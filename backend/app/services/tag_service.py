@@ -85,6 +85,7 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
             "id": tag.id,
             "name": tag.name,
             "category": tag.category,
+            "source": tag.source,
             "created_at": tag.created_at,
             "usage_count": count,
         }
@@ -93,14 +94,14 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
 
 
 async def get_or_create_tag(
-    db: AsyncSession, name: str, category: str = "free"
+    db: AsyncSession, name: str, category: str = "free", source: str = "manual"
 ) -> Tag:
     """按名称查找已有标签，不存在则创建新标签。"""
     name = name.strip()
     result = await db.execute(select(Tag).where(Tag.name == name))
     tag = result.scalar_one_or_none()
     if not tag:
-        tag = Tag(name=name, category=category)
+        tag = Tag(name=name, category=category, source=source)
         db.add(tag)
         await db.flush()
     return tag

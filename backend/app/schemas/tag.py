@@ -21,6 +21,7 @@ class TagOut(BaseModel):
     id: int
     name: str
     category: str
+    source: str = "seed"
     created_at: datetime | None = None
     usage_count: int = 0
 
@@ -43,3 +44,19 @@ class TagMergeRequest(BaseModel):
     """合并标签请求：将 source_tag_id 合并到 target_tag_id，删除源标签"""
     source_tag_id: int
     target_tag_id: int
+
+
+class TagBatchDelete(BaseModel):
+    """批量删除标签请求"""
+    tag_ids: list[int]
+
+
+class TagImportItem(BaseModel):
+    """导入标签的单项"""
+    name: str
+    category: str = "free"
+
+
+class TagImportRequest(BaseModel):
+    """批量导入标签请求"""
+    tags: list[TagImportItem]

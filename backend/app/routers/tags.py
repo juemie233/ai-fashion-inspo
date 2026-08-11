@@ -1,12 +1,21 @@
 """标签管理的 REST API 路由。"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.tag import Tag
-from app.schemas.tag import TagCreate, TagCategoryGroup, TagMergeRequest, TagOut, TagUpdate
+from app.models.inspiration import Inspiration
+from app.models.tag import Tag, InspirationTag
+from app.schemas.tag import (
+    TagBatchDelete,
+    TagCreate,
+    TagCategoryGroup,
+    TagImportRequest,
+    TagMergeRequest,
+    TagOut,
+    TagUpdate,
+)
 from app.services.tag_service import (
     find_similar_tags,
     get_all_tags_grouped,
@@ -134,3 +143,228 @@ async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
         {"id": t.id, "name": t.name, "category": t.category}
         for t in similar
     ]
+
+
+# ============ 批量操作 ============
+
+
+@router.post("/batch-delete", status_code=status.HTTP_200_OK)
+async def batch_delete_tags(
+    data: TagBatchDelete, db: AsyncSession = Depends(get_db)
+):
+    """批量删除标签及其所有关联。"""
+    if not data.tag_ids:
+        raise HTTPException(status_code=400, detail="请提供要删除的标签 ID 列表")
+
+    tags_result = await db.execute(
+        select(Tag).where(Tag.id.in_(data.tag_ids))
+    )
+    tags = tags_result.scalars().all()
+    if not tags:
+        raise HTTPException(status_code=404, detail="未找到任何标签")
+
+    for tag in tags:
+        await db.delete(tag)
+    await db.flush()
+
+    return {"message": f"已删除 {len(tags)} 个标签", "count": len(tags)}
+
+
+@router.delete("/unused", status_code=status.HTTP_200_OK)
+async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
+    """删除所有使用次数为 0 的标签。"""
+    # 找到所有在 inspiration_tags 中没有关联的标签
+    used_subquery = select(InspirationTag.tag_id).distinct()
+    result = await db.execute(
+        select(Tag).where(Tag.id.notin_(used_subquery))
+    )
+    unused = result.scalars().all()
+
+    if not unused:
+        return {"message": "没有未使用的标签", "count": 0}
+
+    # 删除预设标签（seed）时加保护：仅删除 AI 生成和手动创建的
+    # 这里暂时允许删除所有未使用标签
+
+    for tag in unused:
+        await db.delete(tag)
+    await db.flush()
+
+    return {"message": f"已删除 {len(unused)} 个未使用标签", "count": len(unused)}
+
+
+# ============ 统计与扫描 ============
+
+
+@router.get("/stats")
+async def tag_stats(db: AsyncSession = Depends(get_db)):
+    """获取标签统计数据。"""
+    # 总数
+    total_result = await db.execute(select(func.count()).select_from(Tag))
+    total = total_result.scalar() or 0
+
+    # 按来源统计
+    source_result = await db.execute(
+        select(Tag.source, func.count()).group_by(Tag.source)
+    )
+    by_source = {row[0]: row[1] for row in source_result}
+
+    # 按类别统计
+    cat_result = await db.execute(
+        select(Tag.category, func.count()).group_by(Tag.category).order_by(func.count().desc())
+    )
+    by_category = {row[0]: row[1] for row in cat_result}
+
+    # 未使用标签数
+    used_subquery = select(InspirationTag.tag_id).distinct()
+    unused_result = await db.execute(
+        select(func.count()).select_from(Tag).where(Tag.id.notin_(used_subquery))
+    )
+    unused = unused_result.scalar() or 0
+
+    # 总关联数
+    link_result = await db.execute(select(func.count()).select_from(InspirationTag))
+    total_links = link_result.scalar() or 0
+
+    return {
+        "total": total,
+        "unused": unused,
+        "total_links": total_links,
+        "by_source": by_source,
+        "by_category": by_category,
+    }
+
+
+@router.get("/duplicates")
+async def find_duplicate_tags(
+    threshold: float = 0.75, db: AsyncSession = Depends(get_db)
+):
+    """扫描所有标签，找出名称相似度 >= threshold 的标签对。"""
+    result = await db.execute(select(Tag).order_by(Tag.name))
+    all_tags = result.scalars().all()
+
+    from app.services.tag_service import _similarity
+
+    pairs = []
+    for i in range(len(all_tags)):
+        for j in range(i + 1, len(all_tags)):
+            sim = _similarity(all_tags[i].name, all_tags[j].name)
+            if sim >= threshold and sim < 1.0:
+                pairs.append({
+                    "tag_a": {
+                        "id": all_tags[i].id,
+                        "name": all_tags[i].name,
+                        "category": all_tags[i].category,
+                    },
+                    "tag_b": {
+                        "id": all_tags[j].id,
+                        "name": all_tags[j].name,
+                        "category": all_tags[j].category,
+                    },
+                    "similarity": round(sim, 2),
+                })
+
+    # 按相似度降序排列
+    pairs.sort(key=lambda p: p["similarity"], reverse=True)
+    return {"duplicates": pairs[:50], "total": len(pairs)}
+
+
+# ============ 标签详情 ============
+
+
+@router.get("/{tag_id}/inspirations")
+async def tag_inspirations(
+    tag_id: int,
+    page: int = 1,
+    size: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取使用指定标签的素材列表。"""
+    tag = await db.get(Tag, tag_id)
+    if not tag:
+        raise HTTPException(status_code=404, detail="标签未找到")
+
+    # 统计总数
+    count_result = await db.execute(
+        select(func.count()).where(InspirationTag.tag_id == tag_id)
+    )
+    total = count_result.scalar() or 0
+
+    # 分页获取素材
+    link_result = await db.execute(
+        select(InspirationTag, Inspiration)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(InspirationTag.tag_id == tag_id)
+        .order_by(Inspiration.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    )
+    rows = link_result.all()
+
+    items = []
+    for link, insp in rows:
+        items.append({
+            "inspiration_id": insp.id,
+            "file_path": insp.file_path,
+            "thumbnail_path": insp.thumbnail_path,
+            "media_type": insp.media_type,
+            "confidence": round(link.confidence, 2),
+            "created_at": str(insp.created_at) if insp.created_at else None,
+        })
+
+    return {
+        "tag": {"id": tag.id, "name": tag.name, "category": tag.category},
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+    }
+
+
+# ============ 导入/导出 ============
+
+
+@router.get("/export")
+async def export_tags(db: AsyncSession = Depends(get_db)):
+    """导出所有标签为 JSON（含类别、来源、使用次数）。"""
+    grouped = await get_all_tags_grouped(db)
+    export_data = []
+    for category, tags in grouped.items():
+        for t in tags:
+            export_data.append({
+                "name": t["name"],
+                "category": t["category"],
+                "source": t.get("source", "seed"),
+                "usage_count": t["usage_count"],
+            })
+    return {"tags": export_data, "exported_at": str(func.now())}
+
+
+@router.post("/import", status_code=status.HTTP_200_OK)
+async def import_tags(
+    data: TagImportRequest, db: AsyncSession = Depends(get_db)
+):
+    """批量导入标签（跳过已存在的标签）。"""
+    imported = 0
+    skipped = 0
+    for item in data.tags:
+        existing = await db.execute(
+            select(Tag).where(Tag.name == item.name.strip())
+        )
+        if existing.scalar_one_or_none():
+            skipped += 1
+            continue
+        tag = Tag(
+            name=item.name.strip(),
+            category=item.category,
+            source="manual",
+        )
+        db.add(tag)
+        imported += 1
+
+    await db.flush()
+    return {
+        "message": f"已导入 {imported} 个标签，跳过 {skipped} 个已存在",
+        "imported": imported,
+        "skipped": skipped,
+    }

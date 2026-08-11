@@ -18,6 +18,9 @@ class Tag(Base):
     category: Mapped[str] = mapped_column(
         String(32), default="free", index=True
     )
+    source: Mapped[str] = mapped_column(
+        String(16), default="seed", index=True
+    )  # seed | ai_generated | manual
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

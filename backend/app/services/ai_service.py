@@ -238,7 +238,7 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
             for name in extracted:
                 name = normalize_tag_name(name)
                 if name:
-                    tag = await get_or_create_tag(db, name, category)
+                    tag = await get_or_create_tag(db, name, category, "ai_generated")
                     await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
 
     # 处理结构化单品标签
@@ -252,24 +252,24 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
             features = item.get("features", [])
 
             if item_type:
-                tag = await get_or_create_tag(db, item_type, "item_type")
+                tag = await get_or_create_tag(db, item_type, "item_type", "ai_generated")
                 await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
 
             if color:
-                tag = await get_or_create_tag(db, color, "color")
+                tag = await get_or_create_tag(db, color, "color", "ai_generated")
                 await _link_tag(db, inspiration_id, tag.id, confidence=0.85)
 
             for feat in features:
                 if isinstance(feat, str):
                     feat_name = normalize_tag_name(feat.strip())
                     if feat_name:
-                        tag = await get_or_create_tag(db, feat_name, "body_part")
+                        tag = await get_or_create_tag(db, feat_name, "body_part", "ai_generated")
                         await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
                 elif isinstance(feat, dict):
                     for fv in _extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
                         if fv:
-                            tag = await get_or_create_tag(db, fv, "body_part")
+                            tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
                             await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
 
 
