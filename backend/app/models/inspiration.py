@@ -1,13 +1,18 @@
 """灵感素材模型：核心实体，代表一条保存的穿搭图片/视频。"""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+def utcnow() -> datetime:
+    """返回当前 UTC 时间。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Inspiration(Base):
@@ -37,10 +42,10 @@ class Inspiration(Base):
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), index=True
+        DateTime, default=utcnow, index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
+        DateTime, default=utcnow, onupdate=utcnow
     )
 
     # 关联关系

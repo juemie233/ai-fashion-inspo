@@ -1,7 +1,7 @@
 """灵感素材的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class TagOut(BaseModel):
@@ -12,6 +12,12 @@ class TagOut(BaseModel):
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime | None) -> str | None:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 class InspirationTagOut(BaseModel):
@@ -52,9 +58,15 @@ class InspirationOut(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
-    analysis_status: str | None = "none"  # none | analyzing | done | error
+    analysis_status: str | None = "none"
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 class InspirationListOut(BaseModel):
@@ -81,3 +93,9 @@ class AnalysisLogOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime | None) -> str | None:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')

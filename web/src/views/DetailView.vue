@@ -93,6 +93,17 @@ function groupedTags() {
   return groups
 }
 
+/** 来源类型中文映射 */
+function sourceLabel(type: string): string {
+  const labels: Record<string, string> = {
+    xiaohongshu: '小红书',
+    douyin: '抖音',
+    manual_upload: '手动上传',
+    browser_extension: '浏览器插件',
+  }
+  return labels[type] || type
+}
+
 /** 分析状态文本 */
 function analysisStatusLabel(): string {
   if (!detail.value) return ''
@@ -153,7 +164,7 @@ function analysisStatusLabel(): string {
             <div class="info-meta">
               <n-descriptions :column="1" label-placement="left" size="small" bordered>
                 <n-descriptions-item label="来源">
-                  <n-tag size="small" type="info">{{ detail.source_type }}</n-tag>
+                  <n-tag size="small" type="info">{{ sourceLabel(detail.source_type) }}</n-tag>
                 </n-descriptions-item>
                 <n-descriptions-item v-if="detail.source_author" label="作者">
                   {{ detail.source_author }}

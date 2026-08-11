@@ -1,7 +1,7 @@
 """采集任务的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class ScraperTaskCreate(BaseModel):
@@ -25,3 +25,9 @@ class ScraperTaskOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('started_at', 'finished_at', 'created_at')
+    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')

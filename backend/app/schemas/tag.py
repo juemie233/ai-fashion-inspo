@@ -1,7 +1,7 @@
 """标签的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class TagCreate(BaseModel):
@@ -25,6 +25,12 @@ class TagOut(BaseModel):
     usage_count: int = 0
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime | None) -> str | None:
+        if dt is None:
+            return None
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 class TagCategoryGroup(BaseModel):
