@@ -444,12 +444,12 @@ function formatDate(d: string | null | undefined) {
             :columns="[
               { title: '名称', key: 'name', width: 200 },
               { title: '大小', key: 'size_display', width: 100 },
-              { title: '显存占用', key: 'vram', width: 100, render: (_:any, r:OllamaModel) => r.loaded ? formatVram(r.vram_used) : '-' },
-              { title: '状态', key: 'loaded', width: 80, render: (_:any, r:OllamaModel) => r.is_active ? h('n-tag', {type:'success',size:'small'}, '活跃') : r.loaded ? h('n-tag', {type:'info',size:'small'}, '已加载') : h('n-tag', {size:'small'}, '休眠') },
-              { title: '更新时间', key: 'modified', width: 160, render: (_:any, r:OllamaModel) => r.modified?.split('T')[0] },
-              { title: '操作', key: 'actions', render: (_:any, r:OllamaModel) => h('span', {style:'display:flex;gap:6px'}, [
-                !r.is_active ? h('n-button', {size:'tiny',onClick:()=>setActiveModel(r.name)}, '启用') : null,
-                !r.is_active ? h('n-popconfirm', {onPositiveClick:()=>deleteModel(r.name)},
+              { title: '显存占用', key: 'vram', width: 100, render: (row: OllamaModel) => row.loaded ? formatVram(row.vram_used) : '-' },
+              { title: '状态', key: 'loaded', width: 80, render: (row: OllamaModel) => row.is_active ? h('n-tag', {type:'success',size:'small'}, '活跃') : row.loaded ? h('n-tag', {type:'info',size:'small'}, '已加载') : h('n-tag', {size:'small'}, '休眠') },
+              { title: '更新时间', key: 'modified', width: 160, render: (row: OllamaModel) => row.modified?.split('T')[0] },
+              { title: '操作', key: 'actions', render: (row: OllamaModel) => h('span', {style:'display:flex;gap:6px'}, [
+                !row.is_active ? h('n-button', {size:'tiny',onClick:()=>setActiveModel(row.name)}, '启用') : null,
+                !row.is_active ? h('n-popconfirm', {onPositiveClick:()=>deleteModel(row.name)},
                   { trigger: ()=>h('n-button',{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此模型？' }
                 ) : null,
               ]) },
@@ -538,15 +538,15 @@ function formatDate(d: string | null | undefined) {
           <n-data-table
             v-if="history.length"
             :columns="[
-              { title: '预览', key: 'thumbnail', width: 70, render: (_:any, r:HistoryItem) => r.thumbnail_path ? h('img', {src:getFileUrl(r.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
+              { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
               { title: '模型', key: 'model_name', width: 130 },
-              { title: '状态', key: 'status', width: 70, render: (_:any, r:HistoryItem) => h('n-tag', {type:r.status==='success'?'success':'error',size:'small'}, r.status==='success'?'成功':'失败') },
-              { title: '耗时', key: 'time', width: 80, render: (_:any, r:HistoryItem) => formatMs(r.processing_time_ms) },
-              { title: '时间', key: 'created_at', width: 160, render: (_:any, r:HistoryItem) => formatDate(r.created_at) },
-              { title: '操作', key: 'actions', width: 140, render: (_:any, r:HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
-                r.status === 'success' ? h('n-button', {size:'tiny',onClick:()=>viewDetail(r.id)}, '详情') : null,
-                r.status === 'error' ? h('n-button', {size:'tiny',onClick:()=>retryAnalysis(r.inspiration_id)}, '重试') : null,
-                h('n-popconfirm', {onPositiveClick:()=>deleteLog(r.id)},
+              { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h('n-tag', {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
+              { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
+              { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },
+              { title: '操作', key: 'actions', width: 140, render: (row: HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
+                row.status === 'success' ? h('n-button', {size:'tiny',onClick:()=>viewDetail(row.id)}, '详情') : null,
+                row.status === 'error' ? h('n-button', {size:'tiny',onClick:()=>retryAnalysis(row.inspiration_id)}, '重试') : null,
+                h('n-popconfirm', {onPositiveClick:()=>deleteLog(row.id)},
                   { trigger: ()=>h('n-button',{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此记录？' }
                 ),
               ]) },
