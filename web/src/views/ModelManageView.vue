@@ -2,7 +2,7 @@
 /** AI 模型管理页：状态面板、模型列表、下载、分析队列、历史、参数调优。 */
 
 import { h, ref, onMounted, onUnmounted, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { useTagsStore } from '@/stores/tags'
@@ -28,7 +28,6 @@ const downloadProgress = ref(0)
 const downloadTotal = ref(0)
 const downloadStatus = ref('')
 const downloading = ref(false)
-let downloadEventSource: EventSource | null = null
 
 // ===== 分析队列 =====
 interface QueueStats { total: number; analyzed: number; unanalyzed: number; failed: number }
@@ -132,53 +131,85 @@ async function deleteModel(name: string) {
 }
 
 // ---- 下载模型 ----
-function startDownload() {
-  if (!downloadName.value.trim()) return
+let downloadAbortController: AbortController | null = null
+
+async function startDownload() {
+  const name = downloadName.value.trim()
+  if (!name) return
   downloading.value = true
   downloadProgress.value = 0
   downloadTotal.value = 0
   downloadStatus.value = '连接中...'
 
+  downloadAbortController = new AbortController()
   const baseUrl = apiClient.defaults.baseURL || '/api'
-  const url = `${baseUrl}/ai/models/pull?model_name=${encodeURIComponent(downloadName.value.trim())}`
-  downloadEventSource = new EventSource(url)
+  const url = `${baseUrl}/ai/models/pull?model_name=${encodeURIComponent(name)}`
 
-  downloadEventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.type === 'progress') {
-        downloadProgress.value = data.completed || 0
-        downloadTotal.value = data.total || 0
-        downloadStatus.value = data.status || ''
-      } else if (data.type === 'done') {
-        downloading.value = false
-        downloadStatus.value = '下载完成'
-        downloadEventSource?.close()
-        downloadEventSource = null
-        message.success('模型下载完成')
-        refreshModels()
-      } else if (data.type === 'error') {
-        downloading.value = false
-        downloadEventSource?.close()
-        downloadEventSource = null
-        message.error(data.message || '下载失败')
-      }
-    } catch {}
-  }
-  downloadEventSource.onerror = () => {
-    if (downloading.value) {
-      downloading.value = false
-      downloadEventSource?.close()
-      downloadEventSource = null
-      message.error('下载连接中断')
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: downloadAbortController.signal,
+    })
+    if (!response.ok) {
+      const errText = await response.text()
+      let errMsg = '下载请求失败'
+      try { errMsg = JSON.parse(errText).detail || errMsg } catch {}
+      throw new Error(errMsg)
     }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // 按 SSE 帧分割
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'progress') {
+              downloadProgress.value = data.completed || 0
+              downloadTotal.value = data.total || 0
+              downloadStatus.value = data.status || ''
+            } else if (data.type === 'done') {
+              downloading.value = false
+              downloadStatus.value = '下载完成'
+              message.success('模型下载完成')
+              refreshModels()
+              return
+            } else if (data.type === 'error') {
+              throw new Error(data.message || '下载失败')
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    if (e.name === 'AbortError') {
+      downloadStatus.value = '已取消'
+      message.info('下载已取消')
+    } else {
+      message.error(e.message || '下载连接中断')
+    }
+  } finally {
+    downloading.value = false
+    downloadAbortController = null
   }
 }
 
 function cancelDownload() {
-  if (downloadEventSource) {
-    downloadEventSource.close()
-    downloadEventSource = null
+  if (downloadAbortController) {
+    downloadAbortController.abort()
+    downloadAbortController = null
   }
   if (downloading.value) {
     downloading.value = false
@@ -474,12 +505,12 @@ function formatDate(d: string | null | undefined) {
               { title: '名称', key: 'name', width: 200 },
               { title: '大小', key: 'size_display', width: 100 },
               { title: '显存占用', key: 'vram', width: 100, render: (row: OllamaModel) => row.loaded ? formatVram(row.vram_used) : '-' },
-              { title: '状态', key: 'loaded', width: 80, render: (row: OllamaModel) => row.is_active ? h('n-tag', {type:'success',size:'small'}, '活跃') : row.loaded ? h('n-tag', {type:'info',size:'small'}, '已加载') : h('n-tag', {size:'small'}, '休眠') },
+              { title: '状态', key: 'loaded', width: 80, render: (row: OllamaModel) => row.is_active ? h(NTag, {type:'success',size:'small'}, '活跃') : row.loaded ? h(NTag, {type:'info',size:'small'}, '已加载') : h(NTag, {size:'small'}, '休眠') },
               { title: '更新时间', key: 'modified', width: 160, render: (row: OllamaModel) => row.modified?.split('T')[0] },
               { title: '操作', key: 'actions', render: (row: OllamaModel) => h('span', {style:'display:flex;gap:6px'}, [
-                !row.is_active ? h('n-button', {size:'tiny',onClick:()=>setActiveModel(row.name)}, '启用') : null,
-                !row.is_active ? h('n-popconfirm', {onPositiveClick:()=>deleteModel(row.name)},
-                  { trigger: ()=>h('n-button',{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此模型？' }
+                !row.is_active ? h(NButton, {size:'tiny',onClick:()=>setActiveModel(row.name)}, '启用') : null,
+                !row.is_active ? h(NPopconfirm, {onPositiveClick:()=>deleteModel(row.name)},
+                  { trigger: ()=>h(NButton,{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此模型？' }
                 ) : null,
               ]) },
             ]"
@@ -569,14 +600,14 @@ function formatDate(d: string | null | undefined) {
             :columns="[
               { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
               { title: '模型', key: 'model_name', width: 130 },
-              { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h('n-tag', {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
+              { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
               { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
               { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },
               { title: '操作', key: 'actions', width: 140, render: (row: HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
-                row.status === 'success' ? h('n-button', {size:'tiny',onClick:()=>viewDetail(row.id)}, '详情') : null,
-                row.status === 'error' ? h('n-button', {size:'tiny',onClick:()=>retryAnalysis(row.inspiration_id)}, '重试') : null,
-                h('n-popconfirm', {onPositiveClick:()=>deleteLog(row.id)},
-                  { trigger: ()=>h('n-button',{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此记录？' }
+                row.status === 'success' ? h(NButton, {size:'tiny',onClick:()=>viewDetail(row.id)}, '详情') : null,
+                row.status === 'error' ? h(NButton, {size:'tiny',onClick:()=>retryAnalysis(row.inspiration_id)}, '重试') : null,
+                h(NPopconfirm, {onPositiveClick:()=>deleteLog(row.id)},
+                  { trigger: ()=>h(NButton,{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此记录？' }
                 ),
               ]) },
             ]"

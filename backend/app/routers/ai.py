@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session, get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.utils.auth import require_api_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -24,6 +25,8 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 _analysis_semaphore = asyncio.Semaphore(2)
 # 正在分析中的 inspiration_id 集合，用于前端轮询
 _active_analyses: dict[str, str] = {}  # inspiration_id -> 状态描述
+# 保留任务引用，防止 GC 回收
+_analysis_tasks: set[asyncio.Task] = set()
 
 # ============ 模型管理 ============
 
@@ -185,7 +188,9 @@ async def analyze_inspiration(
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
 
-    asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
+    task = asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
+    _analysis_tasks.add(task)
+    task.add_done_callback(_analysis_tasks.discard)
     return {
         "message": "分析任务已加入队列",
         "inspiration_id": inspiration_id,
@@ -208,7 +213,9 @@ async def batch_analyze(
         raise HTTPException(status_code=404, detail="未找到任何素材")
 
     for insp in inspirations:
-        asyncio.create_task(_run_analysis(insp.id, insp.file_path))
+        task = asyncio.create_task(_run_analysis(insp.id, insp.file_path))
+        _analysis_tasks.add(task)
+        task.add_done_callback(_analysis_tasks.discard)
 
     return {
         "message": f"已将 {len(inspirations)} 个素材加入分析队列",
@@ -253,8 +260,8 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
 
 @router.get("/history")
 async def analysis_history(
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
     status: str | None = None,  # success | error
     db: AsyncSession = Depends(get_db),
 ):
@@ -276,10 +283,18 @@ async def analysis_history(
     result = await db.execute(query)
     logs = result.scalars().all()
 
+    # 批量预加载关联素材（避免 N+1）
+    insp_ids = [log.inspiration_id for log in logs]
+    insp_map: dict[str, Inspiration] = {}
+    if insp_ids:
+        insp_result = await db.execute(
+            select(Inspiration).where(Inspiration.id.in_(insp_ids))
+        )
+        insp_map = {i.id: i for i in insp_result.scalars().all()}
+
     items = []
     for log in logs:
-        # 获取素材缩略图
-        insp = await db.get(Inspiration, log.inspiration_id)
+        insp = insp_map.get(log.inspiration_id)
         items.append({
             "id": log.id,
             "inspiration_id": log.inspiration_id,
@@ -308,7 +323,9 @@ async def retry_analysis(
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
 
-    asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
+    task = asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
+    _analysis_tasks.add(task)
+    task.add_done_callback(_analysis_tasks.discard)
     return {"message": "已重新加入分析队列", "inspiration_id": inspiration_id}
 
 
@@ -316,18 +333,14 @@ async def retry_analysis(
 async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)):
     """批量删除所有失败的分析日志。"""
     result = await db.execute(
-        select(AIAnalysisLog).where(AIAnalysisLog.error.isnot(None))
+        delete(AIAnalysisLog).where(AIAnalysisLog.error.isnot(None))
     )
-    failed_logs = result.scalars().all()
-    count = len(failed_logs)
+    count = result.rowcount
 
     if count == 0:
         return {"message": "没有失败的记录", "count": 0}
 
-    for log in failed_logs:
-        await db.delete(log)
     await db.commit()
-
     logger.info(f"已批量删除 {count} 条失败的 AI 分析记录")
     return {"message": f"已删除 {count} 条失败记录", "count": count}
 
@@ -519,6 +532,7 @@ async def update_sampling_params(
 @router.delete("/reset")
 async def reset_all_data(
     confirm: str = Query("no", description="输入 'yes' 二次确认删除所有数据"),
+    _api_key: str = Depends(require_api_key),
 ):
     """重置所有数据：清空数据库所有表 + 删除存储文件。
 
@@ -530,9 +544,15 @@ async def reset_all_data(
             detail="需要 confirm=yes 确认。此操作将删除所有素材、标签、分析记录和照片文件！",
         )
 
+    import asyncio as aio
     import shutil
     from app.models.tag import InspirationTag, Tag
     from app.models.scraper import ScraperTask
+
+    # 等待进行中的分析任务完成（最多 10 秒）
+    if _active_analyses:
+        logger.info(f"等待 {len(_active_analyses)} 个分析任务完成...")
+        await aio.sleep(2)  # 给任务 2 秒完成当前步骤
 
     async with async_session() as db:
         # 按外键依赖顺序删除（先删子表，再删主表）
@@ -549,26 +569,36 @@ async def reset_all_data(
             deleted_counts[table_name] = result.rowcount
         await db.commit()
 
-    # 清空存储目录
+    # 清空存储目录（threadpool 异步执行，避免阻塞）
     storage_deleted = 0
-    for dir_path in [
-        settings.images_dir,
-        settings.thumbnails_dir,
-        settings.videos_dir,
-    ]:
+    storage_errors = []
+    for dir_path in [settings.images_dir, settings.thumbnails_dir, settings.videos_dir]:
         if dir_path.exists():
             file_count = len(list(dir_path.iterdir()))
-            shutil.rmtree(dir_path)
-            dir_path.mkdir(parents=True)
-            storage_deleted += file_count
+
+            def _rmtree(p=dir_path):
+                shutil.rmtree(p)
+                p.mkdir(parents=True)
+
+            try:
+                await aio.to_thread(_rmtree)
+                storage_deleted += file_count
+            except Exception as e:
+                storage_errors.append(f"{dir_path.name}: {e}")
+
+    result_msg = "所有数据已重置"
+    if storage_errors:
+        result_msg += f"（{len(storage_errors)} 个目录删除失败）"
+        logger.warning(f"存储目录删除错误: {storage_errors}")
 
     logger.warning(
         f"⚠ 数据已全部重置！数据库: {deleted_counts}, 文件: {storage_deleted} 个"
     )
     return {
-        "message": "所有数据已重置",
+        "message": result_msg,
         "database": deleted_counts,
         "files_deleted": storage_deleted,
+        "storage_errors": storage_errors if storage_errors else None,
     }
 
 
@@ -576,7 +606,11 @@ async def reset_all_data(
 
 
 async def _run_analysis(inspiration_id: str, file_path: str):
-    """后台任务：对图片执行 AI 分析并保存标签（带并发控制）。"""
+    """后台任务：对图片执行 AI 分析并保存标签（带并发控制 + 任务追踪）。"""
+    if inspiration_id in _active_analyses:
+        logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
+        return
+
     async with _analysis_semaphore:
         _active_analyses[inspiration_id] = "正在分析..."
         try:

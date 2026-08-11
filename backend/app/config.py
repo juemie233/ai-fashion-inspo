@@ -51,8 +51,9 @@ class Settings(BaseSettings):
     scraper_max_concurrent: int = 3
     scraper_browser_headless: bool = True
 
-    # 跨域
-    cors_origins: list[str] = ["*"]
+    # 安全
+    api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     @property
     def storage_dirs(self) -> dict[str, Path]:

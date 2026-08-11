@@ -155,21 +155,29 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
     except Exception as e:
         error_msg = str(e)
         logger.error(f"AI 分析失败 {inspiration_id}: {e}")
+        # 发生异常时回滚当前事务，确保日志记录不受脏事务影响
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     finally:
         processing_time = int((time.time() - start_time) * 1000)
 
-        # 记录分析日志
-        log_entry = AIAnalysisLog(
-            inspiration_id=inspiration_id,
-            model_name=settings.ollama_vision_model,
-            raw_response=raw_response,
-            processing_time_ms=processing_time,
-            error=error_msg,
-        )
-        db.add(log_entry)
-        await db.flush()
-        await db.commit()
+        # 记录分析日志（独立事务，即使主流程失败也能写入）
+        try:
+            log_entry = AIAnalysisLog(
+                inspiration_id=inspiration_id,
+                model_name=settings.ollama_vision_model,
+                raw_response=raw_response,
+                processing_time_ms=processing_time,
+                error=error_msg,
+            )
+            db.add(log_entry)
+            await db.flush()
+            await db.commit()
+        except Exception as log_err:
+            logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
 
 
 def _parse_analysis_response(raw: str) -> dict:
@@ -339,19 +347,16 @@ def _extract_tag_names(value) -> list[str]:
             if v is not None:
                 results.extend(_extract_tag_names(v))
 
-        # 第4轮：兜底 — 遍历所有值
+        # 第4轮：兜底 — 遍历所有值，通过递归确保过滤一致
         # 处理 {"宽松/修身": "修身"} 或 {"上衣": "黑色长袖"} 等非标准键
         if not results:
             for k, v in value.items():
+                # 跳过纯英文 boolean 键（如 {'face': True}）
                 if isinstance(k, str) and not any('一' <= c <= '鿿' for c in k):
                     if isinstance(v, bool):
                         continue
-                if isinstance(v, str) and v.strip():
-                    results.append(v.strip())
-                elif isinstance(v, list):
-                    results.extend(_extract_tag_names(v))
-                elif isinstance(v, dict):
-                    results.extend(_extract_tag_names(v))
+                # 所有值统一通过递归 _extract_tag_names 处理，复用长度/标点过滤
+                results.extend(_extract_tag_names(v))
 
         return results
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** 标签管理页：浏览/编辑/合并/批量操作/统计/导入导出。 */
 
-import { ref, onMounted, h, computed, watch } from 'vue'
-import { useMessage, useDialog } from 'naive-ui'
+import { ref, onMounted, computed } from 'vue'
+import { useMessage } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
@@ -14,7 +14,6 @@ import {
 } from '@/api/tags'
 
 const message = useMessage()
-const dialog = useDialog()
 
 const groups = ref<TagCategoryGroup[]>([])
 const loading = ref(false)

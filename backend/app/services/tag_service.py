@@ -1,10 +1,14 @@
 """标签服务：CRUD、标准化、合并以及预设数据导入。"""
 
+import logging
 from difflib import SequenceMatcher
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tag import Tag, InspirationTag
+
+logger = logging.getLogger(__name__)
 
 
 # 预设标签体系（按类别组织）
@@ -96,14 +100,30 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
 async def get_or_create_tag(
     db: AsyncSession, name: str, category: str = "free", source: str = "manual"
 ) -> Tag:
-    """按名称查找已有标签，不存在则创建新标签。"""
+    """按名称查找已有标签，不存在则创建新标签。
+
+    处理并发竞态：两任务同时创建同一标签时，先 flush 的一方成功，
+    后 flush 的一方触发 IntegrityError。捕获后回滚当前事务并重新查询。
+    """
     name = name.strip()
     result = await db.execute(select(Tag).where(Tag.name == name))
     tag = result.scalar_one_or_none()
     if not tag:
         tag = Tag(name=name, category=category, source=source)
         db.add(tag)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # 并发场景下对方已先创建，回滚当前插入，重新查询
+            await db.rollback()
+            logger.debug(f"并发创建标签冲突: {name!r}，回退查询")
+            result = await db.execute(select(Tag).where(Tag.name == name))
+            tag = result.scalar_one_or_none()
+            if not tag:
+                # 极端情况：重查仍未找到，再试一次（小概率）
+                tag = Tag(name=name, category=category, source=source)
+                db.add(tag)
+                await db.flush()
     return tag
 
 

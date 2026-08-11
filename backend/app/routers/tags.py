@@ -1,6 +1,7 @@
 """标签管理的 REST API 路由。"""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,7 +59,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
             detail=f"标签 '{data.name}' 已存在",
         )
 
-    tag = Tag(name=data.name.strip(), category=data.category)
+    tag = Tag(name=data.name.strip(), category=data.category, source="manual")
     db.add(tag)
     await db.flush()
     await db.refresh(tag)
@@ -104,6 +105,47 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
     )
 
 
+@router.delete("/unused", status_code=status.HTTP_200_OK)
+async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
+    """删除所有使用次数为 0 的标签。"""
+    used_subquery = select(InspirationTag.tag_id).distinct()
+    result = await db.execute(
+        select(Tag).where(Tag.id.notin_(used_subquery))
+    )
+    unused = result.scalars().all()
+
+    if not unused:
+        return {"message": "没有未使用的标签", "count": 0}
+
+    for tag in unused:
+        await db.delete(tag)
+    await db.flush()
+
+    return {"message": f"已删除 {len(unused)} 个未使用标签", "count": len(unused)}
+
+
+@router.post("/batch-delete", status_code=status.HTTP_200_OK)
+async def batch_delete_tags(
+    data: TagBatchDelete, db: AsyncSession = Depends(get_db)
+):
+    """批量删除标签及其所有关联。"""
+    if not data.tag_ids:
+        raise HTTPException(status_code=400, detail="请提供要删除的标签 ID 列表")
+
+    tags_result = await db.execute(
+        select(Tag).where(Tag.id.in_(data.tag_ids))
+    )
+    tags = tags_result.scalars().all()
+    if not tags:
+        raise HTTPException(status_code=404, detail="未找到任何标签")
+
+    for tag in tags:
+        await db.delete(tag)
+    await db.flush()
+
+    return {"message": f"已删除 {len(tags)} 个标签", "count": len(tags)}
+
+
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
     """删除标签及其所有素材关联。"""
@@ -143,54 +185,6 @@ async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
         {"id": t.id, "name": t.name, "category": t.category}
         for t in similar
     ]
-
-
-# ============ 批量操作 ============
-
-
-@router.post("/batch-delete", status_code=status.HTTP_200_OK)
-async def batch_delete_tags(
-    data: TagBatchDelete, db: AsyncSession = Depends(get_db)
-):
-    """批量删除标签及其所有关联。"""
-    if not data.tag_ids:
-        raise HTTPException(status_code=400, detail="请提供要删除的标签 ID 列表")
-
-    tags_result = await db.execute(
-        select(Tag).where(Tag.id.in_(data.tag_ids))
-    )
-    tags = tags_result.scalars().all()
-    if not tags:
-        raise HTTPException(status_code=404, detail="未找到任何标签")
-
-    for tag in tags:
-        await db.delete(tag)
-    await db.flush()
-
-    return {"message": f"已删除 {len(tags)} 个标签", "count": len(tags)}
-
-
-@router.delete("/unused", status_code=status.HTTP_200_OK)
-async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
-    """删除所有使用次数为 0 的标签。"""
-    # 找到所有在 inspiration_tags 中没有关联的标签
-    used_subquery = select(InspirationTag.tag_id).distinct()
-    result = await db.execute(
-        select(Tag).where(Tag.id.notin_(used_subquery))
-    )
-    unused = result.scalars().all()
-
-    if not unused:
-        return {"message": "没有未使用的标签", "count": 0}
-
-    # 删除预设标签（seed）时加保护：仅删除 AI 生成和手动创建的
-    # 这里暂时允许删除所有未使用标签
-
-    for tag in unused:
-        await db.delete(tag)
-    await db.flush()
-
-    return {"message": f"已删除 {len(unused)} 个未使用标签", "count": len(unused)}
 
 
 # ============ 统计与扫描 ============
@@ -245,27 +239,30 @@ async def find_duplicate_tags(
 
     from app.services.tag_service import _similarity
 
-    pairs = []
-    for i in range(len(all_tags)):
-        for j in range(i + 1, len(all_tags)):
-            sim = _similarity(all_tags[i].name, all_tags[j].name)
-            if sim >= threshold and sim < 1.0:
-                pairs.append({
-                    "tag_a": {
-                        "id": all_tags[i].id,
-                        "name": all_tags[i].name,
-                        "category": all_tags[i].category,
-                    },
-                    "tag_b": {
-                        "id": all_tags[j].id,
-                        "name": all_tags[j].name,
-                        "category": all_tags[j].category,
-                    },
-                    "similarity": round(sim, 2),
-                })
+    # O(n²) 相似度计算在 threadpool 中执行，避免阻塞事件循环
+    def _compute_pairs():
+        pairs = []
+        for i in range(len(all_tags)):
+            for j in range(i + 1, len(all_tags)):
+                sim = _similarity(all_tags[i].name, all_tags[j].name)
+                if sim >= threshold and sim < 1.0:
+                    pairs.append({
+                        "tag_a": {
+                            "id": all_tags[i].id,
+                            "name": all_tags[i].name,
+                            "category": all_tags[i].category,
+                        },
+                        "tag_b": {
+                            "id": all_tags[j].id,
+                            "name": all_tags[j].name,
+                            "category": all_tags[j].category,
+                        },
+                        "similarity": round(sim, 2),
+                    })
+        pairs.sort(key=lambda p: p["similarity"], reverse=True)
+        return pairs
 
-    # 按相似度降序排列
-    pairs.sort(key=lambda p: p["similarity"], reverse=True)
+    pairs = await run_in_threadpool(_compute_pairs)
     return {"duplicates": pairs[:50], "total": len(pairs)}
 
 
