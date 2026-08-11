@@ -1,8 +1,10 @@
 """采集引擎管理的 REST API 路由。"""
 
+import asyncio
 import json
+import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,20 @@ from app.models.scraper import ScraperTask
 from app.schemas.scraper import ScraperTaskCreate, ScraperTaskOut
 
 router = APIRouter(prefix="/api/scraper", tags=["scraper"])
+
+
+def _launch_scraper_process(task_id: int):
+    """启动独立子进程执行采集，完全隔离 Playwright。"""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).parent.parent.parent / "scripts" / "run_scraper.py"
+    subprocess.Popen(
+        [sys.executable, str(script), str(task_id)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 @router.get("/sources")
@@ -48,7 +64,6 @@ async def scraper_sources():
 )
 async def create_scraper_task(
     data: ScraperTaskCreate,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """创建并启动一个新的采集任务。"""
@@ -63,8 +78,8 @@ async def create_scraper_task(
     await db.flush()
     await db.refresh(task)
 
-    # 后台启动采集
-    background_tasks.add_task(_run_scraper, task.id)
+    # 后台启动采集（子进程模式，完全隔离 Playwright）
+    _launch_scraper_process(task.id)
 
     return ScraperTaskOut.model_validate(task)
 
@@ -100,12 +115,27 @@ async def cancel_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 async def _run_scraper(task_id: int):
-    """后台任务：根据平台执行采集。"""
-    from app.services.scraper_service import run_scraper_task
+    """后台任务：通过子进程执行采集，隔离 Playwright 避免事件循环冲突。"""
+    import logging
+    import subprocess
+    import sys
+    from pathlib import Path
 
     logger = logging.getLogger(__name__)
-    logger.info(f"采集任务 {task_id} 开始执行")
+    logger.info(f"采集任务 {task_id} 开始执行（子进程模式）")
+
+    script = Path(__file__).parent.parent.parent / "scripts" / "run_scraper.py"
     try:
-        await run_scraper_task(task_id)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(script), str(task_id),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if stdout:
+            logger.info(f"采集任务 {task_id} 输出: {stdout.decode(errors='replace')[:500]}")
+        if stderr:
+            logger.warning(f"采集任务 {task_id} 错误: {stderr.decode(errors='replace')[:500]}")
+        logger.info(f"采集任务 {task_id} 子进程退出码: {proc.returncode}")
     except Exception as e:
-        logger.error(f"采集任务 {task_id} 异常: {e}")
+        logger.error(f"采集任务 {task_id} 启动失败: {e}")

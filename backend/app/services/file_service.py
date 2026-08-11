@@ -25,6 +25,27 @@ def _generate_filename(original_filename: str) -> str:
     return f"{uuid.uuid4().hex}{ext}"
 
 
+async def generate_thumbnail(image_path: Path) -> str | None:
+    """为指定图片生成缩略图，返回相对路径。"""
+    from datetime import datetime
+
+    try:
+        from PIL import Image
+
+        thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
+        img = Image.open(image_path)
+        img.thumbnail(settings.thumbnail_size, Image.LANCZOS)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        thumb_filename = f"thumb_{image_path.stem}.jpg"
+        full_thumb_path = thumbs_dir / thumb_filename
+        img.save(full_thumb_path, "JPEG", quality=settings.thumbnail_quality)
+        today = datetime.now().strftime("%Y-%m")
+        return f"thumbnails/{today}/{thumb_filename}"
+    except Exception:
+        return None
+
+
 async def save_upload(file: UploadFile) -> tuple[str, str | None]:
     """
     保存上传文件到图片目录，并生成缩略图。

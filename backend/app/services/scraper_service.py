@@ -154,9 +154,11 @@ async def run_scraper_task(task_id: int):
         task.status = "completed"
 
     except Exception as e:
-        logger.error(f"采集任务 {task_id} 失败: {e}")
+        import traceback
+        err_msg = str(e) if str(e) else f"{type(e).__name__}"
+        logger.error(f"采集任务 {task_id} 失败: {err_msg}\n{traceback.format_exc()}")
         task.status = "failed"
-        task.error = str(e)[:500]
+        task.error = err_msg[:500]
 
     finally:
         if scraper:
