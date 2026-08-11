@@ -80,6 +80,18 @@ function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warn
   }
   return types[s] || 'default'
 }
+
+/** 安全格式化日期字符串 */
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '-'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return '-'
+    return d.toLocaleString('zh-CN')
+  } catch {
+    return '-'
+  }
+}
 </script>
 
 <template>
@@ -148,7 +160,7 @@ function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warn
           { title: '状态', key: 'status', render: (_: any, row: ScraperTask) => h('n-tag', { type: statusType(row.status), size: 'small' }, statusLabel(row.status)) },
           { title: '发现数量', key: 'items_found' },
           { title: '新增数量', key: 'items_added' },
-          { title: '创建时间', key: 'created_at', render: (_: any, row: ScraperTask) => new Date(row.created_at).toLocaleString('zh-CN') },
+          { title: '创建时间', key: 'created_at', render: (_: any, row: ScraperTask) => formatDate(row.created_at) },
         ]"
         :data="tasks"
         :bordered="false"

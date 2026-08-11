@@ -143,6 +143,9 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
             insp.dominant_colors = json.dumps(tags_data["dominant_colors"])
             await db.flush()
 
+        # 提交所有变更
+        await db.commit()
+
     except Exception as e:
         error_msg = str(e)
         logger.error(f"AI 分析失败 {inspiration_id}: {e}")
@@ -160,10 +163,12 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
         )
         db.add(log_entry)
         await db.flush()
+        await db.commit()
 
 
 def _parse_analysis_response(raw: str) -> dict:
     """从模型响应中提取并解析 JSON。"""
+    import re
     text = raw.strip()
 
     # 去除可能的 markdown 代码块标记
@@ -179,11 +184,14 @@ def _parse_analysis_response(raw: str) -> dict:
                 break
         text = "\n".join(lines[start_idx:end_idx])
 
+    # 去除 JSON 中的 // 和 /* */ 注释（模型偶尔会输出）
+    text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         # 尝试在文本中查找 JSON 对象
-        import re
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             try:

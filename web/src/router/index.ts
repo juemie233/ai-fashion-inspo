@@ -41,6 +41,12 @@ const router = createRouter({
       component: () => import('@/views/TagManageView.vue'),
       meta: { title: '标签管理' },
     },
+    {
+      path: '/models',
+      name: 'models',
+      component: () => import('@/views/ModelManageView.vue'),
+      meta: { title: 'AI 模型管理' },
+    },
   ],
 })
 

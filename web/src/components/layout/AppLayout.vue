@@ -9,6 +9,7 @@ import {
   CloudUploadOutline,
   PricetagsOutline,
   ScanOutline,
+  HardwareChipOutline,
 } from '@vicons/ionicons5'
 
 function renderIcon(icon: Component) {
@@ -29,6 +30,7 @@ function renderIcon(icon: Component) {
           { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
           { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
           { label: '标签管理', key: 'tags', icon: renderIcon(PricetagsOutline) },
+          { label: 'AI 模型', key: 'models', icon: renderIcon(HardwareChipOutline) },
         ]"
         @update:value="(key: string) => $router.push(`/${key === 'home' ? '' : key}`)"
         :default-value="$route.name as string"
