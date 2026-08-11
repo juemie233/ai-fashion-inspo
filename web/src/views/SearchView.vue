@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 高级搜索页：多维标签筛选 + 搜索结果展示。 */
 
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import SearchBar from '@/components/search/SearchBar.vue'
 import TagFilter from '@/components/search/TagFilter.vue'
@@ -66,12 +66,15 @@ async function doSearch(tagsFromSearch?: string[]) {
 }
 
 /** 标签筛选变化时自动搜索 */
-function onFilterChange() {
-  // 仅在有筛选条件时自动搜索
-  if (tagsStore.selectedTags.size > 0 || tagsStore.excludedTags.size > 0) {
-    doSearch()
-  }
-}
+watch(
+  () => [tagsStore.selectedTags, tagsStore.excludedTags, tagsStore.combineMode] as const,
+  () => {
+    if (tagsStore.selectedTags.size > 0 || tagsStore.excludedTags.size > 0) {
+      doSearch()
+    }
+  },
+  { deep: false }
+)
 
 async function handleDelete(id: string) {
   try {
@@ -111,7 +114,7 @@ async function handleToggleFavorite(id: string) {
                 收起 ✕
               </n-button>
             </template>
-            <TagFilter @filter-change="onFilterChange" />
+            <TagFilter />
             <n-button
               type="primary"
               block
@@ -145,7 +148,7 @@ async function handleToggleFavorite(id: string) {
                     size="tiny"
                     type="info"
                     closable
-                    @close="tagsStore.toggleTag(name); doSearch()"
+                    @close="tagsStore.toggleTag(name)"
                     style="margin-left:4px"
                   >
                     {{ name }}
