@@ -21,6 +21,8 @@ const results = ref<InspirationOut[]>([])
 const total = ref(0)
 /** 是否正在搜索 */
 const searching = ref(false)
+/** 筛选面板是否展开 */
+const filterVisible = ref(true)
 
 onMounted(() => {
   tagsStore.load()
@@ -100,32 +102,69 @@ async function handleToggleFavorite(id: string) {
 
     <!-- 标签筛选 + 结果 -->
     <div class="search-layout">
-      <!-- 左侧筛选面板 -->
-      <aside class="filter-panel">
-        <TagFilter @filter-change="onFilterChange" />
-        <n-button
-          type="primary"
-          block
-          style="margin-top: 16px"
-          @click="doSearch()"
-          :loading="searching"
-        >
-          搜索
-        </n-button>
-      </aside>
+      <!-- 左侧筛选面板（可折叠） -->
+      <transition name="slide">
+        <aside v-if="filterVisible" class="filter-panel">
+          <n-card title="标签筛选" size="small" :bordered="true">
+            <template #header-extra>
+              <n-button size="tiny" text @click="filterVisible = false" title="隐藏筛选面板">
+                收起 ✕
+              </n-button>
+            </template>
+            <TagFilter @filter-change="onFilterChange" />
+            <n-button
+              type="primary"
+              block
+              style="margin-top: 12px"
+              @click="doSearch()"
+              :loading="searching"
+            >
+              搜索
+            </n-button>
+          </n-card>
+        </aside>
+      </transition>
 
       <!-- 右侧结果 -->
       <main class="result-panel">
-        <div v-if="total > 0" class="result-header">
-          找到 {{ total }} 条结果
-        </div>
-        <MasonryGrid
-          :items="results"
-          :loading="searching"
-          :has-more="false"
-          @delete="handleDelete"
-          @toggle-favorite="handleToggleFavorite"
-        />
+        <n-card size="small" :bordered="true">
+          <template #header>
+            <div class="result-header-row">
+              <span v-if="!filterVisible">
+                <n-button size="tiny" type="primary" secondary @click="filterVisible = true">
+                  展开筛选 ◂
+                </n-button>
+              </span>
+              <span v-if="total > 0" class="result-count">
+                找到 <strong>{{ total }}</strong> 条结果
+                <span v-if="tagsStore.selectedTags.size > 0" style="font-size:12px;color:#999">
+                  · 筛选标签:
+                  <n-tag
+                    v-for="name in [...tagsStore.selectedTags]"
+                    :key="name"
+                    size="tiny"
+                    type="info"
+                    closable
+                    @close="tagsStore.toggleTag(name); doSearch()"
+                    style="margin-left:4px"
+                  >
+                    {{ name }}
+                  </n-tag>
+                </span>
+              </span>
+              <span v-else style="color:#999">
+                点击左侧标签筛选，或直接浏览全部素材
+              </span>
+            </div>
+          </template>
+          <MasonryGrid
+            :items="results"
+            :loading="searching"
+            :has-more="false"
+            @delete="handleDelete"
+            @toggle-favorite="handleToggleFavorite"
+          />
+        </n-card>
       </main>
     </div>
   </div>
@@ -138,16 +177,16 @@ async function handleToggleFavorite(id: string) {
 }
 
 .search-section {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .search-layout {
   display: flex;
-  gap: 24px;
+  gap: 16px;
 }
 
 .filter-panel {
-  width: 280px;
+  width: 290px;
   flex-shrink: 0;
 }
 
@@ -156,10 +195,28 @@ async function handleToggleFavorite(id: string) {
   min-width: 0;
 }
 
-.result-header {
+.result-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.result-count {
   color: #666;
-  margin-bottom: 12px;
   font-size: 14px;
+}
+
+/* 侧边栏折叠动画 */
+.slide-enter-active,
+.slide-leave-active {
+  transition: width 0.25s ease, opacity 0.2s ease;
+  overflow: hidden;
+}
+.slide-enter-from,
+.slide-leave-to {
+  width: 0;
+  opacity: 0;
 }
 
 @media (max-width: 900px) {
