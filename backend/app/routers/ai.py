@@ -3,6 +3,9 @@
 import asyncio
 import json
 import logging
+import os
+import re
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +19,11 @@ from app.models.inspiration import AIAnalysisLog, Inspiration
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+# 分析任务并发控制：最多同时分析 2 个素材，避免显存溢出
+_analysis_semaphore = asyncio.Semaphore(2)
+# 正在分析中的 inspiration_id 集合，用于前端轮询
+_active_analyses: dict[str, str] = {}  # inspiration_id -> 状态描述
 
 # ============ 模型管理 ============
 
@@ -304,6 +312,95 @@ async def retry_analysis(
     return {"message": "已重新加入分析队列", "inspiration_id": inspiration_id}
 
 
+@router.get("/history/{log_id}")
+async def get_analysis_detail(
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取单条分析日志的详细信息，包含原始 AI 响应和关联标签。"""
+    log = await db.get(AIAnalysisLog, log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="分析记录未找到")
+
+    # 获取关联的标签
+    from app.models.tag import InspirationTag, Tag
+    tag_result = await db.execute(
+        select(Tag.name, Tag.category, InspirationTag.confidence)
+        .join(Tag, InspirationTag.tag_id == Tag.id)
+        .where(InspirationTag.inspiration_id == log.inspiration_id)
+    )
+    tags = [
+        {"name": row.name, "category": row.category, "confidence": round(row.confidence, 2)}
+        for row in tag_result
+    ]
+
+    # 获取素材信息
+    insp = await db.get(Inspiration, log.inspiration_id)
+    detail = {
+        "id": log.id,
+        "inspiration_id": log.inspiration_id,
+        "model_name": log.model_name,
+        "raw_response": log.raw_response,
+        "processing_time_ms": log.processing_time_ms,
+        "error": log.error,
+        "status": "error" if log.error else "success",
+        "created_at": str(log.created_at) if log.created_at else None,
+        "thumbnail_path": insp.thumbnail_path if insp else None,
+        "file_path": insp.file_path if insp else None,
+        "tags": tags,
+    }
+
+    # 尝试解析 raw_response 中的 JSON 便于前端展示
+    parsed = None
+    if log.raw_response:
+        try:
+            # 复用 ai_service 的解析逻辑
+            text = log.raw_response.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                si, ei = 0, len(lines)
+                for i, line in enumerate(lines):
+                    if line.startswith("```") and si == 0:
+                        si = i + 1
+                    elif line.startswith("```") and si > 0:
+                        ei = i
+                        break
+                text = "\n".join(lines[si:ei])
+            text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+            text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, Exception):
+            match = re.search(r'\{.*\}', log.raw_response, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except (json.JSONDecodeError, Exception):
+                    pass
+    detail["parsed_response"] = parsed
+
+    return detail
+
+
+@router.delete("/history/{log_id}")
+async def delete_analysis_log(
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除指定分析日志。"""
+    log = await db.get(AIAnalysisLog, log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="分析记录未找到")
+    await db.delete(log)
+    await db.commit()
+    return {"message": f"分析记录 #{log_id} 已删除"}
+
+
+@router.get("/active-analyses")
+async def get_active_analyses():
+    """获取当前正在分析中的素材列表，用于前端轮询显示进度。"""
+    return {"active_analyses": _active_analyses, "count": len(_active_analyses)}
+
+
 # ============ 参数调优 ============
 
 
@@ -322,16 +419,77 @@ async def get_ai_settings():
 async def update_ai_settings(
     confidence_threshold: float | None = Query(None, ge=0, le=1),
     analysis_timeout: int | None = Query(None, ge=10, le=300),
+    persist: bool = Query(False, description="是否持久化写入 .env 文件"),
 ):
-    """更新 AI 参数（仅内存，重启后恢复默认）。"""
+    """更新 AI 参数（可选持久化到 .env 文件）。"""
     if confidence_threshold is not None:
         settings.ai_low_confidence_threshold = confidence_threshold
     if analysis_timeout is not None:
         settings.ai_analysis_timeout = analysis_timeout
+
+    # 持久化：写入 .env 文件
+    if persist:
+        try:
+            _update_env_file({
+                "AI_LOW_CONFIDENCE_THRESHOLD": str(settings.ai_low_confidence_threshold),
+                "AI_ANALYSIS_TIMEOUT": str(settings.ai_analysis_timeout),
+            })
+        except Exception as e:
+            logger.warning(f"写入 .env 失败: {e}")
+
     return {
-        "message": "参数已更新",
+        "message": "参数已更新" + ("并持久化" if persist else ""),
         "confidence_threshold": settings.ai_low_confidence_threshold,
         "analysis_timeout": settings.ai_analysis_timeout,
+    }
+
+
+@router.get("/sampling-params")
+async def get_sampling_params():
+    """获取 AI 采样参数（temperature, top_p, top_k, num_predict），从配置文件读取。"""
+    return {
+        "temperature": getattr(settings, "ai_temperature", 0.7),
+        "top_p": getattr(settings, "ai_top_p", 0.9),
+        "top_k": getattr(settings, "ai_top_k", 40),
+        "num_predict": getattr(settings, "ai_num_predict", 1024),
+    }
+
+
+@router.put("/sampling-params")
+async def update_sampling_params(
+    temperature: float | None = Query(None, ge=0, le=2),
+    top_p: float | None = Query(None, ge=0, le=1),
+    top_k: int | None = Query(None, ge=1, le=100),
+    num_predict: int | None = Query(None, ge=64, le=8192),
+    persist: bool = Query(False),
+):
+    """更新 AI 采样参数（可选持久化）。"""
+    updated = {}
+    if temperature is not None:
+        settings.ai_temperature = temperature
+        updated["AI_TEMPERATURE"] = str(temperature)
+    if top_p is not None:
+        settings.ai_top_p = top_p
+        updated["AI_TOP_P"] = str(top_p)
+    if top_k is not None:
+        settings.ai_top_k = top_k
+        updated["AI_TOP_K"] = str(top_k)
+    if num_predict is not None:
+        settings.ai_num_predict = num_predict
+        updated["AI_NUM_PREDICT"] = str(num_predict)
+
+    if persist and updated:
+        try:
+            _update_env_file(updated)
+        except Exception as e:
+            logger.warning(f"写入 .env 失败: {e}")
+
+    return {
+        "message": "采样参数已更新" + ("并持久化" if persist else ""),
+        "temperature": getattr(settings, "ai_temperature", 0.7),
+        "top_p": getattr(settings, "ai_top_p", 0.9),
+        "top_k": getattr(settings, "ai_top_k", 40),
+        "num_predict": getattr(settings, "ai_num_predict", 1024),
     }
 
 
@@ -339,18 +497,43 @@ async def update_ai_settings(
 
 
 async def _run_analysis(inspiration_id: str, file_path: str):
-    """后台任务：对图片执行 AI 分析并保存标签。"""
-    try:
-        from app.services.ai_service import analyze_image
+    """后台任务：对图片执行 AI 分析并保存标签（带并发控制）。"""
+    async with _analysis_semaphore:
+        _active_analyses[inspiration_id] = "正在分析..."
+        try:
+            from app.services.ai_service import analyze_image
 
-        logger.info(f"开始 AI 分析: {inspiration_id}")
-        async with async_session() as db:
-            await analyze_image(db, inspiration_id, file_path)
-        logger.info(f"AI 分析完成: {inspiration_id}")
-    except ImportError:
-        logger.warning("AI 服务尚未安装")
-    except Exception as e:
-        logger.error(f"分析失败 {inspiration_id}: {e}")
+            logger.info(f"开始 AI 分析: {inspiration_id}")
+            async with async_session() as db:
+                await analyze_image(db, inspiration_id, file_path)
+            logger.info(f"AI 分析完成: {inspiration_id}")
+        except ImportError:
+            logger.warning("AI 服务尚未安装")
+        except Exception as e:
+            logger.error(f"分析失败 {inspiration_id}: {e}")
+        finally:
+            _active_analyses.pop(inspiration_id, None)
+
+
+def _update_env_file(updates: dict[str, str]) -> None:
+    """将键值对更新写入 .env 文件（保留其他配置不变）。"""
+    env_path = Path(__file__).parent.parent.parent / ".env"
+
+    if env_path.exists():
+        content = env_path.read_text(encoding="utf-8")
+    else:
+        content = ""
+
+    for key, value in updates.items():
+        if re.search(rf"^{key}=.*$", content, re.MULTILINE):
+            content = re.sub(rf"^{key}=.*$", f"{key}={value}", content, flags=re.MULTILINE)
+        else:
+            if content and not content.endswith("\n"):
+                content += "\n"
+            content += f"{key}={value}\n"
+
+    env_path.write_text(content, encoding="utf-8")
+    logger.info(f"已更新 .env: {list(updates.keys())}")
 
 
 def _format_size(size_bytes: int) -> str:

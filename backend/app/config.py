@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "all-minilm"
     ai_analysis_timeout: int = 60  # 秒
     ai_low_confidence_threshold: float = 0.6
+    ai_temperature: float = 0.7
+    ai_top_p: float = 0.9
+    ai_top_k: int = 40
+    ai_num_predict: int = 1024
 
     # 采集引擎
     scraper_request_delay: float = 2.0  # 请求间隔（秒）

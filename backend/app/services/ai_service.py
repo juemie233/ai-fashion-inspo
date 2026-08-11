@@ -113,7 +113,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
         with open(full_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
-        # 调用 Ollama 视觉 API
+        # 调用 Ollama 视觉 API — 传入采样参数
         async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
             response = await client.post(
                 f"{settings.ollama_base_url}/api/chat",
@@ -127,6 +127,12 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
                         }
                     ],
                     "stream": False,
+                    "options": {
+                        "temperature": getattr(settings, "ai_temperature", 0.7),
+                        "top_p": getattr(settings, "ai_top_p", 0.9),
+                        "top_k": getattr(settings, "ai_top_k", 40),
+                        "num_predict": getattr(settings, "ai_num_predict", 1024),
+                    },
                 },
             )
             response.raise_for_status()
