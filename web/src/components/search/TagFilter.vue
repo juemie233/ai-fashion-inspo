@@ -133,7 +133,6 @@ function isExcluded(name: string): boolean {
   cursor: pointer;
   background: #f5f5f5;
   border: 1px solid #e5e5e5;
-  user-select: none;
   transition: all 0.15s;
 }
 .tag-chip:hover {
