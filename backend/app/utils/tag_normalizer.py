@@ -75,3 +75,51 @@ def string_similarity(a: str, b: str) -> float:
 def should_merge_tags(name1: str, name2: str, threshold: float = 0.75) -> bool:
     """判断两个标签名称是否足够相似，建议合并。"""
     return string_similarity(name1, name2) >= threshold and name1 != name2
+
+
+def validate_tag_name(name: str) -> tuple[bool, str | None]:
+    """校验标签名是否合法。返回 (是否合法, 错误原因)。"""
+    s = name.strip()
+    if not s or len(s) < 1:
+        return False, "标签名为空"
+
+    # 允许的纯英文时尚专有名词（大小写不敏感）
+    ALLOWED_ENGLISH = {
+        'y2k', 'lolita', 'jk', 'cleanfit', 'gorpcore',
+        'oversized', 'h型', 'a字', 'x型', 'v领', 'u领',
+    }
+    if s.lower() in ALLOWED_ENGLISH:
+        return True, None
+
+    # 允许中文+英文/数字的混合标签（如 V领, A字裙, H型）
+    has_chinese = any('一' <= c <= '鿿' for c in s)
+
+    # 纯 ASCII 且无中文 → 检查是否为允许的混合型
+    if not has_chinese:
+        if s.isascii() and s.replace(' ', '').isalpha() and len(s) > 2:
+            return False, f"标签名是英文: {s!r}"
+
+    if len(s) > 8:
+        return False, f"标签名过长 ({len(s)} 字): {s[:20]}..."
+    # 不能有句号/问号/感叹号
+    if any(c in s for c in '。！？…~'):
+        return False, f"标签名含标点: {s!r}"
+    # 不能是描述句
+    sentence_markers = [
+        '这是一', '图片中', '背景为', '背景是', '整体造型', '完整展示',
+        '人物为', '人物坐在', '人物穿着', '展示穿搭', '图中人物',
+        '穿着方式', '适合场合', '图片属性', '主色调',
+        '宽松/修身', '过膝/露腰', '直筒/H型', '紧身/A字',
+        '颜色为', '搭配了', '整体穿搭', '整体色调',
+    ]
+    if any(m in s for m in sentence_markers):
+        return False, f"标签名是描述句: {s!r}"
+    # 不能是 hex 颜色
+    if s.startswith('#'):
+        return False, f"标签名是 hex 颜色: {s!r}"
+    if len(s) == 6 and all(c in '0123456789ABCDEFabcdef' for c in s):
+        return False, f"标签名是 hex 颜色: {s!r}"
+    # 不能是带括号的推测描述
+    if '（' in s or '(' in s:
+        return False, f"标签名含括号推测: {s!r}"
+    return True, None

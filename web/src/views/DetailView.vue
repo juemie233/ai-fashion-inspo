@@ -67,7 +67,6 @@ function tagColor(category: string): string {
     body_part: '#10b981',
     fit: '#ec4899',
     occasion: '#06b6d4',
-    season: '#84cc16',
     attribute: '#6b7280',
     free: '#9ca3af',
   }
@@ -78,7 +77,7 @@ function tagColor(category: string): string {
 const CAT_LABELS: Record<string, string> = {
   style: '风格', item_type: '单品', color: '颜色',
   body_part: '穿着方式', fit: '版型', occasion: '场合',
-  season: '季节', attribute: '属性', free: '自定义',
+  attribute: '属性', free: '自定义',
 }
 
 /** 按类别分组标签 */

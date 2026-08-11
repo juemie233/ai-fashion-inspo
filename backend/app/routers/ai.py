@@ -315,7 +315,7 @@ async def analysis_history(
             "processing_time_ms": log.processing_time_ms,
             "error": log.error,
             "status": "error" if log.error else "success",
-            "created_at": log.created_at,
+            "created_at": _fmt_utc(log.created_at),
         })
 
     return {"items": items, "total": total, "page": page, "size": size}
@@ -338,6 +338,31 @@ async def retry_analysis(
     _analysis_tasks.add(task)
     task.add_done_callback(_analysis_tasks.discard)
     return {"message": "已重新加入分析队列", "inspiration_id": inspiration_id}
+
+
+@router.post("/retry-all-failed")
+async def retry_all_failed(db: AsyncSession = Depends(get_db)):
+    """一键重试所有失败的分析。"""
+    # 查找所有有失败记录的素材（取每个素材最新的失败记录）
+    result = await db.execute(
+        select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(AIAnalysisLog.error.isnot(None))
+        .distinct()
+    )
+    failed = result.all()
+
+    if not failed:
+        return {"message": "没有失败的记录", "count": 0}
+
+    count = 0
+    for insp_id, file_path in failed:
+        task = asyncio.create_task(_run_analysis(insp_id, file_path))
+        _analysis_tasks.add(task)
+        task.add_done_callback(_analysis_tasks.discard)
+        count += 1
+
+    return {"message": f"已将 {count} 个素材重新加入分析队列", "count": count}
 
 
 @router.delete("/history/failed/all")
@@ -388,7 +413,7 @@ async def get_analysis_detail(
         "processing_time_ms": log.processing_time_ms,
         "error": log.error,
         "status": "error" if log.error else "success",
-        "created_at": str(log.created_at) if log.created_at else None,
+        "created_at": _fmt_utc(log.created_at) if log.created_at else None,
         "thumbnail_path": insp.thumbnail_path if insp else None,
         "file_path": insp.file_path if insp else None,
         "tags": tags,
@@ -658,6 +683,13 @@ def _update_env_file(updates: dict[str, str]) -> None:
 
     env_path.write_text(content, encoding="utf-8")
     logger.info(f"已更新 .env: {list(updates.keys())}")
+
+
+def _fmt_utc(dt) -> str:
+    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _format_size(size_bytes: int) -> str:

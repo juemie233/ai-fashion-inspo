@@ -36,9 +36,7 @@ ANALYSIS_PROMPT = """你是一个专业的时尚穿搭分析助手。请分析�
 
 5. 适合场合：日常/通勤/约会/出游/校园/派对/运动/居家/度假/逛街
 
-6. 适合季节：春季/夏季/秋季/冬季
-
-7. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍
+6. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍
 
 8. 主色调提取：提取2-3个主要颜色（返回hex值）
 
@@ -49,7 +47,6 @@ ANALYSIS_PROMPT = """你是一个专业的时尚穿搭分析助手。请分析�
   "fit": [],
   "wear_style": [],
   "occasion": [],
-  "season": [],
   "attributes": [],
   "dominant_colors": []
 }"""
@@ -113,29 +110,63 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
         with open(full_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
+        # 图片预检：跳过非图片文件
+        import imghdr
+        file_type = imghdr.what(full_path)
+        if file_type is None:
+            # 尝试通过扩展名判断
+            ext = full_path.suffix.lower()
+            if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'):
+                raise ValueError(f"不支持的图片格式: {ext}")
+
+        # 图片体积检查 (>5MB 可能导致 Ollama 400)
+        file_size_mb = full_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > 5:
+            logger.warning(f"图片较大 ({file_size_mb:.1f}MB)，可能导致分析失败: {file_path}")
+
         # 调用 Ollama 视觉 API — 传入采样参数
         async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/chat",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": ANALYSIS_PROMPT,
-                            "images": [image_data],
-                        }
-                    ],
-                    "stream": False,
-                    "options": {
-                        "temperature": getattr(settings, "ai_temperature", 0.7),
-                        "top_p": getattr(settings, "ai_top_p", 0.9),
-                        "top_k": getattr(settings, "ai_top_k", 40),
-                        "num_predict": getattr(settings, "ai_num_predict", 1024),
+            try:
+                response = await client.post(
+                    f"{settings.ollama_base_url}/api/chat",
+                    json={
+                        "model": settings.ollama_vision_model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": ANALYSIS_PROMPT,
+                                "images": [image_data],
+                            }
+                        ],
+                        "stream": False,
+                        "options": {
+                            "temperature": getattr(settings, "ai_temperature", 0.7),
+                            "top_p": getattr(settings, "ai_top_p", 0.9),
+                            "top_k": getattr(settings, "ai_top_k", 40),
+                            "num_predict": getattr(settings, "ai_num_predict", 1024),
+                        },
                     },
-                },
-            )
-            response.raise_for_status()
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                # 将 HTTP 状态码转为人可读的中文错误信息
+                status = e.response.status_code
+                detail = ""
+                try:
+                    detail = e.response.json().get("error", "")
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    _http_error_message(status, detail, file_size_mb)
+                ) from e
+            except httpx.TimeoutException:
+                raise RuntimeError(
+                    f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
+                    "请检查 Ollama 是否正常运行或尝试增大超时时间"
+                )
+            except httpx.ConnectError:
+                raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
+
             result = response.json()
             raw_response = result["message"]["content"]
 
@@ -178,6 +209,29 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
             await db.commit()
         except Exception as log_err:
             logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
+
+
+def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
+    """将 Ollama HTTP 错误转为人可读的中文消息。"""
+    if status == 400:
+        if "image" in detail.lower() or "vision" in detail.lower():
+            return f"图片格式不支持或模型不支持视觉功能 ({detail})"
+        if file_size_mb > 5:
+            return f"图片过大 ({file_size_mb:.1f}MB) 导致请求被拒绝。请尝试压缩图片到 5MB 以下。"
+        if "context" in detail.lower() or "token" in detail.lower():
+            return f"图片太大超出模型上下文限制。请使用更小的图片 (当前 {file_size_mb:.1f}MB)。"
+        return f"请求参数错误 (400): {detail or '请检查图片格式和大小'}"
+    if status == 404:
+        return f"模型 '{settings.ollama_vision_model}' 未安装。请先在模型管理页下载模型。"
+    if status == 413:
+        return f"图片体积过大 ({file_size_mb:.1f}MB)，超过服务端限制。请压缩图片。"
+    if status == 429:
+        return "请求过于频繁，请稍后再试。"
+    if status == 500:
+        return f"Ollama 服务内部错误 (500): {detail or '请检查 Ollama 日志'}。"
+    if status == 502 or status == 503:
+        return "Ollama 服务暂时不可用，请确认模型已加载且显存充足。"
+    return f"Ollama 返回错误 (HTTP {status}): {detail or '未知错误'}"
 
 
 def _parse_analysis_response(raw: str) -> dict:
@@ -234,7 +288,6 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
         "fit": "fit",
         "wear_style": "body_part",
         "occasion": "occasion",
-        "season": "season",
         "attributes": "attribute",
     }
 
@@ -292,28 +345,49 @@ def _extract_tag_names(value) -> list[str]:
     """
     if isinstance(value, str):
         s = value.strip()
-        # 跳过明显不是标签的字符串
         if not s or len(s) <= 1:
             return []
-        # 跳过 JSON/dict 结构字符串（被错误 str() 化的情况）
         if s.startswith("{") and s.endswith("}"):
             return []
-        # 跳过过长字符串（很可能是描述文本而非标签）
-        if len(s) > 10:
+        if any(c in s for c in '。！？…~'):
             return []
-        # 跳过包含逗号、句号的描述文本
-        if '，' in s or '。' in s or ',' in s:
+        if any(w in s for w in ('这是一', '图片中', '背景为', '整体造型', '完整展示', '人物为')):
             return []
-        # 斜杠分隔的值拆分为多个独立标签
+
+        # 先做分隔符拆分（拆分后再递归检查每部分的长度和合法性）
+        if '，' in s or ',' in s:
+            parts = [p.strip() for p in s.replace('，', ',').split(',') if p.strip()]
+            results = []
+            for p in parts:
+                results.extend(_extract_tag_names(p))
+            return results
+        if '、' in s:
+            parts = [p.strip() for p in s.split('、') if p.strip()]
+            results = []
+            for p in parts:
+                results.extend(_extract_tag_names(p))
+            return results
         if '/' in s:
             parts = [p.strip() for p in s.split('/') if p.strip()]
             results = []
             for p in parts:
                 results.extend(_extract_tag_names(p))
             return results
-        # 跳过纯数字
+
+        # 拆分后再检查长度
+        if len(s) > 8:
+            return []
+        if s.isascii() and not any(c.isdigit() for c in s):
+            return []
+        if s.startswith('#') or (len(s) == 6 and all(c in '0123456789ABCDEFabcdef' for c in s)):
+            return []
         if s.isdigit():
             return []
+        # 去除括号内容（如 "室内拍摄（棚拍）" → "室内拍摄"）
+        if '（' in s or '(' in s:
+            s = s.split('（')[0].split('(')[0].strip() if '（' in s else s.split('(')[0].strip()
+            if not s or len(s) <= 1:
+                return []
         return [s]
 
     if isinstance(value, (int, float, bool)):
@@ -341,7 +415,7 @@ def _extract_tag_names(value) -> list[str]:
                 results.extend(_extract_tag_names(v))
 
         # 第3轮：中文语境键（图片属性、场合、季节等）
-        for key in ("图片属性", "属性值", "适合场合", "适合季节", "穿着方式",
+        for key in ("图片属性", "属性值", "适合场合", "穿着方式",
                      "穿着方式/身体部位关系"):
             v = value.get(key)
             if v is not None:

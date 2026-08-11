@@ -23,7 +23,6 @@ export const CATEGORY_LABELS: Record<string, string> = {
   body_part: '穿着方式',
   fit: '版型',
   occasion: '场合',
-  season: '季节',
   attribute: '属性',
   free: '自定义',
 }

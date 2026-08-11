@@ -358,6 +358,21 @@ async function deleteLog(logId: number) {
 }
 
 const clearingFailed = ref(false)
+const retryingAll = ref(false)
+
+async function retryAllFailed() {
+  retryingAll.value = true
+  try {
+    const { data } = await apiClient.post('/ai/retry-all-failed')
+    message.success(data.message || '已加入重试队列')
+    loadQueue(); loadHistory(); loadActiveAnalyses()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重试失败')
+  } finally {
+    retryingAll.value = false
+  }
+}
+
 async function deleteAllFailed() {
   clearingFailed.value = true
   try {
@@ -375,7 +390,7 @@ async function deleteAllFailed() {
 // 标签类别中文映射
 const tagCategoryLabel: Record<string, string> = {
   style: '风格', item_type: '单品类型', color: '颜色', fit: '版型',
-  body_part: '穿着方式', occasion: '场合', season: '季节', attribute: '属性',
+  body_part: '穿着方式', occasion: '场合', attribute: '属性',
 }
 
 // ---- 参数设置 ----
@@ -583,10 +598,13 @@ function formatDate(d: string | null | undefined) {
         <n-card title="分析历史" size="small">
           <template #header-extra>
             <n-space :size="8">
+              <n-button size="small" type="warning" secondary :loading="retryingAll" @click="retryAllFailed">
+                一键重试失败 {{ queueStats.failed > 0 ? `(${queueStats.failed})` : '' }}
+              </n-button>
               <n-popconfirm @positive-click="deleteAllFailed">
                 <template #trigger>
                   <n-button size="small" type="error" secondary :loading="clearingFailed">
-                    删除所有失败记录 {{ queueStats.failed > 0 ? `(${queueStats.failed})` : '' }}
+                    删除所有失败记录
                   </n-button>
                 </template>
                 确定要删除所有失败记录吗？此操作不可恢复。
@@ -607,6 +625,9 @@ function formatDate(d: string | null | undefined) {
               { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
               { title: '模型', key: 'model_name', width: 130 },
               { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
+              { title: '失败原因', key: 'error', width: 200, render: (row: HistoryItem) => row.error
+                ? h('span', {title: row.error, style:'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px'}, row.error)
+                : h('span', {style:'font-size:12px;color:#999'}, '-') },
               { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
               { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },
               { title: '操作', key: 'actions', width: 140, render: (row: HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
@@ -764,7 +785,7 @@ function formatDate(d: string | null | undefined) {
           <!-- 提取的标签 -->
           <div v-if="currentDetail.tags.length > 0">
             <h4 style="margin-bottom:8px">提取的标签</h4>
-            <n-space v-for="cat in ['style','item_type','color','fit','body_part','occasion','season','attribute']" :key="cat" style="margin-bottom:8px" align="center">
+            <n-space v-for="cat in ['style','item_type','color','fit','body_part','occasion','attribute']" :key="cat" style="margin-bottom:8px" align="center">
               <n-tag type="info" size="small" :bordered="false">{{ tagCategoryLabel[cat] || cat }}</n-tag>
               <template v-for="tag in currentDetail.tags.filter(t=>t.category===cat)" :key="tag.name">
                 <n-tag size="small" round>
