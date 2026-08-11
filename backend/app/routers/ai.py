@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -303,6 +302,20 @@ async def analysis_history(
         )
         insp_map = {i.id: i for i in insp_result.scalars().all()}
 
+    # 批量预加载标签
+    from app.models.tag import InspirationTag as IT, Tag as T
+    tag_map: dict[str, list[dict]] = {}
+    if insp_ids:
+        tag_result = await db.execute(
+            select(IT.inspiration_id, T.name, T.category)
+            .join(T, IT.tag_id == T.id)
+            .where(IT.inspiration_id.in_(insp_ids))
+        )
+        for insp_id, tag_name, tag_cat in tag_result:
+            tag_map.setdefault(insp_id, []).append(
+                {"name": tag_name, "category": tag_cat}
+            )
+
     items = []
     for log in logs:
         insp = insp_map.get(log.inspiration_id)
@@ -316,6 +329,7 @@ async def analysis_history(
             "error": log.error,
             "status": "error" if log.error else "success",
             "created_at": _fmt_utc(log.created_at),
+            "tags": tag_map.get(log.inspiration_id, []),
         })
 
     return {"items": items, "total": total, "page": page, "size": size}
@@ -342,13 +356,19 @@ async def retry_analysis(
 
 @router.post("/retry-all-failed")
 async def retry_all_failed(db: AsyncSession = Depends(get_db)):
-    """一键重试所有失败的分析。"""
-    # 查找所有有失败记录的素材（取每个素材最新的失败记录）
+    """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
+    # 子查询：每个素材的最新日志 ID
+    latest_log = (
+        select(AIAnalysisLog.inspiration_id, func.max(AIAnalysisLog.id).label("max_id"))
+        .group_by(AIAnalysisLog.inspiration_id)
+        .subquery()
+    )
     result = await db.execute(
         select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
         .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .join(latest_log, (AIAnalysisLog.inspiration_id == latest_log.c.inspiration_id)
+              & (AIAnalysisLog.id == latest_log.c.max_id))
         .where(AIAnalysisLog.error.isnot(None))
-        .distinct()
     )
     failed = result.all()
 
@@ -422,29 +442,8 @@ async def get_analysis_detail(
     # 尝试解析 raw_response 中的 JSON 便于前端展示
     parsed = None
     if log.raw_response:
-        try:
-            # 复用 ai_service 的解析逻辑
-            text = log.raw_response.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                si, ei = 0, len(lines)
-                for i, line in enumerate(lines):
-                    if line.startswith("```") and si == 0:
-                        si = i + 1
-                    elif line.startswith("```") and si > 0:
-                        ei = i
-                        break
-                text = "\n".join(lines[si:ei])
-            text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
-            text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, Exception):
-            match = re.search(r'\{.*\}', log.raw_response, re.DOTALL)
-            if match:
-                try:
-                    parsed = json.loads(match.group())
-                except (json.JSONDecodeError, Exception):
-                    pass
+        from app.services.ai_service import _parse_analysis_response
+        parsed = _parse_analysis_response(log.raw_response) or None
     detail["parsed_response"] = parsed
 
     return detail
@@ -499,7 +498,7 @@ async def update_ai_settings(
     # 持久化：写入 .env 文件
     if persist:
         try:
-            _update_env_file({
+            await _update_env_file({
                 "AI_LOW_CONFIDENCE_THRESHOLD": str(settings.ai_low_confidence_threshold),
                 "AI_ANALYSIS_TIMEOUT": str(settings.ai_analysis_timeout),
             })
@@ -664,24 +663,27 @@ async def _run_analysis(inspiration_id: str, file_path: str):
             _active_analyses.pop(inspiration_id, None)
 
 
-def _update_env_file(updates: dict[str, str]) -> None:
+async def _update_env_file(updates: dict[str, str]) -> None:
     """将键值对更新写入 .env 文件（保留其他配置不变）。"""
     env_path = Path(__file__).parent.parent.parent / ".env"
 
-    if env_path.exists():
-        content = env_path.read_text(encoding="utf-8")
-    else:
-        content = ""
-
-    for key, value in updates.items():
-        if re.search(rf"^{key}=.*$", content, re.MULTILINE):
-            content = re.sub(rf"^{key}=.*$", f"{key}={value}", content, flags=re.MULTILINE)
+    def _write():
+        if env_path.exists():
+            content = env_path.read_text(encoding="utf-8")
         else:
-            if content and not content.endswith("\n"):
-                content += "\n"
-            content += f"{key}={value}\n"
+            content = ""
 
-    env_path.write_text(content, encoding="utf-8")
+        for key, value in updates.items():
+            if re.search(rf"^{key}=.*$", content, re.MULTILINE):
+                content = re.sub(rf"^{key}=.*$", f"{key}={value}", content, flags=re.MULTILINE)
+            else:
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                content += f"{key}={value}\n"
+
+        env_path.write_text(content, encoding="utf-8")
+
+    await asyncio.to_thread(_write)
     logger.info(f"已更新 .env: {list(updates.keys())}")
 
 

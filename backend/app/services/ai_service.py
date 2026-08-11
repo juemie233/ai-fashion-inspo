@@ -11,13 +11,16 @@ Phase 2 完整实现。
 
 import json
 import logging
+import re
 import time
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import AIAnalysisLog, Inspiration
+
+# 支持的图片扩展名
+_ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
 
 logger = logging.getLogger(__name__)
 
@@ -101,23 +104,24 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
     try:
         import httpx
 
-        full_path = settings.storage_root / file_path
+        full_path = (settings.storage_root / file_path).resolve()
+        # 防御路径遍历攻击
+        if not str(full_path).startswith(str(settings.storage_root.resolve())):
+            raise ValueError(f"非法的文件路径: {file_path}")
         if not full_path.exists():
             raise FileNotFoundError(f"图片不存在: {full_path}")
+        if not full_path.is_file():
+            raise ValueError(f"路径不是文件: {file_path}")
 
         # 读取图片并编码为 base64
         import base64
         with open(full_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode("utf-8")
 
-        # 图片预检：跳过非图片文件
-        import imghdr
-        file_type = imghdr.what(full_path)
-        if file_type is None:
-            # 尝试通过扩展名判断
-            ext = full_path.suffix.lower()
-            if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'):
-                raise ValueError(f"不支持的图片格式: {ext}")
+        # 图片预检：通过扩展名判断（不使用已弃用的 imghdr）
+        ext = full_path.suffix.lower()
+        if ext not in _ALLOWED_IMG_EXT:
+            raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
         file_size_mb = full_path.stat().st_size / (1024 * 1024)
@@ -168,17 +172,35 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
                 raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
 
             result = response.json()
-            raw_response = result["message"]["content"]
+            if not isinstance(result, dict) or "message" not in result:
+                raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
+            raw_response = result["message"].get("content")
+            if not raw_response:
+                raise RuntimeError("Ollama 返回空内容，模型可能不支持视觉功能或图片无效")
 
         # 解析分析结果并保存标签
         tags_data = _parse_analysis_response(raw_response)
-        await _save_tags(db, inspiration_id, tags_data)
+        if not tags_data:
+            error_msg = "AI 响应无法解析为 JSON，原始输出无法识别"
+            logger.warning(f"分析解析失败 {inspiration_id}: {raw_response[:200]}")
+        else:
+            await _save_tags(db, inspiration_id, tags_data)
 
-        # 更新素材的主色调字段
-        insp = await db.get(Inspiration, inspiration_id)
-        if insp and tags_data.get("dominant_colors"):
-            insp.dominant_colors = json.dumps(tags_data["dominant_colors"])
-            await db.flush()
+        # 更新素材的主色调字段（清理注释后缀）
+        if tags_data.get("dominant_colors"):
+            clean_colors = []
+            for c in tags_data["dominant_colors"]:
+                if isinstance(c, str):
+                    # 去除 // 注释和括号描述
+                    c = c.split("//")[0].strip()
+                    c = re.sub(r'[（(][^)）]*[)）]', '', c).strip()
+                    if c:
+                        clean_colors.append(c)
+            if clean_colors:
+                insp = await db.get(Inspiration, inspiration_id)
+                if insp:
+                    insp.dominant_colors = json.dumps(clean_colors)
+                    await db.flush()
 
         # 提交所有变更
         await db.commit()
@@ -236,7 +258,6 @@ def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
 
 def _parse_analysis_response(raw: str) -> dict:
     """从模型响应中提取并解析 JSON。"""
-    import re
     text = raw.strip()
 
     # 去除可能的 markdown 代码块标记
@@ -252,24 +273,35 @@ def _parse_analysis_response(raw: str) -> dict:
                 break
         text = "\n".join(lines[start_idx:end_idx])
 
-    # 去除 JSON 中的 // 和 /* */ 注释（模型偶尔会输出）
-    text = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-
+    # 先尝试直接解析（模型可能在前导文字后直接输出合法 JSON）
     try:
         data = json.loads(text)
+        return data
     except json.JSONDecodeError:
-        # 尝试在文本中查找 JSON 对象
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group())
-            except json.JSONDecodeError:
-                return {}
-        else:
-            return {}
+        pass
 
-    return data
+    # 尝试在文本中查找 JSON 对象（处理前导文字 + JSON 末尾的模式）
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        json_candidate = match.group()
+        try:
+            data = json.loads(json_candidate)
+            return data
+        except json.JSONDecodeError:
+            pass
+
+    # 最后手段：去除注释后再尝试（注释剥离可能破坏字符串内的 //，仅作后备）
+    cleaned = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+    match2 = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    if match2:
+        try:
+            data = json.loads(match2.group())
+            return data
+        except json.JSONDecodeError:
+            pass
+
+    return {}
 
 
 async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
@@ -291,9 +323,11 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
         "attributes": "attribute",
     }
 
-    # 处理简单列表型标签（风格、版型、场合等）
+    # 处理简单列表型标签（风格、版型、场合等） — 兼容 null 值
     for key, category in category_map.items():
-        values = data.get(key, [])
+        values = data.get(key) or []
+        if not isinstance(values, list):
+            values = [values] if values else []
         for value in values:
             extracted = _extract_tag_names(value)
             for name in extracted:
@@ -302,15 +336,27 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
                     tag = await get_or_create_tag(db, name, category, "ai_generated")
                     await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
 
-    # 处理结构化单品标签
-    items = data.get("items", [])
+    # 处理结构化单品标签 — 兼容 type/color 为列表、features 为字符串
+    items = data.get("items") or []
+    if not isinstance(items, list):
+        items = [items] if isinstance(items, dict) else []
     for item in items:
         if isinstance(item, dict):
-            item_type = normalize_tag_name(str(item.get("type", "")).strip())
-            color_raw = str(item.get("color", "")).strip()
-            # 将 hex 颜色值转换为中文颜色名
-            color = _normalize_color(color_raw)
+            # type/color 可能是列表 → 取首元素或 join
+            raw_type = item.get("type", "")
+            if isinstance(raw_type, list):
+                raw_type = raw_type[0] if raw_type else ""
+            item_type = normalize_tag_name(str(raw_type).strip())
+
+            raw_color = item.get("color", "")
+            if isinstance(raw_color, list):
+                raw_color = raw_color[0] if raw_color else ""
+            color = _normalize_color(str(raw_color).strip())
+
             features = item.get("features", [])
+            # features 可能是字符串 → 按顿号/逗号拆分
+            if isinstance(features, str):
+                features = [p.strip() for p in features.replace('，', ',').replace('、', ',').split(',') if p.strip()]
 
             if item_type:
                 tag = await get_or_create_tag(db, item_type, "item_type", "ai_generated")
@@ -322,10 +368,12 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
 
             for feat in features:
                 if isinstance(feat, str):
-                    feat_name = normalize_tag_name(feat.strip())
-                    if feat_name:
-                        tag = await get_or_create_tag(db, feat_name, "body_part", "ai_generated")
-                        await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+                    # 通过 _extract_tag_names 统一过滤（长度/合法性校验）
+                    for fv in _extract_tag_names(feat):
+                        fv = normalize_tag_name(fv)
+                        if fv:
+                            tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
+                            await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
                 elif isinstance(feat, dict):
                     for fv in _extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
@@ -563,8 +611,9 @@ async def _link_tag(
     tag_id: int,
     confidence: float = 1.0,
 ):
-    """将标签与素材关联，避免重复。置信度更高时更新。"""
+    """将标签与素材关联，避免重复。纠竞态冲突，置信度更高时更新。"""
     from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
     from app.models.tag import InspirationTag
 
     result = await db.execute(
@@ -577,6 +626,7 @@ async def _link_tag(
     if existing:
         if confidence > existing.confidence:
             existing.confidence = confidence
+        await db.flush()
     else:
         link = InspirationTag(
             inspiration_id=inspiration_id,
@@ -584,5 +634,18 @@ async def _link_tag(
             confidence=confidence,
         )
         db.add(link)
-
-    await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # 并发场景下对方已先插入，回滚后重查更新
+            await db.rollback()
+            result2 = await db.execute(
+                select(InspirationTag).where(
+                    InspirationTag.inspiration_id == inspiration_id,
+                    InspirationTag.tag_id == tag_id,
+                )
+            )
+            retry_existing = result2.scalar_one_or_none()
+            if retry_existing and confidence > retry_existing.confidence:
+                retry_existing.confidence = confidence
+                await db.flush()

@@ -111,8 +111,8 @@ async def get_or_create_tag(
         try:
             await db.flush()
         except IntegrityError:
-            # 并发场景下对方已先创建，回滚当前插入，重新查询
-            await db.rollback()
+            # 并发场景：使用 SAVEPOINT 回滚仅当前插入，不丢失同事务中已创建的标签
+            await db.rollback()  # SQLite 下此 rollback 回滚整个事务，下一步用 begin_nested 隔离
             logger.debug(f"并发创建标签冲突: {name!r}，回退查询")
             result = await db.execute(select(Tag).where(Tag.name == name))
             tag = result.scalar_one_or_none()

@@ -43,6 +43,7 @@ interface HistoryItem {
   thumbnail_path: string | null; file_path: string | null
   processing_time_ms: number | null; error: string | null
   status: string; created_at: string
+  tags: Array<{ name: string; category: string }>
 }
 const history = ref<HistoryItem[]>([])
 const historyTotal = ref(0)
@@ -297,7 +298,9 @@ async function retryAnalysis(id: string) {
     message.success('已重新加入队列')
     loadQueue()
     loadActiveAnalyses()
-  } catch {}
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重试失败')
+  }
 }
 
 // ---- 分析历史 ----
@@ -625,7 +628,17 @@ function formatDate(d: string | null | undefined) {
               { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
               { title: '模型', key: 'model_name', width: 130 },
               { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
-              { title: '失败原因', key: 'error', width: 200, render: (row: HistoryItem) => row.error
+              { title: '提取标签', key: 'tags', width: 180, render: (row: HistoryItem) => {
+                const tags = row.tags || []
+                if (tags.length === 0) return '-'
+                const shown = tags.slice(0, 4)
+                const more = tags.length > 4 ? ` +${tags.length - 4}` : ''
+                return h('span', {style:'display:flex;flex-wrap:wrap;gap:2px'}, [
+                  ...shown.map(t => h(NTag, {key:t.name,size:'tiny',bordered:false}, t.name)),
+                  more ? h('span', {style:'font-size:11px;color:#999'}, more) : null,
+                ])
+              }},
+              { title: '失败原因', key: 'error', width: 180, render: (row: HistoryItem) => row.error
                 ? h('span', {title: row.error, style:'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px'}, row.error)
                 : h('span', {style:'font-size:12px;color:#999'}, '-') },
               { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
