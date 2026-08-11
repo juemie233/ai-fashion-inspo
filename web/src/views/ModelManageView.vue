@@ -517,13 +517,13 @@ function formatDate(d: string | null | undefined) {
         <n-card title="分析历史" size="small">
           <template #header-extra>
             <n-space :size="8">
-              <n-popconfirm @positive-click="deleteAllFailed" :disabled="queueStats.failed === 0">
+              <n-popconfirm @positive-click="deleteAllFailed">
                 <template #trigger>
-                  <n-button size="small" type="error" secondary :loading="clearingFailed" :disabled="queueStats.failed === 0">
+                  <n-button size="small" type="error" secondary :loading="clearingFailed">
                     删除所有失败记录 {{ queueStats.failed > 0 ? `(${queueStats.failed})` : '' }}
                   </n-button>
                 </template>
-                确定要删除全部 {{ queueStats.failed }} 条失败记录吗？此操作不可恢复。
+                确定要删除所有失败记录吗？此操作不可恢复。
               </n-popconfirm>
               <n-button size="small" @click="loadHistory" :loading="historyLoading">刷新</n-button>
             </n-space>
