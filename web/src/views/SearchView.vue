@@ -24,6 +24,8 @@ const searching = ref(false)
 
 onMounted(() => {
   tagsStore.load()
+  // 初始加载：无条件展示所有素材
+  doSearch()
 })
 
 /** 执行搜索 */
