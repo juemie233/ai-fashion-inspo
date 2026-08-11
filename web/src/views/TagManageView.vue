@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 标签管理页：浏览/编辑/合并/批量操作/统计/导入导出。 */
 
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
 import {
@@ -73,6 +73,10 @@ const dragOverCategory = ref<string | null>(null)
 const filterSource = ref<string | null>(null)
 
 onMounted(async () => { await loadAll() })
+
+onUnmounted(() => {
+  if (suggestionDebounce) clearTimeout(suggestionDebounce)
+})
 
 async function loadAll() {
   loading.value = true
@@ -209,8 +213,8 @@ async function handleMerge() {
   } catch (e: any) { message.error(e.response?.data?.detail || '合并失败') }
 }
 
-function mergeTargetOptions() {
-  if (!mergeSource.value) return []
+const mergeTargetOptions = computed(() => {
+  if (!mergeSource.value) return [] as Array<{ label: string; value: number }>
   const opts: Array<{ label: string; value: number }> = []
   for (const group of groups.value) {
     for (const tag of group.tags) {
@@ -220,7 +224,7 @@ function mergeTargetOptions() {
     }
   }
   return opts
-}
+})
 
 // ===== 批量合并选中 =====
 function openBatchMerge() {
@@ -232,7 +236,7 @@ function openBatchMerge() {
   showBatchMergeDialog.value = true
 }
 
-function batchMergeTargetOptions() {
+const batchMergeTargetOptions = computed(() => {
   const opts: Array<{ label: string; value: number }> = []
   for (const group of groups.value) {
     for (const tag of group.tags) {
@@ -240,7 +244,7 @@ function batchMergeTargetOptions() {
     }
   }
   return opts
-}
+})
 
 async function handleBatchMerge() {
   if (!batchMergeTarget.value || selectedIds.value.size < 2) return
@@ -277,9 +281,9 @@ async function quickMerge(a: number, b: number) {
   try {
     await mergeTags(a, b)
     message.success('已快速合并')
-    // 从列表中移除
+    // 移除所有引用被合并标签的 pair（a 已被删除）
     duplicatePairs.value = duplicatePairs.value.filter(
-      p => !(p.tag_a.id === a && p.tag_b.id === b)
+      p => p.tag_a.id !== a && p.tag_b.id !== a
     )
     await loadAll()
   } catch { message.error('合并失败') }
@@ -288,6 +292,8 @@ async function quickMerge(a: number, b: number) {
 // ===== 标签详情 =====
 async function openDetail(tag: TagItem) {
   detailTag.value = tag
+  detailInspirations.value = []
+  detailTotal.value = 0
   showDetailDrawer.value = true
   detailLoading.value = true
   try {
@@ -322,7 +328,7 @@ async function handleImport() {
     importJsonText.value = ''
     await loadAll()
   } catch (e: any) {
-    message.error('导入失败：' + (e.message || 'JSON 格式错误'))
+    message.error('导入失败：请检查 JSON 格式，确保每项包含 name 字段')
   }
 }
 
@@ -628,7 +634,7 @@ function sourceColor(s: string) {
       <p v-if="mergeSource">将 <strong>{{ mergeSource.name }}</strong> 合并到：</p>
       <n-select
         v-model:value="mergeTarget"
-        :options="mergeTargetOptions()"
+        :options="mergeTargetOptions"
         placeholder="选择目标标签"
         filterable
         style="margin:16px 0"
@@ -644,7 +650,7 @@ function sourceColor(s: string) {
       <p>将选中的 {{ selectedIds.size }} 个标签合并到：</p>
       <n-select
         v-model:value="batchMergeTarget"
-        :options="batchMergeTargetOptions()"
+        :options="batchMergeTargetOptions"
         placeholder="选择目标标签"
         filterable
         style="margin:16px 0"

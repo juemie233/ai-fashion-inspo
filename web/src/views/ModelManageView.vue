@@ -100,6 +100,7 @@ async function refreshModels() {
     const { data } = await apiClient.get<ModelListResponse>('/ai/models')
     models.value = data.models
     activeModel.value = data.active_model
+    aiSettings.value.active_model = data.active_model // 同步设置面板
     ollamaConnected.value = true
   } catch {
     ollamaConnected.value = false
@@ -109,6 +110,7 @@ async function refreshModels() {
 }
 
 async function setActiveModel(name: string) {
+  const previous = activeModel.value
   try {
     await apiClient.put('/ai/models/active', null, { params: { model_name: name } })
     activeModel.value = name
@@ -116,6 +118,7 @@ async function setActiveModel(name: string) {
     message.success(`已切换到 ${name}`)
     refreshModels()
   } catch (e: any) {
+    aiSettings.value.active_model = previous // 失败回滚下拉框
     message.error(e.response?.data?.detail || '切换失败')
   }
 }
@@ -215,6 +218,8 @@ function cancelDownload() {
     downloading.value = false
     downloadStatus.value = '已取消'
     message.info('下载已取消')
+    // 5 秒后自动清空进度提示
+    setTimeout(() => { if (downloadStatus.value === '已取消') downloadStatus.value = '' }, 5000)
   }
 }
 
@@ -243,47 +248,42 @@ async function loadActiveAnalyses() {
   } catch {}
 }
 
+let pollingFast = true
+
 function startPolling() {
   loadActiveAnalyses()
-  pollTimer = setInterval(() => {
-    loadActiveAnalyses()
+  scheduleNextPoll()
+}
+
+function scheduleNextPoll() {
+  const hasActive = Object.keys(activeAnalyses.value).length > 0
+  const interval = hasActive ? 3000 : 15000
+  pollingFast = hasActive
+  pollTimer = setTimeout(async () => {
+    await loadActiveAnalyses()
     if (Object.keys(activeAnalyses.value).length > 0) {
-      loadQueue()
-      // 分析进行中时自动刷新历史列表
-      loadHistory()
+      loadQueue(); loadHistory()
     }
-  }, 3000)
+    // 有活跃或刚变空闲时继续（切换间隔时多跑一轮）
+    if (pollTimer !== null) scheduleNextPoll()
+  }, interval)
 }
 
 function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
 }
 
 async function triggerBatchAnalyze() {
   batchAnalyzing.value = true
   try {
-    // 获取所有未分析的素材（通过查询所有素材，排除已分析的）
-    const { data: allInsp } = await apiClient.get('/inspirations', { params: { page: 1, size: 9999 } })
-    const allIds: string[] = allInsp.items.map((i: any) => i.id)
-
-    // 获取已分析的素材 ID
-    const { data: analyzedData } = await apiClient.get('/ai/history', { params: { page: 1, size: 9999 } })
-    const analyzedIds = new Set(analyzedData.items.map((h: any) => h.inspiration_id))
-
-    const unanalyzedIds = allIds.filter(id => !analyzedIds.has(id))
-    if (unanalyzedIds.length === 0) {
+    const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
+    if (data.count === 0) {
       message.info('所有素材均已分析过，无需重复分析')
       return
     }
-
-    await apiClient.post('/ai/batch-analyze', unanalyzedIds)
-    message.success(`已将 ${unanalyzedIds.length} 个素材加入分析队列`)
-    loadQueue()
-    loadHistory()
-    loadActiveAnalyses()
+    await apiClient.post('/ai/batch-analyze', data.ids)
+    message.success(`已将 ${data.count} 个素材加入分析队列`)
+    loadQueue(); loadHistory(); loadActiveAnalyses()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '批量分析失败')
   } finally {
@@ -301,15 +301,21 @@ async function retryAnalysis(id: string) {
 }
 
 // ---- 分析历史 ----
+let historyAbort: AbortController | null = null
+
 async function loadHistory() {
+  if (historyAbort) historyAbort.abort()
+  historyAbort = new AbortController()
   historyLoading.value = true
   try {
     const params: any = { page: historyPage.value, size: historyPageSize }
     if (historyFilter.value) params.status = historyFilter.value
-    const { data } = await apiClient.get('/ai/history', { params })
+    const { data } = await apiClient.get('/ai/history', { params, signal: historyAbort.signal })
     history.value = data.items
     historyTotal.value = data.total
-  } catch {} finally {
+  } catch (e: any) {
+    if (e?.code !== 'ERR_CANCELED') message.error('加载历史失败')
+  } finally {
     historyLoading.value = false
   }
 }

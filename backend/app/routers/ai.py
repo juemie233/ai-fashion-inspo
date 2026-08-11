@@ -258,6 +258,17 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/unanalyzed-ids")
+async def unanalyzed_ids(db: AsyncSession = Depends(get_db)):
+    """获取所有未分析过的素材 ID 列表。避免前端全量拉取对比。"""
+    analyzed_sub = select(AIAnalysisLog.inspiration_id).distinct()
+    result = await db.execute(
+        select(Inspiration.id).where(Inspiration.id.notin_(analyzed_sub))
+    )
+    ids = [row[0] for row in result]
+    return {"ids": ids, "count": len(ids)}
+
+
 @router.get("/history")
 async def analysis_history(
     page: int = Query(1, ge=1),
