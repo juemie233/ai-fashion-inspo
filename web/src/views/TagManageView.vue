@@ -4,6 +4,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
+import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
   batchDeleteTags, deleteUnusedTags, fetchTagStats, findDuplicates,
@@ -54,9 +55,8 @@ const scanningDuplicates = ref(false)
 const duplicatePairs = ref<DuplicatePair[]>([])
 const showDuplicatesPanel = ref(false)
 
-// ===== 标签详情侧边栏 =====
-const showDetailDrawer = ref(false)
-const detailTag = ref<TagItem | null>(null)
+// ===== 选中标签 → 右侧图片面板 =====
+const selectedTag = ref<TagItem | null>(null)
 const detailInspirations = ref<TagInspiration[]>([])
 const detailTotal = ref(0)
 const detailLoading = ref(false)
@@ -64,6 +64,10 @@ const detailLoading = ref(false)
 // ===== 导入/导出 =====
 const showImportModal = ref(false)
 const importJsonText = ref('')
+
+// ===== 图片灯箱 =====
+const showLightbox = ref(false)
+const lightboxPath = ref('')
 
 // ===== 拖拽改类别 =====
 const dragTag = ref<TagItem | null>(null)
@@ -290,17 +294,16 @@ async function quickMerge(a: number, b: number) {
 }
 
 // ===== 标签详情 =====
-async function openDetail(tag: TagItem) {
-  detailTag.value = tag
+async function selectTag(tag: TagItem) {
+  selectedTag.value = tag
   detailInspirations.value = []
   detailTotal.value = 0
-  showDetailDrawer.value = true
   detailLoading.value = true
   try {
-    const data = await fetchTagInspirations(tag.id, 1, 30)
+    const data = await fetchTagInspirations(tag.id, 1, 50)
     detailInspirations.value = data.items
     detailTotal.value = data.total
-  } catch { message.error('加载详情失败') }
+  } catch { message.error('加载素材失败') }
   finally { detailLoading.value = false }
 }
 
@@ -380,6 +383,11 @@ function sourceColor(s: string) {
         <n-button @click="showImportModal = true" secondary>导入</n-button>
       </n-space>
     </div>
+
+    <div class="split-layout">
+
+    <!-- ===== 左面板：标签列表 ===== -->
+    <div class="left-panel">
 
     <!-- ===== 统计卡片 ===== -->
     <n-grid v-if="stats" :cols="5" :x-gap="12" style="margin-bottom:16px">
@@ -585,7 +593,7 @@ function sourceColor(s: string) {
 
                 <span
                   style="cursor:pointer"
-                  @click="openDetail(tag)"
+                  @click="selectTag(tag)"
                   :title="'点击查看使用该标签的素材'"
                 >{{ tag.name }}</span>
 
@@ -609,6 +617,49 @@ function sourceColor(s: string) {
         </n-collapse-item>
       </n-collapse>
     </n-spin>
+    </div><!-- /left-panel -->
+
+    <!-- ===== 右面板：选中标签的素材图片 ===== -->
+    <div class="right-panel">
+      <template v-if="selectedTag">
+        <div class="right-header">
+          <n-space align="center">
+            <h3 style="margin:0">「{{ selectedTag.name }}」</h3>
+            <n-tag size="small" :bordered="false">{{ selectedTag.usage_count }} 次</n-tag>
+            <n-tag size="small" :color="{ color: sourceColor(selectedTag.source), textColor: '#fff' }">
+              {{ SOURCE_LABELS[selectedTag.source] || selectedTag.source }}
+            </n-tag>
+            <span style="font-size:13px;color:#999">共 {{ detailTotal }} 个素材</span>
+          </n-space>
+        </div>
+        <n-spin :show="detailLoading">
+          <div v-if="detailInspirations.length === 0 && !detailLoading" class="right-empty">
+            暂无使用该标签的素材
+          </div>
+          <div v-else class="image-grid">
+            <div
+              v-for="item in detailInspirations"
+              :key="item.inspiration_id"
+              class="image-card"
+              :title="`置信度: ${(item.confidence * 100).toFixed(0)}%`"
+            >
+              <img
+                v-if="item.thumbnail_path"
+                :src="getFileUrl(item.thumbnail_path)"
+                :alt="selectedTag.name"
+                @click="lightboxPath = item.file_path; showLightbox = true"
+              />
+              <div v-else class="no-preview">无预览</div>
+            </div>
+          </div>
+        </n-spin>
+      </template>
+      <div v-else class="right-placeholder">
+        点击左侧标签查看关联素材
+      </div>
+    </div><!-- /right-panel -->
+
+    </div><!-- /split-layout -->
 
     <!-- ===== 编辑弹窗 ===== -->
     <n-modal v-model:show="showEditModal" title="编辑标签" preset="card" style="width:420px">
@@ -661,37 +712,6 @@ function sourceColor(s: string) {
       </n-space>
     </n-modal>
 
-    <!-- ===== 标签详情侧边栏 ===== -->
-    <n-drawer v-model:show="showDetailDrawer" :width="420" placement="right">
-      <n-drawer-content :title="detailTag ? `「${detailTag.name}」的素材` : '标签详情'" closable>
-        <n-spin :show="detailLoading">
-          <div v-if="detailInspirations.length === 0 && !detailLoading" style="color:#999;text-align:center;padding:40px">
-            暂无使用该标签的素材
-          </div>
-          <div v-else class="detail-grid">
-            <div
-              v-for="item in detailInspirations"
-              :key="item.inspiration_id"
-              class="detail-card"
-              :title="`置信度: ${(item.confidence * 100).toFixed(0)}%`"
-            >
-              <img
-                v-if="item.thumbnail_path"
-                :src="getFileUrl(item.thumbnail_path)"
-                style="width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:4px"
-              />
-              <div v-else style="width:100%;aspect-ratio:2/3;background:#f5f5f5;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#ccc">
-                无预览
-              </div>
-            </div>
-          </div>
-          <p v-if="detailTotal > 0" style="font-size:12px;color:#999;text-align:center;margin-top:12px">
-            共 {{ detailTotal }} 个素材使用此标签
-          </p>
-        </n-spin>
-      </n-drawer-content>
-    </n-drawer>
-
     <!-- ===== 批量合并弹窗 ===== -->
 
     <!-- ===== 导出/导入弹窗 ===== -->
@@ -710,19 +730,97 @@ function sourceColor(s: string) {
         <n-button type="primary" @click="handleImport" :disabled="!importJsonText.trim()">导入</n-button>
       </n-space>
     </n-modal>
+
+    <!-- 图片灯箱 -->
+    <ImageLightbox
+      :show="showLightbox"
+      :image-path="lightboxPath"
+      @close="showLightbox = false"
+    />
   </div>
 </template>
 
 <style scoped>
-.tag-page { max-width: 1000px; margin: 0 auto; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.tag-page { max-width: 100%; margin: 0 auto; height: calc(100vh - 120px); display: flex; flex-direction: column; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-shrink: 0; }
 .page-header h2 { margin: 0; }
 
-.detail-grid {
+/* 左右分屏 */
+.split-layout {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.left-panel {
+  width: 50%;
+  overflow-y: auto;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+
+.right-panel {
+  width: 50%;
+  overflow-y: auto;
+  border-left: 1px solid #e5e7eb;
+  padding-left: 16px;
+  flex-shrink: 0;
+}
+
+.right-header {
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f0f0f0;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
+
+.right-placeholder, .right-empty {
+  color: #999;
+  text-align: center;
+  padding: 60px 20px;
+  font-size: 14px;
+}
+
+.image-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
-.detail-card { cursor: pointer; border-radius: 4px; overflow: hidden; transition: transform 0.15s; }
-.detail-card:hover { transform: scale(1.03); }
+
+.image-card {
+  cursor: pointer;
+  border-radius: 4px;
+  overflow: hidden;
+  transition: transform 0.15s;
+}
+.image-card:hover { transform: scale(1.05); }
+.image-card img {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.no-preview {
+  width: 100%;
+  aspect-ratio: 2/3;
+  background: #f5f5f5;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ccc;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .split-layout { flex-direction: column; }
+  .left-panel, .right-panel { width: 100%; flex: none; max-height: 50vh; }
+  .right-panel { border-left: none; border-top: 1px solid #e5e7eb; padding-left: 0; padding-top: 12px; }
+  .image-grid { grid-template-columns: repeat(3, 1fr); }
+}
 </style>
