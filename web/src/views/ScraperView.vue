@@ -2,7 +2,10 @@
 /** 采集管理页：创建/查看采集任务，管理采集源。Phase 4 完整功能。 */
 
 import { h, ref, onMounted } from 'vue'
+import { NTag, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+
+const message = useMessage()
 
 interface ScraperTask {
   id: number
@@ -38,8 +41,8 @@ onMounted(async () => {
     ])
     sources.value = sRes.data.sources
     tasks.value = tRes.data
-  } catch {
-    // 采集引擎在 Phase 4 实现
+  } catch (e: any) {
+    message.error('加载采集数据失败')
   }
 })
 
@@ -56,8 +59,9 @@ async function createTask() {
     // 刷新任务列表
     const tRes = await apiClient.get('/scraper/tasks')
     tasks.value = tRes.data
-  } catch {
-    // 采集引擎在 Phase 4 实现
+    message.success('采集任务已创建')
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '创建任务失败')
   }
 }
 
@@ -97,7 +101,7 @@ function formatDate(dateStr: string | null | undefined): string {
 <template>
   <div class="scraper-page">
     <h2>采集管理</h2>
-    <p class="subtitle">自动化采集小红书和抖音的穿搭内容。此功能在 Phase 4 完整实现。</p>
+    <p class="subtitle">自动化采集小红书和抖音的穿搭内容。需要安装 Playwright。</p>
 
     <!-- 可用采集源 -->
     <n-card title="可用采集源" style="margin-bottom: 24px">
@@ -157,7 +161,7 @@ function formatDate(dateStr: string | null | undefined): string {
         v-if="tasks.length > 0"
         :columns="[
           { title: '平台', key: 'platform', render: (_: any, row: ScraperTask) => platformName(row.platform) },
-          { title: '状态', key: 'status', render: (_: any, row: ScraperTask) => h('n-tag', { type: statusType(row.status), size: 'small' }, statusLabel(row.status)) },
+          { title: '状态', key: 'status', render: (_: any, row: ScraperTask) => h(NTag, { type: statusType(row.status), size: 'small' }, statusLabel(row.status)) },
           { title: '发现数量', key: 'items_found' },
           { title: '新增数量', key: 'items_added' },
           { title: '创建时间', key: 'created_at', render: (_: any, row: ScraperTask) => formatDate(row.created_at) },

@@ -184,7 +184,10 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
             error_msg = "AI 响应无法解析为 JSON，原始输出无法识别"
             logger.warning(f"分析解析失败 {inspiration_id}: {raw_response[:200]}")
         else:
-            await _save_tags(db, inspiration_id, tags_data)
+            tag_count = await _save_tags(db, inspiration_id, tags_data)
+            if tag_count == 0:
+                error_msg = f"AI 未提取到任何有效标签（原始输出 {len(raw_response)} 字符）"
+                logger.warning(f"零标签分析 {inspiration_id}: {raw_response[:200]}")
 
         # 更新素材的主色调字段（清理注释后缀）
         if tags_data.get("dominant_colors"):
@@ -290,7 +293,7 @@ def _parse_analysis_response(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # 最后手段：去除注释后再尝试（注释剥离可能破坏字符串内的 //，仅作后备）
+    # 最后手段：去除注释后再尝试
     cleaned = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
     cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
     match2 = re.search(r'\{.*\}', cleaned, re.DOTALL)
@@ -301,18 +304,59 @@ def _parse_analysis_response(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # 终极兜底：修复被截断的 JSON（num_predict 不足导致输出被切断）
+    repaired = _repair_truncated_json(text)
+    if repaired:
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
     return {}
 
 
-async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
-    """将 AI 分析提取的标签保存到数据库。
+def _repair_truncated_json(text: str) -> str | None:
+    """尝试修复被截断的 JSON（模型输出超过 num_predict 限制）。"""
+    start = text.find("{")
+    if start == -1:
+        return None
+    fragment = text[start:]
 
-    处理 AI 模型输出的不稳定性：列表元素可能是纯字符串或嵌套 dict，
-    递归提取所有可用的字符串标签。
-    """
+    # 追踪括号栈
+    brackets = []
+    in_string = False
+    escaped = False
+    for ch in fragment:
+        if escaped:
+            escaped = False; continue
+        if ch == '\\':
+            escaped = True; continue
+        if ch == '"':
+            in_string = not in_string; continue
+        if in_string:
+            continue
+        if ch == '{': brackets.append('}')
+        elif ch == '[': brackets.append(']')
+        elif ch == '}' and brackets and brackets[-1] == '}': brackets.pop()
+        elif ch == ']' and brackets and brackets[-1] == ']': brackets.pop()
+
+    # 闭合末尾未闭合的字符串（模型被截断时常见）
+    if in_string:
+        fragment += '"'
+
+    # 补齐缺失的闭合符
+    fragment += ''.join(reversed(brackets))
+
+    return fragment if fragment.startswith('{') else None
+
+
+async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
+    """将 AI 分析提取的标签保存到数据库。返回创建的标签数。"""
     from app.services.tag_service import get_or_create_tag
     from app.models.tag import InspirationTag
     from app.utils.tag_normalizer import normalize_tag_name
+
+    tag_count = 0
 
     # 数据键 -> 标签类别的映射
     category_map = {
@@ -335,6 +379,7 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
                 if name:
                     tag = await get_or_create_tag(db, name, category, "ai_generated")
                     await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
+                    tag_count += 1
 
     # 处理结构化单品标签 — 兼容 type/color 为列表、features 为字符串
     items = data.get("items") or []
@@ -361,25 +406,30 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
             if item_type:
                 tag = await get_or_create_tag(db, item_type, "item_type", "ai_generated")
                 await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
+                tag_count += 1
 
             if color:
                 tag = await get_or_create_tag(db, color, "color", "ai_generated")
                 await _link_tag(db, inspiration_id, tag.id, confidence=0.85)
+                tag_count += 1
 
             for feat in features:
                 if isinstance(feat, str):
-                    # 通过 _extract_tag_names 统一过滤（长度/合法性校验）
                     for fv in _extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
                         if fv:
                             tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
                             await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+                            tag_count += 1
                 elif isinstance(feat, dict):
                     for fv in _extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
                         if fv:
                             tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
                             await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+                            tag_count += 1
+
+    return tag_count
 
 
 def _extract_tag_names(value) -> list[str]:

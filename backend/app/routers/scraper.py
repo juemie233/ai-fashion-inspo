@@ -100,8 +100,12 @@ async def cancel_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 
 async def _run_scraper(task_id: int):
-    """后台任务：根据平台执行采集。Phase 4 完整实现。"""
-    import logging
+    """后台任务：根据平台执行采集。"""
+    from app.services.scraper_service import run_scraper_task
 
     logger = logging.getLogger(__name__)
-    logger.info(f"采集任务 {task_id} 已入队 — 采集引擎将在 Phase 4 实现")
+    logger.info(f"采集任务 {task_id} 开始执行")
+    try:
+        await run_scraper_task(task_id)
+    except Exception as e:
+        logger.error(f"采集任务 {task_id} 异常: {e}")
