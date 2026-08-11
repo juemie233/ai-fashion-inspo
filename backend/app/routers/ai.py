@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -510,6 +510,65 @@ async def update_sampling_params(
         "top_p": getattr(settings, "ai_top_p", 0.9),
         "top_k": getattr(settings, "ai_top_k", 40),
         "num_predict": getattr(settings, "ai_num_predict", 1024),
+    }
+
+
+# ============ 数据重置 ============
+
+
+@router.delete("/reset")
+async def reset_all_data(
+    confirm: str = Query("no", description="输入 'yes' 二次确认删除所有数据"),
+):
+    """重置所有数据：清空数据库所有表 + 删除存储文件。
+
+    危险操作，需 query 参数 confirm=yes 才执行。
+    """
+    if confirm != "yes":
+        raise HTTPException(
+            status_code=400,
+            detail="需要 confirm=yes 确认。此操作将删除所有素材、标签、分析记录和照片文件！",
+        )
+
+    import shutil
+    from app.models.tag import InspirationTag, Tag
+    from app.models.scraper import ScraperTask
+
+    async with async_session() as db:
+        # 按外键依赖顺序删除（先删子表，再删主表）
+        tables_in_order = [
+            (InspirationTag, "inspiration_tags"),
+            (AIAnalysisLog, "ai_analysis_log"),
+            (ScraperTask, "scraper_tasks"),
+            (Inspiration, "inspirations"),
+            (Tag, "tags"),
+        ]
+        deleted_counts = {}
+        for table_model, table_name in tables_in_order:
+            result = await db.execute(delete(table_model))
+            deleted_counts[table_name] = result.rowcount
+        await db.commit()
+
+    # 清空存储目录
+    storage_deleted = 0
+    for dir_path in [
+        settings.images_dir,
+        settings.thumbnails_dir,
+        settings.videos_dir,
+    ]:
+        if dir_path.exists():
+            file_count = len(list(dir_path.iterdir()))
+            shutil.rmtree(dir_path)
+            dir_path.mkdir(parents=True)
+            storage_deleted += file_count
+
+    logger.warning(
+        f"⚠ 数据已全部重置！数据库: {deleted_counts}, 文件: {storage_deleted} 个"
+    )
+    return {
+        "message": "所有数据已重置",
+        "database": deleted_counts,
+        "files_deleted": storage_deleted,
     }
 
 

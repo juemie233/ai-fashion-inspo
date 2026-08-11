@@ -5,8 +5,10 @@ import { h, ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
+import { useTagsStore } from '@/stores/tags'
 
 const message = useMessage()
+const tagsStore = useTagsStore()
 
 // ===== 模型状态 =====
 interface OllamaModel {
@@ -395,6 +397,33 @@ function resetToDefaults() {
   message.info('已恢复默认值（需点击保存生效）')
 }
 
+// ===== 重置所有数据 =====
+const resetStep = ref(0) // 0=idle, 1=一次确认, 2=二次确认
+const resetting = ref(false)
+
+function startReset() { resetStep.value = 1 }
+function cancelReset() { resetStep.value = 0 }
+
+async function confirmResetStep() {
+  if (resetStep.value === 1) {
+    resetStep.value = 2 // 进入二次确认
+  } else if (resetStep.value === 2) {
+    resetStep.value = 0
+    resetting.value = true
+    try {
+      const { data } = await apiClient.delete('/ai/reset', { params: { confirm: 'yes' } })
+      message.success(data.message || '所有数据已重置')
+      // 刷新所有状态
+      refreshModels(); loadQueue(); loadHistory(); loadSettings()
+      tagsStore.load()
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '重置失败')
+    } finally {
+      resetting.value = false
+    }
+  }
+}
+
 // ---- 工具函数 ----
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B'
@@ -627,6 +656,50 @@ function formatDate(d: string | null | undefined) {
               <n-button type="primary" @click="saveSettings" :loading="savingSettings">保存参数</n-button>
               <n-button @click="resetToDefaults">恢复默认值</n-button>
             </n-space>
+          </n-card>
+
+          <!-- 危险操作：重置所有数据 -->
+          <n-card title="⚠ 危险操作" size="small" style="border-color:#ef4444">
+            <p style="font-size:13px;color:#999;margin-bottom:12px">
+              删除数据库中所有素材、标签、分析记录，并清空所有照片文件。此操作不可恢复！
+            </p>
+
+            <!-- 阶段 0: 初始按钮 -->
+            <n-button v-if="resetStep === 0" type="error" @click="startReset">
+              重置所有数据
+            </n-button>
+
+            <!-- 阶段 1: 第一次确认 -->
+            <n-popconfirm
+              v-if="resetStep === 1"
+              @positive-click="confirmResetStep"
+              @negative-click="cancelReset"
+            >
+              <template #trigger>
+                <n-button type="error" :loading="resetting">
+                  第一次确认：确定要删除所有数据吗？
+                </n-button>
+              </template>
+              此操作将清空数据库和所有照片文件！请再次确认。
+            </n-popconfirm>
+
+            <!-- 阶段 2: 第二次确认 -->
+            <n-popconfirm
+              v-if="resetStep === 2"
+              @positive-click="confirmResetStep"
+              @negative-click="cancelReset"
+            >
+              <template #trigger>
+                <n-button type="error" secondary :loading="resetting">
+                  第二次确认：真的要删除吗？此操作不可恢复！
+                </n-button>
+              </template>
+              最后一次确认：点击"确定"后将立即删除所有数据！
+            </n-popconfirm>
+
+            <p v-if="resetting" style="font-size:12px;color:#ef4444;margin-top:8px">
+              正在删除所有数据...
+            </p>
           </n-card>
         </n-space>
       </n-tab-pane>
