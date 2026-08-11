@@ -1,0 +1,22 @@
+# 数据库
+*.db
+*.db-journal
+*.db-wal
+
+# 存储文件
+storage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# 环境配置
+.env
+
+# IDE
+.vscode/
+.idea/

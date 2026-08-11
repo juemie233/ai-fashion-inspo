@@ -1,0 +1,82 @@
+"""灵感素材模型：核心实体，代表一条保存的穿搭图片/视频。"""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+
+class Inspiration(Base):
+    """穿搭灵感素材"""
+
+    __tablename__ = "inspirations"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(32), default="manual_upload", index=True
+    )
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_author: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_platform_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, unique=True, index=True
+    )
+
+    file_path: Mapped[str] = mapped_column(Text)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_type: Mapped[str] = mapped_column(String(16), default="image")
+    dominant_colors: Mapped[str | None] = mapped_column(
+        String(128), nullable=True  # JSON 数组字符串
+    )
+
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    # 关联关系
+    tags: Mapped[list["InspirationTag"]] = relationship(
+        "InspirationTag",
+        back_populates="inspiration",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    analysis_logs: Mapped[list["AIAnalysisLog"]] = relationship(
+        "AIAnalysisLog",
+        back_populates="inspiration",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Inspiration(id={self.id}, source={self.source_type})>"
+
+
+class AIAnalysisLog(Base):
+    """AI 分析日志：记录每次模型分析的过程和结果。"""
+
+    __tablename__ = "ai_analysis_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inspiration_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("inspirations.id", ondelete="CASCADE"), index=True
+    )
+    model_name: Mapped[str] = mapped_column(String(64))
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_time_ms: Mapped[int | None] = mapped_column(nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # 关联关系
+    inspiration: Mapped["Inspiration"] = relationship(
+        "Inspiration", back_populates="analysis_logs"
+    )

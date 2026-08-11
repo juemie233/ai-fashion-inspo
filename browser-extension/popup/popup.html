@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>穿搭灵感采集器</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <!-- 头部 -->
+    <header class="header">
+      <h1>穿搭灵感采集器</h1>
+      <div class="header-actions">
+        <button id="settingsBtn" class="icon-btn" title="设置">⚙️</button>
+      </div>
+    </header>
+
+    <!-- 连接状态 -->
+    <div id="statusBar" class="status-bar disconnected">
+      <span class="status-dot"></span>
+      <span id="statusText">检查连接中...</span>
+    </div>
+
+    <!-- 图片列表 -->
+    <div id="imageGrid" class="image-grid">
+      <p class="hint">打开小红书或抖音的穿搭页面，<br/>然后点击此插件选择图片采集</p>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <footer class="footer">
+      <div class="footer-stats">
+        <span>已选 <strong id="selectedCount">0</strong> / <span id="totalCount">0</span></span>
+      </div>
+      <div class="footer-actions">
+        <button id="selectAllBtn" class="btn btn-secondary">全选</button>
+        <button id="uploadBtn" class="btn btn-primary" disabled>采集入库</button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 设置面板 -->
+  <div id="settingsPanel" class="settings-panel hidden">
+    <h2>设置</h2>
+    <div class="form-group">
+      <label for="apiUrl">后端地址</label>
+      <input type="text" id="apiUrl" placeholder="http://localhost:8000" />
+    </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="autoAnalyze" checked />
+        采集后自动 AI 分析
+      </label>
+    </div>
+    <div class="form-actions">
+      <button id="saveSettingsBtn" class="btn btn-primary">保存</button>
+      <button id="closeSettingsBtn" class="btn btn-secondary">取消</button>
+    </div>
+  </div>
+
+  <!-- 上传进度遮罩 -->
+  <div id="uploadOverlay" class="upload-overlay hidden">
+    <div class="upload-progress">
+      <div class="spinner"></div>
+      <p id="uploadProgressText">正在采集...</p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

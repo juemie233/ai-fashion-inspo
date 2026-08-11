@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build output
+dist/
+web/dist/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+
+# Storage
+storage/
+backend/storage/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo
+.expo/
+mobile/android/
+mobile/ios/
+
+# Logs
+*.log

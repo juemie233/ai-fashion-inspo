@@ -1,0 +1,29 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.19
+websockets==14.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+alembic==1.14.1
+
+# Data validation
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Image processing
+Pillow==11.1.0
+
+# AI / Ollama client
+httpx==0.28.1
+ollama==0.4.7
+
+# Scraping
+playwright==1.49.1
+playwright-stealth==1.0.6
+
+# Utilities
+aiofiles==24.1.0
+python-dateutil==2.9.0

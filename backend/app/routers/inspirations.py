@@ -1,0 +1,250 @@
+"""灵感素材 CRUD 的 REST API 路由。"""
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.database import get_db
+from app.models.inspiration import Inspiration
+from app.models.tag import InspirationTag, Tag
+from app.schemas.inspiration import (
+    InspirationCreate,
+    InspirationDetailOut,
+    InspirationListOut,
+    InspirationOut,
+    InspirationUpdate,
+    InspirationTagOut,
+    TagOut,
+)
+from app.services.file_service import delete_files, save_upload
+
+router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
+
+
+@router.post("", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
+async def create_inspiration(
+    file: UploadFile = File(...),
+    source_type: str = Form(default="manual_upload"),
+    source_url: str | None = Form(default=None),
+    source_author: str | None = Form(default=None),
+    source_platform_id: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传图片并创建灵感素材。AI 分析在后台异步执行。"""
+    # 校验文件类型
+    allowed_types = ("image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4")
+    if file.content_type and file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {file.content_type}。允许: {allowed_types}",
+        )
+
+    # 保存文件
+    file_path, thumb_path = await save_upload(file)
+
+    # 判断媒体类型
+    media_type = "image"
+    if file.content_type and file.content_type.startswith("video/"):
+        media_type = "video"
+
+    # 检查重复（按平台 ID）
+    if source_platform_id:
+        result = await db.execute(
+            select(Inspiration).where(
+                Inspiration.source_platform_id == source_platform_id
+            )
+        )
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"平台ID '{source_platform_id}' 的素材已存在",
+            )
+
+    inspiration = Inspiration(
+        source_type=source_type,
+        source_url=source_url,
+        source_author=source_author,
+        source_platform_id=source_platform_id,
+        file_path=file_path,
+        thumbnail_path=thumb_path,
+        media_type=media_type,
+    )
+    db.add(inspiration)
+    await db.flush()
+    await db.refresh(inspiration)
+
+    return _to_out(inspiration)
+
+
+@router.get("", response_model=InspirationListOut)
+async def list_inspirations(
+    page: int = 1,
+    size: int = 50,
+    source_type: str | None = None,
+    is_favorite: bool | None = None,
+    sort: str = "newest",
+    db: AsyncSession = Depends(get_db),
+):
+    """分页获取灵感列表，支持来源和收藏筛选。"""
+    query = select(Inspiration).options(
+        selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
+    )
+
+    if source_type:
+        query = query.where(Inspiration.source_type == source_type)
+    if is_favorite is not None:
+        query = query.where(Inspiration.is_favorite == is_favorite)
+
+    # 排序
+    if sort == "oldest":
+        query = query.order_by(Inspiration.created_at.asc())
+    else:
+        query = query.order_by(Inspiration.created_at.desc())
+
+    # 统计总数
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # 分页
+    query = query.offset((page - 1) * size).limit(size)
+    result = await db.execute(query)
+    inspirations = result.unique().scalars().all()
+
+    return InspirationListOut(
+        items=[_to_out(i) for i in inspirations],
+        total=total,
+        page=page,
+        size=size,
+    )
+
+
+@router.get("/{inspiration_id}", response_model=InspirationDetailOut)
+async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+    """获取单个灵感详情（包含完整标签和分析日志）。"""
+    result = await db.execute(
+        select(Inspiration)
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.analysis_logs),
+        )
+        .where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.unique().scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+
+    from app.schemas.inspiration import AnalysisLogOut
+
+    detail = InspirationDetailOut(
+        id=inspiration.id,
+        source_type=inspiration.source_type,
+        source_url=inspiration.source_url,
+        source_author=inspiration.source_author,
+        source_platform_id=inspiration.source_platform_id,
+        file_path=inspiration.file_path,
+        thumbnail_path=inspiration.thumbnail_path,
+        media_type=inspiration.media_type,
+        dominant_colors=inspiration.dominant_colors,
+        is_favorite=inspiration.is_favorite,
+        created_at=inspiration.created_at,
+        updated_at=inspiration.updated_at,
+        tags=[
+            InspirationTagOut(tag=TagOut.model_validate(t.tag), confidence=t.confidence)
+            for t in inspiration.tags
+        ],
+        analysis_logs=[
+            AnalysisLogOut.model_validate(log) for log in inspiration.analysis_logs
+        ],
+    )
+
+    # 推断分析状态
+    logs = inspiration.analysis_logs
+    if not logs:
+        detail.analysis_status = "none"
+    elif any(log.error for log in logs):
+        detail.analysis_status = "error"
+    else:
+        detail.analysis_status = "done"
+
+    return detail
+
+
+@router.patch("/{inspiration_id}", response_model=InspirationOut)
+async def update_inspiration(
+    inspiration_id: str,
+    data: InspirationUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新灵感（收藏状态、作者等部分字段）。"""
+    result = await db.execute(
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.unique().scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+
+    if data.is_favorite is not None:
+        inspiration.is_favorite = data.is_favorite
+    if data.source_author is not None:
+        inspiration.source_author = data.source_author
+
+    await db.flush()
+    await db.refresh(inspiration)
+    return _to_out(inspiration)
+
+
+@router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+    """删除灵感素材及其对应的磁盘文件。"""
+    result = await db.execute(
+        select(Inspiration).where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+
+    # 删除磁盘文件
+    delete_files(inspiration.file_path, inspiration.thumbnail_path)
+
+    await db.delete(inspiration)
+    await db.flush()
+
+
+def _to_out(inspiration: Inspiration) -> InspirationOut:
+    """将 ORM 模型转换为 API 响应模型。"""
+    tags_out = [
+        InspirationTagOut(
+            tag=TagOut.model_validate(t.tag),
+            confidence=t.confidence,
+        )
+        for t in inspiration.tags
+    ]
+
+    # 推断分析状态
+    if not inspiration.analysis_logs:
+        status = "none"
+    elif any(log.error for log in inspiration.analysis_logs):
+        status = "error"
+    else:
+        status = "done"
+
+    return InspirationOut(
+        id=inspiration.id,
+        source_type=inspiration.source_type,
+        source_url=inspiration.source_url,
+        source_author=inspiration.source_author,
+        source_platform_id=inspiration.source_platform_id,
+        file_path=inspiration.file_path,
+        thumbnail_path=inspiration.thumbnail_path,
+        media_type=inspiration.media_type,
+        dominant_colors=inspiration.dominant_colors,
+        is_favorite=inspiration.is_favorite,
+        created_at=inspiration.created_at,
+        updated_at=inspiration.updated_at,
+        tags=tags_out,
+        analysis_status=status,
+    )
