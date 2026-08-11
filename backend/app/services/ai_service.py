@@ -211,7 +211,11 @@ def _parse_analysis_response(raw: str) -> dict:
 
 
 async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
-    """将 AI 分析提取的标签保存到数据库。"""
+    """将 AI 分析提取的标签保存到数据库。
+
+    处理 AI 模型输出的不稳定性：列表元素可能是纯字符串或嵌套 dict，
+    递归提取所有可用的字符串标签。
+    """
     from app.services.tag_service import get_or_create_tag
     from app.models.tag import InspirationTag
     from app.utils.tag_normalizer import normalize_tag_name
@@ -230,18 +234,21 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
     for key, category in category_map.items():
         values = data.get(key, [])
         for value in values:
-            name = normalize_tag_name(str(value).strip())
-            if not name:
-                continue
-            tag = await get_or_create_tag(db, name, category)
-            await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
+            extracted = _extract_tag_names(value)
+            for name in extracted:
+                name = normalize_tag_name(name)
+                if name:
+                    tag = await get_or_create_tag(db, name, category)
+                    await _link_tag(db, inspiration_id, tag.id, confidence=0.8)
 
     # 处理结构化单品标签
     items = data.get("items", [])
     for item in items:
         if isinstance(item, dict):
-            item_type = normalize_tag_name(item.get("type", "").strip())
-            color = normalize_tag_name(item.get("color", "").strip())
+            item_type = normalize_tag_name(str(item.get("type", "")).strip())
+            color_raw = str(item.get("color", "")).strip()
+            # 将 hex 颜色值转换为中文颜色名
+            color = _normalize_color(color_raw)
             features = item.get("features", [])
 
             if item_type:
@@ -253,10 +260,222 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict):
                 await _link_tag(db, inspiration_id, tag.id, confidence=0.85)
 
             for feat in features:
-                feat_name = normalize_tag_name(feat.strip())
-                if feat_name:
-                    tag = await get_or_create_tag(db, feat_name, "body_part")
-                    await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+                if isinstance(feat, str):
+                    feat_name = normalize_tag_name(feat.strip())
+                    if feat_name:
+                        tag = await get_or_create_tag(db, feat_name, "body_part")
+                        await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+                elif isinstance(feat, dict):
+                    for fv in _extract_tag_names(feat):
+                        fv = normalize_tag_name(fv)
+                        if fv:
+                            tag = await get_or_create_tag(db, fv, "body_part")
+                            await _link_tag(db, inspiration_id, tag.id, confidence=0.7)
+
+
+def _extract_tag_names(value) -> list[str]:
+    """从任意 AI 返回值中递归提取标签名称字符串。
+
+    AI 模型可能返回:
+      - 纯字符串: "坐姿"
+      - 嵌套 dict: {"type": "坐姿", "position": ["沙发"]}
+      - 混合列表
+    此函数递归提取所有有意义的字符串值。
+    """
+    if isinstance(value, str):
+        s = value.strip()
+        # 跳过明显不是标签的字符串
+        if not s or len(s) <= 1:
+            return []
+        # 跳过 JSON/dict 结构字符串（被错误 str() 化的情况）
+        if s.startswith("{") and s.endswith("}"):
+            return []
+        # 跳过过长字符串（很可能是描述文本而非标签）
+        if len(s) > 10:
+            return []
+        # 跳过包含逗号、句号的描述文本
+        if '，' in s or '。' in s or ',' in s:
+            return []
+        # 斜杠分隔的值拆分为多个独立标签
+        if '/' in s:
+            parts = [p.strip() for p in s.split('/') if p.strip()]
+            results = []
+            for p in parts:
+                results.extend(_extract_tag_names(p))
+            return results
+        # 跳过纯数字
+        if s.isdigit():
+            return []
+        return [s]
+
+    if isinstance(value, (int, float, bool)):
+        return []
+
+    if isinstance(value, dict):
+        results = []
+
+        # 第1轮：已知的 value-only key（直接提取值）
+        known_value_keys = (
+            "type", "name", "label",
+            "属性", "属性名称", "属性标签", "标签",
+            "部位", "style_name", "style",
+            "description", "描述",
+        )
+        for key in known_value_keys:
+            v = value.get(key)
+            if v is not None:
+                results.extend(_extract_tag_names(v))
+
+        # 第2轮：pose/position 结构字段
+        for key in ("pose", "position", "body_position", "orientation"):
+            v = value.get(key)
+            if v is not None:
+                results.extend(_extract_tag_names(v))
+
+        # 第3轮：中文语境键（图片属性、场合、季节等）
+        for key in ("图片属性", "属性值", "适合场合", "适合季节", "穿着方式",
+                     "穿着方式/身体部位关系"):
+            v = value.get(key)
+            if v is not None:
+                results.extend(_extract_tag_names(v))
+
+        # 第4轮：兜底 — 遍历所有值
+        # 处理 {"宽松/修身": "修身"} 或 {"上衣": "黑色长袖"} 等非标准键
+        if not results:
+            for k, v in value.items():
+                if isinstance(k, str) and not any('一' <= c <= '鿿' for c in k):
+                    if isinstance(v, bool):
+                        continue
+                if isinstance(v, str) and v.strip():
+                    results.append(v.strip())
+                elif isinstance(v, list):
+                    results.extend(_extract_tag_names(v))
+                elif isinstance(v, dict):
+                    results.extend(_extract_tag_names(v))
+
+        return results
+
+    if isinstance(value, list):
+        results = []
+        for item in value:
+            results.extend(_extract_tag_names(item))
+        return results
+
+    return []
+
+
+# 常用 hex 颜色 → 中文名称映射
+_HEX_COLOR_MAP: dict[str, str] = {
+    # 红/粉
+    "#FF0000": "红色", "#FF0F1C": "红色", "#E60012": "红色",
+    "#FF008C": "粉色", "#FF69B4": "粉色", "#FFC0CB": "粉色",
+    "#FFB6C1": "粉色", "#f1a0d6": "粉色",
+    # 橙/黄/金
+    "#FFA500": "橙色", "#FF8C00": "橙色",
+    "#FFD700": "金色", "#FFC41B": "金色", "#FFB30A": "金色", "#E4B53A": "金色",
+    "#FFFF00": "黄色",
+    # 绿
+    "#008000": "绿色", "#00FF00": "绿色", "#128F7D": "青绿色", "#015342": "深绿色",
+    # 蓝
+    "#0000FF": "蓝色", "#0000A2": "深蓝色", "#0A3647": "深蓝色",
+    "#0D173A": "深蓝色", "#0E1A3D": "深蓝色", "#000039": "深蓝色",
+    "#1E90FF": "蓝色", "#4169E1": "蓝色",
+    # 紫
+    "#800080": "紫色", "#8B00FF": "紫色", "#4B0082": "紫色",
+    # 黑/白/灰
+    "#000000": "黑色", "#000": "黑色", "#0C1317": "黑色",
+    "#1e1d20": "黑色", "#1A0B2C": "深紫色",
+    "#FFFFFF": "白色", "#FFF": "白色",
+    "#808080": "灰色", "#A2A2AA": "灰色", "#C0C0C0": "银色",
+    # 棕/米
+    "#8B4513": "棕色", "#6C4B2A": "棕色", "#8C6B49": "棕色", "#b78432": "棕色",
+    "#A0522D": "棕色",
+    "#F5DEB3": "米色", "#F5F5DC": "米色",
+    # 肤色
+    "#FFE4C4": "肤色", "#FFDAB9": "肤色", "#FFE4B5": "肤色", "#E5938D": "肤色",
+}
+
+
+def _normalize_color(raw: str) -> str:
+    """将原始颜色值标准化为中文颜色名。"""
+    if not raw:
+        return ""
+
+    # 已经是中文颜色名（可能带 # 前缀，如 "#黑色"）
+    has_chinese = any('一' <= c <= '鿿' for c in raw)
+    if has_chinese:
+        # 去掉 # 前缀
+        return raw.lstrip("#").strip()
+
+    # 英文颜色名（可能带 # 前缀，如 "#Black"）
+    EN_COLOR_MAP = {"BLACK": "黑色", "WHITE": "白色", "RED": "红色", "BLUE": "蓝色",
+                    "GREEN": "绿色", "YELLOW": "黄色", "PINK": "粉色", "PURPLE": "紫色",
+                    "ORANGE": "橙色", "BROWN": "棕色", "GRAY": "灰色", "GREY": "灰色",
+                    "GOLD": "金色", "SILVER": "银色", "BEIGE": "米色"}
+    upper_raw = raw.lstrip("#").strip().upper()
+    if upper_raw in EN_COLOR_MAP:
+        return EN_COLOR_MAP[upper_raw]
+
+    # 去除 # 前缀后查找
+    cleaned = raw.strip().upper()
+    if not cleaned.startswith("#"):
+        cleaned = f"#{cleaned}"
+
+    # 精确匹配
+    if cleaned in _HEX_COLOR_MAP:
+        return _HEX_COLOR_MAP[cleaned]
+
+    # 前缀模糊匹配（如 #000039 → 深蓝色）
+    if len(cleaned) >= 4:
+        prefix = cleaned[:4]
+        for hex_key, name in _HEX_COLOR_MAP.items():
+            if hex_key.startswith(prefix):
+                return name
+
+    # 按 RGB 分量推断基本颜色
+    return _guess_color_from_hex(cleaned)
+
+
+def _guess_color_from_hex(hex_str: str) -> str:
+    """根据十六进制颜色值推断基本颜色名称。"""
+    try:
+        h = hex_str.lstrip("#")
+        if len(h) >= 6:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        elif len(h) == 3:
+            r, g, b = int(h[0], 16) * 17, int(h[1], 16) * 17, int(h[2], 16) * 17
+        else:
+            return ""
+
+        # 灰度检测
+        if abs(r - g) < 20 and abs(g - b) < 20 and abs(r - b) < 20:
+            if r < 40:
+                return "黑色"
+            elif r > 220:
+                return "白色"
+            elif r < 120:
+                return "深灰色"
+            else:
+                return "浅灰色"
+
+        # 基本颜色推断
+        if r > g and r > b:
+            if r - max(g, b) < 40:
+                if g > b:
+                    return "棕色"
+                return "粉色" if r > 200 else "深红色"
+            return "红色"
+        if g > r and g > b:
+            return "绿色"
+        if b > r and b > g:
+            return "蓝色"
+        if r > 150 and g > 100 and b < 80:
+            return "橙色"
+        if r > 150 and g > 150 and b < 60:
+            return "金色"
+        return ""
+    except (ValueError, IndexError):
+        return ""
 
 
 async def _link_tag(
