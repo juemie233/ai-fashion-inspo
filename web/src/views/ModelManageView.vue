@@ -318,6 +318,21 @@ async function deleteLog(logId: number) {
   }
 }
 
+const clearingFailed = ref(false)
+async function deleteAllFailed() {
+  clearingFailed.value = true
+  try {
+    const { data } = await apiClient.delete('/ai/history/failed/all')
+    message.success(data.message || '已清空失败记录')
+    loadHistory()
+    loadQueue()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '清空失败')
+  } finally {
+    clearingFailed.value = false
+  }
+}
+
 // 标签类别中文映射
 const tagCategoryLabel: Record<string, string> = {
   style: '风格', item_type: '单品类型', color: '颜色', fit: '版型',
@@ -501,7 +516,17 @@ function formatDate(d: string | null | undefined) {
         <!-- 分析历史 -->
         <n-card title="分析历史" size="small">
           <template #header-extra>
-            <n-button size="small" @click="loadHistory" :loading="historyLoading">刷新</n-button>
+            <n-space :size="8">
+              <n-popconfirm @positive-click="deleteAllFailed" :disabled="queueStats.failed === 0">
+                <template #trigger>
+                  <n-button size="small" type="error" secondary :loading="clearingFailed" :disabled="queueStats.failed === 0">
+                    删除所有失败记录 {{ queueStats.failed > 0 ? `(${queueStats.failed})` : '' }}
+                  </n-button>
+                </template>
+                确定要删除全部 {{ queueStats.failed }} 条失败记录吗？此操作不可恢复。
+              </n-popconfirm>
+              <n-button size="small" @click="loadHistory" :loading="historyLoading">刷新</n-button>
+            </n-space>
           </template>
 
           <n-radio-group v-model:value="historyFilter" @update:value="filterHistory" size="small" style="margin-bottom:12px">

@@ -312,6 +312,26 @@ async def retry_analysis(
     return {"message": "已重新加入分析队列", "inspiration_id": inspiration_id}
 
 
+@router.delete("/history/failed/all")
+async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)):
+    """批量删除所有失败的分析日志。"""
+    result = await db.execute(
+        select(AIAnalysisLog).where(AIAnalysisLog.error.isnot(None))
+    )
+    failed_logs = result.scalars().all()
+    count = len(failed_logs)
+
+    if count == 0:
+        return {"message": "没有失败的记录", "count": 0}
+
+    for log in failed_logs:
+        await db.delete(log)
+    await db.commit()
+
+    logger.info(f"已批量删除 {count} 条失败的 AI 分析记录")
+    return {"message": f"已删除 {count} 条失败记录", "count": count}
+
+
 @router.get("/history/{log_id}")
 async def get_analysis_detail(
     log_id: int,
