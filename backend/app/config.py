@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     scraper_max_concurrent: int = 3
     scraper_browser_headless: bool = True
     chrome_executable: str = (
-        "C:/Program Files/Google/Chrome/Application/chrome.exe"
-    )  # Chrome 浏览器路径
+        "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe"
+    )  # Chrome 浏览器路径（Windows 用户级安装默认位置）
     chrome_user_data_dir: str = (
         "C:/Users/Administrator/Desktop/chrome-scraper-profile"
     )  # 采集专用 Chrome 用户数据目录

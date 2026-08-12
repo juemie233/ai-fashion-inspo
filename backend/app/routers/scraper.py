@@ -24,7 +24,7 @@ CHROME_DEBUG_CMD = (
 )
 
 
-def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str]:
+def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str, bool]:
     """检测 Chrome 调试端口是否可用。
 
     Args:
@@ -32,14 +32,13 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str]:
         timeout: 连接超时（秒）
 
     Returns:
-        (是否可用, 详情信息)
+        (是否可用, 详情信息, 是否为 Google Chrome)
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
         result = sock.connect_ex(("127.0.0.1", port))
         if result == 0:
-            # 端口可达，进一步验证是否为 Chrome 调试端口
             import urllib.request
             try:
                 req = urllib.request.Request(
@@ -49,15 +48,22 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str]:
                 with urllib.request.urlopen(req, timeout=1) as resp:
                     data = json.loads(resp.read().decode())
                     browser = data.get("Browser", "Unknown")
-                    return True, f"已连接 {browser} (端口 {port})"
+                    is_chrome = "Chrome" in browser and "360" not in browser
+                    if is_chrome:
+                        return True, f"已连接 {browser} (端口 {port})", True
+                    else:
+                        return True, (
+                            f"端口 {port} 上运行的是 {browser}，而非 Google Chrome。"
+                            f"CDP 采集必须使用 Google Chrome，请关闭当前浏览器后重新启动 Chrome 调试模式。"
+                        ), False
             except Exception:
-                return True, f"端口 {port} 可达，但未能确认 Chrome 调试协议"
+                return True, f"端口 {port} 可达，但未能确认调试协议", False
         else:
-            return False, f"端口 {port} 无响应"
+            return False, f"端口 {port} 无响应（请先在命令行中启动调试 Chrome）", False
     except socket.timeout:
-        return False, f"端口 {port} 连接超时"
+        return False, f"端口 {port} 连接超时", False
     except Exception as e:
-        return False, f"端口检测异常: {e}"
+        return False, f"端口检测异常: {e}", False
     finally:
         sock.close()
 
@@ -115,11 +121,16 @@ async def scraper_sources():
 @router.get("/cdp-check/{port}")
 async def check_cdp_endpoint(port: int):
     """检查指定端口的 Chrome 调试连接是否就绪。"""
-    ok, detail = _check_cdp(port)
+    ok, detail, is_chrome = _check_cdp(port)
     return {
         "available": ok,
+        "is_google_chrome": is_chrome,
         "detail": detail,
-        "startup_command": CHROME_DEBUG_CMD.format(chrome=settings.chrome_executable, port=port, data_dir=settings.chrome_user_data_dir),
+        "startup_command": CHROME_DEBUG_CMD.format(
+            chrome=settings.chrome_executable,
+            port=port,
+            data_dir=settings.chrome_user_data_dir,
+        ),
     }
 
 
@@ -136,15 +147,27 @@ async def create_scraper_task(
     """
     # CDP 模式：预检 Chrome 调试端口
     if data.cdp_port is not None:
-        ok, detail = _check_cdp(data.cdp_port)
+        ok, detail, is_chrome = _check_cdp(data.cdp_port)
         if not ok:
-            cmd = CHROME_DEBUG_CMD.format(chrome=settings.chrome_executable, port=data.cdp_port, data_dir=settings.chrome_user_data_dir)
+            cmd = CHROME_DEBUG_CMD.format(
+                chrome=settings.chrome_executable,
+                port=data.cdp_port,
+                data_dir=settings.chrome_user_data_dir,
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": f"Chrome 调试端口不可用: {detail}",
-                    "hint": "请先用调试模式启动 Chrome 后再创建采集任务",
+                    "hint": "请先用调试模式启动 Google Chrome 后再创建采集任务",
                     "command": cmd,
+                },
+            )
+        if not is_chrome:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": detail,
+                    "hint": "CDP 采集必须使用 Google Chrome（非 360 极速浏览器等衍生版本）",
                 },
             )
 

@@ -154,10 +154,14 @@ async function testCdp() {
   cdpStatus.value = 'idle'
   try {
     const res = await apiClient.get(`/scraper/cdp-check/${formCdpPort.value}`)
-    if (res.data.available) {
+    if (res.data.available && res.data.is_google_chrome) {
       cdpStatus.value = 'ok'
       cdpDetail.value = res.data.detail
       message.success(cdpDetail.value)
+    } else if (res.data.available && !res.data.is_google_chrome) {
+      cdpStatus.value = 'fail'
+      cdpDetail.value = res.data.detail
+      message.error('检测到非 Google Chrome 浏览器！请关闭后重新启动 Google Chrome 调试模式。')
     } else {
       cdpStatus.value = 'fail'
       cdpDetail.value = res.data.detail

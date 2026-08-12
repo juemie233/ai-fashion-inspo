@@ -20,7 +20,22 @@
 | **Google Chrome** | 最新稳定版 | CDP 零检测采集的宿主浏览器 |
 | Playwright | 1.40+ | 浏览器自动化驱动 (`pip install playwright && playwright install chromium`) |
 
-> **注意：** CDP 采集模式必须使用 **Google Chrome**（而非 Edge / 360 / Chromium 等衍生浏览器），因为 CDP 协议需要 Chrome DevTools 完整支持。如果使用其他 Chrome 内核浏览器，连接可能失败。
+> ⚠️ **重要：必须使用 Google Chrome，不可替代！**
+>
+> CDP (Chrome DevTools Protocol) 采集依赖 Google Chrome 的原生调试协议。以下浏览器**无法**用于 CDP 采集：
+>
+> | 浏览器 | 是否可用 | 原因 |
+> |--------|:---:|------|
+> | **Google Chrome** | ✅ | 完整支持 CDP 协议 |
+> | 360 极速浏览器 | ❌ | CDP 协议被阉割，无法正常调用 |
+> | Microsoft Edge | ❌ | CDP 实现有差异，部分接口不兼容 |
+> | Chromium 开源版 | ⚠️ | 可能可用，未充分测试 |
+> | 其他 Chrome 内核衍生版 | ❌ | 多数对 CDP 协议做了裁剪 |
+>
+> 如果系统中同时安装了 Google Chrome 和其他 Chromium 内核浏览器，请确保：
+> 1. 启动调试模式前**完全关闭** Google Chrome 的所有窗口
+> 2. 不要使用 360 极速浏览器执行 `--remote-debugging-port` 命令
+> 3. 可以在采集页点击「测试连接」验证连接的是否为 Google Chrome
 
 ### Chrome 路径配置
 
