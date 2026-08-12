@@ -43,6 +43,7 @@ function sourceLabel(type: string): string {
   const labels: Record<string, string> = {
     xiaohongshu: '小红书',
     douyin: '抖音',
+    scraper: '自动采集',
     manual_upload: '手动上传',
     browser_extension: '浏览器插件',
   }
