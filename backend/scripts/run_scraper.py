@@ -165,6 +165,109 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
 
 
 # ═══════════════════════════════════════════════════════════════
+#  下载
+# ═══════════════════════════════════════════════════════════════
+
+def _download_batch(
+    urls: list[str],
+    task_id: int,
+    existing_url_set: set[str],
+    remaining: int,
+    img_dir: Path,
+    today: str,
+    httpx_module,
+) -> tuple[int, int, int, int]:
+    """下载一批 URL，立即入库。同时更新 existing_url_set 防止跨批次重复。
+
+    Args:
+        urls: 本批次要下载的 URL 列表
+        task_id: 关联采集任务 ID
+        existing_url_set: 已知的已入库 URL 集合（传入传出，会被更新）
+        remaining: 剩余配额
+        img_dir: 图片存储目录
+        today: 日期字符串 "YYYY-MM"
+        httpx_module: httpx 模块引用
+
+    Returns:
+        (added, skipped_existing, skipped_non200, skipped_network)
+    """
+    import asyncio as _asyncio
+
+    unique = list(dict.fromkeys(urls))  # 保序去重
+
+    # 查询这批 URL 中已在 DB 中的
+    async def _query_existing():
+        async with async_session() as db:
+            from sqlalchemy import select as sa_select
+            result = await db.execute(
+                sa_select(Inspiration.source_url).where(
+                    Inspiration.source_url.in_(unique)
+                )
+            )
+            return {r[0] for r in result.all() if r[0]}
+
+    db_existing = _asyncio.run(_query_existing())
+    existing_url_set.update(db_existing)
+
+    added = 0
+    skipped_existing = 0
+    skipped_non200 = 0
+    skipped_network = 0
+
+    for img_url in unique:
+        if added >= remaining:
+            break
+        if img_url in existing_url_set:
+            skipped_existing += 1
+            continue
+
+        for attempt in range(1, 4):  # 最多 3 次重试
+            try:
+                resp = httpx_module.get(img_url, headers={
+                    "Referer": "https://www.xiaohongshu.com/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                }, timeout=30, follow_redirects=True)
+                if resp.status_code != 200:
+                    skipped_non200 += 1
+                    break
+                ext = ".jpg"
+                ct = resp.headers.get("content-type", "")
+                if "png" in ct: ext = ".png"
+                elif "webp" in ct: ext = ".webp"
+                fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}{ext}"
+                fpath = img_dir / fname
+                fpath.write_bytes(resp.content)
+
+                async def _save(path=str(fpath)):
+                    async with async_session() as db:
+                        insp = Inspiration(
+                            id=str(uuid.uuid4()),
+                            source_type="scraper",
+                            source_url=img_url,
+                            file_path=f"images/{today}/{Path(path).name}",
+                            media_type="image",
+                            scraper_task_id=task_id,
+                        )
+                        db.add(insp)
+                        await db.commit()
+                _asyncio.run(_save())
+                added += 1
+                existing_url_set.add(img_url)
+                break
+            except Exception as e:
+                err = str(e)[:60]
+                if attempt < 3:
+                    backoff = 2 ** attempt
+                    print(f"    下载重试 ({attempt}/3) {img_url[:40]}... ({err})，{backoff}s 后重试")
+                    time.sleep(backoff)
+                else:
+                    print(f"    下载失败 {img_url[:40]}... ({err})")
+                    skipped_network += 1
+
+    return added, skipped_existing, skipped_non200, skipped_network
+
+
+# ═══════════════════════════════════════════════════════════════
 #  主流程
 # ═══════════════════════════════════════════════════════════════
 
@@ -200,7 +303,18 @@ def run_scraper_sync(task_id: int):
         print("无关键词，退出")
         return
 
-    all_urls: list[str] = []
+    # 准备下载目录
+    today = utcnow().strftime("%Y-%m")
+    img_dir = settings.images_dir / today
+    img_dir.mkdir(parents=True, exist_ok=True)
+    import httpx
+
+    existing_url_set: set[str] = set()  # 跨批次去重
+    items_found = 0  # 搜索提取总数
+    items_added = 0  # 最终入库数
+    total_skipped_existing = 0
+    total_skipped_non200 = 0
+    total_skipped_network = 0
     diagnostics: list[str] = []
 
     try:
@@ -258,7 +372,7 @@ def run_scraper_sync(task_id: int):
             else:
                 print("登录超时，将尝试当前状态")
 
-        # ── 搜索：每个关键词 × 3 种排序，累计达到 max_count 后提前停止 ──
+        # ── 搜索 + 即时下载：每个关键词 × 3 排序，搜完一批立刻下载 ──
         SORT_TYPES = ["general", "popularity_descending", "time_descending"]
         search_count = 0
         total_searches = len(keywords) * len(SORT_TYPES)
@@ -267,9 +381,8 @@ def run_scraper_sync(task_id: int):
             for sort_type in SORT_TYPES:
                 search_count += 1
 
-                # 提前停止：已收集到足够的唯一 URL
-                if len(all_urls) >= max_count:
-                    print(f"\n  已累计 {len(all_urls)} 张 → 达到目标 {max_count}，停止搜索")
+                if items_added >= max_count:
+                    print(f"\n  已入库 {items_added} 张 → 达到目标 {max_count}，停止搜索")
                     break
 
                 print(f"\n{'='*50}")
@@ -283,20 +396,29 @@ def run_scraper_sync(task_id: int):
                         diagnostics.append(f"不支持的平台: {platform}")
                         continue
 
-                    # 与已收集 URL 去重后再追加
-                    new_urls = [u for u in urls if u not in set(all_urls)]
-                    all_urls.extend(new_urls)
-                    dup_in_sort = len(urls) - len(new_urls)
-                    print(f"  [OK] 获取 {len(urls)} 张 (新增 {len(new_urls)}, 跨排序重复 {dup_in_sort})")
-                    print(f"  累计: {len(all_urls)}/{max_count}")
+                    items_found += len(urls)
+                    print(f"  提取 {len(urls)} 个 URL")
+
+                    # 立即下载本批
+                    remaining = max_count - items_added
+                    added, sk_ex, sk_h, sk_n = _download_batch(
+                        urls, task_id, existing_url_set, remaining,
+                        img_dir, today, httpx,
+                    )
+                    items_added += added
+                    total_skipped_existing += sk_ex
+                    total_skipped_non200 += sk_h
+                    total_skipped_network += sk_n
+
+                    print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, HTTP{sk_h}, 网络{sk_n})")
+                    print(f"  累计入库: {items_added}/{max_count}")
 
                 except Exception as e:
                     err = str(e) or type(e).__name__
                     diagnostics.append(f"[{kw}][{sort_type}] 异常: {err}")
                     print(f"  [ERR] {err}")
 
-            # 内层 for 提前停止后也要跳出外层
-            if len(all_urls) >= max_count:
+            if items_added >= max_count:
                 break
 
     except Exception as e:
@@ -324,109 +446,16 @@ def run_scraper_sync(task_id: int):
         except Exception:
             pass
 
-    # ── 下载图片 ──
-    today = utcnow().strftime("%Y-%m")
-    img_dir = settings.images_dir / today
-    img_dir.mkdir(parents=True, exist_ok=True)
-
-    items_found = len(all_urls)
-    items_added = 0
-    download_failed = 0
-    download_skipped_non200 = 0
-    download_skipped_network = 0
-    download_skipped_existing = 0
-    import httpx
-
-    # 去重（不同 URL 可能指向同一图片，保序）
-    unique_urls = list(dict.fromkeys(all_urls))
-    if len(unique_urls) < len(all_urls):
-        print(f"  同次去重: {len(all_urls)} → {len(unique_urls)} URL")
-
-    # 查询数据库中已存在的 source_url，跨次采集去重
-    async def _get_existing_urls():
-        async with async_session() as db:
-            from sqlalchemy import select as sa_select
-            result = await db.execute(
-                sa_select(Inspiration.source_url).where(
-                    Inspiration.source_url.in_(unique_urls)
-                )
-            )
-            return {r[0] for r in result.all() if r[0]}
-
-    existing_urls = asyncio.run(_get_existing_urls())
-    if existing_urls:
-        print(f"  跨次去重: {len(existing_urls)} 个 URL 已在数据库中，跳过")
-
-    for img_url in unique_urls:
-        if items_added >= max_count:
-            break
-
-        # 跳过已存在于数据库中的 URL
-        if img_url in existing_urls:
-            download_skipped_existing += 1
-            continue
-        if items_added >= max_count:
-            break
-
-        last_error = None
-        downloaded = False
-        MAX_RETRIES = 3
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                resp = httpx.get(img_url, headers={
-                    "Referer": "https://www.xiaohongshu.com/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                }, timeout=30, follow_redirects=True)
-                if resp.status_code != 200:
-                    last_error = f"HTTP {resp.status_code}"
-                    download_skipped_non200 += 1
-                    break  # 非 200 不重试，CDN 拒绝重试也没用
-                ext = ".jpg"
-                ct = resp.headers.get("content-type", "")
-                if "png" in ct: ext = ".png"
-                elif "webp" in ct: ext = ".webp"
-                fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}{ext}"
-                fpath = img_dir / fname
-                fpath.write_bytes(resp.content)
-
-                async def _save(path=str(fpath)):
-                    async with async_session() as db:
-                        insp = Inspiration(
-                            id=str(uuid.uuid4()),
-                            source_type="scraper",
-                            source_url=img_url,
-                            file_path=f"images/{today}/{Path(path).name}",
-                            media_type="image",
-                            scraper_task_id=task_id,
-                        )
-                        db.add(insp)
-                        await db.commit()
-                asyncio.run(_save())
-                items_added += 1
-                downloaded = True
-                break  # 成功，跳出重试循环
-            except Exception as e:
-                last_error = str(e)[:80]
-                if attempt < MAX_RETRIES:
-                    backoff = 2 ** attempt  # 2s, 4s
-                    print(f"    下载重试 ({attempt}/{MAX_RETRIES}) {img_url[:50]}... ({last_error})，{backoff}s 后重试")
-                    time.sleep(backoff)
-                else:
-                    print(f"    下载失败 {img_url[:50]}... ({last_error})")
-                    download_failed += 1
-                    download_skipped_network += 1
-
-    # ── 下载漏斗日志 ──
-    print(f"  ┌─ 下载漏斗 ─────────────────────────────")
-    print(f"  │ 搜索提取总数:   {items_found}")
-    print(f"  │ 同次去重后:     {len(unique_urls)}")
-    print(f"  │ 跨次已存在:     {download_skipped_existing}")
-    print(f"  │ 下载成功:       {items_added}")
-    print(f"  │ HTTP 非 200:    {download_skipped_non200}")
-    print(f"  │ 网络失败:       {download_skipped_network}")
-    print(f"  │ 最终入库:       {items_added}")
-    print(f"  └──────────────────────────────────────────")
+    # ── 汇总漏斗日志 ──
+    print(f"\n  ╔══════════════════════════════════════════")
+    print(f"  ║ 采集漏斗汇总")
+    print(f"  ╠══════════════════════════════════════════")
+    print(f"  ║ 搜索提取总数:   {items_found}")
+    print(f"  ║ 跨次已存在:     {total_skipped_existing}")
+    print(f"  ║ HTTP 非 200:    {total_skipped_non200}")
+    print(f"  ║ 网络失败:       {total_skipped_network}")
+    print(f"  ║ ★ 最终入库:     {items_added}")
+    print(f"  ╚══════════════════════════════════════════")
 
     # ── 完成任务 ──
     error_msg = None
