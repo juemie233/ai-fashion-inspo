@@ -234,6 +234,12 @@ async function viewLog(taskId: number) {
 const funnelTaskId = ref<number | null>(null)
 const funnelData = ref<FunnelDiagnostics | null>(null)
 
+/** 漏斗弹窗开关：绑定 n-modal 的 v-model:show，关闭时清空数据 */
+const funnelOpen = computed({
+  get: () => funnelTaskId.value !== null,
+  set: (v: boolean) => { if (!v) { funnelTaskId.value = null; funnelData.value = null } },
+})
+
 function viewFunnel(task: ScraperTask) {
   if (funnelTaskId.value === task.id) { funnelTaskId.value = null; funnelData.value = null; return }
   if (!task.diagnostics) { message.warning('该任务无漏斗数据（旧版本采集的任务）'); return }
@@ -477,13 +483,9 @@ function expandedRowRender(row: ScraperTask) {
     </n-spin>
   </div>
 
-  <!-- 漏斗视图 -->
-  <div v-if="funnelTaskId!==null && funnelData" class="funnel-panel">
-    <div class="funnel-header">
-      <span>📊 任务 #{{ funnelTaskId }} 漏斗视图</span>
-      <n-button size="tiny" @click="funnelTaskId=null;funnelData=null">关闭</n-button>
-    </div>
-
+  <!-- 漏斗视图弹窗 -->
+  <n-modal v-model:show="funnelOpen" preset="card" :title="funnelTaskId!==null ? '📊 任务 #' + funnelTaskId + ' 漏斗视图' : '漏斗视图'" style="max-width:960px">
+    <div v-if="funnelTaskId!==null && funnelData" class="funnel-panel-content">
     <!-- 汇总漏斗 -->
     <div class="funnel-section">
       <div class="funnel-section-title">📈 任务汇总</div>
@@ -571,7 +573,8 @@ function expandedRowRender(row: ScraperTask) {
         </div>
       </div>
     </div>
-  </div>
+    </div>
+  </n-modal>
 
   <!-- 结果预览 -->
   <div v-if="resultsTaskId!==null" class="results-panel">
@@ -623,8 +626,7 @@ function expandedRowRender(row: ScraperTask) {
 .chrome-cmd{display:block;background:#f0f0f0;padding:4px 8px;margin:4px 0;border-radius:4px;font-size:11px;cursor:pointer;user-select:all}
 
 /* 漏斗视图 */
-.funnel-panel{margin-top:16px;border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff}
-.funnel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:14px;font-weight:600}
+.funnel-panel-content{max-height:72vh;overflow-y:auto;padding-right:4px}
 .funnel-section{margin-bottom:20px}
 .funnel-section-title{font-size:13px;font-weight:600;color:#333;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0}
 .funnel-bars{display:flex;flex-direction:column;gap:4px}
