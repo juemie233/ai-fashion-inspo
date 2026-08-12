@@ -27,10 +27,10 @@ function renderIcon(icon: Component) {
         :collapsed-icon-size="22"
         :options="[
           { label: '素材库', key: 'home', icon: renderIcon(ImagesOutline) },
-          { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
           { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
-          { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
+          { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
           { label: '标签管理', key: 'tags', icon: renderIcon(PricetagsOutline) },
+          { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
           { label: 'AI 模型', key: 'models', icon: renderIcon(HardwareChipOutline) },
           { label: '素材管理', key: 'admin', icon: renderIcon(SettingsOutline) },
         ]"

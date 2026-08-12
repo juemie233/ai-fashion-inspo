@@ -12,16 +12,16 @@ const router = createRouter({
       meta: { title: '素材库' },
     },
     {
-      path: '/search',
-      name: 'search',
-      component: () => import('@/views/SearchView.vue'),
-      meta: { title: '高级搜索' },
-    },
-    {
       path: '/upload',
       name: 'upload',
       component: () => import('@/views/UploadView.vue'),
       meta: { title: '上传素材' },
+    },
+    {
+      path: '/search',
+      name: 'search',
+      component: () => import('@/views/SearchView.vue'),
+      meta: { title: '高级搜索' },
     },
     {
       path: '/detail/:id',
