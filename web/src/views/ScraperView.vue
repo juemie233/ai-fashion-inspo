@@ -179,11 +179,22 @@ const deletingTask = ref<number | null>(null)
 async function deleteSingleTask(taskId: number) {
   try {
     deletingTask.value = taskId
-    await apiClient.delete(`/scraper/tasks/${taskId}`)
-    tasks.value = tasks.value.filter(t => t.id !== taskId)
-    message.success('已删除')
+    const res = await apiClient.delete(`/scraper/tasks/${taskId}`)
+    // 200 和 204 均视为成功（兼容旧版后端）
+    if (res.status === 200 || res.status === 204) {
+      tasks.value = tasks.value.filter(t => t.id !== taskId)
+      message.success('已删除')
+    } else {
+      throw new Error(`Unexpected status: ${res.status}`)
+    }
   } catch (e: any) {
-    message.error('删除失败')
+    // Axios 对 204 空 body 会抛 JSON parse error，但也视为成功
+    if (e.response?.status === 204) {
+      tasks.value = tasks.value.filter(t => t.id !== taskId)
+      message.success('已删除')
+    } else {
+      message.error('删除失败: ' + (e.response?.data?.detail || e.message || '未知错误'))
+    }
   } finally {
     deletingTask.value = null
   }
