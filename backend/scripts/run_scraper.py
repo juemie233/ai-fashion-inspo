@@ -168,6 +168,15 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
 #  下载
 # ═══════════════════════════════════════════════════════════════
 
+def _run_async_in_thread(coro):
+    """在独立线程中运行 async 协程，避免与 Playwright 的 event loop 冲突。"""
+    import asyncio as _asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_asyncio.run, coro)
+        return future.result()
+
+
 def _download_batch(
     urls: list[str],
     task_id: int,
@@ -176,9 +185,8 @@ def _download_batch(
     img_dir: Path,
     today: str,
     httpx_module,
-    loop,
 ) -> tuple[int, int, int, int]:
-    """下载一批 URL，立即入库。"""
+    """下载一批 URL，立即入库。DB 操作在独立线程中执行以隔离 event loop。"""
 
     unique = list(dict.fromkeys(urls))
 
@@ -192,7 +200,7 @@ def _download_batch(
             )
             return {r[0] for r in result.all() if r[0]}
 
-    db_existing = loop.run_until_complete(_query_existing())
+    db_existing = _run_async_in_thread(_query_existing())
     existing_url_set.update(db_existing)
 
     added = 0
@@ -236,7 +244,7 @@ def _download_batch(
                         )
                         db.add(insp)
                         await db.commit()
-                loop.run_until_complete(_save())
+                _run_async_in_thread(_save())
                 added += 1
                 existing_url_set.add(img_url)
                 break
@@ -280,10 +288,6 @@ def run_scraper_sync(task_id: int):
                 await db.commit()
     asyncio.run(_run())
 
-    # 创建一个持久的 event loop，Playwright CDP 期间也能正常执行 async 操作
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
     keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
     max_count = config.get("max_count", 50)
@@ -291,7 +295,6 @@ def run_scraper_sync(task_id: int):
 
     if not keywords:
         print("无关键词，退出")
-        loop.close()
         return
 
     # 准备下载目录
@@ -394,7 +397,7 @@ def run_scraper_sync(task_id: int):
                     remaining = max_count - items_added
                     added, sk_ex, sk_h, sk_n = _download_batch(
                         urls, task_id, existing_url_set, remaining,
-                        img_dir, today, httpx, loop,
+                        img_dir, today, httpx,
                     )
                     items_added += added
                     total_skipped_existing += sk_ex
@@ -426,8 +429,7 @@ def run_scraper_sync(task_id: int):
                     t.error = str(e)[:500]
                     t.finished_at = utcnow()
                     await db.commit()
-        loop.run_until_complete(_fail())
-        loop.close()
+        asyncio.run(_fail())
         return
 
     finally:
@@ -465,8 +467,7 @@ def run_scraper_sync(task_id: int):
                     t.error = error_msg
                 t.finished_at = utcnow()
                 await db.commit()
-    loop.run_until_complete(_done())
-    loop.close()
+    asyncio.run(_done())
 
     print(f"\n任务 {task_id} 完成: found={items_found}, added={items_added}")
     if error_msg:
