@@ -168,15 +168,6 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
 #  下载
 # ═══════════════════════════════════════════════════════════════
 
-def _run_async_in_thread(coro):
-    """在独立线程中运行 async 协程，避免与 Playwright 的 event loop 冲突。"""
-    import asyncio as _asyncio
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_asyncio.run, coro)
-        return future.result()
-
-
 def _download_batch(
     urls: list[str],
     task_id: int,
@@ -186,22 +177,27 @@ def _download_batch(
     today: str,
     httpx_module,
 ) -> tuple[int, int, int, int]:
-    """下载一批 URL，立即入库。DB 操作在独立线程中执行以隔离 event loop。"""
+    """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。"""
+    import sqlite3 as _sqlite3
+
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
 
     unique = list(dict.fromkeys(urls))
 
-    async def _query_existing():
-        async with async_session() as db:
-            from sqlalchemy import select as sa_select
-            result = await db.execute(
-                sa_select(Inspiration.source_url).where(
-                    Inspiration.source_url.in_(unique)
-                )
+    # 查询这批 URL 中已在 DB 中的（同步查询）
+    if unique:
+        try:
+            conn = _sqlite3.connect(str(db_path))
+            placeholders = ",".join("?" * len(unique))
+            cur = conn.execute(
+                f"SELECT source_url FROM inspirations WHERE source_url IN ({placeholders})",
+                unique,
             )
-            return {r[0] for r in result.all() if r[0]}
-
-    db_existing = _run_async_in_thread(_query_existing())
-    existing_url_set.update(db_existing)
+            db_existing = {r[0] for r in cur.fetchall()}
+            conn.close()
+            existing_url_set.update(db_existing)
+        except Exception:
+            db_existing = set()
 
     added = 0
     skipped_existing = 0
@@ -232,19 +228,21 @@ def _download_batch(
                 fpath = img_dir / fname
                 fpath.write_bytes(resp.content)
 
-                async def _save(path=str(fpath)):
-                    async with async_session() as db:
-                        insp = Inspiration(
-                            id=str(uuid.uuid4()),
-                            source_type="scraper",
-                            source_url=img_url,
-                            file_path=f"images/{today}/{Path(path).name}",
-                            media_type="image",
-                            scraper_task_id=task_id,
-                        )
-                        db.add(insp)
-                        await db.commit()
-                _run_async_in_thread(_save())
+                # 同步写入数据库
+                conn = _sqlite3.connect(str(db_path))
+                insp_id = str(uuid.uuid4())
+                rel_path = f"images/{today}/{fname}"
+                now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                conn.execute(
+                    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+                    "thumbnail_path, media_type, dominant_colors, is_favorite, "
+                    "scraper_task_id, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?)",
+                    (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
+                )
+                conn.commit()
+                conn.close()
+
                 added += 1
                 existing_url_set.add(img_url)
                 break
