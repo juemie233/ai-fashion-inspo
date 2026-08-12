@@ -10,7 +10,7 @@
 ## 技术栈
 
 | 层级 | 技术 | 版本要求 |
-|------|------|----------|
+| ------ | ------ | ---------- |
 | 后端框架 | Python + FastAPI | 3.12+ |
 | 数据库 | SQLite + SQLAlchemy (async) | — |
 | Web 前端 | Vue 3 + Vite + TypeScript | Node 20+ |
@@ -22,6 +22,7 @@
 ## 代码风格
 
 ### Python
+
 - 遵循 PEP 8
 - 类型注解必须（`disallow_untyped_defs = True`）
 - 异步优先：数据库、HTTP、文件 I/O 均使用 async/await
@@ -29,12 +30,14 @@
 - 字符串：优先使用双引号，f-string 用于格式化
 
 ### TypeScript / Vue
+
 - 使用 Composition API + `<script setup lang="ts">`
 - ESLint + Prettier 格式化
 - 组件命名：PascalCase
 - 文件名：Vue 组件 PascalCase，工具函数 camelCase，目录 kebab-case
 
 ### React Native
+
 - Expo Router 文件路由
 - 组件：PascalCase，hooks：`useXxx` 命名
 - 样式：NativeWind (Tailwind CSS)
@@ -77,6 +80,7 @@ fashion-inspo/
 - 分页参数：`page`（从 1 开始）、`size`
 - 时间格式：ISO 8601 字符串
 - 错误响应格式：
+
   ```json
   {
     "detail": "错误描述"
@@ -94,7 +98,7 @@ fashion-inspo/
 ## 命名约定
 
 | 场景 | 风格 | 示例 |
-|------|------|------|
+| ------ | ------ | ------ |
 | Python 模块/包 | snake_case | `file_service.py` |
 | Python 类 | PascalCase | `InspirationTag` |
 | Python 函数/变量 | snake_case | `get_or_create_tag()` |
@@ -110,7 +114,7 @@ fashion-inspo/
 数据库 `source_type` 字段在前端必须显示为中文：
 
 | 数据库值 | 显示文案 |
-|----------|----------|
+| ---------- | ---------- |
 | `manual_upload` | 手动上传 |
 | `scraper` | 自动采集 |
 | `xiaohongshu` | 小红书 |
@@ -147,7 +151,8 @@ fashion-inspo/
   | 核心解析逻辑变更（如 AI 标签提取） | 建议审查 |
   | < 100 行小改动 | 可跳过审查 |
 
-- **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
+- **改动前提交**：开发可能影响旧代码的新功能前，必须先 `git commit && git push` 保存当前状态，作为回滚基线。
+- **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
 
 ## 环境要求

@@ -176,26 +176,12 @@ def _download_batch(
     img_dir: Path,
     today: str,
     httpx_module,
+    loop,
 ) -> tuple[int, int, int, int]:
-    """下载一批 URL，立即入库。同时更新 existing_url_set 防止跨批次重复。
+    """下载一批 URL，立即入库。"""
 
-    Args:
-        urls: 本批次要下载的 URL 列表
-        task_id: 关联采集任务 ID
-        existing_url_set: 已知的已入库 URL 集合（传入传出，会被更新）
-        remaining: 剩余配额
-        img_dir: 图片存储目录
-        today: 日期字符串 "YYYY-MM"
-        httpx_module: httpx 模块引用
+    unique = list(dict.fromkeys(urls))
 
-    Returns:
-        (added, skipped_existing, skipped_non200, skipped_network)
-    """
-    import asyncio as _asyncio
-
-    unique = list(dict.fromkeys(urls))  # 保序去重
-
-    # 查询这批 URL 中已在 DB 中的
     async def _query_existing():
         async with async_session() as db:
             from sqlalchemy import select as sa_select
@@ -206,7 +192,7 @@ def _download_batch(
             )
             return {r[0] for r in result.all() if r[0]}
 
-    db_existing = _asyncio.run(_query_existing())
+    db_existing = loop.run_until_complete(_query_existing())
     existing_url_set.update(db_existing)
 
     added = 0
@@ -221,7 +207,7 @@ def _download_batch(
             skipped_existing += 1
             continue
 
-        for attempt in range(1, 4):  # 最多 3 次重试
+        for attempt in range(1, 4):
             try:
                 resp = httpx_module.get(img_url, headers={
                     "Referer": "https://www.xiaohongshu.com/",
@@ -250,7 +236,7 @@ def _download_batch(
                         )
                         db.add(insp)
                         await db.commit()
-                _asyncio.run(_save())
+                loop.run_until_complete(_save())
                 added += 1
                 existing_url_set.add(img_url)
                 break
@@ -294,6 +280,10 @@ def run_scraper_sync(task_id: int):
                 await db.commit()
     asyncio.run(_run())
 
+    # 创建一个持久的 event loop，Playwright CDP 期间也能正常执行 async 操作
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
     keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
     max_count = config.get("max_count", 50)
@@ -301,6 +291,7 @@ def run_scraper_sync(task_id: int):
 
     if not keywords:
         print("无关键词，退出")
+        loop.close()
         return
 
     # 准备下载目录
@@ -403,7 +394,7 @@ def run_scraper_sync(task_id: int):
                     remaining = max_count - items_added
                     added, sk_ex, sk_h, sk_n = _download_batch(
                         urls, task_id, existing_url_set, remaining,
-                        img_dir, today, httpx,
+                        img_dir, today, httpx, loop,
                     )
                     items_added += added
                     total_skipped_existing += sk_ex
@@ -435,7 +426,8 @@ def run_scraper_sync(task_id: int):
                     t.error = str(e)[:500]
                     t.finished_at = utcnow()
                     await db.commit()
-        asyncio.run(_fail())
+        loop.run_until_complete(_fail())
+        loop.close()
         return
 
     finally:
@@ -473,7 +465,8 @@ def run_scraper_sync(task_id: int):
                     t.error = error_msg
                 t.finished_at = utcnow()
                 await db.commit()
-    asyncio.run(_done())
+    loop.run_until_complete(_done())
+    loop.close()
 
     print(f"\n任务 {task_id} 完成: found={items_found}, added={items_added}")
     if error_msg:
