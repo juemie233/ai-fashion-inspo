@@ -649,6 +649,12 @@ function sourceColor(s: string) {
                 :alt="selectedTag.name"
                 @click="lightboxPath = item.file_path; showLightbox = true"
               />
+              <img
+                v-else-if="item.file_path"
+                :src="getFileUrl(item.file_path)"
+                :alt="selectedTag.name"
+                @click="lightboxPath = item.file_path; showLightbox = true"
+              />
               <div v-else class="no-preview">无预览</div>
             </div>
           </div>
