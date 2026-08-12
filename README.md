@@ -11,7 +11,7 @@
 | 移动端 | React Native (Expo) + Zustand |
 | 浏览器插件 | Chrome Extension Manifest V3 |
 | AI 推理 | Ollama + MiniCPM-V:8b（本地 GPU） |
-| 采集引擎 | Playwright + playwright-stealth |
+| 采集引擎 | Playwright + CDP 连接真实 Chrome（零检测采集） |
 
 ## 功能概览
 
@@ -21,7 +21,7 @@
 | **高级搜索** | 多维标签筛选（AND/OR 组合）、排除标签、实时搜索 |
 | **上传素材** | 单张/批量上传、文件夹导入、自动生成缩略图 |
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
-| **采集管理** | 小红书/抖音自动采集、任务队列、进度追踪 |
+| **采集管理** | 小红书/抖音 CDP 采集、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
 | **标签管理** | 浏览/编辑/合并/批量操作、相似标签扫描、导入导出、拖拽分类、标签详情 |
 | **AI 模型管理** | 模型列表/下载/切换、批量分析、历史分页、分析详情、参数调优、数据重置 |
 | **浏览器插件** | 一键提取网页穿搭图片 |
@@ -61,7 +61,20 @@ npm run dev
 
 浏览器打开 `http://localhost:5173`
 
-### 4. 安装浏览器插件
+### 4. 启动采集引擎（可选）
+
+采集引擎通过 CDP 连接用户真实 Chrome 实现零检测采集：
+
+```bash
+# 以调试模式启动 Chrome（与日常使用的 Chrome 隔离）
+"C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"
+```
+
+在打开的 Chrome 窗口中登录小红书，然后在采集管理页面创建任务即可自动搜索、下载、入库。
+
+### 5. 安装浏览器插件
 
 1. Chrome 打开 `chrome://extensions`
 2. 开启「开发者模式」
@@ -81,6 +94,7 @@ npx expo start
 fashion-inspo/
 ├── CLAUDE.md                     # 编码规范与项目标准
 ├── README.md                     # 本文件
+├── TODO.md                       # 待完成功能清单
 │
 ├── backend/                      # Python 后端
 │   ├── .env                      # 环境变量
@@ -117,7 +131,10 @@ fashion-inspo/
 │   │       ├── image_utils.py    # 缩略图/颜色提取
 │   │       └── tag_normalizer.py # 标签标准化 + 同义词映射
 │   ├── scripts/                  # 维护脚本
-│   │   └── cleanup_tags.py       # 数据库脏标签清洗
+│   │   ├── run_scraper.py         # CDP 采集执行脚本
+│   │   ├── cleanup_tags.py        # 数据库脏标签清洗
+│   │   ├── validate_tags.py       # 标签合法性校验
+│   │   └── diagnose_scraper.py    # 采集诊断工具
 │   └── storage/                  # 本地文件存储 (gitignore)
 │       ├── images/
 │       ├── thumbnails/
@@ -219,6 +236,11 @@ fashion-inspo/
 │  │          Ollama (GPU: RTX 5060Ti 16GB)               │    │
 │  │  MiniCPM-V:8b — 穿搭视觉分析与标签提取                  │    │
 │  └─────────────────────────────────────────────────────┘    │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │     Chrome CDP (:9222) — 采集引擎连接真实浏览器         │    │
+│  │     小红书/抖音零检测搜索 → 图片自动下载入库             │    │
+│  └─────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -319,16 +341,22 @@ fashion-inspo/
 | `PUT` | `/api/ai/settings` | 更新参数（可选持久化） |
 | `GET` | `/api/ai/sampling-params` | 获取采样参数 |
 | `PUT` | `/api/ai/sampling-params` | 更新采样参数（可选持久化） |
+| `POST` | `/api/ai/retry-all-failed` | 重试所有失败（仅图片） |
 | `DELETE` | `/api/ai/reset?confirm=yes` | 重置所有数据+文件 |
+
+> **注：** 视频文件暂不参与 AI 分析。WebP 图片会自动转为 JPEG 以兼容 MiniCPM-V 模型。
 
 ### 采集管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/scraper/tasks` | 创建采集任务 |
+| `POST` | `/api/scraper/tasks` | 创建采集任务（支持 CDP 端口） |
 | `GET` | `/api/scraper/tasks` | 采集任务列表 |
 | `GET` | `/api/scraper/tasks/{id}` | 任务详情 |
-| `DELETE` | `/api/scraper/tasks/{id}` | 删除任务 |
+| `GET` | `/api/scraper/sources` | 可用采集源及状态 |
+| `POST` | `/api/scraper/tasks/retry-failed` | 重试所有失败任务 |
+| `DELETE` | `/api/scraper/tasks` | 清空所有采集任务 |
+| `DELETE` | `/api/scraper/tasks/{id}` | 取消/删除单个任务 |
 
 ### 其他
 
@@ -345,5 +373,6 @@ fashion-inspo/
 | Node.js 20+ | Web + Mobile 前端 | ✅ |
 | Ollama | AI 视觉推理 | ✅ |
 | MiniCPM-V:8b | 穿搭标签识别 | ✅ |
-| ffmpeg | 视频关键帧提取 | ❌ Phase 4+ |
-| Playwright Chromium | 网页爬虫 | ❌ Phase 4+ |
+| ffmpeg | 视频关键帧提取 | ❌ 尚未使用 |
+| Chrome + CDP | 采集引擎（连接用户真实浏览器） | ❌ 可选 |
+| Playwright | 采集引擎驱动 | ❌ 可选 |
