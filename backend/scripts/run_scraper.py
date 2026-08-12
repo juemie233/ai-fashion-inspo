@@ -97,7 +97,7 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
         # 偶尔回滚一小段（人类浏览行为）
         if random.random() < 0.2:
             back = page.evaluate("window.scrollY") - random.randint(200, 500)
-            page.evaluate(f"window.scrollTo(0, max(0, {back}))")
+            page.evaluate(f"window.scrollTo(0, Math.max(0, {back}))")
             time.sleep(random.uniform(0.3, 0.7))
 
         # 检查是否有新内容加载
