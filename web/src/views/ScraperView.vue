@@ -442,7 +442,7 @@ const tableColumns = computed(() => [
                 ghost: true,
                 loading: deletingTask.value === row.id,
               }, '删除'),
-            default: () => '确定删除此记录？（仅逻辑删除，不删除素材）',
+            default: () => '确定删除此记录？（不删除关联素材）',
           },
         ),
       )

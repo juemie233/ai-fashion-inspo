@@ -197,10 +197,9 @@ async def create_scraper_task(
 
 @router.get("/tasks", response_model=list[ScraperTaskOut])
 async def list_scraper_tasks(db: AsyncSession = Depends(get_db)):
-    """获取最近的采集任务列表（最多20条，不含已逻辑删除的）。"""
+    """获取最近的采集任务列表（最多20条）。"""
     result = await db.execute(
         select(ScraperTask)
-        .where(ScraperTask.is_deleted == False)
         .order_by(ScraperTask.created_at.desc())
         .limit(20)
     )
@@ -219,25 +218,21 @@ async def get_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK)
 async def delete_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
-    """逻辑删除单条采集任务（标记 is_deleted=True，不删除素材）。"""
+    """物理删除单条采集任务（素材的 scraper_task_id 自动置 NULL，不删除素材）。"""
     task = await db.get(ScraperTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="采集任务未找到")
-    task.is_deleted = True
+    await db.delete(task)
     await db.commit()
     return {"deleted": 1, "id": task_id}
 
 
 @router.delete("/tasks", status_code=status.HTTP_200_OK)
 async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)):
-    """逻辑删除所有采集任务历史记录。"""
-    from sqlalchemy import update
+    """物理删除所有采集任务历史记录。"""
+    from sqlalchemy import delete
 
-    result = await db.execute(
-        update(ScraperTask)
-        .where(ScraperTask.is_deleted == False)
-        .values(is_deleted=True)
-    )
+    result = await db.execute(delete(ScraperTask))
     await db.commit()
     return {"deleted": result.rowcount}
 

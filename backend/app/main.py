@@ -31,21 +31,6 @@ async def _auto_migrate():
                 )
                 print(f"[迁移] inspirations 添加列: {col_name}")
 
-        # scraper_tasks 表
-        task_cols = {
-            r[1]
-            for r in await conn.execute("PRAGMA table_info(scraper_tasks)")
-        }
-        task_missing = [
-            ("is_deleted", "BOOLEAN DEFAULT 0"),
-        ]
-        for col_name, col_def in task_missing:
-            if col_name not in task_cols:
-                await conn.execute(
-                    f"ALTER TABLE scraper_tasks ADD COLUMN {col_name} {col_def}"
-                )
-                print(f"[迁移] scraper_tasks 添加列: {col_name}")
-
         await conn.commit()
 
 
