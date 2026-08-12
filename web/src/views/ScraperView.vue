@@ -51,7 +51,7 @@ const tasks = ref<ScraperTask[]>([])
 /** 新建采集表单 */
 const formPlatform = ref('xiaohongshu')
 const formKeywords = ref('')
-const formMaxCount = ref(30)
+const formMaxCount = ref(100)   // 兜底值，实际从后端配置读取
 const formHeadless = ref(false)
 const formCdp = ref(true)        // 默认 CDP 模式
 const formCdpPort = ref(9222)
@@ -64,6 +64,10 @@ onMounted(async () => {
     ])
     sources.value = sRes.data.sources
     tasks.value = tRes.data
+    // 从后端读取可配置的默认采集数量
+    if (sRes.data.default_max_count) {
+      formMaxCount.value = sRes.data.default_max_count
+    }
   } catch (e: any) {
     message.error('加载采集数据失败')
   }

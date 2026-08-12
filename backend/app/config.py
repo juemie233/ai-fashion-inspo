@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # 服务器
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8080
 
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./fashion_inspo.db"
@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # 采集引擎
     scraper_request_delay: float = 2.0  # 请求间隔（秒）
     scraper_max_concurrent: int = 3
+    scraper_default_max_count: int = 100  # 每次采集默认数量
     scraper_browser_headless: bool = True
     chrome_executable: str = (
         "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe"
@@ -60,7 +61,11 @@ class Settings(BaseSettings):
 
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    cors_origins: list[str] = [
+        "http://localhost:9090",
+        "http://127.0.0.1:9090",
+        "http://localhost:5173",  # 兼容旧默认端口
+    ]
 
     @property
     def storage_dirs(self) -> dict[str, Path]:

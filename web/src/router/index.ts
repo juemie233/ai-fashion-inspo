@@ -47,6 +47,12 @@ const router = createRouter({
       component: () => import('@/views/ModelManageView.vue'),
       meta: { title: 'AI 模型管理' },
     },
+    {
+      path: '/admin',
+      name: 'admin',
+      component: () => import('@/views/AdminView.vue'),
+      meta: { title: '素材管理' },
+    },
   ],
 })
 

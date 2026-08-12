@@ -120,16 +120,27 @@ ollama pull minicpm-v:8b
 ### 3. 启动服务
 
 ```bash
-# 后端 (端口 8000)
+# 后端 (默认端口 8080，可通过 PORT 环境变量或 .env 修改)
 cd backend
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
 
-# Web 前端 (端口 5173)
+# Web 前端 (默认端口 9090，可通过 VITE_FRONTEND_PORT 环境变量修改)
 cd web
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`
+浏览器打开 `http://localhost:9090`
+
+**自定义端口：**
+
+```bash
+# 后端 .env
+PORT=8080                    # 后端监听端口
+
+# 前端 .env (web/.env)
+VITE_FRONTEND_PORT=9090      # 前端开发服务器端口
+VITE_BACKEND_URL=http://localhost:8080  # 后端 API 地址
+```
 
 ### 4. 启动采集引擎（可选）
 

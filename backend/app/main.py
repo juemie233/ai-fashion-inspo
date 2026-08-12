@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.routers import inspirations, tags, files, search, ai, scraper, ws
+from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin
 
 
 @asynccontextmanager
@@ -70,6 +70,7 @@ app.include_router(files.router)
 app.include_router(search.router)
 app.include_router(ai.router)
 app.include_router(scraper.router)
+app.include_router(admin.router)
 app.include_router(ws.router)
 
 

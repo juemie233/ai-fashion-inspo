@@ -92,6 +92,7 @@ def _launch_scraper_process(task_id: int):
 async def scraper_sources():
     """列出所有可用的采集源及其状态。"""
     return {
+        "default_max_count": settings.scraper_default_max_count,
         "sources": [
             {
                 "platform": "xiaohongshu",
