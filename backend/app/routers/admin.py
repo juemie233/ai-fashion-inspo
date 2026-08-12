@@ -435,6 +435,33 @@ def _build_hash_map(
     return hash_map
 
 
+@router.get("/check-duplicate")
+async def check_duplicate(
+    hash: str = Query(..., min_length=32, max_length=32, description="文件 MD5 哈希"),
+    db: AsyncSession = Depends(get_db),
+):
+    """检查指定 MD5 的文件是否已存在（上传前去重）。"""
+    # 先检查数据库中是否有相同哈希
+    result = await db.execute(
+        select(Inspiration).limit(500)
+    )
+    inspirations = result.scalars().all()
+
+    storage_root = settings.storage_root
+    for insp in inspirations:
+        if insp.file_path:
+            fpath = storage_root / insp.file_path
+            fhash = _file_hash(fpath)
+            if fhash and fhash == hash:
+                return {
+                    "exists": True,
+                    "inspiration_id": insp.id,
+                    "file_path": insp.file_path,
+                }
+
+    return {"exists": False, "inspiration_id": None, "file_path": None}
+
+
 @router.get("/duplicates")
 async def find_duplicates(db: AsyncSession = Depends(get_db)):
     """通过文件哈希检测完全重复的素材。"""

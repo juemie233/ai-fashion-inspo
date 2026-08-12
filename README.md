@@ -88,8 +88,8 @@ chrome_debug_port: int = 9222
 | 模块 | 功能 |
 |------|------|
 | **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态）、排序、密度调节、分页加载 |
-| **高级搜索** | 多维标签筛选（AND/OR 组合）、排除标签、实时搜索 |
-| **上传素材** | 单张/批量上传、文件夹导入、自动生成缩略图 |
+| **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节 |
+| **上传素材** | 拖拽/粘贴/URL导入、预览队列、元数据预设、去重检测、文件夹批量、队列管理、偏好设置 |
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
 | **采集管理** | 小红书/抖音 CDP 采集、内容 MD5 去重、URL 墓碑表防重复、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
 | **标签管理** | 浏览/编辑/合并/批量操作、相似标签扫描、导入导出、拖拽分类、标签详情 |
@@ -385,6 +385,7 @@ fashion-inspo/
 |------|------|------|
 | `GET` | `/api/inspirations` | 素材列表（分页） |
 | `POST` | `/api/inspirations` | 上传素材 |
+| `POST` | `/api/inspirations/from-url` | 从 URL 导入素材 |
 | `GET` | `/api/inspirations/{id}` | 素材详情 |
 | `PATCH` | `/api/inspirations/{id}` | 更新素材 |
 | `DELETE` | `/api/inspirations/{id}` | 删除素材 |
@@ -393,8 +394,10 @@ fashion-inspo/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/search` | 多维度标签搜索 |
+| `GET` | `/api/search` | 多维度搜索（关键词+标签+颜色+日期+来源+媒体） |
 | `GET` | `/api/search/similar/{id}` | 相似素材推荐 |
+| `GET` | `/api/search/suggestions?q=` | 标签名自动补全 |
+| `GET` | `/api/search/tag-cooccurrence?tag_name=` | 标签共现分析 |
 
 ### 标签管理
 
@@ -470,6 +473,19 @@ fashion-inspo/
 | `POST` | `/api/scraper/tasks/retry-failed` | 重试所有失败任务 |
 | `DELETE` | `/api/scraper/tasks` | 清空所有采集任务 |
 | `DELETE` | `/api/scraper/tasks/{id}` | 取消/删除单个任务 |
+
+### 管理后台
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/admin/stats` | 素材总览统计（含墓碑表计数） |
+| `GET` | `/api/admin/largest-files` | 最大文件 Top 20 |
+| `GET` | `/api/admin/integrity-check` | 数据完整性检查（缺失/孤立文件） |
+| `GET` | `/api/admin/duplicates` | 文件哈希重复检测 |
+| `GET` | `/api/admin/check-duplicate?hash=` | 上传前去重（MD5 检测） |
+| `POST` | `/api/admin/cleanup-orphans` | 清理孤立文件 |
+| `POST` | `/api/admin/batch-delete` | 批量删除素材（按ID或条件） |
+| `POST` | `/api/admin/deduplicate` | 智能去重删除 |
 
 ### 其他
 

@@ -1,45 +1,59 @@
 <script setup lang="ts">
-/** 搜索栏：支持标签名自动补全。 */
+/** 搜索栏：标签名自动补全 + 关键词搜索 + 智能粘贴。 */
 
-import { ref, computed } from 'vue'
-import { useTagsStore } from '@/stores/tags'
-
-const tagsStore = useTagsStore()
+import { ref, watch } from 'vue'
+import { fetchSuggestions } from '@/api/search'
 
 const inputValue = ref('')
+const suggestions = ref<Array<{ label: string; value: string }>>([])
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const emit = defineEmits<{
-  (e: 'search', tags: string[]): void
+  (e: 'search', value: string): void
 }>()
 
-/** 根据输入过滤标签建议 */
-const suggestions = computed(() => {
-  const val = inputValue.value.trim().toLowerCase()
-  if (!val) return []
-  const allTags: string[] = []
-  for (const group of tagsStore.groups) {
-    for (const tag of group.tags) {
-      if (tag.name.toLowerCase().includes(val) && !allTags.includes(tag.name)) {
-        allTags.push(tag.name)
-      }
-    }
+/** 服务端标签建议（防抖 200ms） */
+watch(inputValue, (val) => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  if (!val || val.trim().length < 1) {
+    suggestions.value = []
+    return
   }
-  return allTags.slice(0, 8)
+  debounceTimer = setTimeout(async () => {
+    try {
+      const items = await fetchSuggestions(val.trim())
+      if (Array.isArray(items)) {
+        suggestions.value = items.slice(0, 8).map(s => ({
+          label: `${s.name} (${s.usage_count})`,
+          value: s.name,
+        }))
+      }
+    } catch {
+      suggestions.value = []
+    }
+  }, 200)
 })
 
-function handleEnter() {
-  const tags = inputValue.value
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean)
-  if (tags.length > 0) {
-    emit('search', tags)
+/** 智能粘贴：自动识别颜色代码和日期 */
+function onPaste(e: ClipboardEvent) {
+  const text = e.clipboardData?.getData('text')?.trim()
+  if (!text) return
+  // 检测颜色代码
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) {
+    e.preventDefault()
+    inputValue.value = text
+    emit('search', text)
   }
 }
 
-function selectSuggestion(tag: string) {
-  inputValue.value = tag
-  emit('search', [tag])
+function handleEnter() {
+  const val = inputValue.value.trim()
+  if (val) emit('search', val)
+}
+
+function selectSuggestion(val: string) {
+  inputValue.value = val
+  emit('search', val)
 }
 </script>
 
@@ -47,16 +61,18 @@ function selectSuggestion(tag: string) {
   <div class="search-bar">
     <n-auto-complete
       v-model:value="inputValue"
-      :options="suggestions.map((s) => ({ label: s, value: s }))"
-      placeholder="输入标签搜索，多个用逗号分隔 (如: JK制服, 白色, 过膝袜)"
-      :input-props="{
-        autocomplete: 'disabled',
-      }"
+      :options="suggestions"
+      placeholder="搜索标签、颜色、关键词... 如「JK制服」「#FF0000」「春季」"
       clearable
       @select="selectSuggestion"
       @keyup.enter="handleEnter"
+      @paste="onPaste"
       size="large"
-    />
+    >
+      <template #prefix>
+        <span style="font-size:16px;margin-right:4px">🔍</span>
+      </template>
+    </n-auto-complete>
   </div>
 </template>
 

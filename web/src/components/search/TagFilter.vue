@@ -1,23 +1,69 @@
 <script setup lang="ts">
-/** 多维标签筛选面板：按类别分组展示，支持选中/排除，AND/OR 切换。 */
+/** 多维标签筛选面板：分组展示、内部搜索、共现提示、AND/OR 切换。 */
 
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useTagsStore } from '@/stores/tags'
+import { fetchCooccurrence } from '@/api/search'
 
 const tagsStore = useTagsStore()
 
-/** 是否在基础色模式（暗色模式） */
-const isDark = computed(() => false) // 当前固定为浅色
+/** 标签面板内搜索 */
+const filterSearch = ref('')
+/** 共现标签推荐 */
+const cooccurrenceTags = ref<Array<{ name: string; shared_count: number }>>([])
+const cooccurrenceFor = ref('')
 
-/** 标签是否被选中（包含） */
+/** 过滤后的标签分组 */
+const filteredGroups = computed(() => {
+  const q = filterSearch.value.trim().toLowerCase()
+  if (!q) return tagsStore.groups
+  return tagsStore.groups
+    .map(g => ({
+      ...g,
+      tags: g.tags.filter(t => t.name.toLowerCase().includes(q)),
+    }))
+    .filter(g => g.tags.length > 0)
+})
+
 function isSelected(name: string): boolean {
   return tagsStore.selectedTags.has(name)
 }
 
-/** 标签是否被排除 */
 function isExcluded(name: string): boolean {
   return tagsStore.excludedTags.has(name)
 }
+
+/** 加载共现标签 */
+async function loadCooccurrence(tagName: string) {
+  if (cooccurrenceFor.value === tagName) {
+    cooccurrenceFor.value = ''
+    cooccurrenceTags.value = []
+    return
+  }
+  try {
+    const data = await fetchCooccurrence(tagName)
+    cooccurrenceFor.value = tagName
+    cooccurrenceTags.value = data.related.slice(0, 5)
+  } catch {
+    cooccurrenceTags.value = []
+  }
+}
+
+/** 标签项点击 */
+function onTagClick(tagName: string) {
+  tagsStore.toggleTag(tagName)
+  if (tagsStore.selectedTags.has(tagName)) {
+    loadCooccurrence(tagName)
+  }
+}
+
+/** 组合逻辑描述 */
+const combineDesc = computed(() => {
+  const selected = [...tagsStore.selectedTags]
+  if (selected.length < 2) return ''
+  const sep = tagsStore.combineMode === 'AND' ? ' ∩ ' : ' ∪ '
+  return selected.join(sep)
+})
 </script>
 
 <template>
@@ -25,8 +71,8 @@ function isExcluded(name: string): boolean {
     <!-- 组合模式切换 -->
     <div class="filter-header">
       <n-radio-group v-model:value="tagsStore.combineMode" size="small">
-        <n-radio-button value="AND">全部匹配</n-radio-button>
-        <n-radio-button value="OR">任意匹配</n-radio-button>
+        <n-radio-button value="AND" title="素材必须同时包含所有已选标签">全部匹配 (AND)</n-radio-button>
+        <n-radio-button value="OR" title="素材包含任意一个已选标签即可">任意匹配 (OR)</n-radio-button>
       </n-radio-group>
 
       <n-button
@@ -36,12 +82,18 @@ function isExcluded(name: string): boolean {
         type="warning"
         @click="tagsStore.clearFilters()"
       >
-        清除筛选
+        清除
       </n-button>
+    </div>
+
+    <!-- AND/OR 逻辑描述 -->
+    <div v-if="combineDesc" class="combine-desc" title="当前组合逻辑">
+      {{ combineDesc }}
     </div>
 
     <!-- 已选标签预览 -->
     <div v-if="tagsStore.selectedTags.size > 0" class="active-filters">
+      <span style="font-size:11px;color:#999">包含:</span>
       <n-tag
         v-for="name in [...tagsStore.selectedTags]"
         :key="'inc-' + name"
@@ -50,10 +102,11 @@ function isExcluded(name: string): boolean {
         size="small"
         @close="tagsStore.toggleTag(name)"
       >
-        ✓ {{ name }}
+        {{ name }}
       </n-tag>
     </div>
     <div v-if="tagsStore.excludedTags.size > 0" class="active-filters excluded">
+      <span style="font-size:11px;color:#999">排除:</span>
       <n-tag
         v-for="name in [...tagsStore.excludedTags]"
         :key="'exc-' + name"
@@ -62,14 +115,43 @@ function isExcluded(name: string): boolean {
         size="small"
         @close="tagsStore.toggleExcludeTag(name)"
       >
-        ✕ {{ name }}
+        {{ name }}
       </n-tag>
     </div>
+
+    <!-- 共现标签提示 -->
+    <div v-if="cooccurrenceTags.length > 0" class="cooccurrence-box">
+      <div class="cooccurrence-title">
+        「{{ cooccurrenceFor }}」常与以下标签一起出现：
+        <n-button size="tiny" text @click="cooccurrenceTags = []; cooccurrenceFor = ''">✕</n-button>
+      </div>
+      <div class="cooccurrence-chips">
+        <n-tag
+          v-for="ct in cooccurrenceTags"
+          :key="ct.name"
+          size="tiny"
+          type="success"
+          style="cursor:pointer"
+          @click="tagsStore.toggleTag(ct.name)"
+        >
+          + {{ ct.name }} ({{ ct.shared_count }})
+        </n-tag>
+      </div>
+    </div>
+
+    <!-- 面板内搜索 -->
+    <n-input
+      v-model:value="filterSearch"
+      size="small"
+      placeholder="在标签中搜索..."
+      clearable
+      style="margin-bottom:8px"
+    />
 
     <!-- 标签分组列表 -->
     <n-collapse>
       <n-collapse-item
-        v-for="group in tagsStore.groups"
+        v-for="group in filteredGroups"
         :key="group.category"
         :title="`${tagsStore.getCategoryLabel(group.category)} (${group.tags.length})`"
       >
@@ -82,7 +164,7 @@ function isExcluded(name: string): boolean {
               selected: isSelected(tag.name),
               excluded: isExcluded(tag.name),
             }"
-            @click="tagsStore.toggleTag(tag.name)"
+            @click="onTagClick(tag.name)"
             @contextmenu.prevent="tagsStore.toggleExcludeTag(tag.name)"
             :title="`左键包含 / 右键排除 (使用 ${tag.usage_count} 次)`"
           >
@@ -93,7 +175,6 @@ function isExcluded(name: string): boolean {
       </n-collapse-item>
     </n-collapse>
 
-    <!-- 加载中 -->
     <n-spin v-if="tagsStore.loading" size="small" style="margin-top: 16px" />
   </div>
 </template>
@@ -107,14 +188,49 @@ function isExcluded(name: string): boolean {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.combine-desc {
+  font-size: 11px;
+  color: #3b82f6;
+  padding: 2px 8px;
+  margin-bottom: 8px;
+  background: #eff6ff;
+  border-radius: 4px;
+  word-break: break-all;
+  font-family: monospace;
 }
 
 .active-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
+  gap: 4px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.cooccurrence-box {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.cooccurrence-title {
+  font-size: 11px;
+  color: #166534;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cooccurrence-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .tag-chips {

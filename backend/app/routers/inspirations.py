@@ -77,6 +77,88 @@ async def create_inspiration(
     return _to_out(inspiration)
 
 
+@router.post("/from-url", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
+async def create_from_url(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """从 URL 下载图片并创建素材。
+
+    请求体: {"url": "...", "source_author": "...", "tags": ["..."]}
+    """
+    import uuid
+    import aiofiles
+    import httpx
+
+    url = payload.get("url", "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="请提供图片 URL")
+
+    source_author = payload.get("source_author", "").strip() or None
+    tag_names = payload.get("tags", [])
+
+    # 下载图片
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            image_bytes = resp.content
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"下载失败: {e}")
+
+    # 从 Content-Type 或 URL 推断扩展名
+    content_type = resp.headers.get("content-type", "")
+    ext = ".jpg"
+    if "png" in content_type:
+        ext = ".png"
+    elif "webp" in content_type:
+        ext = ".webp"
+    elif "gif" in content_type:
+        ext = ".gif"
+    elif "mp4" in content_type:
+        ext = ".mp4"
+
+    # 保存文件
+    filename = f"{uuid.uuid4().hex}{ext}"
+    images_dir = settings.images_dir
+    images_dir.mkdir(parents=True, exist_ok=True)
+    file_path_obj = images_dir / filename
+    async with aiofiles.open(file_path_obj, "wb") as f:
+        await f.write(image_bytes)
+
+    # 生成缩略图
+    from app.services.file_service import generate_thumbnail
+    rel_path = f"images/{filename}"
+    thumb_path = await generate_thumbnail(file_path_obj)
+
+    media_type = "video" if ext == ".mp4" else "image"
+
+    inspiration = Inspiration(
+        source_type="browser_extension",
+        source_url=url,
+        source_author=source_author,
+        file_path=rel_path,
+        thumbnail_path=thumb_path,
+        media_type=media_type,
+    )
+    db.add(inspiration)
+    await db.flush()
+    await db.refresh(inspiration)
+
+    # 关联标签
+    if tag_names:
+        from app.services.tag_service import get_or_create_tag
+        for tname in tag_names:
+            tag = await get_or_create_tag(db, tname.strip(), "free")
+            link = InspirationTag(inspiration_id=inspiration.id, tag_id=tag.id, confidence=1.0)
+            db.add(link)
+        await db.flush()
+
+    return _to_out(inspiration)
+
+
 @router.get("", response_model=InspirationListOut)
 async def list_inspirations(
     page: int = 1,
