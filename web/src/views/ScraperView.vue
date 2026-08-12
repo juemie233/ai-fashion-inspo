@@ -31,7 +31,7 @@ interface FunnelSearch {
   keyword: string; sort_type: string
   cards_total?: number; cards_with_img?: number; cards_without_img?: number
   skipped_small?: number; skipped_icon?: number; urls_extracted?: number
-  batch_added?: number; batch_skipped_existing?: number
+  batch_added?: number; batch_skipped_existing?: number; batch_skipped_content_dup?: number
   batch_skipped_http?: number; batch_skipped_network?: number
   error?: string
 }
@@ -39,7 +39,7 @@ interface FunnelSearch {
 interface FunnelDiagnostics {
   per_search: FunnelSearch[]
   summary: {
-    total_found: number; skipped_url_seen: number
+    total_found: number; skipped_url_seen: number; skipped_content_dup: number
     skipped_http_error: number; skipped_network_error: number
     total_added: number
   }
@@ -262,6 +262,17 @@ function sortLabel(s: string): string {
   return m[s] || s
 }
 
+/** 汇总漏斗各阶段派生值，供模板使用 */
+const funnelStages = computed(() => {
+  const s = funnelData.value?.summary
+  if (!s) return null
+  const found = s.total_found || 0
+  const deduped = found - (s.skipped_url_seen || 0) - (s.skipped_content_dup || 0)
+  const downloaded = deduped - (s.skipped_http_error || 0) - (s.skipped_network_error || 0)
+  const unprocessed = Math.max(0, downloaded - (s.total_added || 0))
+  return { found, deduped, downloaded, unprocessed, added: s.total_added || 0 }
+})
+
 // ── 结果预览 ──
 
 async function viewResults(taskId: number) {
@@ -309,8 +320,11 @@ onMounted(()=>{loadAll();startPollIfNeeded()})
 onUnmounted(()=>{stopPoll()})
 
 // ── 表格列 ──
+// 注意：必须用函数而非 computed，否则 render 闭包里的 ref 变化不会触发表格重渲染，
+// 导致「结果/日志/漏斗」按钮文本与删除 loading 态不更新。
 
-const tableColumns = computed(() => [
+function getTableColumns() {
+  return [
   { title:'平台',key:'platform',width:80,render:(r:ScraperTask)=>platformName(r.platform) },
   { title:'关键词',key:'config',width:160,ellipsis:{tooltip:true},render:(r:ScraperTask)=>parseKeywords(r.config) },
   { title:'状态',key:'status',width:80,render:(r:ScraperTask)=>h(NTag,{type:statusType(r.status),size:'small'},STATUS_LABELS[r.status]||r.status) },
@@ -328,11 +342,20 @@ const tableColumns = computed(() => [
     btns.push(h(NPopconfirm,{onPositiveClick:()=>deleteSingleTask(r.id)},{trigger:()=>h(NButton,{size:'tiny',type:'error',ghost:true,loading:deletingTask.value===r.id},'删除'),default:()=>'确定删除此记录？'}))
     return h('span',{style:{display:'flex',gap:'4px',flexWrap:'wrap'}},btns)
   }},
-])
+]
+}
 
 function expandedRowRender(row: ScraperTask) {
+  let configText = ''
+  if (row.config) {
+    try {
+      configText = JSON.stringify(JSON.parse(row.config), null, 2)
+    } catch {
+      configText = row.config  // 历史脏数据无法解析时展示原文
+    }
+  }
   return h('div',{style:{padding:'12px 24px',maxWidth:'700px'}},[
-    row.config?h('div',{style:{marginBottom:'8px'}},[h('span',{style:{color:'#999',fontSize:'12px'}},'配置：'),h('pre',{style:{margin:'4px 0',fontSize:'12px',whiteSpace:'pre-wrap'}},JSON.stringify(JSON.parse(row.config),null,2))]):null,
+    configText?h('div',{style:{marginBottom:'8px'}},[h('span',{style:{color:'#999',fontSize:'12px'}},'配置：'),h('pre',{style:{margin:'4px 0',fontSize:'12px',whiteSpace:'pre-wrap'}},configText)]):null,
     row.error?h('div',[h('span',{style:{color:'#d03050',fontSize:'12px'}},'错误：'),h('pre',{style:{margin:'4px 0',fontSize:'12px',color:'#d03050',whiteSpace:'pre-wrap',background:'#fef0f0',padding:'8px',borderRadius:'4px'}},row.error)]):null,
   ])
 }
@@ -458,7 +481,7 @@ function expandedRowRender(row: ScraperTask) {
     </n-space>
   </template>
 
-  <n-data-table v-if="tasks.length" :columns="tableColumns" :data="tasks" :bordered="false" :expanded-row-render="expandedRowRender" :row-key="(r:ScraperTask)=>r.id" size="small" />
+  <n-data-table v-if="tasks.length" :columns="getTableColumns()" :data="tasks" :bordered="false" :expanded-row-render="expandedRowRender" :row-key="(r:ScraperTask)=>r.id" size="small" />
 
   <n-empty v-else description="暂无采集任务" size="medium">
     <template #extra>
@@ -489,41 +512,41 @@ function expandedRowRender(row: ScraperTask) {
     <!-- 汇总漏斗 -->
     <div class="funnel-section">
       <div class="funnel-section-title">📈 任务汇总</div>
-      <div class="funnel-bars">
+      <div class="funnel-bars" v-if="funnelStages">
         <div class="funnel-bar-row">
           <span class="funnel-bar-label">搜索提取</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found,funnelData.summary.total_found),background:barColor(0)}"></div>
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelStages.found,funnelStages.found),background:barColor(0)}"></div>
           </div>
-          <span class="funnel-bar-count">{{ funnelData.summary.total_found }}</span>
+          <span class="funnel-bar-count">{{ funnelStages.found }}</span>
           <span class="funnel-bar-pct">100%</span>
         </div>
-        <div class="funnel-drop">↓ -{{ funnelData.summary.skipped_url_seen }} 已存在</div>
+        <div class="funnel-drop">↓ -{{ funnelData.summary.skipped_url_seen + funnelData.summary.skipped_content_dup }} 已存在/MD5重复</div>
         <div class="funnel-bar-row">
           <span class="funnel-bar-label">去重后</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen, funnelData.summary.total_found),background:barColor(1)}"></div>
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelStages.deduped,funnelStages.found),background:barColor(1)}"></div>
           </div>
-          <span class="funnel-bar-count">{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen }}</span>
-          <span class="funnel-bar-pct">{{ funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen, funnelData.summary.total_found) }}</span>
+          <span class="funnel-bar-count">{{ funnelStages.deduped }}</span>
+          <span class="funnel-bar-pct">{{ funnelPct(funnelStages.deduped,funnelStages.found) }}</span>
         </div>
         <div class="funnel-drop">↓ -{{ funnelData.summary.skipped_http_error + funnelData.summary.skipped_network_error }} HTTP/网络失败</div>
         <div class="funnel-bar-row">
           <span class="funnel-bar-label">下载成功</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error, funnelData.summary.total_found),background:barColor(2)}"></div>
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelStages.downloaded,funnelStages.found),background:barColor(2)}"></div>
           </div>
-          <span class="funnel-bar-count">{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error }}</span>
-          <span class="funnel-bar-pct">{{ funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error, funnelData.summary.total_found) }}</span>
+          <span class="funnel-bar-count">{{ funnelStages.downloaded }}</span>
+          <span class="funnel-bar-pct">{{ funnelPct(funnelStages.downloaded,funnelStages.found) }}</span>
         </div>
-        <div class="funnel-drop">↓ -{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error - funnelData.summary.total_added }} 内容MD5重复</div>
+        <div class="funnel-drop" v-if="funnelStages.unprocessed > 0">↓ -{{ funnelStages.unprocessed }} 未处理（已达目标数量）</div>
         <div class="funnel-bar-row funnel-bar-final">
           <span class="funnel-bar-label">★ 最终入库</span>
           <div class="funnel-bar-track">
-            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_added, funnelData.summary.total_found),background:barColor(3)}"></div>
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelStages.added,funnelStages.found),background:barColor(3)}"></div>
           </div>
-          <span class="funnel-bar-count" style="font-weight:700">{{ funnelData.summary.total_added }}</span>
-          <span class="funnel-bar-pct" style="font-weight:700">{{ funnelPct(funnelData.summary.total_added, funnelData.summary.total_found) }}</span>
+          <span class="funnel-bar-count" style="font-weight:700">{{ funnelStages.added }}</span>
+          <span class="funnel-bar-pct" style="font-weight:700">{{ funnelPct(funnelStages.added,funnelStages.found) }}</span>
         </div>
       </div>
     </div>
@@ -560,7 +583,7 @@ function expandedRowRender(row: ScraperTask) {
               <div class="funnel-bar-fill" :style="{width:funnelPct(ps.urls_extracted!,ps.cards_total!),background:barColor(2)}"></div>
             </div>
             <span class="funnel-bar-count">{{ ps.urls_extracted }}</span>
-            <span class="funnel-bar-pct" v-if="ps.cards_total && ps.cards_with_img">({{ ps.skipped_small && ps.skipped_icon ? '-小图'+(ps.skipped_small||0)+'/图标'+(ps.skipped_icon||0) : '' }})</span>
+            <span class="funnel-bar-pct" v-if="(ps.skipped_small||0) + (ps.skipped_icon||0) > 0">(-小图{{ps.skipped_small||0}}/图标{{ps.skipped_icon||0}})</span>
           </div>
           <div class="funnel-bar-row funnel-bar-final">
             <span class="funnel-bar-label">入库</span>
@@ -568,7 +591,7 @@ function expandedRowRender(row: ScraperTask) {
               <div class="funnel-bar-fill" :style="{width:funnelPct(ps.batch_added!,ps.cards_total!),background:barColor(3)}"></div>
             </div>
             <span class="funnel-bar-count" style="font-weight:700">{{ ps.batch_added }}</span>
-            <span class="funnel-bar-pct" v-if="ps.batch_skipped_existing||ps.batch_skipped_http||ps.batch_skipped_network">(跳过: 已存在{{ps.batch_skipped_existing}} HTTP{{ps.batch_skipped_http}} 网络{{ps.batch_skipped_network}})</span>
+            <span class="funnel-bar-pct" v-if="ps.batch_skipped_existing||ps.batch_skipped_content_dup||ps.batch_skipped_http||ps.batch_skipped_network">(跳过: 已存在{{ps.batch_skipped_existing||0}} MD5{{ps.batch_skipped_content_dup||0}} HTTP{{ps.batch_skipped_http||0}} 网络{{ps.batch_skipped_network||0}})</span>
           </div>
         </div>
       </div>

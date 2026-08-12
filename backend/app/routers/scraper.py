@@ -3,7 +3,10 @@
 import asyncio
 import json
 import logging
+import os
+import signal
 import socket
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -16,8 +19,11 @@ from app.schemas.scraper import ScraperTaskCreate, ScraperTaskOut
 
 router = APIRouter(prefix="/api/scraper", tags=["scraper"])
 
-# 运行中子进程 PID 映射
+logger = logging.getLogger(__name__)
+
+# 运行中子进程映射
 _scraper_pids: dict[int, int] = {}  # task_id → pid
+_scraper_handles: dict[int, object] = {}  # task_id → Popen 对象（用于日志句柄回收）
 
 # Chrome 调试模式启动命令模板（路径从配置读取）
 CHROME_DEBUG_CMD = (
@@ -88,9 +94,21 @@ def _launch_scraper_process(task_id: int):
         [sys.executable, "-u", str(script), str(task_id)],
         stdout=log_f,
         stderr=subprocess.STDOUT,
-        env={**__import__("os").environ, "PYTHONUNBUFFERED": "1"},
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     _scraper_pids[task_id] = proc.pid
+    _scraper_handles[task_id] = (proc, log_f)
+
+    def _reap():
+        """后台线程等待子进程退出后回收句柄，避免文件描述符泄漏与 PID 复用误杀。"""
+        try:
+            proc.wait()
+        finally:
+            log_f.close()
+            _scraper_pids.pop(task_id, None)
+            _scraper_handles.pop(task_id, None)
+
+    threading.Thread(target=_reap, daemon=True).start()
 
 
 @router.get("/sources")
@@ -254,10 +272,9 @@ async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     # 向子进程发送 SIGTERM
-    pid = _scraper_pids.pop(task_id, None)
+    pid = _scraper_pids.get(task_id)
     if pid:
         try:
-            import signal
             os.kill(pid, signal.SIGTERM)
             logger.info(f"已发送 SIGTERM 给采集进程 PID={pid} (task {task_id})")
         except OSError:
@@ -410,6 +427,7 @@ async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="没有失败的采集任务")
 
     retried = 0
+    new_task_ids: list[int] = []
     for task in failed_tasks:
         new_task = ScraperTask(
             platform=task.platform,
@@ -419,10 +437,15 @@ async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
         db.add(new_task)
         await db.flush()
         await db.refresh(new_task)
-        _launch_scraper_process(new_task.id)
+        new_task_ids.append(new_task.id)
         retried += 1
 
+    # 先提交事务，确保子进程能看到新任务记录
     await db.commit()
+
+    for task_id in new_task_ids:
+        _launch_scraper_process(task_id)
+
     return {"retried": retried, "message": f"已重新创建 {retried} 个采集任务"}
 
 

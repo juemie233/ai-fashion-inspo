@@ -12,11 +12,12 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import settings
-from app.database import async_session
+from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.inspiration import Inspiration
 from app.models.scraper import ScraperTask
@@ -66,7 +67,7 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
 
     url = (
         f"https://www.xiaohongshu.com/search_result/"
-        f"?keyword={keyword}&source=web_search_result_notes&sort={sort_type}"
+        f"?keyword={quote(keyword)}&source=web_search_result_notes&sort={sort_type}"
     )
     print(f"  导航到搜索页 [{sort_label}]: {keyword}")
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -191,7 +192,7 @@ def _download_batch(
     httpx_module,
     cookies: dict | None = None,
     content_hash_set: set[str] | None = None,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。
 
     去重策略（三层）：
@@ -218,6 +219,7 @@ def _download_batch(
 
     # 查询这批 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）
     if unique:
+        conn = None
         try:
             conn = _sqlite3.connect(str(db_path))
             # 确保墓碑表存在
@@ -232,13 +234,16 @@ def _download_batch(
                 unique,
             )
             db_existing = {r[0] for r in cur.fetchall()}
-            conn.close()
             existing_url_set.update(db_existing)
         except Exception:
-            db_existing = set()
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     added = 0
     skipped_existing = 0
+    skipped_content_dup = 0
     skipped_non200 = 0
     skipped_network = 0
 
@@ -270,11 +275,24 @@ def _download_batch(
                     content_hash = hashlib.md5(content).hexdigest()
                     if content_hash in content_hash_set:
                         fpath.unlink()  # 删除刚下载的重复文件
-                        skipped_existing += 1
+                        skipped_content_dup += 1
+                        # 将重复 URL 写入墓碑表，避免下次采集重复下载
+                        try:
+                            _conn = _sqlite3.connect(str(db_path))
+                            _conn.execute(
+                                "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                                (img_url,),
+                            )
+                            _conn.commit()
+                            _conn.close()
+                        except Exception:
+                            pass
+                        existing_url_set.add(img_url)
                         break
                     content_hash_set.add(content_hash)
 
                 # 同步写入数据库（失败时删除已下载文件，避免孤儿文件）
+                conn = None
                 try:
                     conn = _sqlite3.connect(str(db_path))
                     insp_id = str(uuid.uuid4())
@@ -292,13 +310,15 @@ def _download_batch(
                         (img_url,),
                     )
                     conn.commit()
-                    conn.close()
                 except Exception:
                     try:
                         fpath.unlink()
                     except Exception:
                         pass
                     raise  # 重新抛出，让外层重试逻辑处理
+                finally:
+                    if conn is not None:
+                        conn.close()
 
                 added += 1
                 existing_url_set.add(img_url)
@@ -316,7 +336,7 @@ def _download_batch(
                     print(f"    下载失败 {img_url[:40]}... ({err})")
                     skipped_network += 1
 
-    return added, skipped_existing, skipped_non200, skipped_network
+    return added, skipped_existing, skipped_non200, skipped_network, skipped_content_dup
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -327,7 +347,8 @@ def run_scraper_sync(task_id: int):
     from playwright.sync_api import sync_playwright
     import asyncio
 
-    # ── 确保表结构最新（独立脚本不经过服务端 lifespan）──
+    # ── 确保表结构与字段最新（独立脚本不经过服务端 lifespan）──
+    asyncio.run(init_db())
     asyncio.run(ensure_schema())
 
     # ── 加载任务 ──
@@ -349,26 +370,45 @@ def run_scraper_sync(task_id: int):
                 await db.commit()
     asyncio.run(_run())
 
-    config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
-    keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
-    max_count = config.get("max_count", 50)
-    platform = task.platform
+    # ── 标记任务失败（复用：配置异常与采集异常都会调用）──
+    async def _fail(reason: str):
+        async with async_session() as db:
+            t = await db.get(ScraperTask, task_id)
+            if t:
+                t.status = "failed"
+                t.error = reason[:500]
+                t.finished_at = utcnow()
+                await db.commit()
 
-    if not keywords:
-        print("无关键词，退出")
+    # ── 解析配置（异常时标记失败，避免任务卡在 running）──
+    try:
+        config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
+        keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
+        max_count = config.get("max_count", 50)
+        platform = task.platform
+
+        if not keywords:
+            print("无关键词，退出")
+            asyncio.run(_fail("无关键词"))
+            return
+
+        # 准备下载目录
+        today = utcnow().strftime("%Y-%m")
+        img_dir = settings.images_dir / today
+        img_dir.mkdir(parents=True, exist_ok=True)
+        import httpx
+    except Exception as e:
+        err = str(e) or type(e).__name__
+        print(f"配置解析失败: {err}")
+        asyncio.run(_fail(f"配置解析失败: {err}"))
         return
-
-    # 准备下载目录
-    today = utcnow().strftime("%Y-%m")
-    img_dir = settings.images_dir / today
-    img_dir.mkdir(parents=True, exist_ok=True)
-    import httpx
 
     existing_url_set: set[str] = set()  # 跨批次 URL 去重
     content_hash_set: set[str] = set()  # 跨批次内容 MD5 去重
     items_found = 0  # 搜索提取总数
     items_added = 0  # 最终入库数
     total_skipped_existing = 0
+    total_skipped_content_dup = 0
     total_skipped_non200 = 0
     total_skipped_network = 0
     per_search: list[dict] = []  # 每次搜索的漏斗明细
@@ -377,7 +417,7 @@ def run_scraper_sync(task_id: int):
         pw = sync_playwright().start()
 
         # ── 唯一路径：连接 CDP Chrome ──
-        CDP_PORT = 9222
+        CDP_PORT = config.get("cdp_port") or 9222
         cdp_url = f"http://localhost:{CDP_PORT}"
         print(f"连接 CDP Chrome: {cdp_url}")
 
@@ -463,13 +503,14 @@ def run_scraper_sync(task_id: int):
 
                     # 立即下载本批（带浏览器 Cookie）
                     remaining = max_count - items_added
-                    added, sk_ex, sk_h, sk_n = _download_batch(
+                    added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
                         urls, task_id, existing_url_set, remaining,
                         img_dir, today, httpx, browser_cookies,
                         content_hash_set,
                     )
                     items_added += added
                     total_skipped_existing += sk_ex
+                    total_skipped_content_dup += sk_dup
                     total_skipped_non200 += sk_h
                     total_skipped_network += sk_n
 
@@ -480,11 +521,12 @@ def run_scraper_sync(task_id: int):
                         **inner_funnel,
                         "batch_added": added,
                         "batch_skipped_existing": sk_ex,
+                        "batch_skipped_content_dup": sk_dup,
                         "batch_skipped_http": sk_h,
                         "batch_skipped_network": sk_n,
                     })
 
-                    print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, HTTP{sk_h}, 网络{sk_n})")
+                    print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n})")
                     print(f"  累计入库: {items_added}/{max_count}")
 
                     # 搜索间冷却 + CDP 保活
@@ -518,16 +560,7 @@ def run_scraper_sync(task_id: int):
         err = str(e) or type(e).__name__
         print(f"采集失败: {err}")
         traceback.print_exc()
-
-        async def _fail():
-            async with async_session() as db:
-                t = await db.get(ScraperTask, task_id)
-                if t:
-                    t.status = "failed"
-                    t.error = str(e)[:500]
-                    t.finished_at = utcnow()
-                    await db.commit()
-        asyncio.run(_fail())
+        asyncio.run(_fail(err))
         return
 
     finally:
@@ -544,6 +577,7 @@ def run_scraper_sync(task_id: int):
         "summary": {
             "total_found": items_found,
             "skipped_url_seen": total_skipped_existing,
+            "skipped_content_dup": total_skipped_content_dup,
             "skipped_http_error": total_skipped_non200,
             "skipped_network_error": total_skipped_network,
             "total_added": items_added,
@@ -556,6 +590,7 @@ def run_scraper_sync(task_id: int):
     print(f"  ╠══════════════════════════════════════════")
     print(f"  ║ 搜索提取总数:   {items_found}")
     print(f"  ║ 跨次已存在:     {total_skipped_existing}")
+    print(f"  ║ 内容MD5重复:    {total_skipped_content_dup}")
     print(f"  ║ HTTP 非 200:    {total_skipped_non200}")
     print(f"  ║ 网络失败:       {total_skipped_network}")
     print(f"  ║ ★ 最终入库:     {items_added}")

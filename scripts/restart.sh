@@ -74,26 +74,37 @@ echo "  后端 PID: $BACKEND_PID (日志: $LOG_DIR/backend.log)"
 # ── 4. 启动前端 ──
 echo ""
 echo ">>> [4/4] 启动前端 ..."
+if [ ! -d web/node_modules ]; then
+  echo "  ❌ 未检测到 web/node_modules，请先执行: cd web && npm install"
+  exit 1
+fi
 cd web
-nohup npx vite --host 0.0.0.0 --port "$FRONTEND_PORT" \
+nohup npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" \
   > "../$LOG_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 cd ..
 echo "  前端 PID: $FRONTEND_PID (日志: $LOG_DIR/frontend.log)"
 
-# ── 验证 ──
+# ── 验证（轮询，最多 30 秒）──
 echo ""
 echo ">>> 等待服务启动..."
-sleep 5
+BACKEND_OK=0
+FRONTEND_OK=0
+for _ in $(seq 1 30); do
+  [ "$BACKEND_OK" -eq 1 ] || curl -s "http://localhost:$BACKEND_PORT/api/health" >/dev/null 2>&1 && BACKEND_OK=1
+  [ "$FRONTEND_OK" -eq 1 ] || curl -s "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1 && FRONTEND_OK=1
+  if [ "$BACKEND_OK" -eq 1 ] && [ "$FRONTEND_OK" -eq 1 ]; then break; fi
+  sleep 1
+done
 
-if curl -s "http://localhost:$BACKEND_PORT/api/health" >/dev/null 2>&1; then
+if [ "$BACKEND_OK" -eq 1 ]; then
   echo "  ✅ 后端已就绪: http://localhost:$BACKEND_PORT"
   curl -s "http://localhost:$BACKEND_PORT/api/health" && echo ""
 else
   echo "  ❌ 后端未就绪，请检查 $LOG_DIR/backend.log"
 fi
 
-if curl -s "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1; then
+if [ "$FRONTEND_OK" -eq 1 ]; then
   echo "  ✅ 前端已就绪: http://localhost:$FRONTEND_PORT"
 else
   echo "  ❌ 前端未就绪，请检查 $LOG_DIR/frontend.log"
@@ -103,3 +114,10 @@ echo ""
 echo "=============================================="
 echo "  完成。日志目录: $LOG_DIR/"
 echo "=============================================="
+
+# 任一服务未就绪则返回非零退出码，供自动化判断
+if [ "$BACKEND_OK" -eq 1 ] && [ "$FRONTEND_OK" -eq 1 ]; then
+  exit 0
+else
+  exit 1
+fi

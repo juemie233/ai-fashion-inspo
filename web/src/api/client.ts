@@ -9,8 +9,8 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  // 204 No Content 不尝试解析 JSON
-  validateStatus: (status) => status < 500,
+  // 仅 2xx 视为成功，4xx/5xx 进入 catch 分支触发错误处理
+  validateStatus: (status) => status >= 200 && status < 300,
 })
 
 // 响应拦截器：统一错误处理

@@ -1,5 +1,6 @@
 """数据库引擎与会话管理：SQLite + SQLAlchemy async。"""
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -11,6 +12,18 @@ engine = create_async_engine(
     echo=settings.debug,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+    """每次建立连接时启用 SQLite 外键约束。
+
+    SQLite 默认关闭外键，导致 ON DELETE SET NULL / ON DELETE CASCADE 失效。
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
 
 # 异步会话工厂
 async_session = async_sessionmaker(

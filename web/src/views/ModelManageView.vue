@@ -467,7 +467,8 @@ function cancelDownload() {
     downloadStatus.value = '已取消'
     message.info('下载已取消')
     // 5 秒后自动清空进度提示
-    setTimeout(() => { if (downloadStatus.value === '已取消') downloadStatus.value = '' }, 5000)
+    const timer = setTimeout(() => { if (downloadStatus.value === '已取消') downloadStatus.value = '' }, 5000)
+    timerRefs.push(timer)
   }
 }
 
@@ -1289,7 +1290,7 @@ function formatDate(d: string | null | undefined) {
               </p>
 
               <!-- Prompt 版本管理 -->
-              <n-button size="tiny" style="margin-top:8px" @click="savePromptVersion; promptVersionsVisible = true; loadPromptVersions()">保存版本</n-button>
+              <n-button size="tiny" style="margin-top:8px" @click="savePromptVersion(); promptVersionsVisible = true; loadPromptVersions()">保存版本</n-button>
               <n-button size="tiny" style="margin-top:8px;margin-left:6px" @click="promptVersionsVisible = !promptVersionsVisible; loadPromptVersions()">
                 {{ promptVersionsVisible ? '隐藏历史' : '版本历史' }} {{ promptVersions.length > 0 ? `(${promptVersions.length})` : '' }}
               </n-button>
@@ -1297,7 +1298,7 @@ function formatDate(d: string | null | undefined) {
               <div v-if="promptVersionsVisible && promptVersions.length > 0" class="prompt-versions" style="margin-top:8px;max-height:200px;overflow-y:auto">
                 <div v-for="(v, i) in promptVersions" :key="i" style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#f5f5f5;border-radius:4px;margin-bottom:4px;font-size:12px">
                   <span>版本 #{{ promptVersions.length - i }} — {{ v.saved_at?.split('T')[0] }} {{ v.saved_at?.split('T')[1]?.slice(0,5) }} ({{ v.length }} 字符)</span>
-                  <n-button size="tiny" @click="rollbackPrompt(promptVersions.length - i - 1)">回滚</n-button>
+                  <n-button size="tiny" @click="rollbackPrompt(i)">回滚</n-button>
                 </div>
               </div>
               <div v-else-if="promptVersionsVisible" style="font-size:12px;color:#999;margin-top:4px">暂无版本历史，修改 prompt 后点击「保存版本」创建</div>

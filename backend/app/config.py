@@ -3,12 +3,15 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 数据库文件绝对路径（不依赖进程 CWD，避免从不同目录启动时产生双库）
+_DB_PATH = Path(__file__).resolve().parent.parent / "fashion_inspo.db"
+
 
 class Settings(BaseSettings):
     """应用设置类，自动从环境变量和 .env 文件加载。"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parent.parent / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -23,7 +26,7 @@ class Settings(BaseSettings):
     port: int = 18888
 
     # 数据库
-    database_url: str = "sqlite+aiosqlite:///./fashion_inspo.db"
+    database_url: str = f"sqlite+aiosqlite:///{_DB_PATH.as_posix()}"
 
     # 文件存储
     storage_root: Path = Path(__file__).parent.parent / "storage"

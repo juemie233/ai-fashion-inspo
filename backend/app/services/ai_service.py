@@ -97,19 +97,19 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         if ext not in _ALLOWED_IMG_EXT:
             raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
 
-        # 读取图片 —— WebP 需要转为 JPEG（MiniCPM-V 等模型不支持 WebP）
+        # 读取图片 —— WebP/BMP/GIF 转为 JPEG（MiniCPM-V 等模型不支持这些格式）
         import base64
         image_bytes = full_path.read_bytes()
-        if ext == ".webp" and _WEBP_NEEDS_CONVERSION:
+        if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION:
             try:
                 from io import BytesIO
                 from PIL import Image
                 buf = BytesIO()
                 Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
                 image_bytes = buf.getvalue()
-                logger.info(f"WebP → JPEG 转换完成 ({full_path.name})")
+                logger.info(f"{ext} → JPEG 转换完成 ({full_path.name})")
             except Exception as e:
-                raise ValueError(f"WebP 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
+                raise ValueError(f"{ext} 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
         image_data = base64.b64encode(image_bytes).decode("utf-8")
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
@@ -136,7 +136,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
                             "temperature": getattr(settings, "ai_temperature", 0.7),
                             "top_p": getattr(settings, "ai_top_p", 0.9),
                             "top_k": getattr(settings, "ai_top_k", 40),
-                            "num_predict": getattr(settings, "ai_num_predict", 1024),
+                            "num_predict": getattr(settings, "ai_num_predict", 2048),
                         },
                     },
                 )
@@ -272,7 +272,9 @@ def _parse_analysis_response(raw: str) -> dict:
     # 先尝试直接解析
     try:
         data = json.loads(text)
-        return data
+        if isinstance(data, dict):
+            return data
+        # 顶层是数组等非 dict 时，继续走清洗+评分策略，避免下游 .get() 崩溃
     except json.JSONDecodeError:
         pass
 
@@ -504,6 +506,12 @@ def _extract_tag_names(value) -> list[str]:
                 results.extend(_extract_tag_names(p))
             return results
 
+        # 去除括号内容（如 "室内拍摄（棚拍）" → "室内拍摄"），需在长度检查之前
+        if '（' in s or '(' in s:
+            s = s.split('（')[0].split('(')[0].strip() if '（' in s else s.split('(')[0].strip()
+            if not s or len(s) <= 1:
+                return []
+
         # 拆分后再检查长度
         if len(s) > 8:
             return []
@@ -513,11 +521,6 @@ def _extract_tag_names(value) -> list[str]:
             return []
         if s.isdigit():
             return []
-        # 去除括号内容（如 "室内拍摄（棚拍）" → "室内拍摄"）
-        if '（' in s or '(' in s:
-            s = s.split('（')[0].split('(')[0].strip() if '（' in s else s.split('(')[0].strip()
-            if not s or len(s) <= 1:
-                return []
         return [s]
 
     if isinstance(value, (int, float, bool)):

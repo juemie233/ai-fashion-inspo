@@ -35,7 +35,7 @@ function renderIcon(icon: Component) {
           { label: '素材管理', key: 'admin', icon: renderIcon(SettingsOutline) },
         ]"
         @update:value="(key: string) => $router.push(`/${key === 'home' ? '' : key}`)"
-        :default-value="$route.name as string"
+        :value="$route.name as string"
       />
     </aside>
 

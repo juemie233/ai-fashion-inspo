@@ -124,6 +124,7 @@ function sourceLabel(type: string) {
     xiaohongshu: '小红书',
     douyin: '抖音',
     manual_upload: '手动上传',
+    scraper: '自动采集',
     browser_extension: '浏览器插件',
   }
   return labels[type] || type

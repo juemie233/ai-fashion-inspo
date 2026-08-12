@@ -36,6 +36,7 @@ const sourceOptions: { label: string; value: SourceFilter }[] = [
   { label: '手动上传', value: 'manual_upload' },
   { label: '自动采集', value: 'scraper' },
   { label: '小红书', value: 'xiaohongshu' },
+  { label: '抖音', value: 'douyin' },
   { label: '浏览器插件', value: 'browser_extension' },
 ]
 

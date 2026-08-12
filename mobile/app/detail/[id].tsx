@@ -18,6 +18,18 @@ import { useInspirationStore, type Inspiration } from '../../hooks/useInspiratio
 
 const { width } = Dimensions.get('window')
 
+/** 来源类型中文映射 */
+function sourceLabel(type: string) {
+  const labels: Record<string, string> = {
+    xiaohongshu: '小红书',
+    douyin: '抖音',
+    manual_upload: '手动上传',
+    scraper: '自动采集',
+    browser_extension: '浏览器插件',
+  }
+  return labels[type] || type
+}
+
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -112,7 +124,7 @@ export default function DetailScreen() {
       <View style={styles.metaSection}>
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>来源</Text>
-          <Text style={styles.metaValue}>{detail.source_type}</Text>
+          <Text style={styles.metaValue}>{sourceLabel(detail.source_type)}</Text>
         </View>
         {detail.source_author && (
           <View style={styles.metaRow}>

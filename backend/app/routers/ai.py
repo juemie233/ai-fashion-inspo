@@ -192,6 +192,8 @@ async def analyze_inspiration(
     inspiration = result.scalar_one_or_none()
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.media_type != "image":
+        raise HTTPException(status_code=400, detail="仅支持分析图片素材，视频素材暂不支持")
 
     task = asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
     _analysis_tasks.add(task)
@@ -228,9 +230,9 @@ async def batch_analyze(
 
     return {
         "message": f"已将 {len(inspirations)} 个素材加入分析队列"
-                   + (f"，跳过 {skipped} 个非图片素材" if skipped > 0 else ""),
+                   + (f"，跳过 {skipped} 个素材（不存在或非图片）" if skipped > 0 else ""),
         "count": len(inspirations),
-        "skipped_videos": skipped,
+        "skipped": skipped,
     }
 
 
@@ -1198,7 +1200,7 @@ async def test_analyze(
                                 "temperature": getattr(settings, "ai_temperature", 0.7),
                                 "top_p": getattr(settings, "ai_top_p", 0.9),
                                 "top_k": getattr(settings, "ai_top_k", 40),
-                                "num_predict": getattr(settings, "ai_num_predict", 1024),
+                                "num_predict": getattr(settings, "ai_num_predict", 2048),
                             },
                         },
                     )
@@ -1289,7 +1291,7 @@ async def get_sampling_params():
         "temperature": getattr(settings, "ai_temperature", 0.7),
         "top_p": getattr(settings, "ai_top_p", 0.9),
         "top_k": getattr(settings, "ai_top_k", 40),
-        "num_predict": getattr(settings, "ai_num_predict", 1024),
+        "num_predict": getattr(settings, "ai_num_predict", 2048),
     }
 
 
@@ -1327,7 +1329,7 @@ async def update_sampling_params(
         "temperature": getattr(settings, "ai_temperature", 0.7),
         "top_p": getattr(settings, "ai_top_p", 0.9),
         "top_k": getattr(settings, "ai_top_k", 40),
-        "num_predict": getattr(settings, "ai_num_predict", 1024),
+        "num_predict": getattr(settings, "ai_num_predict", 2048),
     }
 
 
@@ -1354,10 +1356,13 @@ async def reset_all_data(
     from app.models.tag import InspirationTag, Tag
     from app.models.scraper import ScraperTask
 
-    # 等待进行中的分析任务完成（最多 10 秒）
-    if _active_analyses:
-        logger.info(f"等待 {len(_active_analyses)} 个分析任务完成...")
-        await aio.sleep(2)  # 给任务 2 秒完成当前步骤
+    # 取消所有进行中的分析任务，避免删除数据后任务写回脏数据
+    if _analysis_tasks:
+        logger.info(f"取消 {len(_analysis_tasks)} 个进行中的分析任务...")
+        for t in list(_analysis_tasks):
+            t.cancel()
+        _active_analyses.clear()
+        await aio.sleep(1)  # 给任务 1 秒处理取消
 
     async with async_session() as db:
         # 按外键依赖顺序删除（先删子表，再删主表）
