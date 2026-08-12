@@ -247,12 +247,17 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "inspiration_ids": list(set(ids)),
             })
 
-    # 扫描磁盘文件，找孤立文件
+    # 扫描磁盘文件，找孤立文件（排除非素材目录）
+    _NON_INSP_DIRS = {"logs", "cookies", "debug"}
     disk_files = _scan_storage_files()
     orphan_files: list[dict] = []
     orphan_total_size = 0
     for rel_path, size in disk_files.items():
         if rel_path not in db_file_paths and not rel_path.endswith(".db"):
+            # 跳过日志/cookie/debug 等非素材目录
+            top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
+            if top_dir in _NON_INSP_DIRS:
+                continue
             orphan_files.append({
                 "file_path": rel_path,
                 "size_bytes": size,
@@ -286,10 +291,12 @@ async def cleanup_orphan_files():
                 if p:
                     db_paths.add(p)
 
+    _NON_INSP_DIRS = {"logs", "cookies", "debug"}
     deleted = 0
     freed_bytes = 0
     for rel_path in storage_files:
-        if rel_path not in db_paths and not rel_path.endswith(".db"):
+        top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
+        if rel_path not in db_paths and not rel_path.endswith(".db") and top_dir not in _NON_INSP_DIRS:
             fpath = storage_root / rel_path
             try:
                 sz = fpath.stat().st_size

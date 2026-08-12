@@ -269,36 +269,75 @@ def _parse_analysis_response(raw: str) -> dict:
                 break
         text = "\n".join(lines[start_idx:end_idx])
 
-    # 先尝试直接解析（模型可能在前导文字后直接输出合法 JSON）
+    # 先尝试直接解析
     try:
         data = json.loads(text)
         return data
     except json.JSONDecodeError:
         pass
 
-    # 尝试在文本中查找 JSON 对象（处理前导文字 + JSON 末尾的模式）
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        json_candidate = match.group()
-        try:
-            data = json.loads(json_candidate)
-            return data
-        except json.JSONDecodeError:
-            pass
-
-    # 最后手段：去除注释后再尝试
-    cleaned = re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+    # 预处理：清洗各类注释和非法内容
+    cleaned = text
+    # 去除 /* */ 多行注释
     cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
-    match2 = re.search(r'\{.*\}', cleaned, re.DOTALL)
-    if match2:
+    # 去除 // 单行注释
+    cleaned = re.sub(r'//[^\n]*', '', cleaned)
+    # 去除 # 风格注释（MiniCPM-V 常用 #FFFFFF 等颜色标注）
+    # 直接删除十六进制颜色代码（#后跟6位hex），保留周围的 JSON 结构
+    cleaned = re.sub(r'#[0-9A-Fa-f]{6}\b', '', cleaned)
+    cleaned = re.sub(r'#[0-9A-Fa-f]{3}\b', '', cleaned)
+    # 去除独立的 # 注释行（非颜色代码的 #）
+    cleaned = re.sub(r'#[^\n,}\]\"]*', '', cleaned)
+    # 修复注释清理后留下的格式问题
+    cleaned = re.sub(r'"\s+"', '\", \"', cleaned)        # "value"  " → "value", "
+    cleaned = re.sub(r'",\s*"\s*\]', '\"]', cleaned)     # "value", " ] → "value"]
+    cleaned = re.sub(r'"\s+\]', '\"]', cleaned)          # "value" ] → "value"]
+    cleaned = re.sub(r'",\s*"\s*\}', '\"}', cleaned)     # "value", " } → "value"}
+    cleaned = re.sub(r'"\s+\}', '\"}', cleaned)          # "value" } → "value"}
+    # 去除尾部逗号（在 ] 或 } 前的逗号）
+    cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+
+    # 策略1：找到所有完整 { ... } 块，按「更像分析结果」打分
+    # 评分标准：含有越多预期键（style/items/fit等），得分越高
+    EXPECTED_KEYS = {"style", "items", "fit", "wear_style", "occasion", "attributes", "dominant_colors"}
+    candidates = []
+    for m in re.finditer(r'\{', cleaned):
+        depth = 0
+        start = m.start()
+        end = -1
+        for i in range(start, len(cleaned)):
+            if cleaned[i] == '{':
+                depth += 1
+            elif cleaned[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end > 0:
+            candidates.append(cleaned[start:end])
+    # 尝试解析，选包含最多预期键的结果
+    best = {}
+    for candidate in candidates:
         try:
-            data = json.loads(match2.group())
-            return data
+            data = json.loads(candidate)
+            score = sum(1 for k in EXPECTED_KEYS if k in data)
+            if score > sum(1 for k in EXPECTED_KEYS if k in best):
+                best = data
+        except json.JSONDecodeError:
+            continue
+    if best:
+        return best
+
+    # 策略2：找第一个 { ... } 块（兼容旧行为）
+    match = re.search(r'\{.*?\}', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
         except json.JSONDecodeError:
             pass
 
-    # 终极兜底：修复被截断的 JSON（num_predict 不足导致输出被切断）
-    repaired = _repair_truncated_json(text)
+    # 策略3：修复可能被截断的 JSON
+    repaired = _repair_truncated_json(cleaned)
     if repaired:
         try:
             return json.loads(repaired)

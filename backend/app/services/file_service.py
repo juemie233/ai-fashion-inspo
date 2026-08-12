@@ -86,15 +86,25 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
 
 
 def delete_files(file_path: str, thumbnail_path: str | None = None):
-    """从磁盘删除文件及其缩略图。"""
-    full_path = settings.storage_root / file_path
-    if full_path.exists():
-        full_path.unlink()
+    """从磁盘删除文件及其缩略图（带错误日志，不抛异常）。"""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    if file_path:
+        full_path = settings.storage_root / file_path
+        try:
+            if full_path.exists():
+                full_path.unlink()
+        except Exception as e:
+            _log.warning(f"删除文件失败: {full_path} — {e}")
 
     if thumbnail_path:
         full_thumb = settings.storage_root / thumbnail_path
-        if full_thumb.exists():
-            full_thumb.unlink()
+        try:
+            if full_thumb.exists():
+                full_thumb.unlink()
+        except Exception as e:
+            _log.warning(f"删除缩略图失败: {full_thumb} — {e}")
 
 
 def get_full_path(relative_path: str) -> Path:

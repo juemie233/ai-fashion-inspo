@@ -261,25 +261,31 @@ def _download_batch(
                         break
                     content_hash_set.add(content_hash)
 
-                # 同步写入数据库
-                conn = _sqlite3.connect(str(db_path))
-                insp_id = str(uuid.uuid4())
-                rel_path = f"images/{today}/{fname}"
-                now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                conn.execute(
-                    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
-                    "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                    "scraper_task_id, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?)",
-                    (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
-                )
-                # 同步写入墓碑表（删除素材后仍保留，防止重复采集）
-                conn.execute(
-                    "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
-                    (img_url,),
-                )
-                conn.commit()
-                conn.close()
+                # 同步写入数据库（失败时删除已下载文件，避免孤儿文件）
+                try:
+                    conn = _sqlite3.connect(str(db_path))
+                    insp_id = str(uuid.uuid4())
+                    rel_path = f"images/{today}/{fname}"
+                    now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    conn.execute(
+                        "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+                        "thumbnail_path, media_type, dominant_colors, is_favorite, "
+                        "scraper_task_id, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?)",
+                        (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                        (img_url,),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    try:
+                        fpath.unlink()
+                    except Exception:
+                        pass
+                    raise  # 重新抛出，让外层重试逻辑处理
 
                 added += 1
                 existing_url_set.add(img_url)
