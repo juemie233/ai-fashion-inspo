@@ -345,19 +345,6 @@ def run_scraper_sync(task_id: int):
         print(f"已连接 Chrome {browser.version}")
         context = browser.contexts[0]
 
-        # 提取浏览器 Cookie 用于后续图片下载（CDN 反盗链需要）
-        cdp_cookies = context.cookies()
-        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cdp_cookies)
-        download_headers = {
-            "Referer": "https://www.xiaohongshu.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
-        if cookie_str:
-            download_headers["Cookie"] = cookie_str
-            print(f"  已提取 {len(cdp_cookies)} 个 Cookie 用于下载")
-        else:
-            print("  ⚠ 未从浏览器提取到 Cookie，下载可能失败")
-
         # 创建新标签页用于采集
         page = context.new_page()
 

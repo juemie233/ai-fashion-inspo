@@ -4,8 +4,8 @@ import { resolve } from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const backendUrl = env.VITE_BACKEND_URL || 'http://localhost:8080'
-  const frontendPort = parseInt(env.VITE_FRONTEND_PORT || '9090', 10)
+  const backendUrl = env.VITE_BACKEND_URL || 'http://localhost:18888'
+  const frontendPort = parseInt(env.VITE_FRONTEND_PORT || '17777', 10)
 
   return {
     plugins: [vue()],

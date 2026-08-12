@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # 服务器
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 18888
 
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./fashion_inspo.db"
@@ -62,9 +62,8 @@ class Settings(BaseSettings):
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）
     cors_origins: list[str] = [
-        "http://localhost:9090",
-        "http://127.0.0.1:9090",
-        "http://localhost:5173",  # 兼容旧默认端口
+        "http://localhost:17777",
+        "http://127.0.0.1:17777",
     ]
 
     @property

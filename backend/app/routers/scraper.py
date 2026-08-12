@@ -6,7 +6,7 @@ import logging
 import socket
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -298,8 +298,22 @@ async def task_results(
     )
     items = items_result.scalars().all()
 
+    def _fmt(dt):
+        return dt.strftime('%Y-%m-%dT%H:%M:%SZ') if dt else None
+
     return {
-        "task": ScraperTaskOut.model_validate(task),
+        "task": {
+            "id": task.id,
+            "platform": task.platform,
+            "status": task.status,
+            "config": task.config,
+            "items_found": task.items_found,
+            "items_added": task.items_added,
+            "error": task.error,
+            "started_at": _fmt(task.started_at),
+            "finished_at": _fmt(task.finished_at),
+            "created_at": _fmt(task.created_at),
+        },
         "total": total,
         "page": page,
         "size": size,
