@@ -11,6 +11,44 @@ from app.database import init_db
 from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin
 
 
+async def _auto_migrate():
+    """自动添加模型中已定义但物理表中缺失的列。"""
+    import aiosqlite
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    async with aiosqlite.connect(str(db_path)) as conn:
+        # inspirations 表
+        insp_cols = {
+            r[1]
+            for r in await conn.execute("PRAGMA table_info(inspirations)")
+        }
+        insp_missing = [
+            ("scraper_task_id", "INTEGER REFERENCES scraper_tasks(id) ON DELETE SET NULL"),
+        ]
+        for col_name, col_def in insp_missing:
+            if col_name not in insp_cols:
+                await conn.execute(
+                    f"ALTER TABLE inspirations ADD COLUMN {col_name} {col_def}"
+                )
+                print(f"[迁移] inspirations 添加列: {col_name}")
+
+        # scraper_tasks 表
+        task_cols = {
+            r[1]
+            for r in await conn.execute("PRAGMA table_info(scraper_tasks)")
+        }
+        task_missing = [
+            ("is_deleted", "BOOLEAN DEFAULT 0"),
+        ]
+        for col_name, col_def in task_missing:
+            if col_name not in task_cols:
+                await conn.execute(
+                    f"ALTER TABLE scraper_tasks ADD COLUMN {col_name} {col_def}"
+                )
+                print(f"[迁移] scraper_tasks 添加列: {col_name}")
+
+        await conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动与关闭事件处理。"""
@@ -20,6 +58,9 @@ async def lifespan(app: FastAPI):
 
     # 初始化数据库表
     await init_db()
+
+    # 自动迁移缺失的列（开发期模型变更频繁，避免手动 ALTER TABLE）
+    await _auto_migrate()
 
     # 启动时清理遗留的僵尸任务（上次异常关闭时未完成的任务）
     from app.database import async_session
