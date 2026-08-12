@@ -24,6 +24,7 @@ class ScraperTask(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    diagnostics: Mapped[str | None] = mapped_column(Text, nullable=True)  # 漏斗日志 JSON
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

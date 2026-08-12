@@ -23,8 +23,26 @@ async function copyText(text: string) {
 
 interface ScraperTask {
   id: number; platform: string; status: string; config: string | null
-  items_found: number; items_added: number; error?: string | null
+  items_found: number; items_added: number; error?: string | null; diagnostics?: string | null
   started_at?: string | null; finished_at?: string | null; created_at: string
+}
+
+interface FunnelSearch {
+  keyword: string; sort_type: string
+  cards_total?: number; cards_with_img?: number; cards_without_img?: number
+  skipped_small?: number; skipped_icon?: number; urls_extracted?: number
+  batch_added?: number; batch_skipped_existing?: number
+  batch_skipped_http?: number; batch_skipped_network?: number
+  error?: string
+}
+
+interface FunnelDiagnostics {
+  per_search: FunnelSearch[]
+  summary: {
+    total_found: number; skipped_url_seen: number
+    skipped_http_error: number; skipped_network_error: number
+    total_added: number
+  }
 }
 
 interface ScraperSource { platform: string; name: string; status: string; features: string[]; note: string }
@@ -211,6 +229,33 @@ async function viewLog(taskId: number) {
   finally { logLoading.value = false }
 }
 
+// ── 漏斗视图 ──
+
+const funnelTaskId = ref<number | null>(null)
+const funnelData = ref<FunnelDiagnostics | null>(null)
+
+function viewFunnel(task: ScraperTask) {
+  if (funnelTaskId.value === task.id) { funnelTaskId.value = null; funnelData.value = null; return }
+  if (!task.diagnostics) { message.warning('该任务无漏斗数据（旧版本采集的任务）'); return }
+  try {
+    funnelData.value = JSON.parse(task.diagnostics)
+    funnelTaskId.value = task.id
+  } catch { message.error('漏斗数据解析失败') }
+}
+
+function funnelPct(value: number, max: number): string {
+  if (!max) return '0%'
+  return Math.round(value / max * 100) + '%'
+}
+
+const BAR_COLORS = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4']
+function barColor(idx: number) { return BAR_COLORS[idx % BAR_COLORS.length] }
+
+function sortLabel(s: string): string {
+  const m: Record<string,string> = { general: '综合', time_descending: '最新', popularity_descending: '最热' }
+  return m[s] || s
+}
+
 // ── 结果预览 ──
 
 async function viewResults(taskId: number) {
@@ -268,10 +313,11 @@ const tableColumns = computed(() => [
   { title:'耗时',key:'duration',width:70,render:(r:ScraperTask)=>getTaskDuration(r) },
   { title:'错误',key:'error',width:140,ellipsis:{tooltip:true},render:(r:ScraperTask)=>r.error?h('span',{style:{color:'#d03050',cursor:'pointer',textDecoration:'underline',fontSize:'12px'},title:r.error,onClick:()=>copyText(r.error!)},r.error.length>25?r.error.slice(0,25)+'…':r.error):'-' },
   { title:'时间',key:'created_at',width:150,render:(r:ScraperTask)=>formatDate(r.created_at) },
-  { title:'操作',key:'actions',width:180,render:(r:ScraperTask)=>{
+  { title:'操作',key:'actions',width:210,render:(r:ScraperTask)=>{
     const btns:any[]=[]
     if(r.items_added>0) btns.push(h(NButton,{size:'tiny',type:resultsTaskId.value===r.id?'warning':'primary',ghost:true,onClick:()=>viewResults(r.id)},resultsTaskId.value===r.id?'收起':'结果'))
     btns.push(h(NButton,{size:'tiny',onClick:()=>viewLog(r.id)},logTaskId.value===r.id?'关闭日志':'日志'))
+    if(r.diagnostics) btns.push(h(NButton,{size:'tiny',type:funnelTaskId.value===r.id?'info':'default',ghost:true,onClick:()=>viewFunnel(r)},funnelTaskId.value===r.id?'关闭漏斗':'漏斗'))
     if(r.status==='pending'||r.status==='running') btns.push(h(NButton,{size:'tiny',type:'warning',ghost:true,onClick:()=>cancelTask(r.id)},'取消'))
     btns.push(h(NPopconfirm,{onPositiveClick:()=>deleteSingleTask(r.id)},{trigger:()=>h(NButton,{size:'tiny',type:'error',ghost:true,loading:deletingTask.value===r.id},'删除'),default:()=>'确定删除此记录？'}))
     return h('span',{style:{display:'flex',gap:'4px',flexWrap:'wrap'}},btns)
@@ -431,6 +477,102 @@ function expandedRowRender(row: ScraperTask) {
     </n-spin>
   </div>
 
+  <!-- 漏斗视图 -->
+  <div v-if="funnelTaskId!==null && funnelData" class="funnel-panel">
+    <div class="funnel-header">
+      <span>📊 任务 #{{ funnelTaskId }} 漏斗视图</span>
+      <n-button size="tiny" @click="funnelTaskId=null;funnelData=null">关闭</n-button>
+    </div>
+
+    <!-- 汇总漏斗 -->
+    <div class="funnel-section">
+      <div class="funnel-section-title">📈 任务汇总</div>
+      <div class="funnel-bars">
+        <div class="funnel-bar-row">
+          <span class="funnel-bar-label">搜索提取</span>
+          <div class="funnel-bar-track">
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found,funnelData.summary.total_found),background:barColor(0)}"></div>
+          </div>
+          <span class="funnel-bar-count">{{ funnelData.summary.total_found }}</span>
+          <span class="funnel-bar-pct">100%</span>
+        </div>
+        <div class="funnel-drop">↓ -{{ funnelData.summary.skipped_url_seen }} 已存在</div>
+        <div class="funnel-bar-row">
+          <span class="funnel-bar-label">去重后</span>
+          <div class="funnel-bar-track">
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen, funnelData.summary.total_found),background:barColor(1)}"></div>
+          </div>
+          <span class="funnel-bar-count">{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen }}</span>
+          <span class="funnel-bar-pct">{{ funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen, funnelData.summary.total_found) }}</span>
+        </div>
+        <div class="funnel-drop">↓ -{{ funnelData.summary.skipped_http_error + funnelData.summary.skipped_network_error }} HTTP/网络失败</div>
+        <div class="funnel-bar-row">
+          <span class="funnel-bar-label">下载成功</span>
+          <div class="funnel-bar-track">
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error, funnelData.summary.total_found),background:barColor(2)}"></div>
+          </div>
+          <span class="funnel-bar-count">{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error }}</span>
+          <span class="funnel-bar-pct">{{ funnelPct(funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error, funnelData.summary.total_found) }}</span>
+        </div>
+        <div class="funnel-drop">↓ -{{ funnelData.summary.total_found - funnelData.summary.skipped_url_seen - funnelData.summary.skipped_http_error - funnelData.summary.skipped_network_error - funnelData.summary.total_added }} 内容MD5重复</div>
+        <div class="funnel-bar-row funnel-bar-final">
+          <span class="funnel-bar-label">★ 最终入库</span>
+          <div class="funnel-bar-track">
+            <div class="funnel-bar-fill" :style="{width:funnelPct(funnelData.summary.total_added, funnelData.summary.total_found),background:barColor(3)}"></div>
+          </div>
+          <span class="funnel-bar-count" style="font-weight:700">{{ funnelData.summary.total_added }}</span>
+          <span class="funnel-bar-pct" style="font-weight:700">{{ funnelPct(funnelData.summary.total_added, funnelData.summary.total_found) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 每次搜索明细 -->
+    <div v-if="funnelData.per_search.length" class="funnel-section">
+      <div class="funnel-section-title">🔍 每次搜索明细（{{ funnelData.per_search.length }} 次）</div>
+      <div v-for="(ps, psi) in funnelData.per_search" :key="psi" class="funnel-per-search">
+        <div class="funnel-ps-header">
+          <n-tag size="tiny" :bordered="false">#{{ psi + 1 }}</n-tag>
+          <strong>{{ ps.keyword }}</strong>
+          <span class="funnel-ps-sort">{{ sortLabel(ps.sort_type) }}</span>
+          <n-tag v-if="ps.error" type="error" size="tiny">{{ ps.error }}</n-tag>
+        </div>
+        <div v-if="!ps.error" class="funnel-bars funnel-bars-sm">
+          <div class="funnel-bar-row">
+            <span class="funnel-bar-label">卡片</span>
+            <div class="funnel-bar-track">
+              <div class="funnel-bar-fill" :style="{width:funnelPct(ps.cards_total!,ps.cards_total!),background:barColor(0)}"></div>
+            </div>
+            <span class="funnel-bar-count">{{ ps.cards_total }}</span>
+          </div>
+          <div class="funnel-bar-row">
+            <span class="funnel-bar-label">有图片</span>
+            <div class="funnel-bar-track">
+              <div class="funnel-bar-fill" :style="{width:funnelPct(ps.cards_with_img!,ps.cards_total!),background:barColor(1)}"></div>
+            </div>
+            <span class="funnel-bar-count">{{ ps.cards_with_img }}</span>
+            <span class="funnel-bar-pct" v-if="ps.cards_total">(-{{ ps.cards_total! - ps.cards_with_img! }} 无图)</span>
+          </div>
+          <div class="funnel-bar-row">
+            <span class="funnel-bar-label">有效URL</span>
+            <div class="funnel-bar-track">
+              <div class="funnel-bar-fill" :style="{width:funnelPct(ps.urls_extracted!,ps.cards_total!),background:barColor(2)}"></div>
+            </div>
+            <span class="funnel-bar-count">{{ ps.urls_extracted }}</span>
+            <span class="funnel-bar-pct" v-if="ps.cards_total && ps.cards_with_img">({{ ps.skipped_small && ps.skipped_icon ? '-小图'+(ps.skipped_small||0)+'/图标'+(ps.skipped_icon||0) : '' }})</span>
+          </div>
+          <div class="funnel-bar-row funnel-bar-final">
+            <span class="funnel-bar-label">入库</span>
+            <div class="funnel-bar-track">
+              <div class="funnel-bar-fill" :style="{width:funnelPct(ps.batch_added!,ps.cards_total!),background:barColor(3)}"></div>
+            </div>
+            <span class="funnel-bar-count" style="font-weight:700">{{ ps.batch_added }}</span>
+            <span class="funnel-bar-pct" v-if="ps.batch_skipped_existing||ps.batch_skipped_http||ps.batch_skipped_network">(跳过: 已存在{{ps.batch_skipped_existing}} HTTP{{ps.batch_skipped_http}} 网络{{ps.batch_skipped_network}})</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 结果预览 -->
   <div v-if="resultsTaskId!==null" class="results-panel">
     <n-spin :show="resultsLoading">
@@ -479,4 +621,23 @@ function expandedRowRender(row: ScraperTask) {
 .result-card img{width:100%;height:100%;object-fit:cover}
 .result-check{position:absolute;top:4px;right:4px}
 .chrome-cmd{display:block;background:#f0f0f0;padding:4px 8px;margin:4px 0;border-radius:4px;font-size:11px;cursor:pointer;user-select:all}
+
+/* 漏斗视图 */
+.funnel-panel{margin-top:16px;border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff}
+.funnel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:14px;font-weight:600}
+.funnel-section{margin-bottom:20px}
+.funnel-section-title{font-size:13px;font-weight:600;color:#333;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #f0f0f0}
+.funnel-bars{display:flex;flex-direction:column;gap:4px}
+.funnel-bars-sm{gap:2px}
+.funnel-bar-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.funnel-bar-label{width:56px;flex-shrink:0;text-align:right;color:#666;font-size:11px}
+.funnel-bar-track{flex:1;height:18px;background:#f5f5f5;border-radius:4px;overflow:hidden;min-width:60px}
+.funnel-bar-fill{height:100%;border-radius:4px;transition:width .4s ease;min-width:2px;opacity:.85}
+.funnel-bar-count{width:36px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:#333}
+.funnel-bar-pct{width:44px;flex-shrink:0;font-size:10px;color:#999;font-variant-numeric:tabular-nums}
+.funnel-bar-final{border-top:1px dashed #e0e0e0;padding-top:4px;margin-top:2px}
+.funnel-drop{font-size:10px;color:#999;padding-left:64px}
+.funnel-per-search{margin-bottom:12px;padding:10px;background:#fafafa;border-radius:6px}
+.funnel-ps-header{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:13px}
+.funnel-ps-sort{font-size:11px;color:#999}
 </style>

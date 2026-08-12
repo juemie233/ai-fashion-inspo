@@ -41,7 +41,7 @@ def _rdsleep(lo=0.5, hi=2.0):
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
-def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "general") -> list[str]:
+def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "general") -> tuple[list[str], dict]:
     """在已登录的页面上搜索并提取图片 URL。
 
     采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
@@ -49,6 +49,9 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
 
     Args:
         sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)
+
+    Returns:
+        (image_urls, funnel_dict): 图片 URL 列表和该次搜索的漏斗统计数据
     """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
@@ -151,6 +154,15 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
             continue
 
     # ── 漏斗日志 ──
+    funnel = {
+        "cards_total": total_cards,
+        "cards_with_img": cards_with_img,
+        "cards_without_img": cards_without_img,
+        "skipped_small": skipped_small,
+        "skipped_icon": skipped_icon,
+        "urls_extracted": len(image_urls),
+        "max_count": max_count,
+    }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
     print(f"  │ DOM 卡片总数: {total_cards}")
     print(f"  │ 有图片的卡片: {cards_with_img}")
@@ -161,7 +173,7 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
     print(f"  │ 目标数量:     {max_count}")
     print(f"  └──────────────────────────────────────────")
 
-    return image_urls[:max_count * 2]  # 多返回一些，下载阶段有重试和丢弃
+    return image_urls[:max_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -355,7 +367,7 @@ def run_scraper_sync(task_id: int):
     total_skipped_existing = 0
     total_skipped_non200 = 0
     total_skipped_network = 0
-    diagnostics: list[str] = []
+    per_search: list[dict] = []  # 每次搜索的漏斗明细
 
     try:
         pw = sync_playwright().start()
@@ -434,9 +446,12 @@ def run_scraper_sync(task_id: int):
 
                 try:
                     if platform == "xiaohongshu":
-                        urls = _search_xiaohongshu(page, kw, max_count, sort_type)
+                        urls, inner_funnel = _search_xiaohongshu(page, kw, max_count, sort_type)
                     else:
-                        diagnostics.append(f"不支持的平台: {platform}")
+                        per_search.append({
+                            "keyword": kw, "sort_type": sort_type,
+                            "error": f"不支持的平台: {platform}",
+                        })
                         continue
 
                     items_found += len(urls)
@@ -453,6 +468,17 @@ def run_scraper_sync(task_id: int):
                     total_skipped_existing += sk_ex
                     total_skipped_non200 += sk_h
                     total_skipped_network += sk_n
+
+                    # 记录本次搜索的完整漏斗
+                    per_search.append({
+                        "keyword": kw,
+                        "sort_type": sort_type,
+                        **inner_funnel,
+                        "batch_added": added,
+                        "batch_skipped_existing": sk_ex,
+                        "batch_skipped_http": sk_h,
+                        "batch_skipped_network": sk_n,
+                    })
 
                     print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, HTTP{sk_h}, 网络{sk_n})")
                     print(f"  累计入库: {items_added}/{max_count}")
@@ -474,7 +500,10 @@ def run_scraper_sync(task_id: int):
 
                 except Exception as e:
                     err = str(e) or type(e).__name__
-                    diagnostics.append(f"[{kw}][{sort_type}] 异常: {err}")
+                    per_search.append({
+                        "keyword": kw, "sort_type": sort_type,
+                        "error": err,
+                    })
                     print(f"  [ERR] {err}")
 
             if items_added >= max_count:
@@ -505,6 +534,18 @@ def run_scraper_sync(task_id: int):
         except Exception:
             pass
 
+    # ── 组装持久化漏斗数据 ──
+    funnel_diagnostics = json.dumps({
+        "per_search": per_search,
+        "summary": {
+            "total_found": items_found,
+            "skipped_url_seen": total_skipped_existing,
+            "skipped_http_error": total_skipped_non200,
+            "skipped_network_error": total_skipped_network,
+            "total_added": items_added,
+        },
+    }, ensure_ascii=False)
+
     # ── 汇总漏斗日志 ──
     print(f"\n  ╔══════════════════════════════════════════")
     print(f"  ║ 采集漏斗汇总")
@@ -518,8 +559,10 @@ def run_scraper_sync(task_id: int):
 
     # ── 完成任务 ──
     error_msg = None
-    if items_found == 0 and diagnostics:
-        error_msg = " | ".join(diagnostics)[:500]
+    if items_found == 0 and per_search:
+        errors = [s.get("error", "") for s in per_search if s.get("error")]
+        if errors:
+            error_msg = " | ".join(errors)[:500]
 
     async def _done():
         async with async_session() as db:
@@ -528,6 +571,7 @@ def run_scraper_sync(task_id: int):
                 t.status = "completed"
                 t.items_found = items_found
                 t.items_added = items_added
+                t.diagnostics = funnel_diagnostics
                 if error_msg:
                     t.error = error_msg
                 t.finished_at = utcnow()
