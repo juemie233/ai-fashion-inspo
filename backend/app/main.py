@@ -17,10 +17,10 @@ async def _auto_migrate():
     db_path = settings.storage_root.parent / "fashion_inspo.db"
     async with aiosqlite.connect(str(db_path)) as conn:
         # inspirations 表
-        insp_cols = {
-            r[1]
-            for r in await conn.execute("PRAGMA table_info(inspirations)")
-        }
+        cursor = await conn.execute("PRAGMA table_info(inspirations)")
+        rows = await cursor.fetchall()
+        insp_cols = {r[1] for r in rows}
+
         insp_missing = [
             ("scraper_task_id", "INTEGER REFERENCES scraper_tasks(id) ON DELETE SET NULL"),
         ]
