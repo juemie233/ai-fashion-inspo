@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.inspiration import Inspiration
+from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import (
     InspirationCreate,
@@ -83,10 +83,13 @@ async def list_inspirations(
     size: int = 50,
     source_type: str | None = None,
     is_favorite: bool | None = None,
+    media_type: str | None = None,
+    analysis_status: str | None = None,  # done | pending | error
+    tag_status: str | None = None,        # tagged | untagged
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ):
-    """分页获取灵感列表，支持来源和收藏筛选。"""
+    """分页获取灵感列表，支持多维筛选和排序。"""
     query = select(Inspiration).options(
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
     )
@@ -95,12 +98,52 @@ async def list_inspirations(
         query = query.where(Inspiration.source_type == source_type)
     if is_favorite is not None:
         query = query.where(Inspiration.is_favorite == is_favorite)
+    if media_type:
+        query = query.where(Inspiration.media_type == media_type)
+
+    # 分析状态筛选
+    if analysis_status == "done":
+        query = query.where(
+            Inspiration.id.in_(
+                select(AIAnalysisLog.inspiration_id).where(
+                    AIAnalysisLog.error.is_(None)
+                ).distinct()
+            )
+        )
+    elif analysis_status == "error":
+        query = query.where(
+            Inspiration.id.in_(
+                select(AIAnalysisLog.inspiration_id).where(
+                    AIAnalysisLog.error.isnot(None)
+                ).distinct()
+            )
+        )
+    elif analysis_status == "pending":
+        analyzed_sub = select(AIAnalysisLog.inspiration_id).distinct()
+        query = query.where(Inspiration.id.notin_(analyzed_sub))
+
+    # 标签状态筛选
+    if tag_status == "tagged":
+        query = query.where(
+            Inspiration.id.in_(
+                select(InspirationTag.inspiration_id).distinct()
+            )
+        )
+    elif tag_status == "untagged":
+        query = query.where(
+            Inspiration.id.notin_(
+                select(InspirationTag.inspiration_id).distinct()
+            )
+        )
 
     # 排序
-    if sort == "oldest":
-        query = query.order_by(Inspiration.created_at.asc())
-    else:
-        query = query.order_by(Inspiration.created_at.desc())
+    sort_map = {
+        "newest": Inspiration.created_at.desc(),
+        "oldest": Inspiration.created_at.asc(),
+        "updated": Inspiration.updated_at.desc(),
+        "largest": Inspiration.file_path.desc(),  # 按路径排序不够精确，用子查询算文件大小
+    }
+    query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
 
     # 统计总数
     count_query = select(func.count()).select_from(query.subquery())

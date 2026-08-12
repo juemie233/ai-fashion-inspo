@@ -61,6 +61,9 @@ export async function fetchInspirations(params: {
   size?: number
   source_type?: string
   is_favorite?: boolean
+  media_type?: string
+  analysis_status?: string
+  tag_status?: string
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })

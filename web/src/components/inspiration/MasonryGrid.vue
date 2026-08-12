@@ -9,6 +9,7 @@ import type { InspirationOut } from '@/api/inspirations'
 defineProps<{
   items: InspirationOut[]
   loading?: boolean
+  density?: 'compact' | 'standard' | 'comfortable'
 }>()
 
 const emit = defineEmits<{
@@ -19,7 +20,7 @@ const emit = defineEmits<{
 
 <template>
   <div class="masonry-container">
-    <div class="masonry-grid">
+    <div class="masonry-grid" :class="'density-' + (density || 'standard')">
       <InspirationCard
         v-for="item in items"
         :key="item.id"
@@ -45,20 +46,23 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.masonry-grid {
-  column-count: 4;
-  column-gap: 16px;
-}
+/* 标准密度（默认） */
+.masonry-grid.density-standard { column-count: 4; column-gap: 16px; }
+@media (max-width: 1400px) { .masonry-grid.density-standard { column-count: 3; } }
+@media (max-width: 1000px) { .masonry-grid.density-standard { column-count: 2; } }
+@media (max-width: 700px)  { .masonry-grid.density-standard { column-count: 1; } }
 
-@media (max-width: 1400px) {
-  .masonry-grid { column-count: 3; }
-}
-@media (max-width: 1000px) {
-  .masonry-grid { column-count: 2; }
-}
-@media (max-width: 700px) {
-  .masonry-grid { column-count: 1; }
-}
+/* 紧凑密度 */
+.masonry-grid.density-compact { column-count: 6; column-gap: 8px; }
+@media (max-width: 1400px) { .masonry-grid.density-compact { column-count: 4; } }
+@media (max-width: 1000px) { .masonry-grid.density-compact { column-count: 3; } }
+@media (max-width: 700px)  { .masonry-grid.density-compact { column-count: 2; } }
+
+/* 宽松密度 */
+.masonry-grid.density-comfortable { column-count: 3; column-gap: 24px; }
+@media (max-width: 1400px) { .masonry-grid.density-comfortable { column-count: 2; } }
+@media (max-width: 1000px) { .masonry-grid.density-comfortable { column-count: 2; } }
+@media (max-width: 700px)  { .masonry-grid.density-comfortable { column-count: 1; } }
 
 .masonry-grid > * {
   break-inside: avoid;
