@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 高级素材管理页：统计仪表盘、存储分析、完整性检查、批量操作。 */
 
-import { ref, computed, onMounted } from 'vue'
+import { h, ref, computed, onMounted } from 'vue'
 import { NTag, NButton, NPopconfirm, NDataTable, NStatistic, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 
@@ -49,27 +49,33 @@ const checking = ref(false)
 // ── 批量删除 ──
 const clearingUntagged = ref(false)
 const clearingFailed = ref(false)
+const deduplicating = ref(false)
+const dedupResult = ref<{ groups_processed: number; files_deleted: number; freed_bytes: number } | null>(null)
 
 // ── 计算属性 ──
 
-const totalSizeMB = computed(() => {
-  if (!stats.value) return '0'
-  return (stats.value.total_size_bytes / 1024 / 1024).toFixed(1)
-})
+const totalBytes = computed(() => stats.value?.total_size_bytes ?? 0)
+const imagesBytes = computed(() => stats.value?.images_size_bytes ?? 0)
+const thumbnailsBytes = computed(() => stats.value?.thumbnail_size_bytes ?? 0)
+const orphanBytes = computed(() => orphanSize.value)
+const dupBytes = computed(() => dupSize.value)
 
-const imagesMB = computed(() => {
-  if (!stats.value) return '0'
-  return (stats.value.images_size_bytes / 1024 / 1024).toFixed(1)
-})
+// ── 自适应大小格式化（值保持在 1-1000 范围 + 单位）──
 
-const thumbnailsMB = computed(() => {
-  if (!stats.value) return '0'
-  return (stats.value.thumbnail_size_bytes / 1024 / 1024).toFixed(1)
-})
+interface SizeDisplay { value: string; unit: string }
 
-const orphanMB = computed(() => (orphanSize.value / 1024 / 1024).toFixed(1))
+function smartSize(bytes: number): SizeDisplay {
+  if (bytes < 1024) return { value: String(bytes), unit: 'B' }
+  if (bytes < 1024 * 1024) return { value: (bytes / 1024).toFixed(1), unit: 'KB' }
+  if (bytes < 1024 * 1024 * 1024) return { value: (bytes / (1024 * 1024)).toFixed(1), unit: 'MB' }
+  return { value: (bytes / (1024 * 1024 * 1024)).toFixed(2), unit: 'GB' }
+}
 
-const dupMB = computed(() => (dupSize.value / 1024 / 1024).toFixed(1))
+/** 返回 "数值 单位" 的完整字符串，如 "462.9 MB" */
+function fmtSize(bytes: number): string {
+  const s = smartSize(bytes)
+  return s.value + ' ' + s.unit
+}
 
 // ── 来源类型中文映射 ──
 
@@ -133,6 +139,7 @@ async function loadIntegrity() {
 }
 
 async function loadDuplicates() {
+  dedupResult.value = null  // 重置上次删除结果
   checking.value = true
   try {
     const res = await apiClient.get('/admin/duplicates')
@@ -143,6 +150,31 @@ async function loadDuplicates() {
     message.error('重复检测失败')
   } finally {
     checking.value = false
+  }
+}
+
+// ── 去重删除 ──
+
+async function deduplicate() {
+  deduplicating.value = true
+  dedupResult.value = null
+  try {
+    const res = await apiClient.post('/admin/deduplicate')
+    dedupResult.value = res.data
+    if (res.data.files_deleted === 0) {
+      message.info('未找到可删除的重复文件')
+    } else {
+      message.success(
+        `去重完成：处理 ${res.data.groups_processed} 组，删除 ${res.data.files_deleted} 个冗余文件，释放 ${formatSize(res.data.freed_bytes)} 空间`
+      )
+    }
+    // 刷新数据和统计
+    await loadAll()
+    await loadDuplicates()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '去重删除失败')
+  } finally {
+    deduplicating.value = false
   }
 }
 
@@ -257,13 +289,13 @@ onMounted(() => {
         <n-statistic label="素材总数" :value="stats?.total_count ?? '-'" />
       </n-card>
       <n-card size="small">
-        <n-statistic label="存储总大小" :value="totalSizeMB" suffix="MB" />
+        <n-statistic label="存储总大小" :value="fmtSize(totalBytes)" />
       </n-card>
       <n-card size="small">
-        <n-statistic label="图片占用" :value="imagesMB" suffix="MB" />
+        <n-statistic label="图片占用" :value="fmtSize(imagesBytes)" />
       </n-card>
       <n-card size="small">
-        <n-statistic label="缩略图占用" :value="thumbnailsMB" suffix="MB" />
+        <n-statistic label="缩略图占用" :value="fmtSize(thumbnailsBytes)" />
       </n-card>
       <n-card size="small">
         <n-statistic label="标签总数" :value="stats?.total_tags ?? '-'" />
@@ -398,7 +430,7 @@ onMounted(() => {
                 清理孤立文件 ({{ orphanFiles.length }})
               </n-button>
             </template>
-            确定删除所有 {{ orphanFiles.length }} 个孤立文件？释放约 {{ orphanMB }} MB。此操作不可撤销。
+            确定删除所有 {{ orphanFiles.length }} 个孤立文件？释放约 {{ fmtSize(orphanBytes) }}。此操作不可撤销。
           </n-popconfirm>
         </n-space>
       </template>
@@ -423,7 +455,7 @@ onMounted(() => {
       <!-- 孤立文件 -->
       <div v-if="orphanFiles.length > 0">
         <h4 style="color: #f0a020; margin: 0 0 8px">
-          ⚠️ 孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共 {{ orphanMB }} MB
+          ⚠️ 孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共 {{ fmtSize(orphanBytes) }}
         </h4>
         <n-data-table
           :columns="orphanColumns"
@@ -444,14 +476,46 @@ onMounted(() => {
     <!-- ====== 重复检测 ====== -->
     <n-card title="重复文件检测" size="small" style="margin-bottom: 24px">
       <template #header-extra>
-        <n-button size="small" :loading="checking" @click="loadDuplicates">
-          检测重复
-        </n-button>
+        <n-space>
+          <n-button size="small" :loading="checking" @click="loadDuplicates">
+            检测重复
+          </n-button>
+          <n-popconfirm
+            v-if="duplicates.length > 0"
+            @positive-click="deduplicate"
+          >
+            <template #trigger>
+              <n-button
+                size="small"
+                type="error"
+                ghost
+                :loading="deduplicating"
+                :disabled="duplicates.length === 0"
+              >
+                删除重复文件 ({{ dupCount }})
+              </n-button>
+            </template>
+            确定删除所有 {{ dupCount }} 个重复文件？<br/>
+            每组将保留评分最高的 1 个（优先有标签/收藏/AI已分析的素材）。<br/>
+            将释放约 {{ fmtSize(dupBytes) }} 空间。<br/>
+            <b style="color: #d03050">此操作物理删除文件，不可撤销！</b>
+          </n-popconfirm>
+        </n-space>
       </template>
+
+      <!-- 去重结果 -->
+      <n-alert
+        v-if="dedupResult && dedupResult.files_deleted > 0"
+        type="success"
+        style="margin-bottom: 12px"
+      >
+        已处理 {{ dedupResult.groups_processed }} 组，删除 {{ dedupResult.files_deleted }} 个文件，
+        释放 {{ fmtSize(dedupResult.freed_bytes) }} 空间
+      </n-alert>
 
       <div v-if="duplicates.length > 0">
         <p style="color: #f0a020; margin-bottom: 12px">
-          ⚠️ 发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费 {{ dupMB }} MB 空间
+          ⚠️ 发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费 {{ fmtSize(dupBytes) }} 空间
         </p>
         <div v-for="(group, gi) in duplicates.slice(0, 20)" :key="group.hash" style="margin-bottom: 16px">
           <n-tag type="info" size="tiny" style="margin-bottom: 6px">

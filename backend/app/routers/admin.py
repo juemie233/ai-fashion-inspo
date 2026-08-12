@@ -419,3 +419,178 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
         "duplicate_count": dup_count,
         "wasted_bytes": dup_size,
     }
+
+
+@router.post("/deduplicate")
+async def deduplicate_files(db: AsyncSession = Depends(get_db)):
+    """智能去重：每组重复文件保留评分最高的 1 个，其余物理删除。
+
+    评分规则：
+      +100 — 已被标签标记
+      +50  — 已收藏
+      +30  — AI 分析成功
+      +10  — 有缩略图
+      +5   — 创建时间更早（平局时选 ID 更小的）
+    """
+    storage_root = settings.storage_root
+
+    # 1. 扫描所有重复组
+    result = (await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
+               Inspiration.is_favorite, Inspiration.created_at)
+    )).all()
+
+    hash_map: dict[str, list[dict]] = {}
+    for rid, fpath, thumb, fav, cat in result:
+        if not fpath:
+            continue
+        full = storage_root / fpath
+        if not full.exists():
+            continue
+        fhash = _file_hash(full)
+        if fhash is None:
+            continue
+        hash_map.setdefault(fhash, []).append({
+            "id": rid,
+            "file_path": fpath,
+            "thumbnail_path": thumb,
+            "is_favorite": fav,
+            "created_at": cat,
+            "size_bytes": full.stat().st_size,
+        })
+
+    # 只处理有重复的组
+    dup_groups = [files for files in hash_map.values() if len(files) > 1]
+    if not dup_groups:
+        return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
+
+    # 2. 对每个文件查询标签和分析状态，计算评分
+    # 批量查询：收集所有涉及的文件 ID
+    all_ids = [f["id"] for group in dup_groups for f in group]
+
+    # 查询哪些文件有标签
+    tagged_result = await db.execute(
+        select(InspirationTag.inspiration_id)
+        .where(InspirationTag.inspiration_id.in_(all_ids))
+        .distinct()
+    )
+    tagged_ids = {r[0] for r in tagged_result.all()}
+
+    # 查询哪些文件 AI 分析成功
+    analyzed_result = await db.execute(
+        select(AIAnalysisLog.inspiration_id)
+        .where(
+            AIAnalysisLog.inspiration_id.in_(all_ids),
+            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+        )
+        .distinct()
+    )
+    analyzed_ids = {r[0] for r in analyzed_result.all()}
+
+    # 3. 每组评分并决定保留哪个
+    details = []
+    ids_to_delete: list[str] = []
+    files_to_delete: list[tuple[str, str | None]] = []  # (file_path, thumbnail_path)
+
+    for group in dup_groups:
+        scored = []
+        for f in group:
+            score = 0
+            reasons: list[str] = []
+
+            # 已被标签标记
+            if f["id"] in tagged_ids:
+                score += 100
+                reasons.append("有标签")
+            # 已收藏
+            if f["is_favorite"]:
+                score += 50
+                reasons.append("已收藏")
+            # AI 分析成功
+            if f["id"] in analyzed_ids:
+                score += 30
+                reasons.append("AI 已分析")
+            # 有缩略图
+            if f["thumbnail_path"]:
+                score += 10
+                reasons.append("有缩略图")
+            # 创建时间更早的加分（用于平局决胜）
+            created_ts = f["created_at"].timestamp() if f["created_at"] else 0
+
+            scored.append({**f, "score": score, "reasons": reasons, "created_ts": created_ts})
+
+        # 排序：score 降序 → created_ts 升序（更早的在前）→ id 升序
+        scored.sort(key=lambda x: (-x["score"], x["created_ts"], x["id"]))
+        keeper = scored[0]
+        victims = scored[1:]
+
+        # 安全检查：如果保留文件的磁盘文件已不存在，跳过整组（防止误删所有副本）
+        keeper_full = storage_root / keeper["file_path"]
+        if not keeper_full.exists():
+            # 保留文件丢失了，找下一个有磁盘文件的作为保留
+            found = False
+            for alt in scored[1:]:
+                alt_full = storage_root / alt["file_path"]
+                if alt_full.exists():
+                    keeper = alt
+                    victims = [f for f in scored if f["id"] != alt["id"]]
+                    found = True
+                    break
+            if not found:
+                # 整组文件都不在磁盘上了，跳过
+                continue
+
+        detail = {
+            "hash": _file_hash(keeper_full) or "unknown",
+            "kept": {
+                "id": keeper["id"],
+                "file_path": keeper["file_path"],
+                "score": keeper["score"],
+                "reasons": keeper["reasons"],
+                "size_bytes": keeper["size_bytes"],
+            },
+            "deleted": [],
+        }
+
+        for v in victims:
+            ids_to_delete.append(v["id"])
+            files_to_delete.append((v["file_path"], v["thumbnail_path"]))
+            detail["deleted"].append({
+                "id": v["id"],
+                "file_path": v["file_path"],
+                "score": v["score"],
+                "reasons": v["reasons"],
+                "size_bytes": v["size_bytes"],
+            })
+
+        if detail["deleted"]:
+            details.append(detail)
+
+    if not ids_to_delete:
+        return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
+
+    # 4. 物理删除磁盘文件
+    freed_bytes = 0
+    for fpath, thumb in files_to_delete:
+        for p in (fpath, thumb):
+            if p:
+                full = storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+
+    # 5. 删除数据库记录（级联删除关联的 tags 和 analysis_logs）
+    await db.execute(
+        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
+    )
+    await db.commit()
+
+    return {
+        "groups_processed": len(details),
+        "files_deleted": len(ids_to_delete),
+        "freed_bytes": freed_bytes,
+        "details": details,
+    }
