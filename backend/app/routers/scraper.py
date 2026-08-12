@@ -197,9 +197,12 @@ async def create_scraper_task(
 
 @router.get("/tasks", response_model=list[ScraperTaskOut])
 async def list_scraper_tasks(db: AsyncSession = Depends(get_db)):
-    """获取最近的采集任务列表（最多20条）。"""
+    """获取最近的采集任务列表（最多20条，不含已逻辑删除的）。"""
     result = await db.execute(
-        select(ScraperTask).order_by(ScraperTask.created_at.desc()).limit(20)
+        select(ScraperTask)
+        .where(ScraperTask.is_deleted == False)
+        .order_by(ScraperTask.created_at.desc())
+        .limit(20)
     )
     tasks = result.scalars().all()
     return [ScraperTaskOut.model_validate(t) for t in tasks]
@@ -214,12 +217,27 @@ async def get_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
     return ScraperTaskOut.model_validate(task)
 
 
+@router.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK)
+async def delete_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """逻辑删除单条采集任务（标记 is_deleted=True，不删除素材）。"""
+    task = await db.get(ScraperTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="采集任务未找到")
+    task.is_deleted = True
+    await db.commit()
+    return {"deleted": 1, "id": task_id}
+
+
 @router.delete("/tasks", status_code=status.HTTP_200_OK)
 async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)):
-    """清空所有采集任务历史记录。"""
-    from sqlalchemy import delete
+    """逻辑删除所有采集任务历史记录。"""
+    from sqlalchemy import update
 
-    result = await db.execute(delete(ScraperTask))
+    result = await db.execute(
+        update(ScraperTask)
+        .where(ScraperTask.is_deleted == False)
+        .values(is_deleted=True)
+    )
     await db.commit()
     return {"deleted": result.rowcount}
 
@@ -250,17 +268,6 @@ async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
 
     await db.commit()
     return {"retried": retried, "message": f"已重新创建 {retried} 个采集任务"}
-
-
-@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def cancel_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
-    """取消一个等待中或正在运行的采集任务。"""
-    task = await db.get(ScraperTask, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="采集任务未找到")
-    if task.status in ("pending", "running"):
-        task.status = "cancelled"
-        await db.flush()
 
 
 @router.get("/tasks/{task_id}/results")

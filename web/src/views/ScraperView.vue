@@ -174,6 +174,21 @@ async function deleteSelected() {
   }
 }
 
+/** 删除单条任务（逻辑删除） */
+const deletingTask = ref<number | null>(null)
+async function deleteSingleTask(taskId: number) {
+  try {
+    deletingTask.value = taskId
+    await apiClient.delete(`/scraper/tasks/${taskId}`)
+    tasks.value = tasks.value.filter(t => t.id !== taskId)
+    message.success('已删除')
+  } catch (e: any) {
+    message.error('删除失败')
+  } finally {
+    deletingTask.value = null
+  }
+}
+
 /** 清空所有采集任务历史 */
 const clearing = ref(false)
 async function clearAllTasks() {
@@ -402,20 +417,37 @@ const tableColumns = computed(() => [
   {
     title: '操作',
     key: 'actions',
-    width: 90,
-    render: (row: ScraperTask) =>
-      row.items_added > 0
-        ? h(
-            NButton,
-            {
-              size: 'tiny',
-              type: resultsTaskId.value === row.id ? 'warning' : 'primary',
-              ghost: true,
-              onClick: () => viewResults(row.id),
-            },
-            resultsTaskId.value === row.id ? '收起' : '查看结果',
-          )
-        : null,
+    width: 140,
+    render: (row: ScraperTask) => {
+      const btns = []
+      if (row.items_added > 0) {
+        btns.push(
+          h(NButton, {
+            size: 'tiny',
+            type: resultsTaskId.value === row.id ? 'warning' : 'primary',
+            ghost: true,
+            onClick: () => viewResults(row.id),
+          }, resultsTaskId.value === row.id ? '收起' : '查看结果'),
+        )
+      }
+      btns.push(
+        h(
+          NPopconfirm,
+          { onPositiveClick: () => deleteSingleTask(row.id) },
+          {
+            trigger: () =>
+              h(NButton, {
+                size: 'tiny',
+                type: 'error',
+                ghost: true,
+                loading: deletingTask.value === row.id,
+              }, '删除'),
+            default: () => '确定删除此记录？（仅逻辑删除，不删除素材）',
+          },
+        ),
+      )
+      return h('span', { style: { display: 'flex', gap: '4px' } }, btns)
+    },
   },
 ])
 
