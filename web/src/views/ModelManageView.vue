@@ -222,6 +222,61 @@ const promptLoading = ref(false)
 const promptSaving = ref(false)
 const persistPrompt = ref(false)
 
+// ===== Prompt 版本管理 =====
+interface PromptVersion {
+  prompt: string; saved_at: string; length: number;
+}
+const promptVersions = ref<PromptVersion[]>([])
+const promptVersionsVisible = ref(false)
+
+async function loadPromptVersions() {
+  try {
+    const { data } = await apiClient.get<{ versions: PromptVersion[]; current: string }>('/ai/prompt/versions')
+    promptVersions.value = data.versions
+  } catch { /* 静默 */ }
+}
+
+async function savePromptVersion() {
+  try {
+    // 先保存当前编辑中的 prompt（如果有修改）
+    if (editedPrompt.value !== currentPrompt.value) {
+      await apiClient.put('/ai/prompt', { prompt: editedPrompt.value, persist: false })
+      currentPrompt.value = editedPrompt.value
+    }
+    await apiClient.post('/ai/prompt/save-version')
+    message.success('版本已保存')
+    loadPromptVersions()
+  } catch { message.error('保存版本失败') }
+}
+
+async function rollbackPrompt(index: number) {
+  try {
+    const { data } = await apiClient.post('/ai/prompt/rollback', { index })
+    editedPrompt.value = data.prompt
+    currentPrompt.value = data.prompt
+    message.success(data.message)
+    loadPromptVersions()
+  } catch (e: any) { message.error(e.response?.data?.detail || '回滚失败') }
+}
+
+// ===== 质量仪表盘 =====
+interface QualityDashboard {
+  daily_trends: Array<{ day: string; total: number; success: number }>
+  overview: Record<string, any>
+  problem_items: Record<string, number>
+}
+const qualityData = ref<QualityDashboard | null>(null)
+const qualityLoading = ref(false)
+
+async function loadQuality() {
+  qualityLoading.value = true
+  try {
+    const { data } = await apiClient.get<QualityDashboard>('/ai/quality-dashboard')
+    qualityData.value = data
+  } catch { /* 静默 */ }
+  finally { qualityLoading.value = false }
+}
+
 // ===== GPU 显存监控 =====
 interface GpuStats {
   gpu_available: boolean
@@ -871,7 +926,7 @@ function formatDate(d: string | null | undefined) {
   <div class="model-page">
     <h2>AI 模型管理</h2>
 
-    <n-tabs v-model:value="activeTab" type="line">
+    <n-tabs v-model:value="activeTab" type="line" @update:value="(v: string) => { if (v === 'quality') loadQuality() }">
       <!-- ===== Tab: 模型 ===== -->
       <n-tab-pane name="models" tab="模型管理">
         <!-- 连接状态 -->
@@ -1232,6 +1287,20 @@ function formatDate(d: string | null | undefined) {
               <p style="font-size:11px;color:#999;margin-top:8px">
                 修改 prompt 会影响后续所有 AI 分析结果。改动后建议先用「单图测试」验证效果。
               </p>
+
+              <!-- Prompt 版本管理 -->
+              <n-button size="tiny" style="margin-top:8px" @click="savePromptVersion; promptVersionsVisible = true; loadPromptVersions()">保存版本</n-button>
+              <n-button size="tiny" style="margin-top:8px;margin-left:6px" @click="promptVersionsVisible = !promptVersionsVisible; loadPromptVersions()">
+                {{ promptVersionsVisible ? '隐藏历史' : '版本历史' }} {{ promptVersions.length > 0 ? `(${promptVersions.length})` : '' }}
+              </n-button>
+
+              <div v-if="promptVersionsVisible && promptVersions.length > 0" class="prompt-versions" style="margin-top:8px;max-height:200px;overflow-y:auto">
+                <div v-for="(v, i) in promptVersions" :key="i" style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;background:#f5f5f5;border-radius:4px;margin-bottom:4px;font-size:12px">
+                  <span>版本 #{{ promptVersions.length - i }} — {{ v.saved_at?.split('T')[0] }} {{ v.saved_at?.split('T')[1]?.slice(0,5) }} ({{ v.length }} 字符)</span>
+                  <n-button size="tiny" @click="rollbackPrompt(promptVersions.length - i - 1)">回滚</n-button>
+                </div>
+              </div>
+              <div v-else-if="promptVersionsVisible" style="font-size:12px;color:#999;margin-top:4px">暂无版本历史，修改 prompt 后点击「保存版本」创建</div>
             </n-spin>
           </n-card>
 
@@ -1366,6 +1435,53 @@ function formatDate(d: string | null | undefined) {
             </p>
           </n-card>
         </n-space>
+      </n-tab-pane>
+
+      <!-- ===== Tab: 质量仪表盘 ===== -->
+      <n-tab-pane name="quality" tab="质量分析">
+        <n-spin :show="qualityLoading">
+          <template v-if="qualityData">
+            <!-- 总览卡片 -->
+            <n-grid :cols="5" :x-gap="12" style="margin-bottom:16px">
+              <n-gi><n-card size="small"><n-statistic label="素材总数" :value="qualityData.overview.total_inspirations" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="已分析" :value="qualityData.overview.analyzed_count" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="覆盖率" :value="`${qualityData.overview.coverage_percent}%`" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="平均标签" :value="qualityData.overview.avg_tags_per_image" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="平均耗时" :value="formatMs(qualityData.overview.avg_time_ms)" /></n-card></n-gi>
+            </n-grid>
+
+            <!-- 问题素材 -->
+            <n-grid :cols="2" :x-gap="12" style="margin-bottom:16px">
+              <n-gi>
+                <n-card size="small" :bordered="true" :style="{ borderColor: (qualityData.problem_items.multi_fail_count > 0 ? '#d03050' : '#e5e7eb') }">
+                  <n-statistic label="🔴 多次失败 (≥3次)" :value="qualityData.problem_items.multi_fail_count" />
+                </n-card>
+              </n-gi>
+              <n-gi>
+                <n-card size="small" :bordered="true" :style="{ borderColor: (qualityData.problem_items.zero_tag_count > 0 ? '#f0a020' : '#e5e7eb') }">
+                  <n-statistic label="🟡 零标签输出" :value="qualityData.problem_items.zero_tag_count" />
+                </n-card>
+              </n-gi>
+            </n-grid>
+
+            <!-- 每日趋势 -->
+            <n-card title="每日分析趋势（最近 30 天）" size="small">
+              <div v-if="qualityData.daily_trends.length > 0" class="trend-chart">
+                <div v-for="d in qualityData.daily_trends" :key="d.day" class="trend-bar-item">
+                  <div class="trend-bar-wrap">
+                    <div class="trend-bar" :style="{ height: Math.max(d.total / Math.max(...qualityData.daily_trends.map(x=>x.total)) * 100, 2) + '%', background: d.success === d.total ? '#22c55e' : '#3b82f6' }" />
+                  </div>
+                  <div class="trend-bar-label">{{ d.day.slice(5) }}</div>
+                  <div class="trend-bar-value">{{ d.total }}</div>
+                </div>
+              </div>
+              <n-empty v-else description="最近 30 天无分析记录" size="small" />
+            </n-card>
+          </template>
+          <n-empty v-else-if="!qualityLoading" description="点击加载质量数据" size="small">
+            <template #extra><n-button size="small" @click="loadQuality">加载</n-button></template>
+          </n-empty>
+        </n-spin>
       </n-tab-pane>
     </n-tabs>
 
@@ -1520,6 +1636,45 @@ function formatDate(d: string | null | undefined) {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #fafafa;
+}
+
+/* 每日趋势图 */
+.trend-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 160px;
+  padding: 8px 0;
+}
+.trend-bar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+.trend-bar-wrap {
+  width: 100%;
+  height: 120px;
+  display: flex;
+  align-items: flex-end;
+}
+.trend-bar {
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height .2s;
+}
+.trend-bar-label {
+  font-size: 9px;
+  color: #999;
+  margin-top: 4px;
+  writing-mode: vertical-rl;
+}
+.trend-bar-value {
+  font-size: 9px;
+  color: #666;
+  font-weight: 600;
 }
 
 .batch-bar {

@@ -40,3 +40,7 @@ mobile/ios/
 
 # Logs
 *.log
+
+# Prompt version history (runtime state)
+prompt_versions.json
+backend/prompt_versions.json

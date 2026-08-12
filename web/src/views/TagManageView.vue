@@ -4,6 +4,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
+import apiClient from '@/api/client'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
@@ -60,6 +61,18 @@ const selectedTag = ref<TagItem | null>(null)
 const detailInspirations = ref<TagInspiration[]>([])
 const detailTotal = ref(0)
 const detailLoading = ref(false)
+const detailPage = ref(1)
+const detailSort = ref<'newest' | 'oldest' | 'confidence'>('newest')
+const detailDensity = ref<'compact' | 'standard'>('compact')
+
+// ===== 批量改类别 =====
+const showBatchCategoryDialog = ref(false)
+const batchCategoryTarget = ref('')
+
+// ===== 批量重命名 =====
+const showBatchRenameDialog = ref(false)
+const renameFind = ref('')
+const renameReplace = ref('')
 
 // ===== 导入/导出 =====
 const showImportModal = ref(false)
@@ -299,15 +312,49 @@ async function quickMerge(a: number, b: number) {
 // ===== 标签详情 =====
 async function selectTag(tag: TagItem) {
   selectedTag.value = tag
-  detailInspirations.value = []
-  detailTotal.value = 0
+  detailPage.value = 1
+  await loadTagInspirations()
+}
+
+async function loadTagInspirations(page?: number) {
+  if (!selectedTag.value) return
+  if (page) detailPage.value = page
   detailLoading.value = true
   try {
-    const data = await fetchTagInspirations(tag.id, 1, 50)
-    detailInspirations.value = data.items
+    const data = await fetchTagInspirations(selectedTag.value.id, detailPage.value, 50, detailSort.value)
+    if (detailPage.value === 1) detailInspirations.value = data.items
+    else detailInspirations.value.push(...data.items)
     detailTotal.value = data.total
   } catch { message.error('加载素材失败') }
   finally { detailLoading.value = false }
+}
+
+function onDetailSortChange() { detailPage.value = 1; loadTagInspirations() }
+
+// ===== 批量改类别 =====
+async function handleBatchCategory() {
+  if (selectedIds.value.size === 0 || !batchCategoryTarget.value) return
+  try {
+    const { data } = await apiClient.patch('/tags/batch-category', {
+      tag_ids: [...selectedIds.value], category: batchCategoryTarget.value,
+    })
+    message.success(`已将 ${data.updated} 个标签移至指定类别`)
+    showBatchCategoryDialog.value = false; batchCategoryTarget.value = ''
+    deselectAll(); await loadAll()
+  } catch (e: any) { message.error(e.response?.data?.detail || '操作失败') }
+}
+
+// ===== 批量重命名 =====
+async function handleBatchRename() {
+  if (selectedIds.value.size === 0 || !renameFind.value.trim() || !renameReplace.value.trim()) return
+  try {
+    const { data } = await apiClient.patch('/tags/batch-rename', {
+      tag_ids: [...selectedIds.value], find: renameFind.value.trim(), replace: renameReplace.value.trim(),
+    })
+    message.success(`已更新 ${data.updated} 个标签`)
+    showBatchRenameDialog.value = false; renameFind.value = ''; renameReplace.value = ''
+    deselectAll(); await loadAll()
+  } catch (e: any) { message.error(e.response?.data?.detail || '操作失败') }
 }
 
 // ===== 导入/导出 =====
@@ -457,6 +504,22 @@ function sourceColor(s: string) {
         @click="openBatchMerge"
       >
         合并选中
+      </n-button>
+      <n-button
+        v-if="selectedIds.size > 0"
+        size="small"
+        secondary
+        @click="showBatchCategoryDialog = true"
+      >
+        改类别
+      </n-button>
+      <n-button
+        v-if="selectedIds.size > 0"
+        size="small"
+        secondary
+        @click="showBatchRenameDialog = true"
+      >
+        重命名
       </n-button>
       <n-button v-if="selectedIds.size > 0" size="small" @click="deselectAll">
         取消选中
@@ -626,40 +689,44 @@ function sourceColor(s: string) {
     <div class="right-panel">
       <template v-if="selectedTag">
         <div class="right-header">
-          <n-space align="center">
+          <n-space align="center" :wrap="false">
             <h3 style="margin:0">「{{ selectedTag.name }}」</h3>
             <n-tag size="small" :bordered="false">{{ selectedTag.usage_count }} 次</n-tag>
-            <n-tag size="small" :color="{ color: sourceColor(selectedTag.source), textColor: '#fff' }">
-              {{ SOURCE_LABELS[selectedTag.source] || selectedTag.source }}
-            </n-tag>
-            <span style="font-size:13px;color:#999">共 {{ detailTotal }} 个素材</span>
+            <span style="font-size:13px;color:#999">共 {{ detailTotal }} 个</span>
+          </n-space>
+          <n-space size="small">
+            <n-select v-model:value="detailSort" :options="[{label:'最新',value:'newest'},{label:'最旧',value:'oldest'},{label:'置信度',value:'confidence'}]" size="tiny" style="width:90px" @update:value="onDetailSortChange" />
+            <n-button-group size="tiny">
+              <n-button :type="detailDensity==='compact'?'primary':'default'" @click="detailDensity='compact'">⊞</n-button>
+              <n-button :type="detailDensity==='standard'?'primary':'default'" @click="detailDensity='standard'">⊟</n-button>
+            </n-button-group>
           </n-space>
         </div>
         <n-spin :show="detailLoading">
-          <div v-if="detailInspirations.length === 0 && !detailLoading" class="right-empty">
-            暂无使用该标签的素材
-          </div>
-          <div v-else class="image-grid">
+          <div v-if="detailInspirations.length === 0 && !detailLoading" class="right-empty">暂无素材</div>
+          <div v-else :class="['image-grid', 'density-' + detailDensity]">
             <div
               v-for="item in detailInspirations"
               :key="item.inspiration_id"
               class="image-card"
               :title="`置信度: ${(item.confidence * 100).toFixed(0)}%`"
+              @click="lightboxPath = item.file_path; showLightbox = true"
             >
               <img
                 v-if="item.thumbnail_path"
                 :src="getFileUrl(item.thumbnail_path)"
                 :alt="selectedTag.name"
-                @click="lightboxPath = item.file_path; showLightbox = true"
               />
               <img
                 v-else-if="item.file_path"
                 :src="getFileUrl(item.file_path)"
                 :alt="selectedTag.name"
-                @click="lightboxPath = item.file_path; showLightbox = true"
               />
               <div v-else class="no-preview">无预览</div>
             </div>
+          </div>
+          <div v-if="detailInspirations.length < detailTotal" style="text-align:center;padding:12px">
+            <n-button size="small" :loading="detailLoading" @click="loadTagInspirations(detailPage + 1)">加载更多</n-button>
           </div>
         </n-spin>
       </template>
@@ -740,6 +807,33 @@ function sourceColor(s: string) {
       </n-space>
     </n-modal>
 
+    <!-- ===== 批量改类别 ===== -->
+    <n-modal v-model:show="showBatchCategoryDialog" title="批量修改类别" preset="card" style="width:420px">
+      <p>将选中的 {{ selectedIds.size }} 个标签移至：</p>
+      <n-select
+        v-model:value="batchCategoryTarget"
+        :options="Object.entries(CATEGORY_LABELS).map(([k,v])=>({label:v,value:k}))"
+        style="margin:12px 0"
+      />
+      <n-space justify="end">
+        <n-button @click="showBatchCategoryDialog = false">取消</n-button>
+        <n-button type="primary" @click="handleBatchCategory" :disabled="!batchCategoryTarget">确认</n-button>
+      </n-space>
+    </n-modal>
+
+    <!-- ===== 批量重命名 ===== -->
+    <n-modal v-model:show="showBatchRenameDialog" title="批量重命名" preset="card" style="width:420px">
+      <p>在选中的 {{ selectedIds.size }} 个标签中查找替换：</p>
+      <n-form label-placement="left" label-width="60" size="small">
+        <n-form-item label="查找"><n-input v-model:value="renameFind" placeholder="如: 白色" /></n-form-item>
+        <n-form-item label="替换为"><n-input v-model:value="renameReplace" placeholder="如: 纯白" /></n-form-item>
+      </n-form>
+      <n-space justify="end">
+        <n-button @click="showBatchRenameDialog = false">取消</n-button>
+        <n-button type="primary" @click="handleBatchRename" :disabled="!renameFind.trim()||!renameReplace.trim()">确认</n-button>
+      </n-space>
+    </n-modal>
+
     <!-- 图片灯箱 -->
     <ImageLightbox
       :show="showLightbox"
@@ -795,11 +889,9 @@ function sourceColor(s: string) {
   font-size: 14px;
 }
 
-.image-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
+.image-grid { display: grid; }
+.image-grid.density-compact { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.image-grid.density-standard { grid-template-columns: repeat(3, 1fr); gap: 10px; }
 
 .image-card {
   cursor: pointer;

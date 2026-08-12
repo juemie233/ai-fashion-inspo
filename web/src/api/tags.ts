@@ -133,8 +133,8 @@ export interface TagInspiration {
 }
 
 /** 获取使用某标签的素材 */
-export async function fetchTagInspirations(tagId: number, page: number = 1, size: number = 20) {
-  const { data } = await apiClient.get(`/tags/${tagId}/inspirations`, { params: { page, size } })
+export async function fetchTagInspirations(tagId: number, page: number = 1, size: number = 20, sort?: string) {
+  const { data } = await apiClient.get(`/tags/${tagId}/inspirations`, { params: { page, size, sort } })
   return data
 }
 

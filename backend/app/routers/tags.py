@@ -1,8 +1,8 @@
 """标签管理的 REST API 路由。"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -197,6 +197,95 @@ async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
     ]
 
 
+# ============ 批量编辑 ============
+
+
+@router.patch("/batch-category", status_code=status.HTTP_200_OK)
+async def batch_change_category(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量修改标签类别。请求体: {"tag_ids": [1,2,3], "category": "style"}"""
+    tag_ids = payload.get("tag_ids", [])
+    category = payload.get("category", "").strip()
+    if not tag_ids or not category:
+        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 category")
+    result = await db.execute(
+        update(Tag).where(Tag.id.in_(tag_ids)).values(category=category)
+    )
+    await db.commit()
+    return {"updated": result.rowcount, "category": category}
+
+
+@router.patch("/batch-rename", status_code=status.HTTP_200_OK)
+async def batch_rename_tags(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量重命名标签（查找替换）。请求体: {"tag_ids": [1,2], "find": "白色", "replace": "纯白"}"""
+    tag_ids = payload.get("tag_ids", [])
+    find_str = payload.get("find", "")
+    replace_str = payload.get("replace", "")
+    if not tag_ids or not find_str:
+        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 find 参数")
+
+    result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+    tags = result.scalars().all()
+    # 预检：新名称是否会与已有标签冲突
+    for tag in tags:
+        if find_str in tag.name:
+            new_name = tag.name.replace(find_str, replace_str)
+            if new_name != tag.name:
+                conflict = await db.execute(
+                    select(Tag.id).where(Tag.name == new_name, Tag.id != tag.id)
+                )
+                if conflict.scalar_one_or_none():
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"重命名冲突: '{tag.name}' → '{new_name}' 与已有标签同名",
+                    )
+    updated = 0
+    for tag in tags:
+        if find_str in tag.name:
+            tag.name = tag.name.replace(find_str, replace_str)
+            updated += 1
+    await db.commit()
+    return {"updated": updated, "find": find_str, "replace": replace_str}
+
+
+# ============ 类别管理 ============
+
+
+# 默认类别配置
+_DEFAULT_CATEGORIES = {
+    "style": "风格", "item_type": "单品类型", "color": "颜色",
+    "fit": "版型", "body_part": "穿着方式", "occasion": "场合",
+    "attribute": "属性", "season": "季节", "material": "面料",
+    "brand": "品牌", "free": "其他",
+}
+
+
+@router.get("/categories")
+async def list_categories():
+    """获取所有可用标签类别。"""
+    return {"categories": [
+        {"key": k, "label": v} for k, v in _DEFAULT_CATEGORIES.items()
+    ]}
+
+
+@router.post("/categories")
+async def add_category(payload: dict = Body(...)):
+    """动态添加标签类别。请求体: {"key": "new_cat", "label": "新类别"}"""
+    key = payload.get("key", "").strip()
+    label = payload.get("label", "").strip()
+    if not key or not label:
+        raise HTTPException(status_code=400, detail="请提供 key 和 label")
+    if key in _DEFAULT_CATEGORIES:
+        raise HTTPException(status_code=409, detail=f"类别 '{key}' 已存在")
+    _DEFAULT_CATEGORIES[key] = label
+    return {"message": f"已添加类别 '{label}'", "key": key, "label": label}
+
+
 # ============ 统计与扫描 ============
 
 
@@ -284,6 +373,7 @@ async def tag_inspirations(
     tag_id: int,
     page: int = 1,
     size: int = 20,
+    sort: str = "newest",  # newest | oldest | confidence
     db: AsyncSession = Depends(get_db),
 ):
     """获取使用指定标签的素材列表。"""
@@ -298,7 +388,7 @@ async def tag_inspirations(
     total = count_result.scalar() or 0
 
     # 分页获取素材 — 只查需要的列，避免 Inspiration 的 selectin 预加载
-    link_result = await db.execute(
+    stmt = (
         select(
             Inspiration.id,
             Inspiration.file_path,
@@ -309,10 +399,15 @@ async def tag_inspirations(
         )
         .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
         .where(InspirationTag.tag_id == tag_id)
-        .order_by(Inspiration.created_at.desc())
+        .order_by(
+            InspirationTag.confidence.desc() if sort == "confidence"
+            else Inspiration.created_at.asc() if sort == "oldest"
+            else Inspiration.created_at.desc()
+        )
         .offset((page - 1) * size)
         .limit(size)
     )
+    link_result = await db.execute(stmt)
     rows = link_result.all()
 
     items = [

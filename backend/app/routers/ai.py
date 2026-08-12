@@ -795,7 +795,7 @@ async def cancel_queue_item(inspiration_id: str):
         _active_analyses.pop(inspiration_id, None)
         return {"message": "已取消排队任务"}
     elif inspiration_id in _active_analyses and inspiration_id not in _pending_queue:
-        return {"message": "任务正在执行中，无法取消。可等待完成后查看结果"}, 409
+        raise HTTPException(status_code=409, detail="任务正在执行中，无法取消。可等待完成后查看结果")
     else:
         raise HTTPException(status_code=404, detail="任务不在队列中")
 
@@ -937,6 +937,71 @@ async def compare_analyses(
     }
 
 
+# ============ Prompt 版本管理 ============
+
+# prompt 版本历史文件路径
+_prompt_versions_file = Path(__file__).parent.parent.parent / "prompt_versions.json"
+
+
+def _load_prompt_versions() -> list[dict]:
+    """加载 prompt 版本历史。"""
+    if _prompt_versions_file.exists():
+        try:
+            return json.loads(_prompt_versions_file.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+
+def _save_prompt_versions(versions: list[dict]):
+    """保存 prompt 版本历史（保留最近 50 条）。"""
+    _prompt_versions_file.write_text(
+        json.dumps(versions[-50:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+@router.get("/prompt/versions")
+async def prompt_versions():
+    """获取 prompt 版本历史列表。"""
+    versions = _load_prompt_versions()
+    return {
+        "versions": versions[::-1],  # 最新的在前
+        "current": settings.ai_analysis_prompt[:100] + "...",
+    }
+
+
+@router.post("/prompt/rollback")
+async def rollback_prompt(payload: dict):
+    """回滚 prompt 到指定版本。请求体: {"index": 0} 其中 index 0 = 最新版本（与 GET /versions 顺序一致）"""
+    versions = _load_prompt_versions()  # 按时间正序存储
+    idx = payload.get("index", 0)
+    # 前端发送的 index：0 = 最新 = versions 最后一个
+    real_idx = len(versions) - 1 - idx
+    if real_idx < 0 or real_idx >= len(versions):
+        raise HTTPException(status_code=400, detail="无效的版本索引")
+    prompt_text = versions[real_idx]["prompt"]
+    settings.ai_analysis_prompt = prompt_text
+    return {
+        "message": f"已回滚到版本 #{idx + 1}",
+        "prompt": prompt_text,
+    }
+
+
+@router.post("/prompt/save-version")
+async def save_prompt_version():
+    """将当前 prompt 保存为一个命名版本（用于后续回滚和对比）。"""
+    versions = _load_prompt_versions()
+    from datetime import datetime
+    versions.append({
+        "prompt": settings.ai_analysis_prompt,
+        "saved_at": datetime.now().isoformat(),
+        "length": len(settings.ai_analysis_prompt),
+    })
+    _save_prompt_versions(versions)
+    return {"message": f"已保存版本 #{len(versions)}", "total_versions": len(versions)}
+
+
 # ============ Prompt 管理 ============
 
 
@@ -974,6 +1039,93 @@ async def update_prompt(
 
     return {
         "message": "Prompt 已更新" + ("并持久化" if persist else "") + f"（{len(prompt)} 字符）",
+    }
+
+
+# ============ 分析质量仪表盘 ============
+
+
+@router.get("/quality-dashboard")
+async def quality_dashboard(db: AsyncSession = Depends(get_db)):
+    """分析质量总览：每日趋势、问题素材、标签覆盖率。"""
+    from datetime import datetime, timedelta
+
+    # 最近 30 天的每日分析统计
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+    daily_result = await db.execute(
+        select(
+            func.date(AIAnalysisLog.created_at).label("day"),
+            func.count().label("total"),
+            func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
+        )
+        .where(AIAnalysisLog.created_at >= thirty_days_ago)
+        .group_by("day")
+        .order_by("day")
+    )
+    daily = [
+        {"day": row[0], "total": row[1], "success": row[2] or 0}
+        for row in daily_result.all()
+    ]
+
+    # 问题素材统计
+    total_insp = (await db.execute(select(func.count(Inspiration.id)))).scalar() or 0
+    analyzed_ids = select(AIAnalysisLog.inspiration_id).distinct()
+    analyzed_count = (await db.execute(
+        select(func.count()).select_from(analyzed_ids.subquery())
+    )).scalar() or 0
+
+    # 多次失败的素材（≥3 次失败）
+    fail_count_sub = (
+        select(AIAnalysisLog.inspiration_id, func.count().label("fc"))
+        .where(AIAnalysisLog.error.isnot(None))
+        .group_by(AIAnalysisLog.inspiration_id)
+        .having(func.count() >= 3)
+        .subquery()
+    )
+    multi_fail = (await db.execute(select(func.count()).select_from(fail_count_sub))).scalar() or 0
+
+    # 零标签输出（有分析记录但没有关联任何标签的素材）
+    from app.models.tag import InspirationTag as IT
+    zero_tag_result = await db.execute(
+        select(func.count())
+        .select_from(AIAnalysisLog)
+        .where(
+            AIAnalysisLog.error.is_(None),
+            ~AIAnalysisLog.inspiration_id.in_(
+                select(IT.inspiration_id).distinct()
+            ),
+        )
+    )
+    zero_tag_count = zero_tag_result.scalar() or 0
+
+    # 平均标签数（单次 SQL 聚合）
+    avg_tags = 0
+    if analyzed_count > 0:
+        tag_total = (await db.execute(
+            select(func.count()).select_from(IT)
+        )).scalar() or 0
+        avg_tags = round(tag_total / analyzed_count, 1)
+
+    # 平均耗时
+    avg_time = (await db.execute(
+        select(func.avg(AIAnalysisLog.processing_time_ms))
+        .where(AIAnalysisLog.error.is_(None))
+    )).scalar() or 0
+
+    return {
+        "daily_trends": daily,
+        "overview": {
+            "total_inspirations": total_insp,
+            "analyzed_count": analyzed_count,
+            "unanalyzed_count": max(0, total_insp - analyzed_count),
+            "coverage_percent": round(analyzed_count / total_insp * 100, 1) if total_insp > 0 else 0,
+            "avg_tags_per_image": avg_tags,
+            "avg_time_ms": round(avg_time),
+        },
+        "problem_items": {
+            "multi_fail_count": multi_fail,
+            "zero_tag_count": zero_tag_count,
+        },
     }
 
 
