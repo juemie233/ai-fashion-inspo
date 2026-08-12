@@ -287,9 +287,16 @@ async def tag_inspirations(
     )
     total = count_result.scalar() or 0
 
-    # 分页获取素材
+    # 分页获取素材 — 只查需要的列，避免 Inspiration 的 selectin 预加载
     link_result = await db.execute(
-        select(InspirationTag, Inspiration)
+        select(
+            Inspiration.id,
+            Inspiration.file_path,
+            Inspiration.thumbnail_path,
+            Inspiration.media_type,
+            Inspiration.created_at,
+            InspirationTag.confidence,
+        )
         .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
         .where(InspirationTag.tag_id == tag_id)
         .order_by(Inspiration.created_at.desc())
@@ -298,16 +305,17 @@ async def tag_inspirations(
     )
     rows = link_result.all()
 
-    items = []
-    for link, insp in rows:
-        items.append({
-            "inspiration_id": insp.id,
-            "file_path": insp.file_path,
-            "thumbnail_path": insp.thumbnail_path,
-            "media_type": insp.media_type,
-            "confidence": round(link.confidence, 2),
-            "created_at": str(insp.created_at) if insp.created_at else None,
-        })
+    items = [
+        {
+            "inspiration_id": row[0],
+            "file_path": row[1],
+            "thumbnail_path": row[2],
+            "media_type": row[3],
+            "confidence": round(row[5], 2) if row[5] else 0,
+            "created_at": str(row[4]) if row[4] else None,
+        }
+        for row in rows
+    ]
 
     return {
         "tag": {"id": tag.id, "name": tag.name, "category": tag.category},
