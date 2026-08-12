@@ -92,8 +92,16 @@ def _launch_scraper_process(task_id: int):
 @router.get("/sources")
 async def scraper_sources():
     """列出所有可用的采集源及其状态。"""
+    from app.models.scraper import ScraperSeenURL
+    from app.database import async_session
+    async with async_session() as db:
+        tombstone_count = (await db.execute(
+            select(func.count(ScraperSeenURL.source_url))
+        )).scalar() or 0
+
     return {
         "default_max_count": settings.scraper_default_max_count,
+        "tombstone_count": tombstone_count,
         "sources": [
             {
                 "platform": "xiaohongshu",

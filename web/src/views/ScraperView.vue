@@ -48,6 +48,8 @@ interface ScraperSource {
 
 const sources = ref<ScraperSource[]>([])
 const tasks = ref<ScraperTask[]>([])
+const tombstoneCount = ref(0)
+const showTombstone = ref(false)
 
 /** 新建采集表单 */
 const formPlatform = ref('xiaohongshu')
@@ -65,6 +67,7 @@ onMounted(async () => {
     ])
     sources.value = sRes.data.sources
     tasks.value = tRes.data
+    tombstoneCount.value = sRes.data.tombstone_count || 0
     // 从后端读取可配置的默认采集数量
     if (sRes.data.default_max_count) {
       formMaxCount.value = sRes.data.default_max_count
@@ -581,6 +584,21 @@ function stopPoll() {
       </n-list>
     </n-card>
 
+    <!-- 墓碑表统计（可折叠） -->
+    <n-card size="small" style="margin-bottom: 24px">
+      <div class="tombstone-header" @click="showTombstone = !showTombstone" style="cursor: pointer; user-select: none;">
+        <span>{{ showTombstone ? '▼' : '▶' }} 已采集 URL 记录</span>
+        <n-tag type="info" size="small">{{ tombstoneCount }} 个</n-tag>
+      </div>
+      <div v-if="showTombstone" class="tombstone-body">
+        <p style="margin: 8px 0 0; font-size: 12px; color: #666">
+          📌 墓碑表记录了所有曾下载过的图片 URL（含已删除的素材）。<br/>
+          采集新素材时会自动跳过这些 URL，确保同一张图永不重复入库。<br/>
+          当前共 <b>{{ tombstoneCount }}</b> 条记录，每条记录约 150 字节，总占用约 {{ (tombstoneCount * 0.15).toFixed(0) }} KB。
+        </p>
+      </div>
+    </n-card>
+
     <!-- 新建采集任务 -->
     <n-card title="新建采集任务" style="margin-bottom: 24px">
       <n-form label-placement="left" label-width="80">
@@ -901,5 +919,17 @@ function stopPoll() {
   position: absolute;
   top: 4px;
   right: 4px;
+}
+
+/* 墓碑表区域 */
+.tombstone-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+}
+.tombstone-body {
+  border-top: 1px solid #eee;
+  margin-top: 8px;
 }
 </style>
