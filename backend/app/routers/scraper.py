@@ -22,10 +22,16 @@ def _launch_scraper_process(task_id: int):
     from pathlib import Path
 
     script = Path(__file__).parent.parent.parent / "scripts" / "run_scraper.py"
+
+    # 日志输出到文件，方便排查
+    logs_dir = Path(__file__).parent.parent.parent / "storage" / "logs" / "scraper"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_f = open(logs_dir / f"task_{task_id}.log", "w", encoding="utf-8")
+
     subprocess.Popen(
         [sys.executable, str(script), str(task_id)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
     )
 
 
@@ -71,7 +77,12 @@ async def create_scraper_task(
         platform=data.platform,
         status="pending",
         config=json.dumps(
-            {"keywords": data.keywords, "max_count": data.max_count}
+            {
+                "keywords": data.keywords,
+                "max_count": data.max_count,
+                "headless": data.headless,
+                "cookie_file": data.cookie_file,
+            }
         ),
     )
     db.add(task)
@@ -101,6 +112,44 @@ async def get_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="采集任务未找到")
     return ScraperTaskOut.model_validate(task)
+
+
+@router.delete("/tasks", status_code=status.HTTP_200_OK)
+async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)):
+    """清空所有采集任务历史记录。"""
+    from sqlalchemy import delete
+
+    result = await db.execute(delete(ScraperTask))
+    await db.commit()
+    return {"deleted": result.rowcount}
+
+
+@router.post("/tasks/retry-failed")
+async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
+    """重试所有失败的采集任务，使用相同配置重新创建任务。"""
+    result = await db.execute(
+        select(ScraperTask).where(ScraperTask.status == "failed")
+    )
+    failed_tasks = result.scalars().all()
+
+    if not failed_tasks:
+        raise HTTPException(status_code=404, detail="没有失败的采集任务")
+
+    retried = 0
+    for task in failed_tasks:
+        new_task = ScraperTask(
+            platform=task.platform,
+            status="pending",
+            config=task.config,
+        )
+        db.add(new_task)
+        await db.flush()
+        await db.refresh(new_task)
+        _launch_scraper_process(new_task.id)
+        retried += 1
+
+    await db.commit()
+    return {"retried": retried, "message": f"已重新创建 {retried} 个采集任务"}
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

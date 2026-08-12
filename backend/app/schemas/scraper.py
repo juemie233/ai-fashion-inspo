@@ -9,6 +9,8 @@ class ScraperTaskCreate(BaseModel):
     platform: str = Field(..., description="xiaohongshu | douyin")
     keywords: list[str] = Field(default=[], description="搜索关键词列表")
     max_count: int = Field(default=50, ge=1, le=500)
+    headless: bool = Field(default=False, description="是否无头模式（默认有头，方便手动登录）")
+    cookie_file: str | None = Field(default=None, description="Cookie 文件路径")
 
 
 class ScraperTaskOut(BaseModel):
