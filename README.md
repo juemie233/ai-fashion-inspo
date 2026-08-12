@@ -91,8 +91,8 @@ chrome_debug_port: int = 9222
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列、元数据预设、去重检测、文件夹批量、队列管理、偏好设置 |
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
-| **采集管理** | 小红书/抖音 CDP 采集、内容 MD5 去重、URL 墓碑表防重复、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
-| **标签管理** | 浏览/编辑/合并/批量操作、相似标签扫描、导入导出、拖拽分类、标签详情 |
+| **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计 |
+| **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除、重复扫描、拖拽改类、导入导出、素材关联预览 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置 |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
@@ -417,6 +417,10 @@ fashion-inspo/
 | `PATCH` | `/api/tags/{id}` | 编辑标签（重命名/改类别） |
 | `DELETE` | `/api/tags/{id}` | 删除标签 |
 | `DELETE` | `/api/tags/unused` | 删除所有未使用标签 |
+| `PATCH` | `/api/tags/batch-category` | 批量修改标签类别 |
+| `PATCH` | `/api/tags/batch-rename` | 批量重命名（查找替换） |
+| `GET` | `/api/tags/categories` | 获取可用标签类别 |
+| `POST` | `/api/tags/categories` | 动态添加新类别 |
 
 ### AI 分析
 
@@ -447,6 +451,10 @@ fashion-inspo/
 | `POST` | `/api/ai/queue/pause` | 暂停队列 |
 | `POST` | `/api/ai/queue/resume` | 恢复队列 |
 | `GET` | `/api/ai/compare/{id}` | 分析结果对比（标签差异+耗时） |
+| `GET` | `/api/ai/quality-dashboard` | 分析质量仪表盘（覆盖率/趋势/问题素材） |
+| `GET` | `/api/ai/prompt/versions` | Prompt 版本历史 |
+| `POST` | `/api/ai/prompt/save-version` | 保存当前 Prompt 为版本 |
+| `POST` | `/api/ai/prompt/rollback` | 回滚 Prompt 到指定版本 |
 
 ### AI 参数调优
 
@@ -472,7 +480,11 @@ fashion-inspo/
 | `GET` | `/api/scraper/cdp-check/{port}` | 检测 Chrome 调试端口是否就绪 |
 | `POST` | `/api/scraper/tasks/retry-failed` | 重试所有失败任务 |
 | `DELETE` | `/api/scraper/tasks` | 清空所有采集任务 |
-| `DELETE` | `/api/scraper/tasks/{id}` | 取消/删除单个任务 |
+| `DELETE` | `/api/scraper/tasks/{id}` | 删除单个任务记录 |
+| `POST` | `/api/scraper/tasks/{id}/cancel` | 取消运行中任务（发送SIGTERM） |
+| `GET` | `/api/scraper/tasks/{id}/log` | 获取任务日志（最近200行） |
+| `GET` | `/api/scraper/cookie-status` | Cookie 文件状态检查 |
+| `POST` | `/api/scraper/cookie-import` | 导入平台 Cookie |
 
 ### 管理后台
 
