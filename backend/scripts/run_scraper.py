@@ -322,9 +322,33 @@ def _download_batch(
 #  主流程
 # ═══════════════════════════════════════════════════════════════
 
+def _ensure_scraper_columns():
+    """确保 scraper_tasks 表有所需的列（脚本独立运行，不经过服务端 _auto_migrate）。"""
+    import sqlite3 as _sqlite3
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        cursor = conn.execute("PRAGMA table_info(scraper_tasks)")
+        cols = {r[1] for r in cursor.fetchall()}
+        missing = [
+            ("diagnostics", "TEXT"),
+        ]
+        for col_name, col_def in missing:
+            if col_name not in cols:
+                conn.execute(f"ALTER TABLE scraper_tasks ADD COLUMN {col_name} {col_def}")
+                print(f"[迁移] scraper_tasks 添加列: {col_name}")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[迁移] 检查失败: {e}")
+
+
 def run_scraper_sync(task_id: int):
     from playwright.sync_api import sync_playwright
     import asyncio
+
+    # ── 确保表结构最新（独立脚本不经过服务端 auto_migrate）──
+    _ensure_scraper_columns()
 
     # ── 加载任务 ──
     async def _load():
