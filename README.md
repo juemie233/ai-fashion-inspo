@@ -2,6 +2,61 @@
 
 专为个人打造的 AI 穿搭灵感管理工具，通过自动化采集与视觉识别，将碎片化的穿搭内容转化为可智能检索的专属素材资产。
 
+## 前置条件
+
+以下软件和环境为 **必须安装**，否则核心功能无法运行：
+
+| 软件 | 版本要求 | 用途 | 安装指引 |
+|------|----------|------|----------|
+| Python | 3.12+ | 后端运行时 | [python.org](https://www.python.org/downloads/) |
+| Node.js | 20+ | Web 前端构建 | [nodejs.org](https://nodejs.org/en/download) |
+| Ollama | latest | AI 视觉推理引擎 | [ollama.com](https://ollama.com/download/windows) |
+| MiniCPM-V:8b | — | 穿搭标签识别模型 | `ollama pull minicpm-v:8b` |
+
+### 采集引擎附加条件（仅 CDP 模式需要）
+
+| 软件 | 要求 | 用途 |
+|------|------|------|
+| **Google Chrome** | 最新稳定版 | CDP 零检测采集的宿主浏览器 |
+| Playwright | 1.40+ | 浏览器自动化驱动 (`pip install playwright && playwright install chromium`) |
+
+> **注意：** CDP 采集模式必须使用 **Google Chrome**（而非 Edge / 360 / Chromium 等衍生浏览器），因为 CDP 协议需要 Chrome DevTools 完整支持。如果使用其他 Chrome 内核浏览器，连接可能失败。
+
+### Chrome 路径配置
+
+Chrome 安装路径和设备不同可能不一样。可通过以下方式自定义：
+
+**方式一：环境变量（推荐）**
+
+在 `backend/.env` 中设置：
+
+```bash
+# Chrome 浏览器可执行文件路径
+CHROME_EXECUTABLE="C:/Program Files/Google/Chrome/Application/chrome.exe"
+
+# 采集专用用户数据目录（与日常 Chrome 隔离，避免冲突）
+CHROME_USER_DATA_DIR="C:/Users/Administrator/Desktop/chrome-scraper-profile"
+
+# 调试端口（默认 9222，一般无需修改）
+CHROME_DEBUG_PORT=9222
+```
+
+**方式二：修改配置文件**
+
+直接编辑 `backend/app/config.py` 中 `Settings` 类的默认值：
+
+```python
+chrome_executable: str = "C:/Program Files/Google/Chrome/Application/chrome.exe"
+chrome_user_data_dir: str = "C:/Users/Administrator/Desktop/chrome-scraper-profile"
+chrome_debug_port: int = 9222
+```
+
+> **常见 Chrome 安装路径：**
+> - Windows 默认：`C:/Program Files/Google/Chrome/Application/chrome.exe`
+> - Windows 用户安装：`C:/Users/<用户名>/AppData/Local/Google/Chrome/Application/chrome.exe`
+> - macOS：`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
+> - Linux：`/usr/bin/google-chrome`
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -63,16 +118,26 @@ npm run dev
 
 ### 4. 启动采集引擎（可选）
 
-采集引擎通过 CDP 连接用户真实 Chrome 实现零检测采集：
+采集引擎通过 CDP 连接用户真实 Chrome 实现零检测采集。
+
+> **前提：** 必须先安装 Google Chrome 并完成 [Chrome 路径配置](#chrome-路径配置)。
+
+**启动调试 Chrome：**
+
+根据你在 `.env` 中配置的路径，在命令行中执行（端口和目录需与配置一致）：
 
 ```bash
-# 以调试模式启动 Chrome（与日常使用的 Chrome 隔离）
-"C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe" ^
-  --remote-debugging-port=9222 ^
-  --user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"
+"C:/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"
 ```
 
-在打开的 Chrome 窗口中登录小红书，然后在采集管理页面创建任务即可自动搜索、下载、入库。
+> 如果 Chrome 提示"无法在此目录下创建用户数据"，请先关闭所有已打开的 Chrome 窗口再试。
+
+**在 Web 界面创建采集任务：**
+
+1. 在调试 Chrome 窗口中登录小红书（`xiaohongshu.com`）
+2. 打开采集页面，确认 CDP 模式已开启
+3. 点击「测试连接」按钮，确认显示"已连接"
+4. 输入关键词，点击「开始采集」
 
 ### 5. 安装浏览器插件
 
@@ -350,10 +415,11 @@ fashion-inspo/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/scraper/tasks` | 创建采集任务（支持 CDP 端口） |
-| `GET` | `/api/scraper/tasks` | 采集任务列表 |
+| `POST` | `/api/scraper/tasks` | 创建采集任务（CDP 模式下会预检 Chrome 连接） |
+| `GET` | `/api/scraper/tasks` | 采集任务列表（最多 20 条） |
 | `GET` | `/api/scraper/tasks/{id}` | 任务详情 |
 | `GET` | `/api/scraper/sources` | 可用采集源及状态 |
+| `GET` | `/api/scraper/cdp-check/{port}` | 检测 Chrome 调试端口是否就绪 |
 | `POST` | `/api/scraper/tasks/retry-failed` | 重试所有失败任务 |
 | `DELETE` | `/api/scraper/tasks` | 清空所有采集任务 |
 | `DELETE` | `/api/scraper/tasks/{id}` | 取消/删除单个任务 |
@@ -373,6 +439,6 @@ fashion-inspo/
 | Node.js 20+ | Web + Mobile 前端 | ✅ |
 | Ollama | AI 视觉推理 | ✅ |
 | MiniCPM-V:8b | 穿搭标签识别 | ✅ |
+| Google Chrome | CDP 采集宿主浏览器 | ⚠️ 采集时必需 |
+| Playwright | 采集引擎驱动 | ⚠️ 采集时必需 |
 | ffmpeg | 视频关键帧提取 | ❌ 尚未使用 |
-| Chrome + CDP | 采集引擎（连接用户真实浏览器） | ❌ 可选 |
-| Playwright | 采集引擎驱动 | ❌ 可选 |

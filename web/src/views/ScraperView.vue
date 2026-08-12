@@ -128,12 +128,60 @@ async function createTask() {
     await refreshTasks()
     message.success('采集任务已创建')
   } catch (e: any) {
-    message.error(e.response?.data?.detail || '创建任务失败')
+    const detail = e.response?.data?.detail
+    if (typeof detail === 'object' && detail !== null) {
+      // 结构化错误（如 CDP 检测失败）
+      message.error(detail.error || '创建任务失败')
+      if (detail.command) {
+        // 把启动命令复制到剪贴板，方便用户执行
+        setTimeout(() => {
+          copyText(detail.command)
+        }, 500)
+      }
+    } else {
+      message.error(detail || '创建任务失败')
+    }
   }
 }
 
+/** 测试 CDP 连接 */
+const cdpChecking = ref(false)
+const cdpStatus = ref<'idle' | 'ok' | 'fail'>('idle')
+const cdpDetail = ref('')
+
+async function testCdp() {
+  cdpChecking.value = true
+  cdpStatus.value = 'idle'
+  try {
+    const res = await apiClient.get(`/scraper/cdp-check/${formCdpPort.value}`)
+    if (res.data.available) {
+      cdpStatus.value = 'ok'
+      cdpDetail.value = res.data.detail
+      message.success(cdpDetail.value)
+    } else {
+      cdpStatus.value = 'fail'
+      cdpDetail.value = res.data.detail
+      message.warning(cdpDetail.value + '。请先启动调试 Chrome。')
+    }
+  } catch (e: any) {
+    cdpStatus.value = 'fail'
+    cdpDetail.value = '检测请求失败'
+  } finally {
+    cdpChecking.value = false
+  }
+}
+
+/** 平台显示名称映射（兜底：sources 未加载或匹配不到时使用） */
+const PLATFORM_LABELS: Record<string, string> = {
+  xiaohongshu: '小红书',
+  douyin: '抖音',
+  browser_extension: '浏览器插件',
+  scraper: '自动采集',
+  manual_upload: '手动上传',
+}
+
 function platformName(p: string): string {
-  return sources.value.find((s) => s.platform === p)?.name || p
+  return sources.value.find((s) => s.platform === p)?.name || PLATFORM_LABELS[p] || p
 }
 
 function statusLabel(s: string): string {
@@ -395,13 +443,37 @@ function stopPoll() {
           <n-input-number v-model:value="formMaxCount" :min="1" :max="500" />
         </n-form-item>
         <n-form-item label="CDP 模式">
-          <n-switch v-model:value="formCdp" />
+          <n-switch v-model:value="formCdp" @update:value="() => { cdpStatus = 'idle' }" />
           <span style="margin-left: 8px; font-size: 12px; color: #18a058;">
             {{ formCdp ? '连接真实 Chrome（零检测，需先启动调试 Chrome）' : 'Playwright 启动浏览器' }}
           </span>
         </n-form-item>
         <n-form-item v-if="formCdp" label="CDP 端口">
-          <n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" />
+          <n-space align="center">
+            <n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" style="width: 120px" />
+            <n-button
+              size="small"
+              :loading="cdpChecking"
+              :type="cdpStatus === 'ok' ? 'success' : cdpStatus === 'fail' ? 'warning' : 'default'"
+              @click="testCdp"
+            >
+              {{ cdpChecking ? '检测中...' : cdpStatus === 'ok' ? '✓ 已连接' : cdpStatus === 'fail' ? '✗ 未连接' : '测试连接' }}
+            </n-button>
+          </n-space>
+        </n-form-item>
+        <n-form-item v-if="formCdp">
+          <n-alert type="info" style="width: 100%">
+            <template #header>
+              💡 如何启动调试 Chrome？
+            </template>
+            <p style="margin: 4px 0; font-size: 12px; line-height: 1.8">
+              请先关闭所有 Chrome 窗口，然后在<b>命令行</b>中执行以下命令启动调试模式：<br/>
+              <code style="display: block; background: #f0f0f0; padding: 6px 10px; margin: 6px 0; border-radius: 4px; font-size: 11px; word-break: break-all; cursor: pointer; user-select: all;">
+                "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe" --remote-debugging-port={{ formCdpPort }} --user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"
+              </code>
+              启动后在 Chrome 中登录小红书，回来点击「<b>测试连接</b>」确认就绪，即可开始采集。
+            </p>
+          </n-alert>
         </n-form-item>
         <n-button type="primary" @click="createTask">
           开始采集

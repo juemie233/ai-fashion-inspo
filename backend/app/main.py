@@ -21,6 +21,19 @@ async def lifespan(app: FastAPI):
     # 初始化数据库表
     await init_db()
 
+    # 启动时清理遗留的僵尸任务（上次异常关闭时未完成的任务）
+    from app.database import async_session
+    from sqlalchemy import update
+    from app.models.scraper import ScraperTask
+    async with async_session() as db:
+        result = await db.execute(
+            update(ScraperTask)
+            .where(ScraperTask.status.in_(["running", "pending"]))
+            .values(status="failed", error="进程异常终止：后端服务重启导致采集中断")
+        )
+        if result.rowcount:
+            print(f"已清理 {result.rowcount} 个僵尸采集任务")
+
     # 导入预设标签
     from app.database import async_session
     from app.services.tag_service import seed_tags

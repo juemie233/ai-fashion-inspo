@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     scraper_request_delay: float = 2.0  # 请求间隔（秒）
     scraper_max_concurrent: int = 3
     scraper_browser_headless: bool = True
+    chrome_executable: str = (
+        "C:/Program Files/Google/Chrome/Application/chrome.exe"
+    )  # Chrome 浏览器路径
+    chrome_user_data_dir: str = (
+        "C:/Users/Administrator/Desktop/chrome-scraper-profile"
+    )  # 采集专用 Chrome 用户数据目录
+    chrome_debug_port: int = 9222  # Chrome 调试端口
 
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）

@@ -141,12 +141,14 @@ def run_scraper_sync(task_id: int):
         try:
             browser = pw.chromium.connect_over_cdp(cdp_url)
         except Exception as e:
+            chrome_exe = settings.chrome_executable
+            data_dir = settings.chrome_user_data_dir
             raise RuntimeError(
                 f"无法连接 CDP Chrome (端口 {CDP_PORT})。\n"
                 f"请先用调试模式启动 Chrome:\n"
-                f'"C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe" '
-                f'--remote-debugging-port={CDP_PORT} '
-                f'--user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"'
+                f'"{chrome_exe}" '
+                f"--remote-debugging-port={CDP_PORT} "
+                f'--user-data-dir="{data_dir}"'
             ) from e
 
         print(f"已连接 Chrome {browser.version}")

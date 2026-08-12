@@ -3,16 +3,63 @@
 import asyncio
 import json
 import logging
+import socket
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.scraper import ScraperTask
 from app.schemas.scraper import ScraperTaskCreate, ScraperTaskOut
 
 router = APIRouter(prefix="/api/scraper", tags=["scraper"])
+
+# Chrome 调试模式启动命令模板（路径从配置读取）
+CHROME_DEBUG_CMD = (
+    '"{chrome}" '
+    "--remote-debugging-port={port} "
+    '--user-data-dir="{data_dir}"'
+)
+
+
+def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str]:
+    """检测 Chrome 调试端口是否可用。
+
+    Args:
+        port: CDP 端口号
+        timeout: 连接超时（秒）
+
+    Returns:
+        (是否可用, 详情信息)
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        result = sock.connect_ex(("127.0.0.1", port))
+        if result == 0:
+            # 端口可达，进一步验证是否为 Chrome 调试端口
+            import urllib.request
+            try:
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/json/version",
+                    headers={"User-Agent": "Chrome"},
+                )
+                with urllib.request.urlopen(req, timeout=1) as resp:
+                    data = json.loads(resp.read().decode())
+                    browser = data.get("Browser", "Unknown")
+                    return True, f"已连接 {browser} (端口 {port})"
+            except Exception:
+                return True, f"端口 {port} 可达，但未能确认 Chrome 调试协议"
+        else:
+            return False, f"端口 {port} 无响应"
+    except socket.timeout:
+        return False, f"端口 {port} 连接超时"
+    except Exception as e:
+        return False, f"端口检测异常: {e}"
+    finally:
+        sock.close()
 
 
 def _launch_scraper_process(task_id: int):
@@ -65,6 +112,17 @@ async def scraper_sources():
     }
 
 
+@router.get("/cdp-check/{port}")
+async def check_cdp_endpoint(port: int):
+    """检查指定端口的 Chrome 调试连接是否就绪。"""
+    ok, detail = _check_cdp(port)
+    return {
+        "available": ok,
+        "detail": detail,
+        "startup_command": CHROME_DEBUG_CMD.format(chrome=settings.chrome_executable, port=port, data_dir=settings.chrome_user_data_dir),
+    }
+
+
 @router.post(
     "/tasks", response_model=ScraperTaskOut, status_code=status.HTTP_201_CREATED
 )
@@ -72,7 +130,24 @@ async def create_scraper_task(
     data: ScraperTaskCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    """创建并启动一个新的采集任务。"""
+    """创建并启动一个新的采集任务。
+
+    CDP 模式下会预先检测 Chrome 调试端口，不可用时返回明确的错误提示。
+    """
+    # CDP 模式：预检 Chrome 调试端口
+    if data.cdp_port is not None:
+        ok, detail = _check_cdp(data.cdp_port)
+        if not ok:
+            cmd = CHROME_DEBUG_CMD.format(chrome=settings.chrome_executable, port=data.cdp_port, data_dir=settings.chrome_user_data_dir)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Chrome 调试端口不可用: {detail}",
+                    "hint": "请先用调试模式启动 Chrome 后再创建采集任务",
+                    "command": cmd,
+                },
+            )
+
     task = ScraperTask(
         platform=data.platform,
         status="pending",
