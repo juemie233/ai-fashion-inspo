@@ -512,6 +512,13 @@ onMounted(() => {
         已处理 {{ dedupResult.groups_processed }} 组，删除 {{ dedupResult.files_deleted }} 个文件，
         释放 {{ fmtSize(dedupResult.freed_bytes) }} 空间
       </n-alert>
+      <n-alert
+        v-if="dedupResult && dedupResult.files_deleted === 0"
+        type="info"
+        style="margin-bottom: 12px"
+      >
+        未发现可清理的重复文件
+      </n-alert>
 
       <div v-if="duplicates.length > 0">
         <p style="color: #f0a020; margin-bottom: 12px">

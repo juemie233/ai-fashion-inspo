@@ -376,17 +376,25 @@ async def batch_delete(
     }
 
 
-@router.get("/duplicates")
-async def find_duplicates(db: AsyncSession = Depends(get_db)):
-    """通过文件哈希检测完全重复的素材。"""
-    result = (await db.execute(
-        select(Inspiration.id, Inspiration.file_path)
-    )).all()
+def _build_hash_map(
+    db_records: list[tuple],
+    storage_root: Path,
+    include_meta: bool = False,
+) -> dict[str, list[dict]]:
+    """根据数据库记录构建文件哈希映射。
 
-    storage_root = settings.storage_root
+    Args:
+        db_records: (id, file_path, ...) 查询结果
+        storage_root: 存储根目录
+        include_meta: 是否包含 thumbnail_path、is_favorite、created_at 等元数据
+
+    Returns:
+        {hash: [{id, file_path, size_bytes, ...}]}
+    """
     hash_map: dict[str, list[dict]] = {}
-
-    for rid, fpath in result:
+    for row in db_records:
+        rid = row[0]
+        fpath = row[1]
         if not fpath:
             continue
         full = storage_root / fpath
@@ -395,13 +403,27 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
         fhash = _file_hash(full)
         if fhash is None:
             continue
-        hash_map.setdefault(fhash, []).append({
+        entry: dict = {
             "id": rid,
             "file_path": fpath,
             "size_bytes": full.stat().st_size,
-        })
+        }
+        if include_meta and len(row) >= 5:
+            entry["thumbnail_path"] = row[2]
+            entry["is_favorite"] = row[3]
+            entry["created_at"] = row[4]
+        hash_map.setdefault(fhash, []).append(entry)
+    return hash_map
 
-    # 只返回有重复的组
+
+@router.get("/duplicates")
+async def find_duplicates(db: AsyncSession = Depends(get_db)):
+    """通过文件哈希检测完全重复的素材。"""
+    result = (await db.execute(
+        select(Inspiration.id, Inspiration.file_path)
+    )).all()
+    hash_map = _build_hash_map(result.all(), settings.storage_root)
+
     duplicates = [
         {"hash": h, "files": files}
         for h, files in hash_map.items()
@@ -435,38 +457,19 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     storage_root = settings.storage_root
 
     # 1. 扫描所有重复组
-    result = (await db.execute(
+    result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
                Inspiration.is_favorite, Inspiration.created_at)
-    )).all()
-
-    hash_map: dict[str, list[dict]] = {}
-    for rid, fpath, thumb, fav, cat in result:
-        if not fpath:
-            continue
-        full = storage_root / fpath
-        if not full.exists():
-            continue
-        fhash = _file_hash(full)
-        if fhash is None:
-            continue
-        hash_map.setdefault(fhash, []).append({
-            "id": rid,
-            "file_path": fpath,
-            "thumbnail_path": thumb,
-            "is_favorite": fav,
-            "created_at": cat,
-            "size_bytes": full.stat().st_size,
-        })
+    )
+    hash_map = _build_hash_map(result.all(), storage_root, include_meta=True)
 
     # 只处理有重复的组
-    dup_groups = [files for files in hash_map.values() if len(files) > 1]
+    dup_groups = [(h, files) for h, files in hash_map.items() if len(files) > 1]
     if not dup_groups:
         return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
 
     # 2. 对每个文件查询标签和分析状态，计算评分
-    # 批量查询：收集所有涉及的文件 ID
-    all_ids = [f["id"] for group in dup_groups for f in group]
+    all_ids = [f["id"] for _h, group in dup_groups for f in group]
 
     # 查询哪些文件有标签
     tagged_result = await db.execute(
@@ -488,11 +491,11 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     analyzed_ids = {r[0] for r in analyzed_result.all()}
 
     # 3. 每组评分并决定保留哪个
-    details = []
+    details: list[dict] = []
     ids_to_delete: list[str] = []
-    files_to_delete: list[tuple[str, str | None]] = []  # (file_path, thumbnail_path)
+    files_to_delete: list[tuple[str, str | None]] = []
 
-    for group in dup_groups:
+    for dup_hash, group in dup_groups:
         scored = []
         for f in group:
             score = 0
@@ -541,7 +544,7 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
                 continue
 
         detail = {
-            "hash": _file_hash(keeper_full) or "unknown",
+            "hash": dup_hash,
             "kept": {
                 "id": keeper["id"],
                 "file_path": keeper["file_path"],
@@ -569,7 +572,14 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     if not ids_to_delete:
         return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
 
-    # 4. 物理删除磁盘文件
+    # 4. 先删 DB 记录（级联删除关联 tags 和 analysis_logs），再删磁盘文件
+    #    这样即使磁盘删除失败，DB 中也不会有孤儿记录
+    await db.execute(
+        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
+    )
+    await db.commit()
+
+    # 5. 物理删除磁盘文件
     freed_bytes = 0
     for fpath, thumb in files_to_delete:
         for p in (fpath, thumb):
@@ -581,12 +591,6 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
                         full.unlink()
                 except Exception:
                     pass
-
-    # 5. 删除数据库记录（级联删除关联的 tags 和 analysis_logs）
-    await db.execute(
-        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
-    )
-    await db.commit()
 
     return {
         "groups_processed": len(details),
