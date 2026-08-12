@@ -82,9 +82,10 @@ def _launch_scraper_process(task_id: int):
     log_f = open(logs_dir / f"task_{task_id}.log", "w", encoding="utf-8")
 
     subprocess.Popen(
-        [sys.executable, str(script), str(task_id)],
+        [sys.executable, "-u", str(script), str(task_id)],
         stdout=log_f,
         stderr=subprocess.STDOUT,
+        env={**__import__("os").environ, "PYTHONUNBUFFERED": "1"},
     )
 
 

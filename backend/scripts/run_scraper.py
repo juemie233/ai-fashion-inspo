@@ -75,30 +75,16 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
         print("  等待搜索结果超时，尝试继续...")
     _rdsleep(1.5, 3.0)
 
-    # ── 拟人化触底循环滚动 ──
-    MAX_SCROLLS = 40
-    CONSECUTIVE_NO_NEW = 4  # 连续 N 次无新卡片则停止
+    # ── 触底循环滚动 ──
+    MAX_SCROLLS = 30
+    CONSECUTIVE_NO_NEW = 3  # 连续 N 次无新卡片则停止
     no_new_count = 0
     last_card_count = 0
 
     for scroll_i in range(MAX_SCROLLS):
-        # 分步滚动，模拟人类逐段浏览（而非瞬间跳到底部）
-        current = page.evaluate("window.scrollY")
-        target = page.evaluate("document.body.scrollHeight")
-        while current < target - 100:
-            step = random.randint(300, 900)
-            current = min(current + step, target)
-            page.evaluate(f"window.scrollTo(0, {current})")
-            time.sleep(random.uniform(0.25, 0.6))
-        # 触底
+        # 直接滚动到页面底部触发懒加载
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        _rdsleep(1.5, 3.0)
-
-        # 偶尔回滚一小段（人类浏览行为）
-        if random.random() < 0.2:
-            back = page.evaluate("window.scrollY") - random.randint(200, 500)
-            page.evaluate(f"window.scrollTo(0, Math.max(0, {back}))")
-            time.sleep(random.uniform(0.3, 0.7))
+        _rdsleep(1.0, 2.0)
 
         # 检查是否有新内容加载
         cards_now = len(page.query_selector_all("section.note-item"))
@@ -358,6 +344,19 @@ def run_scraper_sync(task_id: int):
 
         print(f"已连接 Chrome {browser.version}")
         context = browser.contexts[0]
+
+        # 提取浏览器 Cookie 用于后续图片下载（CDN 反盗链需要）
+        cdp_cookies = context.cookies()
+        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cdp_cookies)
+        download_headers = {
+            "Referer": "https://www.xiaohongshu.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        if cookie_str:
+            download_headers["Cookie"] = cookie_str
+            print(f"  已提取 {len(cdp_cookies)} 个 Cookie 用于下载")
+        else:
+            print("  ⚠ 未从浏览器提取到 Cookie，下载可能失败")
 
         # 创建新标签页用于采集
         page = context.new_page()
