@@ -33,7 +33,9 @@ const tasks = ref<ScraperTask[]>([])
 const formPlatform = ref('xiaohongshu')
 const formKeywords = ref('')
 const formMaxCount = ref(30)
-const formHeadless = ref(false)  // 默认有头模式
+const formHeadless = ref(false)
+const formCdp = ref(true)        // 默认 CDP 模式
+const formCdpPort = ref(9222)
 
 onMounted(async () => {
   try {
@@ -102,6 +104,7 @@ async function createTask() {
         .filter(Boolean),
       max_count: formMaxCount.value,
       headless: formHeadless.value,
+      cdp_port: formCdp.value ? formCdpPort.value : null,
     })
     await refreshTasks()
     message.success('采集任务已创建')
@@ -378,11 +381,14 @@ function stopPoll() {
         <n-form-item label="数量上限">
           <n-input-number v-model:value="formMaxCount" :min="1" :max="500" />
         </n-form-item>
-        <n-form-item label="无头模式">
-          <n-switch v-model:value="formHeadless" />
-          <span style="margin-left: 8px; font-size: 12px; color: #999;">
-            {{ formHeadless ? '后台静默运行（可能被拦截）' : '显示浏览器窗口（推荐，可手动登录验证）' }}
+        <n-form-item label="CDP 模式">
+          <n-switch v-model:value="formCdp" />
+          <span style="margin-left: 8px; font-size: 12px; color: #18a058;">
+            {{ formCdp ? '连接真实 Chrome（零检测，需先启动调试 Chrome）' : 'Playwright 启动浏览器' }}
           </span>
+        </n-form-item>
+        <n-form-item v-if="formCdp" label="CDP 端口">
+          <n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" />
         </n-form-item>
         <n-button type="primary" @click="createTask">
           开始采集

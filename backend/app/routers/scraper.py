@@ -81,6 +81,7 @@ async def create_scraper_task(
                 "keywords": data.keywords,
                 "max_count": data.max_count,
                 "headless": data.headless,
+                "cdp_port": data.cdp_port,
                 "cookie_file": data.cookie_file,
             }
         ),

@@ -120,24 +120,97 @@ def _wait_for_captcha_solve(page, timeout: int = 120):
 def _has_content(page) -> bool:
     """检测页面是否有实际内容（非空白/拦截页）。"""
     try:
-        text = page.inner_text().strip()
-        # 正常页面应该有足够多的文字
+        text = page.evaluate("() => document.body.innerText")
         return len(text) > 100
     except Exception:
         return False
 
 
+def _extract_xiaohongshu_state(page) -> list[str]:
+    """从 Vue SSR 的 window.__INITIAL_STATE__ 提取笔记封面图 URL。
+
+    小红书是 Vue 服务端渲染，搜索/发现页面的笔记数据都在 __INITIAL_STATE__ 中。
+    这比 DOM 解析可靠得多，不受选择器变化影响。
+    """
+    try:
+        state = page.evaluate("""
+            () => {
+                const s = window.__INITIAL_STATE__;
+                if (!s) return [];
+                const images = [];
+                // 搜索结果的笔记列表
+                const notes = s?.search?.notes || s?.note?.notes || [];
+                notes.forEach(n => {
+                    const cover = n?.cover?.url || n?.cover?.url_default || '';
+                    if (cover) images.push(cover);
+                    // 多图笔记
+                    (n?.images_list || []).forEach(img => {
+                        if (img?.url) images.push(img.url);
+                        if (img?.url_size_large) images.push(img.url_size_large);
+                    });
+                });
+                // 瀑布流推荐
+                (s?.feed?.items || []).forEach(item => {
+                    const cover = item?.note_card?.cover?.url || item?.cover?.url || '';
+                    if (cover) images.push(cover);
+                });
+                // 水合后的 note 数据
+                Object.values(s?.note?.noteDetailMap || {}).forEach((n) => {
+                    const cover = n?.note?.cover?.url || '';
+                    if (cover) images.push(cover);
+                    (n?.note?.image_list || []).forEach(img => {
+                        if (img?.url) images.push(img.url);
+                        if (img?.url_size_large) images.push(img.url_size_large);
+                        if (img?.info_list) {
+                            img.info_list.forEach(info => {
+                                if (info?.url) images.push(info.url);
+                            });
+                        }
+                    });
+                });
+                return [...new Set(images)];
+            }
+        """)
+        if state and isinstance(state, list) and len(state) > 0:
+            # 处理协议相对 URL
+            fixed = []
+            for u in state:
+                if u.startswith("//"):
+                    u = "https:" + u
+                if u.startswith("http"):
+                    fixed.append(u)
+            return fixed
+    except Exception as e:
+        print(f"  __INITIAL_STATE__ 提取失败: {e}")
+    return []
+
+
 def _extract_images_from_page(page, max_count: int) -> list[str]:
-    """从当前页面提取穿搭相关图片链接。"""
+    """从当前页面提取穿搭相关图片链接。优先使用 __INITIAL_STATE__。"""
     image_urls: list[str] = []
     seen_urls: set[str] = set()
 
-    # 滚动加载更多内容
+    # ── 优先：从 Vue SSR 状态提取 ──
+    state_images = _extract_xiaohongshu_state(page)
+    if state_images:
+        print(f"  [INITIAL_STATE] 提取到 {len(state_images)} 张图片")
+        # 过滤低质量 URL
+        skip_kw = ["icon", "avatar", "logo", "emoji", "favicon", "qr_code", "trace", "ad"]
+        for u in state_images:
+            if not any(k in u.lower() for k in skip_kw):
+                # 优先保留高清大图
+                if u not in seen_urls:
+                    seen_urls.add(u)
+                    image_urls.append(u)
+        if len(image_urls) >= max_count:
+            return image_urls[:max_count]
+
+    # ── 回退：DOM 选择器提取 ──
+    print(f"  INITIAL_STATE 仅获取 {len(image_urls)} 张，使用 DOM 补充...")
     for i in range(4):
         page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {(i + 1) / 4})")
         _random_delay(0.8, 1.5)
 
-    # 多策略提取笔记卡片中的封面图
     cards: list = []
     selectors = [
         "section.note-item",
@@ -145,21 +218,18 @@ def _extract_images_from_page(page, max_count: int) -> list[str]:
         "[class*='note-item']",
         "a[href*='/explore/']",
         "a[href*='/search_result/']",
-        "a[href*='/discovery/item/']",
     ]
     for sel in selectors:
         cards = page.query_selector_all(sel)
         if cards:
-            print(f"  使用选择器 '{sel}' 找到 {len(cards)} 个元素")
+            print(f"  DOM 选择器 '{sel}' 找到 {len(cards)} 个元素")
             break
     else:
-        # 兜底：查找所有大尺寸图片
         cards = page.query_selector_all("img")
-        print(f"  兜底: 找到 {len(cards)} 个 img 元素")
+        print(f"  DOM 兜底: 找到 {len(cards)} 个 img")
 
     for card in cards[: max_count * 2]:
         try:
-            # 如果是 <img> 元素直接用，否则查找其内部的 <img>
             tag_name = ""
             try:
                 tag_name = card.evaluate("el => el.tagName")
@@ -168,24 +238,17 @@ def _extract_images_from_page(page, max_count: int) -> list[str]:
             img_el = card if tag_name == "IMG" else card.query_selector("img")
             if not img_el:
                 continue
-
             src = (
                 img_el.get_attribute("src")
                 or img_el.get_attribute("data-src")
                 or img_el.get_attribute("srcset")
                 or ""
             )
-
-            # 过滤无效 URL
             if not src or not src.startswith("http"):
                 continue
-
-            # 过滤小图标/头像
             skip_keywords = ["icon", "avatar", "logo", "emoji", "favicon", "qr_code"]
             if any(k in src.lower() for k in skip_keywords):
                 continue
-
-            # 过滤小尺寸图片
             w = img_el.get_attribute("width") or ""
             h = img_el.get_attribute("height") or ""
             try:
@@ -193,14 +256,13 @@ def _extract_images_from_page(page, max_count: int) -> list[str]:
                     continue
             except ValueError:
                 pass
-
             if src not in seen_urls:
                 seen_urls.add(src)
                 image_urls.append(src)
         except Exception:
             continue
 
-    print(f"  提取到 {len(image_urls)} 张有效图片")
+    print(f"  总共提取到 {len(image_urls)} 张有效图片")
     return image_urls[:max_count]
 
 
@@ -220,11 +282,7 @@ def _xiaohongshu_search_from_page(page, keyword: str, max_count: int) -> list[st
     if _has_captcha(page):
         _wait_for_captcha_solve(page, timeout=120)
 
-    # 检查页面内容
-    if not _has_content(page):
-        print(f"  [小红书] 页面内容为空，可能被拦截")
-        return []
-
+    # 直接提取（不再用 _has_content 提前判断，因为 __INITIAL_STATE__ 可能无数据但 DOM 有）
     return _extract_images_from_page(page, max_count)
 
 
@@ -237,10 +295,7 @@ def _douyin_search_from_page(page, keyword: str, max_count: int) -> list[str]:
     page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
     _random_delay(2, 4)
 
-    if not _has_content(page):
-        print(f"  [抖音] 页面内容为空，可能被拦截")
-        return []
-
+    # 直接提取
     return _extract_images_from_page(page, max_count)
 
 
@@ -274,6 +329,7 @@ def run_scraper_sync(task_id: int):
     keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
     max_count = config.get("max_count", 50)
     headless = config.get("headless", False)
+    cdp_port = config.get("cdp_port")            # CDP 端口，连接真实 Chrome
     cookie_file = config.get("cookie_file")
     platform = task.platform
 
@@ -293,76 +349,135 @@ def run_scraper_sync(task_id: int):
     if not cookie_file:
         cookie_file = str(cookies_dir / f"{platform}_cookies.json")
 
+    cdp_mode = cdp_port is not None
+
     try:
         pw = sync_playwright().start()
 
-        # ── 启动浏览器 ──
-        launch_args = [
-            "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-infobars",
-            "--disable-dev-shm-usage",
-            "--no-sandbox",
-        ]
-        if headless:
-            launch_args.append("--window-size=1280,800")
+        # ═══════════════════════════════════════════════════════
+        #  方式 A: CDP 连接真实 Chrome（终极反检测方案）
+        # ═══════════════════════════════════════════════════════
+        if cdp_mode:
+            cdp_url = f"http://localhost:{cdp_port}"
+            print(f"通过 CDP 连接到真实 Chrome: {cdp_url}")
+            browser = pw.chromium.connect_over_cdp(cdp_url)
+            # 使用 Chrome 的默认上下文（已包含用户登录态和真实指纹）
+            contexts = browser.contexts
+            if not contexts:
+                raise RuntimeError("CDP 连接成功但无浏览器上下文，请确保 Chrome 已打开页面")
+            context = contexts[0]
+            # 创建新页面用于采集（不干扰用户现有页面）
+            page = context.new_page()
+            print(f"CDP 连接成功，创建新标签页用于采集")
 
-        # 有头模式尝试用系统 Chrome（指纹更真实），无头模式用 Playwright 自带 Chromium
-        if not headless:
-            try:
-                browser = pw.chromium.launch(channel="chrome", headless=False, args=launch_args)
-                print("使用系统 Chrome 浏览器")
-            except Exception as e:
-                print(f"系统 Chrome 启动失败 ({e})，使用 Playwright Chromium")
-                browser = pw.chromium.launch(headless=False, args=launch_args)
+        # ═══════════════════════════════════════════════════════
+        #  方式 B: 启动新浏览器（原有逻辑）
+        # ═══════════════════════════════════════════════════════
         else:
-            browser = pw.chromium.launch(headless=True, args=launch_args)
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-infobars",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ]
+            if headless:
+                launch_args.append("--window-size=1280,800")
 
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            # 模拟真实浏览器的额外 HTTP 头
-            extra_http_headers={
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not=A?Brand";v="24"',
-                "Sec-Ch-Ua-Platform": '"Windows"',
-                "Sec-Ch-Ua-Mobile": "?0",
-            },
-        )
+            if not headless:
+                try:
+                    browser = pw.chromium.launch(channel="chrome", headless=False, args=launch_args)
+                    print("使用系统 Chrome 浏览器")
+                except Exception as e:
+                    print(f"系统 Chrome 启动失败 ({e})，使用 Playwright Chromium")
+                    browser = pw.chromium.launch(headless=False, args=launch_args)
+            else:
+                browser = pw.chromium.launch(headless=True, args=launch_args)
 
-        # ── 反检测脚本 ──
-        context.add_init_script(
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                extra_http_headers={
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not=A?Brand";v="24"',
+                    "Sec-Ch-Ua-Platform": '"Windows"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                },
+            )
+
+            page = context.new_page()
+
+        # ── 反检测脚本（CDP 模式跳过，真实浏览器无需伪装）──
+        if not cdp_mode:
+            context.add_init_script(
             """
-            // 隐藏自动化痕迹
+            // === 基础自动化标记 ===
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            delete window.__proto__.__proto__.callPhantom;
+            delete window.__proto__.__proto__._phantom;
+
+            // === navigator 属性 ===
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
             Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
             Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-            delete window.__proto__.__proto__.callPhantom;
-            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {} };
-            // 覆盖 permissions API
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+
+            // === chrome 对象 ===
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+
+            // === permissions ===
             const origQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (params) => (
                 params.name === 'notifications'
                     ? Promise.resolve({ state: Notification.permission })
                     : origQuery(params)
             );
-            // 覆盖 chrome.runtime.connect
-            if (window.chrome && window.chrome.runtime) {
-                window.chrome.runtime.connect = () => ({ disconnect: () => {} });
+
+            // === media devices ===
+            if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+                const origEnum = navigator.mediaDevices.enumerateDevices;
+                navigator.mediaDevices.enumerateDevices = () =>
+                    origEnum.call(navigator.mediaDevices).then(list =>
+                        list.map(d => Object.assign({}, d, { label: '', deviceId: '' }))
+                    );
             }
+
+            // === WebGL vendor 伪装 ===
+            const getParam = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(p) {
+                if (p === 37445) return 'Intel Inc.';
+                if (p === 37446) return 'Intel Iris OpenGL Engine';
+                return getParam.call(this, p);
+            };
+
+            // === 覆盖 iframe contentWindow（防止嵌套检测） ===
+            try {
+                const origDefine = Object.defineProperty;
+                Object.defineProperty = function(obj, prop, desc) {
+                    if (prop === 'contentWindow' && desc && desc.get && desc.get.toString().includes('native')) {
+                        return obj;
+                    }
+                    return origDefine.call(Object, obj, prop, desc);
+                };
+            } catch(e) {}
         """
         )
 
-        # ── 加载已有 Cookie ──
-        if _os.path.exists(cookie_file):
+        # ── 加载已有 Cookie（CDP 模式跳过，真实 Chrome 已有 Cookie）──
+        if not cdp_mode and _os.path.exists(cookie_file):
             try:
                 with open(cookie_file, encoding="utf-8") as f:
                     cookies = json.load(f)
@@ -371,56 +486,63 @@ def run_scraper_sync(task_id: int):
             except Exception as e:
                 print(f"Cookie 加载失败: {e}")
 
-        page = context.new_page()
-
         # ═══════════════════════════════════════════════════
-        #  有头模式：打开首页 → 等待用户登录 → 再开始搜索
+        #  等待登录：CDP 模式或有头模式都需要确保已登录
+        #  只有无头模式（已有 Cookie）跳过
         # ═══════════════════════════════════════════════════
         first_kw = keywords[0]
         LOGIN_TIMEOUT = 180
 
-        if not headless:
-            # 打开平台首页（非搜索页），让用户自然登录
-            if platform == "xiaohongshu":
-                home_url = "https://www.xiaohongshu.com/explore"
+        # 判断是否需要登录检测：
+        # CDP 模式：连接到真实 Chrome，用户可能未登录 → 需要检查
+        # 有头模式：新浏览器窗口，用户需要登录 → 需要检查
+        # 无头模式：后台运行，依赖已有 Cookie → 跳过
+        need_login_check = (cdp_mode or not headless)
+
+        if need_login_check:
+            # 先检查当前是否已登录
+            cookies = context.cookies()
+            xhs_cookies = [c for c in cookies if c.get("domain", "").endswith("xiaohongshu.com")]
+            dy_cookies = [c for c in cookies if c.get("domain", "").endswith("douyin.com")]
+            has_xhs_session = any(c.get("name") in ("web_session", "a1", "acw_tc") for c in xhs_cookies)
+            has_dy_session = any(c.get("name") in ("sso", "passport", "sessionid") for c in dy_cookies)
+            already_logged_in = (platform == "xiaohongshu" and has_xhs_session) or (platform == "douyin" and has_dy_session)
+
+            if not already_logged_in:
+                print(f"\n{'='*50}")
+                if cdp_mode:
+                    print(f" >>> 请在 Chrome 中手动打开小红书并登录 <<<")
+                    print(f" 在地址栏输入 xiaohongshu.com 并扫码登录")
+                    print(f" 登录后不要关闭页面，脚本自动检测继续")
+                else:
+                    print(f" >>> 浏览器窗口已打开，请勿关闭 <<<")
+                    print(f" 1. 点击页面右上角「登录」扫码登录")
+                    print(f" 2. 登录成功后等待自动采集")
+                print(f"(等待 {LOGIN_TIMEOUT}s 超时)")
+                print(f"{'='*50}")
+
+                logged_in = False
+                for waited in range(0, LOGIN_TIMEOUT, 5):
+                    time.sleep(5)
+                    cookies = context.cookies()
+                    xhs_cookies = [c for c in cookies if c.get("domain", "").endswith("xiaohongshu.com")]
+                    has_xhs_session = any(c.get("name") in ("web_session", "a1", "acw_tc") for c in xhs_cookies)
+                    dy_cookies = [c for c in cookies if c.get("domain", "").endswith("douyin.com")]
+                    has_dy_session = any(c.get("name") in ("sso", "passport", "sessionid") for c in dy_cookies)
+
+                    if (platform == "xiaohongshu" and has_xhs_session) or (platform == "douyin" and has_dy_session):
+                        print(f"检测到登录会话 ({waited + 5}s)")
+                        logged_in = True
+                        time.sleep(1)
+                        break
+
+                    if (waited + 5) % 30 == 0:
+                        print(f"  等待登录... ({waited + 5}s / {LOGIN_TIMEOUT}s)")
+
+                if not logged_in:
+                    print("登录等待超时，将尝试当前状态采集")
             else:
-                home_url = "https://www.douyin.com"
-
-            print(f"\n{'='*50}")
-            print(f" >>> 浏览器窗口已打开，请勿关闭 <<<")
-            print(f"1. 点击页面右上角「登录」扫码登录")
-            print(f"2. 登录成功后不要做任何操作，等待自动采集")
-            print(f"3. 脚本会自动搜索、下载、关闭浏览器")
-            print(f"(登录等待 {LOGIN_TIMEOUT}s 超时)")
-            print(f"{'='*50}")
-
-            page.goto(home_url, wait_until="domcontentloaded", timeout=30000)
-            _random_delay(1, 2)
-
-            # 等待登录
-            logged_in = False
-            for waited in range(0, LOGIN_TIMEOUT, 8):
-                time.sleep(8)
-                cookies = context.cookies()
-                # 检查真正的登录 Cookie（小红书: web_session / a1, 抖音: sso, passport）
-                xhs_cookies = [c for c in cookies if c.get("domain", "").endswith("xiaohongshu.com")]
-                dy_cookies = [c for c in cookies if c.get("domain", "").endswith("douyin.com")]
-
-                has_xhs_session = any(c.get("name") in ("web_session", "a1", "acw_tc") for c in xhs_cookies)
-                has_dy_session = any(c.get("name") in ("sso", "passport", "sessionid") for c in dy_cookies)
-
-                if (platform == "xiaohongshu" and has_xhs_session) or (platform == "douyin" and has_dy_session):
-                    print(f"检测到登录会话 ({waited + 8}s)")
-                    logged_in = True
-                    time.sleep(2)
-                    break
-
-                # 每 40 秒输出一次进度
-                if (waited + 8) % 40 == 0:
-                    print(f"  等待登录中... ({waited + 8}s / {LOGIN_TIMEOUT}s)")
-
-            if not logged_in:
-                print("登录等待超时，将尝试当前状态采集")
+                print("已检测到登录会话，直接开始采集")
 
         # ═══════════════════════════════════════════════════
         #  逐个关键词搜索
@@ -482,13 +604,15 @@ def run_scraper_sync(task_id: int):
                     print(f"已保存 {len(cookies)} 个 Cookie")
             except Exception:
                 pass
-        try:
-            if browser:
-                browser.close()
-            if pw:
-                pw.stop()
-        except Exception:
-            pass
+        # CDP 模式不关闭浏览器（是用户的真实 Chrome）
+        if not cdp_mode:
+            try:
+                if browser:
+                    browser.close()
+                if pw:
+                    pw.stop()
+            except Exception:
+                pass
 
     # ── 兜底诊断 ──
     if not all_image_urls and not diagnostics:
