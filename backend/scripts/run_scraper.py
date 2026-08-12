@@ -190,9 +190,20 @@ def _download_batch(
     img_dir: Path,
     today: str,
     httpx_module,
+    cookies: dict | None = None,
 ) -> tuple[int, int, int, int]:
     """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。"""
     import sqlite3 as _sqlite3
+
+    # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
+    req_headers = {
+        "Referer": "https://www.xiaohongshu.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    if cookies:
+        req_headers["Cookie"] = "; ".join(
+            f"{c['name']}={c['value']}" for c in cookies.values()
+        )
 
     db_path = settings.storage_root.parent / "fashion_inspo.db"
 
@@ -227,10 +238,8 @@ def _download_batch(
 
         for attempt in range(1, 4):
             try:
-                resp = httpx_module.get(img_url, headers={
-                    "Referer": "https://www.xiaohongshu.com/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                }, timeout=30, follow_redirects=True)
+                resp = httpx_module.get(img_url, headers=req_headers,
+                                         timeout=30, follow_redirects=True)
                 if resp.status_code != 200:
                     skipped_non200 += 1
                     break
@@ -386,6 +395,9 @@ def run_scraper_sync(task_id: int):
         search_count = 0
         total_searches = len(keywords) * len(SORT_TYPES)
 
+        # 提取浏览器 Cookie 用于 httpx 下载鉴权
+        browser_cookies = {c["name"]: c for c in context.cookies()}
+
         for idx, kw in enumerate(keywords):
             for sort_type in SORT_TYPES:
                 search_count += 1
@@ -408,11 +420,11 @@ def run_scraper_sync(task_id: int):
                     items_found += len(urls)
                     print(f"  提取 {len(urls)} 个 URL")
 
-                    # 立即下载本批
+                    # 立即下载本批（带浏览器 Cookie）
                     remaining = max_count - items_added
                     added, sk_ex, sk_h, sk_n = _download_batch(
                         urls, task_id, existing_url_set, remaining,
-                        img_dir, today, httpx,
+                        img_dir, today, httpx, browser_cookies,
                     )
                     items_added += added
                     total_skipped_existing += sk_ex
@@ -422,22 +434,20 @@ def run_scraper_sync(task_id: int):
                     print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, HTTP{sk_h}, 网络{sk_n})")
                     print(f"  累计入库: {items_added}/{max_count}")
 
-                    # 搜索间冷却：模拟人类浏览，避免触发安全验证
+                    # 搜索间冷却 + CDP 保活
                     if items_added < max_count and (
                         idx < len(keywords) - 1
                         or sort_type != SORT_TYPES[-1]
                     ):
-                        cool = random.randint(10, 18)
-                        print(f"  ⏸ 冷却 {cool}s（模拟人类浏览行为）...")
-                        # 模拟浏览：随机滚动几下
-                        for _ in range(random.randint(2, 4)):
-                            page.evaluate(
-                                f"window.scrollBy(0, {random.randint(-200, 400)})"
-                            )
-                            time.sleep(random.uniform(0.5, 1.5))
-                        remaining = cool - 5
-                        if remaining > 0:
-                            time.sleep(remaining)
+                        cool = random.randint(5, 9)
+                        print(f"  ⏸ 冷却 {cool}s...")
+                        # 轻量页面交互保持 CDP 连接活跃
+                        for _ in range(cool):
+                            try:
+                                page.evaluate("1")  # no-op，单纯保持连接
+                            except Exception:
+                                pass
+                            time.sleep(1)
 
                 except Exception as e:
                     err = str(e) or type(e).__name__
