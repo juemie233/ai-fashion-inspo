@@ -177,8 +177,16 @@ def _download_batch(
     today: str,
     httpx_module,
     cookies: dict | None = None,
+    content_hash_set: set[str] | None = None,
 ) -> tuple[int, int, int, int]:
-    """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。"""
+    """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。
+
+    去重策略（三层）：
+    1. URL 内存去重 — 同次运行内相同 URL 不重复下载
+    2. DB source_url 去重 — 跨次采集相同 URL 不重复入库
+    3. 内容 MD5 去重 — 同一图片不同 URL（CDN 多节点）不重复入库
+    """
+    import hashlib
     import sqlite3 as _sqlite3
 
     # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
@@ -235,7 +243,17 @@ def _download_batch(
                 elif "webp" in ct: ext = ".webp"
                 fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}{ext}"
                 fpath = img_dir / fname
-                fpath.write_bytes(resp.content)
+                content = resp.content
+                fpath.write_bytes(content)
+
+                # 内容 MD5 去重：相同图片不同 URL 不重复入库
+                if content_hash_set is not None:
+                    content_hash = hashlib.md5(content).hexdigest()
+                    if content_hash in content_hash_set:
+                        fpath.unlink()  # 删除刚下载的重复文件
+                        skipped_existing += 1
+                        break
+                    content_hash_set.add(content_hash)
 
                 # 同步写入数据库
                 conn = _sqlite3.connect(str(db_path))
@@ -313,7 +331,8 @@ def run_scraper_sync(task_id: int):
     img_dir.mkdir(parents=True, exist_ok=True)
     import httpx
 
-    existing_url_set: set[str] = set()  # 跨批次去重
+    existing_url_set: set[str] = set()  # 跨批次 URL 去重
+    content_hash_set: set[str] = set()  # 跨批次内容 MD5 去重
     items_found = 0  # 搜索提取总数
     items_added = 0  # 最终入库数
     total_skipped_existing = 0
@@ -411,6 +430,7 @@ def run_scraper_sync(task_id: int):
                     added, sk_ex, sk_h, sk_n = _download_batch(
                         urls, task_id, existing_url_set, remaining,
                         img_dir, today, httpx, browser_cookies,
+                        content_hash_set,
                     )
                     items_added += added
                     total_skipped_existing += sk_ex
