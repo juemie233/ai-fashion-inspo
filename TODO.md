@@ -70,3 +70,51 @@
 - `backend/app/models/scraper.py`
 - `backend/scripts/run_scraper.py`
 - `web/src/views/ScraperView.vue`
+
+---
+
+## AI 模型管理页增强（二期）
+
+**状态：** 待开发
+
+以下方案已规划，待一期（Prompt 自定义、统计面板、单图测试）完成后择机实施。
+
+### 4. GPU 显存实时监控
+
+**描述：** 利用 Ollama `/api/ps` 数据和 nvidia-smi，在前端展示显存占用，支持模型预热/卸载。
+
+**涉及模块：**
+- `web/src/views/ModelManageView.vue`
+- `backend/app/routers/ai.py`（可能需要新增显存查询端点）
+
+### 5. 分析结果对比
+
+**描述：** 同一素材多次分析时，并排展示标签差异、置信度变化、耗时对比。
+
+**涉及模块：**
+- `web/src/views/ModelManageView.vue`
+- `backend/app/routers/ai.py`（对比接口）
+
+### 6. 批量操作增强
+
+**描述：** 历史表多选 + 批量删除、按模型筛选、按素材 ID 搜索、选中素材重新分析。
+
+**涉及模块：**
+- `web/src/views/ModelManageView.vue`
+- `backend/app/routers/ai.py`
+
+### 7. 队列可视化 + 控制
+
+**描述：** 排队中的素材缩略图预览，支持取消单个排队任务、暂停/恢复全部。
+
+**涉及模块：**
+- `web/src/views/ModelManageView.vue`
+- `backend/app/routers/ai.py`
+- `backend/app/services/ai_service.py`
+
+### 8. 通知提醒
+
+**描述：** 批量分析完成时浏览器 Notification、下载完成通知、失败率告警。
+
+**涉及模块：**
+- `web/src/views/ModelManageView.vue`

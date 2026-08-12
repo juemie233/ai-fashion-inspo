@@ -46,6 +46,24 @@ class Settings(BaseSettings):
     ai_top_k: int = 40
     ai_num_predict: int = 2048
 
+    # AI 分析 Prompt（运行时可变，前端可编辑）
+    ai_analysis_prompt: str = (
+        "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：\n\n"
+        "1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风\n"
+        "   （可以输出多个风格标签，如果没有明显风格可以不输出）\n\n"
+        "2. 单品识别：识别图中每一件主要服饰单品，包括类型+颜色+特征。\n"
+        '   格式：{"type": "单品类型", "color": "颜色", "features": ["特征1", "特征2"]}\n\n'
+        "3. 版型：宽松/修身/Oversized/直筒/紧身/A字/H型/喇叭/锥形/阔腿\n\n"
+        "4. 穿着方式/身体部位关系：过膝/露腰/高腰/V领/圆领/高领/一字肩/七分袖/长袖/短袖/无袖/拖地/迷你/中长款/长款/短款\n\n"
+        "5. 适合场合：日常/通勤/约会/出游/校园/派对/运动/居家/度假/逛街\n\n"
+        "6. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍\n\n"
+        "8. 主色调提取：提取2-3个主要颜色（返回hex值）\n\n"
+        "请以JSON格式输出，不要包含任何其他文字：\n"
+        '{\n  "style": [],\n  "items": [{"type": "", "color": "", "features": []}],\n'
+        '  "fit": [],\n  "wear_style": [],\n  "occasion": [],\n'
+        '  "attributes": [],\n  "dominant_colors": []\n}'
+    )
+
     # 采集引擎
     scraper_request_delay: float = 2.0  # 请求间隔（秒）
     scraper_max_concurrent: int = 3
@@ -78,3 +96,13 @@ class Settings(BaseSettings):
 
 # 全局单例配置
 settings = Settings()
+
+# 尝试从 prompt.txt 加载已持久化的 prompt
+_prompt_file = Path(__file__).parent.parent / "prompt.txt"
+if _prompt_file.exists():
+    try:
+        saved_prompt = _prompt_file.read_text(encoding="utf-8").strip()
+        if saved_prompt:
+            settings.ai_analysis_prompt = saved_prompt
+    except Exception:
+        pass  # 加载失败时使用默认值

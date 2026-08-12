@@ -120,7 +120,7 @@ function analysisStatusLabel(): string {
       <template v-if="detail">
         <!-- 面包屑 -->
         <n-breadcrumb style="margin-bottom: 16px">
-          <n-breadcrumb-item @click="router.push('/')">灵感库</n-breadcrumb-item>
+          <n-breadcrumb-item @click="router.push('/')">素材库</n-breadcrumb-item>
           <n-breadcrumb-item>素材详情</n-breadcrumb-item>
         </n-breadcrumb>
 

@@ -49,9 +49,8 @@ async def lifespan(app: FastAPI):
 
     # 启动时清理遗留的僵尸任务
     from app.database import async_session
-    from sqlalchemy import func, select, update
-    from app.models.scraper import ScraperTask, ScraperSeenURL
-    from app.models.inspiration import Inspiration
+    from sqlalchemy import update
+    from app.models.scraper import ScraperTask
     async with async_session() as db:
         result = await db.execute(
             update(ScraperTask)
@@ -60,39 +59,6 @@ async def lifespan(app: FastAPI):
         )
         if result.rowcount:
             print(f"已清理 {result.rowcount} 个僵尸采集任务")
-
-    # 回填已有素材 URL 到墓碑表（首次运行）
-    async with async_session() as db:
-        existing_count = (await db.execute(
-            select(func.count(ScraperSeenURL.source_url))
-        )).scalar() or 0
-        if existing_count == 0:
-            # 批量回填
-            backfill_result = await db.execute(
-                select(Inspiration.source_url).where(
-                    Inspiration.source_url.isnot(None),
-                    Inspiration.source_url != "",
-                )
-            )
-            urls = [r[0] for r in backfill_result.all() if r[0]]
-            if urls:
-                import asyncio as _asyncio
-                BATCH = 500
-                total_inserted = 0
-                for i in range(0, len(urls), BATCH):
-                    batch = urls[i:i + BATCH]
-                    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-                    stmt = sqlite_insert(ScraperSeenURL).values([
-                        {"source_url": u} for u in batch
-                    ]).prefix_with("OR IGNORE")
-                    await db.execute(stmt)
-                    total_inserted += len(batch)
-                    if i + BATCH < len(urls):
-                        await _asyncio.sleep(0)  # 让出事件循环
-                await db.commit()
-                print(f"已回填 {total_inserted} 个已有 URL 到墓碑表")
-        else:
-            print(f"墓碑表已有 {existing_count} 条记录，跳过回填")
 
     # 导入预设标签
     from app.database import async_session

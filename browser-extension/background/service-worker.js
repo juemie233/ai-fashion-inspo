@@ -1,7 +1,7 @@
 /** 后台 Service Worker：管理 API 通信和存储。 */
 
 // 默认后端地址
-const DEFAULT_API_URL = 'http://localhost:8000';
+const DEFAULT_API_URL = 'http://localhost:18888';
 
 /** 获取保存的设置 */
 async function getSettings() {

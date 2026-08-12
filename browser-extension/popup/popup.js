@@ -49,7 +49,7 @@ async function checkConnection() {
 async function loadSettings() {
   const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   if (settings) {
-    document.getElementById('apiUrl').value = settings.apiUrl || 'http://localhost:8000';
+    document.getElementById('apiUrl').value = settings.apiUrl || 'http://localhost:18888';
     document.getElementById('autoAnalyze').checked = settings.autoAnalyze !== false;
   }
 }

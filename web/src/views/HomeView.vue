@@ -57,7 +57,7 @@ async function handleToggleFavorite(id: string) {
     <!-- 顶部操作栏 -->
     <div class="page-header">
       <div class="header-left">
-        <h2>灵感库</h2>
+        <h2>素材库</h2>
         <span class="total-count">共 {{ store.total }} 条素材</span>
       </div>
       <div class="header-right">

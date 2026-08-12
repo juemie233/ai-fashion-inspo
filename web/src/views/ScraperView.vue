@@ -800,7 +800,7 @@ function stopPoll() {
             </div>
             <div class="empty-guide-step">
               <span class="step-number">3</span>
-              <span>完成后可在<a href="/">灵感库</a>中查看采集到的穿搭素材</span>
+              <span>完成后可在<a href="/">素材库</a>中查看采集到的穿搭素材</span>
             </div>
             <div class="empty-guide-tip">
               <n-icon size="16"><!-- info --></n-icon>

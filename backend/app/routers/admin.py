@@ -121,6 +121,12 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     # 标签总数
     total_tags = (await db.execute(select(func.count(Tag.id)))).scalar() or 0
 
+    # 墓碑表记录数（已采集 URL 去重）
+    from app.models.scraper import ScraperSeenURL
+    tombstone_count = (await db.execute(
+        select(func.count(ScraperSeenURL.source_url))
+    )).scalar() or 0
+
     # 扫描文件系统中实际文件大小
     storage_files = _scan_storage_files()
     total_size_bytes = sum(storage_files.values())
@@ -156,6 +162,7 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
         "analysis_failed_count": analysis_failed_count,
         "favorite_count": favorite_count,
         "total_tags": total_tags,
+        "tombstone_count": tombstone_count,
         "by_source_type": [
             {"source_type": s[0] or "unknown", "count": s[1]}
             for s in source_stats

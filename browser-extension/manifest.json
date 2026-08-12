@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI 穿搭灵感采集器",
+  "name": "AI 穿搭素材采集器",
   "version": "0.1.0",
-  "description": "一键采集小红书、抖音等平台的穿搭图片到本地灵感库",
+  "description": "一键采集小红书、抖音等平台的穿搭图片到本地素材库",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -14,8 +14,8 @@
   },
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
+    "http://localhost:18888/*",
+    "http://127.0.0.1:18888/*",
     "https://www.xiaohongshu.com/*",
     "https://www.douyin.com/*"
   ],

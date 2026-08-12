@@ -61,7 +61,7 @@ function onScroll(event: Event) {
     <!-- 空状态 -->
     <n-empty
       v-if="!loading && items.length === 0"
-      description="还没有灵感素材，去上传或采集一些吧"
+      description="还没有素材，去上传或采集一些吧"
       style="margin-top: 80px"
     />
   </div>

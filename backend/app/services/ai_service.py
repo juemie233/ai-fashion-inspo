@@ -2,7 +2,7 @@
 
 本模块负责：
 - 与 Ollama API 通信
-- 将图片发送给 Qwen2-VL 进行分析
+- 将图片发送给 MiniCPM-V 进行分析
 - 解析并校验返回的 JSON 结果
 - 根据分析结果创建标签
 
@@ -27,35 +27,7 @@ _WEBP_NEEDS_CONVERSION = True
 
 logger = logging.getLogger(__name__)
 
-# 视觉模型分析提示词（中文 — 模型需要用中文理解穿搭概念）
-ANALYSIS_PROMPT = """你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：
-
-1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风
-   （可以输出多个风格标签，如果没有明显风格可以不输出）
-
-2. 单品识别：识别图中每一件主要服饰单品，包括类型+颜色+特征。
-   格式：{"type": "单品类型", "color": "颜色", "features": ["特征1", "特征2"]}
-
-3. 版型：宽松/修身/Oversized/直筒/紧身/A字/H型/喇叭/锥形/阔腿
-
-4. 穿着方式/身体部位关系：过膝/露腰/高腰/V领/圆领/高领/一字肩/七分袖/长袖/短袖/无袖/拖地/迷你/中长款/长款/短款
-
-5. 适合场合：日常/通勤/约会/出游/校园/派对/运动/居家/度假/逛街
-
-6. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍
-
-8. 主色调提取：提取2-3个主要颜色（返回hex值）
-
-请以JSON格式输出，不要包含任何其他文字：
-{
-  "style": [],
-  "items": [{"type": "", "color": "", "features": []}],
-  "fit": [],
-  "wear_style": [],
-  "occasion": [],
-  "attributes": [],
-  "dominant_colors": []
-}"""
+# 分析 prompt 从配置读取（前端可编辑），保留此注释标记旧常量位置
 
 
 async def check_ollama_status() -> dict:
@@ -151,7 +123,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
                         "messages": [
                             {
                                 "role": "user",
-                                "content": ANALYSIS_PROMPT,
+                                "content": settings.ai_analysis_prompt,
                                 "images": [image_data],
                             }
                         ],

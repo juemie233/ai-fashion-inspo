@@ -91,7 +91,7 @@ chrome_debug_port: int = 9222
 | **高级搜索** | 多维标签筛选（AND/OR 组合）、排除标签、实时搜索 |
 | **上传素材** | 单张/批量上传、文件夹导入、自动生成缩略图 |
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
-| **采集管理** | 小红书/抖音 CDP 采集、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
+| **采集管理** | 小红书/抖音 CDP 采集、内容 MD5 去重、URL 墓碑表防重复、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
 | **标签管理** | 浏览/编辑/合并/批量操作、相似标签扫描、导入导出、拖拽分类、标签详情 |
 | **AI 模型管理** | 模型列表/下载/切换、批量分析、历史分页、分析详情、参数调优、数据重置 |
 | **浏览器插件** | 一键提取网页穿搭图片 |
@@ -120,26 +120,26 @@ ollama pull minicpm-v:8b
 ### 3. 启动服务
 
 ```bash
-# 后端 (默认端口 8080，可通过 PORT 环境变量或 .env 修改)
+# 后端 (默认端口 18888，可通过 PORT 环境变量或 .env 修改)
 cd backend
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
+python -m uvicorn app.main:app --host 127.0.0.1 --port 18888 --reload
 
-# Web 前端 (默认端口 9090，可通过 VITE_FRONTEND_PORT 环境变量修改)
+# Web 前端 (默认端口 17777，可通过 VITE_FRONTEND_PORT 环境变量修改)
 cd web
 npm run dev
 ```
 
-浏览器打开 `http://localhost:9090`
+浏览器打开 `http://localhost:17777`
 
 **自定义端口：**
 
 ```bash
 # 后端 .env
-PORT=8080                    # 后端监听端口
+PORT=18888                   # 后端监听端口
 
 # 前端 .env (web/.env)
-VITE_FRONTEND_PORT=9090      # 前端开发服务器端口
-VITE_BACKEND_URL=http://localhost:8080  # 后端 API 地址
+VITE_FRONTEND_PORT=17777     # 前端开发服务器端口
+VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 ```
 
 ### 4. 启动采集引擎（可选）
@@ -205,6 +205,7 @@ fashion-inspo/
 │   │   │   ├── search.py         # 多维度搜索 + 相似素材
 │   │   │   ├── ai.py             # AI 分析 + 模型管理 + 数据重置
 │   │   │   ├── scraper.py        # 采集管理
+│   │   │   ├── admin.py          # 管理后台（统计、去重、完整性检查）
 │   │   │   ├── files.py          # 静态文件
 │   │   │   └── ws.py             # WebSocket
 │   │   ├── services/             # 业务逻辑
@@ -252,7 +253,8 @@ fashion-inspo/
 │   │   │   ├── DetailView.vue    # 素材详情
 │   │   │   ├── ScraperView.vue   # 采集管理
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
-│   │   │   └── ModelManageView.vue # AI 模型管理（全功能）
+│   │   │   ├── ModelManageView.vue # AI 模型管理（全功能）
+│   │   │   └── AdminView.vue     # 管理后台（统计、去重、完整性检查）
 │   │   ├── components/           # 通用组件
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox
@@ -311,7 +313,7 @@ fashion-inspo/
 │                              │ HTTP/WebSocket                │
 │                              ▼                               │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │               FastAPI Backend (:8000)                 │    │
+│  │               FastAPI Backend (:18888)                │    │
 │  │                                                       │    │
 │  │  REST API │ WebSocket │ Background Tasks             │    │
 │  │  ─────────────────────────────────────────────        │    │
@@ -344,6 +346,7 @@ fashion-inspo/
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, processing_time_ms, error |
 | `scraper_tasks` | 采集任务 | platform, status, items_found/added |
+| `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
 
 ### 标签类别体系
 

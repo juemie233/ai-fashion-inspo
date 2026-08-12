@@ -27,6 +27,7 @@ interface Stats {
   analysis_failed_count: number
   favorite_count: number
   total_tags: number
+  tombstone_count: number
   by_source_type: SourceStat[]
   by_media_type: MediaStat[]
   by_analysis_status: StatusStat[]
@@ -302,6 +303,12 @@ onMounted(() => {
       </n-card>
       <n-card size="small">
         <n-statistic label="收藏数" :value="stats?.favorite_count ?? '-'" />
+      </n-card>
+      <n-card size="small" :bordered="true" style="border-color: #2080f0">
+        <n-statistic label="📋 墓碑表记录" :value="stats?.tombstone_count ?? '-'" />
+        <template #footer>
+          <span style="font-size: 11px; color: #999">已采集 URL，防止重复入库</span>
+        </template>
       </n-card>
     </div>
 

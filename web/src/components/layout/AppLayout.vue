@@ -26,7 +26,7 @@ function renderIcon(icon: Component) {
         :collapsed-width="64"
         :collapsed-icon-size="22"
         :options="[
-          { label: '灵感库', key: 'home', icon: renderIcon(ImagesOutline) },
+          { label: '素材库', key: 'home', icon: renderIcon(ImagesOutline) },
           { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
           { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
           { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },

@@ -9,7 +9,7 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
-      meta: { title: '灵感库' },
+      meta: { title: '素材库' },
     },
     {
       path: '/search',
@@ -58,7 +58,7 @@ const router = createRouter({
 
 // 更新页面标题
 router.afterEach((to) => {
-  document.title = `${to.meta.title || 'AI 穿搭灵感库'} - AI 穿搭灵感库`
+  document.title = `${to.meta.title || 'AI 穿搭素材库'} - AI 穿搭素材库`
 })
 
 export default router

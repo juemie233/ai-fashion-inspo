@@ -48,6 +48,25 @@ const downloadTotal = ref(0)
 const downloadStatus = ref('')
 const downloading = ref(false)
 
+// ===== 模型统计 =====
+interface ModelStat {
+  model_name: string; total_analyses: number; success_count: number
+  failure_count: number; success_rate: number; avg_time_ms: number
+  avg_tags: number; last_used: string
+}
+const modelStats = ref<ModelStat[]>([])
+const totalAnalyses = ref(0)
+const statsLoading = ref(false)
+
+// ===== 单图测试 =====
+const testInspirationId = ref('')
+const testLoading = ref(false)
+const testRawResponse = ref('')
+const testParsed = ref<Record<string, any> | null>(null)
+const testElapsedMs = ref(0)
+const testModel = ref('')
+const testCustomPrompt = ref('')
+
 // ===== 分析队列 =====
 interface QueueStats { total: number; analyzed: number; unanalyzed: number; failed: number }
 interface ActiveAnalysis { active_analyses: Record<string, string>; count: number }
@@ -96,6 +115,13 @@ const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, tempera
 const persistSettings = ref(false)
 const savingSettings = ref(false)
 
+// ===== Prompt 编辑 =====
+const currentPrompt = ref('')
+const editedPrompt = ref('')
+const promptLoading = ref(false)
+const promptSaving = ref(false)
+const persistPrompt = ref(false)
+
 // ===== 标签页 =====
 const activeTab = ref('models')
 
@@ -105,6 +131,7 @@ onMounted(() => {
   loadHistory()
   loadSettings()
   loadSamplingParams()
+  loadPrompt()
   startPolling()
 })
 
@@ -471,6 +498,36 @@ function resetToDefaults() {
   message.info('已恢复默认值（需点击保存生效）')
 }
 
+// ---- Prompt 管理 ----
+async function loadPrompt() {
+  promptLoading.value = true
+  try {
+    const { data } = await apiClient.get<{ prompt: string; length: number }>('/ai/prompt')
+    currentPrompt.value = data.prompt
+    editedPrompt.value = data.prompt
+  } catch { /* 忽略 */ }
+  finally { promptLoading.value = false }
+}
+
+async function savePrompt() {
+  promptSaving.value = true
+  try {
+    await apiClient.put('/ai/prompt', {
+      prompt: editedPrompt.value,
+      persist: persistPrompt.value,
+    })
+    currentPrompt.value = editedPrompt.value
+    message.success('Prompt 已更新' + (persistPrompt.value ? '并持久化' : ''))
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '保存 Prompt 失败')
+  } finally { promptSaving.value = false }
+}
+
+function resetPrompt() {
+  editedPrompt.value = currentPrompt.value
+  message.info('已恢复为上次保存的 Prompt')
+}
+
 // ===== 重置所有数据 =====
 const resetStep = ref(0) // 0=idle, 1=一次确认, 2=二次确认
 const resetting = ref(false)
@@ -495,6 +552,72 @@ async function confirmResetStep() {
     } finally {
       resetting.value = false
     }
+  }
+}
+
+// ---- 模型统计 ----
+async function loadModelStats() {
+  statsLoading.value = true
+  try {
+    const { data } = await apiClient.get<{ models: ModelStat[]; total_analyses: number }>('/ai/model-stats')
+    modelStats.value = data.models
+    totalAnalyses.value = data.total_analyses
+  } catch { /* 忽略 */ }
+  finally { statsLoading.value = false }
+}
+
+// ---- 单图测试 ----
+async function testAnalyze() {
+  if (!testInspirationId.value.trim()) return
+  testLoading.value = true
+  testRawResponse.value = ''
+  testParsed.value = null
+  testElapsedMs.value = 0
+  testModel.value = ''
+
+  try {
+    const baseUrl = apiClient.defaults.baseURL || '/api'
+    const params = new URLSearchParams({ inspiration_id: testInspirationId.value.trim() })
+    if (testCustomPrompt.value.trim()) params.set('custom_prompt', testCustomPrompt.value.trim())
+
+    const response = await fetch(`${baseUrl}/ai/test-analyze?${params}`, { method: 'POST' })
+    if (!response.ok) {
+      const err = await response.json()
+      throw new Error(err.detail || '测试请求失败')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应流')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'done') {
+              testRawResponse.value = data.raw_response || ''
+              testParsed.value = data.parsed || {}
+              testElapsedMs.value = data.elapsed_ms || 0
+              testModel.value = data.model || ''
+              message.success(`测试完成 (${data.elapsed_ms}ms)`)
+            } else if (data.type === 'error') {
+              message.error(data.message || '测试失败')
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch (e: any) {
+    message.error(e.message || '测试请求中断')
+  } finally {
+    testLoading.value = false
   }
 }
 
@@ -576,6 +699,30 @@ function formatDate(d: string | null | undefined) {
             <p style="font-size:12px;color:#666;margin:4px 0">{{ downloadStatus }} {{ downloadSize }}</p>
           </div>
           <p style="font-size:12px;color:#999;margin-top:8px">常用模型: gemma3:4b, llava:7b, llava:13b, minicpm-v:8b</p>
+        </n-card>
+
+        <!-- 模型使用统计 -->
+        <n-card title="模型使用统计" size="small" style="margin-top:16px">
+          <template #header-extra>
+            <n-button size="small" @click="loadModelStats" :loading="statsLoading">刷新</n-button>
+          </template>
+          <n-data-table
+            v-if="modelStats.length"
+            :columns="[
+              { title: '模型', key: 'model_name', width: 160 },
+              { title: '分析次数', key: 'total_analyses', width: 90 },
+              { title: '成功率', key: 'success_rate', width: 90, render: (row: ModelStat) => `${row.success_rate}%` },
+              { title: '平均耗时', key: 'avg_time', width: 100, render: (row: ModelStat) => formatMs(row.avg_time_ms) },
+              { title: '平均标签', key: 'avg_tags', width: 90 },
+              { title: '最近使用', key: 'last_used', width: 150, render: (row: ModelStat) => row.last_used ? formatDate(row.last_used) : '-' },
+            ]"
+            :data="modelStats" :bordered="false" size="small"
+          />
+          <n-empty v-else description="暂无分析数据" size="small">
+            <template #extra>
+              <n-button size="small" @click="loadModelStats">加载统计</n-button>
+            </template>
+          </n-empty>
         </n-card>
       </n-tab-pane>
 
@@ -718,6 +865,87 @@ function formatDate(d: string | null | undefined) {
                 <n-input :value="aiSettings.ollama_base_url" readonly />
               </n-form-item>
             </n-form>
+          </n-card>
+
+          <!-- Prompt 编辑 -->
+          <n-card title="分析 Prompt" size="small">
+            <n-spin :show="promptLoading">
+              <n-input
+                v-model:value="editedPrompt"
+                type="textarea"
+                :autosize="{ minRows: 8, maxRows: 20 }"
+                placeholder="输入 AI 分析 prompt..."
+                style="font-family:monospace;font-size:13px"
+              />
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
+                <n-space align="center">
+                  <n-button type="primary" size="small" @click="savePrompt" :loading="promptSaving">保存 Prompt</n-button>
+                  <n-button size="small" @click="resetPrompt">撤销修改</n-button>
+                </n-space>
+                <n-space align="center">
+                  <n-switch v-model:value="persistPrompt" size="small" />
+                  <span style="font-size:12px;color:#999">持久化保存</span>
+                </n-space>
+              </div>
+              <p style="font-size:11px;color:#999;margin-top:8px">
+                修改 prompt 会影响后续所有 AI 分析结果。改动后建议先用「单图测试」验证效果。
+              </p>
+            </n-spin>
+          </n-card>
+
+          <!-- 单图测试 -->
+          <n-card title="单图即时测试" size="small">
+            <p style="font-size:12px;color:#999;margin-bottom:12px">
+              使用当前 prompt 和参数对单张图片进行测试分析，不保存记录，不影响正式数据。
+            </p>
+            <n-space align="center" style="margin-bottom:12px">
+              <n-input
+                v-model:value="testInspirationId"
+                placeholder="输入素材 ID 或完整 UUID"
+                style="width:280px"
+                size="small"
+              />
+              <n-button
+                type="primary"
+                size="small"
+                @click="testAnalyze"
+                :loading="testLoading"
+                :disabled="!testInspirationId.trim()"
+              >
+                {{ testLoading ? '分析中...' : '开始测试' }}
+              </n-button>
+            </n-space>
+            <!-- 自定义 prompt（可选覆盖） -->
+            <n-input
+              v-model:value="testCustomPrompt"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 6 }"
+              placeholder="可选：临时覆盖 prompt（留空则使用上方保存的 prompt）"
+              size="small"
+              style="font-family:monospace;font-size:12px;margin-bottom:12px"
+            />
+            <!-- 结果展示 -->
+            <div v-if="testRawResponse || testLoading" style="margin-top:8px">
+              <n-alert v-if="testModel" type="success" style="margin-bottom:8px">
+                <template #header>
+                  测试完成 — 模型: {{ testModel }} · 耗时: {{ formatMs(testElapsedMs) }}
+                </template>
+              </n-alert>
+              <n-collapse>
+                <n-collapse-item title="解析结果" name="parsed">
+                  <div v-if="testParsed && Object.keys(testParsed).length">
+                    <div v-for="(val, key) in testParsed" :key="key" style="margin-bottom:6px">
+                      <n-tag type="info" size="tiny" style="margin-right:4px">{{ key }}</n-tag>
+                      <span style="font-size:12px;word-break:break-all">{{ JSON.stringify(val) }}</span>
+                    </div>
+                  </div>
+                  <n-empty v-else description="未能解析出结构化结果" size="small" />
+                </n-collapse-item>
+                <n-collapse-item title="原始响应" name="raw">
+                  <n-code :code="testRawResponse" language="json" word-wrap />
+                </n-collapse-item>
+              </n-collapse>
+            </div>
           </n-card>
 
           <!-- 采样参数 -->

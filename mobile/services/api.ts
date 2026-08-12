@@ -10,7 +10,7 @@ const DEFAULT_IP = Platform.select({
   default: 'localhost',
 })
 
-const DEFAULT_PORT = '8000'
+const DEFAULT_PORT = '18888'
 
 /** 获取 API 基础地址 */
 export function getApiBaseUrl(): string {
@@ -25,7 +25,7 @@ export const apiClient = axios.create({
 })
 
 /** 更新后端地址（用户可在设置中修改） */
-export function setApiBaseUrl(ip: string, port: string = '8000') {
+export function setApiBaseUrl(ip: string, port: string = '18888') {
   apiClient.defaults.baseURL = `http://${ip}:${port}/api`
 }
 

@@ -7,9 +7,9 @@ import re
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -226,6 +226,83 @@ async def batch_analyze(
         "count": len(inspirations),
         "skipped_videos": skipped,
     }
+
+
+# ============ 模型统计 ============
+
+
+@router.get("/model-stats")
+async def model_stats(db: AsyncSession = Depends(get_db)):
+    """获取按模型聚合的分析统计：每个模型的分析次数、成功率、平均耗时、平均标签数。"""
+    # 所有分析日志
+    result = await db.execute(
+        select(
+            AIAnalysisLog.model_name,
+            func.count().label("total"),
+            func.sum(
+                case((AIAnalysisLog.error.is_(None), 1), else_=0)
+            ).label("successes"),
+            func.avg(AIAnalysisLog.processing_time_ms).label("avg_time"),
+            func.max(AIAnalysisLog.created_at).label("last_used"),
+        )
+        .group_by(AIAnalysisLog.model_name)
+        .order_by(func.count().desc())
+    )
+    rows = result.all()
+
+    # 获取每个模型的平均标签数（需要通过 inspiration_tags）
+    from app.models.tag import InspirationTag
+    models = []
+    for row in rows:
+        # 查询该模型成功分析的素材 ID
+        insp_result = await db.execute(
+            select(func.distinct(AIAnalysisLog.inspiration_id)).where(
+                AIAnalysisLog.model_name == row.model_name,
+                AIAnalysisLog.error.is_(None),
+            )
+        )
+        insp_ids = [r[0] for r in insp_result]
+
+        avg_tags = 0
+        if insp_ids:
+            tag_count = await db.execute(
+                select(func.count()).where(
+                    InspirationTag.inspiration_id.in_(insp_ids)
+                )
+            )
+            total_tags = tag_count.scalar() or 0
+            avg_tags = round(total_tags / len(insp_ids), 1)
+
+        models.append({
+            "model_name": row.model_name,
+            "total_analyses": row.total,
+            "success_count": row.successes,
+            "failure_count": row.total - row.successes,
+            "success_rate": round(row.successes / row.total * 100, 1) if row.total > 0 else 0,
+            "avg_time_ms": round(row.avg_time) if row.avg_time else 0,
+            "avg_tags": avg_tags,
+            "last_used": _fmt_utc(row.last_used),
+        })
+
+    # 全局汇总
+    total_all = sum(m["total_analyses"] for m in models)
+    total_success = sum(m["success_count"] for m in models)
+    models.insert(0, {
+        "model_name": "（全部模型汇总）",
+        "total_analyses": total_all,
+        "success_count": total_success,
+        "failure_count": total_all - total_success,
+        "success_rate": round(total_success / total_all * 100, 1) if total_all > 0 else 0,
+        "avg_time_ms": round(
+            sum(m["avg_time_ms"] * m["total_analyses"] for m in models) / total_all
+        ) if total_all > 0 else 0,
+        "avg_tags": round(
+            sum(m["avg_tags"] * m["total_analyses"] for m in models) / total_all, 1
+        ) if total_all > 0 else 0,
+        "last_used": max((m["last_used"] for m in models if m["last_used"]), default=""),
+    })
+
+    return {"models": models, "total_analyses": total_all}
 
 
 # ============ 分析队列与历史 ============
@@ -493,6 +570,156 @@ async def delete_analysis_log(
 async def get_active_analyses():
     """获取当前正在分析中的素材列表，用于前端轮询显示进度。"""
     return {"active_analyses": _active_analyses, "count": len(_active_analyses)}
+
+
+# ============ Prompt 管理 ============
+
+
+@router.get("/prompt")
+async def get_prompt():
+    """获取当前 AI 分析使用的 prompt 文本。"""
+    return {
+        "prompt": settings.ai_analysis_prompt,
+        "length": len(settings.ai_analysis_prompt),
+    }
+
+
+@router.put("/prompt")
+async def update_prompt(
+    body: dict,
+):
+    """更新 AI 分析 prompt（可选持久化到 backend/prompt.txt）。"""
+    prompt = body.get("prompt", "")
+    persist = body.get("persist", False)
+    if not prompt:
+        raise HTTPException(status_code=400, detail="请提供 prompt 文本")
+    settings.ai_analysis_prompt = prompt
+
+    if persist:
+        try:
+            prompt_file = Path(__file__).parent.parent.parent / "prompt.txt"
+
+            def _write_prompt():
+                prompt_file.write_text(prompt, encoding="utf-8")
+
+            await asyncio.to_thread(_write_prompt)
+            logger.info(f"Prompt 已持久化到 {prompt_file}")
+        except Exception as e:
+            logger.warning(f"持久化 prompt 失败: {e}")
+
+    return {
+        "message": "Prompt 已更新" + ("并持久化" if persist else "") + f"（{len(prompt)} 字符）",
+    }
+
+
+# ============ 单图测试 ============
+
+
+@router.post("/test-analyze")
+async def test_analyze(
+    inspiration_id: str | None = Query(None, description="使用已有素材 ID 测试"),
+    custom_prompt: str | None = Query(None, description="临时覆盖 prompt（可选）"),
+):
+    """单图即时测试：使用当前模型和参数分析图片，SSE 流式返回结果。
+
+    不保存分析记录到数据库，仅用于测试 prompt/参数效果。
+    """
+    import base64 as b64
+
+    # 获取图片路径
+    if inspiration_id:
+        async with async_session() as db:
+            insp = await db.get(Inspiration, inspiration_id)
+            if not insp:
+                raise HTTPException(404, "素材未找到")
+            if insp.media_type != "image":
+                raise HTTPException(400, "暂不支持分析视频文件")
+            file_path = insp.file_path
+    else:
+        raise HTTPException(400, "请指定 inspiration_id")
+
+    full_path = (settings.storage_root / file_path).resolve()
+    if not str(full_path).startswith(str(settings.storage_root.resolve())):
+        raise HTTPException(400, "非法的文件路径")
+    if not full_path.exists():
+        raise HTTPException(404, "图片文件不存在")
+
+    # 读取图片
+    image_bytes = full_path.read_bytes()
+    ext = full_path.suffix.lower()
+
+    # WebP 转换
+    if ext == ".webp":
+        try:
+            from io import BytesIO
+            from PIL import Image
+            buf = BytesIO()
+            Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
+            image_bytes = buf.getvalue()
+        except Exception as e:
+            raise HTTPException(400, f"WebP 转换失败: {e}")
+
+    image_data = b64.b64encode(image_bytes).decode("utf-8")
+    prompt = custom_prompt or settings.ai_analysis_prompt
+
+    async def event_stream():
+        import time as _time
+        started = _time.time()
+
+        try:
+            async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
+                try:
+                    response = await client.post(
+                        f"{settings.ollama_base_url}/api/chat",
+                        json={
+                            "model": settings.ollama_vision_model,
+                            "messages": [
+                                {"role": "user", "content": prompt, "images": [image_data]}
+                            ],
+                            "stream": False,
+                            "options": {
+                                "temperature": getattr(settings, "ai_temperature", 0.7),
+                                "top_p": getattr(settings, "ai_top_p", 0.9),
+                                "top_k": getattr(settings, "ai_top_k", 40),
+                                "num_predict": getattr(settings, "ai_num_predict", 1024),
+                            },
+                        },
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    detail = ""
+                    try:
+                        detail = e.response.json().get("error", "")
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'HTTP {e.response.status_code}: {detail or str(e)}'})}\n\n"
+                    return
+                except httpx.TimeoutException:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'AI 响应超时'})}\n\n"
+                    return
+                except httpx.ConnectError:
+                    yield f"data: {json.dumps({'type': 'error', 'message': '无法连接 Ollama，请确认 Ollama 已启动'})}\n\n"
+                    return
+
+            result = response.json()
+            if not isinstance(result, dict) or "message" not in result:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Ollama 返回格式异常'})}\n\n"
+                return
+
+            raw = result["message"].get("content", "")
+            elapsed_ms = int((_time.time() - started) * 1000)
+
+            # 解析响应
+            from app.services.ai_service import _parse_analysis_response
+            parsed = _parse_analysis_response(raw) if raw else {}
+
+            # 流式输出解析结果
+            yield f"data: {json.dumps({'type': 'done', 'raw_response': raw, 'parsed': parsed, 'model': settings.ollama_vision_model, 'elapsed_ms': elapsed_ms})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # ============ 参数调优 ============
