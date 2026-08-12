@@ -41,17 +41,30 @@ def _rdsleep(lo=0.5, hi=2.0):
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
-def _search_xiaohongshu(page, keyword: str, max_count: int) -> list[str]:
+def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "general") -> list[str]:
     """在已登录的页面上搜索并提取图片 URL。
 
     采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
     从每张卡片中提取多张图片（轮播帖），最大化采集数量。
+
+    Args:
+        sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)
     """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
 
-    url = f"https://www.xiaohongshu.com/search_result/?keyword={keyword}&source=web_search_result_notes"
-    print(f"  导航到搜索页: {keyword}")
+    sort_labels = {
+        "general": "综合",
+        "time_descending": "最新",
+        "popularity_descending": "最热",
+    }
+    sort_label = sort_labels.get(sort_type, sort_type)
+
+    url = (
+        f"https://www.xiaohongshu.com/search_result/"
+        f"?keyword={keyword}&source=web_search_result_notes&sort={sort_type}"
+    )
+    print(f"  导航到搜索页 [{sort_label}]: {keyword}")
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
     # 等待搜索结果卡片渲染完成
@@ -244,30 +257,46 @@ def run_scraper_sync(task_id: int):
             else:
                 print("登录超时，将尝试当前状态")
 
-        # ── 搜索 ──
+        # ── 搜索：每个关键词 × 3 种排序，累计达到 max_count 后提前停止 ──
+        SORT_TYPES = ["general", "popularity_descending", "time_descending"]
+        search_count = 0
+        total_searches = len(keywords) * len(SORT_TYPES)
+
         for idx, kw in enumerate(keywords):
-            print(f"\n{'='*50}")
-            print(f"[{idx + 1}/{len(keywords)}] {kw}")
-            print(f"{'='*50}")
+            for sort_type in SORT_TYPES:
+                search_count += 1
 
-            try:
-                if platform == "xiaohongshu":
-                    urls = _search_xiaohongshu(page, kw, max_count)
-                else:
-                    diagnostics.append(f"不支持的平台: {platform}")
-                    continue
+                # 提前停止：已收集到足够的唯一 URL
+                if len(all_urls) >= max_count:
+                    print(f"\n  已累计 {len(all_urls)} 张 → 达到目标 {max_count}，停止搜索")
+                    break
 
-                if urls:
-                    all_urls.extend(urls)
-                    print(f"  [OK] 获取到 {len(urls)} 张图片")
-                else:
-                    msg = f"[{kw}] 0 条结果（未找到笔记卡片，可能需登录或页面结构变更）"
-                    diagnostics.append(msg)
-                    print(f"  [FAIL] {msg}")
-            except Exception as e:
-                err = str(e) or type(e).__name__
-                diagnostics.append(f"[{kw}] 异常: {err}")
-                print(f"  [ERR] {err}")
+                print(f"\n{'='*50}")
+                print(f"[搜索 {search_count}/{total_searches}] {kw} [{sort_type}]")
+                print(f"{'='*50}")
+
+                try:
+                    if platform == "xiaohongshu":
+                        urls = _search_xiaohongshu(page, kw, max_count, sort_type)
+                    else:
+                        diagnostics.append(f"不支持的平台: {platform}")
+                        continue
+
+                    # 与已收集 URL 去重后再追加
+                    new_urls = [u for u in urls if u not in set(all_urls)]
+                    all_urls.extend(new_urls)
+                    dup_in_sort = len(urls) - len(new_urls)
+                    print(f"  [OK] 获取 {len(urls)} 张 (新增 {len(new_urls)}, 跨排序重复 {dup_in_sort})")
+                    print(f"  累计: {len(all_urls)}/{max_count}")
+
+                except Exception as e:
+                    err = str(e) or type(e).__name__
+                    diagnostics.append(f"[{kw}][{sort_type}] 异常: {err}")
+                    print(f"  [ERR] {err}")
+
+            # 内层 for 提前停止后也要跳出外层
+            if len(all_urls) >= max_count:
+                break
 
     except Exception as e:
         import traceback
@@ -303,14 +332,37 @@ def run_scraper_sync(task_id: int):
     download_failed = 0
     download_skipped_non200 = 0
     download_skipped_network = 0
+    download_skipped_existing = 0
     import httpx
 
-    # 去重（不同 URL 可能指向同一图片）
-    unique_urls = list(dict.fromkeys(all_urls))  # 保序去重
+    # 去重（不同 URL 可能指向同一图片，保序）
+    unique_urls = list(dict.fromkeys(all_urls))
     if len(unique_urls) < len(all_urls):
-        print(f"  去重: {len(all_urls)} → {len(unique_urls)} URL")
+        print(f"  同次去重: {len(all_urls)} → {len(unique_urls)} URL")
+
+    # 查询数据库中已存在的 source_url，跨次采集去重
+    async def _get_existing_urls():
+        async with async_session() as db:
+            from sqlalchemy import select as sa_select
+            result = await db.execute(
+                sa_select(Inspiration.source_url).where(
+                    Inspiration.source_url.in_(unique_urls)
+                )
+            )
+            return {r[0] for r in result.all() if r[0]}
+
+    existing_urls = asyncio.run(_get_existing_urls())
+    if existing_urls:
+        print(f"  跨次去重: {len(existing_urls)} 个 URL 已在数据库中，跳过")
 
     for img_url in unique_urls:
+        if items_added >= max_count:
+            break
+
+        # 跳过已存在于数据库中的 URL
+        if img_url in existing_urls:
+            download_skipped_existing += 1
+            continue
         if items_added >= max_count:
             break
 
@@ -364,8 +416,9 @@ def run_scraper_sync(task_id: int):
 
     # ── 下载漏斗日志 ──
     print(f"  ┌─ 下载漏斗 ─────────────────────────────")
-    print(f"  │ 提取 URL 总数:  {items_found}")
-    print(f"  │ 去重后 URL:     {len(unique_urls)}")
+    print(f"  │ 搜索提取总数:   {items_found}")
+    print(f"  │ 同次去重后:     {len(unique_urls)}")
+    print(f"  │ 跨次已存在:     {download_skipped_existing}")
     print(f"  │ 下载成功:       {items_added}")
     print(f"  │ HTTP 非 200:    {download_skipped_non200}")
     print(f"  │ 网络失败:       {download_skipped_network}")
