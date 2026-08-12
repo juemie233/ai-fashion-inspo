@@ -419,9 +419,9 @@ def _build_hash_map(
 @router.get("/duplicates")
 async def find_duplicates(db: AsyncSession = Depends(get_db)):
     """通过文件哈希检测完全重复的素材。"""
-    result = (await db.execute(
+    result = await db.execute(
         select(Inspiration.id, Inspiration.file_path)
-    )).all()
+    )
     hash_map = _build_hash_map(result.all(), settings.storage_root)
 
     duplicates = [
