@@ -6,6 +6,7 @@
 
 import json
 import os as _os
+import random
 import sys
 import time
 import uuid
@@ -33,7 +34,6 @@ def utcnow():
 
 
 def _rdsleep(lo=0.5, hi=2.0):
-    import random
     time.sleep(random.uniform(lo, hi))
 
 
@@ -75,16 +75,30 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
         print("  等待搜索结果超时，尝试继续...")
     _rdsleep(1.5, 3.0)
 
-    # ── 触底循环滚动 ──
-    MAX_SCROLLS = 30
-    CONSECUTIVE_NO_NEW = 3  # 连续 N 次无新卡片则停止
+    # ── 拟人化触底循环滚动 ──
+    MAX_SCROLLS = 40
+    CONSECUTIVE_NO_NEW = 4  # 连续 N 次无新卡片则停止
     no_new_count = 0
     last_card_count = 0
 
     for scroll_i in range(MAX_SCROLLS):
-        # 滚动到页面底部
+        # 分步滚动，模拟人类逐段浏览（而非瞬间跳到底部）
+        current = page.evaluate("window.scrollY")
+        target = page.evaluate("document.body.scrollHeight")
+        while current < target - 100:
+            step = random.randint(300, 900)
+            current = min(current + step, target)
+            page.evaluate(f"window.scrollTo(0, {current})")
+            time.sleep(random.uniform(0.25, 0.6))
+        # 触底
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        _rdsleep(1.0, 2.0)
+        _rdsleep(1.5, 3.0)
+
+        # 偶尔回滚一小段（人类浏览行为）
+        if random.random() < 0.2:
+            back = page.evaluate("window.scrollY") - random.randint(200, 500)
+            page.evaluate(f"window.scrollTo(0, max(0, {back}))")
+            time.sleep(random.uniform(0.3, 0.7))
 
         # 检查是否有新内容加载
         cards_now = len(page.query_selector_all("section.note-item"))
@@ -245,6 +259,9 @@ def _download_batch(
 
                 added += 1
                 existing_url_set.add(img_url)
+
+                # 下载间隔：模拟人类逐张保存的行为
+                time.sleep(random.uniform(0.3, 1.0))
                 break
             except Exception as e:
                 err = str(e)[:60]
@@ -404,6 +421,23 @@ def run_scraper_sync(task_id: int):
 
                     print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, HTTP{sk_h}, 网络{sk_n})")
                     print(f"  累计入库: {items_added}/{max_count}")
+
+                    # 搜索间冷却：模拟人类浏览，避免触发安全验证
+                    if items_added < max_count and (
+                        idx < len(keywords) - 1
+                        or sort_type != SORT_TYPES[-1]
+                    ):
+                        cool = random.randint(10, 18)
+                        print(f"  ⏸ 冷却 {cool}s（模拟人类浏览行为）...")
+                        # 模拟浏览：随机滚动几下
+                        for _ in range(random.randint(2, 4)):
+                            page.evaluate(
+                                f"window.scrollBy(0, {random.randint(-200, 400)})"
+                            )
+                            time.sleep(random.uniform(0.5, 1.5))
+                        remaining = cool - 5
+                        if remaining > 0:
+                            time.sleep(remaining)
 
                 except Exception as e:
                     err = str(e) or type(e).__name__
