@@ -114,8 +114,15 @@ npm install
 
 ```bash
 # 安装 Ollama（从 ollama.com 下载 Windows 版）
+
+# 推荐：Qwen3-VL-8B-Instruct（官方维护、256K 上下文、32 语言 OCR）
+ollama pull qwen3-vl:8b-instruct
+
+# 备选：MiniCPM-V:8b（体量更小、速度更快）
 ollama pull minicpm-v:8b
 ```
+
+安装后在 AI 模型管理页切换活跃模型即可。
 
 ### 3. 启动服务
 
