@@ -26,6 +26,10 @@ _analysis_semaphore = asyncio.Semaphore(2)
 _active_analyses: dict[str, str] = {}  # inspiration_id -> 状态描述
 # 保留任务引用，防止 GC 回收
 _analysis_tasks: set[asyncio.Task] = set()
+# 排队中的任务 ID 列表（尚未获取信号量的）
+_pending_queue: list[str] = []
+# 队列暂停开关
+_queue_paused = False
 
 # ============ 模型管理 ============
 
@@ -228,6 +232,106 @@ async def batch_analyze(
     }
 
 
+# ============ GPU 显存监控 ============
+
+
+@router.get("/gpu-stats")
+async def gpu_stats():
+    """获取 GPU 显存占用和已加载模型信息。
+
+    数据来源：
+    - Ollama /api/ps（正在运行中的模型及其显存占用）
+    - nvidia-smi（物理 GPU 总显存，可选，Windows/Linux 均支持）
+    """
+    result: dict = {
+        "gpu_available": False,
+        "gpu_name": "",
+        "total_vram_mb": 0,
+        "used_vram_mb": 0,
+        "free_vram_mb": 0,
+        "usage_percent": 0,
+        "loaded_models": [],
+    }
+
+    # 1. 从 Ollama /api/ps 获取已加载模型和显存信息
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            ps_resp = await client.get(f"{settings.ollama_base_url}/api/ps")
+            if ps_resp.status_code == 200:
+                ps_data = ps_resp.json()
+                for m in ps_data.get("models", []):
+                    vram_bytes = m.get("size_vram", 0)
+                    result["loaded_models"].append({
+                        "name": m["name"],
+                        "vram_mb": round(vram_bytes / 1024 / 1024, 1),
+                        "loaded_at": m.get("expires_at", None),
+                    })
+                    result["used_vram_mb"] += round(vram_bytes / 1024 / 1024, 1)
+    except Exception as e:
+        logger.debug(f"Ollama /api/ps 查询失败: {e}")
+
+    # 2. 尝试 nvidia-smi 获取物理 GPU 总显存
+    try:
+        import subprocess
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            "--query-gpu=name,memory.total,memory.used,memory.free",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode == 0 and stdout:
+            line = stdout.decode().strip().split("\n")[0]  # 取第一张 GPU
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 4:
+                result["gpu_available"] = True
+                result["gpu_name"] = parts[0]
+                # nvidia-smi 返回的已经是 MB
+                result["total_vram_mb"] = int(float(parts[1]))
+                nv_used = int(float(parts[2]))
+                nv_free = int(float(parts[3]))
+                # 使用 nvidia-smi 的数据（比 Ollama 更准确）
+                if result["used_vram_mb"] == 0:
+                    result["used_vram_mb"] = nv_used
+                result["free_vram_mb"] = nv_free
+    except FileNotFoundError:
+        logger.debug("nvidia-smi 未安装或不在 PATH 中")
+    except Exception as e:
+        logger.debug(f"nvidia-smi 查询失败: {e}")
+
+    # 如果有 Ollama 数据但没有 nvidia-smi，标记为有 GPU
+    if not result["gpu_available"] and result["loaded_models"]:
+        result["gpu_available"] = True
+
+    # 计算使用百分比
+    if result["total_vram_mb"] > 0:
+        result["usage_percent"] = round(
+            result["used_vram_mb"] / result["total_vram_mb"] * 100, 1
+        )
+    elif result["used_vram_mb"] > 0:
+        result["usage_percent"] = -1  # 有使用但不知道总量
+
+    return result
+
+
+@router.post("/unload-model")
+async def unload_model(model_name: str = Query(...)):
+    """卸载指定模型释放显存（通知 Ollama 不再 keep alive）。"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Ollama 没有直接的 unload API，但可以通过设置 keep_alive=0 触发卸载
+            resp = await client.post(
+                f"{settings.ollama_base_url}/api/generate",
+                json={"model": model_name, "keep_alive": 0, "prompt": ""},
+            )
+            # 忽略 400+ 响应（模型可能已经卸载）
+            logger.info(f"已发送卸载请求: {model_name}, 状态: {resp.status_code}")
+        return {"message": f"已发送卸载请求: {model_name}"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"卸载失败: {e}")
+
+
 # ============ 模型统计 ============
 
 
@@ -372,6 +476,8 @@ async def analysis_history(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     status: str | None = None,  # success | error
+    model_name: str | None = None,  # 按模型筛选
+    inspiration_id: str | None = None,  # 按素材 ID 搜索
     db: AsyncSession = Depends(get_db),
 ):
     """获取分析历史记录列表。"""
@@ -380,6 +486,10 @@ async def analysis_history(
         query = query.where(AIAnalysisLog.error.is_(None))
     elif status == "error":
         query = query.where(AIAnalysisLog.error.isnot(None))
+    if model_name:
+        query = query.where(AIAnalysisLog.model_name == model_name)
+    if inspiration_id:
+        query = query.where(AIAnalysisLog.inspiration_id.contains(inspiration_id))
 
     query = query.order_by(AIAnalysisLog.created_at.desc())
 
@@ -488,6 +598,63 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)):
     return {"message": f"已将 {count} 个素材重新加入分析队列", "count": count}
 
 
+@router.post("/history/batch-delete")
+async def batch_delete_logs(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除分析历史记录。
+
+    请求体: {"ids": [1, 2, 3]}
+    """
+    ids = payload.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请提供要删除的记录 ID 列表")
+    await db.execute(
+        delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(ids))
+    )
+    await db.commit()
+    return {"deleted": len(ids)}
+
+
+@router.post("/history/batch-retry")
+async def batch_retry_logs(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量重试分析记录：根据日志 ID 找到对应素材并重新分析。
+
+    请求体: {"ids": [1, 2, 3]}
+    """
+    ids = payload.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")
+    result = await db.execute(
+        select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(AIAnalysisLog.id.in_(ids))
+        .distinct()
+    )
+    rows = result.all()
+    count = 0
+    for insp_id, file_path in rows:
+        task = asyncio.create_task(_run_analysis(insp_id, file_path))
+        _analysis_tasks.add(task)
+        task.add_done_callback(_analysis_tasks.discard)
+        count += 1
+    return {"message": f"已将 {count} 个素材加入分析队列", "count": count}
+
+
+@router.get("/history/model-names")
+async def get_history_model_names(db: AsyncSession = Depends(get_db)):
+    """获取分析历史中出现过的所有模型名称，供前端筛选。"""
+    result = await db.execute(
+        select(AIAnalysisLog.model_name).distinct().order_by(AIAnalysisLog.model_name)
+    )
+    names = [row[0] for row in result]
+    return {"models": names}
+
+
 @router.delete("/history/failed/all")
 async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)):
     """批量删除所有失败的分析日志。"""
@@ -566,10 +733,193 @@ async def delete_analysis_log(
     return {"message": f"分析记录 #{log_id} 已删除"}
 
 
+@router.get("/queue/pending")
+async def get_pending_queue(db: AsyncSession = Depends(get_db)):
+    """获取排队中素材的缩略图预览信息。"""
+    if not _pending_queue and not _active_analyses:
+        return {"items": [], "paused": _queue_paused}
+
+    # 所有活跃/排队中的素材 ID
+    all_ids = list(_active_analyses.keys())
+    if not all_ids:
+        return {"items": [], "paused": _queue_paused}
+
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.thumbnail_path, Inspiration.file_path)
+        .where(Inspiration.id.in_(all_ids))
+    )
+    insp_map = {r[0]: {"thumbnail_path": r[1], "file_path": r[2]} for r in result}
+
+    items = []
+    for insp_id in _pending_queue:
+        info = insp_map.get(insp_id, {})
+        items.append({
+            "inspiration_id": insp_id,
+            "thumbnail_path": info.get("thumbnail_path"),
+            "file_path": info.get("file_path"),
+            "status": "排队中",
+        })
+    for insp_id, status in _active_analyses.items():
+        if insp_id not in _pending_queue:
+            info = insp_map.get(insp_id, {})
+            items.append({
+                "inspiration_id": insp_id,
+                "thumbnail_path": info.get("thumbnail_path"),
+                "file_path": info.get("file_path"),
+                "status": status,
+            })
+
+    return {"items": items, "paused": _queue_paused}
+
+
+@router.delete("/queue/{inspiration_id}")
+async def cancel_queue_item(inspiration_id: str):
+    """取消排队中的分析任务（已开始分析的无法取消）。"""
+    if inspiration_id in _pending_queue:
+        _pending_queue.remove(inspiration_id)
+        _active_analyses.pop(inspiration_id, None)
+        return {"message": "已取消排队任务"}
+    elif inspiration_id in _active_analyses and inspiration_id not in _pending_queue:
+        return {"message": "任务正在执行中，无法取消。可等待完成后查看结果"}, 409
+    else:
+        raise HTTPException(status_code=404, detail="任务不在队列中")
+
+
+@router.post("/queue/pause")
+async def pause_queue():
+    """暂停全局分析队列（已完成的不受影响）。"""
+    global _queue_paused
+    _queue_paused = True
+    logger.info("分析队列已暂停")
+    return {"message": "队列已暂停", "paused": True}
+
+
+@router.post("/queue/resume")
+async def resume_queue():
+    """恢复全局分析队列。"""
+    global _queue_paused
+    _queue_paused = False
+    logger.info("分析队列已恢复")
+    return {"message": "队列已恢复", "paused": False}
+
+
 @router.get("/active-analyses")
 async def get_active_analyses():
     """获取当前正在分析中的素材列表，用于前端轮询显示进度。"""
     return {"active_analyses": _active_analyses, "count": len(_active_analyses)}
+
+
+# ============ 分析结果对比 ============
+
+
+@router.get("/compare/{inspiration_id}")
+async def compare_analyses(
+    inspiration_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取同一素材的所有历史分析结果，用于并排对比。
+
+    返回：
+    - analyses: 每次分析的详情列表（按时间排序）
+    - tag_diff: 各次分析间的标签差异（新增/消失/共同）
+    - time_comparison: 耗时对比数据
+    """
+    # 获取该素材的所有分析日志
+    result = await db.execute(
+        select(AIAnalysisLog)
+        .where(AIAnalysisLog.inspiration_id == inspiration_id)
+        .order_by(AIAnalysisLog.created_at.asc())
+    )
+    logs = result.scalars().all()
+
+    if len(logs) < 1:
+        raise HTTPException(status_code=404, detail="该素材暂无分析记录")
+
+    insp = await db.get(Inspiration, inspiration_id)
+
+    # 获取每次分析关联的标签
+    from app.models.tag import InspirationTag, Tag
+    tag_result = await db.execute(
+        select(InspirationTag, Tag.name, Tag.category)
+        .join(Tag, InspirationTag.tag_id == Tag.id)
+        .where(InspirationTag.inspiration_id == inspiration_id)
+    )
+    # 注意：标签是素材级别的，不是每次分析独立的
+    # 这里我们展示每次分析的 raw_response 解析结果来对比
+    from app.services.ai_service import _parse_analysis_response
+
+    analyses = []
+    for log in logs:
+        parsed = _parse_analysis_response(log.raw_response) if log.raw_response else {}
+        analyses.append({
+            "id": log.id,
+            "model_name": log.model_name,
+            "processing_time_ms": log.processing_time_ms,
+            "error": log.error,
+            "status": "error" if log.error else "success",
+            "created_at": _fmt_utc(log.created_at) if log.created_at else None,
+            "parsed_response": parsed,
+            "tags_count": {
+                "style": len(parsed.get("style", [])),
+                "items": len(parsed.get("items", [])),
+                "fit": len(parsed.get("fit", [])),
+                "wear_style": len(parsed.get("wear_style", [])),
+                "occasion": len(parsed.get("occasion", [])),
+                "attributes": len(parsed.get("attributes", [])),
+                "colors": len(parsed.get("dominant_colors", [])),
+            },
+        })
+
+    # 标签差异对比（取第一次和最后一次分析）
+    tag_diff = None
+    if len(analyses) >= 2:
+        first = analyses[0]["parsed_response"]
+        last = analyses[-1]["parsed_response"]
+
+        def _tag_set(parsed: dict) -> set[str]:
+            tags: set[str] = set()
+            for key in ("style", "fit", "wear_style", "occasion", "attributes"):
+                vals = parsed.get(key, [])
+                if isinstance(vals, list):
+                    for v in vals:
+                        tags.add(f"{key}:{v}" if isinstance(v, str) else f"{key}:{v.get('name', str(v))}")
+            for item in parsed.get("items", []):
+                if isinstance(item, dict):
+                    tags.add(f"单品:{item.get('type', '')} {item.get('color', '')}")
+            for c in parsed.get("dominant_colors", []):
+                tags.add(f"颜色:{c}" if isinstance(c, str) else str(c))
+            return tags
+
+        first_tags = _tag_set(first)
+        last_tags = _tag_set(last)
+        tag_diff = {
+            "first_analysis_id": analyses[0]["id"],
+            "last_analysis_id": analyses[-1]["id"],
+            "added": sorted(list(last_tags - first_tags)),
+            "removed": sorted(list(first_tags - last_tags)),
+            "common": sorted(list(first_tags & last_tags)),
+        }
+
+    # 耗时对比
+    time_comparison = [
+        {
+            "analysis_id": a["id"],
+            "model_name": a["model_name"],
+            "processing_time_ms": a["processing_time_ms"],
+            "created_at": a["created_at"],
+        }
+        for a in analyses
+    ]
+
+    return {
+        "inspiration_id": inspiration_id,
+        "thumbnail_path": insp.thumbnail_path if insp else None,
+        "file_path": insp.file_path if insp else None,
+        "analyses": analyses,
+        "analyses_count": len(analyses),
+        "tag_diff": tag_diff,
+        "time_comparison": time_comparison,
+    }
 
 
 # ============ Prompt 管理 ============
@@ -899,7 +1249,15 @@ async def _run_analysis(inspiration_id: str, file_path: str):
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
         return
 
+    # 加入排队
+    _pending_queue.append(inspiration_id)
+    _active_analyses[inspiration_id] = "排队中..."
+
     async with _analysis_semaphore:
+        # 等待暂停恢复
+        while _queue_paused:
+            await asyncio.sleep(1)
+        _pending_queue.remove(inspiration_id)
         _active_analyses[inspiration_id] = "正在分析..."
         try:
             from app.services.ai_service import analyze_image

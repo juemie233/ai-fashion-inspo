@@ -1,7 +1,7 @@
 <script setup lang="ts">
-/** 首页：瀑布流展示最近素材，支持收藏筛选和无限滚动。 */
+/** 首页：瀑布流展示素材，支持分页和收藏筛选。 */
 
-import { onMounted, ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
@@ -11,24 +11,34 @@ const router = useRouter()
 const message = useMessage()
 const store = useInspirationsStore()
 
+/** 当前页码 */
+const currentPage = ref(1)
+/** 每页数量 */
+const pageSize = ref(50)
 /** 是否仅显示收藏 */
 const onlyFavorites = ref(false)
+/** 总页数 */
+const totalPages = computed(() => Math.ceil(store.total / pageSize.value))
 
-onMounted(() => {
-  store.load()
-})
-
-/** 加载更多（无限滚动触发） */
-function loadMore() {
-  store.loadMore()
+/** 加载指定页 */
+function loadPage(page: number) {
+  currentPage.value = page
+  store.load({
+    page,
+    size: pageSize.value,
+    is_favorite: onlyFavorites.value ? true : undefined,
+  })
+  // 滚动到顶部
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 /** 切换收藏筛选 */
 function toggleFavoritesFilter() {
   onlyFavorites.value = !onlyFavorites.value
+  currentPage.value = 1
   store.load({
-    is_favorite: onlyFavorites.value ? true : undefined,
     page: 1,
+    is_favorite: onlyFavorites.value ? true : undefined,
   })
 }
 
@@ -37,6 +47,10 @@ async function handleDelete(id: string) {
   try {
     await store.remove(id)
     message.success('已删除')
+    // 如果当前页空了且不是第一页，回退一页
+    if (store.items.length === 0 && currentPage.value > 1) {
+      loadPage(currentPage.value - 1)
+    }
   } catch {
     message.error('删除失败')
   }
@@ -50,6 +64,9 @@ async function handleToggleFavorite(id: string) {
     message.error('操作失败')
   }
 }
+
+// 初始加载
+loadPage(1)
 </script>
 
 <template>
@@ -77,11 +94,22 @@ async function handleToggleFavorite(id: string) {
     <MasonryGrid
       :items="store.items"
       :loading="store.loading"
-      :has-more="store.items.length < store.total"
-      @load-more="loadMore"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"
     />
+
+    <!-- 底部分页 -->
+    <div v-if="totalPages > 1" class="pagination-wrapper">
+      <n-pagination
+        v-model:page="currentPage"
+        :page-count="totalPages"
+        :page-size="pageSize"
+        show-size-picker
+        :page-sizes="[25, 50, 100]"
+        @update:page="loadPage"
+        @update:page-size="(s: number) => { pageSize = s; loadPage(1) }"
+      />
+    </div>
   </div>
 </template>
 
@@ -118,5 +146,11 @@ async function handleToggleFavorite(id: string) {
 .header-right {
   display: flex;
   gap: 8px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
 }
 </style>

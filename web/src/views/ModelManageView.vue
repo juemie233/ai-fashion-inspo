@@ -6,8 +6,10 @@ import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { useTagsStore } from '@/stores/tags'
+import { useNotification } from '@/composables/useNotification'
 
 const message = useMessage()
+const { requestAndNotify, checkFailureAlert } = useNotification()
 
 /** 复制文本到剪贴板（含降级方案） */
 function copyText(text: string) {
@@ -75,6 +77,50 @@ const activeAnalyses = ref<Record<string, string>>({})
 const batchAnalyzing = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// ===== 队列可视化 =====
+interface QueueItem {
+  inspiration_id: string
+  thumbnail_path: string | null
+  file_path: string | null
+  status: string
+}
+const pendingQueue = ref<QueueItem[]>([])
+const queuePaused = ref(false)
+
+async function loadPendingQueue() {
+  try {
+    const { data } = await apiClient.get<{ items: QueueItem[]; paused: boolean }>('/ai/queue/pending')
+    pendingQueue.value = data.items
+    queuePaused.value = data.paused
+  } catch {}
+}
+
+async function cancelQueueItem(inspirationId: string) {
+  try {
+    await apiClient.delete(`/ai/queue/${inspirationId}`)
+    message.success('已取消')
+    loadPendingQueue()
+    loadActiveAnalyses()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || e.response?.data?.message || '取消失败')
+  }
+}
+
+async function togglePauseQueue() {
+  try {
+    if (queuePaused.value) {
+      await apiClient.post('/ai/queue/resume')
+      message.success('队列已恢复')
+    } else {
+      await apiClient.post('/ai/queue/pause')
+      message.success('队列已暂停')
+    }
+    loadPendingQueue()
+  } catch (e: any) {
+    message.error('操作失败')
+  }
+}
+
 // ===== 分析历史 =====
 interface HistoryItem {
   id: number; inspiration_id: string; model_name: string
@@ -88,7 +134,11 @@ const historyTotal = ref(0)
 const historyPage = ref(1)
 const historyPageSize = 20
 const historyFilter = ref<string | null>(null)
+const historyModelFilter = ref<string | null>(null)
+const historySearchId = ref('')
 const historyLoading = ref(false)
+const selectedHistoryIds = ref<Set<number>>(new Set())
+const historyModelNames = ref<string[]>([])
 
 // ===== 分析详情弹窗 =====
 interface TagDetail { name: string; category: string; confidence: number }
@@ -103,6 +153,53 @@ interface AnalysisDetail {
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<AnalysisDetail | null>(null)
+
+// ===== 分析结果对比 =====
+interface CompareData {
+  inspiration_id: string
+  thumbnail_path: string | null
+  file_path: string | null
+  analyses: Array<{
+    id: number
+    model_name: string
+    processing_time_ms: number | null
+    error: string | null
+    status: string
+    created_at: string | null
+    parsed_response: Record<string, any> | null
+    tags_count: Record<string, number>
+  }>
+  analyses_count: number
+  tag_diff: {
+    added: string[]
+    removed: string[]
+    common: string[]
+  } | null
+  time_comparison: Array<{
+    analysis_id: number
+    model_name: string
+    processing_time_ms: number | null
+    created_at: string | null
+  }>
+}
+const compareVisible = ref(false)
+const compareLoading = ref(false)
+const compareData = ref<CompareData | null>(null)
+
+async function viewCompare(inspirationId: string) {
+  compareVisible.value = true
+  compareLoading.value = true
+  compareData.value = null
+  try {
+    const { data } = await apiClient.get<CompareData>(`/ai/compare/${inspirationId}`)
+    compareData.value = data
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '获取对比数据失败')
+    compareVisible.value = false
+  } finally {
+    compareLoading.value = false
+  }
+}
 
 // ===== 参数 =====
 interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; ollama_base_url: string }
@@ -122,13 +219,49 @@ const promptLoading = ref(false)
 const promptSaving = ref(false)
 const persistPrompt = ref(false)
 
+// ===== GPU 显存监控 =====
+interface GpuStats {
+  gpu_available: boolean
+  gpu_name: string
+  total_vram_mb: number
+  used_vram_mb: number
+  free_vram_mb: number
+  usage_percent: number
+  loaded_models: Array<{ name: string; vram_mb: number; loaded_at: string | null }>
+}
+const gpuStats = ref<GpuStats | null>(null)
+
+async function loadGpuStats() {
+  try {
+    const { data } = await apiClient.get<GpuStats>('/ai/gpu-stats')
+    gpuStats.value = data
+  } catch { /* 静默失败 */ }
+}
+
+/** 卸载模型释放显存 */
+async function unloadModel(name: string) {
+  try {
+    // 通过 Ollama API 卸载模型（keep_alive=0 后模型会自动卸载，这里先尝试 generate 一个空请求强制卸载）
+    // Ollama 没有直接的 unload 端点，但可以通过设置 keep_alive 为 0 来卸载
+    const baseUrl = apiClient.defaults.baseURL || ''
+    await fetch(`${baseUrl}/ai/unload-model?model_name=${encodeURIComponent(name)}`, { method: 'POST' })
+    message.success(`正在卸载 ${name}...`)
+    setTimeout(() => loadGpuStats(), 2000)
+  } catch {
+    message.info('模型可能已经卸载，请刷新查看')
+    loadGpuStats()
+  }
+}
+
 // ===== 标签页 =====
 const activeTab = ref('models')
 
 onMounted(() => {
   refreshModels()
+  loadGpuStats()
   loadQueue()
   loadHistory()
+  loadModelNames()
   loadSettings()
   loadSamplingParams()
   loadPrompt()
@@ -232,6 +365,7 @@ async function startDownload() {
               downloading.value = false
               downloadStatus.value = '下载完成'
               message.success('模型下载完成')
+              requestAndNotify('模型下载完成', { body: `${downloadName.value} 已就绪`, tag: 'model-download' })
               refreshModels()
               return
             } else if (data.type === 'error') {
@@ -285,6 +419,7 @@ async function loadQueue() {
   try {
     const { data } = await apiClient.get<QueueStats>('/ai/queue')
     queueStats.value = data
+    checkFailureAlert(data.failed, data.total)
   } catch {}
 }
 
@@ -308,6 +443,7 @@ function scheduleNextPoll() {
   pollingFast = hasActive
   pollTimer = setTimeout(async () => {
     await loadActiveAnalyses()
+    loadPendingQueue()
     if (Object.keys(activeAnalyses.value).length > 0) {
       loadQueue(); loadHistory()
     }
@@ -330,6 +466,7 @@ async function triggerBatchAnalyze() {
     }
     await apiClient.post('/ai/batch-analyze', data.ids)
     message.success(`已将 ${data.count} 个素材加入分析队列`)
+    requestAndNotify('批量分析已启动', { body: `${data.count} 个素材已加入分析队列`, tag: 'batch-analyze' })
     loadQueue(); loadHistory(); loadActiveAnalyses()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '批量分析失败')
@@ -359,6 +496,8 @@ async function loadHistory() {
   try {
     const params: any = { page: historyPage.value, size: historyPageSize }
     if (historyFilter.value) params.status = historyFilter.value
+    if (historyModelFilter.value) params.model_name = historyModelFilter.value
+    if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
     const { data } = await apiClient.get('/ai/history', { params, signal: historyAbort.signal })
     history.value = data.items
     historyTotal.value = data.total
@@ -372,7 +511,75 @@ async function loadHistory() {
 function filterHistory(status: string | null) {
   historyFilter.value = status
   historyPage.value = 1
+  selectedHistoryIds.value = new Set()
   loadHistory()
+}
+
+function filterByModel(model: string | null) {
+  historyModelFilter.value = model
+  historyPage.value = 1
+  selectedHistoryIds.value = new Set()
+  loadHistory()
+}
+
+function searchById() {
+  historyPage.value = 1
+  selectedHistoryIds.value = new Set()
+  loadHistory()
+}
+
+/** 加载历史中出现过的模型名称列表 */
+async function loadModelNames() {
+  try {
+    const { data } = await apiClient.get<{ models: string[] }>('/ai/history/model-names')
+    historyModelNames.value = data.models
+  } catch { /* 静默 */ }
+}
+
+/** 切换单条选中 */
+function toggleSelectHistory(logId: number) {
+  const next = new Set(selectedHistoryIds.value)
+  if (next.has(logId)) next.delete(logId)
+  else next.add(logId)
+  selectedHistoryIds.value = next
+}
+
+/** 全选/取消全选当前页 */
+function selectAllHistory() {
+  if (selectedHistoryIds.value.size === history.value.length && history.value.length > 0) {
+    selectedHistoryIds.value = new Set()
+  } else {
+    selectedHistoryIds.value = new Set(history.value.map(h => h.id))
+  }
+}
+
+/** 批量删除选中记录 */
+async function batchDeleteHistory() {
+  if (selectedHistoryIds.value.size === 0) return
+  try {
+    await apiClient.post('/ai/history/batch-delete', { ids: [...selectedHistoryIds.value] })
+    message.success(`已删除 ${selectedHistoryIds.value.size} 条记录`)
+    selectedHistoryIds.value = new Set()
+    loadHistory()
+    loadQueue()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '批量删除失败')
+  }
+}
+
+/** 批量重试选中记录（根据素材ID去重） */
+async function batchRetryHistory() {
+  if (selectedHistoryIds.value.size === 0) return
+  try {
+    const { data } = await apiClient.post('/ai/history/batch-retry', { ids: [...selectedHistoryIds.value] })
+    message.success(data.message)
+    requestAndNotify('批量重试已启动', { body: data.message, tag: 'batch-retry' })
+    selectedHistoryIds.value = new Set()
+    loadHistory()
+    loadActiveAnalyses()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '批量重试失败')
+  }
 }
 
 function onHistoryPageChange(page: number) {
@@ -414,6 +621,7 @@ async function retryAllFailed() {
   try {
     const { data } = await apiClient.post('/ai/retry-all-failed')
     message.success(data.message || '已加入重试队列')
+    requestAndNotify('失败重试已启动', { body: data.message, tag: 'retry-failed' })
     loadQueue(); loadHistory(); loadActiveAnalyses()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '重试失败')
@@ -660,6 +868,43 @@ function formatDate(d: string | null | undefined) {
           {{ ollamaConnected ? `Ollama 已连接 · 活跃模型: ${activeModel}` : 'Ollama 未连接' }}
         </n-alert>
 
+        <!-- GPU 显存监控 -->
+        <n-card v-if="gpuStats?.gpu_available" size="small" style="margin-bottom:16px">
+          <template #header>
+            🖥 GPU 显存
+            <n-button size="tiny" style="margin-left:8px" @click="loadGpuStats">刷新</n-button>
+          </template>
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <span style="font-size:13px;color:#666">{{ gpuStats?.gpu_name || 'GPU' }}</span>
+            <n-progress
+              type="line"
+              :percentage="gpuStats?.usage_percent || 0"
+              :height="16"
+              :status="(gpuStats?.usage_percent || 0) > 90 ? 'error' : (gpuStats?.usage_percent || 0) > 70 ? 'warning' : 'success'"
+              style="flex:1;min-width:200px"
+            >
+              <template #default>
+                <span style="font-size:11px">{{ gpuStats?.used_vram_mb }} / {{ gpuStats?.total_vram_mb || '?' }} MB</span>
+              </template>
+            </n-progress>
+            <span v-if="gpuStats?.free_vram_mb" style="font-size:12px;color:#18a058">空闲 {{ gpuStats?.free_vram_mb }} MB</span>
+          </div>
+          <!-- 已加载模型列表 -->
+          <div v-if="gpuStats?.loaded_models?.length" style="margin-top:8px">
+            <n-tag
+              v-for="m in gpuStats.loaded_models"
+              :key="m.name"
+              closable
+              size="small"
+              @close="unloadModel(m.name)"
+              style="margin:2px"
+            >
+              {{ m.name }} ({{ m.vram_mb }} MB)
+            </n-tag>
+            <span style="font-size:11px;color:#999;margin-left:4px">点击 × 卸载模型</span>
+          </div>
+        </n-card>
+
         <!-- 模型列表 -->
         <n-card title="已安装模型" size="small" style="margin-bottom:16px">
           <template #header-extra>
@@ -755,13 +1000,59 @@ function formatDate(d: string | null | undefined) {
           </n-button>
         </div>
 
-        <!-- 正在分析提示 -->
-        <n-alert v-if="Object.keys(activeAnalyses).length > 0" type="info" style="margin-bottom:16px" closable>
-          <template #header>正在分析 {{ Object.keys(activeAnalyses).length }} 个素材...</template>
-          <div v-for="(status, id) in activeAnalyses" :key="id" style="font-size:12px;color:#666">
-            素材 {{ id.slice(0, 8) }}... — {{ status }}
+        <!-- 正在分析提示 + 暂停/恢复 -->
+        <div class="queue-controls" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+          <n-alert v-if="Object.keys(activeAnalyses).length > 0" type="info" style="flex:1;min-width:300px" closable>
+            <template #header>正在分析 {{ Object.keys(activeAnalyses).length }} 个素材...</template>
+            <div v-for="(status, id) in activeAnalyses" :key="id" style="font-size:12px;color:#666">
+              素材 {{ id.slice(0, 8) }}... — {{ status }}
+            </div>
+          </n-alert>
+          <n-button
+            v-if="Object.keys(activeAnalyses).length > 0 || pendingQueue.length > 0"
+            :type="queuePaused ? 'success' : 'warning'"
+            size="small"
+            @click="togglePauseQueue"
+          >
+            {{ queuePaused ? '▶ 恢复队列' : '⏸ 暂停队列' }}
+          </n-button>
+        </div>
+
+        <!-- 排队中素材缩略图 -->
+        <div v-if="pendingQueue.length > 0" class="pending-queue">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px">
+            📋 排队中 ({{ pendingQueue.length }})
+            <span v-if="queuePaused" style="color:#f0a020;font-size:12px"> — 已暂停</span>
           </div>
-        </n-alert>
+          <div class="pending-grid">
+            <div v-for="item in pendingQueue" :key="item.inspiration_id" class="pending-card">
+              <img
+                v-if="item.thumbnail_path"
+                :src="getFileUrl(item.thumbnail_path)"
+                style="width:80px;height:120px;object-fit:cover;border-radius:4px"
+              />
+              <img
+                v-else-if="item.file_path"
+                :src="getFileUrl(item.file_path)"
+                style="width:80px;height:120px;object-fit:cover;border-radius:4px"
+              />
+              <div style="font-size:10px;color:#999;text-align:center;margin-top:2px">
+                {{ item.inspiration_id.slice(0, 6) }}...
+              </div>
+              <div style="font-size:10px;color:#666;text-align:center">{{ item.status }}</div>
+              <n-button
+                v-if="item.status === '排队中'"
+                size="tiny"
+                type="error"
+                ghost
+                style="margin-top:2px;font-size:10px"
+                @click="cancelQueueItem(item.inspiration_id)"
+              >
+                取消
+              </n-button>
+            </div>
+          </div>
+        </div>
 
         <!-- 分析历史 -->
         <n-card title="分析历史" size="small">
@@ -782,15 +1073,54 @@ function formatDate(d: string | null | undefined) {
             </n-space>
           </template>
 
-          <n-radio-group v-model:value="historyFilter" @update:value="filterHistory" size="small" style="margin-bottom:12px">
-            <n-radio-button :value="null">全部</n-radio-button>
-            <n-radio-button value="success">成功</n-radio-button>
-            <n-radio-button value="error">失败</n-radio-button>
-          </n-radio-group>
+          <!-- 筛选栏 -->
+          <div class="history-filters">
+            <n-radio-group v-model:value="historyFilter" @update:value="filterHistory" size="small">
+              <n-radio-button :value="null">全部</n-radio-button>
+              <n-radio-button value="success">成功</n-radio-button>
+              <n-radio-button value="error">失败</n-radio-button>
+            </n-radio-group>
+            <n-select
+              v-if="historyModelNames.length"
+              v-model:value="historyModelFilter"
+              :options="[{label:'全部模型',value:null},...historyModelNames.map(m=>({label:m,value:m}))]"
+              size="small"
+              style="width:160px"
+              @update:value="filterByModel"
+              placeholder="按模型筛选"
+            />
+            <n-input
+              v-model:value="historySearchId"
+              size="small"
+              placeholder="搜索素材 ID..."
+              style="width:200px"
+              clearable
+              @keyup.enter="searchById"
+              @clear="searchById"
+            >
+              <template #suffix>
+                <n-button size="tiny" @click="searchById">🔍</n-button>
+              </template>
+            </n-input>
+          </div>
+
+          <!-- 批量操作栏 -->
+          <div v-if="selectedHistoryIds.size > 0" class="batch-bar">
+            <span>已选 {{ selectedHistoryIds.size }} 条</span>
+            <n-button size="tiny" type="primary" ghost @click="batchRetryHistory">重新分析</n-button>
+            <n-popconfirm @positive-click="batchDeleteHistory">
+              <template #trigger>
+                <n-button size="tiny" type="error" ghost>批量删除</n-button>
+              </template>
+              确定删除选中的 {{ selectedHistoryIds.size }} 条记录？
+            </n-popconfirm>
+            <n-button size="tiny" @click="selectedHistoryIds = new Set()">取消选择</n-button>
+          </div>
 
           <n-data-table
             v-if="history.length"
             :columns="[
+              { title: () => h('input', { type:'checkbox', checked: selectedHistoryIds.size === history.length && history.length > 0, onClick: selectAllHistory }), key:'_check', width: 36, render: (row: HistoryItem) => h('input', { type:'checkbox', checked: selectedHistoryIds.has(row.id), onClick: () => toggleSelectHistory(row.id) }) },
               { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
               { title: '模型', key: 'model_name', width: 130 },
               { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
@@ -815,6 +1145,7 @@ function formatDate(d: string | null | undefined) {
               { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },
               { title: '操作', key: 'actions', width: 140, render: (row: HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
                 row.status === 'success' ? h(NButton, {size:'tiny',onClick:()=>viewDetail(row.id)}, '详情') : null,
+                h(NButton, {size:'tiny',onClick:()=>viewCompare(row.inspiration_id)}, '对比'),
                 row.status === 'error' ? h(NButton, {size:'tiny',onClick:()=>retryAnalysis(row.inspiration_id)}, '重试') : null,
                 h(NPopconfirm, {onPositiveClick:()=>deleteLog(row.id)},
                   { trigger: ()=>h(NButton,{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此记录？' }
@@ -1071,10 +1402,124 @@ function formatDate(d: string | null | undefined) {
         </template>
       </n-spin>
     </n-modal>
+
+    <!-- ===== 分析结果对比弹窗 ===== -->
+    <n-modal v-model:show="compareVisible" preset="card" title="分析结果对比" style="max-width:960px" :mask-closable="true">
+      <n-spin :show="compareLoading">
+        <template v-if="compareData">
+          <!-- 素材预览 -->
+          <div v-if="compareData.thumbnail_path" style="text-align:center;margin-bottom:16px">
+            <img :src="getFileUrl(compareData.thumbnail_path)" style="max-height:200px;border-radius:8px" />
+          </div>
+
+          <!-- 耗时对比 -->
+          <n-card title="⏱ 耗时对比" size="small" style="margin-bottom:12px">
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <div v-for="tc in compareData.time_comparison" :key="tc.analysis_id"
+                style="flex:1;min-width:140px;text-align:center;padding:8px;background:#f5f5f5;border-radius:6px">
+                <div style="font-weight:600;font-size:13px">{{ tc.model_name }}</div>
+                <div style="font-size:11px;color:#999">{{ formatDate(tc.created_at) }}</div>
+                <n-tag :type="tc.processing_time_ms ? 'success' : 'default'" size="small" style="margin-top:4px">
+                  {{ formatMs(tc.processing_time_ms) }}
+                </n-tag>
+              </div>
+            </div>
+          </n-card>
+
+          <!-- 标签数量对比 -->
+          <n-card title="📊 标签数量对比" size="small" style="margin-bottom:12px">
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <div v-for="a in compareData.analyses" :key="'count-'+a.id"
+                style="flex:1;min-width:120px;text-align:center;padding:8px;background:#f5f5f5;border-radius:6px">
+                <div style="font-size:11px;color:#999">{{ a.model_name }}</div>
+                <div v-for="(count, cat) in a.tags_count" :key="cat" style="font-size:12px;margin:2px 0">
+                  <n-tag size="tiny" :bordered="false">{{ cat }}</n-tag> {{ count }}
+                </div>
+              </div>
+            </div>
+          </n-card>
+
+          <!-- 标签差异 (首次 vs 末次) -->
+          <n-card v-if="compareData.tag_diff" title="🔄 标签差异（首次 → 末次）" size="small" style="margin-bottom:12px">
+            <div v-if="compareData.tag_diff.added.length" style="margin-bottom:8px">
+              <span style="color:#18a058;font-weight:600;font-size:12px">+ 新增 ({{ compareData.tag_diff.added.length }}):</span>
+              <n-tag v-for="t in compareData.tag_diff.added" :key="'a-'+t" size="tiny" type="success" style="margin:1px">{{ t }}</n-tag>
+            </div>
+            <div v-if="compareData.tag_diff.removed.length" style="margin-bottom:8px">
+              <span style="color:#d03050;font-weight:600;font-size:12px">− 消失 ({{ compareData.tag_diff.removed.length }}):</span>
+              <n-tag v-for="t in compareData.tag_diff.removed" :key="'r-'+t" size="tiny" type="error" style="margin:1px">{{ t }}</n-tag>
+            </div>
+            <div v-if="compareData.tag_diff.common.length">
+              <span style="color:#2080f0;font-weight:600;font-size:12px">= 共同 ({{ compareData.tag_diff.common.length }}):</span>
+              <n-tag v-for="t in compareData.tag_diff.common.slice(0, 20)" :key="'c-'+t" size="tiny" type="info" style="margin:1px">{{ t }}</n-tag>
+              <span v-if="compareData.tag_diff.common.length > 20" style="font-size:11px;color:#999"> ...还有 {{ compareData.tag_diff.common.length - 20 }} 个</span>
+            </div>
+          </n-card>
+
+          <!-- 各次分析详情 -->
+          <n-collapse>
+            <n-collapse-item v-for="(a, idx) in compareData.analyses" :key="a.id"
+              :title="`#${idx + 1} — ${a.model_name} — ${a.status === 'success' ? '✓' : '✗'} — ${formatDate(a.created_at)}`"
+              :name="String(a.id)">
+              <div v-if="a.error" style="color:#d03050;font-size:13px;margin-bottom:8px">{{ a.error }}</div>
+              <div v-if="a.parsed_response" style="font-size:12px">
+                <div v-for="(val, key) in a.parsed_response" :key="key" style="margin:4px 0">
+                  <n-tag type="info" size="tiny">{{ key }}</n-tag>
+                  <code style="margin-left:4px;word-break:break-all">{{ JSON.stringify(val) }}</code>
+                </div>
+              </div>
+            </n-collapse-item>
+          </n-collapse>
+
+          <n-empty v-if="compareData.analyses.length < 2" description="只有一次分析记录，无法对比" size="small" style="margin-top:16px" />
+        </template>
+      </n-spin>
+    </n-modal>
   </div>
 </template>
 
 <style scoped>
 .model-page { max-width: 1100px; margin: 0 auto; }
 .model-page h2 { margin-bottom: 16px; }
+
+/* 历史记录筛选栏 */
+.history-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+/* 批量操作栏 */
+/* 排队中缩略图网格 */
+.pending-queue {
+  margin-bottom: 16px;
+}
+.pending-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pending-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: #f0f7ff;
+  border: 1px solid #d0e3ff;
+  border-radius: 6px;
+  font-size: 13px;
+}
 </style>

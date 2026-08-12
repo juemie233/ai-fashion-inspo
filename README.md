@@ -1,6 +1,6 @@
-# AI 穿搭灵感库
+# AI 穿搭素材库
 
-专为个人打造的 AI 穿搭灵感管理工具，通过自动化采集与视觉识别，将碎片化的穿搭内容转化为可智能检索的专属素材资产。
+专为个人打造的 AI 穿搭素材管理工具，通过自动化采集与视觉识别，将碎片化的穿搭内容转化为可智能检索的专属素材资产。
 
 ## 前置条件
 
@@ -87,13 +87,13 @@ chrome_debug_port: int = 9222
 
 | 模块 | 功能 |
 |------|------|
-| **灵感库** | 瀑布流浏览、收藏、删除、无限滚动加载 |
+| **素材库** | 瀑布流浏览、收藏、删除、分页加载 |
 | **高级搜索** | 多维标签筛选（AND/OR 组合）、排除标签、实时搜索 |
 | **上传素材** | 单张/批量上传、文件夹导入、自动生成缩略图 |
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
 | **采集管理** | 小红书/抖音 CDP 采集、内容 MD5 去重、URL 墓碑表防重复、Cookie 持久化、失败重试、验证码恢复、成功率统计 |
 | **标签管理** | 浏览/编辑/合并/批量操作、相似标签扫描、导入导出、拖拽分类、标签详情 |
-| **AI 模型管理** | 模型列表/下载/切换、批量分析、历史分页、分析详情、参数调优、数据重置 |
+| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置 |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -195,7 +195,7 @@ fashion-inspo/
 │   │   ├── config.py             # 配置管理
 │   │   ├── database.py           # 数据库引擎
 │   │   ├── models/               # 数据模型
-│   │   │   ├── inspiration.py    # 灵感素材 + AI分析日志
+│   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签（含 source 来源标识）
 │   │   │   └── scraper.py        # 采集任务
 │   │   ├── schemas/              # Pydantic 请求/响应
@@ -261,7 +261,8 @@ fashion-inspo/
 │   │   │   └── search/           # SearchBar, TagFilter
 │   │   └── composables/          # Vue composables
 │   │       ├── useWebSocket.ts
-│   │       └── useInfiniteScroll.ts
+│   │       ├── useInfiniteScroll.ts
+│   │       └── useNotification.ts  # 浏览器桌面通知
 │   ├── package.json
 │   └── vite.config.ts
 │
@@ -341,7 +342,7 @@ fashion-inspo/
 
 | 表 | 说明 | 关键字段 |
 |----|------|----------|
-| `inspirations` | 灵感素材 | id, source_type, file_path, media_type, dominant_colors |
+| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual) |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, processing_time_ms, error |
@@ -426,6 +427,16 @@ fashion-inspo/
 | `GET` | `/api/ai/history/{id}` | 分析详情（含标签） |
 | `DELETE` | `/api/ai/history/{id}` | 删除单条日志 |
 | `DELETE` | `/api/ai/history/failed/all` | 删除所有失败日志 |
+| `POST` | `/api/ai/history/batch-delete` | 批量删除分析记录 |
+| `POST` | `/api/ai/history/batch-retry` | 批量重试分析 |
+| `GET` | `/api/ai/history/model-names` | 历史模型名称列表 |
+| `GET` | `/api/ai/gpu-stats` | GPU 显存监控 |
+| `POST` | `/api/ai/unload-model` | 卸载模型释放显存 |
+| `GET` | `/api/ai/queue/pending` | 排队中素材（含缩略图） |
+| `DELETE` | `/api/ai/queue/{id}` | 取消排队任务 |
+| `POST` | `/api/ai/queue/pause` | 暂停队列 |
+| `POST` | `/api/ai/queue/resume` | 恢复队列 |
+| `GET` | `/api/ai/compare/{id}` | 分析结果对比（标签差异+耗时） |
 
 ### AI 参数调优
 

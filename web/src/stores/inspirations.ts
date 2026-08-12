@@ -29,11 +29,13 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   /** 加载素材列表 */
   async function load(params: {
     page?: number
+    size?: number
     source_type?: string
     is_favorite?: boolean
     sort?: string
   } = {}) {
     loading.value = true
+    if (params.size) size.value = params.size
     try {
       const result = await fetchInspirations({
         page: params.page ?? page.value,
