@@ -42,54 +42,113 @@ def _rdsleep(lo=0.5, hi=2.0):
 # ═══════════════════════════════════════════════════════════════
 
 def _search_xiaohongshu(page, keyword: str, max_count: int) -> list[str]:
-    """在已登录的页面上搜索并提取图片 URL。"""
+    """在已登录的页面上搜索并提取图片 URL。
+
+    采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
+    从每张卡片中提取多张图片（轮播帖），最大化采集数量。
+    """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
 
     url = f"https://www.xiaohongshu.com/search_result/?keyword={keyword}&source=web_search_result_notes"
     print(f"  导航到搜索页: {keyword}")
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    _rdsleep(2, 4)
 
-    # 滚动触发懒加载
-    for i in range(5):
-        page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {(i + 1) / 5})")
-        _rdsleep(0.5, 1.0)
+    # 等待搜索结果卡片渲染完成
+    try:
+        page.wait_for_selector("section.note-item", timeout=15000)
+        print("  搜索结果已渲染")
+    except Exception:
+        print("  等待搜索结果超时，尝试继续...")
+    _rdsleep(1.5, 3.0)
 
-    # DOM 提取（section.note-item 是小红书搜索结果卡片的可靠选择器）
+    # ── 触底循环滚动 ──
+    MAX_SCROLLS = 30
+    CONSECUTIVE_NO_NEW = 3  # 连续 N 次无新卡片则停止
+    no_new_count = 0
+    last_card_count = 0
+
+    for scroll_i in range(MAX_SCROLLS):
+        # 滚动到页面底部
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        _rdsleep(1.0, 2.0)
+
+        # 检查是否有新内容加载
+        cards_now = len(page.query_selector_all("section.note-item"))
+
+        if cards_now == last_card_count:
+            no_new_count += 1
+        else:
+            no_new_count = 0
+            last_card_count = cards_now
+
+        # 已获取足够卡片，提前停止
+        target_cards = max_count * 3  # 每卡片可能有 0~N 张图，多取一些卡片保证数量
+        if cards_now >= target_cards:
+            print(f"  滚动 {scroll_i + 1} 次后已获取 {cards_now} 个卡片（目标 {target_cards}），停止滚动")
+            break
+
+        # 连续无新内容，页面已到底
+        if no_new_count >= CONSECUTIVE_NO_NEW:
+            print(f"  连续 {CONSECUTIVE_NO_NEW} 次无新内容，页面已到底（{cards_now} 卡片）")
+            break
+
+    # ── DOM 提取 ──
     cards = page.query_selector_all("section.note-item")
-    print(f"  找到 {len(cards)} 个笔记卡片")
+    total_cards = len(cards)
+    print(f"  共找到 {total_cards} 个笔记卡片，开始提取图片...")
 
     image_urls: list[str] = []
     seen: set[str] = set()
+    cards_with_img = 0
+    cards_without_img = 0
+    skipped_small = 0
+    skipped_icon = 0
 
-    for card in cards[: max_count * 2]:
+    for card in cards[: max_count * 4]:
         try:
-            img = card.query_selector("img")
-            if not img:
+            # 从每张卡片中提取所有图片（轮播帖含多图）
+            imgs = card.query_selector_all("img")
+            if not imgs:
+                cards_without_img += 1
                 continue
-            src = img.get_attribute("src") or img.get_attribute("data-src") or ""
-            if not src or not src.startswith("http"):
-                continue
-            # 过滤小图标
-            if any(k in src.lower() for k in ["icon", "avatar", "logo", "favicon", "emoji"]):
-                continue
-            # 过滤小尺寸
-            w = img.get_attribute("width") or ""
-            h = img.get_attribute("height") or ""
-            try:
-                if w and h and (int(w) < 100 or int(h) < 100):
+            cards_with_img += 1
+
+            for img in imgs:
+                src = img.get_attribute("src") or img.get_attribute("data-src") or ""
+                if not src or not src.startswith("http"):
                     continue
-            except ValueError:
-                pass
-            if src not in seen:
-                seen.add(src)
-                image_urls.append(src)
+                # 过滤图标类 URL
+                if any(k in src.lower() for k in ["icon", "avatar", "logo", "favicon", "emoji"]):
+                    skipped_icon += 1
+                    continue
+                # 过滤小尺寸（< 200px 任意边，比之前的 100px 更严格但不影响数量）
+                w = img.get_attribute("width") or ""
+                h = img.get_attribute("height") or ""
+                try:
+                    if w and h and (int(w) < 100 or int(h) < 100):
+                        skipped_small += 1
+                        continue
+                except ValueError:
+                    pass
+                if src not in seen:
+                    seen.add(src)
+                    image_urls.append(src)
         except Exception:
             continue
 
-    print(f"  提取到 {len(image_urls)} 张有效图片")
-    return image_urls[:max_count]
+    # ── 漏斗日志 ──
+    print(f"  ┌─ 提取漏斗 ─────────────────────────────")
+    print(f"  │ DOM 卡片总数: {total_cards}")
+    print(f"  │ 有图片的卡片: {cards_with_img}")
+    print(f"  │ 无图片的卡片: {cards_without_img}")
+    print(f"  │ 跳过小尺寸:   {skipped_small}")
+    print(f"  │ 跳过图标:     {skipped_icon}")
+    print(f"  │ 提取到 URL:   {len(image_urls)}")
+    print(f"  │ 目标数量:     {max_count}")
+    print(f"  └──────────────────────────────────────────")
+
+    return image_urls[:max_count * 2]  # 多返回一些，下载阶段有重试和丢弃
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -241,39 +300,77 @@ def run_scraper_sync(task_id: int):
 
     items_found = len(all_urls)
     items_added = 0
+    download_failed = 0
+    download_skipped_non200 = 0
+    download_skipped_network = 0
     import httpx
 
-    for img_url in all_urls[:max_count]:
-        try:
-            resp = httpx.get(img_url, headers={
-                "Referer": "https://www.xiaohongshu.com/",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            }, timeout=30, follow_redirects=True)
-            if resp.status_code != 200:
-                continue
-            ext = ".jpg"
-            ct = resp.headers.get("content-type", "")
-            if "png" in ct: ext = ".png"
-            elif "webp" in ct: ext = ".webp"
-            fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}{ext}"
-            fpath = img_dir / fname
-            fpath.write_bytes(resp.content)
+    # 去重（不同 URL 可能指向同一图片）
+    unique_urls = list(dict.fromkeys(all_urls))  # 保序去重
+    if len(unique_urls) < len(all_urls):
+        print(f"  去重: {len(all_urls)} → {len(unique_urls)} URL")
 
-            async def _save(path=str(fpath)):
-                async with async_session() as db:
-                    insp = Inspiration(
-                        id=str(uuid.uuid4()),
-                        source_type="scraper",
-                        source_url=img_url,
-                        file_path=f"images/{today}/{Path(path).name}",
-                        media_type="image",
-                    )
-                    db.add(insp)
-                    await db.commit()
-            asyncio.run(_save())
-            items_added += 1
-        except Exception as e:
-            print(f"  下载失败 {img_url[:60]}...: {e}")
+    for img_url in unique_urls:
+        if items_added >= max_count:
+            break
+
+        last_error = None
+        downloaded = False
+        MAX_RETRIES = 3
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = httpx.get(img_url, headers={
+                    "Referer": "https://www.xiaohongshu.com/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                }, timeout=30, follow_redirects=True)
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code}"
+                    download_skipped_non200 += 1
+                    break  # 非 200 不重试，CDN 拒绝重试也没用
+                ext = ".jpg"
+                ct = resp.headers.get("content-type", "")
+                if "png" in ct: ext = ".png"
+                elif "webp" in ct: ext = ".webp"
+                fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}{ext}"
+                fpath = img_dir / fname
+                fpath.write_bytes(resp.content)
+
+                async def _save(path=str(fpath)):
+                    async with async_session() as db:
+                        insp = Inspiration(
+                            id=str(uuid.uuid4()),
+                            source_type="scraper",
+                            source_url=img_url,
+                            file_path=f"images/{today}/{Path(path).name}",
+                            media_type="image",
+                        )
+                        db.add(insp)
+                        await db.commit()
+                asyncio.run(_save())
+                items_added += 1
+                downloaded = True
+                break  # 成功，跳出重试循环
+            except Exception as e:
+                last_error = str(e)[:80]
+                if attempt < MAX_RETRIES:
+                    backoff = 2 ** attempt  # 2s, 4s
+                    print(f"    下载重试 ({attempt}/{MAX_RETRIES}) {img_url[:50]}... ({last_error})，{backoff}s 后重试")
+                    time.sleep(backoff)
+                else:
+                    print(f"    下载失败 {img_url[:50]}... ({last_error})")
+                    download_failed += 1
+                    download_skipped_network += 1
+
+    # ── 下载漏斗日志 ──
+    print(f"  ┌─ 下载漏斗 ─────────────────────────────")
+    print(f"  │ 提取 URL 总数:  {items_found}")
+    print(f"  │ 去重后 URL:     {len(unique_urls)}")
+    print(f"  │ 下载成功:       {items_added}")
+    print(f"  │ HTTP 非 200:    {download_skipped_non200}")
+    print(f"  │ 网络失败:       {download_skipped_network}")
+    print(f"  │ 最终入库:       {items_added}")
+    print(f"  └──────────────────────────────────────────")
 
     # ── 完成任务 ──
     error_msg = None
