@@ -27,3 +27,20 @@ class ScraperTask(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+
+
+class ScraperSeenURL(Base):
+    """采集 URL 墓碑表：记录所有已下载过的图片 URL。
+
+    素材被物理删除后，该 URL 仍保留在此表中，
+    确保下次采集不会重复下载相同的图片。
+    """
+
+    __tablename__ = "scraper_seen_urls"
+
+    source_url: Mapped[str] = mapped_column(
+        Text, primary_key=True
+    )  # 图片 URL 作为主键，天然去重
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )

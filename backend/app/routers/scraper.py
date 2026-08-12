@@ -349,7 +349,7 @@ async def task_results_batch_delete(
 
     # 仅删除属于该任务的素材
     result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path, Inspiration.source_url)
         .where(
             Inspiration.id.in_(ids),
             Inspiration.scraper_task_id == task_id,
@@ -359,7 +359,7 @@ async def task_results_batch_delete(
 
     storage_root = settings.storage_root
     freed_bytes = 0
-    for fid, fpath, thumb in files_to_delete:
+    for fid, fpath, thumb, _surl in files_to_delete:
         for p in (fpath, thumb):
             if p:
                 full = storage_root / p
@@ -369,6 +369,18 @@ async def task_results_batch_delete(
                         full.unlink()
                 except Exception:
                     pass
+
+    # 写入墓碑表（防止重复采集）
+    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
+    if urls_to_seal:
+        from app.models.scraper import ScraperSeenURL
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
 
     # 从数据库删除（级联删除关联 tags 和 analysis_logs）
     await db.execute(

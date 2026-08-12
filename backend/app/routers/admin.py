@@ -344,16 +344,16 @@ async def batch_delete(
     if not ids:
         return {"deleted_count": 0, "freed_bytes": 0}
 
-    # 先获取文件路径用于删除磁盘文件
+    # 先获取文件路径和 source_url，用于删除磁盘文件和写入墓碑表
     result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path, Inspiration.source_url)
         .where(Inspiration.id.in_(ids))
     )
     files_to_delete = result.all()
 
     storage_root = settings.storage_root
     freed_bytes = 0
-    for fid, fpath, thumb in files_to_delete:
+    for fid, fpath, thumb, _surl in files_to_delete:
         for p in (fpath, thumb):
             if p:
                 full = storage_root / p
@@ -363,6 +363,18 @@ async def batch_delete(
                         full.unlink()
                 except Exception:
                     pass
+
+    # 写入墓碑表（防止重复采集）
+    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
+    if urls_to_seal:
+        from app.models.scraper import ScraperSeenURL
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
 
     # 从数据库删除
     await db.execute(
@@ -572,8 +584,22 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     if not ids_to_delete:
         return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
 
-    # 4. 先删 DB 记录（级联删除关联 tags 和 analysis_logs），再删磁盘文件
-    #    这样即使磁盘删除失败，DB 中也不会有孤儿记录
+    # 4. 写入墓碑表（防止被删除图片的 URL 被重新采集）
+    url_result = await db.execute(
+        select(Inspiration.source_url).where(Inspiration.id.in_(ids_to_delete))
+    )
+    urls_to_seal = [r[0] for r in url_result.all() if r[0]]
+    if urls_to_seal:
+        from app.models.scraper import ScraperSeenURL
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
+
+    # 5. 先删 DB 记录（级联删除关联 tags 和 analysis_logs），再删磁盘文件
     await db.execute(
         Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
     )

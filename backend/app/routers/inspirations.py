@@ -207,6 +207,16 @@ async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
 
+    # 写入墓碑表（防止重复采集）
+    if inspiration.source_url:
+        from app.models.scraper import ScraperSeenURL
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        await db.execute(
+            sqlite_insert(ScraperSeenURL)
+            .values(source_url=inspiration.source_url)
+            .prefix_with("OR IGNORE")
+        )
+
     # 删除磁盘文件
     delete_files(inspiration.file_path, inspiration.thumbnail_path)
 

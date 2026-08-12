@@ -203,13 +203,19 @@ def _download_batch(
 
     unique = list(dict.fromkeys(urls))
 
-    # 查询这批 URL 中已在 DB 中的（同步查询）
+    # 查询这批 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）
     if unique:
         try:
             conn = _sqlite3.connect(str(db_path))
+            # 确保墓碑表存在
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS scraper_seen_urls "
+                "(source_url TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.commit()
             placeholders = ",".join("?" * len(unique))
             cur = conn.execute(
-                f"SELECT source_url FROM inspirations WHERE source_url IN ({placeholders})",
+                f"SELECT source_url FROM scraper_seen_urls WHERE source_url IN ({placeholders})",
                 unique,
             )
             db_existing = {r[0] for r in cur.fetchall()}
@@ -266,6 +272,11 @@ def _download_batch(
                     "scraper_task_id, created_at, updated_at) "
                     "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?)",
                     (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
+                )
+                # 同步写入墓碑表（删除素材后仍保留，防止重复采集）
+                conn.execute(
+                    "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                    (img_url,),
                 )
                 conn.commit()
                 conn.close()
