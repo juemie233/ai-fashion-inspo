@@ -248,11 +248,20 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
     )
     total_count = total.scalar() or 0
 
-    # 失败的
-    failed = await db.execute(
-        select(func.count(func.distinct(AIAnalysisLog.inspiration_id))).where(
-            AIAnalysisLog.error.isnot(None)
+    # 失败的 — 只看每个素材的最新分析日志
+    latest_log_sub = (
+        select(
+            AIAnalysisLog.inspiration_id,
+            func.max(AIAnalysisLog.id).label("max_id"),
         )
+        .group_by(AIAnalysisLog.inspiration_id)
+        .subquery()
+    )
+    failed = await db.execute(
+        select(func.count()).select_from(AIAnalysisLog).join(
+            latest_log_sub,
+            AIAnalysisLog.id == latest_log_sub.c.max_id,
+        ).where(AIAnalysisLog.error.isnot(None))
     )
     failed_count = failed.scalar() or 0
 
@@ -671,6 +680,21 @@ async def _run_analysis(inspiration_id: str, file_path: str):
             logger.info(f"开始 AI 分析: {inspiration_id}")
             async with async_session() as db:
                 await analyze_image(db, inspiration_id, file_path)
+                # 分析成功后删除该素材的旧失败日志（历史垃圾数据）
+                from sqlalchemy import delete
+                old_logs = await db.execute(
+                    select(AIAnalysisLog.id).where(
+                        AIAnalysisLog.inspiration_id == inspiration_id,
+                        AIAnalysisLog.error.isnot(None),
+                    )
+                )
+                old_ids = [row[0] for row in old_logs]
+                if old_ids:
+                    await db.execute(
+                        delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(old_ids))
+                    )
+                    await db.commit()
+                    logger.info(f"清理了 {len(old_ids)} 条旧失败日志: {inspiration_id}")
             logger.info(f"AI 分析完成: {inspiration_id}")
         except ImportError:
             logger.warning("AI 服务尚未安装")
