@@ -8,45 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
+from app.db_migrations import ensure_schema
 from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin
-
-
-async def _auto_migrate():
-    """自动添加模型中已定义但物理表中缺失的列。"""
-    import aiosqlite
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
-    async with aiosqlite.connect(str(db_path)) as conn:
-        # inspirations 表
-        cursor = await conn.execute("PRAGMA table_info(inspirations)")
-        rows = await cursor.fetchall()
-        insp_cols = {r[1] for r in rows}
-
-        insp_missing = [
-            ("scraper_task_id", "INTEGER REFERENCES scraper_tasks(id) ON DELETE SET NULL"),
-        ]
-        for col_name, col_def in insp_missing:
-            if col_name not in insp_cols:
-                await conn.execute(
-                    f"ALTER TABLE inspirations ADD COLUMN {col_name} {col_def}"
-                )
-                print(f"[迁移] inspirations 添加列: {col_name}")
-
-        # scraper_tasks 表
-        cursor = await conn.execute("PRAGMA table_info(scraper_tasks)")
-        rows = await cursor.fetchall()
-        st_cols = {r[1] for r in rows}
-
-        st_missing = [
-            ("diagnostics", "TEXT"),
-        ]
-        for col_name, col_def in st_missing:
-            if col_name not in st_cols:
-                await conn.execute(
-                    f"ALTER TABLE scraper_tasks ADD COLUMN {col_name} {col_def}"
-                )
-                print(f"[迁移] scraper_tasks 添加列: {col_name}")
-
-        await conn.commit()
 
 
 @asynccontextmanager
@@ -60,7 +23,7 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     # 自动迁移缺失的列（开发期模型变更频繁，避免手动 ALTER TABLE）
-    await _auto_migrate()
+    await ensure_schema()
 
     # 启动时清理遗留的僵尸任务
     from app.database import async_session

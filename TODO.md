@@ -1,5 +1,27 @@
 # 待完成功能清单
 
+## API 版本握手
+
+**状态：** 待开发
+
+**描述：** 后端 schema 变更后若未重启，前端会静默降级（如漏斗按钮消失），用户无从察觉。通过版本握手让前后端不一致时明确提示。
+
+**方案：**
+
+- `/api/health` 返回 `schema_version` 字段，每次修改数据库 schema 时递增
+- 前端本地维护一个"期望版本号"常量（或从构建配置注入）
+- 前端启动时请求 health，版本不匹配则明确提示"后端 API 版本不匹配，请重启后端"
+- 可选：后端启动时从 `db_migrations.py` 的字段清单计算版本号，避免手动维护
+
+**涉及模块：**
+
+- `backend/app/main.py`（health 端点）
+- `backend/app/db_migrations.py`（schema_version 常量）
+- `web/src/api/client.ts`（启动时版本检查）
+- `web/src/App.vue` 或全局布局（不匹配提示 UI）
+
+---
+
 ## 视频分析功能
 
 **状态：** 待开发
