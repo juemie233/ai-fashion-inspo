@@ -212,16 +212,19 @@ async def batch_analyze(
     inspirations = result.scalars().all()
 
     if not inspirations:
-        raise HTTPException(status_code=404, detail="未找到任何素材")
+        raise HTTPException(status_code=404, detail="未找到任何可分析的图片素材")
 
+    skipped = len(inspiration_ids) - len(inspirations)
     for insp in inspirations:
         task = asyncio.create_task(_run_analysis(insp.id, insp.file_path))
         _analysis_tasks.add(task)
         task.add_done_callback(_analysis_tasks.discard)
 
     return {
-        "message": f"已将 {len(inspirations)} 个素材加入分析队列",
+        "message": f"已将 {len(inspirations)} 个素材加入分析队列"
+                   + (f"，跳过 {skipped} 个非图片素材" if skipped > 0 else ""),
         "count": len(inspirations),
+        "skipped_videos": skipped,
     }
 
 

@@ -125,12 +125,15 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
         import base64
         image_bytes = full_path.read_bytes()
         if ext == ".webp" and _WEBP_NEEDS_CONVERSION:
-            from io import BytesIO
-            from PIL import Image
-            buf = BytesIO()
-            Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
-            image_bytes = buf.getvalue()
-            logger.info(f"WebP → JPEG 转换完成 ({full_path.name})")
+            try:
+                from io import BytesIO
+                from PIL import Image
+                buf = BytesIO()
+                Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
+                image_bytes = buf.getvalue()
+                logger.info(f"WebP → JPEG 转换完成 ({full_path.name})")
+            except Exception as e:
+                raise ValueError(f"WebP 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
         image_data = base64.b64encode(image_bytes).decode("utf-8")
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
