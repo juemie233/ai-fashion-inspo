@@ -204,7 +204,10 @@ async def batch_analyze(
 ):
     """批量触发多个素材的 AI 分析。"""
     result = await db.execute(
-        select(Inspiration).where(Inspiration.id.in_(inspiration_ids))
+        select(Inspiration).where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.media_type == "image",
+        )
     )
     inspirations = result.scalars().all()
 
@@ -234,8 +237,12 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
     )
     analyzed_count = analyzed.scalar() or 0
 
-    # 总素材数
-    total = await db.execute(select(func.count()).select_from(Inspiration))
+    # 总素材数（仅图片，暂不分析视频）
+    total = await db.execute(
+        select(func.count()).select_from(Inspiration).where(
+            Inspiration.media_type == "image"
+        )
+    )
     total_count = total.scalar() or 0
 
     # 失败的
@@ -259,10 +266,13 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
 
 @router.get("/unanalyzed-ids")
 async def unanalyzed_ids(db: AsyncSession = Depends(get_db)):
-    """获取所有未分析过的素材 ID 列表。避免前端全量拉取对比。"""
+    """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。"""
     analyzed_sub = select(AIAnalysisLog.inspiration_id).distinct()
     result = await db.execute(
-        select(Inspiration.id).where(Inspiration.id.notin_(analyzed_sub))
+        select(Inspiration.id).where(
+            Inspiration.id.notin_(analyzed_sub),
+            Inspiration.media_type == "image",
+        )
     )
     ids = [row[0] for row in result]
     return {"ids": ids, "count": len(ids)}
@@ -348,6 +358,9 @@ async def retry_analysis(
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
 
+    if inspiration.media_type != "image":
+        raise HTTPException(status_code=400, detail="暂不支持分析视频文件")
+
     task = asyncio.create_task(_run_analysis(inspiration_id, inspiration.file_path))
     _analysis_tasks.add(task)
     task.add_done_callback(_analysis_tasks.discard)
@@ -369,6 +382,7 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)):
         .join(latest_log, (AIAnalysisLog.inspiration_id == latest_log.c.inspiration_id)
               & (AIAnalysisLog.id == latest_log.c.max_id))
         .where(AIAnalysisLog.error.isnot(None))
+        .where(Inspiration.media_type == "image")
     )
     failed = result.all()
 

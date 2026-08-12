@@ -8,6 +8,25 @@ import { getFileUrl } from '@/api/inspirations'
 import { useTagsStore } from '@/stores/tags'
 
 const message = useMessage()
+
+/** 复制文本到剪贴板（含降级方案） */
+function copyText(text: string) {
+  try {
+    navigator.clipboard.writeText(text).then(
+      () => message.success('已复制到剪贴板'),
+      () => { throw new Error('clipboard denied') }
+    )
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;left:-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    message.success('已复制到剪贴板')
+  }
+}
 const tagsStore = useTagsStore()
 
 // ===== 模型状态 =====
@@ -639,7 +658,11 @@ function formatDate(d: string | null | undefined) {
                 ])
               }},
               { title: '失败原因', key: 'error', width: 180, render: (row: HistoryItem) => row.error
-                ? h('span', {title: row.error, style:'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px'}, row.error)
+                ? h('span', {
+                    title: row.error,
+                    style:'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;cursor:pointer;text-decoration:underline;text-underline-offset:2px',
+                    onClick: () => copyText(row.error!)
+                  }, row.error)
                 : h('span', {style:'font-size:12px;color:#999'}, '-') },
               { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
               { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },

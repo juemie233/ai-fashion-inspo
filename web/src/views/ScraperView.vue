@@ -7,6 +7,25 @@ import apiClient from '@/api/client'
 
 const message = useMessage()
 
+/** 复制文本到剪贴板（含降级方案） */
+function copyText(text: string) {
+  try {
+    navigator.clipboard.writeText(text).then(
+      () => message.success('已复制到剪贴板'),
+      () => { throw new Error('clipboard denied') }
+    )
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;left:-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    message.success('已复制到剪贴板')
+  }
+}
+
 interface ScraperTask {
   id: number
   platform: string
@@ -220,14 +239,8 @@ const tableColumns = computed(() => [
             textDecoration: 'underline',
             textUnderlineOffset: '2px',
           },
-          title: '点击复制错误信息',
-          onClick: () => {
-            navigator.clipboard.writeText(row.error!).then(() => {
-              message.success('错误信息已复制到剪贴板')
-            }).catch(() => {
-              message.error('复制失败')
-            })
-          },
+          title: row.error,
+          onClick: () => copyText(row.error!),
         },
         row.error.length > 30 ? row.error.slice(0, 30) + '…' : row.error,
       )

@@ -22,6 +22,9 @@ from app.models.inspiration import AIAnalysisLog, Inspiration
 # 支持的图片扩展名
 _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
 
+# MiniCPM-V 等模型不支持 WebP，需要转为 JPEG
+_WEBP_NEEDS_CONVERSION = True
+
 logger = logging.getLogger(__name__)
 
 # 视觉模型分析提示词（中文 — 模型需要用中文理解穿搭概念）
@@ -113,15 +116,22 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
         if not full_path.is_file():
             raise ValueError(f"路径不是文件: {file_path}")
 
-        # 读取图片并编码为 base64
-        import base64
-        with open(full_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode("utf-8")
-
-        # 图片预检：通过扩展名判断（不使用已弃用的 imghdr）
+        # 图片预检：通过扩展名判断
         ext = full_path.suffix.lower()
         if ext not in _ALLOWED_IMG_EXT:
             raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
+
+        # 读取图片 —— WebP 需要转为 JPEG（MiniCPM-V 等模型不支持 WebP）
+        import base64
+        image_bytes = full_path.read_bytes()
+        if ext == ".webp" and _WEBP_NEEDS_CONVERSION:
+            from io import BytesIO
+            from PIL import Image
+            buf = BytesIO()
+            Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
+            image_bytes = buf.getvalue()
+            logger.info(f"WebP → JPEG 转换完成 ({full_path.name})")
+        image_data = base64.b64encode(image_bytes).decode("utf-8")
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
         file_size_mb = full_path.stat().st_size / (1024 * 1024)
