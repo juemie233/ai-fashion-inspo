@@ -25,6 +25,8 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   const loading = ref(false)
   /** 当前查看的素材详情 */
   const currentDetail = ref<InspirationDetailOut | null>(null)
+  /** 请求序号（用于忽略过期响应） */
+  let _requestSeq = 0
 
   /** 加载素材列表 */
   async function load(params: {
@@ -36,6 +38,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   } = {}) {
     loading.value = true
     if (params.size) size.value = params.size
+    const seq = ++_requestSeq
     try {
       const result = await fetchInspirations({
         page: params.page ?? page.value,
@@ -44,13 +47,16 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         is_favorite: params.is_favorite,
         sort: params.sort,
       })
+      // 忽略过期响应（快速翻页时旧请求可能后返回）
+      if (seq !== _requestSeq) return
       items.value = result.items
       total.value = result.total
       page.value = result.page
     } catch (e) {
+      if (seq !== _requestSeq) return
       console.error('加载素材列表失败', e)
     } finally {
-      loading.value = false
+      if (seq === _requestSeq) loading.value = false
     }
   }
 

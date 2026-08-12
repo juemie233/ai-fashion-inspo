@@ -64,17 +64,21 @@ async def check_ollama_status() -> dict:
         }
 
 
-async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
+async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -> bool:
     """分析单张图片：调用视觉模型并保存提取的标签。
 
     参数:
         db: 数据库会话
         inspiration_id: 素材 UUID
         file_path: 图片文件的相对路径
+
+    返回:
+        True 表示分析成功（无错误），False 表示分析失败
     """
     start_time = time.time()
     error_msg = None
     raw_response = None
+    success = False
 
     try:
         import httpx
@@ -192,9 +196,11 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
 
         # 提交所有变更
         await db.commit()
+        success = (error_msg is None)
 
     except Exception as e:
         error_msg = str(e)
+        success = False
         logger.error(f"AI 分析失败 {inspiration_id}: {e}")
         # 发生异常时回滚当前事务，确保日志记录不受脏事务影响
         try:
@@ -219,6 +225,8 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str):
             await db.commit()
         except Exception as log_err:
             logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
+
+        return success
 
 
 def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:

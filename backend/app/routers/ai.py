@@ -26,6 +26,8 @@ _analysis_semaphore = asyncio.Semaphore(2)
 _active_analyses: dict[str, str] = {}  # inspiration_id -> 状态描述
 # 保留任务引用，防止 GC 回收
 _analysis_tasks: set[asyncio.Task] = set()
+# 任务 ID → Task 映射，用于取消单个任务
+_task_by_id: dict[str, asyncio.Task] = {}
 # 排队中的任务 ID 列表（尚未获取信号量的）
 _pending_queue: list[str] = []
 # 队列暂停开关
@@ -270,7 +272,7 @@ async def gpu_stats():
     except Exception as e:
         logger.debug(f"Ollama /api/ps 查询失败: {e}")
 
-    # 2. 尝试 nvidia-smi 获取物理 GPU 总显存
+    # 2. 尝试 nvidia-smi 获取物理 GPU 总显存（比 Ollama 更准确，优先使用）
     try:
         import subprocess
         proc = await asyncio.create_subprocess_exec(
@@ -280,21 +282,22 @@ async def gpu_stats():
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise Exception("nvidia-smi 查询超时")
         if proc.returncode == 0 and stdout:
             line = stdout.decode().strip().split("\n")[0]  # 取第一张 GPU
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 4:
                 result["gpu_available"] = True
                 result["gpu_name"] = parts[0]
-                # nvidia-smi 返回的已经是 MB
+                # nvidia-smi 返回的已经是 MB，始终使用物理 GPU 数据
                 result["total_vram_mb"] = int(float(parts[1]))
-                nv_used = int(float(parts[2]))
-                nv_free = int(float(parts[3]))
-                # 使用 nvidia-smi 的数据（比 Ollama 更准确）
-                if result["used_vram_mb"] == 0:
-                    result["used_vram_mb"] = nv_used
-                result["free_vram_mb"] = nv_free
+                result["used_vram_mb"] = int(float(parts[2]))
+                result["free_vram_mb"] = int(float(parts[3]))
     except FileNotFoundError:
         logger.debug("nvidia-smi 未安装或不在 PATH 中")
     except Exception as e:
@@ -320,14 +323,19 @@ async def unload_model(model_name: str = Query(...)):
     """卸载指定模型释放显存（通知 Ollama 不再 keep alive）。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            # Ollama 没有直接的 unload API，但可以通过设置 keep_alive=0 触发卸载
             resp = await client.post(
                 f"{settings.ollama_base_url}/api/generate",
                 json={"model": model_name, "keep_alive": 0, "prompt": ""},
             )
-            # 忽略 400+ 响应（模型可能已经卸载）
-            logger.info(f"已发送卸载请求: {model_name}, 状态: {resp.status_code}")
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=502 if resp.status_code >= 500 else resp.status_code,
+                    detail=f"卸载失败: Ollama 返回 {resp.status_code}",
+                )
+            logger.info(f"已发送卸载请求: {model_name}")
         return {"message": f"已发送卸载请求: {model_name}"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"卸载失败: {e}")
 
@@ -610,11 +618,11 @@ async def batch_delete_logs(
     ids = payload.get("ids", [])
     if not ids:
         raise HTTPException(status_code=400, detail="请提供要删除的记录 ID 列表")
-    await db.execute(
+    result = await db.execute(
         delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(ids))
     )
     await db.commit()
-    return {"deleted": len(ids)}
+    return {"deleted": result.rowcount}
 
 
 @router.post("/history/batch-retry")
@@ -632,7 +640,10 @@ async def batch_retry_logs(
     result = await db.execute(
         select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
         .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
-        .where(AIAnalysisLog.id.in_(ids))
+        .where(
+            AIAnalysisLog.id.in_(ids),
+            Inspiration.media_type == "image",
+        )
         .distinct()
     )
     rows = result.all()
@@ -776,6 +787,10 @@ async def get_pending_queue(db: AsyncSession = Depends(get_db)):
 async def cancel_queue_item(inspiration_id: str):
     """取消排队中的分析任务（已开始分析的无法取消）。"""
     if inspiration_id in _pending_queue:
+        # 取消对应的 asyncio Task
+        task = _task_by_id.pop(inspiration_id, None)
+        if task and not task.done():
+            task.cancel()
         _pending_queue.remove(inspiration_id)
         _active_analyses.pop(inspiration_id, None)
         return {"message": "已取消排队任务"}
@@ -860,13 +875,13 @@ async def compare_analyses(
             "created_at": _fmt_utc(log.created_at) if log.created_at else None,
             "parsed_response": parsed,
             "tags_count": {
-                "style": len(parsed.get("style", [])),
-                "items": len(parsed.get("items", [])),
-                "fit": len(parsed.get("fit", [])),
-                "wear_style": len(parsed.get("wear_style", [])),
-                "occasion": len(parsed.get("occasion", [])),
-                "attributes": len(parsed.get("attributes", [])),
-                "colors": len(parsed.get("dominant_colors", [])),
+                "style": len((parsed.get("style") or [])),
+                "items": len((parsed.get("items") or [])),
+                "fit": len((parsed.get("fit") or [])),
+                "wear_style": len((parsed.get("wear_style") or [])),
+                "occasion": len((parsed.get("occasion") or [])),
+                "attributes": len((parsed.get("attributes") or [])),
+                "colors": len((parsed.get("dominant_colors") or [])),
             },
         })
 
@@ -883,10 +898,10 @@ async def compare_analyses(
                 if isinstance(vals, list):
                     for v in vals:
                         tags.add(f"{key}:{v}" if isinstance(v, str) else f"{key}:{v.get('name', str(v))}")
-            for item in parsed.get("items", []):
+            for item in (parsed.get("items") or []):
                 if isinstance(item, dict):
                     tags.add(f"单品:{item.get('type', '')} {item.get('color', '')}")
-            for c in parsed.get("dominant_colors", []):
+            for c in (parsed.get("dominant_colors") or []):
                 tags.add(f"颜色:{c}" if isinstance(c, str) else str(c))
             return tags
 
@@ -1151,7 +1166,7 @@ async def update_sampling_params(
 
     if persist and updated:
         try:
-            _update_env_file(updated)
+            await _update_env_file(updated)
         except Exception as e:
             logger.warning(f"写入 .env 失败: {e}")
 
@@ -1249,44 +1264,58 @@ async def _run_analysis(inspiration_id: str, file_path: str):
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
         return
 
+    # 注册当前任务
+    current_task = asyncio.current_task()
+    if current_task:
+        _task_by_id[inspiration_id] = current_task
+
     # 加入排队
     _pending_queue.append(inspiration_id)
     _active_analyses[inspiration_id] = "排队中..."
 
+    # 暂停检查放在信号量之前，避免消耗信号量槽位
+    while _queue_paused:
+        await asyncio.sleep(1)
+
     async with _analysis_semaphore:
-        # 等待暂停恢复
-        while _queue_paused:
-            await asyncio.sleep(1)
-        _pending_queue.remove(inspiration_id)
-        _active_analyses[inspiration_id] = "正在分析..."
         try:
+            # 安全地从排队列表移除（可能已被取消端点移除）
+            try:
+                _pending_queue.remove(inspiration_id)
+            except ValueError:
+                pass
+            _active_analyses[inspiration_id] = "正在分析..."
             from app.services.ai_service import analyze_image
 
             logger.info(f"开始 AI 分析: {inspiration_id}")
             async with async_session() as db:
-                await analyze_image(db, inspiration_id, file_path)
-                # 分析成功后删除该素材的旧失败日志（历史垃圾数据）
-                from sqlalchemy import delete
-                old_logs = await db.execute(
-                    select(AIAnalysisLog.id).where(
-                        AIAnalysisLog.inspiration_id == inspiration_id,
-                        AIAnalysisLog.error.isnot(None),
+                success = await analyze_image(db, inspiration_id, file_path)
+                # 仅分析成功时删除该素材的旧失败日志
+                if success:
+                    old_logs = await db.execute(
+                        select(AIAnalysisLog.id).where(
+                            AIAnalysisLog.inspiration_id == inspiration_id,
+                            AIAnalysisLog.error.isnot(None),
+                        )
                     )
-                )
-                old_ids = [row[0] for row in old_logs]
-                if old_ids:
-                    await db.execute(
-                        delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(old_ids))
-                    )
-                    await db.commit()
-                    logger.info(f"清理了 {len(old_ids)} 条旧失败日志: {inspiration_id}")
+                    old_ids = [row[0] for row in old_logs]
+                    if old_ids:
+                        await db.execute(
+                            delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(old_ids))
+                        )
+                        await db.commit()
+                        logger.info(f"清理了 {len(old_ids)} 条旧失败日志: {inspiration_id}")
             logger.info(f"AI 分析完成: {inspiration_id}")
+        except asyncio.CancelledError:
+            logger.info(f"分析任务被取消: {inspiration_id}")
+            raise
         except ImportError:
             logger.warning("AI 服务尚未安装")
         except Exception as e:
             logger.error(f"分析失败 {inspiration_id}: {e}")
         finally:
             _active_analyses.pop(inspiration_id, None)
+            _task_by_id.pop(inspiration_id, None)
 
 
 async def _update_env_file(updates: dict[str, str]) -> None:

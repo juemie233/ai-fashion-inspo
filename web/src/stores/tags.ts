@@ -21,9 +21,9 @@ export const useTagsStore = defineStore('tags', () => {
   /** 组合逻辑 */
   const combineMode = ref<'AND' | 'OR'>('AND')
 
-  /** 加载标签列表 */
-  async function load() {
-    if (groups.value.length > 0) return // 已加载则跳过
+  /** 加载标签列表（force=true 强制刷新） */
+  async function load(force: boolean = false) {
+    if (!force && groups.value.length > 0) return // 已加载则跳过
     loading.value = true
     try {
       groups.value = await fetchTagsGrouped()

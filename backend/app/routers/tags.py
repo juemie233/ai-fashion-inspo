@@ -108,6 +108,9 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
 @router.delete("/unused", status_code=status.HTTP_200_OK)
 async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
     """删除所有使用次数为 0 的标签。"""
+    import logging
+    _logger = logging.getLogger(__name__)
+
     used_subquery = select(InspirationTag.tag_id).distinct()
     result = await db.execute(
         select(Tag).where(Tag.id.notin_(used_subquery))
@@ -117,11 +120,18 @@ async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
     if not unused:
         return {"message": "没有未使用的标签", "count": 0}
 
-    for tag in unused:
-        await db.delete(tag)
-    await db.flush()
+    # 先删关联表中的残留记录（防御性清理），再删标签
+    unused_ids = [t.id for t in unused]
+    await db.execute(
+        delete(InspirationTag).where(InspirationTag.tag_id.in_(unused_ids))
+    )
+    await db.execute(
+        delete(Tag).where(Tag.id.in_(unused_ids))
+    )
+    await db.commit()
 
-    return {"message": f"已删除 {len(unused)} 个未使用标签", "count": len(unused)}
+    _logger.info(f"已删除 {len(unused)} 个未使用标签: {[t.name for t in unused[:10]]}...")
+    return {"message": f"已删除 {len(unused_ids)} 个未使用标签", "count": len(unused_ids)}
 
 
 @router.post("/batch-delete", status_code=status.HTTP_200_OK)

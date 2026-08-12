@@ -202,7 +202,10 @@ async function handleDeleteUnused() {
     const { data } = await deleteUnusedTags()
     message.success(data.message)
     await loadAll()
-  } catch { message.error('删除失败') }
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail || e?.message || '未知错误'
+    message.error('删除失败：' + detail)
+  }
 }
 
 // ===== 合并 =====

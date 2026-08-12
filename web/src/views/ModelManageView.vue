@@ -12,21 +12,24 @@ const message = useMessage()
 const { requestAndNotify, checkFailureAlert } = useNotification()
 
 /** 复制文本到剪贴板（含降级方案） */
-function copyText(text: string) {
+async function copyText(text: string) {
   try {
-    navigator.clipboard.writeText(text).then(
-      () => message.success('已复制到剪贴板'),
-      () => { throw new Error('clipboard denied') }
-    )
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.cssText = 'position:fixed;left:-9999px'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
+    await navigator.clipboard.writeText(text)
     message.success('已复制到剪贴板')
+  } catch {
+    // 降级方案：使用 textarea + execCommand
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.cssText = 'position:fixed;left:-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      message.success('已复制到剪贴板')
+    } catch {
+      message.error('复制失败')
+    }
   }
 }
 const tagsStore = useTagsStore()
@@ -241,14 +244,17 @@ async function loadGpuStats() {
 /** 卸载模型释放显存 */
 async function unloadModel(name: string) {
   try {
-    // 通过 Ollama API 卸载模型（keep_alive=0 后模型会自动卸载，这里先尝试 generate 一个空请求强制卸载）
-    // Ollama 没有直接的 unload 端点，但可以通过设置 keep_alive 为 0 来卸载
     const baseUrl = apiClient.defaults.baseURL || ''
-    await fetch(`${baseUrl}/ai/unload-model?model_name=${encodeURIComponent(name)}`, { method: 'POST' })
+    const resp = await fetch(`${baseUrl}/ai/unload-model?model_name=${encodeURIComponent(name)}`, { method: 'POST' })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
+      throw new Error(err.detail || `HTTP ${resp.status}`)
+    }
     message.success(`正在卸载 ${name}...`)
-    setTimeout(() => loadGpuStats(), 2000)
-  } catch {
-    message.info('模型可能已经卸载，请刷新查看')
+    const timer = setTimeout(() => { if (gpuStats.value) loadGpuStats() }, 2000)
+    timerRefs.push(timer)
+  } catch (e: any) {
+    message.error(e.message || '卸载模型失败')
     loadGpuStats()
   }
 }
@@ -268,9 +274,15 @@ onMounted(() => {
   startPolling()
 })
 
+// 跟踪定时器引用用于 onUnmounted 清理
+const timerRefs: ReturnType<typeof setTimeout>[] = []
+
 onUnmounted(() => {
   stopPolling()
   cancelDownload()
+  if (historyAbort) historyAbort.abort()
+  timerRefs.forEach(clearTimeout)
+  timerRefs.length = 0
 })
 
 // ---- 模型列表 ----
@@ -430,24 +442,23 @@ async function loadActiveAnalyses() {
   } catch {}
 }
 
-let pollingFast = true
-
 function startPolling() {
   loadActiveAnalyses()
   scheduleNextPoll()
 }
 
 function scheduleNextPoll() {
-  const hasActive = Object.keys(activeAnalyses.value).length > 0
-  const interval = hasActive ? 3000 : 15000
-  pollingFast = hasActive
+  const wasActive = Object.keys(activeAnalyses.value).length > 0
+  const interval = wasActive ? 3000 : 15000
   pollTimer = setTimeout(async () => {
     await loadActiveAnalyses()
     loadPendingQueue()
-    if (Object.keys(activeAnalyses.value).length > 0) {
-      loadQueue(); loadHistory()
+    const isActive = Object.keys(activeAnalyses.value).length > 0
+    // 始终刷新队列统计（轻量查询），有活跃时或刚变空闲时刷新历史
+    loadQueue()
+    if (isActive || wasActive) {
+      loadHistory()
     }
-    // 有活跃或刚变空闲时继续（切换间隔时多跑一轮）
     if (pollTimer !== null) scheduleNextPoll()
   }, interval)
 }
@@ -754,7 +765,7 @@ async function confirmResetStep() {
       message.success(data.message || '所有数据已重置')
       // 刷新所有状态
       refreshModels(); loadQueue(); loadHistory(); loadSettings()
-      tagsStore.load()
+      tagsStore.load(true)
     } catch (e: any) {
       message.error(e.response?.data?.detail || '重置失败')
     } finally {

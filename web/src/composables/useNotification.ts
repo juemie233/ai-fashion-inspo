@@ -2,8 +2,9 @@
 
 import { ref } from 'vue'
 
-/** 通知权限状态 */
-const permission = ref<NotificationPermission>('default')
+/** 通知权限状态——从浏览器当前状态初始化 */
+const _initial = ('Notification' in window) ? Notification.permission : 'default'
+const permission = ref<NotificationPermission>(_initial)
 
 /** 请求通知权限（首次调用时浏览器会弹出授权对话框） */
 async function requestPermission(): Promise<boolean> {
