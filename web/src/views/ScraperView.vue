@@ -2,8 +2,9 @@
 /** 采集管理页：创建/查看采集任务，管理采集源。Phase 4 完整功能。 */
 
 import { h, ref, computed, onMounted } from 'vue'
-import { NTag, NButton, useMessage } from 'naive-ui'
+import { NTag, NButton, NCheckbox, NSpin, NPopconfirm, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { getFileUrl } from '@/api/inspirations'
 
 const message = useMessage()
 
@@ -80,6 +81,96 @@ async function refreshTasks() {
     tasks.value = tRes.data
   } catch (e: any) {
     // 静默失败
+  }
+}
+
+// ── 采集结果预览 ──
+
+interface ResultItem {
+  id: string
+  file_path: string
+  thumbnail_path: string | null
+  source_url: string
+  is_favorite: boolean
+  created_at: string | null
+}
+
+const resultsTaskId = ref<number | null>(null)  // 当前正在查看结果的任务 ID
+const resultsItems = ref<ResultItem[]>([])
+const resultsTotal = ref(0)
+const resultsLoading = ref(false)
+const selectedIds = ref<Set<string>>(new Set())
+const deletingResults = ref(false)
+
+/** 查看某任务的采集结果 */
+async function viewResults(taskId: number) {
+  // 如果已经展开，关闭
+  if (resultsTaskId.value === taskId) {
+    resultsTaskId.value = null
+    resultsItems.value = []
+    selectedIds.value = new Set()
+    return
+  }
+  resultsTaskId.value = taskId
+  resultsLoading.value = true
+  selectedIds.value = new Set()
+  try {
+    const res = await apiClient.get(`/scraper/tasks/${taskId}/results`, { params: { size: 200 } })
+    resultsItems.value = res.data.items
+    resultsTotal.value = res.data.total
+  } catch (e: any) {
+    message.error('加载采集结果失败')
+    resultsTaskId.value = null
+  } finally {
+    resultsLoading.value = false
+  }
+}
+
+/** 切换选中 */
+function toggleSelect(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+
+function isSelected(id: string): boolean {
+  return selectedIds.value.has(id)
+}
+
+/** 全选/取消 */
+function selectAll() {
+  if (selectedIds.value.size === resultsItems.value.length) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(resultsItems.value.map(i => i.id))
+  }
+}
+
+/** 删除选中 */
+async function deleteSelected() {
+  if (selectedIds.value.size === 0) return
+  deletingResults.value = true
+  try {
+    const res = await apiClient.post(`/scraper/tasks/${resultsTaskId.value}/results/batch-delete`, {
+      ids: [...selectedIds.value],
+    })
+    message.success(`已删除 ${res.data.deleted_count} 个素材`)
+    // 从本地列表中移除已删除的
+    resultsItems.value = resultsItems.value.filter(i => !selectedIds.value.has(i.id))
+    selectedIds.value = new Set()
+    resultsTotal.value = res.data.remaining
+    // 如果全删了，关闭视图
+    if (res.data.remaining === 0) {
+      resultsTaskId.value = null
+      resultsItems.value = []
+    }
+    // 刷新任务列表更新计数
+    await refreshTasks()
+  } catch (e: any) {
+    message.error('删除失败')
+  } finally {
+    deletingResults.value = false
   }
 }
 
@@ -307,6 +398,24 @@ const tableColumns = computed(() => [
     key: 'created_at',
     width: 160,
     render: (row: ScraperTask) => formatDate(row.created_at),
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 90,
+    render: (row: ScraperTask) =>
+      row.items_added > 0
+        ? h(
+            NButton,
+            {
+              size: 'tiny',
+              type: resultsTaskId.value === row.id ? 'warning' : 'primary',
+              ghost: true,
+              onClick: () => viewResults(row.id),
+            },
+            resultsTaskId.value === row.id ? '收起' : '查看结果',
+          )
+        : null,
   },
 ])
 
@@ -561,6 +670,61 @@ function stopPoll() {
         </p>
       </template>
 
+      <!-- ====== 采集结果预览 ====== -->
+      <div v-if="resultsTaskId !== null" class="results-panel">
+        <n-spin :show="resultsLoading">
+          <div class="results-header">
+            <span>
+              📋 本次采集结果（共 {{ resultsTotal }} 张）
+            </span>
+            <n-space>
+              <n-button size="tiny" @click="selectAll">
+                {{ selectedIds.size === resultsItems.length ? '取消全选' : '全选' }}
+              </n-button>
+              <n-popconfirm
+                v-if="selectedIds.size > 0"
+                @positive-click="deleteSelected"
+              >
+                <template #trigger>
+                  <n-button size="tiny" type="error" ghost :loading="deletingResults">
+                    删除选中 ({{ selectedIds.size }})
+                  </n-button>
+                </template>
+                确定删除选中的 {{ selectedIds.size }} 个素材？此操作不可撤销。
+              </n-popconfirm>
+            </n-space>
+          </div>
+
+          <div v-if="resultsItems.length === 0 && !resultsLoading" class="results-empty">
+            空空如也 — 本次采集的素材已全部删除
+          </div>
+
+          <div v-else class="results-grid">
+            <div
+              v-for="item in resultsItems"
+              :key="item.id"
+              class="result-card"
+              :class="{ selected: isSelected(item.id) }"
+              @click="toggleSelect(item.id)"
+            >
+              <img
+                v-if="item.thumbnail_path"
+                :src="getFileUrl(item.thumbnail_path)"
+                loading="lazy"
+              />
+              <img
+                v-else
+                :src="getFileUrl(item.file_path)"
+                loading="lazy"
+              />
+              <div class="result-check">
+                <n-checkbox :checked="isSelected(item.id)" size="small" />
+              </div>
+            </div>
+          </div>
+        </n-spin>
+      </div>
+
       <!-- 选项2: 空状态引导 -->
       <n-empty v-else :description="emptyGuideTitle" size="medium">
         <template #extra>
@@ -641,5 +805,58 @@ function stopPoll() {
 :deep(.n-alert-body ul) {
   margin: 4px 0;
   padding-left: 18px;
+}
+
+/* 采集结果预览面板 */
+.results-panel {
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+}
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.results-empty {
+  text-align: center;
+  color: #999;
+  padding: 32px 0;
+  font-size: 13px;
+}
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+.result-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  background: #f5f5f5;
+}
+.result-card.selected {
+  border-color: #2080f0;
+}
+.result-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.result-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 </style>

@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,10 @@ class Inspiration(Base):
     source_platform_id: Mapped[str | None] = mapped_column(
         String(128), nullable=True, unique=True, index=True
     )
+    scraper_task_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("scraper_tasks.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )  # 关联采集任务，用于追溯来源
 
     file_path: Mapped[str] = mapped_column(Text)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -263,6 +263,124 @@ async def cancel_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
         await db.flush()
 
 
+@router.get("/tasks/{task_id}/results")
+async def task_results(
+    task_id: int,
+    page: int = 1,
+    size: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取指定采集任务产出的素材列表（缩略图网格）。"""
+    task = await db.get(ScraperTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="采集任务未找到")
+
+    from app.models.inspiration import Inspiration
+
+    # 计数
+    count_result = await db.execute(
+        select(func.count(Inspiration.id)).where(
+            Inspiration.scraper_task_id == task_id
+        )
+    )
+    total = count_result.scalar() or 0
+
+    # 分页
+    items_result = await db.execute(
+        select(Inspiration)
+        .where(Inspiration.scraper_task_id == task_id)
+        .order_by(Inspiration.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    )
+    items = items_result.scalars().all()
+
+    return {
+        "task": ScraperTaskOut.model_validate(task),
+        "total": total,
+        "page": page,
+        "size": size,
+        "items": [
+            {
+                "id": i.id,
+                "file_path": i.file_path,
+                "thumbnail_path": i.thumbnail_path,
+                "source_url": i.source_url,
+                "is_favorite": i.is_favorite,
+                "created_at": str(i.created_at) if i.created_at else None,
+            }
+            for i in items
+        ],
+    }
+
+
+@router.post("/tasks/{task_id}/results/batch-delete")
+async def task_results_batch_delete(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除采集任务产出的指定素材。
+
+    请求体: {"ids": ["id1", "id2", ...]}
+    """
+    ids = payload.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请提供要删除的素材 ID 列表")
+
+    from app.models.inspiration import Inspiration
+
+    # 仅删除属于该任务的素材
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
+        .where(
+            Inspiration.id.in_(ids),
+            Inspiration.scraper_task_id == task_id,
+        )
+    )
+    files_to_delete = result.all()
+
+    storage_root = settings.storage_root
+    freed_bytes = 0
+    for fid, fpath, thumb in files_to_delete:
+        for p in (fpath, thumb):
+            if p:
+                full = storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+
+    # 从数据库删除（级联删除关联 tags 和 analysis_logs）
+    await db.execute(
+        Inspiration.__table__.delete().where(
+            Inspiration.id.in_([r[0] for r in files_to_delete])
+        )
+    )
+    await db.commit()
+
+    # 更新任务计数
+    remaining_result = await db.execute(
+        select(func.count(Inspiration.id)).where(
+            Inspiration.scraper_task_id == task_id
+        )
+    )
+    remaining = remaining_result.scalar() or 0
+
+    task = await db.get(ScraperTask, task_id)
+    if task:
+        task.items_added = remaining
+        await db.commit()
+
+    return {
+        "deleted_count": len(files_to_delete),
+        "freed_bytes": freed_bytes,
+        "remaining": remaining,
+    }
+
+
 async def _run_scraper(task_id: int):
     """后台任务：通过子进程执行采集，隔离 Playwright 避免事件循环冲突。"""
     import logging

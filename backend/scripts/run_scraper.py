@@ -187,6 +187,7 @@ def run_scraper_sync(task_id: int):
             t = await db.get(ScraperTask, task_id)
             if t:
                 t.status = "running"
+                t.started_at = utcnow()
                 await db.commit()
     asyncio.run(_run())
 
@@ -310,6 +311,7 @@ def run_scraper_sync(task_id: int):
                 if t:
                     t.status = "failed"
                     t.error = str(e)[:500]
+                    t.finished_at = utcnow()
                     await db.commit()
         asyncio.run(_fail())
         return
@@ -396,6 +398,7 @@ def run_scraper_sync(task_id: int):
                             source_url=img_url,
                             file_path=f"images/{today}/{Path(path).name}",
                             media_type="image",
+                            scraper_task_id=task_id,
                         )
                         db.add(insp)
                         await db.commit()
@@ -439,6 +442,7 @@ def run_scraper_sync(task_id: int):
                 t.items_added = items_added
                 if error_msg:
                     t.error = error_msg
+                t.finished_at = utcnow()
                 await db.commit()
     asyncio.run(_done())
 
