@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     thumbnails_dir: Path = storage_root / "thumbnails"
     videos_dir: Path = storage_root / "videos"
 
+    # 向量检索（LanceDB 嵌入式向量库）
+    lancedb_dir: Path = storage_root / "lancedb"  # LanceDB 数据目录（文件落盘，可随项目迁移）
+    lancedb_text_table: str = "text_vectors"  # 文本向量表
+    lancedb_image_table: str = "image_vectors"  # 图像向量表
+    lancedb_text_dim: int = 384  # 文本向量维度（Ollama all-minilm 输出 384 维）
+    lancedb_image_dim: int = 512  # 图像向量维度（CLIP ViT-B/32 输出 512 维）
+    clip_model_name: str = "clip-ViT-B-32"  # 图像向量模型（sentence-transformers / open_clip 均可加载）
+    vector_top_k_default: int = 20  # 向量搜索默认 TopK
+    vector_similarity_weight: float = 0.6  # 混合排序：视觉相似度权重
+    vector_tag_weight: float = 0.4  # 混合排序：标签匹配权重
+
     # 缩略图
     thumbnail_size: tuple[int, int] = (400, 600)
     thumbnail_quality: int = 85

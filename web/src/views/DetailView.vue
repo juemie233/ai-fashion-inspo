@@ -14,8 +14,10 @@ import {
   suggestOutfitTags,
   type InspirationDetailOut,
 } from '@/api/inspirations'
+import { fetchSimilar, type SimilarItemOut } from '@/api/search'
 import { fetchTagsGrouped } from '@/api/tags'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
+import InspirationCard from '@/components/inspiration/InspirationCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,10 +30,39 @@ const lightboxOpen = ref(false)
 /** 正在加载 */
 const loading = ref(true)
 
+// ── 相似素材推荐 ──
+const similarItems = ref<SimilarItemOut[]>([])
+const similarLoading = ref(false)
+
+/** 相似来源中文标注 */
+function similarSourceLabel(source: string): string {
+  const labels: Record<string, string> = {
+    visual: '视觉相似',
+    tag: '标签相似',
+    hybrid: '视觉+标签',
+  }
+  return labels[source] || source
+}
+
+/** 加载相似素材推荐（视觉 + 标签加权） */
+async function loadSimilar(id: string) {
+  similarLoading.value = true
+  try {
+    const data = await fetchSimilar(id, 10)
+    similarItems.value = data.similar
+  } catch {
+    // 相似推荐失败不影响详情展示，静默降级
+    similarItems.value = []
+  } finally {
+    similarLoading.value = false
+  }
+}
+
 onMounted(async () => {
   loadOutfitOptions()
   try {
     detail.value = await fetchInspiration(route.params.id as string)
+    loadSimilar(detail.value.id)
   } catch {
     message.error('加载素材详情失败')
   } finally {
@@ -385,6 +416,26 @@ function dismissOutfitTag(name: string) {
             />
           </div>
         </div>
+
+        <!-- 相似素材推荐 -->
+        <div class="similar-section">
+          <div class="similar-header">
+            <h4>相似素材推荐</h4>
+            <n-spin v-if="similarLoading" size="small" />
+            <span v-else-if="similarItems.length === 0" class="similar-empty-hint">
+              暂无相似素材（需要先回填向量，或在图像向量不可用时依赖标签匹配）
+            </span>
+          </div>
+          <div v-if="similarItems.length > 0" class="similar-grid">
+            <InspirationCard
+              v-for="item in similarItems"
+              :key="item.inspiration.id"
+              :item="item.inspiration"
+              :badge="`${Math.round(item.similarity * 100)}% · ${similarSourceLabel(item.match_source)}`"
+              :show-actions="false"
+            />
+          </div>
+        </div>
       </template>
     </n-spin>
   </div>
@@ -450,6 +501,35 @@ function dismissOutfitTag(name: string) {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.similar-section {
+  margin-top: 32px;
+  border-top: 1px solid var(--n-border-color, #eee);
+  padding-top: 16px;
+}
+
+.similar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.similar-header h4 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.similar-empty-hint {
+  font-size: 12px;
+  color: #999;
+}
+
+.similar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
 }
 
 .outfit-tags-section {

@@ -1,9 +1,18 @@
-"""向量嵌入服务：通过 Ollama 生成图片 CLIP 嵌入向量，实现以图搜图。
+"""向量嵌入服务：生成文本向量与图像向量，供语义搜索、以图搜图使用。
 
-使用 Ollama 的 minicpm-v 或 llava 模型生成视觉嵌入向量。
-如果视觉嵌入模型不可用，回退到使用图片的标签文本生成嵌入。
+两条链路：
+1. 文本向量：通过 Ollama /api/embeddings 使用 all-minilm 模型生成（384 维）。
+2. 图像向量：优先使用本地 CLIP 模型（sentence-transformers 的 clip-ViT-B-32，
+   512 维）。CLIP 依赖 torch / sentence-transformers 较重，项目默认不强制安装；
+   当依赖缺失或模型未下载时，图像向量能力自动降级（返回 None / 明确的状态说明），
+   不会导致其他功能崩溃。
+
+安装方式（需用户手动执行，见 README / TODO）：
+    pip install sentence-transformers
+    # 首次使用时自动下载 clip-ViT-B-32 模型（约 600MB，需科学上网或离线放置）
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -17,72 +26,177 @@ from app.models.inspiration import Inspiration
 
 logger = logging.getLogger(__name__)
 
-# 嵌入向量的维度（取决于所选模型）
-EMBEDDING_DIM = 512
+# 文本向量维度（取决于 Ollama embedding 模型）
+TEXT_EMBEDDING_DIM = settings.lancedb_text_dim
+# 图像向量维度（取决于 CLIP 模型）
+IMAGE_EMBEDDING_DIM = settings.lancedb_image_dim
+
+# CLIP 模型缓存与加载错误状态（模块级单例，避免重复加载）
+_image_model = None
+_image_model_error: str | None = None
 
 
-async def generate_embedding(file_path: str) -> list[float] | None:
+# ==================== 文本向量（Ollama all-minilm） ====================
+
+
+async def generate_text_embedding(text: str) -> list[float] | None:
+    """通过 Ollama embedding 模型生成文本向量。
+
+    参数:
+        text: 待嵌入的文本
+
+    返回:
+        向量列表；Ollama 未启动、模型缺失或调用失败时返回 None
     """
-    为图片生成嵌入向量。
-
-    策略：
-    1. 尝试使用 Ollama 视觉模型生成描述文本，再对该文本生成嵌入
-    2. 如果失败，返回 None
-    """
-    try:
-        full_path = settings.storage_root / file_path
-        if not full_path.exists():
-            logger.warning(f"图片不存在，无法生成嵌入: {full_path}")
-            return None
-
-        # 读取图片为 base64
-        import base64
-
-        with open(full_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode("utf-8")
-
-        # 使用 Ollama 的视觉模型生成简短描述
-        async with httpx.AsyncClient(timeout=30) as client:
-            describe_resp = await client.post(
-                f"{settings.ollama_base_url}/api/chat",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": "用简短的中文描述这张穿搭图片的关键视觉特征（颜色、风格、单品），不超过50字。",
-                            "images": [image_data],
-                        }
-                    ],
-                    "stream": False,
-                },
-            )
-
-            if describe_resp.status_code != 200:
-                logger.error(f"视觉模型描述失败: {describe_resp.text}")
-                return None
-
-            description = describe_resp.json()["message"]["content"].strip()
-
-            # 对描述文本生成嵌入向量
-            embed_resp = await client.post(
-                f"{settings.ollama_base_url}/api/embeddings",
-                json={
-                    "model": settings.ollama_embedding_model,
-                    "prompt": description,
-                },
-            )
-
-            if embed_resp.status_code != 200:
-                logger.error(f"嵌入模型失败: {embed_resp.text}")
-                return None
-
-            embedding = embed_resp.json()["embedding"]
-            return embedding
-
-    except Exception as e:
-        logger.error(f"生成嵌入向量失败: {e}")
+    text = (text or "").strip()
+    if not text:
         return None
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{settings.ollama_base_url}/api/embeddings",
+                json={"model": settings.ollama_embedding_model, "prompt": text},
+            )
+            if resp.status_code != 200:
+                logger.error(
+                    f"文本嵌入模型失败 (HTTP {resp.status_code}): {resp.text[:200]}"
+                )
+                return None
+            embedding = resp.json().get("embedding")
+            if not embedding:
+                logger.warning(f"文本嵌入返回空结果: {text[:50]}")
+                return None
+            return list(embedding)
+    except Exception as e:
+        logger.error(f"生成文本向量失败: {e}")
+        return None
+
+
+def get_text_embedding_status() -> dict:
+    """返回文本向量能力状态（供 /api/search/vector/status 使用）。"""
+    return {
+        "model": settings.ollama_embedding_model,
+        "dim": TEXT_EMBEDDING_DIM,
+        "note": "使用 Ollama /api/embeddings 生成文本向量，需已安装 all-minilm 模型",
+    }
+
+
+# ==================== 图像向量（CLIP） ====================
+
+
+def _check_clip_dependency() -> str | None:
+    """检测 CLIP 依赖是否可用，返回错误原因（可用时返回 None）。"""
+    try:
+        import torch  # noqa: F401
+        import sentence_transformers  # noqa: F401
+        return None
+    except ImportError as e:
+        return (
+            "图像向量不可用：缺少 CLIP 依赖（sentence-transformers / torch）。"
+            f"请手动安装：pip install sentence-transformers。({e})"
+        )
+
+
+def get_image_embedding_status() -> dict:
+    """返回图像向量能力状态（CLIP 是否可用，供前端提示与 /vector/status 使用）。"""
+    reason = _check_clip_dependency()
+    available = reason is None
+    return {
+        "available": available,
+        "model": settings.clip_model_name,
+        "dim": IMAGE_EMBEDDING_DIM,
+        "reason": reason or "图像向量可用（CLIP 已安装）",
+    }
+
+
+def _load_clip_model():
+    """懒加载 CLIP 模型（仅在调用图像向量时加载一次）。
+
+    返回:
+        模型对象；依赖缺失或加载失败时返回 None（并记录错误原因）
+    """
+    global _image_model, _image_model_error
+    if _image_model is not None:
+        return _image_model
+    if _image_model_error is not None:
+        return None
+
+    reason = _check_clip_dependency()
+    if reason:
+        _image_model_error = reason
+        logger.warning(reason)
+        return None
+
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        logger.info(f"正在加载 CLIP 图像模型: {settings.clip_model_name}")
+        _image_model = SentenceTransformer(settings.clip_model_name)
+        return _image_model
+    except Exception as e:
+        _image_model_error = (
+            f"图像向量不可用：CLIP 模型加载失败（模型未下载或网络异常）。"
+            f"请确认模型 {settings.clip_model_name} 已下载。({e})"
+        )
+        logger.error(_image_model_error)
+        return None
+
+
+def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list[float] | None:
+    """同步执行图像向量编码（CPU 密集，调用方需放入线程池）。
+
+    参数:
+        file_path: 图片文件绝对路径（与 image_bytes 二选一）
+        image_bytes: 图片原始字节（与 file_path 二选一）
+
+    返回:
+        512 维向量列表；失败返回 None
+    """
+    model = _load_clip_model()
+    if model is None:
+        return None
+
+    try:
+        from PIL import Image
+
+        if image_bytes is not None:
+            from io import BytesIO
+
+            img = Image.open(BytesIO(image_bytes))
+        else:
+            if not file_path or not Path(file_path).exists():
+                logger.warning(f"图片不存在，无法生成图像向量: {file_path}")
+                return None
+            img = Image.open(file_path)
+
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+
+        embedding = model.encode(img)
+        return [float(x) for x in embedding.tolist()]
+    except Exception as e:
+        logger.error(f"生成图像向量失败: {e}")
+        return None
+
+
+async def generate_image_embedding(
+    file_path: str | None = None, image_bytes: bytes | None = None
+) -> list[float] | None:
+    """为图片生成 CLIP 图像向量（自动降级）。
+
+    参数:
+        file_path: 图片文件绝对路径（与 image_bytes 二选一）
+        image_bytes: 图片原始字节（与 file_path 二选一）
+
+    返回:
+        512 维向量列表；CLIP 依赖缺失、模型未下载或图片无效时返回 None
+    """
+    if file_path is None and image_bytes is None:
+        return None
+    return await asyncio.to_thread(_encode_image_sync, file_path, image_bytes)
+
+
+# ==================== 工具函数 ====================
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -100,16 +214,37 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot_product / (norm_a * norm_b)
 
 
+def build_inspiration_text(inspiration: Inspiration) -> str:
+    """为素材构建语义搜索用文本（标签名 + 主色调 + 作者）。
+
+    返回:
+        拼接后的文本，无内容时返回空字符串
+    """
+    parts: list[str] = [t.tag.name for t in inspiration.tags]
+
+    if inspiration.dominant_colors:
+        try:
+            colors = json.loads(inspiration.dominant_colors)
+            if isinstance(colors, list):
+                parts.extend([f"颜色 {c}" for c in colors if isinstance(c, str)])
+        except Exception:
+            pass
+
+    if inspiration.source_author:
+        parts.append(inspiration.source_author)
+
+    return "、".join(parts)
+
+
 async def find_similar_images(
     db: AsyncSession,
     inspiration_id: str,
     top_k: int = 10,
 ) -> list[dict]:
     """
-    在素材库中搜索与指定素材最相似的图片。
+    基于标签重合度寻找相似素材（纯标签兜底方案）。
 
-    当前实现使用标签相似度作为代理（标签重叠越多越相似）。
-    完整嵌入向量方案在 Ollama 视觉嵌入 API 可用后启用。
+    当图像向量不可用或无向量数据时，由 /api/search/similar/{id} 回退到本函数。
     """
     from app.models.tag import InspirationTag, Tag
 

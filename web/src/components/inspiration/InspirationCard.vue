@@ -9,6 +9,10 @@ import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 
 const props = defineProps<{
   item: InspirationOut
+  /** 右上角角标文本（如相似度「92% 视觉相似」，用于相似推荐场景） */
+  badge?: string
+  /** 是否显示悬浮操作按钮（删除/收藏），相似推荐卡片默认关闭 */
+  showActions?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -80,8 +84,13 @@ function goToDetail() {
         loading="lazy"
       />
 
+      <!-- 角标（相似度 / 相似来源） -->
+      <div v-if="badge" class="sim-badge" :title="badge">
+        {{ badge }}
+      </div>
+
       <!-- 悬浮操作层 -->
-      <div class="card-overlay">
+      <div v-if="showActions !== false" class="card-overlay">
         <n-button
           v-if="item.quality_status === 'rejected'"
           size="tiny"
@@ -213,6 +222,19 @@ function goToDetail() {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 4px;
+}
+
+.sim-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  z-index: 2;
+  white-space: nowrap;
 }
 
 .quality-badge {
