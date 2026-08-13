@@ -25,7 +25,8 @@ from app.routers.ai_shared import (
     _analysis_tasks,
     _task_by_id,
     _pending_queue,
-    _queue_paused,
+    get_queue_paused,
+    set_queue_paused,
     _quality_active,
     _run_analysis,
     _run_quality_check,
@@ -308,7 +309,7 @@ async def batch_delete_logs(
     请求体: {"ids": [1, 2, 3]}
     """
     ids = payload.get("ids", [])
-    if not ids:
+    if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="请提供要删除的记录 ID 列表")
     result = await db.execute(
         delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(ids))
@@ -327,7 +328,7 @@ async def batch_retry_logs(
     请求体: {"ids": [1, 2, 3]}
     """
     ids = payload.get("ids", [])
-    if not ids:
+    if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")
     result = await db.execute(
         select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
@@ -440,12 +441,12 @@ async def delete_analysis_log(
 async def get_pending_queue(db: AsyncSession = Depends(get_db)):
     """获取排队中素材的缩略图预览信息。"""
     if not _pending_queue and not _active_analyses:
-        return {"items": [], "paused": _queue_paused}
+        return {"items": [], "paused": get_queue_paused()}
 
     # 所有活跃/排队中的素材 ID
     all_ids = list(_active_analyses.keys())
     if not all_ids:
-        return {"items": [], "paused": _queue_paused}
+        return {"items": [], "paused": get_queue_paused()}
 
     result = await db.execute(
         select(Inspiration.id, Inspiration.thumbnail_path, Inspiration.file_path)
@@ -472,7 +473,7 @@ async def get_pending_queue(db: AsyncSession = Depends(get_db)):
                 "status": status,
             })
 
-    return {"items": items, "paused": _queue_paused}
+    return {"items": items, "paused": get_queue_paused()}
 
 
 @router.delete("/queue/{inspiration_id}")
@@ -495,8 +496,7 @@ async def cancel_queue_item(inspiration_id: str):
 @router.post("/queue/pause")
 async def pause_queue():
     """暂停全局分析队列（已完成的不受影响）。"""
-    global _queue_paused
-    _queue_paused = True
+    set_queue_paused(True)
     logger.info("分析队列已暂停")
     return {"message": "队列已暂停", "paused": True}
 
@@ -504,8 +504,7 @@ async def pause_queue():
 @router.post("/queue/resume")
 async def resume_queue():
     """恢复全局分析队列。"""
-    global _queue_paused
-    _queue_paused = False
+    set_queue_paused(False)
     logger.info("分析队列已恢复")
     return {"message": "队列已恢复", "paused": False}
 
@@ -531,10 +530,13 @@ async def compare_analyses(
     - tag_diff: 各次分析间的标签差异（新增/消失/共同）
     - time_comparison: 耗时对比数据
     """
-    # 获取该素材的所有分析日志
+    # 获取该素材的所有分析日志（排除质量审核日志）
     result = await db.execute(
         select(AIAnalysisLog)
-        .where(AIAnalysisLog.inspiration_id == inspiration_id)
+        .where(
+            _analysis_log_filter(),
+            AIAnalysisLog.inspiration_id == inspiration_id,
+        )
         .order_by(AIAnalysisLog.created_at.asc())
     )
     logs = result.scalars().all()

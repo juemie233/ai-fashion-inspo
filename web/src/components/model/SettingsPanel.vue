@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 参数调优面板：基础参数、Prompt 管理、单图测试、采样参数、数据重置。 */
 
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { useAiModelsStore } from '@/stores/aiModels'
@@ -71,6 +71,8 @@ const testElapsedMs = ref(0)
 const testModel = ref('')
 const testCustomPrompt = ref('')
 
+let testAbortController: AbortController | null = null
+
 async function testAnalyze() {
   if (!testInspirationId.value.trim()) return
   testLoading.value = true
@@ -84,7 +86,8 @@ async function testAnalyze() {
     const params = new URLSearchParams({ inspiration_id: testInspirationId.value.trim() })
     if (testCustomPrompt.value.trim()) params.set('custom_prompt', testCustomPrompt.value.trim())
 
-    const response = await fetch(`${baseUrl}/ai/test-analyze?${params}`, { method: 'POST' })
+    testAbortController = new AbortController()
+    const response = await fetch(`${baseUrl}/ai/test-analyze?${params}`, { method: 'POST', signal: testAbortController.signal })
     if (!response.ok) {
       const err = await response.json()
       throw new Error(err.detail || '测试请求失败')
@@ -255,6 +258,10 @@ onMounted(() => {
   loadSettings()
   loadSamplingParams()
   loadPrompt()
+})
+
+onUnmounted(() => {
+  if (testAbortController) testAbortController.abort()
 })
 </script>
 

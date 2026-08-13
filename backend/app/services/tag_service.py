@@ -105,10 +105,11 @@ async def get_or_create_tag(
         tag = Tag(name=name, category=category, source=source)
         db.add(tag)
         try:
-            await db.flush()
+            async with db.begin_nested():
+                await db.flush()
         except IntegrityError:
-            # 并发场景：使用 SAVEPOINT 回滚仅当前插入，不丢失同事务中已创建的标签
-            await db.rollback()  # SQLite 下此 rollback 回滚整个事务，下一步用 begin_nested 隔离
+            # SAVEPOINT 已回滚（不影响同事务其它已 flush 的标签），移除失败对象后重查
+            db.expunge(tag)
             logger.debug(f"并发创建标签冲突: {name!r}，回退查询")
             result = await db.execute(select(Tag).where(Tag.name == name))
             tag = result.scalar_one_or_none()

@@ -35,6 +35,17 @@ _queue_paused = False
 _quality_active: set[str] = set()  # 正在审核的 inspiration_id
 
 
+def get_queue_paused() -> bool:
+    """返回队列暂停状态（供其它模块读取，避免按值导入导致读到旧值）。"""
+    return _queue_paused
+
+
+def set_queue_paused(paused: bool) -> None:
+    """设置队列暂停状态（供其它模块修改，避免按值导入失效）。"""
+    global _queue_paused
+    _queue_paused = paused
+
+
 async def _run_analysis(inspiration_id: str, file_path: str):
     """后台任务：对图片执行 AI 分析并保存标签（带并发控制 + 任务追踪）。"""
     if inspiration_id in _active_analyses:
@@ -50,49 +61,55 @@ async def _run_analysis(inspiration_id: str, file_path: str):
     _pending_queue.append(inspiration_id)
     _active_analyses[inspiration_id] = "排队中..."
 
-    # 暂停检查放在信号量之前，避免消耗信号量槽位
-    while _queue_paused:
-        await asyncio.sleep(1)
+    try:
+        # 暂停检查放在信号量之前，避免消耗信号量槽位
+        while _queue_paused:
+            await asyncio.sleep(1)
 
-    async with _analysis_semaphore:
-        try:
-            # 安全地从排队列表移除（可能已被取消端点移除）
+        async with _analysis_semaphore:
             try:
-                _pending_queue.remove(inspiration_id)
-            except ValueError:
-                pass
-            _active_analyses[inspiration_id] = "正在分析..."
-            from app.services.ai_service import analyze_image
+                # 安全地从排队列表移除（可能已被取消端点移除）
+                try:
+                    _pending_queue.remove(inspiration_id)
+                except ValueError:
+                    pass
+                _active_analyses[inspiration_id] = "正在分析..."
+                from app.services.ai_service import analyze_image
 
-            logger.info(f"开始 AI 分析: {inspiration_id}")
-            async with async_session() as db:
-                success = await analyze_image(db, inspiration_id, file_path)
-                # 仅分析成功时删除该素材的旧失败日志
-                if success:
-                    old_logs = await db.execute(
-                        select(AIAnalysisLog.id).where(
-                            AIAnalysisLog.inspiration_id == inspiration_id,
-                            AIAnalysisLog.error.isnot(None),
+                logger.info(f"开始 AI 分析: {inspiration_id}")
+                async with async_session() as db:
+                    success = await analyze_image(db, inspiration_id, file_path)
+                    # 仅分析成功时删除该素材的旧失败日志
+                    if success:
+                        old_logs = await db.execute(
+                            select(AIAnalysisLog.id).where(
+                                AIAnalysisLog.inspiration_id == inspiration_id,
+                                AIAnalysisLog.error.isnot(None),
+                            )
                         )
-                    )
-                    old_ids = [row[0] for row in old_logs]
-                    if old_ids:
-                        await db.execute(
-                            delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(old_ids))
-                        )
-                        await db.commit()
-                        logger.info(f"清理了 {len(old_ids)} 条旧失败日志: {inspiration_id}")
-            logger.info(f"AI 分析完成: {inspiration_id}")
-        except asyncio.CancelledError:
-            logger.info(f"分析任务被取消: {inspiration_id}")
-            raise
-        except ImportError:
-            logger.warning("AI 服务尚未安装")
-        except Exception as e:
-            logger.error(f"分析失败 {inspiration_id}: {e}")
-        finally:
-            _active_analyses.pop(inspiration_id, None)
-            _task_by_id.pop(inspiration_id, None)
+                        old_ids = [row[0] for row in old_logs]
+                        if old_ids:
+                            await db.execute(
+                                delete(AIAnalysisLog).where(AIAnalysisLog.id.in_(old_ids))
+                            )
+                            await db.commit()
+                            logger.info(f"清理了 {len(old_ids)} 条旧失败日志: {inspiration_id}")
+                logger.info(f"AI 分析完成: {inspiration_id}")
+            except asyncio.CancelledError:
+                logger.info(f"分析任务被取消: {inspiration_id}")
+                raise
+            except ImportError:
+                logger.warning("AI 服务尚未安装")
+            except Exception as e:
+                logger.error(f"分析失败 {inspiration_id}: {e}")
+    finally:
+        # 无论何时被取消（含等待信号量/暂停期间），都清理队列与追踪状态
+        _active_analyses.pop(inspiration_id, None)
+        _task_by_id.pop(inspiration_id, None)
+        try:
+            _pending_queue.remove(inspiration_id)
+        except ValueError:
+            pass
 
 
 async def _run_quality_check(inspiration_id: str, file_path: str):

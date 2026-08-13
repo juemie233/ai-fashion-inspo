@@ -91,6 +91,7 @@ function groupedTags() {
   const groups: Record<string, typeof detail.value.tags> = {}
   for (const t of detail.value.tags) {
     const cat = t.tag.category
+    if (cat === 'outfit') continue  // 穿搭大标签单独在顶部展示，避免重复渲染
     if (!groups[cat]) groups[cat] = []
     groups[cat].push(t)
   }

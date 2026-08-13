@@ -172,23 +172,26 @@ const historyLoading = ref(false)
 const selectedHistoryIds = ref<Set<number>>(new Set())
 const historyModelNames = ref<string[]>([])
 let historyAbort: AbortController | null = null
+let historySeq = 0  // 请求序号，防止取消竞态导致 loading 提前熄灭
 
 async function loadHistory() {
   if (historyAbort) historyAbort.abort()
   historyAbort = new AbortController()
   historyLoading.value = true
+  const seq = ++historySeq
   try {
     const params: any = { page: historyPage.value, size: historyPageSize }
     if (historyFilter.value) params.status = historyFilter.value
     if (historyModelFilter.value) params.model_name = historyModelFilter.value
     if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
     const { data } = await apiClient.get('/ai/history', { params, signal: historyAbort.signal })
+    if (seq !== historySeq) return
     history.value = data.items
     historyTotal.value = data.total
   } catch (e: any) {
     if (e?.code !== 'ERR_CANCELED') message.error('加载历史失败')
   } finally {
-    historyLoading.value = false
+    if (seq === historySeq) historyLoading.value = false
   }
 }
 
@@ -280,18 +283,23 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<AnalysisDetail | null>(null)
 
+let detailSeq = 0  // 请求序号，防止陈旧响应覆盖新数据
+
 async function viewDetail(logId: number) {
   detailVisible.value = true
   detailLoading.value = true
   currentDetail.value = null
+  const seq = ++detailSeq
   try {
     const { data } = await apiClient.get<AnalysisDetail>(`/ai/history/${logId}`)
+    if (seq !== detailSeq) return
     currentDetail.value = data
   } catch (e: any) {
+    if (seq !== detailSeq) return
     message.error(e.response?.data?.detail || '获取详情失败')
     detailVisible.value = false
   } finally {
-    detailLoading.value = false
+    if (seq === detailSeq) detailLoading.value = false
   }
 }
 
@@ -356,18 +364,23 @@ const compareVisible = ref(false)
 const compareLoading = ref(false)
 const compareData = ref<CompareData | null>(null)
 
+let compareSeq = 0  // 请求序号，防止陈旧响应覆盖新数据
+
 async function viewCompare(inspirationId: string) {
   compareVisible.value = true
   compareLoading.value = true
   compareData.value = null
+  const seq = ++compareSeq
   try {
     const { data } = await apiClient.get<CompareData>(`/ai/compare/${inspirationId}`)
+    if (seq !== compareSeq) return
     compareData.value = data
   } catch (e: any) {
+    if (seq !== compareSeq) return
     message.error(e.response?.data?.detail || '获取对比数据失败')
     compareVisible.value = false
   } finally {
-    compareLoading.value = false
+    if (seq === compareSeq) compareLoading.value = false
   }
 }
 

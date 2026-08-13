@@ -1,6 +1,6 @@
 """标签管理的 REST API 路由。"""
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -371,8 +371,8 @@ async def find_duplicate_tags(
 @router.get("/{tag_id}/inspirations")
 async def tag_inspirations(
     tag_id: int,
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
     sort: str = "newest",  # newest | oldest | confidence
     db: AsyncSession = Depends(get_db),
 ):
@@ -447,7 +447,8 @@ async def export_tags(db: AsyncSession = Depends(get_db)):
                 "source": t.get("source", "seed"),
                 "usage_count": t["usage_count"],
             })
-    return {"tags": export_data, "exported_at": str(func.now())}
+    from datetime import datetime, timezone
+    return {"tags": export_data, "exported_at": datetime.now(timezone.utc).isoformat()}
 
 
 @router.post("/import", status_code=status.HTTP_200_OK)

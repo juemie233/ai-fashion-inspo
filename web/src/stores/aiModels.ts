@@ -26,17 +26,21 @@ export const useAiModelsStore = defineStore('aiModels', () => {
   const statusLoading = ref(false)
 
   /** 刷新模型列表与活跃模型 */
+  let refreshSeq = 0  // 请求序号，防止并发刷新时陈旧响应覆盖新数据
   async function refreshModels() {
     statusLoading.value = true
+    const seq = ++refreshSeq
     try {
       const { data } = await apiClient.get<ModelListResponse>('/ai/models')
+      if (seq !== refreshSeq) return
       models.value = data.models
       activeModel.value = data.active_model
       ollamaConnected.value = true
     } catch {
+      if (seq !== refreshSeq) return
       ollamaConnected.value = false
     } finally {
-      statusLoading.value = false
+      if (seq === refreshSeq) statusLoading.value = false
     }
   }
 

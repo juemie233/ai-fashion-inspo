@@ -1,6 +1,6 @@
 """灵感素材 CRUD 的 REST API 路由。"""
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -45,15 +45,7 @@ async def create_inspiration(
             detail=f"不支持的文件类型: {file.content_type}。允许: {allowed_types}",
         )
 
-    # 保存文件
-    file_path, thumb_path = await save_upload(file)
-
-    # 判断媒体类型
-    media_type = "image"
-    if file.content_type and file.content_type.startswith("video/"):
-        media_type = "video"
-
-    # 检查重复（按平台 ID）
+    # 检查重复（按平台 ID）—— 先查重，避免保存文件后再发现重复留下孤儿文件
     if source_platform_id:
         result = await db.execute(
             select(Inspiration).where(
@@ -65,6 +57,14 @@ async def create_inspiration(
                 status_code=409,
                 detail=f"平台ID '{source_platform_id}' 的素材已存在",
             )
+
+    # 保存文件
+    file_path, thumb_path = await save_upload(file)
+
+    # 判断媒体类型
+    media_type = "image"
+    if file.content_type and file.content_type.startswith("video/"):
+        media_type = "video"
 
     inspiration = Inspiration(
         source_type=source_type,
@@ -166,8 +166,8 @@ async def create_from_url(
 
 @router.get("", response_model=InspirationListOut)
 async def list_inspirations(
-    page: int = 1,
-    size: int = 50,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
     source_type: str | None = None,
     is_favorite: bool | None = None,
     media_type: str | None = None,

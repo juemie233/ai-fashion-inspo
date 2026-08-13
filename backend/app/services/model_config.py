@@ -16,6 +16,9 @@ from app.config import settings
 
 _CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "model_configs.json"
 
+# 串行化读-改-写，避免并发更新互相覆盖
+_write_lock = asyncio.Lock()
+
 
 def _defaults() -> dict[str, Any]:
     """全局默认配置（来自 .env / config.py）。"""
@@ -59,14 +62,15 @@ async def update_model_config(
     返回:
         更新后的完整配置字典
     """
-    data = _load()
-    model_cfg = data.setdefault(model_name, {})
-    model_cfg.update({k: v for k, v in updates.items() if v is not None})
+    async with _write_lock:
+        data = _load()
+        model_cfg = data.setdefault(model_name, {})
+        model_cfg.update({k: v for k, v in updates.items() if v is not None})
 
-    def _write() -> None:
-        _CONFIG_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        def _write() -> None:
+            _CONFIG_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
-    await asyncio.to_thread(_write)
+        await asyncio.to_thread(_write)
     return get_model_config(model_name)

@@ -230,10 +230,11 @@ async def link_tag(
         )
         db.add(link)
         try:
-            await db.flush()
+            async with db.begin_nested():
+                await db.flush()
         except IntegrityError:
-            # 并发场景下对方已先插入，回滚后重查更新
-            await db.rollback()
+            # SAVEPOINT 已回滚（不影响同事务其它关联），移除失败对象后重查更新
+            db.expunge(link)
             result2 = await db.execute(
                 select(InspirationTag).where(
                     InspirationTag.inspiration_id == inspiration_id,

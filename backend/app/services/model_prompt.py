@@ -12,6 +12,9 @@ from app.config import settings
 
 _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompt_configs.json"
 
+# 串行化读-改-写，避免并发更新互相覆盖
+_write_lock = asyncio.Lock()
+
 
 def _load() -> dict[str, str]:
     """读取 Prompt 配置；文件不存在或损坏时返回空字典。"""
@@ -31,12 +34,13 @@ def get_model_prompt(model_name: str) -> str:
 
 async def set_model_prompt(model_name: str, prompt: str) -> None:
     """保存指定模型的分析 Prompt（持久化到 prompt_configs.json）。"""
-    data = _load()
-    data[model_name] = prompt
+    async with _write_lock:
+        data = _load()
+        data[model_name] = prompt
 
-    def _write() -> None:
-        _PROMPT_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        def _write() -> None:
+            _PROMPT_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
-    await asyncio.to_thread(_write)
+        await asyncio.to_thread(_write)

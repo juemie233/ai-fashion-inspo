@@ -34,6 +34,7 @@ from app.routers.ai_shared import (
     _format_size,
 )
 from app.services.model_config import get_model_config, update_model_config
+from app.services.model_prompt import get_model_prompt
 from app.utils.auth import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -180,14 +181,15 @@ async def test_analyze(
             raise HTTPException(400, f"WebP 转换失败: {e}")
 
     image_data = b64.b64encode(image_bytes).decode("utf-8")
-    prompt = custom_prompt or settings.ai_analysis_prompt
+    prompt = custom_prompt or get_model_prompt(settings.ollama_vision_model)
+    model_cfg = get_model_config(settings.ollama_vision_model)
 
     async def event_stream():
         import time as _time
         started = _time.time()
 
         try:
-            async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
+            async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
                 try:
                     response = await client.post(
                         f"{settings.ollama_base_url}/api/chat",
@@ -198,10 +200,10 @@ async def test_analyze(
                             ],
                             "stream": False,
                             "options": {
-                                "temperature": getattr(settings, "ai_temperature", 0.7),
-                                "top_p": getattr(settings, "ai_top_p", 0.9),
-                                "top_k": getattr(settings, "ai_top_k", 40),
-                                "num_predict": getattr(settings, "ai_num_predict", 2048),
+                                "temperature": model_cfg["temperature"],
+                                "top_p": model_cfg["top_p"],
+                                "top_k": model_cfg["top_k"],
+                                "num_predict": model_cfg["num_predict"],
                             },
                         },
                     )

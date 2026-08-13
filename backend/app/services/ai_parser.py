@@ -83,8 +83,8 @@ def parse_analysis_response(raw: str) -> dict:
     cleaned = text
     # 去除 /* */ 多行注释
     cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
-    # 去除 // 单行注释
-    cleaned = re.sub(r'//[^\n]*', '', cleaned)
+    # 去除 // 单行注释（负向前查找避免误删 URL 里的 https://）
+    cleaned = re.sub(r'(?<!:)//[^\n]*', '', cleaned)
     # 修复单引号字符串（MiniCPM-V 有时输出 '...' 而非 "..."）
     cleaned = re.sub(r"'([^'\"]*)'", r'"\1"', cleaned)
     # 修复 Python set 语法 {"值"} → "值"、{"a","b"} → ["a","b"]

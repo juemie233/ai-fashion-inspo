@@ -101,6 +101,7 @@ async function loadRejectedItems(reset = true) {
 }
 
 function loadMoreRejected() {
+  if (rejectedLoading.value) return  // 防止加载中重复点击导致跳页
   rejectedPage.value += 1
   loadRejectedItems(false)
 }
@@ -224,7 +225,7 @@ onUnmounted(() => {
           </div>
           <n-empty v-else description="暂无未通过素材" size="small" />
           <div v-if="rejectedTotal > rejectedItems.length" style="text-align:center;margin-top:12px">
-            <n-button size="small" @click="loadMoreRejected">加载更多（{{ rejectedItems.length }}/{{ rejectedTotal }}）</n-button>
+            <n-button size="small" :disabled="rejectedLoading" @click="loadMoreRejected">加载更多（{{ rejectedItems.length }}/{{ rejectedTotal }}）</n-button>
           </div>
         </n-spin>
       </n-card>

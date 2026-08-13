@@ -216,7 +216,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
                 logger.warning(f"零标签分析 {inspiration_id}: {raw_response[:200]}")
 
         # 更新素材的主色调字段（清理注释后缀）
-        if tags_data.get("dominant_colors"):
+        if isinstance(tags_data.get("dominant_colors"), list):
             clean_colors = []
             for c in tags_data["dominant_colors"]:
                 if isinstance(c, str):
@@ -351,11 +351,15 @@ async def check_image_quality(
     status = "approved" if is_outfit else "rejected"
 
     # 写回数据库（CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
-    insp = await db.get(Inspiration, inspiration_id)
-    if insp and insp.quality_status == "pending":
-        insp.quality_status = status
-        insp.quality_reason = reason if not is_outfit else None
-        await db.commit()
+    try:
+        insp = await db.get(Inspiration, inspiration_id)
+        if insp and insp.quality_status == "pending":
+            insp.quality_status = status
+            insp.quality_reason = reason if not is_outfit else None
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
+        return "pending", f"写回失败: {str(e)[:100]}"
 
     return status, reason
 
