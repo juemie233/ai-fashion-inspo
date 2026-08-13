@@ -14,6 +14,7 @@ import {
   suggestOutfitTags,
   type InspirationDetailOut,
 } from '@/api/inspirations'
+import { fetchTagsGrouped } from '@/api/tags'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 
 const route = useRoute()
@@ -28,6 +29,7 @@ const lightboxOpen = ref(false)
 const loading = ref(true)
 
 onMounted(async () => {
+  loadOutfitOptions()
   try {
     detail.value = await fetchInspiration(route.params.id as string)
   } catch {
@@ -118,7 +120,8 @@ function analysisStatusLabel(): string {
 }
 
 // ===== 穿搭大标签 =====
-const outfitInput = ref('')
+const outfitTagOptions = ref<{ label: string; value: string }[]>([])
+const outfitSelected = ref<string[]>([])
 const outfitAdding = ref(false)
 const aiSuggesting = ref(false)
 const aiSuggestions = ref<string[]>([])
@@ -129,16 +132,25 @@ function outfitTags() {
   return detail.value.tags.filter((t) => t.tag.category === 'outfit')
 }
 
-/** 手动添加大标签 */
-async function addOutfitTag() {
-  const name = outfitInput.value.trim()
-  if (!name || !detail.value) return
+/** 加载已有大标签作为选择项 */
+async function loadOutfitOptions() {
+  try {
+    const groups = await fetchTagsGrouped()
+    const outfit = groups.find((g) => g.category === 'outfit')
+    outfitTagOptions.value = (outfit?.tags || []).map((t) => ({ label: t.name, value: t.name }))
+  } catch { /* 静默 */ }
+}
+
+/** 手动添加大标签（可多选，可从已有标签中选择或输入新建） */
+async function addOutfitTags() {
+  if (!detail.value || outfitSelected.value.length === 0) return
   outfitAdding.value = true
   try {
-    await addTagsToInspiration(detail.value.id, [name], 'outfit', 'manual')
-    outfitInput.value = ''
+    await addTagsToInspiration(detail.value.id, outfitSelected.value, 'outfit', 'manual')
+    outfitSelected.value = []
     message.success('已添加大标签')
     detail.value = await fetchInspiration(detail.value.id)
+    loadOutfitOptions()
   } catch {
     message.error('添加失败')
   } finally {
@@ -291,14 +303,22 @@ function dismissOutfitTag(name: string) {
               <div v-else style="font-size:12px;color:#999;margin-bottom:8px">暂无大标签</div>
 
               <div class="outfit-tag-add">
-                <n-input
-                  v-model:value="outfitInput"
+                <n-select
+                  v-model:value="outfitSelected"
+                  multiple
+                  filterable
+                  tag
                   size="small"
-                  placeholder="手动输入大标签，如「白色系穿搭」"
-                  @keyup.enter="addOutfitTag"
+                  placeholder="选择或输入大标签，如「白色系穿搭」"
+                  :options="outfitTagOptions"
                   style="flex:1"
                 />
-                <n-button size="small" :loading="outfitAdding" @click="addOutfitTag">添加</n-button>
+                <n-button
+                  size="small"
+                  :loading="outfitAdding"
+                  :disabled="outfitSelected.length === 0"
+                  @click="addOutfitTags"
+                >添加</n-button>
               </div>
 
               <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
