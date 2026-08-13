@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.tag import InspirationTag, Tag
@@ -248,6 +249,51 @@ async def list_inspirations(
         page=page,
         size=size,
     )
+
+
+@router.delete("/quality-rejected", status_code=status.HTTP_200_OK)
+async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
+    """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。
+
+    删除前写入墓碑表，防止下次采集重复下载相同 URL。
+    """
+    result = await db.execute(
+        select(Inspiration).where(Inspiration.quality_status == "rejected")
+    )
+    rejected = result.scalars().all()
+
+    if not rejected:
+        return {"deleted": 0, "freed_bytes": 0, "message": "没有已拒绝的素材"}
+
+    freed_bytes = 0
+    urls_to_seal: list[str] = []
+    for insp in rejected:
+        if insp.source_url:
+            urls_to_seal.append(insp.source_url)
+        for p in (insp.file_path, insp.thumbnail_path):
+            if p:
+                full = settings.storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+        await db.delete(insp)
+
+    # 写入墓碑表（防止重复采集）
+    if urls_to_seal:
+        from app.models.scraper import ScraperSeenURL
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
+
+    await db.commit()
+    return {"deleted": len(rejected), "freed_bytes": freed_bytes}
 
 
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)

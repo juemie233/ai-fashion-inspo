@@ -120,3 +120,11 @@ export async function updateQualityStatus(id: string, qualityStatus: QualityStat
   })
   return data
 }
+
+/** 批量删除所有已拒绝素材 */
+export async function deleteRejectedInspirations() {
+  const { data } = await apiClient.delete<{ deleted: number; freed_bytes: number; message?: string }>(
+    '/inspirations/quality-rejected',
+  )
+  return data
+}

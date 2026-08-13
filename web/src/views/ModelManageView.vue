@@ -4,7 +4,7 @@
 import { h, ref, onMounted, onUnmounted, computed } from 'vue'
 import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
 import { useTagsStore } from '@/stores/tags'
 import { useNotification } from '@/composables/useNotification'
 
@@ -373,6 +373,23 @@ async function approveItem(id: string) {
     const next = new Set(approvingRejectedIds.value)
     next.delete(id)
     approvingRejectedIds.value = next
+  }
+}
+
+const deletingRejected = ref(false)
+
+async function deleteRejected() {
+  deletingRejected.value = true
+  try {
+    const r = await deleteRejectedInspirations()
+    message.success(`已删除 ${r.deleted} 个已拒绝素材，释放 ${formatBytes(r.freed_bytes)}`)
+    rejectedItems.value = []
+    rejectedTotal.value = 0
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '删除失败')
+  } finally {
+    deletingRejected.value = false
   }
 }
 
@@ -1633,6 +1650,12 @@ function formatDate(d: string | null | undefined) {
               <template #header-extra>
                 <n-tag type="error" size="small">{{ rejectedTotal }} 个</n-tag>
                 <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems(true)" :loading="rejectedLoading">刷新</n-button>
+                <n-popconfirm v-if="rejectedTotal > 0" @positive-click="deleteRejected">
+                  <template #trigger>
+                    <n-button size="tiny" type="error" secondary style="margin-left:6px" :loading="deletingRejected">批量删除已拒绝</n-button>
+                  </template>
+                  确定删除全部 {{ rejectedTotal }} 个已拒绝素材？此操作会物理删除文件，不可恢复。
+                </n-popconfirm>
               </template>
               <n-spin :show="rejectedLoading">
                 <div v-if="rejectedItems.length" class="rejected-grid">
