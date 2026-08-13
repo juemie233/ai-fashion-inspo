@@ -16,12 +16,12 @@ LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
 echo "=============================================="
-echo "  一键重启前后端"
+echo "  一键重启前后端 + worker"
 echo "=============================================="
 
 # ── 1. 停止后端 ──
 echo ""
-echo ">>> [1/4] 停止后端 (端口 $BACKEND_PORT) ..."
+echo ">>> [1/6] 停止后端 (端口 $BACKEND_PORT) ..."
 
 # 1a. 杀掉监听端口的进程树（可能是 worker，taskkill /T 会级联杀掉其父 reloader）
 killed=0
@@ -48,7 +48,7 @@ fi
 
 # ── 2. 停止前端 ──
 echo ""
-echo ">>> [2/4] 停止前端 (端口 $FRONTEND_PORT) ..."
+echo ">>> [2/6] 停止前端 (端口 $FRONTEND_PORT) ..."
 for pid in $(netstat -ano 2>/dev/null | grep ":$FRONTEND_PORT" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
   if [ -n "$pid" ]; then
     taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止进程树 PID $pid"
@@ -61,9 +61,17 @@ else
   echo "  ✅ 前端已停止"
 fi
 
-# ── 3. 启动后端 ──
+# ── 3. 停止 worker ──
 echo ""
-echo ">>> [3/4] 启动后端 ..."
+echo ">>> [3/6] 停止 worker ..."
+for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 worker 进程 PID $pid"
+done
+sleep 1
+
+# ── 4. 启动后端 ──
+echo ""
+echo ">>> [4/6] 启动后端 ..."
 cd backend
 nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload \
   > "../$LOG_DIR/backend.log" 2>&1 &
@@ -73,7 +81,7 @@ echo "  后端 PID: $BACKEND_PID (日志: $LOG_DIR/backend.log)"
 
 # ── 4. 启动前端 ──
 echo ""
-echo ">>> [4/4] 启动前端 ..."
+echo ">>> [5/6] 启动前端 ..."
 if [ ! -d web/node_modules ]; then
   echo "  ❌ 未检测到 web/node_modules，请先执行: cd web && npm install"
   exit 1
@@ -84,6 +92,15 @@ nohup npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" \
 FRONTEND_PID=$!
 cd ..
 echo "  前端 PID: $FRONTEND_PID (日志: $LOG_DIR/frontend.log)"
+
+# ── 6. 启动 worker ──
+echo ""
+echo ">>> [6/6] 启动 worker ..."
+cd backend
+nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
+WORKER_PID=$!
+cd ..
+echo "  worker PID: $WORKER_PID (日志: $LOG_DIR/worker.log)"
 
 # ── 验证（轮询，最多 30 秒）──
 echo ""
@@ -108,6 +125,14 @@ if [ "$FRONTEND_OK" -eq 1 ]; then
   echo "  ✅ 前端已就绪: http://localhost:$FRONTEND_PORT"
 else
   echo "  ❌ 前端未就绪，请检查 $LOG_DIR/frontend.log"
+fi
+
+# worker 无 HTTP 端口，通过日志确认是否已启动
+sleep 2
+if grep -q "worker 已启动" "$LOG_DIR/worker.log" 2>/dev/null; then
+  echo "  ✅ worker 已启动（日志: $LOG_DIR/worker.log）"
+else
+  echo "  ⚠️  worker 可能未就绪，请检查 $LOG_DIR/worker.log"
 fi
 
 echo ""
