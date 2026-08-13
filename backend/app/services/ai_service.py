@@ -22,9 +22,6 @@ from app.services.model_prompt import get_model_prompt
 # 支持的图片扩展名
 _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
 
-# MiniCPM-V 等模型不支持 WebP，需要转为 JPEG
-_WEBP_NEEDS_CONVERSION = True
-
 logger = logging.getLogger(__name__)
 
 
@@ -85,12 +82,12 @@ def _read_image_base64(file_path: str) -> tuple[str, float]:
     if ext not in _ALLOWED_IMG_EXT:
         raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
 
-    # 读取图片 —— WebP/BMP/GIF 转为 JPEG（MiniCPM-V 等模型不支持这些格式）
+    # 读取图片 —— WebP/BMP/GIF 统一转为 JPEG
+    # 实测 qwen3-vl:8b-instruct 在 Ollama 下无法解码 WebP（报 "Failed to load image or audio file"），
+    # JPEG 是所有视觉模型通用支持的格式，因此无论模型一律转换，保证兼容性。
     import base64
     image_bytes = full_path.read_bytes()
-    # WebP 仅当模型不支持时才转（qwen3-vl 原生支持 WebP，跳过可省 CPU + 不损失画质）
-    _skip_webp = ext == ".webp" and settings.ollama_vision_model.startswith("qwen3-vl")
-    if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION and not _skip_webp:
+    if ext in {".webp", ".bmp", ".gif"}:
         try:
             from io import BytesIO
             from PIL import Image
