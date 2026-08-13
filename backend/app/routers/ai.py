@@ -900,7 +900,6 @@ async def compare_analyses(
                 "items": len((parsed.get("items") or [])),
                 "fit": len((parsed.get("fit") or [])),
                 "wear_style": len((parsed.get("wear_style") or [])),
-                "occasion": len((parsed.get("occasion") or [])),
                 "attributes": len((parsed.get("attributes") or [])),
                 "colors": len((parsed.get("dominant_colors") or [])),
             },
@@ -914,7 +913,7 @@ async def compare_analyses(
 
         def _tag_set(parsed: dict) -> set[str]:
             tags: set[str] = set()
-            for key in ("style", "fit", "wear_style", "occasion", "attributes"):
+            for key in ("style", "fit", "wear_style", "attributes"):
                 vals = parsed.get(key, [])
                 if isinstance(vals, list):
                     for v in vals:

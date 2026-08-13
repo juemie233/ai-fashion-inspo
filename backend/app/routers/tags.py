@@ -259,7 +259,7 @@ async def batch_rename_tags(
 # 默认类别配置
 _DEFAULT_CATEGORIES = {
     "style": "风格", "item_type": "单品类型", "color": "颜色",
-    "fit": "版型", "body_part": "穿着方式", "occasion": "场合",
+    "fit": "版型", "body_part": "穿着方式",
     "attribute": "属性", "season": "季节", "material": "面料",
     "brand": "品牌", "free": "其他",
 }

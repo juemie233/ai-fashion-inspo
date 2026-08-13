@@ -526,7 +526,7 @@ def _parse_analysis_response(raw: str) -> dict:
 
     # 策略1：找到所有完整 { ... } 块，按「更像分析结果」打分
     # 评分标准：含有越多预期键（style/items/fit等），得分越高
-    EXPECTED_KEYS = {"style", "items", "fit", "wear_style", "occasion", "attributes", "dominant_colors"}
+    EXPECTED_KEYS = {"style", "items", "fit", "wear_style", "attributes", "dominant_colors"}
     candidates = []
     for m in re.finditer(r'\{', cleaned):
         depth = 0
@@ -622,11 +622,10 @@ async def _save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
         "style": "style",
         "fit": "fit",
         "wear_style": "body_part",
-        "occasion": "occasion",
         "attributes": "attribute",
     }
 
-    # 处理简单列表型标签（风格、版型、场合等） — 兼容 null 值
+    # 处理简单列表型标签（风格、版型等） — 兼容 null 值
     for key, category in category_map.items():
         values = data.get(key) or []
         if not isinstance(values, list):
@@ -772,8 +771,8 @@ def _extract_tag_names(value) -> list[str]:
             if v is not None:
                 results.extend(_extract_tag_names(v))
 
-        # 第3轮：中文语境键（图片属性、场合、季节等）
-        for key in ("图片属性", "属性值", "适合场合", "穿着方式",
+        # 第3轮：中文语境键（图片属性、季节等）
+        for key in ("图片属性", "属性值", "穿着方式",
                      "穿着方式/身体部位关系"):
             v = value.get(key)
             if v is not None:
