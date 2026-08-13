@@ -5,6 +5,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
+import { useSplitResize } from '@/composables/useSplitResize'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
   batchDeleteTags, deleteUnusedTags, fetchTagStats, findDuplicates,
@@ -14,6 +15,9 @@ import {
 } from '@/api/tags'
 
 const message = useMessage()
+
+// ===== 左右分栏可拖拽间隔线 =====
+const { containerRef, leftWidth, isDragging, startDrag } = useSplitResize({ initial: 50, min: 20, max: 80 })
 
 const groups = ref<TagCategoryGroup[]>([])
 const loading = ref(false)
@@ -415,10 +419,10 @@ function sourceColor(s: string) {
       </n-space>
     </div>
 
-    <div class="split-layout">
+    <div ref="containerRef" class="split-layout" :class="{ dragging: isDragging }">
 
     <!-- ===== 左面板：标签列表 ===== -->
-    <div class="left-panel">
+    <div class="left-panel" :style="{ width: leftWidth + '%' }">
 
     <!-- ===== 统计卡片 ===== -->
     <n-grid v-if="stats" :cols="5" :x-gap="12" style="margin-bottom:16px">
@@ -666,6 +670,9 @@ function sourceColor(s: string) {
     </n-spin>
     </div><!-- /left-panel -->
 
+    <!-- 可拖拽间隔线 -->
+    <div class="divider" :class="{ dragging: isDragging }" @mousedown="startDrag" />
+
     <!-- ===== 右面板：选中标签的素材网格 ===== -->
     <div class="right-panel">
       <TagInspirationGrid :tag="selectedTag" @changed="onGridChanged" />
@@ -778,33 +785,58 @@ function sourceColor(s: string) {
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-shrink: 0; }
 .page-header h2 { margin: 0; }
 
-/* 左右分屏 */
+/* 左右分屏（左栏宽度由 useSplitResize 控制） */
 .split-layout {
   display: flex;
-  gap: 16px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
+.split-layout.dragging {
+  user-select: none;
+}
 
 .left-panel {
-  width: 50%;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 8px;
   flex-shrink: 0;
 }
 
-.right-panel {
-  width: 50%;
-  overflow-y: auto;
-  border-left: 1px solid #e5e7eb;
-  padding-left: 16px;
+/* 可拖拽间隔线 */
+.divider {
+  width: 6px;
   flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+}
+.divider::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 0;
+  bottom: 0;
+  background: #e5e7eb;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.divider:hover::after,
+.divider.dragging::after {
+  background: #3b82f6;
+}
+
+.right-panel {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding-left: 12px;
 }
 
 @media (max-width: 900px) {
   .split-layout { flex-direction: column; }
-  .left-panel, .right-panel { width: 100%; flex: none; max-height: 50vh; }
-  .right-panel { border-left: none; border-top: 1px solid #e5e7eb; padding-left: 0; padding-top: 12px; }
+  .left-panel, .right-panel { flex: none; max-height: 50vh; }
+  .left-panel { width: 100% !important; }
+  .right-panel { width: 100%; border-top: 1px solid #e5e7eb; padding-left: 0; padding-top: 12px; }
+  .divider { display: none; }
 }
 </style>
