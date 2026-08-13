@@ -3,6 +3,7 @@
 
 import { h, ref, computed, onMounted, onUnmounted } from 'vue'
 import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
+import { storeToRefs } from 'pinia'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
 import { useAiModelsStore, type OllamaModel } from '@/stores/aiModels'
@@ -11,7 +12,9 @@ import { formatBytes, formatVram, formatMs, formatDate } from '@/utils/format'
 const message = useMessage()
 const { requestAndNotify } = useNotification()
 const store = useAiModelsStore()
-const { models, activeModel, ollamaConnected, statusLoading, refreshModels, setActiveModel, deleteModel } = store
+// 用 storeToRefs 保持 ref 响应式（直接解构会拿到非响应式快照，导致「未连接」不更新）
+const { models, activeModel, ollamaConnected, statusLoading } = storeToRefs(store)
+const { refreshModels, setActiveModel, deleteModel } = store
 
 // ===== 下载 =====
 const downloadName = ref('')
