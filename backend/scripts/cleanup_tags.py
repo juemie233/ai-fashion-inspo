@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import select, delete, func
 from app.database import async_session, engine
 from app.models.tag import Tag, InspirationTag
-from app.services.ai_service import _extract_tag_names, _normalize_color
+from app.services.ai_parser import extract_tag_names
+from app.services.ai_tag_saver import normalize_color
 
 
 def is_json_like(name: str) -> bool:
@@ -66,7 +67,7 @@ def extract_clean_name(bad_name: str) -> list[str]:
             json_str = bad_name.replace("'", '"')
             try:
                 obj = json.loads(json_str)
-                results = _extract_tag_names(obj)
+                results = extract_tag_names(obj)
                 return _filter_valid_tags(results)
             except json.JSONDecodeError:
                 pass
@@ -75,7 +76,7 @@ def extract_clean_name(bad_name: str) -> list[str]:
         try:
             import ast
             obj = ast.literal_eval(bad_name)
-            results = _extract_tag_names(obj)
+            results = extract_tag_names(obj)
             return _filter_valid_tags(results)
         except (ValueError, SyntaxError):
             pass
@@ -132,7 +133,7 @@ async def cleanup(dry_run: bool = True):
                 clean_names = extract_clean_name(tag.name)
             elif is_hex_color(tag.name):
                 issue = "hex-color"
-                cn = _normalize_color(tag.name)
+                cn = normalize_color(tag.name)
                 if cn:
                     clean_names = [cn]
             elif is_garbage(tag.name):
