@@ -422,7 +422,9 @@ async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
     if not small_tags:
         return []
 
-    model_cfg = get_model_config(settings.ollama_vision_model)
+    # 大标签总结固定用轻量非思考模型（思考模型会吃光预算返回空）
+    summary_model = getattr(settings, "outfit_summary_model", "minicpm-v:8b")
+    model_cfg = get_model_config(summary_model)
     tag_list = "、".join(small_tags)
     prompt = (
         "你是一个穿搭标签总结助手。根据以下穿搭小标签，判断这套穿搭是否"
@@ -440,11 +442,11 @@ async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
             response = await client.post(
                 f"{settings.ollama_base_url}/api/chat",
                 json={
-                    "model": settings.ollama_vision_model,
+                    "model": summary_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "think": False,  # 纯文本总结无需思考
-                    "options": {"temperature": 0.3, "num_predict": 2048},
+                    "options": {"temperature": 0.3, "num_predict": 512},
                 },
             )
             response.raise_for_status()
