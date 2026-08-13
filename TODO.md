@@ -69,7 +69,7 @@
 
 - [ ] 在 scraper_service.py 中实现 ChromeManager：
   - [ ] 使用 subprocess.Popen 启动 Chrome（读取配置路径、端口、用户数据目录）
-  - [ ] 启动后轮询 http://127.0.0.1:9222/json/version 确认就绪
+  - [ ] 启动后轮询 <http://127.0.0.1:9222/json/version> 确认就绪
   - [ ] 监控进程存活，意外退出自动重启（可配置重启上限）
   - [ ] 支持手动停止和空闲超时自动关闭
 - [ ] 增强 scraper_tasks 表：
@@ -104,7 +104,7 @@
 **涉及模块：**
 
 | 模块 | 改动 |
-|------|------|
+| ------ | ------ |
 | `backend/app/main.py` | /api/health 返回 schema_version |
 | `backend/app/db_migrations.py` | 定义 schema_version 常量（每次加字段递增） |
 | `web/src/api/client.ts` | 启动时发起版本检查请求 |
@@ -171,7 +171,7 @@
 **涉及模块：**
 
 | 模块 | 改动 |
-|------|------|
+| ------ | ------ |
 | `backend/app/services/file_service.py` | 关键帧提取 |
 | `backend/app/routers/inspirations.py` | 视频上传接口 |
 | `backend/app/models/inspiration.py` | 新增字段或表 |
