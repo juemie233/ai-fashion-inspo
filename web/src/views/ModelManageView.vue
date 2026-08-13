@@ -277,6 +277,48 @@ async function loadQuality() {
   finally { qualityLoading.value = false }
 }
 
+// ===== 质量审核 =====
+interface QualityReviewStats {
+  total: number
+  pending: number
+  approved: number
+  rejected: number
+  pass_rate: number
+  active: number
+}
+const qualityReviewStats = ref<QualityReviewStats | null>(null)
+const qualityReviewLoading = ref(false)
+const qualityReviewActive = ref<string[]>([])
+const qualityChecking = ref(false)
+
+async function loadQualityReview() {
+  qualityReviewLoading.value = true
+  try {
+    const { data } = await apiClient.get<QualityReviewStats>('/ai/quality-stats')
+    qualityReviewStats.value = data
+    const active = await apiClient.get<{ active: string[]; count: number }>('/ai/quality-active')
+    qualityReviewActive.value = active.data.active || []
+  } catch { /* 静默 */ }
+  finally { qualityReviewLoading.value = false }
+}
+
+async function triggerQualityCheck() {
+  qualityChecking.value = true
+  try {
+    const { data } = await apiClient.post<{ message: string; count: number }>(
+      '/ai/quality-check',
+      null,
+      { params: { limit: 200 } },
+    )
+    message.success(`已提交 ${data.count} 个素材进行审核`)
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '审核提交失败')
+  } finally {
+    qualityChecking.value = false
+  }
+}
+
 // ===== GPU 显存监控 =====
 interface GpuStats {
   gpu_available: boolean
@@ -514,6 +556,10 @@ function scheduleNextPoll() {
     loadQueue()
     if (isActive || wasActive) {
       loadHistory()
+    }
+    // 质量审核：仅在该标签激活时刷新
+    if (activeTab.value === 'review') {
+      loadQualityReview()
     }
     if (pollTimer !== null) scheduleNextPoll()
   }, interval)
@@ -927,7 +973,7 @@ function formatDate(d: string | null | undefined) {
   <div class="model-page">
     <h2>AI 模型管理</h2>
 
-    <n-tabs v-model:value="activeTab" type="line" @update:value="(v: string) => { if (v === 'quality') loadQuality() }">
+    <n-tabs v-model:value="activeTab" type="line" @update:value="(v: string) => { if (v === 'quality') loadQuality(); if (v === 'review') loadQualityReview() }">
       <!-- ===== Tab: 模型 ===== -->
       <n-tab-pane name="models" tab="模型管理">
         <!-- 连接状态 -->
@@ -1038,8 +1084,8 @@ function formatDate(d: string | null | undefined) {
         </n-card>
       </n-tab-pane>
 
-      <!-- ===== Tab: 分析队列 ===== -->
-      <n-tab-pane name="queue" tab="分析进度">
+      <!-- ===== Tab: 标签分析 ===== -->
+      <n-tab-pane name="queue" tab="标签分析">
         <!-- 统计卡片 -->
         <n-grid :cols="4" :x-gap="12" style="margin-bottom:16px">
           <n-gi><n-card size="small"><n-statistic label="总素材" :value="queueStats.total" /></n-card></n-gi>
@@ -1438,8 +1484,8 @@ function formatDate(d: string | null | undefined) {
         </n-space>
       </n-tab-pane>
 
-      <!-- ===== Tab: 质量仪表盘 ===== -->
-      <n-tab-pane name="quality" tab="质量分析">
+      <!-- ===== Tab: 分析质量仪表盘 ===== -->
+      <n-tab-pane name="quality" tab="分析质量">
         <n-spin :show="qualityLoading">
           <template v-if="qualityData">
             <!-- 总览卡片 -->
@@ -1481,6 +1527,57 @@ function formatDate(d: string | null | undefined) {
           </template>
           <n-empty v-else-if="!qualityLoading" description="点击加载质量数据" size="small">
             <template #extra><n-button size="small" @click="loadQuality">加载</n-button></template>
+          </n-empty>
+        </n-spin>
+      </n-tab-pane>
+
+      <!-- ===== Tab: 质量审核 ===== -->
+      <n-tab-pane name="review" tab="质量审核">
+        <n-spin :show="qualityReviewLoading">
+          <template v-if="qualityReviewStats">
+            <!-- 统计卡片 -->
+            <n-grid :cols="4" :x-gap="12" style="margin-bottom:16px">
+              <n-gi><n-card size="small"><n-statistic label="待审核" :value="qualityReviewStats.pending" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="已通过" :value="qualityReviewStats.approved" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="已拒绝" :value="qualityReviewStats.rejected" /></n-card></n-gi>
+              <n-gi><n-card size="small"><n-statistic label="通过率" :value="`${qualityReviewStats.pass_rate}%`" /></n-card></n-gi>
+            </n-grid>
+
+            <!-- 进度条 + 审核操作 -->
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">
+              <n-progress
+                v-if="qualityReviewStats.total > 0"
+                type="line"
+                :percentage="Math.round((qualityReviewStats.approved + qualityReviewStats.rejected) / qualityReviewStats.total * 100)"
+                :height="24"
+                style="flex:1"
+              />
+              <n-button
+                type="primary"
+                :loading="qualityChecking"
+                :disabled="qualityReviewStats.pending === 0"
+                @click="triggerQualityCheck"
+              >
+                {{ qualityReviewStats.pending > 0 ? `审核全部待审核 (${qualityReviewStats.pending})` : '全部已审核' }}
+              </n-button>
+            </div>
+
+            <!-- 正在审核提示 -->
+            <n-alert v-if="qualityReviewActive.length > 0" type="info" style="margin-bottom:16px">
+              <template #header>正在审核 {{ qualityReviewActive.length }} 个素材...</template>
+              <div style="font-size:12px;color:#666">
+                {{ qualityReviewActive.map((id) => id.slice(0, 8) + '...').join('、') }}
+              </div>
+            </n-alert>
+
+            <!-- 结果查看说明 -->
+            <n-alert type="info" style="margin-bottom:16px">
+              <template #header>💡 如何查看审核结果</template>
+              审核结果已写入素材的审核状态。前往「素材库」页，用筛选栏的「待审核 / 已通过 / 已拒绝」查看，并对误判的图片点击卡片上的 ✓ 翻案。
+            </n-alert>
+          </template>
+          <n-empty v-else-if="!qualityReviewLoading" description="点击加载审核数据" size="small">
+            <template #extra><n-button size="small" @click="loadQualityReview">加载</n-button></template>
           </n-empty>
         </n-spin>
       </n-tab-pane>

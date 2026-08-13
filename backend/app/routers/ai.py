@@ -1528,6 +1528,39 @@ async def batch_quality_check(
     }
 
 
+@router.get("/quality-stats")
+async def quality_stats(db: AsyncSession = Depends(get_db)):
+    """质量审核统计：待审核/已通过/已拒绝数量及通过率。"""
+    result = await db.execute(
+        select(
+            func.coalesce(Inspiration.quality_status, "pending"),
+            func.count(Inspiration.id),
+        ).group_by(func.coalesce(Inspiration.quality_status, "pending"))
+    )
+    counts = {status: count for status, count in result.all()}
+
+    pending = counts.get("pending", 0)
+    approved = counts.get("approved", 0)
+    rejected = counts.get("rejected", 0)
+    total = pending + approved + rejected
+    pass_rate = round(approved / (approved + rejected) * 100, 1) if (approved + rejected) > 0 else 0
+
+    return {
+        "total": total,
+        "pending": pending,
+        "approved": approved,
+        "rejected": rejected,
+        "pass_rate": pass_rate,
+        "active": len(_quality_active),
+    }
+
+
+@router.get("/quality-active")
+async def quality_active():
+    """正在审核中的素材 ID 列表。"""
+    return {"active": list(_quality_active), "count": len(_quality_active)}
+
+
 async def _update_env_file(updates: dict[str, str]) -> None:
     """将键值对更新写入 .env 文件（保留其他配置不变）。"""
     env_path = Path(__file__).parent.parent.parent / ".env"
