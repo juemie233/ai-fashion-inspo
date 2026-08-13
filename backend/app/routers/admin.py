@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import Inspiration, AIAnalysisLog
+from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import Tag, InspirationTag
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -74,14 +74,18 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     # 有分析日志的素材（去重）
     analyzed_ids_subq = (
         select(AIAnalysisLog.inspiration_id)
-        .where(AIAnalysisLog.inspiration_id.isnot(None))
+        .where(analysis_log_filter(), AIAnalysisLog.inspiration_id.isnot(None))
         .distinct()
     ).subquery()
 
     # 分析失败的素材 ID
     failed_ids_subq = (
         select(AIAnalysisLog.inspiration_id)
-        .where(AIAnalysisLog.error.isnot(None), AIAnalysisLog.error != "")
+        .where(
+            analysis_log_filter(),
+            AIAnalysisLog.error.isnot(None),
+            AIAnalysisLog.error != "",
+        )
         .distinct()
     ).subquery()
 
@@ -350,7 +354,11 @@ async def batch_delete(
         # 查询有分析失败日志的素材 ID
         result = await db.execute(
             select(AIAnalysisLog.inspiration_id)
-            .where(AIAnalysisLog.error.isnot(None), AIAnalysisLog.error != "")
+            .where(
+                analysis_log_filter(),
+                AIAnalysisLog.error.isnot(None),
+                AIAnalysisLog.error != "",
+            )
             .distinct()
         )
         ids = [r[0] for r in result.all()]
@@ -536,6 +544,7 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     analyzed_result = await db.execute(
         select(AIAnalysisLog.inspiration_id)
         .where(
+            analysis_log_filter(),
             AIAnalysisLog.inspiration_id.in_(all_ids),
             (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
         )

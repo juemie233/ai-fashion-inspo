@@ -133,6 +133,10 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
 
         # 按当前模型读取独立配置（隔离每个模型的超时与采样参数）
         model_cfg = get_model_config(settings.ollama_vision_model)
+        # 思考模型：思维链会消耗 num_predict 预算，需放大预算以避免 JSON 答案被截断
+        num_predict = model_cfg["num_predict"]
+        if model_cfg.get("think", False):
+            num_predict = max(num_predict, 8192)
 
         # 调用 Ollama 视觉 API — 传入采样参数
         async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
@@ -154,7 +158,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
                             "temperature": model_cfg["temperature"],
                             "top_p": model_cfg["top_p"],
                             "top_k": model_cfg["top_k"],
-                            "num_predict": model_cfg["num_predict"],
+                            "num_predict": num_predict,
                         },
                     },
                 )
@@ -188,7 +192,13 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         # 解析分析结果并保存标签
         tags_data = _parse_analysis_response(raw_response)
         if not tags_data:
-            error_msg = "AI 响应无法解析为 JSON，原始输出无法识别"
+            if _looks_truncated(raw_response):
+                error_msg = (
+                    "AI 输出的 JSON 被截断（可能因思考模型 num_predict 不足），"
+                    "请增大 num_predict 或关闭 think"
+                )
+            else:
+                error_msg = "AI 响应无法解析为 JSON，原始输出无法识别"
             logger.warning(f"分析解析失败 {inspiration_id}: {raw_response[:200]}")
         else:
             tag_count = await _save_tags(db, inspiration_id, tags_data)
@@ -284,6 +294,10 @@ async def check_image_quality(
         return "pending", f"审核失败: {str(e)[:100]}"
 
     model_cfg = get_model_config(settings.ollama_vision_model)
+    # 思考模型：放大 num_predict 预算，避免短答案被思维链截断
+    num_predict = model_cfg["num_predict"]
+    if model_cfg.get("think", False):
+        num_predict = max(num_predict, 8192)
 
     try:
         async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
@@ -296,7 +310,7 @@ async def check_image_quality(
                     ],
                     "stream": False,
                     "think": model_cfg.get("think", False),  # 关闭思考模式
-                    "options": {"temperature": 0.1, "num_predict": model_cfg["num_predict"]},
+                    "options": {"temperature": 0.1, "num_predict": num_predict},
                 },
             )
             response.raise_for_status()
@@ -346,6 +360,32 @@ def _parse_is_outfit(value) -> bool | None:
         if v in ("false", "0", "否", "no", "n"):
             return False
     return None
+
+
+def _looks_truncated(raw: str) -> bool:
+    """粗略判断模型输出是否因 token 截断而 JSON 未闭合（括号不平衡）。"""
+    if not raw:
+        return False
+    depth = 0
+    in_str = False
+    escape = False
+    for ch in raw:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return depth > 0
 
 
 def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:

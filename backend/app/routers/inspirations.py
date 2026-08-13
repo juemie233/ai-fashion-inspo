@@ -7,7 +7,11 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import (
+    AIAnalysisLog,
+    Inspiration,
+    analysis_log_filter as _analysis_log_filter,
+)
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import (
     InspirationCreate,
@@ -21,14 +25,6 @@ from app.schemas.inspiration import (
 from app.services.file_service import delete_files, save_upload
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
-
-
-def _analysis_log_filter():
-    """返回「标签分析日志」的过滤条件，排除 quality_check 质量审核日志。
-
-    quality_check 只做二分类审核（是否合格），不产出标签，不能算作「已分析」。
-    """
-    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
 
 
 @router.post("", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)

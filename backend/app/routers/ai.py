@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session, get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import (
+    AIAnalysisLog,
+    Inspiration,
+    analysis_log_filter as _analysis_log_filter,
+)
 from app.services.model_config import get_model_config, update_model_config
 from app.utils.auth import require_api_key
 
@@ -35,15 +39,6 @@ _pending_queue: list[str] = []
 _queue_paused = False
 # 质量审核任务追踪（与完整分析队列共享 _analysis_semaphore 信号量）
 _quality_active: set[str] = set()  # 正在审核的 inspiration_id
-
-
-def _analysis_log_filter():
-    """返回「标签分析日志」的过滤条件，排除 quality_check 质量审核日志。
-
-    quality_check 只做二分类审核（是否合格），不产出标签，不能算作「已分析」。
-    历史日志的 log_type 为 NULL（迁移前），统一按 analysis 处理。
-    """
-    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
 
 # ============ 模型管理 ============
 
@@ -1084,7 +1079,7 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
             func.count().label("total"),
             func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
         )
-        .where(AIAnalysisLog.created_at >= thirty_days_ago)
+        .where(_analysis_log_filter(), AIAnalysisLog.created_at >= thirty_days_ago)
         .group_by("day")
         .order_by("day")
     )
@@ -1107,7 +1102,7 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
     # 多次失败的素材（≥3 次失败）
     fail_count_sub = (
         select(AIAnalysisLog.inspiration_id, func.count().label("fc"))
-        .where(AIAnalysisLog.error.isnot(None))
+        .where(_analysis_log_filter(), AIAnalysisLog.error.isnot(None))
         .group_by(AIAnalysisLog.inspiration_id)
         .having(func.count() >= 3)
         .subquery()
@@ -1140,7 +1135,7 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
     # 平均耗时
     avg_time = (await db.execute(
         select(func.avg(AIAnalysisLog.processing_time_ms))
-        .where(AIAnalysisLog.error.is_(None))
+        .where(_analysis_log_filter(), AIAnalysisLog.error.is_(None))
     )).scalar() or 0
 
     return {
@@ -1300,7 +1295,7 @@ async def update_ai_settings(
         settings.ai_low_confidence_threshold = confidence_threshold
         await _update_env_file({"AI_LOW_CONFIDENCE_THRESHOLD": str(confidence_threshold)})
 
-    timeout = settings.ai_analysis_timeout
+    timeout = get_model_config(settings.ollama_vision_model)["timeout"]
     if analysis_timeout is not None:
         cfg = await update_model_config(
             settings.ollama_vision_model, {"timeout": analysis_timeout}

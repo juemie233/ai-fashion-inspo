@@ -95,3 +95,13 @@ class AIAnalysisLog(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="analysis_logs"
     )
+
+
+def analysis_log_filter():
+    """返回「标签分析日志」的过滤条件（排除 quality_check 质量审核日志）。
+
+    判断「是否已做标签分析」时应使用本条件：quality_check 只做二分类审核，
+    不产出标签，不能算作「已分析」。历史日志（迁移前）的 log_type 为 NULL，
+    统一按 analysis 处理。
+    """
+    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"

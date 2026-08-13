@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, InspirationOut
 
@@ -84,7 +84,8 @@ async def search_inspirations(
         conditions.append(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id).where(
-                    AIAnalysisLog.error.is_(None)
+                    analysis_log_filter(),
+                    AIAnalysisLog.error.is_(None),
                 ).distinct()
             )
         )
@@ -92,14 +93,17 @@ async def search_inspirations(
         conditions.append(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id).where(
-                    AIAnalysisLog.error.isnot(None)
+                    analysis_log_filter(),
+                    AIAnalysisLog.error.isnot(None),
                 ).distinct()
             )
         )
     elif analysis_status == "pending":
         conditions.append(
             Inspiration.id.notin_(
-                select(AIAnalysisLog.inspiration_id).distinct()
+                select(AIAnalysisLog.inspiration_id)
+                .where(analysis_log_filter())
+                .distinct()
             )
         )
 
