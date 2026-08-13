@@ -32,9 +32,8 @@ _task_by_id: dict[str, asyncio.Task] = {}
 _pending_queue: list[str] = []
 # 队列暂停开关
 _queue_paused = False
-# 质量审核任务追踪（独立于完整分析队列）
+# 质量审核任务追踪（与完整分析队列共享 _analysis_semaphore 信号量）
 _quality_active: set[str] = set()  # 正在审核的 inspiration_id
-_quality_semaphore = asyncio.Semaphore(2)
 
 # ============ 模型管理 ============
 
@@ -1482,9 +1481,17 @@ async def _run_quality_check(inspiration_id: str, file_path: str):
     """后台任务：对图片执行轻量质量审核（是否真人穿搭照片）。"""
     if inspiration_id in _quality_active:
         return
+
+    # 预处理：跳过已审核的（人工翻案或已审核），避免重复调用模型
+    async with async_session() as db:
+        insp = await db.get(Inspiration, inspiration_id)
+        if not insp or insp.quality_status != "pending":
+            return
+
     _quality_active.add(inspiration_id)
     try:
-        async with _quality_semaphore:
+        # 与完整分析共享同一全局信号量，避免单卡同时 4 路推理
+        async with _analysis_semaphore:
             from app.services.ai_service import check_image_quality
             async with async_session() as db:
                 status, reason = await check_image_quality(db, inspiration_id, file_path)
@@ -1530,12 +1537,14 @@ async def batch_quality_check(
 
 @router.get("/quality-stats")
 async def quality_stats(db: AsyncSession = Depends(get_db)):
-    """质量审核统计：待审核/已通过/已拒绝数量及通过率。"""
+    """质量审核统计：待审核/已通过/已拒绝数量及通过率（仅图片素材）。"""
     result = await db.execute(
         select(
             func.coalesce(Inspiration.quality_status, "pending"),
             func.count(Inspiration.id),
-        ).group_by(func.coalesce(Inspiration.quality_status, "pending"))
+        )
+        .where(Inspiration.media_type == "image")
+        .group_by(func.coalesce(Inspiration.quality_status, "pending"))
     )
     counts = {status: count for status, count in result.all()}
 

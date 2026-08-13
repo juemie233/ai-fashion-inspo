@@ -1,6 +1,7 @@
 """灵感素材的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, Field, field_serializer
 
 
@@ -41,7 +42,8 @@ class InspirationUpdate(BaseModel):
     """更新灵感的请求体（部分更新）"""
     is_favorite: bool | None = None
     source_author: str | None = None
-    quality_status: str | None = None  # pending | approved | rejected（人工复核翻案）
+    quality_status: Literal["pending", "approved", "rejected"] | None = None  # 人工复核翻案
+    quality_reason: str | None = None  # 翻案为 rejected 时的自定义原因
 
 
 class InspirationOut(BaseModel):

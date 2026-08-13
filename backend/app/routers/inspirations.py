@@ -184,7 +184,9 @@ async def list_inspirations(
     if media_type:
         query = query.where(Inspiration.media_type == media_type)
     if quality_status:
-        query = query.where(Inspiration.quality_status == quality_status)
+        query = query.where(
+            func.coalesce(Inspiration.quality_status, "pending") == quality_status
+        )
 
     # 分析状态筛选
     if analysis_status == "done":
@@ -322,10 +324,12 @@ async def update_inspiration(
     if data.source_author is not None:
         inspiration.source_author = data.source_author
     if data.quality_status is not None:
-        # 人工复核翻案：修改审核状态，同时清除/保留原因
+        # 人工复核翻案：修改审核状态，同时处理原因
         inspiration.quality_status = data.quality_status
         if data.quality_status in ("approved", "pending"):
             inspiration.quality_reason = None
+        elif data.quality_reason is not None:
+            inspiration.quality_reason = data.quality_reason
 
     await db.flush()
     await db.refresh(inspiration)

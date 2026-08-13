@@ -70,9 +70,12 @@ def _read_image_base64(file_path: str) -> tuple[str, float]:
     返回:
         (base64 字符串, 文件大小 MB)
     """
-    full_path = (settings.storage_root / file_path).resolve()
-    # 防御路径遍历攻击
-    if not str(full_path).startswith(str(settings.storage_root.resolve())):
+    storage_root = settings.storage_root.resolve()
+    full_path = (storage_root / file_path).resolve()
+    # 防御路径遍历攻击（按路径组件判定，Windows 下大小写不敏感）
+    try:
+        full_path.relative_to(storage_root)
+    except ValueError:
         raise ValueError(f"非法的文件路径: {file_path}")
     if not full_path.exists():
         raise FileNotFoundError(f"图片不存在: {full_path}")
@@ -266,7 +269,13 @@ async def check_image_quality(
 
     try:
         image_data, _ = _read_image_base64(file_path)
+    except FileNotFoundError:
+        # 文件缺失：确定性失败，直接拒绝，避免永久停留 pending
+        return "rejected", "文件缺失"
+    except Exception as e:
+        return "pending", f"审核失败: {str(e)[:100]}"
 
+    try:
         async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
             response = await client.post(
                 f"{settings.ollama_base_url}/api/chat",
@@ -293,18 +302,39 @@ async def check_image_quality(
     if not isinstance(parsed, dict) or "is_outfit" not in parsed:
         return "pending", f"无法解析模型输出: {raw[:100]}"
 
-    is_outfit = bool(parsed.get("is_outfit"))
+    is_outfit = _parse_is_outfit(parsed.get("is_outfit"))
+    if is_outfit is None:
+        return "pending", f"无法判定 is_outfit 值: {raw[:100]}"
+
     reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
     status = "approved" if is_outfit else "rejected"
 
-    # 写回数据库
+    # 写回数据库（CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
     insp = await db.get(Inspiration, inspiration_id)
-    if insp:
+    if insp and insp.quality_status == "pending":
         insp.quality_status = status
         insp.quality_reason = reason if not is_outfit else None
         await db.commit()
 
     return status, reason
+
+
+def _parse_is_outfit(value) -> bool | None:
+    """严格解析模型的 is_outfit 输出，避免脏数据误判。
+
+    仅布尔 True 或明确的真值字符串判定为通过；模糊值返回 None（保持 pending）。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "是", "yes", "y"):
+            return True
+        if v in ("false", "0", "否", "no", "n"):
+            return False
+    return None
 
 
 def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:

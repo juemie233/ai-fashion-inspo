@@ -27,6 +27,8 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   const currentDetail = ref<InspirationDetailOut | null>(null)
   /** 请求序号（用于忽略过期响应） */
   let _requestSeq = 0
+  /** 最近一次 load 的筛选参数（供 loadMore 复用） */
+  let _lastParams: Record<string, any> = {}
 
   /** 加载素材列表 */
   async function load(params: {
@@ -42,6 +44,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   } = {}) {
     loading.value = true
     if (params.size) size.value = params.size
+    _lastParams = params
     const seq = ++_requestSeq
     try {
       const result = await fetchInspirations({
@@ -68,7 +71,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     }
   }
 
-  /** 加载下一页（追加到列表） */
+  /** 加载下一页（追加到列表，复用最近一次筛选参数） */
   async function loadMore() {
     if (loading.value || items.value.length >= total.value) return
     loading.value = true
@@ -76,6 +79,13 @@ export const useInspirationsStore = defineStore('inspirations', () => {
       const result = await fetchInspirations({
         page: page.value + 1,
         size: size.value,
+        source_type: _lastParams.source_type,
+        is_favorite: _lastParams.is_favorite,
+        media_type: _lastParams.media_type,
+        analysis_status: _lastParams.analysis_status,
+        tag_status: _lastParams.tag_status,
+        quality_status: _lastParams.quality_status,
+        sort: _lastParams.sort,
       })
       items.value.push(...result.items)
       total.value = result.total

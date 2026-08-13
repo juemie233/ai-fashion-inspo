@@ -2,6 +2,9 @@
 
 import apiClient from './client'
 
+/** 审核状态 */
+export type QualityStatus = 'pending' | 'approved' | 'rejected'
+
 /** 灵感列表响应类型 */
 export interface InspirationOut {
   id: string
@@ -14,7 +17,7 @@ export interface InspirationOut {
   media_type: string
   dominant_colors?: string | null
   is_favorite: boolean
-  quality_status?: string | null
+  quality_status?: QualityStatus | null
   quality_reason?: string | null
   created_at: string
   updated_at?: string | null
@@ -111,7 +114,7 @@ export async function batchQualityCheck(limit?: number) {
 }
 
 /** 人工复核：修改素材审核状态 */
-export async function updateQualityStatus(id: string, qualityStatus: string) {
+export async function updateQualityStatus(id: string, qualityStatus: QualityStatus) {
   const { data } = await apiClient.patch<InspirationOut>(`/inspirations/${id}`, {
     quality_status: qualityStatus,
   })

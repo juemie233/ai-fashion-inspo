@@ -175,18 +175,30 @@ async function handleBatchQualityCheck() {
   }
 }
 
+const approvingIds = ref<Set<string>>(new Set())
+
 async function handleApprove(id: string) {
+  if (approvingIds.value.has(id)) return
+  approvingIds.value = new Set(approvingIds.value).add(id)
   try {
     await updateQualityStatus(id, 'approved')
     message.success('已标记为通过')
-    // 更新本地状态，无需重新加载
-    const item = store.items.find((i) => i.id === id)
-    if (item) {
-      item.quality_status = 'approved'
-      item.quality_reason = null
+    // 若当前筛选为「已拒绝」，从列表剔除并减总数；否则仅更新本地状态
+    if (qualityFilter.value === 'rejected') {
+      store.items = store.items.filter((i) => i.id !== id)
+      store.total = Math.max(0, store.total - 1)
+    } else {
+      const item = store.items.find((i) => i.id === id)
+      if (item) {
+        item.quality_status = 'approved'
+        item.quality_reason = null
+      }
     }
   } catch {
     message.error('操作失败')
+  } finally {
+    approvingIds.value = new Set(approvingIds.value)
+    approvingIds.value.delete(id)
   }
 }
 

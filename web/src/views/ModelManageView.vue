@@ -330,20 +330,37 @@ interface RejectedItem {
 const rejectedItems = ref<RejectedItem[]>([])
 const rejectedTotal = ref(0)
 const rejectedLoading = ref(false)
+const rejectedPage = ref(1)
+const rejectedPageSize = 100
+let rejectedSeq = 0  // 请求序号，防止陈旧响应覆盖
+const approvingRejectedIds = ref<Set<string>>(new Set())
 
-async function loadRejectedItems() {
+async function loadRejectedItems(reset = true) {
+  if (reset) rejectedPage.value = 1
+  const page = rejectedPage.value
   rejectedLoading.value = true
+  const seq = ++rejectedSeq
   try {
     const { data } = await apiClient.get<{ items: RejectedItem[]; total: number }>('/inspirations', {
-      params: { quality_status: 'rejected', size: 100, sort: 'newest' },
+      params: { quality_status: 'rejected', size: rejectedPageSize, page, sort: 'newest' },
     })
-    rejectedItems.value = data.items
+    if (seq !== rejectedSeq) return  // 忽略过期响应
+    rejectedItems.value = reset ? data.items : [...rejectedItems.value, ...data.items]
     rejectedTotal.value = data.total
   } catch { /* 静默 */ }
-  finally { rejectedLoading.value = false }
+  finally {
+    if (seq === rejectedSeq) rejectedLoading.value = false
+  }
+}
+
+function loadMoreRejected() {
+  rejectedPage.value += 1
+  loadRejectedItems(false)
 }
 
 async function approveItem(id: string) {
+  if (approvingRejectedIds.value.has(id)) return
+  approvingRejectedIds.value = new Set(approvingRejectedIds.value).add(id)
   try {
     await apiClient.patch(`/inspirations/${id}`, { quality_status: 'approved' })
     rejectedItems.value = rejectedItems.value.filter((i) => i.id !== id)
@@ -352,6 +369,10 @@ async function approveItem(id: string) {
     loadQualityReview()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '操作失败')
+  } finally {
+    const next = new Set(approvingRejectedIds.value)
+    next.delete(id)
+    approvingRejectedIds.value = next
   }
 }
 
@@ -593,9 +614,10 @@ function scheduleNextPoll() {
     if (isActive || wasActive) {
       loadHistory()
     }
-    // 质量审核：仅在该标签激活时刷新
+    // 质量审核：仅在该标签激活时刷新统计与未通过网格
     if (activeTab.value === 'review') {
       loadQualityReview()
+      loadRejectedItems(true)
     }
     if (pollTimer !== null) scheduleNextPoll()
   }, interval)
@@ -1610,7 +1632,7 @@ function formatDate(d: string | null | undefined) {
             <n-card size="small" title="未通过素材" style="margin-bottom:16px">
               <template #header-extra>
                 <n-tag type="error" size="small">{{ rejectedTotal }} 个</n-tag>
-                <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems" :loading="rejectedLoading">刷新</n-button>
+                <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems(true)" :loading="rejectedLoading">刷新</n-button>
               </template>
               <n-spin :show="rejectedLoading">
                 <div v-if="rejectedItems.length" class="rejected-grid">
@@ -1621,6 +1643,9 @@ function formatDate(d: string | null | undefined) {
                   </div>
                 </div>
                 <n-empty v-else description="暂无未通过素材" size="small" />
+                <div v-if="rejectedTotal > rejectedItems.length" style="text-align:center;margin-top:12px">
+                  <n-button size="small" @click="loadMoreRejected">加载更多（{{ rejectedItems.length }}/{{ rejectedTotal }}）</n-button>
+                </div>
               </n-spin>
             </n-card>
 
