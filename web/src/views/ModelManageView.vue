@@ -856,6 +856,7 @@ async function deleteAllFailed() {
 const tagCategoryLabel: Record<string, string> = {
   style: '风格', item_type: '单品类型', color: '颜色', fit: '版型',
   body_part: '穿着方式', occasion: '场合', attribute: '属性',
+  outfit: '穿搭大标签',
 }
 
 // ---- 参数设置 ----

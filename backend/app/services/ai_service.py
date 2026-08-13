@@ -405,6 +405,87 @@ def _looks_truncated(raw: str) -> bool:
     return depth > 0
 
 
+async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
+    """根据小标签纯文本总结穿搭大标签（带特色闸门，宁缺毋滥）。
+
+    只调用模型做文本总结（不传图片），速度快。返回建议的大标签列表，
+    可能为空（表示素材不够有特色，不配拥有大标签）。
+
+    参数:
+        small_tags: 素材的现有小标签名称列表
+
+    返回:
+        大标签建议列表（去重、限 3 个）
+    """
+    import httpx
+
+    if not small_tags:
+        return []
+
+    model_cfg = get_model_config(settings.ollama_vision_model)
+    tag_list = "、".join(small_tags)
+    prompt = (
+        "你是一个穿搭标签总结助手。根据以下穿搭小标签，判断这套穿搭是否"
+        "「足够有特色、值得一个穿搭大标签」。\n"
+        "值得大标签的例子：御姐长腿高跟鞋穿搭、甜妹白色过膝袜JK制服穿搭、"
+        "白色系穿搭、网球穿搭、女仆穿搭。\n"
+        "不值得大标签的情况：穿搭普通、无特色（如普通T恤牛仔裤、基础款无亮点）。\n"
+        "若值得，总结 1~3 个穿搭大标签（简洁、具体、可检索）；若不值得，返回空数组。\n\n"
+        f"小标签：{tag_list}\n\n"
+        '只输出 JSON，格式：{"outfit_tags": ["大标签1", "大标签2"]}'
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
+            response = await client.post(
+                f"{settings.ollama_base_url}/api/chat",
+                json={
+                    "model": settings.ollama_vision_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "think": False,  # 纯文本总结无需思考
+                    "options": {"temperature": 0.3, "num_predict": 2048},
+                },
+            )
+            response.raise_for_status()
+            raw = response.json().get("message", {}).get("content", "") or ""
+    except Exception as e:
+        logger.warning(f"大标签总结失败: {e}")
+        return []
+
+    if not raw:
+        return []
+
+    # 解析 {"outfit_tags": [...]}
+    parsed = None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group())
+            except Exception:
+                parsed = None
+    if not isinstance(parsed, dict):
+        return []
+
+    tags = parsed.get("outfit_tags") or []
+    if not isinstance(tags, list):
+        return []
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in tags:
+        name = str(t).strip() if t else ""
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+        if len(result) >= 3:
+            break
+    return result
+
+
 def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
     """将 Ollama HTTP 错误转为人可读的中文消息。"""
     if status == 400:

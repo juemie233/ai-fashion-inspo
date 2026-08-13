@@ -9,6 +9,9 @@ import {
   toggleFavorite,
   deleteInspiration,
   getFileUrl,
+  addTagsToInspiration,
+  removeTagFromInspiration,
+  suggestOutfitTags,
   type InspirationDetailOut,
 } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
@@ -69,6 +72,7 @@ function tagColor(category: string): string {
     occasion: '#06b6d4',
     attribute: '#6b7280',
     free: '#9ca3af',
+    outfit: '#e11d48',
   }
   return colors[category] || '#9ca3af'
 }
@@ -77,7 +81,7 @@ function tagColor(category: string): string {
 const CAT_LABELS: Record<string, string> = {
   style: '风格', item_type: '单品', color: '颜色',
   body_part: '穿着方式', fit: '版型', occasion: '场合',
-  attribute: '属性', free: '自定义',
+  attribute: '属性', free: '自定义', outfit: '穿搭大标签',
 }
 
 /** 按类别分组标签 */
@@ -111,6 +115,83 @@ function analysisStatusLabel(): string {
   if (detail.value.analysis_status === 'analyzing') return '分析中...'
   if (detail.value.analysis_status === 'error') return '分析失败'
   return '已分析'
+}
+
+// ===== 穿搭大标签 =====
+const outfitInput = ref('')
+const outfitAdding = ref(false)
+const aiSuggesting = ref(false)
+const aiSuggestions = ref<string[]>([])
+
+/** 当前素材的穿搭大标签 */
+function outfitTags() {
+  if (!detail.value) return []
+  return detail.value.tags.filter((t) => t.tag.category === 'outfit')
+}
+
+/** 手动添加大标签 */
+async function addOutfitTag() {
+  const name = outfitInput.value.trim()
+  if (!name || !detail.value) return
+  outfitAdding.value = true
+  try {
+    await addTagsToInspiration(detail.value.id, [name], 'outfit', 'manual')
+    outfitInput.value = ''
+    message.success('已添加大标签')
+    detail.value = await fetchInspiration(detail.value.id)
+  } catch {
+    message.error('添加失败')
+  } finally {
+    outfitAdding.value = false
+  }
+}
+
+/** 删除大标签 */
+async function removeOutfitTag(tagId: number) {
+  if (!detail.value) return
+  try {
+    await removeTagFromInspiration(detail.value.id, tagId)
+    detail.value = await fetchInspiration(detail.value.id)
+    message.success('已移除大标签')
+  } catch {
+    message.error('移除失败')
+  }
+}
+
+/** AI 建议大标签（只建议不入库） */
+async function aiSuggestOutfitTags() {
+  if (!detail.value) return
+  aiSuggesting.value = true
+  aiSuggestions.value = []
+  try {
+    const data = await suggestOutfitTags(detail.value.id)
+    aiSuggestions.value = data.suggestions || []
+    if (aiSuggestions.value.length === 0) {
+      message.info('AI 认为该穿搭不够有特色，未给出大标签建议')
+    }
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || 'AI 建议失败')
+  } finally {
+    aiSuggesting.value = false
+  }
+}
+
+/** 确认入库某条 AI 建议 */
+async function confirmOutfitTag(name: string) {
+  if (!detail.value) return
+  try {
+    await addTagsToInspiration(detail.value.id, [name], 'outfit', 'ai_generated')
+    aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
+    detail.value = await fetchInspiration(detail.value.id)
+    message.success(`已添加「${name}」`)
+  } catch {
+    message.error('添加失败')
+  }
+}
+
+/** 丢弃某条 AI 建议 */
+function dismissOutfitTag(name: string) {
+  aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
 }
 </script>
 
@@ -184,6 +265,57 @@ function analysisStatusLabel(): string {
                   {{ new Date(detail.created_at).toLocaleString('zh-CN') }}
                 </n-descriptions-item>
               </n-descriptions>
+            </div>
+
+            <!-- 穿搭大标签 -->
+            <div class="outfit-tags-section">
+              <div class="outfit-tags-header">
+                <h4>穿搭大标签</h4>
+                <n-button size="tiny" type="primary" ghost :loading="aiSuggesting" @click="aiSuggestOutfitTags">
+                  ✨ AI 生成
+                </n-button>
+              </div>
+
+              <div v-if="outfitTags().length" class="tag-chips" style="margin-bottom:8px">
+                <n-tag
+                  v-for="t in outfitTags()"
+                  :key="t.tag.id"
+                  size="small"
+                  type="error"
+                  closable
+                  @close="removeOutfitTag(t.tag.id)"
+                >
+                  {{ t.tag.name }}
+                </n-tag>
+              </div>
+              <div v-else style="font-size:12px;color:#999;margin-bottom:8px">暂无大标签</div>
+
+              <div class="outfit-tag-add">
+                <n-input
+                  v-model:value="outfitInput"
+                  size="small"
+                  placeholder="手动输入大标签，如「白色系穿搭」"
+                  @keyup.enter="addOutfitTag"
+                  style="flex:1"
+                />
+                <n-button size="small" :loading="outfitAdding" @click="addOutfitTag">添加</n-button>
+              </div>
+
+              <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
+                <div style="font-size:12px;color:#999;margin:8px 0 4px">AI 建议（点击标签入库，点 ✕ 丢弃）：</div>
+                <div class="tag-chips">
+                  <span
+                    v-for="name in aiSuggestions"
+                    :key="name"
+                    style="display:inline-flex;align-items:center;gap:2px;margin:0 6px 4px 0"
+                  >
+                    <n-tag size="small" type="warning" style="cursor:pointer" @click="confirmOutfitTag(name)">
+                      {{ name }}
+                    </n-tag>
+                    <n-button size="tiny" text type="error" @click="dismissOutfitTag(name)">✕</n-button>
+                  </span>
+                </div>
+              </div>
             </div>
 
             <!-- 标签分组 -->
@@ -286,6 +418,31 @@ function analysisStatusLabel(): string {
 .tag-chips {
   display: flex;
   flex-wrap: wrap;
+  gap: 6px;
+}
+
+.outfit-tags-section {
+  border: 1px solid #f0d6dc;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 20px;
+  background: #fef6f7;
+}
+
+.outfit-tags-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.outfit-tags-header h4 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.outfit-tag-add {
+  display: flex;
   gap: 6px;
 }
 

@@ -60,6 +60,31 @@ export function getFileUrl(relativePath: string): string {
   return `/api/files/${relativePath}`
 }
 
+/** 手动给素材关联标签（按名称查找/创建） */
+export async function addTagsToInspiration(
+  id: string,
+  names: string[],
+  category = 'outfit',
+  source = 'manual',
+) {
+  const { data } = await apiClient.post(`/inspirations/${id}/tags`, { names, category, source })
+  return data
+}
+
+/** 解除素材与标签的关联 */
+export async function removeTagFromInspiration(id: string, tagId: number) {
+  const { data } = await apiClient.delete(`/inspirations/${id}/tags/${tagId}`)
+  return data
+}
+
+/** AI 建议穿搭大标签（只建议不入库） */
+export async function suggestOutfitTags(id: string) {
+  const { data } = await apiClient.post('/ai/outfit-tags/suggest', null, {
+    params: { inspiration_id: id },
+  })
+  return data
+}
+
 /** 获取灵感列表 */
 export async function fetchInspirations(params: {
   page?: number

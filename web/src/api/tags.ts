@@ -25,6 +25,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   occasion: '场合',
   attribute: '属性',
   free: '自定义',
+  outfit: '穿搭大标签',
 }
 
 /** 来源的中文映射 */

@@ -1,7 +1,7 @@
 """灵感素材 CRUD 的 REST API 路由。"""
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -391,6 +391,72 @@ async def update_inspiration(
     await db.flush()
     await db.refresh(inspiration)
     return _to_out(inspiration)
+
+
+@router.post("/{inspiration_id}/tags", status_code=status.HTTP_200_OK)
+async def add_inspiration_tags(
+    inspiration_id: str,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """手动给素材关联标签（按名称查找或创建，已关联的自动跳过）。
+
+    请求体: {"names": ["御姐长腿高跟鞋穿搭"], "category": "outfit", "source": "manual"}
+    """
+    inspiration = await db.get(Inspiration, inspiration_id)
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="素材未找到")
+
+    names = payload.get("names", [])
+    category = payload.get("category", "free")
+    source = payload.get("source", "manual")
+    if not isinstance(names, list) or not names:
+        raise HTTPException(status_code=400, detail="请提供标签名称列表")
+
+    from app.services.tag_service import get_or_create_tag
+
+    added = []
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        tag = await get_or_create_tag(db, name, category, source)
+        existing = await db.execute(
+            select(InspirationTag).where(
+                InspirationTag.inspiration_id == inspiration_id,
+                InspirationTag.tag_id == tag.id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+        db.add(
+            InspirationTag(
+                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0
+            )
+        )
+        added.append({"id": tag.id, "name": tag.name, "category": tag.category})
+
+    await db.commit()
+    return {"added": added, "count": len(added)}
+
+
+@router.delete("/{inspiration_id}/tags/{tag_id}", status_code=status.HTTP_200_OK)
+async def remove_inspiration_tag(
+    inspiration_id: str,
+    tag_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """解除素材与某个标签的关联（不删除标签本身）。"""
+    result = await db.execute(
+        delete(InspirationTag).where(
+            InspirationTag.inspiration_id == inspiration_id,
+            InspirationTag.tag_id == tag_id,
+        )
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="未找到该标签关联")
+    return {"removed": 1}
 
 
 @router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)

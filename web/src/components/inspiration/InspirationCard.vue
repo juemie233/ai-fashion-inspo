@@ -35,6 +35,7 @@ function tagColor(category: string): string {
     occasion: '#06b6d4',
     attribute: '#6b7280',
     free: '#9ca3af',
+    outfit: '#e11d48',
   }
   return colors[category] || '#9ca3af'
 }

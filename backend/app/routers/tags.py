@@ -261,7 +261,7 @@ _DEFAULT_CATEGORIES = {
     "style": "风格", "item_type": "单品类型", "color": "颜色",
     "fit": "版型", "body_part": "穿着方式",
     "attribute": "属性", "season": "季节", "material": "面料",
-    "brand": "品牌", "free": "其他",
+    "brand": "品牌", "free": "其他", "outfit": "穿搭大标签",
 }
 
 
