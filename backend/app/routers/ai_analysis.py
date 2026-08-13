@@ -186,8 +186,8 @@ async def analysis_history(
     inspiration_id: str | None = None,  # 按素材 ID 搜索
     db: AsyncSession = Depends(get_db),
 ):
-    """获取分析历史记录列表。"""
-    query = select(AIAnalysisLog)
+    """获取分析历史记录列表（仅标签分析，排除质量审核日志）。"""
+    query = select(AIAnalysisLog).where(_analysis_log_filter())
     if status == "success":
         query = query.where(AIAnalysisLog.error.is_(None))
     elif status == "error":
@@ -358,9 +358,12 @@ async def batch_retry_logs(
 
 @router.get("/history/model-names")
 async def get_history_model_names(db: AsyncSession = Depends(get_db)):
-    """获取分析历史中出现过的所有模型名称，供前端筛选。"""
+    """获取分析历史中出现过的所有模型名称，供前端筛选（排除质量审核日志）。"""
     result = await db.execute(
-        select(AIAnalysisLog.model_name).distinct().order_by(AIAnalysisLog.model_name)
+        select(AIAnalysisLog.model_name)
+        .where(_analysis_log_filter())
+        .distinct()
+        .order_by(AIAnalysisLog.model_name)
     )
     names = [row[0] for row in result]
     return {"models": names}
