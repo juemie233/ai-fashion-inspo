@@ -85,6 +85,7 @@ class AIAnalysisLog(Base):
         String(36), ForeignKey("inspirations.id", ondelete="CASCADE"), index=True
     )
     model_name: Mapped[str] = mapped_column(String(64))
+    log_type: Mapped[str] = mapped_column(String(16), default="analysis")  # analysis | quality_check
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     processing_time_ms: Mapped[int | None] = mapped_column(nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

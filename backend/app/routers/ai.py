@@ -544,6 +544,7 @@ async def analysis_history(
             "id": log.id,
             "inspiration_id": log.inspiration_id,
             "model_name": log.model_name,
+            "log_type": log.log_type or "analysis",
             "thumbnail_path": insp.thumbnail_path if insp else None,
             "file_path": insp.file_path if insp else None,
             "processing_time_ms": log.processing_time_ms,
@@ -1495,6 +1496,14 @@ async def _run_quality_check(inspiration_id: str, file_path: str):
             from app.services.ai_service import check_image_quality
             async with async_session() as db:
                 status, reason = await check_image_quality(db, inspiration_id, file_path)
+                # 写入质量审核日志（失败时记录原因，供前端排查）
+                db.add(AIAnalysisLog(
+                    inspiration_id=inspiration_id,
+                    model_name=settings.ollama_vision_model,
+                    log_type="quality_check",
+                    error=reason if status == "pending" else None,
+                ))
+                await db.commit()
                 logger.info(f"质量审核 {inspiration_id}: {status}（{reason}）")
     except Exception as e:
         logger.error(f"质量审核失败 {inspiration_id}: {e}")

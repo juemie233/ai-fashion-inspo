@@ -28,6 +28,9 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "scraper_tasks": [
         ("diagnostics", "TEXT"),
     ],
+    "ai_analysis_log": [
+        ("log_type", "TEXT DEFAULT 'analysis'"),
+    ],
 }
 
 

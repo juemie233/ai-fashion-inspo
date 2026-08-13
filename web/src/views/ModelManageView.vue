@@ -127,6 +127,7 @@ async function togglePauseQueue() {
 // ===== 分析历史 =====
 interface HistoryItem {
   id: number; inspiration_id: string; model_name: string
+  log_type?: string
   thumbnail_path: string | null; file_path: string | null
   processing_time_ms: number | null; error: string | null
   status: string; created_at: string
@@ -1310,7 +1311,10 @@ function formatDate(d: string | null | undefined) {
             :columns="[
               { title: () => h('input', { type:'checkbox', checked: selectedHistoryIds.size === history.length && history.length > 0, onClick: selectAllHistory }), key:'_check', width: 36, render: (row: HistoryItem) => h('input', { type:'checkbox', checked: selectedHistoryIds.has(row.id), onClick: () => toggleSelectHistory(row.id) }) },
               { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
-              { title: '模型', key: 'model_name', width: 130 },
+              { title: '模型', key: 'model_name', width: 130, render: (row: HistoryItem) => h('span', {style:'display:flex;align-items:center;gap:4px'}, [
+                row.log_type === 'quality_check' ? h(NTag, {type:'info',size:'tiny',bordered:false}, '审核') : null,
+                row.model_name,
+              ]) },
               { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
               { title: '提取标签', key: 'tags', width: 180, render: (row: HistoryItem) => {
                 const tags = row.tags || []
@@ -1332,7 +1336,7 @@ function formatDate(d: string | null | undefined) {
               { title: '耗时', key: 'time', width: 80, render: (row: HistoryItem) => formatMs(row.processing_time_ms) },
               { title: '时间', key: 'created_at', width: 160, render: (row: HistoryItem) => formatDate(row.created_at) },
               { title: '操作', key: 'actions', width: 140, render: (row: HistoryItem) => h('span', {style:'display:flex;gap:4px'}, [
-                row.status === 'success' ? h(NButton, {size:'tiny',onClick:()=>viewDetail(row.id)}, '详情') : null,
+                h(NButton, {size:'tiny',onClick:()=>viewDetail(row.id)}, row.status === 'success' ? '详情' : '原始输出'),
                 h(NButton, {size:'tiny',onClick:()=>viewCompare(row.inspiration_id)}, '对比'),
                 row.status === 'error' ? h(NButton, {size:'tiny',onClick:()=>retryAnalysis(row.inspiration_id)}, '重试') : null,
                 h(NPopconfirm, {onPositiveClick:()=>deleteLog(row.id)},
