@@ -1,0 +1,252 @@
+"""任务队列执行逻辑：供独立 worker 进程（app/worker.py）调用。
+
+本模块只负责「执行」：读取 task_queue 记录、逐张调用现有 AI 分析服务、
+更新进度与结果，不包含任何 HTTP/API 层逻辑。
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import async_session
+from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.task import TaskQueue
+from app.services.ai_service import analyze_image
+
+logger = logging.getLogger(__name__)
+
+# 批内并发度：与原有 AI 分析并发信号量一致（避免单卡多路推理导致显存溢出）
+_ANALYZE_CONCURRENCY = 2
+
+
+class RecoverableTaskError(Exception):
+    """可恢复错误：任务应自动重试（模型超时 / Ollama 连接失败 / SQLite 数据库锁）。"""
+
+
+class PermanentTaskError(Exception):
+    """永久错误：任务不应重试（图片损坏 / 文件不存在等）。"""
+
+
+def _utcnow() -> datetime:
+    """返回当前 UTC 时间（naive datetime）。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _is_recoverable_error(message: str) -> bool:
+    """判断错误消息是否属于「可恢复错误」。
+
+    可恢复错误包括：模型响应超时、无法连接 Ollama、Ollama 服务不可用、
+    SQLite 数据库被锁（database is locked）。其余错误（图片损坏、文件不存在等）
+    视为永久错误，不重试。
+
+    参数:
+        message: 错误消息
+
+    返回:
+        True 表示可恢复，False 表示永久错误
+    """
+    if not message:
+        return False
+    keywords = (
+        "超时",
+        "无法连接 Ollama",
+        "Ollama 服务",
+        "database is locked",
+        "locked",
+    )
+    return any(k in message for k in keywords)
+
+
+def _retry_delay(retry_count: int) -> int:
+    """指数退避延迟（秒）：第 1 次约 30s，第 2 次约 2min。
+
+    参数:
+        retry_count: 当前已重试次数（1 表示第 1 次重试）
+    """
+    return min(120, 30 * (4 ** (retry_count - 1)))
+
+
+async def _schedule_retry(db: AsyncSession, task: TaskQueue, error_msg: str) -> None:
+    """安排任务自动重试（指数退避）；超过最大重试次数则标记失败。
+
+    参数:
+        db: 任务生命周期会话
+        task: 任务记录
+        error_msg: 本次失败原因
+    """
+    task.retry_count += 1
+    task.error = error_msg
+    if task.retry_count <= task.max_retries:
+        delay = _retry_delay(task.retry_count)
+        task.status = "pending"
+        task.next_retry_at = _utcnow() + timedelta(seconds=delay)
+        logger.warning(
+            f"任务将自动重试 #{task.id}，第 {task.retry_count}/{task.max_retries} 次，{delay} 秒后"
+        )
+    else:
+        task.status = "failed"
+        task.next_retry_at = None
+        logger.error(f"任务已超过最大重试次数，标记失败: #{task.id}")
+
+
+async def create_batch_analyze_task(
+    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0
+) -> TaskQueue:
+    """创建「批量分析」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
+
+    参数:
+        db: 数据库会话
+        inspiration_ids: 待分析的素材 ID 列表（已过滤非图片/不存在）
+        skipped: 被跳过的素材数量（不存在或非图片）
+
+    返回:
+        新建的任务记录
+    """
+    task = TaskQueue(
+        type="batch_analyze",
+        status="pending",
+        progress=0,
+        total=len(inspiration_ids),
+        done=0,
+        result={"inspiration_ids": inspiration_ids, "skipped": skipped},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def _last_analysis_error(db: AsyncSession, inspiration_id: str) -> str | None:
+    """读取指定素材最近一次分析日志的错误信息。
+
+    analyze_image 失败时会在独立事务中写入 AIAnalysisLog（含 error），
+    此处读取最新一条用于错误分类。
+    """
+    result = await db.execute(
+        select(AIAnalysisLog.error)
+        .where(AIAnalysisLog.inspiration_id == inspiration_id)
+        .order_by(AIAnalysisLog.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _analyze_one(
+    sem: asyncio.Semaphore, inspiration_id: str, file_path: str
+) -> tuple[str, bool, str | None]:
+    """分析单张图片（使用独立数据库会话），返回 (素材 ID, 是否成功, 失败原因)。
+
+    参数:
+        sem: 批内并发信号量
+        inspiration_id: 素材 ID
+        file_path: 图片相对路径
+    """
+    async with sem:
+        async with async_session() as db:
+            success = await analyze_image(db, inspiration_id, file_path)
+            if success:
+                return inspiration_id, True, None
+            error = await _last_analysis_error(db, inspiration_id)
+            return inspiration_id, False, error
+
+
+async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
+    """执行批量分析任务：逐张调用 AI 分析并维护任务进度（由 worker 调用）。
+
+    参数:
+        db: 任务生命周期会话（用于更新任务进度与状态）
+        task: 任务记录
+
+    抛出:
+        RecoverableTaskError: 整个批次全部因可恢复错误失败（如 Ollama 宕机），
+            由 worker 安排自动重试
+        PermanentTaskError: 整个批次全部因永久错误失败（如图片损坏），直接失败不重试
+    """
+    payload = task.result or {}
+    inspiration_ids = payload.get("inspiration_ids") or []
+    if not inspiration_ids:
+        # 空任务：无素材可分析，直接标记完成
+        task.total = 0
+        task.done = 0
+        task.progress = 100
+        task.error = None
+        await db.commit()
+        return
+
+    # 加载待分析素材（执行期间可能被删除，仅保留仍存在的图片素材）
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.media_type == "image",
+        )
+    )
+    rows = result.all()
+    insp_map = {r[0]: r[1] for r in rows}
+    items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
+
+    task.total = len(items)
+    task.done = 0
+    task.progress = 0
+    task.error = None
+    await db.commit()
+
+    # 批内并发信号量：任务内部对多张图片的分析保持原有并发（不改成单张串行）
+    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+
+    success_count = 0
+    failed_items: list[tuple[str, str | None]] = []
+    recoverable_failed: list[str] = []
+
+    for start in range(0, len(items), _ANALYZE_CONCURRENCY):
+        chunk = items[start:start + _ANALYZE_CONCURRENCY]
+        results = await asyncio.gather(
+            *(_analyze_one(sem, iid, fp) for iid, fp in chunk)
+        )
+        for iid, ok, err in results:
+            if ok:
+                success_count += 1
+            else:
+                failed_items.append((iid, err))
+                if _is_recoverable_error(err or ""):
+                    recoverable_failed.append(iid)
+
+        task.done = min(start + len(chunk), task.total)
+        task.progress = round(task.done / task.total * 100) if task.total else 100
+        task.updated_at = _utcnow()
+        await db.commit()
+        logger.info(
+            f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
+        )
+
+    # 整个批次全部失败：按错误类型决定是否自动重试
+    if task.total > 0 and success_count == 0:
+        if len(recoverable_failed) == task.total:
+            sample = failed_items[0][1] or "未知错误"
+            raise RecoverableTaskError(
+                f"批量分析全部失败（{task.total} 张），疑似可恢复的系统性错误：{sample}"
+            )
+        sample = failed_items[0][1] or "未知错误"
+        raise PermanentTaskError(
+            f"批量分析全部失败（{task.total} 张），均为永久错误（图片损坏/文件不存在等）：{sample}"
+        )
+
+    # 正常完成（部分图片失败也视为任务成功，失败详情写入结果）
+    task.result = {
+        "inspiration_ids": inspiration_ids,
+        "skipped": payload.get("skipped", 0),
+        "success_count": success_count,
+        "failed_count": len(failed_items),
+        "failed_ids": [iid for iid, _ in failed_items],
+        "failed_errors": {iid: err for iid, err in failed_items if err},
+    }
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = _utcnow()
+    await db.commit()
+    logger.info(
+        f"批量分析任务执行完毕: #{task.id} 成功 {success_count}，失败 {len(failed_items)}"
+    )

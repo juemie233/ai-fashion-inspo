@@ -40,6 +40,34 @@ const activeAnalyses = ref<Record<string, string>>({})
 const batchAnalyzing = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
+// ===== 批量分析任务（数据库驱动任务队列，轮询进度） =====
+interface TaskInfo {
+  id: number
+  type: string
+  status: string
+  progress: number
+  total: number
+  done: number
+  result: { success_count?: number; failed_count?: number } | null
+  error: string | null
+  retry_count: number
+  max_retries: number
+  next_retry_at: string | null
+  created_at: string
+  updated_at: string
+}
+const batchTask = ref<TaskInfo | null>(null)
+let batchPollTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 任务状态中文标签 */
+const taskStatusLabel: Record<string, string> = {
+  pending: '排队中',
+  running: '进行中',
+  success: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
 interface QueueItem {
   inspiration_id: string
   thumbnail_path: string | null
@@ -130,15 +158,82 @@ async function triggerBatchAnalyze() {
       message.info('所有素材均已分析过，无需重复分析')
       return
     }
-    await apiClient.post('/ai/batch-analyze', data.ids)
-    message.success(`已将 ${data.count} 个素材加入分析队列`)
-    requestAndNotify('批量分析已启动', { body: `${data.count} 个素材已加入分析队列`, tag: 'batch-analyze' })
-    loadQueue(); loadHistory(); loadActiveAnalyses()
+    // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
+    const { data: created } = await apiClient.post<{ task_id: number; message: string; count: number; skipped: number }>('/ai/batch-analyze', data.ids)
+    batchTask.value = {
+      id: created.task_id,
+      type: 'batch_analyze',
+      status: 'pending',
+      progress: 0,
+      total: created.count,
+      done: 0,
+      result: null,
+      error: null,
+      retry_count: 0,
+      max_retries: 2,
+      next_retry_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+    message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
+    requestAndNotify('批量分析已创建', { body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`, tag: 'batch-analyze' })
+    startBatchPolling(created.task_id)
   } catch (e: any) {
     message.error(e.response?.data?.detail || '批量分析失败')
   } finally {
     batchAnalyzing.value = false
   }
+}
+
+/** 轮询批量分析任务状态（约 1 秒一次），完成后刷新分析结果 */
+function startBatchPolling(taskId: number) {
+  stopBatchPolling()
+  const poll = async () => {
+    try {
+      const { data } = await apiClient.get<TaskInfo>(`/tasks/${taskId}`)
+      batchTask.value = data
+      if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
+        stopBatchPolling()
+        if (data.status === 'success') {
+          const successCount = data.result?.success_count
+          const failedCount = data.result?.failed_count
+          const detail = (successCount !== undefined && failedCount !== undefined)
+            ? `成功 ${successCount}，失败 ${failedCount}`
+            : '已完成'
+          message.success(`批量分析完成：${detail}`)
+        } else if (data.status === 'failed') {
+          message.error(`批量分析失败：${data.error || '未知错误'}`)
+        } else {
+          message.info('批量分析任务已取消')
+        }
+        loadQueue(); loadHistory(); loadActiveAnalyses()
+        return
+      }
+      batchPollTimer = setTimeout(poll, 1000)
+    } catch (e: any) {
+      stopBatchPolling()
+      message.error('获取任务状态失败，请稍后手动刷新')
+    }
+  }
+  poll()
+}
+
+/** 取消排队中的批量分析任务 */
+async function cancelBatchTask() {
+  if (!batchTask.value) return
+  try {
+    await apiClient.post(`/tasks/${batchTask.value.id}/cancel`)
+    message.success('任务已取消')
+    stopBatchPolling()
+    batchTask.value = { ...batchTask.value, status: 'cancelled' }
+    loadQueue()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '取消失败')
+  }
+}
+
+function stopBatchPolling() {
+  if (batchPollTimer) { clearTimeout(batchPollTimer); batchPollTimer = null }
 }
 
 async function retryAnalysis(id: string) {
@@ -399,6 +494,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling()
+  stopBatchPolling()
   if (historyAbort) historyAbort.abort()
 })
 </script>
@@ -431,6 +527,55 @@ onUnmounted(() => {
         {{ queueStats.unanalyzed > 0 ? `分析全部未分析 (${queueStats.unanalyzed})` : '全部已分析' }}
       </n-button>
     </div>
+
+    <!-- 批量分析任务进度（数据库驱动任务队列） -->
+    <n-card v-if="batchTask" size="small" style="margin-bottom:16px">
+      <template #header>
+        <span>批量分析任务 #{{ batchTask.id }}</span>
+        <n-tag
+          :type="batchTask.status === 'success' ? 'success' : batchTask.status === 'failed' ? 'error' : batchTask.status === 'cancelled' ? 'default' : 'info'"
+          size="small"
+          :bordered="false"
+          style="margin-left:8px"
+        >
+          {{ taskStatusLabel[batchTask.status] }}
+        </n-tag>
+        <n-button
+          v-if="['success', 'failed', 'cancelled'].includes(batchTask.status)"
+          size="tiny"
+          text
+          type="default"
+          style="margin-left:auto"
+          @click="batchTask = null"
+        >
+          关闭
+        </n-button>
+      </template>
+      <n-progress
+        type="line"
+        :percentage="batchTask.progress"
+        :height="20"
+        :status="batchTask.status === 'failed' ? 'error' : batchTask.status === 'success' ? 'success' : undefined"
+      />
+      <div style="display:flex;align-items:center;gap:12px;margin-top:6px;font-size:12px;color:#888;flex-wrap:wrap">
+        <span>{{ batchTask.done }} / {{ batchTask.total }} 已完成</span>
+        <span v-if="batchTask.retry_count > 0" style="color:#f0a020">已重试 {{ batchTask.retry_count }} 次</span>
+        <span v-if="batchTask.status === 'pending' && batchTask.next_retry_at" style="color:#f0a020">等待自动重试中...</span>
+        <n-button
+          v-if="batchTask.status === 'pending'"
+          size="tiny"
+          type="error"
+          ghost
+          style="margin-left:auto"
+          @click="cancelBatchTask"
+        >
+          取消任务
+        </n-button>
+      </div>
+      <div v-if="batchTask.error" style="font-size:12px;color:#ef4444;margin-top:4px">
+        {{ batchTask.error }}
+      </div>
+    </n-card>
 
     <!-- 正在分析提示 + 暂停/恢复 -->
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">

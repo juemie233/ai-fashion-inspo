@@ -74,7 +74,12 @@ async def batch_analyze(
     inspiration_ids: list[str],
     db: AsyncSession = Depends(get_db),
 ):
-    """批量触发多个素材的 AI 分析。"""
+    """批量触发多个素材的 AI 分析。
+
+    已改造为「数据库驱动的任务队列」：创建任务记录后立即返回 task_id，
+    由独立 worker 进程（app/worker.py）异步执行，前端通过轮询
+    GET /api/tasks/{task_id} 获取进度。
+    """
     result = await db.execute(
         select(Inspiration).where(
             Inspiration.id.in_(inspiration_ids),
@@ -86,17 +91,19 @@ async def batch_analyze(
     if not inspirations:
         raise HTTPException(status_code=404, detail="未找到任何可分析的图片素材")
 
+    ids = [insp.id for insp in inspirations]
     skipped = len(inspiration_ids) - len(inspirations)
-    for insp in inspirations:
-        task = asyncio.create_task(_run_analysis(insp.id, insp.file_path))
-        _analysis_tasks.add(task)
-        task.add_done_callback(_analysis_tasks.discard)
+
+    from app.services.task_runner import create_batch_analyze_task
+    task = await create_batch_analyze_task(db, ids, skipped)
 
     return {
-        "message": f"已将 {len(inspirations)} 个素材加入分析队列"
+        "task_id": task.id,
+        "message": f"已创建批量分析任务 #{task.id}，共 {len(ids)} 个素材"
                    + (f"，跳过 {skipped} 个素材（不存在或非图片）" if skipped > 0 else ""),
-        "count": len(inspirations),
+        "count": len(ids),
         "skipped": skipped,
+        "status": "pending",
     }
 
 

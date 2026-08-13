@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
 from app.db_migrations import ensure_schema
-from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin
+from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin, tasks
 
 
 @asynccontextmanager
@@ -76,6 +76,7 @@ app.include_router(ai.router)
 app.include_router(scraper.router)
 app.include_router(admin.router)
 app.include_router(ws.router)
+app.include_router(tasks.router)
 
 
 @app.get("/api/health")
