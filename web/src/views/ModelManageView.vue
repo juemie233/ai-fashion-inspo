@@ -319,6 +319,42 @@ async function triggerQualityCheck() {
   }
 }
 
+// 未通过素材列表
+interface RejectedItem {
+  id: string
+  thumbnail_path?: string | null
+  file_path: string
+  quality_reason?: string | null
+  source_type: string
+}
+const rejectedItems = ref<RejectedItem[]>([])
+const rejectedTotal = ref(0)
+const rejectedLoading = ref(false)
+
+async function loadRejectedItems() {
+  rejectedLoading.value = true
+  try {
+    const { data } = await apiClient.get<{ items: RejectedItem[]; total: number }>('/inspirations', {
+      params: { quality_status: 'rejected', size: 100, sort: 'newest' },
+    })
+    rejectedItems.value = data.items
+    rejectedTotal.value = data.total
+  } catch { /* 静默 */ }
+  finally { rejectedLoading.value = false }
+}
+
+async function approveItem(id: string) {
+  try {
+    await apiClient.patch(`/inspirations/${id}`, { quality_status: 'approved' })
+    rejectedItems.value = rejectedItems.value.filter((i) => i.id !== id)
+    rejectedTotal.value = Math.max(0, rejectedTotal.value - 1)
+    message.success('已标记为通过')
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '操作失败')
+  }
+}
+
 // ===== GPU 显存监控 =====
 interface GpuStats {
   gpu_available: boolean
@@ -973,7 +1009,7 @@ function formatDate(d: string | null | undefined) {
   <div class="model-page">
     <h2>AI 模型管理</h2>
 
-    <n-tabs v-model:value="activeTab" type="line" @update:value="(v: string) => { if (v === 'quality') loadQuality(); if (v === 'review') loadQualityReview() }">
+    <n-tabs v-model:value="activeTab" type="line" @update:value="(v: string) => { if (v === 'quality') loadQuality(); if (v === 'review') { loadQualityReview(); loadRejectedItems() } }">
       <!-- ===== Tab: 模型 ===== -->
       <n-tab-pane name="models" tab="模型管理">
         <!-- 连接状态 -->
@@ -1570,10 +1606,28 @@ function formatDate(d: string | null | undefined) {
               </div>
             </n-alert>
 
-            <!-- 结果查看说明 -->
-            <n-alert type="info" style="margin-bottom:16px">
-              <template #header>💡 如何查看审核结果</template>
-              审核结果已写入素材的审核状态。前往「素材库」页，用筛选栏的「待审核 / 已通过 / 已拒绝」查看，并对误判的图片点击卡片上的 ✓ 翻案。
+            <!-- 未通过素材列表 -->
+            <n-card size="small" title="未通过素材" style="margin-bottom:16px">
+              <template #header-extra>
+                <n-tag type="error" size="small">{{ rejectedTotal }} 个</n-tag>
+                <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems" :loading="rejectedLoading">刷新</n-button>
+              </template>
+              <n-spin :show="rejectedLoading">
+                <div v-if="rejectedItems.length" class="rejected-grid">
+                  <div v-for="item in rejectedItems" :key="item.id" class="rejected-card">
+                    <img :src="getFileUrl(item.thumbnail_path || item.file_path)" />
+                    <div class="rejected-reason" :title="item.quality_reason || ''">{{ item.quality_reason || '未说明原因' }}</div>
+                    <n-button size="tiny" type="success" ghost @click="approveItem(item.id)">✓ 翻案</n-button>
+                  </div>
+                </div>
+                <n-empty v-else description="暂无未通过素材" size="small" />
+              </n-spin>
+            </n-card>
+
+            <!-- 说明 -->
+            <n-alert type="info">
+              <template #header>💡 待审核与已通过的素材</template>
+              前往「素材库」页，用筛选栏的「待审核 / 已通过」查看对应素材。
             </n-alert>
           </template>
           <n-empty v-else-if="!qualityReviewLoading" description="点击加载审核数据" size="small">
@@ -1734,6 +1788,41 @@ function formatDate(d: string | null | undefined) {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #fafafa;
+}
+
+/* 未通过素材网格 */
+.rejected-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.rejected-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+  padding-bottom: 6px;
+}
+.rejected-card img {
+  width: 100%;
+  aspect-ratio: 3/4;
+  object-fit: cover;
+  background: #f5f5f5;
+}
+.rejected-reason {
+  font-size: 11px;
+  color: #d03050;
+  text-align: center;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
 /* 每日趋势图 */
