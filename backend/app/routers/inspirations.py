@@ -168,6 +168,7 @@ async def list_inspirations(
     media_type: str | None = None,
     analysis_status: str | None = None,  # done | pending | error
     tag_status: str | None = None,        # tagged | untagged
+    quality_status: str | None = None,    # pending | approved | rejected
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ):
@@ -182,6 +183,8 @@ async def list_inspirations(
         query = query.where(Inspiration.is_favorite == is_favorite)
     if media_type:
         query = query.where(Inspiration.media_type == media_type)
+    if quality_status:
+        query = query.where(Inspiration.quality_status == quality_status)
 
     # 分析状态筛选
     if analysis_status == "done":
@@ -273,6 +276,8 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         media_type=inspiration.media_type,
         dominant_colors=inspiration.dominant_colors,
         is_favorite=inspiration.is_favorite,
+        quality_status=inspiration.quality_status,
+        quality_reason=inspiration.quality_reason,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=[
@@ -316,6 +321,11 @@ async def update_inspiration(
         inspiration.is_favorite = data.is_favorite
     if data.source_author is not None:
         inspiration.source_author = data.source_author
+    if data.quality_status is not None:
+        # 人工复核翻案：修改审核状态，同时清除/保留原因
+        inspiration.quality_status = data.quality_status
+        if data.quality_status in ("approved", "pending"):
+            inspiration.quality_reason = None
 
     await db.flush()
     await db.refresh(inspiration)
@@ -378,6 +388,8 @@ def _to_out(inspiration: Inspiration) -> InspirationOut:
         media_type=inspiration.media_type,
         dominant_colors=inspiration.dominant_colors,
         is_favorite=inspiration.is_favorite,
+        quality_status=inspiration.quality_status,
+        quality_reason=inspiration.quality_reason,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,

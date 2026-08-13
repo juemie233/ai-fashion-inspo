@@ -64,6 +64,44 @@ async def check_ollama_status() -> dict:
         }
 
 
+def _read_image_base64(file_path: str) -> tuple[str, float]:
+    """读取图片并转为 base64（含路径校验和格式转换）。
+
+    返回:
+        (base64 字符串, 文件大小 MB)
+    """
+    full_path = (settings.storage_root / file_path).resolve()
+    # 防御路径遍历攻击
+    if not str(full_path).startswith(str(settings.storage_root.resolve())):
+        raise ValueError(f"非法的文件路径: {file_path}")
+    if not full_path.exists():
+        raise FileNotFoundError(f"图片不存在: {full_path}")
+    if not full_path.is_file():
+        raise ValueError(f"路径不是文件: {file_path}")
+
+    # 图片预检：通过扩展名判断
+    ext = full_path.suffix.lower()
+    if ext not in _ALLOWED_IMG_EXT:
+        raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
+
+    # 读取图片 —— WebP/BMP/GIF 转为 JPEG（MiniCPM-V 等模型不支持这些格式）
+    import base64
+    image_bytes = full_path.read_bytes()
+    if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION:
+        try:
+            from io import BytesIO
+            from PIL import Image
+            buf = BytesIO()
+            Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
+            image_bytes = buf.getvalue()
+            logger.info(f"{ext} → JPEG 转换完成 ({full_path.name})")
+        except Exception as e:
+            raise ValueError(f"{ext} 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
+    image_data = base64.b64encode(image_bytes).decode("utf-8")
+    file_size_mb = full_path.stat().st_size / (1024 * 1024)
+    return image_data, file_size_mb
+
+
 async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -> bool:
     """分析单张图片：调用视觉模型并保存提取的标签。
 
@@ -83,37 +121,9 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
     try:
         import httpx
 
-        full_path = (settings.storage_root / file_path).resolve()
-        # 防御路径遍历攻击
-        if not str(full_path).startswith(str(settings.storage_root.resolve())):
-            raise ValueError(f"非法的文件路径: {file_path}")
-        if not full_path.exists():
-            raise FileNotFoundError(f"图片不存在: {full_path}")
-        if not full_path.is_file():
-            raise ValueError(f"路径不是文件: {file_path}")
-
-        # 图片预检：通过扩展名判断
-        ext = full_path.suffix.lower()
-        if ext not in _ALLOWED_IMG_EXT:
-            raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
-
-        # 读取图片 —— WebP/BMP/GIF 转为 JPEG（MiniCPM-V 等模型不支持这些格式）
-        import base64
-        image_bytes = full_path.read_bytes()
-        if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION:
-            try:
-                from io import BytesIO
-                from PIL import Image
-                buf = BytesIO()
-                Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
-                image_bytes = buf.getvalue()
-                logger.info(f"{ext} → JPEG 转换完成 ({full_path.name})")
-            except Exception as e:
-                raise ValueError(f"{ext} 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
-        image_data = base64.b64encode(image_bytes).decode("utf-8")
+        image_data, file_size_mb = _read_image_base64(file_path)
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
-        file_size_mb = full_path.stat().st_size / (1024 * 1024)
         if file_size_mb > 5:
             logger.warning(f"图片较大 ({file_size_mb:.1f}MB)，可能导致分析失败: {file_path}")
 
@@ -227,6 +237,74 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
             logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
 
         return success
+
+
+async def check_image_quality(
+    db: AsyncSession, inspiration_id: str, file_path: str
+) -> tuple[str, str]:
+    """轻量质量审核：判断图片是否为真人穿搭照片。
+
+    与完整分析不同，这里只做二分类，输出简短，速度快。审核结果直接写回
+    Inspiration 的 quality_status / quality_reason 字段。
+
+    参数:
+        db: 数据库会话
+        inspiration_id: 素材 UUID
+        file_path: 图片文件的相对路径
+
+    返回:
+        (status, reason) — status 为 approved/rejected/pending（审核失败保持 pending）
+    """
+    import httpx
+
+    prompt = (
+        "请判断这张图片是否为真人穿着的服装搭配照片。\n"
+        "判定为「否」的情况：商品平铺图、尺码表、广告、纯文字、无人物、"
+        "与穿搭无关的内容、仅单品特写无真人穿着。\n"
+        '只输出 JSON，格式：{"is_outfit": true 或 false, "reason": "一句话简短理由"}'
+    )
+
+    try:
+        image_data, _ = _read_image_base64(file_path)
+
+        async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
+            response = await client.post(
+                f"{settings.ollama_base_url}/api/chat",
+                json={
+                    "model": settings.ollama_vision_model,
+                    "messages": [
+                        {"role": "user", "content": prompt, "images": [image_data]}
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.1, "num_predict": 128},
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            raw = result.get("message", {}).get("content", "")
+            if not raw:
+                return "pending", "模型返回空内容"
+    except Exception as e:
+        # 调用失败：保持 pending，不误判
+        return "pending", f"审核失败: {str(e)[:100]}"
+
+    # 解析 JSON（复用增强过的解析器，能处理注释/脏输出）
+    parsed = _parse_analysis_response(raw)
+    if not isinstance(parsed, dict) or "is_outfit" not in parsed:
+        return "pending", f"无法解析模型输出: {raw[:100]}"
+
+    is_outfit = bool(parsed.get("is_outfit"))
+    reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
+    status = "approved" if is_outfit else "rejected"
+
+    # 写回数据库
+    insp = await db.get(Inspiration, inspiration_id)
+    if insp:
+        insp.quality_status = status
+        insp.quality_reason = reason if not is_outfit else None
+        await db.commit()
+
+    return status, reason
 
 
 def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:

@@ -37,6 +37,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     media_type?: string
     analysis_status?: string
     tag_status?: string
+    quality_status?: string
     sort?: string
   } = {}) {
     loading.value = true
@@ -51,6 +52,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         media_type: params.media_type,
         analysis_status: params.analysis_status,
         tag_status: params.tag_status,
+        quality_status: params.quality_status,
         sort: params.sort,
       })
       // 忽略过期响应（快速翻页时旧请求可能后返回）

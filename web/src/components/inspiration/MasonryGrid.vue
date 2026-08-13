@@ -15,6 +15,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'delete', id: string): void
   (e: 'toggleFavorite', id: string): void
+  (e: 'approve', id: string): void
 }>()
 </script>
 
@@ -27,6 +28,7 @@ const emit = defineEmits<{
         :item="item"
         @delete="emit('delete', item.id)"
         @toggle-favorite="emit('toggleFavorite', item.id)"
+        @approve="emit('approve', item.id)"
       />
     </div>
 

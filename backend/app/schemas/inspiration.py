@@ -41,6 +41,7 @@ class InspirationUpdate(BaseModel):
     """更新灵感的请求体（部分更新）"""
     is_favorite: bool | None = None
     source_author: str | None = None
+    quality_status: str | None = None  # pending | approved | rejected（人工复核翻案）
 
 
 class InspirationOut(BaseModel):
@@ -55,6 +56,8 @@ class InspirationOut(BaseModel):
     media_type: str
     dominant_colors: str | None = None
     is_favorite: bool = False
+    quality_status: str | None = "pending"
+    quality_reason: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []

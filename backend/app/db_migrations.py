@@ -22,6 +22,8 @@ from app.config import settings
 _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "inspirations": [
         ("scraper_task_id", "INTEGER REFERENCES scraper_tasks(id) ON DELETE SET NULL"),
+        ("quality_status", "TEXT DEFAULT 'pending'"),
+        ("quality_reason", "TEXT"),
     ],
     "scraper_tasks": [
         ("diagnostics", "TEXT"),

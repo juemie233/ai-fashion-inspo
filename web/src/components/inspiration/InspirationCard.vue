@@ -3,7 +3,7 @@
 
 import { h, type Component } from 'vue'
 import { NIcon } from 'naive-ui'
-import { Heart, HeartOutline, TrashOutline, EyeOutline } from '@vicons/ionicons5'
+import { Heart, HeartOutline, TrashOutline, EyeOutline, CheckmarkOutline } from '@vicons/ionicons5'
 import { useRouter } from 'vue-router'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 
@@ -14,6 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'delete'): void
   (e: 'toggleFavorite'): void
+  (e: 'approve'): void
 }>()
 
 const router = useRouter()
@@ -82,6 +83,19 @@ function goToDetail() {
       <!-- 悬浮操作层 -->
       <div class="card-overlay">
         <n-button
+          v-if="item.quality_status === 'rejected'"
+          size="tiny"
+          circle
+          quaternary
+          type="success"
+          title="标记为通过（翻案）"
+          @click.stop="emit('approve')"
+        >
+          <template #icon>
+            <n-icon><CheckmarkOutline /></n-icon>
+          </template>
+        </n-button>
+        <n-button
           size="tiny"
           circle
           quaternary
@@ -111,6 +125,18 @@ function goToDetail() {
       <!-- 分析状态 -->
       <div v-if="analysisStatusLabel()" class="analysis-badge">
         {{ analysisStatusLabel() }}
+      </div>
+
+      <!-- 质量审核状态 -->
+      <div
+        v-if="item.quality_status === 'rejected'"
+        class="quality-badge rejected"
+        :title="item.quality_reason || 'AI 判定为非穿搭内容'"
+      >
+        已拒绝
+      </div>
+      <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
+        待审核
       </div>
     </div>
 
@@ -187,6 +213,22 @@ function goToDetail() {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 4px;
+}
+
+.quality-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.quality-badge.rejected {
+  background: rgba(208, 48, 80, 0.85);
+}
+.quality-badge.pending {
+  background: rgba(160, 160, 160, 0.8);
 }
 
 .card-body {

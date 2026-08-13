@@ -14,6 +14,8 @@ export interface InspirationOut {
   media_type: string
   dominant_colors?: string | null
   is_favorite: boolean
+  quality_status?: string | null
+  quality_reason?: string | null
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
@@ -64,6 +66,7 @@ export async function fetchInspirations(params: {
   media_type?: string
   analysis_status?: string
   tag_status?: string
+  quality_status?: string
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })
@@ -95,4 +98,22 @@ export async function toggleFavorite(id: string, isFavorite: boolean) {
 /** 删除灵感 */
 export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)
+}
+
+/** 批量质量审核（审核所有待审核素材） */
+export async function batchQualityCheck(limit?: number) {
+  const { data } = await apiClient.post<{ message: string; count: number }>(
+    '/ai/quality-check',
+    null,
+    { params: { limit } },
+  )
+  return data
+}
+
+/** 人工复核：修改素材审核状态 */
+export async function updateQualityStatus(id: string, qualityStatus: string) {
+  const { data } = await apiClient.patch<InspirationOut>(`/inspirations/${id}`, {
+    quality_status: qualityStatus,
+  })
+  return data
 }

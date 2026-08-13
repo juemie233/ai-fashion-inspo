@@ -45,6 +45,11 @@ class Inspiration(Base):
 
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    quality_status: Mapped[str] = mapped_column(
+        String(16), default="pending", index=True
+    )  # 质量审核状态：pending/approved/rejected
+    quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # 拒绝原因
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, index=True
     )

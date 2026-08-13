@@ -32,6 +32,9 @@ _task_by_id: dict[str, asyncio.Task] = {}
 _pending_queue: list[str] = []
 # 队列暂停开关
 _queue_paused = False
+# 质量审核任务追踪（独立于完整分析队列）
+_quality_active: set[str] = set()  # 正在审核的 inspiration_id
+_quality_semaphore = asyncio.Semaphore(2)
 
 # ============ 模型管理 ============
 
@@ -1473,6 +1476,56 @@ async def _run_analysis(inspiration_id: str, file_path: str):
         finally:
             _active_analyses.pop(inspiration_id, None)
             _task_by_id.pop(inspiration_id, None)
+
+
+async def _run_quality_check(inspiration_id: str, file_path: str):
+    """后台任务：对图片执行轻量质量审核（是否真人穿搭照片）。"""
+    if inspiration_id in _quality_active:
+        return
+    _quality_active.add(inspiration_id)
+    try:
+        async with _quality_semaphore:
+            from app.services.ai_service import check_image_quality
+            async with async_session() as db:
+                status, reason = await check_image_quality(db, inspiration_id, file_path)
+                logger.info(f"质量审核 {inspiration_id}: {status}（{reason}）")
+    except Exception as e:
+        logger.error(f"质量审核失败 {inspiration_id}: {e}")
+    finally:
+        _quality_active.discard(inspiration_id)
+
+
+@router.post("/quality-check")
+async def batch_quality_check(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量审核所有待审核（pending）的图片素材，后台异步执行。
+
+    只处理图片素材；审核结果直接写回 quality_status（approved/rejected）。
+    """
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path)
+        .where(
+            Inspiration.quality_status == "pending",
+            Inspiration.media_type == "image",
+        )
+        .limit(limit)
+    )
+    items = result.all()
+
+    if not items:
+        return {"message": "没有待审核的素材", "count": 0}
+
+    for insp_id, file_path in items:
+        task = asyncio.create_task(_run_quality_check(insp_id, file_path))
+        _analysis_tasks.add(task)
+        task.add_done_callback(_analysis_tasks.discard)
+
+    return {
+        "message": f"已提交 {len(items)} 个素材进行质量审核",
+        "count": len(items),
+    }
 
 
 async def _update_env_file(updates: dict[str, str]) -> None:

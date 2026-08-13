@@ -301,8 +301,8 @@ def _download_batch(
                     conn.execute(
                         "INSERT INTO inspirations (id, source_type, source_url, file_path, "
                         "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                        "scraper_task_id, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, ?, ?, ?)",
+                        "quality_status, scraper_task_id, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?)",
                         (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
                     )
                     conn.execute(

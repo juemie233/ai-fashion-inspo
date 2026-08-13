@@ -6,6 +6,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
+import { batchQualityCheck, updateQualityStatus } from '@/api/inspirations'
 
 const router = useRouter()
 const route = useRoute()
@@ -14,15 +15,17 @@ const store = useInspirationsStore()
 
 // ── 筛选状态（从 URL query 初始化）──
 
-type SourceFilter = 'all' | 'manual_upload' | 'scraper' | 'xiaohongshu' | 'browser_extension'
+type SourceFilter = 'all' | 'manual_upload' | 'scraper' | 'xiaohongshu' | 'douyin' | 'browser_extension'
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
+type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected'
 type SortMode = 'newest' | 'oldest' | 'updated' | 'largest'
 type Density = 'compact' | 'standard' | 'comfortable'
 
 const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || 'all')
 const mediaFilter = ref<MediaFilter>((route.query.media as MediaFilter) || 'all')
 const statusFilter = ref<StatusFilter>((route.query.status as StatusFilter) || 'all')
+const qualityFilter = ref<QualityFilter>((route.query.quality as QualityFilter) || 'all')
 const sortMode = ref<SortMode>((route.query.sort as SortMode) || 'newest')
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
 
@@ -54,6 +57,13 @@ const statusOptions: { label: string; value: StatusFilter }[] = [
   { label: '仅收藏', value: 'favorites' },
 ]
 
+const qualityOptions: { label: string; value: QualityFilter }[] = [
+  { label: '全部审核', value: 'all' },
+  { label: '待审核', value: 'pending' },
+  { label: '已通过', value: 'approved' },
+  { label: '已拒绝', value: 'rejected' },
+]
+
 const sortOptions: { label: string; value: SortMode }[] = [
   { label: '最新在前', value: 'newest' },
   { label: '最旧在前', value: 'oldest' },
@@ -76,6 +86,7 @@ function syncUrl() {
   if (sourceFilter.value !== 'all') query.source = sourceFilter.value
   if (mediaFilter.value !== 'all') query.media = mediaFilter.value
   if (statusFilter.value !== 'all') query.status = statusFilter.value
+  if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
   if (sortMode.value !== 'newest') query.sort = sortMode.value
   router.replace({ query })
 }
@@ -91,6 +102,7 @@ function buildParams(page: number) {
     is_favorite: statusFilter.value === 'favorites' ? true : undefined,
     analysis_status: (statusFilter.value === 'done' || statusFilter.value === 'pending') ? statusFilter.value : undefined,
     tag_status: statusFilter.value === 'untagged' ? 'untagged' : undefined,
+    quality_status: qualityFilter.value !== 'all' ? qualityFilter.value : undefined,
     sort: sortMode.value,
   }
 }
@@ -143,6 +155,41 @@ async function handleToggleFavorite(id: string) {
   }
 }
 
+// ── 质量审核 ──
+
+const checkingQuality = ref(false)
+
+async function handleBatchQualityCheck() {
+  checkingQuality.value = true
+  try {
+    const r = await batchQualityCheck(200)
+    if (r.count === 0) {
+      message.info('没有待审核的素材')
+    } else {
+      message.success(`已提交 ${r.count} 个素材进行质量审核，稍后刷新查看结果`)
+    }
+  } catch {
+    message.error('质量审核提交失败')
+  } finally {
+    checkingQuality.value = false
+  }
+}
+
+async function handleApprove(id: string) {
+  try {
+    await updateQualityStatus(id, 'approved')
+    message.success('已标记为通过')
+    // 更新本地状态，无需重新加载
+    const item = store.items.find((i) => i.id === id)
+    if (item) {
+      item.quality_status = 'approved'
+      item.quality_reason = null
+    }
+  } catch {
+    message.error('操作失败')
+  }
+}
+
 // 初始加载
 loadPage(1)
 </script>
@@ -156,6 +203,7 @@ loadPage(1)
         <span class="total-count">共 {{ store.total }} 条</span>
       </div>
       <div class="header-right">
+        <n-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck">批量审核</n-button>
         <n-button type="primary" @click="router.push('/upload')">上传素材</n-button>
       </div>
     </div>
@@ -205,6 +253,21 @@ loadPage(1)
         </n-button>
       </div>
 
+      <n-divider vertical style="height:20px" />
+
+      <!-- 质量审核筛选 -->
+      <div class="filter-group">
+        <n-button
+          v-for="opt in qualityOptions"
+          :key="opt.value"
+          size="tiny"
+          :type="qualityFilter === opt.value ? 'primary' : 'default'"
+          @click="qualityFilter = opt.value; onFilterChange()"
+        >
+          {{ opt.label }}
+        </n-button>
+      </div>
+
       <div style="flex:1" />
 
       <!-- 排序 + 密度 -->
@@ -232,7 +295,7 @@ loadPage(1)
     </div>
 
     <!-- 当前筛选提示 -->
-    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || sortMode !== 'newest'" class="active-filters">
+    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'newest'" class="active-filters">
       当前筛选：
       <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="sourceFilter = 'all'; onFilterChange()">
         {{ sourceOptions.find(o => o.value === sourceFilter)?.label }}
@@ -243,10 +306,13 @@ loadPage(1)
       <n-tag v-if="statusFilter !== 'all'" size="tiny" closable @close="statusFilter = 'all'; onFilterChange()">
         {{ statusOptions.find(o => o.value === statusFilter)?.label }}
       </n-tag>
+      <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="qualityFilter = 'all'; onFilterChange()">
+        {{ qualityOptions.find(o => o.value === qualityFilter)?.label }}
+      </n-tag>
       <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="sortMode = 'newest'; onSortChange()">
         {{ sortOptions.find(o => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';sortMode='newest';onFilterChange()">
+      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='newest';onFilterChange()">
         清除全部
       </n-button>
     </div>
@@ -258,6 +324,7 @@ loadPage(1)
       :density="density"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"
+      @approve="handleApprove"
     />
 
     <!-- 分页 -->
