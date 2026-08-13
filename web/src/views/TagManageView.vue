@@ -212,7 +212,7 @@ async function handleBatchDelete() {
 
 async function handleDeleteUnused() {
   try {
-    const { data } = await deleteUnusedTags()
+    const data = await deleteUnusedTags()
     message.success(data.message)
     await loadAll()
   } catch (e: any) {
@@ -375,7 +375,7 @@ async function handleImport() {
   try {
     const tags = JSON.parse(importJsonText.value)
     if (!Array.isArray(tags)) throw new Error('格式错误')
-    const { data } = await importTags(tags)
+    const data = await importTags(tags)
     message.success(data.message)
     showImportModal.value = false
     importJsonText.value = ''

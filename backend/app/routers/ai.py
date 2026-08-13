@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session, get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.services.model_config import get_model_config, update_model_config
 from app.utils.auth import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,15 @@ _pending_queue: list[str] = []
 _queue_paused = False
 # 质量审核任务追踪（与完整分析队列共享 _analysis_semaphore 信号量）
 _quality_active: set[str] = set()  # 正在审核的 inspiration_id
+
+
+def _analysis_log_filter():
+    """返回「标签分析日志」的过滤条件，排除 quality_check 质量审核日志。
+
+    quality_check 只做二分类审核（是否合格），不产出标签，不能算作「已分析」。
+    历史日志的 log_type 为 NULL（迁移前），统一按 analysis 处理。
+    """
+    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
 
 # ============ 模型管理 ============
 
@@ -174,8 +184,9 @@ async def set_active_model(model_name: str = Query(...)):
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
 
-    # 更新配置（仅内存，重启后需 .env 反映）
+    # 更新内存配置，并持久化到 .env，重启后仍生效
     settings.ollama_vision_model = model_name
+    await _update_env_file({"OLLAMA_VISION_MODEL": model_name})
     return {"message": f"已切换到模型 '{model_name}'", "active_model": model_name}
 
 
@@ -373,6 +384,7 @@ async def model_stats(db: AsyncSession = Depends(get_db)):
         # 查询该模型成功分析的素材 ID
         insp_result = await db.execute(
             select(func.distinct(AIAnalysisLog.inspiration_id)).where(
+                _analysis_log_filter(),
                 AIAnalysisLog.model_name == row.model_name,
                 AIAnalysisLog.error.is_(None),
             )
@@ -427,9 +439,12 @@ async def model_stats(db: AsyncSession = Depends(get_db)):
 @router.get("/queue")
 async def analysis_queue(db: AsyncSession = Depends(get_db)):
     """获取分析队列状态：待分析/分析中/已完成/失败统计。"""
-    # 已分析过
+    # 已分析过（仅统计标签分析日志且素材仍存在，排除质量审核日志）
     analyzed = await db.execute(
         select(func.count(func.distinct(AIAnalysisLog.inspiration_id)))
+        .select_from(AIAnalysisLog)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(_analysis_log_filter(), Inspiration.media_type == "image")
     )
     analyzed_count = analyzed.scalar() or 0
 
@@ -441,12 +456,13 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
     )
     total_count = total.scalar() or 0
 
-    # 失败的 — 只看每个素材的最新分析日志
+    # 失败的 — 只看每个素材的最新分析日志（排除质量审核日志）
     latest_log_sub = (
         select(
             AIAnalysisLog.inspiration_id,
             func.max(AIAnalysisLog.id).label("max_id"),
         )
+        .where(_analysis_log_filter())
         .group_by(AIAnalysisLog.inspiration_id)
         .subquery()
     )
@@ -472,7 +488,11 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)):
 @router.get("/unanalyzed-ids")
 async def unanalyzed_ids(db: AsyncSession = Depends(get_db)):
     """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。"""
-    analyzed_sub = select(AIAnalysisLog.inspiration_id).distinct()
+    analyzed_sub = (
+        select(AIAnalysisLog.inspiration_id)
+        .where(_analysis_log_filter())
+        .distinct()
+    )
     result = await db.execute(
         select(Inspiration.id).where(
             Inspiration.id.notin_(analyzed_sub),
@@ -582,9 +602,10 @@ async def retry_analysis(
 @router.post("/retry-all-failed")
 async def retry_all_failed(db: AsyncSession = Depends(get_db)):
     """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
-    # 子查询：每个素材的最新日志 ID
+    # 子查询：每个素材的最新日志 ID（排除质量审核日志）
     latest_log = (
         select(AIAnalysisLog.inspiration_id, func.max(AIAnalysisLog.id).label("max_id"))
+        .where(_analysis_log_filter())
         .group_by(AIAnalysisLog.inspiration_id)
         .subquery()
     )
@@ -1074,7 +1095,11 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
 
     # 问题素材统计
     total_insp = (await db.execute(select(func.count(Inspiration.id)))).scalar() or 0
-    analyzed_ids = select(AIAnalysisLog.inspiration_id).distinct()
+    analyzed_ids = (
+        select(AIAnalysisLog.inspiration_id)
+        .where(_analysis_log_filter())
+        .distinct()
+    )
     analyzed_count = (await db.execute(
         select(func.count()).select_from(analyzed_ids.subquery())
     )).scalar() or 0
@@ -1095,6 +1120,7 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
         select(func.count())
         .select_from(AIAnalysisLog)
         .where(
+            _analysis_log_filter(),
             AIAnalysisLog.error.is_(None),
             ~AIAnalysisLog.inspiration_id.in_(
                 select(IT.inspiration_id).distinct()
@@ -1249,11 +1275,12 @@ async def test_analyze(
 
 @router.get("/settings")
 async def get_ai_settings():
-    """获取当前 AI 参数配置。"""
+    """获取当前 AI 参数配置（超时按当前模型独立）。"""
+    model_cfg = get_model_config(settings.ollama_vision_model)
     return {
         "active_model": settings.ollama_vision_model,
         "confidence_threshold": settings.ai_low_confidence_threshold,
-        "analysis_timeout": settings.ai_analysis_timeout,
+        "analysis_timeout": model_cfg["timeout"],
         "ollama_base_url": settings.ollama_base_url,
     }
 
@@ -1264,37 +1291,38 @@ async def update_ai_settings(
     analysis_timeout: int | None = Query(None, ge=10, le=300),
     persist: bool = Query(False, description="是否持久化写入 .env 文件"),
 ):
-    """更新 AI 参数（可选持久化到 .env 文件）。"""
+    """更新 AI 参数。
+
+    超时按当前活跃模型独立保存到 model_configs.json；置信度阈值为全局设置。
+    ``persist`` 参数已废弃（模型配置始终持久化），保留仅为兼容前端。
+    """
     if confidence_threshold is not None:
         settings.ai_low_confidence_threshold = confidence_threshold
-    if analysis_timeout is not None:
-        settings.ai_analysis_timeout = analysis_timeout
+        await _update_env_file({"AI_LOW_CONFIDENCE_THRESHOLD": str(confidence_threshold)})
 
-    # 持久化：写入 .env 文件
-    if persist:
-        try:
-            await _update_env_file({
-                "AI_LOW_CONFIDENCE_THRESHOLD": str(settings.ai_low_confidence_threshold),
-                "AI_ANALYSIS_TIMEOUT": str(settings.ai_analysis_timeout),
-            })
-        except Exception as e:
-            logger.warning(f"写入 .env 失败: {e}")
+    timeout = settings.ai_analysis_timeout
+    if analysis_timeout is not None:
+        cfg = await update_model_config(
+            settings.ollama_vision_model, {"timeout": analysis_timeout}
+        )
+        timeout = cfg["timeout"]
 
     return {
-        "message": "参数已更新" + ("并持久化" if persist else ""),
+        "message": "参数已更新（超时按模型持久化）",
         "confidence_threshold": settings.ai_low_confidence_threshold,
-        "analysis_timeout": settings.ai_analysis_timeout,
+        "analysis_timeout": timeout,
     }
 
 
 @router.get("/sampling-params")
 async def get_sampling_params():
-    """获取 AI 采样参数（temperature, top_p, top_k, num_predict），从配置文件读取。"""
+    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict）。"""
+    cfg = get_model_config(settings.ollama_vision_model)
     return {
-        "temperature": getattr(settings, "ai_temperature", 0.7),
-        "top_p": getattr(settings, "ai_top_p", 0.9),
-        "top_k": getattr(settings, "ai_top_k", 40),
-        "num_predict": getattr(settings, "ai_num_predict", 2048),
+        "temperature": cfg["temperature"],
+        "top_p": cfg["top_p"],
+        "top_k": cfg["top_k"],
+        "num_predict": cfg["num_predict"],
     }
 
 
@@ -1306,33 +1334,27 @@ async def update_sampling_params(
     num_predict: int | None = Query(None, ge=64, le=8192),
     persist: bool = Query(False),
 ):
-    """更新 AI 采样参数（可选持久化）。"""
-    updated = {}
+    """更新当前模型的 AI 采样参数（按模型独立持久化）。"""
+    updates = {}
     if temperature is not None:
-        settings.ai_temperature = temperature
-        updated["AI_TEMPERATURE"] = str(temperature)
+        updates["temperature"] = temperature
     if top_p is not None:
-        settings.ai_top_p = top_p
-        updated["AI_TOP_P"] = str(top_p)
+        updates["top_p"] = top_p
     if top_k is not None:
-        settings.ai_top_k = top_k
-        updated["AI_TOP_K"] = str(top_k)
+        updates["top_k"] = top_k
     if num_predict is not None:
-        settings.ai_num_predict = num_predict
-        updated["AI_NUM_PREDICT"] = str(num_predict)
+        updates["num_predict"] = num_predict
 
-    if persist and updated:
-        try:
-            await _update_env_file(updated)
-        except Exception as e:
-            logger.warning(f"写入 .env 失败: {e}")
+    cfg = get_model_config(settings.ollama_vision_model)
+    if updates:
+        cfg = await update_model_config(settings.ollama_vision_model, updates)
 
     return {
-        "message": "采样参数已更新" + ("并持久化" if persist else ""),
-        "temperature": getattr(settings, "ai_temperature", 0.7),
-        "top_p": getattr(settings, "ai_top_p", 0.9),
-        "top_k": getattr(settings, "ai_top_k", 40),
-        "num_predict": getattr(settings, "ai_num_predict", 2048),
+        "message": "采样参数已更新（按模型持久化）",
+        "temperature": cfg["temperature"],
+        "top_p": cfg["top_p"],
+        "top_k": cfg["top_k"],
+        "num_predict": cfg["num_predict"],
     }
 
 

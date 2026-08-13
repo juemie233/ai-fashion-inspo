@@ -19,7 +19,7 @@ type SourceFilter = 'all' | 'manual_upload' | 'scraper' | 'xiaohongshu' | 'douyi
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
 type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected'
-type SortMode = 'newest' | 'oldest' | 'updated' | 'largest'
+type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'random'
 type Density = 'compact' | 'standard' | 'comfortable'
 
 const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || 'all')
@@ -69,6 +69,7 @@ const sortOptions: { label: string; value: SortMode }[] = [
   { label: '最旧在前', value: 'oldest' },
   { label: '最近更新', value: 'updated' },
   { label: '文件最大', value: 'largest' },
+  { label: '随机', value: 'random' },
 ]
 
 const densityOptions: { label: string; value: Density; icon: string }[] = [

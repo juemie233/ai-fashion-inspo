@@ -23,6 +23,14 @@ from app.services.file_service import delete_files, save_upload
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
 
 
+def _analysis_log_filter():
+    """返回「标签分析日志」的过滤条件，排除 quality_check 质量审核日志。
+
+    quality_check 只做二分类审核（是否合格），不产出标签，不能算作「已分析」。
+    """
+    return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
+
+
 @router.post("", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
 async def create_inspiration(
     file: UploadFile = File(...),
@@ -194,7 +202,8 @@ async def list_inspirations(
         query = query.where(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id).where(
-                    AIAnalysisLog.error.is_(None)
+                    _analysis_log_filter(),
+                    AIAnalysisLog.error.is_(None),
                 ).distinct()
             )
         )
@@ -202,12 +211,17 @@ async def list_inspirations(
         query = query.where(
             Inspiration.id.in_(
                 select(AIAnalysisLog.inspiration_id).where(
-                    AIAnalysisLog.error.isnot(None)
+                    _analysis_log_filter(),
+                    AIAnalysisLog.error.isnot(None),
                 ).distinct()
             )
         )
     elif analysis_status == "pending":
-        analyzed_sub = select(AIAnalysisLog.inspiration_id).distinct()
+        analyzed_sub = (
+            select(AIAnalysisLog.inspiration_id)
+            .where(_analysis_log_filter())
+            .distinct()
+        )
         query = query.where(Inspiration.id.notin_(analyzed_sub))
 
     # 标签状态筛选
@@ -230,6 +244,7 @@ async def list_inspirations(
         "oldest": Inspiration.created_at.asc(),
         "updated": Inspiration.updated_at.desc(),
         "largest": Inspiration.file_path.desc(),  # 按路径排序不够精确，用子查询算文件大小
+        "random": func.random(),  # 随机洗牌：每次请求重新随机
     }
     query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
 

@@ -7,7 +7,7 @@
 以下软件和环境为 **必须安装**，否则核心功能无法运行：
 
 | 软件 | 版本要求 | 用途 | 安装指引 |
-|------|----------|------|----------|
+| ------ | ---------- | ------ | ---------- |
 | Python | 3.12+ | 后端运行时 | [python.org](https://www.python.org/downloads/) |
 | Node.js | 20+ | Web 前端构建 | [nodejs.org](https://nodejs.org/en/download) |
 | Ollama | latest | AI 视觉推理引擎 | [ollama.com](https://ollama.com/download/windows) |
@@ -25,7 +25,7 @@
 > CDP (Chrome DevTools Protocol) 采集依赖 Google Chrome 的原生调试协议。以下浏览器**无法**用于 CDP 采集：
 >
 > | 浏览器 | 是否可用 | 原因 |
-> |--------|:---:|------|
+> | -------- | :---: | ------ |
 > | **Google Chrome** | ✅ | 完整支持 CDP 协议 |
 > | 360 极速浏览器 | ❌ | CDP 协议被阉割，无法正常调用 |
 > | Microsoft Edge | ❌ | CDP 实现有差异，部分接口不兼容 |
@@ -33,6 +33,7 @@
 > | 其他 Chrome 内核衍生版 | ❌ | 多数对 CDP 协议做了裁剪 |
 >
 > 如果系统中同时安装了 Google Chrome 和其他 Chromium 内核浏览器，请确保：
+>
 > 1. 启动调试模式前**完全关闭** Google Chrome 的所有窗口
 > 2. 不要使用 360 极速浏览器执行 `--remote-debugging-port` 命令
 > 3. 可以在采集页点击「测试连接」验证连接的是否为 Google Chrome
@@ -67,6 +68,7 @@ chrome_debug_port: int = 9222
 ```
 
 > **常见 Chrome 安装路径：**
+>
 > - Windows 默认：`C:/Program Files/Google/Chrome/Application/chrome.exe`
 > - Windows 用户安装：`C:/Users/<用户名>/AppData/Local/Google/Chrome/Application/chrome.exe`
 > - macOS：`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
@@ -75,7 +77,7 @@ chrome_debug_port: int = 9222
 ## 技术栈
 
 | 层级 | 技术 |
-|------|------|
+| ------ | ------ |
 | 后端 | Python 3.12 + FastAPI + SQLAlchemy async + SQLite |
 | Web 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI |
 | 移动端 | React Native (Expo) + Zustand |
@@ -86,7 +88,7 @@ chrome_debug_port: int = 9222
 ## 功能概览
 
 | 模块 | 功能 |
-|------|------|
+| ------ | ------ |
 | **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态）、排序、密度调节、分页加载 |
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列、元数据预设、去重检测、文件夹批量、队列管理、偏好设置 |
@@ -348,7 +350,7 @@ fashion-inspo/
 ## 数据模型
 
 | 表 | 说明 | 关键字段 |
-|----|------|----------|
+| ---- | ------ | ---------- |
 | `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual) |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
@@ -359,7 +361,7 @@ fashion-inspo/
 ### 标签类别体系
 
 | 类别 | 示例 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `style` | JK制服, 汉服, Y2K, 法式, 新中式 | 风格体系 |
 | `item_type` | 百褶裙, 过膝袜, 西装外套, 马丁靴 | 单品类型 |
 | `color` | 白色, 海军蓝, 酒红, 格纹 | 颜色 |
@@ -372,7 +374,7 @@ fashion-inspo/
 ### 标签来源标识
 
 | source | 含义 | 颜色标记 |
-|--------|------|:---:|
+| -------- | ------ | :---: |
 | `seed` | 预设标签（系统初始化导入） | 灰色 |
 | `ai_generated` | AI 分析自动提取 | 紫色 |
 | `manual` | 用户手动创建 / 导入 | 蓝色 |
@@ -382,7 +384,7 @@ fashion-inspo/
 ### 素材管理
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/inspirations` | 素材列表（分页） |
 | `POST` | `/api/inspirations` | 上传素材 |
 | `POST` | `/api/inspirations/from-url` | 从 URL 导入素材 |
@@ -393,7 +395,7 @@ fashion-inspo/
 ### 搜索
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/search` | 多维度搜索（关键词+标签+颜色+日期+来源+媒体） |
 | `GET` | `/api/search/similar/{id}` | 相似素材推荐 |
 | `GET` | `/api/search/suggestions?q=` | 标签名自动补全 |
@@ -402,7 +404,7 @@ fashion-inspo/
 ### 标签管理
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/tags` | 标签列表（按类别分组） |
 | `GET` | `/api/tags/popular` | 热门标签 Top 50 |
 | `GET` | `/api/tags/stats` | 标签统计（总数/未使用/来源分布） |
@@ -425,7 +427,7 @@ fashion-inspo/
 ### AI 分析
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/ai/status` | AI 服务状态检查 |
 | `GET` | `/api/ai/models` | 已安装模型列表 |
 | `POST` | `/api/ai/models/pull` | 下载模型（SSE 进度） |
@@ -459,7 +461,7 @@ fashion-inspo/
 ### 质量审核
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材 |
 | `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判 |
 | `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
@@ -471,7 +473,7 @@ fashion-inspo/
 ### AI 参数调优
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/ai/settings` | 获取分析参数 |
 | `PUT` | `/api/ai/settings` | 更新参数（可选持久化） |
 | `GET` | `/api/ai/sampling-params` | 获取采样参数 |
@@ -484,7 +486,7 @@ fashion-inspo/
 ### 采集管理
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `POST` | `/api/scraper/tasks` | 创建采集任务（CDP 模式下会预检 Chrome 连接） |
 | `GET` | `/api/scraper/tasks` | 采集任务列表（最多 20 条） |
 | `GET` | `/api/scraper/tasks/{id}` | 任务详情 |
@@ -501,7 +503,7 @@ fashion-inspo/
 ### 管理后台
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `GET` | `/api/admin/stats` | 素材总览统计（含墓碑表计数） |
 | `GET` | `/api/admin/largest-files` | 最大文件 Top 20 |
 | `GET` | `/api/admin/integrity-check` | 数据完整性检查（缺失/孤立文件） |
@@ -521,7 +523,7 @@ fashion-inspo/
 ## 环境要求
 
 | 软件 | 用途 | 必须？ |
-|------|------|:---:|
+| ------ | ------ | :---: |
 | Python 3.12+ | 后端 | ✅ |
 | Node.js 20+ | Web + Mobile 前端 | ✅ |
 | Ollama | AI 视觉推理 | ✅ |

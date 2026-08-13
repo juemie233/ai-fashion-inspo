@@ -497,6 +497,9 @@ async function setActiveModel(name: string) {
     aiSettings.value.active_model = name
     message.success(`已切换到 ${name}`)
     refreshModels()
+    // 切换后重新加载该模型的独立参数配置
+    loadSettings()
+    loadSamplingParams()
   } catch (e: any) {
     aiSettings.value.active_model = previous // 失败回滚下拉框
     message.error(e.response?.data?.detail || '切换失败')

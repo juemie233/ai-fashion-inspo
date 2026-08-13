@@ -42,12 +42,12 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_vision_model: str = "minicpm-v:8b"
     ollama_embedding_model: str = "all-minilm"
-    ai_analysis_timeout: int = 60  # 秒
+    ai_analysis_timeout: int = 300  # 秒（思考型模型推理耗时更长）
     ai_low_confidence_threshold: float = 0.6
     ai_temperature: float = 0.7
     ai_top_p: float = 0.9
     ai_top_k: int = 40
-    ai_num_predict: int = 2048
+    ai_num_predict: int = 4096  # 思考型模型需为推理预留 token
 
     # AI 分析 Prompt（运行时可变，前端可编辑）
     ai_analysis_prompt: str = (

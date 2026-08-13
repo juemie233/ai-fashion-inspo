@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.services.model_config import get_model_config
 
 # 支持的图片扩展名
 _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
@@ -130,8 +131,11 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         if file_size_mb > 5:
             logger.warning(f"图片较大 ({file_size_mb:.1f}MB)，可能导致分析失败: {file_path}")
 
+        # 按当前模型读取独立配置（隔离每个模型的超时与采样参数）
+        model_cfg = get_model_config(settings.ollama_vision_model)
+
         # 调用 Ollama 视觉 API — 传入采样参数
-        async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
+        async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
             try:
                 response = await client.post(
                     f"{settings.ollama_base_url}/api/chat",
@@ -145,11 +149,12 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
                             }
                         ],
                         "stream": False,
+                        "think": model_cfg.get("think", False),  # 关闭思考模式（可每模型配置）
                         "options": {
-                            "temperature": getattr(settings, "ai_temperature", 0.7),
-                            "top_p": getattr(settings, "ai_top_p", 0.9),
-                            "top_k": getattr(settings, "ai_top_k", 40),
-                            "num_predict": getattr(settings, "ai_num_predict", 2048),
+                            "temperature": model_cfg["temperature"],
+                            "top_p": model_cfg["top_p"],
+                            "top_k": model_cfg["top_k"],
+                            "num_predict": model_cfg["num_predict"],
                         },
                     },
                 )
@@ -278,8 +283,10 @@ async def check_image_quality(
     except Exception as e:
         return "pending", f"审核失败: {str(e)[:100]}"
 
+    model_cfg = get_model_config(settings.ollama_vision_model)
+
     try:
-        async with httpx.AsyncClient(timeout=settings.ai_analysis_timeout) as client:
+        async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
             response = await client.post(
                 f"{settings.ollama_base_url}/api/chat",
                 json={
@@ -288,7 +295,8 @@ async def check_image_quality(
                         {"role": "user", "content": prompt, "images": [image_data]}
                     ],
                     "stream": False,
-                    "options": {"temperature": 0.1, "num_predict": 128},
+                    "think": model_cfg.get("think", False),  # 关闭思考模式
+                    "options": {"temperature": 0.1, "num_predict": model_cfg["num_predict"]},
                 },
             )
             response.raise_for_status()
