@@ -34,6 +34,7 @@ from app.routers.ai_shared import (
     _format_size,
 )
 from app.services.model_config import get_model_config, update_model_config
+from app.services.model_prompt import get_model_prompt, set_model_prompt
 from app.utils.auth import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -46,45 +47,61 @@ router = APIRouter()
 _prompt_versions_file = Path(__file__).parent.parent.parent / "prompt_versions.json"
 
 
-def _load_prompt_versions() -> list[dict]:
-    """加载 prompt 版本历史。"""
+def _load_prompt_versions(model_name: str) -> list[dict]:
+    """加载指定模型的 prompt 版本历史。"""
+    if not _prompt_versions_file.exists():
+        return []
+    try:
+        data = json.loads(_prompt_versions_file.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data.get(model_name, [])
+        return data if isinstance(data, list) else []  # 兼容旧的平铺格式
+    except Exception:
+        return []
+
+
+def _save_prompt_versions(model_name: str, versions: list[dict]):
+    """保存指定模型的 prompt 版本历史（保留最近 50 条）。"""
+    data = {}
     if _prompt_versions_file.exists():
         try:
-            return json.loads(_prompt_versions_file.read_text(encoding="utf-8"))
+            data = json.loads(_prompt_versions_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
         except Exception:
-            return []
-    return []
-
-
-def _save_prompt_versions(versions: list[dict]):
-    """保存 prompt 版本历史（保留最近 50 条）。"""
+            data = {}
+    data[model_name] = versions[-50:]
     _prompt_versions_file.write_text(
-        json.dumps(versions[-50:], ensure_ascii=False, indent=2),
+        json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
+def _active_model() -> str:
+    return settings.ollama_vision_model
+
+
 @router.get("/prompt/versions")
 async def prompt_versions():
-    """获取 prompt 版本历史列表。"""
-    versions = _load_prompt_versions()
+    """获取当前模型的 prompt 版本历史列表。"""
+    versions = _load_prompt_versions(_active_model())
+    current = get_model_prompt(_active_model())
     return {
         "versions": versions[::-1],  # 最新的在前
-        "current": settings.ai_analysis_prompt[:100] + "...",
+        "current": current[:100] + "...",
     }
 
 
 @router.post("/prompt/rollback")
 async def rollback_prompt(payload: dict):
-    """回滚 prompt 到指定版本。请求体: {"index": 0} 其中 index 0 = 最新版本（与 GET /versions 顺序一致）"""
-    versions = _load_prompt_versions()  # 按时间正序存储
+    """回滚当前模型的 prompt 到指定版本。请求体: {"index": 0} 其中 index 0 = 最新版本"""
+    versions = _load_prompt_versions(_active_model())
     idx = payload.get("index", 0)
-    # 前端发送的 index：0 = 最新 = versions 最后一个
     real_idx = len(versions) - 1 - idx
     if real_idx < 0 or real_idx >= len(versions):
         raise HTTPException(status_code=400, detail="无效的版本索引")
     prompt_text = versions[real_idx]["prompt"]
-    settings.ai_analysis_prompt = prompt_text
+    await set_model_prompt(_active_model(), prompt_text)
     return {
         "message": f"已回滚到版本 #{idx + 1}",
         "prompt": prompt_text,
@@ -93,15 +110,16 @@ async def rollback_prompt(payload: dict):
 
 @router.post("/prompt/save-version")
 async def save_prompt_version():
-    """将当前 prompt 保存为一个命名版本（用于后续回滚和对比）。"""
-    versions = _load_prompt_versions()
+    """将当前模型的 prompt 保存为一个版本（用于回滚和对比）。"""
+    versions = _load_prompt_versions(_active_model())
     from datetime import datetime
+    prompt_text = get_model_prompt(_active_model())
     versions.append({
-        "prompt": settings.ai_analysis_prompt,
+        "prompt": prompt_text,
         "saved_at": datetime.now().isoformat(),
-        "length": len(settings.ai_analysis_prompt),
+        "length": len(prompt_text),
     })
-    _save_prompt_versions(versions)
+    _save_prompt_versions(_active_model(), versions)
     return {"message": f"已保存版本 #{len(versions)}", "total_versions": len(versions)}
 
 
@@ -110,10 +128,12 @@ async def save_prompt_version():
 
 @router.get("/prompt")
 async def get_prompt():
-    """获取当前 AI 分析使用的 prompt 文本。"""
+    """获取当前模型 AI 分析使用的 prompt 文本。"""
+    prompt = get_model_prompt(_active_model())
     return {
-        "prompt": settings.ai_analysis_prompt,
-        "length": len(settings.ai_analysis_prompt),
+        "prompt": prompt,
+        "length": len(prompt),
+        "model": _active_model(),
     }
 
 
@@ -121,27 +141,13 @@ async def get_prompt():
 async def update_prompt(
     body: dict,
 ):
-    """更新 AI 分析 prompt（可选持久化到 backend/prompt.txt）。"""
+    """更新当前模型的 AI 分析 prompt（按模型持久化到 prompt_configs.json）。"""
     prompt = body.get("prompt", "")
-    persist = body.get("persist", False)
     if not prompt:
         raise HTTPException(status_code=400, detail="请提供 prompt 文本")
-    settings.ai_analysis_prompt = prompt
-
-    if persist:
-        try:
-            prompt_file = Path(__file__).parent.parent.parent / "prompt.txt"
-
-            def _write_prompt():
-                prompt_file.write_text(prompt, encoding="utf-8")
-
-            await asyncio.to_thread(_write_prompt)
-            logger.info(f"Prompt 已持久化到 {prompt_file}")
-        except Exception as e:
-            logger.warning(f"持久化 prompt 失败: {e}")
-
+    await set_model_prompt(_active_model(), prompt)
     return {
-        "message": "Prompt 已更新" + ("并持久化" if persist else "") + f"（{len(prompt)} 字符）",
+        "message": f"Prompt 已更新（模型 {_active_model()}，{len(prompt)} 字符）",
     }
 
 

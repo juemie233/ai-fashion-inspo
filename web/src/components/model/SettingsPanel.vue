@@ -245,6 +245,7 @@ async function handleSetActiveModel(name: string) {
     message.success(`已切换到 ${name}`)
     loadSettings()
     loadSamplingParams()
+    loadPrompt()  // 切换模型后加载该模型的独立 Prompt
   } else {
     message.error('切换失败')
   }

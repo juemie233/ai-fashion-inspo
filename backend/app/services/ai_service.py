@@ -17,6 +17,7 @@ from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.services.ai_parser import looks_truncated, parse_analysis_response, parse_is_outfit
 from app.services.ai_tag_saver import save_tags
 from app.services.model_config import get_model_config
+from app.services.model_prompt import get_model_prompt
 
 # 支持的图片扩展名
 _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
@@ -151,7 +152,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
                             "messages": [
                                 {
                                     "role": "user",
-                                    "content": settings.ai_analysis_prompt,
+                                    "content": get_model_prompt(settings.ollama_vision_model),
                                     "images": [image_data],
                                 }
                             ],

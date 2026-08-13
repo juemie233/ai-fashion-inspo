@@ -44,3 +44,7 @@ mobile/ios/
 # Prompt version history (runtime state)
 prompt_versions.json
 backend/prompt_versions.json
+
+# 全局默认 prompt（运行时数据）
+prompt.txt
+backend/prompt.txt
