@@ -87,7 +87,9 @@ def _read_image_base64(file_path: str) -> tuple[str, float]:
     # 读取图片 —— WebP/BMP/GIF 转为 JPEG（MiniCPM-V 等模型不支持这些格式）
     import base64
     image_bytes = full_path.read_bytes()
-    if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION:
+    # WebP 仅当模型不支持时才转（qwen3-vl 原生支持 WebP，跳过可省 CPU + 不损失画质）
+    _skip_webp = ext == ".webp" and settings.ollama_vision_model.startswith("qwen3-vl")
+    if ext in {".webp", ".bmp", ".gif"} and _WEBP_NEEDS_CONVERSION and not _skip_webp:
         try:
             from io import BytesIO
             from PIL import Image
