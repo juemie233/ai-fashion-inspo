@@ -29,7 +29,7 @@ const qualityFilter = ref<QualityFilter>((route.query.quality as QualityFilter) 
 const sortMode = ref<SortMode>((route.query.sort as SortMode) || 'newest')
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
 
-const currentPage = ref(1)
+const currentPage = ref(parseInt(route.query.page as string) || 1)
 const pageSize = ref(50)
 
 // ── 筛选选项配置 ──
@@ -88,6 +88,7 @@ function syncUrl() {
   if (statusFilter.value !== 'all') query.status = statusFilter.value
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
   if (sortMode.value !== 'newest') query.sort = sortMode.value
+  if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
 }
 
@@ -202,8 +203,8 @@ async function handleApprove(id: string) {
   }
 }
 
-// 初始加载
-loadPage(1)
+// 初始加载（从 URL 恢复页码）
+loadPage(currentPage.value)
 </script>
 
 <template>
