@@ -3,15 +3,13 @@
 
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
-import { getFileUrl } from '@/api/inspirations'
 import apiClient from '@/api/client'
-import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
+import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
   batchDeleteTags, deleteUnusedTags, fetchTagStats, findDuplicates,
-  fetchTagInspirations, exportTags, importTags,
+  exportTags, importTags,
   type TagCategoryGroup, type TagItem, type TagStats, type DuplicatePair,
-  type TagInspiration,
   CATEGORY_LABELS, SOURCE_LABELS,
 } from '@/api/tags'
 
@@ -56,14 +54,8 @@ const scanningDuplicates = ref(false)
 const duplicatePairs = ref<DuplicatePair[]>([])
 const showDuplicatesPanel = ref(false)
 
-// ===== 选中标签 → 右侧图片面板 =====
+// ===== 选中标签 → 右侧素材面板 =====
 const selectedTag = ref<TagItem | null>(null)
-const detailInspirations = ref<TagInspiration[]>([])
-const detailTotal = ref(0)
-const detailLoading = ref(false)
-const detailPage = ref(1)
-const detailSort = ref<'newest' | 'oldest' | 'confidence'>('newest')
-const detailDensity = ref<'compact' | 'standard'>('compact')
 
 // ===== 批量改类别 =====
 const showBatchCategoryDialog = ref(false)
@@ -77,10 +69,6 @@ const renameReplace = ref('')
 // ===== 导入/导出 =====
 const showImportModal = ref(false)
 const importJsonText = ref('')
-
-// ===== 图片灯箱 =====
-const showLightbox = ref(false)
-const lightboxPath = ref('')
 
 // ===== 拖拽改类别 =====
 const dragTag = ref<TagItem | null>(null)
@@ -310,26 +298,19 @@ async function quickMerge(a: number, b: number) {
 }
 
 // ===== 标签详情 =====
-async function selectTag(tag: TagItem) {
+function selectTag(tag: TagItem) {
   selectedTag.value = tag
-  detailPage.value = 1
-  await loadTagInspirations()
 }
 
-async function loadTagInspirations(page?: number) {
-  if (!selectedTag.value) return
-  if (page) detailPage.value = page
-  detailLoading.value = true
-  try {
-    const data = await fetchTagInspirations(selectedTag.value.id, detailPage.value, 50, detailSort.value)
-    if (detailPage.value === 1) detailInspirations.value = data.items
-    else detailInspirations.value.push(...data.items)
-    detailTotal.value = data.total
-  } catch { message.error('加载素材失败') }
-  finally { detailLoading.value = false }
+/** 素材关联数变化后，同步左侧标签 usage_count 与统计数字 */
+function onGridChanged(payload: { removed: number }) {
+  if (selectedTag.value) {
+    selectedTag.value.usage_count = Math.max(0, selectedTag.value.usage_count - payload.removed)
+  }
+  if (stats.value) {
+    stats.value.total_links = Math.max(0, stats.value.total_links - payload.removed)
+  }
 }
-
-function onDetailSortChange() { detailPage.value = 1; loadTagInspirations() }
 
 // ===== 批量改类别 =====
 async function handleBatchCategory() {
@@ -685,56 +666,9 @@ function sourceColor(s: string) {
     </n-spin>
     </div><!-- /left-panel -->
 
-    <!-- ===== 右面板：选中标签的素材图片 ===== -->
+    <!-- ===== 右面板：选中标签的素材网格 ===== -->
     <div class="right-panel">
-      <template v-if="selectedTag">
-        <div class="right-header">
-          <n-space align="center" :wrap="false">
-            <h3 style="margin:0">「{{ selectedTag.name }}」</h3>
-            <n-tag size="small" :bordered="false">{{ selectedTag.usage_count }} 次</n-tag>
-            <span style="font-size:13px;color:#999">共 {{ detailTotal }} 个</span>
-          </n-space>
-          <n-space size="small">
-            <n-select v-model:value="detailSort" :options="[{label:'最新',value:'newest'},{label:'最旧',value:'oldest'},{label:'置信度',value:'confidence'}]" size="tiny" style="width:90px" @update:value="onDetailSortChange" />
-            <n-button-group size="tiny">
-              <n-button :type="detailDensity==='compact'?'primary':'default'" @click="detailDensity='compact'">⊞</n-button>
-              <n-button :type="detailDensity==='standard'?'primary':'default'" @click="detailDensity='standard'">⊟</n-button>
-            </n-button-group>
-          </n-space>
-        </div>
-        <n-spin :show="detailLoading">
-          <div v-if="detailInspirations.length === 0 && !detailLoading" class="right-empty">暂无素材</div>
-          <div v-else :class="['image-grid', 'density-' + detailDensity]">
-            <div
-              v-for="item in detailInspirations"
-              :key="item.inspiration_id"
-              class="image-card"
-              :title="`置信度: ${(item.confidence * 100).toFixed(0)}%`"
-              @click="lightboxPath = item.file_path; showLightbox = true"
-            >
-              <img
-                v-if="item.thumbnail_path"
-                :src="getFileUrl(item.thumbnail_path)"
-                :alt="selectedTag.name"
-                loading="lazy"
-              />
-              <img
-                v-else-if="item.file_path"
-                :src="getFileUrl(item.file_path)"
-                :alt="selectedTag.name"
-                loading="lazy"
-              />
-              <div v-else class="no-preview">无预览</div>
-            </div>
-          </div>
-          <div v-if="detailInspirations.length < detailTotal" style="text-align:center;padding:12px">
-            <n-button size="small" :loading="detailLoading" @click="loadTagInspirations(detailPage + 1)">加载更多</n-button>
-          </div>
-        </n-spin>
-      </template>
-      <div v-else class="right-placeholder">
-        点击左侧标签查看关联素材
-      </div>
+      <TagInspirationGrid :tag="selectedTag" @changed="onGridChanged" />
     </div><!-- /right-panel -->
 
     </div><!-- /split-layout -->
@@ -836,12 +770,6 @@ function sourceColor(s: string) {
       </n-space>
     </n-modal>
 
-    <!-- 图片灯箱 -->
-    <ImageLightbox
-      :show="showLightbox"
-      :image-path="lightboxPath"
-      @close="showLightbox = false"
-    />
   </div>
 </template>
 
@@ -874,56 +802,9 @@ function sourceColor(s: string) {
   flex-shrink: 0;
 }
 
-.right-header {
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #f0f0f0;
-  position: sticky;
-  top: 0;
-  background: #fff;
-  z-index: 1;
-}
-
-.right-placeholder, .right-empty {
-  color: #999;
-  text-align: center;
-  padding: 60px 20px;
-  font-size: 14px;
-}
-
-.image-grid { display: grid; }
-.image-grid.density-compact { grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.image-grid.density-standard { grid-template-columns: repeat(3, 1fr); gap: 10px; }
-
-.image-card {
-  cursor: pointer;
-  border-radius: 4px;
-  overflow: hidden;
-  transition: transform 0.15s;
-}
-.image-card:hover { transform: scale(1.05); }
-.image-card img {
-  width: 100%;
-  aspect-ratio: 2/3;
-  object-fit: cover;
-  border-radius: 4px;
-}
-.no-preview {
-  width: 100%;
-  aspect-ratio: 2/3;
-  background: #f5f5f5;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #ccc;
-  font-size: 12px;
-}
-
 @media (max-width: 900px) {
   .split-layout { flex-direction: column; }
   .left-panel, .right-panel { width: 100%; flex: none; max-height: 50vh; }
   .right-panel { border-left: none; border-top: 1px solid #e5e7eb; padding-left: 0; padding-top: 12px; }
-  .image-grid { grid-template-columns: repeat(3, 1fr); }
 }
 </style>

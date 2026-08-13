@@ -138,6 +138,15 @@ export async function fetchTagInspirations(tagId: number, page: number = 1, size
   return data
 }
 
+/** 批量解除标签与多个素材的关联 */
+export async function batchRemoveTagInspirations(tagId: number, inspirationIds: string[]) {
+  const { data } = await apiClient.post<{ removed: number }>(
+    `/tags/${tagId}/inspirations/batch-remove`,
+    { inspiration_ids: inspirationIds },
+  )
+  return data
+}
+
 // ===== 导入/导出 =====
 
 /** 导出所有标签 */

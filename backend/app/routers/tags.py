@@ -368,6 +368,30 @@ async def find_duplicate_tags(
 # ============ 标签详情 ============
 
 
+@router.post("/{tag_id}/inspirations/batch-remove", status_code=status.HTTP_200_OK)
+async def batch_remove_tag_inspirations(
+    tag_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量解除标签与多个素材的关联。
+
+    请求体: {"inspiration_ids": ["uuid1", "uuid2", ...]}
+    """
+    inspiration_ids = payload.get("inspiration_ids", [])
+    if not isinstance(inspiration_ids, list) or not inspiration_ids:
+        raise HTTPException(status_code=400, detail="请提供素材 ID 列表")
+
+    result = await db.execute(
+        delete(InspirationTag).where(
+            InspirationTag.tag_id == tag_id,
+            InspirationTag.inspiration_id.in_(inspiration_ids),
+        )
+    )
+    await db.commit()
+    return {"removed": result.rowcount}
+
+
 @router.get("/{tag_id}/inspirations")
 async def tag_inspirations(
     tag_id: int,
