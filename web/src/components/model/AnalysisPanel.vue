@@ -373,7 +373,7 @@ async function viewCompare(inspirationId: string) {
 
 const tagCategoryLabel: Record<string, string> = {
   style: '风格', item_type: '单品类型', color: '颜色', fit: '版型',
-  body_part: '穿着方式', occasion: '场合', attribute: '属性',
+  body_part: '穿着方式', attribute: '属性',
   outfit: '穿搭大标签',
 }
 
@@ -604,7 +604,7 @@ onUnmounted(() => {
 
           <div v-if="currentDetail.tags.length > 0">
             <h4 style="margin-bottom:8px">提取的标签</h4>
-            <n-space v-for="cat in ['style','item_type','color','fit','body_part','occasion','attribute']" :key="cat" style="margin-bottom:8px" align="center">
+            <n-space v-for="cat in ['style','item_type','color','fit','body_part','attribute']" :key="cat" style="margin-bottom:8px" align="center">
               <n-tag type="info" size="small" :bordered="false">{{ tagCategoryLabel[cat] || cat }}</n-tag>
               <template v-for="tag in currentDetail.tags.filter(t=>t.category===cat)" :key="tag.name">
                 <n-tag size="small" round>

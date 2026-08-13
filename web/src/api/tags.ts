@@ -22,7 +22,6 @@ export const CATEGORY_LABELS: Record<string, string> = {
   color: '颜色',
   body_part: '穿着方式',
   fit: '版型',
-  occasion: '场合',
   attribute: '属性',
   free: '自定义',
   outfit: '穿搭大标签',

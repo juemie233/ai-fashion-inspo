@@ -87,7 +87,7 @@ export default function DetailScreen() {
 
   const CAT_LABELS: Record<string, string> = {
     style: '风格', item_type: '单品', color: '颜色',
-    body_part: '穿着方式', fit: '版型', occasion: '场合',
+    body_part: '穿着方式', fit: '版型',
     season: '季节', attribute: '属性', free: '自定义',
   }
 

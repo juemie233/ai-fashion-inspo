@@ -32,7 +32,6 @@ function tagColor(category: string): string {
     color: '#f59e0b',
     body_part: '#10b981',
     fit: '#ec4899',
-    occasion: '#06b6d4',
     attribute: '#6b7280',
     free: '#9ca3af',
     outfit: '#e11d48',

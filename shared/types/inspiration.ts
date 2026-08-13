@@ -12,7 +12,7 @@ export type AnalysisStatus = 'none' | 'analyzing' | 'done' | 'error'
 /** 标签类别 */
 export const TAG_CATEGORIES = [
   'style', 'item_type', 'color', 'body_part',
-  'fit', 'occasion', 'season', 'attribute', 'free', 'outfit',
+  'fit', 'season', 'attribute', 'free', 'outfit',
 ] as const
 export type TagCategory = typeof TAG_CATEGORIES[number]
 
@@ -23,7 +23,6 @@ export const TAG_CATEGORY_LABELS: Record<TagCategory, string> = {
   color: '颜色',
   body_part: '穿着方式',
   fit: '版型',
-  occasion: '场合',
   season: '季节',
   attribute: '属性',
   free: '自定义',
