@@ -45,17 +45,44 @@ def _rdsleep(lo=0.5, hi=2.0):
     time.sleep(random.uniform(lo, hi))
 
 
+def _human_mouse_move(page):
+    """随机移动鼠标到页面某处，模拟真人浏览时的无意识动作。"""
+    try:
+        vp = page.viewport_size or {"width": 1920, "height": 1080}
+        w, h = vp.get("width", 1920), vp.get("height", 1080)
+        page.mouse.move(
+            random.randint(int(w * 0.15), int(w * 0.85)),
+            random.randint(int(h * 0.15), int(h * 0.85)),
+        )
+    except Exception:
+        pass  # 鼠标移动失败不影响主流程
+
+
+def _human_scroll(page, steps=None):
+    """分步随机滚动到底部：随机步长 + 随机停顿，避免一步到底的机器特征。
+
+    最终仍滚动到底以触发懒加载，但过程更接近真人浏览。
+    分步数控制在 1~2 步，避免滚动事件被过度放大（每步都是一次可见滚动）。
+    """
+    steps = steps or random.randint(1, 2)
+    for _ in range(steps):
+        page.evaluate(f"window.scrollBy(0, {random.randint(400, 900)})")
+        _rdsleep(0.6, 1.5)
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+
 # ═══════════════════════════════════════════════════════════════
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
-def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "general") -> tuple[list[str], dict]:
+def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "general") -> tuple[list[str], dict]:
     """在已登录的页面上搜索并提取图片 URL。
 
     采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
     从每张卡片中提取多张图片（轮播帖），最大化采集数量。
 
     Args:
+        need_count: 本次搜索还需采集的数量（剩余需求），用于「够用即停」判断
         sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)
 
     Returns:
@@ -84,18 +111,30 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
         print("  搜索结果已渲染")
     except Exception:
         print("  等待搜索结果超时，尝试继续...")
-    _rdsleep(1.5, 3.0)
+    # 拟人化：页面加载后随机停顿 + 偶发鼠标移动，模拟真人浏览前先看一页
+    _rdsleep(1.5, 3.5)
+    if random.random() < 0.7:
+        _human_mouse_move(page)
 
     # ── 触底循环滚动 ──
-    MAX_SCROLLS = 30
-    CONSECUTIVE_NO_NEW = 3  # 连续 N 次无新卡片则停止
+    MAX_SCROLLS = 10  # 滚动硬上限（真人不会滚 30 次）
+    CONSECUTIVE_NO_NEW = 1  # 连续 N 次无新卡片即视为到底（一次确认足够，减少白滚）
+    # 已获取足够卡片即停（实测每卡片≈1张图，1.5倍余量足够）
+    target_cards = max(10, int(need_count * 1.5))
     no_new_count = 0
     last_card_count = 0
 
     for scroll_i in range(MAX_SCROLLS):
-        # 直接滚动到页面底部触发懒加载
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        _rdsleep(1.0, 2.0)
+        # 拟人化滚动：偶发鼠标移动 + 分步随机滚到底 + 随机停顿
+        if random.random() < 0.6:
+            _human_mouse_move(page)
+        _human_scroll(page)
+        _rdsleep(1.0, 2.5)
+
+        # 偶发回滚一点，模拟真人来回浏览
+        if random.random() < 0.15:
+            page.evaluate(f"window.scrollBy(0, -{random.randint(100, 300)})")
+            _rdsleep(0.5, 1.2)
 
         # 检查是否有新内容加载
         cards_now = len(page.query_selector_all("section.note-item"))
@@ -107,7 +146,6 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
             last_card_count = cards_now
 
         # 已获取足够卡片，提前停止
-        target_cards = max_count * 3  # 每卡片可能有 0~N 张图，多取一些卡片保证数量
         if cards_now >= target_cards:
             print(f"  滚动 {scroll_i + 1} 次后已获取 {cards_now} 个卡片（目标 {target_cards}），停止滚动")
             break
@@ -129,7 +167,7 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
     skipped_small = 0
     skipped_icon = 0
 
-    for card in cards[: max_count * 4]:
+    for card in cards[: need_count * 2]:
         try:
             # 从每张卡片中提取所有图片（轮播帖含多图）
             imgs = card.query_selector_all("img")
@@ -169,7 +207,7 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
         "skipped_small": skipped_small,
         "skipped_icon": skipped_icon,
         "urls_extracted": len(image_urls),
-        "max_count": max_count,
+        "target": need_count,
     }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
     print(f"  │ DOM 卡片总数: {total_cards}")
@@ -178,10 +216,10 @@ def _search_xiaohongshu(page, keyword: str, max_count: int, sort_type: str = "ge
     print(f"  │ 跳过小尺寸:   {skipped_small}")
     print(f"  │ 跳过图标:     {skipped_icon}")
     print(f"  │ 提取到 URL:   {len(image_urls)}")
-    print(f"  │ 目标数量:     {max_count}")
+    print(f"  │ 目标数量:     {need_count}")
     print(f"  └──────────────────────────────────────────")
 
-    return image_urls[:max_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
+    return image_urls[:need_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -390,6 +428,8 @@ def run_scraper_sync(task_id: int):
     try:
         config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
         keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
+        # 随机打乱关键词顺序，避免每次固定搜索流程
+        random.shuffle(keywords)
         max_count = config.get("max_count", 50)
         platform = task.platform
 
@@ -495,8 +535,10 @@ def run_scraper_sync(task_id: int):
                 print(f"{'='*50}")
 
                 try:
+                    # 按剩余需求采集：够用即停，避免滚动浏览远超所需的内容
+                    remaining = max_count - items_added
                     if platform == "xiaohongshu":
-                        urls, inner_funnel = _search_xiaohongshu(page, kw, max_count, sort_type)
+                        urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
                     else:
                         per_search.append({
                             "keyword": kw, "sort_type": sort_type,
@@ -508,7 +550,6 @@ def run_scraper_sync(task_id: int):
                     print(f"  提取 {len(urls)} 个 URL")
 
                     # 立即下载本批（带浏览器 Cookie）
-                    remaining = max_count - items_added
                     added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
                         urls, task_id, existing_url_set, remaining,
                         img_dir, today, httpx, browser_cookies,
@@ -540,15 +581,17 @@ def run_scraper_sync(task_id: int):
                         idx < len(keywords) - 1
                         or sort_type != SORT_TYPES[-1]
                     ):
-                        cool = random.randint(5, 9)
+                        cool = random.randint(6, 12)
                         print(f"  ⏸ 冷却 {cool}s...")
-                        # 轻量页面交互保持 CDP 连接活跃
+                        # 轻量页面交互保持 CDP 连接活跃（随机间隔 + 偶发鼠标移动）
                         for _ in range(cool):
                             try:
+                                if random.random() < 0.5:
+                                    _human_mouse_move(page)
                                 page.evaluate("1")  # no-op，单纯保持连接
                             except Exception:
                                 pass
-                            time.sleep(1)
+                            _rdsleep(0.8, 1.5)
 
                 except Exception as e:
                     err = str(e) or type(e).__name__

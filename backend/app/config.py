@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # 采集引擎
     scraper_request_delay: float = 2.0  # 请求间隔（秒）
     scraper_max_concurrent: int = 3
-    scraper_default_max_count: int = 100  # 每次采集默认数量
+    scraper_default_max_count: int = 20  # 每次采集默认数量（降低单次规模以规避风控）
     scraper_browser_headless: bool = True
     chrome_executable: str = (
         "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe"
