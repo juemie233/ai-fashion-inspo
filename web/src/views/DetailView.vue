@@ -18,6 +18,7 @@ import { fetchSimilar, type SimilarItemOut } from '@/api/search'
 import { fetchTagsGrouped } from '@/api/tags'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import InspirationCard from '@/components/inspiration/InspirationCard.vue'
+import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -92,21 +93,6 @@ async function handleDelete() {
   } catch {
     message.error('删除失败')
   }
-}
-
-/** 标签类别颜色映射 */
-function tagColor(category: string): string {
-  const colors: Record<string, string> = {
-    style: '#8b5cf6',
-    item_type: '#3b82f6',
-    color: '#f59e0b',
-    body_part: '#10b981',
-    fit: '#ec4899',
-    attribute: '#6b7280',
-    free: '#9ca3af',
-    outfit: '#e11d48',
-  }
-  return colors[category] || '#9ca3af'
 }
 
 /** 类别中文名 */
@@ -392,18 +378,14 @@ function dismissOutfitTag(name: string) {
                   {{ CAT_LABELS[category] || category }}
                 </span>
                 <div class="tag-chips">
-                  <n-tag
+                  <CategoryTag
                     v-for="t in tags"
                     :key="t.tag.id"
+                    :category="t.tag.category"
                     size="small"
-                    :bordered="false"
-                    :style="{ backgroundColor: tagColor(t.tag.category) + '20', color: tagColor(t.tag.category) }"
                   >
-                    {{ t.tag.name }}
-                    <template v-if="t.confidence < 0.8">
-                      ({{ Math.round(t.confidence * 100) }}%)
-                    </template>
-                  </n-tag>
+                    {{ t.tag.name }}<template v-if="t.confidence < 0.8"> ({{ Math.round(t.confidence * 100) }}%)</template>
+                  </CategoryTag>
                 </div>
               </div>
             </div>
@@ -527,10 +509,16 @@ function dismissOutfitTag(name: string) {
 }
 
 .similar-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  column-count: 5;
+  column-gap: 12px;
 }
+.similar-grid :deep(.card) {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
+@media (max-width: 1200px) { .similar-grid { column-count: 4; } }
+@media (max-width: 900px)  { .similar-grid { column-count: 3; } }
+@media (max-width: 600px)  { .similar-grid { column-count: 2; } }
 
 .outfit-tags-section {
   border: 1px solid #f0d6dc;

@@ -198,7 +198,7 @@ async function startUpload() {
         // TODO: add tags to material via API
       }
 
-      prependRecent(result.id, result.thumbnail_path, result.file_path)
+      prependRecent(result.id, result.thumbnail_path ?? null, result.file_path)
       _lastBytes += item.file.size
     } catch (e: any) {
       item.status = 'failed'
@@ -254,9 +254,10 @@ function openFilePicker() { fileInput.value?.click() }
 function openFolder() { folderInput.value?.click() }
 
 function onFileChange(e: Event) {
-  const files = Array.from((e.target as HTMLInputElement).files || [])
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
   if (files.length > 0) addFiles(files)
-  (e.target as HTMLInputElement).value = ''
+  input.value = ''
 }
 
 // ── 视频预览 ──

@@ -8,6 +8,9 @@ import { getFileUrl } from '@/api/inspirations'
 
 const message = useMessage()
 
+/** 当前激活的页签：tasks 采集任务 / config 源配置 */
+const activeTab = ref<'tasks' | 'config'>('tasks')
+
 // ── copyText（修复版）──
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); message.success('已复制') }
@@ -366,49 +369,9 @@ function expandedRowRender(row: ScraperTask) {
 <h2>采集管理</h2>
 <p class="subtitle">自动化采集小红书和抖音的穿搭内容</p>
 
-<!-- Cookie 状态 -->
-<div class="cookie-cards">
-  <n-card v-for="(cs, plat) in cookieStatuses" :key="plat" size="small" style="flex:1;min-width:260px">
-    <template #header>
-      {{ PLATFORM_LABELS[plat] || plat }} Cookie
-      <n-tag :type="cs.valid?'success':'error'" size="small" style="margin-left:8px">{{ cs.exists?(cs.valid?'有效':'已过期'):'未配置' }}</n-tag>
-    </template>
-    <p style="font-size:12px;color:#666;margin:0">{{ cs.hint }}</p>
-    <template #action>
-      <n-button size="tiny" @click="cookiePlatform=plat;showingCookieImport=true">导入</n-button>
-    </template>
-  </n-card>
-</div>
-
-<!-- Cookie 导入对话框 -->
-<n-modal v-model:show="showingCookieImport" preset="card" title="导入 Cookie" style="max-width:500px">
-  <p style="font-size:12px;color:#666;margin-bottom:8px">粘贴 {{ PLATFORM_LABELS[cookiePlatform]||cookiePlatform }} 的 Cookie JSON 数据</p>
-  <n-input v-model:value="cookieJsonInput" type="textarea" :autosize="{minRows:4,maxRows:12}" placeholder='[{"name":"...","value":"...","domain":"..."}]' style="font-family:monospace;font-size:12px" />
-  <n-button type="primary" block style="margin-top:12px" @click="importCookie">导入</n-button>
-</n-modal>
-
-<!-- 采集源 -->
-<n-card title="可用采集源" style="margin-bottom:16px" size="small">
-  <n-list>
-    <n-list-item v-for="src in sources" :key="src.platform">
-      <template #prefix><n-tag :type="src.status==='available'?'success':'warning'" size="small">{{ src.status==='available'?'可用':'有限' }}</n-tag></template>
-      <n-thing :title="src.name" :description="src.note">
-        <template #header-extra><n-tag v-for="f in src.features" :key="f" size="tiny" :bordered="false">{{ f }}</n-tag></template>
-      </n-thing>
-    </n-list-item>
-  </n-list>
-</n-card>
-
-<!-- 墓碑表 -->
-<n-card size="small" style="margin-bottom:16px">
-  <div class="tombstone-header" @click="showTombstone=!showTombstone" style="cursor:pointer;user-select:none">
-    <span>{{ showTombstone?'▼':'▶' }} 已采集 URL 记录</span>
-    <n-tag type="info" size="small">{{ tombstoneCount }} 个</n-tag>
-  </div>
-  <div v-if="showTombstone" class="tombstone-body">
-    <p style="margin:8px 0 0;font-size:12px;color:#666">📌 墓碑表记录了所有曾下载过的图片 URL，采集时自动跳过，确保永不重复入库。当前共 <b>{{ tombstoneCount }}</b> 条。</p>
-  </div>
-</n-card>
+<n-tabs v-model:value="activeTab" type="line">
+  <!-- 采集任务 Tab -->
+  <n-tab-pane name="tasks" tab="采集任务">
 
 <!-- 新建任务 -->
 <n-card title="新建采集任务" style="margin-bottom:16px" size="small">
@@ -455,19 +418,6 @@ function expandedRowRender(row: ScraperTask) {
     <n-button type="primary" @click="createTask">开始采集</n-button>
   </n-form>
 </n-card>
-
-<!-- 平台提示 -->
-<div v-for="hint in sources.map(src=>{
-  let level:'warning'|'info'|'error'='info',tips:string[]=[]
-  if(src.platform==='xiaohongshu'){level='warning';tips=['需要有效的登录 Cookie','反爬检测严格','搜索功能依赖页面 DOM 结构']}
-  else if(src.platform==='douyin'){level='error';tips=['网页版功能严重受限','搜索结果可能为空','推荐使用浏览器插件代替']}
-  else{tips=['最可靠的采集方式','支持一键抓取当前页面']}
-  return {...src,level,tips}
-})" :key="hint.platform" style="margin-bottom:12px">
-  <n-alert :type="hint.level" :title="hint.name+' — '+(hint.level==='error'?'⚠️ 可靠性低':hint.level==='warning'?'⚡ 需要配置':'✅ 推荐使用')">
-    <ul style="margin:4px 0;padding-left:18px;font-size:13px"><li v-for="t in hint.tips" :key="t">{{ t }}</li></ul>
-  </n-alert>
-</div>
 
 <!-- 任务历史 -->
 <n-card title="采集任务历史" size="small">
@@ -622,6 +572,71 @@ function expandedRowRender(row: ScraperTask) {
     </n-spin>
   </div>
 </n-card>
+
+  </n-tab-pane>
+
+  <!-- 源配置 Tab -->
+  <n-tab-pane name="config" tab="源配置">
+
+<!-- Cookie 状态 -->
+<div class="cookie-cards">
+  <n-card v-for="(cs, plat) in cookieStatuses" :key="plat" size="small" style="flex:1;min-width:260px">
+    <template #header>
+      {{ PLATFORM_LABELS[plat] || plat }} Cookie
+      <n-tag :type="cs.valid?'success':'error'" size="small" style="margin-left:8px">{{ cs.exists?(cs.valid?'有效':'已过期'):'未配置' }}</n-tag>
+    </template>
+    <p style="font-size:12px;color:#666;margin:0">{{ cs.hint }}</p>
+    <template #action>
+      <n-button size="tiny" @click="cookiePlatform=plat;showingCookieImport=true">导入</n-button>
+    </template>
+  </n-card>
+</div>
+
+<!-- Cookie 导入对话框 -->
+<n-modal v-model:show="showingCookieImport" preset="card" title="导入 Cookie" style="max-width:500px">
+  <p style="font-size:12px;color:#666;margin-bottom:8px">粘贴 {{ PLATFORM_LABELS[cookiePlatform]||cookiePlatform }} 的 Cookie JSON 数据</p>
+  <n-input v-model:value="cookieJsonInput" type="textarea" :autosize="{minRows:4,maxRows:12}" placeholder='[{"name":"...","value":"...","domain":"..."}]' style="font-family:monospace;font-size:12px" />
+  <n-button type="primary" block style="margin-top:12px" @click="importCookie">导入</n-button>
+</n-modal>
+
+<!-- 采集源 -->
+<n-card title="可用采集源" style="margin-bottom:16px" size="small">
+  <n-list>
+    <n-list-item v-for="src in sources" :key="src.platform">
+      <template #prefix><n-tag :type="src.status==='available'?'success':'warning'" size="small">{{ src.status==='available'?'可用':'有限' }}</n-tag></template>
+      <n-thing :title="src.name" :description="src.note">
+        <template #header-extra><n-tag v-for="f in src.features" :key="f" size="tiny" :bordered="false">{{ f }}</n-tag></template>
+      </n-thing>
+    </n-list-item>
+  </n-list>
+</n-card>
+
+<!-- 墓碑表 -->
+<n-card size="small" style="margin-bottom:16px">
+  <div class="tombstone-header" @click="showTombstone=!showTombstone" style="cursor:pointer;user-select:none">
+    <span>{{ showTombstone?'▼':'▶' }} 已采集 URL 记录</span>
+    <n-tag type="info" size="small">{{ tombstoneCount }} 个</n-tag>
+  </div>
+  <div v-if="showTombstone" class="tombstone-body">
+    <p style="margin:8px 0 0;font-size:12px;color:#666">📌 墓碑表记录了所有曾下载过的图片 URL，采集时自动跳过，确保永不重复入库。当前共 <b>{{ tombstoneCount }}</b> 条。</p>
+  </div>
+</n-card>
+
+<!-- 平台提示 -->
+<div v-for="hint in sources.map(src=>{
+  let level:'warning'|'info'|'error'='info',tips:string[]=[]
+  if(src.platform==='xiaohongshu'){level='warning';tips=['需要有效的登录 Cookie','反爬检测严格','搜索功能依赖页面 DOM 结构']}
+  else if(src.platform==='douyin'){level='error';tips=['网页版功能严重受限','搜索结果可能为空','推荐使用浏览器插件代替']}
+  else{tips=['最可靠的采集方式','支持一键抓取当前页面']}
+  return {...src,level,tips}
+})" :key="hint.platform" style="margin-bottom:12px">
+  <n-alert :type="hint.level" :title="hint.name+' — '+(hint.level==='error'?'⚠️ 可靠性低':hint.level==='warning'?'⚡ 需要配置':'✅ 推荐使用')">
+    <ul style="margin:4px 0;padding-left:18px;font-size:13px"><li v-for="t in hint.tips" :key="t">{{ t }}</li></ul>
+  </n-alert>
+</div>
+
+  </n-tab-pane>
+</n-tabs>
 </div>
 </template>
 

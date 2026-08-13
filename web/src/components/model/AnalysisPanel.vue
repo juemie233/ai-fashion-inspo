@@ -2,7 +2,7 @@
 /** 标签分析面板：分析队列、历史记录、分析详情与结果对比。 */
 
 import { h, ref, onMounted, onUnmounted } from 'vue'
-import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
+import { NTag, NButton, NPopconfirm, NPopover, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { useNotification } from '@/composables/useNotification'
@@ -696,7 +696,15 @@ onUnmounted(() => {
         v-if="history.length"
         :columns="[
           { title: () => h('input', { type:'checkbox', checked: selectedHistoryIds.size === history.length && history.length > 0, onClick: selectAllHistory }), key:'_check', width: 36, render: (row: HistoryItem) => h('input', { type:'checkbox', checked: selectedHistoryIds.has(row.id), onClick: () => toggleSelectHistory(row.id) }) },
-          { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
+          { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => {
+            const thumb = row.thumbnail_path || row.file_path
+            if (!thumb) return '-'
+            const full = row.file_path || row.thumbnail_path
+            return h(NPopover, { trigger: 'hover', placement: 'right', style: { padding: '6px' } }, {
+              trigger: () => h('img', { src: getFileUrl(thumb), style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block' }),
+              default: () => h('img', { src: getFileUrl(full!), style: 'max-width:320px;max-height:420px;border-radius:6px;display:block' }),
+            })
+          } },
           { title: '模型', key: 'model_name', width: 130, render: (row: HistoryItem) => row.model_name },
           { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
           { title: '提取标签', key: 'tags', width: 180, render: (row: HistoryItem) => {

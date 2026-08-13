@@ -6,6 +6,7 @@ import { NIcon } from 'naive-ui'
 import { Heart, HeartOutline, TrashOutline, EyeOutline, CheckmarkOutline } from '@vicons/ionicons5'
 import { useRouter } from 'vue-router'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
+import CategoryTag from './CategoryTag.vue'
 
 const props = defineProps<{
   item: InspirationOut
@@ -26,21 +27,6 @@ const router = useRouter()
 /** 获取首行展示的标签（最多 4 个） */
 function displayTags() {
   return props.item.tags?.slice(0, 4).map((t) => t.tag) ?? []
-}
-
-/** 获取标签颜色（按类别） */
-function tagColor(category: string): string {
-  const colors: Record<string, string> = {
-    style: '#8b5cf6',
-    item_type: '#3b82f6',
-    color: '#f59e0b',
-    body_part: '#10b981',
-    fit: '#ec4899',
-    attribute: '#6b7280',
-    free: '#9ca3af',
-    outfit: '#e11d48',
-  }
-  return colors[category] || '#9ca3af'
 }
 
 /** 来源图标和标签 */
@@ -161,15 +147,14 @@ function goToDetail() {
 
       <!-- 标签 -->
       <div v-if="displayTags().length > 0" class="card-tags">
-        <n-tag
+        <CategoryTag
           v-for="tag in displayTags()"
           :key="tag.id"
+          :category="tag.category"
           size="tiny"
-          :bordered="false"
-          :style="{ backgroundColor: tagColor(tag.category) + '20', color: tagColor(tag.category) }"
         >
           {{ tag.name }}
-        </n-tag>
+        </CategoryTag>
       </div>
     </div>
   </div>

@@ -14,7 +14,7 @@ export function useInfiniteScroll(
     const el = containerRef.value
     if (!el) return
 
-    function handler() {
+    const handler = () => {
       if (enabled && !enabled.value) return
       const { scrollTop, scrollHeight, clientHeight } = el
       if (scrollHeight - scrollTop - clientHeight < threshold) {
