@@ -291,6 +291,7 @@ const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
 const qualityReviewActive = ref<string[]>([])
 const qualityChecking = ref(false)
+const rechecking = ref(false)
 
 async function loadQualityReview() {
   qualityReviewLoading.value = true
@@ -317,6 +318,21 @@ async function triggerQualityCheck() {
     message.error(e.response?.data?.detail || '审核提交失败')
   } finally {
     qualityChecking.value = false
+  }
+}
+
+async function recheckQuality() {
+  rechecking.value = true
+  try {
+    const { data } = await apiClient.post<{ message: string; count: number }>(
+      '/ai/quality-recheck',
+    )
+    message.success(data.message)
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重新审核提交失败')
+  } finally {
+    rechecking.value = false
   }
 }
 
@@ -1639,6 +1655,21 @@ function formatDate(d: string | null | undefined) {
               >
                 {{ qualityReviewStats.pending > 0 ? `审核全部待审核 (${qualityReviewStats.pending})` : '全部已审核' }}
               </n-button>
+              <n-popconfirm
+                v-if="qualityReviewStats.approved > 0"
+                @positive-click="recheckQuality"
+              >
+                <template #trigger>
+                  <n-button
+                    type="warning"
+                    secondary
+                    :loading="rechecking"
+                  >
+                    重新审核已通过 ({{ qualityReviewStats.approved }})
+                  </n-button>
+                </template>
+                将已通过的 {{ qualityReviewStats.approved }} 个素材重置为待审核，并用最新标准重新判定（会重新调用 AI 模型，耗时较长）。确定继续？
+              </n-popconfirm>
             </div>
 
             <!-- 正在审核提示 -->

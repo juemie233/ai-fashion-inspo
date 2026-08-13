@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1540,6 +1540,47 @@ async def batch_quality_check(
 
     return {
         "message": f"已提交 {len(items)} 个素材进行质量审核",
+        "count": len(items),
+    }
+
+
+@router.post("/quality-recheck")
+async def recheck_quality(db: AsyncSession = Depends(get_db)):
+    """重新审核所有已通过（approved）的图片素材。
+
+    将 approved 重置为 pending 后立即提交批量审核，用最新审核标准重新判定。
+    用于修正审核标准升级后历史素材的误判（如「只有腿部」被误判为通过）。
+    """
+    result = await db.execute(
+        update(Inspiration)
+        .where(
+            Inspiration.media_type == "image",
+            Inspiration.quality_status == "approved",
+        )
+        .values(quality_status="pending", quality_reason=None)
+    )
+    await db.commit()
+    reset_count = result.rowcount
+
+    if not reset_count:
+        return {"message": "没有已通过的素材可重新审核", "count": 0}
+
+    # 提交所有待审核素材（含刚重置的），信号量保证单卡并发不超过 2
+    items_result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.quality_status == "pending",
+            Inspiration.media_type == "image",
+        )
+    )
+    items = items_result.all()
+
+    for insp_id, file_path in items:
+        task = asyncio.create_task(_run_quality_check(insp_id, file_path))
+        _analysis_tasks.add(task)
+        task.add_done_callback(_analysis_tasks.discard)
+
+    return {
+        "message": f"已重置 {reset_count} 个已通过素材，重新提交 {len(items)} 个待审核",
         "count": len(items),
     }
 
