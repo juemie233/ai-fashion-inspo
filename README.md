@@ -92,7 +92,7 @@ chrome_debug_port: int = 9222
 | **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态）、排序、密度调节、分页加载 |
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列、元数据预设、去重检测、文件夹批量、队列管理、偏好设置 |
-| **素材详情** | 大图预览、标签展示、相似素材推荐 |
+| **素材详情** | 大图预览、标签展示、穿搭大标签（手动选择/新建 + AI 建议确认）、相似素材推荐 |
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计 |
 | **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除、重复扫描、拖拽改类、导入导出、素材关联预览 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核） |
@@ -212,13 +212,23 @@ fashion-inspo/
 │   │   │   ├── inspirations.py   # 素材 CRUD
 │   │   │   ├── tags.py           # 标签管理 + 批量/统计/扫描/导入导出
 │   │   │   ├── search.py         # 多维度搜索 + 相似素材
-│   │   │   ├── ai.py             # AI 分析 + 模型管理 + 数据重置
+│   │   │   ├── ai.py             # AI 路由聚合（拆分见 ai_*.py）
+│   │   │   ├── ai_shared.py      # AI 共享状态 + 后台任务
+│   │   │   ├── ai_models.py      # 模型管理 + GPU + 模型统计
+│   │   │   ├── ai_analysis.py    # 分析 + 队列 + 历史 + 对比
+│   │   │   ├── ai_quality.py     # 质量审核
+│   │   │   ├── ai_settings.py    # Prompt + 参数调优
+│   │   │   ├── ai_dashboard.py   # 分析质量仪表盘
+│   │   │   ├── ai_outfit.py      # 穿搭大标签建议
+│   │   │   ├── ai_reset.py       # 数据重置
 │   │   │   ├── scraper.py        # 采集管理
 │   │   │   ├── admin.py          # 管理后台（统计、去重、完整性检查）
 │   │   │   ├── files.py          # 静态文件
 │   │   │   └── ws.py             # WebSocket
 │   │   ├── services/             # 业务逻辑
-│   │   │   ├── ai_service.py     # Ollama 视觉分析 + 标签提取 + 颜色映射
+│   │   │   ├── ai_service.py     # AI 编排（分析/审核/大标签总结）
+│   │   │   ├── ai_parser.py      # AI 响应解析/修复（畸形处理）
+│   │   │   ├── ai_tag_saver.py   # 标签标准化/保存/关联
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
 │   │   │   ├── embedding_service.py  # 向量嵌入
@@ -254,6 +264,7 @@ fashion-inspo/
 │   │   ├── stores/               # Pinia 状态
 │   │   │   ├── inspirations.ts   # 素材状态
 │   │   │   ├── tags.ts           # 标签筛选状态
+│   │   │   ├── aiModels.ts       # AI 模型共享状态
 │   │   │   └── ui.ts             # UI 状态
 │   │   ├── views/                # 页面组件
 │   │   │   ├── HomeView.vue      # 首页画廊
@@ -267,7 +278,10 @@ fashion-inspo/
 │   │   ├── components/           # 通用组件
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox
+│   │   │   ├── model/            # ModelListPanel, AnalysisPanel, SettingsPanel, QualityPanel, ReviewPanel
 │   │   │   └── search/           # SearchBar, TagFilter
+│   │   ├── utils/                # 工具函数
+│   │   │   └── format.ts         # 字节/耗时/日期格式化
 │   │   └── composables/          # Vue composables
 │   │       ├── useWebSocket.ts
 │   │       ├── useInfiniteScroll.ts
@@ -367,9 +381,9 @@ fashion-inspo/
 | `color` | 白色, 海军蓝, 酒红, 格纹 | 颜色 |
 | `body_part` | 过膝, 高腰, V领, 拖地 | 穿着方式 |
 | `fit` | 宽松, 修身, Oversized, 直筒 | 版型 |
-| `occasion` | 日常, 通勤, 约会, 校园 | 场合 |
 | `season` | 春季, 夏季, 秋季, 冬季 | 季节 |
 | `attribute` | 露脸, 全身, 对镜自拍, 叠穿 | 图片属性 |
+| `outfit` | 御姐长腿高跟鞋穿搭, 白色系穿搭, 网球穿搭 | 穿搭大标签（精选层：手动 + AI 总结，宁缺毋滥） |
 
 ### 标签来源标识
 
@@ -391,6 +405,8 @@ fashion-inspo/
 | `GET` | `/api/inspirations/{id}` | 素材详情 |
 | `PATCH` | `/api/inspirations/{id}` | 更新素材 |
 | `DELETE` | `/api/inspirations/{id}` | 删除素材 |
+| `POST` | `/api/inspirations/{id}/tags` | 手动给素材关联标签（按名查找/创建，如穿搭大标签） |
+| `DELETE` | `/api/inspirations/{id}/tags/{tag_id}` | 解除素材与标签的关联 |
 
 ### 搜索
 
@@ -435,6 +451,7 @@ fashion-inspo/
 | `DELETE` | `/api/ai/models/{name}` | 删除模型 |
 | `POST` | `/api/ai/analyze/{id}` | 触发单个分析 |
 | `POST` | `/api/ai/batch-analyze` | 批量分析 |
+| `POST` | `/api/ai/outfit-tags/suggest` | AI 建议穿搭大标签（只建议不入库） |
 | `POST` | `/api/ai/retry/{id}` | 重试失败分析 |
 | `GET` | `/api/ai/queue` | 分析队列统计 |
 | `GET` | `/api/ai/unanalyzed-ids` | 未分析素材 ID 列表 |
