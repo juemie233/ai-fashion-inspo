@@ -207,12 +207,12 @@ async function viewCompare(inspirationId: string) {
 
 // ===== 参数 =====
 interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; ollama_base_url: string }
-interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number }
+interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number; think: boolean }
 const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, ollama_base_url: '' })
 const confThreshold = ref(0.6)
 const analysisTimeout = ref(60)
-const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024 })
-const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024 }
+const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, think: false })
+const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, think: false }
 const persistSettings = ref(false)
 const savingSettings = ref(false)
 
@@ -891,6 +891,7 @@ async function saveSettings() {
         top_p: samplingParams.value.top_p,
         top_k: samplingParams.value.top_k,
         num_predict: samplingParams.value.num_predict,
+        think: samplingParams.value.think,
         persist: persistSettings.value,
       },
     })
@@ -910,6 +911,7 @@ function resetToDefaults() {
     top_p: defaultParams.top_p,
     top_k: defaultParams.top_k,
     num_predict: defaultParams.num_predict,
+    think: defaultParams.think,
   }
   message.info('已恢复默认值（需点击保存生效）')
 }
@@ -1520,6 +1522,10 @@ function formatDate(d: string | null | undefined) {
               </n-form-item>
               <n-form-item label="Max Tokens">
                 <n-input-number v-model:value="samplingParams.num_predict" :min="64" :max="8192" :step="64" style="width:140px" />
+              </n-form-item>
+              <n-form-item label="思考模式">
+                <n-switch v-model:value="samplingParams.think" />
+                <span style="margin-left:12px;font-size:13px;color:#666">思考模型开启后更慢，可能提升推理质量（仅思考型模型生效）</span>
               </n-form-item>
             </n-form>
           </n-card>

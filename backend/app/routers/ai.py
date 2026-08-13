@@ -1311,13 +1311,14 @@ async def update_ai_settings(
 
 @router.get("/sampling-params")
 async def get_sampling_params():
-    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict）。"""
+    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, think）。"""
     cfg = get_model_config(settings.ollama_vision_model)
     return {
         "temperature": cfg["temperature"],
         "top_p": cfg["top_p"],
         "top_k": cfg["top_k"],
         "num_predict": cfg["num_predict"],
+        "think": cfg["think"],
     }
 
 
@@ -1327,6 +1328,7 @@ async def update_sampling_params(
     top_p: float | None = Query(None, ge=0, le=1),
     top_k: int | None = Query(None, ge=1, le=100),
     num_predict: int | None = Query(None, ge=64, le=8192),
+    think: bool | None = Query(None, description="是否开启思考模式（思考模型适用）"),
     persist: bool = Query(False),
 ):
     """更新当前模型的 AI 采样参数（按模型独立持久化）。"""
@@ -1339,6 +1341,8 @@ async def update_sampling_params(
         updates["top_k"] = top_k
     if num_predict is not None:
         updates["num_predict"] = num_predict
+    if think is not None:
+        updates["think"] = think
 
     cfg = get_model_config(settings.ollama_vision_model)
     if updates:
@@ -1350,6 +1354,7 @@ async def update_sampling_params(
         "top_p": cfg["top_p"],
         "top_k": cfg["top_k"],
         "num_predict": cfg["num_predict"],
+        "think": cfg["think"],
     }
 
 

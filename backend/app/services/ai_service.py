@@ -133,59 +133,69 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
 
         # 按当前模型读取独立配置（隔离每个模型的超时与采样参数）
         model_cfg = get_model_config(settings.ollama_vision_model)
+        think_enabled = model_cfg.get("think", False)
         # 思考模型：思维链会消耗 num_predict 预算，需放大预算以避免 JSON 答案被截断
         num_predict = model_cfg["num_predict"]
-        if model_cfg.get("think", False):
+        if think_enabled:
             num_predict = max(num_predict, 8192)
 
         # 调用 Ollama 视觉 API — 传入采样参数
         async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
-            try:
-                response = await client.post(
-                    f"{settings.ollama_base_url}/api/chat",
-                    json={
-                        "model": settings.ollama_vision_model,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": settings.ai_analysis_prompt,
-                                "images": [image_data],
-                            }
-                        ],
-                        "stream": False,
-                        "think": model_cfg.get("think", False),  # 关闭思考模式（可每模型配置）
-                        "options": {
-                            "temperature": model_cfg["temperature"],
-                            "top_p": model_cfg["top_p"],
-                            "top_k": model_cfg["top_k"],
-                            "num_predict": num_predict,
-                        },
-                    },
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # 将 HTTP 状态码转为人可读的中文错误信息
-                status = e.response.status_code
-                detail = ""
+            raw_response = ""
+            # 思考模式若思维链耗尽预算会返回空内容，此时回退到非思考模式重试
+            think_attempts = [think_enabled, False] if think_enabled else [False]
+            for think in think_attempts:
                 try:
-                    detail = e.response.json().get("error", "")
-                except Exception:
-                    pass
-                raise RuntimeError(
-                    _http_error_message(status, detail, file_size_mb)
-                ) from e
-            except httpx.TimeoutException:
-                raise RuntimeError(
-                    f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
-                    "请检查 Ollama 是否正常运行或尝试增大超时时间"
-                )
-            except httpx.ConnectError:
-                raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
+                    response = await client.post(
+                        f"{settings.ollama_base_url}/api/chat",
+                        json={
+                            "model": settings.ollama_vision_model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": settings.ai_analysis_prompt,
+                                    "images": [image_data],
+                                }
+                            ],
+                            "stream": False,
+                            "think": think,  # 关闭思考模式（可每模型配置）
+                            "options": {
+                                "temperature": model_cfg["temperature"],
+                                "top_p": model_cfg["top_p"],
+                                "top_k": model_cfg["top_k"],
+                                "num_predict": num_predict,
+                            },
+                        },
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    # 将 HTTP 状态码转为人可读的中文错误信息
+                    status = e.response.status_code
+                    detail = ""
+                    try:
+                        detail = e.response.json().get("error", "")
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        _http_error_message(status, detail, file_size_mb)
+                    ) from e
+                except httpx.TimeoutException:
+                    raise RuntimeError(
+                        f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
+                        "请检查 Ollama 是否正常运行或尝试增大超时时间"
+                    )
+                except httpx.ConnectError:
+                    raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
 
-            result = response.json()
-            if not isinstance(result, dict) or "message" not in result:
-                raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
-            raw_response = result["message"].get("content")
+                result = response.json()
+                if not isinstance(result, dict) or "message" not in result:
+                    raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
+                raw_response = result["message"].get("content") or ""
+                if raw_response:
+                    break
+                if think:
+                    logger.warning(f"思考模型返回空内容，改用非思考模式重试: {inspiration_id}")
+
             if not raw_response:
                 raise RuntimeError("Ollama 返回空内容，模型可能不支持视觉功能或图片无效")
 
@@ -294,28 +304,35 @@ async def check_image_quality(
         return "pending", f"审核失败: {str(e)[:100]}"
 
     model_cfg = get_model_config(settings.ollama_vision_model)
+    think_enabled = model_cfg.get("think", False)
     # 思考模型：放大 num_predict 预算，避免短答案被思维链截断
     num_predict = model_cfg["num_predict"]
-    if model_cfg.get("think", False):
+    if think_enabled:
         num_predict = max(num_predict, 8192)
 
     try:
         async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/chat",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "messages": [
-                        {"role": "user", "content": prompt, "images": [image_data]}
-                    ],
-                    "stream": False,
-                    "think": model_cfg.get("think", False),  # 关闭思考模式
-                    "options": {"temperature": 0.1, "num_predict": num_predict},
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            raw = result.get("message", {}).get("content", "")
+            raw = ""
+            # 思考模式若思维链耗尽预算会返回空内容，回退到非思考模式重试
+            think_attempts = [think_enabled, False] if think_enabled else [False]
+            for think in think_attempts:
+                response = await client.post(
+                    f"{settings.ollama_base_url}/api/chat",
+                    json={
+                        "model": settings.ollama_vision_model,
+                        "messages": [
+                            {"role": "user", "content": prompt, "images": [image_data]}
+                        ],
+                        "stream": False,
+                        "think": think,  # 关闭思考模式
+                        "options": {"temperature": 0.1, "num_predict": num_predict},
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                raw = result.get("message", {}).get("content", "") or ""
+                if raw:
+                    break
             if not raw:
                 return "pending", "模型返回空内容"
     except Exception as e:
