@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -61,4 +61,6 @@ class InspirationTag(Base):
 
     __table_args__ = (
         UniqueConstraint("inspiration_id", "tag_id", name="uq_inspiration_tag"),
+        # 按标签筛选（WHERE tag_id = X）需要 tag_id 单列索引；复合主键索引 (inspiration_id, tag_id) 无法高效服务此类查询
+        Index("ix_inspiration_tags_tag_id", "tag_id"),
     )

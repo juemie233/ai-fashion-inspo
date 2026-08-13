@@ -22,6 +22,8 @@ def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
     """
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    # WAL 模式：读不阻塞写、写不阻塞读，显著提升并发读写能力（尤其 AI 分析并发写日志时）
+    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
 
 
