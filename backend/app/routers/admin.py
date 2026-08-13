@@ -28,20 +28,29 @@ def _file_hash(path: Path) -> str | None:
         return None
 
 
+# 素材媒体目录：完整性检查只扫描这些目录，排除 lancedb（向量库）、logs（日志）、
+# cookies、debug 等非素材数据，否则会把向量库内部文件误判为「孤立文件」。
+_INSP_MEDIA_DIRS = ("images", "thumbnails", "videos")
+
+
 def _scan_storage_files() -> dict[str, int]:
-    """扫描所有存储目录中的实际文件，返回 {相对路径: 字节数}。"""
+    """扫描素材媒体目录（images/thumbnails/videos）中的实际文件，返回 {相对路径: 字节数}。"""
     files: dict[str, int] = {}
     storage_root = settings.storage_root
     if not storage_root.exists():
         return files
-    for fpath in storage_root.rglob("*"):
-        if fpath.is_file():
-            # 计算相对于 storage 的路径
-            try:
-                rel = fpath.relative_to(storage_root).as_posix()
-            except ValueError:
-                rel = str(fpath)
-            files[rel] = fpath.stat().st_size
+    for dir_name in _INSP_MEDIA_DIRS:
+        dir_path = storage_root / dir_name
+        if not dir_path.exists():
+            continue
+        for fpath in dir_path.rglob("*"):
+            if fpath.is_file():
+                # 计算相对于 storage 的路径
+                try:
+                    rel = fpath.relative_to(storage_root).as_posix()
+                except ValueError:
+                    rel = str(fpath)
+                files[rel] = fpath.stat().st_size
     return files
 
 
@@ -251,17 +260,12 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "inspiration_ids": list(set(ids)),
             })
 
-    # 扫描磁盘文件，找孤立文件（排除非素材目录）
-    _NON_INSP_DIRS = {"logs", "cookies", "debug"}
+    # 扫描磁盘媒体文件，找孤立文件（_scan_storage_files 已排除 lancedb/logs 等非素材目录）
     disk_files = _scan_storage_files()
     orphan_files: list[dict] = []
     orphan_total_size = 0
     for rel_path, size in disk_files.items():
-        if rel_path not in db_file_paths and not rel_path.endswith(".db"):
-            # 跳过日志/cookie/debug 等非素材目录
-            top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-            if top_dir in _NON_INSP_DIRS:
-                continue
+        if rel_path not in db_file_paths:
             orphan_files.append({
                 "file_path": rel_path,
                 "size_bytes": size,
@@ -295,12 +299,10 @@ async def cleanup_orphan_files():
                 if p:
                     db_paths.add(p)
 
-    _NON_INSP_DIRS = {"logs", "cookies", "debug"}
     deleted = 0
     freed_bytes = 0
     for rel_path in storage_files:
-        top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        if rel_path not in db_paths and not rel_path.endswith(".db") and top_dir not in _NON_INSP_DIRS:
+        if rel_path not in db_paths:
             fpath = storage_root / rel_path
             try:
                 sz = fpath.stat().st_size

@@ -97,7 +97,8 @@ echo "  前端 PID: $FRONTEND_PID (日志: $LOG_DIR/frontend.log)"
 echo ""
 echo ">>> [6/6] 启动 worker ..."
 cd backend
-nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
+# 强制 UTF-8 输出，避免中文日志在 Windows 下被写成 GBK 导致就绪检测 grep 失败
+PYTHONUTF8=1 nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
 WORKER_PID=$!
 cd ..
 echo "  worker PID: $WORKER_PID (日志: $LOG_DIR/worker.log)"
@@ -127,9 +128,17 @@ else
   echo "  ❌ 前端未就绪，请检查 $LOG_DIR/frontend.log"
 fi
 
-# worker 无 HTTP 端口，通过日志确认是否已启动
-sleep 2
-if grep -q "worker 已启动" "$LOG_DIR/worker.log" 2>/dev/null; then
+# worker 无 HTTP 端口，通过日志中的启动标记确认（轮询，最多 15 秒）
+WORKER_OK=0
+for _ in $(seq 1 15); do
+  if grep -q "worker 已启动" "$LOG_DIR/worker.log" 2>/dev/null; then
+    WORKER_OK=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$WORKER_OK" -eq 1 ]; then
   echo "  ✅ worker 已启动（日志: $LOG_DIR/worker.log）"
 else
   echo "  ⚠️  worker 可能未就绪，请检查 $LOG_DIR/worker.log"

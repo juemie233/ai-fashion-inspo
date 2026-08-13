@@ -160,8 +160,8 @@ async def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    # 关闭 SQLAlchemy 引擎的 echo SQL 日志（debug 模式下每秒轮询会刷屏）
-    logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
+    # 关闭 SQLAlchemy 引擎的 SQL 日志（debug 模式下每秒轮询会刷屏）
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     await init_db()
     await ensure_schema()
     await _reset_stale_tasks()

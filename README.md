@@ -95,7 +95,7 @@ chrome_debug_port: int = 9222
 | **素材详情** | 大图预览、标签展示、穿搭大标签（手动选择/新建 + AI 建议确认）、相似素材推荐（标注视觉/标签/混合来源） |
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计 |
 | **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除、重复扫描、拖拽改类、导入导出、素材关联预览 |
-| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核） |
+| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核） |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -136,9 +136,15 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 18888 --reload
 # Web 前端 (默认端口 17777，可通过 VITE_FRONTEND_PORT 环境变量修改)
 cd web
 npm run dev
+
+# 任务队列 worker（处理「批量分析」异步任务，需单独起一个终端）
+cd ../backend
+python -m app.worker
 ```
 
 浏览器打开 `http://localhost:17777`
+
+> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker，并校验就绪。
 
 **自定义端口：**
 
@@ -371,6 +377,7 @@ fashion-inspo/
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
 | `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志） |
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
+| `task_queue` | 异步任务队列 | type, status, progress, total/done, result, error, retry_count, next_retry_at |
 
 ### 标签类别体系
 
@@ -420,6 +427,16 @@ fashion-inspo/
 | `GET` | `/api/search/vector/status` | 向量检索能力状态（LanceDB/文本/图像向量/存量数量） |
 | `POST` | `/api/search/vector/backfill` | 存量素材向量回填（`mode`=all/text/image，`limit`=条数上限） |
 
+> **向量检索设置：** 文本语义搜索用 Ollama `all-minilm`（零额外依赖）。以图搜图/视觉相似需额外安装 CLIP：
+>
+> ```bash
+> pip install sentence-transformers   # 含 torch，较重
+> export HF_ENDPOINT=https://hf-mirror.com   # 国内下载 CLIP 模型用镜像
+> python scripts/backfill_vectors.py --mode all   # 存量回填（首次下载 clip-ViT-B-32 约 600MB）
+> ```
+>
+> 未安装 CLIP 时，以图搜图接口返回 503、相似推荐自动退化为纯标签匹配，其余功能不受影响。
+
 ### 标签管理
 
 | 方法 | 路径 | 说明 |
@@ -453,7 +470,7 @@ fashion-inspo/
 | `PUT` | `/api/ai/models/active` | 切换活跃模型 |
 | `DELETE` | `/api/ai/models/{name}` | 删除模型 |
 | `POST` | `/api/ai/analyze/{id}` | 触发单个分析 |
-| `POST` | `/api/ai/batch-analyze` | 批量分析 |
+| `POST` | `/api/ai/batch-analyze` | 批量分析（创建异步任务，返回 task_id，由 worker 执行） |
 | `POST` | `/api/ai/outfit-tags/suggest` | AI 建议穿搭大标签（只建议不入库） |
 | `POST` | `/api/ai/retry/{id}` | 重试失败分析 |
 | `GET` | `/api/ai/queue` | 分析队列统计 |
@@ -489,6 +506,16 @@ fashion-inspo/
 | `DELETE` | `/api/inspirations/quality-rejected` | 批量删除所有已拒绝（rejected）素材 |
 
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
+
+### 任务队列
+
+| 方法 | 路径 | 说明 |
+| ------ | ------ | ------ |
+| `GET` | `/api/tasks` | 任务列表（分页，可按 status/type 筛选） |
+| `GET` | `/api/tasks/{id}` | 任务详情（前端进度轮询） |
+| `POST` | `/api/tasks/{id}/cancel` | 取消排队中的任务（仅 pending 可取消） |
+
+> 批量分析已改为「数据库驱动的异步任务」：接口秒回 `task_id`，由独立 worker 进程（`python -m app.worker`）串行执行、自动重试（2 次，指数退避）。worker 未启动时任务会一直停留在「排队中」。
 
 ### AI 参数调优
 

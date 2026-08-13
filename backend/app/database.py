@@ -1,5 +1,7 @@
 """数据库引擎与会话管理：SQLite + SQLAlchemy async。"""
 
+import logging
+
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -7,11 +9,17 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 
 # SQLite 异步引擎（check_same_thread=False 允许跨线程访问）
+# 注意：不使用 echo 标志，改用 logging 级别控制 SQL 回显。
+# echo=True 会让 SQLAlchemy 额外安装自己的 handler，导致每条 SQL 打印两份。
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=False,
     connect_args={"check_same_thread": False, "timeout": 30},
 )
+
+if settings.debug:
+    # debug 开启时记录 SQL；各进程可用 setLevel 覆盖（如 worker 降为 WARNING 避免刷屏）
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
 
 @event.listens_for(engine.sync_engine, "connect")
