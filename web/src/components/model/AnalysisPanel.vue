@@ -697,10 +697,7 @@ onUnmounted(() => {
         :columns="[
           { title: () => h('input', { type:'checkbox', checked: selectedHistoryIds.size === history.length && history.length > 0, onClick: selectAllHistory }), key:'_check', width: 36, render: (row: HistoryItem) => h('input', { type:'checkbox', checked: selectedHistoryIds.has(row.id), onClick: () => toggleSelectHistory(row.id) }) },
           { title: '预览', key: 'thumbnail', width: 70, render: (row: HistoryItem) => row.thumbnail_path ? h('img', {src:getFileUrl(row.thumbnail_path), style:'width:48px;height:72px;object-fit:cover;border-radius:4px'}) : '-' },
-          { title: '模型', key: 'model_name', width: 130, render: (row: HistoryItem) => h('span', {style:'display:flex;align-items:center;gap:4px'}, [
-            row.log_type === 'quality_check' ? h(NTag, {type:'info',size:'tiny',bordered:false}, '审核') : null,
-            row.model_name,
-          ]) },
+          { title: '模型', key: 'model_name', width: 130, render: (row: HistoryItem) => row.model_name },
           { title: '状态', key: 'status', width: 70, render: (row: HistoryItem) => h(NTag, {type:row.status==='success'?'success':'error',size:'small'}, row.status==='success'?'成功':'失败') },
           { title: '提取标签', key: 'tags', width: 180, render: (row: HistoryItem) => {
             const tags = row.tags || []
