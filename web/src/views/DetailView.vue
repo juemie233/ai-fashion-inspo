@@ -158,6 +158,16 @@ async function addOutfitTags() {
   }
 }
 
+/** 输入新大标签后按两次回车快速添加：第二次回车（输入框已空且有待添加标签）触发添加 */
+function onOutfitEnter(e: KeyboardEvent) {
+  const inputText = (e.target as HTMLInputElement | null)?.value?.trim() ?? ''
+  if (inputText === '' && outfitSelected.value.length > 0 && !outfitAdding.value) {
+    e.preventDefault()
+    e.stopPropagation()
+    addOutfitTags()
+  }
+}
+
 /** 删除大标签 */
 async function removeOutfitTag(tagId: number) {
   if (!detail.value) return
@@ -302,7 +312,7 @@ function dismissOutfitTag(name: string) {
               </div>
               <div v-else style="font-size:12px;color:#999;margin-bottom:8px">暂无大标签</div>
 
-              <div class="outfit-tag-add">
+              <div class="outfit-tag-add" @keydown.enter.capture="onOutfitEnter">
                 <n-select
                   v-model:value="outfitSelected"
                   multiple
@@ -320,6 +330,7 @@ function dismissOutfitTag(name: string) {
                   @click="addOutfitTags"
                 >添加</n-button>
               </div>
+              <div class="outfit-tag-hint">输入新标签后按两次回车即可快速添加</div>
 
               <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
                 <div style="font-size:12px;color:#999;margin:8px 0 4px">AI 建议（点击标签入库，点 ✕ 丢弃）：</div>
@@ -464,6 +475,12 @@ function dismissOutfitTag(name: string) {
 .outfit-tag-add {
   display: flex;
   gap: 6px;
+}
+
+.outfit-tag-hint {
+  font-size: 11px;
+  color: #999;
+  margin-top: 6px;
 }
 
 @media (max-width: 900px) {
