@@ -93,7 +93,7 @@ chrome_debug_port: int = 9222
 | **素材详情** | 大图预览、标签展示、相似素材推荐 |
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计 |
 | **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除、重复扫描、拖拽改类、导入导出、素材关联预览 |
-| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置 |
+| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核） |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -349,11 +349,11 @@ fashion-inspo/
 
 | 表 | 说明 | 关键字段 |
 |----|------|----------|
-| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors |
+| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual) |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
-| `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, processing_time_ms, error |
-| `scraper_tasks` | 采集任务 | platform, status, items_found/added |
+| `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
+| `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志） |
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
 
 ### 标签类别体系
@@ -455,6 +455,18 @@ fashion-inspo/
 | `GET` | `/api/ai/prompt/versions` | Prompt 版本历史 |
 | `POST` | `/api/ai/prompt/save-version` | 保存当前 Prompt 为版本 |
 | `POST` | `/api/ai/prompt/rollback` | 回滚 Prompt 到指定版本 |
+
+### 质量审核
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材 |
+| `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判 |
+| `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
+| `GET` | `/api/ai/quality-active` | 正在审核中的素材 ID 列表 |
+| `DELETE` | `/api/inspirations/quality-rejected` | 批量删除所有已拒绝（rejected）素材 |
+
+> **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
 
 ### AI 参数调优
 
