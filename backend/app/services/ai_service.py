@@ -360,6 +360,49 @@ def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
     return f"Ollama 返回错误 (HTTP {status}): {detail or '未知错误'}"
 
 
+def _quote_bare_array_words(text: str) -> str:
+    """给数组内未加引号的裸中文/英文词加引号。
+
+    MiniCPM-V 常输出 [宽松] 或 [阔腿, 运动风] 这类缺失引号的数组项。
+    仅处理不含引号/花括号的简单数组，避免破坏已合法的 JSON。
+    """
+    def _repl(m):
+        inner = m.group(1)
+        if not inner.strip():
+            return m.group(0)  # 空数组
+        if '"' in inner or '{' in inner or '}' in inner:
+            return m.group(0)  # 已含引号或对象，跳过
+        # 按半角/全角逗号分隔
+        parts = re.split(r'\s*[,，]\s*', inner.strip())
+        quoted = []
+        for p in parts:
+            if re.fullmatch(r'[一-鿿A-Za-z][一-鿿A-Za-z0-9]*', p):
+                quoted.append(f'"{p}"')
+            else:
+                quoted.append(p)
+        return '[' + ', '.join(quoted) + ']'
+    return re.sub(r'\[([^\[\]]*)\]', _repl, text)
+
+
+def _fix_python_sets(text: str) -> str:
+    """将 Python set 语法转为 JSON。
+
+    {"过膝"} → "过膝"（单元素，作为字符串）
+    {"V领", "短袖"} → ["V领", "短袖"]（多元素，作为数组）
+    不含冒号（冒号表示这是字典，跳过）。
+    """
+    def _repl(m):
+        strings = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(0))
+        if len(strings) == 1:
+            return f'"{strings[0]}"'
+        return '[' + ', '.join(f'"{s}"' for s in strings) + ']'
+    return re.sub(
+        r'\{\s*("(?:[^"\\]|\\.)*")(?:\s*,\s*"(?:[^"\\]|\\.)*")*\s*\}',
+        _repl,
+        text,
+    )
+
+
 def _parse_analysis_response(raw: str) -> dict:
     """从模型响应中提取并解析 JSON。"""
     text = raw.strip()
@@ -392,12 +435,18 @@ def _parse_analysis_response(raw: str) -> dict:
     cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
     # 去除 // 单行注释
     cleaned = re.sub(r'//[^\n]*', '', cleaned)
-    # 去除 # 风格注释（MiniCPM-V 常用 #FFFFFF 等颜色标注）
-    # 直接删除十六进制颜色代码（#后跟6位hex），保留周围的 JSON 结构
-    cleaned = re.sub(r'#[0-9A-Fa-f]{6}\b', '', cleaned)
-    cleaned = re.sub(r'#[0-9A-Fa-f]{3}\b', '', cleaned)
-    # 去除独立的 # 注释行（非颜色代码的 #）
-    cleaned = re.sub(r'#[^\n,}\]\"]*', '', cleaned)
+    # 修复单引号字符串（MiniCPM-V 有时输出 '...' 而非 "..."）
+    cleaned = re.sub(r"'([^'\"]*)'", r'"\1"', cleaned)
+    # 修复 Python set 语法 {"值"} → "值"、{"a","b"} → ["a","b"]
+    cleaned = _fix_python_sets(cleaned)
+    # 修复数组内未加引号的中文词 [围巾] → ["围巾"]、[阔腿, 运动风] → ["阔腿", "运动风"]
+    cleaned = _quote_bare_array_words(cleaned)
+    # 去除 # 风格注释/颜色标注，但用负向前查找保留字符串内的颜色值
+    # （"#F4D0A3" 是合法颜色值要保留，" #FFFFFF" 是注释要删除）
+    cleaned = re.sub(r'(?<!")#[0-9A-Fa-f]{6}\b', '', cleaned)
+    cleaned = re.sub(r'(?<!")#[0-9A-Fa-f]{3}\b', '', cleaned)
+    # 去除独立的 # 注释（非字符串内的 #）
+    cleaned = re.sub(r'(?<!")#[^\n,}\]\"]*', '', cleaned)
     # 修复注释清理后留下的格式问题
     cleaned = re.sub(r'"\s+"', '\", \"', cleaned)        # "value"  " → "value", "
     cleaned = re.sub(r'",\s*"\s*\]', '\"]', cleaned)     # "value", " ] → "value"]
