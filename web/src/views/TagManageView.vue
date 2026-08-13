@@ -716,11 +716,13 @@ function sourceColor(s: string) {
                 v-if="item.thumbnail_path"
                 :src="getFileUrl(item.thumbnail_path)"
                 :alt="selectedTag.name"
+                loading="lazy"
               />
               <img
                 v-else-if="item.file_path"
                 :src="getFileUrl(item.file_path)"
                 :alt="selectedTag.name"
+                loading="lazy"
               />
               <div v-else class="no-preview">无预览</div>
             </div>
