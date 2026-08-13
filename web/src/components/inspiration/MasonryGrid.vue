@@ -10,6 +10,8 @@ defineProps<{
   items: InspirationOut[]
   loading?: boolean
   density?: 'compact' | 'standard' | 'comfortable'
+  /** 卡片角标映射：素材 id -> 角标文本（如「92% 相似」），用于向量搜索结果 */
+  badges?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +28,7 @@ const emit = defineEmits<{
         v-for="item in items"
         :key="item.id"
         :item="item"
+        :badge="badges?.[item.id]"
         @delete="emit('delete', item.id)"
         @toggle-favorite="emit('toggleFavorite', item.id)"
         @approve="emit('approve', item.id)"

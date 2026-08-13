@@ -482,6 +482,12 @@ async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get
     # 删除磁盘文件
     delete_files(inspiration.file_path, inspiration.thumbnail_path)
 
+    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
+    from app.services import vector_store
+
+    if vector_store.is_lancedb_available():
+        await vector_store.delete_inspiration_vectors(inspiration.id)
+
     await db.delete(inspiration)
     await db.flush()
 

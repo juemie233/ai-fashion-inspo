@@ -9,7 +9,7 @@ import TagFilter from '@/components/search/TagFilter.vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import { useTagsStore } from '@/stores/tags'
 import { useInspirationsStore } from '@/stores/inspirations'
-import { searchInspirations, type SearchQuery } from '@/api/search'
+import { searchInspirations, vectorSearchText, vectorSearchImage, type SearchQuery, type VectorSearchItem } from '@/api/search'
 import { getFileUrl } from '@/api/inspirations'
 import type { InspirationOut } from '@/api/inspirations'
 
@@ -42,6 +42,32 @@ const dateTo = ref((route.query.to as string) || '')
 const density = ref<'compact' | 'standard' | 'comfortable'>(
   (localStorage.getItem('search-density') as 'compact' | 'standard' | 'comfortable') || 'compact'
 )
+
+// ── 向量搜索（语义搜索 / 以图搜图） ──
+
+/** 向量搜索模式：none 普通搜索 / semantic 语义搜索 / image 以图搜图 */
+const vectorMode = ref<'none' | 'semantic' | 'image'>('none')
+/** 语义搜索输入文本 */
+const semanticText = ref('')
+/** 语义搜索执行中 */
+const vectorLoading = ref(false)
+/** 向量搜索结果原始数据（含相似度分数） */
+const vectorItems = ref<VectorSearchItem[]>([])
+/** 向量搜索的查询描述（用于横幅展示） */
+const vectorQueryLabel = ref('')
+/** 以图搜图上传图片的本地预览 URL */
+const imagePreviewUrl = ref<string | null>(null)
+/** 图片文件选择框引用 */
+const imageFileInput = ref<HTMLInputElement | null>(null)
+
+/** 向量结果卡片角标（相似度百分比） */
+const vectorBadges = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const item of vectorItems.value) {
+    map[item.inspiration.id] = `${Math.round(item.score * 100)}% 相似`
+  }
+  return map
+})
 
 // 搜索历史
 const searchHistory = ref<string[]>(
@@ -88,6 +114,7 @@ function buildQuery(page: number): SearchQuery {
 }
 
 async function doSearch(page: number = 1) {
+  resetVectorState()
   searching.value = true
   currentPage.value = page
   try {
@@ -126,6 +153,78 @@ function addToHistory(val: string) {
   h.unshift(val)
   searchHistory.value = h.slice(0, 10)
   localStorage.setItem('search-history', JSON.stringify(searchHistory.value))
+}
+
+// ── 向量搜索（语义搜索 / 以图搜图） ──
+
+/** 触发语义搜索 */
+async function doSemanticSearch() {
+  const text = semanticText.value.trim()
+  if (!text) {
+    message.warning('请输入要搜索的语义描述')
+    return
+  }
+  vectorLoading.value = true
+  try {
+    const data = await vectorSearchText(text, 50)
+    vectorItems.value = data.items
+    vectorMode.value = 'semantic'
+    vectorQueryLabel.value = text
+    results.value = data.items.map((i) => i.inspiration)
+    total.value = data.total
+    addToHistory(text)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '语义搜索失败，请确认后端向量服务已就绪')
+  } finally {
+    vectorLoading.value = false
+  }
+}
+
+/** 选择图片后触发以图搜图 */
+async function onImagePicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  vectorLoading.value = true
+  // 生成本地预览
+  imagePreviewUrl.value = URL.createObjectURL(file)
+  try {
+    const data = await vectorSearchImage(file, 50)
+    vectorItems.value = data.items
+    vectorMode.value = 'image'
+    vectorQueryLabel.value = file.name
+    results.value = data.items.map((i) => i.inspiration)
+    total.value = data.total
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '以图搜图失败，请确认已安装 CLIP 图像模型')
+  } finally {
+    vectorLoading.value = false
+    if (input) input.value = ''
+  }
+}
+
+/** 打开以图搜图文件选择 */
+function openImagePicker() {
+  imageFileInput.value?.click()
+}
+
+/** 清空向量搜索状态（不触发重新搜索） */
+function resetVectorState() {
+  vectorMode.value = 'none'
+  vectorItems.value = []
+  vectorQueryLabel.value = ''
+  if (imagePreviewUrl.value) {
+    URL.revokeObjectURL(imagePreviewUrl.value)
+    imagePreviewUrl.value = null
+  }
+}
+
+/** 退出向量搜索，返回普通搜索 */
+function exitVectorMode() {
+  resetVectorState()
+  doSearch(1)
 }
 
 // ── 标签筛选变化时自动搜索 ──
@@ -213,6 +312,34 @@ onMounted(() => {
     <!-- 搜索栏 -->
     <div class="search-section">
       <SearchBar @search="handleSearchBar" />
+    </div>
+
+    <!-- 向量搜索入口：语义搜索 + 以图搜图 -->
+    <div class="vector-search-section">
+      <n-space align="center">
+        <n-input
+          v-model:value="semanticText"
+          placeholder="语义搜索：输入描述，如「复古红格裙」「白色系甜美穿搭」"
+          clearable
+          size="small"
+          style="width: 360px"
+          @keyup.enter="doSemanticSearch"
+        />
+        <n-button type="primary" secondary size="small" :loading="vectorLoading" @click="doSemanticSearch">
+          🧠 语义搜索
+        </n-button>
+        <n-divider vertical style="margin: 0 4px" />
+        <n-button size="small" :loading="vectorLoading" @click="openImagePicker">
+          🖼️ 以图搜图
+        </n-button>
+        <input
+          ref="imageFileInput"
+          type="file"
+          accept="image/*"
+          style="display: none"
+          @change="onImagePicked"
+        />
+      </n-space>
     </div>
 
     <!-- 搜索历史 -->
@@ -333,14 +460,23 @@ onMounted(() => {
                   : '输入关键词或选择标签开始搜索' }}
               </span>
               <span style="flex:1" />
-              <!-- 排序 + 密度 -->
-              <n-select
-                v-model:value="sortMode"
-                :options="sortOptions"
-                size="tiny"
-                style="width:110px"
-                @update:value="onSortChange"
-              />
+              <!-- 向量搜索横幅 -->
+              <span v-if="vectorMode !== 'none'" class="vector-mode-banner">
+                <template v-if="vectorMode === 'semantic'">语义搜索</template>
+                <template v-else>以图搜图</template>「{{ vectorQueryLabel }}」
+                <img v-if="imagePreviewUrl" :src="imagePreviewUrl" class="vector-query-thumb" alt="搜索图" />
+                <n-button size="tiny" text type="primary" @click="exitVectorMode">返回普通搜索</n-button>
+              </span>
+              <!-- 排序 + 密度（向量搜索时不显示排序） -->
+              <template v-if="vectorMode === 'none'">
+                <n-select
+                  v-model:value="sortMode"
+                  :options="sortOptions"
+                  size="tiny"
+                  style="width:110px"
+                  @update:value="onSortChange"
+                />
+              </template>
               <n-button-group size="tiny">
                 <n-button :type="density==='compact'?'primary':'default'" @click="setDensity('compact')" title="紧凑">⊞</n-button>
                 <n-button :type="density==='standard'?'primary':'default'" @click="setDensity('standard')" title="标准">⊟</n-button>
@@ -368,13 +504,14 @@ onMounted(() => {
             :items="results"
             :loading="searching"
             :density="density"
+            :badges="vectorMode !== 'none' ? vectorBadges : undefined"
             @delete="handleDelete"
             @toggle-favorite="handleToggleFavorite"
           />
         </n-card>
 
-        <!-- 分页 -->
-        <div v-if="totalPages > 1" class="pagination-wrapper">
+        <!-- 分页（向量搜索不翻页） -->
+        <div v-if="totalPages > 1 && vectorMode === 'none'" class="pagination-wrapper">
           <n-pagination
             v-model:page="currentPage"
             :page-count="totalPages"
@@ -406,6 +543,33 @@ onMounted(() => {
   gap: 6px;
   margin-bottom: 8px;
   flex-wrap: wrap;
+}
+
+.vector-search-section {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.vector-mode-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #8b5cf6;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+
+.vector-query-thumb {
+  width: 32px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #ddd;
 }
 
 .search-context {

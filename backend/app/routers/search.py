@@ -1,16 +1,46 @@
 """多维度搜索的 REST API 路由。"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import uuid
+from pathlib import Path
+
+import aiofiles
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, InspirationOut
+from app.schemas.search import (
+    SimilarItemOut,
+    SimilarOut,
+    VectorSearchItem,
+    VectorSearchOut,
+    VectorStatusOut,
+)
+from app.services import vector_store
+from app.services.embedding_service import (
+    generate_image_embedding,
+    generate_text_embedding,
+    get_image_embedding_status,
+    get_text_embedding_status,
+)
+from app.services.vector_service import backfill_all_vectors, find_similar_hybrid
 
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+# 向量不可用时给用户的可读提示
+_TEXT_VEC_UNAVAILABLE_MSG = (
+    "文本向量不可用：请确认 Ollama 已启动且已安装 embedding 模型 "
+    f"（ollama pull {settings.ollama_embedding_model}）"
+)
+_IMAGE_VEC_UNAVAILABLE_MSG = (
+    "图像向量不可用：请先安装 CLIP 依赖（pip install sentence-transformers），"
+    f"并确认模型 {settings.clip_model_name} 已下载（首次加载会自动下载）"
+)
 
 
 @router.get("", response_model=InspirationListOut)
@@ -221,46 +251,139 @@ async def search_inspirations(
     )
 
 
-@router.get("/similar/{inspiration_id}")
+@router.post("/vector", response_model=VectorSearchOut)
+async def vector_search(
+    text: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    top_k: int = Form(default=settings.vector_top_k_default, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """语义搜索 / 以图搜图：接受文本或图片，返回 TopK 相似素材。
+
+    请求体为 multipart/form-data：
+        - text: 搜索文本（语义搜索，走 Ollama 文本向量 + 文本向量表）
+        - file: 搜索图片（以图搜图，走 CLIP 图像向量 + 图像向量表）
+        - top_k: 返回数量（默认 20）
+    """
+    if not text and not file:
+        raise HTTPException(status_code=400, detail="请提供搜索文本或图片")
+    if text and file:
+        raise HTTPException(status_code=400, detail="请勿同时提供文本与图片")
+
+    if text:
+        query_vec = await generate_text_embedding(text)
+        if not query_vec:
+            raise HTTPException(status_code=503, detail=_TEXT_VEC_UNAVAILABLE_MSG)
+        hits = await vector_store.search_vectors("text", query_vec, top_k)
+        query_type = "text"
+    else:
+        tmp_path = None
+        try:
+            tmp_path = await _save_temp_image(file)
+            query_vec = await generate_image_embedding(file_path=str(tmp_path))
+        finally:
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
+        if not query_vec:
+            raise HTTPException(status_code=503, detail=_IMAGE_VEC_UNAVAILABLE_MSG)
+        hits = await vector_store.search_vectors("image", query_vec, top_k)
+        query_type = "image"
+
+    items: list[VectorSearchItem] = []
+    for hit in hits:
+        insp = await _load_inspiration(db, hit["inspiration_id"])
+        if insp:
+            items.append(
+                VectorSearchItem(
+                    inspiration=_to_search_out(insp),
+                    score=hit["score"],
+                )
+            )
+
+    return VectorSearchOut(
+        query_type=query_type,
+        query_text=text,
+        items=items,
+        total=len(items),
+    )
+
+
+@router.get("/vector/status", response_model=VectorStatusOut)
+async def vector_search_status(db: AsyncSession = Depends(get_db)):
+    """查询向量检索能力状态（LanceDB / 文本向量 / 图像向量 / 存量向量数量）。"""
+    lancedb_available = vector_store.is_lancedb_available()
+    text_count = (
+        await vector_store.count_vectors("text") if lancedb_available else 0
+    )
+    image_count = (
+        await vector_store.count_vectors("image") if lancedb_available else 0
+    )
+    return VectorStatusOut(
+        lancedb_available=lancedb_available,
+        lancedb_dir=str(settings.lancedb_dir),
+        text_embedding=get_text_embedding_status(),
+        image_embedding=get_image_embedding_status(),
+        text_vector_count=text_count,
+        image_vector_count=image_count,
+    )
+
+
+@router.post("/vector/backfill")
+async def trigger_vector_backfill(
+    mode: str = Form(default="all"),
+    limit: int = Form(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """为存量素材批量生成向量（文本 + 图像）。
+
+    参数:
+        mode: "all" | "text" | "image"（只回填指定类型）
+        limit: 处理条数上限，0 表示全部
+
+    说明:
+        同步执行，素材量大时耗时较长；当前为独立触发入口，
+        未来接入任务队列后可改为后台异步执行。
+    """
+    if mode not in ("all", "text", "image"):
+        raise HTTPException(status_code=400, detail="mode 参数仅支持 all / text / image")
+    stats = await backfill_all_vectors(db, mode=mode, limit=limit)
+    if "error" in stats:
+        raise HTTPException(status_code=503, detail=stats["error"])
+    return stats
+
+
+@router.get("/similar/{inspiration_id}", response_model=SimilarOut)
 async def similar_inspirations(
     inspiration_id: str,
     top_k: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
 ):
-    """根据标签相似度寻找与指定素材最相似的其他素材。"""
-    from app.services.embedding_service import find_similar_images
+    """根据图像向量 + 标签匹配加权排序寻找相似素材。
 
-    result = await db.execute(
-        select(Inspiration)
-        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-        .where(Inspiration.id == inspiration_id)
-    )
-    source = result.unique().scalar_one_or_none()
+    优先使用图像向量（视觉相似，权重 0.6）+ 标签重合度（权重 0.4）加权排序；
+    图像向量不可用或无向量数据时，回退到纯标签匹配。
+    结果中 match_source 标记：visual（视觉）/ hybrid（混合）/ tag（标签）。
+    """
+    source = await _load_inspiration(db, inspiration_id)
     if not source:
         raise HTTPException(status_code=404, detail="素材未找到")
 
-    similar = await find_similar_images(db, inspiration_id, top_k)
+    similar = await find_similar_hybrid(db, source, top_k)
 
-    out_items = []
-    for item in similar:
-        result = await db.execute(
-            select(Inspiration)
-            .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-            .where(Inspiration.id == item["id"])
+    out_items = [
+        SimilarItemOut(
+            inspiration=_to_search_out(item["inspiration"]),
+            similarity=item["similarity"],
+            shared_tags=item["shared_tags"],
+            match_source=item["match_source"],
         )
-        insp = result.unique().scalar_one_or_none()
-        if insp:
-            out = _to_search_out(insp)
-            out_items.append({
-                "inspiration": out,
-                "similarity": item["similarity"],
-                "shared_tags": item["shared_tags"],
-            })
+        for item in similar
+    ]
 
-    return {
-        "source": _to_search_out(source),
-        "similar": out_items,
-    }
+    return SimilarOut(
+        source=_to_search_out(source),
+        similar=out_items,
+    )
 
 
 @router.get("/suggestions")
@@ -331,3 +454,28 @@ def _to_search_out(inspiration: Inspiration) -> InspirationOut:
     """将 Inspiration 模型转换为搜索结果的 InspirationOut。"""
     from app.routers.inspirations import _to_out
     return _to_out(inspiration)
+
+
+async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:
+    """加载素材（预加载标签），不存在时返回 None。"""
+    result = await db.execute(
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(Inspiration.id == inspiration_id)
+    )
+    return result.unique().scalar_one_or_none()
+
+
+async def _save_temp_image(file: UploadFile) -> Path:
+    """将上传图片保存到临时目录，返回临时文件路径（调用方负责删除）。
+
+    LanceDB 的图像向量基于本地文件生成，这里使用独立临时目录，
+    不污染正式 images 存储目录。
+    """
+    tmp_dir = settings.storage_root / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"vec_{uuid.uuid4().hex}.img"
+    content = await file.read()
+    async with aiofiles.open(tmp_path, "wb") as f:
+        await f.write(content)
+    return tmp_path
