@@ -378,8 +378,8 @@ async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
     if not small_tags:
         return []
 
-    # 大标签总结固定用轻量非思考模型（思考模型会吃光预算返回空）
-    summary_model = getattr(settings, "outfit_summary_model", "minicpm-v:8b")
+    # 大标签总结跟随模型管理的活跃模型；仍强制非思考模式（思考模型会吃光预算返回空）
+    summary_model = settings.ollama_vision_model
     model_cfg = get_model_config(summary_model)
     tag_list = "、".join(small_tags)
     prompt = (

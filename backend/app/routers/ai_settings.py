@@ -163,7 +163,6 @@ async def get_ai_settings():
         "active_model": settings.ollama_vision_model,
         "confidence_threshold": settings.ai_low_confidence_threshold,
         "analysis_timeout": model_cfg["timeout"],
-        "outfit_summary_model": settings.outfit_summary_model,
         "ollama_base_url": settings.ollama_base_url,
     }
 
@@ -172,21 +171,16 @@ async def get_ai_settings():
 async def update_ai_settings(
     confidence_threshold: float | None = Query(None, ge=0, le=1),
     analysis_timeout: int | None = Query(None, ge=10, le=300),
-    outfit_summary_model: str | None = Query(None, description="大标签总结模型"),
     persist: bool = Query(False, description="是否持久化写入 .env 文件"),
 ):
     """更新 AI 参数。
 
-    超时按当前活跃模型独立保存到 model_configs.json；置信度阈值与大标签总结模型为全局设置。
+    超时按当前活跃模型独立保存到 model_configs.json；置信度阈值为全局设置。
     ``persist`` 参数已废弃（配置始终持久化），保留仅为兼容前端。
     """
     if confidence_threshold is not None:
         settings.ai_low_confidence_threshold = confidence_threshold
         await _update_env_file({"AI_LOW_CONFIDENCE_THRESHOLD": str(confidence_threshold)})
-
-    if outfit_summary_model is not None:
-        settings.outfit_summary_model = outfit_summary_model
-        await _update_env_file({"OUTFIT_SUMMARY_MODEL": outfit_summary_model})
 
     timeout = get_model_config(settings.ollama_vision_model)["timeout"]
     if analysis_timeout is not None:
@@ -199,7 +193,6 @@ async def update_ai_settings(
         "message": "参数已更新",
         "confidence_threshold": settings.ai_low_confidence_threshold,
         "analysis_timeout": timeout,
-        "outfit_summary_model": settings.outfit_summary_model,
     }
 
 

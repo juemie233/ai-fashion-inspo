@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     # AI / Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_vision_model: str = "minicpm-v:8b"
-    outfit_summary_model: str = "qwen3-vl:8b-instruct"  # 大标签总结用非思考模型（比 minicpm 更懂语言）
     ollama_embedding_model: str = "all-minilm"
     ai_analysis_timeout: int = 300  # 秒（思考型模型推理耗时更长）
     ai_low_confidence_threshold: float = 0.6

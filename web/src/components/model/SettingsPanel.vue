@@ -12,9 +12,9 @@ const message = useMessage()
 const store = useAiModelsStore()
 const tagsStore = useTagsStore()
 
-interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; outfit_summary_model: string; ollama_base_url: string }
+interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; ollama_base_url: string }
 interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number; think: boolean }
-const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, outfit_summary_model: '', ollama_base_url: '' })
+const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, ollama_base_url: '' })
 const confThreshold = ref(0.6)
 const analysisTimeout = ref(60)
 const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, think: false })
@@ -181,7 +181,6 @@ async function saveSettings() {
       params: {
         confidence_threshold: confThreshold.value,
         analysis_timeout: analysisTimeout.value,
-        outfit_summary_model: aiSettings.value.outfit_summary_model,
         persist: persistSettings.value,
       },
     })
@@ -277,14 +276,6 @@ onUnmounted(() => {
             placeholder="选择模型"
             filterable
             @update:value="handleSetActiveModel"
-          />
-        </n-form-item>
-        <n-form-item label="大标签总结模型">
-          <n-select
-            v-model:value="aiSettings.outfit_summary_model"
-            :options="store.models.map(m=>({label:m.name,value:m.name}))"
-            placeholder="选择总结模型（建议非思考模型）"
-            filterable
           />
         </n-form-item>
         <n-form-item label="置信度阈值">
