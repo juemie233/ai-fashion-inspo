@@ -75,7 +75,7 @@ def _human_scroll(page, steps=None):
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
-def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "general") -> tuple[list[str], dict]:
+def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "general") -> tuple[list[tuple[str, str]], dict]:
     """在已登录的页面上搜索并提取图片 URL。
 
     采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
@@ -86,7 +86,7 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
         sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)
 
     Returns:
-        (image_urls, funnel_dict): 图片 URL 列表和该次搜索的漏斗统计数据
+        (pairs, funnel_dict): 每张图片的 (笔记页面 URL, 图片 CDN URL) 列表和该次搜索的漏斗统计数据
     """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
@@ -160,7 +160,7 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
     total_cards = len(cards)
     print(f"  共找到 {total_cards} 个笔记卡片，开始提取图片...")
 
-    image_urls: list[str] = []
+    pairs: list[tuple[str, str]] = []  # (笔记页面 URL, 图片 CDN URL)
     seen: set[str] = set()
     cards_with_img = 0
     cards_without_img = 0
@@ -169,6 +169,16 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
 
     for card in cards[: need_count * 2]:
         try:
+            # 提取笔记页面链接（作为「原始链接」，而非图片 CDN 直链）
+            note_href = ""
+            link_el = card.query_selector("a")
+            if link_el:
+                note_href = link_el.get_attribute("href") or ""
+            note_url = (
+                f"https://www.xiaohongshu.com{note_href}"
+                if note_href.startswith("/") else note_href
+            )
+
             # 从每张卡片中提取所有图片（轮播帖含多图）
             imgs = card.query_selector_all("img")
             if not imgs:
@@ -195,7 +205,7 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
                     pass
                 if src not in seen:
                     seen.add(src)
-                    image_urls.append(src)
+                    pairs.append((note_url, src))
         except Exception:
             continue
 
@@ -206,7 +216,7 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
         "cards_without_img": cards_without_img,
         "skipped_small": skipped_small,
         "skipped_icon": skipped_icon,
-        "urls_extracted": len(image_urls),
+        "urls_extracted": len(pairs),
         "target": need_count,
     }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
@@ -215,11 +225,11 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
     print(f"  │ 无图片的卡片: {cards_without_img}")
     print(f"  │ 跳过小尺寸:   {skipped_small}")
     print(f"  │ 跳过图标:     {skipped_icon}")
-    print(f"  │ 提取到 URL:   {len(image_urls)}")
+    print(f"  │ 提取到 URL:   {len(pairs)}")
     print(f"  │ 目标数量:     {need_count}")
     print(f"  └──────────────────────────────────────────")
 
-    return image_urls[:need_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
+    return pairs[:need_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -227,7 +237,7 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
 # ═══════════════════════════════════════════════════════════════
 
 def _download_batch(
-    urls: list[str],
+    urls: list[tuple[str, str]],
     task_id: int,
     existing_url_set: set[str],
     remaining: int,
@@ -237,11 +247,14 @@ def _download_batch(
     cookies: dict | None = None,
     content_hash_set: set[str] | None = None,
 ) -> tuple[int, int, int, int, int]:
-    """下载一批 URL，立即入库。使用同步 sqlite3 避免 event loop 冲突。
+    """下载一批图片，立即入库。使用同步 sqlite3 避免 event loop 冲突。
+
+    urls 中每项为 (笔记页面 URL, 图片 CDN URL)：笔记页面 URL 存入 source_url 作为
+    「原始链接」，图片 CDN URL 用于下载与去重。
 
     去重策略（三层）：
-    1. URL 内存去重 — 同次运行内相同 URL 不重复下载
-    2. DB source_url 去重 — 跨次采集相同 URL 不重复入库
+    1. 图片 URL 内存去重 — 同次运行内相同图片不重复下载
+    2. DB 墓碑表去重 — 跨次采集相同图片 URL 不重复入库
     3. 内容 MD5 去重 — 同一图片不同 URL（CDN 多节点）不重复入库
     """
     import hashlib
@@ -259,10 +272,17 @@ def _download_batch(
 
     db_path = settings.storage_root.parent / "fashion_inspo.db"
 
-    unique = list(dict.fromkeys(urls))
+    # 按图片 URL 去重（同一图片可能在不同卡片/搜索中重复出现）
+    unique: list[tuple[str, str]] = []
+    _seen_url: set[str] = set()
+    for note_url, img_url in urls:
+        if img_url not in _seen_url:
+            _seen_url.add(img_url)
+            unique.append((note_url, img_url))
 
-    # 查询这批 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）
+    # 查询这批图片 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）
     if unique:
+        img_urls = [img_url for _, img_url in unique]
         conn = None
         try:
             conn = _sqlite3.connect(str(db_path))
@@ -272,10 +292,10 @@ def _download_batch(
                 "(source_url TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
             conn.commit()
-            placeholders = ",".join("?" * len(unique))
+            placeholders = ",".join("?" * len(img_urls))
             cur = conn.execute(
                 f"SELECT source_url FROM scraper_seen_urls WHERE source_url IN ({placeholders})",
-                unique,
+                img_urls,
             )
             db_existing = {r[0] for r in cur.fetchall()}
             existing_url_set.update(db_existing)
@@ -291,7 +311,7 @@ def _download_batch(
     skipped_non200 = 0
     skipped_network = 0
 
-    for img_url in unique:
+    for note_url, img_url in unique:
         if added >= remaining:
             break
         if img_url in existing_url_set:
@@ -347,7 +367,7 @@ def _download_batch(
                         "thumbnail_path, media_type, dominant_colors, is_favorite, "
                         "quality_status, scraper_task_id, created_at, updated_at) "
                         "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?)",
-                        (insp_id, "scraper", img_url, rel_path, "image", task_id, now_str, now_str),
+                        (insp_id, "scraper", note_url or img_url, rel_path, "image", task_id, now_str, now_str),
                     )
                     conn.execute(
                         "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",

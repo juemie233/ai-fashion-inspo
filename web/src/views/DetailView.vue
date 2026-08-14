@@ -211,6 +211,20 @@ const downloadFileName = computed(() => {
   return detail.value.file_path.split('/').pop() || 'download'
 })
 
+/** 判断「原始链接」是否为可访问的页面链接（排除图片/视频 CDN 直链） */
+const isSourceLinkValid = computed(() => {
+  const url = detail.value?.source_url
+  if (!url) return false
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    // 图片/视频 CDN 直链直接打开会被防盗链拦截，不作为「原始链接」展示
+    const cdnHosts = ['xhscdn.com', 'douyinpic.com', 'douyinvod.com', 'pstatp.com', 'snssdk.com', 'ixigua.com']
+    return !cdnHosts.some((h) => host === h || host.endsWith('.' + h))
+  } catch {
+    return false
+  }
+})
+
 /** 复制原始链接到剪贴板 */
 async function copySourceUrl() {
   if (!detail.value?.source_url) return
@@ -491,7 +505,8 @@ async function refreshSimilar(id: string) {
                   {{ detail.source_author }}
                 </n-descriptions-item>
                 <n-descriptions-item v-if="detail.source_url" label="原始链接">
-                  <a :href="detail.source_url" target="_blank">打开</a>
+                  <a v-if="isSourceLinkValid" :href="detail.source_url" target="_blank">打开</a>
+                  <n-text v-else depth="3">图片直链，无法打开</n-text>
                   <n-button size="tiny" quaternary style="margin-left:8px" @click="copySourceUrl">复制</n-button>
                 </n-descriptions-item>
                 <n-descriptions-item label="AI 分析">

@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  Linking,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -28,6 +29,16 @@ function sourceLabel(type: string) {
     browser_extension: '浏览器插件',
   }
   return labels[type] || type
+}
+
+/** 判断「原始链接」是否为可访问的页面链接（排除图片/视频 CDN 直链） */
+function isSourceLinkValid(url: string | null | undefined): boolean {
+  if (!url) return false
+  // 提取 hostname（RN 环境下避免依赖不完全的 URL 实现）
+  const m = url.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i)
+  const host = (m ? m[1] : url.split(/[/?#]/)[0]).toLowerCase()
+  const cdnHosts = ['xhscdn.com', 'douyinpic.com', 'douyinvod.com', 'pstatp.com', 'snssdk.com', 'ixigua.com']
+  return !cdnHosts.some((h) => host === h || host.endsWith('.' + h))
 }
 
 export default function DetailScreen() {
@@ -59,6 +70,15 @@ export default function DetailScreen() {
     const newState = !detail.is_favorite
     await toggleFavorite(id!)
     setDetail({ ...detail, is_favorite: newState })
+  }
+
+  const handleOpenSource = async () => {
+    if (!detail?.source_url) return
+    try {
+      await Linking.openURL(detail.source_url)
+    } catch {
+      // 打开失败（无效链接/未安装浏览器）静默处理
+    }
   }
 
   if (loading) {
@@ -112,8 +132,8 @@ export default function DetailScreen() {
           </Text>
         </TouchableOpacity>
 
-        {detail.source_url && (
-          <TouchableOpacity style={styles.linkBtn}>
+        {detail.source_url && isSourceLinkValid(detail.source_url) && (
+          <TouchableOpacity style={styles.linkBtn} onPress={handleOpenSource}>
             <Ionicons name="link-outline" size={20} color="#6366f1" />
             <Text style={styles.linkText}>查看原链接</Text>
           </TouchableOpacity>
