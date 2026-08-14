@@ -31,10 +31,12 @@ for pid in $(netstat -ano 2>/dev/null | grep ":$BACKEND_PORT" | grep -i LISTENIN
   fi
 done
 
-# 1b. 兜底：按命令行匹配 reloader 主进程（uvicorn --reload 的父进程），
-#     防止 worker 已死但 reloader 仍残留的情况
-for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*uvicorn app.main*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
-  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && { echo "  已终止 reloader PID $pid"; killed=1; }
+# 1b. 兜底：按命令行匹配 uvicorn reloader 主进程 + spawn worker 子进程。
+#     uvicorn --reload 用 multiprocessing spawn 启动 server worker；若 reloader
+#     先被单独杀掉，worker 会变成孤儿继续持有端口（此时 netstat 只显示已死的
+#     reloader PID，导致 1a 无法命中）。必须同时按命令行清理 spawn worker。
+for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*uvicorn app.main*' -or \$_.CommandLine -like '*spawn_main*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && { echo "  已终止 uvicorn 进程 PID $pid"; killed=1; }
 done
 
 sleep 1
