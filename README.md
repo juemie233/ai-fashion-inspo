@@ -95,7 +95,7 @@ chrome_debug_port: int = 9222
 | **素材详情** | 大图预览、标签展示、穿搭大标签（手动选择/新建 + AI 建议确认）、相似素材推荐（标注视觉/标签/混合来源） |
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计 |
 | **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除、重复扫描、拖拽改类、导入导出、素材关联预览 |
-| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核） |
+| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步） |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -144,7 +144,7 @@ python -m app.worker
 
 浏览器打开 `http://localhost:17777`
 
-> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker，并校验就绪。
+> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker + agentmemory（若已安装），并校验就绪。
 
 **自定义端口：**
 
@@ -209,10 +209,12 @@ fashion-inspo/
 │   │   ├── main.py               # FastAPI 入口
 │   │   ├── config.py             # 配置管理
 │   │   ├── database.py           # 数据库引擎
+│   │   ├── worker.py             # 任务队列 worker（python -m app.worker）
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签（含 source 来源标识）
-│   │   │   └── scraper.py        # 采集任务
+│   │   │   ├── scraper.py        # 采集任务
+│   │   │   └── task.py           # 异步任务队列
 │   │   ├── schemas/              # Pydantic 请求/响应
 │   │   ├── routers/              # API 路由
 │   │   │   ├── inspirations.py   # 素材 CRUD
@@ -229,6 +231,7 @@ fashion-inspo/
 │   │   │   ├── ai_reset.py       # 数据重置
 │   │   │   ├── scraper.py        # 采集管理
 │   │   │   ├── admin.py          # 管理后台（统计、去重、完整性检查）
+│   │   │   ├── tasks.py          # 任务队列（列表/详情/取消）
 │   │   │   ├── files.py          # 静态文件
 │   │   │   └── ws.py             # WebSocket
 │   │   ├── services/             # 业务逻辑
@@ -237,7 +240,10 @@ fashion-inspo/
 │   │   │   ├── ai_tag_saver.py   # 标签标准化/保存/关联
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
-│   │   │   ├── embedding_service.py  # 向量嵌入
+│   │   │   ├── embedding_service.py  # 向量嵌入（文本/图像）
+│   │   │   ├── vector_service.py     # 向量回填 / 相似度混合排序
+│   │   │   ├── vector_store.py       # LanceDB 读写
+│   │   │   ├── task_runner.py        # 异步任务执行器（worker 分发）
 │   │   │   └── scraper_service.py    # 采集编排
 │   │   ├── scrapers/             # 平台爬虫
 │   │   │   ├── base.py           # 抽象基类
@@ -245,6 +251,7 @@ fashion-inspo/
 │   │   │   └── douyin.py         # 抖音
 │   │   └── utils/                # 工具函数
 │   │       ├── auth.py           # API Key 认证中间件
+│   │       ├── file_hash.py      # 文件 MD5 哈希
 │   │       ├── image_utils.py    # 缩略图/颜色提取
 │   │       └── tag_normalizer.py # 标签标准化 + 同义词映射
 │   ├── scripts/                  # 维护脚本
@@ -255,7 +262,8 @@ fashion-inspo/
 │   └── storage/                  # 本地文件存储 (gitignore)
 │       ├── images/
 │       ├── thumbnails/
-│       └── videos/
+│       ├── videos/
+│       └── lancedb/              # 向量库（文本/图像向量）
 │
 ├── web/                          # Vue 3 Web 前端
 │   ├── src/
@@ -325,6 +333,8 @@ fashion-inspo/
 └── scripts/                      # 工具脚本
     ├── seed_tags.py              # 预设标签导入
     ├── batch_import.py           # 批量导入本地图片
+    ├── backfill_vectors.py       # 存量素材向量回填
+    ├── restart.sh                # 一键重启前后端 + worker + agentmemory
     └── generate_icons.py         # 生成插件图标
 ```
 
@@ -377,7 +387,7 @@ fashion-inspo/
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
 | `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志） |
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
-| `task_queue` | 异步任务队列 | type, status, progress, total/done, result, error, retry_count, next_retry_at |
+| `task_queue` | 异步任务队列 | type（batch_analyze/quality_check/batch_delete/deduplicate）, status（pending/running/success/failed/cancelled）, progress, total/done, result, error, retry_count, next_retry_at |
 
 ### 标签类别体系
 
@@ -499,12 +509,16 @@ fashion-inspo/
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材 |
-| `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判 |
+| `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材（异步任务，返回 `task_id`） |
+| `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判（异步任务，返回 `task_id`） |
 | `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
+| `GET` | `/api/ai/manual-upload-auto-approve` | 获取「手动上传默认免审核」配置 |
+| `PUT` | `/api/ai/manual-upload-auto-approve` | 设置「手动上传默认免审核」（`enabled=true/false`，可选持久化到 .env） |
 | `DELETE` | `/api/inspirations/quality-rejected` | 批量删除所有已拒绝（rejected）素材 |
 
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
+
+> **手动上传免审核：** 默认开启（配置项 `manual_upload_auto_approve`，对应 .env 的 `MANUAL_UPLOAD_AUTO_APPROVE`）。开启后手动上传的素材直接标记为「已通过」，不进入待审核队列；关闭后恢复为待审核。可在「AI 模型管理 → 质量审核」面板一键切换。
 
 ### 任务队列
 
@@ -514,7 +528,14 @@ fashion-inspo/
 | `GET` | `/api/tasks/{id}` | 任务详情（前端进度轮询） |
 | `POST` | `/api/tasks/{id}/cancel` | 取消排队中的任务（仅 pending 可取消） |
 
-> 批量分析已改为「数据库驱动的异步任务」：接口秒回 `task_id`，由独立 worker 进程（`python -m app.worker`）串行执行、自动重试（2 次，指数退避）。worker 未启动时任务会一直停留在「排队中」。
+> 以下重型操作均改造为「数据库驱动的异步任务」：接口秒回 `task_id`，由独立 worker 进程（`python -m app.worker`）串行执行、自动重试（2 次，指数退避）。worker 未启动时任务会一直停留在「排队中」。
+>
+> | type | 触发接口 | 说明 |
+> | ---- | -------- | ---- |
+> | `batch_analyze` | `POST /api/ai/batch-analyze` | 批量 AI 分析 |
+> | `quality_check` | `POST /api/ai/quality-check` / `quality-recheck` | 批量质量审核 / 重新审核 |
+> | `batch_delete` | `POST /api/admin/batch-delete` | 批量删除素材 |
+> | `deduplicate` | `POST /api/admin/deduplicate` | 智能去重删除 |
 
 ### AI 参数调优
 
@@ -556,8 +577,8 @@ fashion-inspo/
 | `GET` | `/api/admin/duplicates` | 文件哈希重复检测 |
 | `GET` | `/api/admin/check-duplicate?hash=` | 上传前去重（MD5 检测） |
 | `POST` | `/api/admin/cleanup-orphans` | 清理孤立文件 |
-| `POST` | `/api/admin/batch-delete` | 批量删除素材（按ID或条件） |
-| `POST` | `/api/admin/deduplicate` | 智能去重删除 |
+| `POST` | `/api/admin/batch-delete` | 批量删除素材（按ID或条件，异步任务，返回 `task_id`） |
+| `POST` | `/api/admin/deduplicate` | 智能去重删除（异步任务，返回 `task_id`） |
 
 ### 其他
 

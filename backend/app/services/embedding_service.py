@@ -186,13 +186,19 @@ def _load_clip_model():
         try:
             from sentence_transformers import SentenceTransformer
 
+            # local_files_only=True：仅从本地缓存加载，禁止联网检查/下载。
+            # 默认行为会向 huggingface 发 HEAD 请求校验版本，无网络时按重试
+            # 退避阻塞数分钟，导致详情页「相似推荐」请求卡死。本地已缓存时直接
+            # 加载（毫秒级），未缓存时快速失败并降级到标签匹配兜底。
             logger.info(f"正在加载 CLIP 图像模型: {settings.clip_model_name}")
-            _image_model = SentenceTransformer(settings.clip_model_name)
+            _image_model = SentenceTransformer(
+                settings.clip_model_name, local_files_only=True
+            )
             return _image_model
         except Exception as e:
             _image_model_error = (
-                f"图像向量不可用：CLIP 模型加载失败（模型未下载或网络异常）。"
-                f"请确认模型 {settings.clip_model_name} 已下载。({e})"
+                f"图像向量不可用：CLIP 模型未下载或加载失败（本地无缓存）。"
+                f"请先离线放置或联网下载模型 {settings.clip_model_name}。({e})"
             )
             logger.error(_image_model_error)
             return None

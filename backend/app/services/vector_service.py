@@ -98,6 +98,10 @@ async def backfill_all_vectors(
         if mode in ("all", "image"):
             existing_image_ids = await vector_store.list_vector_ids("image")
 
+    # 批量累积待写入的向量，循环结束后一次性 add，避免逐条写造成版本膨胀
+    text_items: list[tuple[str, list[float]]] = []
+    image_items: list[tuple[str, list[float]]] = []
+
     for insp in inspirations:
         stats["processed"] += 1
 
@@ -110,11 +114,8 @@ async def backfill_all_vectors(
                 if text:
                     vec = await generate_text_embedding(text)
                     if vec:
-                        ok = await vector_store.upsert_vector("text", insp.id, vec)
-                        if ok:
-                            stats["text_added"] += 1
-                        else:
-                            stats["text_failed"] += 1
+                        text_items.append((insp.id, vec))
+                        stats["text_added"] += 1
                     else:
                         stats["text_failed"] += 1
 
@@ -131,13 +132,20 @@ async def backfill_all_vectors(
                 else:
                     vec = await generate_image_embedding(file_path=str(full_path))
                     if vec:
-                        ok = await vector_store.upsert_vector("image", insp.id, vec)
-                        if ok:
-                            stats["image_added"] += 1
-                        else:
-                            stats["image_failed"] += 1
+                        image_items.append((insp.id, vec))
+                        stats["image_added"] += 1
                     else:
                         stats["image_failed"] += 1
+
+    # 批量落盘（单次 add），写入行数与累积数不符时记 warning
+    if text_items:
+        written = await vector_store.batch_upsert_vectors("text", text_items)
+        if written != len(text_items):
+            logger.warning(f"文本向量批量写入 {written}/{len(text_items)} 条")
+    if image_items:
+        written = await vector_store.batch_upsert_vectors("image", image_items)
+        if written != len(image_items):
+            logger.warning(f"图像向量批量写入 {written}/{len(image_items)} 条")
 
     logger.info(
         f"向量回填完成: processed={stats['processed']} "

@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     ai_top_k: int = 40
     ai_num_predict: int = 4096  # 思考型模型需为推理预留 token
 
+    # 质量审核
+    manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
+
     # AI 分析 Prompt（运行时可变，前端可编辑）
     ai_analysis_prompt: str = (
         "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：\n\n"

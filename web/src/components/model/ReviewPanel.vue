@@ -23,6 +23,10 @@ const rechecking = ref(false)
 const randomReviewCount = ref(10)  // 随机审核数量（可调）
 const randomChecking = ref(false)
 
+// 手动上传免审核配置
+const autoApproveEnabled = ref(true)
+const autoApproveSaving = ref(false)
+
 // 质量审核任务（数据库驱动任务队列，轮询进度）
 interface ReviewTask {
   id: number
@@ -50,6 +54,28 @@ async function loadQualityReview() {
     qualityReviewStats.value = data
   } catch { /* 静默 */ }
   finally { qualityReviewLoading.value = false }
+}
+
+/** 读取「手动上传免审核」配置 */
+async function loadAutoApprove() {
+  try {
+    const { data } = await apiClient.get<{ enabled: boolean }>('/ai/manual-upload-auto-approve')
+    autoApproveEnabled.value = data.enabled
+  } catch { /* 静默 */ }
+}
+
+/** 切换「手动上传免审核」配置 */
+async function toggleAutoApprove(val: boolean) {
+  autoApproveSaving.value = true
+  try {
+    await apiClient.put('/ai/manual-upload-auto-approve', null, { params: { enabled: val } })
+    message.success('手动上传免审核已' + (val ? '开启' : '关闭'))
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '设置失败')
+    autoApproveEnabled.value = !val  // 失败回滚
+  } finally {
+    autoApproveSaving.value = false
+  }
 }
 
 /** 轮询审核任务状态（约 1 秒一次），完成后刷新统计与未通过列表 */
@@ -257,6 +283,7 @@ onMounted(() => {
   loadQualityReview()
   loadRejectedItems()
   resumeReviewTask()
+  loadAutoApprove()
   pollTimer = setInterval(loadQualityReview, 10000)
 })
 
@@ -276,6 +303,21 @@ onUnmounted(() => {
         <n-gi><n-card size="small"><n-statistic label="已拒绝" :value="qualityReviewStats.rejected" /></n-card></n-gi>
         <n-gi><n-card size="small"><n-statistic label="通过率" :value="`${qualityReviewStats.pass_rate}%`" /></n-card></n-gi>
       </n-grid>
+
+      <!-- 手动上传免审核配置 -->
+      <n-card size="small" style="margin-bottom:16px">
+        <n-space align="center" justify="space-between">
+          <span style="font-size:13px">手动上传默认免审核</span>
+          <n-switch
+            :value="autoApproveEnabled"
+            :loading="autoApproveSaving"
+            @update:value="toggleAutoApprove"
+          />
+        </n-space>
+        <p style="font-size:12px;color:#999;margin:8px 0 0">
+          开启后，手动上传的素材会直接标记为「已通过」，不再进入待审核队列。
+        </p>
+      </n-card>
 
       <!-- 进度条 + 审核操作 -->
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">

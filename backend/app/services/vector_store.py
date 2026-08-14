@@ -148,6 +148,57 @@ async def upsert_vector(kind: str, inspiration_id: str, vector: list[float]) -> 
     return await asyncio.to_thread(_upsert_sync, kind, inspiration_id, vector)
 
 
+def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
+    """同步批量写入多条向量（单次 add，避免逐条写产生版本膨胀）。
+
+    单条写入时 LanceDB 每次 add 都会生成一个新 manifest，其大小随片段数增长，
+    逐条写入 N 条会落盘约 O(N²) 字节（实测 1657 条图像向量膨胀到 524MB）。
+    批量一次性插入全部行，只产生极少数 fragment 与 manifest，是回填场景的正确写法。
+
+    返回:
+        实际写入的行数（跳过维度不匹配或含 NaN/Inf 的非法向量）。
+    """
+    if not items:
+        return 0
+    expected_dim = _dim(kind)
+    rows = []
+    for inspiration_id, vector in items:
+        vec = [float(x) for x in vector]
+        if len(vec) != expected_dim:
+            logger.warning(
+                f"批量写入向量维度不匹配 (kind={kind}, id={inspiration_id}): "
+                f"期望 {expected_dim}，实际 {len(vec)}，跳过"
+            )
+            continue
+        if not all(math.isfinite(x) for x in vec):
+            logger.warning(
+                f"批量写入向量含非法值（NaN/Inf）(kind={kind}, id={inspiration_id})，跳过"
+            )
+            continue
+        rows.append({
+            "id": uuid.uuid4().hex,
+            "inspiration_id": inspiration_id,
+            "vector": vec,
+            "created_at": _utc_str(),
+        })
+    if not rows:
+        return 0
+    try:
+        table = _table(kind)
+        table.add(rows)
+        return len(rows)
+    except Exception as e:
+        logger.error(f"批量写入向量失败 (kind={kind}, count={len(rows)}): {e}")
+        return 0
+
+
+async def batch_upsert_vectors(
+    kind: str, items: list[tuple[str, list[float]]]
+) -> int:
+    """批量写入（或新增）多条向量。kind 为 text/image，返回实际写入行数。"""
+    return await asyncio.to_thread(_batch_add_sync, kind, items)
+
+
 def _search_sync(
     kind: str, query_vector: list[float], top_k: int
 ) -> list[dict[str, Any]]:

@@ -4,10 +4,39 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
+from app.routers.ai_shared import _update_env_file
 
 router = APIRouter()
+
+
+@router.get("/manual-upload-auto-approve")
+async def get_manual_upload_auto_approve():
+    """获取手动上传素材是否默认免审核的配置。"""
+    return {"enabled": settings.manual_upload_auto_approve}
+
+
+@router.put("/manual-upload-auto-approve")
+async def set_manual_upload_auto_approve(
+    enabled: bool = Query(...),
+    persist: bool = Query(True, description="是否持久化写入 .env 文件"),
+):
+    """设置手动上传素材是否默认免审核。
+
+    ``enabled=True`` 时，手动上传的素材直接标记为已通过，跳过质量审核队列；
+    ``enabled=False`` 时恢复为待审核（pending）。
+    """
+    settings.manual_upload_auto_approve = enabled
+    if persist:
+        await _update_env_file(
+            {"MANUAL_UPLOAD_AUTO_APPROVE": "true" if enabled else "false"}
+        )
+    return {
+        "enabled": enabled,
+        "message": "手动上传免审核已" + ("开启" if enabled else "关闭"),
+    }
 
 
 @router.post("/quality-check")

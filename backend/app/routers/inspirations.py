@@ -91,6 +91,13 @@ async def create_inspiration(
     if file.content_type and file.content_type.startswith("video/"):
         media_type = "video"
 
+    # 手动上传默认免审核：按配置直接标记为已通过，跳过质量审核队列
+    quality_status = (
+        "approved"
+        if source_type == "manual_upload" and settings.manual_upload_auto_approve
+        else "pending"
+    )
+
     inspiration = Inspiration(
         source_type=source_type,
         source_url=source_url,
@@ -99,6 +106,7 @@ async def create_inspiration(
         file_path=file_path,
         thumbnail_path=thumb_path,
         media_type=media_type,
+        quality_status=quality_status,
     )
     db.add(inspiration)
     await db.flush()
