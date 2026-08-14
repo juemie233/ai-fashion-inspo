@@ -496,6 +496,7 @@ async def task_results(
                 "id": i.id,
                 "file_path": i.file_path,
                 "thumbnail_path": i.thumbnail_path,
+                "media_type": i.media_type,
                 "source_url": i.source_url,
                 "is_favorite": i.is_favorite,
                 "created_at": str(i.created_at) if i.created_at else None,

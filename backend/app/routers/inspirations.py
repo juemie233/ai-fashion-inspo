@@ -23,8 +23,27 @@ from app.schemas.inspiration import (
     TagOut,
 )
 from app.services.file_service import delete_files, save_upload
+from app.utils.file_hash import file_sha256
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
+
+
+async def _find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:
+    """全库扫描素材文件内容哈希，返回重复素材 ID（无重复返回 None）。
+
+    用于上传入库前去重：逐文件计算 SHA-256 与待上传文件比对，
+    覆盖全部存量素材（个人库规模有限，全量扫描可接受）。
+    """
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.file_path.isnot(None)
+        )
+    )
+    storage_root = settings.storage_root
+    for insp_id, fpath in result.all():
+        if fpath and file_sha256(storage_root / fpath) == content_hash:
+            return insp_id
+    return None
 
 
 @router.post("", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
@@ -60,6 +79,12 @@ async def create_inspiration(
 
     # 保存文件
     file_path, thumb_path = await save_upload(file)
+
+    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
+    content_hash = file_sha256(settings.storage_root / file_path)
+    if content_hash and await _find_duplicate_by_hash(db, content_hash):
+        delete_files(file_path, thumb_path)  # 清理刚保存的重复文件与缩略图
+        raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
 
     # 判断媒体类型
     media_type = "image"
@@ -137,6 +162,12 @@ async def create_from_url(
     from app.services.file_service import generate_thumbnail
     rel_path = f"images/{filename}"
     thumb_path = await generate_thumbnail(file_path_obj)
+
+    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
+    content_hash = file_sha256(file_path_obj)
+    if content_hash and await _find_duplicate_by_hash(db, content_hash):
+        delete_files(rel_path, thumb_path)
+        raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
 
     media_type = "video" if ext == ".mp4" else "image"
 

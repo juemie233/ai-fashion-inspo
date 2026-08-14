@@ -60,7 +60,7 @@ const afterUpload = ref<'stay' | 'detail' | 'home'>(
 )
 
 // ── 最近上传 ──
-const recentUploads = ref<Array<{ id: string; thumbnailPath: string | null; filePath: string }>>(
+const recentUploads = ref<Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }>>(
   JSON.parse(sessionStorage.getItem('recent-uploads') || '[]')
 )
 
@@ -143,8 +143,9 @@ function applyMetaToAll() {
 async function checkDuplicate(file: File): Promise<boolean> {
   const buffer = await file.arrayBuffer()
   const hashBuf = await crypto.subtle.digest('SHA-256', buffer)
-  const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32)
+  const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('')
   if (_dedupHashes.has(hash)) return true
+  _dedupHashes.add(hash)  // 记录已检测哈希，同批队列内直接拦截重复文件
   try {
     const { data } = await apiClient.get('/admin/check-duplicate', { params: { hash } })
     if (data.exists) return true
@@ -198,7 +199,7 @@ async function startUpload() {
         // TODO: add tags to material via API
       }
 
-      prependRecent(result.id, result.thumbnail_path ?? null, result.file_path)
+      prependRecent(result.id, result.thumbnail_path ?? null, result.file_path, result.media_type)
       _lastBytes += item.file.size
     } catch (e: any) {
       item.status = 'failed'
@@ -237,7 +238,7 @@ async function importFromUrl() {
       tags,
     })
     message.success('URL 导入成功')
-    prependRecent(data.id, data.thumbnail_path, data.file_path)
+    prependRecent(data.id, data.thumbnail_path, data.file_path, data.media_type)
     urlInput.value = ''
     if (autoAnalyze.value) {
       apiClient.post(`/ai/analyze/${data.id}`).catch(() => {})
@@ -267,9 +268,9 @@ function previewVideo(file: File) {
 }
 
 // ── 最近上传 ──
-function prependRecent(id: string, thumbnailPath: string | null, filePath: string) {
+function prependRecent(id: string, thumbnailPath: string | null, filePath: string, mediaType?: string) {
   recentUploads.value = [
-    { id, thumbnailPath, filePath },
+    { id, thumbnailPath, filePath, mediaType },
     ...recentUploads.value.filter(r => r.id !== id),
   ].slice(0, 20)
   sessionStorage.setItem('recent-uploads', JSON.stringify(recentUploads.value))
@@ -462,8 +463,15 @@ onUnmounted(() => {
           class="recent-card"
           @click="goToDetail(item.id)"
         >
+          <video
+            v-if="item.mediaType === 'video' && !item.thumbnailPath"
+            :src="getFileUrl(item.filePath)"
+            muted
+            playsinline
+            preload="metadata"
+          />
           <img
-            v-if="item.thumbnailPath || item.filePath"
+            v-else-if="item.thumbnailPath || item.filePath"
             :src="getFileUrl(item.thumbnailPath || item.filePath)"
           />
           <div class="recent-card-overlay"><span>查看详情</span></div>
@@ -708,7 +716,8 @@ onUnmounted(() => {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
-.recent-card img {
+.recent-card img,
+.recent-card video {
   position: absolute;
   top: 0;
   left: 0;

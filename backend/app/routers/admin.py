@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import Tag, InspirationTag
-from app.utils.file_hash import build_hash_map, file_hash
+from app.utils.file_hash import build_hash_map, file_hash, file_sha256
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -368,27 +368,23 @@ async def batch_delete(
 
 @router.get("/check-duplicate")
 async def check_duplicate(
-    hash: str = Query(..., min_length=32, max_length=32, description="文件 MD5 哈希"),
+    hash: str = Query(..., min_length=64, max_length=64, description="文件 SHA-256 哈希"),
     db: AsyncSession = Depends(get_db),
 ):
-    """检查指定 MD5 的文件是否已存在（上传前去重）。"""
-    # 先检查数据库中是否有相同哈希
+    """检查指定 SHA-256 的文件是否已存在（上传前去重）。"""
     result = await db.execute(
-        select(Inspiration).limit(500)
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.file_path.isnot(None)
+        )
     )
-    inspirations = result.scalars().all()
-
     storage_root = settings.storage_root
-    for insp in inspirations:
-        if insp.file_path:
-            fpath = storage_root / insp.file_path
-            fhash = file_hash(fpath)
-            if fhash and fhash == hash:
-                return {
-                    "exists": True,
-                    "inspiration_id": insp.id,
-                    "file_path": insp.file_path,
-                }
+    for insp_id, fpath in result.all():
+        if fpath and file_sha256(storage_root / fpath) == hash:
+            return {
+                "exists": True,
+                "inspiration_id": insp_id,
+                "file_path": fpath,
+            }
 
     return {"exists": False, "inspiration_id": None, "file_path": None}
 

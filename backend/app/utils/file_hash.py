@@ -27,6 +27,28 @@ def file_hash(path: Path) -> str | None:
         return None
 
 
+def file_sha256(path: Path) -> str | None:
+    """计算文件的 SHA-256 哈希，用于上传前/入库时内容去重。
+
+    与 file_hash（MD5）并存：MD5 用于后台全库去重，SHA-256 用于上传去重，
+    后者与前端 Web Crypto 的原生 SHA-256 保持一致，避免引入额外依赖。
+
+    参数:
+        path: 文件路径
+
+    返回:
+        16 进制 SHA-256 字符串（64 位）；文件不可读时返回 None
+    """
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
 def build_hash_map(
     db_records: list[tuple],
     storage_root: Path,
