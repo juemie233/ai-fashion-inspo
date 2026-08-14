@@ -94,7 +94,7 @@ chrome_debug_port: int = 9222
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
 | **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、下载原图、复制原始链接、标签点击跳搜索 |
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计、任务状态/表单草稿持久化 |
-| **标签管理** | 分组浏览/搜索/筛选、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、导入导出、素材关联预览、分栏宽度持久化 |
+| **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、快捷键（回车下载/Ctrl+S 保存） |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
@@ -212,13 +212,13 @@ fashion-inspo/
 │   │   ├── worker.py             # 任务队列 worker（python -m app.worker）
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
-│   │   │   ├── tag.py            # 标签（含 source 来源标识）
+│   │   │   ├── tag.py            # 标签 + 别名（含 source 来源标识）
 │   │   │   ├── scraper.py        # 采集任务
 │   │   │   └── task.py           # 异步任务队列
 │   │   ├── schemas/              # Pydantic 请求/响应
 │   │   ├── routers/              # API 路由
 │   │   │   ├── inspirations.py   # 素材 CRUD
-│   │   │   ├── tags.py           # 标签管理 + 批量/统计/扫描/导入导出
+│   │   │   ├── tags.py           # 标签管理 + 批量/统计/扫描/排序/别名/共现/导入导出
 │   │   │   ├── search.py         # 多维度搜索 + 相似素材
 │   │   │   ├── ai.py             # AI 路由聚合（拆分见 ai_*.py）
 │   │   │   ├── ai_shared.py      # AI 共享状态 + 后台任务
@@ -253,7 +253,7 @@ fashion-inspo/
 │   │       ├── auth.py           # API Key 认证中间件
 │   │       ├── file_hash.py      # 文件 MD5 哈希
 │   │       ├── image_utils.py    # 缩略图/颜色提取
-│   │       └── tag_normalizer.py # 标签标准化 + 同义词映射
+│   │       └── tag_normalizer.py # 标签标准化 + 同义词/别名映射
 │   ├── scripts/                  # 维护脚本
 │   │   ├── run_scraper.py         # CDP 采集执行脚本
 │   │   ├── cleanup_tags.py        # 数据库脏标签清洗
@@ -382,7 +382,8 @@ fashion-inspo/
 | 表 | 说明 | 关键字段 |
 | ---- | ------ | ---------- |
 | `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason |
-| `tags` | 标签 | id, name, category, source (seed/ai_generated/manual) |
+| `tags` | 标签 | id, name, category, source (seed/ai_generated/manual), pinned, sort_order, description |
+| `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
 | `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志） |
@@ -452,23 +453,27 @@ fashion-inspo/
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
 | `GET` | `/api/tags` | 标签列表（按类别分组） |
-| `GET` | `/api/tags/popular` | 热门标签 Top 50 |
-| `GET` | `/api/tags/stats` | 标签统计（总数/未使用/来源分布） |
-| `GET` | `/api/tags/duplicates` | 相似标签扫描 |
-| `GET` | `/api/tags/export` | 导出全部标签 JSON |
-| `GET` | `/api/tags/suggestions/{name}` | 创建时去重建议 |
-| `GET` | `/api/tags/{id}/inspirations` | 使用该标签的素材 |
 | `POST` | `/api/tags` | 创建标签 |
-| `POST` | `/api/tags/import` | 批量导入标签 |
-| `POST` | `/api/tags/merge` | 合并标签 |
-| `POST` | `/api/tags/batch-delete` | 批量删除标签 |
-| `PATCH` | `/api/tags/{id}` | 编辑标签（重命名/改类别） |
-| `DELETE` | `/api/tags/{id}` | 删除标签 |
+| `PATCH` | `/api/tags/{id}` | 编辑标签（重命名/改类别/置顶/排序/备注） |
 | `DELETE` | `/api/tags/unused` | 删除所有未使用标签 |
+| `POST` | `/api/tags/batch-delete` | 批量删除标签 |
+| `POST` | `/api/tags/merge` | 合并标签 |
+| `GET` | `/api/tags/suggestions/{name}` | 创建时去重建议 |
 | `PATCH` | `/api/tags/batch-category` | 批量修改标签类别 |
 | `PATCH` | `/api/tags/batch-rename` | 批量重命名（查找替换） |
-| `GET` | `/api/tags/categories` | 获取可用标签类别 |
-| `POST` | `/api/tags/categories` | 动态添加新类别 |
+| `GET` | `/api/tags/stats` | 标签统计（总数/未使用/来源分布） |
+| `GET` | `/api/tags/duplicates` | 相似标签扫描 |
+| `GET` | `/api/tags/{id}/inspirations` | 使用该标签的素材 |
+| `POST` | `/api/tags/{id}/inspirations/batch-remove` | 批量解除标签与素材关联 |
+| `GET` | `/api/tags/export` | 导出全部标签 JSON |
+| `POST` | `/api/tags/import` | 批量导入标签 |
+| `POST` | `/api/tags/reorder` | 批量更新自定义排序 |
+| `GET` | `/api/tags/aliases` | 标签别名列表 |
+| `POST` | `/api/tags/{id}/aliases` | 为标签添加别名 |
+| `DELETE` | `/api/tags/aliases/{id}` | 删除标签别名 |
+| `GET` | `/api/tags/cooccurrence-network` | 标签共现网络（节点 + 加权边） |
+| `GET` | `/api/tags/top` | 热门标签排行 |
+| `GET` | `/api/tags/{id}/trend` | 标签使用趋势（按日/周/月） |
 
 ### AI 分析
 
