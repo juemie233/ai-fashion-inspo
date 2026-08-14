@@ -1,8 +1,8 @@
 """AI 路由共享状态与后台任务。
 
-多个 AI 子路由（ai_analysis / ai_quality 等）共享的：
+多个 AI 子路由（ai_analysis 等）共享的：
 - 并发信号量、分析队列、任务追踪等内存状态
-- _run_analysis / _run_quality_check 后台任务
+- _run_analysis 后台任务
 - .env 更新、时间/大小格式化等辅助函数
 """
 
@@ -31,8 +31,6 @@ _task_by_id: dict[str, asyncio.Task] = {}
 _pending_queue: list[str] = []
 # 队列暂停开关
 _queue_paused = False
-# 质量审核任务追踪（与完整分析队列共享 _analysis_semaphore 信号量）
-_quality_active: set[str] = set()  # 正在审核的 inspiration_id
 
 
 def get_queue_paused() -> bool:
@@ -110,39 +108,6 @@ async def _run_analysis(inspiration_id: str, file_path: str):
             _pending_queue.remove(inspiration_id)
         except ValueError:
             pass
-
-
-async def _run_quality_check(inspiration_id: str, file_path: str):
-    """后台任务：对图片执行轻量质量审核（是否真人穿搭照片）。"""
-    if inspiration_id in _quality_active:
-        return
-
-    # 预处理：跳过已审核的（人工翻案或已审核），避免重复调用模型
-    async with async_session() as db:
-        insp = await db.get(Inspiration, inspiration_id)
-        if not insp or insp.quality_status != "pending":
-            return
-
-    _quality_active.add(inspiration_id)
-    try:
-        # 与完整分析共享同一全局信号量，避免单卡同时 4 路推理
-        async with _analysis_semaphore:
-            from app.services.ai_service import check_image_quality
-            async with async_session() as db:
-                status, reason = await check_image_quality(db, inspiration_id, file_path)
-                # 写入质量审核日志（失败时记录原因，供前端排查）
-                db.add(AIAnalysisLog(
-                    inspiration_id=inspiration_id,
-                    model_name=settings.ollama_vision_model,
-                    log_type="quality_check",
-                    error=reason if status == "pending" else None,
-                ))
-                await db.commit()
-                logger.info(f"质量审核 {inspiration_id}: {status}（{reason}）")
-    except Exception as e:
-        logger.error(f"质量审核失败 {inspiration_id}: {e}")
-    finally:
-        _quality_active.discard(inspiration_id)
 
 
 async def _update_env_file(updates: dict[str, str]) -> None:

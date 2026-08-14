@@ -48,3 +48,6 @@ backend/prompt_versions.json
 # 全局默认 prompt（运行时数据）
 prompt.txt
 backend/prompt.txt
+
+# agentmemory 运行时数据
+data/

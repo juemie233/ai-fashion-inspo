@@ -502,7 +502,6 @@ fashion-inspo/
 | `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材 |
 | `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判 |
 | `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
-| `GET` | `/api/ai/quality-active` | 正在审核中的素材 ID 列表 |
 | `DELETE` | `/api/inspirations/quality-rejected` | 批量删除所有已拒绝（rejected）素材 |
 
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。

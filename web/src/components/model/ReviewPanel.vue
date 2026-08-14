@@ -15,7 +15,6 @@ interface QualityReviewStats {
   approved: number
   rejected: number
   pass_rate: number
-  active: number
 }
 const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
@@ -77,6 +76,20 @@ function startReviewPolling(taskId: number) {
 
 function stopReviewPolling() {
   if (reviewPollTimer) { clearTimeout(reviewPollTimer); reviewPollTimer = null }
+}
+
+/** 恢复进行中的审核任务：刷新页面后查询是否有 pending/running 的审核任务并继续轮询 */
+async function resumeReviewTask() {
+  try {
+    const { data } = await apiClient.get<{ items: ReviewTask[] }>('/tasks', {
+      params: { type: 'quality_check', size: 20 },
+    })
+    const active = data.items.find((t) => t.status === 'pending' || t.status === 'running')
+    if (active) {
+      reviewTask.value = active
+      startReviewPolling(active.id)
+    }
+  } catch { /* 静默 */ }
 }
 
 async function triggerQualityCheck() {
@@ -193,6 +206,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   loadQualityReview()
   loadRejectedItems()
+  resumeReviewTask()
   pollTimer = setInterval(loadQualityReview, 10000)
 })
 

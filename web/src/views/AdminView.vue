@@ -104,6 +104,43 @@ function startAdminPolling(taskId: number, onDone: () => void) {
   poll()
 }
 
+/** 后台任务完成后的统一处理：根据任务类型刷新统计并提示 */
+function handleAdminTaskDone() {
+  const task = adminTask.value
+  const r = task?.result
+  if (task?.type === 'deduplicate') {
+    dedupResult.value = r
+      ? { groups_processed: r.groups_processed ?? 0, files_deleted: r.files_deleted ?? 0, freed_bytes: r.freed_bytes ?? 0 }
+      : null
+    if (!r || r.files_deleted === 0) {
+      message.info('未找到可删除的重复文件')
+    } else {
+      message.success(`去重完成：处理 ${r.groups_processed ?? 0} 组，删除 ${r.files_deleted ?? 0} 个冗余文件，释放 ${formatSize(r.freed_bytes ?? 0)} 空间`)
+    }
+    loadDuplicates()
+  } else {
+    const label = r?.label === 'untagged' ? '无标签素材' : r?.label === 'analysis_failed' ? '分析失败素材' : '素材'
+    message.success(`已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`)
+  }
+  adminTask.value = null
+  loadAll()
+}
+
+/** 恢复进行中的后台任务：刷新页面后查询是否有 pending/running 的删除/去重任务并继续轮询 */
+async function resumeAdminTask() {
+  try {
+    const { data } = await apiClient.get<{ items: AdminTask[] }>('/tasks', { params: { size: 20 } })
+    const active = data.items.find((t) =>
+      (t.type === 'batch_delete' || t.type === 'deduplicate') &&
+      (t.status === 'pending' || t.status === 'running')
+    )
+    if (active) {
+      adminTask.value = active
+      startAdminPolling(active.id, () => handleAdminTaskDone())
+    }
+  } catch { /* 静默 */ }
+}
+
 // ── 计算属性 ──
 
 const totalBytes = computed(() => stats.value?.total_size_bytes ?? 0)
@@ -214,20 +251,7 @@ async function deduplicate() {
     const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/deduplicate')
     adminTask.value = { id: data.task_id, type: 'deduplicate', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
     message.success(data.message)
-    startAdminPolling(data.task_id, () => {
-      const r = adminTask.value?.result
-      dedupResult.value = r
-        ? { groups_processed: r.groups_processed ?? 0, files_deleted: r.files_deleted ?? 0, freed_bytes: r.freed_bytes ?? 0 }
-        : null
-      if (!r || r.files_deleted === 0) {
-        message.info('未找到可删除的重复文件')
-      } else {
-        message.success(`去重完成：处理 ${r.groups_processed ?? 0} 组，删除 ${r.files_deleted ?? 0} 个冗余文件，释放 ${formatSize(r.freed_bytes ?? 0)} 空间`)
-      }
-      adminTask.value = null
-      loadAll()
-      loadDuplicates()
-    })
+    startAdminPolling(data.task_id, () => handleAdminTaskDone())
   } catch (e: any) {
     message.error(e.response?.data?.detail || '去重删除失败')
   } finally {
@@ -250,19 +274,13 @@ async function cleanOrphans() {
 // ── 批量删除 ──
 
 async function batchDeleteByCondition(condition: string) {
-  const label = condition === 'untagged' ? '无标签素材' : '分析失败素材'
   try {
     if (condition === 'untagged') clearingUntagged.value = true
     else clearingFailed.value = true
     const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/batch-delete', { condition })
     adminTask.value = { id: data.task_id, type: 'batch_delete', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
     message.success(data.message)
-    startAdminPolling(data.task_id, () => {
-      const r = adminTask.value?.result
-      message.success(`已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`)
-      adminTask.value = null
-      loadAll()
-    })
+    startAdminPolling(data.task_id, () => handleAdminTaskDone())
   } catch (e: any) {
     message.error('批量删除失败')
   } finally {
@@ -338,6 +356,7 @@ function statusColor(s: string): string {
 
 onMounted(() => {
   loadAll()
+  resumeAdminTask()
 })
 
 onUnmounted(() => {

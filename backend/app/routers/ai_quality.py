@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.inspiration import Inspiration
-from app.routers.ai_shared import _quality_active
 
 router = APIRouter()
 
@@ -110,11 +109,4 @@ async def quality_stats(db: AsyncSession = Depends(get_db)):
         "approved": approved,
         "rejected": rejected,
         "pass_rate": pass_rate,
-        "active": len(_quality_active),
     }
-
-
-@router.get("/quality-active")
-async def quality_active():
-    """正在审核中的素材 ID 列表。"""
-    return {"active": list(_quality_active), "count": len(_quality_active)}
