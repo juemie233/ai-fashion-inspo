@@ -1,5 +1,7 @@
 """多维度搜索的 REST API 路由。"""
 
+import asyncio
+import logging
 import uuid
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.database import get_db
+from app.database import async_session, get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, InspirationOut
@@ -31,6 +33,11 @@ from app.services.embedding_service import (
 from app.services.vector_service import backfill_all_vectors, find_similar_hybrid
 
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+logger = logging.getLogger(__name__)
+
+# 后台向量回填任务引用集合（防止 GC 回收，参考 ai_shared._analysis_tasks 模式）
+_backfill_tasks: set[asyncio.Task] = set()
 
 # 向量不可用时给用户的可读提示
 _TEXT_VEC_UNAVAILABLE_MSG = (
@@ -270,6 +277,12 @@ async def vector_search(
     if text and file:
         raise HTTPException(status_code=400, detail="请勿同时提供文本与图片")
 
+    # 未安装 LanceDB 时直接返回 503（可选依赖，项目默认不强制安装）
+    if not vector_store.is_lancedb_available():
+        raise HTTPException(
+            status_code=503, detail="lancedb 未安装，请执行 pip install lancedb"
+        )
+
     if text:
         query_vec = await generate_text_embedding(text)
         if not query_vec:
@@ -328,28 +341,48 @@ async def vector_search_status(db: AsyncSession = Depends(get_db)):
     )
 
 
+async def _run_vector_backfill(mode: str, limit: int) -> None:
+    """后台执行向量回填（独立数据库会话，避免请求会话被关闭）。
+
+    大库量回填耗时较长，放入后台任务不阻塞 HTTP 请求。
+    """
+    try:
+        async with async_session() as db:
+            stats = await backfill_all_vectors(db, mode=mode, limit=limit)
+            logger.info(f"后台向量回填完成: mode={mode} limit={limit} {stats}")
+    except Exception as e:
+        logger.error(f"后台向量回填失败 (mode={mode}): {e}")
+
+
 @router.post("/vector/backfill")
 async def trigger_vector_backfill(
     mode: str = Form(default="all"),
     limit: int = Form(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
 ):
-    """为存量素材批量生成向量（文本 + 图像）。
+    """为存量素材批量生成向量（文本 + 图像），后台异步执行。
 
     参数:
         mode: "all" | "text" | "image"（只回填指定类型）
         limit: 处理条数上限，0 表示全部
 
     说明:
-        同步执行，素材量大时耗时较长；当前为独立触发入口，
-        未来接入任务队列后可改为后台异步执行。
+        接口立即返回「已启动」，实际回填在后台任务中执行，
+        避免大库量回填挂起 HTTP 连接数分钟。
     """
     if mode not in ("all", "text", "image"):
         raise HTTPException(status_code=400, detail="mode 参数仅支持 all / text / image")
-    stats = await backfill_all_vectors(db, mode=mode, limit=limit)
-    if "error" in stats:
-        raise HTTPException(status_code=503, detail=stats["error"])
-    return stats
+    if not vector_store.is_lancedb_available():
+        raise HTTPException(
+            status_code=503, detail="lancedb 未安装，请执行 pip install lancedb"
+        )
+    task = asyncio.create_task(_run_vector_backfill(mode, limit))
+    _backfill_tasks.add(task)
+    task.add_done_callback(_backfill_tasks.discard)
+    return {
+        "message": "回填任务已启动（后台执行，素材量大时耗时较长）",
+        "mode": mode,
+        "limit": limit,
+    }
 
 
 @router.get("/similar/{inspiration_id}", response_model=SimilarOut)

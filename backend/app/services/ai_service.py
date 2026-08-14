@@ -259,6 +259,12 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
             await db.commit()
         except Exception as log_err:
             logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
+            # 显式回滚，避免会话进入 pending-rollback 状态；
+            # 否则后续查询会抛 PendingRollbackError，被误判为永久失败
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
         return success
 

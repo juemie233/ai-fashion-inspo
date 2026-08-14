@@ -24,8 +24,11 @@ from app.utils.file_hash import build_hash_map
 
 logger = logging.getLogger(__name__)
 
-# 批内并发度：与原有 AI 分析并发信号量一致（避免单卡多路推理导致显存溢出）
-_ANALYZE_CONCURRENCY = 2
+# 批内并发度：批量分析任务量大，固定为 1（逐张串行）对单卡最稳。
+# 注意：worker 进程与 API 进程（routers/ai_shared.py 的 _analysis_semaphore=2）各自持有
+# 独立的进程内信号量，互不感知、无法跨进程共享。串行后最坏情况为 1（worker）+ 2（API）= 3 路，
+# 相比原 2+2=4 路进一步降低单卡显存溢出风险。如需整体调整，请同步修改两处。
+_ANALYZE_CONCURRENCY = 1
 
 
 class RecoverableTaskError(Exception):
@@ -59,7 +62,14 @@ def _is_recoverable_error(message: str) -> bool:
     keywords = (
         "超时",
         "无法连接 Ollama",
+        "无法连接",
         "Ollama 服务",
+        "Ollama 返回",
+        "返回空内容",
+        "返回格式异常",
+        "缺少 message",
+        "暂时不可用",
+        "请求过于频繁",
         "database is locked",
         "locked",
     )
@@ -75,6 +85,34 @@ def _retry_delay(retry_count: int) -> int:
     return min(120, 30 * (4 ** (retry_count - 1)))
 
 
+def _chunked(values: list, size: int = 500) -> list[list]:
+    """将列表按指定大小分片，避免 SQLite IN(...) 超过变量上限（SQLite 默认约 999 个变量）。
+
+    参数:
+        values: 待分片的列表
+        size: 每片大小（默认 500，留足余量）
+
+    返回:
+        分片后的列表
+    """
+    return [values[i:i + size] for i in range(0, len(values), size)]
+
+
+async def _delete_inspiration_vectors(inspiration_ids: list[str]) -> None:
+    """批量删除素材在 LanceDB 中的向量（素材物理删除后调用）。
+
+    删除函数由 app.services.vector_store 提供（并行 agent 实现），LanceDB 未安装时
+    静默返回；此处额外兜底捕获异常并降级为警告，避免向量清理失败影响任务结果。
+    """
+    if not inspiration_ids:
+        return
+    try:
+        from app.services.vector_store import delete_inspiration_vectors_batch
+        await delete_inspiration_vectors_batch(inspiration_ids)
+    except Exception as e:
+        logger.warning(f"批量删除素材向量失败（忽略，不影响任务结果）: {e}")
+
+
 async def _schedule_retry(db: AsyncSession, task: TaskQueue, error_msg: str) -> None:
     """安排任务自动重试（指数退避）；超过最大重试次数则标记失败。
 
@@ -85,6 +123,9 @@ async def _schedule_retry(db: AsyncSession, task: TaskQueue, error_msg: str) -> 
     """
     task.retry_count += 1
     task.error = error_msg
+    # 重试前重置进度，避免重试任务显示 100% 却处于 pending
+    task.progress = 0
+    task.done = 0
     if task.retry_count <= task.max_retries:
         delay = _retry_delay(task.retry_count)
         task.status = "pending"
@@ -194,6 +235,23 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     insp_map = {r[0]: r[1] for r in rows}
     items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
 
+    # 崩溃恢复幂等：跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
+    analyzed_ids: set[str] = set()
+    candidate_ids = [iid for iid, _ in items]
+    for chunk in _chunked(candidate_ids):
+        analyzed_result = await db.execute(
+            select(AIAnalysisLog.inspiration_id)
+            .where(
+                analysis_log_filter(),
+                AIAnalysisLog.inspiration_id.in_(chunk),
+                (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+            )
+            .distinct()
+        )
+        analyzed_ids.update(r[0] for r in analyzed_result.all())
+    already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
+    items = [(iid, fp) for iid, fp in items if iid not in analyzed_ids]
+
     task.total = len(items)
     task.done = 0
     task.progress = 0
@@ -229,11 +287,13 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         )
 
     # 整个批次全部失败：按错误类型决定是否自动重试
+    # 采用宽松判定：只要存在可恢复错误的失败样本，就按可恢复处理（Ollama 瞬时故障时
+    # 不同图片可能报不同错误，若要求「全部可恢复」才会被误判为永久失败、放弃重试）
     if task.total > 0 and success_count == 0:
-        if len(recoverable_failed) == task.total:
+        if recoverable_failed:
             sample = failed_items[0][1] or "未知错误"
             raise RecoverableTaskError(
-                f"批量分析全部失败（{task.total} 张），疑似可恢复的系统性错误：{sample}"
+                f"批量分析全部失败（{task.total} 张），存在疑似可恢复的系统性错误：{sample}"
             )
         sample = failed_items[0][1] or "未知错误"
         raise PermanentTaskError(
@@ -244,6 +304,7 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     task.result = {
         "inspiration_ids": inspiration_ids,
         "skipped": payload.get("skipped", 0),
+        "already_analyzed": already_analyzed,
         "success_count": success_count,
         "failed_count": len(failed_items),
         "failed_ids": [iid for iid, _ in failed_items],
@@ -432,8 +493,27 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     files_to_delete = result.all()
 
     storage_root = settings.storage_root
+
+    # 写入墓碑表（防止被删除素材的 URL 被重新采集）
+    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
+            )
+
+    # 先提交数据库删除（级联删除关联 tags 与 analysis_logs），再删磁盘文件，
+    # 降低「文件已删但 DB 未删」的不一致窗口
+    deleted_ids = [r[0] for r in files_to_delete]
+    await db.execute(
+        Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
+    )
+    await db.commit()
+
+    # 删除 LanceDB 向量，避免孤儿向量（由 vector_store 提供，未安装时静默返回）
+    await _delete_inspiration_vectors(deleted_ids)
+
     freed_bytes = 0
-    deleted = 0
     for _fid, fpath, thumb, _surl in files_to_delete:
         for p in (fpath, thumb):
             if p:
@@ -444,35 +524,18 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
                         full.unlink()
                 except Exception:
                     pass
-        deleted += 1
-
-    # 写入墓碑表（防止被删除素材的 URL 被重新采集）
-    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
-            )
-
-    # 删除数据库记录（级联删除关联 tags 与 analysis_logs）
-    await db.execute(
-        Inspiration.__table__.delete().where(
-            Inspiration.id.in_([r[0] for r in files_to_delete])
-        )
-    )
-    await db.commit()
 
     task.result = {
         "inspiration_ids": inspiration_ids,
         "label": payload.get("label", ""),
-        "deleted_count": deleted,
+        "deleted_count": len(deleted_ids),
         "freed_bytes": freed_bytes,
     }
     task.done = task.total
     task.progress = 100
     task.updated_at = _utcnow()
     await db.commit()
-    logger.info(f"批量删除任务完成: #{task.id} 删除 {deleted} 个素材")
+    logger.info(f"批量删除任务完成: #{task.id} 删除 {len(deleted_ids)} 个素材")
 
 
 async def create_deduplicate_task(db: AsyncSession) -> TaskQueue:
@@ -508,11 +571,14 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     await db.commit()
 
     # 阶段 1：全库扫描，计算 MD5 并分组
+    # 同步逐块读文件算 MD5 会阻塞事件循环数分钟，放入线程池执行
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
                Inspiration.is_favorite, Inspiration.created_at)
     )
-    hash_map = build_hash_map(result.all(), storage_root, include_meta=True)
+    hash_map = await asyncio.to_thread(
+        build_hash_map, result.all(), storage_root, include_meta=True
+    )
 
     dup_groups = [(h, files) for h, files in hash_map.items() if len(files) > 1]
     if not dup_groups:
@@ -531,23 +597,28 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     # 阶段 2：评分并决定每组保留哪个
     all_ids = [f["id"] for _h, group in dup_groups for f in group]
 
-    tagged_result = await db.execute(
-        select(InspirationTag.inspiration_id)
-        .where(InspirationTag.inspiration_id.in_(all_ids))
-        .distinct()
-    )
-    tagged_ids = {r[0] for r in tagged_result.all()}
-
-    analyzed_result = await db.execute(
-        select(AIAnalysisLog.inspiration_id)
-        .where(
-            analysis_log_filter(),
-            AIAnalysisLog.inspiration_id.in_(all_ids),
-            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+    # 全库去重时 all_ids 可能很大，按片查询避免 IN(...) 超过 SQLite 变量上限
+    tagged_ids: set[str] = set()
+    for chunk in _chunked(all_ids):
+        tagged_result = await db.execute(
+            select(InspirationTag.inspiration_id)
+            .where(InspirationTag.inspiration_id.in_(chunk))
+            .distinct()
         )
-        .distinct()
-    )
-    analyzed_ids = {r[0] for r in analyzed_result.all()}
+        tagged_ids.update(r[0] for r in tagged_result.all())
+
+    analyzed_ids: set[str] = set()
+    for chunk in _chunked(all_ids):
+        analyzed_result = await db.execute(
+            select(AIAnalysisLog.inspiration_id)
+            .where(
+                analysis_log_filter(),
+                AIAnalysisLog.inspiration_id.in_(chunk),
+                (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+            )
+            .distinct()
+        )
+        analyzed_ids.update(r[0] for r in analyzed_result.all())
 
     details: list[dict] = []
     ids_to_delete: list[str] = []
@@ -622,20 +693,27 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
         return
 
     # 阶段 3：写墓碑、删数据库记录、删磁盘文件
-    url_result = await db.execute(
-        select(Inspiration.source_url).where(Inspiration.id.in_(ids_to_delete))
-    )
-    urls_to_seal = [r[0] for r in url_result.all() if r[0]]
+    urls_to_seal: list[str] = []
+    for chunk in _chunked(ids_to_delete):
+        url_result = await db.execute(
+            select(Inspiration.source_url).where(Inspiration.id.in_(chunk))
+        )
+        urls_to_seal.extend(r[0] for r in url_result.all() if r[0])
     if urls_to_seal:
         for url in urls_to_seal:
             await db.execute(
                 sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
             )
 
-    await db.execute(
-        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
-    )
+    # 分片删除，避免 IN(...) 超过 SQLite 变量上限
+    for chunk in _chunked(ids_to_delete):
+        await db.execute(
+            Inspiration.__table__.delete().where(Inspiration.id.in_(chunk))
+        )
     await db.commit()
+
+    # 删除 LanceDB 向量，避免孤儿向量（由 vector_store 提供，未安装时静默返回）
+    await _delete_inspiration_vectors(ids_to_delete)
 
     freed_bytes = 0
     for fpath, thumb in files_to_delete:

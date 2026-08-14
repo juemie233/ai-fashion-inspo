@@ -43,7 +43,7 @@ async def _load_inspiration(
 
 
 async def backfill_all_vectors(
-    db: AsyncSession, mode: str = "all", limit: int = 0
+    db: AsyncSession, mode: str = "all", limit: int = 0, incremental: bool = False
 ) -> dict:
     """为存量素材批量生成文本/图像向量。
 
@@ -51,9 +51,12 @@ async def backfill_all_vectors(
         db: 数据库会话
         mode: "all" | "text" | "image"（只回填指定类型）
         limit: 处理条数上限，0 表示全部
+        incremental: 增量模式。为 True 时跳过「已存在向量」的素材（表 schema 按
+            配置维度固定，存在即视为维度/模型未变），只回填缺失向量。
 
     返回:
-        统计字典（processed / text_added / image_added / 失败计数等）
+        统计字典（processed / text_added / text_failed / text_skipped /
+        image_added / image_failed / image_skipped / skipped_non_image 等）
 
     说明:
         文本向量基于素材标签拼接文本（build_inspiration_text）生成；
@@ -78,51 +81,68 @@ async def backfill_all_vectors(
         "processed": 0,
         "text_added": 0,
         "text_failed": 0,
+        "text_skipped": 0,
         "image_added": 0,
         "image_failed": 0,
+        "image_skipped": 0,
         "skipped_non_image": 0,
         "errors": [],
     }
+
+    # 增量模式：预先一次性加载已有向量素材 ID（避免逐条查询放大开销）
+    existing_text_ids: set[str] = set()
+    existing_image_ids: set[str] = set()
+    if incremental:
+        if mode in ("all", "text"):
+            existing_text_ids = await vector_store.list_vector_ids("text")
+        if mode in ("all", "image"):
+            existing_image_ids = await vector_store.list_vector_ids("image")
 
     for insp in inspirations:
         stats["processed"] += 1
 
         # 文本向量
         if mode in ("all", "text"):
-            text = build_inspiration_text(insp)
-            if text:
-                vec = await generate_text_embedding(text)
-                if vec:
-                    ok = await vector_store.upsert_vector("text", insp.id, vec)
-                    if ok:
-                        stats["text_added"] += 1
+            if insp.id in existing_text_ids:
+                stats["text_skipped"] += 1
+            else:
+                text = build_inspiration_text(insp)
+                if text:
+                    vec = await generate_text_embedding(text)
+                    if vec:
+                        ok = await vector_store.upsert_vector("text", insp.id, vec)
+                        if ok:
+                            stats["text_added"] += 1
+                        else:
+                            stats["text_failed"] += 1
                     else:
                         stats["text_failed"] += 1
-                else:
-                    stats["text_failed"] += 1
 
         # 图像向量
         if mode in ("all", "image"):
-            if insp.media_type != "image":
+            if insp.id in existing_image_ids:
+                stats["image_skipped"] += 1
+            elif insp.media_type != "image":
                 stats["skipped_non_image"] += 1
-                continue
-            full_path = settings.storage_root / insp.file_path
-            if not full_path.exists():
-                stats["image_failed"] += 1
-                continue
-            vec = await generate_image_embedding(file_path=str(full_path))
-            if vec:
-                ok = await vector_store.upsert_vector("image", insp.id, vec)
-                if ok:
-                    stats["image_added"] += 1
-                else:
-                    stats["image_failed"] += 1
             else:
-                stats["image_failed"] += 1
+                full_path = settings.storage_root / insp.file_path
+                if not full_path.exists():
+                    stats["image_failed"] += 1
+                else:
+                    vec = await generate_image_embedding(file_path=str(full_path))
+                    if vec:
+                        ok = await vector_store.upsert_vector("image", insp.id, vec)
+                        if ok:
+                            stats["image_added"] += 1
+                        else:
+                            stats["image_failed"] += 1
+                    else:
+                        stats["image_failed"] += 1
 
     logger.info(
         f"向量回填完成: processed={stats['processed']} "
-        f"text_added={stats['text_added']} image_added={stats['image_added']}"
+        f"text_added={stats['text_added']} (skipped {stats['text_skipped']}) "
+        f"image_added={stats['image_added']} (skipped {stats['image_skipped']})"
     )
     return stats
 
@@ -149,6 +169,32 @@ async def _get_or_build_image_vector(db: AsyncSession, inspiration: Inspiration)
     if vec and vector_store.is_lancedb_available():
         await vector_store.upsert_vector("image", inspiration.id, vec)
     return vec
+
+
+async def rebuild_text_vector(db: AsyncSession, inspiration_id: str) -> bool:
+    """重建单个素材的文本向量（标签/作者等语义字段变更后调用）。
+
+    语义:
+        文本向量由 build_inspiration_text（标签名 + 主色 + 作者）拼接生成。
+        标签变更后必须重建，否则语义搜索结果陈旧。本函数重新加载素材与标签、
+        生成最新文本 embedding 并 upsert。
+
+    返回:
+        True 表示重建成功；LanceDB 未安装、Ollama 不可用、素材不存在或
+        无文本内容时静默降级返回 False，不抛错（不阻断标签写入主流程）。
+    """
+    if not vector_store.is_lancedb_available():
+        return False
+    insp = await _load_inspiration(db, inspiration_id)
+    if insp is None:
+        return False
+    text = build_inspiration_text(insp)
+    if not text:
+        return False
+    vec = await generate_text_embedding(text)
+    if not vec:
+        return False
+    return await vector_store.upsert_vector("text", insp.id, vec)
 
 
 def _count_shared_tags(candidate: Inspiration, source_tag_ids: set[int]) -> int:

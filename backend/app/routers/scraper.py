@@ -566,12 +566,17 @@ async def task_results_batch_delete(
             )
 
     # 从数据库删除（级联删除关联 tags 和 analysis_logs）
+    deleted_ids = [r[0] for r in files_to_delete]
     await db.execute(
-        Inspiration.__table__.delete().where(
-            Inspiration.id.in_([r[0] for r in files_to_delete])
-        )
+        Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
     )
     await db.commit()
+
+    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
+    # 避免批量删除后产生孤儿向量
+    from app.services import vector_store
+
+    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
 
     # 更新任务计数
     remaining_result = await db.execute(

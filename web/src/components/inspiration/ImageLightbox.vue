@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 大图灯箱：点击图片全屏查看，支持左右切换和键盘导航。 */
 
-import { watch } from 'vue'
+import { watch, onUnmounted } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
@@ -30,6 +30,11 @@ watch(
     }
   }
 )
+
+// 组件被卸载（如灯箱未关闭直接路由跳走）时也要移除监听器，避免 document 上残留 ESC 监听
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>

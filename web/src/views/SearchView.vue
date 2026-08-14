@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 高级搜索页：关键词搜索 + 多维标签筛选 + 高级筛选 + 相似推荐 + 搜索历史。 */
 
-import { h, ref, computed, watch, onMounted } from 'vue'
+import { h, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import SearchBar from '@/components/search/SearchBar.vue'
@@ -24,6 +24,7 @@ const inspStore = useInspirationsStore()
 const results = ref<InspirationOut[]>([])
 const total = ref(0)
 const searching = ref(false)
+let searchSeq = 0  // 请求序号：普通/语义/以图搜图共用，防止陈旧响应乱序覆盖新结果
 const filterVisible = ref(true)
 const showMoreFilters = ref(false)
 
@@ -117,32 +118,25 @@ async function doSearch(page: number = 1) {
   resetVectorState()
   searching.value = true
   currentPage.value = page
+  const seq = ++searchSeq
   try {
     const data = await searchInspirations(buildQuery(page))
+    if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
     results.value = data.items
     total.value = data.total
     syncUrl()
     window.scrollTo({ top: 0, behavior: 'smooth' })
   } catch {
-    message.error('搜索失败')
+    if (seq === searchSeq) message.error('搜索失败')
   } finally {
-    searching.value = false
+    if (seq === searchSeq) searching.value = false
   }
 }
 
 // ── 搜索栏回调 ──
 
 function handleSearchBar(val: string) {
-  // 颜色代码 → 直接搜索
-  if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-    keyword.value = ''
-    doSearch(1)
-    // 颜色搜索通过 URL 参数处理，这里简化：直接把颜色作为关键词
-    keyword.value = val
-    doSearch(1)
-    return
-  }
-  // 普通搜索
+  // 颜色代码同样直接作为关键词处理：先设置好最终状态再发一次搜索，避免触发两次并发请求
   keyword.value = val
   addToHistory(val)
   doSearch(1)
@@ -165,8 +159,10 @@ async function doSemanticSearch() {
     return
   }
   vectorLoading.value = true
+  const seq = ++searchSeq  // 纳入同一序号体系，防止与普通搜索乱序覆盖
   try {
     const data = await vectorSearchText(text, 50)
+    if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
     vectorItems.value = data.items
     vectorMode.value = 'semantic'
     vectorQueryLabel.value = text
@@ -175,9 +171,9 @@ async function doSemanticSearch() {
     addToHistory(text)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   } catch (e: any) {
-    message.error(e.response?.data?.detail || '语义搜索失败，请确认后端向量服务已就绪')
+    if (seq === searchSeq) message.error(e.response?.data?.detail || '语义搜索失败，请确认后端向量服务已就绪')
   } finally {
-    vectorLoading.value = false
+    if (seq === searchSeq) vectorLoading.value = false
   }
 }
 
@@ -187,10 +183,16 @@ async function onImagePicked(e: Event) {
   const file = input.files?.[0]
   if (!file) return
   vectorLoading.value = true
-  // 生成本地预览
+  const seq = ++searchSeq  // 纳入同一序号体系，防止与普通搜索乱序覆盖
+  // 生成本地预览：先释放上一次的 blob URL，避免内存泄漏
+  if (imagePreviewUrl.value) {
+    URL.revokeObjectURL(imagePreviewUrl.value)
+    imagePreviewUrl.value = null
+  }
   imagePreviewUrl.value = URL.createObjectURL(file)
   try {
     const data = await vectorSearchImage(file, 50)
+    if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
     vectorItems.value = data.items
     vectorMode.value = 'image'
     vectorQueryLabel.value = file.name
@@ -198,9 +200,9 @@ async function onImagePicked(e: Event) {
     total.value = data.total
     window.scrollTo({ top: 0, behavior: 'smooth' })
   } catch (err: any) {
-    message.error(err.response?.data?.detail || '以图搜图失败，请确认已安装 CLIP 图像模型')
+    if (seq === searchSeq) message.error(err.response?.data?.detail || '以图搜图失败，请确认已安装 CLIP 图像模型')
   } finally {
-    vectorLoading.value = false
+    if (seq === searchSeq) vectorLoading.value = false
     if (input) input.value = ''
   }
 }
@@ -301,6 +303,14 @@ onMounted(() => {
     doSearch(1)
   } else {
     doSearch(1)
+  }
+})
+
+onUnmounted(() => {
+  // 卸载时释放以图搜图的本地预览 blob URL
+  if (imagePreviewUrl.value) {
+    URL.revokeObjectURL(imagePreviewUrl.value)
+    imagePreviewUrl.value = null
   }
 })
 </script>

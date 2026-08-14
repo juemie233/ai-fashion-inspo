@@ -58,6 +58,7 @@ interface TaskInfo {
 }
 const batchTask = ref<TaskInfo | null>(null)
 let batchPollTimer: ReturnType<typeof setTimeout> | null = null
+let batchPollSeq = 0  // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
 
 /** 任务状态中文标签 */
 const taskStatusLabel: Record<string, string> = {
@@ -188,9 +189,14 @@ async function triggerBatchAnalyze() {
 /** 轮询批量分析任务状态（约 1 秒一次），完成后刷新分析结果 */
 function startBatchPolling(taskId: number) {
   stopBatchPolling()
+  const seq = batchPollSeq  // 当前代际：stopBatchPolling 已自增，旧链的 seq 与之不符即失效
+  let consecutiveFailures = 0  // 连续失败次数，失败时有限次重试而非直接停止
   const poll = async () => {
+    if (seq !== batchPollSeq) return  // 已被 stop/新轮询取代，不再调度
     try {
       const { data } = await apiClient.get<TaskInfo>(`/tasks/${taskId}`)
+      if (seq !== batchPollSeq) return  // 在途请求返回前已被停止，丢弃结果
+      consecutiveFailures = 0
       batchTask.value = data
       if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
         stopBatchPolling()
@@ -210,9 +216,17 @@ function startBatchPolling(taskId: number) {
         return
       }
       batchPollTimer = setTimeout(poll, 1000)
-    } catch (e: any) {
-      stopBatchPolling()
-      message.error('获取任务状态失败，请稍后手动刷新')
+    } catch {
+      if (seq !== batchPollSeq) return
+      consecutiveFailures += 1
+      if (consecutiveFailures >= 5) {
+        // 连续多次失败才停止，避免后端重启/网络抖动导致任务进度卡死
+        stopBatchPolling()
+        message.error('获取任务状态多次失败，已停止轮询，请稍后手动刷新')
+        return
+      }
+      // 有限次重试：间隔放大到 3 秒，继续续排轮询链
+      batchPollTimer = setTimeout(poll, 3000)
     }
   }
   poll()
@@ -233,7 +247,22 @@ async function cancelBatchTask() {
 }
 
 function stopBatchPolling() {
+  batchPollSeq += 1  // 自增代际号，使当前轮询链失效，防止在途请求返回后重新调度
   if (batchPollTimer) { clearTimeout(batchPollTimer); batchPollTimer = null }
+}
+
+/** 恢复进行中的批量分析任务：刷新页面后查询是否有 pending/running 的批量分析任务并继续轮询 */
+async function resumeBatchAnalyzeTask() {
+  try {
+    const { data } = await apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+      params: { type: 'batch_analyze', size: 20 },
+    })
+    const active = data.items.find((t) => t.status === 'pending' || t.status === 'running')
+    if (active) {
+      batchTask.value = active
+      startBatchPolling(active.id)
+    }
+  } catch { /* 静默 */ }
 }
 
 async function retryAnalysis(id: string) {
@@ -490,6 +519,7 @@ onMounted(() => {
   loadHistory()
   loadModelNames()
   startPolling()
+  resumeBatchAnalyzeTask()
 })
 
 onUnmounted(() => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 素材详情页：大图浏览、标签编辑、收藏、删除、相似推荐。 */
 
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import {
@@ -46,30 +46,56 @@ function similarSourceLabel(source: string): string {
 }
 
 /** 加载相似素材推荐（视觉 + 标签加权） */
-async function loadSimilar(id: string) {
+async function loadSimilar(id: string, seq: number) {
   similarLoading.value = true
   try {
     const data = await fetchSimilar(id, 10)
+    if (seq !== detailSeq) return  // 过期响应不覆盖新数据
     similarItems.value = data.similar
   } catch {
     // 相似推荐失败不影响详情展示，静默降级
+    if (seq !== detailSeq) return
     similarItems.value = []
   } finally {
-    similarLoading.value = false
+    if (seq === detailSeq) similarLoading.value = false
   }
 }
 
-onMounted(async () => {
-  loadOutfitOptions()
+let detailSeq = 0  // 请求序号，防止参数快速切换时旧响应覆盖新数据
+
+/** 加载素材详情数据（含相似推荐），路由参数变化时复用 */
+async function loadDetail(id: string) {
+  const seq = ++detailSeq
+  loading.value = true
+  detail.value = null  // 清理旧素材，避免参数切换时残留上一份内容
+  lightboxOpen.value = false
+  similarItems.value = []
   try {
-    detail.value = await fetchInspiration(route.params.id as string)
-    loadSimilar(detail.value.id)
+    const data = await fetchInspiration(id)
+    if (seq !== detailSeq) return  // 已有更新的请求，丢弃过期响应
+    detail.value = data
+    loadSimilar(data.id, seq)
   } catch {
+    if (seq !== detailSeq) return
     message.error('加载素材详情失败')
   } finally {
-    loading.value = false
+    if (seq === detailSeq) loading.value = false
   }
+}
+
+onMounted(() => {
+  loadOutfitOptions()
+  loadDetail(route.params.id as string)
 })
+
+// 详情页跳转相似推荐等场景下，Vue Router 复用同一路由记录、不会重触发 onMounted，
+// 需监听参数变化重新加载数据
+watch(
+  () => route.params.id as string,
+  (id) => {
+    if (id) loadDetail(id)
+  }
+)
 
 /** 切换收藏 */
 async function handleToggleFavorite() {

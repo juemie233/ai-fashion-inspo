@@ -31,9 +31,15 @@ interface ReviewTask {
   done: number
   result: { approved?: number; rejected?: number; pending?: number } | null
   error: string | null
+  retry_count: number
+  max_retries: number
+  next_retry_at: string | null
+  created_at: string
+  updated_at: string
 }
 const reviewTask = ref<ReviewTask | null>(null)
 let reviewPollTimer: ReturnType<typeof setTimeout> | null = null
+let reviewPollSeq = 0  // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
 
 async function loadQualityReview() {
   qualityReviewLoading.value = true
@@ -47,9 +53,14 @@ async function loadQualityReview() {
 /** 轮询审核任务状态（约 1 秒一次），完成后刷新统计与未通过列表 */
 function startReviewPolling(taskId: number) {
   stopReviewPolling()
+  const seq = reviewPollSeq  // 当前代际：stopReviewPolling 已自增，旧链的 seq 与之不符即失效
+  let consecutiveFailures = 0  // 连续失败次数，失败时有限次重试而非直接停止
   const poll = async () => {
+    if (seq !== reviewPollSeq) return  // 已被 stop/新轮询取代，不再调度
     try {
       const { data } = await apiClient.get<ReviewTask>(`/tasks/${taskId}`)
+      if (seq !== reviewPollSeq) return  // 在途请求返回前已被停止，丢弃结果
+      consecutiveFailures = 0
       reviewTask.value = data
       if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
         stopReviewPolling()
@@ -67,14 +78,23 @@ function startReviewPolling(taskId: number) {
       }
       reviewPollTimer = setTimeout(poll, 1000)
     } catch {
-      stopReviewPolling()
-      message.error('获取审核任务状态失败，请稍后手动刷新')
+      if (seq !== reviewPollSeq) return
+      consecutiveFailures += 1
+      if (consecutiveFailures >= 5) {
+        // 连续多次失败才停止，避免后端重启/网络抖动导致任务进度卡死
+        stopReviewPolling()
+        message.error('获取审核任务状态多次失败，已停止轮询，请稍后手动刷新')
+        return
+      }
+      // 有限次重试：间隔放大到 3 秒，继续续排轮询链
+      reviewPollTimer = setTimeout(poll, 3000)
     }
   }
   poll()
 }
 
 function stopReviewPolling() {
+  reviewPollSeq += 1  // 自增代际号，使当前轮询链失效，防止在途请求返回后重新调度
   if (reviewPollTimer) { clearTimeout(reviewPollTimer); reviewPollTimer = null }
 }
 
@@ -100,7 +120,7 @@ async function triggerQualityCheck() {
       null,
       { params: { limit: 200 } },
     )
-    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null }
+    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     message.success(`已提交 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
     startReviewPolling(data.task_id)
   } catch (e: any) {
@@ -116,7 +136,7 @@ async function recheckQuality() {
     const { data } = await apiClient.post<{ message: string; count: number; task_id: number }>(
       '/ai/quality-recheck',
     )
-    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null }
+    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     message.success(`已提交重新审核任务 #${data.task_id}，共 ${data.count} 个素材`)
     startReviewPolling(data.task_id)
   } catch (e: any) {

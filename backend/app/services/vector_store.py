@@ -12,6 +12,8 @@ LanceDB 为嵌入式向量数据库，数据落盘到 ``backend/storage/lancedb/
 
 import asyncio
 import logging
+import math
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -20,13 +22,19 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 连接缓存（模块级单例，懒加载）
+# 连接缓存（模块级单例，懒加载）；加锁防止线程池并发首屏重复连接
 _db = None
+_db_lock = threading.Lock()
 
 
 def _utc_str() -> str:
     """返回当前 UTC 时间的 ISO 字符串。"""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _sql_quote(value: str) -> str:
+    """对 SQL 字符串字面量做单引号转义（防止注入）。"""
+    return value.replace("'", "''")
 
 
 def is_lancedb_available() -> bool:
@@ -39,15 +47,22 @@ def is_lancedb_available() -> bool:
 
 
 def _connect():
-    """连接 LanceDB 数据目录（懒加载并缓存连接）。"""
+    """连接 LanceDB 数据目录（懒加载并缓存连接，线程安全）。
+
+    加锁 + 双重检查：首次从多个线程池线程并发触发时只初始化一次。
+    """
     global _db
     if _db is not None:
         return _db
-    import lancedb
+    with _db_lock:
+        # 双重检查，避免线程池并发首屏重复连接
+        if _db is not None:
+            return _db
+        import lancedb
 
-    settings.lancedb_dir.mkdir(parents=True, exist_ok=True)
-    _db = lancedb.connect(str(settings.lancedb_dir))
-    return _db
+        settings.lancedb_dir.mkdir(parents=True, exist_ok=True)
+        _db = lancedb.connect(str(settings.lancedb_dir))
+        return _db
 
 
 def _table_name(kind: str) -> str:
@@ -91,17 +106,35 @@ def _table(kind: str):
 
 
 def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
-    """同步执行 upsert（先删除旧行再插入），保证一个素材只有一条向量。"""
+    """同步执行 upsert（先删除旧行再插入），保证一个素材只有一条向量。
+
+    写入前校验向量维度与有限性（NaN/Inf），不合法时记 warning 并返回 False，
+    避免 embedding 模型切换后向固定维度 schema 写入非法向量导致静默失效。
+    """
     try:
+        expected_dim = _dim(kind)
+        vec = [float(x) for x in vector]
+        if len(vec) != expected_dim:
+            logger.warning(
+                f"写入向量维度不匹配 (kind={kind}, id={inspiration_id}): "
+                f"期望 {expected_dim}，实际 {len(vec)}，跳过写入"
+            )
+            return False
+        if not all(math.isfinite(x) for x in vec):
+            logger.warning(
+                f"写入向量包含非法值（NaN/Inf）(kind={kind}, id={inspiration_id})，跳过写入"
+            )
+            return False
+
         table = _table(kind)
         try:
-            table.delete(f"inspiration_id = '{inspiration_id}'")
+            table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
         except Exception:
             pass  # 无匹配行时删除可能抛错，忽略即可
         table.add([{
             "id": uuid.uuid4().hex,
             "inspiration_id": inspiration_id,
-            "vector": [float(x) for x in vector],
+            "vector": vec,
             "created_at": _utc_str(),
         }])
         return True
@@ -118,19 +151,27 @@ async def upsert_vector(kind: str, inspiration_id: str, vector: list[float]) -> 
 def _search_sync(
     kind: str, query_vector: list[float], top_k: int
 ) -> list[dict[str, Any]]:
-    """同步执行余弦相似度 TopK 检索。"""
-    table = _table(kind)
-    rows = table.search(query_vector).metric("cosine").limit(top_k).to_list()
-    results: list[dict[str, Any]] = []
-    for r in rows:
-        dist = float(r.get("_distance", 1.0))
-        # LanceDB cosine 距离 = 1 - 余弦相似度
-        score = max(0.0, min(1.0, 1.0 - dist))
-        results.append({
-            "inspiration_id": str(r["inspiration_id"]),
-            "score": round(score, 4),
-        })
-    return results
+    """同步执行余弦相似度 TopK 检索。
+
+    任何异常（如 LanceDB 未安装、表缺失）都记日志并返回空列表，
+    避免语义搜索接口直接 500。
+    """
+    try:
+        table = _table(kind)
+        rows = table.search(query_vector).metric("cosine").limit(top_k).to_list()
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            dist = float(r.get("_distance", 1.0))
+            # LanceDB cosine 距离 = 1 - 余弦相似度
+            score = max(0.0, min(1.0, 1.0 - dist))
+            results.append({
+                "inspiration_id": str(r["inspiration_id"]),
+                "score": round(score, 4),
+            })
+        return results
+    except Exception as e:
+        logger.error(f"向量检索失败 (kind={kind}): {e}")
+        return []
 
 
 async def search_vectors(
@@ -178,21 +219,55 @@ async def count_vectors(kind: str) -> int:
     return await asyncio.to_thread(_count_sync, kind)
 
 
-def _delete_inspiration_sync(inspiration_id: str) -> None:
-    """同步删除素材在两张表中的向量（素材删除时调用）。"""
+def _list_vector_ids_sync(kind: str) -> set[str]:
+    """同步读取表中全部素材 ID 集合（供回填增量判断，一次表扫描）。"""
+    try:
+        table = _table(kind)
+        arrow_table = table.to_arrow()
+        return {str(x) for x in arrow_table["inspiration_id"].to_pylist()}
+    except Exception as e:
+        logger.error(f"读取向量表素材 ID 失败 (kind={kind}): {e}")
+        return set()
+
+
+async def list_vector_ids(kind: str) -> set[str]:
+    """返回指定表中已存在向量的全部素材 ID 集合。"""
+    return await asyncio.to_thread(_list_vector_ids_sync, kind)
+
+
+def _delete_inspiration_batch_sync(inspiration_ids: list[str]) -> None:
+    """同步批量删除多个素材在两张表中的向量（素材批量删除时调用）。"""
+    if not inspiration_ids:
+        return
     for kind in ("text", "image"):
         try:
             table = _table(kind)
-            table.delete(f"inspiration_id = '{inspiration_id}'")
+            # 对每个 id 做单引号转义后拼成 IN 子句，防止注入
+            clause = "inspiration_id IN (" + ", ".join(
+                f"'{_sql_quote(i)}'" for i in inspiration_ids
+            ) + ")"
+            table.delete(clause)
         except Exception as e:
             logger.warning(
-                f"删除素材向量失败 (kind={kind}, id={inspiration_id}): {e}"
+                f"批量删除素材向量失败 (kind={kind}, count={len(inspiration_ids)}): {e}"
             )
+
+
+async def delete_inspiration_vectors_batch(inspiration_ids: list[str]) -> None:
+    """批量删除多个素材对应的文本与图像向量（素材批量删除时调用）。
+
+    LanceDB 未安装时静默返回（直接 return），不影响主流程。
+    """
+    if not is_lancedb_available():
+        return
+    if not inspiration_ids:
+        return
+    await asyncio.to_thread(_delete_inspiration_batch_sync, inspiration_ids)
 
 
 async def delete_inspiration_vectors(inspiration_id: str) -> None:
     """删除素材对应的文本与图像向量（素材物理删除时调用）。"""
-    await asyncio.to_thread(_delete_inspiration_sync, inspiration_id)
+    await delete_inspiration_vectors_batch([inspiration_id])
 
 
 def get_status() -> dict:

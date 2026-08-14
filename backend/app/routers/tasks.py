@@ -1,7 +1,9 @@
 """任务队列路由：查询任务状态、任务列表与取消任务。"""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -9,6 +11,11 @@ from app.models.task import TaskQueue
 from app.schemas.task import TaskListOut, TaskOut
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+def _utcnow() -> datetime:
+    """返回当前 UTC 时间（naive datetime）。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @router.get("", response_model=TaskListOut)
@@ -60,15 +67,21 @@ async def cancel_task(
     db: AsyncSession = Depends(get_db),
 ):
     """取消排队中的任务（仅 pending 状态可取消，running 不硬打断）。"""
+    # 先确认任务存在（404），再做条件更新：仅当仍为 pending 时才置为 cancelled，
+    # 避免「读取到 pending 后 worker 已认领为 running」的 TOCTOU 竞态（否则会把 running 覆盖成 cancelled）。
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
-    if task.status != "pending":
+    result = await db.execute(
+        update(TaskQueue)
+        .where(TaskQueue.id == task_id, TaskQueue.status == "pending")
+        .values(status="cancelled", error="用户手动取消", updated_at=_utcnow())
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        await db.refresh(task)
         raise HTTPException(
             status_code=409,
-            detail=f"仅可取消排队中（pending）的任务，当前状态为 {task.status}",
+            detail=f"任务已开始执行（当前状态 {task.status}），无法取消",
         )
-    task.status = "cancelled"
-    task.error = "用户手动取消"
-    await db.commit()
-    return {"message": "任务已取消", "task_id": task.id}
+    return {"message": "任务已取消", "task_id": task_id}

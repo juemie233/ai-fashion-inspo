@@ -15,6 +15,7 @@
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 
 import httpx
@@ -34,13 +35,56 @@ IMAGE_EMBEDDING_DIM = settings.lancedb_image_dim
 # CLIP 模型缓存与加载错误状态（模块级单例，避免重复加载）
 _image_model = None
 _image_model_error: str | None = None
+# CLIP 模型懒加载锁：_encode_image_sync 在 asyncio.to_thread 线程池中调用，
+# 并发首屏可能重复加载（模型约 600MB），加锁 + 双重检查保证只初始化一次。
+_clip_model_lock = threading.Lock()
+
+# 文本向量缓存（进程内，按 query 文本缓存，避免相同文本重复调用 Ollama）。
+# generate_text_embedding 为 async 函数、仅事件循环内调用，无跨线程竞争。
+_text_cache: dict[str, list[float]] = {}
+_TEXT_CACHE_MAX = 500
+
+# 图像向量缓存（按图片文件路径缓存；_encode_image_sync 在线程池运行，需加锁）
+_image_cache: dict[str, list[float]] = {}
+_IMAGE_CACHE_MAX = 300
+_image_cache_lock = threading.Lock()
+
+
+def _cache_text_embedding(text: str, vec: list[float]) -> None:
+    """写入文本向量缓存，超过上限时淘汰最旧条目。"""
+    if len(_text_cache) >= _TEXT_CACHE_MAX:
+        try:
+            _text_cache.pop(next(iter(_text_cache)))
+        except StopIteration:
+            pass
+    _text_cache[text] = list(vec)
+
+
+def _get_cached_image_embedding(file_path: str) -> list[float] | None:
+    """读取图像向量缓存（命中时返回副本，避免调用方修改缓存内容）。"""
+    with _image_cache_lock:
+        cached = _image_cache.get(file_path)
+        if cached is None:
+            return None
+        return list(cached)
+
+
+def _cache_image_embedding(file_path: str, vec: list[float]) -> None:
+    """写入图像向量缓存，超过上限时淘汰最旧条目。"""
+    with _image_cache_lock:
+        if len(_image_cache) >= _IMAGE_CACHE_MAX:
+            try:
+                _image_cache.pop(next(iter(_image_cache)))
+            except StopIteration:
+                pass
+        _image_cache[file_path] = list(vec)
 
 
 # ==================== 文本向量（Ollama all-minilm） ====================
 
 
 async def generate_text_embedding(text: str) -> list[float] | None:
-    """通过 Ollama embedding 模型生成文本向量。
+    """通过 Ollama embedding 模型生成文本向量（带进程内缓存）。
 
     参数:
         text: 待嵌入的文本
@@ -51,6 +95,9 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     text = (text or "").strip()
     if not text:
         return None
+    cached = _text_cache.get(text)
+    if cached is not None:
+        return list(cached)
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -66,7 +113,9 @@ async def generate_text_embedding(text: str) -> list[float] | None:
             if not embedding:
                 logger.warning(f"文本嵌入返回空结果: {text[:50]}")
                 return None
-            return list(embedding)
+            result = list(embedding)
+            _cache_text_embedding(text, result)
+            return result
     except Exception as e:
         logger.error(f"生成文本向量失败: {e}")
         return None
@@ -110,7 +159,7 @@ def get_image_embedding_status() -> dict:
 
 
 def _load_clip_model():
-    """懒加载 CLIP 模型（仅在调用图像向量时加载一次）。
+    """懒加载 CLIP 模型（仅在调用图像向量时加载一次，线程安全）。
 
     返回:
         模型对象；依赖缺失或加载失败时返回 None（并记录错误原因）
@@ -121,25 +170,32 @@ def _load_clip_model():
     if _image_model_error is not None:
         return None
 
-    reason = _check_clip_dependency()
-    if reason:
-        _image_model_error = reason
-        logger.warning(reason)
-        return None
+    with _clip_model_lock:
+        # 双重检查：避免线程池并发首屏重复加载（CLIP 模型约 600MB）
+        if _image_model is not None:
+            return _image_model
+        if _image_model_error is not None:
+            return None
 
-    try:
-        from sentence_transformers import SentenceTransformer
+        reason = _check_clip_dependency()
+        if reason:
+            _image_model_error = reason
+            logger.warning(reason)
+            return None
 
-        logger.info(f"正在加载 CLIP 图像模型: {settings.clip_model_name}")
-        _image_model = SentenceTransformer(settings.clip_model_name)
-        return _image_model
-    except Exception as e:
-        _image_model_error = (
-            f"图像向量不可用：CLIP 模型加载失败（模型未下载或网络异常）。"
-            f"请确认模型 {settings.clip_model_name} 已下载。({e})"
-        )
-        logger.error(_image_model_error)
-        return None
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            logger.info(f"正在加载 CLIP 图像模型: {settings.clip_model_name}")
+            _image_model = SentenceTransformer(settings.clip_model_name)
+            return _image_model
+        except Exception as e:
+            _image_model_error = (
+                f"图像向量不可用：CLIP 模型加载失败（模型未下载或网络异常）。"
+                f"请确认模型 {settings.clip_model_name} 已下载。({e})"
+            )
+            logger.error(_image_model_error)
+            return None
 
 
 def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list[float] | None:
@@ -152,6 +208,12 @@ def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list
     返回:
         512 维向量列表；失败返回 None
     """
+    # 仅文件路径输入时可走缓存（按路径缓存，避免重复编码）
+    if file_path is not None and image_bytes is None:
+        cached = _get_cached_image_embedding(file_path)
+        if cached is not None:
+            return cached
+
     model = _load_clip_model()
     if model is None:
         return None
@@ -173,7 +235,10 @@ def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list
             img = img.convert("RGB")
 
         embedding = model.encode(img)
-        return [float(x) for x in embedding.tolist()]
+        result = [float(x) for x in embedding.tolist()]
+        if file_path is not None and image_bytes is None:
+            _cache_image_embedding(file_path, result)
+        return result
     except Exception as e:
         logger.error(f"生成图像向量失败: {e}")
         return None

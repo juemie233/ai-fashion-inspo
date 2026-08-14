@@ -276,6 +276,7 @@ async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
     if not rejected:
         return {"deleted": 0, "freed_bytes": 0, "message": "没有已拒绝的素材"}
 
+    deleted_ids = [insp.id for insp in rejected]
     freed_bytes = 0
     urls_to_seal: list[str] = []
     for insp in rejected:
@@ -304,6 +305,13 @@ async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
             )
 
     await db.commit()
+
+    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
+    # 避免批量删除后产生孤儿向量
+    from app.services import vector_store
+
+    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+
     return {"deleted": len(rejected), "freed_bytes": freed_bytes}
 
 
@@ -437,6 +445,12 @@ async def add_inspiration_tags(
         added.append({"id": tag.id, "name": tag.name, "category": tag.category})
 
     await db.commit()
+
+    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
+    from app.services.vector_service import rebuild_text_vector
+
+    await rebuild_text_vector(db, inspiration_id)
+
     return {"added": added, "count": len(added)}
 
 
@@ -456,6 +470,11 @@ async def remove_inspiration_tag(
     await db.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="未找到该标签关联")
+
+    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
+    from app.services.vector_service import rebuild_text_vector
+
+    await rebuild_text_vector(db, inspiration_id)
     return {"removed": 1}
 
 

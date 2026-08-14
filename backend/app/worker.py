@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select, update
+from sqlalchemy.exc import OperationalError
 
 from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
@@ -42,6 +43,7 @@ async def _claim_next_task() -> int | None:
     - 仅认领 status = pending 的任务
     - 若设置了 next_retry_at（重试退避），需等到该时间之后
     - 通过「先查询 + 条件更新」保证多 worker 实例下不会重复执行同一任务
+    - 多 worker 竞争写锁时 SQLite 可能报 database is locked，静默跳过本轮（下一轮再试）
     """
     now = _utcnow()
     async with async_session() as db:
@@ -63,12 +65,19 @@ async def _claim_next_task() -> int | None:
 
         task_id = row[0]
         # 原子认领：仅当仍为 pending 时才置为 running，避免重复执行
-        result = await db.execute(
-            update(TaskQueue)
-            .where(TaskQueue.id == task_id, TaskQueue.status == "pending")
-            .values(status="running", updated_at=now)
-        )
-        await db.commit()
+        try:
+            result = await db.execute(
+                update(TaskQueue)
+                .where(TaskQueue.id == task_id, TaskQueue.status == "pending")
+                .values(status="running", updated_at=now)
+            )
+            await db.commit()
+        except OperationalError as e:
+            # SQLite 写锁：多 worker/API 同时写入导致认领失败，属正常竞争。
+            # 静默跳过本轮认领（不记 error 噪音），下一轮轮询再试。
+            if "database is locked" in str(e).lower():
+                return None
+            raise
         if result.rowcount == 0:
             return None
         return task_id
@@ -91,6 +100,13 @@ async def _run_task(task_id: int) -> None:
             if handler is None:
                 raise PermanentTaskError(f"未知任务类型: {task.type}")
             await handler(db, task)
+            # 任务执行期间状态可能被外部变更（如取消接口），仅当仍为 running 时才标记 success
+            await db.refresh(task)
+            if task.status != "running":
+                logger.info(
+                    f"任务状态在执行期间被外部改为 {task.status}，跳过 success 覆盖: #{task.id}"
+                )
+                return
             task.status = "success"
             task.progress = 100
             task.error = None
@@ -123,6 +139,11 @@ async def _reset_stale_tasks() -> None:
 
     worker 进程异常终止时，正在执行的任务会卡在 running 状态；
     重启后将其重置回 pending，由本进程重新认领执行。
+
+    注意：当前为单 worker 部署（见 scripts/restart.sh，仅启动一个 app.worker 进程），
+    重启时旧进程必已退出，因此无条件重置是安全的。若未来引入多 worker 并发执行，
+    此处的无条件重置会误重置「另一存活 worker 正在执行」的任务，届时需改为
+    基于心跳租约的判定（记录执行中的 worker 心跳，仅重置超过心跳超时的 running）。
     """
     now = _utcnow()
     async with async_session() as db:
