@@ -25,7 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select, func
-from app.database import async_session
+from app.database import async_session, init_db
+from app.db_migrations import ensure_schema
 from app.models.tag import Tag, InspirationTag
 from app.utils.tag_normalizer import validate_tag_name
 
@@ -141,6 +142,10 @@ async def main():
     parser.add_argument("--fix", action="store_true", help="自动修复可拆分的标签")
     parser.add_argument("--force", action="store_true", help="删除无法修复的问题标签")
     args = parser.parse_args()
+
+    # 确保表结构与字段最新（独立脚本不经过服务端 lifespan）
+    await init_db()
+    await ensure_schema()
 
     issues = await check_tags()
 

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select, delete, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -42,8 +43,13 @@ async def list_tags(db: AsyncSession = Depends(get_db)):
 @router.post("", response_model=TagOut, status_code=status.HTTP_201_CREATED)
 async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
     """手动创建自定义标签。"""
-    # 检查标签是否已存在
-    result = await db.execute(select(Tag).where(Tag.name == data.name.strip()))
+    # 先做别名归一化（DB 别名 → 硬编码同义词），使「纯白」自动落到既有规范名「白色」
+    from app.utils.tag_normalizer import normalize_tag_name_async
+
+    name = (await normalize_tag_name_async(db, data.name)).strip()
+
+    # 检查标签是否已存在（用归一化后的规范名查重）
+    result = await db.execute(select(Tag).where(Tag.name == name))
     existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(
@@ -51,7 +57,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
             detail=f"标签 '{data.name}' 已存在",
         )
 
-    tag = Tag(name=data.name.strip(), category=data.category, source="manual")
+    tag = Tag(name=name, category=data.category, source="manual")
     db.add(tag)
     await db.flush()
     await db.refresh(tag)
@@ -73,15 +79,29 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=404, detail="标签未找到")
 
     if data.name is not None:
-        # 检查名称是否冲突
+        # 先做别名归一化，保证改名后仍命中规范名（用户自定义的 DB 别名优先）
+        from app.utils.tag_normalizer import normalize_tag_name_async
+
+        name = (await normalize_tag_name_async(db, data.name)).strip()
+
+        # 检查新名称是否与其它主标签冲突
         result = await db.execute(
-            select(Tag).where(Tag.name == data.name.strip(), Tag.id != tag_id)
+            select(Tag).where(Tag.name == name, Tag.id != tag_id)
         )
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=409, detail=f"标签 '{data.name}' 已存在"
             )
-        tag.name = data.name.strip()
+        # 检查新名称是否已是其它标签的别名（避免改名后产生歧义）
+        alias_conflict = await db.execute(
+            select(TagAlias).where(TagAlias.alias == name)
+        )
+        if alias_conflict.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"标签名 '{data.name}' 已作为其它标签的别名使用",
+            )
+        tag.name = name
 
     if data.category is not None:
         tag.category = data.category
@@ -480,6 +500,13 @@ async def reorder_tags(
     order_map = {item.id: item.sort_order for item in data.items}
     result = await db.execute(select(Tag).where(Tag.id.in_(order_map.keys())))
     tags = result.scalars().all()
+    if len(tags) != len(order_map):
+        found_ids = {t.id for t in tags}
+        missing_ids = [i for i in order_map if i not in found_ids]
+        raise HTTPException(
+            status_code=404,
+            detail=f"以下标签不存在，无法排序: {missing_ids}",
+        )
     for tag in tags:
         tag.sort_order = order_map[tag.id]
     await db.commit()
@@ -529,7 +556,20 @@ async def create_alias(
 
     obj = TagAlias(tag_id=tag_id, alias=alias)
     db.add(obj)
-    await db.flush()
+    try:
+        # 用 SAVEPOINT 隔离插入：并发创建同名字别名时，后者触发 IntegrityError，
+        # 回滚后重查并返回已存在的别名，避免 500。
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        db.expunge(obj)
+        existing = await db.execute(
+            select(TagAlias).where(TagAlias.alias == alias)
+        )
+        existing_obj = existing.scalar_one_or_none()
+        if existing_obj:
+            return existing_obj
+        raise HTTPException(status_code=409, detail=f"别名 '{alias}' 已存在")
     await db.refresh(obj)
     return obj
 

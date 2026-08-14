@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tag import Tag, InspirationTag
+from app.models.tag import Tag, InspirationTag, TagAlias
 from app.utils.tag_normalizer import normalize_tag_name_async
 
 logger = logging.getLogger(__name__)
@@ -175,6 +175,30 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int):
     # 删除源标签
     source_tag = await db.get(Tag, source_id)
     if source_tag:
+        # 注意：Tag.aliases 关系声明了 cascade="all, delete-orphan"，
+        # 直接 delete 源标签会物理删除其全部别名（数据丢失），
+        # 因此必须先手动把源标签的别名搬迁到目标标签（与目标已有别名去重）。
+        target_aliases = (
+            await db.execute(select(TagAlias.alias).where(TagAlias.tag_id == target_id))
+        ).scalars().all()
+        target_alias_set = set(target_aliases)
+
+        source_aliases = (
+            await db.execute(select(TagAlias).where(TagAlias.tag_id == source_id))
+        ).scalars().all()
+        for alias in source_aliases:
+            if alias.alias in target_alias_set:
+                # 目标标签已存在同名字别名，删除该条，避免唯一约束冲突
+                await db.delete(alias)
+            else:
+                # 重指向目标标签，随源标签删除而保留（避免级联物理删除）
+                alias.tag_id = target_id
+                target_alias_set.add(alias.alias)
+
+        # 先刷新，确保别名搬迁（tag_id 重指向）先落库，
+        # 否则 delete-orphan 级联在删除源标签时会重新加载仍指向源标签的别名并物理删除。
+        await db.flush()
+
         await db.delete(source_tag)
 
     await db.flush()

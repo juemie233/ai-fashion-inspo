@@ -91,9 +91,18 @@ const vectorBadges = computed<Record<string, string>>(() => {
 })
 
 // 搜索历史
-const searchHistory = ref<string[]>(
-  JSON.parse(localStorage.getItem('search-history') || '[]')
-)
+/** 读取 localStorage 中的搜索历史，解析失败时回退空数组（参考 ScraperView 的 try/catch 范式） */
+function loadSearchHistory(): string[] {
+  try {
+    const raw = localStorage.getItem('search-history')
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+const searchHistory = ref<string[]>(loadSearchHistory())
 
 const totalPages = computed(() => Math.ceil(total.value / pageSize.value))
 
@@ -108,12 +117,12 @@ function syncUrl() {
   if (analysisFilter.value) query.analysis = analysisFilter.value
   if (dateFrom.value) query.from = dateFrom.value
   if (dateTo.value) query.to = dateTo.value
-  router.replace({ query })
+  return router.replace({ query })
 }
 
 /** 复制当前搜索链接（含筛选条件）到剪贴板 */
 async function copySearchLink() {
-  syncUrl()  // 先把最新筛选条件同步到 URL
+  await syncUrl()  // 等待 URL 同步完成后再读取 location.href，确保复制到最新筛选条件
   try {
     await navigator.clipboard.writeText(location.href)
     message.success('已复制搜索链接')

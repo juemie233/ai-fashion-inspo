@@ -55,16 +55,30 @@ watch(show, (v) => {
   if (v) {
     // 等待 modal 动画与布局完成后再渲染，确保容器有尺寸
     nextTick(() => setTimeout(load, 60))
+  } else {
+    // n-modal 默认 displayDirective='if'，关闭会销毁内容 DOM，
+    // 必须同步 dispose 图表实例，否则二次打开时 setOption 到已脱离文档的 canvas 上
+    disposeCharts()
   }
 })
 
 onMounted(() => window.addEventListener('resize', handleResize))
-onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  disposeCharts()
+})
 
 function handleResize() {
   graphChart?.resize()
   topChart?.resize()
   trendChart?.resize()
+}
+
+/** 销毁所有图表实例并置空：关闭弹窗（DOM 被销毁）或组件卸载时调用，保证下次打开重新 init */
+function disposeCharts() {
+  graphChart?.dispose(); graphChart = null
+  topChart?.dispose(); topChart = null
+  trendChart?.dispose(); trendChart = null
 }
 
 async function load() {
@@ -90,7 +104,7 @@ async function load() {
 // ===== 热门标签排行（横向条形图） =====
 function renderTop(tags: TopTag[]) {
   if (!topRef.value) return
-  if (!topChart) topChart = echarts.init(topRef.value)
+  if (!topChart || topChart.isDisposed()) topChart = echarts.init(topRef.value)
   // 横向：顶部是最多的，倒序让第一名在最上
   const sorted = [...tags].reverse()
   topChart.setOption({
@@ -119,7 +133,7 @@ function renderTop(tags: TopTag[]) {
 // ===== 共现关系图（力导向） =====
 function renderGraph(net: CooccurrenceNetwork) {
   if (!graphRef.value) return
-  if (!graphChart) {
+  if (!graphChart || graphChart.isDisposed()) {
     graphChart = echarts.init(graphRef.value)
     graphChart.on('click', (params: any) => {
       if (params.dataType === 'node' && params.data?.id != null) {
@@ -172,7 +186,7 @@ async function loadTrend(tagId: number, name: string) {
   if (!trendRef.value) return
   try {
     const data = await fetchTagTrend(tagId, trendGranularity.value)
-    if (!trendChart) trendChart = echarts.init(trendRef.value)
+    if (!trendChart || trendChart.isDisposed()) trendChart = echarts.init(trendRef.value)
     trendChart.setOption({
       grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
       xAxis: {

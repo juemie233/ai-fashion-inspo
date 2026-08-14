@@ -116,7 +116,9 @@ watch(
       }
       document.removeEventListener('keydown', onKeydown)
     }
-  }
+  },
+  // 挂载时 show 即 true 也要生效：加 immediate 确保初始打开就锁定滚动并注册键盘监听
+  { immediate: true }
 )
 
 // 组件被卸载（如灯箱未关闭直接路由跳走）时也要移除监听器并恢复滚动

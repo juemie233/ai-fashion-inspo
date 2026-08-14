@@ -38,6 +38,15 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# 索引清单：表名 -> [(索引名, 列名), ...]
+# 存量库通过 ALTER TABLE 补列的字段不会自动获得 ORM 中 index=True 生成的索引，
+# 需在迁移时手动补齐（索引名参考 SQLAlchemy 默认命名 ix_{table}_{column}）。
+_SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
+    "tags": [
+        ("ix_tags_pinned", "pinned"),
+    ],
+}
+
 
 def get_db_path() -> Path:
     """返回 SQLite 数据库文件的绝对路径。"""
@@ -65,6 +74,13 @@ async def ensure_schema() -> list[str]:
                     )
                     added.append(f"{table}.{col_name}")
                     print(f"[迁移] {table} 添加列: {col_name}")
+
+        # 补齐存量库缺失的索引（幂等，CREATE INDEX IF NOT EXISTS）
+        for table, indexes in _SCHEMA_INDEXES.items():
+            for idx_name, column in indexes:
+                await conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})"
+                )
 
         await conn.commit()
 

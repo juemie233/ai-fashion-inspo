@@ -104,6 +104,16 @@ async function loadAll() {
   try {
     groups.value = await fetchTagsGrouped()
     stats.value = await fetchTagStats()
+    // 数据刷新后按 id 重新查找选中标签并替换引用，右侧面板显示最新名称/使用次数；
+    // 标签已不存在（被删除/合并）时清空选中，右侧回到空态
+    if (selectedTag.value) {
+      let fresh: TagItem | null = null
+      for (const g of groups.value) {
+        const t = g.tags.find(x => x.id === selectedTag.value!.id)
+        if (t) { fresh = t; break }
+      }
+      selectedTag.value = fresh
+    }
   } catch { message.error('加载失败') } finally { loading.value = false }
 }
 
@@ -141,6 +151,11 @@ const filteredGroups = computed(() => {
   // 移除空组
   return result.filter(g => g.tags.length > 0)
 })
+
+/** 是否存在搜索/类别/来源筛选：筛选态下可见顺序与完整分组不一致，禁用自定义排序拖拽 */
+const hasActiveFilter = computed(() =>
+  !!searchQuery.value.trim() || !!filterCategory.value || !!filterSource.value
+)
 
 // ===== 创建标签（带去重建议） =====
 function onNewTagNameInput() {
@@ -437,11 +452,16 @@ async function togglePin(tag: TagItem) {
 
 // ===== 自定义排序拖拽 =====
 function onTagDragOver(e: DragEvent) {
-  if (sortMode.value === 'custom') e.preventDefault()
+  if (sortMode.value === 'custom' && !hasActiveFilter.value) e.preventDefault()
 }
 
 async function onTagDrop(target: TagItem) {
   if (sortMode.value !== 'custom' || !dragTag.value) return
+  if (hasActiveFilter.value) {
+    message.warning('筛选状态下不支持拖动排序，请清除筛选后重试')
+    dragTag.value = null
+    return
+  }
   if (dragTag.value.id === target.id) { dragTag.value = null; return }
   const group = groups.value.find((g) => g.tags.some((t) => t.id === target.id))
   if (!group || !group.tags.some((t) => t.id === dragTag.value!.id)) {
@@ -452,8 +472,10 @@ async function onTagDrop(target: TagItem) {
   const fromIdx = tags.findIndex((t) => t.id === dragTag.value!.id)
   const toIdx = tags.findIndex((t) => t.id === target.id)
   if (fromIdx < 0 || toIdx < 0) { dragTag.value = null; return }
+  // off-by-one 修复：向后拖（toIdx > fromIdx）时，删除源项会让目标索引前移一位
+  const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx
   const [moved] = tags.splice(fromIdx, 1)
-  tags.splice(toIdx, 0, moved)
+  tags.splice(insertIdx, 0, moved)
   dragTag.value = null
   try {
     await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
@@ -756,7 +778,7 @@ async function quickSetAlias(sourceId: number, targetId: number, sourceName: str
               <n-list-item
                 v-for="tag in group.tags"
                 :key="tag.id"
-                draggable="true"
+                :draggable="sortMode === 'custom' && !hasActiveFilter"
                 @dragstart="onDragStart(tag)"
                 @dragover="onTagDragOver"
                 @drop="onTagDrop(tag)"

@@ -14,6 +14,7 @@ from app.models.inspiration import (
 )
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import (
+    BatchAddTagsRequest,
     InspirationCreate,
     InspirationDetailOut,
     InspirationListOut,
@@ -442,7 +443,7 @@ async def update_inspiration(
 
 @router.post("/batch-tags", status_code=status.HTTP_200_OK)
 async def batch_add_tags(
-    payload: dict,
+    data: BatchAddTagsRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
@@ -452,49 +453,53 @@ async def batch_add_tags(
     用于「相似素材批量添加穿搭大标签」场景：把当前素材的大标签一次性复制到
     多个相似素材上。仅对实际新增了标签的素材重建文本向量，避免无谓调用 Ollama。
     """
-    inspiration_ids = payload.get("inspiration_ids", [])
-    names = payload.get("names", [])
-    category = payload.get("category", "free")
-    source = payload.get("source", "manual")
-
-    if not isinstance(inspiration_ids, list) or not inspiration_ids:
-        raise HTTPException(status_code=400, detail="请提供素材 ID 列表")
-    if not isinstance(names, list) or not names:
-        raise HTTPException(status_code=400, detail="请提供标签名称列表")
-
     from app.services.tag_service import get_or_create_tag
+
+    # 去重（保留顺序），避免重复 ID/名称虚增统计与重复查询
+    inspiration_ids = list(dict.fromkeys(data.inspiration_ids))
+    raw_names = [n.strip() for n in data.names if n.strip()]
+
+    if not raw_names:
+        raise HTTPException(status_code=400, detail="请提供有效的标签名称")
 
     # 先解析标签（批量 get_or_create，避免每个素材重复查询同名标签）
     tags = []
-    for raw in names:
-        name = str(raw).strip()
-        if not name:
-            continue
-        tags.append(await get_or_create_tag(db, name, category, source))
+    for name in raw_names:
+        tags.append(await get_or_create_tag(db, name, data.category, data.source))
 
-    if not tags:
-        raise HTTPException(status_code=400, detail="请提供有效的标签名称")
+    tag_ids = [t.id for t in tags]
 
-    # 批量关联，跳过已存在的关联；记录实际变更的素材
+    # 一次性校验素材存在性，避免逐个 db.get
+    found_result = await db.execute(
+        select(Inspiration.id).where(Inspiration.id.in_(inspiration_ids))
+    )
+    found_ids = set(found_result.scalars().all())
+    not_found_ids = [i for i in inspiration_ids if i not in found_ids]
+
+    # 一次性查出已存在的关联，避免 M×N 逐条查询
+    existing_result = await db.execute(
+        select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
+            InspirationTag.inspiration_id.in_(inspiration_ids),
+            InspirationTag.tag_id.in_(tag_ids),
+        )
+    )
+    existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
+
+    # 批量插入新关联，跳过已存在的；记录实际变更的素材
     total_added = 0
     affected_ids: list[str] = []
+    skipped_existing = 0
     for inspiration_id in inspiration_ids:
-        inspiration = await db.get(Inspiration, inspiration_id)
-        if not inspiration:
+        if inspiration_id not in found_ids:
             continue
         added_for_this = 0
-        for tag in tags:
-            existing = await db.execute(
-                select(InspirationTag).where(
-                    InspirationTag.inspiration_id == inspiration_id,
-                    InspirationTag.tag_id == tag.id,
-                )
-            )
-            if existing.scalar_one_or_none():
+        for tag_id in tag_ids:
+            if (inspiration_id, tag_id) in existing_pairs:
+                skipped_existing += 1
                 continue
             db.add(
                 InspirationTag(
-                    inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0
+                    inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0
                 )
             )
             added_for_this += 1
@@ -513,7 +518,12 @@ async def batch_add_tags(
     return {
         "added": total_added,
         "affected": len(affected_ids),
+        # 向后兼容：skipped 仍为「未实际变更的素材数」（含不存在与已全部关联）
         "skipped": len(inspiration_ids) - len(affected_ids),
+        # 明确拆分两个跳过维度
+        "not_found": len(not_found_ids),
+        "skipped_existing": skipped_existing,
+        "missing_ids": not_found_ids,
     }
 
 

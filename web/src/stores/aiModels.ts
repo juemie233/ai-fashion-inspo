@@ -46,16 +46,21 @@ export const useAiModelsStore = defineStore('aiModels', () => {
 
   /** 切换活跃模型，返回是否成功（成功时已刷新列表） */
   async function setActiveModel(name: string): Promise<boolean> {
-    const previous = activeModel.value  // 记录旧值，失败时回滚
+    const previous = activeModel.value  // 记录旧值，仅 PUT 失败时回滚
     activeModel.value = name  // 乐观赋值：界面立即切换
     try {
       await apiClient.put('/ai/models/active', null, { params: { model_name: name } })
-      await refreshModels()
-      return true
     } catch {
-      activeModel.value = previous  // 失败回滚，避免界面显示已切换但实际未生效
+      activeModel.value = previous  // 仅 PUT 本身失败才回滚，避免界面显示已切换但实际未生效
       return false
     }
+    // PUT 已成功：刷新列表；refreshModels 失败单独静默降级，不回滚已生效的切换
+    try {
+      await refreshModels()
+    } catch {
+      // 刷新失败静默忽略：列表可能暂时不新，但活跃模型切换已成功
+    }
+    return true
   }
 
   /** 删除模型，返回是否成功 */

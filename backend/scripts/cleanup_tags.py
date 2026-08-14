@@ -19,7 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select, delete, func
-from app.database import async_session, engine
+from app.database import async_session, engine, init_db
+from app.db_migrations import ensure_schema
 from app.models.tag import Tag, InspirationTag
 from app.services.ai_parser import extract_tag_names
 from app.services.ai_tag_saver import normalize_color
@@ -241,6 +242,10 @@ async def main():
     dry_run = not args.apply
     if dry_run:
         print("=== DRY RUN 模式（不会修改数据）===\n")
+
+    # 确保表结构与字段最新（独立脚本不经过服务端 lifespan）
+    await init_db()
+    await ensure_schema()
 
     await cleanup(dry_run=dry_run)
 

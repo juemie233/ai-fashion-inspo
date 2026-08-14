@@ -64,9 +64,18 @@ const afterUpload = ref<'stay' | 'detail' | 'home'>(
 )
 
 // ── 最近上传 ──
-const recentUploads = ref<Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }>>(
-  JSON.parse(sessionStorage.getItem('recent-uploads') || '[]')
-)
+/** 读取 sessionStorage 中的最近上传记录，解析失败时回退空数组（参考 ScraperView 的 try/catch 范式） */
+function loadRecentUploads(): Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }> {
+  try {
+    const raw = sessionStorage.getItem('recent-uploads')
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+const recentUploads = ref<Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }>>(loadRecentUploads())
 
 // ── 文件选择 ──
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -114,11 +123,15 @@ function addFiles(files: File[]) {
     message.warning('没有可识别的图片文件')
     return
   }
-  // 数量校验：队列已有 + 本次拖入超过上限时，截断只保留前 500 个
+  // 数量校验：队列已有 + 本次拖入超过上限时，按剩余容量截断
   const remaining = MAX_QUEUE_SIZE - queue.value.length
   const accepted = remaining > 0 ? imageFiles.slice(0, remaining) : []
   if (accepted.length < imageFiles.length) {
-    message.warning(`单次最多 ${MAX_QUEUE_SIZE} 个，已截断仅保留前 ${MAX_QUEUE_SIZE} 个`)
+    if (remaining <= 0) {
+      message.warning(`队列已满（最多 ${MAX_QUEUE_SIZE} 个），未添加任何文件`)
+    } else {
+      message.warning(`队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`)
+    }
   }
   for (const file of accepted) {
     const id = crypto.randomUUID()
@@ -336,8 +349,14 @@ const showClearConfirm = ref(false)
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    // 与 SearchView.onGlobalKeydown 对齐：焦点在输入框/文本域时放行，避免干扰输入
+    const target = e.target as HTMLElement | null
+    const tag = target?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+    // 任一弹窗打开时忽略，避免 Esc 关闭弹窗的同时误弹「清空队列」确认框
+    if (videoModalOpen.value || showClearConfirm.value) return
     // Esc 不再直接清空队列，改为弹出确认，防止误触一次性清掉整批文件
-    if (queue.value.length === 0 || uploading.value || showClearConfirm.value) return
+    if (queue.value.length === 0 || uploading.value) return
     showClearConfirm.value = true
   }
 }

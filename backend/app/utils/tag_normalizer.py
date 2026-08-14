@@ -3,6 +3,7 @@
 from difflib import SequenceMatcher
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
@@ -64,22 +65,20 @@ def normalize_tag_name(name: str) -> str:
     return name
 
 
-async def normalize_tag_name_async(db, name: str) -> str:
+async def normalize_tag_name_async(db: AsyncSession, name: str) -> str:
     """异步版标签名标准化：先查数据库别名，再回退到硬编码同义词映射。
 
     用于 get_or_create_tag 链路，使 AI 打标也能命中用户自定义的别名归一化。
     别名表较小且带索引，这里不做进程内缓存，保证别名增删立即生效。
+
+    注意：DB 别名优先于硬编码同义词 —— 用户显式创建的别名一定生效，
+    硬编码同义词仅作为无 DB 别名时的兜底。
     """
     if not name:
         return name
     stripped = name.strip()
 
-    # 先走硬编码同义词映射（无需查库）
-    normalized = normalize_tag_name(stripped)
-    if normalized != stripped:
-        return normalized
-
-    # 再查数据库别名（延迟导入，避免模块加载顺序耦合）
+    # 先查数据库别名（延迟导入，避免模块加载顺序耦合）
     from app.models.tag import Tag, TagAlias
 
     result = await db.execute(
@@ -88,7 +87,11 @@ async def normalize_tag_name_async(db, name: str) -> str:
         .where(TagAlias.alias == stripped)
     )
     main_name = result.scalar_one_or_none()
-    return main_name or stripped
+    if main_name:
+        return main_name
+
+    # 未命中 DB 别名，再回退到硬编码同义词映射
+    return normalize_tag_name(stripped)
 
 
 def is_low_confidence(confidence: float) -> bool:

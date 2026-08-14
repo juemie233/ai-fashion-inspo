@@ -1,7 +1,7 @@
 """灵感素材的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_serializer
 
 
@@ -44,6 +44,17 @@ class InspirationUpdate(BaseModel):
     source_author: str | None = None
     quality_status: Literal["pending", "approved", "rejected"] | None = None  # 人工复核翻案
     quality_reason: str | None = None  # 翻案为 rejected 时的自定义原因
+
+
+class BatchAddTagsRequest(BaseModel):
+    """批量给多个素材关联标签的请求体"""
+
+    inspiration_ids: list[str] = Field(min_length=1, max_length=200)
+    names: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
+        min_length=1, max_length=50
+    )
+    category: str = "free"
+    source: str = "manual"
 
 
 class InspirationOut(BaseModel):
