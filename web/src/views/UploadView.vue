@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import type { UploadFileInfo } from 'naive-ui'
 import { useInspirationsStore } from '@/stores/inspirations'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, addTagsToInspiration } from '@/api/inspirations'
 import apiClient from '@/api/client'
 
 const router = useRouter()
@@ -15,6 +15,9 @@ const store = useInspirationsStore()
 
 // ── 图片扩展名 ──
 const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4'])
+
+// ── 上传队列上限（页面文案承诺「单次最多 500 个」）──
+const MAX_QUEUE_SIZE = 500
 
 // ── 拖拽状态 ──
 const isDragging = ref(false)
@@ -47,11 +50,12 @@ const autoAnalyze = ref(localStorage.getItem('upload-auto-analyze') !== 'false')
 const urlInput = ref('')
 const urlImporting = ref(false)
 
-// ── 视频相关 ──
-const videoPreviewUrl = ref('')
+// ── 视频预览（模态框）──
+const videoModalOpen = ref(false)
+const videoModalSrc = ref('')
 
 // ── 去重 ──
-const skipDuplicates = ref(true)
+const skipDuplicates = ref(localStorage.getItem('upload-skip-duplicates') !== 'false')
 let _dedupHashes = new Set<string>()
 
 // ── 偏好 ──
@@ -110,7 +114,13 @@ function addFiles(files: File[]) {
     message.warning('没有可识别的图片文件')
     return
   }
-  for (const file of imageFiles) {
+  // 数量校验：队列已有 + 本次拖入超过上限时，截断只保留前 500 个
+  const remaining = MAX_QUEUE_SIZE - queue.value.length
+  const accepted = remaining > 0 ? imageFiles.slice(0, remaining) : []
+  if (accepted.length < imageFiles.length) {
+    message.warning(`单次最多 ${MAX_QUEUE_SIZE} 个，已截断仅保留前 ${MAX_QUEUE_SIZE} 个`)
+  }
+  for (const file of accepted) {
     const id = crypto.randomUUID()
     queue.value.push({
       id,
@@ -163,8 +173,12 @@ async function startUpload() {
   uploading.value = true
   _lastBytes = 0
   _lastTime = Date.now()
+  uploadSpeed.value = ''
 
-  const tags = quickTags.value.split(',').map(t => t.trim()).filter(Boolean)
+  const tags = quickTags.value.split(/[,，\s]+/).map(t => t.trim()).filter(Boolean)
+
+  let taggedCount = 0   // 快速标签添加成功数
+  let tagFailedCount = 0  // 快速标签添加失败数
 
   for (const item of pending) {
     // 去重检测
@@ -184,7 +198,7 @@ async function startUpload() {
       formData.append('source_type', 'manual_upload')
       if (sourceAuthor.value.trim()) formData.append('source_author', sourceAuthor.value.trim())
 
-      const result = await store.upload(formData)
+      const result = await store.upload(formData, makeProgressHandler(item))
       item.status = 'done'
       item.resultId = result.id
       item.progress = 100
@@ -194,9 +208,14 @@ async function startUpload() {
         apiClient.post(`/ai/analyze/${result.id}`).catch(() => {})
       }
 
-      // 关联标签
+      // 关联快速标签（自由类目，来源为手动）
       if (tags.length > 0) {
-        // TODO: add tags to material via API
+        try {
+          await addTagsToInspiration(result.id, tags, 'free', 'manual')
+          taggedCount++
+        } catch {
+          tagFailedCount++
+        }
       }
 
       prependRecent(result.id, result.thumbnail_path ?? null, result.file_path, result.media_type)
@@ -208,6 +227,7 @@ async function startUpload() {
   }
 
   uploading.value = false
+  uploadSpeed.value = ''
   const done = queue.value.filter(q => q.status === 'done').length
   const failed = queue.value.filter(q => q.status === 'failed').length
   const dups = queue.value.filter(q => q.status === 'duplicate').length
@@ -216,6 +236,12 @@ async function startUpload() {
   if (failed > 0) parts.push(`${failed} 失败`)
   if (dups > 0) parts.push(`${dups} 已跳过`)
   message.success('上传完成：' + parts.join('，'))
+
+  // 快速标签处理结果提示
+  if (tags.length > 0) {
+    if (taggedCount > 0) message.success(`已为 ${taggedCount} 个素材添加快速标签`)
+    if (tagFailedCount > 0) message.warning(`${tagFailedCount} 个素材快速标签添加失败`)
+  }
 
   // 上传后行为
   if (afterUpload.value === 'home') router.push('/')
@@ -262,9 +288,29 @@ function onFileChange(e: Event) {
 }
 
 // ── 视频预览 ──
-function previewVideo(file: File) {
-  URL.revokeObjectURL(videoPreviewUrl.value)
-  videoPreviewUrl.value = URL.createObjectURL(file)
+/** 判断文件是否为视频（按 MIME 类型与扩展名） */
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name)
+}
+
+/** 点击队列中的视频项，在模态框中播放预览 */
+function previewQueueItem(item: QueueItem) {
+  if (!isVideoFile(item.file)) return
+  videoModalSrc.value = item.thumbnail
+  videoModalOpen.value = true
+}
+
+/** 生成上传进度回调：更新单项百分比并计算整体速度 */
+function makeProgressHandler(item: QueueItem) {
+  return (e: any) => {
+    if (e?.total > 0) {
+      item.progress = Math.min(100, Math.round((e.loaded / e.total) * 100))
+    }
+    const totalBytes = _lastBytes + (e?.loaded || 0)
+    const elapsed = (Date.now() - _lastTime) / 1000
+    const mbps = elapsed > 0 ? totalBytes / 1024 / 1024 / elapsed : 0
+    uploadSpeed.value = `${item.progress}% · ${mbps.toFixed(1)} MB/s`
+  }
 }
 
 // ── 最近上传 ──
@@ -285,14 +331,22 @@ const queueFailed = computed(() => queue.value.filter(q => q.status === 'failed'
 const queueDups = computed(() => queue.value.filter(q => q.status === 'duplicate').length)
 
 // ── 快捷键 ──
+/** 清空队列确认弹窗是否可见（按钮与 Esc 共用同一确认） */
+const showClearConfirm = ref(false)
+
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Escape') clearQueue()
+  if (e.key === 'Escape') {
+    // Esc 不再直接清空队列，改为弹出确认，防止误触一次性清掉整批文件
+    if (queue.value.length === 0 || uploading.value || showClearConfirm.value) return
+    showClearConfirm.value = true
+  }
 }
 
 // ── 偏好保存 ──
 function savePrefs() {
   localStorage.setItem('upload-auto-analyze', String(autoAnalyze.value))
   localStorage.setItem('upload-after', afterUpload.value)
+  localStorage.setItem('upload-skip-duplicates', String(skipDuplicates.value))
 }
 
 // ── 生命周期 ──
@@ -363,9 +417,10 @@ onUnmounted(() => {
         <span style="font-size:12px;color:#999">
           待上传 {{ queuePending }} · 已完成 {{ queueDone }} · 失败 {{ queueFailed }}
           <template v-if="queueDups > 0"> · 跳过 {{ queueDups }}</template>
+          <template v-if="uploading && uploadSpeed"> · <span style="color:#6366f1">{{ uploadSpeed }}</span></template>
         </span>
         <n-space>
-          <n-button size="tiny" @click="clearQueue" :disabled="uploading">清空队列</n-button>
+          <n-button size="tiny" @click="showClearConfirm = true" :disabled="uploading">清空队列</n-button>
         </n-space>
       </div>
 
@@ -376,7 +431,23 @@ onUnmounted(() => {
           class="queue-card"
           :class="item.status"
         >
-          <img :src="item.thumbnail" :alt="item.file.name" />
+          <video
+            v-if="isVideoFile(item.file)"
+            :src="item.thumbnail"
+            muted
+            playsinline
+            preload="metadata"
+            class="queue-thumb"
+            title="点击预览"
+            @click="previewQueueItem(item)"
+          />
+          <img
+            v-else
+            :src="item.thumbnail"
+            :alt="item.file.name"
+            class="queue-thumb"
+          />
+          <div v-if="isVideoFile(item.file)" class="queue-video-badge" title="点击预览">▶</div>
           <div class="queue-card-status">
             <template v-if="item.status === 'pending'">⏳</template>
             <template v-else-if="item.status === 'uploading'">
@@ -420,7 +491,7 @@ onUnmounted(() => {
           </div>
           <div class="meta-row">
             <label>跳过重复</label>
-            <n-switch v-model:value="skipDuplicates" />
+            <n-switch v-model:value="skipDuplicates" @update:value="savePrefs" />
           </div>
           <div class="meta-row">
             <label>上传后</label>
@@ -445,12 +516,6 @@ onUnmounted(() => {
           {{ uploading ? '上传中...' : `开始上传 (${queuePending} 个)` }}
         </n-button>
       </n-card>
-    </div>
-
-    <!-- 视频预览 -->
-    <div v-if="videoPreviewUrl" class="video-preview">
-      <video :src="videoPreviewUrl" controls style="max-width:400px;max-height:300px;border-radius:8px" />
-      <n-button size="tiny" @click="videoPreviewUrl = ''">关闭预览</n-button>
     </div>
 
     <!-- 最近上传 -->
@@ -478,6 +543,36 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 清空队列确认弹窗 -->
+    <n-modal
+      v-model:show="showClearConfirm"
+      preset="dialog"
+      title="确认清空待上传队列？"
+      positive-text="确认清空"
+      negative-text="取消"
+      :positive-button-props="{ type: 'error' }"
+      @positive-click="clearQueue"
+    >
+      已选择的文件将全部移除，此操作不可恢复。
+    </n-modal>
+
+    <!-- 视频预览弹窗 -->
+    <n-modal
+      v-model:show="videoModalOpen"
+      preset="card"
+      title="视频预览"
+      style="width: 640px; max-width: 90vw"
+    >
+      <video
+        v-if="videoModalSrc"
+        :src="videoModalSrc"
+        controls
+        autoplay
+        playsinline
+        style="width: 100%; border-radius: 8px"
+      />
+    </n-modal>
   </div>
 </template>
 
@@ -614,10 +709,29 @@ onUnmounted(() => {
 .queue-card.failed { border-color: #ef4444; }
 .queue-card.duplicate { border-color: #f59e0b; }
 
-.queue-card img {
+.queue-card img,
+.queue-card video.queue-thumb {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.queue-video-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .queue-card-status {
@@ -674,12 +788,6 @@ onUnmounted(() => {
   width: 80px;
   flex-shrink: 0;
   text-align: right;
-}
-
-/* 视频预览 */
-.video-preview {
-  margin-top: 16px;
-  text-align: center;
 }
 
 /* 最近上传 */

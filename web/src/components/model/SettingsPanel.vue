@@ -300,6 +300,8 @@ onUnmounted(() => {
           :autosize="{ minRows: 8, maxRows: 20 }"
           placeholder="输入 AI 分析 prompt..."
           style="font-family:monospace;font-size:13px"
+          @keydown.ctrl.s.prevent="savePrompt"
+          @keydown.meta.s.prevent="savePrompt"
         />
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
           <n-space align="center">

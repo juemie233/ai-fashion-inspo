@@ -59,6 +59,7 @@ export const useTagsStore = defineStore('tags', () => {
   function clearFilters() {
     selectedTags.value = new Set()
     excludedTags.value = new Set()
+    combineMode.value = 'AND'  // 组合逻辑一并重置回默认「全部匹配」，避免残留 OR 逻辑
   }
 
   /** 获取类别显示名称 */

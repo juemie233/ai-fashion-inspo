@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 质量审核面板：待审核/已通过/已拒绝统计 + 未通过素材管理。 */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
@@ -20,8 +20,11 @@ const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
 const qualityChecking = ref(false)
 const rechecking = ref(false)
-const randomReviewCount = ref(10)  // 随机审核数量（可调）
+const randomReviewCount = ref(parseInt(localStorage.getItem('review-random-count') || '', 10) || 10)  // 随机审核数量（可调）
 const randomChecking = ref(false)
+
+// 持久化随机审核数量：刷新或再次进入时保持上次设置
+watch(randomReviewCount, (v) => { localStorage.setItem('review-random-count', String(v)) })
 
 // 手动上传免审核配置
 const autoApproveEnabled = ref(true)

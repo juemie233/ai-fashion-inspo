@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 采集管理页：Cookie管理、任务创建、日志查看、结果预览。 */
 
-import { h, ref, computed, onMounted, onUnmounted } from 'vue'
+import { h, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { NTag, NButton, NCheckbox, NSpin, NPopconfirm, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
@@ -9,7 +9,7 @@ import { getFileUrl } from '@/api/inspirations'
 const message = useMessage()
 
 /** 当前激活的页签：tasks 采集任务 / config 源配置 */
-const activeTab = ref<'tasks' | 'config'>('tasks')
+const activeTab = ref<'tasks' | 'config'>((localStorage.getItem('scraper-active-tab') as 'tasks' | 'config') || 'tasks')
 
 // ── copyText（修复版）──
 async function copyText(text: string) {
@@ -73,11 +73,45 @@ const formCdpPort = ref(9222)
 const formSortMode = ref('general')  // general | latest | popular
 const formCollectMode = ref('search')  // search | user | topic
 
+// 新建任务表单草稿：初始化时从 localStorage 恢复，为空则用默认值
+const hasFormDraft = localStorage.getItem('scraper-form-draft') !== null
+const savedFormDraft = localStorage.getItem('scraper-form-draft')
+if (savedFormDraft) {
+  try {
+    const draft = JSON.parse(savedFormDraft) as Record<string, unknown>
+    if (draft.platform === 'xiaohongshu' || draft.platform === 'douyin') formPlatform.value = draft.platform
+    if (typeof draft.keywords === 'string') formKeywords.value = draft.keywords
+    if (typeof draft.maxCount === 'number') formMaxCount.value = draft.maxCount
+    if (typeof draft.sortMode === 'string') formSortMode.value = draft.sortMode
+    if (typeof draft.collectMode === 'string') formCollectMode.value = draft.collectMode
+    if (typeof draft.cdp === 'boolean') formCdp.value = draft.cdp
+    if (typeof draft.cdpPort === 'number') formCdpPort.value = draft.cdpPort
+  } catch { /* 草稿损坏则忽略，使用默认值 */ }
+}
+
 // 任务筛选
 const taskFilterPlatform = ref('')
-const taskFilterStatus = ref('')
-const taskSort = ref('newest')
+const taskFilterStatus = ref(localStorage.getItem('scraper-task-filter') || '')
+const taskSort = ref(localStorage.getItem('scraper-task-sort') || 'newest')
 const taskPage = ref(1)
+
+// 持久化页签与任务筛选/排序：刷新或再次进入时保持上次选择
+watch(activeTab, (v) => { localStorage.setItem('scraper-active-tab', v) })
+watch(taskFilterStatus, (v) => { localStorage.setItem('scraper-task-filter', v) })
+watch(taskSort, (v) => { localStorage.setItem('scraper-task-sort', v) })
+
+// 表单草稿持久化：字段变化时自动保存（仅存草稿，不自动提交任务）
+watch([formPlatform, formKeywords, formMaxCount, formCdp, formCdpPort, formSortMode, formCollectMode], () => {
+  localStorage.setItem('scraper-form-draft', JSON.stringify({
+    platform: formPlatform.value,
+    keywords: formKeywords.value,
+    maxCount: formMaxCount.value,
+    sortMode: formSortMode.value,
+    collectMode: formCollectMode.value,
+    cdp: formCdp.value,
+    cdpPort: formCdpPort.value,
+  }))
+})
 
 // 结果预览
 const resultsTaskId = ref<number | null>(null)
@@ -140,7 +174,7 @@ async function loadAll() {
     sources.value = sRes.data.sources
     tasks.value = tRes.data
     tombstoneCount.value = sRes.data.tombstone_count || 0
-    if (sRes.data.default_max_count) formMaxCount.value = sRes.data.default_max_count
+    if (sRes.data.default_max_count && !hasFormDraft) formMaxCount.value = sRes.data.default_max_count
     cookieStatuses.value = {
       xiaohongshu: cXhs.data as CookieStatus,
       douyin: cDy.data as CookieStatus,
@@ -217,7 +251,7 @@ async function clearAllTasks() {
 
 const retrying = ref(false)
 async function retryFailedTasks() {
-  try { retrying.value=true; message.success((await apiClient.post('/scraper/tasks/retry-failed')).data.message); refreshTasks() }
+  try { retrying.value=true; message.success((await apiClient.post('/scraper/tasks/retry-failed')).data.message); refreshTasks(); startPollIfNeeded() }
   catch (e: any) { message.info(e.response?.status===404?'没有失败任务':(e.response?.data?.detail||'重试失败')) }
   finally { retrying.value=false }
 }
@@ -387,7 +421,7 @@ function expandedRowRender(row: ScraperTask) {
       </n-radio-group>
     </n-form-item>
     <n-form-item :label="formCollectMode==='user'?'用户ID':'关键词'">
-      <n-input v-model:value="formKeywords" :placeholder="formCollectMode==='user'?'输入用户ID或主页链接':'多个关键词用逗号分隔'" />
+      <n-input v-model:value="formKeywords" :placeholder="formCollectMode==='user'?'输入用户ID或主页链接':'多个关键词用逗号分隔'" @keyup.enter="createTask" />
     </n-form-item>
     <n-form-item label="数量">
       <n-input-number v-model:value="formMaxCount" :min="1" :max="500" style="width:100px" />

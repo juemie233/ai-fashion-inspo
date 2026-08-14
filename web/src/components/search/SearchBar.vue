@@ -8,6 +8,12 @@ const inputValue = ref('')
 const suggestions = ref<Array<{ label: string; value: string }>>([])
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
+/** 内部自动补全组件实例引用，用于暴露 focus 方法 */
+const autoCompleteInst = ref<{ focus: () => void } | null>(null)
+
+// 暴露 focus 方法，供 SearchView 的全局快捷键（按 / 聚焦搜索框）调用
+defineExpose({ focus: () => autoCompleteInst.value?.focus() })
+
 const emit = defineEmits<{
   (e: 'search', value: string): void
 }>()
@@ -60,6 +66,7 @@ function selectSuggestion(val: string) {
 <template>
   <div class="search-bar">
     <n-auto-complete
+      ref="autoCompleteInst"
       v-model:value="inputValue"
       :options="suggestions"
       placeholder="搜索标签、颜色、关键词... 如「JK制服」「#FF0000」「春季」"

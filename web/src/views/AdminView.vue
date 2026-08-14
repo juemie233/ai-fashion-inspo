@@ -286,6 +286,7 @@ async function cleanOrphans() {
     const res = await apiClient.post('/admin/cleanup-orphans')
     message.success(`已删除 ${res.data.deleted_count} 个孤立文件，释放 ${formatSize(res.data.freed_bytes)} 空间`)
     await loadIntegrity()
+    await loadAll()  // 顶部统计（存储总大小/来源分布）同步刷新
   } catch (e: any) {
     message.error('清理失败')
   }

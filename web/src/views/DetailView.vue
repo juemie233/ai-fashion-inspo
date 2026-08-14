@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 素材详情页：大图浏览、标签编辑、收藏、删除、相似推荐。 */
 
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import {
@@ -13,6 +13,7 @@ import {
   batchAddTagsToInspirations,
   removeTagFromInspiration,
   suggestOutfitTags,
+  analyzeInspiration,
   type InspirationDetailOut,
 } from '@/api/inspirations'
 import { fetchSimilar, type SimilarItemOut } from '@/api/search'
@@ -31,6 +32,23 @@ const detail = ref<InspirationDetailOut | null>(null)
 const lightboxOpen = ref(false)
 /** 正在加载 */
 const loading = ref(true)
+/** 重新分析提交中（防重复点击） */
+const analyzing = ref(false)
+
+/** 灯箱可浏览图片列表：当前图 + 相似推荐中的图片（排除视频），支持灯箱左右切换 */
+const lightboxPaths = computed<string[]>(() => {
+  const paths: string[] = []
+  if (detail.value && detail.value.media_type !== 'video' && detail.value.file_path) {
+    paths.push(detail.value.file_path)
+  }
+  for (const item of similarItems.value) {
+    const insp = item.inspiration
+    if (insp.media_type !== 'video' && insp.file_path) {
+      paths.push(insp.file_path)
+    }
+  }
+  return paths
+})
 
 // ── 相似素材推荐 ──
 const similarItems = ref<SimilarItemOut[]>([])
@@ -122,6 +140,30 @@ async function handleDelete() {
   }
 }
 
+/** 切换相似素材收藏 */
+async function toggleFavoriteSimilar(id: string) {
+  const item = similarItems.value.find((s) => s.inspiration.id === id)?.inspiration
+  if (!item) return
+  try {
+    const newState = !item.is_favorite
+    await toggleFavorite(id, newState)
+    item.is_favorite = newState
+  } catch {
+    message.error('操作失败')
+  }
+}
+
+/** 删除相似素材 */
+async function deleteSimilar(id: string) {
+  try {
+    await deleteInspiration(id)
+    similarItems.value = similarItems.value.filter((s) => s.inspiration.id !== id)
+    message.success('已删除')
+  } catch {
+    message.error('删除失败')
+  }
+}
+
 /** 类别中文名 */
 const CAT_LABELS: Record<string, string> = {
   style: '风格', item_type: '单品', color: '颜色',
@@ -161,6 +203,42 @@ function analysisStatusLabel(): string {
   if (detail.value.analysis_status === 'analyzing') return '分析中...'
   if (detail.value.analysis_status === 'error') return '分析失败'
   return '已分析'
+}
+
+/** 下载原图的文件名（取文件路径最后一段） */
+const downloadFileName = computed(() => {
+  if (!detail.value) return 'download'
+  return detail.value.file_path.split('/').pop() || 'download'
+})
+
+/** 复制原始链接到剪贴板 */
+async function copySourceUrl() {
+  if (!detail.value?.source_url) return
+  try {
+    await navigator.clipboard.writeText(detail.value.source_url)
+    message.success('已复制原始链接')
+  } catch {
+    message.error('复制失败')
+  }
+}
+
+/** 重新触发 AI 分析（分析失败/未分析时可重试） */
+async function reanalyze() {
+  if (!detail.value || analyzing.value) return
+  analyzing.value = true
+  try {
+    await analyzeInspiration(detail.value.id)
+    message.success('已提交重新分析')
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重新分析失败')
+  } finally {
+    analyzing.value = false
+  }
+}
+
+/** 点击标签跳转到搜索页 */
+function goSearchByTag(name: string) {
+  router.push({ path: '/search', query: { q: name } })
 }
 
 // ===== 穿搭大标签 =====
@@ -252,6 +330,20 @@ async function confirmOutfitTag(name: string) {
     message.success(`已添加「${name}」`)
   } catch {
     message.error('添加失败')
+  }
+}
+
+/** 一键确认全部 AI 建议入库 */
+async function confirmAllOutfitTags() {
+  if (!detail.value || aiSuggestions.value.length === 0) return
+  const names = [...aiSuggestions.value]
+  try {
+    await addTagsToInspiration(detail.value.id, names, 'outfit', 'ai_generated')
+    aiSuggestions.value = []
+    detail.value = await fetchInspiration(detail.value.id)
+    message.success(`已全部入库 ${names.length} 个大标签`)
+  } catch {
+    message.error('批量入库失败')
   }
 }
 
@@ -354,11 +446,12 @@ async function refreshSimilar(id: string) {
               class="main-image"
             />
 
-            <!-- 大图灯箱（仅图片） -->
+            <!-- 大图灯箱（仅图片，可左右切换到相似推荐图） -->
             <ImageLightbox
               v-if="detail.media_type !== 'video'"
               :show="lightboxOpen"
-              :image-path="detail.file_path"
+              :image-paths="lightboxPaths"
+              :initial-index="0"
               @close="lightboxOpen = false"
             />
           </div>
@@ -373,6 +466,13 @@ async function refreshSimilar(id: string) {
               >
                 {{ detail.is_favorite ? '❤️ 已收藏' : '🤍 收藏' }}
               </n-button>
+              <a
+                :href="getFileUrl(detail.file_path)"
+                :download="downloadFileName"
+                class="download-link"
+              >
+                <n-button>⬇️ 下载原图</n-button>
+              </a>
               <n-popconfirm @positive-click="handleDelete">
                 <template #trigger>
                   <n-button type="error" secondary>删除</n-button>
@@ -392,6 +492,7 @@ async function refreshSimilar(id: string) {
                 </n-descriptions-item>
                 <n-descriptions-item v-if="detail.source_url" label="原始链接">
                   <a :href="detail.source_url" target="_blank">打开</a>
+                  <n-button size="tiny" quaternary style="margin-left:8px" @click="copySourceUrl">复制</n-button>
                 </n-descriptions-item>
                 <n-descriptions-item label="AI 分析">
                   <n-tag
@@ -400,6 +501,14 @@ async function refreshSimilar(id: string) {
                   >
                     {{ analysisStatusLabel() }}
                   </n-tag>
+                  <n-button
+                    v-if="detail.analysis_status === 'error' || detail.analysis_status === 'none'"
+                    size="tiny"
+                    quaternary
+                    :loading="analyzing"
+                    style="margin-left:8px"
+                    @click="reanalyze"
+                  >重新分析</n-button>
                 </n-descriptions-item>
                 <n-descriptions-item label="上传时间">
                   {{ new Date(detail.created_at).toLocaleString('zh-CN') }}
@@ -423,7 +532,9 @@ async function refreshSimilar(id: string) {
                   size="small"
                   type="error"
                   closable
+                  class="tag-clickable"
                   @close="removeOutfitTag(t.tag.id)"
+                  @click="goSearchByTag(t.tag.name)"
                 >
                   {{ t.tag.name }}
                 </n-tag>
@@ -451,7 +562,15 @@ async function refreshSimilar(id: string) {
               <div class="outfit-tag-hint">输入新标签后按两次回车即可快速添加</div>
 
               <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
-                <div style="font-size:12px;color:#999;margin:8px 0 4px">AI 建议（点击标签入库，点 ✕ 丢弃）：</div>
+                <div class="outfit-tag-suggestions-header">
+                  <span style="font-size:12px;color:#999">AI 建议（点击标签入库，点 ✕ 丢弃）：</span>
+                  <n-button
+                    size="tiny"
+                    type="warning"
+                    secondary
+                    @click="confirmAllOutfitTags"
+                  >一键全部入库 ({{ aiSuggestions.length }})</n-button>
+                </div>
                 <div class="tag-chips">
                   <span
                     v-for="name in aiSuggestions"
@@ -479,14 +598,19 @@ async function refreshSimilar(id: string) {
                   {{ CAT_LABELS[category] || category }}
                 </span>
                 <div class="tag-chips">
-                  <CategoryTag
+                  <span
                     v-for="t in tags"
                     :key="t.tag.id"
-                    :category="t.tag.category"
-                    size="small"
+                    class="tag-clickable"
+                    @click="goSearchByTag(t.tag.name)"
                   >
-                    {{ t.tag.name }}<template v-if="t.confidence < 0.8"> ({{ Math.round(t.confidence * 100) }}%)</template>
-                  </CategoryTag>
+                    <CategoryTag
+                      :category="t.tag.category"
+                      size="small"
+                    >
+                      {{ t.tag.name }}<template v-if="t.confidence < 0.8"> ({{ Math.round(t.confidence * 100) }}%)</template>
+                    </CategoryTag>
+                  </span>
                 </div>
               </div>
             </div>
@@ -557,10 +681,12 @@ async function refreshSimilar(id: string) {
               :key="item.inspiration.id"
               :item="item.inspiration"
               :badge="`${Math.round(item.similarity * 100)}% · ${similarSourceLabel(item.match_source)}`"
-              :show-actions="false"
+              :show-actions="!batchMode"
               :selectable="batchMode"
               :selected="batchSelectedIds.includes(item.inspiration.id)"
               @toggle-select="toggleSelectSimilar(item.inspiration.id)"
+              @toggle-favorite="toggleFavoriteSimilar(item.inspiration.id)"
+              @delete="deleteSimilar(item.inspiration.id)"
             />
           </div>
         </div>
@@ -629,6 +755,25 @@ async function refreshSimilar(id: string) {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 可点击跳转搜索的标签 */
+.tag-clickable {
+  cursor: pointer;
+}
+
+/* 下载原图按钮的链接容器 */
+.download-link {
+  display: inline-flex;
+}
+
+/* AI 建议一键全部入库的操作行 */
+.outfit-tag-suggestions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
 }
 
 .similar-section {

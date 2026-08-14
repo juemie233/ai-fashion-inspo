@@ -123,10 +123,14 @@ export async function fetchInspiration(id: string) {
   return data
 }
 
-/** 上传灵感图片 */
-export async function uploadInspiration(formData: FormData) {
+/** 上传灵感图片（支持透传上传进度回调） */
+export async function uploadInspiration(
+  formData: FormData,
+  onProgress?: (e: any) => void,
+) {
   const { data } = await apiClient.post<InspirationOut>('/inspirations', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: onProgress,
   })
   return data
 }
@@ -142,6 +146,12 @@ export async function toggleFavorite(id: string, isFavorite: boolean) {
 /** 删除灵感 */
 export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)
+}
+
+/** 触发 AI 分析（用于手动重新分析） */
+export async function analyzeInspiration(id: string) {
+  const { data } = await apiClient.post(`/ai/analyze/${id}`)
+  return data
 }
 
 /** 批量质量审核（审核所有待审核素材） */

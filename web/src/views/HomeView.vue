@@ -26,8 +26,17 @@ const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || '
 const mediaFilter = ref<MediaFilter>((route.query.media as MediaFilter) || 'all')
 const statusFilter = ref<StatusFilter>((route.query.status as StatusFilter) || 'all')
 const qualityFilter = ref<QualityFilter>((route.query.quality as QualityFilter) || 'all')
-const sortMode = ref<SortMode>((route.query.sort as SortMode) || 'newest')
+const sortMode = ref<SortMode>(
+  (route.query.sort as SortMode) ||
+  (localStorage.getItem('masonry-sort') as SortMode) ||
+  'newest'
+)
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
+
+// 持久化浏览模式（排序，含「随机」）：刷新或再次进入素材库时保持上次的选择
+watch(sortMode, (v) => {
+  localStorage.setItem('masonry-sort', v)
+})
 
 const currentPage = ref(parseInt(route.query.page as string) || 1)
 const pageSize = ref(50)

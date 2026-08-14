@@ -275,7 +275,7 @@ onUnmounted(() => {
     <!-- 下载模型 -->
     <n-card title="下载新模型" size="small">
       <n-space align="center">
-        <n-input v-model:value="downloadName" placeholder="如: gemma3:4b, llava:7b" style="width:280px" />
+        <n-input v-model:value="downloadName" placeholder="如: gemma3:4b, llava:7b" style="width:280px" @keyup.enter="startDownload" />
         <n-button v-if="!downloading" type="primary" @click="startDownload" :disabled="!downloadName.trim()">
           下载
         </n-button>

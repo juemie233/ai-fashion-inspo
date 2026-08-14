@@ -107,8 +107,8 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   }
 
   /** 上传新素材 */
-  async function upload(formData: FormData) {
-    const item = await uploadInspiration(formData)
+  async function upload(formData: FormData, onProgress?: (e: any) => void) {
+    const item = await uploadInspiration(formData, onProgress)
     items.value.unshift(item)
     total.value++
     return item

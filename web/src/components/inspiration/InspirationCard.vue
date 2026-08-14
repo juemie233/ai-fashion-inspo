@@ -118,17 +118,22 @@ function handleCardClick() {
             <n-icon><CheckmarkOutline /></n-icon>
           </template>
         </n-button>
-        <n-button
-          size="tiny"
-          circle
-          quaternary
-          type="error"
-          @click.stop="emit('delete')"
-        >
-          <template #icon>
-            <n-icon><TrashOutline /></n-icon>
+        <n-popconfirm @positive-click="emit('delete')">
+          <template #trigger>
+            <n-button
+              size="tiny"
+              circle
+              quaternary
+              type="error"
+              @click.stop
+            >
+              <template #icon>
+                <n-icon><TrashOutline /></n-icon>
+              </template>
+            </n-button>
           </template>
-        </n-button>
+          确认删除该素材？此操作不可恢复
+        </n-popconfirm>
         <n-button
           size="tiny"
           circle

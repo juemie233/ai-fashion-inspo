@@ -472,15 +472,21 @@ function sourceColor(s: string) {
 
       <n-divider vertical />
 
-      <n-button
+      <n-popconfirm
         v-if="selectedIds.size > 0"
-        size="small"
-        type="error"
-        secondary
-        @click="handleBatchDelete"
+        @positive-click="handleBatchDelete"
       >
-        删除选中 ({{ selectedIds.size }})
-      </n-button>
+        <template #trigger>
+          <n-button
+            size="small"
+            type="error"
+            secondary
+          >
+            删除选中 ({{ selectedIds.size }})
+          </n-button>
+        </template>
+        确认删除选中的 {{ selectedIds.size }} 个标签？此操作不可恢复
+      </n-popconfirm>
       <n-button
         v-if="selectedIds.size >= 2"
         size="small"
@@ -571,12 +577,22 @@ function sourceColor(s: string) {
             <n-tag size="small">{{ pair.tag_a.name }}</n-tag>
             <span style="font-size:12px;color:#999">相似度 {{ (pair.similarity * 100).toFixed(0) }}%</span>
             <n-tag size="small">{{ pair.tag_b.name }}</n-tag>
-            <n-button size="tiny" type="warning" @click="quickMerge(pair.tag_a.id, pair.tag_b.id)">
-              合并 → {{ pair.tag_a.name }}
-            </n-button>
-            <n-button size="tiny" type="warning" @click="quickMerge(pair.tag_b.id, pair.tag_a.id)">
-              合并 → {{ pair.tag_b.name }}
-            </n-button>
+            <n-popconfirm @positive-click="quickMerge(pair.tag_a.id, pair.tag_b.id)">
+              <template #trigger>
+                <n-button size="tiny" type="warning">
+                  合并 → {{ pair.tag_a.name }}
+                </n-button>
+              </template>
+              确认合并？源标签「{{ pair.tag_b.name }}」将被删除，其关联素材会迁移到「{{ pair.tag_a.name }}」
+            </n-popconfirm>
+            <n-popconfirm @positive-click="quickMerge(pair.tag_b.id, pair.tag_a.id)">
+              <template #trigger>
+                <n-button size="tiny" type="warning">
+                  合并 → {{ pair.tag_b.name }}
+                </n-button>
+              </template>
+              确认合并？源标签「{{ pair.tag_a.name }}」将被删除，其关联素材会迁移到「{{ pair.tag_b.name }}」
+            </n-popconfirm>
           </n-space>
         </n-list-item>
       </n-list>
@@ -681,10 +697,10 @@ function sourceColor(s: string) {
     </div><!-- /split-layout -->
 
     <!-- ===== 编辑弹窗 ===== -->
-    <n-modal v-model:show="showEditModal" title="编辑标签" preset="card" style="width:420px">
+    <n-modal v-model:show="showEditModal" title="编辑标签" preset="card" style="width:420px" @esc="showEditModal = false">
       <n-form label-placement="left" label-width="60">
         <n-form-item label="名称">
-          <n-input v-model:value="editName" />
+          <n-input v-model:value="editName" @keyup.enter="handleEdit" />
         </n-form-item>
         <n-form-item label="类别">
           <n-select

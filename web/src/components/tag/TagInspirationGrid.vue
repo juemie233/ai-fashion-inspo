@@ -31,8 +31,12 @@ const items = ref<TagInspiration[]>([])
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
-const sort = ref<'newest' | 'oldest' | 'confidence'>('newest')
-const density = ref<'compact' | 'standard'>('compact')
+const sort = ref<'newest' | 'oldest' | 'confidence'>((localStorage.getItem('tag-grid-sort') as 'newest' | 'oldest' | 'confidence') || 'newest')
+const density = ref<'compact' | 'standard'>((localStorage.getItem('tag-grid-density') as 'compact' | 'standard') || 'compact')
+
+// 持久化排序与密度：刷新或再次进入时保持上次选择
+watch(sort, (v) => { localStorage.setItem('tag-grid-sort', v) })
+watch(density, (v) => { localStorage.setItem('tag-grid-density', v) })
 
 // ===== 多选（批量移除） =====
 const selectedIds = ref<Set<string>>(new Set())
@@ -43,7 +47,14 @@ const removingIds = ref<Set<string>>(new Set())
 
 // ===== 灯箱 =====
 const showLightbox = ref(false)
-const lightboxPath = ref('')
+/** 打开灯箱时的初始显示索引（对应 lightboxPaths） */
+const lightboxIndex = ref(0)
+/** 当前标签下所有图片路径（排除视频），供灯箱左右切换 */
+const lightboxPaths = computed<string[]>(() =>
+  items.value
+    .filter((i) => i.media_type !== 'video' && i.file_path)
+    .map((i) => i.file_path)
+)
 
 const selectedCount = computed(() => selectedIds.value.size)
 const allVisibleSelected = computed(
@@ -117,7 +128,8 @@ function openLightbox(item: TagInspiration) {
     openDetail(item)  // 视频跳到详情页播放
     return
   }
-  lightboxPath.value = item.file_path
+  const idx = lightboxPaths.value.indexOf(item.file_path)
+  lightboxIndex.value = idx >= 0 ? idx : 0
   showLightbox.value = true
 }
 
@@ -194,9 +206,14 @@ function fileUrl(item: TagInspiration): string {
       <n-space align="center" :size="8">
         <n-checkbox :checked="allVisibleSelected" :indeterminate="selectedCount > 0 && !allVisibleSelected" @update:checked="toggleSelectAll" />
         <span style="font-size:13px">已选 {{ selectedCount }} 个</span>
-        <n-button size="tiny" type="error" :loading="batchRemoving" @click="batchRemove">
-          批量移除该标签
-        </n-button>
+        <n-popconfirm @positive-click="batchRemove">
+          <template #trigger>
+            <n-button size="tiny" type="error" :loading="batchRemoving">
+              批量移除该标签
+            </n-button>
+          </template>
+          确认批量移除 {{ selectedCount }} 个关联？此操作不可恢复
+        </n-popconfirm>
         <n-button size="tiny" @click="clearSelection">取消选择</n-button>
       </n-space>
     </div>
@@ -232,13 +249,17 @@ function fileUrl(item: TagInspiration): string {
 
           <!-- 悬停快捷操作 -->
           <div class="card-actions" @click.stop>
-            <n-button
-              size="tiny"
-              type="error"
-              ghost
-              :loading="removingIds.has(item.inspiration_id)"
-              @click="removeOne(item)"
-            >移除</n-button>
+            <n-popconfirm @positive-click="removeOne(item)">
+              <template #trigger>
+                <n-button
+                  size="tiny"
+                  type="error"
+                  ghost
+                  :loading="removingIds.has(item.inspiration_id)"
+                >移除</n-button>
+              </template>
+              确认移除该素材关联？
+            </n-popconfirm>
             <n-button size="tiny" @click="openLightbox(item)">大图</n-button>
           </div>
 
@@ -253,7 +274,7 @@ function fileUrl(item: TagInspiration): string {
     </n-spin>
 
     <!-- 灯箱 -->
-    <ImageLightbox :show="showLightbox" :image-path="lightboxPath" @close="showLightbox = false" />
+    <ImageLightbox :show="showLightbox" :image-paths="lightboxPaths" :initial-index="lightboxIndex" @close="showLightbox = false" />
   </template>
 
   <div v-else class="grid-placeholder">点击左侧标签查看关联素材</div>

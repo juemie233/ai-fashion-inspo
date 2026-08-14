@@ -19,19 +19,35 @@ const message = useMessage()
 const tagsStore = useTagsStore()
 const inspStore = useInspirationsStore()
 
+/** 搜索栏组件引用，供全局快捷键聚焦 */
+const searchBarRef = ref<{ focus: () => void } | null>(null)
+
+/** 全局快捷键：按 / 聚焦搜索框（焦点在输入框时放行避免干扰输入），按 Esc 退出向量搜索 */
+function onGlobalKeydown(e: KeyboardEvent) {
+  const target = e.target as HTMLElement | null
+  const tag = target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+  if (e.key === '/') {
+    e.preventDefault()
+    searchBarRef.value?.focus()
+  } else if (e.key === 'Escape' && vectorMode.value !== 'none') {
+    exitVectorMode()
+  }
+}
+
 // ── 响应式状态 ──
 
 const results = ref<InspirationOut[]>([])
 const total = ref(0)
 const searching = ref(false)
 let searchSeq = 0  // 请求序号：普通/语义/以图搜图共用，防止陈旧响应乱序覆盖新结果
-const filterVisible = ref(true)
+const filterVisible = ref(localStorage.getItem('search-filter-visible') !== 'false')
 const showMoreFilters = ref(false)
 
 // 搜索参数
 const keyword = ref((route.query.q as string) || '')
 const currentPage = ref(1)
-const pageSize = ref(50)
+const pageSize = ref(parseInt(localStorage.getItem('search-page-size') || '', 10) || 50)
 const sortMode = ref((route.query.sort as string) || 'newest')
 const sourceFilter = ref((route.query.source as string) || '')
 const mediaFilter = ref((route.query.media as string) || '')
@@ -43,6 +59,10 @@ const dateTo = ref((route.query.to as string) || '')
 const density = ref<'compact' | 'standard' | 'comfortable'>(
   (localStorage.getItem('search-density') as 'compact' | 'standard' | 'comfortable') || 'compact'
 )
+
+// ── 持久化分页大小与筛选面板可见性：刷新或再次进入时保持上次选择 ──
+watch(pageSize, (v) => { localStorage.setItem('search-page-size', String(v)) })
+watch(filterVisible, (v) => { localStorage.setItem('search-filter-visible', String(v)) })
 
 // ── 向量搜索（语义搜索 / 以图搜图） ──
 
@@ -89,6 +109,17 @@ function syncUrl() {
   if (dateFrom.value) query.from = dateFrom.value
   if (dateTo.value) query.to = dateTo.value
   router.replace({ query })
+}
+
+/** 复制当前搜索链接（含筛选条件）到剪贴板 */
+async function copySearchLink() {
+  syncUrl()  // 先把最新筛选条件同步到 URL
+  try {
+    await navigator.clipboard.writeText(location.href)
+    message.success('已复制搜索链接')
+  } catch {
+    message.error('复制失败')
+  }
 }
 
 // ── 搜索执行 ──
@@ -304,6 +335,8 @@ onMounted(() => {
   } else {
     doSearch(1)
   }
+  // 注册全局快捷键：/ 聚焦搜索框、Esc 退出向量搜索
+  document.addEventListener('keydown', onGlobalKeydown)
 })
 
 onUnmounted(() => {
@@ -312,6 +345,8 @@ onUnmounted(() => {
     URL.revokeObjectURL(imagePreviewUrl.value)
     imagePreviewUrl.value = null
   }
+  // 移除全局快捷键监听，避免页面残留
+  document.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 
@@ -321,7 +356,7 @@ onUnmounted(() => {
 
     <!-- 搜索栏 -->
     <div class="search-section">
-      <SearchBar @search="handleSearchBar" />
+      <SearchBar ref="searchBarRef" @search="handleSearchBar" />
     </div>
 
     <!-- 向量搜索入口：语义搜索 + 以图搜图 -->
@@ -470,6 +505,7 @@ onUnmounted(() => {
                   : '输入关键词或选择标签开始搜索' }}
               </span>
               <span style="flex:1" />
+              <n-button size="tiny" @click="copySearchLink">复制搜索链接</n-button>
               <!-- 向量搜索横幅 -->
               <span v-if="vectorMode !== 'none'" class="vector-mode-banner">
                 <template v-if="vectorMode === 'semantic'">语义搜索</template>
@@ -477,6 +513,8 @@ onUnmounted(() => {
                 <img v-if="imagePreviewUrl" :src="imagePreviewUrl" class="vector-query-thumb" alt="搜索图" />
                 <n-button size="tiny" text type="primary" @click="exitVectorMode">返回普通搜索</n-button>
               </span>
+              <!-- 向量搜索固定取前 50 条提示 -->
+              <span v-if="vectorMode !== 'none'" class="vector-limit-hint">仅显示前 50 条最相似结果</span>
               <!-- 排序 + 密度（向量搜索时不显示排序） -->
               <template v-if="vectorMode === 'none'">
                 <n-select
@@ -580,6 +618,11 @@ onUnmounted(() => {
   object-fit: cover;
   border-radius: 4px;
   border: 1px solid #ddd;
+}
+
+.vector-limit-hint {
+  font-size: 12px;
+  color: #999;
 }
 
 .search-context {
