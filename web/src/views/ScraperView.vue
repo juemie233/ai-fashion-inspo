@@ -641,7 +641,7 @@ function expandedRowRender(row: ScraperTask) {
 </template>
 
 <style scoped>
-.scraper-page{max-width:940px;margin:0 auto}
+.scraper-page{max-width:1200px;margin:0 auto}
 .subtitle{color:#999;margin-bottom:16px}
 
 .cookie-cards{display:flex;gap:12px;margin-bottom:16px}
@@ -656,7 +656,7 @@ function expandedRowRender(row: ScraperTask) {
 .results-panel{margin-top:16px;border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff}
 .results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:14px;font-weight:600}
 .results-empty{text-align:center;color:#999;padding:32px 0;font-size:13px}
-.results-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;max-height:500px;overflow-y:auto}
+.results-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;max-height:72vh;overflow-y:auto;padding:4px}
 .result-card{position:relative;aspect-ratio:3/4;overflow:hidden;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:border-color .15s;background:#f5f5f5}
 .result-card.selected{border-color:#2080f0}
 .result-card img{width:100%;height:100%;object-fit:cover}
