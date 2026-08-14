@@ -191,8 +191,11 @@ def _load_clip_model():
             # 退避阻塞数分钟，导致详情页「相似推荐」请求卡死。本地已缓存时直接
             # 加载（毫秒级），未缓存时快速失败并降级到标签匹配兜底。
             logger.info(f"正在加载 CLIP 图像模型: {settings.clip_model_name}")
+            # device="cuda"：CLIP 图像编码走 GPU（RTX 5060 Ti，CUDA 13.2）。
+            # 显式指定避免默认回落到 CPU；若 CUDA 不可用则加载失败，交由下方
+            # except 记录错误并降级到标签匹配兜底，不影响其他功能。
             _image_model = SentenceTransformer(
-                settings.clip_model_name, local_files_only=True
+                settings.clip_model_name, local_files_only=True, device="cuda"
             )
             return _image_model
         except Exception as e:

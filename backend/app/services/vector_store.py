@@ -148,8 +148,30 @@ async def upsert_vector(kind: str, inspiration_id: str, vector: list[float]) -> 
     return await asyncio.to_thread(_upsert_sync, kind, inspiration_id, vector)
 
 
+def _delete_ids_sync(kind: str, inspiration_ids: list[str], chunk_size: int = 500) -> None:
+    """分批删除指定素材的向量（分块避免 IN 子句过长）。
+
+    与单条 ``_upsert_sync`` 的「先删后插」语义一致，但按块合并删除，
+    避免逐条 delete 造成与逐条 add 同等的 manifest 版本膨胀。
+    """
+    if not inspiration_ids:
+        return
+    try:
+        table = _table(kind)
+        for i in range(0, len(inspiration_ids), chunk_size):
+            chunk = inspiration_ids[i:i + chunk_size]
+            clause = "inspiration_id IN (" + ", ".join(
+                f"'{_sql_quote(x)}'" for x in chunk
+            ) + ")"
+            table.delete(clause)
+    except Exception as e:
+        logger.warning(
+            f"批量删除向量失败 (kind={kind}, count={len(inspiration_ids)}): {e}"
+        )
+
+
 def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
-    """同步批量写入多条向量（单次 add，避免逐条写产生版本膨胀）。
+    """同步批量写入多条向量（先删同批旧向量再单次 add，实现真 upsert）。
 
     单条写入时 LanceDB 每次 add 都会生成一个新 manifest，其大小随片段数增长，
     逐条写入 N 条会落盘约 O(N²) 字节（实测 1657 条图像向量膨胀到 524MB）。
@@ -185,6 +207,9 @@ def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
         return 0
     try:
         table = _table(kind)
+        # 真 upsert：先删除同批素材的旧向量，再批量插入，保证一个素材只有一条
+        # 向量（与单条 _upsert_sync 语义一致）。分块删除，避免 IN 子句过长。
+        _delete_ids_sync(kind, [row["inspiration_id"] for row in rows])
         table.add(rows)
         return len(rows)
     except Exception as e:
