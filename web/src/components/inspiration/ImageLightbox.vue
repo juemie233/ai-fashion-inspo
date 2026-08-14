@@ -36,18 +36,89 @@ const MAX_SCALE = 5
 const SCALE_STEP = 0.2
 const scale = ref(1)
 
+// ===== 平移 =====
+/** 平移偏移（像素，基于 1x 基准的视口坐标） */
+const offsetX = ref(0)
+const offsetY = ref(0)
+/** 图片元素与容器 DOM 引用（实时测量尺寸以夹紧平移边界） */
+const imgRef = ref<HTMLImageElement | null>(null)
+const wrapRef = ref<HTMLDivElement | null>(null)
+
 function zoomIn() { scale.value = Math.min(MAX_SCALE, +(scale.value + SCALE_STEP).toFixed(2)) }
 function zoomOut() { scale.value = Math.max(MIN_SCALE, +(scale.value - SCALE_STEP).toFixed(2)) }
-function resetZoom() { scale.value = 1 }
+function resetZoom() {
+  scale.value = 1
+  // 回到 1x 时平移归零，避免残留位移让图片偏离中心
+  offsetX.value = 0
+  offsetY.value = 0
+}
 /** 双击在 1x 与 2x 间切换 */
 function onDblClick() {
   scale.value = scale.value === 1 ? 2 : 1
+  if (scale.value === 1) { offsetX.value = 0; offsetY.value = 0 }
+}
+
+/**
+ * 计算放大后的最大平移范围（像素）。
+ * offsetWidth/offsetHeight 不含 transform，即图片缩放前的 1x 布局尺寸；
+ * 乘以 scale 得到放大后的视觉尺寸，与容器尺寸之差的一半即为单方向可平移量。
+ */
+function maxPanRange(): { maxX: number; maxY: number } {
+  const img = imgRef.value
+  const wrap = wrapRef.value
+  if (!img || !wrap || scale.value <= 1) return { maxX: 0, maxY: 0 }
+  const scaledW = img.offsetWidth * scale.value
+  const scaledH = img.offsetHeight * scale.value
+  return {
+    maxX: Math.max(0, (scaledW - wrap.clientWidth) / 2),
+    maxY: Math.max(0, (scaledH - wrap.clientHeight) / 2),
+  }
+}
+
+function clampOffset() {
+  const { maxX, maxY } = maxPanRange()
+  offsetX.value = Math.min(maxX, Math.max(-maxX, offsetX.value))
+  offsetY.value = Math.min(maxY, Math.max(-maxY, offsetY.value))
+}
+
+// ===== 拖拽平移 =====
+let dragging = false
+/** 拖拽进行中（用于临时禁用 transform 过渡，避免平移卡顿） */
+const isPanning = ref(false)
+let dragStartX = 0
+let dragStartY = 0
+let dragOriginX = 0
+let dragOriginY = 0
+
+function onDragStart(e: MouseEvent) {
+  if (scale.value <= 1) return
+  dragging = true
+  isPanning.value = true
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragOriginX = offsetX.value
+  dragOriginY = offsetY.value
+  e.preventDefault()
+}
+
+function onDragMove(e: MouseEvent) {
+  if (!dragging) return
+  offsetX.value = dragOriginX + (e.clientX - dragStartX)
+  offsetY.value = dragOriginY + (e.clientY - dragStartY)
+  clampOffset()
+}
+
+function onDragEnd() {
+  dragging = false
+  isPanning.value = false
 }
 
 /** 滚轮缩放：向上放大，向下缩小 */
 function onWheel(e: WheelEvent) {
   if (e.deltaY < 0) zoomIn()
   else zoomOut()
+  // 缩放后平移可能越界（如缩小时），立即夹紧
+  clampOffset()
 }
 
 // ===== 左右切换 =====
@@ -134,16 +205,26 @@ onUnmounted(() => {
 <template>
   <Teleport to="body">
     <div v-if="show" class="lightbox-backdrop" @click="emit('close')">
-      <div class="lightbox-content" @click.stop @wheel.prevent="onWheel">
+      <div class="lightbox-content" @click.stop>
         <!-- 图片 + 加载中提示 -->
-        <div class="lightbox-img-wrap" @dblclick="onDblClick">
+        <div
+          ref="wrapRef"
+          class="lightbox-img-wrap"
+          @dblclick="onDblClick"
+          @mousedown="onDragStart"
+          @mousemove="onDragMove"
+          @mouseup="onDragEnd"
+          @mouseleave="onDragEnd"
+          @wheel.prevent="onWheel"
+        >
           <n-spin v-if="currentImage" :show="imageLoading" class="lightbox-loading" size="large">
             <img
+              ref="imgRef"
               :src="getFileUrl(currentImage)"
               :alt="imageList.length > 1 ? `大图浏览 ${currentIndex + 1}/${imageList.length}` : '大图浏览'"
               class="lightbox-img"
-              :class="{ 'is-zoomed': scale !== 1 }"
-              :style="{ transform: `scale(${scale})` }"
+              :class="{ 'is-zoomed': scale !== 1, 'is-panning': isPanning }"
+              :style="{ transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})` }"
               @load="onImageLoad"
               @error="imageLoading = false"
             />
@@ -219,6 +300,11 @@ onUnmounted(() => {
 
 .lightbox-img.is-zoomed {
   cursor: zoom-out;
+}
+
+/* 拖拽平移时禁用 transform 过渡，保证跟手；拖拽结束恢复平滑 */
+.lightbox-img.is-panning {
+  transition: none;
 }
 
 .lightbox-count {

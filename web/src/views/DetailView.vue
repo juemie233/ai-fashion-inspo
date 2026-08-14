@@ -412,8 +412,17 @@ async function batchAddOutfitTags() {
   if (batchSelectedIds.value.length === 0 || batchTagNames.value.length === 0) return
   batchAdding.value = true
   try {
-    await batchAddTagsToInspirations(batchSelectedIds.value, batchTagNames.value, 'outfit', 'manual')
-    message.success(`已为 ${batchSelectedIds.value.length} 个相似素材添加大标签`)
+    const { affected, not_found, skipped_existing } = await batchAddTagsToInspirations(
+      batchSelectedIds.value,
+      batchTagNames.value,
+      'outfit',
+      'manual',
+    )
+    // 明细提示：区分「实际新增」「素材不存在」「关联已存在」
+    const parts = [`已为 ${affected} 个相似素材添加大标签`]
+    if (not_found > 0) parts.push(`${not_found} 个素材不存在`)
+    if (skipped_existing > 0) parts.push(`${skipped_existing} 条关联已存在`)
+    message.success(parts.join('，'))
     exitBatchMode()
     if (detail.value) await refreshSimilar(detail.value.id)
   } catch {

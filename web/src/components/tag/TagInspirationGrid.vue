@@ -192,12 +192,16 @@ async function batchAddTags() {
   }
   batchAdding.value = true
   try {
-    const { added, affected } = await batchAddTagsToInspirations(
+    const { added, affected, not_found, skipped_existing } = await batchAddTagsToInspirations(
       [...selectedIds.value],
       names,
       batchAddCategory.value,
     )
-    message.success(`已为 ${affected} 个素材添加 ${added} 个标签`)
+    // 明细提示：区分「实际新增」「素材不存在」「关联已存在」，避免误以为全部成功
+    const parts = [`已为 ${affected} 个素材添加 ${added} 个标签`]
+    if (not_found > 0) parts.push(`${not_found} 个素材不存在`)
+    if (skipped_existing > 0) parts.push(`${skipped_existing} 条关联已存在`)
+    message.success(parts.join('，'))
     showBatchAddModal.value = false
     batchAddNames.value = ''
     // 添加标签不影响当前标签的关联数，但标签 usage 可能变化，通知父组件刷新统计

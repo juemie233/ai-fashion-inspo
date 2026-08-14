@@ -71,14 +71,24 @@ export async function addTagsToInspiration(
   return data
 }
 
+/** 批量打标结果 */
+export interface BatchAddTagsResult {
+  added: number
+  affected: number
+  skipped: number
+  not_found: number
+  skipped_existing: number
+  missing_ids: string[]
+}
+
 /** 批量给多个素材关联标签（如相似素材批量添加穿搭大标签） */
 export async function batchAddTagsToInspirations(
   inspirationIds: string[],
   names: string[],
   category = 'outfit',
   source = 'manual',
-) {
-  const { data } = await apiClient.post('/inspirations/batch-tags', {
+): Promise<BatchAddTagsResult> {
+  const { data } = await apiClient.post<BatchAddTagsResult>('/inspirations/batch-tags', {
     inspiration_ids: inspirationIds,
     names,
     category,
