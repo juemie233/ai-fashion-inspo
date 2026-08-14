@@ -385,15 +385,6 @@ async def list_scraper_tasks(
     return [ScraperTaskOut.model_validate(t) for t in tasks]
 
 
-@router.get("/tasks/{task_id}", response_model=ScraperTaskOut)
-async def get_scraper_task(task_id: int, db: AsyncSession = Depends(get_db)):
-    """获取指定采集任务的状态。"""
-    task = await db.get(ScraperTask, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="采集任务未找到")
-    return ScraperTaskOut.model_validate(task)
-
-
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK)
 async def delete_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
     """物理删除单条采集任务（素材的 scraper_task_id 自动置 NULL，不删除素材）。"""

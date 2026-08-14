@@ -131,24 +131,6 @@ export async function fetchVectorStatus() {
   return data
 }
 
-/** 触发存量素材向量回填 */
-export async function backfillVectors(mode = 'all', limit = 0) {
-  const form = new FormData()
-  form.append('mode', mode)
-  form.append('limit', String(limit))
-  const { data } = await apiClient.post('/search/vector/backfill', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return data as {
-    processed: number
-    text_added: number
-    text_failed: number
-    image_added: number
-    image_failed: number
-    skipped_non_image: number
-  }
-}
-
 /** 相似素材推荐（视觉 + 标签加权） */
 export async function fetchSimilar(id: string, topK = 10) {
   const { data } = await apiClient.get<SimilarOut>(`/search/similar/${id}`, {

@@ -20,6 +20,8 @@ const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
 const qualityChecking = ref(false)
 const rechecking = ref(false)
+const randomReviewCount = ref(10)  // 随机审核数量（可调）
+const randomChecking = ref(false)
 
 // 质量审核任务（数据库驱动任务队列，轮询进度）
 interface ReviewTask {
@@ -146,6 +148,34 @@ async function recheckQuality() {
   }
 }
 
+/** 随机抽取指定数量的待审核素材进行审核 */
+async function randomQualityCheck() {
+  const count = randomReviewCount.value
+  if (!count || count < 1) {
+    message.warning('请输入有效的随机审核数量（1~200）')
+    return
+  }
+  randomChecking.value = true
+  try {
+    const { data } = await apiClient.post<{ message: string; count: number; task_id?: number }>(
+      '/ai/quality-check',
+      null,
+      { params: { limit: count, random: true } },
+    )
+    if (!data.task_id || data.count === 0) {
+      message.info(data.message || '没有待审核的素材')
+      return
+    }
+    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    message.success(`已随机抽取 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
+    startReviewPolling(data.task_id)
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '随机审核提交失败')
+  } finally {
+    randomChecking.value = false
+  }
+}
+
 // 未通过素材列表
 interface RejectedItem {
   id: string
@@ -264,6 +294,25 @@ onUnmounted(() => {
         >
           {{ qualityReviewStats.pending > 0 ? `审核全部待审核 (${qualityReviewStats.pending})` : '全部已审核' }}
         </n-button>
+        <n-space :size="6" align="center">
+          <n-input-number
+            v-model:value="randomReviewCount"
+            :min="1"
+            :max="200"
+            size="small"
+            style="width:88px"
+            placeholder="数量"
+          />
+          <n-button
+            type="primary"
+            secondary
+            :loading="randomChecking"
+            :disabled="qualityReviewStats.total === 0"
+            @click="randomQualityCheck"
+          >
+            随机审核
+          </n-button>
+        </n-space>
         <n-popconfirm
           v-if="qualityReviewStats.approved > 0"
           @positive-click="recheckQuality"

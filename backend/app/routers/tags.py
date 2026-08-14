@@ -1,6 +1,6 @@
 """标签管理的 REST API 路由。"""
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,17 +34,6 @@ async def list_tags(db: AsyncSession = Depends(get_db)):
         TagCategoryGroup(category=cat, tags=tags)
         for cat, tags in grouped.items()
     ]
-
-
-@router.get("/popular")
-async def popular_tags(db: AsyncSession = Depends(get_db)):
-    """获取热门标签（按使用次数降序排列，前50条）。"""
-    grouped = await get_all_tags_grouped(db)
-    all_tags = []
-    for cat, tags in grouped.items():
-        all_tags.extend(tags)
-    all_tags.sort(key=lambda t: t["usage_count"], reverse=True)
-    return all_tags[:50]
 
 
 @router.post("", response_model=TagOut, status_code=status.HTTP_201_CREATED)
@@ -156,16 +145,6 @@ async def batch_delete_tags(
     return {"message": f"已删除 {len(tags)} 个标签", "count": len(tags)}
 
 
-@router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
-    """删除标签及其所有素材关联。"""
-    tag = await db.get(Tag, tag_id)
-    if not tag:
-        raise HTTPException(status_code=404, detail="标签未找到")
-    await db.delete(tag)
-    await db.flush()
-
-
 @router.post("/merge", status_code=status.HTTP_200_OK)
 async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(get_db)):
     """将源标签合并到目标标签，删除源标签。"""
@@ -251,39 +230,6 @@ async def batch_rename_tags(
             updated += 1
     await db.commit()
     return {"updated": updated, "find": find_str, "replace": replace_str}
-
-
-# ============ 类别管理 ============
-
-
-# 默认类别配置
-_DEFAULT_CATEGORIES = {
-    "style": "风格", "item_type": "单品类型", "color": "颜色",
-    "fit": "版型", "body_part": "穿着方式",
-    "attribute": "属性", "season": "季节", "material": "面料",
-    "brand": "品牌", "free": "其他", "outfit": "穿搭大标签",
-}
-
-
-@router.get("/categories")
-async def list_categories():
-    """获取所有可用标签类别。"""
-    return {"categories": [
-        {"key": k, "label": v} for k, v in _DEFAULT_CATEGORIES.items()
-    ]}
-
-
-@router.post("/categories")
-async def add_category(payload: dict = Body(...)):
-    """动态添加标签类别。请求体: {"key": "new_cat", "label": "新类别"}"""
-    key = payload.get("key", "").strip()
-    label = payload.get("label", "").strip()
-    if not key or not label:
-        raise HTTPException(status_code=400, detail="请提供 key 和 label")
-    if key in _DEFAULT_CATEGORIES:
-        raise HTTPException(status_code=409, detail=f"类别 '{key}' 已存在")
-    _DEFAULT_CATEGORIES[key] = label
-    return {"message": f"已添加类别 '{label}'", "key": key, "label": label}
 
 
 # ============ 统计与扫描 ============

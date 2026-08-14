@@ -41,20 +41,6 @@ router = APIRouter()
 # ============ 模型管理 ============
 
 
-@router.get("/status")
-async def ai_status():
-    """检查 AI 模型的可用性和状态。"""
-    try:
-        from app.services.ai_service import check_ollama_status
-        return await check_ollama_status()
-    except ImportError:
-        return {
-            "status": "not_configured",
-            "message": "AI 服务尚未配置。请安装 Ollama 并拉取视觉模型。",
-            "ollama_url": settings.ollama_base_url,
-        }
-
-
 @router.get("/models")
 async def list_models():
     """列出所有已安装的 Ollama 模型，含大小和修改时间。"""

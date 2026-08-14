@@ -320,14 +320,15 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
 
 
 async def create_quality_check_task(
-    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0
+    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0, random: bool = False
 ) -> TaskQueue:
     """创建「质量审核」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
 
     参数:
         db: 数据库会话
-        inspiration_ids: 待审核的素材 ID 列表（API 层已过滤为 pending 图片）
+        inspiration_ids: 待审核的素材 ID 列表（API 层已按条件过滤）
         skipped: 被跳过的素材数量（保留字段）
+        random: 是否为随机复审——True 时执行阶段不限制 pending，且会覆盖已审查素材的判定
 
     返回:
         新建的任务记录
@@ -338,7 +339,7 @@ async def create_quality_check_task(
         progress=0,
         total=len(inspiration_ids),
         done=0,
-        result={"inspiration_ids": inspiration_ids, "skipped": skipped},
+        result={"inspiration_ids": inspiration_ids, "skipped": skipped, "random": random},
         max_retries=2,
     )
     db.add(task)
@@ -348,15 +349,18 @@ async def create_quality_check_task(
 
 
 async def _quality_check_one(
-    sem: asyncio.Semaphore, inspiration_id: str, file_path: str
+    sem: asyncio.Semaphore, inspiration_id: str, file_path: str, force: bool = False
 ) -> tuple[str, str, str]:
     """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因)。
 
     状态为 approved/rejected/pending（审核失败保持 pending）。
+
+    参数:
+        force: 为 True 时覆盖写入已审查素材（随机复审场景）
     """
     async with sem:
         async with async_session() as db:
-            status, reason = await check_image_quality(db, inspiration_id, file_path)
+            status, reason = await check_image_quality(db, inspiration_id, file_path, force=force)
             # 写入质量审核日志（失败时记录原因，供前端排查）
             db.add(AIAnalysisLog(
                 inspiration_id=inspiration_id,
@@ -376,6 +380,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
+    is_random = payload.get("random", False)
     if not inspiration_ids:
         task.total = 0
         task.done = 0
@@ -383,14 +388,15 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
-    # 加载仍待审核的图片素材（执行期间可能已被人工翻案，仅保留仍 pending 的）
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(
-            Inspiration.id.in_(inspiration_ids),
-            Inspiration.media_type == "image",
-            Inspiration.quality_status == "pending",
-        )
+    # 加载待审核的图片素材（执行期间可能已被人工翻案）：
+    # 随机复审不限制状态，覆盖重审已审查素材；普通审核仅保留仍 pending 的
+    stmt = select(Inspiration.id, Inspiration.file_path).where(
+        Inspiration.id.in_(inspiration_ids),
+        Inspiration.media_type == "image",
     )
+    if not is_random:
+        stmt = stmt.where(Inspiration.quality_status == "pending")
+    result = await db.execute(stmt)
     rows = result.all()
     insp_map = {r[0]: r[1] for r in rows}
     items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
@@ -409,7 +415,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     for start in range(0, len(items), _ANALYZE_CONCURRENCY):
         chunk = items[start:start + _ANALYZE_CONCURRENCY]
         results = await asyncio.gather(
-            *(_quality_check_one(sem, iid, fp) for iid, fp in chunk)
+            *(_quality_check_one(sem, iid, fp, force=is_random) for iid, fp in chunk)
         )
         for _iid, status, _reason in results:
             if status == "approved":

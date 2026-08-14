@@ -13,29 +13,34 @@ router = APIRouter()
 @router.post("/quality-check")
 async def batch_quality_check(
     limit: int = Query(50, ge=1, le=200),
+    random: bool = Query(False, description="是否随机抽取素材（含已审查）"),
     db: AsyncSession = Depends(get_db),
 ):
-    """批量审核所有待审核（pending）的图片素材。
+    """批量审核图片素材。
 
     只处理图片素材；审核结果直接写回 quality_status（approved/rejected）。
     已改造为数据库驱动任务队列：创建任务记录后立即返回 task_id，
     由独立 worker 进程异步执行，前端轮询 GET /api/tasks/{task_id} 获取进度。
+
+    参数:
+        limit: 最多审核的素材数量。
+        random: 为 True 时随机抽取 limit 个素材（含已审查，会覆盖重审）；
+            为 False 时按默认顺序取前 limit 个待审核（pending）素材。
     """
-    result = await db.execute(
-        select(Inspiration.id)
-        .where(
-            Inspiration.quality_status == "pending",
-            Inspiration.media_type == "image",
-        )
-        .limit(limit)
-    )
+    # 随机复审抽取所有图片素材（含已审查），普通审核仅取 pending
+    stmt = select(Inspiration.id).where(Inspiration.media_type == "image")
+    if random:
+        stmt = stmt.order_by(func.random())
+    else:
+        stmt = stmt.where(Inspiration.quality_status == "pending")
+    result = await db.execute(stmt.limit(limit))
     ids = [r[0] for r in result.all()]
 
     if not ids:
-        return {"message": "没有待审核的素材", "count": 0}
+        return {"message": "没有可审核的素材", "count": 0}
 
     from app.services.task_runner import create_quality_check_task
-    task = await create_quality_check_task(db, ids)
+    task = await create_quality_check_task(db, ids, random=random)
 
     return {
         "message": f"已提交 {len(ids)} 个素材进行质量审核",

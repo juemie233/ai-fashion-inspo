@@ -42,12 +42,6 @@ export async function fetchTagsGrouped() {
   return data
 }
 
-/** 获取热门标签 */
-export async function fetchPopularTags() {
-  const { data } = await apiClient.get<TagItem[]>('/tags/popular')
-  return data
-}
-
 /** 创建自定义标签 */
 export async function createTag(name: string, category: string = 'free') {
   const { data } = await apiClient.post('/tags', { name, category })

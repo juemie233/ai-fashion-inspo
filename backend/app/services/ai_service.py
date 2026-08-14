@@ -25,40 +25,6 @@ _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
 logger = logging.getLogger(__name__)
 
 
-async def check_ollama_status() -> dict:
-    """检查 Ollama 是否运行以及视觉模型是否可用。"""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{settings.ollama_base_url}/api/tags")
-            if resp.status_code != 200:
-                return {"status": "error", "message": "Ollama 服务无响应"}
-
-            models = resp.json().get("models", [])
-            model_names = [m["name"] for m in models]
-            vision_available = any(
-                name.startswith(settings.ollama_vision_model.split(":")[0])
-                for name in model_names
-            )
-
-            return {
-                "status": "ok" if vision_available else "model_missing",
-                "ollama_url": settings.ollama_base_url,
-                "available_models": model_names,
-                "vision_model_available": vision_available,
-                "recommended_model": settings.ollama_vision_model,
-                "install_command": f"ollama pull {settings.ollama_vision_model}",
-            }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"无法连接 Ollama：{str(e)}",
-            "ollama_url": settings.ollama_base_url,
-            "recommended_model": settings.ollama_vision_model,
-        }
-
-
 def _read_image_base64(file_path: str) -> tuple[str, float]:
     """读取图片并转为 base64（含路径校验和格式转换）。
 
@@ -270,7 +236,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
 
 
 async def check_image_quality(
-    db: AsyncSession, inspiration_id: str, file_path: str
+    db: AsyncSession, inspiration_id: str, file_path: str, force: bool = False
 ) -> tuple[str, str]:
     """轻量质量审核：判断图片是否为真人穿搭照片。
 
@@ -281,6 +247,8 @@ async def check_image_quality(
         db: 数据库会话
         inspiration_id: 素材 UUID
         file_path: 图片文件的相对路径
+        force: 为 True 时覆盖写入，忽略素材当前审核状态（用于随机复审已审查素材）；
+            默认 False 仅写入 pending 素材，避免覆盖人工翻案
 
     返回:
         (status, reason) — status 为 approved/rejected/pending（审核失败保持 pending）
@@ -353,10 +321,11 @@ async def check_image_quality(
     reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
     status = "approved" if is_outfit else "rejected"
 
-    # 写回数据库（CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
+    # 写回数据库（force=True 时覆盖写入，用于随机复审已审查素材；
+    # 否则 CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
     try:
         insp = await db.get(Inspiration, inspiration_id)
-        if insp and insp.quality_status == "pending":
+        if insp and (force or insp.quality_status == "pending"):
             insp.quality_status = status
             insp.quality_reason = reason if not is_outfit else None
             await db.commit()
