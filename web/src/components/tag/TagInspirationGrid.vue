@@ -113,6 +113,10 @@ async function removeOne(item: TagInspiration) {
 
 /** C 方案：悬停快捷操作——看大图 */
 function openLightbox(item: TagInspiration) {
+  if (item.media_type === 'video') {
+    openDetail(item)  // 视频跳到详情页播放
+    return
+  }
   lightboxPath.value = item.file_path
   showLightbox.value = true
 }
@@ -208,7 +212,14 @@ function fileUrl(item: TagInspiration): string {
           :title="`置信度: ${(item.confidence * 100).toFixed(0)}%`"
           @click="openDetail(item)"
         >
-          <img v-if="item.thumbnail_path || item.file_path" :src="fileUrl(item)" :alt="tag.name" loading="lazy" />
+          <video
+            v-if="item.media_type === 'video' && !item.thumbnail_path"
+            :src="getFileUrl(item.file_path)"
+            muted
+            playsinline
+            preload="metadata"
+          />
+          <img v-else-if="item.thumbnail_path || item.file_path" :src="fileUrl(item)" :alt="tag.name" loading="lazy" />
           <div v-else class="no-preview">无预览</div>
 
           <!-- 多选勾选 -->
@@ -302,7 +313,8 @@ function fileUrl(item: TagInspiration): string {
 .image-card:hover {
   transform: scale(1.03);
 }
-.image-card img {
+.image-card img,
+.image-card video {
   width: 100%;
   aspect-ratio: 2/3;
   object-fit: cover;

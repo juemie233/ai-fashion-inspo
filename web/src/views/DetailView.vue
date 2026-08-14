@@ -271,17 +271,26 @@ function dismissOutfitTag(name: string) {
         </n-breadcrumb>
 
         <div class="detail-layout">
-          <!-- 左侧：大图 -->
+          <!-- 左侧：大图 / 视频 -->
           <div class="image-section">
+            <video
+              v-if="detail.media_type === 'video'"
+              :src="getFileUrl(detail.file_path)"
+              controls
+              playsinline
+              class="main-image"
+            />
             <img
+              v-else
               :src="getFileUrl(detail.file_path)"
               alt="穿搭素材"
               @click="lightboxOpen = true"
               class="main-image"
             />
 
-            <!-- 大图灯箱 -->
+            <!-- 大图灯箱（仅图片） -->
             <ImageLightbox
+              v-if="detail.media_type !== 'video'"
               :show="lightboxOpen"
               :image-path="detail.file_path"
               @close="lightboxOpen = false"

@@ -55,20 +55,24 @@ function goToDetail() {
 
 <template>
   <div class="card" @click="goToDetail">
-    <!-- 缩略图 -->
+    <!-- 缩略图 / 视频首帧 -->
     <div class="card-image">
-      <img
-        v-if="item.thumbnail_path"
-        :src="getFileUrl(item.thumbnail_path)"
-        :alt="item.source_author || '穿搭素材'"
-        loading="lazy"
+      <video
+        v-if="item.media_type === 'video' && !item.thumbnail_path"
+        :src="getFileUrl(item.file_path)"
+        muted
+        playsinline
+        preload="metadata"
       />
       <img
         v-else
-        :src="getFileUrl(item.file_path)"
+        :src="getFileUrl(item.thumbnail_path || item.file_path)"
         :alt="item.source_author || '穿搭素材'"
         loading="lazy"
       />
+
+      <!-- 视频播放角标 -->
+      <div v-if="item.media_type === 'video'" class="video-badge" title="视频">▶</div>
 
       <!-- 角标（相似度 / 相似来源） -->
       <div v-if="badge" class="sim-badge" :title="badge">
@@ -179,10 +183,33 @@ function goToDetail() {
   width: 100%;
   background: #f5f5f5;
 }
-.card-image img {
+.card-image img,
+.card-image video {
   width: 100%;
   display: block;
   object-fit: cover;
+}
+.card-image video {
+  aspect-ratio: 3 / 4;
+  background: #000;
+}
+
+.video-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .card-overlay {

@@ -1,12 +1,12 @@
 """文件服务：上传保存、缩略图生成、静态文件管理。"""
 
+import asyncio
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import aiofiles
 from fastapi import UploadFile
-from PIL import Image
 
 from app.config import settings
 
@@ -25,9 +25,48 @@ def _generate_filename(original_filename: str) -> str:
     return f"{uuid.uuid4().hex}{ext}"
 
 
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _is_video(path: Path) -> bool:
+    """判断文件是否为视频（按扩展名）。"""
+    return path.suffix.lower() in _VIDEO_EXTS
+
+
+async def _generate_video_thumbnail(video_path: Path) -> str | None:
+    """用 ffmpeg 提取视频首帧作为缩略图，失败返回 None。"""
+    thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
+    thumb_filename = f"thumb_{video_path.stem}.jpg"
+    full_thumb_path = thumbs_dir / thumb_filename
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", "1",
+        "-i", str(video_path),
+        "-frames:v", "1",
+        "-vf", "scale=400:-2",
+        str(full_thumb_path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        if full_thumb_path.exists() and full_thumb_path.stat().st_size > 0:
+            today = datetime.now().strftime("%Y-%m")
+            return f"thumbnails/{today}/{thumb_filename}"
+    except Exception:
+        pass
+    return None
+
+
 async def generate_thumbnail(image_path: Path) -> str | None:
-    """为指定图片生成缩略图，返回相对路径。"""
+    """为图片或视频生成缩略图，返回相对路径。图片用 PIL，视频用 ffmpeg 提取首帧。"""
     from datetime import datetime
+
+    if _is_video(image_path):
+        return await _generate_video_thumbnail(image_path)
 
     try:
         from PIL import Image
@@ -54,7 +93,6 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
         (文件相对路径, 缩略图相对路径或None)
     """
     images_dir = _ensure_date_dir(settings.images_dir)
-    thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
 
     filename = _generate_filename(file.filename or "upload.jpg")
     file_path = images_dir / filename
@@ -64,20 +102,8 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
     async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)
 
-    # 生成缩略图
-    thumb_path = None
-    try:
-        img = Image.open(file_path)
-        img.thumbnail(settings.thumbnail_size, Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        thumb_filename = f"thumb_{filename}"
-        full_thumb_path = thumbs_dir / thumb_filename
-        img.save(full_thumb_path, "JPEG", quality=settings.thumbnail_quality)
-        today = datetime.now().strftime("%Y-%m")
-        thumb_path = f"thumbnails/{today}/{thumb_filename}"
-    except Exception:
-        thumb_path = None
+    # 生成缩略图（图片用 PIL，视频用 ffmpeg 提取首帧）
+    thumb_path = await generate_thumbnail(file_path)
 
     today = datetime.now().strftime("%Y-%m")
     rel_file_path = f"images/{today}/{filename}"
@@ -127,7 +153,6 @@ async def save_from_url(url: str) -> tuple[str, str | None] | None:
             response.raise_for_status()
 
         images_dir = _ensure_date_dir(settings.images_dir)
-        thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
 
         # 根据 Content-Type 确定扩展名
         content_type = response.headers.get("content-type", "")
@@ -144,20 +169,8 @@ async def save_from_url(url: str) -> tuple[str, str | None] | None:
         async with aiofiles.open(file_path, "wb") as f:
             await f.write(response.content)
 
-        # 生成缩略图
-        thumb_path = None
-        try:
-            img = Image.open(file_path)
-            img.thumbnail(settings.thumbnail_size, Image.LANCZOS)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            thumb_filename = f"thumb_{filename}"
-            full_thumb = thumbs_dir / thumb_filename
-            img.save(full_thumb, "JPEG", quality=settings.thumbnail_quality)
-            today = datetime.now().strftime("%Y-%m")
-            thumb_path = f"thumbnails/{today}/{thumb_filename}"
-        except Exception:
-            pass
+        # 生成缩略图（图片用 PIL，视频用 ffmpeg 提取首帧）
+        thumb_path = await generate_thumbnail(file_path)
 
         today = datetime.now().strftime("%Y-%m")
         rel_file_path = f"images/{today}/{filename}"
