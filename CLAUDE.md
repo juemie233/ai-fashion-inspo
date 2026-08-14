@@ -7,6 +7,35 @@
 3. **用户界面文案**：所有页面提示、警告、错误信息、状态标签、按钮文字、空状态引导等，一律使用中文
 4. **数据内容**（标签名、AI prompt 等）：使用中文
 
+## 代码探索策略（jcodemunch MCP）
+
+代码导航一律优先使用 jCodeMunch-MCP，不要回退到 Read / Grep / Glob / Bash 做代码探索。
+**例外：** 即将编辑某个文件时用 `Read` —— harness 要求 `Edit`/`Write` 之前必须先 `Read`。先用 jCodeMunch **定位和理解**代码，再只 `Read` 你要改的那个文件。
+
+本服务器运行 **front door（前门）** 表面：三个工具可触达所有 jCodeMunch 能力，因此工具列表保持精简，目录仅在需要时才拉取。
+
+**会话开始时：**
+1. `order { "action": "resolve_repo", "args": { "path": "." } }` —— 确认项目已索引。若未索引：`order { "action": "index_folder", "args": { "path": "." } }`
+
+**之后针对任何任务：**
+- 明确知道要什么 → `order { "action": "<name>", "args": { ... } }`
+- 知道目标但不知用哪个工具 → `route { "query": "用一句话描述你的任务" }` 自动选择动作并构造参数
+- 想看有哪些能力 → `menu { "query": "你想做什么" }` 返回匹配的动作及示例参数
+- 想看完整目录与使用规则 → `jcodemunch_guide`
+
+`menu` 与 `jcodemunch_guide` 会列出本服务器可运行的所有动作，包括不在你工具列表里的。这是预期行为：front door 就是调用它们的方式。
+
+**解读结果：**
+- `verdict` 为 `no_implementation_found` 是「不存在」的证据，直接报告缺失，不要换措辞重搜。
+- `verdict` 为 `degraded` 表示某通道不可用，因此「不存在」并未被证明，依赖结果前先读 note。
+- `source: ""` 同时带 `source_status` 表示函数体无法读取，而非符号为空。
+
+**编辑文件后：**
+- 装了 PostToolUse hook（Claude Code）时，编辑过的文件会自动重建索引。
+- 否则编辑后用 `order { "action": "register_edit", "args": { "paths": [...] } }`，批量改动时合并调用。
+
+**每个会话宣告一次你的模型**，让服务器据此调整回答大小：`announce_model { "model": "<你的模型 id>" }`。
+
 ## 技术栈
 
 | 层级 | 技术 | 版本要求 |
