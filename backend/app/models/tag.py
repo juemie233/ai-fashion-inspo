@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -21,6 +21,15 @@ class Tag(Base):
     source: Mapped[str] = mapped_column(
         String(16), default="seed", index=True
     )  # seed | ai_generated | manual
+    pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, index=True
+    )  # 是否置顶（常用标签固定排前）
+    sort_order: Mapped[int] = mapped_column(
+        Integer, default=0
+    )  # 自定义排序权重（越小越靠前，仅在自定义排序模式生效）
+    description: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )  # 标签说明文字
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -28,6 +37,11 @@ class Tag(Base):
     # 关联关系
     inspirations: Mapped[list["InspirationTag"]] = relationship(
         "InspirationTag",
+        back_populates="tag",
+        cascade="all, delete-orphan",
+    )
+    aliases: Mapped[list["TagAlias"]] = relationship(
+        "TagAlias",
         back_populates="tag",
         cascade="all, delete-orphan",
     )
@@ -64,3 +78,26 @@ class InspirationTag(Base):
         # 按标签筛选（WHERE tag_id = X）需要 tag_id 单列索引；复合主键索引 (inspiration_id, tag_id) 无法高效服务此类查询
         Index("ix_inspiration_tags_tag_id", "tag_id"),
     )
+
+
+class TagAlias(Base):
+    """标签别名：将同义名称（如「纯白」）归一化到主标签（如「白色」）。"""
+
+    __tablename__ = "tag_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tag_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        index=True,
+    )
+    alias: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    # 关联关系
+    tag: Mapped["Tag"] = relationship("Tag", back_populates="aliases")
+
+    def __repr__(self) -> str:
+        return f"<TagAlias(alias={self.alias}, tag_id={self.tag_id})>"

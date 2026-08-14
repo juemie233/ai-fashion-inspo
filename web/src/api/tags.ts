@@ -12,6 +12,9 @@ export interface TagItem {
   name: string
   category: string
   source: string  // seed | ai_generated | manual
+  pinned: boolean
+  sort_order: number
+  description: string | null
   usage_count: number
 }
 
@@ -48,9 +51,18 @@ export async function createTag(name: string, category: string = 'free') {
   return data
 }
 
-/** 更新标签（重命名 / 改类别） */
-export async function updateTag(tagId: number, body: { name?: string; category?: string }) {
+/** 更新标签（重命名 / 改类别 / 置顶 / 排序 / 备注） */
+export async function updateTag(
+  tagId: number,
+  body: { name?: string; category?: string; pinned?: boolean; sort_order?: number; description?: string | null },
+) {
   const { data } = await apiClient.patch(`/tags/${tagId}`, body)
+  return data
+}
+
+/** 批量更新标签自定义排序 */
+export async function reorderTags(items: Array<{ id: number; sort_order: number }>) {
+  const { data } = await apiClient.post('/tags/reorder', { items })
   return data
 }
 
@@ -152,5 +164,88 @@ export async function exportTags() {
 /** 导入标签 */
 export async function importTags(tags: Array<{ name: string; category: string }>) {
   const { data } = await apiClient.post('/tags/import', { tags })
+  return data
+}
+
+// ===== 别名管理 =====
+
+export interface TagAlias {
+  id: number
+  tag_id: number
+  alias: string
+  tag_name?: string
+}
+
+/** 获取所有标签别名 */
+export async function fetchAliases(): Promise<TagAlias[]> {
+  const { data } = await apiClient.get('/tags/aliases')
+  return data
+}
+
+/** 为标签添加别名 */
+export async function createAlias(tagId: number, alias: string) {
+  const { data } = await apiClient.post(`/tags/${tagId}/aliases`, { alias })
+  return data
+}
+
+/** 删除别名 */
+export async function deleteAlias(aliasId: number) {
+  const { data } = await apiClient.delete(`/tags/aliases/${aliasId}`)
+  return data
+}
+
+// ===== 共现网络与使用趋势 =====
+
+export interface CooccurrenceNode {
+  id: number
+  name: string
+  category: string
+  usage_count: number
+}
+
+export interface CooccurrenceEdge {
+  source: number
+  target: number
+  weight: number
+}
+
+export interface CooccurrenceNetwork {
+  nodes: CooccurrenceNode[]
+  edges: CooccurrenceEdge[]
+}
+
+/** 获取标签共现网络 */
+export async function fetchCooccurrenceNetwork(limit: number = 30, minCount: number = 1) {
+  const { data } = await apiClient.get<CooccurrenceNetwork>('/tags/cooccurrence-network', {
+    params: { limit, min_count: minCount },
+  })
+  return data
+}
+
+export interface TopTag {
+  id: number
+  name: string
+  category: string
+  usage_count: number
+}
+
+/** 获取热门标签排行 */
+export async function fetchTopTags(limit: number = 20): Promise<TopTag[]> {
+  const { data } = await apiClient.get('/tags/top', { params: { limit } })
+  return data
+}
+
+export interface TagTrendPoint {
+  bucket: string
+  count: number
+}
+
+/** 获取标签使用趋势 */
+export async function fetchTagTrend(tagId: number, granularity: string = 'month') {
+  const { data } = await apiClient.get<{
+    tag: { id: number; name: string }
+    granularity: string
+    trend: TagTrendPoint[]
+  }>(`/tags/${tagId}/trend`, { params: { granularity } })
   return data
 }

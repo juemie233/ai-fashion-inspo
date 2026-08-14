@@ -10,7 +10,7 @@ import {
   type TagInspiration,
   type TagItem,
 } from '@/api/tags'
-import { getFileUrl, removeTagFromInspiration } from '@/api/inspirations'
+import { getFileUrl, removeTagFromInspiration, batchAddTagsToInspirations } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 
 const props = defineProps<{
@@ -41,6 +41,12 @@ watch(density, (v) => { localStorage.setItem('tag-grid-density', v) })
 // ===== 多选（批量移除） =====
 const selectedIds = ref<Set<string>>(new Set())
 const batchRemoving = ref(false)
+
+// ===== 批量添加标签 =====
+const showBatchAddModal = ref(false)
+const batchAddNames = ref('')
+const batchAddCategory = ref('free')
+const batchAdding = ref(false)
 
 // ===== 单个移除中 =====
 const removingIds = ref<Set<string>>(new Set())
@@ -171,6 +177,37 @@ async function batchRemove() {
 function fileUrl(item: TagInspiration): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
 }
+
+/** 批量给选中素材添加标签（按名称查找或创建） */
+async function batchAddTags() {
+  if (selectedCount.value === 0 || !batchAddNames.value.trim()) return
+  // 支持逗号/顿号/空格分隔多个标签名
+  const names = batchAddNames.value
+    .split(/[,，、\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (names.length === 0) {
+    message.warning('请输入标签名')
+    return
+  }
+  batchAdding.value = true
+  try {
+    const { added, affected } = await batchAddTagsToInspirations(
+      [...selectedIds.value],
+      names,
+      batchAddCategory.value,
+    )
+    message.success(`已为 ${affected} 个素材添加 ${added} 个标签`)
+    showBatchAddModal.value = false
+    batchAddNames.value = ''
+    // 添加标签不影响当前标签的关联数，但标签 usage 可能变化，通知父组件刷新统计
+    emit('changed', { removed: 0 })
+  } catch {
+    message.error('批量添加标签失败')
+  } finally {
+    batchAdding.value = false
+  }
+}
 </script>
 
 <template>
@@ -214,6 +251,9 @@ function fileUrl(item: TagInspiration): string {
           </template>
           确认批量移除 {{ selectedCount }} 个关联？此操作不可恢复
         </n-popconfirm>
+        <n-button size="tiny" type="primary" secondary @click="showBatchAddModal = true">
+          批量添加标签
+        </n-button>
         <n-button size="tiny" @click="clearSelection">取消选择</n-button>
       </n-space>
     </div>
@@ -275,6 +315,42 @@ function fileUrl(item: TagInspiration): string {
 
     <!-- 灯箱 -->
     <ImageLightbox :show="showLightbox" :image-paths="lightboxPaths" :initial-index="lightboxIndex" @close="showLightbox = false" />
+
+    <!-- 批量添加标签弹窗 -->
+    <n-modal v-model:show="showBatchAddModal" title="批量添加标签" preset="card" style="width:480px">
+      <p style="font-size:13px;color:#999;margin:0 0 12px">
+        将为选中的 {{ selectedCount }} 个素材添加以下标签（已存在的关联自动跳过）：
+      </p>
+      <n-form label-placement="left" label-width="60" size="small">
+        <n-form-item label="标签名">
+          <n-input
+            v-model:value="batchAddNames"
+            type="textarea"
+            :rows="3"
+            placeholder="多个标签用逗号/顿号分隔，例如：御姐风, 长腿, 高跟鞋"
+          />
+        </n-form-item>
+        <n-form-item label="类别">
+          <n-select
+            v-model:value="batchAddCategory"
+            :options="[
+              { label: '风格', value: 'style' },
+              { label: '单品', value: 'item_type' },
+              { label: '颜色', value: 'color' },
+              { label: '穿着方式', value: 'body_part' },
+              { label: '版型', value: 'fit' },
+              { label: '属性', value: 'attribute' },
+              { label: '自定义', value: 'free' },
+              { label: '穿搭大标签', value: 'outfit' },
+            ]"
+          />
+        </n-form-item>
+      </n-form>
+      <n-space justify="end" style="margin-top:16px">
+        <n-button @click="showBatchAddModal = false">取消</n-button>
+        <n-button type="primary" :loading="batchAdding" :disabled="!batchAddNames.trim()" @click="batchAddTags">确认添加</n-button>
+      </n-space>
+    </n-modal>
   </template>
 
   <div v-else class="grid-placeholder">点击左侧标签查看关联素材</div>

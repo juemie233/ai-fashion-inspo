@@ -5,12 +5,13 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
+import TagAnalyticsModal from '@/components/tag/TagAnalyticsModal.vue'
 import { useSplitResize } from '@/composables/useSplitResize'
 import {
   fetchTagsGrouped, createTag, updateTag, mergeTags, getSimilarSuggestions,
   batchDeleteTags, deleteUnusedTags, fetchTagStats, findDuplicates,
-  exportTags, importTags,
-  type TagCategoryGroup, type TagItem, type TagStats, type DuplicatePair,
+  exportTags, importTags, reorderTags, fetchAliases, createAlias, deleteAlias,
+  type TagCategoryGroup, type TagItem, type TagStats, type DuplicatePair, type TagAlias,
   CATEGORY_LABELS, SOURCE_LABELS,
 } from '@/api/tags'
 
@@ -23,7 +24,7 @@ const groups = ref<TagCategoryGroup[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
 const filterCategory = ref<string | null>(null)
-const sortMode = ref<'usage' | 'name' | 'recent'>('usage')
+const sortMode = ref<'usage' | 'name' | 'custom'>('usage')
 
 // ===== 统计 =====
 const stats = ref<TagStats | null>(null)
@@ -36,6 +37,7 @@ const showEditModal = ref(false)
 const editTag = ref<TagItem | null>(null)
 const editName = ref('')
 const editCategory = ref('')
+const editDescription = ref('')
 
 // ===== 创建表单 =====
 const showCreateForm = ref(false)
@@ -81,6 +83,16 @@ const dragOverCategory = ref<string | null>(null)
 // ===== 来源筛选 =====
 const filterSource = ref<string | null>(null)
 
+// ===== 标签分析弹窗 =====
+const showAnalytics = ref(false)
+
+// ===== 别名管理 =====
+const showAliasModal = ref(false)
+const aliasTag = ref<TagItem | null>(null)
+const aliasList = ref<TagAlias[]>([])
+const newAlias = ref('')
+const aliasLoading = ref(false)
+
 onMounted(async () => { await loadAll() })
 
 onUnmounted(() => {
@@ -118,7 +130,7 @@ const filteredGroups = computed(() => {
       tags: g.tags.filter(t => t.name.toLowerCase().includes(q)),
     }))
   }
-  // 排序
+  // 排序（custom 模式保持后端 sort_order 顺序，不做前端排序）
   for (const g of result) {
     if (sortMode.value === 'usage') {
       g.tags.sort((a, b) => b.usage_count - a.usage_count)
@@ -163,6 +175,7 @@ function openEdit(tag: TagItem) {
   editTag.value = tag
   editName.value = tag.name
   editCategory.value = tag.category
+  editDescription.value = tag.description || ''
   showEditModal.value = true
 }
 
@@ -172,6 +185,9 @@ async function handleEdit() {
     await updateTag(editTag.value.id, {
       name: editName.value.trim() !== editTag.value.name ? editName.value.trim() : undefined,
       category: editCategory.value !== editTag.value.category ? editCategory.value : undefined,
+      description: (editDescription.value.trim() || null) !== (editTag.value.description || null)
+        ? editDescription.value.trim() || null
+        : undefined,
     })
     message.success('标签已更新')
     showEditModal.value = false
@@ -308,6 +324,11 @@ function selectTag(tag: TagItem) {
 
 /** 素材关联数变化后，同步左侧标签 usage_count 与统计数字 */
 function onGridChanged(payload: { removed: number }) {
+  // 批量添加标签（removed=0）后整体刷新，确保统计与 usage_count 准确
+  if (payload.removed === 0) {
+    loadAll()
+    return
+  }
   if (selectedTag.value) {
     selectedTag.value.usage_count = Math.max(0, selectedTag.value.usage_count - payload.removed)
   }
@@ -404,6 +425,93 @@ async function onDrop(category: string) {
 function sourceColor(s: string) {
   return s === 'ai_generated' ? '#8b5cf6' : s === 'manual' ? '#3b82f6' : '#9ca3af'
 }
+
+// ===== 置顶 =====
+async function togglePin(tag: TagItem) {
+  try {
+    await updateTag(tag.id, { pinned: !tag.pinned })
+    message.success(tag.pinned ? '已取消置顶' : '已置顶')
+    await loadAll()
+  } catch { message.error('操作失败') }
+}
+
+// ===== 自定义排序拖拽 =====
+function onTagDragOver(e: DragEvent) {
+  if (sortMode.value === 'custom') e.preventDefault()
+}
+
+async function onTagDrop(target: TagItem) {
+  if (sortMode.value !== 'custom' || !dragTag.value) return
+  if (dragTag.value.id === target.id) { dragTag.value = null; return }
+  const group = groups.value.find((g) => g.tags.some((t) => t.id === target.id))
+  if (!group || !group.tags.some((t) => t.id === dragTag.value!.id)) {
+    dragTag.value = null
+    return
+  }
+  const tags = [...group.tags]
+  const fromIdx = tags.findIndex((t) => t.id === dragTag.value!.id)
+  const toIdx = tags.findIndex((t) => t.id === target.id)
+  if (fromIdx < 0 || toIdx < 0) { dragTag.value = null; return }
+  const [moved] = tags.splice(fromIdx, 1)
+  tags.splice(toIdx, 0, moved)
+  dragTag.value = null
+  try {
+    await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
+    message.success('排序已更新')
+    await loadAll()
+  } catch { message.error('排序失败') }
+}
+
+// ===== 别名管理 =====
+async function openAliasManager(tag: TagItem) {
+  aliasTag.value = tag
+  newAlias.value = ''
+  showAliasModal.value = true
+  await loadAliases()
+}
+
+async function loadAliases() {
+  aliasLoading.value = true
+  try {
+    const all = await fetchAliases()
+    aliasList.value = all.filter((a) => a.tag_id === aliasTag.value?.id)
+  } catch { aliasList.value = [] } finally { aliasLoading.value = false }
+}
+
+async function handleAddAlias() {
+  if (!aliasTag.value || !newAlias.value.trim()) return
+  try {
+    await createAlias(aliasTag.value.id, newAlias.value.trim())
+    message.success('别名已添加')
+    newAlias.value = ''
+    await loadAliases()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '添加失败')
+  }
+}
+
+async function handleDeleteAlias(aliasId: number) {
+  try {
+    await deleteAlias(aliasId)
+    message.success('别名已删除')
+    await loadAliases()
+  } catch { message.error('删除失败') }
+}
+
+/** 重复面板：将源标签合并到目标并设为其别名 */
+async function quickSetAlias(sourceId: number, targetId: number, sourceName: string) {
+  try {
+    await mergeTags(sourceId, targetId)
+    await createAlias(targetId, sourceName)
+    message.success(`已合并并将「${sourceName}」设为别名`)
+    duplicatePairs.value = duplicatePairs.value.filter(
+      (p) => p.tag_a.id !== sourceId && p.tag_b.id !== sourceId,
+    )
+    await loadAll()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '操作失败')
+  }
+}
 </script>
 
 <template>
@@ -414,6 +522,7 @@ function sourceColor(s: string) {
         <n-button @click="showCreateForm = !showCreateForm" type="primary">
           {{ showCreateForm ? '取消' : '新标签' }}
         </n-button>
+        <n-button @click="showAnalytics = true" secondary>标签分析</n-button>
         <n-button @click="handleExport" secondary>导出</n-button>
         <n-button @click="showImportModal = true" secondary>导入</n-button>
       </n-space>
@@ -468,6 +577,7 @@ function sourceColor(s: string) {
       <n-radio-group v-model:value="sortMode" size="small">
         <n-radio-button value="usage">使用次数</n-radio-button>
         <n-radio-button value="name">名称</n-radio-button>
+        <n-radio-button value="custom">自定义</n-radio-button>
       </n-radio-group>
 
       <n-divider vertical />
@@ -593,6 +703,14 @@ function sourceColor(s: string) {
               </template>
               确认合并？源标签「{{ pair.tag_a.name }}」将被删除，其关联素材会迁移到「{{ pair.tag_b.name }}」
             </n-popconfirm>
+            <n-popconfirm @positive-click="quickSetAlias(pair.tag_b.id, pair.tag_a.id, pair.tag_b.name)">
+              <template #trigger>
+                <n-button size="tiny" type="info">
+                  设别名 → {{ pair.tag_a.name }}
+                </n-button>
+              </template>
+              确认将「{{ pair.tag_b.name }}」合并到「{{ pair.tag_a.name }}」并设为其别名？此后 AI 再识别出「{{ pair.tag_b.name }}」将自动归为「{{ pair.tag_a.name }}」
+            </n-popconfirm>
           </n-space>
         </n-list-item>
       </n-list>
@@ -640,6 +758,8 @@ function sourceColor(s: string) {
                 :key="tag.id"
                 draggable="true"
                 @dragstart="onDragStart(tag)"
+                @dragover="onTagDragOver"
+                @drop="onTagDrop(tag)"
                 style="cursor:grab"
               >
                 <template #prefix>
@@ -649,6 +769,13 @@ function sourceColor(s: string) {
                       @update:checked="toggleSelect(tag.id)"
                       @click.stop
                     />
+                    <n-button
+                      size="tiny"
+                      text
+                      :type="tag.pinned ? 'warning' : 'tertiary'"
+                      @click.stop="togglePin(tag)"
+                      :title="tag.pinned ? '取消置顶' : '置顶到最前'"
+                    >📌</n-button>
                     <n-tag size="small" :bordered="false" :color="{ color: sourceColor(tag.source), textColor: '#fff' }">
                       {{ SOURCE_LABELS[tag.source] || tag.source }}
                     </n-tag>
@@ -661,12 +788,13 @@ function sourceColor(s: string) {
                 <span
                   style="cursor:pointer"
                   @click="selectTag(tag)"
-                  :title="'点击查看使用该标签的素材'"
+                  :title="tag.description ? `点击查看素材 — ${tag.description}` : '点击查看使用该标签的素材'"
                 >{{ tag.name }}</span>
 
                 <template #suffix>
                   <n-space :size="4">
                     <n-button size="tiny" text type="info" @click="openEdit(tag)">编辑</n-button>
+                    <n-button size="tiny" text type="info" @click="openAliasManager(tag)">别名</n-button>
                     <n-button size="tiny" text type="info"
                       @click="mergeSource = { id: tag.id, name: tag.name }; showMergeDialog = true"
                     >合并</n-button>
@@ -706,6 +834,16 @@ function sourceColor(s: string) {
           <n-select
             v-model:value="editCategory"
             :options="Object.entries(CATEGORY_LABELS).map(([k, v]) => ({ label: v, value: k }))"
+          />
+        </n-form-item>
+        <n-form-item label="备注">
+          <n-input
+            v-model:value="editDescription"
+            type="textarea"
+            :rows="2"
+            maxlength="255"
+            show-count
+            placeholder="标签说明（可选）"
           />
         </n-form-item>
       </n-form>
@@ -792,6 +930,39 @@ function sourceColor(s: string) {
         <n-button type="primary" @click="handleBatchRename" :disabled="!renameFind.trim()||!renameReplace.trim()">确认</n-button>
       </n-space>
     </n-modal>
+
+    <!-- ===== 别名管理 ===== -->
+    <n-modal v-model:show="showAliasModal" title="标签别名" preset="card" style="width:520px">
+      <p v-if="aliasTag" style="font-size:13px;color:#999;margin-bottom:12px">
+        「{{ aliasTag.name }}」的别名：AI 识别到别名时会自动归为该标签
+      </p>
+      <n-space align="center" style="margin-bottom:12px">
+        <n-input
+          v-model:value="newAlias"
+          placeholder="输入别名，如：纯白"
+          style="width:240px"
+          @keyup.enter="handleAddAlias"
+        />
+        <n-button type="primary" size="small" :disabled="!newAlias.trim()" @click="handleAddAlias">添加</n-button>
+      </n-space>
+      <n-spin :show="aliasLoading">
+        <n-list v-if="aliasList.length > 0" bordered>
+          <n-list-item v-for="a in aliasList" :key="a.id">
+            <template #suffix>
+              <n-popconfirm @positive-click="handleDeleteAlias(a.id)">
+                <template #trigger><n-button size="tiny" text type="error">删除</n-button></template>
+                确认删除别名「{{ a.alias }}」？
+              </n-popconfirm>
+            </template>
+            {{ a.alias }}
+          </n-list-item>
+        </n-list>
+        <div v-else-if="!aliasLoading" style="text-align:center;color:#999;padding:20px">暂无别名</div>
+      </n-spin>
+    </n-modal>
+
+    <!-- ===== 标签分析 ===== -->
+    <TagAnalyticsModal v-model:show="showAnalytics" />
 
   </div>
 </template>

@@ -7,14 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.inspiration import Inspiration
-from app.models.tag import Tag, InspirationTag
+from app.models.tag import Tag, InspirationTag, TagAlias
 from app.schemas.tag import (
+    AliasCreate,
+    AliasOut,
     TagBatchDelete,
     TagCreate,
     TagCategoryGroup,
     TagImportRequest,
     TagMergeRequest,
     TagOut,
+    TagReorderRequest,
     TagUpdate,
 )
 from app.services.tag_service import (
@@ -64,7 +67,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/{tag_id}", response_model=TagOut)
 async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(get_db)):
-    """更新标签的名称或类别。"""
+    """更新标签的名称、类别、置顶、排序或备注。"""
     tag = await db.get(Tag, tag_id)
     if not tag:
         raise HTTPException(status_code=404, detail="标签未找到")
@@ -83,12 +86,24 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
     if data.category is not None:
         tag.category = data.category
 
+    if data.pinned is not None:
+        tag.pinned = data.pinned
+
+    if data.sort_order is not None:
+        tag.sort_order = data.sort_order
+
+    if data.description is not None:
+        tag.description = data.description
+
     await db.flush()
     await db.refresh(tag)
     return TagOut(
         id=tag.id,
         name=tag.name,
         category=tag.category,
+        pinned=tag.pinned,
+        sort_order=tag.sort_order,
+        description=tag.description,
         created_at=tag.created_at,
         usage_count=0,
     )
@@ -448,4 +463,195 @@ async def import_tags(
         "message": f"已导入 {imported} 个标签，跳过 {skipped} 个已存在",
         "imported": imported,
         "skipped": skipped,
+    }
+
+
+# ============ 自定义排序 ============
+
+
+@router.post("/reorder", status_code=status.HTTP_200_OK)
+async def reorder_tags(
+    data: TagReorderRequest, db: AsyncSession = Depends(get_db)
+):
+    """批量更新标签自定义排序权重（sort_order 越小越靠前）。"""
+    if not data.items:
+        raise HTTPException(status_code=400, detail="请提供排序项")
+
+    order_map = {item.id: item.sort_order for item in data.items}
+    result = await db.execute(select(Tag).where(Tag.id.in_(order_map.keys())))
+    tags = result.scalars().all()
+    for tag in tags:
+        tag.sort_order = order_map[tag.id]
+    await db.commit()
+    return {"updated": len(tags)}
+
+
+# ============ 别名管理 ============
+
+
+@router.get("/aliases", status_code=status.HTTP_200_OK)
+async def list_aliases(db: AsyncSession = Depends(get_db)):
+    """获取所有标签别名（含所属标签名）。"""
+    result = await db.execute(
+        select(TagAlias.id, TagAlias.tag_id, TagAlias.alias, Tag.name)
+        .join(Tag, Tag.id == TagAlias.tag_id)
+        .order_by(Tag.name, TagAlias.alias)
+    )
+    return [
+        {"id": r[0], "tag_id": r[1], "alias": r[2], "tag_name": r[3]}
+        for r in result.all()
+    ]
+
+
+@router.post("/{tag_id}/aliases", response_model=AliasOut, status_code=status.HTTP_201_CREATED)
+async def create_alias(
+    tag_id: int, data: AliasCreate, db: AsyncSession = Depends(get_db)
+):
+    """为标签添加别名（将别名归一化到该标签）。"""
+    tag = await db.get(Tag, tag_id)
+    if not tag:
+        raise HTTPException(status_code=404, detail="标签未找到")
+
+    alias = data.alias.strip()
+    if not alias:
+        raise HTTPException(status_code=400, detail="别名为空")
+
+    # 别名不能与任何主标签同名（否则产生歧义）
+    existing_tag = await db.execute(select(Tag.id).where(Tag.name == alias))
+    if existing_tag.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"别名 '{alias}' 与已有标签同名")
+
+    existing_alias = await db.execute(
+        select(TagAlias).where(TagAlias.alias == alias)
+    )
+    if existing_alias.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"别名 '{alias}' 已存在")
+
+    obj = TagAlias(tag_id=tag_id, alias=alias)
+    db.add(obj)
+    await db.flush()
+    await db.refresh(obj)
+    return obj
+
+
+@router.delete("/aliases/{alias_id}", status_code=status.HTTP_200_OK)
+async def delete_alias(alias_id: int, db: AsyncSession = Depends(get_db)):
+    """删除标签别名。"""
+    obj = await db.get(TagAlias, alias_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="别名未找到")
+    await db.delete(obj)
+    await db.commit()
+    return {"message": "已删除别名"}
+
+
+# ============ 共现网络与使用趋势 ============
+
+
+@router.get("/cooccurrence-network", status_code=status.HTTP_200_OK)
+async def cooccurrence_network(
+    limit: int = Query(30, ge=2, le=100),
+    min_count: int = Query(1, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。"""
+    import itertools
+    from collections import defaultdict
+
+    # 取使用次数最多的 top-N 标签作为网络节点
+    top_result = await db.execute(
+        select(
+            Tag.id,
+            Tag.name,
+            Tag.category,
+            func.count(InspirationTag.inspiration_id).label("cnt"),
+        )
+        .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .group_by(Tag.id)
+        .order_by(func.count(InspirationTag.inspiration_id).desc())
+        .limit(limit)
+    )
+    tags = [(r[0], r[1], r[2], r[3]) for r in top_result.all()]
+    tag_ids = [t[0] for t in tags]
+
+    if not tag_ids:
+        return {"nodes": [], "edges": []}
+
+    # 一次性查出这些标签的所有素材关联，在内存中统计共现
+    links_result = await db.execute(
+        select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
+            InspirationTag.tag_id.in_(tag_ids)
+        )
+    )
+    insp_map: dict[str, set[int]] = defaultdict(set)
+    for insp_id, tag_id in links_result.all():
+        insp_map[insp_id].add(tag_id)
+
+    pair_count: dict[tuple[int, int], int] = defaultdict(int)
+    for tag_set in insp_map.values():
+        for a, b in itertools.combinations(sorted(tag_set), 2):
+            pair_count[(a, b)] += 1
+
+    nodes = [
+        {"id": t[0], "name": t[1], "category": t[2], "usage_count": t[3]}
+        for t in tags
+    ]
+    edges = [
+        {"source": a, "target": b, "weight": w}
+        for (a, b), w in pair_count.items()
+        if w >= min_count
+    ]
+    return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/top", status_code=status.HTTP_200_OK)
+async def top_tags(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回使用次数最多的标签排行。"""
+    result = await db.execute(
+        select(
+            Tag.id,
+            Tag.name,
+            Tag.category,
+            func.count(InspirationTag.inspiration_id).label("cnt"),
+        )
+        .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .group_by(Tag.id)
+        .order_by(func.count(InspirationTag.inspiration_id).desc())
+        .limit(limit)
+    )
+    return [
+        {"id": r[0], "name": r[1], "category": r[2], "usage_count": r[3]}
+        for r in result.all()
+    ]
+
+
+@router.get("/{tag_id}/trend", status_code=status.HTTP_200_OK)
+async def tag_trend(
+    tag_id: int,
+    granularity: str = Query("month", pattern="^(month|week|day)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取标签的使用趋势（按素材创建时间分桶统计）。"""
+    tag = await db.get(Tag, tag_id)
+    if not tag:
+        raise HTTPException(status_code=404, detail="标签未找到")
+
+    fmt = {"month": "%Y-%m", "week": "%Y-W%W", "day": "%Y-%m-%d"}[granularity]
+    result = await db.execute(
+        select(
+            func.strftime(fmt, Inspiration.created_at).label("bucket"),
+            func.count().label("cnt"),
+        )
+        .join(InspirationTag, InspirationTag.inspiration_id == Inspiration.id)
+        .where(InspirationTag.tag_id == tag_id)
+        .group_by("bucket")
+        .order_by("bucket")
+    )
+    return {
+        "tag": {"id": tag.id, "name": tag.name},
+        "granularity": granularity,
+        "trend": [{"bucket": r[0], "count": r[1]} for r in result.all()],
     }

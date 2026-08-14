@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tag import Tag, InspirationTag
+from app.utils.tag_normalizer import normalize_tag_name_async
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,10 @@ async def seed_tags(db: AsyncSession) -> int:
 
 
 async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
-    """获取所有标签，按类别分组，并包含使用次数统计。"""
+    """获取所有标签，按类别分组，并包含使用次数统计。
+
+    组内排序优先级：置顶 → 自定义 sort_order → 使用次数（降序）。
+    """
     result = await db.execute(
         select(
             Tag,
@@ -73,7 +77,12 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
         )
         .outerjoin(InspirationTag, Tag.id == InspirationTag.tag_id)
         .group_by(Tag.id)
-        .order_by(Tag.category, func.count(InspirationTag.inspiration_id).desc())
+        .order_by(
+            Tag.category,
+            Tag.pinned.desc(),
+            Tag.sort_order.asc(),
+            func.count(InspirationTag.inspiration_id).desc(),
+        )
     )
     grouped: dict[str, list[dict]] = {}
     for row in result:
@@ -83,6 +92,9 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
             "name": tag.name,
             "category": tag.category,
             "source": tag.source,
+            "pinned": tag.pinned,
+            "sort_order": tag.sort_order,
+            "description": tag.description,
             "created_at": tag.created_at,
             "usage_count": count,
         }
@@ -97,8 +109,10 @@ async def get_or_create_tag(
 
     处理并发竞态：两任务同时创建同一标签时，先 flush 的一方成功，
     后 flush 的一方触发 IntegrityError。捕获后回滚当前事务并重新查询。
+
+    创建前先做别名归一化（DB 别名 → 硬编码同义词），使「纯白」自动落到「白色」。
     """
-    name = name.strip()
+    name = await normalize_tag_name_async(db, name.strip())
     result = await db.execute(select(Tag).where(Tag.name == name))
     tag = result.scalar_one_or_none()
     if not tag:

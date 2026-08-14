@@ -31,6 +31,11 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "ai_analysis_log": [
         ("log_type", "TEXT DEFAULT 'analysis'"),
     ],
+    "tags": [
+        ("pinned", "INTEGER DEFAULT 0"),
+        ("sort_order", "INTEGER DEFAULT 0"),
+        ("description", "TEXT"),
+    ],
 }
 
 
