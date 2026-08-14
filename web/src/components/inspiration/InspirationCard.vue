@@ -14,12 +14,17 @@ const props = defineProps<{
   badge?: string
   /** 是否显示悬浮操作按钮（删除/收藏），相似推荐卡片默认关闭 */
   showActions?: boolean
+  /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
+  selectable?: boolean
+  /** 批量选择模式下是否已勾选 */
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'delete'): void
   (e: 'toggleFavorite'): void
   (e: 'approve'): void
+  (e: 'toggleSelect'): void
 }>()
 
 const router = useRouter()
@@ -51,10 +56,19 @@ function analysisStatusLabel(): string | null {
 function goToDetail() {
   router.push(`/detail/${props.item.id}`)
 }
+
+/** 卡片点击：批量模式下切换勾选，否则跳转详情 */
+function handleCardClick() {
+  if (props.selectable) {
+    emit('toggleSelect')
+  } else {
+    goToDetail()
+  }
+}
 </script>
 
 <template>
-  <div class="card" @click="goToDetail">
+  <div class="card" @click="handleCardClick">
     <!-- 缩略图 / 视频首帧 -->
     <div class="card-image">
       <video
@@ -77,6 +91,16 @@ function goToDetail() {
       <!-- 角标（相似度 / 相似来源） -->
       <div v-if="badge" class="sim-badge" :title="badge">
         {{ badge }}
+      </div>
+
+      <!-- 批量勾选框 -->
+      <div
+        v-if="selectable"
+        class="select-checkbox"
+        :class="{ checked: selected }"
+        @click.stop="emit('toggleSelect')"
+      >
+        <span v-if="selected">✓</span>
       </div>
 
       <!-- 悬浮操作层 -->
@@ -247,6 +271,30 @@ function goToDetail() {
   border-radius: 4px;
   z-index: 2;
   white-space: nowrap;
+}
+
+.select-checkbox {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  border: 2px solid #ccc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  cursor: pointer;
+  z-index: 3;
+  transition: all 0.15s;
+}
+.select-checkbox.checked {
+  background: #e0465e;
+  border-color: #e0465e;
 }
 
 .quality-badge {

@@ -440,6 +440,83 @@ async def update_inspiration(
     return _to_out(inspiration)
 
 
+@router.post("/batch-tags", status_code=status.HTTP_200_OK)
+async def batch_add_tags(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
+
+    请求体: {"inspiration_ids": [...], "names": [...], "category": "outfit", "source": "manual"}
+
+    用于「相似素材批量添加穿搭大标签」场景：把当前素材的大标签一次性复制到
+    多个相似素材上。仅对实际新增了标签的素材重建文本向量，避免无谓调用 Ollama。
+    """
+    inspiration_ids = payload.get("inspiration_ids", [])
+    names = payload.get("names", [])
+    category = payload.get("category", "free")
+    source = payload.get("source", "manual")
+
+    if not isinstance(inspiration_ids, list) or not inspiration_ids:
+        raise HTTPException(status_code=400, detail="请提供素材 ID 列表")
+    if not isinstance(names, list) or not names:
+        raise HTTPException(status_code=400, detail="请提供标签名称列表")
+
+    from app.services.tag_service import get_or_create_tag
+
+    # 先解析标签（批量 get_or_create，避免每个素材重复查询同名标签）
+    tags = []
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        tags.append(await get_or_create_tag(db, name, category, source))
+
+    if not tags:
+        raise HTTPException(status_code=400, detail="请提供有效的标签名称")
+
+    # 批量关联，跳过已存在的关联；记录实际变更的素材
+    total_added = 0
+    affected_ids: list[str] = []
+    for inspiration_id in inspiration_ids:
+        inspiration = await db.get(Inspiration, inspiration_id)
+        if not inspiration:
+            continue
+        added_for_this = 0
+        for tag in tags:
+            existing = await db.execute(
+                select(InspirationTag).where(
+                    InspirationTag.inspiration_id == inspiration_id,
+                    InspirationTag.tag_id == tag.id,
+                )
+            )
+            if existing.scalar_one_or_none():
+                continue
+            db.add(
+                InspirationTag(
+                    inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0
+                )
+            )
+            added_for_this += 1
+        if added_for_this:
+            affected_ids.append(inspiration_id)
+            total_added += added_for_this
+
+    await db.commit()
+
+    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
+    from app.services.vector_service import rebuild_text_vector
+
+    for inspiration_id in affected_ids:
+        await rebuild_text_vector(db, inspiration_id)
+
+    return {
+        "added": total_added,
+        "affected": len(affected_ids),
+        "skipped": len(inspiration_ids) - len(affected_ids),
+    }
+
+
 @router.post("/{inspiration_id}/tags", status_code=status.HTTP_200_OK)
 async def add_inspiration_tags(
     inspiration_id: str,

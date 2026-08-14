@@ -10,6 +10,7 @@ import {
   deleteInspiration,
   getFileUrl,
   addTagsToInspiration,
+  batchAddTagsToInspirations,
   removeTagFromInspiration,
   suggestOutfitTags,
   type InspirationDetailOut,
@@ -258,6 +259,71 @@ async function confirmOutfitTag(name: string) {
 function dismissOutfitTag(name: string) {
   aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
 }
+
+// ===== 相似素材批量添加大标签 =====
+const batchMode = ref(false)                 // 是否处于批量选择模式
+const batchSelectedIds = ref<string[]>([])   // 勾选的相似素材 ID
+const batchTagNames = ref<string[]>([])      // 要批量添加的大标签（预填当前素材大标签）
+const batchAdding = ref(false)
+
+/** 进入批量模式：预填当前素材已有的大标签，清空勾选 */
+function enterBatchMode() {
+  batchSelectedIds.value = []
+  const current = outfitTags().map((t) => t.tag.name)
+  // 确保当前素材大标签在可选项中（AI 建议入库的标签可能尚未进 options）
+  for (const name of current) {
+    if (!outfitTagOptions.value.some((o) => o.value === name)) {
+      outfitTagOptions.value.push({ label: name, value: name })
+    }
+  }
+  batchTagNames.value = current
+  batchMode.value = true
+}
+
+/** 退出批量模式 */
+function exitBatchMode() {
+  batchMode.value = false
+  batchSelectedIds.value = []
+  batchTagNames.value = []
+}
+
+/** 切换单个相似素材的勾选 */
+function toggleSelectSimilar(id: string) {
+  const idx = batchSelectedIds.value.indexOf(id)
+  if (idx >= 0) batchSelectedIds.value.splice(idx, 1)
+  else batchSelectedIds.value.push(id)
+}
+
+/** 全选 / 取消全选 */
+function toggleSelectAll() {
+  const allIds = similarItems.value.map((it) => it.inspiration.id)
+  const allSelected = allIds.length > 0 && allIds.every((id) => batchSelectedIds.value.includes(id))
+  batchSelectedIds.value = allSelected ? [] : [...allIds]
+}
+
+/** 批量添加大标签到勾选的相似素材，成功后刷新相似列表 */
+async function batchAddOutfitTags() {
+  if (batchSelectedIds.value.length === 0 || batchTagNames.value.length === 0) return
+  batchAdding.value = true
+  try {
+    await batchAddTagsToInspirations(batchSelectedIds.value, batchTagNames.value, 'outfit', 'manual')
+    message.success(`已为 ${batchSelectedIds.value.length} 个相似素材添加大标签`)
+    exitBatchMode()
+    if (detail.value) await refreshSimilar(detail.value.id)
+  } catch {
+    message.error('批量添加失败')
+  } finally {
+    batchAdding.value = false
+  }
+}
+
+/** 刷新相似素材（批量加标签后卡片标签与相似度可能变化） */
+async function refreshSimilar(id: string) {
+  try {
+    const data = await fetchSimilar(id, 10)
+    similarItems.value = data.similar
+  } catch { /* 静默降级 */ }
+}
 </script>
 
 <template>
@@ -442,7 +508,49 @@ function dismissOutfitTag(name: string) {
             <span v-else-if="similarItems.length === 0" class="similar-empty-hint">
               暂无相似素材（需要先回填向量，或在图像向量不可用时依赖标签匹配）
             </span>
+            <span v-else class="similar-count">{{ similarItems.length }} 个</span>
+            <n-button
+              v-if="similarItems.length > 0 && !batchMode"
+              size="tiny"
+              type="error"
+              ghost
+              style="margin-left:auto"
+              @click="enterBatchMode"
+            >
+              批量添加大标签
+            </n-button>
           </div>
+
+          <!-- 批量添加操作栏 -->
+          <div v-if="batchMode" class="batch-toolbar">
+            <span class="batch-selected-count">
+              已选 {{ batchSelectedIds.length }} / {{ similarItems.length }}
+            </span>
+            <n-button size="tiny" quaternary @click="toggleSelectAll">
+              {{ batchSelectedIds.length === similarItems.length ? '取消全选' : '全选' }}
+            </n-button>
+            <n-select
+              v-model:value="batchTagNames"
+              multiple
+              filterable
+              tag
+              size="small"
+              placeholder="选择或输入大标签"
+              :options="outfitTagOptions"
+              style="flex:1; min-width:200px"
+            />
+            <n-button
+              size="small"
+              type="error"
+              :loading="batchAdding"
+              :disabled="batchSelectedIds.length === 0 || batchTagNames.length === 0"
+              @click="batchAddOutfitTags"
+            >
+              添加（{{ batchSelectedIds.length }}）
+            </n-button>
+            <n-button size="small" @click="exitBatchMode">取消</n-button>
+          </div>
+
           <div v-if="similarItems.length > 0" class="similar-grid">
             <InspirationCard
               v-for="item in similarItems"
@@ -450,6 +558,9 @@ function dismissOutfitTag(name: string) {
               :item="item.inspiration"
               :badge="`${Math.round(item.similarity * 100)}% · ${similarSourceLabel(item.match_source)}`"
               :show-actions="false"
+              :selectable="batchMode"
+              :selected="batchSelectedIds.includes(item.inspiration.id)"
+              @toggle-select="toggleSelectSimilar(item.inspiration.id)"
             />
           </div>
         </div>
@@ -541,6 +652,29 @@ function dismissOutfitTag(name: string) {
 .similar-empty-hint {
   font-size: 12px;
   color: #999;
+}
+
+.similar-count {
+  font-size: 12px;
+  color: #999;
+}
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #fef6f7;
+  border: 1px solid #f0d6dc;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-selected-count {
+  font-size: 13px;
+  color: #e0465e;
+  font-weight: 600;
 }
 
 .similar-grid {

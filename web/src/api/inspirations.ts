@@ -71,6 +71,22 @@ export async function addTagsToInspiration(
   return data
 }
 
+/** 批量给多个素材关联标签（如相似素材批量添加穿搭大标签） */
+export async function batchAddTagsToInspirations(
+  inspirationIds: string[],
+  names: string[],
+  category = 'outfit',
+  source = 'manual',
+) {
+  const { data } = await apiClient.post('/inspirations/batch-tags', {
+    inspiration_ids: inspirationIds,
+    names,
+    category,
+    source,
+  })
+  return data
+}
+
 /** 解除素材与标签的关联 */
 export async function removeTagFromInspiration(id: string, tagId: number) {
   const { data } = await apiClient.delete(`/inspirations/${id}/tags/${tagId}`)
