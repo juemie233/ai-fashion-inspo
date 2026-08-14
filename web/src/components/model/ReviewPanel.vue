@@ -19,31 +19,77 @@ interface QualityReviewStats {
 }
 const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
-const qualityReviewActive = ref<string[]>([])
 const qualityChecking = ref(false)
 const rechecking = ref(false)
+
+// 质量审核任务（数据库驱动任务队列，轮询进度）
+interface ReviewTask {
+  id: number
+  type: string
+  status: string
+  progress: number
+  total: number
+  done: number
+  result: { approved?: number; rejected?: number; pending?: number } | null
+  error: string | null
+}
+const reviewTask = ref<ReviewTask | null>(null)
+let reviewPollTimer: ReturnType<typeof setTimeout> | null = null
 
 async function loadQualityReview() {
   qualityReviewLoading.value = true
   try {
     const { data } = await apiClient.get<QualityReviewStats>('/ai/quality-stats')
     qualityReviewStats.value = data
-    const active = await apiClient.get<{ active: string[]; count: number }>('/ai/quality-active')
-    qualityReviewActive.value = active.data.active || []
   } catch { /* 静默 */ }
   finally { qualityReviewLoading.value = false }
+}
+
+/** 轮询审核任务状态（约 1 秒一次），完成后刷新统计与未通过列表 */
+function startReviewPolling(taskId: number) {
+  stopReviewPolling()
+  const poll = async () => {
+    try {
+      const { data } = await apiClient.get<ReviewTask>(`/tasks/${taskId}`)
+      reviewTask.value = data
+      if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
+        stopReviewPolling()
+        if (data.status === 'success') {
+          const r = data.result
+          message.success(`审核完成：通过 ${r?.approved ?? 0}，拒绝 ${r?.rejected ?? 0}，未判定 ${r?.pending ?? 0}`)
+        } else if (data.status === 'failed') {
+          message.error(`审核失败：${data.error || '未知错误'}`)
+        } else {
+          message.info('审核任务已取消')
+        }
+        loadQualityReview()
+        loadRejectedItems()
+        return
+      }
+      reviewPollTimer = setTimeout(poll, 1000)
+    } catch {
+      stopReviewPolling()
+      message.error('获取审核任务状态失败，请稍后手动刷新')
+    }
+  }
+  poll()
+}
+
+function stopReviewPolling() {
+  if (reviewPollTimer) { clearTimeout(reviewPollTimer); reviewPollTimer = null }
 }
 
 async function triggerQualityCheck() {
   qualityChecking.value = true
   try {
-    const { data } = await apiClient.post<{ message: string; count: number }>(
+    const { data } = await apiClient.post<{ message: string; count: number; task_id: number }>(
       '/ai/quality-check',
       null,
       { params: { limit: 200 } },
     )
-    message.success(`已提交 ${data.count} 个素材进行审核`)
-    loadQualityReview()
+    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null }
+    message.success(`已提交 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
+    startReviewPolling(data.task_id)
   } catch (e: any) {
     message.error(e.response?.data?.detail || '审核提交失败')
   } finally {
@@ -54,11 +100,12 @@ async function triggerQualityCheck() {
 async function recheckQuality() {
   rechecking.value = true
   try {
-    const { data } = await apiClient.post<{ message: string; count: number }>(
+    const { data } = await apiClient.post<{ message: string; count: number; task_id: number }>(
       '/ai/quality-recheck',
     )
-    message.success(data.message)
-    loadQualityReview()
+    reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null }
+    message.success(`已提交重新审核任务 #${data.task_id}，共 ${data.count} 个素材`)
+    startReviewPolling(data.task_id)
   } catch (e: any) {
     message.error(e.response?.data?.detail || '重新审核提交失败')
   } finally {
@@ -151,6 +198,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  stopReviewPolling()
 })
 </script>
 
@@ -195,12 +243,10 @@ onUnmounted(() => {
         </n-popconfirm>
       </div>
 
-      <!-- 正在审核提示 -->
-      <n-alert v-if="qualityReviewActive.length > 0" type="info" style="margin-bottom:16px">
-        <template #header>正在审核 {{ qualityReviewActive.length }} 个素材...</template>
-        <div style="font-size:12px;color:#666">
-          {{ qualityReviewActive.map((id) => id.slice(0, 8) + '...').join('、') }}
-        </div>
+      <!-- 审核任务进度 -->
+      <n-alert v-if="reviewTask && (reviewTask.status === 'pending' || reviewTask.status === 'running')" type="info" style="margin-bottom:16px">
+        <template #header>审核任务 #{{ reviewTask.id }} 进行中（{{ reviewTask.done }}/{{ reviewTask.total }}）</template>
+        <n-progress type="line" :percentage="reviewTask.progress" style="margin-top:8px" />
       </n-alert>
 
       <!-- 未通过素材列表 -->

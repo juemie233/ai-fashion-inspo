@@ -11,10 +11,16 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from app.config import settings
 from app.database import async_session
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
+from app.models.scraper import ScraperSeenURL
+from app.models.tag import InspirationTag
 from app.models.task import TaskQueue
-from app.services.ai_service import analyze_image
+from app.services.ai_service import analyze_image, check_image_quality
+from app.utils.file_hash import build_hash_map
 
 logger = logging.getLogger(__name__)
 
@@ -250,3 +256,419 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     logger.info(
         f"批量分析任务执行完毕: #{task.id} 成功 {success_count}，失败 {len(failed_items)}"
     )
+
+
+async def create_quality_check_task(
+    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0
+) -> TaskQueue:
+    """创建「质量审核」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
+
+    参数:
+        db: 数据库会话
+        inspiration_ids: 待审核的素材 ID 列表（API 层已过滤为 pending 图片）
+        skipped: 被跳过的素材数量（保留字段）
+
+    返回:
+        新建的任务记录
+    """
+    task = TaskQueue(
+        type="quality_check",
+        status="pending",
+        progress=0,
+        total=len(inspiration_ids),
+        done=0,
+        result={"inspiration_ids": inspiration_ids, "skipped": skipped},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def _quality_check_one(
+    sem: asyncio.Semaphore, inspiration_id: str, file_path: str
+) -> tuple[str, str, str]:
+    """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因)。
+
+    状态为 approved/rejected/pending（审核失败保持 pending）。
+    """
+    async with sem:
+        async with async_session() as db:
+            status, reason = await check_image_quality(db, inspiration_id, file_path)
+            # 写入质量审核日志（失败时记录原因，供前端排查）
+            db.add(AIAnalysisLog(
+                inspiration_id=inspiration_id,
+                model_name=settings.ollama_vision_model,
+                log_type="quality_check",
+                error=reason if status == "pending" else None,
+            ))
+            await db.commit()
+            return inspiration_id, status, reason
+
+
+async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
+    """执行质量审核任务：逐张调用轻量审核并维护进度（由 worker 调用）。
+
+    质量审核是「尽力而为」的：单张失败保持 pending，不触发整个任务重试，
+    因此本函数不主动抛出 Recoverable/Permanent 错误（数据库层异常由 worker 兜底）。
+    """
+    payload = task.result or {}
+    inspiration_ids = payload.get("inspiration_ids") or []
+    if not inspiration_ids:
+        task.total = 0
+        task.done = 0
+        task.progress = 100
+        await db.commit()
+        return
+
+    # 加载仍待审核的图片素材（执行期间可能已被人工翻案，仅保留仍 pending 的）
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.media_type == "image",
+            Inspiration.quality_status == "pending",
+        )
+    )
+    rows = result.all()
+    insp_map = {r[0]: r[1] for r in rows}
+    items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
+
+    task.total = len(items)
+    task.done = 0
+    task.progress = 0
+    task.error = None
+    await db.commit()
+
+    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+    approved = 0
+    rejected = 0
+    pending = 0
+
+    for start in range(0, len(items), _ANALYZE_CONCURRENCY):
+        chunk = items[start:start + _ANALYZE_CONCURRENCY]
+        results = await asyncio.gather(
+            *(_quality_check_one(sem, iid, fp) for iid, fp in chunk)
+        )
+        for _iid, status, _reason in results:
+            if status == "approved":
+                approved += 1
+            elif status == "rejected":
+                rejected += 1
+            else:
+                pending += 1
+
+        task.done = min(start + len(chunk), task.total)
+        task.progress = round(task.done / task.total * 100) if task.total else 100
+        task.updated_at = _utcnow()
+        await db.commit()
+        logger.info(
+            f"质量审核进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
+        )
+
+    task.result = {
+        "inspiration_ids": inspiration_ids,
+        "skipped": payload.get("skipped", 0),
+        "approved": approved,
+        "rejected": rejected,
+        "pending": pending,
+    }
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = _utcnow()
+    await db.commit()
+    logger.info(
+        f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，未判定 {pending}"
+    )
+
+
+async def create_batch_delete_task(
+    db: AsyncSession, inspiration_ids: list[str], label: str = ""
+) -> TaskQueue:
+    """创建「批量删除」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
+
+    参数:
+        db: 数据库会话
+        inspiration_ids: 待删除的素材 ID 列表（API 层已按条件解析）
+        label: 删除类型标签（untagged / analysis_failed / ids），用于完成后提示
+
+    返回:
+        新建的任务记录
+    """
+    task = TaskQueue(
+        type="batch_delete",
+        status="pending",
+        progress=0,
+        total=len(inspiration_ids),
+        done=0,
+        result={"inspiration_ids": inspiration_ids, "label": label},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
+    """执行批量删除任务：删文件、写墓碑、删数据库记录（由 worker 调用）。
+
+    单个素材删除是确定性操作，文件缺失跳过即可，不抛可恢复错误。
+    """
+    payload = task.result or {}
+    inspiration_ids = payload.get("inspiration_ids") or []
+    if not inspiration_ids:
+        task.total = 0
+        task.done = 0
+        task.progress = 100
+        await db.commit()
+        return
+
+    # 查待删除素材的文件路径与来源 URL
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path, Inspiration.source_url)
+        .where(Inspiration.id.in_(inspiration_ids))
+    )
+    files_to_delete = result.all()
+
+    storage_root = settings.storage_root
+    freed_bytes = 0
+    deleted = 0
+    for _fid, fpath, thumb, _surl in files_to_delete:
+        for p in (fpath, thumb):
+            if p:
+                full = storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+        deleted += 1
+
+    # 写入墓碑表（防止被删除素材的 URL 被重新采集）
+    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
+            )
+
+    # 删除数据库记录（级联删除关联 tags 与 analysis_logs）
+    await db.execute(
+        Inspiration.__table__.delete().where(
+            Inspiration.id.in_([r[0] for r in files_to_delete])
+        )
+    )
+    await db.commit()
+
+    task.result = {
+        "inspiration_ids": inspiration_ids,
+        "label": payload.get("label", ""),
+        "deleted_count": deleted,
+        "freed_bytes": freed_bytes,
+    }
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = _utcnow()
+    await db.commit()
+    logger.info(f"批量删除任务完成: #{task.id} 删除 {deleted} 个素材")
+
+
+async def create_deduplicate_task(db: AsyncSession) -> TaskQueue:
+    """创建「智能去重」任务记录，返回任务对象。
+
+    去重无需预加载 ID：由 worker 执行时全库扫描并计算 MD5，
+    因此创建时 total 未知（设为 0，执行阶段再更新）。
+    """
+    task = TaskQueue(
+        type="deduplicate",
+        status="pending",
+        progress=0,
+        total=0,
+        done=0,
+        result={"inspiration_ids": []},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
+    """执行智能去重任务：全库 MD5 扫描 + 评分保留 + 物理删除冗余副本（由 worker 调用）。
+
+    评分规则与 admin 路由的旧版一致：有标签 +100、已收藏 +50、AI 分析成功 +30、
+    有缩略图 +10、创建时间更早优先（平局时 ID 更小）。
+    """
+    storage_root = settings.storage_root
+    task.error = None
+    task.progress = 5
+    await db.commit()
+
+    # 阶段 1：全库扫描，计算 MD5 并分组
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
+               Inspiration.is_favorite, Inspiration.created_at)
+    )
+    hash_map = build_hash_map(result.all(), storage_root, include_meta=True)
+
+    dup_groups = [(h, files) for h, files in hash_map.items() if len(files) > 1]
+    if not dup_groups:
+        task.result = {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
+        task.total = 0
+        task.done = 0
+        task.progress = 100
+        await db.commit()
+        return
+
+    task.total = len(dup_groups)
+    task.done = 0
+    task.progress = 30
+    await db.commit()
+
+    # 阶段 2：评分并决定每组保留哪个
+    all_ids = [f["id"] for _h, group in dup_groups for f in group]
+
+    tagged_result = await db.execute(
+        select(InspirationTag.inspiration_id)
+        .where(InspirationTag.inspiration_id.in_(all_ids))
+        .distinct()
+    )
+    tagged_ids = {r[0] for r in tagged_result.all()}
+
+    analyzed_result = await db.execute(
+        select(AIAnalysisLog.inspiration_id)
+        .where(
+            analysis_log_filter(),
+            AIAnalysisLog.inspiration_id.in_(all_ids),
+            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+        )
+        .distinct()
+    )
+    analyzed_ids = {r[0] for r in analyzed_result.all()}
+
+    details: list[dict] = []
+    ids_to_delete: list[str] = []
+    files_to_delete: list[tuple[str, str | None]] = []
+
+    for dup_hash, group in dup_groups:
+        scored = []
+        for f in group:
+            score = 0
+            reasons: list[str] = []
+            if f["id"] in tagged_ids:
+                score += 100
+                reasons.append("有标签")
+            if f["is_favorite"]:
+                score += 50
+                reasons.append("已收藏")
+            if f["id"] in analyzed_ids:
+                score += 30
+                reasons.append("AI 已分析")
+            if f["thumbnail_path"]:
+                score += 10
+                reasons.append("有缩略图")
+            created_ts = f["created_at"].timestamp() if f["created_at"] else 0
+            scored.append({**f, "score": score, "reasons": reasons, "created_ts": created_ts})
+
+        scored.sort(key=lambda x: (-x["score"], x["created_ts"], x["id"]))
+        keeper = scored[0]
+        victims = scored[1:]
+
+        # 安全检查：保留文件磁盘已丢失时，换一个磁盘存在的作为保留，避免误删全部副本
+        keeper_full = storage_root / keeper["file_path"]
+        if not keeper_full.exists():
+            found = False
+            for alt in scored[1:]:
+                if (storage_root / alt["file_path"]).exists():
+                    keeper = alt
+                    victims = [f for f in scored if f["id"] != alt["id"]]
+                    found = True
+                    break
+            if not found:
+                continue
+
+        detail = {
+            "hash": dup_hash,
+            "kept": {
+                "id": keeper["id"],
+                "file_path": keeper["file_path"],
+                "score": keeper["score"],
+                "reasons": keeper["reasons"],
+                "size_bytes": keeper["size_bytes"],
+            },
+            "deleted": [],
+        }
+        for v in victims:
+            ids_to_delete.append(v["id"])
+            files_to_delete.append((v["file_path"], v["thumbnail_path"]))
+            detail["deleted"].append({
+                "id": v["id"],
+                "file_path": v["file_path"],
+                "score": v["score"],
+                "reasons": v["reasons"],
+                "size_bytes": v["size_bytes"],
+            })
+        if detail["deleted"]:
+            details.append(detail)
+
+    if not ids_to_delete:
+        task.result = {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
+        task.done = task.total
+        task.progress = 100
+        await db.commit()
+        return
+
+    # 阶段 3：写墓碑、删数据库记录、删磁盘文件
+    url_result = await db.execute(
+        select(Inspiration.source_url).where(Inspiration.id.in_(ids_to_delete))
+    )
+    urls_to_seal = [r[0] for r in url_result.all() if r[0]]
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
+            )
+
+    await db.execute(
+        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
+    )
+    await db.commit()
+
+    freed_bytes = 0
+    for fpath, thumb in files_to_delete:
+        for p in (fpath, thumb):
+            if p:
+                full = storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+
+    task.result = {
+        "groups_processed": len(details),
+        "files_deleted": len(ids_to_delete),
+        "freed_bytes": freed_bytes,
+        "details": details,
+    }
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = _utcnow()
+    await db.commit()
+    logger.info(
+        f"去重任务完成: #{task.id} 处理 {len(details)} 组，删除 {len(ids_to_delete)} 个冗余文件"
+    )
+
+
+# 任务类型 → 执行函数的分发表：worker 按 task.type 分发到对应执行器。
+# 新增任务类型时，在此注册对应的 execute_xxx 函数即可，worker 无需改动。
+TASK_HANDLERS = {
+    "batch_analyze": execute_batch_analyze,
+    "quality_check": execute_quality_check,
+    "batch_delete": execute_batch_delete,
+    "deduplicate": execute_deduplicate,
+}

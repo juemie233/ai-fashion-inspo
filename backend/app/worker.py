@@ -19,9 +19,9 @@ from app.models.task import TaskQueue
 from app.services.task_runner import (
     PermanentTaskError,
     RecoverableTaskError,
+    TASK_HANDLERS,
     _is_recoverable_error,
     _schedule_retry,
-    execute_batch_analyze,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,10 @@ async def _run_task(task_id: int) -> None:
             return
 
         try:
-            await execute_batch_analyze(db, task)
+            handler = TASK_HANDLERS.get(task.type)
+            if handler is None:
+                raise PermanentTaskError(f"未知任务类型: {task.type}")
+            await handler(db, task)
             task.status = "success"
             task.progress = 100
             task.error = None

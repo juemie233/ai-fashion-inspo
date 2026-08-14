@@ -1,7 +1,6 @@
 """素材管理后台 — 统计、完整性检查、批量操作。"""
 
 import os
-import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,20 +11,9 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import Tag, InspirationTag
+from app.utils.file_hash import build_hash_map, file_hash
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-def _file_hash(path: Path) -> str | None:
-    """计算文件的 MD5 哈希，用于重复检测。"""
-    try:
-        h = hashlib.md5()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return None
 
 
 # 素材媒体目录：完整性检查只扫描这些目录，排除 lancedb（向量库）、logs（日志）、
@@ -331,7 +319,7 @@ async def batch_delete(
     payload: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    """批量删除素材。
+    """批量删除素材（已改造为任务队列，创建任务后返回 task_id）。
 
     请求体:
         {"ids": ["id1", "id2", ...]}  — 按 ID 列表删除
@@ -344,7 +332,8 @@ async def batch_delete(
     if not ids and not condition:
         raise HTTPException(status_code=400, detail="请提供 ids 列表或 condition 条件")
 
-    # 按条件查询要删除的 ID
+    # 按条件查询要删除的 ID（在 API 层解析，保证删除语义稳定）
+    label = condition or "ids"
     if condition == "untagged":
         result = await db.execute(
             select(Inspiration.id)
@@ -368,88 +357,13 @@ async def batch_delete(
     if not ids:
         return {"deleted_count": 0, "freed_bytes": 0}
 
-    # 先获取文件路径和 source_url，用于删除磁盘文件和写入墓碑表
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path, Inspiration.source_url)
-        .where(Inspiration.id.in_(ids))
-    )
-    files_to_delete = result.all()
-
-    storage_root = settings.storage_root
-    freed_bytes = 0
-    for fid, fpath, thumb, _surl in files_to_delete:
-        for p in (fpath, thumb):
-            if p:
-                full = storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
-
-    # 写入墓碑表（防止重复采集）
-    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
-    if urls_to_seal:
-        from app.models.scraper import ScraperSeenURL
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
-
-    # 从数据库删除
-    await db.execute(
-        Inspiration.__table__.delete().where(Inspiration.id.in_(ids))
-    )
-    await db.commit()
+    from app.services.task_runner import create_batch_delete_task
+    task = await create_batch_delete_task(db, ids, label=label)
 
     return {
-        "deleted_count": len(ids),
-        "freed_bytes": freed_bytes,
+        "message": f"已提交批量删除任务 #{task.id}，共 {len(ids)} 个素材",
+        "task_id": task.id,
     }
-
-
-def _build_hash_map(
-    db_records: list[tuple],
-    storage_root: Path,
-    include_meta: bool = False,
-) -> dict[str, list[dict]]:
-    """根据数据库记录构建文件哈希映射。
-
-    Args:
-        db_records: (id, file_path, ...) 查询结果
-        storage_root: 存储根目录
-        include_meta: 是否包含 thumbnail_path、is_favorite、created_at 等元数据
-
-    Returns:
-        {hash: [{id, file_path, size_bytes, ...}]}
-    """
-    hash_map: dict[str, list[dict]] = {}
-    for row in db_records:
-        rid = row[0]
-        fpath = row[1]
-        if not fpath:
-            continue
-        full = storage_root / fpath
-        if not full.exists():
-            continue
-        fhash = _file_hash(full)
-        if fhash is None:
-            continue
-        entry: dict = {
-            "id": rid,
-            "file_path": fpath,
-            "size_bytes": full.stat().st_size,
-        }
-        if include_meta and len(row) >= 5:
-            entry["thumbnail_path"] = row[2]
-            entry["is_favorite"] = row[3]
-            entry["created_at"] = row[4]
-        hash_map.setdefault(fhash, []).append(entry)
-    return hash_map
 
 
 @router.get("/check-duplicate")
@@ -468,7 +382,7 @@ async def check_duplicate(
     for insp in inspirations:
         if insp.file_path:
             fpath = storage_root / insp.file_path
-            fhash = _file_hash(fpath)
+            fhash = file_hash(fpath)
             if fhash and fhash == hash:
                 return {
                     "exists": True,
@@ -485,7 +399,7 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path)
     )
-    hash_map = _build_hash_map(result.all(), settings.storage_root)
+    hash_map = build_hash_map(result.all(), settings.storage_root)
 
     duplicates = [
         {"hash": h, "files": files}
@@ -508,171 +422,11 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
 
 @router.post("/deduplicate")
 async def deduplicate_files(db: AsyncSession = Depends(get_db)):
-    """智能去重：每组重复文件保留评分最高的 1 个，其余物理删除。
+    """智能去重（已改造为任务队列，创建任务后返回 task_id）。
 
-    评分规则：
-      +100 — 已被标签标记
-      +50  — 已收藏
-      +30  — AI 分析成功
-      +10  — 有缩略图
-      +5   — 创建时间更早（平局时选 ID 更小的）
+    每组重复文件保留评分最高的 1 个，其余物理删除；
+    评分与删除逻辑见 task_runner.execute_deduplicate。
     """
-    storage_root = settings.storage_root
-
-    # 1. 扫描所有重复组
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
-               Inspiration.is_favorite, Inspiration.created_at)
-    )
-    hash_map = _build_hash_map(result.all(), storage_root, include_meta=True)
-
-    # 只处理有重复的组
-    dup_groups = [(h, files) for h, files in hash_map.items() if len(files) > 1]
-    if not dup_groups:
-        return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
-
-    # 2. 对每个文件查询标签和分析状态，计算评分
-    all_ids = [f["id"] for _h, group in dup_groups for f in group]
-
-    # 查询哪些文件有标签
-    tagged_result = await db.execute(
-        select(InspirationTag.inspiration_id)
-        .where(InspirationTag.inspiration_id.in_(all_ids))
-        .distinct()
-    )
-    tagged_ids = {r[0] for r in tagged_result.all()}
-
-    # 查询哪些文件 AI 分析成功
-    analyzed_result = await db.execute(
-        select(AIAnalysisLog.inspiration_id)
-        .where(
-            analysis_log_filter(),
-            AIAnalysisLog.inspiration_id.in_(all_ids),
-            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
-        )
-        .distinct()
-    )
-    analyzed_ids = {r[0] for r in analyzed_result.all()}
-
-    # 3. 每组评分并决定保留哪个
-    details: list[dict] = []
-    ids_to_delete: list[str] = []
-    files_to_delete: list[tuple[str, str | None]] = []
-
-    for dup_hash, group in dup_groups:
-        scored = []
-        for f in group:
-            score = 0
-            reasons: list[str] = []
-
-            # 已被标签标记
-            if f["id"] in tagged_ids:
-                score += 100
-                reasons.append("有标签")
-            # 已收藏
-            if f["is_favorite"]:
-                score += 50
-                reasons.append("已收藏")
-            # AI 分析成功
-            if f["id"] in analyzed_ids:
-                score += 30
-                reasons.append("AI 已分析")
-            # 有缩略图
-            if f["thumbnail_path"]:
-                score += 10
-                reasons.append("有缩略图")
-            # 创建时间更早的加分（用于平局决胜）
-            created_ts = f["created_at"].timestamp() if f["created_at"] else 0
-
-            scored.append({**f, "score": score, "reasons": reasons, "created_ts": created_ts})
-
-        # 排序：score 降序 → created_ts 升序（更早的在前）→ id 升序
-        scored.sort(key=lambda x: (-x["score"], x["created_ts"], x["id"]))
-        keeper = scored[0]
-        victims = scored[1:]
-
-        # 安全检查：如果保留文件的磁盘文件已不存在，跳过整组（防止误删所有副本）
-        keeper_full = storage_root / keeper["file_path"]
-        if not keeper_full.exists():
-            # 保留文件丢失了，找下一个有磁盘文件的作为保留
-            found = False
-            for alt in scored[1:]:
-                alt_full = storage_root / alt["file_path"]
-                if alt_full.exists():
-                    keeper = alt
-                    victims = [f for f in scored if f["id"] != alt["id"]]
-                    found = True
-                    break
-            if not found:
-                # 整组文件都不在磁盘上了，跳过
-                continue
-
-        detail = {
-            "hash": dup_hash,
-            "kept": {
-                "id": keeper["id"],
-                "file_path": keeper["file_path"],
-                "score": keeper["score"],
-                "reasons": keeper["reasons"],
-                "size_bytes": keeper["size_bytes"],
-            },
-            "deleted": [],
-        }
-
-        for v in victims:
-            ids_to_delete.append(v["id"])
-            files_to_delete.append((v["file_path"], v["thumbnail_path"]))
-            detail["deleted"].append({
-                "id": v["id"],
-                "file_path": v["file_path"],
-                "score": v["score"],
-                "reasons": v["reasons"],
-                "size_bytes": v["size_bytes"],
-            })
-
-        if detail["deleted"]:
-            details.append(detail)
-
-    if not ids_to_delete:
-        return {"groups_processed": 0, "files_deleted": 0, "freed_bytes": 0, "details": []}
-
-    # 4. 写入墓碑表（防止被删除图片的 URL 被重新采集）
-    url_result = await db.execute(
-        select(Inspiration.source_url).where(Inspiration.id.in_(ids_to_delete))
-    )
-    urls_to_seal = [r[0] for r in url_result.all() if r[0]]
-    if urls_to_seal:
-        from app.models.scraper import ScraperSeenURL
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
-
-    # 5. 先删 DB 记录（级联删除关联 tags 和 analysis_logs），再删磁盘文件
-    await db.execute(
-        Inspiration.__table__.delete().where(Inspiration.id.in_(ids_to_delete))
-    )
-    await db.commit()
-
-    # 5. 物理删除磁盘文件
-    freed_bytes = 0
-    for fpath, thumb in files_to_delete:
-        for p in (fpath, thumb):
-            if p:
-                full = storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
-
-    return {
-        "groups_processed": len(details),
-        "files_deleted": len(ids_to_delete),
-        "freed_bytes": freed_bytes,
-        "details": details,
-    }
+    from app.services.task_runner import create_deduplicate_task
+    task = await create_deduplicate_task(db)
+    return {"message": f"已提交去重任务 #{task.id}", "task_id": task.id}

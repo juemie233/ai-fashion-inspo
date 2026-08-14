@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 高级素材管理页：统计仪表盘、存储分析、完整性检查、批量操作。 */
 
-import { h, ref, computed, onMounted } from 'vue'
+import { h, ref, computed, onMounted, onUnmounted } from 'vue'
 import { NTag, NButton, NPopconfirm, NDataTable, NStatistic, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 
@@ -52,6 +52,57 @@ const clearingUntagged = ref(false)
 const clearingFailed = ref(false)
 const deduplicating = ref(false)
 const dedupResult = ref<{ groups_processed: number; files_deleted: number; freed_bytes: number } | null>(null)
+
+// 后台任务（批量删除/去重）—— 数据库驱动任务队列，轮询进度
+interface AdminTask {
+  id: number
+  type: string
+  status: string
+  progress: number
+  total: number
+  done: number
+  result: {
+    label?: string
+    deleted_count?: number
+    freed_bytes?: number
+    groups_processed?: number
+    files_deleted?: number
+  } | null
+  error: string | null
+}
+const adminTask = ref<AdminTask | null>(null)
+let adminPollTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopAdminPolling() {
+  if (adminPollTimer) { clearTimeout(adminPollTimer); adminPollTimer = null }
+}
+
+/** 轮询后台任务状态（约 1 秒一次），完成后执行 onDone 回调 */
+function startAdminPolling(taskId: number, onDone: () => void) {
+  stopAdminPolling()
+  const poll = async () => {
+    try {
+      const { data } = await apiClient.get<AdminTask>(`/tasks/${taskId}`)
+      adminTask.value = data
+      if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
+        stopAdminPolling()
+        if (data.status === 'success') {
+          onDone()
+        } else if (data.status === 'failed') {
+          message.error(`任务失败：${data.error || '未知错误'}`)
+        } else {
+          message.info('任务已取消')
+        }
+        return
+      }
+      adminPollTimer = setTimeout(poll, 1000)
+    } catch {
+      stopAdminPolling()
+      message.error('获取任务状态失败，请稍后手动刷新')
+    }
+  }
+  poll()
+}
 
 // ── 计算属性 ──
 
@@ -160,18 +211,23 @@ async function deduplicate() {
   deduplicating.value = true
   dedupResult.value = null
   try {
-    const res = await apiClient.post('/admin/deduplicate')
-    dedupResult.value = res.data
-    if (res.data.files_deleted === 0) {
-      message.info('未找到可删除的重复文件')
-    } else {
-      message.success(
-        `去重完成：处理 ${res.data.groups_processed} 组，删除 ${res.data.files_deleted} 个冗余文件，释放 ${formatSize(res.data.freed_bytes)} 空间`
-      )
-    }
-    // 刷新数据和统计
-    await loadAll()
-    await loadDuplicates()
+    const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/deduplicate')
+    adminTask.value = { id: data.task_id, type: 'deduplicate', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
+    message.success(data.message)
+    startAdminPolling(data.task_id, () => {
+      const r = adminTask.value?.result
+      dedupResult.value = r
+        ? { groups_processed: r.groups_processed ?? 0, files_deleted: r.files_deleted ?? 0, freed_bytes: r.freed_bytes ?? 0 }
+        : null
+      if (!r || r.files_deleted === 0) {
+        message.info('未找到可删除的重复文件')
+      } else {
+        message.success(`去重完成：处理 ${r.groups_processed ?? 0} 组，删除 ${r.files_deleted ?? 0} 个冗余文件，释放 ${formatSize(r.freed_bytes ?? 0)} 空间`)
+      }
+      adminTask.value = null
+      loadAll()
+      loadDuplicates()
+    })
   } catch (e: any) {
     message.error(e.response?.data?.detail || '去重删除失败')
   } finally {
@@ -198,9 +254,15 @@ async function batchDeleteByCondition(condition: string) {
   try {
     if (condition === 'untagged') clearingUntagged.value = true
     else clearingFailed.value = true
-    const res = await apiClient.post('/admin/batch-delete', { condition })
-    message.success(`已删除 ${res.data.deleted_count} 个${label}，释放 ${formatSize(res.data.freed_bytes)} 空间`)
-    await loadAll()
+    const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/batch-delete', { condition })
+    adminTask.value = { id: data.task_id, type: 'batch_delete', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
+    message.success(data.message)
+    startAdminPolling(data.task_id, () => {
+      const r = adminTask.value?.result
+      message.success(`已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`)
+      adminTask.value = null
+      loadAll()
+    })
   } catch (e: any) {
     message.error('批量删除失败')
   } finally {
@@ -277,6 +339,10 @@ function statusColor(s: string): string {
 onMounted(() => {
   loadAll()
 })
+
+onUnmounted(() => {
+  stopAdminPolling()
+})
 </script>
 
 <template>
@@ -311,6 +377,15 @@ onMounted(() => {
         </template>
       </n-card>
     </div>
+
+    <!-- ====== 后台任务进度 ====== -->
+    <n-alert v-if="adminTask && (adminTask.status === 'pending' || adminTask.status === 'running')" type="info" style="margin: 16px 0">
+      <template #header>
+        {{ adminTask.type === 'deduplicate' ? '去重任务' : '批量删除任务' }} #{{ adminTask.id }} 进行中
+        <span v-if="adminTask.total > 0">（{{ adminTask.done }}/{{ adminTask.total }}）</span>
+      </template>
+      <n-progress type="line" :percentage="adminTask.progress" style="margin-top:8px" />
+    </n-alert>
 
     <!-- ====== 问题概览卡片 ====== -->
     <div class="stat-cards" style="margin-top: 16px">
