@@ -184,6 +184,12 @@ export async function updateQualityStatus(id: string, qualityStatus: QualityStat
   return data
 }
 
+/** 人工复核：批量将疑似 AI 素材重新标记为非 AI */
+export async function batchUnmarkAi(ids: string[]) {
+  const { data } = await apiClient.post<{ updated: number }>('/admin/batch-unmark-ai', { ids })
+  return data
+}
+
 /** 批量删除所有已拒绝素材 */
 export async function deleteRejectedInspirations() {
   const { data } = await apiClient.delete<{ deleted: number; freed_bytes: number; message?: string }>(

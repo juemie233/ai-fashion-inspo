@@ -44,6 +44,7 @@ class InspirationUpdate(BaseModel):
     source_author: str | None = None
     quality_status: Literal["pending", "approved", "rejected"] | None = None  # 人工复核翻案
     quality_reason: str | None = None  # 翻案为 rejected 时的自定义原因
+    is_ai_generated: bool | None = None  # 人工复核翻案：标记/取消「疑似 AI」
 
 
 class BatchAddTagsRequest(BaseModel):

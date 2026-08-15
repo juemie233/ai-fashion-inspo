@@ -1,12 +1,12 @@
 <script setup lang="ts">
-/** 高级素材管理页：统计仪表盘、存储分析、完整性检查、批量操作。 */
+/** 高级素材管理页：统计仪表盘、存储分析、完整性检查、批量操作。
+
+  页面按功能拆分为小菜单（子页面）：概览 / 疑似 AI / 批量清理 / 数据完整性 / 重复文件。 */
 
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { formatSize } from '@/utils/format'
-// 来源类型中文映射（此前去重已落地，供后台来源列展示，保留 import）
-import { sourceLabel } from '@/utils/sourceLabel'
 import { useAdminTask } from '@/composables/useAdminTask'
 import type { Stats, LargeFile, MissingFile, OrphanFile, DuplicateGroup, DedupResult } from '@/types/admin'
 
@@ -17,8 +17,16 @@ import AdminDistStats from '@/components/admin/AdminDistStats.vue'
 import AdminLargeFiles from '@/components/admin/AdminLargeFiles.vue'
 import AdminIntegrityCheck from '@/components/admin/AdminIntegrityCheck.vue'
 import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
+import AdminAiReview from '@/components/admin/AdminAiReview.vue'
 
 const message = useMessage()
+
+// ── 子页面（小菜单）状态 ──
+type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates'
+const activeTab = ref<AdminTab>('overview')
+
+/** 疑似 AI 子页面刷新键：批量删除完成后自增，通知子页面重新加载 */
+const aiRefreshKey = ref(0)
 
 // ── 响应式状态 ──
 
@@ -59,6 +67,8 @@ function handleAdminTaskDone() {
   } else {
     const label = r?.label === 'untagged' ? '无标签素材' : r?.label === 'analysis_failed' ? '分析失败素材' : '素材'
     message.success(`已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`)
+    // 疑似 AI 素材可能被批量删除，通知子页面刷新
+    aiRefreshKey.value += 1
   }
   adminTask.value = null
   loadAll()
@@ -148,19 +158,34 @@ async function cleanOrphans() {
 
 // ── 批量删除 ──
 
+/** 提交批量删除任务（按条件或按 ID 列表）并开启进度轮询 */
+async function submitBatchDelete(payload: { ids?: string[]; condition?: string }) {
+  const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/batch-delete', payload)
+  adminTask.value = { id: data.task_id, type: 'batch_delete', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
+  message.success(data.message)
+  startAdminPolling(data.task_id, () => handleAdminTaskDone())
+}
+
+/** 按条件批量删除（无标签 / 分析失败） */
 async function batchDeleteByCondition(condition: string) {
   try {
     if (condition === 'untagged') clearingUntagged.value = true
     else clearingFailed.value = true
-    const { data } = await apiClient.post<{ message: string; task_id: number }>('/admin/batch-delete', { condition })
-    adminTask.value = { id: data.task_id, type: 'batch_delete', status: 'pending', progress: 0, total: 0, done: 0, result: null, error: null }
-    message.success(data.message)
-    startAdminPolling(data.task_id, () => handleAdminTaskDone())
+    await submitBatchDelete({ condition })
   } catch (e: any) {
     message.error('批量删除失败')
   } finally {
     clearingUntagged.value = false
     clearingFailed.value = false
+  }
+}
+
+/** 按 ID 列表批量删除（疑似 AI 子页面勾选删除） */
+async function batchDeleteByIds(ids: string[]) {
+  try {
+    await submitBatchDelete({ ids })
+  } catch (e: any) {
+    message.error('批量删除失败')
   }
 }
 
@@ -181,53 +206,69 @@ onUnmounted(() => {
     <h2>素材管理</h2>
     <p class="subtitle">统计、审计、清理和批量操作</p>
 
-    <!-- ====== 概览卡片 ====== -->
-    <admin-stat-cards :stats="stats" />
-
-    <!-- ====== 后台任务进度 ====== -->
+    <!-- ====== 后台任务进度（全局） ====== -->
     <admin-task-progress :task="adminTask" />
 
-    <!-- ====== 问题概览卡片 ====== -->
-    <admin-problem-cards
-      :stats="stats"
-      :clearing-untagged="clearingUntagged"
-      :clearing-failed="clearingFailed"
-      @delete-untagged="batchDeleteByCondition('untagged')"
-      @delete-failed="batchDeleteByCondition('analysis_failed')"
-    />
+    <!-- ====== 子页面小菜单 ====== -->
+    <n-tabs v-model:value="activeTab" type="line" animated>
+      <!-- 概览 -->
+      <n-tab-pane name="overview" tab="概览">
+        <admin-stat-cards :stats="stats" />
+        <admin-dist-stats :stats="stats" />
+        <admin-large-files :files="largestFiles" />
+        <p style="color: #999; font-size: 12px">
+          💡 提示：定期检查数据完整性和重复文件，可以保持素材库健康。建议每月执行一次。
+        </p>
+      </n-tab-pane>
 
-    <!-- ====== 分布统计 ====== -->
-    <admin-dist-stats :stats="stats" />
+      <!-- 疑似 AI -->
+      <n-tab-pane name="ai" tab="疑似 AI">
+        <admin-ai-review
+          :refresh-key="aiRefreshKey"
+          @delete-selected="batchDeleteByIds"
+        />
+      </n-tab-pane>
 
-    <!-- ====== 最大文件 ====== -->
-    <admin-large-files :files="largestFiles" />
+      <!-- 批量清理 -->
+      <n-tab-pane name="cleanup" tab="批量清理">
+        <admin-problem-cards
+          :stats="stats"
+          :clearing-untagged="clearingUntagged"
+          :clearing-failed="clearingFailed"
+          @delete-untagged="batchDeleteByCondition('untagged')"
+          @delete-failed="batchDeleteByCondition('analysis_failed')"
+        />
+        <p style="color: #999; font-size: 12px">
+          💡 提示：清理无标签或分析失败的素材可回收空间；删除前请确认这些素材确实不再需要。
+        </p>
+      </n-tab-pane>
 
-    <!-- ====== 完整性检查 ====== -->
-    <admin-integrity-check
-      :missing-files="missingFiles"
-      :orphan-files="orphanFiles"
-      :orphan-bytes="orphanSize"
-      :checking="checking"
-      @recheck="loadIntegrity"
-      @clean-orphans="cleanOrphans"
-    />
+      <!-- 数据完整性 -->
+      <n-tab-pane name="integrity" tab="数据完整性">
+        <admin-integrity-check
+          :missing-files="missingFiles"
+          :orphan-files="orphanFiles"
+          :orphan-bytes="orphanSize"
+          :checking="checking"
+          @recheck="loadIntegrity"
+          @clean-orphans="cleanOrphans"
+        />
+      </n-tab-pane>
 
-    <!-- ====== 重复检测 ====== -->
-    <admin-duplicates
-      :duplicates="duplicates"
-      :dup-count="dupCount"
-      :dup-bytes="dupSize"
-      :checking="checking"
-      :deduplicating="deduplicating"
-      :dedup-result="dedupResult"
-      @scan="scanDuplicates"
-      @deduplicate="deduplicate"
-    />
-
-    <!-- ====== 提示 ====== -->
-    <p style="color: #999; font-size: 12px">
-      💡 提示：定期检查数据完整性和重复文件，可以保持素材库健康。建议每月执行一次。
-    </p>
+      <!-- 重复文件 -->
+      <n-tab-pane name="duplicates" tab="重复文件">
+        <admin-duplicates
+          :duplicates="duplicates"
+          :dup-count="dupCount"
+          :dup-bytes="dupSize"
+          :checking="checking"
+          :deduplicating="deduplicating"
+          :dedup-result="dedupResult"
+          @scan="scanDuplicates"
+          @deduplicate="deduplicate"
+        />
+      </n-tab-pane>
+    </n-tabs>
   </div>
 </template>
 <style scoped>

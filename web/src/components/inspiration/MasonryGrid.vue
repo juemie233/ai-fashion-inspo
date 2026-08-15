@@ -12,12 +12,21 @@ defineProps<{
   density?: 'compact' | 'standard' | 'comfortable'
   /** 卡片角标映射：素材 id -> 角标文本（如「92% 相似」），用于向量搜索结果 */
   badges?: Record<string, string>
+  /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
+  selectable?: boolean
+  /** 已勾选的素材 id 集合（选择模式下生效） */
+  selectedIds?: ReadonlySet<string>
+  /** 空状态提示文案 */
+  emptyText?: string
+  /** 是否显示悬浮操作按钮（删除/收藏），默认显示 */
+  showActions?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'delete', id: string): void
   (e: 'toggleFavorite', id: string): void
   (e: 'approve', id: string): void
+  (e: 'toggleSelect', id: string): void
 }>()
 </script>
 
@@ -29,9 +38,13 @@ const emit = defineEmits<{
         :key="item.id"
         :item="item"
         :badge="badges?.[item.id]"
+        :selectable="selectable"
+        :selected="selectable ? selectedIds?.has(item.id) : false"
+        :show-actions="showActions !== false"
         @delete="emit('delete', item.id)"
         @toggle-favorite="emit('toggleFavorite', item.id)"
         @approve="emit('approve', item.id)"
+        @toggle-select="emit('toggleSelect', item.id)"
       />
     </div>
 
@@ -44,7 +57,7 @@ const emit = defineEmits<{
     <!-- 空状态 -->
     <n-empty
       v-if="!loading && items.length === 0"
-      description="还没有素材，去上传或采集一些吧"
+      :description="emptyText || '还没有素材，去上传或采集一些吧'"
       style="margin-top: 80px"
     />
   </div>

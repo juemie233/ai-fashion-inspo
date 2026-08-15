@@ -4,12 +4,12 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
+from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
 from app.models.tag import Tag, InspirationTag
 from app.utils.file_hash import build_hash_map, file_hash, file_sha256
 
@@ -364,6 +364,30 @@ async def batch_delete(
         "message": f"已提交批量删除任务 #{task.id}，共 {len(ids)} 个素材",
         "task_id": task.id,
     }
+
+
+@router.post("/batch-unmark-ai")
+async def batch_unmark_ai(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量将疑似 AI 素材重新标记为非 AI（人工复核翻案）。
+
+    请求体: {"ids": ["id1", "id2", ...]}
+
+    仅做数据库标记更新（不删除文件、不触发 AI），因此同步执行并立即返回。
+    """
+    ids = payload.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="请提供 ids 列表")
+
+    result = await db.execute(
+        update(Inspiration)
+        .where(Inspiration.id.in_(ids))
+        .values(is_ai_generated=False, updated_at=utcnow())
+    )
+    await db.commit()
+    return {"updated": result.rowcount}
 
 
 @router.get("/check-duplicate")

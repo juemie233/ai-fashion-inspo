@@ -386,6 +386,10 @@ async def update_inspiration(
         elif data.quality_reason is not None:
             inspiration.quality_reason = data.quality_reason
 
+    if data.is_ai_generated is not None:
+        # 人工复核翻案：标记或取消「疑似 AI」标记
+        inspiration.is_ai_generated = data.is_ai_generated
+
     await db.flush()
     await db.refresh(inspiration)
     return inspiration
