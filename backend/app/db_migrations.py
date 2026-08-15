@@ -31,6 +31,7 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("quality_status", "TEXT DEFAULT 'pending'"),
         ("quality_reason", "TEXT"),
         ("is_ai_generated", "INTEGER DEFAULT 0"),
+        ("content_hash", "TEXT"),
     ],
     "scraper_tasks": [
         ("diagnostics", "TEXT"),
@@ -52,6 +53,7 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
 _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
     "inspirations": [
         ("ix_inspirations_is_ai_generated", "is_ai_generated"),
+        ("ix_inspirations_content_hash", "content_hash"),
     ],
     "tags": [
         ("ix_tags_pinned", "pinned"),
@@ -100,11 +102,19 @@ async def ensure_schema() -> list[str]:
 
             for col_name, col_def in columns:
                 if col_name not in existing:
-                    await conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
-                    )
-                    added.append(f"{table}.{col_name}")
-                    print(f"[迁移] {table} 添加列: {col_name}")
+                    try:
+                        await conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
+                        )
+                        added.append(f"{table}.{col_name}")
+                        print(f"[迁移] {table} 添加列: {col_name}")
+                    except Exception as e:
+                        # 多进程（服务端 + worker）同时启动时可能并发执行迁移，
+                        # 后到者会报 "duplicate column name"，幂等容忍即可。
+                        if "duplicate column" in str(e).lower():
+                            print(f"[迁移] {table}.{col_name} 已被其他进程添加，跳过")
+                            continue
+                        raise
 
         # 补齐存量库缺失的索引（幂等，CREATE INDEX IF NOT EXISTS）
         for table, indexes in _SCHEMA_INDEXES.items():

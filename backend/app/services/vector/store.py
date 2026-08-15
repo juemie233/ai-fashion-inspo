@@ -48,6 +48,16 @@ def is_lancedb_available() -> bool:
         return False
 
 
+def reset_connection() -> None:
+    """丢弃缓存的 LanceDB 连接（数据重置等场景在删除目录前调用）。
+
+    下次任何向量操作会自动重新连接（懒加载），目录被删除后重建。
+    """
+    global _db
+    with _db_lock:
+        _db = None
+
+
 def _connect():
     """连接 LanceDB 数据目录（懒加载并缓存连接，线程安全）。
 

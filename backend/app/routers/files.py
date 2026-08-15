@@ -25,4 +25,8 @@ async def serve_file(file_path: str):
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status_code=404, detail="文件未找到")
 
-    return FileResponse(full_path)
+    # nosniff：防止浏览器将非图片文件（如误入库的 HTML/SVG）按 HTML/SVG 渲染执行
+    return FileResponse(
+        full_path,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )

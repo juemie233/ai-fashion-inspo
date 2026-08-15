@@ -563,6 +563,24 @@ async def batch_delete_task_results(
     )
     files_to_delete = result.all()
 
+    # 先删除数据库记录并写入墓碑表（同一事务），提交成功后再物理删除文件，
+    # 避免「文件已删但事务失败」产生指向不存在文件的记录
+    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
+    deleted_ids = [r[0] for r in files_to_delete]
+    if deleted_ids:
+        await db.execute(
+            Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
+        )
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
+    await db.commit()
+
+    # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
     storage_root = settings.storage_root
     freed_bytes = 0
     for _fid, fpath, thumb, _surl in files_to_delete:
@@ -575,23 +593,6 @@ async def batch_delete_task_results(
                         full.unlink()
                 except Exception:
                     pass
-
-    # 写入墓碑表（防止重复采集）
-    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
-
-    # 从数据库删除（级联删除关联 tags 和 analysis_logs）
-    deleted_ids = [r[0] for r in files_to_delete]
-    await db.execute(
-        Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
-    )
-    await db.commit()
 
     # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
     # 避免批量删除后产生孤儿向量

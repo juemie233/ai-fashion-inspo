@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     thumbnails_dir: Path = storage_root / "thumbnails"
     videos_dir: Path = storage_root / "videos"
 
+    # 上传大小限制（MB）：防止误传超大文件导致内存与磁盘暴涨
+    max_image_upload_mb: int = 20  # 图片/缩略图
+    max_video_upload_mb: int = 500  # 视频
+
     # 向量检索（LanceDB 嵌入式向量库）
     lancedb_dir: Path = storage_root / "lancedb"  # LanceDB 数据目录（文件落盘，可随项目迁移）
     lancedb_text_table: str = "text_vectors"  # 文本向量表
@@ -86,12 +90,9 @@ class Settings(BaseSettings):
     scraper_max_concurrent: int = 3
     scraper_default_max_count: int = 20  # 每次采集默认数量（降低单次规模以规避风控）
     scraper_browser_headless: bool = True
-    chrome_executable: str = (
-        "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe"
-    )  # Chrome 浏览器路径（Windows 用户级安装默认位置）
-    chrome_user_data_dir: str = (
-        "C:/Users/Administrator/Desktop/chrome-scraper-profile"
-    )  # 采集专用 Chrome 用户数据目录
+    # Chrome 路径（Windows 用户级安装默认位置）；留空时自动探测常见安装路径
+    chrome_executable: str = ""
+    chrome_user_data_dir: str = ""  # 采集专用 Chrome 用户数据目录；留空使用默认目录
     chrome_debug_port: int = 9222  # Chrome 调试端口
     chrome_auto_restart_limit: int = 3  # Chrome 崩溃自动重启次数上限
     chrome_idle_timeout: int = 600  # 无活动采集任务时的空闲自动关闭秒数（0=禁用）
@@ -117,6 +118,41 @@ class Settings(BaseSettings):
 
 # 全局单例配置
 settings = Settings()
+
+# ── Chrome 路径自动探测 ──
+# 配置留空时，按常见安装位置探测 Chrome 可执行文件；用户数据目录使用默认位置。
+def _detect_chrome_executable() -> str:
+    """探测常见安装位置的 Chrome 可执行文件，未找到返回空字符串。"""
+    import os
+
+    candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+if not settings.chrome_executable:
+    detected = _detect_chrome_executable()
+    if detected:
+        settings.chrome_executable = detected
+
+if not settings.chrome_user_data_dir:
+    import os
+
+    default_dir = os.path.expandvars(r"%LOCALAPPDATA%\chrome-scraper-profile")
+    if not default_dir.startswith(r"%"):
+        settings.chrome_user_data_dir = default_dir
+    else:
+        # 非 Windows 环境：使用用户主目录
+        settings.chrome_user_data_dir = str(Path.home() / "chrome-scraper-profile")
 
 # 尝试从 prompt.txt 加载已持久化的 prompt
 _prompt_file = Path(__file__).parent.parent / "prompt.txt"

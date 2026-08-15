@@ -315,6 +315,23 @@ def _download_batch(
     skipped_non200 = 0
     skipped_network = 0
 
+    # 单连接贯穿整批写入：攒批提交（每 20 条一次），避免每张图开连接
+    # 频繁抢占 SQLite 写锁，与 API 服务/worker 并发时显著降低锁冲突。
+    _BATCH_COMMIT = 20
+    batch_conn = None
+    pending_in_batch = 0
+    try:
+        batch_conn = _sqlite3.connect(str(db_path))
+    except Exception:
+        batch_conn = None
+
+    def _commit_batch():
+        """提交当前攒批的写入（无写入或连接不可用时跳过）。"""
+        nonlocal pending_in_batch
+        if batch_conn is not None and pending_in_batch > 0:
+            batch_conn.commit()
+            pending_in_batch = 0
+
     for note_url, img_url in unique:
         if added >= remaining:
             break
@@ -340,8 +357,8 @@ def _download_batch(
 
                 # 内容 MD5 去重：相同图片不同 URL 不重复入库
                 if content_hash_set is not None:
-                    content_hash = hashlib.md5(content).hexdigest()
-                    if content_hash in content_hash_set:
+                    content_md5 = hashlib.md5(content).hexdigest()
+                    if content_md5 in content_hash_set:
                         fpath.unlink()  # 删除刚下载的重复文件
                         skipped_content_dup += 1
                         # 将重复 URL 写入墓碑表，避免下次采集重复下载
@@ -357,52 +374,51 @@ def _download_batch(
                             pass
                         existing_url_set.add(img_url)
                         break
-                    content_hash_set.add(content_hash)
+                    content_hash_set.add(content_md5)
 
-                # 同步写入数据库（失败时删除已下载文件，避免孤儿文件）
-                conn = None
+                # 同步写入数据库（同一事务：素材行 + 墓碑 + 向量回填任务）。
+                # 失败时回滚本批未提交部分并删除已下载文件，避免孤儿文件/孤儿行。
+                if batch_conn is None:
+                    raise RuntimeError("数据库连接不可用")
                 try:
-                    conn = _sqlite3.connect(str(db_path))
                     insp_id = str(uuid.uuid4())
                     rel_path = f"images/{today}/{fname}"
                     now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                    conn.execute(
+                    # 与主库 content_hash 列一致（SHA-256），供上传/管理页索引查重
+                    content_sha256 = hashlib.sha256(content).hexdigest()
+                    batch_conn.execute(
                         "INSERT INTO inspirations (id, source_type, source_url, file_path, "
                         "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                        "quality_status, scraper_task_id, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?)",
-                        (insp_id, "scraper", note_url or img_url, rel_path, "image", task_id, now_str, now_str),
+                        "quality_status, content_hash, scraper_task_id, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?, ?)",
+                        (insp_id, "scraper", note_url or img_url, rel_path, "image",
+                         content_sha256, task_id, now_str, now_str),
                     )
-                    conn.execute(
+                    batch_conn.execute(
                         "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
                         (img_url,),
                     )
-                    conn.commit()
-                except Exception:
-                    try:
-                        fpath.unlink()
-                    except Exception:
-                        pass
-                    raise  # 重新抛出，让外层重试逻辑处理
-                finally:
-                    if conn is not None:
-                        conn.close()
-
-                # 入库后异步回填向量（写入任务队列，由独立 worker 进程执行）。
-                # 保证采集入库的素材无需手动回填即可被语义搜索 / 相似推荐检索到。
-                # 入队失败不影响采集主流程，静默降级。
-                try:
-                    _vconn = _sqlite3.connect(str(db_path))
-                    _vconn.execute(
+                    # 向量回填任务入队（与素材行同事务，保证一致）
+                    batch_conn.execute(
                         "INSERT INTO task_queue (type, status, progress, total, done, result, "
                         "max_retries, retry_count, created_at, updated_at) "
                         "VALUES ('vector_backfill', 'pending', 0, 1, 0, ?, 2, 0, ?, ?)",
                         (json.dumps({"inspiration_ids": [insp_id]}), now_str, now_str),
                     )
-                    _vconn.commit()
-                    _vconn.close()
+                    pending_in_batch += 1
+                    if pending_in_batch >= _BATCH_COMMIT:
+                        _commit_batch()
                 except Exception:
-                    pass
+                    try:
+                        batch_conn.rollback()
+                        pending_in_batch = 0
+                    except Exception:
+                        pass
+                    try:
+                        fpath.unlink()
+                    except Exception:
+                        pass
+                    raise  # 重新抛出，让外层重试逻辑处理
 
                 added += 1
                 existing_url_set.add(img_url)
@@ -420,6 +436,11 @@ def _download_batch(
                     print(f"    下载失败 {img_url[:40]}... ({err})")
                     skipped_network += 1
 
+    # 收尾：提交剩余攒批并关闭连接
+    _commit_batch()
+    if batch_conn is not None:
+        batch_conn.close()
+
     return added, skipped_existing, skipped_non200, skipped_network, skipped_content_dup
 
 
@@ -431,15 +452,22 @@ def run_scraper_sync(task_id: int):
     from playwright.sync_api import sync_playwright
     import asyncio
 
+    # 单事件循环贯穿整个脚本：SQLAlchemy 连接池中的连接绑定创建它们的 loop，
+    # 若反复 asyncio.run() 新建/关闭 loop，跨 loop 复用连接会间歇性报
+    # "attached to a different loop"。子进程生命周期内只建一个 loop，
+    # 进程退出时由操作系统回收。
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     # ── 确保表结构与字段最新（独立脚本不经过服务端 lifespan）──
-    asyncio.run(init_db())
-    asyncio.run(ensure_schema())
+    loop.run_until_complete(init_db())
+    loop.run_until_complete(ensure_schema())
 
     # ── 加载任务 ──
     async def _load():
         async with async_session() as db:
             return await db.get(ScraperTask, task_id)
-    task = asyncio.run(_load())
+    task = loop.run_until_complete(_load())
     if not task or task.status in ("completed", "cancelled"):
         print(f"任务 {task_id} 已完结，跳过")
         return
@@ -452,7 +480,7 @@ def run_scraper_sync(task_id: int):
                 t.status = "running"
                 t.started_at = utcnow()
                 await db.commit()
-    asyncio.run(_run())
+    loop.run_until_complete(_run())
 
     # ── 标记任务失败（复用：配置异常与采集异常都会调用）──
     async def _fail(reason: str):
@@ -473,7 +501,7 @@ def run_scraper_sync(task_id: int):
 
         if not keywords:
             print("无关键词，退出")
-            asyncio.run(_fail("无关键词"))
+            loop.run_until_complete(_fail("无关键词"))
             return
 
         # 准备下载目录
@@ -484,7 +512,7 @@ def run_scraper_sync(task_id: int):
     except Exception as e:
         err = str(e) or type(e).__name__
         print(f"配置解析失败: {err}")
-        asyncio.run(_fail(f"配置解析失败: {err}"))
+        loop.run_until_complete(_fail(f"配置解析失败: {err}"))
         return
 
     # ── 断点续采：构建或恢复执行计划（关键词 × 排序） ──
@@ -533,7 +561,7 @@ def run_scraper_sync(task_id: int):
                 if t:
                     t.resume_token = token
                     await db.commit()
-        asyncio.run(_w())
+        loop.run_until_complete(_w())
 
     try:
         pw = sync_playwright().start()
@@ -687,7 +715,7 @@ def run_scraper_sync(task_id: int):
         err = str(e) or type(e).__name__
         print(f"采集失败: {err}")
         traceback.print_exc()
-        asyncio.run(_fail(err))
+        loop.run_until_complete(_fail(err))
         return
 
     finally:
@@ -743,7 +771,7 @@ def run_scraper_sync(task_id: int):
                 t.resume_token = None  # 任务完结，清除断点进度
                 t.finished_at = utcnow()
                 await db.commit()
-    asyncio.run(_done())
+    loop.run_until_complete(_done())
 
     print(f"\n任务 {task_id} 完成: found={items_found}, added={items_added}")
     if error_msg:

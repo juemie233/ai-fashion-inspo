@@ -452,12 +452,25 @@ async def _save_temp_image(file: UploadFile) -> Path:
     """将上传图片保存到临时目录，返回临时文件路径（调用方负责删除）。
 
     LanceDB 的图像向量基于本地文件生成，这里使用独立临时目录，
-    不污染正式 images 存储目录。
+    不污染正式 images 存储目录。分块流式写入并限制大小，
+    避免超大文件整体驻留内存；失败时清理残留文件。
     """
     tmp_dir = settings.storage_root / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = tmp_dir / f"vec_{uuid.uuid4().hex}.img"
-    content = await file.read()
-    async with aiofiles.open(tmp_path, "wb") as f:
-        await f.write(content)
+    size_limit = settings.max_image_upload_mb * 1024 * 1024
+    total = 0
+    try:
+        async with aiofiles.open(tmp_path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > size_limit:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"文件超过大小限制（{settings.max_image_upload_mb}MB）",
+                    )
+                await f.write(chunk)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return tmp_path

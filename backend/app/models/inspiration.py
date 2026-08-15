@@ -38,6 +38,9 @@ class Inspiration(Base):
 
     file_path: Mapped[str] = mapped_column(Text)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )  # 文件内容 SHA-256（上传去重用，存量可回填）
     media_type: Mapped[str] = mapped_column(String(16), default="image")
     dominant_colors: Mapped[str | None] = mapped_column(
         String(128), nullable=True  # JSON 数组字符串

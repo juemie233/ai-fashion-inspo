@@ -59,7 +59,7 @@ async def reset_all_data(
     import asyncio as aio
     import shutil
     from app.models.tag import InspirationTag, Tag
-    from app.models.scraper import ScraperTask
+    from app.models.scraper import ScraperSeenURL, ScraperTask
 
     # 取消所有进行中的分析任务，避免删除数据后任务写回脏数据
     if _analysis_tasks:
@@ -77,12 +77,24 @@ async def reset_all_data(
             (ScraperTask, "scraper_tasks"),
             (Inspiration, "inspirations"),
             (Tag, "tags"),
+            (ScraperSeenURL, "scraper_seen_urls"),  # 墓碑表：重置后不应再跳过旧 URL
         ]
         deleted_counts = {}
         for table_model, table_name in tables_in_order:
             result = await db.execute(delete(table_model))
             deleted_counts[table_name] = result.rowcount
         await db.commit()
+
+    # 丢弃缓存的向量连接，并清空向量库目录（避免重置后残留孤儿向量）
+    from app.services.vector import store as vector_store
+
+    vector_store.reset_connection()
+    if settings.lancedb_dir.exists():
+        try:
+            await aio.to_thread(shutil.rmtree, settings.lancedb_dir)
+            logger.info(f"已清空向量库目录: {settings.lancedb_dir}")
+        except Exception as e:
+            logger.warning(f"向量库目录删除失败: {settings.lancedb_dir} — {e}")
 
     # 清空存储目录（threadpool 异步执行，避免阻塞）
     storage_deleted = 0

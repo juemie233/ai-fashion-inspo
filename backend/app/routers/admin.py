@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
 from app.models.tag import Tag, InspirationTag
-from app.utils.file_hash import build_hash_map, file_hash, file_sha256
+from app.utils.file_hash import build_hash_map
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -395,20 +395,23 @@ async def check_duplicate(
     hash: str = Query(..., min_length=64, max_length=64, description="文件 SHA-256 哈希"),
     db: AsyncSession = Depends(get_db),
 ):
-    """检查指定 SHA-256 的文件是否已存在（上传前去重）。"""
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(
-            Inspiration.file_path.isnot(None)
+    """检查指定 SHA-256 的文件是否已存在（上传前去重）。
+
+    优先走 content_hash 索引列；存量素材未回填哈希时自动回退扫描并回填。
+    """
+    from app.services.inspiration_service import find_duplicate_by_hash
+
+    dup_id = await find_duplicate_by_hash(db, hash)
+    if dup_id:
+        result = await db.execute(
+            select(Inspiration.file_path).where(Inspiration.id == dup_id)
         )
-    )
-    storage_root = settings.storage_root
-    for insp_id, fpath in result.all():
-        if fpath and file_sha256(storage_root / fpath) == hash:
-            return {
-                "exists": True,
-                "inspiration_id": insp_id,
-                "file_path": fpath,
-            }
+        fpath = result.scalar_one_or_none()
+        return {
+            "exists": True,
+            "inspiration_id": dup_id,
+            "file_path": fpath,
+        }
 
     return {"exists": False, "inspiration_id": None, "file_path": None}
 

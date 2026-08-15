@@ -1,9 +1,11 @@
 """灵感素材服务：素材 CRUD、批量标签、去重与向量同步。"""
 
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,20 +20,49 @@ from app.utils.file_hash import file_sha256
 
 
 async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:
-    """全库扫描素材文件内容哈希，返回重复素材 ID（无重复返回 None）。
+    """按文件内容哈希查找重复素材，返回重复素材 ID（无重复返回 None）。
 
-    用于上传入库前去重：逐文件计算 SHA-256 与待上传文件比对，
-    覆盖全部存量素材（个人库规模有限，全量扫描可接受）。
+    优先走 content_hash 索引列（快路径）；存量素材尚未回填哈希（列为空）时，
+    回退全量扫描磁盘文件，并顺手把哈希回填入库，一次扫描后后续全部走索引。
     """
+    # 快路径：哈希列命中
+    result = await db.execute(
+        select(Inspiration.id).where(Inspiration.content_hash == content_hash)
+    )
+    dup_id = result.scalars().first()
+    if dup_id:
+        return dup_id
+
+    # 存量回退：库中仍有未回填哈希的行时才全量扫描（避免无谓磁盘 I/O）
+    unfilled = (
+        await db.execute(
+            select(func.count(Inspiration.id)).where(
+                Inspiration.content_hash.is_(None),
+                Inspiration.file_path.isnot(None),
+            )
+        )
+    ).scalar() or 0
+    if not unfilled:
+        return None
+
+    storage_root = settings.storage_root
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path).where(
-            Inspiration.file_path.isnot(None)
+            Inspiration.content_hash.is_(None),
+            Inspiration.file_path.isnot(None),
         )
     )
-    storage_root = settings.storage_root
     for insp_id, fpath in result.all():
-        if fpath and file_sha256(storage_root / fpath) == content_hash:
-            return insp_id
+        h = file_sha256(storage_root / fpath) if fpath else None
+        if h:
+            # 回填哈希（含命中场景），随外层事务一并提交
+            await db.execute(
+                update(Inspiration)
+                .where(Inspiration.id == insp_id)
+                .values(content_hash=h)
+            )
+            if h == content_hash:
+                return insp_id
     return None
 
 
@@ -85,6 +116,7 @@ async def create_inspiration(
         source_platform_id=source_platform_id,
         file_path=file_path,
         thumbnail_path=thumb_path,
+        content_hash=content_hash,
         media_type=media_type,
         quality_status=quality_status,
     )
@@ -116,41 +148,80 @@ async def create_inspiration_from_url(
     import aiofiles
     import httpx
 
+    from app.services.file_service import resolve_size_limit, validate_media
+
     tag_names = tag_names or []
 
-    # 下载图片
+    # 下载图片：流式落盘 + 大小限制（按响应 Content-Type 区分图片/视频上限）
+    images_dir = settings.images_dir
+    images_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m")
+    day_dir = images_dir / today
+    day_dir.mkdir(parents=True, exist_ok=True)
+
+    filename: str | None = None
+    file_path_obj: Path | None = None
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            image_bytes = resp.content
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+
+                # 从 Content-Type 推断扩展名
+                ext = ".jpg"
+                if "png" in content_type:
+                    ext = ".png"
+                elif "webp" in content_type:
+                    ext = ".webp"
+                elif "gif" in content_type:
+                    ext = ".gif"
+                elif "mp4" in content_type:
+                    ext = ".mp4"
+
+                size_limit = resolve_size_limit(content_type)
+                filename = f"{uuid.uuid4().hex}{ext}"
+                file_path_obj = day_dir / filename
+
+                # 先按 Content-Length 预检，再流式写入并实时校验
+                content_length = resp.headers.get("content-length")
+                if content_length and content_length.isdigit() and int(content_length) > size_limit:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"文件超过大小限制（{size_limit // (1024 * 1024)}MB）",
+                    )
+
+                total = 0
+                async with aiofiles.open(file_path_obj, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        total += len(chunk)
+                        if total > size_limit:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"文件超过大小限制（{size_limit // (1024 * 1024)}MB）",
+                            )
+                        await f.write(chunk)
     except httpx.TimeoutException:
         raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
+    except HTTPException:
+        # 大小超限等：清理残留文件后原样抛出
+        if file_path_obj and file_path_obj.exists():
+            file_path_obj.unlink(missing_ok=True)
+        raise
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=400, detail="下载失败：目标地址返回非 2xx 状态码")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"下载失败: {e}")
 
-    # 从 Content-Type 或 URL 推断扩展名
-    content_type = resp.headers.get("content-type", "")
-    ext = ".jpg"
-    if "png" in content_type:
-        ext = ".png"
-    elif "webp" in content_type:
-        ext = ".webp"
-    elif "gif" in content_type:
-        ext = ".gif"
-    elif "mp4" in content_type:
-        ext = ".mp4"
-
-    # 保存文件
-    filename = f"{uuid.uuid4().hex}{ext}"
-    images_dir = settings.images_dir
-    images_dir.mkdir(parents=True, exist_ok=True)
-    file_path_obj = images_dir / filename
-    async with aiofiles.open(file_path_obj, "wb") as f:
-        await f.write(image_bytes)
+    # 校验真实文件类型（图片需能通过 PIL 解码，视频需带 MP4 魔数）
+    try:
+        validate_media(file_path_obj, content_type)
+    except HTTPException:
+        if file_path_obj.exists():
+            file_path_obj.unlink(missing_ok=True)
+        raise
 
     # 生成缩略图
-    rel_path = f"images/{filename}"
+    rel_path = f"images/{today}/{filename}"
     thumb_path = await generate_thumbnail(file_path_obj)
 
     # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
@@ -167,6 +238,7 @@ async def create_inspiration_from_url(
         source_author=source_author,
         file_path=rel_path,
         thumbnail_path=thumb_path,
+        content_hash=content_hash,
         media_type=media_type,
     )
     db.add(inspiration)
@@ -274,9 +346,44 @@ async def list_inspirations(
         "newest": Inspiration.created_at.desc(),
         "oldest": Inspiration.created_at.asc(),
         "updated": Inspiration.updated_at.desc(),
-        "largest": Inspiration.file_path.desc(),  # 按路径排序不够精确，用子查询算文件大小
         "random": func.random(),  # 随机洗牌：每次请求重新随机
     }
+
+    # largest 排序：SQLite 无法按磁盘文件大小排序，改为取全量 (id, file_path)
+    # 在 Python 中按文件实际大小降序取本页（个人库规模可接受）。
+    # 注意：须先统计总数，再按大小排序取页内 ID，最后回查对象并恢复页内顺序。
+    if sort == "largest":
+        total = (
+            await db.execute(select(func.count()).select_from(query.subquery()))
+        ).scalar() or 0
+
+        size_rows = (await db.execute(
+            select(Inspiration.id, Inspiration.file_path)
+        )).all()
+
+        def _file_size(row) -> int:
+            """返回素材文件字节数（文件缺失按 0 处理）。"""
+            if not row[1]:
+                return 0
+            try:
+                p = settings.storage_root / row[1]
+                return p.stat().st_size if p.exists() else 0
+            except OSError:
+                return 0
+
+        ordered = sorted(size_rows, key=_file_size, reverse=True)
+        page_ids = [r[0] for r in ordered[(page - 1) * size : page * size]]
+
+        if not page_ids:
+            return [], total
+
+        result = await db.execute(query.where(Inspiration.id.in_(page_ids)))
+        inspirations = result.unique().scalars().all()
+        # 恢复按文件大小的页内顺序（in_ 查询不保证顺序）
+        id_order = {insp_id: idx for idx, insp_id in enumerate(page_ids)}
+        inspirations = sorted(inspirations, key=lambda i: id_order.get(i.id, 0))
+        return inspirations, total
+
     query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
 
     # 统计总数
@@ -307,11 +414,24 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
         return {"deleted": 0, "freed_bytes": 0, "message": "没有已拒绝的素材"}
 
     deleted_ids = [insp.id for insp in rejected]
-    freed_bytes = 0
-    urls_to_seal: list[str] = []
+    urls_to_seal: list[str] = [insp.source_url for insp in rejected if insp.source_url]
+
+    # 先删除数据库记录并写入墓碑表（同一事务），提交成功后再物理删除文件，
+    # 避免「文件已删但事务失败」产生指向不存在文件的记录
     for insp in rejected:
-        if insp.source_url:
-            urls_to_seal.append(insp.source_url)
+        await db.delete(insp)
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL)
+                .values(source_url=url)
+                .prefix_with("OR IGNORE")
+            )
+    await db.commit()
+
+    # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
+    freed_bytes = 0
+    for insp in rejected:
         for p in (insp.file_path, insp.thumbnail_path):
             if p:
                 full = settings.storage_root / p
@@ -321,18 +441,6 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
                         full.unlink()
                 except Exception:
                     pass
-        await db.delete(insp)
-
-    # 写入墓碑表（防止重复采集）
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
-
-    await db.commit()
 
     # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
     # 避免批量删除后产生孤儿向量
@@ -567,12 +675,14 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
             .prefix_with("OR IGNORE")
         )
 
-    # 删除磁盘文件
-    delete_files(inspiration.file_path, inspiration.thumbnail_path)
+    # 先删除数据库记录并 flush（提交由外层事务完成），成功后再删磁盘文件，
+    # 避免「文件已删但事务失败」产生指向不存在文件的记录
+    await db.delete(inspiration)
+    await db.flush()
 
     # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
     if vector_store.is_lancedb_available():
         await vector_store.delete_inspiration_vectors(inspiration.id)
 
-    await db.delete(inspiration)
-    await db.flush()
+    # 提交成功后物理删除文件（删除失败仅记日志，不抛异常）
+    delete_files(inspiration.file_path, inspiration.thumbnail_path)

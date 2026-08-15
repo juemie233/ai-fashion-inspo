@@ -50,6 +50,8 @@ async def _run_analysis(inspiration_id: str, file_path: str):
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
         return
 
+    success = False
+
     # 注册当前任务
     current_task = asyncio.current_task()
     if current_task:
@@ -108,6 +110,20 @@ async def _run_analysis(inspiration_id: str, file_path: str):
             _pending_queue.remove(inspiration_id)
         except ValueError:
             pass
+
+        # 实时推送分析结果（前端 useWebSocket 监听 ai_analysis_done）
+        try:
+            from app.routers.ws import manager
+
+            await manager.broadcast(
+                {
+                    "type": "ai_analysis_done",
+                    "inspiration_id": inspiration_id,
+                    "success": success,
+                }
+            )
+        except Exception:
+            logger.debug("WebSocket 广播失败（忽略，不影响分析主流程）", exc_info=True)
 
 
 async def _update_env_file(updates: dict[str, str]) -> None:

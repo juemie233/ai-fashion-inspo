@@ -33,7 +33,6 @@ from app.routers.ai_shared import (
 )
 from app.services.model_config import get_model_config, update_model_config
 from app.services.model_prompt import get_model_prompt
-from app.utils.auth import require_api_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
