@@ -11,7 +11,7 @@
 | Python | 3.12+ | 后端运行时 | [python.org](https://www.python.org/downloads/) |
 | Node.js | 20+ | Web 前端构建 | [nodejs.org](https://nodejs.org/en/download) |
 | Ollama | latest | AI 视觉推理引擎 | [ollama.com](https://ollama.com/download/windows) |
-| MiniCPM-V:8b | — | 穿搭标签识别模型 | `ollama pull minicpm-v:8b` |
+| Qwen3-VL:8B-Instruct | — | 穿搭标签识别模型 | `ollama pull qwen3-vl:8b-instruct` |
 
 ### 采集引擎附加条件（仅 CDP 模式需要）
 
@@ -82,7 +82,7 @@ chrome_debug_port: int = 9222
 | Web 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI |
 | 移动端 | React Native (Expo) + Zustand |
 | 浏览器插件 | Chrome Extension Manifest V3 |
-| AI 推理 | Ollama + MiniCPM-V:8b（本地 GPU） |
+| AI 推理 | Ollama + Qwen3-VL:8B-Instruct（本地 GPU） |
 | 采集引擎 | Playwright + CDP 连接真实 Chrome（零检测采集） |
 
 ## 功能概览
@@ -235,16 +235,19 @@ fashion-inspo/
 │   │   │   ├── files.py          # 静态文件
 │   │   │   └── ws.py             # WebSocket
 │   │   ├── services/             # 业务逻辑
-│   │   │   ├── ai_service.py     # AI 编排（分析/审核/大标签总结）
+│   │   │   ├── ai_service/       # AI 编排（analyze 分析 / quality 审核 / outfit_summary 大标签 / common）
 │   │   │   ├── ai_parser.py      # AI 响应解析/修复（畸形处理）
 │   │   │   ├── ai_tag_saver.py   # 标签标准化/保存/关联
-│   │   │   ├── file_service.py   # 文件管理
+│   │   │   ├── ai_analysis_service.py  # 分析/队列/历史业务逻辑
+│   │   │   ├── inspiration_service.py  # 素材 CRUD 业务逻辑
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
-│   │   │   ├── embedding_service.py  # 向量嵌入（文本/图像）
-│   │   │   ├── vector_service.py     # 向量回填 / 相似度混合排序
-│   │   │   ├── vector_store.py       # LanceDB 读写
-│   │   │   ├── task_runner.py        # 异步任务执行器（worker 分发）
-│   │   │   └── scraper_service.py    # 采集编排
+│   │   │   ├── scraper_service.py    # 采集编排
+│   │   │   ├── file_service.py   # 文件管理
+│   │   │   ├── task_runners/     # 异步任务执行器（batch_analyze / quality_check / batch_delete / deduplicate）
+│   │   │   ├── vector/           # 向量检索（embedding / store / similarity）
+│   │   │   ├── embedding_service.py  # 薄壳 → vector.embedding
+│   │   │   ├── vector_service.py     # 薄壳 → vector.similarity
+│   │   │   └── vector_store.py       # 薄壳 → vector.store
 │   │   ├── scrapers/             # 平台爬虫
 │   │   │   ├── base.py           # 抽象基类
 │   │   │   ├── xiaohongshu.py    # 小红书
@@ -289,17 +292,20 @@ fashion-inspo/
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
 │   │   │   ├── ModelManageView.vue # AI 模型管理（全功能）
 │   │   │   └── AdminView.vue     # 管理后台（统计、去重、完整性检查）
-│   │   ├── components/           # 通用组件
+│   │   ├── components/           # 通用组件（按域分目录）
 │   │   │   ├── layout/AppLayout.vue
-│   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox
-│   │   │   ├── model/            # ModelListPanel, AnalysisPanel, SettingsPanel, QualityPanel, ReviewPanel
-│   │   │   └── search/           # SearchBar, TagFilter
+│   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
+│   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
+│   │   │   ├── admin/            # 统计/任务/重复/完整性检查子组件
+│   │   │   ├── scraper/          # 采集任务/日志/漏斗/结果子组件
+│   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
+│   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件
+│   │   │   └── upload/           # 上传拖拽/队列/选项子组件
+│   │   ├── types/                # 跨组件复用的 TS 类型（admin/analysis/scraper/upload）
 │   │   ├── utils/                # 工具函数
+│   │   │   ├── sourceLabel.ts    # 来源类型中文映射
 │   │   │   └── format.ts         # 字节/耗时/日期格式化
-│   │   └── composables/          # Vue composables
-│   │       ├── useWebSocket.ts
-│   │       ├── useInfiniteScroll.ts
-│   │       └── useNotification.ts  # 浏览器桌面通知
+│   │   └── composables/          # Vue composables（useWebSocket / useSearch / useOutfitTags / useTagManage / useAdminTask 等）
 │   ├── package.json
 │   └── vite.config.ts
 │
@@ -313,6 +319,7 @@ fashion-inspo/
 │   │   └── detail/[id].tsx       # 详情
 │   ├── hooks/useInspirations.ts  # Zustand 状态
 │   ├── services/api.ts           # API 客户端
+│   ├── utils/sourceLabel.ts      # 来源类型中文映射
 │   └── app.json                  # Expo 配置
 │
 ├── browser-extension/            # Chrome 浏览器插件
@@ -367,7 +374,7 @@ fashion-inspo/
 │                                                               │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │          Ollama (GPU: RTX 5060Ti 16GB)               │    │
-│  │  MiniCPM-V:8b — 穿搭视觉分析与标签提取                  │    │
+│  │  Qwen3-VL:8B-Instruct — 穿搭视觉分析与标签提取         │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────┐    │
@@ -553,7 +560,7 @@ fashion-inspo/
 | `POST` | `/api/ai/retry-all-failed` | 重试所有失败（仅图片） |
 | `DELETE` | `/api/ai/reset?confirm=yes` | 重置所有数据+文件 |
 
-> **注：** 视频文件暂不参与 AI 分析。WebP 图片会自动转为 JPEG 以兼容 MiniCPM-V 模型。
+> **注：** 视频文件暂不参与 AI 分析。WebP 图片会自动转为 JPEG 以兼容 Qwen3-VL 模型。
 
 ### 采集管理
 
@@ -599,7 +606,7 @@ fashion-inspo/
 | Python 3.12+ | 后端 | ✅ |
 | Node.js 20+ | Web + Mobile 前端 | ✅ |
 | Ollama | AI 视觉推理 | ✅ |
-| MiniCPM-V:8b | 穿搭标签识别 | ✅ |
+| Qwen3-VL:8B-Instruct | 穿搭标签识别 | ✅ |
 | Google Chrome | CDP 采集宿主浏览器 | ⚠️ 采集时必需 |
 | Playwright | 采集引擎驱动 | ⚠️ 采集时必需 |
 | ffmpeg | 视频关键帧提取 | ❌ 尚未使用 |

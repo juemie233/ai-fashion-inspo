@@ -91,11 +91,13 @@ fashion-inspo/
 │   └── requirements.txt
 ├── web/                   # Vue 3 Web 前端
 │   └── src/
-│       ├── views/         # 页面组件
-│       ├── components/    # 通用组件
+│       ├── views/         # 页面组件（只做编排）
+│       ├── components/    # 通用组件（按域分子目录）
 │       ├── stores/        # Pinia 状态
 │       ├── api/           # API 客户端
-│       └── composables/   # Vue composables
+│       ├── composables/   # Vue composables
+│       ├── types/         # 跨组件复用的 TS 类型
+│       └── utils/         # 纯工具函数（去重）
 ├── mobile/                # React Native 移动端
 ├── browser-extension/     # Chrome 浏览器插件
 ├── shared/types/          # 前后端共享的类型定义
@@ -138,6 +140,14 @@ fashion-inspo/
 | 数据库表 | snake_case（复数） | `inspirations` |
 | 数据库列 | snake_case | `source_type` |
 
+## 前端文件拆分约定
+
+- 视图只做编排（数据加载 + 子组件组装 + 事件接线），单个视图超过 ~400 行优先拆解。
+- 自成体系的状态 + 逻辑抽 `composables/useXxx.ts`，内部自行 `useMessage()`，不直接操作 DOM。
+- 跨组件复用的 TS 接口放 `web/src/types/{domain}.ts`，不在组件内重复定义。
+- 多处重复的纯函数收敛 `web/src/utils/`（如 sourceLabel、formatSize），禁止多文件重复定义。
+- 子组件按域放 `web/src/components/{admin|scraper|search|tag|upload|model|inspiration}/`，props + emit 通信。
+
 ## 来源类型映射
 
 数据库 `source_type` 字段在前端必须显示为中文：
@@ -150,7 +160,7 @@ fashion-inspo/
 | `douyin` | 抖音 |
 | `browser_extension` | 浏览器插件 |
 
-新增来源类型时，必须在所有 `sourceLabel()` 函数中同步添加映射。
+新增来源类型时，只需在 `web/src/utils/sourceLabel.ts` 与 `mobile/utils/sourceLabel.ts` 各改一处。
 
 ## Git 提交格式
 

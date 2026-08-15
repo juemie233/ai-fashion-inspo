@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 质量审核面板：待审核/已通过/已拒绝统计 + 未通过素材管理。 */
 
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
@@ -50,6 +50,12 @@ interface ReviewTask {
 const reviewTask = ref<ReviewTask | null>(null)
 let reviewPollTimer: ReturnType<typeof setTimeout> | null = null
 let reviewPollSeq = 0  // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
+
+/** 是否存在进行中的审核任务（pending/running），用于禁止重复提交审核 */
+const reviewTaskActive = computed(() => {
+  const s = reviewTask.value?.status
+  return s === 'pending' || s === 'running'
+})
 
 async function loadQualityReview() {
   qualityReviewLoading.value = true
@@ -336,10 +342,10 @@ onUnmounted(() => {
         <n-button
           type="primary"
           :loading="qualityChecking"
-          :disabled="qualityReviewStats.pending === 0"
+          :disabled="qualityReviewStats.pending === 0 || reviewTaskActive"
           @click="triggerQualityCheck"
         >
-          {{ qualityReviewStats.pending > 0 ? `审核全部待审核 (${qualityReviewStats.pending})` : '全部已审核' }}
+          {{ reviewTaskActive ? '审核进行中…' : qualityReviewStats.pending > 0 ? `审核全部待审核 (${qualityReviewStats.pending})` : '全部已审核' }}
         </n-button>
         <n-space :size="6" align="center">
           <n-input-number
