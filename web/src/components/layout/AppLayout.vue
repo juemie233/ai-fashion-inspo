@@ -13,6 +13,7 @@ import {
   SettingsOutline,
   ListOutline,
 } from '@vicons/ionicons5'
+import SchemaVersionBanner from './SchemaVersionBanner.vue'
 
 function renderIcon(icon: Component) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -43,6 +44,8 @@ function renderIcon(icon: Component) {
 
     <!-- 主内容区 -->
     <main class="main-content">
+      <!-- 前后端 schema 版本握手提示 -->
+      <SchemaVersionBanner />
       <slot />
     </main>
   </div>

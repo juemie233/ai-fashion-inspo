@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.db_migrations import ensure_schema
+from app.db_migrations import compute_schema_version, ensure_schema
 from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin, tasks
 
 
@@ -81,9 +81,13 @@ app.include_router(tasks.router)
 
 @app.get("/api/health")
 async def health_check():
-    """健康检查端点。"""
+    """健康检查端点。
+
+    返回 schema_version 供前端启动时比对，检测前后端契约是否一致。
+    """
     return {
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
+        "schema_version": compute_schema_version(),
     }

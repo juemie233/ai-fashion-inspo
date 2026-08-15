@@ -96,6 +96,7 @@ chrome_debug_port: int = 9222
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计、任务状态/表单草稿持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、快捷键（回车下载/Ctrl+S 保存） |
+| **素材管理** | 按小菜单分区的管理后台：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重 |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -291,12 +292,12 @@ fashion-inspo/
 │   │   │   ├── ScraperView.vue   # 采集管理
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
 │   │   │   ├── ModelManageView.vue # AI 模型管理（全功能）
-│   │   │   └── AdminView.vue     # 管理后台（统计、去重、完整性检查）
+│   │   │   └── AdminView.vue     # 素材管理（小菜单子页面：概览/疑似AI/批量清理/完整性/重复文件）
 │   │   ├── components/           # 通用组件（按域分目录）
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
-│   │   │   ├── admin/            # 统计/任务/重复/完整性检查子组件
+│   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/完整性检查子组件
 │   │   │   ├── scraper/          # 采集任务/日志/漏斗/结果子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件
@@ -388,7 +389,7 @@ fashion-inspo/
 
 | 表 | 说明 | 关键字段 |
 | ---- | ------ | ---------- |
-| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason |
+| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason, is_ai_generated |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual), pinned, sort_order, description |
 | `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
@@ -590,14 +591,18 @@ fashion-inspo/
 | `GET` | `/api/admin/check-duplicate?hash=` | 上传前去重（MD5 检测） |
 | `POST` | `/api/admin/cleanup-orphans` | 清理孤立文件 |
 | `POST` | `/api/admin/batch-delete` | 批量删除素材（按ID或条件，异步任务，返回 `task_id`） |
+| `POST` | `/api/admin/batch-unmark-ai` | 批量将疑似 AI 素材重新标记为非 AI（按 ID 列表，同步返回 `updated`） |
 | `POST` | `/api/admin/deduplicate` | 智能去重删除（异步任务，返回 `task_id`） |
 
 ### 其他
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/api/health` | 健康检查（返回 `schema_version`，前端启动时比对前后端契约） |
 | `GET` | `/api/files/{path}` | 静态文件访问 |
 | `WS` | `/ws` | WebSocket 实时推送 |
+
+> **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端启动时比对本地期望值，不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」。
 
 ## 环境要求
 

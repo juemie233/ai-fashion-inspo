@@ -12,11 +12,17 @@
 所有进程启动时会自动补全缺失列，无需手动 ALTER TABLE。
 """
 
+import hashlib
+import json
 from pathlib import Path
 
 import aiosqlite
 
 from app.config import settings
+
+# API/Pydantic 契约版本：修改请求/响应模型、路由字段等「不落库」的契约时手动 +1。
+# 与数据库结构哈希拼接成前后端握手用的 schema_version（见 compute_schema_version）。
+API_CONTRACT_VERSION = 1
 
 # 字段清单：表名 -> [(列名, 列定义), ...]
 _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
@@ -51,6 +57,26 @@ _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
         ("ix_tags_pinned", "pinned"),
     ],
 }
+
+
+def compute_schema_version() -> str:
+    """计算前后端握手用的 schema 版本号。
+
+    格式：``{数据库结构哈希}-{API 契约版本}``
+
+    - 数据库结构哈希：对 _SCHEMA_COLUMNS / _SCHEMA_INDEXES 做稳定序列化后取
+      SHA-256 前 8 位，修改列/索引清单时自动变化（无需手动递增）。
+    - API 契约版本：修改 Pydantic 模型、路由字段等「不落库」的契约时手动 +1。
+
+    该值通过 /api/health 暴露，前端启动时比对，用于把「静默失败」变成「显式提示」。
+    """
+    payload = {
+        "columns": {table: sorted(cols) for table, cols in sorted(_SCHEMA_COLUMNS.items())},
+        "indexes": {table: sorted(idxs) for table, idxs in sorted(_SCHEMA_INDEXES.items())},
+    }
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    db_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:8]
+    return f"{db_hash}-{API_CONTRACT_VERSION}"
 
 
 def get_db_path() -> Path:
