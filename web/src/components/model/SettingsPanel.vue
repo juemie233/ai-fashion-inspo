@@ -13,12 +13,12 @@ const store = useAiModelsStore()
 const tagsStore = useTagsStore()
 
 interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; ollama_base_url: string }
-interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number; think: boolean }
+interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number; num_ctx: number; think: boolean }
 const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, ollama_base_url: '' })
 const confThreshold = ref(0.6)
 const analysisTimeout = ref(60)
-const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, think: false })
-const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, think: false }
+const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false })
+const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false }
 const persistSettings = ref(false)
 const savingSettings = ref(false)
 
@@ -190,6 +190,7 @@ async function saveSettings() {
         top_p: samplingParams.value.top_p,
         top_k: samplingParams.value.top_k,
         num_predict: samplingParams.value.num_predict,
+        num_ctx: samplingParams.value.num_ctx,
         think: samplingParams.value.think,
         persist: persistSettings.value,
       },
@@ -210,6 +211,7 @@ function resetToDefaults() {
     top_p: defaultParams.top_p,
     top_k: defaultParams.top_k,
     num_predict: defaultParams.num_predict,
+    num_ctx: defaultParams.num_ctx,
     think: defaultParams.think,
   }
   message.info('已恢复默认值（需点击保存生效）')
@@ -388,6 +390,10 @@ onUnmounted(() => {
         </n-form-item>
         <n-form-item label="Max Tokens">
           <n-input-number v-model:value="samplingParams.num_predict" :min="64" :max="8192" :step="64" style="width:140px" />
+        </n-form-item>
+        <n-form-item label="上下文窗口">
+          <n-input-number v-model:value="samplingParams.num_ctx" :min="1024" :max="131072" :step="1024" style="width:160px" />
+          <span style="margin-left:12px;font-size:13px;color:#666">视觉模型编码图片消耗大量 token，过小会截断输出（建议 ≥ 8192）</span>
         </n-form-item>
         <n-form-item label="思考模式">
           <n-switch v-model:value="samplingParams.think" />

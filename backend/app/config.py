@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     ai_top_p: float = 0.9
     ai_top_k: int = 40
     ai_num_predict: int = 4096  # 思考型模型需为推理预留 token
+    # Ollama 推理上下文窗口：视觉模型对高分辨率图片编码消耗大量 token
+    # （实测一张 1.8MB 图片占约 4000 token），Ollama 默认 4096 会把 JSON 输出硬性截断，
+    # 必须显式传入更大的 num_ctx
+    ai_num_ctx: int = 16384
 
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）

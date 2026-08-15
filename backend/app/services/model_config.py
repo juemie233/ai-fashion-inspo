@@ -25,6 +25,8 @@ def _defaults() -> dict[str, Any]:
     return {
         "timeout": settings.ai_analysis_timeout,
         "num_predict": settings.ai_num_predict,
+        # 上下文窗口：必须显式传给 Ollama，默认 4096 会截断视觉模型输出
+        "num_ctx": settings.ai_num_ctx,
         "temperature": settings.ai_temperature,
         "top_p": settings.ai_top_p,
         "top_k": settings.ai_top_k,

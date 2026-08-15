@@ -195,13 +195,14 @@ async def update_ai_settings(
 
 @router.get("/sampling-params")
 async def get_sampling_params():
-    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, think）。"""
+    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, num_ctx, think）。"""
     cfg = get_model_config(settings.ollama_vision_model)
     return {
         "temperature": cfg["temperature"],
         "top_p": cfg["top_p"],
         "top_k": cfg["top_k"],
         "num_predict": cfg["num_predict"],
+        "num_ctx": cfg["num_ctx"],
         "think": cfg["think"],
     }
 
@@ -212,6 +213,7 @@ async def update_sampling_params(
     top_p: float | None = Query(None, ge=0, le=1),
     top_k: int | None = Query(None, ge=1, le=100),
     num_predict: int | None = Query(None, ge=64, le=8192),
+    num_ctx: int | None = Query(None, ge=1024, le=131072, description="上下文窗口大小（视觉模型图片 token 消耗大）"),
     think: bool | None = Query(None, description="是否开启思考模式（思考模型适用）"),
     persist: bool = Query(False),
 ):
@@ -225,6 +227,8 @@ async def update_sampling_params(
         updates["top_k"] = top_k
     if num_predict is not None:
         updates["num_predict"] = num_predict
+    if num_ctx is not None:
+        updates["num_ctx"] = num_ctx
     if think is not None:
         updates["think"] = think
 
@@ -238,5 +242,6 @@ async def update_sampling_params(
         "top_p": cfg["top_p"],
         "top_k": cfg["top_k"],
         "num_predict": cfg["num_predict"],
+        "num_ctx": cfg["num_ctx"],
         "think": cfg["think"],
     }

@@ -43,7 +43,12 @@ async def _ollama_vision_chat(
                         ],
                         "stream": False,
                         "think": think,
-                        "options": {"temperature": temperature, "num_predict": num_predict},
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": num_predict,
+                            # 视觉模型图片编码 token 消耗大，必须显式传 num_ctx（默认 4096 会截断/拒绝大图）
+                            "num_ctx": model_cfg["num_ctx"],
+                        },
                     },
                 )
                 response.raise_for_status()

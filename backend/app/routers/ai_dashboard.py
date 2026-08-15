@@ -201,6 +201,7 @@ async def test_analyze(
                                 "top_p": model_cfg["top_p"],
                                 "top_k": model_cfg["top_k"],
                                 "num_predict": model_cfg["num_predict"],
+                                "num_ctx": model_cfg["num_ctx"],
                             },
                         },
                     )

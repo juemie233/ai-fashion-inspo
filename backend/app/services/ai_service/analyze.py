@@ -47,65 +47,110 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         num_predict = model_cfg["num_predict"]
         if think_enabled:
             num_predict = max(num_predict, 8192)
+        # 上下文窗口：视觉模型对高分辨率图片编码消耗大量 token（实测约 4000），
+        # 若沿用 Ollama 默认 4096，输出会被硬性截断（done_reason=length）
+        num_ctx = model_cfg["num_ctx"]
 
         # 调用 Ollama 视觉 API — 传入采样参数
         async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
             raw_response = ""
+            truncated = False
+            ctx_too_small = False
             # 思考模式若思维链耗尽预算会返回空内容，此时回退到非思考模式重试
             think_attempts = [think_enabled, False] if think_enabled else [False]
-            for think in think_attempts:
-                try:
-                    response = await client.post(
-                        f"{settings.ollama_base_url}/api/chat",
-                        json={
-                            "model": settings.ollama_vision_model,
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": get_model_prompt(settings.ollama_vision_model),
-                                    "images": [image_data],
-                                }
-                            ],
-                            "stream": False,
-                            "think": think,  # 关闭思考模式（可每模型配置）
-                            "options": {
-                                "temperature": model_cfg["temperature"],
-                                "top_p": model_cfg["top_p"],
-                                "top_k": model_cfg["top_k"],
-                                "num_predict": num_predict,
-                            },
-                        },
-                    )
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    # 将 HTTP 状态码转为人可读的中文错误信息
-                    status = e.response.status_code
-                    detail = ""
+            # 输出被 token 预算截断时加倍 num_ctx 重试一次（封顶 65536）
+            ctx_attempts = [num_ctx]
+            doubled_ctx = min(num_ctx * 2, 65536)
+            if doubled_ctx > num_ctx:
+                ctx_attempts.append(doubled_ctx)
+            for num_ctx_attempt in ctx_attempts:
+                got_complete = False
+                for think in think_attempts:
                     try:
-                        detail = e.response.json().get("error", "")
-                    except Exception:
-                        pass
-                    raise RuntimeError(
-                        _http_error_message(status, detail, file_size_mb)
-                    ) from e
-                except httpx.TimeoutException:
-                    raise RuntimeError(
-                        f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
-                        "请检查 Ollama 是否正常运行或尝试增大超时时间"
-                    )
-                except httpx.ConnectError:
-                    raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
+                        response = await client.post(
+                            f"{settings.ollama_base_url}/api/chat",
+                            json={
+                                "model": settings.ollama_vision_model,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": get_model_prompt(settings.ollama_vision_model),
+                                        "images": [image_data],
+                                    }
+                                ],
+                                "stream": False,
+                                "think": think,  # 关闭思考模式（可每模型配置）
+                                "options": {
+                                    "temperature": model_cfg["temperature"],
+                                    "top_p": model_cfg["top_p"],
+                                    "top_k": model_cfg["top_k"],
+                                    "num_predict": num_predict,
+                                    "num_ctx": num_ctx_attempt,
+                                },
+                            },
+                        )
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        # 将 HTTP 状态码转为人可读的中文错误信息
+                        status = e.response.status_code
+                        detail = ""
+                        try:
+                            detail = e.response.json().get("error", "")
+                        except Exception:
+                            pass
+                        # 400 + 上下文相关错误：图片 token 超过当前窗口，若还有更大窗口则继续重试
+                        if status == 400 and (
+                            "context" in detail.lower() or "window" in detail.lower()
+                        ):
+                            ctx_too_small = True
+                            logger.warning(
+                                f"图片超出上下文窗口 (num_ctx={num_ctx_attempt})，"
+                                f"加倍窗口重试: {inspiration_id}"
+                            )
+                            break
+                        raise RuntimeError(
+                            _http_error_message(status, detail, file_size_mb)
+                        ) from e
+                    except httpx.TimeoutException:
+                        raise RuntimeError(
+                            f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
+                            "请检查 Ollama 是否正常运行或尝试增大超时时间"
+                        )
+                    except httpx.ConnectError:
+                        raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
 
-                result = response.json()
-                if not isinstance(result, dict) or "message" not in result:
-                    raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
-                raw_response = result["message"].get("content") or ""
-                if raw_response:
+                    result = response.json()
+                    if not isinstance(result, dict) or "message" not in result:
+                        raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
+                    raw_response = result["message"].get("content") or ""
+                    if raw_response and result.get("done_reason") != "length":
+                        got_complete = True
+                        break
+                    if raw_response and result.get("done_reason") == "length":
+                        # token 预算耗尽导致的截断：丢弃残缺输出，用更大的上下文窗口重试
+                        truncated = True
+                        raw_response = ""
+                        logger.warning(
+                            f"输出被 token 预算截断 (done_reason=length, num_ctx={num_ctx_attempt})，"
+                            f"加倍上下文窗口重试: {inspiration_id}"
+                        )
+                        break
+                    if think:
+                        logger.warning(f"思考模型返回空内容，改用非思考模式重试: {inspiration_id}")
+                if got_complete:
                     break
-                if think:
-                    logger.warning(f"思考模型返回空内容，改用非思考模式重试: {inspiration_id}")
 
             if not raw_response:
+                if ctx_too_small:
+                    raise RuntimeError(
+                        "图片占用的 token 超过模型上下文窗口（已尝试加倍 num_ctx 仍不足），"
+                        "请增大该模型的 num_ctx，或压缩图片分辨率后重试"
+                    )
+                if truncated:
+                    raise RuntimeError(
+                        "AI 输出被 token 预算截断（已尝试加倍上下文窗口仍不完整），"
+                        "请重试，或增大该模型的 num_ctx / num_predict"
+                    )
                 raise RuntimeError("Ollama 返回空内容，模型可能不支持视觉功能或图片无效")
 
         # 解析分析结果并保存标签
