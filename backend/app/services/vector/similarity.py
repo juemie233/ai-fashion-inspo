@@ -9,6 +9,9 @@
 - ``backfill_all_vectors``：为存量素材批量生成文本/图像向量（独立可触发，
   不依赖任务队列，未来可接入队列后改为后台执行）。
 - ``rebuild_text_vector``：重建单个素材的文本向量（标签/作者变更后调用）。
+- ``rebuild_image_vector``：重建单个素材的图像向量（素材入库后调用）。
+- ``rebuild_inspiration_vectors``：一次性重建单个素材的文本 + 图像向量
+  （上传 / AI 分析完成后的统一入口）。
 """
 
 import logging
@@ -207,6 +210,45 @@ async def rebuild_text_vector(db: AsyncSession, inspiration_id: str) -> bool:
     if not vec:
         return False
     return await vector_store.upsert_vector("text", insp.id, vec)
+
+
+async def rebuild_image_vector(db: AsyncSession, inspiration_id: str) -> bool:
+    """重建单个素材的图像向量（素材入库后调用，保证相似推荐可用）。
+
+    语义:
+        图像向量由 CLIP 对素材原图编码生成，写入 LanceDB 图像向量表。
+        素材不存在、非图片、LanceDB 未安装、CLIP 不可用或文件缺失时
+        静默降级返回 False，不抛错（不阻断入库/分析主流程）。
+
+    返回:
+        True 表示重建成功；其余情况返回 False。
+    """
+    if not vector_store.is_lancedb_available():
+        return False
+    insp = await db.get(Inspiration, inspiration_id)
+    if insp is None or insp.media_type != "image":
+        return False
+    full_path = settings.storage_root / insp.file_path
+    if not full_path.exists():
+        return False
+    vec = await generate_image_embedding(file_path=str(full_path))
+    if not vec:
+        return False
+    return await vector_store.upsert_vector("image", insp.id, vec)
+
+
+async def rebuild_inspiration_vectors(db: AsyncSession, inspiration_id: str) -> dict:
+    """重建单个素材的文本 + 图像向量（上传 / AI 分析完成后的统一入口）。
+
+    文本向量依赖标签内容，无标签时自动跳过（返回 False）；图像向量仅对
+    图片素材生成（视频跳过）。任一步骤失败均静默降级，不影响主流程。
+
+    返回:
+        统计字典 {"text": bool, "image": bool}，True 表示已成功写入或无需生成。
+    """
+    text_ok = await rebuild_text_vector(db, inspiration_id)
+    image_ok = await rebuild_image_vector(db, inspiration_id)
+    return {"text": text_ok, "image": image_ok}
 
 
 def _count_shared_tags(candidate: Inspiration, source_tag_ids: set[int]) -> int:

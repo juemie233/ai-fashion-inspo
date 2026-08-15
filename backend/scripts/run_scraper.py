@@ -388,6 +388,22 @@ def _download_batch(
                     if conn is not None:
                         conn.close()
 
+                # 入库后异步回填向量（写入任务队列，由独立 worker 进程执行）。
+                # 保证采集入库的素材无需手动回填即可被语义搜索 / 相似推荐检索到。
+                # 入队失败不影响采集主流程，静默降级。
+                try:
+                    _vconn = _sqlite3.connect(str(db_path))
+                    _vconn.execute(
+                        "INSERT INTO task_queue (type, status, progress, total, done, result, "
+                        "max_retries, retry_count, created_at, updated_at) "
+                        "VALUES ('vector_backfill', 'pending', 0, 1, 0, ?, 2, 0, ?, ?)",
+                        (json.dumps({"inspiration_ids": [insp_id]}), now_str, now_str),
+                    )
+                    _vconn.commit()
+                    _vconn.close()
+                except Exception:
+                    pass
+
                 added += 1
                 existing_url_set.add(img_url)
 

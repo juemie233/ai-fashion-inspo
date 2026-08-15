@@ -8,11 +8,15 @@
 from app.services.vector.similarity import (
     backfill_all_vectors,
     find_similar_hybrid,
+    rebuild_image_vector,
+    rebuild_inspiration_vectors,
     rebuild_text_vector,
 )
 
 __all__ = [
     "backfill_all_vectors",
     "rebuild_text_vector",
+    "rebuild_image_vector",
+    "rebuild_inspiration_vectors",
     "find_similar_hybrid",
 ]

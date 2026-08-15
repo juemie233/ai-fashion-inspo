@@ -37,6 +37,10 @@ from app.services.task_runners.quality_check import (
     create_quality_check_task,
     execute_quality_check,
 )
+from app.services.task_runners.vector_backfill import (
+    create_vector_backfill_task,
+    execute_vector_backfill,
+)
 
 # 任务类型 → 执行函数的分发表：worker 按 task.type 分发到对应执行器。
 # 新增任务类型时，在此注册对应的 execute_xxx 函数即可，worker 无需改动。
@@ -45,4 +49,5 @@ TASK_HANDLERS = {
     "quality_check": execute_quality_check,
     "batch_delete": execute_batch_delete,
     "deduplicate": execute_deduplicate,
+    "vector_backfill": execute_vector_backfill,
 }

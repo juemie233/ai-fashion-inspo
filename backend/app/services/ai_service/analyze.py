@@ -145,6 +145,21 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         await db.commit()
         success = (error_msg is None)
 
+        # AI 分析完成（单条分析与批量分析共用本函数，均运行于后台任务）：
+        # 立即重建文本 + 图像向量，保证新素材可被语义搜索 / 相似推荐检索到。
+        # 标签此刻已入库，文本向量有内容可生成；图像向量对视频素材自动跳过。
+        # LanceDB / CLIP / Ollama 不可用时内部静默降级，不影响分析结果。
+        if success:
+            try:
+                from app.services.vector_service import rebuild_inspiration_vectors
+
+                await rebuild_inspiration_vectors(db, inspiration_id)
+            except Exception as vec_err:
+                logger.warning(
+                    f"分析完成后重建向量失败（忽略，不影响分析结果）"
+                    f"{inspiration_id}: {vec_err}"
+                )
+
     except Exception as e:
         error_msg = str(e)
         success = False

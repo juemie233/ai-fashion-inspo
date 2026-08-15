@@ -91,6 +91,18 @@ async def create_inspiration(
     db.add(inspiration)
     await db.flush()
     await db.refresh(inspiration)
+
+    # 入库后异步回填向量：保证新素材进入详情页「相似推荐」/ 语义搜索时已有向量，
+    # 避免请求链路内现场 CLIP 编码造成卡顿。文本向量需等标签生成后才有内容，
+    # 无标签时由任务内部自动跳过（后续 AI 分析完成时再重建）。
+    # 入队失败（如任务表不可用）不影响上传主流程，静默降级。
+    try:
+        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+
+        await create_vector_backfill_task(db, [inspiration.id])
+    except Exception:
+        pass
+
     return inspiration
 
 
@@ -168,6 +180,15 @@ async def create_inspiration_from_url(
             link = InspirationTag(inspiration_id=inspiration.id, tag_id=tag.id, confidence=1.0)
             db.add(link)
         await db.flush()
+
+    # 入库后异步回填向量（含 URL 导入时携带的标签 → 文本向量一并生成）。
+    # 入队失败不影响导入主流程，静默降级。
+    try:
+        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+
+        await create_vector_backfill_task(db, [inspiration.id])
+    except Exception:
+        pass
 
     return inspiration
 

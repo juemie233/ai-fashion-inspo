@@ -9,6 +9,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   batch_delete: '批量删除',
   deduplicate: '去重',
   scraper: '采集',
+  vector_backfill: '向量回填',
 }
 
 /** 采集平台中文标签 */
@@ -55,6 +56,7 @@ export function taskTypeTagColor(
     batch_delete: 'error',
     deduplicate: 'success',
     scraper: 'info',
+    vector_backfill: 'info',
   }
   return map[type] || 'default'
 }
