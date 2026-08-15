@@ -24,6 +24,8 @@ const props = defineProps<{
   selected?: boolean
   /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
   hoverZoom?: boolean
+  /** 是否显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
+  showViewButton?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -103,6 +105,12 @@ function handleCardClick() {
     goToDetail()
   }
 }
+
+/** 浏览详情：选择模式下通过专用按钮进入详情页（阻止冒泡，不触发勾选切换） */
+function openDetail() {
+  cancelZoom()
+  goToDetail()
+}
 </script>
 
 <template>
@@ -139,6 +147,16 @@ function handleCardClick() {
         @click.stop="emit('toggleSelect')"
       >
         <span v-if="selected">✓</span>
+      </div>
+
+      <!-- 浏览详情按钮（选择模式下仍可进入详情页） -->
+      <div
+        v-if="showViewButton"
+        class="view-detail-btn"
+        title="浏览详情"
+        @click.stop="openDetail"
+      >
+        <n-icon><EyeOutline /></n-icon>
       </div>
 
       <!-- 悬浮操作层 -->
@@ -358,6 +376,32 @@ function handleCardClick() {
 .select-checkbox.checked {
   background: #e0465e;
   border-color: #e0465e;
+}
+
+/* 浏览详情按钮：悬停卡片时出现，位于缩略图右下角 */
+.view-detail-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.card:hover .view-detail-btn {
+  opacity: 1;
+}
+.view-detail-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
 }
 
 .quality-badges {

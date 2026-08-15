@@ -22,6 +22,8 @@ defineProps<{
   showActions?: boolean
   /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
   hoverZoom?: boolean
+  /** 显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
+  showViewButton?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -44,6 +46,7 @@ const emit = defineEmits<{
         :selected="selectable ? selectedIds?.has(item.id) : false"
         :show-actions="showActions !== false"
         :hover-zoom="hoverZoom"
+        :show-view-button="showViewButton"
         @delete="emit('delete', item.id)"
         @toggle-favorite="emit('toggleFavorite', item.id)"
         @approve="emit('approve', item.id)"

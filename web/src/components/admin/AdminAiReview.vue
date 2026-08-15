@@ -118,6 +118,7 @@ function deleteSelected() {
         <n-tag type="warning" size="small" :bordered="false">
           共 {{ total }} 个疑似 AI 素材
         </n-tag>
+        <span class="view-hint">点击卡片勾选，悬停后点 👁 浏览详情</span>
         <span v-if="selectedCount > 0" class="selected-info">已选 {{ selectedCount }} 项</span>
       </div>
       <div class="toolbar-right">
@@ -161,6 +162,7 @@ function deleteSelected() {
       :selected-ids="selectedIds"
       :show-actions="false"
       :hover-zoom="true"
+      :show-view-button="true"
       empty-text="🎉 没有疑似 AI 的素材"
       @toggle-select="toggleSelect"
     />
@@ -190,6 +192,10 @@ function deleteSelected() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.view-hint {
+  font-size: 12px;
+  color: #999;
 }
 .selected-info {
   font-size: 13px;

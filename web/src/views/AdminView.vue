@@ -3,7 +3,8 @@
 
   页面按功能拆分为小菜单（子页面）：概览 / 疑似 AI / 批量清理 / 数据完整性 / 重复文件。 */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { formatSize } from '@/utils/format'
@@ -20,10 +21,30 @@ import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
 import AdminAiReview from '@/components/admin/AdminAiReview.vue'
 
 const message = useMessage()
+const router = useRouter()
+const route = useRoute()
 
 // ── 子页面（小菜单）状态 ──
 type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates'
-const activeTab = ref<AdminTab>('overview')
+const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates']
+
+/** 从 URL query 恢复上次停留的子页面：刷新页面后仍停留在原小页面而非回到「概览」 */
+function initialTab(): AdminTab {
+  const t = route.query.tab
+  return t && ADMIN_TABS.includes(t as AdminTab) ? (t as AdminTab) : 'overview'
+}
+const activeTab = ref<AdminTab>(initialTab())
+
+// 切换子页面时同步到 URL query（replace 不产生历史记录，刷新后可恢复）
+watch(activeTab, (tab) => {
+  const query = { ...route.query }
+  if (tab === 'overview') {
+    delete query.tab
+  } else {
+    query.tab = tab
+  }
+  router.replace({ query })
+})
 
 /** 疑似 AI 子页面刷新键：批量删除完成后自增，通知子页面重新加载 */
 const aiRefreshKey = ref(0)
