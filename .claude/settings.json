@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/restart.sh > logs/restart-hook.log 2>&1",
+            "command": "bash scripts/ensure-services.sh > logs/ensure-services.log 2>&1",
             "shell": "bash",
             "async": true,
             "timeout": 120

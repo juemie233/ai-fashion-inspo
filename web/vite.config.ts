@@ -16,6 +16,11 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: frontendPort,
+      watch: {
+        // 忽略编辑器/工具原子写入的临时目录（形如 `.文件名.PID.uuid.tmpdir`），
+        // 避免 Vite 监听这些瞬时文件时触发 EBUSY（resource busy or locked）崩溃
+        ignored: ['**/.*.tmpdir', '**/.*.tmpdir/**'],
+      },
       proxy: {
         '/api': {
           target: backendUrl,
