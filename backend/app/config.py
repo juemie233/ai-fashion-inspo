@@ -93,6 +93,10 @@ class Settings(BaseSettings):
         "C:/Users/Administrator/Desktop/chrome-scraper-profile"
     )  # 采集专用 Chrome 用户数据目录
     chrome_debug_port: int = 9222  # Chrome 调试端口
+    chrome_auto_restart_limit: int = 3  # Chrome 崩溃自动重启次数上限
+    chrome_idle_timeout: int = 600  # 无活动采集任务时的空闲自动关闭秒数（0=禁用）
+    chrome_startup_timeout: int = 20  # 启动就绪轮询超时（秒）
+    scraper_task_auto_retry: int = 2  # 采集任务崩溃自动续采次数上限
 
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）

@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 # 运行中子进程映射
 _scraper_pids: dict[int, int] = {}  # task_id → pid
 _scraper_handles: dict[int, object] = {}  # task_id → Popen 对象（用于日志句柄回收）
+_scraper_retry_count: dict[int, int] = {}  # task_id → 自动续采已重试次数
 
 # Chrome 调试模式启动命令模板（路径从配置读取）
 CHROME_DEBUG_CMD = (
@@ -113,15 +115,49 @@ def _launch_scraper_process(task_id: int):
     _scraper_handles[task_id] = (proc, log_f)
 
     def _reap():
-        """后台线程等待子进程退出后回收句柄，避免文件描述符泄漏与 PID 复用误杀。"""
-        try:
-            proc.wait()
-        finally:
-            log_f.close()
-            _scraper_pids.pop(task_id, None)
-            _scraper_handles.pop(task_id, None)
+        """后台线程等待子进程退出后回收句柄，异常退出时自动续采。"""
+        returncode = proc.wait()
+        log_f.close()
+        _scraper_pids.pop(task_id, None)
+        _scraper_handles.pop(task_id, None)
+
+        # 正常退出（0）视为完成，重置续采计数；非 0 视为异常，尝试自动续采
+        if returncode == 0:
+            _scraper_retry_count.pop(task_id, None)
+        else:
+            _maybe_auto_retry(task_id)
 
     threading.Thread(target=_reap, daemon=True).start()
+
+
+def _maybe_auto_retry(task_id: int):
+    """任务子进程异常退出时，若任务仍可续采且未超重试上限，自动重新拉起。"""
+    async def _load():
+        async with async_session() as db:
+            return await db.get(ScraperTask, task_id)
+    try:
+        task = asyncio.run(_load())
+    except Exception:
+        return
+
+    # 用户取消的任务不自动重试
+    if task is None or task.status == "cancelled":
+        return
+
+    retried = _scraper_retry_count.get(task_id, 0)
+    if retried >= settings.scraper_task_auto_retry:
+        return
+
+    _scraper_retry_count[task_id] = retried + 1
+    logger.warning(
+        f"采集任务 {task_id} 异常退出，自动续采（{retried + 1}/{settings.scraper_task_auto_retry}）"
+    )
+    # 延时片刻，给 ChromeManager 崩溃重启留出时间，避免立刻重连失败
+    time.sleep(3)
+    # 期间若已被其它入口（如手动续采）重新拉起，则不再重复启动
+    if task_id in _scraper_pids:
+        return
+    _launch_scraper_process(task_id)
 
 
 def _validate_cookie_platform(platform: str) -> str:
@@ -418,6 +454,27 @@ async def retry_failed_scraper_tasks(db: AsyncSession) -> dict:
         _launch_scraper_process(task_id)
 
     return {"retried": retried, "message": f"已重新创建 {retried} 个采集任务"}
+
+
+async def retry_single_task(db: AsyncSession, task_id: int) -> dict:
+    """重试单个失败任务：沿用 resume_token 从断点续采，而非新建任务。"""
+    task = await db.get(ScraperTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status != "failed":
+        raise HTTPException(
+            status_code=400, detail=f"仅失败任务可续采（当前状态 {task.status}）"
+        )
+
+    task.status = "pending"
+    task.error = None
+    await db.commit()
+
+    # 视为一次新的手动尝试，重置自动续采计数
+    _scraper_retry_count.pop(task_id, None)
+
+    _launch_scraper_process(task_id)
+    return {"message": f"任务 {task_id} 已重新加入队列（断点续采）", "task_id": task_id}
 
 
 # ============ 任务结果管理 ============

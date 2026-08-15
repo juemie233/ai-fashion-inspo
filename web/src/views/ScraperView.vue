@@ -26,10 +26,10 @@ watch(activeTab, (v) => { localStorage.setItem('scraper-active-tab', v) })
 // ===== 各业务域 composable =====
 const {
   sources, tasks, tombstoneCount, cookieStatuses, defaultMaxCount,
-  taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying,
+  taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying, retryingTask,
   taskStats, hasFailedTasks,
   loadAll, refreshTasks, onFilterChange,
-  cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks,
+  cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask,
   startPollIfNeeded, stopPoll, copyText,
   statusType, platformName, formatDate, parseKeywords, getTaskDuration,
 } = useScraperTasks()
@@ -82,6 +82,7 @@ function getTableColumns() {
       btns.push(h(NButton, { size: 'tiny', onClick: () => viewLog(r.id) }, logTaskId.value === r.id ? '关闭日志' : '日志'))
       if (r.diagnostics) btns.push(h(NButton, { size: 'tiny', type: funnelTaskId.value === r.id ? 'info' : 'default', ghost: true, onClick: () => viewFunnel(r) }, funnelTaskId.value === r.id ? '关闭漏斗' : '漏斗'))
       if (r.status === 'pending' || r.status === 'running') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, onClick: () => cancelTask(r.id) }, '取消'))
+      if (r.status === 'failed') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, loading: retryingTask.value === r.id, onClick: () => retrySingleTask(r.id) }, '续采'))
       btns.push(h(NPopconfirm, { onPositiveClick: () => deleteSingleTask(r.id) }, { trigger: () => h(NButton, { size: 'tiny', type: 'error', ghost: true, loading: deletingTask.value === r.id }, '删除'), default: () => '确定删除此记录？' }))
       return h('span', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } }, btns)
     } },

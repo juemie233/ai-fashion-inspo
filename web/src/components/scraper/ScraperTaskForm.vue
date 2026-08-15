@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /** 新建采集任务表单：平台/模式/关键词/数量/CDP 配置，含草稿持久化与 CDP 连通性测试。 */
 
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { useChromeManager, CHROME_STATE_LABELS, CHROME_STATE_TAG } from '@/composables/useChromeManager'
 
 const props = defineProps<{
   /** 后端返回的默认采集数量（用户无已保存草稿时应用） */
@@ -16,6 +17,11 @@ const emit = defineEmits<{
 }>()
 
 const message = useMessage()
+
+// Chrome 生命周期（启动/停止/状态，替代手动命令行启动）
+const { chromeStatus, chromeBusy, refreshChromeStatus, startChrome, stopChrome } = useChromeManager()
+
+onMounted(() => { refreshChromeStatus() })
 
 // 表单字段
 const formPlatform = ref('xiaohongshu')
@@ -144,23 +150,28 @@ async function createTask() {
       <n-space><n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" style="width:100px" />
       <n-button size="small" :loading="cdpChecking" :type="cdpStatus==='ok'?'success':cdpStatus==='fail'?'warning':'default'" @click="testCdp">{{ cdpChecking?'检测中...':cdpStatus==='ok'?'✓ 已连接':cdpStatus==='fail'?'✗ 未连接':'测试连接' }}</n-button></n-space>
     </n-form-item>
-    <n-form-item v-if="formCdp">
-      <n-alert type="info" style="width:100%">
-        <template #header>💡 启动调试 Chrome</template>
-        <p style="margin:4px 0;font-size:12px;line-height:1.6">
-          关闭所有 Chrome 窗口后在命令行执行：<br/>
-          <code class="chrome-cmd" @click="copyText('C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe --remote-debugging-port=' + formCdpPort + ' --user-data-dir=C:/Users/Administrator/Desktop/chrome-scraper-profile')">
-            "C:/Users/Administrator/AppData/Local/Google/Chrome/Application/chrome.exe" --remote-debugging-port={{ formCdpPort }} --user-data-dir="C:/Users/Administrator/Desktop/chrome-scraper-profile"
-          </code>
-          启动后在 Chrome 中登录，回来点击「测试连接」即可开始采集。
-        </p>
-      </n-alert>
+    <n-form-item v-if="formCdp" label="Chrome">
+      <n-space align="center">
+        <n-button
+          v-if="chromeStatus?.state === 'running'"
+          size="small" type="warning" ghost :loading="chromeBusy"
+          @click="stopChrome"
+        >停止 Chrome</n-button>
+        <n-button
+          v-else-if="!chromeStatus || chromeStatus.state === 'not_started'"
+          size="small" type="primary" :loading="chromeBusy"
+          @click="startChrome"
+        >启动 Chrome</n-button>
+        <n-button size="small" quaternary @click="refreshChromeStatus">刷新</n-button>
+        <n-tag v-if="chromeStatus" :type="CHROME_STATE_TAG[chromeStatus.state] || 'default'" size="small">
+          {{ CHROME_STATE_LABELS[chromeStatus.state] || chromeStatus.state }}
+        </n-tag>
+      </n-space>
+    </n-form-item>
+    <n-form-item v-if="formCdp && chromeStatus?.detail">
+      <span style="font-size:12px;color:#999;line-height:1.6">{{ chromeStatus.detail }}</span>
     </n-form-item>
     <n-button type="primary" @click="createTask">开始采集</n-button>
   </n-form>
 </n-card>
 </template>
-
-<style scoped>
-.chrome-cmd{display:block;background:#f0f0f0;padding:4px 8px;margin:4px 0;border-radius:4px;font-size:11px;cursor:pointer;user-select:all}
-</style>

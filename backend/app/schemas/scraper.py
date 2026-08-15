@@ -23,6 +23,7 @@ class ScraperTaskOut(BaseModel):
     items_found: int
     items_added: int
     diagnostics: str | None = None  # 漏斗日志 JSON 字符串
+    resume_token: str | None = None  # 断点续采进度 JSON 字符串
     error: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None

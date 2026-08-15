@@ -25,6 +25,7 @@ class ScraperTask(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     diagnostics: Mapped[str | None] = mapped_column(Text, nullable=True)  # 漏斗日志 JSON
+    resume_token: Mapped[str | None] = mapped_column(Text, nullable=True)  # 断点续采进度 JSON
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

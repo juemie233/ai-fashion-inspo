@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.scraper import ScraperTaskCreate, ScraperTaskOut
 from app.services import scraper_service
+from app.services.chrome_manager import chrome_manager
 
 router = APIRouter(prefix="/api/scraper", tags=["scraper"])
 
@@ -20,6 +21,27 @@ async def scraper_sources():
 async def check_cdp_endpoint(port: int):
     """检查指定端口的 Chrome 调试连接是否就绪。"""
     return await scraper_service.check_cdp(port)
+
+
+# ============ Chrome 生命周期管理 ============
+
+
+@router.post("/chrome/start")
+async def chrome_start():
+    """由后端拉起采集专用 Chrome（调试模式）。"""
+    return chrome_manager.start()
+
+
+@router.post("/chrome/stop")
+async def chrome_stop():
+    """停止由后端拉起的采集专用 Chrome。"""
+    return chrome_manager.stop()
+
+
+@router.get("/chrome/status")
+async def chrome_status():
+    """查询采集专用 Chrome 的连接状态。"""
+    return chrome_manager.status()
 
 
 # ============ Cookie 管理 ============
@@ -105,6 +127,12 @@ async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)):
 async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
     """重试所有失败的采集任务，使用相同配置重新创建任务。"""
     return await scraper_service.retry_failed_scraper_tasks(db)
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """重试单个失败任务，沿用断点续采（不重复采集已处理内容）。"""
+    return await scraper_service.retry_single_task(db, task_id)
 
 
 @router.get("/tasks/{task_id}/results")

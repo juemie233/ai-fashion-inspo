@@ -41,6 +41,10 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# 搜索排序方式（固定顺序，作为断点续采执行计划的基础）
+SORT_TYPES = ["general", "popularity_descending", "time_descending"]
+
+
 def _rdsleep(lo=0.5, hi=2.0):
     time.sleep(random.uniform(lo, hi))
 
@@ -448,8 +452,6 @@ def run_scraper_sync(task_id: int):
     try:
         config = json.loads(task.config) if isinstance(task.config, str) else task.config or {}
         keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
-        # 随机打乱关键词顺序，避免每次固定搜索流程
-        random.shuffle(keywords)
         max_count = config.get("max_count", 50)
         platform = task.platform
 
@@ -469,15 +471,53 @@ def run_scraper_sync(task_id: int):
         asyncio.run(_fail(f"配置解析失败: {err}"))
         return
 
+    # ── 断点续采：构建或恢复执行计划（关键词 × 排序） ──
+    # 首次运行：随机打乱关键词一次后展开 ×3 排序，计划随 resume_token 持久化，保证跨重启顺序确定。
+    resume = None
+    if task.resume_token:
+        try:
+            resume = json.loads(task.resume_token)
+        except Exception:
+            resume = None
+
+    if resume and isinstance(resume.get("plan"), list) and resume["plan"]:
+        plan = resume["plan"]
+        done = int(resume.get("done", 0))
+        items_found = int(resume.get("items_found", 0))
+        items_added = int(resume.get("items_added", 0))
+        print(f"断点续采：从第 {done}/{len(plan)} 个组合继续（已入库 {items_added}）")
+    else:
+        shuffled = list(keywords)
+        random.shuffle(shuffled)
+        plan = [{"k": kw, "s": s} for kw in shuffled for s in SORT_TYPES]
+        done = 0
+        items_found = 0
+        items_added = 0
+
     existing_url_set: set[str] = set()  # 跨批次 URL 去重
     content_hash_set: set[str] = set()  # 跨批次内容 MD5 去重
-    items_found = 0  # 搜索提取总数
-    items_added = 0  # 最终入库数
     total_skipped_existing = 0
     total_skipped_content_dup = 0
     total_skipped_non200 = 0
     total_skipped_network = 0
     per_search: list[dict] = []  # 每次搜索的漏斗明细
+
+    def _save_resume(done_idx: int):
+        """持久化断点进度（计划 / 已完成数 / 累计计数）。"""
+        token = json.dumps({
+            "plan": plan,
+            "done": done_idx,
+            "items_found": items_found,
+            "items_added": items_added,
+        }, ensure_ascii=False)
+
+        async def _w():
+            async with async_session() as db:
+                t = await db.get(ScraperTask, task_id)
+                if t:
+                    t.resume_token = token
+                    await db.commit()
+        asyncio.run(_w())
 
     try:
         pw = sync_playwright().start()
@@ -534,95 +574,97 @@ def run_scraper_sync(task_id: int):
             else:
                 print("登录超时，将尝试当前状态")
 
-        # ── 搜索 + 即时下载：每个关键词 × 3 排序，搜完一批立刻下载 ──
-        SORT_TYPES = ["general", "popularity_descending", "time_descending"]
-        search_count = 0
-        total_searches = len(keywords) * len(SORT_TYPES)
+        # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
+        total_searches = len(plan)
 
         # 提取浏览器 Cookie 用于 httpx 下载鉴权
         browser_cookies = {c["name"]: c for c in context.cookies()}
 
-        for idx, kw in enumerate(keywords):
-            for sort_type in SORT_TYPES:
-                search_count += 1
-
-                if items_added >= max_count:
-                    print(f"\n  已入库 {items_added} 张 → 达到目标 {max_count}，停止搜索")
-                    break
-
-                print(f"\n{'='*50}")
-                print(f"[搜索 {search_count}/{total_searches}] {kw} [{sort_type}]")
-                print(f"{'='*50}")
-
-                try:
-                    # 按剩余需求采集：够用即停，避免滚动浏览远超所需的内容
-                    remaining = max_count - items_added
-                    if platform == "xiaohongshu":
-                        urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
-                    else:
-                        per_search.append({
-                            "keyword": kw, "sort_type": sort_type,
-                            "error": f"不支持的平台: {platform}",
-                        })
-                        continue
-
-                    items_found += len(urls)
-                    print(f"  提取 {len(urls)} 个 URL")
-
-                    # 立即下载本批（带浏览器 Cookie）
-                    added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
-                        urls, task_id, existing_url_set, remaining,
-                        img_dir, today, httpx, browser_cookies,
-                        content_hash_set,
-                    )
-                    items_added += added
-                    total_skipped_existing += sk_ex
-                    total_skipped_content_dup += sk_dup
-                    total_skipped_non200 += sk_h
-                    total_skipped_network += sk_n
-
-                    # 记录本次搜索的完整漏斗
-                    per_search.append({
-                        "keyword": kw,
-                        "sort_type": sort_type,
-                        **inner_funnel,
-                        "batch_added": added,
-                        "batch_skipped_existing": sk_ex,
-                        "batch_skipped_content_dup": sk_dup,
-                        "batch_skipped_http": sk_h,
-                        "batch_skipped_network": sk_n,
-                    })
-
-                    print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n})")
-                    print(f"  累计入库: {items_added}/{max_count}")
-
-                    # 搜索间冷却 + CDP 保活
-                    if items_added < max_count and (
-                        idx < len(keywords) - 1
-                        or sort_type != SORT_TYPES[-1]
-                    ):
-                        cool = random.randint(6, 12)
-                        print(f"  ⏸ 冷却 {cool}s...")
-                        # 轻量页面交互保持 CDP 连接活跃（随机间隔 + 偶发鼠标移动）
-                        for _ in range(cool):
-                            try:
-                                if random.random() < 0.5:
-                                    _human_mouse_move(page)
-                                page.evaluate("1")  # no-op，单纯保持连接
-                            except Exception:
-                                pass
-                            _rdsleep(0.8, 1.5)
-
-                except Exception as e:
-                    err = str(e) or type(e).__name__
-                    per_search.append({
-                        "keyword": kw, "sort_type": sort_type,
-                        "error": err,
-                    })
-                    print(f"  [ERR] {err}")
+        for plan_idx in range(done, len(plan)):
+            entry = plan[plan_idx]
+            kw = entry["k"]
+            sort_type = entry["s"]
+            search_count = plan_idx + 1
 
             if items_added >= max_count:
+                print(f"\n  已入库 {items_added} 张 → 达到目标 {max_count}，停止搜索")
+                done = len(plan)
+                _save_resume(done)
                 break
+
+            print(f"\n{'='*50}")
+            print(f"[搜索 {search_count}/{total_searches}] {kw} [{sort_type}]")
+            print(f"{'='*50}")
+
+            try:
+                # 按剩余需求采集：够用即停，避免滚动浏览远超所需的内容
+                remaining = max_count - items_added
+                if platform == "xiaohongshu":
+                    urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
+                else:
+                    per_search.append({
+                        "keyword": kw, "sort_type": sort_type,
+                        "error": f"不支持的平台: {platform}",
+                    })
+                    done = plan_idx + 1
+                    _save_resume(done)
+                    continue
+
+                items_found += len(urls)
+                print(f"  提取 {len(urls)} 个 URL")
+
+                # 立即下载本批（带浏览器 Cookie）
+                added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
+                    urls, task_id, existing_url_set, remaining,
+                    img_dir, today, httpx, browser_cookies,
+                    content_hash_set,
+                )
+                items_added += added
+                total_skipped_existing += sk_ex
+                total_skipped_content_dup += sk_dup
+                total_skipped_non200 += sk_h
+                total_skipped_network += sk_n
+
+                # 记录本次搜索的完整漏斗
+                per_search.append({
+                    "keyword": kw,
+                    "sort_type": sort_type,
+                    **inner_funnel,
+                    "batch_added": added,
+                    "batch_skipped_existing": sk_ex,
+                    "batch_skipped_content_dup": sk_dup,
+                    "batch_skipped_http": sk_h,
+                    "batch_skipped_network": sk_n,
+                })
+
+                print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n})")
+                print(f"  累计入库: {items_added}/{max_count}")
+
+                # 搜索间冷却 + CDP 保活
+                if items_added < max_count and plan_idx < len(plan) - 1:
+                    cool = random.randint(6, 12)
+                    print(f"  ⏸ 冷却 {cool}s...")
+                    # 轻量页面交互保持 CDP 连接活跃（随机间隔 + 偶发鼠标移动）
+                    for _ in range(cool):
+                        try:
+                            if random.random() < 0.5:
+                                _human_mouse_move(page)
+                            page.evaluate("1")  # no-op，单纯保持连接
+                        except Exception:
+                            pass
+                        _rdsleep(0.8, 1.5)
+
+            except Exception as e:
+                err = str(e) or type(e).__name__
+                per_search.append({
+                    "keyword": kw, "sort_type": sort_type,
+                    "error": err,
+                })
+                print(f"  [ERR] {err}")
+
+            # 每完成一个组合即持久化进度（成功或失败都推进，避免重复执行同一组合）
+            done = plan_idx + 1
+            _save_resume(done)
 
     except Exception as e:
         import traceback
@@ -682,6 +724,7 @@ def run_scraper_sync(task_id: int):
                 t.diagnostics = funnel_diagnostics
                 if error_msg:
                     t.error = error_msg
+                t.resume_token = None  # 任务完结，清除断点进度
                 t.finished_at = utcnow()
                 await db.commit()
     asyncio.run(_done())

@@ -40,6 +40,7 @@ export function useScraperTasks() {
   const deletingTask = ref<number | null>(null)
   const clearing = ref(false)
   const retrying = ref(false)
+  const retryingTask = ref<number | null>(null)
 
   // ===== 派生状态 =====
   const hasActiveTasks = computed(() => tasks.value.some(t => t.status === 'pending' || t.status === 'running'))
@@ -144,6 +145,18 @@ export function useScraperTasks() {
     } finally { retrying.value = false }
   }
 
+  async function retrySingleTask(taskId: number) {
+    try {
+      retryingTask.value = taskId
+      await apiClient.post(`/scraper/tasks/${taskId}/retry`)
+      message.success('已重新加入队列（断点续采）')
+      refreshTasks()
+      startPollIfNeeded()
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '续采失败')
+    } finally { retryingTask.value = null }
+  }
+
   // ===== 轮询：有运行/等待中的任务时每 5s 刷新一次 =====
   let pollTimer: ReturnType<typeof setInterval> | null = null
   function startPollIfNeeded() {
@@ -203,10 +216,10 @@ export function useScraperTasks() {
 
   return {
     sources, tasks, tombstoneCount, cookieStatuses, defaultMaxCount,
-    taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying,
+    taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying, retryingTask,
     taskStats, hasFailedTasks,
     loadAll, refreshTasks, onFilterChange,
-    cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks,
+    cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask,
     startPollIfNeeded, stopPoll, copyText,
     statusType, platformName, formatDate, parseKeywords, getTaskDuration,
   }

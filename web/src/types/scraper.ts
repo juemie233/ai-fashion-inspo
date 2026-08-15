@@ -63,3 +63,10 @@ export interface CookieStatus {
   valid: boolean
   hint: string
 }
+
+/** 采集专用 Chrome 连接状态 */
+export interface ChromeStatus {
+  state: 'running' | 'not_started' | 'port_conflict' | 'starting'
+  detail: string
+  pid: number | null
+}
