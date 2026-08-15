@@ -1,7 +1,8 @@
 <script setup lang="ts">
-/** 标签分组折叠列表：分组勾选、置顶、来源/次数展示、编辑/别名/合并/删除、拖拽改类别与自定义排序。 */
+/** 标签分组折叠列表：分组勾选、置顶、来源/次数展示、编辑/别名/合并/删除、拖拽改类别与自定义排序。
+ * 大分组（数千标签）展开时分批渐进渲染，避免一次性挂载导致首帧卡死。 */
 
-import { ref } from 'vue'
+import { ref, reactive, watch, onUnmounted } from 'vue'
 import { CATEGORY_LABELS, SOURCE_LABELS, type TagCategoryGroup, type TagItem } from '@/api/tags'
 
 const props = defineProps<{
@@ -56,13 +57,123 @@ function onTagDrop(target: TagItem) {
 function sourceColor(s: string) {
   return s === 'ai_generated' ? '#8b5cf6' : s === 'manual' ? '#3b82f6' : '#9ca3af'
 }
+
+// ===== 两段式删除确认（替代每行一个 popconfirm，大分组下显著降低组件开销） =====
+/** 当前处于「确认删除」态的标签 id */
+const deletingId = ref<number | null>(null)
+let deletingTimer: number | null = null
+
+function onDeleteClick(tag: TagItem) {
+  if (deletingId.value === tag.id) {
+    clearDeletingState()
+    emit('delete', tag.id, tag.name)
+    return
+  }
+  deletingId.value = tag.id
+  if (deletingTimer !== null) window.clearTimeout(deletingTimer)
+  deletingTimer = window.setTimeout(clearDeletingState, 3000)
+}
+
+function clearDeletingState() {
+  deletingId.value = null
+  if (deletingTimer !== null) {
+    window.clearTimeout(deletingTimer)
+    deletingTimer = null
+  }
+}
+
+// ===== 大分组分批渐进渲染 =====
+/** 展开中的分组名（受控，同时驱动折叠面板） */
+const expandedNames = ref<string[]>([])
+/** 每个分组当前已渲染的标签条数 */
+const renderedCounts = reactive<Record<string, number>>({})
+/** 分批渲染定时器（按分组保存，便于取消） */
+const chunkTimers = new Map<string, number>()
+/** 首帧渲染条数：让首次点击立刻有内容可看 */
+const FIRST_CHUNK = 100
+/** 后续每帧追加条数 */
+const CHUNK_SIZE = 200
+
+/** 分组当前应渲染的标签切片 */
+function visibleTags(group: TagCategoryGroup): TagItem[] {
+  const count = renderedCounts[group.category]
+  return count === undefined ? group.tags : group.tags.slice(0, count)
+}
+
+function stopProgressiveRender(category: string) {
+  const timer = chunkTimers.get(category)
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    chunkTimers.delete(category)
+  }
+}
+
+/** 从当前进度继续分批渲染，直至全部渲染完 */
+function startProgressiveRender(group: TagCategoryGroup) {
+  const total = group.tags.length
+  const current = renderedCounts[group.category] ?? 0
+  if (current >= total) return  // 已全部渲染
+  stopProgressiveRender(group.category)
+  if (current === 0) renderedCounts[group.category] = Math.min(FIRST_CHUNK, total)
+  const step = () => {
+    const done = renderedCounts[group.category] ?? 0
+    if (done >= total) {
+      chunkTimers.delete(group.category)
+      return
+    }
+    renderedCounts[group.category] = Math.min(total, done + CHUNK_SIZE)
+    chunkTimers.set(group.category, window.setTimeout(step, 16))
+  }
+  chunkTimers.set(group.category, window.setTimeout(step, 16))
+}
+
+// 展开分组时开始渐进渲染
+watch(
+  expandedNames,
+  (names, oldNames) => {
+    for (const name of names) {
+      if (oldNames?.includes(name)) continue
+      const group = props.groups.find((g) => g.category === name)
+      if (group) startProgressiveRender(group)
+    }
+  },
+)
+
+// 数据源变化（筛选/搜索/重载）导致标签数量变化时，对展开中的分组从头渐进渲染；
+// 仅排序变化（长度不变）不重置进度，避免置顶/删除刷新后列表闪缩
+const lastLengths = new Map<string, number>()
+watch(
+  () => props.groups.map((g) => g.tags),
+  () => {
+    for (const group of props.groups) {
+      const prev = lastLengths.get(group.category)
+      lastLengths.set(group.category, group.tags.length)
+      if (
+        prev !== undefined &&
+        prev !== group.tags.length &&
+        expandedNames.value.includes(group.category)
+      ) {
+        renderedCounts[group.category] = 0
+        startProgressiveRender(group)
+      }
+    }
+  },
+)
+
+onUnmounted(() => {
+  for (const timer of chunkTimers.values()) window.clearTimeout(timer)
+  chunkTimers.clear()
+  if (deletingTimer !== null) window.clearTimeout(deletingTimer)
+})
 </script>
 
 <template>
-  <n-collapse>
+  <!-- display-directive="show"：首次展开后内容保持挂载，再次展开/收起零渲染开销 -->
+  <n-collapse v-model:expanded-names="expandedNames" display-directive="show">
     <n-collapse-item
       v-for="group in groups"
       :key="group.category"
+      :name="group.category"
     >
       <template #header>
         <n-space align="center">
@@ -89,63 +200,182 @@ function sourceColor(s: string) {
         @dragleave="onDragLeave"
         @drop="onDropCategory(group.category)"
       >
-        <n-list hoverable clickable>
-          <n-list-item
-            v-for="tag in group.tags"
+        <!-- 轻量行：数千条标签时组件化行（n-list-item/n-popconfirm 等）挂载成本过高，
+             改用原生元素 + CSS 实现同等交互，展开与滚动都快一个数量级 -->
+        <div class="tag-list">
+          <div
+            v-for="tag in visibleTags(group)"
             :key="tag.id"
+            class="tag-row"
+            :class="{ 'row-selected': selectedIds.has(tag.id) }"
             :draggable="sortMode === 'custom' && !hasActiveFilter"
             @dragstart="onDragStart(tag)"
             @dragover="onTagDragOver"
             @drop="onTagDrop(tag)"
-            style="cursor:grab"
           >
-            <template #prefix>
-              <n-space align="center" :size="8">
-                <n-checkbox
-                  :checked="selectedIds.has(tag.id)"
-                  @update:checked="emit('toggle-select', tag.id)"
-                  @click.stop
-                />
-                <n-button
-                  size="tiny"
-                  text
-                  :type="tag.pinned ? 'warning' : 'tertiary'"
-                  @click.stop="emit('toggle-pin', tag)"
-                  :title="tag.pinned ? '取消置顶' : '置顶到最前'"
-                >📌</n-button>
-                <n-tag size="small" :bordered="false" :color="{ color: sourceColor(tag.source), textColor: '#fff' }">
-                  {{ SOURCE_LABELS[tag.source] || tag.source }}
-                </n-tag>
-                <n-tag size="small" :bordered="false">
-                  {{ tag.usage_count }} 次
-                </n-tag>
-              </n-space>
-            </template>
-
+            <input
+              type="checkbox"
+              class="row-check"
+              :checked="selectedIds.has(tag.id)"
+              @click.stop
+              @change="emit('toggle-select', tag.id)"
+            />
+            <button
+              class="row-pin"
+              :class="{ pinned: tag.pinned }"
+              :title="tag.pinned ? '取消置顶' : '置顶到最前'"
+              @click.stop="emit('toggle-pin', tag)"
+            >📌</button>
+            <span class="row-badge row-source" :style="{ background: sourceColor(tag.source) }">
+              {{ SOURCE_LABELS[tag.source] || tag.source }}
+            </span>
+            <span class="row-badge row-usage">{{ tag.usage_count }} 次</span>
             <span
-              style="cursor:pointer"
-              @click="emit('select-tag', tag)"
+              class="row-name"
               :title="tag.description ? `点击查看素材 — ${tag.description}` : '点击查看使用该标签的素材'"
+              @click="emit('select-tag', tag)"
             >{{ tag.name }}</span>
-
-            <template #suffix>
-              <n-space :size="4">
-                <n-button size="tiny" text type="info" @click="emit('edit', tag)">编辑</n-button>
-                <n-button size="tiny" text type="info" @click="emit('alias', tag)">别名</n-button>
-                <n-button size="tiny" text type="info"
-                  @click="emit('merge', tag)"
-                >合并</n-button>
-                <n-popconfirm @positive-click="emit('delete', tag.id, tag.name)">
-                  <template #trigger>
-                    <n-button size="tiny" text type="error">删除</n-button>
-                  </template>
-                  确定删除标签 "{{ tag.name }}"？
-                </n-popconfirm>
-              </n-space>
-            </template>
-          </n-list-item>
-        </n-list>
+            <span class="row-actions">
+              <button class="row-act" @click="emit('edit', tag)">编辑</button>
+              <button class="row-act" @click="emit('alias', tag)">别名</button>
+              <button class="row-act" @click="emit('merge', tag)">合并</button>
+              <button
+                class="row-act danger"
+                :class="{ confirming: deletingId === tag.id }"
+                @click="onDeleteClick(tag)"
+              >{{ deletingId === tag.id ? '确认删除?' : '删除' }}</button>
+            </span>
+          </div>
+        </div>
       </div>
     </n-collapse-item>
   </n-collapse>
 </template>
+
+<style scoped>
+/* 轻量标签行：外观对齐原 n-list-item + 小号组件，但每行只有十几个原生节点 */
+.tag-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+  cursor: default;
+}
+
+.tag-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.tag-row.row-selected {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+/* 自定义排序模式下可拖拽，恢复抓手光标提示 */
+.tag-row[draggable='true'] {
+  cursor: grab;
+}
+
+.row-check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.row-pin {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.35;
+  flex-shrink: 0;
+}
+
+.row-pin:hover {
+  opacity: 0.8;
+}
+
+.row-pin.pinned {
+  opacity: 1;
+}
+
+.row-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.row-source {
+  color: #fff;
+}
+
+.row-usage {
+  background: rgba(0, 0, 0, 0.06);
+  color: #555;
+}
+
+.row-name {
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-name:hover {
+  color: #3b82f6;
+}
+
+.row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tag-row:hover .row-actions {
+  opacity: 1;
+}
+
+.row-act {
+  border: none;
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #2080f0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.row-act:hover {
+  background: rgba(32, 128, 240, 0.1);
+}
+
+.row-act.danger {
+  color: #d03050;
+}
+
+.row-act.danger:hover {
+  background: rgba(208, 48, 80, 0.1);
+}
+
+.row-act.confirming {
+  color: #fff;
+  background: #d03050;
+}
+</style>
