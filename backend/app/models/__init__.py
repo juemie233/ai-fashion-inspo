@@ -2,6 +2,7 @@
 
 from app.models.inspiration import Inspiration, AIAnalysisLog
 from app.models.tag import Tag, InspirationTag, TagAlias
+from app.models.person import Person, InspirationPerson
 from app.models.scraper import ScraperTask
 from app.models.task import TaskQueue
 
@@ -11,6 +12,8 @@ __all__ = [
     "Tag",
     "InspirationTag",
     "TagAlias",
+    "Person",
+    "InspirationPerson",
     "ScraperTask",
     "TaskQueue",
 ]
