@@ -1,5 +1,7 @@
 /** 任务类型与状态的中文映射（任务中心专用）。 */
 
+import type { UnifiedTask } from '@/types/task'
+
 /** 任务类型中文标签 */
 export const TASK_TYPE_LABELS: Record<string, string> = {
   batch_analyze: '批量 AI 分析',
@@ -41,4 +43,49 @@ export function taskStatusType(
     cancelled: 'warning',
   }
   return map[status] || 'default'
+}
+
+/** 任务类型对应的标签颜色（naive-ui NTag type），不同任务类型用醒目颜色区分 */
+export function taskTypeTagColor(
+  type: string,
+): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
+  const map: Record<string, 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error'> = {
+    batch_analyze: 'primary',
+    quality_check: 'warning',
+    batch_delete: 'error',
+    deduplicate: 'success',
+    scraper: 'info',
+  }
+  return map[type] || 'default'
+}
+
+// ===== 剩余时间预测 =====
+
+/** 将秒数格式化为中文时长（不足 1 分钟显示秒，否则显示分钟/小时） */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  const s = Math.ceil(seconds)
+  if (s < 60) return `${s} 秒`
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} 分钟`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return rm > 0 ? `${h} 小时 ${rm} 分` : `${h} 小时`
+}
+
+/** 预测运行中任务的剩余时间（仅采集任务与批量 AI 分析）；信息不足时返回 null */
+export function predictEta(task: UnifiedTask): string | null {
+  if (task.status !== 'running') return null
+  if (task.type !== 'batch_analyze' && task.type !== 'scraper') return null
+  const startTs = task.started_at
+    ? new Date(task.started_at).getTime()
+    : new Date(task.created_at).getTime()
+  if (!startTs || Number.isNaN(startTs)) return null
+  const elapsedSec = (Date.now() - startTs) / 1000
+  if (elapsedSec < 10) return null // 运行时间太短，速率不稳定，先不预测
+  const { done, target } = task
+  if (done <= 0 || target <= 0 || target <= done) return null
+  const rate = done / elapsedSec
+  if (rate <= 0) return null
+  return formatDuration((target - done) / rate)
 }

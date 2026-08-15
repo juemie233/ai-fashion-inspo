@@ -64,6 +64,8 @@ export function useTaskCenter() {
       progress: t.progress,
       total: t.total,
       done: t.done,
+      target: t.total,
+      started_at: null,
       title: TASK_TYPE_LABELS[t.type] || t.type,
       detail: t.error || '',
       error: t.error,
@@ -85,6 +87,8 @@ export function useTaskCenter() {
       progress: -1,
       total: t.items_found,
       done: t.items_added,
+      target: parseMaxCount(t.config),
+      started_at: t.started_at,
       title: `${platform}采集`,
       detail: [keywords, t.error].filter(Boolean).join(' · ') || '',
       error: t.error,
@@ -101,6 +105,17 @@ export function useTaskCenter() {
       return Array.isArray(kw) && kw.length ? `关键词：${kw.join('、')}` : ''
     } catch {
       return ''
+    }
+  }
+
+  /** 解析采集任务配置中的目标采集数量 max_count（无则返回 0） */
+  function parseMaxCount(config: string | null): number {
+    if (!config) return 0
+    try {
+      const obj = JSON.parse(config)
+      return typeof obj?.max_count === 'number' ? obj.max_count : 0
+    } catch {
+      return 0
     }
   }
 
@@ -190,7 +205,7 @@ export function useTaskCenter() {
     }
   }
 
-  // ===== 轮询：有活动任务时每 3 秒刷新一次 =====
+  // ===== 轮询：有活动任务时每 5 秒刷新一次 =====
 
   let pollTimer: ReturnType<typeof setInterval> | null = null
   function startPoll() {
@@ -198,7 +213,7 @@ export function useTaskCenter() {
     pollTimer = setInterval(() => {
       if (hasActive.value) loadTasks()
       else stopPoll()
-    }, 3000)
+    }, 5000)
   }
   function stopPoll() {
     if (pollTimer) {

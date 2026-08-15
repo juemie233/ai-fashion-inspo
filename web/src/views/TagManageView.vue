@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 标签管理页：浏览/编辑/合并/批量操作/统计/导入导出。 */
 
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
 import TagAnalyticsModal from '@/components/tag/TagAnalyticsModal.vue'
@@ -35,6 +35,11 @@ const {
   handleDelete, handleBatchDelete, handleDeleteUnused, scanDuplicates,
   quickMerge, quickSetAlias, togglePin, onDrop, onTagDrop,
 } = useTagManage()
+
+// 页面挂载时加载标签数据
+onMounted(() => {
+  loadAll()
+})
 
 // ===== 弹窗开关 =====
 const showCreateForm = ref(false)

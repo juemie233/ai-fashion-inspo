@@ -29,7 +29,7 @@ const qualityFilter = ref<QualityFilter>((route.query.quality as QualityFilter) 
 const sortMode = ref<SortMode>(
   (route.query.sort as SortMode) ||
   (localStorage.getItem('masonry-sort') as SortMode) ||
-  'newest'
+  'random'
 )
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
 
@@ -98,7 +98,7 @@ function syncUrl() {
   if (mediaFilter.value !== 'all') query.media = mediaFilter.value
   if (statusFilter.value !== 'all') query.status = statusFilter.value
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
-  if (sortMode.value !== 'newest') query.sort = sortMode.value
+  if (sortMode.value !== 'random') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
 }
@@ -320,7 +320,7 @@ loadPage(currentPage.value)
     </div>
 
     <!-- 当前筛选提示 -->
-    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'newest'" class="active-filters">
+    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'random'" class="active-filters">
       当前筛选：
       <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="sourceFilter = 'all'; onFilterChange()">
         {{ sourceOptions.find(o => o.value === sourceFilter)?.label }}
@@ -334,10 +334,10 @@ loadPage(currentPage.value)
       <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="qualityFilter = 'all'; onFilterChange()">
         {{ qualityOptions.find(o => o.value === qualityFilter)?.label }}
       </n-tag>
-      <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="sortMode = 'newest'; onSortChange()">
+      <n-tag v-if="sortMode !== 'random'" size="tiny" closable @close="sortMode = 'random'; onSortChange()">
         {{ sortOptions.find(o => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='newest';onFilterChange()">
+      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='random';onFilterChange()">
         清除全部
       </n-button>
     </div>

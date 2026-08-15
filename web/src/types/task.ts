@@ -20,6 +20,10 @@ export interface UnifiedTask {
   total: number
   /** 已完成数（采集任务对应 items_added） */
   done: number
+  /** 预测目标数量：队列任务=批处理总数，采集任务=配置的 max_count */
+  target: number
+  /** 开始时间：采集任务为 started_at；队列任务为 null（预测时回退 created_at） */
+  started_at: string | null
   /** 中文标题，如「批量 AI 分析」「小红书采集」 */
   title: string
   /** 摘要信息（如采集关键词、错误摘要） */

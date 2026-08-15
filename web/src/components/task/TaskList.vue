@@ -5,7 +5,7 @@ import { h } from 'vue'
 import { NTag, NProgress, NSpin, NButton, NPopconfirm, NText } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import type { UnifiedTask } from '@/types/task'
-import { TASK_TYPE_LABELS, TASK_STATUS_LABELS, taskStatusType } from '@/utils/taskLabel'
+import { TASK_STATUS_LABELS, taskStatusType, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate } from '@/utils/format'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
@@ -45,16 +45,13 @@ const columns: DataTableColumns<UnifiedTask> = [
     key: 'title',
     render: (row) =>
       h('div', { style: 'line-height:1.4' }, [
-        h('div', [
-          h(
-            NTag,
-            { size: 'small', type: row.source === 'scraper' ? 'info' : 'default', style: 'margin-right:6px' },
-            { default: () => TASK_TYPE_LABELS[row.type] || row.type },
-          ),
-          h(NText, { strong: true }, { default: () => row.title }),
-        ]),
+        h(
+          NTag,
+          { size: 'small', type: taskTypeTagColor(row.type) },
+          { default: () => row.title },
+        ),
         row.detail
-          ? h(NText, { depth: 3, style: 'font-size:12px;display:block;margin-top:2px' }, { default: () => row.detail })
+          ? h(NText, { depth: 3, style: 'font-size:12px;display:block;margin-top:6px' }, { default: () => row.detail })
           : null,
       ]),
   },
@@ -67,6 +64,17 @@ const columns: DataTableColumns<UnifiedTask> = [
   },
   { title: '进度', key: 'progress', width: 160, render: renderProgress },
   { title: '完成', key: 'count', width: 100, render: renderCount },
+  {
+    title: '预计剩余',
+    key: 'eta',
+    width: 110,
+    render: (row) => {
+      const eta = predictEta(row)
+      return eta
+        ? h(NText, { depth: 2 }, { default: () => eta })
+        : h(NText, { depth: 3 }, { default: () => '—' })
+    },
+  },
   {
     title: '创建时间',
     key: 'created_at',
