@@ -20,6 +20,8 @@ defineProps<{
   emptyText?: string
   /** 是否显示悬浮操作按钮（删除/收藏），默认显示 */
   showActions?: boolean
+  /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
+  hoverZoom?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -41,6 +43,7 @@ const emit = defineEmits<{
         :selectable="selectable"
         :selected="selectable ? selectedIds?.has(item.id) : false"
         :show-actions="showActions !== false"
+        :hover-zoom="hoverZoom"
         @delete="emit('delete', item.id)"
         @toggle-favorite="emit('toggleFavorite', item.id)"
         @approve="emit('approve', item.id)"

@@ -160,6 +160,7 @@ function deleteSelected() {
       :selectable="true"
       :selected-ids="selectedIds"
       :show-actions="false"
+      :hover-zoom="true"
       empty-text="🎉 没有疑似 AI 的素材"
       @toggle-select="toggleSelect"
     />

@@ -347,6 +347,7 @@ loadPage(currentPage.value)
       :items="store.items"
       :loading="store.loading"
       :density="density"
+      :hover-zoom="qualityFilter === 'ai'"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"
       @approve="handleApprove"
