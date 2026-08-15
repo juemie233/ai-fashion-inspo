@@ -131,7 +131,7 @@ onUnmounted(() => {
     <!-- 分析结果对比弹窗 -->
     <AnalysisCompareModal v-model:visible="compareVisible" :loading="compareLoading" :data="compareData" />
 
-    <!-- 大图灯箱：点击历史缩略图全屏浏览 -->
-    <ImageLightbox v-model:show="lightboxVisible" :image-path="lightboxImage" />
+    <!-- 大图灯箱：点击历史缩略图全屏浏览（组件发出 close 事件，需显式监听关闭） -->
+    <ImageLightbox :show="lightboxVisible" :image-path="lightboxImage" @close="lightboxVisible = false" />
   </div>
 </template>

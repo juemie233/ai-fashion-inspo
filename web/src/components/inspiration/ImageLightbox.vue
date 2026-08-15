@@ -85,6 +85,8 @@ function clampOffset() {
 let dragging = false
 /** 拖拽进行中（用于临时禁用 transform 过渡，避免平移卡顿） */
 const isPanning = ref(false)
+/** 本次拖拽是否产生了位移：用于抑制拖拽结束后的 click，避免平移松手误关灯箱 */
+let dragMoved = false
 let dragStartX = 0
 let dragStartY = 0
 let dragOriginX = 0
@@ -94,23 +96,46 @@ function onDragStart(e: MouseEvent) {
   if (scale.value <= 1) return
   dragging = true
   isPanning.value = true
+  dragMoved = false
   dragStartX = e.clientX
   dragStartY = e.clientY
   dragOriginX = offsetX.value
   dragOriginY = offsetY.value
+  // 拖拽期间把移动/释放监听挂到 window：光标拖出图片窗口也能持续平移，
+  // 一次拖拽即可把放大图平移到边缘（此前事件挂在 wrap 上，光标离开后平移被提前截断）
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', onDragEnd)
   e.preventDefault()
 }
 
 function onDragMove(e: MouseEvent) {
   if (!dragging) return
+  // 位移超过 3px 视为拖拽（而非原地点击）
+  if (!dragMoved && (Math.abs(e.clientX - dragStartX) > 3 || Math.abs(e.clientY - dragStartY) > 3)) {
+    dragMoved = true
+  }
   offsetX.value = dragOriginX + (e.clientX - dragStartX)
   offsetY.value = dragOriginY + (e.clientY - dragStartY)
   clampOffset()
 }
 
 function onDragEnd() {
+  if (!dragging) return
   dragging = false
   isPanning.value = false
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
+  // click 事件在 mouseup 之后派发：等 click 处理完毕再复位标记，
+  // 让松手在背景上产生的 click 被抑制，且不影响之后正常点击关闭
+  window.setTimeout(() => {
+    dragMoved = false
+  }, 0)
+}
+
+/** 背景点击关闭：平移拖拽刚结束时抑制这次 click，避免拖出窗口松手误关灯箱 */
+function onBackdropClick() {
+  if (dragMoved) return
+  emit('close')
 }
 
 /** 滚轮缩放：向上放大，向下缩小 */
@@ -195,6 +220,8 @@ watch(
 // 组件被卸载（如灯箱未关闭直接路由跳走）时也要移除监听器并恢复滚动
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
   if (bodyLocked) {
     document.body.style.overflow = prevBodyOverflow
     bodyLocked = false
@@ -204,7 +231,7 @@ onUnmounted(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="lightbox-backdrop" @click="emit('close')">
+    <div v-if="show" class="lightbox-backdrop" @click="onBackdropClick">
       <div class="lightbox-content" @click.stop>
         <!-- 图片 + 加载中提示 -->
         <div
@@ -212,9 +239,6 @@ onUnmounted(() => {
           class="lightbox-img-wrap"
           @dblclick="onDblClick"
           @mousedown="onDragStart"
-          @mousemove="onDragMove"
-          @mouseup="onDragEnd"
-          @mouseleave="onDragEnd"
           @wheel.prevent="onWheel"
         >
           <n-spin v-if="currentImage" :show="imageLoading" class="lightbox-loading" size="large">
@@ -289,6 +313,8 @@ onUnmounted(() => {
 }
 
 .lightbox-img {
+  /* display:block 消除行内 img 的基线空隙，保证与 flex 居中完全一致（像素级居中） */
+  display: block;
   max-width: 90vw;
   max-height: 90vh;
   object-fit: contain;

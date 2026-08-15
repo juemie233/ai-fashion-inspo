@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 分析历史卡片：筛选、批量操作、历史表格与分页。 */
 
-import { h, computed } from 'vue'
+import { h, computed, ref, onBeforeUnmount } from 'vue'
 import { NTag, NButton, NIcon, NPopconfirm, NPopover, useMessage, type DataTableColumns } from 'naive-ui'
 import { GitCompareOutline, RefreshOutline, TrashBinOutline, TrashOutline } from '@vicons/ionicons5'
 import { getFileUrl } from '@/api/inspirations'
@@ -93,6 +93,40 @@ function onPageChange(page: number) {
   emit('updatePage', page)
 }
 
+// ===== 悬停快速预览（固定居中浮层，见模板尾部 Teleport） =====
+/** 当前预览图片路径（null = 关闭） */
+const hoverPreviewPath = ref<string | null>(null)
+/** 悬停停留计时器：短暂停留才弹出预览，扫过表格时不闪烁 */
+let hoverPreviewTimer: number | null = null
+
+/** 预览用图片路径：视频素材回退到首帧缩略图，避免 <img> 加载 mp4 失败 */
+function previewImagePath(row: HistoryItem): string {
+  if (row.file_path && /\.(mp4|webm|mov|m4v)$/i.test(row.file_path)) {
+    return row.thumbnail_path || ''
+  }
+  return row.file_path || row.thumbnail_path || ''
+}
+
+/** 鼠标进入缩略图：短暂停留后显示居中预览 */
+function startHoverPreview(path: string) {
+  clearHoverPreview()
+  if (!path) return
+  hoverPreviewTimer = window.setTimeout(() => {
+    hoverPreviewPath.value = path
+  }, 250)
+}
+
+/** 清除预览与计时器 */
+function clearHoverPreview() {
+  if (hoverPreviewTimer !== null) {
+    window.clearTimeout(hoverPreviewTimer)
+    hoverPreviewTimer = null
+  }
+  hoverPreviewPath.value = null
+}
+
+onBeforeUnmount(clearHoverPreview)
+
 /** 历史表格列定义 */
 const columns = computed<DataTableColumns<HistoryItem>>(() => [
   {
@@ -116,21 +150,18 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
     render: (row: HistoryItem) => {
       const thumb = row.thumbnail_path || row.file_path
       if (!thumb) return '-'
-      const full = row.file_path || row.thumbnail_path
-      // 悬停快速预览（尺寸限制在视口内，不出屏）；点击缩略图打开全屏灯箱动态浏览
-      return h(NPopover, { trigger: 'hover', placement: 'top', showArrow: true }, {
-        trigger: () => h('img', {
-          src: getFileUrl(thumb),
-          title: '悬停快速预览，点击全屏浏览',
-          style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
-          onClick: () => emit('previewImage', full!),
-        }),
-        default: () => h('div', { style: 'display:flex;justify-content:center;align-items:center;padding:8px' }, [
-          h('img', {
-            src: getFileUrl(full!),
-            style: 'max-width:min(720px, 72vw);max-height:min(900px, 80vh);border-radius:8px;display:block',
-          }),
-        ]),
+      const full = previewImagePath(row)
+      // 悬停快速预览：固定居中浮层（不再用 popover 跟随缩略图，避免大图超出屏幕）；
+      // 点击缩略图打开全屏灯箱动态浏览
+      return h('img', {
+        src: getFileUrl(thumb),
+        title: '悬停快速预览，点击全屏浏览',
+        style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
+        onMouseenter: () => startHoverPreview(full),
+        onMouseleave: clearHoverPreview,
+        onClick: () => {
+          if (full) emit('previewImage', full)
+        },
       })
     },
   },
@@ -339,6 +370,15 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
         size="small"
       />
     </div>
+
+    <!-- 悬停快速预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡表格点击 -->
+    <Teleport to="body">
+      <div v-if="hoverPreviewPath" class="hover-preview-layer">
+        <div class="hover-preview-panel">
+          <img :src="getFileUrl(hoverPreviewPath)" alt="悬停快速预览" />
+        </div>
+      </div>
+    </Teleport>
   </n-card>
 </template>
 
@@ -360,5 +400,45 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
   border: 1px solid #d0e3ff;
   border-radius: 6px;
   font-size: 13px;
+}
+
+/* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */
+.hover-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 指针穿透：预览浮层不拦截任何鼠标事件，表格可正常点击/悬停 */
+  pointer-events: none;
+}
+
+.hover-preview-panel {
+  max-width: 90vw;
+  max-height: 88vh;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+  animation: hover-preview-in 0.15s ease;
+}
+
+.hover-preview-panel img {
+  display: block;
+  max-width: 90vw;
+  max-height: 88vh;
+  object-fit: contain;
+}
+
+@keyframes hover-preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>
