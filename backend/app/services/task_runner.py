@@ -350,8 +350,8 @@ async def create_quality_check_task(
 
 async def _quality_check_one(
     sem: asyncio.Semaphore, inspiration_id: str, file_path: str, force: bool = False
-) -> tuple[str, str, str]:
-    """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因)。
+) -> tuple[str, str, str, bool]:
+    """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因, 是否疑似 AI)。
 
     状态为 approved/rejected/pending（审核失败保持 pending）。
 
@@ -360,7 +360,9 @@ async def _quality_check_one(
     """
     async with sem:
         async with async_session() as db:
-            status, reason = await check_image_quality(db, inspiration_id, file_path, force=force)
+            status, reason, ai_generated = await check_image_quality(
+                db, inspiration_id, file_path, force=force
+            )
             # 写入质量审核日志（失败时记录原因，供前端排查）
             db.add(AIAnalysisLog(
                 inspiration_id=inspiration_id,
@@ -369,7 +371,7 @@ async def _quality_check_one(
                 error=reason if status == "pending" else None,
             ))
             await db.commit()
-            return inspiration_id, status, reason
+            return inspiration_id, status, reason, ai_generated
 
 
 async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
@@ -411,19 +413,22 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     approved = 0
     rejected = 0
     pending = 0
+    ai_generated = 0
 
     for start in range(0, len(items), _ANALYZE_CONCURRENCY):
         chunk = items[start:start + _ANALYZE_CONCURRENCY]
         results = await asyncio.gather(
             *(_quality_check_one(sem, iid, fp, force=is_random) for iid, fp in chunk)
         )
-        for _iid, status, _reason in results:
+        for _iid, status, _reason, _ai in results:
             if status == "approved":
                 approved += 1
             elif status == "rejected":
                 rejected += 1
             else:
                 pending += 1
+            if _ai:
+                ai_generated += 1
 
         task.done = min(start + len(chunk), task.total)
         task.progress = round(task.done / task.total * 100) if task.total else 100
@@ -439,6 +444,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "approved": approved,
         "rejected": rejected,
         "pending": pending,
+        "ai_generated": ai_generated,
     }
     task.done = task.total
     task.progress = 100

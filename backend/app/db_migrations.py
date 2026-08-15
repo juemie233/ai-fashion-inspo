@@ -24,6 +24,7 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("scraper_task_id", "INTEGER REFERENCES scraper_tasks(id) ON DELETE SET NULL"),
         ("quality_status", "TEXT DEFAULT 'pending'"),
         ("quality_reason", "TEXT"),
+        ("is_ai_generated", "INTEGER DEFAULT 0"),
     ],
     "scraper_tasks": [
         ("diagnostics", "TEXT"),
@@ -42,6 +43,9 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
 # 存量库通过 ALTER TABLE 补列的字段不会自动获得 ORM 中 index=True 生成的索引，
 # 需在迁移时手动补齐（索引名参考 SQLAlchemy 默认命名 ix_{table}_{column}）。
 _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
+    "inspirations": [
+        ("ix_inspirations_is_ai_generated", "is_ai_generated"),
+    ],
     "tags": [
         ("ix_tags_pinned", "pinned"),
     ],

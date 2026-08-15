@@ -19,6 +19,7 @@ export interface InspirationOut {
   is_favorite: boolean
   quality_status?: QualityStatus | null
   quality_reason?: string | null
+  is_ai_generated?: boolean
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
@@ -121,6 +122,7 @@ export async function fetchInspirations(params: {
   analysis_status?: string
   tag_status?: string
   quality_status?: string
+  is_ai_generated?: boolean
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })

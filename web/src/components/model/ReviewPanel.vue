@@ -15,6 +15,7 @@ interface QualityReviewStats {
   approved: number
   rejected: number
   pass_rate: number
+  ai_generated: number
 }
 const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
@@ -38,7 +39,7 @@ interface ReviewTask {
   progress: number
   total: number
   done: number
-  result: { approved?: number; rejected?: number; pending?: number } | null
+  result: { approved?: number; rejected?: number; pending?: number; ai_generated?: number } | null
   error: string | null
   retry_count: number
   max_retries: number
@@ -97,7 +98,7 @@ function startReviewPolling(taskId: number) {
         stopReviewPolling()
         if (data.status === 'success') {
           const r = data.result
-          message.success(`审核完成：通过 ${r?.approved ?? 0}，拒绝 ${r?.rejected ?? 0}，未判定 ${r?.pending ?? 0}`)
+          message.success(`审核完成：通过 ${r?.approved ?? 0}，拒绝 ${r?.rejected ?? 0}，未判定 ${r?.pending ?? 0}，疑似 AI ${r?.ai_generated ?? 0}`)
         } else if (data.status === 'failed') {
           message.error(`审核失败：${data.error || '未知错误'}`)
         } else {
@@ -300,11 +301,12 @@ onUnmounted(() => {
   <n-spin :show="qualityReviewLoading">
     <template v-if="qualityReviewStats">
       <!-- 统计卡片 -->
-      <n-grid :cols="4" :x-gap="12" style="margin-bottom:16px">
+      <n-grid :cols="5" :x-gap="12" style="margin-bottom:16px">
         <n-gi><n-card size="small"><n-statistic label="待审核" :value="qualityReviewStats.pending" /></n-card></n-gi>
         <n-gi><n-card size="small"><n-statistic label="已通过" :value="qualityReviewStats.approved" /></n-card></n-gi>
         <n-gi><n-card size="small"><n-statistic label="已拒绝" :value="qualityReviewStats.rejected" /></n-card></n-gi>
         <n-gi><n-card size="small"><n-statistic label="通过率" :value="`${qualityReviewStats.pass_rate}%`" /></n-card></n-gi>
+        <n-gi><n-card size="small"><n-statistic label="疑似 AI" :value="qualityReviewStats.ai_generated" /></n-card></n-gi>
       </n-grid>
 
       <!-- 手动上传免审核配置 -->

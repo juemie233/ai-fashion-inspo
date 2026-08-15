@@ -49,6 +49,9 @@ class Inspiration(Base):
         String(16), default="pending", index=True
     )  # 质量审核状态：pending/approved/rejected
     quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # 拒绝原因
+    is_ai_generated: Mapped[bool] = mapped_column(
+        Boolean, default=False, index=True
+    )  # 疑似 AI 生成标记（只标记不拒绝，与 quality_status 正交）
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, index=True

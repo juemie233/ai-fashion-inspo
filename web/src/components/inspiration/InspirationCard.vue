@@ -155,16 +155,28 @@ function handleCardClick() {
         {{ analysisStatusLabel() }}
       </div>
 
-      <!-- 质量审核状态 -->
+      <!-- 质量审核状态 + 疑似 AI 标记（正交，可同时显示） -->
       <div
-        v-if="item.quality_status === 'rejected'"
-        class="quality-badge rejected"
-        :title="item.quality_reason || 'AI 判定为非穿搭内容'"
+        v-if="item.quality_status !== 'approved' || item.is_ai_generated"
+        class="quality-badges"
       >
-        已拒绝
-      </div>
-      <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
-        待审核
+        <div
+          v-if="item.quality_status === 'rejected'"
+          class="quality-badge rejected"
+          :title="item.quality_reason || 'AI 判定为非穿搭内容'"
+        >
+          已拒绝
+        </div>
+        <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
+          待审核
+        </div>
+        <div
+          v-if="item.is_ai_generated"
+          class="quality-badge ai"
+          title="疑似 AI 生成，请人工确认"
+        >
+          疑似 AI
+        </div>
       </div>
     </div>
 
@@ -302,10 +314,17 @@ function handleCardClick() {
   border-color: #e0465e;
 }
 
-.quality-badge {
+.quality-badges {
   position: absolute;
   top: 8px;
   left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 2;
+}
+.quality-badge {
+  width: fit-content;
   color: #fff;
   font-size: 11px;
   padding: 2px 8px;
@@ -316,6 +335,9 @@ function handleCardClick() {
 }
 .quality-badge.pending {
   background: rgba(160, 160, 160, 0.8);
+}
+.quality-badge.ai {
+  background: rgba(122, 80, 200, 0.9);
 }
 
 .card-body {

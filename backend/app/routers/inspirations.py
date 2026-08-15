@@ -214,6 +214,7 @@ async def list_inspirations(
     analysis_status: str | None = None,  # done | pending | error
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
+    is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ):
@@ -232,6 +233,8 @@ async def list_inspirations(
         query = query.where(
             func.coalesce(Inspiration.quality_status, "pending") == quality_status
         )
+    if is_ai_generated is not None:
+        query = query.where(Inspiration.is_ai_generated == is_ai_generated)
 
     # 分析状态筛选
     if analysis_status == "done":
@@ -385,6 +388,7 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         is_favorite=inspiration.is_favorite,
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
+        is_ai_generated=inspiration.is_ai_generated,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=[
@@ -668,6 +672,7 @@ def _to_out(inspiration: Inspiration) -> InspirationOut:
         is_favorite=inspiration.is_favorite,
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
+        is_ai_generated=inspiration.is_ai_generated,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,

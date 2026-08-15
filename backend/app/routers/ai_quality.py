@@ -137,10 +137,20 @@ async def quality_stats(db: AsyncSession = Depends(get_db)):
     total = pending + approved + rejected
     pass_rate = round(approved / (approved + rejected) * 100, 1) if (approved + rejected) > 0 else 0
 
+    # 疑似 AI 生成素材数（与 quality_status 正交，独立统计）
+    ai_result = await db.execute(
+        select(func.count(Inspiration.id)).where(
+            Inspiration.media_type == "image",
+            Inspiration.is_ai_generated.is_(True),
+        )
+    )
+    ai_generated = ai_result.scalar() or 0
+
     return {
         "total": total,
         "pending": pending,
         "approved": approved,
         "rejected": rejected,
         "pass_rate": pass_rate,
+        "ai_generated": ai_generated,
     }

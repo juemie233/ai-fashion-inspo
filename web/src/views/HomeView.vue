@@ -18,7 +18,7 @@ const store = useInspirationsStore()
 type SourceFilter = 'all' | 'manual_upload' | 'scraper' | 'xiaohongshu' | 'douyin' | 'browser_extension'
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
-type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected'
+type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'ai'
 type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'random'
 type Density = 'compact' | 'standard' | 'comfortable'
 
@@ -71,6 +71,7 @@ const qualityOptions: { label: string; value: QualityFilter }[] = [
   { label: '待审核', value: 'pending' },
   { label: '已通过', value: 'approved' },
   { label: '已拒绝', value: 'rejected' },
+  { label: '疑似 AI', value: 'ai' },
 ]
 
 const sortOptions: { label: string; value: SortMode }[] = [
@@ -113,7 +114,8 @@ function buildParams(page: number) {
     is_favorite: statusFilter.value === 'favorites' ? true : undefined,
     analysis_status: (statusFilter.value === 'done' || statusFilter.value === 'pending') ? statusFilter.value : undefined,
     tag_status: statusFilter.value === 'untagged' ? 'untagged' : undefined,
-    quality_status: qualityFilter.value !== 'all' ? qualityFilter.value : undefined,
+    quality_status: (qualityFilter.value !== 'all' && qualityFilter.value !== 'ai') ? qualityFilter.value : undefined,
+    is_ai_generated: qualityFilter.value === 'ai' ? true : undefined,
     sort: sortMode.value,
   }
 }

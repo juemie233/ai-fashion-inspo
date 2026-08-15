@@ -71,6 +71,7 @@ class InspirationOut(BaseModel):
     is_favorite: bool = False
     quality_status: str | None = "pending"
     quality_reason: str | None = None
+    is_ai_generated: bool = False
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []

@@ -237,11 +237,11 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
 
 async def check_image_quality(
     db: AsyncSession, inspiration_id: str, file_path: str, force: bool = False
-) -> tuple[str, str]:
-    """轻量质量审核：判断图片是否为真人穿搭照片。
+) -> tuple[str, str, bool]:
+    """轻量质量审核：判断图片是否为真人穿搭照片，并检测是否疑似 AI 生成。
 
     与完整分析不同，这里只做二分类，输出简短，速度快。审核结果直接写回
-    Inspiration 的 quality_status / quality_reason 字段。
+    Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
 
     参数:
         db: 数据库会话
@@ -251,7 +251,8 @@ async def check_image_quality(
             默认 False 仅写入 pending 素材，避免覆盖人工翻案
 
     返回:
-        (status, reason) — status 为 approved/rejected/pending（审核失败保持 pending）
+        (status, reason, is_ai_generated) — status 为 approved/rejected/pending
+        （审核失败保持 pending）；is_ai_generated 为是否疑似 AI 生成标记
     """
     import httpx
 
@@ -261,17 +262,19 @@ async def check_image_quality(
         "1. 无人物：商品平铺图、尺码表、广告、纯文字、与穿搭无关的内容\n"
         "2. 仅单品特写：只拍某一件单品，无真人整体穿着\n"
         "3. 局部/裁切特写：有真人但只拍到局部（如只有腿、只有脚、只有手臂、只有颈部领口），看不清整体搭配\n"
-        "4. 构图裁切过度：人物主体被裁掉大部分，无法判断完整穿搭\n"
-        '只输出 JSON，格式：{"is_outfit": true 或 false, "reason": "一句话简短理由"}'
+        "4. 构图裁切过度：人物主体被裁掉大部分，无法判断完整穿搭\n\n"
+        "另外判断这张图片是否疑似由 AI 生成（AI 生成常见痕迹：皮肤过度光滑、"
+        "手指/肢体数量或形态异常、光影与透视违和、背景文字乱码、塑料感或动漫感过强等）。\n"
+        '只输出 JSON，格式：{"is_outfit": true 或 false, "is_ai_generated": true 或 false, "reason": "一句话简短理由"}'
     )
 
     try:
         image_data, _ = _read_image_base64(file_path)
     except FileNotFoundError:
         # 文件缺失：确定性失败，直接拒绝，避免永久停留 pending
-        return "rejected", "文件缺失"
+        return "rejected", "文件缺失", False
     except Exception as e:
-        return "pending", f"审核失败: {str(e)[:100]}"
+        return "pending", f"审核失败: {str(e)[:100]}", False
 
     model_cfg = get_model_config(settings.ollama_vision_model)
     think_enabled = model_cfg.get("think", False)
@@ -304,22 +307,25 @@ async def check_image_quality(
                 if raw:
                     break
             if not raw:
-                return "pending", "模型返回空内容"
+                return "pending", "模型返回空内容", False
     except Exception as e:
         # 调用失败：保持 pending，不误判
-        return "pending", f"审核失败: {str(e)[:100]}"
+        return "pending", f"审核失败: {str(e)[:100]}", False
 
     # 解析 JSON（复用增强过的解析器，能处理注释/脏输出）
     parsed = parse_analysis_response(raw)
     if not isinstance(parsed, dict) or "is_outfit" not in parsed:
-        return "pending", f"无法解析模型输出: {raw[:100]}"
+        return "pending", f"无法解析模型输出: {raw[:100]}", False
 
     is_outfit = parse_is_outfit(parsed.get("is_outfit"))
     if is_outfit is None:
-        return "pending", f"无法判定 is_outfit 值: {raw[:100]}"
+        return "pending", f"无法判定 is_outfit 值: {raw[:100]}", False
 
     reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
     status = "approved" if is_outfit else "rejected"
+
+    # AI 生成检测：缺失/模糊默认 False，宁可不标记，避免误报
+    ai_generated = bool(parse_is_outfit(parsed.get("is_ai_generated")))
 
     # 写回数据库（force=True 时覆盖写入，用于随机复审已审查素材；
     # 否则 CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
@@ -328,12 +334,13 @@ async def check_image_quality(
         if insp and (force or insp.quality_status == "pending"):
             insp.quality_status = status
             insp.quality_reason = reason if not is_outfit else None
+            insp.is_ai_generated = ai_generated
             await db.commit()
     except Exception as e:
         logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
-        return "pending", f"写回失败: {str(e)[:100]}"
+        return "pending", f"写回失败: {str(e)[:100]}", False
 
-    return status, reason
+    return status, reason, ai_generated
 
 
 async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
