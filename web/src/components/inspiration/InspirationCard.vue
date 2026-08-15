@@ -4,9 +4,10 @@
 import { h, type Component } from 'vue'
 import { NIcon } from 'naive-ui'
 import { Heart, HeartOutline, TrashOutline, EyeOutline, CheckmarkOutline } from '@vicons/ionicons5'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import CategoryTag from './CategoryTag.vue'
+import { sourceLabel } from '@/utils/sourceLabel'
 
 const props = defineProps<{
   item: InspirationOut
@@ -28,22 +29,11 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+const route = useRoute()
 
 /** 获取首行展示的标签（最多 4 个） */
 function displayTags() {
   return props.item.tags?.slice(0, 4).map((t) => t.tag) ?? []
-}
-
-/** 来源图标和标签 */
-function sourceLabel(type: string): string {
-  const labels: Record<string, string> = {
-    xiaohongshu: '小红书',
-    douyin: '抖音',
-    scraper: '自动采集',
-    manual_upload: '手动上传',
-    browser_extension: '浏览器插件',
-  }
-  return labels[type] || type
 }
 
 /** 分析状态标签 */
@@ -54,7 +44,8 @@ function analysisStatusLabel(): string | null {
 }
 
 function goToDetail() {
-  router.push(`/detail/${props.item.id}`)
+  // 携带当前筛选 query 进入详情，便于删除/返回后恢复素材库筛选状态
+  router.push({ path: `/detail/${props.item.id}`, query: route.query })
 }
 
 /** 卡片点击：批量模式下切换勾选，否则跳转详情 */

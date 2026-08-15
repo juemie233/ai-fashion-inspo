@@ -1,0 +1,156 @@
+"""质量审核任务：逐张调用轻量 AI 审核并维护进度。
+
+本模块包含「质量审核」（quality_check）任务的创建与执行逻辑，
+由 worker 进程（app/worker.py）通过 TASK_HANDLERS 分发表调度。
+"""
+
+import asyncio
+import logging
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.database import async_session
+from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.task import TaskQueue
+from app.services.ai_service import check_image_quality
+from app.services.task_runners.common import _ANALYZE_CONCURRENCY, _utcnow
+
+logger = logging.getLogger(__name__)
+
+
+async def create_quality_check_task(
+    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0, random: bool = False
+) -> TaskQueue:
+    """创建「质量审核」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
+
+    参数:
+        db: 数据库会话
+        inspiration_ids: 待审核的素材 ID 列表（API 层已按条件过滤）
+        skipped: 被跳过的素材数量（保留字段）
+        random: 是否为随机复审——True 时执行阶段不限制 pending，且会覆盖已审查素材的判定
+
+    返回:
+        新建的任务记录
+    """
+    task = TaskQueue(
+        type="quality_check",
+        status="pending",
+        progress=0,
+        total=len(inspiration_ids),
+        done=0,
+        result={"inspiration_ids": inspiration_ids, "skipped": skipped, "random": random},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def _quality_check_one(
+    sem: asyncio.Semaphore, inspiration_id: str, file_path: str, force: bool = False
+) -> tuple[str, str, str, bool]:
+    """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因, 是否疑似 AI)。
+
+    状态为 approved/rejected/pending（审核失败保持 pending）。
+
+    参数:
+        force: 为 True 时覆盖写入已审查素材（随机复审场景）
+    """
+    async with sem:
+        async with async_session() as db:
+            status, reason, ai_generated = await check_image_quality(
+                db, inspiration_id, file_path, force=force
+            )
+            # 写入质量审核日志（失败时记录原因，供前端排查）
+            db.add(AIAnalysisLog(
+                inspiration_id=inspiration_id,
+                model_name=settings.ollama_vision_model,
+                log_type="quality_check",
+                error=reason if status == "pending" else None,
+            ))
+            await db.commit()
+            return inspiration_id, status, reason, ai_generated
+
+
+async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
+    """执行质量审核任务：逐张调用轻量审核并维护进度（由 worker 调用）。
+
+    质量审核是「尽力而为」的：单张失败保持 pending，不触发整个任务重试，
+    因此本函数不主动抛出 Recoverable/Permanent 错误（数据库层异常由 worker 兜底）。
+    """
+    payload = task.result or {}
+    inspiration_ids = payload.get("inspiration_ids") or []
+    is_random = payload.get("random", False)
+    if not inspiration_ids:
+        task.total = 0
+        task.done = 0
+        task.progress = 100
+        await db.commit()
+        return
+
+    # 加载待审核的图片素材（执行期间可能已被人工翻案）：
+    # 随机复审不限制状态，覆盖重审已审查素材；普通审核仅保留仍 pending 的
+    stmt = select(Inspiration.id, Inspiration.file_path).where(
+        Inspiration.id.in_(inspiration_ids),
+        Inspiration.media_type == "image",
+    )
+    if not is_random:
+        stmt = stmt.where(Inspiration.quality_status == "pending")
+    result = await db.execute(stmt)
+    rows = result.all()
+    insp_map = {r[0]: r[1] for r in rows}
+    items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
+
+    task.total = len(items)
+    task.done = 0
+    task.progress = 0
+    task.error = None
+    await db.commit()
+
+    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+    approved = 0
+    rejected = 0
+    pending = 0
+    ai_generated = 0
+
+    for start in range(0, len(items), _ANALYZE_CONCURRENCY):
+        chunk = items[start:start + _ANALYZE_CONCURRENCY]
+        results = await asyncio.gather(
+            *(_quality_check_one(sem, iid, fp, force=is_random) for iid, fp in chunk)
+        )
+        for _iid, status, _reason, _ai in results:
+            if status == "approved":
+                approved += 1
+            elif status == "rejected":
+                rejected += 1
+            else:
+                pending += 1
+            if _ai:
+                ai_generated += 1
+
+        task.done = min(start + len(chunk), task.total)
+        task.progress = round(task.done / task.total * 100) if task.total else 100
+        task.updated_at = _utcnow()
+        await db.commit()
+        logger.info(
+            f"质量审核进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
+        )
+
+    task.result = {
+        "inspiration_ids": inspiration_ids,
+        "skipped": payload.get("skipped", 0),
+        "approved": approved,
+        "rejected": rejected,
+        "pending": pending,
+        "ai_generated": ai_generated,
+    }
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = _utcnow()
+    await db.commit()
+    logger.info(
+        f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，未判定 {pending}"
+    )

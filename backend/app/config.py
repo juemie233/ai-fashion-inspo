@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
+    ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」
 
     # AI 分析 Prompt（运行时可变，前端可编辑）
     ai_analysis_prompt: str = (

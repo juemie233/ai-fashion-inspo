@@ -16,20 +16,9 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { apiClient } from '../../services/api'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
+import { sourceLabel } from '../../utils/sourceLabel'
 
 const { width } = Dimensions.get('window')
-
-/** 来源类型中文映射 */
-function sourceLabel(type: string) {
-  const labels: Record<string, string> = {
-    xiaohongshu: '小红书',
-    douyin: '抖音',
-    manual_upload: '手动上传',
-    scraper: '自动采集',
-    browser_extension: '浏览器插件',
-  }
-  return labels[type] || type
-}
 
 /** 判断「原始链接」是否为可访问的页面链接（排除图片/视频 CDN 直链） */
 function isSourceLinkValid(url: string | null | undefined): boolean {

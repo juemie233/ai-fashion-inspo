@@ -1,0 +1,162 @@
+"""质量审核编排：穿搭二分类 + AI 生成检测。
+
+与完整分析不同，审核只做两步轻量调用，结果直接写回
+Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
+"""
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.models.inspiration import Inspiration
+from app.services.ai_parser import parse_analysis_response, parse_is_outfit
+from app.services.ai_service.common import _read_image_base64, logger
+from app.services.model_config import get_model_config
+
+
+async def _ollama_vision_chat(
+    image_data: str, prompt: str, model_cfg: dict, temperature: float
+) -> tuple[str, str | None]:
+    """调用视觉模型返回原始文本。
+
+    返回 ``(raw, error)``：``error`` 为 ``None`` 且 ``raw`` 非空表示成功；
+    空内容或调用异常时 ``raw`` 为空串、``error`` 为原因描述，由调用方决定降级策略。
+    """
+    import httpx
+
+    think_enabled = model_cfg.get("think", False)
+    # 思考模型：思维链会消耗 num_predict 预算，需放大预算以避免 JSON 答案被截断
+    num_predict = model_cfg["num_predict"]
+    if think_enabled:
+        num_predict = max(num_predict, 8192)
+
+    try:
+        async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:
+            # 思考模式若思维链耗尽预算会返回空内容，回退到非思考模式重试
+            think_attempts = [think_enabled, False] if think_enabled else [False]
+            for think in think_attempts:
+                response = await client.post(
+                    f"{settings.ollama_base_url}/api/chat",
+                    json={
+                        "model": settings.ollama_vision_model,
+                        "messages": [
+                            {"role": "user", "content": prompt, "images": [image_data]}
+                        ],
+                        "stream": False,
+                        "think": think,
+                        "options": {"temperature": temperature, "num_predict": num_predict},
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                raw = result.get("message", {}).get("content", "") or ""
+                if raw:
+                    return raw, None
+        return "", "模型返回空内容"
+    except Exception as e:
+        return "", f"调用失败: {str(e)[:100]}"
+
+
+def _parse_ai_generated(parsed: dict) -> bool:
+    """解析 AI 生成检测结果：仅当模型明确判 true 且置信度达标才标记，宁缺毋滥。
+
+    置信度缺失/非法或低于阈值时返回 False，避免把真实照片误标为疑似 AI。
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if parse_is_outfit(parsed.get("is_ai_generated")) is not True:
+        return False
+    try:
+        confidence = float(parsed.get("confidence"))
+    except (TypeError, ValueError):
+        return False
+    return confidence >= settings.ai_generated_confidence_threshold
+
+
+async def check_image_quality(
+    db: AsyncSession, inspiration_id: str, file_path: str, force: bool = False
+) -> tuple[str, str, bool]:
+    """轻量质量审核：分两步——先做穿搭二分类，通过后再单独做 AI 生成检测。
+
+    与完整分析不同，这里输出简短、速度快。审核结果直接写回
+    Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
+
+    参数:
+        db: 数据库会话
+        inspiration_id: 素材 UUID
+        file_path: 图片文件的相对路径
+        force: 为 True 时覆盖写入，忽略素材当前审核状态（用于随机复审已审查素材）；
+            默认 False 仅写入 pending 素材，避免覆盖人工翻案
+
+    返回:
+        (status, reason, is_ai_generated) — status 为 approved/rejected/pending
+        （审核失败保持 pending）；is_ai_generated 为是否疑似 AI 生成标记
+    """
+    outfit_prompt = (
+        "请判断这张图片是否为「完整的真人穿搭照片」，即能看清整体搭配（例如上衣+下装的完整组合）的真人穿着照片。\n"
+        "判定为「否」的情况：\n"
+        "1. 无人物：商品平铺图、尺码表、广告、纯文字、与穿搭无关的内容\n"
+        "2. 仅单品特写：只拍某一件单品，无真人整体穿着\n"
+        "3. 局部/裁切特写：有真人但只拍到局部（如只有腿、只有脚、只有手臂、只有颈部领口），看不清整体搭配\n"
+        "4. 构图裁切过度：人物主体被裁掉大部分，无法判断完整穿搭\n"
+        '只输出 JSON，格式：{"is_outfit": true 或 false, "reason": "一句话简短理由"}'
+    )
+
+    ai_prompt = (
+        "请仅判断这张图片是否疑似由 AI 生成。\n"
+        "判定为 true 的硬性要求：必须找到至少 2 处具体的生成痕迹，并在 evidence 中逐条指出。\n"
+        "AI 生成常见痕迹：手指/肢体数量或形态异常、背景文字乱码、透视或空间关系违和、"
+        "塑料感或动漫感过强、纹理不自然重复。\n"
+        "以下情况不算 AI 痕迹（不要据此判 true）：皮肤光滑/磨皮（可能是美颜或后期处理）、"
+        "背景虚化/景深（人像摄影正常）、轻微光影不均。\n"
+        '只输出 JSON，格式：{"is_ai_generated": true 或 false, "confidence": 0.0 到 1.0, "evidence": ["痕迹1", "痕迹2"]}'
+    )
+
+    try:
+        image_data, _ = _read_image_base64(file_path)
+    except FileNotFoundError:
+        # 文件缺失：确定性失败，直接拒绝，避免永久停留 pending
+        return "rejected", "文件缺失", False
+    except Exception as e:
+        return "pending", f"审核失败: {str(e)[:100]}", False
+
+    model_cfg = get_model_config(settings.ollama_vision_model)
+
+    # 第一步：穿搭二分类
+    raw, err = await _ollama_vision_chat(image_data, outfit_prompt, model_cfg, temperature=0.1)
+    if err:
+        return "pending", f"审核失败: {err}", False
+
+    # 解析 JSON（复用增强过的解析器，能处理注释/脏输出）
+    parsed = parse_analysis_response(raw)
+    if not isinstance(parsed, dict) or "is_outfit" not in parsed:
+        return "pending", f"无法解析模型输出: {raw[:100]}", False
+
+    is_outfit = parse_is_outfit(parsed.get("is_outfit"))
+    if is_outfit is None:
+        return "pending", f"无法判定 is_outfit 值: {raw[:100]}", False
+
+    reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
+    status = "approved" if is_outfit else "rejected"
+
+    # 第二步：仅对通过穿搭判断的图片做 AI 生成检测（非穿搭内容无需检测，省一次调用）
+    ai_generated = False
+    if is_outfit:
+        raw_ai, err_ai = await _ollama_vision_chat(image_data, ai_prompt, model_cfg, temperature=0.0)
+        # AI 检测失败/空结果默认不标记，宁可不标，避免误报
+        if not err_ai:
+            ai_generated = _parse_ai_generated(parse_analysis_response(raw_ai))
+
+    # 写回数据库（force=True 时覆盖写入，用于随机复审已审查素材；
+    # 否则 CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
+    try:
+        insp = await db.get(Inspiration, inspiration_id)
+        if insp and (force or insp.quality_status == "pending"):
+            insp.quality_status = status
+            insp.quality_reason = reason if not is_outfit else None
+            insp.is_ai_generated = ai_generated
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
+        return "pending", f"写回失败: {str(e)[:100]}", False
+
+    return status, reason, ai_generated

@@ -1,21 +1,12 @@
 """灵感素材 CRUD 的 REST API 路由。"""
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.database import get_db
-from app.models.inspiration import (
-    AIAnalysisLog,
-    Inspiration,
-    analysis_log_filter as _analysis_log_filter,
-)
-from app.models.tag import InspirationTag, Tag
+from app.models.inspiration import Inspiration
 from app.schemas.inspiration import (
     BatchAddTagsRequest,
-    InspirationCreate,
     InspirationDetailOut,
     InspirationListOut,
     InspirationOut,
@@ -23,28 +14,9 @@ from app.schemas.inspiration import (
     InspirationTagOut,
     TagOut,
 )
-from app.services.file_service import delete_files, save_upload
-from app.utils.file_hash import file_sha256
+from app.services import inspiration_service
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
-
-
-async def _find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:
-    """全库扫描素材文件内容哈希，返回重复素材 ID（无重复返回 None）。
-
-    用于上传入库前去重：逐文件计算 SHA-256 与待上传文件比对，
-    覆盖全部存量素材（个人库规模有限，全量扫描可接受）。
-    """
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(
-            Inspiration.file_path.isnot(None)
-        )
-    )
-    storage_root = settings.storage_root
-    for insp_id, fpath in result.all():
-        if fpath and file_sha256(storage_root / fpath) == content_hash:
-            return insp_id
-    return None
 
 
 @router.post("", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
@@ -65,54 +37,14 @@ async def create_inspiration(
             detail=f"不支持的文件类型: {file.content_type}。允许: {allowed_types}",
         )
 
-    # 检查重复（按平台 ID）—— 先查重，避免保存文件后再发现重复留下孤儿文件
-    if source_platform_id:
-        result = await db.execute(
-            select(Inspiration).where(
-                Inspiration.source_platform_id == source_platform_id
-            )
-        )
-        if result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=409,
-                detail=f"平台ID '{source_platform_id}' 的素材已存在",
-            )
-
-    # 保存文件
-    file_path, thumb_path = await save_upload(file)
-
-    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
-    content_hash = file_sha256(settings.storage_root / file_path)
-    if content_hash and await _find_duplicate_by_hash(db, content_hash):
-        delete_files(file_path, thumb_path)  # 清理刚保存的重复文件与缩略图
-        raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
-
-    # 判断媒体类型
-    media_type = "image"
-    if file.content_type and file.content_type.startswith("video/"):
-        media_type = "video"
-
-    # 手动上传默认免审核：按配置直接标记为已通过，跳过质量审核队列
-    quality_status = (
-        "approved"
-        if source_type == "manual_upload" and settings.manual_upload_auto_approve
-        else "pending"
-    )
-
-    inspiration = Inspiration(
+    inspiration = await inspiration_service.create_inspiration(
+        db,
+        file,
         source_type=source_type,
         source_url=source_url,
         source_author=source_author,
         source_platform_id=source_platform_id,
-        file_path=file_path,
-        thumbnail_path=thumb_path,
-        media_type=media_type,
-        quality_status=quality_status,
     )
-    db.add(inspiration)
-    await db.flush()
-    await db.refresh(inspiration)
-
     return _to_out(inspiration)
 
 
@@ -125,10 +57,6 @@ async def create_from_url(
 
     请求体: {"url": "...", "source_author": "...", "tags": ["..."]}
     """
-    import uuid
-    import aiofiles
-    import httpx
-
     url = payload.get("url", "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="请提供图片 URL")
@@ -136,71 +64,12 @@ async def create_from_url(
     source_author = payload.get("source_author", "").strip() or None
     tag_names = payload.get("tags", [])
 
-    # 下载图片
-    try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            image_bytes = resp.content
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"下载失败: {e}")
-
-    # 从 Content-Type 或 URL 推断扩展名
-    content_type = resp.headers.get("content-type", "")
-    ext = ".jpg"
-    if "png" in content_type:
-        ext = ".png"
-    elif "webp" in content_type:
-        ext = ".webp"
-    elif "gif" in content_type:
-        ext = ".gif"
-    elif "mp4" in content_type:
-        ext = ".mp4"
-
-    # 保存文件
-    filename = f"{uuid.uuid4().hex}{ext}"
-    images_dir = settings.images_dir
-    images_dir.mkdir(parents=True, exist_ok=True)
-    file_path_obj = images_dir / filename
-    async with aiofiles.open(file_path_obj, "wb") as f:
-        await f.write(image_bytes)
-
-    # 生成缩略图
-    from app.services.file_service import generate_thumbnail
-    rel_path = f"images/{filename}"
-    thumb_path = await generate_thumbnail(file_path_obj)
-
-    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
-    content_hash = file_sha256(file_path_obj)
-    if content_hash and await _find_duplicate_by_hash(db, content_hash):
-        delete_files(rel_path, thumb_path)
-        raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
-
-    media_type = "video" if ext == ".mp4" else "image"
-
-    inspiration = Inspiration(
-        source_type="browser_extension",
-        source_url=url,
+    inspiration = await inspiration_service.create_inspiration_from_url(
+        db,
+        url,
         source_author=source_author,
-        file_path=rel_path,
-        thumbnail_path=thumb_path,
-        media_type=media_type,
+        tag_names=tag_names,
     )
-    db.add(inspiration)
-    await db.flush()
-    await db.refresh(inspiration)
-
-    # 关联标签
-    if tag_names:
-        from app.services.tag_service import get_or_create_tag
-        for tname in tag_names:
-            tag = await get_or_create_tag(db, tname.strip(), "free")
-            link = InspirationTag(inspiration_id=inspiration.id, tag_id=tag.id, confidence=1.0)
-            db.add(link)
-        await db.flush()
-
     return _to_out(inspiration)
 
 
@@ -219,84 +88,19 @@ async def list_inspirations(
     db: AsyncSession = Depends(get_db),
 ):
     """分页获取灵感列表，支持多维筛选和排序。"""
-    query = select(Inspiration).options(
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
+    inspirations, total = await inspiration_service.list_inspirations(
+        db,
+        page=page,
+        size=size,
+        source_type=source_type,
+        is_favorite=is_favorite,
+        media_type=media_type,
+        analysis_status=analysis_status,
+        tag_status=tag_status,
+        quality_status=quality_status,
+        is_ai_generated=is_ai_generated,
+        sort=sort,
     )
-
-    if source_type:
-        query = query.where(Inspiration.source_type == source_type)
-    if is_favorite is not None:
-        query = query.where(Inspiration.is_favorite == is_favorite)
-    if media_type:
-        query = query.where(Inspiration.media_type == media_type)
-    if quality_status:
-        query = query.where(
-            func.coalesce(Inspiration.quality_status, "pending") == quality_status
-        )
-    if is_ai_generated is not None:
-        query = query.where(Inspiration.is_ai_generated == is_ai_generated)
-
-    # 分析状态筛选
-    if analysis_status == "done":
-        query = query.where(
-            Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    _analysis_log_filter(),
-                    AIAnalysisLog.error.is_(None),
-                ).distinct()
-            )
-        )
-    elif analysis_status == "error":
-        query = query.where(
-            Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    _analysis_log_filter(),
-                    AIAnalysisLog.error.isnot(None),
-                ).distinct()
-            )
-        )
-    elif analysis_status == "pending":
-        analyzed_sub = (
-            select(AIAnalysisLog.inspiration_id)
-            .where(_analysis_log_filter())
-            .distinct()
-        )
-        query = query.where(Inspiration.id.notin_(analyzed_sub))
-
-    # 标签状态筛选
-    if tag_status == "tagged":
-        query = query.where(
-            Inspiration.id.in_(
-                select(InspirationTag.inspiration_id).distinct()
-            )
-        )
-    elif tag_status == "untagged":
-        query = query.where(
-            Inspiration.id.notin_(
-                select(InspirationTag.inspiration_id).distinct()
-            )
-        )
-
-    # 排序
-    sort_map = {
-        "newest": Inspiration.created_at.desc(),
-        "oldest": Inspiration.created_at.asc(),
-        "updated": Inspiration.updated_at.desc(),
-        "largest": Inspiration.file_path.desc(),  # 按路径排序不够精确，用子查询算文件大小
-        "random": func.random(),  # 随机洗牌：每次请求重新随机
-    }
-    query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
-
-    # 统计总数
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
-
-    # 分页
-    query = query.offset((page - 1) * size).limit(size)
-    result = await db.execute(query)
-    inspirations = result.unique().scalars().all()
-
     return InspirationListOut(
         items=[_to_out(i) for i in inspirations],
         total=total,
@@ -307,71 +111,14 @@ async def list_inspirations(
 
 @router.delete("/quality-rejected", status_code=status.HTTP_200_OK)
 async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
-    """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。
-
-    删除前写入墓碑表，防止下次采集重复下载相同 URL。
-    """
-    result = await db.execute(
-        select(Inspiration).where(Inspiration.quality_status == "rejected")
-    )
-    rejected = result.scalars().all()
-
-    if not rejected:
-        return {"deleted": 0, "freed_bytes": 0, "message": "没有已拒绝的素材"}
-
-    deleted_ids = [insp.id for insp in rejected]
-    freed_bytes = 0
-    urls_to_seal: list[str] = []
-    for insp in rejected:
-        if insp.source_url:
-            urls_to_seal.append(insp.source_url)
-        for p in (insp.file_path, insp.thumbnail_path):
-            if p:
-                full = settings.storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
-        await db.delete(insp)
-
-    # 写入墓碑表（防止重复采集）
-    if urls_to_seal:
-        from app.models.scraper import ScraperSeenURL
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
-
-    await db.commit()
-
-    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
-    # 避免批量删除后产生孤儿向量
-    from app.services import vector_store
-
-    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
-
-    return {"deleted": len(rejected), "freed_bytes": freed_bytes}
+    """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。"""
+    return await inspiration_service.delete_rejected_inspirations(db)
 
 
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)
 async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
     """获取单个灵感详情（包含完整标签和分析日志）。"""
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.analysis_logs),
-        )
-        .where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.unique().scalar_one_or_none()
-    if not inspiration:
-        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    inspiration = await inspiration_service.get_inspiration(db, inspiration_id)
 
     from app.schemas.inspiration import AnalysisLogOut
 
@@ -419,29 +166,7 @@ async def update_inspiration(
     db: AsyncSession = Depends(get_db),
 ):
     """更新灵感（收藏状态、作者等部分字段）。"""
-    result = await db.execute(
-        select(Inspiration)
-        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-        .where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.unique().scalar_one_or_none()
-    if not inspiration:
-        raise HTTPException(status_code=404, detail="灵感素材未找到")
-
-    if data.is_favorite is not None:
-        inspiration.is_favorite = data.is_favorite
-    if data.source_author is not None:
-        inspiration.source_author = data.source_author
-    if data.quality_status is not None:
-        # 人工复核翻案：修改审核状态，同时处理原因
-        inspiration.quality_status = data.quality_status
-        if data.quality_status in ("approved", "pending"):
-            inspiration.quality_reason = None
-        elif data.quality_reason is not None:
-            inspiration.quality_reason = data.quality_reason
-
-    await db.flush()
-    await db.refresh(inspiration)
+    inspiration = await inspiration_service.update_inspiration(db, inspiration_id, data)
     return _to_out(inspiration)
 
 
@@ -457,78 +182,13 @@ async def batch_add_tags(
     用于「相似素材批量添加穿搭大标签」场景：把当前素材的大标签一次性复制到
     多个相似素材上。仅对实际新增了标签的素材重建文本向量，避免无谓调用 Ollama。
     """
-    from app.services.tag_service import get_or_create_tag
-
-    # 去重（保留顺序），避免重复 ID/名称虚增统计与重复查询
-    inspiration_ids = list(dict.fromkeys(data.inspiration_ids))
-    raw_names = [n.strip() for n in data.names if n.strip()]
-
-    if not raw_names:
-        raise HTTPException(status_code=400, detail="请提供有效的标签名称")
-
-    # 先解析标签（批量 get_or_create，避免每个素材重复查询同名标签）
-    tags = []
-    for name in raw_names:
-        tags.append(await get_or_create_tag(db, name, data.category, data.source))
-
-    tag_ids = [t.id for t in tags]
-
-    # 一次性校验素材存在性，避免逐个 db.get
-    found_result = await db.execute(
-        select(Inspiration.id).where(Inspiration.id.in_(inspiration_ids))
+    return await inspiration_service.batch_add_tags(
+        db,
+        data.inspiration_ids,
+        data.names,
+        category=data.category,
+        source=data.source,
     )
-    found_ids = set(found_result.scalars().all())
-    not_found_ids = [i for i in inspiration_ids if i not in found_ids]
-
-    # 一次性查出已存在的关联，避免 M×N 逐条查询
-    existing_result = await db.execute(
-        select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
-            InspirationTag.inspiration_id.in_(inspiration_ids),
-            InspirationTag.tag_id.in_(tag_ids),
-        )
-    )
-    existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
-
-    # 批量插入新关联，跳过已存在的；记录实际变更的素材
-    total_added = 0
-    affected_ids: list[str] = []
-    skipped_existing = 0
-    for inspiration_id in inspiration_ids:
-        if inspiration_id not in found_ids:
-            continue
-        added_for_this = 0
-        for tag_id in tag_ids:
-            if (inspiration_id, tag_id) in existing_pairs:
-                skipped_existing += 1
-                continue
-            db.add(
-                InspirationTag(
-                    inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0
-                )
-            )
-            added_for_this += 1
-        if added_for_this:
-            affected_ids.append(inspiration_id)
-            total_added += added_for_this
-
-    await db.commit()
-
-    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
-    from app.services.vector_service import rebuild_text_vector
-
-    for inspiration_id in affected_ids:
-        await rebuild_text_vector(db, inspiration_id)
-
-    return {
-        "added": total_added,
-        "affected": len(affected_ids),
-        # 向后兼容：skipped 仍为「未实际变更的素材数」（含不存在与已全部关联）
-        "skipped": len(inspiration_ids) - len(affected_ids),
-        # 明确拆分两个跳过维度
-        "not_found": len(not_found_ids),
-        "skipped_existing": skipped_existing,
-        "missing_ids": not_found_ids,
-    }
 
 
 @router.post("/{inspiration_id}/tags", status_code=status.HTTP_200_OK)
@@ -541,47 +201,16 @@ async def add_inspiration_tags(
 
     请求体: {"names": ["御姐长腿高跟鞋穿搭"], "category": "outfit", "source": "manual"}
     """
-    inspiration = await db.get(Inspiration, inspiration_id)
-    if not inspiration:
-        raise HTTPException(status_code=404, detail="素材未找到")
-
     names = payload.get("names", [])
     category = payload.get("category", "free")
     source = payload.get("source", "manual")
-    if not isinstance(names, list) or not names:
-        raise HTTPException(status_code=400, detail="请提供标签名称列表")
-
-    from app.services.tag_service import get_or_create_tag
-
-    added = []
-    for raw in names:
-        name = str(raw).strip()
-        if not name:
-            continue
-        tag = await get_or_create_tag(db, name, category, source)
-        existing = await db.execute(
-            select(InspirationTag).where(
-                InspirationTag.inspiration_id == inspiration_id,
-                InspirationTag.tag_id == tag.id,
-            )
-        )
-        if existing.scalar_one_or_none():
-            continue
-        db.add(
-            InspirationTag(
-                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0
-            )
-        )
-        added.append({"id": tag.id, "name": tag.name, "category": tag.category})
-
-    await db.commit()
-
-    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
-    from app.services.vector_service import rebuild_text_vector
-
-    await rebuild_text_vector(db, inspiration_id)
-
-    return {"added": added, "count": len(added)}
+    return await inspiration_service.add_inspiration_tags(
+        db,
+        inspiration_id,
+        names,
+        category=category,
+        source=source,
+    )
 
 
 @router.delete("/{inspiration_id}/tags/{tag_id}", status_code=status.HTTP_200_OK)
@@ -591,54 +220,13 @@ async def remove_inspiration_tag(
     db: AsyncSession = Depends(get_db),
 ):
     """解除素材与某个标签的关联（不删除标签本身）。"""
-    result = await db.execute(
-        delete(InspirationTag).where(
-            InspirationTag.inspiration_id == inspiration_id,
-            InspirationTag.tag_id == tag_id,
-        )
-    )
-    await db.commit()
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="未找到该标签关联")
-
-    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
-    from app.services.vector_service import rebuild_text_vector
-
-    await rebuild_text_vector(db, inspiration_id)
-    return {"removed": 1}
+    return await inspiration_service.remove_inspiration_tag(db, inspiration_id, tag_id)
 
 
 @router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
     """删除灵感素材及其对应的磁盘文件。"""
-    result = await db.execute(
-        select(Inspiration).where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.scalar_one_or_none()
-    if not inspiration:
-        raise HTTPException(status_code=404, detail="灵感素材未找到")
-
-    # 写入墓碑表（防止重复采集）
-    if inspiration.source_url:
-        from app.models.scraper import ScraperSeenURL
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-        await db.execute(
-            sqlite_insert(ScraperSeenURL)
-            .values(source_url=inspiration.source_url)
-            .prefix_with("OR IGNORE")
-        )
-
-    # 删除磁盘文件
-    delete_files(inspiration.file_path, inspiration.thumbnail_path)
-
-    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
-    from app.services import vector_store
-
-    if vector_store.is_lancedb_available():
-        await vector_store.delete_inspiration_vectors(inspiration.id)
-
-    await db.delete(inspiration)
-    await db.flush()
+    await inspiration_service.delete_inspiration(db, inspiration_id)
 
 
 def _to_out(inspiration: Inspiration) -> InspirationOut:

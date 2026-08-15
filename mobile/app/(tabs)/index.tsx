@@ -14,6 +14,7 @@ import {
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
+import { sourceLabel } from '../../utils/sourceLabel'
 
 const { width } = Dimensions.get('window')
 const CARD_WIDTH = (width - 36) / 2
@@ -117,17 +118,6 @@ export default function GalleryScreen() {
 function getFileUrl(path: string) {
   const base = useInspirationStore.getState().apiBaseUrl
   return `${base}/api/files/${path}`
-}
-
-function sourceLabel(type: string) {
-  const labels: Record<string, string> = {
-    xiaohongshu: '小红书',
-    douyin: '抖音',
-    manual_upload: '手动上传',
-    scraper: '自动采集',
-    browser_extension: '浏览器插件',
-  }
-  return labels[type] || type
 }
 
 const styles = StyleSheet.create({

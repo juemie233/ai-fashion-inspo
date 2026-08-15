@@ -4,14 +4,26 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import type { UploadFileInfo } from 'naive-ui'
 import { useInspirationsStore } from '@/stores/inspirations'
-import { getFileUrl, addTagsToInspiration } from '@/api/inspirations'
+import { addTagsToInspiration } from '@/api/inspirations'
 import apiClient from '@/api/client'
+import type { UploadQueueItem } from '@/types/upload'
+import { useUploadPrefs } from '@/composables/useUploadPrefs'
+import { useRecentUploads } from '@/composables/useRecentUploads'
+import UploadDropZone from '@/components/upload/UploadDropZone.vue'
+import UploadQueue from '@/components/upload/UploadQueue.vue'
+import UploadOptionsPanel from '@/components/upload/UploadOptionsPanel.vue'
+import RecentUploads from '@/components/upload/RecentUploads.vue'
 
 const router = useRouter()
 const message = useMessage()
 const store = useInspirationsStore()
+
+// ── 偏好（localStorage 持久化）──
+const { autoAnalyze, afterUpload, skipDuplicates, savePrefs } = useUploadPrefs()
+
+// ── 最近上传（sessionStorage 持久化）──
+const { recentUploads, prependRecent } = useRecentUploads()
 
 // ── 图片扩展名 ──
 const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4'])
@@ -24,16 +36,7 @@ const isDragging = ref(false)
 const dragCount = ref(0)
 
 // ── 预览队列 ──
-interface QueueItem {
-  id: string
-  file: File
-  thumbnail: string  // object URL
-  status: 'pending' | 'uploading' | 'done' | 'failed' | 'duplicate'
-  progress: number
-  resultId?: string
-  errorMsg?: string
-}
-const queue = ref<QueueItem[]>([])
+const queue = ref<UploadQueueItem[]>([])
 
 // ── 上传状态 ──
 const uploading = ref(false)
@@ -44,7 +47,6 @@ let _lastTime = 0
 // ── 元数据 ──
 const sourceAuthor = ref('')
 const quickTags = ref('')
-const autoAnalyze = ref(localStorage.getItem('upload-auto-analyze') !== 'false')
 
 // ── URL 导入 ──
 const urlInput = ref('')
@@ -55,31 +57,7 @@ const videoModalOpen = ref(false)
 const videoModalSrc = ref('')
 
 // ── 去重 ──
-const skipDuplicates = ref(localStorage.getItem('upload-skip-duplicates') !== 'false')
 let _dedupHashes = new Set<string>()
-
-// ── 偏好 ──
-const afterUpload = ref<'stay' | 'detail' | 'home'>(
-  (localStorage.getItem('upload-after') as 'stay' | 'detail' | 'home') || 'stay'
-)
-
-// ── 最近上传 ──
-/** 读取 sessionStorage 中的最近上传记录，解析失败时回退空数组（参考 ScraperView 的 try/catch 范式） */
-function loadRecentUploads(): Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }> {
-  try {
-    const raw = sessionStorage.getItem('recent-uploads')
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-const recentUploads = ref<Array<{ id: string; thumbnailPath: string | null; filePath: string; mediaType?: string }>>(loadRecentUploads())
-
-// ── 文件选择 ──
-const fileInput = ref<HTMLInputElement | null>(null)
-const folderInput = ref<HTMLInputElement | null>(null)
 
 // ── 拖拽处理 ──
 function onDragEnter(e: DragEvent) {
@@ -289,17 +267,6 @@ async function importFromUrl() {
   }
 }
 
-// ── 文件选择 ──
-function openFilePicker() { fileInput.value?.click() }
-function openFolder() { folderInput.value?.click() }
-
-function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const files = Array.from(input.files || [])
-  if (files.length > 0) addFiles(files)
-  input.value = ''
-}
-
 // ── 视频预览 ──
 /** 判断文件是否为视频（按 MIME 类型与扩展名） */
 function isVideoFile(file: File): boolean {
@@ -307,14 +274,14 @@ function isVideoFile(file: File): boolean {
 }
 
 /** 点击队列中的视频项，在模态框中播放预览 */
-function previewQueueItem(item: QueueItem) {
+function previewQueueItem(item: UploadQueueItem) {
   if (!isVideoFile(item.file)) return
   videoModalSrc.value = item.thumbnail
   videoModalOpen.value = true
 }
 
 /** 生成上传进度回调：更新单项百分比并计算整体速度 */
-function makeProgressHandler(item: QueueItem) {
+function makeProgressHandler(item: UploadQueueItem) {
   return (e: any) => {
     if (e?.total > 0) {
       item.progress = Math.min(100, Math.round((e.loaded / e.total) * 100))
@@ -324,15 +291,6 @@ function makeProgressHandler(item: QueueItem) {
     const mbps = elapsed > 0 ? totalBytes / 1024 / 1024 / elapsed : 0
     uploadSpeed.value = `${item.progress}% · ${mbps.toFixed(1)} MB/s`
   }
-}
-
-// ── 最近上传 ──
-function prependRecent(id: string, thumbnailPath: string | null, filePath: string, mediaType?: string) {
-  recentUploads.value = [
-    { id, thumbnailPath, filePath, mediaType },
-    ...recentUploads.value.filter(r => r.id !== id),
-  ].slice(0, 20)
-  sessionStorage.setItem('recent-uploads', JSON.stringify(recentUploads.value))
 }
 
 function goToDetail(id: string) { router.push(`/detail/${id}`) }
@@ -359,13 +317,6 @@ function onKeyDown(e: KeyboardEvent) {
     if (queue.value.length === 0 || uploading.value) return
     showClearConfirm.value = true
   }
-}
-
-// ── 偏好保存 ──
-function savePrefs() {
-  localStorage.setItem('upload-auto-analyze', String(autoAnalyze.value))
-  localStorage.setItem('upload-after', afterUpload.value)
-  localStorage.setItem('upload-skip-duplicates', String(skipDuplicates.value))
 }
 
 // ── 生命周期 ──
@@ -400,168 +351,49 @@ onUnmounted(() => {
     </div>
 
     <!-- 上传区域 -->
-    <div class="upload-zone" :class="{ 'has-queue': queue.length > 0 }">
-      <div class="upload-icon-wrap">📤</div>
-      <p class="upload-title">上传穿搭素材</p>
-      <p class="upload-desc">拖拽文件到此处、Ctrl+V 粘贴、或点击下方按钮</p>
-      <p class="upload-formats">JPG / PNG / WebP / GIF / MP4 · 单次最多 500 个</p>
-
-      <div class="upload-actions">
-        <n-button type="primary" size="large" @click="openFilePicker">选择文件</n-button>
-        <n-button size="large" @click="openFolder">📁 导入文件夹</n-button>
-      </div>
-
-      <input ref="fileInput" type="file" multiple accept="image/*,video/mp4" style="display:none" @change="onFileChange" />
-      <input ref="folderInput" type="file" webkitdirectory multiple accept="image/*,video/mp4" style="display:none" @change="onFileChange" />
-
-      <!-- URL 导入 -->
-      <div class="url-import">
-        <n-input
-          v-model:value="urlInput"
-          size="small"
-          placeholder="或粘贴图片 URL 导入..."
-          clearable
-          @keyup.enter="importFromUrl"
-        />
-        <n-button size="small" :loading="urlImporting" @click="importFromUrl" :disabled="!urlInput.trim()">
-          导入
-        </n-button>
-      </div>
-    </div>
+    <UploadDropZone
+      v-model:url-input="urlInput"
+      :url-importing="urlImporting"
+      :has-queue="queue.length > 0"
+      @import-url="importFromUrl"
+      @files-selected="addFiles"
+    />
 
     <!-- 预览队列 -->
-    <div v-if="queue.length > 0" class="queue-section">
-      <div class="queue-header">
-        <span>上传队列 ({{ queue.length }})</span>
-        <span style="font-size:12px;color:#999">
-          待上传 {{ queuePending }} · 已完成 {{ queueDone }} · 失败 {{ queueFailed }}
-          <template v-if="queueDups > 0"> · 跳过 {{ queueDups }}</template>
-          <template v-if="uploading && uploadSpeed"> · <span style="color:#6366f1">{{ uploadSpeed }}</span></template>
-        </span>
-        <n-space>
-          <n-button size="tiny" @click="showClearConfirm = true" :disabled="uploading">清空队列</n-button>
-        </n-space>
-      </div>
-
-      <div class="queue-grid">
-        <div
-          v-for="item in queue"
-          :key="item.id"
-          class="queue-card"
-          :class="item.status"
-        >
-          <video
-            v-if="isVideoFile(item.file)"
-            :src="item.thumbnail"
-            muted
-            playsinline
-            preload="metadata"
-            class="queue-thumb"
-            title="点击预览"
-            @click="previewQueueItem(item)"
-          />
-          <img
-            v-else
-            :src="item.thumbnail"
-            :alt="item.file.name"
-            class="queue-thumb"
-          />
-          <div v-if="isVideoFile(item.file)" class="queue-video-badge" title="点击预览">▶</div>
-          <div class="queue-card-status">
-            <template v-if="item.status === 'pending'">⏳</template>
-            <template v-else-if="item.status === 'uploading'">
-              <n-spin size="small" />
-            </template>
-            <template v-else-if="item.status === 'done'">✅</template>
-            <template v-else-if="item.status === 'duplicate'">🔄</template>
-            <template v-else-if="item.status === 'failed'">❌</template>
-          </div>
-          <div class="queue-card-name">{{ item.file.name.slice(0, 20) }}</div>
-          <div v-if="item.status === 'failed'" class="queue-card-error" :title="item.errorMsg">
-            {{ item.errorMsg?.slice(0, 30) }}
-          </div>
-          <n-button
-            v-if="item.status === 'pending'"
-            size="tiny"
-            type="error"
-            @click="removeFromQueue(item.id)"
-          >
-            ✕
-          </n-button>
-        </div>
-      </div>
-    </div>
+    <UploadQueue
+      v-if="queue.length > 0"
+      :queue="queue"
+      :pending="queuePending"
+      :done="queueDone"
+      :failed="queueFailed"
+      :dups="queueDups"
+      :uploading="uploading"
+      :speed="uploadSpeed"
+      @clear="showClearConfirm = true"
+      @remove="removeFromQueue"
+      @preview="previewQueueItem"
+    />
 
     <!-- 元数据 + 选项 -->
-    <div v-if="queue.length > 0" class="meta-section">
-      <n-card size="small" title="上传选项">
-        <div class="meta-grid">
-          <div class="meta-row">
-            <label>来源作者</label>
-            <n-input v-model:value="sourceAuthor" size="small" placeholder="如 Instagram @xxx" />
-          </div>
-          <div class="meta-row">
-            <label>快速标签</label>
-            <n-input v-model:value="quickTags" size="small" placeholder="逗号分隔，如：春季, JK制服" />
-          </div>
-          <div class="meta-row">
-            <label>自动 AI 分析</label>
-            <n-switch v-model:value="autoAnalyze" @update:value="savePrefs" />
-          </div>
-          <div class="meta-row">
-            <label>跳过重复</label>
-            <n-switch v-model:value="skipDuplicates" @update:value="savePrefs" />
-          </div>
-          <div class="meta-row">
-            <label>上传后</label>
-            <n-select
-              v-model:value="afterUpload"
-              :options="[{label:'留在本页',value:'stay'},{label:'查看详情',value:'detail'},{label:'去素材库',value:'home'}]"
-              size="tiny"
-              style="width:140px"
-              @update:value="savePrefs"
-            />
-          </div>
-        </div>
-
-        <n-button
-          type="primary"
-          block
-          :loading="uploading"
-          :disabled="queuePending === 0"
-          style="margin-top:12px"
-          @click="startUpload"
-        >
-          {{ uploading ? '上传中...' : `开始上传 (${queuePending} 个)` }}
-        </n-button>
-      </n-card>
-    </div>
+    <UploadOptionsPanel
+      v-if="queue.length > 0"
+      v-model:source-author="sourceAuthor"
+      v-model:quick-tags="quickTags"
+      v-model:auto-analyze="autoAnalyze"
+      v-model:skip-duplicates="skipDuplicates"
+      v-model:after-upload="afterUpload"
+      :uploading="uploading"
+      :pending="queuePending"
+      @save-prefs="savePrefs"
+      @start="startUpload"
+    />
 
     <!-- 最近上传 -->
-    <div v-if="recentUploads.length > 0" class="recent-section">
-      <h3>最近上传 ({{ recentUploads.length }})</h3>
-      <div class="recent-grid">
-        <div
-          v-for="item in recentUploads"
-          :key="item.id"
-          class="recent-card"
-          @click="goToDetail(item.id)"
-        >
-          <video
-            v-if="item.mediaType === 'video' && !item.thumbnailPath"
-            :src="getFileUrl(item.filePath)"
-            muted
-            playsinline
-            preload="metadata"
-          />
-          <img
-            v-else-if="item.thumbnailPath || item.filePath"
-            :src="getFileUrl(item.thumbnailPath || item.filePath)"
-          />
-          <div class="recent-card-overlay"><span>查看详情</span></div>
-        </div>
-      </div>
-    </div>
+    <RecentUploads
+      v-if="recentUploads.length > 0"
+      :items="recentUploads"
+      @open-detail="goToDetail"
+    />
 
     <!-- 清空队列确认弹窗 -->
     <n-modal
@@ -628,248 +460,5 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 600;
   margin: 0;
-}
-
-/* 上传主区域 */
-.upload-zone {
-  padding: 48px 32px 36px;
-  background: #fff;
-  border: 2px dashed #d1d5db;
-  border-radius: 16px;
-  text-align: center;
-  transition: border-color 0.2s, background 0.2s;
-}
-
-.upload-zone:hover {
-  border-color: #818cf8;
-  background: #fafafe;
-}
-
-.upload-zone.has-queue {
-  padding: 24px 32px 20px;
-}
-
-.upload-icon-wrap {
-  font-size: 56px;
-  margin-bottom: 12px;
-}
-
-.upload-title {
-  margin: 0 0 6px;
-  font-size: 18px;
-  font-weight: 600;
-  color: #374151;
-}
-
-.upload-desc {
-  margin: 0 0 4px;
-  font-size: 14px;
-  color: #9ca3af;
-}
-
-.upload-formats {
-  margin: 0 0 20px;
-  font-size: 12px;
-  color: #c4c4c4;
-}
-
-.upload-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-/* URL 导入 */
-.url-import {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-  max-width: 500px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-/* 队列 */
-.queue-section {
-  margin-top: 16px;
-  background: #fff;
-  border-radius: 10px;
-  padding: 12px;
-}
-
-.queue-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.queue-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
-  max-height: 360px;
-  overflow-y: auto;
-}
-
-.queue-card {
-  position: relative;
-  aspect-ratio: 3/4;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #f5f5f5;
-  border: 2px solid #e5e7eb;
-}
-
-.queue-card.done { border-color: #22c55e; }
-.queue-card.failed { border-color: #ef4444; }
-.queue-card.duplicate { border-color: #f59e0b; }
-
-.queue-card img,
-.queue-card video.queue-thumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.queue-video-badge {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.queue-card-status {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 16px;
-}
-
-.queue-card-name {
-  position: absolute;
-  bottom: 24px;
-  left: 0;
-  right: 0;
-  font-size: 10px;
-  color: #fff;
-  background: rgba(0,0,0,0.6);
-  padding: 2px 4px;
-  text-align: center;
-}
-
-.queue-card-error {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  font-size: 10px;
-  color: #fff;
-  background: rgba(239,68,68,0.8);
-  padding: 2px 4px;
-  text-align: center;
-}
-
-/* 元数据 */
-.meta-section {
-  margin-top: 16px;
-}
-
-.meta-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.meta-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.meta-row label {
-  font-size: 12px;
-  color: #666;
-  width: 80px;
-  flex-shrink: 0;
-  text-align: right;
-}
-
-/* 最近上传 */
-.recent-section {
-  margin-top: 32px;
-}
-
-.recent-section h3 {
-  margin: 0 0 12px;
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.recent-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
-}
-
-.recent-card {
-  position: relative;
-  width: 100%;
-  padding-bottom: 150%;
-  border-radius: 10px;
-  overflow: hidden;
-  cursor: pointer;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.recent-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-}
-
-.recent-card img,
-.recent-card video {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.recent-card-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s;
-  color: #fff;
-  font-size: 14px;
-}
-
-.recent-card:hover .recent-card-overlay {
-  opacity: 1;
 }
 </style>

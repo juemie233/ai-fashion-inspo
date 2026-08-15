@@ -9,18 +9,16 @@ import {
   toggleFavorite,
   deleteInspiration,
   getFileUrl,
-  addTagsToInspiration,
-  batchAddTagsToInspirations,
-  removeTagFromInspiration,
-  suggestOutfitTags,
   analyzeInspiration,
   type InspirationDetailOut,
 } from '@/api/inspirations'
-import { fetchSimilar, type SimilarItemOut } from '@/api/search'
-import { fetchTagsGrouped } from '@/api/tags'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
-import InspirationCard from '@/components/inspiration/InspirationCard.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
+import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
+import SimilarSection from '@/components/inspiration/SimilarSection.vue'
+import { sourceLabel } from '@/utils/sourceLabel'
+import { useOutfitTags } from '@/composables/useOutfitTags'
+import { useSimilarItems } from '@/composables/useSimilarItems'
 
 const route = useRoute()
 const router = useRouter()
@@ -34,6 +32,43 @@ const lightboxOpen = ref(false)
 const loading = ref(true)
 /** 重新分析提交中（防重复点击） */
 const analyzing = ref(false)
+
+// ── 穿搭大标签 composable ──
+const {
+  outfitTagOptions,
+  outfitSelected,
+  outfitAdding,
+  aiSuggesting,
+  aiSuggestions,
+  outfitTags,
+  loadOutfitOptions,
+  addOutfitTags,
+  removeOutfitTag,
+  aiSuggestOutfitTags,
+  confirmOutfitTag,
+  confirmAllOutfitTags,
+  dismissOutfitTag,
+} = useOutfitTags(detail)
+
+// ── 相似素材推荐 + 批量打标 composable ──
+let detailSeq = 0  // 请求序号，防止参数快速切换时旧响应覆盖新数据
+const {
+  similarItems,
+  similarLoading,
+  similarSourceLabel,
+  loadSimilar,
+  batchMode,
+  batchSelectedIds,
+  batchTagNames,
+  batchAdding,
+  enterBatchMode,
+  exitBatchMode,
+  toggleSelectSimilar,
+  toggleSelectAll,
+  toggleFavoriteSimilar,
+  deleteSimilar,
+  batchAddOutfitTags,
+} = useSimilarItems(detail, outfitTagOptions, outfitTags, (seq) => seq === detailSeq)
 
 /** 灯箱可浏览图片列表：当前图 + 相似推荐中的图片（排除视频），支持灯箱左右切换 */
 const lightboxPaths = computed<string[]>(() => {
@@ -49,38 +84,6 @@ const lightboxPaths = computed<string[]>(() => {
   }
   return paths
 })
-
-// ── 相似素材推荐 ──
-const similarItems = ref<SimilarItemOut[]>([])
-const similarLoading = ref(false)
-
-/** 相似来源中文标注 */
-function similarSourceLabel(source: string): string {
-  const labels: Record<string, string> = {
-    visual: '视觉相似',
-    tag: '标签相似',
-    hybrid: '视觉+标签',
-  }
-  return labels[source] || source
-}
-
-/** 加载相似素材推荐（视觉 + 标签加权） */
-async function loadSimilar(id: string, seq: number) {
-  similarLoading.value = true
-  try {
-    const data = await fetchSimilar(id, 10)
-    if (seq !== detailSeq) return  // 过期响应不覆盖新数据
-    similarItems.value = data.similar
-  } catch {
-    // 相似推荐失败不影响详情展示，静默降级
-    if (seq !== detailSeq) return
-    similarItems.value = []
-  } finally {
-    if (seq === detailSeq) similarLoading.value = false
-  }
-}
-
-let detailSeq = 0  // 请求序号，防止参数快速切换时旧响应覆盖新数据
 
 /** 加载素材详情数据（含相似推荐），路由参数变化时复用 */
 async function loadDetail(id: string) {
@@ -128,37 +131,18 @@ async function handleToggleFavorite() {
   }
 }
 
+/** 返回素材库，携带进入详情时的筛选 query，保证删除/返回后筛选状态不丢失 */
+function goHome() {
+  router.push({ path: '/', query: route.query })
+}
+
 /** 删除 */
 async function handleDelete() {
   if (!detail.value) return
   try {
     await deleteInspiration(detail.value.id)
     message.success('已删除')
-    router.push('/')
-  } catch {
-    message.error('删除失败')
-  }
-}
-
-/** 切换相似素材收藏 */
-async function toggleFavoriteSimilar(id: string) {
-  const item = similarItems.value.find((s) => s.inspiration.id === id)?.inspiration
-  if (!item) return
-  try {
-    const newState = !item.is_favorite
-    await toggleFavorite(id, newState)
-    item.is_favorite = newState
-  } catch {
-    message.error('操作失败')
-  }
-}
-
-/** 删除相似素材 */
-async function deleteSimilar(id: string) {
-  try {
-    await deleteInspiration(id)
-    similarItems.value = similarItems.value.filter((s) => s.inspiration.id !== id)
-    message.success('已删除')
+    goHome()
   } catch {
     message.error('删除失败')
   }
@@ -182,18 +166,6 @@ function groupedTags() {
     groups[cat].push(t)
   }
   return groups
-}
-
-/** 来源类型中文映射 */
-function sourceLabel(type: string): string {
-  const labels: Record<string, string> = {
-    xiaohongshu: '小红书',
-    douyin: '抖音',
-    scraper: '自动采集',
-    manual_upload: '手动上传',
-    browser_extension: '浏览器插件',
-  }
-  return labels[type] || type
 }
 
 /** 分析状态文本 */
@@ -254,191 +226,6 @@ async function reanalyze() {
 function goSearchByTag(name: string) {
   router.push({ path: '/search', query: { q: name } })
 }
-
-// ===== 穿搭大标签 =====
-const outfitTagOptions = ref<{ label: string; value: string }[]>([])
-const outfitSelected = ref<string[]>([])
-const outfitAdding = ref(false)
-const aiSuggesting = ref(false)
-const aiSuggestions = ref<string[]>([])
-
-/** 当前素材的穿搭大标签 */
-function outfitTags() {
-  if (!detail.value) return []
-  return detail.value.tags.filter((t) => t.tag.category === 'outfit')
-}
-
-/** 加载已有大标签作为选择项 */
-async function loadOutfitOptions() {
-  try {
-    const groups = await fetchTagsGrouped()
-    const outfit = groups.find((g) => g.category === 'outfit')
-    outfitTagOptions.value = (outfit?.tags || []).map((t) => ({ label: t.name, value: t.name }))
-  } catch { /* 静默 */ }
-}
-
-/** 手动添加大标签（可多选，可从已有标签中选择或输入新建） */
-async function addOutfitTags() {
-  if (!detail.value || outfitSelected.value.length === 0) return
-  outfitAdding.value = true
-  try {
-    await addTagsToInspiration(detail.value.id, outfitSelected.value, 'outfit', 'manual')
-    outfitSelected.value = []
-    message.success('已添加大标签')
-    detail.value = await fetchInspiration(detail.value.id)
-    loadOutfitOptions()
-  } catch {
-    message.error('添加失败')
-  } finally {
-    outfitAdding.value = false
-  }
-}
-
-/** 输入新大标签后按两次回车快速添加：第二次回车（输入框已空且有待添加标签）触发添加 */
-function onOutfitEnter(e: KeyboardEvent) {
-  const inputText = (e.target as HTMLInputElement | null)?.value?.trim() ?? ''
-  if (inputText === '' && outfitSelected.value.length > 0 && !outfitAdding.value) {
-    e.preventDefault()
-    e.stopPropagation()
-    addOutfitTags()
-  }
-}
-
-/** 删除大标签 */
-async function removeOutfitTag(tagId: number) {
-  if (!detail.value) return
-  try {
-    await removeTagFromInspiration(detail.value.id, tagId)
-    detail.value = await fetchInspiration(detail.value.id)
-    message.success('已移除大标签')
-  } catch {
-    message.error('移除失败')
-  }
-}
-
-/** AI 建议大标签（只建议不入库） */
-async function aiSuggestOutfitTags() {
-  if (!detail.value) return
-  aiSuggesting.value = true
-  aiSuggestions.value = []
-  try {
-    const data = await suggestOutfitTags(detail.value.id)
-    aiSuggestions.value = data.suggestions || []
-    if (aiSuggestions.value.length === 0) {
-      message.info('AI 认为该穿搭不够有特色，未给出大标签建议')
-    }
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || 'AI 建议失败')
-  } finally {
-    aiSuggesting.value = false
-  }
-}
-
-/** 确认入库某条 AI 建议 */
-async function confirmOutfitTag(name: string) {
-  if (!detail.value) return
-  try {
-    await addTagsToInspiration(detail.value.id, [name], 'outfit', 'ai_generated')
-    aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
-    detail.value = await fetchInspiration(detail.value.id)
-    message.success(`已添加「${name}」`)
-  } catch {
-    message.error('添加失败')
-  }
-}
-
-/** 一键确认全部 AI 建议入库 */
-async function confirmAllOutfitTags() {
-  if (!detail.value || aiSuggestions.value.length === 0) return
-  const names = [...aiSuggestions.value]
-  try {
-    await addTagsToInspiration(detail.value.id, names, 'outfit', 'ai_generated')
-    aiSuggestions.value = []
-    detail.value = await fetchInspiration(detail.value.id)
-    message.success(`已全部入库 ${names.length} 个大标签`)
-  } catch {
-    message.error('批量入库失败')
-  }
-}
-
-/** 丢弃某条 AI 建议 */
-function dismissOutfitTag(name: string) {
-  aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
-}
-
-// ===== 相似素材批量添加大标签 =====
-const batchMode = ref(false)                 // 是否处于批量选择模式
-const batchSelectedIds = ref<string[]>([])   // 勾选的相似素材 ID
-const batchTagNames = ref<string[]>([])      // 要批量添加的大标签（预填当前素材大标签）
-const batchAdding = ref(false)
-
-/** 进入批量模式：预填当前素材已有的大标签，清空勾选 */
-function enterBatchMode() {
-  batchSelectedIds.value = []
-  const current = outfitTags().map((t) => t.tag.name)
-  // 确保当前素材大标签在可选项中（AI 建议入库的标签可能尚未进 options）
-  for (const name of current) {
-    if (!outfitTagOptions.value.some((o) => o.value === name)) {
-      outfitTagOptions.value.push({ label: name, value: name })
-    }
-  }
-  batchTagNames.value = current
-  batchMode.value = true
-}
-
-/** 退出批量模式 */
-function exitBatchMode() {
-  batchMode.value = false
-  batchSelectedIds.value = []
-  batchTagNames.value = []
-}
-
-/** 切换单个相似素材的勾选 */
-function toggleSelectSimilar(id: string) {
-  const idx = batchSelectedIds.value.indexOf(id)
-  if (idx >= 0) batchSelectedIds.value.splice(idx, 1)
-  else batchSelectedIds.value.push(id)
-}
-
-/** 全选 / 取消全选 */
-function toggleSelectAll() {
-  const allIds = similarItems.value.map((it) => it.inspiration.id)
-  const allSelected = allIds.length > 0 && allIds.every((id) => batchSelectedIds.value.includes(id))
-  batchSelectedIds.value = allSelected ? [] : [...allIds]
-}
-
-/** 批量添加大标签到勾选的相似素材，成功后刷新相似列表 */
-async function batchAddOutfitTags() {
-  if (batchSelectedIds.value.length === 0 || batchTagNames.value.length === 0) return
-  batchAdding.value = true
-  try {
-    const { affected, not_found, skipped_existing } = await batchAddTagsToInspirations(
-      batchSelectedIds.value,
-      batchTagNames.value,
-      'outfit',
-      'manual',
-    )
-    // 明细提示：区分「实际新增」「素材不存在」「关联已存在」
-    const parts = [`已为 ${affected} 个相似素材添加大标签`]
-    if (not_found > 0) parts.push(`${not_found} 个素材不存在`)
-    if (skipped_existing > 0) parts.push(`${skipped_existing} 条关联已存在`)
-    message.success(parts.join('，'))
-    exitBatchMode()
-    if (detail.value) await refreshSimilar(detail.value.id)
-  } catch {
-    message.error('批量添加失败')
-  } finally {
-    batchAdding.value = false
-  }
-}
-
-/** 刷新相似素材（批量加标签后卡片标签与相似度可能变化） */
-async function refreshSimilar(id: string) {
-  try {
-    const data = await fetchSimilar(id, 10)
-    similarItems.value = data.similar
-  } catch { /* 静默降级 */ }
-}
 </script>
 
 <template>
@@ -447,7 +234,7 @@ async function refreshSimilar(id: string) {
       <template v-if="detail">
         <!-- 面包屑 -->
         <n-breadcrumb style="margin-bottom: 16px">
-          <n-breadcrumb-item @click="router.push('/')">素材库</n-breadcrumb-item>
+          <n-breadcrumb-item @click="goHome()">素材库</n-breadcrumb-item>
           <n-breadcrumb-item>素材详情</n-breadcrumb-item>
         </n-breadcrumb>
 
@@ -541,74 +328,21 @@ async function refreshSimilar(id: string) {
             </div>
 
             <!-- 穿搭大标签 -->
-            <div class="outfit-tags-section">
-              <div class="outfit-tags-header">
-                <h4>穿搭大标签</h4>
-                <n-button size="tiny" type="primary" ghost :loading="aiSuggesting" @click="aiSuggestOutfitTags">
-                  ✨ AI 生成
-                </n-button>
-              </div>
-
-              <div v-if="outfitTags().length" class="tag-chips" style="margin-bottom:8px">
-                <n-tag
-                  v-for="t in outfitTags()"
-                  :key="t.tag.id"
-                  size="small"
-                  type="error"
-                  closable
-                  class="tag-clickable"
-                  @close="removeOutfitTag(t.tag.id)"
-                  @click="goSearchByTag(t.tag.name)"
-                >
-                  {{ t.tag.name }}
-                </n-tag>
-              </div>
-              <div v-else style="font-size:12px;color:#999;margin-bottom:8px">暂无大标签</div>
-
-              <div class="outfit-tag-add" @keydown.enter.capture="onOutfitEnter">
-                <n-select
-                  v-model:value="outfitSelected"
-                  multiple
-                  filterable
-                  tag
-                  size="small"
-                  placeholder="选择或输入大标签，如「白色系穿搭」"
-                  :options="outfitTagOptions"
-                  style="flex:1"
-                />
-                <n-button
-                  size="small"
-                  :loading="outfitAdding"
-                  :disabled="outfitSelected.length === 0"
-                  @click="addOutfitTags"
-                >添加</n-button>
-              </div>
-              <div class="outfit-tag-hint">输入新标签后按两次回车即可快速添加</div>
-
-              <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
-                <div class="outfit-tag-suggestions-header">
-                  <span style="font-size:12px;color:#999">AI 建议（点击标签入库，点 ✕ 丢弃）：</span>
-                  <n-button
-                    size="tiny"
-                    type="warning"
-                    secondary
-                    @click="confirmAllOutfitTags"
-                  >一键全部入库 ({{ aiSuggestions.length }})</n-button>
-                </div>
-                <div class="tag-chips">
-                  <span
-                    v-for="name in aiSuggestions"
-                    :key="name"
-                    style="display:inline-flex;align-items:center;gap:2px;margin:0 6px 4px 0"
-                  >
-                    <n-tag size="small" type="warning" style="cursor:pointer" @click="confirmOutfitTag(name)">
-                      {{ name }}
-                    </n-tag>
-                    <n-button size="tiny" text type="error" @click="dismissOutfitTag(name)">✕</n-button>
-                  </span>
-                </div>
-              </div>
-            </div>
+            <OutfitTagSection
+              :tags="outfitTags()"
+              :options="outfitTagOptions"
+              v-model:selected="outfitSelected"
+              :adding="outfitAdding"
+              :ai-suggesting="aiSuggesting"
+              :ai-suggestions="aiSuggestions"
+              @add="addOutfitTags"
+              @remove="removeOutfitTag"
+              @tag-click="goSearchByTag"
+              @ai-suggest="aiSuggestOutfitTags"
+              @confirm="confirmOutfitTag"
+              @confirm-all="confirmAllOutfitTags"
+              @dismiss="dismissOutfitTag"
+            />
 
             <!-- 标签分组 -->
             <div v-if="detail.tags.length > 0" class="tags-section">
@@ -649,71 +383,23 @@ async function refreshSimilar(id: string) {
         </div>
 
         <!-- 相似素材推荐 -->
-        <div class="similar-section">
-          <div class="similar-header">
-            <h4>相似素材推荐</h4>
-            <n-spin v-if="similarLoading" size="small" />
-            <span v-else-if="similarItems.length === 0" class="similar-empty-hint">
-              暂无相似素材（需要先回填向量，或在图像向量不可用时依赖标签匹配）
-            </span>
-            <span v-else class="similar-count">{{ similarItems.length }} 个</span>
-            <n-button
-              v-if="similarItems.length > 0 && !batchMode"
-              size="tiny"
-              type="error"
-              ghost
-              style="margin-left:auto"
-              @click="enterBatchMode"
-            >
-              批量添加大标签
-            </n-button>
-          </div>
-
-          <!-- 批量添加操作栏 -->
-          <div v-if="batchMode" class="batch-toolbar">
-            <span class="batch-selected-count">
-              已选 {{ batchSelectedIds.length }} / {{ similarItems.length }}
-            </span>
-            <n-button size="tiny" quaternary @click="toggleSelectAll">
-              {{ batchSelectedIds.length === similarItems.length ? '取消全选' : '全选' }}
-            </n-button>
-            <n-select
-              v-model:value="batchTagNames"
-              multiple
-              filterable
-              tag
-              size="small"
-              placeholder="选择或输入大标签"
-              :options="outfitTagOptions"
-              style="flex:1; min-width:200px"
-            />
-            <n-button
-              size="small"
-              type="error"
-              :loading="batchAdding"
-              :disabled="batchSelectedIds.length === 0 || batchTagNames.length === 0"
-              @click="batchAddOutfitTags"
-            >
-              添加（{{ batchSelectedIds.length }}）
-            </n-button>
-            <n-button size="small" @click="exitBatchMode">取消</n-button>
-          </div>
-
-          <div v-if="similarItems.length > 0" class="similar-grid">
-            <InspirationCard
-              v-for="item in similarItems"
-              :key="item.inspiration.id"
-              :item="item.inspiration"
-              :badge="`${Math.round(item.similarity * 100)}% · ${similarSourceLabel(item.match_source)}`"
-              :show-actions="!batchMode"
-              :selectable="batchMode"
-              :selected="batchSelectedIds.includes(item.inspiration.id)"
-              @toggle-select="toggleSelectSimilar(item.inspiration.id)"
-              @toggle-favorite="toggleFavoriteSimilar(item.inspiration.id)"
-              @delete="deleteSimilar(item.inspiration.id)"
-            />
-          </div>
-        </div>
+        <SimilarSection
+          :items="similarItems"
+          :loading="similarLoading"
+          :batch-mode="batchMode"
+          :batch-selected-ids="batchSelectedIds"
+          v-model:batch-tag-names="batchTagNames"
+          :batch-adding="batchAdding"
+          :options="outfitTagOptions"
+          :similar-source-label="similarSourceLabel"
+          @enter-batch="enterBatchMode"
+          @exit-batch="exitBatchMode"
+          @toggle-select-all="toggleSelectAll"
+          @toggle-select="toggleSelectSimilar"
+          @toggle-favorite="toggleFavoriteSimilar"
+          @delete="deleteSimilar"
+          @batch-add="batchAddOutfitTags"
+        />
       </template>
     </n-spin>
   </div>
@@ -789,104 +475,6 @@ async function refreshSimilar(id: string) {
 /* 下载原图按钮的链接容器 */
 .download-link {
   display: inline-flex;
-}
-
-/* AI 建议一键全部入库的操作行 */
-.outfit-tag-suggestions-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 8px 0 4px;
-}
-
-.similar-section {
-  margin-top: 32px;
-  border-top: 1px solid var(--n-border-color, #eee);
-  padding-top: 16px;
-}
-
-.similar-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.similar-header h4 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.similar-empty-hint {
-  font-size: 12px;
-  color: #999;
-}
-
-.similar-count {
-  font-size: 12px;
-  color: #999;
-}
-
-.batch-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: #fef6f7;
-  border: 1px solid #f0d6dc;
-  border-radius: 8px;
-  flex-wrap: wrap;
-}
-
-.batch-selected-count {
-  font-size: 13px;
-  color: #e0465e;
-  font-weight: 600;
-}
-
-.similar-grid {
-  column-count: 5;
-  column-gap: 12px;
-}
-.similar-grid :deep(.card) {
-  break-inside: avoid;
-  margin-bottom: 12px;
-}
-@media (max-width: 1200px) { .similar-grid { column-count: 4; } }
-@media (max-width: 900px)  { .similar-grid { column-count: 3; } }
-@media (max-width: 600px)  { .similar-grid { column-count: 2; } }
-
-.outfit-tags-section {
-  border: 1px solid #f0d6dc;
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 20px;
-  background: #fef6f7;
-}
-
-.outfit-tags-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.outfit-tags-header h4 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.outfit-tag-add {
-  display: flex;
-  gap: 6px;
-}
-
-.outfit-tag-hint {
-  font-size: 11px;
-  color: #999;
-  margin-top: 6px;
 }
 
 @media (max-width: 900px) {
