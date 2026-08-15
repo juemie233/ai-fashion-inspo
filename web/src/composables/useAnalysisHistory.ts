@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { deleteInspiration as deleteInspirationApi } from '@/api/inspirations'
 import { useNotification } from '@/composables/useNotification'
 import type { HistoryItem } from '@/types/analysis'
 
@@ -151,6 +152,23 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     }
   }
 
+  /** 删除素材本身（连带磁盘文件与全部分析记录，不可恢复）。
+   *
+   * 用于处置质量审核不到位混入的低质量素材：在分析历史中直接删除，
+   * 删除后该素材的日志随外键级联清除，历史列表自动刷新。
+   */
+  async function deleteInspirationFromHistory(inspirationId: string) {
+    try {
+      await deleteInspirationApi(inspirationId)
+      message.success('素材已删除（含文件与分析记录）')
+      loadHistory()
+      options.loadQueue?.()
+      options.loadActiveAnalyses?.()
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '删除素材失败')
+    }
+  }
+
   /** 一键重试所有失败记录 */
   async function retryAllFailed() {
     retryingAll.value = true
@@ -210,6 +228,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     batchRetryHistory,
     onHistoryPageChange,
     deleteLog,
+    deleteInspirationFromHistory,
     retryAllFailed,
     deleteAllFailed,
     abortHistoryRequest,

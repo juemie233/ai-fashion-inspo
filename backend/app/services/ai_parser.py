@@ -103,8 +103,8 @@ def parse_analysis_response(raw: str) -> dict:
     cleaned = re.sub(r'"\s+\]', '\"]', cleaned)          # "value" ] → "value"]
     cleaned = re.sub(r'",\s*"\s*\}', '\"}', cleaned)     # "value", " } → "value"}
     cleaned = re.sub(r'"\s+\}', '\"}', cleaned)          # "value" } → "value"}
-    # 去除尾部逗号（在 ] 或 } 前的逗号）
-    cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+    # 去除尾部逗号（在 ] 或 } 前的逗号；字符串感知，不误删标签名内的 ",}"）
+    cleaned = _strip_trailing_commas(cleaned)
 
     # 策略1：找到所有完整 { ... } 块，按「更像分析结果」打分
     # 评分标准：含有越多预期键（style/items/fit等），得分越高
@@ -156,8 +156,25 @@ def parse_analysis_response(raw: str) -> dict:
     return {}
 
 
+def _strip_trailing_commas(text: str) -> str:
+    """删除结构层的尾部逗号（`]` 或 `}` 前的逗号）。
+
+    仅处理字符串外的逗号：字符串内部内容（如标签名 "黑,}"）不受影响。
+    通过统计匹配位置之前未闭合的双引号个数判断逗号是否位于字符串内。
+    """
+
+    def _repl(m):
+        prefix = text[: m.start()]
+        # 忽略转义引号后统计未闭合引号；奇数个说明逗号在字符串内
+        if prefix.replace('\\"', "").count('"') % 2 == 1:
+            return m.group(0)  # 字符串内，保留原样
+        return m.group(1)  # 结构层，删除逗号（保留空白与闭合符）
+
+    return re.sub(r",(\s*[}\]])", _repl, text)
+
+
 def repair_truncated_json(text: str) -> str | None:
-    """尝试修复被截断的 JSON（模型输出超过 num_predict 限制）。"""
+    """尝试修复被截断的 JSON（模型输出超限或提前结束）。"""
     start = text.find("{")
     if start == -1:
         return None
@@ -187,6 +204,10 @@ def repair_truncated_json(text: str) -> str | None:
 
     # 补齐缺失的闭合符
     fragment += ''.join(reversed(brackets))
+
+    # 补全后清理结构层尾部逗号（如 "...]," → "...]"），
+    # JSON 不允许尾部逗号；字符串感知，不触碰字符串内部内容（如 "黑,}"）。
+    fragment = _strip_trailing_commas(fragment)
 
     return fragment if fragment.startswith('{') else None
 

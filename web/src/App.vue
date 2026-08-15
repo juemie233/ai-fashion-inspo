@@ -6,10 +6,12 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 
 <template>
   <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme="null">
-    <n-message-provider>
-      <AppLayout>
-        <router-view />
-      </AppLayout>
-    </n-message-provider>
+    <n-dialog-provider>
+      <n-message-provider>
+        <AppLayout>
+          <router-view />
+        </AppLayout>
+      </n-message-provider>
+    </n-dialog-provider>
   </n-config-provider>
 </template>

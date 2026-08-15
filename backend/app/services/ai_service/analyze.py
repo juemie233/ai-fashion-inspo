@@ -113,8 +113,8 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         if not tags_data:
             if looks_truncated(raw_response):
                 error_msg = (
-                    "AI 输出的 JSON 被截断（可能因思考模型 num_predict 不足），"
-                    "请增大 num_predict 或关闭 think"
+                    "AI 输出的 JSON 不完整（提前截断），自动修复未能恢复完整数据。"
+                    "可尝试点击重试；若反复失败，可增大该模型的 num_predict"
                 )
             else:
                 error_msg = "AI 响应无法解析为 JSON，原始输出无法识别"

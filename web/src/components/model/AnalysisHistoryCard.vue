@@ -2,7 +2,8 @@
 /** 分析历史卡片：筛选、批量操作、历史表格与分页。 */
 
 import { h, computed } from 'vue'
-import { NTag, NButton, NPopconfirm, NPopover, useMessage, type DataTableColumns } from 'naive-ui'
+import { NTag, NButton, NIcon, NPopconfirm, NPopover, useMessage, type DataTableColumns } from 'naive-ui'
+import { GitCompareOutline, RefreshOutline, TrashBinOutline, TrashOutline } from '@vicons/ionicons5'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 import type { HistoryItem } from '@/types/analysis'
@@ -39,8 +40,10 @@ const emit = defineEmits<{
   (e: 'batchRetry'): void
   (e: 'viewDetail', logId: number): void
   (e: 'viewCompare', inspirationId: string): void
+  (e: 'previewImage', imagePath: string): void
   (e: 'retryAnalysis', inspirationId: string): void
   (e: 'deleteLog', logId: number): void
+  (e: 'deleteInspiration', inspirationId: string): void
   (e: 'updatePage', page: number): void
   (e: 'retryAllFailed'): void
   (e: 'deleteAllFailed'): void
@@ -114,17 +117,38 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
       const thumb = row.thumbnail_path || row.file_path
       if (!thumb) return '-'
       const full = row.file_path || row.thumbnail_path
-      return h(NPopover, { trigger: 'hover', placement: 'right', style: { padding: '6px' } }, {
-        trigger: () => h('img', { src: getFileUrl(thumb), style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block' }),
-        default: () => h('img', { src: getFileUrl(full!), style: 'max-width:320px;max-height:420px;border-radius:6px;display:block' }),
+      // 悬停快速预览（尺寸限制在视口内，不出屏）；点击缩略图打开全屏灯箱动态浏览
+      return h(NPopover, { trigger: 'hover', placement: 'top', showArrow: true }, {
+        trigger: () => h('img', {
+          src: getFileUrl(thumb),
+          title: '悬停快速预览，点击全屏浏览',
+          style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
+          onClick: () => emit('previewImage', full!),
+        }),
+        default: () => h('div', { style: 'display:flex;justify-content:center;align-items:center;padding:8px' }, [
+          h('img', {
+            src: getFileUrl(full!),
+            style: 'max-width:min(720px, 72vw);max-height:min(900px, 80vh);border-radius:8px;display:block',
+          }),
+        ]),
       })
     },
   },
   {
     title: '模型',
     key: 'model_name',
-    width: 130,
-    render: (row: HistoryItem) => row.model_name,
+    width: 64,
+    render: (row: HistoryItem) => h(NPopover, {
+      trigger: 'hover',
+      placement: 'top-start',
+      style: { maxWidth: '360px' },
+    }, {
+      // 单元格内最多显示约 3 个字符，其余省略；完整模型名悬停气泡阅读
+      trigger: () => h('span', {
+        style: 'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
+      }, row.model_name),
+      default: () => h('span', { style: 'font-size:12px;word-break:break-all' }, row.model_name),
+    }),
   },
   {
     title: '状态',
@@ -150,14 +174,30 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
   {
     title: '失败原因',
     key: 'error',
-    width: 180,
-    render: (row: HistoryItem) => row.error
-      ? h('span', {
-        title: row.error,
-        style: 'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;cursor:pointer;text-decoration:underline;text-underline-offset:2px',
-        onClick: () => copyText(row.error!),
-      }, row.error)
-      : h('span', { style: 'font-size:12px;color:#999' }, '-'),
+    width: 76,
+    render: (row: HistoryItem) => {
+      const err = row.error
+      return err
+        ? h(NPopover, {
+          trigger: 'hover',
+          placement: 'top-start',
+          style: { maxWidth: '480px' },
+        }, {
+          // 单元格内最多显示 3 个字符，其余省略；完整内容悬停气泡阅读
+          trigger: () => h('span', {
+            style: 'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
+          }, err),
+          default: () => h('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+            h('div', {
+              style: 'font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto',
+            }, err),
+            h('div', { style: 'display:flex;justify-content:flex-end' }, [
+              h(NButton, { size: 'tiny', quaternary: true, onClick: () => copyText(err) }, '复制'),
+            ]),
+          ]),
+        })
+        : h('span', { style: 'font-size:12px;color:#999' }, '-')
+    },
   },
   {
     title: '耗时',
@@ -174,13 +214,43 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
   {
     title: '操作',
     key: 'actions',
-    width: 140,
-    render: (row: HistoryItem) => h('span', { style: 'display:flex;gap:4px' }, [
+    width: 200,
+    render: (row: HistoryItem) => h('span', { style: 'display:flex;gap:4px;align-items:center' }, [
       h(NButton, { size: 'tiny', onClick: () => emit('viewDetail', row.id) }, row.status === 'success' ? '详情' : '原始输出'),
-      h(NButton, { size: 'tiny', onClick: () => emit('viewCompare', row.inspiration_id) }, '对比'),
-      row.status === 'error' ? h(NButton, { size: 'tiny', onClick: () => emit('retryAnalysis', row.inspiration_id) }, '重试') : null,
+      row.status === 'error'
+        ? h(NButton, {
+          size: 'tiny',
+          secondary: true,
+          title: '重试分析',
+          onClick: () => emit('retryAnalysis', row.inspiration_id),
+        }, { icon: () => h(NIcon, { component: RefreshOutline }) })
+        : null,
+      h(NButton, {
+        size: 'tiny',
+        secondary: true,
+        title: '对比分析结果',
+        onClick: () => emit('viewCompare', row.inspiration_id),
+      }, { icon: () => h(NIcon, { component: GitCompareOutline }) }),
       h(NPopconfirm, { onPositiveClick: () => emit('deleteLog', row.id) },
-        { trigger: () => h(NButton, { size: 'tiny', type: 'error', secondary: true }, '删除'), default: () => '确定删除此记录？' },
+        {
+          trigger: () => h(NButton, {
+            size: 'tiny',
+            type: 'warning',
+            secondary: true,
+            title: '删除分析记录',
+          }, { icon: () => h(NIcon, { component: TrashOutline }) }),
+          default: () => '确定删除此分析记录？此操作不可恢复。',
+        },
+      ),
+      h(NPopconfirm, { onPositiveClick: () => emit('deleteInspiration', row.inspiration_id) },
+        {
+          trigger: () => h(NButton, {
+            size: 'tiny',
+            type: 'error',
+            title: '删除素材（含图片文件，不可恢复）',
+          }, { icon: () => h(NIcon, { component: TrashBinOutline }) }),
+          default: () => '删除该素材？将同时删除图片文件与全部分析记录，此操作不可恢复！',
+        },
       ),
     ]),
   },

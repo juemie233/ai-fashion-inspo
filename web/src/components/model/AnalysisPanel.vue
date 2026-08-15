@@ -1,12 +1,13 @@
 <script setup lang="ts">
 /** 标签分析面板：分析队列、历史记录、分析详情与结果对比。 */
 
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import AnalysisStatsCard from '@/components/model/AnalysisStatsCard.vue'
 import AnalysisQueueOverview from '@/components/model/AnalysisQueueOverview.vue'
 import AnalysisHistoryCard from '@/components/model/AnalysisHistoryCard.vue'
 import AnalysisDetailModal from '@/components/model/AnalysisDetailModal.vue'
 import AnalysisCompareModal from '@/components/model/AnalysisCompareModal.vue'
+import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { useAnalysisQueue } from '@/composables/useAnalysisQueue'
 import { useAnalysisHistory } from '@/composables/useAnalysisHistory'
 import { useAnalysisDetail } from '@/composables/useAnalysisDetail'
@@ -39,11 +40,20 @@ const {
   historySearchId, historyLoading, selectedHistoryIds, historyModelNames,
   clearingFailed, retryingAll, loadHistory, filterHistory, filterByModel, searchById,
   onHistoryPageChange, batchDeleteHistory, batchRetryHistory, toggleSelectHistory, selectAllHistory,
-  deleteLog, retryAllFailed, deleteAllFailed,
+  deleteLog, deleteInspirationFromHistory, retryAllFailed, deleteAllFailed,
 } = historyApi
 
 const { detailVisible, detailLoading, currentDetail, viewDetail } = detailApi
 const { compareVisible, compareLoading, compareData, viewCompare } = compareApi
+
+/** 大图灯箱：点击历史缩略图打开，居中全屏动态浏览（缩放/拖动/Esc 关闭） */
+const lightboxVisible = ref(false)
+const lightboxImage = ref('')
+
+function openLightbox(imagePath: string) {
+  lightboxImage.value = imagePath
+  lightboxVisible.value = true
+}
 
 onMounted(() => {
   queueApi.loadQueue()
@@ -105,8 +115,10 @@ onUnmounted(() => {
       @batch-retry="batchRetryHistory"
       @view-detail="viewDetail"
       @view-compare="viewCompare"
+      @preview-image="openLightbox"
       @retry-analysis="retryAnalysis"
       @delete-log="deleteLog"
+      @delete-inspiration="deleteInspirationFromHistory"
       @update-page="onHistoryPageChange"
       @retry-all-failed="retryAllFailed"
       @delete-all-failed="deleteAllFailed"
@@ -118,5 +130,8 @@ onUnmounted(() => {
 
     <!-- 分析结果对比弹窗 -->
     <AnalysisCompareModal v-model:visible="compareVisible" :loading="compareLoading" :data="compareData" />
+
+    <!-- 大图灯箱：点击历史缩略图全屏浏览 -->
+    <ImageLightbox v-model:show="lightboxVisible" :image-path="lightboxImage" />
   </div>
 </template>
