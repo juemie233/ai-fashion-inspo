@@ -53,6 +53,12 @@ const router = createRouter({
       component: () => import('@/views/AdminView.vue'),
       meta: { title: '素材管理' },
     },
+    {
+      path: '/tasks',
+      name: 'tasks',
+      component: () => import('@/views/TaskManageView.vue'),
+      meta: { title: '任务管理' },
+    },
   ],
 })
 
