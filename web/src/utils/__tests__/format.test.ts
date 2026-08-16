@@ -7,6 +7,7 @@ import {
   formatMs,
   formatSize,
   fmtSize,
+  normalizeModelName,
   smartSize,
 } from '../format'
 
@@ -56,5 +57,20 @@ describe('formatDate', () => {
 
   it('合法日期', () => {
     expect(formatDate('2026-08-16T10:00:00Z')).toContain('2026')
+  })
+})
+
+describe('normalizeModelName', () => {
+  it('无 tag 补 :latest', () => {
+    expect(normalizeModelName('all-minilm')).toBe('all-minilm:latest')
+  })
+
+  it('已有 tag 保持不变', () => {
+    expect(normalizeModelName('all-minilm:latest')).toBe('all-minilm:latest')
+    expect(normalizeModelName('qwen3-vl:8b-instruct')).toBe('qwen3-vl:8b-instruct')
+  })
+
+  it('空字符串原样返回', () => {
+    expect(normalizeModelName('')).toBe('')
   })
 })

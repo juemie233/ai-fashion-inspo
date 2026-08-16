@@ -10,7 +10,8 @@ import pytest
 TAGS_PAYLOAD = {
     "models": [
         {"name": "qwen3-vl:8b-instruct", "size": 8000000000, "modified_at": "2025-01-01T00:00:00Z"},
-        {"name": "all-minilm", "size": 80000000, "modified_at": "2025-01-02T00:00:00Z"},
+        # 真实 Ollama 对无 tag 模型返回 :latest 后缀，配置里的 all-minilm 需与之等价匹配
+        {"name": "all-minilm:latest", "size": 80000000, "modified_at": "2025-01-02T00:00:00Z"},
         {"name": "llava:7b", "size": 4000000000, "modified_at": "2025-01-03T00:00:00Z"},
     ]
 }
@@ -84,7 +85,8 @@ def test_list_models_marks_embedding(client):
     assert data["active_model"] == "qwen3-vl:8b-instruct"
     assert data["embedding_model"] == "all-minilm"
     by_name = {m["name"]: m for m in data["models"]}
-    assert by_name["all-minilm"]["is_embedding"] is True
+    # 配置的 all-minilm 与实际安装的 all-minilm:latest 等价，应正确标记为嵌入模型
+    assert by_name["all-minilm:latest"]["is_embedding"] is True
     assert by_name["qwen3-vl:8b-instruct"]["is_active"] is True
     assert by_name["llava:7b"]["is_embedding"] is False
     assert by_name["llava:7b"]["is_active"] is False

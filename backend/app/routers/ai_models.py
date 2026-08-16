@@ -27,14 +27,25 @@ router = APIRouter()
 # ============ 模型管理 ============
 
 
+def _normalize_model_name(name: str) -> str:
+    """规范化模型名：无 tag 时补 :latest，使 all-minilm 与 all-minilm:latest 等价。
+
+    Ollama 对不含 tag 的模型名默认按 ``:latest`` 处理，因此配置里的 ``all-minilm``
+    与 /api/tags 返回的 ``all-minilm:latest`` 实为同一模型，比较时需先规范化。
+    """
+    if not name:
+        return name
+    return name if ":" in name else f"{name}:latest"
+
+
 async def _ensure_model_installed(model_name: str) -> None:
     """校验模型已安装（调用 Ollama /api/tags），未安装抛 404、连接失败抛 503。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{settings.ollama_base_url}/api/tags")
             models = resp.json().get("models", [])
-            names = [m["name"] for m in models]
-            if model_name not in names:
+            names = [_normalize_model_name(m["name"]) for m in models]
+            if _normalize_model_name(model_name) not in names:
                 raise HTTPException(status_code=404, detail=f"模型 '{model_name}' 未安装")
     except HTTPException:
         raise
@@ -78,8 +89,8 @@ async def list_models():
                 "size_bytes": m.get("size", 0),
                 "size_display": _format_size(m.get("size", 0)),
                 "modified": m.get("modified_at", ""),
-                "is_active": name == active,
-                "is_embedding": name == embedding,
+                "is_active": _normalize_model_name(name) == _normalize_model_name(active),
+                "is_embedding": _normalize_model_name(name) == _normalize_model_name(embedding),
                 "vram_used": gpu_info.get(name, {}).get("vram_used", 0),
                 "loaded": gpu_info.get(name, {}).get("loaded", False),
             })

@@ -48,6 +48,12 @@ export function formatUptime(seconds: number | null | undefined): string {
   return restHours > 0 ? `${days} 天 ${restHours} 小时` : `${days} 天`
 }
 
+/** 规范化模型名：无 tag 时补 :latest，使 all-minilm 与 all-minilm:latest 等价。 */
+export function normalizeModelName(name: string): string {
+  if (!name) return name
+  return name.includes(':') ? name : `${name}:latest`
+}
+
 /** 自适应大小格式化：数值保持在 1-1000 范围 + 单位 */
 export function smartSize(bytes: number): { value: string; unit: string } {
   if (bytes < 1024) return { value: String(bytes), unit: 'B' }

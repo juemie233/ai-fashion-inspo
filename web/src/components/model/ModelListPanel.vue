@@ -12,7 +12,7 @@ import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
 import { useGpuMonitor } from '@/composables/useGpuMonitor'
 import { useAiModelsStore, type OllamaModel } from '@/stores/aiModels'
-import { formatBytes, formatVram, formatMs, formatDate, formatUptime } from '@/utils/format'
+import { formatBytes, formatVram, formatMs, formatDate, formatUptime, normalizeModelName } from '@/utils/format'
 
 echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer])
 
@@ -37,7 +37,7 @@ async function loadAiStatus() {
 /** 配置的文本嵌入模型是否缺失（未安装） */
 const embeddingMissing = computed(() => {
   if (!ollamaConnected.value || !embeddingModel.value) return false
-  return !models.value.some((m) => m.name === embeddingModel.value)
+  return !models.value.some((m) => normalizeModelName(m.name) === normalizeModelName(embeddingModel.value))
 })
 
 // ===== GPU 显存监控（自动轮询 + 趋势图） =====
