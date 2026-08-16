@@ -27,6 +27,7 @@ from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import TRASH_REASONS, InspirationUpdate
 from app.services.file_service import (
     delete_files,
+    delete_files_counting,
     generate_thumbnail,
     move_to_trash,
     restore_from_trash,
@@ -548,15 +549,7 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
     freed_bytes = 0
     for insp in rejected:
-        for p in (insp.file_path, insp.thumbnail_path):
-            if p:
-                full = settings.storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception as e:
-                    logger.warning(f"删除文件失败（忽略）: {full} — {e}")
+        freed_bytes += delete_files_counting(insp.file_path, insp.thumbnail_path)
 
     # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
     # 避免批量删除后产生孤儿向量
@@ -1066,6 +1059,9 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     conds = [Inspiration.deleted_at.isnot(None)]
     if only_expired:
+        # 保留期 <= 0 表示禁用自动回收：不清理任何素材，直接返回
+        if settings.trash_retention_days <= 0:
+            return {"deleted": 0, "freed_bytes": 0, "message": "自动回收已禁用"}
         cutoff = utcnow() - timedelta(days=settings.trash_retention_days)
         conds.append(Inspiration.deleted_at < cutoff)
 
@@ -1085,15 +1081,7 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     freed_bytes = 0
     for insp in items:
-        for p in (insp.file_path, insp.thumbnail_path):
-            if p:
-                full = settings.storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception as e:
-                    logger.warning(f"删除文件失败（忽略）: {full} — {e}")
+        freed_bytes += delete_files_counting(insp.file_path, insp.thumbnail_path)
 
     # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
     await vector_store.delete_inspiration_vectors_batch(deleted_ids)

@@ -19,6 +19,7 @@ from app.config import settings
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag
 from app.models.task import TaskQueue
+from app.services.file_service import delete_files_counting
 from app.services.scraper_seen_service import seal_urls
 from app.services.task_runners.common import (
     _chunked,
@@ -166,18 +167,10 @@ def _score_groups(
 def _delete_files(
     files_to_delete: list[tuple[str, str | None]], storage_root: Path
 ) -> int:
-    """物理删除冗余文件并统计释放空间（删除失败仅跳过，不抛异常）。"""
+    """物理删除冗余文件并统计释放空间（删除失败仅记日志，不抛异常）。"""
     freed_bytes = 0
     for fpath, thumb in files_to_delete:
-        for p in (fpath, thumb):
-            if p:
-                full = storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
+        freed_bytes += delete_files_counting(fpath, thumb, storage_root=storage_root)
     return freed_bytes
 
 

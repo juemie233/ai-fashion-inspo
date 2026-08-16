@@ -9,9 +9,9 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
+from app.services.file_service import delete_files_counting
 from app.services.scraper_seen_service import seal_urls
 from app.services.task_runners.common import _delete_inspiration_vectors, utcnow
 
@@ -74,8 +74,6 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     )
     files_to_delete = result.all()
 
-    storage_root = settings.storage_root
-
     # 写入墓碑表（防止被删除素材的 URL 被重新采集）
     urls_to_seal = [r[3] for r in files_to_delete if r[3]]
     await seal_urls(db, urls_to_seal)
@@ -93,15 +91,7 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
 
     freed_bytes = 0
     for _fid, fpath, thumb, _surl in files_to_delete:
-        for p in (fpath, thumb):
-            if p:
-                full = storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
+        freed_bytes += delete_files_counting(fpath, thumb)
 
     task.result = {
         "inspiration_ids": inspiration_ids,

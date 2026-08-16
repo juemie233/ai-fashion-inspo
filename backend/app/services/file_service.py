@@ -235,6 +235,28 @@ def delete_files(file_path: str, thumbnail_path: str | None = None) -> None:
             _log.warning(f"删除缩略图失败: {full_thumb} — {e}")
 
 
+def delete_files_counting(*paths: str | None, storage_root: Path | None = None) -> int:
+    """删除多个存储相对路径对应的文件，返回释放的字节数（失败仅记日志）。
+
+    统一「物理删除 + 统计释放空间」的重复实现（此前散落在 delete_rejected /
+    purge_trash / deduplicate / batch_delete 等 4 处，且部分静默吞异常）。
+    storage_root 缺省为 settings.storage_root，测试可传入临时目录。
+    """
+    root = storage_root or settings.storage_root
+    freed = 0
+    for rel in paths:
+        if not rel:
+            continue
+        full = root / rel
+        try:
+            if full.exists():
+                freed += full.stat().st_size
+                full.unlink()
+        except Exception as e:
+            _log.warning(f"删除文件失败（忽略）: {full} — {e}")
+    return freed
+
+
 def get_full_path(relative_path: str) -> Path:
     """将存储相对路径转换为绝对文件系统路径。"""
     return settings.storage_root / relative_path
