@@ -118,7 +118,7 @@ npm install
 ```bash
 # 安装 Ollama（从 ollama.com 下载 Windows 版）
 
-# 推荐：Qwen3-VL-8B-Instruct（官方维护、256K 上下文、32 语言 OCR）
+# 推荐：Qwen3-VL:8B-Instruct（官方维护、256K 上下文、32 语言 OCR）
 ollama pull qwen3-vl:8b-instruct
 
 # 备选：MiniCPM-V:8b（体量更小、速度更快）
@@ -620,6 +620,31 @@ fashion-inspo/
 | `WS` | `/ws` | WebSocket 实时推送 |
 
 > **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端启动时比对本地期望值，不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」。
+
+## 安全加固（API 密钥）
+
+后端默认**不启用**认证（开发模式）。若服务暴露在局域网/外网，建议为破坏性接口启用 API Key 保护。
+
+**保护范围**：数据重置、批量删除、清空垃圾桶、去重删除、标签删除/合并、模型卸载、删除人物等**不可恢复或批量破坏性**接口；读接口与普通写操作（上传、收藏、移入垃圾桶等）不受影响。
+
+```bash
+# 1. 生成密钥并获取启用指引
+python scripts/generate_api_key.py
+
+# 2. 将输出的密钥追加到 backend/.env（脚本会打印完整指引）
+#    API_KEY=<生成的密钥>
+
+# 3. 重启后端生效
+bash scripts/restart.sh
+```
+
+**生效后行为**：
+- 破坏性接口请求头必须携带 `X-API-Key`，缺失返回 `401`，密钥错误返回 `403`
+- 读接口无需密钥，正常访问
+
+**前端接入**：浏览器控制台执行 `localStorage.setItem('apiKey', '<密钥>')` 后刷新页面，前端请求会自动附加 `X-API-Key` 头；或构建时设置 `VITE_API_KEY` 环境变量。
+
+**说明**：`X-API-Key` 为简单共享密钥认证，仅防误操作/未授权调用；不替代 HTTPS/用户体系。破坏性接口清单维护于 `backend/app/utils/auth.py` 的 `DESTRUCTIVE_ROUTES`，新增破坏性接口时在其中追加一行即可。
 
 ## 环境要求
 

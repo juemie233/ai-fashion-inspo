@@ -5,8 +5,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import init_db
@@ -23,6 +24,7 @@ from app.routers import (
     tasks,
     persons,
 )
+from app.utils.auth import is_destructive_route
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def destructive_api_key_middleware(request: Request, call_next):
+    """破坏性接口的 API Key 认证。
+
+    命中 DESTRUCTIVE_ROUTES 清单的写操作（不可恢复删除/重置/批量破坏）需要
+    有效的 X-API-Key；未配置 api_key（开发模式）时跳过；读接口与普通写接口
+    完全不受影响。
+    """
+    if not is_destructive_route(request.method, request.url.path):
+        return await call_next(request)
+    if not settings.api_key:
+        return await call_next(request)  # 开发模式：未配置密钥则跳过认证
+
+    api_key = request.headers.get("X-API-Key")
+    if not api_key:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "缺少 API 密钥，请在请求头中提供 X-API-Key"},
+        )
+    if api_key != settings.api_key:
+        return JSONResponse(
+            status_code=403, content={"detail": "API 密钥无效"}
+        )
+    return await call_next(request)
 
 # 注册路由
 app.include_router(inspirations.router)
