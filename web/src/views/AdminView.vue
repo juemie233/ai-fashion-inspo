@@ -114,7 +114,7 @@ async function loadAll() {
     ])
     stats.value = sRes.data
     largestFiles.value = lRes.data
-  } catch (e: any) {
+  } catch {
     message.error('加载统计数据失败')
   } finally {
     loading.value = false
@@ -128,7 +128,7 @@ async function loadIntegrity() {
     missingFiles.value = res.data.missing_files
     orphanFiles.value = res.data.orphan_files
     orphanSize.value = res.data.orphan_total_size_bytes
-  } catch (e: any) {
+  } catch {
     message.error('完整性检查失败')
   } finally {
     checking.value = false
@@ -142,7 +142,7 @@ async function loadDuplicates() {
     duplicates.value = res.data.duplicate_groups
     dupCount.value = res.data.duplicate_count
     dupSize.value = res.data.wasted_bytes
-  } catch (e: any) {
+  } catch {
     message.error('重复检测失败')
   } finally {
     checking.value = false
@@ -180,7 +180,7 @@ async function cleanOrphans() {
     message.success(`已删除 ${res.data.deleted_count} 个孤立文件，释放 ${formatSize(res.data.freed_bytes)} 空间`)
     await loadIntegrity()
     await loadAll()  // 顶部统计（存储总大小/来源分布）同步刷新
-  } catch (e: any) {
+  } catch {
     message.error('清理失败')
   }
 }
@@ -201,7 +201,7 @@ async function batchDeleteByCondition(condition: string) {
     if (condition === 'untagged') clearingUntagged.value = true
     else clearingFailed.value = true
     await submitBatchDelete({ condition })
-  } catch (e: any) {
+  } catch {
     message.error('批量删除失败')
   } finally {
     clearingUntagged.value = false
@@ -213,7 +213,7 @@ async function batchDeleteByCondition(condition: string) {
 async function batchDeleteByIds(ids: string[]) {
   try {
     await submitBatchDelete({ ids })
-  } catch (e: any) {
+  } catch {
     message.error('批量删除失败')
   }
 }

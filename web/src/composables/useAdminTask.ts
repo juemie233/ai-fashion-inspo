@@ -5,6 +5,11 @@ import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import type { AdminTask } from '@/types/admin'
 
+/** 任务轮询正常间隔（毫秒）：约 1 秒一次 */
+const POLL_NORMAL_MS = 1000
+/** 任务轮询失败重试间隔（毫秒）：放大到 3 秒，有限次重试 */
+const POLL_RETRY_MS = 3000
+
 export function useAdminTask() {
   const message = useMessage()
   const adminTask = ref<AdminTask | null>(null)
@@ -39,7 +44,7 @@ export function useAdminTask() {
           }
           return
         }
-        adminPollTimer = setTimeout(poll, 1000)
+        adminPollTimer = setTimeout(poll, POLL_NORMAL_MS)
       } catch {
         if (seq !== adminPollSeq) return
         consecutiveFailures += 1
@@ -50,7 +55,7 @@ export function useAdminTask() {
           return
         }
         // 有限次重试：间隔放大到 3 秒，继续续排轮询链
-        adminPollTimer = setTimeout(poll, 3000)
+        adminPollTimer = setTimeout(poll, POLL_RETRY_MS)
       }
     }
     poll()

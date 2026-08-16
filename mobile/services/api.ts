@@ -24,11 +24,6 @@ export const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-/** 更新后端地址（用户可在设置中修改） */
-export function setApiBaseUrl(ip: string, port: string = '18888') {
-  apiClient.defaults.baseURL = `http://${ip}:${port}/api`
-}
-
 /** 拼接素材文件访问地址：按路径段 URL 编码，防止含空格/中文的路径 404 */
 export function getFileUrl(base: string, relativePath: string): string {
   const encoded = relativePath.split('/').map(encodeURIComponent).join('/')

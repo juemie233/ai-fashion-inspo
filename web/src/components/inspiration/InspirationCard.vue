@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 素材卡片：瀑布流中的单个卡片，显示缩略图、标签和操作按钮。 */
 
-import { h, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { Heart, HeartOutline, TrashOutline, EyeOutline, CheckmarkOutline } from '@vicons/ionicons5'
 import { useRouter, useRoute } from 'vue-router'

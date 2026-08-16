@@ -5,7 +5,6 @@ import { ref } from 'vue'
 import {
   fetchTagsGrouped,
   type TagCategoryGroup,
-  type TagItem,
   CATEGORY_LABELS,
 } from '@/api/tags'
 

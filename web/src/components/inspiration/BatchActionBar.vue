@@ -6,7 +6,7 @@ import { useMessage } from 'naive-ui'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
-const props = defineProps<{
+defineProps<{
   /** 已勾选数量 */
   count: number
   /** 当前页是否全选 */

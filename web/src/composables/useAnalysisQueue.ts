@@ -12,6 +12,15 @@ export interface UseAnalysisQueueOptions {
   loadHistory?: () => void
 }
 
+/** 有活动分析时的轮询间隔（毫秒） */
+const ACTIVE_POLL_MS = 3000
+/** 无活动分析时的轮询间隔（毫秒） */
+const IDLE_POLL_MS = 15000
+/** 批量任务轮询正常间隔（毫秒） */
+const BATCH_POLL_MS = 1000
+/** 批量任务轮询失败重试间隔（毫秒） */
+const BATCH_RETRY_MS = 3000
+
 export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const { requestAndNotify, checkFailureAlert } = useNotification()
   const message = useMessage()
@@ -89,7 +98,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
 
   function scheduleNextPoll() {
     const wasActive = Object.keys(activeAnalyses.value).length > 0
-    const interval = wasActive ? 3000 : 15000
+    const interval = wasActive ? ACTIVE_POLL_MS : IDLE_POLL_MS
     pollTimer = setTimeout(async () => {
       await loadActiveAnalyses()
       loadPendingQueue()
@@ -172,7 +181,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
           loadQueue(); options.loadHistory?.(); loadActiveAnalyses()
           return
         }
-        batchPollTimer = setTimeout(poll, 1000)
+        batchPollTimer = setTimeout(poll, BATCH_POLL_MS)
       } catch {
         if (seq !== batchPollSeq) return
         consecutiveFailures += 1
@@ -183,7 +192,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
           return
         }
         // 有限次重试：间隔放大到 3 秒，继续续排轮询链
-        batchPollTimer = setTimeout(poll, 3000)
+        batchPollTimer = setTimeout(poll, BATCH_RETRY_MS)
       }
     }
     poll()

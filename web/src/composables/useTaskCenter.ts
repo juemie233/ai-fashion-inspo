@@ -42,6 +42,9 @@ interface ScraperTaskRaw {
 /** 每页条数（客户端分页） */
 const PAGE_SIZE = 20
 
+/** 任务轮询间隔（毫秒）：有活动任务时每 5 秒刷新一次 */
+const POLL_INTERVAL_MS = 5000
+
 export function useTaskCenter() {
   const message = useMessage()
 
@@ -174,6 +177,8 @@ export function useTaskCenter() {
       tasks.value = [...queue, ...scraper].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       )
+      // 任务数量缩减后页码可能超出总页数，回退到最后一页
+      page.value = Math.min(page.value, Math.max(1, pageCount.value))
     } catch {
       message.error('加载任务失败')
     } finally {
@@ -254,7 +259,7 @@ export function useTaskCenter() {
     pollTimer = setInterval(() => {
       if (hasActive.value) loadTasks()
       else stopPoll()
-    }, 5000)
+    }, POLL_INTERVAL_MS)
   }
   function stopPoll() {
     if (pollTimer) {

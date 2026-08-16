@@ -5,6 +5,7 @@ import hashlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
@@ -24,30 +25,27 @@ _EXT_MEDIA = {
     ".mp4": ("video", "video/mp4"),
 }
 
+# 哈希计算分块大小（1MB，与 file_service._CHUNK_SIZE 一致），流式读取避免整文件驻留内存
+_HASH_CHUNK_SIZE = 1024 * 1024
+
 
 @dataclass
 class FakeUploadFile:
-    """模拟 UploadFile：按 chunk 大小分块返回内容，供 save_upload 流式读取。
+    """模拟 UploadFile：基于已打开的二进制文件句柄分块返回内容，供 save_upload 流式读取。
 
-    注意：read 必须维护读取偏移并尊重 size 参数，否则 save_upload 的分块
-    循环会重复读到同一段内容导致死循环/误判超限。
+    注意：read 直接委托底层文件句柄（句柄自身维护读取偏移并尊重 size 参数），
+    save_upload 的分块循环读到 b"" 即结束；句柄由调用方持有并在
+    save_upload 返回后关闭。
     """
 
     filename: str
     content_type: str = "image/jpeg"
-    _content: bytes = b""
-    _offset: int = 0
+    _file: BinaryIO | None = None
 
     async def read(self, size: int = -1) -> bytes:
-        if self._offset >= len(self._content):
+        if self._file is None:
             return b""
-        if size < 0:
-            chunk = self._content[self._offset :]
-            self._offset = len(self._content)
-        else:
-            chunk = self._content[self._offset : self._offset + size]
-            self._offset += size
-        return chunk
+        return self._file.read(size)
 
 
 async def import_folder(folder_path: str, source_type: str = "manual_upload"):
@@ -77,24 +75,26 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
             try:
                 ext = file_path.suffix.lower()
                 media_type, content_type = _EXT_MEDIA[ext]
-                with open(file_path, "rb") as f:
-                    content = f.read()
 
-                # 内容哈希去重：重跑脚本时跳过已导入的文件（幂等）
-                content_hash = hashlib.sha256(content).hexdigest()
+                # 内容哈希去重：分块流式计算，避免整文件读入内存（幂等）
+                hasher = hashlib.sha256()
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(_HASH_CHUNK_SIZE):
+                        hasher.update(chunk)
+                content_hash = hasher.hexdigest()
                 if await find_duplicate_by_hash(db, content_hash):
                     skipped_dup += 1
                     print(f"  [{i}/{len(files)}] {file_path.name} 已存在（内容重复），跳过")
                     continue
 
-                fake_file = FakeUploadFile(
-                    filename=file_path.name,
-                    content_type=content_type,
-                    _content=content,
-                )
-
-                # 保存文件（流式分块写入，内部校验真实类型与大小上限）
-                rel_path, thumb_path = await save_upload(fake_file)
+                # 保存文件（基于文件句柄流式分块读取，内部校验真实类型与大小上限）
+                with open(file_path, "rb") as f:
+                    fake_file = FakeUploadFile(
+                        filename=file_path.name,
+                        content_type=content_type,
+                        _file=f,
+                    )
+                    rel_path, thumb_path = await save_upload(fake_file)
 
                 inspiration = Inspiration(
                     source_type=source_type,

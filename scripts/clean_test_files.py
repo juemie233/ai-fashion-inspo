@@ -1,9 +1,13 @@
 """扫描并清理测试污染文件：上传测试曾误写入真实 backend/storage/ 的纯色小图。
 
-判定条件（三重确认，避免误删真实素材）：
-1. PIL 判定为纯色图（颜色数 == 1）且尺寸 <= 128x128（测试图片 64x64 纯色）
-2. 真实数据库（backend/fashion_inspo.db）无该文件路径的记录
-3. 修改时间为本次测试会话期间（扫描时通过 --since 传入 ISO 时间）
+判定规则（四重确认，任一条件不满足即跳过，避免误删真实素材）：
+1. 白名单：真实数据库（backend/fashion_inspo.db）有记录的路径一律跳过
+   （inspirations.file_path / inspirations.thumbnail_path / persons.avatar_path）
+2. 新鲜度保护：mtime 在最近 --recent-minutes 分钟内的文件一律跳过
+   （防误删正在上传/刚生成的文件）
+3. 时间窗口：只处理 mtime 不早于 --since 的文件；--since 默认「当前时间
+   往前推 1 天」（不再写死未来日期，避免随时间失效）
+4. 内容判定：PIL 判定为纯色小图（尺寸 <= 128x128、颜色极单一、平均色接近测试色）
 
 用法:
     python scripts/clean_test_files.py            # 扫描（只报告不删除）
@@ -13,7 +17,7 @@
 import argparse
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image
@@ -52,28 +56,40 @@ def main() -> None:
     parser.add_argument("--delete", action="store_true", help="确认删除匹配文件")
     parser.add_argument(
         "--since",
-        default="2026-08-16T00:00:00",
-        help="只处理修改时间晚于此 ISO 时间的文件（默认本次测试日）",
+        default=None,
+        help="只处理修改时间不早于此 ISO 时间的文件（默认当前时间往前推 1 天）",
+    )
+    parser.add_argument(
+        "--recent-minutes",
+        type=int,
+        default=10,
+        help="mtime 在最近 N 分钟内的文件一律跳过（默认 10，防误删在传/刚生成文件）",
     )
     args = parser.parse_args()
-    since_ts = datetime.fromisoformat(args.since).timestamp()
+    if args.since:
+        since_ts = datetime.fromisoformat(args.since).timestamp()
+    else:
+        since_ts = (datetime.now() - timedelta(days=1)).timestamp()
+    recent_cutoff_ts = datetime.now().timestamp() - args.recent_minutes * 60
 
     # 收集数据库中的真实路径
     known_paths = set()
     if DB_PATH.exists():
         conn = sqlite3.connect(str(DB_PATH))
-        for table in ("inspirations",):
-            try:
-                for (p,) in conn.execute(
-                    f"SELECT file_path FROM {table} WHERE file_path IS NOT NULL"
-                ):
-                    known_paths.add(p.replace("\\", "/"))
-                for (p,) in conn.execute(
-                    f"SELECT thumbnail_path FROM {table} WHERE thumbnail_path IS NOT NULL"
-                ):
-                    known_paths.add(p.replace("\\", "/"))
-            except sqlite3.Error:
-                pass
+        # 各表媒体路径字段 → 白名单（新增路径字段时在此登记即可纳入保护）
+        path_columns = {
+            "inspirations": ("file_path", "thumbnail_path"),
+            "persons": ("avatar_path",),
+        }
+        for table, columns in path_columns.items():
+            for column in columns:
+                try:
+                    for (p,) in conn.execute(
+                        f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"
+                    ):
+                        known_paths.add(p.replace("\\", "/"))
+                except sqlite3.Error:
+                    pass
         conn.close()
     print(f"数据库已知路径: {len(known_paths)} 条")
 
@@ -88,8 +104,11 @@ def main() -> None:
             rel = p.relative_to(STORAGE_DIR).as_posix()
             if rel in known_paths:
                 continue  # 数据库有记录，跳过
-            if p.stat().st_mtime < since_ts:
-                continue  # 早于测试时段，跳过
+            mtime = p.stat().st_mtime
+            if mtime > recent_cutoff_ts:
+                continue  # 最近 N 分钟内修改，可能正在上传/生成，跳过
+            if mtime < since_ts:
+                continue  # 早于时间窗口，跳过
             if is_test_file(p):
                 candidates.append(p)
 

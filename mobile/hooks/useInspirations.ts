@@ -4,7 +4,6 @@ import { create } from 'zustand'
 import {
   apiClient,
   getApiBaseUrl,
-  setApiBaseUrl as setApiClientBaseUrl,
   type Inspiration,
   type InspirationListResponse,
 } from '../services/api'
@@ -30,7 +29,6 @@ interface InspirationState {
   fetchMore: () => Promise<void>
   uploadImage: (uri: string) => Promise<Inspiration>
   toggleFavorite: (id: string, desiredState: boolean) => Promise<void>
-  setApiBaseUrl: (ip: string, port?: string) => void
 }
 
 export const useInspirationStore = create<InspirationState>((set, get) => ({
@@ -113,12 +111,6 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
         i.id === id ? { ...i, is_favorite: desiredState } : i
       ),
     }))
-  },
-
-  /** 更新后端地址（同步 store 与 axios 客户端，图片 URL 与请求一致生效） */
-  setApiBaseUrl: (ip: string, port: string = '18888') => {
-    setApiClientBaseUrl(ip, port)
-    set({ apiBaseUrl: `http://${ip}:${port}` })
   },
 }))
 

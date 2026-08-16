@@ -44,7 +44,6 @@ export function useSearch() {
   const searching = ref(false)
   let searchSeq = 0  // 请求序号：普通/语义/以图搜图共用，防止陈旧响应乱序覆盖新结果
   const filterVisible = ref(localStorage.getItem('search-filter-visible') !== 'false')
-  const showMoreFilters = ref(false)
 
   // 搜索参数
   const keyword = ref((route.query.q as string) || '')

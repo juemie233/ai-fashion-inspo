@@ -209,11 +209,15 @@ function showUploadOverlay(show) {
   uploadOverlay.classList.toggle('hidden', !show);
 }
 
-/** HTML 转义 */
+/** HTML 转义：同时转义引号，防止页面图片 URL 经 innerHTML 渲染时注入属性
+ * （如 data-url/src 属性逃逸） */
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str || '';
-  return div.innerHTML;
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** 绑定事件 */

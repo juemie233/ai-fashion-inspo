@@ -21,7 +21,8 @@ export function storedBrowseSort(): string {
 /** 读取本地持久化的每页数量，缺省 50 */
 export function storedBrowsePageSize(): number {
   const n = parseInt(localStorage.getItem(PAGE_SIZE_STORAGE_KEY) || '', 10)
-  return Number.isFinite(n) && n > 0 ? n : 50
+  // 有效值夹在 [1, 200]：避免本地存储被篡改后请求超大分页
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, 1), 200) : 50
 }
 
 /**

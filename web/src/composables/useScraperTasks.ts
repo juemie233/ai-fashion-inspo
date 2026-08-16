@@ -17,6 +17,9 @@ export const STATUS_LABELS: Record<string, string> = {
   pending: '等待中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消',
 }
 
+/** 任务列表轮询间隔（毫秒）：有运行/等待中的任务时每 5 秒刷新一次 */
+const POLL_INTERVAL_MS = 5000
+
 /** 任务域数据与操作集合，由 ScraperView 及其子组件消费。 */
 export function useScraperTasks() {
   const message = useMessage()
@@ -140,10 +143,8 @@ export function useScraperTasks() {
         refreshTasks()
       }
     } catch (e: any) {
-      if (e.response?.status === 204) {
-        message.success('已删除')
-        refreshTasks()
-      } else message.error('删除失败: ' + (e.response?.data?.detail || ''))
+      // 204 同属 2xx 成功响应（apiClient validateStatus 放行），不会落入 catch，无需单独处理
+      message.error('删除失败: ' + (e.response?.data?.detail || ''))
     } finally { deletingTask.value = null }
   }
 
@@ -218,7 +219,7 @@ export function useScraperTasks() {
         await refreshTasks()
         if (!hasActiveTasks.value) stopPoll()
       }
-    }, 5000)
+    }, POLL_INTERVAL_MS)
   }
   function stopPoll() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }

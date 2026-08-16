@@ -38,7 +38,7 @@ echo ">>> [1/4] 停止后端 (端口 $BACKEND_PORT) ..."
 
 # 1a. 杀掉监听端口的进程树（可能是 worker，taskkill /T 会级联杀掉其父 reloader）
 killed=0
-for pid in $(netstat -ano 2>/dev/null | grep ":$BACKEND_PORT" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
+for pid in $(netstat -ano 2>/dev/null | grep -E ":$BACKEND_PORT( |$)" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
   if [ -n "$pid" ]; then
     taskkill //F //T //PID "$pid" >/dev/null 2>&1 && { echo "  已终止进程树 PID $pid"; killed=1; }
   fi
@@ -55,7 +55,7 @@ done
 sleep 1
 
 # 验证端口已释放
-if netstat -ano 2>/dev/null | grep ":$BACKEND_PORT" | grep -qi LISTENING; then
+if netstat -ano 2>/dev/null | grep -E ":$BACKEND_PORT( |$)" | grep -qi LISTENING; then
   echo "  ⚠️  警告：端口 $BACKEND_PORT 可能仍被占用"
 else
   echo "  ✅ 后端已停止"
@@ -64,13 +64,13 @@ fi
 # ── 2. 停止前端 ──
 echo ""
 echo ">>> [2/4] 停止前端 (端口 $FRONTEND_PORT) ..."
-for pid in $(netstat -ano 2>/dev/null | grep ":$FRONTEND_PORT" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
+for pid in $(netstat -ano 2>/dev/null | grep -E ":$FRONTEND_PORT( |$)" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
   if [ -n "$pid" ]; then
     taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止进程树 PID $pid"
   fi
 done
 sleep 1
-if netstat -ano 2>/dev/null | grep ":$FRONTEND_PORT" | grep -qi LISTENING; then
+if netstat -ano 2>/dev/null | grep -E ":$FRONTEND_PORT( |$)" | grep -qi LISTENING; then
   echo "  ⚠️  警告：端口 $FRONTEND_PORT 可能仍被占用"
 else
   echo "  ✅ 前端已停止"

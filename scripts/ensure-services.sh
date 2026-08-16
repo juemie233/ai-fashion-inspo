@@ -28,7 +28,7 @@ LOCK_STALE_SECONDS=180
 
 # ── 原子锁：mkdir 原子性保证只有一个实例能拿到锁 ──
 acquire_lock() {
-  local now ts
+  local now=0 ts=0
   now=$(date +%s)
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "$now" > "$LOCK_DIR/ts"
@@ -36,7 +36,11 @@ acquire_lock() {
   fi
   # 锁已存在：超过阈值视为「上次执行被强杀」留下的陈旧锁，清理后重试一次
   ts=$(cat "$LOCK_DIR/ts" 2>/dev/null || echo 0)
-  if [ $(( now - ts )) -gt "$LOCK_STALE_SECONDS" ]; then
+  # ts 可能为空或非数字（锁文件写入被中断），兜底为 0 视为新鲜锁，避免算术表达式报错
+  case "$ts" in
+    ''|*[!0-9]*) ts=0 ;;
+  esac
+  if [ "$(( now - ts ))" -gt "$LOCK_STALE_SECONDS" ]; then
     rm -rf "$LOCK_DIR"
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       echo "$now" > "$LOCK_DIR/ts"
