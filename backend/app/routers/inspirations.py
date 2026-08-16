@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
 from app.schemas.inspiration import (
@@ -135,6 +136,7 @@ async def list_trash(
         total=total,
         page=page,
         size=size,
+        trash_retention_days=settings.trash_retention_days,
     )
 
 
@@ -293,20 +295,18 @@ async def link_inspiration_persons(
 
     请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID。
     """
+    result = await person_service.link_persons_batch(db, inspiration_id, data.person_ids)
     added = []
-    for person_id in data.person_ids:
-        link = await person_service.link_person(db, inspiration_id, person_id)
-        if link:
-            person = await person_service.get_person(db, person_id)
-            added.append(
-                PersonBriefOut(
-                    id=person.id,
-                    name=person.name,
-                    person_type=person.person_type,
-                    platform=person.platform,
-                    avatar_path=person.avatar_path,
-                )
+    for link in result["links"]:
+        added.append(
+            PersonBriefOut(
+                id=link.person_id,
+                name=link.person.name,
+                person_type=link.person.person_type,
+                platform=link.person.platform,
+                avatar_path=link.person.avatar_path,
             )
+        )
     await db.flush()
     return {"added": [a.model_dump() for a in added], "count": len(added)}
 

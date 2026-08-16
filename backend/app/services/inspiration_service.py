@@ -1,5 +1,6 @@
 """灵感素材服务：素材 CRUD、批量标签、去重与向量同步。"""
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +25,8 @@ from app.services.file_service import (
 )
 from app.services.tag_service import get_or_create_tag
 from app.utils.file_hash import file_sha256
+
+logger = logging.getLogger(__name__)
 
 # 垃圾桶删除原因合法取值（负样本学习只用「质量差」子集保证语义纯净）
 TRASH_REASONS = ("质量差", "重复", "不喜欢", "隐私", "其他")
@@ -743,17 +746,33 @@ async def trash_inspiration(
 
     resolved = _resolve_trash_reason(reason, inspiration)
 
-    # 移动主文件与缩略图到垃圾桶，更新 DB 路径；文件缺失时返回 None 保留原路径
-    new_file = move_to_trash(inspiration.file_path, inspiration.id)
-    if new_file:
-        inspiration.file_path = new_file
-    new_thumb = move_to_trash(inspiration.thumbnail_path, inspiration.id, suffix="_thumb")
-    if new_thumb:
-        inspiration.thumbnail_path = new_thumb
-
+    # 先提交软删除标记（DB 落库），提交成功后再移动文件，避免「文件已移走但事务
+    # 回滚/失败」导致 DB 仍指向原路径的悬空记录（与 delete_inspiration 的顺序一致）。
     inspiration.deleted_at = utcnow()
     inspiration.trash_reason = resolved
-    await db.flush()
+    await db.commit()
+
+    # 移动文件失败时记录日志但不回滚软删除：文件仍在原目录，DB 路径未变仍指向
+    # 实际位置；恢复时 restore_from_trash 找不到 trash/ 下的文件会自动保持原路径，
+    # 形成自愈。文件缺失时 move_to_trash 返回 None，同样保留原路径。
+    paths_changed = False
+    try:
+        new_file = move_to_trash(inspiration.file_path, inspiration.id)
+        if new_file:
+            inspiration.file_path = new_file
+            paths_changed = True
+    except OSError as e:
+        logger.warning(f"移动主文件到垃圾桶失败 {inspiration.id}: {e}")
+    try:
+        new_thumb = move_to_trash(inspiration.thumbnail_path, inspiration.id, suffix="_thumb")
+        if new_thumb:
+            inspiration.thumbnail_path = new_thumb
+            paths_changed = True
+    except OSError as e:
+        logger.warning(f"移动缩略图到垃圾桶失败 {inspiration.id}: {e}")
+
+    if paths_changed:
+        await db.commit()
     await db.refresh(inspiration)
     return inspiration
 
@@ -771,16 +790,30 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     if inspiration.deleted_at is None:
         raise HTTPException(status_code=409, detail="素材不在垃圾桶中")
 
-    new_file = restore_from_trash(inspiration.file_path)
-    if new_file:
-        inspiration.file_path = new_file
-    new_thumb = restore_from_trash(inspiration.thumbnail_path)
-    if new_thumb:
-        inspiration.thumbnail_path = new_thumb
-
+    # 先提交恢复标记（DB 落库），提交成功后再移动文件；移动失败仅记日志，
+    # 文件留在 trash/ 由后续清空任务兜底清理，恢复本身不受阻断。
     inspiration.deleted_at = None
     inspiration.trash_reason = None
-    await db.flush()
+    await db.commit()
+
+    paths_changed = False
+    try:
+        new_file = restore_from_trash(inspiration.file_path)
+        if new_file:
+            inspiration.file_path = new_file
+            paths_changed = True
+    except OSError as e:
+        logger.warning(f"恢复主文件失败 {inspiration.id}: {e}")
+    try:
+        new_thumb = restore_from_trash(inspiration.thumbnail_path)
+        if new_thumb:
+            inspiration.thumbnail_path = new_thumb
+            paths_changed = True
+    except OSError as e:
+        logger.warning(f"恢复缩略图失败 {inspiration.id}: {e}")
+
+    if paths_changed:
+        await db.commit()
     await db.refresh(inspiration)
     return inspiration
 

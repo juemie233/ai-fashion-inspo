@@ -20,6 +20,7 @@ import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
+import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
 
@@ -251,7 +252,7 @@ async function reanalyze() {
 }
 
 /** 更新素材详情中的人物关联列表 */
-function updatePersons(list: any) {
+function updatePersons(list: PersonBrief[]) {
   if (detail.value) detail.value.persons = list
 }
 
@@ -339,7 +340,7 @@ function goSearchByTag(name: string) {
                 <template #trigger>
                   <n-button type="error" secondary>移入垃圾桶</n-button>
                 </template>
-                移入垃圾桶后 30 天内可在「素材管理 → 垃圾桶」恢复
+                移入垃圾桶后可在保留期内从「素材管理 → 垃圾桶」恢复
               </n-popconfirm>
             </div>
 

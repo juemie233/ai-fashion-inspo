@@ -188,7 +188,7 @@ function openDetail() {
               </template>
             </n-button>
           </template>
-          移入垃圾桶？30 天内可在「素材管理 → 垃圾桶」恢复
+          移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复
         </n-popconfirm>
         <n-button
           size="tiny"
@@ -238,9 +238,9 @@ function openDetail() {
 
     <!-- 信息区 -->
     <div class="card-body">
-      <!-- 来源 -->
+      <!-- 来源（空来源不渲染，避免出现空白胶囊） -->
       <div class="card-source">
-        <n-tag size="tiny" :bordered="false" type="info">
+        <n-tag v-if="item.source_type" size="tiny" :bordered="false" type="info">
           {{ sourceLabel(item.source_type) }}
         </n-tag>
         <span v-if="item.source_author" class="author">@{{ item.source_author }}</span>

@@ -67,33 +67,43 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
     total_insp = (await db.execute(
         select(func.count(Inspiration.id)).where(Inspiration.deleted_at.is_(None))
     )).scalar() or 0
+    # 已分析素材同样只统计未删除素材的日志，与 total_insp 口径一致，
+    # 否则「已分析数 > 素材总数」导致 pending 数为负
     analyzed_ids = (
         select(AIAnalysisLog.inspiration_id)
-        .where(_analysis_log_filter())
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(_analysis_log_filter(), Inspiration.deleted_at.is_(None))
         .distinct()
     )
     analyzed_count = (await db.execute(
         select(func.count()).select_from(analyzed_ids.subquery())
     )).scalar() or 0
 
-    # 多次失败的素材（≥3 次失败）
+    # 多次失败的素材（≥3 次失败，排除垃圾桶）
     fail_count_sub = (
         select(AIAnalysisLog.inspiration_id, func.count().label("fc"))
-        .where(_analysis_log_filter(), AIAnalysisLog.error.isnot(None))
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(
+            _analysis_log_filter(),
+            AIAnalysisLog.error.isnot(None),
+            Inspiration.deleted_at.is_(None),
+        )
         .group_by(AIAnalysisLog.inspiration_id)
         .having(func.count() >= 3)
         .subquery()
     )
     multi_fail = (await db.execute(select(func.count()).select_from(fail_count_sub))).scalar() or 0
 
-    # 零标签输出（有分析记录但没有关联任何标签的素材）
+    # 零标签输出（有分析记录但没有关联任何标签的素材，排除垃圾桶）
     from app.models.tag import InspirationTag as IT
     zero_tag_result = await db.execute(
         select(func.count())
         .select_from(AIAnalysisLog)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
         .where(
             _analysis_log_filter(),
             AIAnalysisLog.error.is_(None),
+            Inspiration.deleted_at.is_(None),
             ~AIAnalysisLog.inspiration_id.in_(
                 select(IT.inspiration_id).distinct()
             ),

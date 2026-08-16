@@ -77,8 +77,15 @@ def _parse_ai_generated(parsed: dict) -> bool:
     return confidence >= settings.ai_generated_confidence_threshold
 
 
-async def _classifier_prefilter(inspiration_id: str) -> tuple[bool, float] | None:
+async def _classifier_prefilter(
+    inspiration_id: str, vector: list[float] | None = None
+) -> tuple[bool, float] | None:
     """负样本初筛器前置初筛：用已训练分类器对素材图像向量做「垃圾」判定。
+
+    参数:
+        inspiration_id: 素材 UUID
+        vector: 预取的图像向量（批量审核时由任务执行器批量预取，避免逐条全表扫描）；
+            为 None 时此处现场读取。
 
     返回 ``(是否垃圾, 垃圾置信度)``；未训练分类器、LanceDB 未安装或素材无图像向量时
     返回 None（静默跳过，仍走完整 VLM 审核）。「宁缺毋滥」：仅在置信度超过阈值时
@@ -89,14 +96,45 @@ async def _classifier_prefilter(inspiration_id: str) -> tuple[bool, float] | Non
 
     if not vector_store.is_lancedb_available():
         return None
-    vec = await vector_store.get_vector("image", inspiration_id)
-    if not vec:
+    if vector is None:
+        vector = await vector_store.get_vector("image", inspiration_id)
+    if not vector:
         return None
-    return await quality_learner.predict_vector(vec)
+    return await quality_learner.predict_vector(vector)
+
+
+async def _write_quality_result(
+    db: AsyncSession,
+    inspiration_id: str,
+    status: str,
+    reason: str | None,
+    is_ai_generated: bool,
+    force: bool,
+) -> str | None:
+    """写回质量审核结果（CAS），返回 None 表示成功，否则返回错误描述。
+
+    与旧逻辑一致：仅当素材仍为 pending（或 force=True 覆盖）时写入，
+    避免覆盖人工翻案；初筛器拒绝与 VLM 审核两条路径共用本函数。
+    """
+    try:
+        insp = await db.get(Inspiration, inspiration_id)
+        if insp and (force or insp.quality_status == "pending"):
+            insp.quality_status = status
+            insp.quality_reason = reason
+            insp.is_ai_generated = is_ai_generated
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
+        return f"写回失败: {str(e)[:100]}"
+    return None
 
 
 async def check_image_quality(
-    db: AsyncSession, inspiration_id: str, file_path: str, force: bool = False
+    db: AsyncSession,
+    inspiration_id: str,
+    file_path: str,
+    force: bool = False,
+    prefilter_vector: list[float] | None = None,
 ) -> tuple[str, str, bool]:
     """轻量质量审核：分两步——先做穿搭二分类，通过后再单独做 AI 生成检测。
 
@@ -109,6 +147,8 @@ async def check_image_quality(
         file_path: 图片文件的相对路径
         force: 为 True 时覆盖写入，忽略素材当前审核状态（用于随机复审已审查素材）；
             默认 False 仅写入 pending 素材，避免覆盖人工翻案
+        prefilter_vector: 预取的图像向量（批量审核场景由任务执行器一次性批量读取，
+            供初筛器复用，避免逐条 get_vector 造成 O(N²) 全表扫描）
 
     返回:
         (status, reason, is_ai_generated) — status 为 approved/rejected/pending
@@ -137,7 +177,12 @@ async def check_image_quality(
     try:
         image_data, _ = _read_image_base64(file_path)
     except FileNotFoundError:
-        # 文件缺失：确定性失败，直接拒绝，避免永久停留 pending
+        # 文件缺失：确定性失败，直接拒绝并写回，避免永久停留 pending
+        err = await _write_quality_result(
+            db, inspiration_id, "rejected", "文件缺失", False, force
+        )
+        if err:
+            return "pending", err, False
         return "rejected", "文件缺失", False
     except Exception as e:
         return "pending", f"审核失败: {str(e)[:100]}", False
@@ -147,11 +192,18 @@ async def check_image_quality(
     # 阶段 2：负样本初筛器前置初筛（仅普通审核生效；随机复审 force=True 走完整 VLM，
     # 未训练分类器 / 无图像向量时静默跳过）
     if not force:
-        prefilter = await _classifier_prefilter(inspiration_id)
+        prefilter = await _classifier_prefilter(inspiration_id, prefilter_vector)
         if prefilter is not None:
             is_garbage, proba = prefilter
             if is_garbage:
-                return "rejected", f"初筛器判定为垃圾素材（置信度 {proba:.2f}）", False
+                reason = f"初筛器判定为垃圾素材（置信度 {proba:.2f}）"
+                # 写回 DB 与 VLM 路径一致（CAS：仅 pending 时写入），避免素材永远停在 pending
+                err = await _write_quality_result(
+                    db, inspiration_id, "rejected", reason, False, force
+                )
+                if err:
+                    return "pending", err, False
+                return "rejected", reason, False
 
     # 第一步：穿搭二分类
     raw, err = await _ollama_vision_chat(image_data, outfit_prompt, model_cfg, temperature=0.1)
@@ -180,15 +232,15 @@ async def check_image_quality(
 
     # 写回数据库（force=True 时覆盖写入，用于随机复审已审查素材；
     # 否则 CAS：仅当仍为 pending 时写入，避免覆盖人工翻案）
-    try:
-        insp = await db.get(Inspiration, inspiration_id)
-        if insp and (force or insp.quality_status == "pending"):
-            insp.quality_status = status
-            insp.quality_reason = reason if not is_outfit else None
-            insp.is_ai_generated = ai_generated
-            await db.commit()
-    except Exception as e:
-        logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
-        return "pending", f"写回失败: {str(e)[:100]}", False
+    err = await _write_quality_result(
+        db,
+        inspiration_id,
+        status,
+        reason if not is_outfit else None,
+        ai_generated,
+        force,
+    )
+    if err:
+        return "pending", err, False
 
     return status, reason, ai_generated

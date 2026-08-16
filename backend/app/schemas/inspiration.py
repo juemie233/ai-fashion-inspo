@@ -85,7 +85,7 @@ class InspirationOut(BaseModel):
     quality_reason: str | None = None
     is_ai_generated: bool = False
     deleted_at: datetime | None = None
-    trash_reason: str | None = None
+    trash_reason: TrashReason | None = None
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
@@ -103,10 +103,13 @@ class InspirationOut(BaseModel):
 
 class InspirationListOut(BaseModel):
     """灵感分页列表"""
+
     items: list[InspirationOut]
     total: int
     page: int
     size: int
+    # 垃圾桶保留天数（仅垃圾桶列表返回，前端据此展示剩余天数，避免硬编码 30 天）
+    trash_retention_days: int | None = None
 
 
 class InspirationDetailOut(InspirationOut):

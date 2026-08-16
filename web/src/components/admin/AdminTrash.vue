@@ -27,6 +27,9 @@ const reasonFilter = ref<TrashReason | ''>('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
+/** 垃圾桶保留天数（后端配置下发，缺省回退 30 天） */
+const retentionDays = ref(30)
+
 async function load() {
   loading.value = true
   try {
@@ -37,6 +40,9 @@ async function load() {
     })
     items.value = data.items
     total.value = data.total
+    if (data.trash_retention_days) {
+      retentionDays.value = data.trash_retention_days
+    }
   } catch {
     message.error('加载垃圾桶失败')
   } finally {
@@ -52,11 +58,11 @@ function onReasonChange() {
   load()
 }
 
-/** 剩余保留天数（保留期按 30 天估算展示） */
+/** 剩余保留天数（保留期以后端下发的 trash_retention_days 为准） */
 function daysRemaining(deletedAt?: string | null): string {
   if (!deletedAt) return ''
   const deleted = new Date(deletedAt).getTime()
-  const expire = deleted + 30 * 86400_000
+  const expire = deleted + retentionDays.value * 86400_000
   const days = Math.max(0, Math.ceil((expire - Date.now()) / 86400_000))
   return `${days} 天`
 }
@@ -133,7 +139,7 @@ async function cleanExpired() {
     <div class="toolbar">
       <div class="toolbar-left">
         <n-tag type="warning" size="small" :bordered="false">
-          共 {{ total }} 个垃圾桶素材（30 天后自动清理）
+          共 {{ total }} 个垃圾桶素材（{{ retentionDays }} 天后自动清理）
         </n-tag>
         <n-select
           v-model:value="reasonFilter"
@@ -149,7 +155,7 @@ async function cleanExpired() {
           <template #trigger>
             <n-button size="small" :loading="cleaningExpired">清理过期</n-button>
           </template>
-          仅清理超过 30 天保留期的素材，仍在保留期内的保留。
+          仅清理超过 {{ retentionDays }} 天保留期的素材，仍在保留期内的保留。
         </n-popconfirm>
         <n-popconfirm @positive-click="emptyAll">
           <template #trigger>

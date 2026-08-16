@@ -16,6 +16,7 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 
@@ -50,6 +51,10 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
 
     正样本 label=1（合格），负样本 label=0（垃圾）。只取已在 LanceDB 中存有
     图像向量的样本（无向量样本跳过，训练不现场编码 CLIP 以免阻塞）。
+
+    策略说明：正样本不排除 ``is_ai_generated=True`` 的素材——项目对 AI 生成图
+    采取「只标记不拒绝」策略，将其纳入正样本与策略一致（初筛器不会因此把
+    AI 生成图学成垃圾）。若未来策略改为拒绝 AI 生成图，需在此同步过滤。
     """
     positive_ids = (
         await db.execute(
@@ -150,7 +155,10 @@ def _train_sync(X: list[list[float]], y: list[int]) -> dict:
     }
 
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, _MODEL_PATH)
+    # 先写临时文件再原子替换：进程中途被杀也不会留下损坏的模型文件
+    tmp_path = _MODEL_PATH.with_suffix(".joblib.tmp")
+    joblib.dump(model, tmp_path)
+    os.replace(tmp_path, _MODEL_PATH)
 
     meta = {
         "trained_at": _utcnow().isoformat(),
@@ -173,8 +181,6 @@ async def train(db: AsyncSession) -> dict:
         return {"error": "lancedb 未安装，请先执行：pip install lancedb"}
 
     X, y, stats = await collect_samples(db)
-    if "error" in stats:
-        return stats
     if len(set(y)) < 2 or len(X) < 10:
         return {"error": f"样本不足：共 {len(X)} 条含向量样本（正 {stats['positive_with_vector']} / 负 {stats['negative_with_vector']}），无法训练"}
 

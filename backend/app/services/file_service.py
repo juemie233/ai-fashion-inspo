@@ -273,7 +273,9 @@ def restore_from_trash(rel_path: str) -> str | None:
 
     stem = src.stem  # 不含扩展名
     ext = src.suffix.lower() or ".bin"
-    is_thumb = stem.endswith("_thumb")
+    # 缩略图命名为 ``{id}_thumb{ext}``；撞名兜底时带随机后缀 ``{id}_thumb_{hex}{ext}``，
+    # 用「包含 _thumb」判断（素材 id 为纯 hex 不含下划线，不会误判主文件）
+    is_thumb = "_thumb" in stem
 
     if is_thumb:
         base = _ensure_date_dir(settings.thumbnails_dir)

@@ -1,6 +1,7 @@
 """FastAPI 应用入口。"""
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,8 @@ from app.routers import (
     persons,
 )
 
+logger = logging.getLogger(__name__)
+
 # 垃圾桶自动清理周期（秒）：每 6 小时扫描一次超过保留期的软删除素材
 _TRASH_SWEEP_INTERVAL = 6 * 3600
 
@@ -42,11 +45,11 @@ async def _sweep_expired_trash() -> None:
             async with async_session() as db:
                 result = await inspiration_service.purge_trash(db, only_expired=True)
                 if result.get("deleted"):
-                    print(f"[垃圾桶] 自动清理 {result['deleted']} 个过期素材")
+                    logger.info(f"[垃圾桶] 自动清理 {result['deleted']} 个过期素材")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"[垃圾桶] 自动清理失败: {e}")
+            logger.warning(f"[垃圾桶] 自动清理失败: {e}")
 
 
 @asynccontextmanager
@@ -89,9 +92,9 @@ async def lifespan(app: FastAPI):
         try:
             swept = await inspiration_service.purge_trash(db, only_expired=True)
             if swept.get("deleted"):
-                print(f"[垃圾桶] 启动清理 {swept['deleted']} 个过期素材")
+                logger.info(f"[垃圾桶] 启动清理 {swept['deleted']} 个过期素材")
         except Exception as e:
-            print(f"[垃圾桶] 启动清理失败: {e}")
+            logger.warning(f"[垃圾桶] 启动清理失败: {e}")
 
     sweep_task = asyncio.create_task(_sweep_expired_trash())
 

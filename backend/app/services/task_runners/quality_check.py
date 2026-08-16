@@ -16,6 +16,7 @@ from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.task import TaskQueue
 from app.services.ai_service import check_image_quality
 from app.services.task_runners.common import _ANALYZE_CONCURRENCY, _utcnow
+from app.services.vector import store as vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ async def create_quality_check_task(
 
 
 async def _quality_check_one(
-    sem: asyncio.Semaphore, inspiration_id: str, file_path: str, force: bool = False
+    sem: asyncio.Semaphore,
+    inspiration_id: str,
+    file_path: str,
+    prefilter_vector: list[float] | None = None,
+    force: bool = False,
 ) -> tuple[str, str, str, bool]:
     """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因, 是否疑似 AI)。
 
@@ -58,11 +63,12 @@ async def _quality_check_one(
 
     参数:
         force: 为 True 时覆盖写入已审查素材（随机复审场景）
+        prefilter_vector: 预取的图像向量，供负样本初筛器复用（避免逐条全表扫描）
     """
     async with sem:
         async with async_session() as db:
             status, reason, ai_generated = await check_image_quality(
-                db, inspiration_id, file_path, force=force
+                db, inspiration_id, file_path, force=force, prefilter_vector=prefilter_vector
             )
             # 写入质量审核日志（失败时记录原因，供前端排查）
             db.add(AIAnalysisLog(
@@ -104,6 +110,12 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     insp_map = {r[0]: r[1] for r in rows}
     items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
 
+    # 一次性批量预取全部图像向量供初筛器复用：逐条 get_vector 每次都会全表加载
+    # LanceDB 表（O(N²)），批量读取只加载一次（与训练侧 get_vectors_batch 同理）
+    vec_map: dict[str, list[float]] = {}
+    if vector_store.is_lancedb_available():
+        vec_map = await vector_store.get_vectors_batch("image", [iid for iid, _ in items])
+
     task.total = len(items)
     task.done = 0
     task.progress = 0
@@ -119,7 +131,12 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     for start in range(0, len(items), _ANALYZE_CONCURRENCY):
         chunk = items[start:start + _ANALYZE_CONCURRENCY]
         results = await asyncio.gather(
-            *(_quality_check_one(sem, iid, fp, force=is_random) for iid, fp in chunk)
+            *(
+                _quality_check_one(
+                    sem, iid, fp, prefilter_vector=vec_map.get(iid), force=is_random
+                )
+                for iid, fp in chunk
+            )
         )
         for _iid, status, _reason, _ai in results:
             if status == "approved":

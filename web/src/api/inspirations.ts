@@ -58,6 +58,8 @@ export interface InspirationListOut {
   total: number
   page: number
   size: number
+  /** 垃圾桶保留天数（仅垃圾桶列表返回，前端据此展示剩余天数） */
+  trash_retention_days?: number | null
 }
 
 export interface InspirationDetailOut extends InspirationOut {
