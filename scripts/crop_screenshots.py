@@ -7,9 +7,13 @@
 
 两阶段工作流（先扫描、后执行）:
     1. 扫描:
-       python scripts/crop_screenshots.py --scan
+       python scripts/crop_screenshots.py --scan [--auto]
        扫描库中符合「竖屏截图比例」的手动上传图片，把候选清单写入
        scripts/crop_candidates.json。本阶段不做任何修改。
+       - 默认模式：所有候选统一使用 --crop-top / --crop-bottom 比例。
+       - --auto 模式：逐张检测黑边（逐行统计亮像素占比，取最高的内容
+         条带作为照片主体，裁到黑边消失为止）。检测失败的条目自动置为
+         未选中并注明原因，留在清单里供人工处理。
 
     2. 审查候选清单（人工确认）:
        打开 scripts/crop_candidates.json：
@@ -29,6 +33,8 @@
     - 已移入垃圾桶的素材不处理。
     - 向量重建以任务队列方式入队，由 worker 进程消费；未启动 worker
       时向量保持旧值，任务会在 worker 下次启动后执行。
+    - --auto 黑边检测针对「深色/黑色背景」截图（暗色相册查看器等）；
+      浅色背景的截图请用默认比例或人工调整。
 """
 
 import argparse
@@ -60,6 +66,12 @@ DEFAULT_MIN_RATIO = 1.75  # 高/宽 ≥ 1.75 视为竖屏截图候选（9:16≈1
 DEFAULT_CROP_TOP = 0.03  # 默认裁掉顶部 3%（状态栏区域）
 DEFAULT_CROP_BOTTOM = 0.05  # 默认裁掉底部 5%（底部导航栏/手势条区域）
 
+# ── 黑边自动检测参数（--auto 模式）──
+BRIGHT_PIXEL_THRESHOLD = 25  # 灰度值 > 25 视为「亮像素」
+CONTENT_ROW_FRACTION = 0.005  # 一行中亮像素占比 > 0.5% 视为内容行
+MIN_MAIN_BAND_HEIGHT_FRACTION = 0.25  # 主体条带高度至少占全图 25%
+MAX_OTHER_BANDS_FRACTION = 0.5  # 其他条带总高度不超过主体的 50%
+
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
@@ -72,6 +84,11 @@ def parse_args() -> argparse.Namespace:
     )
     mode.add_argument(
         "--apply", action="store_true", help="按候选清单执行裁剪"
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="扫描时自动检测黑边并逐张计算裁剪比例（失败条目置为未选中）",
     )
     parser.add_argument(
         "--file",
@@ -111,6 +128,58 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def detect_photo_band(path: Path) -> tuple[int, int]:
+    """检测图片中最大的内容条带（照片主体）的上下边界。
+
+    思路：把图像转灰度后逐行统计「亮像素占比」，占比极低的连续行视为
+    黑边/留白；从所有内容条带中选出最高的一条作为照片主体，返回
+    (顶部行, 底部行)（含端点，0 基像素坐标）。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        (top, bottom) 主体条带的上下边界
+
+    异常:
+        ValueError: 布局不规则（无内容/主体过矮/多主体拼贴等），需人工处理
+    """
+    import numpy as np
+
+    with Image.open(path) as im:
+        arr = np.asarray(im.convert("L"))
+    height = arr.shape[0]
+    row_frac = (arr > BRIGHT_PIXEL_THRESHOLD).mean(axis=1)
+
+    bands: list[tuple[int, int]] = []
+    start: int | None = None
+    for y, frac in enumerate(row_frac):
+        if frac > CONTENT_ROW_FRACTION:
+            if start is None:
+                start = y
+        elif start is not None:
+            bands.append((start, y - 1))
+            start = None
+    if start is not None:
+        bands.append((start, height - 1))
+
+    if not bands:
+        raise ValueError("未检测到内容条带")
+
+    main = max(bands, key=lambda b: b[1] - b[0] + 1)
+    top, bottom = main
+    main_height = bottom - top + 1
+
+    if main_height < height * MIN_MAIN_BAND_HEIGHT_FRACTION:
+        raise ValueError(f"主体条带过矮（{main_height}px），可能不是居中照片")
+    if top == 0 and bottom == height - 1:
+        raise ValueError("主体占满全图，无黑边可裁")
+    other_height = sum(e - s + 1 for s, e in bands if (s, e) != main)
+    if other_height > main_height * MAX_OTHER_BANDS_FRACTION:
+        raise ValueError(f"其他内容条带过多（{other_height}px），布局复杂")
+    return top, bottom
+
+
 async def scan_candidates(args: argparse.Namespace) -> None:
     """扫描竖屏截图候选素材，写入候选清单 JSON（只读不写库）。"""
     await init_db()
@@ -133,6 +202,8 @@ async def scan_candidates(args: argparse.Namespace) -> None:
 
     candidates: list[dict] = []
     skipped_missing = 0
+    auto_ok = 0
+    auto_fail = 0
     for insp_id, file_path, media_type, quality_status, created_at in rows:
         if media_type != "image":
             continue
@@ -147,21 +218,37 @@ async def scan_candidates(args: argparse.Namespace) -> None:
             continue  # 无法解码的图片不做候选
         if height / width < args.min_ratio:
             continue
-        candidates.append(
-            {
-                "id": insp_id,
-                "file_path": file_path,
-                "width": width,
-                "height": height,
-                "ratio": round(height / width, 3),
-                "size_bytes": full.stat().st_size,
-                "quality_status": quality_status or "",
-                "created_at": created_at.isoformat(sep=" ") if created_at else "",
-                "crop_top": args.crop_top,
-                "crop_bottom": args.crop_bottom,
-                "selected": True,
-            }
-        )
+        item = {
+            "id": insp_id,
+            "file_path": file_path,
+            "width": width,
+            "height": height,
+            "ratio": round(height / width, 3),
+            "size_bytes": full.stat().st_size,
+            "quality_status": quality_status or "",
+            "created_at": created_at.isoformat(sep=" ") if created_at else "",
+            "crop_top": args.crop_top,
+            "crop_bottom": args.crop_bottom,
+            "selected": True,
+        }
+        # --auto：黑边检测，逐张计算裁剪比例；失败条目置为未选中并注明原因
+        if args.auto:
+            try:
+                top_px, bottom_px = detect_photo_band(full)
+                item.update(
+                    {
+                        "auto": True,
+                        "detected_top_px": top_px,
+                        "detected_bottom_px": bottom_px,
+                        "crop_top": round(top_px / height, 6),
+                        "crop_bottom": round((height - 1 - bottom_px) / height, 6),
+                    }
+                )
+                auto_ok += 1
+            except ValueError as e:
+                item.update({"selected": False, "note": f"自动检测失败：{e}"})
+                auto_fail += 1
+        candidates.append(item)
 
     candidates.sort(key=lambda c: c["ratio"], reverse=True)
     if args.limit > 0:
@@ -183,12 +270,22 @@ async def scan_candidates(args: argparse.Namespace) -> None:
     args.file.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"扫描完成：共 {len(candidates)} 个候选（源文件缺失跳过 {skipped_missing} 个）")
+    if args.auto:
+        print(f"黑边自动检测：成功 {auto_ok} 个，失败 {auto_fail} 个（已置为未选中，请人工确认）")
     print("")
-    print(f"{'序号':>4}  {'素材 ID':<36}  {'宽x高':<12}  {'高宽比':>6}  {'质量状态':<8}  创建时间")
+    print(
+        f"{'序号':>4}  {'素材 ID':<36}  {'宽x高':<13}  {'高宽比':>6}  "
+        f"{'裁剪(上/下)':<13}  {'质量状态':<8}  创建时间"
+    )
     for idx, c in enumerate(candidates, start=1):
+        crop_str = (
+            "待人工"
+            if c.get("selected") is False
+            else f"{c['crop_top'] * 100:.1f}%/{c['crop_bottom'] * 100:.1f}%"
+        )
         print(
             f"{idx:>4}  {c['id']:<36}  {c['width']}x{c['height']:<8}  "
-            f"{c['ratio']:>6}  {c['quality_status']:<8}  {c['created_at']}"
+            f"{c['ratio']:>6}  {crop_str:<13}  {c['quality_status']:<8}  {c['created_at']}"
         )
     print("")
     print(f"候选清单已写入: {args.file}")
@@ -210,8 +307,8 @@ def _crop_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     异常:
         ValueError: 裁剪比例非法或合计超出图片高度
     """
-    if not 0 < top_frac < 0.5 or not 0 < bottom_frac < 0.5:
-        raise ValueError(f"裁剪比例必须位于 (0, 0.5): top={top_frac}, bottom={bottom_frac}")
+    if not (0 <= top_frac < 1) or not (0 <= bottom_frac < 1):
+        raise ValueError(f"裁剪比例必须位于 [0, 1): top={top_frac}, bottom={bottom_frac}")
 
     tmp = path.with_name(f"{path.stem}_crop_tmp{path.suffix}")
     with Image.open(path) as src:
@@ -284,6 +381,27 @@ async def apply_crops(args: argparse.Namespace) -> None:
             if not full.exists():
                 skipped.append((insp_id, "文件不存在"))
                 continue
+
+            # 尺寸守卫：与扫描时记录不一致说明文件已变化（可能已处理过），
+            # 按旧比例裁剪会算错，跳过并提示重新扫描
+            rec_width = item.get("width")
+            rec_height = item.get("height")
+            if rec_width is not None and rec_height is not None:
+                try:
+                    with Image.open(full) as probe:
+                        cur_width, cur_height = probe.size
+                except Exception:
+                    skipped.append((insp_id, "文件无法解码"))
+                    continue
+                if abs(cur_width - int(rec_width)) > 2 or abs(cur_height - int(rec_height)) > 2:
+                    skipped.append(
+                        (
+                            insp_id,
+                            f"文件尺寸已变化（现 {cur_width}x{cur_height}，"
+                            f"扫描时 {rec_width}x{rec_height}），请重新扫描",
+                        )
+                    )
+                    continue
 
             top_frac = float(item.get("crop_top", params.get("crop_top", DEFAULT_CROP_TOP)))
             bottom_frac = float(
@@ -382,6 +500,9 @@ async def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args()
+    if args.auto and args.apply:
+        print("--auto 仅用于 --scan 模式（自动检测在扫描阶段完成，执行阶段按清单比例裁剪）")
+        return
     if args.scan:
         await scan_candidates(args)
     else:
