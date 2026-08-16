@@ -29,6 +29,9 @@ class Person(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), index=True)  # 人物名 / 博主昵称
+    person_type: Mapped[str] = mapped_column(
+        String(16), default="blogger", index=True
+    )  # 内容类型：model（职业模特写真）| blogger（博主穿搭），用于 UI 区分呈现
     platform: Mapped[str] = mapped_column(
         String(32), default="other", index=True
     )  # 平台标识：xiaohongshu | douyin | other

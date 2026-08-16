@@ -22,7 +22,7 @@ from app.config import settings
 
 # API/Pydantic 契约版本：修改请求/响应模型、路由字段等「不落库」的契约时手动 +1。
 # 与数据库结构哈希拼接成前后端握手用的 schema_version（见 compute_schema_version）。
-API_CONTRACT_VERSION = 2
+API_CONTRACT_VERSION = 3
 
 # 字段清单：表名 -> [(列名, 列定义), ...]
 _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
@@ -47,6 +47,9 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("sort_order", "INTEGER DEFAULT 0"),
         ("description", "TEXT"),
     ],
+    "persons": [
+        ("person_type", "TEXT DEFAULT 'blogger'"),
+    ],
 }
 
 # 索引清单：表名 -> [(索引名, 列名), ...]
@@ -60,6 +63,9 @@ _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
     ],
     "tags": [
         ("ix_tags_pinned", "pinned"),
+    ],
+    "persons": [
+        ("ix_persons_person_type", "person_type"),
     ],
 }
 

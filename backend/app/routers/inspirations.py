@@ -15,7 +15,8 @@ from app.schemas.inspiration import (
     MoveToTrashRequest,
     TagOut,
 )
-from app.services import inspiration_service
+from app.schemas.person import PersonBriefOut, PersonLinkRequest
+from app.services import inspiration_service, person_service
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
 
@@ -195,6 +196,9 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
             InspirationTagOut(tag=TagOut.model_validate(t.tag), confidence=t.confidence)
             for t in inspiration.tags
         ],
+        persons=[
+            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
+        ],
         analysis_logs=[
             AnalysisLogOut.model_validate(log) for log in inspiration.analysis_logs
         ],
@@ -276,6 +280,49 @@ async def remove_inspiration_tag(
     return await inspiration_service.remove_inspiration_tag(db, inspiration_id, tag_id)
 
 
+# ── 人物关联（对标 tag 关联写法；关联用 person_id 规避同名歧义）──
+
+
+@router.post("/{inspiration_id}/persons", status_code=status.HTTP_200_OK)
+async def link_inspiration_persons(
+    inspiration_id: str,
+    data: PersonLinkRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """给素材批量关联人物（幂等，已关联自动跳过）。
+
+    请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID。
+    """
+    added = []
+    for person_id in data.person_ids:
+        link = await person_service.link_person(db, inspiration_id, person_id)
+        if link:
+            person = await person_service.get_person(db, person_id)
+            added.append(
+                PersonBriefOut(
+                    id=person.id,
+                    name=person.name,
+                    person_type=person.person_type,
+                    platform=person.platform,
+                    avatar_path=person.avatar_path,
+                )
+            )
+    await db.flush()
+    return {"added": [a.model_dump() for a in added], "count": len(added)}
+
+
+@router.delete("/{inspiration_id}/persons/{person_id}", status_code=status.HTTP_200_OK)
+async def unlink_inspiration_person(
+    inspiration_id: str,
+    person_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """解除素材与某个人物的关联（不删除人物本身）。"""
+    if not await person_service.unlink_person(db, inspiration_id, person_id):
+        raise HTTPException(status_code=404, detail="未找到该人物关联")
+    return {"removed": 1}
+
+
 @router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
     """彻底删除灵感素材（物理删除文件与数据库记录，不可恢复）。
@@ -323,5 +370,8 @@ def _to_out(inspiration: Inspiration) -> InspirationOut:
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,
+        persons=[
+            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
+        ],
         analysis_status=status,
     )

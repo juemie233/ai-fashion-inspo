@@ -18,6 +18,7 @@ import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
+import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
@@ -249,6 +250,11 @@ async function reanalyze() {
   }
 }
 
+/** 更新素材详情中的人物关联列表 */
+function updatePersons(list: any) {
+  if (detail.value) detail.value.persons = list
+}
+
 /** 点击标签跳转到搜索页 */
 function goSearchByTag(name: string) {
   router.push({ path: '/search', query: { q: name } })
@@ -372,6 +378,13 @@ function goSearchByTag(name: string) {
                 </n-descriptions-item>
               </n-descriptions>
             </div>
+
+            <!-- 关联人物（搜索添加 / 解除关联） -->
+            <PersonLinkSection
+              :persons="detail.persons || []"
+              :inspiration-id="detail.id"
+              @change="updatePersons"
+            />
 
             <!-- 穿搭大标签 -->
             <OutfitTagSection

@@ -10,7 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
 from app.db_migrations import compute_schema_version, ensure_schema
-from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin, tasks
+from app.routers import (
+    inspirations,
+    tags,
+    files,
+    search,
+    ai,
+    scraper,
+    ws,
+    admin,
+    tasks,
+    persons,
+)
 
 # 垃圾桶自动清理周期（秒）：每 6 小时扫描一次超过保留期的软删除素材
 _TRASH_SWEEP_INTERVAL = 6 * 3600
@@ -120,6 +131,7 @@ app.include_router(scraper.router)
 app.include_router(admin.router)
 app.include_router(ws.router)
 app.include_router(tasks.router)
+app.include_router(persons.router)
 
 
 @app.get("/api/health")

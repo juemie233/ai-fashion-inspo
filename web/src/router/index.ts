@@ -42,6 +42,18 @@ const router = createRouter({
       meta: { title: '标签管理' },
     },
     {
+      path: '/persons',
+      name: 'persons',
+      component: () => import('@/views/PersonView.vue'),
+      meta: { title: '人物管理' },
+    },
+    {
+      path: '/persons/:id',
+      name: 'person-detail',
+      component: () => import('@/views/PersonDetailView.vue'),
+      meta: { title: '人物详情' },
+    },
+    {
       path: '/models',
       name: 'models',
       component: () => import('@/views/ModelManageView.vue'),

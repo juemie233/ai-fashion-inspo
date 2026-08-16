@@ -1,7 +1,7 @@
 /** 共享类型定义：灵感素材相关。Web 和 Mobile 端共用。 */
 
 /** 灵感的来源类型 */
-export type SourceType = 'xiaohongshu' | 'douyin' | 'manual_upload' | 'scraper' | 'browser_extension'
+export type SourceType = 'xiaohongshu' | 'douyin' | 'manual_upload' | 'scraper' | 'browser_extension' | 'batch_import'
 
 /** 媒体类型 */
 export type MediaType = 'image' | 'video_frame' | 'video'

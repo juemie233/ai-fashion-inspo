@@ -1,6 +1,7 @@
 /** 灵感素材相关 API 调用。 */
 
 import apiClient from './client'
+import type { PersonBrief } from '@shared/types/person'
 
 /** 审核状态 */
 export type QualityStatus = 'pending' | 'approved' | 'rejected'
@@ -37,6 +38,7 @@ export interface InspirationOut {
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
+  persons?: PersonBrief[]
   analysis_status?: string | null
 }
 

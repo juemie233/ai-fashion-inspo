@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
+from app.models.person import InspirationPerson
 from app.models.scraper import ScraperSeenURL
 from app.models.tag import InspirationTag
 from app.schemas.inspiration import InspirationUpdate
@@ -301,7 +302,8 @@ async def list_inspirations(
         (素材列表, 总数)
     """
     query = select(Inspiration).options(
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
+        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+        selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
     ).where(_NOT_DELETED)
 
     if source_type:
@@ -478,6 +480,7 @@ async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
             selectinload(Inspiration.analysis_logs),
+            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
         )
         .where(Inspiration.id == inspiration_id)
     )

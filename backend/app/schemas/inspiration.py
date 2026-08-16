@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_serializer
 
+from app.schemas.person import PersonBriefOut
+
 # 垃圾桶删除原因枚举（负样本学习只用「质量差」子集保证语义纯净）
 TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他"]
 
@@ -87,6 +89,7 @@ class InspirationOut(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
+    persons: list[PersonBriefOut] = []
     analysis_status: str | None = "none"
 
     model_config = {"from_attributes": True}
