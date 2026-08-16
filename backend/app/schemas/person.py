@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
+from app.utils.time import format_utc
+
 # 内容类型：职业模特写真 / 博主穿搭（UI 区分呈现的核心维度）
 PersonType = Literal["model", "blogger"]
 
@@ -70,9 +72,7 @@ class PersonOut(BaseModel):
 
     @field_serializer("created_at", "updated_at")
     def serialize_datetime(self, dt: datetime | None) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return format_utc(dt)
 
 
 class PersonBriefOut(BaseModel):

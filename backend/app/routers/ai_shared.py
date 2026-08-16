@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +150,9 @@ async def _update_env_file(updates: dict[str, str]) -> None:
     logger.info(f"已更新 .env: {list(updates.keys())}")
 
 
-def _fmt_utc(dt) -> str:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
-    if dt is None:
-        return None
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _fmt_utc(dt) -> str | None:
+    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
+    return format_utc(dt)
 
 
 def _format_size(size_bytes: int) -> str:

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 
 async def _daily_trends(db: AsyncSession) -> list[dict]:
@@ -117,10 +117,8 @@ async def _problem_items(db: AsyncSession) -> dict:
 
 
 def _fmt_utc(dt) -> str | None:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
-    if dt is None:
-        return None
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
+    return format_utc(dt)
 
 
 async def _model_comparison(db: AsyncSession) -> list[dict]:

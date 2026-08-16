@@ -22,6 +22,7 @@ from app.models.inspiration import (
 )
 from app.models.tag import InspirationTag, Tag
 from app.services.ai_tag_saver import iter_extracted_tags
+from app.utils.time import format_utc
 
 
 class AIAnalysisNotFoundError(Exception):
@@ -41,10 +42,8 @@ class InvalidMediaError(Exception):
 
 
 def _fmt_utc(dt) -> str | None:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
-    if dt is None:
-        return None
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
+    return format_utc(dt)
 
 
 async def trigger_analysis(

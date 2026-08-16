@@ -30,7 +30,7 @@ from app.services.audit_service import record_audit_log
 from app.services.file_service import move_to_trash
 from app.services.inspiration_service import _resolve_trash_reason
 from app.services.scraper_seen_service import seal_urls
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -954,7 +954,7 @@ async def get_task_results(
     items = items_result.scalars().all()
 
     def _fmt(dt):
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ') if dt else None
+        return format_utc(dt)
 
     return {
         "task": {

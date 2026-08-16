@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, field_serializer
 
+from app.utils.time import format_utc
+
 
 class TaskOut(BaseModel):
     """任务状态输出（前端轮询使用）。"""
@@ -28,9 +30,7 @@ class TaskOut(BaseModel):
     @field_serializer("next_retry_at", "created_at", "updated_at")
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
         """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
-        if dt is None:
-            return None
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return format_utc(dt)
 
 
 class TaskListOut(BaseModel):

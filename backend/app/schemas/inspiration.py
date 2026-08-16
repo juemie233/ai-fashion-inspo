@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Literal, get_args
 from pydantic import BaseModel, Field, field_serializer
 
 from app.schemas.person import PersonBriefOut
+from app.utils.time import format_utc
 
 if TYPE_CHECKING:
     from app.models.inspiration import Inspiration
@@ -30,9 +31,7 @@ class TagOut(BaseModel):
 
     @field_serializer('created_at')
     def serialize_created_at(self, dt: datetime | None) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 class InspirationTagOut(BaseModel):
@@ -129,9 +128,7 @@ class InspirationOut(BaseModel):
 
     @field_serializer('created_at', 'updated_at', 'deleted_at')
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 class InspirationListOut(BaseModel):
@@ -164,9 +161,7 @@ class AnalysisLogOut(BaseModel):
 
     @field_serializer('created_at')
     def serialize_created_at(self, dt: datetime | None) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 def analysis_status_from_logs(logs: list) -> str:

@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
+from app.utils.time import format_utc
+
 
 class ScraperTaskCreate(BaseModel):
     """创建采集任务"""
@@ -37,9 +39,7 @@ class ScraperTaskOut(BaseModel):
 
     @field_serializer('started_at', 'finished_at', 'created_at')
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 class ScraperScheduleCreate(BaseModel):
@@ -94,6 +94,4 @@ class ScraperScheduleOut(BaseModel):
 
     @field_serializer('next_run_at', 'last_run_at', 'created_at')
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)

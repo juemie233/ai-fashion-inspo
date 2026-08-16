@@ -3,6 +3,8 @@
 from datetime import datetime
 from pydantic import BaseModel, Field, field_serializer
 
+from app.utils.time import format_utc
+
 
 class TagCreate(BaseModel):
     """创建标签"""
@@ -35,9 +37,7 @@ class TagOut(BaseModel):
 
     @field_serializer('created_at')
     def serialize_created_at(self, dt: datetime | None) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 class TagCategoryGroup(BaseModel):
@@ -84,9 +84,7 @@ class AliasOut(BaseModel):
 
     @field_serializer('created_at')
     def serialize_created_at(self, dt: datetime | None) -> str | None:
-        if dt is None:
-            return None
-        return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        return format_utc(dt)
 
 
 class TagReorderItem(BaseModel):
