@@ -1,5 +1,6 @@
 """素材管理后台 — 统计、完整性检查、批量操作、导出与趋势分析。"""
 
+import asyncio
 import csv
 import io
 import logging
@@ -106,7 +107,7 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
             })
 
     # 扫描磁盘媒体文件，找孤立文件（scan_storage_files 已排除 lancedb/logs 等非素材目录）
-    disk_files = admin_stats_service.scan_storage_files()
+    disk_files = await asyncio.to_thread(admin_stats_service.scan_storage_files)
     orphan_files: list[dict] = []
     orphan_total_size = 0
     for rel_path, size in disk_files.items():
@@ -129,7 +130,7 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
 @router.post("/cleanup-orphans")
 async def cleanup_orphan_files():
     """删除所有孤立文件（磁盘上有但数据库无记录的文件）。"""
-    storage_files = admin_stats_service.scan_storage_files()
+    storage_files = await asyncio.to_thread(admin_stats_service.scan_storage_files)
     storage_root = settings.storage_root
 
     # 这里需要一个同步的数据库会话来获取文件列表
@@ -313,7 +314,7 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
     )
-    hash_map = build_hash_map(result.all(), settings.storage_root)
+    hash_map = await asyncio.to_thread(build_hash_map, result.all(), settings.storage_root)
 
     duplicates = [
         {"hash": h, "files": files}

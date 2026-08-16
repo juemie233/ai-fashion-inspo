@@ -5,6 +5,8 @@
 若干 ≤60 行的小函数，便于单独阅读与测试。
 """
 
+import asyncio
+
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,7 +185,7 @@ async def collect_stats(db: AsyncSession) -> dict:
     base = await _query_base_counts(db)
     analysis = await _query_analysis_counts(db)
     distributions = await _query_distributions(db)
-    sizes = _compute_storage_sizes(scan_storage_files())
+    sizes = _compute_storage_sizes(await asyncio.to_thread(scan_storage_files))
 
     return {
         **base,
