@@ -96,6 +96,30 @@ def _is_content_image(src: str) -> bool:
     return not any(k in low for k in skip_kw)
 
 
+def _is_large_image(img, min_size: int = 300) -> bool:
+    """判断图片是否为大图（正文轮播图），用于回退模式下排除推荐缩略图。
+
+    详情页 swiper 选择器失效时会回退到全页 img，此时「相关推荐」区块的
+    缩略图（约 200px）会被误采。用实际图片尺寸过滤：正文轮播图是大图，
+    推荐缩略图是小图。naturalWidth 优先，其次渲染尺寸；都拿不到时保守保留。
+    """
+    try:
+        dims = img.evaluate("el => ({w: el.naturalWidth || 0, h: el.naturalHeight || 0})")
+        if dims.get("w", 0) >= min_size or dims.get("h", 0) >= min_size:
+            return True
+        if dims.get("w") and dims.get("h"):
+            return False  # 明确的小图
+    except Exception:
+        pass
+    try:
+        box = img.bounding_box()
+        if box and (box.get("width", 0) >= min_size or box.get("height", 0) >= min_size):
+            return True
+    except Exception:
+        pass
+    return True  # 拿不到尺寸信息时保守保留，避免漏采
+
+
 def _extract_note_detail(page, note_url: str) -> tuple[list[str], list[str]]:
     """打开单个笔记详情页，提取轮播图 URL 与视频 URL。
 
@@ -116,12 +140,9 @@ def _extract_note_detail(page, note_url: str) -> tuple[list[str], list[str]]:
     except Exception:
         return img_urls, video_urls
 
-    # 等待详情页主体渲染（轮播图或视频）
+    # 等待详情页主体渲染（任意图片或视频出现即继续）
     try:
-        page.wait_for_selector(
-            "div.swiper-slide img, video, div[class*=swiper] img",
-            timeout=10000,
-        )
+        page.wait_for_selector("img, video", timeout=10000)
     except Exception:
         pass
 
@@ -130,22 +151,29 @@ def _extract_note_detail(page, note_url: str) -> tuple[list[str], list[str]]:
     if random.random() < 0.6:
         _human_mouse_move(page)
 
-    # 提取轮播图：优先 swiper 轮播容器（精确），回退到全页 img（宽松）
+    # 提取轮播图：优先 swiper 轮播容器（精确），失效时回退到全页 img（宽松），
+    # 回退模式下用「大图过滤 + 数量上限」排除相关推荐缩略图等噪声。
     img_elements = []
     for sel in ("div.swiper-slide img", "div[class*=swiper] img"):
         img_elements = page.query_selector_all(sel)
         if img_elements:
             break
+    loose_mode = not img_elements  # 未命中精确容器 → 回退全页，需严格过滤
     if not img_elements:
         img_elements = page.query_selector_all("img")
 
+    MAX_IMAGES_PER_NOTE = 9  # 小红书单笔记正文图上限，超出即视为混入噪声
     seen_imgs: set[str] = set()
     for img in img_elements:
         src = _clean_media_url(img.get_attribute("src") or img.get_attribute("data-src") or "")
         if not src or not _is_content_image(src) or src in seen_imgs:
             continue
+        if loose_mode and not _is_large_image(img):
+            continue
         seen_imgs.add(src)
         img_urls.append(src)
+        if len(img_urls) >= MAX_IMAGES_PER_NOTE:
+            break
 
     # 提取视频：<video> 的 src（或 <source> 子标签），封面 poster 一并作为图片采集
     for video in page.query_selector_all("video"):
@@ -160,6 +188,13 @@ def _extract_note_detail(page, note_url: str) -> tuple[list[str], list[str]]:
         if poster and _is_content_image(poster) and poster not in seen_imgs:
             seen_imgs.add(poster)
             img_urls.append(poster)
+
+    # 无媒体时打印诊断，便于判断「被重定向/风控」还是「选择器未命中」
+    if not img_urls and not video_urls:
+        try:
+            print(f"    详情页无媒体（title={page.title()[:30]!r}, url={page.url[:70]}...）")
+        except Exception:
+            pass
 
     return img_urls, video_urls
 
@@ -278,6 +313,8 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
         if len(img_pairs) >= need_count * 2:
             break
 
+        # 详情页之间随机停顿，模拟真人逐个浏览，降低风控
+        _rdsleep(0.5, 1.5)
         img_urls, video_urls = _extract_note_detail(page, note_url)
         if not img_urls and not video_urls:
             notes_without_media += 1
