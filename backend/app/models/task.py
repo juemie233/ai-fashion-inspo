@@ -43,6 +43,12 @@ class TaskQueue(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, index=True
     )  # 下次可重试时间（指数退避）
+    claimed_by: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # 认领该任务的 worker 实例标识（心跳租约用）
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )  # 认领 worker 的最后心跳时间（超时视为 worker 已死）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow

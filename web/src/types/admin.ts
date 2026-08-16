@@ -62,3 +62,44 @@ export interface AdminTask {
   } | null
   error: string | null
 }
+
+/** 单个服务的健康状态（服务守护与监控） */
+export interface ServiceHealthItem {
+  status: 'ok' | 'down' | 'unhealthy' | 'starting'
+  pid: number | null
+  latency_ms?: number | null
+  count?: number
+  workers?: string[]
+  last_heartbeat_at?: string | null
+  detail?: string
+}
+
+/** 各服务 + 资源 + 告警的健康状态汇总 */
+export interface ServiceHealth {
+  services: {
+    backend: ServiceHealthItem
+    frontend: ServiceHealthItem
+    worker: ServiceHealthItem
+  }
+  resources: {
+    disk: {
+      path: string
+      total_bytes: number
+      used_bytes: number
+      free_bytes: number
+      used_percent: number
+    }
+    memory: {
+      used_percent: number
+      total_bytes: number
+      available_bytes: number
+    } | null
+    logs: {
+      dir: string
+      total_bytes: number
+      files: { name: string; size_bytes: number }[]
+    }
+  }
+  alerts: string[]
+  checked_at: string
+}

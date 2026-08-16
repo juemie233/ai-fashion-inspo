@@ -17,3 +17,21 @@ def test_health_schema_version_format(client):
     head, tail = version.rsplit("-", 1)
     assert len(head) == 8  # SHA-256 前 8 位
     assert tail.isdigit()
+
+
+def test_health_services(client):
+    """服务健康端点：返回 services/resources/alerts 结构。"""
+    r = client.get("/api/health/services")
+    assert r.status_code == 200
+    data = r.json()
+
+    # 后端自身健康（能响应即 ok）
+    assert data["services"]["backend"]["status"] == "ok"
+    # 前端 / worker 探测与心跳
+    assert "frontend" in data["services"]
+    assert "worker" in data["services"]
+    # 资源与告警结构
+    assert "disk" in data["resources"]
+    assert "logs" in data["resources"]
+    assert isinstance(data["alerts"], list)
+    assert data["checked_at"]

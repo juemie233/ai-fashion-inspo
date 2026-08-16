@@ -26,6 +26,7 @@ import AdminTrendChart from '@/components/admin/AdminTrendChart.vue'
 import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
 import AdminAuditLog from '@/components/admin/AdminAuditLog.vue'
 import AdminNearDuplicates from '@/components/admin/AdminNearDuplicates.vue'
+import AdminServiceHealth from '@/components/admin/AdminServiceHealth.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -241,6 +242,7 @@ onUnmounted(() => {
     <n-tabs v-model:value="activeTab" type="line" animated>
       <!-- 概览 -->
       <n-tab-pane name="overview" tab="概览">
+        <admin-service-health />
         <admin-stat-cards :stats="stats" />
         <admin-dist-stats :stats="stats" />
         <admin-large-files :files="largestFiles" />

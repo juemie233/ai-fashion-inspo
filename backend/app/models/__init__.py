@@ -11,6 +11,7 @@ from app.models.person import Person, InspirationPerson
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import TaskQueue
 from app.models.audit import AuditLog
+from app.models.service_heartbeat import ServiceHeartbeat
 
 __all__ = [
     "Inspiration",
@@ -26,4 +27,5 @@ __all__ = [
     "ScraperSchedule",
     "TaskQueue",
     "AuditLog",
+    "ServiceHeartbeat",
 ]

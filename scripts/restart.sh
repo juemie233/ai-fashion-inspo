@@ -1,11 +1,15 @@
 #!/bin/bash
-# AI 穿搭素材库 — 一键重启前后端
+# AI 穿搭素材库 — 一键重启前后端 + worker
 # 用法: bash scripts/restart.sh
 #
 # 说明：后端「不」使用 uvicorn --reload。
 #   Windows 下 --reload 走 multiprocessing.spawn，文件变更触发重载时会以
 #   OSError: [WinError 87] 参数错误 崩溃（后端挂掉）；且强杀时易残留 spawn
 #   worker 子进程占用端口。本脚本靠「先杀后启」拿到最新代码，无需 --reload。
+#
+# 自「服务守护」改造后，进程由 supervisor 统一管理：
+#   先停 supervisor（级联停三服务）→ 兜底杀残留进程 → 启动 supervisor
+#   （supervisor 再拉起三服务）。这样三服务总能拿到最新代码。
 # 本脚本可靠地终止所有相关进程（含孤儿 worker）后重启。
 
 cd "$(dirname "$0")/.."
@@ -20,9 +24,17 @@ echo "=============================================="
 echo "  一键重启前后端 + worker"
 echo "=============================================="
 
+# ── 0. 停止 supervisor（守护进程；级联停止三服务）──
+echo ""
+echo ">>> [0/4] 停止 supervisor ..."
+for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*supervisor.py*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 supervisor 进程树 PID $pid"
+done
+sleep 1
+
 # ── 1. 停止后端 ──
 echo ""
-echo ">>> [1/6] 停止后端 (端口 $BACKEND_PORT) ..."
+echo ">>> [1/4] 停止后端 (端口 $BACKEND_PORT) ..."
 
 # 1a. 杀掉监听端口的进程树（可能是 worker，taskkill /T 会级联杀掉其父 reloader）
 killed=0
@@ -51,7 +63,7 @@ fi
 
 # ── 2. 停止前端 ──
 echo ""
-echo ">>> [2/6] 停止前端 (端口 $FRONTEND_PORT) ..."
+echo ">>> [2/4] 停止前端 (端口 $FRONTEND_PORT) ..."
 for pid in $(netstat -ano 2>/dev/null | grep ":$FRONTEND_PORT" | grep -i LISTENING | awk '{print $NF}' | sort -u); do
   if [ -n "$pid" ]; then
     taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止进程树 PID $pid"
@@ -66,56 +78,28 @@ fi
 
 # ── 3. 停止 worker ──
 echo ""
-echo ">>> [3/6] 停止 worker ..."
+echo ">>> [3/4] 停止 worker ..."
 for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
   taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 worker 进程 PID $pid"
 done
 sleep 1
 
-# ── 4. 启动后端 ──
+# ── 4. 启动 supervisor（由它拉起三服务）──
 echo ""
-echo ">>> [4/6] 启动后端 ..."
-cd backend
-# PYTHONUTF8=1 让中文日志以 UTF-8 落盘，避免 Windows 默认 GBK 导致日志乱码
-# 默认仅绑定本机（127.0.0.1）：个人单机使用，避免局域网内其他设备访问私人素材。
-# 确需真机/局域网访问时，把下方 --host 改为 0.0.0.0 并自行评估暴露风险。
-PYTHONUTF8=1 nohup python -m uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT" \
-  > "../$LOG_DIR/backend.log" 2>&1 &
-BACKEND_PID=$!
-cd ..
-echo "  后端 PID: $BACKEND_PID (日志: $LOG_DIR/backend.log)"
-
-# ── 4. 启动前端 ──
-echo ""
-echo ">>> [5/6] 启动前端 ..."
+echo ">>> [4/4] 启动 supervisor ..."
 if [ ! -d web/node_modules ]; then
   echo "  ❌ 未检测到 web/node_modules，请先执行: cd web && npm install"
   exit 1
 fi
-cd web
-# 前端 dev server 同样默认仅本机：它代理后端 API，绑 0.0.0.0 会间接暴露后端
-nohup npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" \
-  > "../$LOG_DIR/frontend.log" 2>&1 &
-FRONTEND_PID=$!
-cd ..
-echo "  前端 PID: $FRONTEND_PID (日志: $LOG_DIR/frontend.log)"
+nohup python scripts/supervisor.py > "$LOG_DIR/supervisor-bootstrap.log" 2>&1 &
+echo "  supervisor PID: $! (日志: $LOG_DIR/supervisor.log)"
 
-# ── 6. 启动 worker ──
-echo ""
-echo ">>> [6/6] 启动 worker ..."
-cd backend
-# 强制 UTF-8 输出，避免中文日志在 Windows 下被写成 GBK 导致就绪检测 grep 失败
-PYTHONUTF8=1 nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
-WORKER_PID=$!
-cd ..
-echo "  worker PID: $WORKER_PID (日志: $LOG_DIR/worker.log)"
-
-# ── 验证（轮询，最多 30 秒）──
+# ── 验证（轮询，最多 60 秒）──
 echo ""
 echo ">>> 等待服务启动..."
 BACKEND_OK=0
 FRONTEND_OK=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   [ "$BACKEND_OK" -eq 1 ] || curl -s "http://localhost:$BACKEND_PORT/api/health" >/dev/null 2>&1 && BACKEND_OK=1
   [ "$FRONTEND_OK" -eq 1 ] || curl -s "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1 && FRONTEND_OK=1
   if [ "$BACKEND_OK" -eq 1 ] && [ "$FRONTEND_OK" -eq 1 ]; then break; fi
@@ -135,10 +119,10 @@ else
   echo "  ❌ 前端未就绪，请检查 $LOG_DIR/frontend.log"
 fi
 
-# worker 无 HTTP 端口，通过日志中的启动标记确认（轮询，最多 15 秒）
+# worker 无 HTTP 端口，通过进程存在确认（轮询，最多 20 秒）
 WORKER_OK=0
-for _ in $(seq 1 15); do
-  if grep -q "worker 已启动" "$LOG_DIR/worker.log" 2>/dev/null; then
+for _ in $(seq 1 20); do
+  if powershell -Command "if (Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'python.exe' -and \$_.CommandLine -like '*app.worker*' }) { exit 0 } else { exit 1 }" >/dev/null 2>&1; then
     WORKER_OK=1
     break
   fi

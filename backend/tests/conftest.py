@@ -38,6 +38,7 @@ _ALL_TABLES = [
     "scraper_schedules",
     "scraper_tasks",
     "task_queue",
+    "service_heartbeats",
     "audit_logs",
     "inspirations",
     "persons",

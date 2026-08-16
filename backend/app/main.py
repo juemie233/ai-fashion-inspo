@@ -23,6 +23,7 @@ from app.routers import (
     admin,
     tasks,
     persons,
+    health,
 )
 from app.utils.auth import is_destructive_route
 
@@ -195,6 +196,7 @@ app.include_router(admin.router)
 app.include_router(ws.router)
 app.include_router(tasks.router)
 app.include_router(persons.router)
+app.include_router(health.router)
 
 
 @app.get("/api/health")
