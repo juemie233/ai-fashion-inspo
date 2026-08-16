@@ -9,6 +9,7 @@ import {
   SCRAPER_PLATFORM_LABELS,
   normalizeTaskStatus,
 } from '@/utils/taskLabel'
+import { formatSize } from '@/utils/format'
 
 /** 任务队列原始条目（/api/tasks 返回项） */
 interface QueueTask {
@@ -18,6 +19,7 @@ interface QueueTask {
   progress: number
   total: number
   done: number
+  result: Record<string, any> | null
   error: string | null
   created_at: string
   updated_at: string
@@ -52,6 +54,44 @@ export function useTaskCenter() {
 
   // ===== 归一化 =====
 
+  /** 根据任务 result 生成直观的完成统计（成功任务的「干成了什么」） */
+  function resultSummary(type: string, result: Record<string, any> | null, error: string | null): string {
+    if (error) return error
+    if (!result || typeof result !== 'object') return ''
+    const r = result as Record<string, any>
+    switch (type) {
+      case 'vector_backfill':
+        // 向量回填：展示图像/文本向量入库与跳过统计，替代抽象的「N/N」
+        return [
+          r.image_done != null ? `图像向量 ${r.image_done}` : '',
+          r.text_done != null ? `文本向量 ${r.text_done}` : '',
+          r.image_skipped || r.text_skipped ? `跳过 ${(r.image_skipped || 0) + (r.text_skipped || 0)}` : '',
+        ].filter(Boolean).join(' · ')
+      case 'deduplicate':
+        return [
+          r.files_deleted != null ? `删除 ${r.files_deleted} 个文件` : '',
+          r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
+          r.groups_processed != null ? `处理 ${r.groups_processed} 组` : '',
+        ].filter(Boolean).join(' · ')
+      case 'batch_delete':
+        return [
+          r.deleted_count != null ? `删除 ${r.deleted_count} 个素材` : '',
+          r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
+        ].filter(Boolean).join(' · ')
+      case 'batch_analyze':
+        return r.done != null ? `完成 ${r.done} 张` : ''
+      case 'quality_check':
+        return [
+          r.approved != null ? `通过 ${r.approved}` : '',
+          r.rejected != null ? `拒绝 ${r.rejected}` : '',
+          r.pending != null ? `未判定 ${r.pending}` : '',
+          r.ai_generated ? `疑似 AI ${r.ai_generated}` : '',
+        ].filter(Boolean).join(' · ')
+      default:
+        return ''
+    }
+  }
+
   function normalizeQueueTask(t: QueueTask): UnifiedTask {
     const status = normalizeTaskStatus(t.status)
     const finished = status === 'success' || status === 'failed' || status === 'cancelled'
@@ -67,7 +107,7 @@ export function useTaskCenter() {
       target: t.total,
       started_at: null,
       title: TASK_TYPE_LABELS[t.type] || t.type,
-      detail: t.error || '',
+      detail: resultSummary(t.type, t.result, t.error || ''),
       error: t.error,
       created_at: t.created_at,
       finished_at: finished ? t.updated_at : null,

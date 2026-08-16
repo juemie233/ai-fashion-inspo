@@ -6,7 +6,7 @@
  * 由 worker 执行，进度通过任务中心查看）。
  */
 
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { useAdminTask } from '@/composables/useAdminTask'
@@ -19,6 +19,16 @@ const submitting = ref(false)
 
 // 后台任务轮询（向量回填）
 const { adminTask, startAdminPolling, stopAdminPolling, resumeAdminTask } = useAdminTask()
+
+/** 任务是否进行中（pending/running）——进行中按钮必须禁用，防止重复创建任务 */
+const taskRunning = computed(
+  () => adminTask.value !== null && (adminTask.value.status === 'pending' || adminTask.value.status === 'running'),
+)
+
+/** 按钮禁用条件：提交中、任务进行中、无缺失、lancedb 不可用 */
+const backfillDisabled = computed(
+  () => submitting.value || taskRunning.value || stats.value === null || stats.value.missing === 0 || !stats.value.lancedb_available,
+)
 
 async function loadStats() {
   loading.value = true
@@ -34,7 +44,7 @@ async function loadStats() {
 
 /** 一键向量化：创建回填任务并开始轮询进度 */
 async function handleBackfill() {
-  if (!stats.value || stats.value.missing === 0) return
+  if (!stats.value || stats.value.missing === 0 || taskRunning.value) return
   submitting.value = true
   try {
     const { data } = await apiClient.post<{ task_id: number | null; count: number; message: string }>(
@@ -58,7 +68,7 @@ async function handleBackfill() {
 
 onMounted(async () => {
   await loadStats()
-  // 刷新后恢复进行中的向量回填任务轮询
+  // 刷新后恢复进行中的向量回填任务轮询（任务完成后按钮自动恢复可用）
   resumeAdminTask(() => {
     message.success('向量回填完成')
     loadStats()
@@ -96,12 +106,12 @@ onMounted(async () => {
           <n-button
             type="primary"
             :loading="submitting"
-            :disabled="stats.missing === 0 || !stats.lancedb_available"
+            :disabled="backfillDisabled"
             @click="handleBackfill"
           >
-            一键向量化缺失素材{{ stats.missing > 0 ? `（${stats.missing} 个）` : '' }}
+            {{ taskRunning ? '向量化任务进行中…' : stats.missing > 0 ? `一键向量化缺失素材（${stats.missing} 个）` : '一键向量化缺失素材' }}
           </n-button>
-          <n-button secondary @click="loadStats">刷新统计</n-button>
+          <n-button secondary :disabled="taskRunning" @click="loadStats">刷新统计</n-button>
         </n-space>
 
         <!-- 任务进度 -->

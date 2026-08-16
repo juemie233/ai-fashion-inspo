@@ -15,10 +15,12 @@ LanceDB 为嵌入式向量数据库，数据落盘到 ``backend/storage/lancedb/
 import asyncio
 import logging
 import math
+import os
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from app.config import settings
 
@@ -27,6 +29,50 @@ logger = logging.getLogger(__name__)
 # 连接缓存（模块级单例，懒加载）；加锁防止线程池并发首屏重复连接
 _db = None
 _db_lock = threading.Lock()
+
+
+@contextmanager
+def _vector_write_lock() -> Iterator[None]:
+    """跨进程向量写互斥：线程锁 + 文件锁双层。
+
+    背景：LanceDB 是嵌入式单目录存储，**多进程基于各自缓存的旧版本并发提交
+    写操作会互相覆盖**（后提交者以旧版本为基线，丢弃先提交者的新数据）。
+    实测表现：批量回填 955 条后，worker 基于旧版本单条写入即把整批覆盖丢失。
+
+    方案：所有向量写入口（upsert / batch / delete）串行化——
+    - 线程锁：保证同一进程内多线程（asyncio.to_thread）不并发写同一 fd
+    - 文件锁：跨进程互斥（Windows 用 msvcrt，POSIX 用 fcntl），锁文件位于
+      ``storage/lancedb/.vector-write.lock``，API / worker / 脚本共用
+    读操作（搜索/查询）不持锁，不受影响。
+    """
+    with _thread_write_lock:
+        lock_path = settings.lancedb_dir / ".vector-write.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as f:
+            if os.name == "nt":
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # 阻塞等待（内部重试约 10 秒）
+                try:
+                    yield
+                finally:
+                    f.seek(0)
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+_thread_write_lock = threading.Lock()
 
 
 def _utc_str() -> str:
@@ -139,16 +185,17 @@ def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
             return False
 
         table = _table(kind)
-        try:
-            table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
-        except Exception:
-            pass  # 无匹配行时删除可能抛错，忽略即可
-        table.add([{
-            "id": uuid.uuid4().hex,
-            "inspiration_id": inspiration_id,
-            "vector": vec,
-            "created_at": _utc_str(),
-        }])
+        with _vector_write_lock():
+            try:
+                table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
+            except Exception:
+                pass  # 无匹配行时删除可能抛错，忽略即可
+            table.add([{
+                "id": uuid.uuid4().hex,
+                "inspiration_id": inspiration_id,
+                "vector": vec,
+                "created_at": _utc_str(),
+            }])
         return True
     except Exception as e:
         logger.error(f"写入向量失败 (kind={kind}, id={inspiration_id}): {e}")
@@ -160,6 +207,19 @@ async def upsert_vector(kind: str, inspiration_id: str, vector: list[float]) -> 
     return await asyncio.to_thread(_upsert_sync, kind, inspiration_id, vector)
 
 
+def _delete_ids_locked(kind: str, inspiration_ids: list[str], chunk_size: int = 500) -> None:
+    """无锁内部实现：分批删除指定素材的向量（调用方须已持有写锁）。"""
+    if not inspiration_ids:
+        return
+    table = _table(kind)
+    for i in range(0, len(inspiration_ids), chunk_size):
+        chunk = inspiration_ids[i:i + chunk_size]
+        clause = "inspiration_id IN (" + ", ".join(
+            f"'{_sql_quote(x)}'" for x in chunk
+        ) + ")"
+        table.delete(clause)
+
+
 def _delete_ids_sync(kind: str, inspiration_ids: list[str], chunk_size: int = 500) -> None:
     """分批删除指定素材的向量（分块避免 IN 子句过长）。
 
@@ -169,13 +229,8 @@ def _delete_ids_sync(kind: str, inspiration_ids: list[str], chunk_size: int = 50
     if not inspiration_ids:
         return
     try:
-        table = _table(kind)
-        for i in range(0, len(inspiration_ids), chunk_size):
-            chunk = inspiration_ids[i:i + chunk_size]
-            clause = "inspiration_id IN (" + ", ".join(
-                f"'{_sql_quote(x)}'" for x in chunk
-            ) + ")"
-            table.delete(clause)
+        with _vector_write_lock():
+            _delete_ids_locked(kind, inspiration_ids, chunk_size)
     except Exception as e:
         logger.warning(
             f"批量删除向量失败 (kind={kind}, count={len(inspiration_ids)}): {e}"
@@ -218,11 +273,13 @@ def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
     if not rows:
         return 0
     try:
-        table = _table(kind)
-        # 真 upsert：先删除同批素材的旧向量，再批量插入，保证一个素材只有一条
-        # 向量（与单条 _upsert_sync 语义一致）。分块删除，避免 IN 子句过长。
-        _delete_ids_sync(kind, [row["inspiration_id"] for row in rows])
-        table.add(rows)
+        with _vector_write_lock():
+            table = _table(kind)
+            # 真 upsert：先删除同批素材的旧向量，再批量插入，保证一个素材只有一条
+            # 向量（与单条 _upsert_sync 语义一致）。分块删除，避免 IN 子句过长。
+            # 注意：此处调用无锁内部版，避免嵌套加锁死锁（写锁已由本函数持有）。
+            _delete_ids_locked(kind, [row["inspiration_id"] for row in rows])
+            table.add(rows)
         return len(rows)
     except Exception as e:
         logger.error(f"批量写入向量失败 (kind={kind}, count={len(rows)}): {e}")
