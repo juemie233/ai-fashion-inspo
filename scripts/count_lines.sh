@@ -30,11 +30,11 @@ docs=$(find . -maxdepth 1 -type f \( -name "*.md" -o -name ".gitignore" \) -exec
 docs_backend=$(find backend -maxdepth 1 -type f \( -name "*.txt" -o -name ".env" -o -name ".gitignore" \) -exec cat {} + 2>/dev/null | wc -l)
 echo "   文档/配置              $(printf '%6s' $((docs + docs_backend))) 行"
 
-total=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" \) -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/.git/*" -not -path "*/package-lock.json" -exec cat {} + | wc -l)
+total=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" \) -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/package-lock.json" -exec cat {} + | wc -l)
 echo "   ─────────────────────────────────"
 echo "   总计                   $(printf '%6s' $total) 行"
 echo ""
 
-files=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" \) -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/.git/*" -not -path "*/package-lock.json" | wc -l)
+files=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" \) -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/package-lock.json" | wc -l)
 echo "   ${files} 个文件"
 echo ""

@@ -147,7 +147,7 @@ python -m app.worker
 
 浏览器打开 `http://localhost:17777`
 
-> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker + agentmemory（若已安装），并校验就绪。
+> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker，并校验就绪。
 >
 > 自动拉起：`bash scripts/ensure-services.sh` 做「健康检查 + 只启动缺失服务」，幂等且带锁，默认由 Claude Code 的 SessionStart 钩子（见 `.claude/settings.json`）在新会话启动时自动调用，多会话并发时安全。
 
@@ -358,7 +358,7 @@ fashion-inspo/
     ├── seed_tags.py              # 预设标签导入
     ├── batch_import.py           # 批量导入本地图片
     ├── backfill_vectors.py       # 存量素材向量回填
-    ├── restart.sh                # 一键重启前后端 + worker + agentmemory
+    ├── restart.sh                # 一键重启前后端 + worker
     ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，供 SessionStart 钩子）
     └── generate_icons.py         # 生成插件图标
 ```

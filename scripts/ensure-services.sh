@@ -15,7 +15,6 @@ cd "$(dirname "$0")/.."
 
 BACKEND_PORT=18888
 FRONTEND_PORT=17777
-AGENTMEMORY_PORT=3111
 LOG_DIR="logs"
 
 mkdir -p "$LOG_DIR"
@@ -70,10 +69,6 @@ worker_running() {
   [ -n "$found" ]
 }
 
-agentmemory_running() {
-  port_listening "$AGENTMEMORY_PORT"
-}
-
 echo "=============================================="
 echo "  确保服务在运行（幂等）"
 echo "=============================================="
@@ -122,21 +117,6 @@ else
   PYTHONUTF8=1 nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
   cd ..
   echo "  worker PID: $! (日志: $LOG_DIR/worker.log)"
-fi
-
-# ── agentmemory ──
-echo ""
-echo ">>> 检查 agentmemory ..."
-if command -v agentmemory >/dev/null 2>&1; then
-  if agentmemory_running; then
-    echo "  ✅ agentmemory 已在运行，跳过"
-  else
-    echo "  agentmemory 未运行，启动中..."
-    nohup agentmemory > "$HOME/.agentmemory/agentmemory.log" 2>&1 &
-    echo "  agentmemory 已后台启动 (日志: ~/.agentmemory/agentmemory.log)"
-  fi
-else
-  echo "  未安装 agentmemory CLI，跳过"
 fi
 
 # ── 等待就绪 ──

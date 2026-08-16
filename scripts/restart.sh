@@ -17,7 +17,7 @@ LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
 
 echo "=============================================="
-echo "  一键重启前后端 + worker + agentmemory"
+echo "  一键重启前后端 + worker"
 echo "=============================================="
 
 # ── 1. 停止后端 ──
@@ -72,16 +72,6 @@ for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='
 done
 sleep 1
 
-# ── 停止 agentmemory ──
-echo ""
-echo ">>> 停止 agentmemory ..."
-if command -v agentmemory >/dev/null 2>&1; then
-  agentmemory stop >/dev/null 2>&1 && echo "  已停止 agentmemory" || echo "  agentmemory 未在运行"
-else
-  echo "  未安装 agentmemory CLI，跳过"
-fi
-sleep 1
-
 # ── 4. 启动后端 ──
 echo ""
 echo ">>> [4/6] 启动后端 ..."
@@ -116,16 +106,6 @@ PYTHONUTF8=1 nohup python -m app.worker > "../$LOG_DIR/worker.log" 2>&1 &
 WORKER_PID=$!
 cd ..
 echo "  worker PID: $WORKER_PID (日志: $LOG_DIR/worker.log)"
-
-# ── 启动 agentmemory ──
-echo ""
-echo ">>> 启动 agentmemory ..."
-if command -v agentmemory >/dev/null 2>&1; then
-  nohup agentmemory > "$HOME/.agentmemory/agentmemory.log" 2>&1 &
-  echo "  agentmemory 已后台启动 (日志: ~/.agentmemory/agentmemory.log)"
-else
-  echo "  未安装 agentmemory CLI，跳过"
-fi
 
 # ── 验证（轮询，最多 30 秒）──
 echo ""
