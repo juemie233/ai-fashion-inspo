@@ -41,17 +41,33 @@ router = APIRouter()
 # ============ 模型管理 ============
 
 
+async def _ensure_model_installed(model_name: str) -> None:
+    """校验模型已安装（调用 Ollama /api/tags），未安装抛 404、连接失败抛 503。"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{settings.ollama_base_url}/api/tags")
+            models = resp.json().get("models", [])
+            names = [m["name"] for m in models]
+            if model_name not in names:
+                raise HTTPException(status_code=404, detail=f"模型 '{model_name}' 未安装")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+
+
 @router.get("/models")
 async def list_models():
-    """列出所有已安装的 Ollama 模型，含大小和修改时间。"""
+    """列出所有已安装的 Ollama 模型，含大小和修改时间，并标注视觉/嵌入角色。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{settings.ollama_base_url}/api/tags")
             resp.raise_for_status()
             models = resp.json().get("models", [])
 
-        # 获取当前活跃模型
+        # 当前活跃视觉模型与文本嵌入模型
         active = settings.ollama_vision_model
+        embedding = settings.ollama_embedding_model
 
         # 尝试获取 GPU 信息
         gpu_info = {}
@@ -77,13 +93,39 @@ async def list_models():
                 "size_display": _format_size(m.get("size", 0)),
                 "modified": m.get("modified_at", ""),
                 "is_active": name == active,
+                "is_embedding": name == embedding,
                 "vram_used": gpu_info.get(name, {}).get("vram_used", 0),
                 "loaded": gpu_info.get(name, {}).get("loaded", False),
             })
 
-        return {"models": result, "active_model": active}
+        return {
+            "models": result,
+            "active_model": active,
+            "embedding_model": embedding,
+        }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+
+
+@router.get("/status")
+async def ai_status():
+    """AI 服务状态：Ollama 连接、版本号、活跃视觉模型与文本嵌入模型。"""
+    connected = False
+    version = ""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.ollama_base_url}/api/version")
+            if resp.status_code == 200:
+                connected = True
+                version = resp.json().get("version", "")
+    except Exception:
+        pass
+    return {
+        "ollama_connected": connected,
+        "ollama_version": version,
+        "active_model": settings.ollama_vision_model,
+        "embedding_model": settings.ollama_embedding_model,
+    }
 
 
 @router.post("/models/pull")
@@ -149,24 +191,23 @@ async def delete_model(model_name: str):
 
 @router.put("/models/active")
 async def set_active_model(model_name: str = Query(...)):
-    """切换活跃模型。"""
-    # 验证模型存在
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{settings.ollama_base_url}/api/tags")
-            models = resp.json().get("models", [])
-            names = [m["name"] for m in models]
-            if model_name not in names:
-                raise HTTPException(status_code=404, detail=f"模型 '{model_name}' 未安装")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+    """切换活跃视觉模型。"""
+    await _ensure_model_installed(model_name)
 
     # 更新内存配置，并持久化到 .env，重启后仍生效
     settings.ollama_vision_model = model_name
     await _update_env_file({"OLLAMA_VISION_MODEL": model_name})
     return {"message": f"已切换到模型 '{model_name}'", "active_model": model_name}
+
+
+@router.put("/models/embedding-active")
+async def set_embedding_model(model_name: str = Query(...)):
+    """切换文本嵌入模型（向量检索文本侧使用，持久化到 .env）。"""
+    await _ensure_model_installed(model_name)
+
+    settings.ollama_embedding_model = model_name
+    await _update_env_file({"OLLAMA_EMBEDDING_MODEL": model_name})
+    return {"message": f"已切换到嵌入模型 '{model_name}'", "embedding_model": model_name}
 
 
 # ============ GPU 显存监控 ============
@@ -205,8 +246,14 @@ async def unload_model(model_name: str = Query(...)):
 
 @router.get("/model-stats")
 async def model_stats(db: AsyncSession = Depends(get_db)):
-    """获取按模型聚合的分析统计：每个模型的分析次数、成功率、平均耗时、平均标签数。"""
-    # 所有分析日志
+    """获取按模型聚合的分析统计：每个模型的分析次数、成功率、平均耗时、平均标签数。
+
+    平均标签数按 ``ai_extracted_tags`` 结构化快照统计（仅统计该模型成功分析
+    日志实际提取的标签数），不混入人工补打或其他模型/来源的标签。
+    """
+    from app.models.inspiration import AIAnalysisTag
+
+    # 所有标签分析日志（排除 quality_check 审核日志）
     result = await db.execute(
         select(
             AIAnalysisLog.model_name,
@@ -217,41 +264,40 @@ async def model_stats(db: AsyncSession = Depends(get_db)):
             func.avg(AIAnalysisLog.processing_time_ms).label("avg_time"),
             func.max(AIAnalysisLog.created_at).label("last_used"),
         )
+        .where(_analysis_log_filter())
         .group_by(AIAnalysisLog.model_name)
         .order_by(func.count().desc())
     )
     rows = result.all()
 
-    # 获取每个模型的平均标签数（需要通过 inspiration_tags）
-    from app.models.tag import InspirationTag
-    models = []
-    for row in rows:
-        # 查询该模型成功分析的素材 ID
-        insp_result = await db.execute(
-            select(func.distinct(AIAnalysisLog.inspiration_id)).where(
-                _analysis_log_filter(),
-                AIAnalysisLog.model_name == row.model_name,
-                AIAnalysisLog.error.is_(None),
-            )
+    # 每个模型的标签快照总数（仅成功分析日志的结构化提取结果）
+    tag_rows = await db.execute(
+        select(
+            AIAnalysisLog.model_name,
+            func.count(AIAnalysisTag.id).label("tag_total"),
         )
-        insp_ids = [r[0] for r in insp_result]
+        .join(AIAnalysisTag, AIAnalysisTag.log_id == AIAnalysisLog.id)
+        .where(_analysis_log_filter(), AIAnalysisLog.error.is_(None))
+        .group_by(AIAnalysisLog.model_name)
+    )
+    tag_totals = {row[0]: row[1] for row in tag_rows}
 
-        avg_tags = 0
-        if insp_ids:
-            tag_count = await db.execute(
-                select(func.count()).where(
-                    InspirationTag.inspiration_id.in_(insp_ids)
-                )
-            )
-            total_tags = tag_count.scalar() or 0
-            avg_tags = round(total_tags / len(insp_ids), 1)
+    models = []
+    total_success = 0
+    total_tags = 0
+    for row in rows:
+        successes = int(row.successes or 0)
+        tag_total = tag_totals.get(row.model_name, 0)
+        avg_tags = round(tag_total / successes, 1) if successes > 0 else 0
+        total_success += successes
+        total_tags += tag_total
 
         models.append({
             "model_name": row.model_name,
             "total_analyses": row.total,
-            "success_count": row.successes,
-            "failure_count": row.total - row.successes,
-            "success_rate": round(row.successes / row.total * 100, 1) if row.total > 0 else 0,
+            "success_count": successes,
+            "failure_count": row.total - successes,
+            "success_rate": round(successes / row.total * 100, 1) if row.total > 0 else 0,
             "avg_time_ms": round(row.avg_time) if row.avg_time else 0,
             "avg_tags": avg_tags,
             "last_used": _fmt_utc(row.last_used),
@@ -259,7 +305,6 @@ async def model_stats(db: AsyncSession = Depends(get_db)):
 
     # 全局汇总
     total_all = sum(m["total_analyses"] for m in models)
-    total_success = sum(m["success_count"] for m in models)
     models.insert(0, {
         "model_name": "（全部模型汇总）",
         "total_analyses": total_all,
@@ -269,9 +314,7 @@ async def model_stats(db: AsyncSession = Depends(get_db)):
         "avg_time_ms": round(
             sum(m["avg_time_ms"] * m["total_analyses"] for m in models) / total_all
         ) if total_all > 0 else 0,
-        "avg_tags": round(
-            sum(m["avg_tags"] * m["total_analyses"] for m in models) / total_all, 1
-        ) if total_all > 0 else 0,
+        "avg_tags": round(total_tags / total_success, 1) if total_success > 0 else 0,
         "last_used": max((m["last_used"] for m in models if m["last_used"]), default=""),
     })
 

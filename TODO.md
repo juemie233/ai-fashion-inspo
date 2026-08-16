@@ -108,6 +108,50 @@
 - 微调模型在留存验证集上的误杀率与召回率优于或持平现有 sklearn 初筛器
 - 可离线导出为 Ollama 可加载模型并接入现有质量审核链路
 
+## AI 模型管理增强项
+
+> 2025 年模型管理页缺口修复（死开关/嵌入模型/初筛器界面/统计口径）已完成；以下为待实现的增强项。
+
+### 模型详情查看
+- 模型列表点击查看详情弹窗：调用 Ollama `/api/show` 展示参数量、量化方式、架构、模板与许可证
+- 涉及模块：`backend/app/routers/ai_models.py`、`web/src/components/model/ModelListPanel.vue`
+- 验收：任意已安装模型可查看完整元信息
+
+### 模型更新与复制
+- 已安装模型支持「更新到最新版」（对同 tag 执行 pull）；支持复制模型（`ollama cp`，如 `qwen3-vl:8b-instruct → qwen3-vl:latest`）
+- 涉及模块：`ai_models.py` 新增 update/copy 端点、`ModelListPanel.vue` 操作列
+- 验收：模型可一键更新/复制，界面实时刷新列表
+
+### 下载体验增强
+- 常用模型下拉选择（官方库热门列表）、多模型排队下载、下载完成自动刷新「模型使用统计」
+- 涉及模块：`ModelListPanel.vue`
+- 验收：无需手输模型名即可下载；任务完成后统计即时更新
+
+### GPU 显存自动监控
+- 显存占用定时轮询（如 5 秒）+ echarts 短时趋势图，替代当前手动刷新
+- 涉及模块：`ModelListPanel.vue`、新增 GPU 趋势 composable
+- 验收：显存变化自动更新，可回看最近占用曲线
+
+### 分析质量仪表盘升级
+- 手写 CSS 柱状图换 echarts；增加按模型成功率对比、错误原因分布、失败素材直达列表
+- 涉及模块：`backend/app/services/ai_dashboard_service.py`、`QualityPanel.vue`
+- 验收：可切换维度查看质量趋势与失败归因
+
+### 分析历史增强
+- 时间范围筛选、按耗时排序、失败原因列、CSV 导出
+- 涉及模块：`backend/app/routers/ai_analysis.py`、`useAnalysisHistory.ts`、`AnalysisHistoryCard.vue`
+- 验收：可按时间/耗时检索历史，一键导出分析记录
+
+### 每模型配置总览
+- 一览 `model_configs.json` / `prompt_configs.json` 中哪些模型有自定义配置；支持把某模型的参数/Prompt 复制到另一模型
+- 涉及模块：`model_config.py`、`model_prompt.py`、`SettingsPanel.vue` 新增总览区块
+- 验收：配置分布一目了然，可跨模型复制配置
+
+### 单图测试直接传图 + 服务信息
+- 单图测试支持直接上传图片（不依赖已有素材 ID）；连接卡片展示 Ollama 版本与运行时长
+- 涉及模块：`backend/app/routers/ai_dashboard.py`（test-analyze 支持 multipart）、`SettingsPanel.vue`、`ModelListPanel.vue`
+- 验收：任选本地图片即可测试 prompt/参数效果；Ollama 版本可见
+
 ## 备注
 
 - 向量检索与采集引擎自动化可以并行开发。

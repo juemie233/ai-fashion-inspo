@@ -12,14 +12,24 @@ const message = useMessage()
 const store = useAiModelsStore()
 const tagsStore = useTagsStore()
 
-interface AiSettings { active_model: string; confidence_threshold: number; analysis_timeout: number; ollama_base_url: string }
-interface SamplingParams { temperature: number; top_p: number; top_k: number; num_predict: number; num_ctx: number; think: boolean }
-const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, ollama_base_url: '' })
+interface AiSettings {
+  active_model: string
+  confidence_threshold: number
+  analysis_timeout: number
+  ollama_base_url: string
+  defaults: { confidence_threshold: number; analysis_timeout: number }
+}
+interface SamplingParams {
+  temperature: number; top_p: number; top_k: number; num_predict: number; num_ctx: number; think: boolean
+  defaults: { temperature: number; top_p: number; top_k: number; num_predict: number; num_ctx: number; think: boolean }
+}
+const aiSettings = ref<AiSettings>({ active_model: '', confidence_threshold: 0.6, analysis_timeout: 60, ollama_base_url: '', defaults: { confidence_threshold: 0.6, analysis_timeout: 60 } })
 const confThreshold = ref(0.6)
 const analysisTimeout = ref(60)
-const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false })
-const defaultParams = { confidence_threshold: 0.6, analysis_timeout: 60, temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false }
-const persistSettings = ref(false)
+const samplingParams = ref<SamplingParams>({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false, defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false } })
+// 全局默认值由后端下发（.env 实际值），避免前端硬编码与后端不一致
+const defaultSettings = ref({ confidence_threshold: 0.6, analysis_timeout: 60 })
+const defaultSampling = ref({ temperature: 0.7, top_p: 0.9, top_k: 40, num_predict: 1024, num_ctx: 16384, think: false })
 const savingSettings = ref(false)
 
 // ===== Prompt =====
@@ -27,7 +37,6 @@ const currentPrompt = ref('')
 const editedPrompt = ref('')
 const promptLoading = ref(false)
 const promptSaving = ref(false)
-const persistPrompt = ref(false)
 
 interface PromptVersion { prompt: string; saved_at: string; length: number }
 const promptVersions = ref<PromptVersion[]>([])
@@ -43,7 +52,7 @@ async function loadPromptVersions() {
 async function savePromptVersion() {
   try {
     if (editedPrompt.value !== currentPrompt.value) {
-      await apiClient.put('/ai/prompt', { prompt: editedPrompt.value, persist: false })
+      await apiClient.put('/ai/prompt', { prompt: editedPrompt.value })
       currentPrompt.value = editedPrompt.value
     }
     await apiClient.post('/ai/prompt/save-version')
@@ -164,6 +173,7 @@ async function loadSettings() {
     aiSettings.value = data
     confThreshold.value = data.confidence_threshold
     analysisTimeout.value = data.analysis_timeout
+    defaultSettings.value = data.defaults
   } catch {}
 }
 
@@ -171,6 +181,7 @@ async function loadSamplingParams() {
   try {
     const { data } = await apiClient.get<SamplingParams>('/ai/sampling-params')
     samplingParams.value = data
+    defaultSampling.value = data.defaults
   } catch {}
 }
 
@@ -181,7 +192,6 @@ async function saveSettings() {
       params: {
         confidence_threshold: confThreshold.value,
         analysis_timeout: analysisTimeout.value,
-        persist: persistSettings.value,
       },
     })
     await apiClient.put('/ai/sampling-params', null, {
@@ -192,10 +202,9 @@ async function saveSettings() {
         num_predict: samplingParams.value.num_predict,
         num_ctx: samplingParams.value.num_ctx,
         think: samplingParams.value.think,
-        persist: persistSettings.value,
       },
     })
-    message.success('参数已保存' + (persistSettings.value ? '并持久化到 .env' : ''))
+    message.success('参数已保存（按模型独立持久化，重启后仍生效）')
   } catch (e: any) {
     message.error(e.response?.data?.detail || '保存失败')
   } finally {
@@ -204,17 +213,27 @@ async function saveSettings() {
 }
 
 function resetToDefaults() {
-  confThreshold.value = defaultParams.confidence_threshold
-  analysisTimeout.value = defaultParams.analysis_timeout
-  samplingParams.value = {
-    temperature: defaultParams.temperature,
-    top_p: defaultParams.top_p,
-    top_k: defaultParams.top_k,
-    num_predict: defaultParams.num_predict,
-    num_ctx: defaultParams.num_ctx,
-    think: defaultParams.think,
+  confThreshold.value = defaultSettings.value.confidence_threshold
+  analysisTimeout.value = defaultSettings.value.analysis_timeout
+  samplingParams.value = { ...samplingParams.value, ...defaultSampling.value }
+  message.info('已恢复为全局默认值（需点击保存生效）')
+}
+
+// ===== 清除本模型自定义配置 =====
+const clearingModelConfig = ref(false)
+
+async function clearModelConfig() {
+  clearingModelConfig.value = true
+  try {
+    const { data } = await apiClient.delete<{ message: string }>('/ai/model-config')
+    message.success(data.message || '已恢复全局默认值')
+    loadSettings()
+    loadSamplingParams()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '清除失败')
+  } finally {
+    clearingModelConfig.value = false
   }
-  message.info('已恢复默认值（需点击保存生效）')
 }
 
 async function loadPrompt() {
@@ -230,9 +249,9 @@ async function loadPrompt() {
 async function savePrompt() {
   promptSaving.value = true
   try {
-    await apiClient.put('/ai/prompt', { prompt: editedPrompt.value, persist: persistPrompt.value })
+    await apiClient.put('/ai/prompt', { prompt: editedPrompt.value })
     currentPrompt.value = editedPrompt.value
-    message.success('Prompt 已更新' + (persistPrompt.value ? '并持久化' : ''))
+    message.success('Prompt 已更新（按模型持久化保存）')
   } catch (e: any) {
     message.error(e.response?.data?.detail || '保存 Prompt 失败')
   } finally { promptSaving.value = false }
@@ -310,13 +329,10 @@ onUnmounted(() => {
             <n-button type="primary" size="small" @click="savePrompt" :loading="promptSaving">保存 Prompt</n-button>
             <n-button size="small" @click="resetPrompt">撤销修改</n-button>
           </n-space>
-          <n-space align="center">
-            <n-switch v-model:value="persistPrompt" size="small" />
-            <span style="font-size:12px;color:#999">持久化保存</span>
-          </n-space>
+          <span style="font-size:12px;color:#999">按模型独立保存（prompt_configs.json）</span>
         </div>
         <p style="font-size:11px;color:#999;margin-top:8px">
-          修改 prompt 会影响后续所有 AI 分析结果。改动后建议先用「单图测试」验证效果。
+          修改 prompt 仅影响当前模型「{{ store.activeModel }}」后续的 AI 分析结果（按模型隔离）。改动后建议先用「单图测试」验证效果。
         </p>
 
         <n-button size="tiny" style="margin-top:8px" @click="savePromptVersion(); promptVersionsVisible = true; loadPromptVersions()">保存版本</n-button>
@@ -403,15 +419,23 @@ onUnmounted(() => {
     </n-card>
 
     <!-- 操作 -->
-    <n-card size="small">
+    <n-card size="small" title="保存与重置">
+      <p style="font-size:12px;color:#999;margin:0 0 12px">
+        参数始终按模型独立持久化（超时/采样参数存 model_configs.json，置信度阈值存 .env），重启后仍生效。
+      </p>
       <n-space align="center">
-        <n-switch v-model:value="persistSettings" />
-        <span style="font-size:13px">持久化到 .env 文件（重启后仍生效）</span>
-      </n-space>
-      <n-space style="margin-top:16px">
         <n-button type="primary" @click="saveSettings" :loading="savingSettings">保存参数</n-button>
         <n-button @click="resetToDefaults">恢复默认值</n-button>
+        <n-popconfirm @positive-click="clearModelConfig">
+          <template #trigger>
+            <n-button secondary :loading="clearingModelConfig">清除本模型自定义配置</n-button>
+          </template>
+          删除当前模型在 model_configs.json 中的全部覆盖项，直接回退到全局默认值。确定继续？
+        </n-popconfirm>
       </n-space>
+      <p style="font-size:12px;color:#999;margin:8px 0 0">
+        「恢复默认值」仅把表单改回全局默认（需再点保存）；「清除自定义配置」会删除已保存的覆盖项并立即生效。
+      </p>
     </n-card>
 
     <!-- 危险操作：重置所有数据 -->

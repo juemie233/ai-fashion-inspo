@@ -10,6 +10,7 @@ export interface OllamaModel {
   size_display: string
   modified: string
   is_active: boolean
+  is_embedding: boolean
   vram_used: number
   loaded: boolean
 }
@@ -17,11 +18,13 @@ export interface OllamaModel {
 interface ModelListResponse {
   models: OllamaModel[]
   active_model: string
+  embedding_model: string
 }
 
 export const useAiModelsStore = defineStore('aiModels', () => {
   const models = ref<OllamaModel[]>([])
   const activeModel = ref('')
+  const embeddingModel = ref('')
   const ollamaConnected = ref(false)
   const statusLoading = ref(false)
 
@@ -35,6 +38,7 @@ export const useAiModelsStore = defineStore('aiModels', () => {
       if (seq !== refreshSeq) return
       models.value = data.models
       activeModel.value = data.active_model
+      embeddingModel.value = data.embedding_model
       ollamaConnected.value = true
     } catch {
       if (seq !== refreshSeq) return
@@ -44,7 +48,7 @@ export const useAiModelsStore = defineStore('aiModels', () => {
     }
   }
 
-  /** 切换活跃模型，返回是否成功（成功时已刷新列表） */
+  /** 切换活跃视觉模型，返回是否成功（成功时已刷新列表） */
   async function setActiveModel(name: string): Promise<boolean> {
     const previous = activeModel.value  // 记录旧值，仅 PUT 失败时回滚
     activeModel.value = name  // 乐观赋值：界面立即切换
@@ -63,6 +67,24 @@ export const useAiModelsStore = defineStore('aiModels', () => {
     return true
   }
 
+  /** 切换文本嵌入模型，返回是否成功 */
+  async function setEmbeddingModel(name: string): Promise<boolean> {
+    const previous = embeddingModel.value
+    embeddingModel.value = name  // 乐观赋值，失败回滚
+    try {
+      await apiClient.put('/ai/models/embedding-active', null, { params: { model_name: name } })
+    } catch {
+      embeddingModel.value = previous
+      return false
+    }
+    try {
+      await refreshModels()
+    } catch {
+      // 刷新失败静默忽略：切换已生效
+    }
+    return true
+  }
+
   /** 删除模型，返回是否成功 */
   async function deleteModel(name: string): Promise<boolean> {
     try {
@@ -74,5 +96,15 @@ export const useAiModelsStore = defineStore('aiModels', () => {
     }
   }
 
-  return { models, activeModel, ollamaConnected, statusLoading, refreshModels, setActiveModel, deleteModel }
+  return {
+    models,
+    activeModel,
+    embeddingModel,
+    ollamaConnected,
+    statusLoading,
+    refreshModels,
+    setActiveModel,
+    setEmbeddingModel,
+    deleteModel,
+  }
 })

@@ -95,7 +95,7 @@ chrome_debug_port: int = 9222
 | **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、下载原图、复制原始链接、标签点击跳搜索 |
 | **采集管理** | 小红书 CDP 零检测采集 + 抖音独立浏览器采集、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
-| **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、快捷键（回车下载/Ctrl+S 保存） |
+| **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
 | **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理） |
 | **浏览器插件** | 一键提取网页穿搭图片；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
@@ -538,10 +538,11 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `GET` | `/api/ai/status` | AI 服务状态检查 |
-| `GET` | `/api/ai/models` | 已安装模型列表 |
+| `GET` | `/api/ai/status` | AI 服务状态（Ollama 连接/版本/活跃视觉与嵌入模型） |
+| `GET` | `/api/ai/models` | 已安装模型列表（标注视觉/文本嵌入角色） |
 | `POST` | `/api/ai/models/pull` | 下载模型（SSE 进度） |
-| `PUT` | `/api/ai/models/active` | 切换活跃模型 |
+| `PUT` | `/api/ai/models/active` | 切换活跃视觉模型 |
+| `PUT` | `/api/ai/models/embedding-active` | 切换文本嵌入模型（向量检索文本侧） |
 | `DELETE` | `/api/ai/models/{name}` | 删除模型 |
 | `POST` | `/api/ai/analyze/{id}` | 触发单个分析 |
 | `POST` | `/api/ai/batch-analyze` | 批量分析（创建异步任务，返回 task_id，由 worker 执行） |
@@ -565,9 +566,13 @@ alembic upgrade head
 | `POST` | `/api/ai/queue/resume` | 恢复队列 |
 | `GET` | `/api/ai/compare/{id}` | 分析结果对比（结构化标签差异 + 耗时 + 版本信息） |
 | `GET` | `/api/ai/quality-dashboard` | 分析质量仪表盘（覆盖率/趋势/问题素材） |
+| `GET` | `/api/ai/model-stats` | 按模型聚合的使用统计（成功率/平均耗时/平均标签数，标签按结构化快照口径） |
+| `GET` | `/api/ai/prompt` | 获取当前模型的 Prompt（按模型隔离） |
+| `PUT` | `/api/ai/prompt` | 更新当前模型的 Prompt |
 | `GET` | `/api/ai/prompt/versions` | Prompt 版本历史 |
 | `POST` | `/api/ai/prompt/save-version` | 保存当前 Prompt 为版本 |
 | `POST` | `/api/ai/prompt/rollback` | 回滚 Prompt 到指定版本 |
+| `POST` | `/api/ai/test-analyze` | 单图测试分析（SSE，不落库） |
 
 > **AI 分析结果结构化存储（多版本对比与追溯）：**
 >
@@ -612,7 +617,7 @@ alembic upgrade head
 | `POST` | `/api/ai/quality-learner/train` | 用正负样本训练/重训 sklearn 分类器（返回指标） |
 | `POST` | `/api/ai/quality-learner/reset` | 删除模型，回滚到纯 VLM 审核 |
 
-> **说明：** 初筛器用「垃圾桶 `质量差` 负样本 + `rejected` 素材 + `approved` 正样本」的 CLIP 图像向量（512 维，LanceDB）训练轻量逻辑回归，作为质量审核前置初筛：高置信度垃圾直接拒绝，低置信度仍走 VLM 复审（「宁缺毋滥」）。阈值见 `quality_classifier_threshold`，人工翻案机制原样保留。也可用脚本 `python scripts/quality_learner.py status|train|reset` 操作。
+> **说明：** 初筛器用「垃圾桶 `质量差` 负样本 + `rejected` 素材 + `approved` 正样本」的 CLIP 图像向量（512 维，LanceDB）训练轻量逻辑回归，作为质量审核前置初筛：高置信度垃圾直接拒绝，低置信度仍走 VLM 复审（「宁缺毋滥」）。阈值见 `quality_classifier_threshold`，人工翻案机制原样保留。「AI 模型管理 → 质量审核」页有状态/指标/训练/回滚面板，也可用脚本 `python scripts/quality_learner.py status|train|reset` 操作。
 
 ### 任务队列
 
@@ -635,10 +640,11 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `GET` | `/api/ai/settings` | 获取分析参数 |
-| `PUT` | `/api/ai/settings` | 更新参数（可选持久化） |
-| `GET` | `/api/ai/sampling-params` | 获取采样参数 |
-| `PUT` | `/api/ai/sampling-params` | 更新采样参数（可选持久化） |
+| `GET` | `/api/ai/settings` | 获取分析参数（附全局默认值） |
+| `PUT` | `/api/ai/settings` | 更新参数（置信度阈值全局持久化到 .env；超时按模型持久化） |
+| `GET` | `/api/ai/sampling-params` | 获取采样参数（附全局默认值） |
+| `PUT` | `/api/ai/sampling-params` | 更新采样参数（按模型独立持久化到 model_configs.json） |
+| `DELETE` | `/api/ai/model-config` | 清除当前模型的自定义配置，回退全局默认值 |
 | `POST` | `/api/ai/retry-all-failed` | 重试所有失败（仅图片） |
 | `DELETE` | `/api/ai/reset?confirm=yes` | 重置所有数据+文件 |
 

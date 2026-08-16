@@ -6,6 +6,7 @@ import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
 import { formatBytes } from '@/utils/format'
+import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
 
 const message = useMessage()
 
@@ -329,6 +330,9 @@ onUnmounted(() => {
           开启后，手动上传的素材会直接标记为「已通过」，不再进入待审核队列。
         </p>
       </n-card>
+
+      <!-- 负样本初筛器（阶段 2：前置质量初筛） -->
+      <QualityLearnerCard />
 
       <!-- 进度条 + 审核操作 -->
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">

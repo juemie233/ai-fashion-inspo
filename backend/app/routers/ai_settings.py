@@ -31,7 +31,11 @@ from app.routers.ai_shared import (
     _fmt_utc,
     _format_size,
 )
-from app.services.model_config import get_model_config, update_model_config
+from app.services.model_config import (
+    get_model_config,
+    reset_model_config,
+    update_model_config,
+)
 from app.services.model_prompt import get_model_prompt, set_model_prompt
 
 logger = logging.getLogger(__name__)
@@ -154,13 +158,17 @@ async def update_prompt(
 
 @router.get("/settings")
 async def get_ai_settings():
-    """获取当前 AI 参数配置（超时按当前模型独立）。"""
+    """获取当前 AI 参数配置（超时按当前模型独立），附全局默认值供前端「恢复默认」。"""
     model_cfg = get_model_config(settings.ollama_vision_model)
     return {
         "active_model": settings.ollama_vision_model,
         "confidence_threshold": settings.ai_low_confidence_threshold,
         "analysis_timeout": model_cfg["timeout"],
         "ollama_base_url": settings.ollama_base_url,
+        "defaults": {
+            "confidence_threshold": settings.ai_low_confidence_threshold,
+            "analysis_timeout": settings.ai_analysis_timeout,
+        },
     }
 
 
@@ -168,12 +176,11 @@ async def get_ai_settings():
 async def update_ai_settings(
     confidence_threshold: float | None = Query(None, ge=0, le=1),
     analysis_timeout: int | None = Query(None, ge=10, le=300),
-    persist: bool = Query(False, description="是否持久化写入 .env 文件"),
 ):
     """更新 AI 参数。
 
-    超时按当前活跃模型独立保存到 model_configs.json；置信度阈值为全局设置。
-    ``persist`` 参数已废弃（配置始终持久化），保留仅为兼容前端。
+    超时按当前活跃模型独立保存到 model_configs.json；置信度阈值为全局设置
+    （写入 .env）。配置始终持久化，无需前端「持久化」开关。
     """
     if confidence_threshold is not None:
         settings.ai_low_confidence_threshold = confidence_threshold
@@ -195,7 +202,10 @@ async def update_ai_settings(
 
 @router.get("/sampling-params")
 async def get_sampling_params():
-    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, num_ctx, think）。"""
+    """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, num_ctx, think）。
+
+    响应附 ``defaults``（.env 全局默认值），供前端「恢复默认值」与「清除覆盖」使用。
+    """
     cfg = get_model_config(settings.ollama_vision_model)
     return {
         "temperature": cfg["temperature"],
@@ -204,6 +214,14 @@ async def get_sampling_params():
         "num_predict": cfg["num_predict"],
         "num_ctx": cfg["num_ctx"],
         "think": cfg["think"],
+        "defaults": {
+            "temperature": settings.ai_temperature,
+            "top_p": settings.ai_top_p,
+            "top_k": settings.ai_top_k,
+            "num_predict": settings.ai_num_predict,
+            "num_ctx": settings.ai_num_ctx,
+            "think": False,
+        },
     }
 
 
@@ -215,7 +233,6 @@ async def update_sampling_params(
     num_predict: int | None = Query(None, ge=64, le=8192),
     num_ctx: int | None = Query(None, ge=1024, le=131072, description="上下文窗口大小（视觉模型图片 token 消耗大）"),
     think: bool | None = Query(None, description="是否开启思考模式（思考模型适用）"),
-    persist: bool = Query(False),
 ):
     """更新当前模型的 AI 采样参数（按模型独立持久化）。"""
     updates = {}
@@ -244,4 +261,18 @@ async def update_sampling_params(
         "num_predict": cfg["num_predict"],
         "num_ctx": cfg["num_ctx"],
         "think": cfg["think"],
+    }
+
+
+@router.delete("/model-config")
+async def reset_model_config_endpoint():
+    """清除当前活跃模型的自定义配置（model_configs.json 中的覆盖项）。
+
+    回退到 .env 全局默认值。用于「该模型改乱后想恢复默认」的场景，
+    与「恢复默认值按钮只改表单」不同，本接口直接删除持久化覆盖。
+    """
+    cfg = await reset_model_config(settings.ollama_vision_model)
+    return {
+        "message": f"已清除模型 '{settings.ollama_vision_model}' 的自定义配置，恢复全局默认值",
+        "config": cfg,
     }

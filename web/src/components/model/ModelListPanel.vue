@@ -13,8 +13,24 @@ const message = useMessage()
 const { requestAndNotify } = useNotification()
 const store = useAiModelsStore()
 // 用 storeToRefs 保持 ref 响应式（直接解构会拿到非响应式快照，导致「未连接」不更新）
-const { models, activeModel, ollamaConnected, statusLoading } = storeToRefs(store)
-const { refreshModels, setActiveModel, deleteModel } = store
+const { models, activeModel, embeddingModel, ollamaConnected, statusLoading } = storeToRefs(store)
+const { refreshModels, setActiveModel, setEmbeddingModel, deleteModel } = store
+
+// ===== 服务状态（Ollama 版本） =====
+const ollamaVersion = ref('')
+
+async function loadAiStatus() {
+  try {
+    const { data } = await apiClient.get<{ ollama_version: string }>('/ai/status')
+    ollamaVersion.value = data.ollama_version || ''
+  } catch { /* 静默 */ }
+}
+
+/** 配置的文本嵌入模型是否缺失（未安装） */
+const embeddingMissing = computed(() => {
+  if (!ollamaConnected.value || !embeddingModel.value) return false
+  return !models.value.some((m) => m.name === embeddingModel.value)
+})
 
 // ===== 下载 =====
 const downloadName = ref('')
@@ -25,9 +41,10 @@ const downloading = ref(false)
 let downloadAbortController: AbortController | null = null
 const timerRefs: ReturnType<typeof setTimeout>[] = []
 
-async function startDownload() {
-  const name = downloadName.value.trim()
+async function startDownload(nameArg?: string) {
+  const name = (nameArg ?? downloadName.value).trim()
   if (!name) return
+  downloadName.value = name
   downloading.value = true
   downloadProgress.value = 0
   downloadTotal.value = 0
@@ -185,6 +202,13 @@ async function handleSetActiveModel(name: string) {
   else message.error('切换失败')
 }
 
+/** 切换文本嵌入模型 */
+async function handleSetEmbeddingModel(name: string) {
+  const ok = await setEmbeddingModel(name)
+  if (ok) message.success(`已将 ${name} 设为文本嵌入模型`)
+  else message.error('切换嵌入模型失败')
+}
+
 /** 删除模型 */
 async function handleDeleteModel(name: string) {
   const ok = await deleteModel(name)
@@ -195,6 +219,7 @@ async function handleDeleteModel(name: string) {
 onMounted(() => {
   refreshModels()
   loadGpuStats()
+  loadAiStatus()
 })
 
 onUnmounted(() => {
@@ -208,7 +233,16 @@ onUnmounted(() => {
   <div>
     <!-- 连接状态 -->
     <n-alert :type="ollamaConnected ? 'success' : 'error'" style="margin-bottom:16px">
-      {{ ollamaConnected ? `Ollama 已连接 · 活跃模型: ${activeModel}` : 'Ollama 未连接' }}
+      {{ ollamaConnected ? `Ollama 已连接${ollamaVersion ? ` v${ollamaVersion}` : ''} · 活跃模型: ${activeModel}` : 'Ollama 未连接' }}
+    </n-alert>
+
+    <!-- 文本嵌入模型缺失告警（向量检索文本侧依赖） -->
+    <n-alert v-if="embeddingMissing" type="warning" style="margin-bottom:16px">
+      <template #header>文本嵌入模型「{{ embeddingModel }}」未安装</template>
+      向量检索的文本侧依赖该模型（文本搜索/混合排序），当前不可用。
+      <n-button size="tiny" type="primary" style="margin-left:8px" :disabled="downloading" @click="startDownload(embeddingModel)">
+        一键下载
+      </n-button>
     </n-alert>
 
     <!-- GPU 显存监控 -->
@@ -258,10 +292,11 @@ onUnmounted(() => {
           { title: '名称', key: 'name', width: 200 },
           { title: '大小', key: 'size_display', width: 100 },
           { title: '显存占用', key: 'vram', width: 100, render: (row: OllamaModel) => row.loaded ? formatVram(row.vram_used) : '-' },
-          { title: '状态', key: 'loaded', width: 80, render: (row: OllamaModel) => row.is_active ? h(NTag, {type:'success',size:'small'}, '活跃') : row.loaded ? h(NTag, {type:'info',size:'small'}, '已加载') : h(NTag, {size:'small'}, '休眠') },
+          { title: '状态', key: 'loaded', width: 100, render: (row: OllamaModel) => row.is_active ? h(NTag, {type:'success',size:'small'}, '活跃') : row.is_embedding ? h(NTag, {type:'info',size:'small'}, '文本嵌入') : row.loaded ? h(NTag, {type:'info',size:'small'}, '已加载') : h(NTag, {size:'small'}, '休眠') },
           { title: '更新时间', key: 'modified', width: 160, render: (row: OllamaModel) => row.modified?.split('T')[0] },
-          { title: '操作', key: 'actions', render: (row: OllamaModel) => h('span', {style:'display:flex;gap:6px'}, [
+          { title: '操作', key: 'actions', render: (row: OllamaModel) => h('span', {style:'display:flex;gap:6px;flex-wrap:wrap'}, [
             !row.is_active ? h(NButton, {size:'tiny',onClick:()=>handleSetActiveModel(row.name)}, '启用') : null,
+            !row.is_embedding ? h(NButton, {size:'tiny',secondary:true,onClick:()=>handleSetEmbeddingModel(row.name)}, '设嵌入') : null,
             !row.is_active ? h(NPopconfirm, {onPositiveClick:()=>handleDeleteModel(row.name)},
               { trigger: ()=>h(NButton,{size:'tiny',type:'error',secondary:true},'删除'), default: ()=>'确定删除此模型？' }
             ) : null,
@@ -276,7 +311,7 @@ onUnmounted(() => {
     <n-card title="下载新模型" size="small">
       <n-space align="center">
         <n-input v-model:value="downloadName" placeholder="如: gemma3:4b, llava:7b" style="width:280px" @keyup.enter="startDownload" />
-        <n-button v-if="!downloading" type="primary" @click="startDownload" :disabled="!downloadName.trim()">
+        <n-button v-if="!downloading" type="primary" @click="startDownload()" :disabled="!downloadName.trim()">
           下载
         </n-button>
         <n-button v-else type="warning" @click="cancelDownload">取消下载</n-button>
@@ -285,7 +320,7 @@ onUnmounted(() => {
         <n-progress type="line" :percentage="downloadPercent" :height="18" :status="downloadStatus === '下载完成' ? 'success' : downloadStatus === '已取消' ? 'warning' : undefined" />
         <p style="font-size:12px;color:#666;margin:4px 0">{{ downloadStatus }} {{ downloadSize }}</p>
       </div>
-      <p style="font-size:12px;color:#999;margin-top:8px">常用模型: gemma3:4b, llava:7b, llava:13b, minicpm-v:8b</p>
+      <p style="font-size:12px;color:#999;margin-top:8px">常用模型: gemma3:4b, llava:7b, llava:13b, minicpm-v:8b · 文本嵌入: all-minilm</p>
     </n-card>
 
     <!-- 模型使用统计 -->

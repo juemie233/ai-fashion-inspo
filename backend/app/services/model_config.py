@@ -76,3 +76,26 @@ async def update_model_config(
 
         await asyncio.to_thread(_write)
     return get_model_config(model_name)
+
+
+async def reset_model_config(model_name: str) -> dict[str, Any]:
+    """删除指定模型的全部自定义配置（回退到全局默认值），返回默认配置。
+
+    参数:
+        model_name: 模型名（配置键）
+
+    返回:
+        全局默认配置字典
+    """
+    async with _write_lock:
+        data = _load()
+        if model_name in data:
+            del data[model_name]
+
+            def _write() -> None:
+                _CONFIG_FILE.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+
+            await asyncio.to_thread(_write)
+    return get_model_config(model_name)
