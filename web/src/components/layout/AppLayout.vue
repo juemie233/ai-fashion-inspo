@@ -32,6 +32,33 @@ const menuKey = computed(() => {
 function renderIcon(icon: Component) {
   return () => h(NIcon, null, { default: () => h(icon) })
 }
+
+/** 菜单分组：高频「浏览」操作在前，低频「管理」项收纳在后，降低认知负担 */
+const menuOptions = [
+  {
+    type: 'group' as const,
+    label: '浏览',
+    key: 'browse',
+    children: [
+      { label: '素材库', key: 'home', icon: renderIcon(ImagesOutline) },
+      { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
+      { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
+    ],
+  },
+  {
+    type: 'group' as const,
+    label: '管理',
+    key: 'manage',
+    children: [
+      { label: '标签管理', key: 'tags', icon: renderIcon(PricetagsOutline) },
+      { label: '人物管理', key: 'persons', icon: renderIcon(PersonOutline) },
+      { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
+      { label: 'AI 模型', key: 'models', icon: renderIcon(HardwareChipOutline) },
+      { label: '素材管理', key: 'admin', icon: renderIcon(SettingsOutline) },
+      { label: '任务管理', key: 'tasks', icon: renderIcon(ListOutline) },
+    ],
+  },
+]
 </script>
 
 <template>
@@ -41,17 +68,7 @@ function renderIcon(icon: Component) {
       <n-menu
         :collapsed-width="64"
         :collapsed-icon-size="22"
-        :options="[
-          { label: '素材库', key: 'home', icon: renderIcon(ImagesOutline) },
-          { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
-          { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
-          { label: '标签管理', key: 'tags', icon: renderIcon(PricetagsOutline) },
-          { label: '人物管理', key: 'persons', icon: renderIcon(PersonOutline) },
-          { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
-          { label: 'AI 模型', key: 'models', icon: renderIcon(HardwareChipOutline) },
-          { label: '素材管理', key: 'admin', icon: renderIcon(SettingsOutline) },
-          { label: '任务管理', key: 'tasks', icon: renderIcon(ListOutline) },
-        ]"
+        :options="menuOptions"
         @update:value="(key: string) => $router.push(`/${key === 'home' ? '' : key}`)"
         :value="menuKey"
       />

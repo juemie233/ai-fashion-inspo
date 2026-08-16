@@ -22,6 +22,7 @@ const emit = defineEmits<{
   (e: 'update:afterUpload', value: UploadAfterAction): void
   (e: 'savePrefs'): void
   (e: 'start'): void
+  (e: 'stop'): void
 }>()
 
 /** 上传后跳转选项 */
@@ -104,6 +105,17 @@ const afterUploadModel = computed({
       @click="emit('start')"
     >
       {{ uploading ? '上传中...' : `开始上传 (${pending} 个)` }}
+    </n-button>
+    <!-- 上传进行中提供停止入口：当前文件中止、剩余文件保持待上传 -->
+    <n-button
+      v-if="uploading"
+      block
+      quaternary
+      type="warning"
+      style="margin-top:8px"
+      @click="emit('stop')"
+    >
+      停止上传
     </n-button>
   </n-card>
 </template>

@@ -132,9 +132,9 @@ const pageSizeModel = computed({
             />
           </template>
           <n-button-group size="tiny">
-            <n-button :type="density==='compact'?'primary':'default'" @click="densityModel='compact'" title="紧凑">⊞</n-button>
-            <n-button :type="density==='standard'?'primary':'default'" @click="densityModel='standard'" title="标准">⊟</n-button>
-            <n-button :type="density==='comfortable'?'primary':'default'" @click="densityModel='comfortable'" title="宽松">⊠</n-button>
+            <n-button :type="density==='compact'?'primary':'default'" @click="densityModel='compact'">紧凑</n-button>
+            <n-button :type="density==='standard'?'primary':'default'" @click="densityModel='standard'">标准</n-button>
+            <n-button :type="density==='comfortable'?'primary':'default'" @click="densityModel='comfortable'">宽松</n-button>
           </n-button-group>
         </div>
       </template>

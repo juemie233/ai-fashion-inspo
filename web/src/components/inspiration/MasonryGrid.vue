@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /** 瀑布流网格：自适应列数，展示素材卡片列表。
+ *
+ * 采用「行优先」分列（第 i 个素材放入第 i % 列数 的列），保证视觉顺序
+ * 按行从左到右、从上到下，与「最新在前」等时间排序的扫视习惯一致；
+ * 列数随密度与视口宽度响应式调整。 */
 
-  使用 CSS columns 实现，性能好且代码简单。 */
-
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import InspirationCard from './InspirationCard.vue'
 import type { InspirationOut } from '@/api/inspirations'
 
-defineProps<{
+const props = defineProps<{
   items: InspirationOut[]
   loading?: boolean
   density?: 'compact' | 'standard' | 'comfortable'
@@ -32,26 +35,78 @@ const emit = defineEmits<{
   (e: 'approve', id: string): void
   (e: 'toggleSelect', id: string): void
 }>()
+
+// ── 响应式列数：断点与原 CSS columns 行为保持一致 ──
+
+/** 密度 -> (视口宽度上限, 列数) 列表，从窄到宽 */
+const DENSITY_BREAKPOINTS: Record<string, Array<{ max: number; cols: number }>> = {
+  compact: [
+    { max: 700, cols: 2 },
+    { max: 1000, cols: 3 },
+    { max: 1400, cols: 4 },
+    { max: Infinity, cols: 6 },
+  ],
+  standard: [
+    { max: 700, cols: 1 },
+    { max: 1000, cols: 2 },
+    { max: 1400, cols: 3 },
+    { max: Infinity, cols: 4 },
+  ],
+  comfortable: [
+    { max: 700, cols: 1 },
+    { max: 1000, cols: 2 },
+    { max: 1400, cols: 2 },
+    { max: Infinity, cols: 3 },
+  ],
+}
+
+const colCount = ref(4)
+
+function updateColCount() {
+  const width = window.innerWidth
+  const list = DENSITY_BREAKPOINTS[props.density || 'standard'] || DENSITY_BREAKPOINTS.standard
+  colCount.value = list.find((b) => width <= b.max)?.cols ?? 4
+}
+
+watch(() => props.density, updateColCount)
+
+onMounted(() => {
+  updateColCount()
+  window.addEventListener('resize', updateColCount)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateColCount)
+})
+
+/** 行优先分列：第 i 个素材放入第 i % 列数 的列 */
+const columns = computed<InspirationOut[][]>(() => {
+  const cols: InspirationOut[][] = Array.from({ length: colCount.value }, () => [])
+  props.items.forEach((item, i) => cols[i % colCount.value].push(item))
+  return cols
+})
 </script>
 
 <template>
   <div class="masonry-container">
     <div class="masonry-grid" :class="'density-' + (density || 'standard')">
-      <InspirationCard
-        v-for="item in items"
-        :key="item.id"
-        :item="item"
-        :badge="badges?.[item.id]"
-        :selectable="selectable"
-        :selected="selectable ? selectedIds?.has(item.id) : false"
-        :show-actions="showActions !== false"
-        :hover-zoom="hoverZoom"
-        :show-view-button="showViewButton"
-        @delete="emit('delete', item.id)"
-        @toggle-favorite="emit('toggleFavorite', item.id)"
-        @approve="emit('approve', item.id)"
-        @toggle-select="emit('toggleSelect', item.id)"
-      />
+      <div v-for="(col, ci) in columns" :key="ci" class="masonry-column">
+        <div v-for="item in col" :key="item.id" class="masonry-cell">
+          <InspirationCard
+            :item="item"
+            :badge="badges?.[item.id]"
+            :selectable="selectable"
+            :selected="selectable ? selectedIds?.has(item.id) : false"
+            :show-actions="showActions !== false"
+            :hover-zoom="hoverZoom"
+            :show-view-button="showViewButton"
+            @delete="emit('delete', item.id)"
+            @toggle-favorite="emit('toggleFavorite', item.id)"
+            @approve="emit('approve', item.id)"
+            @toggle-select="emit('toggleSelect', item.id)"
+          />
+        </div>
+      </div>
     </div>
 
     <!-- 加载指示器 -->
@@ -70,27 +125,39 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-/* 标准密度（默认） */
-.masonry-grid.density-standard { column-count: 4; column-gap: 16px; }
-@media (max-width: 1400px) { .masonry-grid.density-standard { column-count: 3; } }
-@media (max-width: 1000px) { .masonry-grid.density-standard { column-count: 2; } }
-@media (max-width: 700px)  { .masonry-grid.density-standard { column-count: 1; } }
+/* 行优先分列容器：每列等宽、顶部对齐 */
+.masonry-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
 
-/* 紧凑密度 */
-.masonry-grid.density-compact { column-count: 6; column-gap: 8px; }
-@media (max-width: 1400px) { .masonry-grid.density-compact { column-count: 4; } }
-@media (max-width: 1000px) { .masonry-grid.density-compact { column-count: 3; } }
-@media (max-width: 700px)  { .masonry-grid.density-compact { column-count: 2; } }
+.masonry-grid.density-compact {
+  gap: 8px;
+}
 
-/* 宽松密度 */
-.masonry-grid.density-comfortable { column-count: 3; column-gap: 24px; }
-@media (max-width: 1400px) { .masonry-grid.density-comfortable { column-count: 2; } }
-@media (max-width: 1000px) { .masonry-grid.density-comfortable { column-count: 2; } }
-@media (max-width: 700px)  { .masonry-grid.density-comfortable { column-count: 1; } }
+.masonry-grid.density-comfortable {
+  gap: 24px;
+}
 
-.masonry-grid > * {
-  break-inside: avoid;
-  margin-bottom: 16px;
+.masonry-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.masonry-grid.density-compact .masonry-column {
+  gap: 8px;
+}
+
+.masonry-grid.density-comfortable .masonry-column {
+  gap: 24px;
+}
+
+.masonry-cell {
+  width: 100%;
 }
 
 .loading-bar {

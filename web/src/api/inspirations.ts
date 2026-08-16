@@ -153,14 +153,16 @@ export async function fetchInspiration(id: string) {
   return data
 }
 
-/** 上传灵感图片（支持透传上传进度回调） */
+/** 上传灵感图片（支持透传上传进度回调与取消信号） */
 export async function uploadInspiration(
   formData: FormData,
   onProgress?: (e: any) => void,
+  signal?: AbortSignal,
 ) {
   const { data } = await apiClient.post<InspirationOut>('/inspirations', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: onProgress,
+    signal,
   })
   return data
 }

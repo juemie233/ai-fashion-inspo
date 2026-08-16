@@ -54,8 +54,8 @@ const batchTagNamesModel = computed<string[]>({
       <n-button
         v-if="items.length > 0 && !batchMode"
         size="tiny"
-        type="error"
-        ghost
+        type="primary"
+        secondary
         style="margin-left:auto"
         @click="emit('enter-batch')"
       >
@@ -102,6 +102,7 @@ const batchTagNamesModel = computed<string[]>({
         :show-actions="!batchMode"
         :selectable="batchMode"
         :selected="batchSelectedIds.includes(item.inspiration.id)"
+        :show-view-button="batchMode"
         @toggle-select="emit('toggle-select', item.inspiration.id)"
         @toggle-favorite="emit('toggle-favorite', item.inspiration.id)"
         @delete="emit('delete', item.inspiration.id)"

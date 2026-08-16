@@ -1,18 +1,23 @@
 <script setup lang="ts">
-/** 素材详情页：大图浏览、标签编辑、收藏、删除、相似推荐。 */
+/** 素材详情页：大图浏览、标签编辑、收藏、删除、相似推荐与上一张/下一张导航。 */
 
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, NIcon } from 'naive-ui'
+import { ChevronBackOutline, ChevronForwardOutline, CloseOutline } from '@vicons/ionicons5'
 import {
   fetchInspiration,
+  fetchInspirations,
   toggleFavorite,
   moveToTrash,
   restoreInspiration,
   deleteInspiration,
+  removeTagFromInspiration,
   getFileUrl,
   analyzeInspiration,
   type InspirationDetailOut,
+  type InspirationOut,
+  type InspirationTagOut,
 } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
@@ -20,6 +25,7 @@ import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
+import { buildBrowseParams, storedBrowsePageSize } from '@/utils/browseQuery'
 import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
@@ -89,18 +95,137 @@ const lightboxPaths = computed<string[]>(() => {
   return paths
 })
 
-/** 加载素材详情数据（含相似推荐），路由参数变化时复用 */
+// ── 上一张/下一张浏览上下文 ──
+// 从进入详情时携带的列表筛选 query 重建「同一次浏览」的相邻素材，
+// 让用户无需回到列表即可连续刷图；当前素材不在上下文列表时隐藏导航。
+
+const browseItems = ref<InspirationOut[]>([])
+const browseTotal = ref(0)
+const browsePage = ref(parseInt(route.query.page as string) || 1)
+const browseLoading = ref(false)
+
+/** 当前素材在浏览列表中的位置（不在列表中返回 -1，隐藏导航） */
+const browseIndex = computed(() => {
+  if (!detail.value) return -1
+  return browseItems.value.findIndex((i) => i.id === detail.value!.id)
+})
+
+/** 全局位置（跨页）：(页码-1)×每页 + 页内位置 + 1 */
+const browsePosition = computed(() => {
+  if (browseIndex.value < 0) return 0
+  return (browsePage.value - 1) * storedBrowsePageSize() + browseIndex.value + 1
+})
+
+/** 页内是否可前进/后退（跨页由 goNeighbor 翻页补齐） */
+const hasPrev = computed(() => browseIndex.value > 0 || (browseIndex.value === 0 && browsePage.value > 1))
+const hasNext = computed(() => {
+  if (browseIndex.value < 0) return false
+  const size = storedBrowsePageSize()
+  return (
+    browseIndex.value < browseItems.value.length - 1 ||
+    browsePage.value * size < browseTotal.value
+  )
+})
+
+/** 加载当前筛选条件下的列表上下文（翻页时按目标页码加载） */
+async function loadBrowseContext(page: number, seq: number) {
+  browseLoading.value = true
+  try {
+    const data = await fetchInspirations(
+      buildBrowseParams(route.query as Record<string, string>, page, storedBrowsePageSize()),
+    )
+    if (seq !== detailSeq) return
+    browseItems.value = data.items
+    browseTotal.value = data.total
+    browsePage.value = page
+  } catch {
+    if (seq === detailSeq) {
+      // 上下文加载失败：静默隐藏导航，不影响详情主流程
+      browseItems.value = []
+    }
+  } finally {
+    if (seq === detailSeq) browseLoading.value = false
+  }
+}
+
+/** 跳转到指定素材，保持浏览 query（页码同步更新） */
+function gotoItem(id: string, page?: number) {
+  const query = { ...route.query }
+  if (page !== undefined) {
+    if (page > 1) query.page = String(page)
+    else delete query.page
+  }
+  router.replace({ path: `/detail/${id}`, query })
+}
+
+/** 上一张/下一张：页内移动；到页边界时自动翻页取相邻页的首/尾素材 */
+async function goNeighbor(dir: 'prev' | 'next') {
+  if (!detail.value || browseIndex.value < 0 || browseLoading.value) return
+  const size = storedBrowsePageSize()
+  if (dir === 'prev') {
+    if (browseIndex.value > 0) {
+      gotoItem(browseItems.value[browseIndex.value - 1].id)
+    } else if (browsePage.value > 1) {
+      const page = browsePage.value - 1
+      try {
+        const data = await fetchInspirations(
+          buildBrowseParams(route.query as Record<string, string>, page, size),
+        )
+        if (data.items.length > 0) gotoItem(data.items[data.items.length - 1].id, page)
+        else message.info('前面没有更多素材了')
+      } catch {
+        message.error('加载上一页失败')
+      }
+    }
+  } else {
+    if (browseIndex.value < browseItems.value.length - 1) {
+      gotoItem(browseItems.value[browseIndex.value + 1].id)
+    } else if (browsePage.value * size < browseTotal.value) {
+      const page = browsePage.value + 1
+      try {
+        const data = await fetchInspirations(
+          buildBrowseParams(route.query as Record<string, string>, page, size),
+        )
+        if (data.items.length > 0) gotoItem(data.items[0].id, page)
+        else message.info('后面没有更多素材了')
+      } catch {
+        message.error('加载下一页失败')
+      }
+    }
+  }
+}
+
+/** 键盘左右键切换相邻素材（灯箱打开、输入聚焦或浏览上下文缺失时禁用） */
+function onKeydown(e: KeyboardEvent) {
+  const target = e.target as HTMLElement | null
+  const tag = target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+  if (lightboxOpen.value) return
+  if (e.key === 'ArrowLeft' && hasPrev.value) {
+    e.preventDefault()
+    goNeighbor('prev')
+  } else if (e.key === 'ArrowRight' && hasNext.value) {
+    e.preventDefault()
+    goNeighbor('next')
+  }
+}
+
+/** 加载素材详情数据（含相似推荐与浏览上下文），路由参数变化时复用 */
 async function loadDetail(id: string) {
   const seq = ++detailSeq
   loading.value = true
   detail.value = null  // 清理旧素材，避免参数切换时残留上一份内容
   lightboxOpen.value = false
   similarItems.value = []
+  browseItems.value = []
   try {
     const data = await fetchInspiration(id)
     if (seq !== detailSeq) return  // 已有更新的请求，丢弃过期响应
     detail.value = data
     loadSimilar(data.id, seq)
+    // 同步加载浏览上下文（翻页导航后 route.query.page 已更新）
+    browsePage.value = parseInt(route.query.page as string) || 1
+    loadBrowseContext(browsePage.value, seq)
   } catch {
     if (seq !== detailSeq) return
     message.error('加载素材详情失败')
@@ -112,6 +237,11 @@ async function loadDetail(id: string) {
 onMounted(() => {
   loadOutfitOptions()
   loadDetail(route.params.id as string)
+  document.addEventListener('keydown', onKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
 })
 
 // 详情页跳转相似推荐等场景下，Vue Router 复用同一路由记录、不会重触发 onMounted，
@@ -260,17 +390,56 @@ function updatePersons(list: PersonBrief[]) {
 function goSearchByTag(name: string) {
   router.push({ path: '/search', query: { q: name } })
 }
+
+/** 移除普通标签（穿搭大标签由 OutfitTagSection 管理，不在此渲染） */
+async function removeTag(t: InspirationTagOut) {
+  if (!detail.value) return
+  try {
+    await removeTagFromInspiration(detail.value.id, t.tag.id)
+    detail.value.tags = detail.value.tags.filter((x) => x.tag.id !== t.tag.id)
+    message.success('已移除标签')
+  } catch {
+    message.error('移除标签失败')
+  }
+}
 </script>
 
 <template>
   <div class="detail-page">
     <n-spin :show="loading">
       <template v-if="detail">
-        <!-- 面包屑 -->
-        <n-breadcrumb style="margin-bottom: 16px">
-          <n-breadcrumb-item @click="goHome()">素材库</n-breadcrumb-item>
-          <n-breadcrumb-item>素材详情</n-breadcrumb-item>
-        </n-breadcrumb>
+        <!-- 面包屑 + 上一张/下一张导航 -->
+        <div class="detail-topbar">
+          <n-breadcrumb>
+            <n-breadcrumb-item @click="goHome()">素材库</n-breadcrumb-item>
+            <n-breadcrumb-item>素材详情</n-breadcrumb-item>
+          </n-breadcrumb>
+          <div v-if="browseIndex >= 0" class="browse-nav">
+            <span class="browse-position">
+              {{ browsePosition }} / {{ browseTotal }}
+            </span>
+            <n-button-group size="tiny">
+              <n-button
+                :disabled="!hasPrev"
+                :loading="browseLoading"
+                title="上一张（←）"
+                @click="goNeighbor('prev')"
+              >
+                <template #icon><n-icon><ChevronBackOutline /></n-icon></template>
+                上一张
+              </n-button>
+              <n-button
+                :disabled="!hasNext"
+                :loading="browseLoading"
+                title="下一张（→）"
+                @click="goNeighbor('next')"
+              >
+                下一张
+                <template #icon><n-icon><ChevronForwardOutline /></n-icon></template>
+              </n-button>
+            </n-button-group>
+          </div>
+        </div>
 
         <!-- 垃圾桶提示（软删除素材） -->
         <n-alert
@@ -279,7 +448,7 @@ function goSearchByTag(name: string) {
           title="此素材在垃圾桶中"
           style="margin-bottom: 16px"
         >
-          删除原因：{{ detail.trash_reason || '未知' }}；可点击右上角「恢复」移回素材库，或「彻底删除」永久移除。
+          删除原因：{{ detail.trash_reason || '未知' }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
         </n-alert>
 
         <div class="detail-layout">
@@ -325,7 +494,7 @@ function goSearchByTag(name: string) {
                 :download="downloadFileName"
                 class="download-link"
               >
-                <n-button>⬇️ 下载原图</n-button>
+                <n-button>⬇️ {{ detail.media_type === 'video' ? '下载视频' : '下载原图' }}</n-button>
               </a>
               <template v-if="detail.deleted_at">
                 <n-button type="primary" secondary @click="handleRestore">恢复</n-button>
@@ -428,6 +597,16 @@ function goSearchByTag(name: string) {
                     >
                       {{ t.tag.name }}<template v-if="t.confidence < 0.8"> ({{ Math.round(t.confidence * 100) }}%)</template>
                     </CategoryTag>
+                    <n-button
+                      size="tiny"
+                      quaternary
+                      circle
+                      class="tag-remove-btn"
+                      title="移除该标签"
+                      @click.stop="removeTag(t)"
+                    >
+                      <template #icon><n-icon><CloseOutline /></n-icon></template>
+                    </n-button>
                   </span>
                 </div>
               </div>
@@ -474,6 +653,27 @@ function goSearchByTag(name: string) {
 .detail-layout {
   display: flex;
   gap: 24px;
+}
+
+/* 顶部：面包屑 + 浏览导航 */
+.detail-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.browse-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.browse-position {
+  font-size: 13px;
+  color: #999;
 }
 
 .image-section {
@@ -530,6 +730,19 @@ function goSearchByTag(name: string) {
 /* 可点击跳转搜索的标签 */
 .tag-clickable {
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 标签移除按钮：悬停标签时出现，避免常驻造成视觉噪音 */
+.tag-remove-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  transform: scale(0.85);
+}
+.tag-clickable:hover .tag-remove-btn {
+  opacity: 1;
 }
 
 /* 下载原图按钮的链接容器 */

@@ -243,8 +243,8 @@ onUnmounted(() => {
         </p>
       </n-tab-pane>
 
-      <!-- 疑似 AI -->
-      <n-tab-pane name="ai" tab="疑似 AI">
+      <!-- 疑似 AI 素材（与侧边栏「AI 模型」区分，避免混淆） -->
+      <n-tab-pane name="ai" tab="疑似 AI 素材">
         <admin-ai-review
           :refresh-key="aiRefreshKey"
           @delete-selected="batchDeleteByIds"

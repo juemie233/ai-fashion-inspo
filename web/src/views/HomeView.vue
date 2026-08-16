@@ -1,16 +1,23 @@
 <script setup lang="ts">
 /** 首页：瀑布流展示素材，支持筛选、排序、密度调节和分页。 */
 
-import { ref, computed, watch } from 'vue'
+import { h, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, useNotification } from 'naive-ui'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { batchQualityCheck, updateQualityStatus } from '@/api/inspirations'
+import {
+  buildBrowseParams,
+  storedBrowseSort,
+  storedBrowsePageSize,
+  PAGE_SIZE_STORAGE_KEY,
+} from '@/utils/browseQuery'
 
 const router = useRouter()
 const route = useRoute()
 const message = useMessage()
+const notification = useNotification()
 const store = useInspirationsStore()
 
 // ── 筛选状态（从 URL query 初始化）──
@@ -27,9 +34,7 @@ const mediaFilter = ref<MediaFilter>((route.query.media as MediaFilter) || 'all'
 const statusFilter = ref<StatusFilter>((route.query.status as StatusFilter) || 'all')
 const qualityFilter = ref<QualityFilter>((route.query.quality as QualityFilter) || 'all')
 const sortMode = ref<SortMode>(
-  (route.query.sort as SortMode) ||
-  (localStorage.getItem('masonry-sort') as SortMode) ||
-  'random'
+  (route.query.sort as SortMode) || (storedBrowseSort() as SortMode) || 'newest'
 )
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
 
@@ -39,7 +44,11 @@ watch(sortMode, (v) => {
 })
 
 const currentPage = ref(parseInt(route.query.page as string) || 1)
-const pageSize = ref(50)
+// 每页数量同样持久化，避免刷新后重置（与排序/密度偏好行为一致）
+const pageSize = ref(storedBrowsePageSize())
+watch(pageSize, (v) => {
+  localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(v))
+})
 
 // ── 筛选选项配置 ──
 
@@ -82,10 +91,10 @@ const sortOptions: { label: string; value: SortMode }[] = [
   { label: '随机', value: 'random' },
 ]
 
-const densityOptions: { label: string; value: Density; icon: string }[] = [
-  { label: '紧凑', value: 'compact', icon: '⊞' },
-  { label: '标准', value: 'standard', icon: '⊟' },
-  { label: '宽松', value: 'comfortable', icon: '⊠' },
+const densityOptions: { label: string; value: Density }[] = [
+  { label: '紧凑', value: 'compact' },
+  { label: '标准', value: 'standard' },
+  { label: '宽松', value: 'comfortable' },
 ]
 
 const totalPages = computed(() => Math.ceil(store.total / pageSize.value))
@@ -98,26 +107,26 @@ function syncUrl() {
   if (mediaFilter.value !== 'all') query.media = mediaFilter.value
   if (statusFilter.value !== 'all') query.status = statusFilter.value
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
-  if (sortMode.value !== 'random') query.sort = sortMode.value
+  if (sortMode.value !== 'newest') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
 }
 
 // ── 数据加载 ──
 
+/** 构建列表请求参数：与 DetailView 的浏览上下文共用同一映射，保证筛选排序一致 */
 function buildParams(page: number) {
-  return {
+  return buildBrowseParams(
+    {
+      source: sourceFilter.value,
+      media: mediaFilter.value,
+      status: statusFilter.value,
+      quality: qualityFilter.value,
+      sort: sortMode.value,
+    },
     page,
-    size: pageSize.value,
-    source_type: sourceFilter.value !== 'all' ? sourceFilter.value : undefined,
-    media_type: mediaFilter.value !== 'all' ? mediaFilter.value : undefined,
-    is_favorite: statusFilter.value === 'favorites' ? true : undefined,
-    analysis_status: (statusFilter.value === 'done' || statusFilter.value === 'pending') ? statusFilter.value : undefined,
-    tag_status: statusFilter.value === 'untagged' ? 'untagged' : undefined,
-    quality_status: (qualityFilter.value !== 'all' && qualityFilter.value !== 'ai') ? qualityFilter.value : undefined,
-    is_ai_generated: qualityFilter.value === 'ai' ? true : undefined,
-    sort: sortMode.value,
-  }
+    pageSize.value,
+  )
 }
 
 function loadPage(page: number) {
@@ -179,7 +188,25 @@ async function handleBatchQualityCheck() {
     if (r.count === 0) {
       message.info('没有待审核的素材')
     } else {
-      message.success(`已提交 ${r.count} 个素材进行质量审核，稍后刷新查看结果`)
+      // 后台任务异步执行：用带「查看进度」动作的通知引导用户去任务管理页
+      notification.success({
+        title: `已提交 ${r.count} 个素材进行质量审核`,
+        content: '任务在后台执行，可稍后在任务管理页查看进度与结果',
+        duration: 8000,
+        action: () =>
+          h(
+            'a',
+            {
+              href: '#',
+              style: 'color:#2080f0; text-decoration:none',
+              onClick: (e: MouseEvent) => {
+                e.preventDefault()
+                router.push('/tasks')
+              },
+            },
+            '查看进度',
+          ),
+      })
     }
   } catch {
     message.error('质量审核提交失败')
@@ -310,17 +337,16 @@ loadPage(currentPage.value)
             v-for="d in densityOptions"
             :key="d.value"
             :type="density === d.value ? 'primary' : 'default'"
-            :title="d.label"
             @click="setDensity(d.value)"
           >
-            {{ d.icon }}
+            {{ d.label }}
           </n-button>
         </n-button-group>
       </div>
     </div>
 
     <!-- 当前筛选提示 -->
-    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'random'" class="active-filters">
+    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'newest'" class="active-filters">
       当前筛选：
       <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="sourceFilter = 'all'; onFilterChange()">
         {{ sourceOptions.find(o => o.value === sourceFilter)?.label }}
@@ -334,10 +360,10 @@ loadPage(currentPage.value)
       <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="qualityFilter = 'all'; onFilterChange()">
         {{ qualityOptions.find(o => o.value === qualityFilter)?.label }}
       </n-tag>
-      <n-tag v-if="sortMode !== 'random'" size="tiny" closable @close="sortMode = 'random'; onSortChange()">
+      <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="sortMode = 'newest'; onSortChange()">
         {{ sortOptions.find(o => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='random';onFilterChange()">
+      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='newest';onFilterChange()">
         清除全部
       </n-button>
     </div>

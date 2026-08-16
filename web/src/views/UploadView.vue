@@ -44,6 +44,16 @@ const uploadSpeed = ref('')
 let _lastBytes = 0
 let _lastTime = 0
 
+// ── 停止上传 ──
+let _stopRequested = false
+let _abortCtrl: AbortController | null = null
+
+/** 停止上传：中止当前请求并中断队列循环，剩余文件保持「待上传」可再次开始 */
+function stopUpload() {
+  _stopRequested = true
+  _abortCtrl?.abort()
+}
+
 // ── 元数据 ──
 const sourceAuthor = ref('')
 const quickTags = ref('')
@@ -135,11 +145,6 @@ function clearQueue() {
   queue.value = []
 }
 
-// ── 批量元数据 ──
-function applyMetaToAll() {
-  // 元数据通过表单传递，上传时自动应用
-}
-
 // ── 去重检测 ──
 async function checkDuplicate(file: File): Promise<boolean> {
   const buffer = await file.arrayBuffer()
@@ -162,6 +167,9 @@ async function startUpload() {
     return
   }
   uploading.value = true
+  _stopRequested = false
+  _abortCtrl = new AbortController()
+  const abortSignal = _abortCtrl.signal
   _lastBytes = 0
   _lastTime = Date.now()
   uploadSpeed.value = ''
@@ -172,6 +180,8 @@ async function startUpload() {
   let tagFailedCount = 0  // 快速标签添加失败数
 
   for (const item of pending) {
+    if (_stopRequested) break
+
     // 去重检测
     if (skipDuplicates.value) {
       const dup = await checkDuplicate(item.file)
@@ -189,7 +199,7 @@ async function startUpload() {
       formData.append('source_type', 'manual_upload')
       if (sourceAuthor.value.trim()) formData.append('source_author', sourceAuthor.value.trim())
 
-      const result = await store.upload(formData, makeProgressHandler(item))
+      const result = await store.upload(formData, makeProgressHandler(item), abortSignal)
       item.status = 'done'
       item.resultId = result.id
       item.progress = 100
@@ -212,16 +222,30 @@ async function startUpload() {
       prependRecent(result.id, result.thumbnail_path ?? null, result.file_path, result.media_type)
       _lastBytes += item.file.size
     } catch (e: any) {
+      if (_stopRequested) {
+        // 用户主动停止：当前项回滚为待上传，剩余队列保持原样
+        item.status = 'pending'
+        item.progress = 0
+        break
+      }
       item.status = 'failed'
       item.errorMsg = e.response?.data?.detail || '上传失败'
     }
   }
 
+  const stopped = _stopRequested
+  _abortCtrl = null
   uploading.value = false
   uploadSpeed.value = ''
   const done = queue.value.filter(q => q.status === 'done').length
   const failed = queue.value.filter(q => q.status === 'failed').length
   const dups = queue.value.filter(q => q.status === 'duplicate').length
+
+  if (stopped) {
+    const remain = queue.value.filter(q => q.status === 'pending').length
+    message.info(`已停止上传：完成 ${done} 个，剩余 ${remain} 个待上传`)
+    return
+  }
 
   const parts = [`${done} 成功`]
   if (failed > 0) parts.push(`${failed} 失败`)
@@ -386,6 +410,7 @@ onUnmounted(() => {
       :pending="queuePending"
       @save-prefs="savePrefs"
       @start="startUpload"
+      @stop="stopUpload"
     />
 
     <!-- 最近上传 -->
