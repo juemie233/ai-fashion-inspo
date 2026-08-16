@@ -615,11 +615,11 @@ fashion-inspo/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/health` | 健康检查（返回 `schema_version`，前端启动时比对前后端契约） |
+| `GET` | `/api/health` | 健康检查（返回 `schema_version`，前端据此校验前后端契约） |
 | `GET` | `/api/files/{path}` | 静态文件访问 |
 | `WS` | `/ws` | WebSocket 实时推送 |
 
-> **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端启动时比对本地期望值，不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」。
+> **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端期望值不再手工维护：dev 启动 / build 时由 `scripts/compute_schema_version.py` 调用后端代码自动计算并注入为全局常量 `__SCHEMA_VERSION__`（见 `web/vite.config.ts`）。不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」；后端改动后重启前端 dev / 重新 build 即自动对齐。
 
 ## 安全加固（API 密钥）
 

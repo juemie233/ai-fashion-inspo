@@ -21,21 +21,6 @@
 - 备份脚本可定时执行，并保留多份历史快照
 - 破坏性接口不再无提示清空
 
-### 自动化测试（核心链路回归防护）
-
-**背景：** 项目目前零自动化测试。系统已相当复杂（采集、AI 分析、向量检索、任务队列、垃圾桶软删除、负样本初筛器），改动全靠人工验证，回归风险高——近期 --reload 崩溃、垃圾桶软删除等改动均无测试兜底；`.claude/skills` 里已有 vitest/api-testing 规范但未落地。
-
-**目标：**
-
-- 后端：pytest + httpx 集成测试，覆盖核心 API（上传/搜索/标签/质量审核/垃圾桶/认证）
-- 关键服务单测：tag_normalizer、ai_parser、inspiration_service（软删除过滤、垃圾桶移入/恢复/清空）、quality_learner（训练/回滚）
-- 前端：vitest 覆盖纯工具函数与关键 composable/store
-
-**验收标准：**
-
-- `pytest` 一键运行，核心链路测试通过
-- 软删除过滤、垃圾桶移入/恢复/清空、内容去重等有回归测试
-
 ### Alembic 正式迁移，替换手写 db_migrations
 
 **背景：** requirements.txt 已含 alembic==1.14.1，但 backend/alembic/ 从未初始化；当前靠手写 db_migrations.py 的「PRAGMA table_info + ALTER TABLE ADD COLUMN」，只能加列，无法 DROP/RENAME/改约束/改索引，且依赖 aiosqlite 手写逻辑。随 AI 结构化存储、视频关键帧表等演进，手写迁移会越来越难维护、易产生 schema 漂移。
@@ -166,7 +151,6 @@
 ## 备注
 
 - 向量检索与采集引擎自动化可以并行开发。
-- API 版本握手实现简单，可与任务队列同步推进，有效避免开发过程中的版本混乱。
 - AI 结果结构化存储依赖于任务队列稳定后实施。
 - 视频分析功能依赖关键帧提取和 AI 复用，建议在任务队列和 AI 结构化存储完成后进行，以减少重复工作。
 - 所有任务需遵循项目编码规范（见 CLAUDE.md）。

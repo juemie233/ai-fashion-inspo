@@ -44,7 +44,7 @@
 | 数据库 | SQLite + SQLAlchemy (async) | — |
 | Web 前端 | Vue 3 + Vite + TypeScript | Node 20+ |
 | 移动端 | React Native (Expo) | SDK 52+ |
-| AI 推理 | Ollama + MiniCPM-V:8b | 本地 |
+| AI 推理 | Ollama + Qwen3-VL:8B-Instruct | 本地 |
 | 浏览器插件 | Chrome Extension Manifest V3 | — |
 | 采集引擎 | Playwright + playwright-stealth | — |
 

@@ -4,7 +4,7 @@
 未显式配置的模型回退到 ``.env`` / ``config.py`` 中的全局默认值。
 
 设计目的：思考型模型（如 qwen3-vl:8b-thinking）推理慢、token 消耗大，
-需要更大的超时与 num_predict；普通模型（如 minicpm-v:8b）则用更紧凑的值。
+需要更大的超时与 num_predict；普通模型（如 qwen3-vl:8b-instruct）则用更紧凑的值。
 """
 
 import asyncio

@@ -56,7 +56,9 @@ class Settings(BaseSettings):
 
     # AI / Ollama
     ollama_base_url: str = "http://localhost:11434"
-    ollama_vision_model: str = "minicpm-v:8b"
+    # 默认视觉模型与 README 推荐一致（Qwen3-VL:8B-Instruct）；
+    # 可在 .env 用 OLLAMA_VISION_MODEL 覆盖，或在「AI 模型管理」页切换
+    ollama_vision_model: str = "qwen3-vl:8b-instruct"
     ollama_embedding_model: str = "all-minilm"
     ai_analysis_timeout: int = 300  # 秒（思考型模型推理耗时更长）
     ai_low_confidence_threshold: float = 0.6
