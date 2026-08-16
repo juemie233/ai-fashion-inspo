@@ -97,6 +97,7 @@ chrome_debug_port: int = 9222
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
 | **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 并排预览 + 人工确认删除）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志） |
+| **人物管理** | 人物列表（名称搜索/内容类型筛选/平台筛选/排序）、内容类型区分（职业模特/穿搭博主徽标贯穿列表/详情/表单）、新建/编辑/删除、热门排行、风格画像（高频标签/类别分布/趋势）、素材关联（详情页搜索添加/解除）、**模特照片组**（选择文件夹整组导入到选定人物、照片组浏览/灯箱/删除、组内 SHA-256 去重） |
 | **浏览器插件** | 一键提取网页穿搭图片；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
 ## 快速启动
@@ -224,7 +225,7 @@ fashion-inspo/
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签 + 别名（含 source 来源标识）
-│   │   │   ├── person.py         # 人物（模特/博主） + 人物-素材关联
+│   │   │   ├── person.py         # 人物（模特/博主） + 人物-素材关联 + 照片组/照片
 │   │   │   ├── scraper.py        # 采集任务 + 定时采集计划
 │   │   │   ├── task.py           # 异步任务队列
 │   │   │   └── audit.py          # 操作审计日志
@@ -233,6 +234,7 @@ fashion-inspo/
 │   │   │   ├── inspirations.py   # 素材 CRUD
 │   │   │   ├── tags.py           # 标签管理 + 批量/统计/扫描/排序/别名/共现/导入导出
 │   │   │   ├── search.py         # 多维度搜索 + 相似素材
+│   │   │   ├── persons.py        # 人物管理 + 照片组（模特写真）
 │   │   │   ├── ai.py             # AI 路由聚合（拆分见 ai_*.py）
 │   │   │   ├── ai_shared.py      # AI 共享状态 + 后台任务
 │   │   │   ├── ai_models.py      # 模型管理 + GPU + 模型统计
@@ -254,6 +256,7 @@ fashion-inspo/
 │   │   │   ├── ai_analysis_service.py  # 分析/队列/历史业务逻辑
 │   │   │   ├── inspiration_service.py  # 素材 CRUD 业务逻辑
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
+│   │   │   ├── person_service.py # 人物 CRUD + 风格画像 + 照片组/照片
 │   │   │   ├── scraper_service.py    # 采集编排 + 定时调度 + 插件任务记录
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── audit_service.py  # 操作审计日志写入
@@ -282,6 +285,9 @@ fashion-inspo/
 │       ├── images/
 │       ├── thumbnails/
 │       ├── videos/
+│       ├── trash/                # 垃圾桶（软删除文件移入此目录）
+│       ├── person_photos/        # 人物照片（模特写真，与素材库 images/ 分离）
+│       ├── person_thumbnails/    # 人物照片缩略图
 │       └── lancedb/              # 向量库（文本/图像向量）
 │
 ├── web/                          # Vue 3 Web 前端
@@ -303,12 +309,16 @@ fashion-inspo/
 │   │   ├── views/                # 页面组件
 │   │   │   ├── HomeView.vue      # 首页画廊
 │   │   │   ├── UploadView.vue    # 上传素材
+│   │   │   ├── ModelPhotoUploadView.vue # 添加模特照片（文件夹整组导入）
 │   │   │   ├── SearchView.vue    # 高级搜索
 │   │   │   ├── DetailView.vue    # 素材详情
 │   │   │   ├── ScraperView.vue   # 采集管理
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
+│   │   │   ├── PersonView.vue    # 人物管理（列表/筛选/CRUD/排行）
+│   │   │   ├── PersonDetailView.vue # 人物详情（风格画像 + 照片组浏览）
 │   │   │   ├── ModelManageView.vue # AI 模型管理（全功能）
-│   │   │   └── AdminView.vue     # 素材管理（小菜单子页面：概览/疑似AI/批量清理/完整性/重复文件）
+│   │   │   ├── AdminView.vue     # 素材管理（小菜单子页面：概览/疑似AI/批量清理/完整性/重复文件）
+│   │   │   └── TaskManageView.vue # 任务管理（异步任务队列列表/详情/取消）
 │   │   ├── components/           # 通用组件（按域分目录）
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
@@ -317,6 +327,7 @@ fashion-inspo/
 │   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件
+│   │   │   ├── person/           # PersonTypeTag, PersonFormModal, PersonLinkSection
 │   │   │   └── upload/           # 上传拖拽/队列/选项子组件
 │   │   ├── types/                # 跨组件复用的 TS 类型（admin/analysis/scraper/upload）
 │   │   ├── utils/                # 工具函数
@@ -352,6 +363,7 @@ fashion-inspo/
 ├── shared/types/                 # 前后端共享类型
 │   ├── inspiration.ts
 │   ├── tag.ts
+│   ├── person.ts
 │   └── api.ts
 │
 └── scripts/                      # 工具脚本
@@ -417,6 +429,10 @@ fashion-inspo/
 | `scraper_schedules` | 定时采集计划 | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count |
 | `task_queue` | 异步任务队列 | type（batch_analyze/quality_check/batch_delete/deduplicate）, status（pending/running/success/failed/cancelled）, progress, total/done, result, error, retry_count, next_retry_at |
 | `audit_logs` | 操作审计日志 | id, action（batch_delete/delete_rejected/cleanup_orphans/empty_trash/batch_trash）, target_type, count, freed_bytes, detail, created_at — 破坏性批量操作留痕 |
+| `persons` | 人物（职业模特/穿搭博主） | id, name, person_type（model/blogger）, platform, platform_user_id, profile_url, avatar_path, bio, source, created_at, updated_at |
+| `inspiration_persons` | 人物-素材多对多关联 | inspiration_id, person_id, confidence — 记录 AI 识别「图片里是谁」的置信度 |
+| `person_photo_sets` | 人物照片组 | id, person_id, name（组名，默认取文件夹名）, created_at, updated_at |
+| `person_photos` | 人物照片 | id, set_id, file_path, thumbnail_path, content_hash（组内 SHA-256 去重）, sort_order, created_at |
 
 ### 标签类别体系
 
@@ -545,6 +561,20 @@ alembic upgrade head
 | `DELETE` | `/api/inspirations/{id}/persons/{pid}` | 解除素材与人物关联 |
 
 > **内容类型 UI 区分：** 人物以 `person_type` 区分「职业模特（model）/ 穿搭博主（blogger）」，列表筛选、类型徽标、表单选择贯穿前端呈现；关联一律使用 `person_id`（人物名不唯一，规避同名歧义）。
+
+### 人物照片组（模特写真）
+
+模特照片组与穿搭素材分离：模特照片是人物主体的写真资料，不进入素材库、不参与 AI 打标与检索，仅按「人物 → 照片组 → 照片」浏览。文件独立落盘 `person_photos/`，避免被完整性检查误判为孤立文件。
+
+| 方法 | 路径 | 说明 |
+| ------ | ------ | ------ |
+| `GET` | `/api/persons/{id}/photo-sets` | 人物照片组列表（分页，含照片数与封面） |
+| `POST` | `/api/persons/{id}/photo-sets` | 创建照片组（组名缺省回退「未命名照片组」） |
+| `GET` | `/api/persons/{id}/photo-sets/{set_id}` | 照片组详情（含分页照片列表） |
+| `PATCH` | `/api/persons/{id}/photo-sets/{set_id}` | 重命名照片组 |
+| `DELETE` | `/api/persons/{id}/photo-sets/{set_id}` | 删除照片组（级联删除照片与物理文件） |
+| `POST` | `/api/persons/{id}/photo-sets/{set_id}/photos` | 上传单张照片到照片组（组内 SHA-256 内容去重） |
+| `DELETE` | `/api/persons/{id}/photo-sets/{set_id}/photos/{photo_id}` | 删除照片组内单张照片 |
 
 ### AI 分析
 
