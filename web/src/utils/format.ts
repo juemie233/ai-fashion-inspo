@@ -34,6 +34,20 @@ export function formatDate(d: string | null | undefined): string {
   }
 }
 
+/** 将运行时长（秒）格式化为可读中文，如「2 小时 5 分钟」。 */
+export function formatUptime(seconds: number | null | undefined): string {
+  if (seconds == null || seconds < 0) return '-'
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  if (hours < 24) return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分钟` : `${hours} 小时`
+  const days = Math.floor(hours / 24)
+  const restHours = hours % 24
+  return restHours > 0 ? `${days} 天 ${restHours} 小时` : `${days} 天`
+}
+
 /** 自适应大小格式化：数值保持在 1-1000 范围 + 单位 */
 export function smartSize(bytes: number): { value: string; unit: string } {
   if (bytes < 1024) return { value: String(bytes), unit: 'B' }

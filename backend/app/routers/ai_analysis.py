@@ -1,9 +1,12 @@
 """AI 子路由。"""
 
 import asyncio
+import csv
+import io
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -102,11 +105,58 @@ async def analysis_history(
     status: str | None = None,  # success | error
     model_name: str | None = None,  # 按模型筛选
     inspiration_id: str | None = None,  # 按素材 ID 搜索
+    start_date: str | None = None,  # 起始时间（ISO，含）
+    end_date: str | None = None,  # 结束时间（ISO，含）
+    sort_by: str | None = None,  # time_asc | time_desc（默认按时间倒序）
     db: AsyncSession = Depends(get_db),
 ):
     """获取分析历史记录列表（仅标签分析，排除质量审核日志）。"""
-    return await ai_svc.get_analysis_history(
-        db, page, size, status, model_name, inspiration_id
+    try:
+        return await ai_svc.get_analysis_history(
+            db, page, size, status, model_name, inspiration_id,
+            start_date, end_date, sort_by,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}")
+
+
+@router.get("/history/export")
+async def export_analysis_history_csv(
+    status: str | None = None,
+    model_name: str | None = None,
+    inspiration_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    sort_by: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """导出分析历史为 CSV（当前筛选条件，上限 10000 条）。"""
+    try:
+        items = await ai_svc.export_analysis_history(
+            db, status, model_name, inspiration_id, start_date, end_date, sort_by
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "素材ID", "模型", "状态", "耗时(ms)", "失败原因", "时间", "标签"])
+    for it in items:
+        writer.writerow([
+            it["id"],
+            it["inspiration_id"],
+            it["model_name"],
+            it["status"],
+            it["processing_time_ms"] if it["processing_time_ms"] is not None else "",
+            it["error"] or "",
+            it["created_at"] or "",
+            "、".join(t["name"] for t in it["tags"]),
+        ])
+    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM 让 Excel 正确识别中文
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="analysis_history.csv"'},
     )
 
 

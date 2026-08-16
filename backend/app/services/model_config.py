@@ -99,3 +99,23 @@ async def reset_model_config(model_name: str) -> dict[str, Any]:
 
             await asyncio.to_thread(_write)
     return get_model_config(model_name)
+
+
+def get_all_model_configs() -> dict[str, dict[str, Any]]:
+    """返回所有有自定义覆盖的模型参数（仅覆盖项，不含全局默认值）。"""
+    return _load()
+
+
+async def copy_model_config(source: str, destination: str) -> None:
+    """将源模型的参数覆盖复制到目标模型（无覆盖则忽略）。"""
+    async with _write_lock:
+        data = _load()
+        if source in data:
+            data[destination] = dict(data[source])
+
+            def _write() -> None:
+                _CONFIG_FILE.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+
+            await asyncio.to_thread(_write)

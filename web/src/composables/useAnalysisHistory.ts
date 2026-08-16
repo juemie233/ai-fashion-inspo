@@ -26,6 +26,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const historyFilter = ref<string | null>(null)
   const historyModelFilter = ref<string | null>(null)
   const historySearchId = ref('')
+  const historyStartDate = ref<number | null>(null)
+  const historyEndDate = ref<number | null>(null)
+  const historySortBy = ref<string | null>(null)
   const historyLoading = ref(false)
   const selectedHistoryIds = ref<Set<number>>(new Set())
   const historyModelNames = ref<string[]>([])
@@ -46,6 +49,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       if (historyFilter.value) params.status = historyFilter.value
       if (historyModelFilter.value) params.model_name = historyModelFilter.value
       if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
+      if (historyStartDate.value) params.start_date = toDateStr(historyStartDate.value)
+      if (historyEndDate.value) params.end_date = toDateStr(historyEndDate.value)
+      if (historySortBy.value) params.sort_by = historySortBy.value
       const { data } = await apiClient.get('/ai/history', { params, signal: historyAbort.signal })
       if (seq !== historySeq) return
       history.value = data.items
@@ -78,6 +84,53 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     historyPage.value = 1
     selectedHistoryIds.value = new Set()
     loadHistory()
+  }
+
+  /** 时间戳（毫秒）转 YYYY-MM-DD 日期字符串 */
+  function toDateStr(ts: number): string {
+    const d = new Date(ts)
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  }
+
+  /** 按时间范围筛选 */
+  function filterByDate(start: number | null, end: number | null) {
+    historyStartDate.value = start
+    historyEndDate.value = end
+    historyPage.value = 1
+    selectedHistoryIds.value = new Set()
+    loadHistory()
+  }
+
+  /** 按耗时排序（time_asc | time_desc | null=按时间倒序） */
+  function sortByTime(value: string | null) {
+    historySortBy.value = value
+    historyPage.value = 1
+    loadHistory()
+  }
+
+  /** 导出当前筛选条件下的历史为 CSV 文件 */
+  async function exportHistoryCsv() {
+    try {
+      const params: any = {}
+      if (historyFilter.value) params.status = historyFilter.value
+      if (historyModelFilter.value) params.model_name = historyModelFilter.value
+      if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
+      if (historyStartDate.value) params.start_date = toDateStr(historyStartDate.value)
+      if (historyEndDate.value) params.end_date = toDateStr(historyEndDate.value)
+      if (historySortBy.value) params.sort_by = historySortBy.value
+      const response = await apiClient.get('/ai/history/export', { params, responseType: 'blob' })
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'analysis_history.csv'
+      link.click()
+      URL.revokeObjectURL(url)
+      message.success('已导出 CSV')
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '导出失败')
+    }
   }
 
   /** 加载历史模型下拉选项 */
@@ -212,6 +265,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     historyFilter,
     historyModelFilter,
     historySearchId,
+    historyStartDate,
+    historyEndDate,
+    historySortBy,
     historyLoading,
     selectedHistoryIds,
     historyModelNames,
@@ -221,6 +277,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     filterHistory,
     filterByModel,
     searchById,
+    filterByDate,
+    sortByTime,
+    exportHistoryCsv,
     loadModelNames,
     toggleSelectHistory,
     selectAllHistory,

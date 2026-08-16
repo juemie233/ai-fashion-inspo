@@ -19,6 +19,9 @@ const props = defineProps<{
   historyFilter: string | null
   historyModelFilter: string | null
   historySearchId: string
+  historyStartDate: number | null
+  historyEndDate: number | null
+  historySortBy: string | null
   historyLoading: boolean
   selectedHistoryIds: Set<number>
   historyModelNames: string[]
@@ -34,6 +37,9 @@ const emit = defineEmits<{
   (e: 'filterByModel', value: string | null): void
   (e: 'update:historySearchId', value: string): void
   (e: 'searchById'): void
+  (e: 'filterByDate', start: number | null, end: number | null): void
+  (e: 'sortByTime', value: string | null): void
+  (e: 'exportCsv'): void
   (e: 'toggleSelect', logId: number): void
   (e: 'selectAll'): void
   (e: 'clearSelection'): void
@@ -76,6 +82,18 @@ function onModelFilterUpdate(value: string | null) {
 /** 搜索关键词变化：仅同步 v-model */
 function onSearchUpdate(value: string) {
   emit('update:historySearchId', value)
+}
+
+/** 耗时排序选项 */
+const sortOptions = [
+  { label: '耗时升序', value: 'time_asc' },
+  { label: '耗时降序', value: 'time_desc' },
+]
+
+/** 日期范围变化：同步父组件并触发加载 */
+function onDateRangeChange(value: [number, number] | null) {
+  if (value) emit('filterByDate', value[0], value[1])
+  else emit('filterByDate', null, null)
 }
 
 /** 分页变化 */
@@ -291,6 +309,7 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
           </template>
           确定要删除所有失败记录吗？此操作不可恢复。
         </n-popconfirm>
+        <n-button size="small" secondary @click="emit('exportCsv')">导出 CSV</n-button>
         <n-button size="small" @click="emit('refresh')" :loading="historyLoading">刷新</n-button>
       </n-space>
     </template>
@@ -325,6 +344,23 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
           <n-button size="tiny" @click="emit('searchById')">🔍</n-button>
         </template>
       </n-input>
+      <n-date-picker
+        :value="historyStartDate && historyEndDate ? [historyStartDate, historyEndDate] : null"
+        type="daterange"
+        size="small"
+        style="width:250px"
+        clearable
+        @update:value="onDateRangeChange"
+      />
+      <n-select
+        :value="historySortBy"
+        :options="sortOptions"
+        size="small"
+        style="width:130px"
+        placeholder="按耗时排序"
+        clearable
+        @update:value="(v: string | null) => emit('sortByTime', v)"
+      />
     </div>
 
     <!-- 批量操作栏 -->

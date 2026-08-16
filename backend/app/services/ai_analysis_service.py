@@ -8,6 +8,8 @@
 路由层（routers/ai_analysis.py）负责解析参数、捕获本模块异常并转为 HTTPException。
 """
 
+from datetime import datetime
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -166,6 +168,17 @@ async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
     return [row[0] for row in result]
 
 
+def _parse_iso_dt(value: str) -> datetime:
+    """将 ISO 时间字符串解析为 naive UTC datetime（与 DB 存储口径一致）。"""
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dt = datetime.fromisoformat(text)
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt
+
+
 async def get_analysis_history(
     db: AsyncSession,
     page: int,
@@ -173,8 +186,15 @@ async def get_analysis_history(
     status: str | None,
     model_name: str | None,
     inspiration_id: str | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    sort_by: str | None = None,
 ) -> dict:
-    """分页查询分析历史记录（仅标签分析，排除质量审核日志），返回 items + total。"""
+    """分页查询分析历史记录（仅标签分析，排除质量审核日志），返回 items + total。
+
+    支持时间范围筛选（start_date / end_date，ISO 字符串）与耗时排序
+    （sort_by=time_asc|time_desc）。
+    """
     query = select(AIAnalysisLog).where(_analysis_log_filter())
     if status == "success":
         query = query.where(AIAnalysisLog.error.is_(None))
@@ -184,8 +204,21 @@ async def get_analysis_history(
         query = query.where(AIAnalysisLog.model_name == model_name)
     if inspiration_id:
         query = query.where(AIAnalysisLog.inspiration_id.contains(inspiration_id))
+    if start_date:
+        query = query.where(AIAnalysisLog.created_at >= _parse_iso_dt(start_date))
+    if end_date:
+        end_dt = _parse_iso_dt(end_date)
+        # 纯日期（YYYY-MM-DD）扩展到当天结束，避免丢失结束日当天的记录
+        if len(end_date.strip()) == 10:
+            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        query = query.where(AIAnalysisLog.created_at <= end_dt)
 
-    query = query.order_by(AIAnalysisLog.created_at.desc())
+    if sort_by == "time_asc":
+        query = query.order_by(AIAnalysisLog.processing_time_ms.asc())
+    elif sort_by == "time_desc":
+        query = query.order_by(AIAnalysisLog.processing_time_ms.desc())
+    else:
+        query = query.order_by(AIAnalysisLog.created_at.desc())
 
     # 总数
     count_query = select(func.count()).select_from(query.subquery())
@@ -236,6 +269,22 @@ async def get_analysis_history(
         })
 
     return {"items": items, "total": total, "page": page, "size": size}
+
+
+async def export_analysis_history(
+    db: AsyncSession,
+    status: str | None,
+    model_name: str | None,
+    inspiration_id: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    sort_by: str | None,
+) -> list[dict]:
+    """导出分析历史（不分页，上限 10000 条），复用列表过滤与排序逻辑。"""
+    result = await get_analysis_history(
+        db, 1, 10000, status, model_name, inspiration_id, start_date, end_date, sort_by
+    )
+    return result["items"]
 
 
 async def get_failed_analysis_targets(db: AsyncSession) -> list[tuple[str, str]]:

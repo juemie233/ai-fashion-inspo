@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** 参数调优面板：基础参数、Prompt 管理、单图测试、采样参数、数据重置。 */
 
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { h, ref, onMounted, onUnmounted } from 'vue'
+import { NTag, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { useAiModelsStore } from '@/stores/aiModels'
 import { useTagsStore } from '@/stores/tags'
@@ -73,6 +73,7 @@ async function rollbackPrompt(index: number) {
 
 // ===== 单图测试 =====
 const testInspirationId = ref('')
+const testFile = ref<File | null>(null)
 const testLoading = ref(false)
 const testRawResponse = ref('')
 const testParsed = ref<Record<string, any> | null>(null)
@@ -82,8 +83,18 @@ const testCustomPrompt = ref('')
 
 let testAbortController: AbortController | null = null
 
+/** 上传图片后清空素材 ID（二者互斥，优先使用上传图片） */
+function onTestFileChange(options: { file: { file?: File | null } }) {
+  testFile.value = options.file?.file || null
+  if (testFile.value) testInspirationId.value = ''
+}
+
+function clearTestFile() {
+  testFile.value = null
+}
+
 async function testAnalyze() {
-  if (!testInspirationId.value.trim()) return
+  if (!testInspirationId.value.trim() && !testFile.value) return
   testLoading.value = true
   testRawResponse.value = ''
   testParsed.value = null
@@ -92,11 +103,27 @@ async function testAnalyze() {
 
   try {
     const baseUrl = apiClient.defaults.baseURL || '/api'
-    const params = new URLSearchParams({ inspiration_id: testInspirationId.value.trim() })
-    if (testCustomPrompt.value.trim()) params.set('custom_prompt', testCustomPrompt.value.trim())
-
     testAbortController = new AbortController()
-    const response = await fetch(`${baseUrl}/ai/test-analyze?${params}`, { method: 'POST', signal: testAbortController.signal })
+
+    // 优先使用上传图片（multipart），否则回退到素材 ID
+    let response: Response
+    if (testFile.value) {
+      const query = testCustomPrompt.value.trim()
+        ? `?custom_prompt=${encodeURIComponent(testCustomPrompt.value.trim())}`
+        : ''
+      const form = new FormData()
+      form.append('file', testFile.value)
+      response = await fetch(`${baseUrl}/ai/test-analyze${query}`, {
+        method: 'POST',
+        body: form,
+        signal: testAbortController.signal,
+      })
+    } else {
+      const params = new URLSearchParams({ inspiration_id: testInspirationId.value.trim() })
+      if (testCustomPrompt.value.trim()) params.set('custom_prompt', testCustomPrompt.value.trim())
+      response = await fetch(`${baseUrl}/ai/test-analyze?${params}`, { method: 'POST', signal: testAbortController.signal })
+    }
+
     if (!response.ok) {
       const err = await response.json()
       throw new Error(err.detail || '测试请求失败')
@@ -236,6 +263,53 @@ async function clearModelConfig() {
   }
 }
 
+// ===== 每模型配置总览 =====
+interface ModelConfigOverviewItem {
+  name: string
+  has_config: boolean
+  config_fields: string[]
+  has_prompt: boolean
+  prompt_length: number
+}
+const configOverview = ref<ModelConfigOverviewItem[]>([])
+const configOverviewLoading = ref(false)
+
+async function loadConfigOverview() {
+  configOverviewLoading.value = true
+  try {
+    const { data } = await apiClient.get<{ models: ModelConfigOverviewItem[] }>('/ai/model-config/overview')
+    configOverview.value = data.models
+  } catch { /* 静默 */ }
+  finally { configOverviewLoading.value = false }
+}
+
+// ===== 跨模型复制配置 =====
+const copyConfigSource = ref<string | null>(null)
+const copyConfigDestination = ref('')
+const copyConfigLoading = ref(false)
+
+async function copyModelConfig() {
+  const source = copyConfigSource.value
+  const dest = copyConfigDestination.value.trim()
+  if (!source || !dest) {
+    message.warning('请选择源模型并输入目标模型名')
+    return
+  }
+  copyConfigLoading.value = true
+  try {
+    const { data } = await apiClient.post<{ message: string }>('/ai/model-config/copy', {
+      source,
+      destination: dest,
+    })
+    message.success(data.message)
+    loadConfigOverview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '复制失败')
+  } finally {
+    copyConfigLoading.value = false
+  }
+}
+
 async function loadPrompt() {
   promptLoading.value = true
   try {
@@ -278,6 +352,7 @@ onMounted(() => {
   loadSettings()
   loadSamplingParams()
   loadPrompt()
+  loadConfigOverview()
 })
 
 onUnmounted(() => {
@@ -355,9 +430,17 @@ onUnmounted(() => {
       <p style="font-size:12px;color:#999;margin-bottom:12px">
         使用当前 prompt 和参数对单张图片进行测试分析，不保存记录，不影响正式数据。
       </p>
-      <n-space align="center" style="margin-bottom:12px">
-        <n-input v-model:value="testInspirationId" placeholder="输入素材 ID 或完整 UUID" style="width:280px" size="small" />
-        <n-button type="primary" size="small" @click="testAnalyze" :loading="testLoading" :disabled="!testInspirationId.trim()">
+      <n-space align="center" style="margin-bottom:12px" :wrap="false">
+        <n-upload :show-file-list="false" accept="image/*" @change="onTestFileChange">
+          <n-button size="small" secondary>上传图片</n-button>
+        </n-upload>
+        <span v-if="testFile" style="font-size:12px;color:#666">
+          已选：{{ testFile.name }}
+          <n-button size="tiny" quaternary type="error" @click="clearTestFile">移除</n-button>
+        </span>
+        <span v-else style="font-size:12px;color:#999">或</span>
+        <n-input v-model:value="testInspirationId" placeholder="输入素材 ID 或完整 UUID" style="width:260px" size="small" :disabled="!!testFile" />
+        <n-button type="primary" size="small" @click="testAnalyze" :loading="testLoading" :disabled="!testInspirationId.trim() && !testFile">
           {{ testLoading ? '分析中...' : '开始测试' }}
         </n-button>
       </n-space>
@@ -416,6 +499,33 @@ onUnmounted(() => {
           <span style="margin-left:12px;font-size:13px;color:#666">思考模型开启后更慢，可能提升推理质量（仅思考型模型生效）</span>
         </n-form-item>
       </n-form>
+    </n-card>
+
+    <!-- 每模型配置总览 -->
+    <n-card title="每模型配置总览" size="small">
+      <p style="font-size:12px;color:#999;margin:0 0 12px">
+        一览 model_configs.json / prompt_configs.json 中哪些模型有自定义参数或 Prompt，支持跨模型复制。
+      </p>
+      <n-data-table
+        v-if="configOverview.length"
+        :columns="[
+          { title: '模型', key: 'name', width: 180 },
+          { title: '参数覆盖', key: 'config', render: (row: ModelConfigOverviewItem) => row.has_config ? h('span', {style:'display:flex;flex-wrap:wrap;gap:2px'}, row.config_fields.map((f: string) => h(NTag, {size:'tiny', bordered:false}, f))) : '-' },
+          { title: 'Prompt', key: 'prompt', render: (row: ModelConfigOverviewItem) => row.has_prompt ? h(NTag, {type:'info', size:'tiny'}, `已自定义 (${row.prompt_length} 字符)`) : '-' },
+        ]"
+        :data="configOverview"
+        :bordered="false"
+        size="small"
+      />
+      <n-empty v-else description="暂无模型自定义配置" size="small" />
+
+      <n-divider style="margin:16px 0" />
+      <p style="font-size:12px;color:#666;margin:0 0 8px">跨模型复制配置：将源模型的参数与 Prompt 一并复制到目标模型。</p>
+      <n-space align="center">
+        <n-select v-model:value="copyConfigSource" :options="store.models.map(m=>({label:m.name,value:m.name}))" placeholder="选择源模型" filterable style="width:220px" />
+        <n-input v-model:value="copyConfigDestination" placeholder="目标模型名（如 qwen3-vl:latest）" style="width:240px" />
+        <n-button type="primary" size="small" :loading="copyConfigLoading" :disabled="!copyConfigSource || !copyConfigDestination.trim()" @click="copyModelConfig">复制配置</n-button>
+      </n-space>
     </n-card>
 
     <!-- 操作 -->

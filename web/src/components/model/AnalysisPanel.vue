@@ -37,8 +37,9 @@ const {
 
 const {
   history, historyTotal, historyPage, historyPageSize, historyFilter, historyModelFilter,
-  historySearchId, historyLoading, selectedHistoryIds, historyModelNames,
-  clearingFailed, retryingAll, loadHistory, filterHistory, filterByModel, searchById,
+  historySearchId, historyStartDate, historyEndDate, historySortBy, historyLoading,
+  selectedHistoryIds, historyModelNames, clearingFailed, retryingAll,
+  loadHistory, filterHistory, filterByModel, searchById, filterByDate, sortByTime, exportHistoryCsv,
   onHistoryPageChange, batchDeleteHistory, batchRetryHistory, toggleSelectHistory, selectAllHistory,
   deleteLog, deleteInspirationFromHistory, retryAllFailed, deleteAllFailed,
 } = historyApi
@@ -99,6 +100,9 @@ onUnmounted(() => {
       :history-total="historyTotal"
       :history-page="historyPage"
       :history-page-size="historyPageSize"
+      :history-start-date="historyStartDate"
+      :history-end-date="historyEndDate"
+      :history-sort-by="historySortBy"
       :history-loading="historyLoading"
       :selected-history-ids="selectedHistoryIds"
       :history-model-names="historyModelNames"
@@ -108,6 +112,9 @@ onUnmounted(() => {
       @filter-history="filterHistory"
       @filter-by-model="filterByModel"
       @search-by-id="searchById"
+      @filter-by-date="filterByDate"
+      @sort-by-time="sortByTime"
+      @export-csv="exportHistoryCsv"
       @toggle-select="toggleSelectHistory"
       @select-all="selectAllHistory"
       @clear-selection="selectedHistoryIds = new Set()"

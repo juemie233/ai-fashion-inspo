@@ -44,3 +44,23 @@ async def set_model_prompt(model_name: str, prompt: str) -> None:
             )
 
         await asyncio.to_thread(_write)
+
+
+def get_all_model_prompts() -> dict[str, str]:
+    """返回所有有自定义 Prompt 的模型（键为模型名）。"""
+    return _load()
+
+
+async def copy_model_prompt(source: str, destination: str) -> None:
+    """将源模型的 Prompt 复制到目标模型（无自定义 Prompt 则忽略）。"""
+    async with _write_lock:
+        data = _load()
+        if source in data:
+            data[destination] = data[source]
+
+            def _write() -> None:
+                _PROMPT_FILE.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+
+            await asyncio.to_thread(_write)

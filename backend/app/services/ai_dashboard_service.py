@@ -116,10 +116,111 @@ async def _problem_items(db: AsyncSession) -> dict:
     }
 
 
+def _fmt_utc(dt) -> str | None:
+    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _model_comparison(db: AsyncSession) -> list[dict]:
+    """按模型聚合的成功率对比（仅标签分析，排除质量审核日志与垃圾桶素材）。"""
+    result = await db.execute(
+        select(
+            AIAnalysisLog.model_name,
+            func.count().label("total"),
+            func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
+        )
+        .where(analysis_log_filter())
+        .group_by(AIAnalysisLog.model_name)
+        .order_by(func.count().desc())
+    )
+    return [
+        {
+            "model_name": row[0],
+            "total": row[1],
+            "success": row[2] or 0,
+            "success_rate": round((row[2] or 0) / row[1] * 100, 1) if row[1] else 0,
+        }
+        for row in result.all()
+    ]
+
+
+def _classify_error(error: str) -> str:
+    """按关键词归类失败原因，供错误分布统计使用。"""
+    if not error:
+        return "未知"
+    low = error.lower()
+    if "timeout" in low or "超时" in error:
+        return "超时"
+    if "connect" in low or "connection" in low or "refused" in low or "连接" in error:
+        return "连接失败"
+    if "http" in low or "status" in low:
+        return "HTTP 错误"
+    if "parse" in low or "json" in low or "解析" in error or "格式" in error:
+        return "解析失败"
+    if "context" in low or "token" in low or "截断" in error:
+        return "上下文/截断"
+    return "其他"
+
+
+async def _error_distribution(db: AsyncSession) -> list[dict]:
+    """失败日志的错误原因分布（按关键词归类后聚合）。"""
+    result = await db.execute(
+        select(AIAnalysisLog.error)
+        .where(analysis_log_filter(), AIAnalysisLog.error.isnot(None))
+    )
+    counter: dict[str, int] = {}
+    for (error,) in result.all():
+        category = _classify_error(error or "")
+        counter[category] = counter.get(category, 0) + 1
+    return [
+        {"category": category, "count": count}
+        for category, count in sorted(counter.items(), key=lambda x: -x[1])
+    ]
+
+
+async def _failed_items(db: AsyncSession, limit: int = 20) -> list[dict]:
+    """最近失败的素材列表（供前端直达跳转），每个素材取最新一条失败日志。"""
+    latest_sub = (
+        select(AIAnalysisLog.inspiration_id, func.max(AIAnalysisLog.id).label("max_id"))
+        .where(analysis_log_filter(), AIAnalysisLog.error.isnot(None))
+        .group_by(AIAnalysisLog.inspiration_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            AIAnalysisLog.inspiration_id,
+            AIAnalysisLog.model_name,
+            AIAnalysisLog.error,
+            AIAnalysisLog.created_at,
+            Inspiration.thumbnail_path,
+        )
+        .join(latest_sub, AIAnalysisLog.id == latest_sub.c.max_id)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+        .order_by(AIAnalysisLog.created_at.desc())
+        .limit(limit)
+    )
+    return [
+        {
+            "inspiration_id": row[0],
+            "model_name": row[1],
+            "error": row[2],
+            "created_at": _fmt_utc(row[3]),
+            "thumbnail_path": row[4],
+        }
+        for row in result.all()
+    ]
+
+
 async def collect_quality_dashboard(db: AsyncSession) -> dict:
     """汇总分析质量仪表盘数据（原 routers/ai_dashboard.py 的 quality_dashboard 逻辑）。"""
     return {
         "daily_trends": await _daily_trends(db),
         "overview": await _overview(db),
         "problem_items": await _problem_items(db),
+        "model_comparison": await _model_comparison(db),
+        "error_distribution": await _error_distribution(db),
+        "failed_items": await _failed_items(db),
     }

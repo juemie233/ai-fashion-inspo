@@ -9,11 +9,18 @@ from fastapi import APIRouter, HTTPException, Query
 from app.config import settings
 from app.routers.ai_shared import _update_env_file
 from app.services.model_config import (
+    copy_model_config,
+    get_all_model_configs,
     get_model_config,
     reset_model_config,
     update_model_config,
 )
-from app.services.model_prompt import get_model_prompt, set_model_prompt
+from app.services.model_prompt import (
+    copy_model_prompt,
+    get_all_model_prompts,
+    get_model_prompt,
+    set_model_prompt,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -253,3 +260,38 @@ async def reset_model_config_endpoint():
         "message": f"已清除模型 '{settings.ollama_vision_model}' 的自定义配置，恢复全局默认值",
         "config": cfg,
     }
+
+
+@router.get("/model-config/overview")
+async def model_config_overview():
+    """返回每模型的参数/Prompt 自定义配置总览（哪些模型有覆盖、覆盖哪些字段）。"""
+    configs = get_all_model_configs()
+    prompts = get_all_model_prompts()
+    model_names = sorted(set(configs.keys()) | set(prompts.keys()))
+    return {
+        "models": [
+            {
+                "name": name,
+                "has_config": name in configs,
+                "config_fields": sorted(configs.get(name, {}).keys()),
+                "has_prompt": name in prompts,
+                "prompt_length": len(prompts.get(name, "")),
+            }
+            for name in model_names
+        ]
+    }
+
+
+@router.post("/model-config/copy")
+async def copy_model_config_endpoint(payload: dict):
+    """把某模型的参数与 Prompt 复制到另一模型。请求体: {"source": ..., "destination": ...}"""
+    source = payload.get("source", "")
+    destination = payload.get("destination", "")
+    if not source or not destination:
+        raise HTTPException(status_code=400, detail="请提供 source 与 destination")
+    if source == destination:
+        raise HTTPException(status_code=400, detail="源模型与目标模型不能相同")
+
+    await copy_model_config(source, destination)
+    await copy_model_prompt(source, destination)
+    return {"message": f"已将 '{source}' 的配置复制到 '{destination}'"}

@@ -4,7 +4,7 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,15 +35,23 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
 async def test_analyze(
     inspiration_id: str | None = Query(None, description="使用已有素材 ID 测试"),
     custom_prompt: str | None = Query(None, description="临时覆盖 prompt（可选）"),
+    file: UploadFile | None = File(None, description="直接上传图片测试（优先于素材 ID）"),
 ):
     """单图即时测试：使用当前模型和参数分析图片，SSE 流式返回结果。
 
+    支持两种图片来源：直接上传图片（file，优先）或已有素材 ID（inspiration_id）。
     不保存分析记录到数据库，仅用于测试 prompt/参数效果。
     """
     import base64 as b64
 
-    # 获取图片路径
-    if inspiration_id:
+    # 获取图片字节与扩展名：优先使用上传的文件，否则回退到素材文件
+    if file is not None:
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(400, "上传的图片为空")
+        filename = file.filename or ""
+        ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ".jpg"
+    elif inspiration_id:
         async with async_session() as db:
             insp = await db.get(Inspiration, inspiration_id)
             if not insp:
@@ -51,18 +59,17 @@ async def test_analyze(
             if insp.media_type != "image":
                 raise HTTPException(400, "暂不支持分析视频文件")
             file_path = insp.file_path
+
+        full_path = (settings.storage_root / file_path).resolve()
+        if not str(full_path).startswith(str(settings.storage_root.resolve())):
+            raise HTTPException(400, "非法的文件路径")
+        if not full_path.exists():
+            raise HTTPException(404, "图片文件不存在")
+
+        image_bytes = full_path.read_bytes()
+        ext = full_path.suffix.lower()
     else:
-        raise HTTPException(400, "请指定 inspiration_id")
-
-    full_path = (settings.storage_root / file_path).resolve()
-    if not str(full_path).startswith(str(settings.storage_root.resolve())):
-        raise HTTPException(400, "非法的文件路径")
-    if not full_path.exists():
-        raise HTTPException(404, "图片文件不存在")
-
-    # 读取图片
-    image_bytes = full_path.read_bytes()
-    ext = full_path.suffix.lower()
+        raise HTTPException(400, "请上传图片或指定 inspiration_id")
 
     # WebP 转换
     if ext == ".webp":

@@ -1,7 +1,9 @@
 """AI 子路由。"""
 
+import asyncio
 import json
 import logging
+import os
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -91,9 +93,30 @@ async def list_models():
         raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
 
 
+async def _get_ollama_uptime_seconds() -> int | None:
+    """获取 Ollama 进程运行时长（秒）；Windows 用 PowerShell 查进程启动时间，失败返回 None。"""
+    if os.name != "nt":
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "powershell", "-NoProfile", "-Command",
+            "$p = Get-Process ollama -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "if ($p) { [int]((Get-Date) - $p.StartTime).TotalSeconds }",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        text = stdout.decode().strip()
+        if text.isdigit():
+            return int(text)
+    except Exception:
+        pass
+    return None
+
+
 @router.get("/status")
 async def ai_status():
-    """AI 服务状态：Ollama 连接、版本号、活跃视觉模型与文本嵌入模型。"""
+    """AI 服务状态：Ollama 连接、版本号、运行时长、活跃视觉模型与文本嵌入模型。"""
     connected = False
     version = ""
     try:
@@ -104,20 +127,18 @@ async def ai_status():
                 version = resp.json().get("version", "")
     except Exception:
         pass
+    uptime = await _get_ollama_uptime_seconds() if connected else None
     return {
         "ollama_connected": connected,
         "ollama_version": version,
+        "ollama_uptime_seconds": uptime,
         "active_model": settings.ollama_vision_model,
         "embedding_model": settings.ollama_embedding_model,
     }
 
 
-@router.post("/models/pull")
-async def pull_model(
-    model_name: str = Query(..., description="要下载的模型名称，如 gemma3:4b"),
-):
-    """拉取新模型（SSE 流式返回下载进度）。"""
-    logger.info(f"开始拉取模型: {model_name}")
+def _pull_event_stream(model_name: str):
+    """拉取模型的 SSE 事件流（供下载与更新复用）。"""
 
     async def event_stream():
         try:
@@ -147,7 +168,86 @@ async def pull_model(
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return event_stream()
+
+
+@router.post("/models/pull")
+async def pull_model(
+    model_name: str = Query(..., description="要下载的模型名称，如 gemma3:4b"),
+):
+    """拉取新模型（SSE 流式返回下载进度）。"""
+    logger.info(f"开始拉取模型: {model_name}")
+    return StreamingResponse(_pull_event_stream(model_name), media_type="text/event-stream")
+
+
+@router.get("/models/{model_name:path}/detail")
+async def model_detail(model_name: str):
+    """获取模型完整元信息（调用 Ollama /api/show）。"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{settings.ollama_base_url}/api/show",
+                json={"model": model_name, "verbose": True},
+            )
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"模型 '{model_name}' 不存在")
+            resp.raise_for_status()
+            data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+
+    details = data.get("details") or {}
+    model_info = data.get("model_info") or {}
+    return {
+        "name": model_name,
+        "parameter_size": details.get("parameter_size", ""),
+        "quantization_level": details.get("quantization_level", ""),
+        "family": details.get("family", ""),
+        "families": details.get("families", []),
+        "format": details.get("format", ""),
+        "parent_model": details.get("parent_model", ""),
+        "architecture": details.get("architecture", ""),
+        "template": data.get("template", ""),
+        "system": data.get("system", ""),
+        "license": data.get("license", ""),
+        "modelfile": data.get("modelfile", ""),
+        "parameters": data.get("parameters", ""),
+        "model_info": model_info,
+    }
+
+
+@router.post("/models/{model_name:path}/update")
+async def update_model(model_name: str):
+    """更新已安装模型到最新版（对同 tag 执行 pull，SSE 流式返回进度）。"""
+    await _ensure_model_installed(model_name)
+    logger.info(f"开始更新模型: {model_name}")
+    return StreamingResponse(_pull_event_stream(model_name), media_type="text/event-stream")
+
+
+@router.post("/models/copy")
+async def copy_model(
+    source: str = Query(..., description="源模型名称"),
+    destination: str = Query(..., description="目标模型名称"),
+):
+    """复制模型（调用 Ollama /api/copy）。"""
+    if not destination.strip():
+        raise HTTPException(status_code=400, detail="目标模型名称不能为空")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{settings.ollama_base_url}/api/copy",
+                json={"source": source, "destination": destination},
+            )
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"模型 '{source}' 不存在")
+            resp.raise_for_status()
+        return {"message": f"已复制 '{source}' → '{destination}'"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"复制失败: {e}")
 
 
 @router.delete("/models/{model_name:path}")
