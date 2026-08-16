@@ -444,6 +444,34 @@ def _download_batch(
     return added, skipped_existing, skipped_non200, skipped_network, skipped_content_dup
 
 
+def _update_task_sync(task_id: int, fields: dict) -> None:
+    """用同步 sqlite3 更新采集任务字段，规避与 Playwright 同步 API 的事件循环冲突。
+
+    小红书采集阶段，Playwright 的 sync API 在后台 greenlet 中运行自己的事件循环，
+    此时在主线程调用 ``loop.run_until_complete`` 会抛
+    "Cannot run the event loop while another loop is running"。
+    因此任务进度（断点 / 状态 / 错误 / 完成标记）统一走同步 sqlite3，
+    与 :func:`_download_batch` 的写库思路保持一致。
+
+    Args:
+        task_id: 采集任务主键。
+        fields: 需要更新的列名到新值的映射（列名仅由调用方常量传入，无注入风险）。
+    """
+    import sqlite3 as _sqlite3
+
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    values = [*fields.values(), task_id]
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = _sqlite3.connect(str(db_path))
+    try:
+        conn.execute(f"UPDATE scraper_tasks SET {sets} WHERE id = ?", values)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ═══════════════════════════════════════════════════════════════
 #  主流程
 # ═══════════════════════════════════════════════════════════════
@@ -483,14 +511,13 @@ def run_scraper_sync(task_id: int):
     loop.run_until_complete(_run())
 
     # ── 标记任务失败（复用：配置异常与采集异常都会调用）──
-    async def _fail(reason: str):
-        async with async_session() as db:
-            t = await db.get(ScraperTask, task_id)
-            if t:
-                t.status = "failed"
-                t.error = reason[:500]
-                t.finished_at = utcnow()
-                await db.commit()
+    def _fail(reason: str):
+        """标记任务失败（同步写库，规避与 Playwright 同步 API 的事件循环冲突）。"""
+        _update_task_sync(task_id, {
+            "status": "failed",
+            "error": reason[:500],
+            "finished_at": utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        })
 
     # ── 解析配置（异常时标记失败，避免任务卡在 running）──
     try:
@@ -501,7 +528,7 @@ def run_scraper_sync(task_id: int):
 
         if not keywords:
             print("无关键词，退出")
-            loop.run_until_complete(_fail("无关键词"))
+            _fail("无关键词")
             return
 
         # 准备下载目录
@@ -512,7 +539,7 @@ def run_scraper_sync(task_id: int):
     except Exception as e:
         err = str(e) or type(e).__name__
         print(f"配置解析失败: {err}")
-        loop.run_until_complete(_fail(f"配置解析失败: {err}"))
+        _fail(f"配置解析失败: {err}")
         return
 
     # ── 断点续采：构建或恢复执行计划（关键词 × 排序） ──
@@ -558,21 +585,14 @@ def run_scraper_sync(task_id: int):
     per_search: list[dict] = []  # 每次搜索的漏斗明细
 
     def _save_resume(done_idx: int):
-        """持久化断点进度（计划 / 已完成数 / 累计计数）。"""
+        """持久化断点进度（计划 / 已完成数 / 累计计数）— 同步写库，避免事件循环冲突。"""
         token = json.dumps({
             "plan": plan,
             "done": done_idx,
             "items_found": items_found,
             "items_added": items_added,
         }, ensure_ascii=False)
-
-        async def _w():
-            async with async_session() as db:
-                t = await db.get(ScraperTask, task_id)
-                if t:
-                    t.resume_token = token
-                    await db.commit()
-        loop.run_until_complete(_w())
+        _update_task_sync(task_id, {"resume_token": token})
 
     # 平台执行器：小红书走 CDP 真实 Chrome；抖音走独立 Playwright 浏览器（网页版无需 CDP）
     pw = None
@@ -779,7 +799,7 @@ def run_scraper_sync(task_id: int):
         err = str(e) or type(e).__name__
         print(f"采集失败: {err}")
         traceback.print_exc()
-        loop.run_until_complete(_fail(err))
+        _fail(err)
         return
 
     finally:
@@ -827,20 +847,21 @@ def run_scraper_sync(task_id: int):
         if errors:
             error_msg = " | ".join(errors)[:500]
 
-    async def _done():
-        async with async_session() as db:
-            t = await db.get(ScraperTask, task_id)
-            if t:
-                t.status = "completed"
-                t.items_found = items_found
-                t.items_added = items_added
-                t.diagnostics = funnel_diagnostics
-                if error_msg:
-                    t.error = error_msg
-                t.resume_token = None  # 任务完结，清除断点进度
-                t.finished_at = utcnow()
-                await db.commit()
-    loop.run_until_complete(_done())
+    def _done():
+        """标记任务完成并写入漏斗诊断（同步写库，规避事件循环冲突）。"""
+        fields = {
+            "status": "completed",
+            "items_found": items_found,
+            "items_added": items_added,
+            "diagnostics": funnel_diagnostics,
+            "resume_token": None,  # 任务完结，清除断点进度
+            "finished_at": utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if error_msg:
+            fields["error"] = error_msg
+        _update_task_sync(task_id, fields)
+
+    _done()
 
     print(f"\n任务 {task_id} 完成: found={items_found}, added={items_added}")
     if error_msg:
