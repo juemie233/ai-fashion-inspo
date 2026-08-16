@@ -128,3 +128,55 @@ def test_analysis_comparison_not_found(client, upload):
 def test_analyze_not_found(client):
     """触发分析：素材不存在返回 404。"""
     assert client.post("/api/ai/analyze/no-such-id").status_code == 404
+
+
+def test_batch_analyze_creates_task(client, upload):
+    """批量分析：创建任务记录，统计可分析数与跳过数。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    r = client.post("/api/ai/batch-analyze", json=[a, b, "no-such-id"])
+    assert r.status_code == 200
+    data = r.json()
+    assert data["count"] == 2
+    assert data["skipped"] == 1
+    assert data["task_id"] is not None
+
+
+async def test_history_batch_delete(client, upload):
+    """批量删除分析历史。"""
+    insp_id = upload().json()["id"]
+    log_a = await _add_log(insp_id)
+    log_b = await _add_log(insp_id)
+
+    r = client.post("/api/ai/history/batch-delete", json={"ids": [log_a, log_b]})
+    assert r.status_code == 200
+    assert r.json()["deleted"] == 2
+    assert client.get("/api/ai/history").json()["total"] == 0
+
+
+async def test_delete_failed_logs(client, upload):
+    """删除所有失败日志，保留成功日志。"""
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error="解析失败")
+    await _add_log(insp_id, error=None)
+
+    r = client.delete("/api/ai/history/failed/all")
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
+
+    data = client.get("/api/ai/history").json()
+    assert data["total"] == 1
+    assert data["items"][0]["status"] == "success"
+
+
+def test_queue_pause_resume(client):
+    """分析队列暂停/恢复。"""
+    assert client.post("/api/ai/queue/pause").json()["paused"] is True
+    assert client.post("/api/ai/queue/resume").json()["paused"] is False
+
+
+def test_pending_queue_empty(client):
+    """空队列：排队预览返回空列表。"""
+    data = client.get("/api/ai/queue/pending").json()
+    assert data["items"] == []

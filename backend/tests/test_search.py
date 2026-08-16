@@ -47,3 +47,16 @@ def test_search_excludes_trashed(client, upload):
     client.post(f"/api/inspirations/{insp_id}/trash")
     r = client.get("/api/search", params={}).json()
     assert r["total"] == 0
+
+
+def test_similar_tag_fallback(client, upload):
+    """相似素材推荐：无向量时回退到标签匹配。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    client.post(f"/api/inspirations/{a}/tags", json={"names": ["法式"]})
+    client.post(f"/api/inspirations/{b}/tags", json={"names": ["法式"]})
+
+    r = client.get(f"/api/search/similar/{a}")
+    assert r.status_code == 200
+    data = r.json()
+    assert any(s["inspiration"]["id"] == b for s in data["similar"])
