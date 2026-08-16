@@ -1,9 +1,10 @@
 """垃圾桶（软删除）回归测试：移入/恢复/清空/过期清理。"""
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.config import settings
+from app.utils.time import utcnow
 
 
 def _set_deleted_at(days_ago: int, inspiration_id: str):
@@ -11,7 +12,7 @@ def _set_deleted_at(days_ago: int, inspiration_id: str):
     db_path = settings.storage_root.parent / "fashion_inspo.db"
     conn = sqlite3.connect(str(db_path))
     try:
-        old = (datetime.utcnow() - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
+        old = (utcnow() - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "UPDATE inspirations SET deleted_at = ? WHERE id = ?",
             (old, inspiration_id),

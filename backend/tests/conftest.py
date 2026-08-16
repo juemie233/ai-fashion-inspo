@@ -74,7 +74,9 @@ def clean_state(client):
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
     ]:
         if dir_path.exists():
-            for f in dir_path.iterdir():
+            # 递归清理子目录文件：素材按「年月」子目录落盘（images/2026-08/xxx.jpg），
+            # 仅清空顶层 iterdir() 会残留子目录文件，导致跨用例状态污染
+            for f in dir_path.rglob("*"):
                 if f.is_file():
                     f.unlink()
     yield

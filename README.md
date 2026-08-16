@@ -89,14 +89,14 @@ chrome_debug_port: int = 9222
 
 | 模块 | 功能 |
 | ------ | ------ |
-| **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态）、排序（含随机）、密度调节、分页加载、浏览模式/密度持久化 |
+| **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态/标签/主色调）、排序（含随机/标签数）、密度调节、分页加载、批量多选操作（收藏/移垃圾桶/加标签/编辑元数据）、浏览模式/密度/每页数量持久化 |
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节、语义搜索（文本）、以图搜图（图片上传）、`/` 聚焦与 Esc 退出、复制搜索链接、筛选状态持久化 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
 | **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、下载原图、复制原始链接、标签点击跳搜索 |
 | **采集管理** | 小红书 CDP 零检测采集 + 抖音独立浏览器采集、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
-| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理） |
+| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 并排预览 + 人工确认删除）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志） |
 | **浏览器插件** | 一键提取网页穿搭图片；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
 ## 快速启动
@@ -224,8 +224,10 @@ fashion-inspo/
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签 + 别名（含 source 来源标识）
+│   │   │   ├── person.py         # 人物（模特/博主） + 人物-素材关联
 │   │   │   ├── scraper.py        # 采集任务 + 定时采集计划
-│   │   │   └── task.py           # 异步任务队列
+│   │   │   ├── task.py           # 异步任务队列
+│   │   │   └── audit.py          # 操作审计日志
 │   │   ├── schemas/              # Pydantic 请求/响应
 │   │   ├── routers/              # API 路由
 │   │   │   ├── inspirations.py   # 素材 CRUD
@@ -254,6 +256,8 @@ fashion-inspo/
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
 │   │   │   ├── scraper_service.py    # 采集编排 + 定时调度 + 插件任务记录
 │   │   │   ├── file_service.py   # 文件管理
+│   │   │   ├── audit_service.py  # 操作审计日志写入
+│   │   │   ├── near_duplicate_service.py  # 近似重复检测（感知哈希分组）
 │   │   │   ├── task_runners/     # 异步任务执行器（batch_analyze / quality_check / batch_delete / deduplicate）
 │   │   │   ├── vector/           # 向量检索（embedding / store / similarity）
 │   │   │   ├── embedding_service.py  # 薄壳 → vector.embedding
@@ -265,7 +269,8 @@ fashion-inspo/
 │   │   │   └── douyin.py         # 抖音
 │   │   └── utils/                # 工具函数
 │   │       ├── auth.py           # API Key 认证中间件
-│   │       ├── file_hash.py      # 文件 MD5 哈希
+│   │       ├── file_hash.py      # 文件 MD5/SHA-256 哈希
+│   │       ├── image_hash.py     # 感知哈希（dHash，近似重复检测）
 │   │       ├── image_utils.py    # 缩略图/颜色提取
 │   │       └── tag_normalizer.py # 标签标准化 + 同义词/别名映射
 │   ├── scripts/                  # 维护脚本
@@ -288,7 +293,8 @@ fashion-inspo/
 │   │   │   ├── client.ts         # Axios 实例
 │   │   │   ├── inspirations.ts   # 素材 API
 │   │   │   ├── tags.ts           # 标签 API（完整）
-│   │   │   └── search.ts         # 搜索 API
+│   │   │   ├── search.ts         # 搜索 API
+│   │   │   └── admin.ts          # 管理后台 API（导出/趋势/人物频次/审计/近似重复）
 │   │   ├── stores/               # Pinia 状态
 │   │   │   ├── inspirations.ts   # 素材状态
 │   │   │   ├── tags.ts           # 标签筛选状态
@@ -307,7 +313,7 @@ fashion-inspo/
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
-│   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/完整性检查子组件
+│   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志子组件
 │   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件
@@ -410,6 +416,7 @@ fashion-inspo/
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
 | `scraper_schedules` | 定时采集计划 | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count |
 | `task_queue` | 异步任务队列 | type（batch_analyze/quality_check/batch_delete/deduplicate）, status（pending/running/success/failed/cancelled）, progress, total/done, result, error, retry_count, next_retry_at |
+| `audit_logs` | 操作审计日志 | id, action（batch_delete/delete_rejected/cleanup_orphans/empty_trash/batch_trash）, target_type, count, freed_bytes, detail, created_at — 破坏性批量操作留痕 |
 
 ### 标签类别体系
 
@@ -455,7 +462,7 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `GET` | `/api/inspirations` | 素材列表（分页） |
+| `GET` | `/api/inspirations` | 素材列表（分页；支持来源/媒体/状态/质量/标签/主色调/日期筛选，排序含 `tag_count`） |
 | `POST` | `/api/inspirations` | 上传素材 |
 | `POST` | `/api/inspirations/from-url` | 从 URL 导入素材 |
 | `GET` | `/api/inspirations/{id}` | 素材详情 |
@@ -467,6 +474,11 @@ alembic upgrade head
 | `DELETE` | `/api/inspirations/{id}` | 彻底删除（物理，不可恢复；普通删除请用 `/trash`） |
 | `POST` | `/api/inspirations/{id}/tags` | 手动给素材关联标签（按名查找/创建，如穿搭大标签） |
 | `DELETE` | `/api/inspirations/{id}/tags/{tag_id}` | 解除素材与标签的关联 |
+| `POST` | `/api/inspirations/batch-tags` | 批量给多个素材关联标签（按名查找/创建） |
+| `POST` | `/api/inspirations/batch-favorite` | 批量收藏/取消收藏素材 |
+| `POST` | `/api/inspirations/batch-trash` | 批量移入垃圾桶（软删除） |
+| `POST` | `/api/inspirations/batch-update` | 批量编辑元数据（来源/收藏/审核状态/疑似 AI 标记） |
+| `GET` | `/api/inspirations/dominant-colors` | 库内主色调列表（hex + 计数，供颜色筛选） |
 
 ### 搜索
 
@@ -704,6 +716,11 @@ alembic upgrade head
 | `POST` | `/api/admin/deduplicate` | 智能去重删除（异步任务，返回 `task_id`） |
 | `GET` | `/api/admin/vector-stats` | 向量化状态统计（素材总数/已有图像与文本向量/缺失数/LanceDB 可用性） |
 | `POST` | `/api/admin/vector-backfill` | 一键为缺失向量的素材创建回填任务（异步，返回 `task_id`；无缺失时返回 `count=0`） |
+| `GET` | `/api/admin/export` | 导出全部素材为 CSV（含标签/人物/审核状态，触发浏览器下载） |
+| `GET` | `/api/admin/trend?days=` | 每日新增素材数量趋势（近 N 天） |
+| `GET` | `/api/admin/person-frequency?limit=` | 人物 × 素材数量排行 |
+| `GET` | `/api/admin/audit-logs?limit=` | 操作审计日志（按时间倒序） |
+| `GET` | `/api/admin/near-duplicates?limit=&threshold=` | 近似重复检测（感知哈希分组，仅返回候选、不删除） |
 
 ### 其他
 
@@ -744,7 +761,7 @@ bash scripts/restart.sh
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
 
-### 后端（pytest，75 用例）
+### 后端（pytest，100+ 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -756,8 +773,8 @@ pytest
 ```
 
 覆盖范围：
-- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合）
-- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）
+- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**任务执行器**（批量删除任务：删记录+删文件+释放空间）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合）
+- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）
 
 ### 前端（vitest，26 用例）
 

@@ -57,6 +57,13 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
         task.total = 0
         task.done = 0
         task.progress = 100
+        # 空 ID 也给出与正常路径一致的 result 结构，前端据此展示「已删除 0 个」
+        task.result = {
+            "inspiration_ids": [],
+            "label": payload.get("label", ""),
+            "deleted_count": 0,
+            "freed_bytes": 0,
+        }
         await db.commit()
         return
 
