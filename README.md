@@ -763,6 +763,13 @@ bash scripts/restart.sh
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
 
+**一键运行全部测试**（后端 + 前端类型检查 + vitest，Git Bash）：
+
+```bash
+bash scripts/test.sh          # 常规
+bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
+```
+
 ### 后端（pytest，100+ 用例）
 
 ```bash
@@ -778,7 +785,7 @@ pytest
 - **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**任务执行器**（批量删除任务：删记录+删文件+释放空间）、**AI 分析与质量审核**（完整分析保存标签、审核二分类通过/拒绝、大标签建议、质量统计、批量审核/重审任务创建——均模拟 Ollama）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合）
 - **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）
 
-> **覆盖率度量**：`pip install pytest-cov` 后执行 `pytest --cov=app --cov-report=term-missing` 可生成行级覆盖率（当前约 48%）。低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、AI 分析/审核的其余业务分支、`tag_service`/`inspiration_service` 的错误与边界路径、`vector/similarity`、异步任务执行器（batch_analyze/quality_check/vector_backfill）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
 ### 前端（vitest，26 用例）
 

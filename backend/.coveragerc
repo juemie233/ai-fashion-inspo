@@ -1,0 +1,12 @@
+# pytest-cov 覆盖率配置（运行：cd backend && pytest --cov --cov-report=term-missing）
+[run]
+source = app
+
+[report]
+# 排除样板代码，让覆盖率反映真实业务逻辑
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    def __repr__
+    def __str__
