@@ -18,7 +18,7 @@ const emit = defineEmits<{
 
 const message = useMessage()
 
-const threshold = ref(10)
+const threshold = ref(32)
 const limit = ref(1000)
 const scanning = ref(false)
 const result = ref<NearDuplicateResult | null>(null)
@@ -26,9 +26,9 @@ const result = ref<NearDuplicateResult | null>(null)
 const toDelete = ref<Set<string>>(new Set())
 
 const thresholdOptions = [
-  { label: '严格（5，仅极相似）', value: 5 },
-  { label: '标准（10，推荐）', value: 10 },
-  { label: '宽松（15，含轻微差异）', value: 15 },
+  { label: '严格（16，仅极相似）', value: 16 },
+  { label: '标准（32，推荐）', value: 32 },
+  { label: '宽松（64，含轻微差异）', value: 64 },
 ]
 
 const limitOptions = [

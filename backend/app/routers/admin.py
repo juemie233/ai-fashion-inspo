@@ -466,7 +466,7 @@ async def audit_logs(
 @router.get("/near-duplicates")
 async def near_duplicates(
     limit: int = Query(1000, ge=1, le=5000, description="扫描图片数量上限"),
-    threshold: int = Query(10, ge=1, le=32, description="汉明距离阈值（越小越严格）"),
+    threshold: int = Query(32, ge=1, le=256, description="汉明距离阈值（越小越严格，768 位 RGB dHash）"),
     db: AsyncSession = Depends(get_db),
 ):
     """检测视觉近似重复的图片素材（感知哈希分组），仅返回候选、不删除。

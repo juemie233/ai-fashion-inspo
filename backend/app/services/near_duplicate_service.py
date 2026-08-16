@@ -19,8 +19,8 @@ from app.models.inspiration import (
 from app.models.tag import InspirationTag
 from app.utils.image_hash import hamming_distance, perceptual_hash
 
-# 默认阈值（64 位 dHash 汉明距离）：≤10 视为近似重复（约 15% 差异内）
-DEFAULT_THRESHOLD = 10
+# 默认阈值（768 位 RGB dHash 汉明距离）：≤32 视为近似重复（约 4% 差异内）
+DEFAULT_THRESHOLD = 32
 # 默认扫描上限（0 表示不限）；同步接口，超大库建议分批或后续改造为任务队列
 DEFAULT_LIMIT = 1000
 

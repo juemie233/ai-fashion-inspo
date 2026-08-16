@@ -104,7 +104,7 @@ def test_near_duplicate_scan(client):
     rb = client.post("/api/inspirations", files={"file": ("b.jpg", b, "image/jpeg")})
     assert ra.status_code == 201 and rb.status_code == 201
 
-    res = client.get("/api/admin/near-duplicates", params={"threshold": 10}).json()
+    res = client.get("/api/admin/near-duplicates", params={"threshold": 32}).json()
     assert res["scanned"] == 2
     assert len(res["groups"]) == 1
     ids = {f["id"] for f in res["groups"][0]["files"]}
