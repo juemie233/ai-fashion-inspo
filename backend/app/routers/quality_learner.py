@@ -15,7 +15,7 @@ router = APIRouter(prefix="/quality-learner", tags=["quality-learner"])
 
 
 @router.get("/status")
-async def learner_status(db: AsyncSession = Depends(get_db)):
+async def learner_status(db: AsyncSession = Depends(get_db)) -> dict:
     """返回初筛器状态（是否已训练、指标、阈值）与当前正负样本统计。"""
     from app.services.vector import store as vector_store
 
@@ -29,12 +29,12 @@ async def learner_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/train")
-async def learner_train(db: AsyncSession = Depends(get_db)):
+async def learner_train(db: AsyncSession = Depends(get_db)) -> dict:
     """用当前正负样本训练/重训初筛器，返回训练指标与样本统计。"""
     return await quality_learner.train(db)
 
 
 @router.post("/reset")
-async def learner_reset():
+async def learner_reset() -> dict:
     """删除已训练模型，回滚到纯 VLM 审核（指标变差时使用）。"""
     return quality_learner.reset()

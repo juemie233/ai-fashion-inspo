@@ -83,7 +83,7 @@ class ScraperScheduleOut(BaseModel):
 
     @field_validator("keywords", mode="before")
     @classmethod
-    def parse_keywords(cls, v):
+    def parse_keywords(cls, v) -> list[str]:
         """ORM 中 keywords 为 JSON 字符串，反序列化为列表。"""
         if isinstance(v, str):
             try:

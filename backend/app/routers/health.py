@@ -15,6 +15,6 @@ router = APIRouter(prefix="/api/health", tags=["health"])
 
 
 @router.get("/services")
-async def services_health(db: AsyncSession = Depends(get_db)):
+async def services_health(db: AsyncSession = Depends(get_db)) -> dict:
     """返回各服务（后端/前端/worker）健康状态、资源占用与告警列表。"""
     return await health_service.collect_health(db)

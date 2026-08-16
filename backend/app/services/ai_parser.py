@@ -16,7 +16,7 @@ def quote_bare_array_words(text: str) -> str:
     MiniCPM-V 常输出 [宽松] 或 [阔腿, 运动风] 这类缺失引号的数组项。
     仅处理不含引号/花括号的简单数组，避免破坏已合法的 JSON。
     """
-    def _repl(m):
+    def _repl(m) -> str:
         inner = m.group(1)
         if not inner.strip():
             return m.group(0)  # 空数组
@@ -41,7 +41,7 @@ def fix_python_sets(text: str) -> str:
     {"V领", "短袖"} → ["V领", "短袖"]（多元素，作为数组）
     不含冒号（冒号表示这是字典，跳过）。
     """
-    def _repl(m):
+    def _repl(m) -> str:
         strings = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(0))
         if len(strings) == 1:
             return f'"{strings[0]}"'
@@ -163,7 +163,7 @@ def _strip_trailing_commas(text: str) -> str:
     通过统计匹配位置之前未闭合的双引号个数判断逗号是否位于字符串内。
     """
 
-    def _repl(m):
+    def _repl(m) -> str:
         prefix = text[: m.start()]
         # 忽略转义引号后统计未闭合引号；奇数个说明逗号在字符串内
         if prefix.replace('\\"', "").count('"') % 2 == 1:

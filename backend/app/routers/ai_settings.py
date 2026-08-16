@@ -45,7 +45,7 @@ def _load_prompt_versions(model_name: str) -> list[dict]:
         return []
 
 
-def _save_prompt_versions(model_name: str, versions: list[dict]):
+def _save_prompt_versions(model_name: str, versions: list[dict]) -> None:
     """保存指定模型的 prompt 版本历史（保留最近 50 条）。"""
     data = {}
     if _prompt_versions_file.exists():
@@ -67,7 +67,7 @@ def _active_model() -> str:
 
 
 @router.get("/prompt/versions")
-async def prompt_versions():
+async def prompt_versions() -> dict:
     """获取当前模型的 prompt 版本历史列表。"""
     versions = _load_prompt_versions(_active_model())
     current = get_model_prompt(_active_model())
@@ -78,7 +78,7 @@ async def prompt_versions():
 
 
 @router.post("/prompt/rollback")
-async def rollback_prompt(payload: dict):
+async def rollback_prompt(payload: dict) -> dict[str, str]:
     """回滚当前模型的 prompt 到指定版本。请求体: {"index": 0} 其中 index 0 = 最新版本"""
     versions = _load_prompt_versions(_active_model())
     idx = payload.get("index", 0)
@@ -94,7 +94,7 @@ async def rollback_prompt(payload: dict):
 
 
 @router.post("/prompt/save-version")
-async def save_prompt_version():
+async def save_prompt_version() -> dict[str, str | int]:
     """将当前模型的 prompt 保存为一个版本（用于回滚和对比）。"""
     versions = _load_prompt_versions(_active_model())
     from datetime import datetime
@@ -112,7 +112,7 @@ async def save_prompt_version():
 
 
 @router.get("/prompt")
-async def get_prompt():
+async def get_prompt() -> dict[str, str | int]:
     """获取当前模型 AI 分析使用的 prompt 文本。"""
     prompt = get_model_prompt(_active_model())
     return {
@@ -125,7 +125,7 @@ async def get_prompt():
 @router.put("/prompt")
 async def update_prompt(
     body: dict,
-):
+) -> dict[str, str]:
     """更新当前模型的 AI 分析 prompt（按模型持久化到 prompt_configs.json）。"""
     prompt = body.get("prompt", "")
     if not prompt:
@@ -141,7 +141,7 @@ async def update_prompt(
 
 
 @router.get("/settings")
-async def get_ai_settings():
+async def get_ai_settings() -> dict:
     """获取当前 AI 参数配置（超时按当前模型独立），附全局默认值供前端「恢复默认」。"""
     model_cfg = get_model_config(settings.ollama_vision_model)
     return {
@@ -160,7 +160,7 @@ async def get_ai_settings():
 async def update_ai_settings(
     confidence_threshold: float | None = Query(None, ge=0, le=1),
     analysis_timeout: int | None = Query(None, ge=10, le=300),
-):
+) -> dict:
     """更新 AI 参数。
 
     超时按当前活跃模型独立保存到 model_configs.json；置信度阈值为全局设置
@@ -185,7 +185,7 @@ async def update_ai_settings(
 
 
 @router.get("/sampling-params")
-async def get_sampling_params():
+async def get_sampling_params() -> dict:
     """获取当前模型的 AI 采样参数（temperature, top_p, top_k, num_predict, num_ctx, think）。
 
     响应附 ``defaults``（.env 全局默认值），供前端「恢复默认值」与「清除覆盖」使用。
@@ -217,7 +217,7 @@ async def update_sampling_params(
     num_predict: int | None = Query(None, ge=64, le=8192),
     num_ctx: int | None = Query(None, ge=1024, le=131072, description="上下文窗口大小（视觉模型图片 token 消耗大）"),
     think: bool | None = Query(None, description="是否开启思考模式（思考模型适用）"),
-):
+) -> dict:
     """更新当前模型的 AI 采样参数（按模型独立持久化）。"""
     updates = {}
     if temperature is not None:
@@ -249,7 +249,7 @@ async def update_sampling_params(
 
 
 @router.delete("/model-config")
-async def reset_model_config_endpoint():
+async def reset_model_config_endpoint() -> dict:
     """清除当前活跃模型的自定义配置（model_configs.json 中的覆盖项）。
 
     回退到 .env 全局默认值。用于「该模型改乱后想恢复默认」的场景，
@@ -263,7 +263,7 @@ async def reset_model_config_endpoint():
 
 
 @router.get("/model-config/overview")
-async def model_config_overview():
+async def model_config_overview() -> dict:
     """返回每模型的参数/Prompt 自定义配置总览（哪些模型有覆盖、覆盖哪些字段）。"""
     configs = get_all_model_configs()
     prompts = get_all_model_prompts()
@@ -283,7 +283,7 @@ async def model_config_overview():
 
 
 @router.post("/model-config/copy")
-async def copy_model_config_endpoint(payload: dict):
+async def copy_model_config_endpoint(payload: dict) -> dict[str, str]:
     """把某模型的参数与 Prompt 复制到另一模型。请求体: {"source": ..., "destination": ...}"""
     source = payload.get("source", "")
     destination = payload.get("destination", "")

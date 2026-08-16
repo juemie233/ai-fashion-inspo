@@ -29,7 +29,7 @@ async def list_persons(
     platform: str | None = Query(None, description="平台筛选"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """分页获取人物列表，支持名称搜索与内容类型/平台筛选。"""
     items, total = await person_service.list_persons(
         db,
@@ -44,7 +44,7 @@ async def list_persons(
 
 
 @router.post("", response_model=PersonOut, status_code=status.HTTP_201_CREATED)
-async def create_person(data: PersonCreate, db: AsyncSession = Depends(get_db)):
+async def create_person(data: PersonCreate, db: AsyncSession = Depends(get_db)) -> dict:
     """创建人物（职业模特 / 穿搭博主）。"""
     return await person_service.create_person(
         db,
@@ -62,7 +62,7 @@ async def create_person(data: PersonCreate, db: AsyncSession = Depends(get_db)):
 async def top_persons(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """按素材数倒序返回热门人物排行。"""
     return await person_service.top_persons(db, limit)
 
@@ -71,13 +71,13 @@ async def top_persons(
 async def suggest_persons(
     name: str = Query(..., min_length=1, description="名称模糊关键字"),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """按名称模糊匹配人物（用于前端选择去重）。"""
     return await person_service.suggest_persons(db, name)
 
 
 @router.get("/{person_id}", response_model=PersonDetailOut)
-async def get_person(person_id: int, db: AsyncSession = Depends(get_db)):
+async def get_person(person_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """获取人物详情（含素材数与风格画像）。"""
     try:
         person = await person_service.get_person(db, person_id)
@@ -93,7 +93,7 @@ async def get_person(person_id: int, db: AsyncSession = Depends(get_db)):
 @router.patch("/{person_id}", response_model=PersonOut)
 async def update_person(
     person_id: int, data: PersonUpdate, db: AsyncSession = Depends(get_db)
-):
+) -> dict:
     """更新人物信息（部分更新；显式传 null 的字段会被清空）。"""
     try:
         return await person_service.update_person(
@@ -106,7 +106,7 @@ async def update_person(
 
 
 @router.delete("/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_person(person_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_person(person_id: int, db: AsyncSession = Depends(get_db)) -> None:
     """删除人物（inspiration_persons 关联级联删除）。"""
     try:
         await person_service.delete_person(db, person_id)
@@ -121,7 +121,7 @@ async def person_inspirations(
     size: int = Query(20, ge=1, le=200),
     sort: str = Query("newest", pattern="^(newest|oldest|confidence)$"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取该人物的素材列表（分页 + 排序，排除软删除素材）。"""
     result = await person_service.list_person_inspirations(db, person_id, page, size, sort)
     if not result:

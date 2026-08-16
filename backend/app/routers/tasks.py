@@ -19,7 +19,7 @@ async def list_tasks(
     status: str | None = None,
     type: str | None = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """分页查询任务列表，可按状态 / 类型筛选。"""
     query = select(TaskQueue)
     if status:
@@ -47,7 +47,7 @@ async def list_tasks(
 async def get_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> TaskQueue:
     """查询单个任务状态（供前端轮询进度）。"""
     task = await db.get(TaskQueue, task_id)
     if not task:
@@ -59,7 +59,7 @@ async def get_task(
 async def cancel_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """取消排队中的任务（仅 pending 状态可取消，running 不硬打断）。"""
     # 先确认任务存在（404），再做条件更新：仅当仍为 pending 时才置为 cancelled，
     # 避免「读取到 pending 后 worker 已认领为 running」的 TOCTOU 竞态（否则会把 running 覆盖成 cancelled）。

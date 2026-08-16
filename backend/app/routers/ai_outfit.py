@@ -17,7 +17,7 @@ router = APIRouter()
 async def suggest_outfit_tags(
     inspiration_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, list[str] | str | int]:
     """根据素材的小标签，AI 建议穿搭大标签（只建议，不入库）。"""
     from app.models.tag import InspirationTag, Tag
 

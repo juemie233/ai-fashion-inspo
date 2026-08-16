@@ -8,22 +8,22 @@ router = APIRouter(prefix="/ws", tags=["websocket"])
 class ConnectionManager:
     """管理 WebSocket 连接和广播消息。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.active_connections: list[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> None:
         """接受新的 WebSocket 连接。"""
         await websocket.accept()
         self.active_connections.append(websocket)
 
-    def disconnect(self, websocket: WebSocket):
+    def disconnect(self, websocket: WebSocket) -> None:
         """移除断开的连接（存在性保护：并发断开时忽略重复移除）。"""
         try:
             self.active_connections.remove(websocket)
         except ValueError:
             pass
 
-    async def broadcast(self, message: dict):
+    async def broadcast(self, message: dict) -> None:
         """向所有已连接的客户端广播消息。"""
         disconnected = []
         for connection in self.active_connections:
@@ -35,7 +35,7 @@ class ConnectionManager:
             if conn in self.active_connections:
                 self.active_connections.remove(conn)
 
-    async def send_to(self, websocket: WebSocket, message: dict):
+    async def send_to(self, websocket: WebSocket, message: dict) -> None:
         """向单个客户端发送消息。"""
         try:
             await websocket.send_json(message)
@@ -48,7 +48,7 @@ manager = ConnectionManager()
 
 
 @router.websocket("")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket) -> None:
     """WebSocket 连接端点：实时推送分析进度和采集状态。
 
     客户端可发送 "ping" 来保持连接活跃。

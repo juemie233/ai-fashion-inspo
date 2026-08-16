@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -23,7 +24,7 @@ router = APIRouter()
 
 
 @router.get("/quality-dashboard")
-async def quality_dashboard(db: AsyncSession = Depends(get_db)):
+async def quality_dashboard(db: AsyncSession = Depends(get_db)) -> dict:
     """分析质量总览：每日趋势、问题素材、标签覆盖率（聚合在 ai_dashboard_service）。"""
     return await ai_dashboard_service.collect_quality_dashboard(db)
 
@@ -36,7 +37,7 @@ async def test_analyze(
     inspiration_id: str | None = Query(None, description="使用已有素材 ID 测试"),
     custom_prompt: str | None = Query(None, description="临时覆盖 prompt（可选）"),
     file: UploadFile | None = File(None, description="直接上传图片测试（优先于素材 ID）"),
-):
+) -> StreamingResponse:
     """单图即时测试：使用当前模型和参数分析图片，SSE 流式返回结果。
 
     支持两种图片来源：直接上传图片（file，优先）或已有素材 ID（inspiration_id）。
@@ -86,7 +87,7 @@ async def test_analyze(
     prompt = custom_prompt or get_model_prompt(settings.ollama_vision_model)
     model_cfg = get_model_config(settings.ollama_vision_model)
 
-    async def event_stream():
+    async def event_stream() -> AsyncIterator[str]:
         import time as _time
         started = _time.time()
 

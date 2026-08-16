@@ -194,7 +194,7 @@ def _drop_model_cache() -> None:
         _model_cache["model"] = None
 
 
-def _load_model():
+def _load_model() -> object | None:
     """懒加载模型（按文件 mtime 失效重载，跨进程重训后自动生效，线程安全）。"""
     global _model_cache
     if not _MODEL_PATH.exists():

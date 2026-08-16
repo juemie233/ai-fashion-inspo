@@ -3,11 +3,12 @@
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.config import settings
 from app.database import init_db, run_migrations
@@ -81,7 +82,7 @@ async def _scraper_schedule_loop() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用启动与关闭事件处理。"""
     # 安全护栏：绑定非回环地址（0.0.0.0 / 局域网 IP）时，破坏性接口（物理删除、
     # 清空垃圾桶、数据重置等）在未配置 API_KEY 的情况下会对所有能访问该地址的
@@ -176,7 +177,7 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def destructive_api_key_middleware(request: Request, call_next):
+async def destructive_api_key_middleware(request: Request, call_next) -> Response:
     """破坏性接口的 API Key 认证。
 
     命中 DESTRUCTIVE_ROUTES 清单的写操作（不可恢复删除/重置/批量破坏）需要
@@ -215,7 +216,7 @@ app.include_router(health.router)
 
 
 @app.get("/api/health")
-async def health_check():
+async def health_check() -> dict:
     """健康检查端点。
 
     返回 schema_version 供前端启动时比对，检测前后端契约是否一致。

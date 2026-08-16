@@ -14,14 +14,14 @@ class DouyinScraper(BaseScraper):
 
     platform = "douyin"
 
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True) -> None:
         self.headless = headless
         self._browser = None
         self._context = None
         self._page = None
         self._pw = None
 
-    def _ensure_browser_sync(self):
+    def _ensure_browser_sync(self) -> None:
         if self._browser is not None:
             return
         from playwright.sync_api import sync_playwright
@@ -40,7 +40,7 @@ class DouyinScraper(BaseScraper):
         )
         self._page = self._context.new_page()
 
-    async def _ensure_browser(self):
+    async def _ensure_browser(self) -> None:
         if self._browser is not None:
             return
         await asyncio.to_thread(self._ensure_browser_sync)
@@ -51,7 +51,7 @@ class DouyinScraper(BaseScraper):
     async def search(self, keyword: str, count: int = 20) -> list[RawContent]:
         await self._ensure_browser()
 
-        def _search():
+        def _search() -> list[RawContent]:
             results: list[RawContent] = []
             try:
                 logger.info(f"抖音搜索: {keyword}")
@@ -110,8 +110,8 @@ class DouyinScraper(BaseScraper):
         except Exception:
             return {}
 
-    async def close(self):
-        def _close():
+    async def close(self) -> None:
+        def _close() -> None:
             try:
                 if self._browser:
                     self._browser.close()

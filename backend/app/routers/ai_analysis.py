@@ -33,7 +33,7 @@ router = APIRouter()
 async def analyze_inspiration(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str]:
     """触发单个素材的 AI 分析（后台异步执行）。"""
     try:
         file_path = await ai_svc.trigger_analysis(
@@ -58,7 +58,7 @@ async def analyze_inspiration(
 async def batch_analyze(
     inspiration_ids: list[str],
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str | int]:
     """批量触发多个素材的 AI 分析。
 
     已改造为「数据库驱动的任务队列」：创建任务记录后立即返回 task_id，
@@ -86,13 +86,13 @@ async def batch_analyze(
 
 
 @router.get("/queue")
-async def analysis_queue(db: AsyncSession = Depends(get_db)):
+async def analysis_queue(db: AsyncSession = Depends(get_db)) -> dict:
     """获取分析队列状态：待分析/分析中/已完成/失败统计。"""
     return await ai_svc.get_analysis_queue_stats(db)
 
 
 @router.get("/unanalyzed-ids")
-async def unanalyzed_ids(db: AsyncSession = Depends(get_db)):
+async def unanalyzed_ids(db: AsyncSession = Depends(get_db)) -> dict[str, list[str] | int]:
     """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。"""
     ids = await ai_svc.get_unanalyzed_ids(db)
     return {"ids": ids, "count": len(ids)}
@@ -109,7 +109,7 @@ async def analysis_history(
     end_date: str | None = None,  # 结束时间（ISO，含）
     sort_by: str | None = None,  # time_asc | time_desc（默认按时间倒序）
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取分析历史记录列表（仅标签分析，排除质量审核日志）。"""
     try:
         return await ai_svc.get_analysis_history(
@@ -129,7 +129,7 @@ async def export_analysis_history_csv(
     end_date: str | None = None,
     sort_by: str | None = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> Response:
     """导出分析历史为 CSV（当前筛选条件，上限 10000 条）。"""
     try:
         items = await ai_svc.export_analysis_history(
@@ -164,7 +164,7 @@ async def export_analysis_history_csv(
 async def retry_analysis(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str]:
     """重试失败的分析。"""
     try:
         file_path = await ai_svc.trigger_analysis(
@@ -182,7 +182,7 @@ async def retry_analysis(
 
 
 @router.post("/retry-all-failed")
-async def retry_all_failed(db: AsyncSession = Depends(get_db)):
+async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
     failed = await ai_svc.get_failed_analysis_targets(db)
 
@@ -203,7 +203,7 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)):
 async def batch_delete_logs(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, int]:
     """批量删除分析历史记录。
 
     请求体: {"ids": [1, 2, 3]}
@@ -219,7 +219,7 @@ async def batch_delete_logs(
 async def batch_retry_logs(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str | int]:
     """批量重试分析记录：根据日志 ID 找到对应素材并重新分析。
 
     请求体: {"ids": [1, 2, 3]}
@@ -238,14 +238,14 @@ async def batch_retry_logs(
 
 
 @router.get("/history/model-names")
-async def get_history_model_names(db: AsyncSession = Depends(get_db)):
+async def get_history_model_names(db: AsyncSession = Depends(get_db)) -> dict[str, list[str]]:
     """获取分析历史中出现过的所有模型名称，供前端筛选（排除质量审核日志）。"""
     names = await ai_svc.get_history_model_names(db)
     return {"models": names}
 
 
 @router.delete("/history/failed/all")
-async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)):
+async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     """批量删除所有失败的分析日志。"""
     count = await ai_svc.delete_failed_logs(db)
 
@@ -260,7 +260,7 @@ async def delete_all_failed_logs(db: AsyncSession = Depends(get_db)):
 async def get_analysis_detail(
     log_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取单条分析日志的详细信息，包含原始 AI 响应和关联标签。"""
     result = await ai_svc.get_analysis_detail(db, log_id)
     if not result:
@@ -272,7 +272,7 @@ async def get_analysis_detail(
 async def delete_analysis_log(
     log_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str]:
     """删除指定分析日志。"""
     if not await ai_svc.delete_analysis_log(db, log_id):
         raise HTTPException(status_code=404, detail="分析记录未找到")
@@ -280,7 +280,7 @@ async def delete_analysis_log(
 
 
 @router.get("/queue/pending")
-async def get_pending_queue(db: AsyncSession = Depends(get_db)):
+async def get_pending_queue(db: AsyncSession = Depends(get_db)) -> dict[str, list[dict] | bool]:
     """获取排队中素材的缩略图预览信息。"""
     if not _pending_queue and not _active_analyses:
         return {"items": [], "paused": get_queue_paused()}
@@ -315,7 +315,7 @@ async def get_pending_queue(db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/queue/{inspiration_id}")
-async def cancel_queue_item(inspiration_id: str):
+async def cancel_queue_item(inspiration_id: str) -> dict[str, str]:
     """取消排队中的分析任务（已开始分析的无法取消）。"""
     if inspiration_id in _pending_queue:
         # 取消对应的 asyncio Task
@@ -332,7 +332,7 @@ async def cancel_queue_item(inspiration_id: str):
 
 
 @router.post("/queue/pause")
-async def pause_queue():
+async def pause_queue() -> dict[str, str | bool]:
     """暂停全局分析队列（已完成的不受影响）。"""
     set_queue_paused(True)
     logger.info("分析队列已暂停")
@@ -340,7 +340,7 @@ async def pause_queue():
 
 
 @router.post("/queue/resume")
-async def resume_queue():
+async def resume_queue() -> dict[str, str | bool]:
     """恢复全局分析队列。"""
     set_queue_paused(False)
     logger.info("分析队列已恢复")
@@ -348,7 +348,7 @@ async def resume_queue():
 
 
 @router.get("/active-analyses")
-async def get_active_analyses():
+async def get_active_analyses() -> dict[str, dict[str, str] | int]:
     """获取当前正在分析中的素材列表，用于前端轮询显示进度。"""
     return {"active_analyses": _active_analyses, "count": len(_active_analyses)}
 
@@ -360,7 +360,7 @@ async def get_active_analyses():
 async def compare_analyses(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取同一素材的所有历史分析结果，用于并排对比。
 
     返回：

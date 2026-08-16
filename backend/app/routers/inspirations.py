@@ -36,7 +36,7 @@ async def create_inspiration(
     source_platform_id: str | None = Form(default=None),
     scraper_task_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationOut:
     """上传图片并创建灵感素材。AI 分析在后台异步执行。
 
     scraper_task_id 用于浏览器插件采集：将素材关联到采集任务记录，
@@ -66,7 +66,7 @@ async def create_inspiration(
 async def create_from_url(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationOut:
     """从 URL 下载图片并创建素材。
 
     请求体: {"url": "...", "source_author": "...", "tags": ["..."]}
@@ -109,7 +109,7 @@ async def list_inspirations(
     date_to: str | None = Query(None, description="上传日期上限，ISO 日期"),
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationListOut:
     """分页获取灵感列表，支持多维筛选和排序。"""
     include_list = (
         [t.strip() for t in include_tags.split(",") if t.strip()]
@@ -144,13 +144,13 @@ async def list_inspirations(
 async def dominant_colors(
     limit: int = Query(30, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """返回库内实际出现的主色调（hex）及出现次数，供颜色筛选下拉展示。"""
     return await inspiration_service.list_dominant_colors(db, limit=limit)
 
 
 @router.delete("/quality-rejected", status_code=status.HTTP_200_OK)
-async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
+async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)) -> dict:
     """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。"""
     return await inspiration_service.delete_rejected_inspirations(db)
 
@@ -165,7 +165,7 @@ async def list_trash(
     size: int = Query(50, ge=1, le=200),
     reason: str | None = Query(None, description="按删除原因筛选（质量差/重复/不喜欢/隐私/其他）"),
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationListOut:
     """分页获取垃圾桶中的素材（软删除，30 天内可恢复）。"""
     items, total = await inspiration_service.list_trash(db, page=page, size=size, reason=reason)
     return InspirationListOut(
@@ -181,7 +181,7 @@ async def list_trash(
 async def empty_trash(
     only_expired: bool = Query(False, description="为 true 时仅清理超过保留期的过期素材"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """彻底清空垃圾桶（物理删除文件与数据库记录）。"""
     return await inspiration_service.purge_trash(db, only_expired=only_expired)
 
@@ -191,7 +191,7 @@ async def move_to_trash(
     inspiration_id: str,
     payload: MoveToTrashRequest | None = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationOut:
     """将素材移入垃圾桶（软删除），文件移入 storage/trash/，30 天内可恢复。"""
     inspiration = await inspiration_service.trash_inspiration(
         db, inspiration_id, payload.reason if payload else None
@@ -200,14 +200,14 @@ async def move_to_trash(
 
 
 @router.post("/{inspiration_id}/restore", response_model=InspirationOut)
-async def restore_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+async def restore_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> InspirationOut:
     """从垃圾桶恢复素材（移回媒体目录，清除软删除标记）。"""
     inspiration = await inspiration_service.restore_inspiration(db, inspiration_id)
     return _to_out(inspiration)
 
 
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)
-async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> InspirationDetailOut:
     """获取单个灵感详情（包含完整标签和分析日志）。"""
     inspiration = await inspiration_service.get_inspiration(db, inspiration_id)
 
@@ -254,7 +254,7 @@ async def update_inspiration(
     inspiration_id: str,
     data: InspirationUpdate,
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationOut:
     """更新灵感（收藏状态、作者等部分字段）。"""
     inspiration = await inspiration_service.update_inspiration(db, inspiration_id, data)
     return _to_out(inspiration)
@@ -264,7 +264,7 @@ async def update_inspiration(
 async def batch_add_tags(
     data: BatchAddTagsRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
 
     请求体: {"inspiration_ids": [...], "names": [...], "category": "outfit", "source": "manual"}
@@ -285,7 +285,7 @@ async def batch_add_tags(
 async def batch_favorite(
     data: BatchFavoriteRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量收藏/取消收藏素材（仅作用于未删除素材）。"""
     updated = await inspiration_service.batch_favorite_inspirations(
         db, data.ids, data.is_favorite
@@ -297,7 +297,7 @@ async def batch_favorite(
 async def batch_trash(
     data: BatchTrashRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量将素材移入垃圾桶（软删除，30 天内可恢复）。
 
     reason 为空时按各素材状态自动推断；不存在/已在垃圾桶中的 ID 计入 skipped。
@@ -311,7 +311,7 @@ async def batch_trash(
 async def batch_update(
     data: BatchUpdateRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记），仅更新显式字段。"""
     updated = await inspiration_service.batch_update_inspirations(
         db,
@@ -329,7 +329,7 @@ async def add_inspiration_tags(
     inspiration_id: str,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """手动给素材关联标签（按名称查找或创建，已关联的自动跳过）。
 
     请求体: {"names": ["御姐长腿高跟鞋穿搭"], "category": "outfit", "source": "manual"}
@@ -351,7 +351,7 @@ async def remove_inspiration_tag(
     inspiration_id: str,
     tag_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """解除素材与某个标签的关联（不删除标签本身）。"""
     return await inspiration_service.remove_inspiration_tag(db, inspiration_id, tag_id)
 
@@ -364,7 +364,7 @@ async def link_inspiration_persons(
     inspiration_id: str,
     data: PersonLinkRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """给素材批量关联人物（幂等，已关联自动跳过）。
 
     请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID；素材不存在返回 404。
@@ -392,7 +392,7 @@ async def unlink_inspiration_person(
     inspiration_id: str,
     person_id: int,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """解除素材与某个人物的关联（不删除人物本身）。"""
     if not await person_service.unlink_person(db, inspiration_id, person_id):
         raise HTTPException(status_code=404, detail="未找到该人物关联")
@@ -400,7 +400,7 @@ async def unlink_inspiration_person(
 
 
 @router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> None:
     """彻底删除灵感素材（物理删除文件与数据库记录，不可恢复）。
 
     普通「删除」请使用 ``POST /{id}/trash``（移入垃圾桶，可恢复）；

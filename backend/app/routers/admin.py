@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 @router.get("/stats")
-async def admin_stats(db: AsyncSession = Depends(get_db)):
+async def admin_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """素材总览仪表盘数据（聚合逻辑在 app.services.admin_stats_service）。"""
     return await admin_stats_service.collect_stats(db)
 
@@ -43,7 +43,7 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
 async def largest_files(
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """列出占用空间最大的前 N 个文件。"""
     storage_root = settings.storage_root
     result = (await db.execute(
@@ -75,7 +75,7 @@ async def largest_files(
 
 
 @router.get("/integrity-check")
-async def integrity_check(db: AsyncSession = Depends(get_db)):
+async def integrity_check(db: AsyncSession = Depends(get_db)) -> dict:
     """数据完整性检查：
     - missing_files: 数据库有记录但文件不存在的素材
     - orphan_files: 磁盘上有文件但数据库无对应记录的文件
@@ -128,7 +128,7 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/cleanup-orphans")
-async def cleanup_orphan_files():
+async def cleanup_orphan_files() -> dict:
     """删除所有孤立文件（磁盘上有但数据库无记录的文件）。"""
     storage_files = await asyncio.to_thread(admin_stats_service.scan_storage_files)
     storage_root = settings.storage_root
@@ -196,7 +196,7 @@ async def cleanup_orphan_files():
 async def batch_delete(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量删除素材（已改造为任务队列，创建任务后返回 task_id）。
 
     请求体:
@@ -262,7 +262,7 @@ async def batch_delete(
 async def batch_unmark_ai(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量将疑似 AI 素材重新标记为非 AI（人工复核翻案）。
 
     请求体: {"ids": ["id1", "id2", ...]}
@@ -286,7 +286,7 @@ async def batch_unmark_ai(
 async def check_duplicate(
     hash: str = Query(..., min_length=64, max_length=64, description="文件 SHA-256 哈希"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """检查指定 SHA-256 的文件是否已存在（上传前去重）。
 
     优先走 content_hash 索引列；存量素材未回填哈希时自动回退扫描并回填。
@@ -309,7 +309,7 @@ async def check_duplicate(
 
 
 @router.get("/duplicates")
-async def find_duplicates(db: AsyncSession = Depends(get_db)):
+async def find_duplicates(db: AsyncSession = Depends(get_db)) -> dict:
     """通过文件哈希检测完全重复的素材。"""
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
@@ -336,7 +336,7 @@ async def find_duplicates(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/deduplicate")
-async def deduplicate_files(db: AsyncSession = Depends(get_db)):
+async def deduplicate_files(db: AsyncSession = Depends(get_db)) -> dict:
     """智能去重（已改造为任务队列，创建任务后返回 task_id）。
 
     每组重复文件保留评分最高的 1 个，其余物理删除；
@@ -351,7 +351,7 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/export")
-async def export_inspirations(db: AsyncSession = Depends(get_db)):
+async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
     """导出全部未删除素材为 CSV（含标签与关联人物），供 Excel/表格工具离线分析。
 
     响应为 UTF-8（带 BOM，Excel 打开不乱码），Content-Disposition 触发浏览器下载。
@@ -406,7 +406,7 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)):
 async def inspiration_trend(
     days: int = Query(30, ge=1, le=365, description="统计最近 N 天"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """按天统计新增素材数量（近 N 天），供管理页趋势图使用。
 
     created_at 按项目约定为 UTC（utcnow 写入），截止时间必须同样用 UTC
@@ -432,7 +432,7 @@ async def inspiration_trend(
 async def person_frequency(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。"""
     rows = (await db.execute(
         select(
@@ -465,7 +465,7 @@ async def person_frequency(
 async def audit_logs(
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """按时间倒序返回破坏性操作审计日志。"""
     result = await db.execute(
         select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit)
@@ -490,7 +490,7 @@ async def near_duplicates(
     limit: int = Query(1000, ge=1, le=5000, description="扫描图片数量上限"),
     threshold: int = Query(32, ge=1, le=256, description="汉明距离阈值（越小越严格，768 位 RGB dHash）"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """检测视觉近似重复的图片素材（感知哈希分组），仅返回候选、不删除。
 
     与「重复文件」（SHA-256 精确重复）互补：本接口识别字节不同但视觉相似的
@@ -529,7 +529,7 @@ async def _get_missing_image_vector_ids(db: AsyncSession) -> list[str]:
 
 
 @router.get("/vector-stats")
-async def vector_stats(db: AsyncSession = Depends(get_db)):
+async def vector_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """向量化状态统计：素材总数 / 已有向量数 / 缺失数（供管理页展示）。"""
     from app.services.vector import store as vector_store
 
@@ -550,7 +550,7 @@ async def vector_stats(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/vector-backfill")
-async def vector_backfill(db: AsyncSession = Depends(get_db)):
+async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
     """一键为缺失向量的素材创建向量回填任务（异步，由 worker 执行）。
 
     返回 task_id 供前端轮询进度；无缺失素材时返回 count=0。

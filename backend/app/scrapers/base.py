@@ -40,6 +40,6 @@ class BaseScraper(ABC):
         ...
 
     @abstractmethod
-    async def close(self):
+    async def close(self) -> None:
         """清理资源（浏览器、连接等）。"""
         ...

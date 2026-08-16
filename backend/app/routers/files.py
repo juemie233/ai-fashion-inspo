@@ -18,7 +18,7 @@ _MEDIA_EXT_TO_TYPE = {
 
 
 @router.get("/{file_path:path}")
-async def serve_file(file_path: str):
+async def serve_file(file_path: str) -> FileResponse:
     """提供存储文件的访问。例如 /api/files/images/2026-08/abc123.jpg"""
     root = settings.storage_root.resolve()
     full_path = (settings.storage_root / file_path).resolve()

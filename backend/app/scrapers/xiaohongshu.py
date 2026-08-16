@@ -15,7 +15,7 @@ class XiaohongshuScraper(BaseScraper):
 
     platform = "xiaohongshu"
 
-    def __init__(self, headless: bool = True, cookie_file: str | None = None):
+    def __init__(self, headless: bool = True, cookie_file: str | None = None) -> None:
         self.headless = headless
         self.cookie_file = cookie_file
         self._browser = None
@@ -23,7 +23,7 @@ class XiaohongshuScraper(BaseScraper):
         self._page = None
         self._pw = None
 
-    def _ensure_browser_sync(self):
+    def _ensure_browser_sync(self) -> None:
         """同步初始化浏览器。"""
         if self._browser is not None:
             return
@@ -51,7 +51,7 @@ class XiaohongshuScraper(BaseScraper):
         """)
         self._page = self._context.new_page()
 
-    async def _ensure_browser(self):
+    async def _ensure_browser(self) -> None:
         if self._browser is not None:
             return
         await asyncio.to_thread(self._ensure_browser_sync)
@@ -59,7 +59,7 @@ class XiaohongshuScraper(BaseScraper):
     async def login(self) -> bool:
         await self._ensure_browser()
 
-        def _login():
+        def _login() -> bool:
             if self.cookie_file and os.path.exists(self.cookie_file):
                 try:
                     with open(self.cookie_file, encoding="utf-8") as f:
@@ -79,7 +79,7 @@ class XiaohongshuScraper(BaseScraper):
         await self._ensure_browser()
         await self.login()
 
-        def _search():
+        def _search() -> list[RawContent]:
             results: list[RawContent] = []
             # 关键词 URL 编码：中文/空格/特殊字符直接拼进 URL 会导致请求异常
             from urllib.parse import quote
@@ -163,7 +163,7 @@ class XiaohongshuScraper(BaseScraper):
     async def get_feed(self, count: int = 20) -> list[RawContent]:
         await self._ensure_browser()
 
-        def _get_feed():
+        def _get_feed() -> list[RawContent]:
             results: list[RawContent] = []
             import time
             try:
@@ -197,8 +197,8 @@ class XiaohongshuScraper(BaseScraper):
 
         return await asyncio.to_thread(_get_feed)
 
-    async def close(self):
-        def _close():
+    async def close(self) -> None:
+        def _close() -> None:
             try:
                 if self._browser:
                     self._browser.close()

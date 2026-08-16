@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.tag import TagAlias
 from app.schemas.tag import (
     AliasCreate,
     AliasOut,
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/tags", tags=["tags"])
 
 
 @router.get("")
-async def list_tags(db: AsyncSession = Depends(get_db)):
+async def list_tags(db: AsyncSession = Depends(get_db)) -> list[TagCategoryGroup]:
     """获取所有标签，按类别分组。"""
     grouped = await tag_service.get_all_tags_grouped(db)
     return [
@@ -32,7 +33,7 @@ async def list_tags(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=TagOut, status_code=status.HTTP_201_CREATED)
-async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
+async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)) -> TagOut:
     """手动创建自定义标签。"""
     try:
         tag = await tag_service.create_tag(db, data.name, data.category)
@@ -56,7 +57,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
 async def batch_change_category(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量修改标签类别。请求体: {"tag_ids": [1,2,3], "category": "style"}"""
     tag_ids = payload.get("tag_ids", [])
     category = payload.get("category", "").strip()
@@ -70,7 +71,7 @@ async def batch_change_category(
 async def batch_rename_tags(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量重命名标签（查找替换）。请求体: {"tag_ids": [1,2], "find": "白色", "replace": "纯白"}"""
     tag_ids = payload.get("tag_ids", [])
     find_str = payload.get("find", "")
@@ -86,7 +87,7 @@ async def batch_rename_tags(
 
 
 @router.patch("/{tag_id}", response_model=TagOut)
-async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(get_db)):
+async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(get_db)) -> TagOut:
     """更新标签的名称、类别、置顶、排序或备注。"""
     try:
         tag = await tag_service.update_tag(
@@ -115,7 +116,7 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
 
 
 @router.delete("/unused", status_code=status.HTTP_200_OK)
-async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
+async def delete_unused_tags(db: AsyncSession = Depends(get_db)) -> dict:
     """删除所有使用次数为 0 的标签。"""
     import logging
     _logger = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ async def delete_unused_tags(db: AsyncSession = Depends(get_db)):
 @router.post("/batch-delete", status_code=status.HTTP_200_OK)
 async def batch_delete_tags(
     data: TagBatchDelete, db: AsyncSession = Depends(get_db)
-):
+) -> dict:
     """批量删除标签及其所有关联。"""
     if not data.tag_ids:
         raise HTTPException(status_code=400, detail="请提供要删除的标签 ID 列表")
@@ -144,7 +145,7 @@ async def batch_delete_tags(
 
 
 @router.post("/merge", status_code=status.HTTP_200_OK)
-async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(get_db)):
+async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """将源标签合并到目标标签，删除源标签。"""
     if data.source_tag_id == data.target_tag_id:
         raise HTTPException(status_code=400, detail="不能将标签合并到自身")
@@ -159,7 +160,7 @@ async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(
 
 
 @router.get("/suggestions/{name}")
-async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
+async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)) -> list[dict]:
     """查找与给定名称相似的已有标签（用于去重建议）。"""
     similar = await tag_service.find_similar_tags(db, name)
     return [
@@ -172,7 +173,7 @@ async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/stats")
-async def tag_stats(db: AsyncSession = Depends(get_db)):
+async def tag_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """获取标签统计数据。"""
     return await tag_service.get_tag_stats(db)
 
@@ -180,7 +181,7 @@ async def tag_stats(db: AsyncSession = Depends(get_db)):
 @router.get("/duplicates")
 async def find_duplicate_tags(
     threshold: float = 0.75, db: AsyncSession = Depends(get_db)
-):
+) -> dict:
     """扫描所有标签，找出名称相似度 >= threshold 的标签对。"""
     pairs, total = await tag_service.find_duplicate_tag_pairs(db, threshold)
     return {"duplicates": pairs[:50], "total": total}
@@ -194,7 +195,7 @@ async def batch_remove_tag_inspirations(
     tag_id: int,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量解除标签与多个素材的关联。
 
     请求体: {"inspiration_ids": ["uuid1", "uuid2", ...]}
@@ -214,7 +215,7 @@ async def tag_inspirations(
     size: int = Query(20, ge=1, le=200),
     sort: str = "newest",  # newest | oldest | confidence
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取使用指定标签的素材列表。"""
     result = await tag_service.list_tag_inspirations(db, tag_id, page, size, sort)
     if not result:
@@ -226,7 +227,7 @@ async def tag_inspirations(
 
 
 @router.get("/export")
-async def export_tags(db: AsyncSession = Depends(get_db)):
+async def export_tags(db: AsyncSession = Depends(get_db)) -> dict:
     """导出所有标签为 JSON（含类别、来源、使用次数）。"""
     from datetime import datetime, timezone
     export_data = await tag_service.export_tags(db)
@@ -236,7 +237,7 @@ async def export_tags(db: AsyncSession = Depends(get_db)):
 @router.post("/import", status_code=status.HTTP_200_OK)
 async def import_tags(
     data: TagImportRequest, db: AsyncSession = Depends(get_db)
-):
+) -> dict:
     """批量导入标签（跳过已存在的标签）。"""
     imported, skipped = await tag_service.import_tags(
         db, [(item.name, item.category) for item in data.tags]
@@ -254,7 +255,7 @@ async def import_tags(
 @router.post("/reorder", status_code=status.HTTP_200_OK)
 async def reorder_tags(
     data: TagReorderRequest, db: AsyncSession = Depends(get_db)
-):
+) -> dict:
     """批量更新标签自定义排序权重（sort_order 越小越靠前）。"""
     if not data.items:
         raise HTTPException(status_code=400, detail="请提供排序项")
@@ -273,7 +274,7 @@ async def reorder_tags(
 
 
 @router.get("/aliases", status_code=status.HTTP_200_OK)
-async def list_aliases(db: AsyncSession = Depends(get_db)):
+async def list_aliases(db: AsyncSession = Depends(get_db)) -> list[dict]:
     """获取所有标签别名（含所属标签名）。"""
     return await tag_service.list_aliases(db)
 
@@ -281,7 +282,7 @@ async def list_aliases(db: AsyncSession = Depends(get_db)):
 @router.post("/{tag_id}/aliases", response_model=AliasOut, status_code=status.HTTP_201_CREATED)
 async def create_alias(
     tag_id: int, data: AliasCreate, db: AsyncSession = Depends(get_db)
-):
+) -> TagAlias:
     """为标签添加别名（将别名归一化到该标签）。"""
     alias = data.alias.strip()
     if not alias:
@@ -297,7 +298,7 @@ async def create_alias(
 
 
 @router.delete("/aliases/{alias_id}", status_code=status.HTTP_200_OK)
-async def delete_alias(alias_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_alias(alias_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """删除标签别名。"""
     if not await tag_service.delete_alias(db, alias_id):
         raise HTTPException(status_code=404, detail="别名未找到")
@@ -312,7 +313,7 @@ async def cooccurrence_network(
     limit: int = Query(30, ge=2, le=100),
     min_count: int = Query(1, ge=1),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。"""
     return await tag_service.get_cooccurrence_network(db, limit, min_count)
 
@@ -321,7 +322,7 @@ async def cooccurrence_network(
 async def top_tags(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """返回使用次数最多的标签排行。"""
     return await tag_service.get_top_tags(db, limit)
 
@@ -331,7 +332,7 @@ async def tag_trend(
     tag_id: int,
     granularity: str = Query("month", pattern="^(month|week|day)$"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取标签的使用趋势（按素材创建时间分桶统计）。"""
     result = await tag_service.get_tag_trend(db, tag_id, granularity)
     if not result:

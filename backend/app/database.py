@@ -25,7 +25,7 @@ if settings.debug:
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
     """每次建立连接时启用 SQLite 外键约束。
 
     SQLite 默认关闭外键，导致 ON DELETE SET NULL / ON DELETE CASCADE 失效。
@@ -61,7 +61,7 @@ async def get_db() -> AsyncSession:
             raise
 
 
-async def init_db():
+async def init_db() -> None:
     """创建所有数据库表。在应用启动时调用。"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

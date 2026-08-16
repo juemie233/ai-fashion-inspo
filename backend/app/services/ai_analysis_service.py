@@ -28,7 +28,7 @@ from app.utils.time import format_utc
 class AIAnalysisNotFoundError(Exception):
     """AI 分析相关记录不存在（路由层转为 404）。"""
 
-    def __init__(self, message: str = "记录未找到"):
+    def __init__(self, message: str = "记录未找到") -> None:
         super().__init__(message)
         self.message = message
 
@@ -36,7 +36,7 @@ class AIAnalysisNotFoundError(Exception):
 class InvalidMediaError(Exception):
     """素材不是可分析的图片（路由层转为 400）。"""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
 

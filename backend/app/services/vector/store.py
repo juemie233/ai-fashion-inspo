@@ -104,7 +104,7 @@ def reset_connection() -> None:
         _db = None
 
 
-def _connect():
+def _connect() -> object:
     """连接 LanceDB 数据目录（懒加载并缓存连接，线程安全）。
 
     加锁 + 双重检查：首次从多个线程池线程并发触发时只初始化一次。
@@ -137,7 +137,7 @@ def _dim(kind: str) -> int:
     )
 
 
-def _table(kind: str):
+def _table(kind: str) -> object:
     """打开表，不存在时按 schema 创建。
 
     LanceDB 表结构（两张表共用）：

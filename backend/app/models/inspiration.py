@@ -2,9 +2,11 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    ColumnElement,
     DateTime,
     Float,
     ForeignKey,
@@ -211,7 +213,7 @@ class AIQualityReview(Base):
     log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="quality_reviews")
 
 
-def analysis_log_filter():
+def analysis_log_filter() -> ColumnElement[bool]:
     """返回「标签分析日志」的过滤条件（排除 quality_check 质量审核日志）。
 
     判断「是否已做标签分析」时应使用本条件：quality_check 只做二分类审核，
@@ -221,7 +223,7 @@ def analysis_log_filter():
     return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
 
 
-def latest_analysis_log_subquery():
+def latest_analysis_log_subquery() -> Any:
     """返回「每个素材最新一条标签分析日志」的子查询（inspiration_id, max_id）。
 
     分析状态的判定（done/error）应基于**最新一条**日志，而非「任意一条」：

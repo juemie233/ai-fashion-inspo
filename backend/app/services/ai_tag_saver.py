@@ -228,7 +228,7 @@ async def link_tag(
     inspiration_id: str,
     tag_id: int,
     confidence: float = 1.0,
-):
+) -> None:
     """将标签与素材关联，避免重复。纠竞态冲突，置信度更高时更新。"""
     result = await db.execute(
         select(InspirationTag).where(

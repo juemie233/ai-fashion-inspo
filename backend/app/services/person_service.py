@@ -23,7 +23,7 @@ STYLE_PROFILE_TOP_TAGS = 15
 class PersonNotFoundError(Exception):
     """人物或关联对象不存在（路由层转为 404）。"""
 
-    def __init__(self, message: str = "人物未找到"):
+    def __init__(self, message: str = "人物未找到") -> None:
         super().__init__(message)
         self.message = message
 
@@ -31,7 +31,7 @@ class PersonNotFoundError(Exception):
 class PersonConflictError(Exception):
     """人物数据冲突（路由层转为 409）。"""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
 

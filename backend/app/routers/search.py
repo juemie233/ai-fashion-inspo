@@ -71,7 +71,7 @@ async def search_inspirations(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-):
+) -> InspirationListOut:
     """按多个维度搜索素材，支持关键词、标签、颜色、日期、来源等组合筛选。"""
     include_list = (
         [t.strip() for t in include_tags.split(",") if t.strip()]
@@ -263,7 +263,7 @@ async def vector_search(
     file: UploadFile | None = File(default=None),
     top_k: int = Form(default=settings.vector_top_k_default, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
-):
+) -> VectorSearchOut:
     """语义搜索 / 以图搜图：接受文本或图片，返回 TopK 相似素材。
 
     请求体为 multipart/form-data：
@@ -321,7 +321,7 @@ async def vector_search(
 
 
 @router.get("/vector/status", response_model=VectorStatusOut)
-async def vector_search_status(db: AsyncSession = Depends(get_db)):
+async def vector_search_status(db: AsyncSession = Depends(get_db)) -> VectorStatusOut:
     """查询向量检索能力状态（LanceDB / 文本向量 / 图像向量 / 存量向量数量）。"""
     lancedb_available = vector_store.is_lancedb_available()
     text_count = (
@@ -345,7 +345,7 @@ async def similar_inspirations(
     inspiration_id: str,
     top_k: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
-):
+) -> SimilarOut:
     """根据图像向量 + 标签匹配加权排序寻找相似素材。
 
     优先使用图像向量（视觉相似，权重 0.6）+ 标签重合度（权重 0.4）加权排序；
@@ -379,7 +379,7 @@ async def search_suggestions(
     q: str = Query(..., min_length=1, description="搜索前缀"),
     limit: int = Query(8, ge=1, le=20),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict]:
     """根据输入前缀返回匹配的标签名建议（用于搜索框自动补全）。"""
     result = await db.execute(
         select(Tag.name, func.count(InspirationTag.inspiration_id).label("cnt"))
@@ -400,7 +400,7 @@ async def tag_cooccurrence(
     tag_name: str = Query(..., description="标签名"),
     limit: int = Query(10, ge=1, le=30),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取与指定标签经常一同出现的其他标签（共现分析）。"""
     tag_result = await db.execute(select(Tag.id).where(Tag.name == tag_name))
     tag_row = tag_result.first()

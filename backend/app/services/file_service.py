@@ -216,7 +216,7 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
     return rel_file_path, thumb_path
 
 
-def delete_files(file_path: str, thumbnail_path: str | None = None):
+def delete_files(file_path: str, thumbnail_path: str | None = None) -> None:
     """从磁盘删除文件及其缩略图（带错误日志，不抛异常）。"""
     if file_path:
         full_path = settings.storage_root / file_path

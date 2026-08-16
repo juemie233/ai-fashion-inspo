@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/manual-upload-auto-approve")
-async def get_manual_upload_auto_approve():
+async def get_manual_upload_auto_approve() -> dict[str, bool]:
     """获取手动上传素材是否默认免审核的配置。"""
     return {"enabled": settings.manual_upload_auto_approve}
 
@@ -22,7 +22,7 @@ async def get_manual_upload_auto_approve():
 async def set_manual_upload_auto_approve(
     enabled: bool = Query(...),
     persist: bool = Query(True, description="是否持久化写入 .env 文件"),
-):
+) -> dict[str, str | bool]:
     """设置手动上传素材是否默认免审核。
 
     ``enabled=True`` 时，手动上传的素材直接标记为已通过，跳过质量审核队列；
@@ -44,7 +44,7 @@ async def batch_quality_check(
     limit: int = Query(50, ge=1, le=200),
     random: bool = Query(False, description="是否随机抽取素材（含已审查）"),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str | int]:
     """批量审核图片素材。
 
     只处理图片素材；审核结果直接写回 quality_status（approved/rejected）。
@@ -82,7 +82,7 @@ async def batch_quality_check(
 
 
 @router.post("/quality-recheck")
-async def recheck_quality(db: AsyncSession = Depends(get_db)):
+async def recheck_quality(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     """重新审核所有已通过（approved）的图片素材。
 
     将 approved 重置为 pending 后提交任务队列批量审核，用最新审核标准重新判定。
@@ -124,7 +124,7 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/quality-stats")
-async def quality_stats(db: AsyncSession = Depends(get_db)):
+async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | float]:
     """质量审核统计：待审核/已通过/已拒绝数量及通过率（仅图片素材）。"""
     result = await db.execute(
         select(

@@ -22,7 +22,7 @@ router = APIRouter()
 async def reset_all_data(
     confirm: str = Query("no", description="输入 'yes' 二次确认删除所有数据"),
     _api_key: str = Depends(require_api_key),
-):
+) -> dict:
     """重置所有数据：清空数据库所有表 + 删除存储文件。
 
     危险操作，需 query 参数 confirm=yes 才执行。
@@ -88,7 +88,7 @@ async def reset_all_data(
         if dir_path.exists():
             file_count = len(list(dir_path.iterdir()))
 
-            def _rmtree(p=dir_path):
+            def _rmtree(p=dir_path) -> None:
                 shutil.rmtree(p)
                 p.mkdir(parents=True)
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -54,7 +55,7 @@ async def _ensure_model_installed(model_name: str) -> None:
 
 
 @router.get("/models")
-async def list_models():
+async def list_models() -> dict:
     """列出所有已安装的 Ollama 模型，含大小和修改时间，并标注视觉/嵌入角色。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -126,7 +127,7 @@ async def _get_ollama_uptime_seconds() -> int | None:
 
 
 @router.get("/status")
-async def ai_status():
+async def ai_status() -> dict:
     """AI 服务状态：Ollama 连接、版本号、运行时长、活跃视觉模型与文本嵌入模型。"""
     connected = False
     version = ""
@@ -148,10 +149,10 @@ async def ai_status():
     }
 
 
-def _pull_event_stream(model_name: str):
+def _pull_event_stream(model_name: str) -> AsyncIterator[str]:
     """拉取模型的 SSE 事件流（供下载与更新复用）。"""
 
-    async def event_stream():
+    async def event_stream() -> AsyncIterator[str]:
         try:
             async with httpx.AsyncClient(timeout=3600) as client:
                 async with client.stream(
@@ -185,14 +186,14 @@ def _pull_event_stream(model_name: str):
 @router.post("/models/pull")
 async def pull_model(
     model_name: str = Query(..., description="要下载的模型名称，如 gemma3:4b"),
-):
+) -> StreamingResponse:
     """拉取新模型（SSE 流式返回下载进度）。"""
     logger.info(f"开始拉取模型: {model_name}")
     return StreamingResponse(_pull_event_stream(model_name), media_type="text/event-stream")
 
 
 @router.get("/models/{model_name:path}/detail")
-async def model_detail(model_name: str):
+async def model_detail(model_name: str) -> dict:
     """获取模型完整元信息（调用 Ollama /api/show）。"""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -230,7 +231,7 @@ async def model_detail(model_name: str):
 
 
 @router.post("/models/{model_name:path}/update")
-async def update_model(model_name: str):
+async def update_model(model_name: str) -> StreamingResponse:
     """更新已安装模型到最新版（对同 tag 执行 pull，SSE 流式返回进度）。"""
     await _ensure_model_installed(model_name)
     logger.info(f"开始更新模型: {model_name}")
@@ -241,7 +242,7 @@ async def update_model(model_name: str):
 async def copy_model(
     source: str = Query(..., description="源模型名称"),
     destination: str = Query(..., description="目标模型名称"),
-):
+) -> dict[str, str]:
     """复制模型（调用 Ollama /api/copy）。"""
     if not destination.strip():
         raise HTTPException(status_code=400, detail="目标模型名称不能为空")
@@ -262,7 +263,7 @@ async def copy_model(
 
 
 @router.delete("/models/{model_name:path}")
-async def delete_model(model_name: str):
+async def delete_model(model_name: str) -> dict[str, str]:
     """删除指定模型。"""
     # 防误删：不允许删除当前活跃模型
     if model_name == settings.ollama_vision_model:
@@ -285,7 +286,7 @@ async def delete_model(model_name: str):
 
 
 @router.put("/models/active")
-async def set_active_model(model_name: str = Query(...)):
+async def set_active_model(model_name: str = Query(...)) -> dict[str, str]:
     """切换活跃视觉模型。"""
     await _ensure_model_installed(model_name)
 
@@ -296,7 +297,7 @@ async def set_active_model(model_name: str = Query(...)):
 
 
 @router.put("/models/embedding-active")
-async def set_embedding_model(model_name: str = Query(...)):
+async def set_embedding_model(model_name: str = Query(...)) -> dict[str, str]:
     """切换文本嵌入模型（向量检索文本侧使用，持久化到 .env）。"""
     await _ensure_model_installed(model_name)
 
@@ -309,13 +310,13 @@ async def set_embedding_model(model_name: str = Query(...)):
 
 
 @router.get("/gpu-stats")
-async def gpu_stats():
+async def gpu_stats() -> dict:
     """获取 GPU 显存占用和已加载模型信息（聚合逻辑在 app.services.gpu_service）。"""
     return await gpu_service.collect_gpu_stats()
 
 
 @router.post("/unload-model")
-async def unload_model(model_name: str = Query(...)):
+async def unload_model(model_name: str = Query(...)) -> dict[str, str]:
     """卸载指定模型释放显存（通知 Ollama 不再 keep alive）。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -340,7 +341,7 @@ async def unload_model(model_name: str = Query(...)):
 
 
 @router.get("/model-stats")
-async def model_stats(db: AsyncSession = Depends(get_db)):
+async def model_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """获取按模型聚合的分析统计：每个模型的分析次数、成功率、平均耗时、平均标签数。
 
     平均标签数按 ``ai_extracted_tags`` 结构化快照统计（仅统计该模型成功分析

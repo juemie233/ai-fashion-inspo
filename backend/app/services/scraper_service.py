@@ -97,7 +97,7 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str, bool]:
         sock.close()
 
 
-def _launch_scraper_process(task_id: int):
+def _launch_scraper_process(task_id: int) -> None:
     """启动独立子进程执行采集，完全隔离 Playwright。"""
     script = Path(__file__).parent.parent.parent / "scripts" / "run_scraper.py"
 
@@ -115,7 +115,7 @@ def _launch_scraper_process(task_id: int):
     _scraper_pids[task_id] = proc.pid
     _scraper_handles[task_id] = (proc, log_f)
 
-    def _reap():
+    def _reap() -> None:
         """后台线程等待子进程退出后回收句柄，异常退出时自动续采。"""
         returncode = proc.wait()
         log_f.close()
@@ -131,9 +131,9 @@ def _launch_scraper_process(task_id: int):
     threading.Thread(target=_reap, daemon=True).start()
 
 
-def _maybe_auto_retry(task_id: int):
+def _maybe_auto_retry(task_id: int) -> None:
     """任务子进程异常退出时，若任务仍可续采且未超重试上限，自动重新拉起。"""
-    async def _load():
+    async def _load() -> ScraperTask | None:
         async with async_session() as db:
             return await db.get(ScraperTask, task_id)
     try:
@@ -188,7 +188,6 @@ def _validate_cookie_platform(platform: str) -> str:
 
 async def check_cdp(port: int) -> dict:
     """检查指定端口的 Chrome 调试连接是否就绪。
-
     端口探测是阻塞 socket 操作（最长约 3 秒），放入线程池避免卡住事件循环。
     """
     ok, detail, is_chrome = await asyncio.to_thread(_check_cdp, port)
@@ -953,7 +952,7 @@ async def get_task_results(
     )
     items = items_result.scalars().all()
 
-    def _fmt(dt):
+    def _fmt(dt) -> str | None:
         return format_utc(dt)
 
     return {

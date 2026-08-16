@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.scraper import ScraperSchedule
 from app.schemas.scraper import (
     ScraperScheduleCreate,
     ScraperScheduleOut,
@@ -20,13 +21,13 @@ router = APIRouter(prefix="/api/scraper", tags=["scraper"])
 
 
 @router.get("/sources")
-async def scraper_sources():
+async def scraper_sources() -> dict:
     """列出所有可用的采集源及其状态。"""
     return await scraper_service.get_scraper_sources()
 
 
 @router.get("/stats")
-async def scraper_stats(days: int = 30):
+async def scraper_stats(days: int = 30) -> dict:
     """采集任务统计看板：近 N 天的总量/成功率/按平台与按日分布。"""
     if days < 1 or days > 365:
         days = 30
@@ -34,7 +35,7 @@ async def scraper_stats(days: int = 30):
 
 
 @router.get("/cdp-check/{port}")
-async def check_cdp_endpoint(port: int):
+async def check_cdp_endpoint(port: int) -> dict:
     """检查指定端口的 Chrome 调试连接是否就绪。"""
     return await scraper_service.check_cdp(port)
 
@@ -43,7 +44,7 @@ async def check_cdp_endpoint(port: int):
 
 
 @router.post("/chrome/start")
-async def chrome_start():
+async def chrome_start() -> dict:
     """由后端拉起采集专用 Chrome（调试模式）。
 
     启动流程含子进程拉起与最长 chrome_startup_timeout 秒的就绪轮询
@@ -53,13 +54,13 @@ async def chrome_start():
 
 
 @router.post("/chrome/stop")
-async def chrome_stop():
+async def chrome_stop() -> dict:
     """停止由后端拉起的采集专用 Chrome（含 taskkill 与等待，走线程池）。"""
     return await asyncio.to_thread(chrome_manager.stop)
 
 
 @router.get("/chrome/status")
-async def chrome_status():
+async def chrome_status() -> dict:
     """查询采集专用 Chrome 的连接状态（端口探测含 socket 超时，走线程池）。"""
     return await asyncio.to_thread(chrome_manager.status)
 
@@ -68,19 +69,19 @@ async def chrome_status():
 
 
 @router.get("/cookie-status")
-async def cookie_status(platform: str = "xiaohongshu"):
+async def cookie_status(platform: str = "xiaohongshu") -> dict:
     """检查指定平台的 Cookie 文件状态。"""
     return await scraper_service.get_cookie_status(platform)
 
 
 @router.post("/cookie-import")
-async def cookie_import(payload: dict):
+async def cookie_import(payload: dict) -> dict:
     """导入平台 Cookie（JSON 格式，自动校验平台合法性）。"""
     return await scraper_service.import_cookies(payload)
 
 
 @router.delete("/cookie/{platform}")
-async def delete_cookie(platform: str):
+async def delete_cookie(platform: str) -> dict:
     """删除指定平台的 Cookie 文件。"""
     return await scraper_service.delete_cookies(platform)
 
@@ -89,31 +90,31 @@ async def delete_cookie(platform: str):
 
 
 @router.get("/schedules", response_model=list[ScraperScheduleOut])
-async def list_schedules(db: AsyncSession = Depends(get_db)):
+async def list_schedules(db: AsyncSession = Depends(get_db)) -> list[ScraperSchedule]:
     """列出全部定时采集计划。"""
     return await scraper_service.list_schedules(db)
 
 
 @router.post("/schedules", response_model=ScraperScheduleOut, status_code=status.HTTP_201_CREATED)
-async def create_schedule(data: ScraperScheduleCreate, db: AsyncSession = Depends(get_db)):
+async def create_schedule(data: ScraperScheduleCreate, db: AsyncSession = Depends(get_db)) -> ScraperSchedule:
     """创建定时采集计划。"""
     return await scraper_service.create_schedule(db, data)
 
 
 @router.patch("/schedules/{schedule_id}", response_model=ScraperScheduleOut)
-async def update_schedule(schedule_id: int, data: ScraperScheduleUpdate, db: AsyncSession = Depends(get_db)):
+async def update_schedule(schedule_id: int, data: ScraperScheduleUpdate, db: AsyncSession = Depends(get_db)) -> ScraperSchedule:
     """更新定时采集计划（启用/停用/改间隔/改关键词等）。"""
     return await scraper_service.update_schedule(db, schedule_id, data)
 
 
 @router.delete("/schedules/{schedule_id}")
-async def delete_schedule(schedule_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_schedule(schedule_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """删除定时采集计划。"""
     return await scraper_service.delete_schedule(db, schedule_id)
 
 
 @router.post("/schedules/{schedule_id}/run")
-async def run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_db)):
+async def run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """立即执行一次定时采集计划。"""
     return await scraper_service.run_schedule_now(db, schedule_id)
 
@@ -122,14 +123,14 @@ async def run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/extension-tasks", status_code=status.HTTP_201_CREATED)
-async def create_extension_task(payload: dict, db: AsyncSession = Depends(get_db)):
+async def create_extension_task(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
     """浏览器插件采集会话开始：创建任务记录并返回 task_id。"""
     task = await scraper_service.create_extension_task(db, payload)
     return {"id": task.id}
 
 
 @router.post("/extension-tasks/{task_id}/complete")
-async def complete_extension_task(task_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+async def complete_extension_task(task_id: int, payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
     """浏览器插件采集会话结束：汇总发现/入库数量并标记任务完成。"""
     return await scraper_service.complete_extension_task(db, task_id, payload)
 
@@ -138,7 +139,7 @@ async def complete_extension_task(task_id: int, payload: dict, db: AsyncSession 
 
 
 @router.get("/tasks/{task_id}/log")
-async def task_log(task_id: int):
+async def task_log(task_id: int) -> dict:
     """获取采集任务的日志内容（最近 200 行）。"""
     return await scraper_service.get_task_log(task_id)
 
@@ -147,7 +148,7 @@ async def task_log(task_id: int):
 
 
 @router.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """取消运行中或等待中的采集任务（发送终止信号给子进程）。"""
     return await scraper_service.cancel_scraper_task(db, task_id)
 
@@ -161,7 +162,7 @@ async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
 async def create_scraper_task(
     data: ScraperTaskCreate,
     db: AsyncSession = Depends(get_db),
-):
+) -> ScraperTaskOut:
     """创建并启动一个新的采集任务。
 
     CDP 模式下会预先检测 Chrome 调试端口，不可用时返回明确的错误提示。
@@ -178,7 +179,7 @@ async def list_scraper_tasks(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取采集任务列表，支持筛选、排序与分页（返回 items + total + stats）。"""
     tasks, total, stats = await scraper_service.list_scraper_tasks(
         db, platform, status, sort, page, size
@@ -193,25 +194,25 @@ async def list_scraper_tasks(
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK)
-async def delete_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_single_task(task_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """物理删除单条采集任务（素材的 scraper_task_id 自动置 NULL，不删除素材）。"""
     return await scraper_service.delete_single_scraper_task(db, task_id)
 
 
 @router.delete("/tasks", status_code=status.HTTP_200_OK)
-async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)):
+async def clear_all_scraper_tasks(db: AsyncSession = Depends(get_db)) -> dict:
     """物理删除所有采集任务历史记录。"""
     return await scraper_service.clear_all_scraper_tasks(db)
 
 
 @router.post("/tasks/retry-failed")
-async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)):
+async def retry_failed_scraper_tasks(db: AsyncSession = Depends(get_db)) -> dict:
     """重试所有失败的采集任务，使用相同配置重新创建任务。"""
     return await scraper_service.retry_failed_scraper_tasks(db)
 
 
 @router.post("/tasks/{task_id}/retry")
-async def retry_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
+async def retry_single_task(task_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """重试单个失败任务，沿用断点续采（不重复采集已处理内容）。"""
     return await scraper_service.retry_single_task(db, task_id)
 
@@ -222,7 +223,7 @@ async def task_results(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """获取指定采集任务产出的素材列表（缩略图网格）。"""
     return await scraper_service.get_task_results(db, task_id, page, size)
 
@@ -232,7 +233,7 @@ async def task_results_batch_delete(
     task_id: int,
     payload: dict,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict:
     """批量将采集任务产出的指定素材移入垃圾桶（软删除，30 天内可恢复）。
 
     请求体: {"ids": ["id1", "id2", ...], "reason": "不喜欢"}

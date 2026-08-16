@@ -159,7 +159,7 @@ def get_image_embedding_status() -> dict:
     }
 
 
-def _load_clip_model():
+def _load_clip_model() -> object | None:
     """懒加载 CLIP 模型（仅在调用图像向量时加载一次，线程安全）。
 
     返回:

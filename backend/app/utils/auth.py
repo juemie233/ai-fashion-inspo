@@ -11,7 +11,7 @@ from app.config import settings
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def require_api_key(api_key: str | None = Security(api_key_header)):
+async def require_api_key(api_key: str | None = Security(api_key_header)) -> str | None:
     """验证 API Key。如果未配置 api_key（开发模式）则跳过。"""
     if not settings.api_key:
         return  # 开发模式：未设置密钥则跳过认证

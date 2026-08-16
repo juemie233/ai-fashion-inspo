@@ -39,7 +39,7 @@ async def _rebuild_vectors_for_tag_change(
 class TagNotFoundError(Exception):
     """标签或关联对象不存在（路由层转为 404）。"""
 
-    def __init__(self, message: str = "标签未找到"):
+    def __init__(self, message: str = "标签未找到") -> None:
         super().__init__(message)
         self.message = message
 
@@ -47,7 +47,7 @@ class TagNotFoundError(Exception):
 class TagConflictError(Exception):
     """标签名称或别名冲突（路由层转为 409）。"""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
 
@@ -197,7 +197,7 @@ async def find_similar_tags(
     return sorted(similar, key=lambda t: _similarity(name, t.name), reverse=True)
 
 
-async def merge_tags(db: AsyncSession, source_id: int, target_id: int):
+async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
     """将源标签合并到目标标签：重新关联所有素材，删除源标签。"""
     # 查找源标签的所有关联
     result = await db.execute(
@@ -499,7 +499,7 @@ async def find_duplicate_tag_pairs(
     result = await db.execute(select(Tag).order_by(Tag.name))
     all_tags = result.scalars().all()
 
-    def _compute_pairs():
+    def _compute_pairs() -> list[dict]:
         pairs = []
         for i in range(len(all_tags)):
             for j in range(i + 1, len(all_tags)):

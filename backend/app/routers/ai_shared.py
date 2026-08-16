@@ -44,7 +44,7 @@ def set_queue_paused(paused: bool) -> None:
     _queue_paused = paused
 
 
-async def _run_analysis(inspiration_id: str, file_path: str):
+async def _run_analysis(inspiration_id: str, file_path: str) -> None:
     """后台任务：对图片执行 AI 分析并保存标签（带并发控制 + 任务追踪）。"""
     if inspiration_id in _active_analyses:
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
@@ -130,7 +130,7 @@ async def _update_env_file(updates: dict[str, str]) -> None:
     """将键值对更新写入 .env 文件（保留其他配置不变）。"""
     env_path = Path(__file__).parent.parent.parent / ".env"
 
-    def _write():
+    def _write() -> None:
         if env_path.exists():
             content = env_path.read_text(encoding="utf-8")
         else:
