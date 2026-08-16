@@ -74,7 +74,11 @@ export function useScraperResults(deps: ScraperResultsDeps) {
 
   function toggleSelect(id: string) {
     const n = new Set(selectedIds.value)
-    n.has(id) ? n.delete(id) : n.add(id)
+    if (n.has(id)) {
+      n.delete(id)
+    } else {
+      n.add(id)
+    }
     selectedIds.value = n
   }
 

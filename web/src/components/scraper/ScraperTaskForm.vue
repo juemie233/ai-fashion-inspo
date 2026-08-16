@@ -71,7 +71,11 @@ const cdpStatus = ref<'idle' | 'ok' | 'fail'>('idle')
 // 复制文本到剪贴板（复用 utils/clipboard 实现）
 async function copyText(text: string) {
   const ok = await copyToClipboard(text)
-  ok ? message.success('已复制') : message.error('复制失败')
+  if (ok) {
+    message.success('已复制')
+  } else {
+    message.error('复制失败')
+  }
 }
 
 async function testCdp() {

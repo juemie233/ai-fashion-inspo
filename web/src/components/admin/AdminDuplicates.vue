@@ -78,7 +78,7 @@ const dupColumns = [
       <p style="color: #f0a020; margin-bottom: 12px">
         ⚠️ 发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费 {{ fmtSize(dupBytes) }} 空间
       </p>
-      <div v-for="(group, gi) in duplicates.slice(0, 20)" :key="group.hash" style="margin-bottom: 16px">
+      <div v-for="group in duplicates.slice(0, 20)" :key="group.hash" style="margin-bottom: 16px">
         <n-tag type="info" size="tiny" style="margin-bottom: 6px">
           {{ group.files.length }} 个相同文件 ({{ formatSize(group.files[0].size_bytes) }} × {{ group.files.length }})
         </n-tag>

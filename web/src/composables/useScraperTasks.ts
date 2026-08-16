@@ -228,7 +228,11 @@ export function useScraperTasks() {
   /** 复制文本到剪贴板（复用 utils/clipboard 实现，成功/失败给出提示） */
   async function copyText(text: string) {
     const ok = await copyToClipboard(text)
-    ok ? message.success('已复制') : message.error('复制失败')
+    if (ok) {
+      message.success('已复制')
+    } else {
+      message.error('复制失败')
+    }
   }
 
   /** 状态标签颜色：复用 taskLabel 的映射（completed 与 success 语义一致） */

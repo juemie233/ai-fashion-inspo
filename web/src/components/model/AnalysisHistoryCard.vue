@@ -54,7 +54,11 @@ const emit = defineEmits<{
 /** 复制文本到剪贴板（复用 utils/clipboard 实现） */
 async function copyText(text: string) {
   const ok = await copyToClipboard(text)
-  ok ? message.success('已复制到剪贴板') : message.error('复制失败')
+  if (ok) {
+    message.success('已复制到剪贴板')
+  } else {
+    message.error('复制失败')
+  }
 }
 
 /** 状态筛选变化：同步 v-model 并触发加载 */
