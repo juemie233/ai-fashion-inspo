@@ -6,6 +6,8 @@
 #   - restart.sh：先杀后启（全量重启），适合手动「彻底重启」。
 #   - 本脚本：健康检查后只启动缺失的服务，已在运行则跳过，天然幂等。
 #
+# 后端「不」使用 uvicorn --reload：Windows 下 --reload 在文件变更重载时
+# 会以 OSError [WinError 87] 崩溃，导致后端挂掉（详见 restart.sh 说明）。
 # 通过「原子锁」保证并发调用（如多个会话同时启动）时只有一个实例真正执行，
 # 其余实例直接退出，避免并发重启互相抢端口、杀进程导致服务崩溃。
 
@@ -84,7 +86,8 @@ if backend_healthy; then
 else
   echo "  后端未运行，启动中..."
   cd backend
-  nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload \
+  # PYTHONUTF8=1 让中文日志以 UTF-8 落盘，避免 Windows 默认 GBK 导致日志乱码
+  PYTHONUTF8=1 nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
     > "../$LOG_DIR/backend.log" 2>&1 &
   cd ..
   echo "  后端 PID: $! (日志: $LOG_DIR/backend.log)"

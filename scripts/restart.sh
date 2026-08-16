@@ -2,9 +2,10 @@
 # AI 穿搭素材库 — 一键重启前后端
 # 用法: bash scripts/restart.sh
 #
-# 解决 Windows 上 uvicorn --reload 不可靠的问题：
-#   - --reload 的文件监听对子目录变更有时不触发，导致运行旧代码
-#   - 强制杀进程时容易残留 multiprocessing worker 子进程占用端口
+# 说明：后端「不」使用 uvicorn --reload。
+#   Windows 下 --reload 走 multiprocessing.spawn，文件变更触发重载时会以
+#   OSError: [WinError 87] 参数错误 崩溃（后端挂掉）；且强杀时易残留 spawn
+#   worker 子进程占用端口。本脚本靠「先杀后启」拿到最新代码，无需 --reload。
 # 本脚本可靠地终止所有相关进程（含孤儿 worker）后重启。
 
 cd "$(dirname "$0")/.."
@@ -85,7 +86,8 @@ sleep 1
 echo ""
 echo ">>> [4/6] 启动后端 ..."
 cd backend
-nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload \
+# PYTHONUTF8=1 让中文日志以 UTF-8 落盘，避免 Windows 默认 GBK 导致日志乱码
+PYTHONUTF8=1 nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
   > "../$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 cd ..
