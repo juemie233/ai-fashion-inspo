@@ -201,7 +201,7 @@ onUnmounted(() => { stopPoll() })
 
   <!-- 定时采集 Tab -->
   <n-tab-pane name="schedules" tab="定时采集">
-    <ScraperScheduleTab />
+    <ScraperScheduleTab v-if="activeTab === 'schedules'" />
   </n-tab-pane>
 </n-tabs>
 </div>

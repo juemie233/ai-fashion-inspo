@@ -157,7 +157,12 @@ class TestSchedules:
             "/api/scraper/schedules", json={"platform": "douyin", "keywords": ["x"], "interval_minutes": 5}
         ).status_code == 422  # 间隔低于下限
 
-    def test_run_now_creates_task(self, client):
+    def test_run_now_creates_task(self, client, monkeypatch):
+        from app.services import scraper_service
+
+        # 定时计划「立即执行」对小红书做 CDP 预检；测试环境无 Chrome，mock 为可用
+        monkeypatch.setattr(scraper_service, "_check_cdp", lambda port, timeout=2.0: (True, "ok", True))
+
         s = self._create(client, platform="xiaohongshu", keywords=["法式"], sort_mode="latest")
         r = client.post(f"/api/scraper/schedules/{s['id']}/run")
         assert r.status_code == 200
@@ -169,6 +174,67 @@ class TestSchedules:
         import json as _json
 
         assert _json.loads(t["config"])["sort_mode"] == "latest"
+
+    def test_run_now_xiaohongshu_requires_chrome(self, client, monkeypatch):
+        """小红书计划「立即执行」前做 CDP 预检，Chrome 不可用时返回 400。"""
+        from app.services import scraper_service
+
+        monkeypatch.setattr(
+            scraper_service, "_check_cdp", lambda port, timeout=2.0: (False, "端口无响应", False)
+        )
+        s = self._create(client, platform="xiaohongshu", keywords=["法式"])
+        r = client.post(f"/api/scraper/schedules/{s['id']}/run")
+        assert r.status_code == 400
+        assert "Chrome" in r.json()["detail"]
+
+    def test_advance_next_run_keeps_rhythm(self):
+        """next_run_at 从原到期点推进，而非从当前时间重置（防节奏漂移）。"""
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.scraper_service import _advance_next_run
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # 单周期内迟到：从到期点 + 一个间隔
+        due = now - timedelta(minutes=30)
+        assert _advance_next_run(60, due, now) == due + timedelta(minutes=60)
+        # 停机超过一个周期：推进到未来的第一个执行点
+        due2 = now - timedelta(hours=3)
+        assert _advance_next_run(60, due2, now) == due2 + timedelta(minutes=60) * 4
+
+    async def test_run_now_advances_clock_so_auto_loop_skips(self, client):
+        """「立即执行」到期计划后推进 next_run_at，自动循环不再重复触发。"""
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import func, select
+
+        from app.database import async_session
+        from app.models.scraper import ScraperSchedule, ScraperTask
+        from app.services import scraper_service
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        due = now - timedelta(minutes=10)
+
+        async with async_session() as db:
+            sched = ScraperSchedule(
+                platform="douyin", keywords='["穿搭"]', max_count=10,
+                enabled=True, interval_minutes=60, next_run_at=due, run_count=0,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+            sid = sched.id
+
+        # 立即执行（douyin 无 CDP 预检）
+        async with async_session() as db:
+            await scraper_service.run_schedule_now(db, sid)
+
+        # 立即执行已把 next_run_at 推进到未来，自动循环不应再触发
+        async with async_session() as db:
+            assert await scraper_service.run_due_schedules(db) == 0
+
+        async with async_session() as db:
+            task_count = await db.scalar(select(func.count(ScraperTask.id)))
+            assert task_count == 1  # 仅「立即执行」创建的那一个任务
 
 
 class TestCookieManagement:

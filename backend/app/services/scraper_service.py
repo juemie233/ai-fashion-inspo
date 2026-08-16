@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -425,6 +425,19 @@ def _build_schedule_task_config(sched: ScraperSchedule) -> dict:
     return config
 
 
+def _advance_next_run(interval_minutes: int, due_at: datetime, now: datetime) -> datetime:
+    """从到期点推进到未来的下一个执行槽，保持固定节奏。
+
+    不直接用 now + interval，是为了避免服务停机或手动执行导致节奏漂移：
+    例如每天 08:00 到期的计划，若 09:30 才恢复执行，下次仍应是次日 08:00
+    而非 09:30。
+    """
+    nxt = due_at
+    while nxt <= now:
+        nxt += timedelta(minutes=interval_minutes)
+    return nxt
+
+
 async def create_schedule(db: AsyncSession, data: ScraperScheduleCreate) -> ScraperSchedule:
     """创建定时采集计划。"""
     platform = _validate_schedule_platform(data.platform)
@@ -451,7 +464,7 @@ async def create_schedule(db: AsyncSession, data: ScraperScheduleCreate) -> Scra
 
 
 async def list_schedules(db: AsyncSession) -> list[ScraperSchedule]:
-    """列出全部定时采集计划（按创建时间倒序）。"""
+    """列出全部定时采集计划（按 ID 倒序，即创建顺序倒序）。"""
     result = await db.execute(select(ScraperSchedule).order_by(ScraperSchedule.id.desc()))
     return list(result.scalars().all())
 
@@ -506,10 +519,30 @@ async def delete_schedule(db: AsyncSession, schedule_id: int) -> dict:
 
 
 async def run_schedule_now(db: AsyncSession, schedule_id: int) -> dict:
-    """立即执行一次定时采集计划：创建采集任务并启动。"""
+    """立即执行一次定时采集计划：创建采集任务并启动。
+
+    小红书计划复用 CDP 预检，Chrome 调试端口不可用时直接返回明确错误，
+    避免前端提示「已触发」但子进程实际连不上 Chrome 而立刻失败。
+    """
     sched = await db.get(ScraperSchedule, schedule_id)
     if not sched:
         raise HTTPException(status_code=404, detail="定时计划不存在")
+
+    if sched.platform == "xiaohongshu":
+        ok, detail, is_chrome = _check_cdp(settings.chrome_debug_port)
+        if not ok:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Chrome 调试端口不可用: {detail}。"
+                    "请先在「采集任务」页签启动调试模式 Chrome 后再执行定时计划。"
+                ),
+            )
+        if not is_chrome:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CDP 采集必须使用 Google Chrome（非 360 极速浏览器等衍生版本）: {detail}",
+            )
 
     task = ScraperTask(
         platform=sched.platform,
@@ -520,12 +553,13 @@ async def run_schedule_now(db: AsyncSession, schedule_id: int) -> dict:
     await db.flush()
     await db.refresh(task)
 
+    now = _utcnow()
     sched.last_task_id = task.id
-    sched.last_run_at = _utcnow()
+    sched.last_run_at = now
     sched.run_count += 1
-    # 保持原有节奏：下次执行时间从最近一次到期点推进，而非从手动执行时间重置
-    if sched.enabled and sched.next_run_at is not None and sched.next_run_at <= _utcnow():
-        sched.next_run_at = _utcnow() + timedelta(minutes=sched.interval_minutes)
+    # 保持原有节奏：仅当计划已到期时，从到期点推进到未来，而非从手动执行时间重置
+    if sched.enabled and sched.next_run_at is not None and sched.next_run_at <= now:
+        sched.next_run_at = _advance_next_run(sched.interval_minutes, sched.next_run_at, now)
     await db.commit()
 
     _launch_scraper_process(task.id)
@@ -537,6 +571,10 @@ async def run_due_schedules(db: AsyncSession) -> int:
 
     创建任务失败（如 Chrome 未启动）时记录日志并照常推进 next_run_at，
     避免同一计划反复重试刷屏；具体失败原因可从对应任务记录中查看。
+
+    通过条件 UPDATE（乐观锁）原子推进 next_run_at：仅当 next_run_at 仍为
+    本循环读取到的到期值时生效。若「立即执行」已在同一次到期点抢先推进，
+    rowcount 为 0，跳过本次避免重复触发两次。
     """
     now = _utcnow()
     result = await db.execute(
@@ -552,6 +590,23 @@ async def run_due_schedules(db: AsyncSession) -> int:
 
     triggered = 0
     for sched in due:
+        # 乐观锁认领：从到期点推进到未来；已被其它入口抢先推进则跳过
+        claimed = await db.execute(
+            update(ScraperSchedule)
+            .where(
+                ScraperSchedule.id == sched.id,
+                ScraperSchedule.enabled.is_(True),
+                ScraperSchedule.next_run_at == sched.next_run_at,
+            )
+            .values(
+                next_run_at=_advance_next_run(sched.interval_minutes, sched.next_run_at, now),
+                last_run_at=now,
+                run_count=ScraperSchedule.run_count + 1,
+            )
+        )
+        if claimed.rowcount == 0:
+            continue
+
         launched_id: int | None = None
         try:
             task = ScraperTask(
@@ -566,11 +621,12 @@ async def run_due_schedules(db: AsyncSession) -> int:
         except Exception as e:
             logger.warning(f"[定时采集] 计划 {sched.id} 创建任务失败: {e}")
 
-        sched.last_run_at = now
-        sched.next_run_at = now + timedelta(minutes=sched.interval_minutes)
-        sched.run_count += 1
         if launched_id is not None:
-            sched.last_task_id = launched_id
+            await db.execute(
+                update(ScraperSchedule)
+                .where(ScraperSchedule.id == sched.id)
+                .values(last_task_id=launched_id)
+            )
         await db.commit()
         if launched_id is not None:
             _launch_scraper_process(launched_id)
