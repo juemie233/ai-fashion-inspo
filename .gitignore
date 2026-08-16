@@ -42,6 +42,8 @@ mobile/ios/
 # Logs
 *.log
 logs/
+*.err
+*.out
 
 # Prompt version history (runtime state)
 prompt_versions.json
