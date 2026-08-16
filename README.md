@@ -107,6 +107,8 @@ chrome_debug_port: int = 9222
 # Python 后端
 cd backend
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+# 可选：运行自动化测试时的测试依赖
+pip install -r requirements-dev.txt -i https://mirrors.aliyun.com/pypi/simple/
 
 # Node.js 前端
 cd ../web
@@ -422,6 +424,23 @@ fashion-inspo/
 | `ai_generated` | AI 分析自动提取 | 紫色 |
 | `manual` | 用户手动创建 / 导入 | 蓝色 |
 
+### 数据库迁移（Alembic）
+
+数据库 schema 由 Alembic 管理（`backend/alembic/`）。后端 / worker 启动时自动调用 `run_migrations()`：全新空库执行 baseline 建表，历史库自动 `stamp` 到 baseline，已管理库执行增量升级；`ensure_schema()`（手写补列）保留作兼容兜底。
+
+**新增字段/表时**（不再往 `db_migrations.py` 的 `_SCHEMA_COLUMNS` 手写追加）：
+
+```bash
+cd backend
+# 1. 修改 ORM 模型后生成迁移脚本（对比模型与库的差异）
+alembic revision --autogenerate -m "描述"
+
+# 2. 应用到数据库（或重启后端自动执行）
+alembic upgrade head
+```
+
+> 生成 baseline / 测试时可用环境变量 `ALEMBIC_DB_URL` 指向临时库，避免触碰真实数据。
+
 ## API 概览
 
 ### 素材管理
@@ -490,6 +509,23 @@ fashion-inspo/
 | `GET` | `/api/tags/top` | 热门标签排行 |
 | `GET` | `/api/tags/{id}/trend` | 标签使用趋势（按日/周/月） |
 
+### 人物管理
+
+| 方法 | 路径 | 说明 |
+| ------ | ------ | ------ |
+| `GET` | `/api/persons` | 人物列表（分页 / 名称搜索 / 内容类型 / 平台筛选） |
+| `POST` | `/api/persons` | 创建人物（职业模特 / 穿搭博主） |
+| `GET` | `/api/persons/{id}` | 人物详情（含素材数与风格画像：高频标签 / 类别分布 / 趋势） |
+| `PATCH` | `/api/persons/{id}` | 更新人物（显式传 `null` 可清空可空字段） |
+| `DELETE` | `/api/persons/{id}` | 删除人物（需 API Key；素材保留，仅解除关联） |
+| `GET` | `/api/persons/{id}/inspirations` | 该人物的素材列表（分页 + 排序） |
+| `GET` | `/api/persons/top` | 热门人物排行（按素材数） |
+| `GET` | `/api/persons/suggestions` | 按名称建议人物（用于选择去重） |
+| `POST` | `/api/inspirations/{id}/persons` | 给素材批量关联人物（幂等，需 API Key 保护清单外） |
+| `DELETE` | `/api/inspirations/{id}/persons/{pid}` | 解除素材与人物关联 |
+
+> **内容类型 UI 区分：** 人物以 `person_type` 区分「职业模特（model）/ 穿搭博主（blogger）」，列表筛选、类型徽标、表单选择贯穿前端呈现；关联一律使用 `person_id`（人物名不唯一，规避同名歧义）。
+
 ### AI 分析
 
 | 方法 | 路径 | 说明 |
@@ -507,7 +543,7 @@ fashion-inspo/
 | `GET` | `/api/ai/unanalyzed-ids` | 未分析素材 ID 列表 |
 | `GET` | `/api/ai/active-analyses` | 正在分析的任务 |
 | `GET` | `/api/ai/history` | 分析历史（分页/筛选） |
-| `GET` | `/api/ai/history/{id}` | 分析详情（含标签） |
+| `GET` | `/api/ai/history/{id}` | 分析详情（含标签、结构化快照、质量审核、版本信息） |
 | `DELETE` | `/api/ai/history/{id}` | 删除单条日志 |
 | `DELETE` | `/api/ai/history/failed/all` | 删除所有失败日志 |
 | `POST` | `/api/ai/history/batch-delete` | 批量删除分析记录 |
@@ -519,11 +555,31 @@ fashion-inspo/
 | `DELETE` | `/api/ai/queue/{id}` | 取消排队任务 |
 | `POST` | `/api/ai/queue/pause` | 暂停队列 |
 | `POST` | `/api/ai/queue/resume` | 恢复队列 |
-| `GET` | `/api/ai/compare/{id}` | 分析结果对比（标签差异+耗时） |
+| `GET` | `/api/ai/compare/{id}` | 分析结果对比（结构化标签差异 + 耗时 + 版本信息） |
 | `GET` | `/api/ai/quality-dashboard` | 分析质量仪表盘（覆盖率/趋势/问题素材） |
 | `GET` | `/api/ai/prompt/versions` | Prompt 版本历史 |
 | `POST` | `/api/ai/prompt/save-version` | 保存当前 Prompt 为版本 |
 | `POST` | `/api/ai/prompt/rollback` | 回滚 Prompt 到指定版本 |
+
+> **AI 分析结果结构化存储（多版本对比与追溯）：**
+>
+> 每次分析/审核的结构化结果落为独立数据表，与素材当前状态（全量标签、`quality_status`）解耦，支撑跨模型/Prompt 版本的历史追溯：
+>
+> | 表 | 说明 |
+> | ------ | ------ |
+> | `ai_extracted_tags` | 单次分析「提取了哪些标签」的快照（log_id + tag_id + confidence） |
+> | `ai_quality_review` | 单次审核的判定（result / reason / reviewed_at） |
+>
+> `ai_analysis_log` 新增 `prompt_version`（所用 Prompt 内容哈希前 8 位）与 `model_version` 字段，`GET /api/ai/history/{id}` 返回 `structured_tags` / `quality_reviews` / 版本字段；`GET /api/ai/compare/{id}` 的标签差异基于结构化快照精确计算（存量日志自动回退实时解析）。
+>
+> 历史数据回填（一次性迁移，从 `raw_response` 解析写入快照与版本字段）：
+>
+> ```bash
+> cd backend
+> python scripts/backfill_structured.py            # 预览将处理多少条
+> python scripts/backfill_structured.py --apply    # 实际写入
+> ```
+
 
 ### 质量审核
 
@@ -645,6 +701,39 @@ bash scripts/restart.sh
 **前端接入**：浏览器控制台执行 `localStorage.setItem('apiKey', '<密钥>')` 后刷新页面，前端请求会自动附加 `X-API-Key` 头；或构建时设置 `VITE_API_KEY` 环境变量。
 
 **说明**：`X-API-Key` 为简单共享密钥认证，仅防误操作/未授权调用；不替代 HTTPS/用户体系。破坏性接口清单维护于 `backend/app/utils/auth.py` 的 `DESTRUCTIVE_ROUTES`，新增破坏性接口时在其中追加一行即可。
+
+## 自动化测试
+
+核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
+
+### 后端（pytest，63 用例）
+
+```bash
+# 首次：安装测试依赖
+cd backend
+pip install -r requirements-dev.txt -i https://mirrors.aliyun.com/pypi/simple/
+
+# 运行全部测试（自动使用临时数据库与临时存储目录，不触碰真实数据）
+pytest
+```
+
+覆盖范围：
+- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除
+- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）
+
+### 前端（vitest，26 用例）
+
+```bash
+cd web
+npm test
+```
+
+覆盖范围：`format` / `sourceLabel` / `taskLabel` 纯函数、`useSplitResize` 拖拽 composable、`persons` store（mock API + 请求序号防乱序）。
+
+### 约定
+
+- 测试使用**临时数据库与临时存储目录**，不会读写真实 `storage/` 与 `fashion_inspo.db`；如误将测试文件写入真实目录，用 `python scripts/clean_test_files.py --delete` 清理
+- 新增破坏性接口或修改核心链路（软删除/垃圾桶/去重/认证）时，请在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
 
 ## 环境要求
 

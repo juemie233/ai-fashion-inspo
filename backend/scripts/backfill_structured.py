@@ -16,6 +16,11 @@ raw_response 重新解析，写入结构化标签快照，并回填版本字段�
 import argparse
 import asyncio
 import hashlib
+import sys
+from pathlib import Path
+
+# 将 backend 目录加入 sys.path（脚本独立运行于 scripts/ 下）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import func, select
 
