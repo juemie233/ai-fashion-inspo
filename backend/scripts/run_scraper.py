@@ -320,15 +320,33 @@ def _download_batch(
     _BATCH_COMMIT = 20
     batch_conn = None
     pending_in_batch = 0
+    # 本批待回填向量的素材 ID：攒批后合并为一个向量回填任务，
+    # 避免每张图各建一个任务导致任务队列膨胀（此前 75 张图=75 个任务）。
+    backfill_ids: list[str] = []
     try:
         batch_conn = _sqlite3.connect(str(db_path))
     except Exception:
         batch_conn = None
 
     def _commit_batch():
-        """提交当前攒批的写入（无写入或连接不可用时跳过）。"""
+        """提交当前攒批的写入（无写入或连接不可用时跳过）。
+
+        提交前把本批素材合并为一个向量回填任务入队，保证素材行与
+        回填任务在同一事务内提交（要么都写，要么都回滚）。
+        """
         nonlocal pending_in_batch
         if batch_conn is not None and pending_in_batch > 0:
+            if backfill_ids:
+                now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                batch_conn.execute(
+                    "INSERT INTO task_queue (type, status, progress, total, done, result, "
+                    "max_retries, retry_count, created_at, updated_at) "
+                    "VALUES ('vector_backfill', 'pending', 0, ?, 0, ?, 2, 0, ?, ?)",
+                    (len(backfill_ids),
+                     json.dumps({"inspiration_ids": list(backfill_ids)}),
+                     now_str, now_str),
+                )
+                backfill_ids.clear()
             batch_conn.commit()
             pending_in_batch = 0
 
@@ -398,13 +416,8 @@ def _download_batch(
                         "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
                         (img_url,),
                     )
-                    # 向量回填任务入队（与素材行同事务，保证一致）
-                    batch_conn.execute(
-                        "INSERT INTO task_queue (type, status, progress, total, done, result, "
-                        "max_retries, retry_count, created_at, updated_at) "
-                        "VALUES ('vector_backfill', 'pending', 0, 1, 0, ?, 2, 0, ?, ?)",
-                        (json.dumps({"inspiration_ids": [insp_id]}), now_str, now_str),
-                    )
+                    # 向量回填任务攒批：本批素材合并为一个任务，在 _commit_batch 时入队
+                    backfill_ids.append(insp_id)
                     pending_in_batch += 1
                     if pending_in_batch >= _BATCH_COMMIT:
                         _commit_batch()

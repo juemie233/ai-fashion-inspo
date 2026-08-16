@@ -150,7 +150,12 @@ def _table(kind: str):
 
     db = _connect()
     name = _table_name(kind)
-    if name in db.list_tables():
+    # LanceDB 新版 list_tables() 返回 TableNames 命名元组（含 .tables 列表），
+    # 旧版返回 list[str]；统一取表名列表，否则 `name in 对象` 恒为 False，
+    # 导致每次都对已存在的表重复 create_table 抛「Table already exists」。
+    tables = db.list_tables()
+    table_names = tables.tables if hasattr(tables, "tables") else tables
+    if name in table_names:
         return db.open_table(name)
 
     schema = pa.schema([
@@ -160,7 +165,14 @@ def _table(kind: str):
         pa.field("created_at", pa.string()),
     ])
     logger.info(f"创建 LanceDB 表: {name} (维度 {_dim(kind)})")
-    return db.create_table(name, schema=schema)
+    try:
+        return db.create_table(name, schema=schema)
+    except Exception as e:
+        # 多进程并发首建表：另一进程已抢先创建，回退 open_table 而非让写失败
+        if "already exists" in str(e).lower():
+            logger.warning(f"LanceDB 表已存在（并发建表），回退 open_table: {name}")
+            return db.open_table(name)
+        raise
 
 
 def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
