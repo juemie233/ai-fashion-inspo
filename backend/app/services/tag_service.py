@@ -16,6 +16,26 @@ from app.utils.tag_normalizer import normalize_tag_name_async
 logger = logging.getLogger(__name__)
 
 
+async def _rebuild_vectors_for_tag_change(
+    db: AsyncSession, inspiration_ids: list[str]
+) -> None:
+    """标签变更（合并/删除/重命名/解除关联）后，为受影响素材重建文本向量。
+
+    语义搜索的文本向量基于素材标签名拼接生成，标签变更会使其陈旧；这里把
+    受影响素材入队到向量回填任务（由 worker 异步执行），入队失败静默降级，
+    不影响标签操作主流程。
+    """
+    ids = list(dict.fromkeys(inspiration_ids))
+    if not ids:
+        return
+    try:
+        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+
+        await create_vector_backfill_task(db, ids)
+    except Exception as e:
+        logger.warning(f"标签变更后向量重建入队失败（忽略）: {e}")
+
+
 class TagNotFoundError(Exception):
     """标签或关联对象不存在（路由层转为 404）。"""
 
@@ -176,6 +196,8 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int):
         select(InspirationTag).where(InspirationTag.tag_id == source_id)
     )
     links = result.scalars().all()
+    # 收集受影响素材：合并会改变这些素材的标签集合，需重建其文本向量
+    affected_ids = [link.inspiration_id for link in links]
 
     for link in links:
         # 检查该素材是否已关联目标标签
@@ -222,6 +244,9 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int):
         await db.delete(source_tag)
 
     await db.flush()
+
+    # 合并后为受影响素材重建文本向量（异步入队，由 worker 执行）
+    await _rebuild_vectors_for_tag_change(db, affected_ids)
 
 
 async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag:
@@ -323,9 +348,19 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     """批量删除标签及其所有关联，返回被删除的标签列表。"""
     result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
     tags = result.scalars().all()
+    # 删除前收集受影响素材（被删标签的关联），删除后用于重建文本向量
+    affected_ids = (
+        await db.execute(
+            select(InspirationTag.inspiration_id)
+            .where(InspirationTag.tag_id.in_(tag_ids))
+            .distinct()
+        )
+    ).scalars().all()
     for tag in tags:
         await db.delete(tag)
     await db.flush()
+    # 删除标签后素材标签集合变了，重建其文本向量（异步入队）
+    await _rebuild_vectors_for_tag_change(db, affected_ids)
     return tags
 
 
@@ -380,11 +415,24 @@ async def batch_rename_tags(
                         f"重命名冲突: '{tag.name}' → '{new_name}' 与已有标签同名"
                     )
     updated = 0
+    renamed_tag_ids: list[int] = []
     for tag in tags:
         if find_str in tag.name:
             tag.name = tag.name.replace(find_str, replace_str)
+            renamed_tag_ids.append(tag.id)
             updated += 1
     await db.commit()
+
+    # 重命名后标签名变了，文本向量（基于标签名拼接）需重建，异步入队
+    if renamed_tag_ids:
+        affected_ids = (
+            await db.execute(
+                select(InspirationTag.inspiration_id)
+                .where(InspirationTag.tag_id.in_(renamed_tag_ids))
+                .distinct()
+            )
+        ).scalars().all()
+        await _rebuild_vectors_for_tag_change(db, affected_ids)
     return updated
 
 
@@ -473,6 +521,8 @@ async def batch_remove_tag_inspirations(
         )
     )
     await db.commit()
+    # 解除关联后素材标签集合变了，重建其文本向量（异步入队）
+    await _rebuild_vectors_for_tag_change(db, list(inspiration_ids))
     return result.rowcount
 
 

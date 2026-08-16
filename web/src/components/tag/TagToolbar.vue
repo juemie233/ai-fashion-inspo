@@ -7,6 +7,7 @@ const searchQuery = defineModel<string>('searchQuery', { required: true })
 const filterCategory = defineModel<string | null>('filterCategory', { required: true })
 const filterSource = defineModel<string | null>('filterSource', { required: true })
 const sortMode = defineModel<'usage' | 'name' | 'custom'>('sortMode', { required: true })
+const duplicateThreshold = defineModel<number>('duplicateThreshold', { required: true })
 
 defineProps<{
   selectedCount: number
@@ -111,6 +112,19 @@ const emit = defineEmits<{
 
     <n-divider vertical />
 
+    <n-select
+      v-model:value="duplicateThreshold"
+      :options="[
+        { label: '≥60%', value: 0.6 },
+        { label: '≥70%', value: 0.7 },
+        { label: '≥75%', value: 0.75 },
+        { label: '≥80%', value: 0.8 },
+        { label: '≥90%', value: 0.9 },
+      ]"
+      size="tiny"
+      style="width:80px"
+      title="相似度阈值"
+    />
     <n-button size="small" @click="emit('find-duplicates')" :loading="scanning">
       发现重复
     </n-button>

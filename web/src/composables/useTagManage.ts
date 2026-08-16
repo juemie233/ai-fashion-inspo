@@ -44,6 +44,8 @@ export function useTagManage() {
   const scanningDuplicates = ref(false)
   const duplicatePairs = ref<DuplicatePair[]>([])
   const showDuplicatesPanel = ref(false)
+  /** 相似度阈值（可调）：低于该值不视为重复 */
+  const duplicateThreshold = ref(0.75)
 
   // ===== 加载全部 =====
   async function loadAll() {
@@ -89,10 +91,13 @@ export function useTagManage() {
     }
     // 排序（custom 模式保持后端 sort_order 顺序，不做前端排序）
     for (const g of result) {
+      // 置顶优先：无论「使用次数」还是「名称」排序，置顶标签始终排本组最前
+      const pinnedFirst = (a: TagItem, b: TagItem) =>
+        Number(b.pinned) - Number(a.pinned)
       if (sortMode.value === 'usage') {
-        g.tags.sort((a, b) => b.usage_count - a.usage_count)
+        g.tags.sort((a, b) => pinnedFirst(a, b) || (b.usage_count - a.usage_count))
       } else if (sortMode.value === 'name') {
-        g.tags.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+        g.tags.sort((a, b) => pinnedFirst(a, b) || a.name.localeCompare(b.name, 'zh'))
       }
     }
     // 移除空组
@@ -140,7 +145,7 @@ export function useTagManage() {
   async function scanDuplicates() {
     scanningDuplicates.value = true
     try {
-      const data = await findDuplicates(0.75)
+      const data = await findDuplicates(duplicateThreshold.value)
       duplicatePairs.value = data.duplicates
       showDuplicatesPanel.value = true
       if (data.total === 0) message.success('未发现重复标签')
@@ -256,7 +261,7 @@ export function useTagManage() {
   return {
     groups, loading, stats, searchQuery, filterCategory, filterSource, sortMode,
     selectedIds, selectedTag, scanningDuplicates, duplicatePairs, showDuplicatesPanel,
-    filteredGroups, hasActiveFilter,
+    duplicateThreshold, filteredGroups, hasActiveFilter,
     loadAll, selectTag, onGridChanged, toggleSelect, selectAllInGroup, deselectAll,
     handleDelete, handleBatchDelete, handleDeleteUnused, scanDuplicates,
     quickMerge, quickSetAlias, togglePin, onDrop, onTagDrop,

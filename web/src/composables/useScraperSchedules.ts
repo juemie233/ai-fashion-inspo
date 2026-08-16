@@ -44,8 +44,10 @@ export function useScraperSchedules() {
     try {
       const r = await apiClient.get('/scraper/schedules')
       schedules.value = r.data
-    } catch { message.error('加载定时计划失败') }
-    finally { loading.value = false }
+    } catch (e: any) {
+      const detail = e.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '加载定时计划失败')
+    } finally { loading.value = false }
   }
 
   async function createSchedule() {

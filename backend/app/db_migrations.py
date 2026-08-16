@@ -1,15 +1,14 @@
-"""统一的数据库迁移模块。
+"""数据库迁移的兼容兜底模块（手写补列）。
 
-所有会访问数据库的进程（FastAPI 服务端、采集脚本等）在启动时调用
-`ensure_schema()`，确保物理表结构包含 ORM 模型声明的新列，避免 schema 漂移。
+正式迁移已改用 Alembic（``backend/alembic/``），由 ``database.run_migrations()``
+在服务端进程启动时执行；本模块的 ``ensure_schema()`` 保留作兼容兜底：
 
-背景：
-- SQLAlchemy 的 `create_all` 只创建表，不会更新已有表的新增列
-- 开发期模型字段变更频繁，需要一个轻量的自动迁移机制
-- 采集脚本作为独立子进程运行，不经过服务端 lifespan，需自行确保表结构
+- 存量库在引入 Alembic 之前，通过手写 ``ALTER TABLE`` 补齐的列（``_SCHEMA_COLUMNS``）
+- Alembic 不可用或失败时，仍能补齐缺失列，不阻断启动
 
-新增字段时，在下方 `_SCHEMA_COLUMNS` 清单中追加即可，
-所有进程启动时会自动补全缺失列，无需手动 ALTER TABLE。
+**新增字段/表请走 Alembic**（``alembic revision --autogenerate`` + ``alembic
+upgrade head``），不再往 ``_SCHEMA_COLUMNS`` 手写追加；``compute_schema_version()``
+仍用于前后端 schema 版本握手。
 """
 
 import hashlib

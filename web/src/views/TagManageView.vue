@@ -30,7 +30,7 @@ const { containerRef, leftWidth, isDragging, startDrag } = useSplitResize({ init
 const {
   groups, loading, stats, searchQuery, filterCategory, filterSource, sortMode,
   selectedIds, selectedTag, duplicatePairs, scanningDuplicates, showDuplicatesPanel,
-  filteredGroups, hasActiveFilter,
+  duplicateThreshold, filteredGroups, hasActiveFilter,
   loadAll, selectTag, onGridChanged, toggleSelect, selectAllInGroup, deselectAll,
   handleDelete, handleBatchDelete, handleDeleteUnused, scanDuplicates,
   quickMerge, quickSetAlias, togglePin, onDrop, onTagDrop,
@@ -127,6 +127,7 @@ async function handleExport() {
       v-model:filter-category="filterCategory"
       v-model:filter-source="filterSource"
       v-model:sort-mode="sortMode"
+      v-model:duplicate-threshold="duplicateThreshold"
       :selected-count="selectedIds.size"
       :unused-count="stats?.unused || 0"
       :scanning="scanningDuplicates"
