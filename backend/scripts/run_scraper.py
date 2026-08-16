@@ -643,9 +643,20 @@ def run_scraper_sync(task_id: int):
             else:
                 print(f"\n{'='*50}")
                 print(" >>> 请在 Chrome 中登录小红书 <<<")
-                print(" 在地址栏输入 xiaohongshu.com，扫码登录")
+                print(" 已自动打开小红书登录页，请扫码登录")
                 print(f" 登录完成后脚本自动检测并继续（{LOGIN_TIMEOUT}s 超时）")
                 print(f"{'='*50}")
+
+                # 将空白标签页导航到小红书首页（未登录时展示扫码登录二维码），
+                # 避免停留在 about:blank 让用户误以为卡死或出 bug
+                try:
+                    page.goto(
+                        "https://www.xiaohongshu.com/explore",
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
+                except Exception as e:
+                    print(f"自动跳转登录页失败（可手动在地址栏输入 xiaohongshu.com）: {e}")
 
                 for waited in range(0, LOGIN_TIMEOUT, 5):
                     time.sleep(5)
