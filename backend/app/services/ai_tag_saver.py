@@ -3,20 +3,38 @@
 包含标签标准化、颜色映射、素材-标签关联（去重/竞态处理）。
 """
 
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tag import InspirationTag
+from app.models.tag import InspirationTag, Tag
 from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
 from app.utils.tag_normalizer import normalize_tag_name
+
+if TYPE_CHECKING:
+    from app.models.tag import Tag
 
 
 async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
     """将 AI 分析提取的标签保存到数据库。返回创建的标签数。"""
     tag_count = 0
+    for name, category, confidence in iter_extracted_tags(data):
+        tag = await get_or_create_tag(db, name, category, "ai_generated")
+        await link_tag(db, inspiration_id, tag.id, confidence=confidence)
+        tag_count += 1
+    return tag_count
 
+
+def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
+    """按与 save_tags 完全一致的规则，迭代 AI 分析结果中的 (标签名, 类别, 置信度)。
+
+    供「素材-标签关联保存」与「ai_extracted_tags 结构化快照」共用，
+    保证两种落库方式提取出的标签集合一致（支撑多版本对比的可信度）。
+    """
     # 数据键 -> 标签类别的映射
     category_map = {
         "style": "style",
@@ -35,9 +53,7 @@ async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
             for name in extracted:
                 name = normalize_tag_name(name)
                 if name:
-                    tag = await get_or_create_tag(db, name, category, "ai_generated")
-                    await link_tag(db, inspiration_id, tag.id, confidence=0.8)
-                    tag_count += 1
+                    yield name, category, 0.8
 
     # 处理结构化单品标签 — 兼容 type/color 为列表、features 为字符串
     items = data.get("items") or []
@@ -62,32 +78,35 @@ async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
                 features = [p.strip() for p in features.replace('，', ',').replace('、', ',').split(',') if p.strip()]
 
             if item_type:
-                tag = await get_or_create_tag(db, item_type, "item_type", "ai_generated")
-                await link_tag(db, inspiration_id, tag.id, confidence=0.8)
-                tag_count += 1
+                yield item_type, "item_type", 0.8
 
             if color:
-                tag = await get_or_create_tag(db, color, "color", "ai_generated")
-                await link_tag(db, inspiration_id, tag.id, confidence=0.85)
-                tag_count += 1
+                yield color, "color", 0.85
 
             for feat in features:
                 if isinstance(feat, str):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
                         if fv:
-                            tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
-                            await link_tag(db, inspiration_id, tag.id, confidence=0.7)
-                            tag_count += 1
+                            yield fv, "body_part", 0.7
                 elif isinstance(feat, dict):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
                         if fv:
-                            tag = await get_or_create_tag(db, fv, "body_part", "ai_generated")
-                            await link_tag(db, inspiration_id, tag.id, confidence=0.7)
-                            tag_count += 1
+                            yield fv, "body_part", 0.7
 
-    return tag_count
+
+async def resolve_tag_ids(
+    db: AsyncSession, names: list[str]
+) -> dict[str, int]:
+    """按名称批量查询已有标签 ID（不创建），返回 {名称: tag_id}。
+
+    供结构化快照使用：快照只记录「本次分析提取的标签」，不因快照产生新标签。
+    """
+    if not names:
+        return {}
+    result = await db.execute(select(Tag.id, Tag.name).where(Tag.name.in_(names)))
+    return {name: tag_id for tag_id, name in result.all()}
 
 
 # 常用 hex 颜色 → 中文名称映射

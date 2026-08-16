@@ -53,31 +53,6 @@
 
 ## 低优先级
 
-### AI 分析结果结构化存储，支持多版本对比与追溯
-
-**背景：** 目前 AI 分析日志保存原始 JSON，解析逻辑与标签关联可能不统一，质量审核与标签提取关系模糊。
-
-**目标：** 将 AI 分析结果拆分为结构化表，支持历史对比与版本追溯。
-
-- 设计新增表结构：
-- ai_extracted_tags：id, log_id, tag_id, confidence, created_at
-- ai_quality_review：id, log_id, result (approved/rejected), reason, reviewed_at
-- 修改 AI 分析流程：
-- 每次分析同时生成标签提取结果和质量审核结果，分别写入上述表
-- 保留 ai_analysis_log.raw_response 用于原始记录
-- 在 ai_analysis_log 中增加 prompt_version 和 model_version 字段
-- 更新相关 API：
-- GET /api/ai/history/{id} 返回结构化标签和质量结果
-- GET /api/ai/compare/{id} 支持对比不同 log_id 的标签差异
-- 质量审核为 rejected 的素材，标签仍保留但标记为"待人工确认"
-- 清理现有数据：编写迁移脚本，从 raw_response 中解析历史数据填充新表（如可行）
-
-**验收标准：**
-
-- 可以查询某个素材在不同模型/Prompt 版本下的历史标签
-- 质量审核与标签提取互不干扰，可独立管理
-- 数据迁移脚本可在现有数据库上成功执行
-
 ### 视频分析功能（~ 进行中：视频上传存储已支持）
 
 **背景：** 视频上传与存储已支持（inspirations 已含 video 类型，可上传 mp4），但尚未做关键帧提取与 AI 分析；穿搭内容大量以短视频形式存在（小红书/抖音），手动截图效率低。

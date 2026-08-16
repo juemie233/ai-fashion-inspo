@@ -13,10 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import (
     AIAnalysisLog,
+    AIAnalysisTag,
+    AIQualityReview,
     Inspiration,
     analysis_log_filter as _analysis_log_filter,
 )
 from app.models.tag import InspirationTag, Tag
+from app.services.ai_tag_saver import iter_extracted_tags
 
 
 class AIAnalysisNotFoundError(Exception):
@@ -305,12 +308,12 @@ async def delete_failed_logs(db: AsyncSession) -> int:
 
 
 async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
-    """查询单条分析日志的详细信息（含关联标签、素材信息与解析结果），不存在返回 None。"""
+    """查询单条分析日志的详细信息（含关联标签、素材信息、解析结果与结构化快照），不存在返回 None。"""
     log = await db.get(AIAnalysisLog, log_id)
     if not log:
         return None
 
-    # 获取关联的标签
+    # 获取关联的标签（素材当前全量标签）
     tag_result = await db.execute(
         select(Tag.name, Tag.category, InspirationTag.confidence)
         .join(Tag, InspirationTag.tag_id == Tag.id)
@@ -321,12 +324,42 @@ async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
         for row in tag_result
     ]
 
+    # 结构化快照：本次分析提取的标签（按日志追溯）
+    snapshot_result = await db.execute(
+        select(Tag.name, Tag.category, AIAnalysisTag.confidence)
+        .join(Tag, AIAnalysisTag.tag_id == Tag.id)
+        .where(AIAnalysisTag.log_id == log.id)
+        .order_by(AIAnalysisTag.id)
+    )
+    structured_tags = [
+        {"name": row.name, "category": row.category, "confidence": round(row.confidence, 2)}
+        for row in snapshot_result
+    ]
+
+    # 结构化质量审核结果（quality_check 日志）
+    review_result = await db.execute(
+        select(AIQualityReview)
+        .where(AIQualityReview.log_id == log.id)
+        .order_by(AIQualityReview.id)
+    )
+    quality_reviews = [
+        {
+            "result": r.result,
+            "reason": r.reason,
+            "reviewed_at": _fmt_utc(r.reviewed_at),
+        }
+        for r in review_result.scalars().all()
+    ]
+
     # 获取素材信息
     insp = await db.get(Inspiration, log.inspiration_id)
     detail = {
         "id": log.id,
         "inspiration_id": log.inspiration_id,
         "model_name": log.model_name,
+        "prompt_version": log.prompt_version,
+        "model_version": log.model_version,
+        "log_type": log.log_type or "analysis",
         "raw_response": log.raw_response,
         "processing_time_ms": log.processing_time_ms,
         "error": log.error,
@@ -335,6 +368,8 @@ async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
         "thumbnail_path": insp.thumbnail_path if insp else None,
         "file_path": insp.file_path if insp else None,
         "tags": tags,
+        "structured_tags": structured_tags,
+        "quality_reviews": quality_reviews,
     }
 
     # 尝试解析 raw_response 中的 JSON 便于前端展示
@@ -398,17 +433,39 @@ async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict
 
     from app.services.ai_parser import parse_analysis_response
 
+    # 批量加载各日志的结构化标签快照（若存在），优先用于对比
+    log_ids = [log.id for log in logs]
+    snapshot_map: dict[int, list[str]] = {}
+    if log_ids:
+        snap_result = await db.execute(
+            select(AIAnalysisTag.log_id, Tag.name)
+            .join(Tag, AIAnalysisTag.tag_id == Tag.id)
+            .where(AIAnalysisTag.log_id.in_(log_ids))
+        )
+        for snap_log_id, tag_name in snap_result:
+            snapshot_map.setdefault(snap_log_id, []).append(tag_name)
+
     analyses = []
     for log in logs:
         parsed = parse_analysis_response(log.raw_response) if log.raw_response else {}
+        # 结构化快照优先（精确记录本次提取）；否则回退到实时解析
+        structured_tags = snapshot_map.get(log.id)
+        if structured_tags is None:
+            structured_tags = sorted({
+                tag_name
+                for tag_name, _cat, _conf in iter_extracted_tags(parsed)
+            })
         analyses.append({
             "id": log.id,
             "model_name": log.model_name,
+            "prompt_version": log.prompt_version,
+            "model_version": log.model_version,
             "processing_time_ms": log.processing_time_ms,
             "error": log.error,
             "status": "error" if log.error else "success",
             "created_at": _fmt_utc(log.created_at),
             "parsed_response": parsed,
+            "structured_tags": structured_tags,
             "tags_count": {
                 "style": len((parsed.get("style") or [])),
                 "items": len((parsed.get("items") or [])),
@@ -419,28 +476,11 @@ async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict
             },
         })
 
-    # 标签差异对比（取第一次和最后一次分析）
+    # 标签差异对比（取第一次和最后一次分析，优先用结构化快照）
     tag_diff = None
     if len(analyses) >= 2:
-        first = analyses[0]["parsed_response"]
-        last = analyses[-1]["parsed_response"]
-
-        def _tag_set(parsed: dict) -> set[str]:
-            tags: set[str] = set()
-            for key in ("style", "fit", "wear_style", "attributes"):
-                vals = parsed.get(key, [])
-                if isinstance(vals, list):
-                    for v in vals:
-                        tags.add(f"{key}:{v}" if isinstance(v, str) else f"{key}:{v.get('name', str(v))}")
-            for item in (parsed.get("items") or []):
-                if isinstance(item, dict):
-                    tags.add(f"单品:{item.get('type', '')} {item.get('color', '')}")
-            for c in (parsed.get("dominant_colors") or []):
-                tags.add(f"颜色:{c}" if isinstance(c, str) else str(c))
-            return tags
-
-        first_tags = _tag_set(first)
-        last_tags = _tag_set(last)
+        first_tags = set(analyses[0]["structured_tags"])
+        last_tags = set(analyses[-1]["structured_tags"])
         tag_diff = {
             "first_analysis_id": analyses[0]["id"],
             "last_analysis_id": analyses[-1]["id"],

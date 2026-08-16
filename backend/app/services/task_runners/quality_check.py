@@ -12,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import AIAnalysisLog, AIQualityReview, Inspiration
 from app.models.task import TaskQueue
 from app.services.ai_service import check_image_quality
-from app.services.task_runners.common import _ANALYZE_CONCURRENCY, _utcnow
+from app.services.task_runners.common import _ANALYZE_CONCURRENCY, utcnow
 from app.services.vector import store as vector_store
 
 logger = logging.getLogger(__name__)
@@ -71,12 +71,24 @@ async def _quality_check_one(
                 db, inspiration_id, file_path, force=force, prefilter_vector=prefilter_vector
             )
             # 写入质量审核日志（失败时记录原因，供前端排查）
-            db.add(AIAnalysisLog(
+            log_entry = AIAnalysisLog(
                 inspiration_id=inspiration_id,
                 model_name=settings.ollama_vision_model,
                 log_type="quality_check",
+                model_version=settings.ollama_vision_model,
                 error=reason if status == "pending" else None,
-            ))
+            )
+            db.add(log_entry)
+            await db.flush()
+            # 结构化审核结果：按日志记录单次判定，与素材当前状态（quality_status）解耦
+            db.add(
+                AIQualityReview(
+                    log_id=log_entry.id,
+                    result=status,
+                    reason=reason,
+                    reviewed_at=utcnow(),
+                )
+            )
             await db.commit()
             return inspiration_id, status, reason, ai_generated
 
@@ -150,7 +162,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
 
         task.done = min(start + len(chunk), task.total)
         task.progress = round(task.done / task.total * 100) if task.total else 100
-        task.updated_at = _utcnow()
+        task.updated_at = utcnow()
         await db.commit()
         logger.info(
             f"质量审核进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
@@ -166,7 +178,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     }
     task.done = task.total
     task.progress = 100
-    task.updated_at = _utcnow()
+    task.updated_at = utcnow()
     await db.commit()
     logger.info(
         f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，未判定 {pending}"

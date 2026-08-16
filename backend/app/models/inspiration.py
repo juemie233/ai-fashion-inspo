@@ -1,18 +1,14 @@
 """灵感素材模型：核心实体，代表一条保存的穿搭图片/视频。"""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-
-
-def utcnow() -> datetime:
-    """返回当前 UTC 时间。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from app.utils.time import utcnow  # noqa: F401  # 供其他模型/服务统一导入，保持旧 import 路径可用
 
 
 class Inspiration(Base):
@@ -94,6 +90,11 @@ class Inspiration(Base):
         return f"<Inspiration(id={self.id}, source={self.source_type})>"
 
 
+# 未删除素材的统一过滤条件（软删除后所有正常查询都应排除垃圾桶素材）。
+# 单一来源定义在此，服务/路由统一导入，避免各文件重复维护。
+NOT_DELETED = Inspiration.deleted_at.is_(None)
+
+
 class AIAnalysisLog(Base):
     """AI 分析日志：记录每次模型分析的过程和结果。"""
 
@@ -106,6 +107,12 @@ class AIAnalysisLog(Base):
     model_name: Mapped[str] = mapped_column(String(64))
     log_type: Mapped[str] = mapped_column(String(16), default="analysis")  # analysis | quality_check
     raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )  # 分析所用 Prompt 的内容哈希（前 8 位），用于版本追溯
+    model_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )  # 模型版本标识（当前为模型名，如 qwen3-vl:8b-instruct）
     processing_time_ms: Mapped[int | None] = mapped_column(nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -114,6 +121,70 @@ class AIAnalysisLog(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="analysis_logs"
     )
+    extracted_tags: Mapped[list["AIAnalysisTag"]] = relationship(
+        "AIAnalysisTag",
+        back_populates="log",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    quality_reviews: Mapped[list["AIQualityReview"]] = relationship(
+        "AIQualityReview",
+        back_populates="log",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+    def __repr__(self) -> str:
+        return f"<AIAnalysisLog(id={self.id}, model={self.model_name})>"
+
+
+class AIAnalysisTag(Base):
+    """AI 分析提取标签的结构化快照：每次分析「提取了什么」的版本记录。
+
+    与 inspiration_tags（素材当前全量标签）不同，本表按日志记录单次分析的
+    提取结果，支撑「不同模型/Prompt 版本的历史标签对比与追溯」。
+    """
+
+    __tablename__ = "ai_extracted_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    log_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_analysis_log.id", ondelete="CASCADE"), index=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tags.id", ondelete="CASCADE"), index=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.8)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    # 关联关系
+    log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="extracted_tags")
+    tag: Mapped["Tag"] = relationship("Tag")
+
+
+class AIQualityReview(Base):
+    """质量审核的结构化结果：单次审核的判定与原因。
+
+    与 Inspiration.quality_status（素材当前状态）不同，本表按日志记录每次
+    审核的判定，支撑「质量审核与标签提取互不干扰、可独立管理」的追溯需求。
+    """
+
+    __tablename__ = "ai_quality_review"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    log_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("ai_analysis_log.id", ondelete="CASCADE"), index=True
+    )
+    result: Mapped[str] = mapped_column(String(16))  # approved | rejected | pending
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    # 关联关系
+    log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="quality_reviews")
 
 
 def analysis_log_filter():
