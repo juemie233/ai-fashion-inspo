@@ -658,8 +658,10 @@ alembic upgrade head
 | `PUT` | `/api/ai/sampling-params` | 更新采样参数（按模型独立持久化到 model_configs.json） |
 | `DELETE` | `/api/ai/model-config` | 清除当前模型的自定义配置，回退全局默认值 |
 | `POST` | `/api/ai/retry-all-failed` | 重试所有失败（仅图片） |
-| `DELETE` | `/api/ai/reset?confirm=yes` | 重置所有数据+文件 |
+| `DELETE` | `/api/ai/reset?confirm=yes` | 重置所有数据+文件（破坏性接口，需 API Key） |
 
+> **重置范围说明：** `/api/ai/reset` 清空素材、标签、素材-标签关联、分析日志及其结构化快照/审核结果、采集任务、URL 墓碑表，并删除图片/缩略图/视频与向量库文件。**不含**「人物（persons）」「定时采集计划（scraper_schedules）」「任务队列（task_queue）」「操作审计日志（audit_logs）」——这些管理类数据在重置后保留。
+>
 > **注：** 视频文件暂不参与 AI 分析。WebP 图片会自动转为 JPEG 以兼容 Qwen3-VL 模型。
 
 ### 采集管理
