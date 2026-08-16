@@ -4,10 +4,11 @@
  * 关联一律使用 person_id（不按名称匹配），规避同名多人歧义。
  */
 
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { linkPerson, unlinkPerson, suggestPersons } from '@/api/persons'
 import type { PersonBrief } from '@shared/types/person'
+import { PERSON_TYPE_LABELS } from '@shared/types/person'
 import PersonTypeTag from './PersonTypeTag.vue'
 
 const props = defineProps<{
@@ -29,25 +30,43 @@ const keyword = ref('')
 const suggestions = ref<PersonBrief[]>([])
 /** 是否正在搜索 */
 const searching = ref(false)
+/** 搜索防抖定时器（避免每敲一个字就请求一次接口） */
+let searchTimer: number | null = null
+/** 请求序号：丢弃过期响应，防止慢的旧请求覆盖新建议 */
+let searchSeq = 0
 
-/** 按名称搜索候选人物（排除已关联的） */
-async function onSearch() {
+/** 按名称搜索候选人物（300ms 防抖 + 序号防乱序，排除已关联的） */
+function onSearch() {
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer)
+    searchTimer = null
+  }
   const name = keyword.value.trim()
   if (!name) {
     suggestions.value = []
     return
   }
-  searching.value = true
-  try {
-    const list = await suggestPersons(name)
-    const linkedIds = new Set(props.persons.map((p) => p.id))
-    suggestions.value = list.filter((p) => !linkedIds.has(p.id))
-  } catch {
-    suggestions.value = []
-  } finally {
-    searching.value = false
-  }
+  searchTimer = window.setTimeout(async () => {
+    const seq = ++searchSeq
+    searching.value = true
+    try {
+      const list = await suggestPersons(name)
+      if (seq !== searchSeq) return  // 已有更新的请求，丢弃过期响应
+      const linkedIds = new Set(props.persons.map((p) => p.id))
+      suggestions.value = list.filter((p) => !linkedIds.has(p.id))
+    } catch {
+      if (seq === searchSeq) suggestions.value = []
+    } finally {
+      if (seq === searchSeq) searching.value = false
+    }
+  }, 300)
 }
+
+onBeforeUnmount(() => {
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer)
+  }
+})
 
 /** 选中候选人物 → 建立关联 */
 async function addPerson(person: PersonBrief) {
@@ -98,7 +117,7 @@ async function removePerson(person: PersonBrief) {
     <div class="search-row">
       <n-auto-complete
         v-model:value="keyword"
-        :options="suggestions.map((s) => ({ label: `${s.name}（${s.person_type === 'model' ? '职业模特' : '穿搭博主'}）`, value: String(s.id) }))"
+        :options="suggestions.map((s) => ({ label: `${s.name}（${PERSON_TYPE_LABELS[s.person_type] || s.person_type}）`, value: String(s.id) }))"
         :loading="searching"
         placeholder="输入人物名称搜索并添加"
         size="small"

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /** 应用整体布局：侧边导航 + 主内容区。 */
 
-import { h, type Component } from 'vue'
+import { computed, h, type Component } from 'vue'
+import { useRoute } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import {
   ImagesOutline,
@@ -15,6 +16,18 @@ import {
   PersonOutline,
 } from '@vicons/ionicons5'
 import SchemaVersionBanner from './SchemaVersionBanner.vue'
+
+const route = useRoute()
+
+/** 详情类路由映射回所属一级菜单，保持侧边栏高亮（如人物详情 → 人物管理） */
+const menuKey = computed(() => {
+  const name = route.name as string
+  const mapping: Record<string, string> = {
+    'person-detail': 'persons',
+    detail: 'home',
+  }
+  return mapping[name] ?? name
+})
 
 function renderIcon(icon: Component) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -40,7 +53,7 @@ function renderIcon(icon: Component) {
           { label: '任务管理', key: 'tasks', icon: renderIcon(ListOutline) },
         ]"
         @update:value="(key: string) => $router.push(`/${key === 'home' ? '' : key}`)"
-        :value="$route.name as string"
+        :value="menuKey"
       />
     </aside>
 

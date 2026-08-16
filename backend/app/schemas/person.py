@@ -3,13 +3,23 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 
 # 内容类型：职业模特写真 / 博主穿搭（UI 区分呈现的核心维度）
 PersonType = Literal["model", "blogger"]
 
 # 平台标识
 PersonPlatform = Literal["xiaohongshu", "douyin", "other"]
+
+
+def _strip_name(v: str | None) -> str | None:
+    """去除首尾空白；纯空白字符串视为无效名称。"""
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        raise ValueError("人物名称不能为空")
+    return v
 
 
 class PersonCreate(BaseModel):
@@ -23,6 +33,8 @@ class PersonCreate(BaseModel):
     avatar_path: str | None = None
     bio: str | None = None
 
+    _validate_name = field_validator("name")(_strip_name)
+
 
 class PersonUpdate(BaseModel):
     """更新人物（部分更新）"""
@@ -34,6 +46,8 @@ class PersonUpdate(BaseModel):
     profile_url: str | None = None
     avatar_path: str | None = None
     bio: str | None = None
+
+    _validate_name = field_validator("name")(_strip_name)
 
 
 class PersonOut(BaseModel):

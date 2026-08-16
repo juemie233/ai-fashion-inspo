@@ -7,6 +7,7 @@
 import logging
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
@@ -147,30 +148,21 @@ async def create_person(
 async def update_person(
     db: AsyncSession,
     person_id: int,
-    name: str | None = None,
-    person_type: str | None = None,
-    platform: str | None = None,
-    platform_user_id: str | None = None,
-    profile_url: str | None = None,
-    avatar_path: str | None = None,
-    bio: str | None = None,
+    payload: dict,
 ) -> dict:
-    """更新人物字段并返回响应字典，不存在抛 PersonNotFoundError。"""
+    """更新人物字段并返回响应字典，不存在抛 PersonNotFoundError。
+
+    参数:
+        payload: 由 PersonUpdate.model_dump(exclude_unset=True) 得到的字段字典——
+            未传的字段不在 dict 中（保持不变），显式传 None 的字段会被清空。
+    """
     person = await get_person(db, person_id)
-    if name is not None:
-        person.name = name.strip()
-    if person_type is not None:
-        person.person_type = person_type
-    if platform is not None:
-        person.platform = platform
-    if platform_user_id is not None:
-        person.platform_user_id = platform_user_id
-    if profile_url is not None:
-        person.profile_url = profile_url
-    if avatar_path is not None:
-        person.avatar_path = avatar_path
-    if bio is not None:
-        person.bio = bio
+    for field, value in payload.items():
+        if field == "name":
+            value = value.strip() if value is not None else None
+            if not value:
+                raise PersonConflictError("人物名称不能为空")
+        setattr(person, field, value)
     await db.flush()
     await db.refresh(person)
     return _to_person_dict(person)
@@ -418,26 +410,97 @@ async def link_person(
 
     素材或人物不存在返回 None（由路由层决定是否抛 404）。
     """
-    inspiration = await db.get(Inspiration, inspiration_id)
-    person = await db.get(Person, person_id)
-    if not inspiration or not person:
-        return None
+    result = await link_persons_batch(
+        db, inspiration_id, [person_id], confidence=confidence
+    )
+    return result["links"][0] if result["links"] else None
 
-    existing = await db.execute(
-        select(InspirationPerson).where(
+
+async def link_persons_batch(
+    db: AsyncSession,
+    inspiration_id: str,
+    person_ids: list[int],
+    confidence: float = 1.0,
+) -> dict:
+    """批量建立素材-人物关联（幂等，已存在跳过），减少 N+1 查询。
+
+    对标 tag_service.batch_add_tags 的批量模式：一次校验素材与人物存在性、
+    一次查询已有关联，再批量插入缺失关联；SAVEPOINT 隔离插入，
+    并发建立同一关联时回滚后重查返回已存在的关联，避免 500。
+
+    返回:
+        {"links": [InspirationPerson, ...], "missing_ids": [...], "skipped": int,
+         "inspiration_exists": bool}
+        - links: 本次新增的关联对象列表
+        - missing_ids: 不存在的人物 ID
+        - skipped: 已存在而跳过的关联数
+        - inspiration_exists: 素材是否存在（供路由层决定是否抛 404）
+    """
+    person_ids = list(dict.fromkeys(person_ids))  # 去重保序
+    links: list[InspirationPerson] = []
+
+    inspiration = await db.get(Inspiration, inspiration_id)
+    if not inspiration:
+        return {
+            "links": links,
+            "missing_ids": person_ids,
+            "skipped": 0,
+            "inspiration_exists": False,
+        }
+
+    # 一次查出所有候选人物，缺失的记入 missing_ids
+    persons_result = await db.execute(
+        select(Person).where(Person.id.in_(person_ids))
+    )
+    persons = {p.id: p for p in persons_result.scalars().all()}
+    missing_ids = [pid for pid in person_ids if pid not in persons]
+
+    # 一次查出已存在的关联对，跳过
+    existing_result = await db.execute(
+        select(InspirationPerson.inspiration_id, InspirationPerson.person_id).where(
             InspirationPerson.inspiration_id == inspiration_id,
-            InspirationPerson.person_id == person_id,
+            InspirationPerson.person_id.in_(persons.keys()),
         )
     )
-    link = existing.scalar_one_or_none()
-    if link:
-        return link
-    link = InspirationPerson(
-        inspiration_id=inspiration_id, person_id=person_id, confidence=confidence
-    )
-    db.add(link)
-    await db.flush()
-    return link
+    existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
+
+    skipped = 0
+    for pid in persons:
+        if (inspiration_id, pid) in existing_pairs:
+            skipped += 1
+            continue
+        link = InspirationPerson(
+            inspiration_id=inspiration_id, person_id=pid, confidence=confidence
+        )
+        # 预绑定已查到的 Person 对象，避免路由层访问 link.person 时触发懒加载
+        link.person = persons[pid]
+        db.add(link)
+        try:
+            # SAVEPOINT 隔离插入：并发建立同一关联时后者触发 IntegrityError，
+            # 回滚后重查并复用已存在的关联，避免 500。
+            async with db.begin_nested():
+                await db.flush()
+        except IntegrityError:
+            db.expunge(link)
+            existing = await db.execute(
+                select(InspirationPerson).where(
+                    InspirationPerson.inspiration_id == inspiration_id,
+                    InspirationPerson.person_id == pid,
+                )
+            )
+            existing_link = existing.scalar_one_or_none()
+            if existing_link:
+                skipped += 1
+                continue
+            raise
+        links.append(link)
+
+    return {
+        "links": links,
+        "missing_ids": missing_ids,
+        "skipped": skipped,
+        "inspiration_exists": True,
+    }
 
 
 async def unlink_person(

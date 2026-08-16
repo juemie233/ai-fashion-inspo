@@ -348,7 +348,7 @@ function goSearchByTag(name: string) {
             <div class="info-meta">
               <n-descriptions :column="1" label-placement="left" size="small" bordered>
                 <n-descriptions-item label="来源">
-                  <n-tag size="small" type="info">{{ sourceLabel(detail.source_type) }}</n-tag>
+                  <n-tag size="small" type="info">{{ sourceLabel(detail.source_type || '') }}</n-tag>
                 </n-descriptions-item>
                 <n-descriptions-item v-if="detail.source_author" label="作者">
                   {{ detail.source_author }}

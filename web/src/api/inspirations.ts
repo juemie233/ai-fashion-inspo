@@ -21,7 +21,7 @@ export const TRASH_REASON_OPTIONS: { label: string; value: TrashReason }[] = [
 /** 灵感列表响应类型 */
 export interface InspirationOut {
   id: string
-  source_type: string
+  source_type?: string
   source_url?: string | null
   source_author?: string | null
   source_platform_id?: string | null

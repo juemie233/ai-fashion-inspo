@@ -66,7 +66,12 @@ async function handleDelete(person: Person) {
   try {
     await deletePerson(person.id)
     message.success(`已删除人物「${person.name}」`)
-    await store.reload()
+    // 保持当前页：本页仅剩一条且不在第一页时回退一页，否则按当前页刷新
+    if (store.persons.length === 1 && store.page > 1) {
+      await store.setPage(store.page - 1)
+    } else {
+      await store.load(true)
+    }
   } catch (e: any) {
     message.error(e.response?.data?.detail || '删除失败')
   }
@@ -75,6 +80,13 @@ async function handleDelete(person: Person) {
 /** 跳转人物详情 */
 function goDetail(person: Person) {
   router.push(`/persons/${person.id}`)
+}
+
+/** 搜索输入：回车触发（兼容中文输入法，compositionend 期间不误触） */
+function onSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.isComposing) {
+    store.reload()
+  }
 }
 
 /** 表格列定义 */
@@ -206,7 +218,7 @@ onMounted(async () => {
             placeholder="搜索人物名称"
             clearable
             style="width: 240px"
-            @keyup.enter="store.reload()"
+            @keydown="onSearchKeydown"
             @clear="store.reload()"
           >
             <template #prefix>🔍</template>
@@ -247,10 +259,23 @@ onMounted(async () => {
       />
 
       <n-empty
-        v-if="!store.loading && store.persons.length === 0"
+        v-if="!store.loading && !store.error && store.persons.length === 0"
         description="还没有人物，点击右上角「新建人物」开始录入"
         style="margin-top: 48px"
       />
+
+      <!-- 加载失败错误态：与「无数据」明确区分 -->
+      <n-result
+        v-if="store.error"
+        status="error"
+        title="加载失败"
+        :description="store.error"
+        style="margin-top: 32px"
+      >
+        <template #footer>
+          <n-button @click="store.reload()">重试</n-button>
+        </template>
+      </n-result>
     </n-card>
 
     <!-- 热门排行 -->

@@ -293,9 +293,11 @@ async def link_inspiration_persons(
 ):
     """给素材批量关联人物（幂等，已关联自动跳过）。
 
-    请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID。
+    请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID；素材不存在返回 404。
     """
     result = await person_service.link_persons_batch(db, inspiration_id, data.person_ids)
+    if not result["inspiration_exists"]:
+        raise HTTPException(status_code=404, detail="素材未找到")
     added = []
     for link in result["links"]:
         added.append(

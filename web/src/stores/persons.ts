@@ -10,6 +10,8 @@ export const usePersonsStore = defineStore('persons', () => {
   const persons = ref<Person[]>([])
   /** 是否正在加载 */
   const loading = ref(false)
+  /** 加载错误信息（非空时展示错误空态，避免被误读为「无数据」） */
+  const error = ref<string | null>(null)
   /** 总数（分页用） */
   const total = ref(0)
   /** 当前页码 */
@@ -25,10 +27,15 @@ export const usePersonsStore = defineStore('persons', () => {
   /** 排序方式：newest | name | count */
   const sort = ref<'newest' | 'name' | 'count'>('newest')
 
+  /** 请求序号：筛选快速切换时丢弃过期响应，防止旧数据覆盖新列表 */
+  let loadSeq = 0
+
   /** 加载人物列表（force=true 忽略已有数据强制刷新） */
   async function load(force: boolean = false) {
     if (!force && loading.value) return
+    const seq = ++loadSeq
     loading.value = true
+    error.value = null
     try {
       const data = await fetchPersons({
         page: page.value,
@@ -38,12 +45,15 @@ export const usePersonsStore = defineStore('persons', () => {
         platform: platform.value || undefined,
         sort: sort.value,
       })
+      if (seq !== loadSeq) return  // 已有更新的请求，丢弃过期响应
       persons.value = data.items
       total.value = data.total
     } catch (e) {
+      if (seq !== loadSeq) return
+      error.value = '加载人物列表失败，请检查服务后重试'
       console.error('加载人物列表失败', e)
     } finally {
-      loading.value = false
+      if (seq === loadSeq) loading.value = false
     }
   }
 
@@ -62,6 +72,7 @@ export const usePersonsStore = defineStore('persons', () => {
   return {
     persons,
     loading,
+    error,
     total,
     page,
     size,

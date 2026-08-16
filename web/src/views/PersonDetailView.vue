@@ -5,7 +5,7 @@
  * 素材区复用 MasonryGrid / ImageLightbox，不重写照片浏览。
  */
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import {
@@ -44,7 +44,6 @@ const lightboxOpen = ref(false)
 function toInspirationOut(item: PersonInspiration): InspirationOut {
   return {
     id: item.inspiration_id,
-    source_type: '',
     file_path: item.file_path,
     thumbnail_path: item.thumbnail_path,
     media_type: item.media_type,
@@ -63,9 +62,16 @@ const lightboxPaths = computed<string[]>(() =>
 )
 
 async function loadDetail() {
+  // 参数兜底：非法 id（NaN/非正整数）直接回列表，避免 404 误报
+  const id = personId.value
+  if (!Number.isInteger(id) || id <= 0) {
+    message.error('人物参数无效')
+    router.replace('/persons')
+    return
+  }
   loading.value = true
   try {
-    detail.value = await fetchPerson(personId.value)
+    detail.value = await fetchPerson(id)
   } catch {
     message.error('加载人物详情失败')
     return
@@ -115,6 +121,12 @@ function goSearchByTag(name: string) {
 onMounted(() => {
   loadDetail()
 })
+
+// 路由参数变化（未来人物间跳转 / 复用同一路由记录）时重新加载
+watch(personId, () => {
+  page.value = 1
+  loadDetail()
+})
 </script>
 
 <template>
@@ -148,7 +160,7 @@ onMounted(() => {
               </div>
               <div class="meta-line">
                 <n-tag size="small" :bordered="false" round>
-                  {{ PERSON_PLATFORM_LABELS[detail.platform as keyof typeof PERSON_PLATFORM_LABELS] || detail.platform }}
+                  {{ PERSON_PLATFORM_LABELS[detail.platform] || detail.platform }}
                 </n-tag>
                 <n-text depth="3" style="font-size: 13px">
                   {{ detail.inspiration_count ?? 0 }} 条素材 · 创建于
@@ -256,6 +268,7 @@ onMounted(() => {
           <MasonryGrid
             :items="items.map(toInspirationOut)"
             :loading="itemsLoading"
+            :show-actions="false"
             empty-text="该人物还没有素材，去素材详情页关联或按博主采集吧"
           />
 

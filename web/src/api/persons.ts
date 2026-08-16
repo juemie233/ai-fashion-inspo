@@ -1,9 +1,9 @@
 /** 人物相关 API 调用。 */
 
 import apiClient from './client'
-import type { Person, PersonDetail, PersonListOut, PersonPlatform, PersonType } from '@shared/types/person'
+import type { Person, PersonBrief, PersonDetail, PersonListOut, PersonPlatform, PersonType } from '@shared/types/person'
 
-export type { Person, PersonDetail, PersonStyleProfile, PersonPlatform, PersonType } from '@shared/types/person'
+export type { Person, PersonBrief, PersonDetail, PersonStyleProfile, PersonPlatform, PersonType } from '@shared/types/person'
 
 /** 人物表单载荷（创建/更新共用，更新时字段均可选） */
 export interface PersonForm {
@@ -101,7 +101,7 @@ export async function suggestPersons(name: string): Promise<Person[]> {
 
 /** 给素材批量关联人物（幂等） */
 export async function linkPerson(inspirationId: string, personIds: number[]) {
-  const { data } = await apiClient.post<{ added: Person[]; count: number }>(
+  const { data } = await apiClient.post<{ added: PersonBrief[]; count: number }>(
     `/inspirations/${inspirationId}/persons`,
     { person_ids: personIds },
   )

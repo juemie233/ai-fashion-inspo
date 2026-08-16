@@ -58,7 +58,7 @@ async def create_person(data: PersonCreate, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/top", status_code=status.HTTP_200_OK)
+@router.get("/top", response_model=list[PersonOut])
 async def top_persons(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -67,7 +67,7 @@ async def top_persons(
     return await person_service.top_persons(db, limit)
 
 
-@router.get("/suggestions", status_code=status.HTTP_200_OK)
+@router.get("/suggestions", response_model=list[PersonOut])
 async def suggest_persons(
     name: str = Query(..., min_length=1, description="名称模糊关键字"),
     db: AsyncSession = Depends(get_db),
@@ -94,21 +94,15 @@ async def get_person(person_id: int, db: AsyncSession = Depends(get_db)):
 async def update_person(
     person_id: int, data: PersonUpdate, db: AsyncSession = Depends(get_db)
 ):
-    """更新人物信息（部分更新）。"""
+    """更新人物信息（部分更新；显式传 null 的字段会被清空）。"""
     try:
         return await person_service.update_person(
-            db,
-            person_id,
-            name=data.name,
-            person_type=data.person_type,
-            platform=data.platform,
-            platform_user_id=data.platform_user_id,
-            profile_url=data.profile_url,
-            avatar_path=data.avatar_path,
-            bio=data.bio,
+            db, person_id, data.model_dump(exclude_unset=True)
         )
     except person_service.PersonNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
+    except person_service.PersonConflictError as e:
+        raise HTTPException(status_code=409, detail=e.message)
 
 
 @router.delete("/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
