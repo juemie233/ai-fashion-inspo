@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         if result.rowcount:
             await db.commit()
-            print(f"已清理 {result.rowcount} 个僵尸采集任务")
+            logger.info(f"已清理 {result.rowcount} 个僵尸采集任务")
 
     # 导入预设标签
     from app.database import async_session
@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         added = await seed_tags(db)
         if added:
             await db.commit()
-            print(f"已导入 {added} 个预设标签")
+            logger.info(f"已导入 {added} 个预设标签")
 
     # 垃圾桶：保留期 > 0 时才启动时清理一次过期素材，并拉起周期性自动清理任务；
     # 保留期 <= 0（禁用自动回收）时跳过，垃圾桶素材永不自动删除。
@@ -156,7 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sweep_task = asyncio.create_task(_sweep_expired_trash())
     schedule_task = asyncio.create_task(_scraper_schedule_loop())
 
-    print(f"{settings.app_name} v{settings.app_version} 启动于端口 {settings.port}")
+    logger.info(f"{settings.app_name} v{settings.app_version} 启动于端口 {settings.port}")
     yield
     # 关闭：取消周期性清理与定时采集调度任务
     for task in (sweep_task, schedule_task):
@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await task
         except asyncio.CancelledError:
             pass
-    print("正在关闭...")
+    logger.info("正在关闭...")
 
 
 app = FastAPI(

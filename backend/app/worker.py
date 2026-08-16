@@ -277,4 +277,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("任务队列 worker 已停止")
+        logger.info("任务队列 worker 已停止")

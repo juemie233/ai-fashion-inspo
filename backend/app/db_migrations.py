@@ -13,11 +13,14 @@ upgrade head``），不再往 ``_SCHEMA_COLUMNS`` 手写追加；``compute_schem
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 import aiosqlite
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # API/Pydantic 契约版本：修改请求/响应模型、路由字段等「不落库」的契约时手动 +1。
 # 与数据库结构哈希拼接成前后端握手用的 schema_version（见 compute_schema_version）。
@@ -133,12 +136,12 @@ async def ensure_schema() -> list[str]:
                             f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"
                         )
                         added.append(f"{table}.{col_name}")
-                        print(f"[迁移] {table} 添加列: {col_name}")
+                        logger.info(f"[迁移] {table} 添加列: {col_name}")
                     except Exception as e:
                         # 多进程（服务端 + worker）同时启动时可能并发执行迁移，
                         # 后到者会报 "duplicate column name"，幂等容忍即可。
                         if "duplicate column" in str(e).lower():
-                            print(f"[迁移] {table}.{col_name} 已被其他进程添加，跳过")
+                            logger.info(f"[迁移] {table}.{col_name} 已被其他进程添加，跳过")
                             continue
                         raise
 
