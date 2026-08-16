@@ -22,6 +22,7 @@ from app.routers import (
     ai_quality,
     ai_reset,
     ai_settings,
+    quality_learner,
 )
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -33,3 +34,4 @@ router.include_router(ai_quality.router)
 router.include_router(ai_settings.router)
 router.include_router(ai_dashboard.router)
 router.include_router(ai_reset.router)
+router.include_router(quality_learner.router)

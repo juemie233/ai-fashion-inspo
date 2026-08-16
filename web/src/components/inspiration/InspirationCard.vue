@@ -188,7 +188,7 @@ function openDetail() {
               </template>
             </n-button>
           </template>
-          确认删除该素材？此操作不可恢复
+          移入垃圾桶？30 天内可在「素材管理 → 垃圾桶」恢复
         </n-popconfirm>
         <n-button
           size="tiny"

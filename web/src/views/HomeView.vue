@@ -151,12 +151,12 @@ function setDensity(d: Density) {
 async function handleDelete(id: string) {
   try {
     await store.remove(id)
-    message.success('已删除')
+    message.success('已移入垃圾桶')
     if (store.items.length === 0 && currentPage.value > 1) {
       loadPage(currentPage.value - 1)
     }
   } catch {
-    message.error('删除失败')
+    message.error('操作失败')
   }
 }
 

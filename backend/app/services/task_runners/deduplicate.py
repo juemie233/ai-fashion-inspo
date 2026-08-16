@@ -63,6 +63,7 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
                Inspiration.is_favorite, Inspiration.created_at)
+        .where(Inspiration.deleted_at.is_(None))
     )
     hash_map = await asyncio.to_thread(
         build_hash_map, result.all(), storage_root, include_meta=True

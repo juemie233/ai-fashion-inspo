@@ -1,7 +1,7 @@
 """灵感素材服务：素材 CRUD、批量标签、去重与向量同步。"""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
@@ -10,13 +10,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
+from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
 from app.models.scraper import ScraperSeenURL
 from app.models.tag import InspirationTag
 from app.schemas.inspiration import InspirationUpdate
-from app.services.file_service import delete_files, generate_thumbnail, save_upload
+from app.services.file_service import (
+    delete_files,
+    generate_thumbnail,
+    move_to_trash,
+    restore_from_trash,
+    save_upload,
+)
 from app.services.tag_service import get_or_create_tag
 from app.utils.file_hash import file_sha256
+
+# 垃圾桶删除原因合法取值（负样本学习只用「质量差」子集保证语义纯净）
+TRASH_REASONS = ("质量差", "重复", "不喜欢", "隐私", "其他")
+
+# 未删除素材的统一过滤条件（软删除后所有正常查询都应排除垃圾桶素材）
+_NOT_DELETED = Inspiration.deleted_at.is_(None)
 
 
 async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:
@@ -25,9 +37,12 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
     优先走 content_hash 索引列（快路径）；存量素材尚未回填哈希（列为空）时，
     回退全量扫描磁盘文件，并顺手把哈希回填入库，一次扫描后后续全部走索引。
     """
-    # 快路径：哈希列命中
+    # 快路径：哈希列命中（垃圾桶素材视为「可重新入库」，不参与去重）
     result = await db.execute(
-        select(Inspiration.id).where(Inspiration.content_hash == content_hash)
+        select(Inspiration.id).where(
+            Inspiration.content_hash == content_hash,
+            _NOT_DELETED,
+        )
     )
     dup_id = result.scalars().first()
     if dup_id:
@@ -39,6 +54,7 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
             select(func.count(Inspiration.id)).where(
                 Inspiration.content_hash.is_(None),
                 Inspiration.file_path.isnot(None),
+                _NOT_DELETED,
             )
         )
     ).scalar() or 0
@@ -50,6 +66,7 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
         select(Inspiration.id, Inspiration.file_path).where(
             Inspiration.content_hash.is_(None),
             Inspiration.file_path.isnot(None),
+            _NOT_DELETED,
         )
     )
     for insp_id, fpath in result.all():
@@ -285,7 +302,7 @@ async def list_inspirations(
     """
     query = select(Inspiration).options(
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
-    )
+    ).where(_NOT_DELETED)
 
     if source_type:
         query = query.where(Inspiration.source_type == source_type)
@@ -358,7 +375,7 @@ async def list_inspirations(
         ).scalar() or 0
 
         size_rows = (await db.execute(
-            select(Inspiration.id, Inspiration.file_path)
+            select(Inspiration.id, Inspiration.file_path).where(_NOT_DELETED)
         )).all()
 
         def _file_size(row) -> int:
@@ -406,7 +423,10 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
     result = await db.execute(
-        select(Inspiration).where(Inspiration.quality_status == "rejected")
+        select(Inspiration).where(
+            Inspiration.quality_status == "rejected",
+            _NOT_DELETED,
+        )
     )
     rejected = result.scalars().all()
 
@@ -686,3 +706,156 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
 
     # 提交成功后物理删除文件（删除失败仅记日志，不抛异常）
     delete_files(inspiration.file_path, inspiration.thumbnail_path)
+
+
+def _resolve_trash_reason(reason: str | None, inspiration: Inspiration) -> str:
+    """解析删除原因：显式传入的合法值优先；否则按素材状态自动推断。
+
+    - 质量审核被拒绝（rejected）→ 「质量差」（负样本学习用）
+    - 其余 → 「不喜欢」
+    """
+    if reason in TRASH_REASONS:
+        return reason
+    return "质量差" if inspiration.quality_status == "rejected" else "不喜欢"
+
+
+async def trash_inspiration(
+    db: AsyncSession, inspiration_id: str, reason: str | None
+) -> Inspiration:
+    """将素材移入垃圾桶（软删除）：文件移入 trash/，标记 deleted_at 与 trash_reason。
+
+    向量保留不删除（阶段 2 负样本学习依赖垃圾桶素材的 CLIP 图像向量），
+    恢复时无需重建、清空时才删除向量。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.unique().scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="素材已在垃圾桶中")
+
+    resolved = _resolve_trash_reason(reason, inspiration)
+
+    # 移动主文件与缩略图到垃圾桶，更新 DB 路径；文件缺失时返回 None 保留原路径
+    new_file = move_to_trash(inspiration.file_path, inspiration.id)
+    if new_file:
+        inspiration.file_path = new_file
+    new_thumb = move_to_trash(inspiration.thumbnail_path, inspiration.id, suffix="_thumb")
+    if new_thumb:
+        inspiration.thumbnail_path = new_thumb
+
+    inspiration.deleted_at = utcnow()
+    inspiration.trash_reason = resolved
+    await db.flush()
+    await db.refresh(inspiration)
+    return inspiration
+
+
+async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
+    """从垃圾桶恢复素材：文件移回媒体目录，清除 deleted_at 与 trash_reason。"""
+    result = await db.execute(
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.unique().scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.deleted_at is None:
+        raise HTTPException(status_code=409, detail="素材不在垃圾桶中")
+
+    new_file = restore_from_trash(inspiration.file_path)
+    if new_file:
+        inspiration.file_path = new_file
+    new_thumb = restore_from_trash(inspiration.thumbnail_path)
+    if new_thumb:
+        inspiration.thumbnail_path = new_thumb
+
+    inspiration.deleted_at = None
+    inspiration.trash_reason = None
+    await db.flush()
+    await db.refresh(inspiration)
+    return inspiration
+
+
+async def list_trash(
+    db: AsyncSession,
+    page: int = 1,
+    size: int = 50,
+    reason: str | None = None,
+) -> tuple[list[Inspiration], int]:
+    """分页查询垃圾桶中的素材（按删除时间倒序），支持按删除原因筛选。"""
+    query = (
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(Inspiration.deleted_at.isnot(None))
+    )
+    if reason:
+        query = query.where(Inspiration.trash_reason == reason)
+
+    total = (
+        await db.execute(select(func.count()).select_from(query.subquery()))
+    ).scalar() or 0
+
+    query = query.order_by(Inspiration.deleted_at.desc()).offset((page - 1) * size).limit(size)
+    result = await db.execute(query)
+    return result.unique().scalars().all(), total
+
+
+async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
+    """彻底清空垃圾桶（物理删除文件与数据库记录，释放磁盘空间）。
+
+    参数:
+        only_expired: 为 True 时仅清理已超过保留期（trash_retention_days）的素材，
+            用于 30 天自动清理；为 False 时清空全部垃圾桶素材。
+
+    返回:
+        {"deleted": 删除数量, "freed_bytes": 释放字节数}
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    from app.services import vector_store
+
+    conds = [Inspiration.deleted_at.isnot(None)]
+    if only_expired:
+        cutoff = utcnow() - timedelta(days=settings.trash_retention_days)
+        conds.append(Inspiration.deleted_at < cutoff)
+
+    result = await db.execute(select(Inspiration).where(*conds))
+    items = result.scalars().all()
+    if not items:
+        return {"deleted": 0, "freed_bytes": 0, "message": "垃圾桶已空"}
+
+    deleted_ids = [insp.id for insp in items]
+    urls_to_seal = [insp.source_url for insp in items if insp.source_url]
+
+    # 先删数据库记录并写墓碑（同一事务），提交成功后再物理删除文件
+    for insp in items:
+        await db.delete(insp)
+    if urls_to_seal:
+        for url in urls_to_seal:
+            await db.execute(
+                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
+            )
+    await db.commit()
+
+    freed_bytes = 0
+    for insp in items:
+        for p in (insp.file_path, insp.thumbnail_path):
+            if p:
+                full = settings.storage_root / p
+                try:
+                    if full.exists():
+                        freed_bytes += full.stat().st_size
+                        full.unlink()
+                except Exception:
+                    pass
+
+    # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
+    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+
+    return {"deleted": len(items), "freed_bytes": freed_bytes}

@@ -63,8 +63,10 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)):
         for row in daily_result.all()
     ]
 
-    # 问题素材统计
-    total_insp = (await db.execute(select(func.count(Inspiration.id)))).scalar() or 0
+    # 问题素材统计（排除垃圾桶）
+    total_insp = (await db.execute(
+        select(func.count(Inspiration.id)).where(Inspiration.deleted_at.is_(None))
+    )).scalar() or 0
     analyzed_ids = (
         select(AIAnalysisLog.inspiration_id)
         .where(_analysis_log_filter())

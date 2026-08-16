@@ -5,6 +5,18 @@ import apiClient from './client'
 /** 审核状态 */
 export type QualityStatus = 'pending' | 'approved' | 'rejected'
 
+/** 垃圾桶删除原因（负样本学习只用「质量差」子集保证语义纯净） */
+export type TrashReason = '质量差' | '重复' | '不喜欢' | '隐私' | '其他'
+
+/** 删除原因可选项（前端下拉用） */
+export const TRASH_REASON_OPTIONS: { label: string; value: TrashReason }[] = [
+  { label: '质量差', value: '质量差' },
+  { label: '重复', value: '重复' },
+  { label: '不喜欢', value: '不喜欢' },
+  { label: '隐私', value: '隐私' },
+  { label: '其他', value: '其他' },
+]
+
 /** 灵感列表响应类型 */
 export interface InspirationOut {
   id: string
@@ -20,6 +32,8 @@ export interface InspirationOut {
   quality_status?: QualityStatus | null
   quality_reason?: string | null
   is_ai_generated?: boolean
+  deleted_at?: string | null
+  trash_reason?: TrashReason | null
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
@@ -155,9 +169,43 @@ export async function toggleFavorite(id: string, isFavorite: boolean) {
   return data
 }
 
-/** 删除灵感 */
+/** 彻底删除灵感（物理删除，不可恢复；用于垃圾桶「彻底删除」等场景） */
 export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)
+}
+
+/** 移入垃圾桶（软删除，30 天内可恢复；reason 为空时后端按素材状态自动推断） */
+export async function moveToTrash(id: string, reason?: TrashReason) {
+  const { data } = await apiClient.post<InspirationOut>(
+    `/inspirations/${id}/trash`,
+    reason ? { reason } : {},
+  )
+  return data
+}
+
+/** 从垃圾桶恢复素材 */
+export async function restoreInspiration(id: string) {
+  const { data } = await apiClient.post<InspirationOut>(`/inspirations/${id}/restore`)
+  return data
+}
+
+/** 获取垃圾桶素材列表 */
+export async function fetchTrash(params: {
+  page?: number
+  size?: number
+  reason?: TrashReason
+} = {}) {
+  const { data } = await apiClient.get<InspirationListOut>('/inspirations/trash', { params })
+  return data
+}
+
+/** 清空垃圾桶（onlyExpired=true 仅清理超过保留期的过期素材） */
+export async function emptyTrash(onlyExpired = false) {
+  const { data } = await apiClient.delete<{ deleted: number; freed_bytes: number; message?: string }>(
+    '/inspirations/trash',
+    { params: { only_expired: onlyExpired } },
+  )
+  return data
 }
 
 /** 触发 AI 分析（用于手动重新分析） */

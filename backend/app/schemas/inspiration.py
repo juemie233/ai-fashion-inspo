@@ -4,6 +4,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_serializer
 
+# 垃圾桶删除原因枚举（负样本学习只用「质量差」子集保证语义纯净）
+TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他"]
+
 
 class TagOut(BaseModel):
     """标签输出"""
@@ -58,6 +61,12 @@ class BatchAddTagsRequest(BaseModel):
     source: str = "manual"
 
 
+class MoveToTrashRequest(BaseModel):
+    """移入垃圾桶的请求体（reason 为空时按素材状态自动推断）。"""
+
+    reason: TrashReason | None = None
+
+
 class InspirationOut(BaseModel):
     """灵感列表项输出"""
     id: str
@@ -73,6 +82,8 @@ class InspirationOut(BaseModel):
     quality_status: str | None = "pending"
     quality_reason: str | None = None
     is_ai_generated: bool = False
+    deleted_at: datetime | None = None
+    trash_reason: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
@@ -80,7 +91,7 @@ class InspirationOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_serializer('created_at', 'updated_at')
+    @field_serializer('created_at', 'updated_at', 'deleted_at')
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
         if dt is None:
             return None

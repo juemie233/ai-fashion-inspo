@@ -282,9 +282,9 @@ export function useSearch() {
       await inspStore.remove(id)
       results.value = results.value.filter(r => r.id !== id)
       total.value--
-      message.success('已删除')
+      message.success('已移入垃圾桶')
     } catch {
-      message.error('删除失败')
+      message.error('操作失败')
     }
   }
 

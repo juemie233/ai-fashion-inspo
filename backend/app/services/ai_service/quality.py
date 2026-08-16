@@ -77,6 +77,24 @@ def _parse_ai_generated(parsed: dict) -> bool:
     return confidence >= settings.ai_generated_confidence_threshold
 
 
+async def _classifier_prefilter(inspiration_id: str) -> tuple[bool, float] | None:
+    """负样本初筛器前置初筛：用已训练分类器对素材图像向量做「垃圾」判定。
+
+    返回 ``(是否垃圾, 垃圾置信度)``；未训练分类器、LanceDB 未安装或素材无图像向量时
+    返回 None（静默跳过，仍走完整 VLM 审核）。「宁缺毋滥」：仅在置信度超过阈值时
+    由调用方直接拒绝，否则退回 VLM 复审。
+    """
+    from app.services import quality_learner
+    from app.services.vector import store as vector_store
+
+    if not vector_store.is_lancedb_available():
+        return None
+    vec = await vector_store.get_vector("image", inspiration_id)
+    if not vec:
+        return None
+    return await quality_learner.predict_vector(vec)
+
+
 async def check_image_quality(
     db: AsyncSession, inspiration_id: str, file_path: str, force: bool = False
 ) -> tuple[str, str, bool]:
@@ -125,6 +143,15 @@ async def check_image_quality(
         return "pending", f"审核失败: {str(e)[:100]}", False
 
     model_cfg = get_model_config(settings.ollama_vision_model)
+
+    # 阶段 2：负样本初筛器前置初筛（仅普通审核生效；随机复审 force=True 走完整 VLM，
+    # 未训练分类器 / 无图像向量时静默跳过）
+    if not force:
+        prefilter = await _classifier_prefilter(inspiration_id)
+        if prefilter is not None:
+            is_garbage, proba = prefilter
+            if is_garbage:
+                return "rejected", f"初筛器判定为垃圾素材（置信度 {proba:.2f}）", False
 
     # 第一步：穿搭二分类
     raw, err = await _ollama_vision_chat(image_data, outfit_prompt, model_cfg, temperature=0.1)

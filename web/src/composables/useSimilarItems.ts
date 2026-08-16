@@ -5,7 +5,7 @@ import type { Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import {
   toggleFavorite,
-  deleteInspiration,
+  moveToTrash,
   batchAddTagsToInspirations,
   type InspirationDetailOut,
   type InspirationTagOut,
@@ -91,14 +91,14 @@ export function useSimilarItems(
     }
   }
 
-  /** 删除相似素材 */
+  /** 将相似素材移入垃圾桶 */
   async function deleteSimilar(id: string) {
     try {
-      await deleteInspiration(id)
+      await moveToTrash(id)
       similarItems.value = similarItems.value.filter((s) => s.inspiration.id !== id)
-      message.success('已删除')
+      message.success('已移入垃圾桶')
     } catch {
-      message.error('删除失败')
+      message.error('操作失败')
     }
   }
 

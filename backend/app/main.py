@@ -1,5 +1,6 @@
 """FastAPI 应用入口。"""
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,31 @@ from app.config import settings
 from app.database import init_db
 from app.db_migrations import compute_schema_version, ensure_schema
 from app.routers import inspirations, tags, files, search, ai, scraper, ws, admin, tasks
+
+# 垃圾桶自动清理周期（秒）：每 6 小时扫描一次超过保留期的软删除素材
+_TRASH_SWEEP_INTERVAL = 6 * 3600
+
+
+async def _sweep_expired_trash() -> None:
+    """周期性地彻底删除超过保留期的垃圾桶素材（30 天自动清理）。
+
+    独立 asyncio 任务运行于服务进程内，无需额外 cron；进程重启时由
+    lifespan 立即触发一次清理，之后按固定间隔轮询。
+    """
+    from app.database import async_session
+    from app.services import inspiration_service
+
+    while True:
+        try:
+            await asyncio.sleep(_TRASH_SWEEP_INTERVAL)
+            async with async_session() as db:
+                result = await inspiration_service.purge_trash(db, only_expired=True)
+                if result.get("deleted"):
+                    print(f"[垃圾桶] 自动清理 {result['deleted']} 个过期素材")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[垃圾桶] 自动清理失败: {e}")
 
 
 @asynccontextmanager
@@ -46,9 +72,26 @@ async def lifespan(app: FastAPI):
         if added:
             print(f"已导入 {added} 个预设标签")
 
+    # 垃圾桶：启动时立即清理一次超过保留期的过期素材，并拉起周期性自动清理任务
+    from app.services import inspiration_service
+    async with async_session() as db:
+        try:
+            swept = await inspiration_service.purge_trash(db, only_expired=True)
+            if swept.get("deleted"):
+                print(f"[垃圾桶] 启动清理 {swept['deleted']} 个过期素材")
+        except Exception as e:
+            print(f"[垃圾桶] 启动清理失败: {e}")
+
+    sweep_task = asyncio.create_task(_sweep_expired_trash())
+
     print(f"{settings.app_name} v{settings.app_version} 启动于端口 {settings.port}")
     yield
-    # 关闭
+    # 关闭：取消周期性清理任务
+    sweep_task.cancel()
+    try:
+        await sweep_task
+    except asyncio.CancelledError:
+        pass
     print("正在关闭...")
 
 

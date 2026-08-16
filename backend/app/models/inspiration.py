@@ -56,6 +56,13 @@ class Inspiration(Base):
         Boolean, default=False, index=True
     )  # 疑似 AI 生成标记（只标记不拒绝，与 quality_status 正交）
 
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )  # 软删除时间戳（非空表示在垃圾桶中，30 天内可恢复）
+    trash_reason: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )  # 删除原因：质量差/重复/不喜欢/隐私/其他（负样本学习只用「质量差」子集）
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, index=True
     )

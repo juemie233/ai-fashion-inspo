@@ -76,6 +76,7 @@ async def get_batch_analyze_targets(
         select(Inspiration).where(
             Inspiration.id.in_(inspiration_ids),
             Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
     )
     inspirations = result.scalars().all()
@@ -94,25 +95,35 @@ async def get_analysis_queue_stats(db: AsyncSession) -> dict:
         select(func.count(func.distinct(AIAnalysisLog.inspiration_id)))
         .select_from(AIAnalysisLog)
         .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
-        .where(_analysis_log_filter(), Inspiration.media_type == "image")
+        .where(
+            _analysis_log_filter(),
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
+        )
     )
     analyzed_count = analyzed.scalar() or 0
 
-    # 总素材数（仅图片，暂不分析视频）
+    # 总素材数（仅图片，暂不分析视频，排除垃圾桶）
     total = await db.execute(
         select(func.count()).select_from(Inspiration).where(
-            Inspiration.media_type == "image"
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
     )
     total_count = total.scalar() or 0
 
-    # 失败的 — 只看每个素材的最新分析日志（排除质量审核日志）
+    # 失败的 — 只看每个素材的最新分析日志（排除质量审核日志与垃圾桶素材）
     latest_log_sub = (
         select(
             AIAnalysisLog.inspiration_id,
             func.max(AIAnalysisLog.id).label("max_id"),
         )
-        .where(_analysis_log_filter())
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(
+            _analysis_log_filter(),
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
+        )
         .group_by(AIAnalysisLog.inspiration_id)
         .subquery()
     )
@@ -146,6 +157,7 @@ async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
         select(Inspiration.id).where(
             Inspiration.id.notin_(analyzed_sub),
             Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
     )
     return [row[0] for row in result]

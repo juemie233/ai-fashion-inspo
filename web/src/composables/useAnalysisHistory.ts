@@ -3,7 +3,7 @@
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
-import { deleteInspiration as deleteInspirationApi } from '@/api/inspirations'
+import { moveToTrash as moveToTrashApi } from '@/api/inspirations'
 import { useNotification } from '@/composables/useNotification'
 import type { HistoryItem } from '@/types/analysis'
 
@@ -152,20 +152,20 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     }
   }
 
-  /** 删除素材本身（连带磁盘文件与全部分析记录，不可恢复）。
+  /** 将素材移入垃圾桶（软删除，30 天内可恢复）。
    *
-   * 用于处置质量审核不到位混入的低质量素材：在分析历史中直接删除，
-   * 删除后该素材的日志随外键级联清除，历史列表自动刷新。
+   * 用于处置质量审核不到位混入的低质量素材：在分析历史中直接移入垃圾桶，
+   * 移入后该素材从正常列表/统计中过滤，历史列表自动刷新。
    */
   async function deleteInspirationFromHistory(inspirationId: string) {
     try {
-      await deleteInspirationApi(inspirationId)
-      message.success('素材已删除（含文件与分析记录）')
+      await moveToTrashApi(inspirationId)
+      message.success('素材已移入垃圾桶（30 天内可恢复）')
       loadHistory()
       options.loadQueue?.()
       options.loadActiveAnalyses?.()
     } catch (e: any) {
-      message.error(e.response?.data?.detail || '删除素材失败')
+      message.error(e.response?.data?.detail || '移入垃圾桶失败')
     }
   }
 

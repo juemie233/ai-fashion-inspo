@@ -96,7 +96,7 @@ chrome_debug_port: int = 9222
 | **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计、任务状态/表单草稿持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、快捷键（回车下载/Ctrl+S 保存） |
-| **素材管理** | 按小菜单分区的管理后台：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重 |
+| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理） |
 | **浏览器插件** | 一键提取网页穿搭图片 |
 
 ## 快速启动
@@ -392,7 +392,7 @@ fashion-inspo/
 
 | 表 | 说明 | 关键字段 |
 | ---- | ------ | ---------- |
-| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason, is_ai_generated |
+| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, quality_status, quality_reason, is_ai_generated, deleted_at, trash_reason |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual), pinned, sort_order, description |
 | `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
@@ -433,7 +433,11 @@ fashion-inspo/
 | `POST` | `/api/inspirations/from-url` | 从 URL 导入素材 |
 | `GET` | `/api/inspirations/{id}` | 素材详情 |
 | `PATCH` | `/api/inspirations/{id}` | 更新素材 |
-| `DELETE` | `/api/inspirations/{id}` | 删除素材 |
+| `POST` | `/api/inspirations/{id}/trash` | 移入垃圾桶（软删除，`reason` 可选：质量差/重复/不喜欢/隐私/其他） |
+| `POST` | `/api/inspirations/{id}/restore` | 从垃圾桶恢复 |
+| `GET` | `/api/inspirations/trash` | 垃圾桶素材列表（分页，可按 `reason` 筛选） |
+| `DELETE` | `/api/inspirations/trash` | 清空垃圾桶（`only_expired=true` 仅清理过期素材） |
+| `DELETE` | `/api/inspirations/{id}` | 彻底删除（物理，不可恢复；普通删除请用 `/trash`） |
 | `POST` | `/api/inspirations/{id}/tags` | 手动给素材关联标签（按名查找/创建，如穿搭大标签） |
 | `DELETE` | `/api/inspirations/{id}/tags/{tag_id}` | 解除素材与标签的关联 |
 
@@ -535,6 +539,16 @@ fashion-inspo/
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
 
 > **手动上传免审核：** 默认开启（配置项 `manual_upload_auto_approve`，对应 .env 的 `MANUAL_UPLOAD_AUTO_APPROVE`）。开启后手动上传的素材直接标记为「已通过」，不进入待审核队列；关闭后恢复为待审核。可在「AI 模型管理 → 质量审核」面板一键切换。
+
+### 负样本初筛器（质量审核前置初筛）
+
+| 方法 | 路径 | 说明 |
+| ------ | ------ | ------ |
+| `GET` | `/api/ai/quality-learner/status` | 初筛器状态 + 当前正负样本统计 |
+| `POST` | `/api/ai/quality-learner/train` | 用正负样本训练/重训 sklearn 分类器（返回指标） |
+| `POST` | `/api/ai/quality-learner/reset` | 删除模型，回滚到纯 VLM 审核 |
+
+> **说明：** 初筛器用「垃圾桶 `质量差` 负样本 + `rejected` 素材 + `approved` 正样本」的 CLIP 图像向量（512 维，LanceDB）训练轻量逻辑回归，作为质量审核前置初筛：高置信度垃圾直接拒绝，低置信度仍走 VLM 复审（「宁缺毋滥」）。阈值见 `quality_classifier_threshold`，人工翻案机制原样保留。也可用脚本 `python scripts/quality_learner.py status|train|reset` 操作。
 
 ### 任务队列
 

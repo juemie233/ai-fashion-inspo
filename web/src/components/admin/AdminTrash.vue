@@ -1,0 +1,293 @@
+<script setup lang="ts">
+/** 垃圾桶管理：查看/筛选软删除素材，支持恢复、彻底删除与清空（含清理过期）。 */
+
+import { computed, onMounted, ref } from 'vue'
+import { useMessage } from 'naive-ui'
+import {
+  fetchTrash,
+  restoreInspiration,
+  deleteInspiration,
+  emptyTrash,
+  getFileUrl,
+  TRASH_REASON_OPTIONS,
+  type TrashReason,
+  type InspirationOut,
+} from '@/api/inspirations'
+import { formatSize } from '@/utils/format'
+
+const message = useMessage()
+
+// ── 列表与分页 ──
+const items = ref<InspirationOut[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = 50
+const loading = ref(false)
+const reasonFilter = ref<TrashReason | ''>('')
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+async function load() {
+  loading.value = true
+  try {
+    const data = await fetchTrash({
+      page: page.value,
+      size: pageSize,
+      reason: reasonFilter.value || undefined,
+    })
+    items.value = data.items
+    total.value = data.total
+  } catch {
+    message.error('加载垃圾桶失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
+
+/** 按删除原因筛选 */
+function onReasonChange() {
+  page.value = 1
+  load()
+}
+
+/** 剩余保留天数（保留期按 30 天估算展示） */
+function daysRemaining(deletedAt?: string | null): string {
+  if (!deletedAt) return ''
+  const deleted = new Date(deletedAt).getTime()
+  const expire = deleted + 30 * 86400_000
+  const days = Math.max(0, Math.ceil((expire - Date.now()) / 86400_000))
+  return `${days} 天`
+}
+
+// ── 单条操作 ──
+const restoring = ref<Set<string>>(new Set())
+const deleting = ref<Set<string>>(new Set())
+
+async function restore(id: string) {
+  if (restoring.value.has(id)) return
+  restoring.value = new Set(restoring.value).add(id)
+  try {
+    await restoreInspiration(id)
+    message.success('已恢复')
+    await load()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '恢复失败')
+  } finally {
+    restoring.value = new Set(restoring.value)
+    restoring.value.delete(id)
+  }
+}
+
+async function permanentDelete(id: string) {
+  if (deleting.value.has(id)) return
+  deleting.value = new Set(deleting.value).add(id)
+  try {
+    await deleteInspiration(id)
+    message.success('已彻底删除')
+    await load()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '删除失败')
+  } finally {
+    deleting.value = new Set(deleting.value)
+    deleting.value.delete(id)
+  }
+}
+
+// ── 批量清空 ──
+const emptying = ref(false)
+const cleaningExpired = ref(false)
+
+async function emptyAll() {
+  emptying.value = true
+  try {
+    const r = await emptyTrash(false)
+    message.success(`已清空 ${r.deleted} 个素材，释放 ${formatSize(r.freed_bytes)}`)
+    page.value = 1
+    await load()
+  } catch {
+    message.error('清空失败')
+  } finally {
+    emptying.value = false
+  }
+}
+
+async function cleanExpired() {
+  cleaningExpired.value = true
+  try {
+    const r = await emptyTrash(true)
+    message.success(`已清理 ${r.deleted} 个过期素材，释放 ${formatSize(r.freed_bytes)}`)
+    await load()
+  } catch {
+    message.error('清理失败')
+  } finally {
+    cleaningExpired.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="trash-panel">
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <n-tag type="warning" size="small" :bordered="false">
+          共 {{ total }} 个垃圾桶素材（30 天后自动清理）
+        </n-tag>
+        <n-select
+          v-model:value="reasonFilter"
+          :options="[{ label: '全部原因', value: '' }, ...TRASH_REASON_OPTIONS]"
+          size="small"
+          style="width: 130px"
+          placeholder="删除原因"
+          @update:value="onReasonChange"
+        />
+      </div>
+      <div class="toolbar-right">
+        <n-popconfirm @positive-click="cleanExpired">
+          <template #trigger>
+            <n-button size="small" :loading="cleaningExpired">清理过期</n-button>
+          </template>
+          仅清理超过 30 天保留期的素材，仍在保留期内的保留。
+        </n-popconfirm>
+        <n-popconfirm @positive-click="emptyAll">
+          <template #trigger>
+            <n-button size="small" type="error" secondary :loading="emptying">清空垃圾桶</n-button>
+          </template>
+          彻底删除垃圾桶中全部素材并释放磁盘空间，不可恢复。
+        </n-popconfirm>
+      </div>
+    </div>
+
+    <!-- 列表 -->
+    <n-spin :show="loading">
+      <div v-if="items.length === 0 && !loading" class="empty">
+        <n-empty description="垃圾桶是空的 🎉" />
+      </div>
+      <div v-else class="grid">
+        <div v-for="item in items" :key="item.id" class="trash-card">
+          <video
+            v-if="item.media_type === 'video' && !item.thumbnail_path"
+            :src="getFileUrl(item.file_path)"
+            muted
+            playsinline
+            preload="metadata"
+            class="thumb"
+          />
+          <img
+            v-else
+            :src="getFileUrl(item.thumbnail_path || item.file_path)"
+            :alt="item.source_author || '垃圾桶素材'"
+            class="thumb"
+            loading="lazy"
+          />
+          <div class="meta">
+            <n-tag size="tiny" type="error" :bordered="false">{{ item.trash_reason || '未知' }}</n-tag>
+            <span class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
+          </div>
+          <div class="actions">
+            <n-button
+              size="tiny"
+              type="primary"
+              secondary
+              :loading="restoring.has(item.id)"
+              @click="restore(item.id)"
+            >
+              恢复
+            </n-button>
+            <n-popconfirm @positive-click="permanentDelete(item.id)">
+              <template #trigger>
+                <n-button
+                  size="tiny"
+                  type="error"
+                  quaternary
+                  :loading="deleting.has(item.id)"
+                >
+                  彻底删除
+                </n-button>
+              </template>
+              彻底删除后不可恢复，确定继续？
+            </n-popconfirm>
+          </div>
+        </div>
+      </div>
+    </n-spin>
+
+    <!-- 分页 -->
+    <div v-if="totalPages > 1" class="pagination-wrapper">
+      <n-pagination
+        v-model:page="page"
+        :page-count="totalPages"
+        :page-size="pageSize"
+        @update:page="load"
+      />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+.trash-card {
+  border: 1px solid var(--n-border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--n-color);
+  display: flex;
+  flex-direction: column;
+}
+.thumb {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  display: block;
+  background: #f5f5f5;
+}
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 8px 10px 0;
+}
+.days {
+  font-size: 12px;
+  color: #999;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px 10px;
+}
+.empty {
+  padding: 48px 0;
+}
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+</style>

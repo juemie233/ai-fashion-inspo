@@ -56,8 +56,11 @@ async def batch_quality_check(
         random: 为 True 时随机抽取 limit 个素材（含已审查，会覆盖重审）；
             为 False 时按默认顺序取前 limit 个待审核（pending）素材。
     """
-    # 随机复审抽取所有图片素材（含已审查），普通审核仅取 pending
-    stmt = select(Inspiration.id).where(Inspiration.media_type == "image")
+    # 随机复审抽取所有图片素材（含已审查），普通审核仅取 pending；均排除垃圾桶素材
+    stmt = select(Inspiration.id).where(
+        Inspiration.media_type == "image",
+        Inspiration.deleted_at.is_(None),
+    )
     if random:
         stmt = stmt.order_by(func.random())
     else:
@@ -90,6 +93,7 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)):
         .where(
             Inspiration.media_type == "image",
             Inspiration.quality_status == "approved",
+            Inspiration.deleted_at.is_(None),
         )
         .values(quality_status="pending", quality_reason=None)
     )
@@ -104,6 +108,7 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)):
         select(Inspiration.id).where(
             Inspiration.quality_status == "pending",
             Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
     )
     ids = [r[0] for r in items_result.all()]
@@ -126,7 +131,10 @@ async def quality_stats(db: AsyncSession = Depends(get_db)):
             func.coalesce(Inspiration.quality_status, "pending"),
             func.count(Inspiration.id),
         )
-        .where(Inspiration.media_type == "image")
+        .where(
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
+        )
         .group_by(func.coalesce(Inspiration.quality_status, "pending"))
     )
     counts = {status: count for status, count in result.all()}
@@ -142,6 +150,7 @@ async def quality_stats(db: AsyncSession = Depends(get_db)):
         select(func.count(Inspiration.id)).where(
             Inspiration.media_type == "image",
             Inspiration.is_ai_generated.is_(True),
+            Inspiration.deleted_at.is_(None),
         )
     )
     ai_generated = ai_result.scalar() or 0

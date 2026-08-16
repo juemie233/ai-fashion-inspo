@@ -12,6 +12,7 @@ from app.schemas.inspiration import (
     InspirationOut,
     InspirationUpdate,
     InspirationTagOut,
+    MoveToTrashRequest,
     TagOut,
 )
 from app.services import inspiration_service
@@ -115,6 +116,56 @@ async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
     return await inspiration_service.delete_rejected_inspirations(db)
 
 
+# ── 垃圾桶（软删除）──
+# 注意：GET /trash、DELETE /trash 必须声明在 /{inspiration_id} 之前，避免被动态路由吞掉
+
+
+@router.get("/trash", response_model=InspirationListOut)
+async def list_trash(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    reason: str | None = Query(None, description="按删除原因筛选（质量差/重复/不喜欢/隐私/其他）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """分页获取垃圾桶中的素材（软删除，30 天内可恢复）。"""
+    items, total = await inspiration_service.list_trash(db, page=page, size=size, reason=reason)
+    return InspirationListOut(
+        items=[_to_out(i) for i in items],
+        total=total,
+        page=page,
+        size=size,
+    )
+
+
+@router.delete("/trash", status_code=status.HTTP_200_OK)
+async def empty_trash(
+    only_expired: bool = Query(False, description="为 true 时仅清理超过保留期的过期素材"),
+    db: AsyncSession = Depends(get_db),
+):
+    """彻底清空垃圾桶（物理删除文件与数据库记录）。"""
+    return await inspiration_service.purge_trash(db, only_expired=only_expired)
+
+
+@router.post("/{inspiration_id}/trash", response_model=InspirationOut)
+async def move_to_trash(
+    inspiration_id: str,
+    payload: MoveToTrashRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """将素材移入垃圾桶（软删除），文件移入 storage/trash/，30 天内可恢复。"""
+    inspiration = await inspiration_service.trash_inspiration(
+        db, inspiration_id, payload.reason if payload else None
+    )
+    return _to_out(inspiration)
+
+
+@router.post("/{inspiration_id}/restore", response_model=InspirationOut)
+async def restore_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
+    """从垃圾桶恢复素材（移回媒体目录，清除软删除标记）。"""
+    inspiration = await inspiration_service.restore_inspiration(db, inspiration_id)
+    return _to_out(inspiration)
+
+
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)
 async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
     """获取单个灵感详情（包含完整标签和分析日志）。"""
@@ -136,6 +187,8 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
         is_ai_generated=inspiration.is_ai_generated,
+        deleted_at=inspiration.deleted_at,
+        trash_reason=inspiration.trash_reason,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=[
@@ -225,7 +278,11 @@ async def remove_inspiration_tag(
 
 @router.delete("/{inspiration_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)):
-    """删除灵感素材及其对应的磁盘文件。"""
+    """彻底删除灵感素材（物理删除文件与数据库记录，不可恢复）。
+
+    普通「删除」请使用 ``POST /{id}/trash``（移入垃圾桶，可恢复）；
+    本端点用于垃圾桶中的「彻底删除」或内部物理清理场景。
+    """
     await inspiration_service.delete_inspiration(db, inspiration_id)
 
 
@@ -261,6 +318,8 @@ def _to_out(inspiration: Inspiration) -> InspirationOut:
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
         is_ai_generated=inspiration.is_ai_generated,
+        deleted_at=inspiration.deleted_at,
+        trash_reason=inspiration.trash_reason,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,

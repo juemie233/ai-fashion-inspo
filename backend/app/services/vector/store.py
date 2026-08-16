@@ -293,6 +293,37 @@ async def get_vector(kind: str, inspiration_id: str) -> list[float] | None:
     return await asyncio.to_thread(_get_vector_sync, kind, inspiration_id)
 
 
+def _get_vectors_sync(kind: str, inspiration_ids: list[str]) -> dict[str, list[float]]:
+    """同步批量读取多个素材的向量（一次表加载，避免逐条 O(N) 全表扫描）。
+
+    训练负样本初筛器等需要「全量样本向量」的场景应使用本函数，
+    逐条 ``get_vector`` 每次都会 ``to_arrow()`` 全表加载，N 条即 O(N²)。
+    """
+    if not inspiration_ids:
+        return {}
+    try:
+        table = _table(kind)
+        arrow_table = table.to_arrow()
+        id_set = set(inspiration_ids)
+        insp_col = arrow_table["inspiration_id"].to_pylist()
+        vec_col = arrow_table["vector"].to_pylist()
+        result: dict[str, list[float]] = {}
+        for insp_id, vec in zip(insp_col, vec_col):
+            if insp_id in id_set:
+                result[str(insp_id)] = [float(x) for x in vec]
+        return result
+    except Exception as e:
+        logger.error(f"批量读取向量失败 (kind={kind}): {e}")
+        return {}
+
+
+async def get_vectors_batch(
+    kind: str, inspiration_ids: list[str]
+) -> dict[str, list[float]]:
+    """批量读取多个素材的向量；不存在或读取失败的素材不在结果中。"""
+    return await asyncio.to_thread(_get_vectors_sync, kind, inspiration_ids)
+
+
 def _count_sync(kind: str) -> int:
     """同步统计表中向量条数。"""
     try:

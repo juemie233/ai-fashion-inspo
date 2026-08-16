@@ -215,3 +215,88 @@ def delete_files(file_path: str, thumbnail_path: str | None = None):
 def get_full_path(relative_path: str) -> Path:
     """将存储相对路径转换为绝对文件系统路径。"""
     return settings.storage_root / relative_path
+
+
+def move_to_trash(rel_path: str, inspiration_id: str, suffix: str = "") -> str | None:
+    """将单个文件移动到垃圾桶目录，返回新的相对路径；文件不存在时返回 None。
+
+    参数:
+        rel_path: 待移动文件的存储相对路径（如 ``images/2026-01/abc.jpg``）
+        inspiration_id: 素材 UUID（作为垃圾桶内文件名，便于按素材追溯）
+        suffix: 文件名后缀（如 ``_thumb`` 用于区分缩略图，避免与主文件同名覆盖）
+
+    说明:
+        移动后文件位于 ``storage/trash/{inspiration_id}{suffix}{ext}``，
+        与原始目录解耦，保证完整性检查（只扫描 images/thumbnails/videos）不会
+        把垃圾桶文件误判为孤立文件。
+    """
+    if not rel_path:
+        return None
+    src = settings.storage_root / rel_path
+    if not src.exists():
+        return None
+
+    settings.trash_dir.mkdir(parents=True, exist_ok=True)
+    ext = src.suffix.lower() or ".bin"
+    dst = settings.trash_dir / f"{inspiration_id}{suffix}{ext}"
+    # 目标已存在（罕见：同 id 重复移入）时加随机后缀避免覆盖
+    if dst.exists():
+        dst = settings.trash_dir / f"{inspiration_id}{suffix}_{uuid.uuid4().hex[:6]}{ext}"
+
+    try:
+        src.rename(dst)
+    except OSError:
+        # 跨卷 rename 可能失败（不同磁盘/权限），回退 copy + 删除
+        import shutil
+
+        shutil.copy2(src, dst)
+        src.unlink(missing_ok=True)
+
+    return dst.relative_to(settings.storage_root).as_posix()
+
+
+def restore_from_trash(rel_path: str) -> str | None:
+    """将垃圾桶目录中的文件移回对应媒体目录，返回新的相对路径。
+
+    根据文件名后缀与扩展名推断目标目录：
+    - ``{id}_thumb{ext}`` → ``thumbnails/{月份}/``
+    - 视频扩展名 → ``videos/{月份}/``
+    - 其余（图片） → ``images/{月份}/``
+
+    文件不存在时返回 None（调用方据此容错，不阻断恢复流程）。
+    """
+    if not rel_path:
+        return None
+    src = settings.storage_root / rel_path
+    if not src.exists():
+        return None
+
+    stem = src.stem  # 不含扩展名
+    ext = src.suffix.lower() or ".bin"
+    is_thumb = stem.endswith("_thumb")
+
+    if is_thumb:
+        base = _ensure_date_dir(settings.thumbnails_dir)
+        prefix = "thumbnails"
+    elif _is_video(src):
+        base = _ensure_date_dir(settings.videos_dir)
+        prefix = "videos"
+    else:
+        base = _ensure_date_dir(settings.images_dir)
+        prefix = "images"
+
+    dst = base / f"{stem}{ext}"
+    # 目标已存在时加随机后缀，避免覆盖同月已恢复的同名文件
+    if dst.exists():
+        dst = base / f"{stem}_{uuid.uuid4().hex[:6]}{ext}"
+
+    try:
+        src.rename(dst)
+    except OSError:
+        import shutil
+
+        shutil.copy2(src, dst)
+        src.unlink(missing_ok=True)
+
+    today = datetime.now().strftime("%Y-%m")
+    return f"{prefix}/{today}/{dst.name}"

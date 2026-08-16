@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     images_dir: Path = storage_root / "images"
     thumbnails_dir: Path = storage_root / "thumbnails"
     videos_dir: Path = storage_root / "videos"
+    trash_dir: Path = storage_root / "trash"  # 垃圾桶（软删除文件移入此目录）
 
     # 上传大小限制（MB）：防止误传超大文件导致内存与磁盘暴涨
     max_image_upload_mb: int = 20  # 图片/缩略图
@@ -71,6 +72,12 @@ class Settings(BaseSettings):
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」
+
+    # 垃圾桶（软删除）
+    trash_retention_days: int = 30  # 垃圾桶保留天数，到期自动清理
+
+    # 负样本初筛器（阶段 2：CLIP 向量 + sklearn 轻量分类器）
+    quality_classifier_threshold: float = 0.9  # 自动拒绝的置信度阈值（宁缺毋滥，低置信度仍走 VLM 复审）
 
     # AI 分析 Prompt（运行时可变，前端可编辑）
     ai_analysis_prompt: str = (
@@ -117,6 +124,7 @@ class Settings(BaseSettings):
             "images": self.images_dir,
             "thumbnails": self.thumbnails_dir,
             "videos": self.videos_dir,
+            "trash": self.trash_dir,
         }
 
 

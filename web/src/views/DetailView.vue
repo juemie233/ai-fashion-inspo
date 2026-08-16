@@ -7,6 +7,8 @@ import { useMessage } from 'naive-ui'
 import {
   fetchInspiration,
   toggleFavorite,
+  moveToTrash,
+  restoreInspiration,
   deleteInspiration,
   getFileUrl,
   analyzeInspiration,
@@ -136,12 +138,37 @@ function goHome() {
   router.push({ path: '/', query: route.query })
 }
 
-/** 删除 */
+/** 移入垃圾桶（软删除） */
 async function handleDelete() {
   if (!detail.value) return
   try {
+    await moveToTrash(detail.value.id)
+    message.success('已移入垃圾桶')
+    goHome()
+  } catch {
+    message.error('操作失败')
+  }
+}
+
+/** 从垃圾桶恢复 */
+async function handleRestore() {
+  if (!detail.value) return
+  try {
+    const restored = await restoreInspiration(detail.value.id)
+    message.success('已恢复')
+    detail.value.deleted_at = restored.deleted_at ?? null
+    detail.value.trash_reason = restored.trash_reason ?? null
+  } catch {
+    message.error('恢复失败')
+  }
+}
+
+/** 彻底删除（物理删除，不可恢复） */
+async function handlePermanentDelete() {
+  if (!detail.value) return
+  try {
     await deleteInspiration(detail.value.id)
-    message.success('已删除')
+    message.success('已彻底删除')
     goHome()
   } catch {
     message.error('删除失败')
@@ -238,6 +265,16 @@ function goSearchByTag(name: string) {
           <n-breadcrumb-item>素材详情</n-breadcrumb-item>
         </n-breadcrumb>
 
+        <!-- 垃圾桶提示（软删除素材） -->
+        <n-alert
+          v-if="detail.deleted_at"
+          type="warning"
+          title="此素材在垃圾桶中"
+          style="margin-bottom: 16px"
+        >
+          删除原因：{{ detail.trash_reason || '未知' }}；可点击右上角「恢复」移回素材库，或「彻底删除」永久移除。
+        </n-alert>
+
         <div class="detail-layout">
           <!-- 左侧：大图 / 视频 -->
           <div class="image-section">
@@ -283,11 +320,20 @@ function goSearchByTag(name: string) {
               >
                 <n-button>⬇️ 下载原图</n-button>
               </a>
-              <n-popconfirm @positive-click="handleDelete">
+              <template v-if="detail.deleted_at">
+                <n-button type="primary" secondary @click="handleRestore">恢复</n-button>
+                <n-popconfirm @positive-click="handlePermanentDelete">
+                  <template #trigger>
+                    <n-button type="error">彻底删除</n-button>
+                  </template>
+                  彻底删除后不可恢复，确定继续？
+                </n-popconfirm>
+              </template>
+              <n-popconfirm v-else @positive-click="handleDelete">
                 <template #trigger>
-                  <n-button type="error" secondary>删除</n-button>
+                  <n-button type="error" secondary>移入垃圾桶</n-button>
                 </template>
-                确定要删除这个素材吗？
+                移入垃圾桶后 30 天内可在「素材管理 → 垃圾桶」恢复
               </n-popconfirm>
             </div>
 

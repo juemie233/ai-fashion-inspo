@@ -7,7 +7,7 @@ import {
   fetchInspiration,
   uploadInspiration,
   toggleFavorite as toggleFavoriteApi,
-  deleteInspiration as deleteInspirationApi,
+  moveToTrash as moveToTrashApi,
   type InspirationOut,
   type InspirationDetailOut,
 } from '@/api/inspirations'
@@ -129,9 +129,9 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     }
   }
 
-  /** 删除素材 */
+  /** 移入垃圾桶（软删除，30 天内可恢复） */
   async function remove(id: string) {
-    await deleteInspirationApi(id)
+    await moveToTrashApi(id)
     items.value = items.value.filter((i) => i.id !== id)
     total.value--
   }

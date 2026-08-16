@@ -18,7 +18,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 # 素材媒体目录：完整性检查只扫描这些目录，排除 lancedb（向量库）、logs（日志）、
 # cookies、debug 等非素材数据，否则会把向量库内部文件误判为「孤立文件」。
+# 垃圾桶（trash）同样不在此列：软删除文件已移入 trash/，不应被当作孤立文件。
 _INSP_MEDIA_DIRS = ("images", "thumbnails", "videos")
+
+# 未删除素材的统一过滤条件（软删除后所有统计/完整性/重复检测都应排除垃圾桶素材）
+_NOT_DELETED = Inspiration.deleted_at.is_(None)
 
 
 def _scan_storage_files() -> dict[str, int]:
@@ -48,18 +52,22 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     - 总数、总大小、缩略图大小
     - 按来源类型 / 媒体类型 / 分析状态 / 月份分组统计
     """
-    # 素材总数
-    total_count = (await db.execute(select(func.count(Inspiration.id)))).scalar() or 0
+    # 素材总数（排除垃圾桶）
+    total_count = (await db.execute(
+        select(func.count(Inspiration.id)).where(_NOT_DELETED)
+    )).scalar() or 0
 
     # 按来源类型
     source_stats = (await db.execute(
         select(Inspiration.source_type, func.count(Inspiration.id))
+        .where(_NOT_DELETED)
         .group_by(Inspiration.source_type)
     )).all()
 
     # 按媒体类型
     media_stats = (await db.execute(
         select(Inspiration.media_type, func.count(Inspiration.id))
+        .where(_NOT_DELETED)
         .group_by(Inspiration.media_type)
     )).all()
 
@@ -68,26 +76,34 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     # — "error": 有分析日志且至少一条失败
     # — "pending": 没有任何分析日志
 
-    # 有分析日志的素材（去重）
+    # 未删除素材 ID 集合（统计子查询过滤垃圾桶素材）
+    non_deleted_ids = select(Inspiration.id).where(_NOT_DELETED)
+
+    # 有分析日志的素材（去重，排除垃圾桶）
     analyzed_ids_subq = (
         select(AIAnalysisLog.inspiration_id)
-        .where(analysis_log_filter(), AIAnalysisLog.inspiration_id.isnot(None))
+        .where(
+            analysis_log_filter(),
+            AIAnalysisLog.inspiration_id.isnot(None),
+            AIAnalysisLog.inspiration_id.in_(non_deleted_ids),
+        )
         .distinct()
     ).subquery()
 
-    # 分析失败的素材 ID
+    # 分析失败的素材 ID（排除垃圾桶）
     failed_ids_subq = (
         select(AIAnalysisLog.inspiration_id)
         .where(
             analysis_log_filter(),
             AIAnalysisLog.error.isnot(None),
             AIAnalysisLog.error != "",
+            AIAnalysisLog.inspiration_id.in_(non_deleted_ids),
         )
         .distinct()
     ).subquery()
 
     total_count_val = (await db.execute(
-        select(func.count(Inspiration.id))
+        select(func.count(Inspiration.id)).where(_NOT_DELETED)
     )).scalar() or 0
 
     error_count = (await db.execute(
@@ -103,20 +119,20 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     done_count = analyzed_count - error_count
     pending_count = total_count_val - analyzed_count
 
-    # 无标签素材数
+    # 无标签素材数（排除垃圾桶）
     untagged_count = (await db.execute(
         select(func.count(Inspiration.id))
         .outerjoin(InspirationTag, Inspiration.id == InspirationTag.inspiration_id)
-        .where(InspirationTag.inspiration_id.is_(None))
+        .where(InspirationTag.inspiration_id.is_(None), _NOT_DELETED)
     )).scalar() or 0
 
     # 分析失败数（带日志）
     analysis_failed_count = error_count
 
-    # 收藏数
+    # 收藏数（排除垃圾桶）
     favorite_count = (await db.execute(
         select(func.count(Inspiration.id))
-        .where(Inspiration.is_favorite == True)
+        .where(Inspiration.is_favorite == True, _NOT_DELETED)
     )).scalar() or 0
 
     # 标签总数
@@ -148,7 +164,7 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
             func.strftime("%Y-%m", Inspiration.created_at).label("month"),
             func.count(Inspiration.id).label("count"),
         )
-        .where(Inspiration.created_at.isnot(None))
+        .where(Inspiration.created_at.isnot(None), _NOT_DELETED)
         .group_by("month")
         .order_by(text("month DESC"))
         .limit(12)
@@ -192,6 +208,7 @@ async def largest_files(
     storage_root = settings.storage_root
     result = (await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.source_type, Inspiration.created_at)
+        .where(_NOT_DELETED)
         .order_by(Inspiration.created_at.desc())
     )).all()
 
@@ -225,9 +242,10 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
     """
     storage_root = settings.storage_root
 
-    # 所有数据库记录的 file_path 和 thumbnail_path
+    # 所有数据库记录的 file_path 和 thumbnail_path（排除垃圾桶：其文件已移入 trash/）
     db_files_result = (await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
+        .where(_NOT_DELETED)
     )).all()
 
     db_file_paths: set[str] = set()
@@ -279,7 +297,7 @@ async def cleanup_orphan_files():
     from app.database import async_session
     async with async_session() as db:
         result = await db.execute(
-            select(Inspiration.file_path, Inspiration.thumbnail_path)
+            select(Inspiration.file_path, Inspiration.thumbnail_path).where(_NOT_DELETED)
         )
         db_paths: set[str] = set()
         for row in result:
@@ -338,17 +356,18 @@ async def batch_delete(
         result = await db.execute(
             select(Inspiration.id)
             .outerjoin(InspirationTag, Inspiration.id == InspirationTag.inspiration_id)
-            .where(InspirationTag.inspiration_id.is_(None))
+            .where(InspirationTag.inspiration_id.is_(None), _NOT_DELETED)
         )
         ids = [r[0] for r in result.all()]
     elif condition == "analysis_failed":
-        # 查询有分析失败日志的素材 ID
+        # 查询有分析失败日志的素材 ID（排除垃圾桶）
         result = await db.execute(
             select(AIAnalysisLog.inspiration_id)
             .where(
                 analysis_log_filter(),
                 AIAnalysisLog.error.isnot(None),
                 AIAnalysisLog.error != "",
+                AIAnalysisLog.inspiration_id.in_(select(Inspiration.id).where(_NOT_DELETED)),
             )
             .distinct()
         )
@@ -420,7 +439,7 @@ async def check_duplicate(
 async def find_duplicates(db: AsyncSession = Depends(get_db)):
     """通过文件哈希检测完全重复的素材。"""
     result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path)
+        select(Inspiration.id, Inspiration.file_path).where(_NOT_DELETED)
     )
     hash_map = build_hash_map(result.all(), settings.storage_root)
 

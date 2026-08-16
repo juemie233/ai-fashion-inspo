@@ -44,7 +44,10 @@ async def _load_inspiration(
     result = await db.execute(
         select(Inspiration)
         .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-        .where(Inspiration.id == inspiration_id)
+        .where(
+            Inspiration.id == inspiration_id,
+            Inspiration.deleted_at.is_(None),
+        )
     )
     return result.unique().scalar_one_or_none()
 
@@ -395,6 +398,7 @@ async def find_similar_images(
         .where(
             InspirationTag.tag_id.in_(source_tag_ids),
             Inspiration.id != inspiration_id,
+            Inspiration.deleted_at.is_(None),
         )
         .group_by(Inspiration.id)
         .order_by(text("shared_count DESC"))

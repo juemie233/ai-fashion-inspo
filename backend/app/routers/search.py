@@ -77,10 +77,10 @@ async def search_inspirations(
         if exclude_tags else []
     )
 
-    # 基础查询（预加载标签）
+    # 基础查询（预加载标签，排除垃圾桶中已软删除的素材）
     base_query = select(Inspiration).options(
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
-    )
+    ).where(Inspiration.deleted_at.is_(None))
 
     # 收集筛选条件
     conditions = []
@@ -439,11 +439,14 @@ def _to_search_out(inspiration: Inspiration) -> InspirationOut:
 
 
 async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:
-    """加载素材（预加载标签），不存在时返回 None。"""
+    """加载素材（预加载标签，排除垃圾桶素材），不存在时返回 None。"""
     result = await db.execute(
         select(Inspiration)
         .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-        .where(Inspiration.id == inspiration_id)
+        .where(
+            Inspiration.id == inspiration_id,
+            Inspiration.deleted_at.is_(None),
+        )
     )
     return result.unique().scalar_one_or_none()
 
