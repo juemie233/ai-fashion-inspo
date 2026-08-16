@@ -79,18 +79,107 @@ def _human_scroll(page, steps=None):
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
-def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "general") -> tuple[list[tuple[str, str]], dict]:
-    """在已登录的页面上搜索并提取图片 URL。
+def _clean_media_url(src: str) -> str:
+    """清洗媒体 URL：去空白、补全协议头。"""
+    src = (src or "").strip()
+    if src.startswith("//"):
+        src = "https:" + src
+    return src
 
-    采用触底循环滚动策略，持续滚到懒加载不出新卡片或达到上限为止。
-    从每张卡片中提取多张图片（轮播帖），最大化采集数量。
+
+def _is_content_image(src: str) -> bool:
+    """判断 URL 是否为「内容图」（排除头像/图标/logo/角标等非素材图）。"""
+    if not src.startswith("http"):
+        return False
+    low = src.lower()
+    skip_kw = ("avatar", "icon", "logo", "emoji", "favicon", "qrcode", "qr_code", "verified")
+    return not any(k in low for k in skip_kw)
+
+
+def _extract_note_detail(page, note_url: str) -> tuple[list[str], list[str]]:
+    """打开单个笔记详情页，提取轮播图 URL 与视频 URL。
+
+    搜索结果卡片上通常只渲染 1 张封面图；轮播图（多图笔记）与短视频内容
+    只在详情页才加载。本函数逐个打开详情页，把「封面上看不到的素材」补回来。
+
+    Args:
+        page: Playwright 页面对象（复用当前标签页）。
+        note_url: 笔记详情页完整 URL（来自搜索卡片链接，含鉴权 token）。
+
+    Returns:
+        (img_urls, video_urls): 图片 CDN URL 列表与视频 CDN URL 列表。
+    """
+    img_urls: list[str] = []
+    video_urls: list[str] = []
+    try:
+        page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        return img_urls, video_urls
+
+    # 等待详情页主体渲染（轮播图或视频）
+    try:
+        page.wait_for_selector(
+            "div.swiper-slide img, video, div[class*=swiper] img",
+            timeout=10000,
+        )
+    except Exception:
+        pass
+
+    # 拟人化：加载后随机停顿 + 偶发鼠标移动，触发轮播懒加载
+    _rdsleep(1.0, 2.5)
+    if random.random() < 0.6:
+        _human_mouse_move(page)
+
+    # 提取轮播图：优先 swiper 轮播容器（精确），回退到全页 img（宽松）
+    img_elements = []
+    for sel in ("div.swiper-slide img", "div[class*=swiper] img"):
+        img_elements = page.query_selector_all(sel)
+        if img_elements:
+            break
+    if not img_elements:
+        img_elements = page.query_selector_all("img")
+
+    seen_imgs: set[str] = set()
+    for img in img_elements:
+        src = _clean_media_url(img.get_attribute("src") or img.get_attribute("data-src") or "")
+        if not src or not _is_content_image(src) or src in seen_imgs:
+            continue
+        seen_imgs.add(src)
+        img_urls.append(src)
+
+    # 提取视频：<video> 的 src（或 <source> 子标签），封面 poster 一并作为图片采集
+    for video in page.query_selector_all("video"):
+        vsrc = _clean_media_url(video.get_attribute("src") or "")
+        if not vsrc:
+            source_el = video.query_selector("source")
+            if source_el:
+                vsrc = _clean_media_url(source_el.get_attribute("src") or "")
+        if vsrc and vsrc not in video_urls:
+            video_urls.append(vsrc)
+        poster = _clean_media_url(video.get_attribute("poster") or "")
+        if poster and _is_content_image(poster) and poster not in seen_imgs:
+            seen_imgs.add(poster)
+            img_urls.append(poster)
+
+    return img_urls, video_urls
+
+
+def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "general") -> tuple[list[tuple[str, str]], list[tuple[str, str]], dict]:
+    """在已登录的页面上搜索，逐个打开详情页提取轮播图与视频 URL。
+
+    采用触底循环滚动策略收集搜索卡片，之后逐个打开卡片对应的笔记详情页：
+    - 图片笔记：提取详情页轮播图（多图），而非仅封面 1 张；
+    - 视频笔记：提取视频 CDN URL 及其封面。
 
     Args:
         need_count: 本次搜索还需采集的数量（剩余需求），用于「够用即停」判断
         sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)
 
     Returns:
-        (pairs, funnel_dict): 每张图片的 (笔记页面 URL, 图片 CDN URL) 列表和该次搜索的漏斗统计数据
+        (img_pairs, video_pairs, funnel_dict):
+            img_pairs   — 每张图片的 (笔记页面 URL, 图片 CDN URL) 列表
+            video_pairs — 每个视频的 (笔记页面 URL, 视频 CDN URL) 列表
+            funnel_dict — 该次搜索的漏斗统计
     """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
@@ -123,8 +212,8 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
     # ── 触底循环滚动 ──
     MAX_SCROLLS = 10  # 滚动硬上限（真人不会滚 30 次）
     CONSECUTIVE_NO_NEW = 1  # 连续 N 次无新卡片即视为到底（一次确认足够，减少白滚）
-    # 已获取足够卡片即停（实测每卡片≈1张图，1.5倍余量足够）
-    target_cards = max(10, int(need_count * 1.5))
+    # 已获取足够卡片即停（详情页每篇多图，约 0.7 倍余量足够）
+    target_cards = max(10, int(need_count * 0.7))
     no_new_count = 0
     last_card_count = 0
 
@@ -159,81 +248,71 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
             print(f"  连续 {CONSECUTIVE_NO_NEW} 次无新内容，页面已到底（{cards_now} 卡片）")
             break
 
-    # ── DOM 提取 ──
+    # ── 收集笔记链接 ──
     cards = page.query_selector_all("section.note-item")
     total_cards = len(cards)
-    print(f"  共找到 {total_cards} 个笔记卡片，开始提取图片...")
+    print(f"  共找到 {total_cards} 个笔记卡片，开始逐个打开详情页提取...")
 
-    pairs: list[tuple[str, str]] = []  # (笔记页面 URL, 图片 CDN URL)
-    seen: set[str] = set()
-    cards_with_img = 0
-    cards_without_img = 0
-    skipped_small = 0
-    skipped_icon = 0
-
-    for card in cards[: need_count * 2]:
-        try:
-            # 提取笔记页面链接（作为「原始链接」，而非图片 CDN 直链）
-            note_href = ""
-            link_el = card.query_selector("a")
-            if link_el:
-                note_href = link_el.get_attribute("href") or ""
-            note_url = (
-                f"https://www.xiaohongshu.com{note_href}"
-                if note_href.startswith("/") else note_href
-            )
-
-            # 从每张卡片中提取所有图片（轮播帖含多图）
-            imgs = card.query_selector_all("img")
-            if not imgs:
-                cards_without_img += 1
-                continue
-            cards_with_img += 1
-
-            for img in imgs:
-                src = img.get_attribute("src") or img.get_attribute("data-src") or ""
-                if not src or not src.startswith("http"):
-                    continue
-                # 过滤图标类 URL
-                if any(k in src.lower() for k in ["icon", "avatar", "logo", "favicon", "emoji"]):
-                    skipped_icon += 1
-                    continue
-                # 过滤小尺寸（< 200px 任意边，比之前的 100px 更严格但不影响数量）
-                w = img.get_attribute("width") or ""
-                h = img.get_attribute("height") or ""
-                try:
-                    if w and h and (int(w) < 100 or int(h) < 100):
-                        skipped_small += 1
-                        continue
-                except ValueError:
-                    pass
-                if src not in seen:
-                    seen.add(src)
-                    pairs.append((note_url, src))
-        except Exception:
+    note_urls: list[str] = []
+    seen_notes: set[str] = set()
+    for card in cards:
+        link_el = card.query_selector("a")
+        if not link_el:
             continue
+        href = link_el.get_attribute("href") or ""
+        if href.startswith("/"):
+            href = f"https://www.xiaohongshu.com{href}"
+        if href.startswith("http") and href not in seen_notes:
+            seen_notes.add(href)
+            note_urls.append(href)
+
+    # ── 逐个打开详情页提取多图 + 视频 ──
+    img_pairs: list[tuple[str, str]] = []    # (笔记页面 URL, 图片 CDN URL)
+    video_pairs: list[tuple[str, str]] = []  # (笔记页面 URL, 视频 CDN URL)
+    seen_imgs: set[str] = set()
+    notes_with_media = 0
+    notes_without_media = 0
+
+    for i, note_url in enumerate(note_urls):
+        # 图片采够即停（视频是额外收益，不单独卡数量）
+        if len(img_pairs) >= need_count * 2:
+            break
+
+        img_urls, video_urls = _extract_note_detail(page, note_url)
+        if not img_urls and not video_urls:
+            notes_without_media += 1
+            continue
+        notes_with_media += 1
+
+        for img_url in img_urls:
+            if img_url not in seen_imgs:
+                seen_imgs.add(img_url)
+                img_pairs.append((note_url, img_url))
+        for video_url in video_urls:
+            video_pairs.append((note_url, video_url))
+
+        print(f"  [{i + 1}/{len(note_urls)}] 图 {len(img_urls)} / 视频 {len(video_urls)}")
 
     # ── 漏斗日志 ──
     funnel = {
         "cards_total": total_cards,
-        "cards_with_img": cards_with_img,
-        "cards_without_img": cards_without_img,
-        "skipped_small": skipped_small,
-        "skipped_icon": skipped_icon,
-        "urls_extracted": len(pairs),
+        "notes_with_media": notes_with_media,
+        "notes_without_media": notes_without_media,
+        "img_urls_extracted": len(img_pairs),
+        "video_urls_extracted": len(video_pairs),
+        "urls_extracted": len(img_pairs) + len(video_pairs),
         "target": need_count,
     }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
-    print(f"  │ DOM 卡片总数: {total_cards}")
-    print(f"  │ 有图片的卡片: {cards_with_img}")
-    print(f"  │ 无图片的卡片: {cards_without_img}")
-    print(f"  │ 跳过小尺寸:   {skipped_small}")
-    print(f"  │ 跳过图标:     {skipped_icon}")
-    print(f"  │ 提取到 URL:   {len(pairs)}")
-    print(f"  │ 目标数量:     {need_count}")
+    print(f"  │ DOM 卡片总数:   {total_cards}")
+    print(f"  │ 有媒体详情页:   {notes_with_media}")
+    print(f"  │ 无媒体详情页:   {notes_without_media}")
+    print(f"  │ 提取图片 URL:   {len(img_pairs)}")
+    print(f"  │ 提取视频 URL:   {len(video_pairs)}")
+    print(f"  │ 目标数量:       {need_count}")
     print(f"  └──────────────────────────────────────────")
 
-    return pairs[:need_count * 2], funnel  # 多返回一些，下载阶段有重试和丢弃
+    return img_pairs[:need_count * 2], video_pairs, funnel  # 多返回一些，下载阶段有重试和丢弃
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -457,6 +536,193 @@ def _download_batch(
     return added, skipped_existing, skipped_non200, skipped_network, skipped_content_dup
 
 
+def _extract_video_thumbnail_sync(video_path: Path, today: str) -> str | None:
+    """用 ffmpeg 提取视频首帧缩略图（同步 subprocess），失败返回 None。"""
+    import subprocess
+
+    thumb_dir = settings.thumbnails_dir / today
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_name = f"thumb_{video_path.stem}.jpg"
+    thumb_path = thumb_dir / thumb_name
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "1", "-i", str(video_path),
+             "-frames:v", "1", "-vf", "scale=400:-2", str(thumb_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    if thumb_path.exists() and thumb_path.stat().st_size > 0:
+        return f"thumbnails/{today}/{thumb_name}"
+    return None
+
+
+def _download_videos(
+    video_pairs: list[tuple[str, str]],
+    task_id: int,
+    existing_url_set: set[str],
+    remaining: int,
+    videos_dir: Path,
+    today: str,
+    httpx_module,
+    cookies: dict | None = None,
+) -> tuple[int, int]:
+    """下载一批短视频并入库为 video 类型（同步 sqlite3 + 同步 ffmpeg 缩略图）。
+
+    video_pairs 每项为 (笔记页面 URL, 视频 CDN URL)。去重策略与图片一致
+    （URL 内存去重 + 墓碑表去重）；视频不做内容哈希去重（同一视频多 CDN 节点
+    罕见，且逐字节哈希代价高）。
+
+    Returns:
+        (added, skipped): 成功入库数与跳过数（已存在 / 下载失败）。
+    """
+    import sqlite3 as _sqlite3
+
+    # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
+    req_headers = {
+        "Referer": "https://www.xiaohongshu.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    if cookies:
+        req_headers["Cookie"] = "; ".join(
+            f"{c['name']}={c['value']}" for c in cookies.values()
+        )
+
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+
+    # 视频 URL 内存去重
+    unique: list[tuple[str, str]] = []
+    _seen_url: set[str] = set()
+    for note_url, video_url in video_pairs:
+        if video_url and video_url not in _seen_url:
+            _seen_url.add(video_url)
+            unique.append((note_url, video_url))
+
+    # 查询这批视频 URL 中已在墓碑表中的
+    if unique:
+        video_urls = [u for _, u in unique]
+        conn = None
+        try:
+            conn = _sqlite3.connect(str(db_path))
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS scraper_seen_urls "
+                "(source_url TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.commit()
+            placeholders = ",".join("?" * len(video_urls))
+            cur = conn.execute(
+                f"SELECT source_url FROM scraper_seen_urls WHERE source_url IN ({placeholders})",
+                video_urls,
+            )
+            db_existing = {r[0] for r in cur.fetchall()}
+            existing_url_set.update(db_existing)
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    added = 0
+    skipped = 0
+    pending_in_batch = 0
+    _BATCH_COMMIT = 5  # 视频入库量小，攒批阈值降低
+    batch_conn = None
+    try:
+        batch_conn = _sqlite3.connect(str(db_path))
+    except Exception:
+        batch_conn = None
+
+    def _commit_videos():
+        """提交当前攒批的视频写入。"""
+        nonlocal pending_in_batch
+        if batch_conn is not None and pending_in_batch > 0:
+            batch_conn.commit()
+            pending_in_batch = 0
+
+    # 单个视频下载大小上限（100MB）：避免超大视频撑爆磁盘
+    MAX_VIDEO_BYTES = 100 * 1024 * 1024
+
+    for note_url, video_url in unique:
+        if added >= remaining:
+            break
+        if video_url in existing_url_set:
+            skipped += 1
+            continue
+
+        fpath: Path | None = None
+        try:
+            # 流式下载视频（边下边写，避免整体驻留内存）
+            with httpx_module.stream("GET", video_url, headers=req_headers,
+                                     timeout=60, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    skipped += 1
+                    continue
+                fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}.mp4"
+                fpath = videos_dir / fname
+                total = 0
+                with open(fpath, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                        total += len(chunk)
+                        if total > MAX_VIDEO_BYTES:
+                            raise RuntimeError("视频超过大小上限，跳过")
+                        f.write(chunk)
+                if total == 0:
+                    fpath.unlink(missing_ok=True)
+                    fpath = None
+                    skipped += 1
+                    continue
+
+            # ffmpeg 提取首帧缩略图
+            thumb_rel = _extract_video_thumbnail_sync(fpath, today)
+
+            if batch_conn is None:
+                raise RuntimeError("数据库连接不可用")
+            insp_id = str(uuid.uuid4())
+            rel_path = f"videos/{today}/{fname}"
+            now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            batch_conn.execute(
+                "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+                "thumbnail_path, media_type, dominant_colors, is_favorite, "
+                "quality_status, content_hash, scraper_task_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 'pending', NULL, ?, ?, ?)",
+                (insp_id, "scraper", note_url or video_url, rel_path, thumb_rel, "video",
+                 task_id, now_str, now_str),
+            )
+            batch_conn.execute(
+                "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                (video_url,),
+            )
+            pending_in_batch += 1
+            if pending_in_batch >= _BATCH_COMMIT:
+                _commit_videos()
+
+            added += 1
+            existing_url_set.add(video_url)
+            # 视频较大，下载间隔稍长
+            time.sleep(random.uniform(1.0, 2.0))
+        except Exception as e:
+            try:
+                if batch_conn is not None:
+                    batch_conn.rollback()
+                pending_in_batch = 0
+            except Exception:
+                pass
+            if fpath is not None:
+                try:
+                    fpath.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            print(f"    视频下载失败 {video_url[:40]}... ({str(e)[:60]})")
+            skipped += 1
+
+    _commit_videos()
+    if batch_conn is not None:
+        batch_conn.close()
+
+    return added, skipped
+
+
 def _update_task_sync(task_id: int, fields: dict) -> None:
     """用同步 sqlite3 更新采集任务字段，规避与 Playwright 同步 API 的事件循环冲突。
 
@@ -544,10 +810,12 @@ def run_scraper_sync(task_id: int):
             _fail("无关键词")
             return
 
-        # 准备下载目录
+        # 准备下载目录（图片 + 视频）
         today = utcnow().strftime("%Y-%m")
         img_dir = settings.images_dir / today
         img_dir.mkdir(parents=True, exist_ok=True)
+        videos_dir = settings.videos_dir / today
+        videos_dir.mkdir(parents=True, exist_ok=True)
         import httpx
     except Exception as e:
         err = str(e) or type(e).__name__
@@ -733,8 +1001,9 @@ def run_scraper_sync(task_id: int):
             try:
                 # 按剩余需求采集：够用即停，避免滚动浏览远超所需的内容
                 remaining = max_count - items_added
+                video_pairs: list[tuple[str, str]] = []
                 if platform == "xiaohongshu":
-                    urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
+                    urls, video_pairs, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
                 elif platform == "douyin":
                     urls, inner_funnel = _search_douyin(kw, remaining)
                 else:
@@ -746,14 +1015,14 @@ def run_scraper_sync(task_id: int):
                     _save_resume(done)
                     continue
 
-                items_found += len(urls)
-                print(f"  提取 {len(urls)} 个 URL")
+                items_found += len(urls) + len(video_pairs)
+                print(f"  提取 {len(urls)} 张图片 + {len(video_pairs)} 个视频")
 
                 # 抖音每次搜索后同步其浏览器 Cookie（用于 CDN 下载鉴权）
                 if platform == "douyin":
                     browser_cookies = dy.cookies()
 
-                # 立即下载本批（带浏览器 Cookie）
+                # 立即下载图片（带浏览器 Cookie）
                 added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
                     urls, task_id, existing_url_set, remaining,
                     img_dir, today, httpx, browser_cookies,
@@ -765,19 +1034,31 @@ def run_scraper_sync(task_id: int):
                 total_skipped_non200 += sk_h
                 total_skipped_network += sk_n
 
+                # 立即下载视频（带浏览器 Cookie）
+                v_added = 0
+                v_skipped = 0
+                if video_pairs:
+                    v_added, v_skipped = _download_videos(
+                        video_pairs, task_id, existing_url_set, remaining - added,
+                        videos_dir, today, httpx, browser_cookies,
+                    )
+                    items_added += v_added
+
                 # 记录本次搜索的完整漏斗
                 per_search.append({
                     "keyword": kw,
                     "sort_type": sort_type,
                     **inner_funnel,
                     "batch_added": added,
+                    "batch_video_added": v_added,
+                    "batch_video_skipped": v_skipped,
                     "batch_skipped_existing": sk_ex,
                     "batch_skipped_content_dup": sk_dup,
                     "batch_skipped_http": sk_h,
                     "batch_skipped_network": sk_n,
                 })
 
-                print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n})")
+                print(f"  本批入库: 图片 {added} + 视频 {v_added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n}, 视频{v_skipped})")
                 print(f"  累计入库: {items_added}/{max_count}")
 
                 # 搜索间冷却 + CDP 保活（仅小红书有 CDP 页面）
