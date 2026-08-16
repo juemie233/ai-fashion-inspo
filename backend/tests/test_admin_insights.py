@@ -73,6 +73,15 @@ def test_audit_log_empty_trash(client, upload):
     assert empty["freed_bytes"] > 0
 
 
+def test_admin_stats(client, upload):
+    """素材总览统计：素材总数与来源分布。"""
+    upload()
+    data = client.get("/api/admin/stats").json()
+    assert data["total_count"] == 1
+    sources = {s["source_type"]: s["count"] for s in data["by_source_type"]}
+    assert sources["manual_upload"] == 1
+
+
 def test_near_duplicate_scan(client):
     """近似重复检测：同构图不同尺寸的两张图应被归入同一组。"""
     import io

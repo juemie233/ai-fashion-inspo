@@ -180,3 +180,15 @@ def test_pending_queue_empty(client):
     """空队列：排队预览返回空列表。"""
     data = client.get("/api/ai/queue/pending").json()
     assert data["items"] == []
+
+
+async def test_quality_dashboard(client, upload):
+    """分析质量仪表盘：概览覆盖率 + 每日趋势。"""
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error=None, raw='{"style": ["法式"]}')
+
+    data = client.get("/api/ai/quality-dashboard").json()
+    assert data["overview"]["total_inspirations"] == 1
+    assert data["overview"]["analyzed_count"] == 1
+    assert data["overview"]["coverage_percent"] == 100.0
+    assert len(data["daily_trends"]) >= 1
