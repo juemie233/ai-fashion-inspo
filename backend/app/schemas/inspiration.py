@@ -1,7 +1,7 @@
 """灵感素材的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Literal, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 from pydantic import BaseModel, Field, field_serializer
 
 from app.schemas.person import PersonBriefOut
@@ -127,7 +127,7 @@ class InspirationOut(BaseModel):
     model_config = {"from_attributes": True}
 
     @field_serializer('created_at', 'updated_at', 'deleted_at')
-    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+    def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         return format_utc(dt)
 
 

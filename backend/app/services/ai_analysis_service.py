@@ -41,7 +41,7 @@ class InvalidMediaError(Exception):
         self.message = message
 
 
-def _fmt_utc(dt) -> str | None:
+def _fmt_utc(dt: datetime | None) -> str | None:
     """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
     return format_utc(dt)
 

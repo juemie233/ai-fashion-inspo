@@ -8,6 +8,7 @@
 
 import json
 import re
+from typing import Any
 
 
 def quote_bare_array_words(text: str) -> str:
@@ -16,7 +17,7 @@ def quote_bare_array_words(text: str) -> str:
     MiniCPM-V 常输出 [宽松] 或 [阔腿, 运动风] 这类缺失引号的数组项。
     仅处理不含引号/花括号的简单数组，避免破坏已合法的 JSON。
     """
-    def _repl(m) -> str:
+    def _repl(m: re.Match[str]) -> str:
         inner = m.group(1)
         if not inner.strip():
             return m.group(0)  # 空数组
@@ -41,7 +42,7 @@ def fix_python_sets(text: str) -> str:
     {"V领", "短袖"} → ["V领", "短袖"]（多元素，作为数组）
     不含冒号（冒号表示这是字典，跳过）。
     """
-    def _repl(m) -> str:
+    def _repl(m: re.Match[str]) -> str:
         strings = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(0))
         if len(strings) == 1:
             return f'"{strings[0]}"'
@@ -163,7 +164,7 @@ def _strip_trailing_commas(text: str) -> str:
     通过统计匹配位置之前未闭合的双引号个数判断逗号是否位于字符串内。
     """
 
-    def _repl(m) -> str:
+    def _repl(m: re.Match[str]) -> str:
         prefix = text[: m.start()]
         # 忽略转义引号后统计未闭合引号；奇数个说明逗号在字符串内
         if prefix.replace('\\"', "").count('"') % 2 == 1:
@@ -212,7 +213,7 @@ def repair_truncated_json(text: str) -> str | None:
     return fragment if fragment.startswith('{') else None
 
 
-def parse_is_outfit(value) -> bool | None:
+def parse_is_outfit(value: Any) -> bool | None:
     """严格解析模型的 is_outfit 输出，避免脏数据误判。
 
     仅布尔 True 或明确的真值字符串判定为通过；模糊值返回 None（保持 pending）。
@@ -351,7 +352,7 @@ def _extract_dict_tags(value: dict) -> list[str]:
     return results
 
 
-def extract_tag_names(value) -> list[str]:
+def extract_tag_names(value: Any) -> list[str]:
     """从任意 AI 返回值中递归提取标签名称字符串。
 
     AI 模型可能返回:

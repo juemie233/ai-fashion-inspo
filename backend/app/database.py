@@ -1,6 +1,7 @@
 """数据库引擎与会话管理：SQLite + SQLAlchemy async。"""
 
 import logging
+from typing import Any
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -25,7 +26,7 @@ if settings.debug:
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+def _enable_sqlite_foreign_keys(dbapi_connection: Any, connection_record: Any) -> None:
     """每次建立连接时启用 SQLite 外键约束。
 
     SQLite 默认关闭外键，导致 ON DELETE SET NULL / ON DELETE CASCADE 失效。

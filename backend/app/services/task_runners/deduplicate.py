@@ -10,6 +10,7 @@ execute_deduplicate 原为 182 行巨型函数，现按阶段拆分为：
 
 import asyncio
 import logging
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,7 +87,7 @@ def _score_groups(
     dup_groups: list[tuple[str, list[dict]]],
     tagged_ids: set[str],
     analyzed_ids: set[str],
-    storage_root,
+    storage_root: Path,
 ) -> tuple[list[dict], list[str], list[tuple[str, str | None]]]:
     """按评分规则决定每组的保留副本与冗余副本。
 
@@ -163,7 +164,7 @@ def _score_groups(
 
 
 def _delete_files(
-    files_to_delete: list[tuple[str, str | None]], storage_root
+    files_to_delete: list[tuple[str, str | None]], storage_root: Path
 ) -> int:
     """物理删除冗余文件并统计释放空间（删除失败仅跳过，不抛异常）。"""
     freed_bytes = 0

@@ -9,6 +9,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -150,7 +151,7 @@ async def _update_env_file(updates: dict[str, str]) -> None:
     logger.info(f"已更新 .env: {list(updates.keys())}")
 
 
-def _fmt_utc(dt) -> str | None:
+def _fmt_utc(dt: datetime | None) -> str | None:
     """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
     return format_utc(dt)
 

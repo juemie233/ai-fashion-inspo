@@ -28,7 +28,7 @@ class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
     @field_serializer("next_retry_at", "created_at", "updated_at")
-    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+    def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
         return format_utc(dt)
 

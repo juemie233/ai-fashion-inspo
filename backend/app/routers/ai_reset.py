@@ -1,6 +1,7 @@
 """AI 子路由。"""
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete
@@ -88,7 +89,7 @@ async def reset_all_data(
         if dir_path.exists():
             file_count = len(list(dir_path.iterdir()))
 
-            def _rmtree(p=dir_path) -> None:
+            def _rmtree(p: Path = dir_path) -> None:
                 shutil.rmtree(p)
                 p.mkdir(parents=True)
 

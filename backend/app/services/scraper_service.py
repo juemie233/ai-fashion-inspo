@@ -952,7 +952,7 @@ async def get_task_results(
     )
     items = items_result.scalars().all()
 
-    def _fmt(dt) -> str | None:
+    def _fmt(dt: datetime | None) -> str | None:
         return format_utc(dt)
 
     return {

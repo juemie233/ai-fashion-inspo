@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -177,7 +177,9 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def destructive_api_key_middleware(request: Request, call_next) -> Response:
+async def destructive_api_key_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """破坏性接口的 API Key 认证。
 
     命中 DESTRUCTIVE_ROUTES 清单的写操作（不可恢复删除/重置/批量破坏）需要

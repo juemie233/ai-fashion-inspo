@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
@@ -38,7 +39,7 @@ class ScraperTaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
     @field_serializer('started_at', 'finished_at', 'created_at')
-    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+    def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         return format_utc(dt)
 
 
@@ -83,7 +84,7 @@ class ScraperScheduleOut(BaseModel):
 
     @field_validator("keywords", mode="before")
     @classmethod
-    def parse_keywords(cls, v) -> list[str]:
+    def parse_keywords(cls, v: Any) -> list[str]:
         """ORM 中 keywords 为 JSON 字符串，反序列化为列表。"""
         if isinstance(v, str):
             try:
@@ -93,5 +94,5 @@ class ScraperScheduleOut(BaseModel):
         return v or []
 
     @field_serializer('next_run_at', 'last_run_at', 'created_at')
-    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+    def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
         return format_utc(dt)

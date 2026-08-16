@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import delete, func, select, update
@@ -436,7 +437,7 @@ async def list_inspirations(
             size_query = size_query.where(where_clause)
         size_rows = (await db.execute(size_query)).all()
 
-        def _file_size(row) -> int:
+        def _file_size(row: Any) -> int:
             """返回素材文件字节数（文件缺失按 0 处理）。"""
             if not row[1]:
                 return 0

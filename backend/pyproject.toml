@@ -19,3 +19,17 @@ ignore = ["E501", "B008"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+# mypy 静态类型检查（安装：pip install mypy，运行：cd backend && mypy app）
+#
+# 与 CLAUDE.md「类型注解必须（disallow_untyped_defs = True）」一致：
+# 强制所有函数/方法/闭包带参数与返回类型注解。第三方库缺 stub 时不报错
+# （ignore_missing_imports），避免 SQLAlchemy/playwright 等依赖噪音淹没真正问题。
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+ignore_missing_imports = true
+# 暂不把 Any 当错误（渐进清理）；返回 Any 仅告警提示
+warn_return_any = false
+disallow_any_generics = false
+warn_unused_ignores = true
