@@ -233,9 +233,11 @@ async def task_results_batch_delete(
     payload: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    """批量删除采集任务产出的指定素材。
+    """批量将采集任务产出的指定素材移入垃圾桶（软删除，30 天内可恢复）。
 
-    请求体: {"ids": ["id1", "id2", ...]}
+    请求体: {"ids": ["id1", "id2", ...], "reason": "不喜欢"}
+    reason 为空时按素材状态自动推断（质量审核被拒 → 质量差，其余 → 不喜欢）。
     """
     ids = payload.get("ids", [])
-    return await scraper_service.batch_delete_task_results(db, task_id, ids)
+    reason = payload.get("reason")
+    return await scraper_service.batch_delete_task_results(db, task_id, ids, reason)

@@ -59,14 +59,35 @@ class TestExtensionTaskFlow:
         assert res["total"] == 1
         assert len(res["items"]) == 1
 
-        # 批量删除结果并验证任务计数同步
+        # 批量删除结果 → 软删除进入垃圾桶（而非物理删除），任务结果计数同步
         del_res = client.post(
             f"/api/scraper/tasks/{task_id}/results/batch-delete",
             json={"ids": [res["items"][0]["id"]]},
         )
         assert del_res.status_code == 200
-        assert del_res.json()["deleted_count"] == 1
+        body = del_res.json()
+        assert body["trashed_count"] == 1
+        assert body["skipped"] == 0
         assert client.get(f"/api/scraper/tasks/{task_id}/results").json()["total"] == 0
+
+        # 素材进入全局垃圾桶，可恢复
+        trash = client.get("/api/inspirations/trash").json()
+        assert trash["total"] == 1
+        assert trash["items"][0]["id"] == res["items"][0]["id"]
+
+        # 从垃圾桶恢复后重新出现在任务结果中
+        r = client.post(f"/api/inspirations/{res['items'][0]['id']}/restore")
+        assert r.status_code == 200
+        assert client.get(f"/api/scraper/tasks/{task_id}/results").json()["total"] == 1
+
+        # 已在垃圾桶中的素材重复删除：计入 skipped，不报错
+        client.post(f"/api/inspirations/{res['items'][0]['id']}/trash")
+        del_res2 = client.post(
+            f"/api/scraper/tasks/{task_id}/results/batch-delete",
+            json={"ids": [res["items"][0]["id"]]},
+        )
+        assert del_res2.json()["trashed_count"] == 0
+        assert del_res2.json()["skipped"] == 1
 
     def test_upload_with_unknown_task_id(self, client, upload):
         up = upload(scraper_task_id="99999")

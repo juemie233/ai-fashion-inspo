@@ -26,7 +26,10 @@ from app.schemas.scraper import (
     ScraperScheduleUpdate,
     ScraperTaskCreate,
 )
-from app.services.scraper_seen_service import seal_urls
+from app.services.audit_service import record_audit_log
+from app.services.file_service import move_to_trash
+from app.services.inspiration_service import _resolve_trash_reason
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -910,10 +913,11 @@ async def get_task_results(
     if not task:
         raise HTTPException(status_code=404, detail="采集任务未找到")
 
-    # 计数
+    # 计数（排除垃圾桶中的软删除素材，与素材库正常列表口径一致）
     count_result = await db.execute(
         select(func.count(Inspiration.id)).where(
-            Inspiration.scraper_task_id == task_id
+            Inspiration.scraper_task_id == task_id,
+            Inspiration.deleted_at.is_(None),
         )
     )
     total = count_result.scalar() or 0
@@ -921,7 +925,10 @@ async def get_task_results(
     # 分页
     items_result = await db.execute(
         select(Inspiration)
-        .where(Inspiration.scraper_task_id == task_id)
+        .where(
+            Inspiration.scraper_task_id == task_id,
+            Inspiration.deleted_at.is_(None),
+        )
         .order_by(Inspiration.created_at.desc())
         .offset((page - 1) * size)
         .limit(size)
@@ -966,59 +973,70 @@ async def batch_delete_task_results(
     db: AsyncSession,
     task_id: int,
     ids: list[str],
+    reason: str | None = None,
 ) -> dict:
-    """批量删除采集任务产出的指定素材。
+    """批量将采集任务产出的指定素材移入垃圾桶（软删除，30 天内可恢复）。
 
-    请求体: {"ids": ["id1", "id2", ...]}
+    请求体: {"ids": ["id1", "id2", ...], "reason": "不喜欢"}
+
+    与素材库单条软删除语义一致：标记 deleted_at / trash_reason、文件移入
+    storage/trash/、向量保留（负样本学习依赖垃圾桶素材向量）。URL 墓碑此时
+    不写入——素材仍在垃圾桶中可恢复，仅当垃圾桶清空（purge_trash）时统一
+    封存 URL，避免「恢复后无法重新采集」的偏差。
     """
     if not ids:
         raise HTTPException(status_code=400, detail="请提供要删除的素材 ID 列表")
 
-    # 仅删除属于该任务的素材
+    # 仅处理属于该任务的素材；已在垃圾桶中的计入 skipped，不重复软删除
     result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path, Inspiration.source_url)
-        .where(
+        select(Inspiration).where(
             Inspiration.id.in_(ids),
             Inspiration.scraper_task_id == task_id,
         )
     )
-    files_to_delete = result.all()
+    inspirations = result.scalars().all()
 
-    # 先删除数据库记录并写入墓碑表（同一事务），提交成功后再物理删除文件，
-    # 避免「文件已删但事务失败」产生指向不存在文件的记录
-    urls_to_seal = [r[3] for r in files_to_delete if r[3]]
-    deleted_ids = [r[0] for r in files_to_delete]
-    if deleted_ids:
-        await db.execute(
-            Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
-        )
-    await seal_urls(db, urls_to_seal)
-    await db.commit()
+    trashed_items: list[Inspiration] = []
+    skipped = 0
+    for insp in inspirations:
+        if insp.deleted_at is not None:
+            skipped += 1
+            continue
+        insp.deleted_at = utcnow()
+        insp.trash_reason = _resolve_trash_reason(reason, insp)
+        trashed_items.append(insp)
 
-    # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
-    storage_root = settings.storage_root
-    freed_bytes = 0
-    for _fid, fpath, thumb, _surl in files_to_delete:
-        for p in (fpath, thumb):
-            if p:
-                full = storage_root / p
-                try:
-                    if full.exists():
-                        freed_bytes += full.stat().st_size
-                        full.unlink()
-                except Exception:
-                    pass
+    # 先提交软删除标记（DB 落库），提交成功后再移动文件，避免「文件已移走但
+    # 事务回滚/失败」导致 DB 仍指向原路径的悬空记录（与 trash_inspiration 一致）
+    if trashed_items:
+        await db.commit()
 
-    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
-    # 避免批量删除后产生孤儿向量
-    from app.services import vector_store
+    # 移动文件到垃圾桶目录；失败仅记日志不阻断软删除（恢复时按 DB 路径自愈）
+    paths_changed = False
+    for insp in trashed_items:
+        try:
+            new_file = move_to_trash(insp.file_path, insp.id)
+            if new_file:
+                insp.file_path = new_file
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动主文件到垃圾桶失败 {insp.id}: {e}")
+        try:
+            new_thumb = move_to_trash(insp.thumbnail_path, insp.id, suffix="_thumb")
+            if new_thumb:
+                insp.thumbnail_path = new_thumb
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动缩略图到垃圾桶失败 {insp.id}: {e}")
 
-    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+    if paths_changed:
+        await db.commit()
 
-    # 更新任务计数
+    # 更新任务计数：只统计未删除素材（与结果列表口径一致）
     remaining_result = await db.execute(
         select(func.count(Inspiration.id)).where(
-            Inspiration.scraper_task_id == task_id
+            Inspiration.scraper_task_id == task_id,
+            Inspiration.deleted_at.is_(None),
         )
     )
     remaining = remaining_result.scalar() or 0
@@ -1028,8 +1046,20 @@ async def batch_delete_task_results(
         task.items_added = remaining
         await db.commit()
 
+    # 批量移入垃圾桶纳入审计，便于追溯批量整理动作
+    if trashed_items:
+        detail = f"采集任务 {task_id} 结果移入垃圾桶"
+        if skipped:
+            detail += f"，跳过 {skipped} 个（已在垃圾桶）"
+        await record_audit_log(
+            db,
+            action="batch_trash",
+            count=len(trashed_items),
+            detail=detail,
+        )
+
     return {
-        "deleted_count": len(files_to_delete),
-        "freed_bytes": freed_bytes,
+        "trashed_count": len(trashed_items),
+        "skipped": skipped,
         "remaining": remaining,
     }

@@ -94,7 +94,12 @@ export function useScraperResults(deps: ScraperResultsDeps) {
     deletingResults.value = true
     try {
       const r = await apiClient.post(`/scraper/tasks/${resultsTaskId.value}/results/batch-delete`, { ids: [...selectedIds.value] })
-      message.success(`已删除 ${r.data.deleted_count} 个`)
+      const { trashed_count: trashed, skipped } = r.data
+      message.success(
+        skipped
+          ? `已移入垃圾桶 ${trashed} 个（${skipped} 个已在垃圾桶，已跳过）`
+          : `已移入垃圾桶 ${trashed} 个`,
+      )
       resultsItems.value = resultsItems.value.filter((i: any) => !selectedIds.value.has(i.id))
       selectedIds.value = new Set()
       resultsTotal.value = r.data.remaining
