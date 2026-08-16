@@ -47,6 +47,44 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
     )
 
 
+# ============ 批量编辑 ============
+# 注意：PATCH /batch-category、/batch-rename 必须声明在 PATCH /{tag_id} 之前，
+# 否则会被动态路由吞掉（tag_id 解析为字符串导致 422）
+
+
+@router.patch("/batch-category", status_code=status.HTTP_200_OK)
+async def batch_change_category(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量修改标签类别。请求体: {"tag_ids": [1,2,3], "category": "style"}"""
+    tag_ids = payload.get("tag_ids", [])
+    category = payload.get("category", "").strip()
+    if not tag_ids or not category:
+        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 category")
+    updated = await tag_service.batch_change_category(db, tag_ids, category)
+    return {"updated": updated, "category": category}
+
+
+@router.patch("/batch-rename", status_code=status.HTTP_200_OK)
+async def batch_rename_tags(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量重命名标签（查找替换）。请求体: {"tag_ids": [1,2], "find": "白色", "replace": "纯白"}"""
+    tag_ids = payload.get("tag_ids", [])
+    find_str = payload.get("find", "")
+    replace_str = payload.get("replace", "")
+    if not tag_ids or not find_str:
+        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 find 参数")
+
+    try:
+        updated = await tag_service.batch_rename_tags(db, tag_ids, find_str, replace_str)
+    except tag_service.TagConflictError as e:
+        raise HTTPException(status_code=409, detail=e.message)
+    return {"updated": updated, "find": find_str, "replace": replace_str}
+
+
 @router.patch("/{tag_id}", response_model=TagOut)
 async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(get_db)):
     """更新标签的名称、类别、置顶、排序或备注。"""
@@ -128,42 +166,6 @@ async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)):
         {"id": t.id, "name": t.name, "category": t.category}
         for t in similar
     ]
-
-
-# ============ 批量编辑 ============
-
-
-@router.patch("/batch-category", status_code=status.HTTP_200_OK)
-async def batch_change_category(
-    payload: dict,
-    db: AsyncSession = Depends(get_db),
-):
-    """批量修改标签类别。请求体: {"tag_ids": [1,2,3], "category": "style"}"""
-    tag_ids = payload.get("tag_ids", [])
-    category = payload.get("category", "").strip()
-    if not tag_ids or not category:
-        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 category")
-    updated = await tag_service.batch_change_category(db, tag_ids, category)
-    return {"updated": updated, "category": category}
-
-
-@router.patch("/batch-rename", status_code=status.HTTP_200_OK)
-async def batch_rename_tags(
-    payload: dict,
-    db: AsyncSession = Depends(get_db),
-):
-    """批量重命名标签（查找替换）。请求体: {"tag_ids": [1,2], "find": "白色", "replace": "纯白"}"""
-    tag_ids = payload.get("tag_ids", [])
-    find_str = payload.get("find", "")
-    replace_str = payload.get("replace", "")
-    if not tag_ids or not find_str:
-        raise HTTPException(status_code=400, detail="请提供 tag_ids 和 find 参数")
-
-    try:
-        updated = await tag_service.batch_rename_tags(db, tag_ids, find_str, replace_str)
-    except tag_service.TagConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
-    return {"updated": updated, "find": find_str, "replace": replace_str}
 
 
 # ============ 统计与扫描 ============
