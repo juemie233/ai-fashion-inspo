@@ -1,6 +1,7 @@
 """FastAPI 应用入口。"""
 
 import asyncio
+import hmac
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -204,7 +205,8 @@ async def destructive_api_key_middleware(
             status_code=401,
             content={"detail": "缺少 API 密钥，请在请求头中提供 X-API-Key"},
         )
-    if api_key != settings.api_key:
+    # 常数时间比较，避免时序侧信道泄露密钥前缀
+    if not hmac.compare_digest(api_key, settings.api_key):
         return JSONResponse(
             status_code=403, content={"detail": "API 密钥无效"}
         )

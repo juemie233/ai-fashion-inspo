@@ -28,6 +28,7 @@ from app.models.tag import InspirationTag
 from app.models.audit import AuditLog
 from app.services import admin_stats_service
 from app.services.audit_service import record_audit_log
+from app.utils.csv_safety import sanitize_csv_cell
 from app.utils.file_hash import build_hash_map
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -383,7 +384,7 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
     for insp in inspirations:
         tags = "|".join(t.tag.name for t in insp.tags)
         persons = "|".join(p.person.name for p in insp.persons)
-        writer.writerow([
+        row = [
             insp.id,
             insp.source_type,
             insp.source_author or "",
@@ -398,7 +399,9 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
             persons,
             insp.created_at.isoformat() if insp.created_at else "",
             insp.updated_at.isoformat() if insp.updated_at else "",
-        ])
+        ]
+        # 防 CSV 公式注入：用户/模型可控的单元格以 = + - @ 开头时加 ' 转义
+        writer.writerow([sanitize_csv_cell(x) for x in row])
 
     filename = f"inspirations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(

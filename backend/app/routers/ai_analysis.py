@@ -21,6 +21,7 @@ from app.routers.ai_shared import (
 )
 from app.services import ai_analysis_service as ai_svc
 from app.services.task_runner import create_batch_analyze_task
+from app.utils.csv_safety import sanitize_csv_cell
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -142,7 +143,7 @@ async def export_analysis_history_csv(
     writer = csv.writer(output)
     writer.writerow(["ID", "素材ID", "模型", "状态", "耗时(ms)", "失败原因", "时间", "标签"])
     for it in items:
-        writer.writerow([
+        row = [
             it["id"],
             it["inspiration_id"],
             it["model_name"],
@@ -151,7 +152,9 @@ async def export_analysis_history_csv(
             it["error"] or "",
             it["created_at"] or "",
             "、".join(t["name"] for t in it["tags"]),
-        ])
+        ]
+        # 防 CSV 公式注入：模型名/失败原因/标签为模型或用户可控，前缀 = + - @ 时加 ' 转义
+        writer.writerow([sanitize_csv_cell(x) for x in row])
     csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM 让 Excel 正确识别中文
     return Response(
         content=csv_bytes,

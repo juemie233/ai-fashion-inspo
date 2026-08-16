@@ -1,5 +1,6 @@
 """API 认证依赖与中间件：API Key 校验，保护破坏性接口。"""
 
+import hmac
 import re
 from typing import Pattern
 
@@ -19,7 +20,8 @@ async def require_api_key(api_key: str | None = Security(api_key_header)) -> str
     if not api_key:
         raise HTTPException(status_code=401, detail="缺少 API 密钥，请在请求头中提供 X-API-Key")
 
-    if api_key != settings.api_key:
+    # 常数时间比较，避免时序侧信道泄露密钥前缀
+    if not hmac.compare_digest(api_key, settings.api_key):
         raise HTTPException(status_code=403, detail="API 密钥无效")
 
     return api_key
