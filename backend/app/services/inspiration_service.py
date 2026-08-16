@@ -94,6 +94,7 @@ async def create_inspiration(
     source_url: str | None = None,
     source_author: str | None = None,
     source_platform_id: str | None = None,
+    scraper_task_id: int | None = None,
 ) -> Inspiration:
     """上传图片并创建灵感素材，含平台 ID 查重与内容哈希去重。"""
     # 检查重复（按平台 ID）—— 先查重，避免保存文件后再发现重复留下孤儿文件
@@ -108,6 +109,14 @@ async def create_inspiration(
                 status_code=409,
                 detail=f"平台ID '{source_platform_id}' 的素材已存在",
             )
+
+    # 关联采集任务校验：插件采集链路传 task_id，避免产生指向不存在任务的孤儿记录
+    if scraper_task_id is not None:
+        from app.models.scraper import ScraperTask
+
+        task = await db.get(ScraperTask, scraper_task_id)
+        if not task:
+            raise HTTPException(status_code=400, detail="关联的采集任务不存在")
 
     # 保存文件
     file_path, thumb_path = await save_upload(file)
@@ -140,6 +149,7 @@ async def create_inspiration(
         content_hash=content_hash,
         media_type=media_type,
         quality_status=quality_status,
+        scraper_task_id=scraper_task_id,
     )
     db.add(inspiration)
     await db.flush()

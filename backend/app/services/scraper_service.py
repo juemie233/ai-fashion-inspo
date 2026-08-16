@@ -10,18 +10,22 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
 from app.models.inspiration import Inspiration
-from app.models.scraper import ScraperSeenURL, ScraperTask
-from app.schemas.scraper import ScraperTaskCreate
+from app.models.scraper import ScraperSchedule, ScraperSeenURL, ScraperTask
+from app.schemas.scraper import (
+    ScraperScheduleCreate,
+    ScraperScheduleUpdate,
+    ScraperTaskCreate,
+)
 from app.services.scraper_seen_service import seal_urls
 
 logger = logging.getLogger(__name__)
@@ -258,7 +262,26 @@ async def import_cookies(payload: dict) -> dict:
     cookie_file = cookie_dir / f"{platform}_cookies.json"
 
     cookie_file.write_text(json.dumps(cookie_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"message": f"已导入 {platform} Cookie", "platform": platform}
+    count = len(cookie_data) if isinstance(cookie_data, list) else 0
+    return {
+        "message": f"已导入 {platform} Cookie",
+        "platform": platform,
+        "imported": count,
+        "valid": True,  # 刚写入的文件视为有效
+    }
+
+
+async def delete_cookies(platform: str) -> dict:
+    """删除指定平台的 Cookie 文件（不影响已导入的素材与任务）。"""
+    platform = _validate_cookie_platform(platform)
+    cookie_dir = Path(settings.storage_root) / "cookies"
+    cookie_file = cookie_dir / f"{platform}_cookies.json"
+
+    if not cookie_file.exists():
+        raise HTTPException(status_code=404, detail="Cookie 文件不存在")
+
+    cookie_file.unlink()
+    return {"message": f"已删除 {platform} Cookie", "platform": platform}
 
 
 # ============ 任务日志与取消 ============
@@ -304,6 +327,323 @@ async def cancel_scraper_task(db: AsyncSession, task_id: int) -> dict:
     return {"message": f"任务 {task_id} 已取消"}
 
 
+# ============ 浏览器插件任务记录 ============
+
+
+def _utcnow() -> datetime:
+    """当前 UTC 时间（无时区信息，与数据库 DateTime 一致）。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def create_extension_task(db: AsyncSession, payload: dict) -> ScraperTask:
+    """为浏览器插件的一次采集会话创建任务记录（running 状态）。
+
+    插件在批量上传图片前调用，获得 task_id 后随每次上传附带；
+    上传结束后调用 complete_extension_task 汇总计数并标记完成。
+    """
+    config = {
+        "mode": "extension",
+        "source_url": payload.get("source_url"),
+        "origin_platform": payload.get("platform") or "browser_extension",
+    }
+    task = ScraperTask(
+        platform="browser_extension",
+        status="running",
+        config=json.dumps(config, ensure_ascii=False),
+        started_at=_utcnow(),
+    )
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+    await db.commit()
+    return task
+
+
+async def complete_extension_task(db: AsyncSession, task_id: int, payload: dict) -> dict:
+    """汇总浏览器插件采集会话的发现/入库数量并标记任务完成。"""
+    task = await db.get(ScraperTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.platform != "browser_extension":
+        raise HTTPException(status_code=400, detail="仅浏览器插件任务可使用此接口")
+
+    items_found = int(payload.get("items_found") or 0)
+    items_added = int(payload.get("items_added") or 0)
+    skipped = max(0, items_found - items_added)
+
+    task.status = "completed"
+    task.items_found = items_found
+    task.items_added = items_added
+    task.finished_at = _utcnow()
+    # 组装最小漏斗：与手动采集任务的漏斗结构对齐，前端漏斗弹窗可直接展示
+    task.diagnostics = json.dumps({
+        "per_search": [{
+            "keyword": payload.get("source_url") or "插件采集",
+            "sort_type": "extension",
+            "batch_added": items_added,
+            "batch_skipped_existing": skipped,
+        }],
+        "summary": {
+            "total_found": items_found,
+            "skipped_url_seen": 0,
+            "skipped_content_dup": 0,
+            "skipped_http_error": 0,
+            "skipped_network_error": skipped,
+            "total_added": items_added,
+        },
+    }, ensure_ascii=False)
+    if items_added == 0 and items_found > 0:
+        task.error = "全部图片上传失败（可能内容重复或后端异常）"
+    await db.commit()
+    return {"message": "已记录插件采集", "task_id": task_id, "items_added": items_added}
+
+
+# ============ 定时采集计划 ============
+
+_SCHEDULE_PLATFORMS = {"xiaohongshu", "douyin"}
+_SCHEDULE_SORT_MODES = {"general", "latest", "popular"}
+
+
+def _validate_schedule_platform(platform: str) -> str:
+    """校验计划平台合法性。"""
+    p = platform.strip().lower()
+    if p not in _SCHEDULE_PLATFORMS:
+        raise HTTPException(status_code=400, detail=f"不支持的平台: {platform}，允许: {_SCHEDULE_PLATFORMS}")
+    return p
+
+
+def _build_schedule_task_config(sched: ScraperSchedule) -> dict:
+    """由计划构造采集任务配置（小红书定时任务使用配置中的调试端口走 CDP）。"""
+    config: dict = {
+        "keywords": json.loads(sched.keywords or "[]"),
+        "max_count": sched.max_count,
+        "headless": True,  # 定时任务默认无头，避免弹出浏览器窗口
+        "cdp_port": settings.chrome_debug_port if sched.platform == "xiaohongshu" else None,
+    }
+    if sched.sort_mode and sched.platform == "xiaohongshu":
+        config["sort_mode"] = sched.sort_mode
+    return config
+
+
+async def create_schedule(db: AsyncSession, data: ScraperScheduleCreate) -> ScraperSchedule:
+    """创建定时采集计划。"""
+    platform = _validate_schedule_platform(data.platform)
+    keywords = [k.strip() for k in data.keywords if k.strip()]
+    if not keywords:
+        raise HTTPException(status_code=400, detail="至少需要一个关键词")
+    if data.sort_mode and data.sort_mode not in _SCHEDULE_SORT_MODES:
+        raise HTTPException(status_code=400, detail=f"不支持的排序方式: {data.sort_mode}")
+
+    sched = ScraperSchedule(
+        platform=platform,
+        keywords=json.dumps(keywords, ensure_ascii=False),
+        max_count=data.max_count,
+        sort_mode=data.sort_mode if platform == "xiaohongshu" else None,
+        enabled=data.enabled,
+        interval_minutes=data.interval_minutes,
+        next_run_at=_utcnow() + timedelta(minutes=data.interval_minutes) if data.enabled else None,
+    )
+    db.add(sched)
+    await db.flush()
+    await db.refresh(sched)
+    await db.commit()
+    return sched
+
+
+async def list_schedules(db: AsyncSession) -> list[ScraperSchedule]:
+    """列出全部定时采集计划（按创建时间倒序）。"""
+    result = await db.execute(select(ScraperSchedule).order_by(ScraperSchedule.id.desc()))
+    return list(result.scalars().all())
+
+
+async def update_schedule(db: AsyncSession, schedule_id: int, data: ScraperScheduleUpdate) -> ScraperSchedule:
+    """更新定时采集计划（仅更新传入字段）。
+
+    间隔变更或重新启用时，从当前时间重新计算 next_run_at；停用时清空 next_run_at。
+    """
+    sched = await db.get(ScraperSchedule, schedule_id)
+    if not sched:
+        raise HTTPException(status_code=404, detail="定时计划不存在")
+
+    if data.keywords is not None:
+        keywords = [k.strip() for k in data.keywords if k.strip()]
+        if not keywords:
+            raise HTTPException(status_code=400, detail="至少需要一个关键词")
+        sched.keywords = json.dumps(keywords, ensure_ascii=False)
+    if data.max_count is not None:
+        sched.max_count = data.max_count
+    if data.sort_mode is not None:
+        if sched.platform == "xiaohongshu":
+            if data.sort_mode not in _SCHEDULE_SORT_MODES:
+                raise HTTPException(status_code=400, detail=f"不支持的排序方式: {data.sort_mode}")
+            sched.sort_mode = data.sort_mode
+    interval_changed = data.interval_minutes is not None and data.interval_minutes != sched.interval_minutes
+    if data.interval_minutes is not None:
+        sched.interval_minutes = data.interval_minutes
+    if data.enabled is not None:
+        was_enabled = sched.enabled
+        sched.enabled = data.enabled
+        if data.enabled and (not was_enabled or interval_changed):
+            sched.next_run_at = _utcnow() + timedelta(minutes=sched.interval_minutes)
+        elif not data.enabled:
+            sched.next_run_at = None
+    elif interval_changed and sched.enabled:
+        sched.next_run_at = _utcnow() + timedelta(minutes=sched.interval_minutes)
+
+    await db.commit()
+    await db.refresh(sched)
+    return sched
+
+
+async def delete_schedule(db: AsyncSession, schedule_id: int) -> dict:
+    """删除定时采集计划（不删除已产生的采集任务）。"""
+    sched = await db.get(ScraperSchedule, schedule_id)
+    if not sched:
+        raise HTTPException(status_code=404, detail="定时计划不存在")
+    await db.delete(sched)
+    await db.commit()
+    return {"deleted": 1, "id": schedule_id}
+
+
+async def run_schedule_now(db: AsyncSession, schedule_id: int) -> dict:
+    """立即执行一次定时采集计划：创建采集任务并启动。"""
+    sched = await db.get(ScraperSchedule, schedule_id)
+    if not sched:
+        raise HTTPException(status_code=404, detail="定时计划不存在")
+
+    task = ScraperTask(
+        platform=sched.platform,
+        status="pending",
+        config=json.dumps(_build_schedule_task_config(sched), ensure_ascii=False),
+    )
+    db.add(task)
+    await db.flush()
+    await db.refresh(task)
+
+    sched.last_task_id = task.id
+    sched.last_run_at = _utcnow()
+    sched.run_count += 1
+    # 保持原有节奏：下次执行时间从最近一次到期点推进，而非从手动执行时间重置
+    if sched.enabled and sched.next_run_at is not None and sched.next_run_at <= _utcnow():
+        sched.next_run_at = _utcnow() + timedelta(minutes=sched.interval_minutes)
+    await db.commit()
+
+    _launch_scraper_process(task.id)
+    return {"message": f"计划 {schedule_id} 已触发", "task_id": task.id}
+
+
+async def run_due_schedules(db: AsyncSession) -> int:
+    """执行所有到期的定时采集计划（由后端调度循环周期性调用）。
+
+    创建任务失败（如 Chrome 未启动）时记录日志并照常推进 next_run_at，
+    避免同一计划反复重试刷屏；具体失败原因可从对应任务记录中查看。
+    """
+    now = _utcnow()
+    result = await db.execute(
+        select(ScraperSchedule).where(
+            ScraperSchedule.enabled.is_(True),
+            ScraperSchedule.next_run_at.is_not(None),
+            ScraperSchedule.next_run_at <= now,
+        )
+    )
+    due = result.scalars().all()
+    if not due:
+        return 0
+
+    triggered = 0
+    for sched in due:
+        launched_id: int | None = None
+        try:
+            task = ScraperTask(
+                platform=sched.platform,
+                status="pending",
+                config=json.dumps(_build_schedule_task_config(sched), ensure_ascii=False),
+            )
+            db.add(task)
+            await db.flush()
+            await db.refresh(task)
+            launched_id = task.id
+        except Exception as e:
+            logger.warning(f"[定时采集] 计划 {sched.id} 创建任务失败: {e}")
+
+        sched.last_run_at = now
+        sched.next_run_at = now + timedelta(minutes=sched.interval_minutes)
+        sched.run_count += 1
+        if launched_id is not None:
+            sched.last_task_id = launched_id
+        await db.commit()
+        if launched_id is not None:
+            _launch_scraper_process(launched_id)
+        triggered += 1
+    return triggered
+
+
+# ============ 统计看板 ============
+
+
+async def get_scraper_stats(days: int = 30) -> dict:
+    """聚合近 N 天的采集任务统计：总量、成功率、按平台与按日分布。"""
+    since = _utcnow() - timedelta(days=days)
+    _total = func.count(ScraperTask.id)
+    _completed = func.sum(case((ScraperTask.status == "completed", 1), else_=0))
+    _failed = func.sum(case((ScraperTask.status == "failed", 1), else_=0))
+    _found = func.coalesce(func.sum(ScraperTask.items_found), 0)
+    _added = func.coalesce(func.sum(ScraperTask.items_added), 0)
+
+    async with async_session() as db:
+        overall = (await db.execute(
+            select(_total, _completed, _failed, _found, _added)
+            .where(ScraperTask.created_at >= since)
+        )).one()
+
+        platform_rows = (await db.execute(
+            select(ScraperTask.platform, _total, _found, _added, _completed)
+            .where(ScraperTask.created_at >= since)
+            .group_by(ScraperTask.platform)
+        )).all()
+
+        # SQLite date() 直接作用于 UTC 时间戳列，按自然日聚合
+        day_rows = (await db.execute(
+            select(func.date(ScraperTask.created_at), _total, _added, _failed)
+            .where(ScraperTask.created_at >= since)
+            .group_by(func.date(ScraperTask.created_at))
+            .order_by(func.date(ScraperTask.created_at))
+        )).all()
+
+    total = int(overall[0] or 0)
+    completed = int(overall[1] or 0)
+    failed = int(overall[2] or 0)
+
+    return {
+        "days": days,
+        "total_tasks": total,
+        "completed": completed,
+        "failed": failed,
+        "success_rate": round(completed / total * 100, 1) if total else 0,
+        "total_found": int(overall[3] or 0),
+        "total_added": int(overall[4] or 0),
+        "by_platform": [
+            {
+                "platform": p,
+                "tasks": int(t or 0),
+                "found": int(f or 0),
+                "added": int(a or 0),
+                "completed": int(c or 0),
+            }
+            for p, t, f, a, c in platform_rows
+        ],
+        "by_day": [
+            {
+                "date": d,
+                "tasks": int(t or 0),
+                "added": int(a or 0),
+                "failed": int(f or 0),
+            }
+            for d, t, a, f in day_rows
+        ],
+    }
+
+
 # ============ 任务 CRUD ============
 
 
@@ -312,8 +652,8 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
 
     CDP 模式下会预先检测 Chrome 调试端口，不可用时返回明确的错误提示。
     """
-    # CDP 模式：预检 Chrome 调试端口
-    if data.cdp_port is not None:
+    # CDP 模式：预检 Chrome 调试端口（仅小红书使用 CDP；抖音走独立 Playwright 浏览器）
+    if data.cdp_port is not None and data.platform == "xiaohongshu":
         ok, detail, is_chrome = _check_cdp(data.cdp_port)
         if not ok:
             cmd = CHROME_DEBUG_CMD.format(
@@ -375,28 +715,54 @@ async def list_scraper_tasks(
     sort: str = "newest",  # newest | oldest | most_found | most_added
     page: int = 1,
     size: int = 50,
-) -> list[ScraperTask]:
-    """获取采集任务列表，支持筛选和排序。"""
-    query = select(ScraperTask)
+) -> tuple[list[ScraperTask], int, dict[str, int]]:
+    """获取采集任务列表，支持筛选、排序与分页。
 
+    Returns:
+        (任务列表, 符合筛选条件的总数, 按状态聚合的统计)
+    """
+    conditions = []
     if platform:
-        query = query.where(ScraperTask.platform == platform)
+        conditions.append(ScraperTask.platform == platform)
     if status:
-        query = query.where(ScraperTask.status == status)
+        conditions.append(ScraperTask.status == status)
 
-    # 排序
+    # 总数统计（用于前端分页）
+    count_query = select(func.count(ScraperTask.id))
+    if conditions:
+        count_query = count_query.where(*conditions)
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # 按状态聚合（覆盖全部筛选结果，而非仅当前页）
+    stats_result = await db.execute(
+        select(ScraperTask.status, func.count(ScraperTask.id))
+        .where(*conditions)
+        .group_by(ScraperTask.status)
+    )
+    stats = {"pending": 0, "running": 0, "completed": 0, "failed": 0, "cancelled": 0}
+    for s, c in stats_result.all():
+        stats[s] = c
+
+    query = select(ScraperTask)
+    if conditions:
+        query = query.where(*conditions)
+
+    # 排序（附加 id 兜底键，保证同秒创建的任务顺序稳定）
     sort_map = {
-        "newest": ScraperTask.created_at.desc(),
-        "oldest": ScraperTask.created_at.asc(),
-        "most_found": ScraperTask.items_found.desc(),
-        "most_added": ScraperTask.items_added.desc(),
+        "newest": (ScraperTask.created_at.desc(), ScraperTask.id.desc()),
+        "oldest": (ScraperTask.created_at.asc(), ScraperTask.id.asc()),
+        "most_found": (ScraperTask.items_found.desc(), ScraperTask.id.desc()),
+        "most_added": (ScraperTask.items_added.desc(), ScraperTask.id.desc()),
     }
-    query = query.order_by(sort_map.get(sort, ScraperTask.created_at.desc()))
+    primary, tiebreak = sort_map.get(
+        sort, (ScraperTask.created_at.desc(), ScraperTask.id.desc())
+    )
+    query = query.order_by(primary, tiebreak)
     query = query.offset((page - 1) * size).limit(size)
 
     result = await db.execute(query)
     tasks = result.scalars().all()
-    return list(tasks)
+    return list(tasks), total, stats
 
 
 async def delete_single_scraper_task(db: AsyncSession, task_id: int) -> dict:

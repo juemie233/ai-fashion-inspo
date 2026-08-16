@@ -70,3 +70,19 @@ export interface ChromeStatus {
   detail: string
   pid: number | null
 }
+
+/** 定时采集计划 */
+export interface ScraperSchedule {
+  id: number
+  platform: string
+  keywords: string[]
+  max_count: number
+  sort_mode: string | null
+  enabled: boolean
+  interval_minutes: number
+  next_run_at: string | null
+  last_run_at: string | null
+  last_task_id: number | null
+  run_count: number
+  created_at: string
+}

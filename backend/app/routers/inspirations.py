@@ -30,9 +30,14 @@ async def create_inspiration(
     source_url: str | None = Form(default=None),
     source_author: str | None = Form(default=None),
     source_platform_id: str | None = Form(default=None),
+    scraper_task_id: int | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传图片并创建灵感素材。AI 分析在后台异步执行。"""
+    """上传图片并创建灵感素材。AI 分析在后台异步执行。
+
+    scraper_task_id 用于浏览器插件采集：将素材关联到采集任务记录，
+    便于在采集管理页按任务查看结果与统计。
+    """
     # 校验文件类型
     allowed_types = ("image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4")
     if file.content_type and file.content_type not in allowed_types:
@@ -48,6 +53,7 @@ async def create_inspiration(
         source_url=source_url,
         source_author=source_author,
         source_platform_id=source_platform_id,
+        scraper_task_id=scraper_task_id,
     )
     return _to_out(inspiration)
 

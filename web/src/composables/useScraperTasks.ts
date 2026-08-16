@@ -26,11 +26,13 @@ export function useScraperTasks() {
   const cookieStatuses = ref<Record<string, CookieStatus>>({})
   const defaultMaxCount = ref(0)
 
-  // ===== 任务筛选/排序 =====
+  // ===== 任务筛选/排序/分页 =====
   const taskFilterPlatform = ref('')
   const taskFilterStatus = ref(localStorage.getItem('scraper-task-filter') || '')
   const taskSort = ref(localStorage.getItem('scraper-task-sort') || 'newest')
   const taskPage = ref(1)
+  const taskPageSize = 50
+  const taskTotal = ref(0)
 
   // 持久化任务筛选/排序：刷新或再次进入时保持上次选择
   watch(taskFilterStatus, (v) => { localStorage.setItem('scraper-task-filter', v) })
@@ -41,18 +43,27 @@ export function useScraperTasks() {
   const clearing = ref(false)
   const retrying = ref(false)
   const retryingTask = ref<number | null>(null)
+  const copyingTask = ref<number | null>(null)
 
   // ===== 派生状态 =====
-  const hasActiveTasks = computed(() => tasks.value.some(t => t.status === 'pending' || t.status === 'running'))
-  const taskStats = computed(() => {
-    const t = tasks.value
-    const total = t.length
-    const completed = t.filter(x => x.status === 'completed').length
-    const failed = t.filter(x => x.status === 'failed').length
-    const rate = total > 0 ? Math.round(completed / total * 100) : 0
-    return { total, completed, failed, rate }
-  })
-  const hasFailedTasks = computed(() => tasks.value.some(t => t.status === 'failed'))
+  // 任务统计来自后端聚合（覆盖全部筛选结果，而非仅当前页）
+  const taskStats = ref({ total: 0, completed: 0, failed: 0, running: 0, pending: 0, rate: 0 })
+  const hasActiveTasks = computed(() => taskStats.value.running + taskStats.value.pending > 0)
+  const hasFailedTasks = computed(() => taskStats.value.failed > 0)
+
+  /** 将列表接口返回的统计写入 taskStats */
+  function applyTaskStats(data: { total: number; stats?: Record<string, number> }) {
+    const total = data.total || 0
+    const s = data.stats || {}
+    taskStats.value = {
+      total,
+      completed: s.completed || 0,
+      failed: s.failed || 0,
+      running: s.running || 0,
+      pending: s.pending || 0,
+      rate: total > 0 ? Math.round((s.completed || 0) / total * 100) : 0,
+    }
+  }
 
   // ===== 数据加载 =====
   async function loadAll() {
@@ -65,6 +76,7 @@ export function useScraperTasks() {
             status: taskFilterStatus.value || undefined,
             sort: taskSort.value,
             page: taskPage.value,
+            size: taskPageSize,
           },
         }),
         apiClient.get('/scraper/cookie-status', { params: { platform: 'xiaohongshu' } })
@@ -73,7 +85,9 @@ export function useScraperTasks() {
           .catch(() => ({ data: { platform: 'douyin', exists: false, age_hours: 0, valid: false, hint: '检查失败' } })),
       ])
       sources.value = sRes.data.sources
-      tasks.value = tRes.data
+      tasks.value = tRes.data.items
+      taskTotal.value = tRes.data.total || 0
+      applyTaskStats(tRes.data)
       tombstoneCount.value = sRes.data.tombstone_count || 0
       defaultMaxCount.value = sRes.data.default_max_count || 0
       cookieStatuses.value = {
@@ -91,14 +105,20 @@ export function useScraperTasks() {
           status: taskFilterStatus.value || undefined,
           sort: taskSort.value,
           page: taskPage.value,
+          size: taskPageSize,
         },
       })
-      tasks.value = tRes.data
+      tasks.value = tRes.data.items
+      taskTotal.value = tRes.data.total || 0
+      applyTaskStats(tRes.data)
     } catch { /* 轮询/静默刷新失败不提示，保持旧数据 */ }
   }
 
   /** 筛选或排序变化：回到第一页并刷新 */
   function onFilterChange() { taskPage.value = 1; refreshTasks() }
+
+  /** 翻页：更新页码并刷新列表 */
+  function onPageChange(page: number) { taskPage.value = page; refreshTasks() }
 
   // ===== 任务操作 =====
   async function cancelTask(taskId: number) {
@@ -114,13 +134,13 @@ export function useScraperTasks() {
       deletingTask.value = taskId
       const res = await apiClient.delete(`/scraper/tasks/${taskId}`)
       if (res.status === 200 || res.status === 204) {
-        tasks.value = tasks.value.filter(t => t.id !== taskId)
         message.success('已删除')
+        refreshTasks()
       }
     } catch (e: any) {
       if (e.response?.status === 204) {
-        tasks.value = tasks.value.filter(t => t.id !== taskId)
         message.success('已删除')
+        refreshTasks()
       } else message.error('删除失败: ' + (e.response?.data?.detail || ''))
     } finally { deletingTask.value = null }
   }
@@ -129,8 +149,9 @@ export function useScraperTasks() {
     try {
       clearing.value = true
       await apiClient.delete('/scraper/tasks')
-      tasks.value = []
+      taskPage.value = 1
       message.success('已清空')
+      refreshTasks()
     } catch { message.error('清空失败') } finally { clearing.value = false }
   }
 
@@ -155,6 +176,35 @@ export function useScraperTasks() {
     } catch (e: any) {
       message.error(e.response?.data?.detail || '续采失败')
     } finally { retryingTask.value = null }
+  }
+
+  /** 复制任务配置重新采集：解析原任务 config，按相同参数创建新任务 */
+  async function copyTask(task: ScraperTask) {
+    let cfg: any = {}
+    try { cfg = task.config ? JSON.parse(task.config) : {} } catch { cfg = {} }
+    const keywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : []
+    if (!keywords.length) { message.warning('原任务没有关键词配置，无法复制'); return }
+    try {
+      copyingTask.value = task.id
+      const payload: any = {
+        platform: task.platform,
+        keywords,
+        max_count: cfg.max_count || 20,
+        headless: !!cfg.headless,
+        cdp_port: task.platform === 'xiaohongshu' ? (cfg.cdp_port || 9222) : null,
+      }
+      if (task.platform === 'xiaohongshu' && cfg.sort_mode && cfg.sort_mode !== 'general') payload.sort_mode = cfg.sort_mode
+      await apiClient.post('/scraper/tasks', payload)
+      message.success('已按原配置创建新采集任务')
+      refreshTasks()
+      startPollIfNeeded()
+    } catch (e: any) {
+      const detail = e.response?.data?.detail
+      if (typeof detail === 'object' && detail?.command) {
+        message.error(detail.error || '创建失败')
+        setTimeout(() => copyText(detail.command), 500)
+      } else { message.error(detail || '创建失败') }
+    } finally { copyingTask.value = null }
   }
 
   // ===== 轮询：有运行/等待中的任务时每 5s 刷新一次 =====
@@ -216,10 +266,11 @@ export function useScraperTasks() {
 
   return {
     sources, tasks, tombstoneCount, cookieStatuses, defaultMaxCount,
-    taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying, retryingTask,
+    taskFilterPlatform, taskFilterStatus, taskSort, taskPage, taskPageSize, taskTotal,
+    deletingTask, clearing, retrying, retryingTask, copyingTask,
     taskStats, hasFailedTasks,
-    loadAll, refreshTasks, onFilterChange,
-    cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask,
+    loadAll, refreshTasks, onFilterChange, onPageChange,
+    cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask, copyTask,
     startPollIfNeeded, stopPoll, copyText,
     statusType, platformName, formatDate, parseKeywords, getTaskDuration,
   }

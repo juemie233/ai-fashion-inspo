@@ -1,28 +1,38 @@
 <script setup lang="ts">
-/** 结果预览面板：展示某任务采集到的图片/视频，支持全选与批量删除。 */
+/** 结果预览面板：展示某任务采集到的图片/视频，支持勾选批量删除、加载更多与跳转素材详情。 */
 
+import { useRouter } from 'vue-router'
 import { getFileUrl } from '@/api/inspirations'
 
 defineProps<{
   items: any[]
   total: number
   loading: boolean
+  hasMore: boolean
   selectedIds: Set<string>
   deleting: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select-all'): void
+  (e: 'load-more'): void
   (e: 'toggle-select', id: string): void
   (e: 'delete-selected'): void
 }>()
+
+const router = useRouter()
+
+/** 跳转到素材详情页（打标签、审核等操作在详情页完成） */
+function openDetail(id: string) {
+  router.push({ name: 'detail', params: { id } })
+}
 </script>
 
 <template>
 <div class="results-panel">
   <n-spin :show="loading">
     <div class="results-header">
-      <span>📋 结果（共 {{ total }} 张）</span>
+      <span>📋 结果（已加载 {{ items.length }}/{{ total }} 张）</span>
       <n-space>
         <n-button size="tiny" @click="emit('select-all')">{{ selectedIds.size===items.length?'取消全选':'全选' }}</n-button>
         <n-popconfirm v-if="selectedIds.size>0" @positive-click="emit('delete-selected')">
@@ -43,7 +53,11 @@ const emit = defineEmits<{
         />
         <img v-else :src="getFileUrl(item.thumbnail_path||item.file_path)" loading="lazy" />
         <div class="result-check"><n-checkbox :checked="selectedIds.has(item.id)" size="small" /></div>
+        <n-button class="result-open" size="tiny" quaternary type="primary" @click.stop="openDetail(item.id)">查看详情</n-button>
       </div>
+    </div>
+    <div v-if="hasMore" class="results-more">
+      <n-button size="small" :loading="loading" @click="emit('load-more')">加载更多</n-button>
     </div>
   </n-spin>
 </div>
@@ -59,4 +73,7 @@ const emit = defineEmits<{
 .result-card img,
 .result-card video{width:100%;height:100%;object-fit:cover}
 .result-check{position:absolute;top:4px;right:4px}
+.result-open{position:absolute;bottom:4px;left:4px;opacity:0;transition:opacity .15s;background:rgba(255,255,255,.85)}
+.result-card:hover .result-open{opacity:1}
+.results-more{display:flex;justify-content:center;margin-top:12px}
 </style>

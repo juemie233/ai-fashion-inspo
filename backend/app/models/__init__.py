@@ -8,7 +8,7 @@ from app.models.inspiration import (
 )
 from app.models.tag import Tag, InspirationTag, TagAlias
 from app.models.person import Person, InspirationPerson
-from app.models.scraper import ScraperTask
+from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import TaskQueue
 
 __all__ = [
@@ -22,5 +22,6 @@ __all__ = [
     "Person",
     "InspirationPerson",
     "ScraperTask",
+    "ScraperSchedule",
     "TaskQueue",
 ]

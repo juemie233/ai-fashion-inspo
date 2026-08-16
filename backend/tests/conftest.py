@@ -31,6 +31,7 @@ _ALL_TABLES = [
     "ai_analysis_log",
     "tag_aliases",
     "scraper_seen_urls",
+    "scraper_schedules",
     "scraper_tasks",
     "task_queue",
     "inspirations",

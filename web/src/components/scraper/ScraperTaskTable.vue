@@ -12,18 +12,31 @@ defineProps<{
   hasFailed: boolean
   retrying: boolean
   clearing: boolean
+  filterPlatform: string
   filterStatus: string
   sort: string
+  page: number
+  pageSize: number
+  total: number
 }>()
 
 const emit = defineEmits<{
+  (e: 'update:filterPlatform', v: string): void
   (e: 'update:filterStatus', v: string): void
   (e: 'update:sort', v: string): void
   (e: 'filter-change'): void
   (e: 'sort-change'): void
+  (e: 'page-change', page: number): void
   (e: 'retry-failed'): void
   (e: 'clear-all'): void
 }>()
+
+const platformOptions = [
+  { label: '全部平台', value: '' },
+  { label: '小红书', value: 'xiaohongshu' },
+  { label: '抖音', value: 'douyin' },
+  { label: '浏览器插件', value: 'browser_extension' },
+]
 
 const filterOptions = [
   { label: '全部状态', value: '' },
@@ -41,6 +54,11 @@ const sortOptions = [
 
 const guideSteps = ['在上方输入关键词，选择平台', '点击「开始采集」创建任务', '完成后可在素材库中查看结果']
 
+function onFilterPlatformChange(v: string) {
+  emit('update:filterPlatform', v)
+  emit('filter-change')
+}
+
 function onFilterStatusChange(v: string) {
   emit('update:filterStatus', v)
   emit('filter-change')
@@ -50,6 +68,10 @@ function onSortChange(v: string) {
   emit('update:sort', v)
   emit('sort-change')
 }
+
+function onPageChange(page: number) {
+  emit('page-change', page)
+}
 </script>
 
 <template>
@@ -57,6 +79,7 @@ function onSortChange(v: string) {
   <template #header-extra>
     <n-space align="center" size="small">
       <span v-if="stats.total>0" style="font-size:12px;color:#666">共 <b>{{ stats.total }}</b> · 成功 <b style="color:#18a058">{{ stats.completed }}</b> · 失败 <b style="color:#d03050">{{ stats.failed }}</b> · {{ stats.rate }}%</span>
+      <n-select :value="filterPlatform" :options="platformOptions" size="tiny" style="width:110px" @update:value="onFilterPlatformChange" />
       <n-select :value="filterStatus" :options="filterOptions" size="tiny" style="width:100px" @update:value="onFilterStatusChange" />
       <n-select :value="sort" :options="sortOptions" size="tiny" style="width:100px" @update:value="onSortChange" />
       <n-button v-if="hasFailed" size="tiny" type="warning" ghost :loading="retrying" @click="emit('retry-failed')">重试失败</n-button>
@@ -77,6 +100,16 @@ function onSortChange(v: string) {
       </div>
     </template>
   </n-empty>
+
+  <n-pagination
+    v-if="total > pageSize"
+    style="margin-top:12px;justify-content:flex-end"
+    :page="page"
+    :page-size="pageSize"
+    :item-count="total"
+    :page-slot="7"
+    @update:page="onPageChange"
+  />
 
   <slot name="extra" />
 </n-card>

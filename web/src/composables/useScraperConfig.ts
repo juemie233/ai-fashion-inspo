@@ -1,4 +1,4 @@
-/** 采集源配置域：Cookie 导入与墓碑表展开状态。 */
+/** 采集源配置域：Cookie 导入/删除与墓碑表展开状态。 */
 
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
@@ -12,12 +12,13 @@ export function useScraperConfig() {
   const showingCookieImport = ref(false)
   const cookiePlatform = ref('xiaohongshu')
   const cookieJsonInput = ref('')
+  const deletingCookie = ref<string | null>(null)
 
   /** 导入 Cookie；成功返回 true，父级据此刷新全量数据 */
   async function importCookie(): Promise<boolean> {
     try {
-      await apiClient.post('/scraper/cookie-import', { platform: cookiePlatform.value, cookies: JSON.parse(cookieJsonInput.value) })
-      message.success('Cookie 已导入')
+      const r = await apiClient.post('/scraper/cookie-import', { platform: cookiePlatform.value, cookies: JSON.parse(cookieJsonInput.value) })
+      message.success(`Cookie 已导入${r.data.imported ? `（${r.data.imported} 条）` : ''}`)
       showingCookieImport.value = false
       cookieJsonInput.value = ''
       return true
@@ -27,5 +28,18 @@ export function useScraperConfig() {
     }
   }
 
-  return { showTombstone, showingCookieImport, cookiePlatform, cookieJsonInput, importCookie }
+  /** 删除平台 Cookie；成功返回 true，父级据此刷新 Cookie 状态 */
+  async function deleteCookie(platform: string): Promise<boolean> {
+    try {
+      deletingCookie.value = platform
+      await apiClient.delete(`/scraper/cookie/${platform}`)
+      message.success('Cookie 已删除')
+      return true
+    } catch (e: any) {
+      message.error('删除失败: ' + (e.response?.data?.detail || ''))
+      return false
+    } finally { deletingCookie.value = null }
+  }
+
+  return { showTombstone, showingCookieImport, cookiePlatform, cookieJsonInput, deletingCookie, importCookie, deleteCookie }
 }

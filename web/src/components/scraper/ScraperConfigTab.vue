@@ -13,6 +13,7 @@ defineProps<{
   showCookieImport: boolean
   cookiePlatform: string
   cookieJsonInput: string
+  deletingCookie: string | null
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +23,8 @@ const emit = defineEmits<{
   (e: 'update:cookieJsonInput', v: string): void
   /** 点击导入：父级执行 Cookie 导入 */
   (e: 'import-cookie'): void
+  /** 点击删除：父级执行 Cookie 删除 */
+  (e: 'delete-cookie', platform: string): void
 }>()
 
 function openCookieImport(plat: string) {
@@ -36,6 +39,15 @@ function onUpdateCookieImportShow(v: boolean) {
 function onUpdateCookieJson(v: string) {
   emit('update:cookieJsonInput', v)
 }
+
+/** Cookie 时效文案：未配置 / N 小时前导入 / 已过期 */
+function cookieAgeHint(cs: CookieStatus): string {
+  if (!cs.exists) return '尚未导入'
+  if (cs.age_hours === undefined || cs.age_hours === null) return '已导入'
+  if (!cs.valid) return `已过期（${cs.age_hours} 小时前导入）`
+  if (cs.age_hours < 1) return '刚刚导入'
+  return `${cs.age_hours} 小时前导入`
+}
 </script>
 
 <template>
@@ -46,9 +58,16 @@ function onUpdateCookieJson(v: string) {
       {{ PLATFORM_LABELS[plat] || plat }} Cookie
       <n-tag :type="cs.valid?'success':'error'" size="small" style="margin-left:8px">{{ cs.exists?(cs.valid?'有效':'已过期'):'未配置' }}</n-tag>
     </template>
-    <p style="font-size:12px;color:#666;margin:0">{{ cs.hint }}</p>
+    <p style="font-size:12px;color:#666;margin:0">{{ cookieAgeHint(cs) }}</p>
+    <p style="font-size:12px;color:#666;margin:4px 0 0">{{ cs.hint }}</p>
     <template #action>
-      <n-button size="tiny" @click="openCookieImport(plat)">导入</n-button>
+      <n-space size="small">
+        <n-button size="tiny" @click="openCookieImport(plat)">导入</n-button>
+        <n-popconfirm v-if="cs.exists" @positive-click="emit('delete-cookie', plat)">
+          <template #trigger><n-button size="tiny" type="error" ghost :loading="deletingCookie===plat">删除</n-button></template>
+          确定删除 {{ PLATFORM_LABELS[plat]||plat }} 的 Cookie？
+        </n-popconfirm>
+      </n-space>
     </template>
   </n-card>
 </div>

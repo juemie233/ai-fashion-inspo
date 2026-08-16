@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -45,4 +45,28 @@ class ScraperSeenURL(Base):
     )  # 图片 URL 作为主键，天然去重
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+
+class ScraperSchedule(Base):
+    """定时采集计划：按固定间隔自动创建采集任务。"""
+
+    __tablename__ = "scraper_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    platform: Mapped[str] = mapped_column(String(32), index=True)
+    keywords: Mapped[str] = mapped_column(Text)  # JSON 数组字符串
+    max_count: Mapped[int] = mapped_column(Integer, default=20)
+    sort_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)  # 仅小红书生效
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)  # 执行间隔（分钟）
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
     )

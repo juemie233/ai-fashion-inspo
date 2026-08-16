@@ -30,8 +30,7 @@ const formMaxCount = ref(100)
 const formHeadless = ref(false)
 const formCdp = ref(true)
 const formCdpPort = ref(9222)
-const formSortMode = ref('general')  // general | latest | popular
-const formCollectMode = ref('search')  // search | user | topic
+const formSortMode = ref('general')  // general | latest | popular（仅小红书搜索生效）
 
 // 新建任务表单草稿：初始化时从 localStorage 恢复，为空则用默认值
 const hasFormDraft = localStorage.getItem('scraper-form-draft') !== null
@@ -43,20 +42,18 @@ if (savedFormDraft) {
     if (typeof draft.keywords === 'string') formKeywords.value = draft.keywords
     if (typeof draft.maxCount === 'number') formMaxCount.value = draft.maxCount
     if (typeof draft.sortMode === 'string') formSortMode.value = draft.sortMode
-    if (typeof draft.collectMode === 'string') formCollectMode.value = draft.collectMode
     if (typeof draft.cdp === 'boolean') formCdp.value = draft.cdp
     if (typeof draft.cdpPort === 'number') formCdpPort.value = draft.cdpPort
   } catch { /* 草稿损坏则忽略，使用默认值 */ }
 }
 
 // 表单草稿持久化：字段变化时自动保存（仅存草稿，不自动提交任务）
-watch([formPlatform, formKeywords, formMaxCount, formCdp, formCdpPort, formSortMode, formCollectMode], () => {
+watch([formPlatform, formKeywords, formMaxCount, formCdp, formCdpPort, formSortMode], () => {
   localStorage.setItem('scraper-form-draft', JSON.stringify({
     platform: formPlatform.value,
     keywords: formKeywords.value,
     maxCount: formMaxCount.value,
     sortMode: formSortMode.value,
-    collectMode: formCollectMode.value,
     cdp: formCdp.value,
     cdpPort: formCdpPort.value,
   }))
@@ -103,10 +100,12 @@ async function createTask() {
       keywords: formKeywords.value.split(',').map(k => k.trim()).filter(Boolean),
       max_count: formMaxCount.value,
       headless: formHeadless.value,
-      cdp_port: formCdp.value ? formCdpPort.value : null,
     }
-    if (formSortMode.value !== 'general') config.sort_mode = formSortMode.value
-    if (formCollectMode.value !== 'search') config.collect_mode = formCollectMode.value
+    // CDP 仅小红书使用：抖音走独立 Playwright 浏览器，不携带端口避免误导
+    if (formPlatform.value === 'xiaohongshu') {
+      config.cdp_port = formCdp.value ? formCdpPort.value : null
+      if (formSortMode.value !== 'general') config.sort_mode = formSortMode.value
+    }
     await apiClient.post('/scraper/tasks', config)
     emit('created')
     message.success('采集任务已创建')
@@ -126,31 +125,24 @@ async function createTask() {
     <n-form-item label="平台">
       <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
     </n-form-item>
-    <n-form-item label="模式">
-      <n-radio-group v-model:value="formCollectMode" size="small">
-        <n-radio-button value="search">搜索</n-radio-button>
-        <n-radio-button value="user">用户主页</n-radio-button>
-        <n-radio-button value="topic">话题</n-radio-button>
-      </n-radio-group>
-    </n-form-item>
-    <n-form-item :label="formCollectMode==='user'?'用户ID':'关键词'">
-      <n-input v-model:value="formKeywords" :placeholder="formCollectMode==='user'?'输入用户ID或主页链接':'多个关键词用逗号分隔'" @keyup.enter="createTask" />
+    <n-form-item label="关键词">
+      <n-input v-model:value="formKeywords" placeholder="多个关键词用逗号分隔" @keyup.enter="createTask" />
     </n-form-item>
     <n-form-item label="数量">
       <n-input-number v-model:value="formMaxCount" :min="1" :max="500" style="width:100px" />
     </n-form-item>
-    <n-form-item v-if="formCollectMode==='search'" label="排序">
+    <n-form-item v-if="formPlatform==='xiaohongshu'" label="排序">
       <n-select v-model:value="formSortMode" :options="[{label:'综合',value:'general'},{label:'最新',value:'latest'},{label:'最热',value:'popular'}]" style="width:120px" />
     </n-form-item>
-    <n-form-item label="CDP">
+    <n-form-item v-if="formPlatform==='xiaohongshu'" label="CDP">
       <n-switch v-model:value="formCdp" @update:value="()=>{cdpStatus='idle'}" />
       <span style="margin-left:8px;font-size:12px;color:#18a058">{{ formCdp?'连接真实 Chrome（零检测）':'Playwright 自动浏览器' }}</span>
     </n-form-item>
-    <n-form-item v-if="formCdp" label="端口">
+    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="端口">
       <n-space><n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" style="width:100px" />
       <n-button size="small" :loading="cdpChecking" :type="cdpStatus==='ok'?'success':cdpStatus==='fail'?'warning':'default'" @click="testCdp">{{ cdpChecking?'检测中...':cdpStatus==='ok'?'✓ 已连接':cdpStatus==='fail'?'✗ 未连接':'测试连接' }}</n-button></n-space>
     </n-form-item>
-    <n-form-item v-if="formCdp" label="Chrome">
+    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="Chrome">
       <n-space align="center">
         <n-button
           v-if="chromeStatus?.state === 'running'"
@@ -168,9 +160,12 @@ async function createTask() {
         </n-tag>
       </n-space>
     </n-form-item>
-    <n-form-item v-if="formCdp && chromeStatus?.detail">
+    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp && chromeStatus?.detail">
       <span style="font-size:12px;color:#999;line-height:1.6">{{ chromeStatus.detail }}</span>
     </n-form-item>
+    <n-alert v-if="formPlatform==='douyin'" type="warning" style="margin-bottom:12px">
+      抖音网页版功能受限，搜索结果可能为空，推荐使用浏览器插件采集。
+    </n-alert>
     <n-button type="primary" @click="createTask">开始采集</n-button>
   </n-form>
 </n-card>

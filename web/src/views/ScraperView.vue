@@ -17,19 +17,21 @@ import ScraperLogViewer from '@/components/scraper/ScraperLogViewer.vue'
 import ScraperFunnelModal from '@/components/scraper/ScraperFunnelModal.vue'
 import ScraperResultsPanel from '@/components/scraper/ScraperResultsPanel.vue'
 import ScraperConfigTab from '@/components/scraper/ScraperConfigTab.vue'
+import ScraperScheduleTab from '@/components/scraper/ScraperScheduleTab.vue'
+import ScraperStatsPanel from '@/components/scraper/ScraperStatsPanel.vue'
 import type { ScraperTask } from '@/types/scraper'
 
-/** 当前激活的页签：tasks 采集任务 / config 源配置 */
-const activeTab = ref<'tasks' | 'config'>((localStorage.getItem('scraper-active-tab') as 'tasks' | 'config') || 'tasks')
-watch(activeTab, (v) => { localStorage.setItem('scraper-active-tab', v) })
+/** 当前激活的页签：tasks 采集任务 / config 源配置 / schedules 定时采集 */
+const activeTab = ref<'tasks' | 'config' | 'schedules'>((localStorage.getItem('scraper-active-tab') as 'tasks' | 'config' | 'schedules') || 'tasks')
 
 // ===== 各业务域 composable =====
 const {
   sources, tasks, tombstoneCount, cookieStatuses, defaultMaxCount,
-  taskFilterStatus, taskSort, taskPage, deletingTask, clearing, retrying, retryingTask,
+  taskFilterPlatform, taskFilterStatus, taskSort, taskPage, taskPageSize, taskTotal,
+  deletingTask, clearing, retrying, retryingTask, copyingTask,
   taskStats, hasFailedTasks,
-  loadAll, refreshTasks, onFilterChange,
-  cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask,
+  loadAll, refreshTasks, onFilterChange, onPageChange,
+  cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask, copyTask,
   startPollIfNeeded, stopPoll, copyText,
   statusType, platformName, formatDate, parseKeywords, getTaskDuration,
 } = useScraperTasks()
@@ -44,23 +46,36 @@ const {
 
 const {
   resultsTaskId, resultsItems, resultsTotal, resultsLoading, selectedIds, deletingResults,
-  viewResults, toggleSelect, selectAll, deleteSelected,
+  hasMoreResults,
+  viewResults, loadMoreResults, toggleSelect, selectAll, deleteSelected,
 } = useScraperResults({ refreshTasks })
 
 const {
-  showTombstone, showingCookieImport, cookiePlatform, cookieJsonInput, importCookie,
+  showTombstone, showingCookieImport, cookiePlatform, cookieJsonInput, deletingCookie, importCookie, deleteCookie,
 } = useScraperConfig()
-
-/** 任务创建成功后：刷新列表并启动轮询 */
-function onTaskCreated() {
-  refreshTasks()
-  startPollIfNeeded()
-}
 
 /** 点击 Cookie 导入：执行导入，成功则刷新全量数据（来源/任务/Cookie 状态） */
 async function onCookieImport() {
   const ok = await importCookie()
   if (ok) loadAll()
+}
+
+/** 点击 Cookie 删除：执行删除，成功则刷新 Cookie 状态 */
+async function onDeleteCookie(platform: string) {
+  const ok = await deleteCookie(platform)
+  if (ok) loadAll()
+}
+
+// 页签切换：持久化选择；切回任务页签时刷新（定时计划「立即执行」可能在别的页签新建了任务）
+watch(activeTab, (v) => {
+  localStorage.setItem('scraper-active-tab', v)
+  if (v === 'tasks') { refreshTasks(); startPollIfNeeded() }
+})
+
+/** 任务创建成功后：刷新列表并启动轮询 */
+function onTaskCreated() {
+  refreshTasks()
+  startPollIfNeeded()
 }
 
 // ── 表格列 ──
@@ -76,13 +91,14 @@ function getTableColumns() {
     { title: '耗时', key: 'duration', width: 70, render: (r: ScraperTask) => getTaskDuration(r) },
     { title: '错误', key: 'error', width: 140, ellipsis: { tooltip: true }, render: (r: ScraperTask) => r.error ? h('span', { style: { color: '#d03050', cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }, title: r.error, onClick: () => copyText(r.error!) }, r.error.length > 25 ? r.error.slice(0, 25) + '…' : r.error) : '-' },
     { title: '时间', key: 'created_at', width: 150, render: (r: ScraperTask) => formatDate(r.created_at) },
-    { title: '操作', key: 'actions', width: 210, render: (r: ScraperTask) => {
+    { title: '操作', key: 'actions', width: 250, render: (r: ScraperTask) => {
       const btns: any[] = []
       if (r.items_added > 0) btns.push(h(NButton, { size: 'tiny', type: resultsTaskId.value === r.id ? 'warning' : 'primary', ghost: true, onClick: () => viewResults(r.id) }, resultsTaskId.value === r.id ? '收起' : '结果'))
       btns.push(h(NButton, { size: 'tiny', onClick: () => viewLog(r.id) }, logTaskId.value === r.id ? '关闭日志' : '日志'))
       if (r.diagnostics) btns.push(h(NButton, { size: 'tiny', type: funnelTaskId.value === r.id ? 'info' : 'default', ghost: true, onClick: () => viewFunnel(r) }, funnelTaskId.value === r.id ? '关闭漏斗' : '漏斗'))
       if (r.status === 'pending' || r.status === 'running') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, onClick: () => cancelTask(r.id) }, '取消'))
       if (r.status === 'failed') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, loading: retryingTask.value === r.id, onClick: () => retrySingleTask(r.id) }, '续采'))
+      btns.push(h(NButton, { size: 'tiny', ghost: true, loading: copyingTask.value === r.id, onClick: () => copyTask(r) }, '复制'))
       btns.push(h(NPopconfirm, { onPositiveClick: () => deleteSingleTask(r.id) }, { trigger: () => h(NButton, { size: 'tiny', type: 'error', ghost: true, loading: deletingTask.value === r.id }, '删除'), default: () => '确定删除此记录？' }))
       return h('span', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } }, btns)
     } },
@@ -117,6 +133,8 @@ onUnmounted(() => { stopPoll() })
   <!-- 采集任务 Tab -->
   <n-tab-pane name="tasks" tab="采集任务">
 
+    <ScraperStatsPanel />
+
     <ScraperTaskForm :default-max-count="defaultMaxCount" @created="onTaskCreated" />
 
     <ScraperTaskTable
@@ -127,10 +145,15 @@ onUnmounted(() => { stopPoll() })
       :has-failed="hasFailedTasks"
       :retrying="retrying"
       :clearing="clearing"
+      v-model:filter-platform="taskFilterPlatform"
       v-model:filter-status="taskFilterStatus"
       v-model:sort="taskSort"
+      :page="taskPage"
+      :page-size="taskPageSize"
+      :total="taskTotal"
       @filter-change="onFilterChange"
-      @sort-change="() => { taskPage = 1; refreshTasks() }"
+      @sort-change="onFilterChange"
+      @page-change="onPageChange"
       @retry-failed="retryFailedTasks"
       @clear-all="clearAllTasks"
     >
@@ -147,9 +170,11 @@ onUnmounted(() => { stopPoll() })
           :items="resultsItems"
           :total="resultsTotal"
           :loading="resultsLoading"
+          :has-more="hasMoreResults"
           :selected-ids="selectedIds"
           :deleting="deletingResults"
           @select-all="selectAll"
+          @load-more="loadMoreResults"
           @toggle-select="toggleSelect"
           @delete-selected="deleteSelected"
         />
@@ -164,12 +189,19 @@ onUnmounted(() => { stopPoll() })
       :sources="sources"
       :tombstone-count="tombstoneCount"
       :cookie-statuses="cookieStatuses"
+      :deleting-cookie="deletingCookie"
       v-model:show-tombstone="showTombstone"
       v-model:show-cookie-import="showingCookieImport"
       v-model:cookie-platform="cookiePlatform"
       v-model:cookie-json-input="cookieJsonInput"
       @import-cookie="onCookieImport"
+      @delete-cookie="onDeleteCookie"
     />
+  </n-tab-pane>
+
+  <!-- 定时采集 Tab -->
+  <n-tab-pane name="schedules" tab="定时采集">
+    <ScraperScheduleTab />
   </n-tab-pane>
 </n-tabs>
 </div>

@@ -95,6 +95,18 @@ class DouyinScraper(BaseScraper):
     async def get_feed(self, count: int = 20) -> list[RawContent]:
         return []
 
+    def cookies(self) -> dict:
+        """返回当前浏览器上下文 Cookie（键为 name，供下载器构造请求头）。
+
+        抖音搜索页加载后调用，可将会话 Cookie 用于图片 CDN 下载鉴权。
+        """
+        if self._context is None:
+            return {}
+        try:
+            return {c["name"]: c for c in self._context.cookies()}
+        except Exception:
+            return {}
+
     async def close(self):
         def _close():
             try:

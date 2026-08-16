@@ -27,7 +27,7 @@ const BAR_COLORS = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba
 function barColor(idx: number) { return BAR_COLORS[idx % BAR_COLORS.length] }
 
 function sortLabel(s: string): string {
-  const m: Record<string, string> = { general: '综合', time_descending: '最新', popularity_descending: '最热' }
+  const m: Record<string, string> = { general: '综合', time_descending: '最新', popularity_descending: '最热', extension: '插件采集' }
   return m[s] || s
 }
 

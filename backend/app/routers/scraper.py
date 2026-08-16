@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.schemas.scraper import ScraperTaskCreate, ScraperTaskOut
+from app.schemas.scraper import (
+    ScraperScheduleCreate,
+    ScraperScheduleOut,
+    ScraperScheduleUpdate,
+    ScraperTaskCreate,
+    ScraperTaskOut,
+)
 from app.services import scraper_service
 from app.services.chrome_manager import chrome_manager
 
@@ -15,6 +21,14 @@ router = APIRouter(prefix="/api/scraper", tags=["scraper"])
 async def scraper_sources():
     """列出所有可用的采集源及其状态。"""
     return await scraper_service.get_scraper_sources()
+
+
+@router.get("/stats")
+async def scraper_stats(days: int = 30):
+    """采集任务统计看板：近 N 天的总量/成功率/按平台与按日分布。"""
+    if days < 1 or days > 365:
+        days = 30
+    return await scraper_service.get_scraper_stats(days)
 
 
 @router.get("/cdp-check/{port}")
@@ -59,6 +73,61 @@ async def cookie_import(payload: dict):
     return await scraper_service.import_cookies(payload)
 
 
+@router.delete("/cookie/{platform}")
+async def delete_cookie(platform: str):
+    """删除指定平台的 Cookie 文件。"""
+    return await scraper_service.delete_cookies(platform)
+
+
+# ============ 定时采集计划 ============
+
+
+@router.get("/schedules", response_model=list[ScraperScheduleOut])
+async def list_schedules(db: AsyncSession = Depends(get_db)):
+    """列出全部定时采集计划。"""
+    return await scraper_service.list_schedules(db)
+
+
+@router.post("/schedules", response_model=ScraperScheduleOut, status_code=status.HTTP_201_CREATED)
+async def create_schedule(data: ScraperScheduleCreate, db: AsyncSession = Depends(get_db)):
+    """创建定时采集计划。"""
+    return await scraper_service.create_schedule(db, data)
+
+
+@router.patch("/schedules/{schedule_id}", response_model=ScraperScheduleOut)
+async def update_schedule(schedule_id: int, data: ScraperScheduleUpdate, db: AsyncSession = Depends(get_db)):
+    """更新定时采集计划（启用/停用/改间隔/改关键词等）。"""
+    return await scraper_service.update_schedule(db, schedule_id, data)
+
+
+@router.delete("/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: int, db: AsyncSession = Depends(get_db)):
+    """删除定时采集计划。"""
+    return await scraper_service.delete_schedule(db, schedule_id)
+
+
+@router.post("/schedules/{schedule_id}/run")
+async def run_schedule_now(schedule_id: int, db: AsyncSession = Depends(get_db)):
+    """立即执行一次定时采集计划。"""
+    return await scraper_service.run_schedule_now(db, schedule_id)
+
+
+# ============ 浏览器插件任务记录 ============
+
+
+@router.post("/extension-tasks", status_code=status.HTTP_201_CREATED)
+async def create_extension_task(payload: dict, db: AsyncSession = Depends(get_db)):
+    """浏览器插件采集会话开始：创建任务记录并返回 task_id。"""
+    task = await scraper_service.create_extension_task(db, payload)
+    return {"id": task.id}
+
+
+@router.post("/extension-tasks/{task_id}/complete")
+async def complete_extension_task(task_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    """浏览器插件采集会话结束：汇总发现/入库数量并标记任务完成。"""
+    return await scraper_service.complete_extension_task(db, task_id, payload)
+
+
 # ============ 任务日志 ============
 
 
@@ -95,7 +164,7 @@ async def create_scraper_task(
     return ScraperTaskOut.model_validate(task)
 
 
-@router.get("/tasks", response_model=list[ScraperTaskOut])
+@router.get("/tasks")
 async def list_scraper_tasks(
     platform: str | None = None,
     status: str | None = None,
@@ -104,11 +173,17 @@ async def list_scraper_tasks(
     size: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    """获取采集任务列表，支持筛选和排序。"""
-    tasks = await scraper_service.list_scraper_tasks(
+    """获取采集任务列表，支持筛选、排序与分页（返回 items + total + stats）。"""
+    tasks, total, stats = await scraper_service.list_scraper_tasks(
         db, platform, status, sort, page, size
     )
-    return [ScraperTaskOut.model_validate(t) for t in tasks]
+    return {
+        "items": [ScraperTaskOut.model_validate(t) for t in tasks],
+        "total": total,
+        "page": page,
+        "size": size,
+        "stats": stats,
+    }
 
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK)

@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # 垃圾桶自动清理周期（秒）：每 6 小时扫描一次超过保留期的软删除素材
 _TRASH_SWEEP_INTERVAL = 6 * 3600
 
+# 定时采集调度周期（秒）：每 30 秒检查一次到期计划
+_SCHEDULE_TICK_SECONDS = 30
+
 
 async def _sweep_expired_trash() -> None:
     """周期性地彻底删除超过保留期的垃圾桶素材（30 天自动清理）。
@@ -52,6 +55,28 @@ async def _sweep_expired_trash() -> None:
             raise
         except Exception as e:
             logger.warning(f"[垃圾桶] 自动清理失败: {e}")
+
+
+async def _scraper_schedule_loop() -> None:
+    """周期性检查定时采集计划：到期则创建采集任务并推进下次执行时间。
+
+    独立 asyncio 任务运行于服务进程内；进程重启后由 lifespan 的
+    僵尸任务清理逻辑兜底（未启动的计划保留 pending，等待下次到期重试）。
+    """
+    from app.database import async_session
+    from app.services import scraper_service
+
+    while True:
+        try:
+            await asyncio.sleep(_SCHEDULE_TICK_SECONDS)
+            async with async_session() as db:
+                triggered = await scraper_service.run_due_schedules(db)
+                if triggered:
+                    logger.info(f"[定时采集] 本次触发 {triggered} 个计划")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[定时采集] 检查失败: {e}")
 
 
 @asynccontextmanager
@@ -102,15 +127,17 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[垃圾桶] 启动清理失败: {e}")
 
     sweep_task = asyncio.create_task(_sweep_expired_trash())
+    schedule_task = asyncio.create_task(_scraper_schedule_loop())
 
     print(f"{settings.app_name} v{settings.app_version} 启动于端口 {settings.port}")
     yield
-    # 关闭：取消周期性清理任务
-    sweep_task.cancel()
-    try:
-        await sweep_task
-    except asyncio.CancelledError:
-        pass
+    # 关闭：取消周期性清理与定时采集调度任务
+    for task in (sweep_task, schedule_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     print("正在关闭...")
 
 

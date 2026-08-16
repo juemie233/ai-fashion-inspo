@@ -533,7 +533,18 @@ def run_scraper_sync(task_id: int):
     else:
         shuffled = list(keywords)
         random.shuffle(shuffled)
-        plan = [{"k": kw, "s": s} for kw in shuffled for s in SORT_TYPES]
+        # 排序方式映射：用户选择的排序 → 执行计划中的排序类型（默认仅综合）
+        # 抖音网页版不支持排序切换，固定综合排序单组合
+        if platform == "douyin":
+            plan = [{"k": kw, "s": "general"} for kw in shuffled]
+        else:
+            sort_mode = config.get("sort_mode") or "general"
+            sorts = {
+                "latest": ["time_descending"],
+                "popular": ["popularity_descending"],
+                "general": ["general"],
+            }.get(sort_mode, SORT_TYPES)
+            plan = [{"k": kw, "s": s} for kw in shuffled for s in sorts]
         done = 0
         items_found = 0
         items_added = 0
@@ -563,66 +574,101 @@ def run_scraper_sync(task_id: int):
                     await db.commit()
         loop.run_until_complete(_w())
 
+    # 平台执行器：小红书走 CDP 真实 Chrome；抖音走独立 Playwright 浏览器（网页版无需 CDP）
+    pw = None
+    dy = None
+    page = None
+
+    def _search_douyin(keyword: str, need_count: int) -> tuple[list[tuple[str, str]], dict]:
+        """使用 DouyinScraper 在独立浏览器中搜索抖音网页版并提取图片 URL。
+
+        Returns:
+            (pairs, funnel_dict): (笔记页面 URL, 图片 CDN URL) 列表与该次搜索的漏斗统计
+        """
+        raw = loop.run_until_complete(dy.search(keyword, max(10, need_count * 2)))
+        pairs: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for item in raw:
+            for img in item.image_urls or []:
+                if img and img not in seen:
+                    seen.add(img)
+                    pairs.append((item.url or "", img))
+        funnel: dict = {
+            "cards_total": len(raw),
+            "urls_extracted": len(pairs),
+            "target": need_count,
+        }
+        if not raw:
+            funnel["error"] = "抖音搜索无结果（网页版可能未登录或页面结构变化）"
+        return pairs[: need_count * 2], funnel
+
     try:
-        pw = sync_playwright().start()
+        if platform == "xiaohongshu":
+            pw = sync_playwright().start()
 
-        # ── 唯一路径：连接 CDP Chrome ──
-        CDP_PORT = config.get("cdp_port") or 9222
-        cdp_url = f"http://localhost:{CDP_PORT}"
-        print(f"连接 CDP Chrome: {cdp_url}")
+            # ── 连接 CDP Chrome ──
+            CDP_PORT = config.get("cdp_port") or 9222
+            cdp_url = f"http://localhost:{CDP_PORT}"
+            print(f"连接 CDP Chrome: {cdp_url}")
 
-        try:
-            browser = pw.chromium.connect_over_cdp(cdp_url)
-        except Exception as e:
-            chrome_exe = settings.chrome_executable
-            data_dir = settings.chrome_user_data_dir
-            raise RuntimeError(
-                f"无法连接 CDP Chrome (端口 {CDP_PORT})。\n"
-                f"请先用调试模式启动 Chrome:\n"
-                f'"{chrome_exe}" '
-                f"--remote-debugging-port={CDP_PORT} "
-                f'--user-data-dir="{data_dir}"'
-            ) from e
+            try:
+                browser = pw.chromium.connect_over_cdp(cdp_url)
+            except Exception as e:
+                chrome_exe = settings.chrome_executable
+                data_dir = settings.chrome_user_data_dir
+                raise RuntimeError(
+                    f"无法连接 CDP Chrome (端口 {CDP_PORT})。\n"
+                    f"请先用调试模式启动 Chrome:\n"
+                    f'"{chrome_exe}" '
+                    f"--remote-debugging-port={CDP_PORT} "
+                    f'--user-data-dir="{data_dir}"'
+                ) from e
 
-        print(f"已连接 Chrome {browser.version}")
-        context = browser.contexts[0]
+            print(f"已连接 Chrome {browser.version}")
+            context = browser.contexts[0]
 
-        # 创建新标签页用于采集
-        page = context.new_page()
+            # 创建新标签页用于采集
+            page = context.new_page()
 
-        # ── 登录检查 ──
-        LOGIN_TIMEOUT = 180
+            # ── 登录检查 ──
+            LOGIN_TIMEOUT = 180
 
-        def _check_login() -> bool:
-            cookies = context.cookies()
-            xhs = [c for c in cookies if "xiaohongshu" in c.get("domain", "")]
-            return any(c.get("name") in ("web_session", "a1") for c in xhs)
+            def _check_login() -> bool:
+                cookies = context.cookies()
+                xhs = [c for c in cookies if "xiaohongshu" in c.get("domain", "")]
+                return any(c.get("name") in ("web_session", "a1") for c in xhs)
 
-        if _check_login():
-            print("已在登录状态，直接开始采集")
-        else:
-            print(f"\n{'='*50}")
-            print(" >>> 请在 Chrome 中登录小红书 <<<")
-            print(" 在地址栏输入 xiaohongshu.com，扫码登录")
-            print(f" 登录完成后脚本自动检测并继续（{LOGIN_TIMEOUT}s 超时）")
-            print(f"{'='*50}")
-
-            for waited in range(0, LOGIN_TIMEOUT, 5):
-                time.sleep(5)
-                if _check_login():
-                    print(f"检测到登录 ({waited + 5}s)")
-                    time.sleep(1)
-                    break
-                if (waited + 5) % 30 == 0:
-                    print(f"  等待登录... ({waited + 5}s / {LOGIN_TIMEOUT}s)")
+            if _check_login():
+                print("已在登录状态，直接开始采集")
             else:
-                print("登录超时，将尝试当前状态")
+                print(f"\n{'='*50}")
+                print(" >>> 请在 Chrome 中登录小红书 <<<")
+                print(" 在地址栏输入 xiaohongshu.com，扫码登录")
+                print(f" 登录完成后脚本自动检测并继续（{LOGIN_TIMEOUT}s 超时）")
+                print(f"{'='*50}")
+
+                for waited in range(0, LOGIN_TIMEOUT, 5):
+                    time.sleep(5)
+                    if _check_login():
+                        print(f"检测到登录 ({waited + 5}s)")
+                        time.sleep(1)
+                        break
+                    if (waited + 5) % 30 == 0:
+                        print(f"  等待登录... ({waited + 5}s / {LOGIN_TIMEOUT}s)")
+                else:
+                    print("登录超时，将尝试当前状态")
+
+            # 提取浏览器 Cookie 用于 httpx 下载鉴权
+            browser_cookies = {c["name"]: c for c in context.cookies()}
+        else:
+            from app.scrapers.douyin import DouyinScraper
+
+            dy = DouyinScraper(headless=config.get("headless", True))
+            browser_cookies: dict = {}
+            print("抖音平台：使用独立 Playwright 浏览器（无需 CDP Chrome）")
 
         # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
         total_searches = len(plan)
-
-        # 提取浏览器 Cookie 用于 httpx 下载鉴权
-        browser_cookies = {c["name"]: c for c in context.cookies()}
 
         for plan_idx in range(done, len(plan)):
             entry = plan[plan_idx]
@@ -645,6 +691,8 @@ def run_scraper_sync(task_id: int):
                 remaining = max_count - items_added
                 if platform == "xiaohongshu":
                     urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
+                elif platform == "douyin":
+                    urls, inner_funnel = _search_douyin(kw, remaining)
                 else:
                     per_search.append({
                         "keyword": kw, "sort_type": sort_type,
@@ -656,6 +704,10 @@ def run_scraper_sync(task_id: int):
 
                 items_found += len(urls)
                 print(f"  提取 {len(urls)} 个 URL")
+
+                # 抖音每次搜索后同步其浏览器 Cookie（用于 CDN 下载鉴权）
+                if platform == "douyin":
+                    browser_cookies = dy.cookies()
 
                 # 立即下载本批（带浏览器 Cookie）
                 added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
@@ -684,18 +736,19 @@ def run_scraper_sync(task_id: int):
                 print(f"  本批入库: {added} (跳过: 已存在{sk_ex}, MD5重复{sk_dup}, HTTP{sk_h}, 网络{sk_n})")
                 print(f"  累计入库: {items_added}/{max_count}")
 
-                # 搜索间冷却 + CDP 保活
+                # 搜索间冷却 + CDP 保活（仅小红书有 CDP 页面）
                 if items_added < max_count and plan_idx < len(plan) - 1:
                     cool = random.randint(6, 12)
                     print(f"  ⏸ 冷却 {cool}s...")
                     # 轻量页面交互保持 CDP 连接活跃（随机间隔 + 偶发鼠标移动）
                     for _ in range(cool):
-                        try:
-                            if random.random() < 0.5:
-                                _human_mouse_move(page)
-                            page.evaluate("1")  # no-op，单纯保持连接
-                        except Exception:
-                            pass
+                        if page is not None:
+                            try:
+                                if random.random() < 0.5:
+                                    _human_mouse_move(page)
+                                page.evaluate("1")  # no-op，单纯保持连接
+                            except Exception:
+                                pass
                         _rdsleep(0.8, 1.5)
 
             except Exception as e:
@@ -719,12 +772,17 @@ def run_scraper_sync(task_id: int):
         return
 
     finally:
-        # CDP 模式不关浏览器
+        # CDP 模式不关 Chrome；Playwright 客户端与抖音独立浏览器正常回收
         try:
-            if 'pw' in dir() and pw:
+            if pw:
                 pw.stop()
         except Exception:
             pass
+        if dy is not None:
+            try:
+                loop.run_until_complete(dy.close())
+            except Exception:
+                pass
 
     # ── 组装持久化漏斗数据 ──
     funnel_diagnostics = json.dumps({
