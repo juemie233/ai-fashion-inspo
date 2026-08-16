@@ -120,9 +120,13 @@ def _train_sync(X: list[list[float]], y: list[int]) -> dict:
     if len(X) < 10:
         return {"error": f"样本量过少（{len(X)} 条），不足以训练有意义的分类器，请先积累样本"}
 
-    # stratify 保证训练/验证集正负比例一致（样本不均衡时尤为重要）
+    # stratify 保证训练/验证集正负比例一致（样本不均衡时尤为重要）。
+    # 某类样本量过小（如 1 条）时 stratify 无法分层会直接抛 ValueError，
+    # 此时降级为不分层随机划分，避免训练流程因个别罕见样本崩溃。
+    y_counts = {c: y.count(c) for c in set(y)}
+    stratify_arg = y if all(cnt >= 2 for cnt in y_counts.values()) else None
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42, stratify=y
+        X, y, test_size=0.25, random_state=42, stratify=stratify_arg
     )
 
     model = make_pipeline(

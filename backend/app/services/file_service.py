@@ -107,6 +107,11 @@ async def _generate_video_thumbnail(video_path: Path) -> str | None:
                 proc.kill()
             except ProcessLookupError:
                 pass
+            # kill 后必须回收子进程，否则留下僵尸进程
+            try:
+                await proc.wait()
+            except Exception:
+                pass
             _log.warning(f"ffmpeg 缩略图提取超时，已终止: {video_path}")
             return None
         if full_thumb_path.exists() and full_thumb_path.stat().st_size > 0:

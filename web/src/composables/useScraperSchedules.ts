@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { formatDate } from '@/utils/format'
 import type { ScraperSchedule } from '@/types/scraper'
 
 /** 计划间隔选项（分钟） */
@@ -132,15 +133,6 @@ export function useScraperSchedules() {
     } catch (e: any) {
       message.error(e.response?.data?.detail || '删除失败')
     } finally { deletingId.value = null }
-  }
-
-  /** ISO 时间转本地显示 */
-  function formatDate(d: string | null) {
-    if (!d) return '-'
-    try {
-      const dt = new Date(d)
-      return isNaN(dt.getTime()) ? '-' : dt.toLocaleString('zh-CN')
-    } catch { return '-' }
   }
 
   return {

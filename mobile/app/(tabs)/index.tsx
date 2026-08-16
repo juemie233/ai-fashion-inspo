@@ -14,6 +14,7 @@ import {
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
+import { getFileUrl as buildFileUrl } from '../../services/api'
 import { sourceLabel } from '../../utils/sourceLabel'
 
 const { width } = Dimensions.get('window')
@@ -55,8 +56,7 @@ export default function GalleryScreen() {
             : getFileUrl(item.file_path),
         }}
         style={styles.cardImage}
-      />
-      {/* 标签 */}
+      />      {/* 标签 */}
       <View style={styles.cardTags}>
         {item.tags?.slice(0, 3).map((t) => (
           <View key={t.tag.id} style={styles.tag}>
@@ -77,7 +77,7 @@ export default function GalleryScreen() {
       {/* 收藏按钮 */}
       <TouchableOpacity
         style={styles.favBtn}
-        onPress={() => toggleFavorite(item.id)}
+        onPress={() => toggleFavorite(item.id, !item.is_favorite)}
       >
         <Ionicons
           name={item.is_favorite ? 'heart' : 'heart-outline'}
@@ -114,10 +114,10 @@ export default function GalleryScreen() {
   )
 }
 
-/** 辅助函数 */
+/** 辅助函数：拼接文件地址（路径段 URL 编码，防止含空格/中文的路径 404） */
 function getFileUrl(path: string) {
   const base = useInspirationStore.getState().apiBaseUrl
-  return `${base}/api/files/${path}`
+  return buildFileUrl(base, path)
 }
 
 const styles = StyleSheet.create({

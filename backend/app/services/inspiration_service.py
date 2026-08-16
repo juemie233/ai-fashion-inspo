@@ -187,6 +187,7 @@ async def create_inspiration_from_url(
     url: str,
     source_author: str | None = None,
     tag_names: list[str] | None = None,
+    source_type: str = "url_import",
 ) -> Inspiration:
     """从 URL 下载图片并创建素材，支持关联标签。"""
     import aiofiles
@@ -277,7 +278,7 @@ async def create_inspiration_from_url(
     media_type = "video" if ext == ".mp4" else "image"
 
     inspiration = Inspiration(
-        source_type="browser_extension",
+        source_type=source_type,
         source_url=url,
         source_author=source_author,
         file_path=rel_path,

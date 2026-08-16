@@ -2,6 +2,7 @@
 
 import csv
 import io
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.database import get_db
@@ -143,6 +146,7 @@ async def cleanup_orphan_files():
 
     deleted = 0
     freed_bytes = 0
+    failed: list[str] = []
     for rel_path in storage_files:
         if rel_path not in db_paths:
             fpath = storage_root / rel_path
@@ -151,8 +155,10 @@ async def cleanup_orphan_files():
                 fpath.unlink()
                 deleted += 1
                 freed_bytes += sz
-            except Exception:
-                pass
+            except Exception as e:
+                # 删除失败不能静默吞掉：记录日志与失败列表，freed_bytes 与实际释放保持一致
+                failed.append(rel_path)
+                logger.warning(f"孤立文件删除失败: {rel_path} — {e}")
 
     # 清理空目录
     for dirpath in sorted(storage_root.rglob("*"), reverse=True):
@@ -176,6 +182,7 @@ async def cleanup_orphan_files():
     return {
         "deleted_count": deleted,
         "freed_bytes": freed_bytes,
+        "failed_files": failed if failed else None,
     }
 
 

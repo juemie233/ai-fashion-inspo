@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 搜索栏：标签名自动补全 + 关键词搜索 + 智能粘贴。 */
 
-import { ref, watch } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { fetchSuggestions } from '@/api/search'
 
 const inputValue = ref('')
@@ -38,6 +38,11 @@ watch(inputValue, (val) => {
       suggestions.value = []
     }
   }, 200)
+})
+
+// 卸载时清理防抖定时器，避免残留请求回调在组件销毁后执行
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
 })
 
 /** 智能粘贴：自动识别颜色代码和日期 */

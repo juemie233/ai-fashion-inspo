@@ -13,9 +13,8 @@ from pathlib import Path
 
 from sqlalchemy import delete, select
 
-from app.config import settings
 from app.database import async_session
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import AIAnalysisLog
 
 logger = logging.getLogger(__name__)
 

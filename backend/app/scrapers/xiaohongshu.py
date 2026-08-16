@@ -81,9 +81,12 @@ class XiaohongshuScraper(BaseScraper):
 
         def _search():
             results: list[RawContent] = []
+            # 关键词 URL 编码：中文/空格/特殊字符直接拼进 URL 会导致请求异常
+            from urllib.parse import quote
+
             search_url = (
                 f"https://www.xiaohongshu.com/search_result/"
-                f"?keyword={keyword}&source=web_search_result_notes"
+                f"?keyword={quote(keyword)}&source=web_search_result_notes"
             )
             try:
                 logger.info(f"小红书搜索: {keyword}")

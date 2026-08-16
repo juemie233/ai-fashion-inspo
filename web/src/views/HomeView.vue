@@ -22,6 +22,7 @@ import {
   storedBrowsePageSize,
   PAGE_SIZE_STORAGE_KEY,
 } from '@/utils/browseQuery'
+import { buildSourceOptions } from '@/utils/sourceLabel'
 
 const router = useRouter()
 const route = useRoute()
@@ -105,15 +106,10 @@ async function loadDominantColors() {
 }
 
 // ── 筛选选项配置 ──
-
-const sourceOptions: { label: string; value: SourceFilter }[] = [
-  { label: '全部来源', value: 'all' },
-  { label: '手动上传', value: 'manual_upload' },
-  { label: '自动采集', value: 'scraper' },
-  { label: '小红书', value: 'xiaohongshu' },
-  { label: '抖音', value: 'douyin' },
-  { label: '浏览器插件', value: 'browser_extension' },
-]
+// 来源选项由 sourceLabel.ts 统一生成（新增来源类型只改一处）
+const sourceOptions = buildSourceOptions('all').map(
+  (o) => ({ ...o, value: o.value as SourceFilter }),
+)
 
 const mediaOptions: { label: string; value: MediaFilter }[] = [
   { label: '全部', value: 'all' },

@@ -26,12 +26,6 @@
           "photosPermission": "允许访问相册以选择穿搭图片",
           "cameraPermission": "允许使用相机拍摄穿搭照片"
         }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "允许使用相机拍摄穿搭照片"
-        }
       ]
     ],
     "scheme": "fashion-inspo"

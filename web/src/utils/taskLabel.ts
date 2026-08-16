@@ -1,6 +1,7 @@
 /** 任务类型与状态的中文映射（任务中心专用）。 */
 
 import type { UnifiedTask } from '@/types/task'
+import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
 /** 任务类型中文标签 */
 export const TASK_TYPE_LABELS: Record<string, string> = {
@@ -12,10 +13,10 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   vector_backfill: '向量回填',
 }
 
-/** 采集平台中文标签 */
+/** 采集平台中文标签（复用来源映射，单一来源避免文案漂移） */
 export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
-  xiaohongshu: '小红书',
-  douyin: '抖音',
+  xiaohongshu: SOURCE_TYPE_LABELS.xiaohongshu,
+  douyin: SOURCE_TYPE_LABELS.douyin,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */

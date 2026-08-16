@@ -11,7 +11,7 @@ class ScraperTaskCreate(BaseModel):
     platform: str = Field(..., description="xiaohongshu | douyin")
     keywords: list[str] = Field(default=[], description="搜索关键词列表")
     max_count: int = Field(default=100, ge=1, le=500)
-    headless: bool = Field(default=False, description="是否无头模式")
+    headless: bool = Field(default=True, description="是否无头模式（默认无头，与 scraper_browser_headless 配置一致）")
     cdp_port: int | None = Field(default=None, description="CDP 端口，连接真实 Chrome 实现零检测采集（仅小红书生效）")
     cookie_file: str | None = Field(default=None, description="Cookie 文件路径")
     sort_mode: str | None = Field(default=None, description="搜索排序: general | latest | popular（仅小红书搜索模式生效）")

@@ -3,6 +3,7 @@
  *  底部保留 extra 插槽，供父级注入日志查看器/漏斗弹窗/结果预览面板（保持原卡片内布局）。 */
 
 import type { ScraperTask } from '@/types/scraper'
+import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
 defineProps<{
   tasks: ScraperTask[]
@@ -31,11 +32,11 @@ const emit = defineEmits<{
   (e: 'clear-all'): void
 }>()
 
+/** 采集平台筛选选项（文案由 sourceLabel.ts 单一来源生成） */
+const PLATFORM_KEYS = ['xiaohongshu', 'douyin', 'browser_extension'] as const
 const platformOptions = [
   { label: '全部平台', value: '' },
-  { label: '小红书', value: 'xiaohongshu' },
-  { label: '抖音', value: 'douyin' },
-  { label: '浏览器插件', value: 'browser_extension' },
+  ...PLATFORM_KEYS.map((k) => ({ label: SOURCE_TYPE_LABELS[k], value: k })),
 ]
 
 const filterOptions = [

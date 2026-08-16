@@ -11,10 +11,11 @@ import {
   ActivityIndicator,
   Dimensions,
   Linking,
+  Alert,
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { apiClient } from '../../services/api'
+import { apiClient, getFileUrl, type InspirationTag } from '../../services/api'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
 import { sourceLabel } from '../../utils/sourceLabel'
 
@@ -37,28 +38,41 @@ export default function DetailScreen() {
 
   const [detail, setDetail] = useState<Inspiration | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 错误文案：404 显示「素材未找到」，网络/服务错误单独提示 */
+  const [error, setError] = useState('')
 
   useEffect(() => {
     loadDetail()
   }, [id])
 
   const loadDetail = async () => {
+    setLoading(true)
+    setError('')
     try {
       const { data } = await apiClient.get(`/inspirations/${id}`)
       setDetail(data)
-    } catch {
+    } catch (e: any) {
+      setDetail(null)
+      setError(
+        e?.response?.status === 404
+          ? '素材未找到'
+          : '加载失败，请检查网络或后端服务'
+      )
     } finally {
       setLoading(false)
     }
   }
 
-  const getFileUrl = (path: string) => `${apiBaseUrl}/api/files/${path}`
-
   const handleToggleFav = async () => {
     if (!detail) return
     const newState = !detail.is_favorite
-    await toggleFavorite(id!)
-    setDetail({ ...detail, is_favorite: newState })
+    try {
+      await toggleFavorite(id!, newState)
+      setDetail({ ...detail, is_favorite: newState })
+    } catch {
+      // 失败时保持原状态并提示，避免 UI 与服务端不一致
+      Alert.alert('操作失败', '收藏状态更新失败，请稍后重试')
+    }
   }
 
   const handleOpenSource = async () => {
@@ -81,13 +95,13 @@ export default function DetailScreen() {
   if (!detail) {
     return (
       <View style={styles.loading}>
-        <Text style={{ color: '#9ca3af' }}>素材未找到</Text>
+        <Text style={{ color: '#9ca3af' }}>{error || '素材未找到'}</Text>
       </View>
     )
   }
 
   // 按类别分组标签
-  const groupedTags: Record<string, any[]> = {}
+  const groupedTags: Record<string, InspirationTag[]> = {}
   detail.tags?.forEach((t) => {
     const cat = t.tag.category
     if (!groupedTags[cat]) groupedTags[cat] = []
@@ -104,7 +118,7 @@ export default function DetailScreen() {
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
       {/* 大图 */}
       <Image
-        source={{ uri: getFileUrl(detail.file_path) }}
+        source={{ uri: getFileUrl(apiBaseUrl, detail.file_path) }}
         style={styles.mainImage}
       />
 

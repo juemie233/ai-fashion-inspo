@@ -10,6 +10,7 @@ import apiClient from '@/api/client'
 import type { UploadQueueItem } from '@/types/upload'
 import { useUploadPrefs } from '@/composables/useUploadPrefs'
 import { useRecentUploads } from '@/composables/useRecentUploads'
+import { isVideoFile } from '@/utils/media'
 import UploadDropZone from '@/components/upload/UploadDropZone.vue'
 import UploadQueue from '@/components/upload/UploadQueue.vue'
 import UploadOptionsPanel from '@/components/upload/UploadOptionsPanel.vue'
@@ -25,8 +26,8 @@ const { autoAnalyze, afterUpload, skipDuplicates, savePrefs } = useUploadPrefs()
 // ── 最近上传（sessionStorage 持久化）──
 const { recentUploads, prependRecent } = useRecentUploads()
 
-// ── 图片扩展名 ──
-const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4'])
+// ── 可上传扩展名（含视频；命名用 UPLOAD 而非 IMG 避免误导）──
+const UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4'])
 
 // ── 上传队列上限（页面文案承诺「单次最多 500 个」）──
 const MAX_QUEUE_SIZE = 500
@@ -105,7 +106,7 @@ function onPaste(e: ClipboardEvent) {
 function addFiles(files: File[]) {
   const imageFiles = files.filter(f => {
     const ext = '.' + (f.name.split('.').pop()?.toLowerCase() || '')
-    return IMG_EXTS.has(ext)
+    return UPLOAD_EXTS.has(ext)
   })
   if (imageFiles.length === 0) {
     message.warning('没有可识别的图片文件')
@@ -292,11 +293,6 @@ async function importFromUrl() {
 }
 
 // ── 视频预览 ──
-/** 判断文件是否为视频（按 MIME 类型与扩展名） */
-function isVideoFile(file: File): boolean {
-  return file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name)
-}
-
 /** 点击队列中的视频项，在模态框中播放预览 */
 function previewQueueItem(item: UploadQueueItem) {
   if (!isVideoFile(item.file)) return

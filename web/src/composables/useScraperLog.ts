@@ -17,9 +17,16 @@ export function useScraperLog() {
     if (logTaskId.value === taskId) { logTaskId.value = null; logContent.value = ''; return }
     logTaskId.value = taskId
     logLoading.value = true
-    try { logContent.value = (await apiClient.get(`/scraper/tasks/${taskId}/log`)).data.content }
-    catch { message.error('日志加载失败'); logTaskId.value = null }
-    finally { logLoading.value = false }
+    try {
+      const content = (await apiClient.get(`/scraper/tasks/${taskId}/log`)).data.content
+      // 竞态防护：快速切换任务时，旧任务的日志响应不覆盖新任务
+      if (logTaskId.value === taskId) logContent.value = content
+    } catch {
+      message.error('日志加载失败')
+      if (logTaskId.value === taskId) logTaskId.value = null
+    } finally {
+      logLoading.value = false
+    }
   }
 
   /** 关闭日志查看器 */

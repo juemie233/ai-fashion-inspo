@@ -76,12 +76,17 @@ async def create_from_url(
 
     source_author = payload.get("source_author", "").strip() or None
     tag_names = payload.get("tags", [])
+    # 通用「从 URL 导入」默认标记为 url_import；插件采集链路可显式传 browser_extension
+    source_type = payload.get("source_type") or "url_import"
+    if not isinstance(source_type, str) or len(source_type) > 32:
+        raise HTTPException(status_code=400, detail="source_type 非法")
 
     inspiration = await inspiration_service.create_inspiration_from_url(
         db,
         url,
         source_author=source_author,
         tag_names=tag_names,
+        source_type=source_type,
     )
     return _to_out(inspiration)
 

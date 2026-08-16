@@ -1,4 +1,4 @@
-/** 搜索页：标签筛选 + 关键词搜索。 */
+/** 搜索页：标签筛选 + 关键词搜索 + 结果网格。 */
 
 import { useState, useEffect } from 'react'
 import {
@@ -10,19 +10,34 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  Image,
+  Dimensions,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
-import { apiClient, type TagCategoryGroup } from '../../services/api'
+import { apiClient, getFileUrl, type TagCategoryGroup } from '../../services/api'
+import { sourceLabel } from '../../utils/sourceLabel'
+
+const { width } = Dimensions.get('window')
+const CARD_WIDTH = (width - 36) / 2
+
+const CAT_LABELS: Record<string, string> = {
+  style: '风格', item_type: '单品', color: '颜色',
+  body_part: '穿着方式', fit: '版型',
+  season: '季节', attribute: '属性', free: '自定义',
+}
 
 export default function SearchScreen() {
   const router = useRouter()
+  const { apiBaseUrl, toggleFavorite } = useInspirationStore()
   const [searchText, setSearchText] = useState('')
   const [tagGroups, setTagGroups] = useState<TagCategoryGroup[]>([])
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<Inspiration[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [searched, setSearched] = useState(false)
   const [total, setTotal] = useState(0)
 
   useEffect(() => {
@@ -33,7 +48,9 @@ export default function SearchScreen() {
     try {
       const { data } = await apiClient.get('/tags')
       setTagGroups(data)
-    } catch {}
+    } catch (e) {
+      console.error('加载标签失败', e)
+    }
   }
 
   const toggleTag = (name: string) => {
@@ -48,6 +65,8 @@ export default function SearchScreen() {
 
   const doSearch = async () => {
     setLoading(true)
+    setError('')
+    setSearched(true)
     try {
       const params: Record<string, string> = {}
       if (selectedTags.size > 0) {
@@ -62,17 +81,59 @@ export default function SearchScreen() {
       const { data } = await apiClient.get('/search', { params })
       setResults(data.items)
       setTotal(data.total)
-    } catch {
+    } catch (e) {
+      setError('搜索失败，请确认后端服务已启动')
+      setResults([])
+      setTotal(0)
     } finally {
       setLoading(false)
     }
   }
 
-  const CAT_LABELS: Record<string, string> = {
-    style: '风格', item_type: '单品', color: '颜色',
-    body_part: '穿着方式', fit: '版型',
-    season: '季节', attribute: '属性', free: '自定义',
+  /** 切换收藏：结果项本地更新（结果不经过素材库 store 列表） */
+  const handleToggleFavorite = async (item: Inspiration) => {
+    try {
+      const newState = !item.is_favorite
+      await toggleFavorite(item.id, newState)
+      setResults((prev) =>
+        prev.map((r) => (r.id === item.id ? { ...r, is_favorite: newState } : r))
+      )
+    } catch {
+      setError('收藏操作失败')
+    }
   }
+
+  const renderCard = ({ item }: { item: Inspiration }) => (
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.8}
+      onPress={() => router.push(`/detail/${item.id}`)}
+    >
+      <Image
+        source={{
+          uri: item.thumbnail_path
+            ? getFileUrl(apiBaseUrl, item.thumbnail_path)
+            : getFileUrl(apiBaseUrl, item.file_path),
+        }}
+        style={styles.cardImage}
+      />
+      {/* 来源标识 */}
+      <View style={styles.cardBadge}>
+        <Text style={styles.cardBadgeText}>{sourceLabel(item.source_type)}</Text>
+      </View>
+      {/* 收藏按钮 */}
+      <TouchableOpacity
+        style={styles.favBtn}
+        onPress={() => handleToggleFavorite(item)}
+      >
+        <Ionicons
+          name={item.is_favorite ? 'heart' : 'heart-outline'}
+          size={18}
+          color={item.is_favorite ? '#ef4444' : '#fff'}
+        />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  )
 
   return (
     <View style={styles.container}>
@@ -95,7 +156,7 @@ export default function SearchScreen() {
         )}
       </View>
 
-      {/* 标签筛选 */}
+      {/* 标签筛选（限高滚动，为结果区留出空间） */}
       <ScrollView style={styles.tagsPanel} showsVerticalScrollIndicator={false}>
         {tagGroups.map((group) => (
           <View key={group.category} style={styles.tagGroup}>
@@ -136,8 +197,24 @@ export default function SearchScreen() {
 
       {/* 结果 */}
       {loading && <ActivityIndicator style={{ marginTop: 16 }} color="#6366f1" />}
-      {total > 0 && (
-        <Text style={styles.resultCount}>找到 {total} 条结果</Text>
+      {error !== '' && (
+        <Text style={styles.errorText}>{error}</Text>
+      )}
+      {!loading && searched && total === 0 && error === '' && (
+        <Text style={styles.resultCount}>没有找到匹配的素材</Text>
+      )}
+      {results.length > 0 && (
+        <FlatList
+          data={results}
+          renderItem={renderCard}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.row}
+          contentContainerStyle={styles.resultsGrid}
+          ListHeaderComponent={
+            <Text style={styles.resultCount}>找到 {total} 条结果</Text>
+          }
+        />
       )}
     </View>
   )
@@ -162,7 +239,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#1f2937',
   },
-  tagsPanel: { flex: 1, paddingHorizontal: 12 },
+  tagsPanel: { maxHeight: 200, paddingHorizontal: 12 },
   tagGroup: { marginBottom: 16 },
   tagCategoryTitle: {
     fontSize: 13,
@@ -195,8 +272,53 @@ const styles = StyleSheet.create({
   searchBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   resultCount: {
     paddingHorizontal: 12,
-    paddingBottom: 8,
+    paddingVertical: 8,
     fontSize: 13,
     color: '#6b7280',
+  },
+  errorText: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#ef4444',
+  },
+  resultsGrid: { paddingHorizontal: 12, paddingBottom: 24 },
+  row: { gap: 12, marginBottom: 12 },
+  card: {
+    width: CARD_WIDTH,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  cardImage: {
+    width: '100%',
+    aspectRatio: 2 / 3,
+    backgroundColor: '#f3f4f6',
+  },
+  cardBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  cardBadgeText: { fontSize: 10, color: '#fff' },
+  favBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })

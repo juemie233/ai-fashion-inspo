@@ -2,6 +2,7 @@
 /** 标签分析弹窗：热门排行 + 共现关系图 + 使用趋势。 */
 
 import { ref, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { useMessage } from 'naive-ui'
 import * as echarts from 'echarts/core'
 import { GraphChart, BarChart, LineChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
@@ -17,6 +18,7 @@ import {
 echarts.use([GraphChart, BarChart, LineChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
 
 const show = defineModel<boolean>('show', { required: true })
+const message = useMessage()
 
 // ===== 图表容器 =====
 const graphRef = ref<HTMLDivElement | null>(null)
@@ -96,6 +98,11 @@ async function load() {
     if (top.length > 0) {
       await loadTrend(top[0].id, top[0].name)
     }
+  } catch {
+    // 接口失败给出提示而非 unhandled rejection
+    message.error('标签分析数据加载失败')
+    network.value = { nodes: [], edges: [] }
+    topTags.value = []
   } finally {
     loading.value = false
   }

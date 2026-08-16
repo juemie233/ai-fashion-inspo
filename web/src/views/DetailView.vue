@@ -26,6 +26,7 @@ import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { buildBrowseParams, storedBrowsePageSize } from '@/utils/browseQuery'
+import { CATEGORY_LABELS } from '@/api/tags'
 import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
@@ -307,12 +308,8 @@ async function handlePermanentDelete() {
   }
 }
 
-/** 类别中文名 */
-const CAT_LABELS: Record<string, string> = {
-  style: '风格', item_type: '单品', color: '颜色',
-  body_part: '穿着方式', fit: '版型',
-  attribute: '属性', free: '自定义', outfit: '穿搭大标签',
-}
+/** 类别中文名（复用 api/tags 的 CATEGORY_LABELS，单一来源） */
+const CAT_LABELS = CATEGORY_LABELS
 
 /** 按类别分组标签 */
 function groupedTags() {

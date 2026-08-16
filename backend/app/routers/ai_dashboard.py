@@ -1,34 +1,18 @@
 """AI 子路由。"""
 
-import asyncio
 import json
 import logging
-import re
-from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session, get_db
 from app.models.inspiration import Inspiration
-from app.routers.ai_shared import (
-    _analysis_semaphore,
-    _active_analyses,
-    _analysis_tasks,
-    _task_by_id,
-    _pending_queue,
-    _queue_paused,
-    _run_analysis,
-    _update_env_file,
-    _fmt_utc,
-    _format_size,
-)
 from app.services import ai_dashboard_service
-from app.services.model_config import get_model_config, update_model_config
+from app.services.model_config import get_model_config
 from app.services.model_prompt import get_model_prompt
 
 logger = logging.getLogger(__name__)

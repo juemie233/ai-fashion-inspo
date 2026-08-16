@@ -3,6 +3,10 @@
 
 import { computed } from 'vue'
 import TagFilter from './TagFilter.vue'
+import { buildSourceOptions } from '@/utils/sourceLabel'
+
+/** 来源筛选选项（由 sourceLabel.ts 统一生成） */
+const sourceFilterOptions = buildSourceOptions('', '全部')
 
 const props = defineProps<{
   /** 面板是否可见 */
@@ -91,11 +95,7 @@ const dateToModel = computed({
                 <label>来源</label>
                 <n-select
                   v-model:value="sourceFilterModel"
-                  :options="[
-                    {label:'全部',value:''},{label:'手动上传',value:'manual_upload'},
-                    {label:'自动采集',value:'scraper'},{label:'小红书',value:'xiaohongshu'},
-                    {label:'抖音',value:'douyin'},{label:'浏览器插件',value:'browser_extension'}
-                  ]"
+                  :options="sourceFilterOptions"
                   size="tiny"
                   clearable
                 />

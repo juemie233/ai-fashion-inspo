@@ -162,7 +162,7 @@ def test_create_from_url(client, monkeypatch):
     )
     assert r.status_code == 201
     data = r.json()
-    assert data["source_type"] == "browser_extension"
+    assert data["source_type"] == "url_import"
     assert data["source_author"] == "博主"
     assert data["media_type"] == "image"
 

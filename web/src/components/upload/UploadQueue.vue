@@ -2,6 +2,7 @@
 /** 上传队列：缩略图网格、状态角标、错误提示、移除与视频预览。 */
 
 import type { UploadQueueItem } from '@/types/upload'
+import { isVideoFile } from '@/utils/media'
 
 defineProps<{
   queue: UploadQueueItem[]
@@ -18,11 +19,6 @@ const emit = defineEmits<{
   (e: 'remove', id: string): void
   (e: 'preview', item: UploadQueueItem): void
 }>()
-
-/** 判断文件是否为视频（按 MIME 类型与扩展名） */
-function isVideoFile(file: File): boolean {
-  return file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name)
-}
 </script>
 
 <template>

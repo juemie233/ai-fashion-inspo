@@ -119,7 +119,7 @@ async def person_inspirations(
     person_id: int,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
-    sort: str = "newest",  # newest | oldest | confidence
+    sort: str = Query("newest", pattern="^(newest|oldest|confidence)$"),
     db: AsyncSession = Depends(get_db),
 ):
     """获取该人物的素材列表（分页 + 排序，排除软删除素材）。"""

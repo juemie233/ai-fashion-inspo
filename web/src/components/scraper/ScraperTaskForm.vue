@@ -4,6 +4,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { copyToClipboard } from '@/utils/clipboard'
 import { useChromeManager, CHROME_STATE_LABELS, CHROME_STATE_TAG } from '@/composables/useChromeManager'
 
 const props = defineProps<{
@@ -27,7 +28,6 @@ onMounted(() => { refreshChromeStatus() })
 const formPlatform = ref('xiaohongshu')
 const formKeywords = ref('')
 const formMaxCount = ref(100)
-const formHeadless = ref(false)
 const formCdp = ref(true)
 const formCdpPort = ref(9222)
 const formSortMode = ref('general')  // general | latest | popular（仅小红书搜索生效）
@@ -68,17 +68,10 @@ watch(() => props.defaultMaxCount, (v) => {
 const cdpChecking = ref(false)
 const cdpStatus = ref<'idle' | 'ok' | 'fail'>('idle')
 
-// copyText（修复版）
+// 复制文本到剪贴板（复用 utils/clipboard 实现）
 async function copyText(text: string) {
-  try { await navigator.clipboard.writeText(text); message.success('已复制') }
-  catch {
-    try {
-      const ta = document.createElement('textarea'); ta.value = text
-      ta.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(ta)
-      ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
-      message.success('已复制')
-    } catch { message.error('复制失败') }
-  }
+  const ok = await copyToClipboard(text)
+  ok ? message.success('已复制') : message.error('复制失败')
 }
 
 async function testCdp() {
@@ -99,7 +92,6 @@ async function createTask() {
       platform: formPlatform.value,
       keywords: formKeywords.value.split(',').map(k => k.trim()).filter(Boolean),
       max_count: formMaxCount.value,
-      headless: formHeadless.value,
     }
     // CDP 仅小红书使用：抖音走独立 Playwright 浏览器，不携带端口避免误导
     if (formPlatform.value === 'xiaohongshu') {

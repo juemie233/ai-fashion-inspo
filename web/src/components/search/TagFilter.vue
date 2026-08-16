@@ -33,18 +33,23 @@ function isExcluded(name: string): boolean {
   return tagsStore.excludedTags.has(name)
 }
 
-/** 加载共现标签 */
+/** 加载共现标签（请求序号守卫：快速切换标签时旧响应不覆盖新结果） */
+let cooccurrenceSeq = 0
+
 async function loadCooccurrence(tagName: string) {
   if (cooccurrenceFor.value === tagName) {
     cooccurrenceFor.value = ''
     cooccurrenceTags.value = []
     return
   }
+  const seq = ++cooccurrenceSeq
   try {
     const data = await fetchCooccurrence(tagName)
+    if (seq !== cooccurrenceSeq) return
     cooccurrenceFor.value = tagName
     cooccurrenceTags.value = data.related.slice(0, 5)
   } catch {
+    if (seq !== cooccurrenceSeq) return
     cooccurrenceTags.value = []
   }
 }

@@ -17,8 +17,11 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        """移除断开的连接。"""
-        self.active_connections.remove(websocket)
+        """移除断开的连接（存在性保护：并发断开时忽略重复移除）。"""
+        try:
+            self.active_connections.remove(websocket)
+        except ValueError:
+            pass
 
     async def broadcast(self, message: dict):
         """向所有已连接的客户端广播消息。"""

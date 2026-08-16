@@ -55,8 +55,11 @@ class DouyinScraper(BaseScraper):
             results: list[RawContent] = []
             try:
                 logger.info(f"抖音搜索: {keyword}")
+                # 关键词 URL 编码：中文/空格/特殊字符直接拼进 URL 会导致请求异常
+                from urllib.parse import quote
+
                 self._page.goto(
-                    f"https://www.douyin.com/search/{keyword}?type=general",
+                    f"https://www.douyin.com/search/{quote(keyword)}?type=general",
                     wait_until="domcontentloaded", timeout=30000,
                 )
                 time.sleep(3)

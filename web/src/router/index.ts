@@ -71,6 +71,11 @@ const router = createRouter({
       component: () => import('@/views/TaskManageView.vue'),
       meta: { title: '任务管理' },
     },
+    {
+      // 404 兜底：未知路径重定向首页，避免白屏
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
+    },
   ],
 })
 

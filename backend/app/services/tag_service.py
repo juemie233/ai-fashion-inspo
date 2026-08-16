@@ -207,15 +207,17 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int):
     # 收集受影响素材：合并会改变这些素材的标签集合，需重建其文本向量
     affected_ids = [link.inspiration_id for link in links]
 
-    for link in links:
-        # 检查该素材是否已关联目标标签
-        existing = await db.execute(
-            select(InspirationTag).where(
-                InspirationTag.inspiration_id == link.inspiration_id,
-                InspirationTag.tag_id == target_id,
-            )
+    # 一次性查出已关联目标标签的素材集合，避免逐条 N+1 查询
+    existing_result = await db.execute(
+        select(InspirationTag.inspiration_id).where(
+            InspirationTag.inspiration_id.in_(affected_ids),
+            InspirationTag.tag_id == target_id,
         )
-        if existing.scalar_one_or_none():
+    )
+    already_linked = set(existing_result.scalars().all())
+
+    for link in links:
+        if link.inspiration_id in already_linked:
             # 重复关联 — 删除源标签的关联
             await db.delete(link)
         else:

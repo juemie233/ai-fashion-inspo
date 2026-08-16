@@ -3,12 +3,14 @@
 import { ref, computed, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
+import { formatDate } from '@/utils/format'
+import { copyToClipboard } from '@/utils/clipboard'
+import { normalizeTaskStatus, taskStatusType } from '@/utils/taskLabel'
 import type { ScraperTask, ScraperSource, CookieStatus } from '@/types/scraper'
 
-/** 平台显示文案 */
-export const PLATFORM_LABELS: Record<string, string> = {
-  xiaohongshu: '小红书', douyin: '抖音', browser_extension: '浏览器插件', scraper: '自动采集', manual_upload: '手动上传',
-}
+/** 平台显示文案（复用来源映射，单一来源避免多处重复维护） */
+export const PLATFORM_LABELS: Record<string, string> = SOURCE_TYPE_LABELS
 
 /** 任务状态显示文案 */
 export const STATUS_LABELS: Record<string, string> = {
@@ -223,31 +225,18 @@ export function useScraperTasks() {
   }
 
   // ===== 工具函数 =====
+  /** 复制文本到剪贴板（复用 utils/clipboard 实现，成功/失败给出提示） */
   async function copyText(text: string) {
-    try { await navigator.clipboard.writeText(text); message.success('已复制') }
-    catch {
-      try {
-        const ta = document.createElement('textarea'); ta.value = text
-        ta.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(ta)
-        ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
-        message.success('已复制')
-      } catch { message.error('复制失败') }
-    }
+    const ok = await copyToClipboard(text)
+    ok ? message.success('已复制') : message.error('复制失败')
   }
 
+  /** 状态标签颜色：复用 taskLabel 的映射（completed 与 success 语义一致） */
   function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warning' {
-    const m: Record<string, 'default' | 'info' | 'success' | 'error' | 'warning'> = {
-      pending: 'default', running: 'info', completed: 'success', failed: 'error', cancelled: 'warning',
-    }
-    return m[s] || 'default'
+    return taskStatusType(normalizeTaskStatus(s))
   }
 
   function platformName(p: string) { return sources.value.find(s => s.platform === p)?.name || PLATFORM_LABELS[p] || p }
-
-  function formatDate(d: string | null | undefined) {
-    if (!d) return '-'
-    try { const dt = new Date(d); return isNaN(dt.getTime()) ? '-' : dt.toLocaleString('zh-CN') } catch { return '-' }
-  }
 
   function parseKeywords(c: string | null) {
     if (!c) return '-'

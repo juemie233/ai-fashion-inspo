@@ -1,7 +1,23 @@
 /** 灵感素材状态管理（Zustand）。 */
 
 import { create } from 'zustand'
-import { apiClient, getApiBaseUrl, type Inspiration, type InspirationListResponse } from '../services/api'
+import {
+  apiClient,
+  getApiBaseUrl,
+  setApiBaseUrl as setApiClientBaseUrl,
+  type Inspiration,
+  type InspirationListResponse,
+} from '../services/api'
+
+/** 上传文件扩展名 → MIME 类型（避免 PNG/HEIC 被错误标记为 image/jpeg） */
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  mp4: 'video/mp4',
+}
 
 interface InspirationState {
   items: Inspiration[]
@@ -13,7 +29,8 @@ interface InspirationState {
   fetchInspirations: () => Promise<void>
   fetchMore: () => Promise<void>
   uploadImage: (uri: string) => Promise<Inspiration>
-  toggleFavorite: (id: string) => Promise<void>
+  toggleFavorite: (id: string, desiredState: boolean) => Promise<void>
+  setApiBaseUrl: (ip: string, port?: string) => void
 }
 
 export const useInspirationStore = create<InspirationState>((set, get) => ({
@@ -64,10 +81,13 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   uploadImage: async (uri: string) => {
     const formData = new FormData()
     const filename = uri.split('/').pop() || 'photo.jpg'
+    // 按真实扩展名推断 MIME，避免 PNG/HEIC 被错误标记为 image/jpeg
+    const ext = filename.split('.').pop()?.toLowerCase() || 'jpg'
+    const mime = MIME_BY_EXT[ext] || 'image/jpeg'
     formData.append('file', {
       uri,
       name: filename,
-      type: 'image/jpeg',
+      type: mime,
     } as any)
     formData.append('source_type', 'manual_upload')
 
@@ -84,20 +104,21 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     return data
   },
 
-  /** 切换收藏 */
-  toggleFavorite: async (id: string) => {
-    const { items } = get()
-    const item = items.find((i) => i.id === id)
-    if (!item) return
+  /** 切换收藏：显式传入目标状态，素材不在列表（详情页）时同样生效 */
+  toggleFavorite: async (id: string, desiredState: boolean) => {
+    await apiClient.patch(`/inspirations/${id}`, { is_favorite: desiredState })
 
-    const newState = !item.is_favorite
-    await apiClient.patch(`/inspirations/${id}`, { is_favorite: newState })
-
-    set({
-      items: items.map((i) =>
-        i.id === id ? { ...i, is_favorite: newState } : i
+    set((state) => ({
+      items: state.items.map((i) =>
+        i.id === id ? { ...i, is_favorite: desiredState } : i
       ),
-    })
+    }))
+  },
+
+  /** 更新后端地址（同步 store 与 axios 客户端，图片 URL 与请求一致生效） */
+  setApiBaseUrl: (ip: string, port: string = '18888') => {
+    setApiClientBaseUrl(ip, port)
+    set({ apiBaseUrl: `http://${ip}:${port}` })
   },
 }))
 

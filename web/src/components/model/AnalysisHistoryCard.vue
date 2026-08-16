@@ -6,6 +6,7 @@ import { NTag, NButton, NIcon, NPopconfirm, NPopover, useMessage, type DataTable
 import { GitCompareOutline, RefreshOutline, TrashBinOutline, TrashOutline } from '@vicons/ionicons5'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { HistoryItem } from '@/types/analysis'
 
 const message = useMessage()
@@ -50,25 +51,10 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-/** 复制文本到剪贴板 */
+/** 复制文本到剪贴板（复用 utils/clipboard 实现） */
 async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    message.success('已复制到剪贴板')
-  } catch {
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.cssText = 'position:fixed;left:-9999px'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      message.success('已复制到剪贴板')
-    } catch {
-      message.error('复制失败')
-    }
-  }
+  const ok = await copyToClipboard(text)
+  ok ? message.success('已复制到剪贴板') : message.error('复制失败')
 }
 
 /** 状态筛选变化：同步 v-model 并触发加载 */

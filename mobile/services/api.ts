@@ -29,6 +29,12 @@ export function setApiBaseUrl(ip: string, port: string = '18888') {
   apiClient.defaults.baseURL = `http://${ip}:${port}/api`
 }
 
+/** 拼接素材文件访问地址：按路径段 URL 编码，防止含空格/中文的路径 404 */
+export function getFileUrl(base: string, relativePath: string): string {
+  const encoded = relativePath.split('/').map(encodeURIComponent).join('/')
+  return `${base}/api/files/${encoded}`
+}
+
 // 类型定义
 export interface Inspiration {
   id: string

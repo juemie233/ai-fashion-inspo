@@ -114,7 +114,10 @@ export function useTagManage() {
     try {
       await batchDeleteTags([tagId])
       message.success(`已删除 "${tagName}"`)
-      selectedIds.value.delete(tagId)
+      // Set 是响应式的：原地 delete 不会触发视图更新，须整体替换
+      const next = new Set(selectedIds.value)
+      next.delete(tagId)
+      selectedIds.value = next
       await loadAll()
     } catch { message.error('删除失败') }
   }

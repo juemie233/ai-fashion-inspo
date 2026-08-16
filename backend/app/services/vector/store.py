@@ -150,7 +150,7 @@ def _table(kind: str):
 
     db = _connect()
     name = _table_name(kind)
-    if name in db.table_names():
+    if name in db.list_tables():
         return db.open_table(name)
 
     schema = pa.schema([

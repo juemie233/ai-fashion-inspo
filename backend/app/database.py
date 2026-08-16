@@ -84,8 +84,15 @@ def run_migrations() -> None:
     from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
 
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    # 从 settings.database_url 推导 SQLite 文件路径（与异步引擎同源），
+    # 避免自定义 DATABASE_URL 时迁移错打「storage 旁的默认库」。
+    _db_name = make_url(settings.database_url).database
+    if _db_name:
+        db_path = Path(_db_name)
+    else:
+        db_path = settings.storage_root.parent / "fashion_inspo.db"
     sync_url = f"sqlite:///{db_path.as_posix()}"
     backend_dir = Path(__file__).resolve().parent.parent
     cfg = Config(str(backend_dir / "alembic.ini"))
