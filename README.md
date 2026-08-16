@@ -787,14 +787,14 @@ pytest
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，26 用例）
+### 前端（vitest，42 用例）
 
 ```bash
 cd web
 npm test
 ```
 
-覆盖范围：`format` / `sourceLabel` / `taskLabel` 纯函数、`useSplitResize` 拖拽 composable、`persons` store（mock API + 请求序号防乱序）。
+覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` 纯函数、`useSplitResize` 拖拽 composable、`persons` 与 `inspirations` store（mock API + 请求序号防乱序）。
 
 ### 约定
 
