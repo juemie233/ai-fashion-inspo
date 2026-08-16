@@ -51,6 +51,10 @@ export function buildBrowseParams(
         ? state.quality
         : undefined,
     is_ai_generated: state.quality === 'ai' ? true : undefined,
+    include_tags: state.tags ? state.tags : undefined,
+    dominant_color: state.color ? state.color : undefined,
+    date_from: state.date_from || undefined,
+    date_to: state.date_to || undefined,
     sort: state.sort || storedBrowseSort(),
   }
 }

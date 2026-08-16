@@ -1,10 +1,14 @@
-"""素材管理后台 — 统计、完整性检查、批量操作。"""
+"""素材管理后台 — 统计、完整性检查、批量操作、导出与趋势分析。"""
 
+import csv
+import io
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
@@ -15,6 +19,7 @@ from app.models.inspiration import (
     analysis_log_filter,
     utcnow,
 )
+from app.models.person import InspirationPerson, Person
 from app.models.tag import InspirationTag
 from app.services import admin_stats_service
 from app.utils.file_hash import build_hash_map
@@ -301,6 +306,116 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     from app.services.task_runner import create_deduplicate_task
     task = await create_deduplicate_task(db)
     return {"message": f"已提交去重任务 #{task.id}", "task_id": task.id}
+
+
+# ============ 数据导出 / 趋势 / 人物频次 ============
+
+
+@router.get("/export")
+async def export_inspirations(db: AsyncSession = Depends(get_db)):
+    """导出全部未删除素材为 CSV（含标签与关联人物），供 Excel/表格工具离线分析。
+
+    响应为 UTF-8（带 BOM，Excel 打开不乱码），Content-Disposition 触发浏览器下载。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+        )
+        .where(NOT_DELETED)
+        .order_by(Inspiration.created_at.desc())
+    )
+    inspirations = result.unique().scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "source_type", "source_author", "source_url", "media_type",
+        "is_favorite", "quality_status", "quality_reason", "is_ai_generated",
+        "dominant_colors", "tags", "persons", "created_at", "updated_at",
+    ])
+    for insp in inspirations:
+        tags = "|".join(t.tag.name for t in insp.tags)
+        persons = "|".join(p.person.name for p in insp.persons)
+        writer.writerow([
+            insp.id,
+            insp.source_type,
+            insp.source_author or "",
+            insp.source_url or "",
+            insp.media_type,
+            "1" if insp.is_favorite else "0",
+            insp.quality_status or "",
+            insp.quality_reason or "",
+            "1" if insp.is_ai_generated else "0",
+            insp.dominant_colors or "",
+            tags,
+            persons,
+            insp.created_at.isoformat() if insp.created_at else "",
+            insp.updated_at.isoformat() if insp.updated_at else "",
+        ])
+
+    filename = f"inspirations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content="\ufeff" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/trend")
+async def inspiration_trend(
+    days: int = Query(30, ge=1, le=365, description="统计最近 N 天"),
+    db: AsyncSession = Depends(get_db),
+):
+    """按天统计新增素材数量（近 N 天），供管理页趋势图使用。"""
+    cutoff = datetime.now() - timedelta(days=days)
+    rows = (await db.execute(
+        select(
+            func.strftime("%Y-%m-%d", Inspiration.created_at).label("day"),
+            func.count(Inspiration.id).label("cnt"),
+        )
+        .where(Inspiration.created_at >= cutoff, NOT_DELETED)
+        .group_by("day")
+        .order_by("day")
+    )).all()
+    return {
+        "days": days,
+        "trend": [{"day": r[0], "count": r[1]} for r in rows],
+    }
+
+
+@router.get("/person-frequency")
+async def person_frequency(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。"""
+    rows = (await db.execute(
+        select(
+            Person.id,
+            Person.name,
+            Person.person_type,
+            Person.platform,
+            func.count(InspirationPerson.inspiration_id).label("cnt"),
+        )
+        .join(InspirationPerson, InspirationPerson.person_id == Person.id)
+        .join(Inspiration, Inspiration.id == InspirationPerson.inspiration_id)
+        .where(NOT_DELETED)
+        .group_by(Person.id, Person.name, Person.person_type, Person.platform)
+        .order_by(func.count(InspirationPerson.inspiration_id).desc())
+        .limit(limit)
+    )).all()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "person_type": r[2],
+            "platform": r[3],
+            "count": r[4],
+        }
+        for r in rows
+    ]
 
 
 # ============ 向量化管理（一键回填缺失向量） ============

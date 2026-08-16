@@ -21,14 +21,17 @@ import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
 import AdminAiReview from '@/components/admin/AdminAiReview.vue'
 import AdminTrash from '@/components/admin/AdminTrash.vue'
 import AdminVectorPanel from '@/components/admin/AdminVectorPanel.vue'
+import AdminExportPanel from '@/components/admin/AdminExportPanel.vue'
+import AdminTrendChart from '@/components/admin/AdminTrendChart.vue'
+import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
 
 const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态 ──
-type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'vectors' | 'trash'
-const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'vectors', 'trash']
+type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'vectors' | 'trash' | 'insights'
+const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'vectors', 'trash', 'insights']
 
 /** 从 URL query 恢复上次停留的子页面：刷新页面后仍停留在原小页面而非回到「概览」 */
 function initialTab(): AdminTab {
@@ -301,6 +304,15 @@ onUnmounted(() => {
       <n-tab-pane name="trash" tab="垃圾桶">
         <admin-trash />
       </n-tab-pane>
+
+      <!-- 数据导出与洞察 -->
+      <n-tab-pane name="insights" tab="数据洞察">
+        <div class="insights-layout">
+          <admin-export-panel />
+          <admin-trend-chart />
+          <admin-person-frequency />
+        </div>
+      </n-tab-pane>
     </n-tabs>
   </div>
 </template>
@@ -312,5 +324,20 @@ onUnmounted(() => {
 .subtitle {
   color: #999;
   margin-bottom: 24px;
+}
+
+.insights-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.insights-layout > :first-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .insights-layout {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

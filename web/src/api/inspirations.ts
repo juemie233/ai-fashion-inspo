@@ -116,6 +116,41 @@ export async function batchAddTagsToInspirations(
   return data
 }
 
+/** 批量收藏/取消收藏素材，返回实际更新行数 */
+export async function batchFavorite(ids: string[], isFavorite: boolean): Promise<number> {
+  const { data } = await apiClient.post<{ updated: number }>('/inspirations/batch-favorite', {
+    ids,
+    is_favorite: isFavorite,
+  })
+  return data.updated
+}
+
+/** 批量移入垃圾桶（软删除），返回 {trashed, skipped} */
+export async function batchTrash(ids: string[], reason?: TrashReason) {
+  const { data } = await apiClient.post<{ trashed: number; skipped: number }>(
+    '/inspirations/batch-trash',
+    reason ? { ids, reason } : { ids },
+  )
+  return data
+}
+
+/** 批量编辑元数据的字段集合（仅更新显式提供的字段） */
+export interface BatchUpdateFields {
+  source_type?: string
+  is_favorite?: boolean
+  quality_status?: QualityStatus
+  is_ai_generated?: boolean
+}
+
+/** 批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记） */
+export async function batchUpdateInspirations(ids: string[], fields: BatchUpdateFields) {
+  const { data } = await apiClient.post<{ updated: number }>('/inspirations/batch-update', {
+    ids,
+    ...fields,
+  })
+  return data.updated
+}
+
 /** 解除素材与标签的关联 */
 export async function removeTagFromInspiration(id: string, tagId: number) {
   const { data } = await apiClient.delete(`/inspirations/${id}/tags/${tagId}`)
@@ -141,6 +176,10 @@ export async function fetchInspirations(params: {
   tag_status?: string
   quality_status?: string
   is_ai_generated?: boolean
+  include_tags?: string
+  dominant_color?: string
+  date_from?: string
+  date_to?: string
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })

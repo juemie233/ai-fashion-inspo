@@ -78,6 +78,30 @@ class MoveToTrashRequest(BaseModel):
     reason: TrashReason | None = None
 
 
+class BatchFavoriteRequest(BaseModel):
+    """批量收藏/取消收藏的请求体。"""
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    is_favorite: bool
+
+
+class BatchTrashRequest(BaseModel):
+    """批量移入垃圾桶的请求体（reason 为空时按各素材状态自动推断）。"""
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    reason: TrashReason | None = None
+
+
+class BatchUpdateRequest(BaseModel):
+    """批量编辑素材元数据的请求体（仅更新显式提供的字段）。"""
+
+    ids: list[str] = Field(min_length=1, max_length=500)
+    source_type: str | None = None
+    is_favorite: bool | None = None
+    quality_status: Literal["pending", "approved", "rejected"] | None = None
+    is_ai_generated: bool | None = None
+
+
 class InspirationOut(BaseModel):
     """灵感列表项输出"""
     id: str

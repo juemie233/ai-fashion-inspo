@@ -88,3 +88,66 @@ def test_physical_delete(client, upload):
 
 def test_detail_not_found(client):
     assert client.get("/api/inspirations/no-such-id").status_code == 404
+
+
+def test_tag_filter_include(client, upload):
+    """按标签筛选（AND 语义）：只返回包含指定标签的素材。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    client.post(f"/api/inspirations/{a}/tags", json={"names": ["黑色"], "category": "color"})
+    client.post(f"/api/inspirations/{b}/tags", json={"names": ["白色"], "category": "color"})
+
+    r = client.get("/api/inspirations", params={"include_tags": "黑色"})
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["id"] == a
+
+
+def test_tag_count_sort(client, upload):
+    """按标签数量降序排序：标签丰富者在前。"""
+    a = upload().json()["id"]
+    upload()  # b 无标签
+    client.post(f"/api/inspirations/{a}/tags", json={"names": ["黑色", "白色"], "category": "color"})
+
+    ids = [i["id"] for i in client.get("/api/inspirations", params={"sort": "tag_count"}).json()["items"]]
+    assert ids[0] == a
+
+
+def test_batch_favorite(client, upload):
+    """批量收藏素材。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    r = client.post("/api/inspirations/batch-favorite", json={"ids": [a, b], "is_favorite": True})
+    assert r.status_code == 200
+    assert r.json()["updated"] == 2
+
+    favs = {i["id"]: i["is_favorite"] for i in client.get("/api/inspirations").json()["items"]}
+    assert favs[a] is True and favs[b] is True
+
+
+def test_batch_trash(client, upload):
+    """批量移入垃圾桶：正常列表清空、垃圾桶包含全部。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    r = client.post("/api/inspirations/batch-trash", json={"ids": [a, b]})
+    assert r.status_code == 200
+    assert r.json()["trashed"] == 2
+
+    assert client.get("/api/inspirations").json()["total"] == 0
+    assert client.get("/api/inspirations/trash").json()["total"] == 2
+
+
+def test_batch_update(client, upload):
+    """批量编辑元数据（来源/审核状态/疑似 AI 标记）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    r = client.post(
+        "/api/inspirations/batch-update",
+        json={"ids": [a, b], "source_type": "douyin", "quality_status": "rejected", "is_ai_generated": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["updated"] == 2
+
+    for i in client.get("/api/inspirations").json()["items"]:
+        assert i["source_type"] == "douyin"
+        assert i["quality_status"] == "rejected"
+        assert i["is_ai_generated"] is True

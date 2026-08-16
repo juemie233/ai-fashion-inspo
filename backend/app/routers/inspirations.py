@@ -8,6 +8,9 @@ from app.database import get_db
 from app.models.inspiration import Inspiration
 from app.schemas.inspiration import (
     BatchAddTagsRequest,
+    BatchFavoriteRequest,
+    BatchTrashRequest,
+    BatchUpdateRequest,
     InspirationDetailOut,
     InspirationListOut,
     InspirationOut,
@@ -94,10 +97,18 @@ async def list_inspirations(
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
     is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
+    include_tags: str | None = Query(None, description="逗号分隔的标签名（需同时包含）"),
+    dominant_color: str | None = Query(None, description="主色调 hex 值（子串匹配）"),
+    date_from: str | None = Query(None, description="上传日期下限，ISO 日期"),
+    date_to: str | None = Query(None, description="上传日期上限，ISO 日期"),
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ):
     """分页获取灵感列表，支持多维筛选和排序。"""
+    include_list = (
+        [t.strip() for t in include_tags.split(",") if t.strip()]
+        if include_tags else None
+    )
     inspirations, total = await inspiration_service.list_inspirations(
         db,
         page=page,
@@ -109,6 +120,10 @@ async def list_inspirations(
         tag_status=tag_status,
         quality_status=quality_status,
         is_ai_generated=is_ai_generated,
+        include_tags=include_list,
+        dominant_color=dominant_color,
+        date_from=date_from,
+        date_to=date_to,
         sort=sort,
     )
     return InspirationListOut(
@@ -255,6 +270,49 @@ async def batch_add_tags(
         category=data.category,
         source=data.source,
     )
+
+
+@router.post("/batch-favorite", status_code=status.HTTP_200_OK)
+async def batch_favorite(
+    data: BatchFavoriteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量收藏/取消收藏素材（仅作用于未删除素材）。"""
+    updated = await inspiration_service.batch_favorite_inspirations(
+        db, data.ids, data.is_favorite
+    )
+    return {"updated": updated}
+
+
+@router.post("/batch-trash", status_code=status.HTTP_200_OK)
+async def batch_trash(
+    data: BatchTrashRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量将素材移入垃圾桶（软删除，30 天内可恢复）。
+
+    reason 为空时按各素材状态自动推断；不存在/已在垃圾桶中的 ID 计入 skipped。
+    """
+    return await inspiration_service.batch_trash_inspirations(
+        db, data.ids, data.reason
+    )
+
+
+@router.post("/batch-update", status_code=status.HTTP_200_OK)
+async def batch_update(
+    data: BatchUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记），仅更新显式字段。"""
+    updated = await inspiration_service.batch_update_inspirations(
+        db,
+        data.ids,
+        source_type=data.source_type,
+        is_favorite=data.is_favorite,
+        quality_status=data.quality_status,
+        is_ai_generated=data.is_ai_generated,
+    )
+    return {"updated": updated}
 
 
 @router.post("/{inspiration_id}/tags", status_code=status.HTTP_200_OK)

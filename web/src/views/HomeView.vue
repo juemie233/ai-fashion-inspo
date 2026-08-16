@@ -5,8 +5,12 @@ import { h, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage, useNotification } from 'naive-ui'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
+import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
+import { useTagsStore } from '@/stores/tags'
+import { useBatchSelection } from '@/composables/useBatchSelection'
 import { batchQualityCheck, updateQualityStatus } from '@/api/inspirations'
+import type { BatchUpdateFields } from '@/api/inspirations'
 import {
   buildBrowseParams,
   storedBrowseSort,
@@ -19,6 +23,20 @@ const route = useRoute()
 const message = useMessage()
 const notification = useNotification()
 const store = useInspirationsStore()
+const tagsStore = useTagsStore()
+const {
+  batchMode,
+  selectedIds,
+  selectedCount,
+  enterBatchMode,
+  exitBatchMode,
+  toggleSelect,
+  toggleSelectAll,
+  batchFavorite,
+  batchTrash,
+  batchAddTags,
+  batchUpdate,
+} = useBatchSelection()
 
 // ── 筛选状态（从 URL query 初始化）──
 
@@ -26,7 +44,7 @@ type SourceFilter = 'all' | 'manual_upload' | 'scraper' | 'xiaohongshu' | 'douyi
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
 type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'ai'
-type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'random'
+type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random'
 type Density = 'compact' | 'standard' | 'comfortable'
 
 const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || 'all')
@@ -49,6 +67,23 @@ const pageSize = ref(storedBrowsePageSize())
 watch(pageSize, (v) => {
   localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(v))
 })
+
+// ── 标签筛选 ──
+// 从 URL query 恢复（逗号分隔），刷新/详情返回时保持
+const selectedTags = ref<string[]>(
+  (route.query.tags as string)?.split(',').filter(Boolean) || [],
+)
+// 标签下拉：按类别分组，支持搜索与多选
+const tagFilterOptions = computed(() =>
+  tagsStore.groups.map((g) => ({
+    type: 'group' as const,
+    label: tagsStore.getCategoryLabel(g.category),
+    key: g.category,
+    children: g.tags.map((t) => ({ label: t.name, value: t.name })),
+  })),
+)
+/** 全部已有标签名（供批量加标签候选，避免重复录入） */
+const allTagNames = computed(() => tagsStore.groups.flatMap((g) => g.tags.map((t) => t.name)))
 
 // ── 筛选选项配置 ──
 
@@ -88,6 +123,7 @@ const sortOptions: { label: string; value: SortMode }[] = [
   { label: '最旧在前', value: 'oldest' },
   { label: '最近更新', value: 'updated' },
   { label: '文件最大', value: 'largest' },
+  { label: '标签最多', value: 'tag_count' },
   { label: '随机', value: 'random' },
 ]
 
@@ -107,6 +143,7 @@ function syncUrl() {
   if (mediaFilter.value !== 'all') query.media = mediaFilter.value
   if (statusFilter.value !== 'all') query.status = statusFilter.value
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
+  if (selectedTags.value.length > 0) query.tags = selectedTags.value.join(',')
   if (sortMode.value !== 'newest') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
@@ -122,6 +159,7 @@ function buildParams(page: number) {
       media: mediaFilter.value,
       status: statusFilter.value,
       quality: qualityFilter.value,
+      tags: selectedTags.value.join(','),
       sort: sortMode.value,
     },
     page,
@@ -242,7 +280,53 @@ async function handleApprove(id: string) {
   }
 }
 
-// 初始加载（从 URL 恢复页码）
+// ── 批量多选操作 ──
+
+/** 当前页素材 ID（供全选/取消全选） */
+const currentPageIds = computed(() => store.items.map((i) => i.id))
+/** 当前页是否已全选 */
+const allSelected = computed(
+  () => store.items.length > 0 && store.items.every((i) => selectedIds.value.has(i.id)),
+)
+
+/** 批量收藏/取消收藏：成功后同步本地卡片状态 */
+async function handleBatchFavorite(isFavorite: boolean) {
+  const updated = await batchFavorite(isFavorite)
+  if (updated > 0) {
+    for (const item of store.items) {
+      if (selectedIds.value.has(item.id)) item.is_favorite = isFavorite
+    }
+    exitBatchMode()
+  }
+}
+
+/** 批量移入垃圾桶：成功后刷新列表 */
+async function handleBatchTrash() {
+  const trashed = await batchTrash()
+  if (trashed > 0) {
+    exitBatchMode()
+    loadPage(currentPage.value)
+  }
+}
+
+/** 批量加标签：成功后刷新列表（卡片标签更新） */
+async function handleBatchAddTags(names: string[]) {
+  await batchAddTags(names)
+  exitBatchMode()
+  loadPage(currentPage.value)
+}
+
+/** 批量编辑元数据：成功后刷新列表 */
+async function handleBatchUpdate(fields: BatchUpdateFields) {
+  const updated = await batchUpdate(fields)
+  if (updated > 0) {
+    exitBatchMode()
+    loadPage(currentPage.value)
+  }
+}
+
+// 初始加载（从 URL 恢复页码）+ 预载标签下拉选项
+tagsStore.load()
 loadPage(currentPage.value)
 </script>
 
@@ -256,6 +340,7 @@ loadPage(currentPage.value)
       </div>
       <div class="header-right">
         <n-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck">批量审核</n-button>
+        <n-button size="small" @click="enterBatchMode()">批量选择</n-button>
         <n-button type="primary" @click="router.push('/upload')">上传素材</n-button>
       </div>
     </div>
@@ -320,6 +405,23 @@ loadPage(currentPage.value)
         </n-button>
       </div>
 
+      <n-divider vertical style="height:20px" />
+
+      <!-- 标签筛选（多选，需同时包含） -->
+      <div class="filter-group">
+        <n-select
+          v-model:value="selectedTags"
+          multiple
+          filterable
+          clearable
+          :options="tagFilterOptions"
+          placeholder="按标签筛选"
+          size="tiny"
+          style="width: 220px"
+          @update:value="onFilterChange"
+        />
+      </div>
+
       <div style="flex:1" />
 
       <!-- 排序 + 密度 -->
@@ -346,7 +448,7 @@ loadPage(currentPage.value)
     </div>
 
     <!-- 当前筛选提示 -->
-    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || sortMode !== 'newest'" class="active-filters">
+    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || selectedTags.length > 0 || sortMode !== 'newest'" class="active-filters">
       当前筛选：
       <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="sourceFilter = 'all'; onFilterChange()">
         {{ sourceOptions.find(o => o.value === sourceFilter)?.label }}
@@ -360,13 +462,36 @@ loadPage(currentPage.value)
       <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="qualityFilter = 'all'; onFilterChange()">
         {{ qualityOptions.find(o => o.value === qualityFilter)?.label }}
       </n-tag>
+      <n-tag
+        v-for="tag in selectedTags"
+        :key="tag"
+        size="tiny"
+        closable
+        @close="selectedTags = selectedTags.filter(t => t !== tag); onFilterChange()"
+      >
+        {{ tag }}
+      </n-tag>
       <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="sortMode = 'newest'; onSortChange()">
         {{ sortOptions.find(o => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';sortMode='newest';onFilterChange()">
+      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';selectedTags=[];sortMode='newest';onFilterChange()">
         清除全部
       </n-button>
     </div>
+
+    <!-- 批量选择操作栏 -->
+    <BatchActionBar
+      v-if="batchMode"
+      :count="selectedCount"
+      :all-selected="allSelected"
+      :tag-options="allTagNames"
+      @favorite="handleBatchFavorite"
+      @trash="handleBatchTrash"
+      @select-all="toggleSelectAll(currentPageIds)"
+      @add-tags="handleBatchAddTags"
+      @update="handleBatchUpdate"
+      @exit="exitBatchMode()"
+    />
 
     <!-- 瀑布流 -->
     <MasonryGrid
@@ -374,9 +499,14 @@ loadPage(currentPage.value)
       :loading="store.loading"
       :density="density"
       :hover-zoom="qualityFilter === 'ai'"
+      :selectable="batchMode"
+      :selected-ids="selectedIds"
+      :show-view-button="batchMode"
+      :show-actions="!batchMode"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"
       @approve="handleApprove"
+      @toggle-select="toggleSelect"
     />
 
     <!-- 分页 -->

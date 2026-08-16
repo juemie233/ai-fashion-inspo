@@ -41,6 +41,10 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     tag_status?: string
     quality_status?: string
     is_ai_generated?: boolean
+    include_tags?: string
+    dominant_color?: string
+    date_from?: string
+    date_to?: string
     sort?: string
   } = {}) {
     loading.value = true
@@ -58,6 +62,10 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         tag_status: params.tag_status,
         quality_status: params.quality_status,
         is_ai_generated: params.is_ai_generated,
+        include_tags: params.include_tags,
+        dominant_color: params.dominant_color,
+        date_from: params.date_from,
+        date_to: params.date_to,
         sort: params.sort,
       })
       // 忽略过期响应（快速翻页时旧请求可能后返回）
@@ -88,6 +96,10 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         tag_status: _lastParams.tag_status,
         quality_status: _lastParams.quality_status,
         is_ai_generated: _lastParams.is_ai_generated,
+        include_tags: _lastParams.include_tags,
+        dominant_color: _lastParams.dominant_color,
+        date_from: _lastParams.date_from,
+        date_to: _lastParams.date_to,
         sort: _lastParams.sort,
       })
       items.value.push(...result.items)

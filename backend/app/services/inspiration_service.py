@@ -19,7 +19,7 @@ from app.models.inspiration import (
     utcnow,
 )
 from app.models.person import InspirationPerson
-from app.models.tag import InspirationTag
+from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import TRASH_REASONS, InspirationUpdate
 from app.services.file_service import (
     delete_files,
@@ -307,6 +307,10 @@ async def list_inspirations(
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
     is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
+    include_tags: list[str] | None = None,  # 需同时包含的标签名（AND 语义）
+    dominant_color: str | None = None,      # 主色调（hex 子串匹配）
+    date_from: str | None = None,           # 上传日期下限（ISO 日期）
+    date_to: str | None = None,             # 上传日期上限（ISO 日期）
     sort: str = "newest",
 ) -> tuple[list[Inspiration], int]:
     """分页查询灵感列表，支持多维筛选和排序。
@@ -331,6 +335,24 @@ async def list_inspirations(
         )
     if is_ai_generated is not None:
         query = query.where(Inspiration.is_ai_generated == is_ai_generated)
+    if dominant_color:
+        query = query.where(Inspiration.dominant_colors.contains(dominant_color))
+    if date_from:
+        query = query.where(Inspiration.created_at >= date_from)
+    if date_to:
+        query = query.where(Inspiration.created_at <= date_to)
+
+    # 标签筛选（AND 语义：素材须同时包含所有给定标签）
+    if include_tags:
+        for name in include_tags:
+            tag_id_sub = select(Tag.id).where(Tag.name == name)
+            query = query.where(
+                Inspiration.id.in_(
+                    select(InspirationTag.inspiration_id).where(
+                        InspirationTag.tag_id.in_(tag_id_sub)
+                    )
+                )
+            )
 
     # 分析状态筛选
     if analysis_status == "done":
@@ -416,7 +438,24 @@ async def list_inspirations(
         inspirations = sorted(inspirations, key=lambda i: id_order.get(i.id, 0))
         return inspirations, total
 
-    query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
+    # 按标签数量降序：标签丰富的素材排前（并列时按创建时间倒序保持稳定）
+    if sort == "tag_count":
+        tag_count_sub = (
+            select(
+                InspirationTag.inspiration_id,
+                func.count(InspirationTag.tag_id).label("cnt"),
+            )
+            .group_by(InspirationTag.inspiration_id)
+            .subquery()
+        )
+        query = query.outerjoin(
+            tag_count_sub, Inspiration.id == tag_count_sub.c.inspiration_id
+        ).order_by(
+            func.coalesce(tag_count_sub.c.cnt, 0).desc(),
+            Inspiration.created_at.desc(),
+        )
+    else:
+        query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
 
     # 统计总数
     count_query = select(func.count()).select_from(query.subquery())
@@ -612,6 +651,82 @@ async def batch_add_tags(
         "skipped_existing": skipped_existing,
         "missing_ids": not_found_ids,
     }
+
+
+async def batch_favorite_inspirations(
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    is_favorite: bool,
+) -> int:
+    """批量设置素材收藏状态，返回实际更新的行数。
+
+    仅作用于未删除素材；已删除/不存在的 ID 被静默忽略。
+    """
+    result = await db.execute(
+        update(Inspiration)
+        .where(Inspiration.id.in_(inspiration_ids), NOT_DELETED)
+        .values(is_favorite=is_favorite, updated_at=utcnow())
+    )
+    await db.commit()
+    return result.rowcount
+
+
+async def batch_trash_inspirations(
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    reason: str | None = None,
+) -> dict:
+    """批量将素材移入垃圾桶（逐个复用单条软删除逻辑，容忍部分失败）。
+
+    单条素材的文件移动与软删除已在 trash_inspiration 内完成并各自提交；
+    此处逐条调用，不存在/已在垃圾桶中的 ID 计入 skipped，不影响其余素材。
+    """
+    trashed = 0
+    skipped = 0
+    for inspiration_id in inspiration_ids:
+        try:
+            await trash_inspiration(db, inspiration_id, reason)
+            trashed += 1
+        except HTTPException:
+            skipped += 1
+    return {"trashed": trashed, "skipped": skipped}
+
+
+async def batch_update_inspirations(
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    *,
+    source_type: str | None = None,
+    is_favorite: bool | None = None,
+    quality_status: str | None = None,
+    is_ai_generated: bool | None = None,
+) -> int:
+    """批量编辑素材元数据，仅更新显式提供的字段，返回实际更新行数。
+
+    审核状态翻案为 approved/pending 时清空拒绝原因（与单条更新语义一致）。
+    """
+    values: dict = {"updated_at": utcnow()}
+    if source_type is not None:
+        values["source_type"] = source_type
+    if is_favorite is not None:
+        values["is_favorite"] = is_favorite
+    if is_ai_generated is not None:
+        values["is_ai_generated"] = is_ai_generated
+    if quality_status is not None:
+        values["quality_status"] = quality_status
+        if quality_status in ("approved", "pending"):
+            values["quality_reason"] = None
+
+    if len(values) == 1:  # 仅 updated_at，无任何业务字段
+        return 0
+
+    result = await db.execute(
+        update(Inspiration)
+        .where(Inspiration.id.in_(inspiration_ids), NOT_DELETED)
+        .values(**values)
+    )
+    await db.commit()
+    return result.rowcount
 
 
 async def add_inspiration_tags(
