@@ -20,6 +20,9 @@ web/dist/
 storage/
 backend/storage/
 
+# 裁剪脚本候选清单（运行时数据）
+scripts/crop_candidates.json
+
 # Environment
 .env
 .env.local
