@@ -67,3 +67,40 @@ export async function fetchAuditLogs(limit = 50): Promise<AuditLogItem[]> {
   })
   return data
 }
+
+/** 近似重复组内的单个文件 */
+export interface NearDuplicateFile {
+  id: string
+  file_path: string
+  thumbnail_path: string | null
+  is_favorite: boolean
+  created_at: string | null
+  size_bytes: number
+  score: number
+  distance: number
+}
+
+/** 一组视觉近似重复的素材 */
+export interface NearDuplicateGroup {
+  rep_phash: string
+  files: NearDuplicateFile[]
+  keeper_id: string
+  wasted_bytes: number
+}
+
+/** 近似重复扫描结果 */
+export interface NearDuplicateResult {
+  groups: NearDuplicateGroup[]
+  scanned: number
+  total: number
+  truncated: boolean
+  threshold: number
+}
+
+/** 扫描视觉近似重复的图片素材（感知哈希分组，仅返回候选） */
+export async function fetchNearDuplicates(limit = 1000, threshold = 10): Promise<NearDuplicateResult> {
+  const { data } = await apiClient.get<NearDuplicateResult>('/admin/near-duplicates', {
+    params: { limit, threshold },
+  })
+  return data
+}

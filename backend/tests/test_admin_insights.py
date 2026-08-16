@@ -71,3 +71,43 @@ def test_audit_log_empty_trash(client, upload):
     empty = next(l for l in logs if l["action"] == "empty_trash")
     assert empty["count"] == 1
     assert empty["freed_bytes"] > 0
+
+
+def test_near_duplicate_scan(client):
+    """近似重复检测：同构图不同尺寸的两张图应被归入同一组。"""
+    import io
+
+    from PIL import Image
+
+    def _structured(size):
+        img = Image.new("RGB", size, (255, 255, 255))
+        px = img.load()
+        for y in range(size[1]):
+            for x in range(size[0]):
+                v = 255 if x >= size[0] // 2 else 0
+                if abs(x - y) < 3:
+                    v = 128
+                px[x, y] = (v, v, v)
+        return img
+
+    def _bytes(img):
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        return buf.getvalue()
+
+    base = _structured((64, 64))
+    a = _bytes(base)
+    b = _bytes(base.resize((48, 48)).resize((64, 64)))
+
+    ra = client.post("/api/inspirations", files={"file": ("a.jpg", a, "image/jpeg")})
+    rb = client.post("/api/inspirations", files={"file": ("b.jpg", b, "image/jpeg")})
+    assert ra.status_code == 201 and rb.status_code == 201
+
+    res = client.get("/api/admin/near-duplicates", params={"threshold": 10}).json()
+    assert res["scanned"] == 2
+    assert len(res["groups"]) == 1
+    ids = {f["id"] for f in res["groups"][0]["files"]}
+    assert ids == {ra.json()["id"], rb.json()["id"]}
+    # 每组应给出保留建议
+    assert res["groups"][0]["keeper_id"] in ids

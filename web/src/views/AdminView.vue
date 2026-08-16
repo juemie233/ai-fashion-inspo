@@ -25,14 +25,15 @@ import AdminExportPanel from '@/components/admin/AdminExportPanel.vue'
 import AdminTrendChart from '@/components/admin/AdminTrendChart.vue'
 import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
 import AdminAuditLog from '@/components/admin/AdminAuditLog.vue'
+import AdminNearDuplicates from '@/components/admin/AdminNearDuplicates.vue'
 
 const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态 ──
-type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'vectors' | 'trash' | 'insights'
-const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'vectors', 'trash', 'insights']
+type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'neardup' | 'vectors' | 'trash' | 'insights'
+const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'neardup', 'vectors', 'trash', 'insights']
 
 /** 从 URL query 恢复上次停留的子页面：刷新页面后仍停留在原小页面而非回到「概览」 */
 function initialTab(): AdminTab {
@@ -294,6 +295,11 @@ onUnmounted(() => {
           @scan="scanDuplicates"
           @deduplicate="deduplicate"
         />
+      </n-tab-pane>
+
+      <!-- 近似重复（感知哈希） -->
+      <n-tab-pane name="neardup" tab="近似重复">
+        <admin-near-duplicates @delete-selected="batchDeleteByIds" />
       </n-tab-pane>
 
       <!-- 向量管理 -->

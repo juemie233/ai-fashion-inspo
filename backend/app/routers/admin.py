@@ -463,6 +463,22 @@ async def audit_logs(
     ]
 
 
+@router.get("/near-duplicates")
+async def near_duplicates(
+    limit: int = Query(1000, ge=1, le=5000, description="扫描图片数量上限"),
+    threshold: int = Query(10, ge=1, le=32, description="汉明距离阈值（越小越严格）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """检测视觉近似重复的图片素材（感知哈希分组），仅返回候选、不删除。
+
+    与「重复文件」（SHA-256 精确重复）互补：本接口识别字节不同但视觉相似的
+    近似重复（不同压缩/缩放/水印），由前端并排预览后人工确认删除。
+    """
+    from app.services.near_duplicate_service import scan_near_duplicates
+
+    return await scan_near_duplicates(db, limit=limit, threshold=threshold)
+
+
 # ============ 向量化管理（一键回填缺失向量） ============
 
 
