@@ -1,13 +1,22 @@
 """灵感素材的 Pydantic 请求/响应模型。"""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, get_args
 from pydantic import BaseModel, Field, field_serializer
 
 from app.schemas.person import PersonBriefOut
 
+if TYPE_CHECKING:
+    from app.models.inspiration import Inspiration
+
 # 垃圾桶删除原因枚举（负样本学习只用「质量差」子集保证语义纯净）
 TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他"]
+
+# 垃圾桶删除原因的运行时全部取值（由 TrashReason 派生，单一来源，勿再手工维护副本）
+TRASH_REASONS: tuple[str, ...] = get_args(TrashReason)
+
+# 负样本学习使用的删除原因（语义纯净子集）
+LEARN_NEGATIVE_TRASH_REASON: str = "质量差"
 
 
 class TagOut(BaseModel):
@@ -134,3 +143,51 @@ class AnalysisLogOut(BaseModel):
         if dt is None:
             return None
         return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
+    """将 ORM 素材对象转换为列表/详情响应模型（各路由共用）。
+
+    此前该转换逻辑在 routers/inspirations.py 与 routers/search.py 重复
+    实现（后者甚至反向 import 前者），现统一收敛到 schema 层。
+    """
+    tags_out = [
+        InspirationTagOut(
+            tag=TagOut.model_validate(t.tag),
+            confidence=t.confidence,
+        )
+        for t in inspiration.tags
+    ]
+
+    # 推断分析状态：无日志=未分析；任一日志失败=失败；否则=已完成
+    if not inspiration.analysis_logs:
+        status = "none"
+    elif any(log.error for log in inspiration.analysis_logs):
+        status = "error"
+    else:
+        status = "done"
+
+    return InspirationOut(
+        id=inspiration.id,
+        source_type=inspiration.source_type,
+        source_url=inspiration.source_url,
+        source_author=inspiration.source_author,
+        source_platform_id=inspiration.source_platform_id,
+        file_path=inspiration.file_path,
+        thumbnail_path=inspiration.thumbnail_path,
+        media_type=inspiration.media_type,
+        dominant_colors=inspiration.dominant_colors,
+        is_favorite=inspiration.is_favorite,
+        quality_status=inspiration.quality_status,
+        quality_reason=inspiration.quality_reason,
+        is_ai_generated=inspiration.is_ai_generated,
+        deleted_at=inspiration.deleted_at,
+        trash_reason=inspiration.trash_reason,
+        created_at=inspiration.created_at,
+        updated_at=inspiration.updated_at,
+        tags=tags_out,
+        persons=[
+            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
+        ],
+        analysis_status=status,
+    )

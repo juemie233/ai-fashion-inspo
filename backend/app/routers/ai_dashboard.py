@@ -9,16 +9,12 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session, get_db
-from app.models.inspiration import (
-    AIAnalysisLog,
-    Inspiration,
-    analysis_log_filter as _analysis_log_filter,
-)
+from app.models.inspiration import Inspiration
 from app.routers.ai_shared import (
     _analysis_semaphore,
     _active_analyses,
@@ -31,6 +27,7 @@ from app.routers.ai_shared import (
     _fmt_utc,
     _format_size,
 )
+from app.services import ai_dashboard_service
 from app.services.model_config import get_model_config, update_model_config
 from app.services.model_prompt import get_model_prompt
 
@@ -43,103 +40,8 @@ router = APIRouter()
 
 @router.get("/quality-dashboard")
 async def quality_dashboard(db: AsyncSession = Depends(get_db)):
-    """分析质量总览：每日趋势、问题素材、标签覆盖率。"""
-    from datetime import datetime, timedelta
-
-    # 最近 30 天的每日分析统计
-    thirty_days_ago = datetime.now() - timedelta(days=30)
-    daily_result = await db.execute(
-        select(
-            func.date(AIAnalysisLog.created_at).label("day"),
-            func.count().label("total"),
-            func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
-        )
-        .where(_analysis_log_filter(), AIAnalysisLog.created_at >= thirty_days_ago)
-        .group_by("day")
-        .order_by("day")
-    )
-    daily = [
-        {"day": row[0], "total": row[1], "success": row[2] or 0}
-        for row in daily_result.all()
-    ]
-
-    # 问题素材统计（排除垃圾桶）
-    total_insp = (await db.execute(
-        select(func.count(Inspiration.id)).where(Inspiration.deleted_at.is_(None))
-    )).scalar() or 0
-    # 已分析素材同样只统计未删除素材的日志，与 total_insp 口径一致，
-    # 否则「已分析数 > 素材总数」导致 pending 数为负
-    analyzed_ids = (
-        select(AIAnalysisLog.inspiration_id)
-        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
-        .where(_analysis_log_filter(), Inspiration.deleted_at.is_(None))
-        .distinct()
-    )
-    analyzed_count = (await db.execute(
-        select(func.count()).select_from(analyzed_ids.subquery())
-    )).scalar() or 0
-
-    # 多次失败的素材（≥3 次失败，排除垃圾桶）
-    fail_count_sub = (
-        select(AIAnalysisLog.inspiration_id, func.count().label("fc"))
-        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
-        .where(
-            _analysis_log_filter(),
-            AIAnalysisLog.error.isnot(None),
-            Inspiration.deleted_at.is_(None),
-        )
-        .group_by(AIAnalysisLog.inspiration_id)
-        .having(func.count() >= 3)
-        .subquery()
-    )
-    multi_fail = (await db.execute(select(func.count()).select_from(fail_count_sub))).scalar() or 0
-
-    # 零标签输出（有分析记录但没有关联任何标签的素材，排除垃圾桶）
-    from app.models.tag import InspirationTag as IT
-    zero_tag_result = await db.execute(
-        select(func.count())
-        .select_from(AIAnalysisLog)
-        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
-        .where(
-            _analysis_log_filter(),
-            AIAnalysisLog.error.is_(None),
-            Inspiration.deleted_at.is_(None),
-            ~AIAnalysisLog.inspiration_id.in_(
-                select(IT.inspiration_id).distinct()
-            ),
-        )
-    )
-    zero_tag_count = zero_tag_result.scalar() or 0
-
-    # 平均标签数（单次 SQL 聚合）
-    avg_tags = 0
-    if analyzed_count > 0:
-        tag_total = (await db.execute(
-            select(func.count()).select_from(IT)
-        )).scalar() or 0
-        avg_tags = round(tag_total / analyzed_count, 1)
-
-    # 平均耗时
-    avg_time = (await db.execute(
-        select(func.avg(AIAnalysisLog.processing_time_ms))
-        .where(_analysis_log_filter(), AIAnalysisLog.error.is_(None))
-    )).scalar() or 0
-
-    return {
-        "daily_trends": daily,
-        "overview": {
-            "total_inspirations": total_insp,
-            "analyzed_count": analyzed_count,
-            "unanalyzed_count": max(0, total_insp - analyzed_count),
-            "coverage_percent": round(analyzed_count / total_insp * 100, 1) if total_insp > 0 else 0,
-            "avg_tags_per_image": avg_tags,
-            "avg_time_ms": round(avg_time),
-        },
-        "problem_items": {
-            "multi_fail_count": multi_fail,
-            "zero_tag_count": zero_tag_count,
-        },
-    }
+    """分析质量总览：每日趋势、问题素材、标签覆盖率（聚合在 ai_dashboard_service）。"""
+    return await ai_dashboard_service.collect_quality_dashboard(db)
 
 
 # ============ 单图测试 ============

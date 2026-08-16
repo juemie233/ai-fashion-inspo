@@ -18,7 +18,7 @@ from app.services.task_runners.common import (
     _is_recoverable_error,
     _retry_delay,
     _schedule_retry,
-    _utcnow,
+    utcnow,
 )
 
 __all__ = [
@@ -30,5 +30,5 @@ __all__ = [
     "_is_recoverable_error",
     "_retry_delay",
     "_schedule_retry",
-    "_utcnow",
+    "utcnow",
 ]

@@ -15,6 +15,7 @@ from app.schemas.inspiration import (
     InspirationTagOut,
     MoveToTrashRequest,
     TagOut,
+    inspiration_to_out,
 )
 from app.schemas.person import PersonBriefOut, PersonLinkRequest
 from app.services import inspiration_service, person_service
@@ -336,44 +337,5 @@ async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get
 
 
 def _to_out(inspiration: Inspiration) -> InspirationOut:
-    """将 ORM 模型转换为 API 响应模型。"""
-    tags_out = [
-        InspirationTagOut(
-            tag=TagOut.model_validate(t.tag),
-            confidence=t.confidence,
-        )
-        for t in inspiration.tags
-    ]
-
-    # 推断分析状态
-    if not inspiration.analysis_logs:
-        status = "none"
-    elif any(log.error for log in inspiration.analysis_logs):
-        status = "error"
-    else:
-        status = "done"
-
-    return InspirationOut(
-        id=inspiration.id,
-        source_type=inspiration.source_type,
-        source_url=inspiration.source_url,
-        source_author=inspiration.source_author,
-        source_platform_id=inspiration.source_platform_id,
-        file_path=inspiration.file_path,
-        thumbnail_path=inspiration.thumbnail_path,
-        media_type=inspiration.media_type,
-        dominant_colors=inspiration.dominant_colors,
-        is_favorite=inspiration.is_favorite,
-        quality_status=inspiration.quality_status,
-        quality_reason=inspiration.quality_reason,
-        is_ai_generated=inspiration.is_ai_generated,
-        deleted_at=inspiration.deleted_at,
-        trash_reason=inspiration.trash_reason,
-        created_at=inspiration.created_at,
-        updated_at=inspiration.updated_at,
-        tags=tags_out,
-        persons=[
-            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
-        ],
-        analysis_status=status,
-    )
+    """将 ORM 模型转换为 API 响应模型（实现已收敛到 schemas.inspiration_to_out）。"""
+    return inspiration_to_out(inspiration)

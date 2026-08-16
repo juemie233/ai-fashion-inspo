@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
-from app.services.task_runners.common import _utcnow
+from app.services.task_runners.common import utcnow
 from app.services.vector_service import rebuild_inspiration_vectors
 
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
 
         task.done = idx
         task.progress = round(idx / total * 100)
-        task.updated_at = _utcnow()
+        task.updated_at = utcnow()
         await db.commit()
         logger.info(
             f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
@@ -125,7 +125,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     task.done = total
     task.progress = 100
     task.error = None
-    task.updated_at = _utcnow()
+    task.updated_at = utcnow()
     await db.commit()
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "

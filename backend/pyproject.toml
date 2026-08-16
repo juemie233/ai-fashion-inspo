@@ -1,0 +1,21 @@
+# ruff 静态检查配置（安装：pip install ruff，运行：cd backend && ruff check app）
+#
+# 规则集保持保守：E/W（pycodestyle）、F（pyflakes 死代码/未用导入）、
+# B（bugbear 常见 bug）、UP（pyupgrade 现代化写法，含 3.9+ 类型语法）。
+# 暂不启用 I（import 排序）与 ANN（强制注解），避免大面积格式噪音。
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "UP"]
+# E501 行宽由格式化工具统一处理，不在 lint 中告警
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# 迁移脚本与配置入口允许宽泛异常捕获
+"app/db_migrations.py" = ["B902"]
+
+[tool.ruff.format]
+quote-style = "double"

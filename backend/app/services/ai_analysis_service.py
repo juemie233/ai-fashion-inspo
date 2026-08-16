@@ -405,6 +405,40 @@ async def get_inspiration_preview_map(
     return {r[0]: {"thumbnail_path": r[1], "file_path": r[2]} for r in result}
 
 
+def _build_analysis_item(log: AIAnalysisLog, structured_tags: list[str] | None) -> dict:
+    """将单条分析日志转换为对比视图条目（结构化快照优先，否则实时解析）。"""
+    from app.services.ai_parser import parse_analysis_response
+
+    parsed = parse_analysis_response(log.raw_response) if log.raw_response else {}
+    # 结构化快照优先（精确记录本次提取）；否则回退到实时解析
+    tags = structured_tags
+    if tags is None:
+        tags = sorted({
+            tag_name
+            for tag_name, _cat, _conf in iter_extracted_tags(parsed)
+        })
+    return {
+        "id": log.id,
+        "model_name": log.model_name,
+        "prompt_version": log.prompt_version,
+        "model_version": log.model_version,
+        "processing_time_ms": log.processing_time_ms,
+        "error": log.error,
+        "status": "error" if log.error else "success",
+        "created_at": _fmt_utc(log.created_at),
+        "parsed_response": parsed,
+        "structured_tags": tags,
+        "tags_count": {
+            "style": len((parsed.get("style") or [])),
+            "items": len((parsed.get("items") or [])),
+            "fit": len((parsed.get("fit") or [])),
+            "wear_style": len((parsed.get("wear_style") or [])),
+            "attributes": len((parsed.get("attributes") or [])),
+            "colors": len((parsed.get("dominant_colors") or [])),
+        },
+    }
+
+
 async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict:
     """获取同一素材的所有历史分析结果，用于并排对比。
 
@@ -431,8 +465,6 @@ async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict
 
     insp = await db.get(Inspiration, inspiration_id)
 
-    from app.services.ai_parser import parse_analysis_response
-
     # 批量加载各日志的结构化标签快照（若存在），优先用于对比
     log_ids = [log.id for log in logs]
     snapshot_map: dict[int, list[str]] = {}
@@ -445,36 +477,9 @@ async def get_analysis_comparison(db: AsyncSession, inspiration_id: str) -> dict
         for snap_log_id, tag_name in snap_result:
             snapshot_map.setdefault(snap_log_id, []).append(tag_name)
 
-    analyses = []
-    for log in logs:
-        parsed = parse_analysis_response(log.raw_response) if log.raw_response else {}
-        # 结构化快照优先（精确记录本次提取）；否则回退到实时解析
-        structured_tags = snapshot_map.get(log.id)
-        if structured_tags is None:
-            structured_tags = sorted({
-                tag_name
-                for tag_name, _cat, _conf in iter_extracted_tags(parsed)
-            })
-        analyses.append({
-            "id": log.id,
-            "model_name": log.model_name,
-            "prompt_version": log.prompt_version,
-            "model_version": log.model_version,
-            "processing_time_ms": log.processing_time_ms,
-            "error": log.error,
-            "status": "error" if log.error else "success",
-            "created_at": _fmt_utc(log.created_at),
-            "parsed_response": parsed,
-            "structured_tags": structured_tags,
-            "tags_count": {
-                "style": len((parsed.get("style") or [])),
-                "items": len((parsed.get("items") or [])),
-                "fit": len((parsed.get("fit") or [])),
-                "wear_style": len((parsed.get("wear_style") or [])),
-                "attributes": len((parsed.get("attributes") or [])),
-                "colors": len((parsed.get("dominant_colors") or [])),
-            },
-        })
+    analyses = [
+        _build_analysis_item(log, snapshot_map.get(log.id)) for log in logs
+    ]
 
     # 标签差异对比（取第一次和最后一次分析，优先用结构化快照）
     tag_diff = None

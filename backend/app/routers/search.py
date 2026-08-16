@@ -434,8 +434,9 @@ async def tag_cooccurrence(
 
 def _to_search_out(inspiration: Inspiration) -> InspirationOut:
     """将 Inspiration 模型转换为搜索结果的 InspirationOut。"""
-    from app.routers.inspirations import _to_out
-    return _to_out(inspiration)
+    from app.schemas.inspiration import inspiration_to_out
+
+    return inspiration_to_out(inspiration)
 
 
 async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:

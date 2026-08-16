@@ -26,7 +26,7 @@ from app.services.task_runners.common import (
     _is_recoverable_error,
     _retry_delay,
     _schedule_retry,
-    _utcnow,
+    utcnow,
 )
 from app.services.task_runners.deduplicate import (
     create_deduplicate_task,

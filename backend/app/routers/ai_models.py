@@ -31,6 +31,7 @@ from app.routers.ai_shared import (
     _fmt_utc,
     _format_size,
 )
+from app.services import gpu_service
 from app.services.model_config import get_model_config, update_model_config
 
 logger = logging.getLogger(__name__)
@@ -173,83 +174,8 @@ async def set_active_model(model_name: str = Query(...)):
 
 @router.get("/gpu-stats")
 async def gpu_stats():
-    """获取 GPU 显存占用和已加载模型信息。
-
-    数据来源：
-    - Ollama /api/ps（正在运行中的模型及其显存占用）
-    - nvidia-smi（物理 GPU 总显存，可选，Windows/Linux 均支持）
-    """
-    result: dict = {
-        "gpu_available": False,
-        "gpu_name": "",
-        "total_vram_mb": 0,
-        "used_vram_mb": 0,
-        "free_vram_mb": 0,
-        "usage_percent": 0,
-        "loaded_models": [],
-    }
-
-    # 1. 从 Ollama /api/ps 获取已加载模型和显存信息
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            ps_resp = await client.get(f"{settings.ollama_base_url}/api/ps")
-            if ps_resp.status_code == 200:
-                ps_data = ps_resp.json()
-                for m in ps_data.get("models", []):
-                    vram_bytes = m.get("size_vram", 0)
-                    result["loaded_models"].append({
-                        "name": m["name"],
-                        "vram_mb": round(vram_bytes / 1024 / 1024, 1),
-                        "loaded_at": m.get("expires_at", None),
-                    })
-                    result["used_vram_mb"] += round(vram_bytes / 1024 / 1024, 1)
-    except Exception as e:
-        logger.debug(f"Ollama /api/ps 查询失败: {e}")
-
-    # 2. 尝试 nvidia-smi 获取物理 GPU 总显存（比 Ollama 更准确，优先使用）
-    try:
-        import subprocess
-        proc = await asyncio.create_subprocess_exec(
-            "nvidia-smi",
-            "--query-gpu=name,memory.total,memory.used,memory.free",
-            "--format=csv,noheader,nounits",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise Exception("nvidia-smi 查询超时")
-        if proc.returncode == 0 and stdout:
-            line = stdout.decode().strip().split("\n")[0]  # 取第一张 GPU
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 4:
-                result["gpu_available"] = True
-                result["gpu_name"] = parts[0]
-                # nvidia-smi 返回的已经是 MB，始终使用物理 GPU 数据
-                result["total_vram_mb"] = int(float(parts[1]))
-                result["used_vram_mb"] = int(float(parts[2]))
-                result["free_vram_mb"] = int(float(parts[3]))
-    except FileNotFoundError:
-        logger.debug("nvidia-smi 未安装或不在 PATH 中")
-    except Exception as e:
-        logger.debug(f"nvidia-smi 查询失败: {e}")
-
-    # 如果有 Ollama 数据但没有 nvidia-smi，标记为有 GPU
-    if not result["gpu_available"] and result["loaded_models"]:
-        result["gpu_available"] = True
-
-    # 计算使用百分比
-    if result["total_vram_mb"] > 0:
-        result["usage_percent"] = round(
-            result["used_vram_mb"] / result["total_vram_mb"] * 100, 1
-        )
-    elif result["used_vram_mb"] > 0:
-        result["usage_percent"] = -1  # 有使用但不知道总量
-
-    return result
+    """获取 GPU 显存占用和已加载模型信息（聚合逻辑在 app.services.gpu_service）。"""
+    return await gpu_service.collect_gpu_stats()
 
 
 @router.post("/unload-model")

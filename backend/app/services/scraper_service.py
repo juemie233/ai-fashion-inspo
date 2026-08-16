@@ -10,12 +10,11 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -23,6 +22,7 @@ from app.database import async_session
 from app.models.inspiration import Inspiration
 from app.models.scraper import ScraperSeenURL, ScraperTask
 from app.schemas.scraper import ScraperTaskCreate
+from app.services.scraper_seen_service import seal_urls
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,6 @@ CHROME_DEBUG_CMD = (
 
 # Cookie 平台白名单
 _COOKIE_PLATFORMS = {"xiaohongshu", "douyin"}
-
-
-def utcnow() -> datetime:
-    """返回当前 UTC 时间。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============ Chrome/CDP 与子进程管理 ============
@@ -571,13 +566,7 @@ async def batch_delete_task_results(
         await db.execute(
             Inspiration.__table__.delete().where(Inspiration.id.in_(deleted_ids))
         )
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
+    await seal_urls(db, urls_to_seal)
     await db.commit()
 
     # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）

@@ -20,7 +20,7 @@ from app.services.task_runners.common import (
     _ANALYZE_CONCURRENCY,
     _chunked,
     _is_recoverable_error,
-    _utcnow,
+    utcnow,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,66 @@ async def _analyze_one(
             return inspiration_id, False, error
 
 
+async def _load_pending_items(
+    db: AsyncSession, inspiration_ids: list[str]
+) -> tuple[list[tuple[str, str]], int]:
+    """加载仍存在的图片素材，并跳过已有成功分析日志的（崩溃恢复幂等）。
+
+    返回 (待分析 (id, file_path) 列表, 已跳过数量)。
+    """
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.media_type == "image",
+        )
+    )
+    rows = result.all()
+    insp_map = {r[0]: r[1] for r in rows}
+    items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
+
+    # 跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
+    analyzed_ids: set[str] = set()
+    candidate_ids = [iid for iid, _ in items]
+    for chunk in _chunked(candidate_ids):
+        analyzed_result = await db.execute(
+            select(AIAnalysisLog.inspiration_id)
+            .where(
+                analysis_log_filter(),
+                AIAnalysisLog.inspiration_id.in_(chunk),
+                (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+            )
+            .distinct()
+        )
+        analyzed_ids.update(r[0] for r in analyzed_result.all())
+    already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
+    items = [(iid, fp) for iid, fp in items if iid not in analyzed_ids]
+    return items, already_analyzed
+
+
+def _raise_if_all_failed(
+    task_total: int,
+    success_count: int,
+    failed_items: list[tuple[str, str | None]],
+    recoverable_failed: list[str],
+) -> None:
+    """整个批次全部失败时按错误类型决定是否自动重试。
+
+    采用宽松判定：只要存在可恢复错误的失败样本，就按可恢复处理（Ollama 瞬时故障时
+    不同图片可能报不同错误，若要求「全部可恢复」才会被误判为永久失败、放弃重试）。
+    """
+    if task_total == 0 or success_count > 0:
+        return
+    if recoverable_failed:
+        sample = failed_items[0][1] or "未知错误"
+        raise RecoverableTaskError(
+            f"批量分析全部失败（{task_total} 张），存在疑似可恢复的系统性错误：{sample}"
+        )
+    sample = failed_items[0][1] or "未知错误"
+    raise PermanentTaskError(
+        f"批量分析全部失败（{task_total} 张），均为永久错误（图片损坏/文件不存在等）：{sample}"
+    )
+
+
 async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     """执行批量分析任务：逐张调用 AI 分析并维护任务进度（由 worker 调用）。
 
@@ -112,32 +172,7 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         return
 
     # 加载待分析素材（执行期间可能被删除，仅保留仍存在的图片素材）
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(
-            Inspiration.id.in_(inspiration_ids),
-            Inspiration.media_type == "image",
-        )
-    )
-    rows = result.all()
-    insp_map = {r[0]: r[1] for r in rows}
-    items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
-
-    # 崩溃恢复幂等：跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
-    analyzed_ids: set[str] = set()
-    candidate_ids = [iid for iid, _ in items]
-    for chunk in _chunked(candidate_ids):
-        analyzed_result = await db.execute(
-            select(AIAnalysisLog.inspiration_id)
-            .where(
-                analysis_log_filter(),
-                AIAnalysisLog.inspiration_id.in_(chunk),
-                (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
-            )
-            .distinct()
-        )
-        analyzed_ids.update(r[0] for r in analyzed_result.all())
-    already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
-    items = [(iid, fp) for iid, fp in items if iid not in analyzed_ids]
+    items, already_analyzed = await _load_pending_items(db, inspiration_ids)
 
     task.total = len(items)
     task.done = 0
@@ -167,25 +202,13 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
 
         task.done = min(start + len(chunk), task.total)
         task.progress = round(task.done / task.total * 100) if task.total else 100
-        task.updated_at = _utcnow()
+        task.updated_at = utcnow()
         await db.commit()
         logger.info(
             f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
 
-    # 整个批次全部失败：按错误类型决定是否自动重试
-    # 采用宽松判定：只要存在可恢复错误的失败样本，就按可恢复处理（Ollama 瞬时故障时
-    # 不同图片可能报不同错误，若要求「全部可恢复」才会被误判为永久失败、放弃重试）
-    if task.total > 0 and success_count == 0:
-        if recoverable_failed:
-            sample = failed_items[0][1] or "未知错误"
-            raise RecoverableTaskError(
-                f"批量分析全部失败（{task.total} 张），存在疑似可恢复的系统性错误：{sample}"
-            )
-        sample = failed_items[0][1] or "未知错误"
-        raise PermanentTaskError(
-            f"批量分析全部失败（{task.total} 张），均为永久错误（图片损坏/文件不存在等）：{sample}"
-        )
+    _raise_if_all_failed(task.total, success_count, failed_items, recoverable_failed)
 
     # 正常完成（部分图片失败也视为任务成功，失败详情写入结果）
     task.result = {
@@ -199,7 +222,7 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     }
     task.done = task.total
     task.progress = 100
-    task.updated_at = _utcnow()
+    task.updated_at = utcnow()
     await db.commit()
     logger.info(
         f"批量分析任务执行完毕: #{task.id} 成功 {success_count}，失败 {len(failed_items)}"

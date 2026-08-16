@@ -256,6 +256,101 @@ def looks_truncated(raw: str) -> bool:
     return depth > 0
 
 
+_TAG_DROP_SENTENCES = ("这是一", "图片中", "背景为", "整体造型", "完整展示", "人物为")
+
+
+def _extract_str_tag(s: str) -> list[str]:
+    """从单个字符串值中提取合法标签（长度/标点/句式过滤）。"""
+    if len(s) <= 1:
+        return []
+    if s.startswith("{") and s.endswith("}"):
+        return []
+    if any(c in s for c in "。！？…~"):
+        return []
+    if any(w in s for w in _TAG_DROP_SENTENCES):
+        return []
+
+    # 先做分隔符拆分（拆分后再递归检查每部分的长度和合法性）
+    if "，" in s or "," in s:
+        parts = [p.strip() for p in s.replace("，", ",").split(",") if p.strip()]
+        results = []
+        for p in parts:
+            results.extend(extract_tag_names(p))
+        return results
+    if "、" in s:
+        parts = [p.strip() for p in s.split("、") if p.strip()]
+        results = []
+        for p in parts:
+            results.extend(extract_tag_names(p))
+        return results
+    if "/" in s:
+        parts = [p.strip() for p in s.split("/") if p.strip()]
+        results = []
+        for p in parts:
+            results.extend(extract_tag_names(p))
+        return results
+
+    # 去除括号内容（如 "室内拍摄（棚拍）" → "室内拍摄"），需在长度检查之前
+    if "（" in s or "(" in s:
+        s = s.split("（")[0].split("(")[0].strip() if "（" in s else s.split("(")[0].strip()
+        if not s or len(s) <= 1:
+            return []
+
+    # 拆分后再检查长度
+    if len(s) > 8:
+        return []
+    if s.isascii() and not any(c.isdigit() for c in s):
+        return []
+    if s.startswith("#") or (len(s) == 6 and all(c in "0123456789ABCDEFabcdef" for c in s)):
+        return []
+    if s.isdigit():
+        return []
+    return [s]
+
+
+def _extract_dict_tags(value: dict) -> list[str]:
+    """从嵌套 dict 中按已知键优先级提取标签，兜底遍历所有值。"""
+    results = []
+
+    # 第1轮：已知的 value-only key（直接提取值）
+    known_value_keys = (
+        "type", "name", "label",
+        "属性", "属性名称", "属性标签", "标签",
+        "部位", "style_name", "style",
+        "description", "描述",
+    )
+    for key in known_value_keys:
+        v = value.get(key)
+        if v is not None:
+            results.extend(extract_tag_names(v))
+
+    # 第2轮：pose/position 结构字段
+    for key in ("pose", "position", "body_position", "orientation"):
+        v = value.get(key)
+        if v is not None:
+            results.extend(extract_tag_names(v))
+
+    # 第3轮：中文语境键（图片属性、季节等）
+    for key in ("图片属性", "属性值", "穿着方式",
+                 "穿着方式/身体部位关系"):
+        v = value.get(key)
+        if v is not None:
+            results.extend(extract_tag_names(v))
+
+    # 第4轮：兜底 — 遍历所有值，通过递归确保过滤一致
+    # 处理 {"宽松/修身": "修身"} 或 {"上衣": "黑色长袖"} 等非标准键
+    if not results:
+        for k, v in value.items():
+            # 跳过纯英文 boolean 键（如 {'face': True}）
+            if isinstance(k, str) and not any("一" <= c <= "鿿" for c in k):
+                if isinstance(v, bool):
+                    continue
+            # 所有值统一通过递归 extract_tag_names 处理，复用长度/标点过滤
+            results.extend(extract_tag_names(v))
+
+    return results
+
+
 def extract_tag_names(value) -> list[str]:
     """从任意 AI 返回值中递归提取标签名称字符串。
 
@@ -266,96 +361,13 @@ def extract_tag_names(value) -> list[str]:
     此函数递归提取所有有意义的字符串值。
     """
     if isinstance(value, str):
-        s = value.strip()
-        if not s or len(s) <= 1:
-            return []
-        if s.startswith("{") and s.endswith("}"):
-            return []
-        if any(c in s for c in '。！？…~'):
-            return []
-        if any(w in s for w in ('这是一', '图片中', '背景为', '整体造型', '完整展示', '人物为')):
-            return []
-
-        # 先做分隔符拆分（拆分后再递归检查每部分的长度和合法性）
-        if '，' in s or ',' in s:
-            parts = [p.strip() for p in s.replace('，', ',').split(',') if p.strip()]
-            results = []
-            for p in parts:
-                results.extend(extract_tag_names(p))
-            return results
-        if '、' in s:
-            parts = [p.strip() for p in s.split('、') if p.strip()]
-            results = []
-            for p in parts:
-                results.extend(extract_tag_names(p))
-            return results
-        if '/' in s:
-            parts = [p.strip() for p in s.split('/') if p.strip()]
-            results = []
-            for p in parts:
-                results.extend(extract_tag_names(p))
-            return results
-
-        # 去除括号内容（如 "室内拍摄（棚拍）" → "室内拍摄"），需在长度检查之前
-        if '（' in s or '(' in s:
-            s = s.split('（')[0].split('(')[0].strip() if '（' in s else s.split('(')[0].strip()
-            if not s or len(s) <= 1:
-                return []
-
-        # 拆分后再检查长度
-        if len(s) > 8:
-            return []
-        if s.isascii() and not any(c.isdigit() for c in s):
-            return []
-        if s.startswith('#') or (len(s) == 6 and all(c in '0123456789ABCDEFabcdef' for c in s)):
-            return []
-        if s.isdigit():
-            return []
-        return [s]
+        return _extract_str_tag(value.strip() or "")
 
     if isinstance(value, (int, float, bool)):
         return []
 
     if isinstance(value, dict):
-        results = []
-
-        # 第1轮：已知的 value-only key（直接提取值）
-        known_value_keys = (
-            "type", "name", "label",
-            "属性", "属性名称", "属性标签", "标签",
-            "部位", "style_name", "style",
-            "description", "描述",
-        )
-        for key in known_value_keys:
-            v = value.get(key)
-            if v is not None:
-                results.extend(extract_tag_names(v))
-
-        # 第2轮：pose/position 结构字段
-        for key in ("pose", "position", "body_position", "orientation"):
-            v = value.get(key)
-            if v is not None:
-                results.extend(extract_tag_names(v))
-
-        # 第3轮：中文语境键（图片属性、季节等）
-        for key in ("图片属性", "属性值", "穿着方式",
-                     "穿着方式/身体部位关系"):
-            v = value.get(key)
-            if v is not None:
-                results.extend(extract_tag_names(v))
-
-        # 第4轮：兜底 — 遍历所有值，通过递归确保过滤一致
-        # 处理 {"宽松/修身": "修身"} 或 {"上衣": "黑色长袖"} 等非标准键
-        if not results:
-            for k, v in value.items():
-                # 跳过纯英文 boolean 键（如 {'face': True}）
-                if isinstance(k, str) and not any('一' <= c <= '鿿' for c in k):
-                    if isinstance(v, bool):
-                        continue
-                # 所有值统一通过递归 extract_tag_names 处理，复用长度/标点过滤
-                results.extend(extract_tag_names(v))
-
-        return results
+        return _extract_dict_tags(value)
 
     if isinstance(value, list):
         results = []

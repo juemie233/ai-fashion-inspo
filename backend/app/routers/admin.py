@@ -1,202 +1,31 @@
 """素材管理后台 — 统计、完整性检查、批量操作。"""
 
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
-from app.models.tag import Tag, InspirationTag
+from app.models.inspiration import (
+    AIAnalysisLog,
+    Inspiration,
+    NOT_DELETED,
+    analysis_log_filter,
+    utcnow,
+)
+from app.models.tag import InspirationTag
+from app.services import admin_stats_service
 from app.utils.file_hash import build_hash_map
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-# 素材媒体目录：完整性检查只扫描这些目录，排除 lancedb（向量库）、logs（日志）、
-# cookies、debug 等非素材数据，否则会把向量库内部文件误判为「孤立文件」。
-# 垃圾桶（trash）同样不在此列：软删除文件已移入 trash/，不应被当作孤立文件。
-_INSP_MEDIA_DIRS = ("images", "thumbnails", "videos")
-
-# 未删除素材的统一过滤条件（软删除后所有统计/完整性/重复检测都应排除垃圾桶素材）
-_NOT_DELETED = Inspiration.deleted_at.is_(None)
-
-
-def _scan_storage_files() -> dict[str, int]:
-    """扫描素材媒体目录（images/thumbnails/videos）中的实际文件，返回 {相对路径: 字节数}。"""
-    files: dict[str, int] = {}
-    storage_root = settings.storage_root
-    if not storage_root.exists():
-        return files
-    for dir_name in _INSP_MEDIA_DIRS:
-        dir_path = storage_root / dir_name
-        if not dir_path.exists():
-            continue
-        for fpath in dir_path.rglob("*"):
-            if fpath.is_file():
-                # 计算相对于 storage 的路径
-                try:
-                    rel = fpath.relative_to(storage_root).as_posix()
-                except ValueError:
-                    rel = str(fpath)
-                files[rel] = fpath.stat().st_size
-    return files
-
-
 @router.get("/stats")
 async def admin_stats(db: AsyncSession = Depends(get_db)):
-    """素材总览仪表盘数据：
-    - 总数、总大小、缩略图大小
-    - 按来源类型 / 媒体类型 / 分析状态 / 月份分组统计
-    """
-    # 素材总数（排除垃圾桶）
-    total_count = (await db.execute(
-        select(func.count(Inspiration.id)).where(_NOT_DELETED)
-    )).scalar() or 0
-
-    # 按来源类型
-    source_stats = (await db.execute(
-        select(Inspiration.source_type, func.count(Inspiration.id))
-        .where(_NOT_DELETED)
-        .group_by(Inspiration.source_type)
-    )).all()
-
-    # 按媒体类型
-    media_stats = (await db.execute(
-        select(Inspiration.media_type, func.count(Inspiration.id))
-        .where(_NOT_DELETED)
-        .group_by(Inspiration.media_type)
-    )).all()
-
-    # 分析状态统计：通过子查询计算
-    # — "done": 有分析日志且全部成功
-    # — "error": 有分析日志且至少一条失败
-    # — "pending": 没有任何分析日志
-
-    # 未删除素材 ID 集合（统计子查询过滤垃圾桶素材）
-    non_deleted_ids = select(Inspiration.id).where(_NOT_DELETED)
-
-    # 有分析日志的素材（去重，排除垃圾桶）
-    analyzed_ids_subq = (
-        select(AIAnalysisLog.inspiration_id)
-        .where(
-            analysis_log_filter(),
-            AIAnalysisLog.inspiration_id.isnot(None),
-            AIAnalysisLog.inspiration_id.in_(non_deleted_ids),
-        )
-        .distinct()
-    ).subquery()
-
-    # 分析失败的素材 ID（排除垃圾桶）
-    failed_ids_subq = (
-        select(AIAnalysisLog.inspiration_id)
-        .where(
-            analysis_log_filter(),
-            AIAnalysisLog.error.isnot(None),
-            AIAnalysisLog.error != "",
-            AIAnalysisLog.inspiration_id.in_(non_deleted_ids),
-        )
-        .distinct()
-    ).subquery()
-
-    total_count_val = (await db.execute(
-        select(func.count(Inspiration.id)).where(_NOT_DELETED)
-    )).scalar() or 0
-
-    error_count = (await db.execute(
-        select(func.count())
-        .select_from(failed_ids_subq)
-    )).scalar() or 0
-
-    analyzed_count = (await db.execute(
-        select(func.count())
-        .select_from(analyzed_ids_subq)
-    )).scalar() or 0
-
-    done_count = analyzed_count - error_count
-    pending_count = total_count_val - analyzed_count
-
-    # 无标签素材数（排除垃圾桶）
-    untagged_count = (await db.execute(
-        select(func.count(Inspiration.id))
-        .outerjoin(InspirationTag, Inspiration.id == InspirationTag.inspiration_id)
-        .where(InspirationTag.inspiration_id.is_(None), _NOT_DELETED)
-    )).scalar() or 0
-
-    # 分析失败数（带日志）
-    analysis_failed_count = error_count
-
-    # 收藏数（排除垃圾桶）
-    favorite_count = (await db.execute(
-        select(func.count(Inspiration.id))
-        .where(Inspiration.is_favorite == True, _NOT_DELETED)
-    )).scalar() or 0
-
-    # 标签总数
-    total_tags = (await db.execute(select(func.count(Tag.id)))).scalar() or 0
-
-    # 墓碑表记录数（已采集 URL 去重）
-    from app.models.scraper import ScraperSeenURL
-    tombstone_count = (await db.execute(
-        select(func.count(ScraperSeenURL.source_url))
-    )).scalar() or 0
-
-    # 扫描文件系统中实际文件大小
-    storage_files = _scan_storage_files()
-    total_size_bytes = sum(storage_files.values())
-
-    # 缩略图大小
-    thumbnail_size_bytes = sum(
-        s for p, s in storage_files.items() if "thumbnails" in p
-    )
-
-    # 图片文件大小
-    images_size_bytes = sum(
-        s for p, s in storage_files.items() if p.startswith("images")
-    )
-
-    # 按月份统计（最近 12 个月）
-    month_stats = (await db.execute(
-        select(
-            func.strftime("%Y-%m", Inspiration.created_at).label("month"),
-            func.count(Inspiration.id).label("count"),
-        )
-        .where(Inspiration.created_at.isnot(None), _NOT_DELETED)
-        .group_by("month")
-        .order_by(text("month DESC"))
-        .limit(12)
-    )).all()
-
-    return {
-        "total_count": total_count,
-        "total_size_bytes": total_size_bytes,
-        "thumbnail_size_bytes": thumbnail_size_bytes,
-        "images_size_bytes": images_size_bytes,
-        "untagged_count": untagged_count,
-        "analysis_failed_count": analysis_failed_count,
-        "favorite_count": favorite_count,
-        "total_tags": total_tags,
-        "tombstone_count": tombstone_count,
-        "by_source_type": [
-            {"source_type": s[0] or "unknown", "count": s[1]}
-            for s in source_stats
-        ],
-        "by_media_type": [
-            {"media_type": s[0] or "unknown", "count": s[1]}
-            for s in media_stats
-        ],
-        "by_analysis_status": [
-            {"status": "done", "count": done_count, "label": "已分析"},
-            {"status": "error", "count": error_count, "label": "分析失败"},
-            {"status": "pending", "count": pending_count, "label": "未分析"},
-        ],
-        "by_month": [
-            {"month": s[0], "count": s[1]} for s in month_stats
-        ],
-    }
+    """素材总览仪表盘数据（聚合逻辑在 app.services.admin_stats_service）。"""
+    return await admin_stats_service.collect_stats(db)
 
 
 @router.get("/largest-files")
@@ -208,7 +37,7 @@ async def largest_files(
     storage_root = settings.storage_root
     result = (await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.source_type, Inspiration.created_at)
-        .where(_NOT_DELETED)
+        .where(NOT_DELETED)
         .order_by(Inspiration.created_at.desc())
     )).all()
 
@@ -245,7 +74,7 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
     # 所有数据库记录的 file_path 和 thumbnail_path（排除垃圾桶：其文件已移入 trash/）
     db_files_result = (await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
-        .where(_NOT_DELETED)
+        .where(NOT_DELETED)
     )).all()
 
     db_file_paths: set[str] = set()
@@ -266,8 +95,8 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
                 "inspiration_ids": list(set(ids)),
             })
 
-    # 扫描磁盘媒体文件，找孤立文件（_scan_storage_files 已排除 lancedb/logs 等非素材目录）
-    disk_files = _scan_storage_files()
+    # 扫描磁盘媒体文件，找孤立文件（scan_storage_files 已排除 lancedb/logs 等非素材目录）
+    disk_files = admin_stats_service.scan_storage_files()
     orphan_files: list[dict] = []
     orphan_total_size = 0
     for rel_path, size in disk_files.items():
@@ -290,14 +119,14 @@ async def integrity_check(db: AsyncSession = Depends(get_db)):
 @router.post("/cleanup-orphans")
 async def cleanup_orphan_files():
     """删除所有孤立文件（磁盘上有但数据库无记录的文件）。"""
-    storage_files = _scan_storage_files()
+    storage_files = admin_stats_service.scan_storage_files()
     storage_root = settings.storage_root
 
     # 这里需要一个同步的数据库会话来获取文件列表
     from app.database import async_session
     async with async_session() as db:
         result = await db.execute(
-            select(Inspiration.file_path, Inspiration.thumbnail_path).where(_NOT_DELETED)
+            select(Inspiration.file_path, Inspiration.thumbnail_path).where(NOT_DELETED)
         )
         db_paths: set[str] = set()
         for row in result:
@@ -356,7 +185,7 @@ async def batch_delete(
         result = await db.execute(
             select(Inspiration.id)
             .outerjoin(InspirationTag, Inspiration.id == InspirationTag.inspiration_id)
-            .where(InspirationTag.inspiration_id.is_(None), _NOT_DELETED)
+            .where(InspirationTag.inspiration_id.is_(None), NOT_DELETED)
         )
         ids = [r[0] for r in result.all()]
     elif condition == "analysis_failed":
@@ -367,7 +196,7 @@ async def batch_delete(
                 analysis_log_filter(),
                 AIAnalysisLog.error.isnot(None),
                 AIAnalysisLog.error != "",
-                AIAnalysisLog.inspiration_id.in_(select(Inspiration.id).where(_NOT_DELETED)),
+                AIAnalysisLog.inspiration_id.in_(select(Inspiration.id).where(NOT_DELETED)),
             )
             .distinct()
         )
@@ -439,7 +268,7 @@ async def check_duplicate(
 async def find_duplicates(db: AsyncSession = Depends(get_db)):
     """通过文件哈希检测完全重复的素材。"""
     result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(_NOT_DELETED)
+        select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
     )
     hash_map = build_hash_map(result.all(), settings.storage_root)
 

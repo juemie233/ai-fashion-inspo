@@ -9,12 +9,11 @@ worker 与 API 之间通过 task_queue 表解耦。
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy import or_, select, update
 from sqlalchemy.exc import OperationalError
 
-from app.database import async_session, init_db
+from app.database import async_session, init_db, run_migrations
 from app.db_migrations import ensure_schema
 from app.models.task import TaskQueue
 from app.services.task_runner import (
@@ -24,16 +23,12 @@ from app.services.task_runner import (
     _is_recoverable_error,
     _schedule_retry,
 )
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
 # 轮询间隔（秒）：无任务时多久检查一次
 _POLL_INTERVAL = 1.0
-
-
-def _utcnow() -> datetime:
-    """返回当前 UTC 时间（naive datetime）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def _claim_next_task() -> int | None:
@@ -45,7 +40,7 @@ async def _claim_next_task() -> int | None:
     - 通过「先查询 + 条件更新」保证多 worker 实例下不会重复执行同一任务
     - 多 worker 竞争写锁时 SQLite 可能报 database is locked，静默跳过本轮（下一轮再试）
     """
-    now = _utcnow()
+    now = utcnow()
     async with async_session() as db:
         result = await db.execute(
             select(TaskQueue.id)
@@ -145,7 +140,7 @@ async def _reset_stale_tasks() -> None:
     此处的无条件重置会误重置「另一存活 worker 正在执行」的任务，届时需改为
     基于心跳租约的判定（记录执行中的 worker 心跳，仅重置超过心跳超时的 running）。
     """
-    now = _utcnow()
+    now = utcnow()
     async with async_session() as db:
         result = await db.execute(
             update(TaskQueue)
@@ -187,7 +182,8 @@ async def main() -> None:
     # 关闭 SQLAlchemy 引擎的 SQL 日志（debug 模式下每秒轮询会刷屏）
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     await init_db()
-    await ensure_schema()
+    await asyncio.to_thread(run_migrations)  # Alembic 正式迁移（stamp/upgrade）
+    await ensure_schema()  # 手写迁移兜底
     await _reset_stale_tasks()
     await _worker_loop()
 

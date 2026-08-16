@@ -11,11 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter, utcnow
+from app.models.inspiration import (
+    AIAnalysisLog,
+    Inspiration,
+    NOT_DELETED,
+    analysis_log_filter,
+    utcnow,
+)
 from app.models.person import InspirationPerson
-from app.models.scraper import ScraperSeenURL
 from app.models.tag import InspirationTag
-from app.schemas.inspiration import InspirationUpdate
+from app.schemas.inspiration import TRASH_REASONS, InspirationUpdate
 from app.services.file_service import (
     delete_files,
     generate_thumbnail,
@@ -23,16 +28,11 @@ from app.services.file_service import (
     restore_from_trash,
     save_upload,
 )
+from app.services.scraper_seen_service import seal_urls
 from app.services.tag_service import get_or_create_tag
 from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
-
-# 垃圾桶删除原因合法取值（负样本学习只用「质量差」子集保证语义纯净）
-TRASH_REASONS = ("质量差", "重复", "不喜欢", "隐私", "其他")
-
-# 未删除素材的统一过滤条件（软删除后所有正常查询都应排除垃圾桶素材）
-_NOT_DELETED = Inspiration.deleted_at.is_(None)
 
 
 async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:
@@ -45,7 +45,7 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
     result = await db.execute(
         select(Inspiration.id).where(
             Inspiration.content_hash == content_hash,
-            _NOT_DELETED,
+            NOT_DELETED,
         )
     )
     dup_id = result.scalars().first()
@@ -58,7 +58,7 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
             select(func.count(Inspiration.id)).where(
                 Inspiration.content_hash.is_(None),
                 Inspiration.file_path.isnot(None),
-                _NOT_DELETED,
+                NOT_DELETED,
             )
         )
     ).scalar() or 0
@@ -70,7 +70,7 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
         select(Inspiration.id, Inspiration.file_path).where(
             Inspiration.content_hash.is_(None),
             Inspiration.file_path.isnot(None),
-            _NOT_DELETED,
+            NOT_DELETED,
         )
     )
     for insp_id, fpath in result.all():
@@ -307,7 +307,7 @@ async def list_inspirations(
     query = select(Inspiration).options(
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
         selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
-    ).where(_NOT_DELETED)
+    ).where(NOT_DELETED)
 
     if source_type:
         query = query.where(Inspiration.source_type == source_type)
@@ -380,7 +380,7 @@ async def list_inspirations(
         ).scalar() or 0
 
         size_rows = (await db.execute(
-            select(Inspiration.id, Inspiration.file_path).where(_NOT_DELETED)
+            select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
         )).all()
 
         def _file_size(row) -> int:
@@ -425,12 +425,10 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
 
     删除前写入墓碑表，防止下次采集重复下载相同 URL。
     """
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
     result = await db.execute(
         select(Inspiration).where(
             Inspiration.quality_status == "rejected",
-            _NOT_DELETED,
+            NOT_DELETED,
         )
     )
     rejected = result.scalars().all()
@@ -445,13 +443,7 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     # 避免「文件已删但事务失败」产生指向不存在文件的记录
     for insp in rejected:
         await db.delete(insp)
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL)
-                .values(source_url=url)
-                .prefix_with("OR IGNORE")
-            )
+    await seal_urls(db, urls_to_seal)
     await db.commit()
 
     # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
@@ -683,7 +675,6 @@ async def remove_inspiration_tag(
 
 async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     """删除灵感素材及其对应的磁盘文件，不存在则抛出 404。"""
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from app.services import vector_store
 
     result = await db.execute(
@@ -694,12 +685,7 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
 
     # 写入墓碑表（防止重复采集）
-    if inspiration.source_url:
-        await db.execute(
-            sqlite_insert(ScraperSeenURL)
-            .values(source_url=inspiration.source_url)
-            .prefix_with("OR IGNORE")
-        )
+    await seal_urls(db, [inspiration.source_url])
 
     # 先删除数据库记录并 flush（提交由外层事务完成），成功后再删磁盘文件，
     # 避免「文件已删但事务失败」产生指向不存在文件的记录
@@ -852,8 +838,6 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
     返回:
         {"deleted": 删除数量, "freed_bytes": 释放字节数}
     """
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
     from app.services import vector_store
 
     conds = [Inspiration.deleted_at.isnot(None)]
@@ -872,11 +856,7 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
     # 先删数据库记录并写墓碑（同一事务），提交成功后再物理删除文件
     for insp in items:
         await db.delete(insp)
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
-            )
+    await seal_urls(db, urls_to_seal)
     await db.commit()
 
     freed_bytes = 0

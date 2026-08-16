@@ -18,14 +18,15 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import Inspiration
+from app.schemas.inspiration import LEARN_NEGATIVE_TRASH_REASON
 from app.services.vector import store as vector_store
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +34,9 @@ _MODEL_DIR = settings.storage_root / "quality_classifier"
 _MODEL_PATH = _MODEL_DIR / "classifier.joblib"
 _META_PATH = _MODEL_DIR / "meta.json"
 
-# 负样本删除原因（与 inspiration_service.TRASH_REASONS 中的「质量差」保持一致）
-_NEGATIVE_TRASH_REASON = "质量差"
-
 # 模型缓存（跨进程重训后按文件 mtime 失效重载；预测在 to_thread 线程池运行，加锁保护）
 _model_cache: dict = {"mtime": None, "model": None}
 _model_lock = threading.Lock()
-
-
-def _utcnow() -> datetime:
-    """返回当前 UTC 时间（naive datetime）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int], dict]:
@@ -75,7 +68,7 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
                     & (Inspiration.deleted_at.is_(None))
                 )
                 | (
-                    (Inspiration.trash_reason == _NEGATIVE_TRASH_REASON)
+                    (Inspiration.trash_reason == LEARN_NEGATIVE_TRASH_REASON)
                     & (Inspiration.deleted_at.isnot(None))
                 ),
             )
@@ -161,7 +154,7 @@ def _train_sync(X: list[list[float]], y: list[int]) -> dict:
     os.replace(tmp_path, _MODEL_PATH)
 
     meta = {
-        "trained_at": _utcnow().isoformat(),
+        "trained_at": utcnow().isoformat(),
         "sample_total": len(X),
         "positive": int(sum(y)),
         "negative": int(len(y) - sum(y)),

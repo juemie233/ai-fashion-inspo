@@ -5,11 +5,12 @@
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import TaskQueue
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,6 @@ class RecoverableTaskError(Exception):
 
 class PermanentTaskError(Exception):
     """永久错误：任务不应重试（图片损坏 / 文件不存在等）。"""
-
-
-def _utcnow() -> datetime:
-    """返回当前 UTC 时间（naive datetime）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _is_recoverable_error(message: str) -> bool:
@@ -118,7 +114,7 @@ async def _schedule_retry(db: AsyncSession, task: TaskQueue, error_msg: str) -> 
     if task.retry_count <= task.max_retries:
         delay = _retry_delay(task.retry_count)
         task.status = "pending"
-        task.next_retry_at = _utcnow() + timedelta(seconds=delay)
+        task.next_retry_at = utcnow() + timedelta(seconds=delay)
         logger.warning(
             f"任务将自动重试 #{task.id}，第 {task.retry_count}/{task.max_retries} 次，{delay} 秒后"
         )

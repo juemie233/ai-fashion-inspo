@@ -7,14 +7,13 @@
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import Inspiration
-from app.models.scraper import ScraperSeenURL
 from app.models.task import TaskQueue
-from app.services.task_runners.common import _delete_inspiration_vectors, _utcnow
+from app.services.scraper_seen_service import seal_urls
+from app.services.task_runners.common import _delete_inspiration_vectors, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +71,7 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
 
     # 写入墓碑表（防止被删除素材的 URL 被重新采集）
     urls_to_seal = [r[3] for r in files_to_delete if r[3]]
-    if urls_to_seal:
-        for url in urls_to_seal:
-            await db.execute(
-                sqlite_insert(ScraperSeenURL).values(source_url=url).prefix_with("OR IGNORE")
-            )
+    await seal_urls(db, urls_to_seal)
 
     # 先提交数据库删除（级联删除关联 tags 与 analysis_logs），再删磁盘文件，
     # 降低「文件已删但 DB 未删」的不一致窗口
@@ -109,6 +104,6 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     }
     task.done = task.total
     task.progress = 100
-    task.updated_at = _utcnow()
+    task.updated_at = utcnow()
     await db.commit()
     logger.info(f"批量删除任务完成: #{task.id} 删除 {len(deleted_ids)} 个素材")
