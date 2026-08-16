@@ -20,8 +20,9 @@ export function useSchemaCheck() {
     try {
       const { data } = await apiClient.get<{ schema_version?: string }>('/health')
       serverVersion.value = data.schema_version ?? null
-      // 后端未返回 schema_version（旧版本后端）也视为不一致，避免静默降级
-      mismatch.value = data.schema_version !== EXPECTED_SCHEMA_VERSION
+      // 前端期望版本为空（构建时未能从后端代码计算）时跳过校验，避免误报；
+      // 否则后端未返回 schema_version（旧版本后端）也视为不一致，避免静默降级
+      mismatch.value = !!EXPECTED_SCHEMA_VERSION && data.schema_version !== EXPECTED_SCHEMA_VERSION
     } catch {
       serverVersion.value = null
       mismatch.value = false
