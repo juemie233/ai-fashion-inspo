@@ -406,9 +406,11 @@ async def link_person(
     person_id: int,
     confidence: float = 1.0,
 ) -> InspirationPerson | None:
-    """建立素材-人物关联（幂等，已存在跳过）。
+    """建立单条素材-人物关联（幂等，已存在跳过）。
 
-    素材或人物不存在返回 None（由路由层决定是否抛 404）。
+    内部兼容 wrapper：委托给批量版 link_persons_batch（一次查询 + SAVEPOINT
+    竞态保护），供采集器 / AI 识别等按单条关联的调用方使用。
+    素材或人物不存在返回 None（由调用方决定是否抛 404）。
     """
     result = await link_persons_batch(
         db, inspiration_id, [person_id], confidence=confidence

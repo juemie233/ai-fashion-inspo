@@ -309,7 +309,7 @@ async def link_inspiration_persons(
                 avatar_path=link.person.avatar_path,
             )
         )
-    await db.flush()
+    # 关联对象已在批量函数内逐条 flush（SAVEPOINT），此处无需再 flush
     return {"added": [a.model_dump() for a in added], "count": len(added)}
 
 
