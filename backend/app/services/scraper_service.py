@@ -162,6 +162,22 @@ def _maybe_auto_retry(task_id: int):
     _launch_scraper_process(task_id)
 
 
+async def has_active_scraper_tasks() -> bool:
+    """是否存在进行中的采集任务（running/pending，跨进程权威状态）。
+
+    供 ChromeManager 空闲判定使用：仅看进程内 ``_scraper_pids`` 会在多 worker
+    或 API 进程重启后误判「无活动采集」而提前关闭 Chrome，打断正在进行的采集。
+    采集子进程会同步写库更新任务状态，DB 是权威来源。
+    """
+    async with async_session() as db:
+        result = await db.execute(
+            select(func.count(ScraperTask.id)).where(
+                ScraperTask.status.in_(["running", "pending"])
+            )
+        )
+        return (result.scalar() or 0) > 0
+
+
 def _validate_cookie_platform(platform: str) -> str:
     """校验并标准化平台名，防止路径穿越。"""
     p = platform.strip().lower()
@@ -1054,7 +1070,6 @@ async def batch_delete_task_results(
         if skipped:
             detail += f"，跳过 {skipped} 个（已在垃圾桶）"
         await record_audit_log(
-            db,
             action="batch_trash",
             count=len(trashed_items),
             detail=detail,

@@ -177,14 +177,12 @@ async def cleanup_orphan_files():
 
     # 记录审计：清理孤立文件属破坏性操作，留痕便于追溯
     if deleted > 0:
-        async with async_session() as audit_db:
-            await record_audit_log(
-                audit_db,
-                action="cleanup_orphans",
-                count=deleted,
-                freed_bytes=freed_bytes,
-                detail="删除磁盘上有但数据库无记录的孤立媒体文件",
-            )
+        await record_audit_log(
+            action="cleanup_orphans",
+            count=deleted,
+            freed_bytes=freed_bytes,
+            detail="删除磁盘上有但数据库无记录的孤立媒体文件",
+        )
 
     return {
         "deleted_count": deleted,
@@ -248,7 +246,6 @@ async def batch_delete(
 
     # 记录审计：批量删除（物理删除）属破坏性操作
     await record_audit_log(
-        db,
         action="batch_delete",
         count=len(ids),
         detail=f"任务 #{task.id}，条件={label}",

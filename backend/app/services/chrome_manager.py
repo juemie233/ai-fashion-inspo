@@ -1,9 +1,11 @@
 """采集专用 Chrome 生命周期管理。
 
 自动拉起调试模式 Chrome、监控存活并在崩溃后自动重启，支持手动停止与空闲自动关闭。
-独立于采集任务子进程，二者通过 CDP 端口协作；任务子进程是否活动由 ``scraper_service._scraper_pids`` 判断。
+独立于采集任务子进程，二者通过 CDP 端口协作；任务子进程是否活动由
+``scraper_service._scraper_pids`` 与数据库中的 running/pending 任务共同判断。
 """
 
+import asyncio
 import logging
 import subprocess
 import threading
@@ -163,9 +165,18 @@ class ChromeManager:
                 self._proc = None
                 break
 
-            # 空闲自动关闭：无活动采集任务且持续超时
+            # 空闲自动关闭：无活动采集任务且持续超时。
+            # 除进程内 _scraper_pids 外，再查 DB 中 running/pending 任务（跨进程权威），
+            # 避免多 worker / API 重启后误判空闲而提前关闭 Chrome、打断采集。
             if settings.chrome_idle_timeout > 0:
-                if scraper_service._scraper_pids:
+                has_active = bool(scraper_service._scraper_pids)
+                if not has_active:
+                    try:
+                        has_active = asyncio.run(scraper_service.has_active_scraper_tasks())
+                    except Exception as e:
+                        logger.warning(f"查询活动采集任务失败（按有活动处理，避免误关）: {e}")
+                        has_active = True
+                if has_active:
                     idle_since = time.time()
                 elif time.time() - idle_since >= settings.chrome_idle_timeout:
                     logger.info("Chrome 空闲超时，自动关闭")

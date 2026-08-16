@@ -565,7 +565,6 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
 
     # 记录审计：删除已拒绝素材属于破坏性批量操作，留痕便于追溯
     await record_audit_log(
-        db,
         action="delete_rejected",
         count=len(rejected),
         freed_bytes=freed_bytes,
@@ -760,7 +759,6 @@ async def batch_trash_inspirations(
     # 记录审计：批量移入垃圾桶（软删除）也纳入审计，便于追溯批量整理动作
     if trashed > 0:
         await record_audit_log(
-            db,
             action="batch_trash",
             count=trashed,
             detail=f"跳过 {skipped} 个（不存在或已在垃圾桶）" if skipped else None,
@@ -1101,7 +1099,6 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     # 记录审计：清空垃圾桶（含定时自动清理）属于不可恢复的破坏性操作
     await record_audit_log(
-        db,
         action="empty_trash",
         count=len(items),
         freed_bytes=freed_bytes,

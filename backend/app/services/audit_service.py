@@ -1,12 +1,14 @@
 """操作审计日志服务：记录破坏性操作的统一入口。"""
 
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
+from app.database import async_session
 from app.models.audit import AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 async def record_audit_log(
-    db: AsyncSession,
     *,
     action: str,
     target_type: str = "inspirations",
@@ -14,18 +16,23 @@ async def record_audit_log(
     freed_bytes: int = 0,
     detail: str | None = None,
 ) -> None:
-    """写入一条审计记录并立即提交（不依赖外层事务，失败不影响主流程语义）。
+    """写入一条审计记录（独立会话、独立事务，失败不影响主流程）。
 
-    调用方在破坏性操作完成后调用本函数；审计写入失败时抛异常由调用方兜底，
-    但通常不应因审计失败而回滚已完成的业务操作。
+    破坏性操作已完成后再调用本函数：审计落库失败仅记日志、不抛异常，避免
+    让整个请求因此报错；同时使用独立会话，不共享调用方会话（防止把调用方
+    尚未提交的内容一并提交/回滚）。
     """
-    db.add(
-        AuditLog(
-            action=action,
-            target_type=target_type,
-            count=count,
-            freed_bytes=freed_bytes,
-            detail=detail,
-        )
-    )
-    await db.commit()
+    try:
+        async with async_session() as db:
+            db.add(
+                AuditLog(
+                    action=action,
+                    target_type=target_type,
+                    count=count,
+                    freed_bytes=freed_bytes,
+                    detail=detail,
+                )
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"写入审计日志失败（忽略）: action={action} — {e}")
