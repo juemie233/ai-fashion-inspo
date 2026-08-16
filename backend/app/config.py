@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     thumbnails_dir: Path = storage_root / "thumbnails"
     videos_dir: Path = storage_root / "videos"
     trash_dir: Path = storage_root / "trash"  # 垃圾桶（软删除文件移入此目录）
+    # 人物照片（模特写真）：与素材库 images/ 分离，避免被完整性检查误判为孤立文件
+    person_photos_dir: Path = storage_root / "person_photos"
+    person_thumbnails_dir: Path = storage_root / "person_thumbnails"
 
     # 上传大小限制（MB）：防止误传超大文件导致内存与磁盘暴涨
     max_image_upload_mb: int = 20  # 图片/缩略图
@@ -129,6 +132,8 @@ class Settings(BaseSettings):
             "thumbnails": self.thumbnails_dir,
             "videos": self.videos_dir,
             "trash": self.trash_dir,
+            "person_photos": self.person_photos_dir,
+            "person_thumbnails": self.person_thumbnails_dir,
         }
 
 

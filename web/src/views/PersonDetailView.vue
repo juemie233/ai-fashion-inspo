@@ -11,8 +11,12 @@ import { useMessage } from 'naive-ui'
 import {
   fetchPerson,
   fetchPersonInspirations,
+  fetchPersonPhotoSets,
+  fetchPersonPhotoSet,
   deletePerson,
+  deletePersonPhotoSet,
   type PersonInspiration,
+  type PersonPhotoSet,
 } from '@/api/persons'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import type { PersonDetail } from '@shared/types/person'
@@ -73,6 +77,54 @@ const lightboxPaths = computed<string[]>(() =>
     .map((i) => i.file_path)
 )
 
+// ── 照片组（模特写真：与穿搭素材分离）──
+const photoSets = ref<PersonPhotoSet[]>([])
+const photoSetsLoading = ref(false)
+/** 照片组灯箱：浏览某个照片组的照片 */
+const photoLightboxOpen = ref(false)
+const photoLightboxPaths = ref<string[]>([])
+const photoLightboxName = ref('')
+
+async function loadPhotoSets() {
+  photoSetsLoading.value = true
+  try {
+    const data = await fetchPersonPhotoSets(personId.value, 1, 50)
+    photoSets.value = data.items ?? []
+  } catch {
+    // 照片组加载失败不阻塞详情页其余内容
+  } finally {
+    photoSetsLoading.value = false
+  }
+}
+
+/** 点击照片组：加载组内照片并打开灯箱浏览 */
+async function openPhotoSet(set: PersonPhotoSet) {
+  try {
+    const detail = await fetchPersonPhotoSet(personId.value, set.id, 1, 200)
+    photoLightboxPaths.value = (detail.photos ?? []).map((p) => p.file_path)
+    photoLightboxName.value = set.name
+    photoLightboxOpen.value = true
+  } catch {
+    message.error('加载照片组失败')
+  }
+}
+
+/** 删除照片组（二次确认） */
+async function handleDeletePhotoSet(set: PersonPhotoSet) {
+  try {
+    await deletePersonPhotoSet(personId.value, set.id)
+    message.success(`已删除照片组「${set.name}」`)
+    await loadPhotoSets()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '删除失败')
+  }
+}
+
+/** 跳转到「添加模特照片」页并预选当前人物 */
+function goAddPhotos() {
+  router.push({ path: '/model-photos', query: { person_id: personId.value } })
+}
+
 async function loadDetail() {
   // 参数兜底：非法 id（NaN/非正整数）直接回列表，避免 404 误报
   const id = personId.value
@@ -91,6 +143,7 @@ async function loadDetail() {
     loading.value = false
   }
   await loadInspirations()
+  await loadPhotoSets()
 }
 
 async function loadInspirations() {
@@ -200,6 +253,50 @@ watch(personId, () => {
           </div>
         </n-card>
 
+        <!-- 照片组（模特写真：与穿搭素材分离） -->
+        <n-card size="small" class="photo-sets-card">
+          <div class="items-header">
+            <h3 style="margin: 0">照片组（模特写真）</h3>
+            <n-button size="small" type="primary" secondary @click="goAddPhotos">
+              ＋ 添加照片
+            </n-button>
+          </div>
+
+          <div v-if="photoSets.length > 0" class="photo-sets-grid">
+            <div v-for="set in photoSets" :key="set.id" class="photo-set-card">
+              <div class="photo-set-cover" @click="openPhotoSet(set)">
+                <img
+                  v-if="set.cover_path"
+                  :src="getFileUrl(set.cover_path)"
+                  :alt="set.name"
+                />
+                <span v-else class="cover-fallback">🖼️</span>
+                <div class="photo-set-count">{{ set.photo_count }} 张</div>
+              </div>
+              <div class="photo-set-meta">
+                <span class="photo-set-name" :title="set.name">{{ set.name }}</span>
+                <n-space :size="4">
+                  <n-button size="tiny" quaternary @click="openPhotoSet(set)">浏览</n-button>
+                  <n-popconfirm @positive-click="handleDeletePhotoSet(set)">
+                    <template #trigger>
+                      <n-button size="tiny" type="error" quaternary>删除</n-button>
+                    </template>
+                    确定删除照片组「{{ set.name }}」？组内照片将一并删除。
+                  </n-popconfirm>
+                </n-space>
+              </div>
+            </div>
+          </div>
+
+          <n-empty
+            v-else-if="!photoSetsLoading"
+            description="暂无照片组，点击右上角「添加照片」从文件夹导入"
+            size="small"
+            style="margin: 24px 0"
+          />
+          <n-spin v-if="photoSetsLoading" :show="true" style="margin: 24px 0" />
+        </n-card>
+
         <!-- 风格画像 -->
         <n-card size="small" class="profile-card" title="风格画像（基于该人物素材标签聚合）">
           <div class="profile-grid">
@@ -301,6 +398,14 @@ watch(personId, () => {
           :image-paths="lightboxPaths"
           :initial-index="0"
           @close="lightboxOpen = false"
+        />
+
+        <!-- 全屏灯箱：浏览照片组照片 -->
+        <ImageLightbox
+          :show="photoLightboxOpen"
+          :image-paths="photoLightboxPaths"
+          :initial-index="0"
+          @close="photoLightboxOpen = false"
         />
       </template>
     </n-spin>
@@ -490,6 +595,74 @@ watch(personId, () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+
+/* 照片组 */
+.photo-sets-card {
+  margin-bottom: 12px;
+}
+
+.photo-sets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.photo-set-card {
+  border: 1px solid #eef1f6;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.photo-set-cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  cursor: pointer;
+  background: #f3f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.photo-set-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-fallback {
+  font-size: 36px;
+}
+
+.photo-set-count {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+}
+
+.photo-set-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 8px;
+}
+
+.photo-set-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {

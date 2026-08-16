@@ -7,7 +7,12 @@ from app.models.inspiration import (
     Inspiration,
 )
 from app.models.tag import Tag, InspirationTag, TagAlias
-from app.models.person import Person, InspirationPerson
+from app.models.person import (
+    Person,
+    InspirationPerson,
+    PersonPhoto,
+    PersonPhotoSet,
+)
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import TaskQueue
 from app.models.audit import AuditLog
@@ -23,6 +28,8 @@ __all__ = [
     "TagAlias",
     "Person",
     "InspirationPerson",
+    "PersonPhoto",
+    "PersonPhotoSet",
     "ScraperTask",
     "ScraperSchedule",
     "TaskQueue",

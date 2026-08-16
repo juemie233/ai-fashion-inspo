@@ -15,7 +15,14 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP}/fashion_inspo.db"
 os.environ["STORAGE_ROOT"] = f"{_TMP}/storage"
 # 注意：images_dir 等派生字段是 Settings 类的默认值（类定义时用默认 storage_root 计算），
 # 仅覆盖 STORAGE_ROOT 不会让它们跟着变，必须逐项覆盖，否则测试文件会写入真实 backend/storage/！
-for _sub in ("images", "thumbnails", "videos", "trash"):
+for _sub in (
+    "images",
+    "thumbnails",
+    "videos",
+    "trash",
+    "person_photos",
+    "person_thumbnails",
+):
     os.environ[f"{_sub.upper()}_DIR"] = f"{_TMP}/storage/{_sub}"
 os.environ.pop("API_KEY", None)  # 认证测试自行设置，默认开发模式跳过
 
@@ -41,6 +48,8 @@ _ALL_TABLES = [
     "service_heartbeats",
     "audit_logs",
     "inspirations",
+    "person_photos",
+    "person_photo_sets",
     "persons",
     "tags",
 ]
@@ -76,6 +85,8 @@ def clean_state(client):
         settings.images_dir,
         settings.thumbnails_dir,
         settings.videos_dir,
+        settings.person_photos_dir,
+        settings.person_thumbnails_dir,
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
     ]:
         if dir_path.exists():

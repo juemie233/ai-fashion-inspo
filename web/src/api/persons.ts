@@ -1,9 +1,31 @@
 /** 人物相关 API 调用。 */
 
 import apiClient from './client'
-import type { Person, PersonBrief, PersonDetail, PersonListOut, PersonPlatform, PersonType } from '@shared/types/person'
+import type {
+  Person,
+  PersonBrief,
+  PersonDetail,
+  PersonListOut,
+  PersonPlatform,
+  PersonPhoto,
+  PersonPhotoSet,
+  PersonPhotoSetDetail,
+  PersonPhotoSetListOut,
+  PersonType,
+} from '@shared/types/person'
 
-export type { Person, PersonBrief, PersonDetail, PersonStyleProfile, PersonPlatform, PersonType } from '@shared/types/person'
+export type {
+  Person,
+  PersonBrief,
+  PersonDetail,
+  PersonStyleProfile,
+  PersonPlatform,
+  PersonPhoto,
+  PersonPhotoSet,
+  PersonPhotoSetDetail,
+  PersonPhotoSetListOut,
+  PersonType,
+} from '@shared/types/person'
 
 /** 人物表单载荷（创建/更新共用，更新时字段均可选） */
 export interface PersonForm {
@@ -112,6 +134,101 @@ export async function linkPerson(inspirationId: string, personIds: number[]) {
 export async function unlinkPerson(inspirationId: string, personId: number) {
   const { data } = await apiClient.delete<{ removed: number }>(
     `/inspirations/${inspirationId}/persons/${personId}`,
+  )
+  return data
+}
+
+// ── 人物照片组（模特写真，与穿搭素材分离）──
+
+/** 获取人物照片组分页列表 */
+export async function fetchPersonPhotoSets(
+  personId: number,
+  page: number = 1,
+  size: number = 50,
+): Promise<PersonPhotoSetListOut> {
+  const { data } = await apiClient.get<PersonPhotoSetListOut>(
+    `/persons/${personId}/photo-sets`,
+    { params: { page, size } },
+  )
+  return data
+}
+
+/** 创建人物照片组（name 可留空，后端回退「未命名照片组」） */
+export async function createPersonPhotoSet(
+  personId: number,
+  name?: string | null,
+): Promise<PersonPhotoSet> {
+  const { data } = await apiClient.post<PersonPhotoSet>(
+    `/persons/${personId}/photo-sets`,
+    { name: name || null },
+  )
+  return data
+}
+
+/** 获取照片组详情（含分页照片列表） */
+export async function fetchPersonPhotoSet(
+  personId: number,
+  setId: number,
+  page: number = 1,
+  size: number = 200,
+): Promise<PersonPhotoSetDetail> {
+  const { data } = await apiClient.get<PersonPhotoSetDetail>(
+    `/persons/${personId}/photo-sets/${setId}`,
+    { params: { page, size } },
+  )
+  return data
+}
+
+/** 更新照片组名称 */
+export async function updatePersonPhotoSet(
+  personId: number,
+  setId: number,
+  name: string,
+): Promise<PersonPhotoSet> {
+  const { data } = await apiClient.patch<PersonPhotoSet>(
+    `/persons/${personId}/photo-sets/${setId}`,
+    { name },
+  )
+  return data
+}
+
+/** 删除照片组（级联删除照片与文件） */
+export async function deletePersonPhotoSet(personId: number, setId: number) {
+  await apiClient.delete(`/persons/${personId}/photo-sets/${setId}`)
+}
+
+/** 上传一张照片到照片组（支持进度回调与取消信号） */
+export async function uploadPersonPhoto(
+  personId: number,
+  setId: number,
+  file: File,
+  sortOrder: number,
+  onProgress?: (e: any) => void,
+  signal?: AbortSignal,
+): Promise<PersonPhoto> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('sort_order', String(sortOrder))
+  const { data } = await apiClient.post<PersonPhoto>(
+    `/persons/${personId}/photo-sets/${setId}/photos`,
+    formData,
+    {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: onProgress,
+      signal,
+    },
+  )
+  return data
+}
+
+/** 删除照片组内的单张照片 */
+export async function deletePersonPhoto(
+  personId: number,
+  setId: number,
+  photoId: number,
+) {
+  const { data } = await apiClient.delete<{ removed: number }>(
+    `/persons/${personId}/photo-sets/${setId}/photos/${photoId}`,
   )
   return data
 }

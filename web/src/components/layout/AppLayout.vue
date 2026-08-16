@@ -8,6 +8,7 @@ import {
   ImagesOutline,
   SearchOutline,
   CloudUploadOutline,
+  CameraOutline,
   PricetagsOutline,
   ScanOutline,
   HardwareChipOutline,
@@ -42,6 +43,7 @@ const menuOptions = [
     children: [
       { label: '素材库', key: 'home', icon: renderIcon(ImagesOutline) },
       { label: '上传素材', key: 'upload', icon: renderIcon(CloudUploadOutline) },
+      { label: '添加模特照片', key: 'model-photos', icon: renderIcon(CameraOutline) },
       { label: '高级搜索', key: 'search', icon: renderIcon(SearchOutline) },
     ],
   },

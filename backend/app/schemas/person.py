@@ -114,3 +114,68 @@ class PersonLinkRequest(BaseModel):
     """批量关联素材-人物请求"""
 
     person_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class PersonPhotoSetCreate(BaseModel):
+    """创建人物照片组（组名缺省时后端回退为「未命名照片组」）"""
+
+    name: str | None = Field(None, max_length=128)
+
+
+class PersonPhotoSetUpdate(BaseModel):
+    """更新人物照片组（仅名称）"""
+
+    name: str = Field(min_length=1, max_length=128)
+
+
+class PersonPhotoOut(BaseModel):
+    """人物照片输出"""
+
+    id: int
+    set_id: int
+    file_path: str
+    thumbnail_path: str | None = None
+    sort_order: int = 0
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+    @field_serializer("created_at")
+    def serialize_photo_created_at(self, dt: datetime | None) -> str | None:
+        return format_utc(dt)
+
+
+class PersonPhotoSetOut(BaseModel):
+    """人物照片组输出（含照片数与封面）"""
+
+    id: int
+    person_id: int
+    name: str
+    photo_count: int = 0
+    cover_path: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_set_datetime(self, dt: datetime | None) -> str | None:
+        return format_utc(dt)
+
+
+class PersonPhotoSetListOut(BaseModel):
+    """人物照片组分页列表"""
+
+    items: list[PersonPhotoSetOut]
+    total: int
+    page: int
+    size: int
+
+
+class PersonPhotoSetDetailOut(PersonPhotoSetOut):
+    """人物照片组详情（含分页照片列表）"""
+
+    photos: list[PersonPhotoOut] = []
+    total: int = 0
+    page: int = 1
+    size: int = 100

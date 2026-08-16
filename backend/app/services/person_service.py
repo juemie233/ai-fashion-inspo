@@ -4,15 +4,30 @@
 规避「同名多人」的歧义（详见人物模块移植报告 5.4）。
 """
 
+import asyncio
 import logging
 
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.models.inspiration import Inspiration
-from app.models.person import InspirationPerson, Person
+from app.models.person import (
+    InspirationPerson,
+    Person,
+    PersonPhoto,
+    PersonPhotoSet,
+)
 from app.models.tag import InspirationTag, Tag
+from app.services.file_service import (
+    delete_files,
+    delete_files_counting,
+    save_upload,
+)
+from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +184,31 @@ async def update_person(
 
 
 async def delete_person(db: AsyncSession, person_id: int) -> None:
-    """删除人物（inspiration_persons 关联随外键级联删除），不存在抛 404。"""
-    person = await get_person(db, person_id)
+    """删除人物（关联级联删除），不存在抛 404。
+
+    除 inspiration_persons 关联外，还会级联删除该人物的照片组与照片记录；
+    照片物理文件在提交成功后统一清理，避免「文件已删但事务失败」产生悬空记录。
+    """
+    result = await db.execute(
+        select(Person)
+        .options(selectinload(Person.photo_sets).selectinload(PersonPhotoSet.photos))
+        .where(Person.id == person_id)
+    )
+    person = result.scalar_one_or_none()
+    if not person:
+        raise PersonNotFoundError("人物未找到")
+
+    # 先收集照片文件路径（DB 级联删除后无法再拿到），提交成功后再物理删除
+    photo_paths: list[str] = []
+    for photo_set in person.photo_sets:
+        for photo in photo_set.photos:
+            photo_paths.extend([photo.file_path, photo.thumbnail_path])
+
     await db.delete(person)
-    await db.flush()
+    await db.commit()
+
+    if photo_paths:
+        delete_files_counting(*photo_paths)
 
 
 async def get_person_inspiration_count(db: AsyncSession, person_id: int) -> int:
@@ -516,3 +552,254 @@ async def unlink_person(
         )
     )
     return result.rowcount > 0
+
+
+# ── 人物照片组（人物 → 照片组 → 照片）──
+
+
+def _to_photo_set_dict(
+    photo_set: PersonPhotoSet,
+    photo_count: int = 0,
+    cover_path: str | None = None,
+) -> dict:
+    """将 PersonPhotoSet ORM 对象转为响应字典（含照片数与封面）。"""
+    return {
+        "id": photo_set.id,
+        "person_id": photo_set.person_id,
+        "name": photo_set.name,
+        "photo_count": photo_count,
+        "cover_path": cover_path,
+        "created_at": photo_set.created_at,
+        "updated_at": photo_set.updated_at,
+    }
+
+
+def _to_photo_dict(photo: PersonPhoto) -> dict:
+    """将 PersonPhoto ORM 对象转为响应字典。"""
+    return {
+        "id": photo.id,
+        "set_id": photo.set_id,
+        "file_path": photo.file_path,
+        "thumbnail_path": photo.thumbnail_path,
+        "sort_order": photo.sort_order,
+        "created_at": photo.created_at,
+    }
+
+
+async def create_photo_set(
+    db: AsyncSession, person_id: int, name: str | None = None
+) -> dict:
+    """创建人物照片组，返回响应字典；人物不存在抛 PersonNotFoundError。"""
+    await get_person(db, person_id)
+    resolved = (name or "").strip() or "未命名照片组"
+    photo_set = PersonPhotoSet(person_id=person_id, name=resolved)
+    db.add(photo_set)
+    await db.flush()
+    await db.refresh(photo_set)
+    return _to_photo_set_dict(photo_set)
+
+
+async def list_photo_sets(
+    db: AsyncSession, person_id: int, page: int, size: int
+) -> tuple[list[dict], int]:
+    """分页查询人物照片组（含照片数与封面），人物不存在抛 PersonNotFoundError。"""
+    person = await db.get(Person, person_id)
+    if not person:
+        raise PersonNotFoundError("人物未找到")
+
+    # 每组照片数统计子查询
+    count_subq = (
+        select(
+            PersonPhoto.set_id.label("sid"),
+            func.count(PersonPhoto.id).label("cnt"),
+        )
+        .group_by(PersonPhoto.set_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(PersonPhotoSet, func.coalesce(count_subq.c.cnt, 0).label("cnt"))
+        .outerjoin(count_subq, PersonPhotoSet.id == count_subq.c.sid)
+        .where(PersonPhotoSet.person_id == person_id)
+        .order_by(PersonPhotoSet.created_at.desc(), PersonPhotoSet.id.desc())
+    )
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(
+                select(PersonPhotoSet.id)
+                .where(PersonPhotoSet.person_id == person_id)
+                .subquery()
+            )
+        )
+    ).scalar() or 0
+
+    rows = (
+        await db.execute(stmt.offset((page - 1) * size).limit(size))
+    ).all()
+
+    # 封面：每组第一条照片（按 sort_order, id），一次查询避免 N+1
+    cover_map: dict[int, str] = {}
+    set_ids = [row[0].id for row in rows]
+    if set_ids:
+        cover_result = await db.execute(
+            select(
+                PersonPhoto.set_id,
+                PersonPhoto.file_path,
+                PersonPhoto.thumbnail_path,
+            )
+            .where(PersonPhoto.set_id.in_(set_ids))
+            .order_by(PersonPhoto.set_id, PersonPhoto.sort_order, PersonPhoto.id)
+        )
+        seen: set[int] = set()
+        for sid, file_path, thumb_path in cover_result.all():
+            if sid not in seen:
+                seen.add(sid)
+                cover_map[sid] = thumb_path or file_path
+
+    items = [
+        _to_photo_set_dict(ps, cnt, cover_map.get(ps.id))
+        for ps, cnt in rows
+    ]
+    return items, total
+
+
+async def get_photo_set(db: AsyncSession, set_id: int) -> PersonPhotoSet:
+    """按 ID 获取照片组，不存在抛 PersonNotFoundError。"""
+    photo_set = await db.get(PersonPhotoSet, set_id)
+    if not photo_set:
+        raise PersonNotFoundError("照片组未找到")
+    return photo_set
+
+
+async def get_photo_set_cover(db: AsyncSession, set_id: int) -> str | None:
+    """返回照片组的封面路径（组内第一条照片的缩略图或原图），无照片返回 None。"""
+    row = (
+        await db.execute(
+            select(PersonPhoto.file_path, PersonPhoto.thumbnail_path)
+            .where(PersonPhoto.set_id == set_id)
+            .order_by(PersonPhoto.sort_order, PersonPhoto.id)
+            .limit(1)
+        )
+    ).first()
+    if not row:
+        return None
+    return row[1] or row[0]
+
+
+async def update_photo_set(db: AsyncSession, set_id: int, name: str) -> dict:
+    """更新照片组名称，返回响应字典；空名称抛 PersonConflictError。"""
+    photo_set = await get_photo_set(db, set_id)
+    resolved = (name or "").strip()
+    if not resolved:
+        raise PersonConflictError("照片组名称不能为空")
+    photo_set.name = resolved
+    await db.flush()
+    await db.refresh(photo_set)
+    return _to_photo_set_dict(photo_set)
+
+
+async def add_photo_to_set(
+    db: AsyncSession, set_id: int, file: UploadFile, sort_order: int = 0
+) -> dict:
+    """上传一张照片到照片组（含组内内容去重），返回响应字典。
+
+    照片落盘到 person_photos/ 与 person_thumbnails/（与素材库 images/ 分离，
+    避免被完整性检查误判为孤立文件）。
+    """
+    await get_photo_set(db, set_id)
+
+    file_path, thumb_path = await save_upload(
+        file,
+        images_dir=settings.person_photos_dir,
+        thumbs_dir=settings.person_thumbnails_dir,
+        image_prefix="person_photos",
+        thumb_prefix="person_thumbnails",
+    )
+
+    # 组内去重：同一照片组内按内容哈希拦截重复照片（大文件哈希放线程池执行）
+    content_hash = await asyncio.to_thread(
+        file_sha256, settings.storage_root / file_path
+    )
+    if content_hash:
+        dup = await db.execute(
+            select(PersonPhoto.id).where(
+                PersonPhoto.set_id == set_id,
+                PersonPhoto.content_hash == content_hash,
+            )
+        )
+        if dup.scalar_one_or_none():
+            delete_files(file_path, thumb_path)
+            raise HTTPException(status_code=409, detail="该照片已存在于该照片组（内容重复）")
+
+    photo = PersonPhoto(
+        set_id=set_id,
+        file_path=file_path,
+        thumbnail_path=thumb_path,
+        content_hash=content_hash,
+        sort_order=sort_order,
+    )
+    db.add(photo)
+    await db.flush()
+    await db.refresh(photo)
+    return _to_photo_dict(photo)
+
+
+async def list_set_photos(
+    db: AsyncSession, set_id: int, page: int, size: int
+) -> tuple[list[dict], int]:
+    """分页查询照片组内的照片，返回 (items, total)；组不存在抛 PersonNotFoundError。"""
+    await get_photo_set(db, set_id)
+    total = (
+        await db.execute(
+            select(func.count()).select_from(PersonPhoto).where(
+                PersonPhoto.set_id == set_id
+            )
+        )
+    ).scalar() or 0
+
+    rows = (
+        await db.execute(
+            select(PersonPhoto)
+            .where(PersonPhoto.set_id == set_id)
+            .order_by(PersonPhoto.sort_order, PersonPhoto.id)
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+    ).scalars().all()
+    return [_to_photo_dict(p) for p in rows], total
+
+
+async def delete_photo_set(db: AsyncSession, set_id: int) -> None:
+    """删除照片组（级联删除照片记录），提交成功后清理照片物理文件。"""
+    result = await db.execute(
+        select(PersonPhotoSet)
+        .options(selectinload(PersonPhotoSet.photos))
+        .where(PersonPhotoSet.id == set_id)
+    )
+    photo_set = result.scalar_one_or_none()
+    if not photo_set:
+        raise PersonNotFoundError("照片组未找到")
+
+    photo_paths: list[str] = []
+    for photo in photo_set.photos:
+        photo_paths.extend([photo.file_path, photo.thumbnail_path])
+
+    await db.delete(photo_set)
+    await db.commit()
+
+    if photo_paths:
+        delete_files_counting(*photo_paths)
+
+
+async def delete_photo(db: AsyncSession, photo_id: int) -> None:
+    """删除单张照片（提交成功后清理物理文件），不存在抛 PersonNotFoundError。"""
+    photo = await db.get(PersonPhoto, photo_id)
+    if not photo:
+        raise PersonNotFoundError("照片未找到")
+
+    file_path, thumb_path = photo.file_path, photo.thumbnail_path
+    await db.delete(photo)
+    await db.commit()
+
+    delete_files(file_path, thumb_path)

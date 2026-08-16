@@ -15,7 +15,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:show', value: boolean): void
-  (e: 'saved'): void
+  /** 保存成功，回传保存后的人物对象（新建/编辑均回传） */
+  (e: 'saved', person: Person): void
 }>()
 
 const message = useMessage()
@@ -75,14 +76,11 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    if (props.person) {
-      await updatePerson(props.person.id, form.value)
-      message.success('已更新人物')
-    } else {
-      await createPerson(form.value)
-      message.success('已创建人物')
-    }
-    emit('saved')
+    const saved = props.person
+      ? await updatePerson(props.person.id, form.value)
+      : await createPerson(form.value)
+    message.success(props.person ? '已更新人物' : '已创建人物')
+    emit('saved', saved)
     emit('update:show', false)
   } catch (e: any) {
     message.error(e.response?.data?.detail || '保存失败')

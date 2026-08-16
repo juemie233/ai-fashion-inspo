@@ -65,3 +65,40 @@ export interface PersonListOut {
   page: number
   size: number
 }
+
+/** 人物照片：照片组内的一张照片 */
+export interface PersonPhoto {
+  id: number
+  set_id: number
+  file_path: string
+  thumbnail_path?: string | null
+  sort_order?: number
+  created_at?: string | null
+}
+
+/** 人物照片组：一次从文件夹导入的一组模特写真 */
+export interface PersonPhotoSet {
+  id: number
+  person_id: number
+  name: string
+  photo_count: number
+  cover_path?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** 人物照片组详情（含分页照片列表） */
+export interface PersonPhotoSetDetail extends PersonPhotoSet {
+  photos: PersonPhoto[]
+  total: number
+  page: number
+  size: number
+}
+
+/** 人物照片组分页列表 */
+export interface PersonPhotoSetListOut {
+  items: PersonPhotoSet[]
+  total: number
+  page: number
+  size: number
+}

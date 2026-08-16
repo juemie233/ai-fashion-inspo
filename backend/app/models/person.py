@@ -57,6 +57,11 @@ class Person(Base):
         back_populates="person",
         cascade="all, delete-orphan",
     )
+    photo_sets: Mapped[list["PersonPhotoSet"]] = relationship(
+        "PersonPhotoSet",
+        back_populates="person",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Person(name={self.name}, platform={self.platform})>"
@@ -101,3 +106,61 @@ class InspirationPerson(Base):
             f"<InspirationPerson(inspiration_id={self.inspiration_id}, "
             f"person_id={self.person_id})>"
         )
+
+
+class PersonPhotoSet(Base):
+    """人物照片组：一组属于某个人物的照片（对应一次导入的文件夹）。
+
+    与穿搭素材（Inspiration）分离：模特照片是人物主体的写真资料，
+    不进入素材库、不参与 AI 打标与检索，仅按「人物 → 照片组 → 照片」浏览。
+    """
+
+    __tablename__ = "person_photo_sets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    person_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("persons.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))  # 组名（默认取文件夹名）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    # 关联关系
+    person: Mapped["Person"] = relationship("Person", back_populates="photo_sets")
+    photos: Mapped[list["PersonPhoto"]] = relationship(
+        "PersonPhoto",
+        back_populates="photo_set",
+        cascade="all, delete-orphan",
+        order_by="PersonPhoto.sort_order",
+    )
+
+    def __repr__(self) -> str:
+        return f"<PersonPhotoSet(id={self.id}, name={self.name})>"
+
+
+class PersonPhoto(Base):
+    """人物照片：照片组内的一张照片。"""
+
+    __tablename__ = "person_photos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    set_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("person_photo_sets.id", ondelete="CASCADE"), index=True
+    )
+    file_path: Mapped[str] = mapped_column(Text)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )  # 文件内容 SHA-256（组内去重用）
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)  # 组内排序（按文件名）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    # 关联关系
+    photo_set: Mapped["PersonPhotoSet"] = relationship(
+        "PersonPhotoSet", back_populates="photos"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PersonPhoto(id={self.id}, set_id={self.set_id})>"

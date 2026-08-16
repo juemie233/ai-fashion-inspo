@@ -85,9 +85,11 @@ def validate_media(path: Path, content_type: str | None = None) -> None:
         raise HTTPException(status_code=400, detail="文件不是有效的图片，请检查文件是否损坏")
 
 
-async def _generate_video_thumbnail(video_path: Path) -> str | None:
+async def _generate_video_thumbnail(
+    video_path: Path, thumbs_dir: Path | None = None, thumb_prefix: str = "thumbnails"
+) -> str | None:
     """用 ffmpeg 提取视频首帧作为缩略图，失败返回 None。"""
-    thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
+    thumbs_dir = _ensure_date_dir(thumbs_dir or settings.thumbnails_dir)
     thumb_filename = f"thumb_{video_path.stem}.jpg"
     full_thumb_path = thumbs_dir / thumb_filename
     cmd = [
@@ -121,29 +123,40 @@ async def _generate_video_thumbnail(video_path: Path) -> str | None:
             return None
         if full_thumb_path.exists() and full_thumb_path.stat().st_size > 0:
             today = datetime.now().strftime("%Y-%m")
-            return f"thumbnails/{today}/{thumb_filename}"
+            return f"{thumb_prefix}/{today}/{thumb_filename}"
     except Exception:
         pass
     return None
 
 
-async def generate_thumbnail(image_path: Path) -> str | None:
-    """为图片或视频生成缩略图，返回相对路径。图片用 PIL，视频用 ffmpeg 提取首帧。"""
+async def generate_thumbnail(
+    image_path: Path, thumbs_dir: Path | None = None, thumb_prefix: str = "thumbnails"
+) -> str | None:
+    """为图片或视频生成缩略图，返回相对路径。图片用 PIL，视频用 ffmpeg 提取首帧。
+
+    参数:
+        thumbs_dir: 缩略图输出根目录（缺省 settings.thumbnails_dir）
+        thumb_prefix: 返回相对路径的首段（缺省 "thumbnails"，人物照片用 "person_thumbnails"）
+    """
     if _is_video(image_path):
-        return await _generate_video_thumbnail(image_path)
+        return await _generate_video_thumbnail(image_path, thumbs_dir, thumb_prefix)
 
     # PIL 解码/缩放/保存是阻塞 I/O（大图需数百毫秒），放线程池执行避免卡事件循环
-    return await asyncio.to_thread(_generate_image_thumbnail_sync, image_path)
+    return await asyncio.to_thread(
+        _generate_image_thumbnail_sync, image_path, thumbs_dir, thumb_prefix
+    )
 
 
-def _generate_image_thumbnail_sync(image_path: Path) -> str | None:
+def _generate_image_thumbnail_sync(
+    image_path: Path, thumbs_dir: Path | None = None, thumb_prefix: str = "thumbnails"
+) -> str | None:
     """同步生成图片缩略图（线程池内执行），失败返回 None。"""
     from datetime import datetime
 
     try:
         from PIL import Image
 
-        thumbs_dir = _ensure_date_dir(settings.thumbnails_dir)
+        thumbs_dir = _ensure_date_dir(thumbs_dir or settings.thumbnails_dir)
         img = Image.open(image_path)
         img.thumbnail(settings.thumbnail_size, Image.LANCZOS)
         if img.mode in ("RGBA", "P"):
@@ -152,22 +165,34 @@ def _generate_image_thumbnail_sync(image_path: Path) -> str | None:
         full_thumb_path = thumbs_dir / thumb_filename
         img.save(full_thumb_path, "JPEG", quality=settings.thumbnail_quality)
         today = datetime.now().strftime("%Y-%m")
-        return f"thumbnails/{today}/{thumb_filename}"
+        return f"{thumb_prefix}/{today}/{thumb_filename}"
     except Exception:
         return None
 
 
-async def save_upload(file: UploadFile) -> tuple[str, str | None]:
+async def save_upload(
+    file: UploadFile,
+    images_dir: Path | None = None,
+    thumbs_dir: Path | None = None,
+    image_prefix: str = "images",
+    thumb_prefix: str = "thumbnails",
+) -> tuple[str, str | None]:
     """
     保存上传文件到图片目录，并生成缩略图。
 
     分块流式写入磁盘（避免大文件整体驻留内存），超限或类型校验失败时
     抛 400 并清理已写入的残留文件。
 
+    参数:
+        images_dir: 图片输出根目录（缺省 settings.images_dir）
+        thumbs_dir: 缩略图输出根目录（缺省 settings.thumbnails_dir）
+        image_prefix: 返回相对路径的首段（缺省 "images"，人物照片用 "person_photos"）
+        thumb_prefix: 缩略图相对路径首段（缺省 "thumbnails"）
+
     返回:
         (文件相对路径, 缩略图相对路径或None)
     """
-    images_dir = _ensure_date_dir(settings.images_dir)
+    images_dir = _ensure_date_dir(images_dir or settings.images_dir)
 
     filename = _generate_filename(file.filename or "upload.jpg")
     file_path = images_dir / filename
@@ -201,7 +226,7 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
     # 校验失败会抛 400，此时清理已落盘文件，避免每次失败都残留孤儿文件。
     try:
         await asyncio.to_thread(validate_media, file_path, file.content_type)
-        thumb_path = await generate_thumbnail(file_path)
+        thumb_path = await generate_thumbnail(file_path, thumbs_dir, thumb_prefix)
     except Exception:
         try:
             if file_path.exists():
@@ -211,7 +236,7 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
         raise
 
     today = datetime.now().strftime("%Y-%m")
-    rel_file_path = f"images/{today}/{filename}"
+    rel_file_path = f"{image_prefix}/{today}/{filename}"
 
     return rel_file_path, thumb_path
 

@@ -18,6 +18,12 @@ const router = createRouter({
       meta: { title: '上传素材' },
     },
     {
+      path: '/model-photos',
+      name: 'model-photos',
+      component: () => import('@/views/ModelPhotoUploadView.vue'),
+      meta: { title: '添加模特照片' },
+    },
+    {
       path: '/search',
       name: 'search',
       component: () => import('@/views/SearchView.vue'),
