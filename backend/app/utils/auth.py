@@ -49,6 +49,7 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     # 分析日志批量删除
     ("POST", "/api/ai/history/batch-delete"),
     ("DELETE", "/api/ai/history/failed/all"),
+    ("DELETE", "/api/ai/history/{log_id}"),
     # 采集任务删除
     ("DELETE", "/api/scraper/tasks/{task_id}"),
     ("DELETE", "/api/scraper/tasks"),

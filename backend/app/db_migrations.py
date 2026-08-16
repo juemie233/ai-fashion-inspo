@@ -99,7 +99,16 @@ def compute_schema_version() -> str:
 
 
 def get_db_path() -> Path:
-    """返回 SQLite 数据库文件的绝对路径。"""
+    """返回 SQLite 数据库文件的绝对路径（与 database.run_migrations 同源推导）。
+
+    从 settings.database_url 解析路径，自定义 DATABASE_URL 时 ensure_schema
+    才作用于正确的库文件，而非「storage 旁的默认库」。
+    """
+    from sqlalchemy.engine import make_url
+
+    db_name = make_url(settings.database_url).database
+    if db_name:
+        return Path(db_name)
     return settings.storage_root.parent / "fashion_inspo.db"
 
 

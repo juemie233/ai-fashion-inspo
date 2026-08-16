@@ -31,8 +31,8 @@ _MEMORY_ALERT_PERCENT = 90.0
 
 
 def _logs_dir() -> Path:
-    """返回项目根目录下的日志目录（logs/）。"""
-    return settings.storage_root.parent.parent / "logs"
+    """返回日志目录（storage/logs，采集器与其它组件统一写这里）。"""
+    return settings.storage_root / "logs"
 
 
 async def _probe_frontend() -> dict:

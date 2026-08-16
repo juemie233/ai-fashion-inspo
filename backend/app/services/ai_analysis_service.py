@@ -8,7 +8,7 @@
 路由层（routers/ai_analysis.py）负责解析参数、捕获本模块异常并转为 HTTPException。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,13 +169,17 @@ async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
 
 
 def _parse_iso_dt(value: str) -> datetime:
-    """将 ISO 时间字符串解析为 naive UTC datetime（与 DB 存储口径一致）。"""
+    """将 ISO 时间字符串解析为 naive UTC datetime（与 DB 存储口径一致）。
+
+    带时区的时间会先换算到 UTC 再剥离时区，避免直接 replace 导致筛选窗口
+    偏移（如东八区 23:59 被当作 UTC 23:59 提前 8 小时截断）。
+    """
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is not None:
-        dt = dt.replace(tzinfo=None)
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
 
@@ -319,6 +323,7 @@ async def get_failed_analysis_targets(db: AsyncSession) -> list[tuple[str, str]]
               & (AIAnalysisLog.id == latest_log.c.max_id))
         .where(AIAnalysisLog.error.isnot(None))
         .where(Inspiration.media_type == "image")
+        .where(Inspiration.deleted_at.is_(None))
     )
     return [(r[0], r[1]) for r in result.all()]
 
@@ -335,13 +340,14 @@ async def delete_analysis_logs_batch(db: AsyncSession, log_ids: list[int]) -> in
 async def get_batch_retry_targets(
     db: AsyncSession, log_ids: list[int]
 ) -> list[tuple[str, str]]:
-    """根据日志 ID 查询可重试的图片素材，返回 (素材 ID, 文件路径) 列表（去重）。"""
+    """根据日志 ID 查询可重试的图片素材，返回 (素材 ID, 文件路径) 列表（去重，排除垃圾桶）。"""
     result = await db.execute(
         select(AIAnalysisLog.inspiration_id, Inspiration.file_path)
         .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
         .where(
             AIAnalysisLog.id.in_(log_ids),
             Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
         .distinct()
     )

@@ -283,3 +283,15 @@ async def test_quality_dashboard(client, upload):
     assert data["overview"]["analyzed_count"] == 1
     assert data["overview"]["coverage_percent"] == 100.0
     assert len(data["daily_trends"]) >= 1
+
+
+def test_parse_iso_dt_converts_timezone_to_utc():
+    """带时区的时间应换算到 UTC 再剥离时区，避免筛选窗口偏移。"""
+    from app.services.ai_analysis_service import _parse_iso_dt
+
+    # 东八区 23:59 → UTC 15:59
+    assert _parse_iso_dt("2026-01-01T23:59:00+08:00").hour == 15
+    # Z 后缀（UTC）→ 原样
+    assert _parse_iso_dt("2026-01-01T23:59:00Z").hour == 23
+    # 无时区 → 原样
+    assert _parse_iso_dt("2026-01-01T23:59:00").hour == 23

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -670,7 +671,9 @@ async def batch_add_tags(
     )
     existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
 
-    # 批量插入新关联，跳过已存在的；记录实际变更的素材
+    # 批量插入新关联，跳过已存在的；记录实际变更的素材。
+    # 逐条用 SAVEPOINT flush 并捕获 IntegrityError：并发请求插入同一关联时，
+    # 仅回滚该条 SAVEPOINT 而非整个事务，避免 500。
     total_added = 0
     affected_ids: list[str] = []
     skipped_existing = 0
@@ -682,11 +685,18 @@ async def batch_add_tags(
             if (inspiration_id, tag_id) in existing_pairs:
                 skipped_existing += 1
                 continue
-            db.add(
-                InspirationTag(
-                    inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0
-                )
+            link = InspirationTag(
+                inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0
             )
+            db.add(link)
+            try:
+                async with db.begin_nested():
+                    await db.flush()
+            except IntegrityError:
+                # 并发下同一关联已被其他请求插入：回滚 SAVEPOINT，移除失败对象后跳过
+                db.expunge(link)
+                skipped_existing += 1
+                continue
             added_for_this += 1
         if added_for_this:
             affected_ids.append(inspiration_id)
