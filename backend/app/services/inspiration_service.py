@@ -30,6 +30,7 @@ from app.services.file_service import (
 )
 from app.services.scraper_seen_service import seal_urls
 from app.services.tag_service import get_or_create_tag
+from app.services.audit_service import record_audit_log
 from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
@@ -469,6 +470,34 @@ async def list_inspirations(
     return inspirations, total
 
 
+async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
+    """统计库内实际出现的主色调（hex）及其出现次数，供颜色筛选使用。
+
+    从 dominant_colors 的 JSON 数组字符串解析去重计数，仅统计未删除素材；
+    返回按出现次数降序的颜色列表，避免前端硬编码可能不存在的色板。
+    """
+    import json
+
+    result = await db.execute(
+        select(Inspiration.dominant_colors).where(
+            NOT_DELETED, Inspiration.dominant_colors.isnot(None)
+        )
+    )
+    counter: dict[str, int] = {}
+    for (raw,) in result.all():
+        try:
+            colors = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(colors, list):
+            for c in colors:
+                if isinstance(c, str) and c:
+                    counter[c] = counter.get(c, 0) + 1
+
+    top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+    return [{"color": c, "count": n} for c, n in top]
+
+
 async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。
 
@@ -513,6 +542,15 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     from app.services import vector_store
 
     await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+
+    # 记录审计：删除已拒绝素材属于破坏性批量操作，留痕便于追溯
+    await record_audit_log(
+        db,
+        action="delete_rejected",
+        count=len(rejected),
+        freed_bytes=freed_bytes,
+        detail="物理删除所有质量审核被拒绝的素材",
+    )
 
     return {"deleted": len(rejected), "freed_bytes": freed_bytes}
 
@@ -689,6 +727,16 @@ async def batch_trash_inspirations(
             trashed += 1
         except HTTPException:
             skipped += 1
+
+    # 记录审计：批量移入垃圾桶（软删除）也纳入审计，便于追溯批量整理动作
+    if trashed > 0:
+        await record_audit_log(
+            db,
+            action="batch_trash",
+            count=trashed,
+            detail=f"跳过 {skipped} 个（不存在或已在垃圾桶）" if skipped else None,
+        )
+
     return {"trashed": trashed, "skipped": skipped}
 
 
@@ -998,5 +1046,14 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
     await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+
+    # 记录审计：清空垃圾桶（含定时自动清理）属于不可恢复的破坏性操作
+    await record_audit_log(
+        db,
+        action="empty_trash",
+        count=len(items),
+        freed_bytes=freed_bytes,
+        detail="仅清理过期素材" if only_expired else "清空全部垃圾桶",
+    )
 
     return {"deleted": len(items), "freed_bytes": freed_bytes}

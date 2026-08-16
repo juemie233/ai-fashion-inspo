@@ -34,6 +34,7 @@ _ALL_TABLES = [
     "scraper_schedules",
     "scraper_tasks",
     "task_queue",
+    "audit_logs",
     "inspirations",
     "persons",
     "tags",

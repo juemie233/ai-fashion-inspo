@@ -151,3 +151,31 @@ def test_batch_update(client, upload):
         assert i["source_type"] == "douyin"
         assert i["quality_status"] == "rejected"
         assert i["is_ai_generated"] is True
+
+
+def test_dominant_colors_and_filter(client, upload):
+    """主色调列表接口 + 颜色筛选（dominant_color 子串匹配）。"""
+    import json
+    import sqlite3
+
+    from app.config import settings
+
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    # 上传接口不产出主色调（AI 分析才写），这里直接写库模拟分析结果
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("UPDATE inspirations SET dominant_colors=? WHERE id=?", (json.dumps(["#ff0000"]), a))
+    conn.execute("UPDATE inspirations SET dominant_colors=? WHERE id=?", (json.dumps(["#0000ff"]), b))
+    conn.commit()
+    conn.close()
+
+    # 颜色列表接口：返回库内实际出现的 hex 及计数
+    colors = client.get("/api/inspirations/dominant-colors").json()
+    assert {"color": "#ff0000", "count": 1} in colors
+    assert {"color": "#0000ff", "count": 1} in colors
+
+    # 颜色筛选：只命中该颜色的素材
+    r = client.get("/api/inspirations", params={"dominant_color": "#ff0000"})
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["id"] == a

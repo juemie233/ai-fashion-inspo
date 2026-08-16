@@ -48,3 +48,22 @@ export async function fetchPersonFrequency(limit = 20): Promise<PersonFrequencyI
   })
   return data
 }
+
+/** 操作审计日志条目 */
+export interface AuditLogItem {
+  id: number
+  action: string
+  target_type: string
+  count: number
+  freed_bytes: number
+  detail: string | null
+  created_at: string | null
+}
+
+/** 获取破坏性操作审计日志（按时间倒序） */
+export async function fetchAuditLogs(limit = 50): Promise<AuditLogItem[]> {
+  const { data } = await apiClient.get<AuditLogItem[]>('/admin/audit-logs', {
+    params: { limit },
+  })
+  return data
+}

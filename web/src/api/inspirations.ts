@@ -165,6 +165,20 @@ export async function suggestOutfitTags(id: string) {
   return data
 }
 
+/** 库内主色调统计条目（供颜色筛选） */
+export interface DominantColorItem {
+  color: string
+  count: number
+}
+
+/** 获取库内实际出现的主色调及出现次数 */
+export async function fetchDominantColors(limit = 30): Promise<DominantColorItem[]> {
+  const { data } = await apiClient.get<DominantColorItem[]>('/inspirations/dominant-colors', {
+    params: { limit },
+  })
+  return data
+}
+
 /** 获取灵感列表 */
 export async function fetchInspirations(params: {
   page?: number

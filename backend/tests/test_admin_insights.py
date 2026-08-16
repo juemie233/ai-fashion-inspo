@@ -46,3 +46,28 @@ def test_person_frequency(client, upload, create_person):
     assert len(data) == 1
     assert data[0]["name"] == "高频博主"
     assert data[0]["count"] == 1
+
+
+def test_audit_log_batch_trash(client, upload):
+    """批量移入垃圾桶会写入审计日志。"""
+    a = upload().json()["id"]
+    client.post("/api/inspirations/batch-trash", json={"ids": [a]})
+
+    logs = client.get("/api/admin/audit-logs").json()
+    assert len(logs) == 1
+    assert logs[0]["action"] == "batch_trash"
+    assert logs[0]["count"] == 1
+
+
+def test_audit_log_empty_trash(client, upload):
+    """清空垃圾桶会写入审计日志（含释放空间）。"""
+    a = upload().json()["id"]
+    client.post(f"/api/inspirations/{a}/trash", json={"reason": "不喜欢"})
+    client.delete("/api/inspirations/trash")
+
+    logs = client.get("/api/admin/audit-logs").json()
+    actions = [l["action"] for l in logs]
+    assert "empty_trash" in actions
+    empty = next(l for l in logs if l["action"] == "empty_trash")
+    assert empty["count"] == 1
+    assert empty["freed_bytes"] > 0

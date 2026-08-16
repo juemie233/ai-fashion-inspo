@@ -9,7 +9,12 @@ import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
-import { batchQualityCheck, updateQualityStatus } from '@/api/inspirations'
+import {
+  batchQualityCheck,
+  updateQualityStatus,
+  fetchDominantColors,
+  type DominantColorItem,
+} from '@/api/inspirations'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import {
   buildBrowseParams,
@@ -85,6 +90,20 @@ const tagFilterOptions = computed(() =>
 /** 全部已有标签名（供批量加标签候选，避免重复录入） */
 const allTagNames = computed(() => tagsStore.groups.flatMap((g) => g.tags.map((t) => t.name)))
 
+// ── 颜色筛选 ──
+// 从 URL query 恢复选中的主色调（hex），刷新/详情返回时保持
+const colorFilter = ref<string>((route.query.color as string) || '')
+/** 库内实际出现的主色调（数据驱动，避免硬编码可能不存在的色板） */
+const dominantColors = ref<DominantColorItem[]>([])
+
+async function loadDominantColors() {
+  try {
+    dominantColors.value = await fetchDominantColors(30)
+  } catch {
+    dominantColors.value = []
+  }
+}
+
 // ── 筛选选项配置 ──
 
 const sourceOptions: { label: string; value: SourceFilter }[] = [
@@ -144,6 +163,7 @@ function syncUrl() {
   if (statusFilter.value !== 'all') query.status = statusFilter.value
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
   if (selectedTags.value.length > 0) query.tags = selectedTags.value.join(',')
+  if (colorFilter.value) query.color = colorFilter.value
   if (sortMode.value !== 'newest') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
@@ -160,6 +180,7 @@ function buildParams(page: number) {
       status: statusFilter.value,
       quality: qualityFilter.value,
       tags: selectedTags.value.join(','),
+      color: colorFilter.value,
       sort: sortMode.value,
     },
     page,
@@ -325,8 +346,9 @@ async function handleBatchUpdate(fields: BatchUpdateFields) {
   }
 }
 
-// 初始加载（从 URL 恢复页码）+ 预载标签下拉选项
+// 初始加载（从 URL 恢复页码）+ 预载标签下拉选项与主色调色板
 tagsStore.load()
+loadDominantColors()
 loadPage(currentPage.value)
 </script>
 
@@ -422,6 +444,24 @@ loadPage(currentPage.value)
         />
       </div>
 
+      <n-divider vertical style="height:20px" />
+
+      <!-- 颜色筛选（主色调色板，数据驱动） -->
+      <div v-if="dominantColors.length > 0" class="filter-group color-filter" title="按主色调筛选">
+        <span
+          v-for="c in dominantColors"
+          :key="c.color"
+          class="color-swatch"
+          :class="{ active: colorFilter === c.color }"
+          :style="{ background: c.color }"
+          :title="`${c.color}（${c.count} 个素材）`"
+          @click="colorFilter = colorFilter === c.color ? '' : c.color; onFilterChange()"
+        />
+        <n-button v-if="colorFilter" size="tiny" quaternary @click="colorFilter = ''; onFilterChange()">
+          清除颜色
+        </n-button>
+      </div>
+
       <div style="flex:1" />
 
       <!-- 排序 + 密度 -->
@@ -448,7 +488,7 @@ loadPage(currentPage.value)
     </div>
 
     <!-- 当前筛选提示 -->
-    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || selectedTags.length > 0 || sortMode !== 'newest'" class="active-filters">
+    <div v-if="sourceFilter !== 'all' || mediaFilter !== 'all' || statusFilter !== 'all' || qualityFilter !== 'all' || selectedTags.length > 0 || colorFilter !== '' || sortMode !== 'newest'" class="active-filters">
       当前筛选：
       <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="sourceFilter = 'all'; onFilterChange()">
         {{ sourceOptions.find(o => o.value === sourceFilter)?.label }}
@@ -471,10 +511,13 @@ loadPage(currentPage.value)
       >
         {{ tag }}
       </n-tag>
+      <n-tag v-if="colorFilter" size="tiny" closable @close="colorFilter = ''; onFilterChange()">
+        <span class="color-chip" :style="{ background: colorFilter }" /> {{ colorFilter }}
+      </n-tag>
       <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="sortMode = 'newest'; onSortChange()">
         {{ sortOptions.find(o => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';selectedTags=[];sortMode='newest';onFilterChange()">
+      <n-button size="tiny" text @click="sourceFilter='all';mediaFilter='all';statusFilter='all';qualityFilter='all';selectedTags=[];colorFilter='';sortMode='newest';onFilterChange()">
         清除全部
       </n-button>
     </div>
@@ -574,6 +617,34 @@ loadPage(currentPage.value)
 .filter-group {
   display: flex;
   gap: 4px;
+}
+
+/* 颜色筛选色板 */
+.color-filter {
+  align-items: center;
+}
+.color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  transition: transform 0.1s, border-color 0.1s;
+}
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+.color-swatch.active {
+  border-color: #2080f0;
+}
+.color-chip {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
 .control-group {

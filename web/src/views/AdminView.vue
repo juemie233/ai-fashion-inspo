@@ -24,6 +24,7 @@ import AdminVectorPanel from '@/components/admin/AdminVectorPanel.vue'
 import AdminExportPanel from '@/components/admin/AdminExportPanel.vue'
 import AdminTrendChart from '@/components/admin/AdminTrendChart.vue'
 import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
+import AdminAuditLog from '@/components/admin/AdminAuditLog.vue'
 
 const message = useMessage()
 const router = useRouter()
@@ -311,6 +312,7 @@ onUnmounted(() => {
           <admin-export-panel />
           <admin-trend-chart />
           <admin-person-frequency />
+          <admin-audit-log class="insights-full" />
         </div>
       </n-tab-pane>
     </n-tabs>
@@ -332,6 +334,9 @@ onUnmounted(() => {
   gap: 16px;
 }
 .insights-layout > :first-child {
+  grid-column: 1 / -1;
+}
+.insights-layout :deep(.insights-full) {
   grid-column: 1 / -1;
 }
 

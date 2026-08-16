@@ -21,7 +21,9 @@ from app.models.inspiration import (
 )
 from app.models.person import InspirationPerson, Person
 from app.models.tag import InspirationTag
+from app.models.audit import AuditLog
 from app.services import admin_stats_service
+from app.services.audit_service import record_audit_log
 from app.utils.file_hash import build_hash_map
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -160,6 +162,17 @@ async def cleanup_orphan_files():
             except OSError:
                 pass
 
+    # 记录审计：清理孤立文件属破坏性操作，留痕便于追溯
+    if deleted > 0:
+        async with async_session() as audit_db:
+            await record_audit_log(
+                audit_db,
+                action="cleanup_orphans",
+                count=deleted,
+                freed_bytes=freed_bytes,
+                detail="删除磁盘上有但数据库无记录的孤立媒体文件",
+            )
+
     return {
         "deleted_count": deleted,
         "freed_bytes": freed_bytes,
@@ -212,6 +225,14 @@ async def batch_delete(
 
     from app.services.task_runner import create_batch_delete_task
     task = await create_batch_delete_task(db, ids, label=label)
+
+    # 记录审计：批量删除（物理删除）属破坏性操作
+    await record_audit_log(
+        db,
+        action="batch_delete",
+        count=len(ids),
+        detail=f"任务 #{task.id}，条件={label}",
+    )
 
     return {
         "message": f"已提交批量删除任务 #{task.id}，共 {len(ids)} 个素材",
@@ -413,6 +434,30 @@ async def person_frequency(
             "person_type": r[2],
             "platform": r[3],
             "count": r[4],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/audit-logs")
+async def audit_logs(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """按时间倒序返回破坏性操作审计日志。"""
+    result = await db.execute(
+        select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit)
+    )
+    rows = result.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "action": r.action,
+            "target_type": r.target_type,
+            "count": r.count,
+            "freed_bytes": r.freed_bytes,
+            "detail": r.detail,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in rows
     ]

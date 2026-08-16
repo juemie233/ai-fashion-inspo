@@ -134,6 +134,15 @@ async def list_inspirations(
     )
 
 
+@router.get("/dominant-colors", status_code=status.HTTP_200_OK)
+async def dominant_colors(
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回库内实际出现的主色调（hex）及出现次数，供颜色筛选下拉展示。"""
+    return await inspiration_service.list_dominant_colors(db, limit=limit)
+
+
 @router.delete("/quality-rejected", status_code=status.HTTP_200_OK)
 async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)):
     """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。"""
