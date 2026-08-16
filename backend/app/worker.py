@@ -13,7 +13,7 @@ import logging
 from sqlalchemy import or_, select, update
 from sqlalchemy.exc import OperationalError
 
-from app.database import async_session, init_db, run_migrations
+from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.task import TaskQueue
 from app.services.task_runner import (
@@ -181,8 +181,10 @@ async def main() -> None:
     )
     # 关闭 SQLAlchemy 引擎的 SQL 日志（debug 模式下每秒轮询会刷屏）
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # 注意：worker 不跑 Alembic 迁移，由服务端进程（app.main）统一负责。
+    # 服务端与 worker 并发启动时同时跑 alembic upgrade 会竞争 SQLite 写锁导致死锁；
+    # worker 仅做 create_all（建缺失表）+ ensure_schema（手写补列）兜底。
     await init_db()
-    await asyncio.to_thread(run_migrations)  # Alembic 正式迁移（stamp/upgrade）
     await ensure_schema()  # 手写迁移兜底
     await _reset_stale_tasks()
     await _worker_loop()

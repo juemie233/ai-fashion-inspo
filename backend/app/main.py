@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.database import init_db
+from app.database import init_db, run_migrations
 from app.db_migrations import compute_schema_version, ensure_schema
 from app.routers import (
     inspirations,
@@ -64,7 +64,10 @@ async def lifespan(app: FastAPI):
     # 初始化数据库表（含新增 scraper_seen_urls 墓碑表）
     await init_db()
 
-    # 自动迁移缺失的列（开发期模型变更频繁，避免手动 ALTER TABLE）
+    # Alembic 正式迁移：空库建表 / 历史库 stamp 到 baseline / 已管理库升级增量
+    await asyncio.to_thread(run_migrations)
+
+    # 手写迁移兜底（Alembic 不可用或失败时仍能补齐缺失列）
     await ensure_schema()
 
     # 启动时清理遗留的僵尸任务

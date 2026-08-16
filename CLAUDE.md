@@ -126,6 +126,7 @@ fashion-inspo/
 - 多对多关联表：`{table1}_{table2}` 格式
 - 软删除：仅 `inspirations` 素材使用（垃圾桶，`deleted_at` / `trash_reason`，30 天可恢复）；其余表仍直接物理删除
 - 删除原因枚举：`质量差`/`重复`/`不喜欢`/`隐私`/`其他`（负样本学习只用「质量差」子集保证语义纯净）
+- 数据库迁移：使用 Alembic（`backend/alembic/`）。新增字段/表时先改 ORM 模型，再 `alembic revision --autogenerate -m "描述"` 生成迁移、`alembic upgrade head` 应用；**不再往 `db_migrations.py` 的 `_SCHEMA_COLUMNS` 手写追加**（`ensure_schema` 仅作兼容兜底）
 
 ## 命名约定
 
@@ -183,6 +184,14 @@ fashion-inspo/
 - **≥ 100 行**：自动 `git commit` 并 `git push origin master`。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
+
+## 自动化测试
+
+- 后端：`cd backend && pytest`（集成测试 + 服务单测；使用临时数据库/临时存储，**不触碰真实数据**）
+- 前端：`cd web && npm test`（vitest：纯函数 / composable / store）
+- 测试依赖：`pip install -r backend/requirements-dev.txt`（后端）；vitest 等已含在 `web/package.json` devDependencies
+- **约定**：修改核心链路（软删除/垃圾桶/内容去重/破坏性接口认证/人物模块）或新增破坏性接口时，须在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
+- 误将测试文件写入真实存储目录时，用 `python scripts/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
 
 ## 环境要求
 

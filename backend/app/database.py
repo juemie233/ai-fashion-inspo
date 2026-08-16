@@ -8,6 +8,8 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 # SQLite 异步引擎（check_same_thread=False 允许跨线程访问）
 # 注意：不使用 echo 标志，改用 logging 级别控制 SQL 回显。
 # echo=True 会让 SQLAlchemy 额外安装自己的 handler，导致每条 SQL 打印两份。
@@ -63,3 +65,59 @@ async def init_db():
     """创建所有数据库表。在应用启动时调用。"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+def run_migrations() -> None:
+    """将数据库迁移到 Alembic 管理的 head 版本（同步引擎，启动时调用）。
+
+    幂等策略：
+    - 全新空库：执行 ``upgrade head``，由 baseline 迁移建出全部表
+    - 历史库（有业务表但无 alembic_version，由 create_all 建成）：``stamp head``
+      仅记录版本号，不重建表
+    - 已管理库：``upgrade head`` 应用基线之后的增量迁移
+
+    Alembic 是正式迁移工具（支持 DROP/RENAME/改约束等 create_all 与手写
+    ALTER TABLE 做不到的操作）；``ensure_schema`` 保留作兼容兜底。
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    sync_url = f"sqlite:///{db_path.as_posix()}"
+    backend_dir = Path(__file__).resolve().parent.parent
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", sync_url)
+    # script_location 显式设为绝对路径，避免相对 CWD 解析错误
+    cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+
+    # timeout=10：SQLite 锁竞争（如 server 与 worker 并发启动同时迁移）时最多等 10 秒，
+    # 超时抛 OperationalError 由下方 try-except 降级，避免进程无限卡在迁移上
+    engine_sync = create_engine(sync_url, connect_args={"timeout": 10})
+    with engine_sync.connect() as conn:
+        biz_tables = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' AND name != 'alembic_version'"
+            )
+        ).scalar()
+        has_alembic = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                "AND name='alembic_version'"
+            )
+        ).scalar()
+
+    try:
+        if biz_tables == 0:
+            command.upgrade(cfg, "head")  # 空库：baseline 建表
+        elif not has_alembic:
+            command.stamp(cfg, "head")  # 历史库：标记到 baseline，不重建
+        else:
+            command.upgrade(cfg, "head")  # 已管理库：应用增量
+    except Exception as e:
+        # Alembic 失败（如并发锁竞争超时、脚本缺失）时静默降级，
+        # 由 ensure_schema（手写补列）兜底，不阻断启动
+        logger.warning(f"Alembic 迁移失败（降级到 ensure_schema 兜底）: {e}")

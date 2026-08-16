@@ -21,21 +21,6 @@
 - 备份脚本可定时执行，并保留多份历史快照
 - 破坏性接口不再无提示清空
 
-### Alembic 正式迁移，替换手写 db_migrations
-
-**背景：** requirements.txt 已含 alembic==1.14.1，但 backend/alembic/ 从未初始化；当前靠手写 db_migrations.py 的「PRAGMA table_info + ALTER TABLE ADD COLUMN」，只能加列，无法 DROP/RENAME/改约束/改索引，且依赖 aiosqlite 手写逻辑。随 AI 结构化存储、视频关键帧表等演进，手写迁移会越来越难维护、易产生 schema 漂移。
-
-**目标：**
-
-- 初始化 Alembic，生成对应现有 schema 的 baseline 迁移
-- 新字段/新表改用 Alembic revision，现有 ensure_schema 保留作兼容/兜底
-- 迁移纳入启动流程与文档
-
-**验收标准：**
-
-- `alembic upgrade head` 在全新库上建出与现有 schema 一致的库
-- 新增字段走 alembic revision，不再往 _SCHEMA_COLUMNS 手写追加
-
 ### 服务守护与监控
 
 **背景：** 后端/前端/worker 依赖 SessionStart hook + 手动脚本拉起；worker 是单点、无进程守护、无日志轮转、无资源告警。近期 --reload 崩溃导致后端静默挂掉，暴露「服务挂了无感知、需人工发现」的问题。
