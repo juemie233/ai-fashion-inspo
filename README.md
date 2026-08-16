@@ -93,11 +93,11 @@ chrome_debug_port: int = 9222
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节、语义搜索（文本）、以图搜图（图片上传）、`/` 聚焦与 Esc 退出、复制搜索链接、筛选状态持久化 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
 | **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、下载原图、复制原始链接、标签点击跳搜索 |
-| **采集管理** | CDP零检测采集、Cookie管理(状态/导入)、任务筛选/排序/取消、采集日志查看、内容MD5去重、URL墓碑表防重复、成功率统计、任务状态/表单草稿持久化 |
+| **采集管理** | 小红书 CDP 零检测采集 + 抖音独立浏览器采集、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、快捷键（回车下载/Ctrl+S 保存） |
-| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理） |
-| **浏览器插件** | 一键提取网页穿搭图片 |
+| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空/30 天自动清理） |
+| **浏览器插件** | 一键提取网页穿搭图片；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
 ## 快速启动
 
@@ -185,6 +185,12 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 3. 点击「测试连接」按钮，确认显示"已连接"
 4. 输入关键词，点击「开始采集」
 
+> **抖音采集：** 抖音任务无需 CDP Chrome —— 后端用独立 Playwright 浏览器直接采集网页版搜索结果（反爬严格，结果可能为空，页面已提示推荐浏览器插件）。
+>
+> **排序说明：** 「最新/最热」排序仅小红书搜索模式生效；抖音网页版固定综合排序。
+>
+> **定时采集：** 「采集管理 → 定时采集」页签可创建按间隔（1 小时 ~ 每周）自动执行的计划，由后端调度循环每 30 秒检查触发；小红书定时任务依赖调试 Chrome 保持运行（可在任务表单点击「启动 Chrome」由后端拉起）。
+
 ### 5. 安装浏览器插件
 
 1. Chrome 打开 `chrome://extensions`
@@ -192,7 +198,7 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 3. 点击「加载已解压的扩展程序」
 4. 选择 `browser-extension/` 目录
 
-### 5. 启动移动端（可选）
+### 6. 启动移动端（可选）
 
 ```bash
 cd mobile
@@ -218,7 +224,7 @@ fashion-inspo/
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签 + 别名（含 source 来源标识）
-│   │   │   ├── scraper.py        # 采集任务
+│   │   │   ├── scraper.py        # 采集任务 + 定时采集计划
 │   │   │   └── task.py           # 异步任务队列
 │   │   ├── schemas/              # Pydantic 请求/响应
 │   │   ├── routers/              # API 路由
@@ -246,7 +252,7 @@ fashion-inspo/
 │   │   │   ├── ai_analysis_service.py  # 分析/队列/历史业务逻辑
 │   │   │   ├── inspiration_service.py  # 素材 CRUD 业务逻辑
 │   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
-│   │   │   ├── scraper_service.py    # 采集编排
+│   │   │   ├── scraper_service.py    # 采集编排 + 定时调度 + 插件任务记录
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── task_runners/     # 异步任务执行器（batch_analyze / quality_check / batch_delete / deduplicate）
 │   │   │   ├── vector/           # 向量检索（embedding / store / similarity）
@@ -263,7 +269,7 @@ fashion-inspo/
 │   │       ├── image_utils.py    # 缩略图/颜色提取
 │   │       └── tag_normalizer.py # 标签标准化 + 同义词/别名映射
 │   ├── scripts/                  # 维护脚本
-│   │   ├── run_scraper.py         # CDP 采集执行脚本
+│   │   ├── run_scraper.py         # 采集执行脚本（小红书 CDP / 抖音独立浏览器，断点续采）
 │   │   ├── cleanup_tags.py        # 数据库脏标签清洗
 │   │   ├── validate_tags.py       # 标签合法性校验
 │   │   └── diagnose_scraper.py    # 采集诊断工具
@@ -302,7 +308,7 @@ fashion-inspo/
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
 │   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/完整性检查子组件
-│   │   │   ├── scraper/          # 采集任务/日志/漏斗/结果子组件
+│   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件
 │   │   │   └── upload/           # 上传拖拽/队列/选项子组件
@@ -372,6 +378,7 @@ fashion-inspo/
 │  │  ─────────────────────────────────────────────        │    │
 │  │  Scraper Mgr │ AI Service │ File Service            │    │
 │  │  Tag Service │ Auth Middleware                       │    │
+│  │  定时采集调度 │ 垃圾桶自动清理                        │    │
 │  └──────────────────────────┬──────────────────────────┘    │
 │                              │                               │
 │  ┌──────────────────────────┼──────────────────────────┐    │
@@ -399,8 +406,9 @@ fashion-inspo/
 | `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
-| `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志） |
+| `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志）, resume_token（断点续采进度） |
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
+| `scraper_schedules` | 定时采集计划 | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count |
 | `task_queue` | 异步任务队列 | type（batch_analyze/quality_check/batch_delete/deduplicate）, status（pending/running/success/failed/cancelled）, progress, total/done, result, error, retry_count, next_retry_at |
 
 ### 标签类别体系
@@ -426,7 +434,7 @@ fashion-inspo/
 
 ### 数据库迁移（Alembic）
 
-数据库 schema 由 Alembic 管理（`backend/alembic/`）。后端 / worker 启动时自动调用 `run_migrations()`：全新空库执行 baseline 建表，历史库自动 `stamp` 到 baseline，已管理库执行增量升级；`ensure_schema()`（手写补列）保留作兼容兜底。
+数据库 schema 由 Alembic 管理（`backend/alembic/`）。后端启动时自动调用 `run_migrations()`：全新空库执行 baseline 建表，历史库自动 `stamp` 到 baseline，已管理库执行增量升级；worker 不跑 Alembic（并发启动会竞争 SQLite 写锁），仅做 create_all + `ensure_schema()`（手写补列）兜底。
 
 **新增字段/表时**（不再往 `db_migrations.py` 的 `_SCHEMA_COLUMNS` 手写追加）：
 
@@ -640,18 +648,40 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `POST` | `/api/scraper/tasks` | 创建采集任务（CDP 模式下会预检 Chrome 连接） |
-| `GET` | `/api/scraper/tasks` | 采集任务列表（最多 20 条） |
-| `GET` | `/api/scraper/tasks/{id}` | 任务详情 |
-| `GET` | `/api/scraper/sources` | 可用采集源及状态 |
+| `GET` | `/api/scraper/sources` | 可用采集源、状态与墓碑表计数 |
+| `GET` | `/api/scraper/stats?days=30` | 采集统计（总量/成功率/平台分布/每日趋势） |
 | `GET` | `/api/scraper/cdp-check/{port}` | 检测 Chrome 调试端口是否就绪 |
+| `POST` | `/api/scraper/chrome/start` | 由后端拉起采集专用 Chrome（调试模式） |
+| `POST` | `/api/scraper/chrome/stop` | 停止采集专用 Chrome |
+| `GET` | `/api/scraper/chrome/status` | 采集专用 Chrome 连接状态 |
+| `GET` | `/api/scraper/cookie-status?platform=` | Cookie 状态（存在性/时效/是否有效） |
+| `POST` | `/api/scraper/cookie-import` | 导入平台 Cookie（JSON 数组） |
+| `DELETE` | `/api/scraper/cookie/{platform}` | 删除平台 Cookie |
+| `POST` | `/api/scraper/tasks` | 创建采集任务（支持 `sort_mode`；小红书 CDP 模式预检 Chrome 连接） |
+| `GET` | `/api/scraper/tasks` | 任务列表（`platform`/`status` 筛选 + `sort` 排序 + `page`/`size` 分页，返回 `items`/`total`/`stats`） |
+| `DELETE` | `/api/scraper/tasks` | 清空所有采集任务记录 |
+| `DELETE` | `/api/scraper/tasks/{id}` | 删除单条任务记录（素材保留，关联置空） |
+| `POST` | `/api/scraper/tasks/{id}/cancel` | 取消运行中任务 |
+| `POST` | `/api/scraper/tasks/{id}/retry` | 单任务续采（断点续采） |
 | `POST` | `/api/scraper/tasks/retry-failed` | 重试所有失败任务 |
-| `DELETE` | `/api/scraper/tasks` | 清空所有采集任务 |
-| `DELETE` | `/api/scraper/tasks/{id}` | 删除单个任务记录 |
-| `POST` | `/api/scraper/tasks/{id}/cancel` | 取消运行中任务（发送SIGTERM） |
-| `GET` | `/api/scraper/tasks/{id}/log` | 获取任务日志（最近200行） |
-| `GET` | `/api/scraper/cookie-status` | Cookie 文件状态检查 |
-| `POST` | `/api/scraper/cookie-import` | 导入平台 Cookie |
+| `GET` | `/api/scraper/tasks/{id}/log` | 任务日志（最近 200 行） |
+| `GET` | `/api/scraper/tasks/{id}/results` | 任务产出素材列表（分页） |
+| `POST` | `/api/scraper/tasks/{id}/results/batch-delete` | 批量删除任务产出素材 |
+| `POST` | `/api/scraper/extension-tasks` | 插件采集会话开始（创建任务记录，返回 `task_id`） |
+| `POST` | `/api/scraper/extension-tasks/{id}/complete` | 插件会话结束（汇总发现/入库数量并标记完成） |
+| `GET` | `/api/scraper/schedules` | 定时采集计划列表 |
+| `POST` | `/api/scraper/schedules` | 创建定时计划（平台/关键词/数量/排序/间隔/启用） |
+| `PATCH` | `/api/scraper/schedules/{id}` | 更新计划（启停/改间隔/改关键词等） |
+| `DELETE` | `/api/scraper/schedules/{id}` | 删除定时计划 |
+| `POST` | `/api/scraper/schedules/{id}/run` | 立即执行一次计划 |
+
+> **断点续采：** 失败任务可「续采」，沿用 `resume_token` 中的执行计划（关键词 × 排序）从未完成处继续，已入库图片不重复采集。
+>
+> **排序生效范围：** `sort_mode`（`general`/`latest`/`popular`）仅小红书搜索模式生效；抖音网页版固定综合排序。
+>
+> **定时采集：** 后端调度循环每 30 秒检查一次到期计划并创建任务；停用或改间隔会重算 `next_run_at`，执行失败照常推进并可从任务记录排查。
+>
+> **插件任务记录：** 浏览器插件上传素材时可携带 `scraper_task_id` 表单字段（`POST /api/inspirations`），将素材关联到插件采集任务，供结果预览与统计；插件会话通过 `extension-tasks` 两端点创建/汇总任务记录。
 
 ### 管理后台
 
@@ -666,6 +696,8 @@ alembic upgrade head
 | `POST` | `/api/admin/batch-delete` | 批量删除素材（按ID或条件，异步任务，返回 `task_id`） |
 | `POST` | `/api/admin/batch-unmark-ai` | 批量将疑似 AI 素材重新标记为非 AI（按 ID 列表，同步返回 `updated`） |
 | `POST` | `/api/admin/deduplicate` | 智能去重删除（异步任务，返回 `task_id`） |
+| `GET` | `/api/admin/vector-stats` | 向量化状态统计（素材总数/已有图像与文本向量/缺失数/LanceDB 可用性） |
+| `POST` | `/api/admin/vector-backfill` | 一键为缺失向量的素材创建回填任务（异步，返回 `task_id`；无缺失时返回 `count=0`） |
 
 ### 其他
 
@@ -706,7 +738,7 @@ bash scripts/restart.sh
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
 
-### 后端（pytest，63 用例）
+### 后端（pytest，75 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -718,7 +750,7 @@ pytest
 ```
 
 覆盖范围：
-- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除
+- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物 CRUD/类型区分/关联/风格画像/解除/删除、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合）
 - **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）
 
 ### 前端（vitest，26 用例）
