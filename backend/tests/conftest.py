@@ -25,7 +25,11 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 # 数据库表清空顺序（按外键依赖：先子表后主表）
+# 注意：ai_extracted_tags / ai_quality_review 是 ai_analysis_log 的结构化快照子表，
+# 缺失会导致 AI 分析用例写入的快照跨用例残留，污染 model-stats 等聚合口径
 _ALL_TABLES = [
+    "ai_extracted_tags",
+    "ai_quality_review",
     "inspiration_persons",
     "inspiration_tags",
     "ai_analysis_log",

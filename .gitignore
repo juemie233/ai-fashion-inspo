@@ -48,6 +48,11 @@ logs/
 *.err
 *.out
 
+# 覆盖率（pytest-cov 产物）
+.coverage
+.coverage.*
+htmlcov/
+
 # Prompt version history (runtime state)
 prompt_versions.json
 backend/prompt_versions.json
