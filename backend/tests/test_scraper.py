@@ -35,8 +35,12 @@ class TestExtensionTaskFlow:
         assert r.status_code == 201
         task_id = r.json()["id"]
 
-        # 素材上传关联任务
-        up = upload(scraper_task_id=str(task_id), source_type="browser_extension")
+        # 素材上传关联任务（带来源 URL，用于验证删除后写入采集墓碑）
+        up = upload(
+            scraper_task_id=str(task_id),
+            source_type="browser_extension",
+            source_url="https://www.xiaohongshu.com/explore/abc",
+        )
         assert up.status_code == 201, up.text
 
         # 汇总完成
@@ -69,6 +73,9 @@ class TestExtensionTaskFlow:
         assert body["trashed_count"] == 1
         assert body["skipped"] == 0
         assert client.get(f"/api/scraper/tasks/{task_id}/results").json()["total"] == 0
+
+        # 软删除即写入采集墓碑，采集器后续不再重复采集该 URL
+        assert client.get("/api/scraper/sources").json()["tombstone_count"] == 1
 
         # 素材进入全局垃圾桶，可恢复
         trash = client.get("/api/inspirations/trash").json()

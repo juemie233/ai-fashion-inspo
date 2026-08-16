@@ -14,6 +14,7 @@ from app.models.inspiration import (
     Inspiration,
     NOT_DELETED,
     analysis_log_filter,
+    latest_analysis_log_subquery,
 )
 from app.models.scraper import ScraperSeenURL
 from app.models.tag import Tag, InspirationTag
@@ -104,10 +105,17 @@ async def _query_analysis_counts(db: AsyncSession) -> dict[str, int]:
         .distinct()
     ).subquery()
 
+    # 「失败」按最新一条标签分析日志判定（latest 语义），
+    # 避免「历史失败但最新已成功」的素材既计入已分析又被扣为失败
+    latest_log_sub = latest_analysis_log_subquery()
     failed_ids_subq = (
         select(AIAnalysisLog.inspiration_id)
+        .join(
+            latest_log_sub,
+            (AIAnalysisLog.inspiration_id == latest_log_sub.c.inspiration_id)
+            & (AIAnalysisLog.id == latest_log_sub.c.max_id),
+        )
         .where(
-            analysis_log_filter(),
             AIAnalysisLog.error.isnot(None),
             AIAnalysisLog.error != "",
             AIAnalysisLog.inspiration_id.in_(non_deleted_ids),

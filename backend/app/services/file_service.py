@@ -28,13 +28,18 @@ def _ensure_date_dir(base: Path) -> Path:
     return dir_path
 
 
-def _generate_filename(original_filename: str) -> str:
-    """生成唯一文件名，保留原始扩展名。"""
-    ext = Path(original_filename).suffix.lower() or ".jpg"
-    return f"{uuid.uuid4().hex}{ext}"
-
-
+# 允许落盘的扩展名白名单（防存储型 XSS：多态文件若以 .html/.svg 等命名，
+# 被 /api/files 按扩展名返回后可在前端源执行，窃取 localStorage 中的密钥）
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _generate_filename(original_filename: str) -> str:
+    """生成唯一文件名，扩展名仅允许图片/视频白名单（其余回退 .jpg）。"""
+    ext = Path(original_filename or "").suffix.lower()
+    if ext not in _IMAGE_EXTS and ext not in _VIDEO_EXTS:
+        ext = ".jpg"
+    return f"{uuid.uuid4().hex}{ext}"
 
 
 def _is_video(path: Path) -> bool:

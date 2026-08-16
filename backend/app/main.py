@@ -83,6 +83,19 @@ async def _scraper_schedule_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动与关闭事件处理。"""
+    # 安全护栏：绑定非回环地址（0.0.0.0 / 局域网 IP）时，破坏性接口（物理删除、
+    # 清空垃圾桶、数据重置等）在未配置 API_KEY 的情况下会对所有能访问该地址的
+    # 客户端无鉴权开放。此处仅强烈告警而非强制中断，避免破坏现有部署；生产或
+    # 局域网暴露场景务必设置 API_KEY。
+    _loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+    if settings.host not in _loopback_hosts and not settings.api_key:
+        logger.warning(
+            "安全警告：当前绑定非回环地址 %s 但未配置 API_KEY，破坏性接口（物理删除/"
+            "清空垃圾桶/数据重置等）将无鉴权开放。请运行 scripts/generate_api_key.py "
+            "生成密钥并写入 backend/.env，或把 host 改回 127.0.0.1（仅本机访问）。",
+            settings.host,
+        )
+
     # 启动：确保存储目录存在
     for dir_path in settings.storage_dirs.values():
         os.makedirs(dir_path, exist_ok=True)
@@ -109,6 +122,7 @@ async def lifespan(app: FastAPI):
             .values(status="failed", error="进程异常终止：后端服务重启导致采集中断")
         )
         if result.rowcount:
+            await db.commit()
             print(f"已清理 {result.rowcount} 个僵尸采集任务")
 
     # 导入预设标签
@@ -117,6 +131,7 @@ async def lifespan(app: FastAPI):
     async with async_session() as db:
         added = await seed_tags(db)
         if added:
+            await db.commit()
             print(f"已导入 {added} 个预设标签")
 
     # 垃圾桶：启动时立即清理一次超过保留期的过期素材，并拉起周期性自动清理任务

@@ -206,6 +206,61 @@ async def test_delete_failed_logs(client, upload):
     assert data["items"][0]["status"] == "success"
 
 
+async def test_delete_failed_logs_preserves_quality_check(client, upload):
+    """删除失败日志只清标签分析，保留质量审核（quality_check）失败日志。"""
+    from sqlalchemy import func, select
+
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error="无法连接 Ollama")  # 标签分析失败
+    async with async_session() as db:
+        db.add(
+            AIAnalysisLog(
+                inspiration_id=insp_id,
+                model_name="qwen3-vl:8b-instruct",
+                log_type="quality_check",
+                error="审核失败",
+            )
+        )
+        await db.commit()
+
+    r = client.delete("/api/ai/history/failed/all")
+    assert r.json()["count"] == 1  # 只删标签分析失败日志
+
+    async with async_session() as db:
+        qc = (
+            await db.execute(
+                select(func.count())
+                .select_from(AIAnalysisLog)
+                .where(AIAnalysisLog.log_type == "quality_check")
+            )
+        ).scalar()
+    assert qc == 1  # 质量审核日志保留
+
+
+async def test_analysis_status_filter_uses_latest_log(client, upload):
+    """analysis_status 筛选基于最新日志：历史失败但最新成功的素材不属 error。"""
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error="无法连接 Ollama")  # 历史失败
+    await _add_log(insp_id, error=None)  # 最新成功
+
+    err = client.get("/api/inspirations", params={"analysis_status": "error"}).json()
+    assert err["total"] == 0
+    done = client.get("/api/inspirations", params={"analysis_status": "done"}).json()
+    assert done["total"] == 1
+    assert done["items"][0]["id"] == insp_id
+
+
+async def test_batch_delete_analysis_failed_uses_latest(client, upload):
+    """「删除分析失败素材」按最新日志判定：最新已成功的素材不被误删。"""
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error="无法连接 Ollama")  # 历史失败
+    await _add_log(insp_id, error=None)  # 最新成功
+
+    r = client.post("/api/admin/batch-delete", json={"condition": "analysis_failed"})
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 0  # 最新成功，不应被选中
+
+
 def test_queue_pause_resume(client):
     """分析队列暂停/恢复。"""
     assert client.post("/api/ai/queue/pause").json()["paused"] is True

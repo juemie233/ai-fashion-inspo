@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.sqlite import JSON
@@ -29,8 +30,8 @@ class Inspiration(Base):
 
     __table_args__ = (
         # 部分唯一索引：仅在未删除素材（deleted_at IS NULL）之间保证平台 ID 唯一。
-        # 垃圾桶素材释放该 ID，允许「删除后重新采集」，与内容哈希去重的
-        # 「垃圾桶素材可重新入库」语义对齐；同时充当查重查询的查找索引。
+        # 垃圾桶素材释放该 ID，允许通过上传等非采集路径重新入库（采集路径由
+        # URL 墓碑拦截，不参与重新采集）；同时充当查重查询的查找索引。
         Index(
             "ix_inspirations_source_platform_id",
             "source_platform_id",
@@ -218,3 +219,21 @@ def analysis_log_filter():
     统一按 analysis 处理。
     """
     return func.coalesce(AIAnalysisLog.log_type, "analysis") == "analysis"
+
+
+def latest_analysis_log_subquery():
+    """返回「每个素材最新一条标签分析日志」的子查询（inspiration_id, max_id）。
+
+    分析状态的判定（done/error）应基于**最新一条**日志，而非「任意一条」：
+    旧失败日志不应覆盖后续成功（反之亦然）。调用方 join 本子查询并按
+    ``AIAnalysisLog.id == max_id`` 取最新记录后判断 error。
+    """
+    return (
+        select(
+            AIAnalysisLog.inspiration_id,
+            func.max(AIAnalysisLog.id).label("max_id"),
+        )
+        .where(analysis_log_filter())
+        .group_by(AIAnalysisLog.inspiration_id)
+        .subquery()
+    )

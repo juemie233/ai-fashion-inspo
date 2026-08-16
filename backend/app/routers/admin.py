@@ -19,7 +19,7 @@ from app.models.inspiration import (
     AIAnalysisLog,
     Inspiration,
     NOT_DELETED,
-    analysis_log_filter,
+    latest_analysis_log_subquery,
     utcnow,
 )
 from app.models.person import InspirationPerson, Person
@@ -214,11 +214,17 @@ async def batch_delete(
         )
         ids = [r[0] for r in result.all()]
     elif condition == "analysis_failed":
-        # 查询有分析失败日志的素材 ID（排除垃圾桶）
+        # 查询「最新一条标签分析日志失败」的素材 ID（排除垃圾桶）。
+        # 用 latest 语义：历史失败过但最新已成功的素材不应被误删。
+        latest = latest_analysis_log_subquery()
         result = await db.execute(
             select(AIAnalysisLog.inspiration_id)
+            .join(
+                latest,
+                (AIAnalysisLog.inspiration_id == latest.c.inspiration_id)
+                & (AIAnalysisLog.id == latest.c.max_id),
+            )
             .where(
-                analysis_log_filter(),
                 AIAnalysisLog.error.isnot(None),
                 AIAnalysisLog.error != "",
                 AIAnalysisLog.inspiration_id.in_(select(Inspiration.id).where(NOT_DELETED)),

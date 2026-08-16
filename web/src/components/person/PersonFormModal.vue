@@ -34,6 +34,19 @@ const form = ref<PersonForm>({
 
 const rules: FormRules = {
   name: { required: true, message: '请输入人物名称', trigger: ['input', 'blur'] },
+  profile_url: {
+    trigger: ['input', 'blur'],
+    validator: (_rule, value: string | null) => {
+      if (!value) return true
+      try {
+        const p = new URL(value)
+        if (p.protocol === 'http:' || p.protocol === 'https:') return true
+      } catch {
+        /* 非法 URL 落入下方错误 */
+      }
+      return new Error('主页链接仅支持 http/https 协议')
+    },
+  },
 }
 
 // 打开对话框时初始化表单：编辑模式回填，新建模式重置

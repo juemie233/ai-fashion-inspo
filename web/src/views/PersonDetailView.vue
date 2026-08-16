@@ -31,6 +31,18 @@ const personId = computed(() => Number(route.params.id))
 const detail = ref<PersonDetail | null>(null)
 const loading = ref(true)
 
+/** 主页链接是否安全可点击（仅允许 http/https，杜绝 javascript:/data: 注入） */
+const isProfileUrlSafe = computed(() => {
+  const url = detail.value?.profile_url
+  if (!url) return false
+  try {
+    const p = new URL(url)
+    return p.protocol === 'http:' || p.protocol === 'https:'
+  } catch {
+    return false
+  }
+})
+
 // ── 素材列表状态 ──
 const items = ref<PersonInspiration[]>([])
 const total = ref(0)
@@ -171,7 +183,8 @@ watch(personId, () => {
                 <n-text depth="2">{{ detail.bio }}</n-text>
               </div>
               <div v-if="detail.profile_url" class="bio-line">
-                <a :href="detail.profile_url" target="_blank" rel="noopener">主页链接 ↗</a>
+                <a v-if="isProfileUrlSafe" :href="detail.profile_url" target="_blank" rel="noopener noreferrer">主页链接 ↗</a>
+                <n-text v-else depth="3">主页链接：{{ detail.profile_url }}</n-text>
               </div>
             </div>
 

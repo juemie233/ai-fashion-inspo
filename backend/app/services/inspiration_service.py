@@ -17,6 +17,7 @@ from app.models.inspiration import (
     Inspiration,
     NOT_DELETED,
     analysis_log_filter,
+    latest_analysis_log_subquery,
     utcnow,
 )
 from app.models.person import InspirationPerson
@@ -368,23 +369,24 @@ async def list_inspirations(
                 )
             )
 
-    # 分析状态筛选
-    if analysis_status == "done":
-        query = query.where(
-            Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    analysis_log_filter(),
-                    AIAnalysisLog.error.is_(None),
-                ).distinct()
-            )
+    # 分析状态筛选（done/error 基于「最新一条」标签分析日志，与卡片状态一致）
+    if analysis_status in ("done", "error"):
+        latest = latest_analysis_log_subquery()
+        error_cond = (
+            (AIAnalysisLog.error.isnot(None)) & (AIAnalysisLog.error != "")
+            if analysis_status == "error"
+            else AIAnalysisLog.error.is_(None)
         )
-    elif analysis_status == "error":
         query = query.where(
             Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    analysis_log_filter(),
-                    AIAnalysisLog.error.isnot(None),
-                ).distinct()
+                select(AIAnalysisLog.inspiration_id)
+                .join(
+                    latest,
+                    (AIAnalysisLog.inspiration_id == latest.c.inspiration_id)
+                    & (AIAnalysisLog.id == latest.c.max_id),
+                )
+                .where(error_cond)
+                .distinct()
             )
         )
     elif analysis_status == "pending":
@@ -877,16 +879,17 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     # 写入墓碑表（防止重复采集）
     await seal_urls(db, [inspiration.source_url])
 
-    # 先删除数据库记录并 flush（提交由外层事务完成），成功后再删磁盘文件，
-    # 避免「文件已删但事务失败」产生指向不存在文件的记录
+    # 先删除数据库记录并提交（与 purge_trash / batch_delete 等路径一致：DB
+    # 落库成功后再删磁盘文件/向量），避免「文件已删但事务提交失败」产生
+    # 指向不存在文件的悬空记录
     await db.delete(inspiration)
-    await db.flush()
+    await db.commit()
 
-    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
+    # 提交成功后同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
     if vector_store.is_lancedb_available():
         await vector_store.delete_inspiration_vectors(inspiration.id)
 
-    # 提交成功后物理删除文件（删除失败仅记日志，不抛异常）
+    # 物理删除文件（删除失败仅记日志，不抛异常）
     delete_files(inspiration.file_path, inspiration.thumbnail_path)
 
 
@@ -907,7 +910,8 @@ async def trash_inspiration(
     """将素材移入垃圾桶（软删除）：文件移入 trash/，标记 deleted_at 与 trash_reason。
 
     向量保留不删除（阶段 2 负样本学习依赖垃圾桶素材的 CLIP 图像向量），
-    恢复时无需重建、清空时才删除向量。
+    恢复时无需重建、清空时才删除向量。软删除即写入来源 URL 墓碑，采集器
+    后续遇到该 URL 会直接跳过，不再重复采集。
     """
     result = await db.execute(
         select(Inspiration)
@@ -926,6 +930,8 @@ async def trash_inspiration(
     # 回滚/失败」导致 DB 仍指向原路径的悬空记录（与 delete_inspiration 的顺序一致）。
     inspiration.deleted_at = utcnow()
     inspiration.trash_reason = resolved
+    # 进垃圾桶视为「垃圾素材」，立即写入来源 URL 墓碑，防止采集器重复采集
+    await seal_urls(db, [inspiration.source_url])
     await db.commit()
 
     # 移动文件失败时记录日志但不回滚软删除：文件仍在原目录，DB 路径未变仍指向

@@ -74,9 +74,9 @@ export interface AnalysisLogOut {
   created_at: string
 }
 
-/** 获取图片/缩略图的完整 URL */
+/** 获取图片/缩略图的完整 URL（逐段编码，兼容含空格/#/?/中文的文件名） */
 export function getFileUrl(relativePath: string): string {
-  return `/api/files/${relativePath}`
+  return `/api/files/${relativePath.split('/').map(encodeURIComponent).join('/')}`
 }
 
 /** 手动给素材关联标签（按名称查找/创建） */

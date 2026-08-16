@@ -1,9 +1,9 @@
 """采集已见 URL 墓碑服务：防止被删除素材被采集器重复入库。
 
-「墓碑」即 scraper_seen_urls 表中的记录：素材被物理删除（垃圾桶清空、
-去重、批量删除等）时写入其来源 URL，采集器在去重检查时会跳过这些 URL。
-此前该插入逻辑在 inspiration_service / scraper_service / task_runners
-等 6 处重复实现，现统一收敛到本模块。
+「墓碑」即 scraper_seen_urls 表中的记录：素材被删除（软删除进垃圾桶、
+物理删除、去重、批量删除等）时写入其来源 URL，采集器在去重检查时会跳过
+这些 URL。此前该插入逻辑在 inspiration_service / scraper_service /
+task_runners 等 6 处重复实现，现统一收敛到本模块。
 """
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert

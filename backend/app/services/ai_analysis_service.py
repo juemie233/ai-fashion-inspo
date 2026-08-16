@@ -360,9 +360,12 @@ async def get_history_model_names(db: AsyncSession) -> list[str]:
 
 
 async def delete_failed_logs(db: AsyncSession) -> int:
-    """删除所有失败的分析日志，返回删除数量。"""
+    """删除所有失败的标签分析日志（排除质量审核日志），返回删除数量。"""
     result = await db.execute(
-        delete(AIAnalysisLog).where(AIAnalysisLog.error.isnot(None))
+        delete(AIAnalysisLog).where(
+            _analysis_log_filter(),
+            AIAnalysisLog.error.isnot(None),
+        )
     )
     count = result.rowcount
     if count:

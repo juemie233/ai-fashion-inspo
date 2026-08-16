@@ -81,3 +81,21 @@ def test_purge_only_expired(client, upload):
 
 def test_restore_missing(client):
     assert client.post("/api/inspirations/no-such/restore").status_code == 404
+
+
+def test_trash_writes_tombstone(client, upload):
+    """移入垃圾桶立即写入来源 URL 墓碑，防止采集器重复采集。"""
+    url = "https://www.xiaohongshu.com/explore/abc123"
+    insp_id = upload(source_url=url).json()["id"]
+
+    client.post(f"/api/inspirations/{insp_id}/trash")
+
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM scraper_seen_urls WHERE source_url = ?", (url,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1

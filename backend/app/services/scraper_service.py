@@ -29,6 +29,7 @@ from app.schemas.scraper import (
 from app.services.audit_service import record_audit_log
 from app.services.file_service import move_to_trash
 from app.services.inspiration_service import _resolve_trash_reason
+from app.services.scraper_seen_service import seal_urls
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -980,9 +981,8 @@ async def batch_delete_task_results(
     请求体: {"ids": ["id1", "id2", ...], "reason": "不喜欢"}
 
     与素材库单条软删除语义一致：标记 deleted_at / trash_reason、文件移入
-    storage/trash/、向量保留（负样本学习依赖垃圾桶素材向量）。URL 墓碑此时
-    不写入——素材仍在垃圾桶中可恢复，仅当垃圾桶清空（purge_trash）时统一
-    封存 URL，避免「恢复后无法重新采集」的偏差。
+    storage/trash/、向量保留（负样本学习依赖垃圾桶素材向量）。软删除即写入
+    来源 URL 墓碑，采集器后续遇到该 URL 会直接跳过，不再重复采集。
     """
     if not ids:
         raise HTTPException(status_code=400, detail="请提供要删除的素材 ID 列表")
@@ -1006,9 +1006,10 @@ async def batch_delete_task_results(
         insp.trash_reason = _resolve_trash_reason(reason, insp)
         trashed_items.append(insp)
 
-    # 先提交软删除标记（DB 落库），提交成功后再移动文件，避免「文件已移走但
-    # 事务回滚/失败」导致 DB 仍指向原路径的悬空记录（与 trash_inspiration 一致）
+    # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，避免
+    # 「文件已移走但事务回滚/失败」导致 DB 仍指向原路径的悬空记录
     if trashed_items:
+        await seal_urls(db, [insp.source_url for insp in trashed_items if insp.source_url])
         await db.commit()
 
     # 移动文件到垃圾桶目录；失败仅记日志不阻断软删除（恢复时按 DB 路径自愈）

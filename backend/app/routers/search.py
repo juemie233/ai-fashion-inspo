@@ -11,7 +11,12 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
+from app.models.inspiration import (
+    AIAnalysisLog,
+    Inspiration,
+    analysis_log_filter,
+    latest_analysis_log_subquery,
+)
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, InspirationOut
 from app.schemas.search import (
@@ -109,23 +114,24 @@ async def search_inspirations(
         ]
         conditions.append(or_(*kw_conds))
 
-    # 分析状态
-    if analysis_status == "done":
-        conditions.append(
-            Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    analysis_log_filter(),
-                    AIAnalysisLog.error.is_(None),
-                ).distinct()
-            )
+    # 分析状态（done/error 基于「最新一条」标签分析日志，与卡片状态一致）
+    if analysis_status in ("done", "error"):
+        latest = latest_analysis_log_subquery()
+        error_cond = (
+            (AIAnalysisLog.error.isnot(None)) & (AIAnalysisLog.error != "")
+            if analysis_status == "error"
+            else AIAnalysisLog.error.is_(None)
         )
-    elif analysis_status == "error":
         conditions.append(
             Inspiration.id.in_(
-                select(AIAnalysisLog.inspiration_id).where(
-                    analysis_log_filter(),
-                    AIAnalysisLog.error.isnot(None),
-                ).distinct()
+                select(AIAnalysisLog.inspiration_id)
+                .join(
+                    latest,
+                    (AIAnalysisLog.inspiration_id == latest.c.inspiration_id)
+                    & (AIAnalysisLog.id == latest.c.max_id),
+                )
+                .where(error_cond)
+                .distinct()
             )
         )
     elif analysis_status == "pending":

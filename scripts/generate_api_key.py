@@ -12,7 +12,7 @@ import secrets
 import sys
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
 ENV_FILE = BACKEND_DIR / ".env"
 
 

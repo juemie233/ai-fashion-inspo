@@ -7,6 +7,15 @@ from app.config import settings
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
+# 扩展名 → 强制 Content-Type 白名单：只允许图片/视频媒体，杜绝把误入库的
+# HTML/SVG 等按 text/html 返回（存储型 XSS 的第二道防线，配合 nosniff）。
+_MEDIA_EXT_TO_TYPE = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif",
+    ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska", ".webm": "video/webm",
+}
+
 
 @router.get("/{file_path:path}")
 async def serve_file(file_path: str):
@@ -26,8 +35,14 @@ async def serve_file(file_path: str):
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status_code=404, detail="文件未找到")
 
-    # nosniff：防止浏览器将非图片文件（如误入库的 HTML/SVG）按 HTML/SVG 渲染执行
+    # 只允许提供白名单内的图片/视频扩展名，并强制对应 MIME 类型
+    media_type = _MEDIA_EXT_TO_TYPE.get(full_path.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="文件未找到")
+
+    # nosniff：防止浏览器按内容嗅探，把非图片文件当 HTML/SVG 渲染执行
     return FileResponse(
         full_path,
+        media_type=media_type,
         headers={"X-Content-Type-Options": "nosniff"},
     )
