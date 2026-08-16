@@ -18,6 +18,7 @@ from app.schemas.inspiration import (
     InspirationTagOut,
     MoveToTrashRequest,
     TagOut,
+    analysis_status_from_logs,
     inspiration_to_out,
 )
 from app.schemas.person import PersonBriefOut, PersonLinkRequest
@@ -242,14 +243,8 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         ],
     )
 
-    # 推断分析状态
-    logs = inspiration.analysis_logs
-    if not logs:
-        detail.analysis_status = "none"
-    elif any(log.error for log in logs):
-        detail.analysis_status = "error"
-    else:
-        detail.analysis_status = "done"
+    # 推断分析状态：仅看最新一次标签分析日志（旧失败日志不覆盖后续成功）
+    detail.analysis_status = analysis_status_from_logs(inspiration.analysis_logs)
 
     return detail
 

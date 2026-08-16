@@ -107,6 +107,42 @@ async def test_analysis_queue_stats(client, upload):
     assert data["unanalyzed"] == 0
 
 
+async def test_analysis_status_latest_success_wins(client, upload):
+    """最新一次标签分析成功时，素材状态应为 done（残留失败日志不覆盖）。"""
+    insp_id = upload().json()["id"]
+    await _add_log(insp_id, error="无法连接 Ollama 服务，请确认 Ollama 已启动")
+    await _add_log(insp_id, error=None)
+
+    detail = client.get(f"/api/inspirations/{insp_id}").json()
+    assert detail["analysis_status"] == "done"
+
+
+async def test_history_failed_log_shows_no_tags(client, upload):
+    """失败日志的标签列应为空，不应误展示素材当前（历史成功留下的）标签。"""
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["法式"]})
+    failed_id = await _add_log(insp_id, error="无法连接 Ollama 服务，请确认 Ollama 已启动")
+
+    data = client.get("/api/ai/history").json()
+    failed_item = next(it for it in data["items"] if it["id"] == failed_id)
+    assert failed_item["status"] == "error"
+    assert failed_item["tags"] == []
+
+
+async def test_history_success_log_uses_own_tags(client, upload):
+    """成功日志的标签列展示「本次分析」提取的标签，而非素材当前全量标签。"""
+    insp_id = upload().json()["id"]
+    # 素材当前有另一条手动标签（不应出现在分析日志的标签列）
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["白色"]})
+    # 成功分析提取了「法式」（无结构化快照，回退解析 raw_response）
+    log_id = await _add_log(insp_id, raw='{"style": ["法式"]}')
+
+    data = client.get("/api/ai/history").json()
+    item = next(it for it in data["items"] if it["id"] == log_id)
+    assert item["status"] == "success"
+    assert {t["name"] for t in item["tags"]} == {"法式"}
+
+
 async def test_analysis_comparison(client, upload):
     """结果对比：两次分析的标签差异（新增/共同）。"""
     insp_id = upload().json()["id"]

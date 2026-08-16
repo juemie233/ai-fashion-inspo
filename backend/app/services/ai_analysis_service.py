@@ -238,22 +238,36 @@ async def get_analysis_history(
         )
         insp_map = {i.id: i for i in insp_result.scalars().all()}
 
-    # 批量预加载标签
-    tag_map: dict[str, list[dict]] = {}
-    if insp_ids:
-        tag_result = await db.execute(
-            select(InspirationTag.inspiration_id, Tag.name, Tag.category)
-            .join(Tag, InspirationTag.tag_id == Tag.id)
-            .where(InspirationTag.inspiration_id.in_(insp_ids))
+    # 批量预加载各日志「本次提取的标签」结构化快照（而非素材当前全量标签），
+    # 避免失败日志误展示历史成功分析留下的标签
+    log_ids = [log.id for log in logs]
+    snap_map: dict[int, list[dict]] = {}
+    if log_ids:
+        snap_result = await db.execute(
+            select(AIAnalysisTag.log_id, Tag.name, Tag.category)
+            .join(Tag, AIAnalysisTag.tag_id == Tag.id)
+            .where(AIAnalysisTag.log_id.in_(log_ids))
         )
-        for insp_id, tag_name, tag_cat in tag_result:
-            tag_map.setdefault(insp_id, []).append(
+        for log_id, tag_name, tag_cat in snap_result:
+            snap_map.setdefault(log_id, []).append(
                 {"name": tag_name, "category": tag_cat}
             )
 
     items = []
     for log in logs:
         insp = insp_map.get(log.inspiration_id)
+        # 标签列只展示「本条日志」提取的标签：结构化快照优先；
+        # 无快照的成功日志回退到解析 raw_response（兼容结构化存储上线前的旧数据）
+        log_tags = snap_map.get(log.id, [])
+        if not log_tags and not log.error and log.raw_response:
+            from app.services.ai_parser import parse_analysis_response
+
+            parsed = parse_analysis_response(log.raw_response)
+            seen: set[str] = set()
+            for name, category, _conf in iter_extracted_tags(parsed):
+                if name not in seen:
+                    seen.add(name)
+                    log_tags.append({"name": name, "category": category})
         items.append({
             "id": log.id,
             "inspiration_id": log.inspiration_id,
@@ -265,7 +279,7 @@ async def get_analysis_history(
             "error": log.error,
             "status": "error" if log.error else "success",
             "created_at": _fmt_utc(log.created_at),
-            "tags": tag_map.get(log.inspiration_id, []),
+            "tags": log_tags,
         })
 
     return {"items": items, "total": total, "page": page, "size": size}

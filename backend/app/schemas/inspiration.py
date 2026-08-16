@@ -169,6 +169,20 @@ class AnalysisLogOut(BaseModel):
         return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+def analysis_status_from_logs(logs: list) -> str:
+    """从分析日志推断素材的分析状态（仅看标签分析，取最新一条）。
+
+    质量审核（quality_check）日志不产出标签、不参与判定；旧失败日志不影响
+    后续成功的判定——只要最新一次标签分析成功即视为「已完成」，避免「重试
+    成功后仍因残留失败日志显示为错误」。
+    """
+    analysis_logs = [log for log in logs if (log.log_type or "analysis") == "analysis"]
+    if not analysis_logs:
+        return "none"
+    latest = max(analysis_logs, key=lambda log: log.id)
+    return "error" if latest.error else "done"
+
+
 def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
     """将 ORM 素材对象转换为列表/详情响应模型（各路由共用）。
 
@@ -183,13 +197,8 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         for t in inspiration.tags
     ]
 
-    # 推断分析状态：无日志=未分析；任一日志失败=失败；否则=已完成
-    if not inspiration.analysis_logs:
-        status = "none"
-    elif any(log.error for log in inspiration.analysis_logs):
-        status = "error"
-    else:
-        status = "done"
+    # 推断分析状态：仅看最新一次标签分析日志（旧失败日志不覆盖后续成功）
+    status = analysis_status_from_logs(inspiration.analysis_logs)
 
     return InspirationOut(
         id=inspiration.id,
