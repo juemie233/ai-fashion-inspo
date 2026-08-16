@@ -20,6 +20,11 @@ export function intervalLabel(minutes: number): string {
   return INTERVAL_OPTIONS.find(o => o.value === minutes)?.label || `${minutes} 分钟`
 }
 
+/** 排序方式显示文案 */
+export const SORT_MODE_LABELS: Record<string, string> = {
+  general: '综合', latest: '最新', popular: '最热',
+}
+
 /** 定时采集页签状态与操作，由 ScraperScheduleTab 消费。 */
 export function useScraperSchedules() {
   const message = useMessage()
@@ -27,6 +32,7 @@ export function useScraperSchedules() {
   const schedules = ref<ScraperSchedule[]>([])
   const loading = ref(false)
   const creating = ref(false)
+  const updatingId = ref<number | null>(null)
   const togglingId = ref<number | null>(null)
   const runningId = ref<number | null>(null)
   const deletingId = ref<number | null>(null)
@@ -68,6 +74,29 @@ export function useScraperSchedules() {
     } catch (e: any) {
       message.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '创建失败')
     } finally { creating.value = false }
+  }
+
+  /** 更新计划（关键词/数量/排序/间隔），成功返回 true 供调用方关闭弹窗 */
+  async function updateSchedule(
+    id: number,
+    payload: { keywords: string; max_count: number; sort_mode: string | null; interval_minutes: number },
+  ): Promise<boolean> {
+    try {
+      updatingId.value = id
+      const body: any = {
+        keywords: payload.keywords.split(',').map((k: string) => k.trim()).filter(Boolean),
+        max_count: payload.max_count,
+        interval_minutes: payload.interval_minutes,
+        sort_mode: payload.sort_mode,
+      }
+      await apiClient.patch(`/scraper/schedules/${id}`, body)
+      message.success('定时计划已更新')
+      loadSchedules()
+      return true
+    } catch (e: any) {
+      message.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '更新失败')
+      return false
+    } finally { updatingId.value = null }
   }
 
   /** 启用/停用计划 */
@@ -115,8 +144,8 @@ export function useScraperSchedules() {
   }
 
   return {
-    schedules, loading, creating, togglingId, runningId, deletingId,
+    schedules, loading, creating, updatingId, togglingId, runningId, deletingId,
     formPlatform, formKeywords, formMaxCount, formSortMode, formInterval, formEnabled,
-    loadSchedules, createSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
+    loadSchedules, createSchedule, updateSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
   }
 }

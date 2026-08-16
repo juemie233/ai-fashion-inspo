@@ -489,7 +489,8 @@ async def update_schedule(db: AsyncSession, schedule_id: int, data: ScraperSched
         if sched.platform == "xiaohongshu":
             if data.sort_mode not in _SCHEDULE_SORT_MODES:
                 raise HTTPException(status_code=400, detail=f"不支持的排序方式: {data.sort_mode}")
-            sched.sort_mode = data.sort_mode
+            # 「综合」与创建路径一致归一化为 None，避免 'general' 字符串与 NULL 并存
+            sched.sort_mode = None if data.sort_mode == "general" else data.sort_mode
     interval_changed = data.interval_minutes is not None and data.interval_minutes != sched.interval_minutes
     if data.interval_minutes is not None:
         sched.interval_minutes = data.interval_minutes

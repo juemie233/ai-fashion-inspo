@@ -157,6 +157,26 @@ class TestSchedules:
             "/api/scraper/schedules", json={"platform": "douyin", "keywords": ["x"], "interval_minutes": 5}
         ).status_code == 422  # 间隔低于下限
 
+    def test_update_editable_fields(self, client):
+        """更新计划的关键词/数量/排序/间隔，且「综合」归一化为 None。"""
+        s = self._create(client, platform="xiaohongshu", keywords=["穿搭"], sort_mode="latest")
+        assert s["sort_mode"] == "latest"
+
+        r = client.patch(
+            f"/api/scraper/schedules/{s['id']}",
+            json={"keywords": ["法式", "通勤"], "max_count": 50, "sort_mode": "popular", "interval_minutes": 720},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["keywords"] == ["法式", "通勤"]
+        assert body["max_count"] == 50
+        assert body["sort_mode"] == "popular"
+        assert body["interval_minutes"] == 720
+
+        r2 = client.patch(f"/api/scraper/schedules/{s['id']}", json={"sort_mode": "general"})
+        assert r2.status_code == 200
+        assert r2.json()["sort_mode"] is None
+
     def test_run_now_creates_task(self, client, monkeypatch):
         from app.services import scraper_service
 
