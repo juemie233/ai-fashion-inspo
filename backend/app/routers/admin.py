@@ -52,26 +52,28 @@ async def largest_files(
         .order_by(Inspiration.created_at.desc())
     )).all()
 
-    files = []
-    for row in result:
-        fpath = storage_root / row[1] if row[1] else None
-        size = 0
-        exists = False
-        if fpath and fpath.exists():
-            size = fpath.stat().st_size
-            exists = True
-        files.append({
-            "id": row[0],
-            "file_path": row[1],
-            "source_type": row[2],
-            "created_at": row[3].isoformat() if row[3] else None,
-            "size_bytes": size,
-            "exists": exists,
-        })
+    # 磁盘 stat 属阻塞 I/O，放线程池避免大库时卡事件循环
+    def _collect() -> list[dict]:
+        files = []
+        for row in result:
+            fpath = storage_root / row[1] if row[1] else None
+            size = 0
+            exists = False
+            if fpath and fpath.exists():
+                size = fpath.stat().st_size
+                exists = True
+            files.append({
+                "id": row[0],
+                "file_path": row[1],
+                "source_type": row[2],
+                "created_at": row[3].isoformat() if row[3] else None,
+                "size_bytes": size,
+                "exists": exists,
+            })
+        files.sort(key=lambda f: f["size_bytes"], reverse=True)
+        return files[:limit]
 
-    # 按文件大小降序排列
-    files.sort(key=lambda f: f["size_bytes"], reverse=True)
-    return files[:limit]
+    return await asyncio.to_thread(_collect)
 
 
 @router.get("/integrity-check")
@@ -96,15 +98,19 @@ async def integrity_check(db: AsyncSession = Depends(get_db)) -> dict:
                 db_file_paths.add(p)
                 id_by_path.setdefault(p, []).append(row[0])
 
-    # 检查 missing files
-    missing_files: list[dict] = []
-    for file_path, ids in id_by_path.items():
-        fpath = storage_root / file_path
-        if not fpath.exists():
-            missing_files.append({
-                "file_path": file_path,
-                "inspiration_ids": list(set(ids)),
-            })
+    # 检查 missing files（磁盘 exists 属阻塞 I/O，放线程池）
+    def _find_missing() -> list[dict]:
+        missing: list[dict] = []
+        for file_path, ids in id_by_path.items():
+            fpath = storage_root / file_path
+            if not fpath.exists():
+                missing.append({
+                    "file_path": file_path,
+                    "inspiration_ids": list(set(ids)),
+                })
+        return missing
+
+    missing_files = await asyncio.to_thread(_find_missing)
 
     # 扫描磁盘媒体文件，找孤立文件（scan_storage_files 已排除 lancedb/logs 等非素材目录）
     disk_files = await asyncio.to_thread(admin_stats_service.scan_storage_files)
