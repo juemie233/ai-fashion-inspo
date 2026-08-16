@@ -138,7 +138,8 @@ def _maybe_auto_retry(task_id: int):
             return await db.get(ScraperTask, task_id)
     try:
         task = asyncio.run(_load())
-    except Exception:
+    except Exception as e:
+        logger.warning(f"自动续采前加载任务失败（放弃本次续采）: {task_id} — {e}")
         return
 
     # 用户取消的任务不自动重试

@@ -197,11 +197,18 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
             pass
         raise
 
-    # 校验真实文件类型：PIL 完整解码是阻塞 I/O（大图耗时数百毫秒），放线程池执行
-    await asyncio.to_thread(validate_media, file_path, file.content_type)
-
-    # 生成缩略图（图片用 PIL，视频用 ffmpeg 提取首帧）
-    thumb_path = await generate_thumbnail(file_path)
+    # 校验真实文件类型（PIL 完整解码是阻塞 I/O，放线程池执行）并生成缩略图。
+    # 校验失败会抛 400，此时清理已落盘文件，避免每次失败都残留孤儿文件。
+    try:
+        await asyncio.to_thread(validate_media, file_path, file.content_type)
+        thumb_path = await generate_thumbnail(file_path)
+    except Exception:
+        try:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
     today = datetime.now().strftime("%Y-%m")
     rel_file_path = f"images/{today}/{filename}"

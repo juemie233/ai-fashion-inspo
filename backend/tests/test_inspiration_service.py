@@ -90,6 +90,27 @@ def test_platform_id_dedup_excludes_trash(client, upload, make_image):
     assert r.status_code == 201
 
 
+def test_restore_conflict_when_platform_id_reused(client, upload, make_image):
+    """垃圾桶期间同平台 ID 被新素材占用，恢复返回 409 而非 IntegrityError 500。"""
+    pid = "xhs-note-9999"
+    first = upload(source_platform_id=pid)
+    assert first.status_code == 201
+    insp_id = first.json()["id"]
+
+    client.post(f"/api/inspirations/{insp_id}/trash")
+
+    data2, ctype2 = make_image()
+    r = client.post(
+        "/api/inspirations",
+        files={"file": ("t2.jpg", data2, ctype2)},
+        data={"source_platform_id": pid},
+    )
+    assert r.status_code == 201
+
+    res = client.post(f"/api/inspirations/{insp_id}/restore")
+    assert res.status_code == 409
+
+
 def test_largest_sort_respects_filters(client, make_image):
     """sort=largest 与来源筛选组合：只返回筛选内的素材（修复 size_rows 漏筛选条件）。"""
     # 大图 → manual_upload（无筛选时 largest 排最前）；小图 → scraper

@@ -51,6 +51,10 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "persons": [
         ("person_type", "TEXT DEFAULT 'blogger'"),
     ],
+    "task_queue": [
+        ("claimed_by", "TEXT"),
+        ("heartbeat_at", "DATETIME"),
+    ],
 }
 
 # 索引清单：表名 -> [(索引名, 列名), ...]
@@ -67,6 +71,9 @@ _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
     ],
     "persons": [
         ("ix_persons_person_type", "person_type"),
+    ],
+    "task_queue": [
+        ("ix_task_queue_heartbeat_at", "heartbeat_at"),
     ],
 }
 

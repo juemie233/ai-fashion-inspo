@@ -172,13 +172,13 @@ async def create_inspiration(
     # 入库后异步回填向量：保证新素材进入详情页「相似推荐」/ 语义搜索时已有向量，
     # 避免请求链路内现场 CLIP 编码造成卡顿。文本向量需等标签生成后才有内容，
     # 无标签时由任务内部自动跳过（后续 AI 分析完成时再重建）。
-    # 入队失败（如任务表不可用）不影响上传主流程，静默降级。
+    # 入队失败（如任务表不可用）不影响上传主流程，仅记日志降级。
     try:
         from app.services.task_runners.vector_backfill import create_vector_backfill_task
 
         await create_vector_backfill_task(db, [inspiration.id])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"入队向量回填任务失败（忽略，不影响上传）: {e}")
 
     return inspiration
 
@@ -300,13 +300,13 @@ async def create_inspiration_from_url(
         await db.flush()
 
     # 入库后异步回填向量（含 URL 导入时携带的标签 → 文本向量一并生成）。
-    # 入队失败不影响导入主流程，静默降级。
+    # 入队失败不影响导入主流程，仅记日志降级。
     try:
         from app.services.task_runners.vector_backfill import create_vector_backfill_task
 
         await create_vector_backfill_task(db, [inspiration.id])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"入队向量回填任务失败（忽略，不影响导入）: {e}")
 
     return inspiration
 
@@ -553,8 +553,8 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
                     if full.exists():
                         freed_bytes += full.stat().st_size
                         full.unlink()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"删除文件失败（忽略）: {full} — {e}")
 
     # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
     # 避免批量删除后产生孤儿向量
@@ -972,6 +972,25 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     if inspiration.deleted_at is None:
         raise HTTPException(status_code=409, detail="素材不在垃圾桶中")
 
+    # 恢复会重新占用 source_platform_id 的唯一性（部分唯一索引仅约束未删除素材）。
+    # 若垃圾桶期间同平台 ID 已被新素材重新入库，恢复将触发唯一索引 IntegrityError，
+    # 这里前置查重并返回 409，避免落成 500。
+    if inspiration.source_platform_id:
+        dup = await db.execute(
+            select(Inspiration.id)
+            .where(
+                Inspiration.source_platform_id == inspiration.source_platform_id,
+                Inspiration.deleted_at.is_(None),
+                Inspiration.id != inspiration.id,
+            )
+            .limit(1)
+        )
+        if dup.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="该平台 ID 已被新素材占用，无法恢复（请先删除新素材后再试）",
+            )
+
     # 先提交恢复标记（DB 落库），提交成功后再移动文件；移动失败仅记日志，
     # 文件留在 trash/ 由后续清空任务兜底清理，恢复本身不受阻断。
     inspiration.deleted_at = None
@@ -1064,8 +1083,8 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
                     if full.exists():
                         freed_bytes += full.stat().st_size
                         full.unlink()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"删除文件失败（忽略）: {full} — {e}")
 
     # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
     await vector_store.delete_inspiration_vectors_batch(deleted_ids)

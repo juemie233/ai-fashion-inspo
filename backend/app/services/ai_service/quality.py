@@ -4,6 +4,7 @@
 Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
 """
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -115,14 +116,23 @@ async def _write_quality_result(
 
     与旧逻辑一致：仅当素材仍为 pending（或 force=True 覆盖）时写入，
     避免覆盖人工翻案；初筛器拒绝与 VLM 审核两条路径共用本函数。
+    用条件 UPDATE 原子完成「判定 + 写入」，避免 check-then-act 竞态。
     """
     try:
-        insp = await db.get(Inspiration, inspiration_id)
-        if insp and (force or insp.quality_status == "pending"):
-            insp.quality_status = status
-            insp.quality_reason = reason
-            insp.is_ai_generated = is_ai_generated
-            await db.commit()
+        stmt = (
+            update(Inspiration)
+            .where(Inspiration.id == inspiration_id)
+            .values(
+                quality_status=status,
+                quality_reason=reason,
+                is_ai_generated=is_ai_generated,
+            )
+        )
+        if not force:
+            # CAS：仅当仍为 pending 时写入（rowcount=0 表示已被人工翻案，放弃覆盖）
+            stmt = stmt.where(Inspiration.quality_status == "pending")
+        await db.execute(stmt)
+        await db.commit()
     except Exception as e:
         logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
         return f"写回失败: {str(e)[:100]}"

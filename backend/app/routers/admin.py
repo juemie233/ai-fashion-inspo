@@ -3,6 +3,7 @@
 import csv
 import io
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -147,11 +148,18 @@ async def cleanup_orphan_files():
     deleted = 0
     freed_bytes = 0
     failed: list[str] = []
+    # 保护期：跳过最近写入的文件，避免与「上传落盘 → 建库/哈希 → 事务提交」的窗口
+    # 并发（TOCTOU），误删正在上传、尚未入库的媒体文件
+    _ORPHAN_GRACE_SECONDS = 600  # 10 分钟
+    cutoff = time.time() - _ORPHAN_GRACE_SECONDS
     for rel_path in storage_files:
         if rel_path not in db_paths:
             fpath = storage_root / rel_path
             try:
-                sz = fpath.stat().st_size
+                st = fpath.stat()
+                if st.st_mtime > cutoff:
+                    continue  # 最近写入，可能仍在入库流程中
+                sz = st.st_size
                 fpath.unlink()
                 deleted += 1
                 freed_bytes += sz

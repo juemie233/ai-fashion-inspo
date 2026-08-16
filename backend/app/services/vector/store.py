@@ -424,21 +424,22 @@ async def list_vector_ids(kind: str) -> set[str]:
 
 
 def _delete_inspiration_batch_sync(inspiration_ids: list[str]) -> None:
-    """同步批量删除多个素材在两张表中的向量（素材批量删除时调用）。"""
+    """同步批量删除多个素材在两张表中的向量（素材批量删除时调用）。
+
+    必须持有跨进程写锁：LanceDB 多进程基于旧版本并发提交会互相覆盖，
+    批量删除与批量写入/单条写入必须串行化（与 _upsert_sync/_batch_add_sync
+    一致），否则删掉的向量可能被旧版本「复活」或新增向量被丢弃。
+    """
     if not inspiration_ids:
         return
-    for kind in ("text", "image"):
-        try:
-            table = _table(kind)
-            # 对每个 id 做单引号转义后拼成 IN 子句，防止注入
-            clause = "inspiration_id IN (" + ", ".join(
-                f"'{_sql_quote(i)}'" for i in inspiration_ids
-            ) + ")"
-            table.delete(clause)
-        except Exception as e:
-            logger.warning(
-                f"批量删除素材向量失败 (kind={kind}, count={len(inspiration_ids)}): {e}"
-            )
+    try:
+        with _vector_write_lock():
+            for kind in ("text", "image"):
+                _delete_ids_locked(kind, inspiration_ids)
+    except Exception as e:
+        logger.warning(
+            f"批量删除素材向量失败 (count={len(inspiration_ids)}): {e}"
+        )
 
 
 async def delete_inspiration_vectors_batch(inspiration_ids: list[str]) -> None:
