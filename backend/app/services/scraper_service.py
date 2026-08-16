@@ -166,8 +166,11 @@ def _validate_cookie_platform(platform: str) -> str:
 
 
 async def check_cdp(port: int) -> dict:
-    """检查指定端口的 Chrome 调试连接是否就绪。"""
-    ok, detail, is_chrome = _check_cdp(port)
+    """检查指定端口的 Chrome 调试连接是否就绪。
+
+    端口探测是阻塞 socket 操作（最长约 3 秒），放入线程池避免卡住事件循环。
+    """
+    ok, detail, is_chrome = await asyncio.to_thread(_check_cdp, port)
     return {
         "available": ok,
         "is_google_chrome": is_chrome,

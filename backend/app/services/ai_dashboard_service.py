@@ -4,18 +4,23 @@
 业务在 services」约定下沉到本模块，并按指标维度拆成小函数。
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag
+from app.utils.time import utcnow
 
 
 async def _daily_trends(db: AsyncSession) -> list[dict]:
-    """最近 30 天的每日分析统计（总量与成功量）。"""
-    thirty_days_ago = datetime.now() - timedelta(days=30)
+    """最近 30 天的每日分析统计（总量与成功量）。
+
+    created_at 由 SQLite CURRENT_TIMESTAMP（UTC）生成，截止时间须用 UTC
+    计算，避免非 UTC 时区下统计窗口偏移。
+    """
+    thirty_days_ago = utcnow() - timedelta(days=30)
     result = await db.execute(
         select(
             func.date(AIAnalysisLog.created_at).label("day"),

@@ -1,5 +1,6 @@
 """灵感素材服务：素材 CRUD、批量标签、去重与向量同步。"""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -75,7 +76,12 @@ async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | N
         )
     )
     for insp_id, fpath in result.all():
-        h = file_sha256(storage_root / fpath) if fpath else None
+        # 全库磁盘哈希是阻塞 I/O，放线程池执行，避免卡住事件循环
+        h = (
+            await asyncio.to_thread(file_sha256, storage_root / fpath)
+            if fpath
+            else None
+        )
         if h:
             # 回填哈希（含命中场景），随外层事务一并提交
             await db.execute(
@@ -99,10 +105,13 @@ async def create_inspiration(
 ) -> Inspiration:
     """上传图片并创建灵感素材，含平台 ID 查重与内容哈希去重。"""
     # 检查重复（按平台 ID）—— 先查重，避免保存文件后再发现重复留下孤儿文件
+    # 仅统计未删除素材：垃圾桶素材释放平台 ID，允许「删除后重新采集」
+    # （与 content_hash 去重、部分唯一索引的语义一致）
     if source_platform_id:
         result = await db.execute(
             select(Inspiration).where(
-                Inspiration.source_platform_id == source_platform_id
+                Inspiration.source_platform_id == source_platform_id,
+                NOT_DELETED,
             )
         )
         if result.scalar_one_or_none():
@@ -123,7 +132,10 @@ async def create_inspiration(
     file_path, thumb_path = await save_upload(file)
 
     # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
-    content_hash = file_sha256(settings.storage_root / file_path)
+    # 哈希大文件是阻塞 I/O（500MB 视频需数秒），放线程池执行
+    content_hash = await asyncio.to_thread(
+        file_sha256, settings.storage_root / file_path
+    )
     if content_hash and await find_duplicate_by_hash(db, content_hash):
         delete_files(file_path, thumb_path)  # 清理刚保存的重复文件与缩略图
         raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
@@ -244,9 +256,9 @@ async def create_inspiration_from_url(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"下载失败: {e}")
 
-    # 校验真实文件类型（图片需能通过 PIL 解码，视频需带 MP4 魔数）
+    # 校验真实文件类型（PIL 解码是阻塞 I/O，放线程池执行）
     try:
-        validate_media(file_path_obj, content_type)
+        await asyncio.to_thread(validate_media, file_path_obj, content_type)
     except HTTPException:
         if file_path_obj.exists():
             file_path_obj.unlink(missing_ok=True)
@@ -256,8 +268,8 @@ async def create_inspiration_from_url(
     rel_path = f"images/{today}/{filename}"
     thumb_path = await generate_thumbnail(file_path_obj)
 
-    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库
-    content_hash = file_sha256(file_path_obj)
+    # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库（线程池执行）
+    content_hash = await asyncio.to_thread(file_sha256, file_path_obj)
     if content_hash and await find_duplicate_by_hash(db, content_hash):
         delete_files(rel_path, thumb_path)
         raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
@@ -412,9 +424,13 @@ async def list_inspirations(
             await db.execute(select(func.count()).select_from(query.subquery()))
         ).scalar() or 0
 
-        size_rows = (await db.execute(
-            select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
-        )).all()
+        # 复用与主查询完全一致的筛选条件（含 NOT_DELETED 与用户筛选），
+        # 否则取出的 size_rows 与筛选结果错位，导致翻页错乱/空页
+        where_clause = query.whereclause
+        size_query = select(Inspiration.id, Inspiration.file_path)
+        if where_clause is not None:
+            size_query = size_query.where(where_clause)
+        size_rows = (await db.execute(size_query)).all()
 
         def _file_size(row) -> int:
             """返回素材文件字节数（文件缺失按 0 处理）。"""

@@ -82,7 +82,9 @@ else
   echo "  后端未运行，启动中..."
   cd backend
   # PYTHONUTF8=1 让中文日志以 UTF-8 落盘，避免 Windows 默认 GBK 导致日志乱码
-  PYTHONUTF8=1 nohup python -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
+  # 默认仅绑定本机：个人单机使用，避免局域网内其他设备访问私人素材。
+  # 确需真机/局域网访问时改为 0.0.0.0（并自行评估暴露风险）。
+  PYTHONUTF8=1 nohup python -m uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT" \
     > "../$LOG_DIR/backend.log" 2>&1 &
   cd ..
   echo "  后端 PID: $! (日志: $LOG_DIR/backend.log)"
@@ -99,7 +101,8 @@ else
   else
     echo "  前端未运行，启动中..."
     cd web
-    nohup npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" \
+    # dev server 代理后端 API，同样默认仅本机，避免间接暴露后端
+    nohup npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" \
       > "../$LOG_DIR/frontend.log" 2>&1 &
     cd ..
     echo "  前端 PID: $! (日志: $LOG_DIR/frontend.log)"

@@ -5,7 +5,7 @@ import itertools
 import logging
 from collections import defaultdict
 from difflib import SequenceMatcher
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -113,15 +113,23 @@ async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
     result = await db.execute(
         select(
             Tag,
-            func.count(InspirationTag.inspiration_id).label("usage_count"),
+            func.count(Inspiration.id).label("usage_count"),
         )
         .outerjoin(InspirationTag, Tag.id == InspirationTag.tag_id)
+        # 使用次数仅统计未删除素材：垃圾桶素材的关联不计入
+        .outerjoin(
+            Inspiration,
+            and_(
+                InspirationTag.inspiration_id == Inspiration.id,
+                Inspiration.deleted_at.is_(None),
+            ),
+        )
         .group_by(Tag.id)
         .order_by(
             Tag.category,
             Tag.pinned.desc(),
             Tag.sort_order.asc(),
-            func.count(InspirationTag.inspiration_id).desc(),
+            func.count(Inspiration.id).desc(),
         )
     )
     grouped: dict[str, list[dict]] = {}
@@ -461,8 +469,13 @@ async def get_tag_stats(db: AsyncSession) -> dict:
     )
     unused = unused_result.scalar() or 0
 
-    # 总关联数
-    link_result = await db.execute(select(func.count()).select_from(InspirationTag))
+    # 总关联数（仅统计未删除素材的关联，与使用次数口径一致）
+    link_result = await db.execute(
+        select(func.count())
+        .select_from(InspirationTag)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+    )
     total_links = link_result.scalar() or 0
 
     return {
@@ -534,9 +547,15 @@ async def list_tag_inspirations(
     if not tag:
         return None
 
-    # 统计总数
+    # 统计总数（排除垃圾桶素材，与素材列表口径一致）
     count_result = await db.execute(
-        select(func.count()).where(InspirationTag.tag_id == tag_id)
+        select(func.count())
+        .select_from(InspirationTag)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(
+            InspirationTag.tag_id == tag_id,
+            Inspiration.deleted_at.is_(None),
+        )
     )
     total = count_result.scalar() or 0
 
@@ -551,7 +570,10 @@ async def list_tag_inspirations(
             InspirationTag.confidence,
         )
         .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
-        .where(InspirationTag.tag_id == tag_id)
+        .where(
+            InspirationTag.tag_id == tag_id,
+            Inspiration.deleted_at.is_(None),
+        )
         .order_by(
             InspirationTag.confidence.desc() if sort == "confidence"
             else Inspiration.created_at.asc() if sort == "oldest"
@@ -706,7 +728,7 @@ async def get_cooccurrence_network(
     db: AsyncSession, limit: int, min_count: int
 ) -> dict:
     """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。"""
-    # 取使用次数最多的 top-N 标签作为网络节点
+    # 取使用次数最多的 top-N 标签作为网络节点（仅统计未删除素材）
     top_result = await db.execute(
         select(
             Tag.id,
@@ -715,6 +737,8 @@ async def get_cooccurrence_network(
             func.count(InspirationTag.inspiration_id).label("cnt"),
         )
         .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
         .group_by(Tag.id)
         .order_by(func.count(InspirationTag.inspiration_id).desc())
         .limit(limit)
@@ -725,10 +749,13 @@ async def get_cooccurrence_network(
     if not tag_ids:
         return {"nodes": [], "edges": []}
 
-    # 一次性查出这些标签的所有素材关联，在内存中统计共现
+    # 一次性查出这些标签的所有素材关联，在内存中统计共现（同样排除垃圾桶素材）
     links_result = await db.execute(
-        select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
-            InspirationTag.tag_id.in_(tag_ids)
+        select(InspirationTag.inspiration_id, InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(
+            InspirationTag.tag_id.in_(tag_ids),
+            Inspiration.deleted_at.is_(None),
         )
     )
     insp_map: dict[str, set[int]] = defaultdict(set)
@@ -753,7 +780,7 @@ async def get_cooccurrence_network(
 
 
 async def get_top_tags(db: AsyncSession, limit: int) -> list[dict]:
-    """返回使用次数最多的标签排行。"""
+    """返回使用次数最多的标签排行（仅统计未删除素材）。"""
     result = await db.execute(
         select(
             Tag.id,
@@ -762,6 +789,8 @@ async def get_top_tags(db: AsyncSession, limit: int) -> list[dict]:
             func.count(InspirationTag.inspiration_id).label("cnt"),
         )
         .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
         .group_by(Tag.id)
         .order_by(func.count(InspirationTag.inspiration_id).desc())
         .limit(limit)
@@ -787,7 +816,10 @@ async def get_tag_trend(
             func.count().label("cnt"),
         )
         .join(InspirationTag, InspirationTag.inspiration_id == Inspiration.id)
-        .where(InspirationTag.tag_id == tag_id)
+        .where(
+            InspirationTag.tag_id == tag_id,
+            Inspiration.deleted_at.is_(None),
+        )
         .group_by("bucket")
         .order_by("bucket")
     )

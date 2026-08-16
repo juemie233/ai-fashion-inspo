@@ -176,3 +176,27 @@ def test_batch_remove_tag_inspirations(client, upload):
 
     detail = client.get(f"/api/inspirations/{a}").json()
     assert detail["tags"] == []
+
+
+def test_tag_stats_exclude_trash(client, upload):
+    """标签素材列表/使用次数/热门排行均排除垃圾桶素材。"""
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["法式"]})
+
+    tag_id = next(
+        t["id"]
+        for g in client.get("/api/tags").json()
+        for t in g["tags"]
+        if t["name"] == "法式"
+    )
+
+    # 未删除：素材计入
+    assert client.get(f"/api/tags/{tag_id}/inspirations").json()["total"] == 1
+    top = client.get("/api/tags/top").json()
+    assert any(t["name"] == "法式" and t["usage_count"] == 1 for t in top)
+
+    # 移入垃圾桶：素材不再计入列表与热门排行
+    client.post(f"/api/inspirations/{insp_id}/trash")
+    assert client.get(f"/api/tags/{tag_id}/inspirations").json()["total"] == 0
+    top = client.get("/api/tags/top").json()
+    assert not any(t["name"] == "法式" for t in top)

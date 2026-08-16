@@ -169,7 +169,8 @@ export function useTaskCenter() {
         apiClient.get('/scraper/tasks', { params: { sort: 'newest', size: 200 } }),
       ])
       const queue = (qRes.data.items || []).map(normalizeQueueTask)
-      const scraper = (Array.isArray(sRes.data) ? sRes.data : []).map(normalizeScraperTask)
+      // 后端 /scraper/tasks 返回 {items, total, ...} 对象而非数组
+      const scraper = (sRes.data.items || []).map(normalizeScraperTask)
       tasks.value = [...queue, ...scraper].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       )

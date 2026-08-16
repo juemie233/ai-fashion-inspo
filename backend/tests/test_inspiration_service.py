@@ -65,6 +65,56 @@ def test_batch_add_tags(client, upload):
     assert r.json()["affected"] == 2
 
 
+def test_platform_id_dedup_excludes_trash(client, upload, make_image):
+    """平台 ID 查重仅统计未删除素材：垃圾桶素材释放平台 ID，可重新上传。"""
+    pid = "xhs-note-12345"
+    first = upload(source_platform_id=pid)
+    assert first.status_code == 201
+
+    # 未删除时：同平台 ID 再次上传 → 409（平台 ID 重复）
+    data2, ctype2 = make_image()
+    r = client.post(
+        "/api/inspirations",
+        files={"file": ("t2.jpg", data2, ctype2)},
+        data={"source_platform_id": pid},
+    )
+    assert r.status_code == 409
+
+    # 移入垃圾桶后：平台 ID 被释放，同 ID 可重新上传
+    client.post(f"/api/inspirations/{first.json()['id']}/trash")
+    r = client.post(
+        "/api/inspirations",
+        files={"file": ("t2.jpg", data2, ctype2)},
+        data={"source_platform_id": pid},
+    )
+    assert r.status_code == 201
+
+
+def test_largest_sort_respects_filters(client, make_image):
+    """sort=largest 与来源筛选组合：只返回筛选内的素材（修复 size_rows 漏筛选条件）。"""
+    # 大图 → manual_upload（无筛选时 largest 排最前）；小图 → scraper
+    big, ctype = make_image(size=(200, 200))
+    client.post(
+        "/api/inspirations",
+        files={"file": ("big.jpg", big, ctype)},
+        data={"source_type": "manual_upload"},
+    )
+    small, ctype2 = make_image(size=(64, 64))
+    client.post(
+        "/api/inspirations",
+        files={"file": ("small.jpg", small, ctype2)},
+        data={"source_type": "scraper"},
+    )
+
+    # 筛选 scraper + largest：修复前 size_rows 不带筛选，页内 ID 取到大图素材
+    # 导致最终结果被筛选条件过滤成空页
+    r = client.get("/api/inspirations", params={"sort": "largest", "source_type": "scraper"})
+    body = r.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["source_type"] == "scraper"
+
+
 def test_create_from_url(client, monkeypatch):
     """从 URL 下载图片导入素材（模拟 httpx 下载）。"""
     buf = io.BytesIO()

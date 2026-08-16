@@ -119,10 +119,16 @@ async def _generate_video_thumbnail(video_path: Path) -> str | None:
 
 async def generate_thumbnail(image_path: Path) -> str | None:
     """为图片或视频生成缩略图，返回相对路径。图片用 PIL，视频用 ffmpeg 提取首帧。"""
-    from datetime import datetime
-
     if _is_video(image_path):
         return await _generate_video_thumbnail(image_path)
+
+    # PIL 解码/缩放/保存是阻塞 I/O（大图需数百毫秒），放线程池执行避免卡事件循环
+    return await asyncio.to_thread(_generate_image_thumbnail_sync, image_path)
+
+
+def _generate_image_thumbnail_sync(image_path: Path) -> str | None:
+    """同步生成图片缩略图（线程池内执行），失败返回 None。"""
+    from datetime import datetime
 
     try:
         from PIL import Image
@@ -181,8 +187,8 @@ async def save_upload(file: UploadFile) -> tuple[str, str | None]:
             pass
         raise
 
-    # 校验真实文件类型（图片需能通过 PIL 解码，视频需带 MP4 魔数）
-    validate_media(file_path, file.content_type)
+    # 校验真实文件类型：PIL 完整解码是阻塞 I/O（大图耗时数百毫秒），放线程池执行
+    await asyncio.to_thread(validate_media, file_path, file.content_type)
 
     # 生成缩略图（图片用 PIL，视频用 ffmpeg 提取首帧）
     thumb_path = await generate_thumbnail(file_path)

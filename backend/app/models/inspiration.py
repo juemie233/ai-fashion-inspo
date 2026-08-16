@@ -3,7 +3,18 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +27,18 @@ class Inspiration(Base):
 
     __tablename__ = "inspirations"
 
+    __table_args__ = (
+        # 部分唯一索引：仅在未删除素材（deleted_at IS NULL）之间保证平台 ID 唯一。
+        # 垃圾桶素材释放该 ID，允许「删除后重新采集」，与内容哈希去重的
+        # 「垃圾桶素材可重新入库」语义对齐；同时充当查重查询的查找索引。
+        Index(
+            "ix_inspirations_source_platform_id",
+            "source_platform_id",
+            unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
+
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
@@ -25,8 +48,8 @@ class Inspiration(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_author: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_platform_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, unique=True, index=True
-    )
+        String(128), nullable=True
+    )  # 唯一性由 __table_args__ 中的部分唯一索引保证（垃圾桶素材不参与）
     scraper_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("scraper_tasks.id", ondelete="SET NULL"),
         nullable=True, index=True,

@@ -119,5 +119,6 @@ def run_migrations() -> None:
             command.upgrade(cfg, "head")  # 已管理库：应用增量
     except Exception as e:
         # Alembic 失败（如并发锁竞争超时、脚本缺失）时静默降级，
-        # 由 ensure_schema（手写补列）兜底，不阻断启动
-        logger.warning(f"Alembic 迁移失败（降级到 ensure_schema 兜底）: {e}")
+        # 由 ensure_schema（手写补列）兜底，不阻断启动；
+        # 用 ERROR 级日志，确保迁移停摆能被运维及时察觉
+        logger.error(f"Alembic 迁移失败（降级到 ensure_schema 兜底）: {e}")

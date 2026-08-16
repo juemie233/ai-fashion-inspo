@@ -13,6 +13,7 @@ import {
   type VectorSearchItem,
 } from '@/api/search'
 import type { InspirationOut } from '@/api/inspirations'
+import { toggleFavorite as toggleFavoriteApi } from '@/api/inspirations'
 
 /** 排序选项（搜索结果排序） */
 export const SEARCH_SORT_OPTIONS = [
@@ -289,8 +290,14 @@ export function useSearch() {
   }
 
   async function handleToggleFavorite(id: string) {
+    // 搜索结果不经过素材库 store，直接调 API 并更新本地结果项，
+    // 否则 store.toggleFavorite 找不到 item 会静默返回，按钮无任何反应
+    const item = results.value.find((r) => r.id === id)
+    if (!item) return
     try {
-      await inspStore.toggleFavorite(id)
+      const newState = !item.is_favorite
+      await toggleFavoriteApi(id, newState)
+      item.is_favorite = newState
     } catch {
       message.error('操作失败')
     }

@@ -86,11 +86,13 @@ async def lifespan(app: FastAPI):
     for dir_path in settings.storage_dirs.values():
         os.makedirs(dir_path, exist_ok=True)
 
-    # 初始化数据库表（含新增 scraper_seen_urls 墓碑表）
-    await init_db()
-
-    # Alembic 正式迁移：空库建表 / 历史库 stamp 到 baseline / 已管理库升级增量
+    # Alembic 正式迁移必须最先执行：空库由 baseline 建表、历史库 stamp 到
+    # baseline、已管理库升级增量。若先跑 create_all，会把增量迁移中的新表
+    # 抢建出来，导致后续 upgrade 永远失败（table already exists）且版本停摆。
     await asyncio.to_thread(run_migrations)
+
+    # create_all 兜底：仅补齐 metadata 中未被迁移覆盖的表（正常情况是 no-op）
+    await init_db()
 
     # 手写迁移兜底（Alembic 不可用或失败时仍能补齐缺失列）
     await ensure_schema()

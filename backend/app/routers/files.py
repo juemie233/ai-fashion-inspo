@@ -11,13 +11,14 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 @router.get("/{file_path:path}")
 async def serve_file(file_path: str):
     """提供存储文件的访问。例如 /api/files/images/2026-08/abc123.jpg"""
-    full_path = settings.storage_root / file_path
+    root = settings.storage_root.resolve()
+    full_path = (settings.storage_root / file_path).resolve()
 
-    # 安全检查：确保解析后的路径仍在 storage_root 下
+    # 安全检查：确保解析后的路径仍在 storage_root 下。
+    # 用 is_relative_to 而非字符串 startswith：前缀比较会被
+    # 「storage 开头的兄弟目录」（如 ../storage_backup）绕过。
     try:
-        full_path = full_path.resolve()
-        settings.storage_root.resolve()
-        if not str(full_path).startswith(str(settings.storage_root.resolve())):
+        if not full_path.is_relative_to(root):
             raise HTTPException(status_code=403, detail="访问被拒绝")
     except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="无效路径")

@@ -85,6 +85,9 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   async function loadMore() {
     if (loading.value || items.value.length >= total.value) return
     loading.value = true
+    // 记录发起时的请求序号：加载更多在途时用户改筛选触发新的 load，
+    // 本请求返回后必须丢弃，否则旧筛选数据被串进新列表
+    const seq = ++_requestSeq
     try {
       const result = await fetchInspirations({
         page: page.value + 1,
@@ -102,13 +105,15 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         date_to: _lastParams.date_to,
         sort: _lastParams.sort,
       })
+      if (seq !== _requestSeq) return
       items.value.push(...result.items)
       total.value = result.total
       page.value = result.page
     } catch (e) {
+      if (seq !== _requestSeq) return
       console.error('加载更多失败', e)
     } finally {
-      loading.value = false
+      if (seq === _requestSeq) loading.value = false
     }
   }
 
@@ -136,7 +141,15 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   /** 切换收藏 */
   async function toggleFavorite(id: string) {
     const item = items.value.find((i) => i.id === id)
-    if (!item) return
+    if (!item) {
+      // 列表中无此素材（从详情/外部入口进入）：仅同步详情状态，不再静默返回
+      if (currentDetail.value?.id === id) {
+        const newState = !currentDetail.value.is_favorite
+        await toggleFavoriteApi(id, newState)
+        currentDetail.value.is_favorite = newState
+      }
+      return
+    }
     const newState = !item.is_favorite
     await toggleFavoriteApi(id, newState)
     item.is_favorite = newState

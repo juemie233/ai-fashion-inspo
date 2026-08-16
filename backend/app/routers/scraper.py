@@ -1,6 +1,8 @@
 """采集引擎管理的 REST API 路由。"""
 
-from fastapi import APIRouter, Depends, status
+import asyncio
+
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -42,20 +44,24 @@ async def check_cdp_endpoint(port: int):
 
 @router.post("/chrome/start")
 async def chrome_start():
-    """由后端拉起采集专用 Chrome（调试模式）。"""
-    return chrome_manager.start()
+    """由后端拉起采集专用 Chrome（调试模式）。
+
+    启动流程含子进程拉起与最长 chrome_startup_timeout 秒的就绪轮询
+    （同步 sleep），放入线程池执行，避免阻塞整条事件循环。
+    """
+    return await asyncio.to_thread(chrome_manager.start)
 
 
 @router.post("/chrome/stop")
 async def chrome_stop():
-    """停止由后端拉起的采集专用 Chrome。"""
-    return chrome_manager.stop()
+    """停止由后端拉起的采集专用 Chrome（含 taskkill 与等待，走线程池）。"""
+    return await asyncio.to_thread(chrome_manager.stop)
 
 
 @router.get("/chrome/status")
 async def chrome_status():
-    """查询采集专用 Chrome 的连接状态。"""
-    return chrome_manager.status()
+    """查询采集专用 Chrome 的连接状态（端口探测含 socket 超时，走线程池）。"""
+    return await asyncio.to_thread(chrome_manager.status)
 
 
 # ============ Cookie 管理 ============
@@ -169,8 +175,8 @@ async def list_scraper_tasks(
     platform: str | None = None,
     status: str | None = None,
     sort: str = "newest",  # newest | oldest | most_found | most_added
-    page: int = 1,
-    size: int = 50,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """获取采集任务列表，支持筛选、排序与分页（返回 items + total + stats）。"""
@@ -213,8 +219,8 @@ async def retry_single_task(task_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/tasks/{task_id}/results")
 async def task_results(
     task_id: int,
-    page: int = 1,
-    size: int = 50,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """获取指定采集任务产出的素材列表（缩略图网格）。"""

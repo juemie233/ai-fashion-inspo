@@ -38,6 +38,12 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     return detail.value.tags.filter((t) => t.tag.category === 'outfit')
   }
 
+  /** 刷新详情：仅在用户仍停留在同一素材时写回，防止切换素材后被旧详情覆盖 */
+  async function _refreshDetail(id: string) {
+    const fresh = await fetchInspiration(id)
+    if (detail.value?.id === id) detail.value = fresh
+  }
+
   /** 加载已有大标签作为选择项 */
   async function loadOutfitOptions() {
     try {
@@ -57,7 +63,7 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
       await addTagsToInspiration(detail.value.id, outfitSelected.value, 'outfit', 'manual')
       outfitSelected.value = []
       message.success('已添加大标签')
-      detail.value = await fetchInspiration(detail.value.id)
+      await _refreshDetail(detail.value.id)
       loadOutfitOptions()
     } catch {
       message.error('添加失败')
@@ -81,7 +87,7 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     if (!detail.value) return
     try {
       await removeTagFromInspiration(detail.value.id, tagId)
-      detail.value = await fetchInspiration(detail.value.id)
+      await _refreshDetail(detail.value.id)
       message.success('已移除大标签')
     } catch {
       message.error('移除失败')
@@ -112,7 +118,7 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     try {
       await addTagsToInspiration(detail.value.id, [name], 'outfit', 'ai_generated')
       aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
-      detail.value = await fetchInspiration(detail.value.id)
+      await _refreshDetail(detail.value.id)
       message.success(`已添加「${name}」`)
     } catch {
       message.error('添加失败')
@@ -126,7 +132,7 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     try {
       await addTagsToInspiration(detail.value.id, names, 'outfit', 'ai_generated')
       aiSuggestions.value = []
-      detail.value = await fetchInspiration(detail.value.id)
+      await _refreshDetail(detail.value.id)
       message.success(`已全部入库 ${names.length} 个大标签`)
     } catch {
       message.error('批量入库失败')

@@ -58,8 +58,10 @@ async def reset_all_data(
 
     import asyncio as aio
     import shutil
-    from app.models.tag import InspirationTag, Tag
-    from app.models.scraper import ScraperSeenURL, ScraperTask
+    from app.models.person import InspirationPerson, Person
+    from app.models.tag import InspirationTag, Tag, TagAlias
+    from app.models.task import TaskQueue
+    from app.models.scraper import ScraperSchedule, ScraperSeenURL, ScraperTask
 
     # 取消所有进行中的分析任务，避免删除数据后任务写回脏数据
     if _analysis_tasks:
@@ -70,14 +72,20 @@ async def reset_all_data(
         await aio.sleep(1)  # 给任务 1 秒处理取消
 
     async with async_session() as db:
-        # 按外键依赖顺序删除（先删子表，再删主表）
+        # 按外键依赖顺序删除（先删子表，再删主表）。
+        # audit_logs 刻意保留：审计日志的意义是留痕，本次重置动作本身也会记入。
         tables_in_order = [
             (InspirationTag, "inspiration_tags"),
             (AIAnalysisLog, "ai_analysis_log"),
+            (InspirationPerson, "inspiration_persons"),
             (ScraperTask, "scraper_tasks"),
             (Inspiration, "inspirations"),
+            (Person, "persons"),
+            (TagAlias, "tag_aliases"),
             (Tag, "tags"),
             (ScraperSeenURL, "scraper_seen_urls"),  # 墓碑表：重置后不应再跳过旧 URL
+            (ScraperSchedule, "scraper_schedules"),  # 定时计划：不清空则重置后自动复活采集
+            (TaskQueue, "task_queue"),  # 队列：不清空则重置后残留任务继续执行
         ]
         deleted_counts = {}
         for table_model, table_name in tables_in_order:

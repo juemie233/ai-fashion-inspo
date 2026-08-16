@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = True
 
-    # 服务器
-    host: str = "0.0.0.0"
+    # 服务器（默认仅本机可访问；确需局域网/真机访问时再显式改绑 0.0.0.0）
+    host: str = "127.0.0.1"
     port: int = 18888
 
     # 数据库

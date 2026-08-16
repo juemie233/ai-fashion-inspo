@@ -72,6 +72,8 @@ export function useSimilarItems(
   async function refreshSimilar(id: string) {
     try {
       const data = await fetchSimilar(id, 10)
+      // 竞态防护：批量打标在途时切换了素材，丢弃旧素材的相似列表
+      if (detail.value?.id !== id) return
       similarItems.value = data.similar
     } catch {
       /* 静默降级 */

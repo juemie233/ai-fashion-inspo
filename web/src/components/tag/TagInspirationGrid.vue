@@ -78,18 +78,26 @@ watch(
   { immediate: true },
 )
 
+/** 加载代际号：切换标签/排序/加载更多时自增，防止过期响应覆盖新数据 */
+let loadSeq = 0
+
 async function load(reset = true) {
   if (!props.tag) return
   if (reset) page.value = 1
+  const tagId = props.tag.id
+  const seq = ++loadSeq
   loading.value = true
   try {
-    const data = await fetchTagInspirations(props.tag.id, page.value, 50, sort.value)
+    const data = await fetchTagInspirations(tagId, page.value, 50, sort.value)
+    // 竞态防护：请求在途时标签/排序已切换，丢弃过期结果（避免旧标签数据串入新列表）
+    if (seq !== loadSeq || props.tag?.id !== tagId) return
     items.value = reset ? data.items : [...items.value, ...data.items]
     total.value = data.total
   } catch {
+    if (seq !== loadSeq) return
     message.error('加载素材失败')
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

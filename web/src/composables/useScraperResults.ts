@@ -34,6 +34,8 @@ export function useScraperResults(deps: ScraperResultsDeps) {
       const r = await apiClient.get(`/scraper/tasks/${taskId}/results`, {
         params: { page, size: RESULTS_PAGE_SIZE },
       })
+      // 竞态防护：加载更多在途时用户切换了任务，旧任务的响应直接丢弃
+      if (resultsTaskId.value !== taskId) return
       if (append) {
         const existing = new Set(resultsItems.value.map((i: any) => i.id))
         for (const item of r.data.items) {

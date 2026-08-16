@@ -389,8 +389,12 @@ async def inspiration_trend(
     days: int = Query(30, ge=1, le=365, description="统计最近 N 天"),
     db: AsyncSession = Depends(get_db),
 ):
-    """按天统计新增素材数量（近 N 天），供管理页趋势图使用。"""
-    cutoff = datetime.now() - timedelta(days=days)
+    """按天统计新增素材数量（近 N 天），供管理页趋势图使用。
+
+    created_at 按项目约定为 UTC（utcnow 写入），截止时间必须同样用 UTC
+    计算，否则在非 UTC 时区（如 UTC+8）下按天边界整体偏移。
+    """
+    cutoff = utcnow() - timedelta(days=days)
     rows = (await db.execute(
         select(
             func.strftime("%Y-%m-%d", Inspiration.created_at).label("day"),

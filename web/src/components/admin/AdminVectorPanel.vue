@@ -6,7 +6,7 @@
  * 由 worker 执行，进度通过任务中心查看）。
  */
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { useAdminTask } from '@/composables/useAdminTask'
@@ -73,6 +73,11 @@ onMounted(async () => {
     message.success('向量回填完成')
     loadStats()
   })
+})
+
+// 离开管理页时停止任务轮询，避免 1 秒间隔的请求与弹窗残留
+onUnmounted(() => {
+  stopAdminPolling()
 })
 </script>
 
