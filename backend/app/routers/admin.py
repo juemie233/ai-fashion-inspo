@@ -301,3 +301,82 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)):
     from app.services.task_runner import create_deduplicate_task
     task = await create_deduplicate_task(db)
     return {"message": f"已提交去重任务 #{task.id}", "task_id": task.id}
+
+
+# ============ 向量化管理（一键回填缺失向量） ============
+
+
+async def _get_missing_image_vector_ids(db: AsyncSession) -> list[str]:
+    """计算缺失图像向量的素材 ID 列表（图片素材 - 已有图像向量）。
+
+    详情页相似推荐对无向量素材会现场做 CLIP 编码（单张数秒）导致卡顿，
+    本函数用于找出这些「未入库」素材，供一键回填。
+    """
+    from app.services.vector import store as vector_store
+
+    # 全部有效图片素材
+    result = await db.execute(
+        select(Inspiration.id).where(
+            NOT_DELETED,
+            Inspiration.media_type == "image",
+        )
+    )
+    all_image_ids = [row[0] for row in result.all()]
+    if not all_image_ids:
+        return []
+
+    # 已有图像向量的素材
+    existing = await vector_store.list_vector_ids("image")
+    return [i for i in all_image_ids if i not in existing]
+
+
+@router.get("/vector-stats")
+async def vector_stats(db: AsyncSession = Depends(get_db)):
+    """向量化状态统计：素材总数 / 已有向量数 / 缺失数（供管理页展示）。"""
+    from app.services.vector import store as vector_store
+
+    missing_ids = await _get_missing_image_vector_ids(db)
+    return {
+        "total_inspirations": (
+            await db.execute(
+                select(func.count()).select_from(Inspiration).where(
+                    NOT_DELETED, Inspiration.media_type == "image"
+                )
+            )
+        ).scalar() or 0,
+        "image_vectors": await vector_store.count_vectors("image"),
+        "text_vectors": await vector_store.count_vectors("text"),
+        "missing": len(missing_ids),
+        "lancedb_available": vector_store.is_lancedb_available(),
+    }
+
+
+@router.post("/vector-backfill")
+async def vector_backfill(db: AsyncSession = Depends(get_db)):
+    """一键为缺失向量的素材创建向量回填任务（异步，由 worker 执行）。
+
+    返回 task_id 供前端轮询进度；无缺失素材时返回 count=0。
+    """
+    from app.services.task_runners.vector_backfill import create_vector_backfill_task
+    from app.services.vector import store as vector_store
+
+    if not vector_store.is_lancedb_available():
+        raise HTTPException(
+            status_code=400,
+            detail="lancedb 未安装，请先执行：pip install lancedb",
+        )
+
+    missing_ids = await _get_missing_image_vector_ids(db)
+    if not missing_ids:
+        return {
+            "message": "没有缺失向量的素材，全部已入库",
+            "task_id": None,
+            "count": 0,
+        }
+
+    task = await create_vector_backfill_task(db, missing_ids)
+    return {
+        "message": f"已创建向量回填任务 #{task.id}，共 {len(missing_ids)} 个素材",
+        "task_id": task.id,
+        "count": len(missing_ids),
+    }

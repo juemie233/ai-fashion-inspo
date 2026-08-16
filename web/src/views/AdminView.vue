@@ -20,14 +20,15 @@ import AdminIntegrityCheck from '@/components/admin/AdminIntegrityCheck.vue'
 import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
 import AdminAiReview from '@/components/admin/AdminAiReview.vue'
 import AdminTrash from '@/components/admin/AdminTrash.vue'
+import AdminVectorPanel from '@/components/admin/AdminVectorPanel.vue'
 
 const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态 ──
-type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'trash'
-const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'trash']
+type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'vectors' | 'trash'
+const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'vectors', 'trash']
 
 /** 从 URL query 恢复上次停留的子页面：刷新页面后仍停留在原小页面而非回到「概览」 */
 function initialTab(): AdminTab {
@@ -289,6 +290,11 @@ onUnmounted(() => {
           @scan="scanDuplicates"
           @deduplicate="deduplicate"
         />
+      </n-tab-pane>
+
+      <!-- 向量管理 -->
+      <n-tab-pane name="vectors" tab="向量管理">
+        <admin-vector-panel />
       </n-tab-pane>
 
       <!-- 垃圾桶 -->

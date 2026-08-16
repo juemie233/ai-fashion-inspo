@@ -56,12 +56,12 @@ export function useAdminTask() {
     poll()
   }
 
-  /** 恢复进行中的后台任务：刷新页面后查询是否有 pending/running 的删除/去重任务并继续轮询 */
+  /** 恢复进行中的后台任务：刷新页面后查询是否有 pending/running 的删除/去重/向量回填任务并继续轮询 */
   async function resumeAdminTask(onDone: () => void) {
     try {
       const { data } = await apiClient.get<{ items: AdminTask[] }>('/tasks', { params: { size: 20 } })
       const active = data.items.find((t) =>
-        (t.type === 'batch_delete' || t.type === 'deduplicate') &&
+        (t.type === 'batch_delete' || t.type === 'deduplicate' || t.type === 'vector_backfill') &&
         (t.status === 'pending' || t.status === 'running')
       )
       if (active) {

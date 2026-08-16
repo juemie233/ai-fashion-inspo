@@ -19,6 +19,15 @@ export interface DuplicateGroup { hash: string; files: { id: string; file_path: 
 /** 去重结果 */
 export interface DedupResult { groups_processed: number; files_deleted: number; freed_bytes: number }
 
+/** 向量化状态统计（管理页「向量管理」展示） */
+export interface VectorStats {
+  total_inspirations: number
+  image_vectors: number
+  text_vectors: number
+  missing: number
+  lancedb_available: boolean
+}
+
 /** 管理后台统计概览 */
 export interface Stats {
   total_count: number
