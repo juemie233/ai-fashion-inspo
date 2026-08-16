@@ -166,7 +166,7 @@ async def list_trash(
     reason: str | None = Query(None, description="按删除原因筛选（质量差/重复/不喜欢/隐私/其他）"),
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
-    """分页获取垃圾桶中的素材（软删除，30 天内可恢复）。"""
+    """分页获取垃圾桶中的素材（软删除，可恢复）。"""
     items, total = await inspiration_service.list_trash(db, page=page, size=size, reason=reason)
     return InspirationListOut(
         items=[_to_out(i) for i in items],
@@ -192,7 +192,7 @@ async def move_to_trash(
     payload: MoveToTrashRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> InspirationOut:
-    """将素材移入垃圾桶（软删除），文件移入 storage/trash/，30 天内可恢复。"""
+    """将素材移入垃圾桶（软删除），文件移入 storage/trash/，可恢复。"""
     inspiration = await inspiration_service.trash_inspiration(
         db, inspiration_id, payload.reason if payload else None
     )
@@ -298,7 +298,7 @@ async def batch_trash(
     data: BatchTrashRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """批量将素材移入垃圾桶（软删除，30 天内可恢复）。
+    """批量将素材移入垃圾桶（软删除，可恢复）。
 
     reason 为空时按各素材状态自动推断；不存在/已在垃圾桶中的 ID 计入 skipped。
     """

@@ -158,7 +158,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     }
   }
 
-  /** 移入垃圾桶（软删除，30 天内可恢复） */
+  /** 移入垃圾桶（软删除，可恢复） */
   async function remove(id: string) {
     await moveToTrashApi(id)
     items.value = items.value.filter((i) => i.id !== id)

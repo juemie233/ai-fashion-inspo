@@ -205,7 +205,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     }
   }
 
-  /** 将素材移入垃圾桶（软删除，30 天内可恢复）。
+  /** 将素材移入垃圾桶（软删除，可在垃圾桶恢复）。
    *
    * 用于处置质量审核不到位混入的低质量素材：在分析历史中直接移入垃圾桶，
    * 移入后该素材从正常列表/统计中过滤，历史列表自动刷新。
@@ -213,7 +213,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   async function deleteInspirationFromHistory(inspirationId: string) {
     try {
       await moveToTrashApi(inspirationId)
-      message.success('素材已移入垃圾桶（30 天内可恢复）')
+      message.success('素材已移入垃圾桶（可在垃圾桶恢复）')
       loadHistory()
       options.loadQueue?.()
       options.loadActiveAnalyses?.()

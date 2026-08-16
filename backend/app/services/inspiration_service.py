@@ -1050,7 +1050,7 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     参数:
         only_expired: 为 True 时仅清理已超过保留期（trash_retention_days）的素材，
-            用于 30 天自动清理；为 False 时清空全部垃圾桶素材。
+            用于到期自动清理；为 False 时清空全部垃圾桶素材。
 
     返回:
         {"deleted": 删除数量, "freed_bytes": 释放字节数}

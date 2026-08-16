@@ -992,7 +992,7 @@ async def batch_delete_task_results(
     ids: list[str],
     reason: str | None = None,
 ) -> dict:
-    """批量将采集任务产出的指定素材移入垃圾桶（软删除，30 天内可恢复）。
+    """批量将采集任务产出的指定素材移入垃圾桶（软删除，可恢复）。
 
     请求体: {"ids": ["id1", "id2", ...], "reason": "不喜欢"}
 

@@ -63,8 +63,10 @@ def test_empty_trash_purges_all(client, upload):
     assert client.get("/api/inspirations").json()["total"] == 0
 
 
-def test_purge_only_expired(client, upload):
+def test_purge_only_expired(client, upload, monkeypatch):
     """only_expired=True 只清理超过保留期的素材，未过期保留。"""
+    # 显式启用保留期（默认 0 表示禁用自动回收），验证 only_expired 逻辑
+    monkeypatch.setattr(settings, "trash_retention_days", 30)
     fresh = upload().json()["id"]
     old = upload().json()["id"]
     client.post(f"/api/inspirations/{fresh}/trash")
@@ -77,6 +79,19 @@ def test_purge_only_expired(client, upload):
     trash = client.get("/api/inspirations/trash").json()
     assert trash["total"] == 1
     assert trash["items"][0]["id"] == fresh
+
+
+def test_purge_only_expired_disabled_when_retention_zero(client, upload):
+    """trash_retention_days=0（禁用自动回收）时 only_expired=True 不清理任何素材。"""
+    insp = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp}/trash")
+    _set_deleted_at(days_ago=999, inspiration_id=insp)  # 远超任何保留期
+
+    r = client.delete("/api/inspirations/trash", params={"only_expired": True})
+    assert r.json()["deleted"] == 0
+
+    # 素材仍留在垃圾桶，未被自动回收
+    assert client.get("/api/inspirations/trash").json()["total"] == 1
 
 
 def test_restore_missing(client):

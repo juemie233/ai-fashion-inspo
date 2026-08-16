@@ -124,7 +124,7 @@ fashion-inspo/
 - 时间戳：`created_at`、`updated_at`，UTC
 - 外键：`{table}_id` 格式
 - 多对多关联表：`{table1}_{table2}` 格式
-- 软删除：仅 `inspirations` 素材使用（垃圾桶，`deleted_at` / `trash_reason`，30 天可恢复）；其余表仍直接物理删除
+- 软删除：仅 `inspirations` 素材使用（垃圾桶，`deleted_at` / `trash_reason`，可恢复，默认不自动回收）；其余表仍直接物理删除
 - 删除原因枚举：`质量差`/`重复`/`不喜欢`/`隐私`/`其他`（负样本学习只用「质量差」子集保证语义纯净）
 - 数据库迁移：使用 Alembic（`backend/alembic/`）。新增字段/表时先改 ORM 模型，再 `alembic revision --autogenerate -m "描述"` 生成迁移、`alembic upgrade head` 应用；**不再往 `db_migrations.py` 的 `_SCHEMA_COLUMNS` 手写追加**（`ensure_schema` 仅作兼容兜底）
 

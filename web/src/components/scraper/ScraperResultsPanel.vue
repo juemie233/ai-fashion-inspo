@@ -37,7 +37,7 @@ function openDetail(id: string) {
         <n-button size="tiny" @click="emit('select-all')">{{ selectedIds.size===items.length?'取消全选':'全选' }}</n-button>
         <n-popconfirm v-if="selectedIds.size>0" @positive-click="emit('delete-selected')">
           <template #trigger><n-button size="tiny" type="error" ghost :loading="deleting">删除 ({{ selectedIds.size }})</n-button></template>
-          确定将 {{ selectedIds.size }} 个素材移入垃圾桶？（30 天内可在管理页垃圾桶恢复）
+          确定将 {{ selectedIds.size }} 个素材移入垃圾桶？（可在管理页垃圾桶恢复）
         </n-popconfirm>
       </n-space>
     </div>

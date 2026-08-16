@@ -80,7 +80,7 @@ class Inspiration(Base):
 
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, index=True
-    )  # 软删除时间戳（非空表示在垃圾桶中，30 天内可恢复）
+    )  # 软删除时间戳（非空表示在垃圾桶中，可恢复）
     trash_reason: Mapped[str | None] = mapped_column(
         String(32), nullable=True
     )  # 删除原因：质量差/重复/不喜欢/隐私/其他（负样本学习只用「质量差」子集）

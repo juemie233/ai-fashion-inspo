@@ -233,7 +233,7 @@ export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)
 }
 
-/** 移入垃圾桶（软删除，30 天内可恢复；reason 为空时后端按素材状态自动推断） */
+/** 移入垃圾桶（软删除，可恢复；reason 为空时后端按素材状态自动推断） */
 export async function moveToTrash(id: string, reason?: TrashReason) {
   const { data } = await apiClient.post<InspirationOut>(
     `/inspirations/${id}/trash`,

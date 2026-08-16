@@ -27,8 +27,11 @@ const reasonFilter = ref<TrashReason | ''>('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
-/** 垃圾桶保留天数（后端配置下发，缺省回退 30 天） */
-const retentionDays = ref(30)
+/** 垃圾桶保留天数（后端配置下发，0 表示禁用自动回收、不自动清理） */
+const retentionDays = ref(0)
+
+/** 是否启用自动回收（保留期 > 0 时才自动清理过期素材） */
+const autoCleanupEnabled = computed(() => retentionDays.value > 0)
 
 async function load() {
   loading.value = true
@@ -58,9 +61,9 @@ function onReasonChange() {
   load()
 }
 
-/** 剩余保留天数（保留期以后端下发的 trash_retention_days 为准） */
+/** 剩余保留天数（自动回收禁用时返回空，前端不展示） */
 function daysRemaining(deletedAt?: string | null): string {
-  if (!deletedAt) return ''
+  if (!autoCleanupEnabled.value || !deletedAt) return ''
   const deleted = new Date(deletedAt).getTime()
   const expire = deleted + retentionDays.value * 86400_000
   const days = Math.max(0, Math.ceil((expire - Date.now()) / 86400_000))
@@ -139,7 +142,7 @@ async function cleanExpired() {
     <div class="toolbar">
       <div class="toolbar-left">
         <n-tag type="warning" size="small" :bordered="false">
-          共 {{ total }} 个垃圾桶素材（{{ retentionDays }} 天后自动清理）
+          共 {{ total }} 个垃圾桶素材{{ autoCleanupEnabled ? `（${retentionDays} 天后自动清理）` : '（不会自动清理）' }}
         </n-tag>
         <n-select
           v-model:value="reasonFilter"
@@ -151,7 +154,7 @@ async function cleanExpired() {
         />
       </div>
       <div class="toolbar-right">
-        <n-popconfirm @positive-click="cleanExpired">
+        <n-popconfirm v-if="autoCleanupEnabled" @positive-click="cleanExpired">
           <template #trigger>
             <n-button size="small" :loading="cleaningExpired">清理过期</n-button>
           </template>
@@ -190,7 +193,7 @@ async function cleanExpired() {
           />
           <div class="meta">
             <n-tag size="tiny" type="error" :bordered="false">{{ item.trash_reason || '未知' }}</n-tag>
-            <span class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
+            <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
           </div>
           <div class="actions">
             <n-button

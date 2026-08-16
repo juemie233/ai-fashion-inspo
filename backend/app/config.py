@@ -76,7 +76,9 @@ class Settings(BaseSettings):
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」
 
     # 垃圾桶（软删除）
-    trash_retention_days: int = 30  # 垃圾桶保留天数，到期自动清理
+    # 0 表示禁用自动回收：垃圾桶素材永不自动清理，仅可手动恢复或彻底删除。
+    # 如需恢复「到期自动清理」，在 .env 设置 TRASH_RETENTION_DAYS=30 等正整数。
+    trash_retention_days: int = 0
 
     # 负样本初筛器（阶段 2：CLIP 向量 + sklearn 轻量分类器）
     quality_classifier_threshold: float = 0.9  # 自动拒绝的置信度阈值（宁缺毋滥，低置信度仍走 VLM 复审）
