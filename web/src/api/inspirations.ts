@@ -297,9 +297,9 @@ export async function batchUnmarkAi(ids: string[]) {
   return data
 }
 
-/** 批量删除所有已拒绝素材 */
+/** 批量将全部已拒绝素材移入垃圾桶（软删除，可恢复） */
 export async function deleteRejectedInspirations() {
-  const { data } = await apiClient.delete<{ deleted: number; freed_bytes: number; message?: string }>(
+  const { data } = await apiClient.delete<{ trashed: number; message?: string }>(
     '/inspirations/quality-rejected',
   )
   return data

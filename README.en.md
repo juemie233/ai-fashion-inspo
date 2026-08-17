@@ -647,7 +647,7 @@ Model photo sets are separate from outfit inspirations: model photos are portrai
 | `GET` | `/api/ai/quality-stats` | Quality review stats (pending/approved/rejected/approval rate) |
 | `GET` | `/api/ai/manual-upload-auto-approve` | Get the "manual uploads auto-approved by default" config |
 | `PUT` | `/api/ai/manual-upload-auto-approve` | Set "manual uploads auto-approved by default" (`enabled=true/false`; optionally persisted to .env) |
-| `DELETE` | `/api/inspirations/quality-rejected` | Batch delete all rejected inspirations |
+| `DELETE` | `/api/inspirations/quality-rejected` | Move all rejected inspirations to trash (soft delete, restorable) |
 
 > **Review standard:** To be judged "qualified", the photo must be a complete real-person outfit photo where the overall look is clearly visible. Unqualified cases include: no person (flat lay/size chart/advertisement/pure text), single-item close-ups only, partial/cropped close-ups (e.g. only legs/feet/arms/collar), and excessive cropping of the composition.
 

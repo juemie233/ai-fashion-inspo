@@ -169,7 +169,10 @@ async def dominant_colors(
 
 @router.delete("/quality-rejected", status_code=status.HTTP_200_OK)
 async def delete_rejected_inspirations(db: AsyncSession = Depends(get_db)) -> dict:
-    """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。"""
+    """将全部质量审核被拒绝（rejected）的素材批量移入垃圾桶（软删除，可恢复）。
+
+    文件移入 storage/trash/、向量保留（负样本学习依赖），清空垃圾桶时才真正释放空间。
+    """
     return await inspiration_service.delete_rejected_inspirations(db)
 
 

@@ -13,7 +13,7 @@ const loading = ref(false)
 /** 操作类型中文映射 */
 const ACTION_LABELS: Record<string, string> = {
   batch_delete: '批量删除',
-  delete_rejected: '删除已拒绝素材',
+  delete_rejected: '已拒绝素材移入垃圾桶',
   cleanup_orphans: '清理孤立文件',
   empty_trash: '清空垃圾桶',
   batch_trash: '批量移入垃圾桶',

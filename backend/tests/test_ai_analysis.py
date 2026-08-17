@@ -186,3 +186,35 @@ def test_quality_recheck_resets_approved(client, upload):
     data = r.json()
     assert data["count"] >= 1
     assert data["task_id"] is not None
+
+
+def test_quality_rejected_to_trash(client, upload):
+    """已拒绝素材批量移入垃圾桶（软删除）：列表移除、reason=质量差、可恢复。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    client.patch(f"/api/inspirations/{b}", json={"quality_status": "rejected"})
+
+    # 批量移入垃圾桶
+    r = client.delete("/api/inspirations/quality-rejected")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["trashed"] == 1
+    assert data["message"]
+
+    # 已拒绝素材从正常列表消失，且出现在垃圾桶中（reason=质量差，供负样本学习）
+    assert client.get("/api/inspirations", params={"quality_status": "rejected"}).json()["total"] == 0
+    trash = client.get("/api/inspirations/trash").json()
+    assert trash["total"] == 1
+    item = trash["items"][0]
+    assert item["id"] == b
+    assert item["trash_reason"] == "质量差"
+
+    # 再次调用：无已拒绝素材 → trashed=0（幂等）
+    r2 = client.delete("/api/inspirations/quality-rejected")
+    assert r2.status_code == 200
+    assert r2.json()["trashed"] == 0
+
+    # 素材仍可恢复（非物理删除）
+    r3 = client.post(f"/api/inspirations/{b}/restore")
+    assert r3.status_code == 200
+    assert client.get(f"/api/inspirations/{b}").status_code == 200

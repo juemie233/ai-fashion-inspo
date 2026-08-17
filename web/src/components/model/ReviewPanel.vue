@@ -5,7 +5,6 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
-import { formatBytes } from '@/utils/format'
 import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
 
 const message = useMessage()
@@ -277,12 +276,12 @@ async function deleteRejected() {
   deletingRejected.value = true
   try {
     const r = await deleteRejectedInspirations()
-    message.success(`已删除 ${r.deleted} 个已拒绝素材，释放 ${formatBytes(r.freed_bytes)}`)
+    message.success(r.message || `已将 ${r.trashed} 个已拒绝素材移入垃圾桶`)
     rejectedItems.value = []
     rejectedTotal.value = 0
     loadQualityReview()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+    message.error(e.response?.data?.detail || '移入垃圾桶失败')
   } finally {
     deletingRejected.value = false
   }
@@ -396,9 +395,9 @@ onUnmounted(() => {
           <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems(true)" :loading="rejectedLoading">刷新</n-button>
           <n-popconfirm v-if="rejectedTotal > 0" @positive-click="deleteRejected">
             <template #trigger>
-              <n-button size="tiny" type="error" secondary style="margin-left:6px" :loading="deletingRejected">批量删除已拒绝</n-button>
+              <n-button size="tiny" type="error" secondary style="margin-left:6px" :loading="deletingRejected">批量移入垃圾桶</n-button>
             </template>
-            确定删除全部 {{ rejectedTotal }} 个已拒绝素材？此操作会物理删除文件，不可恢复。
+            确定将全部 {{ rejectedTotal }} 个已拒绝素材移入垃圾桶？可在「垃圾桶」中恢复，负样本学习仍会使用这些素材。
           </n-popconfirm>
         </template>
         <n-spin :show="rejectedLoading">

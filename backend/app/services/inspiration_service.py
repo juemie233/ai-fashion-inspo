@@ -554,9 +554,11 @@ async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
 
 
 async def delete_rejected_inspirations(db: AsyncSession) -> dict:
-    """物理删除所有质量审核被拒绝（rejected）的素材，释放磁盘空间。
+    """将全部质量审核被拒绝（rejected）的素材批量移入垃圾桶（软删除，可恢复）。
 
-    删除前写入墓碑表，防止下次采集重复下载相同 URL。
+    与素材库垃圾桶语义一致：标记 deleted_at / trash_reason（rejected → 「质量差」，
+    供负样本学习使用）、文件移入 storage/trash/、向量保留；不再物理删除，
+    避免 AI 误判导致素材不可恢复地丢失，也避免写入采集墓碑后无法重新采集。
     """
     result = await db.execute(
         select(Inspiration).where(
@@ -567,38 +569,55 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     rejected = result.scalars().all()
 
     if not rejected:
-        return {"deleted": 0, "freed_bytes": 0, "message": "没有已拒绝的素材"}
+        return {"trashed": 0, "message": "没有已拒绝的素材"}
 
-    deleted_ids = [insp.id for insp in rejected]
-    urls_to_seal: list[str] = [insp.source_url for insp in rejected if insp.source_url]
-
-    # 先删除数据库记录并写入墓碑表（同一事务），提交成功后再物理删除文件，
-    # 避免「文件已删但事务失败」产生指向不存在文件的记录
+    # 标记软删除（reason 自动推断：rejected → 质量差）
+    trashed_items: list[Inspiration] = []
     for insp in rejected:
-        await db.delete(insp)
-    await seal_urls(db, urls_to_seal)
-    await db.commit()
+        if insp.deleted_at is not None:
+            continue
+        insp.deleted_at = utcnow()
+        insp.trash_reason = _resolve_trash_reason(None, insp)
+        trashed_items.append(insp)
 
-    # 提交成功后物理删除文件，并统计释放空间（删除失败仅记日志，不抛异常）
-    freed_bytes = 0
-    for insp in rejected:
-        freed_bytes += delete_files_counting(insp.file_path, insp.thumbnail_path)
+    # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，
+    # 避免「文件已移走但事务回滚/失败」产生指向不存在文件的记录
+    if trashed_items:
+        await seal_urls(db, [insp.source_url for insp in trashed_items if insp.source_url])
+        await db.commit()
 
-    # 同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过），
-    # 避免批量删除后产生孤儿向量
-    from app.services import vector_store
+    # 移动文件到垃圾桶目录；失败仅记日志不阻断软删除（恢复时按 DB 路径自愈）
+    paths_changed = False
+    for insp in trashed_items:
+        try:
+            new_file = move_to_trash(insp.file_path, insp.id)
+            if new_file:
+                insp.file_path = new_file
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动主文件到垃圾桶失败 {insp.id}: {e}")
+        try:
+            new_thumb = move_to_trash(insp.thumbnail_path, insp.id, suffix="_thumb")
+            if new_thumb:
+                insp.thumbnail_path = new_thumb
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动缩略图到垃圾桶失败 {insp.id}: {e}")
 
-    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+    if paths_changed:
+        await db.commit()
 
-    # 记录审计：删除已拒绝素材属于破坏性批量操作，留痕便于追溯
+    # 记录审计：批量移入垃圾桶属破坏性批量操作，留痕便于追溯
     await record_audit_log(
         action="delete_rejected",
-        count=len(rejected),
-        freed_bytes=freed_bytes,
-        detail="物理删除所有质量审核被拒绝的素材",
+        count=len(trashed_items),
+        detail="批量将质量审核被拒绝的素材移入垃圾桶（软删除，可恢复）",
     )
 
-    return {"deleted": len(rejected), "freed_bytes": freed_bytes}
+    return {
+        "trashed": len(trashed_items),
+        "message": f"已将 {len(trashed_items)} 个已拒绝素材移入垃圾桶",
+    }
 
 
 async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:

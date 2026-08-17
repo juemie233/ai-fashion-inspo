@@ -647,7 +647,7 @@ alembic upgrade head
 | `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
 | `GET` | `/api/ai/manual-upload-auto-approve` | 获取「手动上传默认免审核」配置 |
 | `PUT` | `/api/ai/manual-upload-auto-approve` | 设置「手动上传默认免审核」（`enabled=true/false`，可选持久化到 .env） |
-| `DELETE` | `/api/inspirations/quality-rejected` | 批量删除所有已拒绝（rejected）素材 |
+| `DELETE` | `/api/inspirations/quality-rejected` | 将全部已拒绝（rejected）素材移入垃圾桶（软删除，可恢复） |
 
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
 
