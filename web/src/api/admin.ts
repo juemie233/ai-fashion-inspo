@@ -95,12 +95,20 @@ export interface NearDuplicateResult {
   total: number
   truncated: boolean
   threshold: number
+  /** 本次补算并缓存的感知哈希数（首跑/增量渐进补齐，之后为 0） */
+  backfilled: number
+  /** 当前已缓存感知哈希的图片数（全库渐进完备） */
+  cached_total: number
 }
 
-/** 扫描视觉近似重复的图片素材（感知哈希分组，仅返回候选） */
-export async function fetchNearDuplicates(limit = 1000, threshold = 10): Promise<NearDuplicateResult> {
-  const { data } = await apiClient.get<NearDuplicateResult>('/admin/near-duplicates', {
-    params: { limit, threshold },
+/** 扫描视觉近似重复的图片素材（全库随机抽样 + 感知哈希缓存补算，仅返回候选） */
+export async function fetchNearDuplicates(
+  limit = 1000,
+  threshold = 32,
+): Promise<NearDuplicateResult> {
+  const { data } = await apiClient.post<NearDuplicateResult>('/admin/near-duplicates', {
+    limit,
+    threshold,
   })
   return data
 }

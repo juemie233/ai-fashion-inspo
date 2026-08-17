@@ -27,6 +27,10 @@ def perceptual_hash(path: Path, hash_size: int = 16) -> str | None:
     """
     try:
         with Image.open(path) as img:
+            # draft() 让底层解码器（JPEG 的 DCT 缩放）只解码目标尺寸附近的像素，
+            # 避免对 3000×4000 大图全尺寸解码——单图耗时可降一个数量级；
+            # 非 JPEG 格式（PNG 等无渐进解码）会自动忽略该提示，行为不变。
+            img.draft("RGB", (hash_size + 1, hash_size))
             small = img.convert("RGB").resize(
                 (hash_size + 1, hash_size), Image.Resampling.LANCZOS
             )

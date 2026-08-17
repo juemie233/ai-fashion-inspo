@@ -175,6 +175,39 @@ def test_apply_empty_ids_rejected(client):
     assert r.status_code == 400
 
 
+def test_apply_crop_invalidates_phash_cache(client):
+    """裁剪替换文件后感知哈希缓存（近似重复检测用）应置空，扫描时懒重算。"""
+    import asyncio
+    import sqlite3
+
+    from app.config import settings
+    from app.database import async_session
+    from app.models.inspiration import Inspiration
+
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+
+    # 预置 phash 缓存（模拟素材此前已被近似重复扫描缓存）
+    conn = sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+    conn.execute("UPDATE inspirations SET phash=? WHERE id=?", ("ab" * 96, insp["id"]))
+    conn.commit()
+    conn.close()
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05},
+    )
+    assert r.status_code == 200
+    assert r.json()["processed"] == 1
+
+    async def _phash() -> str | None:
+        async with async_session() as db:
+            row = await db.get(Inspiration, insp["id"])
+            return row.phash
+
+    assert asyncio.run(_phash()) is None
+
+
 def test_apply_duplicate_returns_preview_for_user_decision(client, monkeypatch):
     """裁剪结果与库中素材内容重复：返回 duplicates 对比数据（含预览图），
     不自动丢弃；用户将重复素材移入垃圾桶后再次裁剪即可成功。"""

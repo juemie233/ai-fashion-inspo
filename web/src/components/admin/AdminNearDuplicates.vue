@@ -32,10 +32,10 @@ const thresholdOptions = [
 ]
 
 const limitOptions = [
-  { label: '扫描 500 张', value: 500 },
-  { label: '扫描 1000 张', value: 1000 },
-  { label: '扫描 2000 张', value: 2000 },
-  { label: '扫描 5000 张', value: 5000 },
+  { label: '随机 500 张', value: 500 },
+  { label: '随机 1000 张', value: 1000 },
+  { label: '随机 2000 张', value: 2000 },
+  { label: '随机 5000 张', value: 5000 },
 ]
 
 const groups = computed(() => result.value?.groups ?? [])
@@ -67,7 +67,9 @@ async function scan() {
     }
     toDelete.value = ids
     if (result.value.groups.length === 0) {
-      message.success(`未发现近似重复（已扫描 ${result.value.scanned} 张）`)
+      message.success(
+        `已随机扫描 ${result.value.scanned} 张，未发现近似重复（可再次扫描覆盖其他素材）`,
+      )
     }
   } catch {
     message.error('近似重复扫描失败')
@@ -113,27 +115,48 @@ function fileUrl(f: NearDuplicateFile): string {
   <n-card title="近似重复检测" size="small" style="margin-bottom: 24px">
     <template #header-extra>
       <n-space align="center">
-        <n-select v-model:value="threshold" :options="thresholdOptions" size="small" style="width: 180px" />
+        <n-select
+          v-model:value="threshold"
+          :options="thresholdOptions"
+          size="small"
+          style="width: 180px"
+        />
         <n-select v-model:value="limit" :options="limitOptions" size="small" style="width: 130px" />
-        <n-button size="small" type="primary" :loading="scanning" @click="scan">扫描近似重复</n-button>
+        <n-button size="small" type="primary" :loading="scanning" @click="scan"
+          >扫描近似重复</n-button
+        >
       </n-space>
     </template>
 
     <p style="color: #999; font-size: 12px; margin: 0 0 12px">
-      基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印），仅列出候选，需人工确认后删除。
+      基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印），
+      <b>全库随机抽样</b>，每次扫描覆盖不同素材；哈希首次计算后自动缓存，
+      之后扫描秒级返回。仅列出候选，需人工确认后删除。
     </p>
 
     <!-- 扫描结果汇总 -->
     <n-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
-      已扫描 {{ result.scanned }} / {{ result.total }} 张，未发现近似重复
-      <template v-if="result.truncated">（仅扫描前 {{ result.scanned }} 张，可提高上限）</template>
+      已随机扫描 {{ result.scanned }} / {{ result.total }} 张，未发现近似重复
+      <template v-if="result.truncated">（仅覆盖本次抽样，可再次扫描发现其他素材）</template>
     </n-alert>
 
     <template v-if="groups.length > 0">
       <p style="color: #f0a020; margin-bottom: 12px">
-        ⚠️ 发现 {{ groups.length }} 组近似重复，已扫描 {{ result?.scanned }} / {{ result?.total }} 张
-        <template v-if="result?.truncated">（存在未扫描素材，可提高上限后重扫）</template>
+        ⚠️ 发现 {{ groups.length }} 组近似重复，本次随机扫描 {{ result?.scanned }} /
+        {{ result?.total }} 张
+        <template v-if="result?.truncated">（存在未覆盖素材，可再次扫描）</template>
       </p>
+
+      <!-- 哈希缓存进度 -->
+      <n-alert
+        v-if="result && result.cached_total < result.total"
+        type="info"
+        :bordered="false"
+        style="margin-bottom: 12px"
+      >
+        感知哈希缓存 {{ result.cached_total }} / {{ result.total }} 张（本次新增
+        {{ result.backfilled }} 张），缓存完备后扫描无需重新解码图片
+      </n-alert>
 
       <div v-for="(group, gi) in groups" :key="group.rep_phash" class="nd-group">
         <div class="nd-group-head">
@@ -205,7 +228,9 @@ function fileUrl(f: NearDuplicateFile): string {
   border-radius: 8px;
   overflow: hidden;
   border: 2px solid transparent;
-  transition: border-color 0.15s, opacity 0.15s;
+  transition:
+    border-color 0.15s,
+    opacity 0.15s;
 }
 .nd-file img {
   width: 120px;

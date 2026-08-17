@@ -63,6 +63,9 @@ class Inspiration(Base):
     content_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )  # 文件内容 SHA-256（上传去重用，存量可回填）
+    phash: Mapped[str | None] = mapped_column(
+        String(192), nullable=True
+    )  # 感知哈希缓存（768 位 RGB dHash 的 16 进制串，近似重复检测用；文件替换后置空懒重算）
     media_type: Mapped[str] = mapped_column(String(16), default="image")
     dominant_colors: Mapped[str | None] = mapped_column(
         String(128), nullable=True  # JSON 数组字符串

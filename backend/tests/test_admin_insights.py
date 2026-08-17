@@ -83,7 +83,7 @@ def test_admin_stats(client, upload):
 
 
 def test_near_duplicate_scan(client):
-    """近似重复检测：同构图不同尺寸的两张图应被归入同一组。"""
+    """近似重复检测：同构图不同尺寸的两张图应被归入同一组；哈希缓存渐进补齐。"""
     import io
 
     from PIL import Image
@@ -113,10 +113,19 @@ def test_near_duplicate_scan(client):
     rb = client.post("/api/inspirations", files={"file": ("b.jpg", b, "image/jpeg")})
     assert ra.status_code == 201 and rb.status_code == 201
 
-    res = client.get("/api/admin/near-duplicates", params={"threshold": 32}).json()
+    # 首次扫描：全库 2 张均无哈希缓存，全部补算并参与分组
+    res = client.post("/api/admin/near-duplicates", json={"threshold": 32}).json()
     assert res["scanned"] == 2
+    assert res["backfilled"] == 2
+    assert res["cached_total"] == 2
     assert len(res["groups"]) == 1
     ids = {f["id"] for f in res["groups"][0]["files"]}
     assert ids == {ra.json()["id"], rb.json()["id"]}
     # 每组应给出保留建议
     assert res["groups"][0]["keeper_id"] in ids
+
+    # 二次扫描：哈希已缓存，零补算、零解码，结果一致
+    res2 = client.post("/api/admin/near-duplicates", json={"threshold": 32}).json()
+    assert res2["backfilled"] == 0
+    assert res2["scanned"] == 2
+    assert len(res2["groups"]) == 1

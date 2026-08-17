@@ -530,6 +530,7 @@ async def apply_crops(
             insp.content_hash = new_hash
         insp.thumbnail_path = thumb_path
         insp.dominant_colors = colors
+        insp.phash = None  # 文件内容已替换，感知哈希缓存作废（近似重复扫描时懒重算）
         insp.updated_at = utcnow()
     await db.commit()
 
