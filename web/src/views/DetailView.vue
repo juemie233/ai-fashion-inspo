@@ -282,9 +282,6 @@ const trashReason = ref<TrashReason | null>(null)
 /** 移入垃圾桶提交中（防重复点击） */
 const trashSubmitting = ref(false)
 
-/** 手动移入可选原因（「AI生成」保留给疑似 AI 素材自动移入，不在手动选择中展示） */
-const manualTrashReasons = TRASH_REASON_OPTIONS.filter((o) => o.value !== 'AI生成')
-
 /** 打开移入垃圾桶弹窗（每次重新打开时重置原因选择） */
 function openTrashModal() {
   trashReason.value = null
@@ -701,7 +698,7 @@ async function removeTag(t: InspirationTagOut) {
       <n-radio-group v-model:value="trashReason" class="trash-reason-group">
         <n-space vertical :size="10">
           <n-radio
-            v-for="opt in manualTrashReasons"
+            v-for="opt in TRASH_REASON_OPTIONS"
             :key="opt.value"
             :value="opt.value"
             :label="opt.label"
