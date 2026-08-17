@@ -1,4 +1,4 @@
-"""手机图裁剪服务测试：扫描候选、按勾选执行裁剪、黑边检测、范围过滤。"""
+"""手机图裁剪服务测试：扫描候选、按勾选执行裁剪、黑边检测、截图特征、范围过滤。"""
 
 from io import BytesIO
 from pathlib import Path
@@ -6,7 +6,11 @@ from pathlib import Path
 from PIL import Image
 
 from app.config import settings
-from app.services.crop_service import detect_photo_band
+from app.services.crop_service import (
+    detect_photo_band,
+    detect_screenshot_features,
+    screenshot_confidence,
+)
 
 
 def _make_vertical_screenshot(width=300, height=600, top_black=40, bottom_black=30, bg=(220, 220, 220)):
@@ -197,3 +201,68 @@ def test_detect_photo_band_full_content_raises(tmp_path):
         assert False, "应抛出 ValueError"
     except ValueError as e:
         assert "无黑边" in str(e)
+
+
+def _make_phone_screenshot(tmp_path: Path) -> Path:
+    """构造标准手机截图：顶部状态栏（纯色背景+图标行）+ 彩色内容 + 底部手势条。"""
+    img = Image.new("RGB", (360, 780), (40, 40, 40))  # 19.5:9
+    # 状态栏：纯黑背景，第 2 行放白色图标
+    for x in range(360):
+        img.putpixel((x, 0), (20, 20, 20))
+        img.putpixel((x, 1), (20, 20, 20))
+        if x % 9 == 0:
+            img.putpixel((x, 1), (255, 255, 255))
+    # 内容区：彩色块（模拟照片）
+    for y in range(40, 740):
+        for x in range(360):
+            img.putpixel((x, y), ((x * 7) % 256, (y * 3) % 256, 128))
+    # 底部手势条：黑色窄条
+    for y in range(740, 780):
+        for x in range(360):
+            img.putpixel((x, y), (15, 15, 15))
+    p = tmp_path / "screenshot.jpg"
+    img.save(p, "JPEG")
+    return p
+
+
+def _make_plain_vertical(tmp_path: Path) -> Path:
+    """构造普通竖图：整图渐变/纯色（无状态栏/手势条结构）。"""
+    img = Image.new("RGB", (360, 780), (200, 200, 200))
+    for y in range(780):
+        for x in range(360):
+            img.putpixel((x, y), (y % 40 + 180, 180, 180))  # 顶部稍深、整体近纯色
+    p = tmp_path / "plain.jpg"
+    img.save(p, "JPEG")
+    return p
+
+
+def test_screenshot_features_high_confidence(tmp_path):
+    """手机截图（状态栏+底部手势条）识别为 high 置信度。"""
+    p = _make_phone_screenshot(tmp_path)
+    features = detect_screenshot_features(p)
+    assert features["top_bar"] is True
+    assert features["bottom_bar"] is True
+    assert screenshot_confidence(features) == "high"
+
+
+def test_screenshot_features_low_confidence(tmp_path):
+    """普通竖图（无截图结构）识别为 low 置信度。"""
+    p = _make_plain_vertical(tmp_path)
+    features = detect_screenshot_features(p)
+    assert screenshot_confidence(features) == "low"
+
+
+def test_screenshot_features_medium_without_bottom_bar(tmp_path):
+    """只有状态栏没有底部手势条 → medium。"""
+    p = _make_phone_screenshot(tmp_path)
+    img = Image.open(p)
+    # 把底部手势条区域填成内容色，去掉底部特征
+    px = img.load()
+    for y in range(740, 780):
+        for x in range(360):
+            px[x, y] = ((x * 7) % 256, (y * 3) % 256, 128)
+    img.save(p, "JPEG")
+    features = detect_screenshot_features(p)
+    assert features["top_bar"] is True
+    assert features["bottom_bar"] is False
+    assert screenshot_confidence(features) == "medium"

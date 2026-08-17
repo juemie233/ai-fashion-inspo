@@ -106,6 +106,85 @@ def detect_photo_band(path: Path) -> tuple[int, int]:
     return top, bottom
 
 
+# ── 手机截图特征检测参数 ──
+_ANALYZE_W = 64  # 分析图宽度（统一缩放，降低计算量）
+# 行内颜色多样度（量化后唯一颜色占比）判据（实测校准）：
+# - 状态栏：背景纯色 + 时间/信号图标 → 多样度 0.02~0.3，且下方最终过渡到内容区
+# - 底部手势条/导航栏：最后几行几乎纯色（多样度 < 0.1）
+# - 真实照片内容区：多样度通常 > 0.25
+_ROW_UNIFORM = 0.1  # 纯色条带行：多样度低于此值
+_ROW_STATUS_BAR = 0.3  # 状态栏行（含图标）多样度上限
+_ROW_CONTENT = 0.25  # 内容区行多样度下限
+_TOP_SCAN_FRACTION = 0.15  # 顶部扫描范围（状态栏出现在前 15% 高度内）
+_BOTTOM_SCAN_FRACTION = 0.12  # 底部扫描范围（手势条在最后 12% 高度内）
+
+
+def detect_screenshot_features(path: Path) -> dict:
+    """检测手机系统截图特征：顶部状态栏条带 + 底部导航栏/手势条。
+
+    方法：把图片统一缩放到 64 宽后逐行统计「行内颜色多样度」（量化后唯一
+    颜色占比）。
+    - 状态栏特征：顶部区域存在「多样度 0.02~0.3 的行簇」（纯色背景上的
+      时间/信号图标），且其下方在合理范围内过渡到多样度更高的内容区。
+    - 底部特征：底部最后几行为近纯色（手势条/导航栏），其上方为内容区。
+    两个特征都用于区分「手机系统截图」与「普通竖图/纯色模板」：
+    模板图/渐变图整图多样度低、不存在「条带 → 内容区」的结构突变。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        {"top_bar": bool, "bottom_bar": bool}
+    """
+    with Image.open(path) as im:
+        img = im.convert("RGB")
+        small = img.resize((_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)), Image.LANCZOS)
+    n = small.height
+    px = small.load()
+
+    def diversity(y: int) -> float:
+        colors = set()
+        for x in range(_ANALYZE_W):
+            r, g, b = px[x, y]
+            colors.add((r // 16, g // 16, b // 16))
+        return len(colors) / _ANALYZE_W
+
+    rows = [diversity(y) for y in range(n)]
+
+    # 顶部状态栏：前 15% 高度内存在「图标行簇」（0.02~0.3），
+    # 且其后在 40% 高度内出现内容区（>0.25）；同时该行簇之前允许纯色行（状态栏背景）
+    top_bar = False
+    top_limit = int(n * _TOP_SCAN_FRACTION)
+    for i in range(min(2, top_limit), top_limit):
+        if _ROW_UNIFORM < rows[i] <= _ROW_STATUS_BAR:
+            # 找到图标行，检查其后是否过渡到内容区
+            if any(rows[j] > _ROW_CONTENT for j in range(i, min(n, i + int(n * 0.4)))):
+                top_bar = True
+                break
+
+    # 底部手势条/导航栏：最后 12% 高度内，存在连续 ≥2 行近纯色，
+    # 且其上方（60% 高度内）存在内容区
+    bottom_bar = False
+    bot_start = int(n * (1 - _BOTTOM_SCAN_FRACTION))
+    for i in range(bot_start, n - 1):
+        if rows[i] < _ROW_UNIFORM and rows[i + 1] < _ROW_UNIFORM:
+            if any(rows[j] > _ROW_CONTENT for j in range(max(0, i - int(n * 0.6)), i)):
+                bottom_bar = True
+                break
+
+    return {"top_bar": top_bar, "bottom_bar": bottom_bar}
+
+
+def screenshot_confidence(features: dict) -> str:
+    """根据截图特征输出置信度：high（状态栏+底部栏齐全）/ medium（单侧）/ low（无特征）。"""
+    top_bar, bottom_bar = features.get("top_bar", False), features.get("bottom_bar", False)
+    if top_bar and bottom_bar:
+        return "high"
+    if top_bar or bottom_bar:
+        return "medium"
+    return "low"
+
+
 def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     """按比例裁剪图片并写入同目录临时文件，返回临时文件路径（不改动原图）。
 
@@ -170,6 +249,8 @@ async def scan_candidates(
                 "id": str, "file_path": str, "width": int, "height": int,
                 "ratio": float, "crop_top": float, "crop_bottom": float,
                 "auto_ok": bool, "note": str | None,  # auto 检测失败原因
+                "confidence": "high" | "medium" | "low",  # 截图特征置信度
+                "created_at": str | None,  # 上传时间（ISO）
             }, ...],
         }
     """
@@ -211,6 +292,8 @@ async def scan_candidates(
             "crop_bottom": crop_bottom,
             "auto_ok": True,
             "note": None,
+            "confidence": "low",
+            "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
         }
         if mode == "auto":
             try:
@@ -220,9 +303,16 @@ async def scan_candidates(
             except ValueError as e:
                 item["auto_ok"] = False
                 item["note"] = f"自动检测失败：{e}"
+        # 截图特征检测：状态栏/底部栏 → 置信度分级（供人工筛选）
+        try:
+            features = await asyncio.to_thread(detect_screenshot_features, full)
+            item["confidence"] = screenshot_confidence(features)
+        except Exception:
+            item["confidence"] = "low"
         candidates.append(item)
 
-    candidates.sort(key=lambda c: c["ratio"], reverse=True)
+    # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）
+    candidates.sort(key=lambda c: c.get("created_at") or "", reverse=True)
     return {"total": total, "items": candidates}
 
 

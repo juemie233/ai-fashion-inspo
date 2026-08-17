@@ -30,9 +30,18 @@ interface CropCandidate {
   crop_bottom: number
   auto_ok: boolean
   note: string | null
+  confidence: 'high' | 'medium' | 'low'
+  created_at: string | null
 }
 
-/** 候选网格与勾选状态（默认全选；auto 检测失败的默认不勾选） */
+/** 置信度展示文案与标签类型 */
+const CONFIDENCE_LABELS: Record<string, { text: string; type: 'success' | 'warning' | 'default' }> = {
+  high: { text: '高置信', type: 'success' },
+  medium: { text: '中置信', type: 'warning' },
+  low: { text: '低置信', type: 'default' },
+}
+
+/** 候选网格与勾选状态 */
 const candidates = ref<CropCandidate[]>([])
 const checkedIds = ref<Set<string>>(new Set())
 
@@ -45,8 +54,33 @@ interface CropApplyResult {
 }
 const result = ref<CropApplyResult | null>(null)
 
+/** 大图预览 */
+const previewOpen = ref(false)
+const previewUrl = ref('')
+
+/** 打开大图预览 */
+function openPreview(url: string) {
+  previewUrl.value = url
+  previewOpen.value = true
+}
+
+/** 关闭大图预览 */
+function closePreview() {
+  previewOpen.value = false
+  previewUrl.value = ''
+}
+
 const scannedTotal = ref(0)
 const checkedCount = computed(() => checkedIds.value.size)
+
+/** 是否只勾选高置信候选（默认勾选 high+medium，排除 low） */
+function defaultCheckedIds(items: CropCandidate[]): Set<string> {
+  const ids = new Set<string>()
+  for (const c of items) {
+    if (c.auto_ok && c.confidence !== 'low') ids.add(c.id)
+  }
+  return ids
+}
 
 /** 扫描候选：只读预览，不修改任何数据 */
 async function handleScan() {
@@ -64,12 +98,7 @@ async function handleScan() {
     )
     scannedTotal.value = data.total
     candidates.value = data.items
-    // 默认全选（auto 检测失败的条目不勾选，供人工复核）
-    const ids = new Set<string>()
-    for (const c of data.items) {
-      if (c.auto_ok) ids.add(c.id)
-    }
-    checkedIds.value = ids
+    checkedIds.value = defaultCheckedIds(data.items)
     if (data.items.length === 0) {
       message.info(data.total === 0 ? '没有可裁剪的竖屏截图素材' : `候选超过上限，仅显示前 ${limit.value} 张`)
     }
@@ -93,7 +122,7 @@ function toggleAll() {
   if (checkedCount.value === candidates.value.length) {
     checkedIds.value = new Set()
   } else {
-    checkedIds.value = new Set(candidates.value.filter((c) => c.auto_ok).map((c) => c.id))
+    checkedIds.value = defaultCheckedIds(candidates.value)
   }
 }
 
@@ -127,7 +156,7 @@ async function handleApply() {
   }
 }
 
-/** 候选缩略图地址 */
+/** 候选缩略图地址（缩略图可能存在缺失，回退原图） */
 function thumbUrl(c: CropCandidate): string {
   return getFileUrl(c.file_path)
 }
@@ -135,6 +164,13 @@ function thumbUrl(c: CropCandidate): string {
 /** 裁剪比例展示文案 */
 function cropLabel(c: CropCandidate): string {
   return `${(c.crop_top * 100).toFixed(1)}% / ${(c.crop_bottom * 100).toFixed(1)}%`
+}
+
+/** 上传时间展示：MM-DD HH:mm */
+function timeLabel(c: CropCandidate): string {
+  if (!c.created_at) return ''
+  const t = c.created_at.replace('T', ' ').slice(0, 16)
+  return t.slice(5)
 }
 </script>
 
@@ -144,7 +180,7 @@ function cropLabel(c: CropCandidate): string {
       扫描手动上传素材中的手机全屏截图（仅「手动上传 + 竖屏 高/宽 ≥ 1.75」），
       <b>人工勾选确认后</b>执行裁剪：裁掉顶部状态栏、底部导航栏等多余区域。
       原图自动备份到 <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填；
-      标签/收藏等信息不动。
+      标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图。
     </p>
 
     <n-form label-placement="left" label-width="110" size="small" style="max-width: 560px">
@@ -179,8 +215,8 @@ function cropLabel(c: CropCandidate): string {
         <n-button type="primary" :loading="scanning" @click="handleScan">
           {{ scanning ? '扫描中...' : '扫描候选' }}
         </n-button>
-        <span v-if="mode === 'auto'" style="margin-left: 12px; font-size: 12px; color: #f0a020">
-          自动检测失败（浅色背景/复杂布局）的素材默认不勾选
+        <span style="margin-left: 12px; font-size: 12px; color: #999">
+          默认勾选高/中置信候选，低置信需人工复核
         </span>
       </n-form-item>
     </n-form>
@@ -188,7 +224,7 @@ function cropLabel(c: CropCandidate): string {
     <!-- 候选网格：人工勾选确认 -->
     <template v-if="candidates.length > 0">
       <n-divider style="margin: 12px 0" />
-      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap">
         <n-checkbox
           :checked="checkedCount > 0 && checkedCount === candidates.length"
           :indeterminate="checkedCount > 0 && checkedCount < candidates.length"
@@ -209,11 +245,24 @@ function cropLabel(c: CropCandidate): string {
           class="crop-item"
           :class="{ checked: checkedIds.has(c.id), failed: !c.auto_ok }"
           @click="toggleCheck(c.id)"
+          @dblclick="previewUrl = thumbUrl(c)"
         >
-          <img :src="thumbUrl(c)" :alt="c.id" loading="lazy" />
+          <img :src="thumbUrl(c)" :alt="c.id" loading="lazy" @click.stop="openPreview(thumbUrl(c))" />
           <div class="crop-meta">
-            <span>{{ c.width }}×{{ c.height }} · 比例 {{ c.ratio }}</span>
-            <span>裁剪 {{ cropLabel(c) }}</span>
+            <span class="crop-line">
+              {{ timeLabel(c) }} · {{ c.width }}×{{ c.height }} · {{ c.ratio }}
+            </span>
+            <span class="crop-line">
+              裁剪 {{ cropLabel(c) }}
+              <n-tag
+                size="tiny"
+                :bordered="false"
+                :type="CONFIDENCE_LABELS[c.confidence]?.type || 'default'"
+                style="margin-left: 4px"
+              >
+                {{ CONFIDENCE_LABELS[c.confidence]?.text || c.confidence }}
+              </n-tag>
+            </span>
             <n-tag v-if="!c.auto_ok" size="tiny" type="error" :bordered="false">{{ c.note }}</n-tag>
           </div>
           <div class="crop-check" :class="{ checked: checkedIds.has(c.id) }">
@@ -221,6 +270,7 @@ function cropLabel(c: CropCandidate): string {
           </div>
         </div>
       </div>
+      <p style="font-size: 12px; color: #999; margin-top: 8px">点击缩略图查看大图，双击卡片切换勾选</p>
     </template>
 
     <!-- 执行结果 -->
@@ -249,6 +299,21 @@ function cropLabel(c: CropCandidate): string {
         </n-collapse-item>
       </n-collapse>
     </template>
+
+    <!-- 大图预览弹窗 -->
+    <n-modal
+      v-model:show="previewOpen"
+      preset="card"
+      title="预览原图"
+      style="width: 90%; max-width: 420px"
+      :bordered="false"
+      @close="closePreview"
+      @mask-click="closePreview"
+    >
+      <div style="max-height: 72vh; overflow-y: auto; background: #111; border-radius: 8px; padding: 8px">
+        <img v-if="previewUrl" :src="previewUrl" alt="预览" style="width: 100%; display: block" />
+      </div>
+    </n-modal>
   </n-card>
 </template>
 
@@ -266,14 +331,15 @@ function cropLabel(c: CropCandidate): string {
   overflow: hidden;
   border: 2px solid transparent;
   transition: border-color 0.15s, opacity 0.15s;
+  background: #222; /* 深色底：细长图 contain 显示时观感统一 */
 }
 
 .crop-item img {
   width: 100%;
   height: 170px;
-  object-fit: cover;
+  object-fit: contain; /* 完整显示细长截图，而非裁切中间一条 */
   display: block;
-  background: #f5f5f5;
+  background: #222;
 }
 
 .crop-item.checked {
@@ -293,9 +359,15 @@ function cropLabel(c: CropCandidate): string {
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.6;
   display: flex;
   flex-direction: column;
+}
+
+.crop-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .crop-check {
