@@ -2,12 +2,17 @@
 /** 质量审核面板：待审核/已通过/已拒绝统计 + 未通过素材管理。 */
 
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
-import { getFileUrl, deleteRejectedInspirations } from '@/api/inspirations'
+import { deleteRejectedInspirations, batchUpdateInspirations, batchTrash } from '@/api/inspirations'
 import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
+import InspirationGridBrowser, {
+  type GridBrowserItem,
+} from '@/components/inspiration/InspirationGridBrowser.vue'
 
 const message = useMessage()
+const router = useRouter()
 
 interface QualityReviewStats {
   total: number
@@ -225,8 +230,20 @@ const rejectedTotal = ref(0)
 const rejectedLoading = ref(false)
 const rejectedPage = ref(1)
 const rejectedPageSize = 100
+const rejectedDensity = ref<'compact' | 'standard'>((localStorage.getItem('review-rejected-density') as 'compact' | 'standard') || 'compact')
 let rejectedSeq = 0  // 请求序号，防止陈旧响应覆盖
 const approvingRejectedIds = ref<Set<string>>(new Set())
+const batchApproving = ref(false)
+const batchTrashing = ref(false)
+const rejectedGridRef = ref<InstanceType<typeof InspirationGridBrowser> | null>(null)
+
+// 持久化未通过素材网格密度
+watch(rejectedDensity, (v) => { localStorage.setItem('review-rejected-density', v) })
+
+/** 映射为通用网格条目（未通过素材均为图片，媒体类型固定 image） */
+const rejectedGridItems = computed<GridBrowserItem[]>(() =>
+  rejectedItems.value.map((i) => ({ ...i, media_type: 'image' })),
+)
 
 async function loadRejectedItems(reset = true) {
   if (reset) rejectedPage.value = 1
@@ -259,6 +276,7 @@ async function approveItem(id: string) {
     await apiClient.patch(`/inspirations/${id}`, { quality_status: 'approved' })
     rejectedItems.value = rejectedItems.value.filter((i) => i.id !== id)
     rejectedTotal.value = Math.max(0, rejectedTotal.value - 1)
+    rejectedGridRef.value?.removeSelectedId(id)  // 同步清除网格选中残留
     message.success('已标记为通过')
     loadQualityReview()
   } catch (e: any) {
@@ -284,6 +302,42 @@ async function deleteRejected() {
     message.error(e.response?.data?.detail || '移入垃圾桶失败')
   } finally {
     deletingRejected.value = false
+  }
+}
+
+/** 批量通过：把选中的未通过素材翻案为已通过（复用批量编辑接口） */
+async function batchApprove(ids: string[], clear: () => void) {
+  if (ids.length === 0) return
+  batchApproving.value = true
+  try {
+    const updated = await batchUpdateInspirations(ids, { quality_status: 'approved' })
+    message.success(`已将 ${updated} 个素材标记为通过`)
+    clear()
+    await loadRejectedItems(true)
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '批量通过失败')
+  } finally {
+    batchApproving.value = false
+  }
+}
+
+/** 批量移入垃圾桶：把选中的未通过素材移入垃圾桶（负样本学习仍会使用） */
+async function batchTrashSelected(ids: string[], clear: () => void) {
+  if (ids.length === 0) return
+  batchTrashing.value = true
+  try {
+    const { trashed, skipped } = await batchTrash(ids, '质量差')
+    const parts = [`已将 ${trashed} 个素材移入垃圾桶`]
+    if (skipped > 0) parts.push(`${skipped} 个跳过`)
+    message.success(parts.join('，'))
+    clear()
+    await loadRejectedItems(true)
+    loadQualityReview()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '移入垃圾桶失败')
+  } finally {
+    batchTrashing.value = false
   }
 }
 
@@ -395,24 +449,59 @@ onUnmounted(() => {
           <n-button size="tiny" style="margin-left:6px" @click="loadRejectedItems(true)" :loading="rejectedLoading">刷新</n-button>
           <n-popconfirm v-if="rejectedTotal > 0" @positive-click="deleteRejected">
             <template #trigger>
-              <n-button size="tiny" type="error" secondary style="margin-left:6px" :loading="deletingRejected">批量移入垃圾桶</n-button>
+              <n-button size="tiny" type="error" secondary style="margin-left:6px" :loading="deletingRejected">全部移入垃圾桶</n-button>
             </template>
             确定将全部 {{ rejectedTotal }} 个已拒绝素材移入垃圾桶？可在「垃圾桶」中恢复，负样本学习仍会使用这些素材。
           </n-popconfirm>
         </template>
-        <n-spin :show="rejectedLoading">
-          <div v-if="rejectedItems.length" class="rejected-grid">
-            <div v-for="item in rejectedItems" :key="item.id" class="rejected-card">
-              <img :src="getFileUrl(item.thumbnail_path || item.file_path)" />
-              <div class="rejected-reason" :title="item.quality_reason || ''">{{ item.quality_reason || '未说明原因' }}</div>
-              <n-button size="tiny" type="success" ghost @click="approveItem(item.id)">✓ 翻案</n-button>
+
+        <InspirationGridBrowser
+          ref="rejectedGridRef"
+          :items="rejectedGridItems"
+          :total="rejectedTotal"
+          :loading="rejectedLoading"
+          v-model:density="rejectedDensity"
+          empty-text="暂无未通过素材"
+          @load-more="loadMoreRejected"
+          @open-detail="(item: GridBrowserItem) => router.push({ name: 'detail', params: { id: item.id } })"
+        >
+          <!-- 批量操作栏：全选 + 批量通过 / 批量移入垃圾桶 -->
+          <template #batch-actions="{ ids, count, clear, allSelected, toggleAll }">
+            <n-checkbox :checked="allSelected" :indeterminate="count > 0 && !allSelected" @update:checked="toggleAll" />
+            <span style="font-size:13px">已选 {{ count }} 个</span>
+            <n-popconfirm @positive-click="batchApprove(ids, clear)">
+              <template #trigger>
+                <n-button size="tiny" type="success" secondary :loading="batchApproving">批量通过</n-button>
+              </template>
+              将选中的 {{ count }} 个素材标记为「已通过」？确定继续？
+            </n-popconfirm>
+            <n-popconfirm @positive-click="batchTrashSelected(ids, clear)">
+              <template #trigger>
+                <n-button size="tiny" type="error" secondary :loading="batchTrashing">批量移入垃圾桶</n-button>
+              </template>
+              将选中的 {{ count }} 个素材移入垃圾桶？可在「垃圾桶」中恢复，负样本学习仍会使用这些素材。
+            </n-popconfirm>
+            <n-button size="tiny" @click="clear">取消选择</n-button>
+          </template>
+
+          <!-- 卡片悬停操作：翻案（大图按钮由通用组件内置） -->
+          <template #card-actions="{ item }">
+            <n-button
+              size="tiny"
+              type="success"
+              ghost
+              :loading="approvingRejectedIds.has(item.id)"
+              @click="approveItem(item.id)"
+            >✓ 翻案</n-button>
+          </template>
+
+          <!-- 卡片附加：审核原因 -->
+          <template #card-extra="{ item }">
+            <div class="rejected-reason" :title="String(item.quality_reason || '')">
+              {{ item.quality_reason || '未说明原因' }}
             </div>
-          </div>
-          <n-empty v-else description="暂无未通过素材" size="small" />
-          <div v-if="rejectedTotal > rejectedItems.length" style="text-align:center;margin-top:12px">
-            <n-button size="small" :disabled="rejectedLoading" @click="loadMoreRejected">加载更多（{{ rejectedItems.length }}/{{ rejectedTotal }}）</n-button>
-          </div>
-        </n-spin>
+          </template>
+        </InspirationGridBrowser>
       </n-card>
 
       <!-- 说明 -->
@@ -428,27 +517,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.rejected-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 10px;
-}
-.rejected-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fff;
-  padding-bottom: 6px;
-}
-.rejected-card img {
-  width: 100%;
-  aspect-ratio: 3/4;
-  object-fit: cover;
-  background: #f5f5f5;
-}
 .rejected-reason {
   font-size: 11px;
   color: #d03050;
