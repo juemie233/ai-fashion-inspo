@@ -431,9 +431,21 @@ async def apply_crops(
             "vector_task_id": None,
         }
 
-    # 清理上一次的重复对比预览文件（仅对比决策期间需要，避免磁盘堆积）
+    # 重复对比预览按「批次子目录」存放：用户逐组决策时，前端会仅携带单张
+    # 素材重新调用 apply（如「保留裁剪结果」），若在此处清空整个目录会把
+    # 其他组的预览一并删掉。因此只清理除「最近一个批次」外的残留批次，
+    # 最近批次（含本组其他待决策预览）必须保留到本组决策结束。
     dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
-    shutil.rmtree(dups_dir, ignore_errors=True)
+    if dups_dir.exists():
+        old_batches = sorted(
+            (d for d in dups_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for batch_dir in old_batches[1:]:
+            shutil.rmtree(batch_dir, ignore_errors=True)
+    # 本批次标识：重新 apply 时创建新批次，避免与旧预览混放
+    dup_batch = dups_dir / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
     backup_dir = (
@@ -465,9 +477,9 @@ async def apply_crops(
                             select(Inspiration).where(Inspiration.id == dup_id)
                         )
                     ).scalar_one_or_none()
-                    # 裁剪结果预览移入临时目录（与素材同卷，直接 rename）
-                    dups_dir.mkdir(parents=True, exist_ok=True)
-                    preview = dups_dir / f"{insp.id}_{dup_id}{full.suffix}"
+                    # 裁剪结果预览移入本批次目录（与素材同卷，直接 rename）
+                    dup_batch.mkdir(parents=True, exist_ok=True)
+                    preview = dup_batch / f"{insp.id}_{dup_id}{full.suffix}"
                     os.replace(tmp, preview)
                     tmp = None
                     duplicates.append(

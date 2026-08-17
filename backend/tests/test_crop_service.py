@@ -234,6 +234,62 @@ def test_apply_duplicate_returns_preview_for_user_decision(client, monkeypatch):
     assert _file_size(insp_a["id"], client)[1] == 540  # 已裁剪
 
 
+def test_apply_duplicate_rerun_keeps_other_previews(client, monkeypatch):
+    """逐组决策时重新 apply 单张素材，不得误删其他组的对比预览（回归测试）。"""
+    import sqlite3
+
+    from app.config import settings
+
+    def _fake_hash(path):
+        """按素材文件路径返回不同哈希，模拟「裁剪后各自命中不同重复素材」。"""
+        p = str(path)
+        # 裁剪临时文件与素材同目录同 stem（{stem}_crop_tmp{suffix}），用路径前缀区分
+        if p.startswith(str(settings.storage_root / insp_a["file_path"]).rsplit(".", 1)[0]):
+            return "hash-a"
+        if p.startswith(str(settings.storage_root / insp_c["file_path"]).rsplit(".", 1)[0]):
+            return "hash-c"
+        return "hash-x"
+
+    monkeypatch.setattr("app.services.crop_service.file_sha256", _fake_hash)
+
+    d1, c1 = _make_vertical_screenshot(bg=(220, 220, 220))
+    insp_a = _upload_screenshot(client, d1, c1)
+    d2, c2 = _make_vertical_screenshot(bg=(180, 200, 230))
+    insp_b = _upload_screenshot(client, d2, c2)
+    d3, c3 = _make_vertical_screenshot(bg=(150, 160, 170))
+    insp_c = _upload_screenshot(client, d3, c3)
+    d4, c4 = _make_vertical_screenshot(bg=(120, 130, 140))
+    insp_d = _upload_screenshot(client, d4, c4)
+
+    # 模拟 B 与「A 裁剪结果」重复、D 与「C 裁剪结果」重复
+    conn = sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+    conn.execute("UPDATE inspirations SET content_hash=? WHERE id=?", ("hash-a", insp_b["id"]))
+    conn.execute("UPDATE inspirations SET content_hash=? WHERE id=?", ("hash-c", insp_d["id"]))
+    conn.commit()
+    conn.close()
+
+    body = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp_a["id"], insp_c["id"]], "mode": "ratio"},
+    ).json()
+    assert body["processed"] == 0
+    assert len(body["duplicates"]) == 2
+    c_preview = next(d for d in body["duplicates"] if d["id"] == insp_c["id"])["preview_path"]
+    assert (settings.storage_root / c_preview).exists()
+
+    # 用户处理第一组（A）：B 入垃圾桶后重新 apply 仅 A
+    client.post("/api/inspirations/batch-trash", json={"ids": [insp_b["id"]], "reason": "重复"})
+    r2 = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp_a["id"]], "mode": "ratio"},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["processed"] == 1
+
+    # 关键断言：C 组的对比预览必须仍然存在（否则弹窗第二组起左侧图 404）
+    assert (settings.storage_root / c_preview).exists(), "重新 apply 误删了其他组的对比预览"
+
+
 def test_crop_invalid_mode_rejected(client):
     """非法模式返回 400。"""
     assert client.post(
