@@ -7,6 +7,7 @@ import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { normalizeTaskStatus, taskStatusType } from '@/utils/taskLabel'
+import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
 import type { ScraperTask, ScraperSource, CookieStatus } from '@/types/scraper'
 
 /** 平台显示文案（复用来源映射，单一来源避免多处重复维护） */
@@ -243,9 +244,10 @@ export function useScraperTasks() {
 
   function platformName(p: string) { return sources.value.find(s => s.platform === p)?.name || PLATFORM_LABELS[p] || p }
 
+  /** 关键词展示（表格列）：解析 config 中的关键词，逗号拼接，无则显示占位符 */
   function parseKeywords(c: string | null) {
-    if (!c) return '-'
-    try { return (JSON.parse(c).keywords || []).join(', ') || '-' } catch { return '-' }
+    const kw = parseKeywordsList(c)
+    return kw.length > 0 ? kw.join(', ') : '-'
   }
 
   function getTaskDuration(t: ScraperTask) {

@@ -1,5 +1,21 @@
 /** 采集任务关键词工具：从历史任务中提取最近使用过的关键词。 */
 
+/**
+ * 解析采集任务 config JSON 中的关键词列表。
+ *
+ * 供任务表格/任务中心展示使用：解析失败或字段缺失时返回空数组（调用方自行格式化）。
+ */
+export function parseKeywords(config: string | null): string[] {
+  if (!config) return []
+  try {
+    const obj = JSON.parse(config) as Record<string, unknown>
+    const kw = obj?.keywords
+    return Array.isArray(kw) ? kw.filter((k): k is string => typeof k === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 /** 任务条目中与关键词提取相关的字段 */
 export interface KeywordTaskLike {
   status: string

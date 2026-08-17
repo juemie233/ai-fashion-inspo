@@ -116,11 +116,6 @@ async def _problem_items(db: AsyncSession) -> dict:
     }
 
 
-def _fmt_utc(dt: datetime | None) -> str | None:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
-    return format_utc(dt)
-
-
 async def _model_comparison(db: AsyncSession) -> list[dict]:
     """按模型聚合的成功率对比（仅标签分析，排除质量审核日志与垃圾桶素材）。"""
     result = await db.execute(
@@ -205,7 +200,7 @@ async def _failed_items(db: AsyncSession, limit: int = 20) -> list[dict]:
             "inspiration_id": row[0],
             "model_name": row[1],
             "error": row[2],
-            "created_at": _fmt_utc(row[3]),
+            "created_at": format_utc(row[3]),
             "thumbnail_path": row[4],
         }
         for row in result.all()

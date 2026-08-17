@@ -1,7 +1,25 @@
 /** scraperKeywords 采集任务历史关键词提取单测。 */
 
 import { describe, expect, it } from 'vitest'
-import { extractHistoryKeywords } from '../scraperKeywords'
+import { extractHistoryKeywords, parseKeywords } from '../scraperKeywords'
+
+describe('parseKeywords', () => {
+  it('解析 config 中的关键词列表', () => {
+    expect(parseKeywords(JSON.stringify({ keywords: ['连衣裙', '半身裙'], max_count: 50 }))).toEqual(['连衣裙', '半身裙'])
+  })
+
+  it('config 为空/非法/无 keywords 时返回空数组', () => {
+    expect(parseKeywords(null)).toEqual([])
+    expect(parseKeywords('')).toEqual([])
+    expect(parseKeywords('not-json')).toEqual([])
+    expect(parseKeywords(JSON.stringify({ max_count: 10 }))).toEqual([])
+    expect(parseKeywords(JSON.stringify({ keywords: '字符串' }))).toEqual([])
+  })
+
+  it('过滤非字符串项', () => {
+    expect(parseKeywords(JSON.stringify({ keywords: ['有效', 42, null] }))).toEqual(['有效'])
+  })
+})
 
 describe('extractHistoryKeywords', () => {
   it('只提取已完成任务的关键词', () => {

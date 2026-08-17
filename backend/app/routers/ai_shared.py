@@ -9,14 +9,12 @@
 import asyncio
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import delete, select
 
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog
-from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +147,6 @@ async def _update_env_file(updates: dict[str, str]) -> None:
 
     await asyncio.to_thread(_write)
     logger.info(f"已更新 .env: {list(updates.keys())}")
-
-
-def _fmt_utc(dt: datetime | None) -> str | None:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
-    return format_utc(dt)
 
 
 def _format_size(size_bytes: int) -> str:

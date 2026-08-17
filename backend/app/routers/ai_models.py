@@ -18,8 +18,9 @@ from app.models.inspiration import (
     AIAnalysisLog,
     analysis_log_filter as _analysis_log_filter,
 )
-from app.routers.ai_shared import _format_size, _fmt_utc, _update_env_file
+from app.routers.ai_shared import _format_size, _update_env_file
 from app.services import gpu_service
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -396,7 +397,7 @@ async def model_stats(db: AsyncSession = Depends(get_db)) -> dict:
             "success_rate": round(successes / row.total * 100, 1) if row.total > 0 else 0,
             "avg_time_ms": round(row.avg_time) if row.avg_time else 0,
             "avg_tags": avg_tags,
-            "last_used": _fmt_utc(row.last_used),
+            "last_used": format_utc(row.last_used),
         })
 
     # 全局汇总

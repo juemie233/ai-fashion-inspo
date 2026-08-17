@@ -17,17 +17,13 @@ from app.models.inspiration import (
     analysis_log_filter,
 )
 from app.models.tag import InspirationTag
+from app.services.task_runners.common import _chunked
 from app.utils.image_hash import hamming_distance, perceptual_hash
 
 # 默认阈值（768 位 RGB dHash 汉明距离）：≤32 视为近似重复（约 4% 差异内）
 DEFAULT_THRESHOLD = 32
 # 默认扫描上限（0 表示不限）；同步接口，超大库建议分批或后续改造为任务队列
 DEFAULT_LIMIT = 1000
-
-
-def _chunked(ids: list[str], size: int = 500) -> list[list[str]]:
-    """将 ID 列表按 size 分片，规避 SQLite IN(...) 变量上限。"""
-    return [ids[i : i + size] for i in range(0, len(ids), size)]
 
 
 async def _collect_scoring_ids(

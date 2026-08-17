@@ -10,6 +10,7 @@ import {
   normalizeTaskStatus,
 } from '@/utils/taskLabel'
 import { formatSize } from '@/utils/format'
+import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
 
 /** 任务队列原始条目（/api/tasks 返回项） */
 interface QueueTask {
@@ -141,15 +142,10 @@ export function useTaskCenter() {
     }
   }
 
+  /** 关键词展示（任务详情）：解析 config 中的关键词，带前缀拼接；无则返回空串 */
   function parseKeywords(config: string | null): string {
-    if (!config) return ''
-    try {
-      const obj = JSON.parse(config)
-      const kw = obj?.keywords
-      return Array.isArray(kw) && kw.length ? `关键词：${kw.join('、')}` : ''
-    } catch {
-      return ''
-    }
+    const kw = parseKeywordsList(config)
+    return kw.length > 0 ? `关键词：${kw.join('、')}` : ''
   }
 
   /** 解析采集任务配置中的目标采集数量 max_count（无则返回 0） */

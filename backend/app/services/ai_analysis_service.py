@@ -41,11 +41,6 @@ class InvalidMediaError(Exception):
         self.message = message
 
 
-def _fmt_utc(dt: datetime | None) -> str | None:
-    """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串（统一走 utils/time.format_utc）。"""
-    return format_utc(dt)
-
-
 async def trigger_analysis(
     db: AsyncSession, inspiration_id: str, non_image_message: str
 ) -> str:
@@ -281,7 +276,7 @@ async def get_analysis_history(
             "processing_time_ms": log.processing_time_ms,
             "error": log.error,
             "status": "error" if log.error else "success",
-            "created_at": _fmt_utc(log.created_at),
+            "created_at": format_utc(log.created_at),
             "tags": log_tags,
         })
 
@@ -417,7 +412,7 @@ async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
         {
             "result": r.result,
             "reason": r.reason,
-            "reviewed_at": _fmt_utc(r.reviewed_at),
+            "reviewed_at": format_utc(r.reviewed_at),
         }
         for r in review_result.scalars().all()
     ]
@@ -435,7 +430,7 @@ async def get_analysis_detail(db: AsyncSession, log_id: int) -> dict | None:
         "processing_time_ms": log.processing_time_ms,
         "error": log.error,
         "status": "error" if log.error else "success",
-        "created_at": _fmt_utc(log.created_at),
+        "created_at": format_utc(log.created_at),
         "thumbnail_path": insp.thumbnail_path if insp else None,
         "file_path": insp.file_path if insp else None,
         "tags": tags,
@@ -496,7 +491,7 @@ def _build_analysis_item(log: AIAnalysisLog, structured_tags: list[str] | None) 
         "processing_time_ms": log.processing_time_ms,
         "error": log.error,
         "status": "error" if log.error else "success",
-        "created_at": _fmt_utc(log.created_at),
+        "created_at": format_utc(log.created_at),
         "parsed_response": parsed,
         "structured_tags": tags,
         "tags_count": {

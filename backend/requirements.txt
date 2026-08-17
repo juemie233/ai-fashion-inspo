@@ -18,15 +18,12 @@ Pillow==11.1.0
 
 # AI / Ollama client
 httpx==0.28.1
-ollama==0.4.7
 
 # Scraping
 playwright==1.49.1
-playwright-stealth==1.0.6
 
 # Utilities
 aiofiles==24.1.0
-python-dateutil==2.9.0
 
 # 向量检索（LanceDB 嵌入式向量库，语义搜索 / 以图搜图）
 # 注意：以图搜图需要额外的 CLIP 模型，依赖较重（torch + sentence-transformers），
