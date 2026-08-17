@@ -448,7 +448,7 @@ async function removeTag(t: InspirationTagOut) {
           title="此素材在垃圾桶中"
           style="margin-bottom: 16px"
         >
-          删除原因：{{ detail.trash_reason || '未知' }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
+          删除来源：{{ detail.trash_source === 'auto' ? '自动移动（质量审核）' : '手动移入' }}；原因：{{ detail.trash_reason || '未知' }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
         </n-alert>
 
         <div class="detail-layout">

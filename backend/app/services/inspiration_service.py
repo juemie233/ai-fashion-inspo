@@ -571,13 +571,14 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     if not rejected:
         return {"trashed": 0, "message": "没有已拒绝的素材"}
 
-    # 标记软删除（reason 自动推断：rejected → 质量差）
+    # 标记软删除（reason 自动推断：rejected → 质量差；来源标记为自动移动）
     trashed_items: list[Inspiration] = []
     for insp in rejected:
         if insp.deleted_at is not None:
             continue
         insp.deleted_at = utcnow()
         insp.trash_reason = _resolve_trash_reason(None, insp)
+        insp.trash_source = "auto"
         trashed_items.append(insp)
 
     # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，
@@ -787,17 +788,21 @@ async def batch_trash_inspirations(
     db: AsyncSession,
     inspiration_ids: list[str],
     reason: str | None = None,
+    source: str = "manual",
 ) -> dict:
     """批量将素材移入垃圾桶（逐个复用单条软删除逻辑，容忍部分失败）。
 
     单条素材的文件移动与软删除已在 trash_inspiration 内完成并各自提交；
     此处逐条调用，不存在/已在垃圾桶中的 ID 计入 skipped，不影响其余素材。
+
+    参数:
+        source: 移入来源（manual 手动 / auto 质量审核自动移动），逐条透传给 trash_inspiration
     """
     trashed = 0
     skipped = 0
     for inspiration_id in inspiration_ids:
         try:
-            await trash_inspiration(db, inspiration_id, reason)
+            await trash_inspiration(db, inspiration_id, reason, source=source)
             trashed += 1
         except HTTPException:
             skipped += 1
@@ -959,13 +964,19 @@ def _resolve_trash_reason(reason: str | None, inspiration: Inspiration) -> str:
 
 
 async def trash_inspiration(
-    db: AsyncSession, inspiration_id: str, reason: str | None
+    db: AsyncSession,
+    inspiration_id: str,
+    reason: str | None,
+    source: str = "manual",
 ) -> Inspiration:
     """将素材移入垃圾桶（软删除）：文件移入 trash/，标记 deleted_at 与 trash_reason。
 
     向量保留不删除（阶段 2 负样本学习依赖垃圾桶素材的 CLIP 图像向量），
     恢复时无需重建、清空时才删除向量。软删除即写入来源 URL 墓碑，采集器
     后续遇到该 URL 会直接跳过，不再重复采集。
+
+    参数:
+        source: 移入来源（manual 手动移入 / auto 质量审核自动移动），垃圾桶据此展示来源
     """
     result = await db.execute(
         select(Inspiration)
@@ -984,6 +995,7 @@ async def trash_inspiration(
     # 回滚/失败」导致 DB 仍指向原路径的悬空记录（与 delete_inspiration 的顺序一致）。
     inspiration.deleted_at = utcnow()
     inspiration.trash_reason = resolved
+    inspiration.trash_source = source
     # 进垃圾桶视为「垃圾素材」，立即写入来源 URL 墓碑，防止采集器重复采集
     await seal_urls(db, [inspiration.source_url])
     await db.commit()
@@ -1049,6 +1061,7 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     # 文件留在 trash/ 由后续清空任务兜底清理，恢复本身不受阻断。
     inspiration.deleted_at = None
     inspiration.trash_reason = None
+    inspiration.trash_source = None
     await db.commit()
 
     paths_changed = False

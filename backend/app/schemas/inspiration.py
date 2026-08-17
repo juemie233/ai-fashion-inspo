@@ -75,6 +75,7 @@ class MoveToTrashRequest(BaseModel):
     """移入垃圾桶的请求体（reason 为空时按素材状态自动推断）。"""
 
     reason: TrashReason | None = None
+    source: Literal["manual", "auto"] | None = None  # 移入来源：手动 / 质量审核自动移动
 
 
 class BatchFavoriteRequest(BaseModel):
@@ -89,6 +90,7 @@ class BatchTrashRequest(BaseModel):
 
     ids: list[str] = Field(min_length=1, max_length=500)
     reason: TrashReason | None = None
+    source: Literal["manual", "auto"] | None = None  # 移入来源：手动 / 质量审核自动移动
 
 
 class BatchUpdateRequest(BaseModel):
@@ -118,6 +120,7 @@ class InspirationOut(BaseModel):
     is_ai_generated: bool = False
     deleted_at: datetime | None = None
     trash_reason: TrashReason | None = None
+    trash_source: str | None = None  # 移入来源：manual（手动）/ auto（质量审核自动移动）
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
@@ -211,6 +214,7 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         is_ai_generated=inspiration.is_ai_generated,
         deleted_at=inspiration.deleted_at,
         trash_reason=inspiration.trash_reason,
+        trash_source=inspiration.trash_source,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,

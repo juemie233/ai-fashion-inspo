@@ -213,9 +213,15 @@ async def move_to_trash(
     payload: MoveToTrashRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> InspirationOut:
-    """将素材移入垃圾桶（软删除），文件移入 storage/trash/，可恢复。"""
+    """将素材移入垃圾桶（软删除），文件移入 storage/trash/，可恢复。
+
+    source 标记移入来源：manual（手动移入，默认）/ auto（质量审核自动移动）。
+    """
     inspiration = await inspiration_service.trash_inspiration(
-        db, inspiration_id, payload.reason if payload else None
+        db,
+        inspiration_id,
+        payload.reason if payload else None,
+        source=(payload.source if payload and payload.source else "manual"),
     )
     return _to_out(inspiration)
 
@@ -250,6 +256,7 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         is_ai_generated=inspiration.is_ai_generated,
         deleted_at=inspiration.deleted_at,
         trash_reason=inspiration.trash_reason,
+        trash_source=inspiration.trash_source,
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=[
@@ -322,9 +329,10 @@ async def batch_trash(
     """批量将素材移入垃圾桶（软删除，可恢复）。
 
     reason 为空时按各素材状态自动推断；不存在/已在垃圾桶中的 ID 计入 skipped。
+    source 标记移入来源：manual（手动移入，默认）/ auto（质量审核自动移动）。
     """
     return await inspiration_service.batch_trash_inspirations(
-        db, data.ids, data.reason
+        db, data.ids, data.reason, source=data.source or "manual"
     )
 
 

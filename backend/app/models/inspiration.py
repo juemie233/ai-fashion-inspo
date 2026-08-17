@@ -84,6 +84,9 @@ class Inspiration(Base):
     trash_reason: Mapped[str | None] = mapped_column(
         String(32), nullable=True
     )  # 删除原因：质量差/重复/不喜欢/隐私/其他（负样本学习只用「质量差」子集）
+    trash_source: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )  # 移入来源：manual（手动移入）/ auto（质量审核自动移动），用于垃圾桶区分展示
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, index=True

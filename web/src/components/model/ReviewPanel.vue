@@ -322,12 +322,12 @@ async function batchApprove(ids: string[], clear: () => void) {
   }
 }
 
-/** 批量移入垃圾桶：把选中的未通过素材移入垃圾桶（负样本学习仍会使用） */
+/** 批量移入垃圾桶：把选中的未通过素材移入垃圾桶（负样本学习仍会使用），来源标记为自动移动 */
 async function batchTrashSelected(ids: string[], clear: () => void) {
   if (ids.length === 0) return
   batchTrashing.value = true
   try {
-    const { trashed, skipped } = await batchTrash(ids, '质量差')
+    const { trashed, skipped } = await batchTrash(ids, '质量差', 'auto')
     const parts = [`已将 ${trashed} 个素材移入垃圾桶`]
     if (skipped > 0) parts.push(`${skipped} 个跳过`)
     message.success(parts.join('，'))

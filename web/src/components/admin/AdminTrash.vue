@@ -70,6 +70,12 @@ function daysRemaining(deletedAt?: string | null): string {
   return `${days} 天`
 }
 
+/** 移入来源与原因展示：手动移入 / 自动移动（质量审核） + 删除原因 */
+function trashSourceLabel(item: InspirationOut): string {
+  const reason = item.trash_reason || '未知'
+  return item.trash_source === 'auto' ? `自动移动 · ${reason}` : `手动移入 · ${reason}`
+}
+
 // ── 单条操作 ──
 const restoring = ref<Set<string>>(new Set())
 const deleting = ref<Set<string>>(new Set())
@@ -192,7 +198,9 @@ async function cleanExpired() {
             loading="lazy"
           />
           <div class="meta">
-            <n-tag size="tiny" type="error" :bordered="false">{{ item.trash_reason || '未知' }}</n-tag>
+            <n-tag size="tiny" type="error" :bordered="false" :title="trashSourceLabel(item)">
+              {{ trashSourceLabel(item) }}
+            </n-tag>
             <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
           </div>
           <div class="actions">

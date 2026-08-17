@@ -9,6 +9,9 @@ export type QualityStatus = 'pending' | 'approved' | 'rejected'
 /** 垃圾桶删除原因（负样本学习只用「质量差」子集保证语义纯净） */
 export type TrashReason = '质量差' | '重复' | '不喜欢' | '隐私' | '其他'
 
+/** 移入垃圾桶来源：manual 手动移入 / auto 质量审核自动移动（垃圾桶据此展示来源） */
+export type TrashSource = 'manual' | 'auto'
+
 /** 删除原因可选项（前端下拉用） */
 export const TRASH_REASON_OPTIONS: { label: string; value: TrashReason }[] = [
   { label: '质量差', value: '质量差' },
@@ -35,6 +38,7 @@ export interface InspirationOut {
   is_ai_generated?: boolean
   deleted_at?: string | null
   trash_reason?: TrashReason | null
+  trash_source?: TrashSource | null
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
@@ -125,11 +129,11 @@ export async function batchFavorite(ids: string[], isFavorite: boolean): Promise
   return data.updated
 }
 
-/** 批量移入垃圾桶（软删除），返回 {trashed, skipped} */
-export async function batchTrash(ids: string[], reason?: TrashReason) {
+/** 批量移入垃圾桶（软删除），返回 {trashed, skipped}；source 标记来源（默认手动） */
+export async function batchTrash(ids: string[], reason?: TrashReason, source: TrashSource = 'manual') {
   const { data } = await apiClient.post<{ trashed: number; skipped: number }>(
     '/inspirations/batch-trash',
-    reason ? { ids, reason } : { ids },
+    reason || source !== 'manual' ? { ids, reason, source } : { ids },
   )
   return data
 }
@@ -233,11 +237,11 @@ export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)
 }
 
-/** 移入垃圾桶（软删除，可恢复；reason 为空时后端按素材状态自动推断） */
-export async function moveToTrash(id: string, reason?: TrashReason) {
+/** 移入垃圾桶（软删除，可恢复；reason 为空时后端按素材状态自动推断；source 默认手动） */
+export async function moveToTrash(id: string, reason?: TrashReason, source: TrashSource = 'manual') {
   const { data } = await apiClient.post<InspirationOut>(
     `/inspirations/${id}/trash`,
-    reason ? { reason } : {},
+    reason || source !== 'manual' ? { reason, source } : {},
   )
   return data
 }
