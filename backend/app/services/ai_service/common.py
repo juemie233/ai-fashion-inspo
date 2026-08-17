@@ -33,26 +33,34 @@ def _read_image_base64(file_path: str) -> tuple[str, float]:
     if not full_path.is_file():
         raise ValueError(f"路径不是文件: {file_path}")
 
-    # 图片预检：通过扩展名判断
+    # 图片预检：通过扩展名做白名单校验（防路径/类型误用）
     ext = full_path.suffix.lower()
     if ext not in _ALLOWED_IMG_EXT:
         raise ValueError(f"不支持的图片格式: {ext}，支持: {', '.join(sorted(_ALLOWED_IMG_EXT))}")
 
-    # 读取图片 —— WebP/BMP/GIF 统一转为 JPEG
-    # 实测 qwen3-vl:8b-instruct 在 Ollama 下无法解码 WebP（报 "Failed to load image or audio file"），
-    # JPEG 是所有视觉模型通用支持的格式，因此无论模型一律转换，保证兼容性。
     import base64
     image_bytes = full_path.read_bytes()
-    if ext in {".webp", ".bmp", ".gif"}:
-        try:
-            from io import BytesIO
-            from PIL import Image
-            buf = BytesIO()
-            Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
-            image_bytes = buf.getvalue()
-            logger.info(f"{ext} → JPEG 转换完成 ({full_path.name})")
-        except Exception as e:
-            raise ValueError(f"{ext} 图片转换 JPEG 失败: {e}。文件可能已损坏。") from e
+
+    # 按「实际内容格式」而非扩展名判断是否需要转换：
+    # 小红书等来源常把 WebP 内容存成 .jpg 扩展名，仅按扩展名判断会漏掉这类文件，
+    # 导致 WebP 字节直接交给 Ollama 而报 "Failed to load image or audio file"（审核/分析整批失败）。
+    # 用 PIL 读文件头识别真实格式，凡 Ollama 无法解码的格式（WebP/BMP/GIF）统一转 JPEG。
+    from io import BytesIO
+    from PIL import Image
+
+    try:
+        with Image.open(BytesIO(image_bytes)) as im:
+            actual_format = (im.format or "").upper()
+            if actual_format in {"WEBP", "BMP", "GIF"}:
+                buf = BytesIO()
+                im.convert("RGB").save(buf, "JPEG", quality=95)
+                image_bytes = buf.getvalue()
+                logger.info(
+                    f"实际格式 {actual_format}（扩展名 {ext}）→ JPEG 转换完成 ({full_path.name})"
+                )
+    except Exception as e:
+        raise ValueError(f"图片解析失败（无法识别格式）: {e}。文件可能已损坏。") from e
+
     image_data = base64.b64encode(image_bytes).decode("utf-8")
     file_size_mb = full_path.stat().st_size / (1024 * 1024)
     return image_data, file_size_mb
