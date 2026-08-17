@@ -316,6 +316,26 @@ async def scan_candidates(
     return {"total": total, "items": candidates}
 
 
+def _skip_entry(insp: Inspiration, reason: str) -> dict:
+    """构造跳过明细条目，附带素材文件信息供前端缩略图展示与素材库定位跳转。
+
+    参数:
+        insp: 素材记录（文件信息取自该记录）
+        reason: 跳过原因
+
+    返回:
+        {"id": str, "reason": str, "file_path": str | None,
+         "thumbnail_path": str | None, "created_at": str | None}
+    """
+    return {
+        "id": insp.id,
+        "reason": reason,
+        "file_path": insp.file_path,
+        "thumbnail_path": insp.thumbnail_path,
+        "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
+    }
+
+
 async def apply_crops(
     db: AsyncSession,
     ids: list[str],
@@ -335,7 +355,11 @@ async def apply_crops(
     返回:
         {
             "processed": 成功裁剪数,
-            "skipped": [{"id": str, "reason": str}, ...],
+            "skipped": [{
+                "id": str, "reason": str,
+                "file_path": str | None, "thumbnail_path": str | None,
+                "created_at": str | None,  # 记录不存在时仅 id + reason
+            }, ...],
             "backup_dir": str | None,
             "vector_task_id": int | None,
         }
@@ -353,24 +377,27 @@ async def apply_crops(
     skipped: list[dict] = []
     for insp_id in ids:
         insp = insp_map.get(insp_id)
-        if insp is None or insp.deleted_at is not None:
-            skipped.append({"id": insp_id, "reason": "记录不存在或已入垃圾桶"})
+        if insp is None:
+            skipped.append({"id": insp_id, "reason": "记录不存在"})
+            continue
+        if insp.deleted_at is not None:
+            skipped.append(_skip_entry(insp, "已入垃圾桶"))
             continue
         if insp.media_type != "image":
-            skipped.append({"id": insp_id, "reason": "非图片素材"})
+            skipped.append(_skip_entry(insp, "非图片素材"))
             continue
         full = settings.storage_root / insp.file_path
         if not full.exists():
-            skipped.append({"id": insp_id, "reason": "文件不存在"})
+            skipped.append(_skip_entry(insp, "文件不存在"))
             continue
         try:
             with Image.open(full) as probe:
                 width, height = probe.size
         except Exception:
-            skipped.append({"id": insp_id, "reason": "文件无法解码"})
+            skipped.append(_skip_entry(insp, "文件无法解码"))
             continue
         if height / width < MIN_RATIO:
-            skipped.append({"id": insp_id, "reason": "非竖屏截图（高/宽 < 1.75）"})
+            skipped.append(_skip_entry(insp, "非竖屏截图（高/宽 < 1.75）"))
             continue
         if mode == "auto":
             try:
@@ -378,7 +405,7 @@ async def apply_crops(
                 t_frac = round(top_px / height, 6)
                 b_frac = round((height - 1 - bottom_px) / height, 6)
             except ValueError as e:
-                skipped.append({"id": insp_id, "reason": f"自动检测失败：{e}"})
+                skipped.append(_skip_entry(insp, f"自动检测失败：{e}"))
                 continue
         else:
             t_frac, b_frac = crop_top, crop_bottom
@@ -411,7 +438,7 @@ async def apply_crops(
                     )
                 ).scalars().first()
                 if dup_id:
-                    skipped.append({"id": insp.id, "reason": f"裁剪结果与素材 {dup_id} 内容重复"})
+                    skipped.append(_skip_entry(insp, f"裁剪结果与素材 {dup_id} 内容重复"))
                     tmp.unlink(missing_ok=True)
                     continue
 
@@ -440,7 +467,7 @@ async def apply_crops(
         except Exception as e:
             if tmp is not None and tmp.exists():
                 tmp.unlink(missing_ok=True)
-            skipped.append({"id": insp.id, "reason": f"处理失败: {e}"})
+            skipped.append(_skip_entry(insp, f"处理失败: {e}"))
 
     # 写回数据库（标签/收藏/来源等字段不动）
     for insp, new_hash, thumb_path, colors in successes:

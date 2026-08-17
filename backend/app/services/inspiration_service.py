@@ -394,9 +394,14 @@ async def list_inspirations(
     dominant_color: str | None = None,      # 主色调（hex 子串匹配）
     date_from: str | None = None,           # 上传日期下限（ISO 日期）
     date_to: str | None = None,             # 上传日期上限（ISO 日期）
+    ids: list[str] | None = None,           # 精确 ID 过滤（定位跳转用，与其他筛选条件叠加）
     sort: str = "newest",
 ) -> tuple[list[Inspiration], int]:
     """分页查询灵感列表，支持多维筛选和排序。
+
+    参数:
+        ids: 非空时仅返回这些 ID 的素材（用于「定位跳转」精确展示）
+            ；与其余筛选条件为叠加（AND）关系，已删除素材始终排除。
 
     返回:
         (素材列表, 总数)
@@ -406,6 +411,8 @@ async def list_inspirations(
         selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
     ).where(NOT_DELETED)
 
+    if ids:
+        query = query.where(Inspiration.id.in_(ids))
     if source_type:
         query = query.where(Inspiration.source_type == source_type)
     if is_favorite is not None:

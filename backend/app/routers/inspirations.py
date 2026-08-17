@@ -125,6 +125,7 @@ async def list_inspirations(
     dominant_color: str | None = Query(None, description="主色调 hex 值（子串匹配）"),
     date_from: str | None = Query(None, description="上传日期下限，ISO 日期"),
     date_to: str | None = Query(None, description="上传日期上限，ISO 日期"),
+    ids: str | None = Query(None, description="逗号分隔的素材 ID（精确定位，仅返回这些素材）"),
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
@@ -133,6 +134,7 @@ async def list_inspirations(
         [t.strip() for t in include_tags.split(",") if t.strip()]
         if include_tags else None
     )
+    id_list = [i.strip() for i in ids.split(",") if i.strip()] if ids else None
     inspirations, total = await inspiration_service.list_inspirations(
         db,
         page=page,
@@ -148,6 +150,7 @@ async def list_inspirations(
         dominant_color=dominant_color,
         date_from=date_from,
         date_to=date_to,
+        ids=id_list,
         sort=sort,
     )
     return InspirationListOut(

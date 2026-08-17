@@ -45,6 +45,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     dominant_color?: string
     date_from?: string
     date_to?: string
+    ids?: string
     sort?: string
   } = {}) {
     loading.value = true
@@ -66,6 +67,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         dominant_color: params.dominant_color,
         date_from: params.date_from,
         date_to: params.date_to,
+        ids: params.ids,
         sort: params.sort,
       })
       // 忽略过期响应（快速翻页时旧请求可能后返回）
@@ -103,6 +105,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         dominant_color: _lastParams.dominant_color,
         date_from: _lastParams.date_from,
         date_to: _lastParams.date_to,
+        ids: _lastParams.ids,
         sort: _lastParams.sort,
       })
       if (seq !== _requestSeq) return

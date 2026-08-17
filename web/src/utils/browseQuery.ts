@@ -13,6 +13,23 @@ export const SORT_STORAGE_KEY = 'masonry-sort'
 /** 每页数量偏好持久化 key（与 HomeView 共用） */
 export const PAGE_SIZE_STORAGE_KEY = 'masonry-page-size'
 
+/** 素材库定位跳转的 URL query 参数名（如 /?focus=id1,id2） */
+export const FOCUS_QUERY_KEY = 'focus'
+
+/**
+ * 解析素材库定位跳转参数：逗号分隔的素材 ID 列表 → 去空后的数组。
+ *
+ * 供 HomeView 从 URL query 恢复「定位模式」，供 AdminPhoneCrop 构造跳转链接。
+ */
+export function parseFocusIds(query: Record<string, unknown>): string[] {
+  const raw = query[FOCUS_QUERY_KEY]
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 /** 读取本地持久化的排序偏好，缺省回退 newest */
 export function storedBrowseSort(): string {
   return localStorage.getItem(SORT_STORAGE_KEY) || DEFAULT_BROWSE_SORT
@@ -33,11 +50,7 @@ export function storedBrowsePageSize(): number {
  *     page: 页码（从 1 开始）
  *     size: 每页数量
  */
-export function buildBrowseParams(
-  state: Record<string, any>,
-  page: number,
-  size: number,
-) {
+export function buildBrowseParams(state: Record<string, any>, page: number, size: number) {
   return {
     page,
     size,
@@ -56,6 +69,7 @@ export function buildBrowseParams(
     dominant_color: state.color ? state.color : undefined,
     date_from: state.date_from || undefined,
     date_to: state.date_to || undefined,
+    ids: state.ids ? state.ids : undefined,
     sort: state.sort || storedBrowseSort(),
   }
 }

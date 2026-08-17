@@ -7,6 +7,7 @@ import {
   storedBrowsePageSize,
   SORT_STORAGE_KEY,
   PAGE_SIZE_STORAGE_KEY,
+  parseFocusIds,
 } from '../browseQuery'
 
 describe('buildBrowseParams', () => {
@@ -60,6 +61,24 @@ describe('buildBrowseParams', () => {
   it('sort 使用 state.sort，缺失时回退本地持久化', () => {
     expect(buildBrowseParams({ sort: 'tag_count' }, 1, 50).sort).toBe('tag_count')
     expect(buildBrowseParams({}, 1, 50).sort).toBe(storedBrowseSort())
+  })
+
+  it('映射 ids 精确过滤（定位跳转），缺失时不传参', () => {
+    const p = buildBrowseParams({ ids: 'id1,id2' }, 1, 50)
+    expect(p.ids).toBe('id1,id2')
+    expect(buildBrowseParams({}, 1, 50).ids).toBeUndefined()
+  })
+})
+
+describe('parseFocusIds', () => {
+  it('解析逗号分隔的定位 ID，去空去空格', () => {
+    expect(parseFocusIds({ focus: 'id1, id2 ,,id3' })).toEqual(['id1', 'id2', 'id3'])
+  })
+
+  it('无 focus 参数或为空时返回空数组', () => {
+    expect(parseFocusIds({})).toEqual([])
+    expect(parseFocusIds({ focus: '' })).toEqual([])
+    expect(parseFocusIds({ focus: 123 })).toEqual([])
   })
 })
 

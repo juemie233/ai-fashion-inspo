@@ -5,7 +5,7 @@
  * 按行从左到右、从上到下，与「最新在前」等时间排序的扫视习惯一致；
  * 列数随密度与视口宽度响应式调整。 */
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import InspirationCard from './InspirationCard.vue'
 import type { InspirationOut } from '@/api/inspirations'
 
@@ -27,6 +27,8 @@ const props = defineProps<{
   hoverZoom?: boolean
   /** 显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
   showViewButton?: boolean
+  /** 定位模式：这些素材 id 高亮（金色描边），列表加载后自动滚动到首个目标 */
+  focusedIds?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -85,13 +87,33 @@ const columns = computed<InspirationOut[][]>(() => {
   props.items.forEach((item, i) => cols[i % colCount.value].push(item))
   return cols
 })
+
+// ===== 定位模式：列表加载后滚动到首个被定位素材 =====
+watch(
+  () => props.items,
+  async () => {
+    if (!props.focusedIds?.length) return
+    await nextTick()
+    const first = props.items.find((i) => props.focusedIds?.includes(i.id))
+    if (!first) return
+    document
+      .querySelector(`.masonry-cell[data-insp-id="${first.id}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  },
+)
 </script>
 
 <template>
   <div class="masonry-container">
     <div class="masonry-grid" :class="'density-' + (density || 'standard')">
       <div v-for="(col, ci) in columns" :key="ci" class="masonry-column">
-        <div v-for="item in col" :key="item.id" class="masonry-cell">
+        <div
+          v-for="item in col"
+          :key="item.id"
+          class="masonry-cell"
+          :class="{ focused: focusedIds?.includes(item.id) }"
+          :data-insp-id="item.id"
+        >
           <InspirationCard
             :item="item"
             :badge="badges?.[item.id]"
@@ -158,6 +180,46 @@ const columns = computed<InspirationOut[][]>(() => {
 
 .masonry-cell {
   width: 100%;
+}
+
+/* 定位模式：被定位素材金色描边 + 角标，加载时闪烁提示 */
+.masonry-cell.focused {
+  position: relative;
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 3px #f0a020,
+    0 0 12px rgba(240, 160, 32, 0.45);
+  animation: focus-pulse 1.2s ease-in-out 2;
+}
+
+.masonry-cell.focused::after {
+  content: '已定位';
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #f0a020;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  pointer-events: none;
+}
+
+@keyframes focus-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px #f0a020,
+      0 0 12px rgba(240, 160, 32, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px #f0a020,
+      0 0 20px rgba(240, 160, 32, 0.8);
+  }
 }
 
 .loading-bar {

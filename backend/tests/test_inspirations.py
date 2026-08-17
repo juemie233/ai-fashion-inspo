@@ -112,6 +112,27 @@ def test_tag_count_sort(client, upload):
     assert ids[0] == a
 
 
+def test_list_filter_by_ids(client, upload):
+    """列表 ids 过滤：仅返回指定 ID 的素材（裁剪跳过素材「定位跳转」依赖）。"""
+    a = upload(color=(200, 100, 50)).json()["id"]
+    b = upload(color=(30, 40, 50)).json()["id"]
+    c = upload(color=(90, 10, 200)).json()["id"]
+
+    r = client.get("/api/inspirations", params={"ids": f"{a},{c}"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 2
+    assert {i["id"] for i in r.json()["items"]} == {a, c}
+
+    # 不存在的 ID：返回空列表而非报错
+    empty = client.get("/api/inspirations", params={"ids": "no-such-id"}).json()
+    assert empty["total"] == 0
+
+    # 已删除素材始终排除（不受 ids 影响）
+    client.post(f"/api/inspirations/{b}/trash", json={"reason": "不喜欢"})
+    trashed = client.get("/api/inspirations", params={"ids": b}).json()
+    assert trashed["total"] == 0
+
+
 def test_batch_favorite(client, upload):
     """批量收藏素材。"""
     a = upload().json()["id"]

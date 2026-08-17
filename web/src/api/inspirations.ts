@@ -199,6 +199,7 @@ export async function fetchInspirations(params: {
   dominant_color?: string
   date_from?: string
   date_to?: string
+  ids?: string
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })

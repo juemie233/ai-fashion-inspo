@@ -160,6 +160,14 @@ def test_apply_skips_trash_and_missing(client):
     assert "垃圾桶" in reasons[insp["id"]]
     assert "不存在" in reasons["no-such-id"]
 
+    # 跳过明细附带素材文件信息（供前端缩略图展示与素材库定位跳转）
+    trashed = next(s for s in body["skipped"] if s["id"] == insp["id"])
+    assert trashed["file_path"] and trashed["thumbnail_path"]
+    assert trashed["created_at"]
+    # 记录不存在的条目只有 id + reason
+    missing = next(s for s in body["skipped"] if s["id"] == "no-such-id")
+    assert "file_path" not in missing
+
 
 def test_apply_empty_ids_rejected(client):
     """空 ID 列表返回 400。"""
