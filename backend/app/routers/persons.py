@@ -271,7 +271,7 @@ async def delete_photo(
     photo_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """删除照片组内的单张照片。"""
+    """删除照片组内的单张照片（校验照片归属 set_id，防跨组误删）。"""
     try:
         photo_set = await person_service.get_photo_set(db, set_id)
     except person_service.PersonNotFoundError as e:
@@ -279,7 +279,7 @@ async def delete_photo(
     if photo_set.person_id != person_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
     try:
-        await person_service.delete_photo(db, photo_id)
+        await person_service.delete_photo(db, photo_id, set_id=set_id)
     except person_service.PersonNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
     return {"removed": 1}

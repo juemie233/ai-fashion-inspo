@@ -133,14 +133,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         "image_skipped": image_skipped,
         "image_failed": image_failed,
     }
-    task.done = total
-    task.progress = 100
-    task.error = None
-    task.updated_at = utcnow()
+    # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
 
     # 防假成功：存在图片素材但图像向量全部生成失败（系统性故障，如 CLIP 不可用 /
     # LanceDB 未安装 / 图片文件缺失），任务不能冒充「完成」，交由 worker 标记失败。
+    # 判定在写「完成态」之前：异常抛出时任务仍为 running，避免「先 commit 完成态
+    # 再抛异常」在进程崩溃时残留假完成。
     if image_done == 0 and image_failed > 0:
         detail = (
             f"向量回填失败：{image_failed} 个图片素材的图像向量全部生成失败"
@@ -148,6 +147,12 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             f"图片文件缺失或写入失败"
         )
         raise PermanentTaskError(detail)
+
+    task.done = total
+    task.progress = 100
+    task.error = None
+    task.updated_at = utcnow()
+    await db.commit()
 
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "

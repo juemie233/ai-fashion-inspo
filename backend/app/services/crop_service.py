@@ -397,8 +397,9 @@ async def apply_crops(
         try:
             tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
 
-            # 新内容哈希 + 去重检查（重复则放弃本条，保留原图）
-            new_hash = file_sha256(tmp)
+            # 新内容哈希 + 去重检查（重复则放弃本条，保留原图）。
+            # 大文件哈希为阻塞 I/O，放线程池执行避免卡事件循环（与 scan 阶段一致）
+            new_hash = await asyncio.to_thread(file_sha256, tmp)
             if new_hash:
                 dup_id = (
                     await db.execute(
@@ -414,9 +415,10 @@ async def apply_crops(
                     tmp.unlink(missing_ok=True)
                     continue
 
-            # 备份原图 → 原子替换
+            # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪同一素材时覆盖备份
             backup_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(full, backup_dir / f"{insp.id}{full.suffix}")
+            backup_name = f"{insp.id}_{datetime.now().strftime('%H%M%S%f')}{full.suffix}"
+            shutil.copy2(full, backup_dir / backup_name)
             os.replace(tmp, full)
             tmp = None
 

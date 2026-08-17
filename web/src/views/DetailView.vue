@@ -200,12 +200,12 @@ async function goNeighbor(dir: 'prev' | 'next') {
   }
 }
 
-/** 键盘左右键切换相邻素材（灯箱打开、输入聚焦或浏览上下文缺失时禁用） */
+/** 键盘左右键切换相邻素材（灯箱打开、弹窗打开、输入聚焦或浏览上下文缺失时禁用） */
 function onKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null
   const tag = target?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
-  if (lightboxOpen.value) return
+  if (lightboxOpen.value || trashModalOpen.value) return
   if (e.key === 'ArrowLeft' && hasPrev.value) {
     e.preventDefault()
     goNeighbor('prev')

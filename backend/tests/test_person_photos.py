@@ -135,6 +135,23 @@ def test_photo_set_wrong_person_404(client, create_person):
     assert r.status_code == 404
 
 
+def test_delete_photo_wrong_set_404(client, create_person):
+    """用错误的照片组 ID 删除照片 → 404（防跨组误删，照片保留）。"""
+    person = create_person(name="ModelE", person_type="model")
+    s1 = _create_set(client, person, "组一")
+    s2 = _create_set(client, person, "组二")
+    r = _upload_photo(client, person, s1["id"], color=(5, 5, 5))
+    photo_id = r.json()["id"]
+
+    # 用组二的 set_id 删除组一的照片 → 404，且照片仍存在
+    resp = client.delete(
+        f"/api/persons/{person['id']}/photo-sets/{s2['id']}/photos/{photo_id}"
+    )
+    assert resp.status_code == 404
+    detail = client.get(f"/api/persons/{person['id']}/photo-sets/{s1['id']}").json()
+    assert detail["photo_count"] == 1
+
+
 def test_photo_set_delete_missing_404(client, create_person):
     person = create_person(name="P3")
     # 删除不存在的照片组 → 404（而非 500）

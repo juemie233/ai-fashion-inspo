@@ -792,10 +792,19 @@ async def delete_photo_set(db: AsyncSession, set_id: int) -> None:
         delete_files_counting(*photo_paths)
 
 
-async def delete_photo(db: AsyncSession, photo_id: int) -> None:
-    """删除单张照片（提交成功后清理物理文件），不存在抛 PersonNotFoundError。"""
+async def delete_photo(
+    db: AsyncSession, photo_id: int, set_id: int | None = None
+) -> None:
+    """删除单张照片（提交成功后清理物理文件），不存在抛 PersonNotFoundError。
+
+    参数:
+        set_id: 期望所属的照片组 ID。传入时校验照片归属（防跨组误删），
+            归属不符与不存在同等对待（404，不泄露组间关系）。
+    """
     photo = await db.get(PersonPhoto, photo_id)
     if not photo:
+        raise PersonNotFoundError("照片未找到")
+    if set_id is not None and photo.set_id != set_id:
         raise PersonNotFoundError("照片未找到")
 
     file_path, thumb_path = photo.file_path, photo.thumbnail_path

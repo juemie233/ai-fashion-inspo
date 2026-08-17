@@ -191,13 +191,13 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "failed": failed,
         "ai_generated": ai_generated,
     }
-    task.done = task.total
-    task.progress = 100
-    task.updated_at = utcnow()
+    # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
 
-    # 整批全部审核失败：不能标记成功。抛出任务级异常由 worker 处理——
+    # 整批全部审核失败：不能标记成功。抛出任务级异常交由 worker 处理——
     # 可恢复错误（Ollama 未启动/超时/服务异常）自动重试，永久错误（请求被拒等）标记失败。
+    # 判定在写「完成态」之前：异常抛出时任务仍为 running，由 worker 统一改写状态，
+    # 避免「先 commit 完成态再抛异常」在进程崩溃时残留假完成。
     if task.total and failed == task.total:
         detail = f"质量审核全部失败（{failed}/{task.total}）"
         if first_error:
@@ -205,6 +205,11 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         if _is_recoverable_error(first_error or ""):
             raise RecoverableTaskError(detail)
         raise PermanentTaskError(detail)
+
+    task.done = task.total
+    task.progress = 100
+    task.updated_at = utcnow()
+    await db.commit()
 
     logger.info(
         f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，"
