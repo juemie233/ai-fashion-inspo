@@ -189,3 +189,105 @@ def test_create_from_url(client, monkeypatch):
 
     detail = client.get(f"/api/inspirations/{data['id']}").json()
     assert any(t["tag"]["name"] == "法式" for t in detail["tags"])
+
+
+def test_create_from_url_plugin_flow(client, monkeypatch):
+    """浏览器插件采集链路：from-url 携带平台/任务字段（服务端下载规避 CORS）。"""
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), (10, 20, 30)).save(buf, format="JPEG")
+    buf.seek(0)
+    img_bytes = buf.getvalue()
+
+    class FakeStream:
+        def __init__(self):
+            self.headers = {
+                "content-type": "image/jpeg",
+                "content-length": str(len(img_bytes)),
+            }
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def aiter_bytes(self, _chunk_size):
+            yield img_bytes
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        def stream(self, _method, _url):
+            return FakeStream()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    # 先创建插件采集会话任务
+    r = client.post(
+        "/api/scraper/extension-tasks",
+        json={"platform": "xiaohongshu", "source_url": "https://www.xiaohongshu.com/explore/abc"},
+    )
+    assert r.status_code == 201
+    task_id = r.json()["id"]
+
+    # 插件采集上传：显式传来源页面地址（应优先于图片 URL 落库）
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={
+            "url": "https://sns-webpic-qc.xhscdn.com/note.jpg",
+            "source_type": "browser_extension",
+            "source_url": "https://www.xiaohongshu.com/explore/abc",
+            "source_author": "博主",
+            "source_platform_id": "xhs-abc-1",
+            "scraper_task_id": task_id,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    assert data["source_type"] == "browser_extension"
+    assert data["source_url"] == "https://www.xiaohongshu.com/explore/abc"
+    assert data["source_author"] == "博主"
+
+    # 素材已关联到采集任务（直连临时库验证 scraper_task_id 落库）
+    from app.config import settings
+    import sqlite3
+
+    conn = sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+    try:
+        row = conn.execute(
+            "SELECT scraper_task_id FROM inspirations WHERE source_platform_id='xhs-abc-1'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row and row[0] == task_id
+
+    # 同平台 ID 重复 → 409
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={"url": "https://sns-webpic-qc.xhscdn.com/note2.jpg", "source_platform_id": "xhs-abc-1"},
+    )
+    assert r.status_code == 409
+
+    # 关联任务不存在 → 400
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={"url": "https://example.com/b.jpg", "scraper_task_id": 99999},
+    )
+    assert r.status_code == 400
+
+    # scraper_task_id 非法 → 400
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={"url": "https://example.com/c.jpg", "scraper_task_id": "abc"},
+    )
+    assert r.status_code == 400

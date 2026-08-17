@@ -192,14 +192,44 @@ async def create_inspiration_from_url(
     source_author: str | None = None,
     tag_names: list[str] | None = None,
     source_type: str = "url_import",
+    source_url: str | None = None,
+    source_platform_id: str | None = None,
+    scraper_task_id: int | None = None,
 ) -> Inspiration:
-    """从 URL 下载图片并创建素材，支持关联标签。"""
+    """从 URL 下载图片并创建素材，支持关联标签。
+
+    浏览器插件采集链路复用本函数：服务端直接下载平台图片，
+    规避浏览器扩展跨域下载图片的 CORS/授权限制。
+    """
     import aiofiles
     import httpx
 
     from app.services.file_service import resolve_size_limit, validate_media
 
     tag_names = tag_names or []
+
+    # 检查重复（按平台 ID）：先查重，避免下载文件后再发现重复留下孤儿文件
+    # （与 create_inspiration 的语义一致：垃圾桶素材释放平台 ID）
+    if source_platform_id:
+        result = await db.execute(
+            select(Inspiration).where(
+                Inspiration.source_platform_id == source_platform_id,
+                NOT_DELETED,
+            )
+        )
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"平台ID '{source_platform_id}' 的素材已存在",
+            )
+
+    # 关联采集任务校验：插件采集链路传 task_id，避免指向不存在任务的孤儿记录
+    if scraper_task_id is not None:
+        from app.models.scraper import ScraperTask
+
+        task = await db.get(ScraperTask, scraper_task_id)
+        if not task:
+            raise HTTPException(status_code=400, detail="关联的采集任务不存在")
 
     # 下载图片：流式落盘 + 大小限制（按响应 Content-Type 区分图片/视频上限）
     images_dir = settings.images_dir
@@ -283,12 +313,15 @@ async def create_inspiration_from_url(
 
     inspiration = Inspiration(
         source_type=source_type,
-        source_url=url,
+        # 显式传入来源页面地址优先，否则回退为图片 URL
+        source_url=source_url or url,
         source_author=source_author,
+        source_platform_id=source_platform_id,
         file_path=rel_path,
         thumbnail_path=thumb_path,
         content_hash=content_hash,
         media_type=media_type,
+        scraper_task_id=scraper_task_id,
     )
     db.add(inspiration)
     await db.flush()

@@ -12,39 +12,36 @@ async function getSettings() {
   };
 }
 
-/** 上传图片到后端 */
+/** 上传图片到后端：服务端从图片 URL 直接下载入库。
+
+   不在插件内 fetch 平台图片（小红书/抖音 CDN 域名不在扩展授权内，
+   浏览器会拦截跨域请求导致全部失败），改由后端下载，规避 CORS 限制。
+ */
 async function uploadImage(imageUrl, metadata, taskId) {
   const settings = await getSettings();
 
   try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) throw new Error(`下载图片失败: ${response.status}`);
-    const blob = await response.blob();
-
-    const formData = new FormData();
-    formData.append('file', blob, metadata.filename || 'image.jpg');
-    formData.append('source_type', metadata.platform || 'browser_extension');
-    if (metadata.sourceUrl) formData.append('source_url', metadata.sourceUrl);
-    if (metadata.author) formData.append('source_author', metadata.author);
-    if (metadata.platformId) formData.append('source_platform_id', metadata.platformId);
-    // 关联采集任务记录：素材归属本次插件采集会话，可在采集管理页按任务查看
-    if (taskId) formData.append('scraper_task_id', taskId);
-
-    const apiUrl = settings.apiUrl;
-    const result = await fetch(`${apiUrl}/api/inspirations`, {
+    const response = await fetch(`${settings.apiUrl}/api/inspirations/from-url`, {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: imageUrl,
+        source_type: metadata.platform || 'browser_extension',
+        source_url: metadata.sourceUrl || null,
+        source_author: metadata.author || null,
+        source_platform_id: metadata.platformId || null,
+        // 关联采集任务记录：素材归属本次插件采集会话，可在采集管理页按任务查看
+        scraper_task_id: taskId || null,
+      }),
     });
 
-    if (!result.ok) {
-      const err = await result.json();
-      throw new Error(err.detail || '上传失败');
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error((data && data.detail) || `后端返回 HTTP ${response.status}`);
     }
-
-    const data = await result.json();
     return { success: true, data };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: error.message || String(error) };
   }
 }
 

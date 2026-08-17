@@ -70,6 +70,9 @@ async def create_from_url(
     """从 URL 下载图片并创建素材。
 
     请求体: {"url": "...", "source_author": "...", "tags": ["..."]}
+
+    浏览器插件采集链路也走本接口：服务端直接下载平台图片，
+    规避浏览器扩展跨域下载图片的 CORS/授权限制。
     """
     url = payload.get("url", "").strip()
     if not url:
@@ -82,12 +85,25 @@ async def create_from_url(
     if not isinstance(source_type, str) or len(source_type) > 32:
         raise HTTPException(status_code=400, detail="source_type 非法")
 
+    # 插件采集链路可选字段：来源页面地址 / 平台笔记 ID / 关联采集任务
+    source_url = payload.get("source_url", "").strip() or None
+    source_platform_id = payload.get("source_platform_id", "").strip() or None
+    scraper_task_id = payload.get("scraper_task_id")
+    if scraper_task_id is not None:
+        try:
+            scraper_task_id = int(scraper_task_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="scraper_task_id 非法")
+
     inspiration = await inspiration_service.create_inspiration_from_url(
         db,
         url,
         source_author=source_author,
         tag_names=tag_names,
         source_type=source_type,
+        source_url=source_url,
+        source_platform_id=source_platform_id,
+        scraper_task_id=scraper_task_id,
     )
     return _to_out(inspiration)
 

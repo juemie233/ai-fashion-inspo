@@ -480,7 +480,7 @@ alembic upgrade head
 | ------ | ------ | ------ |
 | `GET` | `/api/inspirations` | 素材列表（分页；支持来源/媒体/状态/质量/标签/主色调/日期筛选，排序含 `tag_count`） |
 | `POST` | `/api/inspirations` | 上传素材 |
-| `POST` | `/api/inspirations/from-url` | 从 URL 导入素材 |
+| `POST` | `/api/inspirations/from-url` | 从 URL 导入素材（浏览器插件采集主通道，服务端下载规避跨域；支持 `source_platform_id`/`scraper_task_id`） |
 | `GET` | `/api/inspirations/{id}` | 素材详情 |
 | `PATCH` | `/api/inspirations/{id}` | 更新素材 |
 | `POST` | `/api/inspirations/{id}/trash` | 移入垃圾桶（软删除，`reason` 可选：质量差/重复/不喜欢/隐私/其他） |

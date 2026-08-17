@@ -192,13 +192,16 @@ async function uploadImages() {
     if (response && response.results) {
       const successCount = response.results.filter((r) => r.success).length;
       const failCount = response.results.filter((r) => !r.success).length;
+      const firstError = response.results.find((r) => !r.success);
 
       if (successCount > 0 && failCount === 0) {
         uploadProgressText.textContent = `✅ 全部采集成功 (${successCount} 张)`;
       } else if (successCount > 0) {
-        uploadProgressText.textContent = `⚠️ 部分成功: ${successCount} 张, ${failCount} 张失败`;
+        uploadProgressText.textContent = `⚠️ 部分成功: ${successCount} 张, ${failCount} 张失败${firstError ? `（${firstError.error}）` : ''}`;
       } else {
-        uploadProgressText.textContent = '❌ 采集失败，请确认后端已启动';
+        uploadProgressText.textContent = firstError
+          ? `❌ 采集失败：${firstError.error}`
+          : '❌ 采集失败，请确认后端已启动';
       }
     }
   } catch (err) {
