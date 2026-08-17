@@ -335,10 +335,30 @@ async def update_tag(
     return tag
 
 
+def _alive_tag_links_subquery():
+    """返回「关联了未删除素材」的标签 id 子查询。
+
+    与使用次数（usage_count）口径完全一致：仅统计未删除素材的关联，
+    垃圾桶素材与孤儿关联（素材行已不存在）不计入。
+    未使用标签 = 不在此子查询中的标签（无任何可见素材引用）。
+    """
+    return (
+        select(InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+        .distinct()
+    )
+
+
 async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
-    """删除所有使用次数为 0 的标签，返回被删除的标签列表。"""
-    used_subquery = select(InspirationTag.tag_id).distinct()
-    result = await db.execute(select(Tag).where(Tag.id.notin_(used_subquery)))
+    """删除所有「未使用」标签，返回被删除的标签列表。
+
+    未使用口径与使用次数一致：没有任何未删除素材关联的标签
+    （含只关联垃圾桶素材、仅残留孤儿关联的标签），连同其残留关联一并清理。
+    """
+    result = await db.execute(
+        select(Tag).where(Tag.id.notin_(_alive_tag_links_subquery()))
+    )
     unused = result.scalars().all()
 
     if not unused:
@@ -464,10 +484,9 @@ async def get_tag_stats(db: AsyncSession) -> dict:
     )
     by_category = {row[0]: row[1] for row in cat_result}
 
-    # 未使用标签数
-    used_subquery = select(InspirationTag.tag_id).distinct()
+    # 未使用标签数（口径与 usage_count 一致：无任何未删除素材关联，含只关联垃圾桶素材的标签）
     unused_result = await db.execute(
-        select(func.count()).select_from(Tag).where(Tag.id.notin_(used_subquery))
+        select(func.count()).select_from(Tag).where(Tag.id.notin_(_alive_tag_links_subquery()))
     )
     unused = unused_result.scalar() or 0
 

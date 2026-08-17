@@ -200,3 +200,41 @@ def test_tag_stats_exclude_trash(client, upload):
     assert client.get(f"/api/tags/{tag_id}/inspirations").json()["total"] == 0
     top = client.get("/api/tags/top").json()
     assert not any(t["name"] == "法式" for t in top)
+
+
+def test_tag_stats_unused_counts_trash_only(client, upload):
+    """只关联垃圾桶素材的标签应计入「未使用」统计（与 usage_count=0 口径一致）。"""
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["法式"]})
+    tag_id = next(
+        t["id"]
+        for g in client.get("/api/tags").json()
+        for t in g["tags"]
+        if t["name"] == "法式"
+    )
+
+    # 素材未删除：标签有未删除素材关联，不算未使用
+    assert client.get("/api/tags/stats").json()["unused"] == 0
+
+    # 移入垃圾桶：标签不再有未删除素材关联 → 计入未使用
+    client.post(f"/api/inspirations/{insp_id}/trash")
+    stats = client.get("/api/tags/stats").json()
+    assert stats["unused"] == 1
+    # 标签列表使用次数同步为 0（两侧口径一致，不再出现「无素材却未使用数为 0」的矛盾）
+    groups = client.get("/api/tags").json()
+    tag = next(t for g in groups for t in g["tags"] if t["id"] == tag_id)
+    assert tag["usage_count"] == 0
+
+
+def test_delete_unused_tags_removes_trash_only(client, upload):
+    """删除未使用：只关联垃圾桶素材的标签也应被清理（连同残留关联）。"""
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["法式"]})
+    client.post(f"/api/inspirations/{insp_id}/trash")
+
+    r = client.delete("/api/tags/unused")
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
+
+    names = _tag_names(client)
+    assert "法式" not in names
