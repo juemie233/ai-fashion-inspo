@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  SCRAPER_PLATFORM_LABELS,
   formatDuration,
   normalizeTaskStatus,
   taskStatusType,
@@ -30,6 +31,14 @@ describe('taskTypeTagColor', () => {
     expect(taskTypeTagColor('batch_delete')).toBe('error')
     expect(taskTypeTagColor('batch_analyze')).toBe('primary')
     expect(taskTypeTagColor('unknown_type')).toBe('default')
+  })
+})
+
+describe('SCRAPER_PLATFORM_LABELS', () => {
+  it('各采集平台映射为中文（含浏览器插件）', () => {
+    expect(SCRAPER_PLATFORM_LABELS.xiaohongshu).toBe('小红书')
+    expect(SCRAPER_PLATFORM_LABELS.douyin).toBe('抖音')
+    expect(SCRAPER_PLATFORM_LABELS.browser_extension).toBe('浏览器插件')
   })
 })
 

@@ -17,6 +17,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
 export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
   xiaohongshu: SOURCE_TYPE_LABELS.xiaohongshu,
   douyin: SOURCE_TYPE_LABELS.douyin,
+  browser_extension: SOURCE_TYPE_LABELS.browser_extension,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */

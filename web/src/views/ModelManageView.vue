@@ -40,6 +40,9 @@ onMounted(() => {
       <n-tab-pane name="models" tab="模型管理">
         <ModelListPanel />
       </n-tab-pane>
+      <n-tab-pane name="review" tab="质量审核">
+        <ReviewPanel />
+      </n-tab-pane>
       <n-tab-pane name="queue" tab="标签分析">
         <AnalysisPanel />
       </n-tab-pane>
@@ -48,9 +51,6 @@ onMounted(() => {
       </n-tab-pane>
       <n-tab-pane name="quality" tab="分析质量">
         <QualityPanel />
-      </n-tab-pane>
-      <n-tab-pane name="review" tab="质量审核">
-        <ReviewPanel />
       </n-tab-pane>
     </n-tabs>
   </div>
