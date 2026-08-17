@@ -12,6 +12,8 @@ const loading = ref(false)
 
 /** 操作类型中文映射 */
 const ACTION_LABELS: Record<string, string> = {
+  trash: '移入垃圾桶',
+  restore: '恢复素材',
   batch_delete: '批量删除',
   delete_rejected: '已拒绝素材移入垃圾桶',
   cleanup_orphans: '清理孤立文件',
@@ -64,7 +66,9 @@ onMounted(load)
             <td>{{ formatTime(it.created_at) }}</td>
             <td>{{ actionLabel(it.action) }}</td>
             <td style="text-align: right">{{ it.count }}</td>
-            <td style="text-align: right">{{ it.freed_bytes > 0 ? formatSize(it.freed_bytes) : '-' }}</td>
+            <td style="text-align: right">
+              {{ it.freed_bytes > 0 ? formatSize(it.freed_bytes) : '-' }}
+            </td>
             <td>{{ it.detail || '-' }}</td>
           </tr>
         </tbody>

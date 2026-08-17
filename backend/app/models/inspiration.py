@@ -88,6 +88,15 @@ class Inspiration(Base):
         String(16), nullable=True
     )  # 移入来源：manual（手动移入）/ auto（质量审核自动移动），用于垃圾桶区分展示
 
+    @property
+    def trash_state(self) -> str:
+        """垃圾桶状态（软删除三字段的单一状态源）：active 正常 / trashed 垃圾桶中。
+
+        所有 Python 侧的状态判断应使用本属性而非散落判断 deleted_at，
+        保证「deleted_at / trash_reason / trash_source 三字段同真同假」的约定单点可查。
+        """
+        return "trashed" if self.deleted_at is not None else "active"
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, index=True
     )

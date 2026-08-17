@@ -28,7 +28,7 @@ from app.schemas.scraper import (
 )
 from app.services.audit_service import record_audit_log
 from app.services.file_service import move_to_trash
-from app.services.inspiration_service import _resolve_trash_reason
+from app.services.inspiration_service import _mark_trashed, _resolve_trash_reason
 from app.services.scraper_seen_service import seal_urls
 from app.utils.time import format_utc, utcnow
 
@@ -1027,8 +1027,9 @@ async def batch_delete_task_results(
         if insp.deleted_at is not None:
             skipped += 1
             continue
-        insp.deleted_at = utcnow()
-        insp.trash_reason = _resolve_trash_reason(reason, insp)
+        # 三字段经 _mark_trashed 单点写入：采集结果删除属于「自动移动」来源，
+        # 必须携带 trash_source=auto（此前遗漏导致垃圾桶来源显示为手动移入）
+        _mark_trashed(insp, _resolve_trash_reason(reason, insp), "auto")
         trashed_items.append(insp)
 
     # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，避免

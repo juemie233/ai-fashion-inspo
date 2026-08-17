@@ -610,14 +610,13 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     if not rejected:
         return {"trashed": 0, "message": "没有已拒绝的素材"}
 
-    # 标记软删除（reason 自动推断：rejected → 质量差；来源标记为自动移动）
+    # 标记软删除（reason 自动推断：rejected → 质量差；来源标记为自动移动）。
+    # 三字段经 _mark_trashed 单点写入，保证状态转移合法
     trashed_items: list[Inspiration] = []
     for insp in rejected:
         if insp.deleted_at is not None:
             continue
-        insp.deleted_at = utcnow()
-        insp.trash_reason = _resolve_trash_reason(None, insp)
-        insp.trash_source = "auto"
+        _mark_trashed(insp, _resolve_trash_reason(None, insp), "auto")
         trashed_items.append(insp)
 
     # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，
@@ -841,7 +840,8 @@ async def batch_trash_inspirations(
     skipped = 0
     for inspiration_id in inspiration_ids:
         try:
-            await trash_inspiration(db, inspiration_id, reason, source=source)
+            # audit=False：批量路径由下方汇总写一条 batch_trash 审计，避免逐条留痕噪音
+            await trash_inspiration(db, inspiration_id, reason, source=source, audit=False)
             trashed += 1
         except HTTPException:
             skipped += 1
@@ -1002,11 +1002,111 @@ def _resolve_trash_reason(reason: str | None, inspiration: Inspiration) -> str:
     return "质量差" if inspiration.quality_status == "rejected" else "不喜欢"
 
 
+def _assert_trash_transition(
+    inspiration: Inspiration,
+    target: str,
+    *,
+    reason: str | None = None,
+    source: str | None = None,
+) -> None:
+    """校验软删除状态转移合法性，非法转移抛 ValueError（内部防御，暴露代码缺陷）。
+
+    合法转移:
+        active → trashed：素材必须不在垃圾桶，且携带合法删除原因（TRASH_REASONS）
+            与移入来源（manual/auto）
+        trashed → active：素材必须在垃圾桶中（恢复需清空三字段由调用方负责）
+
+    其余任何状态组合都视为代码缺陷——立即抛错而非静默留下半状态
+    （如「已删除但缺原因」「未删除却残留来源」这类隐形 bug 的温床）。
+    """
+    if target == "trashed":
+        if inspiration.deleted_at is not None:
+            raise ValueError(f"素材 {inspiration.id} 已在垃圾桶中，非法重复移入")
+        if reason not in TRASH_REASONS:
+            raise ValueError(f"素材 {inspiration.id} 移入垃圾桶缺少合法删除原因: {reason!r}")
+        if source not in ("manual", "auto"):
+            raise ValueError(f"素材 {inspiration.id} 移入来源非法: {source!r}")
+    elif target == "active":
+        if inspiration.deleted_at is None:
+            raise ValueError(f"素材 {inspiration.id} 不在垃圾桶中，非法恢复")
+    else:
+        raise ValueError(f"未知状态转移目标: {target!r}")
+
+
+def _mark_trashed(inspiration: Inspiration, reason: str, source: str) -> None:
+    """将素材标记为垃圾桶状态：软删除三字段单点写入（含合法性断言）。
+
+    所有移入垃圾桶的路径（手动/批量/质量审核自动/疑似 AI 自动）必须经由此函数，
+    杜绝散落字段赋值导致的「三字段不同步」。
+    """
+    _assert_trash_transition(inspiration, "trashed", reason=reason, source=source)
+    inspiration.deleted_at = utcnow()
+    inspiration.trash_reason = reason
+    inspiration.trash_source = source
+
+
+def _mark_restored(inspiration: Inspiration) -> None:
+    """清除素材软删除标记：三字段单点清除（含合法性断言）。"""
+    _assert_trash_transition(inspiration, "active")
+    inspiration.deleted_at = None
+    inspiration.trash_reason = None
+    inspiration.trash_source = None
+
+
+async def verify_trash_invariants(db: AsyncSession) -> list[dict]:
+    """扫描全库校验垃圾桶状态不变量，返回违规清单（空列表 = 健康）。
+
+    规则（软删除三字段必须同真同假，杜绝半状态）：
+        R1: deleted_at 非空 ⇒ trash_reason 必须非空（缺原因无法按原因筛选与负样本统计）
+        R2: deleted_at 非空 ⇒ trash_source 必须非空（manual/auto）
+        R3: deleted_at 为空 ⇒ trash_reason / trash_source 必须为空（残留说明
+            恢复/清理路径未清干净）
+
+    返回值: [{"id": str, "rule": "R1|R2|R3", "detail": str}, ...]
+
+    用途：测试断言 + 管理页完整性检查（integrity-check），让「新代码破坏旧约定」
+    在测试/巡检时立刻暴露，而非等到线上数据烂掉。
+    """
+    rows = (
+        await db.execute(
+            select(
+                Inspiration.id,
+                Inspiration.deleted_at,
+                Inspiration.trash_reason,
+                Inspiration.trash_source,
+            )
+        )
+    ).all()
+
+    violations: list[dict] = []
+    for rid, deleted_at, reason, source in rows:
+        if deleted_at is not None:
+            if not reason:
+                violations.append(
+                    {"id": rid, "rule": "R1", "detail": "垃圾桶素材缺少删除原因"}
+                )
+            if not source:
+                violations.append(
+                    {"id": rid, "rule": "R2", "detail": "垃圾桶素材缺少移入来源"}
+                )
+        else:
+            if reason is not None:
+                violations.append(
+                    {"id": rid, "rule": "R3", "detail": f"未删除素材残留删除原因: {reason}"}
+                )
+            if source is not None:
+                violations.append(
+                    {"id": rid, "rule": "R3", "detail": f"未删除素材残留移入来源: {source}"}
+                )
+    return violations
+
+
 async def trash_inspiration(
     db: AsyncSession,
     inspiration_id: str,
     reason: str | None,
     source: str = "manual",
+    audit: bool = True,
 ) -> Inspiration:
     """将素材移入垃圾桶（软删除）：文件移入 trash/，标记 deleted_at 与 trash_reason。
 
@@ -1016,6 +1116,7 @@ async def trash_inspiration(
 
     参数:
         source: 移入来源（manual 手动移入 / auto 质量审核自动移动），垃圾桶据此展示来源
+        audit: 是否写入单条审计（批量入口逐条调用时应传 False，由批量汇总一条审计）
     """
     result = await db.execute(
         select(Inspiration)
@@ -1032,9 +1133,8 @@ async def trash_inspiration(
 
     # 先提交软删除标记（DB 落库），提交成功后再移动文件，避免「文件已移走但事务
     # 回滚/失败」导致 DB 仍指向原路径的悬空记录（与 delete_inspiration 的顺序一致）。
-    inspiration.deleted_at = utcnow()
-    inspiration.trash_reason = resolved
-    inspiration.trash_source = source
+    # 三字段通过 _mark_trashed 单点写入（含状态转移合法性断言）
+    _mark_trashed(inspiration, resolved, source)
     # 进垃圾桶视为「垃圾素材」，立即写入来源 URL 墓碑，防止采集器重复采集
     await seal_urls(db, [inspiration.source_url])
     await db.commit()
@@ -1061,6 +1161,14 @@ async def trash_inspiration(
     if paths_changed:
         await db.commit()
     await db.refresh(inspiration)
+
+    # 记录审计：单条移入垃圾桶留痕，链路可回放（批量入口逐条调用时经 audit=False 跳过）
+    if audit:
+        await record_audit_log(
+            action="trash",
+            count=1,
+            detail=f"原因：{resolved}；来源：{'自动移动' if source == 'auto' else '手动移入'}",
+        )
     return inspiration
 
 
@@ -1098,9 +1206,10 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
 
     # 先提交恢复标记（DB 落库），提交成功后再移动文件；移动失败仅记日志，
     # 文件留在 trash/ 由后续清空任务兜底清理，恢复本身不受阻断。
-    inspiration.deleted_at = None
-    inspiration.trash_reason = None
-    inspiration.trash_source = None
+    # 三字段通过 _mark_restored 单点清除（含状态转移合法性断言）
+    prev_reason = inspiration.trash_reason
+    prev_source = inspiration.trash_source
+    _mark_restored(inspiration)
     await db.commit()
 
     paths_changed = False
@@ -1122,6 +1231,13 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     if paths_changed:
         await db.commit()
     await db.refresh(inspiration)
+
+    # 记录审计：恢复素材留痕（含原删除原因/来源），链路可回放
+    await record_audit_log(
+        action="restore",
+        count=1,
+        detail=f"原原因：{prev_reason or '未知'}；原来源：{'自动移动' if prev_source == 'auto' else '手动移入'}",
+    )
     return inspiration
 
 

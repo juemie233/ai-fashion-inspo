@@ -27,7 +27,7 @@ from app.models.inspiration import (
 from app.models.person import InspirationPerson, Person
 from app.models.tag import InspirationTag
 from app.models.audit import AuditLog
-from app.services import admin_stats_service
+from app.services import admin_stats_service, inspiration_service
 from app.services.audit_service import record_audit_log
 from app.utils.csv_safety import sanitize_csv_cell
 from app.utils.file_hash import build_hash_map
@@ -132,6 +132,9 @@ async def integrity_check(db: AsyncSession = Depends(get_db)) -> dict:
         "orphan_files": orphan_files,
         "orphan_count": len(orphan_files),
         "orphan_total_size_bytes": orphan_total_size,
+        # 垃圾桶状态不变量违规（R1/R2/R3）：软删除三字段必须同真同假，见
+        # inspiration_service.verify_trash_invariants；空列表 = 健康
+        "trash_invariants": await inspiration_service.verify_trash_invariants(db),
     }
 
 

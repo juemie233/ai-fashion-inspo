@@ -194,3 +194,65 @@ def test_quality_rejected_trash_source_auto(client, upload):
     assert trash["total"] == 2
     assert all(i["trash_source"] == "auto" for i in trash["items"])
     assert all(i["trash_reason"] == "质量差" for i in trash["items"])
+
+
+# ── 垃圾桶状态不变量（verify_trash_invariants）──
+
+
+def _sql(statement: str, params: tuple = ()):
+    """直接改库执行 SQL（构造违规数据用），返回行数。"""
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(statement, params)
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+async def _verify() -> list[dict]:
+    """调用 verify_trash_invariants 扫描全库。"""
+    from app.database import async_session
+    from app.services.inspiration_service import verify_trash_invariants
+
+    async with async_session() as db:
+        return await verify_trash_invariants(db)
+
+
+async def test_trash_invariants_healthy_after_roundtrip(client, upload):
+    """正常旅程（上传→移入→恢复）后不变量保持健康（0 违规）。"""
+    insp = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp}/trash", json={"reason": "不喜欢"})
+    assert await _verify() == []
+
+    client.post(f"/api/inspirations/{insp}/restore")
+    assert await _verify() == []
+
+
+async def test_trash_invariants_detect_broken_state(client, upload):
+    """手工制造半状态：缺原因（R1）/ 未删除残留来源（R3）均被检出。"""
+    trashed = upload().json()["id"]
+    active = upload().json()["id"]
+    client.post(f"/api/inspirations/{trashed}/trash", json={"reason": "质量差"})
+
+    # R1：垃圾桶素材删除原因被清空
+    assert _sql("UPDATE inspirations SET trash_reason = NULL WHERE id = ?", (trashed,)) == 1
+    # R3：未删除素材残留移入来源
+    assert _sql("UPDATE inspirations SET trash_source = 'manual' WHERE id = ?", (active,)) == 1
+
+    violations = await _verify()
+    rules = {(v["rule"], v["id"]) for v in violations}
+    assert ("R1", trashed) in rules
+    assert ("R3", active) in rules
+    assert not any(v["rule"] == "R2" for v in violations)  # 其余字段未被误报
+
+
+async def test_integrity_check_includes_trash_invariants(client, upload):
+    """管理页完整性检查返回垃圾桶不变量结果（空列表 = 健康）。"""
+    upload()
+    r = client.get("/api/admin/integrity-check")
+    assert r.status_code == 200
+    body = r.json()
+    assert "trash_invariants" in body
+    assert body["trash_invariants"] == []
