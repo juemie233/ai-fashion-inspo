@@ -124,3 +124,27 @@ Overall quality is good: fully parameterized SQL, no shell command injection, co
 - `expire_on_commit=False` consistent globally, `get_db` auto-rollback, atomic conditional-UPDATE claiming for worker/scheduled/cancelled tasks, correct SAVEPOINT race handling in `get_or_create_tag`/`link_tag`, idempotent `seal_urls` with OR IGNORE, trash "commit-first-then-move-files" self-healing design.
 - Complete Alembic migration chain (head=51841a0c0163), sensible WAL + busy_timeout configuration.
 - No v-html injection in the frontend, model `raw_response` rendered as text via `<n-code>`, cookies never stored in localStorage, polling generation number prevents re-entrancy, ESLint 0 errors.
+
+---
+
+## 8. Post-Audit Governance (added 2026-08-17)
+
+Landing record for the "reduce hidden bugs in core paths" plan (Plans A/B/C):
+
+### Plan A: Defense Baseline (done)
+
+| Commit | Content |
+| ------ | ------ |
+| `ce6c94b` | 5 review fixes: `file_sha256` moved to thread pool; task anti-fake-success check moved before writing the completed state (quality_check/vector_backfill); photo deletion ownership check; crop backup filename timestamp; arrow-key navigation disabled while modal open |
+| `15fe94d` | Soft-delete state machine: `trash_state` property + `_mark_trashed`/`_mark_restored` single-point writes (with transition legality assertions); `verify_trash_invariants` (rules R1/R2/R3, the three soft-delete fields must be all-set or all-clear) wired into the admin integrity check; audit trail added for single trash/restore; also fixed scraper-result deletion missing `trash_source` |
+| `9d4bd1f` | CLAUDE.md gained a "path-walkthrough review" convention: core paths are reviewed end-to-end (router → service → worker → frontend) |
+
+### Plan B: End-to-End Journey Tests (done)
+
+| Commit | Content |
+| ------ | ------ |
+| `139a026` | `tests/test_journeys.py` with 4 journey tests: material full journey (upload → tagging → vectors → trash → restore → re-trash → purge, asserting zero invariant violations plus tombstone/audit trail throughout), scraping journey (extension session → from-url ingestion → tombstone → re-scrape rejected, including the anti-duplication loop after restore), missing-file self-healing, worker crash (heartbeat timeout → reset → re-run succeeds). Vector generation uses a fake to stay independent of real CLIP/LanceDB |
+
+### Plan C: Idempotency and DB Unique Constraints (registered in TODO, pending)
+
+- Add UNIQUE on the tombstone table `scraper_seen_urls`; partial unique index on `source_platform_id` (non-deleted only, preserving the "trash releases platform ID" semantics) — evaluate existing duplicate rows before migrating; add idempotency assertions to task runners.

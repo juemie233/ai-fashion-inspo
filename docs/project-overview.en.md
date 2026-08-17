@@ -78,7 +78,7 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 
 | Stage | Details |
 | ------ | ------ |
-| Code audit hardening | Completed a full-stack code audit (security / correctness / quality); 4 batches of fixes landed (upload whitelist, auth alerts, vector write lock, deletion transaction ordering, timezone, etc.) |
+| Code audit hardening | Completed a full-stack code audit (security / correctness / quality); 4 batches of fixes landed (upload whitelist, auth alerts, vector write lock, deletion transaction ordering, timezone, etc.). Post-audit governance: 5 review fixes, soft-delete state machine convergence + trash invariant checks + audit trail completion, path-walkthrough review convention (see audit report §8) |
 | Quality loop | Trash soft delete + negative-sample pre-filter (CLIP vectors + sklearn logistic regression for pre-screening before review) |
 | Service supervision | Process supervision + heartbeat lease + health checks (`scripts/supervisor.py`, `ensure-services.sh`) |
 | Frontend engineering | ESLint + Prettier adopted (flat config, 0 errors); vitest unit tests added |
@@ -89,8 +89,8 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 
 ## 6. Testing and Quality Status
 
-- **Backend**: pytest 100+ cases (integration tests + service unit tests), ~52% line coverage; blind spots are the real scrapers (0%, depend on a real browser), deep branches of vector similarity, and WebSocket.
-- **Frontend**: 57 vitest cases (pure functions / composables / stores), ESLint 0 errors.
+- **Backend**: pytest 248 cases (integration tests + service unit tests + end-to-end journey tests), ~52% line coverage; blind spots are the real scrapers (0%, depend on a real browser), deep branches of vector similarity, and WebSocket.
+- **Frontend**: 80 vitest cases (pure functions / composables / stores), ESLint 0 errors.
 - **Convention**: tests use a temporary database and temporary storage and never touch real data; changes to core paths (soft delete / dedup / auth / creators) must add test cases.
 
 ---
