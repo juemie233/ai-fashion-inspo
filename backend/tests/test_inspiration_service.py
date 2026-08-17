@@ -291,3 +291,70 @@ def test_create_from_url_plugin_flow(client, monkeypatch):
         json={"url": "https://example.com/c.jpg", "scraper_task_id": "abc"},
     )
     assert r.status_code == 400
+
+
+def test_create_from_url_null_fields(client, monkeypatch):
+    """插件真实请求会发送 JSON null 可选字段，不得抛 500（回归：None.strip）。"""
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), (99, 88, 77)).save(buf, format="JPEG")
+    buf.seek(0)
+    img_bytes = buf.getvalue()
+
+    class FakeStream:
+        def __init__(self):
+            self.headers = {
+                "content-type": "image/jpeg",
+                "content-length": str(len(img_bytes)),
+            }
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def aiter_bytes(self, _chunk_size):
+            yield img_bytes
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        def stream(self, _method, _url):
+            return FakeStream()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    # 与 service-worker.js 发送的请求体一致：可选字段均为 null
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={
+            "url": "https://sns-webpic-qc.xhscdn.com/note.jpg",
+            "source_type": "browser_extension",
+            "source_url": None,
+            "source_author": None,
+            "source_platform_id": None,
+            "scraper_task_id": None,
+        },
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    assert data["source_type"] == "browser_extension"
+    # 未传 source_url（null）时回退为图片 URL，保证素材可溯源
+    assert data["source_url"] == "https://sns-webpic-qc.xhscdn.com/note.jpg"
+
+    # url 为 null → 400（而非 500）
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={"url": None, "source_type": "browser_extension"},
+    )
+    assert r.status_code == 400

@@ -74,20 +74,22 @@ async def create_from_url(
     浏览器插件采集链路也走本接口：服务端直接下载平台图片，
     规避浏览器扩展跨域下载图片的 CORS/授权限制。
     """
-    url = payload.get("url", "").strip()
+    url = (payload.get("url") or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="请提供图片 URL")
 
-    source_author = payload.get("source_author", "").strip() or None
-    tag_names = payload.get("tags", [])
+    # 可选字段统一做 null 防御：插件可能发送 JSON null（None），
+    # 直接 .strip() 会抛 AttributeError 导致 500
+    source_author = (payload.get("source_author") or "").strip() or None
+    tag_names = payload.get("tags") or []
     # 通用「从 URL 导入」默认标记为 url_import；插件采集链路可显式传 browser_extension
     source_type = payload.get("source_type") or "url_import"
     if not isinstance(source_type, str) or len(source_type) > 32:
         raise HTTPException(status_code=400, detail="source_type 非法")
 
     # 插件采集链路可选字段：来源页面地址 / 平台笔记 ID / 关联采集任务
-    source_url = payload.get("source_url", "").strip() or None
-    source_platform_id = payload.get("source_platform_id", "").strip() or None
+    source_url = (payload.get("source_url") or "").strip() or None
+    source_platform_id = (payload.get("source_platform_id") or "").strip() or None
     scraper_task_id = payload.get("scraper_task_id")
     if scraper_task_id is not None:
         try:
