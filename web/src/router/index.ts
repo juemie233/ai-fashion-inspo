@@ -72,6 +72,18 @@ const router = createRouter({
       meta: { title: '素材管理' },
     },
     {
+      path: '/admin/governance',
+      name: 'admin-governance',
+      component: () => import('@/views/GovernanceView.vue'),
+      meta: { title: '数据治理' },
+    },
+    {
+      path: '/admin/insights',
+      name: 'admin-insights',
+      component: () => import('@/views/InsightsView.vue'),
+      meta: { title: '数据洞察' },
+    },
+    {
       path: '/tasks',
       name: 'tasks',
       component: () => import('@/views/TaskManageView.vue'),

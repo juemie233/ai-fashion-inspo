@@ -15,6 +15,8 @@ import {
   SettingsOutline,
   ListOutline,
   PersonOutline,
+  ShieldCheckmarkOutline,
+  BarChartOutline,
 } from '@vicons/ionicons5'
 import SchemaVersionBanner from './SchemaVersionBanner.vue'
 
@@ -57,6 +59,8 @@ const menuOptions = [
       { label: '采集管理', key: 'scraper', icon: renderIcon(ScanOutline) },
       { label: 'AI 模型', key: 'models', icon: renderIcon(HardwareChipOutline) },
       { label: '素材管理', key: 'admin', icon: renderIcon(SettingsOutline) },
+      { label: '数据治理', key: 'admin-governance', icon: renderIcon(ShieldCheckmarkOutline) },
+      { label: '数据洞察', key: 'admin-insights', icon: renderIcon(BarChartOutline) },
       { label: '任务管理', key: 'tasks', icon: renderIcon(ListOutline) },
     ],
   },
