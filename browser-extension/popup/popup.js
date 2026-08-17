@@ -58,32 +58,39 @@ async function loadSettings() {
 async function loadImages() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
+    if (!tab || !tab.id) return;
 
-    // 注入内容脚本（如果还没注入）
-    try {
-      await chrome.scripting.executeScript({
+    // 仅支持小红书 / 抖音页面
+    const tabUrl = tab.url || '';
+    if (!/xiaohongshu\.com|douyin\.com/.test(tabUrl)) {
+      imageGrid.innerHTML =
+        '<p class="hint">请先打开小红书或抖音的穿搭页面，<br/>再点击本插件采集。</p>';
+      totalCountEl.textContent = '0';
+      updateFooter();
+      return;
+    }
+
+    // 注入内容脚本提取图片（每次注入都会重新提取，兼容 SPA 页面导航）
+    let results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content-scripts/extract-images.js'],
+    });
+    let result = results && results[0] && results[0].result;
+
+    // 若首次提取为空，稍等片刻重试一次（懒加载 / SPA 异步渲染未完成）
+    if (!result || (result.images && result.images.length === 0)) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         files: ['content-scripts/extract-images.js'],
       });
-    } catch {
-      // 脚本可能已经注入过了
+      result = results && results[0] && results[0].result;
     }
 
-    // 获取提取结果
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        return window.__fashionInspoData || { images: [], metadata: {} };
-      },
-    });
-
-    if (results && results[0] && results[0].result) {
-      imageList = results[0].result.images || [];
-      metadata = results[0].result.metadata || {};
-      selectedUrls.clear();
-      renderImages();
-    }
+    imageList = (result && result.images) || [];
+    metadata = (result && result.metadata) || {};
+    selectedUrls.clear();
+    renderImages();
   } catch (err) {
     console.error('加载图片失败:', err);
     imageGrid.innerHTML =
