@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
-from app.services.task_runners.common import PermanentTaskError, utcnow
+from app.services.task_runners.common import PermanentTaskError, _chunked, utcnow
 from app.services.vector_service import rebuild_inspiration_vectors
 
 logger = logging.getLogger(__name__)
@@ -43,11 +43,16 @@ async def create_vector_backfill_task(
     if not ids:
         return None
 
-    # 过滤已不存在的素材，避免无谓入队
-    result = await db.execute(
-        select(Inspiration.id).where(Inspiration.id.in_(ids))
-    )
-    existing_ids = [i for i in ids if i in {row[0] for row in result.all()}]
+    # 过滤已不存在的素材，避免无谓入队。
+    # 分批 IN 查询（每批 500）：长 IN 子句（数千变量）在并发连接复用场景下
+    # 实测会出现「查询只返回 1 行」导致任务 total=1 的问题，分批规避。
+    existing_ids: list[str] = []
+    for chunk in _chunked(ids, 500):
+        result = await db.execute(
+            select(Inspiration.id).where(Inspiration.id.in_(chunk))
+        )
+        chunk_ids = {row[0] for row in result.all()}
+        existing_ids.extend(i for i in chunk if i in chunk_ids)
     if not existing_ids:
         return None
 
