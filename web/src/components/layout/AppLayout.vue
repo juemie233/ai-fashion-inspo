@@ -75,7 +75,7 @@ const menuOptions = [
         :collapsed-width="64"
         :collapsed-icon-size="22"
         :options="menuOptions"
-        @update:value="(key: string) => $router.push(`/${key === 'home' ? '' : key}`)"
+        @update:value="(key: string) => $router.push({ name: key })"
         :value="menuKey"
       />
     </aside>
