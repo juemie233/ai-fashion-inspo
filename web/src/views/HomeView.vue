@@ -261,6 +261,58 @@ function onSortChange() {
   syncUrl()
 }
 
+// ── 筛选/排序快捷入口 ──
+// 模板事件统一走函数：内联多语句表达式（a = b; fn()）会被格式化工具拆成
+// 换行形式导致 Vue 模板编译失败，故全部收敛为具名函数。
+
+function setSourceFilter(v: SourceFilter) {
+  sourceFilter.value = v
+  onFilterChange()
+}
+
+function setMediaFilter(v: MediaFilter) {
+  mediaFilter.value = v
+  onFilterChange()
+}
+
+function setStatusFilter(v: StatusFilter) {
+  statusFilter.value = v
+  onFilterChange()
+}
+
+function setQualityFilter(v: QualityFilter) {
+  qualityFilter.value = v
+  onFilterChange()
+}
+
+function setColorFilter(v: string) {
+  colorFilter.value = v
+  onFilterChange()
+}
+
+function setSortMode(v: SortMode) {
+  sortMode.value = v
+  onSortChange()
+}
+
+/** 移除单个标签筛选 */
+function removeTagFilter(tag: string) {
+  selectedTags.value = selectedTags.value.filter((t) => t !== tag)
+  onFilterChange()
+}
+
+/** 清除全部筛选（不含定位模式） */
+function clearAllFilters() {
+  sourceFilter.value = 'all'
+  mediaFilter.value = 'all'
+  statusFilter.value = 'all'
+  qualityFilter.value = 'all'
+  selectedTags.value = []
+  colorFilter.value = ''
+  sortMode.value = 'newest'
+  onFilterChange()
+}
+
 function setDensity(d: Density) {
   density.value = d
   localStorage.setItem('masonry-density', d)
@@ -430,10 +482,7 @@ loadPage(currentPage.value)
           :key="opt.value"
           size="tiny"
           :type="sourceFilter === opt.value ? 'primary' : 'default'"
-          @click="
-            sourceFilter = opt.value
-            onFilterChange()
-          "
+          @click="setSourceFilter(opt.value)"
         >
           {{ opt.label }}
         </n-button>
@@ -448,10 +497,7 @@ loadPage(currentPage.value)
           :key="opt.value"
           size="tiny"
           :type="mediaFilter === opt.value ? 'primary' : 'default'"
-          @click="
-            mediaFilter = opt.value
-            onFilterChange()
-          "
+          @click="setMediaFilter(opt.value)"
         >
           {{ opt.label }}
         </n-button>
@@ -466,10 +512,7 @@ loadPage(currentPage.value)
           :key="opt.value"
           size="tiny"
           :type="statusFilter === opt.value ? 'primary' : 'default'"
-          @click="
-            statusFilter = opt.value
-            onFilterChange()
-          "
+          @click="setStatusFilter(opt.value)"
         >
           {{ opt.label }}
         </n-button>
@@ -484,10 +527,7 @@ loadPage(currentPage.value)
           :key="opt.value"
           size="tiny"
           :type="qualityFilter === opt.value ? 'primary' : 'default'"
-          @click="
-            qualityFilter = opt.value
-            onFilterChange()
-          "
+          @click="setQualityFilter(opt.value)"
         >
           {{ opt.label }}
         </n-button>
@@ -521,20 +561,9 @@ loadPage(currentPage.value)
           :class="{ active: colorFilter === c.color }"
           :style="{ background: c.color }"
           :title="`${c.color}（${c.count} 个素材）`"
-          @click="
-            colorFilter = colorFilter === c.color ? '' : c.color
-            onFilterChange()
-          "
+          @click="setColorFilter(colorFilter === c.color ? '' : c.color)"
         />
-        <n-button
-          v-if="colorFilter"
-          size="tiny"
-          quaternary
-          @click="
-            colorFilter = ''
-            onFilterChange()
-          "
-        >
+        <n-button v-if="colorFilter" size="tiny" quaternary @click="setColorFilter('')">
           清除颜色
         </n-button>
       </div>
@@ -578,48 +607,16 @@ loadPage(currentPage.value)
       class="active-filters"
     >
       当前筛选：
-      <n-tag
-        v-if="sourceFilter !== 'all'"
-        size="tiny"
-        closable
-        @close="
-          sourceFilter = 'all'
-          onFilterChange()
-        "
-      >
+      <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="setSourceFilter('all')">
         {{ sourceOptions.find((o) => o.value === sourceFilter)?.label }}
       </n-tag>
-      <n-tag
-        v-if="mediaFilter !== 'all'"
-        size="tiny"
-        closable
-        @close="
-          mediaFilter = 'all'
-          onFilterChange()
-        "
-      >
+      <n-tag v-if="mediaFilter !== 'all'" size="tiny" closable @close="setMediaFilter('all')">
         {{ mediaOptions.find((o) => o.value === mediaFilter)?.label }}
       </n-tag>
-      <n-tag
-        v-if="statusFilter !== 'all'"
-        size="tiny"
-        closable
-        @close="
-          statusFilter = 'all'
-          onFilterChange()
-        "
-      >
+      <n-tag v-if="statusFilter !== 'all'" size="tiny" closable @close="setStatusFilter('all')">
         {{ statusOptions.find((o) => o.value === statusFilter)?.label }}
       </n-tag>
-      <n-tag
-        v-if="qualityFilter !== 'all'"
-        size="tiny"
-        closable
-        @close="
-          qualityFilter = 'all'
-          onFilterChange()
-        "
-      >
+      <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="setQualityFilter('all')">
         {{ qualityOptions.find((o) => o.value === qualityFilter)?.label }}
       </n-tag>
       <n-tag
@@ -627,51 +624,17 @@ loadPage(currentPage.value)
         :key="tag"
         size="tiny"
         closable
-        @close="
-          selectedTags = selectedTags.filter((t) => t !== tag)
-          onFilterChange()
-        "
+        @close="removeTagFilter(tag)"
       >
         {{ tag }}
       </n-tag>
-      <n-tag
-        v-if="colorFilter"
-        size="tiny"
-        closable
-        @close="
-          colorFilter = ''
-          onFilterChange()
-        "
-      >
+      <n-tag v-if="colorFilter" size="tiny" closable @close="setColorFilter('')">
         <span class="color-chip" :style="{ background: colorFilter }" /> {{ colorFilter }}
       </n-tag>
-      <n-tag
-        v-if="sortMode !== 'newest'"
-        size="tiny"
-        closable
-        @close="
-          sortMode = 'newest'
-          onSortChange()
-        "
-      >
+      <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="setSortMode('newest')">
         {{ sortOptions.find((o) => o.value === sortMode)?.label }}
       </n-tag>
-      <n-button
-        size="tiny"
-        text
-        @click="
-          sourceFilter = 'all'
-          mediaFilter = 'all'
-          statusFilter = 'all'
-          qualityFilter = 'all'
-          selectedTags = []
-          colorFilter = ''
-          sortMode = 'newest'
-          onFilterChange()
-        "
-      >
-        清除全部
-      </n-button>
+      <n-button size="tiny" text @click="clearAllFilters"> 清除全部 </n-button>
     </div>
 
     <!-- 定位模式横幅：展示被定位的素材并高亮，可一键退出回到完整列表 -->
