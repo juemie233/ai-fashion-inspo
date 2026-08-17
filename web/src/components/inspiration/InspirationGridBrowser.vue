@@ -1,17 +1,14 @@
 <script setup lang="ts">
 /**
- * 通用素材网格浏览器：网格/多选/灯箱/排序密度/加载更多/跳详情。
+ * 通用素材网格浏览器：网格/多选/悬停大图预览/排序密度/加载更多/跳详情。
  *
- * 数据由父组件加载并通过 props 传入（本组件不负责请求）；卡片悬停操作与批量操作栏
- * 通过 slot 注入，供「标签素材网格」「质量审核未通过素材」等场景复用，避免重复实现
- * 网格交互（跳详情、灯箱大图、多选、密度切换、加载更多）。
+ * 数据由父组件加载并通过 props 传入（本组件不负责请求）；卡片操作按钮（如翻案/移除）
+ * 与批量操作栏通过 slot 注入，供「标签素材网格」「质量审核未通过素材」等场景复用，
+ * 避免重复实现网格交互（跳详情、悬停大图预览、多选、密度切换、加载更多）。
  */
 
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { NIcon } from 'naive-ui'
-import { SearchOutline } from '@vicons/ionicons5'
 import { getFileUrl } from '@/api/inspirations'
-import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 
 /** 网格条目：id/缩略图/原图/媒体类型为通用字段，其余字段原样透传（如 quality_reason） */
 export interface GridBrowserItem {
@@ -87,27 +84,6 @@ function removeSelectedId(id: string) {
 }
 
 defineExpose({ clearSelection, removeSelectedId })
-
-// ===== 灯箱 =====
-const showLightbox = ref(false)
-const lightboxIndex = ref(0)
-/** 当前列表内全部图片路径（排除视频），供灯箱左右切换 */
-const lightboxPaths = computed<string[]>(() =>
-  props.items
-    .filter((i) => i.media_type !== 'video' && i.file_path)
-    .map((i) => i.file_path as string),
-)
-
-/** 打开灯箱看大图（视频跳详情页播放） */
-function openLightbox(item: GridBrowserItem) {
-  if (item.media_type === 'video') {
-    emit('open-detail', item)
-    return
-  }
-  const idx = lightboxPaths.value.indexOf(item.file_path || '')
-  lightboxIndex.value = idx >= 0 ? idx : 0
-  showLightbox.value = true
-}
 
 /** 缩略图 URL（无缩略图时回退到原图） */
 function fileUrl(item: GridBrowserItem): string {
@@ -190,42 +166,35 @@ onBeforeUnmount(clearHoverPreview)
           class="image-card"
           :class="{ 'is-selected': selectedIds.has(item.id) }"
           @click="emit('open-detail', item)"
-          @mouseenter="startHoverPreview(item)"
-          @mouseleave="clearHoverPreview"
         >
-          <video
-            v-if="item.media_type === 'video' && !item.thumbnail_path"
-            :src="getFileUrl(item.file_path || '')"
-            muted
-            playsinline
-            preload="metadata"
-          />
-          <img v-else-if="item.thumbnail_path || item.file_path" :src="fileUrl(item)" :alt="item.id" loading="lazy" />
-          <div v-else class="no-preview">无预览</div>
+          <!-- 图片区域：干净展示，悬停停留弹出大图预览 -->
+          <div class="image-wrap" @mouseenter="startHoverPreview(item)" @mouseleave="clearHoverPreview">
+            <video
+              v-if="item.media_type === 'video' && !item.thumbnail_path"
+              :src="getFileUrl(item.file_path || '')"
+              muted
+              playsinline
+              preload="metadata"
+            />
+            <img v-else-if="item.thumbnail_path || item.file_path" :src="fileUrl(item)" :alt="item.id" loading="lazy" />
+            <div v-else class="no-preview">无预览</div>
 
-          <!-- 卡片附加展示（父组件按需注入，如审核原因覆盖条） -->
-          <slot name="card-extra" :item="item" />
+            <!-- 卡片附加展示（父组件按需注入，如审核原因覆盖条） -->
+            <slot name="card-extra" :item="item" />
 
-          <!-- 多选勾选 -->
-          <n-checkbox
-            class="card-checkbox"
-            :checked="selectedIds.has(item.id)"
-            @update:checked="toggleSelect(item.id)"
-            @click.stop
-          />
-
-          <!-- 悬停中央放大镜：点击打开灯箱大图（悬停停留已弹出大图快速预览） -->
-          <div class="card-zoom" @click.stop="openLightbox(item)">
-            <n-icon size="18"><SearchOutline /></n-icon>
+            <!-- 选中遮罩 -->
+            <div v-if="selectedIds.has(item.id)" class="card-selected-mask" />
           </div>
 
-          <!-- 悬停快捷操作：父组件注入的操作按钮（大图浏览由悬停预览浮层承担） -->
+          <!-- 操作按钮区：多选勾选 + 父组件注入的操作按钮，独立显示在图片下方（常显） -->
           <div class="card-actions" @click.stop>
+            <n-checkbox
+              class="card-checkbox"
+              :checked="selectedIds.has(item.id)"
+              @update:checked="toggleSelect(item.id)"
+            />
             <slot name="card-actions" :item="item" />
           </div>
-
-          <!-- 选中遮罩 -->
-          <div v-if="selectedIds.has(item.id)" class="card-selected-mask" />
         </div>
       </div>
 
@@ -233,9 +202,6 @@ onBeforeUnmount(clearHoverPreview)
         <n-button size="small" :loading="loading" @click="emit('load-more')">加载更多（{{ items.length }}/{{ total }}）</n-button>
       </div>
     </n-spin>
-
-    <!-- 灯箱 -->
-    <ImageLightbox :show="showLightbox" :image-paths="lightboxPaths" :initial-index="lightboxIndex" @close="showLightbox = false" />
 
     <!-- 悬停快速预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡网格操作 -->
     <Teleport to="body">
@@ -305,11 +271,21 @@ onBeforeUnmount(clearHoverPreview)
   position: relative;
   cursor: pointer;
   border-radius: 4px;
-  overflow: hidden;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+  padding: 3px;
 }
+
+/* 图片区域：相对定位容器，覆盖元素（勾选/原因/选中遮罩）以此为基准 */
+.image-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
 /* 图片/视频：中图网格展示；大图浏览由「悬停快速预览」浮层承担 */
-.image-card img,
-.image-card video {
+.image-wrap img,
+.image-wrap video {
   width: 100%;
   aspect-ratio: 2/3;
   object-fit: cover;
@@ -329,66 +305,23 @@ onBeforeUnmount(clearHoverPreview)
   font-size: 12px;
 }
 
-/* 多选勾选：悬停或已选中时显示 */
+/* 多选勾选：与操作按钮一起常显在图片下方按钮区 */
 .card-checkbox {
-  position: absolute;
-  top: 4px;
-  left: 4px;
   background: rgba(255, 255, 255, 0.9);
   border-radius: 4px;
   padding: 2px;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 4; /* 高于父组件注入的覆盖条（如审核原因），保证可点选 */
-}
-.image-card:hover .card-checkbox,
-.image-card.is-selected .card-checkbox {
-  opacity: 1;
 }
 
-/* 悬停中央放大镜：点击打开灯箱大图 */
-.card-zoom {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 4;
-}
-.image-card:hover .card-zoom {
-  opacity: 1;
-}
-.card-zoom:hover {
-  background: rgba(0, 0, 0, 0.65);
-}
-
-/* 悬停快捷操作（父组件注入，如移除/翻案） */
+/* 操作按钮：独立显示在图片下方（常显，不覆盖图片） */
 .card-actions {
-  position: absolute;
-  bottom: 4px;
-  left: 0;
-  right: 0;
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 6px;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 4; /* 高于覆盖条，避免被文字遮挡 */
-}
-.image-card:hover .card-actions {
-  opacity: 1;
+  padding: 4px 2px 2px;
 }
 
-/* 选中遮罩 */
+/* 选中遮罩（仅覆盖图片区域） */
 .card-selected-mask {
   position: absolute;
   inset: 0;
