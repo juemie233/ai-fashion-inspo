@@ -41,17 +41,23 @@ function renderCount(row: UnifiedTask) {
 
 const columns: DataTableColumns<UnifiedTask> = [
   {
+    title: '任务ID',
+    key: 'id',
+    width: 80,
+    render: (row) => h(NText, { depth: 2 }, { default: () => String(row.id) }),
+  },
+  {
     title: '任务',
     key: 'title',
     render: (row) =>
       h('div', { style: 'line-height:1.4' }, [
-        h(
-          NTag,
-          { size: 'small', type: taskTypeTagColor(row.type) },
-          { default: () => row.title },
-        ),
+        h(NTag, { size: 'small', type: taskTypeTagColor(row.type) }, { default: () => row.title }),
         row.detail
-          ? h(NText, { depth: 3, style: 'font-size:12px;display:block;margin-top:6px' }, { default: () => row.detail })
+          ? h(
+              NText,
+              { depth: 3, style: 'font-size:12px;display:block;margin-top:6px' },
+              { default: () => row.detail },
+            )
           : null,
       ]),
   },
@@ -60,7 +66,11 @@ const columns: DataTableColumns<UnifiedTask> = [
     key: 'status',
     width: 90,
     render: (row) =>
-      h(NTag, { type: taskStatusType(row.status), size: 'small' }, { default: () => TASK_STATUS_LABELS[row.status] || row.status }),
+      h(
+        NTag,
+        { type: taskStatusType(row.status), size: 'small' },
+        { default: () => TASK_STATUS_LABELS[row.status] || row.status },
+      ),
   },
   { title: '进度', key: 'progress', width: 160, render: renderProgress },
   { title: '完成', key: 'count', width: 100, render: renderCount },
@@ -88,14 +98,28 @@ const columns: DataTableColumns<UnifiedTask> = [
     render: (row) =>
       h('div', { style: 'display:flex;gap:8px' }, [
         row.status === 'pending'
-          ? h(NButton, { size: 'small', quaternary: true, type: 'warning', onClick: () => emit('cancel', row) }, { default: () => '取消' })
+          ? h(
+              NButton,
+              {
+                size: 'small',
+                quaternary: true,
+                type: 'warning',
+                onClick: () => emit('cancel', row),
+              },
+              { default: () => '取消' },
+            )
           : null,
         row.source === 'scraper'
           ? h(
               NPopconfirm,
               { onPositiveClick: () => emit('delete', row) },
               {
-                trigger: () => h(NButton, { size: 'small', quaternary: true, type: 'error' }, { default: () => '删除' }),
+                trigger: () =>
+                  h(
+                    NButton,
+                    { size: 'small', quaternary: true, type: 'error' },
+                    { default: () => '删除' },
+                  ),
                 default: () => '确定删除该采集任务？',
               },
             )
