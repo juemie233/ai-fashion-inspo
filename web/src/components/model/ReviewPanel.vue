@@ -517,16 +517,24 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 审核原因：覆盖在图片顶部的半透明红条，不占用布局高度、不遮挡底部悬停按钮 */
 .rejected-reason {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   font-size: 11px;
-  color: #d03050;
+  color: #fff;
+  background: rgba(208, 48, 80, 0.85);
   text-align: center;
-  padding: 4px 6px;
-  margin-bottom: 4px;
+  padding: 3px 6px;
+  border-radius: 4px 4px 0 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-all;
+  pointer-events: none;
+  z-index: 2;
 }
 </style>
