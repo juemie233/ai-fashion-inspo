@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import axios from 'axios'
 import apiClient from '@/api/client'
-import { getFileUrl, batchTrash } from '@/api/inspirations'
+import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 
 const message = useMessage()
 const router = useRouter()
@@ -112,14 +112,14 @@ function dupTimeLabel(d: CropDuplicate): string {
   return t.slice(5)
 }
 
-/** 保留裁剪结果：把库中重复素材移入垃圾桶，然后重新执行本素材的裁剪 */
+/** 保留裁剪结果：物理删除库中重复素材（不可恢复），然后重新执行本素材的裁剪 */
 async function handleDupKeepCrop() {
   const dup = currentDup.value
   if (!dup || dupProcessing.value) return
   dupProcessing.value = true
   try {
-    // 重复素材移入垃圾桶（裁剪去重检查只认正常库中的素材，入桶后不再拦截）
-    await batchTrash([dup.dup_id], '重复')
+    // 物理删除重复素材（用户已在确认弹层中同意，文件/记录/向量一并清除）
+    await deleteInspiration(dup.dup_id)
     // 重新执行裁剪：此时应能成功；若仍命中新的重复则继续入队决策
     const { data } = await apiClient.post<CropApplyResult>('/admin/crop-phone-screenshots/apply', {
       ids: [dup.id],
@@ -129,7 +129,7 @@ async function handleDupKeepCrop() {
     })
     mergeApplyResult(data, dup.id)
     message.success(
-      `已保留裁剪结果（素材 ${dup.id.slice(0, 8)}…），重复素材 ${dup.dup_id.slice(0, 8)}… 已移入垃圾桶`,
+      `已保留裁剪结果（素材 ${dup.id.slice(0, 8)}…），重复素材 ${dup.dup_id.slice(0, 8)}… 已物理删除`,
     )
     if (data.duplicates.length > 0) {
       message.info(`裁剪后又发现 ${data.duplicates.length} 组内容重复，请继续对比决策`)
@@ -577,11 +577,18 @@ function timeLabel(c: { created_at: string | null }): string {
             </div>
           </div>
         </div>
-        <p class="dup-hint">两张图内容相同，请选择保留哪一张（删除权由你决定）：</p>
+        <p class="dup-hint">
+          两张图内容相同，请选择保留哪一张（删除为<strong>永久删除</strong>，不可恢复）：
+        </p>
         <div class="dup-actions">
-          <n-button type="primary" :loading="dupProcessing" @click="handleDupKeepCrop">
-            保留裁剪结果，库中重复素材移入垃圾桶
-          </n-button>
+          <n-popconfirm :disabled="dupProcessing" @positive-click="handleDupKeepCrop">
+            <template #trigger>
+              <n-button type="primary" :loading="dupProcessing">
+                保留裁剪结果，删除库中重复素材
+              </n-button>
+            </template>
+            将<strong>永久删除</strong>库中重复素材（文件与记录不可恢复），确定继续？
+          </n-popconfirm>
           <n-button :disabled="dupProcessing" @click="handleDupSkip">保留原图，跳过裁剪</n-button>
         </div>
       </template>
