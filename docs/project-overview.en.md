@@ -127,7 +127,6 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 | [README](../README.en.md) | Installation, startup, feature overview, data model, full API docs |
 | [TODO](../TODO.md) | Pending feature list (by priority) |
 | [CLAUDE](../CLAUDE.md) | Coding standards, project standards, tech stack conventions |
-| [Creator module migration report](../人物模块移植报告.md) | Full design and implementation record of the creator/blogger capabilities |
 | [Code audit report](./code-audit-report.en.md) | Full-stack code audit findings and fix progress |
 | [System assessment report — open-source component adoption](./open-source-components-assessment.en.md) | Evaluation of open-source component selection |
 | [CLIP encoding notes](./clip-encoding-notes.en.md) | Notes on the image vector encoding approach |
