@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 疑似 AI 素材管理：勾选素材后批量删除，或重新标记为非 AI。 */
+/** 疑似 AI 素材管理：勾选素材后移入垃圾桶（自动移动·AI生成），或重新标记为非 AI。 */
 
 import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
@@ -11,6 +11,8 @@ const message = useMessage()
 const props = defineProps<{
   /** 刷新键：父组件批量删除完成后自增，触发本组件重新加载列表 */
   refreshKey: number
+  /** 移入垃圾桶进行中（父组件控制，按钮显示加载态） */
+  deleting: boolean
 }>()
 
 const emit = defineEmits<{
@@ -144,12 +146,13 @@ function deleteSelected() {
               size="small"
               type="error"
               secondary
+              :loading="props.deleting"
               :disabled="selectedCount === 0"
             >
-              删除选中
+              移入垃圾桶
             </n-button>
           </template>
-          确定删除选中的 {{ selectedCount }} 个疑似 AI 素材？此操作物理删除文件，不可撤销。
+          确定将选中的 {{ selectedCount }} 个疑似 AI 素材移入垃圾桶？可在「垃圾桶」中恢复。
         </n-popconfirm>
       </div>
     </div>

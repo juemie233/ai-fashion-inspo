@@ -7,6 +7,7 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { batchTrash } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { useAdminTask } from '@/composables/useAdminTask'
 import type { Stats, LargeFile, MissingFile, OrphanFile, DuplicateGroup, DedupResult } from '@/types/admin'
@@ -209,12 +210,22 @@ async function batchDeleteByCondition(condition: string) {
   }
 }
 
-/** 按 ID 列表批量删除（疑似 AI 子页面勾选删除） */
+/** 疑似 AI 素材移入垃圾桶（软删除，可恢复）：来源标记自动移动，原因「AI生成」 */
+const aiTrashing = ref(false)
+
 async function batchDeleteByIds(ids: string[]) {
+  aiTrashing.value = true
   try {
-    await submitBatchDelete({ ids })
-  } catch {
-    message.error('批量删除失败')
+    const { trashed, skipped } = await batchTrash(ids, 'AI生成', 'auto')
+    const parts = [`已将 ${trashed} 个疑似 AI 素材移入垃圾桶`]
+    if (skipped > 0) parts.push(`${skipped} 个跳过（不存在或已在垃圾桶）`)
+    message.success(parts.join('，'))
+    aiRefreshKey.value += 1  // 通知疑似 AI 子页面刷新
+    loadAll()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '移入垃圾桶失败')
+  } finally {
+    aiTrashing.value = false
   }
 }
 
@@ -255,6 +266,7 @@ onUnmounted(() => {
       <n-tab-pane name="ai" tab="疑似 AI 素材">
         <admin-ai-review
           :refresh-key="aiRefreshKey"
+          :deleting="aiTrashing"
           @delete-selected="batchDeleteByIds"
         />
       </n-tab-pane>

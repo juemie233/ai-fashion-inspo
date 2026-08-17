@@ -10,8 +10,8 @@ from app.utils.time import format_utc
 if TYPE_CHECKING:
     from app.models.inspiration import Inspiration
 
-# 垃圾桶删除原因枚举（负样本学习只用「质量差」子集保证语义纯净）
-TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他"]
+# 垃圾桶删除原因枚举（负样本学习只用「质量差」子集保证语义纯净；「AI生成」用于疑似 AI 素材自动移入）
+TrashReason = Literal["质量差", "重复", "不喜欢", "隐私", "其他", "AI生成"]
 
 # 垃圾桶删除原因的运行时全部取值（由 TrashReason 派生，单一来源，勿再手工维护副本）
 TRASH_REASONS: tuple[str, ...] = get_args(TrashReason)
