@@ -63,3 +63,7 @@ backend/prompt_versions.json
 # 全局默认 prompt（运行时数据）
 prompt.txt
 backend/prompt.txt
+
+# 数据库容量评估（含真实数据统计，不公开）
+docs/数据库容量评估.md
+docs/database-capacity-assessment.en.md

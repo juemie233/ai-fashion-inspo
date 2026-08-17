@@ -130,5 +130,4 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 | [Creator module migration report](../人物模块移植报告.md) | Full design and implementation record of the creator/blogger capabilities |
 | [Code audit report](./code-audit-report.en.md) | Full-stack code audit findings and fix progress |
 | [System assessment report — open-source component adoption](./open-source-components-assessment.en.md) | Evaluation of open-source component selection |
-| [Database capacity assessment](./database-capacity-assessment.en.md) | Data scale and capacity evaluation |
 | [CLIP encoding notes](./clip-encoding-notes.en.md) | Notes on the image vector encoding approach |

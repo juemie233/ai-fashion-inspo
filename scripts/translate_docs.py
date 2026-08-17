@@ -31,13 +31,13 @@ DEFAULT_MODEL = "qwen2.5:7b"
 ROOT = Path(__file__).resolve().parents[1]
 
 # 待翻译的中文源文档（相对项目根目录）；新增文档时在此追加
+# 注意：中文源文件名以仓库实际文件名为准（docs/ 下为中文名）
 SOURCE_DOCS = [
     "README.md",
-    "docs/clip-encoding-notes.md",
-    "docs/code-audit-report.md",
-    "docs/database-capacity-assessment.md",
-    "docs/open-source-components-assessment.md",
-    "docs/project-overview.md",
+    "docs/CLIP编码说明.md",
+    "docs/代码审计报告.md",
+    "docs/系统评估报告-开源组件引入.md",
+    "docs/项目情况说明.md",
 ]
 
 # 每段翻译的最大字符数（控制上下文长度，避免超出模型窗口）
