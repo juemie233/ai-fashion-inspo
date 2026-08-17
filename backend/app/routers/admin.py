@@ -599,28 +599,56 @@ class PhoneCropRequest(BaseModel):
     mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例")
     crop_top: float = Field(default=0.03, ge=0, lt=0.5, description="顶部裁剪比例（仅 ratio 模式）")
     crop_bottom: float = Field(default=0.05, ge=0, lt=0.5, description="底部裁剪比例（仅 ratio 模式）")
-    limit: int = Field(default=200, ge=1, le=1000, description="单次最多处理候选数")
+    limit: int = Field(default=200, ge=1, le=1000, description="单次最多返回候选数")
 
 
-@router.post("/crop-phone-screenshots")
-async def crop_phone_screenshots(
+class PhoneCropApplyRequest(BaseModel):
+    """手机图剪裁执行请求：用户勾选确认的素材 ID 列表。"""
+
+    ids: list[str] = Field(..., description="勾选确认要裁剪的素材 ID 列表")
+    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例")
+    crop_top: float = Field(default=0.03, ge=0, lt=0.5, description="顶部裁剪比例（仅 ratio 模式）")
+    crop_bottom: float = Field(default=0.05, ge=0, lt=0.5, description="底部裁剪比例（仅 ratio 模式）")
+
+
+@router.post("/crop-phone-screenshots/scan")
+async def crop_phone_screenshots_scan(
     payload: PhoneCropRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """一键裁剪手动上传素材中的手机全屏截图（扫描 + 执行同步完成）。
-
-    仅处理 source_type=manual_upload 的竖屏截图（高/宽 ≥ 1.75）：裁掉
-    顶部状态栏/底部导航栏区域，自动备份原图并重建缩略图/哈希/主色调/向量。
-    """
-    from app.services.crop_service import crop_phone_screenshots as run_crop
+    """扫描手机图剪裁候选（只读）：手动上传竖屏截图清单 + 逐张裁剪信息，供人工确认。"""
+    from app.services.crop_service import scan_candidates
 
     try:
-        return await run_crop(
+        return await scan_candidates(
             db,
             mode=payload.mode,
             crop_top=payload.crop_top,
             crop_bottom=payload.crop_bottom,
             limit=payload.limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/crop-phone-screenshots/apply")
+async def crop_phone_screenshots_apply(
+    payload: PhoneCropApplyRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按勾选确认的素材执行手机图剪裁：备份原图、裁剪替换、重建缩略图/哈希/主色调并入队向量回填。"""
+    from app.services.crop_service import apply_crops
+
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="请至少勾选一个要裁剪的素材")
+
+    try:
+        return await apply_crops(
+            db,
+            ids=payload.ids,
+            mode=payload.mode,
+            crop_top=payload.crop_top,
+            crop_bottom=payload.crop_bottom,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

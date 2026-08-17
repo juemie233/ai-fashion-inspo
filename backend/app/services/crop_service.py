@@ -147,35 +147,35 @@ def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     return tmp
 
 
-async def crop_phone_screenshots(
+async def scan_candidates(
     db: AsyncSession,
     mode: str = "auto",
     crop_top: float = DEFAULT_CROP_TOP,
     crop_bottom: float = DEFAULT_CROP_BOTTOM,
     limit: int = 200,
 ) -> dict:
-    """一键裁剪手动上传素材中的手机全屏截图（扫描 + 执行一步完成）。
+    """扫描手动上传素材中的手机全屏截图候选（只读，不执行任何裁剪）。
 
     参数:
         db: 数据库会话
-        mode: auto（黑边自动检测，检测失败跳过）/ ratio（统一按比例裁剪）
+        mode: auto（黑边自动检测，逐张计算裁剪比例）/ ratio（统一按比例裁剪）
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
-        limit: 单次最多处理的候选数（0 表示不限制；超大库建议分批）
+        limit: 单次最多返回的候选数（0 表示不限制）
 
     返回:
         {
-            "scanned": 候选总数,
-            "processed": 成功裁剪数,
-            "skipped": [{"id": str, "reason": str}, ...],
-            "backup_dir": str | None,
-            "vector_task_id": int | None,
+            "total": 候选总数（limit 截断前）,
+            "items": [{
+                "id": str, "file_path": str, "width": int, "height": int,
+                "ratio": float, "crop_top": float, "crop_bottom": float,
+                "auto_ok": bool, "note": str | None,  # auto 检测失败原因
+            }, ...],
         }
     """
     if mode not in ("auto", "ratio"):
         raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
 
-    # 1. 扫描候选：手动上传 + 未删除 + 图片 + 竖屏比例（高/宽 ≥ 1.75）
     result = await db.execute(
         select(Inspiration).where(
             Inspiration.source_type == "manual_upload",
@@ -183,7 +183,8 @@ async def crop_phone_screenshots(
             Inspiration.file_path.isnot(None),
         )
     )
-    candidates = []
+    candidates: list[dict] = []
+    total = 0
     for insp in result.scalars():
         if insp.media_type != "image":
             continue
@@ -197,36 +198,111 @@ async def crop_phone_screenshots(
             continue  # 无法解码的图片不做候选
         if height / width < MIN_RATIO:
             continue
-        candidates.append((insp, full, width, height))
+        total += 1
+        if limit > 0 and len(candidates) >= limit:
+            continue
+        item: dict = {
+            "id": insp.id,
+            "file_path": str(insp.file_path),
+            "width": width,
+            "height": height,
+            "ratio": round(height / width, 3),
+            "crop_top": crop_top,
+            "crop_bottom": crop_bottom,
+            "auto_ok": True,
+            "note": None,
+        }
+        if mode == "auto":
+            try:
+                top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
+                item["crop_top"] = round(top_px / height, 6)
+                item["crop_bottom"] = round((height - 1 - bottom_px) / height, 6)
+            except ValueError as e:
+                item["auto_ok"] = False
+                item["note"] = f"自动检测失败：{e}"
+        candidates.append(item)
 
-    candidates.sort(key=lambda c: c[3] / c[2], reverse=True)
-    if limit > 0:
-        candidates = candidates[:limit]
-    if not candidates:
-        return {"scanned": 0, "processed": 0, "skipped": [], "backup_dir": None, "vector_task_id": None}
+    candidates.sort(key=lambda c: c["ratio"], reverse=True)
+    return {"total": total, "items": candidates}
 
-    # 2. 逐张确定裁剪比例（auto：黑边检测；ratio：统一比例）
-    plans: list[tuple[Inspiration, Path, float, float, str | None]] = []
+
+async def apply_crops(
+    db: AsyncSession,
+    ids: list[str],
+    mode: str = "auto",
+    crop_top: float = DEFAULT_CROP_TOP,
+    crop_bottom: float = DEFAULT_CROP_BOTTOM,
+) -> dict:
+    """按用户确认的素材 ID 列表执行裁剪（备份原图 → 裁剪替换 → 重建缩略图/哈希/主色调）。
+
+    参数:
+        db: 数据库会话
+        ids: 用户勾选确认要裁剪的素材 ID 列表
+        mode: auto（黑边自动检测）/ ratio（统一按比例裁剪）
+        crop_top: 顶部裁剪比例（仅 ratio 模式生效）
+        crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
+
+    返回:
+        {
+            "processed": 成功裁剪数,
+            "skipped": [{"id": str, "reason": str}, ...],
+            "backup_dir": str | None,
+            "vector_task_id": int | None,
+        }
+    """
+    if mode not in ("auto", "ratio"):
+        raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
+
+    result = await db.execute(
+        select(Inspiration).where(Inspiration.id.in_(ids))
+    )
+    insp_map = {insp.id: insp for insp in result.scalars()}
+
+    # 逐张确定裁剪比例并执行
+    plans: list[tuple[Inspiration, Path, float, float]] = []
     skipped: list[dict] = []
-    for insp, full, width, height in candidates:
+    for insp_id in ids:
+        insp = insp_map.get(insp_id)
+        if insp is None or insp.deleted_at is not None:
+            skipped.append({"id": insp_id, "reason": "记录不存在或已入垃圾桶"})
+            continue
+        if insp.media_type != "image":
+            skipped.append({"id": insp_id, "reason": "非图片素材"})
+            continue
+        full = settings.storage_root / insp.file_path
+        if not full.exists():
+            skipped.append({"id": insp_id, "reason": "文件不存在"})
+            continue
+        try:
+            with Image.open(full) as probe:
+                width, height = probe.size
+        except Exception:
+            skipped.append({"id": insp_id, "reason": "文件无法解码"})
+            continue
+        if height / width < MIN_RATIO:
+            skipped.append({"id": insp_id, "reason": "非竖屏截图（高/宽 < 1.75）"})
+            continue
         if mode == "auto":
             try:
                 top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
                 t_frac = round(top_px / height, 6)
                 b_frac = round((height - 1 - bottom_px) / height, 6)
             except ValueError as e:
-                skipped.append({"id": insp.id, "reason": f"自动检测失败：{e}"})
+                skipped.append({"id": insp_id, "reason": f"自动检测失败：{e}"})
                 continue
         else:
             t_frac, b_frac = crop_top, crop_bottom
-        plans.append((insp, full, t_frac, b_frac, None))
+        plans.append((insp, full, t_frac, b_frac))
 
-    # 3. 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
+    if not plans:
+        return {"processed": 0, "skipped": skipped, "backup_dir": None, "vector_task_id": None}
+
+    # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
     backup_dir = (
         settings.storage_root / "_crop_backup" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
     )
     successes: list[tuple[Inspiration, str | None, str | None, str | None]] = []
-    for insp, full, t_frac, b_frac, _ in plans:
+    for insp, full, t_frac, b_frac in plans:
         tmp: Path | None = None
         try:
             tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
@@ -274,7 +350,7 @@ async def crop_phone_screenshots(
                 tmp.unlink(missing_ok=True)
             skipped.append({"id": insp.id, "reason": f"处理失败: {e}"})
 
-    # 4. 写回数据库（标签/收藏/来源等字段不动）
+    # 写回数据库（标签/收藏/来源等字段不动）
     for insp, new_hash, thumb_path, colors in successes:
         if new_hash:
             insp.content_hash = new_hash
@@ -283,18 +359,17 @@ async def crop_phone_screenshots(
         insp.updated_at = utcnow()
     await db.commit()
 
-    # 5. 向量回填：图像向量按新图重建，文本向量沿用现有标签
+    # 向量回填：图像向量按新图重建，文本向量沿用现有标签
     vector_task_id: int | None = None
     if successes:
         task = await create_vector_backfill_task(db, [s[0].id for s in successes])
         vector_task_id = task.id if task else None
 
     logger.info(
-        f"手机图裁剪完成: 候选 {len(candidates)}，成功 {len(successes)}，"
+        f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"
         f"跳过 {len(skipped)}，备份 {backup_dir}"
     )
     return {
-        "scanned": len(candidates),
         "processed": len(successes),
         "skipped": skipped,
         "backup_dir": str(backup_dir) if successes else None,
