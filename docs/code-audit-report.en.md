@@ -145,6 +145,14 @@ Landing record for the "reduce hidden bugs in core paths" plan (Plans A/B/C):
 | ------ | ------ |
 | `139a026` | `tests/test_journeys.py` with 4 journey tests: material full journey (upload → tagging → vectors → trash → restore → re-trash → purge, asserting zero invariant violations plus tombstone/audit trail throughout), scraping journey (extension session → from-url ingestion → tombstone → re-scrape rejected, including the anti-duplication loop after restore), missing-file self-healing, worker crash (heartbeat timeout → reset → re-run succeeds). Vector generation uses a fake to stay independent of real CLIP/LanceDB |
 
-### Plan C: Idempotency and DB Unique Constraints (registered in TODO, pending)
+### Plan C: Idempotency and DB Unique Constraints (done)
 
-- Add UNIQUE on the tombstone table `scraper_seen_urls`; partial unique index on `source_platform_id` (non-deleted only, preserving the "trash releases platform ID" semantics) — evaluate existing duplicate rows before migrating; add idempotency assertions to task runners.
+Verification showed both DB constraints had **already landed** (the TODO registration misjudged them as pending; corrected here):
+
+- The tombstone table `scraper_seen_urls.source_url` has been the **primary key** since baseline (naturally unique), so the DB-level anti-duplication guard always existed
+- The partial unique index on `source_platform_id` was landed by migration `02b765c8c4e5` (2026-08-16, before this review round): `WHERE deleted_at IS NULL`, correctly preserving the "trash releases platform ID" semantics
+
+This round's wrap-up (commit TBD):
+- 3 idempotency assertion tests (`test_task_runners.py`): vector backfill re-run keeps identical stats, quality check re-run writes no new logs/reviews, batch delete re-run deletes nothing
+- 4 DB-constraint verification tests (new `test_db_constraints.py`): partial unique index existence, duplicate platform ID rejected, trash-release semantics, tombstone primary key rejects duplicates
+- Read-only production check: migrations applied to head, no existing duplicate platform IDs, no duplicate tombstone URLs

@@ -238,3 +238,113 @@ async def test_vector_backfill_partial_success(client, upload, monkeypatch):
         assert task.result["text_skipped"] == 1
         assert task.done == 2
         assert task.progress == 100
+
+
+# ============ 幂等断言：同一任务重跑，结果与统计不变、无副作用 ============
+
+
+class _AlwaysOkOllama:
+    """模拟 Ollama 全部请求成功（幂等重跑场景：两次执行结果一致）。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def post(self, url, json=None, **kwargs):
+        request = httpx.Request("POST", url)
+        prompt = ((json or {}).get("messages") or [{}])[0].get("content", "")
+        if "疑似由 AI 生成" in prompt:
+            content = '{"is_ai_generated": false, "confidence": 0.1}'
+        else:
+            content = '{"is_outfit": true, "reason": "穿搭照片"}'
+        return httpx.Response(200, json={"message": {"content": content}}, request=request)
+
+
+async def test_vector_backfill_rerun_idempotent(client, upload, monkeypatch):
+    """幂等：向量回填任务成功重跑，统计与第一次一致（upsert 语义，无重复向量）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()  # fail_ids 为空 → 全部成功
+    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [a, b])
+        await vb_module.execute_vector_backfill(db, task)
+        first = {
+            "image_done": task.result["image_done"],
+            "image_failed": task.result["image_failed"],
+            "text_done": task.result["text_done"],
+            "text_skipped": task.result["text_skipped"],
+        }
+        assert first["image_done"] == 2  # 首次执行全部成功
+
+        # worker 重复认领/重试导致重跑：结果统计必须与第一次完全一致，且不抛错
+        await vb_module.execute_vector_backfill(db, task)
+        second = {
+            "image_done": task.result["image_done"],
+            "image_failed": task.result["image_failed"],
+            "text_done": task.result["text_done"],
+            "text_skipped": task.result["text_skipped"],
+        }
+        assert second == first
+        assert task.done == 2
+
+
+async def test_quality_check_rerun_no_side_effects(client, upload, monkeypatch):
+    """幂等：质量审核任务重跑不产生新的审核日志/判定记录（无副作用）。"""
+    from app.models.inspiration import AIAnalysisLog, AIQualityReview
+
+    monkeypatch.setattr(httpx, "AsyncClient", _AlwaysOkOllama)
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+    for iid in (a, b):
+        client.patch(f"/api/inspirations/{iid}", json={"quality_status": "pending"})
+
+    async with async_session() as db:
+        task = await create_quality_check_task(db, [a, b])
+        await execute_quality_check(db, task)
+        assert task.result["approved"] == 2  # 首次执行全部通过
+
+        logs_after_first = await db.scalar(
+            select(func.count(AIAnalysisLog.id)).where(
+                AIAnalysisLog.log_type == "quality_check"
+            )
+        )
+        reviews_after_first = await db.scalar(select(func.count(AIQualityReview.id)))
+        assert logs_after_first == 2
+
+        # 重跑：素材已 approved 被过滤（total=0 秒完成），不写任何新日志/判定
+        await execute_quality_check(db, task)
+        logs_after_rerun = await db.scalar(
+            select(func.count(AIAnalysisLog.id)).where(
+                AIAnalysisLog.log_type == "quality_check"
+            )
+        )
+        reviews_after_rerun = await db.scalar(select(func.count(AIQualityReview.id)))
+        assert logs_after_rerun == logs_after_first
+        assert reviews_after_rerun == reviews_after_first
+
+
+async def test_batch_delete_rerun_idempotent(client, upload):
+    """幂等：批量删除任务重跑（记录已删）不抛错、不重复删、统计为 0。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    async with async_session() as db:
+        task = await create_batch_delete_task(db, [a, b], label="ids")
+        await execute_batch_delete(db, task)
+        assert task.result["deleted_count"] == 2
+        remaining = await db.scalar(select(func.count(Inspiration.id)))
+        assert remaining == 0
+
+        # 重跑：素材已不存在 → 查不到待删记录，deleted_count=0，不抛错
+        await execute_batch_delete(db, task)
+        assert task.result["deleted_count"] == 0
+        assert task.result["freed_bytes"] == 0
+        assert remaining == 0
