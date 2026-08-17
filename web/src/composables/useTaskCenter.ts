@@ -88,6 +88,7 @@ export function useTaskCenter() {
           r.approved != null ? `通过 ${r.approved}` : '',
           r.rejected != null ? `拒绝 ${r.rejected}` : '',
           r.pending != null ? `未判定 ${r.pending}` : '',
+          r.failed != null ? `失败 ${r.failed}` : '',
           r.ai_generated ? `疑似 AI ${r.ai_generated}` : '',
         ].filter(Boolean).join(' · ')
       default:

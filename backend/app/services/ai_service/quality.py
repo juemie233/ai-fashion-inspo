@@ -58,6 +58,19 @@ async def _ollama_vision_chat(
                 if raw:
                     return raw, None
         return "", "模型返回空内容"
+    except httpx.ConnectError:
+        # Ollama 未启动/连接失败：可恢复（_is_recoverable_error 命中「无法连接 Ollama」）
+        return "", "无法连接 Ollama 服务"
+    except httpx.TimeoutException:
+        # 模型响应超时：可恢复（命中「超时」）
+        return "", "调用 Ollama 超时"
+    except httpx.HTTPStatusError as e:
+        # 4xx 为请求/模型问题（如 400 模型未就绪），重试无益 → 永久错误；
+        # 5xx 为服务端暂时异常（命中「Ollama 服务」）→ 可恢复重试
+        status_code = e.response.status_code
+        if 400 <= status_code < 500:
+            return "", f"Ollama 请求被拒绝（HTTP {status_code}）"
+        return "", f"Ollama 服务异常（HTTP {status_code}）"
     except Exception as e:
         return "", f"调用失败: {str(e)[:100]}"
 

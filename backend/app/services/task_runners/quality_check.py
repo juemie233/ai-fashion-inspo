@@ -15,7 +15,13 @@ from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, AIQualityReview, Inspiration
 from app.models.task import TaskQueue
 from app.services.ai_service import check_image_quality
-from app.services.task_runners.common import _ANALYZE_CONCURRENCY, utcnow
+from app.services.task_runners.common import (
+    PermanentTaskError,
+    RecoverableTaskError,
+    _ANALYZE_CONCURRENCY,
+    _is_recoverable_error,
+    utcnow,
+)
 from app.services.vector import store as vector_store
 
 logger = logging.getLogger(__name__)
@@ -96,8 +102,10 @@ async def _quality_check_one(
 async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     """执行质量审核任务：逐张调用轻量审核并维护进度（由 worker 调用）。
 
-    质量审核是「尽力而为」的：单张失败保持 pending，不触发整个任务重试，
-    因此本函数不主动抛出 Recoverable/Permanent 错误（数据库层异常由 worker 兜底）。
+    质量审核是「尽力而为」的：单张失败保持 pending，不触发整个任务重试。
+    但整批全部失败时（如 Ollama 未启动、请求被拒），任务不能冒充「完成」——
+    抛出任务级异常交由 worker 处理：可恢复错误自动重试，永久错误标记失败，
+    避免出现「显示完成 N/N 实际一张都没审」的假成功。数据库层异常由 worker 兜底。
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
@@ -138,7 +146,9 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     approved = 0
     rejected = 0
     pending = 0
+    failed = 0  # 审核失败保持 pending 的张数（reason 非空，与「无法判定」同计数但单列）
     ai_generated = 0
+    first_error: str | None = None  # 第一条失败原因，供任务级报错
 
     for start in range(0, len(items), _ANALYZE_CONCURRENCY):
         chunk = items[start:start + _ANALYZE_CONCURRENCY]
@@ -157,6 +167,10 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
                 rejected += 1
             else:
                 pending += 1
+                if _reason:
+                    failed += 1
+                    if first_error is None:
+                        first_error = _reason
             if _ai:
                 ai_generated += 1
 
@@ -174,12 +188,25 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "approved": approved,
         "rejected": rejected,
         "pending": pending,
+        "failed": failed,
         "ai_generated": ai_generated,
     }
     task.done = task.total
     task.progress = 100
     task.updated_at = utcnow()
     await db.commit()
+
+    # 整批全部审核失败：不能标记成功。抛出任务级异常由 worker 处理——
+    # 可恢复错误（Ollama 未启动/超时/服务异常）自动重试，永久错误（请求被拒等）标记失败。
+    if task.total and failed == task.total:
+        detail = f"质量审核全部失败（{failed}/{task.total}）"
+        if first_error:
+            detail += f"：{first_error}"
+        if _is_recoverable_error(first_error or ""):
+            raise RecoverableTaskError(detail)
+        raise PermanentTaskError(detail)
+
     logger.info(
-        f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，未判定 {pending}"
+        f"质量审核任务完成: #{task.id} 通过 {approved}，拒绝 {rejected}，"
+        f"未判定 {pending}，失败 {failed}"
     )
