@@ -1,6 +1,7 @@
 /** 标签管理页核心数据与操作：加载、筛选排序、选中、删除/合并/置顶/重复扫描等。 */
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import {
   fetchTagsGrouped,
@@ -22,17 +23,23 @@ import {
 /** 标签管理页数据模型与业务操作集合，由 TagManageView 及其子组件消费。 */
 export function useTagManage() {
   const message = useMessage()
+  const route = useRoute()
+  const router = useRouter()
 
   // ===== 数据 =====
   const groups = ref<TagCategoryGroup[]>([])
   const loading = ref(false)
   const stats = ref<TagStats | null>(null)
 
-  // ===== 筛选与排序 =====
-  const searchQuery = ref('')
-  const filterCategory = ref<string | null>(null)
-  const filterSource = ref<string | null>(null)
-  const sortMode = ref<'usage' | 'name' | 'custom'>('usage')
+  // ===== 筛选与排序（初始值从 URL query 恢复：刷新 / 详情页返回后保持浏览状态） =====
+  const searchQuery = ref((route.query.q as string) || '')
+  const filterCategory = ref<string | null>((route.query.category as string) || null)
+  const filterSource = ref<string | null>((route.query.source as string) || null)
+  const sortMode = ref<'usage' | 'name' | 'custom'>(
+    route.query.sort === 'name' || route.query.sort === 'custom'
+      ? route.query.sort
+      : 'usage',
+  )
 
   // ===== 选中（批量操作） =====
   const selectedIds = ref<Set<number>>(new Set())
@@ -62,6 +69,15 @@ export function useTagManage() {
           if (t) { fresh = t; break }
         }
         selectedTag.value = fresh
+      } else {
+        // 从 URL query 恢复上次浏览的标签（刷新 / 点击素材详情返回后，右侧面板仍展示原标签素材）
+        const tagId = Number(route.query.tag)
+        if (Number.isFinite(tagId) && tagId > 0) {
+          for (const g of groups.value) {
+            const t = g.tags.find(x => x.id === tagId)
+            if (t) { selectedTag.value = t; break }
+          }
+        }
       }
     } catch { message.error('加载失败') } finally { loading.value = false }
   }
@@ -189,6 +205,24 @@ export function useTagManage() {
   function selectTag(tag: TagItem) {
     selectedTag.value = tag
   }
+
+  // ===== URL 持久化：浏览状态（搜索/筛选/排序/当前标签）同步到 query =====
+  /** 把当前浏览状态写入 URL query（replace 不产生历史记录；默认值不写入，保持 URL 干净） */
+  function syncQuery() {
+    const query: Record<string, string> = {}
+    if (searchQuery.value.trim()) query.q = searchQuery.value.trim()
+    if (filterCategory.value) query.category = filterCategory.value
+    if (filterSource.value) query.source = filterSource.value
+    if (sortMode.value !== 'usage') query.sort = sortMode.value
+    if (selectedTag.value) query.tag = String(selectedTag.value.id)
+    router.replace({ query })
+  }
+
+  // 任一浏览状态变化即同步 URL：刷新或从素材详情返回后，页面恢复为离开前的浏览状态
+  watch(
+    [searchQuery, filterCategory, filterSource, sortMode, () => selectedTag.value?.id],
+    syncQuery,
+  )
 
   /** 素材关联数变化后，同步左侧标签 usage_count 与统计数字 */
   function onGridChanged(payload: { removed: number }) {
