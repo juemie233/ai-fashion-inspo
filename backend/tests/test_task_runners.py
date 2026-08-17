@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.database import async_session
 from app.models.inspiration import Inspiration
+from app.models.task import TaskQueue
 from app.services.task_runners.batch_delete import (
     create_batch_delete_task,
     execute_batch_delete,
@@ -16,6 +17,7 @@ from app.services.task_runners.quality_check import (
     create_quality_check_task,
     execute_quality_check,
 )
+from app.services.task_runners import vector_backfill as vb_module
 
 
 async def test_execute_batch_delete_deletes_records_and_files(client, upload):
@@ -161,5 +163,78 @@ async def test_quality_check_partial_failed_still_success(client, upload, ollama
         assert task.result["failed"] == 1
         assert task.result["approved"] == 1
         assert task.result["pending"] == 1
+        assert task.done == 2
+        assert task.progress == 100
+
+
+# ============ 向量回填执行器 ============
+
+
+class _FakeRebuildVectors:
+    """mock rebuild_inspiration_vectors：fail_ids 中的素材返回全部失败，其余成功。"""
+
+    def __init__(self) -> None:
+        self.fail_ids: set[str] = set()
+
+    async def __call__(self, db, inspiration_id: str) -> dict:
+        if inspiration_id in self.fail_ids:
+            return {"text": False, "image": False}
+        return {"text": True, "image": True}
+
+
+async def _make_backfill_task(db, inspiration_ids: list[str]) -> TaskQueue:
+    """直接构造向量回填任务（绕过 create 的数据库过滤，聚焦执行器逻辑验证）。"""
+    task = TaskQueue(
+        type="vector_backfill",
+        status="pending",
+        progress=0,
+        total=len(inspiration_ids),
+        done=0,
+        result={"inspiration_ids": inspiration_ids},
+        max_retries=2,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def test_vector_backfill_all_image_failed_raises(client, upload, monkeypatch):
+    """向量回填：全部图片素材向量生成失败时任务抛永久错误（不再冒充「完成」）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()
+    fake.fail_ids = {a, b}
+    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [a, b])
+        with pytest.raises(PermanentTaskError):
+            await vb_module.execute_vector_backfill(db, task)
+
+        await db.refresh(task)
+        assert task.result["image_failed"] == 2
+        assert task.result["image_done"] == 0
+        assert task.result["text_done"] == 0
+
+
+async def test_vector_backfill_partial_success(client, upload, monkeypatch):
+    """向量回填：部分素材成功时任务正常完成，result 单列失败数（不误导为全成功）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()
+    fake.fail_ids = {b}
+    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [a, b])
+        await vb_module.execute_vector_backfill(db, task)  # 部分成功不抛异常
+
+        assert task.result["image_done"] == 1
+        assert task.result["image_failed"] == 1
+        assert task.result["text_done"] == 1
+        assert task.result["text_skipped"] == 1
         assert task.done == 2
         assert task.progress == 100

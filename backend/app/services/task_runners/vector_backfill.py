@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
-from app.services.task_runners.common import utcnow
+from app.services.task_runners.common import PermanentTaskError, utcnow
 from app.services.vector_service import rebuild_inspiration_vectors
 
 logger = logging.getLogger(__name__)
@@ -93,10 +93,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     text_done = 0
     text_skipped = 0
     image_done = 0
-    image_skipped = 0
+    image_skipped = 0  # 非图片素材正常跳过
+    image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
 
     total = len(inspiration_ids)
     for idx, insp_id in enumerate(inspiration_ids, start=1):
+        insp = await db.get(Inspiration, insp_id)
+        is_image = insp is not None and insp.media_type == "image"
         stats = await rebuild_inspiration_vectors(db, insp_id)
         if stats["text"]:
             text_done += 1
@@ -104,6 +107,8 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             text_skipped += 1
         if stats["image"]:
             image_done += 1
+        elif is_image:
+            image_failed += 1
         else:
             image_skipped += 1
 
@@ -121,14 +126,26 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         "text_skipped": text_skipped,
         "image_done": image_done,
         "image_skipped": image_skipped,
+        "image_failed": image_failed,
     }
     task.done = total
     task.progress = 100
     task.error = None
     task.updated_at = utcnow()
     await db.commit()
+
+    # 防假成功：存在图片素材但图像向量全部生成失败（系统性故障，如 CLIP 不可用 /
+    # LanceDB 未安装 / 图片文件缺失），任务不能冒充「完成」，交由 worker 标记失败。
+    if image_done == 0 and image_failed > 0:
+        detail = (
+            f"向量回填失败：{image_failed} 个图片素材的图像向量全部生成失败"
+            f"（成功 {image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
+            f"图片文件缺失或写入失败"
+        )
+        raise PermanentTaskError(detail)
+
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "
         f"文本 {text_done}（跳过 {text_skipped}），"
-        f"图像 {image_done}（跳过 {image_skipped}）"
+        f"图像 {image_done}（跳过 {image_skipped}，失败 {image_failed}）"
     )
