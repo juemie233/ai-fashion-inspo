@@ -25,6 +25,7 @@ import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
+import { shortenText } from '@/utils/format'
 import { buildBrowseParams, storedBrowsePageSize } from '@/utils/browseQuery'
 import { CATEGORY_LABELS } from '@/api/tags'
 import type { PersonBrief } from '@shared/types/person'
@@ -448,7 +449,7 @@ async function removeTag(t: InspirationTagOut) {
           title="此素材在垃圾桶中"
           style="margin-bottom: 16px"
         >
-          删除来源：{{ detail.trash_source === 'auto' ? '自动移动（质量审核）' : '手动移入' }}；原因：{{ detail.trash_reason || '未知' }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
+          删除来源：{{ detail.trash_source === 'auto' ? '自动移动（质量审核）' : '手动移入' }}；原因：{{ detail.trash_reason || '未知' }}{{ detail.quality_reason ? `（${shortenText(detail.quality_reason)}）` : '' }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
         </n-alert>
 
         <div class="detail-layout">

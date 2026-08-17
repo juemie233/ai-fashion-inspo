@@ -8,6 +8,7 @@ import {
   formatSize,
   fmtSize,
   normalizeModelName,
+  shortenText,
   smartSize,
 } from '../format'
 
@@ -72,5 +73,28 @@ describe('normalizeModelName', () => {
 
   it('空字符串原样返回', () => {
     expect(normalizeModelName('')).toBe('')
+  })
+})
+
+describe('shortenText', () => {
+  it('空文本返回空串', () => {
+    expect(shortenText('')).toBe('')
+    expect(shortenText('   ')).toBe('')
+  })
+
+  it('短文本原样返回（去首尾空白）', () => {
+    expect(shortenText(' 图片为手机的截图演示图 ')).toBe('图片为手机的截图演示图')
+  })
+
+  it('超长文本截断并加省略号，保留开头含义', () => {
+    const long = '图片中人物被遮挡在橱窗或海报图中，无法判断完整穿搭'
+    const out = shortenText(long)
+    expect(out.length).toBeLessThan(long.length)
+    expect(out.endsWith('…')).toBe(true)
+    expect(out.startsWith('图片中人物被遮挡')).toBe(true)
+  })
+
+  it('自定义阈值', () => {
+    expect(shortenText('一二三四五六七八九十', 5)).toBe('一二三四五…')
   })
 })

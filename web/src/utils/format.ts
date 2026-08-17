@@ -75,3 +75,13 @@ export function formatSize(bytes: number): string {
   if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB'
   return bytes + ' B'
 }
+
+/**
+ * 精简长文本用于紧凑展示（如垃圾桶原因附加审核结论）：
+ * 去除首尾空白，超长时按字符截断并加省略号，保留开头主要信息、不破坏原意。
+ */
+export function shortenText(text: string, maxLen = 16): string {
+  const t = (text || '').trim()
+  if (!t || t.length <= maxLen) return t
+  return `${t.slice(0, maxLen)}…`
+}

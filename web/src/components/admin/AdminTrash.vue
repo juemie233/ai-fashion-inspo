@@ -13,7 +13,7 @@ import {
   type TrashReason,
   type InspirationOut,
 } from '@/api/inspirations'
-import { formatSize } from '@/utils/format'
+import { formatSize, shortenText } from '@/utils/format'
 
 const message = useMessage()
 
@@ -70,10 +70,20 @@ function daysRemaining(deletedAt?: string | null): string {
   return `${days} 天`
 }
 
-/** 移入来源与原因展示：手动移入 / 自动移动（质量审核） + 删除原因 */
+/** 移入来源与原因展示（紧凑）：手动移入 / 自动移动（质量审核）+ 删除原因 + 精简审核结论 */
 function trashSourceLabel(item: InspirationOut): string {
   const reason = item.trash_reason || '未知'
-  return item.trash_source === 'auto' ? `自动移动 · ${reason}` : `手动移入 · ${reason}`
+  const base = item.trash_source === 'auto' ? '自动移动' : '手动移入'
+  const note = item.quality_reason ? `：${shortenText(item.quality_reason)}` : ''
+  return `${base} · ${reason}${note}`
+}
+
+/** 完整原因文案（title 悬停提示用）：含未精简的审核结论全文 */
+function trashSourceFull(item: InspirationOut): string {
+  const reason = item.trash_reason || '未知'
+  const base = item.trash_source === 'auto' ? '自动移动（质量审核）' : '手动移入'
+  const note = item.quality_reason ? `：${item.quality_reason}` : ''
+  return `${base} · ${reason}${note}`
 }
 
 // ── 单条操作 ──
@@ -198,7 +208,7 @@ async function cleanExpired() {
             loading="lazy"
           />
           <div class="meta">
-            <n-tag size="tiny" type="error" :bordered="false" :title="trashSourceLabel(item)">
+            <n-tag size="tiny" type="error" :bordered="false" :title="trashSourceFull(item)">
               {{ trashSourceLabel(item) }}
             </n-tag>
             <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
