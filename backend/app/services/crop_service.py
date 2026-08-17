@@ -53,6 +53,9 @@ CONTENT_ROW_FRACTION = 0.005  # 一行中亮像素占比 > 0.5% 视为内容行
 MIN_MAIN_BAND_HEIGHT_FRACTION = 0.25  # 主体条带高度至少占全图 25%
 MAX_OTHER_BANDS_FRACTION = 0.5  # 其他条带总高度不超过主体的 50%
 
+# 内容重复时的裁剪结果预览目录（每次 apply 前清空，仅存活于对比决策期间）
+DUP_PREVIEW_DIR_NAME = "_crop_dups"
+
 
 def detect_photo_band(path: Path) -> tuple[int, int]:
     """检测图片中最大的内容条带（照片主体）的上下边界。
@@ -360,6 +363,14 @@ async def apply_crops(
                 "file_path": str | None, "thumbnail_path": str | None,
                 "created_at": str | None,  # 记录不存在时仅 id + reason
             }, ...],
+            "duplicates": [{
+                "id": str,  # 本次要裁剪的素材
+                "dup_id": str,  # 库中内容重复的素材
+                "dup_file_path": str | None, "dup_thumbnail_path": str | None,
+                "dup_created_at": str | None,
+                "preview_path": str | None,  # 裁剪结果预览（临时文件，供左右对比）
+                "reason": str,
+            }, ...],
             "backup_dir": str | None,
             "vector_task_id": int | None,
         }
@@ -412,20 +423,31 @@ async def apply_crops(
         plans.append((insp, full, t_frac, b_frac))
 
     if not plans:
-        return {"processed": 0, "skipped": skipped, "backup_dir": None, "vector_task_id": None}
+        return {
+            "processed": 0,
+            "skipped": skipped,
+            "duplicates": [],
+            "backup_dir": None,
+            "vector_task_id": None,
+        }
+
+    # 清理上一次的重复对比预览文件（仅对比决策期间需要，避免磁盘堆积）
+    dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
+    shutil.rmtree(dups_dir, ignore_errors=True)
 
     # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
     backup_dir = (
         settings.storage_root / "_crop_backup" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
     )
     successes: list[tuple[Inspiration, str | None, str | None, str | None]] = []
+    duplicates: list[dict] = []
     for insp, full, t_frac, b_frac in plans:
         tmp: Path | None = None
         try:
             tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
 
-            # 新内容哈希 + 去重检查（重复则放弃本条，保留原图）。
-            # 大文件哈希为阻塞 I/O，放线程池执行避免卡事件循环（与 scan 阶段一致）
+            # 新内容哈希 + 去重检查：命中重复时保留裁剪结果预览，交用户对比决策，
+            # 不再自动丢弃（原图与库中素材均保留，由用户决定删除哪一张）
             new_hash = await asyncio.to_thread(file_sha256, tmp)
             if new_hash:
                 dup_id = (
@@ -438,8 +460,29 @@ async def apply_crops(
                     )
                 ).scalars().first()
                 if dup_id:
-                    skipped.append(_skip_entry(insp, f"裁剪结果与素材 {dup_id} 内容重复"))
-                    tmp.unlink(missing_ok=True)
+                    dup = (
+                        await db.execute(
+                            select(Inspiration).where(Inspiration.id == dup_id)
+                        )
+                    ).scalar_one_or_none()
+                    # 裁剪结果预览移入临时目录（与素材同卷，直接 rename）
+                    dups_dir.mkdir(parents=True, exist_ok=True)
+                    preview = dups_dir / f"{insp.id}_{dup_id}{full.suffix}"
+                    os.replace(tmp, preview)
+                    tmp = None
+                    duplicates.append(
+                        {
+                            "id": insp.id,
+                            "dup_id": dup_id,
+                            "dup_file_path": dup.file_path if dup else None,
+                            "dup_thumbnail_path": dup.thumbnail_path if dup else None,
+                            "dup_created_at": (
+                                dup.created_at.isoformat(sep=" ") if dup and dup.created_at else None
+                            ),
+                            "preview_path": str(preview.relative_to(settings.storage_root)),
+                            "reason": f"裁剪结果与素材 {dup_id} 内容重复",
+                        }
+                    )
                     continue
 
             # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪同一素材时覆盖备份
@@ -486,11 +529,12 @@ async def apply_crops(
 
     logger.info(
         f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"
-        f"跳过 {len(skipped)}，备份 {backup_dir}"
+        f"跳过 {len(skipped)}，内容重复待用户决策 {len(duplicates)}，备份 {backup_dir}"
     )
     return {
         "processed": len(successes),
         "skipped": skipped,
+        "duplicates": duplicates,
         "backup_dir": str(backup_dir) if successes else None,
         "vector_task_id": vector_task_id,
     }

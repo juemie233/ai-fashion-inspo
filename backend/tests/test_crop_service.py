@@ -175,6 +175,65 @@ def test_apply_empty_ids_rejected(client):
     assert r.status_code == 400
 
 
+def test_apply_duplicate_returns_preview_for_user_decision(client, monkeypatch):
+    """裁剪结果与库中素材内容重复：返回 duplicates 对比数据（含预览图），
+    不自动丢弃；用户将重复素材移入垃圾桶后再次裁剪即可成功。"""
+    import sqlite3
+
+    from app.config import settings
+
+    # A、B 两张不同内容的竖屏截图（避免上传阶段内容去重）
+    d1, c1 = _make_vertical_screenshot(bg=(220, 220, 220))
+    insp_a = _upload_screenshot(client, d1, c1)
+    d2, c2 = _make_vertical_screenshot(bg=(180, 200, 230))
+    insp_b = _upload_screenshot(client, d2, c2)
+
+    # 模拟「A 裁剪后的内容与 B 相同」：固定哈希值 + 把 B 的 content_hash 置为同值
+    monkeypatch.setattr("app.services.crop_service.file_sha256", lambda _p: "dup-hash")
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "UPDATE inspirations SET content_hash=? WHERE id=?", ("dup-hash", insp_b["id"])
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp_a["id"]], "mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 0
+    assert body["skipped"] == []
+    assert len(body["duplicates"]) == 1
+    dup = body["duplicates"][0]
+    assert dup["id"] == insp_a["id"]
+    assert dup["dup_id"] == insp_b["id"]
+    assert dup["dup_file_path"] and dup["dup_thumbnail_path"]
+    assert "内容重复" in dup["reason"]
+    # 裁剪结果预览图保留在 storage/_crop_dups/ 下，且未被应用到素材
+    preview = settings.storage_root / dup["preview_path"]
+    assert preview.exists()
+    assert _file_size(insp_a["id"], client)[1] == 600  # A 原图未动
+
+    # 用户决定：把重复素材 B 移入垃圾桶 → 再次裁剪 A 成功（垃圾桶素材不再算重复）
+    tr = client.post(
+        "/api/inspirations/batch-trash",
+        json={"ids": [insp_b["id"]], "reason": "重复"},
+    )
+    assert tr.status_code == 200
+    r2 = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp_a["id"]], "mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05},
+    )
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["processed"] == 1
+    assert body2["duplicates"] == []
+    assert _file_size(insp_a["id"], client)[1] == 540  # 已裁剪
+
+
 def test_crop_invalid_mode_rejected(client):
     """非法模式返回 400。"""
     assert client.post(

@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import axios from 'axios'
 import apiClient from '@/api/client'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, batchTrash } from '@/api/inspirations'
 
 const message = useMessage()
 const router = useRouter()
@@ -58,6 +58,17 @@ const CONFIDENCE_LABELS: Record<string, { text: string; type: 'success' | 'warni
 const candidates = ref<CropCandidate[]>([])
 const checkedIds = ref<Set<string>>(new Set())
 
+/** 内容重复对比条目：裁剪结果 vs 库中重复素材，由用户决定保留哪一张 */
+interface CropDuplicate {
+  id: string
+  dup_id: string
+  dup_file_path?: string | null
+  dup_thumbnail_path?: string | null
+  dup_created_at?: string | null
+  preview_path?: string | null
+  reason: string
+}
+
 /** 执行结果 */
 interface CropApplyResult {
   processed: number
@@ -68,10 +79,121 @@ interface CropApplyResult {
     thumbnail_path?: string | null
     created_at?: string | null
   }>
+  duplicates: CropDuplicate[]
   backup_dir: string | null
   vector_task_id: number | null
 }
 const result = ref<CropApplyResult | null>(null)
+
+// ── 内容重复对比弹窗：逐组展示「裁剪结果 vs 库中重复素材」，删除权交给用户 ──
+
+/** 待决策的重复组队列 */
+const dupQueue = ref<CropDuplicate[]>([])
+const showDupModal = ref(false)
+const dupProcessing = ref(false)
+/** 当前正在决策的重复组（第 1/N 组） */
+const currentDup = computed(() => dupQueue.value[0] ?? null)
+const dupTotal = computed(() => dupQueue.value.length)
+
+/** 裁剪结果预览 URL（临时文件） */
+function dupPreviewUrl(d: CropDuplicate): string {
+  return getFileUrl(d.preview_path || '')
+}
+
+/** 库中重复素材预览 URL */
+function dupTargetUrl(d: CropDuplicate): string {
+  return getFileUrl(d.dup_thumbnail_path || d.dup_file_path || '')
+}
+
+/** 重复素材上传时间：MM-DD HH:mm */
+function dupTimeLabel(d: CropDuplicate): string {
+  if (!d.dup_created_at) return ''
+  const t = d.dup_created_at.replace('T', ' ').slice(0, 16)
+  return t.slice(5)
+}
+
+/** 保留裁剪结果：把库中重复素材移入垃圾桶，然后重新执行本素材的裁剪 */
+async function handleDupKeepCrop() {
+  const dup = currentDup.value
+  if (!dup || dupProcessing.value) return
+  dupProcessing.value = true
+  try {
+    // 重复素材移入垃圾桶（裁剪去重检查只认正常库中的素材，入桶后不再拦截）
+    await batchTrash([dup.dup_id], '重复')
+    // 重新执行裁剪：此时应能成功；若仍命中新的重复则继续入队决策
+    const { data } = await apiClient.post<CropApplyResult>('/admin/crop-phone-screenshots/apply', {
+      ids: [dup.id],
+      mode: mode.value,
+      crop_top: cropTop.value / 100,
+      crop_bottom: cropBottom.value / 100,
+    })
+    mergeApplyResult(data, dup.id)
+    message.success(
+      `已保留裁剪结果（素材 ${dup.id.slice(0, 8)}…），重复素材 ${dup.dup_id.slice(0, 8)}… 已移入垃圾桶`,
+    )
+    if (data.duplicates.length > 0) {
+      message.info(`裁剪后又发现 ${data.duplicates.length} 组内容重复，请继续对比决策`)
+    }
+  } catch (e: unknown) {
+    message.error(errorDetail(e) || '处理失败')
+  } finally {
+    dupProcessing.value = false
+    dupQueue.value = dupQueue.value.filter((d) => d.id !== dup.id)
+    finishDupQueue()
+  }
+}
+
+/** 保留原图：本次跳过裁剪（两边都保留），进入下一组对比 */
+function handleDupSkip() {
+  const dup = currentDup.value
+  if (!dup || dupProcessing.value) return
+  if (result.value) {
+    result.value.duplicates = result.value.duplicates.filter((d) => d.id !== dup.id)
+  }
+  dupQueue.value = dupQueue.value.filter((d) => d.id !== dup.id)
+  message.info(`已保留原图，跳过裁剪（素材 ${dup.id.slice(0, 8)}…）`)
+  finishDupQueue()
+}
+
+/** 合并一次重复处理后的 apply 结果到汇总结果 */
+function mergeApplyResult(data: CropApplyResult, handledId: string) {
+  if (!result.value) {
+    result.value = data
+  } else {
+    const r = result.value
+    r.processed += data.processed
+    r.skipped = [...r.skipped.filter((s) => s.id !== handledId), ...data.skipped]
+    // 新的重复组追加到汇总与待决策队列
+    r.duplicates = [...r.duplicates.filter((d) => d.id !== handledId), ...data.duplicates]
+    dupQueue.value = [...dupQueue.value.filter((d) => d.id !== handledId), ...data.duplicates]
+    if (data.vector_task_id) r.vector_task_id = data.vector_task_id
+    if (data.backup_dir) r.backup_dir = data.backup_dir
+  }
+}
+
+/** 队列处理完毕：关闭弹窗并汇总提示 + 刷新候选 */
+function finishDupQueue() {
+  if (dupQueue.value.length > 0) return
+  showDupModal.value = false
+  const r = result.value
+  if (!r) return
+  if (r.processed > 0) {
+    message.success(`重复对比处理完成：成功裁剪 ${r.processed} 张，已入队向量回填`)
+    // 已处理的素材不再出现在候选列表
+    handleScan()
+  } else if (r.skipped.length > 0 || r.duplicates.length > 0) {
+    message.warning(`裁剪完成：成功 0 张（跳过 ${r.skipped.length} 张）`)
+  }
+}
+
+/** 关闭弹窗（点击遮罩/关闭按钮）：剩余组按「保留原图」处理 */
+function handleDupModalClose() {
+  if (dupProcessing.value) return
+  dupQueue.value = []
+  showDupModal.value = false
+  const r = result.value
+  if (r && r.processed > 0) handleScan()
+}
 
 /** 跳过明细折叠面板：全部跳过时默认展开，便于立即查看原因并逐条定位 */
 const skippedExpanded = ref<string[]>([])
@@ -186,6 +308,12 @@ async function handleApply() {
       crop_bottom: cropBottom.value / 100,
     })
     result.value = data
+    if (data.duplicates.length > 0) {
+      // 内容重复：弹出左右对比视图，由用户决定保留哪一张（删除权交给用户）
+      dupQueue.value = [...data.duplicates]
+      showDupModal.value = true
+      return
+    }
     if (data.processed > 0) {
       message.success(`裁剪完成：成功 ${data.processed} 张，已入队向量回填`)
       // 裁剪成功后刷新候选：已处理的素材不再出现在候选列表
@@ -342,6 +470,9 @@ function timeLabel(c: { created_at: string | null }): string {
       <n-divider style="margin: 12px 0" />
       <n-alert :type="result.processed > 0 ? 'success' : 'warning'" style="margin-bottom: 8px">
         成功裁剪 {{ result.processed }} 张 · 跳过 {{ result.skipped.length }} 张
+        <template v-if="result.duplicates.length > 0">
+          · 内容重复 {{ result.duplicates.length }} 组待处理
+        </template>
         <template v-if="result.vector_task_id">
           · 已入队向量回填任务 #{{ result.vector_task_id }}（worker 执行）
         </template>
@@ -405,6 +536,55 @@ function timeLabel(c: { created_at: string | null }): string {
       >
         <img v-if="previewUrl" :src="previewUrl" alt="预览" style="width: 100%; display: block" />
       </div>
+    </n-modal>
+
+    <!-- 内容重复对比弹窗：左右并排展示裁剪结果与库中重复素材，删除权交给用户 -->
+    <n-modal
+      v-model:show="showDupModal"
+      preset="card"
+      title="裁剪结果与库中素材内容重复"
+      style="width: 92%; max-width: 860px"
+      :bordered="false"
+      :show-close="!dupProcessing"
+      :mask-closable="!dupProcessing"
+      :close-on-esc="!dupProcessing"
+      @close="handleDupModalClose"
+      @mask-click="handleDupModalClose"
+    >
+      <template v-if="currentDup">
+        <div class="dup-step">
+          第 {{ dupTotal - (dupQueue.length - 1) }} / {{ dupTotal }} 组 ·
+          裁剪后与库中素材内容一致（内容哈希相同）
+        </div>
+        <div class="dup-compare">
+          <div class="dup-side">
+            <div class="dup-side-label">裁剪结果（本次操作后）</div>
+            <div class="dup-img-wrap">
+              <img :src="dupPreviewUrl(currentDup)" alt="裁剪结果" />
+            </div>
+            <div class="dup-side-meta">{{ currentDup.id.slice(0, 8) }}…</div>
+          </div>
+          <div class="dup-vs">内容<br />一致</div>
+          <div class="dup-side">
+            <div class="dup-side-label">库中已有素材</div>
+            <div class="dup-img-wrap">
+              <img :src="dupTargetUrl(currentDup)" alt="库中重复素材" />
+            </div>
+            <div class="dup-side-meta">
+              {{ currentDup.dup_id.slice(0, 8) }}…<template v-if="currentDup.dup_created_at">
+                · {{ dupTimeLabel(currentDup) }}</template
+              >
+            </div>
+          </div>
+        </div>
+        <p class="dup-hint">两张图内容相同，请选择保留哪一张（删除权由你决定）：</p>
+        <div class="dup-actions">
+          <n-button type="primary" :loading="dupProcessing" @click="handleDupKeepCrop">
+            保留裁剪结果，库中重复素材移入垃圾桶
+          </n-button>
+          <n-button :disabled="dupProcessing" @click="handleDupSkip">保留原图，跳过裁剪</n-button>
+        </div>
+      </template>
     </n-modal>
   </n-card>
 </template>
@@ -531,5 +711,75 @@ function timeLabel(c: { created_at: string | null }): string {
 .skip-meta {
   font-size: 11px;
   color: #999;
+}
+
+/* 内容重复对比弹窗 */
+.dup-step {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 10px;
+}
+
+.dup-compare {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dup-side {
+  flex: 1;
+  min-width: 0;
+}
+
+.dup-side-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.dup-img-wrap {
+  height: 52vh;
+  max-height: 480px;
+  background: #111;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.dup-img-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.dup-side-meta {
+  font-size: 11px;
+  color: #999;
+  margin-top: 6px;
+}
+
+.dup-vs {
+  flex-shrink: 0;
+  width: 52px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f0a020;
+  line-height: 1.5;
+}
+
+.dup-hint {
+  margin: 12px 0 10px;
+  font-size: 13px;
+  color: #333;
+}
+
+.dup-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 </style>
