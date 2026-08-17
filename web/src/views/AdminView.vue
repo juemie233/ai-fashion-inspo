@@ -28,14 +28,15 @@ import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
 import AdminAuditLog from '@/components/admin/AdminAuditLog.vue'
 import AdminNearDuplicates from '@/components/admin/AdminNearDuplicates.vue'
 import AdminServiceHealth from '@/components/admin/AdminServiceHealth.vue'
+import AdminPhoneCrop from '@/components/admin/AdminPhoneCrop.vue'
 
 const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态 ──
-type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'neardup' | 'vectors' | 'trash' | 'insights'
-const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'neardup', 'vectors', 'trash', 'insights']
+type AdminTab = 'overview' | 'ai' | 'cleanup' | 'integrity' | 'duplicates' | 'neardup' | 'vectors' | 'crop' | 'trash' | 'insights'
+const ADMIN_TABS: AdminTab[] = ['overview', 'ai', 'cleanup', 'integrity', 'duplicates', 'neardup', 'vectors', 'crop', 'trash', 'insights']
 
 /** 从 URL query 恢复上次停留的子页面：刷新页面后仍停留在原小页面而非回到「概览」 */
 function initialTab(): AdminTab {
@@ -328,6 +329,11 @@ onUnmounted(() => {
       <!-- 向量管理 -->
       <n-tab-pane name="vectors" tab="向量管理">
         <admin-vector-panel />
+      </n-tab-pane>
+
+      <!-- 手机图剪裁 -->
+      <n-tab-pane name="crop" tab="手机图剪裁">
+        <admin-phone-crop />
       </n-tab-pane>
 
       <!-- 垃圾桶 -->

@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -587,3 +588,39 @@ async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
         "task_id": task.id,
         "count": len(missing_ids),
     }
+
+
+# ============ 手机图剪裁（一键裁剪手动上传的竖屏截图） ============
+
+
+class PhoneCropRequest(BaseModel):
+    """手机图剪裁请求参数。"""
+
+    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例")
+    crop_top: float = Field(default=0.03, ge=0, lt=0.5, description="顶部裁剪比例（仅 ratio 模式）")
+    crop_bottom: float = Field(default=0.05, ge=0, lt=0.5, description="底部裁剪比例（仅 ratio 模式）")
+    limit: int = Field(default=200, ge=1, le=1000, description="单次最多处理候选数")
+
+
+@router.post("/crop-phone-screenshots")
+async def crop_phone_screenshots(
+    payload: PhoneCropRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """一键裁剪手动上传素材中的手机全屏截图（扫描 + 执行同步完成）。
+
+    仅处理 source_type=manual_upload 的竖屏截图（高/宽 ≥ 1.75）：裁掉
+    顶部状态栏/底部导航栏区域，自动备份原图并重建缩略图/哈希/主色调/向量。
+    """
+    from app.services.crop_service import crop_phone_screenshots as run_crop
+
+    try:
+        return await run_crop(
+            db,
+            mode=payload.mode,
+            crop_top=payload.crop_top,
+            crop_bottom=payload.crop_bottom,
+            limit=payload.limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -5,6 +5,9 @@
     底部导航栏等与穿搭无关的区域。本脚本用于就地裁剪这类素材的
     顶部/底部多余区域，并同步更新缩略图、内容哈希、主色调与向量。
 
+    黑边检测与裁剪核心逻辑已迁移至 ``app.services.crop_service``，
+    脚本与本服务共用同一份实现（脚本保留为命令行入口）。
+
 两阶段工作流（先扫描、后执行）:
     1. 扫描:
        python scripts/crop_screenshots.py --scan [--auto]
@@ -49,12 +52,18 @@ from pathlib import Path
 # 添加 backend 目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
-from PIL import Image, ImageOps
+from PIL import Image
 from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session, init_db
 from app.models.inspiration import Inspiration
+from app.services.crop_service import (
+    DEFAULT_CROP_BOTTOM,
+    DEFAULT_CROP_TOP,
+    detect_photo_band,
+    crop_image_to_temp as _crop_to_temp,
+)
 from app.services.file_service import generate_thumbnail
 from app.services.task_runners.vector_backfill import create_vector_backfill_task
 from app.utils.file_hash import file_sha256
@@ -63,14 +72,6 @@ from app.utils.time import utcnow
 
 DEFAULT_CANDIDATE_FILE = Path(__file__).resolve().parent / "crop_candidates.json"
 DEFAULT_MIN_RATIO = 1.75  # 高/宽 ≥ 1.75 视为竖屏截图候选（9:16≈1.78、19.5:9≈2.17）
-DEFAULT_CROP_TOP = 0.03  # 默认裁掉顶部 3%（状态栏区域）
-DEFAULT_CROP_BOTTOM = 0.05  # 默认裁掉底部 5%（底部导航栏/手势条区域）
-
-# ── 黑边自动检测参数（--auto 模式）──
-BRIGHT_PIXEL_THRESHOLD = 25  # 灰度值 > 25 视为「亮像素」
-CONTENT_ROW_FRACTION = 0.005  # 一行中亮像素占比 > 0.5% 视为内容行
-MIN_MAIN_BAND_HEIGHT_FRACTION = 0.25  # 主体条带高度至少占全图 25%
-MAX_OTHER_BANDS_FRACTION = 0.5  # 其他条带总高度不超过主体的 50%
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,58 +127,6 @@ def parse_args() -> argparse.Namespace:
         "--limit", type=int, default=0, help="扫描最多列出的候选数（0 表示不限制）"
     )
     return parser.parse_args()
-
-
-def detect_photo_band(path: Path) -> tuple[int, int]:
-    """检测图片中最大的内容条带（照片主体）的上下边界。
-
-    思路：把图像转灰度后逐行统计「亮像素占比」，占比极低的连续行视为
-    黑边/留白；从所有内容条带中选出最高的一条作为照片主体，返回
-    (顶部行, 底部行)（含端点，0 基像素坐标）。
-
-    参数:
-        path: 图片绝对路径
-
-    返回:
-        (top, bottom) 主体条带的上下边界
-
-    异常:
-        ValueError: 布局不规则（无内容/主体过矮/多主体拼贴等），需人工处理
-    """
-    import numpy as np
-
-    with Image.open(path) as im:
-        arr = np.asarray(im.convert("L"))
-    height = arr.shape[0]
-    row_frac = (arr > BRIGHT_PIXEL_THRESHOLD).mean(axis=1)
-
-    bands: list[tuple[int, int]] = []
-    start: int | None = None
-    for y, frac in enumerate(row_frac):
-        if frac > CONTENT_ROW_FRACTION:
-            if start is None:
-                start = y
-        elif start is not None:
-            bands.append((start, y - 1))
-            start = None
-    if start is not None:
-        bands.append((start, height - 1))
-
-    if not bands:
-        raise ValueError("未检测到内容条带")
-
-    main = max(bands, key=lambda b: b[1] - b[0] + 1)
-    top, bottom = main
-    main_height = bottom - top + 1
-
-    if main_height < height * MIN_MAIN_BAND_HEIGHT_FRACTION:
-        raise ValueError(f"主体条带过矮（{main_height}px），可能不是居中照片")
-    if top == 0 and bottom == height - 1:
-        raise ValueError("主体占满全图，无黑边可裁")
-    other_height = sum(e - s + 1 for s, e in bands if (s, e) != main)
-    if other_height > main_height * MAX_OTHER_BANDS_FRACTION:
-        raise ValueError(f"其他内容条带过多（{other_height}px），布局复杂")
-    return top, bottom
 
 
 async def scan_candidates(args: argparse.Namespace) -> None:
@@ -291,47 +240,6 @@ async def scan_candidates(args: argparse.Namespace) -> None:
     print(f"候选清单已写入: {args.file}")
     print("下一步：审查该 JSON（删除条目 / 改 selected 为 false / 调整 crop_top、crop_bottom）")
     print(f"确认后执行: python scripts/crop_screenshots.py --apply --file {args.file.name}")
-
-
-def _crop_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
-    """按比例裁剪图片并写入同目录临时文件，返回临时文件路径（不改动原图）。
-
-    参数:
-        path: 原图绝对路径
-        top_frac: 顶部裁剪比例（相对高度）
-        bottom_frac: 底部裁剪比例（相对高度）
-
-    返回:
-        临时文件路径（由调用方负责替换或清理）
-
-    异常:
-        ValueError: 裁剪比例非法或合计超出图片高度
-    """
-    if not (0 <= top_frac < 1) or not (0 <= bottom_frac < 1):
-        raise ValueError(f"裁剪比例必须位于 [0, 1): top={top_frac}, bottom={bottom_frac}")
-
-    tmp = path.with_name(f"{path.stem}_crop_tmp{path.suffix}")
-    with Image.open(path) as src:
-        img = ImageOps.exif_transpose(src)
-        width, height = img.size
-        top = round(height * top_frac)
-        bottom = round(height * bottom_frac)
-        if top + bottom >= height:
-            raise ValueError(f"裁剪比例过大：顶部 {top}px + 底部 {bottom}px ≥ 高度 {height}px")
-        cropped = img.crop((0, top, width, height - bottom))
-        fmt = src.format or "JPEG"
-        save_kwargs: dict = {}
-        if fmt == "JPEG":
-            save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
-        try:
-            cropped.save(tmp, format=fmt, **save_kwargs)
-        except (ValueError, OSError):
-            # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG
-            if fmt != "JPEG":
-                cropped.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True)
-            else:
-                raise
-    return tmp
 
 
 async def apply_crops(args: argparse.Namespace) -> None:
