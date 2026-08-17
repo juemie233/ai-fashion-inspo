@@ -6,7 +6,7 @@ import type { PersonBrief } from '@shared/types/person'
 /** 审核状态 */
 export type QualityStatus = 'pending' | 'approved' | 'rejected'
 
-/** 垃圾桶删除原因（负样本学习只用「质量差」子集保证语义纯净；「AI生成」用于疑似 AI 素材自动移入） */
+/** 垃圾桶删除原因（垃圾桶素材全部作为负样本学习输入；「AI生成」用于疑似 AI 素材自动移入） */
 export type TrashReason = '质量差' | '重复' | '不喜欢' | '隐私' | '其他' | 'AI生成'
 
 /** 移入垃圾桶来源：manual 手动移入 / auto 质量审核自动移动（垃圾桶据此展示来源） */

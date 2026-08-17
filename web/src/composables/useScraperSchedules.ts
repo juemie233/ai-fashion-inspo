@@ -1,9 +1,10 @@
 /** 定时采集计划域：计划列表、创建、启停、立即执行与删除。 */
 
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { formatDate } from '@/utils/format'
+import { extractHistoryKeywords } from '@/utils/scraperKeywords'
 import type { ScraperSchedule } from '@/types/scraper'
 
 /** 计划间隔选项（分钟） */
@@ -40,11 +41,38 @@ export function useScraperSchedules() {
 
   // 新建计划表单
   const formPlatform = ref('xiaohongshu')
-  const formKeywords = ref('')
+  /** 轮换关键词（多选）：每次执行轮流使用其中一个，可选历史关键词也可手动输入 */
+  const formKeywords = ref<string[]>([])
   const formMaxCount = ref(20)
   const formSortMode = ref('general')
   const formInterval = ref(1440)
   const formEnabled = ref(true)
+
+  // 历史关键词：来自已完成采集任务（最近使用优先去重），供轮换关键词选择
+  const historyKeywords = ref<string[]>([])
+  const keywordOptions = computed(() =>
+    historyKeywords.value.map((k) => ({ label: k, value: k })),
+  )
+
+  /** 手动输入创建关键词：支持逗号/顿号分隔一次创建多个 */
+  function onCreateKeyword(label: string) {
+    const parts = label.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
+    return parts.length > 0 ? parts : null
+  }
+
+  /** 加载历史关键词：拉取最近 200 条已完成任务提取去重关键词 */
+  async function loadHistoryKeywords() {
+    try {
+      const { data } = await apiClient.get('/scraper/tasks', {
+        params: { sort: 'newest', size: 200 },
+      })
+      historyKeywords.value = extractHistoryKeywords(data.items || [])
+    } catch {
+      // 历史关键词加载失败不影响手动输入，静默降级
+    }
+  }
+
+  onMounted(loadHistoryKeywords)
 
   async function loadSchedules() {
     loading.value = true
@@ -62,7 +90,10 @@ export function useScraperSchedules() {
       creating.value = true
       const payload: any = {
         platform: formPlatform.value,
-        keywords: formKeywords.value.split(',').map((k: string) => k.trim()).filter(Boolean),
+        // 轮换关键词：多选为数组，手动输入的条目再按逗号/顿号拆分
+        keywords: formKeywords.value.flatMap((k) =>
+          k.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+        ),
         max_count: formMaxCount.value,
         interval_minutes: formInterval.value,
         enabled: formEnabled.value,
@@ -70,22 +101,24 @@ export function useScraperSchedules() {
       if (formPlatform.value === 'xiaohongshu' && formSortMode.value !== 'general') payload.sort_mode = formSortMode.value
       await apiClient.post('/scraper/schedules', payload)
       message.success('定时计划已创建')
-      formKeywords.value = ''
+      formKeywords.value = []
       loadSchedules()
     } catch (e: any) {
       message.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '创建失败')
     } finally { creating.value = false }
   }
 
-  /** 更新计划（关键词/数量/排序/间隔），成功返回 true 供调用方关闭弹窗 */
+  /** 更新计划（轮换关键词/数量/排序/间隔），成功返回 true 供调用方关闭弹窗 */
   async function updateSchedule(
     id: number,
-    payload: { keywords: string; max_count: number; sort_mode: string | null; interval_minutes: number },
+    payload: { keywords: string[]; max_count: number; sort_mode: string | null; interval_minutes: number },
   ): Promise<boolean> {
     try {
       updatingId.value = id
       const body: any = {
-        keywords: payload.keywords.split(',').map((k: string) => k.trim()).filter(Boolean),
+        keywords: payload.keywords.flatMap((k) =>
+          k.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+        ),
         max_count: payload.max_count,
         interval_minutes: payload.interval_minutes,
         sort_mode: payload.sort_mode,
@@ -138,6 +171,7 @@ export function useScraperSchedules() {
   return {
     schedules, loading, creating, updatingId, togglingId, runningId, deletingId,
     formPlatform, formKeywords, formMaxCount, formSortMode, formInterval, formEnabled,
+    historyKeywords, keywordOptions, onCreateKeyword,
     loadSchedules, createSchedule, updateSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
   }
 }

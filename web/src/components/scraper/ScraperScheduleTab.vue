@@ -2,7 +2,7 @@
 /** 定时采集页签：计划创建表单 + 计划列表（编辑/启用/停用、立即执行、删除）。 */
 
 import { h, onMounted, ref } from 'vue'
-import { NButton, NPopconfirm, NSwitch } from 'naive-ui'
+import { NButton, NPopconfirm, NSwitch, NTag } from 'naive-ui'
 import { useScraperSchedules, INTERVAL_OPTIONS, intervalLabel, SORT_MODE_LABELS } from '@/composables/useScraperSchedules'
 import { PLATFORM_LABELS } from '@/composables/useScraperTasks'
 import type { ScraperSchedule } from '@/types/scraper'
@@ -10,6 +10,7 @@ import type { ScraperSchedule } from '@/types/scraper'
 const {
   schedules, creating, updatingId, togglingId, runningId, deletingId,
   formPlatform, formKeywords, formMaxCount, formSortMode, formInterval, formEnabled,
+  keywordOptions, onCreateKeyword,
   loadSchedules, createSchedule, updateSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
 } = useScraperSchedules()
 
@@ -19,7 +20,7 @@ onMounted(loadSchedules)
 const showEdit = ref(false)
 const editingId = ref<number | null>(null)
 const editPlatform = ref('xiaohongshu')
-const editKeywords = ref('')
+const editKeywords = ref<string[]>([])
 const editMaxCount = ref(20)
 const editSortMode = ref('general')
 const editInterval = ref(1440)
@@ -34,7 +35,7 @@ const SORT_OPTIONS = [
 function openEdit(r: ScraperSchedule) {
   editingId.value = r.id
   editPlatform.value = r.platform
-  editKeywords.value = r.keywords.join(', ')
+  editKeywords.value = [...r.keywords]
   editMaxCount.value = r.max_count
   editSortMode.value = r.sort_mode || 'general'
   editInterval.value = r.interval_minutes
@@ -57,7 +58,10 @@ async function submitEdit() {
 function getColumns() {
   return [
     { title: '平台', key: 'platform', width: 90, render: (r: ScraperSchedule) => PLATFORM_LABELS[r.platform] || r.platform },
-    { title: '关键词', key: 'keywords', ellipsis: { tooltip: true }, render: (r: ScraperSchedule) => r.keywords.join(', ') || '-' },
+    { title: '关键词', key: 'keywords', ellipsis: { tooltip: true }, render: (r: ScraperSchedule) => h('span', [
+      h('span', r.keywords.join(', ') || '-'),
+      r.keywords.length > 1 ? h('span', { style: { marginLeft: '6px' } }, [h(NTag, { size: 'tiny', type: 'info', bordered: false }, { default: () => '轮换' })]) : null,
+    ]) },
     { title: '数量', key: 'max_count', width: 60 },
     { title: '间隔', key: 'interval', width: 100, render: (r: ScraperSchedule) => intervalLabel(r.interval_minutes) },
     { title: '排序', key: 'sort_mode', width: 70, render: (r: ScraperSchedule) => r.platform === 'xiaohongshu' ? SORT_MODE_LABELS[r.sort_mode || 'general'] : '-' },
@@ -82,7 +86,21 @@ function getColumns() {
         <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
       </n-form-item>
       <n-form-item label="关键词">
-        <n-input v-model:value="formKeywords" placeholder="多个关键词用逗号分隔" @keyup.enter="createSchedule" />
+        <n-select
+          v-model:value="formKeywords"
+          multiple
+          filterable
+          tag
+          :options="keywordOptions"
+          :on-create="onCreateKeyword"
+          placeholder="选择轮换关键词，或输入新关键词后回车"
+          style="width:100%"
+        />
+        <template #feedback>
+          <span style="font-size:12px;color:#999">
+            每次执行时轮流使用其中一个关键词（可多选，可选历史关键词或手动输入）
+          </span>
+        </template>
       </n-form-item>
       <n-form-item label="数量">
         <n-input-number v-model:value="formMaxCount" :min="1" :max="500" style="width:100px" />
@@ -116,7 +134,16 @@ function getColumns() {
         <span>{{ PLATFORM_LABELS[editPlatform] || editPlatform }}</span>
       </n-form-item>
       <n-form-item label="关键词">
-        <n-input v-model:value="editKeywords" placeholder="多个关键词用逗号分隔" />
+        <n-select
+          v-model:value="editKeywords"
+          multiple
+          filterable
+          tag
+          :options="keywordOptions"
+          :on-create="onCreateKeyword"
+          placeholder="选择轮换关键词，或输入新关键词后回车"
+          style="width:100%"
+        />
       </n-form-item>
       <n-form-item label="数量">
         <n-input-number v-model:value="editMaxCount" :min="1" :max="500" style="width:100px" />

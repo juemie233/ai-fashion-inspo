@@ -116,6 +116,35 @@ def test_trash_writes_tombstone(client, upload):
     assert count == 1
 
 
+def test_upload_rejected_by_tombstone(client, upload):
+    """墓碑拦截：删除（移入垃圾桶）过的来源 URL 再次上传 → 409，不再重新入库。
+
+    对应「采集任务结果删除的素材直接添加到墓碑表」的防重复闭环：
+    删除即写墓碑，插件/上传链路再次携带同一 URL 时被墓碑拦截。
+    """
+    url = "https://www.xiaohongshu.com/explore/tombstone-upload"
+    insp_id = upload(source_url=url).json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/trash")  # 软删除 → 写墓碑
+
+    r = upload(source_url=url)  # 同 URL 再次上传
+    assert r.status_code == 409
+    assert "墓碑" in r.json()["detail"]
+
+
+def test_url_import_rejected_by_tombstone(client, upload):
+    """墓碑拦截：URL 导入（含插件下载链路）携带已被删除的 URL → 409，不下载不入库。"""
+    url = "https://img.example.com/tombstone-import.jpg"
+    insp_id = upload(source_url=url).json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/trash")
+
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={"url": url, "source_type": "browser_extension"},
+    )
+    assert r.status_code == 409
+    assert "墓碑" in r.json()["detail"]
+
+
 def test_trash_source_default_manual(client, upload):
     """单条移入垃圾桶：默认来源为手动（manual），垃圾桶返回来源标记。"""
     insp = upload().json()["id"]

@@ -3,7 +3,8 @@
 方案阶段 0（热身验证）与阶段 2（初筛器）的核心模块：
 
 - 正样本：``quality_status=approved`` 且未删除的图片素材
-- 负样本：``quality_status=rejected``（未删除）或 ``trash_reason=质量差``（已删除）的图片素材
+- 负样本：垃圾桶中所有图片素材（``deleted_at`` 非空，不限删除原因——凡是用户
+  移入垃圾桶的素材都是明确「不想要」的强负信号，全部计入）
 - 输入：LanceDB 中已存储的 512 维 CLIP 图像向量（垃圾桶素材向量保留，天然可复用）
 - 模型：sklearn 逻辑回归（无需 GPU，秒级训练）
 - 落盘：``storage/quality_classifier/``（joblib 序列化模型 + JSON 元数据）
@@ -24,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import Inspiration
-from app.schemas.inspiration import LEARN_NEGATIVE_TRASH_REASON
 from app.services.vector import store as vector_store
 from app.utils.time import utcnow
 
@@ -59,18 +59,14 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
         )
     ).scalars().all()
 
+    # 负样本 = 垃圾桶中所有图片素材（不限删除原因）。
+    # 口径与「垃圾桶待删除素材」保持一致：用户移入垃圾桶即明确不想要，
+    # 无论原因是质量差/重复/不喜欢/隐私/其他，全部作为负样本。
     negative_ids = (
         await db.execute(
             select(Inspiration.id).where(
                 Inspiration.media_type == "image",
-                (
-                    (Inspiration.quality_status == "rejected")
-                    & (Inspiration.deleted_at.is_(None))
-                )
-                | (
-                    (Inspiration.trash_reason == LEARN_NEGATIVE_TRASH_REASON)
-                    & (Inspiration.deleted_at.isnot(None))
-                ),
+                Inspiration.deleted_at.isnot(None),
             )
         )
     ).scalars().all()

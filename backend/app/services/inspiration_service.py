@@ -132,6 +132,21 @@ async def create_inspiration(
         if not task:
             raise HTTPException(status_code=400, detail="关联的采集任务不存在")
 
+    # 墓碑检查：来源 URL 曾被删除过（如采集结果删除），不再重新入库
+    if source_url:
+        from app.models.scraper import ScraperSeenURL
+
+        seen = await db.execute(
+            select(ScraperSeenURL.source_url).where(
+                ScraperSeenURL.source_url == source_url
+            )
+        )
+        if seen.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="该素材来源 URL 已存在墓碑记录（此前被删除），不会重新入库",
+            )
+
     # 保存文件
     file_path, thumb_path = await save_upload(file)
 
@@ -230,6 +245,23 @@ async def create_inspiration_from_url(
         task = await db.get(ScraperTask, scraper_task_id)
         if not task:
             raise HTTPException(status_code=400, detail="关联的采集任务不存在")
+
+    # 墓碑检查：来源 URL 曾被删除过（如采集结果删除），不再重新入库。
+    # source_url 为显式来源页地址（优先）、url 为图片地址，两者任一命中即拒绝
+    check_urls = [u for u in (source_url, url) if u]
+    if check_urls:
+        from app.models.scraper import ScraperSeenURL
+
+        seen = await db.execute(
+            select(ScraperSeenURL.source_url).where(
+                ScraperSeenURL.source_url.in_(check_urls)
+            )
+        )
+        if seen.scalars().first():
+            raise HTTPException(
+                status_code=409,
+                detail="该图片 URL 已存在墓碑记录（此前被删除），不会重新入库",
+            )
 
     # 下载图片：流式落盘 + 大小限制（按响应 Content-Type 区分图片/视频上限）
     images_dir = settings.images_dir
@@ -955,7 +987,7 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
 def _resolve_trash_reason(reason: str | None, inspiration: Inspiration) -> str:
     """解析删除原因：显式传入的合法值优先；否则按素材状态自动推断。
 
-    - 质量审核被拒绝（rejected）→ 「质量差」（负样本学习用）
+    - 质量审核被拒绝（rejected）→ 「质量差」（垃圾桶素材全部作为负样本学习输入）
     - 其余 → 「不喜欢」
     """
     if reason in TRASH_REASONS:

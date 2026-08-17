@@ -229,6 +229,15 @@ async function batchDeleteByIds(ids: string[]) {
   }
 }
 
+/** 近似重复页：勾选素材执行物理删除（冗余文件直接释放空间，不走垃圾桶；复用批量删除任务 + 审计留痕） */
+async function handleNearDuplicateDelete(ids: string[]) {
+  try {
+    await submitBatchDelete({ ids })
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '删除失败')
+  }
+}
+
 // ── 生命周期 ──
 
 onMounted(() => {
@@ -313,7 +322,7 @@ onUnmounted(() => {
 
       <!-- 近似重复（感知哈希） -->
       <n-tab-pane name="neardup" tab="近似重复">
-        <admin-near-duplicates @delete-selected="batchDeleteByIds" />
+        <admin-near-duplicates @delete-selected="handleNearDuplicateDelete" />
       </n-tab-pane>
 
       <!-- 向量管理 -->

@@ -436,9 +436,18 @@ def _validate_schedule_platform(platform: str) -> str:
 
 
 def _build_schedule_task_config(sched: ScraperSchedule) -> dict:
-    """由计划构造采集任务配置（小红书定时任务使用配置中的调试端口走 CDP）。"""
+    """由计划构造采集任务配置（关键词按轮换机制取用，小红书定时任务使用配置中的调试端口走 CDP）。
+
+    轮换规则：以已执行次数（run_count）为游标，每次执行轮流使用关键词列表中的
+    一个（keywords[run_count % len]）；列表只有一个关键词时退化为固定关键词。
+    """
+    keywords = json.loads(sched.keywords or "[]")
+    if keywords:
+        # 轮换取词：每次任务开始时的关键词不一样（创建计划时选择的关键词轮流使用）
+        rotation = keywords[sched.run_count % len(keywords)]
+        keywords = [rotation]
     config: dict = {
-        "keywords": json.loads(sched.keywords or "[]"),
+        "keywords": keywords,
         "max_count": sched.max_count,
         "headless": True,  # 定时任务默认无头，避免弹出浏览器窗口
         "cdp_port": settings.chrome_debug_port if sched.platform == "xiaohongshu" else None,

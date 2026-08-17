@@ -284,9 +284,12 @@ def _download_batch(
             _seen_url.add(img_url)
             unique.append((note_url, img_url))
 
-    # 查询这批图片 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）
+    # 查询这批图片 URL 及笔记 URL 中已在墓碑表中的（同步查询，包括已删除的素材 URL）。
+    # 删除素材时写入的是素材的 source_url（笔记页地址），采集成功时写入的是图片 CDN
+    # 地址，两者都需匹配：任一命中即视为「已删除/已采集」，跳过入库。
     if unique:
         img_urls = [img_url for _, img_url in unique]
+        note_urls = [note_url for note_url, _ in unique if note_url]
         conn = None
         try:
             conn = _sqlite3.connect(str(db_path))
@@ -296,10 +299,10 @@ def _download_batch(
                 "(source_url TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
             )
             conn.commit()
-            placeholders = ",".join("?" * len(img_urls))
+            placeholders = ",".join("?" * (len(img_urls) + len(note_urls)))
             cur = conn.execute(
                 f"SELECT source_url FROM scraper_seen_urls WHERE source_url IN ({placeholders})",
-                img_urls,
+                img_urls + note_urls,
             )
             db_existing = {r[0] for r in cur.fetchall()}
             existing_url_set.update(db_existing)
@@ -353,7 +356,8 @@ def _download_batch(
     for note_url, img_url in unique:
         if added >= remaining:
             break
-        if img_url in existing_url_set:
+        # 图片 URL 或笔记 URL 命中墓碑/已见集合：删除过的素材不再重复采集
+        if img_url in existing_url_set or note_url in existing_url_set:
             skipped_existing += 1
             continue
 

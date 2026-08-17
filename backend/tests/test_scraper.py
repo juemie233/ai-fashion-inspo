@@ -249,6 +249,52 @@ class TestSchedules:
         due2 = now - timedelta(hours=3)
         assert _advance_next_run(60, due2, now) == due2 + timedelta(minutes=60) * 4
 
+    def test_keyword_rotation_by_run_count(self):
+        """关键词轮换：按已执行次数轮流取用一个关键词，超过列表长度后从头再来。"""
+        import json
+
+        from app.models.scraper import ScraperSchedule
+        from app.services.scraper_service import _build_schedule_task_config
+
+        sched = ScraperSchedule(
+            platform="douyin", keywords=json.dumps(["法式", "通勤", "街头"], ensure_ascii=False),
+            max_count=10, enabled=True, interval_minutes=60,
+        )
+        # 第 0/1/2 次执行依次使用三个关键词，第 3 次回到第一个（循环）
+        for idx, expected in [(0, "法式"), (1, "通勤"), (2, "街头"), (3, "法式")]:
+            sched.run_count = idx
+            config = _build_schedule_task_config(sched)
+            assert config["keywords"] == [expected], f"run_count={idx}"
+
+    def test_keyword_rotation_single_fallback(self):
+        """关键词列表只有 1 个时退化为固定关键词（不轮换）。"""
+        import json
+
+        from app.models.scraper import ScraperSchedule
+        from app.services.scraper_service import _build_schedule_task_config
+
+        sched = ScraperSchedule(
+            platform="douyin", keywords=json.dumps(["穿搭"], ensure_ascii=False),
+            max_count=10, enabled=True, interval_minutes=60, run_count=7,
+        )
+        config = _build_schedule_task_config(sched)
+        assert config["keywords"] == ["穿搭"]
+
+    def test_run_now_rotates_keywords(self, client):
+        """立即执行多次：每次任务使用轮换到的不同关键词。"""
+        import json as _json
+
+        s = self._create(client, platform="douyin", keywords=["法式", "通勤", "街头"])
+        got: list[str] = []
+        for _ in range(3):
+            r = client.post(f"/api/scraper/schedules/{s['id']}/run")
+            assert r.status_code == 200
+            task_id = r.json()["task_id"]
+            tasks = client.get("/api/scraper/tasks").json()
+            t = next(x for x in tasks["items"] if x["id"] == task_id)
+            got.append(_json.loads(t["config"])["keywords"])
+        assert got == [["法式"], ["通勤"], ["街头"]]
+
     async def test_run_now_advances_clock_so_auto_loop_skips(self, client):
         """「立即执行」到期计划后推进 next_run_at，自动循环不再重复触发。"""
         from datetime import datetime, timedelta, timezone

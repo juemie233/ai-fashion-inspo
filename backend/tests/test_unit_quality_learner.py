@@ -44,10 +44,14 @@ async def test_train_success_and_rollback(client, upload, monkeypatch):
     """足够样本（正 6 / 负 6）训练成功，落盘后 reset 回滚。"""
     for i in range(12):
         insp = upload().json()
-        status = "approved" if i % 2 == 0 else "rejected"
-        client.patch(
-            f"/api/inspirations/{insp['id']}", json={"quality_status": status}
-        )
+        if i % 2 == 0:
+            client.patch(
+                f"/api/inspirations/{insp['id']}", json={"quality_status": "approved"}
+            )
+        else:
+            # 负样本来源：移入垃圾桶（不限删除原因，随机用两种原因验证口径）
+            reason = "质量差" if i % 4 == 1 else "不喜欢"
+            client.post(f"/api/inspirations/{insp['id']}/trash", json={"reason": reason})
 
     monkeypatch.setattr(vector_store, "is_lancedb_available", lambda: True)
     monkeypatch.setattr(vector_store, "get_vectors_batch", _fake_get_vectors)
@@ -67,6 +71,28 @@ async def test_train_success_and_rollback(client, upload, monkeypatch):
     r = quality_learner.reset()
     assert r["reset"] is True
     assert quality_learner.get_status()["trained"] is False
+
+
+async def test_negative_samples_count_all_trash_reasons(client, upload, monkeypatch):
+    """负样本 = 垃圾桶全部素材：不同删除原因均计入，rejected 未删除素材不再计入。"""
+    # 三种不同删除原因的垃圾桶素材
+    for reason in ["质量差", "重复", "不喜欢"]:
+        insp = upload().json()
+        client.post(f"/api/inspirations/{insp['id']}/trash", json={"reason": reason})
+    # 未删除的 rejected 素材：不再是负样本（口径与「垃圾桶待删除素材」对齐）
+    rejected = upload().json()
+    client.patch(f"/api/inspirations/{rejected['id']}", json={"quality_status": "rejected"})
+    # 正样本
+    pos = upload().json()
+    client.patch(f"/api/inspirations/{pos['id']}", json={"quality_status": "approved"})
+
+    monkeypatch.setattr(vector_store, "get_vectors_batch", _fake_get_vectors)
+
+    async with async_session() as db:
+        _, _, stats = await quality_learner.collect_samples(db)
+
+    assert stats["negative_total"] == 3
+    assert stats["positive_total"] == 1
 
 
 async def test_train_single_class_error(client, upload, monkeypatch):

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /** 新建采集任务表单：平台/模式/关键词/数量/CDP 配置，含草稿持久化与 CDP 连通性测试。 */
 
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { copyToClipboard } from '@/utils/clipboard'
+import { extractHistoryKeywords } from '@/utils/scraperKeywords'
 import { useChromeManager, CHROME_STATE_LABELS, CHROME_STATE_TAG } from '@/composables/useChromeManager'
 
 const props = defineProps<{
@@ -22,15 +23,43 @@ const message = useMessage()
 // Chrome 生命周期（启动/停止/状态，替代手动命令行启动）
 const { chromeStatus, chromeBusy, refreshChromeStatus, startChrome, stopChrome } = useChromeManager()
 
-onMounted(() => { refreshChromeStatus() })
+onMounted(() => {
+  refreshChromeStatus()
+  loadHistoryKeywords()
+})
+
+/** 加载历史关键词：拉取最近 200 条已完成任务，提取去重后的关键词列表 */
+async function loadHistoryKeywords() {
+  try {
+    const { data } = await apiClient.get('/scraper/tasks', {
+      params: { sort: 'newest', size: 200 },
+    })
+    historyKeywords.value = extractHistoryKeywords(data.items || [])
+  } catch {
+    // 历史关键词加载失败不影响手动输入，静默降级
+  }
+}
 
 // 表单字段
 const formPlatform = ref('xiaohongshu')
-const formKeywords = ref('')
+/** 关键词（多选）：可选历史关键词，也可手动输入新关键词（逗号/顿号分隔批量创建） */
+const formKeywords = ref<string[]>([])
 const formMaxCount = ref(100)
 const formCdp = ref(true)
 const formCdpPort = ref(9222)
 const formSortMode = ref('general')  // general | latest | popular（仅小红书搜索生效）
+
+// 历史关键词：来自已完成采集任务（最近使用优先去重），供下拉选择
+const historyKeywords = ref<string[]>([])
+const keywordOptions = computed(() =>
+  historyKeywords.value.map((k) => ({ label: k, value: k })),
+)
+
+/** 手动输入创建关键词：支持逗号/顿号分隔一次创建多个（粘贴「连衣裙,半身裙」场景） */
+function onCreateKeyword(label: string) {
+  const parts = label.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
+  return parts.length > 0 ? parts : null
+}
 
 // 新建任务表单草稿：初始化时从 localStorage 恢复，为空则用默认值
 const hasFormDraft = localStorage.getItem('scraper-form-draft') !== null
@@ -39,7 +68,12 @@ if (savedFormDraft) {
   try {
     const draft = JSON.parse(savedFormDraft) as Record<string, unknown>
     if (draft.platform === 'xiaohongshu' || draft.platform === 'douyin') formPlatform.value = draft.platform
-    if (typeof draft.keywords === 'string') formKeywords.value = draft.keywords
+    // 草稿兼容：新格式为数组；旧格式为逗号分隔字符串
+    if (Array.isArray(draft.keywords)) {
+      formKeywords.value = draft.keywords.filter((k): k is string => typeof k === 'string')
+    } else if (typeof draft.keywords === 'string') {
+      formKeywords.value = draft.keywords.split(',').map((k) => k.trim()).filter(Boolean)
+    }
     if (typeof draft.maxCount === 'number') formMaxCount.value = draft.maxCount
     if (typeof draft.sortMode === 'string') formSortMode.value = draft.sortMode
     if (typeof draft.cdp === 'boolean') formCdp.value = draft.cdp
@@ -94,7 +128,10 @@ async function createTask() {
   try {
     const config: any = {
       platform: formPlatform.value,
-      keywords: formKeywords.value.split(',').map(k => k.trim()).filter(Boolean),
+      // 多选关键词直接为数组；手动输入的条目再按逗号/顿号拆分，兼容粘贴批量关键词
+      keywords: formKeywords.value.flatMap((k) =>
+        k.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+      ),
       max_count: formMaxCount.value,
     }
     // CDP 仅小红书使用：抖音走独立 Playwright 浏览器，不携带端口避免误导
@@ -122,7 +159,21 @@ async function createTask() {
       <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
     </n-form-item>
     <n-form-item label="关键词">
-      <n-input v-model:value="formKeywords" placeholder="多个关键词用逗号分隔" @keyup.enter="createTask" />
+      <n-select
+        v-model:value="formKeywords"
+        multiple
+        filterable
+        tag
+        :options="keywordOptions"
+        :on-create="onCreateKeyword"
+        placeholder="选择历史关键词，或输入新关键词后回车（逗号/顿号分隔可一次多个）"
+        style="width:100%"
+      />
+      <template #feedback>
+        <span style="font-size:12px;color:#999">
+          可直接选择最近采集使用过的关键词，也可手动输入新关键词
+        </span>
+      </template>
     </n-form-item>
     <n-form-item label="数量">
       <n-input-number v-model:value="formMaxCount" :min="1" :max="500" style="width:100px" />

@@ -100,7 +100,8 @@ const columns: DataTableColumns<Person> = [
         h('span', { class: 'person-avatar' }, [
           row.avatar_path
             ? h('img', { src: getFileUrl(row.avatar_path), class: 'avatar-img', alt: row.name })
-            : h('span', { class: 'avatar-fallback' }, row.name.slice(0, 1)),
+            // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
+            : h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
         ]),
         h('span', { class: 'person-name' }, row.name),
       ]),
@@ -355,9 +356,8 @@ onMounted(async () => {
 }
 
 .avatar-fallback {
-  font-size: 15px;
-  color: #4a5a7a;
-  font-weight: 600;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .person-name {
