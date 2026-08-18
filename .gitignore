@@ -82,3 +82,7 @@ docs/人物模块移植报告.en.md
 
 # 忽略 mcp（不公开）
 mcp
+
+# 人脸识别子服务（face-service）：模型与运行时数据不提交
+face-service/models/
+face-service/face_service.db

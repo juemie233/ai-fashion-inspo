@@ -1,0 +1,8 @@
+# 人脸识别微服务依赖（onnxruntime 直载 buffalo_l onnx 模型，无需 insightface 包）
+# 安装：pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+onnxruntime-gpu>=1.17
+fastapi>=0.110
+uvicorn>=0.27
+opencv-python-headless>=4.8
+python-multipart>=0.0.9
+numpy
