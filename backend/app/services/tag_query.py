@@ -1,0 +1,260 @@
+"""标签查询与统计分析：分组列表、统计、重复对、排行、共现网络与趋势。
+
+依赖 tag_crud 的 _similarity / _alive_tag_links_subquery 等底层工具，
+不反向依赖任何其它标签模块。
+"""
+
+import asyncio
+import itertools
+from collections import defaultdict
+
+from sqlalchemy import and_, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.inspiration import Inspiration
+from app.models.tag import Tag, InspirationTag
+from app.services.tag_crud import _alive_tag_links_subquery, _similarity
+
+
+async def get_all_tags_grouped(db: AsyncSession) -> dict[str, list[dict]]:
+    """获取所有标签，按类别分组，并包含使用次数统计。
+
+    组内排序优先级：置顶 → 自定义 sort_order → 使用次数（降序）。
+    """
+    result = await db.execute(
+        select(
+            Tag,
+            func.count(Inspiration.id).label("usage_count"),
+        )
+        .outerjoin(InspirationTag, Tag.id == InspirationTag.tag_id)
+        # 使用次数仅统计未删除素材：垃圾桶素材的关联不计入
+        .outerjoin(
+            Inspiration,
+            and_(
+                InspirationTag.inspiration_id == Inspiration.id,
+                Inspiration.deleted_at.is_(None),
+            ),
+        )
+        .group_by(Tag.id)
+        .order_by(
+            Tag.category,
+            Tag.pinned.desc(),
+            Tag.sort_order.asc(),
+            func.count(Inspiration.id).desc(),
+        )
+    )
+    grouped: dict[str, list[dict]] = {}
+    for row in result:
+        tag, count = row[0], row[1]
+        tag_dict = {
+            "id": tag.id,
+            "name": tag.name,
+            "category": tag.category,
+            "source": tag.source,
+            "pinned": tag.pinned,
+            "sort_order": tag.sort_order,
+            "description": tag.description,
+            "created_at": tag.created_at,
+            "usage_count": count,
+        }
+        grouped.setdefault(tag.category, []).append(tag_dict)
+    return grouped
+
+
+async def get_tag_stats(db: AsyncSession) -> dict:
+    """统计标签数据：总数、按来源、按类别、未使用数、总关联数。"""
+    # 总数
+    total_result = await db.execute(select(func.count()).select_from(Tag))
+    total = total_result.scalar() or 0
+
+    # 按来源统计
+    source_result = await db.execute(
+        select(Tag.source, func.count()).group_by(Tag.source)
+    )
+    by_source = {row[0]: row[1] for row in source_result}
+
+    # 按类别统计
+    cat_result = await db.execute(
+        select(Tag.category, func.count()).group_by(Tag.category).order_by(func.count().desc())
+    )
+    by_category = {row[0]: row[1] for row in cat_result}
+
+    # 未使用标签数（口径与 usage_count 一致：无任何未删除素材关联，含只关联垃圾桶素材的标签）
+    unused_result = await db.execute(
+        select(func.count()).select_from(Tag).where(Tag.id.notin_(_alive_tag_links_subquery()))
+    )
+    unused = unused_result.scalar() or 0
+
+    # 总关联数（仅统计未删除素材的关联，与使用次数口径一致）
+    link_result = await db.execute(
+        select(func.count())
+        .select_from(InspirationTag)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+    )
+    total_links = link_result.scalar() or 0
+
+    return {
+        "total": total,
+        "unused": unused,
+        "total_links": total_links,
+        "by_source": by_source,
+        "by_category": by_category,
+    }
+
+
+async def find_duplicate_tag_pairs(
+    db: AsyncSession, threshold: float = 0.75
+) -> tuple[list[dict], int]:
+    """扫描所有标签，返回名称相似度达到阈值的标签对列表及总数。
+
+    O(n²) 相似度计算放入线程池执行，避免阻塞事件循环。
+    """
+    result = await db.execute(select(Tag).order_by(Tag.name))
+    all_tags = result.scalars().all()
+
+    def _compute_pairs() -> list[dict]:
+        pairs = []
+        for i in range(len(all_tags)):
+            for j in range(i + 1, len(all_tags)):
+                sim = _similarity(all_tags[i].name, all_tags[j].name)
+                if sim >= threshold and sim < 1.0:
+                    pairs.append({
+                        "tag_a": {
+                            "id": all_tags[i].id,
+                            "name": all_tags[i].name,
+                            "category": all_tags[i].category,
+                        },
+                        "tag_b": {
+                            "id": all_tags[j].id,
+                            "name": all_tags[j].name,
+                            "category": all_tags[j].category,
+                        },
+                        "similarity": round(sim, 2),
+                    })
+        pairs.sort(key=lambda p: p["similarity"], reverse=True)
+        return pairs
+
+    pairs = await asyncio.to_thread(_compute_pairs)
+    return pairs, len(pairs)
+
+
+async def export_tags(db: AsyncSession) -> list[dict]:
+    """导出所有标签为列表（含类别、来源、使用次数）。"""
+    grouped = await get_all_tags_grouped(db)
+    export_data = []
+    for category, tags in grouped.items():
+        for t in tags:
+            export_data.append({
+                "name": t["name"],
+                "category": t["category"],
+                "source": t.get("source", "seed"),
+                "usage_count": t["usage_count"],
+            })
+    return export_data
+
+
+async def get_cooccurrence_network(
+    db: AsyncSession, limit: int, min_count: int
+) -> dict:
+    """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。"""
+    # 取使用次数最多的 top-N 标签作为网络节点（仅统计未删除素材）
+    top_result = await db.execute(
+        select(
+            Tag.id,
+            Tag.name,
+            Tag.category,
+            func.count(InspirationTag.inspiration_id).label("cnt"),
+        )
+        .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+        .group_by(Tag.id)
+        .order_by(func.count(InspirationTag.inspiration_id).desc())
+        .limit(limit)
+    )
+    tags = [(r[0], r[1], r[2], r[3]) for r in top_result.all()]
+    tag_ids = [t[0] for t in tags]
+
+    if not tag_ids:
+        return {"nodes": [], "edges": []}
+
+    # 一次性查出这些标签的所有素材关联，在内存中统计共现（同样排除垃圾桶素材）
+    links_result = await db.execute(
+        select(InspirationTag.inspiration_id, InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(
+            InspirationTag.tag_id.in_(tag_ids),
+            Inspiration.deleted_at.is_(None),
+        )
+    )
+    insp_map: dict[str, set[int]] = defaultdict(set)
+    for insp_id, tag_id in links_result.all():
+        insp_map[insp_id].add(tag_id)
+
+    pair_count: dict[tuple[int, int], int] = defaultdict(int)
+    for tag_set in insp_map.values():
+        for a, b in itertools.combinations(sorted(tag_set), 2):
+            pair_count[(a, b)] += 1
+
+    nodes = [
+        {"id": t[0], "name": t[1], "category": t[2], "usage_count": t[3]}
+        for t in tags
+    ]
+    edges = [
+        {"source": a, "target": b, "weight": w}
+        for (a, b), w in pair_count.items()
+        if w >= min_count
+    ]
+    return {"nodes": nodes, "edges": edges}
+
+
+async def get_top_tags(db: AsyncSession, limit: int) -> list[dict]:
+    """返回使用次数最多的标签排行（仅统计未删除素材）。"""
+    result = await db.execute(
+        select(
+            Tag.id,
+            Tag.name,
+            Tag.category,
+            func.count(InspirationTag.inspiration_id).label("cnt"),
+        )
+        .join(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+        .where(Inspiration.deleted_at.is_(None))
+        .group_by(Tag.id)
+        .order_by(func.count(InspirationTag.inspiration_id).desc())
+        .limit(limit)
+    )
+    return [
+        {"id": r[0], "name": r[1], "category": r[2], "usage_count": r[3]}
+        for r in result.all()
+    ]
+
+
+async def get_tag_trend(
+    db: AsyncSession, tag_id: int, granularity: str
+) -> dict | None:
+    """获取标签的使用趋势（按素材创建时间分桶统计）。标签不存在返回 None。"""
+    tag = await db.get(Tag, tag_id)
+    if not tag:
+        return None
+
+    fmt = {"month": "%Y-%m", "week": "%Y-W%W", "day": "%Y-%m-%d"}[granularity]
+    result = await db.execute(
+        select(
+            func.strftime(fmt, Inspiration.created_at).label("bucket"),
+            func.count().label("cnt"),
+        )
+        .join(InspirationTag, InspirationTag.inspiration_id == Inspiration.id)
+        .where(
+            InspirationTag.tag_id == tag_id,
+            Inspiration.deleted_at.is_(None),
+        )
+        .group_by("bucket")
+        .order_by("bucket")
+    )
+    return {
+        "tag": {"id": tag.id, "name": tag.name},
+        "granularity": granularity,
+        "trend": [{"bucket": r[0], "count": r[1]} for r in result.all()],
+    }
