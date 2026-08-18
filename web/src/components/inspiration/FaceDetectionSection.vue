@@ -1,8 +1,8 @@
 <script setup lang="ts">
-/** 素材人脸识别区块：触发检测与模特特征库匹配，展示结果，支持手动指定/解除模特。
+/** 素材人脸识别区块：触发检测与博主特征库匹配，展示结果，支持手动指定/解除博主。
  *
- * 逻辑：检测结果（inspiration_face_detections）→ 匹配到的模特 / 疑似未知人脸
- * （低于阈值未匹配）→ 用户可手动选择模特或解除错误关联。
+ * 逻辑：检测结果（inspiration_face_detections）→ 匹配到的博主 / 疑似未知人脸
+ * （低于阈值未匹配）→ 用户可手动选择博主或解除错误关联。
  */
 
 import { onMounted, ref } from 'vue'
@@ -15,7 +15,7 @@ import {
   type FaceDetectionOut,
   type FaceDetectionsOut,
 } from '@/api/inspirations'
-import { modelsApi, type PersonBrief } from '@/api/persons'
+import { bloggersApi, type PersonBrief } from '@/api/persons'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const props = defineProps<{
@@ -28,8 +28,8 @@ const message = useMessage()
 const detections = ref<FaceDetectionOut[]>([])
 const loading = ref(false)
 const detecting = ref(false)
-/** 模特候选（手动指定用） */
-const modelOptions = ref<{ label: string; value: number }[]>([])
+/** 博主候选（手动指定用） */
+const bloggerOptions = ref<{ label: string; value: number }[]>([])
 /** 正在手动操作的检测 id */
 const updatingId = ref<number | null>(null)
 
@@ -45,15 +45,15 @@ async function load() {
   }
 }
 
-async function loadModelOptions() {
+async function loadBloggerOptions() {
   try {
-    const { items } = await modelsApi.fetchList({ sort: 'count', size: 100 })
-    modelOptions.value = (items as PersonBrief[]).map((m) => ({
-      label: m.name,
-      value: m.id,
+    const { items } = await bloggersApi.fetchList({ sort: 'count', size: 100 })
+    bloggerOptions.value = (items as PersonBrief[]).map((b) => ({
+      label: b.name,
+      value: b.id,
     }))
   } catch {
-    // 模特列表加载失败静默：手动选择下拉为空
+    // 博主列表加载失败静默：手动选择下拉为空
   }
 }
 
@@ -66,7 +66,7 @@ async function handleDetect() {
     if (data.face_count === 0) {
       message.info('未检测到人脸')
     } else {
-      message.success(`检测到 ${data.face_count} 张人脸，已与模特特征库匹配`)
+      message.success(`检测到 ${data.face_count} 张人脸，已与博主特征库匹配`)
     }
   } catch (e) {
     message.error(getApiErrorMessage(e, '人脸检测失败（请确认人脸识别服务已启动）'))
@@ -75,13 +75,13 @@ async function handleDetect() {
   }
 }
 
-/** 手动指定模特（v-model 变更触发） */
-async function handleSelectModel(det: FaceDetectionOut, modelId: number | null) {
-  if (modelId === null) return // n-select clear 时不处理
+/** 手动指定博主（v-model 变更触发） */
+async function handleSelectBlogger(det: FaceDetectionOut, bloggerId: number | null) {
+  if (bloggerId === null) return // n-select clear 时不处理
   updatingId.value = det.id
   try {
-    await updateFaceDetection(props.inspirationId, det.id, modelId)
-    message.success('已关联模特')
+    await updateFaceDetection(props.inspirationId, det.id, bloggerId)
+    message.success('已关联博主')
     await load()
   } catch (e) {
     message.error(getApiErrorMessage(e, '关联失败'))
@@ -120,14 +120,14 @@ async function handleDelete(det: FaceDetectionOut) {
 
 onMounted(() => {
   load()
-  loadModelOptions()
+  loadBloggerOptions()
 })
 </script>
 
 <template>
   <div class="face-detection-section">
     <div class="face-header">
-      <h3 style="margin: 0">人脸识别（模特特征库匹配）</h3>
+      <h3 style="margin: 0">人脸识别（博主特征库匹配）</h3>
       <n-button size="tiny" type="primary" secondary :loading="detecting" @click="handleDetect">
         检测并匹配
       </n-button>
@@ -136,19 +136,19 @@ onMounted(() => {
     <div v-if="loading" class="face-tip">加载中…</div>
 
     <div v-else-if="detections.length === 0" class="face-tip">
-      暂无检测结果。点击「检测并匹配」识别图中人脸并关联职业模特（需先在模特详情页注册人脸）。
+      暂无检测结果。点击「检测并匹配」识别图中人脸并关联穿搭博主（需先在博主详情页注册人脸）。
     </div>
 
     <div v-else class="face-list">
       <div v-for="det in detections" :key="det.id" class="face-item">
         <span class="face-index">人脸 #{{ det.face_index + 1 }}</span>
         <n-tag
-          v-if="det.matched_model_id !== null"
+          v-if="det.matched_blogger_id !== null"
           type="success"
           size="small"
           :bordered="false"
         >
-          {{ det.matched_model_name ?? `模特 #${det.matched_model_id}` }}
+          {{ det.matched_blogger_name ?? `博主 #${det.matched_blogger_id}` }}
           <template v-if="det.confidence !== null">（{{ (det.confidence * 100).toFixed(1) }}%）</template>
         </n-tag>
         <n-tag v-else type="warning" size="small" :bordered="false">疑似未知人脸</n-tag>
@@ -158,14 +158,14 @@ onMounted(() => {
           style="width: 160px"
           filterable
           clearable
-          placeholder="手动指定模特"
-          :options="modelOptions"
-          :value="det.matched_model_id"
+          placeholder="手动指定博主"
+          :options="bloggerOptions"
+          :value="det.matched_blogger_id"
           :disabled="updatingId === det.id"
-          @update:value="(v: number | null) => handleSelectModel(det, v)"
+          @update:value="(v: number | null) => handleSelectBlogger(det, v)"
         />
         <n-button
-          v-if="det.matched_model_id !== null"
+          v-if="det.matched_blogger_id !== null"
           size="tiny"
           quaternary
           :disabled="updatingId === det.id"

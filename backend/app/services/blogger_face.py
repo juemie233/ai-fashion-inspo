@@ -1,8 +1,10 @@
-"""模特人脸特征库服务：人脸注册（平均池化）、素材人脸检测匹配、手动关联。
+"""穿搭博主人脸特征库服务：人脸注册（平均池化）、素材人脸检测匹配、手动关联。
 
 对接独立人脸识别子服务（face-service，face_client），数据落本地两张表：
-- model_face_embeddings：一位模特一条平均池化特征（512 维 float32）
+- blogger_face_embeddings：一位博主一条平均池化特征（512 维 float32）
 - inspiration_face_detections：素材图内每张人脸一条检测与匹配结果
+
+注：人脸识别服务于穿搭博主（素材人脸自动匹配博主特征库）；职业模特无需人脸能力。
 """
 
 from __future__ import annotations
@@ -17,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models.face import InspirationFaceDetection, ModelFaceEmbedding
-from app.models.person import Model
+from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
+from app.models.person import Blogger
 from app.services.face_client import FaceServiceUnavailableError, face_client
 
 logger = logging.getLogger(__name__)
@@ -39,29 +41,29 @@ def _bytes_to_embedding(data: bytes) -> np.ndarray:
     return emb
 
 
-# ── 模特人脸注册 ──
+# ── 博主人脸注册 ──
 
 
-async def register_model_face(
+async def register_blogger_face(
     db: AsyncSession,
-    model_id: int,
+    blogger_id: int,
     image_bytes_list: list[bytes],
 ) -> dict:
-    """注册/重新注册模特人脸：逐张照片提取特征（取每张图置信度最高的人脸），
+    """注册/重新注册博主人脸：逐张照片提取特征（取每张图置信度最高的人脸），
     平均池化为一条特征 upsert 入库。
 
-    重新注册即覆盖（同 model_id 唯一），符合需求「提供重新注册功能」。
+    重新注册即覆盖（同 blogger_id 唯一），符合需求「提供重新注册功能」。
     """
     if not image_bytes_list:
-        raise HTTPException(status_code=422, detail="请上传 1~5 张模特正脸照片")
+        raise HTTPException(status_code=422, detail="请上传 1~5 张博主正脸照片")
     if len(image_bytes_list) > MAX_REGISTER_PHOTOS:
         raise HTTPException(
             status_code=422, detail=f"最多上传 {MAX_REGISTER_PHOTOS} 张照片"
         )
 
-    model = await db.get(Model, model_id)
-    if not model:
-        raise HTTPException(status_code=404, detail="模特未找到")
+    blogger = await db.get(Blogger, blogger_id)
+    if not blogger:
+        raise HTTPException(status_code=404, detail="博主未找到")
 
     embeddings: list[np.ndarray] = []
     used_photos = 0
@@ -91,11 +93,11 @@ async def register_model_face(
     avg = avg / norm  # 归一化，保证余弦匹配语义
 
     existing = await db.execute(
-        select(ModelFaceEmbedding).where(ModelFaceEmbedding.model_id == model_id)
+        select(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == blogger_id)
     )
     record = existing.scalar_one_or_none()
     if record is None:
-        record = ModelFaceEmbedding(model_id=model_id)
+        record = BloggerFaceEmbedding(blogger_id=blogger_id)
         db.add(record)
     record.embedding = avg.astype(np.float32).tobytes()
     record.updated_at = datetime.now(timezone.utc)
@@ -103,25 +105,25 @@ async def register_model_face(
 
     return {
         "registered": True,
-        "model_id": model_id,
-        "model_name": model.name,
+        "blogger_id": blogger_id,
+        "blogger_name": blogger.name,
         "photos_used": used_photos,
         "photos_total": len(image_bytes_list),
         "updated_at": _now_iso(),
     }
 
 
-async def get_model_face_status(db: AsyncSession, model_id: int) -> dict:
-    """查询模特人脸注册状态。"""
+async def get_blogger_face_status(db: AsyncSession, blogger_id: int) -> dict:
+    """查询博主人脸注册状态。"""
     record = await db.execute(
-        select(ModelFaceEmbedding).where(ModelFaceEmbedding.model_id == model_id)
+        select(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == blogger_id)
     )
     rec = record.scalar_one_or_none()
     if rec is None:
-        return {"registered": False, "model_id": model_id}
+        return {"registered": False, "blogger_id": blogger_id}
     return {
         "registered": True,
-        "model_id": model_id,
+        "blogger_id": blogger_id,
         "updated_at": rec.updated_at.isoformat() if rec.updated_at else None,
     }
 
@@ -132,10 +134,10 @@ async def get_model_face_status(db: AsyncSession, model_id: int) -> dict:
 async def detect_inspiration_faces(
     db: AsyncSession, inspiration_id: str, image_bytes: bytes | None = None
 ) -> dict:
-    """检测素材中的人脸并与模特特征库匹配（余弦相似度，阈值 face_match_threshold）。
+    """检测素材中的人脸并与博主特征库匹配（余弦相似度，阈值 face_match_threshold）。
 
-    - 多张人脸分别匹配；同一图中命中多个已知模特时全部关联
-    - 低于阈值的人脸 matched_model_id 置空（疑似未知人脸，供用户手动选择）
+    - 多张人脸分别匹配；同一图中命中多个已知博主时全部关联
+    - 低于阈值的人脸 matched_blogger_id 置空（疑似未知人脸，供用户手动选择）
     - 重新检测会覆盖旧记录（先清后写）
     """
     from app.models.inspiration import Inspiration
@@ -160,10 +162,10 @@ async def detect_inspiration_faces(
         raise HTTPException(status_code=503, detail=str(e)) from e
     faces = result.get("faces", [])
 
-    # 加载模特特征库
-    rows = await db.execute(select(ModelFaceEmbedding))
+    # 加载博主特征库
+    rows = await db.execute(select(BloggerFaceEmbedding))
     library = [
-        {"model_id": r.model_id, "embedding": _bytes_to_embedding(r.embedding)}
+        {"blogger_id": r.blogger_id, "embedding": _bytes_to_embedding(r.embedding)}
         for r in rows.scalars().all()
     ]
 
@@ -178,29 +180,29 @@ async def detect_inspiration_faces(
     detections = []
     for idx, face in enumerate(faces):
         query = np.asarray(face["embedding"], dtype=np.float32)
-        best_model_id: int | None = None
+        best_blogger_id: int | None = None
         best_score = 0.0
         for item in library:
             score = float(np.dot(query, item["embedding"]))  # 均归一化，点积即余弦
             if score > best_score:
                 best_score = score
-                best_model_id = item["model_id"]
-        if best_model_id is None or best_score < threshold:
-            best_model_id = None
-            best_score = 0.0  # 未命中不记录相似度（或记录？未命中显示为空）
+                best_blogger_id = item["blogger_id"]
+        if best_blogger_id is None or best_score < threshold:
+            best_blogger_id = None
+            best_score = 0.0  # 未命中不记录相似度（未命中显示为空）
         det = InspirationFaceDetection(
             inspiration_id=inspiration_id,
             face_index=idx,
             embedding=np.asarray(face["embedding"], dtype=np.float32).tobytes(),
-            matched_model_id=best_model_id,
-            confidence=round(best_score, 4) if best_model_id is not None else None,
+            matched_blogger_id=best_blogger_id,
+            confidence=round(best_score, 4) if best_blogger_id is not None else None,
         )
         db.add(det)
         detections.append(det)
 
     await db.commit()
 
-    # 组装返回（含模特名）
+    # 组装返回（含博主名）
     return {
         "inspiration_id": inspiration_id,
         "face_count": len(detections),
@@ -208,7 +210,7 @@ async def detect_inspiration_faces(
             {
                 "id": d.id,
                 "face_index": d.face_index,
-                "matched_model_id": d.matched_model_id,
+                "matched_blogger_id": d.matched_blogger_id,
                 "confidence": d.confidence,
             }
             for d in detections
@@ -219,11 +221,11 @@ async def detect_inspiration_faces(
 async def list_inspiration_detections(
     db: AsyncSession, inspiration_id: str
 ) -> list[dict]:
-    """素材人脸检测列表（含匹配模特信息）。"""
+    """素材人脸检测列表（含匹配博主信息）。"""
     rows = await db.execute(
         select(InspirationFaceDetection)
         .where(InspirationFaceDetection.inspiration_id == inspiration_id)
-        .options(selectinload(InspirationFaceDetection.matched_model))
+        .options(selectinload(InspirationFaceDetection.matched_blogger))
         .order_by(InspirationFaceDetection.face_index)
     )
     result = []
@@ -232,8 +234,10 @@ async def list_inspiration_detections(
             {
                 "id": d.id,
                 "face_index": d.face_index,
-                "matched_model_id": d.matched_model_id,
-                "matched_model_name": d.matched_model.name if d.matched_model else None,
+                "matched_blogger_id": d.matched_blogger_id,
+                "matched_blogger_name": (
+                    d.matched_blogger.name if d.matched_blogger else None
+                ),
                 "confidence": d.confidence,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
             }
@@ -241,21 +245,25 @@ async def list_inspiration_detections(
     return result
 
 
-async def set_detection_model(
-    db: AsyncSession, detection_id: int, model_id: int | None
+async def set_detection_blogger(
+    db: AsyncSession, detection_id: int, blogger_id: int | None
 ) -> dict:
-    """手动指定/解除人脸检测的模特关联（model_id 为 None 即解除）。"""
+    """手动指定/解除人脸检测的博主关联（blogger_id 为 None 即解除）。"""
     det = await db.get(InspirationFaceDetection, detection_id)
     if not det:
         raise HTTPException(status_code=404, detail="人脸检测记录未找到")
-    if model_id is not None:
-        model = await db.get(Model, model_id)
-        if not model:
-            raise HTTPException(status_code=404, detail="模特未找到")
-    det.matched_model_id = model_id
-    det.confidence = None if model_id is None else det.confidence
+    if blogger_id is not None:
+        blogger = await db.get(Blogger, blogger_id)
+        if not blogger:
+            raise HTTPException(status_code=404, detail="博主未找到")
+    det.matched_blogger_id = blogger_id
+    det.confidence = None if blogger_id is None else det.confidence
     await db.commit()
-    return {"updated": True, "detection_id": detection_id, "matched_model_id": model_id}
+    return {
+        "updated": True,
+        "detection_id": detection_id,
+        "matched_blogger_id": blogger_id,
+    }
 
 
 async def delete_detection(db: AsyncSession, detection_id: int) -> None:

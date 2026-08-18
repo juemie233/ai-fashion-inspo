@@ -29,17 +29,17 @@ from app.schemas.person import (
 )
 from app.services import inspiration_service
 from app.services.person_service import blogger_service, model_service
-from app.services.model_face import (
+from app.services.blogger_face import (
     delete_detection,
     detect_inspiration_faces,
     list_inspiration_detections,
-    set_detection_model,
+    set_detection_blogger,
 )
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
 
 
-# ── 人脸检测与模特匹配 ──
+# ── 人脸检测与博主匹配 ──
 
 
 @router.post("/{inspiration_id}/face-detect")
@@ -47,7 +47,7 @@ async def face_detect_api(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """检测素材中的人脸并与模特特征库匹配（重新检测覆盖旧结果）。"""
+    """检测素材中的人脸并与博主特征库匹配（重新检测覆盖旧结果）。"""
     return await detect_inspiration_faces(db, inspiration_id)
 
 
@@ -56,7 +56,7 @@ async def face_detections_api(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """素材人脸检测结果列表（含匹配模特）。"""
+    """素材人脸检测结果列表（含匹配博主）。"""
     items = await list_inspiration_detections(db, inspiration_id)
     return {"inspiration_id": inspiration_id, "face_count": len(items), "detections": items}
 
@@ -68,11 +68,11 @@ async def face_detection_update_api(
     body: dict,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """手动指定/解除人脸检测的模特关联（body: {"model_id": 5} 或 {"model_id": null}）。"""
-    model_id = body.get("model_id")
-    if model_id is not None and not isinstance(model_id, int):
-        raise HTTPException(status_code=422, detail="model_id 必须为整数或 null")
-    return await set_detection_model(db, detection_id, model_id)
+    """手动指定/解除人脸检测的博主关联（body: {"blogger_id": 5} 或 {"blogger_id": null}）。"""
+    blogger_id = body.get("blogger_id")
+    if blogger_id is not None and not isinstance(blogger_id, int):
+        raise HTTPException(status_code=422, detail="blogger_id 必须为整数或 null")
+    return await set_detection_blogger(db, detection_id, blogger_id)
 
 
 @router.delete("/{inspiration_id}/face-detections/{detection_id}")

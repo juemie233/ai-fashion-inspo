@@ -166,40 +166,42 @@ function createPersonApi(kind: 'bloggers' | 'models') {
   }
 }
 
-/** 穿搭博主 API（/api/bloggers） */
-export const bloggersApi = createPersonApi('bloggers')
+/** 穿搭博主 API（/api/bloggers）：含人脸特征注册 */
+export const bloggersApi = {
+  ...createPersonApi('bloggers'),
 
-/** 模特人脸注册状态 */
-export interface ModelFaceStatus {
+  /** 注册/重新注册博主人脸（1~5 张正脸照片，重复注册即覆盖更新特征） */
+  async registerFace(id: number, files: File[]): Promise<BloggerFaceRegisterResult> {
+    const formData = new FormData()
+    files.forEach((f) => formData.append('files', f))
+    const { data } = await apiClient.post<BloggerFaceRegisterResult>(`/bloggers/${id}/face`, formData)
+    return data
+  },
+
+  /** 查询博主人脸注册状态 */
+  async fetchFaceStatus(id: number): Promise<BloggerFaceStatus> {
+    const { data } = await apiClient.get<BloggerFaceStatus>(`/bloggers/${id}/face`)
+    return data
+  },
+}
+
+/** 博主人脸注册状态 */
+export interface BloggerFaceStatus {
   registered: boolean
-  model_id: number
+  blogger_id: number
   updated_at?: string | null
 }
 
-/** 模特人脸注册结果 */
-export interface ModelFaceRegisterResult extends ModelFaceStatus {
-  model_name?: string
+/** 博主人脸注册结果 */
+export interface BloggerFaceRegisterResult extends BloggerFaceStatus {
+  blogger_name?: string
   photos_used?: number
   photos_total?: number
 }
 
-/** 职业模特 API（/api/models）：含人脸特征注册 */
+/** 职业模特 API（/api/models）：不含人脸能力，仅通用人物能力 */
 export const modelsApi = {
   ...createPersonApi('models'),
-
-  /** 注册/重新注册模特人脸（1~5 张正脸照片，重复注册即覆盖更新特征） */
-  async registerFace(id: number, files: File[]): Promise<ModelFaceRegisterResult> {
-    const formData = new FormData()
-    files.forEach((f) => formData.append('files', f))
-    const { data } = await apiClient.post<ModelFaceRegisterResult>(`/models/${id}/face`, formData)
-    return data
-  },
-
-  /** 查询模特人脸注册状态 */
-  async fetchFaceStatus(id: number): Promise<ModelFaceStatus> {
-    const { data } = await apiClient.get<ModelFaceStatus>(`/models/${id}/face`)
-    return data
-  },
 }
 
 /** 上传 CSV 批量导入博主（按 xhs_id upsert，昵称/小红书号必填） */

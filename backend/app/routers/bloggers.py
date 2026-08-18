@@ -31,6 +31,7 @@ from app.services.person_service import (
     PersonNotFoundError,
     blogger_service,
 )
+from app.services.blogger_face import get_blogger_face_status, register_blogger_face
 
 router = APIRouter(prefix="/api/bloggers", tags=["bloggers"])
 
@@ -167,3 +168,30 @@ async def blogger_inspirations(
     if not result:
         raise HTTPException(status_code=404, detail="博主未找到")
     return result
+
+
+# ── 博主人脸注册（素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）──
+
+
+@router.post("/{blogger_id}/face")
+async def register_blogger_face_api(
+    blogger_id: int,
+    files: list[UploadFile] = File(..., description="博主正脸照片（1~5 张）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """注册/重新注册博主人脸：提取特征并平均池化入库（同博主重复注册即覆盖）。"""
+    image_bytes_list = []
+    for f in files:
+        data = await f.read()
+        if data:
+            image_bytes_list.append(data)
+    return await register_blogger_face(db, blogger_id, image_bytes_list)
+
+
+@router.get("/{blogger_id}/face")
+async def blogger_face_status_api(
+    blogger_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查询博主人脸注册状态。"""
+    return await get_blogger_face_status(db, blogger_id)

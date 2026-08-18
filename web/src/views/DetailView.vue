@@ -556,7 +556,7 @@ async function removeTag(t: InspirationTagOut) {
               @change="updateModels"
             />
 
-            <!-- 人脸识别（模特特征库匹配） -->
+            <!-- 人脸识别（博主特征库匹配） -->
             <FaceDetectionSection :inspiration-id="detail.id" />
 
             <!-- 穿搭大标签 -->

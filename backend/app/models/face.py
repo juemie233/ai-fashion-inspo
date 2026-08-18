@@ -1,9 +1,8 @@
-"""人脸特征库模型：模特注册特征 + 素材人脸检测结果。
+"""人脸特征库模型：博主注册特征 + 素材人脸检测结果。
 
-对应需求「2.3 数据表扩展」：
-- model_face_embeddings：一位模特一条平均池化后的 512 维特征（float32 BLOB）
+- blogger_face_embeddings：一位博主一条平均池化后的 512 维特征（float32 BLOB）
 - inspiration_face_detections：素材图内每张人脸一条记录（含特征与匹配结果，
-  matched_model_id 为空表示未匹配到已知模特，即「疑似未知人脸」）
+  matched_blogger_id 为空表示未匹配到已知博主，即「疑似未知人脸」）
 """
 
 from datetime import datetime
@@ -23,14 +22,14 @@ from app.database import Base
 from app.models.inspiration import utcnow
 
 
-class ModelFaceEmbedding(Base):
-    """模特人脸特征库：平均池化后的 512 维归一化特征（float32 BLOB，2048 字节）。"""
+class BloggerFaceEmbedding(Base):
+    """博主人脸特征库：平均池化后的 512 维归一化特征（float32 BLOB，2048 字节）。"""
 
-    __tablename__ = "model_face_embeddings"
+    __tablename__ = "blogger_face_embeddings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    model_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("models.id", ondelete="CASCADE"), unique=True, index=True
+    blogger_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bloggers.id", ondelete="CASCADE"), unique=True, index=True
     )
     embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32
     updated_at: Mapped[datetime] = mapped_column(
@@ -38,17 +37,19 @@ class ModelFaceEmbedding(Base):
     )
 
     # 关联关系
-    model: Mapped["Model"] = relationship("Model", back_populates="face_embedding")
+    blogger: Mapped["Blogger"] = relationship(
+        "Blogger", back_populates="face_embedding"
+    )
 
     def __repr__(self) -> str:
-        return f"<ModelFaceEmbedding(model_id={self.model_id})>"
+        return f"<BloggerFaceEmbedding(blogger_id={self.blogger_id})>"
 
 
 class InspirationFaceDetection(Base):
     """素材人脸检测：一张素材图内每张人脸一条记录。
 
-    matched_model_id 非空表示匹配到已知模特；为空表示未匹配（疑似未知人脸），
-    可由用户手动选择模特或解除。
+    matched_blogger_id 非空表示匹配到已知博主；为空表示未匹配（疑似未知人脸），
+    可由用户手动选择博主或解除。
     """
 
     __tablename__ = "inspiration_face_detections"
@@ -59,9 +60,9 @@ class InspirationFaceDetection(Base):
     )
     face_index: Mapped[int] = mapped_column(Integer)  # 图内人脸序号（0 起）
     embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32
-    matched_model_id: Mapped[int | None] = mapped_column(
+    matched_blogger_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("models.id", ondelete="SET NULL"),
+        ForeignKey("bloggers.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -72,8 +73,8 @@ class InspirationFaceDetection(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="face_detections"
     )
-    matched_model: Mapped["Model | None"] = relationship(
-        "Model", back_populates="face_detections"
+    matched_blogger: Mapped["Blogger | None"] = relationship(
+        "Blogger", back_populates="face_detections"
     )
 
     __table_args__ = (
@@ -83,5 +84,5 @@ class InspirationFaceDetection(Base):
     def __repr__(self) -> str:
         return (
             f"<InspirationFaceDetection(inspiration_id={self.inspiration_id}, "
-            f"face_index={self.face_index}, matched_model_id={self.matched_model_id})>"
+            f"face_index={self.face_index}, matched_blogger_id={self.matched_blogger_id})>"
         )

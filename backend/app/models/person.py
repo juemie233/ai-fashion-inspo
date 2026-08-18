@@ -70,6 +70,16 @@ class Blogger(_PersonBaseFields, Base):
         back_populates="blogger",
         cascade="all, delete-orphan",
     )
+    face_embedding: Mapped["BloggerFaceEmbedding | None"] = relationship(
+        "BloggerFaceEmbedding",
+        back_populates="blogger",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+        "InspirationFaceDetection",
+        back_populates="matched_blogger",
+    )
 
     def __repr__(self) -> str:
         return f"<Blogger(name={self.name}, platform={self.platform})>"
@@ -92,16 +102,6 @@ class Model(_PersonBaseFields, Base):
         "ModelPhotoSet",
         back_populates="model",
         cascade="all, delete-orphan",
-    )
-    face_embedding: Mapped["ModelFaceEmbedding | None"] = relationship(
-        "ModelFaceEmbedding",
-        back_populates="model",
-        uselist=False,
-        cascade="all, delete-orphan",
-    )
-    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
-        "InspirationFaceDetection",
-        back_populates="matched_model",
     )
 
     def __repr__(self) -> str:

@@ -332,14 +332,14 @@ export async function analyzeInspiration(id: string) {
   return data
 }
 
-// ── 人脸检测与模特匹配 ──
+// ── 人脸检测与博主匹配 ──
 
-/** 素材人脸检测结果（含匹配模特） */
+/** 素材人脸检测结果（含匹配博主） */
 export interface FaceDetectionOut {
   id: number
   face_index: number
-  matched_model_id: number | null
-  matched_model_name?: string | null
+  matched_blogger_id: number | null
+  matched_blogger_name?: string | null
   confidence: number | null
   created_at?: string | null
 }
@@ -350,7 +350,7 @@ export interface FaceDetectionsOut {
   detections: FaceDetectionOut[]
 }
 
-/** 触发素材人脸检测与模特特征库匹配（重新检测覆盖旧结果） */
+/** 触发素材人脸检测与博主特征库匹配（重新检测覆盖旧结果） */
 export async function faceDetectInspiration(id: string): Promise<FaceDetectionsOut> {
   const { data } = await apiClient.post<FaceDetectionsOut>(`/inspirations/${id}/face-detect`)
   return data
@@ -362,14 +362,14 @@ export async function fetchFaceDetections(id: string): Promise<FaceDetectionsOut
   return data
 }
 
-/** 手动指定/解除人脸检测的模特关联（model_id 传 null 即解除） */
+/** 手动指定/解除人脸检测的博主关联（blogger_id 传 null 即解除） */
 export async function updateFaceDetection(
   id: string,
   detectionId: number,
-  modelId: number | null,
-): Promise<{ updated: boolean; detection_id: number; matched_model_id: number | null }> {
+  bloggerId: number | null,
+): Promise<{ updated: boolean; detection_id: number; matched_blogger_id: number | null }> {
   const { data } = await apiClient.put(`/inspirations/${id}/face-detections/${detectionId}`, {
-    model_id: modelId,
+    blogger_id: bloggerId,
   })
   return data
 }

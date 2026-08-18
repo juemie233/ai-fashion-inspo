@@ -130,24 +130,25 @@ function goAddPhotos() {
   router.push({ path: '/model-photos', query: { person_id: personId.value } })
 }
 
-// ── 人脸特征注册（仅职业模特：上传 1~5 张正脸照片，提取特征平均池化入库）──
+// ── 人脸特征注册（仅穿搭博主：上传 1~5 张正脸照片，提取特征平均池化入库；
+//    素材人脸自动匹配博主特征库，职业模特无此人脸能力）──
 const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | null>(null)
 const faceFiles = ref<File[]>([])
 const faceUploading = ref(false)
 
 async function loadFaceStatus() {
-  if (kind.value !== 'model') return
+  if (kind.value !== 'blogger') return
   try {
-    faceStatus.value = await modelsApi.fetchFaceStatus(personId.value)
+    faceStatus.value = await bloggersApi.fetchFaceStatus(personId.value)
   } catch {
     // 人脸状态加载失败不阻塞详情页
   }
 }
 
-/** 注册 / 重新注册模特人脸（重复注册覆盖旧特征） */
+/** 注册 / 重新注册博主人脸（重复注册覆盖旧特征） */
 async function handleRegisterFace() {
   if (faceFiles.value.length === 0) {
-    message.warning('请先选择 1~5 张模特正脸照片')
+    message.warning('请先选择 1~5 张博主正脸照片')
     return
   }
   if (faceFiles.value.length > 5) {
@@ -156,7 +157,7 @@ async function handleRegisterFace() {
   }
   faceUploading.value = true
   try {
-    const r = await modelsApi.registerFace(personId.value, faceFiles.value)
+    const r = await bloggersApi.registerFace(personId.value, faceFiles.value)
     message.success(
       `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
     )
@@ -354,8 +355,8 @@ watch(personId, () => {
           <n-spin v-if="photoSetsLoading" :show="true" style="margin: 24px 0" />
         </n-card>
 
-        <!-- 人脸特征注册（仅职业模特：素材人脸自动匹配依赖此特征库） -->
-        <n-card v-if="kind === 'model'" size="small" class="face-register-card">
+        <!-- 人脸特征注册（仅穿搭博主：素材人脸自动匹配依赖此特征库） -->
+        <n-card v-if="kind === 'blogger'" size="small" class="face-register-card">
           <div class="items-header">
             <h3 style="margin: 0">人脸特征注册</h3>
             <n-tag v-if="faceStatus?.registered" type="success" size="small" :bordered="false">
@@ -364,7 +365,7 @@ watch(personId, () => {
             <n-tag v-else type="warning" size="small" :bordered="false">未注册</n-tag>
           </div>
           <p class="face-hint">
-            上传 1~5 张该模特的清晰正脸照片，系统提取人脸特征并平均池化入库；
+            上传 1~5 张该博主的清晰正脸照片，系统提取人脸特征并平均池化入库；
             素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
           </p>
           <div class="face-upload-row">
