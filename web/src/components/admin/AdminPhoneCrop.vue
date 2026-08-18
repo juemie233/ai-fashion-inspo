@@ -7,6 +7,7 @@ import { useMessage } from 'naive-ui'
 import axios from 'axios'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteInspiration } from '@/api/inspirations'
+import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
 
 const message = useMessage()
 const router = useRouter()
@@ -58,31 +59,7 @@ const CONFIDENCE_LABELS: Record<string, { text: string; type: 'success' | 'warni
 const candidates = ref<CropCandidate[]>([])
 const checkedIds = ref<Set<string>>(new Set())
 
-/** 内容重复对比条目：裁剪结果 vs 库中重复素材，由用户决定保留哪一张 */
-interface CropDuplicate {
-  id: string
-  dup_id: string
-  dup_file_path?: string | null
-  dup_thumbnail_path?: string | null
-  dup_created_at?: string | null
-  preview_path?: string | null
-  reason: string
-}
-
-/** 执行结果 */
-interface CropApplyResult {
-  processed: number
-  skipped: Array<{
-    id: string
-    reason: string
-    file_path?: string | null
-    thumbnail_path?: string | null
-    created_at?: string | null
-  }>
-  duplicates: CropDuplicate[]
-  backup_dir: string | null
-  vector_task_id: number | null
-}
+/** 执行结果（duplicates/skipped 经 normalizeApplyResult 归一化，恒为数组） */
 const result = ref<CropApplyResult | null>(null)
 
 // ── 内容重复对比弹窗：逐组展示「裁剪结果 vs 库中重复素材」，删除权交给用户 ──
@@ -127,12 +104,13 @@ async function handleDupKeepCrop() {
       crop_top: cropTop.value / 100,
       crop_bottom: cropBottom.value / 100,
     })
-    mergeApplyResult(data, dup.id)
+    const normalized = normalizeApplyResult(data)
+    mergeApplyResult(normalized, dup.id)
     message.success(
       `已保留裁剪结果（素材 ${dup.id.slice(0, 8)}…），重复素材 ${dup.dup_id.slice(0, 8)}… 已物理删除`,
     )
-    if (data.duplicates.length > 0) {
-      message.info(`裁剪后又发现 ${data.duplicates.length} 组内容重复，请继续对比决策`)
+    if (normalized.duplicates.length > 0) {
+      message.info(`裁剪后又发现 ${normalized.duplicates.length} 组内容重复，请继续对比决策`)
     }
   } catch (e: unknown) {
     message.error(errorDetail(e) || '处理失败')
@@ -157,6 +135,8 @@ function handleDupSkip() {
 
 /** 合并一次重复处理后的 apply 结果到汇总结果 */
 function mergeApplyResult(data: CropApplyResult, handledId: string) {
+  // 防御：无论调用方是否已归一化，这里再归一化一次保证数组字段安全
+  data = normalizeApplyResult(data)
   if (!result.value) {
     result.value = data
   } else {
@@ -307,23 +287,31 @@ async function handleApply() {
       crop_top: cropTop.value / 100,
       crop_bottom: cropBottom.value / 100,
     })
-    result.value = data
-    if (data.duplicates.length > 0) {
+    // 归一化后再消费：duplicates/skipped 恒为数组，避免字段缺失导致访问崩溃
+    result.value = normalizeApplyResult(data)
+    console.debug('[手机图剪裁] apply 结果', {
+      processed: result.value.processed,
+      skipped: result.value.skipped.length,
+      duplicates: result.value.duplicates.length,
+      vector_task_id: result.value.vector_task_id,
+    })
+    if (result.value.duplicates.length > 0) {
       // 内容重复：弹出左右对比视图，由用户决定保留哪一张（删除权交给用户）
-      dupQueue.value = [...data.duplicates]
+      dupQueue.value = [...result.value.duplicates]
       showDupModal.value = true
       return
     }
-    if (data.processed > 0) {
-      message.success(`裁剪完成：成功 ${data.processed} 张，已入队向量回填`)
+    if (result.value.processed > 0) {
+      message.success(`裁剪完成：成功 ${result.value.processed} 张，已入队向量回填`)
       // 裁剪成功后刷新候选：已处理的素材不再出现在候选列表
       await handleScan()
-    } else if (data.skipped.length > 0) {
+    } else if (result.value.skipped.length > 0) {
       message.warning(
-        `裁剪完成：成功 0 张（${data.skipped.length} 张跳过），可在下方跳过明细中逐条「定位」`,
+        `裁剪完成：成功 0 张（${result.value.skipped.length} 张跳过），可在下方跳过明细中逐条「定位」`,
       )
     }
   } catch (e: unknown) {
+    console.error('[手机图剪裁] apply 请求失败', e)
     message.error(errorDetail(e) || '裁剪失败')
   } finally {
     cropping.value = false
