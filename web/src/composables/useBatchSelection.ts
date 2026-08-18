@@ -6,6 +6,7 @@ import {
   batchFavorite as batchFavoriteApi,
   batchTrash as batchTrashApi,
   batchAddTagsToInspirations,
+  batchLinkBloggers as batchLinkBloggersApi,
   batchUpdateInspirations,
   type BatchUpdateFields,
 } from '@/api/inspirations'
@@ -89,6 +90,22 @@ export function useBatchSelection() {
     }
   }
 
+  /** 批量给勾选素材关联穿搭博主（幂等：已关联自动跳过） */
+  async function batchLinkBloggers(personIds: number[]) {
+    const ids = [...selectedIds.value]
+    if (ids.length === 0 || personIds.length === 0) return
+    try {
+      const r = await batchLinkBloggersApi(ids, personIds)
+      const parts = [`已关联 ${r.linked} 条博主关联`]
+      if (r.affected > 0) parts.push(`${r.affected} 个素材`)
+      if (r.skipped > 0) parts.push(`跳过已关联 ${r.skipped} 条`)
+      if (r.not_found_count > 0) parts.push(`${r.not_found_count} 个素材不存在`)
+      message.success(parts.join('，'))
+    } catch {
+      message.error('批量关联博主失败')
+    }
+  }
+
   /** 批量编辑元数据（来源 / 收藏 / 审核状态 / 疑似 AI） */
   async function batchUpdate(fields: BatchUpdateFields): Promise<number> {
     const ids = [...selectedIds.value]
@@ -114,6 +131,7 @@ export function useBatchSelection() {
     batchFavorite,
     batchTrash,
     batchAddTags,
+    batchLinkBloggers,
     batchUpdate,
   }
 }

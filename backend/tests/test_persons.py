@@ -75,6 +75,85 @@ def test_link_blogger_missing_inspiration_404(client, create_blogger):
     assert r.status_code == 404
 
 
+def test_batch_link_bloggers(client, create_blogger, upload):
+    """批量关联博主：多素材 × 多博主，返回统计；已关联自动跳过（幂等）。"""
+    b1 = create_blogger(name="博主甲")
+    b2 = create_blogger(name="博主乙")
+    insp_a = upload().json()["id"]
+    insp_b = upload().json()["id"]
+
+    # 首次批量关联：2 素材 × 2 博主 = 4 条
+    r = client.post(
+        "/api/inspirations/batch-bloggers",
+        json={"inspiration_ids": [insp_a, insp_b], "person_ids": [b1["id"], b2["id"]]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["linked"] == 4
+    assert body["affected"] == 2
+    assert body["not_found_count"] == 0
+    assert body["skipped"] == 0
+
+    # 详情可见关联
+    detail = client.get(f"/api/inspirations/{insp_a}").json()
+    assert {p["id"] for p in detail["bloggers"]} == {b1["id"], b2["id"]}
+
+    # 幂等重放：全部已关联 → linked=0、skipped=4，无重复插入
+    r2 = client.post(
+        "/api/inspirations/batch-bloggers",
+        json={"inspiration_ids": [insp_a, insp_b], "person_ids": [b1["id"], b2["id"]]},
+    )
+    body2 = r2.json()
+    assert body2["linked"] == 0
+    assert body2["skipped"] == 4
+    detail2 = client.get(f"/api/inspirations/{insp_a}").json()
+    assert len(detail2["bloggers"]) == 2  # 未重复
+
+    # 部分重放（只关联新博主）：仅新增差值
+    b3 = create_blogger(name="博主丙")
+    r3 = client.post(
+        "/api/inspirations/batch-bloggers",
+        json={"inspiration_ids": [insp_a], "person_ids": [b1["id"], b3["id"]]},
+    )
+    body3 = r3.json()
+    assert body3["linked"] == 1  # 仅丙新增
+    assert body3["skipped"] == 1  # 甲已关联
+
+
+def test_batch_link_bloggers_skips_missing(client, create_blogger, upload):
+    """批量关联：不存在的素材/博主静默跳过并计数，不影响其余关联。"""
+    blogger = create_blogger(name="存在博主")
+    insp_id = upload().json()["id"]
+
+    r = client.post(
+        "/api/inspirations/batch-bloggers",
+        json={
+            "inspiration_ids": [insp_id, "no-such-insp"],
+            "person_ids": [blogger["id"], 999999],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["linked"] == 1  # 仅存在的组合
+    assert body["not_found_count"] == 1  # no-such-insp
+    assert body["skipped"] == 0
+
+    detail = client.get(f"/api/inspirations/{insp_id}").json()
+    assert {p["id"] for p in detail["bloggers"]} == {blogger["id"]}
+
+
+def test_batch_link_bloggers_empty_params(client):
+    """批量关联：空素材列表或空博主列表 → 422（schema min_length 拦截）。"""
+    assert client.post(
+        "/api/inspirations/batch-bloggers",
+        json={"inspiration_ids": [], "person_ids": [1]},
+    ).status_code == 422
+    assert client.post(
+        "/api/inspirations/batch-bloggers",
+        json={"inspiration_ids": ["x"], "person_ids": []},
+    ).status_code == 422
+
+
 def test_unlink_blogger(client, create_blogger, upload):
     blogger = create_blogger(name="解除博主")
     insp_id = upload().json()["id"]

@@ -42,6 +42,7 @@ const {
   batchFavorite,
   batchTrash,
   batchAddTags,
+  batchLinkBloggers,
   batchUpdate,
 } = useBatchSelection()
 
@@ -52,7 +53,8 @@ type SourceFilter =
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
 type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'ai'
-type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random' | 'rating' | 'rating_asc'
+type SortMode =
+  'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random' | 'rating' | 'rating_asc'
 type Density = 'compact' | 'standard' | 'comfortable'
 
 const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || 'all')
@@ -365,8 +367,7 @@ async function handleRate(id: string, value: number) {
     await store.setRating(id, value)
     message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
-      ?.detail
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
     message.error(detail || '评分失败')
   }
 }
@@ -468,6 +469,13 @@ async function handleBatchTrash() {
 /** 批量加标签：成功后刷新列表（卡片标签更新） */
 async function handleBatchAddTags(names: string[]) {
   await batchAddTags(names)
+  exitBatchMode()
+  loadPage(currentPage.value)
+}
+
+/** 批量关联穿搭博主：成功后刷新列表（卡片博主信息更新） */
+async function handleBatchAddBloggers(personIds: number[]) {
+  await batchLinkBloggers(personIds)
   exitBatchMode()
   loadPage(currentPage.value)
 }
@@ -705,6 +713,7 @@ loadPage(currentPage.value)
       @trash="handleBatchTrash"
       @select-all="toggleSelectAll(currentPageIds)"
       @add-tags="handleBatchAddTags"
+      @add-bloggers="handleBatchAddBloggers"
       @update="handleBatchUpdate"
       @exit="exitBatchMode()"
     />

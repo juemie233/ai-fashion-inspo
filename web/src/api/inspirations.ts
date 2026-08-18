@@ -125,6 +125,27 @@ export async function batchAddTagsToInspirations(
   return data
 }
 
+/** 批量关联博主结果统计 */
+export interface BatchLinkBloggersResult {
+  linked: number
+  affected: number
+  not_found_count: number
+  skipped: number
+  message: string
+}
+
+/** 批量给多个素材关联穿搭博主（幂等：已关联自动跳过） */
+export async function batchLinkBloggers(
+  inspirationIds: string[],
+  personIds: number[],
+): Promise<BatchLinkBloggersResult> {
+  const { data } = await apiClient.post<BatchLinkBloggersResult>('/inspirations/batch-bloggers', {
+    inspiration_ids: inspirationIds,
+    person_ids: personIds,
+  })
+  return data
+}
+
 /** 批量收藏/取消收藏素材，返回实际更新行数 */
 export async function batchFavorite(ids: string[], isFavorite: boolean): Promise<number> {
   const { data } = await apiClient.post<{ updated: number }>('/inspirations/batch-favorite', {
@@ -135,7 +156,11 @@ export async function batchFavorite(ids: string[], isFavorite: boolean): Promise
 }
 
 /** 批量移入垃圾桶（软删除），返回 {trashed, skipped}；source 标记来源（默认手动） */
-export async function batchTrash(ids: string[], reason?: TrashReason, source: TrashSource = 'manual') {
+export async function batchTrash(
+  ids: string[],
+  reason?: TrashReason,
+  source: TrashSource = 'manual',
+) {
   const { data } = await apiClient.post<{ trashed: number; skipped: number }>(
     '/inspirations/batch-trash',
     reason || source !== 'manual' ? { ids, reason, source } : { ids },
@@ -189,24 +214,26 @@ export async function fetchDominantColors(limit = 30): Promise<DominantColorItem
 }
 
 /** 获取灵感列表 */
-export async function fetchInspirations(params: {
-  page?: number
-  size?: number
-  source_type?: string
-  is_favorite?: boolean
-  media_type?: string
-  analysis_status?: string
-  tag_status?: string
-  quality_status?: string
-  is_ai_generated?: boolean
-  include_tags?: string
-  dominant_color?: string
-  date_from?: string
-  date_to?: string
-  ids?: string
-  rating_min?: number
-  sort?: string
-} = {}) {
+export async function fetchInspirations(
+  params: {
+    page?: number
+    size?: number
+    source_type?: string
+    is_favorite?: boolean
+    media_type?: string
+    analysis_status?: string
+    tag_status?: string
+    quality_status?: string
+    is_ai_generated?: boolean
+    include_tags?: string
+    dominant_color?: string
+    date_from?: string
+    date_to?: string
+    ids?: string
+    rating_min?: number
+    sort?: string
+  } = {},
+) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })
   return data
 }
@@ -253,7 +280,11 @@ export async function deleteInspiration(id: string) {
 }
 
 /** 移入垃圾桶（软删除，可恢复；reason 为空时后端按素材状态自动推断；source 默认手动） */
-export async function moveToTrash(id: string, reason?: TrashReason, source: TrashSource = 'manual') {
+export async function moveToTrash(
+  id: string,
+  reason?: TrashReason,
+  source: TrashSource = 'manual',
+) {
   const { data } = await apiClient.post<InspirationOut>(
     `/inspirations/${id}/trash`,
     reason || source !== 'manual' ? { reason, source } : {},
@@ -268,21 +299,24 @@ export async function restoreInspiration(id: string) {
 }
 
 /** 获取垃圾桶素材列表 */
-export async function fetchTrash(params: {
-  page?: number
-  size?: number
-  reason?: TrashReason
-} = {}) {
+export async function fetchTrash(
+  params: {
+    page?: number
+    size?: number
+    reason?: TrashReason
+  } = {},
+) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations/trash', { params })
   return data
 }
 
 /** 清空垃圾桶（onlyExpired=true 仅清理超过保留期的过期素材） */
 export async function emptyTrash(onlyExpired = false) {
-  const { data } = await apiClient.delete<{ deleted: number; freed_bytes: number; message?: string }>(
-    '/inspirations/trash',
-    { params: { only_expired: onlyExpired } },
-  )
+  const { data } = await apiClient.delete<{
+    deleted: number
+    freed_bytes: number
+    message?: string
+  }>('/inspirations/trash', { params: { only_expired: onlyExpired } })
   return data
 }
 

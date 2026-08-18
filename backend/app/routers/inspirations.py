@@ -21,7 +21,12 @@ from app.schemas.inspiration import (
     analysis_status_from_logs,
     inspiration_to_out,
 )
-from app.schemas.person import BloggerBriefOut, ModelBriefOut, PersonLinkRequest
+from app.schemas.person import (
+    BatchPersonLinkRequest,
+    BloggerBriefOut,
+    ModelBriefOut,
+    PersonLinkRequest,
+)
 from app.services import inspiration_service
 from app.services.person_service import blogger_service, model_service
 
@@ -394,6 +399,27 @@ async def remove_inspiration_tag(
 
 
 # ── 人物关联（对标 tag 关联写法；关联用 person_id 规避同名歧义）──
+
+
+@router.post("/batch-bloggers", status_code=status.HTTP_200_OK)
+async def batch_link_bloggers(
+    payload: BatchPersonLinkRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量给多个素材关联穿搭博主（素材库批量选择场景）。
+
+    幂等：已存在的关联自动跳过；不存在的素材/博主静默跳过并计数。
+    请求体: {"inspiration_ids": ["id1", ...], "person_ids": [1, 2, ...]}
+    """
+    result = await blogger_service.batch_link_inspirations(
+        db, payload.inspiration_ids, payload.person_ids
+    )
+    return {
+        "message": f"已关联 {result['linked']} 条博主关联"
+        + (f"，跳过已关联 {result['skipped']} 条" if result["skipped"] else "")
+        + (f"，{result['not_found_count']} 个素材不存在" if result["not_found_count"] else ""),
+        **result,
+    }
 
 
 @router.post("/{inspiration_id}/bloggers", status_code=status.HTTP_200_OK)

@@ -206,6 +206,13 @@ class PersonLinkRequest(BaseModel):
     person_ids: list[int] = Field(min_length=1, max_length=50)
 
 
+class BatchPersonLinkRequest(BaseModel):
+    """批量关联素材-博主请求（素材库批量选择 → 批量关联穿搭博主）"""
+
+    inspiration_ids: list[str] = Field(min_length=1, max_length=200)
+    person_ids: list[int] = Field(min_length=1, max_length=50)
+
+
 class ModelPhotoSetCreate(BaseModel):
     """创建模特照片组（组名缺省时后端回退为「未命名照片组」）"""
 

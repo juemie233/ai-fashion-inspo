@@ -18,6 +18,7 @@ vi.mock('@/api/inspirations', () => ({
   batchFavorite: vi.fn(),
   batchTrash: vi.fn(),
   batchAddTagsToInspirations: vi.fn(),
+  batchLinkBloggers: vi.fn(),
   batchUpdateInspirations: vi.fn(),
 }))
 
@@ -25,6 +26,7 @@ import {
   batchFavorite,
   batchTrash,
   batchAddTagsToInspirations,
+  batchLinkBloggers,
   batchUpdateInspirations,
 } from '@/api/inspirations'
 import { useBatchSelection } from '../useBatchSelection'
@@ -32,6 +34,7 @@ import { useBatchSelection } from '../useBatchSelection'
 const mockFavorite = batchFavorite as unknown as ReturnType<typeof vi.fn>
 const mockTrash = batchTrash as unknown as ReturnType<typeof vi.fn>
 const mockAddTags = batchAddTagsToInspirations as unknown as ReturnType<typeof vi.fn>
+const mockLinkBloggers = batchLinkBloggers as unknown as ReturnType<typeof vi.fn>
 const mockUpdate = batchUpdateInspirations as unknown as ReturnType<typeof vi.fn>
 
 describe('useBatchSelection', () => {
@@ -109,6 +112,45 @@ describe('useBatchSelection', () => {
     await b.batchAddTags(['法式'])
     expect(mockAddTags).toHaveBeenCalledWith(['a', 'b'], ['法式'], 'free', 'manual')
     expect(message.success).toHaveBeenCalled()
+  })
+
+  it('batchLinkBloggers 空选择不请求', async () => {
+    const b = useBatchSelection()
+    await b.batchLinkBloggers([1])
+    expect(mockLinkBloggers).not.toHaveBeenCalled()
+  })
+
+  it('batchLinkBloggers 空博主列表不请求', async () => {
+    const b = useBatchSelection()
+    b.toggleSelect('a')
+    await b.batchLinkBloggers([])
+    expect(mockLinkBloggers).not.toHaveBeenCalled()
+  })
+
+  it('batchLinkBloggers 成功传参并提示', async () => {
+    mockLinkBloggers.mockResolvedValue({
+      linked: 3,
+      affected: 2,
+      not_found_count: 0,
+      skipped: 1,
+      message: '已关联 3 条博主关联，跳过已关联 1 条',
+    })
+    const b = useBatchSelection()
+    b.toggleSelect('a')
+    b.toggleSelect('b')
+
+    await b.batchLinkBloggers([10, 11])
+    expect(mockLinkBloggers).toHaveBeenCalledWith(['a', 'b'], [10, 11])
+    expect(message.success).toHaveBeenCalledWith(expect.stringContaining('已关联 3 条博主关联'))
+  })
+
+  it('batchLinkBloggers 失败提示错误', async () => {
+    mockLinkBloggers.mockRejectedValue(new Error('network'))
+    const b = useBatchSelection()
+    b.toggleSelect('a')
+
+    await b.batchLinkBloggers([10])
+    expect(message.error).toHaveBeenCalledWith('批量关联博主失败')
   })
 
   it('batchUpdate 成功返回更新数', async () => {
