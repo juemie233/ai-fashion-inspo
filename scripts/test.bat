@@ -1,22 +1,25 @@
 @echo off
 setlocal enabledelayedexpansion
+chcp 936 >nul
+
+rem ==============================================
+rem AI ´©´îËØ²Ä¿â ¡ª Ò»¼üÔËĞĞ×Ô¶¯»¯²âÊÔ£¨Windows Åú´¦Àí°æ£©
+rem ÓÃ·¨: scripts\test.bat
+rem       scripts\test.bat --cov   ºó¶Ë¶îÍâÊä³öĞĞ¼¶¸²¸ÇÂÊ±¨¸æ
+rem
+rem ËµÃ÷£ºÓë test.sh Ò»ÖÂ£¬ÓÃ node Ö±½Óµ÷ÓÃ±¾µØ¶ş½øÖÆ£¬¹æ±Ü
+rem npx/npm °ü×°½Å±¾ÔÚÊÜÏŞ PowerShell ÏÂµÄÖ´ĞĞ²ßÂÔÎÊÌâ¡£
+rem ==============================================
+rem pytest/vitest Êä³ö UTF-8£¬ÇĞ 65001 ±£Ö¤ÖÕ¶ËÏÔÊ¾Õı³££»
+rem ÆäºóËùÓĞ echo ÒÑ ASCII »¯£¬±ÜÃâ GBK ×Ö½ÚÔÚ 65001 ÏÂ½âÎö´íÎ»
 chcp 65001 >nul
 
-rem ==============================================
-rem AI ç©¿æ­ç´ æåº“ â€” ä¸€é”®è¿è¡Œè‡ªåŠ¨åŒ–æµ‹è¯•ï¼ˆWindows æ‰¹å¤„ç†ç‰ˆï¼‰
-rem ç”¨æ³•: scripts\test.bat
-rem       scripts\test.bat --cov   åç«¯é¢å¤–è¾“å‡ºè¡Œçº§è¦†ç›–ç‡æŠ¥å‘Š
-rem
-rem è¯´æ˜ï¼šä¸ test.sh ä¸€è‡´ï¼Œç”¨ node ç›´æ¥è°ƒç”¨æœ¬åœ°äºŒè¿›åˆ¶ï¼Œè§„é¿
-rem npx/npm åŒ…è£…è„šæœ¬åœ¨å—é™ PowerShell ä¸‹çš„æ‰§è¡Œç­–ç•¥é—®é¢˜ã€‚
-rem ==============================================
-
-rem åˆ‡åˆ°é¡¹ç›®æ ¹ç›®å½•ï¼ˆè„šæœ¬ä½äº scripts\ ä¸‹ï¼‰
+rem cd to project root (script located in scripts/)
 cd /d "%~dp0.."
 
 set "COV=%~1"
 
-echo ===== åç«¯æµ‹è¯•ï¼ˆpytestï¼‰=====
+echo ===== backend tests (pytest) =====
 cd backend
 if /I "%COV%"=="--cov" (
   python -m pytest --cov --cov-report=term-missing
@@ -28,7 +31,7 @@ cd ..
 if not "%TEST_EXIT%"=="0" goto :fail
 
 echo.
-echo ===== å‰ç«¯ç±»å‹æ£€æŸ¥ï¼ˆvue-tscï¼‰=====
+echo ===== frontend type check (vue-tsc) =====
 cd web
 node node_modules\vue-tsc\bin\vue-tsc.js --noEmit
 set "TEST_EXIT=%errorlevel%"
@@ -36,7 +39,7 @@ cd ..
 if not "%TEST_EXIT%"=="0" goto :fail
 
 echo.
-echo ===== å‰ç«¯æµ‹è¯•ï¼ˆvitestï¼‰=====
+echo ===== frontend tests (vitest) =====
 cd web
 node node_modules\vitest\vitest.mjs run
 set "TEST_EXIT=%errorlevel%"
@@ -44,10 +47,10 @@ cd ..
 if not "%TEST_EXIT%"=="0" goto :fail
 
 echo.
-echo âœ… å…¨éƒ¨æµ‹è¯•é€šè¿‡
+echo [OK] All tests passed
 exit /b 0
 
 :fail
 echo.
-echo âŒ æµ‹è¯•å¤±è´¥ï¼ˆé€€å‡ºç  %TEST_EXIT%ï¼‰
+echo [X] Tests failed (exit code %TEST_EXIT%)
 exit /b 1

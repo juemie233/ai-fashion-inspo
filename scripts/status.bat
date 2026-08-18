@@ -1,6 +1,8 @@
 @echo off
-rem AI ç©¿æ­ç´ æåº“ â€” æŸ¥çœ‹å„æœåŠ¡å¥åº·çŠ¶æ€ï¼ˆåŽç«¯ / å‰ç«¯ / worker + èµ„æºå ç”¨ï¼‰
-rem ç”¨æ³•: scripts\status.bat
+chcp 936 >nul
+rem AI ´©´îËØ²Ä¿â ¡ª ²é¿´¸÷·þÎñ½¡¿µ×´Ì¬£¨ºó¶Ë / Ç°¶Ë / worker + ×ÊÔ´Õ¼ÓÃ£©
+rem ÓÃ·¨: scripts\status.bat
+rem status.py ¹Ì¶¨Êä³ö UTF-8£¬ÇÐ»Ø 65001 ±£Ö¤ÖÐÎÄÏÔÊ¾Õý³£
 chcp 65001 >nul
 cd /d "%~dp0.."
 python scripts\status.py
