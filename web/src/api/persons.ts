@@ -174,7 +174,10 @@ export const bloggersApi = {
   async registerFace(id: number, files: File[]): Promise<BloggerFaceRegisterResult> {
     const formData = new FormData()
     files.forEach((f) => formData.append('files', f))
-    const { data } = await apiClient.post<BloggerFaceRegisterResult>(`/bloggers/${id}/face`, formData)
+    // 显式 multipart：全局默认 application/json 会让 axios 把 FormData 序列化成 JSON（后端 422）
+    const { data } = await apiClient.post<BloggerFaceRegisterResult>(`/bloggers/${id}/face`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
     return data
   },
 
