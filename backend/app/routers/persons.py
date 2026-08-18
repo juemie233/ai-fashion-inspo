@@ -20,6 +20,7 @@ from app.database import get_db
 from app.schemas.person import (
     PersonCreate,
     PersonDetailOut,
+    PersonImportResult,
     PersonListOut,
     PersonOut,
     PersonPhotoOut,
@@ -73,6 +74,23 @@ async def create_person(data: PersonCreate, db: AsyncSession = Depends(get_db)) 
     )
 
 
+@router.post(
+    "/import-csv",
+    response_model=PersonImportResult,
+    status_code=status.HTTP_200_OK,
+)
+async def import_persons_csv(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """上传 CSV 批量导入人物（按 xhs_id upsert，昵称/小红书号必填）。
+
+    CSV 表头：nickname, xhs_id, ip_location（列顺序不限，编码 UTF-8）；
+    重复导入相同 xhs_id 不会产生重复记录，而是更新昵称与 IP 属地。
+    """
+    return await person_service.import_persons_from_csv(db, file)
+
+
 @router.get("/top", response_model=list[PersonOut])
 async def top_persons(
     limit: int = Query(20, ge=1, le=100),
@@ -122,11 +140,13 @@ async def update_person(
 
 @router.delete("/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_person(person_id: int, db: AsyncSession = Depends(get_db)) -> None:
-    """删除人物（inspiration_persons 关联级联删除）。"""
+    """删除人物：仅当该人物无关联素材时允许删除，否则返回 400。"""
     try:
         await person_service.delete_person(db, person_id)
     except person_service.PersonNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
+    except person_service.PersonHasInspirationsError as e:
+        raise HTTPException(status_code=400, detail=e.message)
 
 
 @router.get("/{person_id}/inspirations")

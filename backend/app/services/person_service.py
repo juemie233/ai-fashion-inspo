@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -51,6 +51,14 @@ class PersonConflictError(Exception):
         self.message = message
 
 
+class PersonHasInspirationsError(Exception):
+    """人物仍关联素材，禁止删除（路由层转为 400）。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def _to_person_dict(person: Person, inspiration_count: int = 0) -> dict:
     """将 Person ORM 对象转为响应字典（含素材数统计）。"""
     return {
@@ -59,6 +67,8 @@ def _to_person_dict(person: Person, inspiration_count: int = 0) -> dict:
         "person_type": person.person_type,
         "platform": person.platform,
         "platform_user_id": person.platform_user_id,
+        "xhs_id": person.xhs_id,
+        "ip_location": person.ip_location,
         "profile_url": person.profile_url,
         "avatar_path": person.avatar_path,
         "bio": person.bio,
@@ -99,7 +109,15 @@ async def list_persons(
         .outerjoin(count_subq, Person.id == count_subq.c.pid)
     )
     if search:
-        stmt = stmt.where(Person.name.contains(search.strip()))
+        # 搜索覆盖昵称 / 小红书号 / IP 属地（任一命中即匹配）
+        kw = search.strip()
+        stmt = stmt.where(
+            or_(
+                Person.name.contains(kw),
+                Person.xhs_id.contains(kw),
+                Person.ip_location.contains(kw),
+            )
+        )
     if person_type:
         stmt = stmt.where(Person.person_type == person_type)
     if platform:
@@ -160,6 +178,144 @@ async def create_person(
     return _to_person_dict(person)
 
 
+# CSV 导入错误明细上限：避免超大文件撑爆响应体
+_IMPORT_ERROR_LIMIT = 100
+
+
+async def import_persons_from_csv(db: AsyncSession, file: UploadFile) -> dict:
+    """从 CSV 批量导入人物（按 xhs_id upsert），返回导入统计。
+
+    CSV 要求:
+        - 编码 UTF-8（自动去除 BOM）
+        - 表头含 ``nickname`` 与 ``xhs_id``（必填），``ip_location`` 可选；
+          列顺序不限，按表头名称匹配（大小写/首尾空白容错）
+        - nickname 与 xhs_id 非空，ip_location 可为空
+        - xhs_id 已存在 → 更新昵称与 IP 属地（upsert，避免重复导入）
+        - CSV 文件内重复的 xhs_id 合并为一行（后出现者覆盖，计入 skipped）
+
+    返回:
+        {"imported": 新增数, "updated": 更新数, "skipped": 跳过数,
+         "failed": 失败行数, "errors": [{"row", "nickname", "reason"}, ...]}
+    """
+    import csv
+    import io
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")  # utf-8-sig 自动去除 BOM
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400, detail="文件编码不是 UTF-8，请转换为 UTF-8 后重试"
+        )
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV 文件为空或缺少表头")
+
+    # 表头名规范化：去首尾空白 + 小写，兼容 nickname/NickName/昵称等变体
+    header_map: dict[str, str] = {}
+    for h in reader.fieldnames:
+        if h is None:
+            continue
+        key = h.strip().lower()
+        if key and key not in header_map:
+            header_map[key] = h.strip()
+    for required in ("nickname", "xhs_id"):
+        if required not in header_map:
+            raise HTTPException(status_code=400, detail=f"CSV 缺少必填列：{required}")
+    nick_col = header_map["nickname"]
+    xhs_col = header_map["xhs_id"]
+    ip_col = header_map.get("ip_location")
+
+    errors: list[dict] = []
+    # 合法行按 xhs_id 合并（CSV 内重复 → 后出现者覆盖昵称/IP）
+    merged: dict[str, dict] = {}
+    duplicate_in_file = 0
+    row_no = 0  # 数据行号（表头为第 0 行，数据从 1 起）
+    for row in reader:
+        row_no += 1
+        nickname = (row.get(nick_col) or "").strip()
+        xhs_id = (row.get(xhs_col) or "").strip()
+        ip_location = (row.get(ip_col) or "").strip() if ip_col else ""
+
+        if not nickname:
+            errors.append({"row": row_no, "nickname": None, "reason": "昵称为空"})
+            continue
+        if not xhs_id:
+            errors.append({"row": row_no, "nickname": nickname, "reason": "小红书号为空"})
+            continue
+        if len(xhs_id) > 64:
+            errors.append({"row": row_no, "nickname": nickname, "reason": "小红书号超过 64 字符"})
+            continue
+
+        if xhs_id in merged:
+            duplicate_in_file += 1  # CSV 内重复：保留后出现者
+        merged[xhs_id] = {
+            "nickname": nickname,
+            "ip_location": ip_location,
+            "row": row_no,
+        }
+
+    # 批量查库：一次取出所有已存在的 xhs_id，避免逐行查询（N+1）
+    existing_result = await db.execute(
+        select(Person).where(Person.xhs_id.in_(list(merged.keys())))
+    )
+    existing_map = {p.xhs_id: p for p in existing_result.scalars().all()}
+
+    imported = 0
+    updated = 0
+    for xhs_id, entry in merged.items():
+        person = existing_map.get(xhs_id)
+        new_person: Person | None = None
+        try:
+            if person:
+                # upsert：更新昵称与 IP 属地（小红书号本身不变）
+                person.name = entry["nickname"]
+                person.ip_location = entry["ip_location"] or None
+                updated += 1
+            else:
+                new_person = Person(
+                    name=entry["nickname"],
+                    person_type="blogger",
+                    platform="xiaohongshu",
+                    xhs_id=xhs_id,
+                    ip_location=entry["ip_location"] or None,
+                    source="manual",
+                )
+                db.add(new_person)
+                imported += 1
+            async with db.begin_nested():
+                await db.flush()
+        except IntegrityError:
+            # SAVEPOINT 已回滚：新建对象仍在 pending，移除避免后续 commit 重复插入
+            if new_person is not None:
+                db.expunge(new_person)
+            # 并发下同一 xhs_id 已被其它请求插入：重查后按「更新」处理
+            retry = (
+                await db.execute(select(Person).where(Person.xhs_id == xhs_id))
+            ).scalar_one_or_none()
+            if retry:
+                retry.name = entry["nickname"]
+                retry.ip_location = entry["ip_location"] or None
+                if imported > 0:
+                    imported -= 1
+                updated += 1
+            else:
+                errors.append(
+                    {"row": entry["row"], "nickname": entry["nickname"], "reason": "导入冲突"}
+                )
+
+    await db.commit()
+
+    return {
+        "imported": imported,
+        "updated": updated,
+        "skipped": duplicate_in_file,
+        "failed": len(errors),
+        "errors": errors[:_IMPORT_ERROR_LIMIT],
+    }
+
+
 async def update_person(
     db: AsyncSession,
     person_id: int,
@@ -184,10 +340,13 @@ async def update_person(
 
 
 async def delete_person(db: AsyncSession, person_id: int) -> None:
-    """删除人物（关联级联删除），不存在抛 404。
+    """删除人物（仅允许无关联素材时删除），不存在抛 404。
 
-    除 inspiration_persons 关联外，还会级联删除该人物的照片组与照片记录；
-    照片物理文件在提交成功后统一清理，避免「文件已删但事务失败」产生悬空记录。
+    删除前校验该人物的有效素材数（与列表/详情页展示口径一致，排除软删除素材）：
+    关联素材数 > 0 时抛 PersonHasInspirationsError，禁止删除以免误伤素材关联。
+    通过校验后，除 inspiration_persons 关联外，还会级联删除该人物的照片组与
+    照片记录；照片物理文件在提交成功后统一清理，避免「文件已删但事务失败」
+    产生悬空记录。
     """
     result = await db.execute(
         select(Person)
@@ -197,6 +356,12 @@ async def delete_person(db: AsyncSession, person_id: int) -> None:
     person = result.scalar_one_or_none()
     if not person:
         raise PersonNotFoundError("人物未找到")
+
+    inspiration_count = await get_person_inspiration_count(db, person_id)
+    if inspiration_count > 0:
+        raise PersonHasInspirationsError(
+            f"该模特下仍有 {inspiration_count} 个素材，无法删除"
+        )
 
     # 先收集照片文件路径（DB 级联删除后无法再拿到），提交成功后再物理删除
     photo_paths: list[str] = []

@@ -5,6 +5,7 @@ import type {
   Person,
   PersonBrief,
   PersonDetail,
+  PersonImportResult,
   PersonListOut,
   PersonPlatform,
   PersonPhoto,
@@ -18,6 +19,7 @@ export type {
   Person,
   PersonBrief,
   PersonDetail,
+  PersonImportResult,
   PersonStyleProfile,
   PersonPlatform,
   PersonPhoto,
@@ -82,13 +84,25 @@ export async function createPerson(body: PersonForm) {
   return data
 }
 
+/** 上传 CSV 批量导入人物（按 xhs_id upsert，昵称/小红书号必填） */
+export async function importPersonsCsv(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await apiClient.post<PersonImportResult>(
+    '/persons/import-csv',
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+  return data
+}
+
 /** 更新人物（部分更新） */
 export async function updatePerson(id: number, body: PersonForm) {
   const { data } = await apiClient.patch<Person>(`/persons/${id}`, body)
   return data
 }
 
-/** 删除人物（关联素材不受影响，仅解除人物关联） */
+/** 删除人物（仅当其无关联素材时允许；有关联素材时后端返回 400 与提示） */
 export async function deletePerson(id: number) {
   await apiClient.delete(`/persons/${id}`)
 }

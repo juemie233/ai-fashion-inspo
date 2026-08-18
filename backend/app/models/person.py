@@ -38,6 +38,12 @@ class Person(Base):
     platform_user_id: Mapped[str | None] = mapped_column(
         String(128), nullable=True, index=True
     )  # 平台用户 ID（支撑"按博主采集"；手动录入的人物可为空）
+    xhs_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )  # 小红书号（唯一索引，CSV 导入按此 upsert 防重复）
+    ip_location: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # IP 属地（如「浙江」「江苏」）
     profile_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # 主页链接
     avatar_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # 头像文件路径
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)  # 简介

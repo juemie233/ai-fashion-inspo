@@ -28,6 +28,8 @@ export interface Person {
   person_type: PersonType
   platform: PersonPlatform
   platform_user_id?: string | null
+  xhs_id?: string | null
+  ip_location?: string | null
   profile_url?: string | null
   avatar_path?: string | null
   bio?: string | null
@@ -35,6 +37,22 @@ export interface Person {
   created_at?: string | null
   updated_at?: string | null
   inspiration_count?: number
+}
+
+/** CSV 导入单行失败明细 */
+export interface PersonImportError {
+  row: number
+  nickname?: string | null
+  reason: string
+}
+
+/** CSV 导入结果统计 */
+export interface PersonImportResult {
+  imported: number
+  updated: number
+  skipped: number
+  failed: number
+  errors: PersonImportError[]
 }
 
 /** 人物简要信息（素材详情中关联人物展示用） */

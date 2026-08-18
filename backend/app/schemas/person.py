@@ -31,6 +31,8 @@ class PersonCreate(BaseModel):
     person_type: PersonType = "blogger"
     platform: PersonPlatform = "other"
     platform_user_id: str | None = Field(None, max_length=128)
+    xhs_id: str | None = Field(None, max_length=64)
+    ip_location: str | None = Field(None, max_length=64)
     profile_url: str | None = None
     avatar_path: str | None = None
     bio: str | None = None
@@ -45,6 +47,8 @@ class PersonUpdate(BaseModel):
     person_type: PersonType | None = None
     platform: PersonPlatform | None = None
     platform_user_id: str | None = Field(None, max_length=128)
+    xhs_id: str | None = Field(None, max_length=64)
+    ip_location: str | None = Field(None, max_length=64)
     profile_url: str | None = None
     avatar_path: str | None = None
     bio: str | None = None
@@ -60,6 +64,8 @@ class PersonOut(BaseModel):
     person_type: PersonType = "blogger"
     platform: str = "other"
     platform_user_id: str | None = None
+    xhs_id: str | None = None
+    ip_location: str | None = None
     profile_url: str | None = None
     avatar_path: str | None = None
     bio: str | None = None
@@ -108,6 +114,24 @@ class PersonListOut(BaseModel):
     total: int
     page: int
     size: int
+
+
+class PersonImportError(BaseModel):
+    """CSV 导入单行失败明细"""
+
+    row: int
+    nickname: str | None = None
+    reason: str
+
+
+class PersonImportResult(BaseModel):
+    """CSV 导入结果统计"""
+
+    imported: int  # 新增入库
+    updated: int  # 已存在（按 xhs_id）更新昵称/IP
+    skipped: int  # 跳过（CSV 内重复 xhs_id 合并）
+    failed: int  # 失败行数
+    errors: list[PersonImportError] = []  # 失败明细（行号 + 原因）
 
 
 class PersonLinkRequest(BaseModel):

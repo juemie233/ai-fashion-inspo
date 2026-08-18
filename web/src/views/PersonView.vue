@@ -8,11 +8,11 @@
 import { h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import type { DataTableColumns } from 'naive-ui'
+import type { DataTableColumns, UploadCustomRequestOptions } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
-import { deletePerson, fetchTopPersons } from '@/api/persons'
+import { deletePerson, fetchTopPersons, importPersonsCsv } from '@/api/persons'
 import { usePersonsStore } from '@/stores/persons'
-import type { Person } from '@shared/types/person'
+import type { Person, PersonImportResult } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS, PERSON_TYPE_LABELS } from '@shared/types/person'
 import PersonTypeTag from '@/components/person/PersonTypeTag.vue'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
@@ -89,6 +89,47 @@ function onSearchKeydown(e: KeyboardEvent) {
   }
 }
 
+// ── CSV 导入状态 ──
+const importResult = ref<PersonImportResult | null>(null)
+const importError = ref('')
+
+/** 处理 CSV 导入（n-upload custom-request）：上传 → 展示结果 → 刷新列表 */
+async function handleImportCsv(options: UploadCustomRequestOptions) {
+  const file = options.file.file
+  importResult.value = null
+  importError.value = ''
+  if (!file) {
+    message.error('未获取到文件，请重新选择')
+    return
+  }
+  try {
+    const result = await importPersonsCsv(file as File)
+    importResult.value = result
+    if (result.failed > 0) {
+      message.warning(
+        `导入完成：新增 ${result.imported}，更新 ${result.updated}，失败 ${result.failed}`,
+      )
+    } else {
+      message.success(`导入成功：新增 ${result.imported}，更新 ${result.updated}`)
+    }
+    await store.reload()
+  } catch (e) {
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
+      ?.detail
+    importError.value = detail || '导入失败'
+    message.error(importError.value)
+  } finally {
+    // 完成后清空文件列表，允许重复选择同一文件
+    options.onFinish?.()
+  }
+}
+
+/** 关闭导入结果提示 */
+function dismissImportResult() {
+  importResult.value = null
+  importError.value = ''
+}
+
 /** 表格列定义 */
 const columns: DataTableColumns<Person> = [
   {
@@ -117,6 +158,18 @@ const columns: DataTableColumns<Person> = [
     key: 'platform',
     width: 90,
     render: (row) => PERSON_PLATFORM_LABELS[row.platform] || row.platform,
+  },
+  {
+    title: '小红书ID',
+    key: 'xhs_id',
+    width: 130,
+    render: (row) => row.xhs_id || '-',
+  },
+  {
+    title: 'IP属地',
+    key: 'ip_location',
+    width: 90,
+    render: (row) => row.ip_location || '-',
   },
   {
     title: '素材数',
@@ -165,7 +218,7 @@ const columns: DataTableColumns<Person> = [
                 { size: 'small', type: 'error', quaternary: true },
                 { default: () => '删除' }
               ),
-            default: () => `确定删除人物「${row.name}」？其素材不会被删除，仅解除关联。`,
+            default: () => `确定删除人物「${row.name}」？仅当该人物无关联素材时才可删除。`,
           }
         ),
       ]),
@@ -196,9 +249,53 @@ onMounted(async () => {
       </div>
       <n-space>
         <n-button secondary @click="store.reload()">刷新</n-button>
+        <n-upload
+          accept=".csv,text/csv"
+          :show-file-list="false"
+          :custom-request="handleImportCsv"
+          :max="1"
+        >
+          <n-button secondary>导入 CSV</n-button>
+        </n-upload>
         <n-button type="primary" @click="openCreate">新建人物</n-button>
       </n-space>
     </div>
+
+    <!-- 导入结果提示（成功统计 + 失败明细） -->
+    <n-alert
+      v-if="importResult"
+      :type="importResult.failed > 0 ? 'warning' : 'success'"
+      closable
+      style="margin-bottom: 12px"
+      @close="dismissImportResult"
+    >
+      <template #header>
+        导入完成：新增 {{ importResult.imported }} 人，更新 {{ importResult.updated }} 人
+        <template v-if="importResult.skipped > 0">，跳过 {{ importResult.skipped }} 行（CSV 内重复）</template>
+        <template v-if="importResult.failed > 0">，失败 {{ importResult.failed }} 行</template>
+      </template>
+      <div v-if="importResult.failed > 0" style="max-height: 180px; overflow: auto">
+        <div
+          v-for="err in importResult.errors"
+          :key="err.row"
+          style="font-size: 12px; line-height: 1.8"
+        >
+          第 {{ err.row }} 行{{ err.nickname ? `（${err.nickname}）` : '' }}：{{ err.reason }}
+        </div>
+        <n-text v-if="importResult.errors.length < importResult.failed" depth="3" style="font-size: 12px">
+          … 共 {{ importResult.failed }} 行失败，仅展示前 {{ importResult.errors.length }} 条
+        </n-text>
+      </div>
+    </n-alert>
+    <n-alert
+      v-if="importError"
+      type="error"
+      closable
+      style="margin-bottom: 12px"
+      @close="dismissImportResult"
+    >
+      {{ importError }}
+    </n-alert>
 
     <!-- 筛选区：类型筛选为核心 UI 区分入口 -->
     <n-card size="small" class="filter-card">
@@ -216,7 +313,7 @@ onMounted(async () => {
         <n-space>
           <n-input
             v-model:value="store.search"
-            placeholder="搜索人物名称"
+            placeholder="搜索昵称 / 小红书号 / IP属地"
             clearable
             style="width: 240px"
             @keydown="onSearchKeydown"
