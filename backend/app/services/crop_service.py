@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -56,6 +57,54 @@ MAX_OTHER_BANDS_FRACTION = 0.5  # 其他条带总高度不超过主体的 50%
 # 内容重复时的裁剪结果预览目录（每次 apply 前清空，仅存活于对比决策期间）
 DUP_PREVIEW_DIR_NAME = "_crop_dups"
 
+# 预览目录的清理/创建在进程内串行化：多个 apply_crops 并发执行时，
+# 避免互相删除对方刚创建的对比预览批次（跨进程部署时仍有竞态，
+# 但本服务为单进程 uvicorn，进程内锁即可覆盖实际并发场景）。
+_dups_dir_lock = asyncio.Lock()
+
+# EXIF Orientation 取值：5/6/7/8 表示 90°/270° 旋转，宽高互换
+_EXIF_TRANSPOSE_90 = frozenset((5, 6, 7, 8))
+
+
+def _probe_size(path: Path) -> tuple[int, int]:
+    """读取图片显示尺寸（按 EXIF 方向校正宽高，仅读文件头，不完整解码）。
+
+    裁剪阶段用 ``ImageOps.exif_transpose`` 校正方向，扫描/检测阶段必须与之一致，
+    否则带旋转 EXIF 的图片会出现比例误判或裁剪位置偏移。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        (width, height) 按 EXIF 方向校正后的显示尺寸
+    """
+    with Image.open(path) as im:
+        width, height = im.size
+        orientation = im.getexif().get(0x0112, 1)
+    if orientation in _EXIF_TRANSPOSE_90:
+        width, height = height, width
+    return width, height
+
+
+def _resolve_storage_path(rel_path: str | None) -> Path | None:
+    """把库中相对路径解析为存储根内的绝对路径；为空或越出存储根时返回 None。
+
+    防御性校验：素材记录若被篡改（如 ``../`` 越界路径），拒绝访问存储根之外的文件。
+
+    参数:
+        rel_path: 库中存储的相对路径（如 images/2026-08/xxx.jpg）
+
+    返回:
+        存储根内的绝对路径；路径为空或解析后越出存储根时返回 None
+    """
+    if not rel_path:
+        return None
+    full = (settings.storage_root / rel_path).resolve()
+    if not full.is_relative_to(settings.storage_root.resolve()):
+        logger.warning(f"素材文件路径越出存储根，已拒绝访问: {rel_path}")
+        return None
+    return full
+
 
 def detect_photo_band(path: Path) -> tuple[int, int]:
     """检测图片中最大的内容条带（照片主体）的上下边界。
@@ -76,7 +125,8 @@ def detect_photo_band(path: Path) -> tuple[int, int]:
     import numpy as np
 
     with Image.open(path) as im:
-        arr = np.asarray(im.convert("L"))
+        # 与裁剪阶段一致：先做 EXIF 方向校正，避免旋转图片的黑边检测基准错位
+        arr = np.asarray(ImageOps.exif_transpose(im).convert("L"))
     height = arr.shape[0]
     row_frac = (arr > BRIGHT_PIXEL_THRESHOLD).mean(axis=1)
 
@@ -140,8 +190,12 @@ def detect_screenshot_features(path: Path) -> dict:
         {"top_bar": bool, "bottom_bar": bool}
     """
     with Image.open(path) as im:
-        img = im.convert("RGB")
-        small = img.resize((_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)), Image.LANCZOS)
+        # 与裁剪阶段一致：先做 EXIF 方向校正，再缩放分析
+        img = ImageOps.exif_transpose(im).convert("RGB")
+        small = img.resize(
+            (_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)),
+            Image.Resampling.LANCZOS,
+        )
     n = small.height
     px = small.load()
 
@@ -205,28 +259,37 @@ def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     if not (0 <= top_frac < 1) or not (0 <= bottom_frac < 1):
         raise ValueError(f"裁剪比例必须位于 [0, 1): top={top_frac}, bottom={bottom_frac}")
 
-    tmp = path.with_name(f"{path.stem}_crop_tmp{path.suffix}")
-    with Image.open(path) as src:
-        img = ImageOps.exif_transpose(src)
-        width, height = img.size
-        top = round(height * top_frac)
-        bottom = round(height * bottom_frac)
-        if top + bottom >= height:
-            raise ValueError(f"裁剪比例过大：顶部 {top}px + 底部 {bottom}px ≥ 高度 {height}px")
-        cropped = img.crop((0, top, width, height - bottom))
-        fmt = src.format or "JPEG"
-        save_kwargs: dict = {}
-        if fmt == "JPEG":
-            save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
-        try:
-            cropped.save(tmp, format=fmt, **save_kwargs)
-        except (ValueError, OSError):
-            # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG
-            if fmt != "JPEG":
+    # 临时文件名带随机串：同一素材被并发处理或存在历史残留文件时互不干扰；
+    # 任何失败路径都会在下方清理临时文件后重抛
+    tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
+    try:
+        with Image.open(path) as src:
+            img = ImageOps.exif_transpose(src)
+            width, height = img.size
+            top = round(height * top_frac)
+            bottom = round(height * bottom_frac)
+            if top + bottom >= height:
+                raise ValueError(f"裁剪比例过大：顶部 {top}px + 底部 {bottom}px ≥ 高度 {height}px")
+            cropped = img.crop((0, top, width, height - bottom))
+            fmt = src.format or "JPEG"
+            save_kwargs: dict = {}
+            if fmt == "JPEG":
+                save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
+            try:
+                cropped.save(tmp, format=fmt, **save_kwargs)
+            except (ValueError, OSError):
+                # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG；后缀同步改为 .jpg，
+                # 避免文件扩展名与实际内容格式不一致导致前端解码失败
+                if fmt == "JPEG":
+                    raise
+                tmp.unlink(missing_ok=True)
+                tmp = tmp.with_suffix(".jpg")
                 cropped.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True)
-            else:
-                raise
-    return tmp
+        return tmp
+    except Exception:
+        # 任何失败路径都清理残留临时文件后重抛
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 async def scan_candidates(
@@ -259,25 +322,25 @@ async def scan_candidates(
     """
     if mode not in ("auto", "ratio"):
         raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
+    if mode == "ratio" and crop_top + crop_bottom >= 1:
+        raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
 
     result = await db.execute(
         select(Inspiration).where(
             Inspiration.source_type == "manual_upload",
-            Inspiration.deleted_at.is_(None),
+            NOT_DELETED,
             Inspiration.file_path.isnot(None),
+            Inspiration.media_type == "image",
         )
     )
     candidates: list[dict] = []
     total = 0
     for insp in result.scalars():
-        if insp.media_type != "image":
-            continue
-        full = settings.storage_root / insp.file_path
-        if not full.exists():
+        full = _resolve_storage_path(insp.file_path)
+        if full is None or not full.exists():
             continue
         try:
-            with Image.open(full) as probe:
-                width, height = probe.size
+            width, height = _probe_size(full)
         except Exception:
             continue  # 无法解码的图片不做候选
         if height / width < MIN_RATIO:
@@ -377,6 +440,10 @@ async def apply_crops(
     """
     if mode not in ("auto", "ratio"):
         raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
+    if mode == "ratio" and crop_top + crop_bottom >= 1:
+        raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
+    # 去重：同一素材重复勾选时只处理一次
+    ids = list(dict.fromkeys(ids))
 
     result = await db.execute(
         select(Inspiration).where(Inspiration.id.in_(ids))
@@ -394,16 +461,22 @@ async def apply_crops(
         if insp.deleted_at is not None:
             skipped.append(_skip_entry(insp, "已入垃圾桶"))
             continue
+        if insp.source_type != "manual_upload":
+            # 业务边界：仅手动上传素材参与裁剪，其他来源（采集/插件）不处理
+            skipped.append(_skip_entry(insp, "仅支持处理手动上传素材"))
+            continue
         if insp.media_type != "image":
             skipped.append(_skip_entry(insp, "非图片素材"))
             continue
-        full = settings.storage_root / insp.file_path
+        full = _resolve_storage_path(insp.file_path)
+        if full is None:
+            skipped.append(_skip_entry(insp, "文件路径为空或越出存储根"))
+            continue
         if not full.exists():
             skipped.append(_skip_entry(insp, "文件不存在"))
             continue
         try:
-            with Image.open(full) as probe:
-                width, height = probe.size
+            width, height = _probe_size(full)
         except Exception:
             skipped.append(_skip_entry(insp, "文件无法解码"))
             continue
@@ -435,17 +508,19 @@ async def apply_crops(
     # 素材重新调用 apply（如「保留裁剪结果」），若在此处清空整个目录会把
     # 其他组的预览一并删掉。因此只清理除「最近一个批次」外的残留批次，
     # 最近批次（含本组其他待决策预览）必须保留到本组决策结束。
-    dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
-    if dups_dir.exists():
-        old_batches = sorted(
-            (d for d in dups_dir.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime,
-            reverse=True,
-        )
-        for batch_dir in old_batches[1:]:
-            shutil.rmtree(batch_dir, ignore_errors=True)
-    # 本批次标识：重新 apply 时创建新批次，避免与旧预览混放
-    dup_batch = dups_dir / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    # 清理与批次创建在进程内加锁串行化，避免并发 apply 互相删除对方预览。
+    async with _dups_dir_lock:
+        dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
+        if dups_dir.exists():
+            old_batches = sorted(
+                (d for d in dups_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            for batch_dir in old_batches[1:]:
+                shutil.rmtree(batch_dir, ignore_errors=True)
+        # 本批次标识：重新 apply 时创建新批次，避免与旧预览混放
+        dup_batch = dups_dir / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
     backup_dir = (
@@ -453,14 +528,22 @@ async def apply_crops(
     )
     successes: list[tuple[Inspiration, str | None, str | None, str | None]] = []
     duplicates: list[dict] = []
+    # 本批次已成功裁剪素材的新内容哈希 → 素材：同批次后续素材重复命中时，
+    # 数据库尚未提交（哈希还没写回），必须在本批次内互查才能检出重复
+    seen_hashes: dict[str, Inspiration] = {}
     for insp, full, t_frac, b_frac in plans:
         tmp: Path | None = None
+        backup_path: Path | None = None
+        replaced = False
+        new_thumb: str | None = None
         try:
             tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
 
             # 新内容哈希 + 去重检查：命中重复时保留裁剪结果预览，交用户对比决策，
             # 不再自动丢弃（原图与库中素材均保留，由用户决定删除哪一张）
             new_hash = await asyncio.to_thread(file_sha256, tmp)
+            dup_id = None
+            dup_insp: Inspiration | None = None
             if new_hash:
                 dup_id = (
                     await db.execute(
@@ -471,55 +554,89 @@ async def apply_crops(
                         )
                     )
                 ).scalars().first()
-                if dup_id:
-                    dup = (
+                # 同批次已成功裁剪（尚未写库）的素材同样参与去重
+                if dup_id is None and new_hash in seen_hashes:
+                    dup_insp = seen_hashes[new_hash]
+                    dup_id = dup_insp.id
+            if dup_id:
+                if dup_insp is None:
+                    dup_insp = (
                         await db.execute(
                             select(Inspiration).where(Inspiration.id == dup_id)
                         )
                     ).scalar_one_or_none()
-                    # 裁剪结果预览移入本批次目录（与素材同卷，直接 rename）
-                    dup_batch.mkdir(parents=True, exist_ok=True)
-                    preview = dup_batch / f"{insp.id}_{dup_id}{full.suffix}"
-                    os.replace(tmp, preview)
-                    tmp = None
-                    duplicates.append(
-                        {
-                            "id": insp.id,
-                            "dup_id": dup_id,
-                            "dup_file_path": dup.file_path if dup else None,
-                            "dup_thumbnail_path": dup.thumbnail_path if dup else None,
-                            "dup_created_at": (
-                                dup.created_at.isoformat(sep=" ") if dup and dup.created_at else None
-                            ),
-                            "preview_path": str(preview.relative_to(settings.storage_root)),
-                            "reason": f"裁剪结果与素材 {dup_id} 内容重复",
-                        }
-                    )
-                    continue
+                # 裁剪结果预览移入本批次目录（与素材同卷，直接 rename）
+                dup_batch.mkdir(parents=True, exist_ok=True)
+                preview = dup_batch / f"{insp.id}_{dup_id}{tmp.suffix}"
+                os.replace(tmp, preview)
+                tmp = None
+                duplicates.append(
+                    {
+                        "id": insp.id,
+                        "dup_id": dup_id,
+                        "dup_file_path": dup_insp.file_path if dup_insp else None,
+                        "dup_thumbnail_path": dup_insp.thumbnail_path if dup_insp else None,
+                        "dup_created_at": (
+                            dup_insp.created_at.isoformat(sep=" ")
+                            if dup_insp and dup_insp.created_at
+                            else None
+                        ),
+                        "preview_path": str(preview.relative_to(settings.storage_root)),
+                        "reason": f"裁剪结果与素材 {dup_id} 内容重复",
+                    }
+                )
+                continue
+
+            # 主色调在临时文件上提前重算（仅原值非空时刷新）：
+            # 放到替换原图之前执行，替换后便不再有失败点需要回滚
+            colors = insp.dominant_colors
+            if colors is not None:
+                new_colors = await asyncio.to_thread(extract_dominant_colors, tmp)
+                colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
 
             # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪同一素材时覆盖备份
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_name = f"{insp.id}_{datetime.now().strftime('%H%M%S%f')}{full.suffix}"
-            shutil.copy2(full, backup_dir / backup_name)
+            backup_path = backup_dir / backup_name
+            shutil.copy2(full, backup_path)
             os.replace(tmp, full)
             tmp = None
+            replaced = True
 
-            # 重新生成缩略图（失败仅告警，沿用旧缩略图）
+            # 重新生成缩略图：失败（返回 None）时删除旧缩略图并置空，避免缩略图
+            # 仍指向修改前的内容造成错配（前端将回退展示原图）。
+            # generate_thumbnail 内部捕获异常返回 None；若意外抛出（如实现变更），
+            # 由外层 except 触发「从备份恢复原图」的回滚，保证磁盘与数据库一致。
             thumb_path = insp.thumbnail_path
             new_thumb = await generate_thumbnail(full)
             if new_thumb:
                 if thumb_path and (settings.storage_root / thumb_path) != (settings.storage_root / new_thumb):
                     (settings.storage_root / thumb_path).unlink(missing_ok=True)
                 thumb_path = new_thumb
-
-            # 主色调重算（仅原值非空时刷新，避免引入新的过滤属性）
-            colors = insp.dominant_colors
-            if colors is not None:
-                new_colors = await asyncio.to_thread(extract_dominant_colors, full)
-                colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
+            else:
+                if thumb_path:
+                    (settings.storage_root / thumb_path).unlink(missing_ok=True)
+                thumb_path = None
+                logger.warning(f"裁剪后缩略图生成失败，已置空旧缩略图: {insp.id}")
 
             successes.append((insp, new_hash or None, thumb_path, colors))
+            if new_hash:
+                seen_hashes[new_hash] = insp
         except Exception as e:
+            # 原图已被替换但后续失败：从备份恢复原文件，保持磁盘与数据库一致；
+            # 若新缩略图已写入，一并删除（避免与恢复后的原图错配）
+            if replaced:
+                if new_thumb:
+                    (settings.storage_root / new_thumb).unlink(missing_ok=True)
+                if backup_path is not None and backup_path.exists():
+                    try:
+                        shutil.copy2(backup_path, full)
+                        logger.error(f"裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
+                    except Exception as restore_err:
+                        logger.error(
+                            f"裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
+                            f"err={e}, restore_err={restore_err}"
+                        )
             if tmp is not None and tmp.exists():
                 tmp.unlink(missing_ok=True)
             skipped.append(_skip_entry(insp, f"处理失败: {e}"))
@@ -534,11 +651,15 @@ async def apply_crops(
         insp.updated_at = utcnow()
     await db.commit()
 
-    # 向量回填：图像向量按新图重建，文本向量沿用现有标签
+    # 向量回填：图像向量按新图重建，文本向量沿用现有标签。
+    # 任务创建失败不影响主流程（裁剪已成功提交，向量可由后续任务/手动重建兜底）
     vector_task_id: int | None = None
     if successes:
-        task = await create_vector_backfill_task(db, [s[0].id for s in successes])
-        vector_task_id = task.id if task else None
+        try:
+            task = await create_vector_backfill_task(db, [s[0].id for s in successes])
+            vector_task_id = task.id if task else None
+        except Exception:
+            logger.exception("裁剪后创建向量回填任务失败，不影响裁剪主流程")
 
     logger.info(
         f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"

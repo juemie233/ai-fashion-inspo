@@ -7,6 +7,8 @@ from PIL import Image
 
 from app.config import settings
 from app.services.crop_service import (
+    _probe_size,
+    crop_image_to_temp,
     detect_photo_band,
     detect_screenshot_features,
     screenshot_confidence,
@@ -421,3 +423,260 @@ def test_screenshot_features_medium_without_bottom_bar(tmp_path):
     assert features["top_bar"] is True
     assert features["bottom_bar"] is False
     assert screenshot_confidence(features) == "medium"
+
+
+# ── 审查修复回归测试 ────────────────────────────────────────────────────────
+
+
+def test_apply_skips_non_manual_source(client):
+    """来源边界（2.2）：非手动上传素材（如 scraper）被跳过，文件与数据库均不动。"""
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype, source_type="scraper")
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "ratio"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 0
+    assert len(body["skipped"]) == 1
+    assert "手动上传" in body["skipped"][0]["reason"]
+    assert _file_size(insp["id"], client)[1] == 600  # 原图未被裁剪
+
+
+def test_apply_same_batch_duplicate_detected(client, monkeypatch):
+    """同批次去重（2.3）：库中不存在该哈希时，后处理的素材与先成功者重复也须检出。"""
+    d1, c1 = _make_vertical_screenshot(bg=(220, 220, 220))
+    insp_a = _upload_screenshot(client, d1, c1)
+    d2, c2 = _make_vertical_screenshot(bg=(180, 200, 230))
+    insp_b = _upload_screenshot(client, d2, c2)
+    # 固定哈希模拟「A、B 裁剪结果相同」，且库中（提交前）无此哈希
+    monkeypatch.setattr("app.services.crop_service.file_sha256", lambda _p: "same-batch-hash")
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={
+            "ids": [insp_a["id"], insp_b["id"]],
+            "mode": "ratio",
+            "crop_top": 0.05,
+            "crop_bottom": 0.05,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 1  # 第一张成功
+    assert len(body["duplicates"]) == 1  # 第二张与第一张重复
+    dup = body["duplicates"][0]
+    assert dup["id"] == insp_b["id"]
+    assert dup["dup_id"] == insp_a["id"]
+    assert _file_size(insp_a["id"], client)[1] == 540  # A 已裁剪
+    assert _file_size(insp_b["id"], client)[1] == 600  # B 未动
+    # B 的裁剪预览保留供对比决策
+    assert (settings.storage_root / dup["preview_path"]).exists()
+
+
+def test_apply_rolls_back_when_post_replace_fails(client, monkeypatch):
+    """异常回滚（2.1）：原图替换后生成缩略图抛异常 → 从备份恢复原文件，数据库不变。"""
+    from app.services import crop_service
+
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+    old_hash = _file_size(insp["id"], client)[2]
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("缩略图生成失败")
+
+    monkeypatch.setattr(crop_service, "generate_thumbnail", _boom)
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "ratio"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 0
+    assert len(body["skipped"]) == 1
+    assert "处理失败" in body["skipped"][0]["reason"]
+    # 磁盘已从备份恢复为原始内容，数据库哈希不变
+    assert _file_size(insp["id"], client)[1] == 600
+    assert _file_size(insp["id"], client)[2] == old_hash
+
+
+def test_apply_clears_thumbnail_when_regeneration_fails(client, monkeypatch):
+    """缩略图失败（3.1）：重生成失败时置空 thumbnail_path 并删除旧缩略图，避免新旧内容错配。"""
+    import asyncio
+
+    from app.database import async_session
+    from app.models.inspiration import Inspiration
+    from app.services import crop_service
+
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+
+    async def _thumb() -> str | None:
+        async with async_session() as db:
+            row = await db.get(Inspiration, insp["id"])
+            return row.thumbnail_path
+
+    old_thumb = asyncio.run(_thumb())
+    assert old_thumb
+    assert (settings.storage_root / old_thumb).exists()
+
+    async def _no_thumb(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(crop_service, "generate_thumbnail", _no_thumb)
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["processed"] == 1
+    assert asyncio.run(_thumb()) is None  # thumbnail_path 已置空
+    assert not (settings.storage_root / old_thumb).exists()  # 旧缩略图文件已删除
+    assert _file_size(insp["id"], client)[1] == 540  # 裁剪本身成功
+
+
+def test_apply_dedups_repeated_ids(client):
+    """重复 ID（4.1）：同一素材重复勾选只处理一次。"""
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"], insp["id"]], "mode": "ratio"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 1
+    assert body["skipped"] == []
+    assert _backup_count() == 1  # 只备份一次
+
+
+def test_apply_skips_path_traversal(client):
+    """路径越界（3.5）：file_path 越出存储根时防御性跳过，不访问外部文件。"""
+    import sqlite3
+
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+    conn = sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+    conn.execute(
+        "UPDATE inspirations SET file_path=? WHERE id=?", ("../../outside.jpg", insp["id"])
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "ratio"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 0
+    assert len(body["skipped"]) == 1
+    assert "越出存储根" in body["skipped"][0]["reason"]
+
+
+def test_scan_excludes_non_image_media_type(client):
+    """扫描性能（3.2）：media_type 非 image 的素材在 SQL 层直接排除。"""
+    import sqlite3
+
+    data, ctype = _make_vertical_screenshot()
+    insp = _upload_screenshot(client, data, ctype)
+    conn = sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+    conn.execute("UPDATE inspirations SET media_type=? WHERE id=?", ("video", insp["id"]))
+    conn.commit()
+    conn.close()
+
+    body = _scan(client)
+    assert body["total"] == 0
+
+
+def test_probe_size_rotates_by_exif_orientation(tmp_path):
+    """EXIF 尺寸（2.6）：Orientation=6 的图片返回旋转后的显示尺寸（与裁剪基准一致）。"""
+    img = Image.new("RGB", (600, 300), (200, 200, 200))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    p = tmp_path / "rotated.jpg"
+    img.save(p, "JPEG", exif=exif)
+
+    assert _probe_size(p) == (300, 600)
+
+
+def test_scan_lists_exif_rotated_candidate(client):
+    """EXIF 旋转图（2.6）：显示尺寸为竖屏时列入候选，避免比例误判。"""
+    from io import BytesIO
+
+    img = Image.new("RGB", (600, 300), (200, 200, 200))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buf = BytesIO()
+    img.save(buf, "JPEG", exif=exif)
+    _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="ratio")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert (item["width"], item["height"]) == (300, 600)
+    assert item["ratio"] == 2.0
+
+
+def test_crop_image_to_temp_fallback_jpeg_suffix(tmp_path, monkeypatch):
+    """降级保存（2.5）：PIL 无法写回原格式时降级 JPEG，返回 .jpg 后缀且内容为 JPEG。"""
+    from PIL import Image as PILImage
+
+    img = Image.new("RGB", (200, 400), (220, 220, 220))
+    p = tmp_path / "shot.png"
+    img.save(p, "PNG")
+
+    real_save = PILImage.Image.save
+
+    def _flaky_save(self, fp, format=None, **kwargs):
+        if format == "PNG":
+            raise ValueError("无法写回 PNG")
+        return real_save(self, fp, format=format, **kwargs)
+
+    monkeypatch.setattr(PILImage.Image, "save", _flaky_save)
+    tmp = crop_image_to_temp(p, 0.05, 0.05)
+    try:
+        assert tmp.suffix == ".jpg"
+        with PILImage.open(tmp) as f:
+            assert f.format == "JPEG"
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_crop_image_to_temp_cleans_tmp_on_failure(tmp_path):
+    """临时文件清理（2.4）：裁剪比例非法时不留残留临时文件。"""
+    img = Image.new("RGB", (200, 400), (220, 220, 220))
+    p = tmp_path / "shot.png"
+    img.save(p, "PNG")
+
+    before = set(tmp_path.iterdir())
+    try:
+        crop_image_to_temp(p, 0.9, 0.9)  # 合计 ≥ 高度，抛 ValueError
+        assert False, "应抛出 ValueError"
+    except ValueError:
+        pass
+    assert set(tmp_path.iterdir()) == before  # 无残留临时文件
+
+
+def test_scan_ratio_params_sum_validation():
+    """比例合计校验（4.3）：ratio 模式 crop_top + crop_bottom ≥ 1 时入口即抛（防御直调场景）。"""
+    import asyncio
+
+    from app.database import async_session
+    from app.services.crop_service import scan_candidates
+
+    async def _run() -> str | None:
+        async with async_session() as db:
+            try:
+                await scan_candidates(db, mode="ratio", crop_top=0.6, crop_bottom=0.6)
+                return None
+            except ValueError as e:
+                return str(e)
+
+    msg = asyncio.run(_run())
+    assert msg and "合计必须" in msg

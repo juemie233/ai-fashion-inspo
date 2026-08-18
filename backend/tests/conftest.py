@@ -88,6 +88,8 @@ def clean_state(client):
         settings.person_photos_dir,
         settings.person_thumbnails_dir,
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
+        settings.storage_root / "_crop_backup",  # 裁剪原图备份（按时间戳分目录）
+        settings.storage_root / "_crop_dups",  # 裁剪重复对比预览（按批次分目录）
     ]:
         if dir_path.exists():
             # 递归清理子目录文件：素材按「年月」子目录落盘（images/2026-08/xxx.jpg），
