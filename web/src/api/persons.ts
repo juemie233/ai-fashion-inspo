@@ -1,40 +1,41 @@
-/** 人物相关 API 调用。 */
+/** 人物相关 API 调用（穿搭博主 / 职业模特已拆分两表，工厂生成两组端点）。 */
 
 import apiClient from './client'
 import type {
-  Person,
+  Blogger,
+  Model,
+  ModelPhoto,
+  ModelPhotoSet,
+  ModelPhotoSetDetail,
+  ModelPhotoSetListOut,
   PersonBrief,
   PersonDetail,
   PersonImportResult,
   PersonListOut,
   PersonPlatform,
-  PersonPhoto,
-  PersonPhotoSet,
-  PersonPhotoSetDetail,
-  PersonPhotoSetListOut,
-  PersonType,
 } from '@shared/types/person'
 
 export type {
-  Person,
+  Blogger,
+  Model,
   PersonBrief,
   PersonDetail,
   PersonImportResult,
-  PersonStyleProfile,
+  PersonListOut,
   PersonPlatform,
-  PersonPhoto,
-  PersonPhotoSet,
-  PersonPhotoSetDetail,
-  PersonPhotoSetListOut,
-  PersonType,
+  ModelPhoto,
+  ModelPhotoSet,
+  ModelPhotoSetDetail,
+  ModelPhotoSetListOut,
 } from '@shared/types/person'
 
 /** 人物表单载荷（创建/更新共用，更新时字段均可选） */
 export interface PersonForm {
   name?: string
-  person_type?: PersonType
   platform?: PersonPlatform
   platform_user_id?: string | null
+  xhs_id?: string | null
+  ip_location?: string | null
   profile_url?: string | null
   avatar_path?: string | null
   bio?: string | null
@@ -52,179 +53,194 @@ export interface PersonInspiration {
 
 /** 人物素材列表响应 */
 export interface PersonInspirationsOut {
-  person: { id: number; name: string; person_type: PersonType; platform: string }
+  person: { id: number; name: string; platform: string }
   items: PersonInspiration[]
   total: number
   page: number
   size: number
 }
 
-/** 获取人物列表（分页 + 搜索 + 内容类型/平台筛选） */
-export async function fetchPersons(params: {
-  page?: number
-  size?: number
-  search?: string
-  person_type?: PersonType | ''
-  platform?: string
-  sort?: 'newest' | 'name' | 'count'
-} = {}) {
-  const { data } = await apiClient.get<PersonListOut>('/persons', { params })
-  return data
+/**
+ * 按类型生成人物 API（博主 / 模特共用 CRUD，端点路径按 kind 区分）。
+ * 照片组端点仅由模特 API 暴露（博主无写真照片组能力）。
+ */
+function createPersonApi(kind: 'bloggers' | 'models') {
+  const base = `/${kind}`
+
+  return {
+    /** 获取人物列表（分页 + 搜索 + 平台筛选） */
+    async fetchList(params: {
+      page?: number
+      size?: number
+      search?: string
+      platform?: string
+      sort?: 'newest' | 'name' | 'count'
+    } = {}): Promise<PersonListOut> {
+      const { data } = await apiClient.get<PersonListOut>(base, { params })
+      return data
+    },
+
+    /** 获取人物详情（含素材数与风格画像） */
+    async fetchDetail(id: number): Promise<PersonDetail> {
+      const { data } = await apiClient.get<PersonDetail>(`${base}/${id}`)
+      return data
+    },
+
+    /** 创建人物 */
+    async create(body: PersonForm) {
+      const { data } = await apiClient.post<Blogger | Model>(base, body)
+      return data
+    },
+
+    /** 更新人物（部分更新） */
+    async update(id: number, body: PersonForm) {
+      const { data } = await apiClient.patch<Blogger | Model>(`${base}/${id}`, body)
+      return data
+    },
+
+    /** 删除人物（仅当其无关联素材时允许；有关联素材时后端返回 400 与提示） */
+    async remove(id: number) {
+      await apiClient.delete(`${base}/${id}`)
+    },
+
+    /** 获取人物的素材列表 */
+    async fetchInspirations(
+      id: number,
+      page: number = 1,
+      size: number = 20,
+      sort?: string,
+    ): Promise<PersonInspirationsOut> {
+      const { data } = await apiClient.get<PersonInspirationsOut>(
+        `${base}/${id}/inspirations`,
+        { params: { page, size, sort } },
+      )
+      return data
+    },
+
+    /** 获取热门人物排行（按素材数倒序） */
+    async fetchTop(limit: number = 20): Promise<PersonListOut['items']> {
+      const { data } = await apiClient.get<PersonListOut['items']>(`${base}/top`, {
+        params: { limit },
+      })
+      return data
+    },
+
+    /** 按名称模糊匹配人物（用于选择去重） */
+    async suggest(name: string): Promise<PersonListOut['items']> {
+      const { data } = await apiClient.get<PersonListOut['items']>(`${base}/suggestions`, {
+        params: { name },
+      })
+      return data
+    },
+
+    /** 给素材批量关联人物（幂等） */
+    async link(inspirationId: string, personIds: number[]) {
+      const { data } = await apiClient.post<{ added: PersonBrief[]; count: number }>(
+        `/inspirations/${inspirationId}/${kind}`,
+        { person_ids: personIds },
+      )
+      return data
+    },
+
+    /** 解除素材与人物关联 */
+    async unlink(inspirationId: string, personId: number) {
+      const { data } = await apiClient.delete<{ removed: number }>(
+        `/inspirations/${inspirationId}/${kind}/${personId}`,
+      )
+      return data
+    },
+  }
 }
 
-/** 获取人物详情（含素材数与风格画像） */
-export async function fetchPerson(id: number): Promise<PersonDetail> {
-  const { data } = await apiClient.get<PersonDetail>(`/persons/${id}`)
-  return data
-}
+/** 穿搭博主 API（/api/bloggers） */
+export const bloggersApi = createPersonApi('bloggers')
 
-/** 创建人物 */
-export async function createPerson(body: PersonForm) {
-  const { data } = await apiClient.post<Person>('/persons', body)
-  return data
-}
+/** 职业模特 API（/api/models） */
+export const modelsApi = createPersonApi('models')
 
-/** 上传 CSV 批量导入人物（按 xhs_id upsert，昵称/小红书号必填） */
-export async function importPersonsCsv(file: File) {
+/** 上传 CSV 批量导入博主（按 xhs_id upsert，昵称/小红书号必填） */
+export async function importBloggersCsv(file: File) {
   const formData = new FormData()
   formData.append('file', file)
-  const { data } = await apiClient.post<PersonImportResult>(
-    '/persons/import-csv',
-    formData,
-    { headers: { 'Content-Type': 'multipart/form-data' } },
-  )
-  return data
-}
-
-/** 更新人物（部分更新） */
-export async function updatePerson(id: number, body: PersonForm) {
-  const { data } = await apiClient.patch<Person>(`/persons/${id}`, body)
-  return data
-}
-
-/** 删除人物（仅当其无关联素材时允许；有关联素材时后端返回 400 与提示） */
-export async function deletePerson(id: number) {
-  await apiClient.delete(`/persons/${id}`)
-}
-
-/** 获取人物的素材列表 */
-export async function fetchPersonInspirations(
-  id: number,
-  page: number = 1,
-  size: number = 20,
-  sort?: string,
-) {
-  const { data } = await apiClient.get<PersonInspirationsOut>(
-    `/persons/${id}/inspirations`,
-    { params: { page, size, sort } },
-  )
-  return data
-}
-
-/** 获取热门人物排行（按素材数倒序） */
-export async function fetchTopPersons(limit: number = 20): Promise<Person[]> {
-  const { data } = await apiClient.get<Person[]>('/persons/top', { params: { limit } })
-  return data
-}
-
-/** 按名称模糊匹配人物（用于选择去重） */
-export async function suggestPersons(name: string): Promise<Person[]> {
-  const { data } = await apiClient.get<Person[]>('/persons/suggestions', {
-    params: { name },
+  const { data } = await apiClient.post<PersonImportResult>('/bloggers/import-csv', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
   })
   return data
 }
 
-/** 给素材批量关联人物（幂等） */
-export async function linkPerson(inspirationId: string, personIds: number[]) {
-  const { data } = await apiClient.post<{ added: PersonBrief[]; count: number }>(
-    `/inspirations/${inspirationId}/persons`,
-    { person_ids: personIds },
-  )
-  return data
-}
+// ── 模特照片组（写真，与穿搭素材分离；仅模特拥有）──
 
-/** 解除素材与人物关联 */
-export async function unlinkPerson(inspirationId: string, personId: number) {
-  const { data } = await apiClient.delete<{ removed: number }>(
-    `/inspirations/${inspirationId}/persons/${personId}`,
-  )
-  return data
-}
-
-// ── 人物照片组（模特写真，与穿搭素材分离）──
-
-/** 获取人物照片组分页列表 */
-export async function fetchPersonPhotoSets(
-  personId: number,
+/** 获取模特照片组分页列表 */
+export async function fetchModelPhotoSets(
+  modelId: number,
   page: number = 1,
   size: number = 50,
-): Promise<PersonPhotoSetListOut> {
-  const { data } = await apiClient.get<PersonPhotoSetListOut>(
-    `/persons/${personId}/photo-sets`,
+): Promise<ModelPhotoSetListOut> {
+  const { data } = await apiClient.get<ModelPhotoSetListOut>(
+    `/models/${modelId}/photo-sets`,
     { params: { page, size } },
   )
   return data
 }
 
-/** 创建人物照片组（name 可留空，后端回退「未命名照片组」） */
-export async function createPersonPhotoSet(
-  personId: number,
+/** 创建模特照片组（name 可留空，后端回退「未命名照片组」） */
+export async function createModelPhotoSet(
+  modelId: number,
   name?: string | null,
-): Promise<PersonPhotoSet> {
-  const { data } = await apiClient.post<PersonPhotoSet>(
-    `/persons/${personId}/photo-sets`,
+): Promise<ModelPhotoSet> {
+  const { data } = await apiClient.post<ModelPhotoSet>(
+    `/models/${modelId}/photo-sets`,
     { name: name || null },
   )
   return data
 }
 
 /** 获取照片组详情（含分页照片列表） */
-export async function fetchPersonPhotoSet(
-  personId: number,
+export async function fetchModelPhotoSet(
+  modelId: number,
   setId: number,
   page: number = 1,
   size: number = 200,
-): Promise<PersonPhotoSetDetail> {
-  const { data } = await apiClient.get<PersonPhotoSetDetail>(
-    `/persons/${personId}/photo-sets/${setId}`,
+): Promise<ModelPhotoSetDetail> {
+  const { data } = await apiClient.get<ModelPhotoSetDetail>(
+    `/models/${modelId}/photo-sets/${setId}`,
     { params: { page, size } },
   )
   return data
 }
 
 /** 更新照片组名称 */
-export async function updatePersonPhotoSet(
-  personId: number,
+export async function updateModelPhotoSet(
+  modelId: number,
   setId: number,
   name: string,
-): Promise<PersonPhotoSet> {
-  const { data } = await apiClient.patch<PersonPhotoSet>(
-    `/persons/${personId}/photo-sets/${setId}`,
+): Promise<ModelPhotoSet> {
+  const { data } = await apiClient.patch<ModelPhotoSet>(
+    `/models/${modelId}/photo-sets/${setId}`,
     { name },
   )
   return data
 }
 
 /** 删除照片组（级联删除照片与文件） */
-export async function deletePersonPhotoSet(personId: number, setId: number) {
-  await apiClient.delete(`/persons/${personId}/photo-sets/${setId}`)
+export async function deleteModelPhotoSet(modelId: number, setId: number) {
+  await apiClient.delete(`/models/${modelId}/photo-sets/${setId}`)
 }
 
 /** 上传一张照片到照片组（支持进度回调与取消信号） */
-export async function uploadPersonPhoto(
-  personId: number,
+export async function uploadModelPhoto(
+  modelId: number,
   setId: number,
   file: File,
   sortOrder: number,
   onProgress?: (e: any) => void,
   signal?: AbortSignal,
-): Promise<PersonPhoto> {
+): Promise<ModelPhoto> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('sort_order', String(sortOrder))
-  const { data } = await apiClient.post<PersonPhoto>(
-    `/persons/${personId}/photo-sets/${setId}/photos`,
+  const { data } = await apiClient.post<ModelPhoto>(
+    `/models/${modelId}/photo-sets/${setId}/photos`,
     formData,
     {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -236,13 +252,13 @@ export async function uploadPersonPhoto(
 }
 
 /** 删除照片组内的单张照片 */
-export async function deletePersonPhoto(
-  personId: number,
+export async function deleteModelPhoto(
+  modelId: number,
   setId: number,
   photoId: number,
 ) {
   const { data } = await apiClient.delete<{ removed: number }>(
-    `/persons/${personId}/photo-sets/${setId}/photos/${photoId}`,
+    `/models/${modelId}/photo-sets/${setId}/photos/${photoId}`,
   )
   return data
 }

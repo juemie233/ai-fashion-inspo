@@ -9,17 +9,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import {
-  fetchPerson,
-  fetchPersonInspirations,
-  fetchPersonPhotoSets,
-  fetchPersonPhotoSet,
-  deletePerson,
-  deletePersonPhotoSet,
+  bloggersApi,
+  modelsApi,
+  fetchModelPhotoSets,
+  fetchModelPhotoSet,
+  deleteModelPhotoSet,
   type PersonInspiration,
-  type PersonPhotoSet,
+  type ModelPhotoSet,
 } from '@/api/persons'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
-import type { PersonDetail } from '@shared/types/person'
+import type { PersonDetail, PersonType } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
@@ -31,6 +30,11 @@ const router = useRouter()
 const message = useMessage()
 
 const personId = computed(() => Number(route.params.id))
+/** 人物种类：由列表页跳转时携带（/persons/:id?kind=blogger|model） */
+const kind = computed<PersonType>(() => (route.query.kind === 'model' ? 'model' : 'blogger'))
+/** 按种类选择 API（博主 / 模特已拆分） */
+const api = computed(() => (kind.value === 'model' ? modelsApi : bloggersApi))
+const kindLabel = computed(() => (kind.value === 'model' ? '职业模特' : '穿搭博主'))
 
 const detail = ref<PersonDetail | null>(null)
 const loading = ref(true)
@@ -78,7 +82,7 @@ const lightboxPaths = computed<string[]>(() =>
 )
 
 // ── 照片组（模特写真：与穿搭素材分离）──
-const photoSets = ref<PersonPhotoSet[]>([])
+const photoSets = ref<ModelPhotoSet[]>([])
 const photoSetsLoading = ref(false)
 /** 照片组灯箱：浏览某个照片组的照片 */
 const photoLightboxOpen = ref(false)
@@ -88,7 +92,7 @@ const photoLightboxName = ref('')
 async function loadPhotoSets() {
   photoSetsLoading.value = true
   try {
-    const data = await fetchPersonPhotoSets(personId.value, 1, 50)
+    const data = await fetchModelPhotoSets(personId.value, 1, 50)
     photoSets.value = data.items ?? []
   } catch {
     // 照片组加载失败不阻塞详情页其余内容
@@ -98,9 +102,9 @@ async function loadPhotoSets() {
 }
 
 /** 点击照片组：加载组内照片并打开灯箱浏览 */
-async function openPhotoSet(set: PersonPhotoSet) {
+async function openPhotoSet(set: ModelPhotoSet) {
   try {
-    const detail = await fetchPersonPhotoSet(personId.value, set.id, 1, 200)
+    const detail = await fetchModelPhotoSet(personId.value, set.id, 1, 200)
     photoLightboxPaths.value = (detail.photos ?? []).map((p) => p.file_path)
     photoLightboxName.value = set.name
     photoLightboxOpen.value = true
@@ -110,9 +114,9 @@ async function openPhotoSet(set: PersonPhotoSet) {
 }
 
 /** 删除照片组（二次确认） */
-async function handleDeletePhotoSet(set: PersonPhotoSet) {
+async function handleDeletePhotoSet(set: ModelPhotoSet) {
   try {
-    await deletePersonPhotoSet(personId.value, set.id)
+    await deleteModelPhotoSet(personId.value, set.id)
     message.success(`已删除照片组「${set.name}」`)
     await loadPhotoSets()
   } catch (e: any) {
@@ -135,7 +139,7 @@ async function loadDetail() {
   }
   loading.value = true
   try {
-    detail.value = await fetchPerson(id)
+    detail.value = await api.value.fetchDetail(id)
   } catch {
     message.error('加载人物详情失败')
     return
@@ -149,7 +153,7 @@ async function loadDetail() {
 async function loadInspirations() {
   itemsLoading.value = true
   try {
-    const data = await fetchPersonInspirations(personId.value, page.value, pageSize)
+    const data = await api.value.fetchInspirations(personId.value, page.value, pageSize)
     items.value = data.items ?? []
     total.value = data.total ?? 0
   } catch {
@@ -170,7 +174,7 @@ const showForm = ref(false)
 async function handleDelete() {
   if (!detail.value) return
   try {
-    await deletePerson(detail.value.id)
+    await api.value.remove(detail.value.id)
     message.success(`已删除人物「${detail.value.name}」`)
     router.push('/persons')
   } catch (e: any) {
@@ -221,7 +225,7 @@ watch(personId, () => {
               <div class="name-line">
                 <h2 style="margin: 0">{{ detail.name }}</h2>
                 <!-- 内容类型徽标：UI 区分核心 -->
-                <PersonTypeTag :type="detail.person_type" size="medium" />
+                <PersonTypeTag :type="kind" size="medium" />
               </div>
               <div class="meta-line">
                 <n-tag size="small" :bordered="false" round>
@@ -247,14 +251,14 @@ watch(personId, () => {
                 <template #trigger>
                   <n-button type="error" secondary>删除</n-button>
                 </template>
-                确定删除人物「{{ detail.name }}」？其素材不会被删除，仅解除关联。
+                确定删除{{ kindLabel }}「{{ detail.name }}」？仅当该人物无关联素材时才可删除。
               </n-popconfirm>
             </div>
           </div>
         </n-card>
 
-        <!-- 照片组（模特写真：与穿搭素材分离） -->
-        <n-card size="small" class="photo-sets-card">
+        <!-- 照片组（模特写真，仅职业模特展示；与穿搭素材分离） -->
+        <n-card v-if="kind === 'model'" size="small" class="photo-sets-card">
           <div class="items-header">
             <h3 style="margin: 0">照片组（模特写真）</h3>
             <n-button size="small" type="primary" secondary @click="goAddPhotos">
@@ -411,7 +415,7 @@ watch(personId, () => {
     </n-spin>
 
     <!-- 编辑对话框 -->
-    <PersonFormModal v-model:show="showForm" :person="detail" @saved="loadDetail()" />
+    <PersonFormModal v-model:show="showForm" :kind="kind" :person="detail" @saved="loadDetail()" />
   </div>
 </template>
 

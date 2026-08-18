@@ -24,7 +24,8 @@ from app.routers import (
     ws,
     admin,
     tasks,
-    persons,
+    bloggers,
+    models,
     health,
 )
 from app.utils.auth import is_destructive_route
@@ -222,7 +223,8 @@ app.include_router(scraper.router)
 app.include_router(admin.router)
 app.include_router(ws.router)
 app.include_router(tasks.router)
-app.include_router(persons.router)
+app.include_router(bloggers.router)
+app.include_router(models.router)
 app.include_router(health.router)
 
 

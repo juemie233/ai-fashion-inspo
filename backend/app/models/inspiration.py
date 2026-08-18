@@ -121,8 +121,14 @@ class Inspiration(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    persons: Mapped[list["InspirationPerson"]] = relationship(
-        "InspirationPerson",
+    bloggers: Mapped[list["InspirationBlogger"]] = relationship(
+        "InspirationBlogger",
+        back_populates="inspiration",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    models: Mapped[list["InspirationModel"]] = relationship(
+        "InspirationModel",
         back_populates="inspiration",
         cascade="all, delete-orphan",
         lazy="selectin",

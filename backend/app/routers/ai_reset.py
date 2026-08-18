@@ -36,7 +36,14 @@ async def reset_all_data(
 
     import asyncio as aio
     import shutil
-    from app.models.person import InspirationPerson, Person
+    from app.models.person import (
+        Blogger,
+        InspirationBlogger,
+        InspirationModel,
+        Model,
+        ModelPhoto,
+        ModelPhotoSet,
+    )
     from app.models.tag import InspirationTag, Tag, TagAlias
     from app.models.task import TaskQueue
     from app.models.scraper import ScraperSchedule, ScraperSeenURL, ScraperTask
@@ -55,10 +62,14 @@ async def reset_all_data(
         tables_in_order = [
             (InspirationTag, "inspiration_tags"),
             (AIAnalysisLog, "ai_analysis_log"),
-            (InspirationPerson, "inspiration_persons"),
+            (ModelPhoto, "model_photos"),
+            (ModelPhotoSet, "model_photo_sets"),
+            (InspirationBlogger, "inspiration_bloggers"),
+            (InspirationModel, "inspiration_models"),
             (ScraperTask, "scraper_tasks"),
             (Inspiration, "inspirations"),
-            (Person, "persons"),
+            (Blogger, "bloggers"),
+            (Model, "models"),
             (TagAlias, "tag_aliases"),
             (Tag, "tags"),
             (ScraperSeenURL, "scraper_seen_urls"),  # 墓碑表：重置后不应再跳过旧 URL

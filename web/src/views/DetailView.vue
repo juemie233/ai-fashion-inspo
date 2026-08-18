@@ -423,9 +423,14 @@ async function reanalyze() {
   }
 }
 
-/** 更新素材详情中的人物关联列表 */
-function updatePersons(list: PersonBrief[]) {
-  if (detail.value) detail.value.persons = list
+/** 更新素材详情中的博主关联列表 */
+function updateBloggers(list: PersonBrief[]) {
+  if (detail.value) detail.value.bloggers = list
+}
+
+/** 更新素材详情中的模特关联列表 */
+function updateModels(list: PersonBrief[]) {
+  if (detail.value) detail.value.models = list
 }
 
 /** 点击标签跳转到搜索页 */
@@ -624,11 +629,20 @@ async function removeTag(t: InspirationTagOut) {
               </n-descriptions>
             </div>
 
-            <!-- 关联人物（搜索添加 / 解除关联） -->
+            <!-- 关联博主（搜索添加 / 解除关联） -->
             <PersonLinkSection
-              :persons="detail.persons || []"
+              kind="blogger"
+              :persons="detail.bloggers || []"
               :inspiration-id="detail.id"
-              @change="updatePersons"
+              @change="updateBloggers"
+            />
+
+            <!-- 关联模特（搜索添加 / 解除关联） -->
+            <PersonLinkSection
+              kind="model"
+              :persons="detail.models || []"
+              :inspiration-id="detail.id"
+              @change="updateModels"
             />
 
             <!-- 穿搭大标签 -->

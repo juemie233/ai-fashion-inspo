@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import Inspiration, utcnow
-from app.models.person import InspirationPerson
+from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag
 from app.services.audit_service import record_audit_log
 from app.services.file_service import (
@@ -185,7 +185,8 @@ async def trash_inspiration(
         select(Inspiration)
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(Inspiration.id == inspiration_id)
     )
@@ -244,7 +245,8 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
         select(Inspiration)
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(Inspiration.id == inspiration_id)
     )
@@ -321,7 +323,8 @@ async def list_trash(
         select(Inspiration)
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(Inspiration.deleted_at.isnot(None))
     )

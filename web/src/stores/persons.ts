@@ -1,11 +1,20 @@
-/** 人物状态管理：人物列表、加载态、分页与筛选。 */
+/** 人物状态管理：博主/模特共用实现，按 kind 生成独立 store 实例。 */
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { fetchPersons, type Person } from '@/api/persons'
-import type { PersonType } from '@shared/types/person'
+import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
+import type { Person } from '@shared/types/person'
 
-export const usePersonsStore = defineStore('persons', () => {
+/** 人物种类：blogger（穿搭博主）/ model（职业模特） */
+export type PersonKind = 'blogger' | 'model'
+
+/**
+ * 按 kind 定义并获取独立 store 实例（Pinia 动态 id：`persons-blogger` / `persons-model`）。
+ * 同一 kind 复用同一实例；博主与模特互不共享状态。
+ */
+export function usePersonsStore(kind: PersonKind) {
+  /** 对应 API（博主 / 模特各自独立端点） */
+  const api = kind === 'blogger' ? bloggersApi : modelsApi
   /** 人物列表 */
   const persons = ref<Person[]>([])
   /** 是否正在加载 */
@@ -20,8 +29,6 @@ export const usePersonsStore = defineStore('persons', () => {
   const size = ref(20)
   /** 当前搜索关键字 */
   const search = ref('')
-  /** 内容类型筛选（'' 表示全部） */
-  const personType = ref<PersonType | ''>('')
   /** 平台筛选（'' 表示全部） */
   const platform = ref('')
   /** 排序方式：newest | name | count */
@@ -37,15 +44,14 @@ export const usePersonsStore = defineStore('persons', () => {
     loading.value = true
     error.value = null
     try {
-      const data = await fetchPersons({
+      const data = await api.fetchList({
         page: page.value,
         size: size.value,
         search: search.value || undefined,
-        person_type: personType.value || undefined,
         platform: platform.value || undefined,
         sort: sort.value,
       })
-      if (seq !== loadSeq) return  // 已有更新的请求，丢弃过期响应
+      if (seq !== loadSeq) return // 已有更新的请求，丢弃过期响应
       persons.value = data.items
       total.value = data.total
     } catch (e) {
@@ -69,7 +75,13 @@ export const usePersonsStore = defineStore('persons', () => {
     await load(true)
   }
 
-  return {
+  /** 创建/更新（表单提交统一入口） */
+  async function save(id: number | null, body: PersonForm) {
+    return id ? api.update(id, body) : api.create(body)
+  }
+
+  return defineStore(`persons-${kind}`, () => ({
+    kind,
     persons,
     loading,
     error,
@@ -77,11 +89,13 @@ export const usePersonsStore = defineStore('persons', () => {
     page,
     size,
     search,
-    personType,
     platform,
     sort,
     load,
     reload,
     setPage,
-  }
-})
+    save,
+  }))()
+}
+
+export type PersonsStore = ReturnType<typeof usePersonsStore>

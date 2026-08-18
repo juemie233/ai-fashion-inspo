@@ -44,7 +44,10 @@ export interface InspirationOut {
   created_at: string
   updated_at?: string | null
   tags: InspirationTagOut[]
-  persons?: PersonBrief[]
+  /** 关联穿搭博主（博主/模特已拆分两表，素材详情返回两个独立列表） */
+  bloggers?: PersonBrief[]
+  /** 关联职业模特 */
+  models?: PersonBrief[]
   analysis_status?: string | null
 }
 

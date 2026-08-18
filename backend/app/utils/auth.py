@@ -58,8 +58,12 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     ("POST", "/api/scraper/tasks/{task_id}/results/batch-delete"),
     # 模型卸载（删除磁盘模型）
     ("DELETE", "/api/ai/models/{model_name:path}"),
-    # 人物删除（物理删除）
-    ("DELETE", "/api/persons/{person_id}"),
+    # 人物删除（物理删除）：博主与模特已拆分两表
+    ("DELETE", "/api/bloggers/{blogger_id}"),
+    ("DELETE", "/api/models/{model_id}"),
+    # 模特照片删除（物理删除）
+    ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}"),
+    ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}/photos/{photo_id}"),
 ]
 
 

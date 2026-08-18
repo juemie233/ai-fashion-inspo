@@ -8,7 +8,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import { fetchPersons, createPersonPhotoSet, uploadPersonPhoto } from '@/api/persons'
+import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
 import type { Person } from '@shared/types/person'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 
@@ -25,7 +25,7 @@ const showForm = ref(false)
 async function loadPersons() {
   personsLoading.value = true
   try {
-    const data = await fetchPersons({ page: 1, size: 200, sort: 'name' })
+    const data = await modelsApi.fetchList({ page: 1, size: 200, sort: 'name' })
     persons.value = data.items
   } catch {
     message.error('加载人物列表失败')
@@ -131,7 +131,7 @@ async function startUpload() {
   uploading.value = true
   uploadedSetId.value = null
   try {
-    const set = await createPersonPhotoSet(personId.value, setName.value.trim() || undefined)
+    const set = await createModelPhotoSet(personId.value, setName.value.trim() || undefined)
     uploadedSetId.value = set.id
 
     for (let i = 0; i < pending.value.length; i++) {
@@ -139,7 +139,7 @@ async function startUpload() {
       item.status = 'uploading'
       item.progress = 0
       try {
-        await uploadPersonPhoto(personId.value, set.id, item.file, i, (e: any) => {
+        await uploadModelPhoto(personId.value, set.id, item.file, i, (e: any) => {
           if (e?.total > 0) {
             item.progress = Math.min(100, Math.round((e.loaded / e.total) * 100))
           }
@@ -285,8 +285,8 @@ onUnmounted(() => {
       </n-space>
     </n-card>
 
-    <!-- 新建人物对话框 -->
-    <PersonFormModal v-model:show="showForm" :person="null" @saved="onPersonCreated" />
+    <!-- 新建人物对话框（模特照片页仅创建模特） -->
+    <PersonFormModal v-model:show="showForm" kind="model" :person="null" @saved="onPersonCreated" />
   </div>
 </template>
 

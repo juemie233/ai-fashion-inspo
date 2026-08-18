@@ -1,14 +1,9 @@
-/** 共享类型定义：人物（模特 / 博主）相关。Web 和 Mobile 端共用。 */
-
-/** 人物内容类型：职业模特写真 / 博主穿搭（UI 区分呈现的核心维度） */
-export const PERSON_TYPES = ['model', 'blogger'] as const
-export type PersonType = typeof PERSON_TYPES[number]
-
-/** 内容类型中文名称 */
-export const PERSON_TYPE_LABELS: Record<PersonType, string> = {
-  model: '职业模特',
-  blogger: '穿搭博主',
-}
+/** 共享类型定义：人物（穿搭博主 / 职业模特）相关。Web 和 Mobile 端共用。
+ *
+ * 博主与模特已物理拆分为两张独立表（bloggers / models），API 也拆分为
+ * /api/bloggers 与 /api/models；此处保留统一基类型 ``Person`` 便于共用
+ * 字段，实际使用以 ``Blogger`` / ``Model`` 区分。
+ */
 
 /** 人物平台 */
 export const PERSON_PLATFORMS = ['xiaohongshu', 'douyin', 'other'] as const
@@ -21,11 +16,21 @@ export const PERSON_PLATFORM_LABELS: Record<PersonPlatform, string> = {
   other: '其他',
 }
 
-/** 人物对象 */
+/** 人物内容类型：blogger（穿搭博主）/ model（职业模特） */
+export const PERSON_TYPES = ['model', 'blogger'] as const
+export type PersonType = typeof PERSON_TYPES[number]
+
+/** 内容类型中文名称（素材关联徽标 / 历史字段展示用） */
+export const PERSON_TYPE_LABELS: Record<PersonType, string> = {
+  model: '职业模特',
+  blogger: '穿搭博主',
+}
+
+/** 人物统一基类型（博主/模特共用字段；person_type 仅历史/素材关联场景使用） */
 export interface Person {
   id: number
   name: string
-  person_type: PersonType
+  person_type?: 'blogger' | 'model'
   platform: PersonPlatform
   platform_user_id?: string | null
   xhs_id?: string | null
@@ -37,6 +42,16 @@ export interface Person {
   created_at?: string | null
   updated_at?: string | null
   inspiration_count?: number
+}
+
+/** 穿搭博主（对应 /api/bloggers，拥有小红书号/IP 属地、CSV 导入等能力） */
+export interface Blogger extends Person {
+  person_type?: 'blogger'
+}
+
+/** 职业模特（对应 /api/models，拥有写真照片组能力） */
+export interface Model extends Person {
+  person_type?: 'model'
 }
 
 /** CSV 导入单行失败明细 */
@@ -55,11 +70,10 @@ export interface PersonImportResult {
   errors: PersonImportError[]
 }
 
-/** 人物简要信息（素材详情中关联人物展示用） */
+/** 人物简要信息（素材详情中关联展示用） */
 export interface PersonBrief {
   id: number
   name: string
-  person_type: PersonType
   platform: PersonPlatform
   avatar_path?: string | null
 }
@@ -77,15 +91,15 @@ export interface PersonDetail extends Person {
 }
 
 /** 人物分页列表 */
-export interface PersonListOut {
-  items: Person[]
+export interface PersonListOut<T = Person> {
+  items: T[]
   total: number
   page: number
   size: number
 }
 
-/** 人物照片：照片组内的一张照片 */
-export interface PersonPhoto {
+/** 模特照片：照片组内的一张写真照片 */
+export interface ModelPhoto {
   id: number
   set_id: number
   file_path: string
@@ -94,10 +108,10 @@ export interface PersonPhoto {
   created_at?: string | null
 }
 
-/** 人物照片组：一次从文件夹导入的一组模特写真 */
-export interface PersonPhotoSet {
+/** 模特照片组：一次从文件夹导入的一组写真 */
+export interface ModelPhotoSet {
   id: number
-  person_id: number
+  model_id: number
   name: string
   photo_count: number
   cover_path?: string | null
@@ -105,17 +119,17 @@ export interface PersonPhotoSet {
   updated_at?: string | null
 }
 
-/** 人物照片组详情（含分页照片列表） */
-export interface PersonPhotoSetDetail extends PersonPhotoSet {
-  photos: PersonPhoto[]
+/** 模特照片组详情（含分页照片列表） */
+export interface ModelPhotoSetDetail extends ModelPhotoSet {
+  photos: ModelPhoto[]
   total: number
   page: number
   size: number
 }
 
-/** 人物照片组分页列表 */
-export interface PersonPhotoSetListOut {
-  items: PersonPhotoSet[]
+/** 模特照片组分页列表 */
+export interface ModelPhotoSetListOut {
+  items: ModelPhotoSet[]
   total: number
   page: number
   size: number

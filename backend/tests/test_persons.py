@@ -1,37 +1,43 @@
-"""人物模块回归测试：CRUD、类型区分、素材关联、风格画像、删除。"""
+"""人物模块回归测试（博主/模特已拆分两表）：CRUD、素材关联、风格画像、删除。"""
 
 
-def test_create_and_list_persons(client, create_person):
-    blogger = create_person(name="小美", person_type="blogger", platform="xiaohongshu")
-    model = create_person(name="Anna", person_type="model")
+# ═══════════════════════════════════════════════════════════════
+#  穿搭博主（/api/bloggers）
+# ═══════════════════════════════════════════════════════════════
 
-    lst = client.get("/api/persons").json()
-    assert lst["total"] == 2
 
-    # 内容类型筛选（UI 区分的后端支撑）
-    r = client.get("/api/persons", params={"person_type": "model"}).json()
-    assert r["total"] == 1
-    assert r["items"][0]["name"] == "Anna"
+def test_create_and_list_bloggers(client, create_blogger, create_model):
+    blogger = create_blogger(name="小美", platform="xiaohongshu")
+    create_model(name="Anna")
+
+    lst = client.get("/api/bloggers").json()
+    assert lst["total"] == 1
+    assert lst["items"][0]["name"] == "小美"
+
+    # 模特与博主互不可见（已物理拆分）
+    assert client.get("/api/models").json()["total"] == 1
 
     # 搜索
-    r = client.get("/api/persons", params={"search": "小美"}).json()
+    r = client.get("/api/bloggers", params={"search": "小美"}).json()
     assert r["total"] == 1
 
 
 def test_create_person_validation(client):
-    """空白名称 422；缺失名称 422。"""
-    assert client.post("/api/persons", json={"name": "   "}).status_code == 422
-    assert client.post("/api/persons", json={}).status_code == 422
+    """空白名称 422；缺失名称 422（博主/模特一致）。"""
+    assert client.post("/api/bloggers", json={"name": "   "}).status_code == 422
+    assert client.post("/api/bloggers", json={}).status_code == 422
+    assert client.post("/api/models", json={"name": "   "}).status_code == 422
+    assert client.post("/api/models", json={}).status_code == 422
 
 
-def test_person_detail_with_style_profile(client, create_person, upload):
+def test_blogger_detail_with_style_profile(client, create_blogger, upload):
     """详情含素材数 + 风格画像（标签聚合）。"""
-    person = create_person(name="风格博主")
+    blogger = create_blogger(name="风格博主")
     insp_id = upload().json()["id"]
 
-    # 关联人物
+    # 关联博主
     r = client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
     assert r.status_code == 200
     assert r.json()["count"] == 1
@@ -42,136 +48,178 @@ def test_person_detail_with_style_profile(client, create_person, upload):
         json={"names": ["法式", "白色"], "category": "style"},
     )
 
-    detail = client.get(f"/api/persons/{person['id']}").json()
+    detail = client.get(f"/api/bloggers/{blogger['id']}").json()
     assert detail["inspiration_count"] == 1
-    assert detail["person_type"] == "blogger"
     assert detail["style_profile"]["top_tags"]
     assert {t["name"] for t in detail["style_profile"]["top_tags"]} == {"法式", "白色"}
 
 
-def test_person_inspirations(client, create_person, upload):
-    """人物素材列表端点。"""
-    person = create_person(name="素材博主")
+def test_blogger_inspirations(client, create_blogger, upload):
+    """博主素材列表端点。"""
+    blogger = create_blogger(name="素材博主")
     insp_id = upload().json()["id"]
     client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
 
-    r = client.get(f"/api/persons/{person['id']}/inspirations").json()
+    r = client.get(f"/api/bloggers/{blogger['id']}/inspirations").json()
     assert r["total"] == 1
     assert r["items"][0]["inspiration_id"] == insp_id
 
 
-def test_link_person_missing_inspiration_404(client, create_person):
-    person = create_person(name="孤儿人物")
+def test_link_blogger_missing_inspiration_404(client, create_blogger):
+    blogger = create_blogger(name="孤儿博主")
     r = client.post(
-        "/api/inspirations/no-such-id/persons", json={"person_ids": [person["id"]]}
+        "/api/inspirations/no-such-id/bloggers", json={"person_ids": [blogger["id"]]}
     )
     assert r.status_code == 404
 
 
-def test_unlink_person(client, create_person, upload):
-    person = create_person(name="解除人物")
+def test_unlink_blogger(client, create_blogger, upload):
+    blogger = create_blogger(name="解除博主")
     insp_id = upload().json()["id"]
     client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
 
-    r = client.delete(f"/api/inspirations/{insp_id}/persons/{person['id']}")
+    r = client.delete(f"/api/inspirations/{insp_id}/bloggers/{blogger['id']}")
     assert r.status_code == 200
 
     detail = client.get(f"/api/inspirations/{insp_id}").json()
-    assert detail["persons"] == []
+    assert detail["bloggers"] == []
+    assert detail["models"] == []
 
 
-def test_delete_person_blocked_when_has_inspirations(client, create_person, upload):
-    """有关联素材时禁止删除：返回 400 与明确提示，人物与关联均保留。"""
-    person = create_person(name="待删除")
+def test_delete_blogger_blocked_when_has_inspirations(client, create_blogger, upload):
+    """有关联素材时禁止删除：返回 400 与明确提示，博主与关联均保留。"""
+    blogger = create_blogger(name="待删除")
     insp_id = upload().json()["id"]
     client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
 
-    r = client.delete(f"/api/persons/{person['id']}")
+    r = client.delete(f"/api/bloggers/{blogger['id']}")
     assert r.status_code == 400
-    assert r.json()["detail"] == "该模特下仍有 1 个素材，无法删除"
+    assert r.json()["detail"] == "该博主下仍有 1 个素材，无法删除"
 
-    # 人物未被删除，素材关联仍保留
-    assert client.get("/api/persons").json()["total"] == 1
+    # 博主未被删除，素材关联仍保留
+    assert client.get("/api/bloggers").json()["total"] == 1
     detail = client.get(f"/api/inspirations/{insp_id}").json()
-    assert [p["id"] for p in detail["persons"]] == [person["id"]]
+    assert [p["id"] for p in detail["bloggers"]] == [blogger["id"]]
 
 
-def test_delete_person_allowed_when_no_inspirations(client, create_person, upload):
-    """无关联素材时删除成功，素材保留且不再关联该人物。"""
-    person = create_person(name="待删除")
+def test_delete_blogger_allowed_when_no_inspirations(client, create_blogger, upload):
+    """无关联素材时删除成功，素材保留且不再关联该博主。"""
+    blogger = create_blogger(name="待删除")
     insp_id = upload().json()["id"]
-    # 先关联再解除，模拟素材已无人物归属
+    # 先关联再解除，模拟素材已无博主归属
     client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
     assert (
-        client.delete(f"/api/inspirations/{insp_id}/persons/{person['id']}").status_code
+        client.delete(f"/api/inspirations/{insp_id}/bloggers/{blogger['id']}").status_code
         == 200
     )
 
-    r = client.delete(f"/api/persons/{person['id']}")
+    r = client.delete(f"/api/bloggers/{blogger['id']}")
     assert r.status_code == 204
 
-    assert client.get("/api/persons").json()["total"] == 0
+    assert client.get("/api/bloggers").json()["total"] == 0
     # 素材仍存在
     detail = client.get(f"/api/inspirations/{insp_id}").json()
     assert detail["id"] == insp_id
-    assert detail["persons"] == []
+    assert detail["bloggers"] == []
 
 
-def test_delete_person_ignores_trashed_inspirations(client, create_person, upload):
+def test_delete_blogger_ignores_trashed_inspirations(client, create_blogger, upload):
     """垃圾桶（软删除）素材不计入关联数：显示素材数为 0 时允许删除，口径与列表一致。"""
-    person = create_person(name="垃圾桶关联")
+    blogger = create_blogger(name="垃圾桶关联")
     insp_id = upload().json()["id"]
     client.post(
-        f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]}
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
     # 素材移入垃圾桶 → 有效素材数为 0
     client.post(f"/api/inspirations/{insp_id}/trash", json={"reason": "质量差"})
 
-    assert client.delete(f"/api/persons/{person['id']}").status_code == 204
+    assert client.delete(f"/api/bloggers/{blogger['id']}").status_code == 204
 
 
-def test_delete_person_missing_404(client):
-    """删除不存在的人物返回 404。"""
-    r = client.delete("/api/persons/999999")
+def test_delete_blogger_missing_404(client):
+    """删除不存在的博主返回 404。"""
+    r = client.delete("/api/bloggers/999999")
     assert r.status_code == 404
-    assert r.json()["detail"] == "人物未找到"
+    assert r.json()["detail"] == "博主未找到"
 
 
-def test_person_suggestions_and_top(client, create_person, upload):
-    create_person(name="热门博主")
-    r = client.get("/api/persons/suggestions", params={"name": "热门"}).json()
+def test_blogger_suggestions_and_top(client, create_blogger, upload):
+    create_blogger(name="热门博主")
+    r = client.get("/api/bloggers/suggestions", params={"name": "热门"}).json()
     assert len(r) == 1
 
-    top = client.get("/api/persons/top").json()
+    top = client.get("/api/bloggers/top").json()
     assert len(top) == 1
 
 
-def test_update_person_clear_nullable(client, create_person):
+def test_update_blogger_clear_nullable(client, create_blogger):
     """PATCH 显式传 null 可清空可空字段（bio）。"""
-    person = create_person(name="更新博主", bio="旧简介")
-    r = client.patch(f"/api/persons/{person['id']}", json={"bio": None})
+    blogger = create_blogger(name="更新博主", bio="旧简介")
+    r = client.patch(f"/api/bloggers/{blogger['id']}", json={"bio": None})
     assert r.status_code == 200
     assert r.json()["bio"] is None
     assert r.json()["name"] == "更新博主"
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CSV 导入（按 xhs_id upsert）
+#  职业模特（/api/models）
 # ═══════════════════════════════════════════════════════════════
 
 
-def _upload_csv(client, content: bytes, filename: str = "persons.csv"):
+def test_model_crud_and_link(client, create_model, upload):
+    """模特 CRUD + 素材关联 + 删除限制。"""
+    model = create_model(name="Anna")
+    insp_id = upload().json()["id"]
+
+    r = client.post(
+        f"/api/inspirations/{insp_id}/models", json={"person_ids": [model["id"]]}
+    )
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
+
+    detail = client.get(f"/api/models/{model['id']}").json()
+    assert detail["inspiration_count"] == 1
+
+    # 有关联素材禁止删除
+    r = client.delete(f"/api/models/{model['id']}")
+    assert r.status_code == 400
+    assert "模特" in r.json()["detail"]
+
+    # 解除关联后可删除
+    assert (
+        client.delete(f"/api/inspirations/{insp_id}/models/{model['id']}").status_code
+        == 200
+    )
+    assert client.delete(f"/api/models/{model['id']}").status_code == 204
+
+    # 素材详情中关联清空
+    detail = client.get(f"/api/inspirations/{insp_id}").json()
+    assert detail["models"] == []
+
+
+def test_model_missing_404(client):
+    r = client.delete("/api/models/999999")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "模特未找到"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  CSV 导入（博主专属：按 xhs_id upsert）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _upload_csv(client, content: bytes, filename: str = "bloggers.csv"):
     """上传 CSV 到导入接口。"""
     return client.post(
-        "/api/persons/import-csv",
+        "/api/bloggers/import-csv",
         files={"file": (filename, content, "text/csv")},
     )
 
@@ -186,7 +234,7 @@ def test_import_csv_basic(client):
     assert data["updated"] == 0
     assert data["failed"] == 0
 
-    lst = client.get("/api/persons").json()
+    lst = client.get("/api/bloggers").json()
     assert lst["total"] == 2
     item = next(p for p in lst["items"] if p["xhs_id"] == "zhn20050228")
     assert item["name"] == "水色结-"
@@ -204,7 +252,7 @@ def test_import_csv_upsert_no_duplicate(client):
     assert r["imported"] == 0
     assert r["updated"] == 1
 
-    lst = client.get("/api/persons").json()
+    lst = client.get("/api/bloggers").json()
     assert lst["total"] == 1  # 无重复记录
     item = lst["items"][0]
     assert item["name"] == "博主A-新名"
@@ -217,7 +265,7 @@ def test_import_csv_reordered_columns(client):
     r = _upload_csv(client, content).json()
     assert r["imported"] == 1
 
-    lst = client.get("/api/persons").json()
+    lst = client.get("/api/bloggers").json()
     assert lst["items"][0]["name"] == "博主B"
     assert lst["items"][0]["ip_location"] == "江苏"
 
@@ -231,7 +279,7 @@ def test_import_csv_missing_required(client):
     reasons = {e["reason"] for e in r["errors"]}
     assert reasons == {"昵称为空", "小红书号为空"}
 
-    assert client.get("/api/persons").json()["total"] == 1
+    assert client.get("/api/bloggers").json()["total"] == 1
 
 
 def test_import_csv_duplicate_in_file(client):
@@ -243,7 +291,7 @@ def test_import_csv_duplicate_in_file(client):
     assert r["imported"] == 1
     assert r["skipped"] == 1
 
-    lst = client.get("/api/persons").json()
+    lst = client.get("/api/bloggers").json()
     assert lst["total"] == 1
     assert lst["items"][0]["name"] == "博主E新名"
     assert lst["items"][0]["ip_location"] == "上海"
@@ -273,11 +321,11 @@ def test_search_by_xhs_id_and_ip(client):
     _upload_csv(client, content)
 
     # 按小红书号搜索
-    r = client.get("/api/persons", params={"search": "xhs777"}).json()
+    r = client.get("/api/bloggers", params={"search": "xhs777"}).json()
     assert r["total"] == 1
     assert r["items"][0]["name"] == "博主I"
 
     # 按 IP 属地搜索
-    r = client.get("/api/persons", params={"search": "浙江"}).json()
+    r = client.get("/api/bloggers", params={"search": "浙江"}).json()
     assert r["total"] == 1
     assert r["items"][0]["name"] == "博主H"

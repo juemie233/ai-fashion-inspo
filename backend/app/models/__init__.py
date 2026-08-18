@@ -8,10 +8,12 @@ from app.models.inspiration import (
 )
 from app.models.tag import Tag, InspirationTag, TagAlias
 from app.models.person import (
-    Person,
-    InspirationPerson,
-    PersonPhoto,
-    PersonPhotoSet,
+    Blogger,
+    InspirationBlogger,
+    InspirationModel,
+    Model,
+    ModelPhoto,
+    ModelPhotoSet,
 )
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import PendingVectorBackfill, TaskQueue
@@ -26,10 +28,12 @@ __all__ = [
     "Tag",
     "InspirationTag",
     "TagAlias",
-    "Person",
-    "InspirationPerson",
-    "PersonPhoto",
-    "PersonPhotoSet",
+    "Blogger",
+    "Model",
+    "InspirationBlogger",
+    "InspirationModel",
+    "ModelPhoto",
+    "ModelPhotoSet",
     "ScraperTask",
     "ScraperSchedule",
     "TaskQueue",

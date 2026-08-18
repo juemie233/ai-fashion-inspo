@@ -34,17 +34,21 @@ def test_trend(client, upload):
     assert sum(p["count"] for p in data["trend"]) >= 1
 
 
-def test_person_frequency(client, upload, create_person):
-    """人物频次：按关联素材数降序返回人物。"""
+def test_person_frequency(client, upload, create_blogger):
+    """人物频次：按关联素材数降序返回人物（博主/模特合并统计）。"""
     insp_id = upload().json()["id"]
-    person = create_person(name="高频博主")
-    client.post(f"/api/inspirations/{insp_id}/persons", json={"person_ids": [person["id"]]})
+    blogger = create_blogger(name="高频博主")
+    client.post(
+        f"/api/inspirations/{insp_id}/bloggers",
+        json={"person_ids": [blogger["id"]]},
+    )
 
     r = client.get("/api/admin/person-frequency")
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
     assert data[0]["name"] == "高频博主"
+    assert data[0]["person_type"] == "blogger"
     assert data[0]["count"] == 1
 
 

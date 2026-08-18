@@ -31,12 +31,16 @@ def test_reset_clears_data_and_files(client, upload):
     assert client.get("/api/tags").json() == []
 
 
-def test_reset_clears_persons(client, create_person):
-    """confirm=yes：人物表一并清空（修复「重置所有数据」但人物残留）。"""
-    create_person(name="测试博主")
+def test_reset_clears_persons(client, create_blogger, create_model):
+    """confirm=yes：博主/模特表一并清空（修复「重置所有数据」但人物残留）。"""
+    create_blogger(name="测试博主")
+    create_model(name="测试模特")
 
     r = client.delete("/api/ai/reset", params={"confirm": "yes"})
     assert r.status_code == 200
-    assert r.json()["database"]["persons"] == 1
+    db_counts = r.json()["database"]
+    assert db_counts["bloggers"] == 1
+    assert db_counts["models"] == 1
 
-    assert client.get("/api/persons").json()["total"] == 0
+    assert client.get("/api/bloggers").json()["total"] == 0
+    assert client.get("/api/models").json()["total"] == 0

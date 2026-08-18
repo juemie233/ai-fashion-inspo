@@ -15,7 +15,7 @@ from app.models.inspiration import (
     analysis_log_filter,
     latest_analysis_log_subquery,
 )
-from app.models.person import InspirationPerson
+from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
 
 
@@ -49,7 +49,8 @@ async def list_inspirations(
     """
     query = select(Inspiration).options(
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-        selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+        selectinload(Inspiration.models).selectinload(InspirationModel.model),
     ).where(NOT_DELETED)
 
     if ids:
@@ -245,7 +246,8 @@ async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
             selectinload(Inspiration.analysis_logs),
-            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(Inspiration.id == inspiration_id)
     )

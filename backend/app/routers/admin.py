@@ -24,7 +24,7 @@ from app.models.inspiration import (
     latest_analysis_log_subquery,
     utcnow,
 )
-from app.models.person import InspirationPerson, Person
+from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 from app.models.tag import InspirationTag
 from app.models.audit import AuditLog
 from app.services import admin_stats_service, inspiration_service
@@ -371,7 +371,8 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
         select(Inspiration)
         .options(
             selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.persons).selectinload(InspirationPerson.person),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(NOT_DELETED)
         .order_by(Inspiration.created_at.desc())
@@ -383,11 +384,12 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
     writer.writerow([
         "id", "source_type", "source_author", "source_url", "media_type",
         "is_favorite", "quality_status", "quality_reason", "is_ai_generated",
-        "dominant_colors", "tags", "persons", "created_at", "updated_at",
+        "dominant_colors", "tags", "bloggers", "models", "created_at", "updated_at",
     ])
     for insp in inspirations:
         tags = "|".join(t.tag.name for t in insp.tags)
-        persons = "|".join(p.person.name for p in insp.persons)
+        bloggers = "|".join(b.blogger.name for b in insp.bloggers)
+        models = "|".join(m.model.name for m in insp.models)
         row = [
             insp.id,
             insp.source_type,
@@ -400,7 +402,8 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
             "1" if insp.is_ai_generated else "0",
             insp.dominant_colors or "",
             tags,
-            persons,
+            bloggers,
+            models,
             insp.created_at.isoformat() if insp.created_at else "",
             insp.updated_at.isoformat() if insp.updated_at else "",
         ]
@@ -446,29 +449,48 @@ async def person_frequency(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。"""
-    rows = (await db.execute(
+    """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。
+
+    博主与模特已拆分两表，本统计合并两者返回；``person_type`` 保留以区分来源。
+    """
+    combined = (
         select(
-            Person.id,
-            Person.name,
-            Person.person_type,
-            Person.platform,
-            func.count(InspirationPerson.inspiration_id).label("cnt"),
+            Blogger.id.label("id"),
+            Blogger.name.label("name"),
+            Blogger.platform.label("platform"),
+            func.count(InspirationBlogger.inspiration_id).label("cnt"),
         )
-        .join(InspirationPerson, InspirationPerson.person_id == Person.id)
-        .join(Inspiration, Inspiration.id == InspirationPerson.inspiration_id)
+        .join(InspirationBlogger, InspirationBlogger.blogger_id == Blogger.id)
+        .join(Inspiration, Inspiration.id == InspirationBlogger.inspiration_id)
         .where(NOT_DELETED)
-        .group_by(Person.id, Person.name, Person.person_type, Person.platform)
-        .order_by(func.count(InspirationPerson.inspiration_id).desc())
+        .group_by(Blogger.id, Blogger.name, Blogger.platform)
+        .union_all(
+            select(
+                Model.id.label("id"),
+                Model.name.label("name"),
+                Model.platform.label("platform"),
+                func.count(InspirationModel.inspiration_id).label("cnt"),
+            )
+            .join(InspirationModel, InspirationModel.model_id == Model.id)
+            .join(Inspiration, Inspiration.id == InspirationModel.inspiration_id)
+            .where(NOT_DELETED)
+            .group_by(Model.id, Model.name, Model.platform)
+        )
+        .subquery()
+    )
+    rows = (await db.execute(
+        select(combined.c.id, combined.c.name, combined.c.platform, combined.c.cnt)
+        .select_from(combined)
+        .order_by(combined.c.cnt.desc(), combined.c.name.asc())
         .limit(limit)
     )).all()
     return [
         {
             "id": r[0],
             "name": r[1],
-            "person_type": r[2],
-            "platform": r[3],
-            "count": r[4],
+            "person_type": "blogger",
+            "platform": r[2],
+            "count": r[3],
         }
         for r in rows
     ]

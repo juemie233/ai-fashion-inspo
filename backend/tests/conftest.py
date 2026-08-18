@@ -37,7 +37,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 _ALL_TABLES = [
     "ai_extracted_tags",
     "ai_quality_review",
-    "inspiration_persons",
+    "inspiration_bloggers",
+    "inspiration_models",
     "inspiration_tags",
     "ai_analysis_log",
     "tag_aliases",
@@ -48,10 +49,11 @@ _ALL_TABLES = [
     "pending_vector_backfills",
     "service_heartbeats",
     "audit_logs",
+    "model_photos",
+    "model_photo_sets",
     "inspirations",
-    "person_photos",
-    "person_photo_sets",
-    "persons",
+    "bloggers",
+    "models",
     "tags",
 ]
 
@@ -154,13 +156,27 @@ def upload(client, make_image):
 
 
 @pytest.fixture
-def create_person(client):
-    """创建一个人物，返回响应 JSON。"""
+def create_blogger(client):
+    """创建一位穿搭博主，返回响应 JSON。"""
 
     def _create(name: str = "测试博主", **overrides):
-        body = {"name": name, "person_type": "blogger", "platform": "xiaohongshu"}
+        body = {"name": name, "platform": "xiaohongshu"}
         body.update(overrides)
-        r = client.post("/api/persons", json=body)
+        r = client.post("/api/bloggers", json=body)
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    return _create
+
+
+@pytest.fixture
+def create_model(client):
+    """创建一位职业模特，返回响应 JSON。"""
+
+    def _create(name: str = "测试模特", **overrides):
+        body = {"name": name}
+        body.update(overrides)
+        r = client.post("/api/models", json=body)
         assert r.status_code == 201, r.text
         return r.json()
 

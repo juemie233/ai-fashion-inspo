@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 from pydantic import BaseModel, Field, field_serializer
 
-from app.schemas.person import PersonBriefOut
+from app.schemas.person import BloggerBriefOut, ModelBriefOut
 from app.utils.time import format_utc
 
 if TYPE_CHECKING:
@@ -124,7 +124,8 @@ class InspirationOut(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
     tags: list[InspirationTagOut] = []
-    persons: list[PersonBriefOut] = []
+    bloggers: list[BloggerBriefOut] = []  # 关联穿搭博主
+    models: list[ModelBriefOut] = []  # 关联职业模特
     analysis_status: str | None = "none"
 
     model_config = {"from_attributes": True}
@@ -219,8 +220,7 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         created_at=inspiration.created_at,
         updated_at=inspiration.updated_at,
         tags=tags_out,
-        persons=[
-            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
-        ],
+        bloggers=[BloggerBriefOut.model_validate(t.blogger) for t in inspiration.bloggers],
+        models=[ModelBriefOut.model_validate(t.model) for t in inspiration.models],
         analysis_status=status,
     )

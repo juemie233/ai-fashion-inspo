@@ -28,7 +28,7 @@ def test_read_endpoints_unaffected(client, monkeypatch):
     monkeypatch.setattr(settings, "api_key", TEST_KEY)
     assert client.get("/api/inspirations").status_code == 200
     assert client.get("/api/tags").status_code == 200
-    assert client.get("/api/persons").status_code == 200
+    assert client.get("/api/bloggers").status_code == 200
     assert client.get("/api/health").status_code == 200
 
 
@@ -49,7 +49,7 @@ def test_other_destructive_endpoints(client, monkeypatch):
     r = client.post("/api/tags/merge", json={"source_tag_id": 1, "target_tag_id": 2})
     assert r.status_code == 401
 
-    r = client.delete("/api/persons/1")
+    r = client.delete("/api/bloggers/1")
     assert r.status_code == 401
 
     r = client.delete("/api/ai/history/999")
@@ -59,7 +59,7 @@ def test_other_destructive_endpoints(client, monkeypatch):
 def test_destructive_without_key_config_skipped(client):
     """未配置 API_KEY（开发模式）：破坏性接口跳过认证，正常业务响应。"""
     assert settings.api_key == ""  # conftest 已清空
-    r = client.delete("/api/persons/999")
+    r = client.delete("/api/bloggers/999")
     assert r.status_code == 404  # 人物不存在（而非 401）
     r = client.delete("/api/inspirations/trash")
     assert r.status_code == 200

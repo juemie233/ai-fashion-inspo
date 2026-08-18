@@ -1,14 +1,16 @@
 <script setup lang="ts">
-/** 人物新建/编辑对话框：包含内容类型（职业模特/穿搭博主）选择，落实 UI 区分。 */
+/** 人物新建/编辑对话框：按 kind（穿搭博主/职业模特）提交到对应 API。 */
 
 import { ref, watch } from 'vue'
 import { useMessage, type FormInst, type FormRules } from 'naive-ui'
-import { createPerson, updatePerson, type PersonForm } from '@/api/persons'
+import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
 import type { Person } from '@shared/types/person'
-import { PERSON_PLATFORM_LABELS, PERSON_TYPE_LABELS } from '@shared/types/person'
+import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 
 const props = defineProps<{
   show: boolean
+  /** 人物种类：blogger（穿搭博主）/ model（职业模特） */
+  kind: 'blogger' | 'model'
   /** 编辑模式时传入人物对象；新建时传 null */
   person: Person | null
 }>()
@@ -23,12 +25,15 @@ const message = useMessage()
 const formRef = ref<FormInst | null>(null)
 const submitting = ref(false)
 
-/** 表单模型：默认「穿搭博主」（本项目主流人物为博主） */
+const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
+
+/** 表单模型（类型由页面 Tab 决定，不再内置 person_type 字段） */
 const form = ref<PersonForm>({
   name: '',
-  person_type: 'blogger',
   platform: 'other',
   platform_user_id: null,
+  xhs_id: null,
+  ip_location: null,
   profile_url: null,
   bio: null,
 })
@@ -58,16 +63,17 @@ watch(
     const p = props.person
     form.value = {
       name: p?.name ?? '',
-      person_type: p?.person_type ?? 'blogger',
       platform: p?.platform ?? 'other',
       platform_user_id: p?.platform_user_id ?? null,
+      xhs_id: p?.xhs_id ?? null,
+      ip_location: p?.ip_location ?? null,
       profile_url: p?.profile_url ?? null,
       bio: p?.bio ?? null,
     }
   }
 )
 
-/** 提交：新建或更新 */
+/** 提交：新建或更新（按 kind 路由到对应 API） */
 async function handleSubmit() {
   try {
     await formRef.value?.validate()
@@ -76,10 +82,9 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    const saved = props.person
-      ? await updatePerson(props.person.id, form.value)
-      : await createPerson(form.value)
-    message.success(props.person ? '已更新人物' : '已创建人物')
+    const api = props.kind === 'blogger' ? bloggersApi : modelsApi
+    const saved = props.person ? await api.update(props.person.id, form.value) : await api.create(form.value)
+    message.success(props.person ? `已更新${kindLabel}` : `已创建${kindLabel}`)
     emit('saved', saved)
     emit('update:show', false)
   } catch (e: any) {
@@ -94,7 +99,7 @@ async function handleSubmit() {
   <n-modal
     :show="show"
     preset="card"
-    :title="person ? '编辑人物' : '新建人物'"
+    :title="person ? `编辑${kindLabel}` : `新建${kindLabel}`"
     style="width: 480px"
     @update:show="(v: boolean) => emit('update:show', v)"
   >
@@ -103,25 +108,19 @@ async function handleSubmit() {
         <n-input v-model:value="form.name" placeholder="人物名 / 博主昵称" maxlength="128" />
       </n-form-item>
 
-      <!-- 内容类型：UI 区分核心字段 -->
-      <n-form-item label="内容类型" path="person_type">
-        <n-radio-group v-model:value="form.person_type" name="person_type">
-          <n-space>
-            <n-radio-button value="blogger">
-              {{ PERSON_TYPE_LABELS.blogger }}
-            </n-radio-button>
-            <n-radio-button value="model">
-              {{ PERSON_TYPE_LABELS.model }}
-            </n-radio-button>
-          </n-space>
-        </n-radio-group>
-      </n-form-item>
-
       <n-form-item label="平台" path="platform">
         <n-select
           v-model:value="form.platform"
           :options="Object.entries(PERSON_PLATFORM_LABELS).map(([value, label]) => ({ label, value }))"
         />
+      </n-form-item>
+
+      <n-form-item label="小红书号" path="xhs_id">
+        <n-input v-model:value="form.xhs_id" placeholder="如 zhn20050228，可留空" maxlength="64" />
+      </n-form-item>
+
+      <n-form-item label="IP属地" path="ip_location">
+        <n-input v-model:value="form.ip_location" placeholder="如 浙江，可留空" maxlength="64" />
       </n-form-item>
 
       <n-form-item label="平台用户 ID" path="platform_user_id">

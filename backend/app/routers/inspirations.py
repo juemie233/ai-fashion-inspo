@@ -21,8 +21,9 @@ from app.schemas.inspiration import (
     analysis_status_from_logs,
     inspiration_to_out,
 )
-from app.schemas.person import PersonBriefOut, PersonLinkRequest
-from app.services import inspiration_service, person_service
+from app.schemas.person import BloggerBriefOut, ModelBriefOut, PersonLinkRequest
+from app.services import inspiration_service
+from app.services.person_service import blogger_service, model_service
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
 
@@ -269,9 +270,10 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
             InspirationTagOut(tag=TagOut.model_validate(t.tag), confidence=t.confidence)
             for t in inspiration.tags
         ],
-        persons=[
-            PersonBriefOut.model_validate(t.person) for t in inspiration.persons
+        bloggers=[
+            BloggerBriefOut.model_validate(t.blogger) for t in inspiration.bloggers
         ],
+        models=[ModelBriefOut.model_validate(t.model) for t in inspiration.models],
         analysis_logs=[
             AnalysisLogOut.model_validate(log) for log in inspiration.analysis_logs
         ],
@@ -394,43 +396,81 @@ async def remove_inspiration_tag(
 # ── 人物关联（对标 tag 关联写法；关联用 person_id 规避同名歧义）──
 
 
-@router.post("/{inspiration_id}/persons", status_code=status.HTTP_200_OK)
-async def link_inspiration_persons(
+@router.post("/{inspiration_id}/bloggers", status_code=status.HTTP_200_OK)
+async def link_inspiration_bloggers(
     inspiration_id: str,
     data: PersonLinkRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """给素材批量关联人物（幂等，已关联自动跳过）。
+    """给素材批量关联穿搭博主（幂等，已关联自动跳过）。
 
-    请求体: {"person_ids": [1, 2]}——人物不存在时静默跳过该 ID；素材不存在返回 404。
+    请求体: {"person_ids": [1, 2]}——博主不存在时静默跳过该 ID；素材不存在返回 404。
     """
-    result = await person_service.link_persons_batch(db, inspiration_id, data.person_ids)
+    result = await blogger_service.link_batch(db, inspiration_id, data.person_ids)
     if not result["inspiration_exists"]:
         raise HTTPException(status_code=404, detail="素材未找到")
     added = []
     for link in result["links"]:
         added.append(
-            PersonBriefOut(
-                id=link.person_id,
-                name=link.person.name,
-                person_type=link.person.person_type,
-                platform=link.person.platform,
-                avatar_path=link.person.avatar_path,
+            BloggerBriefOut(
+                id=link.blogger_id,
+                name=link.blogger.name,
+                platform=link.blogger.platform,
+                avatar_path=link.blogger.avatar_path,
             )
         )
     # 关联对象已在批量函数内逐条 flush（SAVEPOINT），此处无需再 flush
     return {"added": [a.model_dump() for a in added], "count": len(added)}
 
 
-@router.delete("/{inspiration_id}/persons/{person_id}", status_code=status.HTTP_200_OK)
-async def unlink_inspiration_person(
+@router.delete("/{inspiration_id}/bloggers/{blogger_id}", status_code=status.HTTP_200_OK)
+async def unlink_inspiration_blogger(
     inspiration_id: str,
-    person_id: int,
+    blogger_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """解除素材与某个人物的关联（不删除人物本身）。"""
-    if not await person_service.unlink_person(db, inspiration_id, person_id):
-        raise HTTPException(status_code=404, detail="未找到该人物关联")
+    """解除素材与某位博主的关联（不删除博主本身）。"""
+    if not await blogger_service.unlink(db, inspiration_id, blogger_id):
+        raise HTTPException(status_code=404, detail="未找到该博主关联")
+    return {"removed": 1}
+
+
+@router.post("/{inspiration_id}/models", status_code=status.HTTP_200_OK)
+async def link_inspiration_models(
+    inspiration_id: str,
+    data: PersonLinkRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """给素材批量关联职业模特（幂等，已关联自动跳过）。
+
+    请求体: {"person_ids": [1, 2]}——模特不存在时静默跳过该 ID；素材不存在返回 404。
+    """
+    result = await model_service.link_batch(db, inspiration_id, data.person_ids)
+    if not result["inspiration_exists"]:
+        raise HTTPException(status_code=404, detail="素材未找到")
+    added = []
+    for link in result["links"]:
+        added.append(
+            ModelBriefOut(
+                id=link.model_id,
+                name=link.model.name,
+                platform=link.model.platform,
+                avatar_path=link.model.avatar_path,
+            )
+        )
+    # 关联对象已在批量函数内逐条 flush（SAVEPOINT），此处无需再 flush
+    return {"added": [a.model_dump() for a in added], "count": len(added)}
+
+
+@router.delete("/{inspiration_id}/models/{model_id}", status_code=status.HTTP_200_OK)
+async def unlink_inspiration_model(
+    inspiration_id: str,
+    model_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """解除素材与某位模特的关联（不删除模特本身）。"""
+    if not await model_service.unlink(db, inspiration_id, model_id):
+        raise HTTPException(status_code=404, detail="未找到该模特关联")
     return {"removed": 1}
 
 

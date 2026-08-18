@@ -1,4 +1,11 @@
-"""人物（模特/博主）模型：穿搭素材的主体人物实体。"""
+"""人物模型：穿搭博主（Blogger）与职业模特（Model）两张独立表。
+
+原 ``persons`` 单表以 ``person_type`` 区分博主/模特，因两者后续业务逻辑
+分叉（博主：平台主页/小红书号/按博主采集；模特：写真照片组），现拆为
+``bloggers`` 与 ``models`` 两张独立表，素材关联同样拆为
+``inspiration_bloggers`` / ``inspiration_models`` 两张关联表；
+模特写真组独立为 ``model_photo_sets`` / ``model_photos``。
+"""
 
 from datetime import datetime
 
@@ -18,20 +25,10 @@ from app.database import Base
 from app.models.inspiration import utcnow
 
 
-class Person(Base):
-    """人物：穿搭图片中的主体人物（职业模特 / 小红书博主等）。
+class _PersonBaseFields:
+    """博主/模特共用的字段定义（mixin 仅提供字段，不参与建表）。"""
 
-    与标签不同，人物是一级实体——拥有平台主页、头像、平台用户 ID 等元数据，
-    用于支撑「按博主采集」「博主风格画像」「AI 识别人物」等增值能力。
-    """
-
-    __tablename__ = "persons"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), index=True)  # 人物名 / 博主昵称
-    person_type: Mapped[str] = mapped_column(
-        String(16), default="blogger", index=True
-    )  # 内容类型：model（职业模特写真）| blogger（博主穿搭），用于 UI 区分呈现
     platform: Mapped[str] = mapped_column(
         String(32), default="other", index=True
     )  # 平台标识：xiaohongshu | douyin | other
@@ -49,83 +46,146 @@ class Person(Base):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)  # 简介
     source: Mapped[str] = mapped_column(
         String(16), default="manual", index=True
-    )  # manual | ai_generated（对标 tags.source）
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utcnow, index=True
-    )
+    )  # manual | ai_generated
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow
     )
 
+
+class Blogger(_PersonBaseFields, Base):
+    """穿搭博主：穿搭图片中的主体人物，拥有平台主页/小红书号等元数据。
+
+    与标签不同，博主是一级实体——支撑「按博主采集」「博主风格画像」
+    「AI 识别人物」等增值能力。
+    """
+
+    __tablename__ = "bloggers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
     # 关联关系
-    inspirations: Mapped[list["InspirationPerson"]] = relationship(
-        "InspirationPerson",
-        back_populates="person",
-        cascade="all, delete-orphan",
-    )
-    photo_sets: Mapped[list["PersonPhotoSet"]] = relationship(
-        "PersonPhotoSet",
-        back_populates="person",
+    inspirations: Mapped[list["InspirationBlogger"]] = relationship(
+        "InspirationBlogger",
+        back_populates="blogger",
         cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
-        return f"<Person(name={self.name}, platform={self.platform})>"
+        return f"<Blogger(name={self.name}, platform={self.platform})>"
 
 
-class InspirationPerson(Base):
-    """人物-素材多对多关联表：带 AI 置信度分数。
+class Model(_PersonBaseFields, Base):
+    """职业模特：写真主体人物，拥有独立的写真照片组（与穿搭素材分离）。"""
 
-    对标 inspiration_tags：一条素材可关联多个人物（转发/撞图场景），
-    confidence 记录 AI 识别出「图片里是谁」时的置信度。
+    __tablename__ = "models"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # 关联关系
+    inspirations: Mapped[list["InspirationModel"]] = relationship(
+        "InspirationModel",
+        back_populates="model",
+        cascade="all, delete-orphan",
+    )
+    photo_sets: Mapped[list["ModelPhotoSet"]] = relationship(
+        "ModelPhotoSet",
+        back_populates="model",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Model(name={self.name}, platform={self.platform})>"
+
+
+class InspirationBlogger(Base):
+    """素材-博主多对多关联表：带 AI 置信度分数。
+
+    对标 inspiration_tags：一条素材可关联多位博主（转发/撞图场景），
+    confidence 记录 AI 识别出「图里是谁」时的置信度。
     """
 
-    __tablename__ = "inspiration_persons"
+    __tablename__ = "inspiration_bloggers"
 
     inspiration_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("inspirations.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    person_id: Mapped[int] = mapped_column(
+    blogger_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("persons.id", ondelete="CASCADE"),
+        ForeignKey("bloggers.id", ondelete="CASCADE"),
         primary_key=True,
     )
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
 
     # 关联关系
     inspiration: Mapped["Inspiration"] = relationship(
-        "Inspiration", back_populates="persons"
+        "Inspiration", back_populates="bloggers"
     )
-    person: Mapped["Person"] = relationship("Person", back_populates="inspirations")
+    blogger: Mapped["Blogger"] = relationship("Blogger", back_populates="inspirations")
 
     __table_args__ = (
-        UniqueConstraint("inspiration_id", "person_id", name="uq_inspiration_person"),
-        # 按人物筛选（WHERE person_id = X）需要 person_id 单列索引；
-        # 复合主键索引 (inspiration_id, person_id) 无法高效服务此类查询
-        Index("ix_inspiration_persons_person_id", "person_id"),
+        UniqueConstraint("inspiration_id", "blogger_id", name="uq_inspiration_blogger"),
+        # 按博主筛选（WHERE blogger_id = X）需要单列索引；
+        # 复合主键索引 (inspiration_id, blogger_id) 无法高效服务此类查询
+        Index("ix_inspiration_bloggers_blogger_id", "blogger_id"),
     )
 
     def __repr__(self) -> str:
         return (
-            f"<InspirationPerson(inspiration_id={self.inspiration_id}, "
-            f"person_id={self.person_id})>"
+            f"<InspirationBlogger(inspiration_id={self.inspiration_id}, "
+            f"blogger_id={self.blogger_id})>"
         )
 
 
-class PersonPhotoSet(Base):
-    """人物照片组：一组属于某个人物的照片（对应一次导入的文件夹）。
+class InspirationModel(Base):
+    """素材-模特多对多关联表：带 AI 置信度分数。"""
 
-    与穿搭素材（Inspiration）分离：模特照片是人物主体的写真资料，
-    不进入素材库、不参与 AI 打标与检索，仅按「人物 → 照片组 → 照片」浏览。
+    __tablename__ = "inspiration_models"
+
+    inspiration_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("inspirations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    model_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("models.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+
+    # 关联关系
+    inspiration: Mapped["Inspiration"] = relationship(
+        "Inspiration", back_populates="models"
+    )
+    model: Mapped["Model"] = relationship("Model", back_populates="inspirations")
+
+    __table_args__ = (
+        UniqueConstraint("inspiration_id", "model_id", name="uq_inspiration_model"),
+        Index("ix_inspiration_models_model_id", "model_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<InspirationModel(inspiration_id={self.inspiration_id}, "
+            f"model_id={self.model_id})>"
+        )
+
+
+class ModelPhotoSet(Base):
+    """模特照片组：一组属于某位模特的写真照片（对应一次导入的文件夹）。
+
+    与穿搭素材（Inspiration）分离：模特写真不进入素材库、不参与 AI 打标与
+    检索，仅按「模特 → 照片组 → 照片」浏览。
     """
 
-    __tablename__ = "person_photo_sets"
+    __tablename__ = "model_photo_sets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    person_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("persons.id", ondelete="CASCADE"), index=True
+    model_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("models.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(128))  # 组名（默认取文件夹名）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -134,26 +194,26 @@ class PersonPhotoSet(Base):
     )
 
     # 关联关系
-    person: Mapped["Person"] = relationship("Person", back_populates="photo_sets")
-    photos: Mapped[list["PersonPhoto"]] = relationship(
-        "PersonPhoto",
+    model: Mapped["Model"] = relationship("Model", back_populates="photo_sets")
+    photos: Mapped[list["ModelPhoto"]] = relationship(
+        "ModelPhoto",
         back_populates="photo_set",
         cascade="all, delete-orphan",
-        order_by="PersonPhoto.sort_order",
+        order_by="ModelPhoto.sort_order",
     )
 
     def __repr__(self) -> str:
-        return f"<PersonPhotoSet(id={self.id}, name={self.name})>"
+        return f"<ModelPhotoSet(id={self.id}, name={self.name})>"
 
 
-class PersonPhoto(Base):
-    """人物照片：照片组内的一张照片。"""
+class ModelPhoto(Base):
+    """模特照片：照片组内的一张写真照片。"""
 
-    __tablename__ = "person_photos"
+    __tablename__ = "model_photos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     set_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("person_photo_sets.id", ondelete="CASCADE"), index=True
+        Integer, ForeignKey("model_photo_sets.id", ondelete="CASCADE"), index=True
     )
     file_path: Mapped[str] = mapped_column(Text)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -164,9 +224,9 @@ class PersonPhoto(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # 关联关系
-    photo_set: Mapped["PersonPhotoSet"] = relationship(
-        "PersonPhotoSet", back_populates="photos"
+    photo_set: Mapped["ModelPhotoSet"] = relationship(
+        "ModelPhotoSet", back_populates="photos"
     )
 
     def __repr__(self) -> str:
-        return f"<PersonPhoto(id={self.id}, set_id={self.set_id})>"
+        return f"<ModelPhoto(id={self.id}, set_id={self.set_id})>"
