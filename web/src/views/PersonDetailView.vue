@@ -133,7 +133,8 @@ function goAddPhotos() {
 // ── 人脸特征注册（仅穿搭博主：上传 1~5 张正脸照片，提取特征平均池化入库；
 //    素材人脸自动匹配博主特征库，职业模特无此人脸能力）──
 const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | null>(null)
-const faceFiles = ref<File[]>([])
+/** 已选正脸照片（UploadFileInfo 结构：支持多选/缩略图预览/单张删除） */
+const faceFileList = ref<UploadFileInfo[]>([])
 const faceUploading = ref(false)
 
 async function loadFaceStatus() {
@@ -147,21 +148,24 @@ async function loadFaceStatus() {
 
 /** 注册 / 重新注册博主人脸（重复注册覆盖旧特征） */
 async function handleRegisterFace() {
-  if (faceFiles.value.length === 0) {
+  const files = faceFileList.value
+    .map((f) => f.file)
+    .filter((f): f is File => !!f)
+  if (files.length === 0) {
     message.warning('请先选择 1~5 张博主正脸照片')
     return
   }
-  if (faceFiles.value.length > 5) {
+  if (files.length > 5) {
     message.warning('最多上传 5 张照片')
     return
   }
   faceUploading.value = true
   try {
-    const r = await bloggersApi.registerFace(personId.value, faceFiles.value)
+    const r = await bloggersApi.registerFace(personId.value, files)
     message.success(
       `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
     )
-    faceFiles.value = []
+    faceFileList.value = []
     await loadFaceStatus()
   } catch (e) {
     message.error(getApiErrorMessage(e, '人脸注册失败'))
@@ -370,14 +374,12 @@ watch(personId, () => {
           </p>
           <div class="face-upload-row">
             <n-upload
-              :file-list="faceFiles"
+              v-model:file-list="faceFileList"
               multiple
               :max="5"
               accept="image/*"
               list-type="image"
-              @update:file-list="
-                (list: UploadFileInfo[]) => (faceFiles = list.map((f) => f.file as File))
-              "
+              show-remove-button
             >
               <n-button size="small">选择照片（1~5 张）</n-button>
             </n-upload>
@@ -385,7 +387,7 @@ watch(personId, () => {
               size="small"
               type="primary"
               :loading="faceUploading"
-              :disabled="faceFiles.length === 0"
+              :disabled="faceFileList.length === 0"
               @click="handleRegisterFace"
             >
               {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
