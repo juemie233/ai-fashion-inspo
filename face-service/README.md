@@ -14,7 +14,8 @@
 ## 环境要求
 
 - Python 3.10（insightface 官方支持 3.6~3.10；已安装于 `%LOCALAPPDATA%\Programs\Python\Python310`）
-- NVIDIA GPU + CUDA（onnxruntime-gpu；无 GPU 时自动回退 CPU）
+- NVIDIA GPU + CUDA 12.8 + cuDNN 9.x（已装于 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8`；
+  无 GPU 时自动回退 CPU）
 
 ## 快速开始
 

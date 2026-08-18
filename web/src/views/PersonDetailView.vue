@@ -8,7 +8,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, type UploadFileInfo } from 'naive-ui'
 import {
   bloggersApi,
   modelsApi,
@@ -130,6 +130,45 @@ function goAddPhotos() {
   router.push({ path: '/model-photos', query: { person_id: personId.value } })
 }
 
+// ── 人脸特征注册（仅职业模特：上传 1~5 张正脸照片，提取特征平均池化入库）──
+const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | null>(null)
+const faceFiles = ref<File[]>([])
+const faceUploading = ref(false)
+
+async function loadFaceStatus() {
+  if (kind.value !== 'model') return
+  try {
+    faceStatus.value = await modelsApi.fetchFaceStatus(personId.value)
+  } catch {
+    // 人脸状态加载失败不阻塞详情页
+  }
+}
+
+/** 注册 / 重新注册模特人脸（重复注册覆盖旧特征） */
+async function handleRegisterFace() {
+  if (faceFiles.value.length === 0) {
+    message.warning('请先选择 1~5 张模特正脸照片')
+    return
+  }
+  if (faceFiles.value.length > 5) {
+    message.warning('最多上传 5 张照片')
+    return
+  }
+  faceUploading.value = true
+  try {
+    const r = await modelsApi.registerFace(personId.value, faceFiles.value)
+    message.success(
+      `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
+    )
+    faceFiles.value = []
+    await loadFaceStatus()
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '人脸注册失败'))
+  } finally {
+    faceUploading.value = false
+  }
+}
+
 async function loadDetail() {
   // 参数兜底：非法 id（NaN/非正整数）直接回列表，避免 404 误报
   const id = personId.value
@@ -149,6 +188,7 @@ async function loadDetail() {
   }
   await loadInspirations()
   await loadPhotoSets()
+  await loadFaceStatus()
 }
 
 async function loadInspirations() {
@@ -312,6 +352,44 @@ watch(personId, () => {
             style="margin: 24px 0"
           />
           <n-spin v-if="photoSetsLoading" :show="true" style="margin: 24px 0" />
+        </n-card>
+
+        <!-- 人脸特征注册（仅职业模特：素材人脸自动匹配依赖此特征库） -->
+        <n-card v-if="kind === 'model'" size="small" class="face-register-card">
+          <div class="items-header">
+            <h3 style="margin: 0">人脸特征注册</h3>
+            <n-tag v-if="faceStatus?.registered" type="success" size="small" :bordered="false">
+              已注册{{ faceStatus?.updated_at ? `（${faceStatus.updated_at.slice(0, 10)}）` : '' }}
+            </n-tag>
+            <n-tag v-else type="warning" size="small" :bordered="false">未注册</n-tag>
+          </div>
+          <p class="face-hint">
+            上传 1~5 张该模特的清晰正脸照片，系统提取人脸特征并平均池化入库；
+            素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
+          </p>
+          <div class="face-upload-row">
+            <n-upload
+              :file-list="faceFiles"
+              multiple
+              :max="5"
+              accept="image/*"
+              list-type="image"
+              @update:file-list="
+                (list: UploadFileInfo[]) => (faceFiles = list.map((f) => f.file as File))
+              "
+            >
+              <n-button size="small">选择照片（1~5 张）</n-button>
+            </n-upload>
+            <n-button
+              size="small"
+              type="primary"
+              :loading="faceUploading"
+              :disabled="faceFiles.length === 0"
+              @click="handleRegisterFace"
+            >
+              {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
+            </n-button>
+          </div>
         </n-card>
 
         <!-- 风格画像 -->
@@ -617,6 +695,21 @@ watch(personId, () => {
 /* 照片组 */
 .photo-sets-card {
   margin-bottom: 12px;
+}
+
+/* 人脸特征注册卡片 */
+.face-register-card {
+  margin-bottom: 12px;
+}
+.face-hint {
+  margin: 8px 0;
+  font-size: 12px;
+  color: #999;
+}
+.face-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .photo-sets-grid {

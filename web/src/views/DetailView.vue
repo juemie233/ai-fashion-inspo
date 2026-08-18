@@ -26,6 +26,7 @@ import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
+import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { shortenText } from '@/utils/format'
 import { CATEGORY_LABELS } from '@/api/tags'
@@ -554,6 +555,9 @@ async function removeTag(t: InspirationTagOut) {
               :inspiration-id="detail.id"
               @change="updateModels"
             />
+
+            <!-- 人脸识别（模特特征库匹配） -->
+            <FaceDetectionSection :inspiration-id="detail.id" />
 
             <!-- 穿搭大标签 -->
             <OutfitTagSection

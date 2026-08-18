@@ -93,6 +93,16 @@ class Model(_PersonBaseFields, Base):
         back_populates="model",
         cascade="all, delete-orphan",
     )
+    face_embedding: Mapped["ModelFaceEmbedding | None"] = relationship(
+        "ModelFaceEmbedding",
+        back_populates="model",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+        "InspirationFaceDetection",
+        back_populates="matched_model",
+    )
 
     def __repr__(self) -> str:
         return f"<Model(name={self.name}, platform={self.platform})>"

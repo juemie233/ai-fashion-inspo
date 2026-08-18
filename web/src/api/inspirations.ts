@@ -332,6 +332,54 @@ export async function analyzeInspiration(id: string) {
   return data
 }
 
+// ── 人脸检测与模特匹配 ──
+
+/** 素材人脸检测结果（含匹配模特） */
+export interface FaceDetectionOut {
+  id: number
+  face_index: number
+  matched_model_id: number | null
+  matched_model_name?: string | null
+  confidence: number | null
+  created_at?: string | null
+}
+
+export interface FaceDetectionsOut {
+  inspiration_id: string
+  face_count: number
+  detections: FaceDetectionOut[]
+}
+
+/** 触发素材人脸检测与模特特征库匹配（重新检测覆盖旧结果） */
+export async function faceDetectInspiration(id: string): Promise<FaceDetectionsOut> {
+  const { data } = await apiClient.post<FaceDetectionsOut>(`/inspirations/${id}/face-detect`)
+  return data
+}
+
+/** 查询素材人脸检测结果 */
+export async function fetchFaceDetections(id: string): Promise<FaceDetectionsOut> {
+  const { data } = await apiClient.get<FaceDetectionsOut>(`/inspirations/${id}/face-detections`)
+  return data
+}
+
+/** 手动指定/解除人脸检测的模特关联（model_id 传 null 即解除） */
+export async function updateFaceDetection(
+  id: string,
+  detectionId: number,
+  modelId: number | null,
+): Promise<{ updated: boolean; detection_id: number; matched_model_id: number | null }> {
+  const { data } = await apiClient.put(`/inspirations/${id}/face-detections/${detectionId}`, {
+    model_id: modelId,
+  })
+  return data
+}
+
+/** 删除单条人脸检测记录 */
+export async function deleteFaceDetection(id: string, detectionId: number) {
+  const { data } = await apiClient.delete(`/inspirations/${id}/face-detections/${detectionId}`)
+  return data
+}
+
 /** 批量质量审核（审核所有待审核素材） */
 export async function batchQualityCheck(limit?: number) {
   const { data } = await apiClient.post<{ message: string; count: number }>(

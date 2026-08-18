@@ -133,6 +133,12 @@ class Inspiration(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+        "InspirationFaceDetection",
+        back_populates="inspiration",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     def __repr__(self) -> str:
         return f"<Inspiration(id={self.id}, source={self.source_type})>"

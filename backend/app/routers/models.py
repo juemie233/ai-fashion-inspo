@@ -38,8 +38,36 @@ from app.services.person_service import (
     PersonNotFoundError,
     model_service,
 )
+from app.services.model_face import (
+    get_model_face_status,
+    register_model_face,
+)
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+
+@router.post("/{model_id}/face")
+async def register_model_face_api(
+    model_id: int,
+    files: list[UploadFile] = File(..., description="模特正脸照片（1~5 张）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """注册/重新注册模特人脸：提取特征并平均池化入库（同模特重复注册即覆盖）。"""
+    image_bytes_list = []
+    for f in files:
+        data = await f.read()
+        if data:
+            image_bytes_list.append(data)
+    return await register_model_face(db, model_id, image_bytes_list)
+
+
+@router.get("/{model_id}/face")
+async def model_face_status_api(
+    model_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查询模特人脸注册状态。"""
+    return await get_model_face_status(db, model_id)
 
 
 @router.get("", response_model=ModelListOut)

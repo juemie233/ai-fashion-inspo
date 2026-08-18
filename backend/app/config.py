@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     # 留空表示未部署子服务，人脸相关功能自动降级/不可用
     face_service_url: str = "http://127.0.0.1:18889"
     face_service_timeout: float = 30.0  # 子服务调用超时（秒）
+    face_match_threshold: float = 0.5  # 模特人脸匹配余弦相似度阈值（建议 0.45~0.55，按样本调整）
 
     # 垃圾桶（软删除）
     # 0 表示禁用自动回收：垃圾桶素材永不自动清理，仅可手动恢复或彻底删除。

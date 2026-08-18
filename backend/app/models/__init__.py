@@ -15,6 +15,7 @@ from app.models.person import (
     ModelPhoto,
     ModelPhotoSet,
 )
+from app.models.face import InspirationFaceDetection, ModelFaceEmbedding
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.models.audit import AuditLog
@@ -34,6 +35,8 @@ __all__ = [
     "InspirationModel",
     "ModelPhoto",
     "ModelPhotoSet",
+    "ModelFaceEmbedding",
+    "InspirationFaceDetection",
     "ScraperTask",
     "ScraperSchedule",
     "TaskQueue",
