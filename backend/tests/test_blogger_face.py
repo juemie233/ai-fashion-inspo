@@ -102,6 +102,46 @@ def test_register_blogger_face_too_many_photos(client, create_blogger, monkeypat
     assert r.status_code == 422
 
 
+def test_register_blogger_face_subservice_404_skipped(
+    client, create_blogger, monkeypatch
+):
+    """子服务 404（照片未检测到人脸）：视为业务结果跳过，全部 404 → 400 友好提示。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    blogger = create_blogger(name="404博")
+
+    async def fake_embed_404(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceHttpError(404, "未检测到人脸")
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed_404)
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("a.jpg", b"photo", "image/jpeg"))],
+    )
+    assert r.status_code == 400
+    assert "未检测到清晰人脸" in r.json()["detail"]
+
+
+def test_register_blogger_face_subservice_500_unavailable(
+    client, create_blogger, monkeypatch
+):
+    """子服务真实故障（500）→ 仍按服务不可用 503 提示，不吞掉故障。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    blogger = create_blogger(name="500博")
+
+    async def fake_embed_500(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceHttpError(500, "Internal Server Error")
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed_500)
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("a.jpg", b"photo", "image/jpeg"))],
+    )
+    assert r.status_code == 503
+    assert "人脸识别子服务" in r.json()["detail"]
+
+
 # ═══════════════════════════════════════════════════════════════
 #  素材人脸检测与匹配
 # ═══════════════════════════════════════════════════════════════
@@ -188,3 +228,19 @@ def test_face_detect_missing_inspiration(client):
     """素材不存在 → 404。"""
     r = client.post("/api/inspirations/no-such-id/face-detect")
     assert r.status_code == 404
+
+
+def test_detect_inspiration_faces_subservice_404_empty(client, upload, monkeypatch):
+    """子服务 404（素材中无人脸）：清空旧记录并返回空结果，而非报错。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    async def fake_embed_404(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceHttpError(404, "未检测到人脸")
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed_404)
+    insp_id = upload().json()["id"]
+    r = client.post(f"/api/inspirations/{insp_id}/face-detect")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["face_count"] == 0
+    assert body["detections"] == []

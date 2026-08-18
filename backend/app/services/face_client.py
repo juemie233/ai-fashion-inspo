@@ -21,6 +21,18 @@ class FaceServiceUnavailableError(RuntimeError):
     """人脸识别子服务不可用（未配置或请求失败）。"""
 
 
+class FaceServiceHttpError(FaceServiceUnavailableError):
+    """人脸识别子服务返回了非 2xx 响应（如 embed 未检测到人脸返回 404）。
+
+    携带子服务状态码与业务消息，供调用方区分「业务结果」与「服务故障」。
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(f"人脸识别子服务错误 {status_code}: {detail}")
+        self.status_code = status_code
+        self.detail = detail
+
+
 class FaceRecognitionClient:
     """人脸识别子服务的异步 HTTP 客户端。"""
 
@@ -43,8 +55,15 @@ class FaceRecognitionClient:
                 r.raise_for_status()
                 return r.json()
         except httpx.HTTPStatusError as e:
-            logger.warning("人脸识别子服务返回错误 %s: %s", e.response.status_code, e.response.text)
-            raise FaceServiceUnavailableError(f"人脸识别子服务错误 {e.response.status_code}") from e
+            logger.warning(
+                "人脸识别子服务返回错误 %s: %s", e.response.status_code, e.response.text
+            )
+            # 解析子服务的业务消息（FastAPI 错误响应 {"detail": "..."}）
+            try:
+                detail = e.response.json().get("detail", e.response.text)
+            except ValueError:
+                detail = e.response.text
+            raise FaceServiceHttpError(e.response.status_code, detail) from e
         except httpx.HTTPError as e:
             logger.warning("人脸识别子服务请求失败: %s", e)
             raise FaceServiceUnavailableError(f"人脸识别子服务不可用: {e}") from e

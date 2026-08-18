@@ -21,7 +21,11 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
 from app.models.person import Blogger
-from app.services.face_client import FaceServiceUnavailableError, face_client
+from app.services.face_client import (
+    FaceServiceHttpError,
+    FaceServiceUnavailableError,
+    face_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,12 @@ async def register_blogger_face(
     for data in image_bytes_list:
         try:
             result = await face_client.embed(data)
+        except FaceServiceHttpError as e:
+            if e.status_code == 404:
+                # 子服务 404 = 该照片未检测到人脸（业务结果）：跳过该照片，
+                # 与返回空结果语义一致；全部照片都无人脸时由下方统一提示
+                continue
+            raise HTTPException(status_code=503, detail=str(e)) from e
         except FaceServiceUnavailableError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         faces = result.get("faces", [])
@@ -158,6 +168,17 @@ async def detect_inspiration_faces(
 
     try:
         result = await face_client.embed(image_bytes)
+    except FaceServiceHttpError as e:
+        if e.status_code == 404:
+            # 素材图中未检测到人脸（业务结果，非故障）：清空旧记录并返回空结果
+            await db.execute(
+                delete(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == inspiration_id
+                )
+            )
+            await db.commit()
+            return {"inspiration_id": inspiration_id, "face_count": 0, "detections": []}
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except FaceServiceUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     faces = result.get("faces", [])
