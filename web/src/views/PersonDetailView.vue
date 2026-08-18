@@ -5,6 +5,7 @@
  * 素材区复用 MasonryGrid / ImageLightbox，不重写照片浏览。
  */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
@@ -119,8 +120,8 @@ async function handleDeletePhotoSet(set: ModelPhotoSet) {
     await deleteModelPhotoSet(personId.value, set.id)
     message.success(`已删除照片组「${set.name}」`)
     await loadPhotoSets()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 
@@ -177,8 +178,8 @@ async function handleDelete() {
     await api.value.remove(detail.value.id)
     message.success(`已删除人物「${detail.value.name}」`)
     router.push('/persons')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 

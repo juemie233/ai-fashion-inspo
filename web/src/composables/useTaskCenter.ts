@@ -1,5 +1,6 @@
 /** 任务中心域：聚合任务队列与采集任务，统一筛选、分页、轮询与操作。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -219,8 +220,8 @@ export function useTaskCenter() {
       await apiClient.post(url)
       message.success('已取消')
       loadTasks()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '取消失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
 
@@ -230,8 +231,8 @@ export function useTaskCenter() {
       await apiClient.delete(`/scraper/tasks/${t.id}`)
       message.success('已删除')
       loadTasks()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '删除失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -241,8 +242,9 @@ export function useTaskCenter() {
       const { data } = await apiClient.post('/scraper/tasks/retry-failed')
       message.success(data.message || '已重试')
       loadTasks()
-    } catch (e: any) {
-      message.info(e.response?.status === 404 ? '没有失败任务' : e.response?.data?.detail || '重试失败')
+    } catch (e) {
+      const is404 = (e as { response?: { status?: number } })?.response?.status === 404
+      message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
     } finally {
       retrying.value = false
     }

@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import type { ChromeStatus } from '@/types/scraper'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 /** 状态 → 中文徽标文案 */
 export const CHROME_STATE_LABELS: Record<string, string> = {
@@ -45,8 +46,8 @@ export function useChromeManager() {
       if (r.data.state === 'running') message.success('Chrome 已启动')
       else if (r.data.state === 'port_conflict') message.error(r.data.detail || '端口冲突，请关闭占用进程')
       else message.warning(r.data.detail || '启动失败')
-    } catch (e: any) {
-      message.error('启动 Chrome 失败: ' + (e.response?.data?.detail || e.message))
+    } catch (e) {
+      message.error('启动 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
     } finally {
       chromeBusy.value = false
     }
@@ -58,8 +59,8 @@ export function useChromeManager() {
       const r = await apiClient.post('/scraper/chrome/stop')
       chromeStatus.value = r.data
       message.success('Chrome 已停止')
-    } catch (e: any) {
-      message.error('停止 Chrome 失败: ' + (e.response?.data?.detail || e.message))
+    } catch (e) {
+      message.error('停止 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
     } finally {
       chromeBusy.value = false
     }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 上传页：拖拽/粘贴/URL/文件夹，预览编辑，元数据，队列管理，去重检测。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
@@ -222,7 +223,7 @@ async function startUpload() {
 
       prependRecent(result.id, result.thumbnail_path ?? null, result.file_path, result.media_type)
       _lastBytes += item.file.size
-    } catch (e: any) {
+    } catch (e) {
       if (_stopRequested) {
         // 用户主动停止：当前项回滚为待上传，剩余队列保持原样
         item.status = 'pending'
@@ -230,7 +231,7 @@ async function startUpload() {
         break
       }
       item.status = 'failed'
-      item.errorMsg = e.response?.data?.detail || '上传失败'
+      item.errorMsg = getApiErrorMessage(e, '上传失败')
     }
   }
 
@@ -285,8 +286,8 @@ async function importFromUrl() {
     if (autoAnalyze.value) {
       apiClient.post(`/ai/analyze/${data.id}`).catch(() => {})
     }
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || 'URL 导入失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, 'URL 导入失败'))
   } finally {
     urlImporting.value = false
   }

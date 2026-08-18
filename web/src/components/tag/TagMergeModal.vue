@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 单个标签合并弹窗：选择目标标签并合并。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed } from 'vue'
 import { useMessage } from 'naive-ui'
 import { mergeTags, CATEGORY_LABELS, type TagCategoryGroup } from '@/api/tags'
@@ -38,7 +39,7 @@ async function handleMerge() {
     show.value = false
     mergeTarget.value = null
     emit('merged')
-  } catch (e: any) { message.error(e.response?.data?.detail || '合并失败') }
+  } catch (e) { message.error(getApiErrorMessage(e, '合并失败')) }
 }
 </script>
 

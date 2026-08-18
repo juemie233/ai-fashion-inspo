@@ -45,7 +45,7 @@ async function handleBatchMerge() {
     message.success(`已将 ${sourceIds.length} 个标签合并`)
     show.value = false
     emit('done')
-  } catch (e: any) { message.error('批量合并失败') }
+  } catch (e) { message.error('批量合并失败') }
 }
 </script>
 

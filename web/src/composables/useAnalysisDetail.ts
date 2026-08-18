@@ -1,5 +1,6 @@
 /** AI 分析详情 composable：详情弹窗数据加载。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -24,9 +25,9 @@ export function useAnalysisDetail() {
       const { data } = await apiClient.get<AnalysisDetail>(`/ai/history/${logId}`)
       if (seq !== detailSeq) return
       currentDetail.value = data
-    } catch (e: any) {
+    } catch (e) {
       if (seq !== detailSeq) return
-      message.error(e.response?.data?.detail || '获取详情失败')
+      message.error(getApiErrorMessage(e, '获取详情失败'))
       detailVisible.value = false
     } finally {
       if (seq === detailSeq) detailLoading.value = false

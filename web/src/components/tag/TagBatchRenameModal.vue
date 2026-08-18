@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 批量重命名弹窗：在选中的标签名中查找并替换。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -26,7 +27,7 @@ async function handleBatchRename() {
     renameFind.value = ''
     renameReplace.value = ''
     emit('done')
-  } catch (e: any) { message.error(e.response?.data?.detail || '操作失败') }
+  } catch (e) { message.error(getApiErrorMessage(e, '操作失败')) }
 }
 </script>
 

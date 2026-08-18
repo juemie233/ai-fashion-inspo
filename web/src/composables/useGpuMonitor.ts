@@ -3,6 +3,7 @@
 import { ref, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 /** GPU 显存统计（与后端 /ai/gpu-stats 对齐） */
 export interface GpuStats {
@@ -59,8 +60,8 @@ export function useGpuMonitor(pollIntervalMs = 5000, historySize = 60) {
       message.success(`正在卸载 ${name}...`)
       setTimeout(loadGpuStats, 2000)
       return true
-    } catch (e: any) {
-      message.error(e.message || '卸载模型失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '卸载模型失败'))
       loadGpuStats()
       return false
     }

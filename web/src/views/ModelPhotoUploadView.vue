@@ -10,6 +10,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
 import type { Person } from '@shared/types/person'
+import { getApiErrorMessage } from '@/utils/apiError'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 
 const route = useRoute()
@@ -146,13 +147,13 @@ async function startUpload() {
         })
         item.status = 'done'
         item.progress = 100
-      } catch (err: any) {
-        if (err?.response?.status === 409) {
+      } catch (err) {
+        if ((err as { response?: { status?: number } })?.response?.status === 409) {
           item.status = 'duplicate'
           item.errorMsg = '内容重复已跳过'
         } else {
           item.status = 'failed'
-          item.errorMsg = err?.response?.data?.detail || '上传失败'
+          item.errorMsg = getApiErrorMessage(err, '上传失败')
         }
       }
     }
@@ -162,8 +163,8 @@ async function startUpload() {
     if (failed > 0) parts.push(`${failed} 失败`)
     if (dups > 0) parts.push(`${dups} 重复跳过`)
     message.success(`照片组「${set.name}」导入完成：${parts.join('，')}`)
-  } catch (err: any) {
-    message.error(err?.response?.data?.detail || '创建照片组失败')
+  } catch (err) {
+    message.error(getApiErrorMessage(err, '创建照片组失败'))
   } finally {
     uploading.value = false
   }

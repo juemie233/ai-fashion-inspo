@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -70,8 +71,8 @@ async function handleDelete(person: Person) {
     } else {
       await store.load(true)
     }
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 

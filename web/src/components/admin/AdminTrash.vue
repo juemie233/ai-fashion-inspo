@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 垃圾桶管理：查看/筛选软删除素材，支持恢复、彻底删除与清空（含清理过期）。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import {
@@ -97,8 +98,8 @@ async function restore(id: string) {
     await restoreInspiration(id)
     message.success('已恢复')
     await load()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '恢复失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '恢复失败'))
   } finally {
     restoring.value = new Set(restoring.value)
     restoring.value.delete(id)
@@ -112,8 +113,8 @@ async function permanentDelete(id: string) {
     await deleteInspiration(id)
     message.success('已彻底删除')
     await load()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除失败'))
   } finally {
     deleting.value = new Set(deleting.value)
     deleting.value.delete(id)

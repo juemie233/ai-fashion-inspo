@@ -1,6 +1,7 @@
 /** 穿搭大标签：已有标签加载、手动添加、AI 建议与一键入库。 */
 
 import { ref } from 'vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import type { Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import {
@@ -105,8 +106,8 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
       if (aiSuggestions.value.length === 0) {
         message.info('AI 认为该穿搭不够有特色，未给出大标签建议')
       }
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || 'AI 建议失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, 'AI 建议失败'))
     } finally {
       aiSuggesting.value = false
     }

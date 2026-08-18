@@ -1,5 +1,6 @@
 /** 采集源配置域：Cookie 导入/删除与墓碑表展开状态。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -22,8 +23,8 @@ export function useScraperConfig() {
       showingCookieImport.value = false
       cookieJsonInput.value = ''
       return true
-    } catch (e: any) {
-      message.error('导入失败: ' + (e.response?.data?.detail || 'JSON 格式错误'))
+    } catch (e) {
+      message.error('导入失败: ' + (getApiErrorMessage(e, 'JSON 格式错误')))
       return false
     }
   }
@@ -35,8 +36,8 @@ export function useScraperConfig() {
       await apiClient.delete(`/scraper/cookie/${platform}`)
       message.success('Cookie 已删除')
       return true
-    } catch (e: any) {
-      message.error('删除失败: ' + (e.response?.data?.detail || ''))
+    } catch (e) {
+      message.error('删除失败: ' + (getApiErrorMessage(e, '')))
       return false
     } finally { deletingCookie.value = null }
   }

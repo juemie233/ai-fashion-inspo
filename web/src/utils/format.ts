@@ -85,3 +85,13 @@ export function shortenText(text: string, maxLen = 16): string {
   if (!t || t.length <= maxLen) return t
   return `${t.slice(0, maxLen)}…`
 }
+
+/** 安全解析 JSON：解析失败回退默认值（localStorage 偏好等容错读取统一入口）。 */
+export function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}

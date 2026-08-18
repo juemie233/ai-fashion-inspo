@@ -5,6 +5,7 @@
  * 本组件按 kind 对接对应 API。关联一律使用 ID（不按名称匹配），规避同名多人歧义。
  */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { onBeforeUnmount, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { bloggersApi, modelsApi } from '@/api/persons'
@@ -82,8 +83,8 @@ async function addPerson(person: PersonBrief) {
     message.success(`已关联「${person.name}」`)
     keyword.value = ''
     suggestions.value = []
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '关联失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '关联失败'))
   }
 }
 
@@ -93,8 +94,8 @@ async function removePerson(person: PersonBrief) {
     await api.unlink(props.inspirationId, person.id)
     emit('change', props.persons.filter((p) => p.id !== person.id))
     message.success(`已解除「${person.name}」`)
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '解除关联失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '解除关联失败'))
   }
 }
 </script>

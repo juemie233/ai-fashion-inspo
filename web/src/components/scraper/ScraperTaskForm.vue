@@ -6,6 +6,7 @@ import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
 import { copyToClipboard } from '@/utils/clipboard'
 import { extractHistoryKeywords } from '@/utils/scraperKeywords'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useChromeManager, CHROME_STATE_LABELS, CHROME_STATE_TAG } from '@/composables/useChromeManager'
 
 const props = defineProps<{
@@ -142,12 +143,17 @@ async function createTask() {
     await apiClient.post('/scraper/tasks', config)
     emit('created')
     message.success('采集任务已创建')
-  } catch (e: any) {
-    const detail = e.response?.data?.detail
-    if (typeof detail === 'object' && detail?.command) {
-      message.error(detail.error || '创建失败')
-      setTimeout(() => copyText(detail.command), 500)
-    } else { message.error(detail || '创建失败') }
+  } catch (e) {
+    // 特殊业务：后端 detail 可能是「带启动命令」的对象（Chrome 未启动时引导复制命令）
+    const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data
+      ?.detail
+    if (typeof detail === 'object' && detail && (detail as { command?: string }).command) {
+      const d = detail as { error?: string; command: string }
+      message.error(d.error || '创建失败')
+      setTimeout(() => copyText(d.command), 500)
+    } else {
+      message.error(getApiErrorMessage(e, '创建失败'))
+    }
   }
 }
 </script>

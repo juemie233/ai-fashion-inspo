@@ -139,10 +139,16 @@ export async function batchLinkBloggers(
   inspirationIds: string[],
   personIds: number[],
 ): Promise<BatchLinkBloggersResult> {
-  const { data } = await apiClient.post<BatchLinkBloggersResult>('/inspirations/batch-bloggers', {
-    inspiration_ids: inspirationIds,
-    person_ids: personIds,
-  })
+  const { data } = await apiClient.post<BatchLinkBloggersResult>(
+    '/inspirations/batch-bloggers',
+    {
+      inspiration_ids: inspirationIds,
+      person_ids: personIds,
+    },
+    // 批量上限 200 素材 × 50 博主，服务端逐素材写入可能较慢；
+    // 放宽超时避免「服务端已成功、前端却误报失败」
+    { timeout: 120000 },
+  )
   return data
 }
 

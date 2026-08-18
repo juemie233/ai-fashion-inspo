@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 疑似 AI 素材管理：勾选素材后移入垃圾桶（自动移动·AI生成），或重新标记为非 AI。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { fetchInspirations, batchUnmarkAi, type InspirationOut } from '@/api/inspirations'
@@ -95,8 +96,8 @@ async function unmarkSelected() {
     const r = await batchUnmarkAi(ids)
     message.success(`已将 ${r.updated} 个素材重新标记为非 AI`)
     await load()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '标记失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '标记失败'))
   } finally {
     unmarking.value = false
   }

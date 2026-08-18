@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 人物新建/编辑对话框：按 kind（穿搭博主/职业模特）提交到对应 API。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
 import { useMessage, type FormInst, type FormRules } from 'naive-ui'
 import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
@@ -87,8 +88,8 @@ async function handleSubmit() {
     message.success(props.person ? `已更新${kindLabel}` : `已创建${kindLabel}`)
     emit('saved', saved)
     emit('update:show', false)
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '保存失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '保存失败'))
   } finally {
     submitting.value = false
   }

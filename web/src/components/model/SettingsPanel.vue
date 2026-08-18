@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 参数调优面板：基础参数、Prompt 管理、单图测试、采样参数、数据重置。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { h, ref, onMounted, onUnmounted } from 'vue'
 import { NTag, useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -68,7 +69,7 @@ async function rollbackPrompt(index: number) {
     currentPrompt.value = data.prompt
     message.success(data.message)
     loadPromptVersions()
-  } catch (e: any) { message.error(e.response?.data?.detail || '回滚失败') }
+  } catch (e) { message.error(getApiErrorMessage(e, '回滚失败')) }
 }
 
 // ===== 单图测试 =====
@@ -157,8 +158,8 @@ async function testAnalyze() {
         }
       }
     }
-  } catch (e: any) {
-    message.error(e.message || '测试请求中断')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '测试请求中断'))
   } finally {
     testLoading.value = false
   }
@@ -185,8 +186,8 @@ async function confirmResetStep() {
       loadSamplingParams()
       loadPrompt()
       tagsStore.load(true)
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '重置失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '重置失败'))
     } finally {
       resetting.value = false
     }
@@ -232,8 +233,8 @@ async function saveSettings() {
       },
     })
     message.success('参数已保存（按模型独立持久化，重启后仍生效）')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '保存失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '保存失败'))
   } finally {
     savingSettings.value = false
   }
@@ -256,8 +257,8 @@ async function clearModelConfig() {
     message.success(data.message || '已恢复全局默认值')
     loadSettings()
     loadSamplingParams()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '清除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '清除失败'))
   } finally {
     clearingModelConfig.value = false
   }
@@ -303,8 +304,8 @@ async function copyModelConfig() {
     })
     message.success(data.message)
     loadConfigOverview()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '复制失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '复制失败'))
   } finally {
     copyConfigLoading.value = false
   }
@@ -326,8 +327,8 @@ async function savePrompt() {
     await apiClient.put('/ai/prompt', { prompt: editedPrompt.value })
     currentPrompt.value = editedPrompt.value
     message.success('Prompt 已更新（按模型持久化保存）')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '保存 Prompt 失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '保存 Prompt 失败'))
   } finally { promptSaving.value = false }
 }
 

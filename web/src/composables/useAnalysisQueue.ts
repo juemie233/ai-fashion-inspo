@@ -1,5 +1,6 @@
 /** AI 分析队列 composable：队列统计、活动分析、批量任务、排队素材与轮询。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -52,8 +53,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       message.success('已取消')
       loadPendingQueue()
       loadActiveAnalyses()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || e.response?.data?.message || '取消失败')
+    } catch (e) {
+      const data = (e as { response?: { data?: { detail?: string; message?: string } } })
+        ?.response?.data
+      message.error(data?.detail || data?.message || '取消失败')
     }
   }
 
@@ -68,7 +71,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         message.success('队列已暂停')
       }
       loadPendingQueue()
-    } catch (e: any) {
+    } catch (e) {
       message.error('操作失败')
     }
   }
@@ -145,8 +148,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
       requestAndNotify('批量分析已创建', { body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`, tag: 'batch-analyze' })
       startBatchPolling(created.task_id)
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '批量分析失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '批量分析失败'))
     } finally {
       batchAnalyzing.value = false
     }
@@ -207,8 +210,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       stopBatchPolling()
       batchTask.value = { ...batchTask.value, status: 'cancelled' }
       loadQueue()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '取消失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
 
@@ -239,8 +242,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       message.success('已重新加入队列')
       loadQueue()
       loadActiveAnalyses()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '重试失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '重试失败'))
     }
   }
 

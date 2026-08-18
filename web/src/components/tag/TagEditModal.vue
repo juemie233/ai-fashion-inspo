@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 编辑标签弹窗：重命名 / 改类别 / 改备注。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { updateTag, CATEGORY_LABELS, type TagItem } from '@/api/tags'
@@ -37,8 +38,8 @@ async function handleEdit() {
     message.success('标签已更新')
     show.value = false
     emit('saved')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '更新失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '更新失败'))
   }
 }
 </script>

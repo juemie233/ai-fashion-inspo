@@ -1,5 +1,6 @@
 /** AI 分析历史 composable：历史列表、筛选、分页、批量操作与失败处理。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -56,8 +57,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       if (seq !== historySeq) return
       history.value = data.items
       historyTotal.value = data.total
-    } catch (e: any) {
-      if (e?.code !== 'ERR_CANCELED') message.error('加载历史失败')
+    } catch (e) {
+      // 请求被主动取消（切换筛选触发新请求）时不提示错误
+      if ((e as { code?: string })?.code !== 'ERR_CANCELED') message.error('加载历史失败')
     } finally {
       if (seq === historySeq) historyLoading.value = false
     }
@@ -128,8 +130,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       link.click()
       URL.revokeObjectURL(url)
       message.success('已导出 CSV')
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '导出失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '导出失败'))
     }
   }
 
@@ -167,8 +169,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       selectedHistoryIds.value = new Set()
       loadHistory()
       options.loadQueue?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '批量删除失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '批量删除失败'))
     }
   }
 
@@ -182,8 +184,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       selectedHistoryIds.value = new Set()
       loadHistory()
       options.loadActiveAnalyses?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '批量重试失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '批量重试失败'))
     }
   }
 
@@ -200,8 +202,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       message.success('分析记录已删除')
       loadHistory()
       options.loadQueue?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '删除失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -217,8 +219,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       loadHistory()
       options.loadQueue?.()
       options.loadActiveAnalyses?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '移入垃圾桶失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
     }
   }
 
@@ -230,8 +232,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       message.success(data.message || '已加入重试队列')
       requestAndNotify('失败重试已启动', { body: data.message, tag: 'retry-failed' })
       options.loadQueue?.(); loadHistory(); options.loadActiveAnalyses?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '重试失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '重试失败'))
     } finally {
       retryingAll.value = false
     }
@@ -245,8 +247,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       message.success(data.message || '已清空失败记录')
       loadHistory()
       options.loadQueue?.()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '清空失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '清空失败'))
     } finally {
       clearingFailed.value = false
     }

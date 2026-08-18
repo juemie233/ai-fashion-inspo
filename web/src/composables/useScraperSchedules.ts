@@ -1,5 +1,6 @@
 /** 定时采集计划域：计划列表、创建、启停、立即执行与删除。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -79,9 +80,8 @@ export function useScraperSchedules() {
     try {
       const r = await apiClient.get('/scraper/schedules')
       schedules.value = r.data
-    } catch (e: any) {
-      const detail = e.response?.data?.detail
-      message.error(typeof detail === 'string' ? detail : '加载定时计划失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '加载定时计划失败'))
     } finally { loading.value = false }
   }
 
@@ -103,8 +103,8 @@ export function useScraperSchedules() {
       message.success('定时计划已创建')
       formKeywords.value = []
       loadSchedules()
-    } catch (e: any) {
-      message.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '创建失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '创建失败'))
     } finally { creating.value = false }
   }
 
@@ -127,8 +127,8 @@ export function useScraperSchedules() {
       message.success('定时计划已更新')
       loadSchedules()
       return true
-    } catch (e: any) {
-      message.error(typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '更新失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '更新失败'))
       return false
     } finally { updatingId.value = null }
   }
@@ -140,8 +140,8 @@ export function useScraperSchedules() {
       await apiClient.patch(`/scraper/schedules/${s.id}`, { enabled: !s.enabled })
       message.success(s.enabled ? '已停用' : '已启用')
       loadSchedules()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '操作失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '操作失败'))
     } finally { togglingId.value = null }
   }
 
@@ -152,8 +152,8 @@ export function useScraperSchedules() {
       const r = await apiClient.post(`/scraper/schedules/${s.id}/run`)
       message.success(`已触发采集任务 #${r.data.task_id}`)
       loadSchedules()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '触发失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '触发失败'))
     } finally { runningId.value = null }
   }
 
@@ -163,8 +163,8 @@ export function useScraperSchedules() {
       await apiClient.delete(`/scraper/schedules/${s.id}`)
       message.success('已删除')
       loadSchedules()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '删除失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '删除失败'))
     } finally { deletingId.value = null }
   }
 

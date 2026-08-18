@@ -2,6 +2,7 @@
 /** 数据治理页：批量清理、数据完整性、重复文件、近似重复（素材管理的治理类功能拆分）。 */
 
 import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -176,8 +177,8 @@ async function deduplicate() {
     }
     message.success(data.message)
     startAdminPolling(data.task_id, () => handleAdminTaskDone())
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '去重删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '去重删除失败'))
   } finally {
     deduplicating.value = false
   }
@@ -238,8 +239,8 @@ async function batchDeleteByCondition(condition: string) {
 async function handleNearDuplicateDelete(ids: string[]) {
   try {
     await submitBatchDelete({ ids })
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '删除失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 

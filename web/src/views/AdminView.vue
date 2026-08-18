@@ -5,6 +5,7 @@
  * 报表类（向量管理/数据报表）拆分至「数据洞察」页。 */
 
 import { ref, onMounted, watch } from 'vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -67,8 +68,8 @@ async function batchDeleteByIds(ids: string[]) {
     message.success(parts.join('，'))
     aiRefreshKey.value += 1 // 通知疑似 AI 子页面刷新
     loadAll()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '移入垃圾桶失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
   } finally {
     aiTrashing.value = false
   }

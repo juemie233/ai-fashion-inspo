@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 模型管理面板：连接状态、GPU 显存（自动监控+趋势图）、模型列表（详情/更新/复制）、下载队列、使用统计。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { h, ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { NTag, NButton, NPopconfirm, useMessage } from 'naive-ui'
 import { storeToRefs } from 'pinia'
@@ -102,8 +103,8 @@ async function openDetail(name: string) {
   try {
     const { data } = await apiClient.get<ModelDetail>(`/ai/models/${encodeURIComponent(name)}/detail`)
     modelDetail.value = data
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '获取模型详情失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '获取模型详情失败'))
     detailVisible.value = false
   } finally {
     detailLoading.value = false
@@ -136,8 +137,8 @@ async function doCopyModel() {
     message.success(data.message || '复制完成')
     copyVisible.value = false
     refreshModels()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '复制失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '复制失败'))
   } finally {
     copying.value = false
   }
@@ -256,10 +257,11 @@ async function runDownload(task: DownloadTask) {
           } else if (data.type === 'error') {
             throw new Error(data.message || '下载失败')
           }
-        } catch (parseErr: any) {
-          if (parseErr.message && !parseErr.message.includes('JSON')) {
+        } catch (parseErr) {
+          const perr = parseErr as Error
+          if (perr.message && !perr.message.includes('JSON')) {
             downloadTasks.value = downloadTasks.value.filter((t) => t.key !== task.key)
-            message.error(parseErr.message)
+            message.error(perr.message)
             runNextDownload()
             return
           }
@@ -269,11 +271,12 @@ async function runDownload(task: DownloadTask) {
     // 流意外结束
     downloadTasks.value = downloadTasks.value.filter((t) => t.key !== task.key)
     runNextDownload()
-  } catch (e: any) {
-    if (e.name === 'AbortError') {
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'AbortError') {
       message.info(`已取消「${task.name}」的下载`)
     } else {
-      message.error(e.message || '下载连接中断')
+      message.error(getApiErrorMessage(e, '下载连接中断'))
     }
     downloadTasks.value = downloadTasks.value.filter((t) => t.key !== task.key)
     runNextDownload()

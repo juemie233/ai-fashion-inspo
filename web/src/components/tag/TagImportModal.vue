@@ -22,7 +22,7 @@ async function handleImport() {
     show.value = false
     importJsonText.value = ''
     emit('imported')
-  } catch (e: any) {
+  } catch (e) {
     message.error('导入失败：请检查 JSON 格式，确保每项包含 name 字段')
   }
 }

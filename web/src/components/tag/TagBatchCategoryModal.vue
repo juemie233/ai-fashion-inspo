@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 批量修改类别弹窗：将选中的标签移动到指定类别。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -25,7 +26,7 @@ async function handleBatchCategory() {
     show.value = false
     batchCategoryTarget.value = ''
     emit('done')
-  } catch (e: any) { message.error(e.response?.data?.detail || '操作失败') }
+  } catch (e) { message.error(getApiErrorMessage(e, '操作失败')) }
 }
 </script>
 

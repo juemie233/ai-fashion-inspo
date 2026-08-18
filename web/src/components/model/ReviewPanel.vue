@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 质量审核面板：待审核/已通过/已拒绝统计 + 未通过素材管理。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
@@ -85,8 +86,8 @@ async function toggleAutoApprove(val: boolean) {
   try {
     await apiClient.put('/ai/manual-upload-auto-approve', null, { params: { enabled: val } })
     message.success('手动上传免审核已' + (val ? '开启' : '关闭'))
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '设置失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '设置失败'))
     autoApproveEnabled.value = !val  // 失败回滚
   } finally {
     autoApproveSaving.value = false
@@ -166,8 +167,8 @@ async function triggerQualityCheck() {
     reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     message.success(`已提交 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
     startReviewPolling(data.task_id)
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '审核提交失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '审核提交失败'))
   } finally {
     qualityChecking.value = false
   }
@@ -182,8 +183,8 @@ async function recheckQuality() {
     reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     message.success(`已提交重新审核任务 #${data.task_id}，共 ${data.count} 个素材`)
     startReviewPolling(data.task_id)
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '重新审核提交失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '重新审核提交失败'))
   } finally {
     rechecking.value = false
   }
@@ -210,8 +211,8 @@ async function randomQualityCheck() {
     reviewTask.value = { id: data.task_id, type: 'quality_check', status: 'pending', progress: 0, total: data.count, done: 0, result: null, error: null, retry_count: 0, max_retries: 2, next_retry_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     message.success(`已随机抽取 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
     startReviewPolling(data.task_id)
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '随机审核提交失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '随机审核提交失败'))
   } finally {
     randomChecking.value = false
   }
@@ -279,8 +280,8 @@ async function approveItem(id: string) {
     rejectedGridRef.value?.removeSelectedId(id)  // 同步清除网格选中残留
     message.success('已标记为通过')
     loadQualityReview()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '操作失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '操作失败'))
   } finally {
     const next = new Set(approvingRejectedIds.value)
     next.delete(id)
@@ -298,8 +299,8 @@ async function deleteRejected() {
     rejectedItems.value = []
     rejectedTotal.value = 0
     loadQualityReview()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '移入垃圾桶失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
   } finally {
     deletingRejected.value = false
   }
@@ -315,8 +316,8 @@ async function batchApprove(ids: string[], clear: () => void) {
     clear()
     await loadRejectedItems(true)
     loadQualityReview()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '批量通过失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '批量通过失败'))
   } finally {
     batchApproving.value = false
   }
@@ -334,8 +335,8 @@ async function batchTrashSelected(ids: string[], clear: () => void) {
     clear()
     await loadRejectedItems(true)
     loadQualityReview()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '移入垃圾桶失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
   } finally {
     batchTrashing.value = false
   }

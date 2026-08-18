@@ -9,6 +9,7 @@ import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
+import { getApiErrorMessage } from '@/utils/apiError'
 import {
   batchQualityCheck,
   updateQualityStatus,
@@ -367,8 +368,7 @@ async function handleRate(id: string, value: number) {
     await store.setRating(id, value)
     message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    message.error(detail || '评分失败')
+    message.error(getApiErrorMessage(e, '评分失败'))
   }
 }
 

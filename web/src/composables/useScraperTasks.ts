@@ -1,5 +1,6 @@
 /** 采集管理页任务域：任务数据、筛选排序、任务操作、轮询与来源/状态标签。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -132,7 +133,7 @@ export function useScraperTasks() {
       await apiClient.post(`/scraper/tasks/${taskId}/cancel`)
       message.success('已取消')
       refreshTasks()
-    } catch (e: any) { message.error(e.response?.data?.detail || '取消失败') }
+    } catch (e) { message.error(getApiErrorMessage(e, '取消失败')) }
   }
 
   async function deleteSingleTask(taskId: number) {
@@ -143,9 +144,9 @@ export function useScraperTasks() {
         message.success('已删除')
         refreshTasks()
       }
-    } catch (e: any) {
+    } catch (e) {
       // 204 同属 2xx 成功响应（apiClient validateStatus 放行），不会落入 catch，无需单独处理
-      message.error('删除失败: ' + (e.response?.data?.detail || ''))
+      message.error('删除失败: ' + (getApiErrorMessage(e, '')))
     } finally { deletingTask.value = null }
   }
 
@@ -165,8 +166,9 @@ export function useScraperTasks() {
       message.success((await apiClient.post('/scraper/tasks/retry-failed')).data.message)
       refreshTasks()
       startPollIfNeeded()
-    } catch (e: any) {
-      message.info(e.response?.status === 404 ? '没有失败任务' : (e.response?.data?.detail || '重试失败'))
+    } catch (e) {
+      const is404 = (e as { response?: { status?: number } })?.response?.status === 404
+      message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
     } finally { retrying.value = false }
   }
 
@@ -177,8 +179,8 @@ export function useScraperTasks() {
       message.success('已重新加入队列（断点续采）')
       refreshTasks()
       startPollIfNeeded()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '续采失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '续采失败'))
     } finally { retryingTask.value = null }
   }
 
@@ -202,12 +204,17 @@ export function useScraperTasks() {
       message.success('已按原配置创建新采集任务')
       refreshTasks()
       startPollIfNeeded()
-    } catch (e: any) {
-      const detail = e.response?.data?.detail
-      if (typeof detail === 'object' && detail?.command) {
-        message.error(detail.error || '创建失败')
-        setTimeout(() => copyText(detail.command), 500)
-      } else { message.error(detail || '创建失败') }
+    } catch (e) {
+      // 特殊业务：后端 detail 可能是「带启动命令」的对象（Chrome 未启动时引导复制命令）
+      const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data
+        ?.detail
+      if (typeof detail === 'object' && detail && (detail as { command?: string }).command) {
+        const d = detail as { error?: string; command: string }
+        message.error(d.error || '创建失败')
+        setTimeout(() => copyText(d.command), 500)
+      } else {
+        message.error(getApiErrorMessage(e, '创建失败'))
+      }
     } finally { copyingTask.value = null }
   }
 

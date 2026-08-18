@@ -1,5 +1,6 @@
 /** 标签管理页核心数据与操作：加载、筛选排序、选中、删除/合并/置顶/重复扫描等。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
@@ -154,9 +155,8 @@ export function useTagManage() {
       const data = await deleteUnusedTags()
       message.success(data.message)
       await loadAll()
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail || e?.message || '未知错误'
-      message.error('删除失败：' + detail)
+    } catch (e) {
+      message.error('删除失败：' + getApiErrorMessage(e, '未知错误'))
     }
   }
 
@@ -196,8 +196,8 @@ export function useTagManage() {
         (p) => p.tag_a.id !== sourceId && p.tag_b.id !== sourceId,
       )
       await loadAll()
-    } catch (e: any) {
-      message.error(e.response?.data?.detail || '操作失败')
+    } catch (e) {
+      message.error(getApiErrorMessage(e, '操作失败'))
     }
   }
 

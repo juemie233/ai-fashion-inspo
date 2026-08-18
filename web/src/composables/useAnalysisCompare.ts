@@ -1,5 +1,6 @@
 /** AI 分析结果对比 composable：对比弹窗数据加载。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -24,9 +25,9 @@ export function useAnalysisCompare() {
       const { data } = await apiClient.get<CompareData>(`/ai/compare/${inspirationId}`)
       if (seq !== compareSeq) return
       compareData.value = data
-    } catch (e: any) {
+    } catch (e) {
       if (seq !== compareSeq) return
-      message.error(e.response?.data?.detail || '获取对比数据失败')
+      message.error(getApiErrorMessage(e, '获取对比数据失败'))
       compareVisible.value = false
     } finally {
       if (seq === compareSeq) compareLoading.value = false

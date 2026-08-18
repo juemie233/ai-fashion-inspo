@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 标签别名管理弹窗：查看/添加/删除某标签的别名。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { fetchAliases, createAlias, deleteAlias, type TagAlias, type TagItem } from '@/api/tags'
@@ -37,8 +38,8 @@ async function handleAddAlias() {
     message.success('别名已添加')
     newAlias.value = ''
     await loadAliases()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '添加失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '添加失败'))
   }
 }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 新建标签表单（含相似标签去重建议）。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { createTag, getSimilarSuggestions, CATEGORY_LABELS } from '@/api/tags'
@@ -41,8 +42,8 @@ async function handleCreate() {
     newTagName.value = ''
     createSuggestions.value = []
     emit('created')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '创建失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '创建失败'))
   }
 }
 </script>

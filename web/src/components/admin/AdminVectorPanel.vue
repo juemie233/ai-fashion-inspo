@@ -6,6 +6,7 @@
  * 由 worker 执行，进度通过任务中心查看）。
  */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import apiClient from '@/api/client'
@@ -59,8 +60,8 @@ async function handleBackfill() {
     } else {
       message.info(data.message || '没有缺失向量的素材')
     }
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '创建向量回填任务失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '创建向量回填任务失败'))
   } finally {
     submitting.value = false
   }

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** 素材详情页：大图浏览、标签编辑、收藏、删除、相似推荐与上一张/下一张导航。 */
 
+import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, NIcon } from 'naive-ui'
 import { ChevronBackOutline, ChevronForwardOutline, CloseOutline } from '@vicons/ionicons5'
 import {
   fetchInspiration,
-  fetchInspirations,
   toggleFavorite,
   updateRating,
   moveToTrash,
@@ -18,7 +18,6 @@ import {
   analyzeInspiration,
   TRASH_REASON_OPTIONS,
   type InspirationDetailOut,
-  type InspirationOut,
   type InspirationTagOut,
   type TrashReason,
 } from '@/api/inspirations'
@@ -29,11 +28,11 @@ import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { shortenText } from '@/utils/format'
-import { buildBrowseParams, storedBrowsePageSize } from '@/utils/browseQuery'
 import { CATEGORY_LABELS } from '@/api/tags'
 import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
+import { useBrowseContext } from '@/composables/useBrowseContext'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,106 +99,18 @@ const lightboxPaths = computed<string[]>(() => {
   return paths
 })
 
-// ── 上一张/下一张浏览上下文 ──
-// 从进入详情时携带的列表筛选 query 重建「同一次浏览」的相邻素材，
-// 让用户无需回到列表即可连续刷图；当前素材不在上下文列表时隐藏导航。
-
-const browseItems = ref<InspirationOut[]>([])
-const browseTotal = ref(0)
-const browsePage = ref(parseInt(route.query.page as string) || 1)
-const browseLoading = ref(false)
-
-/** 当前素材在浏览列表中的位置（不在列表中返回 -1，隐藏导航） */
-const browseIndex = computed(() => {
-  if (!detail.value) return -1
-  return browseItems.value.findIndex((i) => i.id === detail.value!.id)
-})
-
-/** 全局位置（跨页）：(页码-1)×每页 + 页内位置 + 1 */
-const browsePosition = computed(() => {
-  if (browseIndex.value < 0) return 0
-  return (browsePage.value - 1) * storedBrowsePageSize() + browseIndex.value + 1
-})
-
-/** 页内是否可前进/后退（跨页由 goNeighbor 翻页补齐） */
-const hasPrev = computed(
-  () => browseIndex.value > 0 || (browseIndex.value === 0 && browsePage.value > 1),
-)
-const hasNext = computed(() => {
-  if (browseIndex.value < 0) return false
-  const size = storedBrowsePageSize()
-  return (
-    browseIndex.value < browseItems.value.length - 1 || browsePage.value * size < browseTotal.value
-  )
-})
-
-/** 加载当前筛选条件下的列表上下文（翻页时按目标页码加载） */
-async function loadBrowseContext(page: number, seq: number) {
-  browseLoading.value = true
-  try {
-    const data = await fetchInspirations(
-      buildBrowseParams(route.query as Record<string, string>, page, storedBrowsePageSize()),
-    )
-    if (seq !== detailSeq) return
-    browseItems.value = data.items
-    browseTotal.value = data.total
-    browsePage.value = page
-  } catch {
-    if (seq === detailSeq) {
-      // 上下文加载失败：静默隐藏导航，不影响详情主流程
-      browseItems.value = []
-    }
-  } finally {
-    if (seq === detailSeq) browseLoading.value = false
-  }
-}
-
-/** 跳转到指定素材，保持浏览 query（页码同步更新） */
-function gotoItem(id: string, page?: number) {
-  const query = { ...route.query }
-  if (page !== undefined) {
-    if (page > 1) query.page = String(page)
-    else delete query.page
-  }
-  router.replace({ path: `/detail/${id}`, query })
-}
-
-/** 上一张/下一张：页内移动；到页边界时自动翻页取相邻页的首/尾素材 */
-async function goNeighbor(dir: 'prev' | 'next') {
-  if (!detail.value || browseIndex.value < 0 || browseLoading.value) return
-  const size = storedBrowsePageSize()
-  if (dir === 'prev') {
-    if (browseIndex.value > 0) {
-      gotoItem(browseItems.value[browseIndex.value - 1].id)
-    } else if (browsePage.value > 1) {
-      const page = browsePage.value - 1
-      try {
-        const data = await fetchInspirations(
-          buildBrowseParams(route.query as Record<string, string>, page, size),
-        )
-        if (data.items.length > 0) gotoItem(data.items[data.items.length - 1].id, page)
-        else message.info('前面没有更多素材了')
-      } catch {
-        message.error('加载上一页失败')
-      }
-    }
-  } else {
-    if (browseIndex.value < browseItems.value.length - 1) {
-      gotoItem(browseItems.value[browseIndex.value + 1].id)
-    } else if (browsePage.value * size < browseTotal.value) {
-      const page = browsePage.value + 1
-      try {
-        const data = await fetchInspirations(
-          buildBrowseParams(route.query as Record<string, string>, page, size),
-        )
-        if (data.items.length > 0) gotoItem(data.items[0].id, page)
-        else message.info('后面没有更多素材了')
-      } catch {
-        message.error('加载下一页失败')
-      }
-    }
-  }
-}
+// ── 上一张/下一张浏览上下文（composable：状态 + 翻页加载 + 导航）──
+const {
+  browseTotal,
+  browseLoading,
+  browseIndex,
+  browsePosition,
+  hasPrev,
+  hasNext,
+  reset: resetBrowseContext,
+  load: loadBrowseContext,
+  goNeighbor,
+} = useBrowseContext({ detail, route, router })
 
 /** 键盘左右键切换相邻素材（灯箱打开、弹窗打开、输入聚焦或浏览上下文缺失时禁用） */
 function onKeydown(e: KeyboardEvent) {
@@ -223,15 +134,14 @@ async function loadDetail(id: string) {
   detail.value = null // 清理旧素材，避免参数切换时残留上一份内容
   lightboxOpen.value = false
   similarItems.value = []
-  browseItems.value = []
+  resetBrowseContext()
   try {
     const data = await fetchInspiration(id)
     if (seq !== detailSeq) return // 已有更新的请求，丢弃过期响应
     detail.value = data
     loadSimilar(data.id, seq)
     // 同步加载浏览上下文（翻页导航后 route.query.page 已更新）
-    browsePage.value = parseInt(route.query.page as string) || 1
-    loadBrowseContext(browsePage.value, seq)
+    loadBrowseContext()
   } catch {
     if (seq !== detailSeq) return
     message.error('加载素材详情失败')
@@ -416,8 +326,8 @@ async function reanalyze() {
   try {
     await analyzeInspiration(detail.value.id)
     message.success('已提交重新分析')
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || '重新分析失败')
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '重新分析失败'))
   } finally {
     analyzing.value = false
   }
