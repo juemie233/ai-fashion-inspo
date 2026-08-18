@@ -348,3 +348,159 @@ async def test_batch_delete_rerun_idempotent(client, upload):
         assert task.result["deleted_count"] == 0
         assert task.result["freed_bytes"] == 0
         assert remaining == 0
+
+
+# ============ 向量回填攒批机制（批量触发策略） ============
+
+
+@pytest.fixture
+def small_batch_threshold(monkeypatch):
+    """把攒批触发阈值调小（3），便于用例低成本触发自动 flush。"""
+    monkeypatch.setattr(vb_module, "VECTOR_BACKFILL_BATCH_SIZE", 3)
+    return 3
+
+
+async def _pending_ids() -> list[str]:
+    """读取待回填表中的素材 ID 列表（独立会话）。"""
+    from app.models.task import PendingVectorBackfill
+
+    async with async_session() as db:
+        result = await db.execute(select(PendingVectorBackfill.inspiration_id))
+        return [row[0] for row in result.all()]
+
+
+async def _insert_inspiration(db) -> str:
+    """直插一条素材记录（绕过上传接口，避免触发攒批登记干扰用例断言）。"""
+    insp = Inspiration(file_path="images/test.jpg")
+    db.add(insp)
+    await db.commit()
+    await db.refresh(insp)
+    return insp.id
+
+
+async def _backfill_task_count(db) -> int:
+    """统计任务队列中的向量回填任务数量。"""
+    return (
+        await db.execute(
+            select(func.count()).select_from(TaskQueue).where(
+                TaskQueue.type == "vector_backfill"
+            )
+        )
+    ).scalar() or 0
+
+
+async def test_enqueue_below_threshold_no_task(client, small_batch_threshold):
+    """攒批未达阈值：不创建任务，素材登记进待回填表；同素材重复登记幂等去重。"""
+    async with async_session() as db:
+        a = await _insert_inspiration(db)
+        b = await _insert_inspiration(db)
+
+        task = await vb_module.enqueue_vector_backfills(db, [a])
+        assert task is None  # 未达阈值：不再创建 1/1 小任务
+        task = await vb_module.enqueue_vector_backfills(db, [a, b])
+        assert task is None
+        assert sorted(await _pending_ids()) == sorted([a, b])  # 同素材重复登记去重
+        assert await _backfill_task_count(db) == 0  # 任务队列零 vector_backfill 任务
+
+
+async def test_enqueue_reaches_threshold_auto_flush(client, small_batch_threshold):
+    """累计达到阈值：自动创建包含全部待回填素材的批量任务，待回填表清空。"""
+    async with async_session() as db:
+        ids = [await _insert_inspiration(db) for _ in range(3)]  # 阈值=3
+
+        task = await vb_module.enqueue_vector_backfills(db, ids)
+        assert task is not None  # 达阈值自动 flush
+        assert task.total == 3
+        assert set(task.result["inspiration_ids"]) == set(ids)  # 顺序不保证，按集合比较
+        assert task.done == 0  # 待 worker 执行
+
+        # 待回填表已清空；任务队列只有这一个批量任务（没有 1/1 小任务）
+        assert await _pending_ids() == []
+        assert await _backfill_task_count(db) == 1
+
+
+async def test_upload_batch_no_small_tasks(client, upload, small_batch_threshold):
+    """集成：连续上传素材，仅当累计达到阈值时出现 1 个批量任务，全程无 1/1 小任务。"""
+    async with async_session() as db:
+        for i in range(3):
+            upload()  # 每次上传都会登记待回填
+            tasks = (
+                await db.execute(
+                    select(TaskQueue).where(TaskQueue.type == "vector_backfill")
+                )
+            ).scalars().all()
+            # 前两次上传无任务；第 3 次上传（达阈值）出现 1 个批量任务
+            assert len(tasks) == (1 if i == 2 else 0)
+            if tasks:
+                assert tasks[0].total == 3
+        assert await _pending_ids() == []
+
+
+async def test_flush_force_merges_extra_ids(client, small_batch_threshold):
+    """手动触发（force）：忽略阈值，待回填素材与额外素材合并为一个批量任务。"""
+    async with async_session() as db:
+        a = await _insert_inspiration(db)
+        b = await _insert_inspiration(db)
+
+        await vb_module.enqueue_vector_backfills(db, [a])  # 1 个待回填（未达阈值）
+        task = await vb_module.flush_pending_vector_backfills(
+            db, force=True, extra_ids=[b]
+        )
+        assert task is not None
+        assert task.total == 2
+        assert set(task.result["inspiration_ids"]) == {a, b}
+        assert await _pending_ids() == []  # 待回填表已清空
+
+
+async def test_flush_no_pending_returns_none(client):
+    """无待回填素材时 flush 返回 None（空任务不创建）。"""
+    async with async_session() as db:
+        task = await vb_module.flush_pending_vector_backfills(db, force=True)
+        assert task is None
+
+
+async def test_purge_small_backfill_tasks(client, upload):
+    """历史清理：total<=1 小任务删除（非运行中）/标记取消（运行中），大任务保留且幂等。"""
+    async with async_session() as db:
+        # 小任务：成功 / 排队 / 运行中各一条
+        for status, done in (("success", 1), ("pending", 0), ("running", 1)):
+            db.add(
+                TaskQueue(
+                    type="vector_backfill", status=status, progress=100,
+                    total=1, done=done, result={}, max_retries=2,
+                )
+            )
+        # 大任务（手动批量回填产物）：应保留
+        db.add(
+            TaskQueue(
+                type="vector_backfill", status="success", progress=100,
+                total=10, done=10, result={}, max_retries=2,
+            )
+        )
+        await db.commit()
+
+        deleted = await vb_module.purge_small_backfill_tasks(db)
+        assert deleted == 2  # success + pending 删除，running 仅标记取消
+
+        tasks = (
+            await db.execute(
+                select(TaskQueue).where(TaskQueue.type == "vector_backfill")
+            )
+        ).scalars().all()
+        by_status = {t.status: t for t in tasks}
+        assert set(by_status.keys()) == {"cancelled", "success"}
+        assert by_status["cancelled"].total == 1  # 运行中的小任务标记取消
+        assert "批量回填机制" in (by_status["cancelled"].error or "")
+        assert by_status["success"].total == 10  # 大任务保留
+
+        # 幂等：重复执行继续收敛（第二次删除首次标记 cancelled 的小任务），最终无任务可清理
+        assert await vb_module.purge_small_backfill_tasks(db) == 1
+        assert await vb_module.purge_small_backfill_tasks(db) == 0
+        remaining_after = (
+            await db.execute(
+                select(func.count()).select_from(TaskQueue).where(
+                    TaskQueue.type == "vector_backfill"
+                )
+            )
+        ).scalar()
+        assert remaining_after == 1  # 仅剩大任务

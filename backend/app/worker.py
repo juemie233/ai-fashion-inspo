@@ -250,6 +250,29 @@ async def _worker_loop(worker_id: str) -> None:
             await asyncio.sleep(_POLL_INTERVAL)
 
 
+async def _flush_pending_backfills_on_startup() -> None:
+    """启动时兜底：清理历史 1/1 小任务，并把攒批队列中的遗留待回填素材入队。
+
+    攒批机制的兜底保障：进程重启后，未达阈值（100）的待回填素材不会丢失——
+    启动时一次性 flush 成批量任务执行（任务创建失败/清理异常仅记日志，不阻断启动）。
+    """
+    from app.services.task_runners.vector_backfill import (
+        flush_pending_vector_backfills,
+        purge_small_backfill_tasks,
+    )
+
+    async with async_session() as db:
+        try:
+            await purge_small_backfill_tasks(db)
+            task = await flush_pending_vector_backfills(db, force=True)
+            if task is not None:
+                logger.info(
+                    f"启动时已把遗留待回填素材入队: #{task.id}，共 {task.total} 个"
+                )
+        except Exception as e:
+            logger.warning(f"启动时清理/回填遗留任务失败（忽略，不影响 worker 启动）: {e}")
+
+
 async def main() -> None:
     """worker 入口：确保表结构、重置遗留任务后启动主循环与心跳循环。"""
     logging.basicConfig(
@@ -266,6 +289,7 @@ async def main() -> None:
 
     worker_id = _build_worker_id()
     await _reset_stale_tasks()
+    await _flush_pending_backfills_on_startup()
     heartbeat_task = asyncio.create_task(_heartbeat_loop(worker_id))
     try:
         await _worker_loop(worker_id)

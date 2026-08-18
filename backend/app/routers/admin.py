@@ -577,9 +577,12 @@ async def vector_stats(db: AsyncSession = Depends(get_db)) -> dict:
 async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
     """一键为缺失向量的素材创建向量回填任务（异步，由 worker 执行）。
 
-    返回 task_id 供前端轮询进度；无缺失素材时返回 count=0。
+    手动触发语义：立即 flush 攒批队列——把「缺失向量的素材」与待回填表中
+    积累的素材（未达自动触发阈值的）合并为一个批量任务，不等阈值。
+
+    返回 task_id 供前端轮询进度；无缺失素材且无待回填素材时返回 count=0。
     """
-    from app.services.task_runners.vector_backfill import create_vector_backfill_task
+    from app.services.task_runners.vector_backfill import flush_pending_vector_backfills
     from app.services.vector import store as vector_store
 
     if not vector_store.is_lancedb_available():
@@ -589,18 +592,17 @@ async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
         )
 
     missing_ids = await _get_missing_image_vector_ids(db)
-    if not missing_ids:
+    task = await flush_pending_vector_backfills(db, force=True, extra_ids=missing_ids)
+    if task is None:
         return {
             "message": "没有缺失向量的素材，全部已入库",
             "task_id": None,
             "count": 0,
         }
-
-    task = await create_vector_backfill_task(db, missing_ids)
     return {
-        "message": f"已创建向量回填任务 #{task.id}，共 {len(missing_ids)} 个素材",
+        "message": f"已创建向量回填任务 #{task.id}，共 {task.total} 个素材",
         "task_id": task.id,
-        "count": len(missing_ids),
+        "count": task.total,
     }
 
 

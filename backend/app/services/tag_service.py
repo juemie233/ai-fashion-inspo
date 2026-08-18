@@ -22,18 +22,18 @@ async def _rebuild_vectors_for_tag_change(
     """标签变更（合并/删除/重命名/解除关联）后，为受影响素材重建文本向量。
 
     语义搜索的文本向量基于素材标签名拼接生成，标签变更会使其陈旧；这里把
-    受影响素材入队到向量回填任务（由 worker 异步执行），入队失败静默降级，
-    不影响标签操作主流程。
+    受影响素材登记到向量回填攒批队列（累计达到阈值后由 worker 统一创建批量
+    任务执行，不再每素材一个任务），登记失败静默降级，不影响标签操作主流程。
     """
     ids = list(dict.fromkeys(inspiration_ids))
     if not ids:
         return
     try:
-        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+        from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 
-        await create_vector_backfill_task(db, ids)
+        await enqueue_vector_backfills(db, ids)
     except Exception as e:
-        logger.warning(f"标签变更后向量重建入队失败（忽略）: {e}")
+        logger.warning(f"标签变更后向量重建登记失败（忽略）: {e}")
 
 
 class TagNotFoundError(Exception):

@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.inspiration import Inspiration, NOT_DELETED
 from app.services.file_service import generate_thumbnail
-from app.services.task_runners.vector_backfill import create_vector_backfill_task
+from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 from app.utils.file_hash import file_sha256
 from app.utils.image_utils import extract_dominant_colors
 from app.utils.time import utcnow
@@ -651,15 +651,17 @@ async def apply_crops(
         insp.updated_at = utcnow()
     await db.commit()
 
-    # 向量回填：图像向量按新图重建，文本向量沿用现有标签。
-    # 任务创建失败不影响主流程（裁剪已成功提交，向量可由后续任务/手动重建兜底）
+    # 向量回填（攒批）：图像向量按新图重建，文本向量沿用现有标签。
+    # 素材 ID 进入待回填队列，累计达到阈值（100）后统一创建批量任务；
+    # 未达阈值时 vector_task_id 为 None（素材保留在待回填表，不会丢失）。
+    # 登记失败不影响主流程（裁剪已成功提交，向量可由后续任务/手动重建兜底）
     vector_task_id: int | None = None
     if successes:
         try:
-            task = await create_vector_backfill_task(db, [s[0].id for s in successes])
+            task = await enqueue_vector_backfills(db, [s[0].id for s in successes])
             vector_task_id = task.id if task else None
         except Exception:
-            logger.exception("裁剪后创建向量回填任务失败，不影响裁剪主流程")
+            logger.exception("裁剪后登记向量回填失败，不影响裁剪主流程")
 
     logger.info(
         f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"

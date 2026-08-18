@@ -119,7 +119,7 @@ def test_scan_excludes_non_vertical_and_non_manual(client):
 
 
 def test_apply_crops_selected_only(client):
-    """按勾选执行：只处理提交的 ID，裁剪后高度减小、哈希更新、原图备份、向量任务入队。"""
+    """按勾选执行：只处理提交的 ID，裁剪后高度减小、哈希更新、原图备份、登记向量回填。"""
     d1, c1 = _make_vertical_screenshot()  # 300x600
     insp1 = _upload_screenshot(client, d1, c1)
     d2, c2 = _make_vertical_screenshot(bg=(180, 200, 230))  # 不同背景色，避免内容去重
@@ -135,7 +135,8 @@ def test_apply_crops_selected_only(client):
     body = r.json()
     assert body["processed"] == 1
     assert body["skipped"] == []
-    assert body["vector_task_id"] is not None  # 自动入队向量回填
+    # 攒批机制：裁剪素材登记进待回填队列，未达阈值（100）时不立即创建任务
+    assert body["vector_task_id"] is None
 
     # 第一个被裁剪：600 → 540；第二个未动：仍 600
     assert _file_size(insp1["id"], client)[1] == 540

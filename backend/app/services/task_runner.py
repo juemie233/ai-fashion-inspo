@@ -38,8 +38,12 @@ from app.services.task_runners.quality_check import (
     execute_quality_check,
 )
 from app.services.task_runners.vector_backfill import (
+    VECTOR_BACKFILL_BATCH_SIZE,
     create_vector_backfill_task,
+    enqueue_vector_backfills,
     execute_vector_backfill,
+    flush_pending_vector_backfills,
+    purge_small_backfill_tasks,
 )
 
 # 任务类型 → 执行函数的分发表：worker 按 task.type 分发到对应执行器。

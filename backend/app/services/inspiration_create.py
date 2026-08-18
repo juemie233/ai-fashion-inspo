@@ -92,16 +92,16 @@ async def create_inspiration(
     await db.flush()
     await db.refresh(inspiration)
 
-    # 入库后异步回填向量：保证新素材进入详情页「相似推荐」/ 语义搜索时已有向量，
-    # 避免请求链路内现场 CLIP 编码造成卡顿。文本向量需等标签生成后才有内容，
-    # 无标签时由任务内部自动跳过（后续 AI 分析完成时再重建）。
-    # 入队失败（如任务表不可用）不影响上传主流程，仅记日志降级。
+    # 入库后登记向量回填（攒批）：素材 ID 进入待回填队列，累计达到阈值（100）后
+    # 统一创建批量任务，避免「每上传一个素材就创建一个 total=1 小任务」。
+    # 文本向量需等标签生成后才有内容，无标签时由任务内部自动跳过（后续 AI 分析
+    # 完成时再重建）。登记失败（如任务表不可用）不影响上传主流程，仅记日志降级。
     try:
-        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+        from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 
-        await create_vector_backfill_task(db, [inspiration.id])
+        await enqueue_vector_backfills(db, [inspiration.id])
     except Exception as e:
-        logger.warning(f"入队向量回填任务失败（忽略，不影响上传）: {e}")
+        logger.warning(f"登记向量回填失败（忽略，不影响上传）: {e}")
 
     return inspiration
 
@@ -243,13 +243,13 @@ async def create_inspiration_from_url(
             db.add(link)
         await db.flush()
 
-    # 入库后异步回填向量（含 URL 导入时携带的标签 → 文本向量一并生成）。
-    # 入队失败不影响导入主流程，仅记日志降级。
+    # 入库后登记向量回填（攒批，含 URL 导入时携带的标签 → 文本向量一并生成）。
+    # 登记失败不影响导入主流程，仅记日志降级。
     try:
-        from app.services.task_runners.vector_backfill import create_vector_backfill_task
+        from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 
-        await create_vector_backfill_task(db, [inspiration.id])
+        await enqueue_vector_backfills(db, [inspiration.id])
     except Exception as e:
-        logger.warning(f"入队向量回填任务失败（忽略，不影响导入）: {e}")
+        logger.warning(f"登记向量回填失败（忽略，不影响导入）: {e}")
 
     return inspiration

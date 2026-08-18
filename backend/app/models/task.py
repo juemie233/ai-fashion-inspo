@@ -56,3 +56,25 @@ class TaskQueue(Base):
 
     def __repr__(self) -> str:
         return f"<TaskQueue(id={self.id}, type={self.type}, status={self.status})>"
+
+
+class PendingVectorBackfill(Base):
+    """向量回填攒批队列：记录等待回填向量的素材 ID（持久化，重启不丢失）。
+
+    触发策略（批量回填，替代「每素材一个任务」）：
+    - 素材入库 / 裁剪 / 标签变更后不再立即创建任务，而是把素材 ID 登记到本表；
+    - 累计达到 VECTOR_BACKFILL_BATCH_SIZE（100）时，由
+      vector_backfill.flush_pending_vector_backfills 统一取出并创建 1 个批量任务；
+    - 用户手动触发一键回填、或 worker 启动兜底时也会立即 flush，
+      保证所有素材最终都能被回填、不丢失。
+    """
+
+    __tablename__ = "pending_vector_backfills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 待回填素材 ID（唯一约束 + 索引：同素材重复登记自动去重）
+    inspiration_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    def __repr__(self) -> str:
+        return f"<PendingVectorBackfill(id={self.id}, inspiration_id={self.inspiration_id})>"

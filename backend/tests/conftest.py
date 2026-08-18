@@ -45,6 +45,7 @@ _ALL_TABLES = [
     "scraper_schedules",
     "scraper_tasks",
     "task_queue",
+    "pending_vector_backfills",
     "service_heartbeats",
     "audit_logs",
     "inspirations",
