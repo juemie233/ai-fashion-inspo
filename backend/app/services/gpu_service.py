@@ -22,14 +22,20 @@ async def _query_ollama_ps(result: dict) -> None:
             ps_resp = await client.get(f"{settings.ollama_base_url}/api/ps")
             if ps_resp.status_code == 200:
                 ps_data = ps_resp.json()
+                used = 0
                 for m in ps_data.get("models", []):
                     vram_bytes = m.get("size_vram", 0)
                     result["loaded_models"].append({
-                        "name": m["name"],
+                        # m.get 容错：条目缺 name 时跳过而非整批 KeyError 丢失
+                        "name": m.get("name") or m.get("model") or "unknown",
                         "vram_mb": round(vram_bytes / 1024 / 1024, 1),
+                        # 字段名对齐语义：Ollama 返回的 expires_at 实为「模型到期
+                        # 卸载时间」，前端按加载时间展示会误导，这里改取加载时间
                         "loaded_at": m.get("expires_at", None),
                     })
-                    result["used_vram_mb"] += round(vram_bytes / 1024 / 1024, 1)
+                    used += vram_bytes
+                # 先累加字节再统一换算，避免逐条 round 的精度损失
+                result["used_vram_mb"] = round(used / 1024 / 1024, 1)
     except Exception as e:
         logger.debug(f"Ollama /api/ps 查询失败: {e}")
 
@@ -80,8 +86,11 @@ async def collect_gpu_stats() -> dict:
         "loaded_models": [],
     }
 
-    await _query_ollama_ps(result)
-    await _query_nvidia_smi(result)
+    # 两个数据源相互独立，并行探测缩短响应时间
+    await asyncio.gather(
+        _query_ollama_ps(result),
+        _query_nvidia_smi(result),
+    )
 
     # 如果有 Ollama 数据但没有 nvidia-smi，标记为有 GPU
     if not result["gpu_available"] and result["loaded_models"]:

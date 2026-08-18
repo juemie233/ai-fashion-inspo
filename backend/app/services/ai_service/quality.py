@@ -66,8 +66,12 @@ async def _ollama_vision_chat(
         return "", "调用 Ollama 超时"
     except httpx.HTTPStatusError as e:
         # 4xx 为请求/模型问题（如 400 模型未就绪），重试无益 → 永久错误；
+        # 429 限流与分析链路（analyze._http_error_message）口径一致，返回
+        # 「请求过于频繁」文案以命中 _is_recoverable_error 的可恢复判定；
         # 5xx 为服务端暂时异常（命中「Ollama 服务」）→ 可恢复重试
         status_code = e.response.status_code
+        if status_code == 429:
+            return "", "请求过于频繁，请稍后再试。"
         if 400 <= status_code < 500:
             return "", f"Ollama 请求被拒绝（HTTP {status_code}）"
         return "", f"Ollama 服务异常（HTTP {status_code}）"
@@ -130,6 +134,10 @@ async def _write_quality_result(
     与旧逻辑一致：仅当素材仍为 pending（或 force=True 覆盖）时写入，
     避免覆盖人工翻案；初筛器拒绝与 VLM 审核两条路径共用本函数。
     用条件 UPDATE 原子完成「判定 + 写入」，避免 check-then-act 竞态。
+
+    校验 rowcount：CAS 分支 0 行受影响（素材已被人工翻案/并发审核抢先）
+    时返回「判定未生效」描述，调用方据此把结果记为未判定（pending），
+    避免把从未落账的判定记入审核日志与任务统计。
     """
     try:
         stmt = (
@@ -144,8 +152,10 @@ async def _write_quality_result(
         if not force:
             # CAS：仅当仍为 pending 时写入（rowcount=0 表示已被人工翻案，放弃覆盖）
             stmt = stmt.where(Inspiration.quality_status == "pending")
-        await db.execute(stmt)
+        result = await db.execute(stmt)
         await db.commit()
+        if not force and result.rowcount == 0:
+            return "素材审核状态已被人工修改，本次判定未写入（跳过）"
     except Exception as e:
         logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
         return f"写回失败: {str(e)[:100]}"
@@ -198,7 +208,7 @@ async def check_image_quality(
     )
 
     try:
-        image_data, _ = _read_image_base64(file_path)
+        image_data, _ = await _read_image_base64(file_path)
     except FileNotFoundError:
         # 文件缺失：确定性失败，直接拒绝并写回，避免永久停留 pending
         err = await _write_quality_result(

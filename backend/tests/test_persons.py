@@ -100,7 +100,7 @@ def test_delete_blogger_blocked_when_has_inspirations(client, create_blogger, up
 
     r = client.delete(f"/api/bloggers/{blogger['id']}")
     assert r.status_code == 400
-    assert r.json()["detail"] == "该博主下仍有 1 个素材，无法删除"
+    assert r.json()["detail"] == "该博主下仍有 1 个素材（含垃圾桶素材）关联，无法删除"
 
     # 博主未被删除，素材关联仍保留
     assert client.get("/api/bloggers").json()["total"] == 1
@@ -108,7 +108,7 @@ def test_delete_blogger_blocked_when_has_inspirations(client, create_blogger, up
     assert [p["id"] for p in detail["bloggers"]] == [blogger["id"]]
 
 
-def test_delete_blogger_allowed_when_no_inspirations(client, create_blogger, upload):
+async def test_delete_blogger_allowed_when_no_inspirations(client, create_blogger, upload):
     """无关联素材时删除成功，素材保留且不再关联该博主。"""
     blogger = create_blogger(name="待删除")
     insp_id = upload().json()["id"]
@@ -131,16 +131,23 @@ def test_delete_blogger_allowed_when_no_inspirations(client, create_blogger, upl
     assert detail["bloggers"] == []
 
 
-def test_delete_blogger_ignores_trashed_inspirations(client, create_blogger, upload):
-    """垃圾桶（软删除）素材不计入关联数：显示素材数为 0 时允许删除，口径与列表一致。"""
+async def test_delete_blogger_blocked_when_trashed_inspirations(client, create_blogger, upload):
+    """垃圾桶（软删除）素材的关联同样拦截删除：delete-orphan 级联会物理删除
+    可恢复素材的关联行，恢复后博主信息永久丢失（修复：校验含垃圾桶素材）。"""
     blogger = create_blogger(name="垃圾桶关联")
     insp_id = upload().json()["id"]
     client.post(
         f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
     )
-    # 素材移入垃圾桶 → 有效素材数为 0
+    # 素材移入垃圾桶 → 有效素材数为 0，但全部关联数仍为 1
     client.post(f"/api/inspirations/{insp_id}/trash", json={"reason": "质量差"})
 
+    r = client.delete(f"/api/bloggers/{blogger['id']}")
+    assert r.status_code == 400
+    assert "含垃圾桶素材" in r.json()["detail"]
+
+    # 先清空垃圾桶（物理删除素材行，DB 级联删除其关联）再删除：允许
+    assert client.delete("/api/inspirations/trash").status_code == 200
     assert client.delete(f"/api/bloggers/{blogger['id']}").status_code == 204
 
 

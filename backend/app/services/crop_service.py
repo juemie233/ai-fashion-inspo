@@ -340,7 +340,8 @@ async def scan_candidates(
         if full is None or not full.exists():
             continue
         try:
-            width, height = _probe_size(full)
+            # PIL 文件头读取是阻塞 I/O，放线程池执行（与下方 detect_* 一致）
+            width, height = await asyncio.to_thread(_probe_size, full)
         except Exception:
             continue  # 无法解码的图片不做候选
         if height / width < MIN_RATIO:
@@ -654,11 +655,13 @@ async def apply_crops(
     # 向量回填（攒批）：图像向量按新图重建，文本向量沿用现有标签。
     # 素材 ID 进入待回填队列，累计达到阈值（100）后统一创建批量任务；
     # 未达阈值时 vector_task_id 为 None（素材保留在待回填表，不会丢失）。
-    # 登记失败不影响主流程（裁剪已成功提交，向量可由后续任务/手动重建兜底）
+    # 登记失败不影响主流程（裁剪已成功提交，向量可由后续任务/手动重建兜底）。
+    # 注意：enqueue 不再内部提交，裁剪变更已在上方 commit，这里需显式提交登记行
     vector_task_id: int | None = None
     if successes:
         try:
             task = await enqueue_vector_backfills(db, [s[0].id for s in successes])
+            await db.commit()
             vector_task_id = task.id if task else None
         except Exception:
             logger.exception("裁剪后登记向量回填失败，不影响裁剪主流程")
@@ -667,6 +670,17 @@ async def apply_crops(
         f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"
         f"跳过 {len(skipped)}，内容重复待用户决策 {len(duplicates)}，备份 {backup_dir}"
     )
+
+    # 记录审计：批量裁剪替换素材图片属破坏性操作（原图仅备份可手动恢复），留痕便于追溯
+    if successes:
+        from app.services.audit_service import record_audit_log
+
+        await record_audit_log(
+            action="crop",
+            count=len(successes),
+            detail=f"手机图裁剪成功 {len(successes)} 个素材（备份于 {backup_dir}）",
+        )
+
     return {
         "processed": len(successes),
         "skipped": skipped,

@@ -15,16 +15,30 @@ _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompt_configs.j
 # 串行化读-改-写，避免并发更新互相覆盖
 _write_lock = asyncio.Lock()
 
+# 读缓存（按文件 mtime 失效重载）：get_model_prompt 位于 AI 分析高频路径
+_cache: dict = {"mtime": None, "data": None}
+
 
 def _load() -> dict[str, str]:
-    """读取 Prompt 配置；文件不存在或损坏时返回空字典。"""
+    """读取 Prompt 配置（按 mtime 缓存）；文件不存在或损坏时返回空字典。"""
     if not _PROMPT_FILE.exists():
+        _cache["mtime"] = None
+        _cache["data"] = None
         return {}
     try:
+        mtime = _PROMPT_FILE.stat().st_mtime
+    except OSError:
+        return _cache["data"] or {}
+    if _cache["mtime"] == mtime and _cache["data"] is not None:
+        return _cache["data"]
+    try:
         data = json.loads(_PROMPT_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        data = {}
+    _cache["mtime"] = mtime
+    _cache["data"] = data
+    return data
 
 
 def get_model_prompt(model_name: str) -> str:

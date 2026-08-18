@@ -31,6 +31,7 @@ from app.models.person import (
     ModelPhotoSet,
 )
 from app.models.tag import InspirationTag, Tag
+from app.services.audit_service import record_audit_log
 from app.services.file_service import (
     delete_files,
     delete_files_counting,
@@ -203,8 +204,11 @@ class PersonServiceBase:
     ) -> dict:
         """创建主体，返回响应字典。"""
         assert self.model is not None
+        clean_name = name.strip()
+        if not clean_name:
+            raise PersonConflictError(f"{self.label}名称不能为空")
         person = self.model(
-            name=name.strip(),
+            name=clean_name,
             platform=platform,
             platform_user_id=platform_user_id,
             xhs_id=xhs_id,
@@ -215,7 +219,16 @@ class PersonServiceBase:
             source="manual",
         )
         db.add(person)
-        await db.flush()
+        try:
+            # SAVEPOINT 隔离：xhs_id 唯一索引冲突（并发/重复导入）时降级为 409，
+            # 避免直接 500
+            async with db.begin_nested():
+                await db.flush()
+        except IntegrityError:
+            db.expunge(person)
+            raise PersonConflictError(
+                f"{self.label}的小红书号（xhs_id）已被其它记录占用"
+            )
         await db.refresh(person)
         return self._to_dict(person)
 
@@ -233,15 +246,25 @@ class PersonServiceBase:
                 if not value:
                     raise PersonConflictError(f"{self.label}名称不能为空")
             setattr(person, field, value)
-        await db.flush()
+        try:
+            # SAVEPOINT 隔离：xhs_id 改到已被占用的值时降级为 409，避免 500
+            async with db.begin_nested():
+                await db.flush()
+        except IntegrityError:
+            raise PersonConflictError(
+                f"{self.label}的小红书号（xhs_id）已被其它记录占用"
+            )
         await db.refresh(person)
         return self._to_dict(person)
 
     async def delete(self, db: AsyncSession, person_id: int) -> None:
         """删除主体（仅允许无关联素材时删除），不存在抛 404。
 
-        删除前校验有效素材数（与列表/详情页展示口径一致，排除软删除素材）：
-        关联素材数 > 0 时抛 PersonHasInspirationsError，禁止删除以免误伤素材关联。
+        删除前校验**全部关联数**（含软删除的垃圾桶素材）：
+        - 关联素材数 > 0 时抛 PersonHasInspirationsError，禁止删除。
+        - 必须统计全部关联而非仅未删除素材：ORM 的 delete-orphan 级联会物理
+          删除垃圾桶（可恢复）素材的关联行，若只按有效素材校验，恢复素材后
+          博主/模特信息会永久丢失。
         通过校验后，模特会级联删除照片组与照片记录；照片物理文件在提交成功后
         统一清理，避免「文件已删但事务失败」产生悬空记录。
         """
@@ -259,24 +282,52 @@ class PersonServiceBase:
         if not person:
             raise PersonNotFoundError(f"{self.label}未找到")
 
-        inspiration_count = await self.count_inspirations(db, person_id)
+        inspiration_count = await self.count_all_inspirations(db, person_id)
         if inspiration_count > 0:
             raise PersonHasInspirationsError(
-                f"该{self.label}下仍有 {inspiration_count} 个素材，无法删除"
+                f"该{self.label}下仍有 {inspiration_count} 个素材（含垃圾桶素材）关联，无法删除"
             )
 
-        # 先收集照片文件路径（DB 级联删除后无法再拿到），提交成功后再物理删除
+        # 先收集照片文件路径（DB 级联删除后无法再拿到），提交成功后再物理删除；
+        # 头像文件同样收集，避免删除后残留孤儿文件
         photo_paths: list[str] = []
         if self.has_photo_sets:
             for photo_set in person.photo_sets:
                 for photo in photo_set.photos:
                     photo_paths.extend([photo.file_path, photo.thumbnail_path])
+        if person.avatar_path:
+            photo_paths.append(person.avatar_path)
 
         await db.delete(person)
         await db.commit()
 
+        # 记录审计：删除人物属破坏性操作（级联删除照片组/照片），留痕便于追溯
+        await record_audit_log(
+            action="delete_person",
+            target_type=self.label,
+            count=1,
+            detail=f"删除{self.label} {person.name}（级联删除照片组与照片记录）",
+        )
+
         if photo_paths:
             delete_files_counting(*photo_paths)
+
+    async def count_all_inspirations(self, db: AsyncSession, person_id: int) -> int:
+        """统计主体的全部关联素材数（**含软删除的垃圾桶素材**）。
+
+        仅供删除前校验使用：删除级联会物理删除全部关联行（含垃圾桶素材的），
+        因此校验口径必须覆盖全部关联，与展示口径（count_inspirations 排除
+        软删除）区分开。
+        """
+        assert self.link_model is not None
+        link_model = self.link_model
+        link_id = self._link_id_col()
+        result = await db.execute(
+            select(func.count(link_model.inspiration_id)).where(
+                link_id == person_id,
+            )
+        )
+        return result.scalar() or 0
 
     # ── 素材统计 / 列表 / 风格画像 ──
 
@@ -901,9 +952,6 @@ class BloggerService(PersonServiceBase):
         for required in ("nickname", "xhs_id"):
             if required not in header_map:
                 raise HTTPException(status_code=400, detail=f"CSV 缺少必填列：{required}")
-        nick_col = header_map["nickname"]
-        xhs_col = header_map["xhs_id"]
-        ip_col = header_map.get("ip_location")
 
         errors: list[dict] = []
         # 合法行按 xhs_id 合并（CSV 内重复 → 后出现者覆盖昵称/IP）
@@ -912,9 +960,15 @@ class BloggerService(PersonServiceBase):
         row_no = 0  # 数据行号（表头为第 0 行，数据从 1 起）
         for row in reader:
             row_no += 1
-            nickname = (row.get(nick_col) or "").strip()
-            xhs_id = (row.get(xhs_col) or "").strip()
-            ip_location = (row.get(ip_col) or "").strip() if ip_col else ""
+            # 行键规范化：DictReader 的键是原始表头（不自动 strip），
+            # 表头带首尾空白时直接 row.get("nickname") 会恒为 None——
+            # 统一按 strip+lower 后的键读取，兑现「首尾空白容错」声明
+            norm_row = {
+                (k.strip().lower() if k else ""): v for k, v in row.items()
+            }
+            nickname = (norm_row.get("nickname") or "").strip()
+            xhs_id = (norm_row.get("xhs_id") or "").strip()
+            ip_location = (norm_row.get("ip_location") or "").strip()
 
             if not nickname:
                 errors.append({"row": row_no, "nickname": None, "reason": "昵称为空"})

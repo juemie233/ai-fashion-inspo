@@ -5,7 +5,6 @@
 """
 
 import asyncio
-import logging
 
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
@@ -15,8 +14,6 @@ from app.config import settings
 from app.models.inspiration import Inspiration, NOT_DELETED
 from app.models.scraper import ScraperSeenURL, ScraperTask
 from app.utils.file_hash import file_sha256
-
-logger = logging.getLogger(__name__)
 
 
 async def find_duplicate_by_hash(db: AsyncSession, content_hash: str) -> str | None:

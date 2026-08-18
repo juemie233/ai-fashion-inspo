@@ -399,6 +399,8 @@ async def test_enqueue_below_threshold_no_task(client, small_batch_threshold):
         assert task is None  # 未达阈值：不再创建 1/1 小任务
         task = await vb_module.enqueue_vector_backfills(db, [a, b])
         assert task is None
+        # enqueue 不再内部提交：登记行由调用方统一提交
+        await db.commit()
         assert sorted(await _pending_ids()) == sorted([a, b])  # 同素材重复登记去重
         assert await _backfill_task_count(db) == 0  # 任务队列零 vector_backfill 任务
 

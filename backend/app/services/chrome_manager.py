@@ -136,11 +136,18 @@ class ChromeManager:
         self._monitor_thread.start()
 
     def _monitor(self) -> None:
-        """周期检测 Chrome 存活；崩溃自动重启；空闲自动关闭。"""
+        """周期检测 Chrome 存活；崩溃自动重启；空闲自动关闭。
+
+        监控线程内维护单一常驻事件循环供 DB 查询复用：反复 asyncio.run()
+        新建/销毁 loop 会让全局 async engine 的连接跨 loop 复用（aiosqlite
+        连接绑定创建它的 loop），间歇性报 attached to a different loop。
+        """
         idle_since = time.time()
+        loop = asyncio.new_event_loop()
         while not self._stop_flag.is_set():
             time.sleep(2)
-            proc = self._proc
+            with self._lock:
+                proc = self._proc
             if proc is None:
                 break
 
@@ -151,7 +158,8 @@ class ChromeManager:
                 # 端口仍由 Chrome 接管（launcher 委托给既有进程）→ 视为存活，重置句柄
                 ok, _detail, is_chrome = self._check(settings.chrome_debug_port)
                 if ok and is_chrome:
-                    self._proc = None
+                    with self._lock:
+                        self._proc = None
                     break
                 # 端口已无 Chrome：自动重启
                 if self._restart_count < settings.chrome_auto_restart_limit:
@@ -159,10 +167,12 @@ class ChromeManager:
                     logger.warning(
                         f"Chrome 异常退出，自动重启（{self._restart_count}/{settings.chrome_auto_restart_limit}）"
                     )
-                    self._proc = subprocess.Popen(self._build_cmd())
+                    with self._lock:
+                        self._proc = subprocess.Popen(self._build_cmd())
                     continue
                 logger.error("Chrome 重启次数已达上限，停止监控")
-                self._proc = None
+                with self._lock:
+                    self._proc = None
                 break
 
             # 空闲自动关闭：无活动采集任务且持续超时。
@@ -172,7 +182,9 @@ class ChromeManager:
                 has_active = bool(scraper_service._scraper_pids)
                 if not has_active:
                     try:
-                        has_active = asyncio.run(scraper_service.has_active_scraper_tasks())
+                        has_active = loop.run_until_complete(
+                            scraper_service.has_active_scraper_tasks()
+                        )
                     except Exception as e:
                         logger.warning(f"查询活动采集任务失败（按有活动处理，避免误关）: {e}")
                         has_active = True

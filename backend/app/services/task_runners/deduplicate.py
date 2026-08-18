@@ -31,6 +31,21 @@ from app.utils.file_hash import build_hash_map
 logger = logging.getLogger(__name__)
 
 
+async def _record_dedupe_audit(deleted_count: int, freed_bytes: int) -> None:
+    """智能去重完成审计（独立会话，失败不影响任务结果）。"""
+    try:
+        from app.services.audit_service import record_audit_log
+
+        await record_audit_log(
+            action="deduplicate",
+            count=deleted_count,
+            freed_bytes=freed_bytes,
+            detail="智能去重：物理删除冗余素材副本",
+        )
+    except Exception as e:
+        logger.warning(f"写入去重审计失败（忽略）: {e}")
+
+
 async def create_deduplicate_task(db: AsyncSession) -> TaskQueue:
     """创建「智能去重」任务记录，返回任务对象。
 
@@ -240,6 +255,10 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     await _delete_inspiration_vectors(ids_to_delete)
 
     freed_bytes = _delete_files(files_to_delete, storage_root)
+
+    # 记录审计：智能去重物理删除属不可恢复的破坏性操作，留痕便于追溯
+    # （含实际删除清单的统计，而非触发时的计划数）
+    await _record_dedupe_audit(len(ids_to_delete), freed_bytes)
 
     task.result = {
         "groups_processed": len(details),

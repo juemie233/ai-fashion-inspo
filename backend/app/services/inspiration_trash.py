@@ -9,7 +9,8 @@ import logging
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +25,7 @@ from app.services.file_service import (
     move_to_trash,
     restore_from_trash,
 )
+from app.services.inspiration_query import load_inspiration_full
 from app.services.inspiration_state import (
     _mark_restored,
     _mark_trashed,
@@ -40,6 +42,8 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     与素材库垃圾桶语义一致：标记 deleted_at / trash_reason（rejected → 「质量差」，
     供负样本学习使用）、文件移入 storage/trash/、向量保留；不再物理删除，
     避免 AI 误判导致素材不可恢复地丢失，也避免写入采集墓碑后无法重新采集。
+
+    分批处理（每批 100 条）：避免大库下一次性全量加载与文件移动阻塞过久。
     """
     result = await db.execute(
         select(Inspiration).where(
@@ -52,52 +56,58 @@ async def delete_rejected_inspirations(db: AsyncSession) -> dict:
     if not rejected:
         return {"trashed": 0, "message": "没有已拒绝的素材"}
 
-    # 标记软删除（reason 自动推断：rejected → 质量差；来源标记为自动移动）。
-    # 三字段经 _mark_trashed 单点写入，保证状态转移合法
-    trashed_items: list[Inspiration] = []
-    for insp in rejected:
-        if insp.deleted_at is not None:
+    total_trashed = 0
+    for start in range(0, len(rejected), 100):
+        batch = rejected[start:start + 100]
+        # 标记软删除（reason 自动推断：rejected → 质量差；来源标记为自动移动）。
+        # 三字段经 _mark_trashed 单点写入，保证状态转移合法
+        trashed_items: list[Inspiration] = []
+        for insp in batch:
+            if insp.deleted_at is not None:
+                continue
+            _mark_trashed(insp, _resolve_trash_reason(None, insp), "auto")
+            trashed_items.append(insp)
+        if not trashed_items:
             continue
-        _mark_trashed(insp, _resolve_trash_reason(None, insp), "auto")
-        trashed_items.append(insp)
 
-    # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，
-    # 避免「文件已移走但事务回滚/失败」产生指向不存在文件的记录
-    if trashed_items:
+        # 先提交软删除标记与来源 URL 墓碑（同一事务），提交成功后再移动文件，
+        # 避免「文件已移走但事务回滚/失败」产生指向不存在文件的记录
         await seal_urls(db, [insp.source_url for insp in trashed_items if insp.source_url])
         await db.commit()
 
-    # 移动文件到垃圾桶目录；失败仅记日志不阻断软删除（恢复时按 DB 路径自愈）
-    paths_changed = False
-    for insp in trashed_items:
-        try:
-            new_file = move_to_trash(insp.file_path, insp.id)
-            if new_file:
-                insp.file_path = new_file
-                paths_changed = True
-        except OSError as e:
-            logger.warning(f"移动主文件到垃圾桶失败 {insp.id}: {e}")
-        try:
-            new_thumb = move_to_trash(insp.thumbnail_path, insp.id, suffix="_thumb")
-            if new_thumb:
-                insp.thumbnail_path = new_thumb
-                paths_changed = True
-        except OSError as e:
-            logger.warning(f"移动缩略图到垃圾桶失败 {insp.id}: {e}")
+        # 移动文件到垃圾桶目录；失败仅记日志不阻断软删除（恢复时按 DB 路径自愈）
+        paths_changed = False
+        for insp in trashed_items:
+            try:
+                new_file = move_to_trash(insp.file_path, insp.id)
+                if new_file:
+                    insp.file_path = new_file
+                    paths_changed = True
+            except OSError as e:
+                logger.warning(f"移动主文件到垃圾桶失败 {insp.id}: {e}")
+            try:
+                new_thumb = move_to_trash(insp.thumbnail_path, insp.id, suffix="_thumb")
+                if new_thumb:
+                    insp.thumbnail_path = new_thumb
+                    paths_changed = True
+            except OSError as e:
+                logger.warning(f"移动缩略图到垃圾桶失败 {insp.id}: {e}")
 
-    if paths_changed:
-        await db.commit()
+        if paths_changed:
+            await db.commit()
+        total_trashed += len(trashed_items)
 
-    # 记录审计：批量移入垃圾桶属破坏性批量操作，留痕便于追溯
-    await record_audit_log(
-        action="delete_rejected",
-        count=len(trashed_items),
-        detail="批量将质量审核被拒绝的素材移入垃圾桶（软删除，可恢复）",
-    )
+    # 记录审计：批量移入垃圾桶属破坏性批量操作，留痕便于追溯（仅实际移入时）
+    if total_trashed:
+        await record_audit_log(
+            action="delete_rejected",
+            count=total_trashed,
+            detail="批量将质量审核被拒绝的素材移入垃圾桶（软删除，可恢复）",
+        )
 
     return {
-        "trashed": len(trashed_items),
-        "message": f"已将 {len(trashed_items)} 个已拒绝素材移入垃圾桶",
+        "trashed": total_trashed,
+        "message": f"已将 {total_trashed} 个已拒绝素材移入垃圾桶",
     }
 
 
@@ -122,8 +132,14 @@ async def batch_trash_inspirations(
             # audit=False：批量路径由下方汇总写一条 batch_trash 审计，避免逐条留痕噪音
             await trash_inspiration(db, inspiration_id, reason, source=source, audit=False)
             trashed += 1
-        except HTTPException:
+        except Exception as e:
+            # 与注释「容忍部分失败」语义一致：单条失败（404/409 或异常）计入
+            # skipped 继续处理其余素材，避免单条异常中断整个批次
             skipped += 1
+            if not isinstance(e, HTTPException):
+                logger.warning(
+                    f"批量移入垃圾桶单条失败（计入跳过）{inspiration_id}: {e}"
+                )
 
     # 记录审计：批量移入垃圾桶（软删除）也纳入审计，便于追溯批量整理动作
     if trashed > 0:
@@ -137,7 +153,13 @@ async def batch_trash_inspirations(
 
 
 async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
-    """删除灵感素材及其对应的磁盘文件，不存在则抛出 404。"""
+    """删除灵感素材及其对应的磁盘文件，不存在则抛出 404。
+
+    仅允许删除垃圾桶中的素材（物理删除，不可恢复）：
+    - active 素材必须先走 trash_inspiration 移入垃圾桶（软删除可恢复），
+      防止误调用绕过软删除生命周期直接永久删除；
+    - 物理删除属不可恢复的破坏性操作，写入审计留痕（与 trash/restore/purge 一致）。
+    """
     from app.services import vector_store
 
     result = await db.execute(
@@ -146,6 +168,11 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     inspiration = result.scalar_one_or_none()
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.deleted_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="素材不在垃圾桶中，请先移入垃圾桶（软删除）后再彻底删除",
+        )
 
     # 写入墓碑表（防止重复采集）
     await seal_urls(db, [inspiration.source_url])
@@ -155,6 +182,13 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     # 指向不存在文件的悬空记录
     await db.delete(inspiration)
     await db.commit()
+
+    # 记录审计：物理删除素材属不可恢复的破坏性操作，必须留痕（写入在主事务提交后）
+    await record_audit_log(
+        action="delete",
+        count=1,
+        detail=f"彻底删除素材 {inspiration_id}（垃圾桶中物理删除）",
+    )
 
     # 提交成功后同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
     if vector_store.is_lancedb_available():
@@ -181,16 +215,7 @@ async def trash_inspiration(
         source: 移入来源（manual 手动移入 / auto 质量审核自动移动），垃圾桶据此展示来源
         audit: 是否写入单条审计（批量入口逐条调用时应传 False，由批量汇总一条审计）
     """
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
-        )
-        .where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.unique().scalar_one_or_none()
+    inspiration = await load_inspiration_full(db, inspiration_id)
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
     if inspiration.deleted_at is not None:
@@ -241,16 +266,7 @@ async def trash_inspiration(
 
 async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
     """从垃圾桶恢复素材：文件移回媒体目录，清除 deleted_at 与 trash_reason。"""
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
-        )
-        .where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.unique().scalar_one_or_none()
+    inspiration = await load_inspiration_full(db, inspiration_id)
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
     if inspiration.deleted_at is None:
@@ -281,7 +297,26 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     prev_reason = inspiration.trash_reason
     prev_source = inspiration.trash_source
     _mark_restored(inspiration)
-    await db.commit()
+    # 恢复后解除来源 URL 墓碑（与移入时的 seal_urls 对称）：
+    # 否则素材恢复后其 URL 仍被采集器/导入链路永久拦截（状态转移缺口）。
+    # 墓碑解除不影响内容去重——同 URL 重新采集会命中 content_hash 查重跳过。
+    if inspiration.source_url:
+        from app.models.scraper import ScraperSeenURL
+
+        await db.execute(
+            delete(ScraperSeenURL).where(
+                ScraperSeenURL.source_url == inspiration.source_url
+            )
+        )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 并发竞态：恢复期间同平台 ID 被新素材抢先入库，撞部分唯一索引。
+        # 恢复标记随事务回滚（素材仍在垃圾桶），转 409 提示用户重试
+        raise HTTPException(
+            status_code=409,
+            detail="恢复失败：该平台 ID 已被其它素材占用（并发冲突），请刷新后重试",
+        )
 
     paths_changed = False
     try:

@@ -94,7 +94,11 @@ async def test_unanalyzed_ids(client, upload):
 
 
 async def test_analysis_queue_stats(client, upload):
-    """分析队列统计：总数/已分析/失败/未分析。"""
+    """分析队列统计：总数/已分析/失败/未分析。
+
+    口径：unanalyzed = 无成功日志的素材（**含分析失败过的**，与批量分析
+    的「已分析跳过」条件一致）；analyzed 为「有过日志」（attempted）。
+    """
     a = upload().json()["id"]
     await _add_log(a, error=None)
     b = upload().json()["id"]
@@ -104,7 +108,18 @@ async def test_analysis_queue_stats(client, upload):
     assert data["total"] == 2
     assert data["analyzed"] == 2
     assert data["failed"] == 1
-    assert data["unanalyzed"] == 0
+    assert data["unanalyzed"] == 1  # 失败素材重新纳入未分析（可被批量重跑）
+
+
+async def test_unanalyzed_ids_include_failed(client, upload):
+    """未分析列表包含分析失败过的素材（修复：失败素材不再被批量分析永久排除）。"""
+    a = upload().json()["id"]
+    await _add_log(a, error=None)
+    b = upload().json()["id"]
+    await _add_log(b, error="解析失败")
+
+    data = client.get("/api/ai/unanalyzed-ids").json()
+    assert data["ids"] == [b]
 
 
 async def test_analysis_status_latest_success_wins(client, upload):

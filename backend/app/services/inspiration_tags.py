@@ -19,10 +19,8 @@ async def batch_add_tags(
 ) -> dict:
     """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
 
-    仅对实际新增了标签的素材重建文本向量，避免无谓调用 Ollama。
+    仅对实际新增了标签的素材登记文本向量重建（攒批队列执行），避免无谓调用 Ollama。
     """
-    from app.services.vector_service import rebuild_text_vector
-
     # 去重（保留顺序），避免重复 ID/名称虚增统计与重复查询
     inspiration_ids = list(dict.fromkeys(inspiration_ids))
     raw_names = [n.strip() for n in names if n.strip()]
@@ -86,9 +84,15 @@ async def batch_add_tags(
 
     await db.commit()
 
-    # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
-    for inspiration_id in affected_ids:
-        await rebuild_text_vector(db, inspiration_id)
+    # 标签变更后的文本向量重建走攒批队列（与 tag_service 的合并/删除/重命名
+    # 路径一致）：批量打标可能涉及上百个素材，逐个同步重建会串行调用上百次
+    # Ollama embedding 导致请求挂起。素材登记进待回填表，累计达阈值后由
+    # worker 统一创建批量任务执行。
+    if affected_ids:
+        from app.services.task_runners.vector_backfill import enqueue_vector_backfills
+
+        await enqueue_vector_backfills(db, affected_ids)
+        await db.commit()
 
     return {
         "added": total_added,
@@ -162,9 +166,9 @@ async def remove_inspiration_tag(
             InspirationTag.tag_id == tag_id,
         )
     )
-    await db.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="未找到该标签关联")
+    await db.commit()
 
     # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
     await rebuild_text_vector(db, inspiration_id)

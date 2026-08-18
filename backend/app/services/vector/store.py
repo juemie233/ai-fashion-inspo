@@ -53,7 +53,14 @@ def _vector_write_lock() -> Iterator[None]:
                 import msvcrt
 
                 f.seek(0)
-                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # 阻塞等待（内部重试约 10 秒）
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # 阻塞等待（内部重试约 10 秒）
+                except OSError as e:
+                    # 锁超时通常意味着另一进程持有写锁过久（大批量回填），
+                    # 转成带说明的异常，与普通向量写失败区分开便于排查
+                    raise RuntimeError(
+                        f"向量写锁获取超时（其它进程持锁过久，通常为大批量回填中）: {e}"
+                    ) from e
                 try:
                     yield
                 finally:
@@ -196,8 +203,12 @@ def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
             )
             return False
 
-        table = _table(kind)
+        table = None
         with _vector_write_lock():
+            # 表句柄必须在锁内打开：LanceDB 表对象持有版本基线，锁外开表会
+            # 以旧版本为基线提交写操作，与并发写入互相覆盖（与 _batch_add_sync
+            # 锁内开表保持一致，防止单条写入复现「955 条覆盖丢失」事故）。
+            table = _table(kind)
             try:
                 table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
             except Exception:

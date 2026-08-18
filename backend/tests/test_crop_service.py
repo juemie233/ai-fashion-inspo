@@ -253,7 +253,14 @@ def test_apply_duplicate_returns_preview_for_user_decision(client, monkeypatch):
     assert preview.exists()
     assert _file_size(insp_a["id"], client)[1] == 600  # A 原图未动
 
-    # 用户决定：物理删除重复素材 B（不可恢复）→ 再次裁剪 A 成功
+    # 用户决定：把重复素材 B 移入垃圾桶后再彻底删除
+    # （active 素材禁止直接物理删除——垃圾桶守卫，先软删可恢复再彻底删除）
+    assert (
+        client.post(
+            f"/api/inspirations/{insp_b['id']}/trash", json={"reason": "重复"}
+        ).status_code
+        == 200
+    )
     r_del = client.delete(f"/api/inspirations/{insp_b['id']}")
     assert r_del.status_code == 204
     # 物理删除：正常列表与垃圾桶均不再包含 B
@@ -312,7 +319,13 @@ def test_apply_duplicate_rerun_keeps_other_previews(client, monkeypatch):
     c_preview = next(d for d in body["duplicates"] if d["id"] == insp_c["id"])["preview_path"]
     assert (settings.storage_root / c_preview).exists()
 
-    # 用户处理第一组（A）：物理删除 B 后重新 apply 仅 A
+    # 用户处理第一组（A）：把 B 移入垃圾桶后彻底删除，再重新 apply 仅 A
+    assert (
+        client.post(
+            f"/api/inspirations/{insp_b['id']}/trash", json={"reason": "重复"}
+        ).status_code
+        == 200
+    )
     assert client.delete(f"/api/inspirations/{insp_b['id']}").status_code == 204
     r2 = client.post(
         "/api/admin/crop-phone-screenshots/apply",

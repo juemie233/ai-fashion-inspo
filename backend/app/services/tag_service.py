@@ -4,13 +4,14 @@ import asyncio
 import itertools
 import logging
 from collections import defaultdict
-from difflib import SequenceMatcher
+from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.tag import Tag, InspirationTag, TagAlias
+from app.services.audit_service import record_audit_log
 from app.utils.tag_normalizer import normalize_tag_name_async
 
 logger = logging.getLogger(__name__)
@@ -87,19 +88,27 @@ SEED_TAGS: dict[str, list[str]] = {
 
 
 def _similarity(a: str, b: str) -> float:
-    """计算两个字符串的相似度（0-1）。"""
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    """计算两个字符串的相似度（0-1），复用 tag_normalizer 的统一实现。"""
+    from app.utils.tag_normalizer import string_similarity
+
+    return string_similarity(a, b)
 
 
 async def seed_tags(db: AsyncSession) -> int:
-    """导入预设标签（跳过已存在的标签）。返回新增标签数量。"""
+    """导入预设标签（跳过已存在的标签）。返回新增标签数量。
+
+    一次性 IN 查询全部预设名（避免逐条 SELECT 的 N+1）。
+    """
+    all_names = [name for names in SEED_TAGS.values() for name in names]
+    existing = await db.execute(select(Tag.name).where(Tag.name.in_(all_names)))
+    existing_names = set(existing.scalars().all())
     added = 0
     for category, names in SEED_TAGS.items():
         for name in names:
-            existing = await db.execute(select(Tag).where(Tag.name == name))
-            if not existing.scalar_one_or_none():
-                db.add(Tag(name=name, category=category))
-                added += 1
+            if name in existing_names:
+                continue
+            db.add(Tag(name=name, category=category))
+            added += 1
     if added:
         await db.flush()
     return added
@@ -176,25 +185,42 @@ async def get_or_create_tag(
             result = await db.execute(select(Tag).where(Tag.name == name))
             tag = result.scalar_one_or_none()
             if not tag:
-                # 极端情况：重查仍未找到，再试一次（小概率）
+                # 极端情况：重查仍未找到，再试一次（小概率）。同样用 SAVEPOINT
+                # 隔离，避免再次并发冲突直接 500
                 tag = Tag(name=name, category=category, source=source)
                 db.add(tag)
-                await db.flush()
+                try:
+                    async with db.begin_nested():
+                        await db.flush()
+                except IntegrityError:
+                    db.expunge(tag)
+                    result = await db.execute(select(Tag).where(Tag.name == name))
+                    tag = result.scalar_one_or_none()
+                    if not tag:
+                        raise
     return tag
 
 
 async def find_similar_tags(
     db: AsyncSession, name: str, threshold: float = 0.75
 ) -> list[Tag]:
-    """查找与给定名称相似的已有标签（用于去重建议）。"""
+    """查找与给定名称相似的已有标签（用于去重建议）。
+
+    全库两两比较是 O(n²) 同步计算，放入线程池执行避免阻塞事件循环
+    （与 find_duplicate_tag_pairs 一致）。
+    """
     result = await db.execute(select(Tag))
     all_tags = result.scalars().all()
-    similar = []
-    for tag in all_tags:
-        sim = _similarity(name, tag.name)
-        if sim >= threshold and sim < 1.0:
-            similar.append(tag)
-    return sorted(similar, key=lambda t: _similarity(name, t.name), reverse=True)
+
+    def _compute_similar() -> list[Tag]:
+        similar = []
+        for tag in all_tags:
+            sim = _similarity(name, tag.name)
+            if sim >= threshold and sim < 1.0:
+                similar.append(tag)
+        return sorted(similar, key=lambda t: _similarity(name, t.name), reverse=True)
+
+    return await asyncio.to_thread(_compute_similar)
 
 
 async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
@@ -221,8 +247,23 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
             # 重复关联 — 删除源标签的关联
             await db.delete(link)
         else:
-            # 重定向到目标标签
+            # 重定向到目标标签。用 SAVEPOINT 隔离提交：并发合并同一素材到
+            # 同一目标标签时，后到者触发唯一约束，仅回滚该条而非整个事务
             link.tag_id = target_id
+            try:
+                async with db.begin_nested():
+                    await db.flush()
+            except IntegrityError:
+                # SAVEPOINT 已回滚，重查后按「已关联」处理（跳过本条）
+                db.expunge(link)
+                existing_link = await db.execute(
+                    select(InspirationTag.id).where(
+                        InspirationTag.inspiration_id == link.inspiration_id,
+                        InspirationTag.tag_id == target_id,
+                    )
+                )
+                if existing_link.scalar_one_or_none() is None:
+                    raise
 
     # 删除源标签
     source_tag = await db.get(Tag, source_id)
@@ -258,11 +299,21 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
     # 合并后为受影响素材重建文本向量（异步入队，由 worker 执行）
     await _rebuild_vectors_for_tag_change(db, affected_ids)
 
+    # 记录审计：合并标签属破坏性批量操作（删除源标签、重定向关联），留痕便于追溯
+    await record_audit_log(
+        action="merge_tags",
+        target_type="tags",
+        count=len(affected_ids),
+        detail=f"标签 {source_id} 合并到 {target_id}",
+    )
+
 
 async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag:
     """创建自定义标签（先做别名归一化，再按规范名查重）。
 
-    名称已存在时抛 TagConflictError。
+    名称已存在时抛 TagConflictError；与既有标签别名同名也抛 TagConflictError
+    （否则别名归一化优先命中别名，新建的主标签永远不被 AI 打标命中，成为死标签）；
+    strip 后为空名直接拒绝。
 
     参数:
         name: 原始输入标签名（归一化前的名称，用于冲突提示文案）
@@ -270,9 +321,14 @@ async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag
     """
     raw_name = name
     name = (await normalize_tag_name_async(db, name)).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="标签名称不能为空")
     result = await db.execute(select(Tag).where(Tag.name == name))
     if result.scalar_one_or_none():
         raise TagConflictError(f"标签 '{raw_name}' 已存在")
+    alias_conflict = await db.execute(select(TagAlias).where(TagAlias.alias == name))
+    if alias_conflict.scalar_one_or_none():
+        raise TagConflictError(f"标签名 '{raw_name}' 已作为其它标签的别名使用")
 
     tag = Tag(name=name, category=category, source="manual")
     db.add(tag)
@@ -307,6 +363,7 @@ async def update_tag(
     if not tag:
         raise TagNotFoundError("标签未找到")
 
+    renamed = False
     if name is not None:
         new_name = (await normalize_tag_name_async(db, name)).strip()
         conflict = await db.execute(
@@ -319,6 +376,7 @@ async def update_tag(
         )
         if alias_conflict.scalar_one_or_none():
             raise TagConflictError(f"标签名 '{name}' 已作为其它标签的别名使用")
+        renamed = new_name != tag.name
         tag.name = new_name
 
     if category is not None:
@@ -332,6 +390,20 @@ async def update_tag(
 
     await db.flush()
     await db.refresh(tag)
+
+    # 单条改名后标签名变了：文本向量（基于标签名拼接生成）需重建，
+    # 与 batch_rename_tags 的语义保持一致。登记到攒批队列由 worker 执行。
+    # （update_tag 只 flush 未提交，登记行与改名随调用方事务一并落库）
+    if name is not None and renamed:
+        affected_ids = (
+            await db.execute(
+                select(InspirationTag.inspiration_id)
+                .where(InspirationTag.tag_id == tag_id)
+                .distinct()
+            )
+        ).scalars().all()
+        await _rebuild_vectors_for_tag_change(db, affected_ids)
+
     return tag
 
 
@@ -364,13 +436,35 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
     if not unused:
         return []
 
-    # 先删关联表中的残留记录（防御性清理），再删标签
+    # 删除前收集受影响素材（含只关联垃圾桶素材的标签——恢复后其文本向量
+    # 含已删标签名，需一并登记重建，与 batch_delete_tags 语义一致）
     unused_ids = [t.id for t in unused]
+    affected_ids = (
+        await db.execute(
+            select(InspirationTag.inspiration_id)
+            .where(InspirationTag.tag_id.in_(unused_ids))
+            .distinct()
+        )
+    ).scalars().all()
+
+    # 先删关联表中的残留记录（防御性清理），再删标签
     await db.execute(
         delete(InspirationTag).where(InspirationTag.tag_id.in_(unused_ids))
     )
     await db.execute(delete(Tag).where(Tag.id.in_(unused_ids)))
     await db.commit()
+
+    # 受影响素材的标签集合变了，重建其文本向量（异步入队，显式提交登记行）
+    await _rebuild_vectors_for_tag_change(db, affected_ids)
+    await db.commit()
+
+    # 记录审计：批量删除未使用标签属破坏性批量操作，留痕便于追溯
+    await record_audit_log(
+        action="delete_unused_tags",
+        target_type="tags",
+        count=len(unused),
+        detail=f"删除未使用标签 {[t.name for t in unused]}",
+    )
     return unused
 
 
@@ -391,6 +485,14 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     await db.flush()
     # 删除标签后素材标签集合变了，重建其文本向量（异步入队）
     await _rebuild_vectors_for_tag_change(db, affected_ids)
+    await db.commit()
+    # 记录审计：批量删除标签属破坏性批量操作，留痕便于追溯
+    await record_audit_log(
+        action="batch_delete_tags",
+        target_type="tags",
+        count=len(tags),
+        detail=f"删除标签 {[t.name for t in tags]}",
+    )
     return tags
 
 
@@ -428,32 +530,62 @@ async def batch_rename_tags(
 ) -> int:
     """批量重命名标签（查找替换），返回实际更新数。
 
-    预检新名称冲突：与已有标签同名时抛 TagConflictError（不执行任何修改）。
+    预检新名称冲突（不执行任何修改）：
+    - 改名结果为空名 → 400（禁止空名标签）
+    - 批内标签改名后互相同名（如 A="ff"、B="f"，find="f" replace=""）→ 409
+    - 与 DB 中其它标签同名 → 409
+    - 与任一标签别名同名 → 409
     """
     result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
     tags = result.scalars().all()
-    # 预检：新名称是否会与已有标签冲突
+
+    # 计算批内全部改名结果（批内新名冲突必须整体预检，不能逐条查 DB）
+    rename_map: dict[int, str] = {}
     for tag in tags:
         if find_str in tag.name:
             new_name = tag.name.replace(find_str, replace_str)
+            if not new_name.strip():
+                raise HTTPException(status_code=400, detail="重命名结果为空名，禁止创建空名标签")
             if new_name != tag.name:
-                conflict = await db.execute(
-                    select(Tag.id).where(Tag.name == new_name, Tag.id != tag.id)
-                )
-                if conflict.scalar_one_or_none():
-                    raise TagConflictError(
-                        f"重命名冲突: '{tag.name}' → '{new_name}' 与已有标签同名"
-                    )
+                rename_map[tag.id] = new_name
+
+    # 批内互相同名：两个不同标签改名后撞名
+    seen_names: dict[str, int] = {}
+    for tid, new_name in rename_map.items():
+        if new_name in seen_names:
+            raise TagConflictError(
+                f"重命名冲突: 标签 '{seen_names[new_name]}' 与 '{tid}' 改名后同为 '{new_name}'"
+            )
+        seen_names[new_name] = tid
+
+    if rename_map:
+        # 与 DB 中其它标签同名（排除本批改名对象）
+        conflict = await db.execute(
+            select(Tag.id).where(
+                Tag.name.in_(rename_map.values()),
+                Tag.id.notin_(rename_map.keys()),
+            )
+        )
+        if conflict.scalars().first():
+            raise TagConflictError("重命名冲突: 新名称与已有标签同名")
+        # 与标签别名同名（别名会与主标签名产生歧义）
+        alias_conflict = await db.execute(
+            select(TagAlias.alias).where(TagAlias.alias.in_(rename_map.values()))
+        )
+        if alias_conflict.scalars().first():
+            raise TagConflictError("重命名冲突: 新名称与已有标签别名同名")
+
     updated = 0
     renamed_tag_ids: list[int] = []
     for tag in tags:
-        if find_str in tag.name:
-            tag.name = tag.name.replace(find_str, replace_str)
+        if tag.id in rename_map:
+            tag.name = rename_map[tag.id]
             renamed_tag_ids.append(tag.id)
             updated += 1
     await db.commit()
 
     # 重命名后标签名变了，文本向量（基于标签名拼接）需重建，异步入队
+    # （enqueue 不内部提交，此处登记行需显式提交；素材变更已在上方 commit）
     if renamed_tag_ids:
         affected_ids = (
             await db.execute(
@@ -463,6 +595,7 @@ async def batch_rename_tags(
             )
         ).scalars().all()
         await _rebuild_vectors_for_tag_change(db, affected_ids)
+        await db.commit()
     return updated
 
 
@@ -555,8 +688,10 @@ async def batch_remove_tag_inspirations(
         )
     )
     await db.commit()
-    # 解除关联后素材标签集合变了，重建其文本向量（异步入队）
+    # 解除关联后素材标签集合变了，重建其文本向量（异步入队）。
+    # enqueue 不内部提交，此处显式提交登记行（解除操作已在上方 commit）
     await _rebuild_vectors_for_tag_change(db, list(inspiration_ids))
+    await db.commit()
     return result.rowcount
 
 
@@ -649,15 +784,29 @@ async def import_tags(
 
     参数:
         items: (标签名, 类别) 列表
+
+    说明:
+        - 批内重复名称先去重（避免同批 flush 时撞唯一约束 500）
+        - 空名 / 纯空白名称跳过
+        - 统一走别名归一化（与 create_tag 一致），避免导入未归一化的脏名
     """
     imported = 0
     skipped = 0
-    for name, category in items:
-        existing = await db.execute(select(Tag).where(Tag.name == name.strip()))
+    seen: set[str] = set()
+    for raw_name, category in items:
+        name = (await normalize_tag_name_async(db, raw_name.strip())).strip()
+        if not name:
+            skipped += 1
+            continue
+        if name in seen:  # 批内重复：跳过
+            skipped += 1
+            continue
+        seen.add(name)
+        existing = await db.execute(select(Tag).where(Tag.name == name))
         if existing.scalar_one_or_none():
             skipped += 1
             continue
-        tag = Tag(name=name.strip(), category=category, source="manual")
+        tag = Tag(name=name, category=category, source="manual")
         db.add(tag)
         imported += 1
 

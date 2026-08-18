@@ -85,6 +85,11 @@ async def _analyze_one(
             if success:
                 return inspiration_id, True, None
             error = await _last_analysis_error(db, inspiration_id)
+            if not error:
+                # 日志未能读到失败原因（_write_analysis_log 内部吞异常时日志
+                # 可能未写入）：给出可辨识的兜底文案，避免「可恢复错误被误判
+                # 为永久错误」时连原因都查不到
+                error = "分析失败（未能记录错误详情，可能日志写入异常）"
             return inspiration_id, False, error
 
 

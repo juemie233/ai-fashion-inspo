@@ -74,6 +74,21 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     )
     files_to_delete = result.all()
 
+    # 崩溃窗口防护：把「待清理清单」先写入任务 result 并提交。
+    # 若 worker 在「删 DB 行 → 删文件/向量」之间崩溃，重试时行已不存在、
+    # 查询不到清单，文件/向量会永久残留；预存清单后重试可从 result 恢复清理。
+    pending_cleanup = [
+        {"id": r[0], "file_path": r[1], "thumbnail_path": r[2]}
+        for r in files_to_delete
+    ]
+    if pending_cleanup:
+        task.result = {
+            "inspiration_ids": inspiration_ids,
+            "label": payload.get("label", ""),
+            "pending_cleanup": pending_cleanup,
+        }
+        await db.commit()
+
     # 写入墓碑表（防止被删除素材的 URL 被重新采集）
     urls_to_seal = [r[3] for r in files_to_delete if r[3]]
     await seal_urls(db, urls_to_seal)
@@ -89,9 +104,13 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     # 删除 LanceDB 向量，避免孤儿向量（由 vector_store 提供，未安装时静默返回）
     await _delete_inspiration_vectors(deleted_ids)
 
+    # 重跑兜底：正常查询可能已无行（首次执行已删），从 result 恢复清理清单
+    cleanup_list = pending_cleanup or (task.result or {}).get("pending_cleanup") or []
     freed_bytes = 0
-    for _fid, fpath, thumb, _surl in files_to_delete:
-        freed_bytes += delete_files_counting(fpath, thumb)
+    for entry in cleanup_list:
+        freed_bytes += delete_files_counting(
+            entry.get("file_path"), entry.get("thumbnail_path")
+        )
 
     task.result = {
         "inspiration_ids": inspiration_ids,

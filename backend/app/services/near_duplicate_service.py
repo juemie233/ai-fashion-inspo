@@ -216,6 +216,14 @@ async def scan_near_duplicates(
         phash = row[5]
         if not phash:
             continue
+        # 文件缺失时按 0 字节处理（磁盘文件被手动删除/孤儿时不应让扫描整体 500）
+        size_bytes = 0
+        if row[1]:
+            try:
+                full = storage_root / row[1]
+                size_bytes = full.stat().st_size if full.exists() else 0
+            except OSError:
+                size_bytes = 0
         items.append(
             {
                 "id": row[0],
@@ -224,7 +232,7 @@ async def scan_near_duplicates(
                 "is_favorite": row[3],
                 "created_at": row[4],
                 "phash_int": int(phash, 16),
-                "size_bytes": (storage_root / row[1]).stat().st_size if row[1] else 0,
+                "size_bytes": size_bytes,
             }
         )
 

@@ -28,7 +28,8 @@ async def summarize_outfit_tags(small_tags: list[str]) -> list[str]:
     # 大标签总结跟随模型管理的活跃模型；仍强制非思考模式（思考模型会吃光预算返回空）
     summary_model = settings.ollama_vision_model
     model_cfg = get_model_config(summary_model)
-    tag_list = "、".join(small_tags)
+    # 输入约束：截断拼接文本（标签名来自模型输出/用户输入，防 prompt 注入与超长输入）
+    tag_list = "、".join(small_tags)[:500]
     prompt = (
         "你是一个穿搭标签总结助手。根据以下穿搭小标签，提炼出 1~3 个「穿搭大标签」。\n"
         "穿搭大标签是「概括整套穿搭风格/场景的短语」，要把关键元素组合起来，例如：\n"

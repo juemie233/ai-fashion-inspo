@@ -4,6 +4,7 @@
 - 共享 logger（沿用原 app.services.ai_service 名称，保证日志输出与拆分前一致）
 """
 
+import asyncio
 import logging
 
 from app.config import settings
@@ -15,8 +16,11 @@ _ALLOWED_IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
 logger = logging.getLogger("app.services.ai_service")
 
 
-def _read_image_base64(file_path: str) -> tuple[str, float]:
-    """读取图片并转为 base64（含路径校验和格式转换）。
+def _read_image_base64_sync(file_path: str) -> tuple[str, float]:
+    """同步读取图片并转为 base64（含路径校验和格式转换）。
+
+    文件读取 + PIL 解码/转换 + base64 编码均为阻塞 CPU/IO（单张可达数百毫秒），
+    调用方应通过 ``_read_image_base64`` 放入线程池执行，避免卡住事件循环。
 
     返回:
         (base64 字符串, 文件大小 MB)
@@ -64,3 +68,12 @@ def _read_image_base64(file_path: str) -> tuple[str, float]:
     image_data = base64.b64encode(image_bytes).decode("utf-8")
     file_size_mb = full_path.stat().st_size / (1024 * 1024)
     return image_data, file_size_mb
+
+
+async def _read_image_base64(file_path: str) -> tuple[str, float]:
+    """异步读取图片并转为 base64（线程池执行，不阻塞事件循环）。
+
+    返回:
+        (base64 字符串, 文件大小 MB)
+    """
+    return await asyncio.to_thread(_read_image_base64_sync, file_path)

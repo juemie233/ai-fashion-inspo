@@ -272,7 +272,7 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
     success = False
 
     try:
-        image_data, file_size_mb = _read_image_base64(file_path)
+        image_data, file_size_mb = await _read_image_base64(file_path)
 
         # 图片体积检查 (>5MB 可能导致 Ollama 400)
         if file_size_mb > 5:

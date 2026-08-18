@@ -107,6 +107,13 @@ async def enqueue_vector_backfills(
 
     返回:
         达阈值时返回新建的批量任务；未达阈值或无有效素材时返回 None。
+
+    事务边界（重要）:
+        - 登记本身**不提交**：pending 行随调用方事务一并落库（由调用方统一
+          commit / rollback），避免 helper 隐式提交调用方未完成的变更
+          （如新素材行、标签合并结果）；
+        - 达阈值触发的 flush 内部会提交（任务创建必须落库），此时登记行与
+          任务在同一提交点完成，调用方无需额外 commit。
     """
     existing_ids = await _filter_existing_ids(db, inspiration_ids)
     if not existing_ids:
@@ -128,9 +135,9 @@ async def enqueue_vector_backfills(
         )
         stmt = stmt.on_conflict_do_nothing(index_elements=["inspiration_id"])
         await db.execute(stmt)
-        await db.commit()
+        # 注意：此处不 commit——pending 行与调用方事务同生共死，由调用方统一提交
 
-    # 累计达到阈值 → 立即创建批量任务（内部会清空待回填表）
+    # 累计达到阈值 → 立即创建批量任务（flush 内部提交并清空待回填表）
     count = (
         await db.execute(select(func.count()).select_from(PendingVectorBackfill))
     ).scalar() or 0

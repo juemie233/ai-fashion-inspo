@@ -5,12 +5,16 @@ inspiration_dedupe，两条创建路径共用同一套「先查重后落盘」�
 """
 
 import asyncio
+import ipaddress
 import logging
+import socket
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -31,6 +35,39 @@ from app.services.tag_service import get_or_create_tag
 from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_download_url(url: str) -> None:
+    """校验下载 URL 目标地址，拒绝 SSRF 高危目标（回环/私网/链路本地等）。
+
+    URL 导入与浏览器插件采集链路会向本接口投递任意 URL，若不拦截内网地址，
+    恶意 URL 可诱导服务端访问内网服务或云元数据接口（169.254.169.254 等）。
+    DNS 解析为阻塞操作，调用方应放入线程池执行。
+
+    异常:
+        HTTPException(400): 地址非法、无法解析或指向内网/保留地址
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="无效的下载地址")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="下载地址无法解析")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_loopback
+            or ip.is_private
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="下载地址指向内网/保留地址，已拒绝（SSRF 防护）",
+            )
 
 
 async def create_inspiration(
@@ -89,13 +126,20 @@ async def create_inspiration(
         scraper_task_id=scraper_task_id,
     )
     db.add(inspiration)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # 并发下撞唯一约束（如平台 ID 部分唯一索引）：清理已落盘文件后转 409，
+        # 避免残留孤儿文件与 500
+        delete_files(file_path, thumb_path)
+        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
     await db.refresh(inspiration)
 
     # 入库后登记向量回填（攒批）：素材 ID 进入待回填队列，累计达到阈值（100）后
     # 统一创建批量任务，避免「每上传一个素材就创建一个 total=1 小任务」。
     # 文本向量需等标签生成后才有内容，无标签时由任务内部自动跳过（后续 AI 分析
     # 完成时再重建）。登记失败（如任务表不可用）不影响上传主流程，仅记日志降级。
+    # enqueue 不内部提交：登记行与素材行随 get_db 统一提交
     try:
         from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 
@@ -146,6 +190,10 @@ async def create_inspiration_from_url(
     day_dir = images_dir / today
     day_dir.mkdir(parents=True, exist_ok=True)
 
+    # SSRF 防护：下载前解析目标地址，拒绝回环/私网/链路本地等内网目标
+    # （插件采集链路会投递任意 URL，不拦截会让服务端请求内网/云元数据接口）
+    await asyncio.to_thread(_validate_download_url, url)
+
     filename: str | None = None
     file_path_obj: Path | None = None
     try:
@@ -153,17 +201,18 @@ async def create_inspiration_from_url(
             async with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
+                is_video_content = content_type.startswith("video/")
 
-                # 从 Content-Type 推断扩展名
-                ext = ".jpg"
-                if "png" in content_type:
-                    ext = ".png"
-                elif "webp" in content_type:
-                    ext = ".webp"
-                elif "gif" in content_type:
-                    ext = ".gif"
-                elif "mp4" in content_type:
-                    ext = ".mp4"
+                # 从 Content-Type 推断扩展名（视频统一 .mp4，避免非 mp4 视频
+                # Content-Type 落成 .jpg 扩展名与 media_type 错位）
+                ext = ".mp4" if is_video_content else ".jpg"
+                if not is_video_content:
+                    if "png" in content_type:
+                        ext = ".png"
+                    elif "webp" in content_type:
+                        ext = ".webp"
+                    elif "gif" in content_type:
+                        ext = ".gif"
 
                 size_limit = resolve_size_limit(content_type)
                 filename = f"{uuid.uuid4().hex}{ext}"
@@ -187,17 +236,26 @@ async def create_inspiration_from_url(
                                 detail=f"文件超过大小限制（{size_limit // (1024 * 1024)}MB）",
                             )
                         await f.write(chunk)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
     except HTTPException:
-        # 大小超限等：清理残留文件后原样抛出
+        # 大小超限等业务异常：清理残留文件后原样抛出
         if file_path_obj and file_path_obj.exists():
             file_path_obj.unlink(missing_ok=True)
         raise
+    except httpx.TimeoutException:
+        # 流式读取中途超时：清理半写文件，避免残留孤儿文件
+        if file_path_obj and file_path_obj.exists():
+            file_path_obj.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
     except httpx.HTTPStatusError:
+        if file_path_obj and file_path_obj.exists():
+            file_path_obj.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="下载失败：目标地址返回非 2xx 状态码")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"下载失败: {e}")
+    except Exception:
+        # 网络/磁盘等其它异常：清理半写文件；内部细节只记日志，不泄露给客户端
+        logger.exception(f"URL 下载失败: {url[:100]}")
+        if file_path_obj and file_path_obj.exists():
+            file_path_obj.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="下载失败，请检查 URL 是否可访问")
 
     # 校验真实文件类型（PIL 解码是阻塞 I/O，放线程池执行）
     try:
@@ -213,11 +271,14 @@ async def create_inspiration_from_url(
 
     # 内容去重：计算 SHA-256 并全库比对，避免同一素材重复入库（线程池执行）
     content_hash = await asyncio.to_thread(file_sha256, file_path_obj)
-    if content_hash and await find_duplicate_by_hash(db, content_hash):
+    if not content_hash:
+        # 哈希失败（磁盘读取异常）：记日志便于发现，不阻断入库
+        logger.warning(f"URL 导入内容哈希计算失败（文件可能损坏）: {rel_path}")
+    elif await find_duplicate_by_hash(db, content_hash):
         delete_files(rel_path, thumb_path)
         raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
 
-    media_type = "video" if ext == ".mp4" else "image"
+    media_type = "video" if is_video_content else "image"
 
     inspiration = Inspiration(
         source_type=source_type,
@@ -232,7 +293,13 @@ async def create_inspiration_from_url(
         scraper_task_id=scraper_task_id,
     )
     db.add(inspiration)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # 并发下撞唯一约束（如平台 ID 部分唯一索引）：清理已落盘文件后转 409，
+        # 避免残留孤儿文件与 500
+        delete_files(rel_path, thumb_path)
+        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
     await db.refresh(inspiration)
 
     # 关联标签

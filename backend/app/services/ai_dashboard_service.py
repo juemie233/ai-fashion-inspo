@@ -57,8 +57,12 @@ async def _overview(db: AsyncSession) -> dict:
 
     avg_tags = 0
     if analyzed_count > 0:
+        # 分子与分母口径一致：仅统计未删除素材的标签关联
+        # （此前全表计数会把垃圾桶素材的标签计入，虚增平均数）
         tag_total = (await db.execute(
             select(func.count()).select_from(InspirationTag)
+            .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+            .where(Inspiration.deleted_at.is_(None))
         )).scalar() or 0
         avg_tags = round(tag_total / analyzed_count, 1)
 

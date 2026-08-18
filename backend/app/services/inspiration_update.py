@@ -36,7 +36,9 @@ async def update_inspiration(
         inspiration.quality_status = data.quality_status
         if data.quality_status in ("approved", "pending"):
             inspiration.quality_reason = None
-        elif data.quality_reason is not None:
+        else:
+            # rejected：显式传入的原因优先；未传时清空旧原因，避免
+            # 「旧拒绝原因张冠李戴」（如上一轮 rejected 的原因残留到新一轮）
             inspiration.quality_reason = data.quality_reason
 
     if data.is_ai_generated is not None:
@@ -91,8 +93,9 @@ async def batch_update_inspirations(
         values["is_ai_generated"] = is_ai_generated
     if quality_status is not None:
         values["quality_status"] = quality_status
-        if quality_status in ("approved", "pending"):
-            values["quality_reason"] = None
+        # 与单条更新语义一致：翻案为 approved/pending 清空原因；
+        # rejected 时本函数无原因参数，一并清空旧原因避免张冠李戴
+        values["quality_reason"] = None
 
     if len(values) == 1:  # 仅 updated_at，无任何业务字段
         return 0

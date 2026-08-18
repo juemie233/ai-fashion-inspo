@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 # 运行中子进程映射
 _scraper_pids: dict[int, int] = {}  # task_id → pid
-_scraper_handles: dict[int, object] = {}  # task_id → Popen 对象（用于日志句柄回收）
 _scraper_retry_count: dict[int, int] = {}  # task_id → 自动续采已重试次数
 
 # Chrome 调试模式启动命令模板（路径从配置读取）
@@ -113,14 +112,12 @@ def _launch_scraper_process(task_id: int) -> None:
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     _scraper_pids[task_id] = proc.pid
-    _scraper_handles[task_id] = (proc, log_f)
 
     def _reap() -> None:
         """后台线程等待子进程退出后回收句柄，异常退出时自动续采。"""
         returncode = proc.wait()
         log_f.close()
         _scraper_pids.pop(task_id, None)
-        _scraper_handles.pop(task_id, None)
 
         # 正常退出（0）视为完成，重置续采计数；非 0 视为异常，尝试自动续采
         if returncode == 0:
@@ -129,6 +126,17 @@ def _launch_scraper_process(task_id: int) -> None:
             _maybe_auto_retry(task_id)
 
     threading.Thread(target=_reap, daemon=True).start()
+
+
+async def _safe_launch(db: AsyncSession, task: ScraperTask) -> None:
+    """启动采集子进程；启动失败时把任务置 failed，避免永久停留在 pending。"""
+    try:
+        _launch_scraper_process(task.id)
+    except Exception as e:
+        logger.error(f"启动采集子进程失败 task {task.id}: {e}")
+        task.status = "failed"
+        task.error = f"采集进程启动失败: {e}"
+        await db.commit()
 
 
 def _maybe_auto_retry(task_id: int) -> None:
@@ -148,6 +156,19 @@ def _maybe_auto_retry(task_id: int) -> None:
 
     retried = _scraper_retry_count.get(task_id, 0)
     if retried >= settings.scraper_task_auto_retry:
+        # 续采次数耗尽：把任务标记失败，避免永久停留在 pending/running
+        # （此前仅靠服务重启清扫兜底，任务可能长期显示「排队中」）
+        try:
+            async def _mark_failed() -> None:
+                async with async_session() as db:
+                    task_row = await db.get(ScraperTask, task_id)
+                    if task_row and task_row.status not in ("cancelled", "completed"):
+                        task_row.status = "failed"
+                        task_row.error = "采集进程异常退出且自动续采次数已用尽"
+                        await db.commit()
+            asyncio.run(_mark_failed())
+        except Exception as e:
+            logger.warning(f"标记续采失败任务失败 {task_id}: {e}")
         return
 
     _scraper_retry_count[task_id] = retried + 1
@@ -159,7 +180,10 @@ def _maybe_auto_retry(task_id: int) -> None:
     # 期间若已被其它入口（如手动续采）重新拉起，则不再重复启动
     if task_id in _scraper_pids:
         return
-    _launch_scraper_process(task_id)
+    try:
+        _launch_scraper_process(task_id)
+    except Exception as e:
+        logger.error(f"自动续采启动失败 task {task_id}: {e}")
 
 
 async def has_active_scraper_tasks() -> bool:
@@ -316,7 +340,10 @@ async def get_task_log(task_id: int) -> dict:
     if not log_file.exists():
         raise HTTPException(status_code=404, detail="日志文件不存在")
 
-    content = log_file.read_text(encoding="utf-8", errors="replace")
+    # 大日志读取是阻塞 I/O，放线程池避免卡住事件循环
+    content = await asyncio.to_thread(
+        lambda: log_file.read_text(encoding="utf-8", errors="replace")
+    )
     lines = content.split("\n")
     return {
         "task_id": task_id,
@@ -337,6 +364,14 @@ async def cancel_scraper_task(db: AsyncSession, task_id: int) -> dict:
     task.status = "cancelled"
     task.error = "用户手动取消"
     await db.commit()
+
+    # 记录审计：取消采集任务属破坏性操作，留痕便于追溯
+    await record_audit_log(
+        action="cancel_scraper_task",
+        target_type="scraper_tasks",
+        count=1,
+        detail=f"取消采集任务 {task_id}",
+    )
 
     # 向子进程发送 SIGTERM
     pid = _scraper_pids.get(task_id)
@@ -562,7 +597,10 @@ async def run_schedule_now(db: AsyncSession, schedule_id: int) -> dict:
         raise HTTPException(status_code=404, detail="定时计划不存在")
 
     if sched.platform == "xiaohongshu":
-        ok, detail, is_chrome = _check_cdp(settings.chrome_debug_port)
+        # 端口探测是阻塞 socket 操作（最长约 3 秒），放线程池避免卡住事件循环
+        ok, detail, is_chrome = await asyncio.to_thread(
+            _check_cdp, settings.chrome_debug_port
+        )
         if not ok:
             raise HTTPException(
                 status_code=400,
@@ -595,7 +633,8 @@ async def run_schedule_now(db: AsyncSession, schedule_id: int) -> dict:
         sched.next_run_at = _advance_next_run(sched.interval_minutes, sched.next_run_at, now)
     await db.commit()
 
-    _launch_scraper_process(task.id)
+    # 启动失败时由 _safe_launch 把任务置 failed，避免永久 pending
+    await _safe_launch(db, task)
     return {"message": f"计划 {schedule_id} 已触发", "task_id": task.id}
 
 
@@ -662,7 +701,10 @@ async def run_due_schedules(db: AsyncSession) -> int:
             )
         await db.commit()
         if launched_id is not None:
-            _launch_scraper_process(launched_id)
+            task_row = await db.get(ScraperTask, launched_id)
+            if task_row:
+                # 启动失败时由 _safe_launch 把任务置 failed，避免永久 pending
+                await _safe_launch(db, task_row)
         triggered += 1
     return triggered
 
@@ -741,9 +783,10 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
 
     CDP 模式下会预先检测 Chrome 调试端口，不可用时返回明确的错误提示。
     """
-    # CDP 模式：预检 Chrome 调试端口（仅小红书使用 CDP；抖音走独立 Playwright 浏览器）
+    # CDP 模式：预检 Chrome 调试端口（仅小红书使用 CDP；抖音走独立 Playwright 浏览器）。
+    # 端口探测是阻塞 socket 操作（最长约 3 秒），放线程池避免卡住事件循环
     if data.cdp_port is not None and data.platform == "xiaohongshu":
-        ok, detail, is_chrome = _check_cdp(data.cdp_port)
+        ok, detail, is_chrome = await asyncio.to_thread(_check_cdp, data.cdp_port)
         if not ok:
             cmd = CHROME_DEBUG_CMD.format(
                 chrome=settings.chrome_executable,
@@ -791,8 +834,9 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
     # 先提交事务，确保子进程能看到任务记录
     await db.commit()
 
-    # 后台启动采集（子进程模式，完全隔离 Playwright）
-    _launch_scraper_process(task.id)
+    # 后台启动采集（子进程模式，完全隔离 Playwright）；
+    # 启动失败时由 _safe_launch 把任务置 failed，避免永久 pending
+    await _safe_launch(db, task)
 
     return task
 
@@ -861,6 +905,13 @@ async def delete_single_scraper_task(db: AsyncSession, task_id: int) -> dict:
         raise HTTPException(status_code=404, detail="采集任务未找到")
     await db.delete(task)
     await db.commit()
+    # 记录审计：物理删除采集任务历史属破坏性操作，留痕便于追溯
+    await record_audit_log(
+        action="delete_scraper_task",
+        target_type="scraper_tasks",
+        count=1,
+        detail=f"删除采集任务 {task_id}",
+    )
     return {"deleted": 1, "id": task_id}
 
 
@@ -868,6 +919,13 @@ async def clear_all_scraper_tasks(db: AsyncSession) -> dict:
     """物理删除所有采集任务历史记录。"""
     result = await db.execute(delete(ScraperTask))
     await db.commit()
+    # 记录审计：清空采集任务历史属不可恢复的破坏性操作
+    await record_audit_log(
+        action="clear_scraper_tasks",
+        target_type="scraper_tasks",
+        count=result.rowcount,
+        detail="清空全部采集任务历史记录",
+    )
     return {"deleted": result.rowcount}
 
 
@@ -882,7 +940,7 @@ async def retry_failed_scraper_tasks(db: AsyncSession) -> dict:
         raise HTTPException(status_code=404, detail="没有失败的采集任务")
 
     retried = 0
-    new_task_ids: list[int] = []
+    new_tasks: list[ScraperTask] = []
     for task in failed_tasks:
         new_task = ScraperTask(
             platform=task.platform,
@@ -892,14 +950,22 @@ async def retry_failed_scraper_tasks(db: AsyncSession) -> dict:
         db.add(new_task)
         await db.flush()
         await db.refresh(new_task)
-        new_task_ids.append(new_task.id)
+        new_tasks.append(new_task)
         retried += 1
 
     # 先提交事务，确保子进程能看到新任务记录
     await db.commit()
 
-    for task_id in new_task_ids:
-        _launch_scraper_process(task_id)
+    for new_task in new_tasks:
+        await _safe_launch(db, new_task)
+
+    # 记录审计：批量重试采集任务属破坏性操作，留痕便于追溯
+    await record_audit_log(
+        action="retry_scraper_tasks",
+        target_type="scraper_tasks",
+        count=retried,
+        detail=f"重试 {retried} 个失败的采集任务",
+    )
 
     return {"retried": retried, "message": f"已重新创建 {retried} 个采集任务"}
 
@@ -921,7 +987,14 @@ async def retry_single_task(db: AsyncSession, task_id: int) -> dict:
     # 视为一次新的手动尝试，重置自动续采计数
     _scraper_retry_count.pop(task_id, None)
 
-    _launch_scraper_process(task_id)
+    await _safe_launch(db, task)
+    # 记录审计：重试采集任务属破坏性操作，留痕便于追溯
+    await record_audit_log(
+        action="retry_scraper_task",
+        target_type="scraper_tasks",
+        count=1,
+        detail=f"断点续采任务 {task_id}",
+    )
     return {"message": f"任务 {task_id} 已重新加入队列（断点续采）", "task_id": task_id}
 
 

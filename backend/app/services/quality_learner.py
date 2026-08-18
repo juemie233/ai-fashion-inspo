@@ -133,19 +133,28 @@ def _train_sync(X: list[list[float]], y: list[int]) -> dict:
     pred = model.predict(X_test)
 
     # label=1 为「合格」，label=0 为「垃圾」；误杀率 = 合格被判为垃圾的比例
-    tn, fp, fn, tp = confusion_matrix(y_test, pred).ravel()
-    good_total = tp + fn
-    false_reject_rate = round(fn / good_total, 4) if good_total else 0.0
+    # 防御：随机划分（样本不均衡降级路径）下测试集可能只剩单类，
+    # confusion_matrix 为 1×1，ravel() 解包会崩溃——单类时跳过指标计算
+    metrics: dict = {}
+    if len(set(y_test)) < 2 or len(set(pred)) < 2:
+        metrics = {
+            "note": "测试集仅单类，指标不可计算（样本过少或分布极端）",
+            "test_size": int(len(y_test)),
+        }
+    else:
+        tn, fp, fn, tp = confusion_matrix(y_test, pred).ravel()
+        good_total = tp + fn
+        false_reject_rate = round(fn / good_total, 4) if good_total else 0.0
 
-    metrics = {
-        "accuracy": round(float(accuracy_score(y_test, pred)), 4),
-        "precision": round(float(precision_score(y_test, pred, zero_division=0)), 4),
-        "recall": round(float(recall_score(y_test, pred, zero_division=0)), 4),
-        "f1": round(float(f1_score(y_test, pred, zero_division=0)), 4),
-        "false_reject_rate": false_reject_rate,
-        "test_size": int(len(y_test)),
-        "confusion": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
-    }
+        metrics = {
+            "accuracy": round(float(accuracy_score(y_test, pred)), 4),
+            "precision": round(float(precision_score(y_test, pred, zero_division=0)), 4),
+            "recall": round(float(recall_score(y_test, pred, zero_division=0)), 4),
+            "f1": round(float(f1_score(y_test, pred, zero_division=0)), 4),
+            "false_reject_rate": false_reject_rate,
+            "test_size": int(len(y_test)),
+            "confusion": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+        }
 
     _MODEL_DIR.mkdir(parents=True, exist_ok=True)
     # 先写临时文件再原子替换：进程中途被杀也不会留下损坏的模型文件

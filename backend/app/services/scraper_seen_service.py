@@ -19,11 +19,12 @@ async def seal_urls(db: AsyncSession, urls: list[str]) -> None:
         db: 数据库会话（调用方负责事务边界，本函数只追加 INSERT）
         urls: 来源 URL 列表（空串 / None 会被跳过）
     """
-    for url in urls:
-        if not url:
-            continue
-        await db.execute(
-            sqlite_insert(ScraperSeenURL)
-            .values(source_url=url)
-            .prefix_with("OR IGNORE")
-        )
+    clean = [u for u in urls if u]
+    if not clean:
+        return
+    # 单条多 VALUES 批量插入（而非逐条 INSERT），减少往返次数
+    await db.execute(
+        sqlite_insert(ScraperSeenURL)
+        .values([{"source_url": u} for u in clean])
+        .prefix_with("OR IGNORE")
+    )

@@ -134,8 +134,24 @@ async def get_analysis_queue_stats(db: AsyncSession) -> dict:
     )
     failed_count = failed.scalar() or 0
 
-    # 未分析
-    unanalyzed_count = max(0, total_count - analyzed_count)
+    # 未分析 — 口径与 batch_analyze 的「已分析跳过」条件一致：没有任何
+    # 成功日志（error IS NULL）的素材都算未分析，**含分析失败过的素材**
+    # （失败素材可通过「分析全部未分析」被批量重跑，不必只走单条 retry）。
+    # 注意：analyzed_count 为「有过日志」（attempted），二者可重叠（失败素材）。
+    success_log_sub = (
+        select(AIAnalysisLog.inspiration_id)
+        .where(
+            _analysis_log_filter(),
+            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+        )
+        .distinct()
+    )
+    analyzed_success = (
+        await db.execute(
+            select(func.count()).select_from(success_log_sub.subquery())
+        )
+    ).scalar() or 0
+    unanalyzed_count = max(0, total_count - analyzed_success)
 
     return {
         "total": total_count,
@@ -146,15 +162,23 @@ async def get_analysis_queue_stats(db: AsyncSession) -> dict:
 
 
 async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
-    """返回所有未分析过的图片素材 ID 列表（暂不分析视频）。"""
-    analyzed_sub = (
+    """返回所有未分析的图片素材 ID 列表（暂不分析视频）。
+
+    口径：没有任何「成功」标签分析日志（error IS NULL）的素材，
+    **含分析失败过的素材**（与批量任务执行时的已分析跳过条件一致，
+    失败素材可被「分析全部未分析」重新纳入批量分析）。
+    """
+    analyzed_success_sub = (
         select(AIAnalysisLog.inspiration_id)
-        .where(_analysis_log_filter())
+        .where(
+            _analysis_log_filter(),
+            (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+        )
         .distinct()
     )
     result = await db.execute(
         select(Inspiration.id).where(
-            Inspiration.id.notin_(analyzed_sub),
+            Inspiration.id.notin_(analyzed_success_sub),
             Inspiration.media_type == "image",
             Inspiration.deleted_at.is_(None),
         )

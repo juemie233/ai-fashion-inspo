@@ -242,22 +242,11 @@ async def save_upload(
 
 
 def delete_files(file_path: str, thumbnail_path: str | None = None) -> None:
-    """从磁盘删除文件及其缩略图（带错误日志，不抛异常）。"""
-    if file_path:
-        full_path = settings.storage_root / file_path
-        try:
-            if full_path.exists():
-                full_path.unlink()
-        except Exception as e:
-            _log.warning(f"删除文件失败: {full_path} — {e}")
+    """从磁盘删除文件及其缩略图（带错误日志，不抛异常）。
 
-    if thumbnail_path:
-        full_thumb = settings.storage_root / thumbnail_path
-        try:
-            if full_thumb.exists():
-                full_thumb.unlink()
-        except Exception as e:
-            _log.warning(f"删除缩略图失败: {full_thumb} — {e}")
+    收敛实现：委托 delete_files_counting 完成物理删除（不统计返回值）。
+    """
+    delete_files_counting(file_path, thumbnail_path)
 
 
 def delete_files_counting(*paths: str | None, storage_root: Path | None = None) -> int:

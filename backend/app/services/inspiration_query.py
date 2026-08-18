@@ -1,5 +1,6 @@
 """灵感素材查询：列表分页筛选、详情、主色调统计。"""
 
+import asyncio
 from typing import Any
 
 from fastapi import HTTPException
@@ -17,6 +18,26 @@ from app.models.inspiration import (
 )
 from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
+
+
+async def load_inspiration_full(
+    db: AsyncSession, inspiration_id: str
+) -> Inspiration | None:
+    """按 ID 加载素材（预加载标签/博主/模特关系），不存在返回 None。
+
+    供详情 / 垃圾桶移入恢复 / 列表复用，收敛散落的
+    「select + selectinload(tags/bloggers/models)」重复块。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        )
+        .where(Inspiration.id == inspiration_id)
+    )
+    return result.unique().scalar_one_or_none()
 
 
 async def list_inspirations(
@@ -167,8 +188,12 @@ async def list_inspirations(
             except OSError:
                 return 0
 
-        ordered = sorted(size_rows, key=_file_size, reverse=True)
-        page_ids = [r[0] for r in ordered[(page - 1) * size : page * size]]
+        def _sort_by_size() -> list[str]:
+            """按文件实际大小降序取页内 ID（同步 stat 为阻塞 I/O，线程池执行）。"""
+            ordered = sorted(size_rows, key=_file_size, reverse=True)
+            return [r[0] for r in ordered[(page - 1) * size : page * size]]
+
+        page_ids = await asyncio.to_thread(_sort_by_size)
 
         if not page_ids:
             return [], total
