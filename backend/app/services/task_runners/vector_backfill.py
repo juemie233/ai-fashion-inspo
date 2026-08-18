@@ -21,7 +21,7 @@
 
 import logging
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -189,9 +189,15 @@ async def flush_pending_vector_backfills(
 async def purge_small_backfill_tasks(db: AsyncSession) -> int:
     """清理历史遗留的向量回填「小任务」（total<=1，多为每素材一个的旧任务）。
 
-    幂等操作，可重复执行（Alembic 迁移已清理过时是 no-op）：
-    - 非运行中的小任务直接删除，避免继续淹没任务列表与统计；
-    - 运行中的小任务标记为 cancelled（不删除执行中的行，避免与 worker 并发写冲突）。
+    幂等操作，可重复执行（Alembic 迁移已清理过时是 no-op）。
+
+    边界约定（避免误删攒批新机制的任务）：
+    - 仅清理**已终态**（success/failed/cancelled）的小任务：历史遗留小任务
+      绝大多数已完成，直接删除不再淹没任务列表与统计；
+    - pending 的小任务一律保留：可能是攒批 flush 刚创建的合法任务
+      （待回填素材恰好 1 条时 total=1），删除会导致该素材向量永久缺失；
+    - running 的小任务不处理：由 worker 心跳租约机制（_reset_stale_tasks）
+      负责，多 worker 部署时另一实例启动不能取消存活 worker 正在执行的任务。
 
     参数:
         db: 数据库会话
@@ -203,20 +209,7 @@ async def purge_small_backfill_tasks(db: AsyncSession) -> int:
         delete(TaskQueue).where(
             TaskQueue.type == "vector_backfill",
             TaskQueue.total <= 1,
-            TaskQueue.status != "running",
-        )
-    )
-    await db.execute(
-        update(TaskQueue)
-        .where(
-            TaskQueue.type == "vector_backfill",
-            TaskQueue.total <= 1,
-            TaskQueue.status == "running",
-        )
-        .values(
-            status="cancelled",
-            error="历史小任务已清理（批量回填机制上线）",
-            updated_at=utcnow(),
+            TaskQueue.status.in_(["success", "failed", "cancelled"]),
         )
     )
     await db.commit()

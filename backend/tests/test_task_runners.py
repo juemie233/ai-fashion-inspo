@@ -460,9 +460,9 @@ async def test_flush_no_pending_returns_none(client):
 
 
 async def test_purge_small_backfill_tasks(client, upload):
-    """历史清理：total<=1 小任务删除（非运行中）/标记取消（运行中），大任务保留且幂等。"""
+    """历史清理：仅删已终态小任务；pending/running 小任务保留（不误删攒批新机制任务）。"""
     async with async_session() as db:
-        # 小任务：成功 / 排队 / 运行中各一条
+        # 小任务：成功（终态，应删）/ 排队（保留）/ 运行中（保留，心跳租约负责）
         for status, done in (("success", 1), ("pending", 0), ("running", 1)):
             db.add(
                 TaskQueue(
@@ -480,7 +480,7 @@ async def test_purge_small_backfill_tasks(client, upload):
         await db.commit()
 
         deleted = await vb_module.purge_small_backfill_tasks(db)
-        assert deleted == 2  # success + pending 删除，running 仅标记取消
+        assert deleted == 1  # 仅终态（success）小任务删除
 
         tasks = (
             await db.execute(
@@ -488,19 +488,10 @@ async def test_purge_small_backfill_tasks(client, upload):
             )
         ).scalars().all()
         by_status = {t.status: t for t in tasks}
-        assert set(by_status.keys()) == {"cancelled", "success"}
-        assert by_status["cancelled"].total == 1  # 运行中的小任务标记取消
-        assert "批量回填机制" in (by_status["cancelled"].error or "")
+        assert set(by_status.keys()) == {"pending", "running", "success"}
+        assert by_status["pending"].total == 1  # 排队小任务保留（可能是攒批新机制产物）
+        assert by_status["running"].total == 1  # 运行中小任务保留（心跳租约负责）
         assert by_status["success"].total == 10  # 大任务保留
 
-        # 幂等：重复执行继续收敛（第二次删除首次标记 cancelled 的小任务），最终无任务可清理
-        assert await vb_module.purge_small_backfill_tasks(db) == 1
+        # 幂等：重复执行不再删除任何任务
         assert await vb_module.purge_small_backfill_tasks(db) == 0
-        remaining_after = (
-            await db.execute(
-                select(func.count()).select_from(TaskQueue).where(
-                    TaskQueue.type == "vector_backfill"
-                )
-            )
-        ).scalar()
-        assert remaining_after == 1  # 仅剩大任务

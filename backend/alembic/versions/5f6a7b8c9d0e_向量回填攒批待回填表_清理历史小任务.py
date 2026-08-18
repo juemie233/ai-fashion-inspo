@@ -38,15 +38,13 @@ def upgrade() -> None:
     )
 
     # 数据清理：删除历史遗留的 total<=1 向量回填小任务（避免继续淹没任务列表与统计）。
-    # 运行中的小任务不删除（避免与 worker 并发写冲突），改为标记取消，由 worker 自然收尾。
+    # 仅清理已终态（success/failed/cancelled）的：pending/running 的小任务保留——
+    # running 由 worker 心跳租约机制负责（迁移运行时 worker 可能正在执行），
+    # pending 保留执行无害（与 worker 启动兜底 purge 的边界约定一致）。
     op.execute(
         "DELETE FROM task_queue "
-        "WHERE type='vector_backfill' AND total <= 1 AND status != 'running'"
-    )
-    op.execute(
-        "UPDATE task_queue SET status='cancelled', "
-        "error='历史小任务已清理（批量回填机制上线）' "
-        "WHERE type='vector_backfill' AND total <= 1 AND status='running'"
+        "WHERE type='vector_backfill' AND total <= 1 "
+        "AND status IN ('success', 'failed', 'cancelled')"
     )
 
 
