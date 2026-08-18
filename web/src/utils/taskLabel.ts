@@ -3,12 +3,12 @@
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
-/** 任务类型中文标签 */
+/** 任务类型中文标签（与后端 task_queue.type 全量对齐，新增类型必须在此登记） */
 export const TASK_TYPE_LABELS: Record<string, string> = {
   batch_analyze: '批量 AI 分析',
   quality_check: '质量审核',
   batch_delete: '批量删除',
-  deduplicate: '去重',
+  deduplicate: '近似重复检测删除',
   scraper: '采集',
   vector_backfill: '向量回填',
 }

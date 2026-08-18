@@ -4,6 +4,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import { NButton, NSelect, NPagination, NSpace } from 'naive-ui'
 import { useTaskCenter } from '@/composables/useTaskCenter'
+import { TASK_TYPE_LABELS } from '@/utils/taskLabel'
 import TaskList from '@/components/task/TaskList.vue'
 
 const {
@@ -26,13 +27,10 @@ const {
   stopPoll,
 } = useTaskCenter()
 
+// 类型筛选选项从映射表派生：与 TASK_TYPE_LABELS 单一来源，避免漏配新类型
 const typeOptions = [
   { label: '全部类型', value: '' },
-  { label: '批量 AI 分析', value: 'batch_analyze' },
-  { label: '质量审核', value: 'quality_check' },
-  { label: '批量删除', value: 'batch_delete' },
-  { label: '去重', value: 'deduplicate' },
-  { label: '采集', value: 'scraper' },
+  ...Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({ label, value })),
 ]
 
 const statusOptions = [

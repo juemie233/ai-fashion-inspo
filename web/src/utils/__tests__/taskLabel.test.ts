@@ -3,11 +3,23 @@
 import { describe, expect, it } from 'vitest'
 import {
   SCRAPER_PLATFORM_LABELS,
+  TASK_TYPE_LABELS,
   formatDuration,
   normalizeTaskStatus,
   taskStatusType,
   taskTypeTagColor,
 } from '../taskLabel'
+
+describe('TASK_TYPE_LABELS', () => {
+  it('全量任务类型映射为中文，vector_backfill 不得被错误归类', () => {
+    expect(TASK_TYPE_LABELS.batch_analyze).toBe('批量 AI 分析')
+    expect(TASK_TYPE_LABELS.quality_check).toBe('质量审核')
+    expect(TASK_TYPE_LABELS.batch_delete).toBe('批量删除')
+    expect(TASK_TYPE_LABELS.deduplicate).toBe('近似重复检测删除')
+    expect(TASK_TYPE_LABELS.scraper).toBe('采集')
+    expect(TASK_TYPE_LABELS.vector_backfill).toBe('向量回填')
+  })
+})
 
 describe('normalizeTaskStatus', () => {
   it('completed 归一化为 success', () => {
