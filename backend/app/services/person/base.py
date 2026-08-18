@@ -478,6 +478,30 @@ class PersonServiceBase:
         )
         return [self._to_dict(p, cnt) for p, cnt in result.all()]
 
+    async def ip_location_stats(self, db: AsyncSession, limit: int = 30) -> dict:
+        """按 IP 属地分组统计主体数量（空属地归入「未知」）。
+
+        供人物管理页展示属地分布（如穿搭博主的地域画像）。
+
+        返回:
+            {"total": 主体总数, "items": [{"ip_location", "count"}, ...]}
+            items 按数量降序、同名按属地排序，最多 limit 条。
+        """
+        assert self.model is not None
+        model = self.model
+        total = (await db.execute(select(func.count(model.id)))).scalar() or 0
+        result = await db.execute(
+            select(
+                func.coalesce(model.ip_location, "未知").label("ip"),
+                func.count(model.id).label("cnt"),
+            )
+            .group_by("ip")
+            .order_by(func.count(model.id).desc(), "ip")
+            .limit(limit)
+        )
+        items = [{"ip_location": r[0], "count": r[1]} for r in result.all()]
+        return {"total": total, "items": items}
+
     async def suggest(self, db: AsyncSession, name: str, limit: int = 10) -> list[dict]:
         """按名称模糊匹配主体（用于前端选择去重）。"""
         assert self.model is not None

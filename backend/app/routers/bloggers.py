@@ -84,6 +84,18 @@ async def import_bloggers_csv(
     return await blogger_service.import_from_csv(db, file)
 
 
+@router.get("/ip-stats")
+async def blogger_ip_stats(
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按 IP 属地分组统计博主数量（空属地归入「未知」）。
+
+    供人物管理页展示穿搭博主的地域分布（柱状图）。
+    """
+    return await blogger_service.ip_location_stats(db, limit=limit)
+
+
 @router.get("/top", response_model=list[BloggerOut])
 async def top_bloggers(
     limit: int = Query(20, ge=1, le=100),

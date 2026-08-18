@@ -74,6 +74,15 @@ async def create_model(data: ModelCreate, db: AsyncSession = Depends(get_db)) ->
     )
 
 
+@router.get("/ip-stats")
+async def model_ip_stats(
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按 IP 属地分组统计模特数量（空属地归入「未知」），与博主统计对称。"""
+    return await model_service.ip_location_stats(db, limit=limit)
+
+
 @router.get("/top", response_model=list[ModelOut])
 async def top_models(
     limit: int = Query(20, ge=1, le=100),

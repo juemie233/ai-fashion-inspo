@@ -2,7 +2,7 @@
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   useMessage,
@@ -11,12 +11,18 @@ import {
   type DataTableColumns,
   type UploadCustomRequestOptions,
 } from 'naive-ui'
+import * as echarts from 'echarts/core'
+import { BarChart } from 'echarts/charts'
+import { TooltipComponent, GridComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { getFileUrl } from '@/api/inspirations'
-import { bloggersApi, importBloggersCsv, modelsApi } from '@/api/persons'
+import { bloggersApi, importBloggersCsv, modelsApi, type PersonIpStats } from '@/api/persons'
 import { usePersonsStore, type PersonKind } from '@/stores/persons'
 import type { Person, PersonImportResult } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
+
+echarts.use([BarChart, TooltipComponent, GridComponent, CanvasRenderer])
 
 const props = defineProps<{ kind: PersonKind }>()
 
@@ -233,9 +239,63 @@ async function loadTop() {
   }
 }
 
+// ── 博主 IP 属地统计（ECharts 横向柱状图，仅博主展示）──
+
+const ipStats = ref<PersonIpStats | null>(null)
+const ipChartRef = ref<HTMLDivElement | null>(null)
+let ipChart: echarts.ECharts | null = null
+
+/** 加载博主 IP 属地统计并渲染柱状图 */
+async function loadIpStats() {
+  if (props.kind !== 'blogger') return
+  try {
+    ipStats.value = await bloggersApi.fetchIpStats(30)
+    await nextTick()
+    renderIpChart()
+  } catch {
+    // 统计加载失败不阻塞列表
+  }
+}
+
+/** 渲染横向柱状图：y 轴地区（最多在上），x 轴人数 */
+function renderIpChart() {
+  if (!ipChartRef.value || !ipStats.value || ipStats.value.items.length === 0) return
+  if (!ipChart || ipChart.isDisposed()) ipChart = echarts.init(ipChartRef.value)
+  const items = [...ipStats.value.items].reverse()
+  ipChart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: 8, right: 40, top: 8, bottom: 8, containLabel: true },
+    xAxis: { type: 'value', minInterval: 1 },
+    yAxis: { type: 'category', data: items.map((i) => i.ip_location) },
+    series: [
+      {
+        type: 'bar',
+        data: items.map((i) => i.count),
+        barMaxWidth: 18,
+        itemStyle: { color: '#18a058', borderRadius: [0, 4, 4, 0] },
+        label: { show: true, position: 'right' },
+      },
+    ],
+  })
+}
+
+function handleIpChartResize() {
+  ipChart?.resize()
+}
+
 onMounted(async () => {
   await store.load(true)
   await loadTop()
+  if (props.kind === 'blogger') {
+    await loadIpStats()
+    window.addEventListener('resize', handleIpChartResize)
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleIpChartResize)
+  ipChart?.dispose()
+  ipChart = null
 })
 </script>
 
@@ -305,6 +365,25 @@ onMounted(async () => {
           @update:value="store.reload()"
         />
       </n-space>
+    </n-card>
+
+    <!-- 博主 IP 属地统计（横向柱状图，展示地域分布） -->
+    <n-card
+      v-if="kind === 'blogger'"
+      size="small"
+      class="ipstats-card"
+      title="博主 IP 属地统计"
+    >
+      <template #header-extra>
+        <n-text depth="3" style="font-size: 12px">共 {{ ipStats?.total ?? 0 }} 位博主</n-text>
+      </template>
+      <div ref="ipChartRef" class="ipstats-chart" />
+      <n-empty
+        v-if="ipStats && ipStats.items.length === 0"
+        description="暂无 IP 属地数据（可从 CSV 导入或编辑博主补充）"
+        size="small"
+        style="padding: 24px 0"
+      />
     </n-card>
 
     <!-- 人物表格 -->
@@ -389,6 +468,16 @@ onMounted(async () => {
 <style scoped>
 .filter-card {
   margin-bottom: 12px;
+}
+
+/* IP 属地统计卡片与图表 */
+.ipstats-card {
+  margin-bottom: 12px;
+}
+
+.ipstats-chart {
+  height: 320px;
+  width: 100%;
 }
 
 .table-card {

@@ -60,6 +60,12 @@ export interface PersonInspirationsOut {
   size: number
 }
 
+/** IP 属地统计响应（人物管理页地域分布） */
+export interface PersonIpStats {
+  total: number
+  items: Array<{ ip_location: string; count: number }>
+}
+
 /**
  * 按类型生成人物 API（博主 / 模特共用 CRUD，端点路径按 kind 区分）。
  * 照片组端点仅由模特 API 暴露（博主无写真照片组能力）。
@@ -120,6 +126,14 @@ function createPersonApi(kind: 'bloggers' | 'models') {
     /** 获取热门人物排行（按素材数倒序） */
     async fetchTop(limit: number = 20): Promise<PersonListOut['items']> {
       const { data } = await apiClient.get<PersonListOut['items']>(`${base}/top`, {
+        params: { limit },
+      })
+      return data
+    },
+
+    /** 按 IP 属地分组统计（空属地归「未知」），供人物管理页展示地域分布 */
+    async fetchIpStats(limit: number = 30): Promise<PersonIpStats> {
+      const { data } = await apiClient.get<PersonIpStats>(`${base}/ip-stats`, {
         params: { limit },
       })
       return data

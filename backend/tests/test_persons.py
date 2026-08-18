@@ -280,6 +280,32 @@ def test_update_blogger_clear_nullable(client, create_blogger):
     assert r.json()["name"] == "更新博主"
 
 
+def test_blogger_ip_location_stats(client, create_blogger):
+    """IP 属地统计：按属地分组计数、空属地归「未知」、总数正确。"""
+    create_blogger(name="博主A", ip_location="浙江")
+    create_blogger(name="博主B", ip_location="浙江")
+    create_blogger(name="博主C", ip_location="广东")
+    create_blogger(name="博主D")  # 无 IP → 未知
+
+    r = client.get("/api/bloggers/ip-stats").json()
+    assert r["total"] == 4
+    by_ip = {i["ip_location"]: i["count"] for i in r["items"]}
+    assert by_ip["浙江"] == 2
+    assert by_ip["广东"] == 1
+    assert by_ip["未知"] == 1
+    # 按数量降序：浙江(2) 在前
+    assert r["items"][0]["ip_location"] == "浙江"
+
+    # limit 截断
+    r2 = client.get("/api/bloggers/ip-stats", params={"limit": 1}).json()
+    assert len(r2["items"]) == 1
+    assert r2["total"] == 4  # total 不受 limit 影响
+
+    # 模特不受博主统计影响（独立表）
+    r3 = client.get("/api/models/ip-stats").json()
+    assert r3["total"] == 0
+
+
 # ═══════════════════════════════════════════════════════════════
 #  职业模特（/api/models）
 # ═══════════════════════════════════════════════════════════════
