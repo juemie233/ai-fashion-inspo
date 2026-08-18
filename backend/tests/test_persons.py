@@ -1,5 +1,23 @@
 """人物模块回归测试（博主/模特已拆分两表）：CRUD、素材关联、风格画像、删除。"""
 
+import sqlite3
+
+from app.config import settings
+
+
+def _sql(statement: str, params: tuple = ()) -> list:
+    """直接查库（断言审计留痕等跨表状态用）。"""
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(statement, params)
+        conn.commit()
+        if cur.description:
+            return cur.fetchall()
+        return []
+    finally:
+        conn.close()
+
 
 # ═══════════════════════════════════════════════════════════════
 #  穿搭博主（/api/bloggers）
@@ -93,6 +111,13 @@ def test_batch_link_bloggers(client, create_blogger, upload):
     assert body["affected"] == 2
     assert body["not_found_count"] == 0
     assert body["skipped"] == 0
+
+    # 批量写操作留审计（主事务提交后独立会话写入，SQLite 下单写者不互等）
+    audit = _sql(
+        "SELECT action, count, detail FROM audit_logs WHERE action = 'batch_link_bloggers'"
+    )
+    assert len(audit) == 1
+    assert audit[0][1] == 4
 
     # 详情可见关联
     detail = client.get(f"/api/inspirations/{insp_a}").json()

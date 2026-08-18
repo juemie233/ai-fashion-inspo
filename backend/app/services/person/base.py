@@ -586,6 +586,7 @@ class PersonServiceBase:
         existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
 
         skipped = 0
+        pending = []
         for pid in persons:
             if (inspiration_id, pid) in existing_pairs:
                 skipped += 1
@@ -597,25 +598,43 @@ class PersonServiceBase:
             # 预绑定已查到的对象，避免路由层访问 link.<entity> 时触发懒加载
             setattr(link, self.link_entity_attr, persons[pid])
             db.add(link)
+            pending.append(link)
+
+        if pending:
             try:
-                # SAVEPOINT 隔离插入：并发建立同一关联时后者触发 IntegrityError，
-                # 回滚后重查并复用已存在的关联，避免 500。
+                # 快路径：一次 flush 全部新增关联。逐条 SAVEPOINT + flush 在
+                # 批量场景（200 素材 × 50 博主 = 1 万条）下耗时 40s+，超过
+                # 前端 30s 超时导致「实际成功却提示失败」；合并为单事务批量
+                # 插入后降到秒级。
                 async with db.begin_nested():
                     await db.flush()
+                links.extend(pending)
             except IntegrityError:
-                db.expunge(link)
-                existing = await db.execute(
-                    select(link_model).where(
-                        link_model.inspiration_id == inspiration_id,
-                        link_id == pid,
-                    )
-                )
-                existing_link = existing.scalar_one_or_none()
-                if existing_link:
-                    skipped += 1
-                    continue
-                raise
-            links.append(link)
+                # 并发冲突（多请求同时建立同一关联）慢路径：回滚后逐条重插，
+                # 冲突条按已存在跳过，保证幂等且不 500。
+                for link in pending:
+                    db.expunge(link)
+                for link in pending:
+                    db.add(link)
+                    try:
+                        # SAVEPOINT 隔离插入：并发建立同一关联时后者触发
+                        # IntegrityError，回滚后重查并复用已存在的关联。
+                        async with db.begin_nested():
+                            await db.flush()
+                        links.append(link)
+                    except IntegrityError:
+                        db.expunge(link)
+                        existing = await db.execute(
+                            select(link_model).where(
+                                link_model.inspiration_id == inspiration_id,
+                                link_id == getattr(link, self.link_id_field),
+                            )
+                        )
+                        existing_link = existing.scalar_one_or_none()
+                        if existing_link:
+                            skipped += 1
+                            continue
+                        raise
 
         return {
             "links": links,
@@ -662,6 +681,11 @@ class PersonServiceBase:
         # 批量关联属批量写操作，按项目批量操作留痕惯例记录审计
         # （独立会话，失败不影响主流程）
         if linked > 0:
+            # 先提交主事务释放 SQLite 写锁，再写审计：独立会话写审计会被
+            # 本事务持有的写锁挡住，互等 30s 后审计超时失败（SQLite 单写者
+            # 死锁），接口被拖慢到超过前端超时，造成「实际成功却提示失败」。
+            # 与批量移垃圾桶 / 删除人物的审计时机一致（先 commit 再审计）。
+            await db.commit()
             try:
                 await record_audit_log(
                     action="batch_link_bloggers",
