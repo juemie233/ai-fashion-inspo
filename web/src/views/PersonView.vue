@@ -1,12 +1,26 @@
 <script setup lang="ts">
-/** 人物管理页：穿搭博主 / 职业模特 双 Tab（两类已物理拆分为独立表与 API）。 */
+/** 人物管理页：穿搭博主 / 职业模特 双 Tab（两类已物理拆分为独立表与 API）。
+ *
+ * 当前 Tab 同步到 URL query（?kind=blogger|model），刷新后保持；
+ * 各 Tab 内的页码/搜索/筛选由 PersonListSection 持久化到同一 URL。
+ */
 
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { NTabs, NTabPane } from 'naive-ui'
 import type { PersonKind } from '@/stores/persons'
 import PersonListSection from '@/components/person/PersonListSection.vue'
 
-const activeKind = ref<PersonKind>('blogger')
+const route = useRoute()
+const router = useRouter()
+
+/** 当前 Tab：初始从 URL 恢复（刷新/详情返回后保持），缺省穿搭博主 */
+const activeKind = ref<PersonKind>(route.query.kind === 'model' ? 'model' : 'blogger')
+
+// Tab 切换时同步 URL（保留其他列表上下文参数）
+watch(activeKind, (kind) => {
+  router.replace({ path: '/persons', query: { ...route.query, kind } })
+})
 </script>
 
 <template>

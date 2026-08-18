@@ -172,12 +172,24 @@ async function setPage(p: number) {
 // ── 编辑 / 删除 ──
 const showForm = ref(false)
 
+/** 返回人物列表：携带进入详情页时的列表上下文（kind/页码/搜索/平台/排序），
+ *  列表页据此恢复原分页与筛选，不再回到第一页 */
+function backToList() {
+  const q = route.query
+  const query: Record<string, string> = {}
+  for (const key of ['kind', 'page', 'q', 'platform', 'sort'] as const) {
+    const v = q[key]
+    if (typeof v === 'string' && v) query[key] = v
+  }
+  router.push({ path: '/persons', query })
+}
+
 async function handleDelete() {
   if (!detail.value) return
   try {
     await api.value.remove(detail.value.id)
     message.success(`已删除人物「${detail.value.name}」`)
-    router.push('/persons')
+    backToList()
   } catch (e) {
     message.error(getApiErrorMessage(e, '删除失败'))
   }
@@ -205,7 +217,7 @@ watch(personId, () => {
       <template v-if="detail">
         <!-- 面包屑 -->
         <n-breadcrumb style="margin-bottom: 16px">
-          <n-breadcrumb-item @click="router.push('/persons')">人物管理</n-breadcrumb-item>
+          <n-breadcrumb-item @click="backToList">人物管理</n-breadcrumb-item>
           <n-breadcrumb-item>{{ detail.name }}</n-breadcrumb-item>
         </n-breadcrumb>
 

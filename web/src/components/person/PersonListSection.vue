@@ -2,8 +2,8 @@
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   useMessage,
   NButton,
@@ -27,10 +27,51 @@ echarts.use([BarChart, TooltipComponent, GridComponent, CanvasRenderer])
 const props = defineProps<{ kind: PersonKind }>()
 
 const router = useRouter()
+const route = useRoute()
 const message = useMessage()
 const store = usePersonsStore(props.kind)
 
 const kindLabel = computed(() => (props.kind === 'blogger' ? '穿搭博主' : '职业模特'))
+
+// ── 列表状态 URL 持久化：页码/搜索/平台/排序写入 query，刷新与详情往返后原样恢复 ──
+
+/** 把列表上下文（kind + 页码 + 搜索 + 平台 + 排序）同步到 URL（replace 不堆历史） */
+function syncUrl() {
+  const query: Record<string, string> = { kind: props.kind }
+  if (store.page > 1) query.page = String(store.page)
+  if (store.search.trim()) query.q = store.search.trim()
+  if (store.platform) query.platform = store.platform
+  if (store.sort !== 'newest') query.sort = store.sort
+  router.replace({ path: '/persons', query })
+}
+
+/** 列表上下文变化时同步 URL：翻页/搜索/平台/排序任意变更即反映到地址栏 */
+watch(
+  () => [store.page, store.search, store.platform, store.sort] as const,
+  () => syncUrl()
+)
+
+/** 从 URL query 恢复列表上下文（组件挂载时调用，刷新/详情返回后保持原状态） */
+function restoreFromUrl() {
+  const q = route.query
+  const page = Number(q.page)
+  store.page = Number.isInteger(page) && page > 1 ? page : 1
+  store.search = typeof q.q === 'string' ? q.q : ''
+  store.platform = typeof q.platform === 'string' ? q.platform : ''
+  store.sort =
+    q.sort === 'name' || q.sort === 'count' ? q.sort : 'newest'
+}
+
+/** 加载后修正页码越界（如删除后总页数减少），并同步 URL */
+async function loadAndSync(force: boolean = true) {
+  await store.load(force)
+  const maxPage = Math.max(1, Math.ceil(store.total / store.size))
+  if (store.page > maxPage) {
+    store.page = maxPage
+    await store.load(true)
+  }
+  syncUrl()
+}
 
 /** 来源中文映射 */
 const SOURCE_LABELS: Record<string, string> = {
@@ -82,9 +123,14 @@ async function handleDelete(person: Person) {
   }
 }
 
-/** 跳转人物详情 */
+/** 跳转人物详情：携带列表上下文（kind/页码/搜索/平台/排序），详情页返回或刷新后可恢复 */
 function goDetail(person: Person) {
-  router.push({ path: `/persons/${person.id}`, query: { kind: props.kind } })
+  const query: Record<string, string> = { kind: props.kind }
+  if (store.page > 1) query.page = String(store.page)
+  if (store.search.trim()) query.q = store.search.trim()
+  if (store.platform) query.platform = store.platform
+  if (store.sort !== 'newest') query.sort = store.sort
+  router.push({ path: `/persons/${person.id}`, query })
 }
 
 /** 搜索输入：回车触发（兼容中文输入法，compositionend 期间不误触） */
@@ -284,7 +330,9 @@ function handleIpChartResize() {
 }
 
 onMounted(async () => {
-  await store.load(true)
+  // 从 URL 恢复列表上下文（刷新 / 从详情返回时保持原页码与筛选），再加载数据
+  restoreFromUrl()
+  await loadAndSync(true)
   await loadTop()
   if (props.kind === 'blogger') {
     await loadIpStats()
@@ -455,12 +503,13 @@ onBeforeUnmount(() => {
       </n-space>
     </n-card>
 
-    <!-- 新建/编辑对话框 -->
+    <!-- 新建/编辑对话框：新建后回第一页（新数据按最新排序在最前）；
+         编辑后保持当前页刷新，不再跳回第一页 -->
     <PersonFormModal
       v-model:show="showForm"
       :kind="kind"
       :person="editingPerson"
-      @saved="store.reload()"
+      @saved="(p: Person) => (editingPerson ? store.load(true) : store.reload())"
     />
   </div>
 </template>
