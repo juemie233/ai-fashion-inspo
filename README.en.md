@@ -92,12 +92,12 @@ chrome_debug_port: int = 9222
 | **Material Library** | Waterfall browsing, multi-dimensional filtering (source/media/status/tags/main color), sorting (including random/tag count), density adjustment, pagination, batch multi-selection operations (favorite/move to trash/add tags/edit metadata), persistent browsing mode/density/number per page |
 | **Advanced Search** | Keyword search, tag filtering (AND/OR), co-occurrence recommendations, advanced filtering (source/media/date), sorting (match priority), search history, pagination, density adjustment, semantic search (text), image search by upload, `/` focus and Esc exit, copy search link, persistent filter status |
 | **Upload Materials** | Drag-and-drop/paste/URL import, preview queue (video previews available), upload progress and speed, quick tagging, metadata presets, deduplication detection, folder batch upload, queue management (clear with confirmation), persistent preference settings, 500 upload limit validation |
-| **Material Details** | Large image preview (lightbox left/right navigation/zoom), tag display, outfit mega-tags (manual selection/new + AI suggestions one-click import), similar material recommendations (can be favorited/deleted), re-analysis, download original image, copy original link, tag click-to-search, move to trash (with optional deletion reason: poor quality/duplicate/dislike/privacy/other/AI-generated) |
+| **Material Details** | Large image preview (lightbox left/right navigation/zoom), tag display, outfit mega-tags (manual selection/new + AI suggestions one-click import), similar material recommendations (can be favorited/deleted), re-analysis, download original image, copy original link, tag click-to-search, move to trash (with optional deletion reason: poor quality/duplicate/dislike/privacy/other/AI-generated), five-star rating (alongside favorites, filterable/sortable in list), **Face Recognition (Blogger Feature Library Matching)** (detect & match → auto-associate fashion bloggers / suspected unknown faces → manually assign or unlink; requires registering the blogger's face first on the blogger detail page) |
 | **Collection Management** | Xiaohongshu CDP zero-detection scraping + Douyin standalone browser scraping, task pagination/platform/status filtering/sorting, cancel/resume (resume from breakpoint)/copy and re-scrape, log viewing, funnel visualization, result preview (batch delete/load more/view details), cookie management (status/expiration/import/delete), Chrome lifecycle management, scheduled scraping (CRUD plan/start/stop/immediate execution), dashboard statistics (platform distribution/daily trends), URL tombstone table + content MD5 deduplication, persistent filtering/sorting/tab state |
 | **Tag Management** | Group browsing/search/filtering, pin + custom drag-and-drop sorting, alias normalization (AI identifies synonyms and auto-merges), batch category change/rename/merge/delete (with confirmation), duplicate scan, drag-and-drop category change, batch tagging, tag notes, co-occurrence relationship graph + usage trends, import/export, material association preview, persistent column width |
 | **AI Model Management** | Model list/download/switch, text embedding model management (annotation/one-click download/switch), GPU memory monitoring, batch analysis (asynchronous task queue), history pagination, multi-select batch operations, analysis result comparison, queue visualization, parameter tuning (model-isolated + default value restore + clear override), data reset, quality review (binary classification: qualified/unqualified + re-review, asynchronous), negative sample initial screener (status/metrics/training/rollback), shortcuts (Enter to download/Ctrl+S to save) |
 | **Material Management** | Backend management dashboard partitioned by small menus (sub-page states persisted via URL, retained on refresh): Overview (statistics/distribution/largest file), AI suspicion re-review (select to batch delete or re-label as non-AI, hover card click 👁 to view details), batch cleanup (untagged/analysis failed), data integrity check, duplicate file detection and deduplication, near-duplicate detection (perceptual hash grouping + full-library random sampling + side-by-side preview + manual confirmation for deletion, hash cache gradually filled for near-instant scanning), vector backfill (one-click complete missing image vectors), Trash (soft-delete material recovery/permanent deletion/clear, default not auto-recycle), Data Insights (CSV export/new trend charts/person frequency ranking/operation audit logs), **Mobile Image Cropping** (scan manually uploaded vertical screenshots → manual selection confirmation → one-click crop status bar/bottom navigation area: auto black border detection / fixed ratio dual mode + screenshot feature confidence grading; original image auto-backup + vector backfill; skip materials support precise location jump in material library; when cropped result matches existing material, side-by-side comparison shown, user decides which to keep — physical deletion of duplicates allowed) |
-| **Person Management** | **Dedicated Tab Management for Fashion Bloggers / Professional Models** (two types physically split into separate tables and APIs, business logic independently evolved): List (name search/platform filtering/sorting), create/edit/delete (deletion only allowed if no associated materials), popularity ranking, style profile (high-frequency tags/category distribution/trends), material association (add/remove materials by blogger/model in detail page sections), **Blogger CSV Import** (Upsert by Xiaohongshu ID), **Model Photo Groups** (select folder to import entire group to selected model, photo group browsing/lightbox/delete, SHA-256 deduplication within group) |
+| **Person Management** | **Dedicated Tab Management for Fashion Bloggers / Professional Models** (two types physically split into separate tables and APIs, business logic independently evolved): List (name search/platform filtering/sorting), create/edit/delete (deletion only allowed if no associated materials), popularity ranking, style profile (high-frequency tags/category distribution/trends), material association (add/remove materials by blogger/model in detail page sections), **Blogger CSV Import** (Upsert by Xiaohongshu ID), **Model Photo Groups** (select folder to import entire group to selected model, photo group browsing/lightbox/delete, SHA-256 deduplication within group), **Blogger Face Registration** (upload 1~5 clear frontal photos to register/re-register; the material face auto-matching depends on this feature library; professional models do not have this face capability) |
 | **Browser Extension** | One-click extraction of fashion images from web pages; each scraping session automatically generates task records, viewable in Collection Management page for plugin history, results, and funnel |
 
 ## Quick Start
@@ -144,11 +144,16 @@ npm run dev
 # Task Queue Worker (handles asynchronous "batch analysis" tasks, needs to be started in a separate terminal)
 cd ../backend
 python -m app.worker
+
+# Face recognition sub-service face-service (standalone Python 3.10 environment running InsightFace, port 18889;
+# provides blogger face registration / material face matching; face features degrade gracefully when not running)
+cd ../face-service
+.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 18889
 ```
 
 Open `http://localhost:17777` in your browser.
 
-> One-click restart: `bash scripts/restart.sh` will automatically stop old processes and simultaneously launch the backend, frontend, and worker, with readiness checks.
+> One-click restart: `bash scripts/restart.sh` will automatically stop old processes and simultaneously launch the backend, frontend, worker, and face recognition sub-service, with readiness checks.
 >
 > Auto-start: `bash scripts/ensure-services.sh` performs "health checks + only starts missing services," idempotent and lock-protected, by default invoked by Claude Code's SessionStart hook (see `.claude/settings.json`) when a new session starts, safe for concurrent sessions.
 
@@ -225,7 +230,8 @@ fashion-inspo/
 │   │   ├── models/               # Data models
 │   │   │   ├── inspiration.py    # Fashion inspiration + AI analysis logs
 │   │   │   ├── tag.py            # Tags + aliases (including source identifiers)
-│   │   │   ├── person.py         # Person model (Blogger/Model dual tables + inspiration association + model photo sets/photos)
+│   │   │   ├── person.py         # Person model (Blogger/Model dual tables + inspiration association + model photo sets/photos + face feature relationships)
+│   │   │   ├── face.py           # Face feature library (blogger face embeddings + inspiration face detections)
 │   │   │   ├── scraper.py        # Scraping tasks + scheduled scraping plans
 │   │   │   ├── task.py           # Async task queue
 │   │   │   └── audit.py          # Operation audit logs
@@ -234,7 +240,7 @@ fashion-inspo/
 │   │   │   ├── inspirations.py   # Inspiration CRUD
 │   │   │   ├── tags.py           # Tag management + batch/statistics/scanning/sorting/alias/import/export
 │   │   │   ├── search.py         # Multi-dimensional search + similar inspirations
-│   │   │   ├── bloggers.py       # Blogger management (includes CSV import)
+│   │   │   ├── bloggers.py       # Blogger management (includes CSV import and blogger face registration)
 │   │   │   ├── models.py         # Professional model management + photo sets (model photoshoots)
 │   │   │   ├── ai.py             # AI route aggregation (split into ai_*.py)
 │   │   │   ├── ai_shared.py      # AI shared state + background tasks
@@ -258,6 +264,8 @@ fashion-inspo/
 │   │   │   ├── inspiration_service.py  # Inspiration CRUD business logic
 │   │   │   ├── tag_service.py    # Tag CRUD + merge + preset import + similarity
 │   │   │   ├── person_service.py # Base class for blogger/model services (PersonServiceBase) + style profile + photo sets/photos
+│   │   │   ├── blogger_face.py   # Blogger face registration (average pooling) + inspiration face detection & matching
+│   │   │   ├── face_client.py    # Face recognition sub-service HTTP client (face-service)
 │   │   │   ├── scraper_service.py    # Scraping orchestration + scheduled scheduling + plugin task logging
 │   │   │   ├── file_service.py   # File management
 │   │   │   ├── audit_service.py
@@ -296,6 +304,11 @@ fashion-inspo/
 │  └─────────────────────────────────────────────────────┘    │
 │                                                               │
 │  ┌─────────────────────────────────────────────────────┐    │
+│  │  Face-service (:18889) — InsightFace on Python 3.10  │    │
+│  │  Blogger Face Registration & Material Face Matching  │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐    │
 │  │     Chrome CDP (:9222) — Connection to Real Browser for Scraping │    │
 │  │     Zero-detection Search on Xiaohongshu/Douyin → Auto-download & Store Images │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -323,6 +336,8 @@ fashion-inspo/
 | `inspiration_models` | Inspiration-model many-to-many associations | inspiration_id, model_id, confidence |
 | `model_photo_sets` | Model photo sets | id, model_id, name (set name, default is folder name), created_at, updated_at |
 | `model_photos` | Model photos | id, set_id, file_path, thumbnail_path, content_hash (SHA-256 deduplication within set), sort_order, created_at |
+| `blogger_face_embeddings` | Blogger face feature library | id, blogger_id (unique), embedding (512-dim float32, average pooling), updated_at — the material face auto-matching depends on this library (models have no face capability) |
+| `inspiration_face_detections` | Inspiration face detections | id, inspiration_id, face_index (index within image), embedding, matched_blogger_id (matched blogger; null = suspected unknown face), confidence (cosine similarity), created_at |
 
 ### Tag Category System
 
@@ -385,6 +400,10 @@ alembic upgrade head
 | `POST` | `/api/inspirations/batch-trash` | Batch move to trash (soft delete) |
 | `POST` | `/api/inspirations/batch-update` | Batch edit metadata (source/favorite/audit status/suspicious AI flag) |
 | `GET` | `/api/inspirations/dominant-colors` | List of dominant colors in library (hex + count, for color filtering) |
+| `POST` | `/api/inspirations/{id}/face-detect` | Detect faces in an inspiration and match against the blogger feature library (re-detection overwrites old results; requires face-service running) |
+| `GET` | `/api/inspirations/{id}/face-detections` | List of face detections for an inspiration (with matched blogger and confidence) |
+| `PUT` | `/api/inspirations/{id}/face-detections/{det_id}` | Manually assign/unlink the blogger association for a face detection (body: `{"blogger_id": 5}` or `{"blogger_id": null}`) |
+| `DELETE` | `/api/inspirations/{id}/face-detections/{det_id}` | Delete a single face detection record |
 
 ### Search
 
@@ -452,6 +471,8 @@ alembic upgrade head
 | `GET` | `/api/bloggers/top` | Top bloggers ranking (by material count) |
 | `GET` | `/api/bloggers/suggestions` | Suggest bloggers by name (for deduplication selection) |
 | `POST` | `/api/bloggers/import-csv` | Upload CSV to batch import bloggers (upsert by xhs_id, nickname and Xiaohongshu ID required) |
+| `POST` | `/api/bloggers/{id}/face` | Register/re-register a blogger's face (1~5 frontal photos; re-registration overwrites old features; requires face-service running) |
+| `GET` | `/api/bloggers/{id}/face` | Query a blogger's face registration status |
 | `POST` | `/api/inspirations/{id}/bloggers` | Batch associate bloggers with material (idempotent) |
 | `DELETE` | `/api/inspirations/{id}/bloggers/{bid}` | Remove blogger association from material |
 
@@ -723,7 +744,7 @@ pytest
 ```
 
 Scope:
-- **Integration Testing**: Health checks, destructive API key authentication (401/403, read APIs unaffected), material upload/detail/favorite/content deduplication (SHA-256)/platform ID deduplication/**soft delete filtering**/physical deletion, trash move-in/restore/clear with reason filtering/expiry cleanup/**invariant state validation** (soft delete three fields same truth value, R1/R2/R3 violation detection), tag creation/conflict/association/idempotency/unassociation, keyword and tag combination search, person module (dual CRUD for blogger/model after split, material association, style profiling, deletion restrictions, CSV import, photo group, and person frequency aggregation statistics), **batch operations** (batch favorite/move to trash/edit metadata/tag and dominant color filtering), **management dashboard insights** (CSV export/new trend/person frequency/audit log/approximate duplicate detection), **mobile image cropping** (candidate scanning/black border detection/screenshot feature confidence/skip details/content duplicate preview/physical deletion of duplicate materials followed by re-cropping/re-cropping without clearing other groups preview), **task executor** (batch delete tasks: delete records + delete files + release space; vector refill batching/quality review anti-fake success: all failures throw task-level exceptions, partial failures complete normally), **AI analysis and quality review** (full analysis save tags, binary classification pass/reject, large tag suggestions, quality statistics, batch review/re-review task creation — all simulated Ollama), **scraping module** (plugin session task full lifecycle and result batch deletion, task list pagination/filtering/sorting/statistics, scheduled task CRUD/start/stop/immediate execution, cookie import/delete/status, statistics aggregation).
+- **Integration Testing**: Health checks, destructive API key authentication (401/403, read APIs unaffected), material upload/detail/favorite/content deduplication (SHA-256)/platform ID deduplication/**soft delete filtering**/physical deletion, trash move-in/restore/clear with reason filtering/expiry cleanup/**invariant state validation** (soft delete three fields same truth value, R1/R2/R3 violation detection), tag creation/conflict/association/idempotency/unassociation, keyword and tag combination search, person module (dual CRUD for blogger/model after split, material association, style profiling, deletion restrictions, CSV import, photo group, and person frequency aggregation statistics), **blogger face** (registration average pooling/re-registration overwrite/no-face rejection/over 5 photos rejection/blogger not found 404, inspiration face detection hit and miss/manual assign and unlink/delete detection — all with mocked face_client), **batch operations** (batch favorite/move to trash/edit metadata/tag and dominant color filtering), **management dashboard insights** (CSV export/new trend/person frequency/audit log/approximate duplicate detection), **mobile image cropping** (candidate scanning/black border detection/screenshot feature confidence/skip details/content duplicate preview/physical deletion of duplicate materials followed by re-cropping/re-cropping without clearing other groups preview), **task executor** (batch delete tasks: delete records + delete files + release space; vector refill batching/quality review anti-fake success: all failures throw task-level exceptions, partial failures complete normally), **AI analysis and quality review** (full analysis save tags, binary classification pass/reject, large tag suggestions, quality statistics, batch review/re-review task creation — all simulated Ollama), **scraping module** (plugin session task full lifecycle and result batch deletion, task list pagination/filtering/sorting/statistics, scheduled task CRUD/start/stop/immediate execution, cookie import/delete/status, statistics aggregation).
 
 - **End-to-end journey testing** (`test_journeys.py`, validating link connections rather than internal single-step logic): material full journey (upload → tagging → vector → trash → restore → delete again → clear, invariant zero violations and tombstone/audit trail at each step), scraping journey (plugin session → from-url ingestion → task completion → deletion → tombstone → re-scrape rejected, including anti-redundancy loop with tombstone still present after restore), failure journey (file missing self-healing: trash/restore do not produce dangling records), crash journey (worker heartbeat timeout → `_reset_stale_tasks` reset → retry succeeds, no false success).
 
