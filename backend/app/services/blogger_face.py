@@ -34,9 +34,10 @@ logger = logging.getLogger(__name__)
 # 注册照片张数限制（需求：1~5 张）
 MAX_REGISTER_PHOTOS = 5
 # 注册人脸质量阈值：face-service 已过滤置信度 < 0.5 的人脸，
-# 0.5~0.65 区间视为「置信度偏低」；人脸 bbox 面积占比低于 3% 视为「人脸过小」
+# 0.5~0.65 区间视为「置信度偏低」；人脸 bbox 宽度占图宽低于 5% 视为「人脸过小」
+# （用宽度占比而非面积占比：高清大图中正常半身照/全身照的面积占比普遍 < 3%，会误判）
 LOW_CONFIDENCE_THRESHOLD = 0.65
-MIN_FACE_RATIO = 0.03
+MIN_FACE_WIDTH_RATIO = 0.05
 
 
 def _now_iso() -> str:
@@ -60,13 +61,16 @@ def _image_size(data: bytes) -> tuple[int, int] | None:
         return None
 
 
-def _face_ratio(bbox: list, img_size: tuple[int, int] | None) -> float | None:
-    """人脸 bbox 面积占图片面积的比例（bbox 为原图坐标）。"""
+def _face_width_ratio(bbox: list, img_size: tuple[int, int] | None) -> float | None:
+    """人脸 bbox 宽度占图片宽度的比例（bbox 为原图坐标）。
+
+    用宽度占比而非面积占比：高清大图中正常半身照/全身照的面积占比
+    普遍低于 3%，按面积判定会误伤；宽度占比更稳定。
+    """
     if len(bbox) != 4 or img_size is None:
         return None
     bw = float(bbox[2] - bbox[0])
-    bh = float(bbox[3] - bbox[1])
-    return round((bw * bh) / (float(img_size[0]) * float(img_size[1])), 4)
+    return round(bw / float(img_size[0]), 4)
 
 
 # ── 博主人脸注册 ──
@@ -134,7 +138,7 @@ async def register_blogger_face(
         # 取该图置信度最高的人脸（正脸照片通常只有一张脸）
         best = max(faces, key=lambda f: f.get("det_score", 0))
         det_score = float(best.get("det_score", 0))
-        face_ratio = _face_ratio(best.get("bbox") or [], _image_size(data))
+        face_ratio = _face_width_ratio(best.get("bbox") or [], _image_size(data))
         # 质量判定：置信度偏低 → 人脸过小 → 合格
         if det_score < LOW_CONFIDENCE_THRESHOLD:
             photo_results.append(
@@ -148,13 +152,13 @@ async def register_blogger_face(
                 }
             )
             continue
-        if face_ratio is not None and face_ratio < MIN_FACE_RATIO:
+        if face_ratio is not None and face_ratio < MIN_FACE_WIDTH_RATIO:
             photo_results.append(
                 {
                     "index": idx,
                     "status": "skipped",
                     "reason": "small_face",
-                    "message": f"人脸过小（占画面 {face_ratio * 100:.1f}%），建议裁剪放大后上传",
+                    "message": f"人脸过小（宽占画面 {face_ratio * 100:.1f}%），建议裁剪放大后上传",
                     "det_score": round(det_score, 3),
                     "face_ratio": face_ratio,
                 }

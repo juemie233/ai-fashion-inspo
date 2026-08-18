@@ -58,21 +58,26 @@ class FaceResult:
     embedding: list[float] = field(default_factory=list)  # 512 维归一化特征
 
 
-def _distance2bbox(points: np.ndarray, distance: np.ndarray) -> np.ndarray:
-    """RetinaFace 中心距离表示 → xyxy 框。"""
-    x1 = points[:, 0] - distance[:, 0]
-    y1 = points[:, 1] - distance[:, 1]
-    x2 = points[:, 0] + distance[:, 2]
-    y2 = points[:, 1] + distance[:, 3]
+def _distance2bbox(points: np.ndarray, distance: np.ndarray, stride: int) -> np.ndarray:
+    """RetinaFace 中心距离表示 → xyxy 框。
+
+    immich 重构版 det_10g 的 bbox 输出为「stride 归一化距离」
+    （距离以 stride 为单位），必须乘以 stride 才是像素距离；
+    直接当像素使用会导致框被缩小 stride 倍（漏检/误判小脸）。
+    """
+    x1 = points[:, 0] - distance[:, 0] * stride
+    y1 = points[:, 1] - distance[:, 1] * stride
+    x2 = points[:, 0] + distance[:, 2] * stride
+    y2 = points[:, 1] + distance[:, 3] * stride
     return np.stack([x1, y1, x2, y2], axis=-1)
 
 
-def _distance2kps(points: np.ndarray, distance: np.ndarray) -> np.ndarray:
-    """中心距离表示 → 5 点关键点（10 维）。"""
+def _distance2kps(points: np.ndarray, distance: np.ndarray, stride: int) -> np.ndarray:
+    """中心距离表示 → 5 点关键点（10 维），同样乘 stride 还原像素坐标。"""
     preds = []
     for i in range(0, distance.shape[1], 2):
-        preds.append(points[:, 0] + distance[:, i])
-        preds.append(points[:, 1] + distance[:, i + 1])
+        preds.append(points[:, 0] + distance[:, i] * stride)
+        preds.append(points[:, 1] + distance[:, i + 1] * stride)
     return np.stack(preds, axis=-1)
 
 
@@ -191,7 +196,7 @@ class FaceEngine:
         all_kpss: list[np.ndarray] = []
         all_scores: list[np.ndarray] = []
         offset = 0
-        for (score, bbox, kps), _stride in zip(groups, DET_STRIDES):
+        for (score, bbox, kps), stride in zip(groups, DET_STRIDES):
             n = score.shape[0]
             seg = centers[offset : offset + n]
             offset += n
@@ -199,8 +204,8 @@ class FaceEngine:
             pos = np.where(s >= DET_THRESHOLD)[0]
             if pos.size == 0:
                 continue
-            boxes = _distance2bbox(seg[pos], bbox[pos])
-            kpss = _distance2kps(seg[pos], kps[pos])
+            boxes = _distance2bbox(seg[pos], bbox[pos], stride)
+            kpss = _distance2kps(seg[pos], kps[pos], stride)
             scores = s[pos]
             keep = _nms(boxes, scores, NMS_THRESHOLD)
             all_boxes.append(boxes[keep])

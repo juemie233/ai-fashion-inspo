@@ -153,12 +153,12 @@ def test_register_blogger_face_skipped_detail(
                 ],
             }
         if n == 3:
-            # 人脸过小（10x10 / 64x64 → 占比 2.4% < 3%）
+            # 人脸过小（bbox 宽 3px / 64px 图 = 4.7% < 5% 宽度占比）
             return {
                 "face_count": 1,
                 "faces": [
                     {
-                        "bbox": [40, 40, 50, 50],
+                        "bbox": [30, 30, 33, 40],
                         "det_score": 0.80,
                         "embedding": _unit_embedding(1),
                     }
