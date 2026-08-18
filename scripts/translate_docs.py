@@ -58,22 +58,32 @@ Translate the given Chinese markdown document into English, following these rule
 6. Output ONLY the translated markdown, no explanations, no code fences around it."""
 
 
-def ollama_request(url: str, payload: dict) -> dict:
+def ollama_request(url: str, payload: dict, method: str = "POST") -> dict:
     """发送请求到 Ollama API，返回 JSON 响应。"""
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
-        method="POST",
+        method=method,
     )
     with urllib.request.urlopen(req, timeout=600) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def check_ollama(base_url: str, model: str) -> None:
-    """检查 Ollama 可用性与模型是否存在。"""
+    """检查 Ollama 可用性与模型是否存在。
+
+    注意：新版 Ollama 的 ``GET /api/tags`` 不接受 POST 请求体（405），
+    探测模型列表必须用 GET。
+    """
     try:
-        tags = ollama_request(f"{base_url}/api/tags", {})
+        req = urllib.request.Request(
+            f"{base_url}/api/tags",
+            headers={"Content-Type": "application/json"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            tags = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError) as e:
         sys.exit(f"[错误] 无法连接 Ollama（{base_url}）：{e}\n请先启动 Ollama：ollama serve")
 

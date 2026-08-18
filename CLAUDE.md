@@ -180,8 +180,9 @@ fashion-inspo/
 - chore: 工具/配置
 
 注意事项：
-- **< 100 行**：不自动提交。仅在用户明确要求时提交。
-- **≥ 100 行**：自动 `git commit` 并 `git push origin master`。
+- **fix（修复）提交无限制**：修复功能的代码提交不受行数限制，完成后自动 `git commit` 并 `git push origin master`。
+- **其他类型 < 100 行**：不自动提交。仅在用户明确要求时提交。
+- **其他类型 ≥ 100 行**：自动 `git commit` 并 `git push origin master`。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
 
