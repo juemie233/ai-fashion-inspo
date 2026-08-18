@@ -9,11 +9,13 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from datetime import datetime, timezone
 
 import numpy as np
 from fastapi import HTTPException
+from PIL import Image
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -31,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 # 注册照片张数限制（需求：1~5 张）
 MAX_REGISTER_PHOTOS = 5
+# 注册人脸质量阈值：face-service 已过滤置信度 < 0.5 的人脸，
+# 0.5~0.65 区间视为「置信度偏低」；人脸 bbox 面积占比低于 3% 视为「人脸过小」
+LOW_CONFIDENCE_THRESHOLD = 0.65
+MIN_FACE_RATIO = 0.03
 
 
 def _now_iso() -> str:
@@ -43,6 +49,24 @@ def _bytes_to_embedding(data: bytes) -> np.ndarray:
     if emb.shape[0] != 512:
         raise ValueError(f"特征维度异常: {emb.shape[0]}（期望 512）")
     return emb
+
+
+def _image_size(data: bytes) -> tuple[int, int] | None:
+    """从图片字节读取宽高（仅解析文件头，不完整解码）。"""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            return img.size  # (w, h)
+    except Exception:  # noqa: BLE001 图片损坏/格式不支持时无法计算占比
+        return None
+
+
+def _face_ratio(bbox: list, img_size: tuple[int, int] | None) -> float | None:
+    """人脸 bbox 面积占图片面积的比例（bbox 为原图坐标）。"""
+    if len(bbox) != 4 or img_size is None:
+        return None
+    bw = float(bbox[2] - bbox[0])
+    bh = float(bbox[3] - bbox[1])
+    return round((bw * bh) / (float(img_size[0]) * float(img_size[1])), 4)
 
 
 # ── 博主人脸注册 ──
@@ -70,30 +94,94 @@ async def register_blogger_face(
         raise HTTPException(status_code=404, detail="博主未找到")
 
     embeddings: list[np.ndarray] = []
-    used_photos = 0
-    for data in image_bytes_list:
+    # 每张照片的结果明细（供前端逐张提示跳过原因）
+    photo_results: list[dict] = []
+    for idx, data in enumerate(image_bytes_list, start=1):
         try:
             result = await face_client.embed(data)
         except FaceServiceHttpError as e:
             if e.status_code == 404:
                 # 子服务 404 = 该照片未检测到人脸（业务结果）：跳过该照片，
                 # 与返回空结果语义一致；全部照片都无人脸时由下方统一提示
+                photo_results.append(
+                    {
+                        "index": idx,
+                        "status": "skipped",
+                        "reason": "no_face",
+                        "message": "未检测到人脸",
+                        "det_score": None,
+                        "face_ratio": None,
+                    }
+                )
                 continue
             raise HTTPException(status_code=503, detail=str(e)) from e
         except FaceServiceUnavailableError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         faces = result.get("faces", [])
         if not faces:
-            continue  # 该照片未检测到人脸，跳过
-        used_photos += 1
+            # 子服务正常响应但未检出人脸（与 404 同语义）
+            photo_results.append(
+                {
+                    "index": idx,
+                    "status": "skipped",
+                    "reason": "no_face",
+                    "message": "未检测到人脸",
+                    "det_score": None,
+                    "face_ratio": None,
+                }
+            )
+            continue
         # 取该图置信度最高的人脸（正脸照片通常只有一张脸）
         best = max(faces, key=lambda f: f.get("det_score", 0))
+        det_score = float(best.get("det_score", 0))
+        face_ratio = _face_ratio(best.get("bbox") or [], _image_size(data))
+        # 质量判定：置信度偏低 → 人脸过小 → 合格
+        if det_score < LOW_CONFIDENCE_THRESHOLD:
+            photo_results.append(
+                {
+                    "index": idx,
+                    "status": "skipped",
+                    "reason": "low_confidence",
+                    "message": f"人脸置信度偏低（{det_score:.2f}），建议换更清晰的正脸照片",
+                    "det_score": round(det_score, 3),
+                    "face_ratio": face_ratio,
+                }
+            )
+            continue
+        if face_ratio is not None and face_ratio < MIN_FACE_RATIO:
+            photo_results.append(
+                {
+                    "index": idx,
+                    "status": "skipped",
+                    "reason": "small_face",
+                    "message": f"人脸过小（占画面 {face_ratio * 100:.1f}%），建议裁剪放大后上传",
+                    "det_score": round(det_score, 3),
+                    "face_ratio": face_ratio,
+                }
+            )
+            continue
+        photo_results.append(
+            {
+                "index": idx,
+                "status": "used",
+                "reason": None,
+                "message": None,
+                "det_score": round(det_score, 3),
+                "face_ratio": face_ratio,
+            }
+        )
         embeddings.append(np.asarray(best["embedding"], dtype=np.float32))
 
     if not embeddings:
+        reasons = "；".join(
+            f"第{r['index']}张{r['message']}" for r in photo_results
+        )
         raise HTTPException(
             status_code=400,
-            detail="所有照片均未检测到清晰人脸，请上传正脸、光线充足的照片",
+            detail=(
+                f"所有照片均未检出清晰人脸（{reasons}），"
+                "请上传正脸、光线充足的照片"
+            ),
         )
 
     avg = np.mean(np.stack(embeddings, axis=0), axis=0)
@@ -117,9 +205,10 @@ async def register_blogger_face(
         "registered": True,
         "blogger_id": blogger_id,
         "blogger_name": blogger.name,
-        "photos_used": used_photos,
+        "photos_used": len(embeddings),
         "photos_total": len(image_bytes_list),
         "updated_at": _now_iso(),
+        "photo_results": photo_results,
     }
 
 

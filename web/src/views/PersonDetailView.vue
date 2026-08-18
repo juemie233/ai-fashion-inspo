@@ -162,9 +162,19 @@ async function handleRegisterFace() {
   faceUploading.value = true
   try {
     const r = await bloggersApi.registerFace(personId.value, files)
-    message.success(
-      `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
-    )
+    const skipped = (r.photo_results ?? []).filter((p) => p.status === 'skipped')
+    if (skipped.length > 0) {
+      // 部分照片被跳过：明确提示哪几张、为什么
+      const detail = skipped.map((p) => `第${p.index}张：${p.message ?? '未检出清晰人脸'}`).join('；')
+      message.warning(
+        `注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）。已跳过：${detail}`,
+        { duration: 8000 },
+      )
+    } else {
+      message.success(
+        `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
+      )
+    }
     faceFileList.value = []
     await loadFaceStatus()
   } catch (e) {

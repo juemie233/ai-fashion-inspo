@@ -119,7 +119,113 @@ def test_register_blogger_face_subservice_404_skipped(
         files=[("files", ("a.jpg", b"photo", "image/jpeg"))],
     )
     assert r.status_code == 400
-    assert "未检测到清晰人脸" in r.json()["detail"]
+    assert "未检出清晰人脸" in r.json()["detail"]
+
+
+def test_register_blogger_face_skipped_detail(
+    client, create_blogger, monkeypatch, make_image
+):
+    """部分照片被跳过：photo_results 逐张给出原因（无脸/置信度低/人脸过小）。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    blogger = create_blogger(name="明细博")
+    data, _ctype = make_image()  # 真实 64x64 图片字节（PIL 可读尺寸）
+
+    call_no = {"n": 0}
+
+    async def fake_embed_sequence(
+        image_bytes: bytes, filename: str = "image.jpg"
+    ) -> dict:
+        call_no["n"] += 1
+        n = call_no["n"]
+        if n == 1:
+            raise FaceServiceHttpError(404, "未检测到人脸")
+        if n == 2:
+            # 置信度偏低（0.55 < 0.65）
+            return {
+                "face_count": 1,
+                "faces": [
+                    {
+                        "bbox": [10, 10, 60, 70],
+                        "det_score": 0.55,
+                        "embedding": _unit_embedding(1),
+                    }
+                ],
+            }
+        if n == 3:
+            # 人脸过小（10x10 / 64x64 → 占比 2.4% < 3%）
+            return {
+                "face_count": 1,
+                "faces": [
+                    {
+                        "bbox": [40, 40, 50, 50],
+                        "det_score": 0.80,
+                        "embedding": _unit_embedding(1),
+                    }
+                ],
+            }
+        # 合格
+        return {
+            "face_count": 1,
+            "faces": [
+                {
+                    "bbox": [10, 10, 60, 70],
+                    "det_score": 0.85,
+                    "embedding": _unit_embedding(2),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.services.blogger_face.face_client.embed", fake_embed_sequence
+    )
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[
+            ("files", ("1.jpg", data, "image/jpeg")),
+            ("files", ("2.jpg", data, "image/jpeg")),
+            ("files", ("3.jpg", data, "image/jpeg")),
+            ("files", ("4.jpg", data, "image/jpeg")),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["photos_used"] == 1
+    assert body["photos_total"] == 4
+    results = {p["index"]: p for p in body["photo_results"]}
+    assert results[1]["status"] == "skipped"
+    assert results[1]["reason"] == "no_face"
+    assert results[2]["status"] == "skipped"
+    assert results[2]["reason"] == "low_confidence"
+    assert "置信度偏低" in results[2]["message"]
+    assert results[3]["status"] == "skipped"
+    assert results[3]["reason"] == "small_face"
+    assert "人脸过小" in results[3]["message"]
+    assert results[4]["status"] == "used"
+    assert results[4]["reason"] is None
+
+
+def test_register_blogger_face_all_skipped_detail(
+    client, create_blogger, monkeypatch
+):
+    """全部照片被跳过：400 且 detail 包含逐张原因摘要。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    blogger = create_blogger(name="全跳博")
+
+    async def fake_embed_404(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceHttpError(404, "未检测到人脸")
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed_404)
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", (f"p{i}.jpg", b"photo", "image/jpeg")) for i in range(3)],
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "第1张未检测到人脸" in detail
+    assert "第2张未检测到人脸" in detail
+    assert "第3张未检测到人脸" in detail
 
 
 def test_register_blogger_face_subservice_500_unavailable(

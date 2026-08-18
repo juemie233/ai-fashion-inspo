@@ -195,11 +195,22 @@ export interface BloggerFaceStatus {
   updated_at?: string | null
 }
 
+/** 单张照片的注册结果明细（部分跳过时前端逐张提示原因） */
+export interface FacePhotoResult {
+  index: number
+  status: 'used' | 'skipped'
+  reason?: 'no_face' | 'low_confidence' | 'small_face' | null
+  message?: string | null
+  det_score?: number | null
+  face_ratio?: number | null
+}
+
 /** 博主人脸注册结果 */
 export interface BloggerFaceRegisterResult extends BloggerFaceStatus {
   blogger_name?: string
   photos_used?: number
   photos_total?: number
+  photo_results?: FacePhotoResult[]
 }
 
 /** 职业模特 API（/api/models）：不含人脸能力，仅通用人物能力 */
