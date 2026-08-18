@@ -84,3 +84,41 @@ def test_similar_tag_fallback(client, upload):
     assert r.status_code == 200
     data = r.json()
     assert any(s["inspiration"]["id"] == b for s in data["similar"])
+
+
+def test_search_with_blogger_and_model_links(client, upload, create_blogger, create_model):
+    """回归：素材关联博主/模特后搜索不再 500。
+
+    修复前 search.py 的查询只预加载 tags，inspiration_to_out 访问关联内层
+    实体（t.blogger / t.model）触发懒加载，async 下抛 MissingGreenlet（500）；
+    仅测试库素材无关联所以此前未暴露，真实库有关联即崩。
+    """
+    insp_id = upload().json()["id"]
+    blogger = create_blogger(name="关联博主")
+    model = create_model(name="关联模特")
+    assert (
+        client.post(
+            f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger["id"]]}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/inspirations/{insp_id}/models", json={"person_ids": [model["id"]]}
+        ).status_code
+        == 200
+    )
+
+    # 普通搜索：命中且返回关联的博主/模特简要信息
+    r = client.get("/api/search", params={})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+    item = r.json()["items"][0]
+    assert item["id"] == insp_id
+    assert [b["id"] for b in item["bloggers"]] == [blogger["id"]]
+    assert [m["id"] for m in item["models"]] == [model["id"]]
+
+    # 相似推荐链路（复用 _load_inspiration，同样需要关联链预加载）
+    r2 = client.get(f"/api/search/similar/{insp_id}")
+    assert r2.status_code == 200
+    assert r2.json()["source"]["id"] == insp_id

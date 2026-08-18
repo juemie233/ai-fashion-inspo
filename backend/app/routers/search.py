@@ -17,6 +17,7 @@ from app.models.inspiration import (
     analysis_log_filter,
     latest_analysis_log_subquery,
 )
+from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
 from app.schemas.inspiration import InspirationListOut, InspirationOut
 from app.schemas.search import (
@@ -86,9 +87,13 @@ async def search_inspirations(
         if exclude_tags else []
     )
 
-    # 基础查询（预加载标签，排除垃圾桶中已软删除的素材）
+    # 基础查询（预加载标签与博主/模特关联链，排除垃圾桶中已软删除的素材）。
+    # 注意：inspiration_to_out 会访问 bloggers/models 的内层实体（t.blogger/t.model），
+    # 必须链式 selectinload，否则 async 下触发懒加载抛 MissingGreenlet（500）
     base_query = select(Inspiration).options(
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag)
+        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+        selectinload(Inspiration.models).selectinload(InspirationModel.model),
     ).where(Inspiration.deleted_at.is_(None))
 
     # 收集筛选条件
@@ -456,10 +461,18 @@ def _to_search_out(inspiration: Inspiration) -> InspirationOut:
 
 
 async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:
-    """加载素材（预加载标签，排除垃圾桶素材），不存在时返回 None。"""
+    """加载素材（预加载标签与博主/模特关联链，排除垃圾桶素材），不存在时返回 None。
+
+    与 search_inspirations 的加载器保持一致：inspiration_to_out 访问关联内层
+    实体时必须链式 selectinload，否则 async 下懒加载抛 MissingGreenlet。
+    """
     result = await db.execute(
         select(Inspiration)
-        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        )
         .where(
             Inspiration.id == inspiration_id,
             Inspiration.deleted_at.is_(None),
