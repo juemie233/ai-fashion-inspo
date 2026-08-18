@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SCRAPER_PLATFORM_LABELS,
+  TASK_TYPE_ICONS,
   TASK_TYPE_LABELS,
   formatDuration,
   normalizeTaskStatus,
@@ -18,6 +19,16 @@ describe('TASK_TYPE_LABELS', () => {
     expect(TASK_TYPE_LABELS.deduplicate).toBe('近似重复检测删除')
     expect(TASK_TYPE_LABELS.scraper).toBe('采集')
     expect(TASK_TYPE_LABELS.vector_backfill).toBe('向量回填')
+  })
+})
+
+describe('TASK_TYPE_ICONS', () => {
+  it('全量任务类型均有图标映射，删除类任务图标互不相同', () => {
+    for (const type of Object.keys(TASK_TYPE_LABELS)) {
+      expect(TASK_TYPE_ICONS[type], `类型 ${type} 缺少图标映射`).toBeTruthy()
+    }
+    // 两类删除任务必须使用不同图标，保证列表中一眼可辨
+    expect(TASK_TYPE_ICONS.batch_delete).not.toBe(TASK_TYPE_ICONS.deduplicate)
   })
 })
 

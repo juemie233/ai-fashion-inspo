@@ -2,10 +2,16 @@
 /** 任务列表：统一展示任务队列与采集任务。 */
 
 import { h } from 'vue'
-import { NTag, NProgress, NSpin, NButton, NPopconfirm, NText } from 'naive-ui'
+import { NTag, NProgress, NSpin, NButton, NPopconfirm, NText, NIcon } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import type { UnifiedTask } from '@/types/task'
-import { TASK_STATUS_LABELS, taskStatusType, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
+import {
+  TASK_STATUS_LABELS,
+  TASK_TYPE_ICONS,
+  taskStatusType,
+  taskTypeTagColor,
+  predictEta,
+} from '@/utils/taskLabel'
 import { formatDate } from '@/utils/format'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
@@ -49,9 +55,18 @@ const columns: DataTableColumns<UnifiedTask> = [
   {
     title: '任务',
     key: 'title',
-    render: (row) =>
-      h('div', { style: 'line-height:1.4' }, [
-        h(NTag, { size: 'small', type: taskTypeTagColor(row.type) }, { default: () => row.title }),
+    render: (row) => {
+      // 类型标签：中文名 + 区分图标（未知类型回退为无图标纯文本）
+      const typeIcon = TASK_TYPE_ICONS[row.type]
+      return h('div', { style: 'line-height:1.4' }, [
+        h(
+          NTag,
+          { size: 'small', type: taskTypeTagColor(row.type) },
+          {
+            ...(typeIcon ? { icon: () => h(NIcon, { component: typeIcon }) } : {}),
+            default: () => row.title,
+          },
+        ),
         row.detail
           ? h(
               NText,
@@ -59,7 +74,8 @@ const columns: DataTableColumns<UnifiedTask> = [
               { default: () => row.detail },
             )
           : null,
-      ]),
+      ])
+    },
   },
   {
     title: '状态',

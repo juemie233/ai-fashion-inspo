@@ -1,5 +1,14 @@
 /** 任务类型与状态的中文映射（任务中心专用）。 */
 
+import type { Component } from 'vue'
+import {
+  CloudDownloadOutline,
+  CubeOutline,
+  GitCompareOutline,
+  ShieldCheckmarkOutline,
+  SparklesOutline,
+  TrashOutline,
+} from '@vicons/ionicons5'
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
@@ -18,6 +27,18 @@ export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
   xiaohongshu: SOURCE_TYPE_LABELS.xiaohongshu,
   douyin: SOURCE_TYPE_LABELS.douyin,
   browser_extension: SOURCE_TYPE_LABELS.browser_extension,
+}
+
+/** 任务类型对应图标（任务列表标签视觉区分，与 TASK_TYPE_LABELS 一一对应）。
+ * 删除类任务刻意使用不同图标：批量删除=垃圾桶、近似重复检测删除=版本对比，
+ * 让两类删除任务在列表中一眼可辨。 */
+export const TASK_TYPE_ICONS: Record<string, Component> = {
+  batch_analyze: SparklesOutline,
+  quality_check: ShieldCheckmarkOutline,
+  batch_delete: TrashOutline,
+  deduplicate: GitCompareOutline,
+  scraper: CloudDownloadOutline,
+  vector_backfill: CubeOutline,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
