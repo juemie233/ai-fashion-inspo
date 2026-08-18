@@ -194,6 +194,8 @@ const columns: DataTableColumns<Person> = [
     title: '操作',
     key: 'actions',
     width: 210,
+    // 固定在表格右侧：列宽合计超过容器宽度出现横向滚动时，操作按钮始终可见
+    fixed: 'right',
     render: (row) =>
       h('div', { class: 'row-actions' }, [
         h(
@@ -345,6 +347,7 @@ onMounted(async () => {
         :loading="store.loading"
         :row-key="(row: Person) => row.id"
         :bordered="false"
+        :scroll-x="1160"
       />
 
       <n-pagination
