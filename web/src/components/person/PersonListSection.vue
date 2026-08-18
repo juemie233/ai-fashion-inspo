@@ -41,7 +41,7 @@ function syncUrl() {
   if (store.page > 1) query.page = String(store.page)
   if (store.search.trim()) query.q = store.search.trim()
   if (store.platform) query.platform = store.platform
-  if (store.sort !== 'newest') query.sort = store.sort
+  if (store.sort !== 'count') query.sort = store.sort
   router.replace({ path: '/persons', query })
 }
 
@@ -51,7 +51,8 @@ watch(
   () => syncUrl()
 )
 
-/** 从 URL query 恢复列表上下文（组件挂载时调用，刷新/详情返回后保持原状态） */
+/** 从 URL query 恢复列表上下文（组件挂载时调用，刷新/详情返回后保持原状态）；
+ *  默认排序为「素材数最多」（count），URL 未显式指定时按此进入 */
 function restoreFromUrl() {
   const q = route.query
   const page = Number(q.page)
@@ -59,7 +60,7 @@ function restoreFromUrl() {
   store.search = typeof q.q === 'string' ? q.q : ''
   store.platform = typeof q.platform === 'string' ? q.platform : ''
   store.sort =
-    q.sort === 'name' || q.sort === 'count' ? q.sort : 'newest'
+    q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
 }
 
 /** 加载后修正页码越界（如删除后总页数减少），并同步 URL */
@@ -86,9 +87,9 @@ const platformOptions = [
   ...Object.entries(PERSON_PLATFORM_LABELS).map(([value, label]) => ({ label, value })),
 ]
 const sortOptions = [
+  { label: '素材数最多', value: 'count' },
   { label: '最新创建', value: 'newest' },
   { label: '名称排序', value: 'name' },
-  { label: '素材数最多', value: 'count' },
 ]
 
 // ── 新建 / 编辑 / 删除 ──
@@ -129,7 +130,7 @@ function goDetail(person: Person) {
   if (store.page > 1) query.page = String(store.page)
   if (store.search.trim()) query.q = store.search.trim()
   if (store.platform) query.platform = store.platform
-  if (store.sort !== 'newest') query.sort = store.sort
+  if (store.sort !== 'count') query.sort = store.sort
   router.push({ path: `/persons/${person.id}`, query })
 }
 

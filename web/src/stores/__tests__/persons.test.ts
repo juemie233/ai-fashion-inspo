@@ -43,6 +43,11 @@ describe('persons store', () => {
     vi.restoreAllMocks()
   })
 
+  it('默认排序为素材数最多（count）', () => {
+    const store = usePersonsStore('blogger')
+    expect(store.sort).toBe('count')
+  })
+
   it('load 填充列表与总数', async () => {
     mockBloggerFetch.mockResolvedValue({
       items: [makePerson(1, '博主甲'), makePerson(2, '博主乙')],

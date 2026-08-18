@@ -31,8 +31,8 @@ export function usePersonsStore(kind: PersonKind) {
   const search = ref('')
   /** 平台筛选（'' 表示全部） */
   const platform = ref('')
-  /** 排序方式：newest | name | count */
-  const sort = ref<'newest' | 'name' | 'count'>('newest')
+  /** 排序方式：newest | name | count（默认素材数最多） */
+  const sort = ref<'newest' | 'name' | 'count'>('count')
 
   /** 请求序号：筛选快速切换时丢弃过期响应，防止旧数据覆盖新列表 */
   let loadSeq = 0
