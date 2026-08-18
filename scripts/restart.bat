@@ -1,24 +1,24 @@
 @echo off
 setlocal enabledelayedexpansion
-chcp 65001 >nul
+chcp 936 >nul
 
 rem ==============================================
-rem AI ç©¿æ­ç´ æåº“ â€” ä¸€é”®é‡å¯å‰åŽç«¯ï¼ˆWindows æ‰¹å¤„ç†ç‰ˆï¼‰
-rem ç”¨æ³•: scripts\restart.batï¼ˆå»ºè®®åœ¨ cmd / Windows Terminal ä¸­è¿è¡Œï¼‰
+rem AI ´©´îËØ²Ä¿â ¡ª Ò»¼üÖØÆôÇ°ºó¶Ë£¨Windows Åú´¦Àí°æ£©
+rem ÓÃ·¨: scripts\restart.bat£¨½¨ÒéÔÚ cmd / Windows Terminal ÖÐÔËÐÐ£©
 rem
-rem è¯´æ˜Žï¼šåŽç«¯ã€Œä¸ã€ä½¿ç”¨ uvicorn --reloadã€‚
-rem   Windows ä¸‹ --reload èµ° multiprocessing.spawnï¼Œæ–‡ä»¶å˜æ›´è§¦å‘é‡è½½æ—¶ä¼šä»¥
-rem   OSError: [WinError 87] å‚æ•°é”™è¯¯ å´©æºƒï¼ˆåŽç«¯æŒ‚æŽ‰ï¼‰ï¼›ä¸”å¼ºæ€æ—¶æ˜“æ®‹ç•™ spawn
-rem   worker å­è¿›ç¨‹å ç”¨ç«¯å£ã€‚æœ¬è„šæœ¬é ã€Œå…ˆæ€åŽå¯ã€æ‹¿åˆ°æœ€æ–°ä»£ç ï¼Œæ— éœ€ --reloadã€‚
+rem ËµÃ÷£ººó¶Ë¡¸²»¡¹Ê¹ÓÃ uvicorn --reload¡£
+rem   Windows ÏÂ --reload ×ß multiprocessing.spawn£¬ÎÄ¼þ±ä¸ü´¥·¢ÖØÔØÊ±»áÒÔ
+rem   OSError: [WinError 87] ²ÎÊý´íÎó ±ÀÀ££¨ºó¶Ë¹Òµô£©£»ÇÒÇ¿É±Ê±Ò×²ÐÁô spawn
+rem   worker ×Ó½ø³ÌÕ¼ÓÃ¶Ë¿Ú¡£±¾½Å±¾¿¿¡¸ÏÈÉ±ºóÆô¡¹ÄÃµ½×îÐÂ´úÂë£¬ÎÞÐè --reload¡£
 rem
-rem è‡ªã€ŒæœåŠ¡å®ˆæŠ¤ã€æ”¹é€ åŽï¼Œè¿›ç¨‹ç”± supervisor ç»Ÿä¸€ç®¡ç†ï¼š
-rem   å…ˆåœ supervisorï¼ˆçº§è”åœä¸‰æœåŠ¡ï¼‰â†’ å…œåº•æ€æ®‹ç•™è¿›ç¨‹ â†’ å¯åŠ¨ supervisor
-rem   ï¼ˆsupervisor å†æ‹‰èµ·ä¸‰æœåŠ¡ï¼‰ã€‚
-rem äººè„¸è¯†åˆ«å­æœåŠ¡ï¼ˆface-serviceï¼Œç‹¬ç«‹ Python 3.10 çŽ¯å¢ƒï¼Œç«¯å£ 18889ï¼‰
-rem   ä¸åœ¨ supervisor ç®¡è¾–å†…ï¼Œæœ¬è„šæœ¬å•ç‹¬ã€Œå…ˆæ€åŽå¯ã€å¹¶éªŒè¯ /healthã€‚
+rem ×Ô¡¸·þÎñÊØ»¤¡¹¸ÄÔìºó£¬½ø³ÌÓÉ supervisor Í³Ò»¹ÜÀí£º
+rem   ÏÈÍ£ supervisor£¨¼¶ÁªÍ£Èý·þÎñ£©¡ú ¶µµ×É±²ÐÁô½ø³Ì ¡ú Æô¶¯ supervisor
+rem   £¨supervisor ÔÙÀ­ÆðÈý·þÎñ£©¡£
+rem ÈËÁ³Ê¶±ð×Ó·þÎñ£¨face-service£¬¶ÀÁ¢ Python 3.10 »·¾³£¬¶Ë¿Ú 18889£©
+rem   ²»ÔÚ supervisor ¹ÜÏ½ÄÚ£¬±¾½Å±¾µ¥¶À¡¸ÏÈÉ±ºóÆô¡¹²¢ÑéÖ¤ /health¡£
 rem ==============================================
 
-rem åˆ‡åˆ°é¡¹ç›®æ ¹ç›®å½•ï¼ˆè„šæœ¬ä½äºŽ scripts\ ä¸‹ï¼‰
+rem ÇÐµ½ÏîÄ¿¸ùÄ¿Â¼£¨½Å±¾Î»ÓÚ scripts\ ÏÂ£©
 cd /d "%~dp0.."
 
 set BACKEND_PORT=18888
@@ -30,107 +30,107 @@ set LOG_DIR=logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 echo ==============================================
-echo   ä¸€é”®é‡å¯å‰åŽç«¯ + worker + äººè„¸è¯†åˆ«æœåŠ¡
+echo   Ò»¼üÖØÆôÇ°ºó¶Ë + worker + ÈËÁ³Ê¶±ð·þÎñ
 echo ==============================================
 
-rem â”€â”€ 0. åœæ­¢ supervisorï¼ˆå®ˆæŠ¤è¿›ç¨‹ï¼›çº§è”åœæ­¢ä¸‰æœåŠ¡ï¼‰â”€â”€
+rem ©¤©¤ 0. Í£Ö¹ supervisor£¨ÊØ»¤½ø³Ì£»¼¶ÁªÍ£Ö¹Èý·þÎñ£©©¤©¤
 echo.
-echo ^>^>^> [0/5] åœæ­¢ supervisor ...
+echo ^>^>^> [0/5] Í£Ö¹ supervisor ...
 for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*supervisor.py*' } | Select-Object -ExpandProperty ProcessId"`) do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢ supervisor è¿›ç¨‹æ ‘ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹ supervisor ½ø³ÌÊ÷ PID %%p
 )
 ping -n 2 127.0.0.1 >nul
 
-rem â”€â”€ 1. åœæ­¢åŽç«¯ â”€â”€
+rem ©¤©¤ 1. Í£Ö¹ºó¶Ë ©¤©¤
 echo.
-echo ^>^>^> [1/5] åœæ­¢åŽç«¯ï¼ˆç«¯å£ %BACKEND_PORT%ï¼‰...
+echo ^>^>^> [1/5] Í£Ö¹ºó¶Ë£¨¶Ë¿Ú %BACKEND_PORT%£©...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%BACKEND_PORT%" ^| findstr LISTENING') do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢è¿›ç¨‹æ ‘ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹½ø³ÌÊ÷ PID %%p
 )
 
-rem å…œåº•ï¼šæŒ‰å‘½ä»¤è¡ŒåŒ¹é… uvicorn reloader ä¸»è¿›ç¨‹ + spawn worker å­è¿›ç¨‹
+rem ¶µµ×£º°´ÃüÁîÐÐÆ¥Åä uvicorn reloader Ö÷½ø³Ì + spawn worker ×Ó½ø³Ì
 for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and ($_.CommandLine -like '*uvicorn app.main*' -or $_.CommandLine -like '*spawn_main*') } | Select-Object -ExpandProperty ProcessId"`) do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢ uvicorn è¿›ç¨‹ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹ uvicorn ½ø³Ì PID %%p
 )
 
 ping -n 2 127.0.0.1 >nul
 
 netstat -ano | findstr ":%BACKEND_PORT%" | findstr LISTENING >nul 2>&1
 if errorlevel 1 (
-  echo   âœ… åŽç«¯å·²åœæ­¢
+  echo   [OK] ºó¶ËÒÑÍ£Ö¹
 ) else (
-  echo   âš ï¸  è­¦å‘Šï¼šç«¯å£ %BACKEND_PORT% å¯èƒ½ä»è¢«å ç”¨
+  echo   [!]  ¾¯¸æ£º¶Ë¿Ú %BACKEND_PORT% ¿ÉÄÜÈÔ±»Õ¼ÓÃ
 )
 
-rem â”€â”€ 2. åœæ­¢å‰ç«¯ â”€â”€
+rem ©¤©¤ 2. Í£Ö¹Ç°¶Ë ©¤©¤
 echo.
-echo ^>^>^> [2/5] åœæ­¢å‰ç«¯ï¼ˆç«¯å£ %FRONTEND_PORT%ï¼‰...
+echo ^>^>^> [2/5] Í£Ö¹Ç°¶Ë£¨¶Ë¿Ú %FRONTEND_PORT%£©...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%FRONTEND_PORT%" ^| findstr LISTENING') do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢è¿›ç¨‹æ ‘ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹½ø³ÌÊ÷ PID %%p
 )
 ping -n 2 127.0.0.1 >nul
 netstat -ano | findstr ":%FRONTEND_PORT%" | findstr LISTENING >nul 2>&1
 if errorlevel 1 (
-  echo   âœ… å‰ç«¯å·²åœæ­¢
+  echo   [OK] Ç°¶ËÒÑÍ£Ö¹
 ) else (
-  echo   âš ï¸  è­¦å‘Šï¼šç«¯å£ %FRONTEND_PORT% å¯èƒ½ä»è¢«å ç”¨
+  echo   [!]  ¾¯¸æ£º¶Ë¿Ú %FRONTEND_PORT% ¿ÉÄÜÈÔ±»Õ¼ÓÃ
 )
 
-rem â”€â”€ 3. åœæ­¢ worker â”€â”€
+rem ©¤©¤ 3. Í£Ö¹ worker ©¤©¤
 echo.
-echo ^>^>^> [3/5] åœæ­¢ worker ...
+echo ^>^>^> [3/5] Í£Ö¹ worker ...
 for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId"`) do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢ worker è¿›ç¨‹ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹ worker ½ø³Ì PID %%p
 )
 ping -n 2 127.0.0.1 >nul
 
-rem â”€â”€ 4. åœæ­¢å¹¶å¯åŠ¨äººè„¸è¯†åˆ«æœåŠ¡ï¼ˆface-serviceï¼Œç‹¬ç«‹äºŽ supervisorï¼‰â”€â”€
+rem ©¤©¤ 4. Í£Ö¹²¢Æô¶¯ÈËÁ³Ê¶±ð·þÎñ£¨face-service£¬¶ÀÁ¢ÓÚ supervisor£©©¤©¤
 echo.
-echo ^>^>^> [4/5] é‡å¯äººè„¸è¯†åˆ«æœåŠ¡ï¼ˆç«¯å£ %FACE_PORT%ï¼‰...
+echo ^>^>^> [4/5] ÖØÆôÈËÁ³Ê¶±ð·þÎñ£¨¶Ë¿Ú %FACE_PORT%£©...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%FACE_PORT%" ^| findstr LISTENING') do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢äººè„¸æœåŠ¡è¿›ç¨‹æ ‘ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹ÈËÁ³·þÎñ½ø³ÌÊ÷ PID %%p
 )
-rem å…œåº•ï¼šæŒ‰å‘½ä»¤è¡ŒåŒ¹é… face-service ç›®å½•ä¸‹çš„ uvicorn
+rem ¶µµ×£º°´ÃüÁîÐÐÆ¥Åä face-service Ä¿Â¼ÏÂµÄ uvicorn
 for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*face-service*uvicorn*' } | Select-Object -ExpandProperty ProcessId"`) do (
   taskkill /F /T /PID %%p >nul 2>&1
-  if not errorlevel 1 echo   å·²ç»ˆæ­¢äººè„¸æœåŠ¡è¿›ç¨‹ PID %%p
+  if not errorlevel 1 echo   ÒÑÖÕÖ¹ÈËÁ³·þÎñ½ø³Ì PID %%p
 )
 ping -n 2 127.0.0.1 >nul
 
 set FACE_OK=0
 set FACE_REQUIRED=1
 if not exist "face-service\.venv\Scripts\python.exe" (
-  echo   âš ï¸  æœªæ£€æµ‹åˆ° face-service\.venvï¼ˆPython 3.10 è™šæ‹ŸçŽ¯å¢ƒï¼‰ï¼Œè·³è¿‡äººè„¸æœåŠ¡
+  echo   [!]  Î´¼ì²âµ½ face-service\.venv£¨Python 3.10 ÐéÄâ»·¾³£©£¬Ìø¹ýÈËÁ³·þÎñ
   set FACE_REQUIRED=0
 ) else (
-  rem æ˜¾å¼è¡¥å…… CUDA è¿è¡Œæ—¶ç›®å½•ï¼ˆonnxruntime-gpu ä¾èµ– cublas/cudnnï¼‰ï¼Œ
-  rem é¿å…åœ¨çŽ¯å¢ƒå˜é‡è®¾ç½®å‰æ‰“å¼€çš„æ—§ç»ˆç«¯é‡Œå›žé€€åˆ° CPU æŽ¨ç†
+  rem ÏÔÊ½²¹³ä CUDA ÔËÐÐÊ±Ä¿Â¼£¨onnxruntime-gpu ÒÀÀµ cublas/cudnn£©£¬
+  rem ±ÜÃâÔÚ»·¾³±äÁ¿ÉèÖÃÇ°´ò¿ªµÄ¾ÉÖÕ¶ËÀï»ØÍËµ½ CPU ÍÆÀí
   if exist "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" (
     set "PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin;%PATH%"
   )
   start "face-service" /B /D "%CD%\face-service" cmd /c ""%CD%\face-service\.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port %FACE_PORT% > "%CD%\%FACE_LOG%" 2>&1"
-  echo   äººè„¸æœåŠ¡å·²å¯åŠ¨ï¼ˆæ—¥å¿—: %FACE_LOG%ï¼‰
+  echo   ÈËÁ³·þÎñÒÑÆô¶¯£¨ÈÕÖ¾: %FACE_LOG%£©
 )
 
-rem â”€â”€ 5. å¯åŠ¨ supervisorï¼ˆç”±å®ƒæ‹‰èµ·ä¸‰æœåŠ¡ï¼‰â”€â”€
+rem ©¤©¤ 5. Æô¶¯ supervisor£¨ÓÉËüÀ­ÆðÈý·þÎñ£©©¤©¤
 echo.
-echo ^>^>^> [5/5] å¯åŠ¨ supervisor ...
+echo ^>^>^> [5/5] Æô¶¯ supervisor ...
 if not exist "web\node_modules" (
-  echo   âŒ æœªæ£€æµ‹åˆ° web\node_modulesï¼Œè¯·å…ˆæ‰§è¡Œ: cd web ^&^& npm install
+  echo   [X] Î´¼ì²âµ½ web\node_modules£¬ÇëÏÈÖ´ÐÐ: cd web ^&^& npm install
   exit /b 1
 )
 start "fashion-supervisor" /B cmd /c "python scripts\supervisor.py > logs\supervisor-bootstrap.log 2>&1"
-echo   supervisor æ—¥å¿—: %LOG_DIR%\supervisor.log
+echo   supervisor ÈÕÖ¾: %LOG_DIR%\supervisor.log
 
-rem â”€â”€ éªŒè¯ï¼ˆè½®è¯¢ï¼Œæœ€å¤š 60 ç§’ï¼‰â”€â”€
+rem ©¤©¤ ÑéÖ¤£¨ÂÖÑ¯£¬×î¶à 60 Ãë£©©¤©¤
 echo.
-echo ^>^>^> ç­‰å¾…æœåŠ¡å¯åŠ¨...
+echo ^>^>^> µÈ´ý·þÎñÆô¶¯...
 set BACKEND_OK=0
 set FRONTEND_OK=0
 for /l %%i in (1,1,60) do (
@@ -148,20 +148,20 @@ for /l %%i in (1,1,60) do (
 :services_ready
 
 if !BACKEND_OK!==1 (
-  echo   âœ… åŽç«¯å·²å°±ç»ª: http://localhost:%BACKEND_PORT%
+  echo   [OK] ºó¶ËÒÑ¾ÍÐ÷: http://localhost:%BACKEND_PORT%
   curl -s "http://localhost:%BACKEND_PORT%/api/health"
   echo.
 ) else (
-  echo   âŒ åŽç«¯æœªå°±ç»ªï¼Œè¯·æ£€æŸ¥ %LOG_DIR%\backend.log
+  echo   [X] ºó¶ËÎ´¾ÍÐ÷£¬Çë¼ì²é %LOG_DIR%\backend.log
 )
 
 if !FRONTEND_OK!==1 (
-  echo   âœ… å‰ç«¯å·²å°±ç»ª: http://localhost:%FRONTEND_PORT%
+  echo   [OK] Ç°¶ËÒÑ¾ÍÐ÷: http://localhost:%FRONTEND_PORT%
 ) else (
-  echo   âŒ å‰ç«¯æœªå°±ç»ªï¼Œè¯·æ£€æŸ¥ %LOG_DIR%\frontend.log
+  echo   [X] Ç°¶ËÎ´¾ÍÐ÷£¬Çë¼ì²é %LOG_DIR%\frontend.log
 )
 
-rem äººè„¸æœåŠ¡å¥åº·æ£€æŸ¥ï¼ˆ/healthï¼›æœªéƒ¨ç½²æ—¶è·³è¿‡ï¼‰
+rem ÈËÁ³·þÎñ½¡¿µ¼ì²é£¨/health£»Î´²¿ÊðÊ±Ìø¹ý£©
 if "!FACE_REQUIRED!"=="0" goto :face_skip
 for /l %%i in (1,1,60) do (
   if !FACE_OK!==0 (
@@ -173,16 +173,16 @@ for /l %%i in (1,1,60) do (
 )
 :face_ready
 if "!FACE_OK!"=="1" (
-  echo   âœ… äººè„¸æœåŠ¡å·²å°±ç»ª: http://localhost:%FACE_PORT%
+  echo   [OK] ÈËÁ³·þÎñÒÑ¾ÍÐ÷: http://localhost:%FACE_PORT%
 ) else (
-  echo   âŒ äººè„¸æœåŠ¡æœªå°±ç»ªï¼Œè¯·æ£€æŸ¥ %FACE_LOG%
+  echo   [X] ÈËÁ³·þÎñÎ´¾ÍÐ÷£¬Çë¼ì²é %FACE_LOG%
 )
 goto :face_done
 :face_skip
-echo   â­ï¸  äººè„¸æœåŠ¡æœªéƒ¨ç½²ï¼ˆè·³è¿‡éªŒè¯ï¼‰
+echo   [--]  ÈËÁ³·þÎñÎ´²¿Êð£¨Ìø¹ýÑéÖ¤£©
 :face_done
 
-rem worker æ—  HTTP ç«¯å£ï¼Œé€šè¿‡è¿›ç¨‹å­˜åœ¨ç¡®è®¤ï¼ˆè½®è¯¢ï¼Œæœ€å¤š 20 ç§’ï¼‰
+rem worker ÎÞ HTTP ¶Ë¿Ú£¬Í¨¹ý½ø³Ì´æÔÚÈ·ÈÏ£¨ÂÖÑ¯£¬×î¶à 20 Ãë£©
 set WORKER_OK=0
 for /l %%i in (1,1,20) do (
   powershell -NoProfile -Command "if (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*app.worker*' }) { exit 0 } else { exit 1 }" >nul 2>&1
@@ -193,18 +193,18 @@ for /l %%i in (1,1,20) do (
 :worker_ready
 
 if !WORKER_OK!==1 (
-  echo   âœ… worker å·²å¯åŠ¨ï¼ˆæ—¥å¿—: %LOG_DIR%\worker.logï¼‰
+  echo   [OK] worker ÒÑÆô¶¯£¨ÈÕÖ¾: %LOG_DIR%\worker.log£©
 ) else (
-  echo   âš ï¸  worker å¯èƒ½æœªå°±ç»ªï¼Œè¯·æ£€æŸ¥ %LOG_DIR%\worker.log
+  echo   [!]  worker ¿ÉÄÜÎ´¾ÍÐ÷£¬Çë¼ì²é %LOG_DIR%\worker.log
 )
 
 echo.
 echo ==============================================
-echo   å®Œæˆã€‚æ—¥å¿—ç›®å½•: %LOG_DIR%\
+echo   Íê³É¡£ÈÕÖ¾Ä¿Â¼: %LOG_DIR%\
 echo ==============================================
 
-rem ä»»ä¸€æœåŠ¡æœªå°±ç»ªåˆ™è¿”å›žéžé›¶é€€å‡ºç ï¼Œä¾›è‡ªåŠ¨åŒ–åˆ¤æ–­
-rem ï¼ˆäººè„¸æœåŠ¡æœªéƒ¨ç½²æ—¶ä¸è¦æ±‚å°±ç»ªï¼Œä¸é˜»å¡žé€€å‡ºç ï¼‰
+rem ÈÎÒ»·þÎñÎ´¾ÍÐ÷Ôò·µ»Ø·ÇÁãÍË³öÂë£¬¹©×Ô¶¯»¯ÅÐ¶Ï
+rem £¨ÈËÁ³·þÎñÎ´²¿ÊðÊ±²»ÒªÇó¾ÍÐ÷£¬²»×èÈûÍË³öÂë£©
 set ALL_CORE_OK=0
 if "!BACKEND_OK!!FRONTEND_OK!"=="11" set ALL_CORE_OK=1
 if !ALL_CORE_OK!==0 exit /b 1
