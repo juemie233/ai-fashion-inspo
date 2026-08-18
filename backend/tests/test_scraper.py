@@ -206,10 +206,13 @@ class TestSchedules:
         assert r2.json()["sort_mode"] is None
 
     def test_run_now_creates_task(self, client, monkeypatch):
-        from app.services import scraper_service
-
-        # 定时计划「立即执行」对小红书做 CDP 预检；测试环境无 Chrome，mock 为可用
-        monkeypatch.setattr(scraper_service, "_check_cdp", lambda port, timeout=2.0: (True, "ok", True))
+        # 定时计划「立即执行」对小红书做 CDP 预检；测试环境无 Chrome，mock 为可用。
+        # 注意 patch 实际使用点：scraper 服务已按领域拆分，_check_cdp 位于
+        # app.services.scraper.schedules（薄壳路径不命中调用点）
+        monkeypatch.setattr(
+            "app.services.scraper.schedules._check_cdp",
+            lambda port, timeout=2.0: (True, "ok", True),
+        )
 
         s = self._create(client, platform="xiaohongshu", keywords=["法式"], sort_mode="latest")
         r = client.post(f"/api/scraper/schedules/{s['id']}/run")
@@ -225,10 +228,9 @@ class TestSchedules:
 
     def test_run_now_xiaohongshu_requires_chrome(self, client, monkeypatch):
         """小红书计划「立即执行」前做 CDP 预检，Chrome 不可用时返回 400。"""
-        from app.services import scraper_service
-
         monkeypatch.setattr(
-            scraper_service, "_check_cdp", lambda port, timeout=2.0: (False, "端口无响应", False)
+            "app.services.scraper.schedules._check_cdp",
+            lambda port, timeout=2.0: (False, "端口无响应", False),
         )
         s = self._create(client, platform="xiaohongshu", keywords=["法式"])
         r = client.post(f"/api/scraper/schedules/{s['id']}/run")
