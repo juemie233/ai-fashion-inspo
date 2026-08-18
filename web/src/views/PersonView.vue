@@ -7,7 +7,7 @@
 
 import { h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { useMessage, NButton, NPopconfirm } from 'naive-ui'
 import type { DataTableColumns, UploadCustomRequestOptions } from 'naive-ui'
 import { getFileUrl } from '@/api/inspirations'
 import { deletePerson, fetchTopPersons, importPersonsCsv } from '@/api/persons'
@@ -193,31 +193,34 @@ const columns: DataTableColumns<Person> = [
   {
     title: '操作',
     key: 'actions',
-    width: 210,
+    width: 230,
     // 固定在表格右侧：列宽合计超过容器宽度出现横向滚动时，操作按钮始终可见
     fixed: 'right',
+    // 注：render 中必须使用导入的组件对象（NButton/NPopconfirm），
+    // 字符串 'n-button'/'n-popconfirm' 在 render 场景可能解析失败，
+    // 导致删除按钮（popconfirm trigger）不渲染、确认文字直接显示
     render: (row) =>
       h('div', { class: 'row-actions' }, [
         h(
-          'n-button',
-          { size: 'small', onClick: () => goDetail(row) },
+          NButton,
+          { size: 'small', quaternary: true, onClick: () => goDetail(row) },
           { default: () => '详情' }
         ),
         h(
-          'n-button',
-          { size: 'small', quaternary: true, onClick: () => openEdit(row) },
+          NButton,
+          { size: 'small', secondary: true, onClick: () => openEdit(row) },
           { default: () => '编辑' }
         ),
         h(
-          'n-popconfirm',
+          NPopconfirm,
           {
             onPositiveClick: () => handleDelete(row),
           },
           {
             trigger: () =>
               h(
-                'n-button',
-                { size: 'small', type: 'error', quaternary: true },
+                NButton,
+                { size: 'small', type: 'error' },
                 { default: () => '删除' }
               ),
             default: () => `确定删除人物「${row.name}」？仅当该人物无关联素材时才可删除。`,
