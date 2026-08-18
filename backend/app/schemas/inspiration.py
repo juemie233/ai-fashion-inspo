@@ -51,6 +51,7 @@ class InspirationCreate(BaseModel):
 class InspirationUpdate(BaseModel):
     """更新灵感的请求体（部分更新）"""
     is_favorite: bool | None = None
+    rating: int | None = Field(None, ge=0, le=5, description="用户评分 0~5（0 表示未评分）")
     source_author: str | None = None
     quality_status: Literal["pending", "approved", "rejected"] | None = None  # 人工复核翻案
     quality_reason: str | None = None  # 翻案为 rejected 时的自定义原因
@@ -96,6 +97,7 @@ class BatchUpdateRequest(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=500)
     source_type: str | None = None
     is_favorite: bool | None = None
+    rating: int | None = Field(None, ge=0, le=5, description="用户评分 0~5")
     quality_status: Literal["pending", "approved", "rejected"] | None = None
     is_ai_generated: bool | None = None
 
@@ -112,6 +114,7 @@ class InspirationOut(BaseModel):
     media_type: str
     dominant_colors: str | None = None
     is_favorite: bool = False
+    rating: int = 0  # 用户评分 0~5（0 表示未评分，5 满分）
     quality_status: str | None = "pending"
     quality_reason: str | None = None
     is_ai_generated: bool = False
@@ -206,6 +209,7 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         media_type=inspiration.media_type,
         dominant_colors=inspiration.dominant_colors,
         is_favorite=inspiration.is_favorite,
+        rating=inspiration.rating,
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
         is_ai_generated=inspiration.is_ai_generated,

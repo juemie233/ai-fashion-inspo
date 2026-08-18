@@ -66,7 +66,11 @@ async def search_inspirations(
     tag_status: str | None = Query(None, description="tagged | untagged"),
     date_from: str | None = Query(None, description="ISO 日期，例如 2026-01-01"),
     date_to: str | None = Query(None),
-    sort: str = Query("newest", description="newest | oldest | tag_count | match_score"),
+    rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
+    sort: str = Query(
+        "newest",
+        description="newest | oldest | tag_count | match_score | rating | rating_asc",
+    ),
     combine: str = Query("AND", description="标签组合逻辑 AND | OR"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
@@ -153,6 +157,10 @@ async def search_inspirations(
             Inspiration.id.notin_(select(InspirationTag.inspiration_id).distinct())
         )
 
+    # 评分筛选（rating >= 指定值）
+    if rating_min is not None:
+        conditions.append(Inspiration.rating >= rating_min)
+
     if conditions:
         base_query = base_query.where(and_(*conditions))
 
@@ -203,6 +211,8 @@ async def search_inspirations(
         "oldest": Inspiration.created_at.asc(),
         "tag_count": Inspiration.id.desc(),  # 占位，下面特殊处理
         "match_score": Inspiration.id.asc(),  # 占位，下面特殊处理
+        "rating": Inspiration.rating.desc(),  # 评分降序（高分优先）
+        "rating_asc": Inspiration.rating.asc(),  # 评分升序
     }
 
     if sort == "tag_count":

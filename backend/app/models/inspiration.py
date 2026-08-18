@@ -72,6 +72,7 @@ class Inspiration(Base):
     )
 
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    rating: Mapped[int] = mapped_column(Integer, default=0)  # 用户评分：0~5（0 表示未评分，5 满分）
 
     quality_status: Mapped[str] = mapped_column(
         String(16), default="pending", index=True

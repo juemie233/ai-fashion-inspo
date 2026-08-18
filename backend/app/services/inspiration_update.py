@@ -27,6 +27,8 @@ async def update_inspiration(
 
     if data.is_favorite is not None:
         inspiration.is_favorite = data.is_favorite
+    if data.rating is not None:
+        inspiration.rating = data.rating
     if data.source_author is not None:
         inspiration.source_author = data.source_author
     if data.quality_status is not None:
@@ -70,6 +72,7 @@ async def batch_update_inspirations(
     *,
     source_type: str | None = None,
     is_favorite: bool | None = None,
+    rating: int | None = None,
     quality_status: str | None = None,
     is_ai_generated: bool | None = None,
 ) -> int:
@@ -82,6 +85,8 @@ async def batch_update_inspirations(
         values["source_type"] = source_type
     if is_favorite is not None:
         values["is_favorite"] = is_favorite
+    if rating is not None:
+        values["rating"] = rating
     if is_ai_generated is not None:
         values["is_ai_generated"] = is_ai_generated
     if quality_status is not None:

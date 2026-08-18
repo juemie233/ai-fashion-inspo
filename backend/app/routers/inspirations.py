@@ -126,6 +126,7 @@ async def list_inspirations(
     date_from: str | None = Query(None, description="上传日期下限，ISO 日期"),
     date_to: str | None = Query(None, description="上传日期上限，ISO 日期"),
     ids: str | None = Query(None, description="逗号分隔的素材 ID（精确定位，仅返回这些素材）"),
+    rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
     sort: str = "newest",
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
@@ -151,6 +152,7 @@ async def list_inspirations(
         date_from=date_from,
         date_to=date_to,
         ids=id_list,
+        rating_min=rating_min,
         sort=sort,
     )
     return InspirationListOut(
@@ -254,6 +256,7 @@ async def get_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db
         media_type=inspiration.media_type,
         dominant_colors=inspiration.dominant_colors,
         is_favorite=inspiration.is_favorite,
+        rating=inspiration.rating,
         quality_status=inspiration.quality_status,
         quality_reason=inspiration.quality_reason,
         is_ai_generated=inspiration.is_ai_generated,

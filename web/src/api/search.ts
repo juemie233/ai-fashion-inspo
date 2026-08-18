@@ -14,6 +14,7 @@ export interface SearchQuery {
   tag_status?: string
   date_from?: string
   date_to?: string
+  rating_min?: number
   sort?: string
   combine?: 'AND' | 'OR'
   page?: number

@@ -52,6 +52,7 @@ const emit = defineEmits<{
   (e: 'exitVector'): void
   (e: 'delete', id: string): void
   (e: 'toggleFavorite', id: string): void
+  (e: 'rate', id: string, value: number): void
   /** 分页翻页（携带目标页码，由父级执行搜索） */
   (e: 'search', page: number): void
   (e: 'update:pageSize', value: number): void
@@ -161,6 +162,7 @@ const pageSizeModel = computed({
         :badges="vectorMode !== 'none' ? vectorBadges : undefined"
         @delete="emit('delete', $event)"
         @toggle-favorite="emit('toggleFavorite', $event)"
+        @rate="(id: string, v: number) => emit('rate', id, v)"
       />
 
       <!-- 分页（向量搜索不翻页） -->

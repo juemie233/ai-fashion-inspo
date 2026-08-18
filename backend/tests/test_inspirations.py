@@ -75,6 +75,87 @@ def test_favorite_toggle(client, upload):
     assert r.json()["is_favorite"] is False
 
 
+# ═══════════════════════════════════════════════════════════════
+#  用户评分（rating 0~5）
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_rating_update(client, upload):
+    """正常设置评分：PATCH 写入、详情与列表返回一致、刷新后保持不变。"""
+    insp_id = upload().json()["id"]
+
+    r = client.patch(f"/api/inspirations/{insp_id}", json={"rating": 4})
+    assert r.status_code == 200
+    assert r.json()["rating"] == 4
+
+    # 详情返回评分
+    assert client.get(f"/api/inspirations/{insp_id}").json()["rating"] == 4
+
+    # 列表返回评分（默认 0 的素材也包含该字段）
+    lst = client.get("/api/inspirations").json()
+    assert lst["total"] == 1
+    assert lst["items"][0]["rating"] == 4
+
+
+def test_rating_boundaries(client, upload):
+    """评分边界：0（未评分/清零）与 5（满分）合法；越界 422。"""
+    insp_id = upload().json()["id"]
+
+    # 5 满分
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"rating": 5}).json()["rating"] == 5
+    # 0 清零（未评分）
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"rating": 0}).json()["rating"] == 0
+    # 默认新建素材评分为 0
+    new_id = upload(color=(10, 200, 100)).json()["id"]
+    assert client.get(f"/api/inspirations/{new_id}").json()["rating"] == 0
+
+    # 越界：6 与负数 → 422
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"rating": 6}).status_code == 422
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"rating": -1}).status_code == 422
+
+
+def test_rating_and_favorite_independent(client, upload):
+    """评分与收藏并列更新，互不干扰（同一次 PATCH 或分别 PATCH）。"""
+    insp_id = upload().json()["id"]
+
+    # 同一次 PATCH 同时设置
+    r = client.patch(
+        f"/api/inspirations/{insp_id}", json={"rating": 3, "is_favorite": True}
+    )
+    assert r.status_code == 200
+    assert r.json()["rating"] == 3
+    assert r.json()["is_favorite"] is True
+
+    # 分别更新：改评分不影响收藏，改收藏不影响评分
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"rating": 1}).json()["is_favorite"] is True
+    assert client.patch(f"/api/inspirations/{insp_id}", json={"is_favorite": False}).json()["rating"] == 1
+
+
+def test_rating_filter_and_sort(client, upload):
+    """评分筛选（rating_min）与评分排序（rating / rating_asc）。"""
+    a = upload(color=(200, 100, 50)).json()["id"]  # 默认 0 分
+    b = upload(color=(30, 40, 50)).json()["id"]
+    c = upload(color=(90, 10, 200)).json()["id"]
+    client.patch(f"/api/inspirations/{b}", json={"rating": 5})
+    client.patch(f"/api/inspirations/{c}", json={"rating": 2})
+
+    # rating_min 筛选：>= 2 → b(5)、c(2)；a(0) 排除
+    r = client.get("/api/inspirations", params={"rating_min": 2}).json()
+    assert r["total"] == 2
+    assert {i["id"] for i in r["items"]} == {b, c}
+
+    # rating_min=1 → 仅 a(0) 排除，其余全含
+    assert client.get("/api/inspirations", params={"rating_min": 1}).json()["total"] == 2
+
+    # 评分降序：b(5) → c(2) → a(0)
+    ids = [i["id"] for i in client.get("/api/inspirations", params={"sort": "rating"}).json()["items"]]
+    assert ids == [b, c, a]
+
+    # 评分升序：a(0) → c(2) → b(5)
+    ids_asc = [i["id"] for i in client.get("/api/inspirations", params={"sort": "rating_asc"}).json()["items"]]
+    assert ids_asc == [a, c, b]
+
+
 def test_physical_delete(client, upload):
     """物理删除后列表与垃圾桶均不再包含。"""
     insp_id = upload().json()["id"]

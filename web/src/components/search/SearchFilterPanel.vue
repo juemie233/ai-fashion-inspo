@@ -23,6 +23,8 @@ const props = defineProps<{
   dateFrom: string
   /** 结束日期 */
   dateTo: string
+  /** 评分筛选值（rating >= 指定值，空串表示不限） */
+  ratingFilter: string
 }>()
 
 const emit = defineEmits<{
@@ -32,6 +34,7 @@ const emit = defineEmits<{
   (e: 'update:analysisFilter', value: string): void
   (e: 'update:dateFrom', value: string): void
   (e: 'update:dateTo', value: string): void
+  (e: 'update:ratingFilter', value: string): void
   /** 任一筛选值变化（由用户操作触发，用于立即重新搜索） */
   (e: 'filterChange'): void
   /** 点击搜索按钮 */
@@ -75,6 +78,15 @@ const dateFromModel = computed({
 const dateToModel = computed({
   get: () => props.dateTo,
   set: (v: string) => emit('update:dateTo', v),
+})
+
+/** 评分筛选（变更即触发重新搜索） */
+const ratingFilterModel = computed({
+  get: () => props.ratingFilter,
+  set: (v: string) => {
+    emit('update:ratingFilter', v)
+    emit('filterChange')
+  },
 })
 </script>
 
@@ -123,6 +135,21 @@ const dateToModel = computed({
               <div class="filter-row">
                 <label>结束日期</label>
                 <n-input v-model:value="dateToModel" type="date" size="tiny" @change="emit('filterChange')" />
+              </div>
+              <div class="filter-row">
+                <label>评分</label>
+                <n-select
+                  v-model:value="ratingFilterModel"
+                  :options="[
+                    { label: '全部', value: '' },
+                    { label: '★ 1 分及以上', value: '1' },
+                    { label: '★ 2 分及以上', value: '2' },
+                    { label: '★ 3 分及以上', value: '3' },
+                    { label: '★ 4 分及以上', value: '4' },
+                    { label: '★ 5 分', value: '5' },
+                  ]"
+                  size="tiny"
+                />
               </div>
             </div>
           </n-collapse-item>

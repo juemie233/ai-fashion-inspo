@@ -13,7 +13,7 @@ import {
   type VectorSearchItem,
 } from '@/api/search'
 import type { InspirationOut } from '@/api/inspirations'
-import { toggleFavorite as toggleFavoriteApi } from '@/api/inspirations'
+import { toggleFavorite as toggleFavoriteApi, updateRating as updateRatingApi } from '@/api/inspirations'
 
 /** 排序选项（搜索结果排序） */
 export const SEARCH_SORT_OPTIONS = [
@@ -21,6 +21,8 @@ export const SEARCH_SORT_OPTIONS = [
   { label: '最旧在前', value: 'oldest' },
   { label: '标签最多', value: 'tag_count' },
   { label: '匹配优先', value: 'match_score' },
+  { label: '评分最高', value: 'rating' },
+  { label: '评分最低', value: 'rating_asc' },
 ]
 
 /**
@@ -55,6 +57,8 @@ export function useSearch() {
   const analysisFilter = ref((route.query.analysis as string) || '')
   const dateFrom = ref((route.query.from as string) || '')
   const dateTo = ref((route.query.to as string) || '')
+  /** 评分筛选（rating >= 指定值，空串表示不限） */
+  const ratingMin = ref((route.query.rating_min as string) || '')
 
   // 密度
   const density = ref<'compact' | 'standard' | 'comfortable'>(
@@ -117,6 +121,7 @@ export function useSearch() {
     if (analysisFilter.value) query.analysis = analysisFilter.value
     if (dateFrom.value) query.from = dateFrom.value
     if (dateTo.value) query.to = dateTo.value
+    if (ratingMin.value) query.rating_min = ratingMin.value
     return router.replace({ query })
   }
 
@@ -150,6 +155,7 @@ export function useSearch() {
     if (analysisFilter.value) query.analysis_status = analysisFilter.value
     if (dateFrom.value) query.date_from = dateFrom.value
     if (dateTo.value) query.date_to = dateTo.value
+    if (ratingMin.value) query.rating_min = Number(ratingMin.value)
 
     return query
   }
@@ -302,6 +308,21 @@ export function useSearch() {
     }
   }
 
+  /** 设置评分（搜索结果直接调 API 并更新本地结果项） */
+  async function handleRate(id: string, value: number) {
+    const item = results.value.find((r) => r.id === id)
+    if (!item) return
+    try {
+      await updateRatingApi(id, value)
+      item.rating = value
+      message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+    } catch (e) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
+        ?.detail
+      message.error(detail || '评分失败')
+    }
+  }
+
   // ── 搜索历史应用 ──
 
   function applyHistory(q: string) {
@@ -362,6 +383,7 @@ export function useSearch() {
     analysisFilter,
     dateFrom,
     dateTo,
+    ratingMin,
     density,
     vectorMode,
     semanticText,
@@ -380,6 +402,7 @@ export function useSearch() {
     exitVectorMode,
     handleDelete,
     handleToggleFavorite,
+    handleRate,
     applyHistory,
     clearHistory,
   }

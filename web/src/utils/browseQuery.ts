@@ -70,6 +70,7 @@ export function buildBrowseParams(state: Record<string, any>, page: number, size
     date_from: state.date_from || undefined,
     date_to: state.date_to || undefined,
     ids: state.ids ? state.ids : undefined,
+    rating_min: state.rating_min ? Number(state.rating_min) : undefined,
     sort: state.sort || storedBrowseSort(),
   }
 }

@@ -9,6 +9,7 @@ import {
   fetchInspiration,
   fetchInspirations,
   toggleFavorite,
+  updateRating,
   moveToTrash,
   restoreInspiration,
   deleteInspiration,
@@ -270,6 +271,20 @@ async function handleToggleFavorite() {
   }
 }
 
+/** 设置评分（0~5，0 清除）：同步详情数据 */
+async function handleRate(value: number) {
+  if (!detail.value) return
+  try {
+    await updateRating(detail.value.id, value)
+    detail.value.rating = value
+    message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+  } catch (e) {
+    const detailMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data
+      ?.detail
+    message.error(detailMsg || '评分失败')
+  }
+}
+
 /** 返回素材库，携带进入详情时的筛选 query，保证删除/返回后筛选状态不丢失 */
 function goHome() {
   router.push({ path: '/', query: route.query })
@@ -523,6 +538,18 @@ async function removeTag(t: InspirationTagOut) {
               >
                 {{ detail.is_favorite ? '❤️ 已收藏' : '🤍 收藏' }}
               </n-button>
+              <!-- 五星评分：仅整数，点击星设置，再点已选星清除（0 分） -->
+              <div class="rating-box" title="评分（0~5，点击星设置，再点清除）">
+                <n-rate
+                  :value="detail.rating || 0"
+                  clearable
+                  size="medium"
+                  @update:value="handleRate"
+                />
+                <span v-if="(detail.rating || 0) > 0" class="rating-value">
+                  {{ detail.rating || 0 }} 分
+                </span>
+              </div>
               <a
                 :href="getFileUrl(detail.file_path)"
                 :download="downloadFileName"
@@ -777,6 +804,20 @@ async function removeTag(t: InspirationTagOut) {
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+/* 评分控件：与收藏按钮并列，垂直居中 */
+.rating-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.rating-value {
+  font-size: 12px;
+  color: #b57914;
+  font-weight: 600;
 }
 
 .info-meta {

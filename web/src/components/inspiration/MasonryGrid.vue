@@ -34,6 +34,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'delete', id: string): void
   (e: 'toggleFavorite', id: string): void
+  (e: 'rate', id: string, value: number): void
   (e: 'approve', id: string): void
   (e: 'toggleSelect', id: string): void
 }>()
@@ -124,6 +125,7 @@ watch(
             :show-view-button="showViewButton"
             @delete="emit('delete', item.id)"
             @toggle-favorite="emit('toggleFavorite', item.id)"
+            @rate="(v: number) => emit('rate', item.id, v)"
             @approve="emit('approve', item.id)"
             @toggle-select="emit('toggleSelect', item.id)"
           />

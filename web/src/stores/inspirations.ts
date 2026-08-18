@@ -7,6 +7,7 @@ import {
   fetchInspiration,
   uploadInspiration,
   toggleFavorite as toggleFavoriteApi,
+  updateRating as updateRatingApi,
   moveToTrash as moveToTrashApi,
   type InspirationOut,
   type InspirationDetailOut,
@@ -46,6 +47,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     date_from?: string
     date_to?: string
     ids?: string
+    rating_min?: number
     sort?: string
   } = {}) {
     loading.value = true
@@ -68,6 +70,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         date_from: params.date_from,
         date_to: params.date_to,
         ids: params.ids,
+        rating_min: params.rating_min,
         sort: params.sort,
       })
       // 忽略过期响应（快速翻页时旧请求可能后返回）
@@ -106,6 +109,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
         date_from: _lastParams.date_from,
         date_to: _lastParams.date_to,
         ids: _lastParams.ids,
+        rating_min: _lastParams.rating_min,
         sort: _lastParams.sort,
       })
       if (seq !== _requestSeq) return
@@ -161,6 +165,16 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     }
   }
 
+  /** 设置评分（0~5，0 清除）：同步列表项与详情 */
+  async function setRating(id: string, rating: number) {
+    await updateRatingApi(id, rating)
+    const item = items.value.find((i) => i.id === id)
+    if (item) item.rating = rating
+    if (currentDetail.value?.id === id) {
+      currentDetail.value.rating = rating
+    }
+  }
+
   /** 移入垃圾桶（软删除，可恢复） */
   async function remove(id: string) {
     await moveToTrashApi(id)
@@ -180,6 +194,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     loadDetail,
     upload,
     toggleFavorite,
+    setRating,
     remove,
   }
 })

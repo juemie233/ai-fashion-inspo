@@ -25,6 +25,7 @@ const {
   analysisFilter,
   dateFrom,
   dateTo,
+  ratingMin,
   density,
   vectorMode,
   semanticText,
@@ -43,6 +44,7 @@ const {
   exitVectorMode,
   handleDelete,
   handleToggleFavorite,
+  handleRate,
   applyHistory,
   clearHistory,
 } = useSearch()
@@ -91,6 +93,7 @@ const {
         v-model:analysis-filter="analysisFilter"
         v-model:date-from="dateFrom"
         v-model:date-to="dateTo"
+        v-model:rating-filter="ratingMin"
         :searching="searching"
         @filter-change="doSearch(1)"
         @search="doSearch(1)"
@@ -120,6 +123,7 @@ const {
         @exit-vector="exitVectorMode"
         @delete="handleDelete"
         @toggle-favorite="handleToggleFavorite"
+        @rate="handleRate"
         @sort-change="doSearch(1)"
         @search="doSearch"
         @update:page-size="(s: number) => { pageSize = s; doSearch(1) }"

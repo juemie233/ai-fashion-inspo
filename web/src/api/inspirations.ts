@@ -34,6 +34,7 @@ export interface InspirationOut {
   media_type: string
   dominant_colors?: string | null
   is_favorite: boolean
+  rating?: number
   quality_status?: QualityStatus | null
   quality_reason?: string | null
   is_ai_generated?: boolean
@@ -200,6 +201,7 @@ export async function fetchInspirations(params: {
   date_from?: string
   date_to?: string
   ids?: string
+  rating_min?: number
   sort?: string
 } = {}) {
   const { data } = await apiClient.get<InspirationListOut>('/inspirations', { params })
@@ -230,6 +232,14 @@ export async function uploadInspiration(
 export async function toggleFavorite(id: string, isFavorite: boolean) {
   const { data } = await apiClient.patch<InspirationOut>(`/inspirations/${id}`, {
     is_favorite: isFavorite,
+  })
+  return data
+}
+
+/** 设置素材评分（0~5，0 表示清除评分） */
+export async function updateRating(id: string, rating: number) {
+  const { data } = await apiClient.patch<InspirationOut>(`/inspirations/${id}`, {
+    rating,
   })
   return data
 }

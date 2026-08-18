@@ -52,7 +52,7 @@ type SourceFilter =
 type MediaFilter = 'all' | 'image' | 'video'
 type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
 type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'ai'
-type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random'
+type SortMode = 'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random' | 'rating' | 'rating_asc'
 type Density = 'compact' | 'standard' | 'comfortable'
 
 const sourceFilter = ref<SourceFilter>((route.query.source as SourceFilter) || 'all')
@@ -89,6 +89,7 @@ function resetFiltersForFocus() {
   qualityFilter.value = 'all'
   selectedTags.value = []
   colorFilter.value = ''
+  ratingMin.value = ''
   sortMode.value = 'newest'
 }
 
@@ -136,6 +137,10 @@ const colorFilter = ref<string>((route.query.color as string) || '')
 /** 库内实际出现的主色调（数据驱动，避免硬编码可能不存在的色板） */
 const dominantColors = ref<DominantColorItem[]>([])
 
+// ── 评分筛选 ──
+// 从 URL query 恢复（rating >= 指定值），刷新/详情返回时保持
+const ratingMin = ref<string>((route.query.rating_min as string) || '')
+
 async function loadDominantColors() {
   try {
     dominantColors.value = await fetchDominantColors(30)
@@ -177,9 +182,21 @@ const sortOptions: { label: string; value: SortMode }[] = [
   { label: '最新在前', value: 'newest' },
   { label: '最旧在前', value: 'oldest' },
   { label: '最近更新', value: 'updated' },
+  { label: '评分最高', value: 'rating' },
+  { label: '评分最低', value: 'rating_asc' },
   { label: '文件最大', value: 'largest' },
   { label: '标签最多', value: 'tag_count' },
   { label: '随机', value: 'random' },
+]
+
+/** 评分筛选选项（rating >= 指定值） */
+const ratingOptions: { label: string; value: string }[] = [
+  { label: '全部评分', value: '' },
+  { label: '★ 1 分及以上', value: '1' },
+  { label: '★ 2 分及以上', value: '2' },
+  { label: '★ 3 分及以上', value: '3' },
+  { label: '★ 4 分及以上', value: '4' },
+  { label: '★ 5 分', value: '5' },
 ]
 
 const densityOptions: { label: string; value: Density }[] = [
@@ -203,6 +220,7 @@ function syncUrl() {
   if (qualityFilter.value !== 'all') query.quality = qualityFilter.value
   if (selectedTags.value.length > 0) query.tags = selectedTags.value.join(',')
   if (colorFilter.value) query.color = colorFilter.value
+  if (ratingMin.value) query.rating_min = ratingMin.value
   if (sortMode.value !== 'newest') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
@@ -224,6 +242,7 @@ function buildParams(page: number) {
       quality: qualityFilter.value,
       tags: selectedTags.value.join(','),
       color: colorFilter.value,
+      rating_min: ratingMin.value,
       sort: sortMode.value,
     },
     page,
@@ -337,6 +356,18 @@ async function handleToggleFavorite(id: string) {
     await store.toggleFavorite(id)
   } catch {
     message.error('操作失败')
+  }
+}
+
+/** 设置评分：同步 store（列表项与详情） */
+async function handleRate(id: string, value: number) {
+  try {
+    await store.setRating(id, value)
+    message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+  } catch (e) {
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
+      ?.detail
+    message.error(detail || '评分失败')
   }
 }
 
@@ -568,6 +599,20 @@ loadPage(currentPage.value)
         </n-button>
       </div>
 
+      <n-divider v-if="dominantColors.length > 0" vertical style="height: 20px" />
+
+      <!-- 评分筛选（评分 >= 指定值） -->
+      <div class="filter-group">
+        <n-select
+          v-model:value="ratingMin"
+          :options="ratingOptions"
+          placeholder="评分筛选"
+          size="tiny"
+          style="width: 130px"
+          @update:value="onFilterChange"
+        />
+      </div>
+
       <div style="flex: 1" />
 
       <!-- 排序 + 密度 -->
@@ -677,6 +722,7 @@ loadPage(currentPage.value)
       :focused-ids="focusedIds"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"
+      @rate="handleRate"
       @approve="handleApprove"
       @toggle-select="toggleSelect"
     />

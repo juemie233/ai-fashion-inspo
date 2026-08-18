@@ -41,6 +41,30 @@ def test_source_type_filter(client, upload):
     assert r["items"][0]["id"] == insp_id
 
 
+def test_search_rating_filter_and_sort(client, upload):
+    """搜索支持评分筛选（rating_min）与评分排序（rating / rating_asc）。"""
+    a = upload(color=(200, 100, 50)).json()["id"]  # 默认 0 分
+    b = upload(color=(30, 40, 50)).json()["id"]
+    c = upload(color=(90, 10, 200)).json()["id"]
+    client.patch(f"/api/inspirations/{b}", json={"rating": 5})
+    client.patch(f"/api/inspirations/{c}", json={"rating": 2})
+
+    # rating_min 筛选：>= 2 → b(5)、c(2)；a(0) 排除
+    r = client.get("/api/search", params={"rating_min": 2}).json()
+    assert r["total"] == 2
+    assert {i["id"] for i in r["items"]} == {b, c}
+
+    # 评分降序：b(5) → c(2) → a(0)
+    ids = [i["id"] for i in client.get("/api/search", params={"sort": "rating"}).json()["items"]]
+    assert ids == [b, c, a]
+
+    # 评分升序：a(0) → c(2) → b(5)
+    ids_asc = [
+        i["id"] for i in client.get("/api/search", params={"sort": "rating_asc"}).json()["items"]
+    ]
+    assert ids_asc == [a, c, b]
+
+
 def test_search_excludes_trashed(client, upload):
     """搜索结果排除已软删除素材。"""
     insp_id = upload().json()["id"]

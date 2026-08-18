@@ -31,6 +31,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'delete'): void
   (e: 'toggleFavorite'): void
+  (e: 'rate', value: number): void
   (e: 'approve'): void
   (e: 'toggleSelect'): void
 }>()
@@ -204,6 +205,16 @@ function openDetail() {
             </n-icon>
           </template>
         </n-button>
+        <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
+        <n-rate
+          :value="item.rating || 0"
+          size="small"
+          clearable
+          class="card-rate"
+          title="评分（点击星设置，再点清除）"
+          @click.stop
+          @update:value="(v: number) => emit('rate', v)"
+        />
       </div>
 
       <!-- 分析状态 -->
@@ -322,12 +333,23 @@ function openDetail() {
   top: 8px;
   right: 8px;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
+  max-width: calc(100% - 16px);
   opacity: 0;
   transition: opacity 0.15s;
 }
 .card:hover .card-overlay {
   opacity: 1;
+}
+
+/* 评分控件：与收藏按钮并列，白色描边保证在任意图片上可辨 */
+.card-rate {
+  margin-left: 2px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .analysis-badge {
