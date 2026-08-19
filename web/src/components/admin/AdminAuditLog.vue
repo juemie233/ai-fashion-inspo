@@ -80,7 +80,7 @@ onMounted(load)
     <template #extra>
       <a-button size="mini" type="text" @click="load">刷新</a-button>
     </template>
-    <a-spin :loading="loading">
+    <a-spin :loading="loading" style="display: block">
       <div class="audit-table-wrap">
         <a-table
           v-if="items.length > 0"
