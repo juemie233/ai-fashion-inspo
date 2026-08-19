@@ -16,11 +16,11 @@ const emit = defineEmits<{
 <div class="log-viewer">
   <div class="log-header">
     <span>📄 任务 #{{ taskId }} 日志</span>
-    <n-button size="tiny" @click="emit('close')">关闭</n-button>
+    <a-button size="mini" @click="emit('close')">关闭</a-button>
   </div>
-  <n-spin :show="loading">
+  <a-spin :loading="loading">
     <pre class="log-content">{{ content || '（空）' }}</pre>
-  </n-spin>
+  </a-spin>
 </div>
 </template>
 
