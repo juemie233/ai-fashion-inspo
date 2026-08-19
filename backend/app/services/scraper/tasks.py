@@ -161,6 +161,23 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
     extra = data.model_dump(exclude={"platform", "keywords", "max_count", "headless", "cdp_port", "cookie_file"}, exclude_none=True)
     config.update(extra)
 
+    # 按博主采集（collect_mode=user）：校验博主存在，未传主页信息时从博主记录自动补齐
+    if data.collect_mode == "user":
+        from app.models.person import Blogger
+
+        blogger = await db.get(Blogger, data.blogger_id)
+        if not blogger:
+            raise HTTPException(status_code=404, detail="博主未找到")
+        if not config.get("profile_url") and blogger.profile_url:
+            config["profile_url"] = blogger.profile_url
+        if not config.get("platform_user_id") and blogger.platform_user_id:
+            config["platform_user_id"] = blogger.platform_user_id
+        if not config.get("profile_url") and not config.get("platform_user_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="该博主缺少主页信息（profile_url / 平台用户 ID），请先完善博主资料",
+            )
+
     task = ScraperTask(
         platform=data.platform,
         status="pending",

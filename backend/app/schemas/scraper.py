@@ -18,7 +18,11 @@ class ScraperTaskCreate(BaseModel):
     cdp_port: int | None = Field(default=None, description="CDP 端口，连接真实 Chrome 实现零检测采集（仅小红书生效）")
     cookie_file: str | None = Field(default=None, description="Cookie 文件路径")
     sort_mode: str | None = Field(default=None, description="搜索排序: general | latest | popular（仅小红书搜索模式生效）")
-    collect_mode: str | None = Field(default=None, description="采集模式: search | user | topic（当前仅 search 生效，其余预留）")
+    collect_mode: str | None = Field(default=None, description="采集模式: search | user（user=按博主采集，仅小红书）")
+    blogger_id: int | None = Field(default=None, description="按博主采集（collect_mode=user）时的博主 ID")
+    profile_url: str | None = Field(default=None, description="博主主页 URL（按博主采集；缺省从博主记录自动补齐）")
+    platform_user_id: str | None = Field(default=None, description="博主平台用户 ID（按博主采集；缺省从博主记录自动补齐）")
+    max_notes: int | None = Field(default=None, ge=1, le=200, description="按博主采集的笔记数上限")
 
 
 class ScraperTaskOut(BaseModel):

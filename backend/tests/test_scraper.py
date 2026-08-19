@@ -3,6 +3,8 @@
 统一 monkeypatch 采集子进程启动，避免测试中拉起真实 Playwright。
 """
 
+import json
+
 import pytest
 
 
@@ -377,3 +379,84 @@ class TestStats:
         platforms = {p["platform"] for p in s["by_platform"]}
         assert "douyin" in platforms
         assert sum(d["tasks"] for d in s["by_day"]) == 2
+
+
+class TestBloggerModeTask:
+    """按博主采集任务创建（collect_mode=user）。"""
+
+    def test_create_blogger_mode_task(self, client, create_blogger):
+        """博主存在：config 带 collect_mode/blogger_id/max_notes，主页信息保留显式值。"""
+        blogger = create_blogger(
+            name="采集博主",
+            platform_user_id="uid123",
+            profile_url="https://www.xiaohongshu.com/user/profile/uid123",
+        )
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+                "max_notes": 30,
+            },
+        )
+        assert r.status_code == 201, r.text
+        config = json.loads(r.json()["config"])
+        assert config["collect_mode"] == "user"
+        assert config["blogger_id"] == blogger["id"]
+        assert config["max_notes"] == 30
+        assert config["profile_url"] == "https://www.xiaohongshu.com/user/profile/uid123"
+
+    def test_create_blogger_mode_auto_fill_platform_user_id(self, client, create_blogger):
+        """未显式传主页信息时，从博主记录自动补齐 platform_user_id。"""
+        blogger = create_blogger(name="自动补博主", platform_user_id="auto_uid")
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+            },
+        )
+        assert r.status_code == 201, r.text
+        config = json.loads(r.json()["config"])
+        assert config["platform_user_id"] == "auto_uid"
+
+    def test_create_blogger_mode_missing_blogger_404(self, client):
+        """博主不存在 → 404。"""
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": 999999,
+            },
+        )
+        assert r.status_code == 404
+        assert "博主未找到" in r.json()["detail"]
+
+    def test_create_blogger_mode_no_profile_400(self, client, create_blogger):
+        """博主缺主页信息且未显式传 → 400。"""
+        blogger = create_blogger(name="无主页博主")
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+            },
+        )
+        assert r.status_code == 400
+        assert "主页信息" in r.json()["detail"]

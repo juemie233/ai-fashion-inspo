@@ -70,6 +70,9 @@ class Inspiration(Base):
     dominant_colors: Mapped[str | None] = mapped_column(
         String(128), nullable=True  # JSON 数组字符串
     )
+    caption: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # 笔记正文描述（详情页采集；手动上传可为空）
 
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     rating: Mapped[int] = mapped_column(Integer, default=0)  # 用户评分：0~5（0 表示未评分，5 满分）

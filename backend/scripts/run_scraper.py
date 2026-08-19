@@ -76,6 +76,192 @@ def _human_scroll(page, steps=None):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  按博主采集：主页笔记收集 + 详情页全量提取（多图/视频/正文/话题标签）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _clean_media_url(src: str) -> str:
+    """清洗媒体 URL：去空白、补全协议头。"""
+    src = (src or "").strip()
+    if src.startswith("//"):
+        src = "https:" + src
+    return src
+
+
+def _is_content_image(src: str) -> bool:
+    """判断 URL 是否为「内容图」（排除头像/图标/logo/角标等非素材图）。"""
+    if not src.startswith("http"):
+        return False
+    low = src.lower()
+    skip_kw = ("avatar", "icon", "logo", "emoji", "favicon", "qrcode", "qr_code", "verified")
+    return not any(k in low for k in skip_kw)
+
+
+def _extract_video_thumbnail_sync(video_path: Path, today: str) -> str | None:
+    """用 ffmpeg 提取视频首帧缩略图（同步 subprocess），失败返回 None。"""
+    import subprocess
+
+    thumb_dir = settings.thumbnails_dir / today
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_name = f"thumb_{video_path.stem}.jpg"
+    thumb_path = thumb_dir / thumb_name
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "1", "-i", str(video_path),
+             "-frames:v", "1", "-vf", "scale=400:-2", str(thumb_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except Exception:
+        return None
+    if thumb_path.exists() and thumb_path.stat().st_size > 0:
+        return f"thumbnails/{today}/{thumb_name}"
+    return None
+
+
+def _extract_note_detail(page, note_url: str) -> dict:
+    """打开单个笔记详情页，提取全部内容。
+
+    搜索结果/主页卡片通常只渲染 1 张封面；轮播图（多图）、视频、正文描述与
+    话题标签只在详情页完整加载。本函数逐个打开详情页把「卡片上看不到的
+    内容」补齐。
+
+    Args:
+        page: Playwright 页面对象（复用当前标签页）。
+        note_url: 笔记详情页完整 URL。
+
+    Returns:
+        {"img_urls": [...], "video_urls": [...], "caption": str, "tags": [...]}
+    """
+    result: dict = {"img_urls": [], "video_urls": [], "caption": "", "tags": []}
+    try:
+        page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        return result
+
+    # 等待详情页主体渲染（轮播图或视频）
+    try:
+        page.wait_for_selector(
+            "div.swiper-slide img, video, div[class*=swiper] img, div[class*='note-content']",
+            timeout=10000,
+        )
+    except Exception:
+        pass
+
+    # 拟人化：加载后随机停顿 + 偶发鼠标移动，触发轮播懒加载
+    _rdsleep(1.0, 2.5)
+    if random.random() < 0.6:
+        _human_mouse_move(page)
+
+    # ── 轮播图：优先 swiper 轮播容器（精确），回退到全页 img（宽松）──
+    img_elements = []
+    for sel in ("div.swiper-slide img", "div[class*=swiper] img"):
+        img_elements = page.query_selector_all(sel)
+        if img_elements:
+            break
+    if not img_elements:
+        img_elements = page.query_selector_all("img")
+
+    seen_imgs: set[str] = set()
+    for img in img_elements:
+        src = _clean_media_url(img.get_attribute("src") or img.get_attribute("data-src") or "")
+        if not src or not _is_content_image(src) or src in seen_imgs:
+            continue
+        seen_imgs.add(src)
+        result["img_urls"].append(src)
+
+    # ── 视频：<video> 的 src（或 <source> 子标签），封面 poster 一并作为图片采集 ──
+    for video in page.query_selector_all("video"):
+        vsrc = _clean_media_url(video.get_attribute("src") or "")
+        if not vsrc:
+            source_el = video.query_selector("source")
+            if source_el:
+                vsrc = _clean_media_url(source_el.get_attribute("src") or "")
+        if vsrc and vsrc not in result["video_urls"]:
+            result["video_urls"].append(vsrc)
+        poster = _clean_media_url(video.get_attribute("poster") or "")
+        if poster and _is_content_image(poster) and poster not in seen_imgs:
+            seen_imgs.add(poster)
+            result["img_urls"].append(poster)
+
+    # ── 正文描述（多候选选择器 + 兜底）──
+    try:
+        for sel in (
+            "div.note-content span, div[class*='note-content'] span",
+            "div[class*='desc']",
+            "div#detail-desc",
+            "div[class*='title']",
+        ):
+            el = page.query_selector(sel)
+            if el:
+                text = (el.inner_text() or "").strip()
+                if text:
+                    result["caption"] = text[:2000]  # 上限 2000 字
+                    break
+    except Exception:
+        pass
+
+    # ── 话题标签：从正文中的 #话题 提取 ──
+    import re as _re
+
+    if result["caption"]:
+        tags = _re.findall(r"#([^\s#，,。！？.!?]{1,30})", result["caption"])
+        result["tags"] = [t.strip() for t in tags if t.strip()]
+
+    return result
+
+
+def _collect_blogger_note_urls(
+    page, profile_url: str, max_notes: int, max_scrolls: int = 15
+) -> list[str]:
+    """打开博主主页，滚动加载笔记卡片，收集笔记详情链接（去重，上限 max_notes）。
+
+    Args:
+        page: Playwright 页面对象。
+        profile_url: 博主主页 URL（含 /user/profile/{uid}）。
+        max_notes: 收集笔记数上限。
+        max_scrolls: 滚动加载次数上限。
+
+    Returns:
+        笔记详情 URL 列表（顺序按页面出现顺序）。
+    """
+    note_urls: list[str] = []
+    try:
+        page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        return note_urls
+    try:
+        page.wait_for_selector("section.note-item, a[href*='/explore/']", timeout=15000)
+    except Exception:
+        pass
+
+    last_count = 0
+    no_new = 0
+    for _ in range(max_scrolls):
+        # 收集当前页全部笔记链接（去重）
+        for link in page.query_selector_all("a[href*='/explore/']"):
+            href = link.get_attribute("href") or ""
+            url = href if href.startswith("http") else f"https://www.xiaohongshu.com{href}"
+            if url not in note_urls:
+                note_urls.append(url)
+                if len(note_urls) >= max_notes:
+                    return note_urls
+        if len(note_urls) == last_count:
+            no_new += 1
+        else:
+            no_new = 0
+            last_count = len(note_urls)
+        if no_new >= 2:
+            break
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        _rdsleep(1.0, 2.0)
+    return note_urls
+
+
+# ═══════════════════════════════════════════════════════════════
 #  搜索与提取
 # ═══════════════════════════════════════════════════════════════
 
@@ -250,11 +436,16 @@ def _download_batch(
     httpx_module,
     cookies: dict | None = None,
     content_hash_set: set[str] | None = None,
+    meta_map: dict[str, dict] | None = None,
 ) -> tuple[int, int, int, int, int]:
     """下载一批图片，立即入库。使用同步 sqlite3 避免 event loop 冲突。
 
     urls 中每项为 (笔记页面 URL, 图片 CDN URL)：笔记页面 URL 存入 source_url 作为
     「原始链接」，图片 CDN URL 用于下载与去重。
+
+    meta_map（可选）：笔记页面 URL → {"caption": str, "blogger_id": int}
+    —— 按博主采集时传入，图片入库同步写入笔记正文 caption，并建立
+    inspiration_bloggers 关联（博主标记）。
 
     去重策略（三层）：
     1. 图片 URL 内存去重 — 同次运行内相同图片不重复下载
@@ -408,14 +599,25 @@ def _download_batch(
                     now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
                     # 与主库 content_hash 列一致（SHA-256），供上传/管理页索引查重
                     content_sha256 = hashlib.sha256(content).hexdigest()
+                    # 按博主采集：同笔记的图片共享正文 caption，并关联博主
+                    meta = meta_map.get(note_url) if meta_map else None
+                    caption_val = (meta or {}).get("caption")
+                    blogger_id = (meta or {}).get("blogger_id")
                     batch_conn.execute(
                         "INSERT INTO inspirations (id, source_type, source_url, file_path, "
                         "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                        "quality_status, content_hash, scraper_task_id, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?, ?)",
+                        "quality_status, content_hash, caption, scraper_task_id, "
+                        "created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?, ?, ?)",
                         (insp_id, "scraper", note_url or img_url, rel_path, "image",
-                         content_sha256, task_id, now_str, now_str),
+                         content_sha256, caption_val, task_id, now_str, now_str),
                     )
+                    if blogger_id:
+                        batch_conn.execute(
+                            "INSERT OR IGNORE INTO inspiration_bloggers "
+                            "(inspiration_id, blogger_id, confidence) VALUES (?, ?, 1.0)",
+                            (insp_id, blogger_id),
+                        )
                     batch_conn.execute(
                         "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
                         (img_url,),
@@ -459,6 +661,291 @@ def _download_batch(
         batch_conn.close()
 
     return added, skipped_existing, skipped_non200, skipped_network, skipped_content_dup
+
+
+def _download_videos(
+    video_pairs: list[tuple[str, str]],
+    task_id: int,
+    existing_url_set: set[str],
+    remaining: int,
+    videos_dir: Path,
+    today: str,
+    httpx_module,
+    cookies: dict | None = None,
+    meta_map: dict[str, dict] | None = None,
+) -> tuple[int, int]:
+    """下载一批短视频并入库为 video 类型（同步 sqlite3 + 同步 ffmpeg 缩略图）。
+
+    video_pairs 每项为 (笔记页面 URL, 视频 CDN URL)。去重策略与图片一致
+    （URL 内存去重 + 墓碑表去重）；视频不做内容哈希去重（同一视频多 CDN 节点
+    罕见，且逐字节哈希代价高）。
+
+    meta_map（可选）：笔记页面 URL → {"caption": str, "blogger_id": int}
+    —— 按博主采集时传入，视频入库同步写入笔记正文 caption 并关联博主。
+
+    Returns:
+        (added, skipped): 成功入库数与跳过数（已存在 / 下载失败）。
+    """
+    import sqlite3 as _sqlite3
+
+    # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
+    req_headers = {
+        "Referer": "https://www.xiaohongshu.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    if cookies:
+        req_headers["Cookie"] = "; ".join(
+            f"{c['name']}={c['value']}" for c in cookies.values()
+        )
+
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+
+    # 视频 URL 内存去重
+    unique: list[tuple[str, str]] = []
+    _seen_url: set[str] = set()
+    for note_url, video_url in video_pairs:
+        if video_url and video_url not in _seen_url:
+            _seen_url.add(video_url)
+            unique.append((note_url, video_url))
+
+    # 查询这批视频 URL 中已在墓碑表中的
+    if unique:
+        video_urls = [u for _, u in unique]
+        conn = None
+        try:
+            conn = _sqlite3.connect(str(db_path))
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS scraper_seen_urls "
+                "(source_url TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.commit()
+            placeholders = ",".join("?" * len(video_urls))
+            cur = conn.execute(
+                f"SELECT source_url FROM scraper_seen_urls WHERE source_url IN ({placeholders})",
+                video_urls,
+            )
+            db_existing = {r[0] for r in cur.fetchall()}
+            existing_url_set.update(db_existing)
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    added = 0
+    skipped = 0
+    pending_in_batch = 0
+    _BATCH_COMMIT = 5  # 视频入库量小，攒批阈值降低
+    batch_conn = None
+    try:
+        batch_conn = _sqlite3.connect(str(db_path))
+    except Exception:
+        batch_conn = None
+
+    def _commit_videos():
+        """提交当前攒批的视频写入。"""
+        nonlocal pending_in_batch
+        if batch_conn is not None and pending_in_batch > 0:
+            batch_conn.commit()
+            pending_in_batch = 0
+
+    # 单个视频下载大小上限（100MB）：避免超大视频撑爆磁盘
+    MAX_VIDEO_BYTES = 100 * 1024 * 1024
+
+    for note_url, video_url in unique:
+        if added >= remaining:
+            break
+        if video_url in existing_url_set:
+            skipped += 1
+            continue
+
+        fpath: Path | None = None
+        try:
+            # 流式下载视频（边下边写，避免整体驻留内存）
+            with httpx_module.stream("GET", video_url, headers=req_headers,
+                                     timeout=60, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    skipped += 1
+                    continue
+                fname = f"{str(uuid.uuid4()).replace('-', '')[:16]}.mp4"
+                fpath = videos_dir / fname
+                total = 0
+                with open(fpath, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                        total += len(chunk)
+                        if total > MAX_VIDEO_BYTES:
+                            raise RuntimeError("视频超过大小上限，跳过")
+                        f.write(chunk)
+                if total == 0:
+                    fpath.unlink(missing_ok=True)
+                    fpath = None
+                    skipped += 1
+                    continue
+
+            # ffmpeg 提取首帧缩略图
+            thumb_rel = _extract_video_thumbnail_sync(fpath, today)
+
+            if batch_conn is None:
+                raise RuntimeError("数据库连接不可用")
+            insp_id = str(uuid.uuid4())
+            rel_path = f"videos/{today}/{fname}"
+            now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            # 按博主采集：视频同步写入笔记正文 caption 并关联博主
+            meta = meta_map.get(note_url) if meta_map else None
+            caption_val = (meta or {}).get("caption")
+            blogger_id = (meta or {}).get("blogger_id")
+            batch_conn.execute(
+                "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+                "thumbnail_path, media_type, dominant_colors, is_favorite, "
+                "quality_status, content_hash, caption, scraper_task_id, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 'pending', NULL, ?, ?, ?, ?)",
+                (insp_id, "scraper", note_url or video_url, rel_path, thumb_rel, "video",
+                 caption_val, task_id, now_str, now_str),
+            )
+            if blogger_id:
+                batch_conn.execute(
+                    "INSERT OR IGNORE INTO inspiration_bloggers "
+                    "(inspiration_id, blogger_id, confidence) VALUES (?, ?, 1.0)",
+                    (insp_id, blogger_id),
+                )
+            batch_conn.execute(
+                "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                (video_url,),
+            )
+            pending_in_batch += 1
+            if pending_in_batch >= _BATCH_COMMIT:
+                _commit_videos()
+
+            added += 1
+            existing_url_set.add(video_url)
+            # 视频较大，下载间隔稍长
+            time.sleep(random.uniform(1.0, 2.0))
+        except Exception as e:
+            try:
+                if batch_conn is not None:
+                    batch_conn.rollback()
+                pending_in_batch = 0
+            except Exception:
+                pass
+            if fpath is not None:
+                try:
+                    fpath.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            print(f"    视频下载失败 {video_url[:40]}... ({str(e)[:60]})")
+            skipped += 1
+
+    _commit_videos()
+    if batch_conn is not None:
+        batch_conn.close()
+
+    return added, skipped
+
+
+def _run_blogger_mode(
+    page,
+    task_id: int,
+    blogger_id: int,
+    config: dict,
+    img_dir: Path,
+    videos_dir: Path,
+    today: str,
+    httpx_module,
+    browser_cookies: dict,
+    existing_url_set: set[str],
+    content_hash_set: set[str],
+) -> tuple[int, int, list[dict]]:
+    """按博主采集：打开博主主页收集笔记 → 逐个详情页提取全量内容并入库。
+
+    每个笔记提取：轮播图全部图片 + 视频（含封面 poster）+ 正文 caption；
+    入库时通过 meta_map 同步写入 caption 并建立 inspiration_bloggers 博主关联。
+
+    风控缓解：详情页访问间隔 2~4s（可经 config["detail_delay"] 调整）；
+    单个详情页提取失败跳过并记录，不影响其余笔记。
+
+    Returns:
+        (items_found, items_added, notes_log) — 提取数 / 入库数 / 每篇笔记漏斗。
+    """
+    # 博主主页 URL：显式 profile_url 优先，否则用 platform_user_id 拼
+    profile_url = config.get("profile_url")
+    if not profile_url:
+        puid = config.get("platform_user_id")
+        if puid:
+            profile_url = f"https://www.xiaohongshu.com/user/profile/{puid}"
+    if not profile_url:
+        raise RuntimeError("按博主采集缺少 profile_url / platform_user_id")
+
+    max_notes = int(config.get("max_notes", 50))
+    max_scrolls = int(config.get("max_scrolls", 15))
+    detail_delay = float(config.get("detail_delay", 3.0))  # 详情页间隔（秒）
+
+    print(f"按博主采集：blogger_id={blogger_id}，目标 {max_notes} 篇笔记")
+    note_urls = _collect_blogger_note_urls(page, profile_url, max_notes, max_scrolls)
+    print(f"  收集到 {len(note_urls)} 篇笔记")
+
+    items_found = 0
+    items_added = 0
+    notes_log: list[dict] = []
+    # 笔记 URL → {caption, blogger_id}：图片/视频入库共用
+    meta_map: dict[str, dict] = {}
+
+    for i, note_url in enumerate(note_urls, 1):
+        try:
+            detail = _extract_note_detail(page, note_url)
+        except Exception as e:
+            print(f"  [{i}/{len(note_urls)}] 详情页提取失败: {str(e)[:80]}")
+            notes_log.append({"note": note_url, "error": str(e)[:200]})
+            time.sleep(detail_delay)
+            continue
+
+        caption = detail.get("caption") or ""
+        meta_map[note_url] = {"caption": caption, "blogger_id": blogger_id}
+
+        img_pairs = [(note_url, u) for u in detail.get("img_urls") or []]
+        video_pairs = [(note_url, u) for u in detail.get("video_urls") or []]
+        items_found += len(img_pairs) + len(video_pairs)
+
+        # 图片下载入库（多图逐张；同笔记共享 caption + 博主关联）
+        added = 0
+        if img_pairs:
+            remaining = max(50, len(img_pairs) * 2)  # 博主模式单笔记不设严格上限
+            added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
+                img_pairs, task_id, existing_url_set,
+                remaining, img_dir, today,
+                httpx_module, browser_cookies,
+                content_hash_set, meta_map,
+            )
+            print(f"    图片 +{added}（跳过 已存在{sk_ex} MD5{sk_dup} HTTP{sk_h} 网络{sk_n}）")
+        # 视频下载入库（mp4 + ffmpeg 缩略图 + caption + 博主关联）
+        v_added = 0
+        if video_pairs:
+            v_added, v_skipped = _download_videos(
+                video_pairs, task_id,
+                existing_url_set, max(20, len(video_pairs) * 2),
+                videos_dir, today,
+                httpx_module, browser_cookies, meta_map,
+            )
+            print(f"    视频 +{v_added}（跳过 {v_skipped}）")
+        items_added += added + v_added
+
+        note_id = note_url.rstrip("/").split("/")[-1][:12]
+        print(
+            f"  [{i}/{len(note_urls)}] 笔记 {note_id}：图 {len(img_pairs)} 视频 {len(video_pairs)} "
+            f"正文 {len(caption)} 字（入库 {added + v_added}）"
+        )
+        notes_log.append({
+            "note": note_url,
+            "img_count": len(img_pairs),
+            "video_count": len(video_pairs),
+            "caption_len": len(caption),
+            "added": added + v_added,
+        })
+
+        # 详情页访问间隔（防风控，默认 2~4s 随机）
+        time.sleep(random.uniform(max(1.0, detail_delay - 1.0), detail_delay + 1.0))
+
+    return items_found, items_added, notes_log
 
 
 def _update_task_sync(task_id: int, fields: dict) -> None:
@@ -542,8 +1029,19 @@ def run_scraper_sync(task_id: int):
         keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
         max_count = config.get("max_count", 50)
         platform = task.platform
+        # 采集模式：search 关键词搜索（默认）| user 按博主采集（小红书）
+        mode = config.get("collect_mode") or config.get("mode") or "search"
+        is_blogger = mode == "user"
+        blogger_id: int | None = None
+        if is_blogger:
+            raw_bid = config.get("blogger_id")
+            if not raw_bid:
+                print("按博主采集缺少 blogger_id，退出")
+                _fail("按博主采集缺少 blogger_id")
+                return
+            blogger_id = int(raw_bid)
 
-        if not keywords:
+        if not keywords and not is_blogger:
             print("无关键词，退出")
             _fail("无关键词")
             return
@@ -561,6 +1059,7 @@ def run_scraper_sync(task_id: int):
 
     # ── 断点续采：构建或恢复执行计划（关键词 × 排序） ──
     # 首次运行：随机打乱关键词一次后展开 ×3 排序，计划随 resume_token 持久化，保证跨重启顺序确定。
+    # 按博主采集不走关键词计划（一轮完成，见下方独立执行分支）。
     resume = None
     if task.resume_token:
         try:
@@ -568,7 +1067,12 @@ def run_scraper_sync(task_id: int):
         except Exception:
             resume = None
 
-    if resume and isinstance(resume.get("plan"), list) and resume["plan"]:
+    if is_blogger:
+        plan: list = []
+        done = 0
+        items_found = 0
+        items_added = 0
+    elif resume and isinstance(resume.get("plan"), list) and resume["plan"]:
         plan = resume["plan"]
         done = int(resume.get("done", 0))
         items_found = int(resume.get("items_found", 0))
@@ -715,8 +1219,21 @@ def run_scraper_sync(task_id: int):
             browser_cookies: dict = {}
             print("抖音平台：使用独立 Playwright 浏览器（无需 CDP Chrome）")
 
-        # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
-        total_searches = len(plan)
+        # ── 按博主采集（小红书）：主页笔记 → 详情页全量提取（多图/视频/正文/博主标记）──
+        if is_blogger:
+            videos_dir = settings.videos_dir / today
+            videos_dir.mkdir(parents=True, exist_ok=True)
+            items_found, items_added, blogger_notes = _run_blogger_mode(
+                page, task_id, blogger_id, config,
+                img_dir, videos_dir, today, httpx,
+                browser_cookies, existing_url_set, content_hash_set,
+            )
+            for n in blogger_notes:
+                per_search.append(n)
+            print(f"按博主采集完成：笔记 {len(blogger_notes)} 篇，提取 {items_found}，入库 {items_added}")
+        else:
+            # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
+            total_searches = len(plan)
 
         for plan_idx in range(done, len(plan)):
             entry = plan[plan_idx]
