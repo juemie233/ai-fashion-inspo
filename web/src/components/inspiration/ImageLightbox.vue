@@ -241,7 +241,7 @@ onUnmounted(() => {
           @mousedown="onDragStart"
           @wheel.prevent="onWheel"
         >
-          <n-spin v-if="currentImage" :show="imageLoading" class="lightbox-loading" size="large">
+          <a-spin v-if="currentImage" :loading="imageLoading" class="lightbox-loading" :size="32">
             <img
               ref="imgRef"
               :src="getFileUrl(currentImage)"
@@ -252,7 +252,7 @@ onUnmounted(() => {
               @load="onImageLoad"
               @error="imageLoading = false"
             />
-          </n-spin>
+          </a-spin>
         </div>
 
         <!-- 图片计数（仅多图） -->
@@ -262,21 +262,21 @@ onUnmounted(() => {
 
         <!-- 缩放控制 -->
         <div class="zoom-controls">
-          <n-button size="small" circle @click="zoomOut" title="缩小（-）">−</n-button>
+          <a-button size="small" shape="circle" @click="zoomOut" title="缩小（-）">−</a-button>
           <span class="zoom-level">{{ Math.round(scale * 100) }}%</span>
-          <n-button size="small" circle @click="zoomIn" title="放大（+）">＋</n-button>
-          <n-button size="small" @click="resetZoom" title="重置缩放">重置</n-button>
+          <a-button size="small" shape="circle" @click="zoomIn" title="放大（+）">＋</a-button>
+          <a-button size="small" @click="resetZoom" title="重置缩放">重置</a-button>
         </div>
 
         <!-- 关闭按钮 -->
-        <n-button class="close-btn" circle size="large" @click="emit('close')">
+        <a-button class="close-btn" shape="circle" size="large" @click="emit('close')">
           ✕
-        </n-button>
+        </a-button>
       </div>
 
       <!-- 左右切换（仅多图时显示，点击不触发射出 close） -->
-      <n-button v-if="canPrev" class="nav-btn nav-prev" circle size="large" @click.stop="goPrev">‹</n-button>
-      <n-button v-if="canNext" class="nav-btn nav-next" circle size="large" @click.stop="goNext">›</n-button>
+      <a-button v-if="canPrev" class="nav-btn nav-prev" shape="circle" size="large" @click.stop="goPrev">‹</a-button>
+      <a-button v-if="canNext" class="nav-btn nav-next" shape="circle" size="large" @click.stop="goNext">›</a-button>
     </div>
   </Teleport>
 </template>

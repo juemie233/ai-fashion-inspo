@@ -11,13 +11,12 @@ onMounted(check)
 </script>
 
 <template>
-  <n-alert
+  <a-alert
     v-if="mismatch || error"
     type="warning"
-    :bordered="false"
     style="margin-bottom: 12px"
   >
-    <template #header>
+    <template #title>
       <span v-if="error">无法校验版本</span>
       <span v-else-if="serverVersion === null">后端未返回版本号</span>
       <span v-else>前后端版本不一致</span>
@@ -34,7 +33,7 @@ onMounted(check)
     </template>
 
     <template #action>
-      <n-button size="small" :loading="checking" @click="check">重新检测</n-button>
+      <a-button size="small" :loading="checking" @click="check">重新检测</a-button>
     </template>
-  </n-alert>
+  </a-alert>
 </template>

@@ -18,10 +18,10 @@ defineProps<{
     搜索 <strong v-if="keyword">"{{ keyword }}"</strong>
     <span v-if="selectedTags.length > 0">
       {{ keyword ? ' · ' : '' }}{{ combineMode === 'AND' ? '全部匹配' : '任意匹配' }}：
-      <n-tag v-for="n in selectedTags" :key="n" size="tiny" type="info">{{ n }}</n-tag>
+      <a-tag v-for="n in selectedTags" :key="n" size="small" type="primary">{{ n }}</a-tag>
     </span>
     <span v-if="excludedTags.length > 0">
-      · 排除：<n-tag v-for="n in excludedTags" :key="n" size="tiny" type="error">{{ n }}</n-tag>
+      · 排除：<a-tag v-for="n in excludedTags" :key="n" size="small" type="danger">{{ n }}</a-tag>
     </span>
   </div>
 </template>

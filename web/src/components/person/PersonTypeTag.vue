@@ -12,12 +12,11 @@ defineProps<{
 </script>
 
 <template>
-  <n-tag
-    :type="type === 'model' ? 'info' : 'warning'"
+  <a-tag
+    :type="type === 'model' ? 'primary' : 'warning'"
     :size="size || 'small'"
-    :bordered="false"
     round
   >
     {{ PERSON_TYPE_LABELS[type] || type }}
-  </n-tag>
+  </a-tag>
 </template>
