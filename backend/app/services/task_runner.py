@@ -32,6 +32,12 @@ from app.services.task_runners.deduplicate import (
     create_deduplicate_task,
     execute_deduplicate,
 )
+from app.services.task_runners.face_scan import (
+    create_face_match_task,
+    create_face_scan_task,
+    execute_face_match,
+    execute_face_scan,
+)
 from app.services.task_runners.quality_check import (
     _quality_check_one,
     create_quality_check_task,
@@ -54,4 +60,6 @@ TASK_HANDLERS = {
     "batch_delete": execute_batch_delete,
     "deduplicate": execute_deduplicate,
     "vector_backfill": execute_vector_backfill,
+    "face_scan": execute_face_scan,
+    "face_match": execute_face_match,
 }

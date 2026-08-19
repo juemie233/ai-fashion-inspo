@@ -1,7 +1,7 @@
 """任务队列路由：查询任务状态、任务列表与取消任务。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -10,6 +10,11 @@ from app.schemas.task import TaskListOut, TaskOut
 from app.utils.time import utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+# 支持「运行中取消」的任务类型：执行器内部每批检查 cancelled 后自行停止。
+# 人脸扫描/匹配任务耗时较长（分钟级），用户需要能随时中断（增量语义下
+# 重跑自动跳过已扫部分，中断无副作用）；其余类型任务不硬打断。
+_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match")
 
 
 @router.get("", response_model=TaskListOut)
@@ -60,15 +65,28 @@ async def cancel_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """取消排队中的任务（仅 pending 状态可取消，running 不硬打断）。"""
-    # 先确认任务存在（404），再做条件更新：仅当仍为 pending 时才置为 cancelled，
-    # 避免「读取到 pending 后 worker 已认领为 running」的 TOCTOU 竞态（否则会把 running 覆盖成 cancelled）。
+    """取消任务：pending 一律可取消；人脸扫描/匹配任务运行中也可取消。
+
+    运行中取消的语义：任务执行器每批检查状态后自行停止（已完成的批次不
+    回滚），用户可随时重新发起任务，增量语义自动跳过已完成部分。
+    """
+    # 先确认任务存在（404），再做条件更新，避免「读取到 pending 后 worker 已认领
+    # 为 running」的 TOCTOU 竞态（否则会把 running 覆盖成 cancelled）
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
     result = await db.execute(
         update(TaskQueue)
-        .where(TaskQueue.id == task_id, TaskQueue.status == "pending")
+        .where(
+            TaskQueue.id == task_id,
+            or_(
+                TaskQueue.status == "pending",
+                and_(
+                    TaskQueue.status == "running",
+                    TaskQueue.type.in_(_CANCELABLE_RUNNING_TYPES),
+                ),
+            ),
+        )
         .values(status="cancelled", error="用户手动取消", updated_at=utcnow())
     )
     await db.commit()

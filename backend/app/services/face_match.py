@@ -143,7 +143,7 @@ async def match_all_faces(
             InspirationFaceDetection.matched_model_id,
             InspirationFaceDetection.confidence,
             InspirationFaceDetection.match_status,
-        )
+        ).where(InspirationFaceDetection.embedding != b"")
     )
     detections = rows.all()
     total = len(detections)

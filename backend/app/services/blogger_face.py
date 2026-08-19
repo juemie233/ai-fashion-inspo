@@ -403,10 +403,16 @@ async def detect_inspiration_faces(
 async def list_inspiration_detections(
     db: AsyncSession, inspiration_id: str
 ) -> list[dict]:
-    """素材人脸检测列表（含匹配博主信息）。"""
+    """素材人脸检测列表（含匹配博主信息）。
+
+    过滤空 embedding 的占位记录（人脸库扫描为无脸素材写入的「已扫」标记）。
+    """
     rows = await db.execute(
         select(InspirationFaceDetection)
-        .where(InspirationFaceDetection.inspiration_id == inspiration_id)
+        .where(
+            InspirationFaceDetection.inspiration_id == inspiration_id,
+            InspirationFaceDetection.embedding != b"",
+        )
         .options(selectinload(InspirationFaceDetection.matched_blogger))
         .order_by(InspirationFaceDetection.face_index)
     )

@@ -26,6 +26,7 @@ from app.routers import (
     tasks,
     bloggers,
     models,
+    face_scan,
     health,
 )
 from app.utils.auth import is_destructive_route
@@ -225,6 +226,8 @@ app.include_router(ws.router)
 app.include_router(tasks.router)
 app.include_router(bloggers.router)
 app.include_router(models.router)
+app.include_router(face_scan.router)
+app.include_router(face_scan.match_router)
 app.include_router(health.router)
 
 
