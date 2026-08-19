@@ -459,7 +459,7 @@ const configColumns = [
 </script>
 
 <template>
-  <a-space direction="vertical" :size="16" style="max-width: 560px">
+  <a-space direction="vertical" :size="16" style="max-width: none; width: 100%">
     <!-- 基础参数 -->
     <a-card title="基础参数" size="small">
       <a-form
@@ -500,7 +500,7 @@ const configColumns = [
 
     <!-- Prompt 编辑 -->
     <a-card title="分析 Prompt" size="small">
-      <a-spin :loading="promptLoading">
+      <a-spin :loading="promptLoading" style="display: block">
         <a-textarea
           v-model="editedPrompt"
           :auto-size="{ minRows: 8, maxRows: 20 }"
