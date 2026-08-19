@@ -91,16 +91,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-<n-card size="small" style="margin-bottom:16px">
-  <template #header>
+<a-card size="small" style="margin-bottom:16px">
+  <template #title>
     <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none" @click="toggle">
       <span>📊 采集统计（近 30 天）{{ expanded ? '▼' : '▶' }}</span>
-      <n-button v-if="expanded" size="tiny" quaternary @click.stop="refresh">刷新</n-button>
+      <a-button v-if="expanded" size="mini" type="text" @click.stop="refresh">刷新</a-button>
     </div>
   </template>
 
   <template v-if="expanded">
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <div v-if="stats" class="stats-summary">
         <div class="stat-item"><span class="stat-num">{{ stats.total_tasks }}</span><span class="stat-label">总任务</span></div>
         <div class="stat-item"><span class="stat-num ok">{{ stats.completed }}</span><span class="stat-label">成功</span></div>
@@ -116,9 +116,9 @@ onBeforeUnmount(() => {
         <div class="chart-box"><div class="chart-title">每日趋势</div><div ref="dayRef" class="chart" /></div>
       </div>
       <div v-else-if="stats && !loading" class="stats-empty">近 30 天暂无采集任务</div>
-    </n-spin>
+    </a-spin>
   </template>
-</n-card>
+</a-card>
 </template>
 
 <style scoped>
