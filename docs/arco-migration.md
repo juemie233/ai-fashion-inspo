@@ -66,24 +66,52 @@
 - 提交：每阶段独立 commit（feat: xxx 迁移至 Arco），保持粒度可 bisect；阶段内小修合并提交。
 - 迁移期间保留 `/persons-arco` 试点路由，作为新旧观感对比基准，P3 完成后再移除。
 
-## 六、迁移进度（2026-08-19 首轮窗口）
+## 六、迁移进度
 
-> 时间窗口：13:46 → 14:00（用户指定，到点硬停）。已提交 5 个 commit，Naive 引用 1050 → **1002 处**（-4.6%）。
+> **✅ 已完成（2026-08-19 全量迁移收官）**：Naive UI 引用 1050 → **0 处**；`naive-ui` 与 `@vicons/ionicons5` 已从 package.json 移除；`app.use(naive)`、`n-config-provider` 壳、`useMessage/useDialog` 全部清除。
 
-| 提交 | 内容 |
-| --- | --- |
-| `(试点)` | ArcoPersonPilotView 试点页 + 全局主题 + 迁移方案（此前已提交） |
-| `d684d61` | 首批 6 组件：PersonTypeTag / SchemaVersionBanner / SearchContextBar / AdminStatCards / AdminDistStats / ImageLightbox |
-| `58fffb8` | AdminExportPanel（useMessage→Message）/ UploadDropZone（n-input→a-input） |
-| `10cf1e2` | MasonryGrid / UploadQueue（spin 数字尺寸、error→status=danger） |
-| `(最近)` | ScraperLogViewer |
+### 各域迁移提交记录
 
-**踩坑记录（后续迁移必读）**：
+| 批次 | 提交 | 内容 |
+| --- | --- | --- |
+| 试点 | `5693c83` | ArcoPersonPilotView 试点页 + 全局主题 + 迁移方案 |
+| 首批 | `d684d61` | PersonTypeTag / SchemaVersionBanner / SearchContextBar / AdminStatCards / AdminDistStats / ImageLightbox |
+| 二批 | `58fffb8` | AdminExportPanel / UploadDropZone |
+| 三批 | `10cf1e2` | MasonryGrid / UploadQueue |
+| 四批 | `cf6fcc9` | ScraperLogViewer |
+| 五批 | `1f122a9` | ScraperStatsPanel |
+| 六批 | `6040408` | FaceDetectionSection |
+| admin 域 | `a7df8dd` | 15 个 admin 组件 |
+| inspiration/search 域 | `c3b2a87` | 12 个组件 |
+| tag 域 | `7e37483` | 14 个组件 |
+| person 域 | `a301e7e` | PersonFormModal / PersonLinkSection / PersonListSection |
+| scraper 域 | `7df8aef` | 6 个组件 |
+| model 域 | `00836a7` | 10 个组件（含 AnalysisHistoryCard / ModelListPanel / SettingsPanel 等大件） |
+| 小视图批 | `e676fe8` | 11 个小视图 + AppLayout（a-menu + Arco 图标库）+ UploadOptionsPanel |
+| 视图大件 + P3 | `e01878b` | DetailView / HomeView / PersonDetailView / ModelPhotoUploadView / TaskList / taskLabel / App.vue / main.ts / 20 个 composables / 测试 |
+
+### 收官验证
+
+- `npx vue-tsc --noEmit`：0 error
+- `npm run lint`：0 error（43 个既有 no-explicit-any warning 渐进清理）
+- `npx vitest run`：104 全过（测试 mock 与断言随语义更新）
+- `npm run build`：vite build 成功
+
+### 踩坑记录（后续迁移必读）
+
 1. Arco `Statistic.value` 仅接受 `number | Date`，字符串需自绘文本（见 AdminStatCards）
 2. Arco `Button` 无 `error` 类型 → `type="primary" + status="danger"`；尺寸体系 `mini/small/medium/large`（naive `tiny` → `mini`）
 3. Arco `Spin.size` 仅接受数字（naive 字符串尺寸无效）
 4. `n-input` 的 `@update:value` → `a-input` 的 `@input`；回车 `@keyup.enter` → `@press-enter`
 5. `useMessage/useDialog` → 静态 `Message/Modal`（无需 provider 包裹）
 6. 本机 `NODE_ENV=production`：装依赖必须 `npm ci --include=dev`
-
-**待续**：剩余 1002 处主要集中在 views（12 个页面）、PersonFormModal/PersonListSection 等大组件、admin 治理页表格；下一步建议按 `components/admin` → `components/inspiration` → `views` 顺序推进（可参考试点页与上述踩坑记录）。
+7. Arco `Select.modelValue` 类型不含 `null`：null 哨兵 → `undefined`（v-model 直连）或 `:model-value` + `@change` 转换
+8. `a-input` 无 `type="textarea"`：用独立 `a-textarea` 组件
+9. `TableColumnData`：`key` → `dataIndex`；`ellipsis` 仅 boolean（tooltip 独立字段）；`render({ record })` 内 `record as T` 转型
+10. Arco 图标从 `@arco-design/web-vue/es/icon` 导入（根导出无 Icon 组件）；无 IconDiff 用 IconSync 替代
+11. `a-upload` 的 `custom-request`：同步返回 `UploadRequest`（对象），文件在 `fileItem.file`；`@change` 签名 `(fileList, fileItem)`
+12. `a-pagination`：`v-model:current` + `:total`（无 page-count）；改页大小用 `@page-size-change`（配 `:auto-adjust="false"` 防双重搜索）
+13. Tag/语义色：naive `success/warning/error/info/default` → Arco 预设色 `green/orange/red/arcoblue/gray`（按需映射）
+14. 图标类任务按钮：`NIcon + ionicons` → 直接渲染 Arco 图标组件（`h(IconXxx)` 或 `<IconXxx />`）
+15. `a-tabs`：`v-model:value` → `v-model:active-key`；`n-tab-pane` 的 `name` → `key`、`tab` → `title`
+16. 迁移大文件时注意 `</n-xxx>` 闭合标签残留：开头标签替换后闭合标签易漏，统一 grep 复查
