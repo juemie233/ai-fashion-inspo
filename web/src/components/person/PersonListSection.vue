@@ -48,7 +48,7 @@ function syncUrl() {
 /** 列表上下文变化时同步 URL：翻页/搜索/平台/排序任意变更即反映到地址栏 */
 watch(
   () => [store.page, store.search, store.platform, store.sort] as const,
-  () => syncUrl()
+  () => syncUrl(),
 )
 
 /** 从 URL query 恢复列表上下文（组件挂载时调用，刷新/详情返回后保持原状态）；
@@ -59,8 +59,7 @@ function restoreFromUrl() {
   store.page = Number.isInteger(page) && page > 1 ? page : 1
   store.search = typeof q.q === 'string' ? q.q : ''
   store.platform = typeof q.platform === 'string' ? q.platform : ''
-  store.sort =
-    q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
+  store.sort = q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
 }
 
 /** 加载后修正页码越界（如删除后总页数减少），并同步 URL */
@@ -167,8 +166,7 @@ async function handleImportCsv(options: UploadCustomRequestOptions) {
     }
     await store.reload()
   } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
-      ?.detail
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
     importError.value = detail || '导入失败'
     message.error(importError.value)
   } finally {
@@ -195,8 +193,8 @@ const columns: DataTableColumns<Person> = [
         h('span', { class: 'person-avatar' }, [
           row.avatar_path
             ? h('img', { src: getFileUrl(row.avatar_path), class: 'avatar-img', alt: row.name })
-            // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
-            : h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
+            : // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
+              h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
         ]),
         h('span', { class: 'person-name' }, row.name),
       ]),
@@ -225,18 +223,22 @@ const columns: DataTableColumns<Person> = [
     width: 80,
     render: (row) => h('span', String(row.inspiration_count ?? 0)),
   },
-  {
-    title: '来源',
-    key: 'source',
-    width: 90,
-    render: (row) => SOURCE_LABELS[row.source || 'manual'] || row.source,
-  },
+  // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
+  ...(props.kind === 'model'
+    ? [
+        {
+          title: '来源',
+          key: 'source',
+          width: 90,
+          render: (row: Person) => SOURCE_LABELS[row.source || 'manual'] || row.source,
+        },
+      ]
+    : []),
   {
     title: '创建时间',
     key: 'created_at',
     width: 160,
-    render: (row) =>
-      row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-',
+    render: (row) => (row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'),
   },
   {
     title: '操作',
@@ -251,12 +253,12 @@ const columns: DataTableColumns<Person> = [
         h(
           NButton,
           { size: 'small', quaternary: true, onClick: () => goDetail(row) },
-          { default: () => '详情' }
+          { default: () => '详情' },
         ),
         h(
           NButton,
           { size: 'small', secondary: true, onClick: () => openEdit(row) },
-          { default: () => '编辑' }
+          { default: () => '编辑' },
         ),
         h(
           NPopconfirm,
@@ -264,10 +266,10 @@ const columns: DataTableColumns<Person> = [
             onPositiveClick: () => handleDelete(row),
           },
           {
-            trigger: () =>
-              h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
-            default: () => `确定删除${kindLabel.value}「${row.name}」？仅当该人物无关联素材时才可删除。`,
-          }
+            trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
+            default: () =>
+              `确定删除${kindLabel.value}「${row.name}」？仅当该人物无关联素材时才可删除。`,
+          },
         ),
       ]),
   },
@@ -361,7 +363,9 @@ onBeforeUnmount(() => {
       >
         <template #header>
           导入完成：新增 {{ importResult.imported }} 人，更新 {{ importResult.updated }} 人
-          <template v-if="importResult.skipped > 0">，跳过 {{ importResult.skipped }} 行（CSV 内重复）</template>
+          <template v-if="importResult.skipped > 0"
+            >，跳过 {{ importResult.skipped }} 行（CSV 内重复）</template
+          >
           <template v-if="importResult.failed > 0">，失败 {{ importResult.failed }} 行</template>
         </template>
         <div v-if="importResult.failed > 0" style="max-height: 180px; overflow: auto">
@@ -372,7 +376,11 @@ onBeforeUnmount(() => {
           >
             第 {{ err.row }} 行{{ err.nickname ? `（${err.nickname}）` : '' }}：{{ err.reason }}
           </div>
-          <n-text v-if="importResult.errors.length < importResult.failed" depth="3" style="font-size: 12px">
+          <n-text
+            v-if="importResult.errors.length < importResult.failed"
+            depth="3"
+            style="font-size: 12px"
+          >
             … 共 {{ importResult.failed }} 行失败，仅展示前 {{ importResult.errors.length }} 条
           </n-text>
         </div>
@@ -417,12 +425,7 @@ onBeforeUnmount(() => {
     </n-card>
 
     <!-- 博主 IP 属地统计（横向柱状图，展示地域分布） -->
-    <n-card
-      v-if="kind === 'blogger'"
-      size="small"
-      class="ipstats-card"
-      title="博主 IP 属地统计"
-    >
+    <n-card v-if="kind === 'blogger'" size="small" class="ipstats-card" title="博主 IP 属地统计">
       <template #header-extra>
         <n-text depth="3" style="font-size: 12px">共 {{ ipStats?.total ?? 0 }} 位博主</n-text>
       </template>
@@ -491,12 +494,7 @@ onBeforeUnmount(() => {
     <!-- 热门排行 -->
     <n-card v-if="topPersons.length > 0" size="small" class="top-card" title="热门人物（按素材数）">
       <n-space vertical :size="8">
-        <div
-          v-for="(p, i) in topPersons"
-          :key="p.id"
-          class="top-row"
-          @click="goDetail(p)"
-        >
+        <div v-for="(p, i) in topPersons" :key="p.id" class="top-row" @click="goDetail(p)">
           <span class="top-rank">{{ i + 1 }}</span>
           <span class="top-name">{{ p.name }}</span>
           <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
