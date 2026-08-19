@@ -128,9 +128,9 @@ onMounted(() => {
   <div class="face-detection-section">
     <div class="face-header">
       <h3 style="margin: 0">人脸识别（博主特征库匹配）</h3>
-      <n-button size="tiny" type="primary" secondary :loading="detecting" @click="handleDetect">
+      <a-button size="mini" type="primary" :loading="detecting" @click="handleDetect">
         检测并匹配
-      </n-button>
+      </a-button>
     </div>
 
     <div v-if="loading" class="face-tip">加载中…</div>
@@ -142,46 +142,41 @@ onMounted(() => {
     <div v-else class="face-list">
       <div v-for="det in detections" :key="det.id" class="face-item">
         <span class="face-index">人脸 #{{ det.face_index + 1 }}</span>
-        <n-tag
-          v-if="det.matched_blogger_id !== null"
-          type="success"
-          size="small"
-          :bordered="false"
-        >
+        <a-tag v-if="det.matched_blogger_id !== null" color="green" size="small">
           {{ det.matched_blogger_name ?? `博主 #${det.matched_blogger_id}` }}
           <template v-if="det.confidence !== null">（{{ (det.confidence * 100).toFixed(1) }}%）</template>
-        </n-tag>
-        <n-tag v-else type="warning" size="small" :bordered="false">疑似未知人脸</n-tag>
+        </a-tag>
+        <a-tag v-else color="orange" size="small">疑似未知人脸</a-tag>
 
-        <n-select
-          size="tiny"
+        <a-select
+          size="small"
           style="width: 160px"
-          filterable
-          clearable
-          placeholder="手动指定博主"
           :options="bloggerOptions"
-          :value="det.matched_blogger_id"
+          :model-value="det.matched_blogger_id ?? undefined"
           :disabled="updatingId === det.id"
-          @update:value="(v: number | null) => handleSelectBlogger(det, v)"
+          allow-clear
+          filterable
+          placeholder="手动指定博主"
+          @change="(v: unknown) => handleSelectBlogger(det, typeof v === 'number' ? v : null)"
         />
-        <n-button
+        <a-button
           v-if="det.matched_blogger_id !== null"
-          size="tiny"
-          quaternary
+          size="mini"
+          type="text"
           :disabled="updatingId === det.id"
           @click="handleUnlink(det)"
         >
           解除
-        </n-button>
-        <n-button
-          size="tiny"
-          quaternary
-          type="error"
+        </a-button>
+        <a-button
+          size="mini"
+          type="text"
+          status="danger"
           :disabled="updatingId === det.id"
           @click="handleDelete(det)"
         >
           删除
-        </n-button>
+        </a-button>
       </div>
     </div>
   </div>
