@@ -1,18 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash scripts/ensure-services.sh > logs/ensure-services.log 2>&1",
-            "shell": "bash",
-            "async": true,
-            "timeout": 120
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }

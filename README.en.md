@@ -155,7 +155,7 @@ Open `http://localhost:17777` in your browser.
 
 > One-click restart: `bash scripts/restart.sh` will automatically stop old processes and simultaneously launch the backend, frontend, worker, and face recognition sub-service, with readiness checks.
 >
-> Auto-start: `bash scripts/ensure-services.sh` performs "health checks + only starts missing services," idempotent and lock-protected, by default invoked by Claude Code's SessionStart hook (see `.claude/settings.json`) when a new session starts, safe for concurrent sessions.
+> Auto-start: run `bash scripts/ensure-services.sh` manually — "health checks + only starts missing services," idempotent and lock-protected. Service start/restart is manual: the coding agent will not run these scripts automatically and will prompt you when a restart is needed.
 
 **Custom Ports:**
 
