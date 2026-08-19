@@ -440,10 +440,9 @@ onUnmounted(() => {
         ></a-col>
         <a-col :flex="1"
           ><a-card size="small"
-            ><div class="stat-custom">
-              <span class="stat-custom-title">通过率</span>
-              <span class="stat-custom-value">{{ qualityReviewStats.pass_rate }}%</span>
-            </div></a-card
+            ><a-statistic title="通过率" :value="qualityReviewStats.pass_rate">
+              <template #suffix>%</template>
+            </a-statistic></a-card
           ></a-col
         >
         <a-col :flex="1"
@@ -639,24 +638,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 自定义统计项（Arco Statistic 的 value 不接受字符串，百分比用自绘文本，参考 AdminStatCards 先例） */
-.stat-custom {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stat-custom-title {
-  font-size: 14px;
-  color: var(--color-text-2);
-}
-
-.stat-custom-value {
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--color-text-1);
-}
 /* 审核原因：覆盖在图片顶部的半透明红条，不占用布局高度、不遮挡底部悬停按钮 */
 .rejected-reason {
   position: absolute;

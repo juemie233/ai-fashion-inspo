@@ -7,7 +7,7 @@ import { Button, Tag, type TableColumnData } from '@arco-design/web-vue'
 import type { EChartsOption } from 'echarts'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
-import { formatMs, formatDate } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const router = useRouter()
@@ -36,6 +36,14 @@ interface QualityDashboard {
 
 const qualityData = ref<QualityDashboard | null>(null)
 const qualityLoading = ref(false)
+
+/** 平均耗时展示：拆分为数字 + 单位（a-statistic 的 value 仅接受数字，无数据时显示占位符） */
+const avgTime = computed(() => {
+  const ms = qualityData.value?.overview.avg_time_ms
+  if (ms == null) return { value: undefined, precision: 0, suffix: '' }
+  if (ms < 1000) return { value: ms, precision: 0, suffix: 'ms' }
+  return { value: Number((ms / 1000).toFixed(1)), precision: 1, suffix: 's' }
+})
 
 async function loadQuality() {
   qualityLoading.value = true
@@ -226,10 +234,12 @@ const failedColumns: TableColumnData[] = [
         ></a-col>
         <a-col :flex="1"
           ><a-card size="small"
-            ><a-statistic title="覆盖率" :value="qualityData.overview.coverage_percent" /><span
-              class="stat-custom"
-              >%</span
-            ></a-card
+            ><a-statistic
+              title="覆盖率"
+              :value="qualityData.overview.coverage_percent"
+            >
+              <template #suffix>%</template>
+            </a-statistic></a-card
           ></a-col
         >
         <a-col :flex="1"
@@ -240,12 +250,14 @@ const failedColumns: TableColumnData[] = [
         ></a-col>
         <a-col :flex="1"
           ><a-card size="small"
-            ><div class="stat-custom">
-              <span class="stat-custom-title">平均耗时</span>
-              <span class="stat-custom-value">{{
-                formatMs(qualityData.overview.avg_time_ms)
-              }}</span>
-            </div></a-card
+            ><a-statistic
+              title="平均耗时"
+              :value="avgTime.value"
+              :precision="avgTime.precision"
+              placeholder="-"
+            >
+              <template #suffix>{{ avgTime.suffix }}</template>
+            </a-statistic></a-card
           ></a-col
         >
       </a-row>
@@ -319,23 +331,5 @@ const failedColumns: TableColumnData[] = [
 <style scoped>
 .chart {
   height: 220px;
-}
-/* 自定义统计项（Arco Statistic 的 value 不接受字符串，百分比/耗时用自绘文本，参考 AdminStatCards 先例） */
-.stat-custom {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stat-custom-title {
-  font-size: 14px;
-  color: var(--color-text-2);
-}
-
-.stat-custom-value {
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--color-text-1);
 }
 </style>
