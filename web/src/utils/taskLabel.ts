@@ -3,11 +3,13 @@
 import type { Component } from 'vue'
 import {
   IconDelete,
+  IconFaceSmileFill,
   IconFileImage,
   IconSafe,
   IconScan,
   IconSync,
   IconBarChart,
+  IconUserGroup,
 } from '@arco-design/web-vue/es/icon'
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
@@ -20,6 +22,8 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   deduplicate: '近似重复检测删除',
   scraper: '采集',
   vector_backfill: '向量回填',
+  face_scan: '人脸库扫描',
+  face_match: '人脸匹配',
 }
 
 /** 采集平台中文标签（复用来源映射，单一来源避免文案漂移） */
@@ -39,6 +43,8 @@ export const TASK_TYPE_ICONS: Record<string, Component> = {
   deduplicate: IconSync,
   scraper: IconScan,
   vector_backfill: IconBarChart,
+  face_scan: IconFaceSmileFill,
+  face_match: IconUserGroup,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
@@ -76,6 +82,8 @@ export function taskTypeTagColor(type: string): string {
     deduplicate: 'green',
     scraper: 'purple',
     vector_backfill: 'cyan',
+    face_scan: 'lime',
+    face_match: 'magenta',
   }
   return map[type] || 'gray'
 }

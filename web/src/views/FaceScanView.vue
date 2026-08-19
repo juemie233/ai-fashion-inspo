@@ -511,7 +511,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
         </a-tag>
         <a-progress
           v-if="['running', 'pending'].includes(scanTask.status)"
-          :percent="scanTask.progress"
+          :percent="scanTask.progress / 100"
           size="small"
           style="width: 320px"
         />
@@ -536,7 +536,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
         </a-tag>
         <a-progress
           v-if="['running', 'pending'].includes(matchTask.status)"
-          :percent="matchTask.progress"
+          :percent="matchTask.progress / 100"
           size="small"
           style="width: 320px"
         />
