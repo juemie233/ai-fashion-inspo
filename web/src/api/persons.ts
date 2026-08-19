@@ -170,10 +170,17 @@ function createPersonApi(kind: 'bloggers' | 'models') {
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
 
-  /** 注册/重新注册博主人脸（1~5 张正脸照片，重复注册即覆盖更新特征） */
-  async registerFace(id: number, files: File[]): Promise<BloggerFaceRegisterResult> {
+  /** 注册/重新注册博主人脸：上传照片与/或已关联素材（合计 1~5 张，重复注册覆盖） */
+  async registerFace(
+    id: number,
+    files: File[],
+    inspirationIds?: string[],
+  ): Promise<BloggerFaceRegisterResult> {
     const formData = new FormData()
     files.forEach((f) => formData.append('files', f))
+    if (inspirationIds && inspirationIds.length > 0) {
+      formData.append('inspiration_ids', JSON.stringify(inspirationIds))
+    }
     // 显式 multipart：全局默认 application/json 会让 axios 把 FormData 序列化成 JSON（后端 422）
     const { data } = await apiClient.post<BloggerFaceRegisterResult>(`/bloggers/${id}/face`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -195,9 +202,11 @@ export interface BloggerFaceStatus {
   updated_at?: string | null
 }
 
-/** 单张照片的注册结果明细（部分跳过时前端逐张提示原因） */
+/** 单张图片的注册结果明细（部分跳过时前端逐张提示原因） */
 export interface FacePhotoResult {
   index: number
+  /** 来源：上传照片 / 已关联素材 */
+  source?: 'upload' | 'inspiration'
   status: 'used' | 'skipped'
   reason?: 'no_face' | 'low_confidence' | 'small_face' | null
   message?: string | null
@@ -210,6 +219,8 @@ export interface BloggerFaceRegisterResult extends BloggerFaceStatus {
   blogger_name?: string
   photos_used?: number
   photos_total?: number
+  /** 素材来源跳过警告（文件缺失/不属于该博主等） */
+  warnings?: string[]
   photo_results?: FacePhotoResult[]
 }
 

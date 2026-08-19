@@ -5,10 +5,13 @@
 ``/{blogger_id}`` 之前，否则会被单段动态路由吞掉。
 """
 
+import json
+
 from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -176,16 +179,38 @@ async def blogger_inspirations(
 @router.post("/{blogger_id}/face")
 async def register_blogger_face_api(
     blogger_id: int,
-    files: list[UploadFile] = File(..., description="博主正脸照片（1~5 张）"),
+    files: list[UploadFile] = File(None, description="博主正脸照片（1~5 张，可选）"),
+    inspiration_ids: str | None = Form(
+        None, description='已关联素材 ID 列表，JSON 数组字符串，如 "[uuid1,uuid2]"'
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """注册/重新注册博主人脸：提取特征并平均池化入库（同博主重复注册即覆盖）。"""
+    """注册/重新注册博主人脸：上传照片与/或选择已关联素材（合计 1~5 张）。
+
+    两种来源可同时提供，也可只提供一种；素材文件缺失/读取失败自动跳过并
+    在返回的 warnings 中提示。
+    """
     image_bytes_list = []
-    for f in files:
+    for f in files or []:
         data = await f.read()
         if data:
             image_bytes_list.append(data)
-    return await register_blogger_face(db, blogger_id, image_bytes_list)
+
+    ids: list[str] = []
+    if inspiration_ids:
+        try:
+            parsed = json.loads(inspiration_ids)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
+            )
+        if not isinstance(parsed, list):
+            raise HTTPException(
+                status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
+            )
+        ids = [str(i) for i in parsed if str(i).strip()]
+
+    return await register_blogger_face(db, blogger_id, image_bytes_list, ids)
 
 
 @router.get("/{blogger_id}/face")

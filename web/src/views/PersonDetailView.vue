@@ -130,12 +130,61 @@ function goAddPhotos() {
   router.push({ path: '/model-photos', query: { person_id: personId.value } })
 }
 
-// ── 人脸特征注册（仅穿搭博主：上传 1~5 张正脸照片，提取特征平均池化入库；
-//    素材人脸自动匹配博主特征库，职业模特无此人脸能力）──
+// ── 人脸特征注册（仅穿搭博主：上传照片 与/或 从已关联素材中选择图片，提取特征
+//    平均池化入库；素材人脸自动匹配博主特征库，职业模特无此人脸能力）──
 const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | null>(null)
+/** 人脸注册来源选项卡：upload 上传照片 / inspiration 从素材选择 */
+const faceTab = ref<'upload' | 'inspiration'>('upload')
 /** 已选正脸照片（UploadFileInfo 结构：支持多选/缩略图预览/单张删除） */
 const faceFileList = ref<UploadFileInfo[]>([])
 const faceUploading = ref(false)
+
+// ── 素材选择状态（Tab2：该博主已关联素材的缩略图网格，勾选参与注册）──
+const faceInspItems = ref<PersonInspiration[]>([])
+const faceInspTotal = ref(0)
+const faceInspPage = ref(1)
+const faceInspPageSize = 30
+const faceInspLoading = ref(false)
+/** 已勾选的素材 ID（限制最多 5 张，与上传照片合计不超过 5） */
+const selectedFaceInspIds = ref<Set<string>>(new Set())
+
+/** 加载该博主已关联素材（分页，供人脸注册选择） */
+async function loadFaceInspirations(page: number = 1) {
+  faceInspLoading.value = true
+  try {
+    const data = await api.value.fetchInspirations(personId.value, page, faceInspPageSize)
+    faceInspItems.value = data.items ?? []
+    faceInspTotal.value = data.total ?? 0
+    faceInspPage.value = page
+  } catch {
+    message.error('加载素材失败')
+  } finally {
+    faceInspLoading.value = false
+  }
+}
+
+/** 勾选/取消素材（最多 5 张，超出提示） */
+function toggleFaceInsp(id: string) {
+  const next = new Set(selectedFaceInspIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    const uploadCount = faceFileList.value.filter((f) => !!f.file).length
+    if (next.size + uploadCount >= 5) {
+      message.warning('照片与素材合计最多 5 张')
+      return
+    }
+    next.add(id)
+  }
+  selectedFaceInspIds.value = next
+}
+
+/** 切换到「从素材选择」Tab 时首次加载该博主素材 */
+watch(faceTab, (tab) => {
+  if (tab === 'inspiration' && faceInspItems.value.length === 0) {
+    loadFaceInspirations(1)
+  }
+})
 
 async function loadFaceStatus() {
   if (kind.value !== 'blogger') return
@@ -146,36 +195,46 @@ async function loadFaceStatus() {
   }
 }
 
-/** 注册 / 重新注册博主人脸（重复注册覆盖旧特征） */
+/** 注册 / 重新注册博主人脸（上传照片 + 已选素材可混合；重复注册覆盖旧特征） */
 async function handleRegisterFace() {
   const files = faceFileList.value
     .map((f) => f.file)
     .filter((f): f is File => !!f)
-  if (files.length === 0) {
-    message.warning('请先选择 1~5 张博主正脸照片')
+  const selectedIds = [...selectedFaceInspIds.value]
+  if (files.length === 0 && selectedIds.length === 0) {
+    message.warning('请选择照片或勾选素材（合计 1~5 张）')
     return
   }
-  if (files.length > 5) {
-    message.warning('最多上传 5 张照片')
+  if (files.length + selectedIds.length > 5) {
+    message.warning('照片与素材合计最多 5 张')
     return
   }
   faceUploading.value = true
   try {
-    const r = await bloggersApi.registerFace(personId.value, files)
+    const r = await bloggersApi.registerFace(personId.value, files, selectedIds)
     const skipped = (r.photo_results ?? []).filter((p) => p.status === 'skipped')
+    const sourceLabel = (p: { source?: string }) => (p.source === 'inspiration' ? '素材' : '照片')
+    let detail = ''
     if (skipped.length > 0) {
-      // 部分照片被跳过：明确提示哪几张、为什么
-      const detail = skipped.map((p) => `第${p.index}张：${p.message ?? '未检出清晰人脸'}`).join('；')
-      message.warning(
-        `注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）。已跳过：${detail}`,
-        { duration: 8000 },
-      )
+      detail =
+        '；已跳过：' +
+        skipped
+          .map((p) => `第${p.index}张${sourceLabel(p)}：${p.message ?? '未检出清晰人脸'}`)
+          .join('；')
+    }
+    const warnings = r.warnings ?? []
+    if (warnings.length > 0) {
+      detail += `；${warnings.join('；')}`
+    }
+    if (detail) {
+      message.warning(`注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）${detail}`, {
+        duration: 8000,
+      })
     } else {
-      message.success(
-        `人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张照片检出人脸）`,
-      )
+      message.success(`人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）`)
     }
     faceFileList.value = []
+    selectedFaceInspIds.value = new Set()
     await loadFaceStatus()
   } catch (e) {
     message.error(getApiErrorMessage(e, '人脸注册失败'))
@@ -204,6 +263,12 @@ async function loadDetail() {
   await loadInspirations()
   await loadPhotoSets()
   await loadFaceStatus()
+  // 人物切换时重置人脸注册的素材选择状态
+  faceTab.value = 'upload'
+  faceFileList.value = []
+  faceInspItems.value = []
+  faceInspPage.value = 1
+  selectedFaceInspIds.value = new Set()
 }
 
 async function loadInspirations() {
@@ -369,7 +434,7 @@ watch(personId, () => {
           <n-spin v-if="photoSetsLoading" :show="true" style="margin: 24px 0" />
         </n-card>
 
-        <!-- 人脸特征注册（仅穿搭博主：素材人脸自动匹配依赖此特征库） -->
+        <!-- 人脸特征注册（仅穿搭博主：上传照片 与/或 从已关联素材中选择图片） -->
         <n-card v-if="kind === 'blogger'" size="small" class="face-register-card">
           <div class="items-header">
             <h3 style="margin: 0">人脸特征注册</h3>
@@ -379,25 +444,83 @@ watch(personId, () => {
             <n-tag v-else type="warning" size="small" :bordered="false">未注册</n-tag>
           </div>
           <p class="face-hint">
-            上传 1~5 张该博主的清晰正脸照片，系统提取人脸特征并平均池化入库；
-            素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
+            上传正脸照片或从已关联素材中选择图片（两种来源合计 1~5 张），系统提取人脸特征并
+            平均池化入库；素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
           </p>
-          <div class="face-upload-row">
-            <n-upload
-              v-model:file-list="faceFileList"
-              multiple
-              :max="5"
-              accept="image/*"
-              list-type="image"
-              show-remove-button
-            >
-              <n-button size="small">选择照片（1~5 张）</n-button>
-            </n-upload>
+
+          <n-tabs v-model:value="faceTab" size="small" type="line" animated>
+            <!-- Tab1：上传照片（原有方式） -->
+            <n-tab-pane name="upload" tab="上传照片">
+              <n-upload
+                v-model:file-list="faceFileList"
+                multiple
+                :max="5"
+                accept="image/*"
+                list-type="image"
+                show-remove-button
+              >
+                <n-button size="small">选择照片（最多 5 张）</n-button>
+              </n-upload>
+            </n-tab-pane>
+
+            <!-- Tab2：从已关联素材中选择图片 -->
+            <n-tab-pane name="inspiration" tab="从素材选择">
+              <div class="face-insp-grid">
+                <div
+                  v-for="item in faceInspItems"
+                  :key="item.inspiration_id"
+                  class="face-insp-item"
+                  :class="{ checked: selectedFaceInspIds.has(item.inspiration_id) }"
+                  :title="item.inspiration_id"
+                  @click="toggleFaceInsp(item.inspiration_id)"
+                >
+                  <img
+                    :src="getFileUrl(item.thumbnail_path || item.file_path)"
+                    :alt="item.inspiration_id"
+                    loading="lazy"
+                  />
+                  <div
+                    v-if="selectedFaceInspIds.has(item.inspiration_id)"
+                    class="face-insp-check"
+                  >
+                    ✓
+                  </div>
+                </div>
+                <n-empty
+                  v-if="!faceInspLoading && faceInspItems.length === 0"
+                  description="暂无已关联素材，可先上传素材并关联该博主"
+                  size="small"
+                  style="grid-column: 1 / -1; padding: 16px 0"
+                />
+                <div v-if="faceInspLoading" class="face-insp-loading">
+                  <n-spin size="small" />
+                  <span>加载中...</span>
+                </div>
+              </div>
+              <n-pagination
+                v-if="faceInspTotal > faceInspPageSize"
+                style="margin-top: 10px; justify-content: center"
+                :page="faceInspPage"
+                :page-size="faceInspPageSize"
+                :item-count="faceInspTotal"
+                @update:page="loadFaceInspirations"
+              />
+            </n-tab-pane>
+          </n-tabs>
+
+          <!-- 注册按钮（上传照片 + 勾选素材合并提交） -->
+          <div class="face-upload-row" style="margin-top: 10px; justify-content: space-between">
+            <n-text depth="3" style="font-size: 12px">
+              已选：{{ faceFileList.filter((f) => !!f.file).length }} 张照片 +
+              {{ selectedFaceInspIds.size }} 张素材（合计 ≤ 5）
+            </n-text>
             <n-button
               size="small"
               type="primary"
               :loading="faceUploading"
-              :disabled="faceFileList.length === 0"
+              :disabled="
+                faceFileList.filter((f) => !!f.file).length + selectedFaceInspIds.size === 0
+              "
               @click="handleRegisterFace"
             >
               {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
@@ -723,6 +846,67 @@ watch(personId, () => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* 人脸注册素材选择网格：缩略图 + 勾选角标 */
+.face-insp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+  min-height: 60px;
+}
+
+.face-insp-item {
+  position: relative;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, opacity 0.15s;
+  aspect-ratio: 3 / 4;
+}
+
+.face-insp-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #f5f5f5;
+}
+
+.face-insp-item.checked {
+  border-color: #18a058;
+}
+
+.face-insp-item.checked img {
+  opacity: 0.75;
+}
+
+.face-insp-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #18a058;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.face-insp-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 0;
+  color: #999;
+  font-size: 12px;
 }
 
 .photo-sets-grid {

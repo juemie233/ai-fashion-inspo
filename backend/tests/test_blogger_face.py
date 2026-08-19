@@ -350,3 +350,127 @@ def test_detect_inspiration_faces_subservice_404_empty(client, upload, monkeypat
     body = r.json()
     assert body["face_count"] == 0
     assert body["detections"] == []
+
+
+# ═══════════════════════════════════════════════════════════════
+#  素材来源注册（从已关联素材中选择图片）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _link_inspiration(client, insp_id: str, blogger_id: int) -> None:
+    """把素材关联到博主（POST /api/inspirations/{id}/bloggers）。"""
+    r = client.post(f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger_id]})
+    assert r.status_code == 200, r.text
+
+
+def test_register_blogger_face_from_inspiration(client, create_blogger, upload, monkeypatch):
+    """从已关联素材注册：inspiration_ids 作为 Form 字段传递，素材图片参与特征提取。"""
+    blogger = create_blogger(name="素材脸博")
+    insp_id = upload().json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+    _patch_embed(monkeypatch, _unit_embedding(3))
+
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{insp_id}"]'},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["registered"] is True
+    assert body["photos_used"] == 1
+    assert body["photo_results"][0]["source"] == "inspiration"
+
+    # 状态已注册
+    s = client.get(f"/api/bloggers/{blogger['id']}/face").json()
+    assert s["registered"] is True
+
+
+def test_register_blogger_face_mixed_sources(client, create_blogger, upload, monkeypatch):
+    """上传照片 + 素材混合注册：合计特征平均池化，photo_results 区分来源。"""
+    blogger = create_blogger(name="混合脸博")
+    insp_id = upload().json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+    _patch_embed(monkeypatch, _unit_embedding(4))
+
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{insp_id}"]'},
+        files=[("files", ("up.jpg", b"upload-photo", "image/jpeg"))],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["photos_used"] == 2
+    sources = {p["source"] for p in body["photo_results"]}
+    assert sources == {"upload", "inspiration"}
+
+
+def test_register_blogger_face_invalid_inspiration_warned(
+    client, create_blogger, upload, monkeypatch
+):
+    """素材不存在/不属于该博主：跳过并记入 warnings；有效来源照常注册。"""
+    blogger = create_blogger(name="无效素材博")
+    insp_id = upload().json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+    _patch_embed(monkeypatch, _unit_embedding(5))
+
+    # 一个有效素材 + 一个不存在 ID
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{insp_id}","no-such-id"]'},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["photos_used"] == 1
+    assert body["warnings"], "应包含素材跳过警告"
+    assert "no-such-id" in body["warnings"][0]
+
+    # 不属于该博主的素材：先建另一博主并关联，再传给本博主 → 同样跳过
+    other_blogger = create_blogger(name="他人博")
+    other_insp = upload(color=(10, 200, 100)).json()["id"]
+    _link_inspiration(client, other_insp, other_blogger["id"])
+    r2 = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{other_insp}"]'},
+        files=[("files", ("up.jpg", b"upload-photo", "image/jpeg"))],
+    )
+    assert r2.status_code == 200, r2.text
+    assert any("不属于该博主" in w for w in r2.json()["warnings"])
+
+
+def test_register_blogger_face_no_source_400(client, create_blogger):
+    """未提供任何来源（无照片、无素材 ID）→ 400。"""
+    blogger = create_blogger(name="空源博")
+    r = client.post(f"/api/bloggers/{blogger['id']}/face", data={})
+    assert r.status_code == 400
+    assert "至少提供一种来源" in r.json()["detail"]
+
+
+def test_register_blogger_face_total_sources_limit(client, create_blogger, upload, monkeypatch):
+    """照片 + 素材合计超过 5 张 → 422。"""
+    import json
+
+    blogger = create_blogger(name="超限博")
+    ids = []
+    for i in range(3):
+        insp_id = upload(color=(i * 40, 100, 100)).json()["id"]
+        _link_inspiration(client, insp_id, blogger["id"])
+        ids.append(insp_id)
+    _patch_embed(monkeypatch, _unit_embedding(6))
+
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": json.dumps(ids)},
+        files=[("files", (f"p{i}.jpg", b"x", "image/jpeg")) for i in range(3)],
+    )
+    assert r.status_code == 422
+    assert "合计最多" in r.json()["detail"]
+
+
+def test_register_blogger_face_invalid_ids_format(client, create_blogger):
+    """inspiration_ids 非 JSON 数组 → 422。"""
+    blogger = create_blogger(name="格式博")
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": "not-a-json"},
+    )
+    assert r.status_code == 422

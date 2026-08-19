@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from datetime import datetime, timezone
@@ -80,27 +81,86 @@ async def register_blogger_face(
     db: AsyncSession,
     blogger_id: int,
     image_bytes_list: list[bytes],
+    inspiration_ids: list[str] | None = None,
 ) -> dict:
-    """注册/重新注册博主人脸：逐张照片提取特征（取每张图置信度最高的人脸），
-    平均池化为一条特征 upsert 入库。
+    """注册/重新注册博主人脸：上传照片与已关联素材两种来源。
 
-    重新注册即覆盖（同 blogger_id 唯一），符合需求「提供重新注册功能」。
+    逐张图片提取特征（取每张图置信度最高的人脸），平均池化为一条特征
+    upsert 入库；同 blogger_id 唯一，重新注册即覆盖。
+
+    来源说明:
+        - ``image_bytes_list``: 上传的正脸照片（可选）
+        - ``inspiration_ids``: 该博主已关联素材的 ID 列表（可选，从素材文件
+          读取图片参与特征提取）；两种来源可同时提供，合计不超过
+          MAX_REGISTER_PHOTOS 张
+
+    素材文件不存在/读取失败时跳过该素材并记入 ``warnings``；所有来源均
+    未检出清晰人脸时抛 400（与纯上传路径语义一致）。
     """
-    if not image_bytes_list:
-        raise HTTPException(status_code=422, detail="请上传 1~5 张博主正脸照片")
-    if len(image_bytes_list) > MAX_REGISTER_PHOTOS:
+    inspiration_ids = [i for i in (inspiration_ids or []) if i]
+    total_sources = len(image_bytes_list) + len(inspiration_ids)
+    if total_sources == 0:
         raise HTTPException(
-            status_code=422, detail=f"最多上传 {MAX_REGISTER_PHOTOS} 张照片"
+            status_code=400, detail="请至少提供一种来源：上传照片或选择已关联素材"
+        )
+    if total_sources > MAX_REGISTER_PHOTOS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"照片与素材合计最多 {MAX_REGISTER_PHOTOS} 张",
         )
 
     blogger = await db.get(Blogger, blogger_id)
     if not blogger:
         raise HTTPException(status_code=404, detail="博主未找到")
 
+    # ── 从已关联素材读取图片（磁盘 I/O 放线程池；缺失/失败跳过并记警告）──
+    warnings: list[str] = []
+    upload_count = len(image_bytes_list)
+    if inspiration_ids:
+        from app.models.inspiration import Inspiration, NOT_DELETED
+        from app.models.person import InspirationBlogger
+
+        rows = await db.execute(
+            select(Inspiration.id, Inspiration.file_path)
+            .join(
+                InspirationBlogger,
+                InspirationBlogger.inspiration_id == Inspiration.id,
+            )
+            .where(
+                InspirationBlogger.blogger_id == blogger_id,
+                Inspiration.id.in_(inspiration_ids),
+                NOT_DELETED,
+            )
+        )
+        insp_map = {r[0]: r[1] for r in rows.all()}
+        for iid in inspiration_ids:
+            fpath = insp_map.get(iid)
+            if not fpath:
+                warnings.append(f"素材 {iid} 不存在或不属于该博主，已跳过")
+                continue
+            full_path = settings.storage_root / fpath
+            try:
+                data = await asyncio.to_thread(full_path.read_bytes)
+            except OSError as e:
+                warnings.append(f"素材 {iid} 文件读取失败（{e}），已跳过")
+                continue
+            if data:
+                image_bytes_list.append(data)
+
+    if not image_bytes_list:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "所选素材均无法读取，请更换素材或上传照片"
+                + (f"（{'；'.join(warnings)}）" if warnings else "")
+            ),
+        )
+
     embeddings: list[np.ndarray] = []
-    # 每张照片的结果明细（供前端逐张提示跳过原因）
+    # 每张照片的结果明细（供前端逐张提示跳过原因；含来源：upload/inspiration）
     photo_results: list[dict] = []
     for idx, data in enumerate(image_bytes_list, start=1):
+        source = "upload" if idx <= upload_count else "inspiration"
         try:
             result = await face_client.embed(data)
         except FaceServiceHttpError as e:
@@ -110,6 +170,7 @@ async def register_blogger_face(
                 photo_results.append(
                     {
                         "index": idx,
+                        "source": source,
                         "status": "skipped",
                         "reason": "no_face",
                         "message": "未检测到人脸",
@@ -127,6 +188,7 @@ async def register_blogger_face(
             photo_results.append(
                 {
                     "index": idx,
+                    "source": source,
                     "status": "skipped",
                     "reason": "no_face",
                     "message": "未检测到人脸",
@@ -144,6 +206,7 @@ async def register_blogger_face(
             photo_results.append(
                 {
                     "index": idx,
+                    "source": source,
                     "status": "skipped",
                     "reason": "low_confidence",
                     "message": f"人脸置信度偏低（{det_score:.2f}），建议换更清晰的正脸照片",
@@ -156,6 +219,7 @@ async def register_blogger_face(
             photo_results.append(
                 {
                     "index": idx,
+                    "source": source,
                     "status": "skipped",
                     "reason": "small_face",
                     "message": f"人脸过小（宽占画面 {face_ratio * 100:.1f}%），建议裁剪放大后上传",
@@ -167,6 +231,7 @@ async def register_blogger_face(
         photo_results.append(
             {
                 "index": idx,
+                "source": source,
                 "status": "used",
                 "reason": None,
                 "message": None,
@@ -183,8 +248,8 @@ async def register_blogger_face(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"所有照片均未检出清晰人脸（{reasons}），"
-                "请上传正脸、光线充足的照片"
+                f"所有图片均未检出清晰人脸（{reasons}），"
+                "请上传正脸、光线充足的照片或更换素材"
             ),
         )
 
@@ -211,6 +276,7 @@ async def register_blogger_face(
         "blogger_name": blogger.name,
         "photos_used": len(embeddings),
         "photos_total": len(image_bytes_list),
+        "warnings": warnings,
         "updated_at": _now_iso(),
         "photo_results": photo_results,
     }
