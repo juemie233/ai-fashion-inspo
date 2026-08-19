@@ -90,6 +90,7 @@ def clean_state(client):
         settings.videos_dir,
         settings.person_photos_dir,
         settings.person_thumbnails_dir,
+        settings.storage_root / "faces",  # 博主人脸缩略图缓存
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
         settings.storage_root / "_crop_backup",  # 裁剪原图备份（按时间戳分目录）
         settings.storage_root / "_crop_dups",  # 裁剪重复对比预览（按批次分目录）

@@ -345,9 +345,10 @@ watch(personId, () => {
         <n-card size="small" class="header-card">
           <div class="header-row">
             <div class="avatar-wrap">
+              <!-- 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 名字首字 -->
               <img
-                v-if="detail.avatar_path"
-                :src="getFileUrl(detail.avatar_path)"
+                v-if="detail.face_thumb_path || detail.avatar_path"
+                :src="getFileUrl(detail.face_thumb_path || (detail.avatar_path as string))"
                 class="avatar-img"
                 :alt="detail.name"
               />

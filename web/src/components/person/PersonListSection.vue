@@ -191,8 +191,13 @@ const columns: DataTableColumns<Person> = [
     render: (row) =>
       h('div', { class: 'person-cell' }, [
         h('span', { class: 'person-avatar' }, [
-          row.avatar_path
-            ? h('img', { src: getFileUrl(row.avatar_path), class: 'avatar-img', alt: row.name })
+          // 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 通用人形占位
+          row.face_thumb_path || row.avatar_path
+            ? h('img', {
+                src: getFileUrl(row.face_thumb_path || (row.avatar_path as string)),
+                class: 'avatar-img',
+                alt: row.name,
+              })
             : // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
               h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
         ]),
@@ -496,6 +501,14 @@ onBeforeUnmount(() => {
       <n-space vertical :size="8">
         <div v-for="(p, i) in topPersons" :key="p.id" class="top-row" @click="goDetail(p)">
           <span class="top-rank">{{ i + 1 }}</span>
+          <span class="top-avatar">
+            <img
+              v-if="p.face_thumb_path || p.avatar_path"
+              :src="getFileUrl(p.face_thumb_path || (p.avatar_path as string))"
+              :alt="p.name"
+            />
+            <span v-else aria-hidden="true">👤</span>
+          </span>
           <span class="top-name">{{ p.name }}</span>
           <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
         </div>
@@ -602,6 +615,26 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 热门排行头像：圆形小图（人脸缩略图或手动头像） */
+.top-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef1f6;
+  font-size: 14px;
+}
+
+.top-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .top-name {

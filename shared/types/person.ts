@@ -37,6 +37,8 @@ export interface Person {
   ip_location?: string | null
   profile_url?: string | null
   avatar_path?: string | null
+  /** 人脸缩略图相对路径（博主专属：从已匹配素材的人脸检测框裁剪；模特无此字段） */
+  face_thumb_path?: string | null
   bio?: string | null
   source?: string
   created_at?: string | null

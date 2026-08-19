@@ -35,6 +35,11 @@ from app.services.person_service import (
     blogger_service,
 )
 from app.services.blogger_face import get_blogger_face_status, register_blogger_face
+from app.services.face_thumbnail import (
+    delete_face_thumbnail,
+    ensure_blogger_face_thumbnail,
+    ensure_blogger_face_thumbnails,
+)
 
 router = APIRouter(prefix="/api/bloggers", tags=["bloggers"])
 
@@ -52,6 +57,10 @@ async def list_bloggers(
     items, total = await blogger_service.list_items(
         db, page=page, size=size, search=search, platform=platform, sort=sort
     )
+    # 批量补齐人脸缩略图（一次查询候选检测 + 缺失缓存裁剪），返回 face_thumb_path
+    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
+    for item in items:
+        item["face_thumb_path"] = thumbs.get(item["id"])
     return {"items": items, "total": total, "page": page, "size": size}
 
 
@@ -106,7 +115,11 @@ async def top_bloggers(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """按素材数倒序返回热门博主排行。"""
-    return await blogger_service.top(db, limit)
+    items = await blogger_service.top(db, limit)
+    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
+    for item in items:
+        item["face_thumb_path"] = thumbs.get(item["id"])
+    return items
 
 
 @router.get("/suggestions", response_model=list[BloggerOut])
@@ -115,7 +128,11 @@ async def suggest_bloggers(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """按名称模糊匹配博主（用于前端选择去重）。"""
-    return await blogger_service.suggest(db, name)
+    items = await blogger_service.suggest(db, name)
+    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
+    for item in items:
+        item["face_thumb_path"] = thumbs.get(item["id"])
+    return items
 
 
 @router.get("/{blogger_id}", response_model=BloggerDetailOut)
@@ -129,6 +146,7 @@ async def get_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> di
     count = await blogger_service.count_inspirations(db, blogger_id)
     profile = await blogger_service.style_profile(db, blogger_id)
     base = blogger_service._to_dict(blogger, count)
+    base["face_thumb_path"] = await ensure_blogger_face_thumbnail(db, blogger_id)
     return {**base, "style_profile": profile}
 
 
@@ -156,6 +174,8 @@ async def delete_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=404, detail=e.message)
     except PersonHasInspirationsError as e:
         raise HTTPException(status_code=400, detail=e.message)
+    # 清理人脸缩略图缓存（博主已删，避免残留孤儿文件）
+    delete_face_thumbnail(blogger_id)
 
 
 @router.get("/{blogger_id}/inspirations")

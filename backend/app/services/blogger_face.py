@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -374,6 +375,9 @@ async def detect_inspiration_faces(
             inspiration_id=inspiration_id,
             face_index=idx,
             embedding=np.asarray(face["embedding"], dtype=np.float32).tobytes(),
+            # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
+            # 子服务偶发缺失时置空，不影响检测匹配主流程
+            bbox=json.dumps(face["bbox"]) if isinstance(face.get("bbox"), list) else None,
             matched_blogger_id=best_blogger_id,
             confidence=round(best_score, 4) if best_blogger_id is not None else None,
         )

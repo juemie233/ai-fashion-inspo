@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +61,9 @@ class InspirationFaceDetection(Base):
     )
     face_index: Mapped[int] = mapped_column(Integer)  # 图内人脸序号（0 起）
     embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32
+    # 人脸检测框（原图坐标 [x1, y1, x2, y2] 的 JSON 字符串，可空）：
+    # 用于从素材图中裁剪人脸小图（博主列表头像），检测子服务返回、入库保留
+    bbox: Mapped[str | None] = mapped_column(Text, nullable=True)
     matched_blogger_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("bloggers.id", ondelete="SET NULL"),

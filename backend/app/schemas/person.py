@@ -100,6 +100,8 @@ class BloggerOut(_PersonOutFields):
     ip_location: str | None = None
     profile_url: str | None = None
     avatar_path: str | None = None
+    # 人脸缩略图相对路径（从已匹配素材的人脸检测框裁剪缓存；无则 null）
+    face_thumb_path: str | None = None
     bio: str | None = None
 
 
