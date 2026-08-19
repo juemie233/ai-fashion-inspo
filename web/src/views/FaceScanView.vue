@@ -9,7 +9,7 @@
  */
 
 import { Message } from '@arco-design/web-vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
@@ -166,11 +166,11 @@ async function toggleDetail(person: PersonAggregateItem) {
   const key = `${person.person_type}:${person.person_id}`
   if (detailKey.value === key) {
     detailKey.value = ''
-    detailChecked.value.clear()
+    detailChecked.value = new Set()
     return
   }
   detailKey.value = key
-  detailChecked.value.clear()
+  detailChecked.value = new Set()
   detailPage.value = 1
   await loadDetail()
 }
@@ -474,13 +474,38 @@ function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
 }
 
-/** 勾选/取消（Arco checkbox change 值类型较宽，统一按真值处理） */
-function toggleChecked(set: Set<number>, id: number, checked: unknown) {
+/** 勾选/取消（Arco checkbox change 值类型较宽，统一按真值处理；替换式 Set 触发响应式） */
+function toggleChecked(target: Ref<Set<number>>, id: number, checked: unknown) {
+  const next = new Set(target.value)
   if (checked) {
-    set.add(id)
+    next.add(id)
   } else {
-    set.delete(id)
+    next.delete(id)
   }
+  target.value = next
+}
+
+/** 明细勾选（模板中 ref 自动解包，经 wrapper 传 ref 对象） */
+function toggleDetailChecked(id: number, checked: unknown) {
+  toggleChecked(detailChecked, id, checked)
+}
+
+/** 未匹配勾选（同上） */
+function toggleUnmatchedChecked(id: number, checked: unknown) {
+  toggleChecked(unmatchedChecked, id, checked)
+}
+
+/** 全选/取消全选当前明细页（已全部勾选时点击为取消全选） */
+function toggleSelectAllDetail() {
+  if (detailItems.value.length === 0) return
+  const next = new Set(detailChecked.value)
+  const allSelected = detailItems.value.every((i) => next.has(i.detection_id))
+  if (allSelected) {
+    detailItems.value.forEach((i) => next.delete(i.detection_id))
+  } else {
+    detailItems.value.forEach((i) => next.add(i.detection_id))
+  }
+  detailChecked.value = next
 }
 
 /** 人物选择器过滤（按名称关键字匹配） */
@@ -650,9 +675,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
                           :model-value="detailChecked.has(item.detection_id)"
-                          @change="
-                            (v: unknown) => toggleChecked(detailChecked, item.detection_id, v)
-                          "
+                          @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
                         />
                         <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
                       </div>
@@ -682,6 +705,18 @@ function filterOption(input: string, option: { label?: string }): boolean {
                       />
                     </a-space>
                     <a-space :size="6">
+                      <a-button
+                        size="mini"
+                        :disabled="detailItems.length === 0"
+                        @click="toggleSelectAllDetail"
+                      >
+                        {{
+                          detailItems.length > 0 &&
+                          detailItems.every((i) => detailChecked.has(i.detection_id))
+                            ? '取消全选'
+                            : '全选'
+                        }}
+                      </a-button>
                       <a-button
                         size="mini"
                         type="primary"
@@ -752,9 +787,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
                           :model-value="detailChecked.has(item.detection_id)"
-                          @change="
-                            (v: unknown) => toggleChecked(detailChecked, item.detection_id, v)
-                          "
+                          @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
                         />
                         <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
                       </div>
@@ -842,7 +875,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 <img :src="thumbUrl(item)" loading="lazy" />
                 <a-checkbox
                   :model-value="unmatchedChecked.has(item.detection_id)"
-                  @change="(v: unknown) => toggleChecked(unmatchedChecked, item.detection_id, v)"
+                  @change="(v: unknown) => toggleUnmatchedChecked(item.detection_id, v)"
                 />
               </div>
             </div>
