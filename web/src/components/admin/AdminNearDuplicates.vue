@@ -4,10 +4,12 @@
  * 扫描出近似重复组后自动打开对比弹窗：左右并排展示每组前两张素材，
  * 由用户决定保留哪一张（或都保留跳过）；全部处理完统一提交删除任务，
  * 物理删除冗余素材（复用批量删除任务 + 审计留痕）。
+ * 若两张都不满意，可点「删除两张」立即提交删除当前两张并自动切到下一对候选。
  */
 
 import { computed, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import apiClient from '@/api/client'
 import {
   fetchNearDuplicates,
   type NearDuplicateFile,
@@ -16,10 +18,13 @@ import {
 } from '@/api/admin'
 import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { collectIdsToDelete } from '@/utils/nearDup'
 
 const emit = defineEmits<{
   (e: 'delete-selected', ids: string[]): void
+  /** 「删除两张」已提交批量删除任务，父组件接管进度轮询（任务完成后刷新统计） */
+  (e: 'task-started', taskId: number, message: string): void
 }>()
 
 const message = useMessage()
@@ -146,6 +151,50 @@ function skipGroup() {
   const g = currentGroup.value
   if (!g) return
   decideDelete(collectIdsToDelete(g, 'skip'))
+}
+
+/** 正在提交「删除两张」的删除任务 */
+const deletingBoth = ref(false)
+
+/**
+ * 删除当前对比的两张素材：确认后立即提交批量删除任务（物理删除，复用
+ * batch-delete 任务 + 审计留痕）。提交成功后将这两张从当前组移除：
+ * 组内剩余 ≥2 张则继续对比该组剩余素材，否则整组移出候选队列并展示下一组；
+ * 候选队列清空时显示「暂无更多近似重复素材」。提交失败仅提示错误，不改动界面状态。
+ */
+async function deleteBoth() {
+  const g = currentGroup.value
+  const left = leftFile.value
+  const right = rightFile.value
+  if (!g || !left || !right || deletingBoth.value) return
+  deletingBoth.value = true
+  try {
+    const ids = collectIdsToDelete(g, 'delete-both')
+    // 直接调用批量删除接口并等待结果：失败时不改动候选列表
+    const { data } = await apiClient.post<{ message: string; task_id: number }>(
+      '/admin/batch-delete',
+      { ids },
+    )
+    emit('task-started', data.task_id, data.message)
+
+    // 从当前组中移除已删除的两张；剩余不足两张时整组移出候选队列
+    g.files = g.files.filter((f) => f.id !== left.id && f.id !== right.id)
+    if (g.files.length < 2) {
+      dupGroups.value.splice(dupIndex.value, 1)
+      if (dupGroups.value.length === 0) {
+        // 候选队列清空：若还有待提交的删除决定，进入提交确认视图；否则显示空状态
+        if (deletingIds.value.size > 0) {
+          allDone.value = true
+        }
+      } else if (dupIndex.value >= dupGroups.value.length) {
+        dupIndex.value = dupGroups.value.length - 1
+      }
+    }
+  } catch (e) {
+    message.error(getApiErrorMessage(e, '删除两张失败'))
+  } finally {
+    deletingBoth.value = false
+  }
 }
 
 /** 提交删除：把全部待删 ID 交给父组件（批量删除任务 + 审计留痕） */
@@ -301,14 +350,32 @@ function favoriteLabel(f: NearDuplicateFile): string {
       </div>
 
       <p class="dup-hint">
-        组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；选择保留一张，其余将
-        <strong>永久删除</strong>（文件与记录不可恢复）。
+        组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；可保留一张（其余将
+        <strong>永久删除</strong>，文件与记录不可恢复），或点「删除两张」将当前两张一并删除。
       </p>
 
       <div class="dup-actions">
-        <n-button type="primary" @click="keepLeft">保留左边</n-button>
-        <n-button type="warning" @click="keepRight">保留右边</n-button>
-        <n-button quaternary @click="skipGroup">都保留（跳过本组）</n-button>
+        <n-button type="primary" :disabled="deletingBoth" @click="keepLeft">保留左边</n-button>
+        <n-button type="warning" :disabled="deletingBoth" @click="keepRight">保留右边</n-button>
+        <n-button quaternary :disabled="deletingBoth" @click="skipGroup"
+          >都保留（跳过本组）</n-button
+        >
+        <n-popconfirm
+          :positive-button-props="{ type: 'error' }"
+          @positive-click="deleteBoth"
+        >
+          <template #trigger>
+            <n-button
+              type="error"
+              ghost
+              :loading="deletingBoth"
+              :disabled="!leftFile || !rightFile"
+            >
+              删除两张
+            </n-button>
+          </template>
+          确定要同时删除这两张素材吗？将物理删除（文件与记录不可恢复），确认后自动切换到下一组。
+        </n-popconfirm>
       </div>
 
       <div class="dup-progress">已决定删除 {{ deleteCount }} 个素材</div>
@@ -332,6 +399,20 @@ function favoriteLabel(f: NearDuplicateFile): string {
               将物理删除 {{ deleteCount }} 个素材（文件与记录不可恢复），确定继续？
             </n-popconfirm>
             <n-button :disabled="submitting" @click="closeDupModal">关闭（不删除）</n-button>
+          </n-space>
+        </template>
+      </n-result>
+    </template>
+
+    <!-- 候选队列已清空（可能部分素材已通过「删除两张」提交删除） -->
+    <template v-else-if="!allDone && dupGroups.length === 0">
+      <n-result status="success" title="暂无更多近似重复素材" style="margin: 8px 0">
+        <template #description>
+          当前候选列表中的近似重复素材已全部处理完毕，可关闭弹窗或重新扫描发现其他素材
+        </template>
+        <template #footer>
+          <n-space justify="center">
+            <n-button @click="closeDupModal">完成</n-button>
           </n-space>
         </template>
       </n-result>

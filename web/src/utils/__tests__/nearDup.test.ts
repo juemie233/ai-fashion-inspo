@@ -49,6 +49,16 @@ describe('collectIdsToDelete', () => {
     expect(collectIdsToDelete(g, 'skip')).toEqual([])
   })
 
+  it('delete-both：两张组删除当前对比的两张', () => {
+    const g = makeGroup(['a', 'b'])
+    expect(collectIdsToDelete(g, 'delete-both')).toEqual(['a', 'b'])
+  })
+
+  it('delete-both：多张组仅删除前两张，组内其余不处理', () => {
+    const g = makeGroup(['a', 'b', 'c', 'd'])
+    expect(collectIdsToDelete(g, 'delete-both')).toEqual(['a', 'b'])
+  })
+
   it('多张组 keep-right 保留的是第二张而非 keeper', () => {
     // keeper 为 a，但用户选择保留右边（b）
     const g = makeGroup(['a', 'b', 'c'], 'a')

@@ -244,6 +244,22 @@ async function handleNearDuplicateDelete(ids: string[]) {
   }
 }
 
+/** 近似重复页「删除两张」：子组件已提交批量删除任务，接管进度轮询（任务完成后刷新统计） */
+function handleTaskStarted(taskId: number, msg: string) {
+  adminTask.value = {
+    id: taskId,
+    type: 'batch_delete',
+    status: 'pending',
+    progress: 0,
+    total: 0,
+    done: 0,
+    result: null,
+    error: null,
+  }
+  message.success(msg)
+  startAdminPolling(taskId, () => handleAdminTaskDone())
+}
+
 // ── 生命周期 ──
 
 onMounted(() => {
@@ -308,7 +324,10 @@ onUnmounted(() => {
 
       <!-- 近似重复（感知哈希） -->
       <n-tab-pane name="neardup" tab="近似重复">
-        <admin-near-duplicates @delete-selected="handleNearDuplicateDelete" />
+        <admin-near-duplicates
+          @delete-selected="handleNearDuplicateDelete"
+          @task-started="handleTaskStarted"
+        />
       </n-tab-pane>
     </n-tabs>
   </div>
