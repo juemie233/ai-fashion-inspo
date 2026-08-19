@@ -388,7 +388,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         <template #extra>
           <a-space style="display: flex; justify-content: center; width: 100%">
             <a-popconfirm
-              content="将物理删除 {{ deleteCount }} 个素材（文件与记录不可恢复），确定继续？"
+              :content="`将物理删除 ${deleteCount} 个素材（文件与记录不可恢复），确定继续？`"
               @ok="confirmSubmit"
             >
               <a-button

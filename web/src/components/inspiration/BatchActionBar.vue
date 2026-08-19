@@ -150,7 +150,7 @@ function confirmEdit() {
       关联博主
     </a-button>
     <a-button size="mini" @click="openEditModal">编辑元数据</a-button>
-    <a-popconfirm content="将所选 {{ count }} 个素材移入垃圾桶？保留期内可恢复" @ok="emit('trash')">
+    <a-popconfirm :content="`将所选 ${count} 个素材移入垃圾桶？保留期内可恢复`" @ok="emit('trash')">
       <a-button size="mini" type="secondary" status="danger">移入垃圾桶</a-button>
     </a-popconfirm>
     <a-button size="mini" @click="emit('select-all')">

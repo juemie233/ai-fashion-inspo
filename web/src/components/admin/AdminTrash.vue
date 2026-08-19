@@ -177,7 +177,7 @@ async function cleanExpired() {
       <div class="toolbar-right">
         <a-popconfirm
           v-if="autoCleanupEnabled"
-          content="仅清理超过 {{ retentionDays }} 天保留期的素材，仍在保留期内的保留。"
+          :content="`仅清理超过 ${retentionDays} 天保留期的素材，仍在保留期内的保留。`"
           @ok="cleanExpired"
         >
           <a-button size="small" :loading="cleaningExpired">清理过期</a-button>
