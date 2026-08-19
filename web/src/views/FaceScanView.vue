@@ -153,6 +153,8 @@ const detailTotal = ref(0)
 const detailLoading = ref(false)
 const detailChecked = ref<Set<number>>(new Set())
 const detailActionBusy = ref(false)
+/** 候选网格列数（3~6 可选，默认 6） */
+const gridColumns = ref<number>(6)
 
 const selectedPerson = computed(() => {
   const [type, id] = detailKey.value.split(':')
@@ -633,7 +635,11 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 <!-- 展开明细 -->
                 <div v-if="detailKey === `${p.person_type}:${p.person_id}`" class="detail-block">
                   <a-spin :loading="detailLoading" style="display: block">
-                    <div v-if="detailItems.length > 0" class="detail-grid">
+                    <div
+                      v-if="detailItems.length > 0"
+                      class="detail-grid"
+                      :style="{ gridTemplateColumns: `repeat(${gridColumns}, 1fr)` }"
+                    >
                       <div
                         v-for="item in detailItems"
                         :key="item.detection_id"
@@ -654,19 +660,27 @@ function filterOption(input: string, option: { label?: string }): boolean {
                     <a-empty v-else description="该人物暂无候选明细" size="small" />
                   </a-spin>
                   <div class="detail-actions">
-                    <a-pagination
-                      v-if="detailTotal > 50"
-                      size="mini"
-                      :current="detailPage"
-                      :page-size="50"
-                      :total="detailTotal"
-                      @change="
-                        (p: number) => {
-                          detailPage = p
-                          loadDetail()
-                        }
-                      "
-                    />
+                    <a-space :size="8">
+                      <a-radio-group v-model="gridColumns" type="button" size="mini">
+                        <a-radio :value="3">3 列</a-radio>
+                        <a-radio :value="4">4 列</a-radio>
+                        <a-radio :value="5">5 列</a-radio>
+                        <a-radio :value="6">6 列</a-radio>
+                      </a-radio-group>
+                      <a-pagination
+                        v-if="detailTotal > 50"
+                        size="mini"
+                        :current="detailPage"
+                        :page-size="50"
+                        :total="detailTotal"
+                        @change="
+                          (p: number) => {
+                            detailPage = p
+                            loadDetail()
+                          }
+                        "
+                      />
+                    </a-space>
                     <a-space :size="6">
                       <a-button
                         size="mini"
