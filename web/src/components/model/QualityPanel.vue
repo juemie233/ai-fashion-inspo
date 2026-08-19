@@ -240,9 +240,12 @@ const failedColumns: TableColumnData[] = [
         ></a-col>
         <a-col :flex="1"
           ><a-card size="small"
-            ><a-statistic title="平均耗时" :value="0" /><span class="stat-custom">{{
-              formatMs(qualityData.overview.avg_time_ms)
-            }}</span></a-card
+            ><div class="stat-custom">
+              <span class="stat-custom-title">平均耗时</span>
+              <span class="stat-custom-value">{{
+                formatMs(qualityData.overview.avg_time_ms)
+              }}</span>
+            </div></a-card
           ></a-col
         >
       </a-row>
@@ -317,10 +320,22 @@ const failedColumns: TableColumnData[] = [
 .chart {
   height: 220px;
 }
-/* Arco Statistic value 仅接受 number：字符串展示用自绘文本（参考 AdminStatCards 先例） */
+/* 自定义统计项（Arco Statistic 的 value 不接受字符串，百分比/耗时用自绘文本，参考 AdminStatCards 先例） */
 .stat-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-custom-title {
+  font-size: 14px;
+  color: var(--color-text-2);
+}
+
+.stat-custom-value {
   font-size: 24px;
   font-weight: 600;
   line-height: 1.2;
+  color: var(--color-text-1);
 }
 </style>
