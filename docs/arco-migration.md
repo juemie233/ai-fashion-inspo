@@ -57,3 +57,25 @@
 - 回滚：任意阶段失败可 `git checkout pre-arco-pilot` 整体回退；单阶段回退用 `git revert`。
 - 提交：每阶段独立 commit（feat: xxx 迁移至 Arco），保持粒度可 bisect；阶段内小修合并提交。
 - 迁移期间保留 `/persons-arco` 试点路由，作为新旧观感对比基准，P3 完成后再移除。
+
+## 六、迁移进度（2026-08-19 首轮窗口）
+
+> 时间窗口：13:46 → 14:00（用户指定，到点硬停）。已提交 5 个 commit，Naive 引用 1050 → **1002 处**（-4.6%）。
+
+| 提交 | 内容 |
+| --- | --- |
+| `(试点)` | ArcoPersonPilotView 试点页 + 全局主题 + 迁移方案（此前已提交） |
+| `d684d61` | 首批 6 组件：PersonTypeTag / SchemaVersionBanner / SearchContextBar / AdminStatCards / AdminDistStats / ImageLightbox |
+| `58fffb8` | AdminExportPanel（useMessage→Message）/ UploadDropZone（n-input→a-input） |
+| `10cf1e2` | MasonryGrid / UploadQueue（spin 数字尺寸、error→status=danger） |
+| `(最近)` | ScraperLogViewer |
+
+**踩坑记录（后续迁移必读）**：
+1. Arco `Statistic.value` 仅接受 `number | Date`，字符串需自绘文本（见 AdminStatCards）
+2. Arco `Button` 无 `error` 类型 → `type="primary" + status="danger"`；尺寸体系 `mini/small/medium/large`（naive `tiny` → `mini`）
+3. Arco `Spin.size` 仅接受数字（naive 字符串尺寸无效）
+4. `n-input` 的 `@update:value` → `a-input` 的 `@input`；回车 `@keyup.enter` → `@press-enter`
+5. `useMessage/useDialog` → 静态 `Message/Modal`（无需 provider 包裹）
+6. 本机 `NODE_ENV=production`：装依赖必须 `npm ci --include=dev`
+
+**待续**：剩余 1002 处主要集中在 views（12 个页面）、PersonFormModal/PersonListSection 等大组件、admin 治理页表格；下一步建议按 `components/admin` → `components/inspiration` → `views` 顺序推进（可参考试点页与上述踩坑记录）。
