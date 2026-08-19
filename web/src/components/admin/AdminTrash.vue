@@ -189,7 +189,7 @@ async function cleanExpired() {
     </div>
 
     <!-- 列表 -->
-    <a-spin :loading="loading">
+    <a-spin :loading="loading" style="display: block">
       <div v-if="items.length === 0 && !loading" class="empty">
         <a-empty description="垃圾桶是空的 🎉" />
       </div>
