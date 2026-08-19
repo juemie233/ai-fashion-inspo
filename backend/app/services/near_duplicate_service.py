@@ -28,6 +28,7 @@ from app.models.inspiration import (
 from app.models.tag import InspirationTag
 from app.services.task_runners.common import _chunked
 from app.utils.image_hash import perceptual_hash
+from app.utils.time import format_utc
 
 # 默认阈值（768 位 RGB dHash 汉明距离）：≤32 视为近似重复（约 4% 差异内）
 DEFAULT_THRESHOLD = 32
@@ -114,7 +115,7 @@ def _group(items: list[dict], threshold: int) -> list[dict]:
                 "file_path": m["file_path"],
                 "thumbnail_path": m["thumbnail_path"],
                 "is_favorite": m["is_favorite"],
-                "created_at": m["created_at"].isoformat() if m["created_at"] else None,
+                "created_at": format_utc(m["created_at"]),
                 "size_bytes": m["size_bytes"],
                 "score": m["score"],
                 "distance": (cluster["rep_phash_int"] ^ m["phash_int"]).bit_count(),

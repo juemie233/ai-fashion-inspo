@@ -31,6 +31,7 @@ from app.services import admin_stats_service, inspiration_service
 from app.services.audit_service import record_audit_log
 from app.utils.csv_safety import sanitize_csv_cell
 from app.utils.file_hash import build_hash_map
+from app.utils.time import format_utc
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -68,7 +69,7 @@ async def largest_files(
                 "id": row[0],
                 "file_path": row[1],
                 "source_type": row[2],
-                "created_at": row[3].isoformat() if row[3] else None,
+                "created_at": format_utc(row[3]),
                 "size_bytes": size,
                 "exists": exists,
             })
@@ -404,8 +405,8 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
             tags,
             bloggers,
             models,
-            insp.created_at.isoformat() if insp.created_at else "",
-            insp.updated_at.isoformat() if insp.updated_at else "",
+            format_utc(insp.created_at) or "",
+            format_utc(insp.updated_at) or "",
         ]
         # 防 CSV 公式注入：用户/模型可控的单元格以 = + - @ 开头时加 ' 转义
         writer.writerow([sanitize_csv_cell(x) for x in row])
@@ -514,7 +515,7 @@ async def audit_logs(
             "count": r.count,
             "freed_bytes": r.freed_bytes,
             "detail": r.detail,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_at": format_utc(r.created_at),
         }
         for r in rows
     ]

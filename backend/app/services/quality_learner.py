@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.inspiration import Inspiration
 from app.services.vector import store as vector_store
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def _train_sync(X: list[list[float]], y: list[int]) -> dict:
     os.replace(tmp_path, _MODEL_PATH)
 
     meta = {
-        "trained_at": utcnow().isoformat(),
+        "trained_at": format_utc(utcnow()),
         "sample_total": len(X),
         "positive": int(sum(y)),
         "negative": int(len(y) - sum(y)),

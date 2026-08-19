@@ -30,6 +30,7 @@ from app.services.face_client import (
     FaceServiceUnavailableError,
     face_client,
 )
+from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +295,7 @@ async def get_blogger_face_status(db: AsyncSession, blogger_id: int) -> dict:
     return {
         "registered": True,
         "blogger_id": blogger_id,
-        "updated_at": rec.updated_at.isoformat() if rec.updated_at else None,
+        "updated_at": format_utc(rec.updated_at),
     }
 
 
@@ -423,7 +424,7 @@ async def list_inspiration_detections(
                     d.matched_blogger.name if d.matched_blogger else None
                 ),
                 "confidence": d.confidence,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "created_at": format_utc(d.created_at),
             }
         )
     return result

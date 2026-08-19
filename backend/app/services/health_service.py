@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.utils.system_stats import disk_usage, memory_usage
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 # 前端 dev server 端口（与 scripts/restart.sh、scripts/ensure-services.sh 约定一致）
 _FRONTEND_PORT = 17777
@@ -67,8 +67,7 @@ async def _worker_status(db: AsyncSession) -> dict:
         return {
             "status": "ok",
             "count": len(alive),
-            "last_heartbeat_at": latest.last_heartbeat_at.isoformat()
-            if latest.last_heartbeat_at else None,
+            "last_heartbeat_at": format_utc(latest.last_heartbeat_at),
             "workers": [r.service_id for r in alive],
         }
     return {"status": "down", "count": 0, "last_heartbeat_at": None, "workers": []}
@@ -127,5 +126,5 @@ async def collect_health(db: AsyncSession) -> dict:
             "logs": _logs_stats(),
         },
         "alerts": alerts,
-        "checked_at": utcnow().isoformat(),
+        "checked_at": format_utc(utcnow()),
     }
