@@ -7,7 +7,7 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
 import type { Person } from '@shared/types/person'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -15,7 +15,6 @@ import PersonFormModal from '@/components/person/PersonFormModal.vue'
 
 const route = useRoute()
 const router = useRouter()
-const message = useMessage()
 
 // ── 人物选择 ──
 const persons = ref<Person[]>([])
@@ -29,7 +28,7 @@ async function loadPersons() {
     const data = await modelsApi.fetchList({ page: 1, size: 200, sort: 'name' })
     persons.value = data.items
   } catch {
-    message.error('加载人物列表失败')
+    Message.error('加载人物列表失败')
   } finally {
     personsLoading.value = false
   }
@@ -79,7 +78,7 @@ function onFolderChange(e: Event) {
     return IMAGE_EXTS.has(ext)
   })
   if (imageFiles.length === 0) {
-    message.warning('该文件夹中没有可识别的图片文件')
+    Message.warning('该文件夹中没有可识别的图片文件')
     input.value = ''
     return
   }
@@ -122,11 +121,11 @@ const stats = computed(() => {
 
 async function startUpload() {
   if (!personId.value) {
-    message.warning('请先选择人物')
+    Message.warning('请先选择人物')
     return
   }
   if (pending.value.length === 0) {
-    message.warning('请先选择一个文件夹')
+    Message.warning('请先选择一个文件夹')
     return
   }
   uploading.value = true
@@ -162,9 +161,9 @@ async function startUpload() {
     const parts = [`${done} 成功`]
     if (failed > 0) parts.push(`${failed} 失败`)
     if (dups > 0) parts.push(`${dups} 重复跳过`)
-    message.success(`照片组「${set.name}」导入完成：${parts.join('，')}`)
+    Message.success(`照片组「${set.name}」导入完成：${parts.join('，')}`)
   } catch (err) {
-    message.error(getApiErrorMessage(err, '创建照片组失败'))
+    Message.error(getApiErrorMessage(err, '创建照片组失败'))
   } finally {
     uploading.value = false
   }
@@ -191,14 +190,14 @@ onUnmounted(() => {
 <template>
   <div class="model-photo-page">
     <h2>添加模特照片</h2>
-    <n-text depth="3" style="font-size: 13px">
+    <a-typography-text type="secondary" style="font-size: 13px">
       选择一个文件夹，把其中所有图片作为一组模特写真导入到某个人物名下
-    </n-text>
+    </a-typography-text>
 
     <!-- 人物选择 -->
-    <n-card size="small" class="step-card" title="第一步 · 选择人物">
-      <n-space align="center">
-        <n-select
+    <a-card size="small" class="step-card" title="第一步 · 选择人物">
+      <a-space align="center">
+        <a-select
           v-model:value="personId"
           :options="personOptions"
           :loading="personsLoading"
@@ -207,12 +206,12 @@ onUnmounted(() => {
           placeholder="选择模特 / 博主"
           style="width: 280px"
         />
-        <n-button secondary @click="showForm = true">＋ 新建人物</n-button>
-      </n-space>
-    </n-card>
+        <a-button type="secondary" @click="showForm = true">＋ 新建人物</a-button>
+      </a-space>
+    </a-card>
 
     <!-- 文件夹选择 -->
-    <n-card size="small" class="step-card" title="第二步 · 选择文件夹">
+    <a-card size="small" class="step-card" title="第二步 · 选择文件夹">
       <div class="folder-zone" @click="openFolder">
         <div class="folder-icon">📁</div>
         <p class="folder-title">点击选择文件夹</p>
@@ -228,22 +227,22 @@ onUnmounted(() => {
         @change="onFolderChange"
       />
 
-      <n-form-item label="照片组名称" style="margin-top: 16px; max-width: 420px">
-        <n-input v-model:value="setName" placeholder="默认取文件夹名，可修改" maxlength="128" />
-      </n-form-item>
-    </n-card>
+      <a-form-item label="照片组名称" style="margin-top: 16px; max-width: 420px">
+        <a-input v-model="setName" placeholder="默认取文件夹名，可修改" :max-length="128" />
+      </a-form-item>
+    </a-card>
 
     <!-- 预览 -->
-    <n-card v-if="pending.length > 0" size="small" class="step-card">
+    <a-card v-if="pending.length > 0" size="small" class="step-card">
       <template #header>
-        <n-space align="center" justify="space-between">
+        <a-space align="center" style="display:flex;justify-content:space-between">
           <span>已选 {{ pending.length }} 张照片</span>
-          <n-space>
-            <n-button size="small" quaternary :disabled="uploading" @click="clearPending">
+          <a-space>
+            <a-button size="small" type="text" :disabled="uploading" @click="clearPending">
               清空
-            </n-button>
-          </n-space>
-        </n-space>
+            </a-button>
+          </a-space>
+        </a-space>
       </template>
 
       <div class="preview-grid">
@@ -251,10 +250,10 @@ onUnmounted(() => {
           <img :src="p.thumbnail" :alt="p.file.name" />
           <div class="preview-index">{{ i + 1 }}</div>
           <div v-if="p.status === 'uploading'" class="preview-mask">
-            <n-progress
+            <a-progress
               type="circle"
               :percentage="p.progress"
-              :size="44"
+              :width="44"
               :show-indicator="true"
             />
           </div>
@@ -269,22 +268,22 @@ onUnmounted(() => {
       </div>
 
       <div class="upload-actions">
-        <n-button type="primary" size="large" :loading="uploading" @click="startUpload">
+        <a-button type="primary" size="large" :loading="uploading" @click="startUpload">
           {{ uploading ? '导入中…' : '开始导入' }}
-        </n-button>
-        <n-text v-if="uploading" depth="3">
+        </a-button>
+        <a-typography-text v-if="uploading" type="secondary">
           已完成 {{ stats.done }} / {{ stats.total }}
-        </n-text>
+        </a-typography-text>
       </div>
-    </n-card>
+    </a-card>
 
     <!-- 完成后跳转 -->
-    <n-card v-if="uploadedSetId && !uploading && stats.done > 0" size="small" class="step-card">
-      <n-space align="center" justify="space-between">
-        <n-text>照片组已导入完成，可前往人物详情查看。</n-text>
-        <n-button type="primary" secondary @click="goPersonDetail">查看人物照片组 →</n-button>
-      </n-space>
-    </n-card>
+    <a-card v-if="uploadedSetId && !uploading && stats.done > 0" size="small" class="step-card">
+      <a-space align="center" style="display:flex;justify-content:space-between">
+        <a-typography-text>照片组已导入完成，可前往人物详情查看。</a-typography-text>
+        <a-button type="secondary" @click="goPersonDetail">查看人物照片组 →</a-button>
+      </a-space>
+    </a-card>
 
     <!-- 新建人物对话框（模特照片页仅创建模特） -->
     <PersonFormModal v-model:show="showForm" kind="model" :person="null" @saved="onPersonCreated" />

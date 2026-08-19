@@ -6,7 +6,6 @@
  */
 
 import { onMounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
 import {
   deleteFaceDetection,
   faceDetectInspiration,
@@ -16,6 +15,7 @@ import {
   type FaceDetectionsOut,
 } from '@/api/inspirations'
 import { bloggersApi, type PersonBrief } from '@/api/persons'
+import { Message } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const props = defineProps<{
@@ -23,7 +23,6 @@ const props = defineProps<{
   inspirationId: string
 }>()
 
-const message = useMessage()
 
 const detections = ref<FaceDetectionOut[]>([])
 const loading = ref(false)
@@ -64,12 +63,12 @@ async function handleDetect() {
     const data = await faceDetectInspiration(props.inspirationId)
     detections.value = data.detections ?? []
     if (data.face_count === 0) {
-      message.info('未检测到人脸')
+      Message.info('未检测到人脸')
     } else {
-      message.success(`检测到 ${data.face_count} 张人脸，已与博主特征库匹配`)
+      Message.success(`检测到 ${data.face_count} 张人脸，已与博主特征库匹配`)
     }
   } catch (e) {
-    message.error(getApiErrorMessage(e, '人脸检测失败（请确认人脸识别服务已启动）'))
+    Message.error(getApiErrorMessage(e, '人脸检测失败（请确认人脸识别服务已启动）'))
   } finally {
     detecting.value = false
   }
@@ -81,10 +80,10 @@ async function handleSelectBlogger(det: FaceDetectionOut, bloggerId: number | nu
   updatingId.value = det.id
   try {
     await updateFaceDetection(props.inspirationId, det.id, bloggerId)
-    message.success('已关联博主')
+    Message.success('已关联博主')
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '关联失败'))
+    Message.error(getApiErrorMessage(e, '关联失败'))
   } finally {
     updatingId.value = null
   }
@@ -95,10 +94,10 @@ async function handleUnlink(det: FaceDetectionOut) {
   updatingId.value = det.id
   try {
     await updateFaceDetection(props.inspirationId, det.id, null)
-    message.success('已解除关联')
+    Message.success('已解除关联')
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '解除失败'))
+    Message.error(getApiErrorMessage(e, '解除失败'))
   } finally {
     updatingId.value = null
   }
@@ -109,10 +108,10 @@ async function handleDelete(det: FaceDetectionOut) {
   updatingId.value = det.id
   try {
     await deleteFaceDetection(props.inspirationId, det.id)
-    message.success('已删除该人脸检测')
+    Message.success('已删除该人脸检测')
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   } finally {
     updatingId.value = null
   }

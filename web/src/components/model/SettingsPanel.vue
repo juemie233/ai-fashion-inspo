@@ -531,20 +531,13 @@ const configColumns = [
         <a-button
           size="mini"
           style="margin-top: 8px"
-          @click="
-            savePromptVersion()
-            promptVersionsVisible = true
-            loadPromptVersions()
-          "
+          @click="savePromptVersion(); promptVersionsVisible = true; loadPromptVersions()"
           >保存版本</a-button
         >
         <a-button
           size="mini"
           style="margin-top: 8px; margin-left: 6px"
-          @click="
-            promptVersionsVisible = !promptVersionsVisible
-            loadPromptVersions()
-          "
+          @click="promptVersionsVisible = !promptVersionsVisible; loadPromptVersions()"
         >
           {{ promptVersionsVisible ? '隐藏历史' : '版本历史' }}
           {{ promptVersions.length > 0 ? `(${promptVersions.length})` : '' }}

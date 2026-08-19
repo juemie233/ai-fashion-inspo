@@ -10,8 +10,8 @@ const message = vi.hoisted(() => ({
   info: vi.fn(),
 }))
 
-vi.mock('naive-ui', () => ({
-  useMessage: () => message,
+vi.mock('@arco-design/web-vue', () => ({
+  Message: message,
 }))
 
 vi.mock('@/api/inspirations', () => ({

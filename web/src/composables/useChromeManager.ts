@@ -1,7 +1,7 @@
 /** 采集专用 Chrome 生命周期：启动 / 停止 / 状态刷新。 */
 
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { ChromeStatus } from '@/types/scraper'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -14,7 +14,7 @@ export const CHROME_STATE_LABELS: Record<string, string> = {
   starting: '启动中',
 }
 
-/** 状态 → naive-ui n-tag type */
+/** 状态 → Arco 标签预设色（naive 语义色，由使用方映射） */
 export const CHROME_STATE_TAG: Record<string, 'success' | 'warning' | 'error' | 'default'> = {
   running: 'success',
   not_started: 'default',
@@ -23,8 +23,7 @@ export const CHROME_STATE_TAG: Record<string, 'success' | 'warning' | 'error' | 
 }
 
 export function useChromeManager() {
-  const message = useMessage()
-
+  
   const chromeStatus = ref<ChromeStatus | null>(null)
   /** 启动/停止操作进行中，用于按钮 loading 态 */
   const chromeBusy = ref(false)
@@ -43,11 +42,11 @@ export function useChromeManager() {
     try {
       const r = await apiClient.post('/scraper/chrome/start')
       chromeStatus.value = r.data
-      if (r.data.state === 'running') message.success('Chrome 已启动')
-      else if (r.data.state === 'port_conflict') message.error(r.data.detail || '端口冲突，请关闭占用进程')
-      else message.warning(r.data.detail || '启动失败')
+      if (r.data.state === 'running') Message.success('Chrome 已启动')
+      else if (r.data.state === 'port_conflict') Message.error(r.data.detail || '端口冲突，请关闭占用进程')
+      else Message.warning(r.data.detail || '启动失败')
     } catch (e) {
-      message.error('启动 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
+      Message.error('启动 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
     } finally {
       chromeBusy.value = false
     }
@@ -58,9 +57,9 @@ export function useChromeManager() {
     try {
       const r = await apiClient.post('/scraper/chrome/stop')
       chromeStatus.value = r.data
-      message.success('Chrome 已停止')
+      Message.success('Chrome 已停止')
     } catch (e) {
-      message.error('停止 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
+      Message.error('停止 Chrome 失败: ' + getApiErrorMessage(e, '操作失败'))
     } finally {
       chromeBusy.value = false
     }

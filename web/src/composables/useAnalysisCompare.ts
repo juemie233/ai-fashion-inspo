@@ -2,13 +2,12 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { CompareData } from '@/types/analysis'
 
 export function useAnalysisCompare() {
-  const message = useMessage()
-
+  
   const compareVisible = ref(false)
   const compareLoading = ref(false)
   const compareData = ref<CompareData | null>(null)
@@ -27,7 +26,7 @@ export function useAnalysisCompare() {
       compareData.value = data
     } catch (e) {
       if (seq !== compareSeq) return
-      message.error(getApiErrorMessage(e, '获取对比数据失败'))
+      Message.error(getApiErrorMessage(e, '获取对比数据失败'))
       compareVisible.value = false
     } finally {
       if (seq === compareSeq) compareLoading.value = false

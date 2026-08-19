@@ -2,7 +2,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
 import type { QueueStats, ActiveAnalysis, TaskInfo, QueueItem } from '@/types/analysis'
@@ -24,8 +24,7 @@ const BATCH_RETRY_MS = 3000
 
 export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const { requestAndNotify, checkFailureAlert } = useNotification()
-  const message = useMessage()
-
+  
   const queueStats = ref<QueueStats>({ total: 0, analyzed: 0, unanalyzed: 0, failed: 0 })
   const activeAnalyses = ref<Record<string, string>>({})
   const batchAnalyzing = ref(false)
@@ -50,13 +49,13 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   async function cancelQueueItem(inspirationId: string) {
     try {
       await apiClient.delete(`/ai/queue/${inspirationId}`)
-      message.success('已取消')
+      Message.success('已取消')
       loadPendingQueue()
       loadActiveAnalyses()
     } catch (e) {
       const data = (e as { response?: { data?: { detail?: string; message?: string } } })
         ?.response?.data
-      message.error(data?.detail || data?.message || '取消失败')
+      Message.error(data?.detail || data?.message || '取消失败')
     }
   }
 
@@ -65,14 +64,14 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     try {
       if (queuePaused.value) {
         await apiClient.post('/ai/queue/resume')
-        message.success('队列已恢复')
+        Message.success('队列已恢复')
       } else {
         await apiClient.post('/ai/queue/pause')
-        message.success('队列已暂停')
+        Message.success('队列已暂停')
       }
       loadPendingQueue()
     } catch (e) {
-      message.error('操作失败')
+      Message.error('操作失败')
     }
   }
 
@@ -125,7 +124,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     try {
       const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
       if (data.count === 0) {
-        message.info('所有素材均已分析过，无需重复分析')
+        Message.info('所有素材均已分析过，无需重复分析')
         return
       }
       // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
@@ -145,11 +144,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
-      message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
+      Message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
       requestAndNotify('批量分析已创建', { body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`, tag: 'batch-analyze' })
       startBatchPolling(created.task_id)
     } catch (e) {
-      message.error(getApiErrorMessage(e, '批量分析失败'))
+      Message.error(getApiErrorMessage(e, '批量分析失败'))
     } finally {
       batchAnalyzing.value = false
     }
@@ -175,11 +174,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
             const detail = (successCount !== undefined && failedCount !== undefined)
               ? `成功 ${successCount}，失败 ${failedCount}`
               : '已完成'
-            message.success(`批量分析完成：${detail}`)
+            Message.success(`批量分析完成：${detail}`)
           } else if (data.status === 'failed') {
-            message.error(`批量分析失败：${data.error || '未知错误'}`)
+            Message.error(`批量分析失败：${data.error || '未知错误'}`)
           } else {
-            message.info('批量分析任务已取消')
+            Message.info('批量分析任务已取消')
           }
           loadQueue(); options.loadHistory?.(); loadActiveAnalyses()
           return
@@ -191,7 +190,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         if (consecutiveFailures >= 5) {
           // 连续多次失败才停止，避免后端重启/网络抖动导致任务进度卡死
           stopBatchPolling()
-          message.error('获取任务状态多次失败，已停止轮询，请稍后手动刷新')
+          Message.error('获取任务状态多次失败，已停止轮询，请稍后手动刷新')
           return
         }
         // 有限次重试：间隔放大到 3 秒，继续续排轮询链
@@ -206,12 +205,12 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     if (!batchTask.value) return
     try {
       await apiClient.post(`/tasks/${batchTask.value.id}/cancel`)
-      message.success('任务已取消')
+      Message.success('任务已取消')
       stopBatchPolling()
       batchTask.value = { ...batchTask.value, status: 'cancelled' }
       loadQueue()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '取消失败'))
+      Message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
 
@@ -239,11 +238,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   async function retryAnalysis(id: string) {
     try {
       await apiClient.post(`/ai/retry/${id}`)
-      message.success('已重新加入队列')
+      Message.success('已重新加入队列')
       loadQueue()
       loadActiveAnalyses()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '重试失败'))
+      Message.error(getApiErrorMessage(e, '重试失败'))
     }
   }
 

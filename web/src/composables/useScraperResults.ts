@@ -1,7 +1,7 @@
 /** 采集任务结果预览域：结果加载（分页追加）、勾选与批量删除。 */
 
 import { ref, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 
 interface ScraperResultsDeps {
@@ -14,8 +14,7 @@ const RESULTS_PAGE_SIZE = 100
 
 /** 任务结果预览状态与操作，由 ScraperView 消费。 */
 export function useScraperResults(deps: ScraperResultsDeps) {
-  const message = useMessage()
-
+  
   const resultsTaskId = ref<number | null>(null)
   const resultsItems = ref<any[]>([])
   const resultsTotal = ref(0)
@@ -45,7 +44,7 @@ export function useScraperResults(deps: ScraperResultsDeps) {
         resultsItems.value = r.data.items
       }
       resultsTotal.value = r.data.total
-    } catch { message.error('加载失败') }
+    } catch { Message.error('加载失败') }
     finally { resultsLoading.value = false }
   }
 
@@ -95,7 +94,7 @@ export function useScraperResults(deps: ScraperResultsDeps) {
     try {
       const r = await apiClient.post(`/scraper/tasks/${resultsTaskId.value}/results/batch-delete`, { ids: [...selectedIds.value] })
       const { trashed_count: trashed, skipped } = r.data
-      message.success(
+      Message.success(
         skipped
           ? `已移入垃圾桶 ${trashed} 个（${skipped} 个已在垃圾桶，已跳过）`
           : `已移入垃圾桶 ${trashed} 个`,
@@ -113,7 +112,7 @@ export function useScraperResults(deps: ScraperResultsDeps) {
         await fetchResults(resultsTaskId.value, 1, false)
       }
       deps.refreshTasks()
-    } catch { message.error('删除失败') } finally { deletingResults.value = false }
+    } catch { Message.error('删除失败') } finally { deletingResults.value = false }
   }
 
   return {

@@ -1,7 +1,7 @@
 /** 素材库批量多选：勾选状态 + 批量收藏 / 移垃圾桶 / 加标签 / 编辑元数据。 */
 
 import { computed, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   batchFavorite as batchFavoriteApi,
   batchTrash as batchTrashApi,
@@ -12,8 +12,7 @@ import {
 } from '@/api/inspirations'
 
 export function useBatchSelection() {
-  const message = useMessage()
-
+  
   /** 是否处于批量选择模式 */
   const batchMode = ref(false)
   /** 已勾选的素材 ID 集合（整体替换保证响应式） */
@@ -51,10 +50,10 @@ export function useBatchSelection() {
     if (ids.length === 0) return 0
     try {
       const updated = await batchFavoriteApi(ids, isFavorite)
-      message.success(`已${isFavorite ? '收藏' : '取消收藏'} ${updated} 个素材`)
+      Message.success(`已${isFavorite ? '收藏' : '取消收藏'} ${updated} 个素材`)
       return updated
     } catch {
-      message.error('批量收藏失败')
+      Message.error('批量收藏失败')
       return 0
     }
   }
@@ -67,10 +66,10 @@ export function useBatchSelection() {
       const { trashed, skipped } = await batchTrashApi(ids)
       const parts = [`已移入垃圾桶 ${trashed} 个`]
       if (skipped > 0) parts.push(`跳过 ${skipped} 个`)
-      message.success(parts.join('，'))
+      Message.success(parts.join('，'))
       return trashed
     } catch {
-      message.error('批量删除失败')
+      Message.error('批量删除失败')
       return 0
     }
   }
@@ -84,9 +83,9 @@ export function useBatchSelection() {
       const parts = [`已为 ${r.affected} 个素材添加标签`]
       if (r.not_found > 0) parts.push(`${r.not_found} 个素材不存在`)
       if (r.skipped_existing > 0) parts.push(`${r.skipped_existing} 条关联已存在`)
-      message.success(parts.join('，'))
+      Message.success(parts.join('，'))
     } catch {
-      message.error('批量添加标签失败')
+      Message.error('批量添加标签失败')
     }
   }
 
@@ -100,9 +99,9 @@ export function useBatchSelection() {
       if (r.affected > 0) parts.push(`${r.affected} 个素材`)
       if (r.skipped > 0) parts.push(`跳过已关联 ${r.skipped} 条`)
       if (r.not_found_count > 0) parts.push(`${r.not_found_count} 个素材不存在`)
-      message.success(parts.join('，'))
+      Message.success(parts.join('，'))
     } catch {
-      message.error('批量关联博主失败')
+      Message.error('批量关联博主失败')
     }
   }
 
@@ -112,10 +111,10 @@ export function useBatchSelection() {
     if (ids.length === 0) return 0
     try {
       const updated = await batchUpdateInspirations(ids, fields)
-      message.success(`已更新 ${updated} 个素材`)
+      Message.success(`已更新 ${updated} 个素材`)
       return updated
     } catch {
-      message.error('批量编辑失败')
+      Message.error('批量编辑失败')
       return 0
     }
   }

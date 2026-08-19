@@ -2,13 +2,13 @@
 
 import type { Component } from 'vue'
 import {
-  CloudDownloadOutline,
-  CubeOutline,
-  GitCompareOutline,
-  ShieldCheckmarkOutline,
-  SparklesOutline,
-  TrashOutline,
-} from '@vicons/ionicons5'
+  IconDelete,
+  IconFileImage,
+  IconSafe,
+  IconScan,
+  IconSync,
+  IconBarChart,
+} from '@arco-design/web-vue/es/icon'
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
@@ -33,12 +33,12 @@ export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
  * 删除类任务刻意使用不同图标：批量删除=垃圾桶、近似重复检测删除=版本对比，
  * 让两类删除任务在列表中一眼可辨。 */
 export const TASK_TYPE_ICONS: Record<string, Component> = {
-  batch_analyze: SparklesOutline,
-  quality_check: ShieldCheckmarkOutline,
-  batch_delete: TrashOutline,
-  deduplicate: GitCompareOutline,
-  scraper: CloudDownloadOutline,
-  vector_backfill: CubeOutline,
+  batch_analyze: IconFileImage,
+  quality_check: IconSafe,
+  batch_delete: IconDelete,
+  deduplicate: IconSync,
+  scraper: IconScan,
+  vector_backfill: IconBarChart,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
@@ -55,33 +55,29 @@ export function normalizeTaskStatus(status: string): string {
   return status === 'completed' ? 'success' : status
 }
 
-/** 状态对应的 naive-ui 标签颜色类型 */
-export function taskStatusType(
-  status: string,
-): 'default' | 'info' | 'success' | 'error' | 'warning' {
-  const map: Record<string, 'default' | 'info' | 'success' | 'error' | 'warning'> = {
-    pending: 'default',
-    running: 'info',
-    success: 'success',
-    failed: 'error',
-    cancelled: 'warning',
+/** 状态对应的 Arco 标签预设色 */
+export function taskStatusType(status: string): string {
+  const map: Record<string, string> = {
+    pending: 'gray',
+    running: 'arcoblue',
+    success: 'green',
+    failed: 'red',
+    cancelled: 'orange',
   }
-  return map[status] || 'default'
+  return map[status] || 'gray'
 }
 
-/** 任务类型对应的标签颜色（naive-ui NTag type），不同任务类型用醒目颜色区分 */
-export function taskTypeTagColor(
-  type: string,
-): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
-  const map: Record<string, 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error'> = {
-    batch_analyze: 'primary',
-    quality_check: 'warning',
-    batch_delete: 'error',
-    deduplicate: 'success',
-    scraper: 'info',
-    vector_backfill: 'info',
+/** 任务类型对应的标签颜色（Arco 预设色），不同任务类型用醒目颜色区分 */
+export function taskTypeTagColor(type: string): string {
+  const map: Record<string, string> = {
+    batch_analyze: 'arcoblue',
+    quality_check: 'orange',
+    batch_delete: 'red',
+    deduplicate: 'green',
+    scraper: 'purple',
+    vector_backfill: 'cyan',
   }
-  return map[type] || 'default'
+  return map[type] || 'gray'
 }
 
 // ===== 剩余时间预测 =====

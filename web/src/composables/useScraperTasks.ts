@@ -2,7 +2,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { formatDate } from '@/utils/format'
@@ -24,8 +24,7 @@ const POLL_INTERVAL_MS = 5000
 
 /** 任务域数据与操作集合，由 ScraperView 及其子组件消费。 */
 export function useScraperTasks() {
-  const message = useMessage()
-
+  
   // ===== 数据 =====
   const sources = ref<ScraperSource[]>([])
   const tasks = ref<ScraperTask[]>([])
@@ -101,7 +100,7 @@ export function useScraperTasks() {
         xiaohongshu: cXhs.data as CookieStatus,
         douyin: cDy.data as CookieStatus,
       }
-    } catch { message.error('加载失败') }
+    } catch { Message.error('加载失败') }
   }
 
   async function refreshTasks() {
@@ -131,9 +130,9 @@ export function useScraperTasks() {
   async function cancelTask(taskId: number) {
     try {
       await apiClient.post(`/scraper/tasks/${taskId}/cancel`)
-      message.success('已取消')
+      Message.success('已取消')
       refreshTasks()
-    } catch (e) { message.error(getApiErrorMessage(e, '取消失败')) }
+    } catch (e) { Message.error(getApiErrorMessage(e, '取消失败')) }
   }
 
   async function deleteSingleTask(taskId: number) {
@@ -141,12 +140,12 @@ export function useScraperTasks() {
       deletingTask.value = taskId
       const res = await apiClient.delete(`/scraper/tasks/${taskId}`)
       if (res.status === 200 || res.status === 204) {
-        message.success('已删除')
+        Message.success('已删除')
         refreshTasks()
       }
     } catch (e) {
       // 204 同属 2xx 成功响应（apiClient validateStatus 放行），不会落入 catch，无需单独处理
-      message.error('删除失败: ' + (getApiErrorMessage(e, '')))
+      Message.error('删除失败: ' + (getApiErrorMessage(e, '')))
     } finally { deletingTask.value = null }
   }
 
@@ -155,20 +154,20 @@ export function useScraperTasks() {
       clearing.value = true
       await apiClient.delete('/scraper/tasks')
       taskPage.value = 1
-      message.success('已清空')
+      Message.success('已清空')
       refreshTasks()
-    } catch { message.error('清空失败') } finally { clearing.value = false }
+    } catch { Message.error('清空失败') } finally { clearing.value = false }
   }
 
   async function retryFailedTasks() {
     try {
       retrying.value = true
-      message.success((await apiClient.post('/scraper/tasks/retry-failed')).data.message)
+      Message.success((await apiClient.post('/scraper/tasks/retry-failed')).data.message)
       refreshTasks()
       startPollIfNeeded()
     } catch (e) {
       const is404 = (e as { response?: { status?: number } })?.response?.status === 404
-      message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
+      Message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
     } finally { retrying.value = false }
   }
 
@@ -176,11 +175,11 @@ export function useScraperTasks() {
     try {
       retryingTask.value = taskId
       await apiClient.post(`/scraper/tasks/${taskId}/retry`)
-      message.success('已重新加入队列（断点续采）')
+      Message.success('已重新加入队列（断点续采）')
       refreshTasks()
       startPollIfNeeded()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '续采失败'))
+      Message.error(getApiErrorMessage(e, '续采失败'))
     } finally { retryingTask.value = null }
   }
 
@@ -189,7 +188,7 @@ export function useScraperTasks() {
     let cfg: any = {}
     try { cfg = task.config ? JSON.parse(task.config) : {} } catch { cfg = {} }
     const keywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : []
-    if (!keywords.length) { message.warning('原任务没有关键词配置，无法复制'); return }
+    if (!keywords.length) { Message.warning('原任务没有关键词配置，无法复制'); return }
     try {
       copyingTask.value = task.id
       const payload: any = {
@@ -201,7 +200,7 @@ export function useScraperTasks() {
       }
       if (task.platform === 'xiaohongshu' && cfg.sort_mode && cfg.sort_mode !== 'general') payload.sort_mode = cfg.sort_mode
       await apiClient.post('/scraper/tasks', payload)
-      message.success('已按原配置创建新采集任务')
+      Message.success('已按原配置创建新采集任务')
       refreshTasks()
       startPollIfNeeded()
     } catch (e) {
@@ -210,10 +209,10 @@ export function useScraperTasks() {
         ?.detail
       if (typeof detail === 'object' && detail && (detail as { command?: string }).command) {
         const d = detail as { error?: string; command: string }
-        message.error(d.error || '创建失败')
+        Message.error(d.error || '创建失败')
         setTimeout(() => copyText(d.command), 500)
       } else {
-        message.error(getApiErrorMessage(e, '创建失败'))
+        Message.error(getApiErrorMessage(e, '创建失败'))
       }
     } finally { copyingTask.value = null }
   }
@@ -238,14 +237,14 @@ export function useScraperTasks() {
   async function copyText(text: string) {
     const ok = await copyToClipboard(text)
     if (ok) {
-      message.success('已复制')
+      Message.success('已复制')
     } else {
-      message.error('复制失败')
+      Message.error('复制失败')
     }
   }
 
-  /** 状态标签颜色：复用 taskLabel 的映射（completed 与 success 语义一致） */
-  function statusType(s: string): 'default' | 'info' | 'success' | 'error' | 'warning' {
+  /** 状态标签颜色：复用 taskLabel 的映射（completed 与 success 语义一致，返回 Arco 预设色） */
+  function statusType(s: string): string {
     return taskStatusType(normalizeTaskStatus(s))
   }
 

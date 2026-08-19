@@ -1,7 +1,7 @@
 /** GPU 显存监控 composable：定时轮询 + 短时趋势数据（供 echarts 趋势图使用）。 */
 
 import { ref, onBeforeUnmount } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 
@@ -24,8 +24,7 @@ export interface GpuTrendPoint {
 }
 
 export function useGpuMonitor(pollIntervalMs = 5000, historySize = 60) {
-  const message = useMessage()
-  const gpuStats = ref<GpuStats | null>(null)
+    const gpuStats = ref<GpuStats | null>(null)
   const gpuHistory = ref<GpuTrendPoint[]>([])
   let timer: ReturnType<typeof setInterval> | null = null
 
@@ -57,11 +56,11 @@ export function useGpuMonitor(pollIntervalMs = 5000, historySize = 60) {
         const err = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }))
         throw new Error(err.detail || `HTTP ${resp.status}`)
       }
-      message.success(`正在卸载 ${name}...`)
+      Message.success(`正在卸载 ${name}...`)
       setTimeout(loadGpuStats, 2000)
       return true
     } catch (e) {
-      message.error(getApiErrorMessage(e, '卸载模型失败'))
+      Message.error(getApiErrorMessage(e, '卸载模型失败'))
       loadGpuStats()
       return false
     }

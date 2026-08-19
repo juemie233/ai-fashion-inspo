@@ -2,7 +2,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { UnifiedTask } from '@/types/task'
 import {
@@ -48,8 +48,7 @@ const PAGE_SIZE = 20
 const POLL_INTERVAL_MS = 5000
 
 export function useTaskCenter() {
-  const message = useMessage()
-
+  
   const tasks = ref<UnifiedTask[]>([])
   const loading = ref(false)
   const statusFilter = ref('')
@@ -178,7 +177,7 @@ export function useTaskCenter() {
       // 任务数量缩减后页码可能超出总页数，回退到最后一页
       page.value = Math.min(page.value, Math.max(1, pageCount.value))
     } catch {
-      message.error('加载任务失败')
+      Message.error('加载任务失败')
     } finally {
       loading.value = false
     }
@@ -218,10 +217,10 @@ export function useTaskCenter() {
     const url = t.source === 'queue' ? `/tasks/${t.id}/cancel` : `/scraper/tasks/${t.id}/cancel`
     try {
       await apiClient.post(url)
-      message.success('已取消')
+      Message.success('已取消')
       loadTasks()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '取消失败'))
+      Message.error(getApiErrorMessage(e, '取消失败'))
     }
   }
 
@@ -229,10 +228,10 @@ export function useTaskCenter() {
     if (t.source !== 'scraper') return
     try {
       await apiClient.delete(`/scraper/tasks/${t.id}`)
-      message.success('已删除')
+      Message.success('已删除')
       loadTasks()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '删除失败'))
+      Message.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -240,11 +239,11 @@ export function useTaskCenter() {
     try {
       retrying.value = true
       const { data } = await apiClient.post('/scraper/tasks/retry-failed')
-      message.success(data.message || '已重试')
+      Message.success(data.message || '已重试')
       loadTasks()
     } catch (e) {
       const is404 = (e as { response?: { status?: number } })?.response?.status === 404
-      message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
+      Message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
     } finally {
       retrying.value = false
     }

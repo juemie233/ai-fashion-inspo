@@ -3,7 +3,7 @@
 
 import { h, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useMessage, useNotification } from 'naive-ui'
+import { Message, Notification } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
@@ -28,8 +28,6 @@ import { buildSourceOptions } from '@/utils/sourceLabel'
 
 const router = useRouter()
 const route = useRoute()
-const message = useMessage()
-const notification = useNotification()
 const store = useInspirationsStore()
 const tagsStore = useTagsStore()
 const {
@@ -266,7 +264,7 @@ function onFilterChange() {
   // 定位模式下修改筛选 = 主动退出定位，回到完整列表按新条件浏览
   if (focusedIds.value.length > 0) {
     focusedIds.value = []
-    message.info('已退出定位模式')
+    Message.info('已退出定位模式')
   }
   currentPage.value = 1
   store.load(buildParams(1))
@@ -276,7 +274,7 @@ function onFilterChange() {
 function onSortChange() {
   if (focusedIds.value.length > 0) {
     focusedIds.value = []
-    message.info('已退出定位模式')
+    Message.info('已退出定位模式')
   }
   currentPage.value = 1
   store.load(buildParams(1))
@@ -345,12 +343,12 @@ function setDensity(d: Density) {
 async function handleDelete(id: string) {
   try {
     await store.remove(id)
-    message.success('已移入垃圾桶')
+    Message.success('已移入垃圾桶')
     if (store.items.length === 0 && currentPage.value > 1) {
       loadPage(currentPage.value - 1)
     }
   } catch {
-    message.error('操作失败')
+    Message.error('操作失败')
   }
 }
 
@@ -358,7 +356,7 @@ async function handleToggleFavorite(id: string) {
   try {
     await store.toggleFavorite(id)
   } catch {
-    message.error('操作失败')
+    Message.error('操作失败')
   }
 }
 
@@ -366,9 +364,9 @@ async function handleToggleFavorite(id: string) {
 async function handleRate(id: string, value: number) {
   try {
     await store.setRating(id, value)
-    message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+    Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
-    message.error(getApiErrorMessage(e, '评分失败'))
+    Message.error(getApiErrorMessage(e, '评分失败'))
   }
 }
 
@@ -381,30 +379,17 @@ async function handleBatchQualityCheck() {
   try {
     const r = await batchQualityCheck(200)
     if (r.count === 0) {
-      message.info('没有待审核的素材')
+      Message.info('没有待审核的素材')
     } else {
       // 后台任务异步执行：用带「查看进度」动作的通知引导用户去任务管理页
-      notification.success({
+      Notification.success({
         title: `已提交 ${r.count} 个素材进行质量审核`,
         content: '任务在后台执行，可稍后在任务管理页查看进度与结果',
         duration: 8000,
-        action: () =>
-          h(
-            'a',
-            {
-              href: '#',
-              style: 'color:#2080f0; text-decoration:none',
-              onClick: (e: MouseEvent) => {
-                e.preventDefault()
-                router.push('/tasks')
-              },
-            },
-            '查看进度',
-          ),
       })
     }
   } catch {
-    message.error('质量审核提交失败')
+    Message.error('质量审核提交失败')
   } finally {
     checkingQuality.value = false
   }
@@ -417,7 +402,7 @@ async function handleApprove(id: string) {
   approvingIds.value = new Set(approvingIds.value).add(id)
   try {
     await updateQualityStatus(id, 'approved')
-    message.success('已标记为通过')
+    Message.success('已标记为通过')
     // 若当前筛选为「已拒绝」，从列表剔除并减总数；否则仅更新本地状态
     if (qualityFilter.value === 'rejected') {
       store.items = store.items.filter((i) => i.id !== id)
@@ -430,7 +415,7 @@ async function handleApprove(id: string) {
       }
     }
   } catch {
-    message.error('操作失败')
+    Message.error('操作失败')
   } finally {
     approvingIds.value = new Set(approvingIds.value)
     approvingIds.value.delete(id)
@@ -504,11 +489,11 @@ loadPage(currentPage.value)
         <span class="total-count">共 {{ store.total }} 条</span>
       </div>
       <div class="header-right">
-        <n-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck"
-          >批量审核</n-button
+        <a-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck"
+          >批量审核</a-button
         >
-        <n-button size="small" @click="enterBatchMode()">批量选择</n-button>
-        <n-button type="primary" @click="router.push('/upload')">上传素材</n-button>
+        <a-button size="small" @click="enterBatchMode()">批量选择</a-button>
+        <a-button type="primary" @click="router.push('/upload')">上传素材</a-button>
       </div>
     </div>
 
@@ -516,80 +501,80 @@ loadPage(currentPage.value)
     <div class="filter-bar">
       <!-- 来源筛选 -->
       <div class="filter-group">
-        <n-button
+        <a-button
           v-for="opt in sourceOptions"
           :key="opt.value"
-          size="tiny"
-          :type="sourceFilter === opt.value ? 'primary' : 'default'"
+          size="mini"
+          :type="sourceFilter === opt.value ? 'primary' : 'secondary'"
           @click="setSourceFilter(opt.value)"
         >
           {{ opt.label }}
-        </n-button>
+        </a-button>
       </div>
 
-      <n-divider vertical style="height: 20px" />
+      <a-divider direction="vertical" style="height: 20px" />
 
       <!-- 媒体筛选 -->
       <div class="filter-group">
-        <n-button
+        <a-button
           v-for="opt in mediaOptions"
           :key="opt.value"
-          size="tiny"
-          :type="mediaFilter === opt.value ? 'primary' : 'default'"
+          size="mini"
+          :type="mediaFilter === opt.value ? 'primary' : 'secondary'"
           @click="setMediaFilter(opt.value)"
         >
           {{ opt.label }}
-        </n-button>
+        </a-button>
       </div>
 
-      <n-divider vertical style="height: 20px" />
+      <a-divider direction="vertical" style="height: 20px" />
 
       <!-- 状态筛选 -->
       <div class="filter-group">
-        <n-button
+        <a-button
           v-for="opt in statusOptions"
           :key="opt.value"
-          size="tiny"
-          :type="statusFilter === opt.value ? 'primary' : 'default'"
+          size="mini"
+          :type="statusFilter === opt.value ? 'primary' : 'secondary'"
           @click="setStatusFilter(opt.value)"
         >
           {{ opt.label }}
-        </n-button>
+        </a-button>
       </div>
 
-      <n-divider vertical style="height: 20px" />
+      <a-divider direction="vertical" style="height: 20px" />
 
       <!-- 质量审核筛选 -->
       <div class="filter-group">
-        <n-button
+        <a-button
           v-for="opt in qualityOptions"
           :key="opt.value"
-          size="tiny"
-          :type="qualityFilter === opt.value ? 'primary' : 'default'"
+          size="mini"
+          :type="qualityFilter === opt.value ? 'primary' : 'secondary'"
           @click="setQualityFilter(opt.value)"
         >
           {{ opt.label }}
-        </n-button>
+        </a-button>
       </div>
 
-      <n-divider vertical style="height: 20px" />
+      <a-divider direction="vertical" style="height: 20px" />
 
       <!-- 标签筛选（多选，需同时包含） -->
       <div class="filter-group">
-        <n-select
-          v-model:value="selectedTags"
+        <a-select
+          v-model="selectedTags"
           multiple
           filterable
-          clearable
+          allow-clear
           :options="tagFilterOptions"
           placeholder="按标签筛选"
-          size="tiny"
+          size="mini"
           style="width: 220px"
-          @update:value="onFilterChange"
+          @change="onFilterChange"
         />
       </div>
 
-      <n-divider vertical style="height: 20px" />
+      <a-divider direction="vertical" style="height: 20px" />
 
       <!-- 颜色筛选（主色调色板，数据驱动） -->
       <div v-if="dominantColors.length > 0" class="filter-group color-filter" title="按主色调筛选">
@@ -602,22 +587,22 @@ loadPage(currentPage.value)
           :title="`${c.color}（${c.count} 个素材）`"
           @click="setColorFilter(colorFilter === c.color ? '' : c.color)"
         />
-        <n-button v-if="colorFilter" size="tiny" quaternary @click="setColorFilter('')">
+        <a-button v-if="colorFilter" size="mini" type="text" @click="setColorFilter('')">
           清除颜色
-        </n-button>
+        </a-button>
       </div>
 
-      <n-divider v-if="dominantColors.length > 0" vertical style="height: 20px" />
+      <a-divider v-if="dominantColors.length > 0" direction="vertical" style="height: 20px" />
 
       <!-- 评分筛选（评分 >= 指定值） -->
       <div class="filter-group">
-        <n-select
-          v-model:value="ratingMin"
+        <a-select
+          v-model="ratingMin"
           :options="ratingOptions"
           placeholder="评分筛选"
-          size="tiny"
+          size="mini"
           style="width: 130px"
-          @update:value="onFilterChange"
+          @change="onFilterChange"
         />
       </div>
 
@@ -625,24 +610,24 @@ loadPage(currentPage.value)
 
       <!-- 排序 + 密度 -->
       <div class="control-group">
-        <n-select
-          v-model:value="sortMode"
+        <a-select
+          v-model="sortMode"
           :options="sortOptions"
-          size="tiny"
+          size="mini"
           style="width: 110px"
-          @update:value="onSortChange"
+          @change="onSortChange"
         />
 
-        <n-button-group size="tiny">
-          <n-button
+        <a-button-group size="mini">
+          <a-button
             v-for="d in densityOptions"
             :key="d.value"
-            :type="density === d.value ? 'primary' : 'default'"
+            :type="density === d.value ? 'primary' : 'secondary'"
             @click="setDensity(d.value)"
           >
             {{ d.label }}
-          </n-button>
-        </n-button-group>
+          </a-button>
+        </a-button-group>
       </div>
     </div>
 
@@ -660,34 +645,34 @@ loadPage(currentPage.value)
       class="active-filters"
     >
       当前筛选：
-      <n-tag v-if="sourceFilter !== 'all'" size="tiny" closable @close="setSourceFilter('all')">
+      <a-tag v-if="sourceFilter !== 'all'" size="small" closable @close="setSourceFilter('all')">
         {{ sourceOptions.find((o) => o.value === sourceFilter)?.label }}
-      </n-tag>
-      <n-tag v-if="mediaFilter !== 'all'" size="tiny" closable @close="setMediaFilter('all')">
+      </a-tag>
+      <a-tag v-if="mediaFilter !== 'all'" size="small" closable @close="setMediaFilter('all')">
         {{ mediaOptions.find((o) => o.value === mediaFilter)?.label }}
-      </n-tag>
-      <n-tag v-if="statusFilter !== 'all'" size="tiny" closable @close="setStatusFilter('all')">
+      </a-tag>
+      <a-tag v-if="statusFilter !== 'all'" size="small" closable @close="setStatusFilter('all')">
         {{ statusOptions.find((o) => o.value === statusFilter)?.label }}
-      </n-tag>
-      <n-tag v-if="qualityFilter !== 'all'" size="tiny" closable @close="setQualityFilter('all')">
+      </a-tag>
+      <a-tag v-if="qualityFilter !== 'all'" size="small" closable @close="setQualityFilter('all')">
         {{ qualityOptions.find((o) => o.value === qualityFilter)?.label }}
-      </n-tag>
-      <n-tag
+      </a-tag>
+      <a-tag
         v-for="tag in selectedTags"
         :key="tag"
-        size="tiny"
+        size="small"
         closable
         @close="removeTagFilter(tag)"
       >
         {{ tag }}
-      </n-tag>
-      <n-tag v-if="colorFilter" size="tiny" closable @close="setColorFilter('')">
+      </a-tag>
+      <a-tag v-if="colorFilter" size="small" closable @close="setColorFilter('')">
         <span class="color-chip" :style="{ background: colorFilter }" /> {{ colorFilter }}
-      </n-tag>
-      <n-tag v-if="sortMode !== 'newest'" size="tiny" closable @close="setSortMode('newest')">
+      </a-tag>
+      <a-tag v-if="sortMode !== 'newest'" size="small" closable @close="setSortMode('newest')">
         {{ sortOptions.find((o) => o.value === sortMode)?.label }}
-      </n-tag>
-      <n-button size="tiny" text @click="clearAllFilters"> 清除全部 </n-button>
+      </a-tag>
+      <a-button size="mini" type="text" @click="clearAllFilters"> 清除全部 </a-button>
     </div>
 
     <!-- 定位模式横幅：展示被定位的素材并高亮，可一键退出回到完整列表 -->
@@ -700,7 +685,7 @@ loadPage(currentPage.value)
         </template>
         ；修改筛选或点击按钮退出定位。
       </span>
-      <n-button size="tiny" type="primary" @click="clearFocus">清除定位，返回完整列表</n-button>
+      <a-button size="mini" type="primary" @click="clearFocus">清除定位，返回完整列表</a-button>
     </div>
 
     <!-- 批量选择操作栏 -->
@@ -738,14 +723,14 @@ loadPage(currentPage.value)
 
     <!-- 分页 -->
     <div v-if="totalPages > 1" class="pagination-wrapper">
-      <n-pagination
-        v-model:page="currentPage"
-        :page-count="totalPages"
+      <a-pagination
+        v-model:current="currentPage"
+        :total="store.total"
         :page-size="pageSize"
-        show-size-picker
-        :page-sizes="[25, 50, 100]"
-        @update:page="loadPage"
-        @update:page-size="
+        show-page-size
+        :page-size-options="[25, 50, 100]"
+        @change="loadPage"
+        @page-size-change="
           (s: number) => {
             pageSize = s
             loadPage(1)

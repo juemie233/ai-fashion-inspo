@@ -40,20 +40,20 @@ describe('normalizeTaskStatus', () => {
 })
 
 describe('taskStatusType', () => {
-  it('状态到颜色映射', () => {
-    expect(taskStatusType('success')).toBe('success')
-    expect(taskStatusType('failed')).toBe('error')
-    expect(taskStatusType('running')).toBe('info')
-    expect(taskStatusType('pending')).toBe('default')
-    expect(taskStatusType('unknown')).toBe('default')
+  it('状态到 Arco 预设色映射', () => {
+    expect(taskStatusType('success')).toBe('green')
+    expect(taskStatusType('failed')).toBe('red')
+    expect(taskStatusType('running')).toBe('arcoblue')
+    expect(taskStatusType('pending')).toBe('gray')
+    expect(taskStatusType('unknown')).toBe('gray')
   })
 })
 
 describe('taskTypeTagColor', () => {
-  it('类型到颜色映射，未知回退 default', () => {
-    expect(taskTypeTagColor('batch_delete')).toBe('error')
-    expect(taskTypeTagColor('batch_analyze')).toBe('primary')
-    expect(taskTypeTagColor('unknown_type')).toBe('default')
+  it('类型到 Arco 预设色映射，未知回退 gray', () => {
+    expect(taskTypeTagColor('batch_delete')).toBe('red')
+    expect(taskTypeTagColor('batch_analyze')).toBe('arcoblue')
+    expect(taskTypeTagColor('unknown_type')).toBe('gray')
   })
 })
 

@@ -2,7 +2,7 @@
 
 import { ref } from 'vue'
 import { getApiErrorMessage } from '@/utils/apiError'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 
 export interface LearnerMetrics {
@@ -43,8 +43,7 @@ export interface LearnerStatus {
 }
 
 export function useQualityLearner() {
-  const message = useMessage()
-  const status = ref<LearnerStatus | null>(null)
+    const status = ref<LearnerStatus | null>(null)
   const loading = ref(false)
   const training = ref(false)
   const resetting = ref(false)
@@ -56,7 +55,7 @@ export function useQualityLearner() {
       const { data } = await apiClient.get<LearnerStatus>('/ai/quality-learner/status')
       status.value = data
     } catch (e) {
-      message.error(getApiErrorMessage(e, '获取初筛器状态失败'))
+      Message.error(getApiErrorMessage(e, '获取初筛器状态失败'))
     } finally {
       loading.value = false
     }
@@ -68,13 +67,13 @@ export function useQualityLearner() {
     try {
       const { data } = await apiClient.post<{ error?: string }>('/ai/quality-learner/train')
       if (data.error) {
-        message.warning(data.error)
+        Message.warning(data.error)
         return
       }
-      message.success('初筛器训练完成')
+      Message.success('初筛器训练完成')
       await loadStatus()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '训练失败'))
+      Message.error(getApiErrorMessage(e, '训练失败'))
     } finally {
       training.value = false
     }
@@ -85,11 +84,11 @@ export function useQualityLearner() {
     resetting.value = true
     try {
       await apiClient.post('/ai/quality-learner/reset')
-      message.success('已删除初筛器模型，回滚到纯 VLM 审核')
+      Message.success('已删除初筛器模型，回滚到纯 VLM 审核')
       await loadStatus()
       return true
     } catch (e) {
-      message.error(getApiErrorMessage(e, '重置失败（可能未配置 API Key）'))
+      Message.error(getApiErrorMessage(e, '重置失败（可能未配置 API Key）'))
       return false
     } finally {
       resetting.value = false

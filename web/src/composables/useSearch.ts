@@ -3,7 +3,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { useTagsStore } from '@/stores/tags'
 import { useInspirationsStore } from '@/stores/inspirations'
 import {
@@ -33,8 +33,7 @@ export const SEARCH_SORT_OPTIONS = [
 export function useSearch() {
   const router = useRouter()
   const route = useRoute()
-  const message = useMessage()
-  const tagsStore = useTagsStore()
+    const tagsStore = useTagsStore()
   const inspStore = useInspirationsStore()
 
   /** 搜索栏组件引用，供全局快捷键聚焦 */
@@ -131,9 +130,9 @@ export function useSearch() {
     await syncUrl()  // 等待 URL 同步完成后再读取 location.href，确保复制到最新筛选条件
     try {
       await navigator.clipboard.writeText(location.href)
-      message.success('已复制搜索链接')
+      Message.success('已复制搜索链接')
     } catch {
-      message.error('复制失败')
+      Message.error('复制失败')
     }
   }
 
@@ -174,7 +173,7 @@ export function useSearch() {
       syncUrl()
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch {
-      if (seq === searchSeq) message.error('搜索失败')
+      if (seq === searchSeq) Message.error('搜索失败')
     } finally {
       if (seq === searchSeq) searching.value = false
     }
@@ -202,7 +201,7 @@ export function useSearch() {
   async function doSemanticSearch() {
     const text = semanticText.value.trim()
     if (!text) {
-      message.warning('请输入要搜索的语义描述')
+      Message.warning('请输入要搜索的语义描述')
       return
     }
     vectorLoading.value = true
@@ -218,7 +217,7 @@ export function useSearch() {
       addToHistory(text)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {
-      if (seq === searchSeq) message.error(getApiErrorMessage(e, '语义搜索失败，请确认后端向量服务已就绪'))
+      if (seq === searchSeq) Message.error(getApiErrorMessage(e, '语义搜索失败，请确认后端向量服务已就绪'))
     } finally {
       if (seq === searchSeq) vectorLoading.value = false
     }
@@ -244,7 +243,7 @@ export function useSearch() {
       total.value = data.total
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
-      if (seq === searchSeq) message.error(getApiErrorMessage(err, '以图搜图失败，请确认已安装 CLIP 图像模型'))
+      if (seq === searchSeq) Message.error(getApiErrorMessage(err, '以图搜图失败，请确认已安装 CLIP 图像模型'))
     } finally {
       if (seq === searchSeq) vectorLoading.value = false
     }
@@ -289,9 +288,9 @@ export function useSearch() {
       await inspStore.remove(id)
       results.value = results.value.filter(r => r.id !== id)
       total.value--
-      message.success('已移入垃圾桶')
+      Message.success('已移入垃圾桶')
     } catch {
-      message.error('操作失败')
+      Message.error('操作失败')
     }
   }
 
@@ -305,7 +304,7 @@ export function useSearch() {
       await toggleFavoriteApi(id, newState)
       item.is_favorite = newState
     } catch {
-      message.error('操作失败')
+      Message.error('操作失败')
     }
   }
 
@@ -316,11 +315,11 @@ export function useSearch() {
     try {
       await updateRatingApi(id, value)
       item.rating = value
-      message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+      Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
     } catch (e) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
         ?.detail
-      message.error(detail || '评分失败')
+      Message.error(detail || '评分失败')
     }
   }
 

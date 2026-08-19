@@ -442,7 +442,7 @@ onUnmounted(() => {
         playsinline
         style="width: 100%; border-radius: 8px"
       />
-    </n-modal>
+    </a-modal>
   </div>
 </template>
 

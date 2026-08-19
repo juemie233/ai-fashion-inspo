@@ -4,8 +4,8 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, NIcon } from 'naive-ui'
-import { ChevronBackOutline, ChevronForwardOutline, CloseOutline } from '@vicons/ionicons5'
+import { Message } from '@arco-design/web-vue'
+import { IconLeft, IconRight, IconClose } from '@arco-design/web-vue/es/icon'
 import {
   fetchInspiration,
   toggleFavorite,
@@ -37,7 +37,6 @@ import { useBrowseContext } from '@/composables/useBrowseContext'
 
 const route = useRoute()
 const router = useRouter()
-const message = useMessage()
 
 /** 素材详情数据 */
 const detail = ref<InspirationDetailOut | null>(null)
@@ -145,7 +144,7 @@ async function loadDetail(id: string) {
     loadBrowseContext()
   } catch {
     if (seq !== detailSeq) return
-    message.error('加载素材详情失败')
+    Message.error('加载素材详情失败')
   } finally {
     if (seq === detailSeq) loading.value = false
   }
@@ -178,7 +177,7 @@ async function handleToggleFavorite() {
     await toggleFavorite(detail.value.id, newState)
     detail.value.is_favorite = newState
   } catch {
-    message.error('操作失败')
+    Message.error('操作失败')
   }
 }
 
@@ -188,11 +187,11 @@ async function handleRate(value: number) {
   try {
     await updateRating(detail.value.id, value)
     detail.value.rating = value
-    message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
+    Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
     const detailMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data
       ?.detail
-    message.error(detailMsg || '评分失败')
+    Message.error(detailMsg || '评分失败')
   }
 }
 
@@ -220,10 +219,10 @@ async function confirmTrash() {
   trashSubmitting.value = true
   try {
     await moveToTrash(detail.value.id, trashReason.value)
-    message.success('已移入垃圾桶')
+    Message.success('已移入垃圾桶')
     goHome()
   } catch {
-    message.error('操作失败')
+    Message.error('操作失败')
   } finally {
     trashSubmitting.value = false
   }
@@ -234,11 +233,11 @@ async function handleRestore() {
   if (!detail.value) return
   try {
     const restored = await restoreInspiration(detail.value.id)
-    message.success('已恢复')
+    Message.success('已恢复')
     detail.value.deleted_at = restored.deleted_at ?? null
     detail.value.trash_reason = restored.trash_reason ?? null
   } catch {
-    message.error('恢复失败')
+    Message.error('恢复失败')
   }
 }
 
@@ -247,10 +246,10 @@ async function handlePermanentDelete() {
   if (!detail.value) return
   try {
     await deleteInspiration(detail.value.id)
-    message.success('已彻底删除')
+    Message.success('已彻底删除')
     goHome()
   } catch {
-    message.error('删除失败')
+    Message.error('删除失败')
   }
 }
 
@@ -314,9 +313,9 @@ async function copySourceUrl() {
   if (!detail.value?.source_url) return
   try {
     await navigator.clipboard.writeText(detail.value.source_url)
-    message.success('已复制原始链接')
+    Message.success('已复制原始链接')
   } catch {
-    message.error('复制失败')
+    Message.error('复制失败')
   }
 }
 
@@ -326,9 +325,9 @@ async function reanalyze() {
   analyzing.value = true
   try {
     await analyzeInspiration(detail.value.id)
-    message.success('已提交重新分析')
+    Message.success('已提交重新分析')
   } catch (e) {
-    message.error(getApiErrorMessage(e, '重新分析失败'))
+    Message.error(getApiErrorMessage(e, '重新分析失败'))
   } finally {
     analyzing.value = false
   }
@@ -355,54 +354,50 @@ async function removeTag(t: InspirationTagOut) {
   try {
     await removeTagFromInspiration(detail.value.id, t.tag.id)
     detail.value.tags = detail.value.tags.filter((x) => x.tag.id !== t.tag.id)
-    message.success('已移除标签')
+    Message.success('已移除标签')
   } catch {
-    message.error('移除标签失败')
+    Message.error('移除标签失败')
   }
 }
 </script>
 
 <template>
   <div class="detail-page">
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <template v-if="detail">
         <!-- 面包屑 + 上一张/下一张导航 -->
         <div class="detail-topbar">
-          <n-breadcrumb>
-            <n-breadcrumb-item @click="goHome()">素材库</n-breadcrumb-item>
-            <n-breadcrumb-item>素材详情</n-breadcrumb-item>
-          </n-breadcrumb>
+          <a-breadcrumb>
+            <a-breadcrumb-item @click="goHome()">素材库</a-breadcrumb-item>
+            <a-breadcrumb-item>素材详情</a-breadcrumb-item>
+          </a-breadcrumb>
           <div v-if="browseIndex >= 0" class="browse-nav">
             <span class="browse-position"> {{ browsePosition }} / {{ browseTotal }} </span>
-            <n-button-group size="tiny">
-              <n-button
+            <a-button-group size="mini">
+              <a-button
                 :disabled="!hasPrev"
                 :loading="browseLoading"
                 title="上一张（←）"
                 @click="goNeighbor('prev')"
               >
-                <template #icon
-                  ><n-icon><ChevronBackOutline /></n-icon
-                ></template>
+                <template #icon><IconLeft /></template>
                 上一张
-              </n-button>
-              <n-button
+              </a-button>
+              <a-button
                 :disabled="!hasNext"
                 :loading="browseLoading"
                 title="下一张（→）"
                 @click="goNeighbor('next')"
               >
                 下一张
-                <template #icon
-                  ><n-icon><ChevronForwardOutline /></n-icon
-                ></template>
-              </n-button>
-            </n-button-group>
+                <template #icon><IconRight /></template>
+              </a-button>
+            </a-button-group>
           </div>
         </div>
 
         <!-- 垃圾桶提示（软删除素材） -->
-        <n-alert
+        <a-alert
           v-if="detail.deleted_at"
           type="warning"
           title="此素材在垃圾桶中"
@@ -414,7 +409,7 @@ async function removeTag(t: InspirationTagOut) {
           }}{{
             detail.quality_reason ? `（${shortenText(detail.quality_reason)}）` : ''
           }}；可在右侧操作区点击「恢复」移回素材库，或「彻底删除」永久移除。
-        </n-alert>
+        </a-alert>
 
         <div class="detail-layout">
           <!-- 左侧：大图 / 视频 -->
@@ -448,19 +443,19 @@ async function removeTag(t: InspirationTagOut) {
           <div class="info-section">
             <!-- 顶部操作 -->
             <div class="info-actions">
-              <n-button
-                :type="detail.is_favorite ? 'error' : 'default'"
+              <a-button
+                :type="detail.is_favorite ? 'primary' : 'secondary'"
+                :status="detail.is_favorite ? 'danger' : undefined"
                 @click="handleToggleFavorite"
               >
                 {{ detail.is_favorite ? '❤️ 已收藏' : '🤍 收藏' }}
-              </n-button>
+              </a-button>
               <!-- 五星评分：仅整数，点击星设置，再点已选星清除（0 分） -->
               <div class="rating-box" title="评分（0~5，点击星设置，再点清除）">
-                <n-rate
-                  :value="detail.rating || 0"
-                  clearable
-                  size="medium"
-                  @update:value="handleRate"
+                <a-rate
+                  :model-value="detail.rating || 0"
+                  allow-clear
+                  @change="(v: number) => handleRate(v)"
                 />
                 <span v-if="(detail.rating || 0) > 0" class="rating-value">
                   {{ detail.rating || 0 }} 分
@@ -471,34 +466,31 @@ async function removeTag(t: InspirationTagOut) {
                 :download="downloadFileName"
                 class="download-link"
               >
-                <n-button
-                  >⬇️ {{ detail.media_type === 'video' ? '下载视频' : '下载原图' }}</n-button
+                <a-button
+                  >⬇️ {{ detail.media_type === 'video' ? '下载视频' : '下载原图' }}</a-button
                 >
               </a>
               <template v-if="detail.deleted_at">
-                <n-button type="primary" secondary @click="handleRestore">恢复</n-button>
-                <n-popconfirm @positive-click="handlePermanentDelete">
-                  <template #trigger>
-                    <n-button type="error">彻底删除</n-button>
-                  </template>
-                  彻底删除后不可恢复，确定继续？
-                </n-popconfirm>
+                <a-button type="secondary" @click="handleRestore">恢复</a-button>
+                <a-popconfirm content="彻底删除后不可恢复，确定继续？" @ok="handlePermanentDelete">
+                  <a-button type="primary" status="danger">彻底删除</a-button>
+                </a-popconfirm>
               </template>
-              <n-button v-else type="error" secondary @click="openTrashModal">移入垃圾桶</n-button>
+              <a-button v-else type="secondary" status="danger" @click="openTrashModal">移入垃圾桶</a-button>
             </div>
 
             <!-- 基本信息 -->
             <div class="info-meta">
-              <n-descriptions :column="1" label-placement="left" size="small" bordered>
-                <n-descriptions-item label="来源">
-                  <n-tag size="small" type="info">{{
+              <a-descriptions :column="1" size="small" bordered>
+                <a-descriptions-item label="来源">
+                  <a-tag size="small" color="arcoblue">{{
                     sourceLabel(detail.source_type || '')
-                  }}</n-tag>
-                </n-descriptions-item>
-                <n-descriptions-item v-if="detail.source_author" label="作者">
+                  }}</a-tag>
+                </a-descriptions-item>
+                <a-descriptions-item v-if="detail.source_author" label="作者">
                   {{ detail.source_author }}
-                </n-descriptions-item>
-                <n-descriptions-item v-if="detail.source_url" label="原始链接">
+                </a-descriptions-item>
+                <a-descriptions-item v-if="detail.source_url" label="原始链接">
                   <a
                     v-if="isSourceLinkValid"
                     :href="detail.source_url"
@@ -506,38 +498,38 @@ async function removeTag(t: InspirationTagOut) {
                     rel="noopener noreferrer"
                     >打开</a
                   >
-                  <n-text v-else depth="3">图片直链，无法打开</n-text>
-                  <n-button size="tiny" quaternary style="margin-left: 8px" @click="copySourceUrl"
-                    >复制</n-button
+                  <a-typography-text v-else type="secondary">图片直链，无法打开</a-typography-text>
+                  <a-button size="mini" type="text" style="margin-left: 8px" @click="copySourceUrl"
+                    >复制</a-button
                   >
-                </n-descriptions-item>
-                <n-descriptions-item label="AI 分析">
-                  <n-tag
+                </a-descriptions-item>
+                <a-descriptions-item label="AI 分析">
+                  <a-tag
                     size="small"
-                    :type="
+                    :color="
                       detail.analysis_status === 'done'
-                        ? 'success'
+                        ? 'green'
                         : detail.analysis_status === 'error'
-                          ? 'error'
-                          : 'default'
+                          ? 'red'
+                          : 'gray'
                     "
                   >
                     {{ analysisStatusLabel() }}
-                  </n-tag>
-                  <n-button
+                  </a-tag>
+                  <a-button
                     v-if="detail.analysis_status === 'error' || detail.analysis_status === 'none'"
-                    size="tiny"
-                    quaternary
+                    size="mini"
+                    type="text"
                     :loading="analyzing"
                     style="margin-left: 8px"
                     @click="reanalyze"
-                    >重新分析</n-button
+                    >重新分析</a-button
                   >
-                </n-descriptions-item>
-                <n-descriptions-item label="上传时间">
+                </a-descriptions-item>
+                <a-descriptions-item label="上传时间">
                   {{ new Date(detail.created_at).toLocaleString('zh-CN') }}
-                </n-descriptions-item>
-              </n-descriptions>
+                </a-descriptions-item>
+              </a-descriptions>
             </div>
 
             <!-- 关联博主（搜索添加 / 解除关联） -->
@@ -596,25 +588,23 @@ async function removeTag(t: InspirationTagOut) {
                         ({{ Math.round(t.confidence * 100) }}%)</template
                       >
                     </CategoryTag>
-                    <n-button
-                      size="tiny"
-                      quaternary
+                    <a-button
+                      size="mini"
+                      type="text"
                       circle
                       class="tag-remove-btn"
                       title="移除该标签"
                       @click.stop="removeTag(t)"
                     >
-                      <template #icon
-                        ><n-icon><CloseOutline /></n-icon
-                      ></template>
-                    </n-button>
+                      <template #icon><IconClose /></template>
+                    </a-button>
                   </span>
                 </div>
               </div>
             </div>
 
             <!-- 无标签 -->
-            <n-empty v-else description="暂无标签，AI 分析后会自动生成" size="small" />
+            <a-empty v-else description="暂无标签，AI 分析后会自动生成" />
           </div>
         </div>
 
@@ -637,43 +627,45 @@ async function removeTag(t: InspirationTagOut) {
           @batch-add="batchAddOutfitTags"
         />
       </template>
-    </n-spin>
+    </a-spin>
 
     <!-- 移入垃圾桶原因选择弹窗 -->
-    <n-modal
-      v-model:show="trashModalOpen"
-      preset="card"
+    <a-modal
+      v-model:visible="trashModalOpen"
       title="移入垃圾桶"
-      style="width: 420px"
+      :width="420"
       :mask-closable="false"
     >
       <p class="trash-reason-tip">
         请选择移入垃圾桶的原因，移入后可在保留期内从「素材管理 → 垃圾桶」恢复：
       </p>
-      <n-radio-group v-model:value="trashReason" class="trash-reason-group">
-        <n-space vertical :size="10">
-          <n-radio
+      <a-radio-group
+        :model-value="trashReason ?? undefined"
+        class="trash-reason-group"
+        @change="(v: unknown) => (trashReason = (v as TrashReason | undefined) ?? null)"
+      >
+        <a-space direction="vertical" :size="10">
+          <a-radio
             v-for="opt in TRASH_REASON_OPTIONS"
             :key="opt.value"
             :value="opt.value"
-            :label="opt.label"
-          />
-        </n-space>
-      </n-radio-group>
+          >{{ opt.label }}</a-radio>
+        </a-space>
+      </a-radio-group>
       <template #footer>
         <div class="trash-modal-footer">
-          <n-button @click="trashModalOpen = false">取消</n-button>
-          <n-button
-            type="error"
+          <a-button @click="trashModalOpen = false">取消</a-button>
+          <a-button
+            status="danger"
             :loading="trashSubmitting"
             :disabled="!trashReason"
             @click="confirmTrash"
           >
             确认移入
-          </n-button>
+          </a-button>
         </div>
       </template>
-    </n-modal>
+    </a-modal>
   </div>
 </template>
 

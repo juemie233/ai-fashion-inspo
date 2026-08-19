@@ -8,7 +8,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, type UploadFileInfo } from 'naive-ui'
+import { Message, type FileItem } from '@arco-design/web-vue'
 import {
   bloggersApi,
   modelsApi,
@@ -28,7 +28,6 @@ import PersonFormModal from '@/components/person/PersonFormModal.vue'
 
 const route = useRoute()
 const router = useRouter()
-const message = useMessage()
 
 const personId = computed(() => Number(route.params.id))
 /** 人物种类：由列表页跳转时携带（/persons/:id?kind=blogger|model） */
@@ -110,7 +109,7 @@ async function openPhotoSet(set: ModelPhotoSet) {
     photoLightboxName.value = set.name
     photoLightboxOpen.value = true
   } catch {
-    message.error('加载照片组失败')
+    Message.error('加载照片组失败')
   }
 }
 
@@ -118,10 +117,10 @@ async function openPhotoSet(set: ModelPhotoSet) {
 async function handleDeletePhotoSet(set: ModelPhotoSet) {
   try {
     await deleteModelPhotoSet(personId.value, set.id)
-    message.success(`已删除照片组「${set.name}」`)
+    Message.success(`已删除照片组「${set.name}」`)
     await loadPhotoSets()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 
@@ -136,7 +135,7 @@ const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | nul
 /** 人脸注册来源选项卡：upload 上传照片 / inspiration 从素材选择 */
 const faceTab = ref<'upload' | 'inspiration'>('upload')
 /** 已选正脸照片（UploadFileInfo 结构：支持多选/缩略图预览/单张删除） */
-const faceFileList = ref<UploadFileInfo[]>([])
+const faceFileList = ref<FileItem[]>([])
 const faceUploading = ref(false)
 
 // ── 素材选择状态（Tab2：该博主已关联素材的缩略图网格，勾选参与注册）──
@@ -157,7 +156,7 @@ async function loadFaceInspirations(page: number = 1) {
     faceInspTotal.value = data.total ?? 0
     faceInspPage.value = page
   } catch {
-    message.error('加载素材失败')
+    Message.error('加载素材失败')
   } finally {
     faceInspLoading.value = false
   }
@@ -171,7 +170,7 @@ function toggleFaceInsp(id: string) {
   } else {
     const uploadCount = faceFileList.value.filter((f) => !!f.file).length
     if (next.size + uploadCount >= 5) {
-      message.warning('照片与素材合计最多 5 张')
+      Message.warning('照片与素材合计最多 5 张')
       return
     }
     next.add(id)
@@ -202,11 +201,11 @@ async function handleRegisterFace() {
     .filter((f): f is File => !!f)
   const selectedIds = [...selectedFaceInspIds.value]
   if (files.length === 0 && selectedIds.length === 0) {
-    message.warning('请选择照片或勾选素材（合计 1~5 张）')
+    Message.warning('请选择照片或勾选素材（合计 1~5 张）')
     return
   }
   if (files.length + selectedIds.length > 5) {
-    message.warning('照片与素材合计最多 5 张')
+    Message.warning('照片与素材合计最多 5 张')
     return
   }
   faceUploading.value = true
@@ -227,17 +226,18 @@ async function handleRegisterFace() {
       detail += `；${warnings.join('；')}`
     }
     if (detail) {
-      message.warning(`注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）${detail}`, {
+      Message.warning({
+        content: `注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）${detail}`,
         duration: 8000,
       })
     } else {
-      message.success(`人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）`)
+      Message.success(`人脸注册成功（${r.photos_used ?? 0}/${r.photos_total ?? 0} 张图片检出人脸）`)
     }
     faceFileList.value = []
     selectedFaceInspIds.value = new Set()
     await loadFaceStatus()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '人脸注册失败'))
+    Message.error(getApiErrorMessage(e, '人脸注册失败'))
   } finally {
     faceUploading.value = false
   }
@@ -247,7 +247,7 @@ async function loadDetail() {
   // 参数兜底：非法 id（NaN/非正整数）直接回列表，避免 404 误报
   const id = personId.value
   if (!Number.isInteger(id) || id <= 0) {
-    message.error('人物参数无效')
+    Message.error('人物参数无效')
     router.replace('/persons')
     return
   }
@@ -255,7 +255,7 @@ async function loadDetail() {
   try {
     detail.value = await api.value.fetchDetail(id)
   } catch {
-    message.error('加载人物详情失败')
+    Message.error('加载人物详情失败')
     return
   } finally {
     loading.value = false
@@ -278,7 +278,7 @@ async function loadInspirations() {
     items.value = data.items ?? []
     total.value = data.total ?? 0
   } catch {
-    message.error('加载人物素材失败')
+    Message.error('加载人物素材失败')
   } finally {
     itemsLoading.value = false
   }
@@ -308,10 +308,10 @@ async function handleDelete() {
   if (!detail.value) return
   try {
     await api.value.remove(detail.value.id)
-    message.success(`已删除人物「${detail.value.name}」`)
+    Message.success(`已删除人物「${detail.value.name}」`)
     backToList()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 
@@ -333,16 +333,16 @@ watch(personId, () => {
 
 <template>
   <div class="person-detail-page">
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <template v-if="detail">
         <!-- 面包屑 -->
-        <n-breadcrumb style="margin-bottom: 16px">
-          <n-breadcrumb-item @click="backToList">人物管理</n-breadcrumb-item>
-          <n-breadcrumb-item>{{ detail.name }}</n-breadcrumb-item>
-        </n-breadcrumb>
+        <a-breadcrumb style="margin-bottom: 16px">
+          <a-breadcrumb-item @click="backToList">人物管理</a-breadcrumb-item>
+          <a-breadcrumb-item>{{ detail.name }}</a-breadcrumb-item>
+        </a-breadcrumb>
 
         <!-- 头部信息卡 -->
-        <n-card size="small" class="header-card">
+        <a-card size="small" class="header-card">
           <div class="header-row">
             <div class="avatar-wrap">
               <!-- 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 名字首字 -->
@@ -362,42 +362,39 @@ watch(personId, () => {
                 <PersonTypeTag :type="kind" size="medium" />
               </div>
               <div class="meta-line">
-                <n-tag size="small" :bordered="false" round>
+                <a-tag size="small">
                   {{ PERSON_PLATFORM_LABELS[detail.platform] || detail.platform }}
-                </n-tag>
-                <n-text depth="3" style="font-size: 13px">
+                </a-tag>
+                <a-typography-text type="secondary" style="font-size: 13px">
                   {{ detail.inspiration_count ?? 0 }} 条素材 · 创建于
                   {{ detail.created_at ? new Date(detail.created_at).toLocaleDateString('zh-CN') : '-' }}
-                </n-text>
+                </a-typography-text>
               </div>
               <div v-if="detail.bio" class="bio-line">
-                <n-text depth="2">{{ detail.bio }}</n-text>
+                <a-typography-text type="secondary">{{ detail.bio }}</a-typography-text>
               </div>
               <div v-if="detail.profile_url" class="bio-line">
                 <a v-if="isProfileUrlSafe" :href="detail.profile_url" target="_blank" rel="noopener noreferrer">主页链接 ↗</a>
-                <n-text v-else depth="3">主页链接：{{ detail.profile_url }}</n-text>
+                <a-typography-text v-else type="secondary">主页链接：{{ detail.profile_url }}</a-typography-text>
               </div>
             </div>
 
             <div class="header-actions">
-              <n-button secondary @click="showForm = true">编辑</n-button>
-              <n-popconfirm @positive-click="handleDelete">
-                <template #trigger>
-                  <n-button type="error" secondary>删除</n-button>
-                </template>
-                确定删除{{ kindLabel }}「{{ detail.name }}」？仅当该人物无关联素材时才可删除。
-              </n-popconfirm>
+              <a-button type="secondary" @click="showForm = true">编辑</a-button>
+              <a-popconfirm :content="`确定删除${kindLabel}「${detail.name}」？仅当该人物无关联素材时才可删除。`" @ok="handleDelete">
+                <a-button type="secondary" status="danger">删除</a-button>
+              </a-popconfirm>
             </div>
           </div>
-        </n-card>
+        </a-card>
 
         <!-- 照片组（模特写真，仅职业模特展示；与穿搭素材分离） -->
-        <n-card v-if="kind === 'model'" size="small" class="photo-sets-card">
+        <a-card v-if="kind === 'model'" size="small" class="photo-sets-card">
           <div class="items-header">
             <h3 style="margin: 0">照片组（模特写真）</h3>
-            <n-button size="small" type="primary" secondary @click="goAddPhotos">
+            <a-button size="small" type="secondary" @click="goAddPhotos">
               ＋ 添加照片
-            </n-button>
+            </a-button>
           </div>
 
           <div v-if="photoSets.length > 0" class="photo-sets-grid">
@@ -413,59 +410,56 @@ watch(personId, () => {
               </div>
               <div class="photo-set-meta">
                 <span class="photo-set-name" :title="set.name">{{ set.name }}</span>
-                <n-space :size="4">
-                  <n-button size="tiny" quaternary @click="openPhotoSet(set)">浏览</n-button>
-                  <n-popconfirm @positive-click="handleDeletePhotoSet(set)">
-                    <template #trigger>
-                      <n-button size="tiny" type="error" quaternary>删除</n-button>
-                    </template>
-                    确定删除照片组「{{ set.name }}」？组内照片将一并删除。
-                  </n-popconfirm>
-                </n-space>
+                <a-space :size="4">
+                  <a-button size="mini" type="text" @click="openPhotoSet(set)">浏览</a-button>
+                  <a-popconfirm :content="`确定删除照片组「${set.name}」？组内照片将一并删除。`" @ok="handleDeletePhotoSet(set)">
+                    <a-button size="mini" type="text" status="danger">删除</a-button>
+                  </a-popconfirm>
+                </a-space>
               </div>
             </div>
           </div>
 
-          <n-empty
+          <a-empty
             v-else-if="!photoSetsLoading"
             description="暂无照片组，点击右上角「添加照片」从文件夹导入"
             size="small"
             style="margin: 24px 0"
           />
-          <n-spin v-if="photoSetsLoading" :show="true" style="margin: 24px 0" />
-        </n-card>
+          <a-spin v-if="photoSetsLoading" :loading="true" style="margin: 24px 0" />
+        </a-card>
 
         <!-- 人脸特征注册（仅穿搭博主：上传照片 与/或 从已关联素材中选择图片） -->
-        <n-card v-if="kind === 'blogger'" size="small" class="face-register-card">
+        <a-card v-if="kind === 'blogger'" size="small" class="face-register-card">
           <div class="items-header">
             <h3 style="margin: 0">人脸特征注册</h3>
-            <n-tag v-if="faceStatus?.registered" type="success" size="small" :bordered="false">
+            <a-tag v-if="faceStatus?.registered" color="green" size="small">
               已注册{{ faceStatus?.updated_at ? `（${faceStatus.updated_at.slice(0, 10)}）` : '' }}
-            </n-tag>
-            <n-tag v-else type="warning" size="small" :bordered="false">未注册</n-tag>
+            </a-tag>
+            <a-tag v-else color="orange" size="small">未注册</a-tag>
           </div>
           <p class="face-hint">
             上传正脸照片或从已关联素材中选择图片（两种来源合计 1~5 张），系统提取人脸特征并
             平均池化入库；素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
           </p>
 
-          <n-tabs v-model:value="faceTab" size="small" type="line" animated>
+          <a-tabs v-model:active-key="faceTab" size="small" type="line">
             <!-- Tab1：上传照片（原有方式） -->
-            <n-tab-pane name="upload" tab="上传照片">
-              <n-upload
+            <a-tab-pane key="upload" title="上传照片">
+              <a-upload
                 v-model:file-list="faceFileList"
                 multiple
                 :max="5"
                 accept="image/*"
-                list-type="image"
+                list-type="picture-card"
                 show-remove-button
               >
-                <n-button size="small">选择照片（最多 5 张）</n-button>
-              </n-upload>
-            </n-tab-pane>
+                <a-button size="small">选择照片（最多 5 张）</a-button>
+              </a-upload>
+            </a-tab-pane>
 
             <!-- Tab2：从已关联素材中选择图片 -->
-            <n-tab-pane name="inspiration" tab="从素材选择">
+            <a-tab-pane key="inspiration" title="从素材选择">
               <div class="face-insp-grid">
                 <div
                   v-for="item in faceInspItems"
@@ -487,35 +481,35 @@ watch(personId, () => {
                     ✓
                   </div>
                 </div>
-                <n-empty
+                <a-empty
                   v-if="!faceInspLoading && faceInspItems.length === 0"
                   description="暂无已关联素材，可先上传素材并关联该博主"
                   size="small"
                   style="grid-column: 1 / -1; padding: 16px 0"
                 />
                 <div v-if="faceInspLoading" class="face-insp-loading">
-                  <n-spin size="small" />
+                  <a-spin :size="14" />
                   <span>加载中...</span>
                 </div>
               </div>
-              <n-pagination
+              <a-pagination
                 v-if="faceInspTotal > faceInspPageSize"
                 style="margin-top: 10px; justify-content: center"
-                :page="faceInspPage"
+                :current="faceInspPage"
                 :page-size="faceInspPageSize"
-                :item-count="faceInspTotal"
-                @update:page="loadFaceInspirations"
+                :total="faceInspTotal"
+                @change="loadFaceInspirations"
               />
-            </n-tab-pane>
-          </n-tabs>
+            </a-tab-pane>
+          </a-tabs>
 
           <!-- 注册按钮（上传照片 + 勾选素材合并提交） -->
           <div class="face-upload-row" style="margin-top: 10px; justify-content: space-between">
-            <n-text depth="3" style="font-size: 12px">
+            <a-typography-text type="secondary" style="font-size: 12px">
               已选：{{ faceFileList.filter((f) => !!f.file).length }} 张照片 +
               {{ selectedFaceInspIds.size }} 张素材（合计 ≤ 5）
-            </n-text>
-            <n-button
+            </a-typography-text>
+            <a-button
               size="small"
               type="primary"
               :loading="faceUploading"
@@ -525,12 +519,12 @@ watch(personId, () => {
               @click="handleRegisterFace"
             >
               {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
-            </n-button>
+            </a-button>
           </div>
-        </n-card>
+        </a-card>
 
         <!-- 风格画像 -->
-        <n-card size="small" class="profile-card" title="风格画像（基于该人物素材标签聚合）">
+        <a-card size="small" class="profile-card" title="风格画像（基于该人物素材标签聚合）">
           <div class="profile-grid">
             <!-- 高频标签 -->
             <div class="profile-block">
@@ -547,7 +541,7 @@ watch(personId, () => {
                     <span class="tag-count">{{ t.count }}</span>
                   </span>
                 </template>
-                <n-empty v-else description="暂无标签数据" size="small" />
+                <a-empty v-else description="暂无标签数据" size="small" />
               </div>
             </div>
 
@@ -566,7 +560,7 @@ watch(personId, () => {
                     <span class="cat-count">{{ count }}</span>
                   </div>
                 </template>
-                <n-empty v-else description="暂无数据" size="small" />
+                <a-empty v-else description="暂无数据" size="small" />
               </div>
             </div>
 
@@ -585,26 +579,26 @@ watch(personId, () => {
                     <span class="trend-count">{{ t.count }}</span>
                   </div>
                 </template>
-                <n-empty v-else description="暂无趋势" size="small" />
+                <a-empty v-else description="暂无趋势" size="small" />
               </div>
             </div>
           </div>
-        </n-card>
+        </a-card>
 
         <!-- 素材瀑布流 -->
-        <n-card size="small" class="items-card">
+        <a-card size="small" class="items-card">
           <div class="items-header">
             <h3 style="margin: 0">TA 的素材</h3>
-            <n-space>
-              <n-button
+            <a-space>
+              <a-button
                 size="small"
                 secondary
                 :disabled="lightboxPaths.length === 0"
                 @click="lightboxOpen = true"
               >
                 🖼️ 全屏浏览
-              </n-button>
-            </n-space>
+              </a-button>
+            </a-space>
           </div>
 
           <MasonryGrid
@@ -614,15 +608,15 @@ watch(personId, () => {
             empty-text="该人物还没有素材，去素材详情页关联或按博主采集吧"
           />
 
-          <n-pagination
+          <a-pagination
             v-if="total > pageSize"
             style="margin-top: 16px; justify-content: flex-end"
-            :page="page"
+            :current="page"
             :page-size="pageSize"
-            :item-count="total"
-            @update:page="setPage"
+            :total="total"
+            @change="setPage"
           />
-        </n-card>
+        </a-card>
 
         <!-- 全屏灯箱：浏览该人物图片素材 -->
         <ImageLightbox
@@ -640,7 +634,7 @@ watch(personId, () => {
           @close="photoLightboxOpen = false"
         />
       </template>
-    </n-spin>
+    </a-spin>
 
     <!-- 编辑对话框 -->
     <PersonFormModal v-model:show="showForm" :kind="kind" :person="detail" @saved="loadDetail()" />

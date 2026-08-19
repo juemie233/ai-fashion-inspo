@@ -467,7 +467,7 @@ onBeforeUnmount(() => {
           :custom-request="handleImportCsv"
           :limit="1"
         >
-          <a-button type="secondary">导入 CSV</a-button>
+          <a-button type="secondary">点击上传 CSV</a-button>
         </a-upload>
         <a-button type="primary" @click="openCreate">新建{{ kindLabel }}</a-button>
       </div>

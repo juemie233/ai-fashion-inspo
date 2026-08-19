@@ -30,18 +30,18 @@ watch(activeKind, (kind) => {
         <h2>人物管理</h2>
         <a-typography-text type="secondary" style="font-size: 13px">
           穿搭博主与职业模特已独立管理：博主（平台主页/小红书号/CSV 导入）与模特（写真照片组）业务逻辑分别演进
-        </n-text>
+        </a-typography-text>
       </div>
     </div>
 
     <a-tabs v-model:active-key="activeKind" type="line">
       <a-tab-pane key="blogger" title="穿搭博主">
         <PersonListSection v-if="activeKind === 'blogger'" kind="blogger" />
-      </n-tab-pane>
+      </a-tab-pane>
       <a-tab-pane key="model" title="职业模特">
         <PersonListSection v-if="activeKind === 'model'" kind="model" />
-      </n-tab-pane>
-    </n-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 

@@ -3,7 +3,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   fetchTagsGrouped,
   updateTag,
@@ -23,8 +23,7 @@ import {
 
 /** 标签管理页数据模型与业务操作集合，由 TagManageView 及其子组件消费。 */
 export function useTagManage() {
-  const message = useMessage()
-  const route = useRoute()
+    const route = useRoute()
   const router = useRouter()
 
   // ===== 数据 =====
@@ -80,7 +79,7 @@ export function useTagManage() {
           }
         }
       }
-    } catch { message.error('加载失败') } finally { loading.value = false }
+    } catch { Message.error('加载失败') } finally { loading.value = false }
   }
 
   // ===== 过滤与排序 =====
@@ -130,13 +129,13 @@ export function useTagManage() {
   async function handleDelete(tagId: number, tagName: string) {
     try {
       await batchDeleteTags([tagId])
-      message.success(`已删除 "${tagName}"`)
+      Message.success(`已删除 "${tagName}"`)
       // Set 是响应式的：原地 delete 不会触发视图更新，须整体替换
       const next = new Set(selectedIds.value)
       next.delete(tagId)
       selectedIds.value = next
       await loadAll()
-    } catch { message.error('删除失败') }
+    } catch { Message.error('删除失败') }
   }
 
   async function handleBatchDelete() {
@@ -144,19 +143,19 @@ export function useTagManage() {
     const ids = Array.from(selectedIds.value)
     try {
       await batchDeleteTags(ids)
-      message.success(`已删除 ${ids.length} 个标签`)
+      Message.success(`已删除 ${ids.length} 个标签`)
       selectedIds.value = new Set()
       await loadAll()
-    } catch { message.error('批量删除失败') }
+    } catch { Message.error('批量删除失败') }
   }
 
   async function handleDeleteUnused() {
     try {
       const data = await deleteUnusedTags()
-      message.success(data.message)
+      Message.success(data.message)
       await loadAll()
     } catch (e) {
-      message.error('删除失败：' + getApiErrorMessage(e, '未知错误'))
+      Message.error('删除失败：' + getApiErrorMessage(e, '未知错误'))
     }
   }
 
@@ -167,9 +166,9 @@ export function useTagManage() {
       const data = await findDuplicates(duplicateThreshold.value)
       duplicatePairs.value = data.duplicates
       showDuplicatesPanel.value = true
-      if (data.total === 0) message.success('未发现重复标签')
-      else message.info(`发现 ${data.total} 对相似标签`)
-    } catch { message.error('扫描失败') }
+      if (data.total === 0) Message.success('未发现重复标签')
+      else Message.info(`发现 ${data.total} 对相似标签`)
+    } catch { Message.error('扫描失败') }
     finally { scanningDuplicates.value = false }
   }
 
@@ -177,13 +176,13 @@ export function useTagManage() {
   async function quickMerge(a: number, b: number) {
     try {
       await mergeTags(a, b)
-      message.success('已快速合并')
+      Message.success('已快速合并')
       // 移除所有引用被合并标签的 pair（a 已被删除）
       duplicatePairs.value = duplicatePairs.value.filter(
         p => p.tag_a.id !== a && p.tag_b.id !== a
       )
       await loadAll()
-    } catch { message.error('合并失败') }
+    } catch { Message.error('合并失败') }
   }
 
   /** 重复面板：将源标签合并到目标并设为其别名 */
@@ -191,13 +190,13 @@ export function useTagManage() {
     try {
       await mergeTags(sourceId, targetId)
       await createAlias(targetId, sourceName)
-      message.success(`已合并并将「${sourceName}」设为别名`)
+      Message.success(`已合并并将「${sourceName}」设为别名`)
       duplicatePairs.value = duplicatePairs.value.filter(
         (p) => p.tag_a.id !== sourceId && p.tag_b.id !== sourceId,
       )
       await loadAll()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '操作失败'))
+      Message.error(getApiErrorMessage(e, '操作失败'))
     }
   }
 
@@ -255,9 +254,9 @@ export function useTagManage() {
   async function togglePin(tag: TagItem) {
     try {
       await updateTag(tag.id, { pinned: !tag.pinned })
-      message.success(tag.pinned ? '已取消置顶' : '已置顶')
+      Message.success(tag.pinned ? '已取消置顶' : '已置顶')
       await loadAll()
-    } catch { message.error('操作失败') }
+    } catch { Message.error('操作失败') }
   }
 
   // ===== 拖拽改类别 =====
@@ -265,16 +264,16 @@ export function useTagManage() {
     if (tag.category === category) return
     try {
       await updateTag(tag.id, { category })
-      message.success(`已将 "${tag.name}" 移至 ${CATEGORY_LABELS[category] || category}`)
+      Message.success(`已将 "${tag.name}" 移至 ${CATEGORY_LABELS[category] || category}`)
       await loadAll()
-    } catch { message.error('移动失败') }
+    } catch { Message.error('移动失败') }
   }
 
   // ===== 自定义排序拖拽 =====
   async function onTagDrop(target: TagItem, dragged: TagItem) {
     if (sortMode.value !== 'custom') return
     if (hasActiveFilter.value) {
-      message.warning('筛选状态下不支持拖动排序，请清除筛选后重试')
+      Message.warning('筛选状态下不支持拖动排序，请清除筛选后重试')
       return
     }
     if (dragged.id === target.id) return
@@ -290,9 +289,9 @@ export function useTagManage() {
     tags.splice(insertIdx, 0, moved)
     try {
       await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
-      message.success('排序已更新')
+      Message.success('排序已更新')
       await loadAll()
-    } catch { message.error('排序失败') }
+    } catch { Message.error('排序失败') }
   }
 
   return {

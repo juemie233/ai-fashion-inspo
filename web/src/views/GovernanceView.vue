@@ -293,7 +293,7 @@ onUnmounted(() => {
         <p style="color: #999; font-size: 12px">
           💡 提示：清理无标签或分析失败的素材可回收空间；删除前请确认这些素材确实不再需要。
         </p>
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 数据完整性 -->
       <a-tab-pane key="integrity" title="数据完整性">
@@ -305,7 +305,7 @@ onUnmounted(() => {
           @recheck="loadIntegrity"
           @clean-orphans="cleanOrphans"
         />
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 重复文件 -->
       <a-tab-pane key="duplicates" title="重复文件">
@@ -319,7 +319,7 @@ onUnmounted(() => {
           @scan="scanDuplicates"
           @deduplicate="deduplicate"
         />
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 近似重复（感知哈希） -->
       <a-tab-pane key="neardup" title="近似重复">
@@ -327,8 +327,8 @@ onUnmounted(() => {
           @delete-selected="handleNearDuplicateDelete"
           @task-started="handleTaskStarted"
         />
-      </n-tab-pane>
-    </n-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 

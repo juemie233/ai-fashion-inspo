@@ -39,20 +39,20 @@ onMounted(() => {
     <a-tabs v-model:active-key="activeTab" type="line">
       <a-tab-pane key="models" title="模型管理">
         <ModelListPanel />
-      </n-tab-pane>
+      </a-tab-pane>
       <a-tab-pane key="review" title="质量审核">
         <ReviewPanel />
-      </n-tab-pane>
+      </a-tab-pane>
       <a-tab-pane key="queue" title="标签分析">
         <AnalysisPanel />
-      </n-tab-pane>
+      </a-tab-pane>
       <a-tab-pane key="settings" title="参数调优">
         <SettingsPanel />
-      </n-tab-pane>
+      </a-tab-pane>
       <a-tab-pane key="quality" title="分析质量">
         <QualityPanel />
-      </n-tab-pane>
-    </n-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 

@@ -2,7 +2,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { moveToTrash as moveToTrashApi } from '@/api/inspirations'
 import { useNotification } from '@/composables/useNotification'
@@ -18,8 +18,7 @@ export interface UseAnalysisHistoryOptions {
 
 export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const { requestAndNotify } = useNotification()
-  const message = useMessage()
-
+  
   const history = ref<HistoryItem[]>([])
   const historyTotal = ref(0)
   const historyPage = ref(1)
@@ -59,7 +58,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       historyTotal.value = data.total
     } catch (e) {
       // 请求被主动取消（切换筛选触发新请求）时不提示错误
-      if ((e as { code?: string })?.code !== 'ERR_CANCELED') message.error('加载历史失败')
+      if ((e as { code?: string })?.code !== 'ERR_CANCELED') Message.error('加载历史失败')
     } finally {
       if (seq === historySeq) historyLoading.value = false
     }
@@ -129,9 +128,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       link.download = 'analysis_history.csv'
       link.click()
       URL.revokeObjectURL(url)
-      message.success('已导出 CSV')
+      Message.success('已导出 CSV')
     } catch (e) {
-      message.error(getApiErrorMessage(e, '导出失败'))
+      Message.error(getApiErrorMessage(e, '导出失败'))
     }
   }
 
@@ -165,12 +164,12 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     if (selectedHistoryIds.value.size === 0) return
     try {
       await apiClient.post('/ai/history/batch-delete', { ids: [...selectedHistoryIds.value] })
-      message.success(`已删除 ${selectedHistoryIds.value.size} 条记录`)
+      Message.success(`已删除 ${selectedHistoryIds.value.size} 条记录`)
       selectedHistoryIds.value = new Set()
       loadHistory()
       options.loadQueue?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '批量删除失败'))
+      Message.error(getApiErrorMessage(e, '批量删除失败'))
     }
   }
 
@@ -179,13 +178,13 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     if (selectedHistoryIds.value.size === 0) return
     try {
       const { data } = await apiClient.post('/ai/history/batch-retry', { ids: [...selectedHistoryIds.value] })
-      message.success(data.message)
+      Message.success(data.message)
       requestAndNotify('批量重试已启动', { body: data.message, tag: 'batch-retry' })
       selectedHistoryIds.value = new Set()
       loadHistory()
       options.loadActiveAnalyses?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '批量重试失败'))
+      Message.error(getApiErrorMessage(e, '批量重试失败'))
     }
   }
 
@@ -199,11 +198,11 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   async function deleteLog(logId: number) {
     try {
       await apiClient.delete(`/ai/history/${logId}`)
-      message.success('分析记录已删除')
+      Message.success('分析记录已删除')
       loadHistory()
       options.loadQueue?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '删除失败'))
+      Message.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -215,12 +214,12 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   async function deleteInspirationFromHistory(inspirationId: string) {
     try {
       await moveToTrashApi(inspirationId)
-      message.success('素材已移入垃圾桶（可在垃圾桶恢复）')
+      Message.success('素材已移入垃圾桶（可在垃圾桶恢复）')
       loadHistory()
       options.loadQueue?.()
       options.loadActiveAnalyses?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
+      Message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
     }
   }
 
@@ -229,11 +228,11 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     retryingAll.value = true
     try {
       const { data } = await apiClient.post('/ai/retry-all-failed')
-      message.success(data.message || '已加入重试队列')
+      Message.success(data.message || '已加入重试队列')
       requestAndNotify('失败重试已启动', { body: data.message, tag: 'retry-failed' })
       options.loadQueue?.(); loadHistory(); options.loadActiveAnalyses?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '重试失败'))
+      Message.error(getApiErrorMessage(e, '重试失败'))
     } finally {
       retryingAll.value = false
     }
@@ -244,11 +243,11 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     clearingFailed.value = true
     try {
       const { data } = await apiClient.delete('/ai/history/failed/all')
-      message.success(data.message || '已清空失败记录')
+      Message.success(data.message || '已清空失败记录')
       loadHistory()
       options.loadQueue?.()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '清空失败'))
+      Message.error(getApiErrorMessage(e, '清空失败'))
     } finally {
       clearingFailed.value = false
     }

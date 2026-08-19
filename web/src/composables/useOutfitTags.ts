@@ -3,7 +3,7 @@
 import { ref } from 'vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import type { Ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   fetchInspiration,
   addTagsToInspiration,
@@ -25,8 +25,7 @@ export interface OutfitTagOption {
  * @param detail 素材详情 ref（可能为 null），供内部刷新详情数据
  */
 export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
-  const message = useMessage()
-
+  
   const outfitTagOptions = ref<OutfitTagOption[]>([])
   const outfitSelected = ref<string[]>([])
   const outfitAdding = ref(false)
@@ -63,11 +62,11 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     try {
       await addTagsToInspiration(detail.value.id, outfitSelected.value, 'outfit', 'manual')
       outfitSelected.value = []
-      message.success('已添加大标签')
+      Message.success('已添加大标签')
       await _refreshDetail(detail.value.id)
       loadOutfitOptions()
     } catch {
-      message.error('添加失败')
+      Message.error('添加失败')
     } finally {
       outfitAdding.value = false
     }
@@ -89,9 +88,9 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     try {
       await removeTagFromInspiration(detail.value.id, tagId)
       await _refreshDetail(detail.value.id)
-      message.success('已移除大标签')
+      Message.success('已移除大标签')
     } catch {
-      message.error('移除失败')
+      Message.error('移除失败')
     }
   }
 
@@ -104,10 +103,10 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
       const data = await suggestOutfitTags(detail.value.id)
       aiSuggestions.value = data.suggestions || []
       if (aiSuggestions.value.length === 0) {
-        message.info('AI 认为该穿搭不够有特色，未给出大标签建议')
+        Message.info('AI 认为该穿搭不够有特色，未给出大标签建议')
       }
     } catch (e) {
-      message.error(getApiErrorMessage(e, 'AI 建议失败'))
+      Message.error(getApiErrorMessage(e, 'AI 建议失败'))
     } finally {
       aiSuggesting.value = false
     }
@@ -120,9 +119,9 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
       await addTagsToInspiration(detail.value.id, [name], 'outfit', 'ai_generated')
       aiSuggestions.value = aiSuggestions.value.filter((s) => s !== name)
       await _refreshDetail(detail.value.id)
-      message.success(`已添加「${name}」`)
+      Message.success(`已添加「${name}」`)
     } catch {
-      message.error('添加失败')
+      Message.error('添加失败')
     }
   }
 
@@ -134,9 +133,9 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
       await addTagsToInspiration(detail.value.id, names, 'outfit', 'ai_generated')
       aiSuggestions.value = []
       await _refreshDetail(detail.value.id)
-      message.success(`已全部入库 ${names.length} 个大标签`)
+      Message.success(`已全部入库 ${names.length} 个大标签`)
     } catch {
-      message.error('批量入库失败')
+      Message.error('批量入库失败')
     }
   }
 

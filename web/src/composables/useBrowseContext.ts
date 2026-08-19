@@ -6,7 +6,7 @@
  */
 
 import { computed, ref, type Ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import {
@@ -23,8 +23,7 @@ export function useBrowseContext(opts: {
   router: Router
 }) {
   const { detail, route, router } = opts
-  const message = useMessage()
-
+  
   const browseItems = ref<InspirationOut[]>([])
   const browseTotal = ref(0)
   const browsePage = ref(parseInt(route.query.page as string) || 1)
@@ -107,9 +106,9 @@ export function useBrowseContext(opts: {
             buildBrowseParams(route.query as Record<string, string>, page, size),
           )
           if (data.items.length > 0) gotoItem(data.items[data.items.length - 1].id, page)
-          else message.info('前面没有更多素材了')
+          else Message.info('前面没有更多素材了')
         } catch {
-          message.error('加载上一页失败')
+          Message.error('加载上一页失败')
         }
       }
     } else {
@@ -122,9 +121,9 @@ export function useBrowseContext(opts: {
             buildBrowseParams(route.query as Record<string, string>, page, size),
           )
           if (data.items.length > 0) gotoItem(data.items[0].id, page)
-          else message.info('后面没有更多素材了')
+          else Message.info('后面没有更多素材了')
         } catch {
-          message.error('加载下一页失败')
+          Message.error('加载下一页失败')
         }
       }
     }

@@ -43,7 +43,7 @@ watch(activeTab, (tab) => {
       <!-- 向量管理 -->
       <a-tab-pane key="vectors" title="向量管理">
         <admin-vector-panel />
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 数据报表 -->
       <a-tab-pane key="reports" title="数据报表">
@@ -53,8 +53,8 @@ watch(activeTab, (tab) => {
           <admin-person-frequency />
           <admin-audit-log class="reports-full" />
         </div>
-      </n-tab-pane>
-    </n-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 

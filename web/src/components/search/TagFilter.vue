@@ -131,10 +131,7 @@ const combineDesc = computed(() => {
         <a-button
           size="mini"
           type="text"
-          @click="
-            cooccurrenceTags = []
-            cooccurrenceFor = ''
-          "
+          @click="cooccurrenceTags = []; cooccurrenceFor = ''"
           >✕</a-button
         >
       </div>

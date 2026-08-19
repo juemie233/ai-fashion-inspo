@@ -1,13 +1,12 @@
 /** 采集任务日志域：日志查看状态与加载。 */
 
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 
 /** 任务日志查看器状态与操作，由 ScraperView 消费。 */
 export function useScraperLog() {
-  const message = useMessage()
-
+  
   const logTaskId = ref<number | null>(null)
   const logContent = ref('')
   const logLoading = ref(false)
@@ -22,7 +21,7 @@ export function useScraperLog() {
       // 竞态防护：快速切换任务时，旧任务的日志响应不覆盖新任务
       if (logTaskId.value === taskId) logContent.value = content
     } catch {
-      message.error('日志加载失败')
+      Message.error('日志加载失败')
       if (logTaskId.value === taskId) logTaskId.value = null
     } finally {
       logLoading.value = false

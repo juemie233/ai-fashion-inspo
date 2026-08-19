@@ -14,8 +14,8 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ replace: routeState.replace }),
 }))
 
-vi.mock('naive-ui', () => ({
-  useMessage: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+vi.mock('@arco-design/web-vue', () => ({
+  Message: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock('@/api/tags', () => ({

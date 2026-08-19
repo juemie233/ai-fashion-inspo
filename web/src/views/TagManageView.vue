@@ -105,11 +105,11 @@ async function handleExport() {
       <a-space>
         <a-button @click="showCreateForm = !showCreateForm" type="primary">
           {{ showCreateForm ? '取消' : '新标签' }}
-        </n-button>
+        </a-button>
         <a-button @click="showAnalytics = true" type="secondary">标签分析</a-button>
         <a-button @click="handleExport" type="secondary">导出</a-button>
         <a-button @click="showImportModal = true" type="secondary">导入</a-button>
-      </n-space>
+      </a-space>
     </div>
 
     <div ref="containerRef" class="split-layout" :class="{ dragging: isDragging }">
@@ -175,7 +175,7 @@ async function handleExport() {
         @drop-category="onDrop"
         @tag-drop="onTagDrop"
       />
-    </n-spin>
+    </a-spin>
     </div><!-- /left-panel -->
 
     <!-- 可拖拽间隔线 -->

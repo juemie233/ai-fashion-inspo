@@ -2,7 +2,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { formatDate } from '@/utils/format'
 import { extractHistoryKeywords } from '@/utils/scraperKeywords'
@@ -30,8 +30,7 @@ export const SORT_MODE_LABELS: Record<string, string> = {
 
 /** 定时采集页签状态与操作，由 ScraperScheduleTab 消费。 */
 export function useScraperSchedules() {
-  const message = useMessage()
-
+  
   const schedules = ref<ScraperSchedule[]>([])
   const loading = ref(false)
   const creating = ref(false)
@@ -75,7 +74,7 @@ export function useScraperSchedules() {
       const r = await apiClient.get('/scraper/schedules')
       schedules.value = r.data
     } catch (e) {
-      message.error(getApiErrorMessage(e, '加载定时计划失败'))
+      Message.error(getApiErrorMessage(e, '加载定时计划失败'))
     } finally { loading.value = false }
   }
 
@@ -94,11 +93,11 @@ export function useScraperSchedules() {
       }
       if (formPlatform.value === 'xiaohongshu' && formSortMode.value !== 'general') payload.sort_mode = formSortMode.value
       await apiClient.post('/scraper/schedules', payload)
-      message.success('定时计划已创建')
+      Message.success('定时计划已创建')
       formKeywords.value = []
       loadSchedules()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '创建失败'))
+      Message.error(getApiErrorMessage(e, '创建失败'))
     } finally { creating.value = false }
   }
 
@@ -118,11 +117,11 @@ export function useScraperSchedules() {
         sort_mode: payload.sort_mode,
       }
       await apiClient.patch(`/scraper/schedules/${id}`, body)
-      message.success('定时计划已更新')
+      Message.success('定时计划已更新')
       loadSchedules()
       return true
     } catch (e) {
-      message.error(getApiErrorMessage(e, '更新失败'))
+      Message.error(getApiErrorMessage(e, '更新失败'))
       return false
     } finally { updatingId.value = null }
   }
@@ -132,10 +131,10 @@ export function useScraperSchedules() {
     try {
       togglingId.value = s.id
       await apiClient.patch(`/scraper/schedules/${s.id}`, { enabled: !s.enabled })
-      message.success(s.enabled ? '已停用' : '已启用')
+      Message.success(s.enabled ? '已停用' : '已启用')
       loadSchedules()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '操作失败'))
+      Message.error(getApiErrorMessage(e, '操作失败'))
     } finally { togglingId.value = null }
   }
 
@@ -144,10 +143,10 @@ export function useScraperSchedules() {
     try {
       runningId.value = s.id
       const r = await apiClient.post(`/scraper/schedules/${s.id}/run`)
-      message.success(`已触发采集任务 #${r.data.task_id}`)
+      Message.success(`已触发采集任务 #${r.data.task_id}`)
       loadSchedules()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '触发失败'))
+      Message.error(getApiErrorMessage(e, '触发失败'))
     } finally { runningId.value = null }
   }
 
@@ -155,10 +154,10 @@ export function useScraperSchedules() {
     try {
       deletingId.value = s.id
       await apiClient.delete(`/scraper/schedules/${s.id}`)
-      message.success('已删除')
+      Message.success('已删除')
       loadSchedules()
     } catch (e) {
-      message.error(getApiErrorMessage(e, '删除失败'))
+      Message.error(getApiErrorMessage(e, '删除失败'))
     } finally { deletingId.value = null }
   }
 

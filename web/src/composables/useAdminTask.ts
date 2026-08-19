@@ -1,7 +1,7 @@
 /** 后台任务轮询 composable：批量删除/去重的进度查询、恢复与停止。 */
 
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { AdminTask } from '@/types/admin'
 
@@ -11,8 +11,7 @@ const POLL_NORMAL_MS = 1000
 const POLL_RETRY_MS = 3000
 
 export function useAdminTask() {
-  const message = useMessage()
-  const adminTask = ref<AdminTask | null>(null)
+    const adminTask = ref<AdminTask | null>(null)
   let adminPollTimer: ReturnType<typeof setTimeout> | null = null
   let adminPollSeq = 0  // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
 
@@ -38,9 +37,9 @@ export function useAdminTask() {
           if (data.status === 'success') {
             onDone()
           } else if (data.status === 'failed') {
-            message.error(`任务失败：${data.error || '未知错误'}`)
+            Message.error(`任务失败：${data.error || '未知错误'}`)
           } else {
-            message.info('任务已取消')
+            Message.info('任务已取消')
           }
           return
         }
@@ -51,7 +50,7 @@ export function useAdminTask() {
         if (consecutiveFailures >= 5) {
           // 连续多次失败才停止，避免后端重启/网络抖动导致任务进度卡死
           stopAdminPolling()
-          message.error('获取任务状态多次失败，已停止轮询，请稍后手动刷新')
+          Message.error('获取任务状态多次失败，已停止轮询，请稍后手动刷新')
           return
         }
         // 有限次重试：间隔放大到 3 秒，继续续排轮询链

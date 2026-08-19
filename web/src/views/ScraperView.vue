@@ -186,7 +186,7 @@ onUnmounted(() => { stopPoll() })
       </template>
     </ScraperTaskTable>
 
-  </n-tab-pane>
+  </a-tab-pane>
 
   <!-- 源配置 Tab -->
   <a-tab-pane key="config" title="源配置">
@@ -202,13 +202,13 @@ onUnmounted(() => { stopPoll() })
       @import-cookie="onCookieImport"
       @delete-cookie="onDeleteCookie"
     />
-  </n-tab-pane>
+  </a-tab-pane>
 
   <!-- 定时采集 Tab -->
   <a-tab-pane key="schedules" title="定时采集">
     <ScraperScheduleTab v-if="activeTab === 'schedules'" />
-  </n-tab-pane>
-</n-tabs>
+  </a-tab-pane>
+</a-tabs>
 </div>
 </template>
 

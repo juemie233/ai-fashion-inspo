@@ -2,8 +2,7 @@
 /** 任务列表：统一展示任务队列与采集任务。 */
 
 import { h } from 'vue'
-import { NTag, NProgress, NSpin, NButton, NPopconfirm, NText, NIcon } from 'naive-ui'
-import type { DataTableColumns } from 'naive-ui'
+import { Tag, Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
 import type { UnifiedTask } from '@/types/task'
 import {
   TASK_STATUS_LABELS,
@@ -23,54 +22,61 @@ const emit = defineEmits<{
 /** 进度列：队列任务显示百分比进度条，采集任务运行中显示加载态 */
 function renderProgress(row: UnifiedTask) {
   if (row.progress >= 0) {
-    return h(NProgress, {
+    return h(Progress, {
       type: 'line',
-      percentage: row.progress,
-      height: 8,
+      percent: row.progress,
+      strokeWidth: 8,
       style: 'width:140px',
     })
   }
   if (row.status === 'running') {
     return h('div', { style: 'display:flex;align-items:center;gap:6px' }, [
-      h(NSpin, { size: 14 }),
-      h(NText, { depth: 3 }, { default: () => '运行中' }),
+      h(Spin, { size: 14 }),
+      h(TypographyText, { type: 'secondary' }, { default: () => '运行中' }),
     ])
   }
-  return h(NText, { depth: 3 }, { default: () => '—' })
+  return h(TypographyText, { type: 'secondary' }, { default: () => '—' })
 }
 
 /** 完成数 / 总数列 */
 function renderCount(row: UnifiedTask) {
   const text = row.total > 0 ? `${row.done} / ${row.total}` : row.done > 0 ? `${row.done}` : '—'
-  return h(NText, { depth: 2 }, { default: () => text })
+  return h(TypographyText, { type: 'secondary' }, { default: () => text })
 }
 
-const columns: DataTableColumns<UnifiedTask> = [
+const columns: TableColumnData[] = [
   {
     title: '任务ID',
-    key: 'id',
+    dataIndex: 'id',
     width: 80,
-    render: (row) => h(NText, { depth: 2 }, { default: () => String(row.id) }),
+    render: ({ record }) => {
+      const row = record as UnifiedTask
+      return h(TypographyText, { type: 'secondary' }, { default: () => String(row.id) })
+    },
   },
   {
     title: '任务',
-    key: 'title',
-    render: (row) => {
+    dataIndex: 'title',
+    render: ({ record }) => {
+      const row = record as UnifiedTask
       // 类型标签：中文名 + 区分图标（未知类型回退为无图标纯文本）
       const typeIcon = TASK_TYPE_ICONS[row.type]
       return h('div', { style: 'line-height:1.4' }, [
         h(
-          NTag,
-          { size: 'small', type: taskTypeTagColor(row.type) },
+          Tag,
+          { size: 'small', color: taskTypeTagColor(row.type) },
           {
-            ...(typeIcon ? { icon: () => h(NIcon, { component: typeIcon }) } : {}),
-            default: () => row.title,
+            default: () =>
+              h('span', { style: 'display:inline-flex;align-items:center;gap:4px' }, [
+                typeIcon ? h(typeIcon, { size: 14 }) : null,
+                row.title,
+              ]),
           },
         ),
         row.detail
           ? h(
-              NText,
-              { depth: 3, style: 'font-size:12px;display:block;margin-top:6px' },
+              TypographyText,
+              { type: 'secondary', style: 'font-size:12px;display:block;margin-top:6px' },
               { default: () => row.detail },
             )
           : null,
@@ -79,47 +85,54 @@ const columns: DataTableColumns<UnifiedTask> = [
   },
   {
     title: '状态',
-    key: 'status',
+    dataIndex: 'status',
     width: 90,
-    render: (row) =>
-      h(
-        NTag,
-        { type: taskStatusType(row.status), size: 'small' },
+    render: ({ record }) => {
+      const row = record as UnifiedTask
+      return h(
+        Tag,
+        { color: taskStatusType(row.status), size: 'small' },
         { default: () => TASK_STATUS_LABELS[row.status] || row.status },
-      ),
+      )
+    },
   },
-  { title: '进度', key: 'progress', width: 160, render: renderProgress },
-  { title: '完成', key: 'count', width: 100, render: renderCount },
+  { title: '进度', dataIndex: 'progress', width: 160, render: ({ record }) => renderProgress(record as UnifiedTask) },
+  { title: '完成', dataIndex: 'count', width: 100, render: ({ record }) => renderCount(record as UnifiedTask) },
   {
     title: '预计剩余',
-    key: 'eta',
+    dataIndex: 'eta',
     width: 110,
-    render: (row) => {
+    render: ({ record }) => {
+      const row = record as UnifiedTask
       const eta = predictEta(row)
       return eta
-        ? h(NText, { depth: 2 }, { default: () => eta })
-        : h(NText, { depth: 3 }, { default: () => '—' })
+        ? h(TypographyText, { type: 'secondary' }, { default: () => eta })
+        : h(TypographyText, { type: 'secondary' }, { default: () => '—' })
     },
   },
   {
     title: '创建时间',
-    key: 'created_at',
+    dataIndex: 'created_at',
     width: 170,
-    render: (row) => h(NText, { depth: 2 }, { default: () => formatDate(row.created_at) }),
+    render: ({ record }) => {
+      const row = record as UnifiedTask
+      return h(TypographyText, { type: 'secondary' }, { default: () => formatDate(row.created_at) })
+    },
   },
   {
     title: '操作',
-    key: 'actions',
+    dataIndex: 'actions',
     width: 140,
-    render: (row) =>
-      h('div', { style: 'display:flex;gap:8px' }, [
+    render: ({ record }) => {
+      const row = record as UnifiedTask
+      return h('div', { style: 'display:flex;gap:8px' }, [
         row.status === 'pending'
           ? h(
-              NButton,
+              Button,
               {
                 size: 'small',
-                quaternary: true,
-                type: 'warning',
+                type: 'text',
+                status: 'warning',
                 onClick: () => emit('cancel', row),
               },
               { default: () => '取消' },
@@ -127,30 +140,30 @@ const columns: DataTableColumns<UnifiedTask> = [
           : null,
         row.source === 'scraper'
           ? h(
-              NPopconfirm,
-              { onPositiveClick: () => emit('delete', row) },
+              Popconfirm,
+              { content: '确定删除该采集任务？', onOk: () => emit('delete', row) },
               {
-                trigger: () =>
+                default: () =>
                   h(
-                    NButton,
-                    { size: 'small', quaternary: true, type: 'error' },
+                    Button,
+                    { size: 'small', type: 'text', status: 'danger' },
                     { default: () => '删除' },
                   ),
-                default: () => '确定删除该采集任务？',
               },
             )
           : null,
-      ]),
+      ])
+    },
   },
 ]
 </script>
 
 <template>
-  <n-data-table
+  <a-table
     :columns="columns"
     :data="tasks"
     :loading="loading"
     :bordered="false"
-    :single-line="false"
+    :pagination="false"
   />
 </template>

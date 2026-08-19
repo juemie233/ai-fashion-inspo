@@ -2,7 +2,7 @@
 
 import { ref } from 'vue'
 import type { Ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   toggleFavorite,
   moveToTrash,
@@ -38,8 +38,7 @@ export function useSimilarItems(
   outfitTags: () => InspirationTagOut[],
   isCurrentSeq: (seq: number) => boolean,
 ) {
-  const message = useMessage()
-
+  
   const similarItems = ref<SimilarItemOut[]>([])
   const similarLoading = ref(false)
   const batchMode = ref(false)                 // 是否处于批量选择模式
@@ -89,7 +88,7 @@ export function useSimilarItems(
       await toggleFavorite(id, newState)
       item.is_favorite = newState
     } catch {
-      message.error('操作失败')
+      Message.error('操作失败')
     }
   }
 
@@ -98,9 +97,9 @@ export function useSimilarItems(
     try {
       await moveToTrash(id)
       similarItems.value = similarItems.value.filter((s) => s.inspiration.id !== id)
-      message.success('已移入垃圾桶')
+      Message.success('已移入垃圾桶')
     } catch {
-      message.error('操作失败')
+      Message.error('操作失败')
     }
   }
 
@@ -154,11 +153,11 @@ export function useSimilarItems(
       const parts = [`已为 ${affected} 个相似素材添加大标签`]
       if (not_found > 0) parts.push(`${not_found} 个素材不存在`)
       if (skipped_existing > 0) parts.push(`${skipped_existing} 条关联已存在`)
-      message.success(parts.join('，'))
+      Message.success(parts.join('，'))
       exitBatchMode()
       if (detail.value) await refreshSimilar(detail.value.id)
     } catch {
-      message.error('批量添加失败')
+      Message.error('批量添加失败')
     } finally {
       batchAdding.value = false
     }

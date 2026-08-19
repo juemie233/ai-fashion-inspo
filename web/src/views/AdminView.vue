@@ -113,7 +113,7 @@ onMounted(() => {
         <p style="color: #999; font-size: 12px">
           💡 提示：定期检查数据完整性和重复文件，可以保持素材库健康。建议每月执行一次。
         </p>
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 疑似 AI 素材（与侧边栏「AI 模型」区分，避免混淆） -->
       <a-tab-pane key="ai" title="疑似 AI 素材">
@@ -122,18 +122,18 @@ onMounted(() => {
           :deleting="aiTrashing"
           @delete-selected="batchDeleteByIds"
         />
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 手机图剪裁 -->
       <a-tab-pane key="crop" title="手机图剪裁">
         <admin-phone-crop />
-      </n-tab-pane>
+      </a-tab-pane>
 
       <!-- 垃圾桶 -->
       <a-tab-pane key="trash" title="垃圾桶">
         <admin-trash />
-      </n-tab-pane>
-    </n-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 

@@ -2,13 +2,12 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { AnalysisDetail } from '@/types/analysis'
 
 export function useAnalysisDetail() {
-  const message = useMessage()
-
+  
   const detailVisible = ref(false)
   const detailLoading = ref(false)
   const currentDetail = ref<AnalysisDetail | null>(null)
@@ -27,7 +26,7 @@ export function useAnalysisDetail() {
       currentDetail.value = data
     } catch (e) {
       if (seq !== detailSeq) return
-      message.error(getApiErrorMessage(e, '获取详情失败'))
+      Message.error(getApiErrorMessage(e, '获取详情失败'))
       detailVisible.value = false
     } finally {
       if (seq === detailSeq) detailLoading.value = false
