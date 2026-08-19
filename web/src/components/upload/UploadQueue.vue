@@ -30,9 +30,9 @@ const emit = defineEmits<{
         <template v-if="dups > 0"> · 跳过 {{ dups }}</template>
         <template v-if="uploading && speed"> · <span style="color:#6366f1">{{ speed }}</span></template>
       </span>
-      <n-space>
-        <n-button size="tiny" @click="emit('clear')" :disabled="uploading">清空队列</n-button>
-      </n-space>
+      <a-space>
+        <a-button size="mini" @click="emit('clear')" :disabled="uploading">清空队列</a-button>
+      </a-space>
     </div>
 
     <div class="queue-grid">
@@ -62,7 +62,7 @@ const emit = defineEmits<{
         <div class="queue-card-status">
           <template v-if="item.status === 'pending'">⏳</template>
           <template v-else-if="item.status === 'uploading'">
-            <n-spin size="small" />
+            <a-spin :size="14" />
           </template>
           <template v-else-if="item.status === 'done'">✅</template>
           <template v-else-if="item.status === 'duplicate'">🔄</template>
@@ -72,14 +72,15 @@ const emit = defineEmits<{
         <div v-if="item.status === 'failed'" class="queue-card-error" :title="item.errorMsg">
           {{ item.errorMsg?.slice(0, 30) }}
         </div>
-        <n-button
+        <a-button
           v-if="item.status === 'pending'"
-          size="tiny"
-          type="error"
+          size="mini"
+          type="primary"
+          status="danger"
           @click="emit('remove', item.id)"
         >
           ✕
-        </n-button>
+        </a-button>
       </div>
     </div>
   </div>

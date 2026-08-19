@@ -135,12 +135,12 @@ watch(
 
     <!-- 加载指示器 -->
     <div v-if="loading" class="loading-bar">
-      <n-spin size="small" />
+      <a-spin :size="14" />
       <span style="margin-left: 8px">加载中...</span>
     </div>
 
     <!-- 空状态 -->
-    <n-empty
+    <a-empty
       v-if="!loading && items.length === 0"
       :description="emptyText || '还没有素材，去上传或采集一些吧'"
       style="margin-top: 80px"
