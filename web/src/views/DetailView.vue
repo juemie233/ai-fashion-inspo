@@ -532,7 +532,7 @@ async function removeTag(t: InspirationTagOut) {
               </a-descriptions>
             </div>
 
-            <!-- 关联博主（搜索添加 / 解除关联） -->
+            <!-- 关联博主（从已有列表选择添加 / 解除关联） -->
             <PersonLinkSection
               kind="blogger"
               :persons="detail.bloggers || []"
@@ -540,7 +540,7 @@ async function removeTag(t: InspirationTagOut) {
               @change="updateBloggers"
             />
 
-            <!-- 关联模特（搜索添加 / 解除关联） -->
+            <!-- 关联模特（从已有列表选择添加 / 解除关联） -->
             <PersonLinkSection
               kind="model"
               :persons="detail.models || []"
