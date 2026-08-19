@@ -418,7 +418,32 @@ onBeforeUnmount(() => {
     window.clearInterval(pollTimer)
     pollTimer = null
   }
+  clearHoverPreview()
 })
+
+// ── 悬停放大预览（复用 InspirationGridBrowser/标签管理网格交互：
+//    鼠标停留 250ms 后屏幕中央弹出原图大图，fixed 浮层指针穿透不挡操作）──
+const hoverPreviewPath = ref<string | null>(null)
+/** 悬停停留计时器：短暂停留才弹出预览，扫过网格时不闪烁 */
+let hoverPreviewTimer: number | null = null
+
+/** 鼠标进入缩略图：短暂停留后显示居中大图预览（用原图保证清晰） */
+function startHoverPreview(item: DetectionItem) {
+  clearHoverPreview()
+  if (!item.file_path) return
+  hoverPreviewTimer = window.setTimeout(() => {
+    hoverPreviewPath.value = item.file_path
+  }, 250)
+}
+
+/** 清除预览与计时器 */
+function clearHoverPreview() {
+  if (hoverPreviewTimer !== null) {
+    window.clearTimeout(hoverPreviewTimer)
+    hoverPreviewTimer = null
+  }
+  hoverPreviewPath.value = null
+}
 
 /** 状态标签颜色 */
 function statusColor(status: string): string {
@@ -609,7 +634,13 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 <div v-if="detailKey === `${p.person_type}:${p.person_id}`" class="detail-block">
                   <a-spin :loading="detailLoading" style="display: block">
                     <div v-if="detailItems.length > 0" class="detail-grid">
-                      <div v-for="item in detailItems" :key="item.detection_id" class="detail-item">
+                      <div
+                        v-for="item in detailItems"
+                        :key="item.detection_id"
+                        class="detail-item"
+                        @mouseenter="startHoverPreview(item)"
+                        @mouseleave="clearHoverPreview"
+                      >
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
                           :model-value="detailChecked.has(item.detection_id)"
@@ -697,7 +728,13 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 <div v-if="detailKey === `${p.person_type}:${p.person_id}`" class="detail-block">
                   <a-spin :loading="detailLoading" style="display: block">
                     <div v-if="detailItems.length > 0" class="detail-grid">
-                      <div v-for="item in detailItems" :key="item.detection_id" class="detail-item">
+                      <div
+                        v-for="item in detailItems"
+                        :key="item.detection_id"
+                        class="detail-item"
+                        @mouseenter="startHoverPreview(item)"
+                        @mouseleave="clearHoverPreview"
+                      >
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
                           :model-value="detailChecked.has(item.detection_id)"
@@ -781,7 +818,13 @@ function filterOption(input: string, option: { label?: string }): boolean {
           </div>
           <a-spin :loading="unmatchedLoading" style="display: block">
             <div v-if="unmatchedItems.length > 0" class="detail-grid unmatched-grid">
-              <div v-for="item in unmatchedItems" :key="item.detection_id" class="detail-item">
+              <div
+                v-for="item in unmatchedItems"
+                :key="item.detection_id"
+                class="detail-item"
+                @mouseenter="startHoverPreview(item)"
+                @mouseleave="clearHoverPreview"
+              >
                 <img :src="thumbUrl(item)" loading="lazy" />
                 <a-checkbox
                   :model-value="unmatchedChecked.has(item.detection_id)"
@@ -807,6 +850,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
         </a-tab-pane>
       </a-tabs>
     </a-card>
+
+    <!-- 悬停放大预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡网格操作 -->
+    <Teleport to="body">
+      <div v-if="hoverPreviewPath" class="hover-preview-layer">
+        <div class="hover-preview-panel">
+          <img :src="getFileUrl(hoverPreviewPath)" alt="悬停大图预览" />
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -861,7 +913,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  grid-template-columns: repeat(6, 1fr);
   gap: 8px;
 }
 
@@ -915,5 +967,52 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
 .unmatched-grid {
   min-height: 80px;
+}
+
+/* 悬停放大预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界
+   （复用 InspirationGridBrowser / 标签管理网格的交互与样式） */
+.hover-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 指针穿透：预览浮层不拦截任何鼠标事件，网格可正常点击/悬停 */
+  pointer-events: none;
+}
+
+.hover-preview-panel {
+  max-width: 90vw;
+  max-height: 88vh;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+  animation: hover-preview-in 0.15s ease;
+}
+
+.hover-preview-panel img {
+  display: block;
+  max-width: 90vw;
+  max-height: 88vh;
+  object-fit: contain;
+}
+
+@keyframes hover-preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 900px) {
+  .detail-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 </style>
