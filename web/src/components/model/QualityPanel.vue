@@ -1,26 +1,14 @@
 <script setup lang="ts">
 /** 分析质量仪表盘面板：总览、问题素材、趋势/模型对比/错误分布（echarts）、失败素材直达列表。 */
 
-import { h, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { h, ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button, Tag, type TableColumnData } from '@arco-design/web-vue'
-import * as echarts from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
-import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import type { EChartsOption } from 'echarts'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
-
-echarts.use([
-  BarChart,
-  LineChart,
-  PieChart,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-  CanvasRenderer,
-])
+import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const router = useRouter()
 
@@ -49,19 +37,11 @@ interface QualityDashboard {
 const qualityData = ref<QualityDashboard | null>(null)
 const qualityLoading = ref(false)
 
-const trendRef = ref<HTMLDivElement | null>(null)
-const modelRef = ref<HTMLDivElement | null>(null)
-const errorRef = ref<HTMLDivElement | null>(null)
-let trendChart: echarts.ECharts | null = null
-let modelChart: echarts.ECharts | null = null
-let errorChart: echarts.ECharts | null = null
-
 async function loadQuality() {
   qualityLoading.value = true
   try {
     const { data } = await apiClient.get<QualityDashboard>('/ai/quality-dashboard')
     qualityData.value = data
-    nextTick(renderCharts)
   } catch {
     /* 静默 */
   } finally {
@@ -69,21 +49,11 @@ async function loadQuality() {
   }
 }
 
-watch(qualityData, () => nextTick(renderCharts), { deep: true })
-
-/** 渲染全部图表 */
-function renderCharts() {
-  renderTrend()
-  renderModelComparison()
-  renderErrorDistribution()
-}
-
 /** 每日趋势：总量与成功量折线 */
-function renderTrend() {
-  if (!qualityData.value || !trendRef.value) return
-  if (!trendChart || trendChart.isDisposed()) trendChart = echarts.init(trendRef.value)
-  const rows = qualityData.value.daily_trends
-  trendChart.setOption({
+const trendOption = computed<EChartsOption | null>(() => {
+  const rows = qualityData.value?.daily_trends ?? []
+  if (rows.length === 0) return null
+  return {
     grid: { left: 8, right: 16, top: 32, bottom: 8, containLabel: true },
     legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
@@ -108,15 +78,14 @@ function renderTrend() {
         itemStyle: { color: '#22c55e' },
       },
     ],
-  })
-}
+  }
+})
 
 /** 按模型成功率对比：成功/失败堆叠柱状图 */
-function renderModelComparison() {
-  if (!qualityData.value || !modelRef.value) return
-  if (!modelChart || modelChart.isDisposed()) modelChart = echarts.init(modelRef.value)
-  const rows = qualityData.value.model_comparison
-  modelChart.setOption({
+const modelOption = computed<EChartsOption | null>(() => {
+  const rows = qualityData.value?.model_comparison ?? []
+  if (rows.length === 0) return null
+  return {
     grid: { left: 8, right: 16, top: 32, bottom: 8, containLabel: true },
     legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
@@ -144,15 +113,14 @@ function renderModelComparison() {
         barMaxWidth: 28,
       },
     ],
-  })
-}
+  }
+})
 
 /** 错误原因分布：环形图 */
-function renderErrorDistribution() {
-  if (!qualityData.value || !errorRef.value) return
-  if (!errorChart || errorChart.isDisposed()) errorChart = echarts.init(errorRef.value)
-  const rows = qualityData.value.error_distribution
-  errorChart.setOption({
+const errorOption = computed<EChartsOption | null>(() => {
+  const rows = qualityData.value?.error_distribution ?? []
+  if (rows.length === 0) return null
+  return {
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     legend: { top: 0, left: 'center', textStyle: { fontSize: 11 } },
     series: [
@@ -165,29 +133,10 @@ function renderErrorDistribution() {
         data: rows.map((r) => ({ name: r.category, value: r.count })),
       },
     ],
-  })
-}
-
-function handleResize() {
-  trendChart?.resize()
-  modelChart?.resize()
-  errorChart?.resize()
-}
-
-onMounted(() => {
-  loadQuality()
-  window.addEventListener('resize', handleResize)
+  }
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleResize)
-  trendChart?.dispose()
-  trendChart = null
-  modelChart?.dispose()
-  modelChart = null
-  errorChart?.dispose()
-  errorChart = null
-})
+onMounted(loadQuality)
 
 /** 失败素材表格列定义 */
 const failedColumns: TableColumnData[] = [
@@ -327,22 +276,19 @@ const failedColumns: TableColumnData[] = [
 
       <!-- 每日趋势 -->
       <a-card title="每日分析趋势（最近 30 天）" size="small" style="margin-bottom: 16px">
-        <div v-if="qualityData.daily_trends.length" ref="trendRef" class="chart" />
-        <a-empty v-else description="最近 30 天无分析记录" />
+        <ArcoChart :option="trendOption" :height="220" empty-text="最近 30 天无分析记录" />
       </a-card>
 
       <!-- 模型成功率对比 + 错误原因分布 -->
       <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
         <a-col :flex="1">
           <a-card title="按模型成功率对比" size="small">
-            <div v-if="qualityData.model_comparison.length" ref="modelRef" class="chart" />
-            <a-empty v-else description="暂无分析数据" />
+            <ArcoChart :option="modelOption" :height="220" empty-text="暂无分析数据" />
           </a-card>
         </a-col>
         <a-col :flex="1">
           <a-card title="错误原因分布" size="small">
-            <div v-if="qualityData.error_distribution.length" ref="errorRef" class="chart" />
-            <a-empty v-else description="暂无失败记录" />
+            <ArcoChart :option="errorOption" :height="220" empty-text="暂无失败记录" />
           </a-card>
         </a-col>
       </a-row>

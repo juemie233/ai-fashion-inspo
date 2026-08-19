@@ -2,13 +2,10 @@
 /** 模型管理面板：连接状态、GPU 显存（自动监控+趋势图）、模型列表（详情/更新/复制）、下载队列、使用统计。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { h, ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { h, ref, computed, onMounted, onUnmounted } from 'vue'
 import { Tag, Button, Popconfirm, Message } from '@arco-design/web-vue'
+import type { EChartsOption } from 'echarts'
 import { storeToRefs } from 'pinia'
-import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { TooltipComponent, GridComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
 import { useGpuMonitor } from '@/composables/useGpuMonitor'
@@ -21,8 +18,7 @@ import {
   formatUptime,
   normalizeModelName,
 } from '@/utils/format'
-
-echarts.use([LineChart, TooltipComponent, GridComponent, CanvasRenderer])
+import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const { requestAndNotify } = useNotification()
 const store = useAiModelsStore()
@@ -56,17 +52,12 @@ const embeddingMissing = computed(() => {
 
 // ===== GPU 显存监控（自动轮询 + 趋势图） =====
 const { gpuStats, gpuHistory, unloadModel, startPolling, stopPolling } = useGpuMonitor(5000, 60)
-const gpuChartRef = ref<HTMLDivElement | null>(null)
-let gpuChart: echarts.ECharts | null = null
 
-watch(gpuHistory, () => renderGpuChart(), { deep: true })
-
-/** 渲染 GPU 显存短时趋势折线图 */
-function renderGpuChart() {
-  if (!gpuChartRef.value) return
-  if (!gpuChart || gpuChart.isDisposed()) gpuChart = echarts.init(gpuChartRef.value)
+/** GPU 显存短时趋势折线图配置（gpuHistory 变化时 ArcoChart 自动重绘） */
+const gpuChartOption = computed<EChartsOption | null>(() => {
   const points = gpuHistory.value
-  gpuChart.setOption({
+  if (points.length <= 1) return null
+  return {
     grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: points.map((p) => p.time), axisLabel: { fontSize: 10 } },
@@ -82,12 +73,8 @@ function renderGpuChart() {
         areaStyle: { opacity: 0.12 },
       },
     ],
-  })
-}
-
-function handleResize() {
-  gpuChart?.resize()
-}
+  }
+})
 
 // ===== 模型详情 =====
 interface ModelDetail {
@@ -386,16 +373,11 @@ onMounted(() => {
   loadAiStatus()
   loadModelStats()
   startPolling()
-  nextTick(() => setTimeout(renderGpuChart, 30))
-  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
   stopPolling()
   downloadTasks.value.forEach((t) => t.controller?.abort())
-  window.removeEventListener('resize', handleResize)
-  gpuChart?.dispose()
-  gpuChart = null
 })
 
 /** 模型列表列定义 */
@@ -581,7 +563,12 @@ const statColumns = [
         </a-tag>
         <span style="font-size: 11px; color: #999; margin-left: 4px">点击 × 卸载模型</span>
       </div>
-      <div v-if="gpuHistory.length > 1" ref="gpuChartRef" style="height: 180px; margin-top: 12px" />
+      <ArcoChart
+        v-if="gpuHistory.length > 1"
+        :option="gpuChartOption"
+        :height="180"
+        style="margin-top: 12px"
+      />
       <div v-else style="font-size: 11px; color: #999; margin-top: 8px">正在收集显存趋势数据…</div>
     </a-card>
 

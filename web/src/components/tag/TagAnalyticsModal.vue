@@ -1,12 +1,9 @@
 <script setup lang="ts">
 /** 标签分析弹窗：热门排行 + 共现关系图 + 使用趋势。 */
 
-import { ref, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import * as echarts from 'echarts/core'
-import { GraphChart, BarChart, LineChart } from 'echarts/charts'
-import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import type { EChartsOption } from 'echarts'
 import {
   fetchCooccurrenceNetwork,
   fetchTopTags,
@@ -14,23 +11,15 @@ import {
   type CooccurrenceNetwork,
   type TopTag,
 } from '@/api/tags'
-
-echarts.use([GraphChart, BarChart, LineChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
+import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const show = defineModel<boolean>('show', { required: true })
-
-// ===== 图表容器 =====
-const graphRef = ref<HTMLDivElement | null>(null)
-const topRef = ref<HTMLDivElement | null>(null)
-const trendRef = ref<HTMLDivElement | null>(null)
-
-let graphChart: echarts.ECharts | null = null
-let topChart: echarts.ECharts | null = null
-let trendChart: echarts.ECharts | null = null
 
 const loading = ref(false)
 const network = ref<CooccurrenceNetwork>({ nodes: [], edges: [] })
 const topTags = ref<TopTag[]>([])
+/** 趋势数据（按选中标签加载） */
+const trendData = ref<Array<{ bucket: string; count: number }>>([])
 const trendTag = ref<{ id: number; name: string } | null>(null)
 const trendGranularity = ref<'month' | 'week' | 'day'>('month')
 
@@ -54,45 +43,17 @@ function categoryColor(cat: string): string {
 
 watch(show, (v) => {
   if (v) {
-    // 等待 modal 动画与布局完成后再渲染，确保容器有尺寸
+    // 等待 modal 动画与布局完成后再加载数据
     nextTick(() => setTimeout(load, 60))
-  } else {
-    // 关闭时统一 dispose 图表实例，保证下次打开重新 init（Arco modal 默认不卸载内容 DOM，
-    // 但图表在隐藏容器内 resize 行为不稳定，仍按关闭即销毁处理）
-    disposeCharts()
   }
 })
-
-onMounted(() => window.addEventListener('resize', handleResize))
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleResize)
-  disposeCharts()
-})
-
-function handleResize() {
-  graphChart?.resize()
-  topChart?.resize()
-  trendChart?.resize()
-}
-
-/** 销毁所有图表实例并置空：关闭弹窗（DOM 被销毁）或组件卸载时调用，保证下次打开重新 init */
-function disposeCharts() {
-  graphChart?.dispose(); graphChart = null
-  topChart?.dispose(); topChart = null
-  trendChart?.dispose(); trendChart = null
-}
 
 async function load() {
   loading.value = true
   try {
-    const [net, top] = await Promise.all([
-      fetchCooccurrenceNetwork(30, 1),
-      fetchTopTags(20),
-    ])
+    const [net, top] = await Promise.all([fetchCooccurrenceNetwork(30, 1), fetchTopTags(20)])
     network.value = net
     topTags.value = top
-    renderTop(top)
-    renderGraph(net)
     // 默认展示使用次数最多的标签趋势
     if (top.length > 0) {
       await loadTrend(top[0].id, top[0].name)
@@ -108,14 +69,18 @@ async function load() {
 }
 
 // ===== 热门标签排行（横向条形图） =====
-function renderTop(tags: TopTag[]) {
-  if (!topRef.value) return
-  if (!topChart || topChart.isDisposed()) topChart = echarts.init(topRef.value)
+const topOption = computed<EChartsOption | null>(() => {
+  const tags = topTags.value
+  if (tags.length === 0) return null
   // 横向：顶部是最多的，倒序让第一名在最上
   const sorted = [...tags].reverse()
-  topChart.setOption({
+  return {
     grid: { left: 8, right: 32, top: 8, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { color: MUTED_INK }, splitLine: { lineStyle: { color: '#e1e0d9' } } },
+    xAxis: {
+      type: 'value',
+      axisLabel: { color: MUTED_INK },
+      splitLine: { lineStyle: { color: '#e1e0d9' } },
+    },
     yAxis: {
       type: 'category',
       data: sorted.map((t) => t.name),
@@ -133,22 +98,15 @@ function renderTop(tags: TopTag[]) {
         label: { show: true, position: 'right', color: '#52514e', fontSize: 11 },
       },
     ],
-  })
-}
+  }
+})
 
 // ===== 共现关系图（力导向） =====
-function renderGraph(net: CooccurrenceNetwork) {
-  if (!graphRef.value) return
-  if (!graphChart || graphChart.isDisposed()) {
-    graphChart = echarts.init(graphRef.value)
-    graphChart.on('click', (params: any) => {
-      if (params.dataType === 'node' && params.data?.id != null) {
-        loadTrend(params.data.id, params.data.name)
-      }
-    })
-  }
+const graphOption = computed<EChartsOption | null>(() => {
+  const net = network.value
+  if (net.nodes.length === 0) return null
   const maxWeight = Math.max(1, ...net.edges.map((e) => e.weight))
-  graphChart.setOption({
+  return {
     tooltip: {
       formatter: (p: any) => {
         if (p.dataType === 'node') return `${p.data.name}<br/>使用 ${p.data.usage_count} 次`
@@ -183,39 +141,53 @@ function renderGraph(net: CooccurrenceNetwork) {
         lineStyle: { color: '#c3c2b7', curveness: 0.1 },
       },
     ],
+  } as EChartsOption
+})
+
+/** 共现图实例就绪：绑定节点点击事件（点击节点查看其趋势） */
+function onGraphReady(chart: any) {
+  chart.on('click', (params: any) => {
+    if (params.dataType === 'node' && params.data?.id != null) {
+      loadTrend(params.data.id, params.data.name)
+    }
   })
 }
 
 // ===== 使用趋势（折线图） =====
+const trendOption = computed<EChartsOption | null>(() => {
+  const rows = trendData.value
+  if (rows.length === 0) return null
+  return {
+    grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: rows.map((p) => p.bucket),
+      axisLabel: { color: MUTED_INK, fontSize: 11 },
+    },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: { color: MUTED_INK } },
+    tooltip: { trigger: 'axis' },
+    series: [
+      {
+        type: 'line',
+        data: rows.map((p) => p.count),
+        smooth: true,
+        symbolSize: 8,
+        lineStyle: { width: 2, color: SERIES_BLUE },
+        itemStyle: { color: SERIES_BLUE },
+        areaStyle: { color: 'rgba(42,120,214,0.12)' },
+      },
+    ],
+  }
+})
+
 async function loadTrend(tagId: number, name: string) {
   trendTag.value = { id: tagId, name }
-  if (!trendRef.value) return
   try {
     const data = await fetchTagTrend(tagId, trendGranularity.value)
-    if (!trendChart || trendChart.isDisposed()) trendChart = echarts.init(trendRef.value)
-    trendChart.setOption({
-      grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: data.trend.map((p) => p.bucket),
-        axisLabel: { color: MUTED_INK, fontSize: 11 },
-      },
-      yAxis: { type: 'value', minInterval: 1, axisLabel: { color: MUTED_INK } },
-      tooltip: { trigger: 'axis' },
-      series: [
-        {
-          type: 'line',
-          data: data.trend.map((p) => p.count),
-          smooth: true,
-          symbolSize: 8,
-          lineStyle: { width: 2, color: SERIES_BLUE },
-          itemStyle: { color: SERIES_BLUE },
-          areaStyle: { color: 'rgba(42,120,214,0.12)' },
-        },
-      ],
-    })
+    trendData.value = data.trend
   } catch {
     // 趋势加载失败静默处理（无历史数据时为空图）
+    trendData.value = []
   }
 }
 
@@ -238,25 +210,35 @@ function onGranularityChange() {
         <div class="row-top">
           <div class="panel">
             <h4>热门标签 Top {{ topTags.length }}</h4>
-            <div ref="topRef" class="chart chart-top" />
+            <ArcoChart :option="topOption" :height="260" empty-text="暂无标签数据" />
           </div>
           <div class="panel">
             <h4>
               使用趋势
               <template v-if="trendTag">— 「{{ trendTag.name }}」</template>
             </h4>
-            <a-radio-group v-model="trendGranularity" type="button" size="mini" @change="onGranularityChange">
+            <a-radio-group
+              v-model="trendGranularity"
+              type="button"
+              size="mini"
+              @change="onGranularityChange"
+            >
               <a-radio value="day">日</a-radio>
               <a-radio value="week">周</a-radio>
               <a-radio value="month">月</a-radio>
             </a-radio-group>
-            <div ref="trendRef" class="chart chart-trend" />
+            <ArcoChart :option="trendOption" :height="220" empty-text="暂无趋势数据" />
           </div>
         </div>
         <!-- 底部：共现关系图 -->
         <div class="panel panel-graph">
           <h4>标签共现关系图 <span class="hint">（点击节点查看其趋势）</span></h4>
-          <div ref="graphRef" class="chart chart-graph" />
+          <ArcoChart
+            :option="graphOption"
+            :height="320"
+            :on-ready="onGraphReady"
+            empty-text="暂无共现数据"
+          />
         </div>
       </div>
     </a-spin>
@@ -301,19 +283,5 @@ function onGranularityChange() {
 .panel-graph {
   flex: 1;
   min-height: 0;
-}
-.chart {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-}
-.chart-top {
-  min-height: 260px;
-}
-.chart-trend {
-  min-height: 220px;
-}
-.chart-graph {
-  min-height: 320px;
 }
 </style>

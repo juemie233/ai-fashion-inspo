@@ -7,7 +7,7 @@
 
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart, GraphChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsOption } from 'echarts'
@@ -16,6 +16,7 @@ echarts.use([
   BarChart,
   LineChart,
   PieChart,
+  GraphChart,
   TooltipComponent,
   LegendComponent,
   GridComponent,
@@ -32,18 +33,22 @@ const props = withDefaults(
     loading?: boolean
     /** 空态文案（option 为 null 时展示） */
     emptyText?: string
+    /** 图表实例就绪回调（用于绑定 echarts 事件，如 graph 图节点点击） */
+    onReady?: (chart: echarts.ECharts) => void
   }>(),
   { height: 320, loading: false, emptyText: '暂无数据' },
 )
 
 const chartEl = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
+let readyFired = false
 
 /** 惰性初始化图表实例（容器挂载后 / 被销毁后重建） */
 function ensureChart(): echarts.ECharts | null {
   if (!chartEl.value) return null
   if (!chart || chart.isDisposed()) {
     chart = echarts.init(chartEl.value)
+    readyFired = false
   }
   return chart
 }
@@ -54,7 +59,14 @@ function ensureChart(): echarts.ECharts | null {
 function render() {
   if (!props.option) return
   const c = ensureChart()
-  if (c) c.setOption(props.option, true)
+  if (c) {
+    c.setOption(props.option, true)
+    // 实例就绪后通知使用方绑定事件（仅在每次新 init 后触发一次）
+    if (!readyFired) {
+      readyFired = true
+      props.onReady?.(c)
+    }
+  }
 }
 
 watch(
