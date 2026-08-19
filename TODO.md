@@ -51,6 +51,59 @@
 - 小红书风控严格，需先冷却账号、控制采集节奏；被风控后短期内不要重试
 - 依赖 ffmpeg（视频缩略图，系统已安装）
 
+### 采集话题标签存档与关键词复用（未开始：方案已确认，待开工）
+
+**背景：** 按博主采集（collect_mode=user）已在笔记详情页提取正文中的话题标签（`#早秋穿搭` 等，`_extract_note_detail` 的 `tags` 字段），但目前只进采集日志、未落库。这些话题对自动采集有复用价值：发现博主常发的话题 → 作为搜索关键词建定时采集任务（`scraper_schedules.keywords`），采集更多同话题内容。**已确认方案：独立话题表（方案 2）**，不灌入素材标签体系（inspiration_tags 关联仍搁置）。
+
+**目标：** 采集到的话题标签存档入库（全局去重、可统计、可追溯来源），并通过「话题 → 定时采集关键词」闭环服务自动采集任务。
+
+**表设计（`scraper_hashtags`，按 name 全局去重）：**
+
+| 列 | 说明 |
+| ------ | ------ |
+| `id` | 自增主键 |
+| `name` | 话题词（去 `#`、strip，唯一索引） |
+| `seen_count` | 累计出现次数（跨任务累加） |
+| `first_seen_at` / `last_seen_at` | 首次/最近出现时间 |
+| `source_kind` | 最近来源：`blogger`（先落地）/ `search`（预留） |
+| `source_id` | 最近来源：博主 id 或任务 id |
+| `note_url` | 最近来源笔记链接（可空） |
+| `source_meta` | JSON：最近若干条来源明细 `[{kind, id, note_url, at}]` |
+
+**实施要点：**
+
+- 存储：模型 + Alembic 迁移（含 run_scraper.py 内 ensure_schema 兜底）；`_run_blogger_mode` 把 `detail["tags"]` 并入 `meta_map[note_url]`，图片/视频入库的同步 sqlite3 攒批提交处顺带 upsert（存在则 seen_count+1、更新 last_seen_at、append source_meta；不存在则插入）；每篇笔记话题数截断（如前 20 个）防脏数据
+- 读取：只读接口 `GET /api/scraper/hashtags`（`sort=count|recent`、`min_count`、`limit`），返回话题 + 计数 + 来源博主名
+- 闭环：定时计划配置页新增「话题库」选择区，按热度勾选写入计划 `keywords`（现有字段即 JSON 数组，零后端改动）
+- 采集任务完成日志附带「本次新增/命中话题 N 个」
+
+**涉及模块：**
+
+| 模块 | 改动 |
+| ------ | ------ |
+| `backend/app/models/scraper.py` | 新增 ScraperHashtag 模型 |
+| `backend/alembic/versions/` | 建表迁移 |
+| `backend/scripts/run_scraper.py` | meta_map 带 tags + upsert 写入 |
+| `backend/app/routers/scraper.py` 或 `services/scraper/` | hashtags 只读接口 |
+| `web/src/components/scraper/` | 定时计划配置页话题选择区 |
+
+**实施顺序（可随时停）：**
+
+1. 阶段① 存储（模型 + 迁移 + 采集写入）——小
+2. 阶段② 读取（查询接口 + 任务结果面板展示本次话题）——小
+3. 阶段③ 闭环（定时计划配置页话题勾选 → keywords）——中
+
+**验收标准：**
+
+- 按博主采集完成后，话题表出现去重记录，重复采集同名话题只累加计数
+- 定时采集计划可从话题库勾选关键词并正常执行搜索采集
+- 话题可追溯到来源博主/笔记
+
+**待定项（开工前确认即可）：**
+
+- 泛词过滤：默认不过滤先攒数据，话题多了再决定忽略词表（如 `#穿搭` 是否算泛词）
+- `source_kind='search'`：搜索模式当前不提取话题，仅预留
+
 ### 视频分析功能（~ 进行中：视频上传存储已支持）
 
 **背景：** 视频上传与存储已支持（inspirations 已含 video 类型，可上传 mp4），但尚未做关键帧提取与 AI 分析；穿搭内容大量以短视频形式存在（小红书/抖音），手动截图效率低。

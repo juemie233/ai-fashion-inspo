@@ -81,7 +81,7 @@ chrome_debug_port: int = 9222
 | 层级 | 技术 |
 | ------ | ------ |
 | 后端 | Python 3.12 + FastAPI + SQLAlchemy async + SQLite |
-| Web 前端 | Vue 3 + Vite + TypeScript + Pinia + Naive UI |
+| Web 前端 | Vue 3 + Vite + TypeScript + Pinia + Arco Design（@arco-design/web-vue，已全量替换 Naive UI） |
 | 移动端 | React Native (Expo) + Zustand |
 | 浏览器插件 | Chrome Extension Manifest V3 |
 | AI 推理 | Ollama + Qwen3-VL:8B-Instruct（本地 GPU） |
@@ -95,11 +95,11 @@ chrome_debug_port: int = 9222
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节、语义搜索（文本）、以图搜图（图片上传）、`/` 聚焦与 Esc 退出、复制搜索链接、筛选状态持久化 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
 | **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、下载原图、复制原始链接、标签点击跳搜索、移入垃圾桶（可选择删除原因：质量差/重复/不喜欢/隐私/其他/AI生成）、五星评分（与收藏并列，列表可筛选/排序）、**人脸识别（博主特征库匹配）**（检测并匹配 → 自动关联穿搭博主 / 疑似未知人脸 → 手动指定或解除关联，需先在博主详情页注册人脸） |
-| **采集管理** | 小红书 CDP 零检测采集 + 抖音独立浏览器采集、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
+| **采集管理** | 小红书 CDP 零检测采集 + 抖音独立浏览器采集、**按博主采集**（选博主 → 进其主页逐篇打开笔记详情页，提取轮播多图/视频/正文 caption/话题标签，视频下载入库，素材自动关联博主）、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
 | **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
 | **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库随机抽样 + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：auto 黑边自动检测 / 固定比例双模式 + 截图特征置信度分级；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
-| **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传 1~5 张正脸照片注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力） |
+| **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力） |
 | **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/质量审核/批量删除/近似重复检测删除/采集/向量回填）、进度条与完成统计（向量/删除/审核明细）、取消排队任务、失败采集一键重试、运行中自动轮询（5s）、预计剩余时间 |
 | **浏览器插件** | 一键提取网页穿搭图片；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
@@ -194,6 +194,8 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 3. 点击「测试连接」按钮，确认显示"已连接"
 4. 输入关键词，点击「开始采集」
 
+> **按博主采集：** 采集方式选「按博主采集」，下拉选择目标博主（也可先在「人物管理」中新建博主），设置笔记数上限（默认 30）后开始。采集器进入博主主页逐个打开笔记详情页，提取轮播多图/视频/正文 caption/话题标签；视频下载入库（ffmpeg 提取首帧缩略图），同一笔记的图片与视频自动关联该博主。详情页访问随机间隔 2~4 秒且失败跳过，请控制采集节奏避免触发风控。
+
 > **抖音采集：** 抖音任务无需 CDP Chrome —— 后端用独立 Playwright 浏览器直接采集网页版搜索结果（反爬严格，结果可能为空，页面已提示推荐浏览器插件）。
 >
 > **排序说明：** 「最新/最热」排序仅小红书搜索模式生效；抖音网页版固定综合排序。
@@ -259,20 +261,28 @@ fashion-inspo/
 │   │   │   ├── tasks.py          # 任务队列（列表/详情/取消）
 │   │   │   ├── files.py          # 静态文件
 │   │   │   └── ws.py             # WebSocket
-│   │   ├── services/             # 业务逻辑
+│   │   ├── services/             # 业务逻辑（按领域拆分，主服务为兼容转发层）
 │   │   │   ├── ai_service/       # AI 编排（analyze 分析 / quality 审核 / outfit_summary 大标签 / common）
 │   │   │   ├── ai_parser.py      # AI 响应解析/修复（畸形处理）
 │   │   │   ├── ai_tag_saver.py   # 标签标准化/保存/关联
 │   │   │   ├── ai_analysis_service.py  # 分析/队列/历史业务逻辑
-│   │   │   ├── inspiration_service.py  # 素材 CRUD 业务逻辑
-│   │   │   ├── tag_service.py    # 标签 CRUD + 合并 + 预设导入 + 相似度
-│   │   │   ├── person_service.py # 博主/模特通用服务基类（PersonServiceBase）+ 风格画像 + 照片组/照片
+│   │   │   ├── inspiration_service.py  # 素材转发层 → inspiration_create/trash/query/update/dedupe/tags/state.py
+│   │   │   ├── tag_service.py    # 标签转发层 → tag_crud/tag_alias/tag_inspirations/tag_query.py
+│   │   │   ├── person_service.py # 人物转发层 → person/（base 基类 + services + csv_import + photo_sets）
+│   │   │   ├── scraper_service.py     # 采集转发层 → scraper/（tasks 任务 + process 编排 + cookies/schedules/extension/results）
 │   │   │   ├── blogger_face.py   # 博主人脸注册（平均池化）+ 素材人脸检测匹配
+│   │   │   ├── face_thumbnail.py # 人脸缩略图裁剪（从已关联素材选图注册用）
 │   │   │   ├── face_client.py    # 人脸识别子服务 HTTP 客户端（face-service）
-│   │   │   ├── scraper_service.py    # 采集编排 + 定时调度 + 插件任务记录
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── audit_service.py  # 操作审计日志写入
 │   │   │   ├── near_duplicate_service.py  # 近似重复检测（感知哈希分组）
+│   │   │   ├── crop_service.py   # 手机图剪裁
+│   │   │   ├── admin_stats_service.py    # 管理后台统计
+│   │   │   ├── chrome_manager.py # 采集专用 Chrome 生命周期
+│   │   │   ├── gpu_service.py / model_config.py / model_prompt.py  # AI 模型/GPU/参数
+│   │   │   ├── quality_learner.py       # 负样本初筛器（sklearn 逻辑回归）
+│   │   │   ├── scraper_seen_service.py  # URL 墓碑表读写
+│   │   │   ├── task_runner.py   # 异步任务执行框架
 │   │   │   ├── task_runners/     # 异步任务执行器（batch_analyze / quality_check / batch_delete / deduplicate / vector_backfill）
 │   │   │   ├── vector/           # 向量检索（embedding / store / similarity）
 │   │   │   ├── embedding_service.py  # 薄壳 → vector.embedding
@@ -438,7 +448,7 @@ fashion-inspo/
 
 | 表 | 说明 | 关键字段 |
 | ---- | ------ | ---------- |
-| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, rating（用户评分 0~5）, quality_status, quality_reason, is_ai_generated, deleted_at, trash_reason |
+| `inspirations` | 穿搭素材 | id, source_type, file_path, media_type, dominant_colors, rating（用户评分 0~5）, caption（笔记正文，按博主采集写入）, quality_status, quality_reason, is_ai_generated, deleted_at, trash_reason |
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual), pinned, sort_order, description |
 | `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
@@ -588,9 +598,10 @@ alembic upgrade head
 | `DELETE` | `/api/bloggers/{id}` | 删除博主（需 API Key；仅无关联素材时可删） |
 | `GET` | `/api/bloggers/{id}/inspirations` | 该博主的素材列表（分页 + 排序） |
 | `GET` | `/api/bloggers/top` | 热门博主排行（按素材数） |
+| `GET` | `/api/bloggers/ip-stats?limit=` | 博主 IP 属地统计（按属地聚合博主数，空属地归「未知」，返回 total + items） |
 | `GET` | `/api/bloggers/suggestions` | 按名称建议博主（用于选择去重） |
 | `POST` | `/api/bloggers/import-csv` | 上传 CSV 批量导入博主（按 xhs_id upsert，昵称/小红书号必填） |
-| `POST` | `/api/bloggers/{id}/face` | 注册/重新注册博主人脸（1~5 张正脸照片，重复注册覆盖旧特征；需 face-service 运行中） |
+| `POST` | `/api/bloggers/{id}/face` | 注册/重新注册博主人脸（上传照片 与/或 从已关联素材选图，合计 1~5 张，重复注册覆盖旧特征；需 face-service 运行中） |
 | `GET` | `/api/bloggers/{id}/face` | 查询博主人脸注册状态 |
 | `POST` | `/api/inspirations/{id}/bloggers` | 给素材批量关联博主（幂等） |
 | `DELETE` | `/api/inspirations/{id}/bloggers/{bid}` | 解除素材与博主关联 |
@@ -606,6 +617,7 @@ alembic upgrade head
 | `DELETE` | `/api/models/{id}` | 删除模特（需 API Key；仅无关联素材时可删） |
 | `GET` | `/api/models/{id}/inspirations` | 该模特的素材列表（分页 + 排序） |
 | `GET` | `/api/models/top` | 热门模特排行（按素材数） |
+| `GET` | `/api/models/ip-stats?limit=` | 模特 IP 属地统计（按属地聚合模特数，空属地归「未知」，返回 total + items） |
 | `GET` | `/api/models/suggestions` | 按名称建议模特（用于选择去重） |
 | `POST` | `/api/inspirations/{id}/models` | 给素材批量关联模特（幂等） |
 | `DELETE` | `/api/inspirations/{id}/models/{mid}` | 解除素材与模特关联 |
@@ -756,7 +768,7 @@ alembic upgrade head
 | `GET` | `/api/scraper/cookie-status?platform=` | Cookie 状态（存在性/时效/是否有效） |
 | `POST` | `/api/scraper/cookie-import` | 导入平台 Cookie（JSON 数组） |
 | `DELETE` | `/api/scraper/cookie/{platform}` | 删除平台 Cookie |
-| `POST` | `/api/scraper/tasks` | 创建采集任务（支持 `sort_mode`；小红书 CDP 模式预检 Chrome 连接） |
+| `POST` | `/api/scraper/tasks` | 创建采集任务（搜索模式：`keywords`/`max_count`/`sort_mode`；按博主采集：`collect_mode=user` + `blogger_id`（或 `profile_url`）+ `max_notes`，小红书 CDP 模式预检 Chrome 连接） |
 | `GET` | `/api/scraper/tasks` | 任务列表（`platform`/`status` 筛选 + `sort` 排序 + `page`/`size` 分页，返回 `items`/`total`/`stats`） |
 | `DELETE` | `/api/scraper/tasks` | 清空所有采集任务记录 |
 | `DELETE` | `/api/scraper/tasks/{id}` | 删除单条任务记录（素材保留，关联置空） |
@@ -851,7 +863,7 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，311 用例）
+### 后端（pytest，355 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -863,13 +875,13 @@ pytest
 ```
 
 覆盖范围：
-- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理/**状态不变量校验**（软删除三字段同真同假，R1/R2/R3 违规检出）、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物模块（博主/模特拆分后的双套 CRUD/素材关联/风格画像/删除限制/CSV 导入/照片组，以及人物频次合并统计）、**博主人脸**（注册平均池化/重新注册覆盖/无脸拒绝/超 5 张拒绝/博主不存在 404、素材人脸检测命中与未命中/手动指定与解除/删除检测——均 mock face_client）、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**手机图剪裁**（候选扫描/黑边检测/截图特征置信度/跳过明细/内容重复对比预览/物理删除重复素材后重裁/重新裁剪不清空其他组预览）、**任务执行器**（批量删除任务：删记录+删文件+释放空间；向量回填攒批/质量审核防假成功：全部失败抛任务级异常、部分失败正常完成）、**AI 分析与质量审核**（完整分析保存标签、审核二分类通过/拒绝、大标签建议、质量统计、批量审核/重审任务创建——均模拟 Ollama）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合）
+- **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理/**状态不变量校验**（软删除三字段同真同假，R1/R2/R3 违规检出）、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、人物模块（博主/模特拆分后的双套 CRUD/素材关联/风格画像/删除限制/CSV 导入/照片组，以及人物频次合并统计）、**博主人脸**（注册平均池化/重新注册覆盖/无脸拒绝/超 5 张拒绝/博主不存在 404、素材人脸检测命中与未命中/手动指定与解除/删除检测——均 mock face_client）、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**手机图剪裁**（候选扫描/黑边检测/截图特征置信度/跳过明细/内容重复对比预览/物理删除重复素材后重裁/重新裁剪不清空其他组预览）、**任务执行器**（批量删除任务：删记录+删文件+释放空间；向量回填攒批/质量审核防假成功：全部失败抛任务级异常、部分失败正常完成）、**AI 分析与质量审核**（完整分析保存标签、审核二分类通过/拒绝、大标签建议、质量统计、批量审核/重审任务创建——均模拟 Ollama）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合、**按博主采集任务**：collect_mode=user 校验 Blogger 存在（404）、自动补全 profile_url/platform_user_id、缺博主与缺 URL 双 400）
 - **链路端到端旅程测试**（`test_journeys.py`，验证环节衔接而非单环节内部）：素材全旅程（上传→打标→向量→垃圾桶→恢复→再删→清空，每环节断言不变量零违规与墓碑/审计留痕）、采集旅程（插件会话→from-url 入库→任务完成→删除→墓碑→重采被拒，含恢复后墓碑仍在的防重复闭环）、失败旅程（文件缺失自愈：trash/restore 不产生悬空记录）、崩溃旅程（worker 心跳超时→`_reset_stale_tasks` 重置→重跑成功，不再假成功）
 - **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，97 用例）
+### 前端（vitest，104 用例）
 
 ```bash
 cd web
@@ -893,7 +905,7 @@ npm test
 | Qwen3-VL:8B-Instruct | 穿搭标签识别 | ✅ |
 | Google Chrome | CDP 采集宿主浏览器 | ⚠️ 采集时必需 |
 | Playwright | 采集引擎驱动 | ⚠️ 采集时必需 |
-| ffmpeg | 视频关键帧提取 | ❌ 尚未使用 |
+| ffmpeg | 视频关键帧提取 / 采集视频首帧缩略图 | ✅ 采集视频时使用 |
 
 ## 开源许可
 
