@@ -2,7 +2,7 @@
 /** 标签分析弹窗：热门排行 + 共现关系图 + 使用趋势。 */
 
 import { ref, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import * as echarts from 'echarts/core'
 import { GraphChart, BarChart, LineChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
@@ -18,7 +18,6 @@ import {
 echarts.use([GraphChart, BarChart, LineChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
 
 const show = defineModel<boolean>('show', { required: true })
-const message = useMessage()
 
 // ===== 图表容器 =====
 const graphRef = ref<HTMLDivElement | null>(null)
@@ -58,8 +57,8 @@ watch(show, (v) => {
     // 等待 modal 动画与布局完成后再渲染，确保容器有尺寸
     nextTick(() => setTimeout(load, 60))
   } else {
-    // n-modal 默认 displayDirective='if'，关闭会销毁内容 DOM，
-    // 必须同步 dispose 图表实例，否则二次打开时 setOption 到已脱离文档的 canvas 上
+    // 关闭时统一 dispose 图表实例，保证下次打开重新 init（Arco modal 默认不卸载内容 DOM，
+    // 但图表在隐藏容器内 resize 行为不稳定，仍按关闭即销毁处理）
     disposeCharts()
   }
 })
@@ -100,7 +99,7 @@ async function load() {
     }
   } catch {
     // 接口失败给出提示而非 unhandled rejection
-    message.error('标签分析数据加载失败')
+    Message.error('标签分析数据加载失败')
     network.value = { nodes: [], edges: [] }
     topTags.value = []
   } finally {
@@ -226,8 +225,14 @@ function onGranularityChange() {
 </script>
 
 <template>
-  <n-modal v-model:show="show" preset="card" title="标签分析" style="width: 90%; max-width: 1200px; height: 84vh">
-    <n-spin :show="loading">
+  <a-modal
+    v-model:visible="show"
+    title="标签分析"
+    :footer="false"
+    :width="'90%'"
+    :modal-style="{ maxWidth: '1200px', height: '84vh' }"
+  >
+    <a-spin :loading="loading">
       <div class="analytics">
         <!-- 顶部：热门排行 + 趋势 -->
         <div class="row-top">
@@ -240,11 +245,11 @@ function onGranularityChange() {
               使用趋势
               <template v-if="trendTag">— 「{{ trendTag.name }}」</template>
             </h4>
-            <n-radio-group v-model:value="trendGranularity" size="tiny" @update:value="onGranularityChange">
-              <n-radio-button value="day">日</n-radio-button>
-              <n-radio-button value="week">周</n-radio-button>
-              <n-radio-button value="month">月</n-radio-button>
-            </n-radio-group>
+            <a-radio-group v-model="trendGranularity" type="button" size="mini" @change="onGranularityChange">
+              <a-radio value="day">日</a-radio>
+              <a-radio value="week">周</a-radio>
+              <a-radio value="month">月</a-radio>
+            </a-radio-group>
             <div ref="trendRef" class="chart chart-trend" />
           </div>
         </div>
@@ -254,8 +259,8 @@ function onGranularityChange() {
           <div ref="graphRef" class="chart chart-graph" />
         </div>
       </div>
-    </n-spin>
-  </n-modal>
+    </a-spin>
+  </a-modal>
 </template>
 
 <style scoped>

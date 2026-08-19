@@ -168,24 +168,23 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- display-directive="show"：首次展开后内容保持挂载，再次展开/收起零渲染开销 -->
-  <n-collapse v-model:expanded-names="expandedNames" display-directive="show">
-    <n-collapse-item
+  <!-- a-collapse 默认销毁行为 destroy-on-hide=false：首次展开后内容保持挂载，再次展开/收起零渲染开销 -->
+  <a-collapse v-model:active-key="expandedNames">
+    <a-collapse-item
       v-for="group in groups"
       :key="group.category"
-      :name="group.category"
     >
       <template #header>
-        <n-space align="center">
-          <n-checkbox
+        <a-space align="center">
+          <a-checkbox
             @click.stop
-            @update:checked="(v: boolean) => v ? emit('select-all', group) : emit('deselect-all')"
-            :checked="group.tags.every(t => selectedIds.has(t.id))"
+            @change="(v: unknown) => v === true ? emit('select-all', group) : emit('deselect-all')"
+            :model-value="group.tags.every(t => selectedIds.has(t.id))"
             :indeterminate="group.tags.some(t => selectedIds.has(t.id)) && !group.tags.every(t => selectedIds.has(t.id))"
           />
           <span>{{ CATEGORY_LABELS[group.category] || group.category }}</span>
-          <n-tag size="small" :bordered="false">{{ group.tags.length }}</n-tag>
-        </n-space>
+          <a-tag size="small">{{ group.tags.length }}</a-tag>
+        </a-space>
       </template>
 
       <div
@@ -200,7 +199,7 @@ onUnmounted(() => {
         @dragleave="onDragLeave"
         @drop="onDropCategory(group.category)"
       >
-        <!-- 轻量行：数千条标签时组件化行（n-list-item/n-popconfirm 等）挂载成本过高，
+        <!-- 轻量行：数千条标签时组件化行（list-item/popconfirm 等）挂载成本过高，
              改用原生元素 + CSS 实现同等交互，展开与滚动都快一个数量级 -->
         <div class="tag-list">
           <div
@@ -248,8 +247,8 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-    </n-collapse-item>
-  </n-collapse>
+    </a-collapse-item>
+  </a-collapse>
 </template>
 
 <style scoped>

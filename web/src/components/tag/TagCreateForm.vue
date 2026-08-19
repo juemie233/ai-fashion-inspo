@@ -3,13 +3,11 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, onUnmounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { createTag, getSimilarSuggestions, CATEGORY_LABELS } from '@/api/tags'
 
 const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ created: [] }>()
-
-const message = useMessage()
 
 const newTagName = ref('')
 const newTagCategory = ref('free')
@@ -37,49 +35,51 @@ async function handleCreate() {
   if (!newTagName.value.trim()) return
   try {
     await createTag(newTagName.value.trim(), newTagCategory.value)
-    message.success('标签已创建')
+    Message.success('标签已创建')
     show.value = false
     newTagName.value = ''
     createSuggestions.value = []
     emit('created')
   } catch (e) {
-    message.error(getApiErrorMessage(e, '创建失败'))
+    Message.error(getApiErrorMessage(e, '创建失败'))
   }
 }
 </script>
 
 <template>
-  <n-card v-if="show" title="创建新标签" size="small" style="margin-bottom:16px">
-    <n-space align="flex-end">
-      <n-form-item label="标签名">
-        <n-input
-          v-model:value="newTagName"
-          placeholder="例如: 森系"
-          @input="onNewTagNameInput"
-        />
-      </n-form-item>
-      <n-form-item label="类别">
-        <n-select
-          v-model:value="newTagCategory"
-          :options="Object.entries(CATEGORY_LABELS).map(([k, v]) => ({ label: v, value: k }))"
-          style="width:140px"
-        />
-      </n-form-item>
-      <n-button type="primary" @click="handleCreate">创建</n-button>
-    </n-space>
+  <a-card v-if="show" title="创建新标签" size="small" style="margin-bottom:16px">
+    <a-space :align="'end'" wrap>
+      <a-form :model="{ newTagName, newTagCategory }" layout="inline">
+        <a-form-item label="标签名">
+          <a-input
+            v-model="newTagName"
+            placeholder="例如: 森系"
+            @input="onNewTagNameInput"
+          />
+        </a-form-item>
+        <a-form-item label="类别">
+          <a-select
+            v-model="newTagCategory"
+            :options="Object.entries(CATEGORY_LABELS).map(([k, v]) => ({ label: v, value: k }))"
+            style="width:140px"
+          />
+        </a-form-item>
+      </a-form>
+      <a-button type="primary" @click="handleCreate">创建</a-button>
+    </a-space>
     <!-- 去重建议 -->
     <div v-if="createSuggestions.length > 0" style="margin-top:8px">
       <span style="font-size:12px;color:#f0a020">⚠ 已有相似标签：</span>
-      <n-space :size="4" style="margin-top:4px">
-        <n-tag
+      <a-space :size="4" style="margin-top:4px" wrap>
+        <a-tag
           v-for="s in createSuggestions"
           :key="s.id"
           size="small"
-          type="warning"
+          color="orange"
         >
           {{ s.name }} ({{ CATEGORY_LABELS[s.category] || s.category }})
-        </n-tag>
-      </n-space>
+        </a-tag>
+      </a-space>
     </div>
-  </n-card>
+  </a-card>
 </template>

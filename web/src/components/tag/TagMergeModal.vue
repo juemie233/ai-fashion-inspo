@@ -3,7 +3,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { mergeTags, CATEGORY_LABELS, type TagCategoryGroup } from '@/api/tags'
 
 const show = defineModel<boolean>('show', { required: true })
@@ -13,8 +13,6 @@ const props = defineProps<{
   source: { id: number; name: string } | null
   groups: TagCategoryGroup[]
 }>()
-
-const message = useMessage()
 
 const mergeTarget = ref<number | null>(null)
 
@@ -35,27 +33,28 @@ async function handleMerge() {
   if (!props.source || !mergeTarget.value) return
   try {
     await mergeTags(props.source.id, mergeTarget.value)
-    message.success('标签已合并')
+    Message.success('标签已合并')
     show.value = false
     mergeTarget.value = null
     emit('merged')
-  } catch (e) { message.error(getApiErrorMessage(e, '合并失败')) }
+  } catch (e) { Message.error(getApiErrorMessage(e, '合并失败')) }
 }
 </script>
 
 <template>
-  <n-modal v-model:show="show" title="合并标签" preset="card" style="width:500px">
+  <a-modal v-model:visible="show" title="合并标签" :footer="false" :width="500">
     <p v-if="source">将 <strong>{{ source.name }}</strong> 合并到：</p>
-    <n-select
-      v-model:value="mergeTarget"
+    <a-select
+      :model-value="mergeTarget ?? undefined"
       :options="mergeTargetOptions"
       placeholder="选择目标标签"
-      filterable
+      allow-search
       style="margin:16px 0"
+      @change="(v: unknown) => (mergeTarget = (v as number | undefined) ?? null)"
     />
-    <n-space justify="end">
-      <n-button @click="show = false">取消</n-button>
-      <n-button type="primary" @click="handleMerge" :disabled="!mergeTarget">确认合并</n-button>
-    </n-space>
-  </n-modal>
+    <a-space style="display:flex;justify-content:flex-end">
+      <a-button @click="show = false">取消</a-button>
+      <a-button type="primary" @click="handleMerge" :disabled="!mergeTarget">确认合并</a-button>
+    </a-space>
+  </a-modal>
 </template>

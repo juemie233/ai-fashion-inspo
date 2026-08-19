@@ -3,14 +3,12 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { fetchAliases, createAlias, deleteAlias, type TagAlias, type TagItem } from '@/api/tags'
 
 const show = defineModel<boolean>('show', { required: true })
 
 const props = defineProps<{ tag: TagItem | null }>()
-
-const message = useMessage()
 
 const aliasList = ref<TagAlias[]>([])
 const newAlias = ref('')
@@ -35,50 +33,49 @@ async function handleAddAlias() {
   if (!props.tag || !newAlias.value.trim()) return
   try {
     await createAlias(props.tag.id, newAlias.value.trim())
-    message.success('别名已添加')
+    Message.success('别名已添加')
     newAlias.value = ''
     await loadAliases()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '添加失败'))
+    Message.error(getApiErrorMessage(e, '添加失败'))
   }
 }
 
 async function handleDeleteAlias(aliasId: number) {
   try {
     await deleteAlias(aliasId)
-    message.success('别名已删除')
+    Message.success('别名已删除')
     await loadAliases()
-  } catch { message.error('删除失败') }
+  } catch { Message.error('删除失败') }
 }
 </script>
 
 <template>
-  <n-modal v-model:show="show" title="标签别名" preset="card" style="width:520px">
+  <a-modal v-model:visible="show" title="标签别名" :footer="false" :width="520">
     <p v-if="tag" style="font-size:13px;color:#999;margin-bottom:12px">
       「{{ tag.name }}」的别名：AI 识别到别名时会自动归为该标签
     </p>
-    <n-space align="center" style="margin-bottom:12px">
-      <n-input
-        v-model:value="newAlias"
+    <a-space style="margin-bottom:12px">
+      <a-input
+        v-model="newAlias"
         placeholder="输入别名，如：纯白"
         style="width:240px"
-        @keyup.enter="handleAddAlias"
+        @press-enter="handleAddAlias"
       />
-      <n-button type="primary" size="small" :disabled="!newAlias.trim()" @click="handleAddAlias">添加</n-button>
-    </n-space>
-    <n-spin :show="aliasLoading">
-      <n-list v-if="aliasList.length > 0" bordered>
-        <n-list-item v-for="a in aliasList" :key="a.id">
-          <template #suffix>
-            <n-popconfirm @positive-click="handleDeleteAlias(a.id)">
-              <template #trigger><n-button size="tiny" text type="error">删除</n-button></template>
-              确认删除别名「{{ a.alias }}」？
-            </n-popconfirm>
+      <a-button type="primary" size="small" :disabled="!newAlias.trim()" @click="handleAddAlias">添加</a-button>
+    </a-space>
+    <a-spin :loading="aliasLoading">
+      <a-list v-if="aliasList.length > 0" :bordered="true">
+        <a-list-item v-for="a in aliasList" :key="a.id">
+          <template #actions>
+            <a-popconfirm :content="`确认删除别名「${a.alias}」？`" @ok="handleDeleteAlias(a.id)">
+              <a-button size="mini" type="text" status="danger">删除</a-button>
+            </a-popconfirm>
           </template>
           {{ a.alias }}
-        </n-list-item>
-      </n-list>
+        </a-list-item>
+      </a-list>
       <div v-else-if="!aliasLoading" style="text-align:center;color:#999;padding:20px">暂无别名</div>
-    </n-spin>
-  </n-modal>
+    </a-spin>
+  </a-modal>
 </template>

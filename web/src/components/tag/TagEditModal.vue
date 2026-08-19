@@ -3,15 +3,13 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { updateTag, CATEGORY_LABELS, type TagItem } from '@/api/tags'
 
 const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ saved: [] }>()
 
 const props = defineProps<{ tag: TagItem | null }>()
-
-const message = useMessage()
 
 const editName = ref('')
 const editCategory = ref('')
@@ -35,41 +33,40 @@ async function handleEdit() {
         ? editDescription.value.trim() || null
         : undefined,
     })
-    message.success('标签已更新')
+    Message.success('标签已更新')
     show.value = false
     emit('saved')
   } catch (e) {
-    message.error(getApiErrorMessage(e, '更新失败'))
+    Message.error(getApiErrorMessage(e, '更新失败'))
   }
 }
 </script>
 
 <template>
-  <n-modal v-model:show="show" title="编辑标签" preset="card" style="width:420px" @esc="show = false">
-    <n-form label-placement="left" label-width="60">
-      <n-form-item label="名称">
-        <n-input v-model:value="editName" @keyup.enter="handleEdit" />
-      </n-form-item>
-      <n-form-item label="类别">
-        <n-select
-          v-model:value="editCategory"
+  <a-modal v-model:visible="show" title="编辑标签" :footer="false" :width="420" @cancel="show = false">
+    <a-form :model="{ editName, editCategory, editDescription }" label-align="left" :label-col-style="{ width: '60px' }">
+      <a-form-item label="名称">
+        <a-input v-model="editName" @press-enter="handleEdit" />
+      </a-form-item>
+      <a-form-item label="类别">
+        <a-select
+          v-model="editCategory"
           :options="Object.entries(CATEGORY_LABELS).map(([k, v]) => ({ label: v, value: k }))"
         />
-      </n-form-item>
-      <n-form-item label="备注">
-        <n-input
-          v-model:value="editDescription"
-          type="textarea"
-          :rows="2"
-          maxlength="255"
-          show-count
+      </a-form-item>
+      <a-form-item label="备注">
+        <a-textarea
+          v-model="editDescription"
+          :auto-size="{ minRows: 2 }"
+          :max-length="255"
+          show-word-limit
           placeholder="标签说明（可选）"
         />
-      </n-form-item>
-    </n-form>
-    <n-space justify="end" style="margin-top:16px">
-      <n-button @click="show = false">取消</n-button>
-      <n-button type="primary" @click="handleEdit">保存</n-button>
-    </n-space>
-  </n-modal>
+      </a-form-item>
+    </a-form>
+    <a-space style="display:flex;justify-content:flex-end;margin-top:16px">
+      <a-button @click="show = false">取消</a-button>
+      <a-button type="primary" @click="handleEdit">保存</a-button>
+    </a-space>
+  </a-modal>
 </template>

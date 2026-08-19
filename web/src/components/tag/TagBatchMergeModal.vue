@@ -2,7 +2,7 @@
 /** 批量合并弹窗：将选中的多个标签合并到同一个目标标签。 */
 
 import { ref, computed, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { mergeTags, CATEGORY_LABELS, type TagCategoryGroup } from '@/api/tags'
 
 const show = defineModel<boolean>('show', { required: true })
@@ -12,8 +12,6 @@ const props = defineProps<{
   selectedIds: Set<number>
   groups: TagCategoryGroup[]
 }>()
-
-const message = useMessage()
 
 const batchMergeTarget = ref<number | null>(null)
 
@@ -35,33 +33,36 @@ async function handleBatchMerge() {
   if (!batchMergeTarget.value || props.selectedIds.size < 2) return
   const sourceIds = Array.from(props.selectedIds).filter(id => id !== batchMergeTarget.value)
   if (sourceIds.length === 0) {
-    message.warning('目标标签不能在被选中的标签中')
+    Message.warning('目标标签不能在被选中的标签中')
     return
   }
   try {
     for (const sid of sourceIds) {
       await mergeTags(sid, batchMergeTarget.value)
     }
-    message.success(`已将 ${sourceIds.length} 个标签合并`)
+    Message.success(`已将 ${sourceIds.length} 个标签合并`)
     show.value = false
     emit('done')
-  } catch (e) { message.error('批量合并失败') }
+  } catch {
+    Message.error('批量合并失败')
+  }
 }
 </script>
 
 <template>
-  <n-modal v-model:show="show" title="批量合并" preset="card" style="width:500px">
+  <a-modal v-model:visible="show" title="批量合并" :footer="false" :width="500">
     <p>将选中的 {{ selectedIds.size }} 个标签合并到：</p>
-    <n-select
-      v-model:value="batchMergeTarget"
+    <a-select
+      :model-value="batchMergeTarget ?? undefined"
       :options="batchMergeTargetOptions"
       placeholder="选择目标标签"
-      filterable
+      allow-search
       style="margin:16px 0"
+      @change="(v: unknown) => (batchMergeTarget = (v as number | undefined) ?? null)"
     />
-    <n-space justify="end">
-      <n-button @click="show = false">取消</n-button>
-      <n-button type="primary" @click="handleBatchMerge" :disabled="!batchMergeTarget">确认合并</n-button>
-    </n-space>
-  </n-modal>
+    <a-space style="display:flex;justify-content:flex-end">
+      <a-button @click="show = false">取消</a-button>
+      <a-button type="primary" @click="handleBatchMerge" :disabled="!batchMergeTarget">确认合并</a-button>
+    </a-space>
+  </a-modal>
 </template>

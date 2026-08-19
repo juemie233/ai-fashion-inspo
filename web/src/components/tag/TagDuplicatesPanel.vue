@@ -13,42 +13,42 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <n-card v-if="pairs.length > 0" title="相似标签" size="small" style="margin-bottom:16px;border-color:#f0a020">
-    <template #header-extra>
-      <n-button size="small" text @click="emit('close')">关闭</n-button>
+  <a-card v-if="pairs.length > 0" title="相似标签" size="small" style="margin-bottom:16px;border-color:#f0a020">
+    <template #extra>
+      <a-button size="small" type="text" @click="emit('close')">关闭</a-button>
     </template>
-    <n-list>
-      <n-list-item v-for="pair in pairs.slice(0, 20)" :key="`${pair.tag_a.id}-${pair.tag_b.id}`">
-        <n-space align="center">
-          <n-tag size="small">{{ pair.tag_a.name }}</n-tag>
+    <a-list>
+      <a-list-item v-for="pair in pairs.slice(0, 20)" :key="`${pair.tag_a.id}-${pair.tag_b.id}`">
+        <a-space align="center">
+          <a-tag size="small">{{ pair.tag_a.name }}</a-tag>
           <span style="font-size:12px;color:#999">相似度 {{ (pair.similarity * 100).toFixed(0) }}%</span>
-          <n-tag size="small">{{ pair.tag_b.name }}</n-tag>
-          <n-popconfirm @positive-click="emit('merge', pair.tag_a.id, pair.tag_b.id)">
-            <template #trigger>
-              <n-button size="tiny" type="warning">
-                合并 → {{ pair.tag_a.name }}
-              </n-button>
-            </template>
-            确认合并？源标签「{{ pair.tag_b.name }}」将被删除，其关联素材会迁移到「{{ pair.tag_a.name }}」
-          </n-popconfirm>
-          <n-popconfirm @positive-click="emit('merge', pair.tag_b.id, pair.tag_a.id)">
-            <template #trigger>
-              <n-button size="tiny" type="warning">
-                合并 → {{ pair.tag_b.name }}
-              </n-button>
-            </template>
-            确认合并？源标签「{{ pair.tag_a.name }}」将被删除，其关联素材会迁移到「{{ pair.tag_b.name }}」
-          </n-popconfirm>
-          <n-popconfirm @positive-click="emit('set-alias', pair.tag_b.id, pair.tag_a.id, pair.tag_b.name)">
-            <template #trigger>
-              <n-button size="tiny" type="info">
-                设别名 → {{ pair.tag_a.name }}
-              </n-button>
-            </template>
-            确认将「{{ pair.tag_b.name }}」合并到「{{ pair.tag_a.name }}」并设为其别名？此后 AI 再识别出「{{ pair.tag_b.name }}」将自动归为「{{ pair.tag_a.name }}」
-          </n-popconfirm>
-        </n-space>
-      </n-list-item>
-    </n-list>
-  </n-card>
+          <a-tag size="small">{{ pair.tag_b.name }}</a-tag>
+          <a-popconfirm
+            :content="`确认合并？源标签「${pair.tag_b.name}」将被删除，其关联素材会迁移到「${pair.tag_a.name}」`"
+            @ok="emit('merge', pair.tag_a.id, pair.tag_b.id)"
+          >
+            <a-button size="mini" type="primary" status="warning">
+              合并 → {{ pair.tag_a.name }}
+            </a-button>
+          </a-popconfirm>
+          <a-popconfirm
+            :content="`确认合并？源标签「${pair.tag_a.name}」将被删除，其关联素材会迁移到「${pair.tag_b.name}」`"
+            @ok="emit('merge', pair.tag_b.id, pair.tag_a.id)"
+          >
+            <a-button size="mini" type="primary" status="warning">
+              合并 → {{ pair.tag_b.name }}
+            </a-button>
+          </a-popconfirm>
+          <a-popconfirm
+            :content="`确认将「${pair.tag_b.name}」合并到「${pair.tag_a.name}」并设为其别名？此后 AI 再识别出「${pair.tag_b.name}」将自动归为「${pair.tag_a.name}」`"
+            @ok="emit('set-alias', pair.tag_b.id, pair.tag_a.id, pair.tag_b.name)"
+          >
+            <a-button size="mini" type="secondary" status="normal">
+              设别名 → {{ pair.tag_a.name }}
+            </a-button>
+          </a-popconfirm>
+        </a-space>
+      </a-list-item>
+    </a-list>
+  </a-card>
 </template>

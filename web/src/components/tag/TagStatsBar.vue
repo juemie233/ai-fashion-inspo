@@ -7,11 +7,11 @@ defineProps<{ stats: TagStats | null }>()
 </script>
 
 <template>
-  <n-grid v-if="stats" :cols="5" :x-gap="12" style="margin-bottom:16px">
-    <n-gi><n-card size="small"><n-statistic label="总标签" :value="stats.total" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="未使用" :value="stats.unused" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="关联数" :value="stats.total_links" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="AI生成" :value="stats.by_source?.ai_generated || 0" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="手动" :value="stats.by_source?.manual || 0" /></n-card></n-gi>
-  </n-grid>
+  <a-row v-if="stats" :gutter="[12, 12]" style="margin-bottom:16px">
+    <a-col :span="5"><a-card size="small"><a-statistic title="总标签" :value="stats.total" /></a-card></a-col>
+    <a-col :span="5"><a-card size="small"><a-statistic title="未使用" :value="stats.unused" /></a-card></a-col>
+    <a-col :span="5"><a-card size="small"><a-statistic title="关联数" :value="stats.total_links" /></a-card></a-col>
+    <a-col :span="5"><a-card size="small"><a-statistic title="AI生成" :value="stats.by_source?.ai_generated || 0" /></a-card></a-col>
+    <a-col :span="5"><a-card size="small"><a-statistic title="手动" :value="stats.by_source?.manual || 0" /></a-card></a-col>
+  </a-row>
 </template>

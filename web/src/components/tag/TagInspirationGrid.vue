@@ -5,7 +5,7 @@
 
 import { ref, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   fetchTagInspirations,
   batchRemoveTagInspirations,
@@ -28,7 +28,6 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
-const message = useMessage()
 
 const gridBrowserRef = ref<InstanceType<typeof InspirationGridBrowser> | null>(null)
 
@@ -94,7 +93,7 @@ async function load(reset = true) {
     total.value = data.total
   } catch {
     if (seq !== loadSeq) return
-    message.error('加载素材失败')
+    Message.error('加载素材失败')
   } finally {
     if (seq === loadSeq) loading.value = false
   }
@@ -120,9 +119,9 @@ async function removeOne(item: GridBrowserItem) {
     total.value = Math.max(0, total.value - 1)
     gridBrowserRef.value?.removeSelectedId(item.id)  // 同步清除选中残留
     emit('changed', { removed: 1 })
-    message.success('已移除该标签')
+    Message.success('已移除该标签')
   } catch {
-    message.error('移除失败')
+    Message.error('移除失败')
   } finally {
     const next = new Set(removingIds.value)
     next.delete(item.id)
@@ -136,12 +135,12 @@ async function batchRemove(ids: string[], clear: () => void) {
   batchRemoving.value = true
   try {
     const { removed } = await batchRemoveTagInspirations(props.tag.id, ids)
-    message.success(`已从 ${removed} 个素材移除该标签`)
+    Message.success(`已从 ${removed} 个素材移除该标签`)
     clear()
     emit('changed', { removed })
     await load(true)
   } catch {
-    message.error('批量移除失败')
+    Message.error('批量移除失败')
   } finally {
     batchRemoving.value = false
   }
@@ -162,7 +161,7 @@ async function batchAddTags() {
     .map((s) => s.trim())
     .filter(Boolean)
   if (names.length === 0) {
-    message.warning('请输入标签名')
+    Message.warning('请输入标签名')
     return
   }
   batchAdding.value = true
@@ -176,13 +175,13 @@ async function batchAddTags() {
     const parts = [`已为 ${affected} 个素材添加 ${added} 个标签`]
     if (not_found > 0) parts.push(`${not_found} 个素材不存在`)
     if (skipped_existing > 0) parts.push(`${skipped_existing} 条关联已存在`)
-    message.success(parts.join('，'))
+    Message.success(parts.join('，'))
     showBatchAddModal.value = false
     batchAddNames.value = ''
     // 添加标签不影响当前标签的关联数，但标签 usage 可能变化，通知父组件刷新统计
     emit('changed', { removed: 0 })
   } catch {
-    message.error('批量添加标签失败')
+    Message.error('批量添加标签失败')
   } finally {
     batchAdding.value = false
   }
@@ -207,61 +206,60 @@ async function batchAddTags() {
       <!-- 头部：标签名 + 使用次数 -->
       <template #header-left>
         <h3 style="margin:0">「{{ tag.name }}」</h3>
-        <n-tag size="small" :bordered="false" style="margin-left:8px">{{ tag.usage_count }} 次</n-tag>
+        <a-tag size="small" style="margin-left:8px">{{ tag.usage_count }} 次</a-tag>
         <span style="font-size:13px;color:#999;margin-left:8px">共 {{ total }} 个</span>
       </template>
 
       <!-- 批量操作栏：全选 + 批量移除/批量添加 -->
       <template #batch-actions="{ ids, count, clear, allSelected, toggleAll }">
-        <n-checkbox :checked="allSelected" :indeterminate="count > 0 && !allSelected" @update:checked="toggleAll" />
+        <a-checkbox :model-value="allSelected" :indeterminate="count > 0 && !allSelected" @change="toggleAll" />
         <span style="font-size:13px">已选 {{ count }} 个</span>
-        <n-popconfirm @positive-click="batchRemove(ids, clear)">
-          <template #trigger>
-            <n-button size="tiny" type="error" :loading="batchRemoving">
-              批量移除该标签
-            </n-button>
-          </template>
-          确认批量移除 {{ count }} 个关联？此操作不可恢复
-        </n-popconfirm>
-        <n-button size="tiny" type="primary" secondary @click="openBatchAdd(ids)">
+        <a-popconfirm
+          :content="`确认批量移除 ${count} 个关联？此操作不可恢复`"
+          @ok="batchRemove(ids, clear)"
+        >
+          <a-button size="mini" type="secondary" status="danger" :loading="batchRemoving">
+            批量移除该标签
+          </a-button>
+        </a-popconfirm>
+        <a-button size="mini" type="secondary" @click="openBatchAdd(ids)">
           批量添加标签
-        </n-button>
-        <n-button size="tiny" @click="clear">取消选择</n-button>
+        </a-button>
+        <a-button size="mini" @click="clear">取消选择</a-button>
       </template>
 
       <!-- 卡片悬停操作：移除该标签（大图按钮由通用组件内置） -->
       <template #card-actions="{ item }">
-        <n-popconfirm @positive-click="removeOne(item)">
-          <template #trigger>
-            <n-button
-              size="tiny"
-              type="error"
-              ghost
-              :loading="removingIds.has(item.id)"
-            >移除</n-button>
-          </template>
-          确认移除该素材关联？
-        </n-popconfirm>
+        <a-popconfirm
+          content="确认移除该素材关联？"
+          @ok="removeOne(item)"
+        >
+          <a-button
+            size="mini"
+            type="outline"
+            status="danger"
+            :loading="removingIds.has(item.id)"
+          >移除</a-button>
+        </a-popconfirm>
       </template>
     </InspirationGridBrowser>
 
     <!-- 批量添加标签弹窗 -->
-    <n-modal v-model:show="showBatchAddModal" title="批量添加标签" preset="card" style="width:480px">
+    <a-modal v-model:visible="showBatchAddModal" title="批量添加标签" :footer="false" :width="480">
       <p style="font-size:13px;color:#999;margin:0 0 12px">
         将为选中的 {{ batchActionIds.length }} 个素材添加以下标签（已存在的关联自动跳过）：
       </p>
-      <n-form label-placement="left" label-width="60" size="small">
-        <n-form-item label="标签名">
-          <n-input
-            v-model:value="batchAddNames"
-            type="textarea"
-            :rows="3"
+      <a-form :model="{ batchAddNames, batchAddCategory }" label-align="left" :label-col-style="{ width: '60px' }" size="small">
+        <a-form-item label="标签名">
+          <a-textarea
+            v-model="batchAddNames"
+            :auto-size="{ minRows: 3 }"
             placeholder="多个标签用逗号/顿号分隔，例如：御姐风, 长腿, 高跟鞋"
           />
-        </n-form-item>
-        <n-form-item label="类别">
-          <n-select
-            v-model:value="batchAddCategory"
+        </a-form-item>
+        <a-form-item label="类别">
+          <a-select
+            v-model="batchAddCategory"
             :options="[
               { label: '风格', value: 'style' },
               { label: '单品', value: 'item_type' },
@@ -273,13 +271,13 @@ async function batchAddTags() {
               { label: '穿搭大标签', value: 'outfit' },
             ]"
           />
-        </n-form-item>
-      </n-form>
-      <n-space justify="end" style="margin-top:16px">
-        <n-button @click="showBatchAddModal = false">取消</n-button>
-        <n-button type="primary" :loading="batchAdding" :disabled="!batchAddNames.trim()" @click="batchAddTags">确认添加</n-button>
-      </n-space>
-    </n-modal>
+        </a-form-item>
+      </a-form>
+      <a-space style="display:flex;justify-content:flex-end;margin-top:16px">
+        <a-button @click="showBatchAddModal = false">取消</a-button>
+        <a-button type="primary" :loading="batchAdding" :disabled="!batchAddNames.trim()" @click="batchAddTags">确认添加</a-button>
+      </a-space>
+    </a-modal>
   </template>
 
   <div v-else class="grid-placeholder">点击左侧标签查看关联素材</div>

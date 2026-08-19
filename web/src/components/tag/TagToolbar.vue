@@ -24,31 +24,37 @@ const emit = defineEmits<{
   'find-duplicates': []
   'delete-unused': []
 }>()
+
+// Arco Select 的 modelValue 类型不含 null：用 undefined 承接空值，change 时转回 null 哨兵
+function onCategoryChange(v: unknown) {
+  filterCategory.value = (v as string | undefined) ?? null
+}
+
+function onSourceChange(v: unknown) {
+  filterSource.value = (v as string | undefined) ?? null
+}
 </script>
 
 <template>
-  <n-space align="center" style="margin-bottom:16px" :size="12">
-    <n-input
-      v-model:value="searchQuery"
+  <a-space wrap style="margin-bottom:16px" :size="12">
+    <a-input
+      v-model="searchQuery"
       placeholder="搜索标签..."
-      clearable
+      allow-clear
       style="width:200px"
     />
-    <n-select
-      v-model:value="filterCategory"
-      :options="[
-        { label: '全部类别', value: null },
-        ...Object.entries(CATEGORY_LABELS).map(([k,v])=>({label:v,value:k})),
-      ]"
+    <a-select
+      :model-value="filterCategory ?? undefined"
+      :options="Object.entries(CATEGORY_LABELS).map(([k,v])=>({label:v,value:k}))"
       style="width:120px"
       size="small"
       placeholder="类别"
-      clearable
+      allow-clear
+      @change="onCategoryChange"
     />
-    <n-select
-      v-model:value="filterSource"
+    <a-select
+      :model-value="filterSource ?? undefined"
       :options="[
-        { label: '全部来源', value: null },
         { label: '预设', value: 'seed' },
         { label: 'AI生成', value: 'ai_generated' },
         { label: '手动', value: 'manual' },
@@ -56,64 +62,63 @@ const emit = defineEmits<{
       style="width:110px"
       size="small"
       placeholder="来源"
-      clearable
+      allow-clear
+      @change="onSourceChange"
     />
-    <n-radio-group v-model:value="sortMode" size="small">
-      <n-radio-button value="usage">使用次数</n-radio-button>
-      <n-radio-button value="name">名称</n-radio-button>
-      <n-radio-button value="custom">自定义</n-radio-button>
-    </n-radio-group>
+    <a-radio-group v-model="sortMode" type="button" size="small">
+      <a-radio value="usage">使用次数</a-radio>
+      <a-radio value="name">名称</a-radio>
+      <a-radio value="custom">自定义</a-radio>
+    </a-radio-group>
 
-    <n-divider vertical />
+    <a-divider direction="vertical" />
 
-    <n-popconfirm
+    <a-popconfirm
       v-if="selectedCount > 0"
-      @positive-click="emit('batch-delete')"
+      :content="`确认删除选中的 ${selectedCount} 个标签？此操作不可恢复`"
+      @ok="emit('batch-delete')"
     >
-      <template #trigger>
-        <n-button
-          size="small"
-          type="error"
-          secondary
-        >
-          删除选中 ({{ selectedCount }})
-        </n-button>
-      </template>
-      确认删除选中的 {{ selectedCount }} 个标签？此操作不可恢复
-    </n-popconfirm>
-    <n-button
+      <a-button
+        size="small"
+        type="secondary"
+        status="danger"
+      >
+        删除选中 ({{ selectedCount }})
+      </a-button>
+    </a-popconfirm>
+    <a-button
       v-if="selectedCount >= 2"
       size="small"
-      type="warning"
-      secondary
+      type="secondary"
+      status="warning"
       @click="emit('batch-merge')"
     >
       合并选中
-    </n-button>
-    <n-button
+    </a-button>
+    <a-button
       v-if="selectedCount > 0"
       size="small"
-      secondary
+      type="secondary"
       @click="emit('batch-category')"
     >
       改类别
-    </n-button>
-    <n-button
+    </a-button>
+    <a-button
       v-if="selectedCount > 0"
       size="small"
-      secondary
+      type="secondary"
       @click="emit('batch-rename')"
     >
       重命名
-    </n-button>
-    <n-button v-if="selectedCount > 0" size="small" @click="emit('deselect-all')">
+    </a-button>
+    <a-button v-if="selectedCount > 0" size="small" @click="emit('deselect-all')">
       取消选中
-    </n-button>
+    </a-button>
 
-    <n-divider vertical />
+    <a-divider direction="vertical" />
 
-    <n-select
-      v-model:value="duplicateThreshold"
+    <a-select
+      v-model="duplicateThreshold"
       :options="[
         { label: '≥60%', value: 0.6 },
         { label: '≥70%', value: 0.7 },
@@ -121,20 +126,20 @@ const emit = defineEmits<{
         { label: '≥80%', value: 0.8 },
         { label: '≥90%', value: 0.9 },
       ]"
-      size="tiny"
+      size="mini"
       style="width:80px"
       title="相似度阈值"
     />
-    <n-button size="small" @click="emit('find-duplicates')" :loading="scanning">
+    <a-button size="small" @click="emit('find-duplicates')" :loading="scanning">
       发现重复
-    </n-button>
-    <n-popconfirm @positive-click="emit('delete-unused')">
-      <template #trigger>
-        <n-button size="small" type="warning" secondary :disabled="unusedCount === 0">
-          删除未使用 {{ unusedCount > 0 ? `(${unusedCount})` : '' }}
-        </n-button>
-      </template>
-      确定删除所有未使用的标签？
-    </n-popconfirm>
-  </n-space>
+    </a-button>
+    <a-popconfirm
+      content="确定删除所有未使用的标签？"
+      @ok="emit('delete-unused')"
+    >
+      <a-button size="small" type="secondary" status="warning" :disabled="unusedCount === 0">
+        删除未使用 {{ unusedCount > 0 ? `(${unusedCount})` : '' }}
+      </a-button>
+    </a-popconfirm>
+  </a-space>
 </template>
