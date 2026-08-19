@@ -7,7 +7,7 @@
 
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NTabs, NTabPane } from 'naive-ui'
+import { Tabs, TabPane } from '@arco-design/web-vue'
 import type { PersonKind } from '@/stores/persons'
 import PersonListSection from '@/components/person/PersonListSection.vue'
 
@@ -28,17 +28,17 @@ watch(activeKind, (kind) => {
     <div class="page-header">
       <div>
         <h2>人物管理</h2>
-        <n-text depth="3" style="font-size: 13px">
+        <a-typography-text type="secondary" style="font-size: 13px">
           穿搭博主与职业模特已独立管理：博主（平台主页/小红书号/CSV 导入）与模特（写真照片组）业务逻辑分别演进
         </n-text>
       </div>
     </div>
 
-    <n-tabs v-model:value="activeKind" type="line" animated>
-      <n-tab-pane name="blogger" tab="穿搭博主">
+    <a-tabs v-model:active-key="activeKind" type="line">
+      <a-tab-pane key="blogger" title="穿搭博主">
         <PersonListSection v-if="activeKind === 'blogger'" kind="blogger" />
       </n-tab-pane>
-      <n-tab-pane name="model" tab="职业模特">
+      <a-tab-pane key="model" title="职业模特">
         <PersonListSection v-if="activeKind === 'model'" kind="model" />
       </n-tab-pane>
     </n-tabs>

@@ -7,7 +7,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { useRouter, useRoute } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { batchTrash } from '@/api/inspirations'
 import type { Stats, LargeFile } from '@/types/admin'
@@ -20,7 +20,6 @@ import AdminAiReview from '@/components/admin/AdminAiReview.vue'
 import AdminPhoneCrop from '@/components/admin/AdminPhoneCrop.vue'
 import AdminTrash from '@/components/admin/AdminTrash.vue'
 
-const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
@@ -65,11 +64,11 @@ async function batchDeleteByIds(ids: string[]) {
     const { trashed, skipped } = await batchTrash(ids, 'AI生成', 'auto')
     const parts = [`已将 ${trashed} 个疑似 AI 素材移入垃圾桶`]
     if (skipped > 0) parts.push(`${skipped} 个跳过（不存在或已在垃圾桶）`)
-    message.success(parts.join('，'))
+    Message.success(parts.join('，'))
     aiRefreshKey.value += 1 // 通知疑似 AI 子页面刷新
     loadAll()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
+    Message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
   } finally {
     aiTrashing.value = false
   }
@@ -87,7 +86,7 @@ async function loadAll() {
     stats.value = sRes.data
     largestFiles.value = lRes.data
   } catch {
-    message.error('加载统计数据失败')
+    Message.error('加载统计数据失败')
   } finally {
     loading.value = false
   }
@@ -104,9 +103,9 @@ onMounted(() => {
     <p class="subtitle">概览、剪裁与垃圾桶（治理类操作见「数据治理」「数据洞察」）</p>
 
     <!-- ====== 子页面小菜单 ====== -->
-    <n-tabs v-model:value="activeTab" type="line" animated>
+    <a-tabs v-model:active-key="activeTab" type="line">
       <!-- 概览 -->
-      <n-tab-pane name="overview" tab="概览">
+      <a-tab-pane key="overview" title="概览">
         <admin-service-health />
         <admin-stat-cards :stats="stats" />
         <admin-dist-stats :stats="stats" />
@@ -117,7 +116,7 @@ onMounted(() => {
       </n-tab-pane>
 
       <!-- 疑似 AI 素材（与侧边栏「AI 模型」区分，避免混淆） -->
-      <n-tab-pane name="ai" tab="疑似 AI 素材">
+      <a-tab-pane key="ai" title="疑似 AI 素材">
         <admin-ai-review
           :refresh-key="aiRefreshKey"
           :deleting="aiTrashing"
@@ -126,12 +125,12 @@ onMounted(() => {
       </n-tab-pane>
 
       <!-- 手机图剪裁 -->
-      <n-tab-pane name="crop" tab="手机图剪裁">
+      <a-tab-pane key="crop" title="手机图剪裁">
         <admin-phone-crop />
       </n-tab-pane>
 
       <!-- 垃圾桶 -->
-      <n-tab-pane name="trash" tab="垃圾桶">
+      <a-tab-pane key="trash" title="垃圾桶">
         <admin-trash />
       </n-tab-pane>
     </n-tabs>

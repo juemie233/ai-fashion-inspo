@@ -39,14 +39,14 @@ watch(activeTab, (tab) => {
     <h2>数据洞察</h2>
     <p class="subtitle">向量状态、导出与统计报表</p>
 
-    <n-tabs v-model:value="activeTab" type="line" animated>
+    <a-tabs v-model:active-key="activeTab" type="line">
       <!-- 向量管理 -->
-      <n-tab-pane name="vectors" tab="向量管理">
+      <a-tab-pane key="vectors" title="向量管理">
         <admin-vector-panel />
       </n-tab-pane>
 
       <!-- 数据报表 -->
-      <n-tab-pane name="reports" tab="数据报表">
+      <a-tab-pane key="reports" title="数据报表">
         <div class="reports-layout">
           <admin-export-panel />
           <admin-trend-chart />

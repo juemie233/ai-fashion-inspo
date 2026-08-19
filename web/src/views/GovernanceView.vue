@@ -4,7 +4,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { useRouter, useRoute } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { formatSize } from '@/utils/format'
 import { useAdminTask } from '@/composables/useAdminTask'
@@ -23,7 +23,6 @@ import AdminIntegrityCheck from '@/components/admin/AdminIntegrityCheck.vue'
 import AdminDuplicates from '@/components/admin/AdminDuplicates.vue'
 import AdminNearDuplicates from '@/components/admin/AdminNearDuplicates.vue'
 
-const message = useMessage()
 const router = useRouter()
 const route = useRoute()
 
@@ -82,9 +81,9 @@ function handleAdminTaskDone() {
         }
       : null
     if (!r || r.files_deleted === 0) {
-      message.info('未找到可删除的重复文件')
+      Message.info('未找到可删除的重复文件')
     } else {
-      message.success(
+      Message.success(
         `去重完成：处理 ${r.groups_processed ?? 0} 组，删除 ${r.files_deleted ?? 0} 个冗余文件，释放 ${formatSize(r.freed_bytes ?? 0)} 空间`,
       )
     }
@@ -96,7 +95,7 @@ function handleAdminTaskDone() {
         : r?.label === 'analysis_failed'
           ? '分析失败素材'
           : '素材'
-    message.success(
+    Message.success(
       `已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`,
     )
   }
@@ -116,7 +115,7 @@ async function loadAll() {
     stats.value = sRes.data
     largestFiles.value = lRes.data
   } catch {
-    message.error('加载统计数据失败')
+    Message.error('加载统计数据失败')
   } finally {
     loading.value = false
   }
@@ -130,7 +129,7 @@ async function loadIntegrity() {
     orphanFiles.value = res.data.orphan_files
     orphanSize.value = res.data.orphan_total_size_bytes
   } catch {
-    message.error('完整性检查失败')
+    Message.error('完整性检查失败')
   } finally {
     checking.value = false
   }
@@ -144,7 +143,7 @@ async function loadDuplicates() {
     dupCount.value = res.data.duplicate_count
     dupSize.value = res.data.wasted_bytes
   } catch {
-    message.error('重复检测失败')
+    Message.error('重复检测失败')
   } finally {
     checking.value = false
   }
@@ -175,10 +174,10 @@ async function deduplicate() {
       result: null,
       error: null,
     }
-    message.success(data.message)
+    Message.success(data.message)
     startAdminPolling(data.task_id, () => handleAdminTaskDone())
   } catch (e) {
-    message.error(getApiErrorMessage(e, '去重删除失败'))
+    Message.error(getApiErrorMessage(e, '去重删除失败'))
   } finally {
     deduplicating.value = false
   }
@@ -189,13 +188,13 @@ async function deduplicate() {
 async function cleanOrphans() {
   try {
     const res = await apiClient.post('/admin/cleanup-orphans')
-    message.success(
+    Message.success(
       `已删除 ${res.data.deleted_count} 个孤立文件，释放 ${formatSize(res.data.freed_bytes)} 空间`,
     )
     await loadIntegrity()
     await loadAll() // 顶部统计（存储总大小/来源分布）同步刷新
   } catch {
-    message.error('清理失败')
+    Message.error('清理失败')
   }
 }
 
@@ -217,7 +216,7 @@ async function submitBatchDelete(payload: { ids?: string[]; condition?: string }
     result: null,
     error: null,
   }
-  message.success(data.message)
+  Message.success(data.message)
   startAdminPolling(data.task_id, () => handleAdminTaskDone())
 }
 
@@ -228,7 +227,7 @@ async function batchDeleteByCondition(condition: string) {
     else clearingFailed.value = true
     await submitBatchDelete({ condition })
   } catch {
-    message.error('批量删除失败')
+    Message.error('批量删除失败')
   } finally {
     clearingUntagged.value = false
     clearingFailed.value = false
@@ -240,7 +239,7 @@ async function handleNearDuplicateDelete(ids: string[]) {
   try {
     await submitBatchDelete({ ids })
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 
@@ -256,7 +255,7 @@ function handleTaskStarted(taskId: number, msg: string) {
     result: null,
     error: null,
   }
-  message.success(msg)
+  Message.success(msg)
   startAdminPolling(taskId, () => handleAdminTaskDone())
 }
 
@@ -281,9 +280,9 @@ onUnmounted(() => {
     <admin-task-progress :task="adminTask" />
 
     <!-- ====== 子页面小菜单 ====== -->
-    <n-tabs v-model:value="activeTab" type="line" animated>
+    <a-tabs v-model:active-key="activeTab" type="line">
       <!-- 批量清理 -->
-      <n-tab-pane name="cleanup" tab="批量清理">
+      <a-tab-pane key="cleanup" title="批量清理">
         <admin-problem-cards
           :stats="stats"
           :clearing-untagged="clearingUntagged"
@@ -297,7 +296,7 @@ onUnmounted(() => {
       </n-tab-pane>
 
       <!-- 数据完整性 -->
-      <n-tab-pane name="integrity" tab="数据完整性">
+      <a-tab-pane key="integrity" title="数据完整性">
         <admin-integrity-check
           :missing-files="missingFiles"
           :orphan-files="orphanFiles"
@@ -309,7 +308,7 @@ onUnmounted(() => {
       </n-tab-pane>
 
       <!-- 重复文件 -->
-      <n-tab-pane name="duplicates" tab="重复文件">
+      <a-tab-pane key="duplicates" title="重复文件">
         <admin-duplicates
           :duplicates="duplicates"
           :dup-count="dupCount"
@@ -323,7 +322,7 @@ onUnmounted(() => {
       </n-tab-pane>
 
       <!-- 近似重复（感知哈希） -->
-      <n-tab-pane name="neardup" tab="近似重复">
+      <a-tab-pane key="neardup" title="近似重复">
         <admin-near-duplicates
           @delete-selected="handleNearDuplicateDelete"
           @task-started="handleTaskStarted"

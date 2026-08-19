@@ -2,7 +2,7 @@
 /** 采集管理页：采集任务创建、日志查看、结果预览、源配置。 */
 
 import { h, ref, watch, onMounted, onUnmounted } from 'vue'
-import { NButton, NPopconfirm, NTag } from 'naive-ui'
+import { Button, Popconfirm, Tag } from '@arco-design/web-vue'
 import {
   useScraperTasks,
   STATUS_LABELS,
@@ -39,6 +39,11 @@ const {
 const {
   logTaskId, logContent, logLoading, viewLog, closeLog,
 } = useScraperLog()
+
+/** naive 语义 tag type → Arco 预设色（statusType 来自 useScraperTasks） */
+function statusColor(t: string): string {
+  return { success: 'green', warning: 'orange', error: 'red', info: 'arcoblue', default: 'gray' }[t] || 'gray'
+}
 
 const {
   funnelTaskId, funnelData, funnelOpen, viewFunnel,
@@ -85,7 +90,7 @@ function getTableColumns() {
   return [
     { title: '平台', key: 'platform', width: 80, render: (r: ScraperTask) => platformName(r.platform) },
     { title: '关键词', key: 'config', width: 160, ellipsis: { tooltip: true }, render: (r: ScraperTask) => parseKeywords(r.config) },
-    { title: '状态', key: 'status', width: 80, render: (r: ScraperTask) => h(NTag, { type: statusType(r.status), size: 'small' }, STATUS_LABELS[r.status] || r.status) },
+    { title: '状态', key: 'status', width: 80, render: (r: ScraperTask) => h(Tag, { color: statusColor(r.status), size: 'small' }, () => STATUS_LABELS[r.status] || r.status) },
     { title: '发现', key: 'items_found', width: 55 },
     { title: '新增', key: 'items_added', width: 55 },
     { title: '耗时', key: 'duration', width: 70, render: (r: ScraperTask) => getTaskDuration(r) },
@@ -93,13 +98,13 @@ function getTableColumns() {
     { title: '时间', key: 'created_at', width: 150, render: (r: ScraperTask) => formatDate(r.created_at) },
     { title: '操作', key: 'actions', width: 250, render: (r: ScraperTask) => {
       const btns: any[] = []
-      if (r.items_added > 0) btns.push(h(NButton, { size: 'tiny', type: resultsTaskId.value === r.id ? 'warning' : 'primary', ghost: true, onClick: () => viewResults(r.id) }, resultsTaskId.value === r.id ? '收起' : '结果'))
-      btns.push(h(NButton, { size: 'tiny', onClick: () => viewLog(r.id) }, logTaskId.value === r.id ? '关闭日志' : '日志'))
-      if (r.diagnostics) btns.push(h(NButton, { size: 'tiny', type: funnelTaskId.value === r.id ? 'info' : 'default', ghost: true, onClick: () => viewFunnel(r) }, funnelTaskId.value === r.id ? '关闭漏斗' : '漏斗'))
-      if (r.status === 'pending' || r.status === 'running') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, onClick: () => cancelTask(r.id) }, '取消'))
-      if (r.status === 'failed') btns.push(h(NButton, { size: 'tiny', type: 'warning', ghost: true, loading: retryingTask.value === r.id, onClick: () => retrySingleTask(r.id) }, '续采'))
-      btns.push(h(NButton, { size: 'tiny', ghost: true, loading: copyingTask.value === r.id, onClick: () => copyTask(r) }, '复制'))
-      btns.push(h(NPopconfirm, { onPositiveClick: () => deleteSingleTask(r.id) }, { trigger: () => h(NButton, { size: 'tiny', type: 'error', ghost: true, loading: deletingTask.value === r.id }, '删除'), default: () => '确定删除此记录？' }))
+      if (r.items_added > 0) btns.push(h(Button, { size: 'mini', type: 'primary', status: resultsTaskId.value === r.id ? 'warning' : undefined, onClick: () => viewResults(r.id) }, () => resultsTaskId.value === r.id ? '收起' : '结果'))
+      btns.push(h(Button, { size: 'mini', onClick: () => viewLog(r.id) }, () => logTaskId.value === r.id ? '关闭日志' : '日志'))
+      if (r.diagnostics) btns.push(h(Button, { size: 'mini', type: 'secondary', status: funnelTaskId.value === r.id ? 'warning' : undefined, onClick: () => viewFunnel(r) }, () => funnelTaskId.value === r.id ? '关闭漏斗' : '漏斗'))
+      if (r.status === 'pending' || r.status === 'running') btns.push(h(Button, { size: 'mini', type: 'outline', status: 'warning', onClick: () => cancelTask(r.id) }, () => '取消'))
+      if (r.status === 'failed') btns.push(h(Button, { size: 'mini', type: 'outline', status: 'warning', loading: retryingTask.value === r.id, onClick: () => retrySingleTask(r.id) }, () => '续采'))
+      btns.push(h(Button, { size: 'mini', type: 'outline', loading: copyingTask.value === r.id, onClick: () => copyTask(r) }, () => '复制'))
+      btns.push(h(Popconfirm, { content: '确定删除此记录？', onOk: () => deleteSingleTask(r.id) }, { default: () => h(Button, { size: 'mini', type: 'outline', status: 'danger', loading: deletingTask.value === r.id }, () => '删除') }))
       return h('span', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } }, btns)
     } },
   ]
@@ -129,9 +134,9 @@ onUnmounted(() => { stopPoll() })
 <h2>采集管理</h2>
 <p class="subtitle">自动化采集小红书和抖音的穿搭内容</p>
 
-<n-tabs v-model:value="activeTab" type="line">
+<a-tabs v-model:active-key="activeTab" type="line">
   <!-- 采集任务 Tab -->
-  <n-tab-pane name="tasks" tab="采集任务">
+  <a-tab-pane key="tasks" title="采集任务">
 
     <ScraperStatsPanel />
 
@@ -184,7 +189,7 @@ onUnmounted(() => { stopPoll() })
   </n-tab-pane>
 
   <!-- 源配置 Tab -->
-  <n-tab-pane name="config" tab="源配置">
+  <a-tab-pane key="config" title="源配置">
     <ScraperConfigTab
       :sources="sources"
       :tombstone-count="tombstoneCount"
@@ -200,7 +205,7 @@ onUnmounted(() => { stopPoll() })
   </n-tab-pane>
 
   <!-- 定时采集 Tab -->
-  <n-tab-pane name="schedules" tab="定时采集">
+  <a-tab-pane key="schedules" title="定时采集">
     <ScraperScheduleTab v-if="activeTab === 'schedules'" />
   </n-tab-pane>
 </n-tabs>

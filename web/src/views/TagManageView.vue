@@ -2,7 +2,7 @@
 /** 标签管理页：浏览/编辑/合并/批量操作/统计/导入导出。 */
 
 import { ref, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
 import TagAnalyticsModal from '@/components/tag/TagAnalyticsModal.vue'
 import TagStatsBar from '@/components/tag/TagStatsBar.vue'
@@ -21,7 +21,6 @@ import { useSplitResize } from '@/composables/useSplitResize'
 import { useTagManage } from '@/composables/useTagManage'
 import { exportTags, type TagItem } from '@/api/tags'
 
-const message = useMessage()
 
 // ===== 左右分栏可拖拽间隔线 =====
 const { containerRef, leftWidth, isDragging, startDrag } = useSplitResize({ initial: 50, min: 20, max: 80 })
@@ -68,7 +67,7 @@ function openMerge(tag: TagItem) {
 
 function openBatchMerge() {
   if (selectedIds.value.size < 2) {
-    message.warning('请至少选中 2 个标签')
+    Message.warning('请至少选中 2 个标签')
     return
   }
   showBatchMergeDialog.value = true
@@ -94,8 +93,8 @@ async function handleExport() {
     const a = document.createElement('a')
     a.href = url; a.download = 'tags-export.json'; a.click()
     URL.revokeObjectURL(url)
-    message.success('已导出')
-  } catch { message.error('导出失败') }
+    Message.success('已导出')
+  } catch { Message.error('导出失败') }
 }
 </script>
 
@@ -103,13 +102,13 @@ async function handleExport() {
   <div class="tag-page">
     <div class="page-header">
       <h2>标签管理</h2>
-      <n-space>
-        <n-button @click="showCreateForm = !showCreateForm" type="primary">
+      <a-space>
+        <a-button @click="showCreateForm = !showCreateForm" type="primary">
           {{ showCreateForm ? '取消' : '新标签' }}
         </n-button>
-        <n-button @click="showAnalytics = true" secondary>标签分析</n-button>
-        <n-button @click="handleExport" secondary>导出</n-button>
-        <n-button @click="showImportModal = true" secondary>导入</n-button>
+        <a-button @click="showAnalytics = true" type="secondary">标签分析</a-button>
+        <a-button @click="handleExport" type="secondary">导出</a-button>
+        <a-button @click="showImportModal = true" type="secondary">导入</a-button>
       </n-space>
     </div>
 
@@ -153,7 +152,7 @@ async function handleExport() {
     />
 
     <!-- ===== 标签分组列表 ===== -->
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <div v-if="filteredGroups.length === 0 && !loading" style="text-align:center;padding:40px;color:#999">
         没有匹配的标签
       </div>

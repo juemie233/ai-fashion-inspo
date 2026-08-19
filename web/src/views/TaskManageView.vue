@@ -2,7 +2,7 @@
 /** 任务管理页：聚合任务队列与采集任务，统一查看与操作。 */
 
 import { onMounted, onUnmounted } from 'vue'
-import { NButton, NSelect, NPagination, NSpace } from 'naive-ui'
+import { Button, Select, Pagination, Space } from '@arco-design/web-vue'
 import { useTaskCenter } from '@/composables/useTaskCenter'
 import { TASK_TYPE_LABELS } from '@/utils/taskLabel'
 import TaskList from '@/components/task/TaskList.vue'
@@ -56,32 +56,33 @@ onUnmounted(stopPoll)
     <p class="subtitle">查看后台处理与采集任务的状态、进度与结果</p>
 
     <div class="toolbar">
-      <n-space>
-        <n-select
-          v-model:value="typeFilter"
+      <a-space>
+        <a-select
+          v-model="typeFilter"
           :options="typeOptions"
           style="width: 140px"
-          @update:value="onFilterChange"
+          @change="onFilterChange"
         />
-        <n-select
-          v-model:value="statusFilter"
+        <a-select
+          v-model="statusFilter"
           :options="statusOptions"
           style="width: 120px"
-          @update:value="onFilterChange"
+          @change="onFilterChange"
         />
-        <n-button @click="loadTasks">刷新</n-button>
-        <n-button v-if="hasFailedScraper" :loading="retrying" @click="retryFailedScraper">
+        <a-button @click="loadTasks">刷新</a-button>
+        <a-button v-if="hasFailedScraper" :loading="retrying" @click="retryFailedScraper">
           重试失败采集任务
-        </n-button>
-      </n-space>
+        </a-button>
+      </a-space>
       <span class="summary">共 {{ total }} 条{{ hasActive ? '（有任务运行中）' : '' }}</span>
     </div>
 
     <task-list :tasks="pageItems" :loading="loading" @cancel="cancelTask" @delete="deleteTask" />
 
-    <n-pagination
-      v-model:page="page"
-      :page-count="pageCount"
+    <a-pagination
+      v-model:current="page"
+      :total="total"
+      :page-size="20"
       style="margin-top: 16px; justify-content: flex-end"
     />
   </div>

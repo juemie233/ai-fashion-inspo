@@ -67,57 +67,57 @@ const afterUploadModel = computed({
 </script>
 
 <template>
-  <n-card size="small" title="上传选项">
+  <a-card size="small" title="上传选项">
     <div class="meta-grid">
       <div class="meta-row">
         <label>来源作者</label>
-        <n-input v-model:value="sourceAuthorModel" size="small" placeholder="如 Instagram @xxx" />
+        <a-input v-model="sourceAuthorModel" size="small" placeholder="如 Instagram @xxx" />
       </div>
       <div class="meta-row">
         <label>快速标签</label>
-        <n-input v-model:value="quickTagsModel" size="small" placeholder="逗号分隔，如：春季, JK制服" />
+        <a-input v-model="quickTagsModel" size="small" placeholder="逗号分隔，如：春季, JK制服" />
       </div>
       <div class="meta-row">
         <label>自动 AI 分析</label>
-        <n-switch v-model:value="autoAnalyzeModel" />
+        <a-switch v-model="autoAnalyzeModel" />
       </div>
       <div class="meta-row">
         <label>跳过重复</label>
-        <n-switch v-model:value="skipDuplicatesModel" />
+        <a-switch v-model="skipDuplicatesModel" />
       </div>
       <div class="meta-row">
         <label>上传后</label>
-        <n-select
-          v-model:value="afterUploadModel"
+        <a-select
+          v-model="afterUploadModel"
           :options="afterUploadOptions"
-          size="tiny"
+          size="mini"
           style="width:140px"
         />
       </div>
     </div>
 
-    <n-button
+    <a-button
       type="primary"
-      block
+      long
       :loading="uploading"
       :disabled="pending === 0"
       style="margin-top:12px"
       @click="emit('start')"
     >
       {{ uploading ? '上传中...' : `开始上传 (${pending} 个)` }}
-    </n-button>
+    </a-button>
     <!-- 上传进行中提供停止入口：当前文件中止、剩余文件保持待上传 -->
-    <n-button
+    <a-button
       v-if="uploading"
-      block
-      quaternary
-      type="warning"
+      long
+      type="text"
+      status="warning"
       style="margin-top:8px"
       @click="emit('stop')"
     >
       停止上传
-    </n-button>
-  </n-card>
+    </a-button>
+  </a-card>
 </template>
 
 <style scoped>

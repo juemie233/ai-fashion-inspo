@@ -36,20 +36,20 @@ onMounted(() => {
   <div class="model-page">
     <h2>AI 模型管理</h2>
 
-    <n-tabs v-model:value="activeTab" type="line">
-      <n-tab-pane name="models" tab="模型管理">
+    <a-tabs v-model:active-key="activeTab" type="line">
+      <a-tab-pane key="models" title="模型管理">
         <ModelListPanel />
       </n-tab-pane>
-      <n-tab-pane name="review" tab="质量审核">
+      <a-tab-pane key="review" title="质量审核">
         <ReviewPanel />
       </n-tab-pane>
-      <n-tab-pane name="queue" tab="标签分析">
+      <a-tab-pane key="queue" title="标签分析">
         <AnalysisPanel />
       </n-tab-pane>
-      <n-tab-pane name="settings" tab="参数调优">
+      <a-tab-pane key="settings" title="参数调优">
         <SettingsPanel />
       </n-tab-pane>
-      <n-tab-pane name="quality" tab="分析质量">
+      <a-tab-pane key="quality" title="分析质量">
         <QualityPanel />
       </n-tab-pane>
     </n-tabs>

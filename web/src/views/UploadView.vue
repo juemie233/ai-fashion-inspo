@@ -4,7 +4,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { addTagsToInspiration } from '@/api/inspirations'
 import apiClient from '@/api/client'
@@ -18,7 +18,6 @@ import UploadOptionsPanel from '@/components/upload/UploadOptionsPanel.vue'
 import RecentUploads from '@/components/upload/RecentUploads.vue'
 
 const router = useRouter()
-const message = useMessage()
 const store = useInspirationsStore()
 
 // ── 偏好（localStorage 持久化）──
@@ -110,7 +109,7 @@ function addFiles(files: File[]) {
     return UPLOAD_EXTS.has(ext)
   })
   if (imageFiles.length === 0) {
-    message.warning('没有可识别的图片文件')
+    Message.warning('没有可识别的图片文件')
     return
   }
   // 数量校验：队列已有 + 本次拖入超过上限时，按剩余容量截断
@@ -118,9 +117,9 @@ function addFiles(files: File[]) {
   const accepted = remaining > 0 ? imageFiles.slice(0, remaining) : []
   if (accepted.length < imageFiles.length) {
     if (remaining <= 0) {
-      message.warning(`队列已满（最多 ${MAX_QUEUE_SIZE} 个），未添加任何文件`)
+      Message.warning(`队列已满（最多 ${MAX_QUEUE_SIZE} 个），未添加任何文件`)
     } else {
-      message.warning(`队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`)
+      Message.warning(`队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`)
     }
   }
   for (const file of accepted) {
@@ -165,7 +164,7 @@ async function checkDuplicate(file: File): Promise<boolean> {
 async function startUpload() {
   const pending = queue.value.filter(q => q.status === 'pending')
   if (pending.length === 0) {
-    message.warning('没有待上传的文件')
+    Message.warning('没有待上传的文件')
     return
   }
   uploading.value = true
@@ -245,19 +244,19 @@ async function startUpload() {
 
   if (stopped) {
     const remain = queue.value.filter(q => q.status === 'pending').length
-    message.info(`已停止上传：完成 ${done} 个，剩余 ${remain} 个待上传`)
+    Message.info(`已停止上传：完成 ${done} 个，剩余 ${remain} 个待上传`)
     return
   }
 
   const parts = [`${done} 成功`]
   if (failed > 0) parts.push(`${failed} 失败`)
   if (dups > 0) parts.push(`${dups} 已跳过`)
-  message.success('上传完成：' + parts.join('，'))
+  Message.success('上传完成：' + parts.join('，'))
 
   // 快速标签处理结果提示
   if (tags.length > 0) {
-    if (taggedCount > 0) message.success(`已为 ${taggedCount} 个素材添加快速标签`)
-    if (tagFailedCount > 0) message.warning(`${tagFailedCount} 个素材快速标签添加失败`)
+    if (taggedCount > 0) Message.success(`已为 ${taggedCount} 个素材添加快速标签`)
+    if (tagFailedCount > 0) Message.warning(`${tagFailedCount} 个素材快速标签添加失败`)
   }
 
   // 上传后行为
@@ -280,14 +279,14 @@ async function importFromUrl() {
       source_author: sourceAuthor.value.trim() || undefined,
       tags,
     })
-    message.success('URL 导入成功')
+    Message.success('URL 导入成功')
     prependRecent(data.id, data.thumbnail_path, data.file_path, data.media_type)
     urlInput.value = ''
     if (autoAnalyze.value) {
       apiClient.post(`/ai/analyze/${data.id}`).catch(() => {})
     }
   } catch (e) {
-    message.error(getApiErrorMessage(e, 'URL 导入失败'))
+    Message.error(getApiErrorMessage(e, 'URL 导入失败'))
   } finally {
     urlImporting.value = false
   }
@@ -418,24 +417,22 @@ onUnmounted(() => {
     />
 
     <!-- 清空队列确认弹窗 -->
-    <n-modal
-      v-model:show="showClearConfirm"
-      preset="dialog"
+    <a-modal
+      v-model:visible="showClearConfirm"
       title="确认清空待上传队列？"
-      positive-text="确认清空"
-      negative-text="取消"
-      :positive-button-props="{ type: 'error' }"
-      @positive-click="clearQueue"
+      @ok="clearQueue"
+      @cancel="showClearConfirm = false"
+      :ok-button-props="{ status: 'danger' }"
     >
       已选择的文件将全部移除，此操作不可恢复。
-    </n-modal>
+    </a-modal>
 
     <!-- 视频预览弹窗 -->
-    <n-modal
-      v-model:show="videoModalOpen"
-      preset="card"
+    <a-modal
+      v-model:visible="videoModalOpen"
       title="视频预览"
-      style="width: 640px; max-width: 90vw"
+      :width="640"
+      :footer="false"
     >
       <video
         v-if="videoModalSrc"
