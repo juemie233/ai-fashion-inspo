@@ -10,6 +10,7 @@
 
 import { Message } from '@arco-design/web-vue'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
@@ -474,6 +475,13 @@ function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
 }
 
+const router = useRouter()
+
+/** 点击素材缩略图跳转素材详情页 */
+function goDetail(inspirationId: string) {
+  router.push(`/detail/${inspirationId}`)
+}
+
 /** 勾选/取消（Arco checkbox change 值类型较宽，统一按真值处理；替换式 Set 触发响应式） */
 function toggleChecked(target: Ref<Set<number>>, id: number, checked: unknown) {
   const next = new Set(target.value)
@@ -669,12 +677,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         v-for="item in detailItems"
                         :key="item.detection_id"
                         class="detail-item"
+                        @click="goDetail(item.inspiration_id)"
                         @mouseenter="startHoverPreview(item)"
                         @mouseleave="clearHoverPreview"
                       >
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
+                          class="detail-check"
                           :model-value="detailChecked.has(item.detection_id)"
+                          @click.stop
                           @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
                         />
                         <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
@@ -781,12 +792,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         v-for="item in detailItems"
                         :key="item.detection_id"
                         class="detail-item"
+                        @click="goDetail(item.inspiration_id)"
                         @mouseenter="startHoverPreview(item)"
                         @mouseleave="clearHoverPreview"
                       >
                         <img :src="thumbUrl(item)" loading="lazy" />
                         <a-checkbox
+                          class="detail-check"
                           :model-value="detailChecked.has(item.detection_id)"
+                          @click.stop
                           @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
                         />
                         <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
@@ -869,12 +883,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 v-for="item in unmatchedItems"
                 :key="item.detection_id"
                 class="detail-item"
+                @click="goDetail(item.inspiration_id)"
                 @mouseenter="startHoverPreview(item)"
                 @mouseleave="clearHoverPreview"
               >
                 <img :src="thumbUrl(item)" loading="lazy" />
                 <a-checkbox
+                  class="detail-check"
                   :model-value="unmatchedChecked.has(item.detection_id)"
+                  @click.stop
                   @change="(v: unknown) => toggleUnmatchedChecked(item.detection_id, v)"
                 />
               </div>
@@ -969,6 +986,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid #eef0f3;
+  cursor: pointer;
 }
 
 .detail-item img {
