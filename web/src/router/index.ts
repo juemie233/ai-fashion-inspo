@@ -54,6 +54,13 @@ const router = createRouter({
       meta: { title: '人物管理' },
     },
     {
+      // Arco Design 试点页：与 Naive UI 版并存对比，评估后决定是否迁移
+      path: '/persons-arco',
+      name: 'persons-arco',
+      component: () => import('@/views/ArcoPersonPilotView.vue'),
+      meta: { title: '人物管理（Arco 试点）' },
+    },
+    {
       path: '/persons/:id',
       name: 'person-detail',
       component: () => import('@/views/PersonDetailView.vue'),

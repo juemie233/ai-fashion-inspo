@@ -1,0 +1,31 @@
+/* Arco Design 全局主题（设计令牌 CSS 变量覆盖）。
+ *
+ * 迁移期策略：Arco 与 Naive 并存时，本文件只影响 Arco 组件；
+ * Naive UI 有独立的 CSS 变量体系，互不干扰，可安全全局引入。
+ * 浅色/深色切换：body[arco-theme='dark'] 下再覆盖一组变量（P2 阶段补充）。
+ */
+
+:root {
+  /* 主色：项目绿（与 Naive 时代一致的品牌色，保持跨库视觉连续） */
+  --primary-1: #e8f7ef;
+  --primary-2: #cdeedc;
+  --primary-3: #a5e0c1;
+  --primary-4: #74cfa0;
+  --primary-5: #42bb7d;
+  --primary-6: #18a058; /* 主色基准 */
+  --primary-7: #158a4c;
+  --primary-8: #10703d;
+  --primary-9: #0c5a31;
+  --primary-10: #084726;
+
+  /* 圆角：比 Arco 默认更圆润，贴合卡片化布局 */
+  --border-radius-none: 0;
+  --border-radius-small: 6px;
+  --border-radius-medium: 8px;
+  --border-radius-large: 12px;
+
+  /* 字体：优先系统字体栈，中文用苹方/雅黑 */
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+}
