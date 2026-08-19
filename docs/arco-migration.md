@@ -3,10 +3,18 @@
 > 状态：试点已验证（`/persons-arco`，用户确认满意），进入全量迁移规划。
 > 恢复点：`git checkout pre-arco-pilot`（试点前的完整 Naive 版本）。
 
+## 〇、硬性要求：彻底抛弃 Naive UI
+
+1. 迁移是**单向、不可逆的最终目标**：P3 完成后必须删除 Naive UI 依赖（`naive-ui` 从 `package.json` 移除、`app.use(naive)` 与全局 provider 壳删除、`n-*` 标签与 `useMessage/useDialog/useNotification` 等命令式 API 使用归零）。
+2. **任何新代码禁止再引入 Naive UI**（组件、命令式 API、类型引用）；新增功能一律使用 Arco Design。
+3. 代码评审中检出 Naive 引用（含注释、示例、文档）即视为不合格，当场要求迁移后再合入。
+4. 迁移完成前由人工把关 + `no-restricted-imports` 风格检查防回潮；P3 依赖移除后由构建天然强制（import 直接报错）。
+5. 迁移期间可并存（Naive 兜底），但**不新增任何 Naive 用法**，存量 Naive 引用只减不增。
+
 ## 一、现状与目标
 
 - 现状：Vue 3 + Naive UI，**88 个文件、约 1050 处组件标签、48 种组件**深度使用（含 `useMessage`/`useDialog` 等命令式 API、`h()` render、主题 provider）。
-- 目标：全量替换为 `@arco-design/web-vue`（已安装，试点页验证通过），统一字节系设计语言 + 设计令牌主题定制，解决 UI 观感问题。
+- 目标：全量替换为 `@arco-design/web-vue`（已安装，试点页验证通过），统一字节系设计语言 + 设计令牌主题定制，解决 UI 观感问题。**最终彻底抛弃 Naive UI（见「〇」）。**
 - 试点页：`web/src/views/ArcoPersonPilotView.vue`（路由 `/persons-arco`）——组件/主题/布局已验证，作为迁移样板。
 
 ## 二、核心组件映射表
