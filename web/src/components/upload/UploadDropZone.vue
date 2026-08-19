@@ -46,8 +46,8 @@ function onUrlInput(value: string | null) {
     <p class="upload-formats">JPG / PNG / WebP / GIF / MP4 · 单次最多 500 个</p>
 
     <div class="upload-actions">
-      <n-button type="primary" size="large" @click="openFilePicker">选择文件</n-button>
-      <n-button size="large" @click="openFolder">📁 导入文件夹</n-button>
+      <a-button type="primary" size="large" @click="openFilePicker">选择文件</a-button>
+      <a-button size="large" @click="openFolder">📁 导入文件夹</a-button>
     </div>
 
     <input ref="fileInput" type="file" multiple accept="image/*,video/mp4" style="display:none" @change="onFileChange" />
@@ -55,17 +55,17 @@ function onUrlInput(value: string | null) {
 
     <!-- URL 导入 -->
     <div class="url-import">
-      <n-input
-        :value="urlInput"
+      <a-input
+        :model-value="urlInput"
         size="small"
         placeholder="或粘贴图片 URL 导入..."
-        clearable
-        @update:value="onUrlInput"
-        @keyup.enter="emit('importUrl')"
+        allow-clear
+        @input="onUrlInput"
+        @press-enter="emit('importUrl')"
       />
-      <n-button size="small" :loading="urlImporting" @click="emit('importUrl')" :disabled="!urlInput.trim()">
+      <a-button size="small" :loading="urlImporting" @click="emit('importUrl')" :disabled="!urlInput.trim()">
         导入
-      </n-button>
+      </a-button>
     </div>
   </div>
 </template>
