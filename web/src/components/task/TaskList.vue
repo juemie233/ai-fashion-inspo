@@ -24,7 +24,7 @@ function renderProgress(row: UnifiedTask) {
   if (row.progress >= 0) {
     return h(Progress, {
       type: 'line',
-      percent: row.progress,
+      percent: row.progress / 100,
       strokeWidth: 8,
       style: 'width:140px',
     })

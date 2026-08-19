@@ -46,7 +46,7 @@ function statusColor(status: string): string {
       <a-progress
         v-if="queueStats.total > 0"
         type="line"
-        :percent="Math.round((queueStats.analyzed / queueStats.total) * 100)"
+        :percent="queueStats.analyzed / queueStats.total"
         :stroke-width="24"
         style="flex: 1"
       />
@@ -79,7 +79,7 @@ function statusColor(status: string): string {
       </template>
       <a-progress
         type="line"
-        :percent="batchTask.progress"
+        :percent="batchTask.progress / 100"
         :stroke-width="20"
         :status="
           batchTask.status === 'failed'

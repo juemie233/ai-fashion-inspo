@@ -252,9 +252,8 @@ onUnmounted(() => {
           <div v-if="p.status === 'uploading'" class="preview-mask">
             <a-progress
               type="circle"
-              :percentage="p.progress"
+              :percent="p.progress / 100"
               :width="44"
-              :show-indicator="true"
             />
           </div>
           <div v-else-if="p.status === 'done'" class="preview-mask done">✓</div>

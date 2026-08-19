@@ -475,11 +475,8 @@ onUnmounted(() => {
           v-if="qualityReviewStats.total > 0"
           type="line"
           :percent="
-            Math.round(
-              ((qualityReviewStats.approved + qualityReviewStats.rejected) /
-                qualityReviewStats.total) *
-                100,
-            )
+            (qualityReviewStats.approved + qualityReviewStats.rejected) /
+            qualityReviewStats.total
           "
           :stroke-width="24"
           style="flex: 1"
@@ -538,7 +535,7 @@ onUnmounted(() => {
             reviewTask.total
           }}）</template
         >
-        <a-progress type="line" :percent="reviewTask.progress" style="margin-top: 8px" />
+        <a-progress type="line" :percent="reviewTask.progress / 100" style="margin-top: 8px" />
       </a-alert>
 
       <!-- 未通过素材列表 -->

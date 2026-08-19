@@ -308,7 +308,7 @@ function cancelDownload(key: number) {
 const downloadPercent = computed(() => {
   const task = runningTask.value
   if (!task || task.total === 0) return 0
-  return Math.round((task.progress / task.total) * 100)
+  return task.progress / task.total
 })
 
 const downloadSize = computed(() => {
@@ -531,7 +531,7 @@ const statColumns = [
         <span style="font-size: 13px; color: #666">{{ gpuStats?.gpu_name || 'GPU' }}</span>
         <a-progress
           type="line"
-          :percent="gpuStats?.usage_percent || 0"
+          :percent="Math.max(0, gpuStats?.usage_percent || 0) / 100"
           :stroke-width="16"
           :status="
             (gpuStats?.usage_percent || 0) > 90

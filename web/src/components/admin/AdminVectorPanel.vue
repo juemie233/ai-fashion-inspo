@@ -146,7 +146,7 @@ onUnmounted(() => {
               adminTask.total
             }}）
           </a-typography-text>
-          <a-progress type="line" :percent="adminTask.progress" :stroke-width="8" />
+          <a-progress type="line" :percent="adminTask.progress / 100" :stroke-width="8" />
         </div>
       </template>
     </a-spin>

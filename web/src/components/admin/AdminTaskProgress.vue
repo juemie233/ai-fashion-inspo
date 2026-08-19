@@ -17,6 +17,6 @@ defineProps<{ task: AdminTask | null }>()
       {{ TASK_TYPE_LABELS[task.type] || task.type }}任务 #{{ task.id }} 进行中
       <span v-if="task.total > 0">（{{ task.done }}/{{ task.total }}）</span>
     </template>
-    <a-progress type="line" :percent="task.progress" style="margin-top: 8px" />
+    <a-progress type="line" :percent="task.progress / 100" style="margin-top: 8px" />
   </a-alert>
 </template>

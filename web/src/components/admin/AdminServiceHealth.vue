@@ -94,7 +94,7 @@ onUnmounted(() => {
         <span class="res-label">磁盘</span>
         <a-progress
           type="line"
-          :percent="Math.min(100, disk.used_percent)"
+          :percent="Math.min(1, disk.used_percent / 100)"
           :status="disk.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
@@ -104,7 +104,7 @@ onUnmounted(() => {
         <span class="res-label">内存</span>
         <a-progress
           type="line"
-          :percent="Math.min(100, memory.used_percent)"
+          :percent="Math.min(1, memory.used_percent / 100)"
           :status="memory.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
