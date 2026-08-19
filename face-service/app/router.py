@@ -2,7 +2,10 @@
 
 接口约定（供主后端 FaceRecognitionClient 调用）：
     GET  /health                       健康检查 + 模型状态
-    POST /api/face/embed               上传图片，返回人脸检测与特征
+    POST /api/face/embed               上传单张图片，返回人脸检测与特征
+    POST /api/face/embed-batch         批量上传多张图片，逐张返回人脸检测与特征
+                                       （无脸为正常结果 face_count=0；单张解码失败
+                                        记 item 级 error，不阻塞整体）
     POST /api/face/register            注册人脸（person_id + 姓名 + 图片）
     POST /api/face/match               上传图片，返回 top-k 匹配
     GET  /api/face/persons             已注册列表
@@ -83,6 +86,53 @@ async def embed_face(file: UploadFile = File(...)) -> dict:
             for f in faces
         ],
     }
+
+
+@router.post("/api/face/embed-batch")
+async def embed_face_batch(files: list[UploadFile] = File(...)) -> dict:
+    """批量检测人脸并提取特征（一次请求多张图，供素材库扫描使用）。
+
+    与单图 embed 的区别：
+    - 单张无脸是正常结果（face_count=0），不返回 404；
+    - 单张解码失败不整体失败，记 item 级 error 并继续处理其余图片；
+    - 人脸模型不可用（影响全部图片）时仍整体返回 503。
+    """
+    items: list[dict] = []
+    for index, file in enumerate(files):
+        data = await file.read()
+        try:
+            img = _decode_image(data)
+        except HTTPException as e:
+            items.append(
+                {
+                    "index": index,
+                    "face_count": 0,
+                    "faces": [],
+                    "error": "decode_failed",
+                    "message": e.detail,
+                }
+            )
+            continue
+        try:
+            faces = face_engine.extract(img)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("批量特征提取失败")
+            raise HTTPException(status_code=503, detail=f"人脸模型不可用: {e}") from e
+        items.append(
+            {
+                "index": index,
+                "face_count": len(faces),
+                "faces": [
+                    {
+                        "bbox": f.bbox,
+                        "det_score": round(f.det_score, 4),
+                        "embedding": f.embedding,
+                    }
+                    for f in faces
+                ],
+            }
+        )
+    return {"items": items, "failed": sum(1 for item in items if "error" in item)}
 
 
 @router.post("/api/face/register")

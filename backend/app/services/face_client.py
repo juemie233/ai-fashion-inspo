@@ -34,26 +34,41 @@ class FaceServiceHttpError(FaceServiceUnavailableError):
 
 
 class FaceRecognitionClient:
-    """人脸识别子服务的异步 HTTP 客户端。"""
+    """人脸识别子服务的异步 HTTP 客户端（实例级连接复用，keep-alive）。"""
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
         self.base_url = (base_url or settings.face_service_url).rstrip("/")
         self.timeout = timeout or settings.face_service_timeout
+        # 惰性创建并复用的连接（避免每次请求重建 TCP/TLS 连接；批量场景收益明显）
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def enabled(self) -> bool:
         """是否已配置子服务地址。"""
         return bool(self.base_url)
 
-    async def _request(self, method: str, path: str, **kwargs) -> dict:
+    async def _get_client(self) -> httpx.AsyncClient:
+        """惰性创建并复用连接（keep-alive）。"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float | None = None,
+        **kwargs,
+    ) -> dict:
         if not self.enabled:
             raise FaceServiceUnavailableError("未配置人脸识别子服务（FACE_SERVICE_URL）")
         url = f"{self.base_url}{path}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                r = await client.request(method, url, **kwargs)
-                r.raise_for_status()
-                return r.json()
+            client = await self._get_client()
+            r = await client.request(method, url, timeout=timeout, **kwargs)
+            r.raise_for_status()
+            return r.json()
         except httpx.HTTPStatusError as e:
             logger.warning(
                 "人脸识别子服务返回错误 %s: %s", e.response.status_code, e.response.text
@@ -79,6 +94,28 @@ class FaceRecognitionClient:
             "/api/face/embed",
             files={"file": (filename, image_bytes, "application/octet-stream")},
         )
+
+    async def embed_batch(
+        self, images: list[bytes], filenames: list[str] | None = None
+    ) -> dict:
+        """批量人脸检测 + 特征提取（一次请求多张图，供素材库扫描）。
+
+        - 无脸是正常结果（face_count=0）；单张解码失败为 item 级 error，不阻塞整体；
+        - 批量超时按张数动态放大（基础 30s + 每张 2s 预算），避免大批量误判超时。
+        """
+        files = [
+            (
+                "files",
+                (
+                    filenames[i] if filenames and i < len(filenames) else f"image_{i}.jpg",
+                    img,
+                    "application/octet-stream",
+                ),
+            )
+            for i, img in enumerate(images)
+        ]
+        timeout = max(self.timeout, 30.0 + len(images) * 2.0)
+        return await self._request("POST", "/api/face/embed-batch", timeout=timeout, files=files)
 
     async def register(self, person_id: str, person_name: str, image_bytes: bytes) -> dict:
         """注册人脸（同 person_id 重复注册即更新）。"""

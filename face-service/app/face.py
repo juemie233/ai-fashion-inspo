@@ -130,16 +130,28 @@ class FaceEngine:
                     )
             gpu_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
             cpu_providers = ["CPUExecutionProvider"]
+            # 压制动态 batch 下「输出形状与声明不符」的预期告警（rec 模型声明 [1,512]，
+            # 实际按输入 batch 输出 [N,512]）；仅保留 error 级别日志
+            sess_options = ort.SessionOptions()
+            sess_options.log_severity_level = 3
             try:
-                self._det = ort.InferenceSession(str(DET_MODEL), providers=gpu_providers)
+                self._det = ort.InferenceSession(
+                    str(DET_MODEL), providers=gpu_providers, sess_options=sess_options
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning("检测模型 GPU 推理不可用，回退 CPU: %s", e)
-                self._det = ort.InferenceSession(str(DET_MODEL), providers=cpu_providers)
+                self._det = ort.InferenceSession(
+                    str(DET_MODEL), providers=cpu_providers, sess_options=sess_options
+                )
             try:
-                self._rec = ort.InferenceSession(str(REC_MODEL), providers=gpu_providers)
+                self._rec = ort.InferenceSession(
+                    str(REC_MODEL), providers=gpu_providers, sess_options=sess_options
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning("识别模型 GPU 推理不可用，回退 CPU: %s", e)
-                self._rec = ort.InferenceSession(str(REC_MODEL), providers=cpu_providers)
+                self._rec = ort.InferenceSession(
+                    str(REC_MODEL), providers=cpu_providers, sess_options=sess_options
+                )
             logger.info(
                 "人脸模型加载完成（det: %s, rec: %s, 实际后端: %s）",
                 DET_MODEL.name,
@@ -242,15 +254,17 @@ class FaceEngine:
         return np.stack(crops, axis=0)
 
     def _get_embeddings(self, crops: np.ndarray) -> np.ndarray:
-        """提取归一化 512 维特征（模型仅支持单张，逐张推理）。"""
+        """批量提取归一化 512 维特征（w600k_r50 输入 batch 为动态维度，一次推理全部）。
+
+        模型输出声明为 [1, 512]，动态 batch 下实际为 [N, 512]——onnxruntime 仅打印
+        告警不报错（已在 session 配置中压制该日志）。逐张循环有 kernel launch 开销，
+        批量推理在 GPU 上吞吐更高、CPU 上无损失。
+        """
         assert self._rec is not None
         input_name = self._rec.get_inputs()[0].name
-        embs = []
-        for crop in crops:
-            emb = self._rec.run(None, {input_name: crop[None, ...]})[0][0]
-            norm = float(np.linalg.norm(emb))
-            embs.append(emb / (norm + 1e-9))
-        return np.stack(embs, axis=0)
+        raw = self._rec.run(None, {input_name: crops})[0]  # (N, 512)
+        norms = np.linalg.norm(raw, axis=1, keepdims=True)
+        return raw / (norms + 1e-9)
 
     def extract(self, image_bgr: np.ndarray) -> list[FaceResult]:
         """从 BGR 图像中检测人脸并提取特征。"""
