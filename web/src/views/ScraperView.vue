@@ -88,15 +88,16 @@ function onTaskCreated() {
 // 导致「结果/日志/漏斗」按钮文本与删除 loading 态不更新。
 function getTableColumns() {
   return [
-    { title: '平台', key: 'platform', width: 80, render: (r: ScraperTask) => platformName(r.platform) },
-    { title: '关键词', key: 'config', width: 160, ellipsis: { tooltip: true }, render: (r: ScraperTask) => parseKeywords(r.config) },
-    { title: '状态', key: 'status', width: 80, render: (r: ScraperTask) => h(Tag, { color: statusColor(r.status), size: 'small' }, () => STATUS_LABELS[r.status] || r.status) },
-    { title: '发现', key: 'items_found', width: 55 },
-    { title: '新增', key: 'items_added', width: 55 },
-    { title: '耗时', key: 'duration', width: 70, render: (r: ScraperTask) => getTaskDuration(r) },
-    { title: '错误', key: 'error', width: 140, ellipsis: { tooltip: true }, render: (r: ScraperTask) => r.error ? h('span', { style: { color: '#d03050', cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }, title: r.error, onClick: () => copyText(r.error!) }, r.error.length > 25 ? r.error.slice(0, 25) + '…' : r.error) : '-' },
-    { title: '时间', key: 'created_at', width: 150, render: (r: ScraperTask) => formatDate(r.created_at) },
-    { title: '操作', key: 'actions', width: 250, render: (r: ScraperTask) => {
+    { title: '平台', key: 'platform', width: 80, render: ({ record }: { record: ScraperTask }) => platformName(record.platform) },
+    { title: '关键词', key: 'config', width: 160, ellipsis: { tooltip: true }, render: ({ record }: { record: ScraperTask }) => parseKeywords(record.config) },
+    { title: '状态', key: 'status', width: 80, render: ({ record }: { record: ScraperTask }) => h(Tag, { color: statusColor(record.status), size: 'small' }, () => STATUS_LABELS[record.status] || record.status) },
+    { title: '发现', dataIndex: 'items_found', width: 55 },
+    { title: '新增', dataIndex: 'items_added', width: 55 },
+    { title: '耗时', key: 'duration', width: 70, render: ({ record }: { record: ScraperTask }) => getTaskDuration(record) },
+    { title: '错误', key: 'error', width: 140, ellipsis: { tooltip: true }, render: ({ record }: { record: ScraperTask }) => record.error ? h('span', { style: { color: '#d03050', cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }, title: record.error, onClick: () => copyText(record.error!) }, record.error.length > 25 ? record.error.slice(0, 25) + '…' : record.error) : '-' },
+    { title: '时间', key: 'created_at', width: 150, render: ({ record }: { record: ScraperTask }) => formatDate(record.created_at) },
+    { title: '操作', key: 'actions', width: 250, render: ({ record }: { record: ScraperTask }) => {
+      const r = record
       const btns: any[] = []
       if (r.items_added > 0) btns.push(h(Button, { size: 'mini', type: 'primary', status: resultsTaskId.value === r.id ? 'warning' : undefined, onClick: () => viewResults(r.id) }, () => resultsTaskId.value === r.id ? '收起' : '结果'))
       btns.push(h(Button, { size: 'mini', onClick: () => viewLog(r.id) }, () => logTaskId.value === r.id ? '关闭日志' : '日志'))
