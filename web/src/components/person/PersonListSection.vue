@@ -8,6 +8,7 @@ import {
   Message,
   Button,
   Popconfirm,
+  Avatar,
   type TableColumnData,
   type RequestOption,
   type UploadRequest,
@@ -194,17 +195,25 @@ const columns: TableColumnData[] = [
     render: ({ record }) => {
       const row = record as Person
       return h('div', { class: 'person-cell' }, [
-        h('span', { class: 'person-avatar' }, [
-          // 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 通用人形占位
-          row.face_thumb_path || row.avatar_path
-            ? h('img', {
-                src: getFileUrl(row.face_thumb_path || (row.avatar_path as string)),
-                class: 'avatar-img',
-                alt: row.name,
-              })
-            : // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
-              h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
-        ]),
+        h(
+          Avatar,
+          { size: 40 },
+          {
+            default: () =>
+              // 展示优先级：人脸小图（自动裁剪）→ 手动头像 → SVG 人形占位
+              row.face_thumb_path || row.avatar_path
+                ? h('img', {
+                    src: getFileUrl(row.face_thumb_path || (row.avatar_path as string)),
+                    alt: row.name,
+                  })
+                : // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复
+                  h('svg', { viewBox: '0 0 24 24', class: 'avatar-icon', 'aria-hidden': 'true' }, [
+                    h('path', {
+                      d: 'M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.4 0-10.1 1.7-10.1 5v2.4h20.2v-2.4c0-3.3-6.7-5-10.1-5z',
+                    }),
+                  ]),
+          },
+        ),
         h('span', { class: 'person-name' }, row.name),
       ])
     },
@@ -287,7 +296,8 @@ const columns: TableColumnData[] = [
             onOk: () => handleDelete(row),
           },
           {
-            default: () => h(Button, { size: 'small', status: 'danger' }, { default: () => '删除' }),
+            default: () =>
+              h(Button, { size: 'small', status: 'danger' }, { default: () => '删除' }),
           },
         ),
       ])
@@ -447,7 +457,9 @@ onBeforeUnmount(() => {
     <!-- 博主 IP 属地统计（横向柱状图，展示地域分布） -->
     <a-card v-if="kind === 'blogger'" size="small" class="ipstats-card" title="博主 IP 属地统计">
       <template #extra>
-        <a-typography-text type="secondary" style="font-size: 12px">共 {{ ipStats?.total ?? 0 }} 位博主</a-typography-text>
+        <a-typography-text type="secondary" style="font-size: 12px"
+          >共 {{ ipStats?.total ?? 0 }} 位博主</a-typography-text
+        >
       </template>
       <div ref="ipChartRef" class="ipstats-chart" />
       <a-empty
@@ -516,14 +528,14 @@ onBeforeUnmount(() => {
       <a-space direction="vertical" :size="8">
         <div v-for="(p, i) in topPersons" :key="p.id" class="top-row" @click="goDetail(p)">
           <span class="top-rank">{{ i + 1 }}</span>
-          <span class="top-avatar">
+          <a-avatar :size="28">
             <img
               v-if="p.face_thumb_path || p.avatar_path"
               :src="getFileUrl(p.face_thumb_path || (p.avatar_path as string))"
               :alt="p.name"
             />
             <span v-else aria-hidden="true">👤</span>
-          </span>
+          </a-avatar>
           <span class="top-name">{{ p.name }}</span>
           <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
         </div>
@@ -560,34 +572,18 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 
-/* 人物单元格：头像 + 名称 */
+/* 人物单元格：a-avatar + 名称（无头像时 SVG 人形占位） */
 .person-cell {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.person-avatar {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #eef1f6;
-}
-
-.avatar-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.avatar-fallback {
-  font-size: 18px;
-  line-height: 1;
+.avatar-icon {
+  width: 60%;
+  height: 60%;
+  color: var(--color-text-4);
+  fill: currentColor;
 }
 
 .person-name {
@@ -632,25 +628,7 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
-/* 热门排行头像：圆形小图（人脸缩略图或手动头像） */
-.top-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  overflow: hidden;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #eef1f6;
-  font-size: 14px;
-}
-
-.top-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
+/* 热门排行头像：a-avatar（圆形小图，人脸缩略图或手动头像） */
 
 .top-name {
   font-weight: 500;
