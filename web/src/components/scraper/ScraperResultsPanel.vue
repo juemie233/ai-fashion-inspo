@@ -30,16 +30,19 @@ function openDetail(id: string) {
 
 <template>
 <div class="results-panel">
-  <n-spin :show="loading">
+  <a-spin :loading="loading">
     <div class="results-header">
       <span>📋 结果（已加载 {{ items.length }}/{{ total }} 张）</span>
-      <n-space>
-        <n-button size="tiny" @click="emit('select-all')">{{ selectedIds.size===items.length?'取消全选':'全选' }}</n-button>
-        <n-popconfirm v-if="selectedIds.size>0" @positive-click="emit('delete-selected')">
-          <template #trigger><n-button size="tiny" type="error" ghost :loading="deleting">删除 ({{ selectedIds.size }})</n-button></template>
-          确定将 {{ selectedIds.size }} 个素材移入垃圾桶？（可在管理页垃圾桶恢复）
-        </n-popconfirm>
-      </n-space>
+      <a-space>
+        <a-button size="mini" @click="emit('select-all')">{{ selectedIds.size===items.length?'取消全选':'全选' }}</a-button>
+        <a-popconfirm
+          v-if="selectedIds.size>0"
+          :content="`确定将 ${selectedIds.size} 个素材移入垃圾桶？（可在管理页垃圾桶恢复）`"
+          @ok="emit('delete-selected')"
+        >
+          <a-button size="mini" type="outline" status="danger" :loading="deleting">删除 ({{ selectedIds.size }})</a-button>
+        </a-popconfirm>
+      </a-space>
     </div>
     <div v-if="items.length===0&&!loading" class="results-empty">空空如也</div>
     <div v-else class="results-grid">
@@ -52,14 +55,14 @@ function openDetail(id: string) {
           preload="metadata"
         />
         <img v-else :src="getFileUrl(item.thumbnail_path||item.file_path)" loading="lazy" />
-        <div class="result-check"><n-checkbox :checked="selectedIds.has(item.id)" size="small" /></div>
-        <n-button class="result-open" size="tiny" quaternary type="primary" @click.stop="openDetail(item.id)">查看详情</n-button>
+        <div class="result-check"><a-checkbox :model-value="selectedIds.has(item.id)" size="small" /></div>
+        <a-button class="result-open" size="mini" type="text" @click.stop="openDetail(item.id)">查看详情</a-button>
       </div>
     </div>
     <div v-if="hasMore" class="results-more">
-      <n-button size="small" :loading="loading" @click="emit('load-more')">加载更多</n-button>
+      <a-button size="small" :loading="loading" @click="emit('load-more')">加载更多</a-button>
     </div>
-  </n-spin>
+  </a-spin>
 </div>
 </template>
 

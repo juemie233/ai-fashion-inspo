@@ -44,7 +44,7 @@ const funnelStages = computed(() => {
 </script>
 
 <template>
-<n-modal :show="show" @update:show="onUpdateShow" preset="card" :title="taskId !== null ? '📊 任务 #' + taskId + ' 漏斗视图' : '漏斗视图'" style="max-width:960px">
+<a-modal :visible="show" @update:visible="onUpdateShow" :title="taskId !== null ? '📊 任务 #' + taskId + ' 漏斗视图' : '漏斗视图'" :width="960" :footer="false" :modal-style="{ maxWidth: '960px' }">
   <div v-if="taskId !== null && data" class="funnel-panel-content">
     <!-- 汇总漏斗 -->
     <div class="funnel-section">
@@ -93,10 +93,10 @@ const funnelStages = computed(() => {
       <div class="funnel-section-title">🔍 每次搜索明细（{{ data.per_search.length }} 次）</div>
       <div v-for="(ps, psi) in data.per_search" :key="psi" class="funnel-per-search">
         <div class="funnel-ps-header">
-          <n-tag size="tiny" :bordered="false">#{{ psi + 1 }}</n-tag>
+          <a-tag size="small">#{{ psi + 1 }}</a-tag>
           <strong>{{ ps.keyword }}</strong>
           <span class="funnel-ps-sort">{{ sortLabel(ps.sort_type) }}</span>
-          <n-tag v-if="ps.error" type="error" size="tiny">{{ ps.error }}</n-tag>
+          <a-tag v-if="ps.error" color="red" size="small">{{ ps.error }}</a-tag>
         </div>
         <div v-if="!ps.error" class="funnel-bars funnel-bars-sm">
           <div class="funnel-bar-row">
@@ -134,7 +134,7 @@ const funnelStages = computed(() => {
       </div>
     </div>
   </div>
-</n-modal>
+</a-modal>
 </template>
 
 <style scoped>

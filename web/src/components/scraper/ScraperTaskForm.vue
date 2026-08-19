@@ -2,7 +2,7 @@
 /** 新建采集任务表单：平台/模式/关键词/数量/CDP 配置，含草稿持久化与 CDP 连通性测试。 */
 
 import { ref, computed, watch, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { copyToClipboard } from '@/utils/clipboard'
 import { extractHistoryKeywords } from '@/utils/scraperKeywords'
@@ -18,8 +18,6 @@ const emit = defineEmits<{
   /** 任务创建成功 */
   (e: 'created'): void
 }>()
-
-const message = useMessage()
 
 // Chrome 生命周期（启动/停止/状态，替代手动命令行启动）
 const { chromeStatus, chromeBusy, refreshChromeStatus, startChrome, stopChrome } = useChromeManager()
@@ -101,9 +99,9 @@ const cdpStatus = ref<'idle' | 'ok' | 'fail'>('idle')
 async function copyText(text: string) {
   const ok = await copyToClipboard(text)
   if (ok) {
-    message.success('已复制')
+    Message.success('已复制')
   } else {
-    message.error('复制失败')
+    Message.error('复制失败')
   }
 }
 
@@ -112,11 +110,16 @@ async function testCdp() {
   cdpStatus.value = 'idle'
   try {
     const r = await apiClient.get(`/scraper/cdp-check/${formCdpPort.value}`)
-    if (r.data.available && r.data.is_google_chrome) { cdpStatus.value = 'ok'; message.success(r.data.detail) }
-    else if (r.data.available) { cdpStatus.value = 'fail'; message.error('非 Google Chrome') }
-    else { cdpStatus.value = 'fail'; message.warning(r.data.detail + '。请启动调试 Chrome。') }
+    if (r.data.available && r.data.is_google_chrome) { cdpStatus.value = 'ok'; Message.success(r.data.detail) }
+    else if (r.data.available) { cdpStatus.value = 'fail'; Message.error('非 Google Chrome') }
+    else { cdpStatus.value = 'fail'; Message.warning(r.data.detail + '。请启动调试 Chrome。') }
   } catch { cdpStatus.value = 'fail' }
   finally { cdpChecking.value = false }
+}
+
+/** Chrome 状态标签的 Arco 预设色映射（naive 语义色 → Arco color） */
+function chromeTagColor(t: string): string {
+  return { success: 'green', warning: 'orange', error: 'red', info: 'arcoblue', default: 'gray' }[t] || 'gray'
 }
 
 async function createTask() {
@@ -136,29 +139,29 @@ async function createTask() {
     }
     await apiClient.post('/scraper/tasks', config)
     emit('created')
-    message.success('采集任务已创建')
+    Message.success('采集任务已创建')
   } catch (e) {
     // 特殊业务：后端 detail 可能是「带启动命令」的对象（Chrome 未启动时引导复制命令）
     const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data
       ?.detail
     if (typeof detail === 'object' && detail && (detail as { command?: string }).command) {
       const d = detail as { error?: string; command: string }
-      message.error(d.error || '创建失败')
+      Message.error(d.error || '创建失败')
       setTimeout(() => copyText(d.command), 500)
     } else {
-      message.error(getApiErrorMessage(e, '创建失败'))
+      Message.error(getApiErrorMessage(e, '创建失败'))
     }
   }
 }
 </script>
 
 <template>
-<n-card title="新建采集任务" style="margin-bottom:16px" size="small">
-  <n-form label-placement="left" label-width="80" size="small">
-    <n-form-item label="平台">
-      <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
-    </n-form-item>
-    <n-form-item label="关键词">
+<a-card title="新建采集任务" style="margin-bottom:16px" size="small">
+  <a-form :model="{ formPlatform, formKeywords, formMaxCount, formSortMode, formCdp, formCdpPort }" label-align="left" :label-col-style="{ width: '80px' }" size="small">
+    <a-form-item label="平台">
+      <a-select v-model="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
+    </a-form-item>
+    <a-form-item label="关键词">
       <a-select
         v-model="formKeywords"
         multiple
@@ -167,51 +170,51 @@ async function createTask() {
         placeholder="选择历史关键词，或输入新关键词后回车（逗号/顿号分隔提交时自动拆分）"
         style="width: 100%"
       />
-      <template #feedback>
+      <template #extra>
         <span style="font-size:12px;color:#999">
           可直接选择最近采集使用过的关键词，也可手动输入新关键词后回车创建（回车即添加）
         </span>
       </template>
-    </n-form-item>
-    <n-form-item label="数量">
-      <n-input-number v-model:value="formMaxCount" :min="1" :max="500" style="width:100px" />
-    </n-form-item>
-    <n-form-item v-if="formPlatform==='xiaohongshu'" label="排序">
-      <n-select v-model:value="formSortMode" :options="[{label:'综合',value:'general'},{label:'最新',value:'latest'},{label:'最热',value:'popular'}]" style="width:120px" />
-    </n-form-item>
-    <n-form-item v-if="formPlatform==='xiaohongshu'" label="CDP">
-      <n-switch v-model:value="formCdp" @update:value="()=>{cdpStatus='idle'}" />
+    </a-form-item>
+    <a-form-item label="数量">
+      <a-input-number v-model="formMaxCount" :min="1" :max="500" style="width:100px" />
+    </a-form-item>
+    <a-form-item v-if="formPlatform==='xiaohongshu'" label="排序">
+      <a-select v-model="formSortMode" :options="[{label:'综合',value:'general'},{label:'最新',value:'latest'},{label:'最热',value:'popular'}]" style="width:120px" />
+    </a-form-item>
+    <a-form-item v-if="formPlatform==='xiaohongshu'" label="CDP">
+      <a-switch v-model="formCdp" @change="()=>{cdpStatus='idle'}" />
       <span style="margin-left:8px;font-size:12px;color:#18a058">{{ formCdp?'连接真实 Chrome（零检测）':'Playwright 自动浏览器' }}</span>
-    </n-form-item>
-    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="端口">
-      <n-space><n-input-number v-model:value="formCdpPort" :min="9222" :max="9230" style="width:100px" />
-      <n-button size="small" :loading="cdpChecking" :type="cdpStatus==='ok'?'success':cdpStatus==='fail'?'warning':'default'" @click="testCdp">{{ cdpChecking?'检测中...':cdpStatus==='ok'?'✓ 已连接':cdpStatus==='fail'?'✗ 未连接':'测试连接' }}</n-button></n-space>
-    </n-form-item>
-    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="Chrome">
-      <n-space align="center">
-        <n-button
+    </a-form-item>
+    <a-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="端口">
+      <a-space><a-input-number v-model="formCdpPort" :min="9222" :max="9230" style="width:100px" />
+      <a-button size="small" :loading="cdpChecking" :type="cdpStatus==='ok'||cdpStatus==='fail'?'primary':'secondary'" :status="cdpStatus==='ok'?'success':cdpStatus==='fail'?'warning':undefined" @click="testCdp">{{ cdpChecking?'检测中...':cdpStatus==='ok'?'✓ 已连接':cdpStatus==='fail'?'✗ 未连接':'测试连接' }}</a-button></a-space>
+    </a-form-item>
+    <a-form-item v-if="formPlatform==='xiaohongshu' && formCdp" label="Chrome">
+      <a-space align="center">
+        <a-button
           v-if="chromeStatus?.state === 'running'"
-          size="small" type="warning" ghost :loading="chromeBusy"
+          size="small" type="outline" status="warning" :loading="chromeBusy"
           @click="stopChrome"
-        >停止 Chrome</n-button>
-        <n-button
+        >停止 Chrome</a-button>
+        <a-button
           v-else-if="!chromeStatus || chromeStatus.state === 'not_started'"
           size="small" type="primary" :loading="chromeBusy"
           @click="startChrome"
-        >启动 Chrome</n-button>
-        <n-button size="small" quaternary @click="refreshChromeStatus">刷新</n-button>
-        <n-tag v-if="chromeStatus" :type="CHROME_STATE_TAG[chromeStatus.state] || 'default'" size="small">
+        >启动 Chrome</a-button>
+        <a-button size="small" type="text" @click="refreshChromeStatus">刷新</a-button>
+        <a-tag v-if="chromeStatus" :color="chromeTagColor(CHROME_STATE_TAG[chromeStatus.state] || 'default')" size="small">
           {{ CHROME_STATE_LABELS[chromeStatus.state] || chromeStatus.state }}
-        </n-tag>
-      </n-space>
-    </n-form-item>
-    <n-form-item v-if="formPlatform==='xiaohongshu' && formCdp && chromeStatus?.detail">
+        </a-tag>
+      </a-space>
+    </a-form-item>
+    <a-form-item v-if="formPlatform==='xiaohongshu' && formCdp && chromeStatus?.detail">
       <span style="font-size:12px;color:#999;line-height:1.6">{{ chromeStatus.detail }}</span>
-    </n-form-item>
-    <n-alert v-if="formPlatform==='douyin'" type="warning" style="margin-bottom:12px">
+    </a-form-item>
+    <a-alert v-if="formPlatform==='douyin'" type="warning" style="margin-bottom:12px">
       抖音网页版功能受限，搜索结果可能为空，推荐使用浏览器插件采集。
-    </n-alert>
-    <n-button type="primary" @click="createTask">开始采集</n-button>
-  </n-form>
-</n-card>
+    </a-alert>
+    <a-button type="primary" @click="createTask">开始采集</a-button>
+  </a-form>
+</a-card>
 </template>

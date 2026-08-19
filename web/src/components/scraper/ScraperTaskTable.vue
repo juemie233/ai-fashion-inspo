@@ -55,18 +55,18 @@ const sortOptions = [
 
 const guideSteps = ['在上方输入关键词，选择平台', '点击「开始采集」创建任务', '完成后可在素材库中查看结果']
 
-function onFilterPlatformChange(v: string) {
-  emit('update:filterPlatform', v)
+function onFilterPlatformChange(v: unknown) {
+  emit('update:filterPlatform', (v as string) ?? '')
   emit('filter-change')
 }
 
-function onFilterStatusChange(v: string) {
-  emit('update:filterStatus', v)
+function onFilterStatusChange(v: unknown) {
+  emit('update:filterStatus', (v as string) ?? '')
   emit('filter-change')
 }
 
-function onSortChange(v: string) {
-  emit('update:sort', v)
+function onSortChange(v: unknown) {
+  emit('update:sort', (v as string) ?? '')
   emit('sort-change')
 }
 
@@ -76,22 +76,33 @@ function onPageChange(page: number) {
 </script>
 
 <template>
-<n-card title="采集任务历史" size="small">
-  <template #header-extra>
-    <n-space align="center" size="small">
+<a-card title="采集任务历史" size="small">
+  <template #extra>
+    <a-space align="center" size="small">
       <span v-if="stats.total>0" style="font-size:12px;color:#666">共 <b>{{ stats.total }}</b> · 成功 <b style="color:#18a058">{{ stats.completed }}</b> · 失败 <b style="color:#d03050">{{ stats.failed }}</b> · {{ stats.rate }}%</span>
-      <n-select :value="filterPlatform" :options="platformOptions" size="tiny" style="width:110px" @update:value="onFilterPlatformChange" />
-      <n-select :value="filterStatus" :options="filterOptions" size="tiny" style="width:100px" @update:value="onFilterStatusChange" />
-      <n-select :value="sort" :options="sortOptions" size="tiny" style="width:100px" @update:value="onSortChange" />
-      <n-button v-if="hasFailed" size="tiny" type="warning" ghost :loading="retrying" @click="emit('retry-failed')">重试失败</n-button>
-      <n-popconfirm @positive-click="emit('clear-all')"><template #trigger><n-button size="tiny" :loading="clearing" type="error" ghost>清空</n-button></template>确定清空所有任务记录？</n-popconfirm>
-    </n-space>
+      <a-select :model-value="filterPlatform" :options="platformOptions" size="mini" style="width:110px" @change="onFilterPlatformChange" />
+      <a-select :model-value="filterStatus" :options="filterOptions" size="mini" style="width:100px" @change="onFilterStatusChange" />
+      <a-select :model-value="sort" :options="sortOptions" size="mini" style="width:100px" @change="onSortChange" />
+      <a-button v-if="hasFailed" size="mini" type="outline" status="warning" :loading="retrying" @click="emit('retry-failed')">重试失败</a-button>
+      <a-popconfirm content="确定清空所有任务记录？" @ok="emit('clear-all')">
+        <a-button size="mini" :loading="clearing" type="outline" status="danger">清空</a-button>
+      </a-popconfirm>
+    </a-space>
   </template>
 
-  <n-data-table v-if="tasks.length" :columns="columns" :data="tasks" :bordered="false" :expanded-row-render="expandedRowRender" :row-key="(r: ScraperTask) => r.id" size="small" />
+  <a-table
+    v-if="tasks.length"
+    :columns="columns"
+    :data="tasks"
+    :bordered="false"
+    :expanded-row-render="expandedRowRender"
+    :row-key="(r: ScraperTask) => String(r.id)"
+    size="small"
+    :pagination="false"
+  />
 
-  <n-empty v-else description="暂无采集任务" size="medium">
-    <template #extra>
+  <a-empty v-else description="暂无采集任务">
+    <template #description>
       <div style="max-width:420px;margin:0 auto;text-align:left">
         <div v-for="(s, i) in guideSteps" :key="i" style="display:flex;align-items:center;gap:10px;padding:8px 0;color:#555;font-size:14px">
           <span style="width:24px;height:24px;border-radius:50%;background:#2080f0;color:#fff;font-size:12px;font-weight:bold;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ i + 1 }}</span>
@@ -100,18 +111,17 @@ function onPageChange(page: number) {
         <div style="margin-top:16px;padding:10px;background:#f0f9eb;border-radius:6px;color:#666;font-size:12px">💡 提示：小红书和抖音反爬严格，推荐使用<b>浏览器插件</b>一键抓取。</div>
       </div>
     </template>
-  </n-empty>
+  </a-empty>
 
-  <n-pagination
+  <a-pagination
     v-if="total > pageSize"
     style="margin-top:12px;justify-content:flex-end"
-    :page="page"
+    :current="page"
     :page-size="pageSize"
-    :item-count="total"
-    :page-slot="7"
-    @update:page="onPageChange"
+    :total="total"
+    @change="onPageChange"
   />
 
   <slot name="extra" />
-</n-card>
+</a-card>
 </template>
