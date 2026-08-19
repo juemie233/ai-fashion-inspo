@@ -40,6 +40,7 @@ _ALL_TABLES = [
     "inspiration_bloggers",
     "inspiration_models",
     "inspiration_tags",
+    "inspiration_face_detections",
     "ai_analysis_log",
     "tag_aliases",
     "scraper_seen_urls",

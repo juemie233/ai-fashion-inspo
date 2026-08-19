@@ -109,6 +109,10 @@ class Model(_PersonBaseFields, Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+        "InspirationFaceDetection",
+        back_populates="matched_model",
+    )
 
     def __repr__(self) -> str:
         return f"<Model(name={self.name}, platform={self.platform})>"

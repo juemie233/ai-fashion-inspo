@@ -30,6 +30,7 @@ from app.services.face_client import (
     FaceServiceUnavailableError,
     face_client,
 )
+from app.services.face_match import _bytes_to_embedding, matrix_match_faces
 from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
@@ -45,14 +46,6 @@ MIN_FACE_WIDTH_RATIO = 0.05
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _bytes_to_embedding(data: bytes) -> np.ndarray:
-    """BLOB bytes → float32 数组（校验维度）。"""
-    emb = np.frombuffer(data, dtype=np.float32)
-    if emb.shape[0] != 512:
-        raise ValueError(f"特征维度异常: {emb.shape[0]}（期望 512）")
-    return emb
 
 
 def _image_size(data: bytes) -> tuple[int, int] | None:
@@ -344,10 +337,15 @@ async def detect_inspiration_faces(
         raise HTTPException(status_code=503, detail=str(e)) from e
     faces = result.get("faces", [])
 
-    # 加载博主特征库
+    # 加载博主特征库（单素材检测保持只匹配博主的行为不变；匹配改为矩阵乘，
+    # 与全库匹配服务 face_match.matrix_match_faces 共用同一实现）
     rows = await db.execute(select(BloggerFaceEmbedding))
     library = [
-        {"blogger_id": r.blogger_id, "embedding": _bytes_to_embedding(r.embedding)}
+        {
+            "person_type": "blogger",
+            "person_id": r.blogger_id,
+            "embedding": _bytes_to_embedding(r.embedding),
+        }
         for r in rows.scalars().all()
     ]
 
@@ -359,19 +357,18 @@ async def detect_inspiration_faces(
     )
 
     threshold = settings.face_match_threshold
+    face_embs = np.stack(
+        [np.asarray(face["embedding"], dtype=np.float32) for face in faces], axis=0
+    )
+    match_results = matrix_match_faces(face_embs, library, threshold)
     detections = []
-    for idx, face in enumerate(faces):
-        query = np.asarray(face["embedding"], dtype=np.float32)
-        best_blogger_id: int | None = None
-        best_score = 0.0
-        for item in library:
-            score = float(np.dot(query, item["embedding"]))  # 均归一化，点积即余弦
-            if score > best_score:
-                best_score = score
-                best_blogger_id = item["blogger_id"]
-        if best_blogger_id is None or best_score < threshold:
-            best_blogger_id = None
-            best_score = 0.0  # 未命中不记录相似度（未命中显示为空）
+    for idx, face, match in zip(range(len(faces)), faces, match_results):
+        if match is None:
+            matched_blogger_id: int | None = None
+            best_score: float | None = None
+        else:
+            matched_blogger_id = match["person_id"]
+            best_score = round(match["score"], 4)
         det = InspirationFaceDetection(
             inspiration_id=inspiration_id,
             face_index=idx,
@@ -379,8 +376,8 @@ async def detect_inspiration_faces(
             # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
             # 子服务偶发缺失时置空，不影响检测匹配主流程
             bbox=json.dumps(face["bbox"]) if isinstance(face.get("bbox"), list) else None,
-            matched_blogger_id=best_blogger_id,
-            confidence=round(best_score, 4) if best_blogger_id is not None else None,
+            matched_blogger_id=matched_blogger_id,
+            confidence=best_score,
         )
         db.add(det)
         detections.append(det)

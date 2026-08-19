@@ -76,8 +76,15 @@ class ModelFaceEmbedding(Base):
 class InspirationFaceDetection(Base):
     """素材人脸检测：一张素材图内每张人脸一条记录。
 
-    matched_blogger_id 非空表示匹配到已知博主；为空表示未匹配（疑似未知人脸），
-    可由用户手动选择博主或解除。
+    matched_blogger_id / matched_model_id 非空表示匹配到已知人物；两者互斥
+    （一张人脸至多命中一种人物，全库匹配时取博主+模特合并库的最高分者）。
+    均空表示未匹配（疑似未知人脸），可由用户手动选择或解除。
+
+    match_status 状态语义：
+    - NULL：单素材「检测并匹配」/手动指派结果（素材详情页直接展示，历史行为不变）
+    - pending：批量扫描 AI 候选，未经人工审核（仅扫描审核页可见，
+      素材详情页不展示，避免「没确认却显示已关联」）
+    - confirmed：人工审核确认，已同步写入人物关联表（素材详情页展示）
     """
 
     __tablename__ = "inspiration_face_detections"
@@ -97,7 +104,17 @@ class InspirationFaceDetection(Base):
         nullable=True,
         index=True,
     )
+    matched_model_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("models.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)  # 匹配余弦相似度
+    # 批量扫描候选状态：NULL 传统/手动结果；pending AI 候选；confirmed 已审核
+    match_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # 关联关系
@@ -106,6 +123,9 @@ class InspirationFaceDetection(Base):
     )
     matched_blogger: Mapped["Blogger | None"] = relationship(
         "Blogger", back_populates="face_detections"
+    )
+    matched_model: Mapped["Model | None"] = relationship(
+        "Model", back_populates="face_detections"
     )
 
     __table_args__ = (
