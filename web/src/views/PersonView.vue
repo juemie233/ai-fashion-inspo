@@ -7,7 +7,6 @@
 
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Tabs, TabPane } from '@arco-design/web-vue'
 import type { PersonKind } from '@/stores/persons'
 import PersonListSection from '@/components/person/PersonListSection.vue'
 
@@ -32,6 +31,7 @@ watch(activeKind, (kind) => {
           穿搭博主与职业模特已独立管理：博主（平台主页/小红书号/CSV 导入）与模特（写真照片组）业务逻辑分别演进
         </a-typography-text>
       </div>
+      <a-button type="primary" @click="router.push('/face-scan')">人脸库扫描</a-button>
     </div>
 
     <a-tabs v-model:active-key="activeKind" type="line">

@@ -227,6 +227,45 @@ export interface BloggerFaceRegisterResult extends BloggerFaceStatus {
 /** 职业模特 API（/api/models）：不含人脸能力，仅通用人物能力 */
 export const modelsApi = {
   ...createPersonApi('models'),
+
+  /** 从写真照片组注册/重新注册模特人脸特征（Top-K 平均池化，默认 5 张） */
+  async registerFace(id: number, topK: number = 5): Promise<ModelFaceRegisterResult> {
+    const formData = new FormData()
+    formData.append('top_k', String(topK))
+    const { data } = await apiClient.post<ModelFaceRegisterResult>(
+      `/models/${id}/face`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    return data
+  },
+
+  /** 查询模特人脸特征注册状态 */
+  async fetchFaceStatus(id: number): Promise<ModelFaceStatus> {
+    const { data } = await apiClient.get<ModelFaceStatus>(`/models/${id}/face`)
+    return data
+  },
+}
+
+/** 模特人脸特征注册状态 */
+export interface ModelFaceStatus {
+  registered: boolean
+  model_id: number
+  updated_at?: string | null
+}
+
+/** 模特人脸注册结果（照片组 Top-K 平均池化） */
+export interface ModelFaceRegisterResult {
+  registered: boolean
+  model_id: number
+  model_name?: string
+  /** 实际使用的照片数（= min(合格人脸数, top_k)） */
+  photos_used?: number
+  photos_total?: number
+  /** 通过质量过滤的人脸总数 */
+  qualified?: number
+  warnings?: string[]
+  updated_at?: string | null
 }
 
 /** 上传 CSV 批量导入博主（按 xhs_id upsert，昵称/小红书号必填） */

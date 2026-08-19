@@ -403,9 +403,11 @@ async def detect_inspiration_faces(
 async def list_inspiration_detections(
     db: AsyncSession, inspiration_id: str
 ) -> list[dict]:
-    """素材人脸检测列表（含匹配博主信息）。
+    """素材人脸检测列表（含匹配博主/模特信息）。
 
-    过滤空 embedding 的占位记录（人脸库扫描为无脸素材写入的「已扫」标记）。
+    - 过滤空 embedding 的占位记录（人脸库扫描为无脸素材写入的「已扫」标记）；
+    - 过滤 match_status=pending 的批量扫描候选（未审核不在素材详情页展示，
+      避免「没确认却显示已关联」；候选仅在扫描审核页可见）。
     """
     rows = await db.execute(
         select(InspirationFaceDetection)
@@ -413,11 +415,16 @@ async def list_inspiration_detections(
             InspirationFaceDetection.inspiration_id == inspiration_id,
             InspirationFaceDetection.embedding != b"",
         )
-        .options(selectinload(InspirationFaceDetection.matched_blogger))
+        .options(
+            selectinload(InspirationFaceDetection.matched_blogger),
+            selectinload(InspirationFaceDetection.matched_model),
+        )
         .order_by(InspirationFaceDetection.face_index)
     )
     result = []
     for d in rows.scalars().all():
+        if d.match_status == "pending":
+            continue
         result.append(
             {
                 "id": d.id,
@@ -426,6 +433,10 @@ async def list_inspiration_detections(
                 "matched_blogger_name": (
                     d.matched_blogger.name if d.matched_blogger else None
                 ),
+                "matched_model_id": d.matched_model_id,
+                "matched_model_name": (
+                    d.matched_model.name if d.matched_model else None
+                ),
                 "confidence": d.confidence,
                 "created_at": format_utc(d.created_at),
             }
@@ -433,24 +444,49 @@ async def list_inspiration_detections(
     return result
 
 
-async def set_detection_blogger(
-    db: AsyncSession, detection_id: int, blogger_id: int | None
+async def set_detection_person(
+    db: AsyncSession,
+    detection_id: int,
+    person_type: str | None,
+    person_id: int | None,
 ) -> dict:
-    """手动指定/解除人脸检测的博主关联（blogger_id 为 None 即解除）。"""
+    """手动指定/解除人脸检测的人物关联（person_type: blogger|model）。
+
+    - person_id 为 None 即解除（同时清两种人物字段）；
+    - 指定时写对应字段并清另一类型字段（互斥）；
+    - 手动指定视为已确认：match_status 置 None（素材详情页直接展示）。
+    """
     det = await db.get(InspirationFaceDetection, detection_id)
     if not det:
         raise HTTPException(status_code=404, detail="人脸检测记录未找到")
-    if blogger_id is not None:
-        blogger = await db.get(Blogger, blogger_id)
-        if not blogger:
-            raise HTTPException(status_code=404, detail="博主未找到")
-    det.matched_blogger_id = blogger_id
-    det.confidence = None if blogger_id is None else det.confidence
+    if person_id is not None:
+        if person_type == "blogger":
+            person = await db.get(Blogger, person_id)
+        elif person_type == "model":
+            from app.models.person import Model
+
+            person = await db.get(Model, person_id)
+        else:
+            raise HTTPException(status_code=422, detail="person_type 必须为 blogger 或 model")
+        if not person:
+            raise HTTPException(status_code=404, detail="人物未找到")
+        if person_type == "blogger":
+            det.matched_blogger_id = person_id
+            det.matched_model_id = None
+        else:
+            det.matched_model_id = person_id
+            det.matched_blogger_id = None
+    else:
+        det.matched_blogger_id = None
+        det.matched_model_id = None
+    det.confidence = None if person_id is None else det.confidence
+    det.match_status = None  # 手动指定视为已确认（直接展示）
     await db.commit()
     return {
         "updated": True,
         "detection_id": detection_id,
-        "matched_blogger_id": blogger_id,
+        "matched_blogger_id": det.matched_blogger_id,
+        "matched_model_id": det.matched_model_id,
     }
 
 

@@ -33,7 +33,7 @@ from app.services.blogger_face import (
     delete_detection,
     detect_inspiration_faces,
     list_inspiration_detections,
-    set_detection_blogger,
+    set_detection_person,
 )
 
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
@@ -68,11 +68,27 @@ async def face_detection_update_api(
     body: dict,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """手动指定/解除人脸检测的博主关联（body: {"blogger_id": 5} 或 {"blogger_id": null}）。"""
-    blogger_id = body.get("blogger_id")
-    if blogger_id is not None and not isinstance(blogger_id, int):
-        raise HTTPException(status_code=422, detail="blogger_id 必须为整数或 null")
-    return await set_detection_blogger(db, detection_id, blogger_id)
+    """手动指定/解除人脸检测的人物关联（兼容两种 body 格式）。
+
+    - 旧格式：{"blogger_id": 5} 或 {"blogger_id": null}（仅博主）
+    - 新格式：{"person_type": "blogger"|"model", "person_id": 5}；
+      person_id 传 null 即解除
+    """
+    if "blogger_id" in body:
+        blogger_id = body.get("blogger_id")
+        if blogger_id is not None and not isinstance(blogger_id, int):
+            raise HTTPException(status_code=422, detail="blogger_id 必须为整数或 null")
+        return await set_detection_person(
+            db,
+            detection_id,
+            "blogger" if blogger_id is not None else None,
+            blogger_id,
+        )
+    person_type = body.get("person_type")
+    person_id = body.get("person_id")
+    if person_id is not None and not isinstance(person_id, int):
+        raise HTTPException(status_code=422, detail="person_id 必须为整数或 null")
+    return await set_detection_person(db, detection_id, person_type, person_id)
 
 
 @router.delete("/{inspiration_id}/face-detections/{detection_id}")

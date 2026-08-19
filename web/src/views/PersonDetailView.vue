@@ -17,6 +17,7 @@ import {
   deleteModelPhotoSet,
   type PersonInspiration,
   type ModelPhotoSet,
+  type ModelFaceStatus,
 } from '@/api/persons'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import type { PersonDetail, PersonType } from '@shared/types/person'
@@ -178,6 +179,38 @@ function toggleFaceInsp(id: string) {
   selectedFaceInspIds.value = next
 }
 
+// ── 模特人脸特征注册（从写真照片组，Top-5 高质量人脸平均池化）──
+const modelFaceStatus = ref<ModelFaceStatus | null>(null)
+const modelFaceBusy = ref(false)
+
+async function loadModelFaceStatus() {
+  if (kind.value !== 'model') return
+  try {
+    modelFaceStatus.value = await modelsApi.fetchFaceStatus(personId.value)
+  } catch {
+    // 人脸状态加载失败不阻塞详情页
+  }
+}
+
+/** 从照片组注册/重新注册模特人脸（重复注册覆盖旧特征） */
+async function handleRegisterModelFace() {
+  modelFaceBusy.value = true
+  try {
+    const r = await modelsApi.registerFace(personId.value, 5)
+    modelFaceStatus.value = {
+      registered: true,
+      model_id: r.model_id,
+      updated_at: r.updated_at,
+    }
+    const warningText = r.warnings?.length ? `，${r.warnings.length} 条照片跳过警告` : ''
+    Message.success(`已从照片组注册人脸（使用 ${r.photos_used ?? 0} 张高质量照片${warningText}）`)
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '注册失败'))
+  } finally {
+    modelFaceBusy.value = false
+  }
+}
+
 /** 切换到「从素材选择」Tab 时首次加载该博主素材 */
 watch(faceTab, (tab) => {
   if (tab === 'inspiration' && faceInspItems.value.length === 0) {
@@ -263,6 +296,7 @@ async function loadDetail() {
   await loadInspirations()
   await loadPhotoSets()
   await loadFaceStatus()
+  await loadModelFaceStatus()
   // 人物切换时重置人脸注册的素材选择状态
   faceTab.value = 'upload'
   faceFileList.value = []
@@ -428,6 +462,39 @@ watch(personId, () => {
           />
           <a-spin v-if="photoSetsLoading" :loading="true" style="margin: 24px 0" />
         </a-card>
+
+        <!-- 模特人脸特征注册（从写真照片组；可折叠，默认收起） -->
+        <a-collapse v-if="kind === 'model'" class="face-register-collapse">
+          <a-collapse-item key="model-face">
+            <template #header>
+              <span class="face-collapse-title">人脸特征注册</span>
+            </template>
+            <template #extra>
+              <a-tag v-if="modelFaceStatus?.registered" color="green" size="small">
+                已注册{{
+                  modelFaceStatus?.updated_at
+                    ? `（${modelFaceStatus.updated_at.slice(0, 10)}）`
+                    : ''
+                }}
+              </a-tag>
+              <a-tag v-else color="orange" size="small">未注册</a-tag>
+            </template>
+            <p class="face-hint">
+              从写真照片组自动挑选 Top-5 张高质量正脸照片提取特征平均池化入库；素材库中的人脸将
+              自动与模特特征库匹配（需先运行「人脸库扫描」）。照片组更新后建议重新注册。
+            </p>
+            <div class="face-upload-row">
+              <a-button
+                size="small"
+                type="primary"
+                :loading="modelFaceBusy"
+                @click="handleRegisterModelFace"
+              >
+                {{ modelFaceStatus?.registered ? '重新注册' : '从照片组注册' }}
+              </a-button>
+            </div>
+          </a-collapse-item>
+        </a-collapse>
 
         <!-- 人脸特征注册（仅穿搭博主：上传照片 与/或 从已关联素材中选择图片；可折叠，默认收起） -->
         <a-collapse v-if="kind === 'blogger'" class="face-register-collapse">

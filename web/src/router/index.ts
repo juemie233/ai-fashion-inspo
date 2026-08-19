@@ -67,6 +67,12 @@ const router = createRouter({
       meta: { title: '人物详情' },
     },
     {
+      path: '/face-scan',
+      name: 'face-scan',
+      component: () => import('@/views/FaceScanView.vue'),
+      meta: { title: '人脸库扫描' },
+    },
+    {
       path: '/models',
       name: 'models',
       component: () => import('@/views/ModelManageView.vue'),
