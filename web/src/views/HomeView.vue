@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 首页：瀑布流展示素材，支持筛选、排序、密度调节和分页。 */
 
-import { h, ref, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Message, Notification } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
@@ -493,7 +493,6 @@ loadPage(currentPage.value)
           >批量审核</a-button
         >
         <a-button size="small" @click="enterBatchMode()">批量选择</a-button>
-        <a-button type="primary" @click="router.push('/upload')">上传素材</a-button>
       </div>
     </div>
 
