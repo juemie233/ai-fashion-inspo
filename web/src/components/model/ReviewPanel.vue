@@ -422,7 +422,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <a-spin :loading="qualityReviewLoading">
+  <a-spin :loading="qualityReviewLoading" style="display: block">
     <template v-if="qualityReviewStats">
       <!-- 统计卡片 -->
       <a-row :gutter="[12, 12]" style="margin-bottom: 16px">

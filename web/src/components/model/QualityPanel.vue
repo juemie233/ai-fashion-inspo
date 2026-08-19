@@ -218,7 +218,7 @@ const failedColumns: TableColumnData[] = [
 </script>
 
 <template>
-  <a-spin :loading="qualityLoading">
+  <a-spin :loading="qualityLoading" style="display: block">
     <template v-if="qualityData">
       <!-- 总览卡片 -->
       <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
