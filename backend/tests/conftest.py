@@ -51,6 +51,7 @@ _ALL_TABLES = [
     "audit_logs",
     "model_photos",
     "model_photo_sets",
+    "model_face_embeddings",
     "inspirations",
     "bloggers",
     "models",

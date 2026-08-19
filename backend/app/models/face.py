@@ -1,6 +1,8 @@
-"""人脸特征库模型：博主注册特征 + 素材人脸检测结果。
+"""人脸特征库模型：博主/模特注册特征 + 素材人脸检测结果。
 
 - blogger_face_embeddings：一位博主一条平均池化后的 512 维特征（float32 BLOB）
+- model_face_embeddings：一位模特一条平均池化后的 512 维特征（float32 BLOB，
+  来源为模特写真照片组；与博主对称，无「人脸缩略图」能力）
 - inspiration_face_detections：素材图内每张人脸一条记录（含特征与匹配结果，
   matched_blogger_id 为空表示未匹配到已知博主，即「疑似未知人脸」）
 """
@@ -44,6 +46,31 @@ class BloggerFaceEmbedding(Base):
 
     def __repr__(self) -> str:
         return f"<BloggerFaceEmbedding(blogger_id={self.blogger_id})>"
+
+
+class ModelFaceEmbedding(Base):
+    """模特人脸特征库：平均池化后的 512 维归一化特征（float32 BLOB，2048 字节）。
+
+    来源：模特写真照片组（model_photos）中按检测置信度挑选的 Top-K 张高质量
+    人脸平均池化；与博主特征库对称，模特无「人脸缩略图」能力。
+    """
+
+    __tablename__ = "model_face_embeddings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("models.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+    # 关联关系
+    model: Mapped["Model"] = relationship("Model", back_populates="face_embedding")
+
+    def __repr__(self) -> str:
+        return f"<ModelFaceEmbedding(model_id={self.model_id})>"
 
 
 class InspirationFaceDetection(Base):

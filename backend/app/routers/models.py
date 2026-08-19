@@ -32,6 +32,12 @@ from app.schemas.person import (
     ModelPhotoSetUpdate,
     ModelUpdate,
 )
+from app.services.model_face import (
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    get_model_face_status,
+    register_model_face,
+)
 from app.services.person_service import (
     PersonConflictError,
     PersonHasInspirationsError,
@@ -293,3 +299,25 @@ async def delete_photo(
     except PersonNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
     return {"removed": 1}
+
+
+# ── 人脸特征注册（从写真照片组，Top-K 高质量人脸平均池化）──
+
+
+@router.post("/{model_id}/face")
+async def register_face(
+    model_id: int,
+    top_k: int = Form(DEFAULT_TOP_K, ge=1, le=MAX_TOP_K),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """从模特写真照片组注册/重新注册人脸特征（默认 Top-5 平均池化）。"""
+    return await register_model_face(db, model_id, top_k=top_k)
+
+
+@router.get("/{model_id}/face")
+async def face_status(
+    model_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查询模特人脸特征注册状态。"""
+    return await get_model_face_status(db, model_id)
