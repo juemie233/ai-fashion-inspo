@@ -3,7 +3,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import {
   fetchTrash,
   restoreInspiration,
@@ -15,8 +15,6 @@ import {
   type InspirationOut,
 } from '@/api/inspirations'
 import { formatSize, shortenText } from '@/utils/format'
-
-const message = useMessage()
 
 // ── 列表与分页 ──
 const items = ref<InspirationOut[]>([])
@@ -48,7 +46,7 @@ async function load() {
       retentionDays.value = data.trash_retention_days
     }
   } catch {
-    message.error('加载垃圾桶失败')
+    Message.error('加载垃圾桶失败')
   } finally {
     loading.value = false
   }
@@ -59,6 +57,12 @@ onMounted(load)
 /** 按删除原因筛选 */
 function onReasonChange() {
   page.value = 1
+  load()
+}
+
+/** 分页跳转 */
+function onPageChange(p: number) {
+  page.value = p
   load()
 }
 
@@ -96,10 +100,10 @@ async function restore(id: string) {
   restoring.value = new Set(restoring.value).add(id)
   try {
     await restoreInspiration(id)
-    message.success('已恢复')
+    Message.success('已恢复')
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '恢复失败'))
+    Message.error(getApiErrorMessage(e, '恢复失败'))
   } finally {
     restoring.value = new Set(restoring.value)
     restoring.value.delete(id)
@@ -111,10 +115,10 @@ async function permanentDelete(id: string) {
   deleting.value = new Set(deleting.value).add(id)
   try {
     await deleteInspiration(id)
-    message.success('已彻底删除')
+    Message.success('已彻底删除')
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   } finally {
     deleting.value = new Set(deleting.value)
     deleting.value.delete(id)
@@ -129,11 +133,11 @@ async function emptyAll() {
   emptying.value = true
   try {
     const r = await emptyTrash(false)
-    message.success(`已清空 ${r.deleted} 个素材，释放 ${formatSize(r.freed_bytes)}`)
+    Message.success(`已清空 ${r.deleted} 个素材，释放 ${formatSize(r.freed_bytes)}`)
     page.value = 1
     await load()
   } catch {
-    message.error('清空失败')
+    Message.error('清空失败')
   } finally {
     emptying.value = false
   }
@@ -143,10 +147,10 @@ async function cleanExpired() {
   cleaningExpired.value = true
   try {
     const r = await emptyTrash(true)
-    message.success(`已清理 ${r.deleted} 个过期素材，释放 ${formatSize(r.freed_bytes)}`)
+    Message.success(`已清理 ${r.deleted} 个过期素材，释放 ${formatSize(r.freed_bytes)}`)
     await load()
   } catch {
-    message.error('清理失败')
+    Message.error('清理失败')
   } finally {
     cleaningExpired.value = false
   }
@@ -158,38 +162,36 @@ async function cleanExpired() {
     <!-- 工具栏 -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <n-tag type="warning" size="small" :bordered="false">
+        <a-tag status="warning" size="small">
           共 {{ total }} 个垃圾桶素材{{ autoCleanupEnabled ? `（${retentionDays} 天后自动清理）` : '（不会自动清理）' }}
-        </n-tag>
-        <n-select
-          v-model:value="reasonFilter"
+        </a-tag>
+        <a-select
+          v-model="reasonFilter"
           :options="[{ label: '全部原因', value: '' }, ...TRASH_REASON_OPTIONS]"
           size="small"
           style="width: 130px"
           placeholder="删除原因"
-          @update:value="onReasonChange"
+          @change="onReasonChange"
         />
       </div>
       <div class="toolbar-right">
-        <n-popconfirm v-if="autoCleanupEnabled" @positive-click="cleanExpired">
-          <template #trigger>
-            <n-button size="small" :loading="cleaningExpired">清理过期</n-button>
-          </template>
-          仅清理超过 {{ retentionDays }} 天保留期的素材，仍在保留期内的保留。
-        </n-popconfirm>
-        <n-popconfirm @positive-click="emptyAll">
-          <template #trigger>
-            <n-button size="small" type="error" secondary :loading="emptying">清空垃圾桶</n-button>
-          </template>
-          彻底删除垃圾桶中全部素材并释放磁盘空间，不可恢复。
-        </n-popconfirm>
+        <a-popconfirm
+          v-if="autoCleanupEnabled"
+          content="仅清理超过 {{ retentionDays }} 天保留期的素材，仍在保留期内的保留。"
+          @ok="cleanExpired"
+        >
+          <a-button size="small" :loading="cleaningExpired">清理过期</a-button>
+        </a-popconfirm>
+        <a-popconfirm content="彻底删除垃圾桶中全部素材并释放磁盘空间，不可恢复。" @ok="emptyAll">
+          <a-button size="small" type="secondary" status="danger" :loading="emptying">清空垃圾桶</a-button>
+        </a-popconfirm>
       </div>
     </div>
 
     <!-- 列表 -->
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <div v-if="items.length === 0 && !loading" class="empty">
-        <n-empty description="垃圾桶是空的 🎉" />
+        <a-empty description="垃圾桶是空的 🎉" />
       </div>
       <div v-else class="grid">
         <div v-for="item in items" :key="item.id" class="trash-card">
@@ -209,46 +211,42 @@ async function cleanExpired() {
             loading="lazy"
           />
           <div class="meta">
-            <n-tag size="tiny" type="error" :bordered="false" :title="trashSourceFull(item)">
+            <a-tag size="small" status="danger" :title="trashSourceFull(item)">
               {{ trashSourceLabel(item) }}
-            </n-tag>
+            </a-tag>
             <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
           </div>
           <div class="actions">
-            <n-button
-              size="tiny"
+            <a-button
+              size="mini"
               type="primary"
-              secondary
               :loading="restoring.has(item.id)"
               @click="restore(item.id)"
             >
               恢复
-            </n-button>
-            <n-popconfirm @positive-click="permanentDelete(item.id)">
-              <template #trigger>
-                <n-button
-                  size="tiny"
-                  type="error"
-                  quaternary
-                  :loading="deleting.has(item.id)"
-                >
-                  彻底删除
-                </n-button>
-              </template>
-              彻底删除后不可恢复，确定继续？
-            </n-popconfirm>
+            </a-button>
+            <a-popconfirm content="彻底删除后不可恢复，确定继续？" @ok="permanentDelete(item.id)">
+              <a-button
+                size="mini"
+                type="text"
+                status="danger"
+                :loading="deleting.has(item.id)"
+              >
+                彻底删除
+              </a-button>
+            </a-popconfirm>
           </div>
         </div>
       </div>
-    </n-spin>
+    </a-spin>
 
     <!-- 分页 -->
     <div v-if="totalPages > 1" class="pagination-wrapper">
-      <n-pagination
-        v-model:page="page"
-        :page-count="totalPages"
+      <a-pagination
+        :total="total"
+        :current="page"
         :page-size="pageSize"
-        @update:page="load"
+        @change="onPageChange"
       />
     </div>
   </div>
@@ -279,10 +277,10 @@ async function cleanExpired() {
   gap: 12px;
 }
 .trash-card {
-  border: 1px solid var(--n-border-color);
+  border: 1px solid var(--color-border-2);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--n-color);
+  background: var(--color-bg-2);
   display: flex;
   flex-direction: column;
 }

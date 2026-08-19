@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /** 人物频次排行：按关联素材数量降序，辅助识别高频模特/博主。 */
 
-import { onMounted, ref } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton } from 'naive-ui'
+import { Button, type TableColumnData } from '@arco-design/web-vue'
 import { fetchPersonFrequency, type PersonFrequencyItem } from '@/api/admin'
 import { sourceLabel } from '@/utils/sourceLabel'
 
@@ -20,6 +20,33 @@ function typeLabel(type: string): string {
   return personTypeLabels[type] || type
 }
 
+/** Arco 表格列定义（render 用 h() 组合节点） */
+const columns: TableColumnData[] = [
+  { title: '#', width: 48, render: ({ rowIndex }) => String(rowIndex + 1) },
+  {
+    title: '人物',
+    dataIndex: 'name',
+    render: ({ record }) =>
+      h(
+        Button,
+        { type: 'text', size: 'mini', onClick: () => router.push(`/persons/${record.id}`) },
+        { default: () => record.name },
+      ),
+  },
+  {
+    title: '类型',
+    dataIndex: 'person_type',
+    render: ({ record }) => typeLabel(record.person_type),
+  },
+  { title: '平台', dataIndex: 'platform', render: ({ record }) => sourceLabel(record.platform) },
+  {
+    title: '素材数',
+    dataIndex: 'count',
+    align: 'right',
+    render: ({ record }) => String(record.count),
+  },
+]
+
 async function load() {
   loading.value = true
   try {
@@ -35,38 +62,23 @@ onMounted(load)
 </script>
 
 <template>
-  <n-card title="人物出现频次" size="small">
-    <template #header-extra>
-      <n-button size="tiny" quaternary @click="load">刷新</n-button>
+  <a-card title="人物出现频次" size="small">
+    <template #extra>
+      <a-button size="mini" type="text" @click="load">刷新</a-button>
     </template>
-    <n-spin :show="loading">
-      <n-table v-if="items.length > 0" size="small" :bordered="false">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>人物</th>
-            <th>类型</th>
-            <th>平台</th>
-            <th style="text-align: right">素材数</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(p, i) in items" :key="p.id">
-            <td>{{ i + 1 }}</td>
-            <td>
-              <n-button text size="tiny" type="primary" @click="router.push(`/persons/${p.id}`)">
-                {{ p.name }}
-              </n-button>
-            </td>
-            <td>{{ typeLabel(p.person_type) }}</td>
-            <td>{{ sourceLabel(p.platform) }}</td>
-            <td style="text-align: right">{{ p.count }}</td>
-          </tr>
-        </tbody>
-      </n-table>
+    <a-spin :loading="loading">
+      <a-table
+        v-if="items.length > 0"
+        :data="items"
+        :columns="columns"
+        size="small"
+        :bordered="false"
+        :pagination="false"
+        row-key="id"
+      />
       <div v-else-if="!loading" class="person-empty">暂无人物关联数据</div>
-    </n-spin>
-  </n-card>
+    </a-spin>
+  </a-card>
 </template>
 
 <style scoped>

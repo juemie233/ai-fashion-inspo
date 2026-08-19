@@ -3,11 +3,9 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed, watch, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { fetchInspirations, batchUnmarkAi, type InspirationOut } from '@/api/inspirations'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
-
-const message = useMessage()
 
 const props = defineProps<{
   /** 刷新键：父组件批量删除完成后自增，触发本组件重新加载列表 */
@@ -45,7 +43,7 @@ async function load() {
     const visible = new Set(data.items.map((i) => i.id))
     selectedIds.value = new Set([...selectedIds.value].filter((id) => visible.has(id)))
   } catch {
-    message.error('加载疑似 AI 素材失败')
+    Message.error('加载疑似 AI 素材失败')
   } finally {
     loading.value = false
   }
@@ -88,16 +86,16 @@ const unmarking = ref(false)
 async function unmarkSelected() {
   const ids = [...selectedIds.value]
   if (!ids.length) {
-    message.warning('请先选择素材')
+    Message.warning('请先选择素材')
     return
   }
   unmarking.value = true
   try {
     const r = await batchUnmarkAi(ids)
-    message.success(`已将 ${r.updated} 个素材重新标记为非 AI`)
+    Message.success(`已将 ${r.updated} 个素材重新标记为非 AI`)
     await load()
   } catch (e) {
-    message.error(getApiErrorMessage(e, '标记失败'))
+    Message.error(getApiErrorMessage(e, '标记失败'))
   } finally {
     unmarking.value = false
   }
@@ -106,10 +104,17 @@ async function unmarkSelected() {
 function deleteSelected() {
   const ids = [...selectedIds.value]
   if (!ids.length) {
-    message.warning('请先选择素材')
+    Message.warning('请先选择素材')
     return
   }
   emit('deleteSelected', ids)
+}
+
+// ── 分页切换 ──
+
+function onPageChange(p: number) {
+  page.value = p
+  load()
 }
 </script>
 
@@ -118,43 +123,42 @@ function deleteSelected() {
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <n-tag type="warning" size="small" :bordered="false">
+        <a-tag color="orange" size="small" :bordered="false">
           共 {{ total }} 个疑似 AI 素材
-        </n-tag>
+        </a-tag>
         <span class="view-hint">点击卡片勾选，悬停后点 👁 浏览详情</span>
         <span v-if="selectedCount > 0" class="selected-info">已选 {{ selectedCount }} 项</span>
       </div>
       <div class="toolbar-right">
-        <n-button size="small" :disabled="items.length === 0" @click="selectAllPage">
+        <a-button size="small" :disabled="items.length === 0" @click="selectAllPage">
           全选本页
-        </n-button>
-        <n-button size="small" :disabled="selectedCount === 0" @click="clearSelection">
+        </a-button>
+        <a-button size="small" :disabled="selectedCount === 0" @click="clearSelection">
           清空选择
-        </n-button>
-        <n-button
+        </a-button>
+        <a-button
           size="small"
-          type="primary"
-          secondary
+          type="secondary"
           :loading="unmarking"
           :disabled="selectedCount === 0"
           @click="unmarkSelected"
         >
           标记为非 AI
-        </n-button>
-        <n-popconfirm @positive-click="deleteSelected">
-          <template #trigger>
-            <n-button
-              size="small"
-              type="error"
-              secondary
-              :loading="props.deleting"
-              :disabled="selectedCount === 0"
-            >
-              移入垃圾桶
-            </n-button>
-          </template>
-          确定将选中的 {{ selectedCount }} 个疑似 AI 素材移入垃圾桶？可在「垃圾桶」中恢复。
-        </n-popconfirm>
+        </a-button>
+        <a-popconfirm
+          :content="`确定将选中的 ${selectedCount} 个疑似 AI 素材移入垃圾桶？可在「垃圾桶」中恢复。`"
+          @ok="deleteSelected"
+        >
+          <a-button
+            size="small"
+            type="primary"
+            status="danger"
+            :loading="props.deleting"
+            :disabled="selectedCount === 0"
+          >
+            移入垃圾桶
+          </a-button>
+        </a-popconfirm>
       </div>
     </div>
 
@@ -173,11 +177,11 @@ function deleteSelected() {
 
     <!-- 分页 -->
     <div v-if="totalPages > 1" class="pagination-wrapper">
-      <n-pagination
-        v-model:page="page"
-        :page-count="totalPages"
+      <a-pagination
+        :total="total"
+        :current="page"
         :page-size="pageSize"
-        @update:page="load"
+        @change="onPageChange"
       />
     </div>
   </div>

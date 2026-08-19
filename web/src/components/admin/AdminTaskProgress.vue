@@ -8,15 +8,15 @@ defineProps<{ task: AdminTask | null }>()
 </script>
 
 <template>
-  <n-alert
+  <a-alert
     v-if="task && (task.status === 'pending' || task.status === 'running')"
     type="info"
     style="margin: 16px 0"
   >
-    <template #header>
+    <template #title>
       {{ TASK_TYPE_LABELS[task.type] || task.type }}任务 #{{ task.id }} 进行中
       <span v-if="task.total > 0">（{{ task.done }}/{{ task.total }}）</span>
     </template>
-    <n-progress type="line" :percentage="task.progress" style="margin-top: 8px" />
-  </n-alert>
+    <a-progress type="line" :percent="task.progress" style="margin-top: 8px" />
+  </a-alert>
 </template>

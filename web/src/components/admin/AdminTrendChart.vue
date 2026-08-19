@@ -40,26 +40,25 @@ watch(days, load)
 </script>
 
 <template>
-  <n-card title="素材新增趋势" size="small">
-    <template #header-extra>
-      <n-radio-group v-model:value="days" size="tiny">
-        <n-radio-button :value="7">近 7 天</n-radio-button>
-        <n-radio-button :value="30">近 30 天</n-radio-button>
-        <n-radio-button :value="90">近 90 天</n-radio-button>
-      </n-radio-group>
+  <a-card title="素材新增趋势" size="small">
+    <template #extra>
+      <a-radio-group v-model="days" type="button" size="mini">
+        <a-radio :value="7">近 7 天</a-radio>
+        <a-radio :value="30">近 30 天</a-radio>
+        <a-radio :value="90">近 90 天</a-radio>
+      </a-radio-group>
     </template>
 
     <div v-if="loading" class="trend-loading">
-      <n-spin size="small" />
+      <a-spin :size="16" />
     </div>
 
-    <div v-else-if="trend.length === 0" class="trend-empty">
-      近 {{ days }} 天暂无新增素材
-    </div>
+    <div v-else-if="trend.length === 0" class="trend-empty">近 {{ days }} 天暂无新增素材</div>
 
     <div v-else>
       <div class="trend-summary">
-        近 {{ days }} 天共新增 <strong>{{ totalCount }}</strong> 条，单日最高 <strong>{{ maxCount }}</strong> 条
+        近 {{ days }} 天共新增 <strong>{{ totalCount }}</strong> 条，单日最高
+        <strong>{{ maxCount }}</strong> 条
       </div>
       <div class="trend-chart">
         <div
@@ -76,7 +75,7 @@ watch(days, load)
         </div>
       </div>
     </div>
-  </n-card>
+  </a-card>
 </template>
 
 <style scoped>

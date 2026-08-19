@@ -1,15 +1,14 @@
 <script setup lang="ts">
 /** 手机图剪裁面板：扫描候选（只读预览）→ 手动勾选确认 → 执行裁剪 → 自动入队向量回填。 */
 
-import { ref, computed, watch } from 'vue'
+import { reactive, ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import axios from 'axios'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
 
-const message = useMessage()
 const router = useRouter()
 
 /** 从请求异常中提取后端 detail 文案（非 Axios 错误返回空串） */
@@ -29,6 +28,9 @@ const cropBottom = ref(5)
 /** 单次最多返回候选数 */
 const limit = ref(200)
 
+/** a-form 表单模型（Arco 表单要求绑定 model；本面板无校验规则，仅提供上下文） */
+const formModel = reactive({ mode, cropTop, cropBottom, limit })
+
 const scanning = ref(false)
 const cropping = ref(false)
 
@@ -47,13 +49,12 @@ interface CropCandidate {
   created_at: string | null
 }
 
-/** 置信度展示文案与标签类型 */
-const CONFIDENCE_LABELS: Record<string, { text: string; type: 'success' | 'warning' | 'default' }> =
-  {
-    high: { text: '高置信', type: 'success' },
-    medium: { text: '中置信', type: 'warning' },
-    low: { text: '低置信', type: 'default' },
-  }
+/** 置信度展示文案与标签颜色（Arco Tag 使用 color 预设色，无 type 语义色） */
+const CONFIDENCE_LABELS: Record<string, { text: string; color: 'green' | 'orange' | 'gray' }> = {
+  high: { text: '高置信', color: 'green' },
+  medium: { text: '中置信', color: 'orange' },
+  low: { text: '低置信', color: 'gray' },
+}
 
 /** 候选网格与勾选状态 */
 const candidates = ref<CropCandidate[]>([])
@@ -106,14 +107,14 @@ async function handleDupKeepCrop() {
     })
     const normalized = normalizeApplyResult(data)
     mergeApplyResult(normalized, dup.id)
-    message.success(
+    Message.success(
       `已保留裁剪结果（素材 ${dup.id.slice(0, 8)}…），重复素材 ${dup.dup_id.slice(0, 8)}… 已物理删除`,
     )
     if (normalized.duplicates.length > 0) {
-      message.info(`裁剪后又发现 ${normalized.duplicates.length} 组内容重复，请继续对比决策`)
+      Message.info(`裁剪后又发现 ${normalized.duplicates.length} 组内容重复，请继续对比决策`)
     }
   } catch (e: unknown) {
-    message.error(errorDetail(e) || '处理失败')
+    Message.error(errorDetail(e) || '处理失败')
   } finally {
     dupProcessing.value = false
     dupQueue.value = dupQueue.value.filter((d) => d.id !== dup.id)
@@ -129,7 +130,7 @@ function handleDupSkip() {
     result.value.duplicates = result.value.duplicates.filter((d) => d.id !== dup.id)
   }
   dupQueue.value = dupQueue.value.filter((d) => d.id !== dup.id)
-  message.info(`已保留原图，跳过裁剪（素材 ${dup.id.slice(0, 8)}…）`)
+  Message.info(`已保留原图，跳过裁剪（素材 ${dup.id.slice(0, 8)}…）`)
   finishDupQueue()
 }
 
@@ -158,11 +159,11 @@ function finishDupQueue() {
   const r = result.value
   if (!r) return
   if (r.processed > 0) {
-    message.success(`重复对比处理完成：成功裁剪 ${r.processed} 张，已入队向量回填`)
+    Message.success(`重复对比处理完成：成功裁剪 ${r.processed} 张，已入队向量回填`)
     // 已处理的素材不再出现在候选列表
     handleScan()
   } else if (r.skipped.length > 0 || r.duplicates.length > 0) {
-    message.warning(`裁剪完成：成功 0 张（跳过 ${r.skipped.length} 张）`)
+    Message.warning(`裁剪完成：成功 0 张（跳过 ${r.skipped.length} 张）`)
   }
 }
 
@@ -244,12 +245,12 @@ async function handleScan() {
     candidates.value = data.items
     checkedIds.value = defaultCheckedIds(data.items)
     if (data.items.length === 0) {
-      message.info(
+      Message.info(
         data.total === 0 ? '没有可裁剪的竖屏截图素材' : `候选超过上限，仅显示前 ${limit.value} 张`,
       )
     }
   } catch (e: unknown) {
-    message.error(errorDetail(e) || '扫描失败')
+    Message.error(errorDetail(e) || '扫描失败')
   } finally {
     scanning.value = false
   }
@@ -275,7 +276,7 @@ function toggleAll() {
 /** 确认裁剪：仅处理勾选的素材，成功后自动入队向量回填 */
 async function handleApply() {
   if (checkedCount.value === 0) {
-    message.warning('请先勾选要裁剪的素材')
+    Message.warning('请先勾选要裁剪的素材')
     return
   }
   cropping.value = true
@@ -302,17 +303,17 @@ async function handleApply() {
       return
     }
     if (result.value.processed > 0) {
-      message.success(`裁剪完成：成功 ${result.value.processed} 张，已入队向量回填`)
+      Message.success(`裁剪完成：成功 ${result.value.processed} 张，已入队向量回填`)
       // 裁剪成功后刷新候选：已处理的素材不再出现在候选列表
       await handleScan()
     } else if (result.value.skipped.length > 0) {
-      message.warning(
+      Message.warning(
         `裁剪完成：成功 0 张（${result.value.skipped.length} 张跳过），可在下方跳过明细中逐条「定位」`,
       )
     }
   } catch (e: unknown) {
     console.error('[手机图剪裁] apply 请求失败', e)
-    message.error(errorDetail(e) || '裁剪失败')
+    Message.error(errorDetail(e) || '裁剪失败')
   } finally {
     cropping.value = false
   }
@@ -337,7 +338,7 @@ function timeLabel(c: { created_at: string | null }): string {
 </script>
 
 <template>
-  <n-card title="手机图剪裁" size="small" style="margin-bottom: 24px">
+  <a-card title="手机图剪裁" size="small" style="margin-bottom: 24px">
     <p style="color: #999; font-size: 12px; margin: 0 0 12px">
       扫描手动上传素材中的手机全屏截图（仅「手动上传 + 竖屏 高/宽 ≥ 1.75」），
       <b>人工勾选确认后</b>执行裁剪：裁掉顶部状态栏、底部导航栏等多余区域。 原图自动备份到
@@ -345,62 +346,68 @@ function timeLabel(c: { created_at: string | null }): string {
       标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图。
     </p>
 
-    <n-form label-placement="left" label-width="110" size="small" style="max-width: 560px">
-      <n-form-item label="裁剪模式">
-        <n-radio-group v-model:value="mode">
-          <n-radio-button value="auto">自动检测黑边（推荐）</n-radio-button>
-          <n-radio-button value="ratio">固定比例</n-radio-button>
-        </n-radio-group>
-      </n-form-item>
+    <a-form
+      :model="formModel"
+      label-align="left"
+      :label-col-style="{ width: '110px' }"
+      size="small"
+      style="max-width: 560px"
+    >
+      <a-form-item label="裁剪模式">
+        <a-radio-group v-model="mode" type="button" size="small">
+          <a-radio value="auto">自动检测黑边（推荐）</a-radio>
+          <a-radio value="ratio">固定比例</a-radio>
+        </a-radio-group>
+      </a-form-item>
 
       <template v-if="mode === 'ratio'">
-        <n-form-item label="顶部裁剪">
-          <n-input-number v-model:value="cropTop" :min="0" :max="40" style="width: 120px">
+        <a-form-item label="顶部裁剪">
+          <a-input-number v-model="cropTop" :min="0" :max="40" style="width: 120px">
             <template #suffix>%</template>
-          </n-input-number>
+          </a-input-number>
           <span style="margin-left: 8px; font-size: 12px; color: #999">默认 3%（状态栏区域）</span>
-        </n-form-item>
-        <n-form-item label="底部裁剪">
-          <n-input-number v-model:value="cropBottom" :min="0" :max="40" style="width: 120px">
+        </a-form-item>
+        <a-form-item label="底部裁剪">
+          <a-input-number v-model="cropBottom" :min="0" :max="40" style="width: 120px">
             <template #suffix>%</template>
-          </n-input-number>
+          </a-input-number>
           <span style="margin-left: 8px; font-size: 12px; color: #999"
             >默认 5%（底部导航栏/手势条）</span
           >
-        </n-form-item>
+        </a-form-item>
       </template>
 
-      <n-form-item label="数量上限">
-        <n-input-number v-model:value="limit" :min="1" :max="1000" style="width: 120px" />
+      <a-form-item label="数量上限">
+        <a-input-number v-model="limit" :min="1" :max="1000" style="width: 120px" />
         <span style="margin-left: 8px; font-size: 12px; color: #999">单次最多扫描的候选数</span>
-      </n-form-item>
+      </a-form-item>
 
-      <n-form-item label=" ">
-        <n-button type="primary" :loading="scanning" @click="handleScan">
+      <a-form-item label=" ">
+        <a-button type="primary" :loading="scanning" @click="handleScan">
           {{ scanning ? '扫描中...' : '扫描候选' }}
-        </n-button>
+        </a-button>
         <span style="margin-left: 12px; font-size: 12px; color: #999">
           默认勾选高/中置信候选，低置信需人工复核
         </span>
-      </n-form-item>
-    </n-form>
+      </a-form-item>
+    </a-form>
 
     <!-- 候选网格：人工勾选确认 -->
     <template v-if="candidates.length > 0">
-      <n-divider style="margin: 12px 0" />
+      <a-divider style="margin: 12px 0" />
       <div
         style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap"
       >
-        <n-checkbox
-          :checked="checkedCount > 0 && checkedCount === candidates.length"
+        <a-checkbox
+          :model-value="checkedCount > 0 && checkedCount === candidates.length"
           :indeterminate="checkedCount > 0 && checkedCount < candidates.length"
-          @update:checked="toggleAll"
+          @change="toggleAll"
         />
         <span style="font-size: 13px">
           已勾选 <b>{{ checkedCount }}</b> / {{ candidates.length }} 张（共扫描
           {{ scannedTotal }} 张候选）
         </span>
-        <n-button
+        <a-button
           size="small"
           type="primary"
           :loading="cropping"
@@ -408,7 +415,7 @@ function timeLabel(c: { created_at: string | null }): string {
           @click="handleApply"
         >
           {{ cropping ? '裁剪中...' : `确认裁剪（${checkedCount} 张）` }}
-        </n-button>
+        </a-button>
       </div>
 
       <div class="crop-grid">
@@ -432,16 +439,16 @@ function timeLabel(c: { created_at: string | null }): string {
             </span>
             <span class="crop-line">
               裁剪 {{ cropLabel(c) }}
-              <n-tag
-                size="tiny"
+              <a-tag
+                size="small"
                 :bordered="false"
-                :type="CONFIDENCE_LABELS[c.confidence]?.type || 'default'"
+                :color="CONFIDENCE_LABELS[c.confidence]?.color || 'gray'"
                 style="margin-left: 4px"
               >
                 {{ CONFIDENCE_LABELS[c.confidence]?.text || c.confidence }}
-              </n-tag>
+              </a-tag>
             </span>
-            <n-tag v-if="!c.auto_ok" size="tiny" type="error" :bordered="false">{{ c.note }}</n-tag>
+            <a-tag v-if="!c.auto_ok" size="small" color="red" :bordered="false">{{ c.note }}</a-tag>
           </div>
           <div class="crop-check" :class="{ checked: checkedIds.has(c.id) }">
             <span v-if="checkedIds.has(c.id)">✓</span>
@@ -455,8 +462,8 @@ function timeLabel(c: { created_at: string | null }): string {
 
     <!-- 执行结果 -->
     <template v-if="result">
-      <n-divider style="margin: 12px 0" />
-      <n-alert :type="result.processed > 0 ? 'success' : 'warning'" style="margin-bottom: 8px">
+      <a-divider style="margin: 12px 0" />
+      <a-alert :type="result.processed > 0 ? 'success' : 'warning'" style="margin-bottom: 8px">
         成功裁剪 {{ result.processed }} 张 · 跳过 {{ result.skipped.length }} 张
         <template v-if="result.duplicates.length > 0">
           · 内容重复 {{ result.duplicates.length }} 组待处理
@@ -467,21 +474,21 @@ function timeLabel(c: { created_at: string | null }): string {
         <template v-if="result.backup_dir">
           · 原图备份：<code>{{ result.backup_dir }}</code>
         </template>
-      </n-alert>
+      </a-alert>
 
-      <n-collapse
+      <a-collapse
         v-if="result.skipped.length > 0"
-        v-model:expanded-names="skippedExpanded"
+        v-model:active-key="skippedExpanded"
         style="margin-top: 8px"
       >
-        <n-collapse-item title="跳过明细" name="skipped">
+        <a-collapse-item key="skipped">
           <template #header>
             <span>跳过明细（{{ result.skipped.length }} 张）· 点击「定位」在素材库中精确跳转</span>
           </template>
           <div v-if="result.skipped.length > 1" style="margin-bottom: 8px">
-            <n-button size="tiny" type="primary" @click="locateAllSkipped">
+            <a-button size="mini" type="primary" @click="locateAllSkipped">
               全部在素材库中定位（{{ result.skipped.length }} 张）
-            </n-button>
+            </a-button>
           </div>
           <ul class="skip-list">
             <li v-for="s in result.skipped" :key="s.id" class="skip-item">
@@ -494,24 +501,21 @@ function timeLabel(c: { created_at: string | null }): string {
                   >
                 </div>
               </div>
-              <n-button size="tiny" type="primary" quaternary @click="locateSkipped(s)">
-                定位
-              </n-button>
+              <a-button size="mini" type="text" @click="locateSkipped(s)">定位</a-button>
             </li>
           </ul>
-        </n-collapse-item>
-      </n-collapse>
+        </a-collapse-item>
+      </a-collapse>
     </template>
 
     <!-- 大图预览弹窗 -->
-    <n-modal
-      v-model:show="previewOpen"
-      preset="card"
+    <a-modal
+      v-model:visible="previewOpen"
       title="预览原图"
-      style="width: 90%; max-width: 420px"
-      :bordered="false"
-      @close="closePreview"
-      @mask-click="closePreview"
+      width="90%"
+      :modal-style="{ maxWidth: '420px' }"
+      :footer="false"
+      @cancel="closePreview"
     >
       <div
         style="
@@ -524,20 +528,19 @@ function timeLabel(c: { created_at: string | null }): string {
       >
         <img v-if="previewUrl" :src="previewUrl" alt="预览" style="width: 100%; display: block" />
       </div>
-    </n-modal>
+    </a-modal>
 
     <!-- 内容重复对比弹窗：左右并排展示裁剪结果与库中重复素材，删除权交给用户 -->
-    <n-modal
-      v-model:show="showDupModal"
-      preset="card"
+    <a-modal
+      v-model:visible="showDupModal"
       title="裁剪结果与库中素材内容重复"
-      style="width: 92%; max-width: 860px"
-      :bordered="false"
-      :show-close="!dupProcessing"
+      width="92%"
+      :modal-style="{ maxWidth: '860px' }"
+      :footer="false"
+      :closable="!dupProcessing"
       :mask-closable="!dupProcessing"
-      :close-on-esc="!dupProcessing"
-      @close="handleDupModalClose"
-      @mask-click="handleDupModalClose"
+      :esc-to-close="!dupProcessing"
+      @cancel="handleDupModalClose"
     >
       <template v-if="currentDup">
         <div class="dup-step">
@@ -569,19 +572,23 @@ function timeLabel(c: { created_at: string | null }): string {
           两张图内容相同，请选择保留哪一张（删除为<strong>永久删除</strong>，不可恢复）：
         </p>
         <div class="dup-actions">
-          <n-popconfirm :disabled="dupProcessing" @positive-click="handleDupKeepCrop">
-            <template #trigger>
-              <n-button type="primary" :loading="dupProcessing">
-                保留裁剪结果，删除库中重复素材
-              </n-button>
+          <a-popconfirm
+            :disabled="dupProcessing"
+            :ok-loading="dupProcessing"
+            @ok="handleDupKeepCrop"
+          >
+            <template #content>
+              将<strong>永久删除</strong>库中重复素材（文件与记录不可恢复），确定继续？
             </template>
-            将<strong>永久删除</strong>库中重复素材（文件与记录不可恢复），确定继续？
-          </n-popconfirm>
-          <n-button :disabled="dupProcessing" @click="handleDupSkip">保留原图，跳过裁剪</n-button>
+            <a-button type="primary" :loading="dupProcessing" :disabled="dupProcessing">
+              保留裁剪结果，删除库中重复素材
+            </a-button>
+          </a-popconfirm>
+          <a-button :disabled="dupProcessing" @click="handleDupSkip">保留原图，跳过裁剪</a-button>
         </div>
       </template>
-    </n-modal>
-  </n-card>
+    </a-modal>
+  </a-card>
 </template>
 
 <style scoped>

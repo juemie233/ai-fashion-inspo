@@ -19,14 +19,15 @@ const SERVICE_LABELS: Record<ServiceKey, string> = {
   worker: 'worker',
 }
 
+/** 状态 → 中文文案 + Arco 预设色（Arco Tag 的 color 仅支持预设色名） */
 const STATUS_MAP: Record<
   string,
-  { label: string; type: 'success' | 'error' | 'warning' | 'info' }
+  { label: string; color: 'green' | 'red' | 'orange' | 'arcoblue' }
 > = {
-  ok: { label: '正常', type: 'success' },
-  down: { label: '停止', type: 'error' },
-  unhealthy: { label: '异常', type: 'warning' },
-  starting: { label: '启动中', type: 'info' },
+  ok: { label: '正常', color: 'green' },
+  down: { label: '停止', color: 'red' },
+  unhealthy: { label: '异常', color: 'orange' },
+  starting: { label: '启动中', color: 'arcoblue' },
 }
 
 const services = computed(() => health.value?.services ?? null)
@@ -36,7 +37,7 @@ const logs = computed(() => health.value?.resources.logs ?? null)
 const alerts = computed(() => health.value?.alerts ?? [])
 
 function statusTag(status: string) {
-  return STATUS_MAP[status] ?? { label: status, type: 'info' as const }
+  return STATUS_MAP[status] ?? { label: status, color: 'arcoblue' as const }
 }
 
 async function load() {
@@ -61,18 +62,18 @@ onUnmounted(() => {
 
 <template>
   <div class="service-health">
-    <n-alert v-if="error" type="error" style="margin-bottom: 12px">
+    <a-alert v-if="error" type="error" style="margin-bottom: 12px">
       {{ error }}
-    </n-alert>
+    </a-alert>
 
     <!-- 服务状态 -->
     <div class="svc-grid">
-      <n-card v-for="key in SERVICE_KEYS" :key="key" size="small">
+      <a-card v-for="key in SERVICE_KEYS" :key="key" size="small">
         <div class="svc-row">
           <span class="svc-label">{{ SERVICE_LABELS[key] }}</span>
-          <n-tag :type="statusTag(services?.[key]?.status ?? 'down').type" size="small" round>
+          <a-tag :color="statusTag(services?.[key]?.status ?? 'down').color" size="small">
             {{ statusTag(services?.[key]?.status ?? 'down').label }}
-          </n-tag>
+          </a-tag>
         </div>
         <div class="svc-meta">
           <span v-if="key === 'frontend' && services?.frontend?.latency_ms != null">
@@ -84,27 +85,27 @@ onUnmounted(() => {
           <span v-else-if="services?.[key]?.pid">PID {{ services[key].pid }}</span>
           <span v-else>-</span>
         </div>
-      </n-card>
+      </a-card>
     </div>
 
     <!-- 资源占用 -->
-    <n-card v-if="health" size="small" title="资源占用" style="margin-top: 16px">
+    <a-card v-if="health" size="small" title="资源占用" style="margin-top: 16px">
       <div v-if="disk" class="res-row">
         <span class="res-label">磁盘</span>
-        <n-progress
+        <a-progress
           type="line"
-          :percentage="Math.min(100, disk.used_percent)"
-          :status="disk.used_percent >= 90 ? 'error' : 'success'"
+          :percent="Math.min(100, disk.used_percent)"
+          :status="disk.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
         <span class="res-value">{{ disk.used_percent.toFixed(1) }}%</span>
       </div>
       <div v-if="memory" class="res-row">
         <span class="res-label">内存</span>
-        <n-progress
+        <a-progress
           type="line"
-          :percentage="Math.min(100, memory.used_percent)"
-          :status="memory.used_percent >= 90 ? 'error' : 'success'"
+          :percent="Math.min(100, memory.used_percent)"
+          :status="memory.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
         <span class="res-value">{{ memory.used_percent.toFixed(1) }}%</span>
@@ -113,13 +114,13 @@ onUnmounted(() => {
         <span class="res-label">日志</span>
         <span class="res-value">{{ formatSize(logs.total_bytes) }}</span>
       </div>
-    </n-card>
+    </a-card>
 
     <!-- 告警 -->
     <div v-if="alerts.length" class="alerts">
-      <n-alert v-for="(a, i) in alerts" :key="i" type="warning" style="margin-top: 12px">
+      <a-alert v-for="(a, i) in alerts" :key="i" type="warning" style="margin-top: 12px">
         {{ a }}
-      </n-alert>
+      </a-alert>
     </div>
   </div>
 </template>

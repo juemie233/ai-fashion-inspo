@@ -17,34 +17,52 @@ const emit = defineEmits<{
 
 <template>
   <div class="stat-cards" style="margin-top: 16px">
-    <n-card size="small" :bordered="true" style="border-color: #f0a020">
-      <n-statistic label="⚠️ 无标签素材" :value="stats?.untagged_count ?? '-'" />
-      <template #footer>
-        <n-popconfirm @positive-click="emit('deleteUntagged')">
-          <template #trigger>
-            <n-button size="tiny" type="warning" ghost :loading="clearingUntagged"
-              :disabled="!stats?.untagged_count">
-              批量删除
-            </n-button>
-          </template>
-          确定删除所有无标签素材？此操作不可撤销。
-        </n-popconfirm>
+    <a-card size="small" :bordered="true" style="border-color: #f0a020">
+      <a-statistic v-if="stats" title="⚠️ 无标签素材" :value="stats.untagged_count" />
+      <div v-else class="stat-custom">
+        <span class="stat-custom-title">⚠️ 无标签素材</span>
+        <span class="stat-custom-value">-</span>
+      </div>
+      <template #actions>
+        <a-popconfirm
+          content="确定删除所有无标签素材？此操作不可撤销。"
+          @ok="emit('deleteUntagged')"
+        >
+          <a-button
+            size="mini"
+            type="outline"
+            status="warning"
+            :loading="clearingUntagged"
+            :disabled="!stats?.untagged_count"
+          >
+            批量删除
+          </a-button>
+        </a-popconfirm>
       </template>
-    </n-card>
-    <n-card size="small" :bordered="true" style="border-color: #d03050">
-      <n-statistic label="❌ 分析失败素材" :value="stats?.analysis_failed_count ?? '-'" />
-      <template #footer>
-        <n-popconfirm @positive-click="emit('deleteFailed')">
-          <template #trigger>
-            <n-button size="tiny" type="error" ghost :loading="clearingFailed"
-              :disabled="!stats?.analysis_failed_count">
-              批量删除
-            </n-button>
-          </template>
-          确定删除所有分析失败的素材？此操作不可撤销。
-        </n-popconfirm>
+    </a-card>
+    <a-card size="small" :bordered="true" style="border-color: #d03050">
+      <a-statistic v-if="stats" title="❌ 分析失败素材" :value="stats.analysis_failed_count" />
+      <div v-else class="stat-custom">
+        <span class="stat-custom-title">❌ 分析失败素材</span>
+        <span class="stat-custom-value">-</span>
+      </div>
+      <template #actions>
+        <a-popconfirm
+          content="确定删除所有分析失败的素材？此操作不可撤销。"
+          @ok="emit('deleteFailed')"
+        >
+          <a-button
+            size="mini"
+            type="outline"
+            status="danger"
+            :loading="clearingFailed"
+            :disabled="!stats?.analysis_failed_count"
+          >
+            批量删除
+          </a-button>
+        </a-popconfirm>
       </template>
-    </n-card>
+    </a-card>
   </div>
 </template>
 
@@ -55,5 +73,23 @@ const emit = defineEmits<{
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 24px;
+}
+
+/* 自定义统计项（Arco Statistic 的 value 不接受字符串，空状态用文本展示） */
+.stat-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-custom-title {
+  font-size: 14px;
+  color: var(--color-text-2);
+}
+
+.stat-custom-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--color-text-1);
 }
 </style>

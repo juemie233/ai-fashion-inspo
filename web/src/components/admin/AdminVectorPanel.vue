@@ -8,12 +8,11 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { useAdminTask } from '@/composables/useAdminTask'
 import type { VectorStats } from '@/types/admin'
 
-const message = useMessage()
 const stats = ref<VectorStats | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
@@ -23,12 +22,19 @@ const { adminTask, startAdminPolling, stopAdminPolling, resumeAdminTask } = useA
 
 /** 任务是否进行中（pending/running）——进行中按钮必须禁用，防止重复创建任务 */
 const taskRunning = computed(
-  () => adminTask.value !== null && (adminTask.value.status === 'pending' || adminTask.value.status === 'running'),
+  () =>
+    adminTask.value !== null &&
+    (adminTask.value.status === 'pending' || adminTask.value.status === 'running'),
 )
 
 /** 按钮禁用条件：提交中、任务进行中、无缺失、lancedb 不可用 */
 const backfillDisabled = computed(
-  () => submitting.value || taskRunning.value || stats.value === null || stats.value.missing === 0 || !stats.value.lancedb_available,
+  () =>
+    submitting.value ||
+    taskRunning.value ||
+    stats.value === null ||
+    stats.value.missing === 0 ||
+    !stats.value.lancedb_available,
 )
 
 async function loadStats() {
@@ -37,7 +43,7 @@ async function loadStats() {
     const { data } = await apiClient.get<VectorStats>('/admin/vector-stats')
     stats.value = data
   } catch {
-    message.error('加载向量化状态失败')
+    Message.error('加载向量化状态失败')
   } finally {
     loading.value = false
   }
@@ -48,20 +54,22 @@ async function handleBackfill() {
   if (!stats.value || stats.value.missing === 0 || taskRunning.value) return
   submitting.value = true
   try {
-    const { data } = await apiClient.post<{ task_id: number | null; count: number; message: string }>(
-      '/admin/vector-backfill',
-    )
+    const { data } = await apiClient.post<{
+      task_id: number | null
+      count: number
+      message: string
+    }>('/admin/vector-backfill')
     if (data.task_id) {
-      message.success(`已创建向量回填任务 #${data.task_id}（${data.count} 个素材）`)
+      Message.success(`已创建向量回填任务 #${data.task_id}（${data.count} 个素材）`)
       startAdminPolling(data.task_id, () => {
-        message.success('向量回填完成，素材打开将不再卡顿')
+        Message.success('向量回填完成，素材打开将不再卡顿')
         loadStats()
       })
     } else {
-      message.info(data.message || '没有缺失向量的素材')
+      Message.info(data.message || '没有缺失向量的素材')
     }
   } catch (e) {
-    message.error(getApiErrorMessage(e, '创建向量回填任务失败'))
+    Message.error(getApiErrorMessage(e, '创建向量回填任务失败'))
   } finally {
     submitting.value = false
   }
@@ -71,7 +79,7 @@ onMounted(async () => {
   await loadStats()
   // 刷新后恢复进行中的向量回填任务轮询（任务完成后按钮自动恢复可用）
   resumeAdminTask(() => {
-    message.success('向量回填完成')
+    Message.success('向量回填完成')
     loadStats()
   })
 })
@@ -83,53 +91,66 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <n-card size="small" title="向量管理" class="vector-panel">
-    <n-spin :show="loading">
+  <a-card size="small" title="向量管理" class="vector-panel">
+    <a-spin :loading="loading">
       <template v-if="stats">
         <!-- 向量化状态统计 -->
         <div class="stat-grid">
-          <n-statistic label="图片素材" :value="stats.total_inspirations" />
-          <n-statistic label="已入库图像向量" :value="stats.image_vectors" />
-          <n-statistic
-            label="缺失（待向量化）"
+          <a-statistic title="图片素材" :value="stats.total_inspirations" />
+          <a-statistic title="已入库图像向量" :value="stats.image_vectors" />
+          <a-statistic
+            title="缺失（待向量化）"
             :value="stats.missing"
             :value-style="{ color: stats.missing > 0 ? '#e8804f' : undefined }"
           />
-          <n-statistic label="文本向量" :value="stats.text_vectors" />
+          <a-statistic title="文本向量" :value="stats.text_vectors" />
         </div>
 
-        <n-alert v-if="!stats.lancedb_available" type="warning" style="margin-top: 12px">
-          未检测到 lancedb，向量功能不可用。请先执行：<n-text code>pip install lancedb</n-text>
-        </n-alert>
+        <a-alert v-if="!stats.lancedb_available" type="warning" style="margin-top: 12px">
+          未检测到 lancedb，向量功能不可用。请先执行：<a-typography-text code
+            >pip install lancedb</a-typography-text
+          >
+        </a-alert>
 
-        <n-alert v-else type="info" style="margin-top: 12px">
+        <a-alert v-else type="info" style="margin-top: 12px">
           打开素材详情卡顿的常见原因：素材尚未生成图像向量，相似推荐会现场做 CLIP 编码。
           点击下方按钮为缺失向量的素材批量回填（异步任务，可到「任务管理」查看进度）。
-        </n-alert>
+        </a-alert>
 
         <!-- 一键回填 -->
-        <n-space style="margin-top: 16px" align="center">
-          <n-button
+        <a-space style="margin-top: 16px" align="center">
+          <a-button
             type="primary"
             :loading="submitting"
             :disabled="backfillDisabled"
             @click="handleBackfill"
           >
-            {{ taskRunning ? '向量化任务进行中…' : stats.missing > 0 ? `一键向量化缺失素材（${stats.missing} 个）` : '一键向量化缺失素材' }}
-          </n-button>
-          <n-button secondary :disabled="taskRunning" @click="loadStats">刷新统计</n-button>
-        </n-space>
+            {{
+              taskRunning
+                ? '向量化任务进行中…'
+                : stats.missing > 0
+                  ? `一键向量化缺失素材（${stats.missing} 个）`
+                  : '一键向量化缺失素材'
+            }}
+          </a-button>
+          <a-button type="secondary" :disabled="taskRunning" @click="loadStats">刷新统计</a-button>
+        </a-space>
 
         <!-- 任务进度 -->
-        <div v-if="adminTask && (adminTask.status === 'pending' || adminTask.status === 'running')" style="margin-top: 16px">
-          <n-text depth="2" style="display: block; margin-bottom: 6px">
-            向量回填任务 #{{ adminTask.id }}：{{ adminTask.progress }}%（{{ adminTask.done }}/{{ adminTask.total }}）
-          </n-text>
-          <n-progress type="line" :percentage="adminTask.progress" :height="8" />
+        <div
+          v-if="adminTask && (adminTask.status === 'pending' || adminTask.status === 'running')"
+          style="margin-top: 16px"
+        >
+          <a-typography-text type="secondary" style="display: block; margin-bottom: 6px">
+            向量回填任务 #{{ adminTask.id }}：{{ adminTask.progress }}%（{{ adminTask.done }}/{{
+              adminTask.total
+            }}）
+          </a-typography-text>
+          <a-progress type="line" :percent="adminTask.progress" :stroke-width="8" />
         </div>
       </template>
-    </n-spin>
-  </n-card>
+    </a-spin>
+  </a-card>
 </template>
 
 <style scoped>

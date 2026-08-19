@@ -8,7 +8,7 @@
  */
 
 import { computed, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import {
   fetchNearDuplicates,
@@ -26,8 +26,6 @@ const emit = defineEmits<{
   /** 「删除两张」已提交批量删除任务，父组件接管进度轮询（任务完成后刷新统计） */
   (e: 'task-started', taskId: number, message: string): void
 }>()
-
-const message = useMessage()
 
 const threshold = ref(32)
 const limit = ref(1000)
@@ -67,13 +65,9 @@ const currentGroup = computed<NearDuplicateGroup | null>(
   () => dupGroups.value[dupIndex.value] ?? null,
 )
 /** 当前组左边素材（组内第一张，评分最高者） */
-const leftFile = computed<NearDuplicateFile | null>(
-  () => currentGroup.value?.files[0] ?? null,
-)
+const leftFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[0] ?? null)
 /** 当前组右边素材（组内第二张） */
-const rightFile = computed<NearDuplicateFile | null>(
-  () => currentGroup.value?.files[1] ?? null,
-)
+const rightFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[1] ?? null)
 /** 已决定删除数量 */
 const deleteCount = computed(() => deletingIds.value.size)
 
@@ -91,7 +85,7 @@ async function scan() {
   try {
     result.value = await fetchNearDuplicates(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
-      message.success(
+      Message.success(
         `已随机扫描 ${result.value.scanned} 张，未发现近似重复（可再次扫描覆盖其他素材）`,
       )
     } else {
@@ -99,7 +93,7 @@ async function scan() {
       openDupModal()
     }
   } catch {
-    message.error('近似重复扫描失败')
+    Message.error('近似重复扫描失败')
   } finally {
     scanning.value = false
   }
@@ -191,7 +185,7 @@ async function deleteBoth() {
       }
     }
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除两张失败'))
+    Message.error(getApiErrorMessage(e, '删除两张失败'))
   } finally {
     deletingBoth.value = false
   }
@@ -200,22 +194,21 @@ async function deleteBoth() {
 /** 提交删除：把全部待删 ID 交给父组件（批量删除任务 + 审计留痕） */
 async function confirmSubmit() {
   if (deletingIds.value.size === 0) {
-    message.info('没有需要删除的素材')
+    Message.info('没有需要删除的素材')
     closeDupModal()
     return
   }
   submitting.value = true
   try {
     emit('delete-selected', [...deletingIds.value])
-    message.success(`已提交删除任务：${deletingIds.value.size} 个冗余素材（后台物理删除）`)
+    Message.success(`已提交删除任务：${deletingIds.value.size} 个冗余素材（后台物理删除）`)
     showDupModal.value = false
     dupGroups.value = []
     // 提交后重新扫描，刷新当前列表状态
     await scan()
   } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
-      ?.detail
-    message.error(detail || '提交删除失败')
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    Message.error(detail || '提交删除失败')
   } finally {
     submitting.value = false
   }
@@ -241,80 +234,84 @@ function favoriteLabel(f: NearDuplicateFile): string {
 </script>
 
 <template>
-  <n-card title="近似重复检测" size="small" style="margin-bottom: 24px">
-    <template #header-extra>
-      <n-space align="center">
-        <n-select
-          v-model:value="threshold"
+  <a-card title="近似重复检测" size="small" style="margin-bottom: 24px">
+    <template #extra>
+      <a-space align="center">
+        <a-select
+          v-model="threshold"
           :options="thresholdOptions"
           size="small"
           style="width: 180px"
         />
-        <n-select v-model:value="limit" :options="limitOptions" size="small" style="width: 130px" />
-        <n-button size="small" type="primary" :loading="scanning" @click="scan"
-          >扫描近似重复</n-button
+        <a-select v-model="limit" :options="limitOptions" size="small" style="width: 130px" />
+        <a-button size="small" type="primary" :loading="scanning" @click="scan"
+          >扫描近似重复</a-button
         >
-      </n-space>
+      </a-space>
     </template>
 
-    <p style="color: #999; font-size: 12px; margin: 0 0 12px">
+    <p style="color: var(--color-text-3); font-size: 12px; margin: 0 0 12px">
       基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印），
       <b>全库随机抽样</b>，每次扫描覆盖不同素材；哈希首次计算后自动缓存，
       之后扫描秒级返回。仅列出候选，需人工确认后删除。
     </p>
 
     <!-- 扫描结果汇总 -->
-    <n-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
+    <a-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
       已随机扫描 {{ result.scanned }} / {{ result.total }} 张，未发现近似重复
       <template v-if="result.truncated">（仅覆盖本次抽样，可再次扫描发现其他素材）</template>
-    </n-alert>
+    </a-alert>
 
     <template v-if="groups.length > 0">
-      <p style="color: #f0a020; margin-bottom: 12px">
+      <p style="color: rgb(var(--warning-6)); margin-bottom: 12px">
         ⚠️ 发现 {{ groups.length }} 组近似重复，本次随机扫描 {{ result?.scanned }} /
         {{ result?.total }} 张
         <template v-if="result?.truncated">（存在未覆盖素材，可再次扫描）</template>
       </p>
 
       <!-- 哈希缓存进度 -->
-      <n-alert
+      <a-alert
         v-if="result && result.cached_total < result.total"
         type="info"
-        :bordered="false"
         style="margin-bottom: 12px"
       >
         感知哈希缓存 {{ result.cached_total }} / {{ result.total }} 张（本次新增
         {{ result.backfilled }} 张），缓存完备后扫描无需重新解码图片
-      </n-alert>
+      </a-alert>
 
-      <n-space align="center" style="margin-bottom: 12px">
-        <n-button type="primary" @click="openDupModal">开始逐组对比处理（{{ groups.length }} 组）</n-button>
-        <n-text depth="3" style="font-size: 12px">
+      <a-space align="center" style="margin-bottom: 12px">
+        <a-button type="primary" @click="openDupModal"
+          >开始逐组对比处理（{{ groups.length }} 组）</a-button
+        >
+        <a-typography-text type="secondary" style="font-size: 12px">
           弹窗中左右对比每组素材，选择保留哪一张；冗余素材将物理删除（不可恢复）
-        </n-text>
-      </n-space>
+        </a-typography-text>
+      </a-space>
     </template>
 
-    <n-empty v-else-if="!scanning" description="点击「扫描近似重复」开始检测" size="small" />
-  </n-card>
+    <a-empty v-else-if="!scanning" description="点击「扫描近似重复」开始检测" />
+  </a-card>
 
   <!-- 近似重复逐组对比弹窗：左右并排大图 + 保留决策 -->
-  <n-modal
-    v-model:show="showDupModal"
-    preset="card"
+  <a-modal
+    v-model:visible="showDupModal"
     title="近似重复素材对比"
-    style="width: 92%; max-width: 1200px"
-    :bordered="false"
-    :show-close="!submitting"
+    :width="'92%'"
+    :modal-style="{ maxWidth: '1200px' }"
+    :closable="!submitting"
     :mask-closable="false"
-    :close-on-esc="false"
-    @close="closeDupModal"
+    :esc-to-close="false"
+    :footer="false"
+    @cancel="closeDupModal"
   >
     <!-- 逐组决策视图 -->
     <template v-if="!allDone && currentGroup">
       <div class="dup-step">
-        第 {{ dupIndex + 1 }} / {{ dupGroups.length }} 组 · 本组共 {{ currentGroup?.files.length ?? 0 }} 张近似重复
-        <n-tag size="tiny" type="info" style="margin-left: 8px">建议保留：{{ keeperHint }}</n-tag>
+        第 {{ dupIndex + 1 }} / {{ dupGroups.length }} 组 · 本组共
+        {{ currentGroup?.files.length ?? 0 }} 张近似重复
+        <a-tag color="arcoblue" size="small" style="margin-left: 8px"
+          >建议保留：{{ keeperHint }}</a-tag
+        >
       </div>
 
       <div class="dup-compare">
@@ -355,27 +352,27 @@ function favoriteLabel(f: NearDuplicateFile): string {
       </p>
 
       <div class="dup-actions">
-        <n-button type="primary" :disabled="deletingBoth" @click="keepLeft">保留左边</n-button>
-        <n-button type="warning" :disabled="deletingBoth" @click="keepRight">保留右边</n-button>
-        <n-button quaternary :disabled="deletingBoth" @click="skipGroup"
-          >都保留（跳过本组）</n-button
+        <a-button type="primary" :disabled="deletingBoth" @click="keepLeft">保留左边</a-button>
+        <a-button type="primary" status="warning" :disabled="deletingBoth" @click="keepRight"
+          >保留右边</a-button
         >
-        <n-popconfirm
-          :positive-button-props="{ type: 'error' }"
-          @positive-click="deleteBoth"
+        <a-button type="text" :disabled="deletingBoth" @click="skipGroup"
+          >都保留（跳过本组）</a-button
         >
-          <template #trigger>
-            <n-button
-              type="error"
-              ghost
-              :loading="deletingBoth"
-              :disabled="!leftFile || !rightFile"
-            >
-              删除两张
-            </n-button>
-          </template>
-          确定要同时删除这两张素材吗？将物理删除（文件与记录不可恢复），确认后自动切换到下一组。
-        </n-popconfirm>
+        <a-popconfirm
+          :ok-button-props="{ type: 'primary', status: 'danger' }"
+          content="确定要同时删除这两张素材吗？将物理删除（文件与记录不可恢复），确认后自动切换到下一组。"
+          @ok="deleteBoth"
+        >
+          <a-button
+            type="outline"
+            status="danger"
+            :loading="deletingBoth"
+            :disabled="!leftFile || !rightFile"
+          >
+            删除两张
+          </a-button>
+        </a-popconfirm>
       </div>
 
       <div class="dup-progress">已决定删除 {{ deleteCount }} 个素材</div>
@@ -383,41 +380,46 @@ function favoriteLabel(f: NearDuplicateFile): string {
 
     <!-- 全部处理完：提交确认视图 -->
     <template v-else-if="allDone">
-      <n-result status="info" title="对比完成" style="margin: 8px 0">
-        <template #description>
+      <a-result status="info" title="对比完成" style="margin: 8px 0">
+        <template #subtitle>
           共处理 {{ dupGroups.length }} 组近似重复，决定删除
           <b>{{ deleteCount }}</b> 个冗余素材（物理删除，不可恢复）
         </template>
-        <template #footer>
-          <n-space justify="center">
-            <n-popconfirm @positive-click="confirmSubmit">
-              <template #trigger>
-                <n-button type="error" :loading="submitting" :disabled="deleteCount === 0">
-                  确认提交删除（{{ deleteCount }} 个）
-                </n-button>
-              </template>
-              将物理删除 {{ deleteCount }} 个素材（文件与记录不可恢复），确定继续？
-            </n-popconfirm>
-            <n-button :disabled="submitting" @click="closeDupModal">关闭（不删除）</n-button>
-          </n-space>
+        <template #extra>
+          <a-space style="display: flex; justify-content: center; width: 100%">
+            <a-popconfirm
+              content="将物理删除 {{ deleteCount }} 个素材（文件与记录不可恢复），确定继续？"
+              @ok="confirmSubmit"
+            >
+              <a-button
+                type="primary"
+                status="danger"
+                :loading="submitting"
+                :disabled="deleteCount === 0"
+              >
+                确认提交删除（{{ deleteCount }} 个）
+              </a-button>
+            </a-popconfirm>
+            <a-button :disabled="submitting" @click="closeDupModal">关闭（不删除）</a-button>
+          </a-space>
         </template>
-      </n-result>
+      </a-result>
     </template>
 
     <!-- 候选队列已清空（可能部分素材已通过「删除两张」提交删除） -->
     <template v-else-if="!allDone && dupGroups.length === 0">
-      <n-result status="success" title="暂无更多近似重复素材" style="margin: 8px 0">
-        <template #description>
+      <a-result status="success" title="暂无更多近似重复素材" style="margin: 8px 0">
+        <template #subtitle>
           当前候选列表中的近似重复素材已全部处理完毕，可关闭弹窗或重新扫描发现其他素材
         </template>
-        <template #footer>
-          <n-space justify="center">
-            <n-button @click="closeDupModal">完成</n-button>
-          </n-space>
+        <template #extra>
+          <a-space style="display: flex; justify-content: center; width: 100%">
+            <a-button @click="closeDupModal">完成</a-button>
+          </a-space>
         </template>
-      </n-result>
+      </a-result>
     </template>
-  </n-modal>
+  </a-modal>
 </template>
 
 <style scoped>
@@ -425,7 +427,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 .dup-step {
   margin-bottom: 12px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-1);
 }
 
 /* 左右对比布局：等宽两列 + 中间 VS */
@@ -446,7 +448,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
   text-align: center;
   font-size: 13px;
   font-weight: 600;
-  color: #555;
+  color: var(--color-text-2);
   margin-bottom: 8px;
 }
 
@@ -473,14 +475,14 @@ function favoriteLabel(f: NearDuplicateFile): string {
   margin-top: 8px;
   text-align: center;
   font-size: 12px;
-  color: #888;
+  color: var(--color-text-3);
   line-height: 1.6;
 }
 
 .dup-vs {
   align-self: center;
   font-weight: 800;
-  color: #bbb;
+  color: var(--color-text-4);
   font-size: 18px;
   padding: 0 2px;
   flex-shrink: 0;
@@ -489,7 +491,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 .dup-hint {
   margin: 12px 0 0;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-3);
   line-height: 1.8;
 }
 
@@ -503,7 +505,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
 .dup-progress {
   text-align: center;
   font-size: 12px;
-  color: #888;
+  color: var(--color-text-3);
   margin-top: 12px;
 }
 </style>

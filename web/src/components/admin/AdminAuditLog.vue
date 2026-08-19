@@ -2,11 +2,10 @@
 /** 操作审计日志：展示破坏性批量操作的留痕（时间/动作/数量/释放空间）。 */
 
 import { onMounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message, type TableColumnData } from '@arco-design/web-vue'
 import { fetchAuditLogs, type AuditLogItem } from '@/api/admin'
 import { formatSize } from '@/utils/format'
 
-const message = useMessage()
 const items = ref<AuditLogItem[]>([])
 const loading = ref(false)
 
@@ -30,12 +29,39 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleString('zh-CN')
 }
 
+/** 审计日志表格列定义（Arco render 的 record 转 AuditLogItem） */
+const logColumns: TableColumnData[] = [
+  {
+    title: '时间',
+    dataIndex: 'created_at',
+    render: ({ record }) => formatTime((record as AuditLogItem).created_at),
+  },
+  {
+    title: '操作',
+    dataIndex: 'action',
+    render: ({ record }) => actionLabel((record as AuditLogItem).action),
+  },
+  { title: '数量', dataIndex: 'count', align: 'right' },
+  {
+    title: '释放空间',
+    dataIndex: 'freed_bytes',
+    align: 'right',
+    render: ({ record }) =>
+      (record as AuditLogItem).freed_bytes > 0 ? formatSize((record as AuditLogItem).freed_bytes) : '-',
+  },
+  {
+    title: '说明',
+    dataIndex: 'detail',
+    render: ({ record }) => (record as AuditLogItem).detail || '-',
+  },
+]
+
 async function load() {
   loading.value = true
   try {
     items.value = await fetchAuditLogs(50)
   } catch {
-    message.error('加载审计日志失败')
+    Message.error('加载审计日志失败')
     items.value = []
   } finally {
     loading.value = false
@@ -46,36 +72,22 @@ onMounted(load)
 </script>
 
 <template>
-  <n-card title="操作审计日志" size="small">
-    <template #header-extra>
-      <n-button size="tiny" quaternary @click="load">刷新</n-button>
+  <a-card title="操作审计日志" size="small">
+    <template #extra>
+      <a-button size="mini" type="text" @click="load">刷新</a-button>
     </template>
-    <n-spin :show="loading">
-      <n-table v-if="items.length > 0" size="small" :bordered="false">
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>操作</th>
-            <th style="text-align: right">数量</th>
-            <th style="text-align: right">释放空间</th>
-            <th>说明</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="it in items" :key="it.id">
-            <td>{{ formatTime(it.created_at) }}</td>
-            <td>{{ actionLabel(it.action) }}</td>
-            <td style="text-align: right">{{ it.count }}</td>
-            <td style="text-align: right">
-              {{ it.freed_bytes > 0 ? formatSize(it.freed_bytes) : '-' }}
-            </td>
-            <td>{{ it.detail || '-' }}</td>
-          </tr>
-        </tbody>
-      </n-table>
+    <a-spin :loading="loading">
+      <a-table
+        v-if="items.length > 0"
+        :columns="logColumns"
+        :data="items"
+        size="small"
+        :bordered="false"
+        :pagination="false"
+      />
       <div v-else-if="!loading" class="audit-empty">暂无破坏性操作记录</div>
-    </n-spin>
-  </n-card>
+    </a-spin>
+  </a-card>
 </template>
 
 <style scoped>
