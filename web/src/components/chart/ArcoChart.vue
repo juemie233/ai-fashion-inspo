@@ -5,7 +5,7 @@
  * 使用方只需提供 option，无需关心 echarts 生命周期。
  */
 
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
@@ -48,14 +48,22 @@ function ensureChart(): echarts.ECharts | null {
   return chart
 }
 
-/** 渲染（notMerge 清空旧数据，避免筛选变化后残留上一份序列） */
+/** 渲染（notMerge 清空旧数据，避免筛选变化后残留上一份序列）。
+ * 需在 nextTick 后执行：option 从 null → 对象时 v-show 容器刚变为可见，
+ * 立即 init 会拿到 0 尺寸容器导致图表不可见。 */
 function render() {
   if (!props.option) return
   const c = ensureChart()
   if (c) c.setOption(props.option, true)
 }
 
-watch(() => props.option, render, { deep: true })
+watch(
+  () => props.option,
+  () => {
+    nextTick(render)
+  },
+  { deep: true },
+)
 
 function handleResize() {
   chart?.resize()
@@ -75,9 +83,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="arco-chart" :style="{ height: `${height}px` }">
-    <a-spin :loading="loading" style="width: 100%; height: 100%">
-      <div v-if="option" ref="chartEl" class="arco-chart-canvas" />
-      <a-empty v-else :description="emptyText" />
+    <a-spin :loading="loading" class="arco-chart-spin">
+      <!-- v-show 而非 v-if：容器常驻 DOM，保证 init 时实例可绑定且后续尺寸正常 -->
+      <div v-show="option" ref="chartEl" class="arco-chart-canvas" />
+      <a-empty v-if="!option" :description="emptyText" />
     </a-spin>
   </div>
 </template>
@@ -85,6 +94,12 @@ onBeforeUnmount(() => {
 <style scoped>
 .arco-chart {
   width: 100%;
+}
+/* a-spin 内部 children 容器高度塌陷：显式撑满，canvas 的 height:100% 才能生效 */
+.arco-chart-spin,
+.arco-chart :deep(.arco-spin-children) {
+  width: 100%;
+  height: 100%;
 }
 .arco-chart-canvas {
   width: 100%;
