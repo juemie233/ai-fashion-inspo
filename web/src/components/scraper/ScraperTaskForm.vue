@@ -56,12 +56,6 @@ const keywordOptions = computed(() =>
   historyKeywords.value.map((k) => ({ label: k, value: k })),
 )
 
-/** 手动输入创建关键词：支持逗号/顿号分隔一次创建多个（粘贴「连衣裙,半身裙」场景） */
-function onCreateKeyword(label: string) {
-  const parts = label.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
-  return parts.length > 0 ? parts : null
-}
-
 // 新建任务表单草稿：初始化时从 localStorage 恢复，为空则用默认值
 const hasFormDraft = localStorage.getItem('scraper-form-draft') !== null
 const savedFormDraft = localStorage.getItem('scraper-form-draft')
@@ -165,19 +159,17 @@ async function createTask() {
       <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
     </n-form-item>
     <n-form-item label="关键词">
-      <n-select
-        v-model:value="formKeywords"
+      <a-select
+        v-model="formKeywords"
         multiple
-        filterable
-        tag
+        allow-create
         :options="keywordOptions"
-        :on-create="onCreateKeyword"
-        placeholder="选择历史关键词，或输入新关键词后回车（逗号/顿号分隔可一次多个）"
-        style="width:100%"
+        placeholder="选择历史关键词，或输入新关键词后回车（逗号/顿号分隔提交时自动拆分）"
+        style="width: 100%"
       />
       <template #feedback>
         <span style="font-size:12px;color:#999">
-          可直接选择最近采集使用过的关键词，也可手动输入新关键词
+          可直接选择最近采集使用过的关键词，也可手动输入新关键词后回车创建（回车即添加）
         </span>
       </template>
     </n-form-item>

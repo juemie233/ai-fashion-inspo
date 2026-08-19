@@ -55,12 +55,6 @@ export function useScraperSchedules() {
     historyKeywords.value.map((k) => ({ label: k, value: k })),
   )
 
-  /** 手动输入创建关键词：支持逗号/顿号分隔一次创建多个 */
-  function onCreateKeyword(label: string) {
-    const parts = label.split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
-    return parts.length > 0 ? parts : null
-  }
-
   /** 加载历史关键词：拉取最近 200 条已完成任务提取去重关键词 */
   async function loadHistoryKeywords() {
     try {
@@ -171,7 +165,7 @@ export function useScraperSchedules() {
   return {
     schedules, loading, creating, updatingId, togglingId, runningId, deletingId,
     formPlatform, formKeywords, formMaxCount, formSortMode, formInterval, formEnabled,
-    historyKeywords, keywordOptions, onCreateKeyword,
+    historyKeywords, keywordOptions,
     loadSchedules, createSchedule, updateSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
   }
 }

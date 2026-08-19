@@ -10,7 +10,7 @@ import type { ScraperSchedule } from '@/types/scraper'
 const {
   schedules, creating, updatingId, togglingId, runningId, deletingId,
   formPlatform, formKeywords, formMaxCount, formSortMode, formInterval, formEnabled,
-  keywordOptions, onCreateKeyword,
+  keywordOptions,
   loadSchedules, createSchedule, updateSchedule, toggleSchedule, runNow, deleteSchedule, formatDate,
 } = useScraperSchedules()
 
@@ -86,19 +86,17 @@ function getColumns() {
         <n-select v-model:value="formPlatform" :options="[{label:'小红书',value:'xiaohongshu'},{label:'抖音',value:'douyin'}]" style="width:180px" />
       </n-form-item>
       <n-form-item label="关键词">
-        <n-select
-          v-model:value="formKeywords"
+        <a-select
+          v-model="formKeywords"
           multiple
-          filterable
-          tag
+          allow-create
           :options="keywordOptions"
-          :on-create="onCreateKeyword"
-          placeholder="选择轮换关键词，或输入新关键词后回车"
+          placeholder="选择轮换关键词，或输入新关键词后回车（回车即添加）"
           style="width:100%"
         />
         <template #feedback>
           <span style="font-size:12px;color:#999">
-            每次执行时轮流使用其中一个关键词（可多选，可选历史关键词或手动输入）
+            每次执行时轮流使用其中一个关键词（可多选，可选历史关键词或手动输入后回车创建）
           </span>
         </template>
       </n-form-item>
@@ -134,14 +132,12 @@ function getColumns() {
         <span>{{ PLATFORM_LABELS[editPlatform] || editPlatform }}</span>
       </n-form-item>
       <n-form-item label="关键词">
-        <n-select
-          v-model:value="editKeywords"
+        <a-select
+          v-model="editKeywords"
           multiple
-          filterable
-          tag
+          allow-create
           :options="keywordOptions"
-          :on-create="onCreateKeyword"
-          placeholder="选择轮换关键词，或输入新关键词后回车"
+          placeholder="选择轮换关键词，或输入新关键词后回车（回车即添加）"
           style="width:100%"
         />
       </n-form-item>
