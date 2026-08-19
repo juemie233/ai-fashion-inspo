@@ -7,7 +7,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { onBeforeUnmount, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { Message } from '@arco-design/web-vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import type { PersonBrief } from '@shared/types/person'
 
@@ -24,7 +24,6 @@ const emit = defineEmits<{
   (e: 'change', persons: PersonBrief[]): void
 }>()
 
-const message = useMessage()
 /** 按种类选择 API */
 const api = props.kind === 'blogger' ? bloggersApi : modelsApi
 const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
@@ -80,11 +79,11 @@ async function addPerson(person: PersonBrief) {
     const added = result.added ?? []
     const merged = [...props.persons, ...added]
     emit('change', merged)
-    message.success(`已关联「${person.name}」`)
+    Message.success(`已关联「${person.name}」`)
     keyword.value = ''
     suggestions.value = []
   } catch (e) {
-    message.error(getApiErrorMessage(e, '关联失败'))
+    Message.error(getApiErrorMessage(e, '关联失败'))
   }
 }
 
@@ -93,9 +92,9 @@ async function removePerson(person: PersonBrief) {
   try {
     await api.unlink(props.inspirationId, person.id)
     emit('change', props.persons.filter((p) => p.id !== person.id))
-    message.success(`已解除「${person.name}」`)
+    Message.success(`已解除「${person.name}」`)
   } catch (e) {
-    message.error(getApiErrorMessage(e, '解除关联失败'))
+    Message.error(getApiErrorMessage(e, '解除关联失败'))
   }
 }
 </script>
@@ -115,19 +114,19 @@ async function removePerson(person: PersonBrief) {
         <span class="linked-remove" title="解除关联" @click="removePerson(p)">×</span>
       </span>
     </div>
-    <n-text v-else depth="3" style="font-size: 13px">尚未关联{{ kindLabel }}</n-text>
+    <a-typography-text v-else type="secondary" style="font-size: 13px">尚未关联{{ kindLabel }}</a-typography-text>
 
     <!-- 搜索添加 -->
     <div class="search-row">
-      <n-auto-complete
-        v-model:value="keyword"
-        :options="suggestions.map((s) => ({ label: s.name, value: String(s.id) }))"
+      <a-auto-complete
+        v-model="keyword"
+        :data="suggestions.map((s) => ({ label: s.name, value: String(s.id) }))"
         :loading="searching"
         :placeholder="`输入${kindLabel}名称搜索并添加`"
         size="small"
-        clearable
+        allow-clear
         style="flex: 1"
-        @update:value="onSearch"
+        @input="onSearch"
         @select="(val: string | number) => { const p = suggestions.find((s) => String(s.id) === String(val)); if (p) addPerson(p) }"
       />
     </div>

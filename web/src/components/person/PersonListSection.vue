@@ -5,12 +5,13 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  useMessage,
-  NButton,
-  NPopconfirm,
-  type DataTableColumns,
-  type UploadCustomRequestOptions,
-} from 'naive-ui'
+  Message,
+  Button,
+  Popconfirm,
+  type TableColumnData,
+  type RequestOption,
+  type UploadRequest,
+} from '@arco-design/web-vue'
 import * as echarts from 'echarts/core'
 import { BarChart } from 'echarts/charts'
 import { TooltipComponent, GridComponent } from 'echarts/components'
@@ -28,7 +29,6 @@ const props = defineProps<{ kind: PersonKind }>()
 
 const router = useRouter()
 const route = useRoute()
-const message = useMessage()
 const store = usePersonsStore(props.kind)
 
 const kindLabel = computed(() => (props.kind === 'blogger' ? '穿搭博主' : '职业模特'))
@@ -111,7 +111,7 @@ async function handleDelete(person: Person) {
   try {
     const api = props.kind === 'blogger' ? bloggersApi : modelsApi
     await api.remove(person.id)
-    message.success(`已删除${kindLabel.value}「${person.name}」`)
+    Message.success(`已删除${kindLabel.value}「${person.name}」`)
     // 保持当前页：本页仅剩一条且不在第一页时回退一页，否则按当前页刷新
     if (store.persons.length === 1 && store.page > 1) {
       await store.setPage(store.page - 1)
@@ -119,7 +119,7 @@ async function handleDelete(person: Person) {
       await store.load(true)
     }
   } catch (e) {
-    message.error(getApiErrorMessage(e, '删除失败'))
+    Message.error(getApiErrorMessage(e, '删除失败'))
   }
 }
 
@@ -145,34 +145,37 @@ function onSearchKeydown(e: KeyboardEvent) {
 const importResult = ref<PersonImportResult | null>(null)
 const importError = ref('')
 
-/** 处理 CSV 导入（n-upload custom-request）：上传 → 展示结果 → 刷新列表 */
-async function handleImportCsv(options: UploadCustomRequestOptions) {
-  const file = options.file.file
-  importResult.value = null
-  importError.value = ''
-  if (!file) {
-    message.error('未获取到文件，请重新选择')
-    return
-  }
-  try {
-    const result = await importBloggersCsv(file as File)
-    importResult.value = result
-    if (result.failed > 0) {
-      message.warning(
-        `导入完成：新增 ${result.imported}，更新 ${result.updated}，失败 ${result.failed}`,
-      )
-    } else {
-      message.success(`导入成功：新增 ${result.imported}，更新 ${result.updated}`)
+/** 处理 CSV 导入（a-upload custom-request）：上传 → 展示结果 → 刷新列表。
+ * Arco 的 custom-request 期望同步返回（UploadRequest），异步逻辑用内部 IIFE 包裹。 */
+function handleImportCsv(options: RequestOption): UploadRequest {
+  void (async () => {
+    const file = options.fileItem.file
+    importResult.value = null
+    importError.value = ''
+    if (!file) {
+      Message.error('未获取到文件，请重新选择')
+      return
     }
-    await store.reload()
-  } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    importError.value = detail || '导入失败'
-    message.error(importError.value)
-  } finally {
-    // 完成后清空文件列表，允许重复选择同一文件
-    options.onFinish?.()
-  }
+    try {
+      const result = await importBloggersCsv(file)
+      importResult.value = result
+      if (result.failed > 0) {
+        Message.warning(
+          `导入完成：新增 ${result.imported}，更新 ${result.updated}，失败 ${result.failed}`,
+        )
+      } else {
+        Message.success(`导入成功：新增 ${result.imported}，更新 ${result.updated}`)
+      }
+      await store.reload()
+      options.onSuccess?.()
+    } catch (e) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      importError.value = detail || '导入失败'
+      Message.error(importError.value)
+      options.onError?.(e as Error)
+    }
+  })()
+  return {}
 }
 
 /** 关闭导入结果提示 */
@@ -183,13 +186,14 @@ function dismissImportResult() {
 
 // ── 表格列定义 ──
 
-const columns: DataTableColumns<Person> = [
+const columns: TableColumnData[] = [
   {
     title: '人物',
-    key: 'name',
+    dataIndex: 'name',
     minWidth: 160,
-    render: (row) =>
-      h('div', { class: 'person-cell' }, [
+    render: ({ record }) => {
+      const row = record as Person
+      return h('div', { class: 'person-cell' }, [
         h('span', { class: 'person-avatar' }, [
           // 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 通用人形占位
           row.face_thumb_path || row.avatar_path
@@ -202,81 +206,92 @@ const columns: DataTableColumns<Person> = [
               h('span', { class: 'avatar-fallback', 'aria-hidden': 'true' }, '👤'),
         ]),
         h('span', { class: 'person-name' }, row.name),
-      ]),
+      ])
+    },
   },
   {
     title: '平台',
-    key: 'platform',
+    dataIndex: 'platform',
     width: 90,
-    render: (row) => PERSON_PLATFORM_LABELS[row.platform] || row.platform,
+    render: ({ record }) => {
+      const row = record as Person
+      return PERSON_PLATFORM_LABELS[row.platform] || row.platform
+    },
   },
   {
     title: '小红书ID',
-    key: 'xhs_id',
+    dataIndex: 'xhs_id',
     width: 130,
-    render: (row) => row.xhs_id || '-',
+    render: ({ record }) => (record as Person).xhs_id || '-',
   },
   {
     title: 'IP属地',
-    key: 'ip_location',
+    dataIndex: 'ip_location',
     width: 90,
-    render: (row) => row.ip_location || '-',
+    render: ({ record }) => (record as Person).ip_location || '-',
   },
   {
     title: '素材数',
-    key: 'inspiration_count',
+    dataIndex: 'inspiration_count',
     width: 80,
-    render: (row) => h('span', String(row.inspiration_count ?? 0)),
+    render: ({ record }) => h('span', String((record as Person).inspiration_count ?? 0)),
   },
   // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
   ...(props.kind === 'model'
-    ? [
+    ? ([
         {
           title: '来源',
-          key: 'source',
+          dataIndex: 'source',
           width: 90,
-          render: (row: Person) => SOURCE_LABELS[row.source || 'manual'] || row.source,
+          render: ({ record }) => {
+            const row = record as Person
+            return SOURCE_LABELS[row.source || 'manual'] || row.source
+          },
         },
-      ]
+      ] as TableColumnData[])
     : []),
   {
     title: '创建时间',
-    key: 'created_at',
+    dataIndex: 'created_at',
     width: 160,
-    render: (row) => (row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'),
+    render: ({ record }) => {
+      const row = record as Person
+      return row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'
+    },
   },
   {
     title: '操作',
-    key: 'actions',
+    dataIndex: 'actions',
     width: 230,
     // 固定在表格右侧：列宽合计超过容器宽度出现横向滚动时，操作按钮始终可见
     fixed: 'right',
-    // 注：render 中必须使用导入的组件对象（NButton/NPopconfirm），
+    // 注：render 中必须使用导入的组件对象（Button/Popconfirm），
     // 字符串组件名在 render 场景可能解析失败导致按钮不渲染
-    render: (row) =>
-      h('div', { class: 'row-actions' }, [
+    render: ({ record }) => {
+      const row = record as Person
+      return h('div', { class: 'row-actions' }, [
         h(
-          NButton,
-          { size: 'small', quaternary: true, onClick: () => goDetail(row) },
+          Button,
+          { size: 'small', type: 'text', onClick: () => goDetail(row) },
           { default: () => '详情' },
         ),
         h(
-          NButton,
-          { size: 'small', secondary: true, onClick: () => openEdit(row) },
+          Button,
+          { size: 'small', type: 'secondary', onClick: () => openEdit(row) },
           { default: () => '编辑' },
         ),
         h(
-          NPopconfirm,
+          Popconfirm,
           {
-            onPositiveClick: () => handleDelete(row),
+            content: `确定删除${kindLabel.value}「${row.name}」？仅当该人物无关联素材时才可删除。`,
+            onOk: () => handleDelete(row),
           },
           {
-            trigger: () => h(NButton, { size: 'small', type: 'error' }, { default: () => '删除' }),
-            default: () =>
-              `确定删除${kindLabel.value}「${row.name}」？仅当该人物无关联素材时才可删除。`,
+            default: () => h(Button, { size: 'small', status: 'danger' }, { default: () => '删除' }),
           },
         ),
-      ]),
+      ])
+    },
   },
 ]
 
@@ -359,14 +374,14 @@ onBeforeUnmount(() => {
   <div>
     <!-- 导入结果提示（成功统计 + 失败明细，仅博主有导入入口） -->
     <template v-if="kind === 'blogger'">
-      <n-alert
+      <a-alert
         v-if="importResult"
         :type="importResult.failed > 0 ? 'warning' : 'success'"
         closable
         style="margin-bottom: 12px"
         @close="dismissImportResult"
       >
-        <template #header>
+        <template #title>
           导入完成：新增 {{ importResult.imported }} 人，更新 {{ importResult.updated }} 人
           <template v-if="importResult.skipped > 0"
             >，跳过 {{ importResult.skipped }} 行（CSV 内重复）</template
@@ -381,16 +396,16 @@ onBeforeUnmount(() => {
           >
             第 {{ err.row }} 行{{ err.nickname ? `（${err.nickname}）` : '' }}：{{ err.reason }}
           </div>
-          <n-text
+          <a-typography-text
             v-if="importResult.errors.length < importResult.failed"
-            depth="3"
+            type="secondary"
             style="font-size: 12px"
           >
             … 共 {{ importResult.failed }} 行失败，仅展示前 {{ importResult.errors.length }} 条
-          </n-text>
+          </a-typography-text>
         </div>
-      </n-alert>
-      <n-alert
+      </a-alert>
+      <a-alert
         v-if="importError"
         type="error"
         closable
@@ -398,107 +413,107 @@ onBeforeUnmount(() => {
         @close="dismissImportResult"
       >
         {{ importError }}
-      </n-alert>
+      </a-alert>
     </template>
 
     <!-- 筛选区：搜索/平台/排序 -->
-    <n-card size="small" class="filter-card">
-      <n-space :size="12" wrap>
-        <n-input
-          v-model:value="store.search"
+    <a-card size="small" class="filter-card">
+      <a-space :size="12" wrap>
+        <a-input
+          v-model="store.search"
           placeholder="搜索昵称 / 小红书号 / IP属地"
-          clearable
+          allow-clear
           style="width: 240px"
           @keydown="onSearchKeydown"
           @clear="store.reload()"
         >
           <template #prefix>🔍</template>
-        </n-input>
-        <n-select
-          v-model:value="store.platform"
+        </a-input>
+        <a-select
+          v-model="store.platform"
           :options="platformOptions"
           style="width: 140px"
-          @update:value="store.reload()"
+          @change="store.reload()"
         />
-        <n-select
-          v-model:value="store.sort"
+        <a-select
+          v-model="store.sort"
           :options="sortOptions"
           style="width: 140px"
-          @update:value="store.reload()"
+          @change="store.reload()"
         />
-      </n-space>
-    </n-card>
+      </a-space>
+    </a-card>
 
     <!-- 博主 IP 属地统计（横向柱状图，展示地域分布） -->
-    <n-card v-if="kind === 'blogger'" size="small" class="ipstats-card" title="博主 IP 属地统计">
-      <template #header-extra>
-        <n-text depth="3" style="font-size: 12px">共 {{ ipStats?.total ?? 0 }} 位博主</n-text>
+    <a-card v-if="kind === 'blogger'" size="small" class="ipstats-card" title="博主 IP 属地统计">
+      <template #extra>
+        <a-typography-text type="secondary" style="font-size: 12px">共 {{ ipStats?.total ?? 0 }} 位博主</a-typography-text>
       </template>
       <div ref="ipChartRef" class="ipstats-chart" />
-      <n-empty
+      <a-empty
         v-if="ipStats && ipStats.items.length === 0"
         description="暂无 IP 属地数据（可从 CSV 导入或编辑博主补充）"
-        size="small"
         style="padding: 24px 0"
       />
-    </n-card>
+    </a-card>
 
     <!-- 人物表格 -->
-    <n-card size="small" class="table-card">
+    <a-card size="small" class="table-card">
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px">
-        <n-upload
+        <a-upload
           v-if="kind === 'blogger'"
           accept=".csv,text/csv"
           :show-file-list="false"
           :custom-request="handleImportCsv"
-          :max="1"
+          :limit="1"
         >
-          <n-button secondary>导入 CSV</n-button>
-        </n-upload>
-        <n-button type="primary" @click="openCreate">新建{{ kindLabel }}</n-button>
+          <a-button type="secondary">导入 CSV</a-button>
+        </a-upload>
+        <a-button type="primary" @click="openCreate">新建{{ kindLabel }}</a-button>
       </div>
 
-      <n-data-table
+      <a-table
         :columns="columns"
         :data="store.persons"
         :loading="store.loading"
-        :row-key="(row: Person) => row.id"
+        :row-key="(row: Person) => String(row.id)"
         :bordered="false"
-        :scroll-x="1160"
+        :scroll="{ x: 1160 }"
+        :pagination="false"
       />
 
-      <n-pagination
+      <a-pagination
         v-if="store.total > store.size"
         style="margin-top: 16px; justify-content: flex-end"
-        :page="store.page"
+        :current="store.page"
         :page-size="store.size"
-        :item-count="store.total"
-        @update:page="store.setPage"
+        :total="store.total"
+        @change="(p: number) => store.setPage(p)"
       />
 
-      <n-empty
+      <a-empty
         v-if="!store.loading && !store.error && store.persons.length === 0"
         :description="`还没有${kindLabel}，点击右上角「新建${kindLabel}」开始录入`"
         style="margin-top: 48px"
       />
 
       <!-- 加载失败错误态：与「无数据」明确区分 -->
-      <n-result
+      <a-result
         v-if="store.error"
         status="error"
         title="加载失败"
         :description="store.error"
         style="margin-top: 32px"
       >
-        <template #footer>
-          <n-button @click="store.reload()">重试</n-button>
+        <template #extra>
+          <a-button @click="store.reload()">重试</a-button>
         </template>
-      </n-result>
-    </n-card>
+      </a-result>
+    </a-card>
 
     <!-- 热门排行 -->
-    <n-card v-if="topPersons.length > 0" size="small" class="top-card" title="热门人物（按素材数）">
-      <n-space vertical :size="8">
+    <a-card v-if="topPersons.length > 0" size="small" class="top-card" title="热门人物（按素材数）">
+      <a-space direction="vertical" :size="8">
         <div v-for="(p, i) in topPersons" :key="p.id" class="top-row" @click="goDetail(p)">
           <span class="top-rank">{{ i + 1 }}</span>
           <span class="top-avatar">
@@ -512,8 +527,8 @@ onBeforeUnmount(() => {
           <span class="top-name">{{ p.name }}</span>
           <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
         </div>
-      </n-space>
-    </n-card>
+      </a-space>
+    </a-card>
 
     <!-- 新建/编辑对话框：新建后回第一页（新数据按最新排序在最前）；
          编辑后保持当前页刷新，不再跳回第一页 -->
