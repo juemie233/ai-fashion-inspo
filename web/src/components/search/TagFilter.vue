@@ -18,11 +18,11 @@ const filteredGroups = computed(() => {
   const q = filterSearch.value.trim().toLowerCase()
   if (!q) return tagsStore.groups
   return tagsStore.groups
-    .map(g => ({
+    .map((g) => ({
       ...g,
-      tags: g.tags.filter(t => t.name.toLowerCase().includes(q)),
+      tags: g.tags.filter((t) => t.name.toLowerCase().includes(q)),
     }))
-    .filter(g => g.tags.length > 0)
+    .filter((g) => g.tags.length > 0)
 })
 
 function isSelected(name: string): boolean {
@@ -75,20 +75,20 @@ const combineDesc = computed(() => {
   <div class="tag-filter">
     <!-- 组合模式切换 -->
     <div class="filter-header">
-      <n-radio-group v-model:value="tagsStore.combineMode" size="small">
-        <n-radio-button value="AND" title="素材必须同时包含所有已选标签">全部匹配 (AND)</n-radio-button>
-        <n-radio-button value="OR" title="素材包含任意一个已选标签即可">任意匹配 (OR)</n-radio-button>
-      </n-radio-group>
+      <a-radio-group v-model="tagsStore.combineMode" type="button" size="small">
+        <a-radio value="AND" title="素材必须同时包含所有已选标签">全部匹配 (AND)</a-radio>
+        <a-radio value="OR" title="素材包含任意一个已选标签即可">任意匹配 (OR)</a-radio>
+      </a-radio-group>
 
-      <n-button
+      <a-button
         v-if="tagsStore.selectedTags.size > 0 || tagsStore.excludedTags.size > 0"
         size="small"
-        text
-        type="warning"
+        type="text"
+        status="warning"
         @click="tagsStore.clearFilters()"
       >
         清除
-      </n-button>
+      </a-button>
     </div>
 
     <!-- AND/OR 逻辑描述 -->
@@ -98,67 +98,75 @@ const combineDesc = computed(() => {
 
     <!-- 已选标签预览 -->
     <div v-if="tagsStore.selectedTags.size > 0" class="active-filters">
-      <span style="font-size:11px;color:#999">包含:</span>
-      <n-tag
+      <span style="font-size: 11px; color: #999">包含:</span>
+      <a-tag
         v-for="name in [...tagsStore.selectedTags]"
         :key="'inc-' + name"
         closable
-        type="info"
+        color="arcoblue"
         size="small"
         @close="tagsStore.toggleTag(name)"
       >
         {{ name }}
-      </n-tag>
+      </a-tag>
     </div>
     <div v-if="tagsStore.excludedTags.size > 0" class="active-filters excluded">
-      <span style="font-size:11px;color:#999">排除:</span>
-      <n-tag
+      <span style="font-size: 11px; color: #999">排除:</span>
+      <a-tag
         v-for="name in [...tagsStore.excludedTags]"
         :key="'exc-' + name"
         closable
-        type="error"
+        color="red"
         size="small"
         @close="tagsStore.toggleExcludeTag(name)"
       >
         {{ name }}
-      </n-tag>
+      </a-tag>
     </div>
 
     <!-- 共现标签提示 -->
     <div v-if="cooccurrenceTags.length > 0" class="cooccurrence-box">
       <div class="cooccurrence-title">
         「{{ cooccurrenceFor }}」常与以下标签一起出现：
-        <n-button size="tiny" text @click="cooccurrenceTags = []; cooccurrenceFor = ''">✕</n-button>
+        <a-button
+          size="mini"
+          type="text"
+          @click="
+            cooccurrenceTags = []
+            cooccurrenceFor = ''
+          "
+          >✕</a-button
+        >
       </div>
       <div class="cooccurrence-chips">
-        <n-tag
+        <a-tag
           v-for="ct in cooccurrenceTags"
           :key="ct.name"
-          size="tiny"
-          type="success"
-          style="cursor:pointer"
+          size="small"
+          color="green"
+          style="cursor: pointer"
           @click="tagsStore.toggleTag(ct.name)"
         >
           + {{ ct.name }} ({{ ct.shared_count }})
-        </n-tag>
+        </a-tag>
       </div>
     </div>
 
     <!-- 面板内搜索 -->
-    <n-input
-      v-model:value="filterSearch"
+    <a-input
+      v-model="filterSearch"
       size="small"
       placeholder="在标签中搜索..."
-      clearable
-      style="margin-bottom:8px"
+      allow-clear
+      style="margin-bottom: 8px"
     />
 
     <!-- 标签分组列表 -->
-    <n-collapse>
-      <n-collapse-item
+    <a-collapse>
+      <a-collapse-item
         v-for="group in filteredGroups"
         :key="group.category"
-        :title="`${tagsStore.getCategoryLabel(group.category)} (${group.tags.length})`"
+        :header="`${tagsStore.getCategoryLabel(group.category)} (${group.tags.length})`"
       >
         <div class="tag-chips">
           <span
@@ -177,10 +185,10 @@ const combineDesc = computed(() => {
             <span class="usage">{{ tag.usage_count }}</span>
           </span>
         </div>
-      </n-collapse-item>
-    </n-collapse>
+      </a-collapse-item>
+    </a-collapse>
 
-    <n-spin v-if="tagsStore.loading" size="small" style="margin-top: 16px" />
+    <a-spin v-if="tagsStore.loading" :size="16" style="margin-top: 16px" />
   </div>
 </template>
 

@@ -2,8 +2,13 @@
 /** 素材卡片：瀑布流中的单个卡片，显示缩略图、标签和操作按钮。 */
 
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { NIcon } from 'naive-ui'
-import { Heart, HeartOutline, TrashOutline, EyeOutline, CheckmarkOutline } from '@vicons/ionicons5'
+import {
+  IconCheck,
+  IconDelete,
+  IconEye,
+  IconHeart,
+  IconHeartFill,
+} from '@arco-design/web-vue/es/icon'
 import { useRouter, useRoute } from 'vue-router'
 import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import CategoryTag from './CategoryTag.vue'
@@ -151,69 +156,56 @@ function openDetail() {
       </div>
 
       <!-- 浏览详情按钮（选择模式下仍可进入详情页） -->
-      <div
-        v-if="showViewButton"
-        class="view-detail-btn"
-        title="浏览详情"
-        @click.stop="openDetail"
-      >
-        <n-icon><EyeOutline /></n-icon>
+      <div v-if="showViewButton" class="view-detail-btn" title="浏览详情" @click.stop="openDetail">
+        <IconEye :size="14" />
       </div>
 
       <!-- 悬浮操作层 -->
       <div v-if="showActions !== false" class="card-overlay">
-        <n-button
+        <a-button
           v-if="item.quality_status === 'rejected'"
-          size="tiny"
-          circle
-          quaternary
-          type="success"
+          size="mini"
+          shape="circle"
+          type="text"
+          status="success"
           title="标记为通过（翻案）"
           @click.stop="emit('approve')"
         >
           <template #icon>
-            <n-icon><CheckmarkOutline /></n-icon>
+            <IconCheck :size="14" />
           </template>
-        </n-button>
-        <n-popconfirm @positive-click="emit('delete')">
-          <template #trigger>
-            <n-button
-              size="tiny"
-              circle
-              quaternary
-              type="error"
-              @click.stop
-            >
-              <template #icon>
-                <n-icon><TrashOutline /></n-icon>
-              </template>
-            </n-button>
-          </template>
-          移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复
-        </n-popconfirm>
-        <n-button
-          size="tiny"
-          circle
-          :quaternary="!item.is_favorite"
-          :type="item.is_favorite ? 'error' : 'default'"
+        </a-button>
+        <a-popconfirm
+          content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
+          :ok-button-props="{ status: 'danger' }"
+          @ok="emit('delete')"
+        >
+          <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
+            <template #icon>
+              <IconDelete :size="14" />
+            </template>
+          </a-button>
+        </a-popconfirm>
+        <a-button
+          size="mini"
+          shape="circle"
+          :type="item.is_favorite ? 'primary' : 'text'"
+          :status="item.is_favorite ? 'danger' : undefined"
           @click.stop="emit('toggleFavorite')"
         >
           <template #icon>
-            <n-icon>
-              <Heart v-if="item.is_favorite" />
-              <HeartOutline v-else />
-            </n-icon>
+            <IconHeartFill v-if="item.is_favorite" :size="14" />
+            <IconHeart v-else :size="14" />
           </template>
-        </n-button>
+        </a-button>
         <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
-        <n-rate
-          :value="item.rating || 0"
-          size="small"
-          clearable
+        <a-rate
+          :model-value="item.rating || 0"
+          allow-clear
           class="card-rate"
           title="评分（点击星设置，再点清除）"
           @click.stop
-          @update:value="(v: number) => emit('rate', v)"
+          @change="(v: number) => emit('rate', v)"
         />
       </div>
 
@@ -223,10 +215,7 @@ function openDetail() {
       </div>
 
       <!-- 质量审核状态 + 疑似 AI 标记（正交，可同时显示） -->
-      <div
-        v-if="item.quality_status !== 'approved' || item.is_ai_generated"
-        class="quality-badges"
-      >
+      <div v-if="item.quality_status !== 'approved' || item.is_ai_generated" class="quality-badges">
         <div
           v-if="item.quality_status === 'rejected'"
           class="quality-badge rejected"
@@ -237,11 +226,7 @@ function openDetail() {
         <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
           待审核
         </div>
-        <div
-          v-if="item.is_ai_generated"
-          class="quality-badge ai"
-          title="疑似 AI 生成，请人工确认"
-        >
+        <div v-if="item.is_ai_generated" class="quality-badge ai" title="疑似 AI 生成，请人工确认">
           疑似 AI
         </div>
       </div>
@@ -251,9 +236,9 @@ function openDetail() {
     <div class="card-body">
       <!-- 来源（空来源不渲染，避免出现空白胶囊） -->
       <div class="card-source">
-        <n-tag v-if="item.source_type" size="tiny" :bordered="false" type="info">
+        <a-tag v-if="item.source_type" size="small" color="arcoblue">
           {{ sourceLabel(item.source_type) }}
-        </n-tag>
+        </a-tag>
         <span v-if="item.source_author" class="author">@{{ item.source_author }}</span>
       </div>
 
@@ -282,12 +267,14 @@ function openDetail() {
 
 <style scoped>
 .card {
-  background: var(--n-color);
+  background: var(--color-bg-2);
   border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
-  border: 1px solid var(--n-border-color);
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+  border: 1px solid var(--color-border-2);
 }
 .card:hover {
   transform: translateY(-2px);
@@ -344,12 +331,18 @@ function openDetail() {
   opacity: 1;
 }
 
-/* 评分控件：与收藏按钮并列，白色描边保证在任意图片上可辨 */
+/* 评分控件：与收藏按钮并列，白色描边保证在任意图片上可辨；
+   Arco rate 无 size 属性，用字体大小控制星号尺寸，并收紧星间间距保持紧凑 */
 .card-rate {
   margin-left: 2px;
   padding: 2px 4px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.75);
+  font-size: 16px;
+  min-height: 0;
+}
+.card-rate :deep(.arco-rate-character:not(:last-child)) {
+  margin-right: 2px;
 }
 
 .analysis-badge {

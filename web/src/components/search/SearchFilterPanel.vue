@@ -68,16 +68,16 @@ const analysisFilterModel = computed({
   },
 })
 
-/** 开始日期（n-input 的 change 事件在失焦/回车时触发搜索） */
+/** 开始日期（a-date-picker 的 change 事件在选中/清空日期时触发搜索） */
 const dateFromModel = computed({
   get: () => props.dateFrom,
-  set: (v: string) => emit('update:dateFrom', v),
+  set: (v: string | undefined) => emit('update:dateFrom', v ?? ''),
 })
 
 /** 结束日期 */
 const dateToModel = computed({
   get: () => props.dateTo,
-  set: (v: string) => emit('update:dateTo', v),
+  set: (v: string | undefined) => emit('update:dateTo', v ?? ''),
 })
 
 /** 评分筛选（变更即触发重新搜索） */
@@ -93,53 +93,74 @@ const ratingFilterModel = computed({
 <template>
   <transition name="slide">
     <aside v-if="visible" class="filter-panel">
-      <n-card title="标签筛选" size="small" :bordered="true">
-        <template #header-extra>
-          <n-button size="tiny" text @click="emit('update:visible', false)">收起 ✕</n-button>
+      <a-card title="标签筛选" size="small" :bordered="true">
+        <template #extra>
+          <a-button size="mini" type="text" @click="emit('update:visible', false)">收起 ✕</a-button>
         </template>
         <TagFilter />
 
         <!-- 更多筛选（可折叠） -->
-        <n-collapse style="margin-top:8px">
-          <n-collapse-item title="更多筛选" name="more">
+        <a-collapse style="margin-top: 8px">
+          <a-collapse-item header="更多筛选" key="more">
             <div class="more-filters">
               <div class="filter-row">
                 <label>来源</label>
-                <n-select
-                  v-model:value="sourceFilterModel"
+                <a-select
+                  v-model="sourceFilterModel"
                   :options="sourceFilterOptions"
-                  size="tiny"
-                  clearable
+                  size="mini"
+                  allow-clear
                 />
               </div>
               <div class="filter-row">
                 <label>媒体</label>
-                <n-select
-                  v-model:value="mediaFilterModel"
-                  :options="[{label:'全部',value:''},{label:'图片',value:'image'},{label:'视频',value:'video'}]"
-                  size="tiny"
+                <a-select
+                  v-model="mediaFilterModel"
+                  :options="[
+                    { label: '全部', value: '' },
+                    { label: '图片', value: 'image' },
+                    { label: '视频', value: 'video' },
+                  ]"
+                  size="mini"
                 />
               </div>
               <div class="filter-row">
                 <label>分析状态</label>
-                <n-select
-                  v-model:value="analysisFilterModel"
-                  :options="[{label:'全部',value:''},{label:'已分析',value:'done'},{label:'未分析',value:'pending'},{label:'分析失败',value:'error'}]"
-                  size="tiny"
+                <a-select
+                  v-model="analysisFilterModel"
+                  :options="[
+                    { label: '全部', value: '' },
+                    { label: '已分析', value: 'done' },
+                    { label: '未分析', value: 'pending' },
+                    { label: '分析失败', value: 'error' },
+                  ]"
+                  size="mini"
                 />
               </div>
               <div class="filter-row">
                 <label>开始日期</label>
-                <n-input v-model:value="dateFromModel" type="date" size="tiny" @change="emit('filterChange')" />
+                <a-date-picker
+                  v-model="dateFromModel"
+                  value-format="YYYY-MM-DD"
+                  size="mini"
+                  allow-clear
+                  @change="emit('filterChange')"
+                />
               </div>
               <div class="filter-row">
                 <label>结束日期</label>
-                <n-input v-model:value="dateToModel" type="date" size="tiny" @change="emit('filterChange')" />
+                <a-date-picker
+                  v-model="dateToModel"
+                  value-format="YYYY-MM-DD"
+                  size="mini"
+                  allow-clear
+                  @change="emit('filterChange')"
+                />
               </div>
               <div class="filter-row">
                 <label>评分</label>
-                <n-select
-                  v-model:value="ratingFilterModel"
+                <a-select
+                  v-model="ratingFilterModel"
                   :options="[
                     { label: '全部', value: '' },
                     { label: '★ 1 分及以上', value: '1' },
@@ -148,23 +169,23 @@ const ratingFilterModel = computed({
                     { label: '★ 4 分及以上', value: '4' },
                     { label: '★ 5 分', value: '5' },
                   ]"
-                  size="tiny"
+                  size="mini"
                 />
               </div>
             </div>
-          </n-collapse-item>
-        </n-collapse>
+          </a-collapse-item>
+        </a-collapse>
 
-        <n-button
+        <a-button
           type="primary"
-          block
-          style="margin-top:8px"
+          long
+          style="margin-top: 8px"
           :loading="searching"
           @click="emit('search')"
         >
           搜索
-        </n-button>
-      </n-card>
+        </a-button>
+      </a-card>
     </aside>
   </transition>
 </template>
@@ -189,17 +210,30 @@ const ratingFilterModel = computed({
   flex-shrink: 0;
 }
 
+/* Arco 控件默认自适应宽度：让下拉/日期选择在筛选行内撑满剩余空间（等价 Naive 默认 100% 宽） */
+.more-filters .filter-row :deep(.arco-select),
+.more-filters .filter-row :deep(.arco-picker) {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 折叠动画 */
-.slide-enter-active, .slide-leave-active {
-  transition: width 0.25s ease, opacity 0.2s ease;
+.slide-enter-active,
+.slide-leave-active {
+  transition:
+    width 0.25s ease,
+    opacity 0.2s ease;
   overflow: hidden;
 }
-.slide-enter-from, .slide-leave-to {
+.slide-enter-from,
+.slide-leave-to {
   width: 0;
   opacity: 0;
 }
 
 @media (max-width: 900px) {
-  .filter-panel { width: 100%; }
+  .filter-panel {
+    width: 100%;
+  }
 }
 </style>

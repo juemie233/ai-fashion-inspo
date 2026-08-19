@@ -35,7 +35,7 @@ const emit = defineEmits<{
   (e: 'batch-add'): void
 }>()
 
-/** 批量大标签双向绑定（供批量操作栏 n-select 的 v-model:value 使用） */
+/** 批量大标签双向绑定（供批量操作栏 a-select 的 v-model 使用） */
 const batchTagNamesModel = computed<string[]>({
   get: () => props.batchTagNames,
   set: (val) => emit('update:batchTagNames', val),
@@ -46,21 +46,20 @@ const batchTagNamesModel = computed<string[]>({
   <div class="similar-section">
     <div class="similar-header">
       <h4>相似素材推荐</h4>
-      <n-spin v-if="loading" size="small" />
+      <a-spin v-if="loading" :size="14" />
       <span v-else-if="items.length === 0" class="similar-empty-hint">
         暂无相似素材（需要先回填向量，或在图像向量不可用时依赖标签匹配）
       </span>
       <span v-else class="similar-count">{{ items.length }} 个</span>
-      <n-button
+      <a-button
         v-if="items.length > 0 && !batchMode"
-        size="tiny"
-        type="primary"
-        secondary
-        style="margin-left:auto"
+        size="mini"
+        type="secondary"
+        style="margin-left: auto"
         @click="emit('enter-batch')"
       >
         批量添加大标签
-      </n-button>
+      </a-button>
     </div>
 
     <!-- 批量添加操作栏 -->
@@ -68,29 +67,29 @@ const batchTagNamesModel = computed<string[]>({
       <span class="batch-selected-count">
         已选 {{ batchSelectedIds.length }} / {{ items.length }}
       </span>
-      <n-button size="tiny" quaternary @click="emit('toggle-select-all')">
+      <a-button size="mini" type="text" @click="emit('toggle-select-all')">
         {{ batchSelectedIds.length === items.length ? '取消全选' : '全选' }}
-      </n-button>
-      <n-select
-        v-model:value="batchTagNamesModel"
+      </a-button>
+      <a-select
+        v-model="batchTagNamesModel"
         multiple
-        filterable
-        tag
+        allow-create
         size="small"
         placeholder="选择或输入大标签"
         :options="options"
-        style="flex:1; min-width:200px"
+        style="flex: 1; min-width: 200px"
       />
-      <n-button
+      <a-button
         size="small"
-        type="error"
+        type="primary"
+        status="danger"
         :loading="batchAdding"
         :disabled="batchSelectedIds.length === 0 || batchTagNames.length === 0"
         @click="emit('batch-add')"
       >
         添加（{{ batchSelectedIds.length }}）
-      </n-button>
-      <n-button size="small" @click="emit('exit-batch')">取消</n-button>
+      </a-button>
+      <a-button size="small" @click="emit('exit-batch')">取消</a-button>
     </div>
 
     <div v-if="items.length > 0" class="similar-grid">
@@ -114,7 +113,7 @@ const batchTagNamesModel = computed<string[]>({
 <style scoped>
 .similar-section {
   margin-top: 32px;
-  border-top: 1px solid var(--n-border-color, #eee);
+  border-top: 1px solid var(--color-border-2, #eee);
   padding-top: 16px;
 }
 
@@ -166,7 +165,19 @@ const batchTagNamesModel = computed<string[]>({
   break-inside: avoid;
   margin-bottom: 12px;
 }
-@media (max-width: 1200px) { .similar-grid { column-count: 4; } }
-@media (max-width: 900px)  { .similar-grid { column-count: 3; } }
-@media (max-width: 600px)  { .similar-grid { column-count: 2; } }
+@media (max-width: 1200px) {
+  .similar-grid {
+    column-count: 4;
+  }
+}
+@media (max-width: 900px) {
+  .similar-grid {
+    column-count: 3;
+  }
+}
+@media (max-width: 600px) {
+  .similar-grid {
+    column-count: 2;
+  }
+}
 </style>

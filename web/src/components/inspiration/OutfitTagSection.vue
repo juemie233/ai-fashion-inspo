@@ -30,7 +30,7 @@ const emit = defineEmits<{
   (e: 'dismiss', name: string): void
 }>()
 
-/** 待添加大标签双向绑定（供 n-select 的 v-model:value 使用） */
+/** 待添加大标签双向绑定（供 a-select 的 v-model 使用） */
 const selectedModel = computed<string[]>({
   get: () => props.selected,
   set: (val) => emit('update:selected', val),
@@ -51,67 +51,66 @@ function onOutfitEnter(e: KeyboardEvent) {
   <div class="outfit-tags-section">
     <div class="outfit-tags-header">
       <h4>穿搭大标签</h4>
-      <n-button size="tiny" type="primary" ghost :loading="aiSuggesting" @click="emit('ai-suggest')">
+      <a-button size="mini" type="outline" :loading="aiSuggesting" @click="emit('ai-suggest')">
         ✨ AI 生成
-      </n-button>
+      </a-button>
     </div>
 
-    <div v-if="tags.length" class="tag-chips" style="margin-bottom:8px">
-      <n-tag
+    <div v-if="tags.length" class="tag-chips" style="margin-bottom: 8px">
+      <a-tag
         v-for="t in tags"
         :key="t.tag.id"
         size="small"
-        type="error"
+        color="red"
         closable
         class="tag-clickable"
         @close="emit('remove', t.tag.id)"
         @click="emit('tag-click', t.tag.name)"
       >
         {{ t.tag.name }}
-      </n-tag>
+      </a-tag>
     </div>
-    <div v-else style="font-size:12px;color:#999;margin-bottom:8px">暂无大标签</div>
+    <div v-else style="font-size: 12px; color: #999; margin-bottom: 8px">暂无大标签</div>
 
     <div class="outfit-tag-add" @keydown.enter.capture="onOutfitEnter">
-      <n-select
-        v-model:value="selectedModel"
+      <a-select
+        v-model="selectedModel"
         multiple
-        filterable
-        tag
+        allow-create
         size="small"
         placeholder="选择或输入大标签，如「白色系穿搭」"
         :options="options"
-        style="flex:1"
+        style="flex: 1"
       />
-      <n-button
+      <a-button
         size="small"
         :loading="adding"
         :disabled="selected.length === 0"
         @click="emit('add')"
-      >添加</n-button>
+        >添加</a-button
+      >
     </div>
     <div class="outfit-tag-hint">输入新标签后按两次回车即可快速添加</div>
 
     <div v-if="aiSuggestions.length" class="outfit-tag-suggestions">
       <div class="outfit-tag-suggestions-header">
-        <span style="font-size:12px;color:#999">AI 建议（点击标签入库，点 ✕ 丢弃）：</span>
-        <n-button
-          size="tiny"
-          type="warning"
-          secondary
-          @click="emit('confirm-all')"
-        >一键全部入库 ({{ aiSuggestions.length }})</n-button>
+        <span style="font-size: 12px; color: #999">AI 建议（点击标签入库，点 ✕ 丢弃）：</span>
+        <a-button size="mini" type="secondary" status="warning" @click="emit('confirm-all')"
+          >一键全部入库 ({{ aiSuggestions.length }})</a-button
+        >
       </div>
       <div class="tag-chips">
         <span
           v-for="name in aiSuggestions"
           :key="name"
-          style="display:inline-flex;align-items:center;gap:2px;margin:0 6px 4px 0"
+          style="display: inline-flex; align-items: center; gap: 2px; margin: 0 6px 4px 0"
         >
-          <n-tag size="small" type="warning" style="cursor:pointer" @click="emit('confirm', name)">
+          <a-tag size="small" color="orange" style="cursor: pointer" @click="emit('confirm', name)">
             {{ name }}
-          </n-tag>
-          <n-button size="tiny" text type="error" @click="emit('dismiss', name)">✕</n-button>
+          </a-tag>
+          <a-button size="mini" type="text" status="danger" @click="emit('dismiss', name)"
+            >✕</a-button
+          >
         </span>
       </div>
     </div>

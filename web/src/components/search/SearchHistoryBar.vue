@@ -16,17 +16,19 @@ const emit = defineEmits<{
 
 <template>
   <div v-if="history.length > 0 && !keyword" class="search-history">
-    <span style="font-size:12px;color:#999">最近搜索：</span>
-    <n-tag
+    <span style="font-size: 12px; color: #999">最近搜索：</span>
+    <a-tag
       v-for="(h, i) in history.slice(0, 6)"
       :key="i"
-      size="tiny"
-      style="cursor:pointer"
+      size="small"
+      style="cursor: pointer"
       @click="emit('apply', h)"
     >
       {{ h }}
-    </n-tag>
-    <n-button size="tiny" text @click="emit('clear')" style="font-size:11px">清除历史</n-button>
+    </a-tag>
+    <a-button size="mini" type="text" @click="emit('clear')" style="font-size: 11px"
+      >清除历史</a-button
+    >
   </div>
 </template>
 

@@ -66,9 +66,7 @@ function toggleSelect(id: string) {
 }
 
 function toggleSelectAll() {
-  selectedIds.value = allVisibleSelected.value
-    ? new Set()
-    : new Set(props.items.map((i) => i.id))
+  selectedIds.value = allVisibleSelected.value ? new Set() : new Set(props.items.map((i) => i.id))
 }
 
 function clearSelection() {
@@ -129,20 +127,28 @@ onBeforeUnmount(clearHoverPreview)
     <!-- 头部：左侧标题（slot）+ 排序 + 密度 -->
     <div class="grid-header">
       <div class="grid-header-left"><slot name="header-left" /></div>
-      <n-space size="small" :wrap="false">
-        <n-select
+      <a-space size="small" :wrap="false">
+        <a-select
           v-if="showSort"
-          :value="sort"
+          :model-value="sort"
           :options="sortOptions"
-          size="tiny"
-          style="width:90px"
-          @update:value="(v: string) => emit('update:sort', v)"
+          size="mini"
+          style="width: 90px"
+          @change="(v: unknown) => emit('update:sort', String(v))"
         />
-        <n-button-group size="tiny">
-          <n-button :type="density === 'compact' ? 'primary' : 'default'" @click="emit('update:density', 'compact')">⊞</n-button>
-          <n-button :type="density === 'standard' ? 'primary' : 'default'" @click="emit('update:density', 'standard')">⊟</n-button>
-        </n-button-group>
-      </n-space>
+        <a-button-group size="mini">
+          <a-button
+            :type="density === 'compact' ? 'primary' : 'outline'"
+            @click="emit('update:density', 'compact')"
+            >⊞</a-button
+          >
+          <a-button
+            :type="density === 'standard' ? 'primary' : 'outline'"
+            @click="emit('update:density', 'standard')"
+            >⊟</a-button
+          >
+        </a-button-group>
+      </a-space>
     </div>
 
     <!-- 批量操作栏（有选中后出现，操作按钮由父组件通过 slot 注入） -->
@@ -157,7 +163,7 @@ onBeforeUnmount(clearHoverPreview)
       />
     </div>
 
-    <n-spin :show="loading">
+    <a-spin :loading="loading">
       <div v-if="items.length === 0 && !loading" class="grid-empty">{{ emptyText }}</div>
       <div v-else :class="['image-grid', 'density-' + density]">
         <div
@@ -168,7 +174,11 @@ onBeforeUnmount(clearHoverPreview)
           @click="emit('open-detail', item)"
         >
           <!-- 图片区域：干净展示，悬停停留弹出大图预览 -->
-          <div class="image-wrap" @mouseenter="startHoverPreview(item)" @mouseleave="clearHoverPreview">
+          <div
+            class="image-wrap"
+            @mouseenter="startHoverPreview(item)"
+            @mouseleave="clearHoverPreview"
+          >
             <video
               v-if="item.media_type === 'video' && !item.thumbnail_path"
               :src="getFileUrl(item.file_path || '')"
@@ -176,7 +186,12 @@ onBeforeUnmount(clearHoverPreview)
               playsinline
               preload="metadata"
             />
-            <img v-else-if="item.thumbnail_path || item.file_path" :src="fileUrl(item)" :alt="item.id" loading="lazy" />
+            <img
+              v-else-if="item.thumbnail_path || item.file_path"
+              :src="fileUrl(item)"
+              :alt="item.id"
+              loading="lazy"
+            />
             <div v-else class="no-preview">无预览</div>
 
             <!-- 卡片附加展示（父组件按需注入，如审核原因覆盖条） -->
@@ -188,20 +203,22 @@ onBeforeUnmount(clearHoverPreview)
 
           <!-- 操作按钮区：多选勾选 + 父组件注入的操作按钮，独立显示在图片下方（常显） -->
           <div class="card-actions" @click.stop>
-            <n-checkbox
+            <a-checkbox
               class="card-checkbox"
-              :checked="selectedIds.has(item.id)"
-              @update:checked="toggleSelect(item.id)"
+              :model-value="selectedIds.has(item.id)"
+              @change="toggleSelect(item.id)"
             />
             <slot name="card-actions" :item="item" />
           </div>
         </div>
       </div>
 
-      <div v-if="items.length < total" style="text-align:center;padding:12px">
-        <n-button size="small" :loading="loading" @click="emit('load-more')">加载更多（{{ items.length }}/{{ total }}）</n-button>
+      <div v-if="items.length < total" style="text-align: center; padding: 12px">
+        <a-button size="small" :loading="loading" @click="emit('load-more')"
+          >加载更多（{{ items.length }}/{{ total }}）</a-button
+        >
       </div>
-    </n-spin>
+    </a-spin>
 
     <!-- 悬停快速预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡网格操作 -->
     <Teleport to="body">

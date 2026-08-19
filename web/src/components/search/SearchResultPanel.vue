@@ -80,71 +80,84 @@ const sortModeModel = computed({
     emit('sortChange')
   },
 })
-
-/** 页码（变更触发 doSearch(page)） */
-const currentPageModel = computed({
-  get: () => props.currentPage,
-  set: (p: number) => emit('search', p),
-})
-
-/** 每页数量（父级在 update:pageSize 中处理回第一页并重新搜索） */
-const pageSizeModel = computed({
-  get: () => props.pageSize,
-  set: (s: number) => emit('update:pageSize', s),
-})
 </script>
 
 <template>
   <main class="result-panel">
-    <n-card size="small" :bordered="true">
-      <template #header>
+    <a-card size="small" :bordered="true">
+      <!-- Arco 卡片无整段 header 插槽，头部工具栏整体放入 #title 插槽，配合 :deep 放开固定高度与单行省略 -->
+      <template #title>
         <div class="result-header-row">
           <span v-if="!filterVisible">
-            <n-button size="tiny" type="primary" secondary @click="filterVisibleModel = true">
+            <a-button size="mini" type="secondary" @click="filterVisibleModel = true">
               展开筛选
-            </n-button>
+            </a-button>
           </span>
           <span v-if="total > 0" class="result-count">
             找到 <strong>{{ total }}</strong> 条结果
           </span>
-          <span v-else-if="!searching" style="color:#999">
-            {{ keyword || selectedTagCount > 0
-              ? '未找到匹配结果，请尝试放宽筛选条件'
-              : '输入关键词或选择标签开始搜索' }}
+          <span v-else-if="!searching" style="color: #999">
+            {{
+              keyword || selectedTagCount > 0
+                ? '未找到匹配结果，请尝试放宽筛选条件'
+                : '输入关键词或选择标签开始搜索'
+            }}
           </span>
-          <span style="flex:1" />
-          <n-button size="tiny" @click="emit('copyLink')">复制搜索链接</n-button>
+          <span style="flex: 1" />
+          <a-button size="mini" @click="emit('copyLink')">复制搜索链接</a-button>
           <!-- 向量搜索横幅 -->
           <span v-if="vectorMode !== 'none'" class="vector-mode-banner">
             <template v-if="vectorMode === 'semantic'">语义搜索</template>
             <template v-else>以图搜图</template>「{{ vectorQueryLabel }}」
-            <img v-if="imagePreviewUrl" :src="imagePreviewUrl" class="vector-query-thumb" alt="搜索图" />
-            <n-button size="tiny" text type="primary" @click="emit('exitVector')">返回普通搜索</n-button>
+            <img
+              v-if="imagePreviewUrl"
+              :src="imagePreviewUrl"
+              class="vector-query-thumb"
+              alt="搜索图"
+            />
+            <a-button size="mini" type="text" @click="emit('exitVector')">返回普通搜索</a-button>
           </span>
           <!-- 向量搜索固定取前 50 条提示 -->
-          <span v-if="vectorMode !== 'none'" class="vector-limit-hint">仅显示前 50 条最相似结果</span>
+          <span v-if="vectorMode !== 'none'" class="vector-limit-hint"
+            >仅显示前 50 条最相似结果</span
+          >
           <!-- 排序 + 密度（向量搜索时不显示排序） -->
           <template v-if="vectorMode === 'none'">
-            <n-select
-              v-model:value="sortModeModel"
+            <a-select
+              v-model="sortModeModel"
               :options="sortOptions"
-              size="tiny"
-              style="width:110px"
+              size="mini"
+              style="width: 110px"
             />
           </template>
-          <n-button-group size="tiny">
-            <n-button :type="density==='compact'?'primary':'default'" @click="densityModel='compact'">紧凑</n-button>
-            <n-button :type="density==='standard'?'primary':'default'" @click="densityModel='standard'">标准</n-button>
-            <n-button :type="density==='comfortable'?'primary':'default'" @click="densityModel='comfortable'">宽松</n-button>
-          </n-button-group>
+          <a-button-group size="mini">
+            <a-button
+              :type="density === 'compact' ? 'primary' : 'secondary'"
+              @click="densityModel = 'compact'"
+              >紧凑</a-button
+            >
+            <a-button
+              :type="density === 'standard' ? 'primary' : 'secondary'"
+              @click="densityModel = 'standard'"
+              >标准</a-button
+            >
+            <a-button
+              :type="density === 'comfortable' ? 'primary' : 'secondary'"
+              @click="densityModel = 'comfortable'"
+              >宽松</a-button
+            >
+          </a-button-group>
         </div>
       </template>
 
       <!-- 无结果诊断 -->
-      <div v-if="total === 0 && !searching && (selectedTagCount > 0 || keyword)" class="no-result-hint">
-        <n-alert type="info" style="margin-bottom:12px">
-          <template #header>未找到匹配结果，建议尝试：</template>
-          <ul style="margin:4px 0;padding-left:16px;font-size:12px">
+      <div
+        v-if="total === 0 && !searching && (selectedTagCount > 0 || keyword)"
+        class="no-result-hint"
+      >
+        <a-alert type="info" style="margin-bottom: 12px">
+          <template #title>未找到匹配结果，建议尝试：</template>
+          <ul style="margin: 4px 0; padding-left: 16px; font-size: 12px">
             <li v-if="combineMode === 'AND' && selectedTagCount > 1">
               将「全部匹配」切换为「任意匹配」模式
             </li>
@@ -152,7 +165,7 @@ const pageSizeModel = computed({
             <li v-if="excludedTagCount > 0">减少排除标签</li>
             <li>检查关键词拼写或尝试更宽泛的词语</li>
           </ul>
-        </n-alert>
+        </a-alert>
       </div>
 
       <MasonryGrid
@@ -165,21 +178,37 @@ const pageSizeModel = computed({
         @rate="(id: string, v: number) => emit('rate', id, v)"
       />
 
-      <!-- 分页（向量搜索不翻页） -->
+      <!-- 分页（向量搜索不翻页）：
+           页码变更触发 emit('search', page)；
+           每页数量变更由父级在 update:pageSize 中处理回第一页并重新搜索，
+           :auto-adjust="false" 避免改页大小时额外触发 change 造成双重搜索 -->
       <div v-if="totalPages > 1 && vectorMode === 'none'" class="pagination-wrapper">
-        <n-pagination
-          v-model:page="currentPageModel"
-          :page-count="totalPages"
-          v-model:page-size="pageSizeModel"
-          show-size-picker
-          :page-sizes="[25, 50, 100]"
+        <a-pagination
+          :total="total"
+          :current="currentPage"
+          :page-size="pageSize"
+          :auto-adjust="false"
+          show-page-size
+          :page-size-options="[25, 50, 100]"
+          @change="(p: number) => emit('search', p)"
+          @page-size-change="(s: number) => emit('update:pageSize', s)"
         />
       </div>
-    </n-card>
+    </a-card>
   </main>
 </template>
 
 <style scoped>
+/* Arco 卡片头部默认固定高度 + 单行省略，结果栏工具栏需要自适应高度与正常换行 */
+:deep(.arco-card-header) {
+  height: auto;
+  min-height: 40px;
+}
+:deep(.arco-card-header-title) {
+  white-space: normal;
+  overflow: visible;
+}
+
 .result-panel {
   flex: 1;
   min-width: 0;

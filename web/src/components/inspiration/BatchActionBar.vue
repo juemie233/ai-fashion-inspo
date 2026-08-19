@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /** 素材库批量选择操作栏：收藏 / 移垃圾桶 / 加标签 / 关联博主 / 编辑元数据 / 全选 / 退出。 */
 
-import { computed, onMounted, ref } from 'vue'
-import { useMessage } from 'naive-ui'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import { bloggersApi } from '@/api/persons'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
@@ -25,8 +25,6 @@ const emit = defineEmits<{
   (e: 'update', fields: BatchUpdateFields): void
   (e: 'exit'): void
 }>()
-
-const message = useMessage()
 
 const sourceOptions = Object.entries(SOURCE_TYPE_LABELS).map(([value, label]) => ({
   label,
@@ -69,7 +67,7 @@ onMounted(async () => {
 
 function confirmLinkBloggers() {
   if (bloggerIds.value.length === 0) {
-    message.warning('请选择至少一位穿搭博主')
+    Message.warning('请选择至少一位穿搭博主')
     return
   }
   emit('add-bloggers', [...bloggerIds.value])
@@ -87,7 +85,7 @@ function openTagModal() {
 
 function confirmTags() {
   if (tagInput.value.length === 0) {
-    message.warning('请输入至少一个标签')
+    Message.warning('请输入至少一个标签')
     return
   }
   emit('add-tags', tagInput.value)
@@ -96,14 +94,19 @@ function confirmTags() {
 
 // ── 编辑元数据弹窗 ──
 const editModalOpen = ref(false)
-const editSource = ref<string | null>(null)
-const editQuality = ref<'pending' | 'approved' | 'rejected' | null>(null)
-const editAi = ref<boolean | null>(null)
+// 批量编辑字段值：undefined 表示「不修改」（Arco Select 的 modelValue 类型不含 null，
+// 用 undefined 作哨兵值保持 v-model 类型兼容）
+const editSource = ref<string>()
+const editQuality = ref<'pending' | 'approved' | 'rejected'>()
+const editAi = ref<boolean>()
+
+/** a-form 表单模型（Arco 表单要求绑定 model；本弹窗无校验规则，仅提供上下文） */
+const editFormModel = reactive({ editSource, editQuality, editAi })
 
 function openEditModal() {
-  editSource.value = null
-  editQuality.value = null
-  editAi.value = null
+  editSource.value = undefined
+  editQuality.value = undefined
+  editAi.value = undefined
   editModalOpen.value = true
 }
 
@@ -111,9 +114,9 @@ function confirmEdit() {
   const fields: BatchUpdateFields = {}
   if (editSource.value) fields.source_type = editSource.value
   if (editQuality.value) fields.quality_status = editQuality.value
-  if (editAi.value !== null) fields.is_ai_generated = editAi.value
+  if (editAi.value !== undefined) fields.is_ai_generated = editAi.value
   if (Object.keys(fields).length === 0) {
-    message.warning('请选择至少一个要修改的字段')
+    Message.warning('请选择至少一个要修改的字段')
     return
   }
   emit('update', fields)
@@ -124,98 +127,89 @@ function confirmEdit() {
 <template>
   <div class="batch-bar">
     <span class="batch-count">已选 {{ count }} 个</span>
-    <n-button size="tiny" @click="emit('favorite', true)">批量收藏</n-button>
-    <n-button size="tiny" @click="emit('favorite', false)">取消收藏</n-button>
-    <n-button size="tiny" @click="openTagModal">加标签</n-button>
-    <n-select
-      v-model:value="bloggerIds"
+    <a-button size="mini" @click="emit('favorite', true)">批量收藏</a-button>
+    <a-button size="mini" @click="emit('favorite', false)">取消收藏</a-button>
+    <a-button size="mini" @click="openTagModal">加标签</a-button>
+    <a-select
+      v-model="bloggerIds"
       multiple
       filterable
       clearable
-      size="tiny"
+      size="mini"
       style="width: 220px"
       placeholder="关联穿搭博主"
       :options="bloggerOptions"
       :loading="bloggerLoading"
     />
-    <n-button
-      size="tiny"
+    <a-button
+      size="mini"
       type="primary"
-      secondary
       :disabled="bloggerIds.length === 0"
       @click="confirmLinkBloggers"
     >
       关联博主
-    </n-button>
-    <n-button size="tiny" @click="openEditModal">编辑元数据</n-button>
-    <n-popconfirm @positive-click="emit('trash')">
-      <template #trigger>
-        <n-button size="tiny" type="error" secondary>移入垃圾桶</n-button>
-      </template>
-      将所选 {{ count }} 个素材移入垃圾桶？保留期内可恢复
-    </n-popconfirm>
-    <n-button size="tiny" @click="emit('select-all')">
+    </a-button>
+    <a-button size="mini" @click="openEditModal">编辑元数据</a-button>
+    <a-popconfirm content="将所选 {{ count }} 个素材移入垃圾桶？保留期内可恢复" @ok="emit('trash')">
+      <a-button size="mini" type="secondary" status="danger">移入垃圾桶</a-button>
+    </a-popconfirm>
+    <a-button size="mini" @click="emit('select-all')">
       {{ allSelected ? '取消全选' : '全选本页' }}
-    </n-button>
+    </a-button>
     <div style="flex: 1" />
-    <n-button size="tiny" quaternary @click="emit('exit')">退出批量</n-button>
+    <a-button size="mini" type="text" @click="emit('exit')">退出批量</a-button>
   </div>
 
   <!-- 加标签弹窗 -->
-  <n-modal v-model:show="tagModalOpen" preset="card" title="批量添加标签" style="width: 460px">
+  <a-modal v-model:visible="tagModalOpen" title="批量添加标签" style="width: 460px">
     <p style="color: #999; font-size: 12px">
       为所选 {{ count }} 个素材批量关联标签（已关联的自动跳过）。
     </p>
-    <n-select
-      v-model:value="tagInput"
+    <a-select
+      v-model="tagInput"
       multiple
       filterable
-      tag
+      allow-create
       clearable
       placeholder="输入标签名，回车新建；也可从已有标签中选择"
       :options="tagOptions.map((name) => ({ label: name, value: name }))"
     />
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">
-        <n-button size="small" @click="tagModalOpen = false">取消</n-button>
-        <n-button size="small" type="primary" @click="confirmTags">确定</n-button>
+        <a-button size="small" @click="tagModalOpen = false">取消</a-button>
+        <a-button size="small" type="primary" @click="confirmTags">确定</a-button>
       </div>
     </template>
-  </n-modal>
+  </a-modal>
 
   <!-- 编辑元数据弹窗 -->
-  <n-modal v-model:show="editModalOpen" preset="card" title="批量编辑元数据" style="width: 460px">
+  <a-modal v-model:visible="editModalOpen" title="批量编辑元数据" style="width: 460px">
     <p style="color: #999; font-size: 12px">
       仅更新所选 {{ count }} 个素材中你显式填写的字段，其余保持不变。
     </p>
-    <n-form label-placement="left" label-width="80" size="small">
-      <n-form-item label="来源">
-        <n-select
-          v-model:value="editSource"
-          clearable
-          placeholder="不修改"
-          :options="sourceOptions"
-        />
-      </n-form-item>
-      <n-form-item label="审核状态">
-        <n-select
-          v-model:value="editQuality"
-          clearable
-          placeholder="不修改"
-          :options="qualityOptions"
-        />
-      </n-form-item>
-      <n-form-item label="疑似 AI">
-        <n-select v-model:value="editAi" clearable placeholder="不修改" :options="aiOptions" />
-      </n-form-item>
-    </n-form>
+    <a-form
+      :model="editFormModel"
+      label-align="left"
+      :label-col-style="{ width: '80px' }"
+      size="small"
+    >
+      <a-form-item label="来源">
+        <a-select v-model="editSource" clearable placeholder="不修改" :options="sourceOptions" />
+      </a-form-item>
+      <a-form-item label="审核状态">
+        <a-select v-model="editQuality" clearable placeholder="不修改" :options="qualityOptions" />
+      </a-form-item>
+      <a-form-item label="疑似 AI">
+        <a-select v-model="editAi" clearable placeholder="不修改" :options="aiOptions" />
+      </a-form-item>
+    </a-form>
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">
-        <n-button size="small" @click="editModalOpen = false">取消</n-button>
-        <n-button size="small" type="primary" @click="confirmEdit">确定</n-button>
+        <a-button size="small" @click="editModalOpen = false">取消</a-button>
+        <a-button size="small" type="primary" @click="confirmEdit">确定</a-button>
       </div>
     </template>
-  </n-modal>
+  </a-modal>
 </template>
 
 <style scoped>

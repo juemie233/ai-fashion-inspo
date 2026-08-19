@@ -29,7 +29,7 @@ watch(inputValue, (val) => {
     try {
       const items = await fetchSuggestions(val.trim())
       if (Array.isArray(items)) {
-        suggestions.value = items.slice(0, 8).map(s => ({
+        suggestions.value = items.slice(0, 8).map((s) => ({
           label: `${s.name} (${s.usage_count})`,
           value: s.name,
         }))
@@ -70,21 +70,21 @@ function selectSuggestion(val: string) {
 
 <template>
   <div class="search-bar">
-    <n-auto-complete
+    <a-auto-complete
       ref="autoCompleteInst"
-      v-model:value="inputValue"
-      :options="suggestions"
+      v-model="inputValue"
+      :data="suggestions"
       placeholder="搜索标签、颜色、关键词... 如「JK制服」「#FF0000」「春季」"
-      clearable
+      allow-clear
       @select="selectSuggestion"
-      @keyup.enter="handleEnter"
+      @press-enter="handleEnter"
       @paste="onPaste"
       size="large"
     >
       <template #prefix>
-        <span style="font-size:16px;margin-right:4px">🔍</span>
+        <span style="font-size: 16px; margin-right: 4px">🔍</span>
       </template>
-    </n-auto-complete>
+    </a-auto-complete>
   </div>
 </template>
 

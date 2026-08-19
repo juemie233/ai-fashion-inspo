@@ -42,22 +42,20 @@ function onImagePicked(e: Event) {
 
 <template>
   <div class="vector-search-section">
-    <n-space align="center">
-      <n-input
-        v-model:value="semanticModel"
+    <a-space align="center">
+      <a-input
+        v-model="semanticModel"
         placeholder="语义搜索：输入描述，如「复古红格裙」「白色系甜美穿搭」"
-        clearable
+        allow-clear
         size="small"
         style="width: 360px"
-        @keyup.enter="emit('semanticSearch')"
+        @press-enter="emit('semanticSearch')"
       />
-      <n-button type="primary" secondary size="small" :loading="loading" @click="emit('semanticSearch')">
+      <a-button type="primary" size="small" :loading="loading" @click="emit('semanticSearch')">
         🧠 语义搜索
-      </n-button>
-      <n-divider vertical style="margin: 0 4px" />
-      <n-button size="small" :loading="loading" @click="openImagePicker">
-        🖼️ 以图搜图
-      </n-button>
+      </a-button>
+      <a-divider direction="vertical" style="margin: 0 4px" />
+      <a-button size="small" :loading="loading" @click="openImagePicker"> 🖼️ 以图搜图 </a-button>
       <input
         ref="imageFileInput"
         type="file"
@@ -65,7 +63,7 @@ function onImagePicked(e: Event) {
         style="display: none"
         @change="onImagePicked"
       />
-    </n-space>
+    </a-space>
   </div>
 </template>
 
