@@ -158,7 +158,7 @@ cd ../face-service
 
 > 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker + 人脸识别子服务，并校验就绪。
 >
-> 自动拉起：`bash scripts/ensure-services.sh` 做「健康检查 + 只启动缺失服务」，幂等且带锁，默认由 Claude Code 的 SessionStart 钩子（见 `.claude/settings.json`）在新会话启动时自动调用，多会话并发时安全。
+> 自动拉起：`bash scripts/ensure-services.sh` 做「健康检查 + 只启动缺失服务」，幂等且带锁。服务启停由用户手动执行（项目规则），需要重启时手动运行上述脚本即可。
 
 **自定义端口：**
 
@@ -400,7 +400,7 @@ fashion-inspo/
     ├── batch_import.py           # 批量导入本地图片
     ├── backfill_vectors.py       # 存量素材向量回填
     ├── restart.sh                # 一键重启前后端 + worker
-    ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，供 SessionStart 钩子）
+    ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，手动执行）
     └── generate_icons.py         # 生成插件图标
 ```
 
