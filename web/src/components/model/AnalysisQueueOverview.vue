@@ -29,128 +29,160 @@ const taskStatusLabel: Record<string, string> = {
   failed: '失败',
   cancelled: '已取消',
 }
+
+/** 任务状态 → Arco Tag 预设色 */
+function statusColor(status: string): string {
+  if (status === 'success') return 'green'
+  if (status === 'failed') return 'red'
+  if (status === 'cancelled') return 'gray'
+  return 'arcoblue'
+}
 </script>
 
 <template>
   <div>
     <!-- 进度条 + 操作 -->
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">
-      <n-progress
+    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px">
+      <a-progress
         v-if="queueStats.total > 0"
         type="line"
-        :percentage="Math.round(queueStats.analyzed / queueStats.total * 100)"
-        :height="24"
-        style="flex:1"
+        :percent="Math.round((queueStats.analyzed / queueStats.total) * 100)"
+        :stroke-width="24"
+        style="flex: 1"
       />
-      <n-button
+      <a-button
         type="primary"
         @click="emit('analyzeAll')"
         :loading="batchAnalyzing"
         :disabled="queueStats.unanalyzed === 0"
       >
         {{ queueStats.unanalyzed > 0 ? `分析全部未分析 (${queueStats.unanalyzed})` : '全部已分析' }}
-      </n-button>
+      </a-button>
     </div>
 
     <!-- 批量分析任务进度（数据库驱动任务队列） -->
-    <n-card v-if="batchTask" size="small" style="margin-bottom:16px">
-      <template #header>
+    <a-card v-if="batchTask" size="small" style="margin-bottom: 16px">
+      <template #title>
         <span>批量分析任务 #{{ batchTask.id }}</span>
-        <n-tag
-          :type="batchTask.status === 'success' ? 'success' : batchTask.status === 'failed' ? 'error' : batchTask.status === 'cancelled' ? 'default' : 'info'"
-          size="small"
-          :bordered="false"
-          style="margin-left:8px"
-        >
+        <a-tag :color="statusColor(batchTask.status)" size="small" style="margin-left: 8px">
           {{ taskStatusLabel[batchTask.status] }}
-        </n-tag>
-        <n-button
+        </a-tag>
+        <a-button
           v-if="['success', 'failed', 'cancelled'].includes(batchTask.status)"
-          size="tiny"
-          text
-          type="default"
-          style="margin-left:auto"
+          size="mini"
+          type="text"
+          style="margin-left: auto"
           @click="emit('closeBatchTask')"
         >
           关闭
-        </n-button>
+        </a-button>
       </template>
-      <n-progress
+      <a-progress
         type="line"
-        :percentage="batchTask.progress"
-        :height="20"
-        :status="batchTask.status === 'failed' ? 'error' : batchTask.status === 'success' ? 'success' : undefined"
+        :percent="batchTask.progress"
+        :stroke-width="20"
+        :status="
+          batchTask.status === 'failed'
+            ? 'danger'
+            : batchTask.status === 'success'
+              ? 'success'
+              : undefined
+        "
       />
-      <div style="display:flex;align-items:center;gap:12px;margin-top:6px;font-size:12px;color:#888;flex-wrap:wrap">
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-top: 6px;
+          font-size: 12px;
+          color: #888;
+          flex-wrap: wrap;
+        "
+      >
         <span>{{ batchTask.done }} / {{ batchTask.total }} 已完成</span>
-        <span v-if="batchTask.retry_count > 0" style="color:#f0a020">已重试 {{ batchTask.retry_count }} 次</span>
-        <span v-if="batchTask.status === 'pending' && batchTask.next_retry_at" style="color:#f0a020">等待自动重试中...</span>
-        <n-button
+        <span v-if="batchTask.retry_count > 0" style="color: #f0a020"
+          >已重试 {{ batchTask.retry_count }} 次</span
+        >
+        <span
+          v-if="batchTask.status === 'pending' && batchTask.next_retry_at"
+          style="color: #f0a020"
+          >等待自动重试中...</span
+        >
+        <a-button
           v-if="batchTask.status === 'pending'"
-          size="tiny"
-          type="error"
-          ghost
-          style="margin-left:auto"
+          size="mini"
+          type="outline"
+          status="danger"
+          style="margin-left: auto"
           @click="emit('cancelBatchTask')"
         >
           取消任务
-        </n-button>
+        </a-button>
       </div>
-      <div v-if="batchTask.error" style="font-size:12px;color:#ef4444;margin-top:4px">
+      <div v-if="batchTask.error" style="font-size: 12px; color: #ef4444; margin-top: 4px">
         {{ batchTask.error }}
       </div>
-    </n-card>
+    </a-card>
 
     <!-- 正在分析提示 + 暂停/恢复 -->
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-      <n-alert v-if="Object.keys(activeAnalyses).length > 0" type="info" style="flex:1;min-width:300px" closable>
-        <template #header>正在分析 {{ Object.keys(activeAnalyses).length }} 个素材...</template>
-        <div v-for="(status, id) in activeAnalyses" :key="id" style="font-size:12px;color:#666">
+    <div
+      style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap"
+    >
+      <a-alert
+        v-if="Object.keys(activeAnalyses).length > 0"
+        type="info"
+        style="flex: 1; min-width: 300px"
+        closable
+      >
+        <template #title>正在分析 {{ Object.keys(activeAnalyses).length }} 个素材...</template>
+        <div v-for="(status, id) in activeAnalyses" :key="id" style="font-size: 12px; color: #666">
           素材 {{ id.slice(0, 8) }}... — {{ status }}
         </div>
-      </n-alert>
-      <n-button
+      </a-alert>
+      <a-button
         v-if="Object.keys(activeAnalyses).length > 0 || pendingQueue.length > 0"
-        :type="queuePaused ? 'success' : 'warning'"
+        :type="queuePaused ? 'primary' : 'secondary'"
+        :status="queuePaused ? 'success' : 'warning'"
         size="small"
         @click="emit('togglePause')"
       >
         {{ queuePaused ? '▶ 恢复队列' : '⏸ 暂停队列' }}
-      </n-button>
+      </a-button>
     </div>
 
     <!-- 排队中素材缩略图 -->
     <div v-if="pendingQueue.length > 0" class="pending-queue">
-      <div style="font-size:13px;font-weight:600;margin-bottom:8px">
+      <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px">
         📋 排队中 ({{ pendingQueue.length }})
-        <span v-if="queuePaused" style="color:#f0a020;font-size:12px"> — 已暂停</span>
+        <span v-if="queuePaused" style="color: #f0a020; font-size: 12px"> — 已暂停</span>
       </div>
       <div class="pending-grid">
         <div v-for="item in pendingQueue" :key="item.inspiration_id" class="pending-card">
           <img
             v-if="item.thumbnail_path"
             :src="getFileUrl(item.thumbnail_path)"
-            style="width:80px;height:120px;object-fit:cover;border-radius:4px"
+            style="width: 80px; height: 120px; object-fit: cover; border-radius: 4px"
           />
           <img
             v-else-if="item.file_path"
             :src="getFileUrl(item.file_path)"
-            style="width:80px;height:120px;object-fit:cover;border-radius:4px"
+            style="width: 80px; height: 120px; object-fit: cover; border-radius: 4px"
           />
-          <div style="font-size:10px;color:#999;text-align:center;margin-top:2px">
+          <div style="font-size: 10px; color: #999; text-align: center; margin-top: 2px">
             {{ item.inspiration_id.slice(0, 6) }}...
           </div>
-          <div style="font-size:10px;color:#666;text-align:center">{{ item.status }}</div>
-          <n-button
+          <div style="font-size: 10px; color: #666; text-align: center">{{ item.status }}</div>
+          <a-button
             v-if="item.status === '排队中'"
-            size="tiny"
-            type="error"
-            ghost
-            style="margin-top:2px;font-size:10px"
+            size="mini"
+            type="outline"
+            status="danger"
+            style="margin-top: 2px; font-size: 10px"
             @click="emit('cancelQueueItem', item.inspiration_id)"
           >
             取消
-          </n-button>
+          </a-button>
         </div>
       </div>
     </div>

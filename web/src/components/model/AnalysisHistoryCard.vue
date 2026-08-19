@@ -2,14 +2,19 @@
 /** 分析历史卡片：筛选、批量操作、历史表格与分页。 */
 
 import { h, computed, ref, onBeforeUnmount } from 'vue'
-import { NTag, NButton, NIcon, NPopconfirm, NPopover, useMessage, type DataTableColumns } from 'naive-ui'
-import { GitCompareOutline, RefreshOutline, TrashBinOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  Tag,
+  Button,
+  Popconfirm,
+  Tooltip,
+  Message,
+  type TableColumnData,
+} from '@arco-design/web-vue'
+import { IconRefresh, IconDelete, IconSync } from '@arco-design/web-vue/es/icon'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { HistoryItem } from '@/types/analysis'
-
-const message = useMessage()
 
 const props = defineProps<{
   history: HistoryItem[]
@@ -61,27 +66,29 @@ const emit = defineEmits<{
 async function copyText(text: string) {
   const ok = await copyToClipboard(text)
   if (ok) {
-    message.success('已复制到剪贴板')
+    Message.success('已复制到剪贴板')
   } else {
-    message.error('复制失败')
+    Message.error('复制失败')
   }
 }
 
-/** 状态筛选变化：同步 v-model 并触发加载 */
-function onFilterUpdate(value: string | null) {
+/** 状态筛选变化：同步 v-model 并触发加载（空串 ↔ null 哨兵转换） */
+function onFilterUpdate(v: unknown) {
+  const value = (v as string) || null
   emit('update:historyFilter', value)
   emit('filterHistory', value)
 }
 
 /** 模型筛选变化：同步 v-model 并触发加载 */
-function onModelFilterUpdate(value: string | null) {
+function onModelFilterUpdate(v: unknown) {
+  const value = (v as string) || null
   emit('update:historyModelFilter', value)
   emit('filterByModel', value)
 }
 
 /** 搜索关键词变化：仅同步 v-model */
-function onSearchUpdate(value: string) {
-  emit('update:historySearchId', value)
+function onSearchUpdate(v: string) {
+  emit('update:historySearchId', v)
 }
 
 /** 耗时排序选项 */
@@ -91,10 +98,22 @@ const sortOptions = [
 ]
 
 /** 日期范围变化：同步父组件并触发加载 */
-function onDateRangeChange(value: [number, number] | null) {
-  if (value) emit('filterByDate', value[0], value[1])
-  else emit('filterByDate', null, null)
+function onDateRangeChange(value: unknown) {
+  const arr = value as Array<string | number | Date> | undefined
+  if (arr && arr.length === 2) {
+    const [s, e] = arr.map((v) => (typeof v === 'number' ? v : new Date(String(v)).getTime()))
+    emit('filterByDate', s, e)
+  } else {
+    emit('filterByDate', null, null)
+  }
 }
+
+/** 日期范围绑定值（Arco date-picker 类型定义不含数组，断言收敛到单值类型） */
+const dateRangeValue = computed(() =>
+  props.historyStartDate && props.historyEndDate
+    ? ([props.historyStartDate, props.historyEndDate] as unknown as string | number | Date)
+    : undefined,
+)
 
 /** 分页变化 */
 function onPageChange(page: number) {
@@ -136,35 +155,41 @@ function clearHoverPreview() {
 onBeforeUnmount(clearHoverPreview)
 
 /** 历史表格列定义 */
-const columns = computed<DataTableColumns<HistoryItem>>(() => [
+const columns = computed<TableColumnData[]>(() => [
   {
-    title: () => h('input', {
-      type: 'checkbox',
-      checked: props.selectedHistoryIds.size === props.history.length && props.history.length > 0,
-      onClick: () => emit('selectAll'),
-    }),
-    key: '_check',
+    title: () =>
+      h('input', {
+        type: 'checkbox',
+        checked: props.selectedHistoryIds.size === props.history.length && props.history.length > 0,
+        onClick: () => emit('selectAll'),
+      }),
+    dataIndex: '_check',
     width: 36,
-    render: (row: HistoryItem) => h('input', {
-      type: 'checkbox',
-      checked: props.selectedHistoryIds.has(row.id),
-      onClick: () => emit('toggleSelect', row.id),
-    }),
+    render: ({ record }) => {
+      const row = record as HistoryItem
+      return h('input', {
+        type: 'checkbox',
+        checked: props.selectedHistoryIds.has(row.id),
+        onClick: () => emit('toggleSelect', row.id),
+      })
+    },
   },
   {
     title: '预览',
-    key: 'thumbnail',
+    dataIndex: 'thumbnail',
     width: 70,
-    render: (row: HistoryItem) => {
+    render: ({ record }) => {
+      const row = record as HistoryItem
       const thumb = row.thumbnail_path || row.file_path
       if (!thumb) return '-'
       const full = previewImagePath(row)
-      // 悬停快速预览：固定居中浮层（不再用 popover 跟随缩略图，避免大图超出屏幕）；
+      // 悬停快速预览：固定居中浮层（不再用 tooltip 跟随缩略图，避免大图超出屏幕）；
       // 点击缩略图打开全屏灯箱动态浏览
       return h('img', {
         src: getFileUrl(thumb),
         title: '悬停快速预览，点击全屏浏览',
-        style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
+        style:
+          'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
         onMouseenter: () => startHoverPreview(full),
         onMouseleave: clearHoverPreview,
         onClick: () => {
@@ -175,224 +200,307 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
   },
   {
     title: '模型',
-    key: 'model_name',
+    dataIndex: 'model_name',
     width: 64,
-    render: (row: HistoryItem) => h(NPopover, {
-      trigger: 'hover',
-      placement: 'top-start',
-      style: { maxWidth: '360px' },
-    }, {
-      // 单元格内最多显示约 3 个字符，其余省略；完整模型名悬停气泡阅读
-      trigger: () => h('span', {
-        style: 'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
-      }, row.model_name),
-      default: () => h('span', { style: 'font-size:12px;word-break:break-all' }, row.model_name),
-    }),
+    render: ({ record }) => {
+      const row = record as HistoryItem
+      return h(
+        Tooltip,
+        {
+          position: 'tl',
+          content: row.model_name,
+        },
+        {
+          default: () =>
+            h(
+              'span',
+              {
+                style:
+                  'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
+              },
+              row.model_name,
+            ),
+        },
+      )
+    },
   },
   {
     title: '状态',
-    key: 'status',
+    dataIndex: 'status',
     width: 70,
-    render: (row: HistoryItem) => h(NTag, { type: row.status === 'success' ? 'success' : 'error', size: 'small' }, row.status === 'success' ? '成功' : '失败'),
+    render: ({ record }) => {
+      const row = record as HistoryItem
+      return h(Tag, { color: row.status === 'success' ? 'green' : 'red', size: 'small' }, () =>
+        row.status === 'success' ? '成功' : '失败',
+      )
+    },
   },
   {
     title: '提取标签',
-    key: 'tags',
+    dataIndex: 'tags',
     width: 180,
-    render: (row: HistoryItem) => {
+    render: ({ record }) => {
+      const row = record as HistoryItem
       const tags = row.tags || []
       if (tags.length === 0) return '-'
       const shown = tags.slice(0, 4)
       const more = tags.length > 4 ? ` +${tags.length - 4}` : ''
       return h('span', { style: 'display:flex;flex-wrap:wrap;gap:2px' }, [
-        ...shown.map(t => h(NTag, { key: t.name, size: 'tiny', bordered: false }, t.name)),
+        ...shown.map((t) => h(Tag, { key: t.name, size: 'small' }, () => t.name)),
         more ? h('span', { style: 'font-size:11px;color:#999' }, more) : null,
       ])
     },
   },
   {
     title: '失败原因',
-    key: 'error',
+    dataIndex: 'error',
     width: 76,
-    render: (row: HistoryItem) => {
+    render: ({ record }) => {
+      const row = record as HistoryItem
       const err = row.error
       return err
-        ? h(NPopover, {
-          trigger: 'hover',
-          placement: 'top-start',
-          style: { maxWidth: '480px' },
-        }, {
-          // 单元格内最多显示 3 个字符，其余省略；完整内容悬停气泡阅读
-          trigger: () => h('span', {
-            style: 'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
-          }, err),
-          default: () => h('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
-            h('div', {
-              style: 'font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto',
-            }, err),
-            h('div', { style: 'display:flex;justify-content:flex-end' }, [
-              h(NButton, { size: 'tiny', quaternary: true, onClick: () => copyText(err) }, '复制'),
-            ]),
-          ]),
-        })
+        ? h(
+            Tooltip,
+            {
+              position: 'tl',
+            },
+            {
+              content: () =>
+                h('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+                  h(
+                    'div',
+                    {
+                      style:
+                        'font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto',
+                    },
+                    err,
+                  ),
+                  h('div', { style: 'display:flex;justify-content:flex-end' }, [
+                    h(
+                      Button,
+                      { size: 'mini', type: 'text', onClick: () => copyText(err) },
+                      () => '复制',
+                    ),
+                  ]),
+                ]),
+              default: () =>
+                h(
+                  'span',
+                  {
+                    style:
+                      'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:3.6em;cursor:help',
+                  },
+                  err,
+                ),
+            },
+          )
         : h('span', { style: 'font-size:12px;color:#999' }, '-')
     },
   },
   {
     title: '耗时',
-    key: 'time',
+    dataIndex: 'time',
     width: 80,
-    render: (row: HistoryItem) => formatMs(row.processing_time_ms),
+    render: ({ record }) => formatMs((record as HistoryItem).processing_time_ms),
   },
   {
     title: '时间',
-    key: 'created_at',
+    dataIndex: 'created_at',
     width: 160,
-    render: (row: HistoryItem) => formatDate(row.created_at),
+    render: ({ record }) => formatDate((record as HistoryItem).created_at),
   },
   {
     title: '操作',
-    key: 'actions',
+    dataIndex: 'actions',
     width: 200,
-    render: (row: HistoryItem) => h('span', { style: 'display:flex;gap:4px;align-items:center' }, [
-      h(NButton, { size: 'tiny', onClick: () => emit('viewDetail', row.id) }, row.status === 'success' ? '详情' : '原始输出'),
-      row.status === 'error'
-        ? h(NButton, {
-          size: 'tiny',
-          secondary: true,
-          title: '重试分析',
-          onClick: () => emit('retryAnalysis', row.inspiration_id),
-        }, { icon: () => h(NIcon, { component: RefreshOutline }) })
-        : null,
-      h(NButton, {
-        size: 'tiny',
-        secondary: true,
-        title: '对比分析结果',
-        onClick: () => emit('viewCompare', row.inspiration_id),
-      }, { icon: () => h(NIcon, { component: GitCompareOutline }) }),
-      h(NPopconfirm, { onPositiveClick: () => emit('deleteLog', row.id) },
-        {
-          trigger: () => h(NButton, {
-            size: 'tiny',
-            type: 'warning',
-            secondary: true,
-            title: '删除分析记录',
-          }, { icon: () => h(NIcon, { component: TrashOutline }) }),
-          default: () => '确定删除此分析记录？此操作不可恢复。',
-        },
-      ),
-      h(NPopconfirm, { onPositiveClick: () => emit('deleteInspiration', row.inspiration_id) },
-        {
-          trigger: () => h(NButton, {
-            size: 'tiny',
-            type: 'error',
-            title: '删除素材（含图片文件，不可恢复）',
-          }, { icon: () => h(NIcon, { component: TrashBinOutline }) }),
-          default: () => '删除该素材？将同时删除图片文件与全部分析记录，此操作不可恢复！',
-        },
-      ),
-    ]),
+    render: ({ record }) => {
+      const row = record as HistoryItem
+      return h('span', { style: 'display:flex;gap:4px;align-items:center' }, [
+        h(Button, { size: 'mini', onClick: () => emit('viewDetail', row.id) }, () =>
+          row.status === 'success' ? '详情' : '原始输出',
+        ),
+        row.status === 'error'
+          ? h(
+              Button,
+              {
+                size: 'mini',
+                type: 'secondary',
+                title: '重试分析',
+                onClick: () => emit('retryAnalysis', row.inspiration_id),
+              },
+              { icon: () => h(IconRefresh) },
+            )
+          : null,
+        h(
+          Button,
+          {
+            size: 'mini',
+            type: 'secondary',
+            title: '对比分析结果',
+            onClick: () => emit('viewCompare', row.inspiration_id),
+          },
+          { icon: () => h(IconSync) },
+        ),
+        h(
+          Popconfirm,
+          {
+            content: '确定删除此分析记录？此操作不可恢复。',
+            onOk: () => emit('deleteLog', row.id),
+          },
+          {
+            default: () =>
+              h(
+                Button,
+                {
+                  size: 'mini',
+                  type: 'secondary',
+                  status: 'warning',
+                  title: '删除分析记录',
+                },
+                { icon: () => h(IconDelete) },
+              ),
+          },
+        ),
+        h(
+          Popconfirm,
+          {
+            content: '删除该素材？将同时删除图片文件与全部分析记录，此操作不可恢复！',
+            onOk: () => emit('deleteInspiration', row.inspiration_id),
+          },
+          {
+            default: () =>
+              h(
+                Button,
+                {
+                  size: 'mini',
+                  status: 'danger',
+                  title: '删除素材（含图片文件，不可恢复）',
+                },
+                { icon: () => h(IconDelete) },
+              ),
+          },
+        ),
+      ])
+    },
   },
 ])
 </script>
 
 <template>
-  <n-card title="分析历史" size="small">
-    <template #header-extra>
-      <n-space :size="8">
-        <n-button size="small" type="warning" secondary :loading="retryingAll" @click="emit('retryAllFailed')">
+  <a-card title="分析历史" size="small">
+    <template #extra>
+      <a-space :size="8">
+        <a-button
+          size="small"
+          type="secondary"
+          status="warning"
+          :loading="retryingAll"
+          @click="emit('retryAllFailed')"
+        >
           一键重试失败 {{ queueFailedCount > 0 ? `(${queueFailedCount})` : '' }}
-        </n-button>
-        <n-popconfirm @positive-click="emit('deleteAllFailed')">
-          <template #trigger>
-            <n-button size="small" type="error" secondary :loading="clearingFailed">删除所有失败记录</n-button>
-          </template>
-          确定要删除所有失败记录吗？此操作不可恢复。
-        </n-popconfirm>
-        <n-button size="small" secondary @click="emit('exportCsv')">导出 CSV</n-button>
-        <n-button size="small" @click="emit('refresh')" :loading="historyLoading">刷新</n-button>
-      </n-space>
+        </a-button>
+        <a-popconfirm
+          content="确定要删除所有失败记录吗？此操作不可恢复。"
+          @ok="emit('deleteAllFailed')"
+        >
+          <a-button size="small" type="secondary" status="danger" :loading="clearingFailed"
+            >删除所有失败记录</a-button
+          >
+        </a-popconfirm>
+        <a-button size="small" type="secondary" @click="emit('exportCsv')">导出 CSV</a-button>
+        <a-button size="small" @click="emit('refresh')" :loading="historyLoading">刷新</a-button>
+      </a-space>
     </template>
 
     <!-- 筛选栏 -->
     <div class="history-filters">
-      <n-radio-group :value="historyFilter" @update:value="onFilterUpdate" size="small">
-        <n-radio-button :value="null">全部</n-radio-button>
-        <n-radio-button value="success">成功</n-radio-button>
-        <n-radio-button value="error">失败</n-radio-button>
-      </n-radio-group>
-      <n-select
-        v-if="historyModelNames.length"
-        :value="historyModelFilter"
-        :options="[{ label: '全部模型', value: null }, ...historyModelNames.map(m => ({ label: m, value: m }))]"
+      <a-radio-group
+        :model-value="historyFilter ?? ''"
+        type="button"
         size="small"
-        style="width:160px"
-        @update:value="onModelFilterUpdate"
+        @change="onFilterUpdate"
+      >
+        <a-radio value="">全部</a-radio>
+        <a-radio value="success">成功</a-radio>
+        <a-radio value="error">失败</a-radio>
+      </a-radio-group>
+      <a-select
+        v-if="historyModelNames.length"
+        :model-value="historyModelFilter ?? undefined"
+        :options="historyModelNames.map((m) => ({ label: m, value: m }))"
+        size="small"
+        style="width: 160px"
+        @change="onModelFilterUpdate"
         placeholder="按模型筛选"
+        allow-clear
       />
-      <n-input
-        :value="historySearchId"
+      <a-input
+        :model-value="historySearchId"
         size="small"
         placeholder="搜索素材 ID..."
-        style="width:200px"
-        clearable
-        @update:value="onSearchUpdate"
-        @keyup.enter="emit('searchById')"
+        style="width: 200px"
+        allow-clear
+        @input="onSearchUpdate"
+        @press-enter="emit('searchById')"
         @clear="emit('searchById')"
       >
         <template #suffix>
-          <n-button size="tiny" @click="emit('searchById')">🔍</n-button>
+          <a-button size="mini" @click="emit('searchById')">🔍</a-button>
         </template>
-      </n-input>
-      <n-date-picker
-        :value="historyStartDate && historyEndDate ? [historyStartDate, historyEndDate] : null"
-        type="daterange"
+      </a-input>
+      <a-date-picker
+        :model-value="dateRangeValue"
+        range
         size="small"
-        style="width:250px"
-        clearable
-        @update:value="onDateRangeChange"
+        style="width: 250px"
+        allow-clear
+        @change="onDateRangeChange"
       />
-      <n-select
-        :value="historySortBy"
+      <a-select
+        :model-value="historySortBy ?? undefined"
         :options="sortOptions"
         size="small"
-        style="width:130px"
+        style="width: 130px"
         placeholder="按耗时排序"
-        clearable
-        @update:value="(v: string | null) => emit('sortByTime', v)"
+        allow-clear
+        @change="(v: unknown) => emit('sortByTime', (v as string) || null)"
       />
     </div>
 
     <!-- 批量操作栏 -->
     <div v-if="selectedHistoryIds.size > 0" class="batch-bar">
       <span>已选 {{ selectedHistoryIds.size }} 条</span>
-      <n-button size="tiny" type="primary" ghost @click="emit('batchRetry')">重新分析</n-button>
-      <n-popconfirm @positive-click="emit('batchDelete')">
-        <template #trigger>
-          <n-button size="tiny" type="error" ghost>批量删除</n-button>
-        </template>
-        确定删除选中的 {{ selectedHistoryIds.size }} 条记录？
-      </n-popconfirm>
-      <n-button size="tiny" @click="emit('clearSelection')">取消选择</n-button>
+      <a-button size="mini" type="outline" @click="emit('batchRetry')">重新分析</a-button>
+      <a-popconfirm
+        :content="`确定删除选中的 ${selectedHistoryIds.size} 条记录？`"
+        @ok="emit('batchDelete')"
+      >
+        <a-button size="mini" type="outline" status="danger">批量删除</a-button>
+      </a-popconfirm>
+      <a-button size="mini" @click="emit('clearSelection')">取消选择</a-button>
     </div>
 
-    <n-data-table
+    <a-table
       v-if="history.length"
       :columns="columns"
       :data="history"
       :bordered="false"
       size="small"
       :loading="historyLoading"
+      :pagination="false"
     />
-    <n-empty v-else description="暂无分析记录" size="small" />
+    <a-empty v-else description="暂无分析记录" />
 
     <!-- 分页 -->
-    <div v-if="historyTotal > historyPageSize" style="display:flex;justify-content:center;margin-top:16px">
-      <n-pagination
-        :page="historyPage"
+    <div
+      v-if="historyTotal > historyPageSize"
+      style="display: flex; justify-content: center; margin-top: 16px"
+    >
+      <a-pagination
+        :current="historyPage"
         :page-size="historyPageSize"
-        :item-count="historyTotal"
-        @update:page="onPageChange"
+        :total="historyTotal"
+        @change="onPageChange"
         size="small"
       />
     </div>
@@ -405,7 +513,7 @@ const columns = computed<DataTableColumns<HistoryItem>>(() => [
         </div>
       </div>
     </Teleport>
-  </n-card>
+  </a-card>
 </template>
 
 <style scoped>

@@ -7,10 +7,18 @@ defineProps<{ queueStats: QueueStats }>()
 </script>
 
 <template>
-  <n-grid :cols="4" :x-gap="12" style="margin-bottom:16px">
-    <n-gi><n-card size="small"><n-statistic label="总素材" :value="queueStats.total" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="已分析" :value="queueStats.analyzed" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="未分析" :value="queueStats.unanalyzed" /></n-card></n-gi>
-    <n-gi><n-card size="small"><n-statistic label="失败" :value="queueStats.failed" /></n-card></n-gi>
-  </n-grid>
+  <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+    <a-col :span="6"
+      ><a-card size="small"><a-statistic title="总素材" :value="queueStats.total" /></a-card
+    ></a-col>
+    <a-col :span="6"
+      ><a-card size="small"><a-statistic title="已分析" :value="queueStats.analyzed" /></a-card
+    ></a-col>
+    <a-col :span="6"
+      ><a-card size="small"><a-statistic title="未分析" :value="queueStats.unanalyzed" /></a-card
+    ></a-col>
+    <a-col :span="6"
+      ><a-card size="small"><a-statistic title="失败" :value="queueStats.failed" /></a-card
+    ></a-col>
+  </a-row>
 </template>

@@ -31,17 +31,51 @@ const compareApi = useAnalysisCompare()
 
 // 解构出顶层 ref，便于模板自动解包
 const {
-  queueStats, activeAnalyses, batchAnalyzing, batchTask, pendingQueue, queuePaused,
-  triggerBatchAnalyze, cancelBatchTask, retryAnalysis, togglePauseQueue, cancelQueueItem,
+  queueStats,
+  activeAnalyses,
+  batchAnalyzing,
+  batchTask,
+  pendingQueue,
+  queuePaused,
+  triggerBatchAnalyze,
+  cancelBatchTask,
+  retryAnalysis,
+  togglePauseQueue,
+  cancelQueueItem,
 } = queueApi
 
 const {
-  history, historyTotal, historyPage, historyPageSize, historyFilter, historyModelFilter,
-  historySearchId, historyStartDate, historyEndDate, historySortBy, historyLoading,
-  selectedHistoryIds, historyModelNames, clearingFailed, retryingAll,
-  loadHistory, filterHistory, filterByModel, searchById, filterByDate, sortByTime, exportHistoryCsv,
-  onHistoryPageChange, batchDeleteHistory, batchRetryHistory, toggleSelectHistory, selectAllHistory,
-  deleteLog, deleteInspirationFromHistory, retryAllFailed, deleteAllFailed,
+  history,
+  historyTotal,
+  historyPage,
+  historyPageSize,
+  historyFilter,
+  historyModelFilter,
+  historySearchId,
+  historyStartDate,
+  historyEndDate,
+  historySortBy,
+  historyLoading,
+  selectedHistoryIds,
+  historyModelNames,
+  clearingFailed,
+  retryingAll,
+  loadHistory,
+  filterHistory,
+  filterByModel,
+  searchById,
+  filterByDate,
+  sortByTime,
+  exportHistoryCsv,
+  onHistoryPageChange,
+  batchDeleteHistory,
+  batchRetryHistory,
+  toggleSelectHistory,
+  selectAllHistory,
+  deleteLog,
+  deleteInspirationFromHistory,
+  retryAllFailed,
+  deleteAllFailed,
 } = historyApi
 
 const { detailVisible, detailLoading, currentDetail, viewDetail } = detailApi
@@ -133,12 +167,24 @@ onUnmounted(() => {
     />
 
     <!-- 分析详情弹窗 -->
-    <AnalysisDetailModal v-model:visible="detailVisible" :loading="detailLoading" :detail="currentDetail" />
+    <AnalysisDetailModal
+      v-model:visible="detailVisible"
+      :loading="detailLoading"
+      :detail="currentDetail"
+    />
 
     <!-- 分析结果对比弹窗 -->
-    <AnalysisCompareModal v-model:visible="compareVisible" :loading="compareLoading" :data="compareData" />
+    <AnalysisCompareModal
+      v-model:visible="compareVisible"
+      :loading="compareLoading"
+      :data="compareData"
+    />
 
     <!-- 大图灯箱：点击历史缩略图全屏浏览（组件发出 close 事件，需显式监听关闭） -->
-    <ImageLightbox :show="lightboxVisible" :image-path="lightboxImage" @close="lightboxVisible = false" />
+    <ImageLightbox
+      :show="lightboxVisible"
+      :image-path="lightboxImage"
+      @close="lightboxVisible = false"
+    />
   </div>
 </template>

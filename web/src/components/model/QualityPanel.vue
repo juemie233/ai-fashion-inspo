@@ -3,7 +3,7 @@
 
 import { h, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag } from 'naive-ui'
+import { Button, Tag, type TableColumnData } from '@arco-design/web-vue'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
@@ -12,7 +12,15 @@ import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 
-echarts.use([BarChart, LineChart, PieChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer])
+echarts.use([
+  BarChart,
+  LineChart,
+  PieChart,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  CanvasRenderer,
+])
 
 const router = useRouter()
 
@@ -28,7 +36,12 @@ interface QualityDashboard {
   daily_trends: Array<{ day: string; total: number; success: number }>
   overview: Record<string, any>
   problem_items: Record<string, number>
-  model_comparison: Array<{ model_name: string; total: number; success: number; success_rate: number }>
+  model_comparison: Array<{
+    model_name: string
+    total: number
+    success: number
+    success_rate: number
+  }>
   error_distribution: Array<{ category: string; count: number }>
   failed_items: FailedItem[]
 }
@@ -49,8 +62,11 @@ async function loadQuality() {
     const { data } = await apiClient.get<QualityDashboard>('/ai/quality-dashboard')
     qualityData.value = data
     nextTick(renderCharts)
-  } catch { /* 静默 */ }
-  finally { qualityLoading.value = false }
+  } catch {
+    /* 静默 */
+  } finally {
+    qualityLoading.value = false
+  }
 }
 
 watch(qualityData, () => nextTick(renderCharts), { deep: true })
@@ -74,8 +90,23 @@ function renderTrend() {
     xAxis: { type: 'category', data: rows.map((r) => r.day.slice(5)), axisLabel: { fontSize: 10 } },
     yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
     series: [
-      { name: '总量', type: 'line', smooth: true, showSymbol: false, data: rows.map((r) => r.total), itemStyle: { color: '#3b82f6' }, areaStyle: { opacity: 0.08 } },
-      { name: '成功', type: 'line', smooth: true, showSymbol: false, data: rows.map((r) => r.success), itemStyle: { color: '#22c55e' } },
+      {
+        name: '总量',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: rows.map((r) => r.total),
+        itemStyle: { color: '#3b82f6' },
+        areaStyle: { opacity: 0.08 },
+      },
+      {
+        name: '成功',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: rows.map((r) => r.success),
+        itemStyle: { color: '#22c55e' },
+      },
     ],
   })
 }
@@ -89,11 +120,29 @@ function renderModelComparison() {
     grid: { left: 8, right: 16, top: 32, bottom: 8, containLabel: true },
     legend: { top: 0, textStyle: { fontSize: 11 } },
     tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: rows.map((r) => r.model_name), axisLabel: { fontSize: 10, rotate: 20 } },
+    xAxis: {
+      type: 'category',
+      data: rows.map((r) => r.model_name),
+      axisLabel: { fontSize: 10, rotate: 20 },
+    },
     yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eee' } } },
     series: [
-      { name: '成功', type: 'bar', stack: 'total', data: rows.map((r) => r.success), itemStyle: { color: '#22c55e' }, barMaxWidth: 28 },
-      { name: '失败', type: 'bar', stack: 'total', data: rows.map((r) => r.total - r.success), itemStyle: { color: '#d03050' }, barMaxWidth: 28 },
+      {
+        name: '成功',
+        type: 'bar',
+        stack: 'total',
+        data: rows.map((r) => r.success),
+        itemStyle: { color: '#22c55e' },
+        barMaxWidth: 28,
+      },
+      {
+        name: '失败',
+        type: 'bar',
+        stack: 'total',
+        data: rows.map((r) => r.total - r.success),
+        itemStyle: { color: '#d03050' },
+        barMaxWidth: 28,
+      },
     ],
   })
 }
@@ -132,86 +181,200 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
-  trendChart?.dispose(); trendChart = null
-  modelChart?.dispose(); modelChart = null
-  errorChart?.dispose(); errorChart = null
+  trendChart?.dispose()
+  trendChart = null
+  modelChart?.dispose()
+  modelChart = null
+  errorChart?.dispose()
+  errorChart = null
 })
+
+/** 失败素材表格列定义 */
+const failedColumns: TableColumnData[] = [
+  {
+    title: '预览',
+    dataIndex: 'thumb',
+    width: 60,
+    render: ({ record }) => {
+      const row = record as FailedItem
+      return row.thumbnail_path
+        ? h('img', {
+            src: getFileUrl(row.thumbnail_path),
+            style: 'width:40px;height:56px;object-fit:cover;border-radius:4px',
+          })
+        : '-'
+    },
+  },
+  {
+    title: '素材 ID',
+    dataIndex: 'id',
+    width: 200,
+    render: ({ record }) =>
+      h(
+        'span',
+        { style: 'font-size:12px;word-break:break-all' },
+        (record as FailedItem).inspiration_id,
+      ),
+  },
+  {
+    title: '模型',
+    dataIndex: 'model',
+    width: 150,
+    render: ({ record }) => h(Tag, { size: 'small' }, () => (record as FailedItem).model_name),
+  },
+  {
+    title: '失败原因',
+    dataIndex: 'error',
+    render: ({ record }) => {
+      const row = record as FailedItem
+      return h(
+        'span',
+        {
+          title: row.error,
+          style:
+            'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px',
+        },
+        row.error || '-',
+      )
+    },
+  },
+  {
+    title: '时间',
+    dataIndex: 'time',
+    width: 150,
+    render: ({ record }) => formatDate((record as FailedItem).created_at),
+  },
+  {
+    title: '操作',
+    dataIndex: 'actions',
+    width: 80,
+    render: ({ record }) => {
+      const row = record as FailedItem
+      return h(
+        Button,
+        { size: 'mini', onClick: () => router.push(`/detail/${row.inspiration_id}`) },
+        () => '查看',
+      )
+    },
+  },
+]
 </script>
 
 <template>
-  <n-spin :show="qualityLoading">
+  <a-spin :loading="qualityLoading">
     <template v-if="qualityData">
       <!-- 总览卡片 -->
-      <n-grid :cols="5" :x-gap="12" style="margin-bottom:16px">
-        <n-gi><n-card size="small"><n-statistic label="素材总数" :value="qualityData.overview.total_inspirations" /></n-card></n-gi>
-        <n-gi><n-card size="small"><n-statistic label="已分析" :value="qualityData.overview.analyzed_count" /></n-card></n-gi>
-        <n-gi><n-card size="small"><n-statistic label="覆盖率" :value="`${qualityData.overview.coverage_percent}%`" /></n-card></n-gi>
-        <n-gi><n-card size="small"><n-statistic label="平均标签" :value="qualityData.overview.avg_tags_per_image" /></n-card></n-gi>
-        <n-gi><n-card size="small"><n-statistic label="平均耗时" :value="formatMs(qualityData.overview.avg_time_ms)" /></n-card></n-gi>
-      </n-grid>
+      <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+        <a-col :flex="1"
+          ><a-card size="small"
+            ><a-statistic
+              title="素材总数"
+              :value="qualityData.overview.total_inspirations" /></a-card
+        ></a-col>
+        <a-col :flex="1"
+          ><a-card size="small"
+            ><a-statistic title="已分析" :value="qualityData.overview.analyzed_count" /></a-card
+        ></a-col>
+        <a-col :flex="1"
+          ><a-card size="small"
+            ><a-statistic title="覆盖率" :value="qualityData.overview.coverage_percent" /><span
+              class="stat-custom"
+              >%</span
+            ></a-card
+          ></a-col
+        >
+        <a-col :flex="1"
+          ><a-card size="small"
+            ><a-statistic
+              title="平均标签"
+              :value="qualityData.overview.avg_tags_per_image" /></a-card
+        ></a-col>
+        <a-col :flex="1"
+          ><a-card size="small"
+            ><a-statistic title="平均耗时" :value="0" /><span class="stat-custom">{{
+              formatMs(qualityData.overview.avg_time_ms)
+            }}</span></a-card
+          ></a-col
+        >
+      </a-row>
 
       <!-- 问题素材 -->
-      <n-grid :cols="2" :x-gap="12" style="margin-bottom:16px">
-        <n-gi>
-          <n-card size="small" :bordered="true" :style="{ borderColor: (qualityData.problem_items.multi_fail_count > 0 ? '#d03050' : '#e5e7eb') }">
-            <n-statistic label="🔴 多次失败 (≥3次)" :value="qualityData.problem_items.multi_fail_count" />
-          </n-card>
-        </n-gi>
-        <n-gi>
-          <n-card size="small" :bordered="true" :style="{ borderColor: (qualityData.problem_items.zero_tag_count > 0 ? '#f0a020' : '#e5e7eb') }">
-            <n-statistic label="🟡 零标签输出" :value="qualityData.problem_items.zero_tag_count" />
-          </n-card>
-        </n-gi>
-      </n-grid>
+      <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+        <a-col :flex="1">
+          <a-card
+            size="small"
+            :style="{
+              borderColor: qualityData.problem_items.multi_fail_count > 0 ? '#d03050' : '#e5e7eb',
+            }"
+          >
+            <a-statistic
+              title="🔴 多次失败 (≥3次)"
+              :value="qualityData.problem_items.multi_fail_count"
+            />
+          </a-card>
+        </a-col>
+        <a-col :flex="1">
+          <a-card
+            size="small"
+            :style="{
+              borderColor: qualityData.problem_items.zero_tag_count > 0 ? '#f0a020' : '#e5e7eb',
+            }"
+          >
+            <a-statistic title="🟡 零标签输出" :value="qualityData.problem_items.zero_tag_count" />
+          </a-card>
+        </a-col>
+      </a-row>
 
       <!-- 每日趋势 -->
-      <n-card title="每日分析趋势（最近 30 天）" size="small" style="margin-bottom:16px">
+      <a-card title="每日分析趋势（最近 30 天）" size="small" style="margin-bottom: 16px">
         <div v-if="qualityData.daily_trends.length" ref="trendRef" class="chart" />
-        <n-empty v-else description="最近 30 天无分析记录" size="small" />
-      </n-card>
+        <a-empty v-else description="最近 30 天无分析记录" />
+      </a-card>
 
       <!-- 模型成功率对比 + 错误原因分布 -->
-      <n-grid :cols="2" :x-gap="12" style="margin-bottom:16px">
-        <n-gi>
-          <n-card title="按模型成功率对比" size="small">
+      <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+        <a-col :flex="1">
+          <a-card title="按模型成功率对比" size="small">
             <div v-if="qualityData.model_comparison.length" ref="modelRef" class="chart" />
-            <n-empty v-else description="暂无分析数据" size="small" />
-          </n-card>
-        </n-gi>
-        <n-gi>
-          <n-card title="错误原因分布" size="small">
+            <a-empty v-else description="暂无分析数据" />
+          </a-card>
+        </a-col>
+        <a-col :flex="1">
+          <a-card title="错误原因分布" size="small">
             <div v-if="qualityData.error_distribution.length" ref="errorRef" class="chart" />
-            <n-empty v-else description="暂无失败记录" size="small" />
-          </n-card>
-        </n-gi>
-      </n-grid>
+            <a-empty v-else description="暂无失败记录" />
+          </a-card>
+        </a-col>
+      </a-row>
 
       <!-- 失败素材直达列表 -->
-      <n-card title="最近失败素材" size="small">
-        <n-data-table
+      <a-card title="最近失败素材" size="small">
+        <a-table
           v-if="qualityData.failed_items.length"
-          :columns="[
-            { title: '预览', key: 'thumb', width: 60, render: (row: FailedItem) => row.thumbnail_path ? h('img', { src: getFileUrl(row.thumbnail_path), style: 'width:40px;height:56px;object-fit:cover;border-radius:4px' }) : '-' },
-            { title: '素材 ID', key: 'id', width: 200, render: (row: FailedItem) => h('span', { style: 'font-size:12px;word-break:break-all' }, row.inspiration_id) },
-            { title: '模型', key: 'model', width: 150, render: (row: FailedItem) => h(NTag, { size: 'tiny' }, row.model_name) },
-            { title: '失败原因', key: 'error', render: (row: FailedItem) => h('span', { title: row.error, style: 'font-size:12px;color:#ef4444;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px' }, row.error || '-') },
-            { title: '时间', key: 'time', width: 150, render: (row: FailedItem) => formatDate(row.created_at) },
-            { title: '操作', key: 'actions', width: 80, render: (row: FailedItem) => h(NButton, { size: 'tiny', onClick: () => router.push(`/detail/${row.inspiration_id}`) }, '查看') },
-          ]"
+          :columns="failedColumns"
           :data="qualityData.failed_items"
           :bordered="false"
           size="small"
           :max-height="360"
+          :pagination="false"
         />
-        <n-empty v-else description="暂无失败素材" size="small" />
-      </n-card>
+        <a-empty v-else description="暂无失败素材" />
+      </a-card>
     </template>
-    <n-empty v-else-if="!qualityLoading" description="点击加载质量数据" size="small">
-      <template #extra><n-button size="small" @click="loadQuality">加载</n-button></template>
-    </n-empty>
-  </n-spin>
+    <a-empty v-else-if="!qualityLoading" description="点击加载质量数据">
+      <a-button size="small" @click="loadQuality">加载</a-button>
+    </a-empty>
+  </a-spin>
 </template>
 
 <style scoped>
-.chart { height: 220px; }
+.chart {
+  height: 220px;
+}
+/* Arco Statistic value 仅接受 number：字符串展示用自绘文本（参考 AdminStatCards 先例） */
+.stat-custom {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
 </style>
