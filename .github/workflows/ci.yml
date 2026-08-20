@@ -69,4 +69,13 @@ jobs:
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
       - name: pytest 全量
-        run: python -m pytest -q
+        run: python -m pytest -q --tb=long 2>&1 | tee pytest.log; exit ${PIPESTATUS[0]}
+
+      # 失败时把完整 pytest 输出上传为 artifact，便于下载排查
+      - name: 上传 pytest 日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: backend/pytest.log
+          retention-days: 7
