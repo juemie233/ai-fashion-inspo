@@ -40,11 +40,6 @@ const {
   logTaskId, logContent, logLoading, viewLog, closeLog,
 } = useScraperLog()
 
-/** naive 语义 tag type → Arco 预设色（statusType 来自 useScraperTasks） */
-function statusColor(t: string): string {
-  return { success: 'green', warning: 'orange', error: 'red', info: 'arcoblue', default: 'gray' }[t] || 'gray'
-}
-
 const {
   funnelTaskId, funnelData, funnelOpen, viewFunnel,
 } = useScraperFunnel()
@@ -90,7 +85,7 @@ function getTableColumns() {
   return [
     { title: '平台', key: 'platform', width: 80, render: ({ record }: { record: ScraperTask }) => platformName(record.platform) },
     { title: '关键词', key: 'config', width: 160, ellipsis: { tooltip: true }, render: ({ record }: { record: ScraperTask }) => parseKeywords(record.config) },
-    { title: '状态', key: 'status', width: 80, render: ({ record }: { record: ScraperTask }) => h(Tag, { color: statusColor(record.status), size: 'small' }, () => STATUS_LABELS[record.status] || record.status) },
+    { title: '状态', key: 'status', width: 80, render: ({ record }: { record: ScraperTask }) => h(Tag, { color: statusType(record.status), size: 'small' }, () => STATUS_LABELS[record.status] || record.status) },
     { title: '发现', dataIndex: 'items_found', width: 55 },
     { title: '新增', dataIndex: 'items_added', width: 55 },
     { title: '耗时', key: 'duration', width: 70, render: ({ record }: { record: ScraperTask }) => getTaskDuration(record) },
