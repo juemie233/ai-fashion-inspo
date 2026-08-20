@@ -34,8 +34,6 @@ const props = withDefaults(
     showSort?: boolean
     /** 空列表占位文案 */
     emptyText?: string
-    /** 悬停放大：鼠标移入图片时由 JS 状态切换放大（默认关闭，避免影响其他页面） */
-    hoverZoom?: boolean
   }>(),
   {
     density: 'compact',
@@ -43,7 +41,6 @@ const props = withDefaults(
     sortOptions: () => [],
     showSort: false,
     emptyText: '暂无素材',
-    hoverZoom: false,
   },
 )
 
@@ -97,19 +94,15 @@ const hoverPreviewPath = ref<string | null>(null)
 /** 悬停停留计时器：短暂停留才弹出预览，扫过网格时不闪烁 */
 let hoverPreviewTimer: number | null = null
 
-/** 悬停放大：由 JS 事件驱动的放大状态（与中央预览共用同一组 mouseenter/mouseleave） */
-const zoomedId = ref<string | null>(null)
-
 /** 预览用大图路径：视频素材回退首帧缩略图，图片用原图保证清晰 */
 function previewPath(item: GridBrowserItem): string {
   if (item.media_type === 'video') return item.thumbnail_path || item.file_path || ''
   return item.file_path || item.thumbnail_path || ''
 }
 
-/** 鼠标进入卡片：立即切换放大状态；短暂停留后再弹出居中大图预览 */
+/** 鼠标进入卡片：短暂停留后显示居中大图预览 */
 function startHoverPreview(item: GridBrowserItem) {
   clearHoverPreview()
-  if (props.hoverZoom) zoomedId.value = item.id
   const path = previewPath(item)
   if (!path) return
   hoverPreviewTimer = window.setTimeout(() => {
@@ -117,14 +110,13 @@ function startHoverPreview(item: GridBrowserItem) {
   }, 250)
 }
 
-/** 清除预览、放大状态与计时器 */
+/** 清除预览与计时器 */
 function clearHoverPreview() {
   if (hoverPreviewTimer !== null) {
     window.clearTimeout(hoverPreviewTimer)
     hoverPreviewTimer = null
   }
   hoverPreviewPath.value = null
-  zoomedId.value = null
 }
 
 onBeforeUnmount(clearHoverPreview)
@@ -181,10 +173,9 @@ onBeforeUnmount(clearHoverPreview)
           :class="{ 'is-selected': selectedIds.has(item.id) }"
           @click="emit('open-detail', item)"
         >
-          <!-- 图片区域：干净展示，悬停停留弹出大图预览；hoverZoom 开启时悬停放大 -->
+          <!-- 图片区域：干净展示，悬停停留弹出大图预览 -->
           <div
             class="image-wrap"
-            :class="{ 'hover-zooming': props.hoverZoom && zoomedId === item.id }"
             @mouseenter="startHoverPreview(item)"
             @mouseleave="clearHoverPreview"
           >
@@ -317,20 +308,6 @@ onBeforeUnmount(clearHoverPreview)
   object-fit: cover;
   border-radius: 4px;
   display: block;
-  /* 悬停放大（JS 状态驱动）的过渡动画：放大/恢复各 0.2s 平滑过渡 */
-  transition: transform 0.2s ease;
-}
-
-/* 悬停放大：image-wrap 已 overflow:hidden，放大不溢出父容器、无布局抖动；
- * 由 JS 在 mouseenter/mouseleave 中切换本 class（与 CSS :hover 无关） */
-.image-wrap.hover-zooming {
-  z-index: 1;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-}
-
-.image-wrap.hover-zooming img,
-.image-wrap.hover-zooming video {
-  transform: scale(1.12);
 }
 
 .no-preview {

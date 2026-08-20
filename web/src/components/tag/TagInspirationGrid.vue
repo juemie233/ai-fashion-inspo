@@ -199,7 +199,6 @@ async function batchAddTags() {
       v-model:sort="sort"
       :sort-options="sortOptions"
       show-sort
-      hover-zoom
       empty-text="暂无素材"
       @load-more="loadMore"
       @open-detail="openDetail"
