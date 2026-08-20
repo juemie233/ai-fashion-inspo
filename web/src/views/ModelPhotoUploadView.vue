@@ -34,10 +34,10 @@ async function loadPersons() {
   }
 }
 
-/** 新建人物成功后：刷新列表并自动选中新人物 */
+/** 新建人物成功后：先选中新人物再刷新列表（避免 loadPersons 失败导致选择状态丢失） */
 async function onPersonCreated(p: Person) {
-  await loadPersons()
   personId.value = p.id
+  await loadPersons()
 }
 
 const personOptions = computed(() =>
@@ -51,7 +51,10 @@ const setName = ref('')
 interface PendingPhoto {
   id: string
   file: File
-  thumbnail: string
+  /** canvas 压缩缩略图 URL（进入视口时异步生成，不直接引用原图） */
+  thumbUrl?: string
+  /** 缩略图生成中标记 */
+  thumbLoading?: boolean
   status: 'pending' | 'uploading' | 'done' | 'failed' | 'duplicate'
   progress: number
   errorMsg?: string
@@ -62,7 +65,89 @@ const pending = ref<PendingPhoto[]>([])
 /** 可上传的图片扩展名（模特写真仅图片，不含视频） */
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 
+// ── 分批渲染 + 缩略图懒加载（避免数百张照片一次性渲染/解码导致页面卡死）──
+/** 每批渲染张数 */
+const PAGE_SIZE = 50
+/** 当前渲染张数（滚动加载/「加载更多」递增） */
+const visibleCount = ref(PAGE_SIZE)
+/** 当前渲染的照片（分页切片） */
+const shownPhotos = computed(() => pending.value.slice(0, visibleCount.value))
+
+function loadMore() {
+  visibleCount.value = Math.min(pending.value.length, visibleCount.value + PAGE_SIZE)
+}
+
+/** 缩略图生成（canvas 压缩至最长边 320px；createImageBitmap 异步解码不阻塞主线程） */
+async function createThumbnailUrl(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, 320 / Math.max(bitmap.width, bitmap.height))
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 不可用')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.8),
+    )
+    if (!blob) throw new Error('缩略图生成失败')
+    return URL.createObjectURL(blob)
+  } finally {
+    bitmap.close() // 释放位图内存
+  }
+}
+
+/** 为指定照片生成缩略图（幂等：已有/生成中则跳过；失败回退原图 objectURL） */
+async function ensureThumbnail(id: string) {
+  const item = pending.value.find((p) => p.id === id)
+  if (!item || item.thumbUrl || item.thumbLoading) return
+  item.thumbLoading = true
+  try {
+    item.thumbUrl = await createThumbnailUrl(item.file)
+  } catch {
+    // createImageBitmap/canvas 不可用（旧浏览器等）：回退原图 objectURL，保证预览可用
+    try {
+      item.thumbUrl = URL.createObjectURL(item.file)
+    } catch {
+      // 仍失败则保持占位
+    }
+  } finally {
+    item.thumbLoading = false
+  }
+}
+
+/** 缩略图懒加载观察器：img 进入视口（提前 200px）才生成缩略图 */
+let thumbObserver: IntersectionObserver | null = null
+
+function onImgMounted(el: unknown) {
+  if (el) thumbObserver?.observe(el as HTMLElement)
+}
+
+/** 底部哨兵：滚动接近底部时自动加载下一批 */
+let sentinelObserver: IntersectionObserver | null = null
+
+function onSentinelMounted(el: unknown) {
+  sentinelObserver?.disconnect()
+  if (el) {
+    sentinelObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMore()
+      },
+      { rootMargin: '400px' },
+    )
+    sentinelObserver.observe(el as HTMLElement)
+  }
+}
+
 function openFolder() {
+  // 上传中禁止更换文件夹，避免上传循环与列表重建错乱
+  if (uploading.value) {
+    Message.info('导入中，暂不能更换文件夹')
+    return
+  }
   folderInput.value?.click()
 }
 
@@ -84,19 +169,35 @@ function onFolderChange(e: Event) {
   }
 
   // 按文件名自然排序（模特写真常以 001/002 命名），保持组内顺序稳定
-  const sorted = imageFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  const sorted = imageFiles.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true }),
+  )
 
   clearPending()
+  // 只登记文件元数据，不立即创建 objectURL；缩略图由懒加载按需生成
   for (const file of sorted) {
     pending.value.push({
       id: crypto.randomUUID(),
       file,
-      thumbnail: URL.createObjectURL(file),
       status: 'pending',
       progress: 0,
     })
   }
-
+  visibleCount.value = PAGE_SIZE
+  thumbObserver?.disconnect()
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const el = entry.target as HTMLElement
+          const id = el.dataset.thumbId
+          if (id) void ensureThumbnail(id)
+          thumbObserver?.unobserve(el)
+        }
+      }
+    },
+    { rootMargin: '200px' },
+  )
   if (folderName && !setName.value.trim()) {
     setName.value = folderName
   }
@@ -104,8 +205,13 @@ function onFolderChange(e: Event) {
 }
 
 function clearPending() {
-  pending.value.forEach((p) => URL.revokeObjectURL(p.thumbnail))
+  pending.value.forEach((p) => {
+    if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl)
+  })
   pending.value = []
+  visibleCount.value = PAGE_SIZE
+  thumbObserver?.disconnect()
+  sentinelObserver?.disconnect()
 }
 
 // ── 上传 ──
@@ -120,6 +226,11 @@ const stats = computed(() => {
 })
 
 async function startUpload() {
+  // 兜底：从 URL 恢复预选人物（详情页「添加照片」入口 / 页面刷新后状态重建场景）
+  if (!personId.value) {
+    const q = Number(route.query.person_id)
+    if (Number.isInteger(q) && q > 0) personId.value = q
+  }
   if (!personId.value) {
     Message.warning('请先选择人物')
     return
@@ -134,8 +245,10 @@ async function startUpload() {
     const set = await createModelPhotoSet(personId.value, setName.value.trim() || undefined)
     uploadedSetId.value = set.id
 
-    for (let i = 0; i < pending.value.length; i++) {
-      const item = pending.value[i]
+    // 上传用快照：上传期间界面已禁止更换文件夹/人物，双保险避免循环引用被替换
+    const items = [...pending.value]
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
       item.status = 'uploading'
       item.progress = 0
       try {
@@ -201,6 +314,7 @@ onUnmounted(() => {
           v-model:value="personId"
           :options="personOptions"
           :loading="personsLoading"
+          :disabled="uploading"
           filterable
           clearable
           placeholder="选择模特 / 博主"
@@ -212,9 +326,9 @@ onUnmounted(() => {
 
     <!-- 文件夹选择 -->
     <a-card size="small" class="step-card" title="第二步 · 选择文件夹">
-      <div class="folder-zone" @click="openFolder">
+      <div class="folder-zone" :class="{ 'folder-zone-disabled': uploading }" @click="openFolder">
         <div class="folder-icon">📁</div>
-        <p class="folder-title">点击选择文件夹</p>
+        <p class="folder-title">{{ uploading ? '导入中，暂不能更换文件夹' : '点击选择文件夹' }}</p>
         <p class="folder-desc">仅支持选择文件夹，会把文件夹内全部图片导入为一组</p>
       </div>
       <input
@@ -228,14 +342,19 @@ onUnmounted(() => {
       />
 
       <a-form-item label="照片组名称" style="margin-top: 16px; max-width: 420px">
-        <a-input v-model="setName" placeholder="默认取文件夹名，可修改" :max-length="128" />
+        <a-input
+          v-model="setName"
+          :disabled="uploading"
+          placeholder="默认取文件夹名，可修改"
+          :max-length="128"
+        />
       </a-form-item>
     </a-card>
 
     <!-- 预览 -->
     <a-card v-if="pending.length > 0" size="small" class="step-card">
       <template #header>
-        <a-space align="center" style="display:flex;justify-content:space-between">
+        <a-space align="center" style="display: flex; justify-content: space-between">
           <span>已选 {{ pending.length }} 张照片</span>
           <a-space>
             <a-button size="small" type="text" :disabled="uploading" @click="clearPending">
@@ -246,15 +365,20 @@ onUnmounted(() => {
       </template>
 
       <div class="preview-grid">
-        <div v-for="(p, i) in pending" :key="p.id" class="preview-item" :class="p.status">
-          <img :src="p.thumbnail" :alt="p.file.name" />
+        <div v-for="(p, i) in shownPhotos" :key="p.id" class="preview-item" :class="p.status">
+          <img
+            v-if="p.thumbUrl"
+            :ref="onImgMounted"
+            :data-thumb-id="p.id"
+            :src="p.thumbUrl"
+            :alt="p.file.name"
+          />
+          <div v-else class="thumb-placeholder">
+            <a-spin v-if="p.thumbLoading" :size="14" />
+          </div>
           <div class="preview-index">{{ i + 1 }}</div>
           <div v-if="p.status === 'uploading'" class="preview-mask">
-            <a-progress
-              type="circle"
-              :percent="p.progress / 100"
-              :width="44"
-            />
+            <a-progress type="circle" :percent="p.progress / 100" :width="44" />
           </div>
           <div v-else-if="p.status === 'done'" class="preview-mask done">✓</div>
           <div v-else-if="p.status === 'failed'" class="preview-mask failed" :title="p.errorMsg">
@@ -264,6 +388,13 @@ onUnmounted(() => {
             ⧉
           </div>
         </div>
+      </div>
+
+      <!-- 分批加载：滚动到接近底部自动加载下一批；「加载更多」按钮兜底 -->
+      <div v-if="visibleCount < pending.length" :ref="onSentinelMounted" class="load-more-row">
+        <a-button size="small" @click="loadMore">
+          加载更多（已显示 {{ shownPhotos.length }} / {{ pending.length }}）
+        </a-button>
       </div>
 
       <div class="upload-actions">
@@ -278,7 +409,7 @@ onUnmounted(() => {
 
     <!-- 完成后跳转 -->
     <a-card v-if="uploadedSetId && !uploading && stats.done > 0" size="small" class="step-card">
-      <a-space align="center" style="display:flex;justify-content:space-between">
+      <a-space align="center" style="display: flex; justify-content: space-between">
         <a-typography-text>照片组已导入完成，可前往人物详情查看。</a-typography-text>
         <a-button type="secondary" @click="goPersonDetail">查看人物照片组 →</a-button>
       </a-space>
@@ -307,12 +438,20 @@ onUnmounted(() => {
   border-radius: 12px;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
 }
 
 .folder-zone:hover {
   border-color: #818cf8;
   background: #fafafe;
+}
+
+/* 上传中禁用文件夹选择 */
+.folder-zone-disabled {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .folder-icon {
@@ -351,6 +490,23 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* 缩略图未生成时的占位 */
+.thumb-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef1f6;
+}
+
+/* 分批加载行（滚动监听哨兵 + 加载更多按钮） */
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 4px;
 }
 
 .preview-index {
