@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -113,10 +113,20 @@ def _alive_tag_links_subquery():
 
 
 async def seed_tags(db: AsyncSession) -> int:
-    """导入预设标签（跳过已存在的标签）。返回新增标签数量。
+    """导入预设标签（仅空库首次初始化时执行）。返回新增标签数量。
 
-    一次性 IN 查询全部预设名（避免逐条 SELECT 的 N+1）。
+    历史问题：本函数每次后端启动都被调用（跳过已存在名称）——用户删除
+    某个预设标签（如「Lolita」）后，下次启动会被当作「不存在」重新创建，
+    导致已删除的标签反复恢复（标签管理页「未使用标签」反复出现）。
+
+    修复：仅当标签表为空（首次初始化/全新库）时导入预设；
+    只要库里已有任何标签（用户使用中的正常状态），不再补 seed——
+    用户删除的预设标签保持删除状态，不会被重建。
     """
+    count = (await db.execute(select(func.count(Tag.id)))).scalar() or 0
+    if count > 0:
+        return 0
+
     all_names = [name for names in SEED_TAGS.values() for name in names]
     existing = await db.execute(select(Tag.name).where(Tag.name.in_(all_names)))
     existing_names = set(existing.scalars().all())

@@ -6,6 +6,62 @@ def _tag_names(client) -> list[str]:
     return [t["name"] for g in client.get("/api/tags").json() for t in g["tags"]]
 
 
+async def test_seed_tags_skips_when_tags_exist(client):
+    """预设标签仅空库导入：库非空时 seed 不执行，用户删除的预设不重建。
+
+    回归：曾出现「删除预设标签后后端重启又被 seed 重建」——seed_tags 每次
+    启动执行且只按名称判重，无法区分「从未存在」与「用户删除过」。
+    """
+    from sqlalchemy import delete, func, select
+
+    from app.database import async_session
+    from app.models.tag import Tag
+    from app.services.tag_service import seed_tags
+
+    async with async_session() as db:
+        # 模拟用户使用中的库：已有任意标签（非空库）
+        db.add(Tag(name="已有标签", category="free"))
+        await db.commit()
+
+        # 库非空 → seed 不再执行
+        added = await seed_tags(db)
+        assert added == 0
+
+        # 预设标签未被创建（如 Lolita）
+        count = (
+            await db.execute(select(func.count(Tag.id)).where(Tag.name == "Lolita"))
+        ).scalar()
+        assert count == 0
+
+        # 删除一个预设后再次 seed 也不会重建（同前：库非空直接跳过）
+        await db.execute(delete(Tag).where(Tag.name == "已有标签"))
+        await db.commit()
+        db.add(Tag(name="另一个标签", category="free"))
+        await db.commit()
+        added2 = await seed_tags(db)
+        assert added2 == 0
+
+
+async def test_seed_tags_imports_on_empty_db(client):
+    """空库（全新初始化）时 seed 导入全部预设标签。"""
+    from sqlalchemy import func, select
+
+    from app.database import async_session
+    from app.models.tag import Tag
+    from app.services.tag_service import seed_tags
+
+    async with async_session() as db:
+        # clean_state 已清空 tags 表 → 空库
+        added = await seed_tags(db)
+        assert added > 0
+        # 预设标签已创建（抽查）
+        for name in ("Lolita", "白衬衫", "街拍"):
+            count = (
+                await db.execute(select(func.count(Tag.id)).where(Tag.name == name))
+            ).scalar()
+            assert count == 1, f"预设标签 {name} 应被创建"
+
+
 def test_merge_tags(client, upload):
     """合并标签：源标签删除、关联转移到目标标签。"""
     s = client.post("/api/tags", json={"name": "法式", "category": "style"}).json()
