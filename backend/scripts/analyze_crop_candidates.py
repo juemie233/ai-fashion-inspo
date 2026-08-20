@@ -165,10 +165,11 @@ def _status_bar_correction(
 ) -> int:
     """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
 
-    顶部状态栏的图标行簇（d 0.15~0.24）与内容区（d 通常 ≥0.25）在多样度上
-    连续过渡，单靠阈值无法干净切分。经验规则：若顶部 10% 高度内的首个内容簇
-    多样度中位 < 0.25，且其后 20% 高度内存在多样度中位 ≥ 首簇 × 1.25 的
-    内容簇，则首簇是状态栏，内容边界后移到后续簇的起点。
+    顶部状态栏的结构：纯色背景（多样度 < 0.1）→ 图标行簇（多样度 0.15~0.24，
+    极薄）→ 内容区（多样度更高）。判定规则（100 张样本校准）：
+    首区段（顶部 8% 窗口内）多样度中位 < 0.25、且区段前一行属低多样度地带、
+    且区段结束后存在多样度 ≥ max(0.24, 首区段中位+0.05) 的行 → 状态栏，
+    内容边界后移到该行。
 
     参数:
         diversity: 行多样度剖面
@@ -178,26 +179,22 @@ def _status_bar_correction(
         修正后的内容区上边界（无法确认状态栏时原样返回）
     """
     n = len(diversity)
-    if top_edge is None or top_edge >= int(n * 0.12):
+    window = int(n * 0.08)
+    if top_edge >= window:
         return top_edge
-    first_cluster_end = top_edge
-    while first_cluster_end + 1 < n and diversity[first_cluster_end + 1] >= 0.15:
-        first_cluster_end += 1
-    first_med = float(np.median(diversity[top_edge : first_cluster_end + 1]))
+    seg_end = top_edge
+    while seg_end + 1 < window and diversity[seg_end + 1] >= 0.15:
+        seg_end += 1
+    first_med = float(np.median(diversity[top_edge : seg_end + 1]))
     if first_med >= 0.25:
         return top_edge
-    # 在首簇之后的 20% 高度内找「显著更高」的内容簇
-    search_end = min(n, first_cluster_end + int(n * 0.2))
-    y = first_cluster_end + 1
-    while y < search_end:
-        if diversity[y] >= 0.15:
-            c_start = y
-            while y + 1 < search_end and diversity[y + 1] >= 0.15:
-                y += 1
-            c_med = float(np.median(diversity[c_start : y + 1]))
-            if c_med >= first_med * 1.25:
-                return c_start
-        y += 1
+    if top_edge == 0 or diversity[top_edge - 1] >= 0.1:
+        return top_edge
+    threshold = max(0.24, first_med + 0.05)
+    search_end = min(n, window + int(n * 0.2))
+    for y in range(seg_end + 1, search_end):
+        if diversity[y] >= threshold:
+            return y
     return top_edge
 
 

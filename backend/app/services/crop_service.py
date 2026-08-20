@@ -178,19 +178,20 @@ _BOTTOM_SCAN_FRACTION = 0.12  # 底部扫描范围（手势条在最后 12% 高�
 _CONTENT_MIN_D = 0.15  # 内容行多样度下限
 _CONTENT_MIN_RUN = 3  # 内容区起始的最小连续行数（防单行噪声）
 _CONTENT_MAX_GAP = 5  # 内容区内部允许的最大缺口行数（照片纯色块/暗部）
-# 状态栏修正：顶部 12% 高度内首个内容簇多样度中位 < 0.25，且其后 20% 高度内
+# 状态栏修正：顶部 8% 高度内首个内容簇多样度中位 < 0.25，且其后 20% 高度内
 # 存在多样度中位 ≥ 首簇 × 1.25 的内容簇 → 首簇判定为状态栏图标行（顶部
-# 状态栏与内容区多样度连续过渡，单靠阈值无法干净切分，需簇间对比）
+# 状态栏与内容区多样度连续过渡，单靠阈值无法干净切分，需簇间对比）。
+# 窗口取 8%：状态栏图标行簇极薄（实测 <3%），窗口过大（如 12%）会把
+# 紧随其后的内容区并入首簇、拉高中位数导致修正失效。
 _STATUS_BAR_MED = 0.25
 _STATUS_BAR_RATIO = 1.25
-_STATUS_BAR_SCAN_FRACTION = 0.12
+_STATUS_BAR_SCAN_FRACTION = 0.08
 _STATUS_BAR_SEARCH_FRACTION = 0.2
 # 灰带判定（0~1 归一化）：低饱和 + 亮度平坦（纹理少）
 _SAT_GRAY = 0.2
 _GRAY_BAND_STD_MAX = 0.06
-# 内容区占比合理范围（灰带包夹的照片主体）
+# 内容区占比下限（灰带包夹的照片主体不得过小）
 _CONTENT_FRACTION_MIN = 0.25
-_CONTENT_FRACTION_MAX = 0.95
 # 内容边界检测的分析宽度（行剖面逐行统计，宽度只影响多样度灵敏度）
 _CONTENT_ANALYZE_W = 96
 
@@ -356,11 +357,15 @@ def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
 def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
 
-    顶部状态栏的图标行簇（多样度 0.15~0.24）与内容区（通常 ≥ 0.25）在多样度
-    上连续过渡，单靠阈值无法干净切分。经验规则（100 张样本校准）：若顶部
-    _STATUS_BAR_SCAN_FRACTION 高度内的首个内容簇多样度中位 < _STATUS_BAR_MED，
-    且其后 _STATUS_BAR_SEARCH_FRACTION 高度内存在多样度中位 ≥ 首簇 ×
-    _STATUS_BAR_RATIO 的内容簇，则首簇是状态栏，内容边界后移到后续簇起点。
+    顶部状态栏的结构：纯色背景（多样度 < 0.1）→ 图标行簇（多样度 0.15~0.24，
+    极薄，实测 <3%）→ 内容区（多样度更高）。图标行与内容区多样度连续过渡，
+    单靠阈值无法干净切分，判定规则（100 张样本校准）：
+
+    1. 首区段（raw 内容起点起的连续 d≥0.15 段，仅在顶部 8% 窗口内延伸）
+       多样度中位 < 0.25；
+    2. 首区段前一行属于低多样度地带（状态栏纯色背景）；
+    3. 区段结束后 _STATUS_BAR_SEARCH_FRACTION 高度内存在多样度
+       ≥ max(0.24, 首区段中位 + 0.05) 的行 → 该行即内容区真实起点。
 
     参数:
         diversity: 行多样度剖面
@@ -370,26 +375,25 @@ def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
         修正后的内容区上边界（无法确认状态栏时原样返回）
     """
     n = len(diversity)
-    if top_edge >= int(n * _STATUS_BAR_SCAN_FRACTION):
+    window = int(n * _STATUS_BAR_SCAN_FRACTION)
+    if top_edge >= window:
         return top_edge
-    first_cluster_end = top_edge
-    while first_cluster_end + 1 < n and diversity[first_cluster_end + 1] >= _CONTENT_MIN_D:
-        first_cluster_end += 1
-    first_med = float(np.median(diversity[top_edge : first_cluster_end + 1]))
+    # 首区段：从 top_edge 起，仅在窗口内延伸（避免并入内容区拉高中位数）
+    seg_end = top_edge
+    while seg_end + 1 < window and diversity[seg_end + 1] >= _CONTENT_MIN_D:
+        seg_end += 1
+    first_med = float(np.median(diversity[top_edge : seg_end + 1]))
     if first_med >= _STATUS_BAR_MED:
         return top_edge
-    # 在首簇之后的搜索窗口内找「显著更高」的内容簇
-    search_end = min(n, first_cluster_end + int(n * _STATUS_BAR_SEARCH_FRACTION))
-    y = first_cluster_end + 1
-    while y < search_end:
-        if diversity[y] >= _CONTENT_MIN_D:
-            c_start = y
-            while y + 1 < search_end and diversity[y + 1] >= _CONTENT_MIN_D:
-                y += 1
-            c_med = float(np.median(diversity[c_start : y + 1]))
-            if c_med >= first_med * _STATUS_BAR_RATIO:
-                return c_start
-        y += 1
+    # 状态栏背景前提：区段前一行为低多样度地带
+    if top_edge == 0 or diversity[top_edge - 1] >= _ROW_UNIFORM:
+        return top_edge
+    # 区段结束后找多样度显著升高的行（内容区起点）
+    threshold = max(_STATUS_BAR_MED - 0.01, first_med + 0.05)
+    search_end = min(n, window + int(n * _STATUS_BAR_SEARCH_FRACTION))
+    for y in range(seg_end + 1, search_end):
+        if diversity[y] >= threshold:
+            return y
     return top_edge
 
 
@@ -448,10 +452,17 @@ def detect_content_bounds(path: Path) -> dict:
     top_edge = _status_bar_correction(diversity, top_edge_raw)
     correction = top_edge != top_edge_raw
 
-    # 内容区占比合理性校验（防灰带过薄/过厚误判）
+    # 内容区占比下限校验（防灰带过厚/内容区过小误判）
     frac = (bottom_edge - top_edge + 1) / n
-    if not (_CONTENT_FRACTION_MIN <= frac <= _CONTENT_FRACTION_MAX):
-        raise ValueError(f"内容区占比异常（{frac:.0%}），布局不规则")
+    if frac < _CONTENT_FRACTION_MIN:
+        raise ValueError(f"内容区占比过小（{frac:.0%}），布局不规则")
+    # 有效裁剪比例合计过小 → 无内容可裁（已裁剪过或非包夹截图）。
+    # 不设内容占比上限：薄边框截图（播放器条 <5%）内容占比可达 98%，
+    # 只要两侧合计仍有 ≥1% 的裁剪区域就允许裁剪，由人工勾选兜底。
+    top_frac = top_edge / n
+    bottom_frac = (n - 1 - bottom_edge) / n
+    if top_frac + bottom_frac < 0.01:
+        raise ValueError("无有效裁剪区域（图片已裁剪过或非包夹截图），无需裁剪")
 
     # 灰带判定：边界外侧低饱和 + 亮度平坦
     top_gray = _band_stats(brightness, saturation, 0, top_edge)
