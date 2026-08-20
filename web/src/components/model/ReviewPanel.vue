@@ -8,6 +8,7 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { deleteRejectedInspirations, batchUpdateInspirations, batchTrash } from '@/api/inspirations'
 import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
+import StatCardGrid from '@/components/common/StatCardGrid.vue'
 import InspirationGridBrowser, {
   type GridBrowserItem,
 } from '@/components/inspiration/InspirationGridBrowser.vue'
@@ -425,31 +426,15 @@ onUnmounted(() => {
   <a-spin :loading="qualityReviewLoading" style="display: block">
     <template v-if="qualityReviewStats">
       <!-- 统计卡片 -->
-      <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="待审核" :value="qualityReviewStats.pending" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="已通过" :value="qualityReviewStats.approved" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="已拒绝" :value="qualityReviewStats.rejected" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="通过率" :value="qualityReviewStats.pass_rate">
-              <template #suffix>%</template>
-            </a-statistic></a-card
-          ></a-col
-        >
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="疑似 AI" :value="qualityReviewStats.ai_generated" /></a-card
-        ></a-col>
-      </a-row>
+      <StatCardGrid
+        :items="[
+          { title: '待审核', value: qualityReviewStats.pending },
+          { title: '已通过', value: qualityReviewStats.approved },
+          { title: '已拒绝', value: qualityReviewStats.rejected },
+          { title: '通过率', value: qualityReviewStats.pass_rate, suffix: '%' },
+          { title: '疑似 AI', value: qualityReviewStats.ai_generated },
+        ]"
+      />
 
       <!-- 手动上传免审核配置 -->
       <a-card size="small" style="margin-bottom: 16px">

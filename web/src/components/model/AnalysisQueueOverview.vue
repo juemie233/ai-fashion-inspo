@@ -2,6 +2,7 @@
 /** AI 分析队列总览：进度条、批量分析入口、批量任务进度、活动分析与排队素材。 */
 
 import { getFileUrl } from '@/api/inspirations'
+import StatusTag from '@/components/common/StatusTag.vue'
 import type { QueueStats, TaskInfo, QueueItem } from '@/types/analysis'
 
 defineProps<{
@@ -20,23 +21,6 @@ const emit = defineEmits<{
   (e: 'togglePause'): void
   (e: 'cancelQueueItem', inspirationId: string): void
 }>()
-
-/** 任务状态中文标签 */
-const taskStatusLabel: Record<string, string> = {
-  pending: '排队中',
-  running: '进行中',
-  success: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-}
-
-/** 任务状态 → Arco Tag 预设色 */
-function statusColor(status: string): string {
-  if (status === 'success') return 'green'
-  if (status === 'failed') return 'red'
-  if (status === 'cancelled') return 'gray'
-  return 'arcoblue'
-}
 </script>
 
 <template>
@@ -65,9 +49,7 @@ function statusColor(status: string): string {
     <a-card v-if="batchTask" size="small" style="margin-bottom: 16px">
       <template #title>
         <span>批量分析任务 #{{ batchTask.id }}</span>
-        <a-tag :color="statusColor(batchTask.status)" size="small" style="margin-left: 8px">
-          {{ taskStatusLabel[batchTask.status] }}
-        </a-tag>
+        <StatusTag :status="batchTask.status" style="margin-left: 8px" />
         <a-button
           v-if="['success', 'failed', 'cancelled'].includes(batchTask.status)"
           size="mini"

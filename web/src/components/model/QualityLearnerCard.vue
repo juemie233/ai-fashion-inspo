@@ -3,6 +3,7 @@
 
 import { computed, onMounted } from 'vue'
 import { useQualityLearner } from '@/composables/useQualityLearner'
+import StatCardGrid from '@/components/common/StatCardGrid.vue'
 
 const { status, loading, training, resetting, loadStatus, train, reset } = useQualityLearner()
 
@@ -55,27 +56,24 @@ onMounted(loadStatus)
         </div>
 
         <!-- 训练指标 -->
-        <a-row v-if="status.meta" :gutter="[8, 8]" style="margin-bottom: 8px">
-          <a-col :flex="1"
-            ><a-statistic title="准确率" :value="status.meta.metrics.accuracy"
-          /></a-col>
-          <a-col :flex="1"
-            ><a-statistic title="精确率" :value="status.meta.metrics.precision"
-          /></a-col>
-          <a-col :flex="1"
-            ><a-statistic title="召回率" :value="status.meta.metrics.recall"
-          /></a-col>
-          <a-col :flex="1"><a-statistic title="F1" :value="status.meta.metrics.f1" /></a-col>
-          <a-col :flex="1">
-            <a-statistic
-              title="误杀率"
-              :value="status.meta.metrics.false_reject_rate"
-              :value-style="{
+        <StatCardGrid
+          v-if="status.meta"
+          :gutter="[8, 8]"
+          margin-bottom="8px"
+          :items="[
+            { title: '准确率', value: status.meta.metrics.accuracy },
+            { title: '精确率', value: status.meta.metrics.precision },
+            { title: '召回率', value: status.meta.metrics.recall },
+            { title: 'F1', value: status.meta.metrics.f1 },
+            {
+              title: '误杀率',
+              value: status.meta.metrics.false_reject_rate,
+              valueStyle: {
                 color: status.meta.metrics.false_reject_rate > 0.05 ? '#d03050' : '#18a058',
-              }"
-            />
-          </a-col>
-        </a-row>
+              },
+            },
+          ]"
+        />
         <p v-if="status.meta" style="font-size: 11px; color: #999; margin: 0 0 8px">
           最近训练 {{ status.meta.trained_at?.slice(0, 16).replace('T', ' ') }} · 训练样本
           {{ status.meta.sample_total }}（正 {{ status.meta.positive }} / 负

@@ -7,17 +7,11 @@ import apiClient from '@/api/client'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
-import { normalizeTaskStatus, taskStatusType } from '@/utils/taskLabel'
 import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
 import type { ScraperTask, ScraperSource, CookieStatus } from '@/types/scraper'
 
 /** 平台显示文案（复用来源映射，单一来源避免多处重复维护） */
 export const PLATFORM_LABELS: Record<string, string> = SOURCE_TYPE_LABELS
-
-/** 任务状态显示文案 */
-export const STATUS_LABELS: Record<string, string> = {
-  pending: '等待中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消',
-}
 
 /** 任务列表轮询间隔（毫秒）：有运行/等待中的任务时每 5 秒刷新一次 */
 const POLL_INTERVAL_MS = 5000
@@ -243,11 +237,6 @@ export function useScraperTasks() {
     }
   }
 
-  /** 状态标签颜色：复用 taskLabel 的映射（completed 与 success 语义一致，返回 Arco 预设色） */
-  function statusType(s: string): string {
-    return taskStatusType(normalizeTaskStatus(s))
-  }
-
   function platformName(p: string) { return sources.value.find(s => s.platform === p)?.name || PLATFORM_LABELS[p] || p }
 
   /** 关键词展示（表格列）：解析 config 中的关键词，逗号拼接，无则显示占位符 */
@@ -274,6 +263,6 @@ export function useScraperTasks() {
     loadAll, refreshTasks, onFilterChange, onPageChange,
     cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask, copyTask,
     startPollIfNeeded, stopPoll, copyText,
-    statusType, platformName, formatDate, parseKeywords, getTaskDuration,
+    platformName, formatDate, parseKeywords, getTaskDuration,
   }
 }

@@ -2,11 +2,8 @@
 /** 采集管理页：采集任务创建、日志查看、结果预览、源配置。 */
 
 import { h, ref, watch, onMounted, onUnmounted } from 'vue'
-import { Button, Popconfirm, Tag } from '@arco-design/web-vue'
-import {
-  useScraperTasks,
-  STATUS_LABELS,
-} from '@/composables/useScraperTasks'
+import { Button, Popconfirm } from '@arco-design/web-vue'
+import { useScraperTasks } from '@/composables/useScraperTasks'
 import { useScraperLog } from '@/composables/useScraperLog'
 import { useScraperFunnel } from '@/composables/useScraperFunnel'
 import { useScraperResults } from '@/composables/useScraperResults'
@@ -19,6 +16,7 @@ import ScraperResultsPanel from '@/components/scraper/ScraperResultsPanel.vue'
 import ScraperConfigTab from '@/components/scraper/ScraperConfigTab.vue'
 import ScraperScheduleTab from '@/components/scraper/ScraperScheduleTab.vue'
 import ScraperStatsPanel from '@/components/scraper/ScraperStatsPanel.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import type { ScraperTask } from '@/types/scraper'
 
 /** 当前激活的页签：tasks 采集任务 / config 源配置 / schedules 定时采集 */
@@ -33,7 +31,7 @@ const {
   loadAll, refreshTasks, onFilterChange, onPageChange,
   cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask, copyTask,
   startPollIfNeeded, stopPoll, copyText,
-  statusType, platformName, formatDate, parseKeywords, getTaskDuration,
+  platformName, formatDate, parseKeywords, getTaskDuration,
 } = useScraperTasks()
 
 const {
@@ -85,7 +83,7 @@ function getTableColumns() {
   return [
     { title: '平台', key: 'platform', width: 80, render: ({ record }: { record: ScraperTask }) => platformName(record.platform) },
     { title: '关键词', key: 'config', width: 160, ellipsis: { tooltip: true }, render: ({ record }: { record: ScraperTask }) => parseKeywords(record.config) },
-    { title: '状态', key: 'status', width: 80, render: ({ record }: { record: ScraperTask }) => h(Tag, { color: statusType(record.status), size: 'small' }, () => STATUS_LABELS[record.status] || record.status) },
+    { title: '状态', key: 'status', width: 80, render: ({ record }: { record: ScraperTask }) => h(StatusTag, { status: record.status }) },
     { title: '发现', dataIndex: 'items_found', width: 55 },
     { title: '新增', dataIndex: 'items_added', width: 55 },
     { title: '耗时', key: 'duration', width: 70, render: ({ record }: { record: ScraperTask }) => getTaskDuration(record) },

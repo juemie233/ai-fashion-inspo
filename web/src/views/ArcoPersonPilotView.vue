@@ -11,6 +11,7 @@ import { useRouter } from 'vue-router'
 import { Avatar, Message, type TableColumnData } from '@arco-design/web-vue'
 import { bloggersApi, type PersonIpStats } from '@/api/persons'
 import { getFileUrl } from '@/api/inspirations'
+import { formatDate } from '@/utils/format'
 import type { Person } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 
@@ -155,10 +156,7 @@ const columns: TableColumnData[] = [
     title: '创建时间',
     dataIndex: 'created_at',
     width: 160,
-    render: ({ record }) => {
-      const created = toPerson(record).created_at
-      return created ? new Date(created).toLocaleString('zh-CN') : '-'
-    },
+    render: ({ record }) => formatDate(toPerson(record).created_at),
   },
   {
     title: '操作',

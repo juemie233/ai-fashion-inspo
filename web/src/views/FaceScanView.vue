@@ -24,6 +24,7 @@ import {
 } from '@/api/faceScan'
 import { getFileUrl } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
+import StatusTag from '@/components/common/StatusTag.vue'
 
 // ── 任务区 ──
 const scanTask = ref<FaceScanTaskOut | null>(null)
@@ -448,28 +449,6 @@ function clearHoverPreview() {
   hoverPreviewPath.value = null
 }
 
-/** 状态标签颜色 */
-function statusColor(status: string): string {
-  if (status === 'success') return 'green'
-  if (status === 'failed') return 'red'
-  if (status === 'cancelled') return 'gray'
-  if (status === 'running') return 'arcoblue'
-  return 'orange'
-}
-
-/** 状态中文 */
-function statusLabel(status: string): string {
-  return (
-    {
-      pending: '排队中',
-      running: '执行中',
-      success: '已完成',
-      failed: '失败',
-      cancelled: '已取消',
-    }[status] || status
-  )
-}
-
 /** 缩略图地址（优先缩略图，无则原图） */
 function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
@@ -566,9 +545,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
       <!-- 扫描任务进度 -->
       <div v-if="scanTask" class="task-line">
-        <a-tag size="small" :color="statusColor(scanTask.status)">
-          {{ statusLabel(scanTask.status) }}
-        </a-tag>
+        <StatusTag :status="scanTask.status" />
         <a-progress
           v-if="['running', 'pending'].includes(scanTask.status)"
           :percent="scanTask.progress / 100"
@@ -591,9 +568,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
       <!-- 匹配任务进度 -->
       <div v-if="matchTask" class="task-line">
-        <a-tag size="small" :color="statusColor(matchTask.status)">
-          匹配{{ statusLabel(matchTask.status) }}
-        </a-tag>
+        匹配 <StatusTag :status="matchTask.status" />
         <a-progress
           v-if="['running', 'pending'].includes(matchTask.status)"
           :percent="matchTask.progress / 100"

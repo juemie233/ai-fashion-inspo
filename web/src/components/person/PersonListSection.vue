@@ -2,6 +2,7 @@
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
+import { formatDate } from '@/utils/format'
 import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -28,6 +29,7 @@ import type { Person, PersonImportResult } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import IpStatsPanel from '@/components/person/IpStatsPanel.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 
 const props = defineProps<{ kind: PersonKind }>()
 
@@ -266,10 +268,7 @@ const columns: TableColumnData[] = [
     title: '创建时间',
     dataIndex: 'created_at',
     width: 160,
-    render: ({ record }) => {
-      const row = record as Person
-      return row.created_at ? new Date(row.created_at).toLocaleString('zh-CN') : '-'
-    },
+    render: ({ record }) => formatDate((record as Person).created_at),
   },
   {
     title: '操作',
@@ -678,26 +677,7 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
       <!-- 任务进度与结果 -->
       <template v-else>
         <div class="enrich-progress">
-          <a-tag
-            size="small"
-            :color="
-              enrichTask.status === 'success'
-                ? 'green'
-                : enrichTask.status === 'failed'
-                  ? 'red'
-                  : 'arcoblue'
-            "
-          >
-            {{
-              {
-                pending: '排队中',
-                running: '补全中',
-                success: '已完成',
-                failed: '失败',
-                cancelled: '已取消',
-              }[enrichTask.status] || enrichTask.status
-            }}
-          </a-tag>
+          <StatusTag :status="enrichTask.status" />
           <a-progress
             v-if="['pending', 'running'].includes(enrichTask.status)"
             :percent="enrichTask.progress / 100"

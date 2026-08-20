@@ -28,7 +28,7 @@ import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
-import { shortenText } from '@/utils/format'
+import { formatDate, shortenText } from '@/utils/format'
 import { CATEGORY_LABELS } from '@/api/tags'
 import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
@@ -527,7 +527,7 @@ async function removeTag(t: InspirationTagOut) {
                   >
                 </a-descriptions-item>
                 <a-descriptions-item label="上传时间">
-                  {{ new Date(detail.created_at).toLocaleString('zh-CN') }}
+                  {{ formatDate(detail.created_at) }}
                 </a-descriptions-item>
               </a-descriptions>
             </div>

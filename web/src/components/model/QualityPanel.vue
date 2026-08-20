@@ -9,6 +9,7 @@ import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { formatDate } from '@/utils/format'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
+import StatCardGrid from '@/components/common/StatCardGrid.vue'
 
 const router = useRouter()
 
@@ -221,46 +222,21 @@ const failedColumns: TableColumnData[] = [
   <a-spin :loading="qualityLoading" style="display: block">
     <template v-if="qualityData">
       <!-- 总览卡片 -->
-      <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic
-              title="素材总数"
-              :value="qualityData.overview.total_inspirations" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic title="已分析" :value="qualityData.overview.analyzed_count" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic
-              title="覆盖率"
-              :value="qualityData.overview.coverage_percent"
-            >
-              <template #suffix>%</template>
-            </a-statistic></a-card
-          ></a-col
-        >
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic
-              title="平均标签"
-              :value="qualityData.overview.avg_tags_per_image" /></a-card
-        ></a-col>
-        <a-col :flex="1"
-          ><a-card size="small"
-            ><a-statistic
-              title="平均耗时"
-              :value="avgTime.value"
-              :precision="avgTime.precision"
-              placeholder="-"
-            >
-              <template #suffix>{{ avgTime.suffix }}</template>
-            </a-statistic></a-card
-          ></a-col
-        >
-      </a-row>
+      <StatCardGrid
+        :items="[
+          { title: '素材总数', value: qualityData.overview.total_inspirations },
+          { title: '已分析', value: qualityData.overview.analyzed_count },
+          { title: '覆盖率', value: qualityData.overview.coverage_percent, suffix: '%' },
+          { title: '平均标签', value: qualityData.overview.avg_tags_per_image },
+          {
+            title: '平均耗时',
+            value: avgTime.value,
+            precision: avgTime.precision,
+            placeholder: '-',
+            suffix: avgTime.suffix,
+          },
+        ]"
+      />
 
       <!-- 问题素材 -->
       <a-row :gutter="[12, 12]" style="margin-bottom: 16px">

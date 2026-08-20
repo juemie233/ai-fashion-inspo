@@ -4,7 +4,7 @@
 import { h, onMounted, ref } from 'vue'
 import { Message, type TableColumnData } from '@arco-design/web-vue'
 import { fetchAuditLogs, type AuditLogItem } from '@/api/admin'
-import { formatSize } from '@/utils/format'
+import { formatDate, formatSize } from '@/utils/format'
 
 const items = ref<AuditLogItem[]>([])
 const loading = ref(false)
@@ -24,11 +24,6 @@ function actionLabel(action: string): string {
   return ACTION_LABELS[action] || action
 }
 
-function formatTime(iso: string | null): string {
-  if (!iso) return '-'
-  return new Date(iso).toLocaleString('zh-CN')
-}
-
 /** 审计日志表格列定义（Arco render 的 record 转 AuditLogItem） */
 const logColumns: TableColumnData[] = [
   {
@@ -36,7 +31,7 @@ const logColumns: TableColumnData[] = [
     dataIndex: 'created_at',
     width: 190,
     render: ({ record }) =>
-      h('span', { style: 'white-space: nowrap' }, formatTime((record as AuditLogItem).created_at)),
+      h('span', { style: 'white-space: nowrap' }, formatDate((record as AuditLogItem).created_at)),
   },
   {
     title: '操作',

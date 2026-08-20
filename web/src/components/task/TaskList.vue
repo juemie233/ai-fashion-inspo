@@ -2,12 +2,11 @@
 /** 任务列表：统一展示任务队列与采集任务。 */
 
 import { h } from 'vue'
-import { Tag, Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
+import { Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
+import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import {
-  TASK_STATUS_LABELS,
   TASK_TYPE_ICONS,
-  taskStatusType,
   taskTypeTagColor,
   predictEta,
 } from '@/utils/taskLabel'
@@ -87,14 +86,7 @@ const columns: TableColumnData[] = [
     title: '状态',
     dataIndex: 'status',
     width: 90,
-    render: ({ record }) => {
-      const row = record as UnifiedTask
-      return h(
-        Tag,
-        { color: taskStatusType(row.status), size: 'small' },
-        { default: () => TASK_STATUS_LABELS[row.status] || row.status },
-      )
-    },
+    render: ({ record }) => h(StatusTag, { status: (record as UnifiedTask).status }),
   },
   { title: '进度', dataIndex: 'progress', width: 160, render: ({ record }) => renderProgress(record as UnifiedTask) },
   { title: '完成', dataIndex: 'count', width: 100, render: ({ record }) => renderCount(record as UnifiedTask) },
