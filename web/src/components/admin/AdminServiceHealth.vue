@@ -94,21 +94,19 @@ onUnmounted(() => {
         <span class="res-label">磁盘</span>
         <a-progress
           type="line"
-          :percent="Math.min(1, disk.used_percent / 100)"
+          :percent="Math.round(disk.used_percent) / 100"
           :status="disk.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
-        <span class="res-value">{{ disk.used_percent.toFixed(1) }}%</span>
       </div>
       <div v-if="memory" class="res-row">
         <span class="res-label">内存</span>
         <a-progress
           type="line"
-          :percent="Math.min(1, memory.used_percent / 100)"
+          :percent="Math.round(memory.used_percent) / 100"
           :status="memory.used_percent >= 90 ? 'danger' : 'success'"
           style="flex: 1"
         />
-        <span class="res-value">{{ memory.used_percent.toFixed(1) }}%</span>
       </div>
       <div v-if="logs" class="res-row">
         <span class="res-label">日志</span>
