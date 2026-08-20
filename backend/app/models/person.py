@@ -250,3 +250,23 @@ class ModelPhoto(Base):
 
     def __repr__(self) -> str:
         return f"<ModelPhoto(id={self.id}, set_id={self.set_id})>"
+
+
+class BloggerEnrichmentSkip(Base):
+    """博主主页信息补全「跳过」记录：确定性无法补全的博主（缺小红书号/搜索无结果等）。
+
+    跳过后不再出现在缺失列表（避免每次补全重复失败）；可解除跳过重新纳入。
+    临时性问题（Cookie 缺失/登录墙/网络异常）不写本表——保留在缺失列表供重试。
+    """
+
+    __tablename__ = "blogger_enrichment_skips"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    blogger_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("bloggers.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    reason: Mapped[str] = mapped_column(Text)  # 跳过原因（确定性失败原因）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    def __repr__(self) -> str:
+        return f"<BloggerEnrichmentSkip(blogger_id={self.blogger_id})>"

@@ -120,6 +120,7 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
     try:
         results: list[dict] = []
         updated = 0
+        skipped = 0
         failed = 0
         cancelled = False
         for idx, blogger_id in enumerate(ids, start=1):
@@ -142,6 +143,8 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
                 results.append(result)
                 if result["status"] == "updated":
                     updated += 1
+                elif result["status"] == "skipped":
+                    skipped += 1
                 else:
                     failed += 1
             task.done = idx
@@ -162,6 +165,7 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         **payload,
         "results": results,
         "updated": updated,
+        "skipped": skipped,
         "failed": failed,
         "cancelled": cancelled,
     }
@@ -170,6 +174,6 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
     task.updated_at = utcnow()
     await db.commit()
     logger.info(
-        f"博主主页补全任务结束: #{task.id} 成功 {updated} 失败 {failed} "
-        f"cancelled={cancelled}"
+        f"博主主页补全任务结束: #{task.id} 成功 {updated} 跳过 {skipped} "
+        f"失败 {failed} cancelled={cancelled}"
     )

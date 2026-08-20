@@ -17,6 +17,7 @@ from app.services.blogger_enrichment_service import (
     enrich_one,
     extract_user_id_from_url,
     list_missing_profile_bloggers,
+    list_skipped,
 )
 from app.services.task_runners.common import PermanentTaskError
 from app.services.task_runners.enrich_blogger_profile import (
@@ -146,14 +147,19 @@ async def test_enrich_build_url_without_search(client):
     assert called["n"] == 0
 
 
-async def test_enrich_invalid_url_failed(client):
-    """主页 URL 无法解析用户 ID → failed 并记录原因。"""
+async def test_enrich_invalid_url_skipped(client):
+    """主页 URL 无法解析用户 ID → 确定性失败自动跳过并写跳过表。"""
     b = _create_blogger(client, "坏URL博", profile_url="https://www.xiaohongshu.com/explore/xx")
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
         result = await enrich_one(db, blogger, search_users=None)
-    assert result["status"] == "failed"
-    assert "无法解析" in result["reason"]
+        assert result["status"] == "skipped"
+        assert "无法解析" in result["reason"]
+        # 已写入跳过表：不再出现在缺失列表
+        missing = await list_missing_profile_bloggers(db)
+        assert all(m.id != b["id"] for m in missing)
+        skips = await list_skipped(db)
+        assert any(s["blogger_id"] == b["id"] for s in skips)
 
 
 async def test_enrich_single_candidate_adopted(client):
@@ -211,12 +217,12 @@ async def test_enrich_multi_candidates_no_match_failed(client):
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
         result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "failed"
+    assert result["status"] == "skipped"
     assert "无法唯一确认" in result["reason"]
 
 
-async def test_enrich_no_result_failed(client):
-    """搜索无结果 → failed。"""
+async def test_enrich_no_result_skipped(client):
+    """搜索无结果 → 确定性失败自动跳过。"""
     b = _create_blogger(client, "无果博", xhs_id="xhs000")
 
     async def fake_search(keyword):
@@ -225,17 +231,17 @@ async def test_enrich_no_result_failed(client):
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
         result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "failed"
+    assert result["status"] == "skipped"
     assert "无结果" in result["reason"]
 
 
-async def test_enrich_missing_xhs_id_failed(client):
-    """两者都缺且无小红书号 → failed（无法定位）。"""
+async def test_enrich_missing_xhs_id_skipped(client):
+    """两者都缺且无小红书号 → 确定性失败自动跳过（无法定位）。"""
     b = _create_blogger(client, "无号博")
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
         result = await enrich_one(db, blogger, search_users=None)
-    assert result["status"] == "failed"
+    assert result["status"] == "skipped"
     assert "缺少小红书号" in result["reason"]
 
 
@@ -372,12 +378,39 @@ async def test_enrich_task_failure_does_not_block(client, monkeypatch):
         await db.refresh(task)
         assert task.progress == 100
         assert task.result["updated"] == 1
-        assert task.result["failed"] == 1
+        assert task.result["skipped"] == 1  # 搜索无结果 → 确定性失败自动跳过
+        assert task.result["failed"] == 0
         results = task.result["results"]
         by_name = {r["name"]: r for r in results}
         assert by_name["成功博"]["status"] == "updated"
-        assert by_name["失败博"]["status"] == "failed"
+        assert by_name["失败博"]["status"] == "skipped"
         assert "无结果" in by_name["失败博"]["reason"]
+
+        # 跳过后不再出现在缺失列表（下一批只处理未跳过的）
+        missing = await list_missing_profile_bloggers(db)
+        assert all(m.name != "失败博" for m in missing)
+
+
+async def test_enrich_skip_unskip_roundtrip(client):
+    """跳过/解除跳过接口：手动跳过后缺失列表排除，解除后重新纳入。"""
+    b = _create_blogger(client, "手动跳过博", xhs_id="xhs999")
+    r = client.post("/api/bloggers/enrich-skip", json={"blogger_ids": [b["id"]], "reason": "测试跳过"})
+    assert r.status_code == 200
+    assert r.json()["skipped"] == 1
+
+    # 缺失列表排除
+    missing = client.get("/api/bloggers/missing-profile").json()
+    assert missing["total"] == 0
+    # 已跳过列表包含
+    skips = client.get("/api/bloggers/enrich-skips").json()
+    assert skips["total"] == 1
+    assert skips["items"][0]["blogger_id"] == b["id"]
+
+    # 解除后重新纳入
+    r2 = client.post("/api/bloggers/enrich-unskip", json={"blogger_ids": [b["id"]]})
+    assert r2.json()["unskipped"] == 1
+    missing2 = client.get("/api/bloggers/missing-profile").json()
+    assert missing2["total"] == 1
 
 
 async def test_enrich_task_missing_cookie_fails_fast(client):

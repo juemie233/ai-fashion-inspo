@@ -53,6 +53,7 @@ _ALL_TABLES = [
     "model_photos",
     "model_photo_sets",
     "model_face_embeddings",
+    "blogger_enrichment_skips",
     "inspirations",
     "bloggers",
     "models",

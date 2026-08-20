@@ -19,9 +19,13 @@ import { getFileUrl } from '@/api/inspirations'
 import {
   bloggersApi,
   enrichMissingProfiles,
+  fetchEnrichSkips,
   fetchMissingProfiles,
   importBloggersCsv,
   modelsApi,
+  skipEnrichBloggers,
+  unskipEnrichBloggers,
+  type EnrichSkipItem,
   type MissingProfileBlogger,
 } from '@/api/persons'
 import { usePersonsStore, type PersonKind } from '@/stores/persons'
@@ -326,6 +330,7 @@ onMounted(async () => {
   await loadAndSync(true)
   await loadTop()
   await loadMissingCount()
+  await loadSkipList()
 })
 
 onUnmounted(() => {
@@ -464,10 +469,63 @@ const enrichResults = computed(
 const enrichUpdated = computed(
   () => (enrichTask.value?.result as { updated?: number } | null)?.updated ?? 0,
 )
+const enrichSkipped = computed(
+  () => (enrichTask.value?.result as { skipped?: number } | null)?.skipped ?? 0,
+)
 const enrichFailed = computed(
   () => (enrichTask.value?.result as { failed?: number } | null)?.failed ?? 0,
 )
+/** 临时性失败（可重试）；确定性失败已自动跳过 */
 const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.status === 'failed'))
+/** 本次自动跳过的（确定性无法获取，展示原因） */
+const enrichSkippedItems = computed(() => enrichResults.value.filter((r) => r.status === 'skipped'))
+
+// ── 跳过管理（确定性无法补全的博主，可解除重新纳入）──
+const skipManageOpen = ref(false)
+const skippedItems = ref<EnrichSkipItem[]>([])
+const skipBusy = ref(false)
+
+async function loadSkipList() {
+  if (props.kind !== 'blogger') return
+  try {
+    const data = await fetchEnrichSkips()
+    skippedItems.value = data.items
+  } catch {
+    // 加载失败静默
+  }
+}
+
+/** 手动跳过指定博主（任务结果里的失败项） */
+async function skipFailedBloggers(ids: number[], reason = '手动跳过（无法获取信息）') {
+  if (ids.length === 0) return
+  skipBusy.value = true
+  try {
+    const r = await skipEnrichBloggers(ids, reason)
+    Message.success(`已跳过 ${r.skipped} 位博主（解除后可重新纳入）`)
+    await loadMissingCount()
+    await loadSkipList()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '跳过失败'))
+  } finally {
+    skipBusy.value = false
+  }
+}
+
+/** 解除跳过（重新纳入补全范围） */
+async function unskipBloggers(ids: number[]) {
+  if (ids.length === 0) return
+  skipBusy.value = true
+  try {
+    const r = await unskipEnrichBloggers(ids)
+    Message.success(`已解除 ${r.unskipped} 位博主（重新纳入补全范围）`)
+    await loadSkipList()
+    await loadMissingCount()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '解除失败'))
+  } finally {
+    skipBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -661,6 +719,11 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
           </div>
           <a-empty v-if="missingItems.length === 0" description="暂无可补全的博主" size="small" />
         </div>
+        <div v-if="skippedItems.length > 0" style="margin-bottom: 10px">
+          <a-button type="text" size="small" @click="skipManageOpen = true">
+            已跳过 {{ skippedItems.length }} 位（查看 / 解除）
+          </a-button>
+        </div>
         <div class="enrich-actions">
           <a-button @click="closeEnrich">取消</a-button>
           <a-button
@@ -699,12 +762,44 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
             v-else
             :type="enrichFailed > 0 ? 'warning' : 'success'"
             style="margin: 12px 0"
-            :message="`补全完成：成功 ${enrichUpdated} 位${enrichFailed > 0 ? `，失败 ${enrichFailed} 位` : ''}`"
+            :message="
+              `补全完成：成功 ${enrichUpdated} 位` +
+              (enrichSkipped > 0 ? `，跳过 ${enrichSkipped} 位（确定性无法获取）` : '') +
+              (enrichFailed > 0 ? `，失败 ${enrichFailed} 位` : '')
+            "
           />
+          <!-- 自动跳过（确定性无法获取，已从缺失列表移除，可解除后重试） -->
+          <div v-if="enrichSkippedItems.length > 0" class="enrich-failed enrich-skipped">
+            <div
+              v-for="item in enrichSkippedItems"
+              :key="item.blogger_id"
+              class="enrich-failed-row"
+            >
+              <span class="enrich-name">{{ item.name }}</span>
+              <span class="enrich-reason">{{ item.reason || '未知原因' }}</span>
+              <a-button
+                size="mini"
+                type="text"
+                :loading="skipBusy"
+                @click="unskipBloggers([item.blogger_id])"
+              >
+                解除跳过
+              </a-button>
+            </div>
+          </div>
+          <!-- 临时性失败（Cookie/登录墙/网络等，可重试或手动跳过） -->
           <div v-if="enrichFailedItems.length > 0" class="enrich-failed">
             <div v-for="item in enrichFailedItems" :key="item.blogger_id" class="enrich-failed-row">
               <span class="enrich-name">{{ item.name }}</span>
               <span class="enrich-reason">{{ item.reason || '未知原因' }}</span>
+              <a-button
+                size="mini"
+                type="text"
+                :loading="skipBusy"
+                @click="skipFailedBloggers([item.blogger_id], `跳过：${item.reason || ''}`)"
+              >
+                跳过
+              </a-button>
             </div>
           </div>
           <div class="enrich-actions">
@@ -716,10 +811,63 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
             >
               重试失败（{{ enrichFailedItems.length }}）
             </a-button>
+            <a-button
+              v-if="enrichFailedItems.length > 0"
+              type="secondary"
+              status="danger"
+              :loading="skipBusy"
+              @click="
+                skipFailedBloggers(
+                  enrichFailedItems.map((r) => r.blogger_id),
+                  '手动跳过全部失败博主',
+                )
+              "
+            >
+              跳过全部失败（{{ enrichFailedItems.length }}）
+            </a-button>
             <a-button type="primary" @click="closeEnrich">完成</a-button>
           </div>
         </template>
       </template>
+    </a-modal>
+
+    <!-- 已跳过补全管理弹窗（解除后重新纳入补全范围） -->
+    <a-modal
+      v-if="kind === 'blogger'"
+      v-model:visible="skipManageOpen"
+      title="已跳过补全的博主"
+      :width="520"
+      :footer="false"
+    >
+      <p class="enrich-tip">
+        以下博主被标记为「跳过补全」（确定性无法获取主页信息）。解除后重新纳入补全范围，可再次尝试。
+      </p>
+      <div v-if="skippedItems.length > 0" class="enrich-list">
+        <div v-for="item in skippedItems" :key="item.blogger_id" class="enrich-row enrich-skip-row">
+          <div class="enrich-skip-info">
+            <span class="enrich-name">{{ item.name }}</span>
+            <span class="enrich-xhs">{{ item.reason }}</span>
+          </div>
+          <a-button
+            size="mini"
+            type="text"
+            :loading="skipBusy"
+            @click="unskipBloggers([item.blogger_id])"
+          >
+            解除跳过
+          </a-button>
+        </div>
+      </div>
+      <a-empty v-else description="暂无已跳过的博主" size="small" />
+      <div v-if="skippedItems.length > 0" class="enrich-actions">
+        <a-button
+          type="secondary"
+          :loading="skipBusy"
+          @click="unskipBloggers(skippedItems.map((s) => s.blogger_id))"
+        >
+          全部解除
+        </a-button>
+      </div>
     </a-modal>
   </div>
 </template>
@@ -847,12 +995,33 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
   margin-bottom: 14px;
 }
 
+/* 自动跳过列表：浅黄色区分于红色失败列表 */
+.enrich-failed.enrich-skipped {
+  border-color: #fbe6c2;
+  background: #fffbf3;
+}
+
 .enrich-failed-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   padding: 4px 0;
   font-size: 13px;
+}
+
+.enrich-skip-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.enrich-skip-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .enrich-reason {

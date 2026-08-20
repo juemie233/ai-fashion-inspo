@@ -2,7 +2,7 @@
 /** 人物新建/编辑对话框：按 kind（穿搭博主/职业模特）提交到对应 API。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Message, type FormInstance, type FieldRule } from '@arco-design/web-vue'
 import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
 import type { Person } from '@shared/types/person'
@@ -61,6 +61,19 @@ const rules: Record<string, FieldRule | FieldRule[]> = {
     },
   ],
 }
+
+/** 合法主页链接（http/https）：非空时提供「打开主页」可点击入口 */
+const profileUrl = computed(() => {
+  const value = form.value.profile_url
+  if (!value) return ''
+  try {
+    const p = new URL(value)
+    if (p.protocol === 'http:' || p.protocol === 'https:') return value
+  } catch {
+    /* 非法 URL 不显示链接 */
+  }
+  return ''
+})
 
 // 打开对话框时初始化表单：编辑模式回填，新建模式重置
 watch(
@@ -154,6 +167,15 @@ async function handleSubmit() {
           placeholder="https://..."
           @input="(v: string) => (form.profile_url = v || null)"
         />
+        <a-link
+          v-if="profileUrl"
+          :href="profileUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="display: inline-block; margin-top: 6px; font-size: 12px"
+        >
+          🔗 打开主页（新窗口）
+        </a-link>
       </a-form-item>
 
       <a-form-item label="简介" field="bio">

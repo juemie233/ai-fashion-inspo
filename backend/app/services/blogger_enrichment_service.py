@@ -6,7 +6,12 @@
 2. 两者都缺：使用小红书 CDP/Playwright 采集引擎按 xhs_id 搜索用户——
    唯一候选直接采纳；多候选时昵称完全匹配才采纳；否则标记失败（需人工核对）；
 3. 单博主失败不阻塞整体；不覆盖已有 platform_user_id；
-4. 搜索无结果/页面结构变化/风控等情况统一记录失败原因，可单独重试。
+4. 结果三态：
+   - updated：成功补全
+   - skipped：确定性无法补全（缺小红书号 / 搜索无结果 / 无法唯一确认 /
+     主页 URL 无法解析）——自动写入跳过表，不再出现在缺失列表，可解除后重试
+   - failed：临时性问题（Cookie 缺失/登录墙/网络异常等）——不跳过，
+     保留在缺失列表，问题解决后重试
 """
 
 from __future__ import annotations
@@ -14,10 +19,11 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from app.models.person import Blogger
+from app.models.person import Blogger, BloggerEnrichmentSkip
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +47,70 @@ async def list_missing_profile_bloggers(
 ) -> list[Blogger]:
     """查询缺失主页信息的小红书博主（profile_url 或 platform_user_id 为空）。
 
+    排除已被「跳过」的博主（确定性无法补全，避免每次重复失败）；
+    临时性问题（Cookie 等）不跳过，仍在列表中供重试。
+
     参数:
-        blogger_ids: 限定范围（None/空 = 全部缺失博主）
+        blogger_ids: 限定范围（None/空 = 全部缺失且未跳过的博主）
     """
     stmt = select(Blogger).where(
         Blogger.platform == "xiaohongshu",
         or_(Blogger.profile_url.is_(None), Blogger.platform_user_id.is_(None)),
+        ~Blogger.id.in_(
+            select(BloggerEnrichmentSkip.blogger_id)
+        ),
     )
     if blogger_ids:
         stmt = stmt.where(Blogger.id.in_(blogger_ids))
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def mark_skipped(db: AsyncSession, blogger_ids: list[int], reason: str) -> int:
+    """批量标记跳过（幂等：已跳过的更新原因）。返回实际处理数。"""
+    ids = list(dict.fromkeys(blogger_ids))
+    if not ids:
+        return 0
+    stmt = sqlite_insert(BloggerEnrichmentSkip).values(
+        [{"blogger_id": bid, "reason": reason} for bid in ids]
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["blogger_id"], set_={"reason": reason}
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return len(ids)
+
+
+async def unskip(db: AsyncSession, blogger_ids: list[int]) -> int:
+    """解除跳过（博主重新纳入补全范围）。返回实际解除数。"""
+    ids = list(dict.fromkeys(blogger_ids))
+    if not ids:
+        return 0
+    result = await db.execute(
+        delete(BloggerEnrichmentSkip).where(
+            BloggerEnrichmentSkip.blogger_id.in_(ids)
+        )
+    )
+    await db.commit()
+    return result.rowcount
+
+
+async def list_skipped(db: AsyncSession) -> list[dict]:
+    """已跳过博主列表（含博主名与原因，供前端管理/解除）。"""
+    rows = await db.execute(
+        select(BloggerEnrichmentSkip, Blogger.name)
+        .join(Blogger, Blogger.id == BloggerEnrichmentSkip.blogger_id)
+        .order_by(BloggerEnrichmentSkip.created_at.desc())
+    )
+    return [
+        {
+            "blogger_id": skip.blogger_id,
+            "name": name,
+            "reason": skip.reason,
+            "created_at": skip.created_at.isoformat(),
+        }
+        for skip, name in rows.all()
+    ]
 
 
 async def enrich_one(
@@ -64,8 +124,14 @@ async def enrich_one(
             测试可注入假实现）。签名: async (keyword) -> list[dict]
 
     返回:
-        {"blogger_id", "name", "status": "updated"|"failed"|"no_change",
+        {"blogger_id", "name", "status": "updated"|"skipped"|"failed",
          "reason"?, "profile_url"?, "platform_user_id"?}
+
+    状态语义：
+    - updated：成功补全
+    - skipped：确定性无法补全（缺小红书号/搜索无结果/无法唯一确认/URL 解析失败），
+      自动写入跳过表（不再出现在缺失列表，可解除后重试）
+    - failed：临时性问题（Cookie/登录墙/网络异常），不跳过，保留重试
     """
     blog_id = blogger.id
     name = blogger.name
@@ -78,10 +144,12 @@ async def enrich_one(
         if extracted:
             uid = extracted
         else:
+            # 确定性失败：URL 存在但无法解析 → 跳过
+            await mark_skipped(db, [blog_id], f"主页 URL 无法解析用户 ID: {url}")
             return {
                 "blogger_id": blog_id,
                 "name": name,
-                "status": "failed",
+                "status": "skipped",
                 "reason": f"主页 URL 无法解析用户 ID: {url}",
             }
     elif uid and not url:
@@ -98,10 +166,12 @@ async def enrich_one(
 
     # ── 2. 两者都缺 → 按小红书号搜索用户 ──
     if not blogger.xhs_id:
+        # 确定性失败：无小红书号无法定位 → 跳过
+        await mark_skipped(db, [blog_id], "缺少小红书号（xhs_id），无法搜索定位")
         return {
             "blogger_id": blog_id,
             "name": name,
-            "status": "failed",
+            "status": "skipped",
             "reason": "缺少小红书号（xhs_id），无法搜索定位",
         }
     if search_users is None:
@@ -112,7 +182,7 @@ async def enrich_one(
         ).search_users
     try:
         candidates = await search_users(blogger.xhs_id)
-    except Exception as e:  # noqa: BLE001 浏览器/网络异常统一按失败记录
+    except Exception as e:  # noqa: BLE001 浏览器/网络/Cookie 异常属临时性问题：不跳过
         logger.warning(f"博主 #{blog_id} 用户搜索异常: {e}")
         return {
             "blogger_id": blog_id,
@@ -130,15 +200,17 @@ async def enrich_one(
                 matched = candidate
                 break
     if matched is None:
+        # 确定性失败：无结果/无法唯一确认 → 跳过（可解除后重试）
         reason = (
             "搜索无结果"
             if not candidates
             else f"搜索结果 {len(candidates)} 个无法唯一确认（需人工核对）"
         )
+        await mark_skipped(db, [blog_id], reason)
         return {
             "blogger_id": blog_id,
             "name": name,
-            "status": "failed",
+            "status": "skipped",
             "reason": reason,
         }
 

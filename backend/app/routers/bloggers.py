@@ -174,6 +174,57 @@ async def missing_profile_bloggers(
     }
 
 
+@router.post("/enrich-skip")
+async def enrich_skip(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """手动跳过补全（确定性无法获取信息的博主，从缺失列表移除）。
+
+    body: {"blogger_ids": [1, 2], "reason": "可选跳过原因"}
+    """
+    blogger_ids = body.get("blogger_ids")
+    if not isinstance(blogger_ids, list) or not all(
+        isinstance(i, int) for i in blogger_ids
+    ):
+        raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
+    from app.services.blogger_enrichment_service import mark_skipped
+
+    count = await mark_skipped(db, blogger_ids, str(body.get("reason") or "手动跳过"))
+    return {"skipped": count}
+
+
+@router.post("/enrich-unskip")
+async def enrich_unskip(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """解除跳过（博主重新纳入补全范围）。
+
+    body: {"blogger_ids": [1, 2]}
+    """
+    blogger_ids = body.get("blogger_ids")
+    if not isinstance(blogger_ids, list) or not all(
+        isinstance(i, int) for i in blogger_ids
+    ):
+        raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
+    from app.services.blogger_enrichment_service import unskip
+
+    count = await unskip(db, blogger_ids)
+    return {"unskipped": count}
+
+
+@router.get("/enrich-skips")
+async def enrich_skips(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """已跳过补全的博主列表（含原因，供前端管理与解除）。"""
+    from app.services.blogger_enrichment_service import list_skipped
+
+    items = await list_skipped(db)
+    return {"items": items, "total": len(items)}
+
+
 @router.get("/ip-stats")
 async def blogger_ip_stats(
     limit: int = Query(30, ge=1, le=100),

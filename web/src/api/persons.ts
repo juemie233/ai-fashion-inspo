@@ -322,6 +322,42 @@ export async function enrichMissingProfiles(bloggerIds?: number[]): Promise<{
   return data
 }
 
+/** 已跳过补全的博主 */
+export interface EnrichSkipItem {
+  blogger_id: number
+  name: string
+  reason: string
+  created_at: string
+}
+
+/** 查询已跳过补全的博主 */
+export async function fetchEnrichSkips(): Promise<{ items: EnrichSkipItem[]; total: number }> {
+  const { data } = await apiClient.get<{ items: EnrichSkipItem[]; total: number }>(
+    '/bloggers/enrich-skips',
+  )
+  return data
+}
+
+/** 手动跳过补全（确定性无法获取信息的博主，从缺失列表移除） */
+export async function skipEnrichBloggers(
+  bloggerIds: number[],
+  reason?: string,
+): Promise<{ skipped: number }> {
+  const { data } = await apiClient.post('/bloggers/enrich-skip', {
+    blogger_ids: bloggerIds,
+    reason,
+  })
+  return data
+}
+
+/** 解除跳过（重新纳入补全范围） */
+export async function unskipEnrichBloggers(bloggerIds: number[]): Promise<{ unskipped: number }> {
+  const { data } = await apiClient.post('/bloggers/enrich-unskip', {
+    blogger_ids: bloggerIds,
+  })
+  return data
+}
+
 // ── 模特照片组（写真，与穿搭素材分离；仅模特拥有）──
 
 /** 获取模特照片组分页列表 */
