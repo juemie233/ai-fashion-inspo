@@ -113,8 +113,16 @@ class PersonServiceBase:
         search: str | None = None,
         platform: str | None = None,
         sort: str = "newest",
+        exclude_face_registered: bool = False,
+        exclude_linked: bool = False,
     ) -> tuple[list[dict], int]:
-        """分页查询（含素材数统计与多维筛选），返回 (items, total)。"""
+        """分页查询（含素材数统计与多维筛选），返回 (items, total)。
+
+        人脸检测筛选约束：
+        - exclude_face_registered=true：返回已注册人脸库的人物（确保人脸检测
+          只匹配候选人脸库内的人）
+        - exclude_linked=true：排除已关联素材的人物
+        """
         assert self.model is not None and self.link_model is not None
         model, link_model = self.model, self.link_model
         link_id = self._link_id_col()
@@ -147,6 +155,21 @@ class PersonServiceBase:
             )
         if platform:
             stmt = stmt.where(model.platform == platform)
+
+        # 过滤：返回已注册人脸库的人物（人脸检测只匹配库内人物）
+        if exclude_face_registered:
+            stmt = stmt.where(model.face_embedding.isnot(None))
+
+        # 排除已关联素材的人物
+        if exclude_linked:
+            # 通过关联表查询已关联素材的人物
+            subquery = (
+                select(link_id)
+                .join(Inspiration, Inspiration.id == link_model.inspiration_id)
+                .where(Inspiration.deleted_at.is_(None))
+                .subquery()
+            )
+            stmt = stmt.where(~link_id.in_(subquery))
 
         # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数倒序）
         if sort == "name":

@@ -475,8 +475,11 @@ onUnmounted(() => {
           v-if="qualityReviewStats.total > 0"
           type="line"
           :percent="
-            (qualityReviewStats.approved + qualityReviewStats.rejected) /
-            qualityReviewStats.total
+            Math.round(
+              ((qualityReviewStats.approved + qualityReviewStats.rejected) /
+                qualityReviewStats.total) *
+                100,
+            ) / 100
           "
           :stroke-width="24"
           style="flex: 1"

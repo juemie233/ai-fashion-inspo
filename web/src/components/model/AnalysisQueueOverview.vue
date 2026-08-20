@@ -46,10 +46,11 @@ function statusColor(status: string): string {
       <a-progress
         v-if="queueStats.total > 0"
         type="line"
-        :percent="queueStats.analyzed / queueStats.total"
+        :percent="Math.round((queueStats.analyzed / queueStats.total) * 100) / 100"
         :stroke-width="24"
         style="flex: 1"
       />
+      
       <a-button
         type="primary"
         @click="emit('analyzeAll')"

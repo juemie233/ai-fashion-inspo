@@ -308,7 +308,7 @@ function cancelDownload(key: number) {
 const downloadPercent = computed(() => {
   const task = runningTask.value
   if (!task || task.total === 0) return 0
-  return task.progress / task.total
+  return Math.round((task.progress / task.total) * 100) / 100
 })
 
 const downloadSize = computed(() => {

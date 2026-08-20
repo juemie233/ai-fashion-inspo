@@ -138,11 +138,16 @@ async def get_analysis_queue_stats(db: AsyncSession) -> dict:
     # 成功日志（error IS NULL）的素材都算未分析，**含分析失败过的素材**
     # （失败素材可通过「分析全部未分析」被批量重跑，不必只走单条 retry）。
     # 注意：analyzed_count 为「有过日志」（attempted），二者可重叠（失败素材）。
+    # 成功素材必须限定在现存图片素材内（join Inspiration 过滤），否则历史
+    # 删除素材的日志会把计数抬高，导致 unanalyzed 恒为 0、批量分析按钮被误禁用。
     success_log_sub = (
         select(AIAnalysisLog.inspiration_id)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
         .where(
             _analysis_log_filter(),
             (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
         )
         .distinct()
     )
