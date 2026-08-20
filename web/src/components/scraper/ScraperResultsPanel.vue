@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 结果预览面板：展示某任务采集到的图片/视频，支持勾选批量删除、加载更多与跳转素材详情。 */
 
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getFileUrl } from '@/api/inspirations'
 
@@ -21,6 +22,9 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
+
+/** 悬停放大：与标签管理页一致的 JS 事件驱动（mouseenter/mouseleave 切换放大状态） */
+const zoomedId = ref<string | null>(null)
 
 /** 跳转到素材详情页（打标签、审核等操作在详情页完成） */
 function openDetail(id: string) {
@@ -46,7 +50,15 @@ function openDetail(id: string) {
     </div>
     <div v-if="items.length===0&&!loading" class="results-empty">空空如也</div>
     <div v-else class="results-grid">
-      <div v-for="item in items" :key="item.id" class="result-card" :class="{selected:selectedIds.has(item.id)}" @click="emit('toggle-select', item.id)">
+      <div
+        v-for="item in items"
+        :key="item.id"
+        class="result-card"
+        :class="{ selected: selectedIds.has(item.id), 'hover-zooming': zoomedId === item.id }"
+        @mouseenter="zoomedId = item.id"
+        @mouseleave="zoomedId = null"
+        @click="emit('toggle-select', item.id)"
+      >
         <video
           v-if="item.media_type === 'video' && !item.thumbnail_path"
           :src="getFileUrl(item.file_path)"
@@ -78,7 +90,11 @@ function openDetail(id: string) {
 .result-card{position:relative;aspect-ratio:3/4;overflow:hidden;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:border-color .15s;background:#f5f5f5}
 .result-card.selected{border-color:#2080f0}
 .result-card img,
-.result-card video{width:100%;height:100%;object-fit:cover}
+.result-card video{width:100%;height:100%;object-fit:cover;transition:transform .2s ease}
+/* 悬停放大（JS 事件驱动，与标签管理页一致）：result-card 已 overflow:hidden，放大不溢出 */
+.result-card.hover-zooming{z-index:1;box-shadow:0 4px 14px rgba(0,0,0,.28)}
+.result-card.hover-zooming img,
+.result-card.hover-zooming video{transform:scale(1.12)}
 .result-check{position:absolute;top:4px;right:4px}
 .result-open{position:absolute;bottom:4px;left:4px;opacity:0;transition:opacity .15s;background:rgba(255,255,255,.85)}
 .result-card:hover .result-open{opacity:1}
