@@ -5,11 +5,7 @@ import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { UnifiedTask } from '@/types/task'
-import {
-  TASK_TYPE_LABELS,
-  SCRAPER_PLATFORM_LABELS,
-  normalizeTaskStatus,
-} from '@/utils/taskLabel'
+import { TASK_TYPE_LABELS, SCRAPER_PLATFORM_LABELS, normalizeTaskStatus } from '@/utils/taskLabel'
 import { formatSize } from '@/utils/format'
 import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
 
@@ -48,7 +44,6 @@ const PAGE_SIZE = 20
 const POLL_INTERVAL_MS = 5000
 
 export function useTaskCenter() {
-  
   const tasks = ref<UnifiedTask[]>([])
   const loading = ref(false)
   const statusFilter = ref('')
@@ -59,7 +54,11 @@ export function useTaskCenter() {
   // ===== 归一化 =====
 
   /** 根据任务 result 生成直观的完成统计（成功任务的「干成了什么」） */
-  function resultSummary(type: string, result: Record<string, any> | null, error: string | null): string {
+  function resultSummary(
+    type: string,
+    result: Record<string, any> | null,
+    error: string | null,
+  ): string {
     if (error) return error
     if (!result || typeof result !== 'object') return ''
     const r = result as Record<string, any>
@@ -69,19 +68,27 @@ export function useTaskCenter() {
         return [
           r.image_done != null ? `图像向量 ${r.image_done}` : '',
           r.text_done != null ? `文本向量 ${r.text_done}` : '',
-          r.image_skipped || r.text_skipped ? `跳过 ${(r.image_skipped || 0) + (r.text_skipped || 0)}` : '',
-        ].filter(Boolean).join(' · ')
+          r.image_skipped || r.text_skipped
+            ? `跳过 ${(r.image_skipped || 0) + (r.text_skipped || 0)}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
       case 'deduplicate':
         return [
           r.files_deleted != null ? `删除 ${r.files_deleted} 个文件` : '',
           r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
           r.groups_processed != null ? `处理 ${r.groups_processed} 组` : '',
-        ].filter(Boolean).join(' · ')
+        ]
+          .filter(Boolean)
+          .join(' · ')
       case 'batch_delete':
         return [
           r.deleted_count != null ? `删除 ${r.deleted_count} 个素材` : '',
           r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
-        ].filter(Boolean).join(' · ')
+        ]
+          .filter(Boolean)
+          .join(' · ')
       case 'batch_analyze':
         return r.done != null ? `完成 ${r.done} 张` : ''
       case 'quality_check':
@@ -91,7 +98,17 @@ export function useTaskCenter() {
           r.pending != null ? `未判定 ${r.pending}` : '',
           r.failed != null ? `失败 ${r.failed}` : '',
           r.ai_generated ? `疑似 AI ${r.ai_generated}` : '',
-        ].filter(Boolean).join(' · ')
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      case 'enrich_blogger_profile':
+        return [
+          r.updated != null ? `补全 ${r.updated}` : '',
+          r.skipped != null ? `跳过 ${r.skipped}` : '',
+          r.failed != null ? `失败 ${r.failed}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
       default:
         return ''
     }

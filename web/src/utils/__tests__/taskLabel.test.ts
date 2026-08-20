@@ -19,6 +19,9 @@ describe('TASK_TYPE_LABELS', () => {
     expect(TASK_TYPE_LABELS.deduplicate).toBe('近似重复检测删除')
     expect(TASK_TYPE_LABELS.scraper).toBe('采集')
     expect(TASK_TYPE_LABELS.vector_backfill).toBe('向量回填')
+    expect(TASK_TYPE_LABELS.face_scan).toBe('人脸库扫描')
+    expect(TASK_TYPE_LABELS.face_match).toBe('人脸匹配')
+    expect(TASK_TYPE_LABELS.enrich_blogger_profile).toBe('博主主页补全')
   })
 })
 
@@ -53,6 +56,7 @@ describe('taskTypeTagColor', () => {
   it('类型到 Arco 预设色映射，未知回退 gray', () => {
     expect(taskTypeTagColor('batch_delete')).toBe('red')
     expect(taskTypeTagColor('batch_analyze')).toBe('arcoblue')
+    expect(taskTypeTagColor('enrich_blogger_profile')).toBe('gold')
     expect(taskTypeTagColor('unknown_type')).toBe('gray')
   })
 })
