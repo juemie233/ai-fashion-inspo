@@ -44,7 +44,7 @@ from app.services.face_thumbnail import (
 router = APIRouter(prefix="/api/bloggers", tags=["bloggers"])
 
 
-router.get("", response_model=BloggerListOut)
+@router.get("", response_model=BloggerListOut)
 async def list_bloggers(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
