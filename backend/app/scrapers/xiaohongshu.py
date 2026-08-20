@@ -9,6 +9,54 @@ from app.scrapers.base import BaseScraper, RawContent
 
 logger = logging.getLogger(__name__)
 
+# Chrome 扩展导出的 sameSite 取值 → Playwright 期望值
+_SAME_SITE_MAP = {
+    "no_restriction": "None",
+    "none": "None",
+    "unspecified": "Lax",
+    "lax": "Lax",
+    "strict": "Strict",
+    "": "Lax",
+}
+
+
+def normalize_cookies(raw: list[dict]) -> list[dict]:
+    """Chrome 扩展导出格式 → Playwright 兼容格式。
+
+    扩展导出（Cookie-Editor 等）字段与 Playwright 不兼容：
+    - sameSite 为 null / no_restriction / unspecified（Playwright 仅接受 Strict/Lax/None）
+    - 过期时间字段名 expirationDate（Playwright 为 expires）
+    - 携带 hostOnly / session / storeId 等 Playwright 不认识的字段（add_cookies 会报错）
+
+    转换规则：
+    - sameSite：no_restriction→None；unspecified/缺失/null→Lax（宽容默认）；
+      lax/strict 大小写归一化
+    - expirationDate → expires（秒时间戳）
+    - 只保留 Playwright 认识的字段，其余丢弃
+    """
+    normalized: list[dict] = []
+    for cookie in raw:
+        if not isinstance(cookie, dict) or not cookie.get("name"):
+            continue
+        item: dict = {
+            "name": cookie["name"],
+            "value": cookie.get("value") or "",
+            "domain": cookie.get("domain") or "",
+            "path": cookie.get("path") or "/",
+        }
+        same_site = cookie.get("sameSite")
+        item["sameSite"] = _SAME_SITE_MAP.get(
+            str(same_site).lower() if same_site is not None else "", "Lax"
+        )
+        if cookie.get("expirationDate"):
+            item["expires"] = float(cookie["expirationDate"])
+        if cookie.get("httpOnly"):
+            item["httpOnly"] = True
+        if cookie.get("secure"):
+            item["secure"] = True
+        normalized.append(item)
+    return normalized
+
 
 class XiaohongshuScraper(BaseScraper):
     """小红书平台爬虫 — 使用 sync Playwright 在 threadpool 中运行。"""
@@ -22,6 +70,7 @@ class XiaohongshuScraper(BaseScraper):
         self._context = None
         self._page = None
         self._pw = None
+        self.last_login_error = ""  # 最近一次 Cookie 加载失败原因（无则空串）
 
     def _ensure_browser_sync(self) -> None:
         """同步初始化浏览器。"""
@@ -63,11 +112,14 @@ class XiaohongshuScraper(BaseScraper):
             if self.cookie_file and os.path.exists(self.cookie_file):
                 try:
                     with open(self.cookie_file, encoding="utf-8") as f:
-                        cookies = json.load(f)
+                        cookies = normalize_cookies(json.load(f))
                     self._context.add_cookies(cookies)
                     logger.info(f"已加载 {len(cookies)} 个 Cookie")
+                    self.last_login_error = ""
                     return True
                 except Exception as e:
+                    # 记录失败原因（供 search/search_users 明确报错，避免静默走到登录墙）
+                    self.last_login_error = str(e)
                     logger.warning(f"Cookie 加载失败: {e}")
             return False
 
@@ -169,7 +221,10 @@ class XiaohongshuScraper(BaseScraper):
         返回候选用户列表：[{"name", "profile_url", "platform_user_id"}]。
         """
         await self._ensure_browser()
-        await self.login()
+        if not await self.login():
+            raise RuntimeError(
+                f"小红书 Cookie 加载失败: {self.last_login_error or 'Cookie 文件缺失或为空'}"
+            )
 
         def _search_users() -> list[dict]:
             results: list[dict] = []
@@ -192,10 +247,13 @@ class XiaohongshuScraper(BaseScraper):
                     raise RuntimeError(
                         "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
                     )
-                # 用户卡片容错选择器（按命中率依次尝试）
+                # 用户卡片容错选择器（按命中率依次尝试）：
+                # 优先搜索页「用户」卡片区（user-item-box，卡片内链接才是搜索结果用户），
+                # 全局 user/profile 链接兜底（注意会包含笔记卡片的作者链接，需配合
+                # 「唯一候选/昵称精确匹配」策略过滤）
                 selectors = [
+                    "div.user-item-box a[href*='/user/profile/']",
                     "a[href*='/user/profile/']",
-                    "div.user-item a[href*='user/profile']",
                     "a[href^='/user/profile/']",
                 ]
                 links = []

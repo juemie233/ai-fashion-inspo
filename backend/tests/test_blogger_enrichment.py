@@ -58,6 +58,45 @@ def test_extract_user_id_from_url():
     assert build_profile_url("abc123") == "https://www.xiaohongshu.com/user/profile/abc123"
 
 
+def test_normalize_cookies():
+    """Chrome 扩展导出 Cookie → Playwright 兼容格式（sameSite/expires/多余字段）。"""
+    from app.scrapers.xiaohongshu import normalize_cookies
+
+    raw = [
+        # 扩展导出典型条目：sameSite=null + expirationDate + 多余字段
+        {
+            "domain": ".xiaohongshu.com",
+            "expirationDate": 1818762106,
+            "hostOnly": False,
+            "httpOnly": True,
+            "name": "web_session",
+            "path": "/",
+            "sameSite": None,
+            "secure": True,
+            "session": False,
+            "storeId": None,
+            "value": "abc123",
+        },
+        # no_restriction / unspecified / lax / strict 归一化
+        {"name": "a", "value": "1", "domain": ".x.com", "path": "/", "sameSite": "no_restriction"},
+        {"name": "b", "value": "2", "domain": ".x.com", "path": "/", "sameSite": "unspecified"},
+        {"name": "c", "value": "3", "domain": ".x.com", "path": "/", "sameSite": "lax"},
+        {"name": "d", "value": "4", "domain": ".x.com", "path": "/", "sameSite": "Strict"},
+        # 缺 name 的条目丢弃
+        {"value": "no-name", "domain": ".x.com", "path": "/"},
+    ]
+    out = normalize_cookies(raw)
+    assert len(out) == 5
+    first = out[0]
+    assert first["name"] == "web_session"
+    assert first["sameSite"] == "Lax"  # null → Lax
+    assert first["expires"] == 1818762106  # expirationDate → expires
+    assert first["httpOnly"] is True
+    assert first["secure"] is True
+    assert "expirationDate" not in first and "session" not in first and "storeId" not in first
+    assert [c["sameSite"] for c in out] == ["Lax", "None", "Lax", "Lax", "Strict"]
+
+
 # ═══════════════════════════════════════════════════════════════
 #  enrich_one 各分支（注入假 search_users）
 # ═══════════════════════════════════════════════════════════════
