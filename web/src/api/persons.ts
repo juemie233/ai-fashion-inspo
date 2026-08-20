@@ -288,6 +288,39 @@ export async function importBloggersCsv(file: File) {
   return data
 }
 
+// ── 博主主页信息补全（人物管理页一键补全）──
+
+/** 缺失主页信息的小红书博主（profile_url 或 platform_user_id 为空） */
+export interface MissingProfileBlogger {
+  id: number
+  name: string
+  xhs_id: string | null
+}
+
+/** 查询缺失主页信息的博主列表 */
+export async function fetchMissingProfiles(): Promise<{
+  items: MissingProfileBlogger[]
+  total: number
+}> {
+  const { data } = await apiClient.get<{ items: MissingProfileBlogger[]; total: number }>(
+    '/bloggers/missing-profile',
+  )
+  return data
+}
+
+/** 创建博主主页补全任务（bloggerIds 缺省 = 全部缺失博主；单次上限 20） */
+export async function enrichMissingProfiles(bloggerIds?: number[]): Promise<{
+  task_id: number
+  total: number
+  truncated: boolean
+  message: string
+}> {
+  const { data } = await apiClient.post('/bloggers/enrich-missing-profile', {
+    blogger_ids: bloggerIds,
+  })
+  return data
+}
+
 // ── 模特照片组（写真，与穿搭素材分离；仅模特拥有）──
 
 /** 获取模特照片组分页列表 */

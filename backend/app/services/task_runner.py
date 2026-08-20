@@ -32,6 +32,10 @@ from app.services.task_runners.deduplicate import (
     create_deduplicate_task,
     execute_deduplicate,
 )
+from app.services.task_runners.enrich_blogger_profile import (
+    create_enrich_blogger_profile_task,
+    execute_enrich_blogger_profile,
+)
 from app.services.task_runners.face_scan import (
     create_face_match_task,
     create_face_scan_task,
@@ -62,4 +66,5 @@ TASK_HANDLERS = {
     "vector_backfill": execute_vector_backfill,
     "face_scan": execute_face_scan,
     "face_match": execute_face_match,
+    "enrich_blogger_profile": execute_enrich_blogger_profile,
 }

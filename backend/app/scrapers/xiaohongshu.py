@@ -160,6 +160,81 @@ class XiaohongshuScraper(BaseScraper):
 
         return await asyncio.to_thread(_search)
 
+    async def search_users(self, keyword: str, limit: int = 10) -> list[dict]:
+        """按关键词搜索小红书用户（博主主页信息补全用）。
+
+        与 search()（搜索笔记）不同：走搜索页「用户」结果（source=web_search_result_users），
+        解析用户卡片主页链接。页面结构变化时容错返回空列表（调用方记录失败原因）。
+
+        返回候选用户列表：[{"name", "profile_url", "platform_user_id"}]。
+        """
+        await self._ensure_browser()
+        await self.login()
+
+        def _search_users() -> list[dict]:
+            results: list[dict] = []
+            from urllib.parse import quote
+
+            search_url = (
+                "https://www.xiaohongshu.com/search_result/"
+                f"?keyword={quote(keyword)}&source=web_search_result_users"
+            )
+            try:
+                logger.info(f"小红书用户搜索: {keyword}")
+                self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                import time
+
+                time.sleep(3)
+                # 用户卡片容错选择器（按命中率依次尝试）
+                selectors = [
+                    "a[href*='/user/profile/']",
+                    "div.user-item a[href*='user/profile']",
+                    "a[href^='/user/profile/']",
+                ]
+                links = []
+                for sel in selectors:
+                    try:
+                        self._page.wait_for_selector(sel, timeout=3000)
+                        links = self._page.query_selector_all(sel)
+                        if links:
+                            logger.info(f"用户搜索选择器 '{sel}' 命中 {len(links)} 个")
+                            break
+                    except Exception:
+                        continue
+
+                seen: set[str] = set()
+                for el in links[:limit]:
+                    try:
+                        href = el.get_attribute("href") or ""
+                        if "/user/profile/" not in href:
+                            continue
+                        user_id = href.rstrip("/").split("/")[-1].split("?")[0]
+                        if not user_id or user_id in seen:
+                            continue
+                        seen.add(user_id)
+                        # 卡片文本取昵称（首个非空行）
+                        text = (el.inner_text() or "").strip().splitlines()
+                        name = next((ln.strip() for ln in text if ln.strip()), "")[:64]
+                        url = (
+                            f"https://www.xiaohongshu.com{href}"
+                            if href.startswith("/")
+                            else href
+                        )
+                        results.append(
+                            {
+                                "name": name,
+                                "profile_url": url,
+                                "platform_user_id": user_id,
+                            }
+                        )
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.error(f"小红书用户搜索失败: {e}")
+            return results
+
+        return await asyncio.to_thread(_search_users)
+
     async def get_feed(self, count: int = 20) -> list[RawContent]:
         await self._ensure_browser()
 

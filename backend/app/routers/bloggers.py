@@ -111,6 +111,69 @@ async def import_bloggers_csv(
     return await blogger_service.import_from_csv(db, file)
 
 
+@router.post("/enrich-missing-profile", status_code=status.HTTP_201_CREATED)
+async def enrich_missing_profile(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """创建「博主主页信息补全」异步任务（人物管理页一键补全）。
+
+    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部缺失主页信息的小红书博主）
+    缺失定义：profile_url 或 platform_user_id 为空。
+    任务执行：本地互推（URL↔ID）优先，缺失时按小红书号搜索用户匹配。
+    返回 task_id；进度/明细通过任务接口轮询。
+    """
+    blogger_ids = body.get("blogger_ids")
+    if blogger_ids is not None and (
+        not isinstance(blogger_ids, list)
+        or not all(isinstance(i, int) for i in blogger_ids)
+    ):
+        raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
+    from app.services.task_runners.enrich_blogger_profile import (
+        MAX_ENRICH_PER_TASK,
+        create_enrich_blogger_profile_task,
+    )
+
+    task, total = await create_enrich_blogger_profile_task(db, blogger_ids)
+    if task is None:
+        raise HTTPException(
+            status_code=400,
+            detail="没有缺失主页信息的小红书博主可补全",
+        )
+    truncated = total > MAX_ENRICH_PER_TASK
+    return {
+        "task_id": task.id,
+        "total": total,
+        "truncated": truncated,
+        "message": (
+            f"本次将补全 {total} 位博主"
+            + ("（超过单次上限，其余请完成后再发起）" if truncated else "")
+        ),
+    }
+
+
+@router.get("/missing-profile")
+async def missing_profile_bloggers(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """缺失主页信息的小红书博主列表（人物管理页补全功能用）。
+
+    缺失定义：profile_url 或 platform_user_id 为空。
+    """
+    from app.services.blogger_enrichment_service import (
+        list_missing_profile_bloggers,
+    )
+
+    bloggers = await list_missing_profile_bloggers(db)
+    return {
+        "items": [
+            {"id": b.id, "name": b.name, "xhs_id": b.xhs_id}
+            for b in bloggers
+        ],
+        "total": len(bloggers),
+    }
+
+
 @router.get("/ip-stats")
 async def blogger_ip_stats(
     limit: int = Query(30, ge=1, le=100),
