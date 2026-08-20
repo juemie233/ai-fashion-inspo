@@ -357,10 +357,25 @@ async def detect_inspiration_faces(
     )
 
     threshold = settings.face_match_threshold
-    face_embs = np.stack(
-        [np.asarray(face["embedding"], dtype=np.float32) for face in faces], axis=0
-    )
-    match_results = matrix_match_faces(face_embs, library, threshold)
+    # 低置信度人脸（det_score < LOW_CONFIDENCE_THRESHOLD，模糊/侧脸/小脸）不参与
+    # 自动匹配——低质量特征匹配出的结果易误判，交由用户手动指定；高置信度人脸
+    # 统一矩阵匹配（与全库匹配服务一致）
+    low_conf_face_indices = {
+        idx
+        for idx, face in enumerate(faces)
+        if float(face.get("det_score", 1.0)) < LOW_CONFIDENCE_THRESHOLD
+    }
+    match_results: list[dict | None] = [None] * len(faces)
+    if len(low_conf_face_indices) < len(faces):
+        high_conf_indices = [i for i in range(len(faces)) if i not in low_conf_face_indices]
+        high_embs = np.stack(
+            [np.asarray(faces[i]["embedding"], dtype=np.float32) for i in high_conf_indices],
+            axis=0,
+        )
+        high_results = matrix_match_faces(high_embs, library, threshold)
+        for i, result in zip(high_conf_indices, high_results):
+            match_results[i] = result
+
     detections = []
     for idx, face, match in zip(range(len(faces)), faces, match_results):
         if match is None:
@@ -376,6 +391,11 @@ async def detect_inspiration_faces(
             # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
             # 子服务偶发缺失时置空，不影响检测匹配主流程
             bbox=json.dumps(face["bbox"]) if isinstance(face.get("bbox"), list) else None,
+            det_score=(
+                round(float(face["det_score"]), 4)
+                if face.get("det_score") is not None
+                else None
+            ),
             matched_blogger_id=matched_blogger_id,
             confidence=best_score,
         )
@@ -392,6 +412,7 @@ async def detect_inspiration_faces(
             {
                 "id": d.id,
                 "face_index": d.face_index,
+                "det_score": d.det_score,
                 "matched_blogger_id": d.matched_blogger_id,
                 "confidence": d.confidence,
             }
@@ -429,6 +450,7 @@ async def list_inspiration_detections(
             {
                 "id": d.id,
                 "face_index": d.face_index,
+                "det_score": d.det_score,
                 "matched_blogger_id": d.matched_blogger_id,
                 "matched_blogger_name": (
                     d.matched_blogger.name if d.matched_blogger else None

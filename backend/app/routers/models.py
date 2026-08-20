@@ -55,19 +55,16 @@ async def list_models(
     search: str | None = Query(None, description="名称模糊搜索"),
     platform: str | None = Query(None, description="平台筛选"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
-    # 人脸检测用：返回已注册人脸库的人（确保人脸检测只匹配库内人物）
-    exclude_face_registered: bool = Query(False, description="返回已注册人脸库的人物"),
-    # 额外：排除已关联素材的，避免重复
-    exclude_linked: bool = Query(False, description="排除已关联素材的人物"),
+    # 人脸检测约束：仅保留已注册人脸库的模特（确保只匹配候选人脸库内的人）
+    face_registered_only: bool = Query(False, description="仅返回已注册人脸库的人物"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     分页获取模特列表，支持名称搜索、平台筛选。
-    
+
     约束说明：
-    - exclude_face_registered=true：返回已注册人脸库的模特，确保人脸检测
+    - face_registered_only=true：仅返回已注册人脸库的模特，确保人脸检测
       只匹配候选人脸库内的人；防止将库外人物误匹配
-    - exclude_linked=true：排除有已关联素材的模特
     """
     items, total = await model_service.list_items(
         db,
@@ -76,8 +73,7 @@ async def list_models(
         search=search,
         platform=platform,
         sort=sort,
-        exclude_face_registered=exclude_face_registered,
-        exclude_linked=exclude_linked,
+        face_registered_only=face_registered_only,
     )
     return {"items": items, "total": total, "page": page, "size": size}
 

@@ -322,6 +322,11 @@ async def _write_detections(
                         if isinstance(face.get("bbox"), list)
                         else None
                     ),
+                    det_score=(
+                        round(float(face["det_score"]), 4)
+                        if face.get("det_score") is not None
+                        else None
+                    ),
                     match_status=None,
                 )
             )

@@ -474,3 +474,45 @@ def test_register_blogger_face_invalid_ids_format(client, create_blogger):
         data={"inspiration_ids": "not-a-json"},
     )
     assert r.status_code == 422
+
+
+def test_detect_low_confidence_face_skips_match(client, create_blogger, upload, monkeypatch):
+    """低置信度人脸不自动匹配：det_score 低于阈值的人脸即使特征与库一致也不关联。"""
+    blogger = create_blogger(name="低信博")
+    emb = _unit_embedding(7)
+    _patch_embed(monkeypatch, emb)
+    client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("m.jpg", b"blogger-photo", "image/jpeg"))],
+    )
+
+    # 素材含两张脸：脸0 高置信度（特征一致 → 命中）；脸1 低置信度（特征一致但跳过匹配）
+    async def fake_embed_multi(image_bytes, filename="image.jpg"):
+        return {
+            "face_count": 2,
+            "faces": [
+                {"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb},
+                {"bbox": [10, 10, 20, 20], "det_score": 0.55, "embedding": emb},
+            ],
+        }
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed_multi)
+    insp_id = upload().json()["id"]
+    r = client.post(f"/api/inspirations/{insp_id}/face-detect")
+    assert r.status_code == 200, r.text
+    dets = sorted(r.json()["detections"], key=lambda d: d["face_index"])
+    assert len(dets) == 2
+    # 脸0：高置信度 → 自动匹配
+    assert dets[0]["det_score"] == 0.9
+    assert dets[0]["matched_blogger_id"] == blogger["id"]
+    assert dets[0]["confidence"] > 0.99
+    # 脸1：低置信度 → 不自动匹配（即使特征一致）
+    assert dets[1]["det_score"] == 0.55
+    assert dets[1]["matched_blogger_id"] is None
+    assert dets[1]["confidence"] is None
+
+    # 列表接口同样带 det_score 与空匹配（前端据此展示「低置信度人脸」）
+    lst = client.get(f"/api/inspirations/{insp_id}/face-detections").json()
+    lst_dets = sorted(lst["detections"], key=lambda d: d["face_index"])
+    assert lst_dets[1]["det_score"] == 0.55
+    assert lst_dets[1]["matched_blogger_id"] is None

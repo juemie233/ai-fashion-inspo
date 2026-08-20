@@ -98,6 +98,9 @@ class InspirationFaceDetection(Base):
     # 人脸检测框（原图坐标 [x1, y1, x2, y2] 的 JSON 字符串，可空）：
     # 用于从素材图中裁剪人脸小图（博主列表头像），检测子服务返回、入库保留
     bbox: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 人脸检测置信度（insightface det_score，0~1）：低置信度人脸不自动匹配，
+    # 避免模糊/侧脸/小脸特征的误判；face-service 已过滤 <0.5 的
+    det_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     matched_blogger_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("bloggers.id", ondelete="SET NULL"),

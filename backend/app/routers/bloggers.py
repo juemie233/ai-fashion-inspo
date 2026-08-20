@@ -51,18 +51,15 @@ async def list_bloggers(
     search: str | None = Query(None, description="名称模糊搜索"),
     platform: str | None = Query(None, description="平台筛选"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
-    # 人脸检测返回已注册人脸库的博主（确保只匹配候选人脸库内的人）
-    exclude_face_registered: bool = Query(False, description="返回已注册人脸库的博主"),
-    # 排除已关联素材的博主
-    exclude_linked: bool = Query(False, description="排除已关联素材的人物"),
+    # 人脸检测约束：仅保留已注册人脸库的博主（确保只匹配候选人脸库内的人）
+    face_registered_only: bool = Query(False, description="仅返回已注册人脸库的博主"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """分页获取博主列表，支持名称搜索、平台筛选与人脸检测约束。
-    
+
     人脸检测约束：
-    - exclude_face_registered=true：返回已注册人脸库的博主，确保人脸检测
+    - face_registered_only=true：仅返回已注册人脸库的博主，确保人脸检测
       只匹配候选人脸库内的人；防止将库外人物误匹配
-    - exclude_linked=true：排除已关联素材的博主
     """
     items, total = await blogger_service.list_items(
         db,
@@ -71,14 +68,13 @@ async def list_bloggers(
         search=search,
         platform=platform,
         sort=sort,
-        exclude_face_registered=exclude_face_registered,
-        exclude_linked=exclude_linked,
+        face_registered_only=face_registered_only,
     )
     # 批量补齐人脸缩略图（一次查询候选检测 + 缺失缓存裁剪），返回 face_thumb_path
     thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
     for item in items:
         item["face_thumb_path"] = thumbs.get(item["id"])
-    
+
     return {"items": items, "total": total, "page": page, "size": size}
 
 

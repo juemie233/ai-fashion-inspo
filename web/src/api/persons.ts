@@ -74,14 +74,24 @@ function createPersonApi(kind: 'bloggers' | 'models') {
   const base = `/${kind}`
 
   return {
-    /** 获取人物列表（分页 + 搜索 + 平台筛选） */
-    async fetchList(params: {
-      page?: number
-      size?: number
-      search?: string
-      platform?: string
-      sort?: 'newest' | 'name' | 'count'
-    } = {}): Promise<PersonListOut> {
+    /** 获取人物列表（分页 + 搜索 + 平台筛选）。
+     *
+     * 人脸检测约束：手动指定只允许选择已注册人脸库的人物（确保检测匹配
+     * 对象都在特征库内，库外人物不可选）。
+     *
+     * - face_registered_only=true：仅返回已注册人脸库的人物（用于人脸检测手动选择）
+     */
+    async fetchList(
+      params: {
+        page?: number
+        size?: number
+        search?: string
+        platform?: string
+        sort?: 'newest' | 'name' | 'count'
+        /** 仅返回已注册人脸库的人物（用于人脸检测手动选择） */
+        face_registered_only?: boolean
+      } = {},
+    ): Promise<PersonListOut> {
       const { data } = await apiClient.get<PersonListOut>(base, { params })
       return data
     },

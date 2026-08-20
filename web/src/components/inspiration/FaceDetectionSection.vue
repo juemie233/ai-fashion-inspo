@@ -49,11 +49,25 @@ async function load() {
   }
 }
 
+/**
+ * 加载人物候选列表（人脸检测手动指定用）。
+ * 约束：仅返回已注册人脸库且未关联素材的人物（确保检测匹配对象都在特征库内）。
+ */
 async function loadPersonOptions() {
   try {
     const [{ items: bloggers }, { items: models }] = await Promise.all([
-      bloggersApi.fetchList({ sort: 'count', size: 100 }),
-      modelsApi.fetchList({ sort: 'count', size: 100 }),
+      bloggersApi.fetchList({
+        sort: 'count',
+        size: 100,
+        // 仅保留已注册人脸库的人（确保人脸检测只匹配库内人物）
+        face_registered_only: true,
+      }),
+      modelsApi.fetchList({
+        sort: 'count',
+        size: 100,
+        // 同上
+        face_registered_only: true,
+      }),
     ])
     bloggerOptions.value = (bloggers as PersonBrief[]).map((b) => ({
       label: b.name,
@@ -136,6 +150,14 @@ function filterPersonOption(input: string, option: { label?: string }): boolean 
   return (option.label ?? '').toLowerCase().includes(kw)
 }
 
+/** 低置信度阈值：检测置信度低于该值的人脸不自动匹配（与后端 LOW_CONFIDENCE_THRESHOLD 一致） */
+const LOW_CONFIDENCE_THRESHOLD = 0.65
+
+/** 是否低置信度人脸（模糊/侧脸/小脸，未自动匹配） */
+function isLowConfidence(det: FaceDetectionOut): boolean {
+  return det.det_score !== null && det.det_score < LOW_CONFIDENCE_THRESHOLD
+}
+
 /** 命中人物标签（博主或模特） */
 function matchedTag(det: FaceDetectionOut): { text: string; model: boolean } | null {
   if (det.matched_blogger_id !== null) {
@@ -176,6 +198,9 @@ onMounted(() => {
           <template v-if="det.confidence !== null">
             （{{ (det.confidence * 100).toFixed(1) }}%）
           </template>
+        </a-tag>
+        <a-tag v-else-if="isLowConfidence(det)" color="orange" size="small">
+          低置信度人脸（{{ (det.det_score ?? 0).toFixed(2) }}），未自动匹配
         </a-tag>
         <a-tag v-else color="orange" size="small">疑似未知人脸</a-tag>
 

@@ -338,6 +338,8 @@ export async function analyzeInspiration(id: string) {
 export interface FaceDetectionOut {
   id: number
   face_index: number
+  /** 人脸检测置信度（0~1；低于阈值的人脸不自动匹配） */
+  det_score: number | null
   matched_blogger_id: number | null
   matched_blogger_name?: string | null
   matched_model_id: number | null
