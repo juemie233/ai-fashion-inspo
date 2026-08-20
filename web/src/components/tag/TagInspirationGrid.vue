@@ -199,6 +199,7 @@ async function batchAddTags() {
       v-model:sort="sort"
       :sort-options="sortOptions"
       show-sort
+      hover-zoom
       empty-text="暂无素材"
       @load-more="loadMore"
       @open-detail="openDetail"
@@ -289,25 +290,5 @@ async function batchAddTags() {
   text-align: center;
   padding: 60px 20px;
   font-size: 14px;
-}
-
-/* ── 图片悬停放大：仅标签管理页生效（:deep 穿透通用网格，不影响质量审核等其他页面）──
- * image-wrap 自带 overflow:hidden，放大不会溢出父容器导致布局抖动；
- * 纯 CSS transition，不影响点击跳详情/勾选/标签等已有交互。 */
-:deep(.image-wrap img),
-:deep(.image-wrap video) {
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-:deep(.image-card:hover .image-wrap) {
-  z-index: 1;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-}
-
-:deep(.image-card:hover .image-wrap img),
-:deep(.image-card:hover .image-wrap video) {
-  transform: scale(1.12);
 }
 </style>
