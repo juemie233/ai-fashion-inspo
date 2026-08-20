@@ -69,6 +69,7 @@ def fake_ollama(monkeypatch, tmp_path):
     """模拟 Ollama 与持久化副作用，隔离真实配置文件。"""
     import app.routers.ai_models as models_mod
     import app.routers.ai_settings as settings_mod
+    from app.config import settings
     from app.services import model_config
 
     monkeypatch.setattr(models_mod.httpx, "AsyncClient", FakeAsyncClient)
@@ -76,6 +77,9 @@ def fake_ollama(monkeypatch, tmp_path):
     monkeypatch.setattr(settings_mod, "_update_env_file", _noop_update_env)
     # model_configs.json 重定向到临时目录
     monkeypatch.setattr(model_config, "_CONFIG_FILE", tmp_path / "model_configs.json")
+    # 固定嵌入模型配置：避免本地 .env 的 OLLAMA_EMBEDDING_MODEL（如带 :latest 后缀）
+    # 与测试断言（all-minilm）不一致导致环境相关失败（CI 无 .env 时为默认值）
+    monkeypatch.setattr(settings, "ollama_embedding_model", "all-minilm")
 
 
 def test_list_models_marks_embedding(client):

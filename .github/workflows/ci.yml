@@ -61,8 +61,10 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
 
-      - name: 安装依赖
-        run: pip install -r requirements-dev.txt
+      - name: 安装依赖（运行依赖 + 测试依赖）
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
