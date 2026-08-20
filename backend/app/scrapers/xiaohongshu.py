@@ -105,25 +105,25 @@ class XiaohongshuScraper(BaseScraper):
             return
         await asyncio.to_thread(self._ensure_browser_sync)
 
+    def _load_cookies_sync(self) -> bool:
+        """同步加载 Cookie（Playwright sync API 需与浏览器操作同线程）。"""
+        if self.cookie_file and os.path.exists(self.cookie_file):
+            try:
+                with open(self.cookie_file, encoding="utf-8") as f:
+                    cookies = normalize_cookies(json.load(f))
+                self._context.add_cookies(cookies)
+                logger.info(f"已加载 {len(cookies)} 个 Cookie")
+                self.last_login_error = ""
+                return True
+            except Exception as e:
+                # 记录失败原因（供 search/search_users 明确报错，避免静默走到登录墙）
+                self.last_login_error = str(e)
+                logger.warning(f"Cookie 加载失败: {e}")
+        return False
+
     async def login(self) -> bool:
         await self._ensure_browser()
-
-        def _login() -> bool:
-            if self.cookie_file and os.path.exists(self.cookie_file):
-                try:
-                    with open(self.cookie_file, encoding="utf-8") as f:
-                        cookies = normalize_cookies(json.load(f))
-                    self._context.add_cookies(cookies)
-                    logger.info(f"已加载 {len(cookies)} 个 Cookie")
-                    self.last_login_error = ""
-                    return True
-                except Exception as e:
-                    # 记录失败原因（供 search/search_users 明确报错，避免静默走到登录墙）
-                    self.last_login_error = str(e)
-                    logger.warning(f"Cookie 加载失败: {e}")
-            return False
-
-        return await asyncio.to_thread(_login)
+        return await asyncio.to_thread(self._load_cookies_sync)
 
     async def search(
         self, keyword: str, count: int = 20
@@ -219,86 +219,98 @@ class XiaohongshuScraper(BaseScraper):
         解析用户卡片主页链接。页面结构变化时容错返回空列表（调用方记录失败原因）。
 
         返回候选用户列表：[{"name", "profile_url", "platform_user_id"}]。
+
+        注意：Playwright sync API 的 greenlet 绑定创建线程，浏览器初始化/Cookie/
+        页面操作必须同一线程执行——本方法整体委托 search_users_sync 在单个
+        to_thread 中完成；批量调用方（任务执行器）应使用专用单线程执行器直接
+        调用 search_users_sync，避免多次 to_thread 落不同线程触发
+        「Cannot switch to a different thread」。
         """
-        await self._ensure_browser()
-        if not await self.login():
+        return await asyncio.to_thread(self.search_users_sync, keyword, limit)
+
+    def search_users_sync(self, keyword: str, limit: int = 10) -> list[dict]:
+        """search_users 的同步实现（单线程内完成 浏览器初始化+Cookie+搜索）。
+
+        供任务执行器在专用单线程 executor 中调用，规避 Playwright sync API 的
+        线程切换限制（greenlet 绑定创建线程）。
+        """
+        self._ensure_browser_sync()
+        if not self._load_cookies_sync():
             raise RuntimeError(
                 f"小红书 Cookie 加载失败: {self.last_login_error or 'Cookie 文件缺失或为空'}"
             )
 
-        def _search_users() -> list[dict]:
-            results: list[dict] = []
-            from urllib.parse import quote
+        results: list[dict] = []
+        from urllib.parse import quote
 
-            search_url = (
-                "https://www.xiaohongshu.com/search_result/"
-                f"?keyword={quote(keyword)}&source=web_search_result_users"
-            )
-            try:
-                logger.info(f"小红书用户搜索: {keyword}")
-                self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                import time
+        search_url = (
+            "https://www.xiaohongshu.com/search_result/"
+            f"?keyword={quote(keyword)}&source=web_search_result_users"
+        )
+        try:
+            logger.info(f"小红书用户搜索: {keyword}")
+            self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            import time
 
-                time.sleep(3)
-                # 登录墙检测：未登录时搜索页只显示「登录后查看搜索结果」，
-                # 不渲染任何结果（无意义的空结果会误导为「搜索无结果」）
-                body_text = (self._page.inner_text("body") or "")[:500]
-                if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
-                    raise RuntimeError(
-                        "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
+            time.sleep(3)
+            # 登录墙检测：未登录时搜索页只显示「登录后查看搜索结果」，
+            # 不渲染任何结果（无意义的空结果会误导为「搜索无结果」）
+            body_text = (self._page.inner_text("body") or "")[:500]
+            if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
+                raise RuntimeError(
+                    "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
+                )
+            # 用户卡片容错选择器（按命中率依次尝试）：
+            # 优先搜索页「用户」卡片区（user-item-box，卡片内链接才是搜索结果用户），
+            # 全局 user/profile 链接兜底（注意会包含笔记卡片的作者链接，需配合
+            # 「唯一候选/昵称精确匹配」策略过滤）
+            selectors = [
+                "div.user-item-box a[href*='/user/profile/']",
+                "a[href*='/user/profile/']",
+                "a[href^='/user/profile/']",
+            ]
+            links = []
+            for sel in selectors:
+                try:
+                    self._page.wait_for_selector(sel, timeout=3000)
+                    links = self._page.query_selector_all(sel)
+                    if links:
+                        logger.info(f"用户搜索选择器 '{sel}' 命中 {len(links)} 个")
+                        break
+                except Exception:
+                    continue
+
+            seen: set[str] = set()
+            for el in links[:limit]:
+                try:
+                    href = el.get_attribute("href") or ""
+                    if "/user/profile/" not in href:
+                        continue
+                    user_id = href.rstrip("/").split("/")[-1].split("?")[0]
+                    if not user_id or user_id in seen:
+                        continue
+                    seen.add(user_id)
+                    # 卡片文本取昵称（首个非空行）
+                    text = (el.inner_text() or "").strip().splitlines()
+                    name = next((ln.strip() for ln in text if ln.strip()), "")[:64]
+                    url = (
+                        f"https://www.xiaohongshu.com{href}"
+                        if href.startswith("/")
+                        else href
                     )
-                # 用户卡片容错选择器（按命中率依次尝试）：
-                # 优先搜索页「用户」卡片区（user-item-box，卡片内链接才是搜索结果用户），
-                # 全局 user/profile 链接兜底（注意会包含笔记卡片的作者链接，需配合
-                # 「唯一候选/昵称精确匹配」策略过滤）
-                selectors = [
-                    "div.user-item-box a[href*='/user/profile/']",
-                    "a[href*='/user/profile/']",
-                    "a[href^='/user/profile/']",
-                ]
-                links = []
-                for sel in selectors:
-                    try:
-                        self._page.wait_for_selector(sel, timeout=3000)
-                        links = self._page.query_selector_all(sel)
-                        if links:
-                            logger.info(f"用户搜索选择器 '{sel}' 命中 {len(links)} 个")
-                            break
-                    except Exception:
-                        continue
-
-                seen: set[str] = set()
-                for el in links[:limit]:
-                    try:
-                        href = el.get_attribute("href") or ""
-                        if "/user/profile/" not in href:
-                            continue
-                        user_id = href.rstrip("/").split("/")[-1].split("?")[0]
-                        if not user_id or user_id in seen:
-                            continue
-                        seen.add(user_id)
-                        # 卡片文本取昵称（首个非空行）
-                        text = (el.inner_text() or "").strip().splitlines()
-                        name = next((ln.strip() for ln in text if ln.strip()), "")[:64]
-                        url = (
-                            f"https://www.xiaohongshu.com{href}"
-                            if href.startswith("/")
-                            else href
-                        )
-                        results.append(
-                            {
-                                "name": name,
-                                "profile_url": url,
-                                "platform_user_id": user_id,
-                            }
-                        )
-                    except Exception:
-                        continue
-            except Exception as e:
-                logger.error(f"小红书用户搜索失败: {e}")
-            return results
-
-        return await asyncio.to_thread(_search_users)
+                    results.append(
+                        {
+                            "name": name,
+                            "profile_url": url,
+                            "platform_user_id": user_id,
+                        }
+                    )
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.error(f"小红书用户搜索失败: {e}")
+            raise
+        return results
 
     async def get_feed(self, count: int = 20) -> list[RawContent]:
         await self._ensure_browser()
@@ -337,13 +349,15 @@ class XiaohongshuScraper(BaseScraper):
 
         return await asyncio.to_thread(_get_feed)
 
+    def close_sync(self) -> None:
+        """同步关闭浏览器（供专用单线程 executor 调用，与页面操作同线程）。"""
+        try:
+            if self._browser:
+                self._browser.close()
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            pass
+
     async def close(self) -> None:
-        def _close() -> None:
-            try:
-                if self._browser:
-                    self._browser.close()
-                if self._pw:
-                    self._pw.stop()
-            except Exception:
-                pass
-        await asyncio.to_thread(_close)
+        await asyncio.to_thread(self.close_sync)

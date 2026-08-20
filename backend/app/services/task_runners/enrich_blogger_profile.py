@@ -88,6 +88,8 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         await db.commit()
         return
 
+    from concurrent.futures import ThreadPoolExecutor
+
     from app.scrapers.xiaohongshu import XiaohongshuScraper
 
     # 小红书搜索需要登录态：加载采集管理导入的 Cookie，缺失/无效时快速失败
@@ -102,44 +104,59 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         headless=settings.scraper_browser_headless,
         cookie_file=str(cookie_path),
     )
-    results: list[dict] = []
-    updated = 0
-    failed = 0
-    cancelled = False
-    for idx, blogger_id in enumerate(ids, start=1):
-        if await _is_cancelled(db, task):
-            cancelled = True
-            break
-        blogger = await db.get(Blogger, blogger_id)
-        if blogger is None:
-            results.append(
-                {
-                    "blogger_id": blogger_id,
-                    "name": f"# {blogger_id}",
-                    "status": "failed",
-                    "reason": "博主不存在（可能已删除）",
-                }
-            )
-            failed += 1
-        else:
-            result = await enrich_one(db, blogger, search_users=scraper.search_users)
-            results.append(result)
-            if result["status"] == "updated":
-                updated += 1
-            else:
-                failed += 1
-        task.done = idx
-        task.progress = round(idx / total * 100)
-        task.updated_at = utcnow()
-        await db.commit()
-        # 随机延时防风控（最后一个博主后可省）
-        if idx < total:
-            await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+    # Playwright sync API 的 greenlet 绑定创建线程：浏览器初始化/Cookie/页面操作
+    # 必须同一线程执行（多次 to_thread 落不同线程会报
+    # 「Cannot switch to a different thread」）——使用专用单线程执行器串行处理
+    loop = asyncio.get_event_loop()
+    browser_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="xhs-enrich"
+    )
+
+    async def _search_users(keyword: str) -> list[dict]:
+        return await loop.run_in_executor(
+            browser_executor, scraper.search_users_sync, keyword
+        )
 
     try:
-        await scraper.close()
-    except Exception:  # noqa: BLE001 关闭失败不影响任务结果
-        pass
+        results: list[dict] = []
+        updated = 0
+        failed = 0
+        cancelled = False
+        for idx, blogger_id in enumerate(ids, start=1):
+            if await _is_cancelled(db, task):
+                cancelled = True
+                break
+            blogger = await db.get(Blogger, blogger_id)
+            if blogger is None:
+                results.append(
+                    {
+                        "blogger_id": blogger_id,
+                        "name": f"# {blogger_id}",
+                        "status": "failed",
+                        "reason": "博主不存在（可能已删除）",
+                    }
+                )
+                failed += 1
+            else:
+                result = await enrich_one(db, blogger, search_users=_search_users)
+                results.append(result)
+                if result["status"] == "updated":
+                    updated += 1
+                else:
+                    failed += 1
+            task.done = idx
+            task.progress = round(idx / total * 100)
+            task.updated_at = utcnow()
+            await db.commit()
+            # 随机延时防风控（最后一个博主后可省）
+            if idx < total:
+                await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+    finally:
+        try:
+            await loop.run_in_executor(browser_executor, scraper.close_sync)
+        except Exception:  # noqa: BLE001 关闭失败不影响任务结果
+            pass
+        browser_executor.shutdown(wait=False)
 
     task.result = {
         **payload,

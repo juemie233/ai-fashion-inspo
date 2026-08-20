@@ -284,9 +284,9 @@ async def test_enrich_api_and_execute(client):
     assert body["truncated"] is False
     task_id = body["task_id"]
 
-    # mock 任务执行器里的 scraper：唯一候选命中「搜索博」
+    # mock 任务执行器里的 scraper：唯一候选命中「搜索博」（执行器走同步方法）
     class _FakeScraper:
-        async def search_users(self, keyword):
+        def search_users_sync(self, keyword):
             return [
                 {
                     "name": "搜索博",
@@ -295,7 +295,7 @@ async def test_enrich_api_and_execute(client):
                 }
             ]
 
-        async def close(self):
+        def close_sync(self):
             pass
 
     monkeypatch = pytest.MonkeyPatch()
@@ -355,10 +355,10 @@ async def test_enrich_task_failure_does_not_block(client, monkeypatch):
     _create_blogger(client, "失败博", xhs_id="xhs404")
 
     class _FakeScraper:
-        async def search_users(self, keyword):
+        def search_users_sync(self, keyword):
             return []  # 搜索无结果 → 失败
 
-        async def close(self):
+        def close_sync(self):
             pass
 
     import app.services.task_runners.enrich_blogger_profile as mod  # noqa: F401
