@@ -227,11 +227,14 @@ function closePreview() {
 const scannedTotal = ref(0)
 const checkedCount = computed(() => checkedIds.value.size)
 
-/** 是否只勾选高置信候选（默认勾选 high+medium，排除 low） */
+/** 是否只勾选高置信候选（默认勾选 high+medium，排除 low；content 模式 plain
+ * 类型无灰带/状态栏结构，可能是普通照片暗部，同样不默认勾选） */
 function defaultCheckedIds(items: CropCandidate[]): Set<string> {
   const ids = new Set<string>()
   for (const c of items) {
-    if (c.auto_ok && c.confidence !== 'low') ids.add(c.id)
+    if (!c.auto_ok || c.confidence === 'low') continue
+    if (c.boundary_kind === 'plain') continue
+    ids.add(c.id)
   }
   return ids
 }

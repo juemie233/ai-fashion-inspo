@@ -233,6 +233,45 @@ def test_detect_content_bounds_marks_cropped(tmp_path):
     assert r["top_frac"] + r["bottom_frac"] < 0.01
 
 
+def test_content_mode_relaxed_ratio_filter(client):
+    """内容边界模式放宽竖屏下限：被裁剪过的截图（比例 1.5）仍列入候选。"""
+    # 比例 1.5（400x600）：顶部 3 行低多样度残留 + 高多样度内容区
+    width, height = 400, 600  # 比例 1.5 < 1.75
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    rng = np.random.default_rng(23)
+    arr[:, :] = (170, 170, 170)
+    for y in range(0, 3):
+        cols = rng.choice(width, size=20, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(20, 3), dtype=np.uint8)
+    for y in range(3, height):
+        cols = rng.choice(width, size=200, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(200, 3), dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    # content 模式：比例 1.5 可见；顶部残留按「疑似」标注（人工确认后勾选）
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["auto_ok"] is False
+    assert "疑似顶部状态栏残留" in (item["note"] or "")
+    assert item["crop_top"] > 0  # 标注的建议裁剪比例
+
+    # 勾选后 apply：按疑似建议比例裁剪成功
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "content"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["processed"] == 1
+
+    # ratio 模式：仍按 1.75 过滤，不可见
+    body2 = _scan(client, mode="ratio")
+    assert body2["total"] == 0
+
+
 def test_content_mode_lists_cropped_candidates(client):
     """内容边界模式：已裁剪干净（内容占满全图）的图仍列入候选，标注不可裁剪及原因。"""
     # 顶部 3 行灰带 + 全噪点内容：内容占比 ≈99.5%，无有效裁剪区域
@@ -253,29 +292,32 @@ def test_content_mode_lists_cropped_candidates(client):
 
 
 def test_status_bar_correction_top_residual():
-    """状态栏残留修正（单元级）：顶格低多样度簇 → 后随更高内容时给出再次裁剪建议。"""
-    from app.services.crop_service import _status_bar_correction
+    """状态栏残留修正（单元级）：顶格低多样度簇 → 后随更高内容时给出疑似裁剪建议。"""
+    from app.services.crop_service import _residual_top_estimate, _status_bar_correction
 
-    # 场景 1：顶格残留（行 0~1 d≈0.19~0.20）后随内容区（d≈0.30+）→ 修正到行 2
+    # 场景 1：顶格残留（行 0~1 d≈0.19~0.20）后随内容区（d≈0.30+）→ 疑似建议 2 行
     d1 = np.array([0.19, 0.20] + [0.30, 0.31, 0.29, 0.33, 0.32] * 30)
-    assert _status_bar_correction(d1, 0) == 2
+    assert _residual_top_estimate(d1) == 2
 
     # 场景 1b：顶格残留较厚（5 行，d 0.16~0.27，透明状态栏图标下沿）
-    # 后随内容区（d≈0.36）→ 修正到行 5（实测 51e564d6 类需裁 5 行才干净）
+    # 后随内容区（d≈0.36）→ 疑似建议 5 行（实测 51e564d6 类需裁 5 行才干净）
     d1b = np.array([0.16, 0.20, 0.24, 0.27, 0.25] + [0.36] * 80)
-    assert _status_bar_correction(d1b, 0) == 5
+    assert _residual_top_estimate(d1b) == 5
 
-    # 场景 2：顶格但内容直接开始（d 高，无残留）→ 不修正
+    # 场景 2：顶格但内容直接开始（d 高，无残留）→ 无疑似建议
     d2 = np.array([0.30, 0.31, 0.29, 0.33, 0.32] * 32)
-    assert _status_bar_correction(d2, 0) == 0
+    assert _residual_top_estimate(d2) == 0
 
-    # 场景 3：顶格低多样度簇但后随内容不高（可能是照片暗部，非残留）→ 不修正
+    # 场景 3：顶格低多样度簇但后随内容不高（可能是照片暗部，非残留）→ 无疑似建议
     d3 = np.array([0.19, 0.20, 0.21, 0.20, 0.22, 0.21] * 30)
-    assert _status_bar_correction(d3, 0) == 0
+    assert _residual_top_estimate(d3) == 0
 
     # 场景 4：未裁截图（图标行从行 12 起，前有纯色背景，n≈200 真实规模）→ 修正到内容区起点
     d4 = np.array([0.02] * 12 + [0.18, 0.19, 0.20, 0.21, 0.20] + [0.30, 0.31] * 90)
     assert _status_bar_correction(d4, 12) == 17
+
+    # 场景 5：顶格残留不并入自动裁剪（top_edge=0 时修正函数不后移边界）
+    assert _status_bar_correction(d1, 0) == 0
 
 
 def test_scan_excludes_non_vertical_and_non_manual(client):

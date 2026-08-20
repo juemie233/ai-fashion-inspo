@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 # 竖屏截图判定：高/宽 ≥ 1.75（9:16≈1.78、19.5:9≈2.17）
 MIN_RATIO = 1.75
+# content 模式的竖屏下限放宽到 1.3：已被裁剪过的截图比例可能掉到 1.3~1.75
+# （原 2.17 裁 40% 后 ≈1.3），顶部状态栏残留仍需二次裁剪；内容边界检测
+# 自带「内容区占比」与「残留簇 + 后随内容更高」校验兜底，不会误裁普通照片。
+CONTENT_MIN_RATIO = 1.3
 # 默认裁剪比例（相对图片高度）
 DEFAULT_CROP_TOP = 0.03  # 顶部 3%（状态栏区域）
 DEFAULT_CROP_BOTTOM = 0.05  # 底部 5%（底部导航栏/手势条区域）
@@ -236,12 +240,17 @@ def detect_screenshot_features(path: Path) -> dict:
 
     rows = [diversity(y) for y in range(n)]
 
-    # 顶部状态栏：前 15% 高度内存在「图标行簇」（0.02~0.3），
-    # 且其后在 40% 高度内出现内容区（>0.25）；同时该行簇之前允许纯色行（状态栏背景）
+    # 顶部状态栏：前 15% 高度内存在「图标行簇」（0.1~0.3），
+    # 且其后在 40% 高度内出现内容区（>0.25）。
+    # 状态栏前提：图标行簇之前必须存在纯色背景行（状态栏背景，多样度 < 0.1）——
+    # 照片暗部/夜景等大块低多样度区域通常直接顶格（无背景行），据此排除
     top_bar = False
     top_limit = int(n * _TOP_SCAN_FRACTION)
     for i in range(min(2, top_limit), top_limit):
         if _ROW_UNIFORM < rows[i] <= _ROW_STATUS_BAR:
+            # 图标行簇前 6 行内须有纯色背景行（状态栏背景）
+            if not any(rows[k] < _ROW_UNIFORM for k in range(max(0, i - 6), i)):
+                continue
             # 找到图标行，检查其后是否过渡到内容区
             if any(rows[j] > _ROW_CONTENT for j in range(i, min(n, i + int(n * 0.4)))):
                 top_bar = True
@@ -358,16 +367,54 @@ def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
     return top_edge, bottom_edge
 
 
+def _residual_top_estimate(diversity: np.ndarray) -> int:
+    """疑似顶部状态栏残留的裁剪行数估算（已裁截图，图标叠加在照片上）。
+
+    透明状态栏图标叠加在照片上，残留行多样度实测 0.16~0.27（图标下沿渐变
+    可达 0.27），与照片顶部自然低多样度区域（暗角/天空/柜台）在行剖面上
+    几乎同构、无法可靠区分。因此本函数只做「疑似」估算，供人工确认后
+    裁剪，绝不并入自动裁剪比例。
+
+    判定：顶部 8% 窗口内存在多样度 < _RESIDUAL_MED（0.28）的连续簇（≥2 行）、
+    簇中位 < _RESIDUAL_MED - 0.02（0.26）、且其后 30% 高度内内容中位显著
+    更高（≥ 簇中位 + 0.08）→ 返回簇结束后首个多样度显著升高的行。
+
+    参数:
+        diversity: 行多样度剖面
+
+    返回:
+        建议裁剪行数（无法确认残留时返回 0）
+    """
+    n = len(diversity)
+    window = int(n * _STATUS_BAR_SCAN_FRACTION)
+    seg_end = 0
+    while seg_end + 1 < window and diversity[seg_end + 1] < _RESIDUAL_MED:
+        seg_end += 1
+    if seg_end < 1:  # 簇至少 2 行才有意义
+        return 0
+    first_med = float(np.median(diversity[0 : seg_end + 1]))
+    if first_med >= _RESIDUAL_MED - 0.02:
+        return 0
+    tail = diversity[seg_end + 1 : min(n, seg_end + 1 + int(n * 0.3))]
+    if len(tail) < 5 or float(np.median(tail)) < first_med + 0.08:
+        return 0
+    threshold = max(_STATUS_BAR_MED, first_med + 0.05)
+    for y in range(seg_end + 1, min(n, window + int(n * _STATUS_BAR_SEARCH_FRACTION))):
+        if diversity[y] >= threshold:
+            return y
+    return 0
+
+
 def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
 
-    覆盖两类场景（100 张样本校准）：
-    1. 未裁截图：纯色背景（多样度 < 0.1）→ 状态栏图标行簇（多样度 0.15~0.24，
-       极薄）→ 内容区（top_edge > 0）；
-    2. 已裁过一次的截图：auto 模式只裁掉状态栏背景，图标行簇残留在图顶
-       （top_edge=0，簇直接顶格）→ 按「低多样度簇 → 明显更高内容区」的
-       跃迁识别并给出再次裁剪建议（透明状态栏叠加在照片上时剖面差异极小，
-       建议由人工在候选列表确认，默认不勾选）。
+    仅处理未裁截图场景（top_edge > 0）：纯色背景（多样度 < 0.1）→ 状态栏
+    图标行簇（多样度 0.15~0.24，极薄）→ 内容区。已裁截图的顶格残留
+    （top_edge=0）由 _residual_top_estimate 单独估算，不并入本函数。
+
+    判定规则：首区段（顶部 8% 窗口内）多样度中位 < 0.25、且区段前一行属
+    低多样度地带、且区段结束后存在多样度 ≥ max(0.24, 首区段中位 + 0.05)
+    的行 → 状态栏，内容边界后移到该行。
 
     参数:
         diversity: 行多样度剖面
@@ -378,32 +425,9 @@ def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     """
     n = len(diversity)
     window = int(n * _STATUS_BAR_SCAN_FRACTION)
-    if top_edge >= window:
+    if top_edge >= window or top_edge == 0:
         return top_edge
-
-    if top_edge == 0:
-        # 已裁截图的状态栏残留：顶部低多样度簇（< _RESIDUAL_MED）顶格，
-        # 其后 30% 高度内内容中位显著更高 → 给出再次裁剪建议
-        seg_end = 0
-        while seg_end + 1 < window and diversity[seg_end + 1] < _RESIDUAL_MED:
-            seg_end += 1
-        if seg_end < 1:  # 簇至少 2 行才有意义
-            return top_edge
-        first_med = float(np.median(diversity[0 : seg_end + 1]))
-        # 残留簇中位上限：透明状态栏残留行中位实测可达 0.24（图标下沿渐变），
-        # 上限取 _RESIDUAL_MED - 0.02（0.26），普通内容顶部波动（≥0.26）不修正
-        if first_med >= _RESIDUAL_MED - 0.02:
-            return top_edge
-        tail = diversity[seg_end + 1 : min(n, seg_end + 1 + int(n * 0.3))]
-        if len(tail) < 5 or float(np.median(tail)) < first_med + 0.08:
-            return top_edge
-        threshold = max(_STATUS_BAR_MED, first_med + 0.05)
-        for y in range(seg_end + 1, min(n, window + int(n * _STATUS_BAR_SEARCH_FRACTION))):
-            if diversity[y] >= threshold:
-                return y
-        return top_edge
-
-    # 未裁截图：首区段从 top_edge 起，仅在窗口内延伸（避免并入内容区拉高中位数）
+    # 首区段：从 top_edge 起，仅在窗口内延伸（避免并入内容区拉高中位数）
     seg_end = top_edge
     while seg_end + 1 < window and diversity[seg_end + 1] >= _CONTENT_MIN_D:
         seg_end += 1
@@ -450,6 +474,11 @@ def detect_content_bounds(path: Path) -> dict:
     类型一为灰带（平坦低饱和），类型二为状态栏 + 播放器条/导航栏。两类
     统一用行多样度剖面找内容区边界，灰带平坦度与状态栏簇对比用于分类标注。
 
+    已裁截图的「透明状态栏残留」（图标叠加在照片上）与照片顶部自然低多样度
+    区域在行剖面上无法可靠区分（96 宽缩放实测同构），因此残留检测结果不
+    并入 top_frac（避免自动误裁普通照片），而是通过 residual_top_frac 单独
+    返回，由调用方标注「疑似残留」供人工确认后勾选裁剪。
+
     参数:
         path: 图片绝对路径
 
@@ -462,7 +491,9 @@ def detect_content_bounds(path: Path) -> dict:
             "correction": 状态栏修正是否生效,
             "kind": "gray_band"（上下灰带包夹）| "status_bar"（含状态栏修正）| "plain",
             "already_cropped": 是否已裁剪干净（无有效裁剪区域，合计 <1%），
-                仅作标注，仍由调用方决定是否列入候选
+                仅作标注，仍由调用方决定是否列入候选,
+            "residual_top_frac": 疑似顶部状态栏残留建议裁剪比例（>0 时由
+                人工确认后使用，不并入 top_frac 自动裁剪）,
         }
 
     异常:
@@ -478,6 +509,10 @@ def detect_content_bounds(path: Path) -> dict:
         raise ValueError("未检测到内容区边界")
     top_edge = _status_bar_correction(diversity, top_edge_raw)
     correction = top_edge != top_edge_raw
+    residual_top_frac = 0.0
+    if top_edge == 0:
+        # 顶格残留疑似检测：不并入 top_frac（防误裁普通照片），单独返回建议
+        residual_top_frac = round(_residual_top_estimate(diversity) / n, 6)
 
     # 底部边界微调：播放器条/导航栏顶部常为半透明渐变过渡（亮度骤降但多样度
     # 仍 ≥0.15），content_bounds 会把过渡行算进内容区，裁后残留暗带。
@@ -511,7 +546,7 @@ def detect_content_bounds(path: Path) -> dict:
 
     if top_gray_ok and bot_gray_ok:
         kind = "gray_band"
-    elif correction:
+    elif correction or residual_top_frac > 0:
         kind = "status_bar"
     else:
         kind = "plain"
@@ -524,6 +559,7 @@ def detect_content_bounds(path: Path) -> dict:
         "correction": correction,
         "kind": kind,
         "already_cropped": already_cropped,
+        "residual_top_frac": residual_top_frac,
     }
 
 
@@ -611,6 +647,8 @@ async def scan_candidates(
         raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio / content）")
     if mode == "ratio" and crop_top + crop_bottom >= 1:
         raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
+    # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
+    min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
 
     result = await db.execute(
         select(Inspiration).where(
@@ -631,7 +669,7 @@ async def scan_candidates(
             width, height = await asyncio.to_thread(_probe_size, full)
         except Exception:
             continue  # 无法解码的图片不做候选
-        if height / width < MIN_RATIO:
+        if height / width < min_ratio:
             continue
         total += 1
         if limit > 0 and len(candidates) >= limit:
@@ -664,7 +702,17 @@ async def scan_candidates(
                 item["crop_top"] = bounds["top_frac"]
                 item["crop_bottom"] = bounds["bottom_frac"]
                 item["boundary_kind"] = bounds["kind"]
-                if bounds["already_cropped"]:
+                if bounds["residual_top_frac"] > 0 and bounds["top_frac"] == 0:
+                    # 疑似顶部状态栏残留（透明图标叠加照片，自动检测不可靠）：
+                    # 不自动判定可裁剪（防误裁普通照片），标注建议比例供人工
+                    # 目检后勾选；勾选后 apply 按此建议裁剪
+                    item["auto_ok"] = False
+                    item["crop_top"] = bounds["residual_top_frac"]
+                    item["note"] = (
+                        f"疑似顶部状态栏残留（建议裁剪 {bounds['residual_top_frac']:.1%}），"
+                        "确认后勾选裁剪"
+                    )
+                elif bounds["already_cropped"]:
                     # 已裁剪干净（或内容占满全图）：仍列入候选供用户可见，
                     # 标记不可裁剪并说明原因（人工可确认是否确实无需再裁）
                     item["auto_ok"] = False
@@ -745,6 +793,8 @@ async def apply_crops(
         raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio / content）")
     if mode == "ratio" and crop_top + crop_bottom >= 1:
         raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
+    # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
+    min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
     # 去重：同一素材重复勾选时只处理一次
     ids = list(dict.fromkeys(ids))
 
@@ -783,8 +833,8 @@ async def apply_crops(
         except Exception:
             skipped.append(_skip_entry(insp, "文件无法解码"))
             continue
-        if height / width < MIN_RATIO:
-            skipped.append(_skip_entry(insp, "非竖屏截图（高/宽 < 1.75）"))
+        if height / width < min_ratio:
+            skipped.append(_skip_entry(insp, f"非竖屏截图（高/宽 < {min_ratio}）"))
             continue
         if mode == "auto":
             try:
@@ -799,7 +849,10 @@ async def apply_crops(
                 bounds = await asyncio.to_thread(detect_content_bounds, full)
                 t_frac = bounds["top_frac"]
                 b_frac = bounds["bottom_frac"]
-                if bounds["already_cropped"]:
+                if bounds["residual_top_frac"] > 0 and t_frac == 0:
+                    # 用户已勾选 = 确认疑似残留：按建议比例裁剪顶部
+                    t_frac = bounds["residual_top_frac"]
+                if bounds["already_cropped"] and t_frac == 0:
                     skipped.append(_skip_entry(insp, "已裁剪过或内容占满全图，无需裁剪"))
                     continue
             except ValueError as e:
