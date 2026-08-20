@@ -354,6 +354,7 @@ const enrichTask = ref<{
   progress: number
   done: number
   total: number
+  error: string | null
   result: Record<string, unknown> | null
 } | null>(null)
 let enrichPollTimer: number | null = null
@@ -707,7 +708,15 @@ const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.sta
         </div>
 
         <template v-if="!['pending', 'running'].includes(enrichTask.status)">
+          <!-- 任务整体失败（如未导入 Cookie）：明确展示失败原因，引导处理 -->
           <a-alert
+            v-if="enrichTask.status === 'failed' && enrichTask.error"
+            type="error"
+            style="margin: 12px 0"
+            :message="`补全任务失败：${enrichTask.error}`"
+          />
+          <a-alert
+            v-else
             :type="enrichFailed > 0 ? 'warning' : 'success'"
             style="margin: 12px 0"
             :message="`补全完成：成功 ${enrichUpdated} 位${enrichFailed > 0 ? `，失败 ${enrichFailed} 位` : ''}`"
