@@ -2,7 +2,7 @@
 /** 任务列表：统一展示任务队列与采集任务。 */
 
 import { h } from 'vue'
-import { Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
+import { Tag, Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import {
