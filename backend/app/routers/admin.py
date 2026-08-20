@@ -635,7 +635,7 @@ async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
 class PhoneCropRequest(BaseModel):
     """手机图剪裁请求参数。"""
 
-    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例")
+    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例 / content 内容边界检测")
     crop_top: float = Field(default=0.03, ge=0, lt=0.5, description="顶部裁剪比例（仅 ratio 模式）")
     crop_bottom: float = Field(default=0.05, ge=0, lt=0.5, description="底部裁剪比例（仅 ratio 模式）")
     limit: int = Field(default=200, ge=1, le=1000, description="单次最多返回候选数")
@@ -645,7 +645,7 @@ class PhoneCropApplyRequest(BaseModel):
     """手机图剪裁执行请求：用户勾选确认的素材 ID 列表。"""
 
     ids: list[str] = Field(..., description="勾选确认要裁剪的素材 ID 列表")
-    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例")
+    mode: str = Field(default="auto", description="auto 黑边自动检测 / ratio 固定比例 / content 内容边界检测")
     crop_top: float = Field(default=0.03, ge=0, lt=0.5, description="顶部裁剪比例（仅 ratio 模式）")
     crop_bottom: float = Field(default=0.05, ge=0, lt=0.5, description="底部裁剪比例（仅 ratio 模式）")
 

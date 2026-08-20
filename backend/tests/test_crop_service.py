@@ -1,14 +1,16 @@
-"""手机图裁剪服务测试：扫描候选、按勾选执行裁剪、黑边检测、截图特征、范围过滤。"""
+"""手机图裁剪服务测试：扫描候选、按勾选执行裁剪、黑边检测、截图特征、内容边界检测、范围过滤。"""
 
 from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from app.config import settings
 from app.services.crop_service import (
     _probe_size,
     crop_image_to_temp,
+    detect_content_bounds,
     detect_photo_band,
     detect_screenshot_features,
     screenshot_confidence,
@@ -24,6 +26,45 @@ def _make_vertical_screenshot(width=300, height=600, top_black=40, bottom_black=
     for y in range(height - bottom_black, height):
         for x in range(width):
             img.putpixel((x, y), (10, 10, 10))
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    return buf.getvalue(), "image/jpeg"
+
+
+def _make_content_band_screenshot(
+    width=300,
+    height=600,
+    top_gray=100,
+    bottom_gray=130,
+    top_color=(70, 70, 70),
+    bottom_color=(90, 90, 90),
+):
+    """构造「灰带包夹」截图：上下平坦灰色地带 + 中间彩色噪点内容区。
+
+    噪点行颜色多样度 ≈1.0（内容区），纯色地带多样度 ≈0（灰带），
+    边界锐利，供内容边界检测断言使用。
+    """
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:, :] = top_color
+    arr[height - bottom_gray :, :] = bottom_color
+    rng = np.random.default_rng(42)
+    content = arr[top_gray : height - bottom_gray]
+    content[:] = rng.integers(0, 256, size=content.shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    return buf.getvalue(), "image/jpeg"
+
+
+def _make_status_bar_screenshot(width=300, height=600, status_bar=25, player_bar=60):
+    """构造「状态栏+播放器条」截图：顶部深色状态栏 + 中间噪点内容 + 底部黑色播放器条。"""
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:status_bar, :] = (60, 60, 60)
+    arr[height - player_bar :, :] = (10, 10, 10)
+    rng = np.random.default_rng(7)
+    content = arr[status_bar : height - player_bar]
+    content[:] = rng.integers(0, 256, size=content.shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
     buf = BytesIO()
     img.save(buf, "JPEG")
     return buf.getvalue(), "image/jpeg"
@@ -103,6 +144,94 @@ def test_scan_auto_mode_detects_black_band(client):
     # 40/600 ≈ 0.0667，30/600 = 0.05
     assert abs(item["crop_top"] - 40 / 600) < 0.001
     assert abs(item["crop_bottom"] - 30 / 600) < 0.001
+
+
+def test_scan_content_mode_detects_gray_band(client):
+    """内容边界模式扫描：灰带包夹截图的边界写入裁剪比例并标注类型。"""
+    data, ctype = _make_content_band_screenshot(top_gray=100, bottom_gray=130)
+    insp = _upload_screenshot(client, data, ctype)
+
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["auto_ok"] is True
+    assert abs(item["crop_top"] - 100 / 600) < 0.01
+    assert abs(item["crop_bottom"] - 130 / 600) < 0.01
+    assert item["boundary_kind"] == "gray_band"
+    # 截图特征置信度仍照常计算（与 auto 模式并存，互不干扰）
+    assert item["confidence"] in ("high", "medium", "low")
+
+
+def test_scan_content_mode_detects_status_bar(client):
+    """内容边界模式扫描：状态栏+播放器条截图（上下深色地带）也能检出边界。"""
+    data, ctype = _make_status_bar_screenshot(status_bar=25, player_bar=60)
+    insp = _upload_screenshot(client, data, ctype)
+
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["auto_ok"] is True
+    assert abs(item["crop_top"] - 25 / 600) < 0.01
+    assert abs(item["crop_bottom"] - 60 / 600) < 0.01
+
+
+def test_content_mode_status_bar_correction(client):
+    """状态栏修正：顶部「低多样度内容簇」（状态栏图标）后移内容上界。"""
+    # 顶部 40px：前 10px 纯色背景，行 10~20 为「少量噪点」（模拟状态栏图标，多样度低），
+    # 行 21~39 纯色背景，行 40 起全噪点内容区
+    width, height = 300, 600
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:, :] = (200, 200, 200)
+    rng = np.random.default_rng(3)
+    # 状态栏图标行：每行仅 18 列随机色（96 宽缩放下多样度 ≈ 0.19）
+    for y in range(10, 20):
+        cols = rng.choice(width, size=18, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(18, 3), dtype=np.uint8)
+    content = arr[40:]
+    content[:] = rng.integers(0, 256, size=content.shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="content")
+    item = body["items"][0]
+    assert item["auto_ok"] is True
+    # 未修正会裁到行 10（状态栏图标簇）；修正后应裁到行 40（内容区起点）
+    assert abs(item["crop_top"] - 40 / 600) < 0.02
+
+
+def test_apply_content_mode_crops_to_bounds(client):
+    """内容边界模式执行裁剪：按检测到的灰带边界裁剪，高度正确缩小。"""
+    data, ctype = _make_content_band_screenshot(top_gray=100, bottom_gray=130)
+    insp = _upload_screenshot(client, data, ctype)
+
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "content"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processed"] == 1
+    # 600 - 100 - 130 = 370；96 宽缩放的行量化误差 ≤ 3px
+    assert abs(_file_size(insp["id"], client)[1] - 370) <= 3
+
+
+def test_detect_content_bounds_rejects_plain_image(tmp_path):
+    """内容边界检测：整图都是内容区（无包夹地带）时拒绝（防误裁普通照片）。"""
+    import pytest
+
+    arr = np.zeros((300, 600, 3), dtype=np.uint8)
+    rng = np.random.default_rng(5)
+    arr[:] = rng.integers(0, 256, size=arr.shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    p = tmp_path / "plain.jpg"
+    p.write_bytes(buf.getvalue())
+
+    with pytest.raises(ValueError):
+        detect_content_bounds(p)
 
 
 def test_scan_excludes_non_vertical_and_non_manual(client):

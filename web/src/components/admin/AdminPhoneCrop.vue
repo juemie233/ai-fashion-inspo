@@ -20,8 +20,8 @@ function errorDetail(e: unknown): string {
   return ''
 }
 
-/** 裁剪模式：auto 黑边自动检测 / ratio 固定比例 */
-const mode = ref<'auto' | 'ratio'>('auto')
+/** 裁剪模式：auto 黑边自动检测 / ratio 固定比例 / content 内容边界检测 */
+const mode = ref<'auto' | 'ratio' | 'content'>('auto')
 /** 顶部/底部裁剪比例（百分比，仅 ratio 模式生效） */
 const cropTop = ref(3)
 const cropBottom = ref(5)
@@ -46,7 +46,16 @@ interface CropCandidate {
   auto_ok: boolean
   note: string | null
   confidence: 'high' | 'medium' | 'low'
+  /** content 模式：gray_band（灰带包夹）/ status_bar（状态栏+播放器条）/ plain */
+  boundary_kind?: 'gray_band' | 'status_bar' | 'plain' | null
   created_at: string | null
+}
+
+/** content 模式检测类型展示文案 */
+const BOUNDARY_LABELS: Record<string, string> = {
+  gray_band: '灰带包夹',
+  status_bar: '状态栏+播放器条',
+  plain: '内容边界',
 }
 
 /** 置信度展示文案与标签颜色（Arco Tag 使用 color 预设色，无 type 语义色） */
@@ -344,6 +353,9 @@ function timeLabel(c: { created_at: string | null }): string {
       <b>人工勾选确认后</b>执行裁剪：裁掉顶部状态栏、底部导航栏等多余区域。 原图自动备份到
       <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填；
       标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图。
+      <br />三种模式并存：「自动检测黑边」面向深色背景截图；「固定比例」按设定比例裁剪；
+      <b>「内容边界检测」</b>面向上下被灰带/状态栏/播放器条包夹的截图，自动定位照片主体边界（100
+      张样本分析校准）。
     </p>
 
     <a-form
@@ -355,7 +367,8 @@ function timeLabel(c: { created_at: string | null }): string {
     >
       <a-form-item label="裁剪模式">
         <a-radio-group v-model="mode" type="button" size="small">
-          <a-radio value="auto">自动检测黑边（推荐）</a-radio>
+          <a-radio value="auto">自动检测黑边</a-radio>
+          <a-radio value="content">内容边界检测（新）</a-radio>
           <a-radio value="ratio">固定比例</a-radio>
         </a-radio-group>
       </a-form-item>
@@ -439,6 +452,15 @@ function timeLabel(c: { created_at: string | null }): string {
             </span>
             <span class="crop-line">
               裁剪 {{ cropLabel(c) }}
+              <a-tag
+                v-if="c.boundary_kind"
+                size="small"
+                :bordered="false"
+                color="arcoblue"
+                style="margin-left: 4px"
+              >
+                {{ BOUNDARY_LABELS[c.boundary_kind] || c.boundary_kind }}
+              </a-tag>
               <a-tag
                 size="small"
                 :bordered="false"

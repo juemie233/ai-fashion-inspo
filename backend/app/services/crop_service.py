@@ -28,6 +28,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,6 +172,28 @@ _ROW_CONTENT = 0.25  # 内容区行多样度下限
 _TOP_SCAN_FRACTION = 0.15  # 顶部扫描范围（状态栏出现在前 15% 高度内）
 _BOTTOM_SCAN_FRACTION = 0.12  # 底部扫描范围（手势条在最后 12% 高度内）
 
+# ── 内容边界检测参数（2026-08 对 100 张手动上传素材行剖面分析校准）──
+# 内容行 = 行内颜色多样度 ≥ _CONTENT_MIN_D；灰带/状态栏/播放器条等非内容
+# 地带多样度低（< 0.08），内容区通常 ≥ 0.22，取 0.15 做分界稳健且抗噪。
+_CONTENT_MIN_D = 0.15  # 内容行多样度下限
+_CONTENT_MIN_RUN = 3  # 内容区起始的最小连续行数（防单行噪声）
+_CONTENT_MAX_GAP = 5  # 内容区内部允许的最大缺口行数（照片纯色块/暗部）
+# 状态栏修正：顶部 12% 高度内首个内容簇多样度中位 < 0.25，且其后 20% 高度内
+# 存在多样度中位 ≥ 首簇 × 1.25 的内容簇 → 首簇判定为状态栏图标行（顶部
+# 状态栏与内容区多样度连续过渡，单靠阈值无法干净切分，需簇间对比）
+_STATUS_BAR_MED = 0.25
+_STATUS_BAR_RATIO = 1.25
+_STATUS_BAR_SCAN_FRACTION = 0.12
+_STATUS_BAR_SEARCH_FRACTION = 0.2
+# 灰带判定（0~1 归一化）：低饱和 + 亮度平坦（纹理少）
+_SAT_GRAY = 0.2
+_GRAY_BAND_STD_MAX = 0.06
+# 内容区占比合理范围（灰带包夹的照片主体）
+_CONTENT_FRACTION_MIN = 0.25
+_CONTENT_FRACTION_MAX = 0.95
+# 内容边界检测的分析宽度（行剖面逐行统计，宽度只影响多样度灵敏度）
+_CONTENT_ANALYZE_W = 96
+
 
 def detect_screenshot_features(path: Path) -> dict:
     """检测手机系统截图特征：顶部状态栏条带 + 底部导航栏/手势条。
@@ -242,6 +265,217 @@ def screenshot_confidence(features: dict) -> str:
     return "low"
 
 
+# ── 内容边界检测（mode="content"，2026-08 新增，与黑边检测/固定比例并存）──
+
+def _row_profiles(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """计算图片的行级剖面：亮度均值、饱和度均值、颜色多样度（0~1，逐行）。
+
+    与 detect_screenshot_features 的缩放策略一致（EXIF 校正 → 统一宽度缩放），
+    但宽度取 _CONTENT_ANALYZE_W（96），行剖面按相对高度输出，与绝对分辨率无关。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        (brightness, saturation, diversity) 三个长度 = 缩放后高度的数组
+    """
+    with Image.open(path) as im:
+        img = ImageOps.exif_transpose(im).convert("RGB")
+        small = img.resize(
+            (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
+            Image.Resampling.LANCZOS,
+        )
+    arr = np.asarray(small).astype(np.float32) / 255.0
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    brightness = (r * 0.299 + g * 0.587 + b * 0.114).mean(axis=1)
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        saturation = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    saturation = saturation.mean(axis=1)
+    # 颜色多样度：16 级量化后每行唯一色占比
+    q = (arr * 16).astype(np.int32)
+    diversity = np.array(
+        [
+            len({(int(v[0]), int(v[1]), int(v[2])) for v in q[y]}) / _CONTENT_ANALYZE_W
+            for y in range(arr.shape[0])
+        ]
+    )
+    return brightness, saturation, diversity
+
+
+def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
+    """找内容区的上下边界（非内容地带包夹检测的核心）。
+
+    思路：内容行 = 多样度 ≥ _CONTENT_MIN_D 的行。从顶向下找首个「连续
+    ≥ _CONTENT_MIN_RUN 行内容」的区段起点作为上界；从底向上对称找下界。
+    扫描时允许内容区内部有 ≤ _CONTENT_MAX_GAP 行的缺口（照片中的纯色块/
+    暗部），避免提前截断。
+
+    参数:
+        diversity: 行多样度剖面
+
+    返回:
+        (top_edge, bottom_edge) 内容区上下边界行；找不到返回 None
+    """
+    n = len(diversity)
+    content = diversity >= _CONTENT_MIN_D
+
+    # 上界：向下扫描，缺口内续接；连续内容达到 MIN_RUN 即定为起点
+    top_edge: int | None = None
+    run = 0
+    last_content: int | None = None
+    for y in range(n):
+        if content[y]:
+            if last_content is None or (y - last_content - 1) <= _CONTENT_MAX_GAP:
+                run += 1
+            else:
+                run = 1
+            last_content = y
+            if run >= _CONTENT_MIN_RUN:
+                top_edge = last_content - run + 1
+                break
+
+    # 下界：向上扫描对称处理
+    bottom_edge: int | None = None
+    run = 0
+    last_content = None
+    for y in range(n - 1, -1, -1):
+        if content[y]:
+            if last_content is None or (last_content - y - 1) <= _CONTENT_MAX_GAP:
+                run += 1
+            else:
+                run = 1
+            last_content = y
+            if run >= _CONTENT_MIN_RUN:
+                bottom_edge = last_content + run - 1
+                break
+    return top_edge, bottom_edge
+
+
+def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
+    """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
+
+    顶部状态栏的图标行簇（多样度 0.15~0.24）与内容区（通常 ≥ 0.25）在多样度
+    上连续过渡，单靠阈值无法干净切分。经验规则（100 张样本校准）：若顶部
+    _STATUS_BAR_SCAN_FRACTION 高度内的首个内容簇多样度中位 < _STATUS_BAR_MED，
+    且其后 _STATUS_BAR_SEARCH_FRACTION 高度内存在多样度中位 ≥ 首簇 ×
+    _STATUS_BAR_RATIO 的内容簇，则首簇是状态栏，内容边界后移到后续簇起点。
+
+    参数:
+        diversity: 行多样度剖面
+        top_edge: 未修正的内容区上边界
+
+    返回:
+        修正后的内容区上边界（无法确认状态栏时原样返回）
+    """
+    n = len(diversity)
+    if top_edge >= int(n * _STATUS_BAR_SCAN_FRACTION):
+        return top_edge
+    first_cluster_end = top_edge
+    while first_cluster_end + 1 < n and diversity[first_cluster_end + 1] >= _CONTENT_MIN_D:
+        first_cluster_end += 1
+    first_med = float(np.median(diversity[top_edge : first_cluster_end + 1]))
+    if first_med >= _STATUS_BAR_MED:
+        return top_edge
+    # 在首簇之后的搜索窗口内找「显著更高」的内容簇
+    search_end = min(n, first_cluster_end + int(n * _STATUS_BAR_SEARCH_FRACTION))
+    y = first_cluster_end + 1
+    while y < search_end:
+        if diversity[y] >= _CONTENT_MIN_D:
+            c_start = y
+            while y + 1 < search_end and diversity[y + 1] >= _CONTENT_MIN_D:
+                y += 1
+            c_med = float(np.median(diversity[c_start : y + 1]))
+            if c_med >= first_med * _STATUS_BAR_RATIO:
+                return c_start
+        y += 1
+    return top_edge
+
+
+def _band_stats(brightness: np.ndarray, saturation: np.ndarray, lo: int, hi: int) -> dict:
+    """统计行区间的灰带特征（饱和度均值、亮度均值、亮度方差）。
+
+    参数:
+        brightness: 行亮度剖面
+        saturation: 行饱和度剖面
+        lo: 起始行（含）
+        hi: 结束行（不含）
+
+    返回:
+        {"sat_mean", "bright_mean", "bright_std"}
+    """
+    if hi <= lo:
+        return {"sat_mean": 0.0, "bright_mean": 0.0, "bright_std": 0.0}
+    return {
+        "sat_mean": float(saturation[lo:hi].mean()),
+        "bright_mean": float(brightness[lo:hi].mean()),
+        "bright_std": float(brightness[lo:hi].std()),
+    }
+
+
+def detect_content_bounds(path: Path) -> dict:
+    """检测内容区（照片主体）的上下边界，输出相对高度的裁剪比例（模式 content）。
+
+    针对「手机截图/视频截图」的通用检测：图片上下被非内容地带包夹——
+    类型一为灰带（平坦低饱和），类型二为状态栏 + 播放器条/导航栏。两类
+    统一用行多样度剖面找内容区边界，灰带平坦度与状态栏簇对比用于分类标注。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        {
+            "top_frac": 顶部裁剪比例（相对高度，0~1）,
+            "bottom_frac": 底部裁剪比例,
+            "top_edge": 内容区上边界行（缩放图坐标系）,
+            "bottom_edge": 内容区下边界行,
+            "correction": 状态栏修正是否生效,
+            "kind": "gray_band"（上下灰带包夹）| "status_bar"（含状态栏修正）| "plain",
+        }
+
+    异常:
+        ValueError: 未检测到内容区或布局不合理（占比越界等）
+    """
+    brightness, saturation, diversity = _row_profiles(path)
+    n = len(diversity)
+    if n < 8:
+        raise ValueError("图片过小，无法检测内容边界")
+
+    top_edge_raw, bottom_edge = _content_bounds(diversity)
+    if top_edge_raw is None or bottom_edge is None or bottom_edge <= top_edge_raw:
+        raise ValueError("未检测到内容区边界")
+    top_edge = _status_bar_correction(diversity, top_edge_raw)
+    correction = top_edge != top_edge_raw
+
+    # 内容区占比合理性校验（防灰带过薄/过厚误判）
+    frac = (bottom_edge - top_edge + 1) / n
+    if not (_CONTENT_FRACTION_MIN <= frac <= _CONTENT_FRACTION_MAX):
+        raise ValueError(f"内容区占比异常（{frac:.0%}），布局不规则")
+
+    # 灰带判定：边界外侧低饱和 + 亮度平坦
+    top_gray = _band_stats(brightness, saturation, 0, top_edge)
+    bot_gray = _band_stats(brightness, saturation, bottom_edge + 1, n)
+    top_gray_ok = top_gray["sat_mean"] < _SAT_GRAY and top_gray["bright_std"] < _GRAY_BAND_STD_MAX
+    bot_gray_ok = bot_gray["sat_mean"] < _SAT_GRAY and bot_gray["bright_std"] < _GRAY_BAND_STD_MAX
+
+    if top_gray_ok and bot_gray_ok:
+        kind = "gray_band"
+    elif correction:
+        kind = "status_bar"
+    else:
+        kind = "plain"
+
+    return {
+        "top_frac": round(top_edge / n, 6),
+        "bottom_frac": round((n - 1 - bottom_edge) / n, 6),
+        "top_edge": top_edge,
+        "bottom_edge": bottom_edge,
+        "correction": correction,
+        "kind": kind,
+    }
+
+
 def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     """按比例裁剪图片并写入同目录临时文件，返回临时文件路径（不改动原图）。
 
@@ -303,7 +537,8 @@ async def scan_candidates(
 
     参数:
         db: 数据库会话
-        mode: auto（黑边自动检测，逐张计算裁剪比例）/ ratio（统一按比例裁剪）
+        mode: auto（黑边自动检测，逐张计算裁剪比例）/ ratio（统一按比例裁剪）/
+            content（内容边界检测：灰带/状态栏/播放器条包夹的内容区边界）
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
         limit: 单次最多返回的候选数（0 表示不限制）
@@ -314,14 +549,15 @@ async def scan_candidates(
             "items": [{
                 "id": str, "file_path": str, "width": int, "height": int,
                 "ratio": float, "crop_top": float, "crop_bottom": float,
-                "auto_ok": bool, "note": str | None,  # auto 检测失败原因
+                "auto_ok": bool, "note": str | None,  # 自动检测失败原因
                 "confidence": "high" | "medium" | "low",  # 截图特征置信度
+                "boundary_kind": str | None,  # content 模式：gray_band/status_bar/plain
                 "created_at": str | None,  # 上传时间（ISO）
             }, ...],
         }
     """
-    if mode not in ("auto", "ratio"):
-        raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
+    if mode not in ("auto", "ratio", "content"):
+        raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio / content）")
     if mode == "ratio" and crop_top + crop_bottom >= 1:
         raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
 
@@ -360,6 +596,7 @@ async def scan_candidates(
             "auto_ok": True,
             "note": None,
             "confidence": "low",
+            "boundary_kind": None,
             "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
         }
         if mode == "auto":
@@ -370,6 +607,15 @@ async def scan_candidates(
             except ValueError as e:
                 item["auto_ok"] = False
                 item["note"] = f"自动检测失败：{e}"
+        elif mode == "content":
+            try:
+                bounds = await asyncio.to_thread(detect_content_bounds, full)
+                item["crop_top"] = bounds["top_frac"]
+                item["crop_bottom"] = bounds["bottom_frac"]
+                item["boundary_kind"] = bounds["kind"]
+            except ValueError as e:
+                item["auto_ok"] = False
+                item["note"] = f"内容边界检测失败：{e}"
         # 截图特征检测：状态栏/底部栏 → 置信度分级（供人工筛选）
         try:
             features = await asyncio.to_thread(detect_screenshot_features, full)
@@ -415,7 +661,7 @@ async def apply_crops(
     参数:
         db: 数据库会话
         ids: 用户勾选确认要裁剪的素材 ID 列表
-        mode: auto（黑边自动检测）/ ratio（统一按比例裁剪）
+        mode: auto（黑边自动检测）/ ratio（统一按比例裁剪）/ content（内容边界检测）
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
 
@@ -439,8 +685,8 @@ async def apply_crops(
             "vector_task_id": int | None,
         }
     """
-    if mode not in ("auto", "ratio"):
-        raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio）")
+    if mode not in ("auto", "ratio", "content"):
+        raise ValueError(f"不支持的裁剪模式: {mode}（允许 auto / ratio / content）")
     if mode == "ratio" and crop_top + crop_bottom >= 1:
         raise ValueError(f"裁剪比例合计必须 < 1：顶部 {crop_top} + 底部 {crop_bottom}")
     # 去重：同一素材重复勾选时只处理一次
@@ -491,6 +737,14 @@ async def apply_crops(
                 b_frac = round((height - 1 - bottom_px) / height, 6)
             except ValueError as e:
                 skipped.append(_skip_entry(insp, f"自动检测失败：{e}"))
+                continue
+        elif mode == "content":
+            try:
+                bounds = await asyncio.to_thread(detect_content_bounds, full)
+                t_frac = bounds["top_frac"]
+                b_frac = bounds["bottom_frac"]
+            except ValueError as e:
+                skipped.append(_skip_entry(insp, f"内容边界检测失败：{e}"))
                 continue
         else:
             t_frac, b_frac = crop_top, crop_bottom
