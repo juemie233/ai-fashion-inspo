@@ -9,7 +9,7 @@ import { formatDate, formatSize } from '@/utils/format'
 const items = ref<AuditLogItem[]>([])
 const loading = ref(false)
 
-/** 操作类型中文映射 */
+/** 操作类型中文映射（与后端 record_audit_log 的 action 值全量对齐） */
 const ACTION_LABELS: Record<string, string> = {
   trash: '移入垃圾桶',
   restore: '恢复素材',
@@ -18,6 +18,19 @@ const ACTION_LABELS: Record<string, string> = {
   cleanup_orphans: '清理孤立文件',
   empty_trash: '清空垃圾桶',
   batch_trash: '批量移入垃圾桶',
+  crop: '裁剪素材',
+  delete: '删除素材',
+  delete_person: '删除人物',
+  batch_link_bloggers: '批量关联博主',
+  merge_tags: '合并标签',
+  delete_unused_tags: '删除未使用标签',
+  batch_delete_tags: '批量删除标签',
+  cancel_scraper_task: '取消采集任务',
+  delete_scraper_task: '删除采集任务',
+  clear_scraper_tasks: '清空采集任务',
+  retry_scraper_tasks: '重试失败采集任务',
+  retry_scraper_task: '重试采集任务',
+  deduplicate: '近似重复删除',
 }
 
 function actionLabel(action: string): string {
