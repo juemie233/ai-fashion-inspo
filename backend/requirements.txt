@@ -25,6 +25,10 @@ playwright==1.49.1
 # Utilities
 aiofiles==24.1.0
 
+# 负样本初筛器（质量审核前置：CLIP 向量 + sklearn 逻辑回归）
+scikit-learn==1.9.0
+joblib==1.5.3
+
 # 向量检索（LanceDB 嵌入式向量库，语义搜索 / 以图搜图）
 # 注意：以图搜图需要额外的 CLIP 模型，依赖较重（torch + sentence-transformers），
 # 未安装时图像向量能力自动降级，不影响其他功能。需要时手动安装：
