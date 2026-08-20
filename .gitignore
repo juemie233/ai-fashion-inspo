@@ -86,3 +86,7 @@ mcp
 # 人脸识别子服务（face-service）：模型与运行时数据不提交
 face-service/models/
 face-service/face_service.db
+
+# Playwright E2E ����
+web/test-results/
+web/playwright-report/

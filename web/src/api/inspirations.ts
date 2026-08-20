@@ -1,6 +1,8 @@
 /** 灵感素材相关 API 调用。 */
 
+import type { AxiosProgressEvent } from 'axios'
 import apiClient from './client'
+import { warnItems } from '@/utils/apiGuard'
 import type { PersonBrief } from '@shared/types/person'
 
 /** 审核状态 */
@@ -253,7 +255,7 @@ export async function fetchInspiration(id: string) {
 /** 上传灵感图片（支持透传上传进度回调与取消信号） */
 export async function uploadInspiration(
   formData: FormData,
-  onProgress?: (e: any) => void,
+  onProgress?: (e: AxiosProgressEvent) => void,
   signal?: AbortSignal,
 ) {
   const { data } = await apiClient.post<InspirationOut>('/inspirations', formData, {
@@ -357,6 +359,20 @@ export interface FaceDetectionsOut {
 /** 触发素材人脸检测与博主特征库匹配（重新检测覆盖旧结果） */
 export async function faceDetectInspiration(id: string): Promise<FaceDetectionsOut> {
   const { data } = await apiClient.post<FaceDetectionsOut>(`/inspirations/${id}/face-detect`)
+  // 校验检测条目关键字段（此前检测接口缺 matched_blogger_name 导致前端显示「博主 #id」）
+  warnItems(
+    data.detections,
+    {
+      id: 'number',
+      face_index: 'number',
+      matched_blogger_id: 'number?',
+      matched_blogger_name: 'string?',
+      matched_model_id: 'number?',
+      matched_model_name: 'string?',
+      confidence: 'number?',
+    },
+    'face-detect detections',
+  )
   return data
 }
 

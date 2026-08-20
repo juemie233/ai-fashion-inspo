@@ -1,6 +1,7 @@
 /** 素材管理后台相关 API 调用（导出 / 趋势 / 人物频次）。 */
 
 import apiClient from './client'
+import { warnItems } from '@/utils/apiGuard'
 
 /** 每日新增趋势点 */
 export interface TrendPoint {
@@ -65,6 +66,19 @@ export async function fetchAuditLogs(limit = 50): Promise<AuditLogItem[]> {
   const { data } = await apiClient.get<AuditLogItem[]>('/admin/audit-logs', {
     params: { limit },
   })
+  // 校验日志条目关键字段（此前 created_at 缺时区曾致时间显示早 8 小时）
+  warnItems(
+    data,
+    {
+      id: 'number',
+      action: 'string',
+      count: 'number',
+      freed_bytes: 'number',
+      detail: 'string?',
+      created_at: 'string?',
+    },
+    'audit-logs',
+  )
   return data
 }
 

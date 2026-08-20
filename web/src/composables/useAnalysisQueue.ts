@@ -1,6 +1,7 @@
 /** AI 分析队列 composable：队列统计、活动分析、批量任务、排队素材与轮询。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
+import { warnShape } from '@/utils/apiGuard'
 import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
@@ -24,7 +25,7 @@ const BATCH_RETRY_MS = 3000
 
 export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const { requestAndNotify, checkFailureAlert } = useNotification()
-  
+
   const queueStats = ref<QueueStats>({ total: 0, analyzed: 0, unanalyzed: 0, failed: 0 })
   const activeAnalyses = ref<Record<string, string>>({})
   const batchAnalyzing = ref(false)
@@ -34,12 +35,14 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let batchPollTimer: ReturnType<typeof setTimeout> | null = null
-  let batchPollSeq = 0  // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
+  let batchPollSeq = 0 // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
 
   /** 加载排队中素材 */
   async function loadPendingQueue() {
     try {
-      const { data } = await apiClient.get<{ items: QueueItem[]; paused: boolean }>('/ai/queue/pending')
+      const { data } = await apiClient.get<{ items: QueueItem[]; paused: boolean }>(
+        '/ai/queue/pending',
+      )
       pendingQueue.value = data.items
       queuePaused.value = data.paused
     } catch {}
@@ -53,8 +56,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       loadPendingQueue()
       loadActiveAnalyses()
     } catch (e) {
-      const data = (e as { response?: { data?: { detail?: string; message?: string } } })
-        ?.response?.data
+      const data = (e as { response?: { data?: { detail?: string; message?: string } } })?.response
+        ?.data
       Message.error(data?.detail || data?.message || '取消失败')
     }
   }
@@ -70,7 +73,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         Message.success('队列已暂停')
       }
       loadPendingQueue()
-    } catch (e) {
+    } catch {
       Message.error('操作失败')
     }
   }
@@ -79,7 +82,17 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   async function loadQueue() {
     try {
       const { data } = await apiClient.get<QueueStats>('/ai/queue')
-      queueStats.value = data
+      // 校验统计字段（此前后端口径问题曾致 unanalyzed 恒为 0、按钮误禁用）
+      queueStats.value = warnShape(
+        data,
+        {
+          total: 'number',
+          analyzed: 'number',
+          unanalyzed: 'number',
+          failed: 'number',
+        },
+        '/ai/queue',
+      )
       checkFailureAlert(data.failed, data.total)
     } catch {}
   }
@@ -115,7 +128,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
 
   /** 停止活动分析轮询 */
   function stopPolling() {
-    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
+    if (pollTimer) {
+      clearTimeout(pollTimer)
+      pollTimer = null
+    }
   }
 
   /** 创建批量分析任务并开始轮询 */
@@ -128,7 +144,12 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         return
       }
       // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
-      const { data: created } = await apiClient.post<{ task_id: number; message: string; count: number; skipped: number }>('/ai/batch-analyze', data.ids)
+      const { data: created } = await apiClient.post<{
+        task_id: number
+        message: string
+        count: number
+        skipped: number
+      }>('/ai/batch-analyze', data.ids)
       batchTask.value = {
         id: created.task_id,
         type: 'batch_analyze',
@@ -145,7 +166,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         updated_at: new Date().toISOString(),
       }
       Message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
-      requestAndNotify('批量分析已创建', { body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`, tag: 'batch-analyze' })
+      requestAndNotify('批量分析已创建', {
+        body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`,
+        tag: 'batch-analyze',
+      })
       startBatchPolling(created.task_id)
     } catch (e) {
       Message.error(getApiErrorMessage(e, '批量分析失败'))
@@ -157,13 +181,13 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   /** 轮询批量分析任务状态（约 1 秒一次），完成后刷新分析结果 */
   function startBatchPolling(taskId: number) {
     stopBatchPolling()
-    const seq = batchPollSeq  // 当前代际：stopBatchPolling 已自增，旧链的 seq 与之不符即失效
-    let consecutiveFailures = 0  // 连续失败次数，失败时有限次重试而非直接停止
+    const seq = batchPollSeq // 当前代际：stopBatchPolling 已自增，旧链的 seq 与之不符即失效
+    let consecutiveFailures = 0 // 连续失败次数，失败时有限次重试而非直接停止
     const poll = async () => {
-      if (seq !== batchPollSeq) return  // 已被 stop/新轮询取代，不再调度
+      if (seq !== batchPollSeq) return // 已被 stop/新轮询取代，不再调度
       try {
         const { data } = await apiClient.get<TaskInfo>(`/tasks/${taskId}`)
-        if (seq !== batchPollSeq) return  // 在途请求返回前已被停止，丢弃结果
+        if (seq !== batchPollSeq) return // 在途请求返回前已被停止，丢弃结果
         consecutiveFailures = 0
         batchTask.value = data
         if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
@@ -171,16 +195,19 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
           if (data.status === 'success') {
             const successCount = data.result?.success_count
             const failedCount = data.result?.failed_count
-            const detail = (successCount !== undefined && failedCount !== undefined)
-              ? `成功 ${successCount}，失败 ${failedCount}`
-              : '已完成'
+            const detail =
+              successCount !== undefined && failedCount !== undefined
+                ? `成功 ${successCount}，失败 ${failedCount}`
+                : '已完成'
             Message.success(`批量分析完成：${detail}`)
           } else if (data.status === 'failed') {
             Message.error(`批量分析失败：${data.error || '未知错误'}`)
           } else {
             Message.info('批量分析任务已取消')
           }
-          loadQueue(); options.loadHistory?.(); loadActiveAnalyses()
+          loadQueue()
+          options.loadHistory?.()
+          loadActiveAnalyses()
           return
         }
         batchPollTimer = setTimeout(poll, BATCH_POLL_MS)
@@ -216,8 +243,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
 
   /** 停止批量任务轮询（自增代际号，使当前轮询链失效） */
   function stopBatchPolling() {
-    batchPollSeq += 1  // 自增代际号，使当前轮询链失效，防止在途请求返回后重新调度
-    if (batchPollTimer) { clearTimeout(batchPollTimer); batchPollTimer = null }
+    batchPollSeq += 1 // 自增代际号，使当前轮询链失效，防止在途请求返回后重新调度
+    if (batchPollTimer) {
+      clearTimeout(batchPollTimer)
+      batchPollTimer = null
+    }
   }
 
   /** 恢复进行中的批量分析任务：刷新页面后查询是否有 pending/running 的批量分析任务并继续轮询 */
@@ -231,7 +261,9 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         batchTask.value = active
         startBatchPolling(active.id)
       }
-    } catch { /* 静默 */ }
+    } catch {
+      /* 静默 */
+    }
   }
 
   /** 单条失败记录重新加入分析队列 */
