@@ -32,9 +32,11 @@ logger = logging.getLogger(__name__)
 
 # 单次补全数量上限（规避风控；超出部分提示分批执行）
 MAX_ENRICH_PER_TASK = 20
-# 博主之间随机延时区间（秒，防风控）
-MIN_DELAY = 1.0
-MAX_DELAY = 2.0
+# 连续无结果阈值：达到后延时档位放大（小红书风控时搜索会静默返回无结果）
+CONSECUTIVE_EMPTY_THRESHOLD = 3
+# 延时档位（秒，依次放大）：基础 0.3~0.8（实验性放开）→ 1~2 → 2~4，
+# 命中结果后恢复基础档
+DELAY_ESCALATIONS = [(0.3, 0.8), (1.0, 2.0), (2.0, 4.0)]
 
 
 async def create_enrich_blogger_profile_task(
@@ -123,6 +125,7 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         skipped = 0
         failed = 0
         cancelled = False
+        consecutive_empty = 0  # 连续无结果计数（风控自适应降速）
         for idx, blogger_id in enumerate(ids, start=1):
             if await _is_cancelled(db, task):
                 cancelled = True
@@ -143,17 +146,25 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
                 results.append(result)
                 if result["status"] == "updated":
                     updated += 1
+                    consecutive_empty = 0
                 elif result["status"] == "skipped":
                     skipped += 1
+                    # 「搜索无结果/无法唯一确认」视为无命中：连续触发可能被风控限流
+                    consecutive_empty += 1
                 else:
                     failed += 1
             task.done = idx
             task.progress = round(idx / total * 100)
             task.updated_at = utcnow()
             await db.commit()
-            # 随机延时防风控（最后一个博主后可省）
+            # 随机延时防风控（最后一个博主后可省）；连续无结果自动降速
             if idx < total:
-                await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+                level = min(
+                    consecutive_empty // CONSECUTIVE_EMPTY_THRESHOLD,
+                    len(DELAY_ESCALATIONS) - 1,
+                )
+                lo, hi = DELAY_ESCALATIONS[level]
+                await asyncio.sleep(random.uniform(lo, hi))
     finally:
         try:
             await loop.run_in_executor(browser_executor, scraper.close_sync)

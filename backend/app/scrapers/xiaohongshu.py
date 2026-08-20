@@ -250,16 +250,25 @@ class XiaohongshuScraper(BaseScraper):
         try:
             logger.info(f"小红书用户搜索: {keyword}")
             self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            # 自适应等待（替代固定 sleep）：轮询直到「用户卡片出现 / 结果区渲染
+            # 但无卡片（无结果，提前退出）/ 登录墙 / 超时」。结果快时不等满固定时长
             import time
 
-            time.sleep(3)
-            # 登录墙检测：未登录时搜索页只显示「登录后查看搜索结果」，
-            # 不渲染任何结果（无意义的空结果会误导为「搜索无结果」）
-            body_text = (self._page.inner_text("body") or "")[:500]
-            if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
-                raise RuntimeError(
-                    "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
-                )
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                body_text = (self._page.inner_text("body") or "")[:500]
+                if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
+                    raise RuntimeError(
+                        "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
+                    )
+                if self._page.query_selector("div.user-item-box"):
+                    break  # 结果已渲染，立即继续
+                if self._page.query_selector("div.search-layout"):
+                    # 结果区域已渲染但尚无用户卡片：短暂确认后仍无则判定「无结果」提前退出
+                    time.sleep(0.5)
+                    if not self._page.query_selector("div.user-item-box"):
+                        break
+                time.sleep(0.4)
             # 用户卡片容错选择器（按命中率依次尝试）：
             # 优先搜索页「用户」卡片区（user-item-box，卡片内链接才是搜索结果用户），
             # 全局 user/profile 链接兜底（注意会包含笔记卡片的作者链接，需配合
@@ -270,9 +279,11 @@ class XiaohongshuScraper(BaseScraper):
                 "a[href^='/user/profile/']",
             ]
             links = []
-            for sel in selectors:
+            for idx, sel in enumerate(selectors):
                 try:
-                    self._page.wait_for_selector(sel, timeout=3000)
+                    # 首个选择器（用户卡片区）无结果时必超时，缩短等待减少无效耗时
+                    timeout_ms = 1500 if idx == 0 else 3000
+                    self._page.wait_for_selector(sel, timeout=timeout_ms)
                     links = self._page.query_selector_all(sel)
                     if links:
                         logger.info(f"用户搜索选择器 '{sel}' 命中 {len(links)} 个")
