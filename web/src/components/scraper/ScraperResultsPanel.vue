@@ -3,7 +3,8 @@
 
 import { useRouter } from 'vue-router'
 import { getFileUrl } from '@/api/inspirations'
-import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
+import LoadMoreBar from '@/components/common/LoadMoreBar.vue'
+import ThumbCard from '@/components/common/ThumbCard.vue'
 
 /** 结果条目：id/媒体类型/文件路径为通用字段，其余字段原样透传 */
 interface ResultItem {
@@ -18,7 +19,6 @@ defineProps<{
   items: ResultItem[]
   total: number
   loading: boolean
-  hasMore: boolean
   selectedIds: Set<string>
   deleting: boolean
 }>()
@@ -69,23 +69,25 @@ function previewSrc(item: ResultItem): string {
         :class="{ selected: selectedIds.has(item.id) }"
         @click="emit('toggle-select', item.id)"
       >
-        <HoverImagePreview :large-src="previewSrc(item)">
-          <video
-            v-if="item.media_type === 'video' && !item.thumbnail_path"
-            :src="getFileUrl(item.file_path)"
-            muted
-            playsinline
-            preload="metadata"
-          />
-          <img v-else :src="getFileUrl(item.thumbnail_path||item.file_path)" loading="lazy" />
-        </HoverImagePreview>
-        <div class="result-check"><a-checkbox :model-value="selectedIds.has(item.id)" size="small" /></div>
-        <a-button class="result-open" size="mini" type="text" @click.stop="openDetail(item.id)">查看详情</a-button>
+        <ThumbCard
+          :src="getFileUrl(item.thumbnail_path || item.file_path || '')"
+          :video-src="item.media_type === 'video' && !item.thumbnail_path ? getFileUrl(item.file_path || '') : undefined"
+          :selected="selectedIds.has(item.id)"
+          :hover-src="previewSrc(item)"
+        >
+          <template #extra>
+            <div class="result-check"><a-checkbox :model-value="selectedIds.has(item.id)" size="small" /></div>
+            <a-button class="result-open" size="mini" type="text" @click.stop="openDetail(item.id)">查看详情</a-button>
+          </template>
+        </ThumbCard>
       </div>
     </div>
-    <div v-if="hasMore" class="results-more">
-      <a-button size="small" :loading="loading" @click="emit('load-more')">加载更多</a-button>
-    </div>
+    <LoadMoreBar
+      :loading="loading"
+      :loaded="items.length"
+      :total="total"
+      @load-more="emit('load-more')"
+    />
   </a-spin>
 </div>
 </template>
@@ -99,15 +101,9 @@ function previewSrc(item: ResultItem): string {
 @media (max-width:1200px){.results-grid{grid-template-columns:repeat(5,1fr)}}
 @media (max-width:900px){.results-grid{grid-template-columns:repeat(4,1fr)}}
 @media (max-width:600px){.results-grid{grid-template-columns:repeat(3,1fr)}}
-.result-card{position:relative;aspect-ratio:3/4;overflow:hidden;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:border-color .15s;background:#f5f5f5}
-.result-card.selected{border-color:#2080f0}
-/* 悬停预览触发区域撑满卡片（HoverImagePreview 根元素），图片 100% 高度生效 */
-.result-card :deep(.hover-preview-trigger){height:100%}
-.result-card img,
-.result-card video{width:100%;height:100%;object-fit:cover}
+.result-card{position:relative;cursor:pointer;border-radius:6px}
+/* extra 插槽覆盖元素（勾选/详情按钮）定位与悬停显示；ThumbCard 负责媒体/选中框/悬停大图 */
 .result-check{position:absolute;top:4px;right:4px}
 .result-open{position:absolute;bottom:4px;left:4px;opacity:0;transition:opacity .15s;background:rgba(255,255,255,.85)}
 .result-card:hover .result-open{opacity:1}
-.results-more{display:flex;justify-content:center;margin-top:12px}
-/* 悬停大图浮层由通用组件 HoverImagePreview 承担 */
 </style>

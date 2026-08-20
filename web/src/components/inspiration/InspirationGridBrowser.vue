@@ -10,6 +10,7 @@
 import { computed, ref } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
+import LoadMoreBar from '@/components/common/LoadMoreBar.vue'
 
 /** 网格条目：id/缩略图/原图/媒体类型为通用字段，其余字段原样透传（如 quality_reason） */
 export interface GridBrowserItem {
@@ -183,11 +184,12 @@ function previewPath(item: GridBrowserItem): string {
         </div>
       </div>
 
-      <div v-if="items.length < total" style="text-align: center; padding: 12px">
-        <a-button size="small" :loading="loading" @click="emit('load-more')"
-          >加载更多（{{ items.length }}/{{ total }}）</a-button
-        >
-      </div>
+      <LoadMoreBar
+        :loading="loading"
+        :loaded="items.length"
+        :total="total"
+        @load-more="emit('load-more')"
+      />
     </a-spin>
   </div>
 </template>

@@ -44,7 +44,6 @@ const {
 
 const {
   resultsTaskId, resultsItems, resultsTotal, resultsLoading, selectedIds, deletingResults,
-  hasMoreResults,
   viewResults, loadMoreResults, toggleSelect, selectAll, deleteSelected,
 } = useScraperResults({ refreshTasks })
 
@@ -169,7 +168,6 @@ onUnmounted(() => { stopPoll() })
           :items="resultsItems"
           :total="resultsTotal"
           :loading="resultsLoading"
-          :has-more="hasMoreResults"
           :selected-ids="selectedIds"
           :deleting="deletingResults"
           @select-all="selectAll"

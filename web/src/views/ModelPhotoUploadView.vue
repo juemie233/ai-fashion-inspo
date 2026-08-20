@@ -12,6 +12,7 @@ import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
 import type { Person } from '@shared/types/person'
 import { getApiErrorMessage } from '@/utils/apiError'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
+import ThumbCard from '@/components/common/ThumbCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -252,7 +253,7 @@ async function startUpload() {
       item.status = 'uploading'
       item.progress = 0
       try {
-        await uploadModelPhoto(personId.value, set.id, item.file, i, (e: any) => {
+        await uploadModelPhoto(personId.value, set.id, item.file, i, (e) => {
           if (e?.total > 0) {
             item.progress = Math.min(100, Math.round((e.loaded / e.total) * 100))
           }
@@ -365,29 +366,27 @@ onUnmounted(() => {
       </template>
 
       <div class="preview-grid">
-        <div v-for="(p, i) in shownPhotos" :key="p.id" class="preview-item" :class="p.status">
-          <img
-            v-if="p.thumbUrl"
-            :ref="onImgMounted"
-            :data-thumb-id="p.id"
-            :src="p.thumbUrl"
-            :alt="p.file.name"
-          />
-          <div v-else class="thumb-placeholder">
-            <a-spin v-if="p.thumbLoading" :size="14" />
-          </div>
-          <div class="preview-index">{{ i + 1 }}</div>
-          <div v-if="p.status === 'uploading'" class="preview-mask">
-            <a-progress type="circle" :percent="p.progress / 100" :width="44" />
-          </div>
-          <div v-else-if="p.status === 'done'" class="preview-mask done">✓</div>
-          <div v-else-if="p.status === 'failed'" class="preview-mask failed" :title="p.errorMsg">
-            ✕
-          </div>
-          <div v-else-if="p.status === 'duplicate'" class="preview-mask dup" :title="p.errorMsg">
-            ⧉
-          </div>
-        </div>
+        <ThumbCard
+          v-for="(p, i) in shownPhotos"
+          :key="p.id"
+          :status="p.status"
+          :status-text="p.errorMsg"
+          :progress="p.status === 'uploading' ? p.progress : undefined"
+          :index="i + 1"
+        >
+          <template #media>
+            <img
+              v-if="p.thumbUrl"
+              :ref="onImgMounted"
+              :data-thumb-id="p.id"
+              :src="p.thumbUrl"
+              :alt="p.file.name"
+            />
+            <div v-else class="thumb-placeholder">
+              <a-spin v-if="p.thumbLoading" :size="14" />
+            </div>
+          </template>
+        </ThumbCard>
       </div>
 
       <!-- 分批加载：滚动到接近底部自动加载下一批；「加载更多」按钮兜底 -->
@@ -471,28 +470,14 @@ onUnmounted(() => {
   color: #9ca3af;
 }
 
-/* 预览网格 */
+/* 预览网格（卡片结构与状态遮罩由 ThumbCard 承担） */
 .preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 10px;
 }
 
-.preview-item {
-  position: relative;
-  aspect-ratio: 3 / 4;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #eef1f6;
-}
-
-.preview-item img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* 缩略图未生成时的占位 */
+/* 缩略图未生成时的占位（#media 插槽内容，ThumbCard 媒体区内） */
 .thumb-placeholder {
   position: absolute;
   inset: 0;
@@ -507,47 +492,6 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   padding: 14px 0 4px;
-}
-
-.preview-index {
-  position: absolute;
-  left: 4px;
-  bottom: 4px;
-  padding: 0 6px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 11px;
-}
-
-.preview-mask {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.preview-mask.done {
-  background: rgba(16, 185, 129, 0.35);
-  color: #065f46;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.preview-mask.failed {
-  background: rgba(239, 68, 68, 0.35);
-  color: #7f1d1d;
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.preview-mask.dup {
-  background: rgba(250, 204, 21, 0.4);
-  color: #713f12;
-  font-size: 28px;
-  font-weight: 700;
 }
 
 .upload-actions {

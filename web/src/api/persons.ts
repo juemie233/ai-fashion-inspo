@@ -1,5 +1,6 @@
 /** 人物相关 API 调用（穿搭博主 / 职业模特已拆分两表，工厂生成两组端点）。 */
 
+import type { AxiosProgressEvent } from 'axios'
 import apiClient from './client'
 import type {
   Blogger,
@@ -386,7 +387,7 @@ export async function uploadModelPhoto(
   setId: number,
   file: File,
   sortOrder: number,
-  onProgress?: (e: any) => void,
+  onProgress?: (e: AxiosProgressEvent) => void,
   signal?: AbortSignal,
 ): Promise<ModelPhoto> {
   const formData = new FormData()

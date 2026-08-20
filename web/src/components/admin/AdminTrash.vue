@@ -4,6 +4,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import ThumbCard from '@/components/common/ThumbCard.vue'
 import {
   fetchTrash,
   restoreInspiration,
@@ -195,47 +196,40 @@ async function cleanExpired() {
       </div>
       <div v-else class="grid">
         <div v-for="item in items" :key="item.id" class="trash-card">
-          <video
-            v-if="item.media_type === 'video' && !item.thumbnail_path"
-            :src="getFileUrl(item.file_path)"
-            muted
-            playsinline
-            preload="metadata"
-            class="thumb"
-          />
-          <img
-            v-else
+          <ThumbCard
             :src="getFileUrl(item.thumbnail_path || item.file_path)"
+            :video-src="item.media_type === 'video' && !item.thumbnail_path ? getFileUrl(item.file_path) : undefined"
             :alt="item.source_author || '垃圾桶素材'"
-            class="thumb"
-            loading="lazy"
-          />
-          <div class="meta">
-            <a-tag size="small" status="danger" :title="trashSourceFull(item)">
-              {{ trashSourceLabel(item) }}
-            </a-tag>
-            <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
-          </div>
-          <div class="actions">
-            <a-button
-              size="mini"
-              type="primary"
-              :loading="restoring.has(item.id)"
-              @click="restore(item.id)"
-            >
-              恢复
-            </a-button>
-            <a-popconfirm content="彻底删除后不可恢复，确定继续？" @ok="permanentDelete(item.id)">
-              <a-button
-                size="mini"
-                type="text"
-                status="danger"
-                :loading="deleting.has(item.id)"
-              >
-                彻底删除
-              </a-button>
-            </a-popconfirm>
-          </div>
+          >
+            <template #footer>
+              <div class="meta">
+                <a-tag size="small" status="danger" :title="trashSourceFull(item)">
+                  {{ trashSourceLabel(item) }}
+                </a-tag>
+                <span v-if="autoCleanupEnabled" class="days">剩余 {{ daysRemaining(item.deleted_at) }}</span>
+              </div>
+              <div class="actions">
+                <a-button
+                  size="mini"
+                  type="primary"
+                  :loading="restoring.has(item.id)"
+                  @click="restore(item.id)"
+                >
+                  恢复
+                </a-button>
+                <a-popconfirm content="彻底删除后不可恢复，确定继续？" @ok="permanentDelete(item.id)">
+                  <a-button
+                    size="mini"
+                    type="text"
+                    status="danger"
+                    :loading="deleting.has(item.id)"
+                  >
+                    彻底删除
+                  </a-button>
+                </a-popconfirm>
+              </div>
+            </template>
+          </ThumbCard>
         </div>
       </div>
     </a-spin>
@@ -283,13 +277,6 @@ async function cleanExpired() {
   background: var(--color-bg-2);
   display: flex;
   flex-direction: column;
-}
-.thumb {
-  width: 100%;
-  aspect-ratio: 3 / 4;
-  object-fit: cover;
-  display: block;
-  background: #f5f5f5;
 }
 .meta {
   display: flex;
