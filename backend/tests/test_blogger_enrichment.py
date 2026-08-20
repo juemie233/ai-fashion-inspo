@@ -413,6 +413,30 @@ async def test_enrich_skip_unskip_roundtrip(client):
     assert missing2["total"] == 1
 
 
+async def test_enrich_priority_two_missing_first(client):
+    """处理顺序：两项信息都缺失的博主优先于只缺一项的（本地互推类靠后）。"""
+    # 只缺 profile_url（有 platform_user_id → 本地互推可补，排在后面）
+    _create_blogger(client, "缺URL博", platform_user_id="uid111")
+    # 两项都缺（需要搜索，排在前面）
+    _create_blogger(client, "全缺博", xhs_id="xhs222")
+    # 只缺 platform_user_id（有 URL → 本地互推，排在后面）
+    _create_blogger(client, "缺ID博", profile_url="https://www.xiaohongshu.com/user/profile/uid333")
+
+    async with async_session() as db:
+        bloggers = await list_missing_profile_bloggers(db)
+        names = [b.name for b in bloggers]
+        # 两项都缺的「全缺博」必须在最前
+        assert names[0] == "全缺博"
+        assert names.index("全缺博") < names.index("缺URL博")
+        assert names.index("全缺博") < names.index("缺ID博")
+        # 其余顺序按 id（创建顺序）
+        assert set(names) == {"全缺博", "缺URL博", "缺ID博"}
+
+    # 前端缺失列表同样顺序
+    resp = client.get("/api/bloggers/missing-profile").json()
+    assert resp["items"][0]["name"] == "全缺博"
+
+
 async def test_enrich_task_missing_cookie_fails_fast(client):
     """未导入小红书 Cookie → 任务直接失败（不逐个跑登录墙），原因明确。"""
     _create_blogger(client, "无Cookie博", xhs_id="xhs555")

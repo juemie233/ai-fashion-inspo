@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import case, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -62,6 +62,18 @@ async def list_missing_profile_bloggers(
     )
     if blogger_ids:
         stmt = stmt.where(Blogger.id.in_(blogger_ids))
+    # 处理顺序：优先「两项信息都缺失」的博主（完全无法定位采集，最需要补全），
+    # 其次「缺一项」的（本地互推即可补全，随时可处理）
+    stmt = stmt.order_by(
+        case(
+            (
+                Blogger.profile_url.is_(None) & Blogger.platform_user_id.is_(None),
+                0,
+            ),
+            else_=1,
+        ),
+        Blogger.id,
+    )
     return list((await db.execute(stmt)).scalars().all())
 
 
