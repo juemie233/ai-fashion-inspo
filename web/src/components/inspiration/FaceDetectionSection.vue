@@ -153,18 +153,32 @@ function filterPersonOption(input: string, option: { label?: string }): boolean 
 /** 低置信度阈值：检测置信度低于该值的人脸不自动匹配（与后端 LOW_CONFIDENCE_THRESHOLD 一致） */
 const LOW_CONFIDENCE_THRESHOLD = 0.65
 
+/** 高置信度阈值：匹配相似度 ≥ 该值视为高置信度，直接展示「穿搭博主/职业模特」标签 */
+const HIGH_CONFIDENCE_THRESHOLD = 0.9
+
 /** 是否低置信度人脸（模糊/侧脸/小脸，未自动匹配） */
 function isLowConfidence(det: FaceDetectionOut): boolean {
   return det.det_score !== null && det.det_score < LOW_CONFIDENCE_THRESHOLD
 }
 
-/** 命中人物标签（博主或模特） */
-function matchedTag(det: FaceDetectionOut): { text: string; model: boolean } | null {
+/** 命中人物标签（穿搭博主/职业模特）：带人物类型前缀与高置信度标记 */
+function matchedTag(
+  det: FaceDetectionOut,
+): { text: string; model: boolean; high: boolean } | null {
+  const confidence = det.confidence ?? 0
   if (det.matched_blogger_id !== null) {
-    return { text: det.matched_blogger_name ?? `博主 #${det.matched_blogger_id}`, model: false }
+    return {
+      text: `穿搭博主 ${det.matched_blogger_name ?? `#${det.matched_blogger_id}`}`,
+      model: false,
+      high: confidence >= HIGH_CONFIDENCE_THRESHOLD,
+    }
   }
   if (det.matched_model_id !== null) {
-    return { text: det.matched_model_name ?? `模特 #${det.matched_model_id}`, model: true }
+    return {
+      text: `职业模特 ${det.matched_model_name ?? `#${det.matched_model_id}`}`,
+      model: true,
+      high: confidence >= HIGH_CONFIDENCE_THRESHOLD,
+    }
   }
   return null
 }
@@ -193,11 +207,13 @@ onMounted(() => {
     <div v-else class="face-list">
       <div v-for="det in detections" :key="det.id" class="face-item">
         <span class="face-index">人脸 #{{ det.face_index + 1 }}</span>
-        <a-tag v-if="matchedTag(det)" color="green" size="small">
+        <!-- 高置信度：直接显示「穿搭博主/职业模特」绿色标签；中低置信度蓝色提示待确认 -->
+        <a-tag v-if="matchedTag(det)" :color="matchedTag(det)?.high ? 'green' : 'arcoblue'" size="small">
           {{ matchedTag(det)?.text }}
           <template v-if="det.confidence !== null">
             （{{ (det.confidence * 100).toFixed(1) }}%）
           </template>
+          <template v-if="matchedTag(det) && !matchedTag(det)!.high">· 待确认</template>
         </a-tag>
         <a-tag v-else-if="isLowConfidence(det)" color="orange" size="small">
           低置信度人脸（{{ (det.det_score ?? 0).toFixed(2) }}），未自动匹配

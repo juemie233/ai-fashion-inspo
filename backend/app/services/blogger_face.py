@@ -24,13 +24,13 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
-from app.models.person import Blogger
+from app.models.person import Blogger, Model
 from app.services.face_client import (
     FaceServiceHttpError,
     FaceServiceUnavailableError,
     face_client,
 )
-from app.services.face_match import _bytes_to_embedding, matrix_match_faces
+from app.services.face_match import load_person_library, matrix_match_faces
 from app.utils.time import format_utc
 
 logger = logging.getLogger(__name__)
@@ -337,17 +337,9 @@ async def detect_inspiration_faces(
         raise HTTPException(status_code=503, detail=str(e)) from e
     faces = result.get("faces", [])
 
-    # 加载博主特征库（单素材检测保持只匹配博主的行为不变；匹配改为矩阵乘，
-    # 与全库匹配服务 face_match.matrix_match_faces 共用同一实现）
-    rows = await db.execute(select(BloggerFaceEmbedding))
-    library = [
-        {
-            "person_type": "blogger",
-            "person_id": r.blogger_id,
-            "embedding": _bytes_to_embedding(r.embedding),
-        }
-        for r in rows.scalars().all()
-    ]
+    # 加载人物特征库（博主 + 模特合并矩阵：ArcFace 同一特征空间，余弦可比，
+    # 一张人脸至多命中一种人物；与全库匹配服务 load_person_library 共用同一实现）
+    library = await load_person_library(db)
 
     # 清旧记录（重新检测覆盖）
     await db.execute(
@@ -378,11 +370,14 @@ async def detect_inspiration_faces(
 
     detections = []
     for idx, face, match in zip(range(len(faces)), faces, match_results):
-        if match is None:
-            matched_blogger_id: int | None = None
-            best_score: float | None = None
-        else:
-            matched_blogger_id = match["person_id"]
+        matched_blogger_id: int | None = None
+        matched_model_id: int | None = None
+        best_score: float | None = None
+        if match is not None:
+            if match["person_type"] == "blogger":
+                matched_blogger_id = match["person_id"]
+            else:
+                matched_model_id = match["person_id"]
             best_score = round(match["score"], 4)
         det = InspirationFaceDetection(
             inspiration_id=inspiration_id,
@@ -397,6 +392,7 @@ async def detect_inspiration_faces(
                 else None
             ),
             matched_blogger_id=matched_blogger_id,
+            matched_model_id=matched_model_id,
             confidence=best_score,
         )
         db.add(det)
@@ -404,7 +400,24 @@ async def detect_inspiration_faces(
 
     await db.commit()
 
-    # 组装返回（含博主名）
+    # 组装返回（含人物名称：检测接口此前缺名称，前端回退显示「博主 #id」）
+    blogger_ids = {
+        d.matched_blogger_id for d in detections if d.matched_blogger_id is not None
+    }
+    model_ids = {d.matched_model_id for d in detections if d.matched_model_id is not None}
+    blogger_names: dict[int, str] = {}
+    model_names: dict[int, str] = {}
+    if blogger_ids:
+        rows = await db.execute(
+            select(Blogger.id, Blogger.name).where(Blogger.id.in_(blogger_ids))
+        )
+        blogger_names = dict(rows.all())
+    if model_ids:
+        rows = await db.execute(
+            select(Model.id, Model.name).where(Model.id.in_(model_ids))
+        )
+        model_names = dict(rows.all())
+
     return {
         "inspiration_id": inspiration_id,
         "face_count": len(detections),
@@ -414,7 +427,19 @@ async def detect_inspiration_faces(
                 "face_index": d.face_index,
                 "det_score": d.det_score,
                 "matched_blogger_id": d.matched_blogger_id,
+                "matched_blogger_name": (
+                    blogger_names.get(d.matched_blogger_id)
+                    if d.matched_blogger_id is not None
+                    else None
+                ),
+                "matched_model_id": d.matched_model_id,
+                "matched_model_name": (
+                    model_names.get(d.matched_model_id)
+                    if d.matched_model_id is not None
+                    else None
+                ),
                 "confidence": d.confidence,
+                "created_at": format_utc(d.created_at),
             }
             for d in detections
         ],
