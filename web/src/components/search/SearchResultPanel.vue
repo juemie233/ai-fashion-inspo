@@ -173,6 +173,7 @@ const sortModeModel = computed({
         :loading="searching"
         :density="density"
         :badges="vectorMode !== 'none' ? vectorBadges : undefined"
+        :hover-zoom="true"
         @delete="emit('delete', $event)"
         @toggle-favorite="emit('toggleFavorite', $event)"
         @rate="(id: string, v: number) => emit('rate', id, v)"
