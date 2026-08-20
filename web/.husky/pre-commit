@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# 提交前质量门禁：对本次暂存的前端文件运行 lint-staged（eslint --fix + prettier --write）。
+# hook 执行时 cwd 为 git 仓库根，先切到 web 目录再执行。
+cd "$(dirname "$0")/.." && npx lint-staged

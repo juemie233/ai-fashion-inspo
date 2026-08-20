@@ -12,7 +12,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write",
     "format:all": "prettier --write src",
-    "format:check": "prettier --check src"
+    "format:check": "prettier --check src",
+    "prepare": "husky"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.58.0",
@@ -32,6 +33,8 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.10.0",
     "happy-dom": "^20.11.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
     "prettier": "^3.9.6",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.67.0",
@@ -42,5 +45,11 @@
   "allowScripts": {
     "esbuild@0.25.12": true,
     "vue-demi@0.14.10": true
+  },
+  "lint-staged": {
+    "*.{ts,tsx,vue,js,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ]
   }
 }

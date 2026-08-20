@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# 提交信息格式校验（与 CLAUDE.md「Git 提交格式」约定一致）。
+# git 调用 hook 时 cwd 为仓库根，$1 为相对仓库根的提交信息文件路径，
+# 先取根路径再切到 web 目录交给 Node 脚本。
+ROOT="$(pwd)"
+cd "$(dirname "$0")/.." && node scripts/check-commit-msg.mjs "$ROOT/$1"
