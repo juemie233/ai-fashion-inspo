@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +26,7 @@ from app.services.blogger_enrichment_service import (
     enrich_one,
     list_missing_profile_bloggers,
 )
-from app.services.task_runners.common import utcnow
+from app.services.task_runners.common import PermanentTaskError, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,17 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
 
     from app.scrapers.xiaohongshu import XiaohongshuScraper
 
+    # 小红书搜索需要登录态：加载采集管理导入的 Cookie，缺失/无效时快速失败
+    # （避免 20 个博主全部跑一遍登录墙才报错，浪费时长且原因不明确）
+    cookie_path = Path(settings.storage_root) / "cookies" / "xiaohongshu_cookies.json"
+    if not cookie_path.exists():
+        raise PermanentTaskError(
+            "未找到小红书 Cookie（storage/cookies/xiaohongshu_cookies.json），"
+            "请先在采集管理页导入小红书 Cookie 后重试"
+        )
     scraper = XiaohongshuScraper(
-        headless=settings.scraper_browser_headless, cookie_file=None
+        headless=settings.scraper_browser_headless,
+        cookie_file=str(cookie_path),
     )
     results: list[dict] = []
     updated = 0

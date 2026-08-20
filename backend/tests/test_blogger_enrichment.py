@@ -5,8 +5,10 @@
 """
 
 import pytest
+from pathlib import Path
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import async_session
 from app.models.person import Blogger
 from app.models.task import TaskQueue
@@ -16,11 +18,20 @@ from app.services.blogger_enrichment_service import (
     extract_user_id_from_url,
     list_missing_profile_bloggers,
 )
+from app.services.task_runners.common import PermanentTaskError
 from app.services.task_runners.enrich_blogger_profile import (
     MAX_ENRICH_PER_TASK,
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
 )
+
+
+def _create_fake_cookie() -> Path:
+    """创建小红书假 Cookie 文件（执行器前置检查用，仅需存在）。"""
+    path = Path(settings.storage_root) / "cookies" / "xiaohongshu_cookies.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("[]", encoding="utf-8")
+    return path
 
 
 def _create_blogger(client, name, xhs_id=None, profile_url=None, platform_user_id=None):
@@ -189,6 +200,20 @@ async def test_enrich_missing_xhs_id_failed(client):
     assert "缺少小红书号" in result["reason"]
 
 
+async def test_enrich_login_wall_failure_reason(client):
+    """搜索遇登录墙（未登录）→ failed 且原因明确提示未登录。"""
+    b = _create_blogger(client, "登录博", xhs_id="xhs111")
+
+    async def fake_search(keyword):
+        raise RuntimeError("小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie")
+
+    async with async_session() as db:
+        blogger = await db.get(Blogger, b["id"])
+        result = await enrich_one(db, blogger, search_users=fake_search)
+    assert result["status"] == "failed"
+    assert "未登录" in result["reason"]
+
+
 # ═══════════════════════════════════════════════════════════════
 #  接口与任务执行
 # ═══════════════════════════════════════════════════════════════
@@ -209,6 +234,7 @@ def test_enrich_api_invalid_blogger_ids(client):
 
 async def test_enrich_api_and_execute(client):
     """接口创建任务 → 执行器补全（本地互推博主成功、搜索博主失败）→ 明细与进度。"""
+    _create_fake_cookie()
     _create_blogger(client, "本地博", profile_url="https://www.xiaohongshu.com/user/profile/uid1")
     _create_blogger(client, "搜索博", xhs_id="xhs777")
 
@@ -285,6 +311,7 @@ async def test_enrich_task_scope_and_cap(client):
 
 async def test_enrich_task_failure_does_not_block(client, monkeypatch):
     """单博主失败不阻塞整体：失败原因记录，其余继续。"""
+    _create_fake_cookie()
     _create_blogger(client, "成功博", profile_url="https://www.xiaohongshu.com/user/profile/ok1")
     _create_blogger(client, "失败博", xhs_id="xhs404")
 
@@ -312,3 +339,17 @@ async def test_enrich_task_failure_does_not_block(client, monkeypatch):
         assert by_name["成功博"]["status"] == "updated"
         assert by_name["失败博"]["status"] == "failed"
         assert "无结果" in by_name["失败博"]["reason"]
+
+
+async def test_enrich_task_missing_cookie_fails_fast(client):
+    """未导入小红书 Cookie → 任务直接失败（不逐个跑登录墙），原因明确。"""
+    _create_blogger(client, "无Cookie博", xhs_id="xhs555")
+    # 确保 cookie 文件不存在（本测试不创建）
+    cookie = Path(settings.storage_root) / "cookies" / "xiaohongshu_cookies.json"
+    if cookie.exists():
+        cookie.unlink()
+
+    async with async_session() as db:
+        task, _ = await create_enrich_blogger_profile_task(db, None)
+        with pytest.raises(PermanentTaskError, match="Cookie"):
+            await execute_enrich_blogger_profile(db, task)

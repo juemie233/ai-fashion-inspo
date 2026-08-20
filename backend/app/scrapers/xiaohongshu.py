@@ -185,6 +185,13 @@ class XiaohongshuScraper(BaseScraper):
                 import time
 
                 time.sleep(3)
+                # 登录墙检测：未登录时搜索页只显示「登录后查看搜索结果」，
+                # 不渲染任何结果（无意义的空结果会误导为「搜索无结果」）
+                body_text = (self._page.inner_text("body") or "")[:500]
+                if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
+                    raise RuntimeError(
+                        "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
+                    )
                 # 用户卡片容错选择器（按命中率依次尝试）
                 selectors = [
                     "a[href*='/user/profile/']",
