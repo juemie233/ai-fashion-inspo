@@ -70,7 +70,11 @@ function openDetail(id: string) {
 .results-panel{margin-top:16px;border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff}
 .results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:14px;font-weight:600}
 .results-empty{text-align:center;color:#999;padding:32px 0;font-size:13px}
-.results-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;max-height:72vh;overflow-y:auto;padding:4px}
+/* 结果网格：桌面端固定六列（≥1200px），窄屏按档位降列 */
+.results-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;max-height:72vh;overflow-y:auto;padding:4px}
+@media (max-width:1200px){.results-grid{grid-template-columns:repeat(5,1fr)}}
+@media (max-width:900px){.results-grid{grid-template-columns:repeat(4,1fr)}}
+@media (max-width:600px){.results-grid{grid-template-columns:repeat(3,1fr)}}
 .result-card{position:relative;aspect-ratio:3/4;overflow:hidden;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:border-color .15s;background:#f5f5f5}
 .result-card.selected{border-color:#2080f0}
 .result-card img,
