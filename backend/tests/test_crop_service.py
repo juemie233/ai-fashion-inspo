@@ -260,6 +260,11 @@ def test_status_bar_correction_top_residual():
     d1 = np.array([0.19, 0.20] + [0.30, 0.31, 0.29, 0.33, 0.32] * 30)
     assert _status_bar_correction(d1, 0) == 2
 
+    # 场景 1b：顶格残留较厚（5 行，d 0.16~0.27，透明状态栏图标下沿）
+    # 后随内容区（d≈0.36）→ 修正到行 5（实测 51e564d6 类需裁 5 行才干净）
+    d1b = np.array([0.16, 0.20, 0.24, 0.27, 0.25] + [0.36] * 80)
+    assert _status_bar_correction(d1b, 0) == 5
+
     # 场景 2：顶格但内容直接开始（d 高，无残留）→ 不修正
     d2 = np.array([0.30, 0.31, 0.29, 0.33, 0.32] * 32)
     assert _status_bar_correction(d2, 0) == 0

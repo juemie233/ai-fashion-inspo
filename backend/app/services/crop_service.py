@@ -187,6 +187,10 @@ _STATUS_BAR_MED = 0.25
 _STATUS_BAR_RATIO = 1.25
 _STATUS_BAR_SCAN_FRACTION = 0.08
 _STATUS_BAR_SEARCH_FRACTION = 0.2
+# 已裁截图顶格状态栏残留的簇多样度上限：透明状态栏图标叠加在照片上，
+# 残留行多样度实测 0.16~0.27（如 51e564d6 类，仅裁 2 行会残留图标下沿），
+# 用 0.28 完整框住残留簇（普通照片顶部自然波动由「后随内容显著更高」兜底）
+_RESIDUAL_MED = 0.28
 # 灰带判定（0~1 归一化）：低饱和 + 亮度平坦（纹理少）
 _SAT_GRAY = 0.2
 _GRAY_BAND_STD_MAX = 0.06
@@ -378,15 +382,17 @@ def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
         return top_edge
 
     if top_edge == 0:
-        # 已裁截图的状态栏残留：顶部低多样度簇（< 0.24）顶格，
+        # 已裁截图的状态栏残留：顶部低多样度簇（< _RESIDUAL_MED）顶格，
         # 其后 30% 高度内内容中位显著更高 → 给出再次裁剪建议
         seg_end = 0
-        while seg_end + 1 < window and diversity[seg_end + 1] < _STATUS_BAR_MED:
+        while seg_end + 1 < window and diversity[seg_end + 1] < _RESIDUAL_MED:
             seg_end += 1
         if seg_end < 1:  # 簇至少 2 行才有意义
             return top_edge
         first_med = float(np.median(diversity[0 : seg_end + 1]))
-        if first_med >= _STATUS_BAR_MED - 0.03:
+        # 残留簇中位上限：透明状态栏残留行中位实测可达 0.24（图标下沿渐变），
+        # 上限取 _RESIDUAL_MED - 0.02（0.26），普通内容顶部波动（≥0.26）不修正
+        if first_med >= _RESIDUAL_MED - 0.02:
             return top_edge
         tail = diversity[seg_end + 1 : min(n, seg_end + 1 + int(n * 0.3))]
         if len(tail) < 5 or float(np.median(tail)) < first_med + 0.08:
@@ -472,6 +478,18 @@ def detect_content_bounds(path: Path) -> dict:
         raise ValueError("未检测到内容区边界")
     top_edge = _status_bar_correction(diversity, top_edge_raw)
     correction = top_edge != top_edge_raw
+
+    # 底部边界微调：播放器条/导航栏顶部常为半透明渐变过渡（亮度骤降但多样度
+    # 仍 ≥0.15），content_bounds 会把过渡行算进内容区，裁后残留暗带。
+    # 若 bottom_edge 行亮度显著低于其上方内容（< 中位 × 0.8），向上回退到
+    # 亮度恢复正常处（最多回退 3 行，防误伤照片暗部）。
+    if bottom_edge >= 5:
+        ref = float(np.median(brightness[max(0, bottom_edge - 20) : bottom_edge]))
+        y = bottom_edge
+        while y > 0 and brightness[y] < ref * 0.8:
+            y -= 1
+        if bottom_edge - y <= 3:
+            bottom_edge = y
 
     # 内容区占比下限校验（防灰带过厚/内容区过小误判）
     frac = (bottom_edge - top_edge + 1) / n
