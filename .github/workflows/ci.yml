@@ -1,0 +1,70 @@
+name: CI
+
+# 质量门禁：push / PR 到主分支时自动执行前端 lint+类型+测试+构建 与 后端全量测试。
+# 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  web:
+    name: Web 前端（lint / 测试 / 构建）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      # 前端构建时 vite 会调用 scripts/compute_schema_version.py 计算 schema 握手版本，
+      # 该脚本 import 后端 app.config（pydantic-settings）与 db_migrations（aiosqlite），
+      # 只需这两个轻量依赖即可在 CI 中完成真实注入。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装 schema 版本注入所需的后端轻依赖
+        run: pip install aiosqlite pydantic-settings
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: 单元测试（vitest）
+        run: npm test
+
+      - name: 类型检查 + 构建（vue-tsc && vite build）
+        run: npm run build
+
+  backend:
+    name: 后端（pytest 全量）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 安装依赖
+        run: pip install -r requirements-dev.txt
+
+      # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
+      # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
+      - name: pytest 全量
+        run: python -m pytest -q

@@ -254,8 +254,9 @@ async function startUpload() {
       item.progress = 0
       try {
         await uploadModelPhoto(personId.value, set.id, item.file, i, (e) => {
-          if (e?.total > 0) {
-            item.progress = Math.min(100, Math.round((e.loaded / e.total) * 100))
+          const total = e?.total
+          if (total && total > 0) {
+            item.progress = Math.min(100, Math.round((e.loaded / total) * 100))
           }
         })
         item.status = 'done'
