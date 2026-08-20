@@ -7,8 +7,9 @@
  * 避免重复实现网格交互（跳详情、悬停大图预览、多选、密度切换、加载更多）。
  */
 
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
+import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 
 /** 网格条目：id/缩略图/原图/媒体类型为通用字段，其余字段原样透传（如 quality_reason） */
 export interface GridBrowserItem {
@@ -88,38 +89,11 @@ function fileUrl(item: GridBrowserItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path || '')
 }
 
-// ===== 悬停快速预览：停留后屏幕中央弹出大图（复用标签分析历史卡片的交互） =====
-/** 当前预览大图路径（null = 关闭） */
-const hoverPreviewPath = ref<string | null>(null)
-/** 悬停停留计时器：短暂停留才弹出预览，扫过网格时不闪烁 */
-let hoverPreviewTimer: number | null = null
-
-/** 预览用大图路径：视频素材回退首帧缩略图，图片用原图保证清晰 */
+/** 悬停预览用大图路径：视频素材回退首帧缩略图，图片用原图保证清晰（由 HoverImagePreview 组件驱动） */
 function previewPath(item: GridBrowserItem): string {
   if (item.media_type === 'video') return item.thumbnail_path || item.file_path || ''
   return item.file_path || item.thumbnail_path || ''
 }
-
-/** 鼠标进入卡片：短暂停留后显示居中大图预览 */
-function startHoverPreview(item: GridBrowserItem) {
-  clearHoverPreview()
-  const path = previewPath(item)
-  if (!path) return
-  hoverPreviewTimer = window.setTimeout(() => {
-    hoverPreviewPath.value = path
-  }, 250)
-}
-
-/** 清除预览与计时器 */
-function clearHoverPreview() {
-  if (hoverPreviewTimer !== null) {
-    window.clearTimeout(hoverPreviewTimer)
-    hoverPreviewTimer = null
-  }
-  hoverPreviewPath.value = null
-}
-
-onBeforeUnmount(clearHoverPreview)
 </script>
 
 <template>
@@ -173,12 +147,8 @@ onBeforeUnmount(clearHoverPreview)
           :class="{ 'is-selected': selectedIds.has(item.id) }"
           @click="emit('open-detail', item)"
         >
-          <!-- 图片区域：干净展示，悬停停留弹出大图预览 -->
-          <div
-            class="image-wrap"
-            @mouseenter="startHoverPreview(item)"
-            @mouseleave="clearHoverPreview"
-          >
+          <!-- 图片区域：干净展示，悬停停留弹出大图预览（HoverImagePreview 通用组件驱动） -->
+          <HoverImagePreview class="image-wrap" :large-src="getFileUrl(previewPath(item))">
             <video
               v-if="item.media_type === 'video' && !item.thumbnail_path"
               :src="getFileUrl(item.file_path || '')"
@@ -199,7 +169,7 @@ onBeforeUnmount(clearHoverPreview)
 
             <!-- 选中遮罩 -->
             <div v-if="selectedIds.has(item.id)" class="card-selected-mask" />
-          </div>
+          </HoverImagePreview>
 
           <!-- 操作按钮区：多选勾选 + 父组件注入的操作按钮，独立显示在图片下方（常显） -->
           <div class="card-actions" @click.stop>
@@ -219,15 +189,6 @@ onBeforeUnmount(clearHoverPreview)
         >
       </div>
     </a-spin>
-
-    <!-- 悬停快速预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡网格操作 -->
-    <Teleport to="body">
-      <div v-if="hoverPreviewPath" class="hover-preview-layer">
-        <div class="hover-preview-panel">
-          <img :src="getFileUrl(hoverPreviewPath)" alt="悬停大图预览" />
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
@@ -349,45 +310,7 @@ onBeforeUnmount(clearHoverPreview)
   z-index: 1;
 }
 
-/* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */
-.hover-preview-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 2500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 指针穿透：预览浮层不拦截任何鼠标事件，网格可正常点击/悬停 */
-  pointer-events: none;
-}
-
-.hover-preview-panel {
-  max-width: 90vw;
-  max-height: 88vh;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #fff;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
-  animation: hover-preview-in 0.15s ease;
-}
-
-.hover-preview-panel img {
-  display: block;
-  max-width: 90vw;
-  max-height: 88vh;
-  object-fit: contain;
-}
-
-@keyframes hover-preview-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
+/* 悬停大图预览由通用组件 HoverImagePreview 承担（fixed 浮层样式在组件内） */
 
 @media (max-width: 900px) {
   .image-grid {
