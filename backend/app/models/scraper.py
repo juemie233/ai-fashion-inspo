@@ -70,3 +70,33 @@ class ScraperSchedule(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class ScraperHashtag(Base):
+    """采集话题标签存档：详情页正文提取的 #话题 全局去重存档。
+
+    供「话题 → 定时采集关键词」闭环：发现博主常发话题 → 作为搜索关键词
+    建定时采集任务。仅存档采集上下文（不进入素材标签体系）。
+
+    - name 全局唯一（去 #、strip 后），重复出现累加 seen_count
+    - source_kind：blogger（先落地）/ search（预留）
+    - source_meta：JSON，最近若干条来源明细（保留 10 条，防膨胀）
+    """
+
+    __tablename__ = "scraper_hashtags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # 话题词（去 #）
+    seen_count: Mapped[int] = mapped_column(Integer, default=1)  # 累计出现次数
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now()
+    )
+    source_kind: Mapped[str] = mapped_column(
+        String(16), default="blogger", index=True
+    )  # blogger | search（预留）
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 博主 id 或任务 id
+    note_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # 最近来源笔记链接
+    source_meta: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON 来源明细

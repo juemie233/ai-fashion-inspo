@@ -46,6 +46,7 @@ _ALL_TABLES = [
     "scraper_seen_urls",
     "scraper_schedules",
     "scraper_tasks",
+    "scraper_hashtags",
     "task_queue",
     "pending_vector_backfills",
     "service_heartbeats",

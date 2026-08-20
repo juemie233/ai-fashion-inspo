@@ -426,6 +426,99 @@ def _search_xiaohongshu(page, keyword: str, need_count: int, sort_type: str = "g
 #  下载
 # ═══════════════════════════════════════════════════════════════
 
+# 单条话题的来源明细保留条数（防 source_meta 无限膨胀）
+_HASHTAG_META_MAX = 10
+# 每篇笔记提取的话题数上限（防脏数据）
+_HASHTAG_PER_NOTE_MAX = 20
+# 本次脚本会话累计处理的话题数（含重复命中，供任务完成日志统计）
+_HASHTAG_SAVED_COUNT = [0]
+
+
+def _ensure_hashtag_table(conn) -> None:
+    """确保话题存档表存在（脚本独立进程兜底；主库由 Alembic 迁移建表）。"""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS scraper_hashtags ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name VARCHAR(64) NOT NULL UNIQUE, "
+            "seen_count INTEGER NOT NULL DEFAULT 1, "
+            "first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "source_kind VARCHAR(16) NOT NULL DEFAULT 'blogger', "
+            "source_id INTEGER, "
+            "note_url TEXT, "
+            "source_meta TEXT)"
+        )
+        conn.commit()
+    except Exception:
+        pass  # 建表失败不阻塞采集主流程（后续写入同样静默跳过）
+
+
+def _save_hashtags(conn, meta: dict | None, note_url: str) -> int:
+    """把一篇笔记的话题 upsert 进 scraper_hashtags（同笔记只处理一次）。
+
+    幂等：meta["hashtags_saved"] 标记——同一笔记的图片/视频多次入库时
+    只累计一次计数。返回本次处理的话题数（0 = 已处理/无话题）。
+
+    Args:
+        conn: 攒批提交用的 sqlite 连接（与素材入库同连接，事务一致）。
+        meta: meta_map 中该笔记的元数据（含 caption/blogger_id/tags）。
+        note_url: 笔记页面 URL（作为来源明细记录）。
+    """
+    if not meta or meta.get("hashtags_saved"):
+        return 0
+    tags = meta.get("tags") or []
+    meta["hashtags_saved"] = True  # 先标记：即使后续失败也不再重复处理
+    if not tags:
+        return 0
+    now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    kind = meta.get("source_kind", "blogger")
+    source_id = meta.get("blogger_id")
+    saved = 0
+    for tag in tags[:_HASHTAG_PER_NOTE_MAX]:
+        name = (tag or "").strip().lstrip("#").strip()
+        if not name or len(name) > 64:
+            continue
+        try:
+            row = conn.execute(
+                "SELECT seen_count, source_meta FROM scraper_hashtags WHERE name = ?",
+                (name,),
+            ).fetchone()
+            item = {
+                "kind": kind,
+                "id": source_id,
+                "note_url": note_url,
+                "at": now_str,
+            }
+            if row is None:
+                conn.execute(
+                    "INSERT INTO scraper_hashtags "
+                    "(name, seen_count, last_seen_at, source_kind, source_id, "
+                    " note_url, source_meta) "
+                    "VALUES (?, 1, ?, ?, ?, ?, ?)",
+                    (name, now_str, kind, source_id, note_url,
+                     json.dumps([item], ensure_ascii=False)),
+                )
+            else:
+                try:
+                    items = json.loads(row[1]) if row[1] else []
+                except Exception:
+                    items = []
+                items = (items + [item])[-_HASHTAG_META_MAX:]
+                conn.execute(
+                    "UPDATE scraper_hashtags SET seen_count = seen_count + 1, "
+                    "last_seen_at = ?, source_kind = ?, source_id = ?, "
+                    "note_url = ?, source_meta = ? WHERE name = ?",
+                    (now_str, kind, source_id, note_url,
+                     json.dumps(items, ensure_ascii=False), name),
+                )
+            saved += 1
+            _HASHTAG_SAVED_COUNT[0] += 1
+        except Exception:
+            pass  # 话题写入失败不影响采集主流程
+    return saved
+
+
 def _download_batch(
     urls: list[tuple[str, str]],
     task_id: int,
@@ -519,6 +612,7 @@ def _download_batch(
     backfill_ids: list[str] = []
     try:
         batch_conn = _sqlite3.connect(str(db_path))
+        _ensure_hashtag_table(batch_conn)  # 话题存档表兜底（独立进程）
     except Exception:
         batch_conn = None
 
@@ -603,6 +697,7 @@ def _download_batch(
                     meta = meta_map.get(note_url) if meta_map else None
                     caption_val = (meta or {}).get("caption")
                     blogger_id = (meta or {}).get("blogger_id")
+                    _save_hashtags(batch_conn, meta, note_url)  # 话题存档（幂等，每笔记一次）
                     batch_conn.execute(
                         "INSERT INTO inspirations (id, source_type, source_url, file_path, "
                         "thumbnail_path, media_type, dominant_colors, is_favorite, "
@@ -739,6 +834,7 @@ def _download_videos(
     batch_conn = None
     try:
         batch_conn = _sqlite3.connect(str(db_path))
+        _ensure_hashtag_table(batch_conn)  # 话题存档表兜底（独立进程）
     except Exception:
         batch_conn = None
 
@@ -794,6 +890,7 @@ def _download_videos(
             meta = meta_map.get(note_url) if meta_map else None
             caption_val = (meta or {}).get("caption")
             blogger_id = (meta or {}).get("blogger_id")
+            _save_hashtags(batch_conn, meta, note_url)  # 话题存档（幂等，每笔记一次）
             batch_conn.execute(
                 "INSERT INTO inspirations (id, source_type, source_url, file_path, "
                 "thumbnail_path, media_type, dominant_colors, is_favorite, "
@@ -900,7 +997,12 @@ def _run_blogger_mode(
             continue
 
         caption = detail.get("caption") or ""
-        meta_map[note_url] = {"caption": caption, "blogger_id": blogger_id}
+        meta_map[note_url] = {
+            "caption": caption,
+            "blogger_id": blogger_id,
+            "tags": detail.get("tags") or [],  # 话题存档（scraper_hashtags）
+            "hashtags_saved": False,
+        }
 
         img_pairs = [(note_url, u) for u in detail.get("img_urls") or []]
         video_pairs = [(note_url, u) for u in detail.get("video_urls") or []]
@@ -945,6 +1047,8 @@ def _run_blogger_mode(
         # 详情页访问间隔（防风控，默认 2~4s 随机）
         time.sleep(random.uniform(max(1.0, detail_delay - 1.0), detail_delay + 1.0))
 
+    if _HASHTAG_SAVED_COUNT[0] > 0:
+        print(f"本次采集命中话题 {_HASHTAG_SAVED_COUNT[0]} 个（已存档 scraper_hashtags，可用于定时采集关键词）")
     return items_found, items_added, notes_log
 
 

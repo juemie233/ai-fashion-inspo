@@ -460,3 +460,37 @@ class TestBloggerModeTask:
         )
         assert r.status_code == 400
         assert "主页信息" in r.json()["detail"]
+
+
+async def test_scraper_hashtags_api(client):
+    """话题存档接口：热度排序、min_count 过滤、来源博主名。"""
+    from app.database import async_session
+    from app.models.scraper import ScraperHashtag
+
+    async with async_session() as db:
+        db.add_all(
+            [
+                ScraperHashtag(name="早秋穿搭", seen_count=5, source_kind="blogger", source_id=None),
+                ScraperHashtag(name="OOTD", seen_count=2, source_kind="blogger", source_id=None),
+                ScraperHashtag(name="小众设计", seen_count=1, source_kind="blogger", source_id=None),
+            ]
+        )
+        await db.commit()
+
+    # 默认按热度降序
+    r = client.get("/api/scraper/hashtags").json()
+    assert [i["name"] for i in r["items"]] == ["早秋穿搭", "OOTD", "小众设计"]
+    assert r["items"][0]["seen_count"] == 5
+    assert r["total"] == 3
+
+    # min_count 过滤低频噪音
+    r2 = client.get("/api/scraper/hashtags", params={"min_count": 2}).json()
+    assert [i["name"] for i in r2["items"]] == ["早秋穿搭", "OOTD"]
+
+    # recent 排序 + limit
+    r3 = client.get("/api/scraper/hashtags", params={"sort": "recent", "limit": 2}).json()
+    assert len(r3["items"]) == 2
+
+    # 无效 sort 参数 → 422
+    r4 = client.get("/api/scraper/hashtags", params={"sort": "bad"})
+    assert r4.status_code == 422

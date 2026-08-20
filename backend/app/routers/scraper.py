@@ -26,6 +26,61 @@ async def scraper_sources() -> dict:
     return await scraper_service.get_scraper_sources()
 
 
+@router.get("/hashtags")
+async def scraper_hashtags(
+    sort: str = Query("count", pattern="^(count|recent)$"),
+    min_count: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """采集话题标签存档：详情页提取的 #话题 全局去重统计。
+
+    供「话题 → 定时采集关键词」闭环：定时计划配置页按热度勾选话题
+    写入计划 keywords。sort=count（按出现次数）/ recent（按最近出现）。
+    """
+    from sqlalchemy import select
+
+    from app.models.person import Blogger
+    from app.models.scraper import ScraperHashtag
+
+    stmt = (
+        select(
+            ScraperHashtag.name,
+            ScraperHashtag.seen_count,
+            ScraperHashtag.last_seen_at,
+            ScraperHashtag.source_kind,
+            ScraperHashtag.source_id,
+            Blogger.name.label("blogger_name"),
+        )
+        .outerjoin(Blogger, Blogger.id == ScraperHashtag.source_id)
+        .where(ScraperHashtag.seen_count >= min_count)
+    )
+    if sort == "recent":
+        stmt = stmt.order_by(
+            ScraperHashtag.last_seen_at.desc(), ScraperHashtag.seen_count.desc()
+        )
+    else:
+        stmt = stmt.order_by(
+            ScraperHashtag.seen_count.desc(), ScraperHashtag.last_seen_at.desc()
+        )
+    stmt = stmt.limit(limit)
+    rows = (await db.execute(stmt)).all()
+    return {
+        "items": [
+            {
+                "name": r[0],
+                "seen_count": r[1],
+                "last_seen_at": r[2].isoformat() if r[2] else None,
+                "source_kind": r[3],
+                "source_id": r[4],
+                "blogger_name": r[5],
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
 @router.get("/stats")
 async def scraper_stats(days: int = 30) -> dict:
     """采集任务统计看板：近 N 天的总量/成功率/按平台与按日分布。"""
