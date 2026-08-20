@@ -33,6 +33,8 @@ import type { Person, PersonImportResult } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import IpStatsPanel from '@/components/person/IpStatsPanel.vue'
+import StatCardGrid from '@/components/common/StatCardGrid.vue'
+import type { PersonStats } from '@/api/persons'
 import StatusTag from '@/components/common/StatusTag.vue'
 
 const props = defineProps<{ kind: PersonKind }>()
@@ -42,6 +44,31 @@ const route = useRoute()
 const store = usePersonsStore(props.kind)
 
 const kindLabel = computed(() => (props.kind === 'blogger' ? '穿搭博主' : '职业模特'))
+
+// ── 数量统计（总数 + 平台分布；仅穿搭博主页顶部展示）──
+const bloggerStats = ref<PersonStats | null>(null)
+
+async function loadBloggerStats() {
+  if (props.kind !== 'blogger') return
+  try {
+    bloggerStats.value = await bloggersApi.fetchStats()
+  } catch {
+    // 统计加载失败静默（顶部卡片不显示，不影响列表功能）
+  }
+}
+
+/** 指定平台的博主数量 */
+function platformCount(platform: string): number {
+  return bloggerStats.value?.items.find((i) => i.platform === platform)?.count ?? 0
+}
+
+// 列表数据量变化（新建/删除）时刷新统计
+watch(
+  () => store.total,
+  () => {
+    if (props.kind === 'blogger') void loadBloggerStats()
+  },
+)
 
 // ── 列表状态 URL 持久化：页码/搜索/平台/排序写入 query，刷新与详情往返后原样恢复 ──
 
@@ -331,6 +358,7 @@ onMounted(async () => {
   await loadTop()
   await loadMissingCount()
   await loadSkipList()
+  await loadBloggerStats()
 })
 
 onUnmounted(() => {
@@ -530,6 +558,17 @@ async function unskipBloggers(ids: number[]) {
 
 <template>
   <div>
+    <!-- 博主数量统计（总数 / 平台分布；复用公共统计卡片组件） -->
+    <StatCardGrid
+      v-if="kind === 'blogger' && bloggerStats"
+      :span="8"
+      :items="[
+        { title: '博主总数', value: bloggerStats.total, highlight: true },
+        { title: '小红书博主', value: platformCount('xiaohongshu') },
+        { title: '抖音博主', value: platformCount('douyin') },
+      ]"
+    />
+
     <!-- 导入结果提示（成功统计 + 失败明细，仅博主有导入入口） -->
     <template v-if="kind === 'blogger'">
       <a-alert

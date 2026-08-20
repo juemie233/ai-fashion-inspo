@@ -512,6 +512,23 @@ class PersonServiceBase:
         items = [{"ip_location": r[0], "count": r[1]} for r in result.all()]
         return {"total": total, "items": items}
 
+    async def platform_stats(self, db: AsyncSession) -> dict:
+        """按平台分组统计主体数量（人物管理页顶部统计卡片用）。
+
+        返回:
+            {"total": 主体总数, "items": [{"platform", "count"}, ...]}
+        """
+        assert self.model is not None
+        model = self.model
+        total = (await db.execute(select(func.count(model.id)))).scalar() or 0
+        result = await db.execute(
+            select(model.platform, func.count(model.id).label("cnt")).group_by(
+                model.platform
+            )
+        )
+        items = [{"platform": r[0], "count": r[1]} for r in result.all()]
+        return {"total": total, "items": items}
+
     async def suggest(self, db: AsyncSession, name: str, limit: int = 10) -> list[dict]:
         """按名称模糊匹配主体（用于前端选择去重）。"""
         assert self.model is not None

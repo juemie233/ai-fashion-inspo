@@ -225,6 +225,14 @@ async def enrich_skips(
     return {"items": items, "total": len(items)}
 
 
+@router.get("/stats")
+async def blogger_stats(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """博主数量统计：总数 + 各平台分布（穿搭博主页顶部统计卡片）。"""
+    return await blogger_service.platform_stats(db)
+
+
 @router.get("/ip-stats")
 async def blogger_ip_stats(
     limit: int = Query(30, ge=1, le=100),

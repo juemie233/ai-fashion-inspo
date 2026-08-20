@@ -52,6 +52,12 @@ export interface PersonInspiration {
   created_at: string | null
 }
 
+/** 人物数量统计（总数 + 平台分布） */
+export interface PersonStats {
+  total: number
+  items: Array<{ platform: string; count: number }>
+}
+
 /** 人物素材列表响应 */
 export interface PersonInspirationsOut {
   person: { id: number; name: string; platform: string }
@@ -100,6 +106,12 @@ function createPersonApi(kind: 'bloggers' | 'models') {
     /** 获取人物详情（含素材数与风格画像） */
     async fetchDetail(id: number): Promise<PersonDetail> {
       const { data } = await apiClient.get<PersonDetail>(`${base}/${id}`)
+      return data
+    },
+
+    /** 数量统计：总数 + 平台分布（人物管理页顶部统计卡片） */
+    async fetchStats(): Promise<PersonStats> {
+      const { data } = await apiClient.get<PersonStats>(`${base}/stats`)
       return data
     },
 
