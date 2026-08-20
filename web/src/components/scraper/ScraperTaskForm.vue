@@ -9,6 +9,7 @@ import { extractHistoryKeywords } from '@/utils/scraperKeywords'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { bloggersApi } from '@/api/persons'
 import type { Person } from '@shared/types/person'
+import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 import { useChromeManager, CHROME_STATE_LABELS, CHROME_STATE_TAG } from '@/composables/useChromeManager'
 
 const props = defineProps<{
@@ -66,13 +67,17 @@ const keywordOptions = computed(() =>
 const bloggerOptions = ref<Array<{ label: string; value: number }>>([])
 const bloggerLoading = ref(false)
 
-/** 加载博主列表（前 100 位，按名称可搜索过滤） */
+/** 加载博主列表（前 100 位，按名称可搜索过滤）。
+ * 标签带平台后缀（小红书/抖音），同名博主可区分；「其他」平台不冗余加后缀 */
 async function loadBloggers() {
   bloggerLoading.value = true
   try {
     const data = await bloggersApi.fetchList({ page: 1, size: 100 })
     bloggerOptions.value = (data.items ?? []).map((p: Person) => ({
-      label: `${p.name}${p.platform === 'xiaohongshu' ? '（小红书）' : ''}`,
+      label:
+        p.platform && p.platform !== 'other'
+          ? `${p.name}（${PERSON_PLATFORM_LABELS[p.platform] || p.platform}）`
+          : p.name,
       value: p.id,
     }))
   } catch {
