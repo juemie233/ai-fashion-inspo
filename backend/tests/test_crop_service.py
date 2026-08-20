@@ -217,10 +217,8 @@ def test_apply_content_mode_crops_to_bounds(client):
     assert abs(_file_size(insp["id"], client)[1] - 370) <= 3
 
 
-def test_detect_content_bounds_rejects_plain_image(tmp_path):
-    """内容边界检测：整图都是内容区（无包夹地带）时拒绝（防误裁普通照片）。"""
-    import pytest
-
+def test_detect_content_bounds_marks_cropped(tmp_path):
+    """内容边界检测：整图都是内容区（无包夹地带）时标记 already_cropped（防误裁普通照片）。"""
     arr = np.zeros((300, 600, 3), dtype=np.uint8)
     rng = np.random.default_rng(5)
     arr[:] = rng.integers(0, 256, size=arr.shape, dtype=np.uint8)
@@ -230,8 +228,49 @@ def test_detect_content_bounds_rejects_plain_image(tmp_path):
     p = tmp_path / "plain.jpg"
     p.write_bytes(buf.getvalue())
 
-    with pytest.raises(ValueError):
-        detect_content_bounds(p)
+    r = detect_content_bounds(p)
+    assert r["already_cropped"] is True
+    assert r["top_frac"] + r["bottom_frac"] < 0.01
+
+
+def test_content_mode_lists_cropped_candidates(client):
+    """内容边界模式：已裁剪干净（内容占满全图）的图仍列入候选，标注不可裁剪及原因。"""
+    # 顶部 3 行灰带 + 全噪点内容：内容占比 ≈99.5%，无有效裁剪区域
+    arr = np.zeros((600, 300, 3), dtype=np.uint8)
+    arr[:3] = (70, 70, 70)
+    rng = np.random.default_rng(9)
+    arr[3:] = rng.integers(0, 256, size=arr[3:].shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["auto_ok"] is False
+    assert "无需裁剪" in (item["note"] or "")
+
+
+def test_status_bar_correction_top_residual():
+    """状态栏残留修正（单元级）：顶格低多样度簇 → 后随更高内容时给出再次裁剪建议。"""
+    from app.services.crop_service import _status_bar_correction
+
+    # 场景 1：顶格残留（行 0~1 d≈0.19~0.20）后随内容区（d≈0.30+）→ 修正到行 2
+    d1 = np.array([0.19, 0.20] + [0.30, 0.31, 0.29, 0.33, 0.32] * 30)
+    assert _status_bar_correction(d1, 0) == 2
+
+    # 场景 2：顶格但内容直接开始（d 高，无残留）→ 不修正
+    d2 = np.array([0.30, 0.31, 0.29, 0.33, 0.32] * 32)
+    assert _status_bar_correction(d2, 0) == 0
+
+    # 场景 3：顶格低多样度簇但后随内容不高（可能是照片暗部，非残留）→ 不修正
+    d3 = np.array([0.19, 0.20, 0.21, 0.20, 0.22, 0.21] * 30)
+    assert _status_bar_correction(d3, 0) == 0
+
+    # 场景 4：未裁截图（图标行从行 12 起，前有纯色背景，n≈200 真实规模）→ 修正到内容区起点
+    d4 = np.array([0.02] * 12 + [0.18, 0.19, 0.20, 0.21, 0.20] + [0.30, 0.31] * 90)
+    assert _status_bar_correction(d4, 12) == 17
 
 
 def test_scan_excludes_non_vertical_and_non_manual(client):

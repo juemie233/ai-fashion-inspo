@@ -357,15 +357,13 @@ def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
 def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     """状态栏修正：顶部内容簇多样度显著低于后续内容区时，视为状态栏并后移边界。
 
-    顶部状态栏的结构：纯色背景（多样度 < 0.1）→ 图标行簇（多样度 0.15~0.24，
-    极薄，实测 <3%）→ 内容区（多样度更高）。图标行与内容区多样度连续过渡，
-    单靠阈值无法干净切分，判定规则（100 张样本校准）：
-
-    1. 首区段（raw 内容起点起的连续 d≥0.15 段，仅在顶部 8% 窗口内延伸）
-       多样度中位 < 0.25；
-    2. 首区段前一行属于低多样度地带（状态栏纯色背景）；
-    3. 区段结束后 _STATUS_BAR_SEARCH_FRACTION 高度内存在多样度
-       ≥ max(0.24, 首区段中位 + 0.05) 的行 → 该行即内容区真实起点。
+    覆盖两类场景（100 张样本校准）：
+    1. 未裁截图：纯色背景（多样度 < 0.1）→ 状态栏图标行簇（多样度 0.15~0.24，
+       极薄）→ 内容区（top_edge > 0）；
+    2. 已裁过一次的截图：auto 模式只裁掉状态栏背景，图标行簇残留在图顶
+       （top_edge=0，簇直接顶格）→ 按「低多样度簇 → 明显更高内容区」的
+       跃迁识别并给出再次裁剪建议（透明状态栏叠加在照片上时剖面差异极小，
+       建议由人工在候选列表确认，默认不勾选）。
 
     参数:
         diversity: 行多样度剖面
@@ -378,15 +376,36 @@ def _status_bar_correction(diversity: np.ndarray, top_edge: int) -> int:
     window = int(n * _STATUS_BAR_SCAN_FRACTION)
     if top_edge >= window:
         return top_edge
-    # 首区段：从 top_edge 起，仅在窗口内延伸（避免并入内容区拉高中位数）
+
+    if top_edge == 0:
+        # 已裁截图的状态栏残留：顶部低多样度簇（< 0.24）顶格，
+        # 其后 30% 高度内内容中位显著更高 → 给出再次裁剪建议
+        seg_end = 0
+        while seg_end + 1 < window and diversity[seg_end + 1] < _STATUS_BAR_MED:
+            seg_end += 1
+        if seg_end < 1:  # 簇至少 2 行才有意义
+            return top_edge
+        first_med = float(np.median(diversity[0 : seg_end + 1]))
+        if first_med >= _STATUS_BAR_MED - 0.03:
+            return top_edge
+        tail = diversity[seg_end + 1 : min(n, seg_end + 1 + int(n * 0.3))]
+        if len(tail) < 5 or float(np.median(tail)) < first_med + 0.08:
+            return top_edge
+        threshold = max(_STATUS_BAR_MED, first_med + 0.05)
+        for y in range(seg_end + 1, min(n, window + int(n * _STATUS_BAR_SEARCH_FRACTION))):
+            if diversity[y] >= threshold:
+                return y
+        return top_edge
+
+    # 未裁截图：首区段从 top_edge 起，仅在窗口内延伸（避免并入内容区拉高中位数）
     seg_end = top_edge
     while seg_end + 1 < window and diversity[seg_end + 1] >= _CONTENT_MIN_D:
         seg_end += 1
     first_med = float(np.median(diversity[top_edge : seg_end + 1]))
     if first_med >= _STATUS_BAR_MED:
         return top_edge
-    # 状态栏背景前提：区段前一行为低多样度地带
-    if top_edge == 0 or diversity[top_edge - 1] >= _ROW_UNIFORM:
+    # 背景前提：区段前一行属于低多样度地带（状态栏纯色背景）
+    if diversity[top_edge - 1] >= _ROW_UNIFORM:
         return top_edge
     # 区段结束后找多样度显著升高的行（内容区起点）
     threshold = max(_STATUS_BAR_MED - 0.01, first_med + 0.05)
@@ -436,10 +455,12 @@ def detect_content_bounds(path: Path) -> dict:
             "bottom_edge": 内容区下边界行,
             "correction": 状态栏修正是否生效,
             "kind": "gray_band"（上下灰带包夹）| "status_bar"（含状态栏修正）| "plain",
+            "already_cropped": 是否已裁剪干净（无有效裁剪区域，合计 <1%），
+                仅作标注，仍由调用方决定是否列入候选
         }
 
     异常:
-        ValueError: 未检测到内容区或布局不合理（占比越界等）
+        ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
     """
     brightness, saturation, diversity = _row_profiles(path)
     n = len(diversity)
@@ -456,13 +477,13 @@ def detect_content_bounds(path: Path) -> dict:
     frac = (bottom_edge - top_edge + 1) / n
     if frac < _CONTENT_FRACTION_MIN:
         raise ValueError(f"内容区占比过小（{frac:.0%}），布局不规则")
-    # 有效裁剪比例合计过小 → 无内容可裁（已裁剪过或非包夹截图）。
-    # 不设内容占比上限：薄边框截图（播放器条 <5%）内容占比可达 98%，
-    # 只要两侧合计仍有 ≥1% 的裁剪区域就允许裁剪，由人工勾选兜底。
+
     top_frac = top_edge / n
     bottom_frac = (n - 1 - bottom_edge) / n
-    if top_frac + bottom_frac < 0.01:
-        raise ValueError("无有效裁剪区域（图片已裁剪过或非包夹截图），无需裁剪")
+    # 已裁剪干净：两侧合计可裁比例 <1%。不抛异常、不设内容占比上限——
+    # 薄边框截图与残留修正（如顶部状态栏图标残余）都可正常给出裁剪建议，
+    # 由调用方按 already_cropped 标注、人工勾选确认兜底
+    already_cropped = top_frac + bottom_frac < 0.01
 
     # 灰带判定：边界外侧低饱和 + 亮度平坦
     top_gray = _band_stats(brightness, saturation, 0, top_edge)
@@ -478,12 +499,13 @@ def detect_content_bounds(path: Path) -> dict:
         kind = "plain"
 
     return {
-        "top_frac": round(top_edge / n, 6),
-        "bottom_frac": round((n - 1 - bottom_edge) / n, 6),
+        "top_frac": round(top_frac, 6),
+        "bottom_frac": round(bottom_frac, 6),
         "top_edge": top_edge,
         "bottom_edge": bottom_edge,
         "correction": correction,
         "kind": kind,
+        "already_cropped": already_cropped,
     }
 
 
@@ -624,6 +646,11 @@ async def scan_candidates(
                 item["crop_top"] = bounds["top_frac"]
                 item["crop_bottom"] = bounds["bottom_frac"]
                 item["boundary_kind"] = bounds["kind"]
+                if bounds["already_cropped"]:
+                    # 已裁剪干净（或内容占满全图）：仍列入候选供用户可见，
+                    # 标记不可裁剪并说明原因（人工可确认是否确实无需再裁）
+                    item["auto_ok"] = False
+                    item["note"] = "已裁剪过或内容占满全图，无需裁剪"
             except ValueError as e:
                 item["auto_ok"] = False
                 item["note"] = f"内容边界检测失败：{e}"
@@ -754,6 +781,9 @@ async def apply_crops(
                 bounds = await asyncio.to_thread(detect_content_bounds, full)
                 t_frac = bounds["top_frac"]
                 b_frac = bounds["bottom_frac"]
+                if bounds["already_cropped"]:
+                    skipped.append(_skip_entry(insp, "已裁剪过或内容占满全图，无需裁剪"))
+                    continue
             except ValueError as e:
                 skipped.append(_skip_entry(insp, f"内容边界检测失败：{e}"))
                 continue
