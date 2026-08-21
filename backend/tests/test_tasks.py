@@ -1,15 +1,22 @@
-"""任务队列路由测试：列表/筛选/详情/取消。"""
+"""任务队列路由测试：列表/筛选/详情/取消/删除。"""
+
+from datetime import datetime, timedelta
 
 from app.database import async_session
 from app.models.task import PendingVectorBackfill, TaskQueue
+from app.utils.time import utcnow
 
 
-async def _add_task(status: str = "pending", type_: str = "batch_analyze") -> int:
+async def _add_task(
+    status: str = "pending",
+    type_: str = "batch_analyze",
+    heartbeat_at: datetime | None = None,
+) -> int:
     """直接插入一条任务记录，返回任务 ID。"""
     async with async_session() as db:
         task = TaskQueue(
             type=type_, status=status, progress=0, total=1, done=0,
-            result={}, max_retries=2,
+            result={}, max_retries=2, heartbeat_at=heartbeat_at,
         )
         db.add(task)
         await db.commit()
@@ -120,15 +127,42 @@ async def test_delete_terminal_task_physically_deletes(client):
 
 
 async def test_delete_pending_running_rejected(client):
-    """删除 pending/running 任务 → 400，记录保留（避免与 worker 竞态）。"""
-    for status in ("pending", "running"):
-        tid = await _add_task(status=status)
+    """删除 pending 任务 → 400，记录保留（待执行任务请走取消接口移除）。"""
+    tid = await _add_task(status="pending")
 
-        r = client.delete(f"/api/tasks/{tid}")
-        assert r.status_code == 400, r.text
-        assert "不能删除" in r.json()["detail"]
-        assert client.get(f"/api/tasks/{tid}").status_code == 200
-        assert client.get(f"/api/tasks/{tid}").json()["status"] == status
+    r = client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 400, r.text
+    assert "不能删除" in r.json()["detail"]
+    assert client.get(f"/api/tasks/{tid}").status_code == 200
+    assert client.get(f"/api/tasks/{tid}").json()["status"] == "pending"
+
+
+async def test_delete_live_running_rejected(client):
+    """心跳新鲜（worker 正在执行）的 running 任务 → 400，记录保留。"""
+    tid = await _add_task(status="running", heartbeat_at=utcnow())
+
+    r = client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 400, r.text
+    assert "不能删除" in r.json()["detail"]
+    assert client.get(f"/api/tasks/{tid}").status_code == 200
+
+
+async def test_delete_zombie_running_task_allowed(client):
+    """僵尸 running（心跳缺失 / 心跳超时，如停电、进程崩溃遗留）可删除。"""
+    # 心跳缺失：视为僵尸（与 worker 僵尸重置判定一致）
+    tid = await _add_task(status="running", heartbeat_at=None)
+    r = client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] is True
+    assert client.get(f"/api/tasks/{tid}").status_code == 404
+
+    # 心跳过期：超过 90s 阈值（如停电后任务卡在 running 一直无人刷新）
+    stale = utcnow() - timedelta(seconds=120)
+    tid = await _add_task(status="running", heartbeat_at=stale)
+    r = client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] is True
+    assert client.get(f"/api/tasks/{tid}").status_code == 404
 
 
 def test_delete_missing_task_404(client):

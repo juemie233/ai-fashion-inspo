@@ -1,13 +1,16 @@
-"""任务队列路由：查询任务状态、任务列表与取消任务。"""
+"""任务队列路由：查询任务状态、任务列表、取消任务与删除任务。"""
+
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.task import TaskQueue
 from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut
 from app.utils.time import utcnow
+from app.worker import _STALE_HEARTBEAT_THRESHOLD
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -129,24 +132,46 @@ async def delete_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """删除任务历史记录：仅终态（success/failed/cancelled）可物理删除。
+    """删除任务记录：终态（success/failed/cancelled）与「僵尸 running」可物理删除。
 
-    pending/running 拒绝删除（避免与 worker 认领/执行产生竞态）。
+    - pending：拒绝删除（待执行任务会重新排队；如确需移除请走取消接口，
+      其对 pending 即物理删除）
+    - running：仅当心跳超时（认领它的 worker 已死，如停电/进程崩溃遗留的
+      僵尸任务）可删除；worker 正在正常执行（心跳新鲜）的任务拒绝删除
     供任务管理页「删除任务」按钮清理历史记录（采集任务走采集专用删除接口）。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
-    if task.status in ("pending", "running"):
+    if task.status == "pending":
         raise HTTPException(
             status_code=400,
-            detail=f"任务状态为 {task.status}，不能删除",
+            detail="任务状态为 pending，不能删除（如需移除请使用取消操作）",
         )
-    # 原子删除：二次确认仍为终态（防止删除瞬间状态被外部修改成 pending/running）
+    stale_before = utcnow() - timedelta(seconds=_STALE_HEARTBEAT_THRESHOLD)
+    if task.status == "running":
+        # 心跳判定与 worker 启动时的僵尸重置（_reset_stale_tasks）一致
+        zombie = task.heartbeat_at is None or task.heartbeat_at < stale_before
+        if not zombie:
+            raise HTTPException(
+                status_code=400,
+                detail="任务正在执行中（心跳正常），不能删除",
+            )
+    # 原子删除：二次确认状态仍落在可删范围（终态或僵尸 running），
+    # 防止删除瞬间正在执行 / 已被 worker 重置为 pending
     result = await db.execute(
         delete(TaskQueue).where(
             TaskQueue.id == task_id,
-            TaskQueue.status.in_(("success", "failed", "cancelled")),
+            or_(
+                TaskQueue.status.in_(("success", "failed", "cancelled")),
+                and_(
+                    TaskQueue.status == "running",
+                    or_(
+                        TaskQueue.heartbeat_at.is_(None),
+                        TaskQueue.heartbeat_at < stale_before,
+                    ),
+                ),
+            ),
         )
     )
     await db.commit()
