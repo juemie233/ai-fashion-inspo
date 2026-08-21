@@ -80,6 +80,11 @@ def fake_ollama(monkeypatch, tmp_path):
     # 固定嵌入模型配置：避免本地 .env 的 OLLAMA_EMBEDDING_MODEL（如带 :latest 后缀）
     # 与测试断言（all-minilm）不一致导致环境相关失败（CI 无 .env 时为默认值）
     monkeypatch.setattr(settings, "ollama_embedding_model", "all-minilm")
+    # 固定视觉模型配置：本机实际安装的模型名可能带量化后缀（如
+    # qwen3-vl:8b-instruct-q4_K_M），与测试断言（qwen3-vl:8b-instruct）不一致
+    # 会导致 test_list_models_marks_embedding / test_ai_status 环境相关失败
+    # （CI 无 .env 时为默认值 qwen3-vl:8b-instruct，此处显式固定等价）
+    monkeypatch.setattr(settings, "ollama_vision_model", "qwen3-vl:8b-instruct")
 
 
 def test_list_models_marks_embedding(client):
