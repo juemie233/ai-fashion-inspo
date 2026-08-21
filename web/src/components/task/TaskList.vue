@@ -2,14 +2,18 @@
 /** 任务列表：统一展示任务队列与采集任务。 */
 
 import { h } from 'vue'
-import { Tag, Progress, Spin, Button, Popconfirm, TypographyText, type TableColumnData } from '@arco-design/web-vue'
+import {
+  Tag,
+  Progress,
+  Spin,
+  Button,
+  Popconfirm,
+  TypographyText,
+  type TableColumnData,
+} from '@arco-design/web-vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
-import {
-  TASK_TYPE_ICONS,
-  taskTypeTagColor,
-  predictEta,
-} from '@/utils/taskLabel'
+import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate } from '@/utils/format'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
@@ -88,8 +92,18 @@ const columns: TableColumnData[] = [
     width: 90,
     render: ({ record }) => h(StatusTag, { status: (record as UnifiedTask).status }),
   },
-  { title: '进度', dataIndex: 'progress', width: 160, render: ({ record }) => renderProgress(record as UnifiedTask) },
-  { title: '完成', dataIndex: 'count', width: 100, render: ({ record }) => renderCount(record as UnifiedTask) },
+  {
+    title: '进度',
+    dataIndex: 'progress',
+    width: 160,
+    render: ({ record }) => renderProgress(record as UnifiedTask),
+  },
+  {
+    title: '完成',
+    dataIndex: 'count',
+    width: 100,
+    render: ({ record }) => renderCount(record as UnifiedTask),
+  },
   {
     title: '预计剩余',
     dataIndex: 'eta',
@@ -120,14 +134,27 @@ const columns: TableColumnData[] = [
       return h('div', { style: 'display:flex;gap:8px' }, [
         row.status === 'pending'
           ? h(
-              Button,
+              Popconfirm,
               {
-                size: 'small',
-                type: 'text',
-                status: 'warning',
-                onClick: () => emit('cancel', row),
+                // 队列任务 pending 取消 = 物理删除不可恢复；采集任务取消仅标记 cancelled
+                content:
+                  row.source === 'queue'
+                    ? '该任务将被删除且不可恢复，确定删除？'
+                    : '确定取消该采集任务？',
+                onOk: () => emit('cancel', row),
               },
-              { default: () => '取消' },
+              {
+                default: () =>
+                  h(
+                    Button,
+                    {
+                      size: 'small',
+                      type: 'text',
+                      status: row.source === 'queue' ? 'danger' : 'warning',
+                    },
+                    { default: () => (row.source === 'queue' ? '删除' : '取消') },
+                  ),
+              },
             )
           : null,
         row.source === 'scraper'

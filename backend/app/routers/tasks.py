@@ -1,12 +1,12 @@
 """任务队列路由：查询任务状态、任务列表与取消任务。"""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.task import TaskQueue
-from app.schemas.task import TaskListOut, TaskOut
+from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut
 from app.utils.time import utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -60,40 +60,65 @@ async def get_task(
     return task
 
 
-@router.post("/{task_id}/cancel")
+@router.post("/{task_id}/cancel", response_model=TaskCancelOut)
 async def cancel_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """取消任务：pending 一律可取消；人脸扫描/匹配任务运行中也可取消。
+    """取消任务：
 
-    运行中取消的语义：任务执行器每批检查状态后自行停止（已完成的批次不
-    回滚），用户可随时重新发起任务，增量语义自动跳过已完成部分。
+    - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
+      ``task_queue`` 表中直接移除，不保留）。
+    - ``running`` 的人脸扫描/匹配任务：标记为 cancelled（运行中取消的既有能力，
+      记录保留；执行器每批检查后自行停止）。
+    - 其余状态（success/failed/cancelled 及不可运行中取消的 running 类型）：
+      返回 400，记录保持不变。
+
+    删除采用「带状态条件的原子 DELETE」：若与 worker 认领（pending→running）
+    发生竞态，删除落空（rowcount=0），按非 pending 状态处理并返回 400，
+    避免误删正在执行的任务。
     """
-    # 先确认任务存在（404），再做条件更新，避免「读取到 pending 后 worker 已认领
-    # 为 running」的 TOCTOU 竞态（否则会把 running 覆盖成 cancelled）
+    # 先确认任务存在（404），后续按状态分支处理
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
-    result = await db.execute(
-        update(TaskQueue)
-        .where(
-            TaskQueue.id == task_id,
-            or_(
-                TaskQueue.status == "pending",
-                and_(
-                    TaskQueue.status == "running",
-                    TaskQueue.type.in_(_CANCELABLE_RUNNING_TYPES),
-                ),
-            ),
+
+    if task.status == "pending":
+        result = await db.execute(
+            delete(TaskQueue).where(TaskQueue.id == task_id, TaskQueue.status == "pending")
         )
-        .values(status="cancelled", error="用户手动取消", updated_at=utcnow())
+        await db.commit()
+        if result.rowcount == 0:
+            # 竞态：读取 pending 后任务已被 worker 认领为 running（或已被并发删除），
+            # 按非 pending 处理，绝不误删正在执行的任务
+            current = await db.get(TaskQueue, task_id)
+            state = current.status if current else "已删除"
+            raise HTTPException(
+                status_code=400,
+                detail=f"任务已开始执行（当前状态 {state}），不能删除",
+            )
+        return {"message": "任务已删除", "task_id": task_id, "deleted": True}
+
+    if task.status == "running" and task.type in _CANCELABLE_RUNNING_TYPES:
+        # 运行中取消（仅人脸扫描/匹配）：保留记录，标记 cancelled
+        result = await db.execute(
+            update(TaskQueue)
+            .where(
+                TaskQueue.id == task_id,
+                TaskQueue.status == "running",
+                TaskQueue.type.in_(_CANCELABLE_RUNNING_TYPES),
+            )
+            .values(status="cancelled", error="用户手动取消", updated_at=utcnow())
+        )
+        await db.commit()
+        if result.rowcount == 0:
+            await db.refresh(task)
+            raise HTTPException(
+                status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法取消"
+            )
+        return {"message": "任务已取消", "task_id": task_id}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"仅等待中的任务可以取消并删除（当前状态 {task.status}）",
     )
-    await db.commit()
-    if result.rowcount == 0:
-        await db.refresh(task)
-        raise HTTPException(
-            status_code=409,
-            detail=f"任务已开始执行（当前状态 {task.status}），无法取消",
-        )
-    return {"message": "任务已取消", "task_id": task_id}

@@ -43,7 +43,12 @@ class TaskListOut(BaseModel):
 
 
 class TaskCancelOut(BaseModel):
-    """取消任务响应。"""
+    """取消任务响应。
+
+    ``deleted``：是否物理删除了任务记录（True = pending 任务被删除；
+    False = 运行中取消/标记，记录保留）。
+    """
 
     message: str
     task_id: int
+    deleted: bool = False

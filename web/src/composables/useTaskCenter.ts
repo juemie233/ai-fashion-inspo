@@ -233,9 +233,16 @@ export function useTaskCenter() {
   async function cancelTask(t: UnifiedTask) {
     const url = t.source === 'queue' ? `/tasks/${t.id}/cancel` : `/scraper/tasks/${t.id}/cancel`
     try {
-      await apiClient.post(url)
-      Message.success('已取消')
-      loadTasks()
+      const { data } = await apiClient.post<{ message?: string; deleted?: boolean }>(url)
+      // 队列任务 pending 取消 = 后端物理删除（deleted: true）；运行中取消仅标记 cancelled
+      const deleted = data?.deleted === true
+      Message.success(data?.message || (deleted ? '任务已删除' : '已取消'))
+      if (deleted) {
+        // 本地先移除该行即时反馈（无需整页刷新），随后全量刷新校正页码
+        tasks.value = tasks.value.filter((x) => !(x.source === 'queue' && x.id === t.id))
+        page.value = Math.min(page.value, Math.max(1, pageCount.value))
+      }
+      await loadTasks()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '取消失败'))
     }
