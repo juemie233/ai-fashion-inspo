@@ -5,7 +5,7 @@
  * 仅按「人物 → 照片组 → 照片」浏览（见人物详情页）。
  */
 
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
@@ -17,10 +17,10 @@ import ThumbCard from '@/components/common/ThumbCard.vue'
 const route = useRoute()
 const router = useRouter()
 
-// ── 人物选择 ──
+// ── 人物选择（undefined = 未选择；Arco a-select 的 modelValue 类型不含 null，清空回写 undefined）──
 const persons = ref<Person[]>([])
 const personsLoading = ref(false)
-const personId = ref<number | null>(null)
+const personId = ref<number | undefined>(undefined)
 const showForm = ref(false)
 
 async function loadPersons() {
@@ -41,9 +41,7 @@ async function onPersonCreated(p: Person) {
   await loadPersons()
 }
 
-const personOptions = computed(() =>
-  persons.value.map((p) => ({ label: p.name, value: p.id })),
-)
+const personOptions = computed(() => persons.value.map((p) => ({ label: p.name, value: p.id })))
 
 // ── 文件夹选择（仅文件夹，禁用多文件选择）──
 const folderInput = ref<HTMLInputElement | null>(null)
@@ -117,30 +115,94 @@ async function ensureThumbnail(id: string) {
     }
   } finally {
     item.thumbLoading = false
+    // 生成期间列表已被清空/替换（如切换文件夹）：立即释放本对象 URL，避免内存泄漏
+    if (item.thumbUrl && !pending.value.includes(item)) {
+      URL.revokeObjectURL(item.thumbUrl)
+      item.thumbUrl = undefined
+    }
   }
 }
 
-/** 缩略图懒加载观察器：img 进入视口（提前 200px）才生成缩略图 */
+/** 缩略图生成并发上限（滚动时大量卡片同时进入视口时，避免一次性解码过多大图导致卡顿） */
+const THUMB_CONCURRENCY = 6
+/** 已排队待生成缩略图的照片 id（去重） */
+const thumbWaiting = new Set<string>()
+/** 正在生成的缩略图数量 */
+let thumbRunning = 0
+
+function requestThumbnail(id: string) {
+  const item = pending.value.find((p) => p.id === id)
+  if (!item || item.thumbUrl || item.thumbLoading || thumbWaiting.has(id)) return
+  thumbWaiting.add(id)
+  drainThumbQueue()
+}
+
+function drainThumbQueue() {
+  while (thumbRunning < THUMB_CONCURRENCY && thumbWaiting.size > 0) {
+    const [nextId] = thumbWaiting
+    thumbWaiting.delete(nextId)
+    thumbRunning += 1
+    void ensureThumbnail(nextId).finally(() => {
+      thumbRunning -= 1
+      drainThumbQueue()
+    })
+  }
+}
+
+/** 缩略图懒加载观察器：卡片本体进入视口（提前 200px）才排队生成缩略图。
+ *  注意观察对象必须是「缩略图就绪前就存在」的节点（img 只有 thumbUrl 就绪后才渲染，
+ *  若观察 img 会陷入「无缩略图→无 img→无人触发生成」的死循环）。 */
 let thumbObserver: IntersectionObserver | null = null
 
-function onImgMounted(el: unknown) {
-  if (el) thumbObserver?.observe(el as HTMLElement)
+function ensureThumbObserver() {
+  if (thumbObserver) return
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const el = entry.target as HTMLElement
+          const id = el.dataset.thumbId
+          if (id) requestThumbnail(id)
+          thumbObserver?.unobserve(el)
+        }
+      }
+    },
+    { rootMargin: '200px' },
+  )
+}
+
+function onThumbCellMounted(el: unknown) {
+  if (!el) return
+  ensureThumbObserver()
+  thumbObserver?.observe(el as HTMLElement)
 }
 
 /** 底部哨兵：滚动接近底部时自动加载下一批 */
 let sentinelObserver: IntersectionObserver | null = null
 
+function ensureSentinelObserver() {
+  if (sentinelObserver) return
+  sentinelObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMore()
+    },
+    { rootMargin: '400px' },
+  )
+}
+
 function onSentinelMounted(el: unknown) {
+  if (!el) return
+  ensureSentinelObserver()
+  sentinelObserver?.observe(el as HTMLElement)
+}
+
+/** 释放懒加载观察器与缩略图队列（清空 / 换文件夹 / 卸载时调用） */
+function resetLazyLoad() {
+  thumbObserver?.disconnect()
+  thumbObserver = null
   sentinelObserver?.disconnect()
-  if (el) {
-    sentinelObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMore()
-      },
-      { rootMargin: '400px' },
-    )
-    sentinelObserver.observe(el as HTMLElement)
-  }
+  sentinelObserver = null
+  thumbWaiting.clear()
 }
 
 function openFolder() {
@@ -185,20 +247,10 @@ function onFolderChange(e: Event) {
     })
   }
   visibleCount.value = PAGE_SIZE
-  thumbObserver?.disconnect()
-  thumbObserver = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          const el = entry.target as HTMLElement
-          const id = el.dataset.thumbId
-          if (id) void ensureThumbnail(id)
-          thumbObserver?.unobserve(el)
-        }
-      }
-    },
-    { rootMargin: '200px' },
-  )
+  if (typeof IntersectionObserver === 'undefined') {
+    // 极旧浏览器无 IO 支持：首批直接排队生成缩略图，保证预览可用
+    for (const item of pending.value.slice(0, visibleCount.value)) requestThumbnail(item.id)
+  }
   if (folderName && !setName.value.trim()) {
     setName.value = folderName
   }
@@ -211,9 +263,13 @@ function clearPending() {
   })
   pending.value = []
   visibleCount.value = PAGE_SIZE
-  thumbObserver?.disconnect()
-  sentinelObserver?.disconnect()
+  resetLazyLoad()
 }
+
+// 取消人物选择后，照片组失去归属对象：清空待导入列表（验收要求：清空待导入列表或禁用导入）
+watch(personId, (val) => {
+  if (!val && pending.value.length > 0) clearPending()
+})
 
 // ── 上传 ──
 const uploading = ref(false)
@@ -313,12 +369,12 @@ onUnmounted(() => {
     <a-card size="small" class="step-card" title="第一步 · 选择人物">
       <a-space align="center">
         <a-select
-          v-model:value="personId"
+          v-model="personId"
           :options="personOptions"
           :loading="personsLoading"
           :disabled="uploading"
           filterable
-          clearable
+          allow-clear
           placeholder="选择模特 / 博主"
           style="width: 280px"
         />
@@ -367,27 +423,27 @@ onUnmounted(() => {
       </template>
 
       <div class="preview-grid">
-        <ThumbCard
+        <div
           v-for="(p, i) in shownPhotos"
           :key="p.id"
-          :status="p.status"
-          :status-text="p.errorMsg"
-          :progress="p.status === 'uploading' ? p.progress : undefined"
-          :index="i + 1"
+          class="thumb-cell"
+          :ref="onThumbCellMounted"
+          :data-thumb-id="p.id"
         >
-          <template #media>
-            <img
-              v-if="p.thumbUrl"
-              :ref="onImgMounted"
-              :data-thumb-id="p.id"
-              :src="p.thumbUrl"
-              :alt="p.file.name"
-            />
-            <div v-else class="thumb-placeholder">
-              <a-spin v-if="p.thumbLoading" :size="14" />
-            </div>
-          </template>
-        </ThumbCard>
+          <ThumbCard
+            :status="p.status"
+            :status-text="p.errorMsg"
+            :progress="p.status === 'uploading' ? p.progress : undefined"
+            :index="i + 1"
+          >
+            <template #media>
+              <img v-if="p.thumbUrl" :src="p.thumbUrl" :alt="p.file.name" />
+              <div v-else class="thumb-placeholder">
+                <a-spin v-if="p.thumbLoading" :size="14" />
+              </div>
+            </template>
+          </ThumbCard>
+        </div>
       </div>
 
       <!-- 分批加载：滚动到接近底部自动加载下一批；「加载更多」按钮兜底 -->
@@ -476,6 +532,11 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 10px;
+}
+
+/* 卡片懒加载观察容器（网格项，始终存在；img 依赖 thumbUrl 就绪后才渲染） */
+.thumb-cell {
+  min-width: 0;
 }
 
 /* 缩略图未生成时的占位（#media 插槽内容，ThumbCard 媒体区内） */
