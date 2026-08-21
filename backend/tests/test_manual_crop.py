@@ -284,3 +284,25 @@ def test_crop_uses_exif_oriented_height(client):
         total = 300 * 300
         assert red / total > 0.99, f"红像素占比过低: {red}/{total}"
         assert blue / total < 0.01, f"蓝像素异常出现: {blue}/{total}"
+
+
+# ── 回归：带关联素材的响应序列化 ───────────────────────────────────────────
+
+
+def test_crop_with_existing_tags_returns_full_out(client):
+    """素材已带标签/关联时裁剪仍须 200 并返回完整标签（回归 MissingGreenlet→500）。
+
+    裁剪成功后 router 通过同步的 _to_out 转换响应：若关联（tags/tag、
+    bloggers/blogger 等）未预加载，访问会触发 async SQLAlchemy 懒加载，
+    在同步转换函数中抛 MissingGreenlet，接口 500（新建素材无关联所以
+    之前的用例无法覆盖该路径）。修复：裁剪服务改用 load_inspiration_full
+    预加载全部嵌套关联。
+    """
+    insp = _upload_image(client)
+    r = client.post(f"/api/inspirations/{insp['id']}/tags", json={"names": ["法式", "白色系"]})
+    assert r.status_code == 200, r.text
+
+    r2 = _crop(client, insp["id"], y1=0.1, y2=0.9)
+    assert r2.status_code == 200, r2.text
+    names = {t["tag"]["name"] for t in r2.json()["tags"]}
+    assert "法式" in names and "白色系" in names

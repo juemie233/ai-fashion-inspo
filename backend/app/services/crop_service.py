@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.inspiration import Inspiration, NOT_DELETED
 from app.services.file_service import generate_thumbnail
+from app.services.inspiration_query import load_inspiration_full
 from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 from app.utils.file_hash import file_sha256
 from app.utils.image_hash import perceptual_hash
@@ -1153,7 +1154,10 @@ async def crop_inspiration_region(
     异常:
         HTTPException: 素材不存在/在垃圾桶/非图片/文件缺失/比例非法/处理失败
     """
-    insp = await db.get(Inspiration, inspiration_id)
+    # 用共享的详情加载方式预加载 tags/tag、bloggers/blogger、models/model 与
+    # analysis_logs，确保裁剪成功返回时 _to_out 的响应转换不会触发异步懒加载
+    # （async SQLAlchemy 的懒加载在同步转换函数中会抛 MissingGreenlet → 500）
+    insp = await load_inspiration_full(db, inspiration_id)
     if insp is None:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
     if insp.deleted_at is not None:

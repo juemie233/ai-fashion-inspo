@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.inspiration import Inspiration, NOT_DELETED, utcnow
+from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag
 from app.schemas.inspiration import InspirationUpdate
 
@@ -18,7 +19,11 @@ async def update_inspiration(
     """更新灵感（收藏状态、作者等部分字段），不存在则抛出 404。"""
     result = await db.execute(
         select(Inspiration)
-        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        )
         .where(Inspiration.id == inspiration_id)
     )
     inspiration = result.unique().scalar_one_or_none()

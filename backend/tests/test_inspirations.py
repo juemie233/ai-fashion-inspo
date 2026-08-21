@@ -1,5 +1,9 @@
 """素材核心链路：上传、列表、详情、收藏、内容去重、软删除过滤。"""
 
+import sqlite3
+
+from app.config import settings
+
 
 def test_upload_and_list(client, upload):
     """上传素材后可在列表与详情中查询到。"""
@@ -73,6 +77,35 @@ def test_favorite_toggle(client, upload):
 
     r = client.patch(f"/api/inspirations/{insp_id}", json={"is_favorite": False})
     assert r.json()["is_favorite"] is False
+
+
+def test_patch_with_linked_blogger_ok(client, upload):
+    """关联博主的素材 PATCH 返回 200 且响应含博主（回归 MissingGreenlet→500）。
+
+    PATCH 路由同样经同步 _to_out 转换响应，博主/模特嵌套关联必须预加载；
+    此前 update_inspiration 只预加载 tags（缺 bloggers/models），带关联素材
+    更新（如评分/收藏）会触发异步懒加载 → 500。
+    """
+    insp_id = upload().json()["id"]
+    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.execute(
+        "INSERT INTO bloggers (name, platform, source, created_at, updated_at) "
+        "VALUES ('测试博主', '小红书', 'manual', '2026-01-01T00:00:00', '2026-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO inspiration_bloggers (inspiration_id, blogger_id, confidence) "
+        "VALUES (?, ?, 0.9)",
+        (insp_id, cur.lastrowid),
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.patch(f"/api/inspirations/{insp_id}", json={"rating": 4})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["rating"] == 4
+    assert body["bloggers"][0]["name"] == "测试博主"
 
 
 # ═══════════════════════════════════════════════════════════════
