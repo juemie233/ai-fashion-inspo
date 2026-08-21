@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from fastapi import HTTPException
 from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,7 @@ from app.models.inspiration import Inspiration, NOT_DELETED
 from app.services.file_service import generate_thumbnail
 from app.services.task_runners.vector_backfill import enqueue_vector_backfills
 from app.utils.file_hash import file_sha256
+from app.utils.image_hash import perceptual_hash
 from app.utils.image_utils import extract_dominant_colors
 from app.utils.time import utcnow
 
@@ -45,6 +47,9 @@ logger = logging.getLogger(__name__)
 
 # 竖屏截图判定：高/宽 ≥ 1.75（9:16≈1.78、19.5:9≈2.17）
 MIN_RATIO = 1.75
+# 手动裁剪最小保留高度（自然像素）：与前端 Cropper.js minCropBoxHeight=50
+# 的口径对齐，避免确认出极窄（<50px）的裁剪结果
+MIN_MANUAL_CROP_HEIGHT_PX = 50
 # content 模式的竖屏下限放宽到 1.3：已被裁剪过的截图比例可能掉到 1.3~1.75
 # （原 2.17 裁 40% 后 ≈1.3），顶部状态栏残留仍需二次裁剪；内容边界检测
 # 自带「内容区占比」与「残留簇 + 后随内容更高」校验兜底，不会误裁普通照片。
@@ -563,6 +568,34 @@ def detect_content_bounds(path: Path) -> dict:
     }
 
 
+def _save_cropped_image(cropped: Image.Image, src: Image.Image, tmp: Path) -> Path:
+    """把裁剪结果写入同目录临时文件（保留原格式，不可写回时降级 JPEG）。
+
+    参数:
+        cropped: 裁剪后的 PIL 图像
+        src: 原图（用于读取原始格式）
+        tmp: 目标临时文件路径
+
+    返回:
+        实际写入的临时文件路径（降级 JPEG 时后缀会变为 .jpg）
+    """
+    fmt = src.format or "JPEG"
+    save_kwargs: dict = {}
+    if fmt == "JPEG":
+        save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
+    try:
+        cropped.save(tmp, format=fmt, **save_kwargs)
+    except (ValueError, OSError):
+        # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG；后缀同步改为 .jpg，
+        # 避免文件扩展名与实际内容格式不一致导致前端解码失败
+        if fmt == "JPEG":
+            raise
+        tmp.unlink(missing_ok=True)
+        tmp = tmp.with_suffix(".jpg")
+        cropped.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True)
+    return tmp
+
+
 def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
     """按比例裁剪图片并写入同目录临时文件，返回临时文件路径（不改动原图）。
 
@@ -592,20 +625,49 @@ def crop_image_to_temp(path: Path, top_frac: float, bottom_frac: float) -> Path:
             if top + bottom >= height:
                 raise ValueError(f"裁剪比例过大：顶部 {top}px + 底部 {bottom}px ≥ 高度 {height}px")
             cropped = img.crop((0, top, width, height - bottom))
-            fmt = src.format or "JPEG"
-            save_kwargs: dict = {}
-            if fmt == "JPEG":
-                save_kwargs = {"quality": 95, "subsampling": 0, "optimize": True}
-            try:
-                cropped.save(tmp, format=fmt, **save_kwargs)
-            except (ValueError, OSError):
-                # 个别格式（如 MPO）PIL 无法写回，降级为 JPEG；后缀同步改为 .jpg，
-                # 避免文件扩展名与实际内容格式不一致导致前端解码失败
-                if fmt == "JPEG":
-                    raise
-                tmp.unlink(missing_ok=True)
-                tmp = tmp.with_suffix(".jpg")
-                cropped.save(tmp, format="JPEG", quality=95, subsampling=0, optimize=True)
+            tmp = _save_cropped_image(cropped, src, tmp)
+        return tmp
+    except Exception:
+        # 任何失败路径都清理残留临时文件后重抛
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def crop_region_to_temp(path: Path, y1_ratio: float, y2_ratio: float) -> Path:
+    """按「保留区域」上下边界比例裁剪图片并写入同目录临时文件（不改动原图）。
+
+    与 crop_image_to_temp（分别裁掉顶部/底部多少）语义互补：本函数直接表达
+    「保留区域 = [y1_ratio, y2_ratio)」的上下边界，供素材详情页手动裁剪使用。
+    比例基准为 EXIF 方向校正后的显示高度（ImageOps.exif_transpose）。
+
+    参数:
+        path: 原图绝对路径
+        y1_ratio: 保留区域上边界（相对高度，0~1）
+        y2_ratio: 保留区域下边界（相对高度，0~1）
+
+    返回:
+        临时文件路径（由调用方负责替换或清理）
+
+    异常:
+        ValueError: 比例非法或保留高度小于 MIN_MANUAL_CROP_HEIGHT_PX
+    """
+    if not (0 <= y1_ratio < y2_ratio <= 1):
+        raise ValueError(
+            f"裁剪比例非法，需满足 0 ≤ y1 < y2 ≤ 1: y1={y1_ratio}, y2={y2_ratio}"
+        )
+    tmp = path.with_name(f"{path.stem}_crop_{uuid.uuid4().hex}{path.suffix}")
+    try:
+        with Image.open(path) as src:
+            img = ImageOps.exif_transpose(src)
+            width, height = img.size
+            top = round(height * y1_ratio)
+            bottom = round(height * y2_ratio)
+            if bottom - top < MIN_MANUAL_CROP_HEIGHT_PX:
+                raise ValueError(
+                    f"保留区域高度过小（{bottom - top}px < {MIN_MANUAL_CROP_HEIGHT_PX}px）"
+                )
+            cropped = img.crop((0, top, width, bottom))
+            tmp = _save_cropped_image(cropped, src, tmp)
         return tmp
     except Exception:
         # 任何失败路径都清理残留临时文件后重抛
@@ -1054,3 +1116,173 @@ async def apply_crops(
         "backup_dir": str(backup_dir) if successes else None,
         "vector_task_id": vector_task_id,
     }
+
+
+# ── 手动裁剪（素材详情页单张裁剪）──────────────────────────────────────────
+
+
+async def crop_inspiration_region(
+    db: AsyncSession, inspiration_id: str, y1_ratio: float, y2_ratio: float
+) -> Inspiration:
+    """手动裁剪单个图片素材：保留 [y1, y2) 区域替换原图，并同步全部派生数据。
+
+    素材详情页「裁剪」入口调用：用户拖动上下分割线确认保留中间区域，
+    后端按比例就地裁剪原图，触发与批量手机图裁剪一致的派生数据更新。
+
+    流程:
+        1. 校验素材存在 / 未删除 / 图片类型 / 文件可读；
+        2. 校验比例合法（0 ≤ y1 < y2 ≤ 1）且保留高度 ≥ MIN_MANUAL_CROP_HEIGHT_PX；
+        3. 按 EXIF 校正后的像素坐标裁剪到临时文件（阻塞 I/O 放线程池）；
+        4. 备份原图 → 原子替换；替换后任一步失败都从备份恢复原文件；
+        5. 重建缩略图、重算内容哈希（SHA-256）与感知哈希（phash）、刷新主色调；
+        6. 登记向量回填（攒批方式，同 apply_crops）并记录审计。
+
+    备份策略与 apply_crops（批量手机图裁剪，备份长期保留供手动恢复）不同：
+    手动裁剪前用户已通过裁剪预览确认，成功后即删除备份，失败时才需要从
+    备份恢复原图，避免手动裁剪备份无限累积占用磁盘。
+
+    参数:
+        db: 数据库会话
+        inspiration_id: 素材 ID
+        y1_ratio: 保留区域上边界（相对 EXIF 校正后图片高度的比例，0~1）
+        y2_ratio: 保留区域下边界（相对 EXIF 校正后图片高度的比例，0~1）
+
+    返回:
+        裁剪完成后的素材记录（已提交，file_path 不变、派生字段已更新）
+
+    异常:
+        HTTPException: 素材不存在/在垃圾桶/非图片/文件缺失/比例非法/处理失败
+    """
+    insp = await db.get(Inspiration, inspiration_id)
+    if insp is None:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if insp.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="素材在垃圾桶中，无法裁剪")
+    if insp.media_type != "image":
+        raise HTTPException(status_code=400, detail="仅支持裁剪图片素材")
+    if not (0 <= y1_ratio < y2_ratio <= 1):
+        raise HTTPException(
+            status_code=400,
+            detail=f"裁剪比例非法，需满足 0 ≤ y1 < y2 ≤ 1（y1={y1_ratio}, y2={y2_ratio}）",
+        )
+
+    full = _resolve_storage_path(insp.file_path)
+    if full is None or not full.exists():
+        raise HTTPException(status_code=400, detail="素材文件缺失或路径越界，无法裁剪")
+
+    # 保留高度校验按「EXIF 校正后的显示高度」计算，避免旋转图比例误判
+    try:
+        _, height = await asyncio.to_thread(_probe_size, full)
+    except Exception:
+        raise HTTPException(status_code=400, detail="素材文件无法解码，无法裁剪") from None
+    if (y2_ratio - y1_ratio) * height < MIN_MANUAL_CROP_HEIGHT_PX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"保留区域高度过小，至少需要 {MIN_MANUAL_CROP_HEIGHT_PX}px",
+        )
+
+    tmp: Path | None = None
+    backup_path: Path | None = None
+    replaced = False
+    new_thumb: str | None = None
+    try:
+        # 裁剪到临时文件（与素材同卷，保证 os.replace 原子）
+        tmp = await asyncio.to_thread(crop_region_to_temp, full, y1_ratio, y2_ratio)
+
+        # 主色调在临时文件上提前重算（仅原值非空时刷新，与 apply_crops 一致）：
+        # 放在替换原图之前执行，替换后便不再有失败点需要回滚
+        colors = insp.dominant_colors
+        if colors is not None:
+            new_colors = await asyncio.to_thread(extract_dominant_colors, tmp)
+            colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
+
+        # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪覆盖备份
+        backup_dir = (
+            settings.storage_root / "_crop_backup" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        )
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"{insp.id}_{datetime.now().strftime('%H%M%S%f')}{full.suffix}"
+        shutil.copy2(full, backup_path)
+        os.replace(tmp, full)
+        tmp = None
+        replaced = True
+
+        # 重建缩略图：失败（返回 None）时删除旧缩略图并置空 thumbnail_path，
+        # 避免缩略图仍指向修改前的内容造成错配（前端将回退展示原图）
+        thumb_path = insp.thumbnail_path
+        new_thumb = await generate_thumbnail(full)
+        if new_thumb:
+            old_full = (settings.storage_root / thumb_path) if thumb_path else None
+            if old_full is not None and old_full != (settings.storage_root / new_thumb):
+                old_full.unlink(missing_ok=True)
+            thumb_path = new_thumb
+        else:
+            if thumb_path:
+                (settings.storage_root / thumb_path).unlink(missing_ok=True)
+            thumb_path = None
+            logger.warning(f"手动裁剪后缩略图生成失败，已置空旧缩略图: {insp.id}")
+
+        # 派生数据写回：内容哈希（SHA-256 精确去重 + 近似重复扫描基准）、
+        # 感知哈希（重算，使缓存与替换后的文件一致，免去懒重算）、主色调、缩略图
+        new_hash = await asyncio.to_thread(file_sha256, full)
+        new_phash = await asyncio.to_thread(perceptual_hash, full)
+        insp.content_hash = new_hash or insp.content_hash
+        insp.phash = new_phash
+        insp.thumbnail_path = thumb_path
+        insp.dominant_colors = colors
+        insp.updated_at = utcnow()
+        # ⚠ 事务边界：commit 之后即为「裁剪成功」，后续仅做尽力而为的清理，
+        # 任何清理失败都不得进入回滚分支（否则会用备份把新图覆盖回旧图，
+        # 造成磁盘与数据库不一致）
+        await db.commit()
+
+        # 裁剪成功：清理备份（用户已通过预览确认；失败恢复不再需要）
+        if backup_path.exists():
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning(f"手动裁剪备份清理失败（忽略）: {backup_path} — {e}")
+
+        # 向量回填（攒批，同 apply_crops）：未达阈值时素材保留在待回填表，
+        # 由后续攒批/手动一键回填/worker 启动兜底，登记失败不影响主流程
+        try:
+            await enqueue_vector_backfills(db, [insp.id])
+            await db.commit()
+        except Exception:
+            logger.exception("手动裁剪后登记向量回填失败，不影响裁剪主流程")
+
+        # 记录审计：手动裁剪替换素材图片属破坏性操作，留痕便于追溯。
+        # record_audit_log 内部使用独立会话并吞异常，不影响主流程
+        from app.services.audit_service import record_audit_log
+
+        await record_audit_log(
+            action="crop",
+            count=1,
+            detail=(
+                f"手动裁剪素材 {insp.id}：保留区域 y1={y1_ratio:.4f}~y2={y2_ratio:.4f}"
+                "（备份已随裁剪成功清理）"
+            ),
+        )
+
+        logger.info(f"手动裁剪完成: id={insp.id}, y1={y1_ratio:.4f}, y2={y2_ratio:.4f}")
+        return insp
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 原图已被替换但后续失败（commit 之前）：从备份恢复原文件，保持磁盘
+        # 与数据库一致；若新缩略图已写入，一并删除（避免与恢复后的原图错配）
+        if replaced:
+            if new_thumb:
+                (settings.storage_root / new_thumb).unlink(missing_ok=True)
+            if backup_path is not None and backup_path.exists():
+                try:
+                    shutil.copy2(backup_path, full)
+                    logger.error(f"手动裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
+                except Exception as restore_err:
+                    logger.error(
+                        f"手动裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
+                        f"err={e}, restore_err={restore_err}"
+                    )
+        if tmp is not None and tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"裁剪处理失败: {e}") from e

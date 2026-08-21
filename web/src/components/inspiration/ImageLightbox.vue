@@ -13,6 +13,8 @@ const props = defineProps<{
   imagePaths?: string[]
   /** 打开时初始显示索引（与 imagePaths 配合） */
   initialIndex?: number
+  /** 图片版本标识（可选）：裁剪等原地替换图片后附加 ?v= 绕过浏览器缓存 */
+  imageVersion?: string
 }>()
 
 const emit = defineEmits<{
@@ -29,6 +31,11 @@ const imageList = computed<string[]>(() => {
 const currentIndex = ref(0)
 /** 当前显示的图片路径 */
 const currentImage = computed(() => imageList.value[currentIndex.value] || '')
+/** 当前图片完整 URL（带可选版本参数，原地替换图片后用于绕过浏览器缓存） */
+const currentImageSrc = computed(() => {
+  const base = getFileUrl(currentImage.value)
+  return props.imageVersion ? `${base}?v=${props.imageVersion}` : base
+})
 
 // ===== 缩放 =====
 const MIN_SCALE = 0.5
@@ -44,8 +51,12 @@ const offsetY = ref(0)
 const imgRef = ref<HTMLImageElement | null>(null)
 const wrapRef = ref<HTMLDivElement | null>(null)
 
-function zoomIn() { scale.value = Math.min(MAX_SCALE, +(scale.value + SCALE_STEP).toFixed(2)) }
-function zoomOut() { scale.value = Math.max(MIN_SCALE, +(scale.value - SCALE_STEP).toFixed(2)) }
+function zoomIn() {
+  scale.value = Math.min(MAX_SCALE, +(scale.value + SCALE_STEP).toFixed(2))
+}
+function zoomOut() {
+  scale.value = Math.max(MIN_SCALE, +(scale.value - SCALE_STEP).toFixed(2))
+}
 function resetZoom() {
   scale.value = 1
   // 回到 1x 时平移归零，避免残留位移让图片偏离中心
@@ -55,7 +66,10 @@ function resetZoom() {
 /** 双击在 1x 与 2x 间切换 */
 function onDblClick() {
   scale.value = scale.value === 1 ? 2 : 1
-  if (scale.value === 1) { offsetX.value = 0; offsetY.value = 0 }
+  if (scale.value === 1) {
+    offsetX.value = 0
+    offsetY.value = 0
+  }
 }
 
 /**
@@ -111,7 +125,10 @@ function onDragStart(e: MouseEvent) {
 function onDragMove(e: MouseEvent) {
   if (!dragging) return
   // 位移超过 3px 视为拖拽（而非原地点击）
-  if (!dragMoved && (Math.abs(e.clientX - dragStartX) > 3 || Math.abs(e.clientY - dragStartY) > 3)) {
+  if (
+    !dragMoved &&
+    (Math.abs(e.clientX - dragStartX) > 3 || Math.abs(e.clientY - dragStartY) > 3)
+  ) {
     dragMoved = true
   }
   offsetX.value = dragOriginX + (e.clientX - dragStartX)
@@ -148,13 +165,15 @@ function onWheel(e: WheelEvent) {
 
 // ===== 左右切换 =====
 const canPrev = computed(() => imageList.value.length > 1 && currentIndex.value > 0)
-const canNext = computed(() => imageList.value.length > 1 && currentIndex.value < imageList.value.length - 1)
+const canNext = computed(
+  () => imageList.value.length > 1 && currentIndex.value < imageList.value.length - 1,
+)
 
 function goPrev() {
   if (!canPrev.value) return
   currentIndex.value--
   resetZoom()
-  imageLoading.value = true  // 切换图片后重新进入加载态，新图加载完成由 @load 清除
+  imageLoading.value = true // 切换图片后重新进入加载态，新图加载完成由 @load 清除
 }
 function goNext() {
   if (!canNext.value) return
@@ -165,7 +184,9 @@ function goNext() {
 
 // ===== 加载状态 =====
 const imageLoading = ref(false)
-function onImageLoad() { imageLoading.value = false }
+function onImageLoad() {
+  imageLoading.value = false
+}
 
 // ===== 滚动锁定与键盘 =====
 /** 打开前的 body overflow，关闭/卸载时恢复 */
@@ -214,7 +235,7 @@ watch(
     }
   },
   // 挂载时 show 即 true 也要生效：加 immediate 确保初始打开就锁定滚动并注册键盘监听
-  { immediate: true }
+  { immediate: true },
 )
 
 // 组件被卸载（如灯箱未关闭直接路由跳走）时也要移除监听器并恢复滚动
@@ -244,8 +265,12 @@ onUnmounted(() => {
           <a-spin v-if="currentImage" :loading="imageLoading" class="lightbox-loading" :size="32">
             <img
               ref="imgRef"
-              :src="getFileUrl(currentImage)"
-              :alt="imageList.length > 1 ? `大图浏览 ${currentIndex + 1}/${imageList.length}` : '大图浏览'"
+              :src="currentImageSrc"
+              :alt="
+                imageList.length > 1
+                  ? `大图浏览 ${currentIndex + 1}/${imageList.length}`
+                  : '大图浏览'
+              "
               class="lightbox-img"
               :class="{ 'is-zoomed': scale !== 1, 'is-panning': isPanning }"
               :style="{ transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})` }"
@@ -275,8 +300,22 @@ onUnmounted(() => {
       </div>
 
       <!-- 左右切换（仅多图时显示，点击不触发射出 close） -->
-      <a-button v-if="canPrev" class="nav-btn nav-prev" shape="circle" size="large" @click.stop="goPrev">‹</a-button>
-      <a-button v-if="canNext" class="nav-btn nav-next" shape="circle" size="large" @click.stop="goNext">›</a-button>
+      <a-button
+        v-if="canPrev"
+        class="nav-btn nav-prev"
+        shape="circle"
+        size="large"
+        @click.stop="goPrev"
+        >‹</a-button
+      >
+      <a-button
+        v-if="canNext"
+        class="nav-btn nav-next"
+        shape="circle"
+        size="large"
+        @click.stop="goNext"
+        >›</a-button
+      >
     </div>
   </Teleport>
 </template>

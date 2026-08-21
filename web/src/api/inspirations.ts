@@ -282,6 +282,25 @@ export async function updateRating(id: string, rating: number) {
   return data
 }
 
+/** 手动裁剪请求：保留区域上下边界（相对 EXIF 校正后图片高度的比例，0~1） */
+export interface CropRegionRequest {
+  y1_ratio: number
+  y2_ratio: number
+}
+
+/** 手动裁剪素材图片（保留中间区域，裁掉上下部分），返回更新后的素材 */
+export async function cropInspirationRegion(
+  id: string,
+  y1Ratio: number,
+  y2Ratio: number,
+): Promise<InspirationOut> {
+  const { data } = await apiClient.post<InspirationOut>(`/inspirations/${id}/crop`, {
+    y1_ratio: y1Ratio,
+    y2_ratio: y2Ratio,
+  })
+  return data
+}
+
 /** 彻底删除灵感（物理删除，不可恢复；用于垃圾桶「彻底删除」等场景） */
 export async function deleteInspiration(id: string) {
   await apiClient.delete(`/inspirations/${id}`)

@@ -22,6 +22,7 @@ import {
   type TrashReason,
 } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
+import ImageCropModal from '@/components/inspiration/ImageCropModal.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
@@ -42,6 +43,10 @@ const router = useRouter()
 const detail = ref<InspirationDetailOut | null>(null)
 /** 灯箱是否打开 */
 const lightboxOpen = ref(false)
+/** 裁剪弹窗是否打开（仅图片素材显示入口） */
+const cropOpen = ref(false)
+/** 图片版本号：裁剪等原地替换图片后递增，附加 ?v= 绕过浏览器缓存 */
+const fileVersion = ref('')
 /** 正在加载 */
 const loading = ref(true)
 /** 重新分析提交中（防重复点击） */
@@ -117,7 +122,7 @@ function onKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null
   const tag = target?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
-  if (lightboxOpen.value || trashModalOpen.value) return
+  if (lightboxOpen.value || trashModalOpen.value || cropOpen.value) return
   if (e.key === 'ArrowLeft' && hasPrev.value) {
     e.preventDefault()
     goNeighbor('prev')
@@ -189,8 +194,7 @@ async function handleRate(value: number) {
     detail.value.rating = value
     Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
-    const detailMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data
-      ?.detail
+    const detailMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
     Message.error(detailMsg || '评分失败')
   }
 }
@@ -283,6 +287,20 @@ const downloadFileName = computed(() => {
   if (!detail.value) return 'download'
   return detail.value.file_path.split('/').pop() || 'download'
 })
+
+/** 主图完整 URL：裁剪等原地替换图片后附加 ?v= 版本参数，强制浏览器重新拉取新图 */
+const mainImageSrc = computed(() => {
+  if (!detail.value) return ''
+  const base = getFileUrl(detail.value.file_path)
+  return fileVersion.value ? `${base}?v=${fileVersion.value}` : base
+})
+
+/** 裁剪成功：刷新素材详情（后端已同步缩略图/哈希/主色调等派生数据） */
+function handleCropSuccess() {
+  fileVersion.value = String(Date.now()) // 先递增版本号，让主图/裁剪弹窗/灯箱取到新图
+  cropOpen.value = false
+  if (detail.value) loadDetail(detail.value.id)
+}
 
 /** 判断「原始链接」是否为可访问的页面链接（排除图片/视频 CDN 直链与危险协议） */
 const isSourceLinkValid = computed(() => {
@@ -414,20 +432,27 @@ async function removeTag(t: InspirationTagOut) {
         <div class="detail-layout">
           <!-- 左侧：大图 / 视频 -->
           <div class="image-section">
-            <video
-              v-if="detail.media_type === 'video'"
-              :src="getFileUrl(detail.file_path)"
-              controls
-              playsinline
-              class="main-image"
-            />
-            <img
-              v-else
-              :src="getFileUrl(detail.file_path)"
-              alt="穿搭素材"
-              @click="lightboxOpen = true"
-              class="main-image"
-            />
+            <div v-if="detail.media_type === 'video'" class="main-image-wrap">
+              <video :src="getFileUrl(detail.file_path)" controls playsinline class="main-image" />
+            </div>
+            <div v-else class="main-image-wrap">
+              <img
+                :src="mainImageSrc"
+                alt="穿搭素材"
+                @click="lightboxOpen = true"
+                class="main-image"
+              />
+              <!-- 裁剪入口：仅图片素材显示（视频缩略图/非图片不显示） -->
+              <a-button
+                v-if="!detail.deleted_at"
+                class="crop-entry-btn"
+                size="small"
+                @click.stop="cropOpen = true"
+                title="裁剪图片（保留中间区域，裁掉上下部分）"
+              >
+                ✂️ 裁剪
+              </a-button>
+            </div>
 
             <!-- 大图灯箱（仅图片，可左右切换到相似推荐图） -->
             <ImageLightbox
@@ -435,6 +460,7 @@ async function removeTag(t: InspirationTagOut) {
               :show="lightboxOpen"
               :image-paths="lightboxPaths"
               :initial-index="0"
+              :image-version="fileVersion"
               @close="lightboxOpen = false"
             />
           </div>
@@ -476,7 +502,9 @@ async function removeTag(t: InspirationTagOut) {
                   <a-button type="primary" status="danger">彻底删除</a-button>
                 </a-popconfirm>
               </template>
-              <a-button v-else type="secondary" status="danger" @click="openTrashModal">移入垃圾桶</a-button>
+              <a-button v-else type="secondary" status="danger" @click="openTrashModal"
+                >移入垃圾桶</a-button
+              >
             </div>
 
             <!-- 基本信息 -->
@@ -645,11 +673,9 @@ async function removeTag(t: InspirationTagOut) {
         @change="(v: unknown) => (trashReason = (v as TrashReason | undefined) ?? null)"
       >
         <a-space direction="vertical" :size="10">
-          <a-radio
-            v-for="opt in TRASH_REASON_OPTIONS"
-            :key="opt.value"
-            :value="opt.value"
-          >{{ opt.label }}</a-radio>
+          <a-radio v-for="opt in TRASH_REASON_OPTIONS" :key="opt.value" :value="opt.value">{{
+            opt.label
+          }}</a-radio>
         </a-space>
       </a-radio-group>
       <template #footer>
@@ -666,6 +692,17 @@ async function removeTag(t: InspirationTagOut) {
         </div>
       </template>
     </a-modal>
+
+    <!-- 图片手动裁剪弹窗（仅图片素材；确认后由后端裁剪并同步派生数据） -->
+    <ImageCropModal
+      v-if="detail && detail.media_type === 'image'"
+      :visible="cropOpen"
+      :inspiration-id="detail.id"
+      :image-path="detail.file_path"
+      :image-version="fileVersion"
+      @close="cropOpen = false"
+      @success="handleCropSuccess"
+    />
   </div>
 </template>
 
@@ -704,6 +741,21 @@ async function removeTag(t: InspirationTagOut) {
 .image-section {
   flex: 1;
   min-width: 0;
+}
+
+/* 主图容器：相对定位，供右上角裁剪入口按钮悬浮 */
+.main-image-wrap {
+  position: relative;
+}
+
+/* 裁剪入口：悬浮在图片右上角，不与图片的点击开灯箱冲突 */
+.crop-entry-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .main-image {

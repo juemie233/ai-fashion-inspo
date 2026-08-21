@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, model_validator
 
 from app.schemas.person import BloggerBriefOut, ModelBriefOut
 from app.utils.time import format_utc
@@ -67,6 +67,24 @@ class BatchAddTagsRequest(BaseModel):
     )
     category: str = "free"
     source: str = "manual"
+
+
+class CropRequest(BaseModel):
+    """手动裁剪图片素材的请求体：保留区域的上下边界（相对图片高度的比例）。
+
+    比例基准为「EXIF 方向校正后」的图片显示高度，与前端 Cropper.js
+    （checkOrientation 按 EXIF 校正）及后端 ImageOps.exif_transpose 保持一致。
+    """
+
+    y1_ratio: float = Field(..., ge=0, lt=1, description="保留区域上边界比例（0~1）")
+    y2_ratio: float = Field(..., gt=0, le=1, description="保留区域下边界比例（0~1）")
+
+    @model_validator(mode="after")
+    def _validate_region_order(self) -> "CropRequest":
+        """上边界必须严格小于下边界（保留区域非空）。"""
+        if self.y1_ratio >= self.y2_ratio:
+            raise ValueError(f"y1_ratio 必须小于 y2_ratio（当前 y1={self.y1_ratio}, y2={self.y2_ratio}）")
+        return self
 
 
 class MoveToTrashRequest(BaseModel):

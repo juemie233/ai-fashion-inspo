@@ -11,6 +11,7 @@ from app.schemas.inspiration import (
     BatchFavoriteRequest,
     BatchTrashRequest,
     BatchUpdateRequest,
+    CropRequest,
     InspirationDetailOut,
     InspirationListOut,
     InspirationOut,
@@ -367,6 +368,27 @@ async def update_inspiration(
 ) -> InspirationOut:
     """更新灵感（收藏状态、作者等部分字段）。"""
     inspiration = await inspiration_service.update_inspiration(db, inspiration_id, data)
+    return _to_out(inspiration)
+
+
+@router.post("/{inspiration_id}/crop", response_model=InspirationOut)
+async def crop_inspiration(
+    inspiration_id: str,
+    payload: CropRequest,
+    db: AsyncSession = Depends(get_db),
+) -> InspirationOut:
+    """手动裁剪素材图片（保留中间区域，裁掉上下部分），就地替换原图。
+
+    裁剪边界为相对「EXIF 校正后图片高度」的比例：y1_ratio 上边界、y2_ratio
+    下边界（0 ≤ y1 < y2 ≤ 1）。裁剪成功自动重建缩略图、重算内容哈希与
+    感知哈希、刷新主色调并登记向量回填；原图先备份，成功后清理备份、
+    失败自动从备份恢复，原素材不受影响。
+    """
+    from app.services.crop_service import crop_inspiration_region
+
+    inspiration = await crop_inspiration_region(
+        db, inspiration_id, payload.y1_ratio, payload.y2_ratio
+    )
     return _to_out(inspiration)
 
 
