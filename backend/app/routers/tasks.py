@@ -122,3 +122,39 @@ async def cancel_task(
         status_code=400,
         detail=f"仅等待中的任务可以取消并删除（当前状态 {task.status}）",
     )
+
+
+@router.delete("/{task_id}", response_model=TaskCancelOut)
+async def delete_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """删除任务历史记录：仅终态（success/failed/cancelled）可物理删除。
+
+    pending/running 拒绝删除（避免与 worker 认领/执行产生竞态）。
+    供任务管理页「删除任务」按钮清理历史记录（采集任务走采集专用删除接口）。
+    """
+    task = await db.get(TaskQueue, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务未找到")
+    if task.status in ("pending", "running"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务状态为 {task.status}，不能删除",
+        )
+    # 原子删除：二次确认仍为终态（防止删除瞬间状态被外部修改成 pending/running）
+    result = await db.execute(
+        delete(TaskQueue).where(
+            TaskQueue.id == task_id,
+            TaskQueue.status.in_(("success", "failed", "cancelled")),
+        )
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        current = await db.get(TaskQueue, task_id)
+        state = current.status if current else "已删除"
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务状态已变化（当前状态 {state}），不能删除",
+        )
+    return {"message": "任务已删除", "task_id": task_id, "deleted": True}

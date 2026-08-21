@@ -249,9 +249,10 @@ export function useTaskCenter() {
   }
 
   async function deleteTask(t: UnifiedTask) {
-    if (t.source !== 'scraper') return
     try {
-      await apiClient.delete(`/scraper/tasks/${t.id}`)
+      // 采集任务记录在 scraper_tasks 表，走采集专用删除接口；队列任务走通用删除接口
+      const url = t.source === 'scraper' ? `/scraper/tasks/${t.id}` : `/tasks/${t.id}`
+      await apiClient.delete(url)
       Message.success('已删除')
       loadTasks()
     } catch (e) {

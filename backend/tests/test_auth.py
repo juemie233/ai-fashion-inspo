@@ -55,6 +55,10 @@ def test_other_destructive_endpoints(client, monkeypatch):
     r = client.delete("/api/ai/history/999")
     assert r.status_code == 401
 
+    # 任务队列历史记录删除（破坏性接口）
+    r = client.delete("/api/tasks/1")
+    assert r.status_code == 401
+
 
 def test_destructive_without_key_config_skipped(client):
     """未配置 API_KEY（开发模式）：破坏性接口跳过认证，正常业务响应。"""

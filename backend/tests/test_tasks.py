@@ -106,3 +106,31 @@ async def test_cancel_again_after_delete_returns_404(client):
 def test_cancel_missing_task_404(client):
     """取消不存在的任务 → 404。"""
     assert client.post("/api/tasks/99999/cancel").status_code == 404
+
+
+async def test_delete_terminal_task_physically_deletes(client):
+    """删除终态任务（cancelled/success/failed）：物理删除，记录从表与列表中消失。"""
+    for status in ("cancelled", "success", "failed"):
+        tid = await _add_task(status=status)
+
+        r = client.delete(f"/api/tasks/{tid}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"] is True
+        assert client.get(f"/api/tasks/{tid}").status_code == 404
+
+
+async def test_delete_pending_running_rejected(client):
+    """删除 pending/running 任务 → 400，记录保留（避免与 worker 竞态）。"""
+    for status in ("pending", "running"):
+        tid = await _add_task(status=status)
+
+        r = client.delete(f"/api/tasks/{tid}")
+        assert r.status_code == 400, r.text
+        assert "不能删除" in r.json()["detail"]
+        assert client.get(f"/api/tasks/{tid}").status_code == 200
+        assert client.get(f"/api/tasks/{tid}").json()["status"] == status
+
+
+def test_delete_missing_task_404(client):
+    """删除不存在的任务 → 404。"""
+    assert client.delete("/api/tasks/99999").status_code == 404

@@ -158,3 +158,41 @@ describe('useTaskCenter.cancelTask 取消任务', () => {
     expect(Message.success).not.toHaveBeenCalled()
   })
 })
+
+describe('useTaskCenter.deleteTask 删除任务', () => {
+  it('队列任务走通用删除接口 /tasks/{id}', async () => {
+    const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
+    mocks.delete.mockResolvedValue({ data: { message: '任务已删除', task_id: 5, deleted: true } })
+
+    const tc = useTaskCenter()
+    await tc.deleteTask(makeQueueTask({ status: 'cancelled' }))
+
+    expect(mocks.delete).toHaveBeenCalledWith('/tasks/5')
+    expect(successSpy).toHaveBeenCalledWith('已删除')
+  })
+
+  it('采集任务走采集专用删除接口 /scraper/tasks/{id}，不误走通用接口', async () => {
+    const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
+    mocks.delete.mockResolvedValue({ data: { message: '已删除' } })
+
+    const tc = useTaskCenter()
+    await tc.deleteTask(makeScraperTask({ status: 'cancelled' }))
+
+    expect(mocks.delete).toHaveBeenCalledWith('/scraper/tasks/3')
+    expect(successSpy).toHaveBeenCalledWith('已删除')
+  })
+
+  it('删除失败时提示错误并刷新列表', async () => {
+    const errorSpy = vi.spyOn(Message, 'error').mockImplementation(msgMock)
+    const queueTask = makeQueueTask({ status: 'running' })
+    mocks.delete.mockRejectedValue({
+      response: { data: { detail: '任务状态为 running，不能删除' } },
+    })
+
+    const tc = useTaskCenter()
+    await tc.deleteTask(queueTask)
+
+    expect(mocks.delete).toHaveBeenCalledWith('/tasks/5')
+    expect(errorSpy).toHaveBeenCalledWith('任务状态为 running，不能删除')
+  })
+})

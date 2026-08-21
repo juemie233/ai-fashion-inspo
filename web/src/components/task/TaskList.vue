@@ -171,6 +171,22 @@ const columns: TableColumnData[] = [
               },
             )
           : null,
+        // 队列任务终态记录清理：仅 cancelled/success/failed 可删（后端同样约束）
+        row.source === 'queue' &&
+        (row.status === 'cancelled' || row.status === 'success' || row.status === 'failed')
+          ? h(
+              Popconfirm,
+              { content: '确定删除该任务历史记录？', onOk: () => emit('delete', row) },
+              {
+                default: () =>
+                  h(
+                    Button,
+                    { size: 'small', type: 'text', status: 'danger' },
+                    { default: () => '删除任务' },
+                  ),
+              },
+            )
+          : null,
       ])
     },
   },
