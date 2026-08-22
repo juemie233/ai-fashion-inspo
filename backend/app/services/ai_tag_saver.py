@@ -6,7 +6,7 @@
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +19,34 @@ if TYPE_CHECKING:
     from app.models.tag import Tag
 
 
+async def clear_ai_tags(db: AsyncSession, inspiration_id: str) -> int:
+    """清除素材上所有由 AI 分析产生的标签关联（source=ai_generated）。
+
+    业务规则（重新分析时先清后写，保证只保留最新一次 AI 结果）：
+    - 仅删除关联行（inspiration_tags），不删除 tags 表中的标签本身
+      （标签保留以便复用与历史追溯）；
+    - 不影响手动标签（manual）与种子标签关联；
+    - 不触碰 ai_extracted_tags 历史快照表。
+
+    返回被删除的关联数。
+    """
+    result = await db.execute(
+        delete(InspirationTag).where(
+            InspirationTag.inspiration_id == inspiration_id,
+            InspirationTag.source == "ai_generated",
+        )
+    )
+    return result.rowcount or 0
+
+
 async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
-    """将 AI 分析提取的标签保存到数据库。返回创建的标签数。"""
+    """将 AI 分析提取的标签保存到数据库。返回关联的标签数。
+
+    重新分析语义：先清除该素材既有的 AI 标签关联，再写入本次结果，
+    与新增关联在同一事务内原子完成（调用方统一 commit）；
+    手动/种子关联不受影响。
+    """
+    await clear_ai_tags(db, inspiration_id)
     tag_count = 0
     for name, category, confidence in iter_extracted_tags(data):
         tag = await get_or_create_tag(db, name, category, "ai_generated")
@@ -41,6 +67,9 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
         "fit": "fit",
         "wear_style": "body_part",
         "attributes": "attribute",
+        "Atmosphere": "Atmosphere",
+        "Expression": "Expression",
+        "Leg_Posture": "Leg_Posture"
     }
 
     # 处理简单列表型标签（风格、版型等） — 兼容 null 值
@@ -228,8 +257,13 @@ async def link_tag(
     inspiration_id: str,
     tag_id: int,
     confidence: float = 1.0,
+    source: str = "ai_generated",
 ) -> None:
-    """将标签与素材关联，避免重复。纠竞态冲突，置信度更高时更新。"""
+    """将标签与素材关联，避免重复。纠竞态冲突，置信度更高时更新。
+
+    新建关联写入 source（AI 关联默认 ai_generated）；已存在关联时
+    保留其原 source（不把手动关联覆盖成 AI 关联）。
+    """
     result = await db.execute(
         select(InspirationTag).where(
             InspirationTag.inspiration_id == inspiration_id,
@@ -246,6 +280,7 @@ async def link_tag(
             inspiration_id=inspiration_id,
             tag_id=tag_id,
             confidence=confidence,
+            source=source,
         )
         db.add(link)
         try:

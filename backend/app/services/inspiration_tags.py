@@ -66,7 +66,8 @@ async def batch_add_tags(
                 skipped_existing += 1
                 continue
             link = InspirationTag(
-                inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0
+                inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0,
+                source="manual",
             )
             db.add(link)
             try:
@@ -139,7 +140,8 @@ async def add_inspiration_tags(
             continue
         db.add(
             InspirationTag(
-                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0
+                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0,
+                source="manual",
             )
         )
         added.append({"id": tag.id, "name": tag.name, "category": tag.category})

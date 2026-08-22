@@ -306,7 +306,10 @@ async def create_inspiration_from_url(
     if tag_names:
         for tname in tag_names:
             tag = await get_or_create_tag(db, tname.strip(), "free")
-            link = InspirationTag(inspiration_id=inspiration.id, tag_id=tag.id, confidence=1.0)
+            link = InspirationTag(
+                inspiration_id=inspiration.id, tag_id=tag.id, confidence=1.0,
+                source="manual",
+            )
             db.add(link)
         await db.flush()
 

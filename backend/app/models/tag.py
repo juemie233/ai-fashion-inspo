@@ -66,6 +66,12 @@ class InspirationTag(Base):
         primary_key=True,
     )
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    # 关联来源：manual 手动添加/种子关联；ai_generated 由 AI 分析产生。
+    # 重新分析时仅清除 ai_generated 关联并替换为最新结果，手动/种子关联保留。
+    # 注意：这是「关联」的来源，与 Tag.source（标签本身来源）语义不同。
+    source: Mapped[str] = mapped_column(
+        String(16), default="manual", server_default="manual"
+    )
 
     # 关联关系
     inspiration: Mapped["Inspiration"] = relationship(
@@ -77,6 +83,8 @@ class InspirationTag(Base):
         UniqueConstraint("inspiration_id", "tag_id", name="uq_inspiration_tag"),
         # 按标签筛选（WHERE tag_id = X）需要 tag_id 单列索引；复合主键索引 (inspiration_id, tag_id) 无法高效服务此类查询
         Index("ix_inspiration_tags_tag_id", "tag_id"),
+        # 重新分析时按 (素材, 来源) 删除旧 AI 关联
+        Index("ix_inspiration_tags_insp_source", "inspiration_id", "source"),
     )
 
 

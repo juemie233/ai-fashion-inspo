@@ -13,6 +13,7 @@ import pytest
 
 from app.database import async_session
 from app.models.inspiration import Inspiration
+from app.models.tag import InspirationTag, Tag
 
 
 class FakeResponse:
@@ -35,6 +36,8 @@ class FakeOllamaClient:
 
     # 穿搭二分类结果，测试可覆盖（rejected 用例置为 False）
     outfit_is_outfit = True
+    # 穿搭分析输出覆盖（重分析测试用）；None 时用内置默认
+    analysis_override: str | None = None
 
     def __init__(self, *args, **kwargs):
         pass
@@ -66,7 +69,9 @@ class FakeOllamaClient:
             return f'{{"is_outfit": {verdict}, "reason": "穿搭照片"}}'
         if "疑似由 AI 生成" in prompt:
             return '{"is_ai_generated": false, "confidence": 0.1}'
-        # 默认：完整穿搭分析
+        # 默认：完整穿搭分析（测试可覆盖 analysis_override 返回不同标签集）
+        if cls.analysis_override is not None:
+            return cls.analysis_override
         return '{"style": ["法式"], "items": [{"type": "连衣裙"}], "dominant_colors": ["#FFFFFF"]}'
 
 
@@ -75,6 +80,166 @@ def fake_ollama(monkeypatch):
     """把 httpx.AsyncClient 替换为 FakeOllamaClient（服务内函数均运行时 import httpx）。"""
     monkeypatch.setattr(httpx, "AsyncClient", FakeOllamaClient)
     FakeOllamaClient.outfit_is_outfit = True  # 每个用例重置
+    FakeOllamaClient.analysis_override = None
+
+
+async def _inspiration_tags(inspiration_id: str) -> dict[str, str]:
+    """返回素材当前标签 {标签名: 关联 source}。"""
+    async with async_session() as db:
+        from sqlalchemy import select
+
+        rows = await db.execute(
+            select(Tag.name, InspirationTag.source)
+            .join(Tag, Tag.id == InspirationTag.tag_id)
+            .where(InspirationTag.inspiration_id == inspiration_id)
+        )
+        return {name: source for name, source in rows.all()}
+
+
+async def test_reanalysis_replaces_ai_tags_keeps_tag_rows(
+    client, upload, fake_ollama
+):
+    """重新分析：旧 AI 标签关联被清除、新 AI 标签生效；标签本身不删除。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    insp = upload().json()
+    # 第一次分析：法式 + 连衣裙
+    async with async_session() as db:
+        assert await analyze_image(db, insp["id"], insp["file_path"]) is True
+    tags1 = await _inspiration_tags(insp["id"])
+    assert {"法式", "连衣裙"} <= set(tags1)
+    assert all(s == "ai_generated" for s in tags1.values())
+
+    # 第二次分析：日系 + 百褶裙（完全不同的标签集）
+    FakeOllamaClient.analysis_override = (
+        '{"style": ["日系"], "items": [{"type": "百褶裙"}]}'
+    )
+    async with async_session() as db:
+        assert await analyze_image(db, insp["id"], insp["file_path"]) is True
+
+    tags2 = await _inspiration_tags(insp["id"])
+    # 旧 AI 关联消失，新 AI 关联出现
+    assert "法式" not in tags2 and "连衣裙" not in tags2
+    assert "日系" in tags2 and "百褶裙" in tags2
+    assert all(s == "ai_generated" for s in tags2.values())
+
+    # 旧标签本身仍保留在 tags 表中（未被删除，仅解除关联）
+    async with async_session() as db:
+        from sqlalchemy import func, select
+
+        orphan = await db.execute(
+            select(func.count()).select_from(Tag).where(Tag.name.in_(["法式", "连衣裙"]))
+        )
+        assert orphan.scalar() == 2
+
+
+async def test_reanalysis_preserves_manual_and_seed_tags(
+    client, upload, fake_ollama
+):
+    """重新分析只清 AI 关联：手动标签与种子标签关联保留。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    insp = upload().json()
+    # 首次分析产生 AI 标签
+    async with async_session() as db:
+        await analyze_image(db, insp["id"], insp["file_path"])
+    # 手动添加一个标签（source=manual 关联）
+    client.post(f"/api/inspirations/{insp['id']}/tags", json={"names": ["手动标签"]})
+    # 预置一个种子标签并关联（模拟种子标签关联 source=manual）
+    async with async_session() as db:
+        from sqlalchemy import select
+
+        from app.models.tag import InspirationTag
+
+        seed = (
+            await db.execute(select(Tag).where(Tag.name == "法式"))
+        ).scalar_one_or_none()
+        # 法式 已作为 AI 关联存在；额外造一个种子标签并手动关联
+        seed_tag = Tag(name="种子测试标签", category="free", source="seed")
+        db.add(seed_tag)
+        await db.flush()
+        db.add(
+            InspirationTag(
+                inspiration_id=insp["id"], tag_id=seed_tag.id, confidence=1.0,
+                source="manual",
+            )
+        )
+        await db.commit()
+
+    before = await _inspiration_tags(insp["id"])
+    assert "手动标签" in before and "种子测试标签" in before
+
+    # 重新分析
+    FakeOllamaClient.analysis_override = '{"style": ["街头"]}'
+    async with async_session() as db:
+        await analyze_image(db, insp["id"], insp["file_path"])
+
+    after = await _inspiration_tags(insp["id"])
+    # 手动标签与种子标签关联保留
+    assert "手动标签" in after and after["手动标签"] == "manual"
+    assert "种子测试标签" in after and after["种子测试标签"] == "manual"
+    # 旧 AI 标签 法式/连衣裙 被替换
+    assert "法式" not in after
+    # 新 AI 标签生效
+    assert after.get("街头") == "ai_generated"
+
+
+async def test_reanalysis_manual_same_name_not_overwritten(
+    client, upload, fake_ollama
+):
+    """手动关联与 AI 同名标签时，该关联保持 manual，重分析不被误删为 AI。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    insp = upload().json()
+    # 先手动关联「法式」（此时标签由 get_or_create_tag 以 manual 创建）
+    client.post(f"/api/inspirations/{insp['id']}/tags", json={"names": ["法式"]})
+    before = await _inspiration_tags(insp["id"])
+    assert before.get("法式") == "manual"
+
+    # AI 分析也产出「法式」：既有 manual 关联不应被覆盖成 ai_generated，
+    # 且由于 clear_ai_tags 只删 AI 关联，手动关联保留
+    async with async_session() as db:
+        await analyze_image(db, insp["id"], insp["file_path"])
+    after = await _inspiration_tags(insp["id"])
+    assert after.get("法式") == "manual"  # 仍是手动，不被覆盖/删除
+
+
+async def test_multiple_reanalyses_keep_only_latest(client, upload, fake_ollama):
+    """多次重新分析：每次只保留最后一次的 AI 标签（幂等替换，不累积）。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    insp = upload().json()
+    outputs = [
+        '{"style": ["法式"]}',
+        '{"style": ["日系"]}',
+        '{"style": ["街头"]}',
+    ]
+    for out in outputs:
+        FakeOllamaClient.analysis_override = out
+        async with async_session() as db:
+            await analyze_image(db, insp["id"], insp["file_path"])
+
+    after = await _inspiration_tags(insp["id"])
+    assert after == {"街头": "ai_generated"}  # 只留最后一次，无累积
+
+
+async def test_failed_analysis_keeps_existing_ai_tags(client, upload, fake_ollama):
+    """分析失败（无法解析）时不清除既有 AI 标签，避免半更新/误删。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    insp = upload().json()
+    async with async_session() as db:
+        await analyze_image(db, insp["id"], insp["file_path"])
+    assert "法式" in await _inspiration_tags(insp["id"])
+
+    # 返回无法解析为分析 JSON 的内容（保存路径不进入，旧标签保留）
+    FakeOllamaClient.analysis_override = "抱歉，我无法分析这张图片。"
+    async with async_session() as db:
+        success = await analyze_image(db, insp["id"], insp["file_path"])
+
+    assert success is False
+    after = await _inspiration_tags(insp["id"])
+    assert "法式" in after  # 既有 AI 标签未被清空
 
 
 async def test_analyze_image_saves_tags(client, upload, fake_ollama):
