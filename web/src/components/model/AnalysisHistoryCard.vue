@@ -2,6 +2,7 @@
 /** 分析历史卡片：筛选、批量操作、历史表格与分页。 */
 
 import { h, computed, ref, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   Tag,
   Button,
@@ -10,12 +11,14 @@ import {
   Message,
   type TableColumnData,
 } from '@arco-design/web-vue'
-import { IconRefresh, IconDelete, IconSync } from '@arco-design/web-vue/es/icon'
+import { IconRefresh, IconDelete, IconSync, IconEye } from '@arco-design/web-vue/es/icon'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { sortAnalysisTags } from '@/utils/tagSort'
 import type { HistoryItem } from '@/types/analysis'
+
+const router = useRouter()
 
 const props = defineProps<{
   history: HistoryItem[]
@@ -190,19 +193,38 @@ const columns = computed<TableColumnData[]>(() => [
       const thumb = row.thumbnail_path || row.file_path
       if (!thumb) return '-'
       const full = previewImagePath(row)
-      // 悬停快速预览：固定居中浮层（不再用 tooltip 跟随缩略图，避免大图超出屏幕）；
-      // 点击缩略图打开全屏灯箱动态浏览
-      return h('img', {
-        src: getFileUrl(thumb),
-        title: '悬停快速预览，点击全屏浏览',
-        style:
-          'width:48px;height:72px;object-fit:cover;border-radius:4px;cursor:zoom-in;display:block',
-        onMouseenter: () => startHoverPreview(full),
-        onMouseleave: clearHoverPreview,
-        onClick: () => {
-          if (full) emit('previewImage', full)
+      // 缩略图：单击跳转素材详情页；悬停时右下角显示眼睛按钮，点击全屏预览
+      return h(
+        'div',
+        {
+          class: 'thumb-cell',
+          style:
+            'position:relative;width:48px;height:72px;cursor:pointer;border-radius:4px;overflow:hidden',
+          onMouseenter: () => startHoverPreview(full),
+          onMouseleave: clearHoverPreview,
+          onClick: () => router.push({ name: 'detail', params: { id: row.inspiration_id } }),
         },
-      })
+        [
+          h('img', {
+            src: getFileUrl(thumb),
+            title: '点击查看素材详情',
+            style: 'width:48px;height:72px;object-fit:cover;border-radius:4px;display:block',
+          }),
+          h(
+            'span',
+            {
+              title: '全屏预览',
+              class: 'thumb-preview-btn',
+              // 点击眼睛按钮：阻止冒泡，不触发详情跳转，改为全屏预览
+              onClick: (e: MouseEvent) => {
+                e.stopPropagation()
+                if (full) emit('previewImage', full)
+              },
+            },
+            h(IconEye, { style: 'font-size:12px' }),
+          ),
+        ],
+      )
     },
   },
   {
@@ -572,6 +594,30 @@ const columns = computed<TableColumnData[]>(() => [
 }
 
 /* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */
+.thumb-preview-btn {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+/* 悬停缩略图容器时显示全屏预览按钮 */
+.thumb-preview-btn:hover,
+.thumb-preview-btn:focus-visible {
+  opacity: 1;
+}
+.thumb-cell:hover .thumb-preview-btn {
+  opacity: 1;
+}
+
 .hover-preview-layer {
   position: fixed;
   inset: 0;
