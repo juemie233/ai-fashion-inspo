@@ -13,7 +13,7 @@ import {
   Linking,
   Alert,
 } from 'react-native'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { apiClient, getFileUrl, type InspirationTag } from '../../services/api'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
@@ -33,7 +33,6 @@ function isSourceLinkValid(url: string | null | undefined): boolean {
 
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
-  const router = useRouter()
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
 
   const [detail, setDetail] = useState<Inspiration | null>(null)
@@ -51,10 +50,11 @@ export default function DetailScreen() {
     try {
       const { data } = await apiClient.get(`/inspirations/${id}`)
       setDetail(data)
-    } catch (e: any) {
+    } catch (e) {
       setDetail(null)
+      const status = (e as { response?: { status?: number } })?.response?.status
       setError(
-        e?.response?.status === 404
+        status === 404
           ? '素材未找到'
           : '加载失败，请检查网络或后端服务'
       )

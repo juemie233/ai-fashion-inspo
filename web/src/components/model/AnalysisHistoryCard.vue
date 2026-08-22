@@ -14,6 +14,7 @@ import { IconRefresh, IconDelete, IconSync } from '@arco-design/web-vue/es/icon'
 import { getFileUrl } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
+import { sortAnalysisTags } from '@/utils/tagSort'
 import type { HistoryItem } from '@/types/analysis'
 
 const props = defineProps<{
@@ -96,6 +97,12 @@ const sortOptions = [
   { label: '耗时升序', value: 'time_asc' },
   { label: '耗时降序', value: 'time_desc' },
 ]
+
+/**
+ * 表格「提取标签」列展示的标签数量。
+ * 默认显示 8 个，可通过表头数字输入框在 8~16 之间调节；超出部分折叠为 +N。
+ */
+const tagsVisibleCount = ref(8)
 
 /** 日期范围变化：同步父组件并触发加载 */
 function onDateRangeChange(value: unknown) {
@@ -238,13 +245,16 @@ const columns = computed<TableColumnData[]>(() => [
   {
     title: '提取标签',
     dataIndex: 'tags',
-    width: 180,
+    width: 280,
     render: ({ record }) => {
       const row = record as HistoryItem
-      const tags = row.tags || []
+      // 按「风格 > 氛围 > 袜 > 鞋 > 模特表情 > 其余」优先级展示，
+      // 同类内保持原有顺序；仅影响该表格的展示，不改动原始数据
+      const tags = sortAnalysisTags(row.tags || [])
       if (tags.length === 0) return '-'
-      const shown = tags.slice(0, 4)
-      const more = tags.length > 4 ? ` +${tags.length - 4}` : ''
+      const limit = tagsVisibleCount.value
+      const shown = tags.slice(0, limit)
+      const more = tags.length > limit ? ` +${tags.length - limit}` : ''
       return h('span', { style: 'display:flex;flex-wrap:wrap;gap:2px' }, [
         ...shown.map((t) => h(Tag, { key: t.name, size: 'small' }, () => t.name)),
         more ? h('span', { style: 'font-size:11px;color:#999' }, more) : null,
@@ -465,6 +475,18 @@ const columns = computed<TableColumnData[]>(() => [
         allow-clear
         @change="(v: unknown) => emit('sortByTime', (v as string) || null)"
       />
+      <div class="tags-limit-control">
+        <span class="tags-limit-label">显示标签</span>
+        <a-input-number
+          v-model="tagsVisibleCount"
+          :min="8"
+          :max="16"
+          :step="1"
+          size="small"
+          mode="button"
+          style="width: 92px"
+        />
+      </div>
     </div>
 
     <!-- 批量操作栏 -->
@@ -534,6 +556,19 @@ const columns = computed<TableColumnData[]>(() => [
   border: 1px solid #d0e3ff;
   border-radius: 6px;
   font-size: 13px;
+}
+
+/* 标签显示数量调节：数字输入框与说明文字同行 */
+.tags-limit-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.tags-limit-label {
+  font-size: 12px;
+  color: #86909c;
 }
 
 /* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */

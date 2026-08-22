@@ -81,7 +81,7 @@ export default function SearchScreen() {
       const { data } = await apiClient.get('/search', { params })
       setResults(data.items)
       setTotal(data.total)
-    } catch (e) {
+    } catch {
       setError('搜索失败，请确认后端服务已启动')
       setResults([])
       setTotal(0)
