@@ -23,6 +23,9 @@ const tagCategoryLabel: Record<string, string> = {
   body_part: '穿着方式',
   attribute: '属性',
   outfit: '穿搭大标签',
+  Atmosphere: '氛围',
+  Expression: '表情',
+  Leg_Posture: '腿部姿态',
 }
 </script>
 
@@ -59,7 +62,17 @@ const tagCategoryLabel: Record<string, string> = {
         <div v-if="detail.tags.length > 0">
           <h4 style="margin-bottom: 8px">提取的标签</h4>
           <a-space
-            v-for="cat in ['style', 'item_type', 'color', 'fit', 'body_part', 'attribute']"
+            v-for="cat in [
+              'style',
+              'item_type',
+              'color',
+              'fit',
+              'body_part',
+              'attribute',
+              'Atmosphere',
+              'Expression',
+              'Leg_Posture',
+            ]"
             :key="cat"
             style="margin-bottom: 8px"
             align="center"

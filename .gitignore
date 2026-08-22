@@ -87,6 +87,9 @@ mcp
 face-service/models/
 face-service/face_service.db
 
-# Playwright E2E ²úÎï
+# Playwright E2E ï¿½ï¿½ï¿½ï¿½
 web/test-results/
 web/playwright-report/
+
+# å¿½ç•¥æ’ä»¶
+.expert-mode
