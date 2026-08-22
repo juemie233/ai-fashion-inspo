@@ -289,9 +289,10 @@ async def confirm(
     """审核确认 / 驳回 / 撤销候选。
 
     - confirm：pending 候选 → 幂等写入人物关联表（inspiration_bloggers/models）
-      + matched_* 置为该人物 + match_status=confirmed
+      + matched_* 置为该人物 + match_status=confirmed（确认后即锁定，
+      重复确认幂等跳过，不报错）
     - reject：pending 候选 → 清空匹配结果（回未匹配区）
-    - undo：confirmed → 解除人物关联 + 清空匹配结果
+    - undo：保留兼容；已确认记录已锁定，撤销一律跳过（不提供解锁）
     """
     ids = list(dict.fromkeys(item.detection_id for item in data.items))
     rows = await db.execute(
@@ -343,20 +344,9 @@ async def confirm(
             det.match_status = None
             stats["rejected"] += 1
     else:  # undo
-        for item in data.items:
-            det = detections.get(item.detection_id)
-            if not det or det.match_status != "confirmed":
-                stats["skipped"] += 1
-                continue
-            if det.matched_blogger_id:
-                await blogger_service.unlink(db, det.inspiration_id, det.matched_blogger_id)
-            if det.matched_model_id:
-                await model_service.unlink(db, det.inspiration_id, det.matched_model_id)
-            det.matched_blogger_id = None
-            det.matched_model_id = None
-            det.confidence = None
-            det.match_status = None
-            stats["undone"] += 1
+        # 锁定为单向操作：已确认记录不提供解锁，撤销一律跳过（保留接口兼容）
+        for _item in data.items:
+            stats["skipped"] += 1
 
     await db.commit()
     return {"action": data.action, **stats}

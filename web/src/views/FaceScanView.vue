@@ -11,6 +11,7 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { IconLock } from '@arco-design/web-vue/es/icon'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
@@ -29,8 +30,10 @@ import StatusTag from '@/components/common/StatusTag.vue'
 // ── 任务区 ──
 const scanTask = ref<FaceScanTaskOut | null>(null)
 const matchTask = ref<FaceScanTaskOut | null>(null)
-const scope = ref<'incremental' | 'all'>('incremental')
-const autoMatch = ref(true)
+// 扫描模式：半增量默认（跳过已确认素材）；全量重扫保留锁定记录
+const scope = ref<'incremental' | 'semi' | 'all'>('semi')
+// 自动全库匹配默认关闭：扫完是否自动比对特征库由用户显式开启
+const autoMatch = ref(false)
 const starting = ref(false)
 const cancelling = ref(false)
 const matching = ref(false)
@@ -266,28 +269,6 @@ async function actOnChecked(action: 'confirm' | 'reject') {
   }
 }
 
-/** 撤销当前人物明细中的勾选项（仅已确认区） */
-async function undoChecked() {
-  if (detailChecked.value.size === 0) {
-    Message.warning('请先勾选要撤销的已确认关联')
-    return
-  }
-  detailActionBusy.value = true
-  try {
-    const result = await confirmFaceScan(
-      'undo',
-      [...detailChecked.value].map((id) => ({ detection_id: id })),
-    )
-    Message.success(`已撤销 ${result.undone} 条关联`)
-    detailChecked.value.clear()
-    await refreshAll()
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '撤销失败'))
-  } finally {
-    detailActionBusy.value = false
-  }
-}
-
 /** 拉取某人物全部明细（分页循环，供批量审核） */
 async function fetchAllDetections(
   status: 'pending' | 'confirmed',
@@ -512,11 +493,12 @@ function filterOption(input: string, option: { label?: string }): boolean {
           <a-select
             v-model="scope"
             :options="[
+              { label: '半增量扫描（跳过已确认素材）', value: 'semi' },
               { label: '增量扫描（仅未扫描素材）', value: 'incremental' },
-              { label: '全量重扫（清空后重扫全部）', value: 'all' },
+              { label: '全量重扫（保留已确认记录）', value: 'all' },
             ]"
             size="small"
-            style="width: 220px"
+            style="width: 240px"
           />
           <a-checkbox v-model="autoMatch" size="small">扫完自动全库匹配</a-checkbox>
           <a-button
@@ -766,18 +748,14 @@ function filterOption(input: string, option: { label?: string }): boolean {
                       <div
                         v-for="item in detailItems"
                         :key="item.detection_id"
-                        class="detail-item"
+                        class="detail-item locked-item"
                         @click="goDetail(item.inspiration_id)"
                         @mouseenter="startHoverPreview(item)"
                         @mouseleave="clearHoverPreview"
                       >
                         <img :src="thumbUrl(item)" loading="lazy" />
-                        <a-checkbox
-                          class="detail-check"
-                          :model-value="detailChecked.has(item.detection_id)"
-                          @click.stop
-                          @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
-                        />
+                        <!-- 已确认锁定：锁图标替代勾选框，不可撤销/编辑 -->
+                        <span class="detail-lock"><IconLock /></span>
                         <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
                       </div>
                     </div>
@@ -797,14 +775,9 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         }
                       "
                     />
-                    <a-button
-                      size="mini"
-                      status="danger"
-                      :loading="detailActionBusy"
-                      @click="undoChecked"
-                    >
-                      撤销勾选关联
-                    </a-button>
+                    <a-typography-text type="secondary" style="font-size: 12px">
+                      已确认关联已锁定，不可修改或撤销
+                    </a-typography-text>
                   </div>
                 </div>
               </div>
@@ -978,6 +951,21 @@ function filterOption(input: string, option: { label?: string }): boolean {
   background: rgba(255, 255, 255, 0.85);
   border-radius: 4px;
   padding: 2px;
+}
+
+/* 已确认锁定标识：左上角锁图标（替代勾选框） */
+.detail-lock {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #009a29;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
 }
 
 .detail-conf {

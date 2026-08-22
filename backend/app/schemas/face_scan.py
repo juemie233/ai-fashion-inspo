@@ -12,10 +12,16 @@ class FaceConfirmItem(BaseModel):
 
 
 class FaceScanStartIn(BaseModel):
-    """创建扫描任务请求。"""
+    """创建扫描任务请求。
 
-    scope: str = Field("incremental", pattern="^(incremental|all)$")
-    auto_match: bool = True
+    scope 三种模式：
+    - incremental：仅扫描无任何检测记录的素材；
+    - semi：半增量，跳过已有已确认（锁定）记录的素材；
+    - all：全量，跳过含锁定记录的素材，其余清空重扫。
+    """
+
+    scope: str = Field("semi", pattern="^(incremental|semi|all)$")
+    auto_match: bool = False
 
 
 class FaceMatchRunIn(BaseModel):

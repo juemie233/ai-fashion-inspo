@@ -1,9 +1,15 @@
 """人脸库扫描任务：批量检测素材人脸（层 1 重活）与全库候选匹配（层 2 轻活）。
 
-- ``face_scan``：增量/全量扫描素材 → embed-batch 批量检测 → 人脸明细写入
-  detections 表（每张人脸一条，含 embedding/bbox）。增量语义 = 只扫无检测
-  记录的素材（断点续跑：取消/失败后重跑自动跳过已扫部分）；无脸素材写入
-  一条空 embedding 的占位记录，保证「有记录即已扫」成立。
+- ``face_scan``：批量检测素材人脸（增量/半增量/全量） → embed-batch 批量检测
+  → 人脸明细写入 detections 表（每张人脸一条，含 embedding/bbox）。
+  三种范围：
+  - incremental：只扫无任何检测记录的素材（断点续跑：取消/失败后重跑自动
+    跳过已扫部分）；
+  - semi（半增量）：跳过已有已确认（锁定）记录的素材，其余素材（仅
+    pending 记录或无记录）重新检测；
+  - all：全量，跳过含锁定记录的素材，其余清空重扫。
+  已确认（match_status=confirmed）的记录受保护：任何模式都不会删除或覆盖。
+  无脸素材写入一条空 embedding 的占位记录，保证「有记录即已扫」成立。
   任务执行期间每批检查 task.status，被取消（cancelled）则停止（已写不回滚）。
   扫描完成后按载荷 auto_match 自动创建 face_match 任务。
 - ``face_match``：全库候选匹配（矩阵乘），产出 pending 候选待人工审核，
@@ -25,7 +31,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import Select, delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -49,10 +55,14 @@ MAX_CONSECUTIVE_FAILED_BATCHES = 10
 
 
 async def create_face_scan_task(
-    db: AsyncSession, scope: str = "incremental", auto_match: bool = True
+    db: AsyncSession, scope: str = "semi", auto_match: bool = False
 ) -> TaskQueue:
-    """创建人脸库扫描任务（total = 待扫图片素材数）。"""
-    if scope not in ("incremental", "all"):
+    """创建人脸库扫描任务（total = 待扫图片素材数）。
+
+    scope: ``incremental``（仅无记录素材）/ ``semi``（半增量，跳过含锁定
+    记录的素材）/ ``all``（全量，跳过含锁定记录的素材）。
+    """
+    if scope not in ("incremental", "semi", "all"):
         raise ValueError(f"未知扫描范围: {scope}")
     total = await _count_scan_images(db, scope)
     task = TaskQueue(
@@ -99,14 +109,16 @@ async def create_face_match_task(
 
 
 async def _count_scan_images(db: AsyncSession, scope: str) -> int:
-    """统计待扫图片素材数（incremental = 无检测记录的图片素材）。"""
+    """统计待扫图片素材数。
+
+    - incremental：无任何检测记录的图片素材；
+    - semi：无已确认（锁定）记录的图片素材（仅 pending 或无记录）；
+    - all：全部图片素材（含锁定素材，重写时保护锁定记录）。
+    """
     stmt = select(func.count()).select_from(Inspiration).where(
         Inspiration.media_type == "image", NOT_DELETED
     )
-    if scope == "incremental":
-        stmt = stmt.where(
-            ~exists().where(InspirationFaceDetection.inspiration_id == Inspiration.id)
-        )
+    stmt = _apply_scope_filter(stmt, scope)
     return (await db.execute(stmt)).scalar() or 0
 
 
@@ -115,12 +127,31 @@ async def _collect_scan_ids(db: AsyncSession, scope: str) -> list[str]:
     stmt = select(Inspiration.id).where(
         Inspiration.media_type == "image", NOT_DELETED
     )
-    if scope == "incremental":
-        stmt = stmt.where(
-            ~exists().where(InspirationFaceDetection.inspiration_id == Inspiration.id)
-        )
+    stmt = _apply_scope_filter(stmt, scope)
     stmt = stmt.order_by(Inspiration.created_at, Inspiration.id)  # id 兜底保证同秒内顺序稳定
     return list((await db.execute(stmt)).scalars().all())
+
+
+def _apply_scope_filter(stmt: Select, scope: str) -> Select:
+    """按扫描范围追加素材过滤条件。
+
+    - incremental：素材无任何人脸检测记录；
+    - semi：素材无已确认（锁定）记录——已有确认归属的素材整张跳过，
+      仅 pending 记录或无记录的素材参与扫描；
+    - all：不过滤（全部素材，锁定记录在写入阶段保护）。
+    """
+    if scope == "incremental":
+        return stmt.where(
+            ~exists().where(InspirationFaceDetection.inspiration_id == Inspiration.id)
+        )
+    if scope == "semi":
+        return stmt.where(
+            ~exists().where(
+                InspirationFaceDetection.inspiration_id == Inspiration.id,
+                InspirationFaceDetection.match_status == "confirmed",
+            )
+        )
+    return stmt
 
 
 async def _is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
@@ -132,8 +163,8 @@ async def _is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
 async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
     """执行人脸库扫描任务：分批检测素材并写 detections（增量/全量）。"""
     payload = task.result or {}
-    scope = payload.get("scope", "incremental")
-    auto_match = bool(payload.get("auto_match", True))
+    scope = payload.get("scope", "semi")
+    auto_match = bool(payload.get("auto_match", False))
     ids = await _collect_scan_ids(db, scope)
     total = len(ids)
     task.total = total
@@ -146,15 +177,13 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
             "faces": 0,
             "failed_files": 0,
             "match_task_id": None,
-            "message": "无可扫描素材（增量场景下可能已全部扫描过）",
+            "message": "无可扫描素材（增量/半增量场景下可能已全部扫描或已确认）",
         }
         await db.commit()
         return
 
-    if scope == "all":
-        # 全量重扫：先清空全部检测记录
-        await db.execute(delete(InspirationFaceDetection))
-        await db.commit()
+    # 全量重扫不再整体清空检测表：锁定（已确认）记录必须保留，
+    # 其余记录在 _write_detections 中按素材先清后写。
 
     # 一次查出全部素材的 file_path（IN 分片 500）
     path_map: dict[str, str] = {}
@@ -287,33 +316,58 @@ async def _embed_batch_concurrent(batch_bytes: list[bytes]) -> list[list[dict]]:
 async def _write_detections(
     db: AsyncSession, inspiration_ids: list[str], faces_list: list[list[dict]]
 ) -> None:
-    """先清后写本批素材的检测记录（幂等）。
+    """先清后写本批素材的检测记录（幂等），保护锁定（已确认）记录。
 
-    有脸素材每张人脸一条记录（embedding/bbox 落库，供矩阵匹配与人脸缩略图）；
-    无脸素材写入一条空 embedding 的占位记录，保证「有记录即已扫」的增量语义
-    （占位记录不参与矩阵匹配——match_all_faces 查询时过滤空 embedding）。
+    - 有锁定记录的素材：仅清除非锁定记录，确认记录原样保留；新检出人脸
+      的 face_index 从锁定记录数起编（锁定记录重排为 0~N-1，保持序号连续）；
+      重扫后未再检出人脸也不写占位记录（锁定记录本身即「已扫」标记）。
+    - 无锁定记录的素材：整体清除后重写；无脸素材写一条空 embedding 的
+      占位记录，保证「有记录即已扫」的增量语义（占位记录不参与矩阵匹配——
+      match_all_faces 查询时过滤空 embedding）。
     """
+    locked_rows = await db.execute(
+        select(InspirationFaceDetection).where(
+            InspirationFaceDetection.inspiration_id.in_(inspiration_ids),
+            InspirationFaceDetection.match_status == "confirmed",
+        )
+    )
+    locked_by_insp: dict[str, list[InspirationFaceDetection]] = {}
+    for d in locked_rows.scalars().all():
+        locked_by_insp.setdefault(d.inspiration_id, []).append(d)
+
+    # 清除非锁定记录（match_status != confirmed 在 SQLite 下对 NULL 不为真，
+    # 需显式补 NULL 分支，否则传统记录清不掉）
     await db.execute(
         delete(InspirationFaceDetection).where(
-            InspirationFaceDetection.inspiration_id.in_(inspiration_ids)
+            InspirationFaceDetection.inspiration_id.in_(inspiration_ids),
+            or_(
+                InspirationFaceDetection.match_status != "confirmed",
+                InspirationFaceDetection.match_status.is_(None),
+            ),
         )
     )
     for insp_id, faces in zip(inspiration_ids, faces_list):
+        locked = locked_by_insp.get(insp_id, [])
+        # 锁定记录重排序号（保持原相对顺序），新脸从其后起编
+        for new_idx, det in enumerate(sorted(locked, key=lambda d: d.face_index)):
+            det.face_index = new_idx
         if not faces:
-            db.add(
-                InspirationFaceDetection(
-                    inspiration_id=insp_id,
-                    face_index=0,
-                    embedding=b"",
-                    match_status=None,
+            if not locked:
+                db.add(
+                    InspirationFaceDetection(
+                        inspiration_id=insp_id,
+                        face_index=0,
+                        embedding=b"",
+                        match_status=None,
+                    )
                 )
-            )
             continue
+        offset = len(locked)
         for idx, face in enumerate(faces):
             db.add(
                 InspirationFaceDetection(
                     inspiration_id=insp_id,
-                    face_index=idx,
+                    face_index=offset + idx,
                     embedding=np.asarray(
                         face["embedding"], dtype=np.float32
                     ).tobytes(),

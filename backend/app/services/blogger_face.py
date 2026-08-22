@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import numpy as np
 from fastapi import HTTPException
 from PIL import Image
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -324,14 +324,19 @@ async def detect_inspiration_faces(
         result = await face_client.embed(image_bytes)
     except FaceServiceHttpError as e:
         if e.status_code == 404:
-            # 素材图中未检测到人脸（业务结果，非故障）：清空旧记录并返回空结果
+            # 素材图中未检测到人脸（业务结果，非故障）：仅清除非锁定记录，
+            # 已确认（锁定）记录保留，返回锁定记录本身
             await db.execute(
                 delete(InspirationFaceDetection).where(
-                    InspirationFaceDetection.inspiration_id == inspiration_id
+                    InspirationFaceDetection.inspiration_id == inspiration_id,
+                    or_(
+                        InspirationFaceDetection.match_status != "confirmed",
+                        InspirationFaceDetection.match_status.is_(None),
+                    ),
                 )
             )
             await db.commit()
-            return {"inspiration_id": inspiration_id, "face_count": 0, "detections": []}
+            return await list_inspiration_detections_response(db, inspiration_id)
         raise HTTPException(status_code=503, detail=str(e)) from e
     except FaceServiceUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -341,10 +346,14 @@ async def detect_inspiration_faces(
     # 一张人脸至多命中一种人物；与全库匹配服务 load_person_library 共用同一实现）
     library = await load_person_library(db)
 
-    # 清旧记录（重新检测覆盖）
+    # 清旧记录（重新检测覆盖；锁定/已确认记录保留不动）
     await db.execute(
         delete(InspirationFaceDetection).where(
-            InspirationFaceDetection.inspiration_id == inspiration_id
+            InspirationFaceDetection.inspiration_id == inspiration_id,
+            or_(
+                InspirationFaceDetection.match_status != "confirmed",
+                InspirationFaceDetection.match_status.is_(None),
+            ),
         )
     )
 
@@ -368,6 +377,17 @@ async def detect_inspiration_faces(
         for i, result in zip(high_conf_indices, high_results):
             match_results[i] = result
 
+    # 查出该素材已锁定的记录：新检出人脸的 face_index 从锁定记录数起编，
+    # 避免与锁定记录序号冲突；返回时合并展示
+    locked_rows = await db.execute(
+        select(InspirationFaceDetection).where(
+            InspirationFaceDetection.inspiration_id == inspiration_id,
+            InspirationFaceDetection.match_status == "confirmed",
+        )
+    )
+    locked_detections = list(locked_rows.scalars().all())
+    face_offset = len(locked_detections)
+
     detections = []
     for idx, face, match in zip(range(len(faces)), faces, match_results):
         matched_blogger_id: int | None = None
@@ -381,7 +401,7 @@ async def detect_inspiration_faces(
             best_score = round(match["score"], 4)
         det = InspirationFaceDetection(
             inspiration_id=inspiration_id,
-            face_index=idx,
+            face_index=face_offset + idx,
             embedding=np.asarray(face["embedding"], dtype=np.float32).tobytes(),
             # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
             # 子服务偶发缺失时置空，不影响检测匹配主流程
@@ -400,11 +420,16 @@ async def detect_inspiration_faces(
 
     await db.commit()
 
-    # 组装返回（含人物名称：检测接口此前缺名称，前端回退显示「博主 #id」）
+    # 组装返回（锁定记录一并返回；含人物名称：检测接口此前缺名称，前端回退显示「博主 #id」）
+    all_detections = sorted(
+        locked_detections + detections, key=lambda d: d.face_index
+    )
     blogger_ids = {
-        d.matched_blogger_id for d in detections if d.matched_blogger_id is not None
+        d.matched_blogger_id for d in all_detections if d.matched_blogger_id is not None
     }
-    model_ids = {d.matched_model_id for d in detections if d.matched_model_id is not None}
+    model_ids = {
+        d.matched_model_id for d in all_detections if d.matched_model_id is not None
+    }
     blogger_names: dict[int, str] = {}
     model_names: dict[int, str] = {}
     if blogger_ids:
@@ -420,7 +445,7 @@ async def detect_inspiration_faces(
 
     return {
         "inspiration_id": inspiration_id,
-        "face_count": len(detections),
+        "face_count": len(all_detections),
         "detections": [
             {
                 "id": d.id,
@@ -439,11 +464,21 @@ async def detect_inspiration_faces(
                     else None
                 ),
                 "confidence": d.confidence,
+                # 状态：confirmed = 已确认（锁定）；其余为待确认/普通结果
+                "match_status": d.match_status,
                 "created_at": format_utc(d.created_at),
             }
-            for d in detections
+            for d in all_detections
         ],
     }
+
+
+async def list_inspiration_detections_response(
+    db: AsyncSession, inspiration_id: str
+) -> dict:
+    """单素材人脸检测列表的标准响应（与 detect 接口返回结构一致）。"""
+    items = await list_inspiration_detections(db, inspiration_id)
+    return {"inspiration_id": inspiration_id, "face_count": len(items), "detections": items}
 
 
 async def list_inspiration_detections(
@@ -485,6 +520,8 @@ async def list_inspiration_detections(
                     d.matched_model.name if d.matched_model else None
                 ),
                 "confidence": d.confidence,
+                # 状态：confirmed = 已确认（锁定）；其余为待确认/普通结果
+                "match_status": d.match_status,
                 "created_at": format_utc(d.created_at),
             }
         )
@@ -501,11 +538,16 @@ async def set_detection_person(
 
     - person_id 为 None 即解除（同时清两种人物字段）；
     - 指定时写对应字段并清另一类型字段（互斥）；
-    - 手动指定视为已确认：match_status 置 None（素材详情页直接展示）。
+    - 手动指定视为已确认：match_status 置 None（素材详情页直接展示）；
+    - 已确认（锁定）记录禁止修改与解除（返回 409），解锁无入口。
     """
     det = await db.get(InspirationFaceDetection, detection_id)
     if not det:
         raise HTTPException(status_code=404, detail="人脸检测记录未找到")
+    if det.match_status == "confirmed":
+        raise HTTPException(
+            status_code=409, detail="该人脸已在扫描审核中确认归属，已锁定，不可修改"
+        )
     if person_id is not None:
         if person_type == "blogger":
             person = await db.get(Blogger, person_id)
@@ -538,9 +580,13 @@ async def set_detection_person(
 
 
 async def delete_detection(db: AsyncSession, detection_id: int) -> None:
-    """删除单条人脸检测记录。"""
+    """删除单条人脸检测记录（已确认锁定记录禁止删除，返回 409）。"""
     det = await db.get(InspirationFaceDetection, detection_id)
     if not det:
         raise HTTPException(status_code=404, detail="人脸检测记录未找到")
+    if det.match_status == "confirmed":
+        raise HTTPException(
+            status_code=409, detail="该人脸已在扫描审核中确认归属，已锁定，不可删除"
+        )
     await db.delete(det)
     await db.commit()

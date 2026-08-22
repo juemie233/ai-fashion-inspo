@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -128,6 +128,8 @@ async def match_all_faces(
 
     - 产出为「待审核候选」（match_status=pending），不写人物关联表——
       最终关联由扫描页人工审核确认完成；
+    - 已确认（锁定，match_status=confirmed）的记录整条跳过，不会被重新
+      匹配或覆盖；
     - 只更新命中结果有变化的行（diff 后批量 UPDATE），避免无谓写库；
     - 分块执行控制峰值内存（默认每 1 万张人脸一块）。
 
@@ -143,7 +145,15 @@ async def match_all_faces(
             InspirationFaceDetection.matched_model_id,
             InspirationFaceDetection.confidence,
             InspirationFaceDetection.match_status,
-        ).where(InspirationFaceDetection.embedding != b"")
+        ).where(
+            InspirationFaceDetection.embedding != b"",
+            # 锁定（已确认）记录不参与全库匹配，避免覆盖人工确认结果
+            # （!= 'confirmed' 对 NULL 不成立，需显式补 NULL 分支）
+            or_(
+                InspirationFaceDetection.match_status != "confirmed",
+                InspirationFaceDetection.match_status.is_(None),
+            ),
+        )
     )
     detections = rows.all()
     total = len(detections)

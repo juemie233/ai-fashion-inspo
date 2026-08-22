@@ -366,6 +366,8 @@ export interface FaceDetectionOut {
   matched_model_id: number | null
   matched_model_name?: string | null
   confidence: number | null
+  /** 匹配状态：confirmed = 已确认（锁定，不可修改/删除）；其余为待确认 */
+  match_status?: string | null
   created_at?: string | null
 }
 

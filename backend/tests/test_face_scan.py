@@ -303,17 +303,18 @@ async def test_match_confirm_results_flow(
     assert r2.json()["confirmed"] == 0
     assert r2.json()["skipped"] == 1
 
-    # 撤销：解除关联 + 状态回退
+    # 锁定单向：撤销不再解除关联（confirmed 保持，关联保留）
     r3 = client.post(
         "/api/face-scan/confirm",
         json={"action": "undo", "items": [{"detection_id": det_id}]},
     )
-    assert r3.json()["undone"] == 1
+    assert r3.json()["undone"] == 0
+    assert r3.json()["skipped"] == 1
     detail_insp2 = client.get(f"/api/inspirations/{insp}").json()
-    assert len(detail_insp2["bloggers"]) == 0
+    assert any(b["id"] == blogger["id"] for b in detail_insp2["bloggers"])
     dets = await _fetch_detections(insp)
-    assert dets[0].match_status is None
-    assert dets[0].matched_blogger_id is None
+    assert dets[0].match_status == "confirmed"
+    assert dets[0].matched_blogger_id == blogger["id"]
 
 
 async def test_confirm_reject_pending(client, create_blogger, monkeypatch):
@@ -390,3 +391,216 @@ async def test_cancel_running_face_scan_allowed(client):
     # 不存在的任务 → 404
     r2 = client.post("/api/tasks/999999/cancel")
     assert r2.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════
+#  锁定（已确认记录） + 半增量扫描 + 自动匹配默认关闭
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _match_and_get_pending_detail(client, blogger_id):
+    """执行最近一次 face_match 任务，返回指定博主的 pending 明细（默认分页）。"""
+    async with async_session() as db:
+        match_task = (
+            await db.execute(
+                select(TaskQueue)
+                .where(TaskQueue.type == "face_match")
+                .order_by(TaskQueue.id.desc())
+            )
+        ).scalar_one()
+        await execute_face_match(db, match_task)
+    return client.get(
+        f"/api/face-scan/results?status=pending&person_id={blogger_id}"
+    ).json()
+
+
+async def test_scan_semi_scope_skips_confirmed(client, create_blogger, monkeypatch):
+    """半增量扫描：已有已确认（锁定）记录的素材整张跳过，仅 pending 或无记录素材参与。"""
+    emb = _unit(10)
+    blogger = _setup_blogger(client, create_blogger, monkeypatch, emb)
+    insp_a = _upload_inspiration(client, (10, 20, 30))  # 将被确认 → 半增量跳过
+    insp_b = _upload_inspiration(client, (40, 50, 60))  # 仅 pending → 半增量仍参与
+    _patch_embed_batch(
+        monkeypatch,
+        [
+            [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}],  # A
+            [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}],  # B
+        ],
+    )
+    await _run_scan(client)
+
+    # 匹配 → 产出 A/B 的 pending 候选，确认 A
+    detail = await _match_and_get_pending_detail(client, blogger["id"])
+    assert detail["total"] == 2
+    a_det = next(d for d in detail["items"] if d["inspiration_id"] == insp_a)
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={
+            "action": "confirm",
+            "items": [
+                {
+                    "detection_id": a_det["detection_id"],
+                    "person_type": "blogger",
+                    "person_id": blogger["id"],
+                }
+            ],
+        },
+    )
+    assert r.json()["confirmed"] == 1
+
+    # 半增量扫描：A 有 confirmed 记录 → 跳过；B（仅 pending）→ 参与
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],  # 仅 B
+    )
+    task_id = await _run_scan(client, scope="semi")
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task.total == 1
+        assert task.result["scanned"] == 1
+
+    # A 的锁定记录原样保留（不受半增量影响）
+    dets_a = await _fetch_detections(insp_a)
+    assert len(dets_a) == 1
+    assert dets_a[0].match_status == "confirmed"
+    assert dets_a[0].matched_blogger_id == blogger["id"]
+    # B 重新检出写入非空人脸记录
+    dets_b = await _fetch_detections(insp_b)
+    assert len(dets_b) == 1
+    assert dets_b[0].embedding != b""
+
+
+async def test_scan_all_scope_preserves_locked(client, create_blogger, monkeypatch):
+    """全量重扫：保留已确认（锁定）记录，其余记录清空重写、序号从锁定数起编。"""
+    emb = _unit(12)
+    blogger = _setup_blogger(client, create_blogger, monkeypatch, emb)
+    insp = _upload_inspiration(client, (100, 200, 30))
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+    await _run_scan(client)
+
+    detail = await _match_and_get_pending_detail(client, blogger["id"])
+    det_id = detail["items"][0]["detection_id"]
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={
+            "action": "confirm",
+            "items": [
+                {
+                    "detection_id": det_id,
+                    "person_type": "blogger",
+                    "person_id": blogger["id"],
+                }
+            ],
+        },
+    )
+    assert r.json()["confirmed"] == 1
+
+    # 全量重扫：同一张人脸再次检出 → 锁定记录保留，新记录序号从 1 起编
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+    task_id = await _run_scan(client, scope="all")
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["scanned"] == 1
+
+    dets = await _fetch_detections(insp)
+    assert len(dets) == 2
+    locked = [d for d in dets if d.match_status == "confirmed"]
+    assert len(locked) == 1
+    assert locked[0].id == det_id
+    assert locked[0].matched_blogger_id == blogger["id"]
+    # 新检出记录序号从锁定记录数起编
+    assert any(d.match_status is None and d.face_index == 1 for d in dets)
+
+
+async def test_lock_blocks_update_unlink_delete(client, create_blogger, monkeypatch):
+    """锁定：已确认记录禁止修改/解除/删除（409），详情页返回 confirmed 状态。"""
+    emb = _unit(11)
+    blogger = _setup_blogger(client, create_blogger, monkeypatch, emb)
+    blogger2 = create_blogger(name="博主二")
+    insp = _upload_inspiration(client, (70, 80, 90))
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+    await _run_scan(client)
+
+    detail = await _match_and_get_pending_detail(client, blogger["id"])
+    det_id = detail["items"][0]["detection_id"]
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={
+            "action": "confirm",
+            "items": [
+                {
+                    "detection_id": det_id,
+                    "person_type": "blogger",
+                    "person_id": blogger["id"],
+                }
+            ],
+        },
+    )
+    assert r.json()["confirmed"] == 1
+
+    # 详情页人脸列表返回 confirmed 状态
+    dets = client.get(f"/api/inspirations/{insp}/face-detections").json()["detections"]
+    assert dets[0]["match_status"] == "confirmed"
+    assert dets[0]["matched_blogger_id"] == blogger["id"]
+
+    # 修改归属 → 409
+    r2 = client.put(
+        f"/api/inspirations/{insp}/face-detections/{det_id}",
+        json={"person_type": "blogger", "person_id": blogger2["id"]},
+    )
+    assert r2.status_code == 409
+    # 解除关联 → 409
+    r3 = client.put(
+        f"/api/inspirations/{insp}/face-detections/{det_id}",
+        json={"person_type": None, "person_id": None},
+    )
+    assert r3.status_code == 409
+    # 删除记录 → 409
+    r4 = client.delete(f"/api/inspirations/{insp}/face-detections/{det_id}")
+    assert r4.status_code == 409
+
+    # 记录未被改动
+    dets = client.get(f"/api/inspirations/{insp}/face-detections").json()["detections"]
+    assert dets[0]["matched_blogger_id"] == blogger["id"]
+    assert dets[0]["match_status"] == "confirmed"
+
+
+async def test_auto_match_default_off(client, create_blogger, monkeypatch):
+    """自动全库匹配默认关闭：不传 auto_match 创建的任务不会自动创建匹配任务。"""
+    emb = _unit(13)
+    _setup_blogger(client, create_blogger, monkeypatch, emb)
+    _upload_inspiration(client, (10, 200, 40))
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+
+    # 不传 auto_match（默认 false）
+    r = client.post("/api/face-scan/start", json={"scope": "incremental"})
+    assert r.status_code == 201, r.text
+    task_id = r.json()["task_id"]
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["auto_match"] is False
+        await execute_face_scan(db, task)
+
+    # 没有自动创建 face_match 任务
+    async with async_session() as db:
+        match_task = (
+            await db.execute(
+                select(TaskQueue).where(TaskQueue.type == "face_match").order_by(TaskQueue.id.desc())
+            )
+        ).scalar_one_or_none()
+        assert match_task is None
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["scanned"] == 1
+        assert task.result["match_task_id"] is None

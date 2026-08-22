@@ -56,10 +56,10 @@ export interface ConfirmResult {
   skipped: number
 }
 
-/** 创建扫描任务（增量/全量；autoMatch 扫描完成后自动全库匹配） */
+/** 创建扫描任务（增量/半增量/全量；autoMatch 扫描完成后自动全库匹配，默认关闭） */
 export async function startFaceScan(
-  scope: 'incremental' | 'all' = 'incremental',
-  autoMatch = true,
+  scope: 'incremental' | 'semi' | 'all' = 'semi',
+  autoMatch = false,
 ): Promise<{ task_id: number; total: number }> {
   const { data } = await apiClient.post<{ task_id: number; total: number }>('/face-scan/start', {
     scope,

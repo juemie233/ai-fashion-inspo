@@ -18,6 +18,7 @@ import {
 } from '@/api/inspirations'
 import { bloggersApi, modelsApi, type PersonBrief } from '@/api/persons'
 import { Message } from '@arco-design/web-vue'
+import { IconLock } from '@arco-design/web-vue/es/icon'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const props = defineProps<{
@@ -161,10 +162,13 @@ function isLowConfidence(det: FaceDetectionOut): boolean {
   return det.det_score !== null && det.det_score < LOW_CONFIDENCE_THRESHOLD
 }
 
+/** 是否已确认（锁定）：扫描审核确认后不可修改/删除 */
+function isLocked(det: FaceDetectionOut): boolean {
+  return det.match_status === 'confirmed'
+}
+
 /** 命中人物标签（穿搭博主/职业模特）：带人物类型前缀与高置信度标记 */
-function matchedTag(
-  det: FaceDetectionOut,
-): { text: string; model: boolean; high: boolean } | null {
+function matchedTag(det: FaceDetectionOut): { text: string; model: boolean; high: boolean } | null {
   const confidence = det.confidence ?? 0
   if (det.matched_blogger_id !== null) {
     return {
@@ -207,8 +211,19 @@ onMounted(() => {
     <div v-else class="face-list">
       <div v-for="det in detections" :key="det.id" class="face-item">
         <span class="face-index">人脸 #{{ det.face_index + 1 }}</span>
+        <!-- 已确认（锁定）：绿色标签 + 锁图标，操作按钮禁用 -->
+        <a-tag v-if="isLocked(det)" color="green" size="small">
+          <IconLock /> 已确认：{{ matchedTag(det)?.text ?? '已关联人物' }}
+          <template v-if="det.confidence !== null">
+            （{{ (det.confidence * 100).toFixed(1) }}%）
+          </template>
+        </a-tag>
         <!-- 高置信度：直接显示「穿搭博主/职业模特」绿色标签；中低置信度蓝色提示待确认 -->
-        <a-tag v-if="matchedTag(det)" :color="matchedTag(det)?.high ? 'green' : 'arcoblue'" size="small">
+        <a-tag
+          v-else-if="matchedTag(det)"
+          :color="matchedTag(det)?.high ? 'green' : 'arcoblue'"
+          size="small"
+        >
           {{ matchedTag(det)?.text }}
           <template v-if="det.confidence !== null">
             （{{ (det.confidence * 100).toFixed(1) }}%）
@@ -238,7 +253,7 @@ onMounted(() => {
               ? (det.matched_blogger_id ?? undefined)
               : (det.matched_model_id ?? undefined)
           "
-          :disabled="updatingId === det.id"
+          :disabled="isLocked(det) || updatingId === det.id"
           allow-clear
           allow-search
           :filter-option="filterPersonOption"
@@ -249,7 +264,7 @@ onMounted(() => {
           v-if="det.matched_blogger_id !== null || det.matched_model_id !== null"
           size="mini"
           type="text"
-          :disabled="updatingId === det.id"
+          :disabled="isLocked(det) || updatingId === det.id"
           @click="handleUnlink(det)"
         >
           解除
@@ -258,7 +273,7 @@ onMounted(() => {
           size="mini"
           type="text"
           status="danger"
-          :disabled="updatingId === det.id"
+          :disabled="isLocked(det) || updatingId === det.id"
           @click="handleDelete(det)"
         >
           删除
