@@ -109,7 +109,7 @@ def parse_analysis_response(raw: str) -> dict:
 
     # 策略1：找到所有完整 { ... } 块，按「更像分析结果」打分
     # 评分标准：含有越多预期键（style/items/fit等），得分越高
-    EXPECTED_KEYS = {"style", "items", "fit", "wear_style", "attributes", "dominant_colors"}
+    EXPECTED_KEYS = {"style", "items", "fit", "wear_style", "attributes", "dominant_colors", "Atmosphere", "Expression", "Leg_Posture"}
     candidates = []
     for m in re.finditer(r'\{', cleaned):
         depth = 0
@@ -319,6 +319,7 @@ def _extract_dict_tags(value: dict) -> list[str]:
         "属性", "属性名称", "属性标签", "标签",
         "部位", "style_name", "style",
         "description", "描述",
+        "Atmosphere", "Expression", "Leg_Posture"
     )
     for key in known_value_keys:
         v = value.get(key)

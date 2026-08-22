@@ -11,7 +11,7 @@ export interface TagItem {
   id: number
   name: string
   category: string
-  source: string  // seed | ai_generated | manual
+  source: string // seed | ai_generated | manual
   pinned: boolean
   sort_order: number
   description: string | null
@@ -28,6 +28,9 @@ export const CATEGORY_LABELS: Record<string, string> = {
   attribute: '属性',
   free: '自定义',
   outfit: '穿搭大标签',
+  Atmosphere: '氛围',
+  Expression: '模特表情',
+  Leg_Posture: '腿部姿态',
 }
 
 /** 来源的中文映射 */
@@ -54,7 +57,13 @@ export async function createTag(name: string, category: string = 'free') {
 /** 更新标签（重命名 / 改类别 / 置顶 / 排序 / 备注） */
 export async function updateTag(
   tagId: number,
-  body: { name?: string; category?: string; pinned?: boolean; sort_order?: number; description?: string | null },
+  body: {
+    name?: string
+    category?: string
+    pinned?: boolean
+    sort_order?: number
+    description?: string | null
+  },
 ) {
   const { data } = await apiClient.patch(`/tags/${tagId}`, body)
   return data
@@ -122,7 +131,8 @@ export interface DuplicatePair {
 /** 扫描重复/相似标签 */
 export async function findDuplicates(threshold: number = 0.75) {
   const { data } = await apiClient.get<{ duplicates: DuplicatePair[]; total: number }>(
-    '/tags/duplicates', { params: { threshold } }
+    '/tags/duplicates',
+    { params: { threshold } },
   )
   return data
 }
@@ -139,8 +149,15 @@ export interface TagInspiration {
 }
 
 /** 获取使用某标签的素材 */
-export async function fetchTagInspirations(tagId: number, page: number = 1, size: number = 20, sort?: string) {
-  const { data } = await apiClient.get(`/tags/${tagId}/inspirations`, { params: { page, size, sort } })
+export async function fetchTagInspirations(
+  tagId: number,
+  page: number = 1,
+  size: number = 20,
+  sort?: string,
+) {
+  const { data } = await apiClient.get(`/tags/${tagId}/inspirations`, {
+    params: { page, size, sort },
+  })
   return data
 }
 
