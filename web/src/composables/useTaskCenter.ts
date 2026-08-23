@@ -5,37 +5,12 @@ import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { UnifiedTask } from '@/types/task'
-import { TASK_TYPE_LABELS, SCRAPER_PLATFORM_LABELS, normalizeTaskStatus } from '@/utils/taskLabel'
-import { formatSize } from '@/utils/format'
-import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
-
-/** 任务队列原始条目（/api/tasks 返回项） */
-interface QueueTask {
-  id: number
-  type: string
-  status: string
-  progress: number
-  total: number
-  done: number
-  result: Record<string, any> | null
-  error: string | null
-  created_at: string
-  updated_at: string
-}
-
-/** 采集任务原始条目（/api/scraper/tasks 返回项） */
-interface ScraperTaskRaw {
-  id: number
-  platform: string
-  status: string
-  config: string | null
-  items_found: number
-  items_added: number
-  error: string | null
-  started_at: string | null
-  finished_at: string | null
-  created_at: string
-}
+import {
+  normalizeQueueTask,
+  normalizeScraperTask,
+  type QueueTask,
+  type ScraperTaskRaw,
+} from '@/utils/taskPresentation'
 
 /** 每页条数（客户端分页） */
 const PAGE_SIZE = 20
@@ -51,142 +26,18 @@ export function useTaskCenter() {
   const page = ref(1)
   const retrying = ref(false)
 
-  // ===== 归一化 =====
-
-  /** 根据任务 result 生成直观的完成统计（成功任务的「干成了什么」） */
-  function resultSummary(
-    type: string,
-    result: Record<string, any> | null,
-    error: string | null,
-  ): string {
-    if (error) return error
-    if (!result || typeof result !== 'object') return ''
-    const r = result as Record<string, any>
-    switch (type) {
-      case 'vector_backfill':
-        // 向量回填：展示图像/文本向量入库与跳过统计，替代抽象的「N/N」
-        return [
-          r.image_done != null ? `图像向量 ${r.image_done}` : '',
-          r.text_done != null ? `文本向量 ${r.text_done}` : '',
-          r.image_skipped || r.text_skipped
-            ? `跳过 ${(r.image_skipped || 0) + (r.text_skipped || 0)}`
-            : '',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      case 'deduplicate':
-        return [
-          r.files_deleted != null ? `删除 ${r.files_deleted} 个文件` : '',
-          r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
-          r.groups_processed != null ? `处理 ${r.groups_processed} 组` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      case 'batch_delete':
-        return [
-          r.deleted_count != null ? `删除 ${r.deleted_count} 个素材` : '',
-          r.freed_bytes != null ? `释放 ${formatSize(r.freed_bytes)}` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      case 'batch_analyze':
-        return r.done != null ? `完成 ${r.done} 张` : ''
-      case 'quality_check':
-        return [
-          r.approved != null ? `通过 ${r.approved}` : '',
-          r.rejected != null ? `拒绝 ${r.rejected}` : '',
-          r.pending != null ? `未判定 ${r.pending}` : '',
-          r.failed != null ? `失败 ${r.failed}` : '',
-          r.ai_generated ? `疑似 AI ${r.ai_generated}` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      case 'enrich_blogger_profile':
-        return [
-          r.updated != null ? `补全 ${r.updated}` : '',
-          r.skipped != null ? `跳过 ${r.skipped}` : '',
-          r.failed != null ? `失败 ${r.failed}` : '',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      default:
-        return ''
-    }
-  }
-
-  function normalizeQueueTask(t: QueueTask): UnifiedTask {
-    const status = normalizeTaskStatus(t.status)
-    const finished = status === 'success' || status === 'failed' || status === 'cancelled'
-    return {
-      id: t.id,
-      source: 'queue',
-      type: t.type,
-      platform: '',
-      status,
-      progress: t.progress,
-      total: t.total,
-      done: t.done,
-      target: t.total,
-      started_at: null,
-      title: TASK_TYPE_LABELS[t.type] || t.type,
-      detail: resultSummary(t.type, t.result, t.error || ''),
-      error: t.error,
-      created_at: t.created_at,
-      finished_at: finished ? t.updated_at : null,
-    }
-  }
-
-  function normalizeScraperTask(t: ScraperTaskRaw): UnifiedTask {
-    const status = normalizeTaskStatus(t.status)
-    const platform = SCRAPER_PLATFORM_LABELS[t.platform] || t.platform
-    const keywords = parseKeywords(t.config)
-    return {
-      id: t.id,
-      source: 'scraper',
-      type: 'scraper',
-      platform: t.platform,
-      status,
-      progress: -1,
-      total: t.items_found,
-      done: t.items_added,
-      target: parseMaxCount(t.config),
-      started_at: t.started_at,
-      title: `${platform}采集`,
-      detail: [keywords, t.error].filter(Boolean).join(' · ') || '',
-      error: t.error,
-      created_at: t.created_at,
-      finished_at: t.finished_at,
-    }
-  }
-
-  /** 关键词展示（任务详情）：解析 config 中的关键词，带前缀拼接；无则返回空串 */
-  function parseKeywords(config: string | null): string {
-    const kw = parseKeywordsList(config)
-    return kw.length > 0 ? `关键词：${kw.join('、')}` : ''
-  }
-
-  /** 解析采集任务配置中的目标采集数量 max_count（无则返回 0） */
-  function parseMaxCount(config: string | null): number {
-    if (!config) return 0
-    try {
-      const obj = JSON.parse(config)
-      return typeof obj?.max_count === 'number' ? obj.max_count : 0
-    } catch {
-      return 0
-    }
-  }
-
   // ===== 数据加载 =====
 
   async function loadTasks() {
     loading.value = true
     try {
       const [qRes, sRes] = await Promise.all([
-        apiClient.get('/tasks', { params: { size: 200 } }),
-        apiClient.get('/scraper/tasks', { params: { sort: 'newest', size: 200 } }),
+        apiClient.get<{ items: QueueTask[] }>('/tasks', { params: { size: 200 } }),
+        apiClient.get<{ items: ScraperTaskRaw[] }>('/scraper/tasks', {
+          params: { sort: 'newest', size: 200 },
+        }),
       ])
       const queue = (qRes.data.items || []).map(normalizeQueueTask)
-      // 后端 /scraper/tasks 返回 {items, total, ...} 对象而非数组
       const scraper = (sRes.data.items || []).map(normalizeScraperTask)
       tasks.value = [...queue, ...scraper].sort(
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
