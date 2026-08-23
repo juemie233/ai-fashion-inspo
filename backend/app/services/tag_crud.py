@@ -295,6 +295,10 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
         detail=f"标签 {source_id} 合并到 {target_id}",
     )
 
+    # 清除重复扫描缓存（标签数据已变更）
+    from app.services.tag_dedupe_cache import clear_all
+    clear_all()
+
 
 async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag:
     """创建自定义标签（先做别名归一化，再按规范名查重）。
@@ -438,6 +442,9 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
         count=len(unused),
         detail=f"删除未使用标签 {[t.name for t in unused]}",
     )
+    # 清除重复扫描缓存（标签数据已变更）
+    from app.services.tag_dedupe_cache import clear_all
+    clear_all()
     return unused
 
 
@@ -466,6 +473,9 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
         count=len(tags),
         detail=f"删除标签 {[t.name for t in tags]}",
     )
+    # 清除重复扫描缓存（标签数据已变更）
+    from app.services.tag_dedupe_cache import clear_all
+    clear_all()
     return tags
 
 
@@ -569,6 +579,10 @@ async def batch_rename_tags(
         ).scalars().all()
         await _rebuild_vectors_for_tag_change(db, affected_ids)
         await db.commit()
+    # 清除重复扫描缓存（标签名称已变更）
+    if renamed_tag_ids:
+        from app.services.tag_dedupe_cache import clear_all
+        clear_all()
     return updated
 
 

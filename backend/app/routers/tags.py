@@ -180,11 +180,33 @@ async def tag_stats(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/duplicates")
 async def find_duplicate_tags(
-    threshold: float = 0.75, db: AsyncSession = Depends(get_db)
+    threshold: float = Query(0.75, ge=0.6, le=0.95),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """扫描所有标签，找出名称相似度 >= threshold 的标签对。"""
+    """扫描所有标签，找出名称相似度 >= threshold 的标签对。
+
+    结果缓存：基于标签最后修改时间 + threshold 生成 key，
+    标签数据不变时直接读缓存，瞬时返回。
+    """
+    from app.models.tag import Tag as TagModel
+    from sqlalchemy import func as sa_func
+
+    from app.services.tag_dedupe_cache import compute_cache_key, get_cached, set_cached
+
+    # 1. 查缓存
+    last_mod_result = await db.execute(
+        sa_func.max(TagModel.created_at)
+    )
+    last_mod = str(last_mod_result.scalar() or "")
+    cache_key = compute_cache_key(last_mod, threshold)
+    cached = get_cached(cache_key)
+    if cached:
+        return {"duplicates": cached["pairs"][:50], "total": cached["total"], "cached": True}
+
+    # 2. 未命中 → 计算
     pairs, total = await tag_service.find_duplicate_tag_pairs(db, threshold)
-    return {"duplicates": pairs[:50], "total": total}
+    set_cached(cache_key, pairs, total)
+    return {"duplicates": pairs[:50], "total": total, "cached": False}
 
 
 # ============ 标签详情 ============

@@ -108,30 +108,45 @@ async def find_duplicate_tag_pairs(
 ) -> tuple[list[dict], int]:
     """扫描所有标签，返回名称相似度达到阈值的标签对列表及总数。
 
-    O(n²) 相似度计算放入线程池执行，避免阻塞事件循环。
+    优化 1：按类别分组，跨类别不比对
+    优化 2：同类别内首字不同直接跳过
+    优化 3：相似度计算放入线程池避免阻塞事件循环
     """
-    result = await db.execute(select(Tag).order_by(Tag.name))
+    result = await db.execute(select(Tag).order_by(Tag.category, Tag.name))
     all_tags = result.scalars().all()
+
+    # 按类别分组
+    by_category: dict[str, list[Tag]] = {}
+    for tag in all_tags:
+        by_category.setdefault(tag.category, []).append(tag)
 
     def _compute_pairs() -> list[dict]:
         pairs = []
-        for i in range(len(all_tags)):
-            for j in range(i + 1, len(all_tags)):
-                sim = _similarity(all_tags[i].name, all_tags[j].name)
-                if sim >= threshold and sim < 1.0:
-                    pairs.append({
-                        "tag_a": {
-                            "id": all_tags[i].id,
-                            "name": all_tags[i].name,
-                            "category": all_tags[i].category,
-                        },
-                        "tag_b": {
-                            "id": all_tags[j].id,
-                            "name": all_tags[j].name,
-                            "category": all_tags[j].category,
-                        },
-                        "similarity": round(sim, 2),
-                    })
+        for category, cat_tags in by_category.items():
+            if len(cat_tags) < 2:
+                continue
+            for i in range(len(cat_tags)):
+                name_a = cat_tags[i].name
+                for j in range(i + 1, len(cat_tags)):
+                    name_b = cat_tags[j].name
+                    # 首字不同直接跳过（中文重复几乎首字一定相同）
+                    if name_a[0] != name_b[0]:
+                        continue
+                    sim = _similarity(name_a, name_b)
+                    if sim >= threshold and sim < 1.0:
+                        pairs.append({
+                            "tag_a": {
+                                "id": cat_tags[i].id,
+                                "name": cat_tags[i].name,
+                                "category": cat_tags[i].category,
+                            },
+                            "tag_b": {
+                                "id": cat_tags[j].id,
+                                "name": cat_tags[j].name,
+                                "category": cat_tags[j].category,
+                            },
+                            "similarity": round(sim, 2),
+                        })
         pairs.sort(key=lambda p: p["similarity"], reverse=True)
         return pairs
 
