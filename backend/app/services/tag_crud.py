@@ -282,6 +282,11 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
     # 合并后为受影响素材重建文本向量（异步入队，由 worker 执行）
     await _rebuild_vectors_for_tag_change(db, affected_ids)
 
+    # 先提交主事务再写审计：audit 用独立会话写库，若在未提交事务内调用，
+    # 独立会话会被本事务持有的 SQLite 写锁阻塞到 busy_timeout（30s）→ 请求超时。
+    # 与 batch_delete_tags / delete_unused_tags 的「先提交、后留痕」模式保持一致。
+    await db.commit()
+
     # 记录审计：合并标签属破坏性批量操作（删除源标签、重定向关联），留痕便于追溯
     await record_audit_log(
         action="merge_tags",
