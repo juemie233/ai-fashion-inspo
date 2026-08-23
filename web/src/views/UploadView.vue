@@ -261,7 +261,9 @@ async function startUpload() {
 
   // 上传后行为
   if (afterUpload.value === 'home') router.push('/')
-  else if (afterUpload.value === 'detail' && done === 1) {
+  else if (afterUpload.value === 'models?tab=queue') {
+    router.push({ path: '/models', query: { tab: 'queue' } })
+  } else if (afterUpload.value === 'detail' && done === 1) {
     const uploaded = queue.value.find(q => q.status === 'done')
     if (uploaded?.resultId) router.push(`/detail/${uploaded.resultId}`)
   }

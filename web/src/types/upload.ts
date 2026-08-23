@@ -20,4 +20,4 @@ export interface RecentUpload {
 }
 
 /** 上传后跳转行为 */
-export type UploadAfterAction = 'stay' | 'detail' | 'home'
+export type UploadAfterAction = 'stay' | 'detail' | 'home' | 'models?tab=queue'

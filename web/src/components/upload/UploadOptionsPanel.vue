@@ -30,6 +30,7 @@ const afterUploadOptions: Array<{ label: string; value: UploadAfterAction }> = [
   { label: '留在本页', value: 'stay' },
   { label: '查看详情', value: 'detail' },
   { label: '去素材库', value: 'home' },
+  { label: '去标签分析', value: 'models?tab=queue' },
 ]
 
 // 文本输入：仅回传值，不触发偏好保存
