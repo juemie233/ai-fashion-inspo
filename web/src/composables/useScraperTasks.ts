@@ -8,6 +8,7 @@ import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { parseKeywords as parseKeywordsList } from '@/utils/scraperKeywords'
+import { usePolling } from '@/composables/usePolling'
 import type { ScraperTask, ScraperSource, CookieStatus } from '@/types/scraper'
 
 /** 平台显示文案（复用来源映射，单一来源避免多处重复维护） */
@@ -18,7 +19,6 @@ const POLL_INTERVAL_MS = 5000
 
 /** 任务域数据与操作集合，由 ScraperView 及其子组件消费。 */
 export function useScraperTasks() {
-  
   // ===== 数据 =====
   const sources = ref<ScraperSource[]>([])
   const tasks = ref<ScraperTask[]>([])
@@ -35,8 +35,12 @@ export function useScraperTasks() {
   const taskTotal = ref(0)
 
   // 持久化任务筛选/排序：刷新或再次进入时保持上次选择
-  watch(taskFilterStatus, (v) => { localStorage.setItem('scraper-task-filter', v) })
-  watch(taskSort, (v) => { localStorage.setItem('scraper-task-sort', v) })
+  watch(taskFilterStatus, (v) => {
+    localStorage.setItem('scraper-task-filter', v)
+  })
+  watch(taskSort, (v) => {
+    localStorage.setItem('scraper-task-sort', v)
+  })
 
   // ===== 操作 loading 态 =====
   const deletingTask = ref<number | null>(null)
@@ -61,7 +65,7 @@ export function useScraperTasks() {
       failed: s.failed || 0,
       running: s.running || 0,
       pending: s.pending || 0,
-      rate: total > 0 ? Math.round((s.completed || 0) / total * 100) : 0,
+      rate: total > 0 ? Math.round(((s.completed || 0) / total) * 100) : 0,
     }
   }
 
@@ -79,10 +83,28 @@ export function useScraperTasks() {
             size: taskPageSize,
           },
         }),
-        apiClient.get('/scraper/cookie-status', { params: { platform: 'xiaohongshu' } })
-          .catch(() => ({ data: { platform: 'xiaohongshu', exists: false, age_hours: 0, valid: false, hint: '检查失败' } })),
-        apiClient.get('/scraper/cookie-status', { params: { platform: 'douyin' } })
-          .catch(() => ({ data: { platform: 'douyin', exists: false, age_hours: 0, valid: false, hint: '检查失败' } })),
+        apiClient
+          .get('/scraper/cookie-status', { params: { platform: 'xiaohongshu' } })
+          .catch(() => ({
+            data: {
+              platform: 'xiaohongshu',
+              exists: false,
+              age_hours: 0,
+              valid: false,
+              hint: '检查失败',
+            },
+          })),
+        apiClient
+          .get('/scraper/cookie-status', { params: { platform: 'douyin' } })
+          .catch(() => ({
+            data: {
+              platform: 'douyin',
+              exists: false,
+              age_hours: 0,
+              valid: false,
+              hint: '检查失败',
+            },
+          })),
       ])
       sources.value = sRes.data.sources
       tasks.value = tRes.data.items
@@ -94,7 +116,9 @@ export function useScraperTasks() {
         xiaohongshu: cXhs.data as CookieStatus,
         douyin: cDy.data as CookieStatus,
       }
-    } catch { Message.error('加载失败') }
+    } catch {
+      Message.error('加载失败')
+    }
   }
 
   async function refreshTasks() {
@@ -111,14 +135,22 @@ export function useScraperTasks() {
       tasks.value = tRes.data.items
       taskTotal.value = tRes.data.total || 0
       applyTaskStats(tRes.data)
-    } catch { /* 轮询/静默刷新失败不提示，保持旧数据 */ }
+    } catch {
+      /* 轮询/静默刷新失败不提示，保持旧数据 */
+    }
   }
 
   /** 筛选或排序变化：回到第一页并刷新 */
-  function onFilterChange() { taskPage.value = 1; refreshTasks() }
+  function onFilterChange() {
+    taskPage.value = 1
+    refreshTasks()
+  }
 
   /** 翻页：更新页码并刷新列表 */
-  function onPageChange(page: number) { taskPage.value = page; refreshTasks() }
+  function onPageChange(page: number) {
+    taskPage.value = page
+    refreshTasks()
+  }
 
   // ===== 任务操作 =====
   async function cancelTask(taskId: number) {
@@ -126,7 +158,9 @@ export function useScraperTasks() {
       await apiClient.post(`/scraper/tasks/${taskId}/cancel`)
       Message.success('已取消')
       refreshTasks()
-    } catch (e) { Message.error(getApiErrorMessage(e, '取消失败')) }
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '取消失败'))
+    }
   }
 
   async function deleteSingleTask(taskId: number) {
@@ -139,8 +173,10 @@ export function useScraperTasks() {
       }
     } catch (e) {
       // 204 同属 2xx 成功响应（apiClient validateStatus 放行），不会落入 catch，无需单独处理
-      Message.error('删除失败: ' + (getApiErrorMessage(e, '')))
-    } finally { deletingTask.value = null }
+      Message.error('删除失败: ' + getApiErrorMessage(e, ''))
+    } finally {
+      deletingTask.value = null
+    }
   }
 
   async function clearAllTasks() {
@@ -150,7 +186,11 @@ export function useScraperTasks() {
       taskPage.value = 1
       Message.success('已清空')
       refreshTasks()
-    } catch { Message.error('清空失败') } finally { clearing.value = false }
+    } catch {
+      Message.error('清空失败')
+    } finally {
+      clearing.value = false
+    }
   }
 
   async function retryFailedTasks() {
@@ -162,7 +202,9 @@ export function useScraperTasks() {
     } catch (e) {
       const is404 = (e as { response?: { status?: number } })?.response?.status === 404
       Message.info(is404 ? '没有失败任务' : getApiErrorMessage(e, '重试失败'))
-    } finally { retrying.value = false }
+    } finally {
+      retrying.value = false
+    }
   }
 
   async function retrySingleTask(taskId: number) {
@@ -174,15 +216,24 @@ export function useScraperTasks() {
       startPollIfNeeded()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '续采失败'))
-    } finally { retryingTask.value = null }
+    } finally {
+      retryingTask.value = null
+    }
   }
 
   /** 复制任务配置重新采集：解析原任务 config，按相同参数创建新任务 */
   async function copyTask(task: ScraperTask) {
     let cfg: any = {}
-    try { cfg = task.config ? JSON.parse(task.config) : {} } catch { cfg = {} }
+    try {
+      cfg = task.config ? JSON.parse(task.config) : {}
+    } catch {
+      cfg = {}
+    }
     const keywords: string[] = Array.isArray(cfg.keywords) ? cfg.keywords : []
-    if (!keywords.length) { Message.warning('原任务没有关键词配置，无法复制'); return }
+    if (!keywords.length) {
+      Message.warning('原任务没有关键词配置，无法复制')
+      return
+    }
     try {
       copyingTask.value = task.id
       const payload: any = {
@@ -190,17 +241,17 @@ export function useScraperTasks() {
         keywords,
         max_count: cfg.max_count || 20,
         headless: !!cfg.headless,
-        cdp_port: task.platform === 'xiaohongshu' ? (cfg.cdp_port || 9222) : null,
+        cdp_port: task.platform === 'xiaohongshu' ? cfg.cdp_port || 9222 : null,
       }
-      if (task.platform === 'xiaohongshu' && cfg.sort_mode && cfg.sort_mode !== 'general') payload.sort_mode = cfg.sort_mode
+      if (task.platform === 'xiaohongshu' && cfg.sort_mode && cfg.sort_mode !== 'general')
+        payload.sort_mode = cfg.sort_mode
       await apiClient.post('/scraper/tasks', payload)
       Message.success('已按原配置创建新采集任务')
       refreshTasks()
       startPollIfNeeded()
     } catch (e) {
       // 特殊业务：后端 detail 可能是「带启动命令」的对象（Chrome 未启动时引导复制命令）
-      const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data
-        ?.detail
+      const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
       if (typeof detail === 'object' && detail && (detail as { command?: string }).command) {
         const d = detail as { error?: string; command: string }
         Message.error(d.error || '创建失败')
@@ -208,23 +259,22 @@ export function useScraperTasks() {
       } else {
         Message.error(getApiErrorMessage(e, '创建失败'))
       }
-    } finally { copyingTask.value = null }
+    } finally {
+      copyingTask.value = null
+    }
   }
 
-  // ===== 轮询：有运行/等待中的任务时每 5s 刷新一次 =====
-  let pollTimer: ReturnType<typeof setInterval> | null = null
-  function startPollIfNeeded() {
-    if (pollTimer) return
-    pollTimer = setInterval(async () => {
+  // ===== 轮询：有运行/等待中的任务时每 5s 刷新一次，无活动则自动停止 =====
+  const { start: startPollIfNeeded, stop: stopPoll } = usePolling({
+    intervalMs: POLL_INTERVAL_MS,
+    immediate: false,
+    callback: async () => {
       if (hasActiveTasks.value) {
         await refreshTasks()
         if (!hasActiveTasks.value) stopPoll()
       }
-    }, POLL_INTERVAL_MS)
-  }
-  function stopPoll() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-  }
+    },
+  })
 
   // ===== 工具函数 =====
   /** 复制文本到剪贴板（复用 utils/clipboard 实现，成功/失败给出提示） */
@@ -237,7 +287,9 @@ export function useScraperTasks() {
     }
   }
 
-  function platformName(p: string) { return sources.value.find(s => s.platform === p)?.name || PLATFORM_LABELS[p] || p }
+  function platformName(p: string) {
+    return sources.value.find((s) => s.platform === p)?.name || PLATFORM_LABELS[p] || p
+  }
 
   /** 关键词展示（表格列）：解析 config 中的关键词，逗号拼接，无则显示占位符 */
   function parseKeywords(c: string | null) {
@@ -256,13 +308,40 @@ export function useScraperTasks() {
   }
 
   return {
-    sources, tasks, tombstoneCount, cookieStatuses, defaultMaxCount,
-    taskFilterPlatform, taskFilterStatus, taskSort, taskPage, taskPageSize, taskTotal,
-    deletingTask, clearing, retrying, retryingTask, copyingTask,
-    taskStats, hasFailedTasks,
-    loadAll, refreshTasks, onFilterChange, onPageChange,
-    cancelTask, deleteSingleTask, clearAllTasks, retryFailedTasks, retrySingleTask, copyTask,
-    startPollIfNeeded, stopPoll, copyText,
-    platformName, formatDate, parseKeywords, getTaskDuration,
+    sources,
+    tasks,
+    tombstoneCount,
+    cookieStatuses,
+    defaultMaxCount,
+    taskFilterPlatform,
+    taskFilterStatus,
+    taskSort,
+    taskPage,
+    taskPageSize,
+    taskTotal,
+    deletingTask,
+    clearing,
+    retrying,
+    retryingTask,
+    copyingTask,
+    taskStats,
+    hasFailedTasks,
+    loadAll,
+    refreshTasks,
+    onFilterChange,
+    onPageChange,
+    cancelTask,
+    deleteSingleTask,
+    clearAllTasks,
+    retryFailedTasks,
+    retrySingleTask,
+    copyTask,
+    startPollIfNeeded,
+    stopPoll,
+    copyText,
+    platformName,
+    formatDate,
+    parseKeywords,
+    getTaskDuration,
   }
 }

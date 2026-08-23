@@ -5,6 +5,7 @@ import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import type { UnifiedTask } from '@/types/task'
+import { usePolling } from '@/composables/usePolling'
 import {
   normalizeQueueTask,
   normalizeScraperTask,
@@ -125,22 +126,16 @@ export function useTaskCenter() {
     }
   }
 
-  // ===== 轮询：有活动任务时每 5 秒刷新一次 =====
+  // ===== 轮询：有活动任务时每 5 秒刷新一次，无活动则自动停止 =====
 
-  let pollTimer: ReturnType<typeof setInterval> | null = null
-  function startPoll() {
-    if (pollTimer) return
-    pollTimer = setInterval(() => {
-      if (hasActive.value) loadTasks()
+  const { start: startPoll, stop: stopPoll } = usePolling({
+    intervalMs: POLL_INTERVAL_MS,
+    immediate: false,
+    callback: () => {
+      if (hasActive.value) void loadTasks()
       else stopPoll()
-    }, POLL_INTERVAL_MS)
-  }
-  function stopPoll() {
-    if (pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-  }
+    },
+  })
 
   return {
     tasks,
