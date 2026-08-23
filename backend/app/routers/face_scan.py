@@ -243,28 +243,49 @@ async def _person_detail_page(
 async def _unmatched_page(
     db: AsyncSession, status: str, page: int, size: int
 ) -> tuple[list[dict], int]:
-    """未匹配人脸明细分页（候选未命中或已驳回）。"""
-    base = (
+    """未匹配人脸明细分页（按素材去重：同一素材多张人脸仅显示一条）。
+
+    子查询按 inspiration_id 分组取最小 detection_id，外层关联素材路径。
+    """
+    subq = (
         select(
-            InspirationFaceDetection.id.label("detection_id"),
             InspirationFaceDetection.inspiration_id,
-            Inspiration.file_path,
-            Inspiration.thumbnail_path,
+            func.min(InspirationFaceDetection.id).label("detection_id"),
         )
-        .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
         .where(
             InspirationFaceDetection.match_status == status,
             InspirationFaceDetection.embedding != b"",
             InspirationFaceDetection.matched_blogger_id.is_(None),
             InspirationFaceDetection.matched_model_id.is_(None),
         )
+        .group_by(InspirationFaceDetection.inspiration_id)
         .subquery()
     )
-    total = (await db.execute(select(func.count()).select_from(base))).scalar() or 0
-    rows = (
-        await db.execute(
-            select(base).order_by(base.c.inspiration_id).offset((page - 1) * size).limit(size)
+    base = (
+        select(
+            subq.c.detection_id,
+            subq.c.inspiration_id,
+            Inspiration.file_path,
+            Inspiration.thumbnail_path,
         )
+        .join(Inspiration, Inspiration.id == subq.c.inspiration_id)
+        .order_by(subq.c.inspiration_id)
+        .offset((page - 1) * size)
+        .limit(size)
+        .subquery()
+    )
+    total = (
+        await db.execute(
+            select(func.count()).where(
+                InspirationFaceDetection.match_status == status,
+                InspirationFaceDetection.embedding != b"",
+                InspirationFaceDetection.matched_blogger_id.is_(None),
+                InspirationFaceDetection.matched_model_id.is_(None),
+            )
+        )
+    ).scalar() or 0
+    rows = (
+        await db.execute(select(base))
     ).all()
     items = [
         {
