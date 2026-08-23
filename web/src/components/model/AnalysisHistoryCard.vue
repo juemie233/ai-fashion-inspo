@@ -12,7 +12,7 @@ import {
   type TableColumnData,
 } from '@arco-design/web-vue'
 import { IconRefresh, IconDelete, IconSync, IconEye } from '@arco-design/web-vue/es/icon'
-import { getFileUrl } from '@/api/inspirations'
+import { getFileUrl, TRASH_REASON_OPTIONS, type TrashReason } from '@/api/inspirations'
 import { formatMs, formatDate } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { sortAnalysisTags } from '@/utils/tagSort'
@@ -59,7 +59,7 @@ const emit = defineEmits<{
   (e: 'previewImage', imagePath: string): void
   (e: 'retryAnalysis', inspirationId: string): void
   (e: 'deleteLog', logId: number): void
-  (e: 'deleteInspiration', inspirationId: string): void
+  (e: 'deleteInspiration', inspirationId: string, reason: TrashReason): void
   (e: 'updatePage', page: number): void
   (e: 'retryAllFailed'): void
   (e: 'deleteAllFailed'): void
@@ -163,6 +163,28 @@ function clearHoverPreview() {
 }
 
 onBeforeUnmount(clearHoverPreview)
+
+// ===== 删除素材（移入垃圾桶）原因弹窗 =====
+/** 当前待删除的素材 ID（null = 未选择，弹窗关闭） */
+const trashTargetId = ref<string | null>(null)
+/** 删除原因弹窗是否打开 */
+const trashModalOpen = ref(false)
+/** 当前选中的删除原因（未选择时确认按钮禁用） */
+const trashReason = ref<TrashReason | null>(null)
+
+/** 打开删除素材原因弹窗（每次重新打开时重置原因选择） */
+function openTrashModal(inspirationId: string) {
+  trashTargetId.value = inspirationId
+  trashReason.value = null
+  trashModalOpen.value = true
+}
+
+/** 确认移入垃圾桶：携带所选原因触发父级删除 */
+function confirmTrash() {
+  if (!trashTargetId.value || !trashReason.value) return
+  emit('deleteInspiration', trashTargetId.value, trashReason.value)
+  trashModalOpen.value = false
+}
 
 /** 历史表格列定义 */
 const columns = computed<TableColumnData[]>(() => [
@@ -394,23 +416,14 @@ const columns = computed<TableColumnData[]>(() => [
           },
         ),
         h(
-          Popconfirm,
+          Button,
           {
-            content: '删除该素材？将同时删除图片文件与全部分析记录，此操作不可恢复！',
-            onOk: () => emit('deleteInspiration', row.inspiration_id),
+            size: 'mini',
+            status: 'danger',
+            title: '删除素材（移入垃圾桶，可选择原因）',
+            onClick: () => openTrashModal(row.inspiration_id),
           },
-          {
-            default: () =>
-              h(
-                Button,
-                {
-                  size: 'mini',
-                  status: 'danger',
-                  title: '删除素材（含图片文件，不可恢复）',
-                },
-                { icon: () => h(IconDelete) },
-              ),
-          },
+          { icon: () => h(IconDelete) },
         ),
       ])
     },
@@ -549,6 +562,33 @@ const columns = computed<TableColumnData[]>(() => [
       />
     </div>
 
+    <!-- 删除素材（移入垃圾桶）原因选择弹窗 -->
+    <a-modal v-model:visible="trashModalOpen" title="删除素材" :width="420" :mask-closable="false">
+      <p class="trash-reason-tip">
+        请选择删除素材的原因，素材将移入垃圾桶（可在「素材管理 →
+        垃圾桶」恢复），历史列表将自动刷新：
+      </p>
+      <a-radio-group
+        :model-value="trashReason ?? undefined"
+        class="trash-reason-group"
+        @change="(v: unknown) => (trashReason = (v as TrashReason | undefined) ?? null)"
+      >
+        <a-space direction="vertical" :size="10">
+          <a-radio v-for="opt in TRASH_REASON_OPTIONS" :key="opt.value" :value="opt.value">{{
+            opt.label
+          }}</a-radio>
+        </a-space>
+      </a-radio-group>
+      <template #footer>
+        <div class="trash-modal-footer">
+          <a-button @click="trashModalOpen = false">取消</a-button>
+          <a-button status="danger" :disabled="!trashReason" @click="confirmTrash">
+            确认删除
+          </a-button>
+        </div>
+      </template>
+    </a-modal>
+
     <!-- 悬停快速预览：fixed 居中浮层，永不超出视口；整层指针穿透，不遮挡表格点击 -->
     <Teleport to="body">
       <div v-if="hoverPreviewPath" class="hover-preview-layer">
@@ -591,6 +631,23 @@ const columns = computed<TableColumnData[]>(() => [
 .tags-limit-label {
   font-size: 12px;
   color: #86909c;
+}
+
+/* 删除素材原因弹窗：说明文字与原因单选组 */
+.trash-reason-tip {
+  font-size: 13px;
+  color: #4e5969;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.trash-reason-group {
+  display: flex;
+  flex-direction: column;
+}
+.trash-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* 悬停快速预览：固定定位 + flex 居中，图片限制在视口内，任何屏幕尺寸都不会越界 */

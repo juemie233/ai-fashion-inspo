@@ -18,6 +18,7 @@ from app.models.inspiration import (
     AIAnalysisTag,
     AIQualityReview,
     Inspiration,
+    NOT_DELETED,
     analysis_log_filter as _analysis_log_filter,
 )
 from app.models.tag import InspirationTag, Tag
@@ -222,7 +223,11 @@ async def get_analysis_history(
     支持时间范围筛选（start_date / end_date，ISO 字符串）与耗时排序
     （sort_by=time_asc|time_desc）。
     """
-    query = select(AIAnalysisLog).where(_analysis_log_filter())
+    query = (
+        select(AIAnalysisLog)
+        .join(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .where(_analysis_log_filter(), NOT_DELETED)
+    )
     if status == "success":
         query = query.where(AIAnalysisLog.error.is_(None))
     elif status == "error":

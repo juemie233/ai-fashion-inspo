@@ -383,3 +383,36 @@ def test_quality_rejected_to_trash(client, upload):
     r3 = client.post(f"/api/inspirations/{b}/restore")
     assert r3.status_code == 200
     assert client.get(f"/api/inspirations/{b}").status_code == 200
+
+
+async def test_analysis_history_excludes_trash_materials(client, upload, fake_ollama):
+    """移入垃圾桶后历史不再显示该素材日志。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    # 创建素材并执行分析
+    insp = upload().json()
+    async with async_session() as db:
+        await analyze_image(db, insp["id"], insp["file_path"])
+
+    # 验证历史中存在该素材的分析记录
+    r = client.get("/api/ai/history", params={"inspiration_id": insp["id"]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] >= 1
+    assert any(log["inspiration_id"] == insp["id"] for log in data["items"])
+
+    # 将该素材移入垃圾桶
+    client.post(f"/api/inspirations/{insp['id']}/trash", json={"reason": "不喜欢"})
+
+    # 再次查询历史：不应再显示该素材的分析记录
+    r2 = client.get("/api/ai/history", params={"inspiration_id": insp["id"]})
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert not any(log["inspiration_id"] == insp["id"] for log in data2["items"])
+
+    # 恢复后应重新出现在历史中
+    client.post(f"/api/inspirations/{insp['id']}/restore")
+    r3 = client.get("/api/ai/history", params={"inspiration_id": insp["id"]})
+    assert r3.status_code == 200
+    data3 = r3.json()
+    assert any(log["inspiration_id"] == insp["id"] for log in data3["items"])

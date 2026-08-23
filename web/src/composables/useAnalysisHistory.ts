@@ -4,7 +4,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
-import { moveToTrash as moveToTrashApi } from '@/api/inspirations'
+import { moveToTrash as moveToTrashApi, type TrashReason } from '@/api/inspirations'
 import { useNotification } from '@/composables/useNotification'
 import type { HistoryItem } from '@/types/analysis'
 
@@ -18,7 +18,7 @@ export interface UseAnalysisHistoryOptions {
 
 export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const { requestAndNotify } = useNotification()
-  
+
   const history = ref<HistoryItem[]>([])
   const historyTotal = ref(0)
   const historyPage = ref(1)
@@ -36,7 +36,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const retryingAll = ref(false)
 
   let historyAbort: AbortController | null = null
-  let historySeq = 0  // 请求序号，防止取消竞态导致 loading 提前熄灭
+  let historySeq = 0 // 请求序号，防止取消竞态导致 loading 提前熄灭
 
   /** 加载分析历史列表 */
   async function loadHistory() {
@@ -139,7 +139,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     try {
       const { data } = await apiClient.get<{ models: string[] }>('/ai/history/model-names')
       historyModelNames.value = data.models
-    } catch { /* 静默 */ }
+    } catch {
+      /* 静默 */
+    }
   }
 
   /** 切换单条记录选中状态 */
@@ -155,7 +157,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     if (selectedHistoryIds.value.size === history.value.length && history.value.length > 0) {
       selectedHistoryIds.value = new Set()
     } else {
-      selectedHistoryIds.value = new Set(history.value.map(h => h.id))
+      selectedHistoryIds.value = new Set(history.value.map((h) => h.id))
     }
   }
 
@@ -177,7 +179,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   async function batchRetryHistory() {
     if (selectedHistoryIds.value.size === 0) return
     try {
-      const { data } = await apiClient.post('/ai/history/batch-retry', { ids: [...selectedHistoryIds.value] })
+      const { data } = await apiClient.post('/ai/history/batch-retry', {
+        ids: [...selectedHistoryIds.value],
+      })
       Message.success(data.message)
       requestAndNotify('批量重试已启动', { body: data.message, tag: 'batch-retry' })
       selectedHistoryIds.value = new Set()
@@ -210,10 +214,13 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
    *
    * 用于处置质量审核不到位混入的低质量素材：在分析历史中直接移入垃圾桶，
    * 移入后该素材从正常列表/统计中过滤，历史列表自动刷新。
+   *
+   * @param inspirationId 素材 ID
+   * @param reason 删除原因（质量差/重复/不喜欢/隐私/其他/AI生成），不传时后端自动推断
    */
-  async function deleteInspirationFromHistory(inspirationId: string) {
+  async function deleteInspirationFromHistory(inspirationId: string, reason?: TrashReason) {
     try {
-      await moveToTrashApi(inspirationId)
+      await moveToTrashApi(inspirationId, reason)
       Message.success('素材已移入垃圾桶（可在垃圾桶恢复）')
       loadHistory()
       options.loadQueue?.()
@@ -230,7 +237,9 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       const { data } = await apiClient.post('/ai/retry-all-failed')
       Message.success(data.message || '已加入重试队列')
       requestAndNotify('失败重试已启动', { body: data.message, tag: 'retry-failed' })
-      options.loadQueue?.(); loadHistory(); options.loadActiveAnalyses?.()
+      options.loadQueue?.()
+      loadHistory()
+      options.loadActiveAnalyses?.()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '重试失败'))
     } finally {

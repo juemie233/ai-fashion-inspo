@@ -1,0 +1,117 @@
+# Dependencies
+
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build output
+
+dist/
+web/dist/
+
+# Database
+
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Storage
+
+storage/
+backend/storage/
+
+# 裁剪脚本候选清单（运行时数据）
+
+scripts/crop_candidates.json
+
+# 手动数据备份
+
+backups/
+
+# Environment
+
+.env
+.env.local
+
+# IDE
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+
+.DS_Store
+Thumbs.db
+
+# Expo
+
+.expo/
+mobile/android/
+mobile/ios/
+
+# Logs
+
+*.log
+logs/
+*.err
+*.out
+
+# 覆盖率（pytest-cov 产物）
+
+.coverage
+.coverage.*
+htmlcov/
+
+# Prompt version history (runtime state)
+
+prompt_versions.json
+backend/prompt_versions.json
+
+# 全局默认 prompt（运行时数据）
+
+prompt.txt
+backend/prompt.txt
+
+# 数据库容量评估（含真实数据统计，不公开）
+
+docs/数据库容量评估.md
+docs/database-capacity-assessment.en.md
+
+# 人物模块移植报告（本地私有文档，不公开、严禁翻译）
+
+人物模块移植报告.md
+docs/人物模块移植报告.md
+人物模块移植报告.en.md
+docs/人物模块移植报告.en.md
+
+# 待改进列表（不公开）
+
+待改进列表.txt
+
+# 统计代码目录（不公开）
+
+.VSCodeCounter
+
+# 忽略 mcp（不公开）
+
+mcp
+
+# 人脸识别子服务（face-service）：模型与运行时数据不提交
+
+face-service/models/
+face-service/face_service.db
+
+# Playwright E2E ����
+
+web/test-results/
+web/playwright-report/
+
+# 忽略插件
+
+.expert-mode

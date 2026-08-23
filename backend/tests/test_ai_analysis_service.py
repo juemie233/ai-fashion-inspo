@@ -50,6 +50,28 @@ async def test_analysis_history_filter_status(client, upload):
     assert data["items"][0]["status"] == "error"
 
 
+async def test_analysis_history_excludes_trashed(client, upload):
+    """历史列表排除已移入垃圾桶（软删除）素材的日志。
+
+    从历史页删除素材 = 移入垃圾桶，刷新后该素材的日志不应再出现在历史列表。
+    """
+    active_id = upload().json()["id"]
+    trashed_id = upload().json()["id"]
+    await _add_log(active_id, error=None)
+    await _add_log(trashed_id, error=None)
+
+    assert client.get("/api/ai/history").json()["total"] == 2
+
+    # 将其中一条移入垃圾桶（携带原因）
+    r = client.post(f"/api/inspirations/{trashed_id}/trash", json={"reason": "不喜欢"})
+    assert r.status_code == 200
+    assert r.json()["trash_reason"] == "不喜欢"
+
+    data = client.get("/api/ai/history").json()
+    assert data["total"] == 1
+    assert data["items"][0]["inspiration_id"] == active_id
+
+
 async def test_analysis_history_detail(client, upload):
     """历史详情：解析 raw_response 供前端展示。"""
     insp_id = upload().json()["id"]
