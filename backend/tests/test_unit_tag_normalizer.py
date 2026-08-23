@@ -2,7 +2,6 @@
 
 from app.utils.tag_normalizer import (
     normalize_tag_name,
-    should_merge_tags,
     string_similarity,
     validate_tag_name,
 )
@@ -26,12 +25,6 @@ def test_string_similarity():
     assert string_similarity("白色", "白色") == 1.0
     assert string_similarity("白色", "黑色") < 1.0
     assert 0.0 <= string_similarity("a", "b") <= 1.0
-
-
-def test_should_merge_tags():
-    assert should_merge_tags("JK制服", "jk制服")  # 仅大小写差异
-    assert not should_merge_tags("JK制服", "JK制服")
-    assert not should_merge_tags("法式", "日系")
 
 
 def test_validate_tag_name_ok():

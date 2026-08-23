@@ -8,23 +8,21 @@ import hashlib
 from pathlib import Path
 
 
-def file_hash(path: Path) -> str | None:
-    """计算文件的 MD5 哈希，用于重复检测。
-
-    参数:
-        path: 文件路径
-
-    返回:
-        16 进制 MD5 字符串；文件不可读时返回 None
-    """
+def _digest(path: Path, factory: callable) -> str | None:
+    """分块读取文件并计算指定算法的摘要；文件不可读时返回 None。"""
     try:
-        h = hashlib.md5()
+        h = factory()
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)
         return h.hexdigest()
     except Exception:
         return None
+
+
+def file_hash(path: Path) -> str | None:
+    """计算文件的 MD5 哈希，用于后台全库重复检测。"""
+    return _digest(path, hashlib.md5)
 
 
 def file_sha256(path: Path) -> str | None:
@@ -32,21 +30,8 @@ def file_sha256(path: Path) -> str | None:
 
     与 file_hash（MD5）并存：MD5 用于后台全库去重，SHA-256 用于上传去重，
     后者与前端 Web Crypto 的原生 SHA-256 保持一致，避免引入额外依赖。
-
-    参数:
-        path: 文件路径
-
-    返回:
-        16 进制 SHA-256 字符串（64 位）；文件不可读时返回 None
     """
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return None
+    return _digest(path, hashlib.sha256)
 
 
 def build_hash_map(
