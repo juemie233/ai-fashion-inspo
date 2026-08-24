@@ -44,7 +44,8 @@
     <h2>设置</h2>
     <div class="form-group">
       <label for="apiUrl">后端地址</label>
-      <input type="text" id="apiUrl" placeholder="http://localhost:8000" />
+      <!-- 占位符须与后端默认端口一致（backend 默认 18888），否则用户照抄会连不上 -->
+      <input type="text" id="apiUrl" placeholder="http://localhost:18888" />
     </div>
     <div class="form-group">
       <label>

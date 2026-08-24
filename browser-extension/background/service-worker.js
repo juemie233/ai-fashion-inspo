@@ -41,6 +41,8 @@ async function uploadImage(imageUrl, metadata, taskId) {
     }
     return { success: true, data };
   } catch (error) {
+    // 记录失败原因（扩展 Service Worker 的控制台可见，便于排查上传失败）
+    console.warn(`[穿搭采集器] 图片上传失败: ${imageUrl}`, error.message || error);
     return { success: false, error: error.message || String(error) };
   }
 }
@@ -60,7 +62,9 @@ async function createExtensionTask(metadata) {
     if (!resp.ok) return null;
     const data = await resp.json();
     return data.id || null;
-  } catch {
+  } catch (err) {
+    // 任务创建失败不影响上传主流程，但记录日志便于排查
+    console.warn('[穿搭采集器] 创建采集会话任务失败:', err);
     return null;
   }
 }
@@ -114,13 +118,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 /** 批量上传图片：先创建采集会话任务，逐张上传后汇总计数 */
 async function handleUploadImages(images, metadata, sendResponse) {
-  const taskId = await createExtensionTask(metadata);
-  const results = [];
-  for (const img of images) {
-    const result = await uploadImage(img, metadata, taskId);
-    results.push(result);
+  try {
+    const taskId = await createExtensionTask(metadata);
+    const results = [];
+    for (const img of images) {
+      const result = await uploadImage(img, metadata, taskId);
+      results.push(result);
+    }
+    const successCount = results.filter((r) => r.success).length;
+    if (taskId) await completeExtensionTask(taskId, images.length, successCount);
+    // popup 可能在等待期间被关闭：sendResponse 抛错时静默（结果已无法送达）
+    sendResponse({ results, taskId });
+  } catch (err) {
+    console.error('[穿搭采集器] 批量上传异常:', err);
+    try {
+      sendResponse({ results: [], taskId: null, error: String(err) });
+    } catch {
+      // popup 已关闭，无法送达响应，忽略
+    }
   }
-  const successCount = results.filter((r) => r.success).length;
-  if (taskId) await completeExtensionTask(taskId, images.length, successCount);
-  sendResponse({ results, taskId });
 }

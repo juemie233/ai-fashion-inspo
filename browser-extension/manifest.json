@@ -17,7 +17,13 @@
     "http://localhost:18888/*",
     "http://127.0.0.1:18888/*",
     "https://www.xiaohongshu.com/*",
-    "https://www.douyin.com/*"
+    "https://*.xiaohongshu.com/*",
+    "https://*.xhscdn.com/*",
+    "https://www.douyin.com/*",
+    "https://*.douyin.com/*",
+    "https://*.douyincdn.com/*",
+    "https://*.byteimg.com/*",
+    "https://*.douyinpic.com/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"

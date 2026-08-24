@@ -32,14 +32,19 @@ document.addEventListener('DOMContentLoaded', () => {
 async function checkConnection() {
   try {
     const response = await chrome.runtime.sendMessage({ type: 'CHECK_API' });
+    // 防御：response.data 可能为 null / 缺 version 字段（后端 health 响应结构变化时
+    // 不能抛 TypeError，否则 popup 打开即异常）
+    const version = (response && response.data && response.data.version) || '';
     if (response && response.connected) {
       statusBar.className = 'status-bar connected';
-      statusText.textContent = `已连接 (v${response.data.version || '?'})`;
+      statusText.textContent = version ? `已连接 (v${version})` : '已连接';
     } else {
       statusBar.className = 'status-bar disconnected';
       statusText.textContent = '未连接 — 请确认后端已启动';
     }
-  } catch {
+  } catch (err) {
+    // sendMessage 失败（如 service worker 未就绪）：按未连接处理，不抛异常
+    console.warn('[穿搭采集器] 检查后端连接失败:', err);
     statusBar.className = 'status-bar disconnected';
     statusText.textContent = '未连接 — 请确认后端已启动';
   }
@@ -47,10 +52,16 @@ async function checkConnection() {
 
 /** 加载设置 */
 async function loadSettings() {
-  const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
-  if (settings) {
-    document.getElementById('apiUrl').value = settings.apiUrl || 'http://localhost:18888';
-    document.getElementById('autoAnalyze').checked = settings.autoAnalyze !== false;
+  try {
+    const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+    if (settings) {
+      document.getElementById('apiUrl').value =
+        settings.apiUrl || 'http://localhost:18888';
+      document.getElementById('autoAnalyze').checked = settings.autoAnalyze !== false;
+    }
+  } catch (err) {
+    // service worker 冷启动 / 未就绪时 sendMessage 可能失败：用默认值，不抛异常
+    console.warn('[穿搭采集器] 加载设置失败（使用默认值）:', err);
   }
 }
 
@@ -58,9 +69,15 @@ async function loadSettings() {
 async function loadImages() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) return;
+    if (!tab || !tab.id) {
+      // 防御：无当前标签页（罕见）时给出提示而非静默失败
+      imageGrid.innerHTML = '<p class="hint">无法获取当前标签页，请刷新后重试</p>';
+      totalCountEl.textContent = '0';
+      updateFooter();
+      return;
+    }
 
-    // 仅支持小红书 / 抖音页面
+    // 仅支持小红书 / 抖音页面；tab.url 可能为空（无 tabs 权限时），防御性判断
     const tabUrl = tab.url || '';
     if (!/xiaohongshu\.com|douyin\.com/.test(tabUrl)) {
       imageGrid.innerHTML =
@@ -91,8 +108,10 @@ async function loadImages() {
     metadata = (result && result.metadata) || {};
     selectedUrls.clear();
     renderImages();
+    console.log(`[穿搭采集器] 提取到 ${imageList.length} 张候选图片`);
   } catch (err) {
-    console.error('加载图片失败:', err);
+    // executeScript 失败（页面不可注入 / 权限未授予等）：记录日志便于排查
+    console.error('[穿搭采集器] 加载图片失败:', err);
     imageGrid.innerHTML =
       '<p class="hint">无法读取当前页面。<br/>请确保在小红书或抖音页面使用此插件。</p>';
   }
@@ -114,7 +133,10 @@ function renderImages() {
     <div class="image-item ${selectedUrls.has(img.url) ? 'selected' : ''}"
          data-index="${i}"
          data-url="${escapeHtml(img.url)}">
-      <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.alt)}" loading="lazy" />
+      <!-- referrerpolicy="no-referrer"：小红书/抖音 CDN 图片通常按 Referer 防盗链，
+           扩展页面 Referer 为 chrome-extension:// 会被拒绝（裂图），去掉 Referer 可正常预览 -->
+      <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.alt)}" loading="lazy"
+           referrerpolicy="no-referrer" />
       <div class="checkbox">${selectedUrls.has(img.url) ? '✓' : ''}</div>
     </div>`
     )
