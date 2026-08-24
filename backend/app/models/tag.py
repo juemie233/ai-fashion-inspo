@@ -33,6 +33,15 @@ class Tag(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )  # 最后修改时间（供操作历史回滚的冲突检测）
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("tags.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )  # 父标签 ID（层级结构；null 表示根节点，与 category 正交）
 
     # 关联关系
     inspirations: Mapped[list["InspirationTag"]] = relationship(

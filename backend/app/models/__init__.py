@@ -19,6 +19,7 @@ from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.models.audit import AuditLog
+from app.models.tag_history import TagHistory
 from app.models.service_heartbeat import ServiceHeartbeat
 
 __all__ = [
@@ -42,5 +43,6 @@ __all__ = [
     "TaskQueue",
     "PendingVectorBackfill",
     "AuditLog",
+    "TagHistory",
     "ServiceHeartbeat",
 ]
