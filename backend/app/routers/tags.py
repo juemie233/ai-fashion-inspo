@@ -517,6 +517,43 @@ async def tag_network_analyze(
     return {"message": f"已提交图分析任务 #{task.id}", "task_id": task.id}
 
 
+# ============ 批量高级编辑 ============
+
+
+@router.post("/batch-edit", status_code=status.HTTP_200_OK)
+async def tag_batch_edit(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """批量高级编辑：正则查找替换 / 前后缀增删 / 格式归一化 / 正则批量合并。
+
+    请求体::
+        {
+            "dry_run": true,
+            "rules": [
+                {"type": "regex_replace", "pattern": "...", "replacement": "...",
+                 "scope": {"tag_ids": [1, 2]}},
+                {"type": "affix", "mode": "add_suffix", "text": "风",
+                 "scope": {"category": "style"}},
+                {"type": "normalize", "ops": ["fullwidth_to_halfwidth", "trim"],
+                 "scope": {"source": "ai_generated"}},
+                {"type": "regex_merge", "pattern": "^(.+)毛衣$", "target_template": "$1",
+                 "scope": {"search": "毛衣"}},
+            ],
+        }
+
+    dry_run=true 返回逐条预览（不落库）；dry_run=false 执行并写操作历史
+    （同批次共享 batch_id）。冲突策略：新名已存在时自动合并到该目标标签。
+    """
+    from app.services.tag_batch_edit import batch_edit_tags
+
+    rules = payload.get("rules") or []
+    dry_run = bool(payload.get("dry_run", True))
+    if not rules:
+        raise HTTPException(status_code=400, detail="请至少提供一条规则")
+    try:
+        return await batch_edit_tags(db, rules, dry_run=dry_run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ============ 共现网络与使用趋势 ============
 
 
