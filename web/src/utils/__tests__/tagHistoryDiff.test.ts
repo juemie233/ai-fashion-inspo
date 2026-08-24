@@ -10,6 +10,7 @@ function makeItem(overrides: Partial<HistoryItem>): HistoryItem {
     batch_id: null,
     operation: 'rename',
     tag_ids: [1],
+    tag_names: [],
     before: {},
     after: {},
     meta: null,
