@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」
 
+    # 标签命名质量
+    # 标签名超过该字数判定为「低质命名（过长）」：标签健康度扫描与 AI 打标提取共用同一阈值，
+    # 可在 .env 用 TAG_NAME_MAX_LENGTH 覆盖
+    tag_name_max_length: int = 12
+
     # 人脸识别子服务（face-service：独立 Python 3.10 环境运行 insightface）
     # 主后端 3.12 不兼容 insightface，人脸能力通过 HTTP 调用子服务；
     # 留空表示未部署子服务，人脸相关功能自动降级/不可用

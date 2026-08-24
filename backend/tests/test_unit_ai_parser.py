@@ -80,3 +80,9 @@ def test_extract_tag_names():
     assert extract_tag_names("图片中的人物") == []  # 描述句过滤
     assert extract_tag_names("#FFFFFF") == []  # hex 过滤
     assert extract_tag_names(123) == []
+
+
+def test_extract_tag_names_length_boundary():
+    """AI 打标长度过滤与低质命名阈值一致：默认 12 字保留、13 字丢弃。"""
+    assert extract_tag_names("一二三四五六七八九十甲乙") == ["一二三四五六七八九十甲乙"]
+    assert extract_tag_names("一二三四五六七八九十甲乙丙") == []

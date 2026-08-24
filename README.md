@@ -166,6 +166,7 @@ cd ../face-service
 ```bash
 # 后端 .env
 PORT=18888                   # 后端监听端口
+TAG_NAME_MAX_LENGTH=12       # 标签名最大字数（超过即判定为「低质命名-过长」，标签健康扫描与 AI 打标共用）
 
 # 前端 .env (web/.env)
 VITE_FRONTEND_PORT=17777     # 前端开发服务器端口

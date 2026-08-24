@@ -1,6 +1,8 @@
 """AI 响应解析工具：从模型输出中提取、修复并校验 JSON 与标签名称。
 
-本模块为纯函数集合，不依赖数据库与配置，供 ai_service / ai_tag_saver 复用。
+本模块为纯函数集合，不依赖数据库；标签长度阈值从全局配置读取
+（settings.tag_name_max_length，可用 .env 的 TAG_NAME_MAX_LENGTH 覆盖），
+供 ai_service / ai_tag_saver 复用。
 包含：
 - 各类 MiniCPM-V 输出畸形格式的修复（注释、Python set、裸词数组、单引号、截断）
 - 标签名称的递归提取与过滤
@@ -260,8 +262,17 @@ def looks_truncated(raw: str) -> bool:
 _TAG_DROP_SENTENCES = ("这是一", "图片中", "背景为", "整体造型", "完整展示", "人物为")
 
 
-def _extract_str_tag(s: str) -> list[str]:
-    """从单个字符串值中提取合法标签（长度/标点/句式过滤）。"""
+def _extract_str_tag(s: str, max_length: int | None = None) -> list[str]:
+    """从单个字符串值中提取合法标签（长度/标点/句式过滤）。
+
+    参数:
+        max_length: 标签名最大允许字数；为 None 时读取全局配置
+            ``settings.tag_name_max_length``（默认 12），与低质命名判定阈值一致。
+    """
+    if max_length is None:
+        from app.config import settings
+
+        max_length = settings.tag_name_max_length
     if len(s) <= 1:
         return []
     if s.startswith("{") and s.endswith("}"):
@@ -298,7 +309,7 @@ def _extract_str_tag(s: str) -> list[str]:
             return []
 
     # 拆分后再检查长度
-    if len(s) > 8:
+    if len(s) > max_length:
         return []
     if s.isascii() and not any(c.isdigit() for c in s):
         return []

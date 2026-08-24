@@ -97,8 +97,20 @@ def string_similarity(a: str, b: str) -> float:
         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def validate_tag_name(name: str) -> tuple[bool, str | None]:
-    """校验标签名是否合法。返回 (是否合法, 错误原因)。"""
+def validate_tag_name(
+    name: str, max_length: int | None = None
+) -> tuple[bool, str | None]:
+    """校验标签名是否合法。返回 (是否合法, 错误原因)。
+
+    参数:
+        max_length: 标签名最大允许字数；为 None 时读取全局配置
+            ``settings.tag_name_max_length``（默认 12，可用 .env 的
+            TAG_NAME_MAX_LENGTH 覆盖）。
+    """
+    if max_length is None:
+        from app.config import settings
+
+        max_length = settings.tag_name_max_length
     s = name.strip()
     if not s or len(s) < 1:
         return False, "标签名为空"
@@ -119,7 +131,7 @@ def validate_tag_name(name: str) -> tuple[bool, str | None]:
         if s.isascii() and s.replace(' ', '').isalpha() and len(s) > 2:
             return False, f"标签名是英文: {s!r}"
 
-    if len(s) > 8:
+    if len(s) > max_length:
         return False, f"标签名过长 ({len(s)} 字): {s[:20]}..."
     # 不能有句号/问号/感叹号
     if any(c in s for c in '。！？…~'):

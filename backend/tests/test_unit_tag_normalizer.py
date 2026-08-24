@@ -45,12 +45,22 @@ def test_validate_tag_name_ok():
 
 
 def test_validate_tag_name_rejects():
-    # 空 / 过长
+    # 空 / 过长（默认阈值 12 字，13 字过长）
     assert validate_tag_name(" ")[0] is False
-    assert validate_tag_name("这是一条超过八个字的长标签名称")[0] is False
+    assert validate_tag_name("一二三四五六七八九十甲乙丙")[0] is False
     # 描述句 / 标点 / hex
     assert validate_tag_name("图片中的人物穿着")[0] is False
     assert validate_tag_name("带标点！")[0] is False
     assert validate_tag_name("#FFFFFF")[0] is False
     # 纯英文普通词
     assert validate_tag_name("hello")[0] is False
+
+
+def test_validate_tag_name_length_boundary():
+    """长度阈值可配置：默认 12 字合法、13 字过长；显式 max_length 可覆盖。"""
+    # 默认阈值（settings.tag_name_max_length = 12）
+    assert validate_tag_name("一二三四五六七八九十甲乙") == (True, None)  # 12 字合法
+    assert validate_tag_name("一二三四五六七八九十甲乙丙")[0] is False  # 13 字过长
+    # 显式覆盖阈值
+    assert validate_tag_name("一二三四五六七八九十甲乙", max_length=10)[0] is False
+    assert validate_tag_name("一二三四五六七八九十", max_length=10) == (True, None)

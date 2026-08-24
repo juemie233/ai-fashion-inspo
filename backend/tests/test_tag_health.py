@@ -37,8 +37,8 @@ async def test_scan_identifies_issues(client, upload):
     # 低频：恰好 1 次素材关联
     insp_id = upload().json()["id"]
     client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["低频甲"]})
-    # 低质命名：超长名
-    bad = _create_tag(client, "这是一条超过八个字的长标签名称")
+    # 低质命名：超长名（默认阈值 12 字，13 字判过长）
+    bad = _create_tag(client, "这是一条超过十二字的长标签名称")
     # 疑似重复：同类别相似名
     _create_tag(client, "法式", category="style")
     _create_tag(client, "法式风", category="style")
