@@ -84,6 +84,9 @@ const currentPanel = computed(() => PANELS[activeTab.value])
   display: flex;
   flex-direction: column;
   height: calc(100vh - 120px);
+  /* 与其他管理页一致：宽屏下内容居中，避免左侧贴边留大片空白 */
+  max-width: 1100px;
+  margin: 0 auto;
 }
 .page-header {
   display: flex;
