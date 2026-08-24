@@ -581,6 +581,49 @@ async def tag_move(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
     return {"moved": moved, "errors": errors}
 
 
+# ============ 使用效果分析 ============
+
+
+@router.get("/effect/trending", status_code=status.HTTP_200_OK)
+async def tag_effect_trending(
+    days: int = Query(30, ge=1, le=365),
+    top: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """热度升降榜：对比最近 days 天与前一 days 天的素材关联数。"""
+    from app.services.tag_effect import get_trending_tags
+
+    return await get_trending_tags(db, days=days, top=top)
+
+
+@router.get("/effect/combinations", status_code=status.HTTP_200_OK)
+async def tag_effect_combinations(
+    limit: int = Query(20, ge=1, le=100),
+    min_count: int = Query(2, ge=1),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """标签组合排行：活跃标签子集内两两共现计数（按次数降序）。"""
+    from app.services.tag_effect import get_tag_combinations
+
+    return await get_tag_combinations(db, limit=limit, min_count=min_count)
+
+
+@router.get("/effect/coverage", status_code=status.HTTP_200_OK)
+async def tag_effect_coverage(db: AsyncSession = Depends(get_db)) -> dict:
+    """覆盖度统计：素材带标签比例、单素材平均标签数、按类别覆盖率。"""
+    from app.services.tag_effect import get_tag_coverage
+
+    return await get_tag_coverage(db)
+
+
+@router.get("/effect/source_dist", status_code=status.HTTP_200_OK)
+async def tag_effect_source_dist(db: AsyncSession = Depends(get_db)) -> dict:
+    """标签来源分布：每来源标签数/总使用/平均使用 + Top 低效 AI 标签。"""
+    from app.services.tag_effect import get_tag_source_dist
+
+    return await get_tag_source_dist(db)
+
+
 # ============ 共现网络与使用趋势 ============
 
 
