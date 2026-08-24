@@ -125,6 +125,12 @@ const graphOption = computed<EChartsOption | null>(() => {
             borderColor: n.is_bridge ? BRIDGE_COLOR : '#fff',
             borderWidth: n.is_bridge ? 3 : 1,
           },
+          // 透传原始节点字段供 tooltip formatter 使用（echarts 会保留自定义字段）
+          usage_count: n.usage_count,
+          degree: n.degree,
+          degree_centrality: n.degree_centrality,
+          betweenness: n.betweenness,
+          is_bridge: n.is_bridge,
         })),
         links: data.edges.map((e) => ({
           source: e.source,
