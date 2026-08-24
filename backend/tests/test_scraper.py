@@ -10,10 +10,16 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def no_scraper_subprocess(monkeypatch):
-    """禁用采集子进程启动（测试不运行真实爬虫）。"""
-    from app.services import scraper_service
+    """禁用采集子进程启动（测试不运行真实爬虫）。
 
-    monkeypatch.setattr(scraper_service, "_launch_scraper_process", lambda task_id: None)
+    patch 真正的定义点 ``app.services.scraper.process``：若只 patch
+    ``scraper_service`` 薄壳 re-export 层的同名符号，``_safe_launch`` 内部
+    引用的仍是 process 模块自身的 ``_launch_scraper_process``，测试会真实
+    拉起 Playwright 采集子进程，污染测试环境并拖慢用例。
+    """
+    from app.services.scraper import process
+
+    monkeypatch.setattr(process, "_launch_scraper_process", lambda task_id: None)
 
 
 def _create_task(client, platform="douyin", keywords=("穿搭",)):

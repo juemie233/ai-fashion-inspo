@@ -4,6 +4,7 @@
 因此必须在导入任何 app.* 模块之前设置测试环境变量（临时库 + 关闭 API Key）。
 """
 
+import asyncio
 import atexit
 import os
 import shutil
@@ -66,6 +67,18 @@ _ALL_TABLES = [
 @pytest.fixture(scope="session")
 def client():
     """会话级 TestClient：以 context manager 触发 lifespan（建表 + 预设标签导入）。"""
+    import app.main as main_module
+
+    # 测试环境禁用后台「定时采集调度循环」：该循环每 30s 触发一次
+    # run_due_schedules，会在用例的 await 窗口内并发抢跑（例如「立即执行」
+    # 推进 next_run_at 的用例，可能被调度循环抢先多创建一个采集任务），
+    # 造成平台相关的偶发失败。测试需要调度行为时显式调用对应函数即可。
+    async def _noop_schedule_loop() -> None:
+        while True:
+            await asyncio.sleep(3600)
+
+    main_module._scraper_schedule_loop = _noop_schedule_loop
+
     from app.main import app
 
     with TestClient(app) as c:
