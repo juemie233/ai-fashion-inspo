@@ -4,6 +4,7 @@
 import { onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { TreeNodeData } from '@arco-design/web-vue'
+import { IconFolder, IconTag } from '@arco-design/web-vue/es/icon'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { fetchTree, moveTags } from '@/api/tagAdvanced'
 import { CATEGORY_LABELS } from '@/api/tags'
@@ -154,8 +155,13 @@ onMounted(() => {
         :expanded-keys="expandedKeys"
         draggable
         block-node
+        show-line
         @drop="onDrop"
       >
+        <template #icon="{ isLeaf }">
+          <IconFolder v-if="!isLeaf" style="color: #d97706" />
+          <IconTag v-else style="color: #9ca3af" />
+        </template>
         <template #title="node">
           {{ nodeTitle(node) }}
         </template>
