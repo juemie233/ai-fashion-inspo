@@ -369,6 +369,57 @@ async def rollback_tag_history(
         raise HTTPException(status_code=409, detail=e.message)
 
 
+# ============ 健康度扫描 ============
+
+
+@router.post("/health/scan", status_code=status.HTTP_200_OK)
+async def tag_health_scan(
+    payload: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """提交标签健康度扫描任务（异步执行，返回 task_id 供轮询进度）。
+
+    请求体可选: {"duplicate_threshold": 0.75}（疑似重复相似度阈值）
+    """
+    from app.services.task_runner import create_tag_health_scan_task
+
+    threshold = float((payload or {}).get("duplicate_threshold", 0.75))
+    task = await create_tag_health_scan_task(db, duplicate_threshold=threshold)
+    return {"message": f"已提交健康度扫描任务 #{task.id}", "task_id": task.id}
+
+
+@router.get("/health/{issue_type}", status_code=status.HTTP_200_OK)
+async def tag_health_issues(
+    issue_type: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """获取最近一次健康度扫描的问题明细（分页）。
+
+    issue_type: orphan | low_frequency | low_quality_name | duplicate
+    """
+    from sqlalchemy import select
+
+    from app.models.task import TaskQueue
+    from app.services.tag_health import get_health_issue_detail
+
+    latest = await db.execute(
+        select(TaskQueue)
+        .where(TaskQueue.type == "tag_health_scan", TaskQueue.status == "success")
+        .order_by(TaskQueue.id.desc())
+        .limit(1)
+    )
+    task = latest.scalar_one_or_none()
+    if task is None or not task.result:
+        raise HTTPException(status_code=404, detail="尚未完成健康度扫描，请先提交扫描任务")
+
+    try:
+        return await get_health_issue_detail(db, task.result, issue_type, page, size)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ============ 共现网络与使用趋势 ============
 
 

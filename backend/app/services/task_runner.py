@@ -47,6 +47,10 @@ from app.services.task_runners.quality_check import (
     create_quality_check_task,
     execute_quality_check,
 )
+from app.services.task_runners.tag_health import (
+    create_tag_health_scan_task,
+    execute_tag_health_scan,
+)
 from app.services.task_runners.vector_backfill import (
     VECTOR_BACKFILL_BATCH_SIZE,
     create_vector_backfill_task,
@@ -67,4 +71,5 @@ TASK_HANDLERS = {
     "face_scan": execute_face_scan,
     "face_match": execute_face_match,
     "enrich_blogger_profile": execute_enrich_blogger_profile,
+    "tag_health_scan": execute_tag_health_scan,
 }
