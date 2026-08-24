@@ -159,43 +159,54 @@ async def scan_near_duplicates(
         )
     ).scalar() or 0
 
-    # ── 1) 补算缺失哈希：随机抽缺失素材（首跑/增量成本受 BACKFILL_PER_SCAN 约束）──
-    missing_rows = (
-        await db.execute(
-            select(Inspiration.id, Inspiration.file_path)
-            .where(
-                NOT_DELETED,
-                Inspiration.media_type == "image",
-                Inspiration.phash.is_(None),
-            )
-            .order_by(func.random())
-            .limit(BACKFILL_PER_SCAN)
-        )
-    ).all()
-
-    def _compute_hashes() -> list[tuple[str, str]]:
-        """同步计算缺失素材的感知哈希（线程池执行，避免阻塞事件循环）。"""
-        out: list[tuple[str, str]] = []
-        for mid, mpath in missing_rows:
-            if not mpath:
-                continue
-            full = storage_root / mpath
-            if not full.exists():
-                continue
-            phash = perceptual_hash(full)
-            if phash:
-                out.append((mid, phash))
-        return out
-
-    computed = await asyncio.to_thread(_compute_hashes)
-    if computed:
-        for mid, phash in computed:
+    # ── 1) 补算缺失哈希：循环回卷，直到所有素材都有 phash 缓存 ──
+    # 每次随机抽 BACKFILL_PER_SCAN 张补算，commit 后继续检查，
+    # 确保最终所有素材的 phash 都就绪，扫描时抽样可见全部数据。
+    total_computed: list[tuple[str, str]] = []
+    while True:
+        missing_rows = (
             await db.execute(
-                update(Inspiration).where(Inspiration.id == mid).values(phash=phash)
+                select(Inspiration.id, Inspiration.file_path)
+                .where(
+                    NOT_DELETED,
+                    Inspiration.media_type == "image",
+                    Inspiration.phash.is_(None),
+                )
+                .order_by(func.random())
+                .limit(BACKFILL_PER_SCAN)
             )
+        ).all()
+
+        if not missing_rows:
+            break  # 已全部补算
+
+        def _compute_hashes() -> list[tuple[str, str]]:
+            """同步计算缺失素材的感知哈希（线程池执行，避免阻塞事件循环）。"""
+            out: list[tuple[str, str]] = []
+            for mid, mpath in missing_rows:
+                if not mpath:
+                    continue
+                full = storage_root / mpath
+                if not full.exists():
+                    continue
+                phash = perceptual_hash(full)
+                if phash:
+                    out.append((mid, phash))
+            return out
+
+        computed = await asyncio.to_thread(_compute_hashes)
+        if computed:
+            total_computed.extend(computed)
+            for mid, phash in computed:
+                await db.execute(
+                    update(Inspiration).where(Inspiration.id == mid).values(phash=phash)
+                )
         await db.commit()
 
-    # ── 2) 全库随机抽样：仅取已有哈希缓存的素材（含刚补算的）参与分组 ──
+    # ── 2) 全库随机抽样：仅取已有哈希缓存的素材参与分组 ──
+    # commit 后同一个 session 的查询应当能看到已提交数据；
+    # 避免在此处切换 session（async_session 上下文管理器会 auto-commit/rollback），
+    # 否则可能读到旧快照或丢失采样结果。
     query = (
         select(
             Inspiration.id,
@@ -260,6 +271,6 @@ async def scan_near_duplicates(
         "total": total,
         "truncated": total > len(items),
         "threshold": threshold,
-        "backfilled": len(computed),
+        "backfilled": len(total_computed),
         "cached_total": cached_total,
     }

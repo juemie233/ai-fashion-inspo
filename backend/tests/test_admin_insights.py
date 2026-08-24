@@ -133,3 +133,66 @@ def test_near_duplicate_scan(client):
     assert res2["backfilled"] == 0
     assert res2["scanned"] == 2
     assert len(res2["groups"]) == 1
+
+
+def test_near_duplicate_scan_backfill_visibility(client):
+    """近似重复扫描：backfill 写入的 phash 必须在随机抽样中可见。
+
+    验证首次扫描时 scanned 数正确（backfill 的 phash 在随机抽样中可见）。
+    这是之前 bug 的回归测试：commit 后随机抽样可能读到旧快照，
+    导致 scanned 数偏少（如请求 5000 却只显示 300）。
+    """
+    import io
+    import random
+
+    from PIL import Image
+
+    def _rand_img(seed):
+        """用随机噪点生成视觉唯一的图片，避免 SHA-256 和 phash 去重拦截。"""
+        random.seed(seed)
+        img = Image.new("RGB", (64, 64))
+        img.putdata([
+            (random.randint(0, 255), random.randint(0, 127), random.randint(0, 255))
+            for _ in range(64 * 64)
+        ])
+        return img
+
+    def _bytes_pil(img):
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=60)
+        buf.seek(0)
+        return buf.getvalue()
+
+    # 上传 500 张唯一图片
+    all_ids = []
+    for i in range(500):
+        img = _rand_img(i)
+        r = client.post(
+            "/api/inspirations",
+            files={"file": (f"test{i}.jpg", _bytes_pil(img), "image/jpeg")},
+        )
+        assert r.status_code == 201, f"upload {i} failed: {r.text}"
+        all_ids.append(r.json()["id"])
+
+    # 首次扫描：500 张均无 phash，循环回卷 backfill 直至全部补齐
+    # limit=5000 → 库中只有 500 张，所以 scanned 应 = 500（min(500, 5000)）
+    # 关键验证：backfill 写入的 phash 必须在随机抽样中可见
+    res = client.post(
+        "/api/admin/near-duplicates", json={"limit": 5000, "threshold": 32}
+    ).json()
+    assert res["backfilled"] == 500, f"backfilled={res['backfilled']} should be 500 (all images)"
+    assert res["cached_total"] == res["backfilled"], (
+        f"cached_total={res['cached_total']} != backfilled={res['backfilled']}"
+    )
+    assert res["scanned"] == 500, (
+        f"BUG! scanned={res['scanned']} should be 500 when limit=5000 and total=500"
+    )
+    assert res["truncated"] is False
+
+    # 第二次扫描：全部哈希已缓存，scanned 应该 = total = 500
+    res2 = client.post(
+        "/api/admin/near-duplicates", json={"limit": 5000, "threshold": 32}
+    ).json()
+    assert res2["backfilled"] == 0
+    assert res2["scanned"] == 500
+    assert res2["truncated"] is False
