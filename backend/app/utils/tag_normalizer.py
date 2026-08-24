@@ -84,10 +84,17 @@ async def normalize_tag_name_async(db: AsyncSession, name: str) -> str:
 def string_similarity(a: str, b: str) -> float:
     """计算两个字符串的相似度（0.0 - 1.0）。
 
-    使用 rapidfuzz 替代 difflib.SequenceMatcher，速度提升 10-50 倍。
+    优先使用 rapidfuzz（速度提升 10-50 倍）；未安装时回退标准库
+    difflib.SequenceMatcher，保证最小环境也能运行。
     """
-    from rapidfuzz import fuzz
-    return fuzz.ratio(a.lower(), b.lower(), score_cutoff=0.0) / 100.0
+    try:
+        from rapidfuzz import fuzz
+
+        return fuzz.ratio(a.lower(), b.lower(), score_cutoff=0.0) / 100.0
+    except ImportError:
+        from difflib import SequenceMatcher
+
+        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
 def validate_tag_name(name: str) -> tuple[bool, str | None]:

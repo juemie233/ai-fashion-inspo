@@ -25,6 +25,9 @@ playwright==1.49.1
 # Utilities
 aiofiles==24.1.0
 
+# 字符串相似度（标签去重/相似建议，tag_normalizer.string_similarity 使用）
+rapidfuzz==3.14.5
+
 # 负样本初筛器（质量审核前置：CLIP 向量 + sklearn 逻辑回归）
 scikit-learn==1.9.0
 joblib==1.5.3

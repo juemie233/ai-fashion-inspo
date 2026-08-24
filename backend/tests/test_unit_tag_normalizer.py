@@ -27,6 +27,17 @@ def test_string_similarity():
     assert 0.0 <= string_similarity("a", "b") <= 1.0
 
 
+def test_string_similarity_fallback_without_rapidfuzz(monkeypatch):
+    """rapidfuzz 缺失时回退 difflib 仍可计算（最小环境不挂测试）。"""
+    import sys
+
+    # 把 rapidfuzz 伪装为缺失：sys.modules 中为 None 时 import 会抛 ImportError
+    monkeypatch.setitem(sys.modules, "rapidfuzz", None)
+    assert string_similarity("白色", "白色") == 1.0
+    assert string_similarity("白色", "黑色") < 1.0
+    assert 0.0 <= string_similarity("法式", "法式风") <= 1.0
+
+
 def test_validate_tag_name_ok():
     assert validate_tag_name("法式") == (True, None)
     assert validate_tag_name(" V领 ") == (True, None)
