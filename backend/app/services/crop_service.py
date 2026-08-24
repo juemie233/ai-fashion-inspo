@@ -173,6 +173,13 @@ async def scan_candidates(
             "boundary_kind": None,
             "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
         }
+        # 截图特征检测提前：状态栏/底部栏 → 置信度分级（content 模式用它在
+        # 「无系统 UI 特征却检出边界」时做误报兜底）
+        try:
+            features = await asyncio.to_thread(detect_screenshot_features, full)
+            item["confidence"] = screenshot_confidence(features)
+        except Exception:
+            item["confidence"] = "low"
         if mode == "auto":
             try:
                 top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
@@ -202,15 +209,17 @@ async def scan_candidates(
                     # 标记不可裁剪并说明原因（人工可确认是否确实无需再裁）
                     item["auto_ok"] = False
                     item["note"] = "已裁剪过或内容占满全图，无需裁剪"
+                elif item["confidence"] == "low" and (
+                    bounds["top_frac"] > 0 or bounds["bottom_frac"] > 0
+                ):
+                    # 无任何系统 UI 特征（无状态栏/导航栏/播放器条）却检出了可裁
+                    # 边界：大概率是照片顶/底部的自然低多样度区域（暗角、纯色
+                    # 天空/地面等），不自动判定可裁剪，标注供人工目检确认
+                    item["auto_ok"] = False
+                    item["note"] = "未检出状态栏/导航栏特征，疑似非截图，请人工确认"
             except ValueError as e:
                 item["auto_ok"] = False
                 item["note"] = f"内容边界检测失败：{e}"
-        # 截图特征检测：状态栏/底部栏 → 置信度分级（供人工筛选）
-        try:
-            features = await asyncio.to_thread(detect_screenshot_features, full)
-            item["confidence"] = screenshot_confidence(features)
-        except Exception:
-            item["confidence"] = "low"
         candidates.append(item)
 
     # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）

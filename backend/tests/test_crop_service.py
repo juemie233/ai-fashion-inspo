@@ -909,3 +909,99 @@ def test_scan_ratio_params_sum_validation():
 
     msg = asyncio.run(_run())
     assert msg and "合计必须" in msg
+
+
+# ═══════════ 误报回归（2026-08：普通照片顶部/底部低多样度被误判为可裁剪）═══════════
+
+
+def _make_gradient_top_screenshot(width=300, height=600, grad_rows=20):
+    """构造「照片顶部缓升渐变」图：顶部 grad_rows 行多样度从 ~0.02 渐升到 ~0.12，
+    下方为噪点内容区（模拟照片暗角/天空渐变 + 主体，无任何系统 UI）。"""
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    rng = np.random.default_rng(31)
+    arr[grad_rows:] = rng.integers(0, 256, size=arr[grad_rows:].shape, dtype=np.uint8)
+    # 渐变行：每行叠加递增数量的随机色像素（行 y 约 4 + 2y 个 → 96 宽缩放下多样度 0.02→0.14）
+    for y in range(grad_rows):
+        n = 4 + y * 2
+        cols = rng.choice(width, size=n, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(n, 3), dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    return buf.getvalue(), "image/jpeg"
+
+
+def _make_narrow_top_band_screenshot(width=300, height=600, band_rows=2):
+    """构造「顶部极窄低多样度地带」图（0.8% 场景）：顶部 band_rows 行纯色 + 噪点内容。"""
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:band_rows] = (70, 70, 70)
+    rng = np.random.default_rng(17)
+    arr[band_rows:] = rng.integers(0, 256, size=arr[band_rows:].shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    return buf.getvalue(), "image/jpeg"
+
+
+def test_content_bounds_ignores_gradient_top(tmp_path):
+    """误报回归：照片顶部缓升渐变（暗角/天空）不被判为可裁剪（top_frac=0）。"""
+    from app.services.crop_service import detect_content_bounds
+
+    data, _ = _make_gradient_top_screenshot()
+    p = tmp_path / "gradient.jpg"
+    p.write_bytes(data)
+
+    r = detect_content_bounds(p)
+    assert r["top_frac"] == 0.0
+    assert r["bottom_frac"] == 0.0
+    assert r["already_cropped"] is True
+
+
+def test_content_bounds_ignores_narrow_top_band(tmp_path):
+    """误报回归：顶部 1~2 行低多样度（0.8% 级噪声）不产出裁剪比例。"""
+    from app.services.crop_service import detect_content_bounds
+
+    data, _ = _make_narrow_top_band_screenshot()
+    p = tmp_path / "narrow.jpg"
+    p.write_bytes(data)
+
+    r = detect_content_bounds(p)
+    assert r["top_frac"] == 0.0
+
+
+def test_ui_band_valid_structure(tmp_path):
+    """地带有效性判定（单元级）：纯色带通过；缓升渐变、无突变峰的起伏被拒。"""
+    from app.services.image_cropping import _ui_band_valid
+
+    # 纯色地带（导航栏/灰带）：通过
+    d1 = np.array([0.01] * 8 + [0.5] * 40)
+    assert _ui_band_valid(d1, 0, 8, 8) is True
+    # 缓升渐变（暗角）：前后半段中位差 ≥ 0.05 → 拒绝
+    d2 = np.array([0.02, 0.04, 0.06, 0.08, 0.10, 0.12] + [0.5] * 40)
+    assert _ui_band_valid(d2, 0, 6, 6) is False
+    # 状态栏结构（纯色背景 + 突变图标峰）：通过
+    d3 = np.array([0.01] * 4 + [0.02, 0.18, 0.15] + [0.5] * 40)
+    assert _ui_band_valid(d3, 0, 7, 7) is True
+    # 过窄地带（1 行）：拒绝
+    d4 = np.array([0.01, 0.5] + [0.5] * 40)
+    assert _ui_band_valid(d4, 0, 1, 1) is False
+
+
+def test_scan_content_mode_low_confidence_flagged(client):
+    """误报回归：无任何状态栏/导航栏特征（confidence=low）却检出边界 → 标注待人工确认。"""
+    width, height = 300, 600
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    arr[:30] = (80, 80, 80)  # 顶部 30px 纯色（可能是照片纯色天空/背景）
+    rng = np.random.default_rng(11)
+    arr[30:] = rng.integers(0, 256, size=arr[30:].shape, dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["confidence"] == "low"
+    assert item["auto_ok"] is False
+    assert "疑似非截图" in (item["note"] or "")

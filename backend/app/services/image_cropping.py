@@ -62,6 +62,26 @@ _CONTENT_FRACTION_MIN = 0.25
 # 内容边界检测的分析宽度（行剖面逐行统计，宽度只影响多样度灵敏度）
 _CONTENT_ANALYZE_W = 96
 
+# ── 系统 UI 地带有效性校验（2026-08 修复「普通照片误报可裁剪」）──
+# 背景：_content_bounds 只凭「多样度低于内容下限」找边界，会把照片顶部/底部的
+# 自然低多样度区域（暗角、渐变、纯色天空/地面）误判为「状态栏/导航栏/灰带」，
+# 产出 0.8% / 4.7% 之类的微小"可裁剪"比例。这里用三个判据区分系统 UI 与照片内容：
+# 1. 宽度：地带至少 _UI_BAND_MIN_FRACTION 高度（防 1~2 行噪声）
+# 2. 硬跃变：内容区与地带多样度中位差 ≥ _UI_BAND_JUMP_MIN（系统 UI 是突变边界，
+#    照片暗角/渐变是渐进过渡，跃变不足）
+# 3. 结构：地带要么整段近纯色（导航栏/灰带/手势条），要么是「纯色背景行 + 图标
+#    行簇」的状态栏结构（带内多样度起伏但峰前存在纯色背景行）
+_UI_BAND_MIN_FRACTION = 0.015  # 地带最小宽度（占全图高度）
+_UI_BAND_PURE_MAX = 0.13  # 纯色地带多样度上限（整段低于此值视为纯色带）
+_UI_BAND_NOISE_MAX = 0.09  # 压缩/JPEG 伪影噪声上限：低于此值不判渐变（纯色块边缘
+# 伪影会把后几行多样度抬到 0.03~0.07，非照片渐变）
+_UI_BAND_JUMP_MIN = 0.12  # 地带 → 内容区的多样度硬跃变下限
+_UI_BAND_GRADIENT_DELTA = 0.05  # 地带前后半段中位差超过此值 → 缓升渐变（暗角）→ 拒绝
+_UI_BAND_SPIKE_MIN = 0.08  # 图标/文字行的「突变峰」单步增量下限（区别于渐变缓升）
+# 单侧最小可裁比例：低于此值的裁剪建议视为噪声置 0（真实状态栏 ≥2.5%；
+# 1%~2% 的薄残留交由 residual 疑似路径人工确认，不自动裁）
+_CONTENT_MIN_CROP_FRACTION = 0.02
+
 # EXIF Orientation 取值：5/6/7/8 表示 90°/270° 旋转，宽高互换
 _EXIF_TRANSPOSE_90 = frozenset((5, 6, 7, 8))
 
@@ -401,6 +421,72 @@ def _band_stats(brightness: np.ndarray, saturation: np.ndarray, lo: int, hi: int
     }
 
 
+def _ui_band_valid(
+    diversity: np.ndarray, lo: int, hi: int, content_row: int
+) -> bool:
+    """判定 [lo, hi) 地带是否为「系统 UI 地带」（状态栏/导航栏/播放器条/灰带）。
+
+    照片顶部/底部的自然低多样度区域（暗角、渐变、纯色天空/地面）与系统 UI
+    在行剖面上相似，本函数用三个判据区分：
+
+    1. 宽度：地带至少 ``_UI_BAND_MIN_FRACTION`` 高度（防 1~2 行噪声）；
+    2. 硬跃变：内容区首行多样度比地带中位高出至少 ``_UI_BAND_JUMP_MIN``
+       ——系统 UI 与内容区是突变边界，照片暗角/渐变是渐进过渡（中位被
+       后半段拉高，跃变不足）；
+    3. 结构：地带要么整段近纯色（导航栏/灰带/手势条），要么是「纯色背景行
+       + 图标行簇」的状态栏结构（带内多样度最高行之前存在纯色背景行）；
+       纯粹的单调上升（渐变）视为照片自然区域，拒绝。
+
+    参数:
+        diversity: 行多样度剖面
+        lo: 地带起始行（含）
+        hi: 地带结束行（不含）
+        content_row: 内容区紧邻地带的行（多样度跃变参照）
+
+    返回:
+        该地带是否为可裁剪的系统 UI 地带
+    """
+    n = len(diversity)
+    w = hi - lo
+    if w < max(2, int(n * _UI_BAND_MIN_FRACTION)):
+        return False
+    band = diversity[lo:hi]
+    content_val = float(diversity[content_row])
+    band_med = float(np.median(band))
+    # 硬跃变：内容区与地带中位差异不足 → 渐进过渡（暗角/渐变）→ 拒绝
+    if content_val - band_med < _UI_BAND_JUMP_MIN:
+        return False
+
+    # 结构判定：
+    band_max = float(band.max())
+    if band_max < _UI_BAND_PURE_MAX:
+        # 纯色地带（导航栏/灰带/手势条/状态栏纯色背景）——排除「缓升渐变」：
+        # 照片暗角/天空渐变的多样度前后半段呈上升趋势，纯色地带前后一致。
+        # 注意 JPEG 压缩会在纯色块边缘产生 0.03~0.07 的伪影上升（非照片渐变），
+        # 仅当多样度突破 _UI_BAND_NOISE_MAX 时才启用渐变检测。
+        if (
+            band_max >= _UI_BAND_NOISE_MAX
+            and len(band) >= 4
+        ):
+            half = len(band) // 2
+            lo_med = float(np.median(band[:half]))
+            hi_med = float(np.median(band[half:]))
+            if hi_med >= lo_med + _UI_BAND_GRADIENT_DELTA:
+                return False
+        return True
+
+    # 图标/文字簇结构（状态栏、带文字的播放器条）：带内存在中等多样度的峰，
+    # 峰前有纯色背景行，且峰是「突变」（单步增量大，区别于渐变的缓升）
+    peak = int(np.argmax(band))
+    if band[peak] >= _UI_BAND_PURE_MAX and any(
+        d < _ROW_UNIFORM for d in band[:peak]
+    ):
+        step = float(band[peak] - band[peak - 1]) if peak > 0 else float(band[peak])
+        if step >= _UI_BAND_SPIKE_MIN:
+            return True
+    return False
+
+
 def detect_content_bounds(path) -> dict:
     """检测内容区（照片主体）的上下边界，输出相对高度的裁剪比例（模式 content）。
 
@@ -438,45 +524,83 @@ def detect_content_bounds(path) -> dict:
     if n < 8:
         raise ValueError("图片过小，无法检测内容边界")
 
-    top_edge_raw, bottom_edge = _content_bounds(diversity)
-    if top_edge_raw is None or bottom_edge is None or bottom_edge <= top_edge_raw:
+    top_edge_raw, bottom_edge_raw = _content_bounds(diversity)
+    if top_edge_raw is None or bottom_edge_raw is None or bottom_edge_raw <= top_edge_raw:
         raise ValueError("未检测到内容区边界")
-    top_edge = _status_bar_correction(diversity, top_edge_raw)
-    correction = top_edge != top_edge_raw
+
+    # ── 顶部地带有效性校验：照片顶部自然低多样度（暗角/渐变/纯色块）不是系统 UI，
+    #    即便 _content_bounds 算出了边界也不裁；只有通过 _ui_band_valid 的地带
+    #    才允许进入状态栏精调并计入 top_frac ──
+    correction = False
+    top_frac = 0.0
+    if top_edge_raw > 0 and _ui_band_valid(
+        diversity, 0, top_edge_raw, top_edge_raw
+    ):
+        top_edge = _status_bar_correction(diversity, top_edge_raw)
+        correction = top_edge != top_edge_raw
+        top_frac = top_edge / n
+    else:
+        top_edge = 0
+
     residual_top_frac = 0.0
     if top_edge == 0:
         # 顶格残留疑似检测：不并入 top_frac（防误裁普通照片），单独返回建议
         residual_top_frac = round(_residual_top_estimate(diversity) / n, 6)
 
-    # 底部边界微调：播放器条/导航栏顶部常为半透明渐变过渡（亮度骤降但多样度
-    # 仍 ≥0.15），content_bounds 会把过渡行算进内容区，裁后残留暗带。
-    # 若 bottom_edge 行亮度显著低于其上方内容（< 中位 × 0.8），向上回退到
-    # 亮度恢复正常处（最多回退 3 行，防误伤照片暗部）。
-    if bottom_edge >= 5:
-        ref = float(np.median(brightness[max(0, bottom_edge - 20) : bottom_edge]))
-        y = bottom_edge
-        while y > 0 and brightness[y] < ref * 0.8:
-            y -= 1
-        if bottom_edge - y <= 3:
-            bottom_edge = y
+    # ── 底部地带有效性校验（同上）：非系统 UI 的底部低多样度区域不裁 ──
+    bottom_edge = bottom_edge_raw
+    bottom_frac = 0.0
+    if bottom_edge < n - 1 and _ui_band_valid(
+        diversity, bottom_edge + 1, n, bottom_edge
+    ):
+        # 底部边界微调：播放器条/导航栏顶部常为半透明渐变过渡（亮度骤降但多样度
+        # 仍 ≥0.15），content_bounds 会把过渡行算进内容区，裁后残留暗带。
+        # 若 bottom_edge 行亮度显著低于其上方内容（< 中位 × 0.8），向上回退到
+        # 亮度恢复正常处（最多回退 3 行，防误伤照片暗部）。
+        if bottom_edge >= 5:
+            ref = float(np.median(brightness[max(0, bottom_edge - 20) : bottom_edge]))
+            y = bottom_edge
+            while y > 0 and brightness[y] < ref * 0.8:
+                y -= 1
+            if bottom_edge - y <= 3:
+                bottom_edge = y
+        bottom_frac = (n - 1 - bottom_edge) / n
+    else:
+        bottom_edge = n - 1
 
     # 内容区占比下限校验（防灰带过厚/内容区过小误判）
     frac = (bottom_edge - top_edge + 1) / n
     if frac < _CONTENT_FRACTION_MIN:
         raise ValueError(f"内容区占比过小（{frac:.0%}），布局不规则")
 
-    top_frac = top_edge / n
-    bottom_frac = (n - 1 - bottom_edge) / n
+    # 单侧最小可裁比例门槛：真实状态栏/导航栏/手势条都有一定高度，
+    # 低于门槛的微比例（如 0.8%）是照片边缘噪声，置 0
+    if top_frac < _CONTENT_MIN_CROP_FRACTION:
+        top_frac = 0.0
+    if bottom_frac < _CONTENT_MIN_CROP_FRACTION:
+        bottom_frac = 0.0
+
     # 已裁剪干净：两侧合计可裁比例 <1%。不抛异常、不设内容占比上限——
     # 薄边框截图与残留修正（如顶部状态栏图标残余）都可正常给出裁剪建议，
     # 由调用方按 already_cropped 标注、人工勾选确认兜底
     already_cropped = top_frac + bottom_frac < 0.01
 
-    # 灰带判定：边界外侧低饱和 + 亮度平坦
-    top_gray = _band_stats(brightness, saturation, 0, top_edge)
-    bot_gray = _band_stats(brightness, saturation, bottom_edge + 1, n)
-    top_gray_ok = top_gray["sat_mean"] < _SAT_GRAY and top_gray["bright_std"] < _GRAY_BAND_STD_MAX
-    bot_gray_ok = bot_gray["sat_mean"] < _SAT_GRAY and bot_gray["bright_std"] < _GRAY_BAND_STD_MAX
+    # 灰带判定：边界外侧低饱和 + 亮度平坦（边界被校验回退到 0 / n-1 时
+    # 视为无该侧地带，不参与灰带判定，避免空区间误判为灰带）
+    top_gray_ok = False
+    if top_edge > 0:
+        top_gray = _band_stats(brightness, saturation, 0, top_edge)
+        top_gray_ok = (
+            top_gray["sat_mean"] < _SAT_GRAY
+            and top_gray["bright_std"] < _GRAY_BAND_STD_MAX
+        )
+    bot_gray_ok = False
+    if bottom_edge < n - 1:
+        bot_gray = _band_stats(brightness, saturation, bottom_edge + 1, n)
+        bot_gray_ok = (
+            bot_gray["sat_mean"] < _SAT_GRAY
+            and bot_gray["bright_std"] < _GRAY_BAND_STD_MAX
+        )
 
     if top_gray_ok and bot_gray_ok:
         kind = "gray_band"
