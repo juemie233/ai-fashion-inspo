@@ -291,10 +291,22 @@ async def _restore_aliases(db: AsyncSession, tag_id: int, before_aliases: list[s
 
 
 async def _restore_tag_fields(db: AsyncSession, tid: int, before_snap: dict) -> None:
-    """用 before 快照恢复标签的可编辑字段。"""
+    """用 before 快照恢复标签的可编辑字段。
+
+    恢复 name 前检查全局唯一：操作后其它标签可能占用了旧名，
+    直接赋值会撞唯一约束导致 500（应友好拒绝回滚）。
+    """
     tag = await db.get(Tag, tid)
     if not tag:
         return
+    if before_snap["name"] != tag.name:
+        occupied = await db.execute(
+            select(Tag.id).where(Tag.name == before_snap["name"], Tag.id != tid)
+        )
+        if occupied.scalar_one_or_none() is not None:
+            raise TagHistoryRollbackError(
+                f"无法回滚：标签名「{before_snap['name']}」已被其它标签占用"
+            )
     tag.name = before_snap["name"]
     tag.category = before_snap["category"]
     tag.parent_id = before_snap["parent_id"]
@@ -302,6 +314,17 @@ async def _restore_tag_fields(db: AsyncSession, tid: int, before_snap: dict) -> 
     tag.sort_order = before_snap["sort_order"]
     tag.description = before_snap["description"]
     tag.source = before_snap["source"]
+
+
+async def _ensure_name_available(db: AsyncSession, name: str, exclude_id: int) -> None:
+    """回滚重建标签前校验 name 未被其它标签占用（占用则拒绝回滚，防唯一约束 500）。"""
+    occupied = await db.execute(
+        select(Tag.id).where(Tag.name == name, Tag.id != exclude_id)
+    )
+    if occupied.scalar_one_or_none() is not None:
+        raise TagHistoryRollbackError(
+            f"无法回滚：标签名「{name}」已被其它标签占用"
+        )
 
 
 async def _restore_deleted_tags(db: AsyncSession, before: dict, after: dict) -> None:
@@ -312,6 +335,7 @@ async def _restore_deleted_tags(db: AsyncSession, before: dict, after: dict) -> 
             continue
         if await db.get(Tag, tid):
             continue  # 冲突检测已保证不存在，这里防御性跳过
+        await _ensure_name_available(db, before_snap["name"], tid)
         db.add(
             Tag(
                 id=tid,
@@ -339,6 +363,7 @@ async def _rollback_merge(
 
     # 1. 重建源标签行
     if await db.get(Tag, source_id) is None:
+        await _ensure_name_available(db, src_before["name"], source_id)
         db.add(
             Tag(
                 id=source_id,

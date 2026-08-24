@@ -162,6 +162,25 @@ async def test_rollback_conflict_detection(client):
             assert "冲突乙" in e.message or "已被修改" in e.message
 
 
+async def test_rollback_rename_name_taken_by_other_tag(client):
+    """回滚改名时旧名已被其它标签占用 → 友好拒绝（409 而非唯一约束 500）。"""
+    a = client.post("/api/tags", json={"name": "回滚甲", "category": "free"}).json()
+    b = client.post("/api/tags", json={"name": "占用乙", "category": "free"}).json()
+    # A 改名为「占用丙」
+    client.patch(f"/api/tags/{a['id']}", json={"name": "占用丙"})
+    rename_row = _history_rows(client)[0]
+    assert rename_row["operation"] == "rename"
+    # B 占用了 A 的旧名「回滚甲」
+    client.patch(f"/api/tags/{b['id']}", json={"name": "回滚甲"})
+
+    async with async_session() as db:
+        try:
+            await rollback_history(db, rename_row["id"])
+            raise AssertionError("应抛出 TagHistoryRollbackError（旧名被占用）")
+        except TagHistoryRollbackError as e:
+            assert "已被其它标签占用" in e.message
+
+
 async def test_alias_history_and_rollback(client):
     """添加/删除别名写入历史；回滚 alias_add 移除别名。"""
     tag = client.post("/api/tags", json={"name": "别名甲", "category": "free"}).json()
