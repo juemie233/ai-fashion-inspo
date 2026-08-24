@@ -132,6 +132,47 @@ def detect_bridges(
     }
 
 
+def _prune_edges(
+    edge_pairs: list[tuple[int, int]],
+    pair_weight: dict[tuple[int, int], int],
+    max_per_node: int,
+) -> list[tuple[int, int]]:
+    """每节点保留权重最高的 max_per_node 条边（无向对去重，贪心）。
+
+    全连接稠密图（AI 打标同质性使 Top-N 标签几乎两两共现）直接全量渲染
+    会变成无法阅读的网格；剪枝只影响展示边，社区发现/中心度/桥接在剪枝前
+    用全图计算，算法质量不受影响。
+
+    参数:
+        edge_pairs: 无向边（节点索引对）
+        pair_weight: 边权重 {(min_a, max_b): weight}
+        max_per_node: 每节点最多保留的边数；<=0 表示不剪枝
+
+    返回:
+        剪枝后的边列表（保持原始顺序的子集）
+    """
+    if max_per_node <= 0 or not edge_pairs:
+        return edge_pairs
+    from collections import defaultdict
+
+    key = lambda a, b: (min(a, b), max(a, b))
+    # 按权重降序贪心：一条边入列当且仅当两端点已保留边数均未达上限
+    ranked = sorted(
+        edge_pairs, key=lambda ab: -pair_weight.get(key(ab[0], ab[1]), 0)
+    )
+    kept: set[tuple[int, int]] = set()
+    cnt: dict[int, int] = defaultdict(int)
+    for a, b in ranked:
+        k = key(a, b)
+        if k in kept:
+            continue
+        if cnt[a] < max_per_node and cnt[b] < max_per_node:
+            kept.add(k)
+            cnt[a] += 1
+            cnt[b] += 1
+    return [(a, b) for a, b in edge_pairs if key(a, b) in kept]
+
+
 async def analyze_tag_network(
     db: AsyncSession,
     limit: int = 100,
@@ -139,8 +180,14 @@ async def analyze_tag_network(
     category: str | None = None,
     with_communities: bool = True,
     with_centrality: bool = True,
+    max_edges_per_node: int = 0,
 ) -> dict:
     """网络图分析主入口：构建共现子图 → 社区/中心度/桥接 → 组装结果。
+
+    参数:
+        max_edges_per_node: 展示边剪枝上限（每节点保留权重最高的 N 条边，
+            缓解全连接稠密图的「网格状」显示；0 = 不剪枝）。社区发现与
+            中心度始终在全图（剪枝前）计算，不受该参数影响。
 
     返回结构（写回任务 result，供前端渲染力导向图）::
 
@@ -149,7 +196,8 @@ async def analyze_tag_network(
                        betweenness, community, is_bridge}],
             "edges": [{source, target, weight}],
             "communities": [{id, size, top_tags}],
-            "params": {limit, min_count, category, with_communities, with_centrality},
+            "params": {limit, min_count, category, with_communities,
+                       with_centrality, max_edges_per_node},
         }
     """
     from app.services.tag_query import get_cooccurrence_network
@@ -163,6 +211,7 @@ async def analyze_tag_network(
         "category": category,
         "with_communities": with_communities,
         "with_centrality": with_centrality,
+        "max_edges_per_node": max_edges_per_node,
     }
     if not nodes:
         return {"nodes": [], "edges": [], "communities": [], "params": params}
@@ -170,9 +219,15 @@ async def analyze_tag_network(
     n = len(nodes)
     index = {node["id"]: i for i, node in enumerate(nodes)}
     edge_pairs = [(index[e["source"]], index[e["target"]]) for e in edges]
+    # 无向对权重表（index 对）
+    pair_weight: dict[tuple[int, int], int] = {}
+    for e in edges:
+        a, b = index[e["source"]], index[e["target"]]
+        k = (min(a, b), max(a, b))
+        pair_weight[k] = max(pair_weight.get(k, 0), e["weight"])
     adj = _build_adjacency(n, edge_pairs)
 
-    # 社区发现
+    # 社区发现（全图）
     communities = (
         detect_communities(edge_pairs, n) if with_communities else {i: 0 for i in range(n)}
     )
@@ -185,6 +240,9 @@ async def analyze_tag_network(
     )
     # 桥接节点（需要社区划分）
     bridges = detect_bridges(adj, edge_pairs, communities, n) if with_communities else set()
+
+    # 展示边剪枝（不影响上方算法；剪枝后每节点连边数 ≤ max_edges_per_node）
+    pruned_pairs = _prune_edges(edge_pairs, pair_weight, max_edges_per_node)
 
     out_nodes = [
         {
@@ -216,8 +274,12 @@ async def analyze_tag_network(
     return {
         "nodes": out_nodes,
         "edges": [
-            {"source": e["source"], "target": e["target"], "weight": e["weight"]}
-            for e in edges
+            {
+                "source": nodes[a]["id"],
+                "target": nodes[b]["id"],
+                "weight": pair_weight[(min(a, b), max(a, b))],
+            }
+            for a, b in pruned_pairs
         ],
         "communities": comms,
         "params": params,

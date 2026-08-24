@@ -154,3 +154,51 @@ async def test_network_empty(client):
     assert result["nodes"] == []
     assert result["edges"] == []
     assert result["communities"] == []
+
+
+async def test_network_edge_pruning(client, upload):
+    """每节点 Top-K 剪枝：完全图（每节点度 3）剪枝后每节点连边数 ≤ 上限。"""
+    names = ["剪枝甲", "剪枝乙", "剪枝丙", "剪枝丁"]
+    for name in names:
+        _create_tag(client, name, "style")
+    # 4 个标签两两共现 2 次 → 完全图 K4（6 条边，每节点度 3）
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, names)
+
+    async with async_session() as db:
+        result = await analyze_tag_network(
+            db, limit=10, min_count=2, max_edges_per_node=2
+        )
+
+    assert len(result["nodes"]) == 4
+    assert len(result["edges"]) < 6  # 剪枝后边数减少
+    degree = {node["id"]: 0 for node in result["nodes"]}
+    for e in result["edges"]:
+        degree[e["source"]] += 1
+        degree[e["target"]] += 1
+    assert all(d <= 2 for d in degree.values())
+    # 参数透传（params 含剪枝上限）
+    assert result["params"]["max_edges_per_node"] == 2
+
+
+async def test_network_task_pruning_param(client, upload):
+    """异步任务链路：max_edges_per_node 透传到执行器并影响结果边数。"""
+    names = ["任务剪枝甲", "任务剪枝乙", "任务剪枝丙"]
+    for name in names:
+        _create_tag(client, name, "style")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, names)
+
+    task_id = await _run_network_analyze(client, limit=10, min_count=2, max_edges_per_node=1)
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        result = task.result
+    assert result["params"]["max_edges_per_node"] == 1
+    # 三角形图（每节点度 2）剪枝到每节点 ≤1 条边
+    degree = {node["id"]: 0 for node in result["nodes"]}
+    for e in result["edges"]:
+        degree[e["source"]] += 1
+        degree[e["target"]] += 1
+    assert all(d <= 1 for d in degree.values())

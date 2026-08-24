@@ -21,6 +21,7 @@ async def create_tag_network_analyze_task(
     category: str | None = None,
     with_communities: bool = True,
     with_centrality: bool = True,
+    max_edges_per_node: int = 0,
 ) -> TaskQueue:
     """创建「网络图分析」任务记录，返回任务对象。"""
     task = TaskQueue(
@@ -35,6 +36,7 @@ async def create_tag_network_analyze_task(
             "category": category,
             "with_communities": with_communities,
             "with_centrality": with_centrality,
+            "max_edges_per_node": max_edges_per_node,
         },
         max_retries=2,
     )
@@ -60,6 +62,7 @@ async def execute_tag_network_analyze(db: AsyncSession, task: TaskQueue) -> None
         category=params.get("category"),
         with_communities=bool(params.get("with_communities", True)),
         with_centrality=bool(params.get("with_centrality", True)),
+        max_edges_per_node=int(params.get("max_edges_per_node", 0)),
     )
 
     task.result = result

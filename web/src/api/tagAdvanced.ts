@@ -84,6 +84,7 @@ export async function analyzeNetwork(
     category?: string | null
     with_communities?: boolean
     with_centrality?: boolean
+    max_edges_per_node?: number
   } = {},
 ) {
   const { data } = await apiClient.post<{ message: string; task_id: number }>(

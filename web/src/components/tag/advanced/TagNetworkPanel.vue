@@ -18,6 +18,8 @@ const { task, pollTask, stopPolling } = useTaskPolling()
 const limit = ref(100)
 const minCount = ref(2)
 const category = ref<string | undefined>(undefined)
+/** 每节点保留权重最高的 N 条边（缓解全连接稠密图的「网格状」显示） */
+const maxEdgesPerNode = ref(10)
 
 // ── 结果 ──
 const result = ref<NetworkAnalysisResult | null>(null)
@@ -65,6 +67,7 @@ async function runAnalyze() {
       category: category.value ?? null,
       with_communities: true,
       with_centrality: true,
+      max_edges_per_node: maxEdgesPerNode.value,
     })
     pollTask(task_id, (r) => {
       const data = asNetworkResult(r)
@@ -87,6 +90,8 @@ const graphOption = computed<EChartsOption | null>(() => {
   const data = result.value
   if (!data || data.nodes.length === 0) return null
   const maxWeight = Math.max(1, ...data.edges.map((e) => e.weight))
+  // 节点大小按使用次数相对映射（相对最大节点缩放，低频标签不再与大标签同尺寸）
+  const maxUsage = Math.max(1, ...data.nodes.map((n) => n.usage_count))
   return {
     tooltip: {
       formatter: (p: any) => {
@@ -114,7 +119,7 @@ const graphOption = computed<EChartsOption | null>(() => {
           id: n.id,
           name: n.name,
           value: n.usage_count,
-          symbolSize: 10 + Math.min(30, Math.sqrt(n.usage_count) * 6),
+          symbolSize: 8 + 26 * Math.pow(n.usage_count / maxUsage, 0.5),
           itemStyle: {
             color: communityColor(n.community),
             borderColor: n.is_bridge ? BRIDGE_COLOR : '#fff',
@@ -217,6 +222,11 @@ onBeforeUnmount(() => {
             {{ label }}
           </a-option>
         </a-select>
+      </div>
+      <div class="param-item">
+        <span class="param-label">每节点连边</span>
+        <a-input-number v-model="maxEdgesPerNode" :min="0" :max="50" style="width: 80px" />
+        <span class="param-hint" style="font-size: 11px; color: #9ca3af"> （0 = 不剪枝） </span>
       </div>
       <a-button type="primary" :loading="running" @click="runAnalyze">
         {{ result ? '重新分析' : '开始分析' }}
