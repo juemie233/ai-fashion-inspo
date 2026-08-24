@@ -301,9 +301,19 @@ class XiaohongshuScraper(BaseScraper):
                     if not user_id or user_id in seen:
                         continue
                     seen.add(user_id)
-                    # 卡片文本取昵称（首个非空行）
-                    text = (el.inner_text() or "").strip().splitlines()
+                    # 卡片文本取昵称（首个非空行）；昵称可能带「小红书号：xxx」
+                    # 后缀（同一行或相邻行），截断至「小红书号」前避免噪声混入
+                    card_text = (el.inner_text() or "").strip()
+                    text = card_text.splitlines()
                     name = next((ln.strip() for ln in text if ln.strip()), "")[:64]
+                    name = name.split("小红书号")[0].strip()[:64]
+                    # 尝试提取卡片内的小红书号（补全「号匹配」判据用）
+                    xhs_id = None
+                    import re as _re
+
+                    m = _re.search(r"小红书号[:：]\s*([0-9a-zA-Z_-]+)", card_text)
+                    if m:
+                        xhs_id = m.group(1)
                     url = (
                         f"https://www.xiaohongshu.com{href}"
                         if href.startswith("/")
@@ -314,6 +324,7 @@ class XiaohongshuScraper(BaseScraper):
                             "name": name,
                             "profile_url": url,
                             "platform_user_id": user_id,
+                            "xhs_id": xhs_id,
                         }
                     )
                 except Exception:

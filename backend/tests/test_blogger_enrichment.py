@@ -221,6 +221,61 @@ async def test_enrich_multi_candidates_no_match_failed(client):
     assert "无法唯一确认" in result["reason"]
 
 
+async def test_enrich_multi_candidates_normalized_name_match(client):
+    """多候选：昵称归一化匹配（容忍大小写/全角/emoji/空格差异）采纳。"""
+    b = _create_blogger(client, "Kitttty", xhs_id="kittttty02")
+    candidates = [
+        {"name": "别人", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
+        # 小红书实际返回的昵称：全角字符 + emoji + 大小写差异
+        {"name": "Ｋｉｔｔｔｔｙ 🐱", "profile_url": "https://www.xiaohongshu.com/user/profile/b", "platform_user_id": "b"},
+    ]
+
+    async def fake_search(keyword):
+        return candidates
+
+    async with async_session() as db:
+        blogger = await db.get(Blogger, b["id"])
+        result = await enrich_one(db, blogger, search_users=fake_search)
+    assert result["status"] == "updated"
+    assert result["platform_user_id"] == "b"
+
+
+async def test_enrich_multi_candidates_xhs_id_match(client):
+    """多候选：候选携带与博主一致的小红书号 → 直接采纳（号匹配比昵称更可靠）。"""
+    b = _create_blogger(client, "Falling U", xhs_id="Softrin")
+    candidates = [
+        {"name": "Softrin", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a", "xhs_id": "softrin"},
+        {"name": "别的用户", "profile_url": "https://www.xiaohongshu.com/user/profile/c", "platform_user_id": "c", "xhs_id": "other"},
+    ]
+
+    async def fake_search(keyword):
+        return candidates
+
+    async with async_session() as db:
+        blogger = await db.get(Blogger, b["id"])
+        result = await enrich_one(db, blogger, search_users=fake_search)
+    assert result["status"] == "updated"
+    assert result["platform_user_id"] == "a"
+
+
+async def test_enrich_candidate_name_with_noise_suffix(client):
+    """候选昵称混入「小红书号：xxx」噪声后缀：归一化后仍能匹配号主。"""
+    b = _create_blogger(client, "久菜和子", xhs_id="Jiucai")
+    candidates = [
+        {"name": "其它用户", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
+        {"name": "久菜和子 小红书号：Jiucai", "profile_url": "https://www.xiaohongshu.com/user/profile/d", "platform_user_id": "d"},
+    ]
+
+    async def fake_search(keyword):
+        return candidates
+
+    async with async_session() as db:
+        blogger = await db.get(Blogger, b["id"])
+        result = await enrich_one(db, blogger, search_users=fake_search)
+    assert result["status"] == "updated"
+    assert result["platform_user_id"] == "d"
+
+
 async def test_enrich_no_result_skipped(client):
     """搜索无结果 → 确定性失败自动跳过。"""
     b = _create_blogger(client, "无果博", xhs_id="xhs000")

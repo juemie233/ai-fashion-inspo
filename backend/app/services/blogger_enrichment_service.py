@@ -31,6 +31,31 @@ logger = logging.getLogger(__name__)
 PROFILE_ID_RE = re.compile(r"/user/profile/([a-zA-Z0-9_-]+)")
 
 
+def _normalize_name(s: str) -> str:
+    """昵称归一化（仅用于匹配比较，不落库）。
+
+    strip + 全角转半角 + 小写 + 去除空白与 emoji/符号（保留中英文与数字）。
+    小红书昵称常带 emoji/空格/全角字符，且候选解析可能混入「小红书号：xxx」
+    后缀，精确 == 匹配会大面积失败；归一化后比较可显著提升「唯一确认」命中率。
+    """
+    out: list[str] = []
+    for ch in (s or "").strip().lower():
+        code = ord(ch)
+        if 0xFF01 <= code <= 0xFF5E:
+            out.append(chr(code - 0xFEE0))  # 全角 → 半角
+        elif code == 0x3000:
+            out.append(" ")  # 全角空格 → 半角
+        else:
+            out.append(ch)
+    # \W 匹配非「单词字符」（中文/字母/数字之外的 emoji、标点、空白等）
+    return re.sub(r"[\s\W_]+", "", "".join(out))
+
+
+def _normalize_candidate_name(name: str) -> str:
+    """候选昵称归一化（先截断「小红书号：xxx」噪声后缀，再归一化）。"""
+    return _normalize_name(name.split("小红书号")[0])
+
+
 def extract_user_id_from_url(url: str) -> str | None:
     """从主页 URL 提取平台用户 ID（无法解析返回 None）。"""
     m = PROFILE_ID_RE.search(url)
@@ -205,12 +230,28 @@ async def enrich_one(
 
     matched: dict | None = None
     if len(candidates) == 1:
+        # 唯一候选直接采纳（搜索词即小红书号，单候选大概率是号主；
+        # 多候选才需要严格校验，避免误采纳无关用户）
         matched = candidates[0]
     else:
+        # 匹配优先级：小红书号精确匹配（搜索即按号发起，最可靠）→
+        # 昵称精确匹配 → 昵称归一化匹配（容忍大小写/全角/空格/emoji 差异）
+        norm_name = _normalize_name(name)
+        norm_xhs_id = _normalize_name(blogger.xhs_id or "")
         for candidate in candidates:
-            if candidate.get("name") == name:
+            # 小红书号匹配：大小写不敏感（号通常不区分大小写，如 Softrin/softrin）
+            cand_xhs = _normalize_name(candidate.get("xhs_id") or "")
+            if norm_xhs_id and cand_xhs == norm_xhs_id:
                 matched = candidate
                 break
+        if matched is None:
+            for candidate in candidates:
+                cand_name = candidate.get("name") or ""
+                if cand_name == name or (
+                    cand_name and _normalize_candidate_name(cand_name) == norm_name
+                ):
+                    matched = candidate
+                    break
     if matched is None:
         # 确定性失败：无结果/无法唯一确认 → 跳过（可解除后重试）
         reason = (
