@@ -33,7 +33,8 @@ async function loadList(p = 1) {
     const data = await fetchHistory({
       page: p,
       size: size.value,
-      operation: operation.value,
+      // 空串（未选择）必须转 undefined，否则 operation= 空参触发后端 pattern 校验 422
+      operation: operation.value || undefined,
       batch_id: batchId.value || undefined,
       tag_id: tagId.value,
     })
