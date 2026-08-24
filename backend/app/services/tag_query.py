@@ -170,11 +170,20 @@ async def export_tags(db: AsyncSession) -> list[dict]:
 
 
 async def get_cooccurrence_network(
-    db: AsyncSession, limit: int, min_count: int
+    db: AsyncSession,
+    limit: int,
+    min_count: int,
+    category: str | None = None,
 ) -> dict:
-    """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。"""
+    """返回使用次数 top-N 标签之间的共现网络（节点 + 加权边）。
+
+    参数:
+        limit: 节点数上限（按使用次数取 top-N）
+        min_count: 边的最小共现次数（过滤弱边）
+        category: 可选，仅统计指定类别标签（网络图分析的类别子图）
+    """
     # 取使用次数最多的 top-N 标签作为网络节点（仅统计未删除素材）
-    top_result = await db.execute(
+    top_query = (
         select(
             Tag.id,
             Tag.name,
@@ -184,7 +193,11 @@ async def get_cooccurrence_network(
         .join(InspirationTag, Tag.id == InspirationTag.tag_id)
         .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
         .where(Inspiration.deleted_at.is_(None))
-        .group_by(Tag.id)
+    )
+    if category:
+        top_query = top_query.where(Tag.category == category)
+    top_result = await db.execute(
+        top_query.group_by(Tag.id)
         .order_by(func.count(InspirationTag.inspiration_id).desc())
         .limit(limit)
     )

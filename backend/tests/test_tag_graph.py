@@ -1,0 +1,156 @@
+"""网络图分析测试：图算法纯函数 + 服务级共现子图/社区/类别过滤/异步任务。"""
+
+from app.database import async_session
+from app.models.task import TaskQueue
+from app.services.tag_graph import analyze_tag_network
+from app.services.task_runners.tag_graph import execute_tag_network_analyze
+
+
+def _create_tag(client, name: str, category: str) -> dict:
+    r = client.post("/api/tags", json={"name": name, "category": category})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _link(client, insp_id: str, names: list[str]) -> None:
+    r = client.post(f"/api/inspirations/{insp_id}/tags", json={"names": names})
+    assert r.status_code == 200, r.text
+
+
+async def _run_network_analyze(client, **params) -> int:
+    """创建图分析任务并同步执行（模拟 worker 成功标记），返回 task_id。"""
+    r = client.post("/api/tags/network/analyze", json=params)
+    assert r.status_code == 200, r.text
+    task_id = r.json()["task_id"]
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        await execute_tag_network_analyze(db, task)
+        task.status = "success"
+        task.progress = 100
+        await db.commit()
+    return task_id
+
+
+# ═══════════ 图算法纯函数 ═══════════
+
+
+def test_detect_communities_two_components():
+    """两个互不相连的分量各成一社区。"""
+    from app.services.tag_graph import detect_communities
+
+    comms = detect_communities([(0, 1), (2, 3)], 4)
+    assert comms[0] == comms[1]
+    assert comms[2] == comms[3]
+    assert comms[0] != comms[2]
+
+
+def test_betweenness_centrality_line():
+    """链式图（0-1-2-3）介数中心度：中间节点高于端点。"""
+    from app.services.tag_graph import betweenness_centrality
+
+    adj = {0: [1], 1: [0, 2], 2: [1, 3], 3: [2]}
+    cb = betweenness_centrality(adj, 4, k=None)
+    assert cb[0] == 0.0
+    assert cb[1] > cb[0] and cb[2] > cb[3]
+    assert all(0.0 <= v <= 1.0 for v in cb.values())
+
+
+def test_detect_bridges():
+    """桥接节点：跨社区边占比 ≥ 0.5 且度 ≥ 3。"""
+    from app.services.tag_graph import detect_bridges
+
+    # 节点 1 连接社区 0（节点 0）与社区 1（节点 2、3）：度 3、跨社区边 2/3
+    edges = [(0, 1), (1, 2), (1, 3)]
+    communities = {0: 0, 1: 0, 2: 1, 3: 1}
+    adj = {0: [1], 1: [0, 2, 3], 2: [1], 3: [1]}
+    bridges = detect_bridges(adj, edges, communities, 4)
+    assert 1 in bridges
+    assert 0 not in bridges and 2 not in bridges
+
+
+# ═══════════ 服务级集成 ═══════════
+
+
+async def test_analyze_network_structure(client, upload):
+    """共现子图 + 节点分析字段完整。"""
+    _create_tag(client, "JK制服", "style")
+    _create_tag(client, "百褶裙", "item_type")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服", "百褶裙"])
+
+    async with async_session() as db:
+        result = await analyze_tag_network(db, limit=10, min_count=2)
+
+    assert len(result["nodes"]) == 2
+    assert len(result["edges"]) == 1
+    assert result["edges"][0]["weight"] == 2
+    for field in (
+        "id", "name", "category", "usage_count", "degree",
+        "degree_centrality", "betweenness", "community", "is_bridge",
+    ):
+        assert field in result["nodes"][0]
+    assert len(result["communities"]) == 1
+    assert result["communities"][0]["top_tags"]
+
+
+async def test_network_two_communities(client, upload):
+    """两个互不相连的分量 → 两个社区。"""
+    _create_tag(client, "JK制服", "style")
+    _create_tag(client, "百褶裙", "item_type")
+    _create_tag(client, "白色", "color")
+    _create_tag(client, "黑色", "color")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服", "百褶裙"])
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["白色", "黑色"])
+
+    async with async_session() as db:
+        result = await analyze_tag_network(db, limit=10, min_count=2)
+
+    assert len(result["nodes"]) == 4
+    assert len(result["communities"]) == 2
+    assert sorted(c["size"] for c in result["communities"]) == [2, 2]
+
+
+async def test_network_category_filter(client, upload):
+    """类别过滤：只分析指定类别的节点。"""
+    _create_tag(client, "JK制服", "style")
+    _create_tag(client, "白色", "color")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服", "白色"])
+
+    async with async_session() as db:
+        result = await analyze_tag_network(db, limit=10, min_count=2, category="style")
+
+    assert {n["name"] for n in result["nodes"]} == {"JK制服"}
+    assert result["edges"] == []
+
+
+async def test_network_task_api(client, upload):
+    """异步任务全链路：提交 → 执行 → 任务 result 含节点/边/社区/参数。"""
+    _create_tag(client, "JK制服", "style")
+    _create_tag(client, "百褶裙", "item_type")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服", "百褶裙"])
+
+    task_id = await _run_network_analyze(client, limit=10, min_count=2)
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        result = task.result
+    assert len(result["nodes"]) == 2
+    assert result["params"]["limit"] == 10
+    assert result["params"]["min_count"] == 2
+
+
+async def test_network_empty(client):
+    """空库：返回空结果。"""
+    async with async_session() as db:
+        result = await analyze_tag_network(db)
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert result["communities"] == []

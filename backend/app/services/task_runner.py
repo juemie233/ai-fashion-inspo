@@ -46,6 +46,10 @@ from app.services.task_runners.tag_cluster import (
     create_tag_cluster_scan_task,
     execute_tag_cluster_scan,
 )
+from app.services.task_runners.tag_graph import (
+    create_tag_network_analyze_task,
+    execute_tag_network_analyze,
+)
 from app.services.task_runners.quality_check import (
     _quality_check_one,
     create_quality_check_task,
@@ -77,4 +81,5 @@ TASK_HANDLERS = {
     "enrich_blogger_profile": execute_enrich_blogger_profile,
     "tag_health_scan": execute_tag_health_scan,
     "tag_cluster_scan": execute_tag_cluster_scan,
+    "tag_network_analyze": execute_tag_network_analyze,
 }

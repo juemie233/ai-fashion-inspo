@@ -490,6 +490,33 @@ async def tag_clusters_apply(
     return await apply_tag_clusters(db, groups, batch_id=data.batch_id)
 
 
+# ============ 网络图分析 ============
+
+
+@router.post("/network/analyze", status_code=status.HTTP_200_OK)
+async def tag_network_analyze(
+    payload: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """提交网络图分析任务（异步执行，返回 task_id 供轮询进度）。
+
+    请求体可选: {"limit": 100, "min_count": 2, "category": null,
+                "with_communities": true, "with_centrality": true}
+    """
+    from app.services.task_runner import create_tag_network_analyze_task
+
+    payload = payload or {}
+    task = await create_tag_network_analyze_task(
+        db,
+        limit=int(payload.get("limit", 100)),
+        min_count=int(payload.get("min_count", 2)),
+        category=payload.get("category"),
+        with_communities=bool(payload.get("with_communities", True)),
+        with_centrality=bool(payload.get("with_centrality", True)),
+    )
+    return {"message": f"已提交图分析任务 #{task.id}", "task_id": task.id}
+
+
 # ============ 共现网络与使用趋势 ============
 
 
