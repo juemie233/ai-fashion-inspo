@@ -199,19 +199,30 @@ async def list_history(
         .offset((page - 1) * size)
         .limit(size)
     )
-    items = [
-        {
-            "id": r.id,
-            "batch_id": r.batch_id,
-            "operation": r.operation,
-            "tag_ids": json.loads(r.tag_ids),
-            "before": json.loads(r.before_snapshot),
-            "after": json.loads(r.after_snapshot),
-            "meta": json.loads(r.meta) if r.meta else None,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in result.scalars().all()
-    ]
+    rows = result.scalars().all()
+    # 收集本页全部受影响标签 ID → 当前名字映射（供列表展示；标签可能已被
+    # 删除/重命名，缺失的 ID 用 "#id" 兜底，tag_ids 本身保持原样供回滚使用）
+    page_ids = [tid for r in rows for tid in json.loads(r.tag_ids)]
+    name_map: dict[int, str] = {}
+    if page_ids:
+        tag_rows = await db.execute(select(Tag.id, Tag.name).where(Tag.id.in_(set(page_ids))))
+        name_map = {tid: name for tid, name in tag_rows.all()}
+    items = []
+    for r in rows:
+        ids = json.loads(r.tag_ids)
+        items.append(
+            {
+                "id": r.id,
+                "batch_id": r.batch_id,
+                "operation": r.operation,
+                "tag_ids": ids,
+                "tag_names": [name_map.get(tid) or f"#{tid}" for tid in ids],
+                "before": json.loads(r.before_snapshot),
+                "after": json.loads(r.after_snapshot),
+                "meta": json.loads(r.meta) if r.meta else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+        )
     return {"items": items, "total": total, "page": page, "size": size}
 
 

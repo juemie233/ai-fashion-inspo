@@ -34,10 +34,13 @@ def test_create_and_rename_record_history(client):
     assert create_row["before"] == {}
     assert create_row["after"][str(tag["id"])]["name"] == "历史甲"
     assert create_row["tag_ids"] == [tag["id"]]
+    # 影响标签随行返回「当前」标签名（与 tag_ids 一一对应；查询时标签已被改名）
+    assert create_row["tag_names"] == ["历史乙"]
 
     rename_row = rows[0]
     assert rename_row["before"][str(tag["id"])]["name"] == "历史甲"
     assert rename_row["after"][str(tag["id"])]["name"] == "历史乙"
+    assert rename_row["tag_names"] == ["历史乙"]
 
 
 async def test_rollback_rename_restores_name(client):

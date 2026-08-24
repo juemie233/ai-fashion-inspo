@@ -207,6 +207,8 @@ export interface HistoryItem {
   batch_id: string | null
   operation: HistoryOperation
   tag_ids: number[]
+  /** 受影响标签名（与 tag_ids 一一对应；已删除标签用 "#id" 兜底） */
+  tag_names: string[]
   before: Record<string, unknown>
   after: Record<string, unknown>
   meta: Record<string, unknown> | null

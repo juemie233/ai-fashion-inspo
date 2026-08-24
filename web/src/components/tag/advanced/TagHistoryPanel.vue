@@ -119,7 +119,11 @@ onMounted(() => {
               }}</a-tag>
             </template>
           </a-table-column>
-          <a-table-column title="影响标签" data-index="tag_ids" />
+          <a-table-column title="影响标签">
+            <template #cell="{ record }">
+              {{ (record.tag_names?.length ? record.tag_names : record.tag_ids).join('、') }}
+            </template>
+          </a-table-column>
           <a-table-column title="批次" :width="200">
             <template #cell="{ record }">{{ record.batch_id ?? '—' }}</template>
           </a-table-column>
