@@ -28,6 +28,16 @@ const PANELS = {
   history: TagHistoryPanel,
 } as const
 
+/** 左侧导航中文标签（PANELS 的值是组件对象，不能直接渲染为文本） */
+const PANEL_LABELS: Record<keyof typeof PANELS, string> = {
+  health: '健康度',
+  cluster: '聚类',
+  network: '网络图',
+  effect: '效果分析',
+  tree: '层级树',
+  history: '历史记录',
+}
+
 const currentPanel = computed(() => PANELS[activeTab.value])
 </script>
 
@@ -42,7 +52,7 @@ const currentPanel = computed(() => PANELS[activeTab.value])
       <!-- 左侧 Tab 导航 -->
       <aside class="adv-nav">
         <div
-          v-for="(label, key) in PANELS"
+          v-for="(label, key) in PANEL_LABELS"
           :key="key"
           class="adv-nav-item"
           :class="{ active: activeTab === key }"
