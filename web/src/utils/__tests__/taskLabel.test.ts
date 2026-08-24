@@ -22,6 +22,9 @@ describe('TASK_TYPE_LABELS', () => {
     expect(TASK_TYPE_LABELS.face_scan).toBe('人脸库扫描')
     expect(TASK_TYPE_LABELS.face_match).toBe('人脸匹配')
     expect(TASK_TYPE_LABELS.enrich_blogger_profile).toBe('博主主页补全')
+    expect(TASK_TYPE_LABELS.tag_health_scan).toBe('标签健康扫描')
+    expect(TASK_TYPE_LABELS.tag_cluster_scan).toBe('标签聚类扫描')
+    expect(TASK_TYPE_LABELS.tag_network_analyze).toBe('标签网络分析')
   })
 })
 

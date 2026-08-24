@@ -2,6 +2,7 @@
 
 import type { Component } from 'vue'
 import {
+  IconCheckCircle,
   IconDelete,
   IconFaceSmileFill,
   IconFileImage,
@@ -11,6 +12,8 @@ import {
   IconBarChart,
   IconUser,
   IconUserGroup,
+  IconMindMapping,
+  IconRelation,
 } from '@arco-design/web-vue/es/icon'
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
@@ -26,6 +29,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   face_scan: '人脸库扫描',
   face_match: '人脸匹配',
   enrich_blogger_profile: '博主主页补全',
+  tag_health_scan: '标签健康扫描',
+  tag_cluster_scan: '标签聚类扫描',
+  tag_network_analyze: '标签网络分析',
 }
 
 /** 采集平台中文标签（复用来源映射，单一来源避免文案漂移） */
@@ -48,6 +54,9 @@ export const TASK_TYPE_ICONS: Record<string, Component> = {
   face_scan: IconFaceSmileFill,
   face_match: IconUserGroup,
   enrich_blogger_profile: IconUser,
+  tag_health_scan: IconCheckCircle,
+  tag_cluster_scan: IconMindMapping,
+  tag_network_analyze: IconRelation,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
@@ -88,6 +97,9 @@ export function taskTypeTagColor(type: string): string {
     face_scan: 'lime',
     face_match: 'magenta',
     enrich_blogger_profile: 'gold',
+    tag_health_scan: 'pinkpurple',
+    tag_cluster_scan: 'yellow',
+    tag_network_analyze: 'orangered',
   }
   return map[type] || 'gray'
 }
