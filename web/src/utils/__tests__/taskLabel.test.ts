@@ -60,6 +60,7 @@ describe('taskTypeTagColor', () => {
     expect(taskTypeTagColor('batch_delete')).toBe('red')
     expect(taskTypeTagColor('batch_analyze')).toBe('arcoblue')
     expect(taskTypeTagColor('enrich_blogger_profile')).toBe('gold')
+    expect(taskTypeTagColor('tag_cluster_scan')).toBe('cyan')
     expect(taskTypeTagColor('unknown_type')).toBe('gray')
   })
 })

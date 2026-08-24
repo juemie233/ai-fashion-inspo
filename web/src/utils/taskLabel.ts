@@ -98,7 +98,7 @@ export function taskTypeTagColor(type: string): string {
     face_match: 'magenta',
     enrich_blogger_profile: 'gold',
     tag_health_scan: 'pinkpurple',
-    tag_cluster_scan: 'yellow',
+    tag_cluster_scan: 'cyan',
     tag_network_analyze: 'orangered',
   }
   return map[type] || 'gray'
