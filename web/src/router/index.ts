@@ -48,6 +48,12 @@ const router = createRouter({
       meta: { title: '标签管理' },
     },
     {
+      path: '/tags/advanced',
+      name: 'tags-advanced',
+      component: () => import('@/views/TagAdvancedManageView.vue'),
+      meta: { title: '标签高级管理' },
+    },
+    {
       path: '/persons',
       name: 'persons',
       component: () => import('@/views/PersonView.vue'),

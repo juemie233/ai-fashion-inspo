@@ -49,6 +49,7 @@ const menuKey = computed(() => {
         </a-menu-item-group>
         <a-menu-item-group title="管理">
           <a-menu-item key="tags"><IconTags />标签管理</a-menu-item>
+          <a-menu-item key="tags-advanced"><IconTags />标签高级管理</a-menu-item>
           <a-menu-item key="persons"><IconUser />人物管理</a-menu-item>
           <a-menu-item key="scraper"><IconScan />采集管理</a-menu-item>
           <a-menu-item key="models"><IconDesktop />AI 模型</a-menu-item>
