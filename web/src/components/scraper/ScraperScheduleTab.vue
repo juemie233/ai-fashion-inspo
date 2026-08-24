@@ -4,6 +4,7 @@
 import { h, onMounted, ref } from 'vue'
 import { Button, Popconfirm, Switch, Tag } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
+import { renderTimeCell } from '@/utils/format'
 import {
   useScraperSchedules,
   INTERVAL_OPTIONS,
@@ -158,7 +159,7 @@ function getColumns() {
       width: 150,
       render: ({ record }: { record: unknown }) => {
         const r = record as ScraperSchedule
-        return formatDate(r.next_run_at)
+        return renderTimeCell(formatDate(r.next_run_at))
       },
     },
     {
@@ -167,7 +168,7 @@ function getColumns() {
       width: 150,
       render: ({ record }: { record: unknown }) => {
         const r = record as ScraperSchedule
-        return formatDate(r.last_run_at)
+        return renderTimeCell(formatDate(r.last_run_at))
       },
     },
     { title: '已执行', dataIndex: 'run_count', width: 65 },

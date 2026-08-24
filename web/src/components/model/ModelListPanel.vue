@@ -15,6 +15,7 @@ import {
   formatVram,
   formatMs,
   formatDate,
+  renderTimeCell,
   formatUptime,
   normalizeModelName,
 } from '@/utils/format'
@@ -422,7 +423,8 @@ const modelColumns = [
     title: '更新时间',
     dataIndex: 'modified',
     width: 110,
-    render: ({ record }: { record: unknown }) => (record as OllamaModel).modified?.split('T')[0],
+    render: ({ record }: { record: unknown }) =>
+      renderTimeCell((record as OllamaModel).modified?.split('T')[0]),
   },
   {
     title: '操作',

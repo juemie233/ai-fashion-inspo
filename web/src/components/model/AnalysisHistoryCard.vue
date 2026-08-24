@@ -13,7 +13,7 @@ import {
 } from '@arco-design/web-vue'
 import { IconRefresh, IconDelete, IconSync, IconEye } from '@arco-design/web-vue/es/icon'
 import { getFileUrl, TRASH_REASON_OPTIONS, type TrashReason } from '@/api/inspirations'
-import { formatMs, formatDate } from '@/utils/format'
+import { formatMs, formatDate, renderTimeCell } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { sortAnalysisTags } from '@/utils/tagSort'
 import type { HistoryItem } from '@/types/analysis'
@@ -361,7 +361,7 @@ const columns = computed<TableColumnData[]>(() => [
     title: '时间',
     dataIndex: 'created_at',
     width: 160,
-    render: ({ record }) => formatDate((record as HistoryItem).created_at),
+    render: ({ record }) => renderTimeCell(formatDate((record as HistoryItem).created_at)),
   },
   {
     title: '操作',

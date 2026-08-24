@@ -2,7 +2,7 @@
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { formatDate } from '@/utils/format'
+import { formatDate, renderTimeCell } from '@/utils/format'
 import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -299,7 +299,7 @@ const columns: TableColumnData[] = [
     title: '创建时间',
     dataIndex: 'created_at',
     width: 160,
-    render: ({ record }) => formatDate((record as Person).created_at),
+    render: ({ record }) => renderTimeCell(formatDate((record as Person).created_at)),
   },
   {
     title: '操作',

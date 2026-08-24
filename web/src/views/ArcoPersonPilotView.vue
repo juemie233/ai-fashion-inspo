@@ -11,7 +11,7 @@ import { useRouter } from 'vue-router'
 import { Avatar, Message, type TableColumnData } from '@arco-design/web-vue'
 import { bloggersApi, type PersonIpStats } from '@/api/persons'
 import { getFileUrl } from '@/api/inspirations'
-import { formatDate } from '@/utils/format'
+import { formatDate, renderTimeCell } from '@/utils/format'
 import type { Person } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 
@@ -105,11 +105,15 @@ function renderAvatarCell(record: Person) {
                 src: getFileUrl(record.face_thumb_path || (record.avatar_path as string)),
                 alt: record.name,
               })
-            : h('svg', { viewBox: '0 0 24 24', class: 'pilot-avatar-icon', 'aria-hidden': 'true' }, [
-                h('path', {
-                  d: 'M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.4 0-10.1 1.7-10.1 5v2.4h20.2v-2.4c0-3.3-6.7-5-10.1-5z',
-                }),
-              ]),
+            : h(
+                'svg',
+                { viewBox: '0 0 24 24', class: 'pilot-avatar-icon', 'aria-hidden': 'true' },
+                [
+                  h('path', {
+                    d: 'M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.4 0-10.1 1.7-10.1 5v2.4h20.2v-2.4c0-3.3-6.7-5-10.1-5z',
+                  }),
+                ],
+              ),
       },
     ),
     h('span', { class: 'pilot-person-name' }, record.name),
@@ -132,7 +136,8 @@ const columns: TableColumnData[] = [
     title: '平台',
     dataIndex: 'platform',
     width: 90,
-    render: ({ record }) => PERSON_PLATFORM_LABELS[toPerson(record).platform] || toPerson(record).platform,
+    render: ({ record }) =>
+      PERSON_PLATFORM_LABELS[toPerson(record).platform] || toPerson(record).platform,
   },
   {
     title: '小红书ID',
@@ -156,14 +161,18 @@ const columns: TableColumnData[] = [
     title: '创建时间',
     dataIndex: 'created_at',
     width: 160,
-    render: ({ record }) => formatDate(toPerson(record).created_at),
+    render: ({ record }) => renderTimeCell(formatDate(toPerson(record).created_at)),
   },
   {
     title: '操作',
     dataIndex: 'actions',
     width: 90,
     render: ({ record }) =>
-      h('a-button', { size: 'small', type: 'text', onClick: () => goDetail(toPerson(record)) }, () => '详情'),
+      h(
+        'a-button',
+        { size: 'small', type: 'text', onClick: () => goDetail(toPerson(record)) },
+        () => '详情',
+      ),
   },
 ]
 
@@ -200,8 +209,14 @@ onMounted(() => {
           placeholder="搜索昵称 / 小红书号 / IP属地"
           allow-clear
           style="width: 240px"
-          @press-enter="page = 1; load()"
-          @clear="page = 1; load()"
+          @press-enter="
+            page = 1
+            load()
+          "
+          @clear="
+            page = 1
+            load()
+          "
         >
           <template #prefix>🔍</template>
         </a-input>
@@ -209,15 +224,28 @@ onMounted(() => {
           v-model="platform"
           :options="platformOptions"
           style="width: 140px"
-          @change="page = 1; load()"
+          @change="
+            page = 1
+            load()
+          "
         />
         <a-select
           v-model="sort"
           :options="sortOptions"
           style="width: 140px"
-          @change="page = 1; load()"
+          @change="
+            page = 1
+            load()
+          "
         />
-        <a-button type="primary" @click="page = 1; load()">查询</a-button>
+        <a-button
+          type="primary"
+          @click="
+            page = 1
+            load()
+          "
+          >查询</a-button
+        >
       </a-space>
     </a-card>
 
@@ -260,16 +288,29 @@ onMounted(() => {
         :page-size-options="[10, 20, 50]"
         style="justify-content: flex-end"
         @change="onPageChange"
-        @page-size-change="(size: number) => { pageSize = size; page = 1; load() }"
+        @page-size-change="
+          (size: number) => {
+            pageSize = size
+            page = 1
+            load()
+          }
+        "
       />
     </a-card>
 
     <!-- 热门排行（Arco 列表卡片） -->
     <a-card v-if="topPersons.length > 0" class="pilot-card" title="热门人物（按素材数）">
       <a-list :bordered="false" :split="false">
-        <a-list-item v-for="(p, i) in topPersons" :key="p.id" class="pilot-top-row" @click="goDetail(p)">
+        <a-list-item
+          v-for="(p, i) in topPersons"
+          :key="p.id"
+          class="pilot-top-row"
+          @click="goDetail(p)"
+        >
           <template #actions>
-            <span style="color: var(--color-text-3); font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>
+            <span style="color: var(--color-text-3); font-size: 12px"
+              >{{ p.inspiration_count ?? 0 }} 素材</span
+            >
           </template>
           <div class="pilot-top-inner">
             <span class="pilot-top-rank">{{ i + 1 }}</span>

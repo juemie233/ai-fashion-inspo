@@ -1,6 +1,7 @@
 /** 格式化工具函数单测。 */
 
 import { describe, expect, it } from 'vitest'
+import { mount } from '@vue/test-utils'
 import {
   formatBytes,
   formatDate,
@@ -8,6 +9,7 @@ import {
   formatSize,
   fmtSize,
   normalizeModelName,
+  renderTimeCell,
   shortenText,
   smartSize,
 } from '../format'
@@ -96,5 +98,38 @@ describe('shortenText', () => {
 
   it('自定义阈值', () => {
     expect(shortenText('一二三四五六七八九十', 5)).toBe('一二三四五…')
+  })
+})
+
+describe('renderTimeCell', () => {
+  /** 渲染 renderTimeCell 并返回 DOM 包装（验证真实渲染结果而非 vnode 结构） */
+  function renderCell(
+    text: string | null | undefined,
+    extra?: Parameters<typeof renderTimeCell>[1],
+  ) {
+    return mount({ render: () => renderTimeCell(text, extra) })
+  }
+
+  it('渲染为单行 span，文本为传入时间', () => {
+    const wrapper = renderCell('2026-08-16 10:00:00')
+    expect(wrapper.element.tagName).toBe('SPAN')
+    expect(wrapper.element.style.whiteSpace).toBe('nowrap')
+    expect(wrapper.text()).toBe('2026-08-16 10:00:00')
+    wrapper.unmount()
+  })
+
+  it('空值显示 -；extra.style 与 nowrap 合并', () => {
+    const wrapper = renderCell(null, { style: 'color: red' })
+    expect(wrapper.text()).toBe('-')
+    expect(wrapper.element.style.whiteSpace).toBe('nowrap')
+    expect(wrapper.element.style.color).toBe('red')
+    wrapper.unmount()
+  })
+
+  it('extra 以对象形式提供时同样保留 nowrap', () => {
+    const wrapper = renderCell('2026-08-16', { style: { color: 'red' } })
+    expect(wrapper.element.style.whiteSpace).toBe('nowrap')
+    expect(wrapper.element.style.color).toBe('red')
+    wrapper.unmount()
   })
 })

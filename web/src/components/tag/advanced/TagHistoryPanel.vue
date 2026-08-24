@@ -110,7 +110,9 @@ onMounted(() => {
       <a-table :data="items" :pagination="false" size="small">
         <template #columns>
           <a-table-column title="时间" :width="150">
-            <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
+            <template #cell="{ record }">
+              <span style="white-space: nowrap">{{ formatTime(record.created_at) }}</span>
+            </template>
           </a-table-column>
           <a-table-column title="操作" :width="90">
             <template #cell="{ record }">

@@ -4,7 +4,7 @@
 import { h, onMounted, ref } from 'vue'
 import { Message, type TableColumnData } from '@arco-design/web-vue'
 import { fetchAuditLogs, type AuditLogItem } from '@/api/admin'
-import { formatDate, formatSize } from '@/utils/format'
+import { formatDate, formatSize, renderTimeCell } from '@/utils/format'
 
 const items = ref<AuditLogItem[]>([])
 const loading = ref(false)
@@ -43,8 +43,7 @@ const logColumns: TableColumnData[] = [
     title: '时间',
     dataIndex: 'created_at',
     width: 190,
-    render: ({ record }) =>
-      h('span', { style: 'white-space: nowrap' }, formatDate((record as AuditLogItem).created_at)),
+    render: ({ record }) => renderTimeCell(formatDate((record as AuditLogItem).created_at)),
   },
   {
     title: '操作',
@@ -59,7 +58,9 @@ const logColumns: TableColumnData[] = [
     width: 110,
     align: 'right',
     render: ({ record }) =>
-      (record as AuditLogItem).freed_bytes > 0 ? formatSize((record as AuditLogItem).freed_bytes) : '-',
+      (record as AuditLogItem).freed_bytes > 0
+        ? formatSize((record as AuditLogItem).freed_bytes)
+        : '-',
   },
   {
     title: '说明',

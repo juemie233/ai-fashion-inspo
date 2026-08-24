@@ -14,7 +14,7 @@ import {
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
-import { formatDate } from '@/utils/format'
+import { formatDate, renderTimeCell } from '@/utils/format'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
 const emit = defineEmits<{
@@ -122,7 +122,8 @@ const columns: TableColumnData[] = [
     width: 170,
     render: ({ record }) => {
       const row = record as UnifiedTask
-      return h(TypographyText, { type: 'secondary' }, { default: () => formatDate(row.created_at) })
+      // 用 renderTimeCell 保证单行；secondary 灰色等价 TypographyText type="secondary"
+      return renderTimeCell(formatDate(row.created_at), { style: 'color: var(--color-text-2)' })
     },
   },
   {

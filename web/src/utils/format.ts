@@ -1,5 +1,7 @@
 /** 通用格式化工具函数。 */
 
+import { h, type VNode } from 'vue'
+
 export function formatBytes(bytes: number): string {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -32,6 +34,23 @@ export function formatDate(d: string | null | undefined): string {
   } catch {
     return '-'
   }
+}
+
+/**
+ * 表格时间列渲染辅助（项目规则：时间列必须单行显示，禁止换行）。
+ * 接收已格式化的时间文本，包装为带 ``white-space: nowrap`` 的 span；
+ * render 函数列统一用它，避免各列重复手写 nowrap 样式。
+ * extra 可附加 span props（如自定义颜色/class），style 与 nowrap 合并。
+ */
+export function renderTimeCell(
+  text: string | null | undefined,
+  extra: { style?: string | Record<string, string>; class?: string } = {},
+): VNode {
+  const style =
+    typeof extra.style === 'string'
+      ? `white-space: nowrap;${extra.style}`
+      : { 'white-space': 'nowrap', ...(extra.style ?? {}) }
+  return h('span', { ...extra, style }, text ?? '-')
 }
 
 /** 将运行时长（秒）格式化为可读中文，如「2 小时 5 分钟」。 */

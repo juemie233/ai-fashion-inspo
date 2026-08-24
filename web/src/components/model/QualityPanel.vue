@@ -7,7 +7,7 @@ import { Button, Tag, type TableColumnData } from '@arco-design/web-vue'
 import type { EChartsOption } from 'echarts'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
-import { formatDate } from '@/utils/format'
+import { formatDate, renderTimeCell } from '@/utils/format'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 
@@ -200,7 +200,7 @@ const failedColumns: TableColumnData[] = [
     title: '时间',
     dataIndex: 'time',
     width: 150,
-    render: ({ record }) => formatDate((record as FailedItem).created_at),
+    render: ({ record }) => renderTimeCell(formatDate((record as FailedItem).created_at)),
   },
   {
     title: '操作',
