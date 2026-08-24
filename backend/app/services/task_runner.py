@@ -42,6 +42,10 @@ from app.services.task_runners.face_scan import (
     execute_face_match,
     execute_face_scan,
 )
+from app.services.task_runners.tag_cluster import (
+    create_tag_cluster_scan_task,
+    execute_tag_cluster_scan,
+)
 from app.services.task_runners.quality_check import (
     _quality_check_one,
     create_quality_check_task,
@@ -72,4 +76,5 @@ TASK_HANDLERS = {
     "face_match": execute_face_match,
     "enrich_blogger_profile": execute_enrich_blogger_profile,
     "tag_health_scan": execute_tag_health_scan,
+    "tag_cluster_scan": execute_tag_cluster_scan,
 }

@@ -96,3 +96,23 @@ class TagReorderItem(BaseModel):
 class TagReorderRequest(BaseModel):
     """批量更新标签自定义排序"""
     items: list[TagReorderItem]
+
+
+class ClusterGroupApply(BaseModel):
+    """聚类候选组应用项：把一组源标签合并到目标标签（可选保留源名为别名）。
+
+    group_id 与显式 target_tag_id/source_tag_ids 二选一：
+    - 传 group_id：服务端从最近一次聚类扫描结果解析组内成员
+    - 传 target_tag_id + source_tag_ids：直接指定（更稳健，不依赖扫描结果）
+    """
+    group_id: str | None = None
+    target_tag_id: int | None = None
+    source_tag_ids: list[int] = []
+    keep_as_alias: bool = True
+
+
+class ClusterApplyRequest(BaseModel):
+    """批量应用聚类候选组请求。"""
+
+    batch_id: str | None = None  # 可选；不传由服务端生成（历史按批次分组）
+    groups: list[ClusterGroupApply]

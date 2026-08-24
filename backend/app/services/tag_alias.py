@@ -26,11 +26,19 @@ async def list_aliases(db: AsyncSession) -> list[dict]:
     ]
 
 
-async def create_alias(db: AsyncSession, tag_id: int, alias: str) -> TagAlias:
+async def create_alias(
+    db: AsyncSession,
+    tag_id: int,
+    alias: str,
+    batch_id: str | None = None,
+) -> TagAlias:
     """为标签添加别名。
 
     标签不存在抛 TagNotFoundError；与主标签或已有别名冲突抛 TagConflictError。
     并发创建同名别名时，回滚后重查并返回已存在的别名（路由层原样返回）。
+
+    参数:
+        batch_id: 操作历史批次 ID（聚类 apply 等批量场景传入）。
     """
     tag = await db.get(Tag, tag_id)
     if not tag:
@@ -72,6 +80,7 @@ async def create_alias(db: AsyncSession, tag_id: int, alias: str) -> TagAlias:
         before={tag_id: before_snap},
         after={tag_id: after_snap},
         meta={"alias": alias},
+        batch_id=batch_id,
     )
     return obj
 

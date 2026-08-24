@@ -8,6 +8,7 @@ from app.models.tag import TagAlias
 from app.schemas.tag import (
     AliasCreate,
     AliasOut,
+    ClusterApplyRequest,
     TagBatchDelete,
     TagCategoryGroup,
     TagCreate,
@@ -418,6 +419,75 @@ async def tag_health_issues(
         return await get_health_issue_detail(db, task.result, issue_type, page, size)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============ 自动聚类 ============
+
+
+@router.post("/clusters/scan", status_code=status.HTTP_200_OK)
+async def tag_clusters_scan(
+    payload: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """提交自动聚类扫描任务（异步执行，返回 task_id 供轮询进度）。
+
+    请求体可选: {"threshold": 0.75, "use_cooccurrence_boost": true, "min_group_size": 2}
+    """
+    from app.services.task_runner import create_tag_cluster_scan_task
+
+    payload = payload or {}
+    task = await create_tag_cluster_scan_task(
+        db,
+        threshold=float(payload.get("threshold", 0.75)),
+        use_cooccurrence_boost=bool(payload.get("use_cooccurrence_boost", True)),
+        min_group_size=int(payload.get("min_group_size", 2)),
+    )
+    return {"message": f"已提交聚类任务 #{task.id}", "task_id": task.id}
+
+
+@router.post("/clusters/apply", status_code=status.HTTP_200_OK)
+async def tag_clusters_apply(
+    data: ClusterApplyRequest, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """应用选中的候选组：组内合并（可选保留源名为别名），全部写操作历史。
+
+    每个组可传 group_id（从最近一次聚类扫描结果解析成员），
+    或直接传 target_tag_id + source_tag_ids（不依赖扫描结果）。
+    """
+    from sqlalchemy import select
+
+    from app.models.task import TaskQueue
+    from app.services.tag_cluster import apply_tag_clusters
+
+    groups = [g.model_dump() for g in data.groups]
+
+    # 仅传 group_id 的组：从最近一次成功的聚类扫描结果解析成员
+    unresolved = [g for g in groups if g.get("target_tag_id") is None]
+    if unresolved:
+        latest = await db.execute(
+            select(TaskQueue)
+            .where(TaskQueue.type == "tag_cluster_scan", TaskQueue.status == "success")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+        task = latest.scalar_one_or_none()
+        if task is None or not task.result:
+            raise HTTPException(
+                status_code=400,
+                detail="请先完成聚类扫描，或直接指定 target_tag_id 与 source_tag_ids",
+            )
+        group_map = {g["id"]: g for g in task.result.get("groups", [])}
+        for g in unresolved:
+            src = group_map.get(g.get("group_id"))
+            if not src:
+                raise HTTPException(status_code=400, detail=f"候选组 {g.get('group_id')} 不存在")
+            target = src["suggested_target"]
+            g["target_tag_id"] = target["id"]
+            g["source_tag_ids"] = [
+                m["id"] for m in src["members"] if m["id"] != target["id"]
+            ]
+
+    return await apply_tag_clusters(db, groups, batch_id=data.batch_id)
 
 
 # ============ 共现网络与使用趋势 ============

@@ -212,8 +212,17 @@ async def find_similar_tags(
     return await asyncio.to_thread(_compute_similar)
 
 
-async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
-    """将源标签合并到目标标签：重新关联所有素材，删除源标签。"""
+async def merge_tags(
+    db: AsyncSession,
+    source_id: int,
+    target_id: int,
+    batch_id: str | None = None,
+) -> None:
+    """将源标签合并到目标标签：重新关联所有素材，删除源标签。
+
+    参数:
+        batch_id: 操作历史批次 ID；不传时每次合并独立成批（聚类 apply 传共享批次）。
+    """
     # 查找源标签的所有关联
     result = await db.execute(
         select(InspirationTag).where(InspirationTag.tag_id == source_id)
@@ -327,7 +336,7 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
         operation="merge",
         before=before_snap,
         after=after_snap,
-        batch_id=new_batch_id("merge"),
+        batch_id=batch_id or new_batch_id("merge"),
         meta={
             "source_tag_id": source_id,
             "target_tag_id": target_id,
