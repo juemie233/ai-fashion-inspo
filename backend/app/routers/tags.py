@@ -554,6 +554,33 @@ async def tag_batch_edit(payload: dict, db: AsyncSession = Depends(get_db)) -> d
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ============ 层级树 ============
+
+
+@router.get("/tree", status_code=status.HTTP_200_OK)
+async def tag_tree(
+    parent_id: int | None = Query(None, ge=1),
+    page: int = Query(1, ge=1),
+    size: int = Query(200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """获取层级树某一层的节点（懒加载）；parent_id 缺省/null 表示根节点。"""
+    from app.services.tag_query import get_tag_tree_children
+
+    return await get_tag_tree_children(db, parent_id, page, size)
+
+
+@router.post("/move", status_code=status.HTTP_200_OK)
+async def tag_move(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """批量移动标签层级。请求体: {"moves": [{"tag_id": 5, "parent_id": 12},
+    {"tag_id": 7, "parent_id": null}]}（parent_id=null 表示移到根）。"""
+    from app.services.tag_crud import move_tags
+
+    moves = payload.get("moves") or []
+    moved, errors = await move_tags(db, moves)
+    return {"moved": moved, "errors": errors}
+
+
 # ============ 共现网络与使用趋势 ============
 
 

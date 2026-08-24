@@ -23,6 +23,7 @@ from app.services.tag_crud import (  # noqa: F401
     import_tags,
     merge_tag_pair,
     merge_tags,
+    move_tags,
     reorder_tags,
     seed_tags,
     update_tag,
@@ -41,6 +42,7 @@ from app.services.tag_query import (  # noqa: F401
     get_all_tags_grouped,
     get_cooccurrence_network,
     get_tag_stats,
+    get_tag_tree_children,
     get_tag_trend,
     get_top_tags,
 )

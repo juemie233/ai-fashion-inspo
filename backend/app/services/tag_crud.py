@@ -779,3 +779,74 @@ async def reorder_tags(
         tag.sort_order = order_map[tag.id]
     await db.commit()
     return len(tags), []
+
+
+async def move_tags(
+    db: AsyncSession, moves: list[dict]
+) -> tuple[int, list[dict]]:
+    """批量移动标签层级（parent_id），含循环检测；写操作历史。
+
+    参数:
+        moves: [{"tag_id": int, "parent_id": int | None}]；parent_id=None 表示移到根。
+
+    返回:
+        (移动成功数, 错误列表 [{"tag_id", "message"}])
+    """
+    if not moves:
+        return 0, [{"tag_id": None, "message": "未提供移动项"}]
+
+    tag_ids = [m["tag_id"] for m in moves]
+    result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+    tag_map = {t.id: t for t in result.scalars().all()}
+
+    # 现有 parent 关系（循环检测用：沿新父节点向上走祖先链）
+    rel_result = await db.execute(select(Tag.id, Tag.parent_id))
+    parent_map = {tid: pid for tid, pid in rel_result.all()}
+
+    valid: list[dict] = []
+    errors: list[dict] = []
+    for m in moves:
+        tid = m["tag_id"]
+        pid = m.get("parent_id")
+        if tid not in tag_map:
+            errors.append({"tag_id": tid, "message": "标签不存在"})
+            continue
+        if pid == tid:
+            errors.append({"tag_id": tid, "message": "不能移动到自身下面"})
+            continue
+        if pid is not None and pid not in parent_map:
+            errors.append({"tag_id": tid, "message": f"父标签 {pid} 不存在"})
+            continue
+        # 循环检测：新父节点的祖先链上不得出现 tid
+        cur = pid
+        seen: set[int] = set()
+        cyclic = False
+        while cur is not None:
+            if cur == tid:
+                cyclic = True
+                break
+            if cur in seen:
+                break  # 防御既有数据环路
+            seen.add(cur)
+            cur = parent_map.get(cur)
+        if cyclic:
+            errors.append({"tag_id": tid, "message": "不能移动到自己的后代标签下"})
+            continue
+        valid.append(m)
+
+    if valid:
+        before_snap = await snapshot_tags(db, [m["tag_id"] for m in valid])
+        for m in valid:
+            tag_map[m["tag_id"]].parent_id = m.get("parent_id")
+        await db.flush()
+        after_snap = await snapshot_tags(db, [m["tag_id"] for m in valid])
+        await record_history(
+            db,
+            operation="move",
+            before=before_snap,
+            after=after_snap,
+            batch_id=new_batch_id("move"),
+        )
+        await db.commit()
+
+    return len(valid), errors

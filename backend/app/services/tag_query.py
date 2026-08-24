@@ -237,6 +237,62 @@ async def get_cooccurrence_network(
     return {"nodes": nodes, "edges": edges}
 
 
+async def get_tag_tree_children(
+    db: AsyncSession, parent_id: int | None, page: int = 1, size: int = 200
+) -> dict:
+    """获取层级树某一层的节点（懒加载），parent_id=None 表示根节点。
+
+    返回:
+        {"items": [{id, name, category, parent_id, usage_count, has_children}],
+         "total", "parent_id"}
+    """
+    query = (
+        select(
+            Tag,
+            func.count(Inspiration.id).label("usage_count"),
+        )
+        .outerjoin(InspirationTag, Tag.id == InspirationTag.tag_id)
+        .outerjoin(
+            Inspiration,
+            and_(
+                InspirationTag.inspiration_id == Inspiration.id,
+                Inspiration.deleted_at.is_(None),
+            ),
+        )
+        .where(Tag.parent_id.is_(None) if parent_id is None else Tag.parent_id == parent_id)
+        .group_by(Tag.id)
+        .order_by(Tag.pinned.desc(), Tag.sort_order.asc(), Tag.id.asc())
+    )
+    total_result = await db.execute(
+        select(func.count())
+        .select_from(Tag)
+        .where(Tag.parent_id.is_(None) if parent_id is None else Tag.parent_id == parent_id)
+    )
+    total = total_result.scalar() or 0
+    result = await db.execute(query.offset((page - 1) * size).limit(size))
+    rows = result.all()
+
+    # 本层节点是否还有子节点（一次性查出所有非空 parent_id）
+    parent_ids = set(
+        (await db.execute(select(Tag.parent_id).where(Tag.parent_id.isnot(None)))).scalars().all()
+    )
+    return {
+        "items": [
+            {
+                "id": row[0].id,
+                "name": row[0].name,
+                "category": row[0].category,
+                "parent_id": row[0].parent_id,
+                "usage_count": row[1],
+                "has_children": row[0].id in parent_ids,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "parent_id": parent_id,
+    }
+
+
 async def get_top_tags(db: AsyncSession, limit: int) -> list[dict]:
     """返回使用次数最多的标签排行（仅统计未删除素材）。"""
     result = await db.execute(
