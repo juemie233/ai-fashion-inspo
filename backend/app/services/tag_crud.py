@@ -15,6 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.inspiration import Inspiration
 from app.models.tag import Tag, InspirationTag, TagAlias
 from app.services.audit_service import record_audit_log
+from app.services.tag_history_service import (
+    new_batch_id,
+    record_history,
+    snapshot_tag,
+    snapshot_tags,
+)
 from app.utils.tag_normalizer import normalize_tag_name_async
 
 logger = logging.getLogger(__name__)
@@ -225,6 +231,15 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
     )
     already_linked = set(existing_result.scalars().all())
 
+    # 合并前快照 + 关联明细（供操作历史与回滚精确恢复）
+    before_snap = await snapshot_tags(db, [source_id, target_id])
+    merged_link_ids = [
+        link.inspiration_id for link in links if link.inspiration_id not in already_linked
+    ]
+    duplicate_link_ids = [
+        link.inspiration_id for link in links if link.inspiration_id in already_linked
+    ]
+
     for link in links:
         if link.inspiration_id in already_linked:
             # 重复关联 — 删除源标签的关联
@@ -250,6 +265,7 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
 
     # 删除源标签
     source_tag = await db.get(Tag, source_id)
+    moved_alias_ids: list[int] = []
     if source_tag:
         # 注意：Tag.aliases 关系声明了 cascade="all, delete-orphan"，
         # 直接 delete 源标签会物理删除其全部别名（数据丢失），
@@ -269,6 +285,7 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
             else:
                 # 重指向目标标签，随源标签删除而保留（避免级联物理删除）
                 alias.tag_id = target_id
+                moved_alias_ids.append(alias.id)
                 target_alias_set.add(alias.alias)
 
         # 先刷新，确保别名搬迁（tag_id 重指向）先落库，
@@ -299,6 +316,28 @@ async def merge_tags(db: AsyncSession, source_id: int, target_id: int) -> None:
     from app.services.tag_dedupe_cache import clear_all
     clear_all()
 
+    # 记录操作历史（merge 已内部提交，此处独立提交 history 行）
+    after_snap = await snapshot_tags(db, [target_id])
+    after_snap[source_id] = {
+        "deleted": True,
+        "name": before_snap.get(source_id, {}).get("name", ""),
+    }
+    await record_history(
+        db,
+        operation="merge",
+        before=before_snap,
+        after=after_snap,
+        batch_id=new_batch_id("merge"),
+        meta={
+            "source_tag_id": source_id,
+            "target_tag_id": target_id,
+            "merged_link_ids": merged_link_ids,
+            "duplicate_link_ids": duplicate_link_ids,
+            "moved_alias_ids": moved_alias_ids,
+        },
+    )
+    await db.commit()
+
 
 async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag:
     """创建自定义标签（先做别名归一化，再按规范名查重）。
@@ -326,6 +365,10 @@ async def create_tag(db: AsyncSession, name: str, category: str = "free") -> Tag
     db.add(tag)
     await db.flush()
     await db.refresh(tag)
+    # 记录操作历史（随调用方事务一并提交）
+    await record_history(
+        db, operation="create", before={}, after={tag.id: await snapshot_tag(db, tag.id)}
+    )
     return tag
 
 
@@ -354,6 +397,9 @@ async def update_tag(
     tag = await db.get(Tag, tag_id)
     if not tag:
         raise TagNotFoundError("标签未找到")
+
+    # 操作前快照（供操作历史与回滚冲突检测）
+    before_snap = await snapshot_tag(db, tag_id) or {}
 
     renamed = False
     if name is not None:
@@ -396,6 +442,26 @@ async def update_tag(
         ).scalars().all()
         await _rebuild_vectors_for_tag_change(db, affected_ids)
 
+    # 记录操作历史（随调用方事务一并提交；未发生实际变更则不记录）
+    after_snap = await snapshot_tag(db, tag_id) or {}
+    if after_snap != before_snap:
+        if renamed:
+            op = "rename"
+        elif category is not None and before_snap.get("category") != category:
+            op = "category_change"
+        else:
+            op = "update"
+        await record_history(
+            db,
+            operation=op,
+            before={tag_id: before_snap},
+            after={tag_id: after_snap},
+            meta={"request": {"name": name, "category": category, "pinned": pinned,
+                              "sort_order": sort_order, "description": description}}
+            if op == "update"
+            else None,
+        )
+
     return tag
 
 
@@ -424,6 +490,9 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
         )
     ).scalars().all()
 
+    # 删除前快照（供操作历史与回滚重建标签）
+    before_snap = await snapshot_tags(db, unused_ids)
+
     # 先删关联表中的残留记录（防御性清理），再删标签
     await db.execute(
         delete(InspirationTag).where(InspirationTag.tag_id.in_(unused_ids))
@@ -445,6 +514,18 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
     # 清除重复扫描缓存（标签数据已变更）
     from app.services.tag_dedupe_cache import clear_all
     clear_all()
+    # 记录操作历史（删除为破坏性操作，写快照支持回滚重建）
+    after_snap = {
+        tid: {"deleted": True, "name": before_snap[tid]["name"]} for tid in before_snap
+    }
+    await record_history(
+        db,
+        operation="delete",
+        before=before_snap,
+        after=after_snap,
+        batch_id=new_batch_id("delete"),
+    )
+    await db.commit()
     return unused
 
 
@@ -452,6 +533,8 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     """批量删除标签及其所有关联，返回被删除的标签列表。"""
     result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
     tags = result.scalars().all()
+    # 删除前快照（供操作历史与回滚重建标签）
+    before_snap = await snapshot_tags(db, [t.id for t in tags])
     # 删除前收集受影响素材（被删标签的关联），删除后用于重建文本向量
     affected_ids = (
         await db.execute(
@@ -476,6 +559,18 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     # 清除重复扫描缓存（标签数据已变更）
     from app.services.tag_dedupe_cache import clear_all
     clear_all()
+    # 记录操作历史（删除为破坏性操作，写快照支持回滚重建）
+    after_snap = {
+        tid: {"deleted": True, "name": before_snap[tid]["name"]} for tid in before_snap
+    }
+    await record_history(
+        db,
+        operation="delete",
+        before=before_snap,
+        after=after_snap,
+        batch_id=new_batch_id("delete"),
+    )
+    await db.commit()
     return tags
 
 
@@ -501,10 +596,28 @@ async def batch_change_category(
     db: AsyncSession, tag_ids: list[int], category: str
 ) -> int:
     """批量修改标签类别，返回受影响行数。"""
+    result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+    tags = result.scalars().all()
+    # 只记录类别实际发生变化的标签（操作历史与回滚）
+    changed_ids = [t.id for t in tags if t.category != category]
+    before_snap = await snapshot_tags(db, changed_ids)
+
     result = await db.execute(
         update(Tag).where(Tag.id.in_(tag_ids)).values(category=category)
     )
     await db.commit()
+
+    # 记录操作历史（随批次分组）
+    if before_snap:
+        after_snap = {tid: {**snap, "category": category} for tid, snap in before_snap.items()}
+        await record_history(
+            db,
+            operation="category_change",
+            before=before_snap,
+            after=after_snap,
+            batch_id=new_batch_id("cat"),
+        )
+        await db.commit()
     return result.rowcount
 
 
@@ -521,6 +634,8 @@ async def batch_rename_tags(
     """
     result = await db.execute(select(Tag).where(Tag.id.in_(tag_ids)))
     tags = result.scalars().all()
+    # 操作前快照（供操作历史与回滚）
+    before_snap = await snapshot_tags(db, [t.id for t in tags])
 
     # 计算批内全部改名结果（批内新名冲突必须整体预检，不能逐条查 DB）
     rename_map: dict[int, str] = {}
@@ -583,6 +698,20 @@ async def batch_rename_tags(
     if renamed_tag_ids:
         from app.services.tag_dedupe_cache import clear_all
         clear_all()
+    # 记录操作历史（批量查找替换重命名，随批次分组）
+    if rename_map:
+        after_snap = {
+            tid: {**before_snap[tid], "name": rename_map[tid]} for tid in rename_map
+        }
+        await record_history(
+            db,
+            operation="rename",
+            before={tid: before_snap[tid] for tid in rename_map},
+            after=after_snap,
+            batch_id=new_batch_id("rename"),
+            meta={"find": find_str, "replace": replace_str},
+        )
+        await db.commit()
     return updated
 
 

@@ -327,6 +327,48 @@ async def delete_alias(alias_id: int, db: AsyncSession = Depends(get_db)) -> dic
     return {"message": "已删除别名"}
 
 
+# ============ 操作历史 ============
+
+
+@router.get("/history", status_code=status.HTTP_200_OK)
+async def tag_history_list(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
+    operation: str | None = Query(
+        None,
+        pattern="^(create|rename|category_change|update|move|merge|alias_add|alias_remove|batch_edit|delete)$",
+    ),
+    tag_id: int | None = Query(None, ge=1),
+    batch_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """分页查询标签操作历史（按时间倒序），支持按操作类型 / 标签 / 批次过滤。"""
+    from app.services.tag_history_service import list_history
+
+    return await list_history(
+        db, page=page, size=size, operation=operation, tag_id=tag_id, batch_id=batch_id
+    )
+
+
+@router.post("/history/{history_id}/rollback", status_code=status.HTTP_200_OK)
+async def rollback_tag_history(
+    history_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """回滚一条标签操作（单条操作级；标签已被后续修改时返回 409 冲突）。"""
+    from app.services.tag_history_service import (
+        TagHistoryNotFoundError,
+        TagHistoryRollbackError,
+        rollback_history,
+    )
+
+    try:
+        return await rollback_history(db, history_id)
+    except TagHistoryNotFoundError:
+        raise HTTPException(status_code=404, detail="历史记录未找到")
+    except TagHistoryRollbackError as e:
+        raise HTTPException(status_code=409, detail=e.message)
+
+
 # ============ 共现网络与使用趋势 ============
 
 

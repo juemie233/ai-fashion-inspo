@@ -58,6 +58,7 @@ _ALL_TABLES = [
     "inspirations",
     "bloggers",
     "models",
+    "tag_history",
     "tags",
 ]
 

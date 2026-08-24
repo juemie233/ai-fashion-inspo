@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tag import Tag, TagAlias
 from app.services.tag_crud import TagConflictError, TagNotFoundError
+from app.services.tag_history_service import record_history, snapshot_tag
 
 
 async def list_aliases(db: AsyncSession) -> list[dict]:
@@ -35,6 +36,9 @@ async def create_alias(db: AsyncSession, tag_id: int, alias: str) -> TagAlias:
     if not tag:
         raise TagNotFoundError("标签未找到")
 
+    # 操作前快照（供操作历史与回滚）
+    before_snap = await snapshot_tag(db, tag_id) or {}
+
     # 别名不能与任何主标签同名（否则产生歧义）
     existing_tag = await db.execute(select(Tag.id).where(Tag.name == alias))
     if existing_tag.scalar_one_or_none():
@@ -56,9 +60,19 @@ async def create_alias(db: AsyncSession, tag_id: int, alias: str) -> TagAlias:
         existing = await db.execute(select(TagAlias).where(TagAlias.alias == alias))
         existing_obj = existing.scalar_one_or_none()
         if existing_obj:
-            return existing_obj
+            return existing_obj  # 并发冲突：别名非本次新增，不写操作历史
         raise TagConflictError(f"别名 '{alias}' 已存在")
     await db.refresh(obj)
+
+    # 记录操作历史（随调用方事务一并提交）
+    after_snap = await snapshot_tag(db, tag_id) or {}
+    await record_history(
+        db,
+        operation="alias_add",
+        before={tag_id: before_snap},
+        after={tag_id: after_snap},
+        meta={"alias": alias},
+    )
     return obj
 
 
@@ -67,6 +81,20 @@ async def delete_alias(db: AsyncSession, alias_id: int) -> bool:
     obj = await db.get(TagAlias, alias_id)
     if not obj:
         return False
+    tag_id = obj.tag_id
+    alias = obj.alias
+    # 操作前快照（供操作历史与回滚）
+    before_snap = await snapshot_tag(db, tag_id) or {}
     await db.delete(obj)
+    await db.commit()
+    # 记录操作历史（delete_alias 已内部提交，此处独立提交 history 行）
+    after_snap = await snapshot_tag(db, tag_id) or {}
+    await record_history(
+        db,
+        operation="alias_remove",
+        before={tag_id: before_snap},
+        after={tag_id: after_snap},
+        meta={"alias": alias},
+    )
     await db.commit()
     return True
