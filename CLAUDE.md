@@ -147,7 +147,7 @@ fashion-inspo/
 
 ## 前端文件拆分约定
 
-- 视图只做编排（数据加载 + 子组件组装 + 事件接线），单个视图超过 ~400 行优先拆解。
+- 视图只做编排（数据加载 + 子组件组装 + 事件接线），单个视图超过 ~800 行优先拆解。
 - 自成体系的状态 + 逻辑抽 `composables/useXxx.ts`，内部自行 `useMessage()`，不直接操作 DOM。
 - 跨组件复用的 TS 接口放 `web/src/types/{domain}.ts`，不在组件内重复定义。
 - 多处重复的纯函数收敛 `web/src/utils/`（如 sourceLabel、formatSize），禁止多文件重复定义。
