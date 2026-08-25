@@ -29,6 +29,8 @@ const emit = defineEmits<{
 /** 按种类选择 API */
 const api = props.kind === 'blogger' ? bloggersApi : modelsApi
 const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
+/** 列表排序：穿搭博主按素材数倒序（高频博主优先出现在下拉顶部）；模特按名称 */
+const listSort = props.kind === 'blogger' ? 'count' : 'name'
 
 /** 全部人物（分页拉取，作为下拉候选池） */
 const allPersons = ref<PersonBrief[]>([])
@@ -75,7 +77,7 @@ async function loadAllPersons() {
     let page = 1
     const loaded: PersonBrief[] = []
     while (true) {
-      const { items, total } = await api.fetchList({ page, size, sort: 'name' })
+      const { items, total } = await api.fetchList({ page, size, sort: listSort })
       loaded.push(...items)
       if (loaded.length >= total || items.length === 0) break
       page += 1
