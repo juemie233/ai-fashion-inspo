@@ -5,10 +5,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { asHealthResult, fetchHealthIssue, scanHealth } from '@/api/tagAdvanced'
-import { batchDeleteTags, mergeTags } from '@/api/tags'
+import { batchDeleteTags } from '@/api/tags'
 import { CATEGORY_LABELS, SOURCE_LABELS } from '@/api/tags'
 import { useTaskPolling } from '@/composables/useTaskPolling'
-import { useTagAdvanced } from '@/composables/useTagAdvanced'
+import TagBatchEditFormModal from '@/components/tag/TagBatchEditFormModal.vue'
+import TagDuplicateCompareModal from './TagDuplicateCompareModal.vue'
 import {
   HEALTH_ISSUE_LABELS,
   type DuplicateIssuePair,
@@ -17,7 +18,6 @@ import {
 } from '@/types/tagAdvanced'
 
 const { task, pollTask, stopPolling } = useTaskPolling()
-const { openBatchEdit } = useTagAdvanced()
 
 // ── 状态 ──
 const score = ref<number | null>(null)
@@ -37,6 +37,10 @@ const pageSize = ref(50)
 const scanning = ref(false)
 const loadingDetail = ref(false)
 const selectedIds = ref<number[]>([])
+/** 批量编辑表单弹窗 */
+const batchEditFormVisible = ref(false)
+/** 当前送入批量编辑表单的标签（勾选行的快照） */
+const batchEditTags = ref<HealthIssueItem[]>([])
 
 const running = computed(
   () => scanning.value || Boolean(task.value && ['pending', 'running'].includes(task.value.status)),
@@ -136,34 +140,35 @@ async function deleteSelected() {
   })
 }
 
-/** 把勾选标签送入批量编辑抽屉 */
+/** 把勾选标签送入批量编辑表单弹窗（逐行直接改名/改类别） */
 function editSelected() {
-  const ids = selectedIds.value
-  if (!ids.length) {
+  const ids = new Set(selectedIds.value)
+  const picked = items.value.filter((t) => ids.has(t.id))
+  if (!picked.length) {
     Message.warning('请先勾选标签')
     return
   }
-  openBatchEdit({ tag_ids: ids })
+  batchEditTags.value = picked
+  batchEditFormVisible.value = true
 }
 
-/** 疑似重复对：合并到指定一侧 */
-async function mergePair(pair: DuplicateIssuePair, target: 'tag_a' | 'tag_b') {
-  const source = target === 'tag_a' ? pair.tag_b : pair.tag_a
-  const dest = target === 'tag_a' ? pair.tag_a : pair.tag_b
-  if (!source || !dest) return
-  Modal.confirm({
-    title: '确认合并',
-    content: `将「${source.name}」合并到「${dest.name}」？`,
-    onOk: async () => {
-      try {
-        await mergeTags(source.id, dest.id)
-        Message.success('合并完成')
-        loadIssue('duplicate', page.value)
-      } catch (e) {
-        Message.error(getApiErrorMessage(e, '合并失败'))
-      }
-    },
-  })
+/** 批量编辑保存后：刷新当前页（勾选已在 loadIssue 内清空） */
+function onBatchEditSaved() {
+  loadIssue(activeIssueType.value, page.value)
+}
+
+/** 疑似重复对：打开图片对比弹窗（合并/重命名在弹窗内完成） */
+const compareVisible = ref(false)
+const comparePair = ref<DuplicateIssuePair | null>(null)
+
+function openCompare(pair: DuplicateIssuePair) {
+  comparePair.value = pair
+  compareVisible.value = true
+}
+
+/** 对比弹窗内合并/重命名后：刷新重复列表 */
+function onCompareChanged() {
+  loadIssue('duplicate', page.value)
 }
 
 function onSelectionChange(keys: Array<string | number>) {
@@ -210,7 +215,7 @@ onBeforeUnmount(() => {
 
     <!-- 明细列表 -->
     <div class="health-list">
-      <div class="list-header">
+      <div class="list-header" :class="{ 'list-header--center': isDuplicate }">
         <span class="list-title">{{ HEALTH_ISSUE_LABELS[activeIssueType] }}</span>
         <span class="list-total">共 {{ total }} 条</span>
       </div>
@@ -223,23 +228,19 @@ onBeforeUnmount(() => {
           :pagination="false"
           size="small"
           row-key="tag_a.id"
+          class="dup-table"
         >
           <template #columns>
-            <a-table-column title="标签 A" data-index="tag_a.name" />
-            <a-table-column title="标签 B" data-index="tag_b.name" />
-            <a-table-column title="相似度" :width="100">
+            <a-table-column title="标签 A" data-index="tag_a.name" align="center" />
+            <a-table-column title="标签 B" data-index="tag_b.name" align="center" />
+            <a-table-column title="相似度" :width="100" align="center">
               <template #cell="{ record }"> {{ (record.similarity * 100).toFixed(0) }}% </template>
             </a-table-column>
-            <a-table-column title="操作" :width="180">
+            <a-table-column title="操作" :width="120" align="center">
               <template #cell="{ record }">
-                <a-space>
-                  <a-button size="mini" type="text" @click="mergePair(record, 'tag_a')">
-                    合并到 A
-                  </a-button>
-                  <a-button size="mini" type="text" @click="mergePair(record, 'tag_b')">
-                    合并到 B
-                  </a-button>
-                </a-space>
+                <a-button size="mini" type="text" @click="openCompare(record)">
+                  图片对比
+                </a-button>
               </template>
             </a-table-column>
           </template>
@@ -251,6 +252,7 @@ onBeforeUnmount(() => {
             :data="items"
             :pagination="false"
             size="small"
+            row-key="id"
             :row-selection="{ selectedRowKeys: selectedIds }"
             @selection-change="onSelectionChange"
           >
@@ -303,6 +305,20 @@ onBeforeUnmount(() => {
         />
       </a-spin>
     </div>
+
+    <!-- 批量编辑标签（逐行直接改名/改类别） -->
+    <TagBatchEditFormModal
+      v-model:visible="batchEditFormVisible"
+      :tags="batchEditTags"
+      @saved="onBatchEditSaved"
+    />
+
+    <!-- 疑似重复：图片对比（弹窗内合并/重命名） -->
+    <TagDuplicateCompareModal
+      v-model:visible="compareVisible"
+      :pair="comparePair"
+      @changed="onCompareChanged"
+    />
   </div>
 </template>
 
@@ -373,6 +389,10 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-bottom: 8px;
 }
+/* 疑似重复页：标题与计数整体居中 */
+.list-header--center {
+  justify-content: center;
+}
 .list-title {
   font-size: 14px;
   font-weight: 600;
@@ -387,5 +407,17 @@ onBeforeUnmount(() => {
 .issue-pager {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+/* 疑似重复表格：表头与单元格内容全部居中（Arco 单元格在 scoped 内需 :deep 穿透） */
+.dup-table :deep(.arco-table-th),
+.dup-table :deep(.arco-table-td) {
+  text-align: center !important;
+}
+.dup-table :deep(.arco-table-cell) {
+  justify-content: center;
+}
+.dup-table :deep(.arco-table-td .arco-btn) {
+  display: inline-flex;
 }
 </style>

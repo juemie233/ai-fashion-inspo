@@ -216,6 +216,32 @@ async def get_health_issue_detail(
         }
 
     tag_ids = issue.get("tag_ids", [])
+
+    # 低质命名：扫描结果可能早于标签/规则的最新状态（已改名、阈值调整等）。
+    # 这里实时复校，过滤掉当前已合法的过期 ID，避免合法标签仍挂在问题列表里；
+    # 原因取实时校验结果，不再用含糊的「标签名不规范」兜底。
+    if issue_type == "low_quality_name":
+        tag_items_all = await _fetch_tag_items(db, tag_ids)
+        items_all = []
+        for tid in tag_ids:
+            item = tag_items_all.get(tid)
+            if item is None:
+                continue
+            ok, reason = validate_tag_name(item["name"])
+            if not ok:
+                item["reason"] = reason
+                items_all.append(item)
+        total = len(items_all)
+        start = (page - 1) * size
+        items = items_all[start : start + size]
+        return {
+            "issue_type": issue_type,
+            "total": total,
+            "page": page,
+            "size": size,
+            "items": items,
+        }
+
     total = len(tag_ids)
     start = (page - 1) * size
     page_ids = tag_ids[start : start + size]
@@ -225,9 +251,6 @@ async def get_health_issue_detail(
         item = tag_items.get(tid)
         if item is None:
             continue
-        if issue_type == "low_quality_name":
-            _, reason = validate_tag_name(item["name"])
-            item["reason"] = reason or "标签名不规范"
         items.append(item)
     return {
         "issue_type": issue_type,

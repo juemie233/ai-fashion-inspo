@@ -1,4 +1,9 @@
-/** 高级标签管理页状态编排：Tab 状态（URL 持久化）+ 全局批量编辑抽屉入口。 */
+/** 高级标签管理页状态编排：Tab 状态（URL 持久化）+ 全局批量编辑抽屉入口。
+ *
+ * 状态为模块级单例：管理视图与各子面板（如健康度面板）共用同一份
+ * batchEditVisible / activeTab，避免各调一次 useTagAdvanced() 拿到独立 ref
+ * 导致「打开抽屉」事件无法跨组件生效。
+ */
 
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,6 +18,18 @@ export const ADVANCED_TABS: AdvancedTab[] = [
   'tree',
   'history',
 ]
+
+// ── 模块级共享状态（单例）──
+const batchEditVisible = ref(false)
+const batchEditInitialTagIds = ref<number[]>([])
+const batchEditInitialCategory = ref<string | undefined>(undefined)
+
+/** 打开批量编辑抽屉（可选携带预选标签 / 预选类别） */
+function openBatchEdit(opts: { tag_ids?: number[]; category?: string } = {}) {
+  batchEditInitialTagIds.value = opts.tag_ids ?? []
+  batchEditInitialCategory.value = opts.category
+  batchEditVisible.value = true
+}
 
 export function useTagAdvanced() {
   const route = useRoute()
@@ -34,18 +51,6 @@ export function useTagAdvanced() {
     }
     router.replace({ query })
   })
-
-  // ── 全局批量编辑抽屉：可从任意面板携带初始范围打开 ──
-  const batchEditVisible = ref(false)
-  const batchEditInitialTagIds = ref<number[]>([])
-  const batchEditInitialCategory = ref<string | undefined>(undefined)
-
-  /** 打开批量编辑抽屉（可选携带预选标签 / 预选类别） */
-  function openBatchEdit(opts: { tag_ids?: number[]; category?: string } = {}) {
-    batchEditInitialTagIds.value = opts.tag_ids ?? []
-    batchEditInitialCategory.value = opts.category
-    batchEditVisible.value = true
-  }
 
   return {
     activeTab,
