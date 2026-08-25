@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /** Arco Design 试点页：用 @arco-design/web-vue 重做穿搭博主列表。
  *
  * 目的：与 Naive UI 版（/persons）并存对比，验证 Arco 组件、主题定制
@@ -209,14 +209,8 @@ onMounted(() => {
           placeholder="搜索昵称 / 小红书号 / IP属地"
           allow-clear
           style="width: 240px"
-          @press-enter="
-            page = 1
-            load()
-          "
-          @clear="
-            page = 1
-            load()
-          "
+          @press-enter="page = 1; load()"
+          @clear="page = 1; load()"
         >
           <template #prefix>🔍</template>
         </a-input>
@@ -224,26 +218,17 @@ onMounted(() => {
           v-model="platform"
           :options="platformOptions"
           style="width: 140px"
-          @change="
-            page = 1
-            load()
-          "
+          @change="page = 1; load()"
         />
         <a-select
           v-model="sort"
           :options="sortOptions"
           style="width: 140px"
-          @change="
-            page = 1
-            load()
-          "
+          @change="page = 1; load()"
         />
         <a-button
           type="primary"
-          @click="
-            page = 1
-            load()
-          "
+          @click="page = 1; load()"
           >查询</a-button
         >
       </a-space>
