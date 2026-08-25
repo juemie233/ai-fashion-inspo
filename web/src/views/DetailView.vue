@@ -30,7 +30,7 @@ import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { formatDate, shortenText } from '@/utils/format'
-import { CATEGORY_LABELS } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
@@ -257,7 +257,7 @@ async function handlePermanentDelete() {
   }
 }
 
-/** 类别中文名（复用 api/tags 的 CATEGORY_LABELS，单一来源） */
+/** 类别中文名（复用 constants/tag 的 CATEGORY_LABELS，单一来源） */
 const CAT_LABELS = CATEGORY_LABELS
 
 /** 按类别分组标签 */
@@ -342,8 +342,12 @@ async function reanalyze() {
   if (!detail.value || analyzing.value) return
   analyzing.value = true
   try {
-    await analyzeInspiration(detail.value.id)
-    Message.success('已提交重新分析')
+    const { data } = await analyzeInspiration(detail.value.id)
+    if (data.ollama_will_start) {
+      Message.warning(data.message || 'Ollama 正在启动中')
+    } else {
+      Message.success('已提交重新分析')
+    }
   } catch (e) {
     Message.error(getApiErrorMessage(e, '重新分析失败'))
   } finally {

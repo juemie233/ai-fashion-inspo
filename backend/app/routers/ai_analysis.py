@@ -20,11 +20,28 @@ from app.routers.ai_shared import (
     _run_analysis,
 )
 from app.services import ai_analysis_service as ai_svc
+from app.services.ollama_utils import is_ollama_running, start_ollama
 from app.services.task_runner import create_batch_analyze_task
 from app.utils.csv_safety import sanitize_csv_cell
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _check_ollama_before_analysis() -> tuple[bool, str | None]:
+    """在提交分析任务前检查 Ollama 运行状态，未运行则尝试自动启动。
+
+    返回:
+        (is_running, message):
+        - is_running=True  表示 Ollama 已在运行，message 为 None
+        - is_running=False 表示 Ollama 未运行且尝试启动，message 为提示信息
+    """
+    if await is_ollama_running():
+        return True, None
+
+    start_msg = await start_ollama()
+    # 无论成功与否都返回 is_running=False，让前端提示用户
+    return False, start_msg or "Ollama 未运行，请确认后重试"
 
 
 # ============ AI 分析 ============
@@ -34,8 +51,17 @@ router = APIRouter()
 async def analyze_inspiration(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+) -> dict:
     """触发单个素材的 AI 分析（后台异步执行）。"""
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    if not ollama_running:
+        return {
+            "message": ollama_msg,
+            "inspiration_id": inspiration_id,
+            "status": "analyzing",
+            "ollama_will_start": True,
+        }
+
     try:
         file_path = await ai_svc.trigger_analysis(
             db, inspiration_id, "仅支持分析图片素材，视频素材暂不支持"
@@ -52,6 +78,7 @@ async def analyze_inspiration(
         "message": "分析任务已加入队列",
         "inspiration_id": inspiration_id,
         "status": "analyzing",
+        "ollama_will_start": False,
     }
 
 
@@ -66,6 +93,16 @@ async def batch_analyze(
     由独立 worker 进程（app/worker.py）异步执行，前端通过轮询
     GET /api/tasks/{task_id} 获取进度。
     """
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    if not ollama_running:
+        return {
+            "message": f"{ollama_msg}，已创建批量分析任务，Ollama 启动后可自动执行",
+            "count": 0,
+            "skipped": 0,
+            "status": "pending",
+            "ollama_will_start": True,
+        }
+
     try:
         ids, skipped = await ai_svc.get_batch_analyze_targets(db, inspiration_ids)
     except ai_svc.AIAnalysisNotFoundError as e:
@@ -167,8 +204,16 @@ async def export_analysis_history_csv(
 async def retry_analysis(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+) -> dict:
     """重试失败的分析。"""
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    if not ollama_running:
+        return {
+            "message": ollama_msg,
+            "inspiration_id": inspiration_id,
+            "ollama_will_start": True,
+        }
+
     try:
         file_path = await ai_svc.trigger_analysis(
             db, inspiration_id, "暂不支持分析视频文件"
@@ -187,6 +232,14 @@ async def retry_analysis(
 @router.post("/retry-all-failed")
 async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    if not ollama_running:
+        return {
+            "message": f"{ollama_msg}，请稍后 Ollama 启动后再次重试",
+            "count": 0,
+            "ollama_will_start": True,
+        }
+
     failed = await ai_svc.get_failed_analysis_targets(db)
 
     if not failed:
@@ -227,6 +280,14 @@ async def batch_retry_logs(
 
     请求体: {"ids": [1, 2, 3]}
     """
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    if not ollama_running:
+        return {
+            "message": f"{ollama_msg}，请稍后 Ollama 启动后再次重试",
+            "count": 0,
+            "ollama_will_start": True,
+        }
+
     ids = payload.get("ids", [])
     if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")

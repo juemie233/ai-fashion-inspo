@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
 from app.routers.ai_shared import _update_env_file
+from app.services.ollama_utils import is_ollama_running, start_ollama
 
 router = APIRouter()
 
@@ -56,6 +57,10 @@ async def batch_quality_check(
         random: 为 True 时随机抽取 limit 个素材（含已审查，会覆盖重审）；
             为 False 时按默认顺序取前 limit 个待审核（pending）素材。
     """
+    # 提交前检查 Ollama 是否运行
+    if not await is_ollama_running():
+        await start_ollama()
+
     # 随机复审抽取所有图片素材（含已审查），普通审核仅取 pending；均排除垃圾桶素材
     stmt = select(Inspiration.id).where(
         Inspiration.media_type == "image",
@@ -88,6 +93,10 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)) -> dict[str, str |
     将 approved 重置为 pending 后提交任务队列批量审核，用最新审核标准重新判定。
     用于修正审核标准升级后历史素材的误判（如「只有腿部」被误判为通过）。
     """
+    # 提交前检查 Ollama 是否运行
+    if not await is_ollama_running():
+        await start_ollama()
+
     result = await db.execute(
         update(Inspiration)
         .where(

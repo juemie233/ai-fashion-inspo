@@ -15,6 +15,7 @@ from app.models.inspiration import Inspiration
 from app.services import ai_dashboard_service
 from app.services.model_config import get_model_config
 from app.services.model_prompt import get_model_prompt
+from app.services.ollama_utils import is_ollama_running, start_ollama
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,6 +91,14 @@ async def test_analyze(
     async def event_stream() -> AsyncIterator[str]:
         import time as _time
         started = _time.time()
+
+        # 提交前检查 Ollama 是否运行，未运行则尝试启动
+        if not await is_ollama_running():
+            start_msg = await start_ollama() or "无法启动 Ollama，请手动启动后重试"
+            yield (
+                f"data: {json.dumps({'type': 'error', 'message': start_msg})}\n\n"
+            )
+            return
 
         try:
             async with httpx.AsyncClient(timeout=model_cfg["timeout"]) as client:

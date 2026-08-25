@@ -149,7 +149,14 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         message: string
         count: number
         skipped: number
+        status?: string
+        ollama_will_start?: boolean
       }>('/ai/batch-analyze', data.ids)
+      if (created.ollama_will_start) {
+        Message.warning(created.message || 'Ollama 正在启动中，请等待后刷新重试')
+        batchAnalyzing.value = false
+        return
+      }
       batchTask.value = {
         id: created.task_id,
         type: 'batch_analyze',
@@ -269,8 +276,12 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   /** 单条失败记录重新加入分析队列 */
   async function retryAnalysis(id: string) {
     try {
-      await apiClient.post(`/ai/retry/${id}`)
-      Message.success('已重新加入队列')
+      const { data } = await apiClient.post<Record<string, unknown>>(`/ai/retry/${id}`)
+      if ((data as Record<string, unknown>).ollama_will_start === true) {
+        Message.warning(String((data as Record<string, unknown>).message || 'Ollama 正在启动中'))
+      } else {
+        Message.success('已重新加入队列')
+      }
       loadQueue()
       loadActiveAnalyses()
     } catch (e) {
