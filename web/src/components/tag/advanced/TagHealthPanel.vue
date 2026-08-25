@@ -6,18 +6,19 @@ import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { asHealthResult, fetchHealthIssue, scanHealth } from '@/api/tagAdvanced'
 import { batchDeleteTags } from '@/api/tags'
-import { CATEGORY_LABELS, SOURCE_LABELS } from '@/api/tags'
-import { useTaskPolling } from '@/composables/useTaskPolling'
-import TagBatchEditFormModal from '@/components/tag/TagBatchEditFormModal.vue'
-import TagDuplicateCompareModal from './TagDuplicateCompareModal.vue'
+import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
+import { useTagAnalysisTask } from '@/composables/useTagAnalysisTask'
+import { useTagSelection } from '@/composables/useTagSelection'
+import { useTagEvents } from '@/composables/useTagEvents'
+import TagBatchEditModal from '@/components/tag/TagBatchEditModal.vue'
+import TagDuplicateCompareModal from '@/components/tag/TagDuplicateCompareModal.vue'
 import {
   HEALTH_ISSUE_LABELS,
   type DuplicateIssuePair,
   type HealthIssueItem,
   type HealthIssueType,
+  type HealthScanResult,
 } from '@/types/tagAdvanced'
-
-const { task, pollTask, stopPolling } = useTaskPolling()
 
 // ── 状态 ──
 const score = ref<number | null>(null)
@@ -34,19 +35,36 @@ const duplicatePairs = ref<DuplicateIssuePair[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(50)
-const scanning = ref(false)
 const loadingDetail = ref(false)
-const selectedIds = ref<number[]>([])
+/** 多选状态（Set 内部存储；selectedKeys 供 Arco 表格使用） */
+const { selectedIds, selectedKeys, setFromKeys, clear: clearSelection, hasAny } = useTagSelection()
+const { onTagChanged, notifyTagChanged } = useTagEvents()
 /** 批量编辑表单弹窗 */
 const batchEditFormVisible = ref(false)
 /** 当前送入批量编辑表单的标签（勾选行的快照） */
 const batchEditTags = ref<HealthIssueItem[]>([])
 
-const running = computed(
-  () => scanning.value || Boolean(task.value && ['pending', 'running'].includes(task.value.status)),
-)
-
 const ISSUE_TYPES: HealthIssueType[] = ['orphan', 'low_frequency', 'low_quality_name', 'duplicate']
+
+/** 健康度扫描任务：提交 → 轮询 → 写入评分/计数 */
+const {
+  run: runScan,
+  running,
+  stopPolling,
+} = useTagAnalysisTask<HealthScanResult>({
+  submit: () => scanHealth(0.75),
+  transform: asHealthResult,
+  onDone: (r) => {
+    score.value = r.score
+    scannedAt.value = r.scanned_at
+    for (const t of ISSUE_TYPES) {
+      issueCounts.value[t] = r.issues[t]?.count ?? 0
+    }
+    Message.success(`健康度扫描完成：${r.total} 个标签，评分 ${r.score}`)
+    loadIssue(activeIssueType.value, 1)
+  },
+  onError: (e) => Message.error(getApiErrorMessage(e, '提交扫描任务失败')),
+})
 
 const isDuplicate = computed(() => activeIssueType.value === 'duplicate')
 
@@ -54,31 +72,6 @@ function scoreColor(s: number): string {
   if (s >= 85) return '#1baf7a'
   if (s >= 60) return '#eda100'
   return '#e34948'
-}
-
-/** 提交扫描任务并轮询 */
-async function runScan() {
-  if (scanning.value) return
-  scanning.value = true
-  try {
-    const { task_id } = await scanHealth(0.75)
-    pollTask(task_id, (result) => {
-      const r = asHealthResult(result)
-      if (r) {
-        score.value = r.score
-        scannedAt.value = r.scanned_at
-        for (const t of ISSUE_TYPES) {
-          issueCounts.value[t] = r.issues[t]?.count ?? 0
-        }
-        Message.success(`健康度扫描完成：${r.total} 个标签，评分 ${r.score}`)
-        loadIssue(activeIssueType.value, 1)
-      }
-    })
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '提交扫描任务失败'))
-  } finally {
-    scanning.value = false
-  }
 }
 
 /** 加载某问题类型的明细（分页） */
@@ -95,16 +88,12 @@ async function loadIssue(type: HealthIssueType, p = 1) {
       items.value = data.items as HealthIssueItem[]
       duplicatePairs.value = []
     }
-    selectedIds.value = []
+    clearSelection()
   } catch (e) {
     Message.error(getApiErrorMessage(e, '加载健康度明细失败'))
   } finally {
     loadingDetail.value = false
   }
-}
-
-function onIssueTypeChange() {
-  loadIssue(activeIssueType.value, 1)
 }
 
 function onIssueTypeClick(type: HealthIssueType) {
@@ -120,11 +109,11 @@ function onPageChange(p: number) {
 
 /** 删除勾选的标签（孤儿/低频/低质命名） */
 async function deleteSelected() {
-  const ids = selectedIds.value
-  if (!ids.length) {
+  if (!hasAny.value) {
     Message.warning('请先勾选标签')
     return
   }
+  const ids = Array.from(selectedIds.value)
   Modal.confirm({
     title: '确认删除',
     content: `确定删除选中的 ${ids.length} 个标签吗？删除后不可恢复。`,
@@ -132,7 +121,7 @@ async function deleteSelected() {
       try {
         await batchDeleteTags(ids)
         Message.success('已删除')
-        loadIssue(activeIssueType.value, page.value)
+        notifyTagChanged({ type: 'deleted', tagIds: ids })
       } catch (e) {
         Message.error(getApiErrorMessage(e, '删除失败'))
       }
@@ -142,7 +131,7 @@ async function deleteSelected() {
 
 /** 把勾选标签送入批量编辑表单弹窗（逐行直接改名/改类别） */
 function editSelected() {
-  const ids = new Set(selectedIds.value)
+  const ids = selectedIds.value
   const picked = items.value.filter((t) => ids.has(t.id))
   if (!picked.length) {
     Message.warning('请先勾选标签')
@@ -150,11 +139,6 @@ function editSelected() {
   }
   batchEditTags.value = picked
   batchEditFormVisible.value = true
-}
-
-/** 批量编辑保存后：刷新当前页（勾选已在 loadIssue 内清空） */
-function onBatchEditSaved() {
-  loadIssue(activeIssueType.value, page.value)
 }
 
 /** 疑似重复对：打开图片对比弹窗（合并/重命名在弹窗内完成） */
@@ -166,17 +150,19 @@ function openCompare(pair: DuplicateIssuePair) {
   compareVisible.value = true
 }
 
-/** 对比弹窗内合并/重命名后：刷新重复列表 */
-function onCompareChanged() {
-  loadIssue('duplicate', page.value)
+function onSelectionChange(keys: Array<string | number>) {
+  setFromKeys(keys)
 }
 
-function onSelectionChange(keys: Array<string | number>) {
-  selectedIds.value = keys.map(Number)
+/** 标签被改名/合并/批量编辑后（来自对比弹窗、批量编辑表单等任意入口），
+ *  自动刷新当前问题列表，无需各弹窗逐个回传 @changed。 */
+function refreshOnTagChange() {
+  loadIssue(activeIssueType.value, page.value)
 }
 
 onMounted(() => {
   runScan()
+  onTagChanged(refreshOnTagChange, ['updated', 'merged', 'batch-edited', 'deleted'])
 })
 
 onBeforeUnmount(() => {
@@ -238,9 +224,7 @@ onBeforeUnmount(() => {
             </a-table-column>
             <a-table-column title="操作" :width="120" align="center">
               <template #cell="{ record }">
-                <a-button size="mini" type="text" @click="openCompare(record)">
-                  图片对比
-                </a-button>
+                <a-button size="mini" type="text" @click="openCompare(record)"> 图片对比 </a-button>
               </template>
             </a-table-column>
           </template>
@@ -253,7 +237,7 @@ onBeforeUnmount(() => {
             :pagination="false"
             size="small"
             row-key="id"
-            :row-selection="{ selectedRowKeys: selectedIds }"
+            :row-selection="{ selectedRowKeys: selectedKeys }"
             @selection-change="onSelectionChange"
           >
             <template #columns>
@@ -278,15 +262,8 @@ onBeforeUnmount(() => {
           </a-table>
           <div class="batch-bar">
             <a-space>
-              <a-button size="small" :disabled="!selectedIds.length" @click="editSelected">
-                批量编辑
-              </a-button>
-              <a-button
-                size="small"
-                status="danger"
-                :disabled="!selectedIds.length"
-                @click="deleteSelected"
-              >
+              <a-button size="small" :disabled="!hasAny" @click="editSelected"> 批量编辑 </a-button>
+              <a-button size="small" status="danger" :disabled="!hasAny" @click="deleteSelected">
                 批量删除
               </a-button>
             </a-space>
@@ -306,19 +283,15 @@ onBeforeUnmount(() => {
       </a-spin>
     </div>
 
-    <!-- 批量编辑标签（逐行直接改名/改类别） -->
-    <TagBatchEditFormModal
+    <!-- 批量编辑标签（逐行直接改名/改类别；保存后经事件总线自动刷新） -->
+    <TagBatchEditModal
       v-model:visible="batchEditFormVisible"
       :tags="batchEditTags"
-      @saved="onBatchEditSaved"
+      initial-mode="inline"
     />
 
-    <!-- 疑似重复：图片对比（弹窗内合并/重命名） -->
-    <TagDuplicateCompareModal
-      v-model:visible="compareVisible"
-      :pair="comparePair"
-      @changed="onCompareChanged"
-    />
+    <!-- 疑似重复：图片对比（弹窗内合并/重命名；变更后经事件总线自动刷新） -->
+    <TagDuplicateCompareModal v-model:visible="compareVisible" :pair="comparePair" />
   </div>
 </template>
 

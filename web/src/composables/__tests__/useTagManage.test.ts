@@ -28,8 +28,6 @@ vi.mock('@/api/tags', () => ({
   findDuplicates: vi.fn(),
   reorderTags: vi.fn(),
   createAlias: vi.fn(),
-  CATEGORY_LABELS: {},
-  SOURCE_LABELS: {},
 }))
 
 import { fetchTagsGrouped, fetchTagStats } from '@/api/tags'
@@ -44,8 +42,26 @@ function makeGroups() {
     {
       category: 'style',
       tags: [
-        { id: 1, name: '法式', category: 'style', source: 'manual', pinned: false, sort_order: 0, description: null, usage_count: 5 },
-        { id: 2, name: '韩系', category: 'style', source: 'ai_generated', pinned: false, sort_order: 1, description: null, usage_count: 3 },
+        {
+          id: 1,
+          name: '法式',
+          category: 'style',
+          source: 'manual',
+          pinned: false,
+          sort_order: 0,
+          description: null,
+          usage_count: 5,
+        },
+        {
+          id: 2,
+          name: '韩系',
+          category: 'style',
+          source: 'ai_generated',
+          pinned: false,
+          sort_order: 1,
+          description: null,
+          usage_count: 3,
+        },
       ],
     },
   ]
@@ -56,7 +72,13 @@ describe('useTagManage URL 浏览状态持久化', () => {
     vi.clearAllMocks()
     routeState.query = {}
     mockFetchGroups.mockResolvedValue(makeGroups())
-    mockFetchStats.mockResolvedValue({ total: 2, unused: 0, total_links: 8, by_source: {}, by_category: {} })
+    mockFetchStats.mockResolvedValue({
+      total: 2,
+      unused: 0,
+      total_links: 8,
+      by_source: {},
+      by_category: {},
+    })
   })
 
   it('初始筛选状态从 URL query 恢复（搜索/类别/来源/排序）', () => {
@@ -113,7 +135,9 @@ describe('useTagManage URL 浏览状态持久化', () => {
     t.filterCategory.value = 'style'
     t.sortMode.value = 'name'
     await nextTick()
-    expect(routeState.replace).toHaveBeenCalledWith({ query: { q: '连衣裙', category: 'style', sort: 'name' } })
+    expect(routeState.replace).toHaveBeenCalledWith({
+      query: { q: '连衣裙', category: 'style', sort: 'name' },
+    })
 
     // 全部回到默认：URL query 清空
     t.searchQuery.value = ''

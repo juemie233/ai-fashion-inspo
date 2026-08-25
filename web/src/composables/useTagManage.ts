@@ -1,29 +1,29 @@
 /** 标签管理页核心数据与操作：加载、筛选排序、选中、删除/合并/置顶/重复扫描等。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { ref, computed, watch } from 'vue'
+import { getCurrentInstance, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
+import { useTagSelection } from './useTagSelection'
+import { useTagEvents } from './useTagEvents'
 import {
   fetchTagsGrouped,
   updateTag,
-  mergeTags,
   batchDeleteTags,
   deleteUnusedTags,
   fetchTagStats,
   findDuplicates,
   reorderTags,
-  createAlias,
-  CATEGORY_LABELS,
   type TagCategoryGroup,
   type TagItem,
   type TagStats,
   type DuplicatePair,
 } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 /** 标签管理页数据模型与业务操作集合，由 TagManageView 及其子组件消费。 */
 export function useTagManage() {
-    const route = useRoute()
+  const route = useRoute()
   const router = useRouter()
 
   // ===== 数据 =====
@@ -36,13 +36,22 @@ export function useTagManage() {
   const filterCategory = ref<string | null>((route.query.category as string) || null)
   const filterSource = ref<string | null>((route.query.source as string) || null)
   const sortMode = ref<'usage' | 'name' | 'custom'>(
-    route.query.sort === 'name' || route.query.sort === 'custom'
-      ? route.query.sort
-      : 'usage',
+    route.query.sort === 'name' || route.query.sort === 'custom' ? route.query.sort : 'usage',
   )
 
-  // ===== 选中（批量操作） =====
-  const selectedIds = ref<Set<number>>(new Set())
+  // ===== 选中（批量操作，复用统一的多选 composable） =====
+  const {
+    selectedIds,
+    toggle: toggleSelect,
+    addMany: _addMany,
+    clear: deselectAll,
+    remove: _remove,
+  } = useTagSelection()
+
+  /** 选中某分组下的全部标签 */
+  function selectAllInGroup(group: TagCategoryGroup) {
+    _addMany(group.tags.map((t) => t.id))
+  }
 
   // ===== 选中标签 → 右侧素材面板 =====
   const selectedTag = ref<TagItem | null>(null)
@@ -65,8 +74,11 @@ export function useTagManage() {
       if (selectedTag.value) {
         let fresh: TagItem | null = null
         for (const g of groups.value) {
-          const t = g.tags.find(x => x.id === selectedTag.value!.id)
-          if (t) { fresh = t; break }
+          const t = g.tags.find((x) => x.id === selectedTag.value!.id)
+          if (t) {
+            fresh = t
+            break
+          }
         }
         selectedTag.value = fresh
       } else {
@@ -74,55 +86,61 @@ export function useTagManage() {
         const tagId = Number(route.query.tag)
         if (Number.isFinite(tagId) && tagId > 0) {
           for (const g of groups.value) {
-            const t = g.tags.find(x => x.id === tagId)
-            if (t) { selectedTag.value = t; break }
+            const t = g.tags.find((x) => x.id === tagId)
+            if (t) {
+              selectedTag.value = t
+              break
+            }
           }
         }
       }
-    } catch { Message.error('加载失败') } finally { loading.value = false }
+    } catch {
+      Message.error('加载失败')
+    } finally {
+      loading.value = false
+    }
   }
 
   // ===== 过滤与排序 =====
   const filteredGroups = computed(() => {
-    let result = groups.value.map(g => ({ ...g, tags: [...g.tags] }))
+    let result = groups.value.map((g) => ({ ...g, tags: [...g.tags] }))
 
     // 类别筛选
     if (filterCategory.value) {
-      result = result.filter(g => g.category === filterCategory.value)
+      result = result.filter((g) => g.category === filterCategory.value)
     }
     // 来源筛选
     if (filterSource.value) {
-      result = result.map(g => ({
+      result = result.map((g) => ({
         ...g,
-        tags: g.tags.filter(t => t.source === filterSource.value),
+        tags: g.tags.filter((t) => t.source === filterSource.value),
       }))
     }
     // 搜索过滤
     if (searchQuery.value.trim()) {
       const q = searchQuery.value.trim().toLowerCase()
-      result = result.map(g => ({
+      result = result.map((g) => ({
         ...g,
-        tags: g.tags.filter(t => t.name.toLowerCase().includes(q)),
+        tags: g.tags.filter((t) => t.name.toLowerCase().includes(q)),
       }))
     }
     // 排序（custom 模式保持后端 sort_order 顺序，不做前端排序）
     for (const g of result) {
       // 置顶优先：无论「使用次数」还是「名称」排序，置顶标签始终排本组最前
-      const pinnedFirst = (a: TagItem, b: TagItem) =>
-        Number(b.pinned) - Number(a.pinned)
+      const pinnedFirst = (a: TagItem, b: TagItem) => Number(b.pinned) - Number(a.pinned)
       if (sortMode.value === 'usage') {
-        g.tags.sort((a, b) => pinnedFirst(a, b) || (b.usage_count - a.usage_count))
+        g.tags.sort((a, b) => pinnedFirst(a, b) || b.usage_count - a.usage_count)
       } else if (sortMode.value === 'name') {
         g.tags.sort((a, b) => pinnedFirst(a, b) || a.name.localeCompare(b.name, 'zh'))
       }
     }
     // 移除空组
-    return result.filter(g => g.tags.length > 0)
+    return result.filter((g) => g.tags.length > 0)
   })
 
   /** 是否存在搜索/类别/来源筛选：筛选态下可见顺序与完整分组不一致，禁用自定义排序拖拽 */
-  const hasActiveFilter = computed(() =>
-    !!searchQuery.value.trim() || !!filterCategory.value || !!filterSource.value
+  const hasActiveFilter = computed(
+    () => !!searchQuery.value.trim() || !!filterCategory.value || !!filterSource.value,
   )
 
   // ===== 删除（单个 / 批量） =====
@@ -130,12 +148,11 @@ export function useTagManage() {
     try {
       await batchDeleteTags([tagId])
       Message.success(`已删除 "${tagName}"`)
-      // Set 是响应式的：原地 delete 不会触发视图更新，须整体替换
-      const next = new Set(selectedIds.value)
-      next.delete(tagId)
-      selectedIds.value = next
+      _remove(tagId)
       await loadAll()
-    } catch { Message.error('删除失败') }
+    } catch {
+      Message.error('删除失败')
+    }
   }
 
   async function handleBatchDelete() {
@@ -144,9 +161,11 @@ export function useTagManage() {
     try {
       await batchDeleteTags(ids)
       Message.success(`已删除 ${ids.length} 个标签`)
-      selectedIds.value = new Set()
+      deselectAll()
       await loadAll()
-    } catch { Message.error('批量删除失败') }
+    } catch {
+      Message.error('批量删除失败')
+    }
   }
 
   async function handleDeleteUnused() {
@@ -168,36 +187,35 @@ export function useTagManage() {
       showDuplicatesPanel.value = true
       if (data.total === 0) Message.success('未发现重复标签')
       else Message.info(`发现 ${data.total} 对相似标签`)
-    } catch { Message.error('扫描失败') }
-    finally { scanningDuplicates.value = false }
-  }
-
-  /** 重复面板：将 a 合并进 b */
-  async function quickMerge(a: number, b: number) {
-    try {
-      await mergeTags(a, b)
-      Message.success('已快速合并')
-      // 移除所有引用被合并标签的 pair（a 已被删除）
-      duplicatePairs.value = duplicatePairs.value.filter(
-        p => p.tag_a.id !== a && p.tag_b.id !== a
-      )
-      await loadAll()
-    } catch { Message.error('合并失败') }
-  }
-
-  /** 重复面板：将源标签合并到目标并设为其别名 */
-  async function quickSetAlias(sourceId: number, targetId: number, sourceName: string) {
-    try {
-      await mergeTags(sourceId, targetId)
-      await createAlias(targetId, sourceName)
-      Message.success(`已合并并将「${sourceName}」设为别名`)
-      duplicatePairs.value = duplicatePairs.value.filter(
-        (p) => p.tag_a.id !== sourceId && p.tag_b.id !== sourceId,
-      )
-      await loadAll()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '操作失败'))
+    } catch {
+      Message.error('扫描失败')
+    } finally {
+      scanningDuplicates.value = false
     }
+  }
+
+  const { onTagChanged } = useTagEvents()
+
+  // 标签在其他入口（高级管理页、图片对比弹窗等）被改名/合并/删除/批量编辑后，
+  // 自动刷新本页数据与重复列表；仅在组件 setup 中订阅，单测中裸调用不挂载。
+  if (getCurrentInstance()) {
+    onTagChanged(
+      (payload) => {
+        // 合并时被合并的源标签已删除，从本地重复列表即时移除其所有 pair
+        if (payload.type === 'merged' && payload.tagIds) {
+          const removed = new Set(payload.tagIds)
+          duplicatePairs.value = duplicatePairs.value.filter(
+            (p) =>
+              p.tag_a !== null &&
+              p.tag_b !== null &&
+              !removed.has(p.tag_a.id) &&
+              !removed.has(p.tag_b.id),
+          )
+        }
+        loadAll()
+      },
+      ['updated', 'merged', 'deleted', 'batch-edited', 'created'],
+    )
   }
 
   // ===== 标签详情 =====
@@ -238,25 +256,15 @@ export function useTagManage() {
     }
   }
 
-  // ===== 选中逻辑 =====
-  function toggleSelect(id: number) {
-    if (selectedIds.value.has(id)) selectedIds.value.delete(id)
-    else selectedIds.value.add(id)
-    selectedIds.value = new Set(selectedIds.value)
-  }
-  function selectAllInGroup(group: TagCategoryGroup) {
-    for (const t of group.tags) selectedIds.value.add(t.id)
-    selectedIds.value = new Set(selectedIds.value)
-  }
-  function deselectAll() { selectedIds.value = new Set() }
-
   // ===== 置顶 =====
   async function togglePin(tag: TagItem) {
     try {
       await updateTag(tag.id, { pinned: !tag.pinned })
       Message.success(tag.pinned ? '已取消置顶' : '已置顶')
       await loadAll()
-    } catch { Message.error('操作失败') }
+    } catch {
+      Message.error('操作失败')
+    }
   }
 
   // ===== 拖拽改类别 =====
@@ -266,7 +274,9 @@ export function useTagManage() {
       await updateTag(tag.id, { category })
       Message.success(`已将 "${tag.name}" 移至 ${CATEGORY_LABELS[category] || category}`)
       await loadAll()
-    } catch { Message.error('移动失败') }
+    } catch {
+      Message.error('移动失败')
+    }
   }
 
   // ===== 自定义排序拖拽 =====
@@ -291,15 +301,39 @@ export function useTagManage() {
       await reorderTags(tags.map((t, i) => ({ id: t.id, sort_order: i })))
       Message.success('排序已更新')
       await loadAll()
-    } catch { Message.error('排序失败') }
+    } catch {
+      Message.error('排序失败')
+    }
   }
 
   return {
-    groups, loading, stats, searchQuery, filterCategory, filterSource, sortMode,
-    selectedIds, selectedTag, scanningDuplicates, duplicatePairs, showDuplicatesPanel,
-    duplicateThreshold, filteredGroups, hasActiveFilter,
-    loadAll, selectTag, onGridChanged, toggleSelect, selectAllInGroup, deselectAll,
-    handleDelete, handleBatchDelete, handleDeleteUnused, scanDuplicates,
-    quickMerge, quickSetAlias, togglePin, onDrop, onTagDrop,
+    groups,
+    loading,
+    stats,
+    searchQuery,
+    filterCategory,
+    filterSource,
+    sortMode,
+    selectedIds,
+    selectedTag,
+    scanningDuplicates,
+    duplicatePairs,
+    showDuplicatesPanel,
+    duplicateThreshold,
+    filteredGroups,
+    hasActiveFilter,
+    loadAll,
+    selectTag,
+    onGridChanged,
+    toggleSelect,
+    selectAllInGroup,
+    deselectAll,
+    handleDelete,
+    handleBatchDelete,
+    handleDeleteUnused,
+    scanDuplicates,
+    togglePin,
+    onDrop,
+    onTagDrop,
   }
 }

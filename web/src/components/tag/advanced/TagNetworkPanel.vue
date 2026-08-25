@@ -7,12 +7,10 @@ import type { EChartsOption } from 'echarts'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { analyzeNetwork, asNetworkResult } from '@/api/tagAdvanced'
 import { fetchTagTrend } from '@/api/tags'
-import { CATEGORY_LABELS } from '@/api/tags'
-import { useTaskPolling } from '@/composables/useTaskPolling'
+import { CATEGORY_LABELS } from '@/constants/tag'
+import { useTagAnalysisTask } from '@/composables/useTagAnalysisTask'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 import type { CommunityInfo, NetworkAnalysisResult, NetworkNode } from '@/types/tagAdvanced'
-
-const { task, pollTask, stopPolling } = useTaskPolling()
 
 // ── 参数 ──
 const limit = ref(100)
@@ -21,20 +19,33 @@ const category = ref<string | undefined>(undefined)
 /** 每节点保留权重最高的 N 条边（缓解全连接稠密图的「网格状」显示） */
 const maxEdgesPerNode = ref(10)
 
-// ── 结果 ──
-const result = ref<NetworkAnalysisResult | null>(null)
-const analyzing = ref(false)
-
 // ── 趋势弹窗 ──
 const trendVisible = ref(false)
 const trendTag = ref<{ id: number; name: string } | null>(null)
 const trendData = ref<Array<{ bucket: string; count: number }>>([])
 const trendLoading = ref(false)
 
-const running = computed(
-  () =>
-    analyzing.value || Boolean(task.value && ['pending', 'running'].includes(task.value.status)),
-)
+/** 图分析任务：提交 → 轮询 → 写入结果 */
+const {
+  run: runAnalyze,
+  running,
+  result,
+  stopPolling,
+} = useTagAnalysisTask<NetworkAnalysisResult>({
+  submit: () =>
+    analyzeNetwork({
+      limit: limit.value,
+      min_count: minCount.value,
+      category: category.value ?? null,
+      with_communities: true,
+      with_centrality: true,
+      max_edges_per_node: maxEdgesPerNode.value,
+    }),
+  transform: asNetworkResult,
+  onDone: (data) =>
+    Message.success(`图分析完成：${data.nodes.length} 个节点，${data.communities.length} 个社区`),
+  onError: (e) => Message.error(getApiErrorMessage(e, '提交图分析任务失败')),
+})
 
 // 社区色板（固定顺序，不循环；超出用灰色）
 const COMMUNITY_COLORS = [
@@ -54,35 +65,6 @@ const MUTED_INK = '#898781'
 
 function communityColor(cid: number): string {
   return COMMUNITY_COLORS[cid % COMMUNITY_COLORS.length] ?? MUTED_INK
-}
-
-/** 提交图分析 */
-async function runAnalyze() {
-  if (running.value) return
-  analyzing.value = true
-  try {
-    const { task_id } = await analyzeNetwork({
-      limit: limit.value,
-      min_count: minCount.value,
-      category: category.value ?? null,
-      with_communities: true,
-      with_centrality: true,
-      max_edges_per_node: maxEdgesPerNode.value,
-    })
-    pollTask(task_id, (r) => {
-      const data = asNetworkResult(r)
-      result.value = data
-      if (data) {
-        Message.success(
-          `图分析完成：${data.nodes.length} 个节点，${data.communities.length} 个社区`,
-        )
-      }
-    })
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '提交图分析任务失败'))
-  } finally {
-    analyzing.value = false
-  }
 }
 
 // ── 力导向图 option ──

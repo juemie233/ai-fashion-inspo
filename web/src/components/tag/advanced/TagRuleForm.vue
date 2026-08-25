@@ -3,7 +3,7 @@
 
 import { reactive, ref, watch } from 'vue'
 import { RULE_TYPE_LABELS, type BatchEditRule, type BatchEditScope } from '@/types/tagAdvanced'
-import { CATEGORY_LABELS, SOURCE_LABELS } from '@/api/tags'
+import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
 
 const props = defineProps<{ rule: BatchEditRule; index: number }>()
 const emit = defineEmits<{ change: [rule: BatchEditRule]; remove: [] }>()

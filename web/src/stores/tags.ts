@@ -2,11 +2,8 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import {
-  fetchTagsGrouped,
-  type TagCategoryGroup,
-  CATEGORY_LABELS,
-} from '@/api/tags'
+import { fetchTagsGrouped, type TagCategoryGroup } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 export const useTagsStore = defineStore('tags', () => {
   /** 已加载的标签分组 */
@@ -58,7 +55,7 @@ export const useTagsStore = defineStore('tags', () => {
   function clearFilters() {
     selectedTags.value = new Set()
     excludedTags.value = new Set()
-    combineMode.value = 'AND'  // 组合逻辑一并重置回默认「全部匹配」，避免残留 OR 逻辑
+    combineMode.value = 'AND' // 组合逻辑一并重置回默认「全部匹配」，避免残留 OR 逻辑
   }
 
   /** 获取类别显示名称 */

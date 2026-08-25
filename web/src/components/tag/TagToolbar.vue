@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 标签工具栏：搜索、类别/来源筛选、排序、批量操作、重复扫描、删除未使用。 */
 
-import { CATEGORY_LABELS } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 const searchQuery = defineModel<string>('searchQuery', { required: true })
 const filterCategory = defineModel<string | null>('filterCategory', { required: true })
@@ -36,17 +36,12 @@ function onSourceChange(v: unknown) {
 </script>
 
 <template>
-  <a-space wrap style="margin-bottom:16px" :size="12">
-    <a-input
-      v-model="searchQuery"
-      placeholder="搜索标签..."
-      allow-clear
-      style="width:200px"
-    />
+  <a-space wrap style="margin-bottom: 16px" :size="12">
+    <a-input v-model="searchQuery" placeholder="搜索标签..." allow-clear style="width: 200px" />
     <a-select
       :model-value="filterCategory ?? undefined"
-      :options="Object.entries(CATEGORY_LABELS).map(([k,v])=>({label:v,value:k}))"
-      style="width:120px"
+      :options="Object.entries(CATEGORY_LABELS).map(([k, v]) => ({ label: v, value: k }))"
+      style="width: 120px"
       size="small"
       placeholder="类别"
       allow-clear
@@ -59,7 +54,7 @@ function onSourceChange(v: unknown) {
         { label: 'AI生成', value: 'ai_generated' },
         { label: '手动', value: 'manual' },
       ]"
-      style="width:110px"
+      style="width: 110px"
       size="small"
       placeholder="来源"
       allow-clear
@@ -78,11 +73,7 @@ function onSourceChange(v: unknown) {
       :content="`确认删除选中的 ${selectedCount} 个标签？此操作不可恢复`"
       @ok="emit('batch-delete')"
     >
-      <a-button
-        size="small"
-        type="secondary"
-        status="danger"
-      >
+      <a-button size="small" type="secondary" status="danger">
         删除选中 ({{ selectedCount }})
       </a-button>
     </a-popconfirm>
@@ -103,12 +94,7 @@ function onSourceChange(v: unknown) {
     >
       改类别
     </a-button>
-    <a-button
-      v-if="selectedCount > 0"
-      size="small"
-      type="secondary"
-      @click="emit('batch-rename')"
-    >
+    <a-button v-if="selectedCount > 0" size="small" type="secondary" @click="emit('batch-rename')">
       重命名
     </a-button>
     <a-button v-if="selectedCount > 0" size="small" @click="emit('deselect-all')">
@@ -127,16 +113,13 @@ function onSourceChange(v: unknown) {
         { label: '≥90%', value: 0.9 },
       ]"
       size="mini"
-      style="width:80px"
+      style="width: 80px"
       title="相似度阈值"
     />
     <a-button size="small" @click="emit('find-duplicates')" :loading="scanning">
       发现重复
     </a-button>
-    <a-popconfirm
-      content="确定删除所有未使用的标签？"
-      @ok="emit('delete-unused')"
-    >
+    <a-popconfirm content="确定删除所有未使用的标签？" @ok="emit('delete-unused')">
       <a-button size="small" type="secondary" status="warning" :disabled="unusedCount === 0">
         删除未使用 {{ unusedCount > 0 ? `(${unusedCount})` : '' }}
       </a-button>

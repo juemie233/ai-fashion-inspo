@@ -5,7 +5,6 @@ import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('@/api/tags', () => ({
   fetchTagsGrouped: vi.fn(),
-  CATEGORY_LABELS: { style: '风格', color: '颜色', free: '自定义' },
 }))
 
 import { fetchTagsGrouped } from '@/api/tags'

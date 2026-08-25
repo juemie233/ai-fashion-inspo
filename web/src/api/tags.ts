@@ -1,6 +1,7 @@
 /** 标签相关 API 调用。 */
 
 import apiClient from './client'
+import type { TagDuplicatePair } from '@/types/tag'
 
 export interface TagCategoryGroup {
   category: string
@@ -18,27 +19,7 @@ export interface TagItem {
   usage_count: number
 }
 
-/** 类别名称的中文映射 */
-export const CATEGORY_LABELS: Record<string, string> = {
-  style: '风格',
-  item_type: '单品',
-  color: '颜色',
-  body_part: '穿着方式',
-  fit: '版型',
-  attribute: '属性',
-  free: '自定义',
-  outfit: '穿搭大标签',
-  Atmosphere: '氛围',
-  Expression: '模特表情',
-  Leg_Posture: '腿部姿态',
-}
-
-/** 来源的中文映射 */
-export const SOURCE_LABELS: Record<string, string> = {
-  seed: '预设',
-  ai_generated: 'AI生成',
-  manual: '手动',
-}
+// 类别 / 来源中文映射已迁至 @/constants/tag（API 层只负责请求）
 
 // ===== 基础 CRUD =====
 
@@ -104,6 +85,24 @@ export async function deleteUnusedTags() {
   return data
 }
 
+/** 批量把标签移动到指定类别（PATCH /tags/batch-category） */
+export async function batchChangeCategory(tagIds: number[], category: string) {
+  const { data } = await apiClient.patch<{ updated: number; category: string }>(
+    '/tags/batch-category',
+    { tag_ids: tagIds, category },
+  )
+  return data
+}
+
+/** 批量查找替换标签名（PATCH /tags/batch-rename） */
+export async function batchRenameTags(tagIds: number[], find: string, replace: string) {
+  const { data } = await apiClient.patch<{ updated: number; find: string; replace: string }>(
+    '/tags/batch-rename',
+    { tag_ids: tagIds, find, replace },
+  )
+  return data
+}
+
 // ===== 统计 =====
 
 export interface TagStats {
@@ -122,15 +121,12 @@ export async function fetchTagStats(): Promise<TagStats> {
 
 // ===== 重复扫描 =====
 
-export interface DuplicatePair {
-  tag_a: { id: number; name: string; category: string }
-  tag_b: { id: number; name: string; category: string }
-  similarity: number
-}
+/** @deprecated 改用 @/types/tag 的 TagDuplicatePair（两处重复扫描共用） */
+export type DuplicatePair = TagDuplicatePair
 
 /** 扫描重复/相似标签 */
 export async function findDuplicates(threshold: number = 0.75) {
-  const { data } = await apiClient.get<{ duplicates: DuplicatePair[]; total: number }>(
+  const { data } = await apiClient.get<{ duplicates: TagDuplicatePair[]; total: number }>(
     '/tags/duplicates',
     { params: { threshold } },
   )

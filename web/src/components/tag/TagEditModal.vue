@@ -4,7 +4,8 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { updateTag, CATEGORY_LABELS, type TagItem } from '@/api/tags'
+import { updateTag, type TagItem } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ saved: [] }>()
@@ -29,9 +30,10 @@ async function handleEdit() {
     await updateTag(props.tag.id, {
       name: editName.value.trim() !== props.tag.name ? editName.value.trim() : undefined,
       category: editCategory.value !== props.tag.category ? editCategory.value : undefined,
-      description: (editDescription.value.trim() || null) !== (props.tag.description || null)
-        ? editDescription.value.trim() || null
-        : undefined,
+      description:
+        (editDescription.value.trim() || null) !== (props.tag.description || null)
+          ? editDescription.value.trim() || null
+          : undefined,
     })
     Message.success('标签已更新')
     show.value = false
@@ -43,8 +45,18 @@ async function handleEdit() {
 </script>
 
 <template>
-  <a-modal v-model:visible="show" title="编辑标签" :footer="false" :width="420" @cancel="show = false">
-    <a-form :model="{ editName, editCategory, editDescription }" label-align="left" :label-col-style="{ width: '60px' }">
+  <a-modal
+    v-model:visible="show"
+    title="编辑标签"
+    :footer="false"
+    :width="420"
+    @cancel="show = false"
+  >
+    <a-form
+      :model="{ editName, editCategory, editDescription }"
+      label-align="left"
+      :label-col-style="{ width: '60px' }"
+    >
       <a-form-item label="名称">
         <a-input v-model="editName" @press-enter="handleEdit" />
       </a-form-item>
@@ -64,7 +76,7 @@ async function handleEdit() {
         />
       </a-form-item>
     </a-form>
-    <a-space style="display:flex;justify-content:flex-end;margin-top:16px">
+    <a-space style="display: flex; justify-content: flex-end; margin-top: 16px">
       <a-button @click="show = false">取消</a-button>
       <a-button type="primary" @click="handleEdit">保存</a-button>
     </a-space>

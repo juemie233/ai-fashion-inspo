@@ -7,7 +7,7 @@ import type { TreeNodeData } from '@arco-design/web-vue'
 import { IconFolder, IconTag } from '@arco-design/web-vue/es/icon'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { fetchTree, moveTags } from '@/api/tagAdvanced'
-import { CATEGORY_LABELS } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 import type { TreeItem } from '@/types/tagAdvanced'
 
 /** 树节点（Arco a-tree 结构 + 自定义字段） */

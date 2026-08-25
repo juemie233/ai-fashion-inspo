@@ -5,16 +5,13 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { applyClusters, asClusterResult, scanClusters } from '@/api/tagAdvanced'
-import { useTaskPolling } from '@/composables/useTaskPolling'
-import type { ClusterGroup } from '@/types/tagAdvanced'
-
-const { task, pollTask, stopPolling } = useTaskPolling()
+import { useTagAnalysisTask } from '@/composables/useTagAnalysisTask'
+import type { ClusterGroup, ClusterScanResult } from '@/types/tagAdvanced'
 
 // ── 扫描参数 ──
 const threshold = ref(0.75)
 const useCooccurrenceBoost = ref(true)
 const minGroupSize = ref(2)
-const scanning = ref(false)
 
 // ── 扫描结果 ──
 const groups = ref<ClusterGroup[]>([])
@@ -28,9 +25,27 @@ const applying = ref(false)
 
 const hasResult = computed(() => groups.value.length > 0)
 
-const running = computed(
-  () => scanning.value || Boolean(task.value && ['pending', 'running'].includes(task.value.status)),
-)
+/** 聚类扫描任务：提交 → 轮询 → 写入候选组 */
+const {
+  run: runScan,
+  running,
+  stopPolling,
+} = useTagAnalysisTask<ClusterScanResult>({
+  submit: () =>
+    scanClusters({
+      threshold: threshold.value,
+      use_cooccurrence_boost: useCooccurrenceBoost.value,
+      min_group_size: minGroupSize.value,
+    }),
+  transform: asClusterResult,
+  onDone: (r) => {
+    groups.value = r.groups
+    checkedIds.value = []
+    scannedAt.value = new Date().toLocaleString()
+    Message.success(r.total ? `聚类完成：发现 ${r.total} 个候选组` : '未发现相似标签候选组')
+  },
+  onError: (e) => Message.error(getApiErrorMessage(e, '提交聚类任务失败')),
+})
 
 /** 勾选/取消单个候选组 */
 function toggleGroup(groupId: string, checked: boolean) {
@@ -38,32 +53,6 @@ function toggleGroup(groupId: string, checked: boolean) {
     if (!checkedIds.value.includes(groupId)) checkedIds.value.push(groupId)
   } else {
     checkedIds.value = checkedIds.value.filter((id) => id !== groupId)
-  }
-}
-
-/** 提交聚类扫描 */
-async function runScan() {
-  if (running.value) return
-  scanning.value = true
-  try {
-    const { task_id } = await scanClusters({
-      threshold: threshold.value,
-      use_cooccurrence_boost: useCooccurrenceBoost.value,
-      min_group_size: minGroupSize.value,
-    })
-    pollTask(task_id, (result) => {
-      const r = asClusterResult(result)
-      if (r) {
-        groups.value = r.groups
-        checkedIds.value = []
-        scannedAt.value = new Date().toLocaleString()
-        Message.success(r.total ? `聚类完成：发现 ${r.total} 个候选组` : '未发现相似标签候选组')
-      }
-    })
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '提交聚类任务失败'))
-  } finally {
-    scanning.value = false
   }
 }
 

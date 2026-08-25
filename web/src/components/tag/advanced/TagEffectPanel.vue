@@ -6,7 +6,7 @@ import { Message } from '@arco-design/web-vue'
 import type { EChartsOption } from 'echarts'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { fetchCombinations, fetchCoverage, fetchSourceDist, fetchTrending } from '@/api/tagAdvanced'
-import { CATEGORY_LABELS, SOURCE_LABELS } from '@/api/tags'
+import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 import type { CoverageStats, SourceDist, TrendingItem } from '@/types/tagAdvanced'
 

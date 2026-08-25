@@ -9,14 +9,17 @@ import { computed, ref, watch } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { getFileUrl } from '@/api/inspirations'
-import { fetchTagInspirations, mergeTags, updateTag, type TagInspiration } from '@/api/tags'
-import type { DuplicateIssuePair } from '@/types/tagAdvanced'
+import { fetchTagInspirations, updateTag, type TagInspiration } from '@/api/tags'
+import { useTagMerge } from '@/composables/useTagMerge'
+import { useTagEvents } from '@/composables/useTagEvents'
+import type { TagDuplicatePair } from '@/types/tag'
 
 const visible = defineModel<boolean>('visible', { required: true })
-const emit = defineEmits<{ changed: [] }>()
+
+const { notifyTagChanged } = useTagEvents()
 
 const props = defineProps<{
-  pair: DuplicateIssuePair | null
+  pair: TagDuplicatePair | null
 }>()
 
 /** 单侧标签的素材池与当前展示索引 */
@@ -34,6 +37,8 @@ function emptySide(): SideState {
 const sideA = ref<SideState>(emptySide())
 const sideB = ref<SideState>(emptySide())
 const busy = ref(false)
+/** 合并时把被合并标签名保留为目标标签别名（AI 再识别到旧名时自动归一） */
+const keepAlias = ref(true)
 
 /** 就地重命名状态 */
 const renaming = ref<'a' | 'b' | null>(null)
@@ -45,6 +50,7 @@ watch(visible, async (v) => {
     sideA.value = emptySide()
     sideB.value = emptySide()
     renaming.value = null
+    keepAlias.value = true
     await Promise.all([loadSide('a', props.pair.tag_a.id), loadSide('b', props.pair.tag_b.id)])
   }
 })
@@ -79,9 +85,7 @@ function imgSrc(item: TagInspiration | null): string {
 
 /** 随机显示：A/B 两侧各自独立随机抽一张；当两侧都只有 ≤1 张（含各 1 张或无图）时
  *  没有可随机的余地，按钮禁用。 */
-const canRandom = computed(
-  () => sideA.value.items.length > 1 || sideB.value.items.length > 1,
-)
+const canRandom = computed(() => sideA.value.items.length > 1 || sideB.value.items.length > 1)
 
 function randomPick() {
   if (!canRandom.value) return
@@ -123,7 +127,7 @@ async function saveRename() {
     Message.success('已重命名')
     renaming.value = null
     renameValue.value = ''
-    emit('changed')
+    notifyTagChanged({ type: 'updated', tagIds: [tag.id] })
   } catch (e) {
     Message.error(getApiErrorMessage(e, '重命名失败'))
   } finally {
@@ -131,25 +135,23 @@ async function saveRename() {
   }
 }
 
-/** 合并：target 保留，source 被合并 */
+const { merge } = useTagMerge()
+
+/** 合并：target 保留，source 被合并；按 keepAlias 决定是否保留源名为别名 */
 function doMerge(target: 'tag_a' | 'tag_b') {
   const source = target === 'tag_a' ? props.pair!.tag_b : props.pair!.tag_a
   const dest = props.pair![target]
   if (!source || !dest) return
+  const aliasHint = keepAlias.value ? `，并将「${source.name}」保留为别名` : ''
   Modal.confirm({
     title: '确认合并',
-    content: `将「${source.name}」合并到「${dest.name}」？合并后素材归入后者，前者删除且不可恢复。`,
+    content: `将「${source.name}」合并到「${dest.name}」${aliasHint}？合并后素材归入后者，前者删除且不可恢复。`,
     onOk: async () => {
       busy.value = true
-      try {
-        await mergeTags(source.id, dest.id)
-        Message.success('合并完成')
+      const { ok } = await merge(source.id, dest.id, keepAlias.value ? source.name : undefined)
+      busy.value = false
+      if (ok) {
         visible.value = false
-        emit('changed')
-      } catch (e) {
-        Message.error(getApiErrorMessage(e, '合并失败'))
-      } finally {
-        busy.value = false
       }
     },
   })
@@ -191,12 +193,7 @@ function doMerge(target: 'tag_a' | 'tag_b') {
           </div>
           <div class="cmp-img-box">
             <a-spin :loading="sideA.loading" class="cmp-spin">
-              <a-image
-                v-if="currentA"
-                :src="imgSrc(currentA)"
-                :width="'100%'"
-                fit="contain"
-              />
+              <a-image v-if="currentA" :src="imgSrc(currentA)" :width="'100%'" fit="contain" />
               <div v-else class="cmp-empty">该标签无图片素材</div>
             </a-spin>
           </div>
@@ -226,12 +223,7 @@ function doMerge(target: 'tag_a' | 'tag_b') {
           </div>
           <div class="cmp-img-box">
             <a-spin :loading="sideB.loading" class="cmp-spin">
-              <a-image
-                v-if="currentB"
-                :src="imgSrc(currentB)"
-                :width="'100%'"
-                fit="contain"
-              />
+              <a-image v-if="currentB" :src="imgSrc(currentB)" :width="'100%'" fit="contain" />
               <div v-else class="cmp-empty">该标签无图片素材</div>
             </a-spin>
           </div>
@@ -241,11 +233,10 @@ function doMerge(target: 'tag_a' | 'tag_b') {
 
       <div class="cmp-actions">
         <a-space>
-          <a-button @click="randomPick" :disabled="!canRandom || busy">
-            🎲 随机显示
-          </a-button>
+          <a-button @click="randomPick" :disabled="!canRandom || busy"> 🎲 随机显示 </a-button>
         </a-space>
         <a-space>
+          <a-checkbox v-model="keepAlias">合并后保留源名为别名</a-checkbox>
           <a-button status="warning" :disabled="busy" @click="doMerge('tag_a')">
             合并到 A
           </a-button>

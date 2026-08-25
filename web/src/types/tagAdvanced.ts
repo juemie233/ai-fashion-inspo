@@ -1,5 +1,7 @@
 /** 高级标签管理页的跨组件类型定义。 */
 
+import type { TagBrief, TagDuplicatePair } from '@/types/tag'
+
 /** 后台任务通用结构（GET /api/tasks/{id} 响应） */
 export interface TaskStatus {
   id: number
@@ -16,21 +18,14 @@ export interface TaskStatus {
 
 export type HealthIssueType = 'orphan' | 'low_frequency' | 'low_quality_name' | 'duplicate'
 
-export interface HealthIssueItem {
-  id: number
-  name: string
-  category: string
+export interface HealthIssueItem extends TagBrief {
   source: string
   parent_id: number | null
-  usage_count: number
   reason?: string | null
 }
 
-export interface DuplicateIssuePair {
-  tag_a: { id: number; name: string; category: string; usage_count: number } | null
-  tag_b: { id: number; name: string; category: string; usage_count: number } | null
-  similarity: number
-}
+/** 健康度明细中的疑似重复对，复用统一的 TagDuplicatePair 结构 */
+export type DuplicateIssuePair = TagDuplicatePair
 
 export interface HealthIssuePage {
   issue_type: HealthIssueType
@@ -58,12 +53,7 @@ export const HEALTH_ISSUE_LABELS: Record<HealthIssueType, string> = {
 
 // ===== 自动聚类 =====
 
-export interface ClusterMember {
-  id: number
-  name: string
-  category: string
-  usage_count: number
-}
+export type ClusterMember = TagBrief
 
 export interface ClusterGroup {
   id: string
@@ -82,11 +72,7 @@ export interface ClusterScanResult {
 
 // ===== 网络图分析 =====
 
-export interface NetworkNode {
-  id: number
-  name: string
-  category: string
-  usage_count: number
+export interface NetworkNode extends TagBrief {
   degree: number
   degree_centrality: number
   betweenness: number | null
@@ -173,12 +159,8 @@ export const RULE_TYPE_LABELS: Record<BatchEditRule['type'], string> = {
 
 // ===== 层级树 =====
 
-export interface TreeItem {
-  id: number
-  name: string
-  category: string
+export interface TreeItem extends TagBrief {
   parent_id: number | null
-  usage_count: number
   has_children: boolean
 }
 

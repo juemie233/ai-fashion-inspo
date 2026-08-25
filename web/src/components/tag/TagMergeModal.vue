@@ -4,7 +4,8 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { mergeTags, CATEGORY_LABELS, type TagCategoryGroup } from '@/api/tags'
+import { mergeTags, type TagCategoryGroup } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ merged: [] }>()
@@ -22,7 +23,10 @@ const mergeTargetOptions = computed(() => {
   for (const group of props.groups) {
     for (const tag of group.tags) {
       if (tag.id !== props.source.id) {
-        opts.push({ label: `${tag.name} (${CATEGORY_LABELS[tag.category] || tag.category})`, value: tag.id })
+        opts.push({
+          label: `${tag.name} (${CATEGORY_LABELS[tag.category] || tag.category})`,
+          value: tag.id,
+        })
       }
     }
   }
@@ -37,22 +41,26 @@ async function handleMerge() {
     show.value = false
     mergeTarget.value = null
     emit('merged')
-  } catch (e) { Message.error(getApiErrorMessage(e, '合并失败')) }
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '合并失败'))
+  }
 }
 </script>
 
 <template>
   <a-modal v-model:visible="show" title="合并标签" :footer="false" :width="500">
-    <p v-if="source">将 <strong>{{ source.name }}</strong> 合并到：</p>
+    <p v-if="source">
+      将 <strong>{{ source.name }}</strong> 合并到：
+    </p>
     <a-select
       :model-value="mergeTarget ?? undefined"
       :options="mergeTargetOptions"
       placeholder="选择目标标签"
       allow-search
-      style="margin:16px 0"
+      style="margin: 16px 0"
       @change="(v: unknown) => (mergeTarget = (v as number | undefined) ?? null)"
     />
-    <a-space style="display:flex;justify-content:flex-end">
+    <a-space style="display: flex; justify-content: flex-end">
       <a-button @click="show = false">取消</a-button>
       <a-button type="primary" @click="handleMerge" :disabled="!mergeTarget">确认合并</a-button>
     </a-space>

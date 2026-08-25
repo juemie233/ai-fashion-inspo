@@ -3,7 +3,8 @@
  * 大分组（数千标签）展开时分批渐进渲染，避免一次性挂载导致首帧卡死。 */
 
 import { ref, reactive, watch, onUnmounted } from 'vue'
-import { CATEGORY_LABELS, SOURCE_LABELS, type TagCategoryGroup, type TagItem } from '@/api/tags'
+import { type TagCategoryGroup, type TagItem } from '@/api/tags'
+import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
 
 const props = defineProps<{
   groups: TagCategoryGroup[]
@@ -30,12 +31,16 @@ const emit = defineEmits<{
 const dragTag = ref<TagItem | null>(null)
 const dragOverCategory = ref<string | null>(null)
 
-function onDragStart(tag: TagItem) { dragTag.value = tag }
+function onDragStart(tag: TagItem) {
+  dragTag.value = tag
+}
 function onDragOver(category: string, e: DragEvent) {
   e.preventDefault()
   dragOverCategory.value = category
 }
-function onDragLeave() { dragOverCategory.value = null }
+function onDragLeave() {
+  dragOverCategory.value = null
+}
 function onDropCategory(category: string) {
   dragOverCategory.value = null
   const tag = dragTag.value
@@ -112,7 +117,7 @@ function stopProgressiveRender(category: string) {
 function startProgressiveRender(group: TagCategoryGroup) {
   const total = group.tags.length
   const current = renderedCounts[group.category] ?? 0
-  if (current >= total) return  // 已全部渲染
+  if (current >= total) return // 已全部渲染
   stopProgressiveRender(group.category)
   if (current === 0) renderedCounts[group.category] = Math.min(FIRST_CHUNK, total)
   const step = () => {
@@ -128,16 +133,13 @@ function startProgressiveRender(group: TagCategoryGroup) {
 }
 
 // 展开分组时开始渐进渲染
-watch(
-  expandedNames,
-  (names, oldNames) => {
-    for (const name of names) {
-      if (oldNames?.includes(name)) continue
-      const group = props.groups.find((g) => g.category === name)
-      if (group) startProgressiveRender(group)
-    }
-  },
-)
+watch(expandedNames, (names, oldNames) => {
+  for (const name of names) {
+    if (oldNames?.includes(name)) continue
+    const group = props.groups.find((g) => g.category === name)
+    if (group) startProgressiveRender(group)
+  }
+})
 
 // 数据源变化（筛选/搜索/重载）导致标签数量变化时，对展开中的分组从头渐进渲染；
 // 仅排序变化（长度不变）不重置进度，避免置顶/删除刷新后列表闪缩
@@ -170,17 +172,19 @@ onUnmounted(() => {
 <template>
   <!-- a-collapse 默认销毁行为 destroy-on-hide=false：首次展开后内容保持挂载，再次展开/收起零渲染开销 -->
   <a-collapse v-model:active-key="expandedNames">
-    <a-collapse-item
-      v-for="group in groups"
-      :key="group.category"
-    >
+    <a-collapse-item v-for="group in groups" :key="group.category">
       <template #header>
         <a-space align="center">
           <a-checkbox
             @click.stop
-            @change="(v: unknown) => v === true ? emit('select-all', group) : emit('deselect-all')"
-            :model-value="group.tags.every(t => selectedIds.has(t.id))"
-            :indeterminate="group.tags.some(t => selectedIds.has(t.id)) && !group.tags.every(t => selectedIds.has(t.id))"
+            @change="
+              (v: unknown) => (v === true ? emit('select-all', group) : emit('deselect-all'))
+            "
+            :model-value="group.tags.every((t) => selectedIds.has(t.id))"
+            :indeterminate="
+              group.tags.some((t) => selectedIds.has(t.id)) &&
+              !group.tags.every((t) => selectedIds.has(t.id))
+            "
           />
           <span>{{ CATEGORY_LABELS[group.category] || group.category }}</span>
           <a-tag size="small">{{ group.tags.length }}</a-tag>
@@ -190,7 +194,8 @@ onUnmounted(() => {
       <div
         :style="{
           background: dragOverCategory === group.category ? '#3b82f620' : undefined,
-          border: dragOverCategory === group.category ? '2px dashed #3b82f6' : '2px solid transparent',
+          border:
+            dragOverCategory === group.category ? '2px dashed #3b82f6' : '2px solid transparent',
           borderRadius: '8px',
           transition: 'all 0.2s',
           minHeight: '40px',
@@ -224,16 +229,21 @@ onUnmounted(() => {
               :class="{ pinned: tag.pinned }"
               :title="tag.pinned ? '取消置顶' : '置顶到最前'"
               @click.stop="emit('toggle-pin', tag)"
-            >📌</button>
+            >
+              📌
+            </button>
             <span class="row-badge row-source" :style="{ background: sourceColor(tag.source) }">
               {{ SOURCE_LABELS[tag.source] || tag.source }}
             </span>
             <span class="row-badge row-usage">{{ tag.usage_count }} 次</span>
             <span
               class="row-name"
-              :title="tag.description ? `点击查看素材 — ${tag.description}` : '点击查看使用该标签的素材'"
+              :title="
+                tag.description ? `点击查看素材 — ${tag.description}` : '点击查看使用该标签的素材'
+              "
               @click="emit('select-tag', tag)"
-            >{{ tag.name }}</span>
+              >{{ tag.name }}</span
+            >
             <span class="row-actions">
               <button class="row-act" @click="emit('edit', tag)">编辑</button>
               <button class="row-act" @click="emit('alias', tag)">别名</button>
@@ -242,7 +252,9 @@ onUnmounted(() => {
                 class="row-act danger"
                 :class="{ confirming: deletingId === tag.id }"
                 @click="onDeleteClick(tag)"
-              >{{ deletingId === tag.id ? '确认删除?' : '删除' }}</button>
+              >
+                {{ deletingId === tag.id ? '确认删除?' : '删除' }}
+              </button>
             </span>
           </div>
         </div>
