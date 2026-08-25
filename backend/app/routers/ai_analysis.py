@@ -7,9 +7,11 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.inspiration import Inspiration
 from app.routers.ai_shared import (
     _active_analyses,
     _analysis_tasks,
@@ -53,6 +55,16 @@ async def analyze_inspiration(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """触发单个素材的 AI 分析（后台异步执行）。"""
+    # 先校验素材是否存在（无论 Ollama 状态），不存在的素材直接 404
+    result = await db.execute(
+        select(Inspiration).where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.media_type != "image":
+        raise HTTPException(status_code=400, detail="仅支持分析图片素材，视频素材暂不支持")
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
@@ -62,14 +74,7 @@ async def analyze_inspiration(
             "ollama_will_start": True,
         }
 
-    try:
-        file_path = await ai_svc.trigger_analysis(
-            db, inspiration_id, "仅支持分析图片素材，视频素材暂不支持"
-        )
-    except ai_svc.AIAnalysisNotFoundError:
-        raise HTTPException(status_code=404, detail="灵感素材未找到")
-    except ai_svc.InvalidMediaError as e:
-        raise HTTPException(status_code=400, detail=e.message)
+    file_path = inspiration.file_path
 
     task = asyncio.create_task(_run_analysis(inspiration_id, file_path))
     _analysis_tasks.add(task)
@@ -93,28 +98,41 @@ async def batch_analyze(
     由独立 worker 进程（app/worker.py）异步执行，前端通过轮询
     GET /api/tasks/{task_id} 获取进度。
     """
+    # 先校验可分析的素材（无论 Ollama 状态）
+    result = await db.execute(
+        select(Inspiration).where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
+        )
+    )
+    inspirations = result.scalars().all()
+    valid_ids = [insp.id for insp in inspirations]
+    skipped = len(inspiration_ids) - len(valid_ids)
+
+    if not valid_ids:
+        raise HTTPException(
+            status_code=404,
+            detail="未找到任何可分析的图片素材"
+        )
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
             "message": f"{ollama_msg}，已创建批量分析任务，Ollama 启动后可自动执行",
-            "count": 0,
-            "skipped": 0,
+            "count": len(valid_ids),
+            "skipped": skipped,
             "status": "pending",
             "ollama_will_start": True,
         }
 
-    try:
-        ids, skipped = await ai_svc.get_batch_analyze_targets(db, inspiration_ids)
-    except ai_svc.AIAnalysisNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-
-    task = await create_batch_analyze_task(db, ids, skipped)
+    task = await create_batch_analyze_task(db, valid_ids, skipped)
 
     return {
         "task_id": task.id,
-        "message": f"已创建批量分析任务 #{task.id}，共 {len(ids)} 个素材"
+        "message": f"已创建批量分析任务 #{task.id}，共 {len(valid_ids)} 个素材"
                    + (f"，跳过 {skipped} 个素材（不存在或非图片）" if skipped > 0 else ""),
-        "count": len(ids),
+        "count": len(valid_ids),
         "skipped": skipped,
         "status": "pending",
     }
@@ -206,6 +224,16 @@ async def retry_analysis(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """重试失败的分析。"""
+    # 先校验素材是否存在
+    result = await db.execute(
+        select(Inspiration).where(Inspiration.id == inspiration_id)
+    )
+    inspiration = result.scalar_one_or_none()
+    if not inspiration:
+        raise HTTPException(status_code=404, detail="灵感素材未找到")
+    if inspiration.media_type != "image":
+        raise HTTPException(status_code=400, detail="暂不支持分析视频文件")
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
@@ -214,14 +242,7 @@ async def retry_analysis(
             "ollama_will_start": True,
         }
 
-    try:
-        file_path = await ai_svc.trigger_analysis(
-            db, inspiration_id, "暂不支持分析视频文件"
-        )
-    except ai_svc.AIAnalysisNotFoundError:
-        raise HTTPException(status_code=404, detail="灵感素材未找到")
-    except ai_svc.InvalidMediaError as e:
-        raise HTTPException(status_code=400, detail=e.message)
+    file_path = inspiration.file_path
 
     task = asyncio.create_task(_run_analysis(inspiration_id, file_path))
     _analysis_tasks.add(task)
@@ -232,6 +253,11 @@ async def retry_analysis(
 @router.post("/retry-all-failed")
 async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
     """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
+    failed = await ai_svc.get_failed_analysis_targets(db)
+
+    if not failed:
+        return {"message": "没有失败的记录", "count": 0}
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
@@ -239,11 +265,6 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str 
             "count": 0,
             "ollama_will_start": True,
         }
-
-    failed = await ai_svc.get_failed_analysis_targets(db)
-
-    if not failed:
-        return {"message": "没有失败的记录", "count": 0}
 
     count = 0
     for insp_id, file_path in failed:
@@ -280,6 +301,15 @@ async def batch_retry_logs(
 
     请求体: {"ids": [1, 2, 3]}
     """
+    ids = payload.get("ids", [])
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")
+
+    rows = await ai_svc.get_batch_retry_targets(db, ids)
+
+    if not rows:
+        return {"message": "没有可重试的素材", "count": 0}
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
@@ -288,10 +318,6 @@ async def batch_retry_logs(
             "ollama_will_start": True,
         }
 
-    ids = payload.get("ids", [])
-    if not isinstance(ids, list) or not ids:
-        raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")
-    rows = await ai_svc.get_batch_retry_targets(db, ids)
     count = 0
     for insp_id, file_path in rows:
         task = asyncio.create_task(_run_analysis(insp_id, file_path))
