@@ -116,17 +116,20 @@ async def batch_analyze(
             detail="未找到任何可分析的图片素材"
         )
 
+    # 统一创建任务记录（无论 Ollama 状态），让前端始终能拿到 task_id
+    task = await create_batch_analyze_task(db, valid_ids, skipped)
+
+    # Ollama 检查：仅用于消息提示，不影响已创建的任务
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
         return {
+            "task_id": task.id,
             "message": f"{ollama_msg}，已创建批量分析任务，Ollama 启动后可自动执行",
             "count": len(valid_ids),
             "skipped": skipped,
             "status": "pending",
             "ollama_will_start": True,
         }
-
-    task = await create_batch_analyze_task(db, valid_ids, skipped)
 
     return {
         "task_id": task.id,
