@@ -109,6 +109,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for dir_path in settings.storage_dirs.values():
         os.makedirs(dir_path, exist_ok=True)
 
+    # 启动时清理过期的 reset/restore 前快照（保留 7 天，reset/restore 为低频
+    # 操作，启动清理一次即可，无需周期轮询；失败不影响启动）
+    try:
+        from app.routers.ai_reset import cleanup_expired_snapshots
+
+        await asyncio.to_thread(cleanup_expired_snapshots)
+    except Exception as e:
+        logger.warning(f"[启动清理] 过期快照清理失败: {e}")
+
     # Alembic 正式迁移必须最先执行：空库由 baseline 建表、历史库 stamp 到
     # baseline、已管理库升级增量。若先跑 create_all，会把增量迁移中的新表
     # 抢建出来，导致后续 upgrade 永远失败（table already exists）且版本停摆。

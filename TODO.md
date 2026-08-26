@@ -65,7 +65,7 @@ Python 3.12/Node 20+/Git/ffmpeg/Git Bash → `git clone` 并 checkout 备份记�
 
 ---
 
-#### 块 4：reset 防呆（T5，核心链路，须补测试）
+#### 块 4：reset 防呆（T5，核心链路，须补测试） ✅ 已完成
 
 改动：`backend/app/routers/ai_reset.py`、`web/src/components/model/SettingsPanel.vue`、`backend/app/main.py`（清理 task）、`backend/tests/`、`.gitignore`。
 

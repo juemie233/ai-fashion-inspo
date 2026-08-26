@@ -220,35 +220,51 @@ async function testAnalyze() {
 }
 
 // ===== 重置所有数据 =====
+// 三步确认：按钮 → 第一次 popconfirm → 输入 DELETE 强确认
 const resetStep = ref(0)
 const resetting = ref(false)
+const resetConfirmText = ref('')
+const RESET_CONFIRM_WORD = 'DELETE'
 
 function startReset() {
   resetStep.value = 1
 }
 function cancelReset() {
   resetStep.value = 0
+  resetConfirmText.value = ''
 }
 
-async function confirmResetStep() {
+// 第一次确认通过 → 进入输入 DELETE 的最终确认
+function confirmResetStep() {
   if (resetStep.value === 1) {
     resetStep.value = 2
-  } else if (resetStep.value === 2) {
-    resetStep.value = 0
-    resetting.value = true
-    try {
-      const { data } = await apiClient.delete('/ai/reset', { params: { confirm: 'yes' } })
-      Message.success(data.message || '所有数据已重置')
-      store.refreshModels()
-      loadSettings()
-      loadSamplingParams()
-      loadPrompt()
-      tagsStore.load(true)
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '重置失败'))
-    } finally {
-      resetting.value = false
-    }
+  }
+}
+
+// 最终确认：输入正确文字后才真正调用重置接口
+async function executeReset() {
+  if (resetConfirmText.value !== RESET_CONFIRM_WORD) return
+  resetStep.value = 0
+  resetting.value = true
+  try {
+    const { data } = await apiClient.delete('/ai/reset', {
+      params: { confirm: 'yes', confirm_text: RESET_CONFIRM_WORD },
+    })
+    Message.success(
+      data.snapshot
+        ? `${data.message || '所有数据已重置'}（已自动保留 reset 前快照 7 天）`
+        : data.message || '所有数据已重置',
+    )
+    store.refreshModels()
+    loadSettings()
+    loadSamplingParams()
+    loadPrompt()
+    tagsStore.load(true)
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '重置失败'))
+  } finally {
+    resetting.value = false
+    resetConfirmText.value = ''
   }
 }
 
@@ -531,13 +547,20 @@ const configColumns = [
         <a-button
           size="mini"
           style="margin-top: 8px"
-          @click="savePromptVersion(); promptVersionsVisible = true; loadPromptVersions()"
+          @click="
+            savePromptVersion()
+            promptVersionsVisible = true
+            loadPromptVersions()
+          "
           >保存版本</a-button
         >
         <a-button
           size="mini"
           style="margin-top: 8px; margin-left: 6px"
-          @click="promptVersionsVisible = !promptVersionsVisible; loadPromptVersions()"
+          @click="
+            promptVersionsVisible = !promptVersionsVisible
+            loadPromptVersions()
+          "
         >
           {{ promptVersionsVisible ? '隐藏历史' : '版本历史' }}
           {{ promptVersions.length > 0 ? `(${promptVersions.length})` : '' }}
@@ -796,16 +819,31 @@ const configColumns = [
         <a-button status="danger" :loading="resetting">第一次确认：确定要删除所有数据吗？</a-button>
       </a-popconfirm>
 
-      <a-popconfirm
-        v-if="resetStep === 2"
-        content="最后一次确认：点击「确定」后将立即删除所有数据！"
-        @ok="confirmResetStep"
-        @cancel="cancelReset"
-      >
-        <a-button type="secondary" status="danger" :loading="resetting"
-          >第二次确认：真的要删除吗？此操作不可恢复！</a-button
-        >
-      </a-popconfirm>
+      <div v-if="resetStep === 2" style="margin-top: 8px">
+        <p style="font-size: 13px; color: #ef4444; margin-bottom: 8px">
+          最后确认：此操作不可恢复！请在下方输入
+          <code style="color: #ef4444; font-weight: 600">{{ RESET_CONFIRM_WORD }}</code>
+          以继续。
+        </p>
+        <a-space>
+          <a-input
+            v-model="resetConfirmText"
+            :placeholder="`输入 ${RESET_CONFIRM_WORD}`"
+            style="width: 160px"
+            allow-clear
+            @press-enter="executeReset"
+          />
+          <a-button
+            type="primary"
+            status="danger"
+            :disabled="resetConfirmText !== RESET_CONFIRM_WORD"
+            :loading="resetting"
+            @click="executeReset"
+            >确认重置</a-button
+          >
+          <a-button :disabled="resetting" @click="cancelReset">取消</a-button>
+        </a-space>
+      </div>
 
       <p v-if="resetting" style="font-size: 12px; color: #ef4444; margin-top: 8px">
         正在删除所有数据...
