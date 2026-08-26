@@ -167,10 +167,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sweep_task = asyncio.create_task(_sweep_expired_trash())
     schedule_task = asyncio.create_task(_scraper_schedule_loop())
 
+    # 启动后自动补备（与每日 03:00 的 schtasks 双通道，backup.lock 互斥）；
+    # 可通过 .env 的 BACKUP_ON_STARTUP=false 关闭
+    backup_task = None
+    if settings.backup_on_startup:
+        from app.services.backup_service import _startup_backup_loop
+
+        backup_task = asyncio.create_task(_startup_backup_loop())
+        logger.info(
+            f"[启动补备] 已启用：{settings.backup_startup_delay_minutes} 分钟后检查，"
+            f"目标 {settings.backup_target_path}，近期（{settings.backup_min_interval_hours}h 内）"
+            f"有成功备份则跳过"
+        )
+
     logger.info(f"{settings.app_name} v{settings.app_version} 启动于端口 {settings.port}")
     yield
-    # 关闭：取消周期性清理与定时采集调度任务
-    for task in (sweep_task, schedule_task):
+    # 关闭：取消周期性清理、定时采集与启动补备任务
+    for task in (sweep_task, schedule_task, backup_task):
+        if task is None:
+            continue
         task.cancel()
         try:
             await task

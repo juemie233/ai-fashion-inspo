@@ -52,7 +52,7 @@ Python 3.12/Node 20+/Git/ffmpeg/Git Bash → `git clone` 并 checkout 备份记�
 
 ---
 
-#### 块 3：后端启动补备 task（T6）
+#### 块 3：后端启动补备 task（T6） ✅ 已完成
 
 改动：`backend/app/main.py`（lifespan）、`backend/app/config.py`（新增配置项），逻辑可抽 `backend/app/services/backup_service.py`。
 

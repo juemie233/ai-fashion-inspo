@@ -136,6 +136,13 @@ class Settings(BaseSettings):
         "http://127.0.0.1:17777",
     ]
 
+    # 启动后自动补备（与每日 03:00 的 schtasks 双通道，backup.lock 互斥）
+    backup_on_startup: bool = True  # .env 设 BACKUP_ON_STARTUP=false 关闭
+    backup_target_path: str = "E:/fashion-inspo-backups"  # 备份目标根目录
+    backup_startup_delay_minutes: int = 10  # 启动后延迟多久再检查（避开迁移/初始化竞争）
+    backup_min_interval_hours: int = 20  # 距上次成功备份小于此时长则跳过
+    backup_tick_hours: int = 6  # 常驻循环的检查周期
+
     @property
     def storage_dirs(self) -> dict[str, Path]:
         """返回所有存储目录的映射。"""
