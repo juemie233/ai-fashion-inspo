@@ -69,6 +69,10 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     # 人物删除（物理删除）：博主与模特已拆分两表
     ("DELETE", "/api/bloggers/{blogger_id}"),
     ("DELETE", "/api/models/{model_id}"),
+    # 博主人物组绑定/解绑/切主（方案 B：跨平台账号合并声明，写操作）
+    ("POST", "/api/bloggers/groups/link"),
+    ("POST", "/api/bloggers/groups/unlink"),
+    ("POST", "/api/bloggers/groups/{group_id}/set-primary"),
     # 模特照片删除（物理删除）
     ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}"),
     ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}/photos/{photo_id}"),

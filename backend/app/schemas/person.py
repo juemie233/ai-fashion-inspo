@@ -4,6 +4,8 @@
 ``_PersonFields`` / ``_PersonUpdateFields`` 基类收敛，避免两份定义漂移。
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Literal
 
@@ -103,6 +105,12 @@ class BloggerOut(_PersonOutFields):
     # 人脸缩略图相对路径（从已匹配素材的人脸检测框裁剪缓存；无则 null）
     face_thumb_path: str | None = None
     bio: str | None = None
+    # 人物组（方案 B）：null=独立账号；同组时列表折叠只返回主记录
+    person_group_id: int | None = None
+    # 折叠视图：组内其余账号（展开显示用）；独立账号/平铺视图为空数组
+    group_members: list["BloggerOut"] = []
+    # 组内平台去重列表（多平台徽标，如 ["douyin", "xiaohongshu"]）
+    group_platforms: list[str] = []
 
 
 class BloggerBriefOut(BaseModel):

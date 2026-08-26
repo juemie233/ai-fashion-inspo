@@ -97,6 +97,8 @@ function createPersonApi(kind: 'bloggers' | 'models') {
         sort?: 'newest' | 'name' | 'count'
         /** 仅返回已注册人脸库的人物（用于人脸检测手动选择） */
         face_registered_only?: boolean
+        /** 按人物组折叠（方案 B，仅博主）：同组只返回主账号，组内账号在 group_members */
+        grouped?: boolean
       } = {},
     ): Promise<PersonListOut> {
       const { data } = await apiClient.get<PersonListOut>(base, { params })
@@ -139,10 +141,9 @@ function createPersonApi(kind: 'bloggers' | 'models') {
       size: number = 20,
       sort?: string,
     ): Promise<PersonInspirationsOut> {
-      const { data } = await apiClient.get<PersonInspirationsOut>(
-        `${base}/${id}/inspirations`,
-        { params: { page, size, sort } },
-      )
+      const { data } = await apiClient.get<PersonInspirationsOut>(`${base}/${id}/inspirations`, {
+        params: { page, size, sort },
+      })
       return data
     },
 
@@ -189,9 +190,45 @@ function createPersonApi(kind: 'bloggers' | 'models') {
   }
 }
 
-/** 穿搭博主 API（/api/bloggers）：含人脸特征注册 */
+/** 穿搭博主 API（/api/bloggers）：含人脸特征注册与人物组绑定 */
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
+
+  // ── 人物组（方案 B）：同一现实人物跨平台账号绑定 ──
+
+  /** 把两个博主绑定为同一人（新建组），或把博主并入已有组 */
+  async linkGroup(body: {
+    blogger_id: number
+    target_blogger_id?: number
+    group_id?: number
+  }): Promise<PersonGroupInfo> {
+    const { data } = await apiClient.post<PersonGroupInfo>('/bloggers/groups/link', body)
+    return data
+  },
+
+  /** 把博主移出人物组（变独立账号；组内剩 1 个时自动删组） */
+  async unlinkGroup(bloggerId: number): Promise<{
+    blogger_id: number
+    removed_group_id: number | null
+  }> {
+    const { data } = await apiClient.post('/bloggers/groups/unlink', { blogger_id: bloggerId })
+    return data
+  },
+
+  /** 手动指定组内主账号（列表折叠展示位） */
+  async setPrimaryGroup(groupId: number, bloggerId: number): Promise<PersonGroupInfo> {
+    const { data } = await apiClient.post<PersonGroupInfo>(
+      `/bloggers/groups/${groupId}/set-primary`,
+      { blogger_id: bloggerId },
+    )
+    return data
+  },
+
+  /** 查询人物组完整信息（组内各账号 + 主账号） */
+  async fetchGroupInfo(groupId: number): Promise<PersonGroupInfo> {
+    const { data } = await apiClient.get<PersonGroupInfo>(`/bloggers/groups/${groupId}`)
+    return data
+  },
 
   /** 注册/重新注册博主人脸：上传照片与/或已关联素材（合计 1~5 张，重复注册覆盖） */
   async registerFace(
@@ -205,9 +242,13 @@ export const bloggersApi = {
       formData.append('inspiration_ids', JSON.stringify(inspirationIds))
     }
     // 显式 multipart：全局默认 application/json 会让 axios 把 FormData 序列化成 JSON（后端 422）
-    const { data } = await apiClient.post<BloggerFaceRegisterResult>(`/bloggers/${id}/face`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    const { data } = await apiClient.post<BloggerFaceRegisterResult>(
+      `/bloggers/${id}/face`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    )
     return data
   },
 
@@ -223,6 +264,23 @@ export interface BloggerFaceStatus {
   registered: boolean
   blogger_id: number
   updated_at?: string | null
+}
+
+/** 人物组信息（方案 B：同一现实人物跨平台账号） */
+export interface PersonGroupInfo {
+  group_id: number
+  group_name: string
+  primary_blogger_id: number
+  member_ids?: number[]
+  members?: Array<{
+    id: number
+    name: string
+    platform: string
+    platform_user_id?: string | null
+    xhs_id?: string | null
+    profile_url?: string | null
+    avatar_path?: string | null
+  }>
 }
 
 /** 单张图片的注册结果明细（部分跳过时前端逐张提示原因） */
@@ -255,11 +313,9 @@ export const modelsApi = {
   async registerFace(id: number, topK: number = 5): Promise<ModelFaceRegisterResult> {
     const formData = new FormData()
     formData.append('top_k', String(topK))
-    const { data } = await apiClient.post<ModelFaceRegisterResult>(
-      `/models/${id}/face`,
-      formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } },
-    )
+    const { data } = await apiClient.post<ModelFaceRegisterResult>(`/models/${id}/face`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
     return data
   },
 
@@ -378,10 +434,9 @@ export async function fetchModelPhotoSets(
   page: number = 1,
   size: number = 50,
 ): Promise<ModelPhotoSetListOut> {
-  const { data } = await apiClient.get<ModelPhotoSetListOut>(
-    `/models/${modelId}/photo-sets`,
-    { params: { page, size } },
-  )
+  const { data } = await apiClient.get<ModelPhotoSetListOut>(`/models/${modelId}/photo-sets`, {
+    params: { page, size },
+  })
   return data
 }
 
@@ -390,10 +445,9 @@ export async function createModelPhotoSet(
   modelId: number,
   name?: string | null,
 ): Promise<ModelPhotoSet> {
-  const { data } = await apiClient.post<ModelPhotoSet>(
-    `/models/${modelId}/photo-sets`,
-    { name: name || null },
-  )
+  const { data } = await apiClient.post<ModelPhotoSet>(`/models/${modelId}/photo-sets`, {
+    name: name || null,
+  })
   return data
 }
 
@@ -417,10 +471,9 @@ export async function updateModelPhotoSet(
   setId: number,
   name: string,
 ): Promise<ModelPhotoSet> {
-  const { data } = await apiClient.patch<ModelPhotoSet>(
-    `/models/${modelId}/photo-sets/${setId}`,
-    { name },
-  )
+  const { data } = await apiClient.patch<ModelPhotoSet>(`/models/${modelId}/photo-sets/${setId}`, {
+    name,
+  })
   return data
 }
 
@@ -454,11 +507,7 @@ export async function uploadModelPhoto(
 }
 
 /** 删除照片组内的单张照片 */
-export async function deleteModelPhoto(
-  modelId: number,
-  setId: number,
-  photoId: number,
-) {
+export async function deleteModelPhoto(modelId: number, setId: number, photoId: number) {
   const { data } = await apiClient.delete<{ removed: number }>(
     `/models/${modelId}/photo-sets/${setId}/photos/${photoId}`,
   )

@@ -96,6 +96,8 @@ class PersonServiceBase:
             "created_at": person.created_at,
             "updated_at": person.updated_at,
             "inspiration_count": inspiration_count,
+            # 人物组（方案 B）：博主有值（null=独立账号）；模特恒为 None
+            "person_group_id": getattr(person, "person_group_id", None),
         }
 
     def _link_id_col(self):
@@ -114,12 +116,21 @@ class PersonServiceBase:
         platform: str | None = None,
         sort: str = "newest",
         face_registered_only: bool = False,
+        grouped: bool = False,
     ) -> tuple[list[dict], int]:
         """分页查询（含素材数统计与多维筛选），返回 (items, total)。
 
         人脸检测筛选约束：
         - face_registered_only=true：仅保留已注册人脸库的人物（确保人脸检测
           只匹配候选人脸库内的人）
+
+        人物组折叠（方案 B，仅穿搭博主）：
+        - grouped=true 时按 person_group_id 折叠：同组只返回一条主记录
+          （素材数最多者），组内其余账号放 ``group_members`` 数组，附
+          ``group_platforms`` 供前端展示多平台徽标；
+        - 折叠仅在「不指定平台」时生效：按平台筛选是单平台视角，保持平铺
+          （同组该平台账号各自显示，但仍带 person_group_id 便于前端提示）；
+        - 折叠后分页/排序以主记录为准。
         """
         assert self.model is not None and self.link_model is not None
         model, link_model = self.model, self.link_model
@@ -158,6 +169,10 @@ class PersonServiceBase:
         if face_registered_only:
             stmt = stmt.where(model.face_embedding.isnot(None))
 
+        # 人物组折叠：仅穿搭博主且不指定平台时生效（平铺分页交给 _list_grouped）
+        if grouped and self.model is Blogger and not platform:
+            return await self._list_grouped(db, stmt, sort, page, size)
+
         # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数倒序）
         if sort == "name":
             stmt = stmt.order_by(model.name.asc(), model.id.desc())
@@ -174,6 +189,99 @@ class PersonServiceBase:
         rows = (await db.execute(stmt)).all()
         items = [self._to_dict(p, cnt) for p, cnt in rows]
         return items, total
+
+    async def _list_grouped(
+        self,
+        db: AsyncSession,
+        stmt,
+        sort: str,
+        page: int,
+        size: int,
+    ) -> tuple[list[dict], int]:
+        """人物组折叠列表：同组只返回主记录，分页以主记录为准。
+
+        主账号确定规则：组手动指定（primary_blogger_id）优先；
+        否则素材数最多者；同数取 id 较小者（先建）。
+        折叠后按主记录在内存排序/分页（SQL 排序对折叠列表无意义）。
+        """
+        rows = (await db.execute(stmt)).all()
+
+        # 收集有组的 id → 组手动主账号（一次查出全部组）
+        from app.models.person import PersonGroup
+
+        group_ids = {
+            person.person_group_id
+            for person, _cnt in rows
+            if person.person_group_id is not None
+        }
+        manual_primary: dict[int, int] = {}
+        if group_ids:
+            group_rows = await db.execute(
+                select(PersonGroup.id, PersonGroup.primary_blogger_id).where(
+                    PersonGroup.id.in_(group_ids)
+                )
+            )
+            manual_primary = {
+                gid: pid
+                for gid, pid in group_rows.all()
+                if pid is not None
+            }
+
+        # 按组折叠：主记录 = 手动指定优先，否则素材数最多（同数取 id 小者）
+        groups: dict[int | None, list[tuple]] = {}
+        for person, cnt in rows:
+            groups.setdefault(person.person_group_id, []).append((person, cnt))
+
+        def _sort_key(item: tuple) -> tuple:
+            # (素材数倒序, id 正序)：主账号 = 素材数最多者
+            return (-item[1], item[0].id)
+
+        folded: list[dict] = []
+        for gid, members in groups.items():
+            members.sort(key=_sort_key)
+            if gid is None:
+                # 独立账号：各自一行（不折叠）
+                for person, cnt in members:
+                    folded.append(self._to_dict(person, cnt))
+                continue
+            # 手动指定的主账号优先；否则素材数最多者
+            manual = manual_primary.get(gid)
+            if manual is not None:
+                primary = next(
+                    (m for m in members if m[0].id == manual), members[0]
+                )
+            else:
+                primary = members[0]
+            item = self._to_dict(primary[0], primary[1])
+            # 组内其余账号（含素材数），供前端展开显示
+            item["group_members"] = [
+                self._to_dict(m[0], m[1])
+                for m in members
+                if m[0].id != primary[0].id
+            ]
+            # 组内平台去重列表（多平台徽标）
+            item["group_platforms"] = sorted(
+                {m[0].platform for m in members}
+            )
+            folded.append(item)
+
+        # 折叠后分页/排序以主记录为准
+        total = len(folded)
+        if sort == "name":
+            folded.sort(key=lambda x: (x["name"], x["id"]))
+        elif sort == "count":
+            folded.sort(key=lambda x: (-x["inspiration_count"], x["id"]))
+        else:
+            folded.sort(
+                key=lambda x: (
+                    x["created_at"] is not None,
+                    x["created_at"],
+                    x["id"],
+                ),
+                reverse=True,
+            )
+        start = (page - 1) * size
+        return folded[start : start + size], total
 
     async def get(self, db: AsyncSession, person_id: int) -> Blogger | Model:
         """按 ID 获取主体，不存在抛 PersonNotFoundError。"""

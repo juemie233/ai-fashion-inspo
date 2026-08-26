@@ -14,6 +14,7 @@ from app.models.person import (
     Model,
     ModelPhoto,
     ModelPhotoSet,
+    PersonGroup,
 )
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
 from app.models.scraper import ScraperSchedule, ScraperTask
@@ -36,6 +37,7 @@ __all__ = [
     "InspirationModel",
     "ModelPhoto",
     "ModelPhotoSet",
+    "PersonGroup",
     "BloggerFaceEmbedding",
     "InspirationFaceDetection",
     "ScraperTask",

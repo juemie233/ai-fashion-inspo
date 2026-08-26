@@ -64,6 +64,16 @@ class Blogger(_PersonBaseFields, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    # 人物组（方案 B）：同一现实人物在多个平台的账号集合。
+    # person_group_id 为空 = 独立账号；非空 = 与组内其它账号声明为同一人。
+    # 组被删除时（ondelete=SET NULL）账号回退为独立，不级联删账号。
+    person_group_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("person_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # 关联关系
     inspirations: Mapped[list["InspirationBlogger"]] = relationship(
         "InspirationBlogger",
@@ -79,6 +89,13 @@ class Blogger(_PersonBaseFields, Base):
     face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
         "InspirationFaceDetection",
         back_populates="matched_blogger",
+    )
+    person_group: Mapped["PersonGroup | None"] = relationship(
+        "PersonGroup",
+        back_populates="bloggers",
+        # person_groups 与 bloggers 间有多条外键（primary_blogger_id 等），
+        # 必须显式声明本关系走 person_group_id，否则 mapper 配置报歧义
+        foreign_keys="Blogger.person_group_id",
     )
 
     def __repr__(self) -> str:
@@ -250,6 +267,44 @@ class ModelPhoto(Base):
 
     def __repr__(self) -> str:
         return f"<ModelPhoto(id={self.id}, set_id={self.set_id})>"
+
+
+class PersonGroup(Base):
+    """人物组：同一现实人物在多个平台（抖音/小红书）的账号集合。
+
+    方案 B（账号关联，保留双账号）：同一人两个平台的博主记录各自保留，
+    通过 ``person_group_id`` 声明为同一人；组内账号信息无损，按平台
+    采集/浏览能力不受影响。组名初始取组内主账号名，可手动改。
+
+    仅穿搭博主（bloggers）参与分组；职业模特（models）暂不分组。
+    """
+
+    __tablename__ = "person_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128))  # 组名（默认取主账号名）
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # 手动指定的主账号（可选）：为空时主账号自动取「素材数最多者」；
+    # 设置后列表折叠以该账号为主，不受素材数变化影响
+    primary_blogger_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("bloggers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # 关联关系：组内博主（按 person_group_id 关联；组删除时账号回退独立）
+    bloggers: Mapped[list["Blogger"]] = relationship(
+        "Blogger",
+        back_populates="person_group",
+        foreign_keys="Blogger.person_group_id",
+    )
+    primary_blogger: Mapped["Blogger | None"] = relationship(
+        "Blogger",
+        foreign_keys=[primary_blogger_id],
+    )
+
+    def __repr__(self) -> str:
+        return f"<PersonGroup(id={self.id}, name={self.name})>"
 
 
 class BloggerEnrichmentSkip(Base):

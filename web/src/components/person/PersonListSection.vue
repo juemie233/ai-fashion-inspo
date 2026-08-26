@@ -2,7 +2,10 @@
 /** 人物列表区（穿搭博主/职业模特共用）：搜索筛选、表格、导入（博主专属）、新建/编辑/删除。
  *
  * 编排层：核心逻辑在 usePersonList / useBloggerImport，补全与跳过管理在
- * PersonEnrichManager（内部 useBloggerEnrich），本组件只做组装与事件接线。 */
+ * PersonEnrichManager（内部 useBloggerEnrich），本组件只做组装与事件接线。
+ *
+ * 人物组（方案 B，仅博主）：同组折叠为一条主记录（多平台徽标），
+ * 展开行显示组内其余账号；展开/绑定操作在 usePersonList 中实现。 */
 
 import { ref } from 'vue'
 import type { Person } from '@shared/types/person'
@@ -14,6 +17,8 @@ import PersonTopList from '@/components/person/PersonTopList.vue'
 import PersonEnrichManager from '@/components/person/PersonEnrichManager.vue'
 import IpStatsPanel from '@/components/person/IpStatsPanel.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
+import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
+import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{ kind: 'blogger' | 'model' }>()
 
@@ -33,6 +38,8 @@ const {
   topPersons,
   missingTotal,
   loadMissingCount,
+  expandedGroupIds,
+  setExpandedGroupIds,
 } = usePersonList(props.kind)
 
 const { importResult, importError, handleImportCsv, dismissImportResult } = useBloggerImport(
@@ -127,7 +134,49 @@ function afterEnrich() {
         :bordered="false"
         :scroll="{ x: 1160 }"
         :pagination="false"
-      />
+        :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
+        :on-expanded-change="
+          props.kind === 'blogger'
+            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(Number))
+            : undefined
+        "
+      >
+        <template #expand-row="{ record }">
+          <!-- 人物组展开行：显示组内其余账号（方案 B） -->
+          <div v-if="(record as Person).group_members?.length" class="group-expand">
+            <div class="group-expand-title">
+              同一个人物（{{
+                PERSON_PLATFORM_LABELS[(record as Person).group_platforms?.[0] ?? 'other']
+              }}
+              {{
+                (record as Person).group_platforms?.length
+                  ? `+${(record as Person).group_platforms!.length - 1}`
+                  : ''
+              }}
+              …共 {{ (record as Person).group_members!.length + 1 }} 个账号）
+            </div>
+            <div
+              v-for="m in (record as Person).group_members!"
+              :key="m.id"
+              class="group-member"
+              @click="goDetail(m)"
+            >
+              <img
+                v-if="m.face_thumb_path || m.avatar_path"
+                :src="getFileUrl(m.face_thumb_path || (m.avatar_path as string))"
+                :alt="m.name"
+                class="group-member-avatar"
+              />
+              <span v-else class="group-member-avatar-fallback">{{ m.name.slice(0, 1) }}</span>
+              <span class="group-member-name">{{ m.name }}</span>
+              <a-tag size="small">{{ PERSON_PLATFORM_LABELS[m.platform] ?? m.platform }}</a-tag>
+              <span class="group-member-count">{{ m.inspiration_count ?? 0 }} 素材</span>
+            </div>
+            <div class="group-expand-hint">点击账号查看该平台素材</div>
+          </div>
+          <div v-else class="group-expand-empty">无同组账号</div>
+        </template>
+      </a-table>
 
       <a-pagination
         v-if="store.total > store.size"
@@ -210,5 +259,66 @@ function afterEnrich() {
   display: flex;
   gap: 4px;
   align-items: center;
+}
+
+/* 人物组展开行（方案 B） */
+.group-expand {
+  padding: 4px 8px 8px 32px;
+}
+.group-expand-title {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+.group-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 0 8px 8px 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  background: #fafafa;
+}
+.group-member:hover {
+  border-color: #2a78d6;
+  background: #eef4fd;
+}
+.group-member-name {
+  font-weight: 500;
+  font-size: 13px;
+}
+.group-member-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.group-member-avatar-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #eef4fd;
+  color: #2a78d6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+.group-member-count {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.group-expand-empty {
+  padding: 8px 8px 8px 32px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.group-expand-hint {
+  font-size: 11px;
+  color: #c0c4cc;
+  margin-top: 4px;
 }
 </style>

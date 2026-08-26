@@ -15,6 +15,7 @@ import PersonStyleProfile from '@/components/person/detail/PersonStyleProfile.vu
 import PersonPhotoSets from '@/components/person/detail/PersonPhotoSets.vue'
 import PersonBloggerFaceRegister from '@/components/person/detail/PersonBloggerFaceRegister.vue'
 import PersonModelFaceRegister from '@/components/person/detail/PersonModelFaceRegister.vue'
+import PersonGroupCard from '@/components/person/detail/PersonGroupCard.vue'
 
 const {
   personId,
@@ -66,6 +67,9 @@ const {
           @edit="showForm = true"
           @delete="handleDelete"
         />
+
+        <!-- 人物组（方案 B）：同一现实人物跨平台账号（仅穿搭博主） -->
+        <PersonGroupCard v-if="kind === 'blogger'" :person="detail" @changed="loadDetail" />
 
         <!-- 照片组（模特写真，仅职业模特展示；与穿搭素材分离） -->
         <PersonPhotoSets

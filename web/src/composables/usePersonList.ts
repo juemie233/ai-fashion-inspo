@@ -143,6 +143,15 @@ export function usePersonList(kind: PersonKind) {
     router.push({ path: `/persons/${person.id}`, query })
   }
 
+  // ── 人物组展开（方案 B）：同组折叠为一条主记录，展开行显示组内账号 ──
+
+  const expandedGroupIds = ref<number[]>([])
+
+  /** 同步展开行 keys（Arco onExpandedChange 返回全部展开行，天然覆盖展开与折叠） */
+  function setExpandedGroupIds(keys: number[]) {
+    expandedGroupIds.value = keys
+  }
+
   /** 搜索输入：回车触发（兼容中文输入法，compositionend 期间不误触） */
   function onSearchKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.isComposing) {
@@ -193,6 +202,23 @@ export function usePersonList(kind: PersonKind) {
       width: 90,
       render: ({ record }) => {
         const row = record as Person
+        // 人物组（方案 B）：组内多平台时显示多平台徽标（如 小红书+抖音）
+        if (row.group_platforms?.length) {
+          return h('span', { style: 'white-space: nowrap' }, [
+            row.group_platforms.map((p, i) =>
+              h(
+                'span',
+                {
+                  key: p + i,
+                  style:
+                    'display:inline-block;margin-right:4px;padding:1px 6px;border-radius:4px;' +
+                    'background:#eef4fd;color:#2a78d6;font-size:12px;',
+                },
+                PERSON_PLATFORM_LABELS[p] || p,
+              ),
+            ),
+          ])
+        }
         return PERSON_PLATFORM_LABELS[row.platform] || row.platform
       },
     },
@@ -329,5 +355,7 @@ export function usePersonList(kind: PersonKind) {
     loadMissingCount,
     loadAndSync,
     restoreFromUrl,
+    expandedGroupIds,
+    setExpandedGroupIds,
   }
 }

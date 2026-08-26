@@ -53,6 +53,9 @@ async def list_bloggers(
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
     # 人脸检测约束：仅保留已注册人脸库的博主（确保只匹配候选人脸库内的人）
     face_registered_only: bool = Query(False, description="仅返回已注册人脸库的博主"),
+    # 人物组折叠（方案 B）：同组只返回主记录，组内账号放 group_members；
+    # 仅在未指定平台时生效（平台筛选是单平台视角，保持平铺）
+    grouped: bool = Query(True, description="按人物组折叠（同组只显示主账号）"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """分页获取博主列表，支持名称搜索、平台筛选与人脸检测约束。
@@ -60,6 +63,11 @@ async def list_bloggers(
     人脸检测约束：
     - face_registered_only=true：仅返回已注册人脸库的博主，确保人脸检测
       只匹配候选人脸库内的人；防止将库外人物误匹配
+
+    人物组折叠（方案 B）：
+    - grouped=true（默认）：同组只返回主账号（素材数最多者或手动指定），
+      组内其余账号在 group_members 中，供前端展开显示与多平台徽标；
+    - 平台筛选时自动平铺（同组该平台账号各自显示）。
     """
     items, total = await blogger_service.list_items(
         db,
@@ -69,11 +77,14 @@ async def list_bloggers(
         platform=platform,
         sort=sort,
         face_registered_only=face_registered_only,
+        grouped=grouped,
     )
     # 批量补齐人脸缩略图（一次查询候选检测 + 缺失缓存裁剪），返回 face_thumb_path
     thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
     for item in items:
         item["face_thumb_path"] = thumbs.get(item["id"])
+        for member in item.get("group_members") or []:
+            member["face_thumb_path"] = thumbs.get(member["id"])
 
     return {"items": items, "total": total, "page": page, "size": size}
 
@@ -269,6 +280,102 @@ async def suggest_bloggers(
     for item in items:
         item["face_thumb_path"] = thumbs.get(item["id"])
     return items
+
+
+# ── 人物组（方案 B）：同一现实人物跨平台账号绑定 ──
+# 注意：/groups/* 静态段路由必须先于 /{blogger_id} 声明，否则会被单段
+# 动态路由吞掉（blogger_id 解析为 "groups" → 422）。
+
+
+@router.post("/groups/link", status_code=status.HTTP_200_OK)
+async def link_bloggers_group_api(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把两个博主绑定为同一人（新建组），或把博主并入已有组。
+
+    请求体（二选一）:
+        {"blogger_id": 1, "target_blogger_id": 2}   # 两账号组成新组
+        {"blogger_id": 1, "group_id": 5}            # 并入已有组
+
+    返回: {"group_id", "group_name", "primary_blogger_id", "member_ids"}
+    """
+    from app.services.person.person_groups import link_bloggers
+
+    blogger_id = body.get("blogger_id")
+    target_blogger_id = body.get("target_blogger_id")
+    group_id = body.get("group_id")
+    if not isinstance(blogger_id, int):
+        raise HTTPException(status_code=422, detail="blogger_id 必须为整数")
+    if target_blogger_id is not None and not isinstance(target_blogger_id, int):
+        raise HTTPException(status_code=422, detail="target_blogger_id 必须为整数")
+    if group_id is not None and not isinstance(group_id, int):
+        raise HTTPException(status_code=422, detail="group_id 必须为整数")
+    try:
+        return await link_bloggers(db, blogger_id, target_blogger_id, group_id)
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except PersonConflictError as e:
+        raise HTTPException(status_code=409, detail=e.message)
+
+
+@router.post("/groups/unlink", status_code=status.HTTP_200_OK)
+async def unlink_blogger_group_api(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把博主移出人物组（变独立账号）；组内仅剩 1 个账号时自动清理组。
+
+    请求体: {"blogger_id": 1}
+    """
+    from app.services.person.person_groups import unlink_blogger
+
+    blogger_id = body.get("blogger_id")
+    if not isinstance(blogger_id, int):
+        raise HTTPException(status_code=422, detail="blogger_id 必须为整数")
+    try:
+        return await unlink_blogger(db, blogger_id)
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except PersonConflictError as e:
+        raise HTTPException(status_code=409, detail=e.message)
+
+
+@router.post("/groups/{group_id}/set-primary", status_code=status.HTTP_200_OK)
+async def set_primary_blogger_api(
+    group_id: int,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """手动指定组内主账号（列表折叠展示位）。
+
+    请求体: {"blogger_id": 1}
+    """
+    from app.services.person.person_groups import set_primary_blogger
+
+    blogger_id = body.get("blogger_id")
+    if not isinstance(blogger_id, int):
+        raise HTTPException(status_code=422, detail="blogger_id 必须为整数")
+    try:
+        return await set_primary_blogger(db, group_id, blogger_id)
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except PersonConflictError as e:
+        raise HTTPException(status_code=409, detail=e.message)
+
+
+@router.get("/groups/{group_id}", status_code=status.HTTP_200_OK)
+async def group_info_api(
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查询人物组完整信息（组内各账号 + 主账号）。"""
+    from app.services.person.person_groups import get_group_info
+
+    try:
+        return await get_group_info(db, group_id)
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
 
 
 @router.get("/{blogger_id}", response_model=BloggerDetailOut)
