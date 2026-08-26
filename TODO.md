@@ -7,19 +7,109 @@
 
 ### 数据备份与灾难恢复
 
-**背景：** 素材库核心数据——SQLite 数据库（fashion_inspo.db）、素材文件（storage/）、向量库（lancedb/）、环境配置（.env）——均被 .gitignore 排除，不在任何版本控制或备份中。目前 3000+ 张素材、标签体系、图像/文本向量全部依赖本地磁盘；一旦磁盘损坏、误删，或误触发 `/api/ai/reset?confirm=yes`（会清空全部数据与文件），损失不可逆。
+**背景：** 3000+ 素材的 DB、storage/、lancedb/、.env 均在本地磁盘且被 gitignore。现有 `scripts/backup_data.sh` 只做手动全量备份、无恢复脚本、无校验、无自动调度、无破坏性操作兜底。已通过 wayfinder 完成 8 张规划票（见 `docs/wayfinder/backup-disaster-recovery/MAP.md`），目标为 **L2 级恢复、RPO ≤1 天**：主备份落 `E:\fashion-inspo-backups\`（独立 SSD），单份约 ~1GB（排除可重建的 `_crop_backup` 881MB），恢复即用（缩略图/向量一并备份，不在恢复时重建）。
 
-**目标：**
+**总体约束：** 脚本只生成/提供命令，**不自动注册计划任务、不自动启停服务**；注释中文；reset 等核心链路须补后端测试；改完提示用户重启。
 
-- 提供完整导出/导入：素材文件 + 数据库元数据 + 标签 + 向量（向量可重建）
-- 定期自动备份脚本（数据库快照 + 文件增量/全量），可接入 Windows 计划任务
-- 破坏性操作加防呆：reset、清空垃圾桶、批量删除前二次确认 + 可选「先备份再执行」
+**现有资产（保留，不重复造）：** `backup_data.sh` 的 DB 一致性快照（Python `sqlite3.backup`，WAL 下在线安全）与运行时配置循环保留逻辑。
 
-**验收标准：**
+---
 
-- 一键导出后可在全新目录/另一台机器完整恢复（素材、标签、收藏、审核状态齐全）
-- 备份脚本可定时执行，并保留多份历史快照
-- 破坏性接口不再无提示清空
+#### 块 1：增强备份脚本（T3/T4/T6/T7） ✅ 已完成（53abf4e）
+
+改动：重构 `scripts/backup_data.sh`，新增 `scripts/backup_task.bat`。
+
+1. 目标路径参数化 + 同盘拒绝：必须显式传入目标；缺省或解析为与项目同盘时强警告并非零退出，`--allow-same-disk` 可强跳；`.bat` 默认传 `E:/fashion-inspo-backups`。
+2. 并发保护：`backup.lock` 目录锁（Git Bash 用 mkdir 原子判定），获取失败说明已有备份在跑，退出 0 并记日志（防 schtasks 凌晨任务与启动补备撞车）。
+3. DB 双重导出：保留 `sqlite3.backup()` → `fashion_inspo.db`；追加 Python `iterdump()` → `fashion_inspo.sql`（不依赖 sqlite3 CLI）。
+4. storage 范围（T3 决议）：robocopy `/XD` 排除列表从 `logs tmp` 扩展为 `logs tmp _crop_backup _crop_dups cookies debug faces`；`images/person_photos/trash/videos/thumbnails/person_thumbnails/lancedb` 由 `/E` 自然覆盖；记录源端文件数/字节数，备份后与目标端比对。
+5. 校验（T7）：备份 `.db` 跑 `PRAGMA integrity_check`（必须 ok）；`.sql` 用内存库 `executescript` 试导确认可导入；必备目录存在性 + `.env` 必须存在（其余 prompt/model 配置缺失只告警）；生成 `manifest.json`（时间戳、git HEAD、关键表 count、各目录文件数+总字节数）；可选 `--verify-hash` 开启全量 SHA-256（默认关）。
+6. 成功/失败标记 + 退出码：全过写 `SUCCESS`（含校验摘要）退出 0；任一失败写 `FAILED` + `backup.log` 原因、非零退出、**不删失败备份**（留证）；日志同时写 `备份目录/backup.log` 与 `backend/storage/logs/backup.log`。
+7. rotation（T6）：成功后按目录名 `YYYY-MM-DD_HHMMSS` 清理——最近 7 个日备全留，更早的周日备份留最近 4 个（周备），其余删；优先删带 `FAILED` 的；只删匹配时间戳格式的目录，避免误删手动文件。
+8. `backup_task.bat`：绝对路径调 Git Bash 执行脚本并传 E 盘目标，供 schtasks 调用。
+
+**验收：** 手动跑一次产物含 `.db`/`.sql`/`storage/`/配置/`manifest.json`/`SUCCESS`；模拟 DB 损坏/缺目录走 FAILED 路径；用伪造时间戳目录验证 rotation。
+
+---
+
+#### 块 2：恢复脚本 + runbook（T8） ✅ 已完成
+
+新增：`scripts/restore_data.sh`、`scripts/restore_task.bat`、`docs/backup-restore.md`。
+
+**`restore_data.sh <备份目录> [--force] [--allow-overwrite] [--from-sql]`**：
+1. 前置检查（不改数据）：目录含 `SUCCESS`（无则拒绝，`--force` 可强跳）；磁盘剩余 ≥ 备份大小 ×1.1；检测端口 18888/进程，服务在运行则**打印停止命令并退出**（不自行 kill）；目标已有数据且无 `--allow-overwrite` 则拒绝。
+2. 恢复前快照：现有 `fashion_inspo.db`（含 `-wal/-shm`）和 storage 移到 `backend/storage/_pre_restore_snapshot/<时间戳>/`，保留 7 天（选错备份可回退）。
+3. 还原 DB：默认用 `.db`（删现有 WAL 三件套后复制到位）；`--from-sql` 时用 `fashion_inspo.sql` 在全新库 `executescript`。
+4. 还原 storage：robocopy 镜像回 T3 必背目录；`_crop_backup/logs/tmp` 恢复后不存在属预期，不告警。
+5. 还原配置：`.env`、prompt/model 配置、`web/.env.local` 拷回原位。
+6. 恢复后校验：`integrity_check` + 关键表 count 与 `manifest.json` 比对 + 抽查 DB 中 `file_path` 对应文件存在；不一致非零退出但**不自动回滚**（人工用步骤 2 快照决定）。
+7. 结尾打印手动启动命令，不自动起服务。
+
+**`docs/backup-restore.md`（新机器从零恢复 checklist）：**
+Python 3.12/Node 20+/Git/ffmpeg/Git Bash → `git clone` 并 checkout 备份记录的 git HEAD → venv + `pip install -r requirements.txt` → 运行 `restore_data.sh` → `alembic upgrade head` → Ollama 安装 + `ollama pull qwen3-vl:8b-instruct` 与 `all-minilm`（模型不入备份）→ 可选 face-service（独立 Python 3.10 + insightface）→ 前端 `npm install && npm run build` → 核对 `.env`（API Key/路径在新机可能需调整）→ 启动验证 `GET /api/health`/素材数/抽查图片/搜索 → 重新注册 schtasks → 建议每季度用一份备份在临时目录演练一次。注明备份含 `.env` 密钥，勿放未加密网盘。
+
+**验收：** 在临时目录对一份测试备份跑通 restore 全流程并通过恢复后校验；`_crop_backup` 缺失不告警。
+
+---
+
+#### 块 3：后端启动补备 task（T6）
+
+改动：`backend/app/main.py`（lifespan）、`backend/app/config.py`（新增配置项），逻辑可抽 `backend/app/services/backup_service.py`。
+
+- 仿现有 `_scraper_schedule_loop` / `_sweep_expired_trash`，在 lifespan 新增 `_startup_backup_loop()` 常驻 task：启动延迟 **10 分钟**（避开迁移/初始化竞争）；读备份目标目录最新一份含 `SUCCESS` 的时间戳，当天已成功 或 距上次成功 ≤20 小时则跳过，否则用 `asyncio.create_subprocess_exec`（项目已有此模式）异步 spawn `bash scripts/backup_data.sh E:/fashion-inspo-backups`，stdout/stderr 追加到 `storage/logs/backup.log`，不阻塞 HTTP；进程内标志位防重复触发；失败只 `logger.warning` 不重试（次日 03:00 定时兜底）。
+- `.env` 新增 `BACKUP_ON_STARTUP=true`（默认开）、`BACKUP_TARGET_PATH`（备份目标，默认 E 盘路径）。
+- reset 快照与启动清理共用一个 lifespan 清理 task，两套目录各自保留 7 天（见 fog 项）。
+- 20 小时为初值，注释标注按实测备份耗时微调。
+
+**验收（补测试，mock subprocess 不真跑备份）：** 当天有 SUCCESS → 跳过；无 SUCCESS 且超 20 小时 → 触发；`BACKUP_ON_STARTUP=false` 时不启动 task。
+
+---
+
+#### 块 4：reset 防呆（T5，核心链路，须补测试）
+
+改动：`backend/app/routers/ai_reset.py`、`web/src/components/model/SettingsPanel.vue`、`backend/app/main.py`（清理 task）、`backend/tests/`、`.gitignore`。
+
+**P0 — `DELETE /api/ai/reset` 四重防护：**
+1. 执行前自动快照（轻量兜底）：reset 删除前把当前 `fashion_inspo.db`（含 WAL）和 T3 必背 storage 目录移动/复制到 `storage/_pre_reset_snapshot/YYYYMMDD_HHMMSS/`，保留 7 天（用移动+必要复制而非全量 robocopy，避免阻塞 reset）；该快照在 C 盘只防误操作、不防磁盘损坏（定时备份职责）。
+2. 确认文字参数：后端在 `confirm=yes` 外新增必须精确匹配的字段（如 `confirm_text=DELETE`），不符返回 400；前端把第二次 popconfirm 改为「输入 `DELETE` 才能启用确认按钮」的输入框。
+3. API Key 裸奔兜底：未配 `api_key` 的开发模式下仍强制要求确认文字；绑定非回环地址（非 127.0.0.1/localhost/::1）且无 Key 时直接 **403 拒绝**；其余破坏性接口维持现状。
+4. 补审计留痕：写 `audit_logs`（action=`reset`，记录删除的表行数、文件数、快照路径、来源 IP）。
+
+**P1/P2（清空垃圾桶/批量物理删除/单条删除）：** 维持现状（软删除层 + popconfirm + audit_logs），不额外加强。
+
+`.gitignore` 加入 `storage/_pre_reset_snapshot/`、`storage/_pre_restore_snapshot/`。
+
+**必补后端测试：** 确认文字缺失/错误 → 400；非回环无 Key → 403；快照确实生成；`audit_logs` 写入；reset 仍能正确清空 15 张表与 images/thumbnails/videos/LanceDB。
+
+---
+
+#### 块 5：文档与注册命令（收尾）
+
+- 在 `docs/backup-restore.md` 给出用户手动执行的 schtasks 命令（不自动注册）：
+  `schtasks /Create /SC DAILY /TN "FashionInspo-Backup" /TR "<绝对路径>\scripts\backup_task.bat" /ST 03:00 /F`
+  配套：`schtasks /Query /TN "FashionInspo-Backup"`、`/Run`（手动触发）、`/Delete /F`。
+- README 增补备份/恢复章节，链接到 `docs/backup-restore.md`。
+- 完成后提示用户：手动执行 schtasks 注册、重启后端使块 3/块 4 生效。
+
+---
+
+#### fog 项落地决定
+
+| 迷雾项 | 落地处理 |
+| ------ | -------- |
+| reset 快照与定时备份清理统一 | 共用一个 lifespan 启动清理 task，两套目录（`_pre_reset_snapshot`/`_pre_restore_snapshot`）各自 7 天保留 |
+| 启动补备节流阈值 | 初值「当天已成功跳过 / 距上次 >20 小时」，注释标注按实测微调 |
+| 备份并发保护 | `backup.lock` 目录锁，块 1 脚本与块 3 启动补备互斥 |
+| 前端展示「上次成功备份时间」 | 本轮不做（非必需增强），留作后续 |
+
+#### 明确排除（out of scope）
+
+- 不备份代码/git 历史（已在 Gitee+GitHub 双远程，仅记录 `git_head.txt`）。
+- 不备份 Ollama 模型文件、face-service 独立 Python 环境、Chrome profile/cookies（runbook 给重建步骤）。
+- 不做高可用/实时复制/多机容灾；不在脚本内实现云厂商 API 上传（可把目标指向网盘挂载目录由客户端自行同步）。
+- 不把 `_crop_backup` 与 `lancedb_backup_*` 纳入常规备份（可重建/临时副本；排除 `_crop_backup` 的明确代价：恢复后无法撤销已做过的裁剪，裁剪后成品图仍在）。
+
+**建议执行顺序：** 块 1（备份脚本基础）→ 块 2（恢复脚本+runbook）→ 块 4（reset 防呆，核心链路单独提交）→ 块 3（启动补备）→ 块 5（文档收尾）。
 
 ## 中优先级
 
