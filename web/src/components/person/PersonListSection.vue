@@ -137,7 +137,7 @@ function afterEnrich() {
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
         :on-expanded-change="
           props.kind === 'blogger'
-            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(Number))
+            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(String))
             : undefined
         "
       >

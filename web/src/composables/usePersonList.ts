@@ -144,11 +144,13 @@ export function usePersonList(kind: PersonKind) {
   }
 
   // ── 人物组展开（方案 B）：同组折叠为一条主记录，展开行显示组内账号 ──
+  // 注意：Arco 的 expandedRowKeys 通过严格相等（includes）与 rowKey 比较，
+  // rowKey 返回 String(id)，因此这里必须存字符串，否则展开永远不生效
 
-  const expandedGroupIds = ref<number[]>([])
+  const expandedGroupIds = ref<string[]>([])
 
   /** 同步展开行 keys（Arco onExpandedChange 返回全部展开行，天然覆盖展开与折叠） */
-  function setExpandedGroupIds(keys: number[]) {
+  function setExpandedGroupIds(keys: string[]) {
     expandedGroupIds.value = keys
   }
 
