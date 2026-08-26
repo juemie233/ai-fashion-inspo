@@ -1,0 +1,2 @@
+# 锁定脚本行尾：.sh 必须保持 LF（Git Bash 依赖），防止 core.autocrlf 检出时转成 CRLF
+*.sh text eol=lf

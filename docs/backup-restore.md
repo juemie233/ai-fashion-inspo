@@ -67,7 +67,17 @@ schtasks /Run    /TN "FashionInspo-Backup"            REM 立即手动触发一�
 schtasks /Delete /TN "FashionInspo-Backup" /F         REM 删除计划任务
 ```
 
-**双通道补充：** 除每日定时外，后端启动并稳定运行约 10 分钟后会自动补备一次（若当天已成功备份或距上次成功 ≤20 小时则跳过）。该通道由 `.env` 的 `BACKUP_ON_STARTUP` 控制（块 3 实现后可用）。两个通道通过 `backup.lock` 目录锁互斥，不会并发。
+**双通道补充：** 除每日定时外，后端启动并稳定运行约 10 分钟后会自动补备一次（若距上次成功备份 ≤20 小时则跳过），之后每 6 小时复查。该通道由以下 `.env` 配置控制（均有默认值）：
+
+```ini
+BACKUP_ON_STARTUP=true                # 设为 false 关闭启动补备
+BACKUP_TARGET_PATH=E:/fashion-inspo-backups
+BACKUP_STARTUP_DELAY_MINUTES=10       # 启动后延迟多久再检查
+BACKUP_MIN_INTERVAL_HOURS=20          # 距上次成功备份小于此时长则跳过
+BACKUP_TICK_HOURS=6                   # 复查周期
+```
+
+两个通道（schtasks 凌晨定时 + 后端启动补备）通过 `backup.lock` 目录锁互斥，不会并发；启动补备的日志同样写入 `backend/storage/logs/backup.log`。
 
 ---
 
@@ -151,7 +161,7 @@ scripts\restore_task.bat
 | 场景 | 做法 |
 | ---- | ---- |
 | 误删了一批素材（已进垃圾桶） | 优先用界面「垃圾桶 → 恢复」；若已清空垃圾桶，用最近备份整库恢复（会回滚到备份时点）。 |
-| 误触发 `DELETE /api/ai/reset` | 块 4 实现后 reset 会自动写 `storage/_pre_reset_snapshot/`；若需整库回退，用最近备份按 4.1 恢复。 |
+| 误触发 `DELETE /api/ai/reset` | reset 执行前会自动快照 DB 与素材目录到 `storage/_pre_reset_snapshot/`（保留 7 天）；若需整库回退，用最近备份按 4.1 恢复。 |
 | 怀疑 DB 文件损坏 | 先用 `.db` 快照恢复；若 `integrity_check` 不过，改用 `--from-sql` 从 `fashion_inspo.sql` 重建。 |
 | 备份失败 | 看 `backend/storage/logs/backup.log` 与失败目录下的 `backup.log`/`FAILED`；失败目录保留最近 3 份。 |
 | 备份盘空间不够 | rotation 自动保留约 11 份（~17GB）；可手动删除更早的时间戳目录，或调小脚本里的 daily/weekly 保留数。 |

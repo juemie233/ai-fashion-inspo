@@ -887,6 +887,25 @@ bash scripts/restart.sh
 
 **说明**：`X-API-Key` 为简单共享密钥认证，仅防误操作/未授权调用；不替代 HTTPS/用户体系。破坏性接口清单维护于 `backend/app/utils/auth.py` 的 `DESTRUCTIVE_ROUTES`，新增破坏性接口时在其中追加一行即可。
 
+## 数据备份与恢复
+
+核心数据（SQLite 库、`storage/` 素材、LanceDB 向量、`.env`）均不进 git，需自行备份。项目提供备份/恢复脚本，支持每日自动备份 + 后端启动补备（双通道）。
+
+```bash
+# 手动备份到独立物理盘（推荐）
+bash scripts/backup_data.sh E:/fashion-inspo-backups
+
+# 从某份备份恢复（同机回滚，会先快照当前数据）
+bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-overwrite
+```
+
+- **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/backup_task.bat`（注册命令见 [备份恢复指南](docs/backup-restore.md)）。
+- **启动后自动补备**：后端启动 10 分钟后，若距上次成功备份超过 20 小时则自动补跑一次（`.env` 的 `BACKUP_ON_STARTUP=false` 可关闭）。两个通道通过 `backup.lock` 互斥。
+- **保留策略**：日备 7 份 + 周日周备 4 份；备份含 DB 一致性快照 + SQL 明文双保险 + 素材/缩略图/向量，备份后自动校验（integrity_check + 文件数/字节数比对）并写 `SUCCESS`/`FAILED` 标记。
+- **数据重置（reset）防呆**：执行前自动快照 DB 与素材目录到 `storage/_pre_reset_snapshot/`（保留 7 天），需输入 `DELETE` 二次确认，未配 API Key 时非本机访问直接拒绝。
+
+完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、常见场景）见 **[docs/backup-restore.md](docs/backup-restore.md)**。
+
 ## 自动化测试
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
