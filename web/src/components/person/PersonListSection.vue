@@ -130,14 +130,14 @@ function afterEnrich() {
         :columns="columns"
         :data="store.persons"
         :loading="store.loading"
-        :row-key="(row: Person) => String(row.id)"
+        row-key="id"
         :bordered="false"
         :scroll="{ x: 1160 }"
         :pagination="false"
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
         :on-expanded-change="
           props.kind === 'blogger'
-            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(String))
+            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(Number))
             : undefined
         "
       >
