@@ -85,6 +85,66 @@ def test_cluster_empty_input():
     assert result["group_count"] == 0
 
 
+def test_load_unmatched_dedupes_same_inspiration(client, upload):
+    """同一素材的多张相似脸只保留一张参与聚类（按素材去重）。
+
+    复现线上问题：一张素材内同一人的多张检测框（高相似度）被聚进同一组，
+    导致组内出现同一素材重复。修复后同一素材只取一张代表脸参与聚类。
+    """
+    from app.database import async_session
+    from app.models.face import InspirationFaceDetection
+    from app.services.face_cluster import _load_unmatched_faces
+
+    insp_id = upload().json()["id"]
+
+    def _vec(main_axis: int) -> np.ndarray:
+        v = np.zeros(512, dtype=np.float32)
+        v[main_axis] = 1.0
+        return v
+
+    # 同一素材 4 张脸（前 3 张同一人高相似、第 4 张不同人）：
+    # 修复前全部参与聚类 → 同素材重复脸会聚进同一组；
+    # 修复后按素材去重 → 只保留 det_score 最高的一张参与聚类。
+    async def _seed():
+        async with async_session() as db:
+            for i, vec in enumerate([_vec(0), _vec(0), _vec(0), _vec(1)]):
+                db.add(
+                    InspirationFaceDetection(
+                        inspiration_id=insp_id,
+                        face_index=i,
+                        embedding=vec.tobytes(),
+                        det_score=0.9 - i * 0.1,
+                        match_status=None,
+                    )
+                )
+            await db.commit()
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    async def _load():
+        async with async_session() as db:
+            return await _load_unmatched_faces(db)
+
+    ids, embs = asyncio.run(_load())
+    # 同一素材去重后只剩 1 张（保留 det_score 最高 0.9 的那张）
+    assert len(ids) == 1
+
+    async def _check():
+        async with async_session() as db:
+            row = (
+                await db.execute(
+                    InspirationFaceDetection.__table__.select().where(
+                        InspirationFaceDetection.id.in_(ids)
+                    )
+                )
+            ).first()
+            assert row.det_score == 0.9
+
+    asyncio.run(_check())
+
+
 # ═══════════════════════════════════════════════════════════════
 #  集成（TestClient：任务创建 → 执行 → 结果查询）
 # ═══════════════════════════════════════════════════════════════

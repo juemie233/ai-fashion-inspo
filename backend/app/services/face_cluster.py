@@ -83,11 +83,19 @@ async def _load_unmatched_faces(db: AsyncSession) -> tuple[list[int], np.ndarray
 
     - 未匹配定义：matched_blogger_id/model_id 均空；
     - 排除人工「不匹配」（match_excluded）与已确认（match_status=confirmed）；
-    - 过滤非 512 维脏数据（实测真实库存在异常维度，直接丢弃并在日志记录）。
+    - 过滤非 512 维脏数据（实测真实库存在异常维度，直接丢弃并在日志记录）；
+    - **按素材去重**：同一素材的多张人脸（同一人的不同检测框/姿态）本质上
+      是同一个人，只保留 det_score 最高的一张参与聚类——避免同素材重复脸
+      被聚进同一组导致组内出现同一素材的重复项。
     """
     rows = (
         await db.execute(
-            select(InspirationFaceDetection.id, InspirationFaceDetection.embedding).where(
+            select(
+                InspirationFaceDetection.id,
+                InspirationFaceDetection.inspiration_id,
+                InspirationFaceDetection.det_score,
+                InspirationFaceDetection.embedding,
+            ).where(
                 InspirationFaceDetection.embedding != b"",
                 InspirationFaceDetection.match_excluded.is_(False),
                 InspirationFaceDetection.matched_blogger_id.is_(None),
@@ -98,11 +106,18 @@ async def _load_unmatched_faces(db: AsyncSession) -> tuple[list[int], np.ndarray
     ids: list[int] = []
     valid: list[np.ndarray] = []
     dropped = 0
-    for det_id, blob in rows:
+    # 同素材去重：inspiration_id → (det_score, id, embedding)，保留 det_score 最高者
+    best_by_insp: dict[str, tuple[float, int, np.ndarray]] = {}
+    for det_id, insp_id, det_score, blob in rows:
         emb = np.frombuffer(blob, dtype=np.float32)
         if emb.shape[0] != FACE_DIM:
             dropped += 1
             continue
+        score = det_score if det_score is not None else 0.0
+        prev = best_by_insp.get(insp_id)
+        if prev is None or score > prev[0]:
+            best_by_insp[insp_id] = (score, det_id, emb)
+    for _score, det_id, emb in best_by_insp.values():
         ids.append(det_id)
         valid.append(emb)
     if dropped:

@@ -495,15 +495,13 @@ async function assignGroup(group: FaceClusterGroup) {
     Message.warning('请选择要指派的人物')
     return
   }
+  const targetIds = group.detection_ids ?? []
+  if (targetIds.length === 0) {
+    Message.warning('该组没有可指派的人脸')
+    return
+  }
   groupActionBusy.value = true
   try {
-    // 整组指派：取该组全部 detection_id（勾选优先于整组）
-    const targetIds =
-      groupChecked.value.size > 0 ? [...groupChecked.value] : (group.detection_ids ?? [])
-    if (targetIds.length === 0) {
-      Message.warning('该组没有可指派的人脸')
-      return
-    }
     const result = await confirmFaceScan(
       'confirm',
       targetIds.map((id) => ({
@@ -513,7 +511,7 @@ async function assignGroup(group: FaceClusterGroup) {
       })),
     )
     Message.success(
-      `已指派 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
+      `已整组指派 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
     )
     groupChecked.value.clear()
     await Promise.all([loadClusterGroups(), loadUnmatched()])
@@ -522,6 +520,54 @@ async function assignGroup(group: FaceClusterGroup) {
   } finally {
     groupActionBusy.value = false
   }
+}
+
+/** 指派勾选的人脸给所选人物（部分选择后指定博主） */
+async function assignCheckedGroup() {
+  if (groupChecked.value.size === 0) {
+    Message.warning('请先勾选要指派的人脸')
+    return
+  }
+  if (!clusterAssignPersonId.value) {
+    Message.warning('请选择要指派的人物')
+    return
+  }
+  groupActionBusy.value = true
+  try {
+    const result = await confirmFaceScan(
+      'confirm',
+      [...groupChecked.value].map((id) => ({
+        detection_id: id,
+        person_type: clusterAssignKind.value,
+        person_id: clusterAssignPersonId.value,
+      })),
+    )
+    Message.success(
+      `已指派勾选 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
+    )
+    groupChecked.value.clear()
+    await Promise.all([loadClusterGroups(), loadUnmatched()])
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '指派勾选失败'))
+  } finally {
+    groupActionBusy.value = false
+  }
+}
+
+/** 全选当前组全部人脸（跨分页拉全量后勾选；非仅当前页） */
+async function selectAllGroup(group: FaceClusterGroup) {
+  const allIds = group.detection_ids ?? []
+  if (allIds.length === 0) {
+    Message.warning('该组没有可勾选的人脸')
+    return
+  }
+  groupChecked.value = new Set(allIds)
+  Message.success(`已全选该组 ${allIds.length} 张人脸`)
+}
+
+/** 清空当前组勾选 */
+function clearGroupChecked() {
+  groupChecked.value = new Set()
 }
 
 // ── 汇总刷新 ──
@@ -1132,22 +1178,49 @@ function filterOption(input: string, option: { label?: string }): boolean {
                     <a-empty v-else description="该组暂无明细" size="small" />
                   </a-spin>
                   <div class="detail-actions">
-                    <a-pagination
-                      v-if="groupDetailTotal > 50"
-                      size="mini"
-                      :current="groupDetailPage"
-                      :page-size="50"
-                      :total="groupDetailTotal"
-                      @change="
-                        (p: number) => {
-                          groupDetailPage = p
-                          loadGroupDetail()
-                        }
-                      "
-                    />
-                    <a-typography-text type="secondary" style="font-size: 12px">
-                      已勾选 {{ groupChecked.size }} 张 · 整组指派无需勾选
-                    </a-typography-text>
+                    <a-space :size="8">
+                      <a-pagination
+                        v-if="groupDetailTotal > 50"
+                        size="mini"
+                        :current="groupDetailPage"
+                        :page-size="50"
+                        :total="groupDetailTotal"
+                        @change="
+                          (p: number) => {
+                            groupDetailPage = p
+                            loadGroupDetail()
+                          }
+                        "
+                      />
+                      <a-typography-text type="secondary" style="font-size: 12px">
+                        已勾选 {{ groupChecked.size }} / {{ g.size }} 张
+                      </a-typography-text>
+                    </a-space>
+                    <a-space :size="6">
+                      <a-button
+                        size="mini"
+                        :disabled="groupDetailLoading"
+                        @click="selectAllGroup(g)"
+                      >
+                        全选
+                      </a-button>
+                      <a-button
+                        size="mini"
+                        :disabled="groupChecked.size === 0"
+                        @click="clearGroupChecked"
+                      >
+                        清空
+                      </a-button>
+                      <a-button
+                        size="mini"
+                        type="primary"
+                        :loading="groupActionBusy"
+                        :disabled="groupChecked.size === 0 || !clusterAssignPersonId"
+                        @click="assignCheckedGroup"
+                      >
+                        指派勾选（{{ groupChecked.size }}）
+                      </a-button>
+                    </a-space>
                   </div>
                 </div>
               </div>
