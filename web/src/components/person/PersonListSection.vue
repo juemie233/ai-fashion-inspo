@@ -54,6 +54,17 @@ function afterEnrich() {
   void loadMissingCount()
   void store.reload()
 }
+
+/**
+ * 表格展开/折叠回调（仅博主表格配置了 expandable，模特不会触发）。
+ * 注意必须用 @expanded-change 事件语法：Arco 内部 emit("expandedChange")，
+ * 编译器会把事件名 camelize 为 onExpandedChange 才能匹配；写成
+ * :on-expanded-change 的 v-bind 形式时 prop 名保持 kebab-case，事件会丢失。
+ */
+function handleExpandedChange(keys: Array<string | number>) {
+  if (props.kind !== 'blogger') return
+  setExpandedGroupIds(keys.map(Number))
+}
 </script>
 
 <template>
@@ -135,11 +146,7 @@ function afterEnrich() {
         :scroll="{ x: 1160 }"
         :pagination="false"
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
-        :on-expanded-change="
-          props.kind === 'blogger'
-            ? (keys: Array<string | number>) => setExpandedGroupIds(keys.map(Number))
-            : undefined
-        "
+        @expanded-change="handleExpandedChange"
       >
         <template #expand-row="{ record }">
           <!-- 人物组展开行：显示组内其余账号（方案 B） -->
