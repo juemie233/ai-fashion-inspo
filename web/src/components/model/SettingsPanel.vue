@@ -129,6 +129,20 @@ async function rollbackPrompt(index: number) {
   }
 }
 
+/** 保存当前 Prompt 为版本，并展开版本历史面板（多语句逻辑收敛于此，
+ *  避免模板内多行表达式被 prettier 展开后无法被 Vue 模板编译器解析） */
+async function handleSavePromptVersion() {
+  await savePromptVersion()
+  promptVersionsVisible.value = true
+  await loadPromptVersions()
+}
+
+/** 切换版本历史面板可见性并刷新列表 */
+async function handleTogglePromptVersions() {
+  promptVersionsVisible.value = !promptVersionsVisible.value
+  await loadPromptVersions()
+}
+
 // ===== 单图测试 =====
 const testInspirationId = ref('')
 const testFile = ref<File | null>(null)
@@ -597,23 +611,13 @@ const configColumns = [
           分析结果（按模型隔离）。改动后建议先用「单图测试」验证效果。
         </p>
 
-        <a-button
-          size="mini"
-          style="margin-top: 8px"
-          @click="
-            savePromptVersion()
-            promptVersionsVisible = true
-            loadPromptVersions()
-          "
+        <a-button size="mini" style="margin-top: 8px" @click="handleSavePromptVersion"
           >保存版本</a-button
         >
         <a-button
           size="mini"
           style="margin-top: 8px; margin-left: 6px"
-          @click="
-            promptVersionsVisible = !promptVersionsVisible
-            loadPromptVersions()
-          "
+          @click="handleTogglePromptVersions"
         >
           {{ promptVersionsVisible ? '隐藏历史' : '版本历史' }}
           {{ promptVersions.length > 0 ? `(${promptVersions.length})` : '' }}
