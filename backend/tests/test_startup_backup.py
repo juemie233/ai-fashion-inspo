@@ -128,10 +128,25 @@ async def test_spawn_backup_calls_script(monkeypatch, tmp_path):
 
     rc = await backup_service._spawn_backup("E:/fashion-inspo-backups")
     assert rc == 0
-    # 命令形如 bash <scripts/backup_data.sh> E:/fashion-inspo-backups
-    assert captured["args"][0] == "bash"
+    # 命令形如 <bash> <scripts/backup_data.sh> E:/fashion-inspo-backups；
+    # bash 可能是 PATH 中的 "bash"，也可能是探测到的绝对路径（服务环境）
+    assert Path(captured["args"][0]).name.lower() in ("bash", "bash.exe")
     assert str(captured["args"][1]).endswith("backup_data.sh")
     assert captured["args"][2] == "E:/fashion-inspo-backups"
     # stderr 合并到 stdout，cwd 为项目根
     assert captured["kwargs"]["stderr"] == backup_service.asyncio.subprocess.STDOUT
     assert Path(captured["kwargs"]["cwd"]).name == "fashion-inspo"
+
+
+@pytest.mark.asyncio
+async def test_spawn_backup_returns_minus1_without_bash(monkeypatch, tmp_path):
+    """PATH 与常见安装路径都没有 bash 时，_spawn_backup 返回 -1 且不执行。"""
+    async def _unexpected(*args, **kwargs):
+        raise AssertionError("不应执行 create_subprocess_exec")
+
+    monkeypatch.setattr(backup_service, "_resolve_bash", lambda: None)
+    monkeypatch.setattr(
+        backup_service.asyncio, "create_subprocess_exec", _unexpected
+    )
+    rc = await backup_service._spawn_backup("E:/fashion-inspo-backups")
+    assert rc == -1

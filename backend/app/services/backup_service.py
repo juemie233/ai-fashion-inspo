@@ -29,6 +29,31 @@ _STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{6})$")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKUP_SCRIPT = PROJECT_ROOT / "scripts" / "backup_data.sh"
 
+# Git Bash 常见安装路径（与 scripts/backup_task.bat 保持一致）。
+# 后端若以服务方式运行，PATH 中往往没有 bash，需按绝对路径探测。
+_BASH_CANDIDATES = (
+    r"D:\Program Files (x86)\Git\bin\bash.exe",
+    r"C:\Program Files\Git\bin\bash.exe",
+    r"C:\Program Files (x86)\Git\bin\bash.exe",
+)
+
+
+def _resolve_bash() -> str | None:
+    """解析 Git Bash 可执行文件路径。
+
+    优先取 PATH 中的 bash（开发环境通常可解析）；找不到时回退到常见
+    安装路径（服务运行场景）。仍找不到返回 None，由调用方记录错误并跳过。
+    """
+    import shutil
+
+    found = shutil.which("bash")
+    if found:
+        return found
+    for cand in _BASH_CANDIDATES:
+        if Path(cand).exists():
+            return cand
+    return None
+
 
 def latest_success_backup_time(target_root: Path) -> datetime | None:
     """返回目标根目录下最近一份含 SUCCESS 标记的备份时间。
@@ -75,11 +100,19 @@ def should_run_startup_backup(
 
 
 async def _spawn_backup(target: str) -> int:
-    """异步执行 backup_data.sh，返回退出码；stdout/stderr 追加到 backup.log。"""
+    """异步执行 backup_data.sh，返回退出码；stdout/stderr 追加到 backup.log。
+
+    找不到 Git Bash（服务环境 PATH 无 bash 且常见路径不存在）时返回 -1，
+    由调用方记录错误，不阻塞启动。
+    """
+    bash_exe = _resolve_bash()
+    if not bash_exe:
+        logger.error("[启动补备] 未找到 Git Bash（bash.exe），无法执行 backup_data.sh，本次补备跳过")
+        return -1
+
     log_path = settings.storage_root / "logs" / "backup.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    bash_exe = "bash"
     cmd = [bash_exe, str(BACKUP_SCRIPT), target]
     logger.info(f"[启动补备] 执行: {' '.join(cmd)}")
 
@@ -101,6 +134,9 @@ async def _startup_backup_loop() -> None:
     异常不中断循环，只记日志。
     """
     target = settings.backup_target_path
+    if not target or not target.strip():
+        logger.error("[启动补备] 未配置 backup_target_path，启动补备已禁用（请在 .env 设置 BACKUP_TARGET_PATH）")
+        return
     target_root = Path(target)
     delay = settings.backup_startup_delay_minutes * 60
     tick = settings.backup_tick_hours * 3600
@@ -121,6 +157,9 @@ async def _startup_backup_loop() -> None:
                 rc = await _spawn_backup(target)
                 if rc == 0:
                     logger.info("[启动补备] 备份成功")
+                elif rc == -1:
+                    # 找不到 bash 已在 _spawn_backup 内记 error，此处不再重复告警
+                    pass
                 else:
                     logger.warning(f"[启动补备] 备份失败，退出码 {rc}（详见 backup.log）")
             else:

@@ -48,11 +48,11 @@ def test_reset_rejects_wrong_confirm_text(client):
 # ── 防护 3：未配 Key + 非回环 → 403 ──
 
 
-def test_reset_loopback_host_allowed_without_key(client, monkeypatch):
+def test_reset_loopback_host_allowed_without_key(client, monkeypatch, upload):
     """确认参数齐全 + 本机回环来源，即使未配 Key 也放行（开发模式）。"""
     monkeypatch.setattr(settings, "api_key", "")
     # 上传一条数据，确认 reset 实际被执行（返回 200 + 清空）
-    client.post("/api/upload", files={"file": ("a.webp", _tiny_png(), "image/webp")})
+    upload()
     r = _reset(client)
     assert r.status_code == 200
 
@@ -80,14 +80,6 @@ def test_reset_non_loopback_allowed_with_key(client, monkeypatch):
 
 
 # ── 防护 1：执行前快照 ──
-
-
-def _tiny_png() -> bytes:
-    # 1x1 PNG
-    return bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-        "890000000d49444154789c6360000002000100e221bc330000000049454e44ae426082"
-    )
 
 
 def test_reset_creates_snapshot(client, upload):

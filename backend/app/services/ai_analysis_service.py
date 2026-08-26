@@ -34,60 +34,6 @@ class AIAnalysisNotFoundError(Exception):
         self.message = message
 
 
-class InvalidMediaError(Exception):
-    """素材不是可分析的图片（路由层转为 400）。"""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-async def trigger_analysis(
-    db: AsyncSession, inspiration_id: str, non_image_message: str
-) -> str:
-    """校验素材是否可分析，返回可分析的图片文件路径。
-
-    素材不存在抛 AIAnalysisNotFoundError；非图片素材抛 InvalidMediaError。
-
-    参数:
-        db: 数据库会话
-        inspiration_id: 素材 UUID
-        non_image_message: 非图片素材的提示文案（单个分析与重试的文案不同）
-    """
-    result = await db.execute(
-        select(Inspiration).where(Inspiration.id == inspiration_id)
-    )
-    inspiration = result.scalar_one_or_none()
-    if not inspiration:
-        raise AIAnalysisNotFoundError("灵感素材未找到")
-    if inspiration.media_type != "image":
-        raise InvalidMediaError(non_image_message)
-    return inspiration.file_path
-
-
-async def get_batch_analyze_targets(
-    db: AsyncSession, inspiration_ids: list[str]
-) -> tuple[list[str], int]:
-    """查询可分析的图片素材，返回 (可分析 ID 列表, 跳过数量)。
-
-    无任何可分析素材时抛 AIAnalysisNotFoundError。
-    """
-    result = await db.execute(
-        select(Inspiration).where(
-            Inspiration.id.in_(inspiration_ids),
-            Inspiration.media_type == "image",
-            Inspiration.deleted_at.is_(None),
-        )
-    )
-    inspirations = result.scalars().all()
-    if not inspirations:
-        raise AIAnalysisNotFoundError("未找到任何可分析的图片素材")
-
-    ids = [insp.id for insp in inspirations]
-    skipped = len(inspiration_ids) - len(inspirations)
-    return ids, skipped
-
-
 async def get_analysis_queue_stats(db: AsyncSession) -> dict:
     """统计分析队列状态：总图片数 / 已分析 / 未分析 / 失败。"""
     # 已分析过（仅统计标签分析日志且素材仍存在，排除质量审核日志）

@@ -145,9 +145,11 @@ echo ">>> [2/5] 备份素材存储（robocopy）..."
 STORAGE_OK=0
 if [ -d backend/storage ]; then
   if command -v robocopy >/dev/null 2>&1; then
-    # 退出码 0-7 成功；/XD 目录名在源下任意层级匹配，支持通配
+    # 退出码 0-7 成功；/XD 目录名在源下任意层级匹配，支持通配。
+    # _pre_reset_snapshot / _pre_restore_snapshot 为 reset/restore 前的 7 天临时
+    # 安全网（内含整库素材副本），不应重复打进长期备份，故一并排除。
     robocopy "backend/storage" "$DEST/storage" //E \
-      //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* \
+      //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
       //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
     RC=$?
     if [ "$RC" -le 7 ]; then
