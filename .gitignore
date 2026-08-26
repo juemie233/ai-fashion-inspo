@@ -64,6 +64,9 @@ backend/prompt_versions.json
 prompt.txt
 backend/prompt.txt
 
+# 人物简介生成 Prompt（用户自定义，运行时数据）
+backend/person_bio_prompt.json
+
 # 数据库容量评估（含真实数据统计，不公开）
 docs/数据库容量评估.md
 docs/database-capacity-assessment.en.md

@@ -436,6 +436,17 @@ async def blogger_inspirations(
     return result
 
 
+@router.post("/{blogger_id}/generate-bio")
+async def generate_blogger_bio(
+    blogger_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """根据该博主的标签画像调用本地大模型生成一段简介（不自动入库，由前端确认后保存）。"""
+    from app.routers._person_bio import generate_person_bio_endpoint
+
+    return await generate_person_bio_endpoint(db, blogger_service, blogger_id)
+
+
 # ── 博主人脸注册（素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）──
 
 

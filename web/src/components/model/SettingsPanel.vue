@@ -78,6 +78,12 @@ const editedPrompt = ref('')
 const promptLoading = ref(false)
 const promptSaving = ref(false)
 
+// ===== 人物简介生成 Prompt =====
+const bioPrompt = ref('')
+const editedBioPrompt = ref('')
+const bioPromptLoading = ref(false)
+const bioPromptSaving = ref(false)
+
 interface PromptVersion {
   prompt: string
   saved_at: string
@@ -421,6 +427,52 @@ function resetPrompt() {
   Message.info('已恢复为上次保存的 Prompt')
 }
 
+// ===== 人物简介生成 Prompt =====
+
+async function loadBioPrompt() {
+  bioPromptLoading.value = true
+  try {
+    const { data } = await apiClient.get<{ prompt: string; default: string; length: number }>(
+      '/ai/person-bio-prompt',
+    )
+    bioPrompt.value = data.prompt
+    editedBioPrompt.value = data.prompt
+  } catch {
+    /* 忽略 */
+  } finally {
+    bioPromptLoading.value = false
+  }
+}
+
+async function saveBioPrompt() {
+  bioPromptSaving.value = true
+  try {
+    await apiClient.put('/ai/person-bio-prompt', { prompt: editedBioPrompt.value })
+    bioPrompt.value = editedBioPrompt.value
+    Message.success('人物简介 Prompt 已更新')
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '保存人物简介 Prompt 失败'))
+  } finally {
+    bioPromptSaving.value = false
+  }
+}
+
+function resetBioPromptChanges() {
+  editedBioPrompt.value = bioPrompt.value
+  Message.info('已恢复为上次保存的 Prompt')
+}
+
+async function restoreDefaultBioPrompt() {
+  try {
+    const { data } = await apiClient.delete<{ prompt: string }>('/ai/person-bio-prompt')
+    bioPrompt.value = data.prompt
+    editedBioPrompt.value = data.prompt
+    Message.success('已恢复默认人物简介 Prompt')
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '恢复默认失败'))
+  }
+}
+
 async function handleSetActiveModel(name: string) {
   const ok = await store.setActiveModel(name)
   if (ok) {
@@ -437,6 +489,7 @@ onMounted(() => {
   loadSettings()
   loadSamplingParams()
   loadPrompt()
+  loadBioPrompt()
   loadConfigOverview()
 })
 
@@ -597,6 +650,41 @@ const configColumns = [
           style="font-size: 12px; color: #999; margin-top: 4px"
         >
           暂无版本历史，修改 prompt 后点击「保存版本」创建
+        </div>
+      </a-spin>
+    </a-card>
+
+    <!-- 人物简介生成 Prompt -->
+    <a-card title="人物简介生成 Prompt" size="small">
+      <p style="font-size: 12px; color: #999; margin: 0 0 8px">
+        用于「人物管理 → 详情 → 编辑 → AI 生成简介」。可用占位符：
+        <code>{kind}</code> <code>{name}</code> <code>{platform}</code>{' '}
+        <code>{ip_location}</code> <code>{top_tags}</code>{' '}
+        <code>{category_summary}</code>
+      </p>
+      <a-spin :loading="bioPromptLoading" style="display: block">
+        <a-textarea
+          v-model="editedBioPrompt"
+          :auto-size="{ minRows: 6, maxRows: 16 }"
+          placeholder="输入人物简介生成 Prompt..."
+          style="font-family: monospace; font-size: 13px"
+        />
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 12px;
+          "
+        >
+          <a-space>
+            <a-button type="primary" size="small" @click="saveBioPrompt" :loading="bioPromptSaving"
+              >保存 Prompt</a-button
+            >
+            <a-button size="small" @click="resetBioPromptChanges">撤销修改</a-button>
+            <a-button size="small" @click="restoreDefaultBioPrompt">恢复默认</a-button>
+          </a-space>
+          <span style="font-size: 12px; color: #999">全局共用（person_bio_prompt.json）</span>
         </div>
       </a-spin>
     </a-card>

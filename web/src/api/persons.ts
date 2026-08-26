@@ -171,6 +171,12 @@ function createPersonApi(kind: 'bloggers' | 'models') {
       return data
     },
 
+    /** 调用本地大模型根据该人物的标签画像生成一段简介（不入库，需手动保存） */
+    async generateBio(id: number): Promise<{ bio: string }> {
+      const { data } = await apiClient.post<{ bio: string }>(`${base}/${id}/generate-bio`)
+      return data
+    },
+
     /** 给素材批量关联人物（幂等） */
     async link(inspirationId: string, personIds: number[]) {
       const { data } = await apiClient.post<{ added: PersonBrief[]; count: number }>(

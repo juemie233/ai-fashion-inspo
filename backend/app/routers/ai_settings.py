@@ -21,6 +21,12 @@ from app.services.model_prompt import (
     get_model_prompt,
     set_model_prompt,
 )
+from app.services.person_bio_prompt import (
+    DEFAULT_PERSON_BIO_PROMPT,
+    get_person_bio_prompt,
+    reset_person_bio_prompt,
+    set_person_bio_prompt,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -295,3 +301,48 @@ async def copy_model_config_endpoint(payload: dict) -> dict[str, str]:
     await copy_model_config(source, destination)
     await copy_model_prompt(source, destination)
     return {"message": f"已将 '{source}' 的配置复制到 '{destination}'"}
+
+
+# ============ 人物简介生成 Prompt ============
+#
+# 单一全局模板（不按模型隔离），通过 {kind}/{name}/{platform}/{ip_location}/
+# {top_tags}/{category_summary} 占位符注入人物信息；前端「人物管理 → 详情
+# → AI 生成简介」按钮使用。模板错误（未知占位符）会在生成时返回 502。
+
+
+@router.get("/person-bio-prompt")
+async def get_person_bio_prompt_endpoint() -> dict:
+    """获取人物简介生成 Prompt 与默认值（供设置页编辑与「恢复默认」）。"""
+    return {
+        "prompt": get_person_bio_prompt(),
+        "default": DEFAULT_PERSON_BIO_PROMPT,
+        "length": len(get_person_bio_prompt()),
+        "is_default": get_person_bio_prompt() == DEFAULT_PERSON_BIO_PROMPT,
+    }
+
+
+@router.put("/person-bio-prompt")
+async def update_person_bio_prompt_endpoint(body: dict) -> dict[str, str | int]:
+    """更新人物简介生成 Prompt（持久化到 person_bio_prompt.json）。"""
+    prompt = body.get("prompt", "")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt 不能为空")
+    try:
+        await set_person_bio_prompt(prompt)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "message": f"人物简介 Prompt 已更新（{len(prompt)} 字符）",
+        "length": len(prompt),
+    }
+
+
+@router.delete("/person-bio-prompt")
+async def reset_person_bio_prompt_endpoint() -> dict[str, str | int]:
+    """删除自定义 Prompt，回退到默认模板。"""
+    reset_person_bio_prompt()
+    return {
+        "message": "已恢复默认人物简介 Prompt",
+        "prompt": DEFAULT_PERSON_BIO_PROMPT,
+        "length": len(DEFAULT_PERSON_BIO_PROMPT),
+    }

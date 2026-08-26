@@ -174,6 +174,17 @@ async def model_inspirations(
     return result
 
 
+@router.post("/{model_id}/generate-bio")
+async def generate_model_bio(
+    model_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """根据该模特的标签画像调用本地大模型生成一段简介（不自动入库，由前端确认后保存）。"""
+    from app.routers._person_bio import generate_person_bio_endpoint
+
+    return await generate_person_bio_endpoint(db, model_service, model_id)
+
+
 # ── 模特照片组（写真：与穿搭素材分离，仅按文件夹整组导入）──
 # 注意：照片组路由统一挂在 /{model_id}/photo-sets 之下（三段路径），
 # 不会与单段动态路由 /{model_id} 冲突。
