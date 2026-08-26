@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.tag import InspirationTag, Tag
 from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
-from app.utils.tag_normalizer import normalize_tag_name
+from app.utils.tag_normalizer import is_similar_category_tag, normalize_tag_name
 
 if TYPE_CHECKING:
     from app.models.tag import Tag
@@ -72,6 +72,18 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
         "Leg_Posture": "Leg_Posture"
     }
 
+    # 预先提取风格大类标签名：氛围标签若与风格标签近似（如「甜美」vs「甜美风」），
+    # 只保留风格标签，丢弃氛围标签，避免两个大类出现语义重复标签。
+    style_values = data.get("style") or []
+    if not isinstance(style_values, list):
+        style_values = [style_values] if style_values else []
+    style_names: list[str] = []
+    for value in style_values:
+        for name in extract_tag_names(value):
+            norm = normalize_tag_name(name)
+            if norm:
+                style_names.append(norm)
+
     # 处理简单列表型标签（风格、版型等） — 兼容 null 值
     for key, category in category_map.items():
         values = data.get(key) or []
@@ -81,8 +93,14 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
             extracted = extract_tag_names(value)
             for name in extracted:
                 name = normalize_tag_name(name)
-                if name:
-                    yield name, category, 0.8
+                if not name:
+                    continue
+                # 氛围标签去重：与任一风格标签近似则跳过（保留风格标签）
+                if category == "Atmosphere" and any(
+                    is_similar_category_tag(name, s) for s in style_names
+                ):
+                    continue
+                yield name, category, 0.8
 
     # 处理结构化单品标签 — 兼容 type/color 为列表、features 为字符串
     items = data.get("items") or []

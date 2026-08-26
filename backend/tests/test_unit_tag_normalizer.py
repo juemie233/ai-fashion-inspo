@@ -1,6 +1,7 @@
 """tag_normalizer 纯函数单测：同义词归一化、相似度、标签名校验。"""
 
 from app.utils.tag_normalizer import (
+    is_similar_category_tag,
     normalize_tag_name,
     string_similarity,
     validate_tag_name,
@@ -36,6 +37,29 @@ def test_string_similarity_fallback_without_rapidfuzz(monkeypatch):
     assert string_similarity("白色", "白色") == 1.0
     assert string_similarity("白色", "黑色") < 1.0
     assert 0.0 <= string_similarity("法式", "法式风") <= 1.0
+
+
+def test_is_similar_category_tag():
+    """跨大类近似判定：剥离风/风格/感/氛围/系/款等后缀后核心相同即近似。"""
+    # 典型场景：差一个后缀字
+    assert is_similar_category_tag("甜美", "甜美风") is True
+    assert is_similar_category_tag("法式", "法式感") is True
+    assert is_similar_category_tag("通勤", "通勤风") is True
+    assert is_similar_category_tag("甜美风", "甜美") is True
+    # 多后缀：甜美风格 → 甜美
+    assert is_similar_category_tag("甜美", "甜美风格") is True
+    # 完全相同
+    assert is_similar_category_tag("学院风", "学院风") is True
+    # 兜底：后缀表未覆盖、仅差一字（编辑距离 ≥ 0.8）
+    assert is_similar_category_tag("通勤", "通勤装") is True
+    # 不近似：语义不同的标签
+    assert is_similar_category_tag("甜美", "暗黑") is False
+    assert is_similar_category_tag("法式", "日系") is False
+    # 不近似：父子标签不应误判（核心词包含规则已刻意不采用）
+    assert is_similar_category_tag("复古", "复古运动") is False
+    # 空值
+    assert is_similar_category_tag("", "甜美") is False
+    assert is_similar_category_tag("甜美", "") is False
 
 
 def test_validate_tag_name_ok():

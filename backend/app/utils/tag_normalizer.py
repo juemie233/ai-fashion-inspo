@@ -97,6 +97,48 @@ def string_similarity(a: str, b: str) -> float:
         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
+# 大类标签近似判定时剥离的常见后缀（风格/氛围高频词缀）
+# 模型常输出「甜美」(style) 与「甜美风」(Atmosphere)，仅差这类后缀字
+_CATEGORY_TAG_SUFFIXES = ("氛围", "风格", "风", "感", "系", "款")
+
+
+def _strip_category_suffix(name: str) -> str:
+    """剥离大类标签末尾的高频后缀词，返回核心词（如「甜美风」→「甜美」）。"""
+    prev = None
+    while prev != name:
+        prev = name
+        for suffix in _CATEGORY_TAG_SUFFIXES:
+            # 至少保留一个字，避免把「风」「系」等单字标签剥空
+            if name.endswith(suffix) and len(name) - len(suffix) >= 1:
+                name = name[: -len(suffix)]
+                break
+    return name
+
+
+def is_similar_category_tag(a: str, b: str) -> bool:
+    """判断两个大类标签是否语义近似（用于跨大类去重）。
+
+    典型场景：风格「甜美」与氛围「甜美风」、风格「法式」与氛围「法式感」
+    仅差一两个高频后缀字，应视为同一标签。判定规则（任一命中即近似）：
+    - 完全相同；
+    - 剥离「风/风格/感/氛围/系/款」等后缀后的核心词相同；
+    - 编辑距离相似度 ≥ 0.8（兜底后缀未覆盖、仅差一字的情况）。
+
+    刻意不使用核心词包含关系：那会把「复古」与「复古运动」这类父子标签
+    误判为重复。
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+
+    core_a = _strip_category_suffix(a)
+    core_b = _strip_category_suffix(b)
+    if core_a and core_b and core_a == core_b:
+        return True
+    return string_similarity(a, b) >= 0.8
+
+
 def validate_tag_name(
     name: str, max_length: int | None = None
 ) -> tuple[bool, str | None]:
