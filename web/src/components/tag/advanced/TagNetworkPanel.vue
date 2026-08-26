@@ -76,16 +76,17 @@ const graphOption = computed<EChartsOption | null>(() => {
   const maxUsage = Math.max(1, ...data.nodes.map((n) => n.usage_count))
   return {
     tooltip: {
-      formatter: (p: any) => {
+      formatter: (p: { dataType?: string; data?: NetworkNode | { value?: number } }) => {
         if (p.dataType === 'node') {
-          const n = p.data as NetworkNode
+          const n = p.data as NetworkNode | undefined
+          if (!n) return ''
           return (
             `${n.name}<br/>使用 ${n.usage_count} 次 · 度 ${n.degree}` +
             (n.betweenness != null ? ` · 介数 ${n.betweenness}` : '') +
             (n.is_bridge ? '<br/><b style="color:#e34948">桥接节点</b>' : '')
           )
         }
-        if (p.dataType === 'edge') return `共现 ${p.data.value} 次`
+        if (p.dataType === 'edge') return `共现 ${p.data?.value ?? ''} 次`
         return ''
       },
     },

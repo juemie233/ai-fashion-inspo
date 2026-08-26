@@ -64,6 +64,32 @@ async def test_move_cycle_rejected(client):
     assert "后代" in data["errors"][0]["message"]
 
 
+async def test_move_batch_cycle_rejected(client):
+    """批内互移（A→B 且 B→A）→ 后一个被拒绝，最终不成环。
+
+    修复前两个移动各自基于旧快照检测都通过，执行后 A、B 互为父子成环；
+    修复后环检测沿「批内已计划的 parent 关系」上溯，第二个移动被拒绝。
+    """
+    a = _create_tag(client, "互移甲")
+    b = _create_tag(client, "互移乙")
+    r = client.post(
+        "/api/tags/move",
+        json={"moves": [{"tag_id": a["id"], "parent_id": b["id"]},
+                        {"tag_id": b["id"], "parent_id": a["id"]}]},
+    )
+    data = r.json()
+    # 第一个移动（A→B）无环合法执行；第二个（B→A）在已计划关系上成环被拒
+    assert data["moved"] == 1
+    assert len(data["errors"]) == 1
+    assert "后代" in data["errors"][0]["message"]
+
+    # 执行后不成环：B 在根层，A 在 B 下
+    roots = client.get("/api/tags/tree").json()
+    root_ids = {i["id"] for i in roots["items"]}
+    assert b["id"] in root_ids
+    assert a["id"] not in root_ids
+
+
 def test_move_missing_parent_error(client):
     """父标签不存在 → 错误汇总。"""
     a = _create_tag(client, "孤甲")

@@ -117,7 +117,10 @@ async def scan_tag_health(
         for p in pairs
     ]
 
-    # 健康评分：100 - 各问题占比扣分（占比 = 问题标签数 / 总数 × 100 百分点）
+    # 健康评分：100 - 各问题占比扣分（占比 = 问题标签数 / 总数 × 100 百分点）。
+    # 注意口径：counts.duplicate 用「涉及标签数」（去重后）而非 pair 数——
+    # 一个标签可能与多个标签重复，按标签占比扣分更符合「问题标签占比」语义；
+    # 而明细 issues.duplicate.count 用 pair 数（前端逐对展示）。两者有意不同。
     score = 100.0
     counts = {
         "orphan": len(orphan_ids),
@@ -200,19 +203,23 @@ async def get_health_issue_detail(
             {p["tag_a_id"] for p in page_pairs} | {p["tag_b_id"] for p in page_pairs}
         )
         tag_items = await _fetch_tag_items(db, ids)
+        # 扫描结果是历史快照，期间标签可能已被删除：过滤掉任一标签缺失的对，
+        # 避免响应里出现 null 导致前端渲染报错。
+        items = [
+            {
+                "tag_a": tag_items[p["tag_a_id"]],
+                "tag_b": tag_items[p["tag_b_id"]],
+                "similarity": p["similarity"],
+            }
+            for p in page_pairs
+            if p["tag_a_id"] in tag_items and p["tag_b_id"] in tag_items
+        ]
         return {
             "issue_type": issue_type,
             "total": total,
             "page": page,
             "size": size,
-            "items": [
-                {
-                    "tag_a": tag_items.get(p["tag_a_id"]),
-                    "tag_b": tag_items.get(p["tag_b_id"]),
-                    "similarity": p["similarity"],
-                }
-                for p in page_pairs
-            ],
+            "items": items,
         }
 
     tag_ids = issue.get("tag_ids", [])

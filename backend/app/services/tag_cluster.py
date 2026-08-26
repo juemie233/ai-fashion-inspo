@@ -17,11 +17,13 @@ import re
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.services.task_runners.common import _chunked
 from app.utils.tag_normalizer import string_similarity
 
-# 全角→半角区间（不含全角空格 0x3000，单独处理）
+# 全角→半角区间：\uFF01-\uFF5E 为全角标点/字母/数字，\u3000 为全角空格。
+# 全角空格在 _normalize_for_compare 中特判转半角空格（不参与去空白）。
 _FULLWIDTH_RE = re.compile("[\uFF01-\uFF5E\u3000]")
 
 
@@ -70,15 +72,21 @@ class _UnionFind:
 async def _cooccurrence_boost(
     db: AsyncSession, pairs: list[tuple[int, int, float, str]]
 ) -> list[tuple[int, int, float, str]]:
-    """共现辅助：候选对在同一素材共现 ≥ 2 次，相似度 + 0.1（封顶 1.0）。"""
+    """共现辅助：候选对在同一素材共现 ≥ 2 次，相似度 + 0.1（封顶 1.0）。
+
+    共现口径与使用次数一致：仅统计未删除素材的关联（垃圾桶素材不计）。
+    """
     if not pairs:
         return pairs
     involved = sorted({p[0] for p in pairs} | {p[1] for p in pairs})
     links: dict[int, set[str]] = {}
     for chunk in _chunked(involved):
         result = await db.execute(
-            select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
-                InspirationTag.tag_id.in_(chunk)
+            select(InspirationTag.inspiration_id, InspirationTag.tag_id)
+            .join(Inspiration, InspirationTag.inspiration_id == Inspiration.id)
+            .where(
+                InspirationTag.tag_id.in_(chunk),
+                Inspiration.deleted_at.is_(None),
             )
         )
         for insp_id, tag_id in result.all():

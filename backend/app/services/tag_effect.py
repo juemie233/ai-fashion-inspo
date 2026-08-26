@@ -13,6 +13,9 @@ from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
 from app.services.task_runners.common import _chunked
 
+# 组合统计的单素材活跃标签数上限：超过则跳过该素材（防组合爆炸）
+_MAX_TAGS_PER_INSPIRATION = 50
+
 
 async def get_trending_tags(
     db: AsyncSession, days: int = 30, top: int = 20
@@ -71,6 +74,10 @@ async def get_tag_combinations(
     """标签组合排行：活跃标签子集（使用次数 top 200）内两两共现计数。
 
     返回按共现次数降序的组合对（{tags: [名A, 名B], count}）。
+
+    性能护栏：单素材关联的活跃标签数超过 ``_MAX_TAGS_PER_INSPIRATION`` 时跳过
+    该素材的组合统计（组合数是标签数的平方，病态素材会拖垮接口；正常 AI 打标
+    一图仅数个到十几个标签，远低于阈值）。
     """
     top_result = await db.execute(
         select(Tag.id, func.count(InspirationTag.inspiration_id).label("cnt"))
@@ -101,6 +108,8 @@ async def get_tag_combinations(
 
     pair_count: dict[tuple[int, int], int] = {}
     for tag_set in insp_map.values():
+        if len(tag_set) > _MAX_TAGS_PER_INSPIRATION:
+            continue  # 病态素材（一次打了数十个活跃标签）：跳过，防组合爆炸
         sorted_ids = sorted(tag_set)
         for i in range(len(sorted_ids)):
             for j in range(i + 1, len(sorted_ids)):

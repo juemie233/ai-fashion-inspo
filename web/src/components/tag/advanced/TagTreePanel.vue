@@ -91,7 +91,13 @@ async function onDrop(info: {
     newParent = dropKey
   } else {
     const chain = findAncestors(treeData.value, dropKey)
-    newParent = chain && chain.length ? chain[chain.length - 1] : null
+    if (chain === null) {
+      // 目标节点尚未被懒加载到树数据中（未展开），无法解析其父级：
+      // 若按 null 处理会误把标签移到根，这里直接拒绝并提示展开后再拖。
+      Message.warning('目标节点尚未加载，无法移动到此位置，请先展开目标节点后再拖拽')
+      return
+    }
+    newParent = chain.length ? chain[chain.length - 1] : null
   }
   // 循环预检：新父节点的祖先链上不得出现被拖节点
   if (newParent != null) {

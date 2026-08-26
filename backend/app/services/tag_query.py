@@ -127,8 +127,12 @@ async def find_duplicate_tag_pairs(
                 continue
             for i in range(len(cat_tags)):
                 name_a = cat_tags[i].name
+                if not name_a:
+                    continue
                 for j in range(i + 1, len(cat_tags)):
                     name_b = cat_tags[j].name
+                    if not name_b:
+                        continue
                     # 首字不同直接跳过（中文重复几乎首字一定相同）
                     if name_a[0] != name_b[0]:
                         continue

@@ -212,6 +212,34 @@ async def find_similar_tags(
     return await asyncio.to_thread(_compute_similar)
 
 
+async def _collect_links(db: AsyncSession, tag_ids: list[int]) -> list[dict]:
+    """收集标签的全部素材关联明细（回滚重建关联用）。
+
+    删除标签会级联物理删除 inspiration_tags 行；回滚时仅重建 Tag 行是不够的，
+    需要把删除前的关联（素材/置信度/来源）留底在历史 meta 中，回滚一并恢复。
+    """
+    ids = [t for t in tag_ids if t]
+    if not ids:
+        return []
+    result = await db.execute(
+        select(
+            InspirationTag.inspiration_id,
+            InspirationTag.tag_id,
+            InspirationTag.confidence,
+            InspirationTag.source,
+        ).where(InspirationTag.tag_id.in_(ids))
+    )
+    return [
+        {
+            "inspiration_id": r[0],
+            "tag_id": r[1],
+            "confidence": r[2],
+            "source": r[3],
+        }
+        for r in result.all()
+    ]
+
+
 async def merge_tags(
     db: AsyncSession,
     source_id: int,
@@ -502,6 +530,10 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
     # 删除前快照（供操作历史与回滚重建标签）
     before_snap = await snapshot_tags(db, unused_ids)
 
+    # 删除前收集关联明细（供回滚重建素材-标签关联：Tag.inspirations 级联
+    # delete-orphan 会物理删除关联行，若不在 meta 里留底，回滚后关联永久丢失）
+    deleted_links = await _collect_links(db, unused_ids)
+
     # 先删关联表中的残留记录（防御性清理），再删标签
     await db.execute(
         delete(InspirationTag).where(InspirationTag.tag_id.in_(unused_ids))
@@ -533,6 +565,7 @@ async def delete_unused_tags(db: AsyncSession) -> list[Tag]:
         before=before_snap,
         after=after_snap,
         batch_id=new_batch_id("delete"),
+        meta={"deleted_links": deleted_links},
     )
     await db.commit()
     return unused
@@ -544,6 +577,8 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     tags = result.scalars().all()
     # 删除前快照（供操作历史与回滚重建标签）
     before_snap = await snapshot_tags(db, [t.id for t in tags])
+    # 删除前收集关联明细（供回滚重建素材-标签关联，避免级联删除后永久丢失）
+    deleted_links = await _collect_links(db, [t.id for t in tags])
     # 删除前收集受影响素材（被删标签的关联），删除后用于重建文本向量
     affected_ids = (
         await db.execute(
@@ -578,6 +613,7 @@ async def batch_delete_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
         before=before_snap,
         after=after_snap,
         batch_id=new_batch_id("delete"),
+        meta={"deleted_links": deleted_links},
     )
     await db.commit()
     return tags
@@ -802,6 +838,10 @@ async def move_tags(
     # 现有 parent 关系（循环检测用：沿新父节点向上走祖先链）
     rel_result = await db.execute(select(Tag.id, Tag.parent_id))
     parent_map = {tid: pid for tid, pid in rel_result.all()}
+    # 批内已计划的 parent 关系（随校验通过的 move 逐步更新）：
+    # 批量互移（如 A→B 且 B→A 同批）若各自基于旧快照检测会双双通过、执行后成环，
+    # 因此环检测必须沿「含批内计划」的关系图上溯。
+    planned_parent = dict(parent_map)
 
     valid: list[dict] = []
     errors: list[dict] = []
@@ -817,7 +857,7 @@ async def move_tags(
         if pid is not None and pid not in parent_map:
             errors.append({"tag_id": tid, "message": f"父标签 {pid} 不存在"})
             continue
-        # 循环检测：新父节点的祖先链上不得出现 tid
+        # 循环检测：沿「批内已计划的新父链」上溯，不得出现 tid
         cur = pid
         seen: set[int] = set()
         cyclic = False
@@ -828,11 +868,13 @@ async def move_tags(
             if cur in seen:
                 break  # 防御既有数据环路
             seen.add(cur)
-            cur = parent_map.get(cur)
+            cur = planned_parent.get(cur)
         if cyclic:
             errors.append({"tag_id": tid, "message": "不能移动到自己的后代标签下"})
             continue
         valid.append(m)
+        # 校验通过即纳入批内计划，后续 move 的环检测基于更新后的关系
+        planned_parent[tid] = pid
 
     if valid:
         before_snap = await snapshot_tags(db, [m["tag_id"] for m in valid])

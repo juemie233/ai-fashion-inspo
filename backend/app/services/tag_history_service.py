@@ -297,7 +297,12 @@ async def _restore_aliases(db: AsyncSession, tag_id: int, before_aliases: list[s
     for alias in target_set - cur_set:
         # 别名全局唯一：若已被其它标签占用则跳过（正常回滚场景不会发生）
         occupied = await db.execute(select(TagAlias.id).where(TagAlias.alias == alias))
-        if occupied.scalar_one_or_none() is None:
+        if occupied.scalar_one_or_none() is not None:
+            continue
+        # 别名不能与任何主标签同名（与 create_alias 规则一致；回滚时操作后可能
+        # 新建了同名的标签，直接插入会留下与主标签歧义的别名）
+        tag_occupied = await db.execute(select(Tag.id).where(Tag.name == alias))
+        if tag_occupied.scalar_one_or_none() is None:
             db.add(TagAlias(tag_id=tag_id, alias=alias))
 
 
@@ -338,8 +343,17 @@ async def _ensure_name_available(db: AsyncSession, name: str, exclude_id: int) -
         )
 
 
-async def _restore_deleted_tags(db: AsyncSession, before: dict, after: dict) -> None:
-    """delete 回滚：按 before 快照重建被删除的标签行（保留原 id）与别名。"""
+async def _restore_deleted_tags(
+    db: AsyncSession, before: dict, after: dict, meta: dict
+) -> None:
+    """delete 回滚：按 before 快照重建被删除的标签行（保留原 id）、别名与素材关联。"""
+    # 删除前留底的素材关联明细（tag_crud._collect_links 写入 meta.deleted_links）。
+    # 删除标签会级联物理删除 inspiration_tags 行，必须一并恢复，否则素材的
+    # 标签集合在回滚后永久缺失该标签。
+    links_by_tag: dict[int, list[dict]] = {}
+    for link in meta.get("deleted_links") or []:
+        links_by_tag.setdefault(int(link["tag_id"]), []).append(link)
+
     for tid_str, before_snap in before.items():
         tid = int(tid_str)
         if str(tid) not in after or not after[str(tid)].get("deleted"):
@@ -361,6 +375,25 @@ async def _restore_deleted_tags(db: AsyncSession, before: dict, after: dict) -> 
         )
         for alias in before_snap.get("aliases", []):
             db.add(TagAlias(tag_id=tid, alias=alias))
+        # 恢复素材关联（回滚前先校验素材/关联是否仍存在，避免 FK/唯一冲突）
+        for link in links_by_tag.get(tid, []):
+            insp_id = link["inspiration_id"]
+            still_exists = await db.execute(
+                select(InspirationTag.inspiration_id).where(
+                    InspirationTag.inspiration_id == insp_id,
+                    InspirationTag.tag_id == tid,
+                )
+            )
+            if still_exists.scalar_one_or_none() is not None:
+                continue
+            db.add(
+                InspirationTag(
+                    inspiration_id=insp_id,
+                    tag_id=tid,
+                    confidence=link.get("confidence", 1.0),
+                    source=link.get("source", "manual"),
+                )
+            )
 
 
 async def _rollback_merge(
@@ -465,7 +498,7 @@ async def _apply_rollback(
         return
 
     if operation == "delete":
-        await _restore_deleted_tags(db, before, after)
+        await _restore_deleted_tags(db, before, after, meta)
         return
 
     # rename / category_change / update / move / batch_edit：恢复字段与别名

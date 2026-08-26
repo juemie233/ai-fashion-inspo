@@ -148,6 +148,37 @@ async def test_delete_rollback_restores_tag(client):
         assert restored.id == tag["id"]
 
 
+async def test_delete_rollback_restores_links(client, upload):
+    """删除使用中的标签后回滚：素材-标签关联一并恢复（修复级联删除丢关联）。"""
+    tag = client.post("/api/tags", json={"name": "删除关联甲", "category": "style"}).json()
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/tags", json={"names": ["删除关联甲"]})
+
+    # 删除使用中的标签（级联删除关联行）
+    r = client.post("/api/tags/batch-delete", json={"tag_ids": [tag["id"]]})
+    assert r.status_code == 200
+    async with async_session() as db:
+        links_after_delete = (
+            await db.execute(
+                select(InspirationTag.inspiration_id).where(InspirationTag.tag_id == tag["id"])
+            )
+        ).scalars().all()
+        assert links_after_delete == []
+
+    delete_row = next(x for x in _history_rows(client) if x["operation"] == "delete")
+    async with async_session() as db:
+        await rollback_history(db, delete_row["id"])
+
+    # 回滚后标签重建，且素材关联恢复
+    async with async_session() as db:
+        links_after_rollback = (
+            await db.execute(
+                select(InspirationTag.inspiration_id).where(InspirationTag.tag_id == tag["id"])
+            )
+        ).scalars().all()
+        assert insp_id in links_after_rollback
+
+
 async def test_rollback_conflict_detection(client):
     """回滚冲突检测：操作后标签又被修改 → 拒绝回滚并报冲突。"""
     tag = client.post("/api/tags", json={"name": "冲突甲", "category": "free"}).json()

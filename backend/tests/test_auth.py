@@ -60,6 +60,20 @@ def test_other_destructive_endpoints(client, monkeypatch):
     assert r.status_code == 401
 
 
+def test_tag_advanced_destructive_endpoints(client, monkeypatch):
+    """高级标签的批量编辑/聚类应用/历史回滚 → 401（修复：此前未纳入清单）。"""
+    monkeypatch.setattr(settings, "api_key", TEST_KEY)
+
+    r = client.post("/api/tags/batch-edit", json={"dry_run": False, "rules": []})
+    assert r.status_code == 401
+
+    r = client.post("/api/tags/clusters/apply", json={"groups": []})
+    assert r.status_code == 401
+
+    r = client.post("/api/tags/history/1/rollback")
+    assert r.status_code == 401
+
+
 def test_destructive_without_key_config_skipped(client):
     """未配置 API_KEY（开发模式）：破坏性接口跳过认证，正常业务响应。"""
     assert settings.api_key == ""  # conftest 已清空

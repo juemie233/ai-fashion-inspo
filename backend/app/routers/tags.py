@@ -195,8 +195,10 @@ async def find_duplicate_tags(
     from app.services.tag_dedupe_cache import compute_cache_key, get_cached, set_cached
 
     # 1. 查缓存
+    # 缓存 key 基于「最后修改时间」：标签的创建/改名/改类别/合并都会刷新
+    # updated_at（created_at 只记录创建，改名/改类别不刷新它，会漏失效）。
     last_mod_result = await db.execute(
-        sa_func.max(TagModel.created_at)
+        sa_func.max(TagModel.updated_at)
     )
     last_mod = str(last_mod_result.scalar() or "")
     cache_key = compute_cache_key(last_mod, threshold)
@@ -385,6 +387,8 @@ async def tag_health_scan(
     from app.services.task_runner import create_tag_health_scan_task
 
     threshold = float((payload or {}).get("duplicate_threshold", 0.75))
+    if not (0.6 <= threshold <= 0.95):
+        raise HTTPException(status_code=400, detail="duplicate_threshold 需在 0.6 ~ 0.95 之间")
     task = await create_tag_health_scan_task(db, duplicate_threshold=threshold)
     return {"message": f"已提交健康度扫描任务 #{task.id}", "task_id": task.id}
 
@@ -436,11 +440,17 @@ async def tag_clusters_scan(
     from app.services.task_runner import create_tag_cluster_scan_task
 
     payload = payload or {}
+    threshold = float(payload.get("threshold", 0.75))
+    if not (0.6 <= threshold <= 0.95):
+        raise HTTPException(status_code=400, detail="threshold 需在 0.6 ~ 0.95 之间")
+    min_group_size = int(payload.get("min_group_size", 2))
+    if min_group_size < 2:
+        raise HTTPException(status_code=400, detail="min_group_size 至少为 2")
     task = await create_tag_cluster_scan_task(
         db,
-        threshold=float(payload.get("threshold", 0.75)),
+        threshold=threshold,
         use_cooccurrence_boost=bool(payload.get("use_cooccurrence_boost", True)),
-        min_group_size=int(payload.get("min_group_size", 2)),
+        min_group_size=min_group_size,
     )
     return {"message": f"已提交聚类任务 #{task.id}", "task_id": task.id}
 

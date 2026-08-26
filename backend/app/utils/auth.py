@@ -48,6 +48,12 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     ("POST", "/api/tags/batch-delete"),
     ("POST", "/api/tags/merge"),
     ("POST", "/api/tags/{tag_id}/inspirations/batch-remove"),
+    # 标签批量高级编辑（dry_run=false 改名/合并）
+    ("POST", "/api/tags/batch-edit"),
+    # 自动聚类应用（批量合并标签，删除源标签）
+    ("POST", "/api/tags/clusters/apply"),
+    # 标签操作历史回滚（批量写回数据）
+    ("POST", "/api/tags/history/{history_id}/rollback"),
     # 分析日志批量删除
     ("POST", "/api/ai/history/batch-delete"),
     ("DELETE", "/api/ai/history/failed/all"),

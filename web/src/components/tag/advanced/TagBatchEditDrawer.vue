@@ -39,6 +39,8 @@ watch(visible, (v) => {
   if (!v) {
     preview.value = []
     previewResult.value = null
+    // 关闭时清空已配置的规则，下次打开从干净状态重新开始
+    rules.value = []
     return
   }
   if (rules.value.length === 0) {
@@ -89,17 +91,23 @@ function confirmExecute() {
   Modal.confirm({
     title: '确认执行',
     content: `将执行：改名 ${s.renamed} 个、合并 ${s.merged} 个、跳过 ${s.skipped} 个。确定继续吗？`,
+    okText: '执行',
     onOk: async () => {
       executing.value = true
       try {
         const data = await batchEditTags({ dry_run: false, rules: rules.value })
         const sum = data.summary
-        Message.success(
-          `执行完成：改名 ${sum.renamed} 个、合并 ${sum.merged} 个` +
-            (data.batch_id ? `（批次 ${data.batch_id}）` : ''),
-        )
         if (data.errors?.length) {
-          Message.warning(data.errors.map((e) => e.message).join('；'))
+          // 部分失败不回滚：改名/合并是分步提交的，失败项已跳过，成功项保留
+          Message.warning(
+            `执行完成：改名 ${sum.renamed} 个、合并 ${sum.merged} 个，${data.errors.length} 处失败（已跳过，成功项不回滚）` +
+              `：${data.errors.map((e) => e.message).join('；')}`,
+          )
+        } else {
+          Message.success(
+            `执行完成：改名 ${sum.renamed} 个、合并 ${sum.merged} 个` +
+              (data.batch_id ? `（批次 ${data.batch_id}）` : ''),
+          )
         }
         preview.value = []
         previewResult.value = null
