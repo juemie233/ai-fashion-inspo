@@ -5,10 +5,11 @@
   三种范围：
   - incremental：只扫无任何检测记录的素材（断点续跑：取消/失败后重跑自动
     跳过已扫部分）；
-  - semi（半增量）：跳过已有已确认（锁定）记录的素材，其余素材（仅
-    pending 记录或无记录）重新检测；
+  - semi（半增量）：跳过已有已确认（锁定）或人工「不匹配」（match_excluded）
+    记录的素材，其余素材（仅 pending 记录或无记录）重新检测；
   - all：全量，跳过含锁定记录的素材，其余清空重扫。
-  已确认（match_status=confirmed）的记录受保护：任何模式都不会删除或覆盖。
+  已确认（match_status=confirmed）与人工「不匹配」（match_excluded=True）记录
+  受保护：任何模式都不会删除或覆盖，且不再参与全库匹配。
   无脸素材写入一条空 embedding 的占位记录，保证「有记录即已扫」成立。
   任务执行期间每批检查 task.status，被取消（cancelled）则停止（已写不回滚）。
   扫描完成后按载荷 auto_match 自动创建 face_match 任务。
@@ -145,10 +146,15 @@ def _apply_scope_filter(stmt: Select, scope: str) -> Select:
             ~exists().where(InspirationFaceDetection.inspiration_id == Inspiration.id)
         )
     if scope == "semi":
+        # 半增量：跳过已有 confirmed（人工确认）或 match_excluded（人工「不匹配」）
+        # 记录的素材——两者都是人工判定过的人脸，重扫无意义且会重建被拒图。
         return stmt.where(
             ~exists().where(
                 InspirationFaceDetection.inspiration_id == Inspiration.id,
-                InspirationFaceDetection.match_status == "confirmed",
+                or_(
+                    InspirationFaceDetection.match_status == "confirmed",
+                    InspirationFaceDetection.match_excluded.is_(True),
+                ),
             )
         )
     return stmt
@@ -316,11 +322,14 @@ async def _embed_batch_concurrent(batch_bytes: list[bytes]) -> list[list[dict]]:
 async def _write_detections(
     db: AsyncSession, inspiration_ids: list[str], faces_list: list[list[dict]]
 ) -> None:
-    """先清后写本批素材的检测记录（幂等），保护锁定（已确认）记录。
+    """先清后写本批素材的检测记录（幂等），保护锁定（已确认）与人工「不匹配」记录。
 
     - 有锁定记录的素材：仅清除非锁定记录，确认记录原样保留；新检出人脸
       的 face_index 从锁定记录数起编（锁定记录重排为 0~N-1，保持序号连续）；
       重扫后未再检出人脸也不写占位记录（锁定记录本身即「已扫」标记）。
+    - 人工「不匹配」（match_excluded=True）记录同样保护：不清除、重排序号
+      并保留标记——用户「不匹配」决定在重扫/重匹配后依然生效，被拒人脸
+      不会重新出现。
     - 无锁定记录的素材：整体清除后重写；无脸素材写一条空 embedding 的
       占位记录，保证「有记录即已扫」的增量语义（占位记录不参与矩阵匹配——
       match_all_faces 查询时过滤空 embedding）。
@@ -335,11 +344,23 @@ async def _write_detections(
     for d in locked_rows.scalars().all():
         locked_by_insp.setdefault(d.inspiration_id, []).append(d)
 
-    # 清除非锁定记录（match_status != confirmed 在 SQLite 下对 NULL 不为真，
-    # 需显式补 NULL 分支，否则传统记录清不掉）
+    # 人工「不匹配」记录：与锁定记录同级保护（不清除、保留标记）
+    excluded_rows = await db.execute(
+        select(InspirationFaceDetection).where(
+            InspirationFaceDetection.inspiration_id.in_(inspiration_ids),
+            InspirationFaceDetection.match_excluded.is_(True),
+        )
+    )
+    excluded_by_insp: dict[str, list[InspirationFaceDetection]] = {}
+    for d in excluded_rows.scalars().all():
+        excluded_by_insp.setdefault(d.inspiration_id, []).append(d)
+
+    # 清除非锁定且非「不匹配」记录（match_status != confirmed 在 SQLite 下
+    # 对 NULL 不为真，需显式补 NULL 分支，否则传统记录清不掉）
     await db.execute(
         delete(InspirationFaceDetection).where(
             InspirationFaceDetection.inspiration_id.in_(inspiration_ids),
+            InspirationFaceDetection.match_excluded.is_(False),
             or_(
                 InspirationFaceDetection.match_status != "confirmed",
                 InspirationFaceDetection.match_status.is_(None),
@@ -348,11 +369,16 @@ async def _write_detections(
     )
     for insp_id, faces in zip(inspiration_ids, faces_list):
         locked = locked_by_insp.get(insp_id, [])
-        # 锁定记录重排序号（保持原相对顺序），新脸从其后起编
-        for new_idx, det in enumerate(sorted(locked, key=lambda d: d.face_index)):
+        excluded = excluded_by_insp.get(insp_id, [])
+        # 锁定 + 不匹配记录一起重排序号（保持原相对顺序，锁在前、不匹配在后），
+        # 新脸从其后起编
+        kept = sorted(
+            locked + excluded, key=lambda d: (d.match_status != "confirmed", d.face_index)
+        )
+        for new_idx, det in enumerate(kept):
             det.face_index = new_idx
         if not faces:
-            if not locked:
+            if not locked and not excluded:
                 db.add(
                     InspirationFaceDetection(
                         inspiration_id=insp_id,
@@ -362,7 +388,7 @@ async def _write_detections(
                     )
                 )
             continue
-        offset = len(locked)
+        offset = len(kept)
         for idx, face in enumerate(faces):
             db.add(
                 InspirationFaceDetection(

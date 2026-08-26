@@ -147,6 +147,8 @@ async def match_all_faces(
             InspirationFaceDetection.match_status,
         ).where(
             InspirationFaceDetection.embedding != b"",
+            # 人工「不匹配」的人脸不再参与后续全库匹配（决定持久化）
+            InspirationFaceDetection.match_excluded.is_(False),
             # 锁定（已确认）记录不参与全库匹配，避免覆盖人工确认结果
             # （!= 'confirmed' 对 NULL 不成立，需显式补 NULL 分支）
             or_(

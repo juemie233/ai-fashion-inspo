@@ -356,6 +356,76 @@ async def test_confirm_reject_pending(client, create_blogger, monkeypatch):
     assert agg["total"] == 0
 
 
+async def test_reject_sets_excluded_and_survives_rescan(client, create_blogger, monkeypatch):
+    """reject 置 match_excluded=True：重扫后记录保留且仍不显示、不重新匹配。
+
+    修复前：reject 只清空匹配字段，半增量重扫会删除并重建该检测记录，
+    下次匹配重新产出候选——同一张被拒图反复出现。
+    """
+    emb = _unit(1)
+    blogger = _setup_blogger(client, create_blogger, monkeypatch, emb)
+    insp = _upload_inspiration(client, (40, 50, 60))
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+    await _run_scan(client, scope="incremental", auto_match=False)
+
+    # 显式创建并执行匹配任务 → pending 候选
+    r = client.post("/api/face-match/run", json={"scope": "all"})
+    assert r.status_code == 201, r.text
+    async with async_session() as db:
+        match_task = await db.get(TaskQueue, r.json()["task_id"])
+        await execute_face_match(db, match_task)
+
+    detail = client.get(
+        f"/api/face-scan/results?status=pending&person_id={blogger['id']}"
+    ).json()
+    det_id = detail["items"][0]["detection_id"]
+
+    # reject：置 excluded
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={"action": "reject", "items": [{"detection_id": det_id}]},
+    )
+    assert r.json()["rejected"] == 1
+
+    async with async_session() as db:
+        det = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.id == det_id
+                )
+            )
+        ).scalar_one()
+        assert det.match_excluded is True
+        assert det.match_status is None
+
+    # 半增量重扫（同一素材）：excluded 记录被保护，不清除、保留标记
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+    )
+    await _run_scan(client, scope="semi", auto_match=False)
+
+    dets = await _fetch_detections(insp)
+    assert len(dets) == 1  # excluded 记录保留（未被重建为多条）
+    assert dets[0].match_excluded is True
+    assert dets[0].match_status is None
+
+    # 重匹配：excluded 记录不参与 → 不产出候选
+    r2 = client.post("/api/face-match/run", json={"scope": "all"})
+    assert r2.status_code == 201, r2.text
+    async with async_session() as db:
+        match_task2 = await db.get(TaskQueue, r2.json()["task_id"])
+        await execute_face_match(db, match_task2)
+
+    agg = client.get("/api/face-scan/results?status=pending").json()
+    assert agg["total"] == 0  # 被拒图不再出现在候选区
+    unmatched = client.get("/api/face-scan/results?status=pending&unmatched=true").json()
+    assert unmatched["total"] == 0  # 也不再出现在未匹配区
+
+
 # ═══════════════════════════════════════════════════════════════
 #  任务 API 与取消
 # ═══════════════════════════════════════════════════════════════

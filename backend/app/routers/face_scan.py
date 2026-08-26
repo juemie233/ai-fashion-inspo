@@ -152,6 +152,8 @@ async def _person_aggregate_page(
     filters = [
         InspirationFaceDetection.match_status == status,
         InspirationFaceDetection.embedding != b"",
+        # 人工「不匹配」的人脸不再显示在候选区
+        InspirationFaceDetection.match_excluded.is_(False),
         InspirationFaceDetection.matched_blogger_id.is_not(None)
         | InspirationFaceDetection.matched_model_id.is_not(None),
     ]
@@ -217,6 +219,8 @@ async def _person_detail_page(
         .where(
             InspirationFaceDetection.match_status == status,
             InspirationFaceDetection.embedding != b"",
+            # 人工「不匹配」的人脸不再显示在候选区
+            InspirationFaceDetection.match_excluded.is_(False),
             col == person_id,
         )
         .subquery()
@@ -255,6 +259,8 @@ async def _unmatched_page(
         .where(
             InspirationFaceDetection.match_status == status,
             InspirationFaceDetection.embedding != b"",
+            # 人工「不匹配」的人脸不再显示在未匹配区域
+            InspirationFaceDetection.match_excluded.is_(False),
             InspirationFaceDetection.matched_blogger_id.is_(None),
             InspirationFaceDetection.matched_model_id.is_(None),
         )
@@ -279,6 +285,8 @@ async def _unmatched_page(
             select(func.count()).where(
                 InspirationFaceDetection.match_status == status,
                 InspirationFaceDetection.embedding != b"",
+                # 人工「不匹配」的人脸不再显示在未匹配区域
+                InspirationFaceDetection.match_excluded.is_(False),
                 InspirationFaceDetection.matched_blogger_id.is_(None),
                 InspirationFaceDetection.matched_model_id.is_(None),
             )
@@ -363,6 +371,9 @@ async def confirm(
             det.matched_model_id = None
             det.confidence = None
             det.match_status = None
+            # 持久化「不匹配」决定：该人脸不再参与后续全库匹配，
+            # 也不再显示在候选/未匹配区域（下次扫描不会重新捞起它）
+            det.match_excluded = True
             stats["rejected"] += 1
     else:  # undo
         # 锁定为单向操作：已确认记录不提供解锁，撤销一律跳过（保留接口兼容）

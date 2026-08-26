@@ -10,6 +10,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -117,6 +118,12 @@ class InspirationFaceDetection(Base):
     # 批量扫描候选状态：NULL 传统/手动结果；pending AI 候选；confirmed 已审核
     match_status: Mapped[str | None] = mapped_column(
         String(16), nullable=True, index=True
+    )
+    # 人工「不匹配」标记：用户在扫描审核页对该人脸点「驳回/不匹配」后置 True。
+    # 该人脸不再参与后续全库匹配（match_all_faces 排除），也不再显示在
+    # 候选/未匹配区域——避免每次扫描匹配后同一张被拒图反复出现。
+    match_excluded: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

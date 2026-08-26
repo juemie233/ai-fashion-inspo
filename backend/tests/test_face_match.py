@@ -227,3 +227,55 @@ async def test_match_all_faces_model_scope(client, create_blogger, create_model,
         assert det.matched_model_id == model["id"]
         assert det.matched_blogger_id is None
         assert det.match_status == "pending"
+
+
+async def test_match_all_faces_skips_excluded(client, create_blogger, monkeypatch):
+    """人工「不匹配」（match_excluded=True）的人脸不再参与全库匹配。
+
+    修复前：reject 只清空匹配字段，下次 match_all_faces 会重新匹配并再次
+    产出 pending 候选（同一张被拒图反复出现）。现在 excluded 记录被排除。
+    """
+    base = _unit(1)
+    blogger = _setup_blogger_face(client, create_blogger, monkeypatch, base.tolist())
+    insp_id = _setup_inspiration_faces(
+        client,
+        monkeypatch,
+        [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": base.tolist()}],
+    )
+
+    async with async_session() as db:
+        # 第一轮全库匹配：产出 pending 候选
+        stats = await match_all_faces(db)
+        assert stats["matched"] == 1
+        dets = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalars().all()
+        assert dets[0].matched_blogger_id == blogger["id"]
+        assert dets[0].match_status == "pending"
+
+        # 人工「不匹配」：置 match_excluded=True（等价于扫描页 reject 动作）
+        dets[0].match_excluded = True
+        dets[0].matched_blogger_id = None
+        dets[0].confidence = None
+        dets[0].match_status = None
+        await db.commit()
+
+        # 第二轮全库匹配：excluded 记录被排除，不再产出候选
+        stats2 = await match_all_faces(db)
+        assert stats2["total_faces"] == 0
+        assert stats2["matched"] == 0
+
+        dets2 = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalars().all()
+        assert dets2[0].match_excluded is True
+        assert dets2[0].match_status is None
+        assert dets2[0].matched_blogger_id is None
