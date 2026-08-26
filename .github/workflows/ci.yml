@@ -1,7 +1,12 @@
 name: CI
 
-# 质量门禁：push / PR 到主分支时自动执行前端 lint+类型+测试+构建 与 后端全量测试。
+# 质量门禁：push / PR 到主分支时自动执行前端 lint+类型+测试 与 后端全量测试。
 # 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
+#
+# 开发阶段约定：项目当前仅在本地运行（npm run dev + uvicorn），尚未进入
+# 部署阶段，CI 不做产物构建（vite build）——只保留能抓问题的 lint / 类型
+# 检查 / 单测，避免为用不上的产物构建付出维护成本（构建还会依赖 python
+# 注入 schema 版本，进一步增加 CI 复杂度）。进入部署阶段后再加回 build。
 
 on:
   push:
@@ -11,22 +16,13 @@ on:
 
 jobs:
   web:
-    name: Web 前端（lint / 测试 / 构建）
+    name: Web 前端（lint / 类型检查 / 测试）
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-
-      # 前端构建时 vite 会调用 scripts/compute_schema_version.py 计算 schema 握手版本，
-      # 该脚本 import 后端 app.config（pydantic-settings）与 db_migrations（aiosqlite），
-      # 只需这两个轻量依赖即可在 CI 中完成真实注入。
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: 安装 schema 版本注入所需的后端轻依赖
-        run: pip install aiosqlite pydantic-settings
 
       - uses: actions/setup-node@v4
         with:
@@ -43,8 +39,8 @@ jobs:
       - name: 单元测试（vitest）
         run: npm test
 
-      - name: 类型检查 + 构建（vue-tsc && vite build）
-        run: npm run build
+      - name: 类型检查（vue-tsc，不产出构建产物）
+        run: npm run type-check
 
   backend:
     name: 后端（pytest 全量）

@@ -213,7 +213,9 @@ onBeforeUnmount(() => {
           :data="duplicatePairs"
           :pagination="false"
           size="small"
-          :row-key="(r: DuplicateIssuePair) => `${r.tag_a.id}-${r.tag_b.id}`"
+          :row-key="
+            (r: DuplicateIssuePair) => `${r.tag_a?.id ?? 'x'}-${r.tag_b?.id ?? 'x'}-${r.similarity}`
+          "
           class="dup-table"
         >
           <template #columns>

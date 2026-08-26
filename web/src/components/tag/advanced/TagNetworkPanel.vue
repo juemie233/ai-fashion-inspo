@@ -86,7 +86,10 @@ const graphOption = computed<EChartsOption | null>(() => {
             (n.is_bridge ? '<br/><b style="color:#e34948">桥接节点</b>' : '')
           )
         }
-        if (p.dataType === 'edge') return `共现 ${p.data?.value ?? ''} 次`
+        if (p.dataType === 'edge') {
+          const e = p.data as { value?: number } | undefined
+          return `共现 ${e?.value ?? ''} 次`
+        }
         return ''
       },
     },
