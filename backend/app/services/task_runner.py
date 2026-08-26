@@ -42,6 +42,10 @@ from app.services.task_runners.face_scan import (
     execute_face_match,
     execute_face_scan,
 )
+from app.services.task_runners.face_cluster import (
+    create_face_cluster_task,
+    execute_face_cluster,
+)
 from app.services.task_runners.tag_cluster import (
     create_tag_cluster_scan_task,
     execute_tag_cluster_scan,
@@ -78,6 +82,7 @@ TASK_HANDLERS = {
     "vector_backfill": execute_vector_backfill,
     "face_scan": execute_face_scan,
     "face_match": execute_face_match,
+    "face_cluster": execute_face_cluster,
     "enrich_blogger_profile": execute_enrich_blogger_profile,
     "tag_health_scan": execute_tag_health_scan,
     "tag_cluster_scan": execute_tag_cluster_scan,

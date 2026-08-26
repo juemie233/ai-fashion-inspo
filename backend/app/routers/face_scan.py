@@ -20,9 +20,16 @@ from app.models.face import InspirationFaceDetection
 from app.models.inspiration import Inspiration
 from app.models.person import Blogger, Model
 from app.models.task import TaskQueue
-from app.schemas.face_scan import FaceConfirmIn, FaceMatchRunIn, FaceScanStartIn
+from app.schemas.face_scan import (
+    FaceClusterRunIn,
+    FaceConfirmIn,
+    FaceMatchRunIn,
+    FaceScanStartIn,
+)
 from app.schemas.task import TaskOut
+from app.services.face_cluster import load_group_detections
 from app.services.person_service import model_service, blogger_service
+from app.services.task_runners.face_cluster import create_face_cluster_task
 from app.services.task_runners.face_scan import (
     create_face_match_task,
     create_face_scan_task,
@@ -382,3 +389,159 @@ async def confirm(
 
     await db.commit()
     return {"action": data.action, **stats}
+
+
+# ── 人脸聚合聚类（未匹配人脸按「疑似同一人」分组，供批量指派）──
+
+
+@router.post("/cluster/run", status_code=201)
+async def cluster_run(
+    data: FaceClusterRunIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """创建人脸聚合聚类任务（异步执行），返回 task_id。
+
+    聚类基于 hnswlib ANN（O(n log n)），把全部未匹配人脸按相似度
+    聚合成「疑似同一人」的组；结果存入任务 result，供 groups 接口查询。
+    """
+    task = await create_face_cluster_task(
+        db,
+        threshold=data.threshold if data.threshold is not None else 0.5,
+        min_group_size=data.min_group_size if data.min_group_size is not None else 2,
+    )
+    return {"task_id": task.id, "message": "人脸聚合聚类任务已创建"}
+
+
+@router.get("/cluster/task")
+async def cluster_task(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """最近一次人脸聚合聚类任务状态（供扫描页轮询进度与结果）。"""
+    task = (
+        await db.execute(
+            select(TaskQueue)
+            .where(TaskQueue.type == "face_cluster")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return {"cluster_task": TaskOut.model_validate(task) if task else None}
+
+
+@router.get("/cluster/groups")
+async def cluster_groups(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """分页返回人脸聚合分组（来自最近一次成功的聚类任务结果）。
+
+    每组返回：组内人脸数 + 代表性人脸（组内 det_score 最高者）的素材信息，
+    供分组列表展示缩略图；组内明细分页由 detections 接口提供。
+    """
+    task = (
+        await db.execute(
+            select(TaskQueue)
+            .where(TaskQueue.type == "face_cluster", TaskQueue.status == "success")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if task is None or not task.result:
+        return {
+            "task_status": None,
+            "items": [],
+            "total": 0,
+            "page": page,
+            "size": size,
+            "summary": None,
+        }
+    result = task.result
+    groups = result.get("groups") or []
+    total = len(groups)
+    start = (page - 1) * size
+    page_groups = groups[start : start + size]
+
+    # 每组取「最高置信度人脸」作为代表：批量拉取 det_score / 素材路径
+    items: list[dict] = []
+    for idx, g in enumerate(page_groups, start=start):
+        detection_ids = g.get("detection_ids") or []
+        if not detection_ids:
+            continue
+        rep_row = (
+            await db.execute(
+                select(
+                    InspirationFaceDetection.id,
+                    InspirationFaceDetection.det_score,
+                    InspirationFaceDetection.inspiration_id,
+                    Inspiration.file_path,
+                    Inspiration.thumbnail_path,
+                )
+                .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
+                .where(InspirationFaceDetection.id.in_(detection_ids))
+                .order_by(InspirationFaceDetection.det_score.desc())
+                .limit(1)
+            )
+        ).first()
+        items.append(
+            {
+                "group_id": idx,
+                "size": g.get("size", len(detection_ids)),
+                "detection_ids": detection_ids,
+                "rep_detection_id": rep_row.id if rep_row else None,
+                "rep_inspiration_id": rep_row.inspiration_id if rep_row else None,
+                "rep_file_path": rep_row.file_path if rep_row else None,
+                "rep_thumbnail_path": rep_row.thumbnail_path if rep_row else None,
+            }
+        )
+
+    return {
+        "task_status": task.status,
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        "summary": {
+            "total_faces": result.get("total_faces"),
+            "method": result.get("method"),
+            "group_count": result.get("group_count"),
+            "clustered_faces": result.get("clustered_faces"),
+            "singletons": result.get("singletons"),
+            "threshold": result.get("threshold"),
+        },
+    }
+
+
+@router.get("/cluster/groups/{group_id}/detections")
+async def cluster_group_detections(
+    group_id: int,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """某聚合组的人脸明细分页（含素材路径/缩略图，供展开网格展示与勾选指派）。
+
+    group_id 是组在最近一次聚类结果中的下标（0 起）；通过最近成功任务解析。
+    """
+    task = (
+        await db.execute(
+            select(TaskQueue)
+            .where(TaskQueue.type == "face_cluster", TaskQueue.status == "success")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if task is None or not task.result:
+        raise HTTPException(status_code=404, detail="尚未执行人脸聚合聚类")
+    groups = task.result.get("groups") or []
+    if not 0 <= group_id < len(groups):
+        raise HTTPException(status_code=404, detail="聚合组不存在")
+    detection_ids = groups[group_id].get("detection_ids") or []
+    items, total = await load_group_detections(db, detection_ids, page, size)
+    return {
+        "group_id": group_id,
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+    }

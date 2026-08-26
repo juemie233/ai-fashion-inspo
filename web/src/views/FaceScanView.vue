@@ -15,11 +15,17 @@ import { IconLock } from '@arco-design/web-vue/es/icon'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
+  fetchFaceClusterDetections,
+  fetchFaceClusterGroups,
+  fetchFaceClusterTask,
   fetchFaceScanResults,
   fetchFaceScanTask,
+  runFaceCluster,
   runFaceMatch,
   startFaceScan,
   type DetectionItem,
+  type FaceClusterGroup,
+  type FaceClusterGroups,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
@@ -40,13 +46,16 @@ const cancelling = ref(false)
 const matching = ref(false)
 let pollTimer: number | null = null
 
-/** 是否有任务在运行（决定轮询与按钮态） */
+/** 是否有任务在运行（决定轮询与按钮态）；
+ *  聚类任务状态（clusterTask）声明于下方聚类区，computed 惰性求值无时序问题 */
 const busy = computed(
   () =>
     scanTask.value?.status === 'running' ||
     scanTask.value?.status === 'pending' ||
     matchTask.value?.status === 'running' ||
-    matchTask.value?.status === 'pending',
+    matchTask.value?.status === 'pending' ||
+    clusterTask.value?.status === 'running' ||
+    clusterTask.value?.status === 'pending',
 )
 
 async function refreshTasks() {
@@ -377,9 +386,153 @@ async function assignUnmatched() {
   }
 }
 
+// ── 人脸聚合分组（未匹配人脸按疑似同一人聚类）──
+const clusterTask = ref<FaceScanTaskOut | null>(null)
+const clusterGroups = ref<FaceClusterGroup[]>([])
+const clusterTotal = ref(0)
+const clusterPage = ref(1)
+const clusterSummary = ref<FaceClusterGroups['summary']>(null)
+const clusterLoading = ref(false)
+const clustering = ref(false)
+// 展开的组：group_id → 明细分页状态
+const expandedGroupId = ref<number | null>(null)
+const groupDetailItems = ref<DetectionItem[]>([])
+const groupDetailTotal = ref(0)
+const groupDetailPage = ref(1)
+const groupDetailLoading = ref(false)
+const groupChecked = ref<Set<number>>(new Set())
+const groupActionBusy = ref(false)
+// 整组指派目标（复用未匹配区的人物选择器状态）
+const clusterAssignKind = ref<'blogger' | 'model'>('blogger')
+const clusterAssignPersonId = ref<number | undefined>(undefined)
+
+/** 拉取最近聚类任务状态 */
+async function loadClusterTask() {
+  try {
+    const { cluster_task } = await fetchFaceClusterTask()
+    clusterTask.value = cluster_task
+  } catch {
+    /* 静默：聚类未运行过时不报错 */
+  }
+}
+
+/** 开始人脸聚合聚类 */
+async function startCluster() {
+  clustering.value = true
+  try {
+    const { task_id, message } = await runFaceCluster()
+    Message.success(message)
+    await loadClusterTask()
+    void pollClusterUntilIdle(task_id)
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '创建聚类任务失败'))
+  } finally {
+    clustering.value = false
+  }
+}
+
+/** 轮询聚类任务直到终态，完成后刷新分组 */
+async function pollClusterUntilIdle(taskId: number) {
+  while (true) {
+    await new Promise((r) => setTimeout(r, 2000))
+    await loadClusterTask()
+    const current = clusterTask.value
+    if (!current || current.id !== taskId || !['running', 'pending'].includes(current.status)) {
+      await loadClusterGroups()
+      return
+    }
+  }
+}
+
+/** 加载聚合分组（分页） */
+async function loadClusterGroups() {
+  clusterLoading.value = true
+  try {
+    const data = await fetchFaceClusterGroups({ page: clusterPage.value, size: 20 })
+    clusterGroups.value = data.items
+    clusterTotal.value = data.total
+    clusterSummary.value = data.summary
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '加载聚合分组失败'))
+  } finally {
+    clusterLoading.value = false
+  }
+}
+
+/** 展开/收起某分组：加载组内人脸明细 */
+async function toggleGroupDetail(group: FaceClusterGroup) {
+  if (expandedGroupId.value === group.group_id) {
+    expandedGroupId.value = null
+    groupChecked.value = new Set()
+    return
+  }
+  expandedGroupId.value = group.group_id
+  groupChecked.value = new Set()
+  groupDetailPage.value = 1
+  await loadGroupDetail()
+}
+
+async function loadGroupDetail() {
+  if (expandedGroupId.value === null) return
+  groupDetailLoading.value = true
+  try {
+    const data = await fetchFaceClusterDetections(expandedGroupId.value, {
+      page: groupDetailPage.value,
+      size: 50,
+    })
+    groupDetailItems.value = data.items
+    groupDetailTotal.value = data.total
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '加载组内人脸失败'))
+  } finally {
+    groupDetailLoading.value = false
+  }
+}
+
+/** 整组指派给所选人物（复用 confirm 批量指派链路） */
+async function assignGroup(group: FaceClusterGroup) {
+  if (!clusterAssignPersonId.value) {
+    Message.warning('请选择要指派的人物')
+    return
+  }
+  groupActionBusy.value = true
+  try {
+    // 整组指派：取该组全部 detection_id（勾选优先于整组）
+    const targetIds =
+      groupChecked.value.size > 0 ? [...groupChecked.value] : (group.detection_ids ?? [])
+    if (targetIds.length === 0) {
+      Message.warning('该组没有可指派的人脸')
+      return
+    }
+    const result = await confirmFaceScan(
+      'confirm',
+      targetIds.map((id) => ({
+        detection_id: id,
+        person_type: clusterAssignKind.value,
+        person_id: clusterAssignPersonId.value,
+      })),
+    )
+    Message.success(
+      `已指派 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
+    )
+    groupChecked.value.clear()
+    await Promise.all([loadClusterGroups(), loadUnmatched()])
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '整组指派失败'))
+  } finally {
+    groupActionBusy.value = false
+  }
+}
+
 // ── 汇总刷新 ──
 async function refreshAll() {
-  await Promise.all([refreshTasks(), loadAggregates(), loadUnmatched(), reloadDetailIfOpen()])
+  await Promise.all([
+    refreshTasks(),
+    loadAggregates(),
+    loadUnmatched(),
+    loadClusterTask(),
+    reloadDetailIfOpen(),
+  ])
 }
 
 async function reloadDetailIfOpen() {
@@ -393,6 +546,7 @@ async function reloadDetailIfOpen() {
 onMounted(async () => {
   await refreshTasks()
   await refreshAll()
+  await loadClusterGroups()
   await loadAssignOptions()
   pollTimer = window.setInterval(() => {
     if (busy.value) void refreshTasks()
@@ -411,6 +565,12 @@ const router = useRouter()
 /** 缩略图地址（优先缩略图，无则原图） */
 function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
+}
+
+/** 聚合分组代表图地址（优先缩略图，无则原图；无任何图时返回空串） */
+function groupThumbUrl(group: FaceClusterGroup): string {
+  const path = group.rep_thumbnail_path || group.rep_file_path
+  return path ? getFileUrl(path) : ''
 }
 
 /** 点击素材缩略图跳转素材详情页 */
@@ -437,6 +597,11 @@ function toggleDetailChecked(id: number, checked: unknown) {
 /** 未匹配勾选（同上） */
 function toggleUnmatchedChecked(id: number, checked: unknown) {
   toggleChecked(unmatchedChecked, id, checked)
+}
+
+/** 聚合分组组内人脸勾选（同上） */
+function toggleGroupChecked(id: number, checked: unknown) {
+  toggleChecked(groupChecked, id, checked)
 }
 
 /** 全选/取消全选当前明细页（已全部勾选时点击为取消全选） */
@@ -842,6 +1007,170 @@ function filterOption(input: string, option: { label?: string }): boolean {
             />
           </a-spin>
         </a-tab-pane>
+
+        <!-- 聚合分组（未匹配人脸按疑似同一人聚类） -->
+        <a-tab-pane key="cluster" title="聚合分组">
+          <div class="assign-bar">
+            <a-radio-group
+              v-model="clusterAssignKind"
+              type="button"
+              size="small"
+              @change="loadAssignOptions"
+            >
+              <a-radio value="blogger">穿搭博主</a-radio>
+              <a-radio value="model">职业模特</a-radio>
+            </a-radio-group>
+            <a-select
+              v-model="clusterAssignPersonId"
+              :options="assignOptions"
+              :loading="assignLoading"
+              placeholder="选择要指派的人物（整组）"
+              size="small"
+              style="width: 240px"
+              allow-search
+              :filter-option="filterOption"
+            />
+            <a-button
+              size="small"
+              type="primary"
+              :loading="clustering"
+              :disabled="busy"
+              @click="startCluster"
+            >
+              开始聚合聚类
+            </a-button>
+          </div>
+
+          <a-spin :loading="clusterLoading" style="display: block">
+            <!-- 聚类任务状态 -->
+            <div v-if="clusterTask" class="task-line">
+              聚类 <StatusTag :status="clusterTask.status" />
+              <a-progress
+                v-if="['running', 'pending'].includes(clusterTask.status)"
+                :percent="clusterTask.progress / 100"
+                size="small"
+                style="width: 320px"
+              />
+              <a-typography-text type="secondary" style="font-size: 12px">
+                <template v-if="clusterTask.result?.total_faces !== undefined">
+                  共 {{ clusterTask.result.total_faces }} 张未匹配人脸
+                  <template v-if="clusterTask.result.group_count !== undefined">
+                    · 聚类出 {{ clusterTask.result.group_count }} 组
+                  </template>
+                  <template v-if="clusterTask.result.singletons !== undefined">
+                    · {{ clusterTask.result.singletons }} 张孤脸
+                  </template>
+                </template>
+              </a-typography-text>
+            </div>
+            <a-typography-text v-else type="secondary" style="font-size: 12px">
+              尚未运行过聚合聚类。点击「开始聚合聚类」按相似度把未匹配人脸分组，
+              便于整组指派给同一位博主/模特。
+            </a-typography-text>
+            <a-typography-text v-if="clusterTask?.error" type="danger" style="font-size: 12px">
+              {{ clusterTask.error }}
+            </a-typography-text>
+
+            <!-- 分组列表 -->
+            <div v-if="clusterGroups.length > 0" class="person-list" style="margin-top: 12px">
+              <div v-for="g in clusterGroups" :key="g.group_id" class="person-row">
+                <div class="person-head" @click="toggleGroupDetail(g)">
+                  <img
+                    v-if="g.rep_file_path"
+                    :src="groupThumbUrl(g)"
+                    class="group-rep-img"
+                    :alt="`组${g.group_id}`"
+                  />
+                  <a-avatar v-else :size="32">{{ g.size }}</a-avatar>
+                  <span class="person-name">疑似同一人 · {{ g.size }} 张人脸</span>
+                  <a-typography-text type="secondary" style="font-size: 12px">
+                    组 #{{ g.group_id }}
+                  </a-typography-text>
+                </div>
+                <a-space :size="6">
+                  <a-button
+                    size="mini"
+                    type="primary"
+                    :loading="groupActionBusy"
+                    :disabled="!clusterAssignPersonId"
+                    @click.stop="assignGroup(g)"
+                  >
+                    整组指派
+                  </a-button>
+                  <a-button size="mini" @click.stop="toggleGroupDetail(g)">
+                    {{ expandedGroupId === g.group_id ? '收起' : '查看人脸' }}
+                  </a-button>
+                </a-space>
+
+                <!-- 展开：组内人脸网格 + 勾选指派 -->
+                <div v-if="expandedGroupId === g.group_id" class="detail-block">
+                  <a-spin :loading="groupDetailLoading" style="display: block">
+                    <div v-if="groupDetailItems.length > 0" class="detail-grid">
+                      <div
+                        v-for="item in groupDetailItems"
+                        :key="item.detection_id"
+                        class="detail-item"
+                        @click="goDetail(item.inspiration_id)"
+                      >
+                        <HoverImagePreview
+                          class="image-wrap"
+                          :large-src="getFileUrl(item.file_path)"
+                        >
+                          <img :src="thumbUrl(item)" loading="lazy" />
+                        </HoverImagePreview>
+                        <a-checkbox
+                          class="detail-check"
+                          :model-value="groupChecked.has(item.detection_id)"
+                          @click.stop
+                          @change="(v: unknown) => toggleGroupChecked(item.detection_id, v)"
+                        />
+                        <span v-if="item.confidence !== null" class="detail-conf">
+                          {{ item.confidence.toFixed(2) }}
+                        </span>
+                      </div>
+                    </div>
+                    <a-empty v-else description="该组暂无明细" size="small" />
+                  </a-spin>
+                  <div class="detail-actions">
+                    <a-pagination
+                      v-if="groupDetailTotal > 50"
+                      size="mini"
+                      :current="groupDetailPage"
+                      :page-size="50"
+                      :total="groupDetailTotal"
+                      @change="
+                        (p: number) => {
+                          groupDetailPage = p
+                          loadGroupDetail()
+                        }
+                      "
+                    />
+                    <a-typography-text type="secondary" style="font-size: 12px">
+                      已勾选 {{ groupChecked.size }} 张 · 整组指派无需勾选
+                    </a-typography-text>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <a-empty
+              v-else-if="!clusterLoading && !clusterTask"
+              description="暂无聚合分组，先运行「开始聚合聚类」"
+            />
+            <a-pagination
+              v-if="clusterTotal > 20"
+              style="margin-top: 12px; justify-content: center"
+              :current="clusterPage"
+              :page-size="20"
+              :total="clusterTotal"
+              @change="
+                (p: number) => {
+                  clusterPage = p
+                  loadClusterGroups()
+                }
+              "
+            />
+          </a-spin>
+        </a-tab-pane>
       </a-tabs>
     </a-card>
   </div>
@@ -964,6 +1293,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+/* 聚合分组代表图：组头像（人脸缩略图） */
+.group-rep-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .unmatched-grid {

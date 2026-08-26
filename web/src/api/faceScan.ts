@@ -56,6 +56,43 @@ export interface ConfirmResult {
   skipped: number
 }
 
+/** 人脸聚合分组列表项（未匹配人脸按疑似同一人聚类） */
+export interface FaceClusterGroup {
+  group_id: number
+  size: number
+  detection_ids: number[]
+  rep_detection_id: number | null
+  rep_inspiration_id: string | null
+  rep_file_path: string | null
+  rep_thumbnail_path: string | null
+}
+
+/** 人脸聚合分组查询响应 */
+export interface FaceClusterGroups {
+  task_status: string | null
+  items: FaceClusterGroup[]
+  total: number
+  page: number
+  size: number
+  summary: {
+    total_faces?: number | null
+    method?: string | null
+    group_count?: number | null
+    clustered_faces?: number | null
+    singletons?: number | null
+    threshold?: number | null
+  } | null
+}
+
+/** 人脸聚合组明细分页响应 */
+export interface FaceClusterDetections {
+  group_id: number
+  items: DetectionItem[]
+  total: number
+  page: number
+  size: number
+}
+
 /** 创建扫描任务（增量/半增量/全量；autoMatch 扫描完成后自动全库匹配，默认关闭） */
 export async function startFaceScan(
   scope: 'incremental' | 'semi' | 'all' = 'semi',
@@ -112,5 +149,44 @@ export async function confirmFaceScan(
   }>,
 ): Promise<ConfirmResult> {
   const { data } = await apiClient.post<ConfirmResult>('/face-scan/confirm', { action, items })
+  return data
+}
+
+/** 创建人脸聚合聚类任务（未匹配人脸按疑似同一人分组） */
+export async function runFaceCluster(
+  params: { threshold?: number; min_group_size?: number } = {},
+): Promise<{ task_id: number; message: string }> {
+  const { data } = await apiClient.post<{ task_id: number; message: string }>(
+    '/face-scan/cluster/run',
+    params,
+  )
+  return data
+}
+
+/** 最近一次人脸聚合聚类任务状态 */
+export async function fetchFaceClusterTask(): Promise<{ cluster_task: FaceScanTaskOut | null }> {
+  const { data } = await apiClient.get<{ cluster_task: FaceScanTaskOut | null }>(
+    '/face-scan/cluster/task',
+  )
+  return data
+}
+
+/** 人脸聚合分组分页查询 */
+export async function fetchFaceClusterGroups(
+  params: { page?: number; size?: number } = {},
+): Promise<FaceClusterGroups> {
+  const { data } = await apiClient.get<FaceClusterGroups>('/face-scan/cluster/groups', { params })
+  return data
+}
+
+/** 某聚合组的人脸明细分页 */
+export async function fetchFaceClusterDetections(
+  groupId: number,
+  params: { page?: number; size?: number } = {},
+): Promise<FaceClusterDetections> {
+  const { data } = await apiClient.get<FaceClusterDetections>(
+    `/face-scan/cluster/groups/${groupId}/detections`,
+    { params },
+  )
   return data
 }

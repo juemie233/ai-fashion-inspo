@@ -38,3 +38,10 @@ class FaceConfirmIn(BaseModel):
 
     action: str = Field(..., pattern="^(confirm|reject|undo)$")
     items: list[FaceConfirmItem] = Field(..., min_length=1, max_length=5000)
+
+
+class FaceClusterRunIn(BaseModel):
+    """创建人脸聚合聚类任务请求（阈值/最小组成员数可调）。"""
+
+    threshold: float | None = Field(None, ge=0.0, le=1.0)
+    min_group_size: int | None = Field(None, ge=2, le=100)
