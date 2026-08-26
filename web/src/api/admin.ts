@@ -126,3 +126,28 @@ export async function fetchNearDuplicates(
   })
   return data
 }
+
+/** 数据备份历史条目（一次时间戳命名的备份目录） */
+export interface BackupHistoryItem {
+  name: string
+  success: boolean
+  time: string | null
+}
+
+/** 数据备份状态（任务管理页「数据备份」卡片数据源，只读） */
+export interface BackupStatus {
+  enabled: boolean
+  configured: boolean
+  target_path: string
+  running: boolean
+  latest_success_at: string | null
+  latest_success_dir: string | null
+  history: BackupHistoryItem[]
+  log_tail: string[]
+}
+
+/** 获取数据备份状态（只读，不触发备份；双通道备份的运行锁/历史均实时读取） */
+export async function fetchBackupStatus(): Promise<BackupStatus> {
+  const { data } = await apiClient.get<BackupStatus>('/admin/backup/status')
+  return data
+}

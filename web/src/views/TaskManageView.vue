@@ -5,6 +5,7 @@ import { onMounted, onUnmounted } from 'vue'
 import { Button, Select, Pagination, Space } from '@arco-design/web-vue'
 import { useTaskCenter } from '@/composables/useTaskCenter'
 import { TASK_TYPE_LABELS } from '@/utils/taskLabel'
+import BackupStatusCard from '@/components/task/BackupStatusCard.vue'
 import TaskList from '@/components/task/TaskList.vue'
 
 const {
@@ -76,6 +77,8 @@ onUnmounted(stopPoll)
       </a-space>
       <span class="summary">共 {{ total }} 条{{ hasActive ? '（有任务运行中）' : '' }}</span>
     </div>
+
+    <backup-status-card />
 
     <task-list :tasks="pageItems" :loading="loading" @cancel="cancelTask" @delete="deleteTask" />
 

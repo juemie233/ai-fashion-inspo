@@ -102,6 +102,61 @@ def test_should_run_ignores_failed_backup(tmp_path):
     )
 
 
+# ── build_backup_status（任务管理页展示用只读状态）──
+
+
+def _make_log(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_build_backup_status_basic(tmp_path):
+    """历史按时间倒序、成功标记正确、最近成功取最新一份。"""
+    _make_backup(tmp_path, "2026-08-20_030000")
+    _make_backup(tmp_path, "2026-08-25_030000", success=False)
+    _make_backup(tmp_path, "2026-08-26_030000")
+    (tmp_path / "manual_note").mkdir()  # 非时间戳目录忽略
+    log = _make_log(tmp_path / "logs" / "backup.log", "line1\nline2\n")
+
+    st = backup_service.build_backup_status(target_root=tmp_path, log_path=log)
+
+    assert st["configured"] is True
+    assert st["target_path"] == str(tmp_path)
+    assert st["running"] is False
+    assert st["latest_success_dir"] == "2026-08-26_030000"
+    assert st["latest_success_at"] == "2026-08-26T03:00:00"
+    # 倒序：最新在前；失败备份也列出但 success=False
+    names = [h["name"] for h in st["history"]]
+    assert names == ["2026-08-26_030000", "2026-08-25_030000", "2026-08-20_030000"]
+    assert st["history"][1]["success"] is False
+    assert st["history"][2]["success"] is True
+    assert st["log_tail"] == ["line1", "line2"]
+
+
+def test_build_backup_status_running_lock(tmp_path):
+    """目标根下存在 .backup.lock 并发锁 → running=True（双通道可见）。"""
+    _make_backup(tmp_path, "2026-08-26_030000")
+    (tmp_path / ".backup.lock").mkdir()
+    st = backup_service.build_backup_status(
+        target_root=tmp_path, log_path=tmp_path / "logs" / "backup.log"
+    )
+    assert st["running"] is True
+
+
+def test_build_backup_status_not_configured(tmp_path, monkeypatch):
+    """未配置目标目录（且配置为空）→ configured=False 空状态。"""
+    monkeypatch.setattr(backup_service.settings, "backup_target_path", "")
+    st = backup_service.build_backup_status(
+        target_root=None, log_path=tmp_path / "nope.log"
+    )
+    assert st["configured"] is False
+    assert st["target_path"] == ""
+    assert st["latest_success_at"] is None
+    assert st["history"] == []
+    assert st["log_tail"] == []  # 日志文件不存在
+
+
 # ── 触发逻辑（_spawn_backup 调脚本，loop 按判定触发）──
 
 

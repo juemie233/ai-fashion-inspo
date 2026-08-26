@@ -99,6 +99,81 @@ def should_run_startup_backup(
     return (now - last) >= timedelta(hours=min_interval_hours)
 
 
+def _read_log_tail(path: Path, max_lines: int = 40) -> list[str]:
+    """读取日志文件末尾若干行（文件不存在/不可读时返回空列表）。
+
+    供任务管理页展示备份日志尾部；只读，不影响备份链路。
+    """
+    if not path.is_file():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    return [line.rstrip("\r\n") for line in lines[-max_lines:]]
+
+
+def build_backup_status(
+    target_root: Path | None = None,
+    *,
+    log_path: Path | None = None,
+    limit: int = 10,
+) -> dict:
+    """汇总备份状态供任务管理页展示（只读，不触发备份）。
+
+    target_root / log_path 可注入（测试用）；默认取 settings 配置：
+    - enabled / configured / target_path：自动补备开关、目标是否已配置、目标路径
+    - running：是否正在备份（目标根下 .backup.lock 并发锁存在，与
+      backup_data.sh 的锁机制一致，双通道（计划任务/启动补备）都可见）
+    - latest_success_at / latest_success_dir：最近一次成功备份的时间与目录名
+    - history：目标根下时间戳备份目录列表（最新在前，至多 limit 条），
+      含 success 标记（目录内是否有 SUCCESS 文件）
+    - log_tail：storage/logs/backup.log 末尾若干行
+    """
+    root = target_root
+    if root is None:
+        target = settings.backup_target_path
+        root = Path(target) if target and target.strip() else None
+
+    log = log_path
+    if log is None:
+        log = settings.storage_root / "logs" / "backup.log"
+
+    latest = latest_success_backup_time(root) if root else None
+
+    history: list[dict] = []
+    if root and root.is_dir():
+        for child in root.iterdir():
+            if not child.is_dir() or not _STAMP_RE.match(child.name):
+                continue
+            try:
+                time_iso = datetime.strptime(child.name, "%Y-%m-%d_%H%M%S").isoformat()
+            except ValueError:
+                time_iso = None
+            history.append(
+                {
+                    "name": child.name,
+                    "success": (child / "SUCCESS").exists(),
+                    "time": time_iso,
+                }
+            )
+        # 目录名即时间戳，字符串倒序 = 时间倒序
+        history.sort(key=lambda x: x["name"], reverse=True)
+        history = history[:limit]
+
+    return {
+        "enabled": settings.backup_on_startup,
+        "configured": root is not None,
+        "target_path": str(root) if root else "",
+        "running": bool(root and (root / ".backup.lock").is_dir()),
+        "latest_success_at": latest.isoformat() if latest else None,
+        "latest_success_dir": latest.strftime("%Y-%m-%d_%H%M%S") if latest else None,
+        "history": history,
+        "log_tail": _read_log_tail(log),
+    }
+
+
 async def _spawn_backup(target: str) -> int:
     """异步执行 backup_data.sh，返回退出码；stdout/stderr 追加到 backup.log。
 

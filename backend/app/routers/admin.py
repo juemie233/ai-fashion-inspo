@@ -27,7 +27,7 @@ from app.models.inspiration import (
 from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 from app.models.tag import InspirationTag
 from app.models.audit import AuditLog
-from app.services import admin_stats_service, inspiration_service
+from app.services import admin_stats_service, backup_service, inspiration_service
 from app.services.audit_service import record_audit_log
 from app.utils.csv_safety import sanitize_csv_cell
 from app.utils.file_hash import build_hash_map
@@ -40,6 +40,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 async def admin_stats(db: AsyncSession = Depends(get_db)) -> dict:
     """素材总览仪表盘数据（聚合逻辑在 app.services.admin_stats_service）。"""
     return await admin_stats_service.collect_stats(db)
+
+
+@router.get("/backup/status")
+async def backup_status() -> dict:
+    """数据备份状态（只读）：开关/最近成功备份/历史/运行锁/日志尾部。
+
+    供任务管理页「数据备份」卡片展示；不触发备份，也不读取数据库。
+    备份双通道（每日计划任务 + 启动补备）的运行锁（.backup.lock）与
+    历史目录均从备份目标目录实时读取，两通道的信息都能看到。
+    """
+    return backup_service.build_backup_status()
 
 
 @router.get("/largest-files")
