@@ -133,9 +133,10 @@ async def test_spawn_backup_calls_script(monkeypatch, tmp_path):
     assert Path(captured["args"][0]).name.lower() in ("bash", "bash.exe")
     assert str(captured["args"][1]).endswith("backup_data.sh")
     assert captured["args"][2] == "E:/fashion-inspo-backups"
-    # stderr 合并到 stdout，cwd 为项目根
+    # stderr 合并到 stdout；cwd 为项目根（与仓库目录名无关，CI 上目录名
+    # 可能是 fashion-inspo 或 ai-fashion-inspo，直接对比 PROJECT_ROOT）
     assert captured["kwargs"]["stderr"] == backup_service.asyncio.subprocess.STDOUT
-    assert Path(captured["kwargs"]["cwd"]).name == "fashion-inspo"
+    assert Path(captured["kwargs"]["cwd"]) == backup_service.PROJECT_ROOT
 
 
 @pytest.mark.asyncio
