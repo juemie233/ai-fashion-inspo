@@ -40,6 +40,16 @@ from app.services.blogger_face import (
 router = APIRouter(prefix="/api/inspirations", tags=["inspirations"])
 
 
+# ── 辅助函数 ──
+
+
+def _parse_csv_list(value: str | None) -> list[str] | None:
+    """解析逗号分隔的字符串列表。"""
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 # ── 人脸检测与博主匹配 ──
 
 
@@ -135,7 +145,7 @@ async def create_inspiration(
         source_platform_id=source_platform_id,
         scraper_task_id=scraper_task_id,
     )
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.post("/from-url", response_model=InspirationOut, status_code=status.HTTP_201_CREATED)
@@ -183,7 +193,7 @@ async def create_from_url(
         source_platform_id=source_platform_id,
         scraper_task_id=scraper_task_id,
     )
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.get("", response_model=InspirationListOut)
@@ -207,11 +217,11 @@ async def list_inspirations(
     db: AsyncSession = Depends(get_db),
 ) -> InspirationListOut:
     """分页获取灵感列表，支持多维筛选和排序。"""
-    include_list = (
-        [t.strip() for t in include_tags.split(",") if t.strip()]
-        if include_tags else None
-    )
-    id_list = [i.strip() for i in ids.split(",") if i.strip()] if ids else None
+    # 解析CSV格式参数
+    include_list = _parse_csv_list(include_tags)
+    id_list = _parse_csv_list(ids)
+    
+    # 调用服务层查询
     inspirations, total = await inspiration_service.list_inspirations(
         db,
         page=page,
@@ -232,7 +242,7 @@ async def list_inspirations(
         sort=sort,
     )
     return InspirationListOut(
-        items=[_to_out(i) for i in inspirations],
+        items=[inspiration_to_out(i) for i in inspirations],
         total=total,
         page=page,
         size=size,
@@ -271,7 +281,7 @@ async def list_trash(
     """分页获取垃圾桶中的素材（软删除，可恢复）。"""
     items, total = await inspiration_service.list_trash(db, page=page, size=size, reason=reason)
     return InspirationListOut(
-        items=[_to_out(i) for i in items],
+        items=[inspiration_to_out(i) for i in items],
         total=total,
         page=page,
         size=size,
@@ -304,14 +314,14 @@ async def move_to_trash(
         payload.reason if payload else None,
         source=(payload.source if payload and payload.source else "manual"),
     )
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.post("/{inspiration_id}/restore", response_model=InspirationOut)
 async def restore_inspiration(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> InspirationOut:
     """从垃圾桶恢复素材（移回媒体目录，清除软删除标记）。"""
     inspiration = await inspiration_service.restore_inspiration(db, inspiration_id)
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.get("/{inspiration_id}", response_model=InspirationDetailOut)
@@ -368,7 +378,7 @@ async def update_inspiration(
 ) -> InspirationOut:
     """更新灵感（收藏状态、作者等部分字段）。"""
     inspiration = await inspiration_service.update_inspiration(db, inspiration_id, data)
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.post("/{inspiration_id}/crop", response_model=InspirationOut)
@@ -389,7 +399,7 @@ async def crop_inspiration(
     inspiration = await crop_inspiration_region(
         db, inspiration_id, payload.y1_ratio, payload.y2_ratio
     )
-    return _to_out(inspiration)
+    return inspiration_to_out(inspiration)
 
 
 @router.post("/batch-tags", status_code=status.HTTP_200_OK)
@@ -601,6 +611,4 @@ async def delete_inspiration(inspiration_id: str, db: AsyncSession = Depends(get
     await inspiration_service.delete_inspiration(db, inspiration_id)
 
 
-def _to_out(inspiration: Inspiration) -> InspirationOut:
-    """将 ORM 模型转换为 API 响应模型（实现已收敛到 schemas.inspiration_to_out）。"""
-    return inspiration_to_out(inspiration)
+

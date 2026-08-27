@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile
+from app.exceptions import validation_error, file_error, processing_error
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,11 +51,11 @@ def _validate_download_url(url: str) -> None:
     parsed = urlparse(url)
     host = parsed.hostname
     if not host:
-        raise HTTPException(status_code=400, detail="无效的下载地址")
+        raise validation_error("url", "无效的下载地址")
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
-        raise HTTPException(status_code=400, detail="下载地址无法解析")
+        raise validation_error("url", "下载地址无法解析")
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if (
@@ -64,9 +65,9 @@ def _validate_download_url(url: str) -> None:
             or ip.is_reserved
             or ip.is_multicast
         ):
-            raise HTTPException(
-                status_code=400,
-                detail="下载地址指向内网/保留地址，已拒绝（SSRF 防护）",
+            raise validation_error(
+                "url", 
+                "下载地址指向内网/保留地址，已拒绝（SSRF 防护）"
             )
 
 

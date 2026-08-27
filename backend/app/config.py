@@ -154,10 +154,197 @@ class Settings(BaseSettings):
             "person_photos": self.person_photos_dir,
             "person_thumbnails": self.person_thumbnails_dir,
         }
+    
+    @property
+    def config_constants(self) -> "ConfigConstants":
+        """返回常量配置实例。
+
+        注解使用字符串前向引用：ConfigConstants 定义在本类之后，
+        且全局实例在模块尾部才创建，属性体在首次访问时才会求值。
+        """
+        return config_constants
 
 
 # 全局单例配置
 settings = Settings()
+
+
+class ConfigConstants:
+    """常量配置类，从配置文件中提取硬编码值。"""
+    
+    def __init__(self, settings_obj):
+        self.settings = settings_obj
+    
+    # AI 相关常量
+    @property
+    def ai_temperature(self):
+        return getattr(self.settings, 'ai_temperature', 0.7)
+    
+    @property
+    def ai_top_p(self):
+        return getattr(self.settings, 'ai_top_p', 0.9)
+    
+    @property
+    def ai_top_k(self):
+        return getattr(self.settings, 'ai_top_k', 40)
+    
+    @property
+    def ai_num_predict(self):
+        return getattr(self.settings, 'ai_num_predict', 4096)
+    
+    @property
+    def ai_num_ctx(self):
+        return getattr(self.settings, 'ai_num_ctx', 16384)
+    
+    @property
+    def ai_low_confidence_threshold(self):
+        return getattr(self.settings, 'ai_low_confidence_threshold', 0.6)
+    
+    @property
+    def ai_generated_confidence_threshold(self):
+        return getattr(self.settings, 'ai_generated_confidence_threshold', 0.8)
+    
+    @property
+    def ai_analysis_prompt(self):
+        # 如果没有从配置中加载，使用默认值
+        return getattr(self.settings, 'ai_analysis_prompt', (
+            "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：\n\n"
+            "1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风\n"
+            "   （可以输出多个风格标签，如果没有明显风格可以不输出）\n\n"
+            "2. 单品识别：识别图中每一件主要服饰单品，包括类型+颜色+特征。\n"
+            '   格式：{"type": "单品类型", "color": "颜色", "features": ["特征1", "特征2"]}\n\n'
+            "3. 版型：宽松/修身/Oversized/直筒/紧身/A字/H型/喇叭/锥形/阔腿\n\n"
+            "4. 穿着方式/身体部位关系：过膝/露腰/高腰/V领/圆领/高领/一字肩/七分袖/长袖/短袖/无袖/拖地/迷你/中长款/长款/短款\n\n"
+            "5. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍\n\n"
+            "6. 主色调提取：提取2-3个主要颜色（返回hex值）\n\n"
+            "请以JSON格式输出，不要包含任何其他文字：\n"
+            '{\n  "style": [],\n  "items": [{"type": "", "color": "", "features": []}],\n'
+            '  "fit": [],\n  "wear_style": [],\n'
+            '  "attributes": [],\n  "dominant_colors": []\n}'
+        ))
+    
+    # 向量检索常量
+    @property
+    def vector_top_k_default(self):
+        return getattr(self.settings, 'vector_top_k_default', 20)
+    
+    @property
+    def vector_similarity_weight(self):
+        return getattr(self.settings, 'vector_similarity_weight', 0.6)
+    
+    @property
+    def vector_tag_weight(self):
+        return getattr(self.settings, 'vector_tag_weight', 0.4)
+    
+    @property
+    def text_vector_dim(self):
+        return getattr(self.settings, 'lancedb_text_dim', 384)
+    
+    @property
+    def image_vector_dim(self):
+        return getattr(self.settings, 'lancedb_image_dim', 512)
+    
+    # 图片处理常量
+    @property
+    def thumbnail_size(self):
+        return getattr(self.settings, 'thumbnail_size', (400, 600))
+    
+    @property
+    def thumbnail_quality(self):
+        return getattr(self.settings, 'thumbnail_quality', 85)
+    
+    @property
+    def max_image_upload_mb(self):
+        return getattr(self.settings, 'max_image_upload_mb', 20)
+    
+    @property
+    def max_video_upload_mb(self):
+        return getattr(self.settings, 'max_video_upload_mb', 500)
+    
+    # 标签常量
+    @property
+    def tag_name_max_length(self):
+        return getattr(self.settings, 'tag_name_max_length', 12)
+    
+    @property
+    def seed_tags(self):
+        return getattr(self.settings, 'seed_tags', [
+            "JK制服", "汉服", "Lolita", "Y2K", "CleanFit", "法式", "日系", "韩系", 
+            "学院风", "街头", "新中式", "复古", "极简", "美式复古", "英伦风", 
+            "波西米亚", "运动风", "甜美风", "暗黑风"
+        ])
+    
+    # 质量审核常量
+    @property
+    def quality_classifier_threshold(self):
+        return getattr(self.settings, 'quality_classifier_threshold', 0.9)
+    
+    @property
+    def manual_upload_auto_approve(self):
+        return getattr(self.settings, 'manual_upload_auto_approve', True)
+    
+    # 人脸识别常量
+    @property
+    def face_service_timeout(self):
+        return getattr(self.settings, 'face_service_timeout', 30.0)
+    
+    @property
+    def face_match_threshold(self):
+        return getattr(self.settings, 'face_match_threshold', 0.5)
+    
+    # 任务队列常量
+    @property
+    def poll_interval(self):
+        return getattr(self.settings, 'poll_interval', 1.0)
+    
+    @property
+    def heartbeat_interval(self):
+        return getattr(self.settings, 'heartbeat_interval', 10.0)
+    
+    @property
+    def stale_heartbeat_threshold(self):
+        return getattr(self.settings, 'stale_heartbeat_threshold', 90.0)
+    
+    # 爬虫常量
+    @property
+    def scraper_request_delay(self):
+        return getattr(self.settings, 'scraper_request_delay', 2.0)
+    
+    @property
+    def scraper_max_concurrent(self):
+        return getattr(self.settings, 'scraper_max_concurrent', 3)
+    
+    @property
+    def scraper_default_max_count(self):
+        return getattr(self.settings, 'scraper_default_max_count', 20)
+    
+    @property
+    def scraper_browser_headless(self):
+        return getattr(self.settings, 'scraper_browser_headless', True)
+    
+    @property
+    def chrome_debug_port(self):
+        return getattr(self.settings, 'chrome_debug_port', 9222)
+    
+    @property
+    def chrome_auto_restart_limit(self):
+        return getattr(self.settings, 'chrome_auto_restart_limit', 3)
+    
+    @property
+    def chrome_idle_timeout(self):
+        return getattr(self.settings, 'chrome_idle_timeout', 600)
+    
+    @property
+    def chrome_startup_timeout(self):
+        return getattr(self.settings, 'chrome_startup_timeout', 20)
+    
+    @property
+    def task_auto_retry(self):
+        return getattr(self.settings, 'task_auto_retry', 2)
+
+
+# 创建配置常量实例
+config_constants = ConfigConstants(settings)
 
 # ── Chrome 路径自动探测 ──
 # 配置留空时，按常见安装位置探测 Chrome 可执行文件；用户数据目录使用默认位置。

@@ -30,8 +30,23 @@ from app.routers import (
     health,
 )
 from app.utils.auth import is_destructive_route
+from app.exceptions import (
+    AppException,
+    AuthenticationException,
+    AuthorizationException,
+    NotFoundException,
+    ValidationException,
+)
 
 logger = logging.getLogger(__name__)
+
+# 业务异常 → HTTP 状态码映射（未列出的 AppException 子类统一按 500 处理）
+_APP_EXCEPTION_STATUS: dict[type[AppException], int] = {
+    NotFoundException: 404,
+    ValidationException: 400,
+    AuthenticationException: 401,
+    AuthorizationException: 403,
+}
 
 # 垃圾桶自动清理周期（秒）：每 6 小时扫描一次超过保留期的软删除素材
 _TRASH_SWEEP_INTERVAL = 6 * 3600
@@ -237,6 +252,21 @@ async def destructive_api_key_middleware(
             status_code=403, content={"detail": "API 密钥无效"}
         )
     return await call_next(request)
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    """业务异常统一转换：保持 {detail} 错误响应契约，服务层可抛领域异常。
+
+    Starlette 按 MRO 匹配处理器，注册基类即可捕获全部子类；
+    映射表未覆盖的异常类型按 500 处理，消息原文返回便于排查。
+    """
+    status_code = 500
+    for exc_type, code in _APP_EXCEPTION_STATUS.items():
+        if isinstance(exc, exc_type):
+            status_code = code
+            break
+    return JSONResponse(status_code=status_code, content={"detail": exc.message})
+
 
 # 注册路由
 app.include_router(inspirations.router)

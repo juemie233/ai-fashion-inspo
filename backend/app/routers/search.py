@@ -19,7 +19,7 @@ from app.models.inspiration import (
 )
 from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
-from app.schemas.inspiration import InspirationListOut, InspirationOut
+from app.schemas.inspiration import InspirationListOut, InspirationOut, inspiration_to_out
 from app.schemas.search import (
     SimilarItemOut,
     SimilarOut,
@@ -265,7 +265,7 @@ async def search_inspirations(
     inspirations = result.unique().scalars().all()
 
     return InspirationListOut(
-        items=[_to_search_out(i) for i in inspirations],
+        items=[inspiration_to_out(i) for i in inspirations],
         total=total,
         page=page,
         size=size,
@@ -322,7 +322,7 @@ async def vector_search(
         if insp:
             items.append(
                 VectorSearchItem(
-                    inspiration=_to_search_out(insp),
+                    inspiration=inspiration_to_out(insp),
                     score=hit["score"],
                 )
             )
@@ -375,7 +375,7 @@ async def similar_inspirations(
 
     out_items = [
         SimilarItemOut(
-            inspiration=_to_search_out(item["inspiration"]),
+            inspiration=inspiration_to_out(item["inspiration"]),
             similarity=item["similarity"],
             shared_tags=item["shared_tags"],
             match_source=item["match_source"],
@@ -384,7 +384,7 @@ async def similar_inspirations(
     ]
 
     return SimilarOut(
-        source=_to_search_out(source),
+        source=inspiration_to_out(source),
         similar=out_items,
     )
 
@@ -453,11 +453,7 @@ async def tag_cooccurrence(
     }
 
 
-def _to_search_out(inspiration: Inspiration) -> InspirationOut:
-    """将 Inspiration 模型转换为搜索结果的 InspirationOut。"""
-    from app.schemas.inspiration import inspiration_to_out
 
-    return inspiration_to_out(inspiration)
 
 
 async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:
