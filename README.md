@@ -233,6 +233,7 @@ fashion-inspo/
 │   │   ├── main.py               # FastAPI 入口
 │   │   ├── config.py             # 配置管理
 │   │   ├── database.py           # 数据库引擎
+│   │   ├── exceptions.py         # 业务异常体系（AppException 子类 → HTTP 状态码全局映射）
 │   │   ├── worker.py             # 任务队列 worker（python -m app.worker）
 │   │   ├── models/               # 数据模型
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
@@ -300,6 +301,8 @@ fashion-inspo/
 │   │       ├── file_hash.py      # 文件 MD5/SHA-256 哈希
 │   │       ├── image_hash.py     # 感知哈希（dHash，近似重复检测）
 │   │       ├── image_utils.py    # 缩略图/颜色提取
+│   │       ├── performance.py    # 性能工具（耗时监控装饰器/BatchProcessor 并发批处理/FileCache/MemoryMonitor）
+│   │       ├── time.py           # 统一 UTC 时间与 ISO 序列化
 │   │       └── tag_normalizer.py # 标签标准化 + 同义词/别名映射
 │   ├── scripts/                  # 维护脚本
 │   │   ├── run_scraper.py         # 采集执行脚本（小红书 CDP / 抖音独立浏览器，断点续采）
@@ -917,7 +920,7 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，491 用例）
+### 后端（pytest，556 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -932,7 +935,9 @@ pytest
 
 - **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理/**状态不变量校验**（软删除三字段同真同假，R1/R2/R3 违规检出）、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、**标签高级管理**（操作历史快照/单条回滚/merge 回滚恢复关联与别名/冲突检测 409；健康度四类问题识别与评分/任务全链路/分页；聚类候选组生成与 apply 合并+别名+历史同批次/group_id 解析/缺源容错；批量编辑四类规则 dry-run 与执行一致/撞名自动合并/历史回滚；网络图社区/类别过滤/任务全链路 + 图算法纯函数单测；层级树懒加载/循环检测/move 历史；效果分析升降榜分窗口/组合/覆盖度/来源分布）、人物模块（博主/模特拆分后的双套 CRUD/素材关联/风格画像/删除限制/CSV 导入/照片组，以及人物频次合并统计）、**博主人脸**（注册平均池化/重新注册覆盖/无脸拒绝/超 5 张拒绝/博主不存在 404、素材人脸检测命中与未命中/手动指定与解除/删除检测——均 mock face_client）、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**手机图剪裁**（候选扫描/黑边检测/截图特征置信度/跳过明细/内容重复对比预览/物理删除重复素材后重裁/重新裁剪不清空其他组预览）、**任务执行器**（批量删除任务：删记录+删文件+释放空间；向量回填攒批/质量审核防假成功：全部失败抛任务级异常、部分失败正常完成）、**AI 分析与质量审核**（完整分析保存标签、审核二分类通过/拒绝、大标签建议、质量统计、批量审核/重审任务创建——均模拟 Ollama）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态、统计聚合、**按博主采集任务**：collect_mode=user 校验 Blogger 存在（404）、自动补全 profile_url/platform_user_id、缺博主与缺 URL 双 400、**话题库查询接口**：去重/计数/排序/筛选）
 - **链路端到端旅程测试**（`test_journeys.py`，验证环节衔接而非单环节内部）：素材全旅程（上传→打标→向量→垃圾桶→恢复→再删→清空，每环节断言不变量零违规与墓碑/审计留痕）、采集旅程（插件会话→from-url 入库→任务完成→删除→墓碑→重采被拒，含恢复后墓碑仍在的防重复闭环）、失败旅程（文件缺失自愈：trash/restore 不产生悬空记录）、崩溃旅程（worker 心跳超时→`_reset_stale_tasks` 重置→重跑成功，不再假成功）
-- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）
+- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）、`exceptions`（业务异常体系：AppException 基类/资源未找到与字段校验异常携带上下文属性/details 浅拷贝防外泄修改/快捷工厂函数）、`performance`（耗时监控装饰器同步+异步、BatchProcessor 并发批处理含失败隔离与并发上限、FileCache 键生成与命中、内存监控与优化装饰器、端到端组合——日志断言经 mock logger，psutil 相关用例已 mock）、`config_constants`（Settings 存储目录、ConfigConstants 各域常量访问与回退值、类型一致性验证）
+
+> **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
