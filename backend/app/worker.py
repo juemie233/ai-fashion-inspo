@@ -116,7 +116,7 @@ async def _run_task(task_id: int) -> None:
             if handler is None:
                 raise PermanentTaskError(f"未知任务类型: {task.type}")
             await handler(db, task)
-            # 任务执行期间状态可能被外部变更（如取消接口），仅当仍为 running 时才标记 success
+            # 任务执行期间状态可能被外部变更（如取消/暂停接口），仅当仍为 running 时才标记 success
             await db.refresh(task)
             if task.status != "running":
                 logger.info(

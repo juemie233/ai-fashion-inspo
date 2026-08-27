@@ -49,6 +49,15 @@ class TaskQueue(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True, index=True
     )  # 认领 worker 的最后心跳时间（超时视为 worker 已死）
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )  # 暂停时间（暂停/恢复机制用）
+    last_stage: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )  # 暂停时的阶段名（用于恢复时续算）
+    stage_state: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True
+    )  # 暂停时的中间状态（JSON，含社区标签/中心度等）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow

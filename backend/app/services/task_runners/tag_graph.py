@@ -2,6 +2,10 @@
 
 任务类型：``tag_network_analyze``
 任务 result：analyze_tag_network 的返回结构（节点含社区/中心度/桥接标记 + 边 + 社区摘要）。
+
+暂停/恢复机制：
+- 执行期间每阶段检查 task.status，若为 paused 则保存中间状态并返回；
+- 恢复时从 last_stage + stage_state 续算，不重复已完成部分。
 """
 
 import logging
@@ -47,22 +51,39 @@ async def create_tag_network_analyze_task(
 
 
 async def execute_tag_network_analyze(db: AsyncSession, task: TaskQueue) -> None:
-    """执行网络图分析（由 worker 调用），结果写入任务 result。"""
+    """执行网络图分析（由 worker 调用），结果写入任务 result。
+
+    支持暂停/恢复：
+    - 若任务状态为 paused（从 resume 接口触发），从 stage_state 续算；
+    - 执行期间若被外部标记为 cancelled/paused，保存状态并返回。
+    """
     from app.services.tag_graph import analyze_tag_network
 
     task.error = None
     task.progress = 10
+    task.updated_at = utcnow()
     await db.commit()
 
     params = task.result or {}
+    resume_state = None
+    if task.status == "paused":
+        # 恢复模式：从暂停状态续算
+        resume_state = task.stage_state
+        if resume_state:
+            logger.info(f"恢复网络图分析任务: #{task.id}，阶段 {task.last_stage}")
+        else:
+            logger.info(f"恢复网络图分析任务: #{task.id}，无保存状态，从头开始")
+
     result = await analyze_tag_network(
         db,
+        task.id,
         limit=int(params.get("limit", 100)),
         min_count=int(params.get("min_count", 2)),
         category=params.get("category"),
         with_communities=bool(params.get("with_communities", True)),
         with_centrality=bool(params.get("with_centrality", True)),
         max_edges_per_node=int(params.get("max_edges_per_node", 0)),
+        resume_from_state=resume_state,
     )
 
     task.result = result

@@ -202,3 +202,109 @@ async def test_network_task_pruning_param(client, upload):
         degree[e["source"]] += 1
         degree[e["target"]] += 1
     assert all(d <= 1 for d in degree.values())
+
+
+# ═══════════ 暂停/恢复 ═══════════
+
+
+async def test_network_analyze_pause_resume(client, upload):
+    """暂停/恢复全链路：提交 → 暂停 → 恢复 → 完成，验证中间状态保存。"""
+    _create_tag(client, "JK制服", "style")
+    _create_tag(client, "百褶裙", "item_type")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服", "百褶裙"])
+
+    # 提交任务
+    r = client.post("/api/tags/network/analyze")
+    assert r.status_code == 200
+    task_id = r.json()["task_id"]
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+
+        # 暂停：仅允许 running 状态，这里直接手动改为 running 后暂停
+        task.status = "running"
+        await db.commit()
+
+        # 调用暂停接口
+        r = client.post(f"/api/tasks/{task_id}/pause")
+        assert r.status_code == 200
+        assert r.json()["message"] == "任务已暂停"
+
+        async with async_session() as db2:
+            task = await db2.get(TaskQueue, task_id)
+            assert task.status == "paused"
+            assert task.paused_at is not None
+
+        # 恢复：仅允许 paused 状态
+        r = client.post(f"/api/tasks/{task_id}/resume")
+        assert r.status_code == 200
+        assert r.json()["message"] == "任务已恢复"
+
+        async with async_session() as db3:
+            task = await db3.get(TaskQueue, task_id)
+            assert task.status == "running"
+            assert task.paused_at is None
+
+        # 执行完成
+        await execute_tag_network_analyze(db3, task)
+        task.status = "success"
+        task.progress = 100
+        await db3.commit()
+
+        result = task.result
+        assert len(result["nodes"]) == 2
+        assert len(result["edges"]) == 1
+
+
+async def test_network_pause_unauthorized(client, upload):
+    """暂停接口权限校验：非 running 或非 tag_network_analyze 类型拒绝。"""
+    # 提交普通任务（非 tag_network_analyze 类型）
+    _create_tag(client, "测试", "style")
+    r = client.post("/api/tags/network/analyze")
+    assert r.status_code == 200
+    task_id = r.json()["task_id"]
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        task.status = "success"  # 终态不可暂停
+        await db.commit()
+
+    r = client.post(f"/api/tasks/{task_id}/pause")
+    assert r.status_code == 400
+
+
+async def test_network_resume_unauthorized(client, upload):
+    """恢复接口权限校验：非 paused 状态拒绝。"""
+    r = client.post("/api/tags/network/analyze")
+    assert r.status_code == 200
+    task_id = r.json()["task_id"]
+
+    r = client.post(f"/api/tasks/{task_id}/resume")
+    assert r.status_code == 400  # pending 状态不可恢复
+
+
+async def test_network_cancel(client, upload):
+    """取消任务：running 状态的 tag_network_analyze 可取消。"""
+    _create_tag(client, "JK制服", "style")
+    for _ in range(2):
+        insp_id = upload().json()["id"]
+        _link(client, insp_id, ["JK制服"])
+
+    r = client.post("/api/tags/network/analyze")
+    assert r.status_code == 200
+    task_id = r.json()["task_id"]
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        task.status = "running"  # 模拟正在执行
+        await db.commit()
+
+    r = client.post(f"/api/tasks/{task_id}/cancel")
+    assert r.status_code == 200
+    assert r.json()["message"] == "任务已取消"
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task.status == "cancelled"

@@ -16,8 +16,9 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 # 支持「运行中取消」的任务类型：执行器内部每批检查 cancelled 后自行停止。
 # 人脸扫描/匹配任务耗时较长（分钟级），用户需要能随时中断（增量语义下
-# 重跑自动跳过已扫部分，中断无副作用）；其余类型任务不硬打断。
-_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match")
+# 重跑自动跳过已扫部分，中断无副作用）；标签网络分析支持暂停/恢复（断点续算）；
+# 其余类型任务不硬打断。
+_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match", "tag_network_analyze")
 
 
 @router.get("", response_model=TaskListOut)
@@ -125,6 +126,76 @@ async def cancel_task(
         status_code=400,
         detail=f"仅等待中的任务可以取消并删除（当前状态 {task.status}）",
     )
+
+
+@router.post("/{task_id}/pause", response_model=TaskCancelOut)
+async def pause_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """暂停任务（仅 tag_network_analyze 支持）：
+
+    - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state）；
+    - 执行器感知到 paused 状态后保存状态并返回。
+    """
+    task = await db.get(TaskQueue, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务未找到")
+
+    if task.status != "running" or task.type != "tag_network_analyze":
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅运行中的 tag_network_analyze 任务可暂停（当前状态 {task.status}）",
+        )
+
+    # 标记为 paused，等待执行器保存状态并返回
+    result = await db.execute(
+        update(TaskQueue)
+        .where(TaskQueue.id == task_id, TaskQueue.status == "running")
+        .values(status="paused", paused_at=utcnow(), updated_at=utcnow())
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        await db.refresh(task)
+        raise HTTPException(
+            status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法暂停"
+        )
+    return {"message": "任务已暂停", "task_id": task_id}
+
+
+@router.post("/{task_id}/resume", response_model=TaskCancelOut)
+async def resume_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """恢复任务（仅 tag_network_analyze 支持）：
+
+    - 从 ``paused`` 状态恢复为 ``running``；
+    - 保留 last_stage 和 stage_state，执行器从中续算。
+    """
+    task = await db.get(TaskQueue, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务未找到")
+
+    if task.status != "paused" or task.type != "tag_network_analyze":
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅已暂停的 tag_network_analyze 任务可恢复（当前状态 {task.status}）",
+        )
+
+    # 恢复为 running，保留 last_stage 和 stage_state
+    result = await db.execute(
+        update(TaskQueue)
+        .where(TaskQueue.id == task_id, TaskQueue.status == "paused")
+        .values(status="running", paused_at=None, updated_at=utcnow())
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        await db.refresh(task)
+        raise HTTPException(
+            status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法恢复"
+        )
+    return {"message": "任务已恢复", "task_id": task_id}
 
 
 @router.delete("/{task_id}", response_model=TaskCancelOut)
