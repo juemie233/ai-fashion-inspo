@@ -42,6 +42,8 @@ bash scripts/backup_data.sh E:/fashion-inspo-backups --verify-hash
 
 备份完成后看 `SUCCESS` 标记与退出码：`0` 成功，`2` 备份/校验失败（失败目录写 `FAILED`，保留排障，不自动删除）。日志同时写入备份目录的 `backup.log` 与 `backend/storage/logs/backup.log`。
 
+**热写入收敛：** 备份期间后台任务（标签分析/向量回填）持续写入 `storage/lancedb/` 等目录属正常场景。脚本在复制后做「比对 → 增量修复」循环（`robocopy /MIR` 只重同步不一致目录，最多 5 次），随后把该时刻的源端统计冻结为 `.source_stats.json`，最终校验以冻结清单为基准——收敛通过后源端继续写入不会误判失败。连续修复仍不一致（写入密度极高）才会判 FAILED，此时暂停相关任务或等其结束后补备即可。
+
 **保留策略（自动 rotation）：** 每日成功备份保留最近 7 份；更早的、落在周日的备份额外保留 4 份（周备）；失败备份独立保留最近 3 份；被中断的半截备份（无任何标记）立即清理。只删除匹配 `YYYY-MM-DD_HHMMSS` 的目录，手动放入的文件不受影响。
 
 ---

@@ -905,6 +905,7 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 - **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/backup_task.bat`（注册命令见 [备份恢复指南](docs/backup-restore.md)）。
 - **启动后自动补备**：后端启动 10 分钟后，若距上次成功备份超过 20 小时则自动补跑一次（`.env` 的 `BACKUP_ON_STARTUP=false` 可关闭）。两个通道通过 `backup.lock` 互斥。
 - **保留策略**：日备 7 份 + 周日周备 4 份；备份含 DB 一致性快照 + SQL 明文双保险 + 素材/缩略图/向量，备份后自动校验（integrity_check + 文件数/字节数比对）并写 `SUCCESS`/`FAILED` 标记。
+- **热写入兼容**：备份期间后台任务（标签分析/向量回填）持续写入时，脚本自动对不一致目录做增量修复重试（最多 5 次），校验以复制完成时刻的「冻结源端清单」为基准（时点快照语义），不再与实时源端比对误报。
 - **数据重置（reset）防呆**：执行前自动快照 DB 与素材目录到 `storage/_pre_reset_snapshot/`（保留 7 天），需输入 `DELETE` 二次确认，未配 API Key 时非本机访问直接拒绝。
 
 完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、常见场景）见 **[docs/backup-restore.md](docs/backup-restore.md)**。

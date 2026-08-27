@@ -13,6 +13,8 @@
 #   - SQLite 一致性快照（Python sqlite3.backup，后端运行中可安全备份）
 #   - 额外导出 SQL 明文（iterdump），DB 损坏时的抢救双保险
 #   - robocopy 全量 storage/，排除可重建的 _crop_backup / logs / tmp 等
+#   - 热写入收敛：后台任务持续写入（标签分析/lancedb）时自动增量修复，
+#     并以「冻结源端清单」为校验基准（时点快照语义，不与实时源端比对）
 #   - 运行时配置（.env / prompt 配置 / web/.env.local）+ git HEAD
 #   - 备份后校验：integrity_check、SQL 内存试导、必备目录、文件数/字节数比对
 #   - manifest.json 清单 + SUCCESS/FAILED 标记 + 可靠退出码
@@ -166,6 +168,106 @@ if [ -d backend/storage ]; then
 else
   fail "未找到 backend/storage，跳过素材存储备份"
 fi
+
+# ── 2.1 热写入收敛：备份期间后台任务（标签分析/向量回填等）可能持续写入
+#    storage/lancedb 等目录，单次复制后立即比对必然不一致（源端在变）。
+#    此处做「比对 → 增量修复」循环：只重同步出现不一致的目录（robocopy
+#    //MIR 增量很快），最多 REPAIR_MAX 次；全部一致则零开销直接通过。
+#
+#    每轮统计都会把「此时点」的源端清单冻结到 $DEST/.source_stats.json，
+#    最终校验（步骤 5）以最后一份冻结清单为基准，而不是校验时刻的实时
+#    源端——备份本就是时点快照语义，收敛通过后源端继续写入不应再判失败。
+MISMATCH_LIST="$DEST/.mismatch_dirs"
+FROZEN_STATS="$DEST/.source_stats.json"
+REPAIR_MAX=5
+repair_n=0
+while :; do
+  python - "$DEST" "backend/storage" "$MISMATCH_LIST" "$FROZEN_STATS" <<'PYEOF'
+import json
+import os
+import sys
+
+dest, storage_src, out_file, stats_file = sys.argv[1:5]
+REQUIRED = ("images", "person_photos", "trash", "thumbnails",
+            "person_thumbnails", "lancedb")
+
+def stat_dir(path: str) -> dict | None:
+    if not os.path.isdir(path):
+        return None
+    fc = tb = 0
+    for root, _, files in os.walk(path):
+        for fn in files:
+            fp = os.path.join(root, fn)
+            try:
+                tb += os.path.getsize(fp)
+                fc += 1
+            except OSError:
+                pass
+    return {"files": fc, "bytes": tb}
+
+dirs = list(REQUIRED)
+vs = stat_dir(os.path.join(storage_src, "videos"))
+if vs and vs["files"] > 0:
+    dirs.append("videos")
+
+storage_dest = os.path.join(dest, "storage")
+mismatch: list[str] = []
+stats: dict[str, dict | None] = {}
+for d in dirs:
+    s = stat_dir(os.path.join(storage_src, d))
+    stats[d] = s
+    if s is None:
+        continue  # 源端本就无此目录：交由最终校验做告警，不参与修复
+    t = stat_dir(os.path.join(storage_dest, d))
+    if t is None or s["files"] != t["files"] or s["bytes"] != t["bytes"]:
+        mismatch.append(d)
+
+# 冻结此时点的源端统计（无论是否一致都写，供步骤 5 作比对基准）
+with open(stats_file, "w", encoding="utf-8") as f:
+    json.dump(stats, f, ensure_ascii=False)
+
+if mismatch:
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(mismatch))
+    print("  源/目标不一致目录: " + ", ".join(mismatch))
+    sys.exit(3)
+sys.exit(0)
+PYEOF
+  if [ $? -eq 0 ]; then
+    [ "$repair_n" -gt 0 ] && echo "  热写入收敛完成（增量修复 $repair_n 次后一致）"
+    break
+  fi
+  repair_n=$((repair_n + 1))
+  if [ "$repair_n" -gt "$REPAIR_MAX" ]; then
+    echo "  !!! 连续 $REPAIR_MAX 次增量修复后仍不一致：源端疑似持续写入"
+    echo "      （如标签分析/AI 任务进行中）。本次备份将按校验失败处理，"
+    echo "      可暂停相关任务或等其结束后再触发补备。"
+    break
+  fi
+  echo "  检测到后台写入导致的不一致，增量修复（第 $repair_n/$REPAIR_MAX 次）..."
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
+    if command -v robocopy >/dev/null 2>&1; then
+      # /MIR 修复：同时处理「源端新增」与「源端删除」两类漂移；
+      # 正在写入中的文件复制失败由下一轮重试兜底
+      robocopy "backend/storage/$d" "$DEST/storage/$d" //MIR \
+        //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
+        //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
+      RC=$?
+      if [ "$RC" -le 7 ]; then
+        echo "    已重同步 $d/（robocopy 退出码 $RC）"
+      else
+        fail "增量修复 $d/ 失败（robocopy 退出码 $RC）"
+      fi
+    else
+      rm -rf "$DEST/storage/$d"
+      cp -r "backend/storage/$d" "$DEST/storage/$d"
+      echo "    已重同步 $d/（cp）"
+    fi
+  done < "$MISMATCH_LIST"
+  sleep 3
+done
+rm -f "$MISMATCH_LIST"
 echo ""
 
 # ── 3. 运行时配置（不进 git 的文件，保持原相对路径，便于 restore 直接拷回）──
@@ -236,7 +338,9 @@ else:
         except sqlite3.Error as e:
             errors.append(f"SQL 内存试导失败: {e}")
 
-# 5.3 必备目录存在性 + 源/目标文件数/字节数比对
+# 5.3 必备目录：与「冻结源端清单」比对（而非校验时刻的实时源端）。
+# 备份是时点快照：以复制收敛完成时刻的源端统计为基准，之后后台任务
+# 继续写入源端属正常现象，不应判备份失败（热写入收敛见步骤 2.1）。
 REQUIRED = ("images", "person_photos", "trash", "thumbnails",
             "person_thumbnails", "lancedb")
 
@@ -262,26 +366,37 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 storage_dest = os.path.join(dest, "storage")
-dir_stats: dict[str, dict] = {}
-for d in REQUIRED:
-    s = stat_dir(os.path.join(storage_src, d))
-    t = stat_dir(os.path.join(storage_dest, d))
-    dir_stats[d] = {"source": s, "dest": t}
-    if s is None:
-        warnings.append(f"源端无 {d}/ 目录（跳过）")
-        continue
-    if t is None:
-        errors.append(f"目标缺少必备目录 {d}/")
-    elif s["files"] != t["files"] or s["bytes"] != t["bytes"]:
-        errors.append(f"{d}/ 文件数或字节数不一致：源={s} 目标={t}")
+frozen_path = os.path.join(dest, ".source_stats.json")
+frozen: dict | None = None
+if os.path.exists(frozen_path):
+    try:
+        with open(frozen_path, encoding="utf-8") as f:
+            frozen = json.load(f)
+    except (OSError, ValueError):
+        frozen = None
 
-# videos 有内容时才要求
-vs = stat_dir(os.path.join(storage_src, "videos"))
-if vs and vs["files"] > 0:
-    t = stat_dir(os.path.join(storage_dest, "videos"))
-    dir_stats["videos"] = {"source": vs, "dest": t}
-    if not t or t["files"] != vs["files"] or t["bytes"] != vs["bytes"]:
-        errors.append(f"videos/ 不一致：源={vs} 目标={t}")
+dir_stats: dict[str, dict] = {}
+if not os.path.isdir(storage_dest):
+    # 未复制 storage：步骤 2 已 fail（未找到 backend/storage），此处仅跳过目录比对
+    pass
+elif frozen is None:
+    errors.append("缺少源端统计快照 .source_stats.json（复制收敛步骤未运行）")
+else:
+    for d, fs in frozen.items():
+        if fs is None:
+            warnings.append(f"源端无 {d}/ 目录（跳过）")
+            continue
+        t = stat_dir(os.path.join(storage_dest, d))
+        dir_stats[d] = {"source": fs, "dest": t}
+        if t is None:
+            errors.append(f"目标缺少必备目录 {d}/")
+        elif fs["files"] != t["files"] or fs["bytes"] != t["bytes"]:
+            errors.append(f"{d}/ 文件数或字节数不一致：源={fs} 目标={t}")
+    # 冻结清单已并入 manifest，清理临时文件
+    try:
+        os.remove(frozen_path)
+    except OSError:
+        pass
 
 # 5.4 配置文件：backend/.env 必须在（配置按原相对路径保存）
 if not os.path.exists(os.path.join(dest, "backend", ".env")):
