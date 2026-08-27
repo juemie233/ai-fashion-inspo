@@ -228,7 +228,9 @@ const scannedTotal = ref(0)
 const checkedCount = computed(() => checkedIds.value.size)
 
 /** 是否只勾选高置信候选（默认勾选 high+medium，排除 low；content 模式 plain
- * 类型无灰带/状态栏结构，可能是普通照片暗部，同样不默认勾选） */
+ * 类型无灰带/状态栏结构，可能是普通照片暗部，同样不默认勾选）。
+ * content 模式后端已按自动化口径过滤：列表内仅剩手机截图候选（UI 特征或
+ * 状态栏残留），其中 auto_ok=false 的「疑似状态栏残留」仍需人工勾选确认。 */
 function defaultCheckedIds(items: CropCandidate[]): Set<string> {
   const ids = new Set<string>()
   for (const c of items) {
@@ -358,7 +360,9 @@ function timeLabel(c: { created_at: string | null }): string {
       标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图。
       <br />三种模式并存：「自动检测黑边」面向深色背景截图；「固定比例」按设定比例裁剪；
       <b>「内容边界检测」</b>面向上下被灰带/状态栏/播放器条包夹的截图，自动定位照片主体边界（100
-      张样本分析校准）。
+      张样本分析校准）。内容边界检测为自动化口径：只列手机截图候选（须检出状态栏/导航栏等系统 UI
+      特征，或抖音全屏浏览态特有的透明状态栏残留），无 UI 证据的普通竖屏照片静默排除，
+      不再出现「自动检测失败」待确认项；「疑似状态栏残留」仍需人工勾选确认。
     </p>
 
     <a-form

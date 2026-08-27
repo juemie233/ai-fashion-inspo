@@ -110,7 +110,10 @@ async def scan_candidates(
     参数:
         db: 数据库会话
         mode: auto（黑边自动检测，逐张计算裁剪比例）/ ratio（统一按比例裁剪）/
-            content（内容边界检测：灰带/状态栏/播放器条包夹的内容区边界）
+            content（内容边界检测：灰带/状态栏/播放器条包夹的内容区边界。
+            自动化口径——只列手机截图候选：须检出系统 UI 特征（状态栏/
+            导航栏）或状态栏残留信号；无 UI 证据的普通竖屏照片静默排除，
+            检测失败（无内容区边界）的同样排除）
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
         limit: 单次最多返回的候选数（0 表示不限制）
@@ -157,25 +160,38 @@ async def scan_candidates(
         if height / width < min_ratio:
             continue
 
-        # content 模式：先进行内容边界检测
+        # 截图特征检测（状态栏/底部栏 → 置信度分级）：content 模式用它做
+        # 「只列手机截图」的自动化过滤，其余模式仅用于候选置信度展示
+        try:
+            features = await asyncio.to_thread(detect_screenshot_features, full)
+            confidence = screenshot_confidence(features)
+        except Exception:
+            confidence = "low"
+
+        # content 模式：内容边界检测（灰带/状态栏/播放器条包夹的内容区边界）
         bounds_result = None
-        already_cropped = False
         if mode == "content":
             try:
                 bounds_result = await asyncio.to_thread(detect_content_bounds, full)
-                already_cropped = bounds_result["already_cropped"]
             except Exception:
-                already_cropped = False
-
-        # 已裁剪干净且无任何残留建议 → 跳过不列入候选（避免扫描列表被大量
-        # 已处理素材淹没）；但检出「疑似状态栏残留」（residual_top_frac > 0）
-        # 的仍要列入——这是待人工确认的有效裁剪候选，与 apply_crops 的
-        # 「残留建议优先于 already_cropped 跳过」语义保持一致
-        if (
-            already_cropped
-            and not (bounds_result and bounds_result["residual_top_frac"] > 0)
-        ):
-            continue
+                # 检测失败（未检出内容区边界/布局不规则）：无法验证截图结构，
+                # 自动化口径下静默排除（此前会带默认比例混入候选，属误列）
+                continue
+            if (
+                bounds_result["already_cropped"]
+                and bounds_result["residual_top_frac"] <= 0
+            ):
+                # 已裁剪干净且无任何残留建议 → 跳过不列入候选（避免扫描列表
+                # 被大量已处理素材淹没）；检出「疑似状态栏残留」的仍要列入
+                # ——这是待人工确认的有效裁剪候选，与 apply_crops 的
+                # 「残留建议优先于 already_cropped 跳过」语义保持一致
+                continue
+            if confidence == "low" and bounds_result["residual_top_frac"] <= 0:
+                # ── 自动化口径：内容边界检测只服务手机截图（抖音全屏截图）──
+                # 无任何系统 UI 特征且无状态栏残留信号的竖屏图大概率是普通
+                # 照片（顶部纯色天空/暗部被误判为边界）——静默排除，不再以
+                # 「自动检测失败/疑似非截图请人工确认」占据扫描列表
+                continue
 
         total += 1
         if limit > 0 and len(candidates) >= limit:
@@ -190,17 +206,10 @@ async def scan_candidates(
             "crop_bottom": crop_bottom,
             "auto_ok": True,
             "note": None,
-            "confidence": "low",
+            "confidence": confidence,
             "boundary_kind": None,
             "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
         }
-        # 截图特征检测提前：状态栏/底部栏 → 置信度分级（content 模式用它在
-        # 「无系统 UI 特征却检出边界」时做误报兜底）
-        try:
-            features = await asyncio.to_thread(detect_screenshot_features, full)
-            item["confidence"] = screenshot_confidence(features)
-        except Exception:
-            item["confidence"] = "low"
         if mode == "auto":
             try:
                 top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
@@ -209,29 +218,21 @@ async def scan_candidates(
             except ValueError as e:
                 item["auto_ok"] = False
                 item["note"] = f"自动检测失败：{e}"
-        elif mode == "content" and bounds_result is not None:
-            # 使用之前缓存的检测结果
+        elif mode == "content":
+            # 使用上方缓存的检测结果
             item["crop_top"] = bounds_result["top_frac"]
             item["crop_bottom"] = bounds_result["bottom_frac"]
             item["boundary_kind"] = bounds_result["kind"]
             if bounds_result["residual_top_frac"] > 0 and bounds_result["top_frac"] == 0:
-                # 疑似顶部状态栏残留（透明图标叠加照片，自动检测不可靠）：
-                # 不自动判定可裁剪（防误裁普通照片），标注建议比例供人工
-                # 目检后勾选；勾选后 apply 按此建议裁剪
+                # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
+                # 典型特征）：不自动判定可裁剪（防误裁普通照片），标注建议
+                # 比例供人工目检后勾选；勾选后 apply 按此建议裁剪
                 item["auto_ok"] = False
                 item["crop_top"] = bounds_result["residual_top_frac"]
                 item["note"] = (
                     f"疑似顶部状态栏残留（建议裁剪 {bounds_result['residual_top_frac']:.1%}），"
                     "确认后勾选裁剪"
                 )
-            elif item["confidence"] == "low" and (
-                bounds_result["top_frac"] > 0 or bounds_result["bottom_frac"] > 0
-            ):
-                # 无任何系统 UI 特征（无状态栏/导航栏/播放器条）却检出了可裁
-                # 边界：大概率是照片顶/底部的自然低多样度区域（暗角、纯色
-                # 天空/地面等），不自动判定可裁剪，标注供人工目检确认
-                item["auto_ok"] = False
-                item["note"] = "未检出状态栏/导航栏特征，疑似非截图，请人工确认"
         candidates.append(item)
 
     # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）

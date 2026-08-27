@@ -1001,8 +1001,10 @@ def test_ui_band_valid_structure(tmp_path):
     assert _ui_band_valid(d4, 0, 1, 1) is False
 
 
-def test_scan_content_mode_low_confidence_flagged(client):
-    """误报回归：无任何状态栏/导航栏特征（confidence=low）却检出边界 → 标注待人工确认。"""
+def test_scan_content_mode_excludes_low_confidence_noise(client):
+    """自动化口径：无任何状态栏/导航栏特征（confidence=low）且无残留信号的
+    竖屏图（大概率普通照片，顶部纯色天空/暗部被误判为边界）静默排除，
+    不再以「自动检测失败/疑似非截图请人工确认」占据扫描列表。"""
     width, height = 300, 600
     arr = np.zeros((height, width, 3), dtype=np.uint8)
     arr[:30] = (80, 80, 80)  # 顶部 30px 纯色（可能是照片纯色天空/背景）
@@ -1011,11 +1013,24 @@ def test_scan_content_mode_low_confidence_flagged(client):
     img = Image.fromarray(arr)
     buf = BytesIO()
     img.save(buf, "JPEG")
-    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+    _upload_screenshot(client, buf.getvalue(), "image/jpeg")
 
     body = _scan(client, mode="content")
-    assert body["total"] == 1
-    item = body["items"][0]
-    assert item["confidence"] == "low"
-    assert item["auto_ok"] is False
-    assert "疑似非截图" in (item["note"] or "")
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+def test_scan_content_mode_excludes_undetectable_layout(client):
+    """自动化口径：内容边界检测失败（全噪点图无内容区边界可检）的素材
+    静默排除——此前会带默认裁剪比例混入候选（auto_ok=True），属误列。"""
+    width, height = 300, 600
+    rng = np.random.default_rng(31)
+    arr = rng.integers(0, 256, size=(height, width, 3), dtype=np.uint8).astype(np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="content")
+    assert body["total"] == 0
+    assert body["items"] == []
