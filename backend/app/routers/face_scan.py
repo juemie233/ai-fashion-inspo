@@ -198,6 +198,7 @@ async def _person_aggregate_page(
                 "person_type": p_type,
                 "person_id": person_id,
                 "name": person.name if person else f"已删除人物 #{person_id}",
+                "avatar_path": person.avatar_path if person else None,
                 "count": cnt,
                 "best_conf": round(best_conf, 4) if best_conf is not None else None,
             }

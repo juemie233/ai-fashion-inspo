@@ -613,6 +613,11 @@ function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
 }
 
+/** 人物头像地址（优先头像图，无则显示文字） */
+function personAvatarUrl(item: PersonAggregateItem): string | undefined {
+  return item.avatar_path ? getFileUrl(item.avatar_path) : undefined
+}
+
 /** 聚合分组代表图地址（优先缩略图，无则原图；无任何图时返回空串） */
 function groupThumbUrl(group: FaceClusterGroup): string {
   const path = group.rep_thumbnail_path || group.rep_file_path
@@ -773,7 +778,10 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 class="person-row"
               >
                 <div class="person-head" @click="toggleDetail(p)">
-                  <a-avatar :size="32">{{ p.name.slice(0, 1) }}</a-avatar>
+                  <a-avatar :size="32">
+                    <img v-if="personAvatarUrl(p)" :src="personAvatarUrl(p)" alt="" />
+                    <template v-else>{{ p.name.slice(0, 1) }}</template>
+                  </a-avatar>
                   <span class="person-name">{{ p.name }}</span>
                   <a-tag size="small" :color="p.person_type === 'blogger' ? 'arcoblue' : 'purple'">
                     {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
@@ -923,7 +931,10 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 class="person-row"
               >
                 <div class="person-head" @click="toggleDetail(p)">
-                  <a-avatar :size="32">{{ p.name.slice(0, 1) }}</a-avatar>
+                  <a-avatar :size="32">
+                    <img v-if="personAvatarUrl(p)" :src="personAvatarUrl(p)" alt="" />
+                    <template v-else>{{ p.name.slice(0, 1) }}</template>
+                  </a-avatar>
                   <span class="person-name">{{ p.name }}</span>
                   <a-tag size="small" color="green">
                     {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
@@ -1104,7 +1115,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
                     · 聚类出 {{ clusterTask.result.group_count }} 组
                   </template>
                   <template v-if="clusterTask.result.singletons !== undefined">
-                    · {{ clusterTask.result.singletons }} 张孤脸
+                    · {{ clusterTask.result.singletons }} 张人脸
                   </template>
                 </template>
               </a-typography-text>

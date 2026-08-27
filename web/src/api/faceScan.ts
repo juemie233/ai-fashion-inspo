@@ -25,6 +25,7 @@ export interface PersonAggregateItem {
   person_type: 'blogger' | 'model'
   person_id: number
   name: string
+  avatar_path: string | null
   count: number
   best_conf: number | null
 }
