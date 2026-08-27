@@ -31,25 +31,42 @@ async def _run_network_analyze(client, **params) -> int:
     return task_id
 
 
+async def _mint_task_id(client) -> int:
+    """创建一个真实的图分析任务行，返回 task_id。
+
+    暂停/恢复改造后 analyze_tag_network 需要 task_id 记录进度/续算状态，
+    服务级直调用例先经 API 建任务再传真实 id。
+    """
+    r = client.post("/api/tags/network/analyze")
+    assert r.status_code == 200, r.text
+    return r.json()["task_id"]
+
+
 # ═══════════ 图算法纯函数 ═══════════
 
 
 def test_detect_communities_two_components():
-    """两个互不相连的分量各成一社区。"""
-    from app.services.tag_graph import detect_communities
+    """两个互不相连的分量各成一社区（迭代版标签传播，返回 labels + state）。"""
+    from app.services.tag_graph import detect_communities_iter
 
-    comms = detect_communities([(0, 1), (2, 3)], 4)
-    assert comms[0] == comms[1]
-    assert comms[2] == comms[3]
-    assert comms[0] != comms[2]
+    labels, state = detect_communities_iter([(0, 1), (2, 3)], 4)
+    assert labels[0] == labels[1]
+    assert labels[2] == labels[3]
+    assert labels[0] != labels[2]
+    assert state.stage == "community_detection"
 
 
 def test_betweenness_centrality_line():
-    """链式图（0-1-2-3）介数中心度：中间节点高于端点。"""
-    from app.services.tag_graph import betweenness_centrality
+    """链式图（0-1-2-3）介数中心度：中间节点高于端点（分批版 + 归一化缩放）。"""
+    from app.services.tag_graph import (
+        apply_betweenness_scale,
+        betweenness_centrality_batch,
+    )
 
     adj = {0: [1], 1: [0, 2], 2: [1, 3], 3: [2]}
-    cb = betweenness_centrality(adj, 4, k=None)
+    raw, state = betweenness_centrality_batch(adj, 4, k=None)
+    assert state.stage == "betweenness_centrality"
+    cb = apply_betweenness_scale(raw, 4, 4)
     assert cb[0] == 0.0
     assert cb[1] > cb[0] and cb[2] > cb[3]
     assert all(0.0 <= v <= 1.0 for v in cb.values())
@@ -79,8 +96,9 @@ async def test_analyze_network_structure(client, upload):
         insp_id = upload().json()["id"]
         _link(client, insp_id, ["JK制服", "百褶裙"])
 
+    task_id = await _mint_task_id(client)
     async with async_session() as db:
-        result = await analyze_tag_network(db, limit=10, min_count=2)
+        result = await analyze_tag_network(db, task_id, limit=10, min_count=2)
 
     assert len(result["nodes"]) == 2
     assert len(result["edges"]) == 1
@@ -107,8 +125,9 @@ async def test_network_two_communities(client, upload):
         insp_id = upload().json()["id"]
         _link(client, insp_id, ["白色", "黑色"])
 
+    task_id = await _mint_task_id(client)
     async with async_session() as db:
-        result = await analyze_tag_network(db, limit=10, min_count=2)
+        result = await analyze_tag_network(db, task_id, limit=10, min_count=2)
 
     assert len(result["nodes"]) == 4
     assert len(result["communities"]) == 2
@@ -123,8 +142,11 @@ async def test_network_category_filter(client, upload):
         insp_id = upload().json()["id"]
         _link(client, insp_id, ["JK制服", "白色"])
 
+    task_id = await _mint_task_id(client)
     async with async_session() as db:
-        result = await analyze_tag_network(db, limit=10, min_count=2, category="style")
+        result = await analyze_tag_network(
+            db, task_id, limit=10, min_count=2, category="style"
+        )
 
     assert {n["name"] for n in result["nodes"]} == {"JK制服"}
     assert result["edges"] == []
@@ -149,8 +171,9 @@ async def test_network_task_api(client, upload):
 
 async def test_network_empty(client):
     """空库：返回空结果。"""
+    task_id = await _mint_task_id(client)
     async with async_session() as db:
-        result = await analyze_tag_network(db)
+        result = await analyze_tag_network(db, task_id)
     assert result["nodes"] == []
     assert result["edges"] == []
     assert result["communities"] == []
@@ -166,9 +189,10 @@ async def test_network_edge_pruning(client, upload):
         insp_id = upload().json()["id"]
         _link(client, insp_id, names)
 
+    task_id = await _mint_task_id(client)
     async with async_session() as db:
         result = await analyze_tag_network(
-            db, limit=10, min_count=2, max_edges_per_node=2
+            db, task_id, limit=10, min_count=2, max_edges_per_node=2
         )
 
     assert len(result["nodes"]) == 4
