@@ -157,7 +157,7 @@ async def scan_candidates(
         if height / width < min_ratio:
             continue
 
-        # content 模式：先进行内容边界检测，已裁剪的素材直接跳过
+        # content 模式：先进行内容边界检测
         bounds_result = None
         already_cropped = False
         if mode == "content":
@@ -167,8 +167,14 @@ async def scan_candidates(
             except Exception:
                 already_cropped = False
 
-        if already_cropped:
-            # 已裁剪干净（或内容占满全图）：跳过不列入候选
+        # 已裁剪干净且无任何残留建议 → 跳过不列入候选（避免扫描列表被大量
+        # 已处理素材淹没）；但检出「疑似状态栏残留」（residual_top_frac > 0）
+        # 的仍要列入——这是待人工确认的有效裁剪候选，与 apply_crops 的
+        # 「残留建议优先于 already_cropped 跳过」语义保持一致
+        if (
+            already_cropped
+            and not (bounds_result and bounds_result["residual_top_frac"] > 0)
+        ):
             continue
 
         total += 1

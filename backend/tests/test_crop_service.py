@@ -272,9 +272,13 @@ def test_content_mode_relaxed_ratio_filter(client):
     assert body2["total"] == 0
 
 
-def test_content_mode_lists_cropped_candidates(client):
-    """内容边界模式：已裁剪干净（内容占满全图）的图仍列入候选，标注不可裁剪及原因。"""
-    # 顶部 3 行灰带 + 全噪点内容：内容占比 ≈99.5%，无有效裁剪区域
+def test_content_mode_excludes_cleanly_cropped(client):
+    """内容边界模式：已裁剪干净（无任何残留建议）的图不再列入扫描候选。
+
+    扫描列表只保留仍有可裁信息的素材（避免被大量已处理图淹没）；
+    若用户仍显式勾选执行，apply 侧按「已裁剪过，无需裁剪」跳过兜底。
+    """
+    # 顶部 3 行灰带 + 全噪点内容：内容占比 ≈99.5%，无有效裁剪区域、无残留建议
     arr = np.zeros((600, 300, 3), dtype=np.uint8)
     arr[:3] = (70, 70, 70)
     rng = np.random.default_rng(9)
@@ -284,11 +288,21 @@ def test_content_mode_lists_cropped_candidates(client):
     img.save(buf, "JPEG")
     insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
 
+    # 干净图不出现在候选列表
     body = _scan(client, mode="content")
-    assert body["total"] == 1
-    item = body["items"][0]
-    assert item["auto_ok"] is False
-    assert "无需裁剪" in (item["note"] or "")
+    assert body["total"] == 0
+    assert body["items"] == []
+
+    # 用户显式勾选执行 → apply 跳过并说明原因（不误裁）
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/apply",
+        json={"ids": [insp["id"]], "mode": "content"},
+    )
+    assert r.status_code == 200, r.text
+    body2 = r.json()
+    assert body2["processed"] == 0
+    reasons = [s.get("reason", "") for s in body2["skipped"]]
+    assert any("无需裁剪" in msg for msg in reasons)
 
 
 def test_status_bar_correction_top_residual():
