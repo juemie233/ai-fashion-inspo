@@ -2,7 +2,6 @@
 /** 任务管理页：聚合任务队列与采集任务，统一查看与操作。 */
 
 import { onMounted, onUnmounted } from 'vue'
-import { Button, Select, Pagination, Space } from '@arco-design/web-vue'
 import { useTaskCenter } from '@/composables/useTaskCenter'
 import { TASK_TYPE_LABELS } from '@/utils/taskLabel'
 import BackupStatusCard from '@/components/task/BackupStatusCard.vue'
@@ -13,7 +12,6 @@ const {
   statusFilter,
   typeFilter,
   page,
-  pageCount,
   retrying,
   total,
   pageItems,

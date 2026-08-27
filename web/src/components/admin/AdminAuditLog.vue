@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 操作审计日志：展示破坏性批量操作的留痕（时间/动作/数量/释放空间）。 */
 
-import { h, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { Message, type TableColumnData } from '@arco-design/web-vue'
 import { fetchAuditLogs, type AuditLogItem } from '@/api/admin'
 import { formatDate, formatSize, renderTimeCell } from '@/utils/format'
