@@ -2,7 +2,9 @@
 
 调用方式::
 
-    python scripts/run_scraper.py <task_id>
+    cd backend && python -m scripts.run_scraper <task_id>
+
+（以模块方式启动：脚本族已拆分为 scripts/ 包内模块，相对导入依赖包上下文）
 
 功能概览::
 
@@ -790,6 +792,6 @@ def run_scraper_sync(task_id: int):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/run_scraper.py <task_id>")
+        print("Usage: python -m scripts.run_scraper <task_id>")
         sys.exit(1)
     run_scraper_sync(int(sys.argv[1]))

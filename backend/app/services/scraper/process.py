@@ -1,7 +1,7 @@
 """采集进程管理：Chrome/CDP 检测、采集子进程启动/自动续采/取消信号。
 
 子进程完全隔离 Playwright：任务记录落库后由 ``_safe_launch`` 拉起独立
-进程执行（``scripts/run_scraper.py``），异常退出时 ``_maybe_auto_retry``
+进程执行（``python -m scripts.run_scraper``），异常退出时 ``_maybe_auto_retry``
 按配置自动续采。
 """
 
@@ -86,17 +86,21 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str, bool]:
 
 def _launch_scraper_process(task_id: int) -> None:
     """启动独立子进程执行采集，完全隔离 Playwright。"""
-    script = Path(__file__).parent.parent.parent.parent / "scripts" / "run_scraper.py"
+    # 以 -m 模块方式启动：采集脚本已拆分为 scripts/ 包内模块（相对导入），
+    # 直接以脚本路径执行会缺失包上下文导致 ImportError；
+    # cwd 固定为 backend/，保证 scripts 包与 app.* 绝对导入均可解析
+    backend_root = Path(__file__).parent.parent.parent.parent
 
     # 日志输出到文件，方便排查
-    logs_dir = Path(__file__).parent.parent.parent.parent / "storage" / "logs" / "scraper"
+    logs_dir = backend_root / "storage" / "logs" / "scraper"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_f = open(logs_dir / f"task_{task_id}.log", "w", encoding="utf-8")
 
     proc = subprocess.Popen(
-        [sys.executable, "-u", str(script), str(task_id)],
+        [sys.executable, "-u", "-m", "scripts.run_scraper", str(task_id)],
         stdout=log_f,
         stderr=subprocess.STDOUT,
+        cwd=backend_root,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     _scraper_pids[task_id] = proc.pid
