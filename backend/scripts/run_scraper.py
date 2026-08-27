@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
+import urllib.parse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,16 +26,19 @@ from app.models.scraper import ScraperTask
 # ── UTF-8 输出 ──
 # 注意：必须开启 line_buffering，否则 stdout 被重新包装成带缓冲的 TextIOWrapper，
 # print 进度日志会一直积压在缓冲区，直到进程退出才落盘，导致日志看起来「卡住不动」。
+# 仅在作为主脚本执行时包装：本文件会被测试通过 importlib 导入以验证纯函数，
+# 此时不能触碰宿主进程的标准流（否则破坏 pytest 捕获）。
 import io
-try:
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-except Exception:
-    pass
+if __name__ == "__main__":
+    try:
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+        )
+    except Exception:
+        pass
 
 
 def utcnow():
@@ -76,8 +80,125 @@ def _human_scroll(page, steps=None):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  按博主采集：主页笔记收集 + 详情页全量提取（多图/视频/正文/话题标签）
+#  平台通用：下载请求头 / 登录检测（小红书与抖音共用）
 # ═══════════════════════════════════════════════════════════════
+
+
+# 各平台媒体 CDN 下载所需的 Referer（缺失或填错平台域名会被 CDN 拒绝）
+_DOWNLOAD_REFERERS = {
+    "xiaohongshu": "https://www.xiaohongshu.com/",
+    "douyin": "https://www.douyin.com/",
+}
+
+# 登录检测用的会话 Cookie 名（命中任一即视为已登录）
+_LOGIN_COOKIE_NAMES = {
+    "xiaohongshu": ("web_session", "a1"),  # 历史版本登录态为 a1
+    "douyin": ("SESSDATA",),
+}
+
+# 未登录时引导用户扫码的平台首页
+_PLATFORM_HOME_URLS = {
+    "xiaohongshu": "https://www.xiaohongshu.com/explore",
+    "douyin": "https://www.douyin.com/",
+}
+
+_PLATFORM_NAMES = {"xiaohongshu": "小红书", "douyin": "抖音"}
+
+_DOWNLOAD_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+)
+
+# 单视频下载大小上限（字节）：抖音短视频普遍更小，50MB 控磁盘；
+# 小红书沿用历史 100MB。超限视频流式中断丢弃并在漏斗记 skip。
+_DEFAULT_VIDEO_MAX_BYTES = 100 * 1024 * 1024
+_MAX_VIDEO_BYTES = {
+    "xiaohongshu": 100 * 1024 * 1024,
+    "douyin": 50 * 1024 * 1024,
+}
+
+
+def _build_download_headers(platform: str, cookies: dict | None = None) -> dict:
+    """构建平台匹配的媒体下载请求头。
+
+    此前此处硬编码小红书 Referer，抖音 CDN 下载一律被拒；
+    现按平台取对应 Referer，并附带浏览器 Cookie 以通过鉴权。
+    """
+    req_headers = {
+        "Referer": _DOWNLOAD_REFERERS.get(platform, "https://www.xiaohongshu.com/"),
+        "User-Agent": _DOWNLOAD_UA,
+    }
+    if cookies:
+        req_headers["Cookie"] = "; ".join(
+            f"{c['name']}={c['value']}" for c in cookies.values()
+        )
+    return req_headers
+
+
+def _platform_has_login(cookies: list[dict], platform: str) -> bool:
+    """根据浏览器 Cookie 判断平台是否处于登录状态。"""
+    names = _LOGIN_COOKIE_NAMES.get(platform, ())
+    domain_hint = _PLATFORM_NAMES.get(platform, "")
+    matched_domains: set[str] = set()
+    for c in cookies:
+        dom = c.get("domain", "")
+        if domain_hint == "小红书" and "xiaohongshu" in dom:
+            matched_domains.add(dom)
+            if c.get("name") in names:
+                return True
+        elif domain_hint == "抖音" and "douyin" in dom:
+            matched_domains.add(dom)
+            if c.get("name") in names:
+                return True
+    # 无任何平台域名的 Cookie 视为未登录
+    return False
+
+
+def _ensure_platform_login(context, page, platform: str, timeout: int = 180) -> bool:
+    """确保平台已登录：未登录则导航到首页并轮询等待用户扫码。
+
+    小红书与抖音共用一套逻辑（差异仅在首页 URL 与会话 Cookie 名）。
+    超时后不强制失败——沿用原行为，以当前状态尝试采集，
+    由漏斗统计自然暴露「无结果」问题。
+
+    Returns:
+        最终是否检测到登录状态。
+    """
+    name = _PLATFORM_NAMES.get(platform, platform)
+
+    def _check() -> bool:
+        return _platform_has_login(context.cookies(), platform)
+
+    if _check():
+        print(f"{name}已在登录状态，直接开始采集")
+        return True
+
+    print(f"\n{'='*50}")
+    print(f" >>> 请在 Chrome 中登录{name} <<<")
+    print(" 已自动打开平台首页，请扫码登录")
+    print(f" 登录完成后脚本自动检测并继续（{timeout}s 超时）")
+    print(f"{'='*50}")
+
+    # 将空白标签页导航到平台首页（未登录时展示扫码入口），
+    # 避免停留在 about:blank 让用户误以为卡死
+    try:
+        page.goto(
+            _PLATFORM_HOME_URLS[platform],
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+    except Exception as e:
+        print(f"自动跳转{name}首页失败（可手动在地址栏输入）: {e}")
+
+    for waited in range(0, timeout, 5):
+        time.sleep(5)
+        if _check():
+            print(f"检测到登录 ({waited + 5}s)")
+            time.sleep(1)
+            return True
+        if (waited + 5) % 30 == 0:
+            print(f"  等待登录... ({waited + 5}s / {timeout}s)")
+    print("登录超时，将尝试当前状态")
+    return False
 
 
 def _clean_media_url(src: str) -> str:
@@ -530,6 +651,7 @@ def _download_batch(
     cookies: dict | None = None,
     content_hash_set: set[str] | None = None,
     meta_map: dict[str, dict] | None = None,
+    platform: str = "xiaohongshu",
 ) -> tuple[int, int, int, int, int]:
     """下载一批图片，立即入库。使用同步 sqlite3 避免 event loop 冲突。
 
@@ -540,6 +662,8 @@ def _download_batch(
     —— 按博主采集时传入，图片入库同步写入笔记正文 caption，并建立
     inspiration_bloggers 关联（博主标记）。
 
+    platform：下载请求头按平台取 Referer（xiaohongshu | douyin），CDN 鉴权必需。
+
     去重策略（三层）：
     1. 图片 URL 内存去重 — 同次运行内相同图片不重复下载
     2. DB 墓碑表去重 — 跨次采集相同图片 URL 不重复入库
@@ -548,15 +672,8 @@ def _download_batch(
     import hashlib
     import sqlite3 as _sqlite3
 
-    # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
-    req_headers = {
-        "Referer": "https://www.xiaohongshu.com/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
-    if cookies:
-        req_headers["Cookie"] = "; ".join(
-            f"{c['name']}={c['value']}" for c in cookies.values()
-        )
+    # 构建平台匹配的请求头（带浏览器 Cookie 以通过 CDN 鉴权）
+    req_headers = _build_download_headers(platform, cookies)
 
     db_path = settings.storage_root.parent / "fashion_inspo.db"
 
@@ -768,6 +885,7 @@ def _download_videos(
     httpx_module,
     cookies: dict | None = None,
     meta_map: dict[str, dict] | None = None,
+    platform: str = "xiaohongshu",
 ) -> tuple[int, int]:
     """下载一批短视频并入库为 video 类型（同步 sqlite3 + 同步 ffmpeg 缩略图）。
 
@@ -778,20 +896,19 @@ def _download_videos(
     meta_map（可选）：笔记页面 URL → {"caption": str, "blogger_id": int}
     —— 按博主采集时传入，视频入库同步写入笔记正文 caption 并关联博主。
 
+    platform：下载请求头按平台取 Referer（xiaohongshu | douyin），CDN 鉴权必需。
+    大小上限按平台区分（_MAX_VIDEO_BYTES，抖音单条更小以控磁盘占用）。
+
     Returns:
         (added, skipped): 成功入库数与跳过数（已存在 / 下载失败）。
     """
     import sqlite3 as _sqlite3
 
-    # 构建请求头（带浏览器 Cookie 以通过 CDN 鉴权）
-    req_headers = {
-        "Referer": "https://www.xiaohongshu.com/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
-    if cookies:
-        req_headers["Cookie"] = "; ".join(
-            f"{c['name']}={c['value']}" for c in cookies.values()
-        )
+    # 构建平台匹配的请求头（带浏览器 Cookie 以通过 CDN 鉴权）
+    req_headers = _build_download_headers(platform, cookies)
+
+    # 单个视频下载大小上限：避免超大视频撑爆磁盘
+    max_video_bytes = _MAX_VIDEO_BYTES.get(platform, _DEFAULT_VIDEO_MAX_BYTES)
 
     db_path = settings.storage_root.parent / "fashion_inspo.db"
 
@@ -845,9 +962,6 @@ def _download_videos(
             batch_conn.commit()
             pending_in_batch = 0
 
-    # 单个视频下载大小上限（100MB）：避免超大视频撑爆磁盘
-    MAX_VIDEO_BYTES = 100 * 1024 * 1024
-
     for note_url, video_url in unique:
         if added >= remaining:
             break
@@ -869,8 +983,10 @@ def _download_videos(
                 with open(fpath, "wb") as f:
                     for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
                         total += len(chunk)
-                        if total > MAX_VIDEO_BYTES:
-                            raise RuntimeError("视频超过大小上限，跳过")
+                        if total > max_video_bytes:
+                            raise RuntimeError(
+                                f"视频超过大小上限（{max_video_bytes // (1024*1024)}MB），跳过"
+                            )
                         f.write(chunk)
                 if total == 0:
                     fpath.unlink(missing_ok=True)
@@ -1081,8 +1197,480 @@ def _update_task_sync(task_id: int, fields: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  主流程
+#  抖音采集：URL 解析 / 详情提取 / 卡片收集 / 双模式执行管线
 # ═══════════════════════════════════════════════════════════════
+#
+# 说明：
+# - 抖音网页版 DOM 与内嵌数据漂移频繁，所有选择器集中在下方常量区，
+#   页面结构变化时优先修改常量而非散落各处的硬编码。
+# - 内容分三层提取并互相兜底：RENDER_DATA 内嵌 JSON（最完整）→
+#   网络响应捕获（视频 CDN 直链）→ DOM 解析（图集容器 / 全页过滤）。
+# - 视频播放地址时效性强且签名随时失效，采取「抓到详情立即下载」，
+#   不跨批次缓存 URL。
+
+# 抖音内容页链接锚点（搜索结果卡与博主页作品网格共用）
+_DOUYIN_DETAIL_ANCHOR = "a[href*='/video/'], a[href*='/note/']"
+# 图集容器（最多图选择器，命中即不必全页过滤）
+_DOUYIN_SLIDE_IMG_SELECTOR = 'div[data-e2e="slide-list"] img, div[class*="slide"] img'
+# 详情页主体就绪信号（标题或描述任一出现即认为渲染完成）
+_DOUYIN_DETAIL_READY = "[data-e2e='video-desc'], [data-e2e='slide-list'], h1, video"
+# 正文描述候选（按优先级取第一个非空）
+_DOUYIN_DESC_SELECTORS = (
+    "[data-e2e='video-desc']",
+    ".video-info-detail .title",
+    "h1[data-e2e='video-title']",
+    "span[class*='desc']",
+)
+# 话题标签锚点（点击进入话题聚合页的 <a>）
+_DOUYIN_HASHTAG_ANCHOR = "a[href*='/hashtag/']"
+
+# 视频 CDN 特征：网络响应 URL 命中任一即视为真实视频直链
+_DOUYIN_VIDEO_URL_HINTS = ("douyinvod.com", "/aweme/v1/play/")
+
+# 抖音媒体 URL 归一化时补充的主机前缀
+_DOUYIN_MEDIA_HOST = "https://www.douyin.com"
+
+
+def _parse_douyin_aweme_id(url: str) -> str | None:
+    """从抖音内容页 URL 提取作品 ID（纯函数，供单测）。
+
+    支持 https://www.douyin.com/video/{id}、/note/{id} 以及带查询串的变体；
+    分享短链（v.douyin.com/xxx）无法在客户端解析出 ID，返回 None 由调用方跳过。
+    """
+    if not url:
+        return None
+    low = url.split("?")[0].rstrip("/")
+    for kind in ("video", "note"):
+        marker = f"/{kind}/"
+        idx = low.find(marker)
+        if idx >= 0:
+            tail = low[idx + len(marker):]
+            seg = tail.split("/")[0] if "/" in tail else tail
+            return seg or None
+    return None
+
+
+def _canonical_douyin_url(href: str) -> str | None:
+    """把页面上的作品 href 归一化为规范详情页 URL（纯函数，供单测）。
+
+    卡片 href 通常带 previous_item_id 等长查询串，规范化后才能跨次运行
+    稳定去重。无法解析出作品 ID 时返回 None。
+    """
+    clean = _clean_media_url(href)
+    if not clean or clean.startswith("blob:") or clean.startswith("javascript"):
+        return None
+    if "douyin.com" not in clean:
+        return None
+    kind_marker = ""
+    for marker in ("/video/", "/note/"):
+        if marker in clean:
+            kind_marker = marker.rstrip("/")
+            break
+    if not kind_marker:
+        return None
+    aid = _parse_douyin_aweme_id(clean)
+    if not aid:
+        return None
+    return f"{_DOUYIN_MEDIA_HOST}{kind_marker}/{aid}"
+
+
+def _normalize_douyin_media_url(src: str) -> str | None:
+    """归一化抖音媒体 URL：补协议头 / 补主机前缀；blob 等不可下载地址返回 None。"""
+    s = _clean_media_url(src)
+    if not s or s.startswith("blob:") or s.startswith("javascript"):
+        return None
+    if s.startswith("/"):
+        return _DOUYIN_MEDIA_HOST + s
+    if not s.startswith("http"):
+        return None
+    return s
+
+
+def _find_douyin_aweme_data(node, depth: int = 0) -> dict | None:
+    """在任意嵌套 JSON 中递归寻找抖音作品数据对象（depth 防御病态深嵌套）。"""
+    if depth > 12:
+        return None
+    if isinstance(node, dict):
+        candidate = node.get("videoData") or node.get("aweme_detail") or node.get("awemeDetail")
+        if isinstance(candidate, dict) and ("desc" in candidate):
+            return candidate
+        for v in node.values():
+            hit = _find_douyin_aweme_data(v, depth + 1)
+            if hit:
+                return hit
+    elif isinstance(node, list):
+        for v in node:
+            hit = _find_douyin_aweme_data(v, depth + 1)
+            if hit:
+                return hit
+    return None
+
+
+def _extract_douyin_render_data(page) -> dict:
+    """解析详情页内嵌的 RENDER_DATA SSR JSON，返回提取到的字段集合。
+
+    RENDER_DATA 是 URL 编码的 JSON 文本节点，包含当前作品的完整数据：
+    desc（正文）、video.play_addr（视频播放地址）、images（图集）、封面。
+    解析失败静默返回空 dict，由后续 DOM 层兜底。
+    """
+    out: dict = {"img_urls": [], "video_urls": [], "caption": ""}
+    try:
+        raw = page.evaluate(
+            "() => { const el = document.getElementById('RENDER_DATA');"
+            " return el ? el.textContent : ''; }"
+        )
+        if not raw:
+            return out
+        data = json.loads(urllib.parse.unquote(raw))
+    except Exception:
+        return out
+
+    aweme = _find_douyin_aweme_data(data)
+    if not aweme:
+        return out
+
+    out["caption"] = (aweme.get("desc") or "").strip()[:2000]
+
+    vid = aweme.get("video") or {}
+    # 封面图作为图片兜底（部分纯视频笔记只有这一张可用图）
+    for cover_key in ("origin_cover", "cover"):
+        url_list = ((vid.get(cover_key) or {}).get("url_list")) or []
+        for u in url_list[:1]:
+            normalized = _normalize_douyin_media_url(u)
+            if normalized and _is_content_image(normalized):
+                out["img_urls"].append(normalized)
+                break
+
+    # 视频真实播放地址（play_addr 的 url_list 可能需要登录 Cookie 才可访问，
+    # 与「抓到立即下载 + 浏览器 Cookie 鉴权」策略配套）
+    for u in ((vid.get("play_addr") or {}).get("url_list")) or []:
+        normalized = _normalize_douyin_media_url(u)
+        if normalized:
+            out["video_urls"].append(normalized)
+
+    # 图集多图（仅图文笔记有 images 数组）
+    for im in (aweme.get("images") or [])[:20]:
+        for u in ((im or {}).get("url_list")) or []:
+            normalized = _normalize_douyin_media_url(u)
+            if normalized and _is_content_image(normalized):
+                out["img_urls"].append(normalized)
+                break  # 每张图取第一个可用 CDN 地址即可
+    return out
+
+
+def _extract_douyin_detail(page, note_url: str) -> dict:
+    """打开单个抖音作品详情页，分层提取全部内容。
+
+    Args:
+        page: Playwright 页面对象（复用当前标签页）。
+        note_url: 作品规范详情页 URL。
+
+    Returns:
+        {"img_urls": [...], "video_urls": [...], "caption": str, "tags": [...]}
+        三层来源合并去重；全部失败时返回空结构，由调用方记入漏斗后跳过。
+    """
+    result: dict = {"img_urls": [], "video_urls": [], "caption": "", "tags": []}
+
+    # 导航期间挂响应监听：捕获浏览器自身发起的视频 CDN 直链请求
+    # （比解析 DOM 更可靠——拿到的是浏览器实际会下载的同一地址）
+    captured_media: list[str] = []
+
+    def _on_response(resp):
+        try:
+            u = resp.url or ""
+            if any(h in u for h in _DOUYIN_VIDEO_URL_HINTS) and u not in captured_media:
+                captured_media.append(u)
+        except Exception:
+            pass
+
+    page.on("response", _on_response)
+    try:
+        page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        return result
+    finally:
+        try:
+            page.remove_listener("response", _on_response)
+        except Exception:
+            pass
+
+    # 等待详情主体渲染（超时不阻断，靠后续随机停顿再等等懒加载）
+    try:
+        page.wait_for_selector(_DOUYIN_DETAIL_READY, timeout=12000)
+    except Exception:
+        pass
+    _rdsleep(1.5, 2.5)
+    if random.random() < 0.6:
+        _human_mouse_move(page)
+
+    # ── 层 1：RENDER_DATA 内嵌 JSON ──
+    try:
+        rendered = _extract_douyin_render_data(page)
+    except Exception:
+        rendered = {}
+    result["caption"] = rendered.get("caption") or ""
+
+    # ── 层 2：网络捕获的视频直链（优先于 play_addr——浏览器真实消费的地址）──
+    for u in captured_media[:1]:
+        normalized = _normalize_douyin_media_url(u)
+        if normalized:
+            result["video_urls"].append(normalized)
+
+    # ── 图片：图集容器优先，回退全页过滤 ──
+    dom_imgs: list[str] = []
+    img_elements = page.query_selector_all(_DOUYIN_SLIDE_IMG_SELECTOR)
+    if not img_elements:
+        img_elements = page.query_selector_all("img")
+    for img in img_elements:
+        src = _clean_media_url(img.get_attribute("src") or img.get_attribute("data-src") or "")
+        if src and _is_content_image(src) and src not in dom_imgs:
+            dom_imgs.append(src)
+
+    # 合并渲染层与 DOM 层候选并统一去重（渲染层在前保证顺序稳定）
+    seen_imgs: set[str] = set()
+    merged_imgs: list[str] = []
+    for src in [*(rendered.get("img_urls") or []), *dom_imgs]:
+        normalized = _normalize_douyin_media_url(src)
+        if normalized and _is_content_image(normalized) and normalized not in seen_imgs:
+            seen_imgs.add(normalized)
+            merged_imgs.append(normalized)
+    result["img_urls"] = merged_imgs
+
+    # ── 视频：网络捕获 → RENDER_DATA → DOM <video>（跳过 blob）──
+    seen_vids: set[str] = set()
+    merged_vids: list[str] = []
+    for src in ([captured_media[0]] if captured_media else []) + \
+               (rendered.get("video_urls") or []):
+        normalized = _normalize_douyin_media_url(src)
+        if normalized and normalized not in seen_vids:
+            seen_vids.add(normalized)
+            merged_vids.append(normalized)
+    for video_el in page.query_selector_all("video"):
+        raw_vsrc = video_el.get_attribute("src") or ""
+        src_el = video_el.query_selector("source")
+        if src_el and not raw_vsrc:
+            raw_vsrc = src_el.get_attribute("src") or ""
+        if raw_vsrc.startswith("blob:"):
+            continue  # blob 地址无法在浏览器外下载
+        normalized = _normalize_douyin_media_url(raw_vsrc)
+        if normalized and normalized not in seen_vids:
+            seen_vids.add(normalized)
+            merged_vids.append(normalized)
+    result["video_urls"] = merged_vids
+
+    # ── caption 兜底：DOM 选择器逐个尝试 ──
+    if not result["caption"]:
+        for sel in _DOUYIN_DESC_SELECTORS:
+            el = page.query_selector(sel)
+            if el:
+                text = (el.inner_text() or "").strip()
+                if text:
+                    result["caption"] = text[:2000]
+                    break
+
+    # ── 话题标签：正文正则 + 话题锚点文本双路 ──
+    import re as _re2
+    tags: list[str] = []
+    if result["caption"]:
+        tags.extend(_re2.findall(r"#([^\s#，,。！？.!?]{1,30})", result["caption"]))
+    for anchor in page.query_selector_all(_DOUYIN_HASHTAG_ANCHOR)[:20]:
+        t = (anchor.inner_text() or "").strip().lstrip("#").strip()
+        if t:
+            tags.append(t)
+    result["tags"] = list(dict.fromkeys(t.strip() for t in tags if t.strip()))
+    return result
+
+
+def _collect_douyin_detail_urls(page, base_url: str, max_items: int,
+                                max_scrolls: int = 10) -> tuple[list[str], dict]:
+    """滚动收集当前页面中的作品详情链接（搜索页与博主页共用）。
+
+    Returns:
+        (detail_urls, funnel)：规范化后的详情页 URL 列表与滚动统计。
+    """
+    detail_urls: list[str] = []
+    cards_seen = 0
+    last_count = 0
+    no_new = 0
+    try:
+        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+    except Exception:
+        return detail_urls, {"cards_seen": 0, "urls_extracted": 0, "error": "导航失败"}
+    try:
+        page.wait_for_selector(_DOUYIN_DETAIL_ANCHOR, timeout=15000)
+    except Exception:
+        pass
+    _rdsleep(1.5, 3.0)
+    if random.random() < 0.7:
+        _human_mouse_move(page)
+
+    for _ in range(max_scrolls):
+        cards_seen += len(page.query_selector_all(_DOUYIN_DETAIL_ANCHOR))
+        for link in page.query_selector_all(_DOUYIN_DETAIL_ANCHOR):
+            canonical = _canonical_douyin_url(link.get_attribute("href") or "")
+            if canonical and canonical not in detail_urls:
+                detail_urls.append(canonical)
+                if len(detail_urls) >= max_items:
+                    return detail_urls, {"cards_seen": cards_seen, "urls_extracted": len(detail_urls)}
+        if len(detail_urls) == last_count:
+            no_new += 1
+        else:
+            no_new = 0
+            last_count = len(detail_urls)
+        if no_new >= 2:
+            break
+        # 拟人化滚动：偶发鼠标移动 + 分步滚到底
+        if random.random() < 0.5:
+            _human_mouse_move(page)
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        _rdsleep(1.0, 2.0)
+    return detail_urls, {"cards_seen": cards_seen, "urls_extracted": len(detail_urls)}
+
+
+def _run_douyin_notes_pipeline(
+    page,
+    task_id: int,
+    note_urls: list[str],
+    budget: int | None,
+    img_dir: Path,
+    videos_dir: Path,
+    today: str,
+    httpx_module,
+    browser_cookies: dict,
+    existing_url_set: set[str],
+    content_hash_set: set[str],
+    blogger_id: int | None,
+    download_video: bool,
+    source_kind: str,
+) -> tuple[int, int, list[dict]]:
+    """抖音笔记管线：逐个打开详情页提取 → 图片/视频即时下载入库。
+
+    搜索模式与按博主模式共用的内部循环；差异仅在于 URL 来源与 meta 构造
+    （blogger_id 是否填充）。单个作品失败跳过不中断，漏斗逐条留痕。
+
+    Args:
+        budget: 本次管线的入库预算（够了提前停止打开后续详情页）；
+                None 表示不设素材级预算（博主模式以作品数上限为准）。
+        blogger_id: 按博主模式传入，图片/视频同步建立博主关联。
+        download_video: False 时跳过视频下载（省磁盘开关）。
+        source_kind: 话题存档来源标记（search | blogger）。
+
+    Returns:
+        (items_found, items_added, notes_log)
+    """
+    import sqlite3 as _sqlite3
+
+    items_found = 0
+    items_added = 0
+    notes_log: list[dict] = []
+
+    conn = None
+    try:
+        conn = _sqlite3.connect(str(settings.storage_root.parent / "fashion_inspo.db"))
+        _ensure_hashtag_table(conn)
+    except Exception:
+        conn = None
+
+    for i, note_url in enumerate(note_urls, 1):
+        if budget is not None and items_added >= budget:
+            print(f"  已入库 {items_added} 个 → 达到本轮预算，停止打开详情页")
+            break
+        detail_delay = random.uniform(2.0, 4.0)
+        try:
+            detail = _extract_douyin_detail(page, note_url)
+        except Exception as e:
+            err = str(e) or type(e).__name__
+            print(f"  [{i}/{len(note_urls)}] 详情提取异常: {err[:80]}")
+            notes_log.append({"note": note_url, "error": err[:200]})
+            time.sleep(detail_delay)
+            continue
+
+        if not detail["img_urls"] and not detail["video_urls"]:
+            print(f"  [{i}/{len(note_urls)}] 详情页无内容（可能触发验证码或已删除）")
+            notes_log.append({"note": note_url, "error": "详情页无内容"})
+            time.sleep(detail_delay)
+            continue
+
+        meta: dict = {
+            "caption": detail.get("caption") or "",
+            "tags": detail.get("tags") or [],
+            "source_kind": source_kind,
+            "hashtags_saved": False,
+        }
+        if blogger_id is not None:
+            meta["blogger_id"] = blogger_id
+        meta_map = {note_url: meta}
+
+        img_pairs = [(note_url, u) for u in detail["img_urls"]]
+        video_pairs = [(note_url, u) for u in detail["video_urls"]]
+        items_found += len(img_pairs) + len(video_pairs)
+
+        added = 0
+        sk_ex = sk_h = sk_n = sk_dup = 0
+        if img_pairs:
+            # 预算剩余量；无预算（博主模式）时给单笔记宽松上限
+            remaining = (budget - items_added) if budget is not None else 200
+            remaining = max(remaining, 1)
+            added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
+                img_pairs, task_id, existing_url_set, remaining,
+                img_dir, today, httpx_module, browser_cookies,
+                content_hash_set, meta_map, platform="douyin",
+            )
+
+        v_added = 0
+        if video_pairs and download_video:
+            v_budget = (budget - items_added) if budget is not None else 50
+            v_added, v_skipped = _download_videos(
+                video_pairs, task_id, existing_url_set,
+                max(v_budget, 1),
+                videos_dir, today, httpx_module, browser_cookies,
+                meta_map, platform="douyin",
+            )
+            added += v_added
+        elif video_pairs:
+            notes_log.append({
+                "note": note_url, "videos_skipped": len(video_pairs),
+                "reason": "视频下载开关关闭",
+            })
+
+        items_added += added
+        tag_saved = None
+        if conn is not None:
+            try:
+                tag_saved = _save_hashtags(conn, meta_map[note_url], note_url)
+                conn.commit()
+            except Exception:
+                pass
+
+        notes_log.append({
+            "note": note_url,
+            "imgs": len(img_pairs), "videos": len(video_pairs),
+            "added": added,
+            "has_tags": bool(meta["tags"]),
+            "hashtags_saved": tag_saved,
+        })
+        print(f"  [{i}/{len(note_urls)}] 图 {len(img_pairs)} / 视频 {len(video_pairs)}"
+              f" → 入库 {added}")
+        time.sleep(random.uniform(2.0, 4.0))  # 详情页间隔风控节奏
+
+    return items_found, items_added, notes_log
+
+
+def _resolve_douyin_profile_url(config: dict) -> str:
+    """从任务配置解析抖音博主主页 URL（显式 profile_url 优先）。"""
+    profile_url = config.get("profile_url")
+    if profile_url:
+        return profile_url
+    puid = config.get("platform_user_id")
+    if puid:
+        return f"{_DOUYIN_MEDIA_HOST}/user/{puid}"
+    raise RuntimeError("按博主采集缺少 profile_url / platform_user_id")
+
+
+
 
 def run_scraper_sync(task_id: int):
     from playwright.sync_api import sync_playwright
@@ -1150,10 +1738,12 @@ def run_scraper_sync(task_id: int):
             _fail("无关键词")
             return
 
-        # 准备下载目录
+        # 准备下载目录（图片与视频目录统一创建：抖音搜索模式同样会下载视频）
         today = utcnow().strftime("%Y-%m")
         img_dir = settings.images_dir / today
         img_dir.mkdir(parents=True, exist_ok=True)
+        videos_dir = settings.videos_dir / today
+        videos_dir.mkdir(parents=True, exist_ok=True)
         import httpx
     except Exception as e:
         err = str(e) or type(e).__name__
@@ -1248,7 +1838,14 @@ def run_scraper_sync(task_id: int):
         return pairs[: need_count * 2], funnel
 
     try:
-        if platform == "xiaohongshu":
+        # ── CDP 通道判定 ──
+        # 小红书固定走 CDP 真实 Chrome；抖音显式提供 cdp_port 时同样走 CDP
+        # （完整采集：图集/视频/正文），未提供则回退独立 Playwright 浏览器旧路径。
+        use_cdp = (
+            platform == "xiaohongshu"
+            or (platform == "douyin" and bool(config.get("cdp_port")))
+        )
+        if use_cdp:
             pw = sync_playwright().start()
 
             # ── 连接 CDP Chrome ──
@@ -1275,44 +1872,8 @@ def run_scraper_sync(task_id: int):
             # 创建新标签页用于采集
             page = context.new_page()
 
-            # ── 登录检查 ──
-            LOGIN_TIMEOUT = 180
-
-            def _check_login() -> bool:
-                cookies = context.cookies()
-                xhs = [c for c in cookies if "xiaohongshu" in c.get("domain", "")]
-                return any(c.get("name") in ("web_session", "a1") for c in xhs)
-
-            if _check_login():
-                print("已在登录状态，直接开始采集")
-            else:
-                print(f"\n{'='*50}")
-                print(" >>> 请在 Chrome 中登录小红书 <<<")
-                print(" 已自动打开小红书登录页，请扫码登录")
-                print(f" 登录完成后脚本自动检测并继续（{LOGIN_TIMEOUT}s 超时）")
-                print(f"{'='*50}")
-
-                # 将空白标签页导航到小红书首页（未登录时展示扫码登录二维码），
-                # 避免停留在 about:blank 让用户误以为卡死或出 bug
-                try:
-                    page.goto(
-                        "https://www.xiaohongshu.com/explore",
-                        wait_until="domcontentloaded",
-                        timeout=30000,
-                    )
-                except Exception as e:
-                    print(f"自动跳转登录页失败（可手动在地址栏输入 xiaohongshu.com）: {e}")
-
-                for waited in range(0, LOGIN_TIMEOUT, 5):
-                    time.sleep(5)
-                    if _check_login():
-                        print(f"检测到登录 ({waited + 5}s)")
-                        time.sleep(1)
-                        break
-                    if (waited + 5) % 30 == 0:
-                        print(f"  等待登录... ({waited + 5}s / {LOGIN_TIMEOUT}s)")
-                else:
-                    print("登录超时，将尝试当前状态")
+            # ── 登录检查（小红书/抖音共用逻辑，差异在首页 URL 与会话 Cookie 名）──
+            _ensure_platform_login(context, page, platform, timeout=180)
 
             # 提取浏览器 Cookie 用于 httpx 下载鉴权
             browser_cookies = {c["name"]: c for c in context.cookies()}
@@ -1321,20 +1882,44 @@ def run_scraper_sync(task_id: int):
 
             dy = DouyinScraper(headless=config.get("headless", True))
             browser_cookies: dict = {}
-            print("抖音平台：使用独立 Playwright 浏览器（无需 CDP Chrome）")
+            print("抖音平台：未配置 CDP 端口，使用独立 Playwright 浏览器降级采集（仅封面图，建议开启 CDP 走完整通道）")
 
-        # ── 按博主采集（小红书）：主页笔记 → 详情页全量提取（多图/视频/正文/博主标记）──
+        # ── 按博主采集：主页作品 → 详情页全量提取（多图/视频/正文/博主标记）──
         if is_blogger:
-            videos_dir = settings.videos_dir / today
-            videos_dir.mkdir(parents=True, exist_ok=True)
-            items_found, items_added, blogger_notes = _run_blogger_mode(
-                page, task_id, blogger_id, config,
-                img_dir, videos_dir, today, httpx,
-                browser_cookies, existing_url_set, content_hash_set,
-            )
+            if platform == "douyin":
+                if page is None:
+                    # 未走 CDP 时无法进博主主页逐篇采集，提前失败并给明确指引
+                    _fail("抖音按博主采集需要 CDP Chrome：请在创建任务时开启 CDP 并登录抖音")
+                    return
+                profile_url = _resolve_douyin_profile_url(config)
+                max_notes_cfg = int(config.get("max_notes", 50) or 50)
+                note_urls, scroll_funnel = _collect_douyin_detail_urls(
+                    page, profile_url, max_notes_cfg,
+                    max_scrolls=int(config.get("max_scrolls", 15) or 15),
+                )
+                print(f"抖音按博主采集：收集到 {len(note_urls)} 个作品")
+                per_search.append({"keyword": profile_url, **scroll_funnel})
+                items_found, items_added, blogger_notes = _run_douyin_notes_pipeline(
+                    page, task_id, note_urls,
+                    budget=None,  # 博主模式以作品数为上限，不设素材级预算
+                    img_dir=img_dir, videos_dir=videos_dir, today=today,
+                    httpx_module=httpx, browser_cookies=browser_cookies,
+                    existing_url_set=existing_url_set,
+                    content_hash_set=content_hash_set,
+                    blogger_id=blogger_id,
+                    download_video=bool(config.get("download_video", True)),
+                    source_kind="blogger",
+                )
+            else:
+                # 小红书按博主：主页笔记 → 详情页全量提取
+                items_found, items_added, blogger_notes = _run_blogger_mode(
+                    page, task_id, blogger_id, config,
+                    img_dir, videos_dir, today, httpx,
+                    browser_cookies, existing_url_set, content_hash_set,
+                )
             for n in blogger_notes:
                 per_search.append(n)
-            print(f"按博主采集完成：笔记 {len(blogger_notes)} 篇，提取 {items_found}，入库 {items_added}")
+            print(f"按博主采集完成：作品 {len(blogger_notes)} 条，提取 {items_found}，入库 {items_added}")
         else:
             # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
             total_searches = len(plan)
@@ -1360,6 +1945,54 @@ def run_scraper_sync(task_id: int):
                 remaining = max_count - items_added
                 if platform == "xiaohongshu":
                     urls, inner_funnel = _search_xiaohongshu(page, kw, remaining, sort_type)
+                elif platform == "douyin" and page is not None:
+                    # 抖音 CDP 完整通道：搜索卡片收集 → 逐详情页提取
+                    # （图集多图/视频/正文 caption/#话题#），与小红书同管线质量
+                    note_urls, card_funnel = _collect_douyin_detail_urls(
+                        page,
+                        f"https://www.douyin.com/search/{quote(kw)}?type=general",
+                        max_items=max(10, int(remaining * 2)),
+                    )
+                    n_found, n_added, note_logs = _run_douyin_notes_pipeline(
+                        page, task_id, note_urls, budget=remaining,
+                        img_dir=img_dir, videos_dir=videos_dir, today=today,
+                        httpx_module=httpx, browser_cookies=browser_cookies,
+                        existing_url_set=existing_url_set,
+                        content_hash_set=content_hash_set,
+                        blogger_id=None,
+                        download_video=bool(config.get("download_video", True)),
+                        source_kind="search",
+                    )
+                    items_found += n_found
+                    items_added += n_added
+                    # 记录本次搜索的完整漏斗（明细截断最近 20 条防 diagnostics 膨胀）
+                    per_search.append({
+                        "keyword": kw,
+                        "sort_type": sort_type,
+                        **card_funnel,
+                        "notes_opened": len(note_urls),
+                        "batch_added": n_added,
+                        "details": note_logs[-20:],
+                    })
+                    print(f"  打开 {len(note_urls)} 个详情 → 入库 {n_added}")
+                    print(f"  累计入库: {items_added}/{max_count}")
+
+                    done = plan_idx + 1
+                    _save_resume(done)
+
+                    # 搜索间冷却（CDP 保活）
+                    if items_added < max_count and plan_idx < len(plan) - 1:
+                        cool = random.randint(6, 12)
+                        print(f"  ⏸ 冷却 {cool}s...")
+                        for _ in range(cool):
+                            try:
+                                if random.random() < 0.5:
+                                    _human_mouse_move(page)
+                                page.evaluate("1")
+                            except Exception:
+                                pass
+                            _rdsleep(0.8, 1.5)
+                    continue
                 elif platform == "douyin":
                     urls, inner_funnel = _search_douyin(kw, remaining)
                 else:
@@ -1374,15 +2007,16 @@ def run_scraper_sync(task_id: int):
                 items_found += len(urls)
                 print(f"  提取 {len(urls)} 个 URL")
 
-                # 抖音每次搜索后同步其浏览器 Cookie（用于 CDN 下载鉴权）
-                if platform == "douyin":
+                # 抖音降级通道：每次搜索后同步其浏览器 Cookie（用于 CDN 下载鉴权）
+                if platform == "douyin" and dy is not None:
                     browser_cookies = dy.cookies()
 
-                # 立即下载本批（带浏览器 Cookie）
+                # 立即下载本批（带浏览器 Cookie；请求头按平台取 Referer）
                 added, sk_ex, sk_h, sk_n, sk_dup = _download_batch(
                     urls, task_id, existing_url_set, remaining,
                     img_dir, today, httpx, browser_cookies,
                     content_hash_set,
+                    platform=platform,
                 )
                 items_added += added
                 total_skipped_existing += sk_ex

@@ -51,9 +51,9 @@ async def get_scraper_sources() -> dict:
             {
                 "platform": "douyin",
                 "name": "抖音",
-                "status": "limited",
-                "features": ["search_web"],
-                "note": "网页版功能有限，完整支持需要移动端自动化",
+                "status": "available",
+                "features": ["search", "user"],
+                "note": "CDP 真实 Chrome 通道：搜索（图集/视频/正文/话题）与按博主采集；首次需扫码登录",
             },
             {
                 "platform": "browser_extension",
@@ -122,9 +122,10 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
 
     CDP 模式下会预先检测 Chrome 调试端口，不可用时返回明确的错误提示。
     """
-    # CDP 模式：预检 Chrome 调试端口（仅小红书使用 CDP；抖音走独立 Playwright 浏览器）。
-    # 端口探测是阻塞 socket 操作（最长约 3 秒），放线程池避免卡住事件循环
-    if data.cdp_port is not None and data.platform == "xiaohongshu":
+    # CDP 模式：预检 Chrome 调试端口（小红书固定走 CDP；抖音显式传 cdp_port 时走 CDP，
+    # 未传则由执行器回退独立浏览器降级路径）。端口探测是阻塞 socket 操作（最长约 3 秒），
+    # 放线程池避免卡住事件循环
+    if data.cdp_port is not None and data.platform in ("xiaohongshu", "douyin"):
         ok, detail, is_chrome = await asyncio.to_thread(_check_cdp, data.cdp_port)
         if not ok:
             cmd = CHROME_DEBUG_CMD.format(
@@ -161,7 +162,8 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
     extra = data.model_dump(exclude={"platform", "keywords", "max_count", "headless", "cdp_port", "cookie_file"}, exclude_none=True)
     config.update(extra)
 
-    # 按博主采集（collect_mode=user）：校验博主存在，未传主页信息时从博主记录自动补齐
+    # 按博主采集（collect_mode=user）：校验博主存在，未传主页信息时从博主记录自动补齐。
+    # profile_url 缺省拼接规则按平台区分（xhs: /user/profile/{uid}，douyin: /user/{uid}）
     if data.collect_mode == "user":
         from app.models.person import Blogger
 
@@ -172,6 +174,18 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
             config["profile_url"] = blogger.profile_url
         if not config.get("platform_user_id") and blogger.platform_user_id:
             config["platform_user_id"] = blogger.platform_user_id
+        # 博主平台与任务平台不符：跨平台主页链接无效，直接拒绝而非静默采错人
+        if blogger.platform and blogger.platform not in (data.platform, "other"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"博主平台为 {blogger.platform}，与任务平台 {data.platform} 不符，请选择对应平台的博主",
+            )
+        if not config.get("profile_url") and config.get("platform_user_id"):
+            puid = config["platform_user_id"]
+            if data.platform == "douyin":
+                config["profile_url"] = f"https://www.douyin.com/user/{puid}"
+            else:
+                config["profile_url"] = f"https://www.xiaohongshu.com/user/profile/{puid}"
         if not config.get("profile_url") and not config.get("platform_user_id"):
             raise HTTPException(
                 status_code=400,

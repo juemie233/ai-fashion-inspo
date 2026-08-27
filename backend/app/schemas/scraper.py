@@ -15,14 +15,15 @@ class ScraperTaskCreate(BaseModel):
     keywords: list[str] = Field(default=[], description="搜索关键词列表")
     max_count: int = Field(default=100, ge=1, le=500)
     headless: bool = Field(default=True, description="是否无头模式（默认无头，与 scraper_browser_headless 配置一致）")
-    cdp_port: int | None = Field(default=None, description="CDP 端口，连接真实 Chrome 实现零检测采集（仅小红书生效）")
+    cdp_port: int | None = Field(default=None, description="CDP 端口，连接真实 Chrome 实现零检测采集（小红书固定使用；抖音提供此端口时走完整通道）")
     cookie_file: str | None = Field(default=None, description="Cookie 文件路径")
     sort_mode: str | None = Field(default=None, description="搜索排序: general | latest | popular（仅小红书搜索模式生效）")
-    collect_mode: str | None = Field(default=None, description="采集模式: search | user（user=按博主采集，仅小红书）")
+    collect_mode: str | None = Field(default=None, description="采集模式: search | user（user=按博主采集，小红书/抖音均支持）")
     blogger_id: int | None = Field(default=None, description="按博主采集（collect_mode=user）时的博主 ID")
     profile_url: str | None = Field(default=None, description="博主主页 URL（按博主采集；缺省从博主记录自动补齐）")
     platform_user_id: str | None = Field(default=None, description="博主平台用户 ID（按博主采集；缺省从博主记录自动补齐）")
     max_notes: int | None = Field(default=None, ge=1, le=200, description="按博主采集的笔记数上限")
+    download_video: bool | None = Field(default=None, description="是否下载视频入库（默认开启；关闭可节省磁盘）")
 
 
 class ScraperTaskOut(BaseModel):

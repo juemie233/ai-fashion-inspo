@@ -468,6 +468,95 @@ class TestBloggerModeTask:
         assert "主页信息" in r.json()["detail"]
 
 
+class TestDouyinPlatformRules:
+    """抖音平台任务创建规则：profile_url 模板、跨平台校验、CDP 预检。"""
+
+    def test_douyin_blogger_profile_url_auto_filled(self, client, create_blogger):
+        """抖音按博主采集：仅传 platform_user_id 时自动拼接抖音主页模板。"""
+        blogger = create_blogger(
+            name="抖音博主", platform="douyin", platform_user_id="dy_uid_1"
+        )
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "douyin",
+                "keywords": [],
+                "max_count": 5,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+            },
+        )
+        assert r.status_code == 201, r.text
+        config = json.loads(r.json()["config"])
+        assert config["profile_url"] == "https://www.douyin.com/user/dy_uid_1"
+        assert config["collect_mode"] == "user"
+
+    def test_xiaohongshu_blogger_profile_url_template_kept(self, client, create_blogger):
+        """小红书按博主采集：模板不变（/user/profile/{uid}），防回归。"""
+        blogger = create_blogger(name="小红书博主", platform_user_id="xhs_uid_1")
+        # 清空 profile_url 让自动补齐路径生效（fixture 不默认带 profile_url，此处显式留空即可）
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+                "profile_url": None,
+            },
+        )
+        assert r.status_code == 201, r.text
+        config = json.loads(r.json()["config"])
+        assert config["profile_url"] == "https://www.xiaohongshu.com/user/profile/xhs_uid_1"
+
+    def test_cross_platform_blogger_rejected(self, client, create_blogger):
+        """博主平台与任务平台不符 → 400（避免静默采错人）。"""
+        blogger = create_blogger(
+            name="跨平台博主", platform="douyin", platform_user_id="u1"
+        )
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+            },
+        )
+        assert r.status_code == 400
+        assert "平台" in r.json()["detail"]
+
+    def test_other_platform_blogger_allowed(self, client, create_blogger):
+        """「other」平台博主兼容放行（历史数据无明确平台）。"""
+        blogger = create_blogger(
+            name="其他平台博主", platform="other", platform_user_id="o1"
+        )
+        r = client.post(
+            "/api/scraper/tasks",
+            json={
+                "platform": "xiaohongshu",
+                "keywords": [],
+                "max_count": 5,
+                "cdp_port": None,
+                "collect_mode": "user",
+                "blogger_id": blogger["id"],
+            },
+        )
+        assert r.status_code == 201, r.text
+
+    def test_sources_list_marks_douyin_available(self, client):
+        """采集源清单：抖音升级为可用状态并支持 search/user 两模式。"""
+        data = client.get("/api/scraper/sources").json()
+        douyin = next(s for s in data["sources"] if s["platform"] == "douyin")
+        assert douyin["status"] == "available"
+        assert "search" in douyin["features"]
+        assert "user" in douyin["features"]
+
+
 async def test_scraper_hashtags_api(client):
     """话题存档接口：热度排序、min_count 过滤、来源博主名。"""
     from app.database import async_session

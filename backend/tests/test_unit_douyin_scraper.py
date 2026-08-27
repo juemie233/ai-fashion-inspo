@@ -1,0 +1,226 @@
+"""抖音采集单元测试：URL 解析 / 媒体归一化 / RENDER_DATA 提取 / 请求头与登录检测。
+
+run_scraper.py 是独立脚本（非包内模块），通过 importlib 按路径加载。
+本文件不启动浏览器、不发真实请求，仅验证纯函数与轻量解析逻辑。
+"""
+
+import importlib.util
+import json
+import sys
+import urllib.parse
+from pathlib import Path
+
+_BACKEND = Path(__file__).resolve().parent.parent
+_SCRIPT = _BACKEND / "scripts" / "run_scraper.py"
+
+_spec = importlib.util.spec_from_file_location("run_scraper_under_test", _SCRIPT)
+rs = importlib.util.module_from_spec(_spec)
+sys.modules.setdefault("run_scraper_under_test", rs)
+_spec.loader.exec_module(rs)
+
+
+# ── 作品 ID 解析 ──
+
+
+def test_parse_aweme_id_video_url():
+    assert rs._parse_douyin_aweme_id("https://www.douyin.com/video/730123") == "730123"
+
+
+def test_parse_aweme_id_note_url_and_query():
+    u = "https://www.douyin.com/note/7456789988776655?previous_item_id=1&x=2"
+    assert rs._parse_douyin_aweme_id(u) == "7456789988776655"
+
+
+def test_parse_aweme_id_trailing_slash():
+    assert rs._parse_douyin_aweme_id("https://www.douyin.com/video/900/") == "900"
+
+
+def test_parse_aweme_id_share_short_link_unsupported():
+    # 分享短链无法客户端解出 ID，返回 None 由调用方跳过
+    assert rs._parse_douyin_aweme_id("https://v.douyin.com/iAbCdEf/") is None
+
+
+def test_parse_aweme_id_empty():
+    assert rs._parse_douyin_aweme_id("") is None
+
+
+# ── 规范详情页 URL ──
+
+
+def test_canonical_url_strips_query_params():
+    href = "//www.douyin.com/video/111222?previous_item_id=abc&utm=1"
+    assert rs._canonical_douyin_url(href) == "https://www.douyin.com/video/111222"
+
+
+def test_canonical_url_note_kind():
+    href = "https://www.douyin.com/note/333444?q=1"
+    assert rs._canonical_douyin_url(href) == "https://www.douyin.com/note/333444"
+
+
+def test_canonical_url_non_douyin_domain_rejected():
+    assert rs._canonical_douyin_url("https://example.com/video/555") is None
+
+
+def test_canonical_url_blob_and_empty_rejected():
+    assert rs._canonical_douyin_url("blob:https://www.douyin.com/x") is None
+    assert rs._canonical_douyin_url("") is None
+    assert rs._canonical_douyin_url("https://www.douyin.com/search?q=a") is None
+
+
+# ── 媒体 URL 归一化 ──
+
+
+def test_normalize_media_protocol_relative():
+    assert rs._normalize_douyin_media_url("//p3.douyinpic.com/a.jpg") == \
+        "https://p3.douyinpic.com/a.jpg"
+
+
+def test_normalize_media_path_gets_host_prefix():
+    u = "/aweme/v1/play/?video_id=xyz"
+    assert rs._normalize_douyin_media_url(u) == f"https://www.douyin.com{u}"
+
+
+def test_normalize_media_blob_rejected():
+    assert rs._normalize_douyin_media_url("blob:https://www.douyin.com/v") is None
+
+
+def test_normalize_media_plain_http_kept():
+    assert rs._normalize_douyin_media_url("https://v.douyinvod.com/x.mp4") == \
+        "https://v.douyinvod.com/x.mp4"
+
+
+def test_normalize_media_empty():
+    assert rs._normalize_douyin_media_url("") is None
+
+
+# ── 下载请求头平台化（此前硬编码小红书 Referer 的回归测试）──
+
+
+def test_download_headers_referer_per_platform():
+    h_dy = rs._build_download_headers("douyin")
+    h_xhs = rs._build_download_headers("xiaohongshu")
+    assert h_dy["Referer"] == "https://www.douyin.com/"
+    assert h_xhs["Referer"] == "https://www.xiaohongshu.com/"
+    assert "Cookie" not in h_dy
+
+
+def test_download_headers_cookie_assembled():
+    cookies = {"SESSDATA": {"name": "SESSDATA", "value": "abc"},
+               "ttwid": {"name": "ttwid", "value": "xyz"}}
+    h = rs._build_download_headers("douyin", cookies)
+    cookie_val = h["Cookie"]
+    assert "SESSDATA=abc" in cookie_val and "ttwid=xyz" in cookie_val
+
+
+def test_video_size_limit_by_platform():
+    assert rs._MAX_VIDEO_BYTES["douyin"] == 50 * 1024 * 1024
+    assert rs._MAX_VIDEO_BYTES["xiaohongshu"] == 100 * 1024 * 1024
+
+
+# ── 登录检测 ──
+
+
+def test_platform_has_login_douyin_sessdata():
+    cookies = [{"name": "SESSDATA", "domain": ".douyin.com"},
+               {"name": "other", "domain": ".douyin.com"}]
+    assert rs._platform_has_login(cookies, "douyin") is True
+
+
+def test_platform_has_login_xhs_web_session():
+    cookies = [{"name": "web_session", "domain": ".xiaohongshu.com"}]
+    assert rs._platform_has_login(cookies, "xiaohongshu") is True
+
+
+def test_platform_has_login_wrong_domain_name_not_counted():
+    # Cookie 名命中但域名不属于该平台 → 未登录
+    cookies = [{"name": "SESSDATA", "domain": ".example.com"}]
+    assert rs._platform_has_login(cookies, "douyin") is False
+    # 有平台域名 Cookie 但没有会话名 → 未登录
+    cookies2 = [{"name": "ttwid", "domain": ".douyin.com"}]
+    assert rs._platform_has_login(cookies2, "douyin") is False
+
+
+def test_platform_has_login_no_cookies():
+    assert rs._platform_has_login([], "douyin") is False
+
+
+# ── RENDER_DATA 解析 ──
+
+
+class _FakePage:
+    """仅实现 evaluate 的假页面：模拟 RENDER_DATA 文本节点读取。"""
+
+    def __init__(self, evaluate_return: str):
+        self._ret = evaluate_return
+
+    def evaluate(self, *_args, **_kwargs):
+        return self._ret
+
+
+def _render_raw(payload: dict) -> str:
+    return urllib.parse.quote(json.dumps(payload, ensure_ascii=False))
+
+
+def test_render_data_extracts_full_detail():
+    data = {"anyContainer": {"loaderData": {"postLoader": {
+        "videoData": {
+            "desc": "#穿搭分享 今日 OOTD",
+            "video": {
+                "origin_cover": {"url_list": ["https://p.example/oc.jpg"]},
+                "cover": {"url_list": ["//p.example/c.jpg"]},
+                "play_addr": {"url_list": ["/aweme/v1/play/?video_id=9"]},
+            },
+            "images": [
+                {"url_list": ["https://img.example/1.jpg", "https://img.example/2.jpg"]},
+            ],
+        }}}}}
+    out = rs._extract_douyin_render_data(_FakePage(_render_raw(data)))
+    assert out["caption"] == "#穿搭分享 今日 OOTD"
+    assert any(u.endswith("/aweme/v1/play/?video_id=9") and u.startswith("https://www.douyin.com")
+               for u in out["video_urls"])
+    assert "https://img.example/1.jpg" in out["img_urls"]
+    assert "https://p.example/oc.jpg" in out["img_urls"]
+    # 协议相对封面已补全协议头
+    assert "https://p.example/c.jpg" in out["img_urls"]
+
+
+def test_render_data_empty_page_returns_empty():
+    out = rs._extract_douyin_render_data(_FakePage(""))
+    assert out["img_urls"] == [] and out["video_urls"] == [] and out["caption"] == ""
+
+
+def test_render_data_broken_json_is_safe():
+    out = rs._extract_douyin_render_data(_FakePage("%%%not-json%%%"))
+    assert out["caption"] == ""
+
+
+def test_render_data_without_aweme_node_returns_empty():
+    out = rs._extract_douyin_render_data(_FakePage(_render_raw({"foo": {"bar": 1}})))
+    assert out["caption"] == ""
+
+
+def test_find_aweme_walker_via_list():
+    deep = [{"items": {"candidate": "no"}, "x": [{"videoData": {"desc": "d", "video": {}}}]}]
+    hit = rs._find_douyin_aweme_data(deep)
+    assert hit is not None and hit["desc"] == "d"
+
+
+def test_find_aweme_walker_depth_guard():
+    node: dict = {"leaf": {"desc": "deep"}}
+    for i in range(16):
+        node = {f"k{i}": node}
+    assert rs._find_douyin_aweme_data(node) is None
+
+
+# ── 抖音 DOM 选择器常量完备性（防手滑改空导致全链路失效）──
+
+
+def test_selector_constants_nonempty():
+    for const in (
+        rs._DOUYIN_DETAIL_ANCHOR,
+        rs._DOUYIN_SLIDE_IMG_SELECTOR,
+        rs._DOUYIN_DETAIL_READY,
+        rs._DOUYIN_HASHTAG_ANCHOR,
+    ):
+        assert isinstance(const, str) and const.strip()
+    assert all(rs._DOUYIN_DESC_SELECTORS)
