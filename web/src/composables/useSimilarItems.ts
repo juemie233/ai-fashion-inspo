@@ -11,18 +11,13 @@ import {
   type InspirationTagOut,
 } from '@/api/inspirations'
 import { fetchSimilar, type SimilarItemOut } from '@/api/search'
+import type { OutfitTagOption } from '@/types/inspiration'
 
 /** 相似来源中文标注映射 */
 const SIMILAR_SOURCE_LABELS: Record<string, string> = {
   visual: '视觉相似',
   tag: '标签相似',
   hybrid: '视觉+标签',
-}
-
-/** 大标签下拉选项（与 useOutfitTags 中结构一致） */
-export interface OutfitTagOption {
-  label: string
-  value: string
 }
 
 /**
@@ -38,12 +33,11 @@ export function useSimilarItems(
   outfitTags: () => InspirationTagOut[],
   isCurrentSeq: (seq: number) => boolean,
 ) {
-  
   const similarItems = ref<SimilarItemOut[]>([])
   const similarLoading = ref(false)
-  const batchMode = ref(false)                 // 是否处于批量选择模式
-  const batchSelectedIds = ref<string[]>([])   // 勾选的相似素材 ID
-  const batchTagNames = ref<string[]>([])      // 要批量添加的大标签（预填当前素材大标签）
+  const batchMode = ref(false) // 是否处于批量选择模式
+  const batchSelectedIds = ref<string[]>([]) // 勾选的相似素材 ID
+  const batchTagNames = ref<string[]>([]) // 要批量添加的大标签（预填当前素材大标签）
   const batchAdding = ref(false)
 
   /** 相似来源中文标注 */
@@ -56,7 +50,7 @@ export function useSimilarItems(
     similarLoading.value = true
     try {
       const data = await fetchSimilar(id, 10)
-      if (!isCurrentSeq(seq)) return  // 过期响应不覆盖新数据
+      if (!isCurrentSeq(seq)) return // 过期响应不覆盖新数据
       similarItems.value = data.similar
     } catch {
       // 相似推荐失败不影响详情展示，静默降级
@@ -134,7 +128,8 @@ export function useSimilarItems(
   /** 全选 / 取消全选 */
   function toggleSelectAll() {
     const allIds = similarItems.value.map((it) => it.inspiration.id)
-    const allSelected = allIds.length > 0 && allIds.every((id) => batchSelectedIds.value.includes(id))
+    const allSelected =
+      allIds.length > 0 && allIds.every((id) => batchSelectedIds.value.includes(id))
     batchSelectedIds.value = allSelected ? [] : [...allIds]
   }
 

@@ -13,19 +13,13 @@ import {
   type InspirationTagOut,
 } from '@/api/inspirations'
 import { fetchTagsGrouped } from '@/api/tags'
-
-/** 大标签下拉选项（label/value 结构，供 n-select 使用） */
-export interface OutfitTagOption {
-  label: string
-  value: string
-}
+import type { OutfitTagOption } from '@/types/inspiration'
 
 /**
  * 穿搭大标签相关状态与逻辑。
  * @param detail 素材详情 ref（可能为 null），供内部刷新详情数据
  */
 export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
-  
   const outfitTagOptions = ref<OutfitTagOption[]>([])
   const outfitSelected = ref<string[]>([])
   const outfitAdding = ref(false)
