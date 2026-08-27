@@ -332,13 +332,26 @@ async def load_group_detections(
     """加载一组人脸的具体明细（含素材路径与缩略图），供分组展开展示。
 
     返回 (items, total)；items 按 detection_id 排序稳定。
+
+    注意：只返回未确认的人脸（matched_blogger_id 和 matched_model_id 都为空）。
     """
     if not detection_ids:
         return [], 0
-    ids = sorted(set(detection_ids))
-    total = len(ids)
+    # 先过滤出所有未确认的人脸
+    unmatched_rows = (
+        await db.execute(
+            select(InspirationFaceDetection.id)
+            .where(
+                InspirationFaceDetection.id.in_(detection_ids),
+                InspirationFaceDetection.matched_blogger_id.is_(None),
+                InspirationFaceDetection.matched_model_id.is_(None),
+            )
+        )
+    ).all()
+    unmatched_ids = sorted([row[0] for row in unmatched_rows])
+    total = len(unmatched_ids)
     start = (page - 1) * size
-    chunk = ids[start : start + size]
+    chunk = unmatched_ids[start : start + size]
     if not chunk:
         return [], total
     rows = (

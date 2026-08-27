@@ -438,6 +438,8 @@ async def cluster_groups(
 
     每组返回：组内人脸数 + 代表性人脸（组内 det_score 最高者）的素材信息，
     供分组列表展示缩略图；组内明细分页由 detections 接口提供。
+
+    注意：整组指派后，已确认的人脸会被过滤掉，该组可能变空或变小。
     """
     task = (
         await db.execute(
@@ -458,11 +460,34 @@ async def cluster_groups(
         }
     result = task.result
     groups = result.get("groups") or []
-    total = len(groups)
+
+    # 动态过滤：只返回还有未确认人脸的组
+    filtered_groups = []
+    for g in groups:
+        detection_ids = g.get("detection_ids") or []
+        if not detection_ids:
+            continue
+        # 检查组内是否还有未确认的人脸（matched_blogger_id 和 matched_model_id 都为空）
+        unmatched_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(InspirationFaceDetection)
+                .where(
+                    InspirationFaceDetection.id.in_(detection_ids),
+                    InspirationFaceDetection.matched_blogger_id.is_(None),
+                    InspirationFaceDetection.matched_model_id.is_(None),
+                )
+            )
+        ).scalar() or 0
+        if unmatched_count > 0:
+            filtered_groups.append(g)
+
+    total = len(filtered_groups)
     start = (page - 1) * size
-    page_groups = groups[start : start + size]
+    page_groups = filtered_groups[start : start + size]
 
     # 每组取「最高置信度人脸」作为代表：批量拉取 det_score / 素材路径
+    # 只查询未确认的人脸作为代表
     items: list[dict] = []
     for idx, g in enumerate(page_groups, start=start):
         detection_ids = g.get("detection_ids") or []
@@ -478,7 +503,11 @@ async def cluster_groups(
                     Inspiration.thumbnail_path,
                 )
                 .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
-                .where(InspirationFaceDetection.id.in_(detection_ids))
+                .where(
+                    InspirationFaceDetection.id.in_(detection_ids),
+                    InspirationFaceDetection.matched_blogger_id.is_(None),
+                    InspirationFaceDetection.matched_model_id.is_(None),
+                )
                 .order_by(InspirationFaceDetection.det_score.desc())
                 .limit(1)
             )
