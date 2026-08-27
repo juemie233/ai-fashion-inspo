@@ -613,9 +613,10 @@ function thumbUrl(item: DetectionItem): string {
   return getFileUrl(item.thumbnail_path || item.file_path)
 }
 
-/** 人物头像地址（优先头像图，无则显示文字） */
+/** 人物头像地址：人脸小图（自动裁剪）→ 手动头像，均无则显示首字（与人物列表/详情约定一致） */
 function personAvatarUrl(item: PersonAggregateItem): string | undefined {
-  return item.avatar_path ? getFileUrl(item.avatar_path) : undefined
+  const path = item.face_thumb_path || item.avatar_path
+  return path ? getFileUrl(path) : undefined
 }
 
 /** 聚合分组代表图地址（优先缩略图，无则原图；无任何图时返回空串） */

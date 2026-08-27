@@ -28,6 +28,7 @@ from app.schemas.face_scan import (
 )
 from app.schemas.task import TaskOut
 from app.services.face_cluster import load_group_detections
+from app.services.face_thumbnail import ensure_blogger_face_thumbnails
 from app.services.person_service import model_service, blogger_service
 from app.services.task_runners.face_cluster import create_face_cluster_task
 from app.services.task_runners.face_scan import (
@@ -190,6 +191,12 @@ async def _person_aggregate_page(
         )
     ).all()
     items = []
+    # 批量补齐博主人脸缩略图（缓存命中时仅做文件存在性检查，缺失才裁剪）；
+    # 前端头像展示约定为「人脸小图 → 手动头像 → 首字」，与人物列表/详情一致
+    blogger_ids = [pid for p_type, pid, _, _ in rows if p_type == "blogger"]
+    thumbs: dict[int, str | None] = (
+        await ensure_blogger_face_thumbnails(db, blogger_ids) if blogger_ids else {}
+    )
     for p_type, person_id, cnt, best_conf in rows:
         name_model = Blogger if p_type == "blogger" else Model
         person = await db.get(name_model, person_id)
@@ -199,6 +206,7 @@ async def _person_aggregate_page(
                 "person_id": person_id,
                 "name": person.name if person else f"已删除人物 #{person_id}",
                 "avatar_path": person.avatar_path if person else None,
+                "face_thumb_path": thumbs.get(person_id) if p_type == "blogger" else None,
                 "count": cnt,
                 "best_conf": round(best_conf, 4) if best_conf is not None else None,
             }

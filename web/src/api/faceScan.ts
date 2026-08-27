@@ -26,6 +26,8 @@ export interface PersonAggregateItem {
   person_id: number
   name: string
   avatar_path: string | null
+  /** 博主人脸小图（自动裁剪，storage/faces/），模特恒为 null */
+  face_thumb_path: string | null
   count: number
   best_conf: number | null
 }
