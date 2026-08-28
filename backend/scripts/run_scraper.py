@@ -717,7 +717,17 @@ def run_scraper_sync(task_id: int):
         return
 
     finally:
-        # CDP 模式不关 Chrome；Playwright 客户端与抖音独立浏览器正常回收
+        # CDP 模式不关 Chrome；但本次采集新开的标签页要关闭——任务结束后
+        # 残留的搜索页/详情页会在调试 Chrome 里越积越多（用户要求）。
+        # page 仅在 CDP 模式由 context.new_page() 创建（非 CDP 降级路径
+        # 始终为 None），关闭它不会影响用户自己打开的标签页。
+        if page is not None:
+            try:
+                page.close()
+                print("已关闭采集使用的浏览器标签页")
+            except Exception:
+                pass
+        # Playwright 客户端与抖音独立浏览器正常回收
         try:
             if pw:
                 pw.stop()
