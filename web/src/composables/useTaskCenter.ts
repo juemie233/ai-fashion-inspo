@@ -112,6 +112,28 @@ export function useTaskCenter() {
     }
   }
 
+  /** 暂停运行中的标签网络分析任务（后端仅 tag_network_analyze 支持） */
+  async function pauseTask(t: UnifiedTask) {
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/pause`)
+      Message.success(data?.message || '任务已暂停')
+      loadTasks()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '暂停失败'))
+    }
+  }
+
+  /** 恢复已暂停的标签网络分析任务（断点续算） */
+  async function resumeTask(t: UnifiedTask) {
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/resume`)
+      Message.success(data?.message || '任务已恢复')
+      loadTasks()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '恢复失败'))
+    }
+  }
+
   async function retryFailedScraper() {
     try {
       retrying.value = true
@@ -153,6 +175,8 @@ export function useTaskCenter() {
     onFilterChange,
     cancelTask,
     deleteTask,
+    pauseTask,
+    resumeTask,
     retryFailedScraper,
     startPoll,
     stopPoll,

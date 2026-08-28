@@ -21,6 +21,8 @@ const {
   onFilterChange,
   cancelTask,
   deleteTask,
+  pauseTask,
+  resumeTask,
   retryFailedScraper,
   startPoll,
   stopPoll,
@@ -36,6 +38,7 @@ const statusOptions = [
   { label: '全部状态', value: '' },
   { label: '排队中', value: 'pending' },
   { label: '运行中', value: 'running' },
+  { label: '已暂停', value: 'paused' },
   { label: '已完成', value: 'success' },
   { label: '失败', value: 'failed' },
   { label: '已取消', value: 'cancelled' },
@@ -78,7 +81,14 @@ onUnmounted(stopPoll)
 
     <backup-status-card />
 
-    <task-list :tasks="pageItems" :loading="loading" @cancel="cancelTask" @delete="deleteTask" />
+    <task-list
+      :tasks="pageItems"
+      :loading="loading"
+      @cancel="cancelTask"
+      @delete="deleteTask"
+      @pause="pauseTask"
+      @resume="resumeTask"
+    />
 
     <a-pagination
       v-model:current="page"

@@ -13,6 +13,9 @@
  */
 
 import { computed, ref } from 'vue'
+import { Message } from '@arco-design/web-vue'
+import apiClient from '@/api/client'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useTaskPolling } from './useTaskPolling'
 
 interface SubmitResult {
@@ -40,6 +43,32 @@ export function useTagAnalysisTask<TResult>(opts: Options<TResult>) {
       submitting.value || Boolean(task.value && ['pending', 'running'].includes(task.value.status)),
   )
 
+  /** 任务是否处于已暂停（暂停后轮询继续，等待恢复或终态） */
+  const paused = computed(() => task.value?.status === 'paused')
+
+  /** 暂停运行中的任务（后端仅 tag_network_analyze 支持，其余类型返回 400） */
+  async function pause() {
+    if (!task.value || task.value.status !== 'running') return
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${task.value.id}/pause`)
+      Message.success(data?.message || '任务已暂停')
+      // 轮询仍在继续，下一轮即会拉到 paused 状态
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '暂停失败'))
+    }
+  }
+
+  /** 恢复已暂停的任务（断点续算） */
+  async function resume() {
+    if (!task.value || task.value.status !== 'paused') return
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${task.value.id}/resume`)
+      Message.success(data?.message || '任务已恢复')
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '恢复失败'))
+    }
+  }
+
   /** 提交任务并开始轮询；重复调用（运行中）会被忽略 */
   async function run() {
     if (running.value) return
@@ -60,5 +89,5 @@ export function useTagAnalysisTask<TResult>(opts: Options<TResult>) {
     }
   }
 
-  return { run, running, result, task, stopPolling }
+  return { run, running, paused, pause, resume, result, task, stopPolling }
 }

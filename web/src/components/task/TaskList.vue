@@ -20,6 +20,8 @@ defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
 const emit = defineEmits<{
   cancel: [t: UnifiedTask]
   delete: [t: UnifiedTask]
+  pause: [t: UnifiedTask]
+  resume: [t: UnifiedTask]
 }>()
 
 /** 进度列：队列任务显示百分比进度条，采集任务运行中显示加载态 */
@@ -129,10 +131,35 @@ const columns: TableColumnData[] = [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 140,
+    width: 180,
     render: ({ record }) => {
       const row = record as UnifiedTask
-      return h('div', { style: 'display:flex;gap:8px' }, [
+      return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
+        // 标签网络分析任务：运行中可暂停、已暂停可恢复（后端断点续算）
+        row.type === 'tag_network_analyze' && row.status === 'running'
+          ? h(
+              Button,
+              {
+                size: 'small',
+                type: 'outline',
+                status: 'warning',
+                onClick: () => emit('pause', row),
+              },
+              { default: () => '暂停' },
+            )
+          : null,
+        row.type === 'tag_network_analyze' && row.status === 'paused'
+          ? h(
+              Button,
+              {
+                size: 'small',
+                type: 'outline',
+                status: 'success',
+                onClick: () => emit('resume', row),
+              },
+              { default: () => '恢复' },
+            )
+          : null,
         row.status === 'pending'
           ? h(
               Popconfirm,

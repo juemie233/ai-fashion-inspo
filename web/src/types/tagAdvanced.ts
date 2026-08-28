@@ -6,7 +6,7 @@ import type { TagBrief, TagDuplicatePair } from '@/types/tag'
 export interface TaskStatus {
   id: number
   type: string
-  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+  status: 'pending' | 'running' | 'paused' | 'success' | 'failed' | 'cancelled'
   progress: number
   total: number
   done: number

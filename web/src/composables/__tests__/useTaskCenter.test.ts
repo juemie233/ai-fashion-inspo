@@ -196,3 +196,44 @@ describe('useTaskCenter.deleteTask 删除任务', () => {
     expect(errorSpy).toHaveBeenCalledWith('任务状态为 running，不能删除')
   })
 })
+
+describe('useTaskCenter.pauseTask / resumeTask 标签网络分析任务暂停恢复', () => {
+  it('暂停：调用 /tasks/{id}/pause 并刷新列表', async () => {
+    const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
+    mocks.post.mockResolvedValue({ data: { message: '任务已暂停', task_id: 7 } })
+
+    const tc = useTaskCenter()
+    await tc.pauseTask(makeQueueTask({ id: 7, type: 'tag_network_analyze', status: 'running' }))
+
+    expect(mocks.post).toHaveBeenCalledWith('/tasks/7/pause')
+    expect(successSpy).toHaveBeenCalledWith('任务已暂停')
+  })
+
+  it('恢复：调用 /tasks/{id}/resume 并刷新列表', async () => {
+    const successSpy = vi.spyOn(Message, 'success').mockImplementation(msgMock)
+    mocks.post.mockResolvedValue({ data: { message: '任务已恢复', task_id: 7 } })
+
+    const tc = useTaskCenter()
+    await tc.resumeTask(makeQueueTask({ id: 7, type: 'tag_network_analyze', status: 'paused' }))
+
+    expect(mocks.post).toHaveBeenCalledWith('/tasks/7/resume')
+    expect(successSpy).toHaveBeenCalledWith('任务已恢复')
+  })
+
+  it('后端 400 拒绝（类型/状态不符）时展示错误详情', async () => {
+    const errorSpy = vi.spyOn(Message, 'error').mockImplementation(msgMock)
+    mocks.post.mockRejectedValue({
+      response: {
+        data: { detail: '仅运行中的 tag_network_analyze 任务可暂停（当前状态 running）' },
+      },
+    })
+
+    const tc = useTaskCenter()
+    await tc.pauseTask(makeQueueTask({ id: 7, type: 'batch_analyze', status: 'running' }))
+
+    expect(mocks.post).toHaveBeenCalledWith('/tasks/7/pause')
+    expect(errorSpy).toHaveBeenCalledWith(
+      '仅运行中的 tag_network_analyze 任务可暂停（当前状态 running）',
+    )
+  })
+})

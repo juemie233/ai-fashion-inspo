@@ -60,6 +60,7 @@ export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
 export const TASK_STATUS_LABELS: Record<string, string> = {
   pending: '排队中',
   running: '运行中',
+  paused: '已暂停',
   success: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -75,6 +76,7 @@ export function taskStatusType(status: string): string {
   const map: Record<string, string> = {
     pending: 'gray',
     running: 'arcoblue',
+    paused: 'gold',
     success: 'green',
     failed: 'red',
     cancelled: 'orange',

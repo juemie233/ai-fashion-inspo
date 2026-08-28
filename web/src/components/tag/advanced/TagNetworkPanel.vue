@@ -25,10 +25,13 @@ const trendTag = ref<{ id: number; name: string } | null>(null)
 const trendData = ref<Array<{ bucket: string; count: number }>>([])
 const trendLoading = ref(false)
 
-/** 图分析任务：提交 → 轮询 → 写入结果 */
+/** 图分析任务：提交 → 轮询 → 写入结果；运行中可暂停、暂停后可恢复（断点续算） */
 const {
   run: runAnalyze,
   running,
+  paused,
+  pause,
+  resume,
   result,
   stopPolling,
 } = useTagAnalysisTask<NetworkAnalysisResult>({
@@ -220,9 +223,16 @@ onBeforeUnmount(() => {
         <a-input-number v-model="maxEdgesPerNode" :min="0" :max="50" style="width: 80px" />
         <span class="param-hint" style="font-size: 11px; color: #9ca3af"> （0 = 不剪枝） </span>
       </div>
-      <a-button type="primary" :loading="running" @click="runAnalyze">
+      <a-button type="primary" :loading="running" @click="runAnalyze" v-if="!running && !paused">
         {{ result ? '重新分析' : '开始分析' }}
       </a-button>
+      <template v-if="running">
+        <a-button type="outline" status="warning" @click="pause">⏸ 暂停</a-button>
+      </template>
+      <template v-if="paused">
+        <a-tag color="gold">已暂停（断点已保存）</a-tag>
+        <a-button type="primary" @click="resume">▶ 恢复</a-button>
+      </template>
     </div>
 
     <div v-if="!result && !running" class="empty-tip">
