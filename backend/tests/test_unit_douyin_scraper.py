@@ -113,10 +113,20 @@ def test_video_size_limit_by_platform():
 # ── 登录检测 ──
 
 
-def test_platform_has_login_douyin_sessdata():
-    cookies = [{"name": "SESSDATA", "domain": ".douyin.com"},
-               {"name": "other", "domain": ".douyin.com"}]
+def test_platform_has_login_douyin_sessionid():
+    # 抖音网页版真实登录态是 sessionid 系列（SESSDATA 是 B 站的）
+    cookies = [{"name": "sessionid", "domain": ".douyin.com"},
+               {"name": "ttwid", "domain": ".douyin.com"}]
     assert sc.platform_has_login(cookies, "douyin") is True
+    cookies_ss = [{"name": "sessionid_ss", "domain": ".douyin.com"}]
+    assert sc.platform_has_login(cookies_ss, "douyin") is True
+
+
+def test_platform_has_login_douyin_sessdata_not_a_login_cookie():
+    # 回归：SESSDATA 是 B 站 Cookie 名，不得再作为抖音登录判据
+    # （曾导致已登录也被判未登录 → 每次任务空等 180s）
+    cookies = [{"name": "SESSDATA", "domain": ".douyin.com"}]
+    assert sc.platform_has_login(cookies, "douyin") is False
 
 
 def test_platform_has_login_xhs_web_session():
@@ -126,7 +136,7 @@ def test_platform_has_login_xhs_web_session():
 
 def test_platform_has_login_wrong_domain_name_not_counted():
     # Cookie 名命中但域名不属于该平台 → 未登录
-    cookies = [{"name": "SESSDATA", "domain": ".example.com"}]
+    cookies = [{"name": "sessionid", "domain": ".example.com"}]
     assert sc.platform_has_login(cookies, "douyin") is False
     # 有平台域名 Cookie 但没有会话名 → 未登录
     cookies2 = [{"name": "ttwid", "domain": ".douyin.com"}]

@@ -35,7 +35,10 @@ DOWNLOAD_REFERERS = {
 """登录检测用的会话 Cookie 名（命中任一即视为已登录）。"""
 LOGIN_COOKIE_NAMES = {
     "xiaohongshu": ("web_session", "a1"),  # 历史版本登录态为 a1
-    "douyin": ("SESSDATA",),
+    # 注意：SESSDATA 是 B 站的会话 Cookie 名，抖音网页版实际是 sessionid
+    # 系列（2026-08 实测调试 Chrome 真实登录态）。写错导致已登录也被判
+    # 未登录 → 每次任务都导航到抖音首页（精选推荐流）空等满 180s。
+    "douyin": ("sessionid", "sessionid_ss", "sid_tt", "sid_guard"),
 }
 
 """未登录时引导用户扫码的平台首页 URL。"""
