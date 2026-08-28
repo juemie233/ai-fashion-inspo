@@ -182,6 +182,11 @@ class _FakeRebuildVectors:
         return {"text": True, "image": True}
 
 
+async def _fake_get_vector(kind: str, inspiration_id: str):
+    """mock vector_store.get_vector：声称写入的向量都能读回（落库验证通过）。"""
+    return [0.1] * (384 if kind == "text" else 512)
+
+
 async def _make_backfill_task(db, inspiration_ids: list[str]) -> TaskQueue:
     """直接构造向量回填任务（绕过 create 的数据库过滤，聚焦执行器逻辑验证）。"""
     task = TaskQueue(
@@ -227,6 +232,8 @@ async def test_vector_backfill_partial_success(client, upload, monkeypatch):
     fake = _FakeRebuildVectors()
     fake.fail_ids = {b}
     monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+    # 落库验证：声称写入的向量可读回（真实 LanceDB 在测试临时目录中为空表）
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
 
     async with async_session() as db:
         task = await _make_backfill_task(db, [a, b])
@@ -238,6 +245,26 @@ async def test_vector_backfill_partial_success(client, upload, monkeypatch):
         assert task.result["text_skipped"] == 1
         assert task.done == 2
         assert task.progress == 100
+
+
+async def test_vector_backfill_verify_persisted_fails(client, upload, monkeypatch):
+    """落库验证：声称写入成功但向量读不回（如向量库目录被外部删除/覆盖）
+    时任务抛永久错误，不再冒充「完成」——防止「假成功」导致缺失向量静默累积。"""
+    a = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()  # 全部成功
+    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+    # 读回全 None：模拟写入未持久化（目录被删/覆盖后重建为空）
+    async def _missing(_kind: str, _inspiration_id: str):
+        return None
+
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _missing)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [a])
+        with pytest.raises(PermanentTaskError) as exc:
+            await vb_module.execute_vector_backfill(db, task)
+        assert "落库验证失败" in str(exc.value)
 
 
 # ============ 幂等断言：同一任务重跑，结果与统计不变、无副作用 ============
@@ -272,6 +299,7 @@ async def test_vector_backfill_rerun_idempotent(client, upload, monkeypatch):
 
     fake = _FakeRebuildVectors()  # fail_ids 为空 → 全部成功
     monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
 
     async with async_session() as db:
         task = await _make_backfill_task(db, [a, b])

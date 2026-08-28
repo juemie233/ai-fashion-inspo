@@ -87,6 +87,11 @@ def _cache_image_embedding(file_path: str, vec: list[float]) -> None:
 async def generate_text_embedding(text: str) -> list[float] | None:
     """通过 Ollama embedding 模型生成文本向量（带进程内缓存）。
 
+    Ollama 的 all-minilm 等模型有 context 上限，超长文本会返回 HTTP 500
+    （"the input length exceeds the context length"），导致「文本太长 →
+    嵌入失败 → 向量永久缺失」。本函数按 1024/512/256 字符逐级截断重试，
+    保证长文本素材也能得到向量（语义损失可接受，优于直接缺失）。
+
     参数:
         text: 待嵌入的文本
 
@@ -99,27 +104,41 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     cached = _text_cache.get(text)
     if cached is not None:
         return list(cached)
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{settings.ollama_base_url}/api/embeddings",
-                json={"model": settings.ollama_embedding_model, "prompt": text},
-            )
-            if resp.status_code != 200:
+    # 逐级截断重试：None=全文，超长报 context 错误时依次减半
+    for limit in (None, 1024, 512, 256):
+        payload = text if limit is None else text[:limit]
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{settings.ollama_base_url}/api/embeddings",
+                    json={
+                        "model": settings.ollama_embedding_model,
+                        "prompt": payload,
+                    },
+                )
+                if resp.status_code == 200:
+                    embedding = resp.json().get("embedding")
+                    if not embedding:
+                        logger.warning(f"文本嵌入返回空结果: {payload[:50]}")
+                        return None
+                    result = list(embedding)
+                    _cache_text_embedding(text, result)
+                    return result
+                body = resp.text or ""
+                if "context length" in body.lower():
+                    logger.warning(
+                        f"文本嵌入超长（{len(text)} 字符），截断到 {limit} 字符重试: "
+                        f"{body[:120]}"
+                    )
+                    continue  # 下一轮截断重试
                 logger.error(
-                    f"文本嵌入模型失败 (HTTP {resp.status_code}): {resp.text[:200]}"
+                    f"文本嵌入模型失败 (HTTP {resp.status_code}): {body[:200]}"
                 )
                 return None
-            embedding = resp.json().get("embedding")
-            if not embedding:
-                logger.warning(f"文本嵌入返回空结果: {text[:50]}")
-                return None
-            result = list(embedding)
-            _cache_text_embedding(text, result)
-            return result
-    except Exception as e:
-        logger.error(f"生成文本向量失败: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"生成文本向量失败: {e}")
+            return None
+    return None
 
 
 def get_text_embedding_status() -> dict:

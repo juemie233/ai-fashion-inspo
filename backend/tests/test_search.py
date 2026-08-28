@@ -122,3 +122,78 @@ def test_search_with_blogger_and_model_links(client, upload, create_blogger, cre
     r2 = client.get(f"/api/search/similar/{insp_id}")
     assert r2.status_code == 200
     assert r2.json()["source"]["id"] == insp_id
+
+
+# ============ 文本嵌入超长截断重试 ============
+
+
+async def test_text_embedding_truncates_oversized(monkeypatch):
+    """超长文本触发 Ollama context 错误时逐级截断重试，最终成功返回向量。
+
+    回归：此前超长文本直接报 HTTP 500 被记失败，长文本素材的文本向量
+    永久缺失（8/27 回填任务 61 条 text_skipped 即此原因）。
+    """
+    import httpx
+
+    from app.services.vector import embedding as emb
+
+    calls: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def post(self, url, json=None, **kwargs):
+            prompt = json["prompt"]
+            calls.append(prompt)
+            req = httpx.Request("POST", url)
+            if len(prompt) > 300:
+                return httpx.Response(
+                    500,
+                    text='{"error":"the input length exceeds the context length"}',
+                    request=req,
+                )
+            return httpx.Response(200, json={"embedding": [0.1] * 384}, request=req)
+
+    monkeypatch.setattr(emb.httpx, "AsyncClient", _FakeClient)
+
+    vec = await emb.generate_text_embedding("穿" * 2000)
+    assert vec is not None
+    assert len(calls) >= 2  # 至少截断重试过一次
+    assert len(calls[-1]) <= 300  # 最后一次在模型 context 内
+
+
+async def test_text_embedding_short_text_single_call(monkeypatch):
+    """短文本只调用一次 Ollama（不触发截断逻辑）。"""
+    import httpx
+
+    from app.services.vector import embedding as emb
+
+    calls: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def post(self, url, json=None, **kwargs):
+            calls.append(json["prompt"])
+            req = httpx.Request("POST", url)
+            return httpx.Response(200, json={"embedding": [0.1] * 384}, request=req)
+
+    monkeypatch.setattr(emb.httpx, "AsyncClient", _FakeClient)
+
+    vec = await emb.generate_text_embedding("法式穿搭")
+    assert vec is not None
+    assert len(calls) == 1

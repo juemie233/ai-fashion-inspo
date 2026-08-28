@@ -20,6 +20,7 @@
 """
 
 import logging
+import random
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.inspiration import Inspiration
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.services.task_runners.common import PermanentTaskError, _chunked, utcnow
+from app.services.vector import store as vector_store
 from app.services.vector_service import rebuild_inspiration_vectors
 
 logger = logging.getLogger(__name__)
@@ -253,6 +255,9 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     image_done = 0
     image_skipped = 0  # 非图片素材正常跳过
     image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
+    # 声称成功的素材 ID（供收尾落库验证：防「写入时成功、事后被删」的假成功）
+    text_ids: list[str] = []
+    image_ids: list[str] = []
 
     total = len(inspiration_ids)
     for idx, insp_id in enumerate(inspiration_ids, start=1):
@@ -261,22 +266,59 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         stats = await rebuild_inspiration_vectors(db, insp_id)
         if stats["text"]:
             text_done += 1
+            text_ids.append(insp_id)
         else:
             text_skipped += 1
         if stats["image"]:
             image_done += 1
+            if is_image:
+                image_ids.append(insp_id)
         elif is_image:
             image_failed += 1
         else:
             image_skipped += 1
 
-        task.done = idx
-        task.progress = round(idx / total * 100)
-        task.updated_at = utcnow()
-        await db.commit()
-        logger.info(
-            f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
-        )
+        # 攒批更新进度（每 25 条提交一次，避免 3000+ 次 commit 拖慢任务）
+        if idx % 25 == 0 or idx == total:
+            task.done = idx
+            task.progress = round(idx / total * 100)
+            task.updated_at = utcnow()
+            await db.commit()
+            logger.info(
+                f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
+            )
+
+    # ── 落库验证（防假成功）──
+    # 背景：历史上曾出现「任务声称全部写入成功，但向量库目录随后被外部
+    # 删除/覆盖，管理页显示大量缺失向量」的假成功（2026-08 复现）。写入
+    # 本身成功与「数据最终存在」是两回事，这里抽查读回验证，失败即任务
+    # 报错，不再冒充完成——用户能看到失败原因而不是静默缺失。
+    if text_ids:
+        text_sample = random.sample(text_ids, min(20, len(text_ids)))
+        missing_text = [
+            iid
+            for iid in text_sample
+            if await vector_store.get_vector("text", iid) is None
+        ]
+        if missing_text:
+            raise PermanentTaskError(
+                f"向量落库验证失败：抽查 {len(text_sample)} 条文本向量中 "
+                f"{len(missing_text)} 条未持久化（疑似向量库目录被外部删除/"
+                f"覆盖，或写入未真正落盘）。请检查 backend/storage/lancedb 目录。"
+            )
+    if image_ids:
+        image_sample = random.sample(image_ids, min(20, len(image_ids)))
+        missing_image = [
+            iid
+            for iid in image_sample
+            if await vector_store.get_vector("image", iid) is None
+        ]
+        if missing_image:
+            raise PermanentTaskError(
+                f"向量落库验证失败：抽查 {len(image_sample)} 条图像向量中 "
+                f"{len(missing_image)} 条未持久化（疑似向量库目录被外部删除/"
+                f"覆盖，或写入未真正落盘）。请检查 backend/storage/lancedb 目录。"
+            )
 
     task.result = {
         "inspiration_ids": inspiration_ids,
