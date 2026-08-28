@@ -55,12 +55,19 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
       - name: 安装依赖（运行依赖 + 测试依赖）
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+          # hnswlib 的官方 manylinux wheel 携带 AVX 系编译标记，部分 runner 的
+          # CPU 不支持这些指令，import 时直接触发 Illegal instruction（SIGILL，
+          # exit 132）杀死整个 pytest 进程。强制从源码重编译：gcc 在本机构建，
+          # 指令集必然与本机 CPU 匹配，同时保持 hnsw 聚类主路径在 CI 被真实覆盖。
+          pip install --force-reinstall --no-binary hnswlib hnswlib==0.8.0
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
