@@ -157,6 +157,21 @@ def detect_photo_band(path) -> tuple[int, int]:
     return top, bottom
 
 
+def _row_diversity(small: Image.Image, analyze_w: int) -> np.ndarray:
+    """计算缩放图的行内颜色多样度（16 级量化后每行唯一色占比，numpy 向量化）。
+
+    逐行 Python set 在 5000+ 张素材的全量扫描里是性能瓶颈（每张 ~30ms 纯
+    Python 循环）；向量化后单张 <1ms。量化口径与旧实现一致（r//16 等，
+    16 级），输出 0~1 的每行多样度数组。
+    """
+    arr = np.asarray(small)
+    q = (arr // 16).astype(np.int64)
+    enc = (q[..., 0] << 16) | (q[..., 1] << 8) | q[..., 2]
+    s = np.sort(enc, axis=1)
+    unique_per_row = (s[:, 1:] != s[:, :-1]).sum(axis=1).astype(np.float32) + 1.0
+    return unique_per_row / analyze_w
+
+
 def detect_screenshot_features(path) -> dict:
     """检测手机系统截图特征：顶部状态栏条带 + 底部导航栏/手势条。
 
@@ -181,17 +196,14 @@ def detect_screenshot_features(path) -> dict:
             (_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
         )
+    return _features_from_small(small)
+
+
+def _features_from_small(small: Image.Image) -> dict:
+    """从缩放图计算截图特征（detect_screenshot_features 的计算核心，供单次
+    解码合并路径复用；扫描全量素材时避免每张图重复完整解码）。"""
     n = small.height
-    px = small.load()
-
-    def diversity(y: int) -> float:
-        colors = set()
-        for x in range(_ANALYZE_W):
-            r, g, b = px[x, y]
-            colors.add((r // 16, g // 16, b // 16))
-        return len(colors) / _ANALYZE_W
-
-    rows = [diversity(y) for y in range(n)]
+    rows = _row_diversity(small, _ANALYZE_W)
 
     # 顶部状态栏：前 15% 高度内存在「图标行簇」（0.1~0.3），
     # 且其后在 40% 高度内出现内容区（>0.25）。
@@ -235,6 +247,26 @@ def screenshot_confidence(features: dict) -> str:
 # ── 内容边界检测（mode="content"，与黑边检测/固定比例并存）──
 
 
+def _profiles_from_small(small: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """从缩放图计算行级剖面（_row_profiles 的计算核心，供单次解码合并路径复用）。"""
+    arr = np.asarray(small).astype(np.float32) / 255.0
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    brightness = (r * 0.299 + g * 0.587 + b * 0.114).mean(axis=1)
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        saturation = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    saturation = saturation.mean(axis=1)
+    # 颜色多样度：16 级量化后每行唯一色占比（numpy 向量化；逐行 set 是
+    # 全量扫描的性能瓶颈，旧实现每张 ~30ms 纯 Python 循环）
+    q = (arr * 16).astype(np.int64)
+    enc = (q[..., 0] << 16) | (q[..., 1] << 8) | q[..., 2]
+    s = np.sort(enc, axis=1)
+    unique_per_row = (s[:, 1:] != s[:, :-1]).sum(axis=1).astype(np.float32) + 1.0
+    diversity = unique_per_row / _CONTENT_ANALYZE_W
+    return brightness, saturation, diversity
+
+
 def _row_profiles(path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """计算图片的行级剖面：亮度均值、饱和度均值、颜色多样度（0~1，逐行）。
 
@@ -253,23 +285,7 @@ def _row_profiles(path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
         )
-    arr = np.asarray(small).astype(np.float32) / 255.0
-    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    brightness = (r * 0.299 + g * 0.587 + b * 0.114).mean(axis=1)
-    mx = arr.max(axis=2)
-    mn = arr.min(axis=2)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        saturation = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
-    saturation = saturation.mean(axis=1)
-    # 颜色多样度：16 级量化后每行唯一色占比
-    q = (arr * 16).astype(np.int32)
-    diversity = np.array(
-        [
-            len({(int(v[0]), int(v[1]), int(v[2])) for v in q[y]}) / _CONTENT_ANALYZE_W
-            for y in range(arr.shape[0])
-        ]
-    )
-    return brightness, saturation, diversity
+    return _profiles_from_small(small)
 
 
 def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
@@ -519,7 +535,23 @@ def detect_content_bounds(path) -> dict:
     异常:
         ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
     """
-    brightness, saturation, diversity = _row_profiles(path)
+    with Image.open(path) as im:
+        img = ImageOps.exif_transpose(im).convert("RGB")
+        small = img.resize(
+            (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
+            Image.Resampling.LANCZOS,
+        )
+    return _content_bounds_from_small(small)
+
+
+def _content_bounds_from_small(small: Image.Image) -> dict:
+    """从缩放图计算内容边界（detect_content_bounds 的计算核心，供单次解码
+    合并路径复用；扫描全量素材时避免每张图重复完整解码）。
+
+    异常:
+        ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
+    """
+    brightness, saturation, diversity = _profiles_from_small(small)
     n = len(diversity)
     if n < 8:
         raise ValueError("图片过小，无法检测内容边界")
@@ -726,3 +758,37 @@ def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
         # 任何失败路径都清理残留临时文件后重抛
         tmp.unlink(missing_ok=True)
         raise
+
+
+def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
+    """单次解码完成「截图特征 + 内容边界」检测（扫描候选路径专用）。
+
+    全量扫描时若分别调用 detect_screenshot_features 与 detect_content_bounds，
+    每张图要完整解码两次（5000+ 张素材时解码是大头，实测单张 ~60-100ms）。
+    本函数一次打开解码，产出 64 宽（特征）与 96 宽（内容边界）两份缩放图，
+    把两次解码合并为一次。
+
+    参数:
+        path: 图片绝对路径
+
+    返回:
+        (features, bounds_or_None)：features 为截图特征字典；bounds 为内容
+        边界结果，检测失败（未检出内容区/布局不规则）时为 None（与
+        detect_content_bounds 抛 ValueError 语义等价，由调用方统一处理）。
+    """
+    with Image.open(path) as im:
+        img = ImageOps.exif_transpose(im).convert("RGB")
+        small64 = img.resize(
+            (_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)),
+            Image.Resampling.LANCZOS,
+        )
+        small96 = img.resize(
+            (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
+            Image.Resampling.LANCZOS,
+        )
+    features = _features_from_small(small64)
+    try:
+        bounds = _content_bounds_from_small(small96)
+    except ValueError:
+        bounds = None
+    return features, bounds

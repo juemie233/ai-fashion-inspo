@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -36,9 +37,9 @@ from app.models.inspiration import Inspiration, NOT_DELETED
 from app.services.file_service import generate_thumbnail
 from app.services.image_cropping import (
     MIN_MANUAL_CROP_HEIGHT_PX,
+    analyze_screenshot_combined,
     crop_image_to_temp,
     crop_region_to_temp,
-    detect_content_bounds,
     detect_photo_band,
     detect_screenshot_features,
     probe_size as _probe_size,
@@ -49,6 +50,7 @@ from app.services.image_cropping import (
 from app.services.image_cropping import (  # noqa: F401
     _residual_top_estimate,
     _status_bar_correction,
+    detect_content_bounds,
 )
 from app.services.inspiration_query import load_inspiration_full
 from app.services.task_runners.vector_backfill import enqueue_vector_backfills
@@ -104,6 +106,8 @@ async def scan_candidates(
     crop_top: float = DEFAULT_CROP_TOP,
     crop_bottom: float = DEFAULT_CROP_BOTTOM,
     limit: int = 200,
+    cursor: str | None = None,
+    time_budget: float = 60.0,
 ) -> dict:
     """扫描手动上传素材中的手机全屏截图候选（只读，不执行任何裁剪）。
 
@@ -117,18 +121,19 @@ async def scan_candidates(
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
         limit: 单次最多返回的候选数（0 表示不限制）
+        cursor: 分页游标（上一批返回的 next_cursor；素材按 id 倒序扫描，
+            传游标从断点继续，避免大批量素材单次请求超时）
+        time_budget: 单次扫描的时间预算（秒）。素材量大（5000+ 竖屏）时
+            全量检测远超前端请求超时，预算耗尽即返回已找到的候选并置
+            truncated=True，由前端提示用户继续扫描。
 
     返回:
         {
-            "total": 候选总数（limit 截断前）,
-            "items": [{
-                "id": str, "file_path": str, "width": int, "height": int,
-                "ratio": float, "crop_top": float, "crop_bottom": float,
-                "auto_ok": bool, "note": str | None,  # 自动检测失败原因
-                "confidence": "high" | "medium" | "low",  # 截图特征置信度
-                "boundary_kind": str | None,  # content 模式：gray_band/status_bar/plain
-                "created_at": str | None,  # 上传时间（ISO）
-            }, ...],
+            "total": 本次扫描找到的候选数（limit 截断前）,
+            "items": [候选列表，同旧结构],
+            "scanned": 本次实际扫描的素材数,
+            "next_cursor": 截断时下一次扫描的起点（素材 id）；扫完返回 None,
+            "truncated": 是否因时间预算/候选上限提前结束（还有未扫描素材）,
         }
     """
     if mode not in ("auto", "ratio", "content"):
@@ -138,17 +143,30 @@ async def scan_candidates(
     # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
     min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
 
-    result = await db.execute(
-        select(Inspiration).where(
-            Inspiration.source_type == "manual_upload",
-            NOT_DELETED,
-            Inspiration.file_path.isnot(None),
-            Inspiration.media_type == "image",
-        )
+    query = select(Inspiration).where(
+        Inspiration.source_type == "manual_upload",
+        NOT_DELETED,
+        Inspiration.file_path.isnot(None),
+        Inspiration.media_type == "image",
     )
+    if cursor:
+        query = query.where(Inspiration.id < int(cursor))
+    query = query.order_by(Inspiration.id.desc())
+    result = await db.execute(query)
+
     candidates: list[dict] = []
     total = 0
+    scanned = 0
+    truncated = False
+    last_insp_id: int | None = None
+    deadline = time.monotonic() + max(1.0, time_budget)
     for insp in result.scalars():
+        # 时间预算检查（检测是耗时大头，循环级检查粒度足够）
+        if time.monotonic() >= deadline:
+            truncated = True
+            break
+        scanned += 1
+        last_insp_id = insp.id
         full = _resolve_storage_path(insp.file_path)
         if full is None or not full.exists():
             continue
@@ -160,20 +178,19 @@ async def scan_candidates(
         if height / width < min_ratio:
             continue
 
-        # 截图特征检测（状态栏/底部栏 → 置信度分级）：content 模式用它做
-        # 「只列手机截图」的自动化过滤，其余模式仅用于候选置信度展示
-        try:
-            features = await asyncio.to_thread(detect_screenshot_features, full)
-            confidence = screenshot_confidence(features)
-        except Exception:
-            confidence = "low"
-
-        # content 模式：内容边界检测（灰带/状态栏/播放器条包夹的内容区边界）
+        # content 模式：单次解码合并「截图特征 + 内容边界」（性能关键——
+        # 全量扫描 5000+ 张时每张只解码一次，旧实现要解码三次）
         bounds_result = None
         if mode == "content":
             try:
-                bounds_result = await asyncio.to_thread(detect_content_bounds, full)
+                features, bounds_result = await asyncio.to_thread(
+                    analyze_screenshot_combined, full
+                )
+                confidence = screenshot_confidence(features)
             except Exception:
+                confidence = "low"
+                bounds_result = None
+            if bounds_result is None:
                 # 检测失败（未检出内容区边界/布局不规则）：无法验证截图结构，
                 # 自动化口径下静默排除（此前会带默认比例混入候选，属误列）
                 continue
@@ -192,10 +209,18 @@ async def scan_candidates(
                 # 照片（顶部纯色天空/暗部被误判为边界）——静默排除，不再以
                 # 「自动检测失败/疑似非截图请人工确认」占据扫描列表
                 continue
+        else:
+            # 非 content 模式：截图特征检测（状态栏/底部栏 → 置信度分级）
+            try:
+                features = await asyncio.to_thread(detect_screenshot_features, full)
+                confidence = screenshot_confidence(features)
+            except Exception:
+                confidence = "low"
 
         total += 1
         if limit > 0 and len(candidates) >= limit:
-            continue
+            truncated = True
+            break
         item: dict = {
             "id": insp.id,
             "file_path": str(insp.file_path),
@@ -237,7 +262,13 @@ async def scan_candidates(
 
     # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）
     candidates.sort(key=lambda c: c.get("created_at") or "", reverse=True)
-    return {"total": total, "items": candidates}
+    return {
+        "total": total,
+        "items": candidates,
+        "scanned": scanned,
+        "next_cursor": str(last_insp_id) if truncated and last_insp_id is not None else None,
+        "truncated": truncated,
+    }
 
 
 def _skip_entry(insp: Inspiration, reason: str) -> dict:

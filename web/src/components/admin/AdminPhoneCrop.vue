@@ -33,6 +33,10 @@ const formModel = reactive({ mode, cropTop, cropBottom, limit })
 
 const scanning = ref(false)
 const cropping = ref(false)
+/** 分页游标：后端按时间预算分批扫描时记录断点，供「继续扫描」续扫 */
+const nextCursor = ref<string | null>(null)
+/** 本次会话累计扫描的素材数（多次续扫累加） */
+const scannedCount = ref(0)
 
 /** 扫描候选 */
 interface CropCandidate {
@@ -241,24 +245,39 @@ function defaultCheckedIds(items: CropCandidate[]): Set<string> {
   return ids
 }
 
-/** 扫描候选：只读预览，不修改任何数据 */
+/** 扫描候选：只读预览，不修改任何数据。
+ * 素材量大时后端按时间预算分批返回（truncated + next_cursor），
+ * 前端可点「继续扫描」从断点续扫；单次请求超时放宽到 120s。 */
+interface ScanResponse {
+  total: number
+  items: CropCandidate[]
+  scanned: number
+  next_cursor: string | null
+  truncated: boolean
+}
+
 async function handleScan() {
   scanning.value = true
   result.value = null
   try {
-    const { data } = await apiClient.post<{ total: number; items: CropCandidate[] }>(
+    const { data } = await apiClient.post<ScanResponse>(
       '/admin/crop-phone-screenshots/scan',
       {
         mode: mode.value,
         crop_top: cropTop.value / 100,
         crop_bottom: cropBottom.value / 100,
         limit: limit.value,
+        cursor: nextCursor.value ?? undefined,
+        time_budget: 60,
       },
+      { timeout: 120000 },
     )
     scannedTotal.value = data.total
     candidates.value = data.items
     checkedIds.value = defaultCheckedIds(data.items)
-    if (data.items.length === 0) {
+    nextCursor.value = data.truncated ? data.next_cursor : null
+    scannedCount.value = (scannedCount.value ?? 0) + data.scanned
+    if (data.items.length === 0 && !data.truncated) {
       Message.info(
         data.total === 0 ? '没有可裁剪的竖屏截图素材' : `候选超过上限，仅显示前 ${limit.value} 张`,
       )
@@ -268,6 +287,13 @@ async function handleScan() {
   } finally {
     scanning.value = false
   }
+}
+
+/** 重新扫描（重置断点，从头开始） */
+function handleRescan() {
+  nextCursor.value = null
+  scannedCount.value = 0
+  handleScan()
 }
 
 /** 切换单个候选勾选 */
@@ -404,10 +430,19 @@ function timeLabel(c: { created_at: string | null }): string {
 
       <a-form-item label=" ">
         <a-button type="primary" :loading="scanning" @click="handleScan">
-          {{ scanning ? '扫描中...' : '扫描候选' }}
+          {{ scanning ? '扫描中...' : nextCursor ? '继续扫描剩余素材' : '扫描候选' }}
+        </a-button>
+        <a-button v-if="nextCursor && !scanning" size="small" @click="handleRescan">
+          重新扫描
         </a-button>
         <span style="margin-left: 12px; font-size: 12px; color: #999">
           默认勾选高/中置信候选，低置信需人工复核
+        </span>
+        <span v-if="scannedCount > 0" style="margin-left: 12px; font-size: 12px; color: #999">
+          已扫描 {{ scannedCount }} 张素材
+        </span>
+        <span v-if="nextCursor" style="margin-left: 12px; font-size: 12px; color: #f0a020">
+          素材量较大，本次扫描已返回一批候选，点击「继续扫描剩余素材」处理更早的素材
         </span>
       </a-form-item>
     </a-form>
