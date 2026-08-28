@@ -254,8 +254,12 @@ def _cluster_o2(embs: np.ndarray, threshold: float, k: int) -> list[tuple[int, i
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
         block = embs[start:end] @ embs.T  # (chunk, n)
-        # 每行取 top-k（排除自身与对角线）
-        top_idx = np.argpartition(-block, k + 1, axis=1)[:, : k + 1]
+        # 每行取 top-k（排除自身与对角线）；argpartition 的 kth 必须在
+        # [0, n-1] 内，人脸数不足 k+1 时截断（小库 / 测试场景，n ≤ k+1）。
+        # 此前从未被执行过（本地有 hnswlib、CI 在 import 即崩），n ≤ 31 时
+        # kth 越界直接 ValueError——降级路径首个真实 bug。
+        kth = min(k + 1, n - 1)
+        top_idx = np.argpartition(-block, kth, axis=1)[:, : min(k + 1, n)]
         for local_i, row_idx in enumerate(top_idx):
             i = start + local_i
             for nb in row_idx:

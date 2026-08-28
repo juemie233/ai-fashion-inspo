@@ -63,11 +63,13 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          # hnswlib 的官方 manylinux wheel 携带 AVX 系编译标记，部分 runner 的
-          # CPU 不支持这些指令，import 时直接触发 Illegal instruction（SIGILL，
-          # exit 132）杀死整个 pytest 进程。强制从源码重编译：gcc 在本机构建，
-          # 指令集必然与本机 CPU 匹配，同时保持 hnsw 聚类主路径在 CI 被真实覆盖。
-          pip install --force-reinstall --no-binary hnswlib hnswlib==0.8.0
+          # CI 不装 hnswlib：其官方 manylinux wheel 携带 AVX 系编译标记，部分
+          # runner CPU 不支持，import 即 SIGILL（exit 132）杀死 pytest 进程，
+          # 且 SIGILL 无法在进程内捕获，源码重编译也无法保证覆盖所有 runner。
+          # 聚类服务对 hnswlib 缺失有 o2 降级路径（O(n²) 分块矩阵，测试规模
+          # 完全够用），CI 走降级路径验证聚类算法逻辑；hnsw 主路径在本地 /
+          # 生产环境（wheel 与 CPU 匹配）真实运行。
+          pip uninstall -y hnswlib
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。

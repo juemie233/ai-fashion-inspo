@@ -152,6 +152,36 @@ def test_cluster_split_oversized_group():
         assert len(axes) <= 1
 
 
+def test_cluster_o2_fallback_path(monkeypatch):
+    """强制 o2 降级路径（CI 无 hnswlib）：分组结果与主路径一致。
+
+    CI 为规避 hnswlib wheel 的 SIGILL 问题不安装该包，聚类走 o2 降级路径；
+    本地有 hnswlib，用 monkeypatch 强制走 o2 保证两条路径都被测试覆盖。
+    同时覆盖 n=6 < k+1=31 的 argpartition kth 截断场景（降级路径首个
+    真实 bug：kth 越界 ValueError）。
+    """
+    from app.services import face_cluster as fc
+
+    monkeypatch.setattr(fc, "_is_hnswlib_available", lambda: False)
+    ids = [1, 2, 3, 4, 5, 6]
+    embs = np.array(
+        [
+            [1.0, 0, 0, 0],
+            [0.99, 0.01, 0, 0],
+            [0, 1.0, 0, 0],
+            [0, 0.98, 0.02, 0],
+            [0, 0, 1.0, 0],
+            [0, 0, 0.97, 0.03],
+        ],
+        dtype=np.float32,
+    )
+    result = fc.cluster_faces_from_embeddings(ids, embs, threshold=0.8)
+    assert result["method"] == "o2"
+    assert result["group_count"] == 3
+    groups = {tuple(sorted(g["detection_ids"])) for g in result["groups"]}
+    assert groups == {(1, 2), (3, 4), (5, 6)}
+
+
 def test_load_unmatched_dedupes_same_inspiration(client, upload):
     """同一素材的多张相似脸只保留一张参与聚类（按素材去重）。
 
