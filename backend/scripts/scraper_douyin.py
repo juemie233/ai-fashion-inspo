@@ -26,6 +26,8 @@ from .scraper_common import (
     DOUYIN_DESC_SELECTORS,
     DOUYIN_HASHTAG_ANCHOR,
     DOUYIN_SLIDE_IMG_SELECTOR,
+    DOUYIN_SEARCH_DIRECT_URL_FMT,
+    DOUYIN_SEARCH_XHR_HINTS,
     DOUYIN_VIDEO_URL_HINTS,
     DOUYIN_MEDIA_HOST,
     DOUYIN_VERIFY_SELECTORS,
@@ -554,85 +556,82 @@ def collect_douyin_detail_urls(
     }
 
 
-def collect_douyin_search_urls(
-    page, keyword: str, max_items: int, max_scrolls: int = 12
-) -> tuple[list[str], dict]:
-    """抖音搜索专用 URL 收集：首页搜索框 → 回车 → 等结果渲染 → 滚动收集。
+def _parse_douyin_search_xhr(raw: str) -> list[str]:
+    """解析搜索接口响应，提取去重的 aweme_id 列表（防御式）。
 
-    为什么不走直连 /search/ URL（2026-08 实测，任务 #43~#45 全 0 条）：
-    直连搜索 URL 只渲染导航壳（0 作品卡片、无验证码，疑似静默风控）；
-    首页搜索框输入回车落到 /jingxuan/search/ 页，结果正常渲染
-    （实测 67 个 /video/ 锚点），但首屏渲染慢（>15s），故轮询等待。
+    精选搜索被静默风控时 DOM 只渲染导航壳，但搜索接口响应仍含完整
+    结果（实测 general/search/stream 响应 378KB、满是 aweme_id）——
+    网络层是比 DOM 更稳的一层。结构变化时静默返回空，由上层判 0 走
+    错误漏斗。
+    """
+    ids: list[str] = []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return ids
+    entries = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return ids
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        aweme = entry.get("aweme_info") or {}
+        aid = str(aweme.get("aweme_id") or "").strip()
+        if aid and aid not in ids:
+            ids.append(aid)
+    return ids
 
-    Args:
-        page: Playwright 页面对象。
-        keyword: 搜索关键词。
-        max_items: 收集作品链接数上限。
-        max_scrolls: 滚动加载次数上限。
+
+def _xhr_aweme_urls(responses, limit: int = 200) -> list[str]:
+    """从捕获的搜索接口响应对象提取 /video/{id} URL（按需取响应体）。
+
+    响应体在导航结束后再取（监听器内调用 text() 有阻塞风险）；
+    单个响应取体失败（浏览器缓冲回收等）静默跳过。
+    """
+    urls: list[str] = []
+    for resp in responses:
+        if len(urls) >= limit:
+            break
+        try:
+            raw = resp.text()
+        except Exception:
+            continue
+        for aid in _parse_douyin_search_xhr(raw):
+            u = f"https://www.douyin.com/video/{aid}"
+            if u not in urls:
+                urls.append(u)
+    return urls
+
+
+def _wait_search_cards(page, wait_s: int = 45) -> int:
+    """轮询等待搜索结果卡片出现（等待期间轻滚动促懒加载）。
 
     Returns:
-        (detail_urls, funnel)：规范化后的详情页 URL 列表与滚动统计。
+        出现的卡片数（0 = 超时仍无）。
     """
-    detail_urls: list[str] = []
-    funnel_base: dict = {"cards_seen": 0, "urls_extracted": 0}
-
-    nav_error = goto_with_retry(page, DOUYIN_HOME_URL, retries=1)
-    if nav_error:
-        print(f"  首页导航最终失败: {nav_error}")
-        return detail_urls, {**funnel_base, "error": f"导航失败: {nav_error}"}
-    try:
-        page.wait_for_selector(DOUYIN_SEARCH_INPUT_SELECTOR, timeout=15000)
-    except Exception:
-        pass
-    inp = page.query_selector(DOUYIN_SEARCH_INPUT_SELECTOR)
-    if inp is None:
-        return detail_urls, {
-            **funnel_base,
-            "error": "未找到抖音首页搜索框（页面结构变化，请检查选择器）",
-        }
-    try:
-        inp.click()
-        _rdsleep(0.5, 1.0)
-        inp.fill(keyword)
-        _rdsleep(0.5, 1.0)
-        inp.press("Enter")
-    except Exception as e:
-        return detail_urls, {
-            **funnel_base,
-            "error": f"搜索框操作失败: {type(e).__name__}: {str(e)[:120]}",
-        }
-    print(f"  已在首页搜索框输入「{keyword}」并回车，等待结果渲染…")
-
-    # 精选搜索结果首屏渲染慢（实测 >15s）：轮询等待首批卡片出现
     cards = 0
-    for _waited in range(0, DOUYIN_SEARCH_RENDER_WAIT, 5):
+    for _ in range(max(1, wait_s // 5)):
         time.sleep(5)
         cards = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
         if cards:
             break
-    if not cards:
-        # 可见验证门检（隐藏模板不算）：等人工解决后再给一次机会
-        if _is_verify_page(page) and _wait_verify_resolved(page):
-            return detail_urls, {
-                **funnel_base,
-                "error": "触发机器人验证，等待人工解决超时"
-                         "（请在调试 Chrome 完成验证后重跑任务）",
-            }
-        time.sleep(5)
-        cards = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
-        if not cards:
-            return detail_urls, {
-                **funnel_base,
-                "error": f"搜索结果 {DOUYIN_SEARCH_RENDER_WAIT}s 内未渲染"
-                         "（可能被静默风控；可在调试 Chrome 手动搜索验证）",
-            }
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+    return cards
 
-    # 结果流式渲染：等卡片数量趋稳（≥10 张或连续 15s 无增长）再开滚。
-    # 实测该页面静置 1~2 分钟内从个位数涨到 60+，过早开滚只收得到零星
-    # 几条（任务 #47：cards_seen=12、urls_extracted=4）。
+
+def _stabilize_search_cards(page, cards: int) -> int:
+    """等结果流式渲染趋稳（≥10 张或连续 15s 无增长，上限 ~60s）。
+
+    实测结果流式渲染慢：静置 1~2 分钟从个位数涨到 60+，过早开滚只收
+    得到零星几条（任务 #47：cards_seen=12、urls_extracted=4）。
+    已 ≥10 张时立即返回（直连页首屏就有十几张的场景不多等）。
+    """
     stable_rounds = 0
     last_cards = cards
-    for _ in range(12):  # 最多再等 ~60s
+    for _ in range(12):
         time.sleep(5)
         cards_now = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
         if cards_now == last_cards:
@@ -642,30 +641,153 @@ def collect_douyin_search_urls(
             last_cards = cards_now
         if cards_now >= 10 or stable_rounds >= 3:
             break
+    return last_cards
 
-    _rdsleep(1.5, 3.0)
-    if random.random() < 0.7:
-        _human_mouse_move(page)
 
-    cards_seen = _scroll_collect_cards(
-        page, detail_urls, max_items, max_scrolls
-    )
+def collect_douyin_search_urls(
+    page, keyword: str, max_items: int, max_scrolls: int = 12
+) -> tuple[list[str], dict]:
+    """抖音搜索 URL 收集：直连经典搜索页 + 搜索接口响应 + 搜索框三层。
 
-    # 滚动一轮颗粒无收且页面转为验证态：等人工解决后补滚一轮
-    if not detail_urls and _is_verify_page(page):
-        if _wait_verify_resolved(page):
-            return detail_urls, {
-                "cards_seen": cards_seen,
-                "urls_extracted": len(detail_urls),
-                "error": "采集过程中触发机器人验证，等待人工解决超时",
-            }
-        cards_seen += _scroll_collect_cards(
+    入口有效性会被抖音轮换（2026-08-28 实测，任务 #47→#49 区间）：
+    直连 /search/{kw}?type=video 渲染正常（30s 内 16 锚点），而首页
+    搜索框回车落地的 /jingxuan/search/ 页被静默风控成空壳（DOM 0 卡片
+    但 general/search/stream 接口响应仍含完整结果）——与此前的结论
+    正好相反。故采用三层策略，不押注单一入口：
+      1) 直连经典搜索页 → DOM 锚点滚动收集（主路线）；
+      2) DOM 颗粒无收 → 解析捕获的搜索接口响应（网络层，空壳拦不住）；
+      3) 仍无 → 首页搜索框回车路线兜底（同样的 DOM+接口双层）。
+
+    Args:
+        page: Playwright 页面对象。
+        keyword: 搜索关键词。
+        max_items: 收集作品链接数上限。
+        max_scrolls: 滚动加载次数上限。
+
+    Returns:
+        (detail_urls, funnel)：规范化后的详情页 URL 列表与漏斗统计
+        （cards_seen / urls_extracted / xhr_extracted / error）。
+    """
+    detail_urls: list[str] = []
+    funnel: dict = {"cards_seen": 0, "urls_extracted": 0, "xhr_extracted": 0}
+
+    captured: list = []  # 搜索接口响应对象（按需取响应体，防监听器内阻塞）
+
+    def _on_response(resp):
+        try:
+            u = resp.url or ""
+            if len(captured) < 12 and any(
+                h in u for h in DOUYIN_SEARCH_XHR_HINTS
+            ):
+                captured.append(resp)
+        except Exception:
+            pass
+
+    def _digest_xhr() -> int:
+        """接口层兜底：解析捕获的搜索响应提取作品 URL，返回新增数。"""
+        added = 0
+        for u in _xhr_aweme_urls(captured):
+            if len(detail_urls) >= max_items:
+                break
+            if u not in detail_urls:
+                detail_urls.append(u)
+                added += 1
+        if added:
+            print(f"  搜索接口响应解析出 {added} 个作品链接（DOM 无卡片兜底）")
+        return added
+
+    page.on("response", _on_response)
+    try:
+        # ── 主路线：直连经典搜索页 ──
+        direct_url = DOUYIN_SEARCH_DIRECT_URL_FMT.format(
+            kw=urllib.parse.quote(keyword)
+        )
+        nav_error = goto_with_retry(page, direct_url, retries=1)
+        if nav_error:
+            print(f"  搜索页导航失败，转搜索框路线: {nav_error}")
+        else:
+            print("  已直连搜索页，等待结果渲染…")
+            cards = _wait_search_cards(page, DOUYIN_SEARCH_RENDER_WAIT)
+            if not cards and _is_verify_page(page) and _wait_verify_resolved(
+                page
+            ):
+                funnel["error"] = (
+                    "触发机器人验证，等待人工解决超时"
+                    "（请在调试 Chrome 完成验证后重跑任务）"
+                )
+                return detail_urls, funnel
+            if cards:
+                cards = _stabilize_search_cards(page, cards)
+            _rdsleep(1.5, 3.0)
+            if random.random() < 0.7:
+                _human_mouse_move(page)
+            funnel["cards_seen"] = _scroll_collect_cards(
+                page, detail_urls, max_items, max_scrolls
+            )
+            if not detail_urls:
+                funnel["xhr_extracted"] = _digest_xhr()
+            if detail_urls:
+                funnel["urls_extracted"] = len(detail_urls)
+                return detail_urls, funnel
+
+        # ── 兜底路线：首页搜索框 → 回车（jingxuan 入口）──
+        print("  直连路线无收，转首页搜索框路线…")
+        nav_error = goto_with_retry(page, DOUYIN_HOME_URL, retries=1)
+        if nav_error:
+            funnel["error"] = f"导航失败: {nav_error}"
+            return detail_urls, funnel
+        try:
+            page.wait_for_selector(DOUYIN_SEARCH_INPUT_SELECTOR, timeout=15000)
+        except Exception:
+            pass
+        inp = page.query_selector(DOUYIN_SEARCH_INPUT_SELECTOR)
+        if inp is None:
+            funnel["error"] = "未找到抖音首页搜索框（页面结构变化，请检查选择器）"
+            return detail_urls, funnel
+        try:
+            inp.click()
+            _rdsleep(0.5, 1.0)
+            inp.fill(keyword)
+            _rdsleep(0.5, 1.0)
+            inp.press("Enter")
+        except Exception as e:
+            funnel["error"] = (
+                f"搜索框操作失败: {type(e).__name__}: {str(e)[:120]}"
+            )
+            return detail_urls, funnel
+        print(f"  已在首页搜索框输入「{keyword}」并回车，等待结果渲染…")
+
+        cards = _wait_search_cards(page, DOUYIN_SEARCH_RENDER_WAIT)
+        if not cards and _is_verify_page(page) and _wait_verify_resolved(page):
+            funnel["error"] = (
+                "触发机器人验证，等待人工解决超时"
+                "（请在调试 Chrome 完成验证后重跑任务）"
+            )
+            return detail_urls, funnel
+        if cards:
+            cards = _stabilize_search_cards(page, cards)
+        _rdsleep(1.5, 3.0)
+        if random.random() < 0.7:
+            _human_mouse_move(page)
+        funnel["cards_seen"] += _scroll_collect_cards(
             page, detail_urls, max_items, max_scrolls
         )
-    return detail_urls, {
-        "cards_seen": cards_seen,
-        "urls_extracted": len(detail_urls),
-    }
+        if not detail_urls:
+            funnel["xhr_extracted"] = _digest_xhr()
+
+        if not detail_urls and not funnel.get("error"):
+            # 只陈述事实与排查方向，不臆测具体原因
+            funnel["error"] = (
+                "搜索结果未提取到作品链接（DOM 与搜索接口均无数据；"
+                "可能被静默风控，请稍后重试或在调试 Chrome 手动搜索验证）"
+            )
+        funnel["urls_extracted"] = len(detail_urls)
+        return detail_urls, funnel
+    finally:
+        try:
+            page.remove_listener("response", _on_response)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════

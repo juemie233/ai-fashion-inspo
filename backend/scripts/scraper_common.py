@@ -86,6 +86,23 @@ DOUYIN_DESC_SELECTORS = (
 """话题标签锚点选择器（点击进入话题聚合页的 <a>）。"""
 DOUYIN_HASHTAG_ANCHOR = "a[href*='/hashtag/']"
 
+"""直连经典搜索页 URL 模板（type=video 只出视频/图集笔记）。
+
+入口有效性会被抖音轮换（2026-08-28 实测：直连 type=video 正常渲染、
+搜索框回车落地的 jingxuan 页被静默风控成空壳——与此前的结论相反），
+故采集端以「DOM + 搜索接口响应」双层合并，不押注单一入口。"""
+DOUYIN_SEARCH_DIRECT_URL_FMT = "https://www.douyin.com/search/{kw}?type=video"
+
+"""搜索结果接口特征：响应 URL 命中任一即视为搜索结果数据。
+
+精选搜索被风控成空壳时 DOM 无卡片，但接口响应仍含完整结果
+（实测 general/search/stream 响应 378KB、满是 aweme_id）。"""
+DOUYIN_SEARCH_XHR_HINTS = (
+    "general/search/stream",
+    "general/search/single",
+    "search/item",
+)
+
 """视频 CDN 特征：网络响应 URL 命中任一即视为真实视频直链。"""
 DOUYIN_VIDEO_URL_HINTS = ("douyinvod.com", "/aweme/v1/play/")
 

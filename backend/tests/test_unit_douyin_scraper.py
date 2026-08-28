@@ -464,25 +464,67 @@ class _FakeLink:
         return self._href
 
 
-class _SearchFlowPage:
-    """搜索全流程假页面：可配置搜索框有无与结果渲染延迟。
+class _FakeXhrResponse:
+    """搜索接口响应假对象（供监听器捕获、按需取响应体）。"""
 
-    render_after: 第 N 次 query_selector_all(卡片锚点) 起返回链接
-    （模拟精选搜索首屏慢渲染）；999 表示永不渲染。渲染后卡片集合
-    持续存在并随查询（滚动）增长，直至 total_links——贴近真实 DOM。
+    def __init__(self, url: str, body: str) -> None:
+        self.url = url
+        self._body = body
+
+    def text(self) -> str:
+        return self._body
+
+
+class _SearchFlowPage:
+    """搜索全流程假页面（路由感知 + 接口响应捕获）。
+
+    direct_renders: 直连 /search/ 路线是否渲染卡片（False 模拟空壳）；
+    with_input: 首页是否有搜索框；
+    render_after: 第 N 次锚点查询起返回链接（999 = 永不渲染）；
+    xhr_payload: 非空时访问 /search/ 页触发 response 监听器（模拟
+    搜索接口响应——DOM 空壳时接口层兜底的数据来源）；
+    searchbox_used: 是否走到了搜索框路线（断言路线选择用）。
     """
 
     def __init__(
-        self, with_input: bool = True, render_after: int = 1, total_links: int = 4
+        self,
+        with_input: bool = True,
+        render_after: int = 1,
+        total_links: int = 4,
+        direct_renders: bool = True,
+        xhr_payload: str | None = None,
     ) -> None:
         self.with_input = with_input
         self.render_after = render_after
         self.total_links = total_links
+        self.direct_renders = direct_renders
+        self.xhr_payload = xhr_payload
+        self.searchbox_used = False
         self._rendered = 0
         self._polls = 0
+        self._on_direct = False
+        self._listener = None
 
-    def goto(self, *_args, **_kwargs) -> None:
-        pass
+    def on(self, _event: str, cb) -> None:
+        self._listener = cb
+
+    def remove_listener(self, *_args) -> None:
+        self._listener = None
+
+    def goto(self, url: str, *_args, **_kwargs) -> None:
+        self._on_direct = "douyin.com/search/" in url
+        if (
+            self._listener is not None
+            and self.xhr_payload is not None
+            and "/search/" in url
+        ):
+            self._listener(
+                _FakeXhrResponse(
+                    "https://www.douyin.com/aweme/v1/web/general/"
+                    "search/stream/?aid=6383",
+                    self.xhr_payload,
+                )
+            )
 
     def wait_for_selector(self, *_args, **_kwargs) -> None:
         pass
@@ -492,11 +534,14 @@ class _SearchFlowPage:
 
     def query_selector(self, sel: str):
         if "searchbar-input" in sel:
+            self.searchbox_used = True
             return _FakeSearchInput() if self.with_input else None
         return None
 
     def query_selector_all(self, sel: str):
         if "video" not in sel:
+            return []
+        if self._on_direct and not self.direct_renders:
             return []
         self._polls += 1
         if self._polls < self.render_after:
@@ -508,38 +553,74 @@ class _SearchFlowPage:
         ]
 
 
-def test_collect_search_urls_via_searchbox(monkeypatch):
-    """搜索框 → 回车 → 结果渲染 → 滚动收集链接（主路径）。"""
+def test_collect_search_urls_direct_route(monkeypatch):
+    """直连经典搜索页渲染 → 直接收集，不落搜索框兜底。"""
     monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
-    urls, funnel = sd.collect_douyin_search_urls(
-        _SearchFlowPage(), "小白裙穿搭", 10
-    )
+    fake = _SearchFlowPage()
+    urls, funnel = sd.collect_douyin_search_urls(fake, "小白裙穿搭", 10)
     assert len(urls) == 4
     assert all("/video/" in u for u in urls)
     assert funnel["cards_seen"] >= len(urls)
+    assert funnel["urls_extracted"] == 4
+    assert funnel.get("xhr_extracted", 0) == 0
+    assert fake.searchbox_used is False
+    assert "error" not in funnel
+
+
+def test_collect_search_urls_via_searchbox(monkeypatch):
+    """直连空壳 → 搜索框兜底路线 → 结果渲染 → 滚动收集。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    fake = _SearchFlowPage(direct_renders=False)
+    urls, funnel = sd.collect_douyin_search_urls(fake, "小白裙穿搭", 10)
+    assert len(urls) == 4
+    assert all("/video/" in u for u in urls)
+    assert fake.searchbox_used is True
     assert funnel["urls_extracted"] == 4
     assert "error" not in funnel
 
 
 def test_collect_search_urls_missing_input_reports_error(monkeypatch):
-    """首页找不到搜索框 → 漏斗留痕（页面结构变化）。"""
+    """直连空壳 + 首页无搜索框 → 漏斗留痕（页面结构变化）。"""
     monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
     urls, funnel = sd.collect_douyin_search_urls(
-        _SearchFlowPage(with_input=False), "kw", 10
+        _SearchFlowPage(direct_renders=False, with_input=False), "kw", 10
     )
     assert urls == []
     assert "搜索框" in funnel.get("error", "")
 
 
 def test_collect_search_urls_render_timeout_reports_error(monkeypatch):
-    """结果 60s 未渲染（静默风控）→ 漏斗明确报错，不误称验证。"""
+    """DOM 与接口均无数据 → 事实型漏斗报错，不误称验证。"""
     monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
     urls, funnel = sd.collect_douyin_search_urls(
-        _SearchFlowPage(render_after=999), "kw", 10
+        _SearchFlowPage(direct_renders=False, render_after=999), "kw", 10
     )
     assert urls == []
-    assert "未渲染" in funnel.get("error", "")
+    assert "未提取到作品链接" in funnel.get("error", "")
     assert "机器人验证" not in funnel.get("error", "")
+
+
+def test_collect_search_urls_xhr_fallback(monkeypatch):
+    """DOM 空壳但搜索接口有响应 → 解析 aweme_id 兜底（网络层）。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    payload = json.dumps(
+        {
+            "data": [
+                {"type": 1, "aweme_info": {"aweme_id": "111"}},
+                {"type": 1, "aweme_info": {"aweme_id": "222"}},
+                {"type": 2},  # 无 aweme_info 的条目跳过
+            ]
+        }
+    )
+    fake = _SearchFlowPage(direct_renders=False, xhr_payload=payload)
+    urls, funnel = sd.collect_douyin_search_urls(fake, "kw", 10)
+    assert urls == [
+        "https://www.douyin.com/video/111",
+        "https://www.douyin.com/video/222",
+    ]
+    assert funnel["xhr_extracted"] == 2
+    assert funnel["urls_extracted"] == 2
+    assert "error" not in funnel
 
 
 # ── 素材入库 INSERT 与真实 schema 匹配（任务 #46 回归）──
