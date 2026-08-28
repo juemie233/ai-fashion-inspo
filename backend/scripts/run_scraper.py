@@ -778,6 +778,21 @@ def run_scraper_sync(task_id: int):
                     f"{error_msg}"
                     "（检测到抖音未登录：请在调试 Chrome 中登录抖音后重试）"
                 )[:500]
+        elif platform == "douyin":
+            # 无显式错误但颗粒无收：避免「成功 0 条」误导（真实案例任务
+            # #44：搜索页被机器人验证拦截，卡片提取 0 个，任务却显示成功）
+            nothing_seen = all(
+                s.get("cards_seen", 0) == 0 for s in per_search
+            )
+            error_msg = (
+                "抖音搜索提取 0 个作品链接："
+                + (
+                    "页面疑似被机器人验证拦截"
+                    "（请在调试 Chrome 完成滑块验证后重跑任务）"
+                    if nothing_seen
+                    else "已见到卡片但未提取到有效链接（请检查任务日志）"
+                )
+            )[:500]
 
     def _done():
         """标记任务完成并写入漏斗诊断（同步写库，规避事件循环冲突）。"""

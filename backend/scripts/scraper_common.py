@@ -89,6 +89,18 @@ DOUYIN_HASHTAG_ANCHOR = "a[href*='/hashtag/']"
 """视频 CDN 特征：网络响应 URL 命中任一即视为真实视频直链。"""
 DOUYIN_VIDEO_URL_HINTS = ("douyinvod.com", "/aweme/v1/play/")
 
+"""抖音机器人验证（滑块/验证码）特征选择器：命中任一即认为处于验证态。
+
+注意 text= 选择器可能匹配到隐藏模板，因此调用方必须以「页面无作品卡片」
+为前置条件，避免误判正常搜索页。"""
+DOUYIN_VERIFY_SELECTORS = (
+    "#captcha_container",
+    "[id*='captcha']",
+    "[class*='captcha_verify']",
+    "text=安全验证",
+    "text=拖动滑块",
+)
+
 """抖音媒体 URL 归一化时补充的主机前缀。"""
 DOUYIN_MEDIA_HOST = "https://www.douyin.com"
 

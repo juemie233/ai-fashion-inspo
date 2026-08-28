@@ -27,6 +27,7 @@ from .scraper_common import (
     DOUYIN_HASHTAG_ANCHOR,
     DOUYIN_VIDEO_URL_HINTS,
     DOUYIN_MEDIA_HOST,
+    DOUYIN_VERIFY_SELECTORS,
     goto_with_retry,
     utcnow,
     _rdsleep,
@@ -259,6 +260,12 @@ def _extract_douyin_detail(page, note_url: str) -> dict:
         print(f"  详情页导航失败，跳过 {note_url[:80]}: {nav_error}")
         return result
 
+    # 详情页被机器人验证拦截：等人工完成验证，超时放弃该篇（留痕）
+    if _is_verify_page(page):
+        if _wait_verify_resolved(page):
+            print(f"  详情页验证超时，跳过 {note_url[:80]}")
+            return result
+
     # 等待详情主体渲染（超时不阻断，靠后续随机停顿再等等懒加载）
     try:
         page.wait_for_selector(DOUYIN_DETAIL_READY, timeout=12000)
@@ -361,6 +368,45 @@ def _extract_douyin_detail(page, note_url: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 
+def _is_verify_page(page) -> bool:
+    """检测当前页面是否处于机器人验证状态（滑块/验证码）。
+
+    仅凭特征选择器判定（可能命中隐藏模板），调用方必须以
+    「页面无作品卡片/提取为空」为前置条件，避免误判正常页面。
+    """
+    for sel in DOUYIN_VERIFY_SELECTORS:
+        try:
+            if page.query_selector(sel):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _wait_verify_resolved(page, timeout: int = 180) -> bool:
+    """等待人工在调试 Chrome 中完成机器人验证（仿登录等待模式）。
+
+    Args:
+        page: Playwright 页面对象。
+        timeout: 人工解决验证的等待上限（秒）。
+
+    Returns:
+        True 表示等待超时仍在验证态；False 表示验证已通过。
+    """
+    print("  ⚠️ 检测到抖音机器人验证（滑块/验证码）")
+    print("  请在调试 Chrome 中手动完成验证，脚本将自动继续…")
+    for waited in range(0, timeout, 5):
+        time.sleep(5)
+        if not _is_verify_page(page):
+            print(f"  验证已通过（{waited + 5}s），继续采集")
+            _rdsleep(1.0, 2.0)
+            return False
+        if (waited + 5) % 30 == 0:
+            print(f"  等待人工验证... ({waited + 5}s / {timeout}s)")
+    print("  等待人工验证超时")
+    return True
+
+
 def collect_douyin_detail_urls(
     page,
     base_url: str,
@@ -368,6 +414,9 @@ def collect_douyin_detail_urls(
     max_scrolls: int = 10,
 ) -> tuple[list[str], dict]:
     """滚动收集当前页面中的作品详情链接（搜索页与博主页共用）。
+
+    被机器人验证拦截时页面没有任何作品卡片：检测到验证态会提示并等待
+    人工在调试 Chrome 中完成验证（登录等待同款模式），超时才判死。
 
     Args:
         page: Playwright 页面对象。
@@ -395,40 +444,66 @@ def collect_douyin_detail_urls(
         page.wait_for_selector(DOUYIN_DETAIL_ANCHOR, timeout=15000)
     except Exception:
         pass
+
+    # ── 机器人验证门检：被风控时页面只有滑块验证，没有任何作品卡片 ──
+    if (
+        not page.query_selector_all(DOUYIN_DETAIL_ANCHOR)
+        and _is_verify_page(page)
+        and _wait_verify_resolved(page)
+    ):
+        return detail_urls, {
+            "cards_seen": 0,
+            "urls_extracted": 0,
+            "error": "触发机器人验证，等待人工解决超时"
+                     "（请在调试 Chrome 完成验证后重跑任务）",
+        }
     _rdsleep(1.5, 3.0)
     if random.random() < 0.7:
         _human_mouse_move(page)
 
-    for _ in range(max_scrolls):
-        cards_seen += len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
-        for link in page.query_selector_all(DOUYIN_DETAIL_ANCHOR):
-            canonical = _canonical_douyin_url(
-                link.get_attribute("href") or ""
-            )
-            if canonical and canonical not in detail_urls:
-                detail_urls.append(canonical)
-                if len(detail_urls) >= max_items:
-                    return detail_urls, {
-                        "cards_seen": cards_seen,
-                        "urls_extracted": len(detail_urls),
-                    }
-        if len(detail_urls) == last_count:
-            no_new += 1
-        else:
-            no_new = 0
-            last_count = len(detail_urls)
-        if no_new >= 2:
-            break
-        # 拟人化滚动：偶发鼠标移动 + 分步滚到底
-        if random.random() < 0.5:
-            _human_mouse_move(page)
-        try:
-            page.evaluate(
-                "window.scrollTo(0, document.body.scrollHeight)"
-            )
-        except Exception:
-            pass
-        _rdsleep(1.0, 2.0)
+    def _scroll_collect() -> None:
+        """拟人化滚动收集一轮：滚动加载 + 提取卡片链接 + 连续无新增早停。"""
+        nonlocal cards_seen, last_count, no_new
+        for _ in range(max_scrolls):
+            cards_seen += len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
+            for link in page.query_selector_all(DOUYIN_DETAIL_ANCHOR):
+                canonical = _canonical_douyin_url(
+                    link.get_attribute("href") or ""
+                )
+                if canonical and canonical not in detail_urls:
+                    detail_urls.append(canonical)
+                    if len(detail_urls) >= max_items:
+                        return
+            if len(detail_urls) == last_count:
+                no_new += 1
+            else:
+                no_new = 0
+                last_count = len(detail_urls)
+            if no_new >= 2:
+                return
+            # 拟人化滚动：偶发鼠标移动 + 分步滚到底
+            if random.random() < 0.5:
+                _human_mouse_move(page)
+            try:
+                page.evaluate(
+                    "window.scrollTo(0, document.body.scrollHeight)"
+                )
+            except Exception:
+                pass
+            _rdsleep(1.0, 2.0)
+
+    _scroll_collect()
+
+    # 滚动一轮颗粒无收且页面转为验证态（风控中途触发）：等人工解决后补滚一轮
+    if not detail_urls and _is_verify_page(page):
+        if _wait_verify_resolved(page):
+            return detail_urls, {
+                "cards_seen": cards_seen,
+                "urls_extracted": len(detail_urls),
+                "error": "采集过程中触发机器人验证，等待人工解决超时",
+            }
+        no_new = 0
+        _scroll_collect()
     return detail_urls, {
         "cards_seen": cards_seen,
         "urls_extracted": len(detail_urls),

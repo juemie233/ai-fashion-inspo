@@ -227,3 +227,64 @@ def test_selector_constants_nonempty():
     ):
         assert isinstance(const, str) and const.strip()
     assert all(sc.DOUYIN_DESC_SELECTORS)
+
+
+# ── 机器人验证检测与人工等待 ──
+
+
+class _VerifyFakePage:
+    """可切换验证态的假页面：query_selector 按验证开关返回命中。"""
+
+    def __init__(self, captcha: bool = True) -> None:
+        self.captcha = captcha
+
+    def goto(self, *_args, **_kwargs) -> None:
+        pass
+
+    def wait_for_selector(self, *_args, **_kwargs) -> None:
+        pass
+
+    def evaluate(self, *_args, **_kwargs) -> None:
+        pass
+
+    def query_selector(self, _sel: str):
+        return object() if self.captcha else None
+
+    def query_selector_all(self, _sel: str):
+        return []  # 验证页/空页都没有作品卡片
+
+
+def test_is_verify_page_detects_captcha():
+    assert sd._is_verify_page(_VerifyFakePage(captcha=True)) is True
+    assert sd._is_verify_page(_VerifyFakePage(captcha=False)) is False
+
+
+def test_wait_verify_resolved_returns_when_solved(monkeypatch):
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    # 首次检查即通过 → False（已解决）
+    assert sd._wait_verify_resolved(_VerifyFakePage(captcha=False)) is False
+
+
+def test_wait_verify_resolved_timeout_returns_true(monkeypatch):
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    # 始终处于验证态 → 等满 timeout 返回 True（超时）
+    assert sd._wait_verify_resolved(_VerifyFakePage(captcha=True)) is True
+
+
+def test_collect_urls_verify_timeout_reports_error(monkeypatch):
+    """搜索页被验证拦截且人工超时 → 漏斗 error 明确留痕（任务 #44 回归）。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(sd, "_wait_verify_resolved", lambda page, timeout=180: True)
+    urls, funnel = sd.collect_douyin_detail_urls(_VerifyFakePage(), "https://x", 10)
+    assert urls == []
+    assert "机器人验证" in funnel.get("error", "")
+    assert funnel["urls_extracted"] == 0
+
+
+def test_collect_urls_verify_solved_resumes_scroll(monkeypatch):
+    """人工完成验证后继续滚动收集（无 error，正常返回漏斗）。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(sd, "_wait_verify_resolved", lambda page, timeout=180: False)
+    urls, funnel = sd.collect_douyin_detail_urls(_VerifyFakePage(), "https://x", 10)
+    assert urls == []
+    assert "error" not in funnel  # 解决后继续，不误报失败
