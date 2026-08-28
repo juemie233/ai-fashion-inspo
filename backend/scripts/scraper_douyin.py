@@ -371,12 +371,18 @@ def _extract_douyin_detail(page, note_url: str) -> dict:
 def _is_verify_page(page) -> bool:
     """检测当前页面是否处于机器人验证状态（滑块/验证码）。
 
-    仅凭特征选择器判定（可能命中隐藏模板），调用方必须以
-    「页面无作品卡片/提取为空」为前置条件，避免误判正常页面。
+    只认**可见**的验证元素：抖音会在每个页面预注入隐藏的验证容器模板，
+    query_selector 连隐藏元素也会命中——不加可见性过滤会把正常搜索页
+    误判成验证态，空等 180s「等待人工验证」而页面毫无验证内容（真实案例）。
+    另：调用方须以「页面无作品卡片/提取为空」为前置条件双重防误判。
     """
     for sel in DOUYIN_VERIFY_SELECTORS:
         try:
-            if page.query_selector(sel):
+            el = page.query_selector(sel)
+        except Exception:
+            continue
+        try:
+            if el and el.is_visible():
                 return True
         except Exception:
             continue

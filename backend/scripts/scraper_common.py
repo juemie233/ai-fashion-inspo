@@ -91,8 +91,9 @@ DOUYIN_VIDEO_URL_HINTS = ("douyinvod.com", "/aweme/v1/play/")
 
 """抖音机器人验证（滑块/验证码）特征选择器：命中任一即认为处于验证态。
 
-注意 text= 选择器可能匹配到隐藏模板，因此调用方必须以「页面无作品卡片」
-为前置条件，避免误判正常搜索页。"""
+注意：抖音会在每个页面预注入隐藏的验证容器模板，text= / [id*=] 选择器
+连隐藏元素也会命中——调用方必须用 is_visible() 过滤（_is_verify_page
+已内置），否则正常搜索页会被误判成验证态空等 180s（真实案例）。"""
 DOUYIN_VERIFY_SELECTORS = (
     "#captcha_container",
     "[id*='captcha']",

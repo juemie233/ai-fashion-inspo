@@ -233,10 +233,21 @@ def test_selector_constants_nonempty():
 
 
 class _VerifyFakePage:
-    """可切换验证态的假页面：query_selector 按验证开关返回命中。"""
+    """可切换验证态的假页面（模拟可见性语义）。
 
-    def __init__(self, captcha: bool = True) -> None:
-        self.captcha = captcha
+    mode: "visible"=有可见验证元素 / "hidden"=仅隐藏验证容器模板 /
+    "none"=无任何验证元素。
+    """
+
+    class _El:
+        def __init__(self, visible: bool) -> None:
+            self._visible = visible
+
+        def is_visible(self) -> bool:
+            return self._visible
+
+    def __init__(self, mode: str = "visible") -> None:
+        self.mode = mode
 
     def goto(self, *_args, **_kwargs) -> None:
         pass
@@ -248,27 +259,36 @@ class _VerifyFakePage:
         pass
 
     def query_selector(self, _sel: str):
-        return object() if self.captcha else None
+        if self.mode == "visible":
+            return self._El(True)
+        if self.mode == "hidden":
+            return self._El(False)
+        return None
 
     def query_selector_all(self, _sel: str):
         return []  # 验证页/空页都没有作品卡片
 
 
 def test_is_verify_page_detects_captcha():
-    assert sd._is_verify_page(_VerifyFakePage(captcha=True)) is True
-    assert sd._is_verify_page(_VerifyFakePage(captcha=False)) is False
+    assert sd._is_verify_page(_VerifyFakePage(mode="visible")) is True
+    assert sd._is_verify_page(_VerifyFakePage(mode="none")) is False
+
+
+def test_is_verify_page_ignores_hidden_captcha_template():
+    """回归：抖音预注入的隐藏验证容器不得判为验证态（曾误报空等 180s）。"""
+    assert sd._is_verify_page(_VerifyFakePage(mode="hidden")) is False
 
 
 def test_wait_verify_resolved_returns_when_solved(monkeypatch):
     monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
     # 首次检查即通过 → False（已解决）
-    assert sd._wait_verify_resolved(_VerifyFakePage(captcha=False)) is False
+    assert sd._wait_verify_resolved(_VerifyFakePage(mode="none")) is False
 
 
 def test_wait_verify_resolved_timeout_returns_true(monkeypatch):
     monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
     # 始终处于验证态 → 等满 timeout 返回 True（超时）
-    assert sd._wait_verify_resolved(_VerifyFakePage(captcha=True)) is True
+    assert sd._wait_verify_resolved(_VerifyFakePage(mode="visible")) is True
 
 
 def test_collect_urls_verify_timeout_reports_error(monkeypatch):
