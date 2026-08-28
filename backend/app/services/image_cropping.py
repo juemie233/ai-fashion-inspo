@@ -248,7 +248,8 @@ def screenshot_confidence(features: dict) -> str:
 
 
 def _profiles_from_small(small: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """从缩放图计算行级剖面（_row_profiles 的计算核心，供单次解码合并路径复用）。"""
+    """从缩放图计算行级剖面（内容边界检测的计算核心，供 detect_content_bounds
+    与单次解码合并路径 analyze_screenshot_combined 复用，避免重复完整解码）。"""
     arr = np.asarray(small).astype(np.float32) / 255.0
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
     brightness = (r * 0.299 + g * 0.587 + b * 0.114).mean(axis=1)
@@ -265,27 +266,6 @@ def _profiles_from_small(small: Image.Image) -> tuple[np.ndarray, np.ndarray, np
     unique_per_row = (s[:, 1:] != s[:, :-1]).sum(axis=1).astype(np.float32) + 1.0
     diversity = unique_per_row / _CONTENT_ANALYZE_W
     return brightness, saturation, diversity
-
-
-def _row_profiles(path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """计算图片的行级剖面：亮度均值、饱和度均值、颜色多样度（0~1，逐行）。
-
-    与 detect_screenshot_features 的缩放策略一致（EXIF 校正 → 统一宽度缩放），
-    但宽度取 _CONTENT_ANALYZE_W（96），行剖面按相对高度输出，与绝对分辨率无关。
-
-    参数:
-        path: 图片绝对路径
-
-    返回:
-        (brightness, saturation, diversity) 三个长度 = 缩放后高度的数组
-    """
-    with Image.open(path) as im:
-        img = ImageOps.exif_transpose(im).convert("RGB")
-        small = img.resize(
-            (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
-            Image.Resampling.LANCZOS,
-        )
-    return _profiles_from_small(small)
 
 
 def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:

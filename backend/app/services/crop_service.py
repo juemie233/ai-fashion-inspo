@@ -25,6 +25,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -40,17 +41,17 @@ from app.services.image_cropping import (
     analyze_screenshot_combined,
     crop_image_to_temp,
     crop_region_to_temp,
+    detect_content_bounds,
     detect_photo_band,
     detect_screenshot_features,
     probe_size as _probe_size,
     screenshot_confidence,
 )
-# 内部算法接缝重新导出：内容边界/状态栏修正的纯函数单测仍从本模块导入，
+# 内部算法接缝重新导出：状态栏修正的纯函数单测仍从本模块导入，
 # 实现已下沉到 image_cropping（纯算法 module，无需 DB/app 即可直测）。
 from app.services.image_cropping import (  # noqa: F401
     _residual_top_estimate,
     _status_bar_correction,
-    detect_content_bounds,
 )
 from app.services.inspiration_query import load_inspiration_full
 from app.services.task_runners.vector_backfill import enqueue_vector_backfills
@@ -121,15 +122,17 @@ async def scan_candidates(
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
         limit: 单次最多返回的候选数（0 表示不限制）
-        cursor: 分页游标（上一批返回的 next_cursor；素材按 id 倒序扫描，
-            传游标从断点继续，避免大批量素材单次请求超时）
+        cursor: 分页游标（上一批返回的 next_cursor；素材按 id 全序分批扫描，
+            传游标从断点继续，避免大批量素材单次请求超时。注意 id 为 UUID，
+            顺序稳定但与上传时间无关——只保证分批不重不漏，不代表先后批次
+            的新旧关系）
         time_budget: 单次扫描的时间预算（秒）。素材量大（5000+ 竖屏）时
             全量检测远超前端请求超时，预算耗尽即返回已找到的候选并置
             truncated=True，由前端提示用户继续扫描。
 
     返回:
         {
-            "total": 本次扫描找到的候选数（limit 截断前）,
+            "total": 本次扫描列入候选的数量（受 limit 封顶，等于 len(items））,
             "items": [候选列表，同旧结构],
             "scanned": 本次实际扫描的素材数,
             "next_cursor": 截断时下一次扫描的起点（素材 id）；扫完返回 None,
@@ -143,22 +146,30 @@ async def scan_candidates(
     # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
     min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
 
+    cursor_id: str | None = None
+    if cursor is not None:
+        try:
+            # 素材主键为 UUID 字符串：规范化（小写连字符形式）后做字符串比较，
+            # 与库中存储格式严格一致；不能 int() 转换（曾导致续扫恒 400）
+            cursor_id = str(uuid.UUID(cursor))
+        except ValueError:
+            raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的素材 id）") from None
+
     query = select(Inspiration).where(
         Inspiration.source_type == "manual_upload",
         NOT_DELETED,
         Inspiration.file_path.isnot(None),
         Inspiration.media_type == "image",
     )
-    if cursor:
-        query = query.where(Inspiration.id < int(cursor))
+    if cursor_id is not None:
+        query = query.where(Inspiration.id < cursor_id)
     query = query.order_by(Inspiration.id.desc())
     result = await db.execute(query)
 
     candidates: list[dict] = []
-    total = 0
     scanned = 0
     truncated = False
-    last_insp_id: int | None = None
+    last_insp_id: str | None = None
     deadline = time.monotonic() + max(1.0, time_budget)
     for insp in result.scalars():
         # 时间预算检查（检测是耗时大头，循环级检查粒度足够）
@@ -217,10 +228,6 @@ async def scan_candidates(
             except Exception:
                 confidence = "low"
 
-        total += 1
-        if limit > 0 and len(candidates) >= limit:
-            truncated = True
-            break
         item: dict = {
             "id": insp.id,
             "file_path": str(insp.file_path),
@@ -259,11 +266,17 @@ async def scan_candidates(
                     "确认后勾选裁剪"
                 )
         candidates.append(item)
+        # 候选上限检查必须放在 append 之后：此时当前候选已入选，断点游标
+        # （last_insp_id）指向它，续扫从它之后接续，不重不漏。若放在 append
+        # 之前，边界候选会被计入 total 却不入选，续扫游标又跳过它 → 永久丢失
+        if limit > 0 and len(candidates) >= limit:
+            truncated = True
+            break
 
     # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）
     candidates.sort(key=lambda c: c.get("created_at") or "", reverse=True)
     return {
-        "total": total,
+        "total": len(candidates),
         "items": candidates,
         "scanned": scanned,
         "next_cursor": str(last_insp_id) if truncated and last_insp_id is not None else None,

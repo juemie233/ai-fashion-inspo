@@ -38,6 +38,13 @@ const nextCursor = ref<string | null>(null)
 /** 本次会话累计扫描的素材数（多次续扫累加） */
 const scannedCount = ref(0)
 
+// 扫描参数变化时已有断点作废（游标与参数无关，继续扫描会混用新旧参数），
+// 重置断点与累计计数，下次扫描从头开始
+watch([mode, cropTop, cropBottom, limit], () => {
+  nextCursor.value = null
+  scannedCount.value = 0
+})
+
 /** 扫描候选 */
 interface CropCandidate {
   id: string
@@ -173,8 +180,8 @@ function finishDupQueue() {
   if (!r) return
   if (r.processed > 0) {
     Message.success(`重复对比处理完成：成功裁剪 ${r.processed} 张，已入队向量回填`)
-    // 已处理的素材不再出现在候选列表
-    handleScan()
+    // 已处理的素材不再出现在候选列表（从头重扫，避免沿用过期的分页断点）
+    handleRescan()
   } else if (r.skipped.length > 0 || r.duplicates.length > 0) {
     Message.warning(`裁剪完成：成功 0 张（跳过 ${r.skipped.length} 张）`)
   }
@@ -186,7 +193,7 @@ function handleDupModalClose() {
   dupQueue.value = []
   showDupModal.value = false
   const r = result.value
-  if (r && r.processed > 0) handleScan()
+  if (r && r.processed > 0) handleRescan()
 }
 
 /** 跳过明细折叠面板：全部跳过时默认展开，便于立即查看原因并逐条定位 */
@@ -246,8 +253,9 @@ function defaultCheckedIds(items: CropCandidate[]): Set<string> {
 }
 
 /** 扫描候选：只读预览，不修改任何数据。
- * 素材量大时后端按时间预算分批返回（truncated + next_cursor），
- * 前端可点「继续扫描」从断点续扫；单次请求超时放宽到 120s。 */
+ * 素材量大时后端按时间预算分批返回（truncated + next_cursor）：
+ * 首次扫描重置列表；「继续扫描」把新批次追加合并到现有列表（按 id 去重，
+ * 保留已勾选状态），避免续扫丢弃上一批候选；单次请求超时放宽到 120s。 */
 interface ScanResponse {
   total: number
   items: CropCandidate[]
@@ -259,6 +267,7 @@ interface ScanResponse {
 async function handleScan() {
   scanning.value = true
   result.value = null
+  const isContinuation = nextCursor.value !== null
   try {
     const { data } = await apiClient.post<ScanResponse>(
       '/admin/crop-phone-screenshots/scan',
@@ -272,15 +281,22 @@ async function handleScan() {
       },
       { timeout: 120000 },
     )
-    scannedTotal.value = data.total
-    candidates.value = data.items
-    checkedIds.value = defaultCheckedIds(data.items)
     nextCursor.value = data.truncated ? data.next_cursor : null
-    scannedCount.value = (scannedCount.value ?? 0) + data.scanned
+    scannedCount.value += data.scanned
+    if (isContinuation) {
+      // 续扫：追加合并新批次（后端按稳定顺序分批，新批次是尚未扫描的剩余素材）
+      const known = new Set(candidates.value.map((c) => c.id))
+      const fresh = data.items.filter((c) => !known.has(c.id))
+      candidates.value = [...candidates.value, ...fresh]
+      checkedIds.value = new Set([...checkedIds.value, ...defaultCheckedIds(fresh)])
+      scannedTotal.value += data.total
+    } else {
+      candidates.value = data.items
+      checkedIds.value = defaultCheckedIds(data.items)
+      scannedTotal.value = data.total
+    }
     if (data.items.length === 0 && !data.truncated) {
-      Message.info(
-        data.total === 0 ? '没有可裁剪的竖屏截图素材' : `候选超过上限，仅显示前 ${limit.value} 张`,
-      )
+      Message.info(isContinuation ? '扫描完成，剩余素材中没有新的候选' : '没有可裁剪的竖屏截图素材')
     }
   } catch (e: unknown) {
     Message.error(errorDetail(e) || '扫描失败')
@@ -289,11 +305,11 @@ async function handleScan() {
   }
 }
 
-/** 重新扫描（重置断点，从头开始） */
+/** 重新扫描（重置断点，从头开始）；裁剪成功后的列表刷新也走这里 */
 function handleRescan() {
   nextCursor.value = null
   scannedCount.value = 0
-  handleScan()
+  return handleScan()
 }
 
 /** 切换单个候选勾选 */
@@ -345,7 +361,8 @@ async function handleApply() {
     if (result.value.processed > 0) {
       Message.success(`裁剪完成：成功 ${result.value.processed} 张，已入队向量回填`)
       // 裁剪成功后刷新候选：已处理的素材不再出现在候选列表
-      await handleScan()
+      // （从头重扫，避免沿用过期的分页断点导致列表只剩下一批）
+      await handleRescan()
     } else if (result.value.skipped.length > 0) {
       Message.warning(
         `裁剪完成：成功 0 张（${result.value.skipped.length} 张跳过），可在下方跳过明细中逐条「定位」`,
@@ -442,7 +459,7 @@ function timeLabel(c: { created_at: string | null }): string {
           已扫描 {{ scannedCount }} 张素材
         </span>
         <span v-if="nextCursor" style="margin-left: 12px; font-size: 12px; color: #f0a020">
-          素材量较大，本次扫描已返回一批候选，点击「继续扫描剩余素材」处理更早的素材
+          素材量较大，已返回一批候选；点击「继续扫描剩余素材」把未扫描的素材追加到列表
         </span>
       </a-form-item>
     </a-form>

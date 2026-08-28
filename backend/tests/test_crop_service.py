@@ -133,6 +133,44 @@ def test_scan_lists_candidates(client):
     assert _backup_count() == 0
 
 
+def test_scan_cursor_pagination_no_loss(client):
+    """游标续扫分批覆盖全部候选，不重不漏。
+
+    回归：limit 截断的边界候选曾被计入 total 却未入选，且续扫游标指向它的
+    id（id < cursor 扫描）→ 该候选被永久跳过丢失。修复后上限检查放在入选
+    之后，断点游标指向已入选的最后一条，续扫恰好从其后接续。
+    """
+    ids = []
+    for i in range(3):
+        # 每次不同背景色，避免同内容上传被内容去重拦截
+        data, ctype = _make_vertical_screenshot(bg=(220 - i * 30, 220, 220))
+        ids.append(_upload_screenshot(client, data, ctype)["id"])
+
+    r1 = _scan(client, limit=2)
+    assert r1["truncated"] is True
+    assert len(r1["items"]) == 2
+    assert r1["total"] == 2
+    assert r1["next_cursor"]
+
+    r2 = _scan(client, limit=2, cursor=r1["next_cursor"])
+    assert r2["truncated"] is False
+    assert len(r2["items"]) == 1
+    assert r2["next_cursor"] is None
+
+    got = {str(i["id"]) for i in r1["items"]} | {str(i["id"]) for i in r2["items"]}
+    assert got == {str(i) for i in ids}, "分批扫描丢失或重复了候选"
+
+
+def test_scan_invalid_cursor_rejected(client):
+    """非法分页游标返回 400 与中文提示（而非 int() 的英文报错）。"""
+    r = client.post(
+        "/api/admin/crop-phone-screenshots/scan",
+        json={"mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05, "cursor": "not-a-number"},
+    )
+    assert r.status_code == 400
+    assert "分页游标格式无效" in r.json()["detail"]
+
+
 def test_scan_auto_mode_detects_black_band(client):
     """自动模式扫描：黑边检测结果写入裁剪比例。"""
     data, ctype = _make_vertical_screenshot(top_black=40, bottom_black=30)
