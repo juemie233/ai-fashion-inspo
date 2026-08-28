@@ -25,6 +25,7 @@ from .scraper_common import (
     DOUYIN_DETAIL_READY,
     DOUYIN_DESC_SELECTORS,
     DOUYIN_HASHTAG_ANCHOR,
+    DOUYIN_SLIDE_IMG_SELECTOR,
     DOUYIN_VIDEO_URL_HINTS,
     DOUYIN_MEDIA_HOST,
     DOUYIN_VERIFY_SELECTORS,
@@ -291,18 +292,34 @@ def _extract_douyin_detail(page, note_url: str) -> dict:
         if normalized:
             result["video_urls"].append(normalized)
 
-    # ── 图片：图集容器优先，回退全页过滤 ──
+    # ── 图片提取策略：先判笔记类型，再选来源，禁止无脑全页兜底 ──
+    # 教训（任务 #47「白色系穿搭」）：视频详情页没有图集容器，旧逻辑回退
+    # 「全页 img」把相关推荐封面、AI 生成内容全部当素材采回（4 篇视频页
+    # 提出 73 张图，用户手动删 69/73）。策略：
+    #   1) 图集容器命中 → 只取容器内图片；
+    #   2) 无容器但确认是视频笔记（捕获/渲染层视频直链或 <video> 播放器）
+    #      → 图片只信 RENDER_DATA 封面/图集（天然笔记隔离），不扫 DOM；
+    #   3) 二者皆无（页面结构未知）→ 才允许全页过滤兜底。
+    slide_imgs = page.query_selector_all(DOUYIN_SLIDE_IMG_SELECTOR)
+    is_video_note = False
+    if not slide_imgs:
+        if captured_media or rendered.get("video_urls"):
+            is_video_note = True
+        else:
+            try:
+                is_video_note = page.query_selector("video") is not None
+            except Exception:
+                is_video_note = False
+
     dom_imgs: list[str] = []
-    from .scraper_common import DOUYIN_SLIDE_IMG_SELECTOR
-    img_elements = page.query_selector_all(DOUYIN_SLIDE_IMG_SELECTOR)
-    if not img_elements:
-        img_elements = page.query_selector_all("img")
-    for img in img_elements:
-        src = clean_media_url(
-            img.get_attribute("src") or img.get_attribute("data-src") or ""
-        )
-        if src and is_content_image(src) and src not in dom_imgs:
-            dom_imgs.append(src)
+    if slide_imgs or not is_video_note:
+        img_elements = slide_imgs or page.query_selector_all("img")
+        for img in img_elements:
+            src = clean_media_url(
+                img.get_attribute("src") or img.get_attribute("data-src") or ""
+            )
+            if src and is_content_image(src) and src not in dom_imgs:
+                dom_imgs.append(src)
 
     # 合并渲染层与 DOM 层候选并统一去重（渲染层在前保证顺序稳定）
     seen_imgs: set[str] = set()
@@ -445,7 +462,9 @@ def _scroll_collect_cards(
         else:
             no_new = 0
             last_count = len(detail_urls)
-        if no_new >= 2:
+        if no_new >= 3:
+            # 连续 3 轮无新增才收手：精选搜索结果流式渲染慢，过早停止
+            # 会漏掉大批未渲染卡片（任务 #47 仅收 4 条）
             return cards_seen
         # 拟人化滚动：偶发鼠标移动 + 分步滚到底
         if random.random() < 0.5:
@@ -607,6 +626,23 @@ def collect_douyin_search_urls(
                 "error": f"搜索结果 {DOUYIN_SEARCH_RENDER_WAIT}s 内未渲染"
                          "（可能被静默风控；可在调试 Chrome 手动搜索验证）",
             }
+
+    # 结果流式渲染：等卡片数量趋稳（≥10 张或连续 15s 无增长）再开滚。
+    # 实测该页面静置 1~2 分钟内从个位数涨到 60+，过早开滚只收得到零星
+    # 几条（任务 #47：cards_seen=12、urls_extracted=4）。
+    stable_rounds = 0
+    last_cards = cards
+    for _ in range(12):  # 最多再等 ~60s
+        time.sleep(5)
+        cards_now = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
+        if cards_now == last_cards:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+            last_cards = cards_now
+        if cards_now >= 10 or stable_rounds >= 3:
+            break
+
     _rdsleep(1.5, 3.0)
     if random.random() < 0.7:
         _human_mouse_move(page)

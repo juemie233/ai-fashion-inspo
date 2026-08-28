@@ -215,6 +215,138 @@ def test_find_aweme_walker_depth_guard():
     assert sd._find_douyin_aweme_data(node) is None
 
 
+# ── 详情页图片提取策略（任务 #47 回归：视频页全页兜底采回 69 张无关图）──
+
+
+class _DetailFakePage:
+    """详情页假页面：可配置图集容器/全页图片/视频播放器/渲染层。
+
+    slide_imgs：命中图集容器选择器的图片元素；
+    page_imgs：全页 img 兜底能看到的图片元素（含相关推荐封面等杂图）；
+    has_video_el：页面是否有 <video> 播放器（模拟视频笔记）。
+    """
+
+    class _Img:
+        def __init__(self, src: str) -> None:
+            self._src = src
+
+        def get_attribute(self, name: str):
+            return self._src if name in ("src", "data-src") else None
+
+    class _Video:
+        def get_attribute(self, _name: str) -> str:
+            return "blob:fake"  # blob 无法外下载，真实直链走渲染层
+
+        def query_selector(self, _sel: str):
+            return None
+
+    def __init__(
+        self,
+        slide_imgs=(),
+        page_imgs=(),
+        has_video_el: bool = False,
+        evaluate_return: str = "",
+    ) -> None:
+        self._slide = list(slide_imgs)
+        self._imgs = list(page_imgs)
+        self._video = has_video_el
+        self._ret = evaluate_return
+
+    def on(self, *_args, **_kwargs) -> None:
+        pass
+
+    def remove_listener(self, *_args, **_kwargs) -> None:
+        pass
+
+    def goto(self, *_args, **_kwargs) -> None:
+        pass
+
+    def wait_for_selector(self, *_args, **_kwargs) -> None:
+        pass
+
+    def evaluate(self, *_args, **_kwargs):
+        return self._ret
+
+    def query_selector(self, sel: str):
+        if sel == "video":
+            return self._Video() if self._video else None
+        return None
+
+    def query_selector_all(self, sel: str):
+        if "slide" in sel:
+            return self._slide
+        if sel == "img":
+            return self._imgs
+        if sel == "video":
+            return [self._Video()] if self._video else []
+        return []
+
+
+def _detail_monkeypatch(monkeypatch) -> None:
+    """详情页提取的外部依赖全部打桩（导航/验证/停顿/拟人动作）。"""
+    monkeypatch.setattr(sd, "goto_with_retry", lambda *_a, **_k: None)
+    monkeypatch.setattr(sd, "_is_verify_page", lambda *_a: False)
+    monkeypatch.setattr(sd, "_rdsleep", lambda *_a: None)
+    monkeypatch.setattr(sd, "_human_mouse_move", lambda *_a: None)
+
+
+def test_detail_video_note_skips_dom_image_fallback(monkeypatch):
+    """视频笔记：图片只信 RENDER_DATA 封面，相关推荐封面不得混入。"""
+    _detail_monkeypatch(monkeypatch)
+    raw = _render_raw({"loaderData": {"postLoader": {"videoData": {
+        "desc": "白色系穿搭",
+        "video": {
+            "origin_cover": {"url_list": ["https://p.example/cover.jpg"]},
+            "play_addr": {"url_list": ["/aweme/v1/play/?video_id=1"]},
+        },
+    }}}})
+    page = _DetailFakePage(
+        page_imgs=[
+            _DetailFakePage._Img(f"https://p9.douyinpic.com/recommend/{i}.jpg")
+            for i in range(3)
+        ],
+        has_video_el=True,
+        evaluate_return=raw,
+    )
+    out = sd._extract_douyin_detail(page, "https://www.douyin.com/video/1")
+    assert out["img_urls"] == ["https://p.example/cover.jpg"]
+    assert all("recommend" not in u for u in out["img_urls"])
+    assert len(out["video_urls"]) == 1
+    assert out["caption"] == "白色系穿搭"
+
+
+def test_detail_slide_note_uses_container_only(monkeypatch):
+    """图集笔记：只取图集容器内图片，页面其他图片不混入。"""
+    _detail_monkeypatch(monkeypatch)
+    slide = [
+        _DetailFakePage._Img(f"https://img.example/slide{i}.jpg")
+        for i in range(4)
+    ]
+    page = _DetailFakePage(
+        slide_imgs=slide,
+        page_imgs=[_DetailFakePage._Img("https://img.example/recommend.jpg")],
+    )
+    out = sd._extract_douyin_detail(page, "https://www.douyin.com/note/1")
+    assert out["img_urls"] == [
+        f"https://img.example/slide{i}.jpg" for i in range(4)
+    ]
+
+
+def test_detail_unknown_structure_keeps_fallback(monkeypatch):
+    """非视频且无图集容器（结构未知）：保留全页过滤兜底。"""
+    _detail_monkeypatch(monkeypatch)
+    page = _DetailFakePage(
+        page_imgs=[
+            _DetailFakePage._Img(f"https://img.example/p{i}.jpg")
+            for i in range(3)
+        ],
+    )
+    out = sd._extract_douyin_detail(page, "https://www.douyin.com/video/2")
+    assert out["img_urls"] == [
+        f"https://img.example/p{i}.jpg" for i in range(3)
+    ]
+
+
 # ── 抖音 DOM 选择器常量完备性（防手滑改空导致全链路失效）──
 
 
