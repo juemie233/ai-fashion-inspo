@@ -28,6 +28,7 @@ from sqlalchemy import select, func
 from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.tag import Tag, InspirationTag
+from app.services.ai_tag_saver import link_tag
 from app.utils.tag_normalizer import validate_tag_name
 
 
@@ -71,11 +72,21 @@ async def check_tags():
                 if split_names:
                     fixable = True
 
+            # 该标签的实际使用次数（素材关联数）
+            usage = (
+                await db.execute(
+                    select(func.count()).select_from(InspirationTag).where(
+                        InspirationTag.tag_id == tag.id
+                    )
+                )
+            ).scalar() or 0
+
             issues.append({
                 "tag": tag,
                 "reason": reason,
                 "fixable": fixable,
                 "split_names": split_names,
+                "usage": usage,
             })
 
         return issues
@@ -100,18 +111,11 @@ async def fix_tags(issues: list[dict], force_delete: bool = False):
                 for clean_name in item["split_names"]:
                     new_tag = await get_or_create_tag(db, clean_name, tag.category, "manual")
                     for link in links:
-                        existing = (await db.execute(
-                            select(InspirationTag).where(
-                                InspirationTag.inspiration_id == link.inspiration_id,
-                                InspirationTag.tag_id == new_tag.id,
-                            )
-                        )).scalar_one_or_none()
-                        if not existing:
-                            db.add(InspirationTag(
-                                inspiration_id=link.inspiration_id,
-                                tag_id=new_tag.id,
-                                confidence=link.confidence,
-                            ))
+                        # 关联迁移复用服务层公共函数（幂等：重复仅更新置信度）
+                        await link_tag(
+                            db, link.inspiration_id, new_tag.id, link.confidence,
+                            source="manual",
+                        )
 
                 # 删除原标签
                 for link in links:
@@ -170,7 +174,7 @@ async def main():
         for item in items:
             tag = item["tag"]
             fix_mark = " [可拆分]" if item["fixable"] else ""
-            print(f"  [{tag.category}] {tag.name!r} (id={tag.id}, 使用{len(items)}次){fix_mark}")
+            print(f"  [{tag.category}] {tag.name!r} (id={tag.id}, 使用{item['usage']}次){fix_mark}")
         print()
 
     fixable_count = sum(1 for i in issues if i["fixable"])

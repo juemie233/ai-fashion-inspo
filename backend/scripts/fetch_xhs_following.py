@@ -29,7 +29,6 @@ import csv
 import json
 import logging
 import os
-import random
 import re
 import subprocess
 import sys
@@ -41,6 +40,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
+# 复用采集脚本族的公共工具（独立脚本直跑，backend 已在 sys.path，可绝对导入）
+from scripts.scraper_common import (  # noqa: E402
+    _rdsleep,
+    ensure_platform_login,
+    goto_with_retry,
+    platform_has_login,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,17 +264,9 @@ def setup_logging(log_path: Path) -> None:
     root.addHandler(sh)
 
 
-def _rdsleep(lo: float = 1.0, hi: float = 2.0) -> None:
-    """随机间隔休眠，模拟真人操作节奏，降低风控概率。"""
-    time.sleep(random.uniform(lo, hi))
-
-
 # ============================================================
 #  Chrome / CDP
-# ============================================================
-
-
-def _probe_cdp(port: int) -> tuple[bool, str, bool]:
+# ============================================================def _probe_cdp(port: int) -> tuple[bool, str, bool]:
     """探测 CDP 端口（延迟导入复用 scraper_service._check_cdp）。
 
     Args:
@@ -339,88 +337,13 @@ def connect_cdp(port: int) -> tuple:
 
 
 # ============================================================
-#  登录
+#  登录（复用 scraper_common.ensure_platform_login / platform_has_login）
 # ============================================================
-
-
-def _is_logged_in(context) -> bool:
-    """通过 Cookie 判断小红书是否已登录。
-
-    Args:
-        context: Playwright BrowserContext。
-
-    Returns:
-        已登录返回 True。
-    """
-    try:
-        cookies = context.cookies()
-    except Exception:
-        return False
-    xhs = [c for c in cookies if "xiaohongshu" in (c.get("domain") or "")]
-    return any(c.get("name") in ("web_session", "a1") for c in xhs)
-
-
-def _wait_login(page, context, timeout: int) -> None:
-    """打开小红书首页等待用户扫码登录，轮询 Cookie 直到超时。
-
-    Args:
-        page: Playwright Page。
-        context: Playwright BrowserContext。
-        timeout: 等待超时秒数。
-
-    Raises:
-        RuntimeError: 超时仍未检测到登录态。
-    """
-    print("=" * 50)
-    print(" >>> 请在 Chrome 中登录小红书 <<<")
-    print(" 已自动打开小红书登录页，请扫码登录")
-    print(f" 登录完成后脚本自动检测并继续（{timeout}s 超时）")
-    print("=" * 50)
-    try:
-        page.goto(
-            "https://www.xiaohongshu.com/explore",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
-    except Exception as e:
-        print(f"自动跳转登录页失败（可手动在地址栏输入 xiaohongshu.com）: {e}")
-
-    for waited in range(0, timeout, 5):
-        time.sleep(5)
-        if _is_logged_in(context):
-            print(f"检测到登录 ({waited + 5}s)")
-            time.sleep(1)
-            return
-        if (waited + 5) % 30 == 0:
-            print(f"  等待登录... ({waited + 5}s / {timeout}s)")
-    raise RuntimeError(f"登录超时（{timeout}s），未检测到小红书登录态")
 
 
 # ============================================================
 #  页面导航与数据提取
-# ============================================================
-
-
-def goto_with_retry(page, url: str, retries: int = 2) -> None:
-    """导航到指定 URL，网络异常时指数退避重试。
-
-    Args:
-        page: Playwright Page。
-        url: 目标 URL。
-        retries: 额外重试次数（默认 2 次）。
-    """
-    for attempt in range(retries + 1):
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            return
-        except Exception as e:
-            if attempt >= retries:
-                raise
-            logger.warning(f"导航失败（{attempt + 1}/{retries}）{url[:60]}...: {e}")
-            time.sleep(2 ** (attempt + 1))
-
-
-def discover_user_id(page) -> str | None:
+# ============================================================def discover_user_id(page) -> str | None:
     """自动发现当前登录用户 ID（不硬编码）。
 
     依次尝试：顶部头像链接 → __INITIAL_STATE__ → localStorage。
@@ -432,7 +355,9 @@ def discover_user_id(page) -> str | None:
         用户 ID 字符串；全部失败返回 None。
     """
     try:
-        goto_with_retry(page, "https://www.xiaohongshu.com/explore")
+        err = goto_with_retry(page, "https://www.xiaohongshu.com/explore")
+        if err:
+            logger.warning(f"打开小红书首页失败（尝试从当前页探测）: {err}")
     except Exception as e:
         logger.warning(f"打开小红书首页失败（尝试从当前页探测）: {e}")
 
@@ -522,7 +447,10 @@ def fetch_user_detail(page, uid: str) -> tuple[str, str]:
     Returns:
         (小红书号, IP属地) 二元组，未提取到的字段为空字符串。
     """
-    goto_with_retry(page, f"https://www.xiaohongshu.com/user/profile/{uid}")
+    err = goto_with_retry(page, f"https://www.xiaohongshu.com/user/profile/{uid}")
+    if err:
+        logger.warning(f"主页导航失败（uid={uid}）: {err}")
+        return "", ""  # 导航失败按回填失败处理，避免在未加载页面误提取
     try:
         page.wait_for_selector(".user-info, [class*='user-info']", timeout=10000)
     except Exception:
@@ -717,10 +645,16 @@ def main(argv=None) -> int:
         page = context.new_page()
 
         # ── 2. 登录态检查 / 扫码等待 ──
-        if _is_logged_in(context):
+        if platform_has_login(context.cookies(), "xiaohongshu"):
             logger.info("检测到小红书登录态，直接开始")
         else:
-            _wait_login(page, context, args.login_timeout)
+            ok = ensure_platform_login(
+                context, page, "xiaohongshu", args.login_timeout
+            )
+            if not ok:
+                raise RuntimeError(
+                    f"登录超时（{args.login_timeout}s），未检测到小红书登录态"
+                )
 
         # ── 3. 自动发现用户 ID（用于确认登录身份，列表不依赖它） ──
         uid = discover_user_id(page)

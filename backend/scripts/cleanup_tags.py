@@ -23,7 +23,7 @@ from app.database import async_session, engine, init_db
 from app.db_migrations import ensure_schema
 from app.models.tag import Tag, InspirationTag
 from app.services.ai_parser import extract_tag_names
-from app.services.ai_tag_saver import normalize_color
+from app.services.ai_tag_saver import link_tag, normalize_color
 
 
 def is_json_like(name: str) -> bool:
@@ -191,7 +191,11 @@ async def cleanup(dry_run: bool = True):
                         db, clean_name, bad_tag.category
                     )
                     for link in links:
-                        await _link_or_update(db, link.inspiration_id, correct_tag.id, link.confidence)
+                        # 关联迁移复用服务层公共函数（幂等：重复仅更新置信度）
+                        await link_tag(
+                            db, link.inspiration_id, correct_tag.id, link.confidence,
+                            source="manual",
+                        )
                 fixed_count += len(links)
             else:
                 garbaged_count += len(links)
@@ -213,25 +217,6 @@ async def cleanup(dry_run: bool = True):
                   f"删除 {deleted_count} 个脏标签, "
                   f"丢弃 {garbaged_count} 个无意义关联。")
             print(f"受影响素材: {len(affected_inspirations)} 个")
-
-
-async def _link_or_update(db, inspiration_id: str, tag_id: int, confidence: float):
-    """关联或更新标签，避免重复（与 ai_service._link_tag 相同逻辑）。"""
-    existing = (await db.execute(
-        select(InspirationTag).where(
-            InspirationTag.inspiration_id == inspiration_id,
-            InspirationTag.tag_id == tag_id,
-        )
-    )).scalar_one_or_none()
-    if existing:
-        if confidence > existing.confidence:
-            existing.confidence = confidence
-    else:
-        db.add(InspirationTag(
-            inspiration_id=inspiration_id,
-            tag_id=tag_id,
-            confidence=confidence,
-        ))
 
 
 async def main():
