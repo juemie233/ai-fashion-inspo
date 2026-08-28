@@ -373,6 +373,7 @@ def run_scraper_sync(task_id: int):
         # ── CDP 通道判定 ──
         # 小红书固定走 CDP 真实 Chrome；抖音显式提供 cdp_port 时同样走 CDP
         # （完整采集：图集/视频/正文），未提供则回退独立 Playwright 浏览器旧路径。
+        login_ok = True  # 未走登录检测的路径默认视为已登录（仅 CDP 流程可检测）
         use_cdp = (
             platform == "xiaohongshu"
             or (
@@ -408,9 +409,11 @@ def run_scraper_sync(task_id: int):
             page = context.new_page()
 
             # ── 登录检查（小红书/抖音共用逻辑，差异在首页 URL 与会话 Cookie 名）──
-            ensure_platform_login(
+            login_ok = ensure_platform_login(
                 context, page, platform, timeout=180
             )
+            if not login_ok:
+                print("警告：平台未登录，未登录状态下采集大概率被登录墙拦截")
 
             # 提取浏览器 Cookie 用于 httpx 下载鉴权
             browser_cookies = {
@@ -764,6 +767,17 @@ def run_scraper_sync(task_id: int):
         ]
         if errors:
             error_msg = " | ".join(errors)[:500]
+            # 抖音未登录时导航失败几乎必然是登录墙：给出可操作指引，
+            # 避免「导航失败」四个字让人无从下手（真实案例：任务 #43）
+            if (
+                platform == "douyin"
+                and not login_ok
+                and "导航失败" in error_msg
+            ):
+                error_msg = (
+                    f"{error_msg}"
+                    "（检测到抖音未登录：请在调试 Chrome 中登录抖音后重试）"
+                )[:500]
 
     def _done():
         """标记任务完成并写入漏斗诊断（同步写库，规避事件循环冲突）。"""

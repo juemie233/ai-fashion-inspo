@@ -290,3 +290,39 @@ def ensure_platform_login(
             print(f"  等待登录... ({waited + 5}s / {timeout}s)")
     print("登录超时，将尝试当前状态")
     return False
+
+
+def goto_with_retry(
+    page, url: str, retries: int = 2, timeout: int = 30000
+) -> str:
+    """导航到指定 URL，异常时指数退避重试（抖音列表页/详情页共用）。
+
+    导航是采集的硬前提：单次网络抖动 / ERR_ABORTED / 慢响应不应直接
+    判死整轮采集（真实案例：任务 #43 一次导航异常即报「导航失败」，
+    异常被吞、无重试、无留痕，无从排查）。
+
+    Args:
+        page: Playwright 页面对象。
+        url: 目标 URL。
+        retries: 失败后的额外重试次数（总尝试 = retries + 1）。
+        timeout: 单次导航超时（毫秒）。
+
+    Returns:
+        空字符串表示成功；失败返回最后一次异常摘要
+        （「类型: 消息」，供调用方写入漏斗/日志）。
+    """
+    last_error = ""
+    for attempt in range(retries + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            return ""
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {str(e)[:200]}"
+            if attempt >= retries:
+                return last_error
+            print(
+                f"  导航失败（第 {attempt + 1}/{retries + 1} 次尝试）"
+                f"{url[:80]}: {last_error}"
+            )
+            time.sleep(2 ** (attempt + 1))
+    return last_error

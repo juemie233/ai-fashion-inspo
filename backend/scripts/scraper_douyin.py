@@ -27,6 +27,7 @@ from .scraper_common import (
     DOUYIN_HASHTAG_ANCHOR,
     DOUYIN_VIDEO_URL_HINTS,
     DOUYIN_MEDIA_HOST,
+    goto_with_retry,
     utcnow,
     _rdsleep,
     _human_mouse_move,
@@ -247,14 +248,16 @@ def _extract_douyin_detail(page, note_url: str) -> dict:
 
     page.on("response", _on_response)
     try:
-        page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
-    except Exception:
-        return result
+        nav_error = goto_with_retry(page, note_url, retries=1)
     finally:
         try:
             page.remove_listener("response", _on_response)
         except Exception:
             pass
+    if nav_error:
+        # 详情页重试后仍失败：跳过该篇（管线不中断），留痕任务日志
+        print(f"  详情页导航失败，跳过 {note_url[:80]}: {nav_error}")
+        return result
 
     # 等待详情主体渲染（超时不阻断，靠后续随机停顿再等等懒加载）
     try:
@@ -379,13 +382,14 @@ def collect_douyin_detail_urls(
     cards_seen = 0
     last_count = 0
     no_new = 0
-    try:
-        page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
-    except Exception:
+    nav_error = goto_with_retry(page, base_url, retries=2)
+    if nav_error:
+        # 列表页导航是硬前提：重试仍失败则本轮判死，异常摘要写入漏斗
+        print(f"  列表页导航最终失败: {base_url[:80]} → {nav_error}")
         return detail_urls, {
             "cards_seen": 0,
             "urls_extracted": 0,
-            "error": "导航失败",
+            "error": f"导航失败: {nav_error}",
         }
     try:
         page.wait_for_selector(DOUYIN_DETAIL_ANCHOR, timeout=15000)
