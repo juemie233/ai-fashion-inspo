@@ -3,7 +3,7 @@
 
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 import type { Stats } from '@/types/admin'
-import { fmtSize } from '@/utils/format'
+import { formatBytes } from '@/utils/format'
 
 defineProps<{ stats: Stats | null }>()
 </script>
@@ -14,9 +14,9 @@ defineProps<{ stats: Stats | null }>()
     :span="8"
     :items="[
       { title: '素材总数', value: stats.total_count ?? 0 },
-      { title: '存储总大小', text: fmtSize(stats.total_size_bytes ?? 0) },
-      { title: '图片占用', text: fmtSize(stats.images_size_bytes ?? 0) },
-      { title: '缩略图占用', text: fmtSize(stats.thumbnail_size_bytes ?? 0) },
+      { title: '存储总大小', text: formatBytes(stats.total_size_bytes ?? 0) },
+      { title: '图片占用', text: formatBytes(stats.images_size_bytes ?? 0) },
+      { title: '缩略图占用', text: formatBytes(stats.thumbnail_size_bytes ?? 0) },
       { title: '标签总数', value: stats.total_tags ?? 0 },
       { title: '收藏数', value: stats.favorite_count ?? 0 },
       {

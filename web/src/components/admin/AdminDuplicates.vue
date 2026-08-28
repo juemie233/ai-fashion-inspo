@@ -3,7 +3,7 @@
 
 import type { TableColumnData } from '@arco-design/web-vue'
 import type { DuplicateGroup, DedupResult } from '@/types/admin'
-import { fmtSize, formatSize } from '@/utils/format'
+import { formatBytes, formatSize } from '@/utils/format'
 
 defineProps<{
   duplicates: DuplicateGroup[]
@@ -39,7 +39,7 @@ const dupColumns: TableColumnData[] = [
           <template #content>
             确定删除所有 {{ dupCount }} 个重复文件？<br />
             每组将保留评分最高的 1 个（优先有标签/收藏/AI已分析的素材）。<br />
-            将释放约 {{ fmtSize(dupBytes) }} 空间。<br />
+            将释放约 {{ formatBytes(dupBytes) }} 空间。<br />
             <b style="color: #d03050">此操作物理删除文件，不可撤销！</b>
           </template>
           <a-button
@@ -62,7 +62,7 @@ const dupColumns: TableColumnData[] = [
       style="margin-bottom: 12px"
     >
       已处理 {{ dedupResult.groups_processed }} 组，删除 {{ dedupResult.files_deleted }} 个文件，
-      释放 {{ fmtSize(dedupResult.freed_bytes) }} 空间
+      释放 {{ formatBytes(dedupResult.freed_bytes) }} 空间
     </a-alert>
     <a-alert
       v-if="dedupResult && dedupResult.files_deleted === 0"
@@ -75,7 +75,7 @@ const dupColumns: TableColumnData[] = [
     <div v-if="duplicates.length > 0">
       <p style="color: #f0a020; margin-bottom: 12px">
         ⚠️ 发现 {{ duplicates.length }} 组重复文件，共 {{ dupCount }} 个冗余副本，浪费
-        {{ fmtSize(dupBytes) }} 空间
+        {{ formatBytes(dupBytes) }} 空间
       </p>
       <div v-for="group in duplicates.slice(0, 20)" :key="group.hash" style="margin-bottom: 16px">
         <a-tag color="arcoblue" size="small" style="margin-bottom: 6px">

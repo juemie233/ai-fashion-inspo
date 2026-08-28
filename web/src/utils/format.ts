@@ -73,20 +73,6 @@ export function normalizeModelName(name: string): string {
   return name.includes(':') ? name : `${name}:latest`
 }
 
-/** 自适应大小格式化：数值保持在 1-1000 范围 + 单位 */
-export function smartSize(bytes: number): { value: string; unit: string } {
-  if (bytes < 1024) return { value: String(bytes), unit: 'B' }
-  if (bytes < 1024 * 1024) return { value: (bytes / 1024).toFixed(1), unit: 'KB' }
-  if (bytes < 1024 * 1024 * 1024) return { value: (bytes / (1024 * 1024)).toFixed(1), unit: 'MB' }
-  return { value: (bytes / (1024 * 1024 * 1024)).toFixed(2), unit: 'GB' }
-}
-
-/** 返回 "数值 单位" 的完整字符串，如 "462.9 MB" */
-export function fmtSize(bytes: number): string {
-  const s = smartSize(bytes)
-  return s.value + ' ' + s.unit
-}
-
 /** 格式化文件大小为可读字符串（KB 取整、MB 1 位、GB 2 位） */
 export function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB'

@@ -7,11 +7,9 @@ import {
   formatDate,
   formatMs,
   formatSize,
-  fmtSize,
   normalizeModelName,
   renderTimeCell,
   shortenText,
-  smartSize,
 } from '../format'
 
 describe('formatBytes', () => {
@@ -33,14 +31,6 @@ describe('formatSize', () => {
     expect(formatSize(2048)).toBe('2 KB')
     expect(formatSize(5 * 1024 * 1024)).toBe('5.0 MB')
     expect(formatSize(2 * 1024 ** 3)).toBe('2.00 GB')
-  })
-})
-
-describe('smartSize / fmtSize', () => {
-  it('返回数值与单位', () => {
-    expect(smartSize(512)).toEqual({ value: '512', unit: 'B' })
-    expect(smartSize(2048)).toEqual({ value: '2.0', unit: 'KB' })
-    expect(fmtSize(5 * 1024 * 1024)).toBe('5.0 MB')
   })
 })
 

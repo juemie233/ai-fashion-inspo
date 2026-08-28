@@ -3,7 +3,7 @@
 
 import type { MissingFile, OrphanFile } from '@/types/admin'
 import type { TableColumnData } from '@arco-design/web-vue'
-import { fmtSize, formatSize } from '@/utils/format'
+import { formatBytes, formatSize } from '@/utils/format'
 
 defineProps<{
   missingFiles: MissingFile[]
@@ -44,12 +44,10 @@ const orphanColumns: TableColumnData[] = [
   <a-card title="数据完整性检查" size="small" style="margin-bottom: 24px">
     <template #extra>
       <a-space>
-        <a-button size="small" :loading="checking" @click="emit('recheck')">
-          重新检查
-        </a-button>
+        <a-button size="small" :loading="checking" @click="emit('recheck')"> 重新检查 </a-button>
         <a-popconfirm
           v-if="orphanFiles.length > 0"
-          :content="`确定删除所有 ${orphanFiles.length} 个孤立文件？释放约 ${fmtSize(orphanBytes)}。此操作不可撤销。`"
+          :content="`确定删除所有 ${orphanFiles.length} 个孤立文件？释放约 ${formatBytes(orphanBytes)}。此操作不可撤销。`"
           @ok="emit('cleanOrphans')"
         >
           <a-button size="small" type="outline" status="danger">
@@ -77,7 +75,8 @@ const orphanColumns: TableColumnData[] = [
     <!-- 孤立文件 -->
     <div v-if="orphanFiles.length > 0">
       <h4 style="color: #f0a020; margin: 0 0 8px">
-        ⚠️ 孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共 {{ fmtSize(orphanBytes) }}
+        ⚠️ 孤立文件 ({{ orphanFiles.length }}) — 磁盘有文件但数据库无记录 · 共
+        {{ formatBytes(orphanBytes) }}
       </h4>
       <a-table
         :columns="orphanColumns"

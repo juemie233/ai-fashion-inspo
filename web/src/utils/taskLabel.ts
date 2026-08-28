@@ -18,47 +18,42 @@ import {
 import type { UnifiedTask } from '@/types/task'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
-/** 任务类型中文标签（与后端 task_queue.type 全量对齐，新增类型必须在此登记） */
-export const TASK_TYPE_LABELS: Record<string, string> = {
-  batch_analyze: '批量 AI 分析',
-  quality_check: '质量审核',
-  batch_delete: '批量删除',
-  deduplicate: '近似重复检测删除',
-  scraper: '采集',
-  vector_backfill: '向量回填',
-  face_scan: '人脸库扫描',
-  face_match: '人脸匹配',
-  face_cluster: '人脸聚合聚类',
-  enrich_blogger_profile: '博主主页补全',
-  tag_health_scan: '标签健康扫描',
-  tag_cluster_scan: '标签聚类扫描',
-  tag_network_analyze: '标签网络分析',
+/** 任务类型元数据单一来源：中文标签 / 图标 / 标签色。
+ * 任务管理页类型筛选项、任务列表图标与颜色均由本表派生——
+ * 新增类型只在此登记一处，避免三张映射表同步维护漏配。
+ * 删除类任务刻意使用不同图标：批量删除=垃圾桶、近似重复检测删除=版本对比，
+ * 让两类删除任务在列表中一眼可辨。 */
+const TASK_TYPE_META: Record<string, { label: string; icon: Component; color: string }> = {
+  batch_analyze: { label: '批量 AI 分析', icon: IconFileImage, color: 'arcoblue' },
+  quality_check: { label: '质量审核', icon: IconSafe, color: 'orange' },
+  batch_delete: { label: '批量删除', icon: IconDelete, color: 'red' },
+  deduplicate: { label: '近似重复检测删除', icon: IconSync, color: 'green' },
+  scraper: { label: '采集', icon: IconScan, color: 'purple' },
+  vector_backfill: { label: '向量回填', icon: IconBarChart, color: 'cyan' },
+  face_scan: { label: '人脸库扫描', icon: IconFaceSmileFill, color: 'lime' },
+  face_match: { label: '人脸匹配', icon: IconUserGroup, color: 'magenta' },
+  face_cluster: { label: '人脸聚合聚类', icon: IconUserGroup, color: 'purple' },
+  enrich_blogger_profile: { label: '博主主页补全', icon: IconUser, color: 'gold' },
+  tag_health_scan: { label: '标签健康扫描', icon: IconCheckCircle, color: 'pinkpurple' },
+  tag_cluster_scan: { label: '标签聚类扫描', icon: IconMindMapping, color: 'cyan' },
+  tag_network_analyze: { label: '标签网络分析', icon: IconRelation, color: 'orangered' },
 }
+
+/** 任务类型中文标签（与后端 task_queue.type 全量对齐；由 TASK_TYPE_META 派生） */
+export const TASK_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(TASK_TYPE_META).map(([k, v]) => [k, v.label]),
+)
+
+/** 任务类型对应图标（由 TASK_TYPE_META 派生） */
+export const TASK_TYPE_ICONS: Record<string, Component> = Object.fromEntries(
+  Object.entries(TASK_TYPE_META).map(([k, v]) => [k, v.icon]),
+)
 
 /** 采集平台中文标签（复用来源映射，单一来源避免文案漂移） */
 export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
   xiaohongshu: SOURCE_TYPE_LABELS.xiaohongshu,
   douyin: SOURCE_TYPE_LABELS.douyin,
   browser_extension: SOURCE_TYPE_LABELS.browser_extension,
-}
-
-/** 任务类型对应图标（任务列表标签视觉区分，与 TASK_TYPE_LABELS 一一对应）。
- * 删除类任务刻意使用不同图标：批量删除=垃圾桶、近似重复检测删除=版本对比，
- * 让两类删除任务在列表中一眼可辨。 */
-export const TASK_TYPE_ICONS: Record<string, Component> = {
-  batch_analyze: IconFileImage,
-  quality_check: IconSafe,
-  batch_delete: IconDelete,
-  deduplicate: IconSync,
-  scraper: IconScan,
-  vector_backfill: IconBarChart,
-  face_scan: IconFaceSmileFill,
-  face_match: IconUserGroup,
-  face_cluster: IconUserGroup,
-  enrich_blogger_profile: IconUser,
-  tag_health_scan: IconCheckCircle,
-  tag_cluster_scan: IconMindMapping,
-  tag_network_analyze: IconRelation,
 }
 
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
@@ -87,24 +82,9 @@ export function taskStatusType(status: string): string {
   return map[status] || 'gray'
 }
 
-/** 任务类型对应的标签颜色（Arco 预设色），不同任务类型用醒目颜色区分 */
+/** 任务类型对应的标签颜色（Arco 预设色，由 TASK_TYPE_META 派生） */
 export function taskTypeTagColor(type: string): string {
-  const map: Record<string, string> = {
-    batch_analyze: 'arcoblue',
-    quality_check: 'orange',
-    batch_delete: 'red',
-    deduplicate: 'green',
-    scraper: 'purple',
-    vector_backfill: 'cyan',
-    face_scan: 'lime',
-    face_match: 'magenta',
-    face_cluster: 'purple',
-    enrich_blogger_profile: 'gold',
-    tag_health_scan: 'pinkpurple',
-    tag_cluster_scan: 'cyan',
-    tag_network_analyze: 'orangered',
-  }
-  return map[type] || 'gray'
+  return TASK_TYPE_META[type]?.color ?? 'gray'
 }
 
 // ===== 剩余时间预测 =====
