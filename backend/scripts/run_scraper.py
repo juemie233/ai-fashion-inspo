@@ -71,6 +71,7 @@ from .scraper_douyin import (
     _extract_douyin_detail,
     _find_douyin_aweme_data,
     collect_douyin_detail_urls,
+    collect_douyin_search_urls,
     run_douyin_notes_pipeline,
     resolve_douyin_profile_url,
 )
@@ -87,7 +88,6 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
 import urllib.parse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -537,12 +537,12 @@ def run_scraper_sync(task_id: int):
                         page, kw, remaining, sort_type
                     )
                 elif platform == "douyin" and page is not None:
-                    # 抖音 CDP 完整通道：搜索卡片收集 → 逐详情页提取
-                    # （图集多图/视频/正文 caption/#话题#），与小红书同管线质量
-                    note_urls, card_funnel = collect_douyin_detail_urls(
+                    # 抖音 CDP 完整通道：首页搜索框 → 回车进入精选搜索
+                    # （直连 /search/ URL 只渲染导航壳，实测静默风控）
+                    # → 卡片收集 → 逐详情页提取（图集多图/视频/正文/#话题#）
+                    note_urls, card_funnel = collect_douyin_search_urls(
                         page,
-                        f"https://www.douyin.com/search/"
-                        f"{quote(kw)}?type=general",
+                        kw,
                         max_items=max(
                             10, int(remaining * 2)
                         ),
@@ -779,19 +779,11 @@ def run_scraper_sync(task_id: int):
                     "（检测到抖音未登录：请在调试 Chrome 中登录抖音后重试）"
                 )[:500]
         elif platform == "douyin":
-            # 无显式错误但颗粒无收：避免「成功 0 条」误导（真实案例任务
-            # #44：搜索页被机器人验证拦截，卡片提取 0 个，任务却显示成功）
-            nothing_seen = all(
-                s.get("cards_seen", 0) == 0 for s in per_search
-            )
+            # 无显式错误但颗粒无收：只陈述事实与排查方向，不臆测原因
+            # （搜索路径的所有失败模式均已带明确漏斗 error，此处为兜底）
             error_msg = (
-                "抖音搜索提取 0 个作品链接："
-                + (
-                    "页面疑似被机器人验证拦截"
-                    "（请在调试 Chrome 完成滑块验证后重跑任务）"
-                    if nothing_seen
-                    else "已见到卡片但未提取到有效链接（请检查任务日志）"
-                )
+                "抖音采集提取 0 个作品链接"
+                "（具体原因见任务日志与漏斗明细）"
             )[:500]
 
     def _done():

@@ -308,3 +308,103 @@ def test_collect_urls_verify_solved_resumes_scroll(monkeypatch):
     urls, funnel = sd.collect_douyin_detail_urls(_VerifyFakePage(), "https://x", 10)
     assert urls == []
     assert "error" not in funnel  # 解决后继续，不误报失败
+
+
+# ── 搜索专用流程：首页搜索框 → 回车 → 精选搜索 ──
+
+
+class _FakeSearchInput:
+    def click(self) -> None:
+        pass
+
+    def fill(self, _value: str) -> None:
+        pass
+
+    def press(self, _key: str) -> None:
+        pass
+
+
+class _FakeLink:
+    def __init__(self, href: str) -> None:
+        self._href = href
+
+    def get_attribute(self, _name: str):
+        return self._href
+
+
+class _SearchFlowPage:
+    """搜索全流程假页面：可配置搜索框有无与结果渲染延迟。
+
+    render_after: 第 N 次 query_selector_all(卡片锚点) 起返回链接
+    （模拟精选搜索首屏慢渲染）；999 表示永不渲染。渲染后卡片集合
+    持续存在并随查询（滚动）增长，直至 total_links——贴近真实 DOM。
+    """
+
+    def __init__(
+        self, with_input: bool = True, render_after: int = 1, total_links: int = 4
+    ) -> None:
+        self.with_input = with_input
+        self.render_after = render_after
+        self.total_links = total_links
+        self._rendered = 0
+        self._polls = 0
+
+    def goto(self, *_args, **_kwargs) -> None:
+        pass
+
+    def wait_for_selector(self, *_args, **_kwargs) -> None:
+        pass
+
+    def evaluate(self, *_args, **_kwargs) -> None:
+        pass
+
+    def query_selector(self, sel: str):
+        if "searchbar-input" in sel:
+            return _FakeSearchInput() if self.with_input else None
+        return None
+
+    def query_selector_all(self, sel: str):
+        if "video" not in sel:
+            return []
+        self._polls += 1
+        if self._polls < self.render_after:
+            return []
+        self._rendered = min(self.total_links, self._rendered + 2)
+        return [
+            _FakeLink(f"https://www.douyin.com/video/{i}")
+            for i in range(self._rendered)
+        ]
+
+
+def test_collect_search_urls_via_searchbox(monkeypatch):
+    """搜索框 → 回车 → 结果渲染 → 滚动收集链接（主路径）。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    urls, funnel = sd.collect_douyin_search_urls(
+        _SearchFlowPage(), "小白裙穿搭", 10
+    )
+    assert len(urls) == 4
+    assert all("/video/" in u for u in urls)
+    assert funnel["cards_seen"] >= len(urls)
+    assert funnel["urls_extracted"] == 4
+    assert "error" not in funnel
+
+
+def test_collect_search_urls_missing_input_reports_error(monkeypatch):
+    """首页找不到搜索框 → 漏斗留痕（页面结构变化）。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    urls, funnel = sd.collect_douyin_search_urls(
+        _SearchFlowPage(with_input=False), "kw", 10
+    )
+    assert urls == []
+    assert "搜索框" in funnel.get("error", "")
+
+
+def test_collect_search_urls_render_timeout_reports_error(monkeypatch):
+    """结果 60s 未渲染（静默风控）→ 漏斗明确报错，不误称验证。"""
+    monkeypatch.setattr(sd.time, "sleep", lambda *_: None)
+    urls, funnel = sd.collect_douyin_search_urls(
+        _SearchFlowPage(render_after=999), "kw", 10
+    )
+    assert urls == []
+    assert "未渲染" in funnel.get("error", "")
+    assert "机器人验证" not in funnel.get("error", "")

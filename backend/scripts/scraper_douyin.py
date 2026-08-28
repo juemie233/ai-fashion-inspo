@@ -28,6 +28,9 @@ from .scraper_common import (
     DOUYIN_VIDEO_URL_HINTS,
     DOUYIN_MEDIA_HOST,
     DOUYIN_VERIFY_SELECTORS,
+    DOUYIN_HOME_URL,
+    DOUYIN_SEARCH_INPUT_SELECTOR,
+    DOUYIN_SEARCH_RENDER_WAIT,
     goto_with_retry,
     utcnow,
     _rdsleep,
@@ -413,16 +416,63 @@ def _wait_verify_resolved(page, timeout: int = 180) -> bool:
     return True
 
 
+def _scroll_collect_cards(
+    page, detail_urls: list[str], max_items: int, max_scrolls: int
+) -> int:
+    """拟人化滚动收集当前页面作品卡片链接（搜索页与博主页共用）。
+
+    滚动加载 + 提取 /video/、/note/ 锚点规范化后追加进 detail_urls；
+    连续 2 轮无新增或达到 max_items 提前停止。
+
+    Returns:
+        cards_seen：滚动过程中见过的卡片总数（漏斗统计用）。
+    """
+    cards_seen = 0
+    last_count = 0
+    no_new = 0
+    for _ in range(max_scrolls):
+        cards_seen += len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
+        for link in page.query_selector_all(DOUYIN_DETAIL_ANCHOR):
+            canonical = _canonical_douyin_url(
+                link.get_attribute("href") or ""
+            )
+            if canonical and canonical not in detail_urls:
+                detail_urls.append(canonical)
+                if len(detail_urls) >= max_items:
+                    return cards_seen
+        if len(detail_urls) == last_count:
+            no_new += 1
+        else:
+            no_new = 0
+            last_count = len(detail_urls)
+        if no_new >= 2:
+            return cards_seen
+        # 拟人化滚动：偶发鼠标移动 + 分步滚到底
+        if random.random() < 0.5:
+            _human_mouse_move(page)
+        try:
+            page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)"
+            )
+        except Exception:
+            pass
+        _rdsleep(1.0, 2.0)
+    return cards_seen
+
+
 def collect_douyin_detail_urls(
     page,
     base_url: str,
     max_items: int,
     max_scrolls: int = 10,
 ) -> tuple[list[str], dict]:
-    """滚动收集当前页面中的作品详情链接（搜索页与博主页共用）。
+    """滚动收集直连列表页（博主页等）中的作品详情链接。
 
     被机器人验证拦截时页面没有任何作品卡片：检测到验证态会提示并等待
     人工在调试 Chrome 中完成验证（登录等待同款模式），超时才判死。
+
+    注意：搜索页不走本函数——直连 /search/ URL 只渲染导航壳（2026-08
+    实测），搜索用 ``collect_douyin_search_urls``（首页搜索框 → 回车）。
 
     Args:
         page: Playwright 页面对象。
@@ -434,9 +484,6 @@ def collect_douyin_detail_urls(
         (detail_urls, funnel)：规范化后的详情页 URL 列表与滚动统计。
     """
     detail_urls: list[str] = []
-    cards_seen = 0
-    last_count = 0
-    no_new = 0
     nav_error = goto_with_retry(page, base_url, retries=2)
     if nav_error:
         # 列表页导航是硬前提：重试仍失败则本轮判死，异常摘要写入漏斗
@@ -467,38 +514,9 @@ def collect_douyin_detail_urls(
     if random.random() < 0.7:
         _human_mouse_move(page)
 
-    def _scroll_collect() -> None:
-        """拟人化滚动收集一轮：滚动加载 + 提取卡片链接 + 连续无新增早停。"""
-        nonlocal cards_seen, last_count, no_new
-        for _ in range(max_scrolls):
-            cards_seen += len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
-            for link in page.query_selector_all(DOUYIN_DETAIL_ANCHOR):
-                canonical = _canonical_douyin_url(
-                    link.get_attribute("href") or ""
-                )
-                if canonical and canonical not in detail_urls:
-                    detail_urls.append(canonical)
-                    if len(detail_urls) >= max_items:
-                        return
-            if len(detail_urls) == last_count:
-                no_new += 1
-            else:
-                no_new = 0
-                last_count = len(detail_urls)
-            if no_new >= 2:
-                return
-            # 拟人化滚动：偶发鼠标移动 + 分步滚到底
-            if random.random() < 0.5:
-                _human_mouse_move(page)
-            try:
-                page.evaluate(
-                    "window.scrollTo(0, document.body.scrollHeight)"
-                )
-            except Exception:
-                pass
-            _rdsleep(1.0, 2.0)
-
-    _scroll_collect()
+    cards_seen = _scroll_collect_cards(
+        page, detail_urls, max_items, max_scrolls
+    )
 
     # 滚动一轮颗粒无收且页面转为验证态（风控中途触发）：等人工解决后补滚一轮
     if not detail_urls and _is_verify_page(page):
@@ -508,8 +526,106 @@ def collect_douyin_detail_urls(
                 "urls_extracted": len(detail_urls),
                 "error": "采集过程中触发机器人验证，等待人工解决超时",
             }
-        no_new = 0
-        _scroll_collect()
+        cards_seen += _scroll_collect_cards(
+            page, detail_urls, max_items, max_scrolls
+        )
+    return detail_urls, {
+        "cards_seen": cards_seen,
+        "urls_extracted": len(detail_urls),
+    }
+
+
+def collect_douyin_search_urls(
+    page, keyword: str, max_items: int, max_scrolls: int = 12
+) -> tuple[list[str], dict]:
+    """抖音搜索专用 URL 收集：首页搜索框 → 回车 → 等结果渲染 → 滚动收集。
+
+    为什么不走直连 /search/ URL（2026-08 实测，任务 #43~#45 全 0 条）：
+    直连搜索 URL 只渲染导航壳（0 作品卡片、无验证码，疑似静默风控）；
+    首页搜索框输入回车落到 /jingxuan/search/ 页，结果正常渲染
+    （实测 67 个 /video/ 锚点），但首屏渲染慢（>15s），故轮询等待。
+
+    Args:
+        page: Playwright 页面对象。
+        keyword: 搜索关键词。
+        max_items: 收集作品链接数上限。
+        max_scrolls: 滚动加载次数上限。
+
+    Returns:
+        (detail_urls, funnel)：规范化后的详情页 URL 列表与滚动统计。
+    """
+    detail_urls: list[str] = []
+    funnel_base: dict = {"cards_seen": 0, "urls_extracted": 0}
+
+    nav_error = goto_with_retry(page, DOUYIN_HOME_URL, retries=1)
+    if nav_error:
+        print(f"  首页导航最终失败: {nav_error}")
+        return detail_urls, {**funnel_base, "error": f"导航失败: {nav_error}"}
+    try:
+        page.wait_for_selector(DOUYIN_SEARCH_INPUT_SELECTOR, timeout=15000)
+    except Exception:
+        pass
+    inp = page.query_selector(DOUYIN_SEARCH_INPUT_SELECTOR)
+    if inp is None:
+        return detail_urls, {
+            **funnel_base,
+            "error": "未找到抖音首页搜索框（页面结构变化，请检查选择器）",
+        }
+    try:
+        inp.click()
+        _rdsleep(0.5, 1.0)
+        inp.fill(keyword)
+        _rdsleep(0.5, 1.0)
+        inp.press("Enter")
+    except Exception as e:
+        return detail_urls, {
+            **funnel_base,
+            "error": f"搜索框操作失败: {type(e).__name__}: {str(e)[:120]}",
+        }
+    print(f"  已在首页搜索框输入「{keyword}」并回车，等待结果渲染…")
+
+    # 精选搜索结果首屏渲染慢（实测 >15s）：轮询等待首批卡片出现
+    cards = 0
+    for _waited in range(0, DOUYIN_SEARCH_RENDER_WAIT, 5):
+        time.sleep(5)
+        cards = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
+        if cards:
+            break
+    if not cards:
+        # 可见验证门检（隐藏模板不算）：等人工解决后再给一次机会
+        if _is_verify_page(page) and _wait_verify_resolved(page):
+            return detail_urls, {
+                **funnel_base,
+                "error": "触发机器人验证，等待人工解决超时"
+                         "（请在调试 Chrome 完成验证后重跑任务）",
+            }
+        time.sleep(5)
+        cards = len(page.query_selector_all(DOUYIN_DETAIL_ANCHOR))
+        if not cards:
+            return detail_urls, {
+                **funnel_base,
+                "error": f"搜索结果 {DOUYIN_SEARCH_RENDER_WAIT}s 内未渲染"
+                         "（可能被静默风控；可在调试 Chrome 手动搜索验证）",
+            }
+    _rdsleep(1.5, 3.0)
+    if random.random() < 0.7:
+        _human_mouse_move(page)
+
+    cards_seen = _scroll_collect_cards(
+        page, detail_urls, max_items, max_scrolls
+    )
+
+    # 滚动一轮颗粒无收且页面转为验证态：等人工解决后补滚一轮
+    if not detail_urls and _is_verify_page(page):
+        if _wait_verify_resolved(page):
+            return detail_urls, {
+                "cards_seen": cards_seen,
+                "urls_extracted": len(detail_urls),
+                "error": "采集过程中触发机器人验证，等待人工解决超时",
+            }
+        cards_seen += _scroll_collect_cards(
+            page, detail_urls, max_items, max_scrolls
+        )
     return detail_urls, {
         "cards_seen": cards_seen,
         "urls_extracted": len(detail_urls),

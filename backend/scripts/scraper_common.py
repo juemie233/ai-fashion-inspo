@@ -102,6 +102,20 @@ DOUYIN_VERIFY_SELECTORS = (
     "text=拖动滑块",
 )
 
+"""抖音首页 URL（搜索框入口导航用）。"""
+DOUYIN_HOME_URL = "https://www.douyin.com/"
+
+"""抖音首页搜索框选择器：首页 → 输入关键词 → 回车 进入精选搜索。
+
+2026-08 实测：直连 /search/?type=general URL 只渲染导航壳（0 作品卡片，
+无验证码，疑似静默风控）；首页搜索框回车落到 /jingxuan/search/ 页，
+结果正常渲染（67 个 /video/ 锚点）。"""
+DOUYIN_SEARCH_INPUT_SELECTOR = "input[data-e2e='searchbar-input']"
+
+"""精选搜索结果首屏渲染等待上限（秒）：实测 >15s 才出首批卡片，60s
+仍未出视为静默风控/加载失败。"""
+DOUYIN_SEARCH_RENDER_WAIT = 60
+
 """抖音媒体 URL 归一化时补充的主机前缀。"""
 DOUYIN_MEDIA_HOST = "https://www.douyin.com"
 
