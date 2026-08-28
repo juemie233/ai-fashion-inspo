@@ -5,10 +5,20 @@
   只在近邻之间建边，复杂度 O(n log n)，内存 O(n·d)；
 - 降级路径：hnswlib 未安装时回退 numpy 分块矩阵（O(n²)，仅适合小规模，
   超过阈值明确报错提示安装 hnswlib——与项目「向量依赖未装则降级」惯例一致）；
-- 聚类：近邻边按相似度阈值过滤 → 并查集连通成组（复用标签聚类 UnionFind 思路，
-  独立实现避免跨模块耦合）；
+- 聚类：**平均链接合并**（组间平均相似度达标才合并），而非裸并查集传递闭包；
 - 数据前置：过滤非 512 维脏 embedding（实测真实库存在 388 条异常维度），
   避免 hnswlib 维度报错；同时排除已确认/人工「不匹配」记录。
+
+为什么不能用「并查集直连」（真实回归教训）：
+    并查集把所有达标边做传递闭包，擦边弱边会链式合并不同人——实测
+    0.5 阈值下 4068 张脸聚出 2446 张的巨型组，组内两两相似度中位数仅
+    0.227（真同一人应在 0.45+），阈值提到 0.65 后该组碎成 1170 块。
+    现行三层防线：
+    1. 建边阈值 EDGE_THRESHOLD=0.6：两两直连相似度门槛（候选边）；
+    2. 平均链接合并：组间平均相似度 ≥ 门槛才合并，单条擦边边拉不动
+       整组平均，链式合并在机制上被杜绝；平均相似度用「组和向量」
+       O(d) 判定（余弦相似度对求和线性），不引入 O(n²)；
+    3. 巨型组保底拆分：仍超上限的组按更高阈值在组内重聚类。
 
 聚类结果不落库（组由检测记录上的 matched_* 状态派生），整组指派复用
 ``/api/face-scan/confirm``，无新增写库链路。
@@ -38,8 +48,25 @@ HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 200
 # 查询时加大搜索宽度提升召回（基准：ef=100 时召回 98.9%）
 HNSW_EF_SEARCH = 100
-# 相似度阈值：低于该值的近邻边丢弃（与 face_match_threshold 语义一致）
-CLUSTER_THRESHOLD = 0.5
+
+# ── 聚类三层防线参数 ──
+
+# 1) 建边阈值：ANN 近邻中两两直连相似度低于该值的边丢弃（候选边门槛）。
+#    注意与 face_match_threshold 的语义区别：匹配是一对一比对（人工确认兜底），
+#    聚类是成组合并（直接决定分组形态）。0.5 沿用匹配阈值曾导致不同人经
+#    擦边弱边链成 2446 张巨型组（见模块 docstring），故提到 0.6。
+EDGE_THRESHOLD = 0.6
+# 2) 合并门槛（平均链接）：两组合并要求组间平均相似度 ≥ max(MERGE_MEAN_MIN,
+#    建边阈值 - MERGE_MEAN_DELTA)。实测不同人簇间平均相似度 ≈0.2~0.3，
+#    同一人簇内 ≈0.5+，默认 0.45 居中区分。
+MERGE_MEAN_DELTA = 0.15
+MERGE_MEAN_MIN = 0.40
+# 3) 巨型组保底：平均链接后仍超过该大小的组按更高阈值在组内重聚类拆分；
+#    逐级提高仍拆不动则按真实超大簇保留（宁大勿碎，打日志告警）。
+MAX_GROUP_SIZE = 500
+SPLIT_THRESHOLD_STEP = 0.05
+SPLIT_THRESHOLD_MAX = 0.75
+
 # 组内最少人脸数：少于该数的组不展示（孤脸不成组）
 MIN_GROUP_SIZE = 2
 # 降级路径（O(n²) 分块矩阵）的安全上限：超过则报错提示安装 hnswlib
@@ -50,24 +77,6 @@ class FaceClusterError(RuntimeError):
     """人脸聚类失败（数据异常 / 规模超限等）。"""
 
 
-class _UnionFind:
-    """并查集：把相似近邻对连通成聚类组。"""
-
-    def __init__(self, n: int) -> None:
-        self.parent = list(range(n))
-
-    def find(self, x: int) -> int:
-        while self.parent[x] != x:
-            self.parent[x] = self.parent[self.parent[x]]
-            x = self.parent[x]
-        return x
-
-    def union(self, a: int, b: int) -> None:
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            self.parent[rb] = ra
-
-
 def _is_hnswlib_available() -> bool:
     """hnswlib 是否已安装（主路径依赖；未安装时走降级路径）。"""
     try:
@@ -76,6 +85,11 @@ def _is_hnswlib_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _merge_mean_threshold(edge_threshold: float) -> float:
+    """由建边阈值推导平均链接合并门槛（建边 - 0.15，下限 0.40）。"""
+    return max(MERGE_MEAN_MIN, edge_threshold - MERGE_MEAN_DELTA)
 
 
 async def _load_unmatched_faces(db: AsyncSession) -> tuple[list[int], np.ndarray]:
@@ -131,36 +145,77 @@ async def _load_unmatched_faces(db: AsyncSession) -> tuple[list[int], np.ndarray
     return ids, embs
 
 
-def _cluster_from_edges(
-    n: int,
-    edges: list[tuple[int, int, float]],
-    min_group_size: int,
-) -> list[dict]:
-    """按阈值过滤后的近邻边做并查集连通，产出分组。
+class _AvgLinkageUnion:
+    """并查集 + 组和向量：平均链接合并的载体。
 
-    返回 [{group_id, size, detection_ids}]，仅含 size ≥ min_group_size 的组。
+    组间平均相似度利用「组和向量」O(d) 计算：mean_cross = (S_A·S_B)/(s_A·s_B)
+    （向量已归一化，余弦相似度对求和线性），无需逐对遍历，合并全程 O(E·d)。
     """
-    uf = _UnionFind(n)
-    for a, b, _score in edges:
-        uf.union(a, b)
 
+    def __init__(self, embs: np.ndarray) -> None:
+        self.parent = list(range(len(embs)))
+        self.sum = embs.copy()  # 仅根节点持有权威组和向量
+        self.size = [1] * len(embs)
+
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]
+            x = self.parent[x]
+        return x
+
+    def mean_cross(self, ra: int, rb: int) -> float:
+        """两组（根索引）之间的平均余弦相似度。"""
+        return float(self.sum[ra] @ self.sum[rb]) / (self.size[ra] * self.size[rb])
+
+    def union(self, ra: int, rb: int) -> None:
+        """合并两组（传入根索引；小组并入大组，减少和向量搬移）。"""
+        if self.size[ra] < self.size[rb]:
+            ra, rb = rb, ra
+        self.sum[ra] += self.sum[rb]
+        self.size[ra] += self.size[rb]
+        self.parent[rb] = ra
+
+
+def _merge_average_linkage(
+    embs: np.ndarray, edges: list[tuple[int, int, float]], merge_mean: float
+) -> tuple[_AvgLinkageUnion, int]:
+    """平均链接贪心合并：边按相似度降序，合并须组间平均相似度达标。
+
+    与裸并查集的本质区别：单条擦边边（如 0.6x）连接两组时，若两组平均
+    相似度低（不同人 ≈0.2~0.3），合并被拒绝——链式合并在机制上被杜绝。
+
+    返回 (union-find 载体, 被平均门槛拒绝的合并尝试次数)。
+    """
+    uf = _AvgLinkageUnion(embs)
+    rejected = 0
+    for a, b, _score in sorted(edges, key=lambda e: e[2], reverse=True):
+        ra, rb = uf.find(a), uf.find(b)
+        if ra == rb:
+            continue
+        if uf.mean_cross(ra, rb) < merge_mean:
+            rejected += 1
+            continue
+        uf.union(ra, rb)
+    return uf, rejected
+
+
+def _collect_groups(
+    uf: _AvgLinkageUnion, n: int, min_group_size: int
+) -> list[list[int]]:
+    """收集连通组（索引成员列表），仅保留 size ≥ min_group_size 的组。"""
     groups: dict[int, list[int]] = {}
     for i in range(n):
-        root = uf.find(i)
-        groups.setdefault(root, []).append(i)
+        groups.setdefault(uf.find(i), []).append(i)
+    return [members for members in groups.values() if len(members) >= min_group_size]
 
-    out = []
-    for members in groups.values():
-        if len(members) < min_group_size:
-            continue
-        out.append(
-            {
-                "size": len(members),
-                "detection_ids": members,
-            }
-        )
-    out.sort(key=lambda g: g["size"], reverse=True)
-    return out
+
+def _build_edges(
+    embs: np.ndarray, threshold: float, k: int
+) -> tuple[list[tuple[int, int, float]], str]:
+    """建候选边：hnswlib 主路径 / numpy 分块降级路径。返回 (edges, method)。"""
+    if _is_hnswlib_available():
+        return _cluster_hnsw(embs, threshold, k), "hnsw"
+    return _cluster_o2(embs, threshold, k), "o2"
 
 
 def _cluster_hnsw(embs: np.ndarray, threshold: float, k: int) -> list[tuple[int, int, float]]:
@@ -214,56 +269,97 @@ def _cluster_o2(embs: np.ndarray, threshold: float, k: int) -> list[tuple[int, i
     return edges
 
 
-async def cluster_unmatched_faces(
-    db: AsyncSession,
-    threshold: float = CLUSTER_THRESHOLD,
-    min_group_size: int = MIN_GROUP_SIZE,
-) -> dict:
-    """对全部未匹配人脸执行聚合聚类，返回分组统计与结果摘要。
+def _split_oversized_groups(
+    groups: list[list[int]],
+    embs: np.ndarray,
+    edge_threshold: float,
+    min_group_size: int,
+    k: int,
+    max_group_size: int = MAX_GROUP_SIZE,
+) -> tuple[list[list[int]], int]:
+    """巨型组保底拆分：超过 max_group_size 的组按递进阈值在组内重聚类。
 
-    返回:
-        {
-          "total_faces": 参与聚类的人脸数,
-          "method": "hnsw" | "o2"（实际使用的聚类路径）,
-          "groups": [{size, detection_ids}],  # 仅 size ≥ min_group_size
-          "group_count": 组数,
-          "clustered_faces": 进入组的人脸数（含孤脸）,
-          "singletons": 孤脸数（未进入任何组）,
-          "threshold": 阈值,
-        }
+    平均链接正常不应产出巨型组；若出现（特征空间异常/真实超大簇），
+    按 建边阈值+0.05 逐级提高（上限 SPLIT_THRESHOLD_MAX）重跑组内聚类。
+    - 拆开后所有子组 ≤ 上限 → 采用拆分结果；
+    - 拆到上限阈值仍超限 → 视为真实超大簇保留原组（宁大勿碎），打告警；
+    - 更高阈值下整组散架（无任何达标子组）→ 丢弃该组（成员视为孤脸）。
+
+    返回 (最终组列表, 实际拆分的组数)。
     """
-    ids, embs = await _load_unmatched_faces(db)
+    final: list[list[int]] = []
+    split_count = 0
+    for members in groups:
+        if len(members) <= max_group_size:
+            final.append(members)
+            continue
+        sub = embs[members]
+        subs: list[list[int]] = []
+        t = edge_threshold + SPLIT_THRESHOLD_STEP
+        while t <= SPLIT_THRESHOLD_MAX:
+            sub_edges, _method = _build_edges(sub, t, k)
+            sub_uf, _rejected = _merge_average_linkage(
+                sub,
+                sub_edges,
+                merge_mean=_merge_mean_threshold(t),
+            )
+            subs = _collect_groups(sub_uf, len(members), min_group_size)
+            if not subs or max(len(m) for m in subs) <= max_group_size:
+                break
+            t += SPLIT_THRESHOLD_STEP
+        if subs and max(len(m) for m in subs) <= max_group_size:
+            split_count += 1
+            final.extend(subs)
+            logger.warning(
+                "聚类巨型组 %d 张触发保底拆分（阈值 %.2f）→ %d 个子组",
+                len(members),
+                t,
+                len(subs),
+            )
+        elif subs:
+            logger.warning(
+                "聚类组 %d 张逐级拆分至阈值 %.2f 仍超上限 %d，按真实超大簇保留",
+                len(members),
+                t,
+                max_group_size,
+            )
+            final.append(members)
+        else:
+            logger.warning(
+                "聚类组 %d 张在更高阈值下无达标子组，整组丢弃（成员视为孤脸）",
+                len(members),
+            )
+    return final, split_count
+
+
+def _run_clustering(
+    ids: list[int],
+    embs: np.ndarray,
+    threshold: float,
+    min_group_size: int,
+    max_group_size: int,
+) -> dict:
+    """聚类核心（纯计算）：建边 → 平均链接合并 → 巨组保底拆分。
+
+    ids 与 embs 行一一对应（embs 已归一化）。
+    """
     n = embs.shape[0]
-    if n == 0:
-        return {
-            "total_faces": 0,
-            "method": "none",
-            "groups": [],
-            "group_count": 0,
-            "clustered_faces": 0,
-            "singletons": 0,
-            "threshold": threshold,
-        }
-
-    if _is_hnswlib_available():
-        edges = _cluster_hnsw(embs, threshold, ANN_K)
-        method = "hnsw"
-    else:
-        edges = _cluster_o2(embs, threshold, ANN_K)
-        method = "o2"
-        logger.warning("hnswlib 未安装，人脸聚类降级为 O(n²) 分块矩阵（仅适合小规模）")
-
-    groups = _cluster_from_edges(n, edges, min_group_size)
-    in_groups = sum(g["size"] for g in groups)
-    # 输出时把组内索引映射回 detection_id
+    merge_mean = _merge_mean_threshold(threshold)
+    edges, method = _build_edges(embs, threshold, ANN_K)
+    uf, rejected = _merge_average_linkage(embs, edges, merge_mean)
+    groups = _collect_groups(uf, n, min_group_size)
+    groups, split_count = _split_oversized_groups(
+        groups, embs, threshold, min_group_size, ANN_K, max_group_size
+    )
+    groups.sort(key=len, reverse=True)
+    in_groups = sum(len(g) for g in groups)
     groups_out = [
         {
-            "size": g["size"],
-            "detection_ids": [ids[i] for i in g["detection_ids"]],
+            "size": len(g),
+            "detection_ids": [ids[i] for i in g],
         }
         for g in groups
     ]
-
     return {
         "total_faces": n,
         "method": method,
@@ -271,59 +367,83 @@ async def cluster_unmatched_faces(
         "group_count": len(groups_out),
         "clustered_faces": in_groups,
         "singletons": n - in_groups,
+        # 兼容旧字段：threshold 即建边阈值
         "threshold": threshold,
+        "edge_threshold": threshold,
+        "merge_mean_threshold": merge_mean,
+        "rejected_merges": rejected,
+        "split_groups": split_count,
     }
+
+
+def _empty_result(threshold: float) -> dict:
+    """空输入的统一空结果（字段与正常结果一致）。"""
+    return {
+        "total_faces": 0,
+        "method": "none",
+        "groups": [],
+        "group_count": 0,
+        "clustered_faces": 0,
+        "singletons": 0,
+        "threshold": threshold,
+        "edge_threshold": threshold,
+        "merge_mean_threshold": _merge_mean_threshold(threshold),
+        "rejected_merges": 0,
+        "split_groups": 0,
+    }
+
+
+async def cluster_unmatched_faces(
+    db: AsyncSession,
+    threshold: float = EDGE_THRESHOLD,
+    min_group_size: int = MIN_GROUP_SIZE,
+    max_group_size: int = MAX_GROUP_SIZE,
+) -> dict:
+    """对全部未匹配人脸执行聚合聚类，返回分组统计与结果摘要。
+
+    参数:
+        threshold: 建边阈值（两两直连相似度门槛；平均链接合并门槛由它推导）
+        min_group_size: 组内最少人脸数
+        max_group_size: 巨型组保底拆分上限
+
+    返回:
+        {
+          "total_faces": 参与聚类的人脸数,
+          "method": "hnsw" | "o2"（实际使用的建边路径）,
+          "groups": [{size, detection_ids}],  # 仅 size ≥ min_group_size
+          "group_count": 组数,
+          "clustered_faces": 进入组的人脸数（含孤脸）,
+          "singletons": 孤脸数（未进入任何组）,
+          "threshold" / "edge_threshold": 建边阈值,
+          "merge_mean_threshold": 平均链接合并门槛,
+          "rejected_merges": 被合并门槛拒绝的合并尝试次数,
+          "split_groups": 触发保底拆分的组数,
+        }
+    """
+    ids, embs = await _load_unmatched_faces(db)
+    if embs.shape[0] == 0:
+        return _empty_result(threshold)
+    return _run_clustering(ids, embs, threshold, min_group_size, max_group_size)
 
 
 def cluster_faces_from_embeddings(
     ids: list[int],
     embs: np.ndarray,
-    threshold: float = CLUSTER_THRESHOLD,
+    threshold: float = EDGE_THRESHOLD,
     min_group_size: int = MIN_GROUP_SIZE,
+    max_group_size: int = MAX_GROUP_SIZE,
 ) -> dict:
     """同步版聚类入口（供单元测试直接调用，不经 DB）。
 
-    与 ``cluster_unmatched_faces`` 的纯计算部分等价（加载→聚类→分组）。
+    与 ``cluster_unmatched_faces`` 的纯计算部分等价（归一化→建边→合并→拆分）。
     """
     embs = np.asarray(embs, dtype=np.float32)
     norms = np.linalg.norm(embs, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     embs = embs / norms
-    n = embs.shape[0]
-    if n == 0:
-        return {
-            "total_faces": 0,
-            "method": "none",
-            "groups": [],
-            "group_count": 0,
-            "clustered_faces": 0,
-            "singletons": 0,
-            "threshold": threshold,
-        }
-    if _is_hnswlib_available():
-        edges = _cluster_hnsw(embs, threshold, ANN_K)
-        method = "hnsw"
-    else:
-        edges = _cluster_o2(embs, threshold, ANN_K)
-        method = "o2"
-    groups = _cluster_from_edges(n, edges, min_group_size)
-    in_groups = sum(g["size"] for g in groups)
-    groups_out = [
-        {
-            "size": g["size"],
-            "detection_ids": [ids[i] for i in g["detection_ids"]],
-        }
-        for g in groups
-    ]
-    return {
-        "total_faces": n,
-        "method": method,
-        "groups": groups_out,
-        "group_count": len(groups_out),
-        "clustered_faces": in_groups,
-        "singletons": n - in_groups,
-        "threshold": threshold,
-    }
+    if embs.shape[0] == 0:
+        return _empty_result(threshold)
+    return _run_clustering(ids, embs, threshold, min_group_size, max_group_size)
 
 
 async def load_group_detections(

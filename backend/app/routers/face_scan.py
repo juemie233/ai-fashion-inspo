@@ -27,7 +27,7 @@ from app.schemas.face_scan import (
     FaceScanStartIn,
 )
 from app.schemas.task import TaskOut
-from app.services.face_cluster import load_group_detections
+from app.services.face_cluster import EDGE_THRESHOLD, MIN_GROUP_SIZE, load_group_detections
 from app.services.face_thumbnail import ensure_blogger_face_thumbnails
 from app.services.person_service import model_service, blogger_service
 from app.services.task_runners.face_cluster import create_face_cluster_task
@@ -410,13 +410,14 @@ async def cluster_run(
 ) -> dict:
     """创建人脸聚合聚类任务（异步执行），返回 task_id。
 
-    聚类基于 hnswlib ANN（O(n log n)），把全部未匹配人脸按相似度
-    聚合成「疑似同一人」的组；结果存入任务 result，供 groups 接口查询。
+    聚类基于 hnswlib ANN（O(n log n)）+ 平均链接合并（组间平均相似度达标
+    才合并，杜绝链式合并），把全部未匹配人脸聚合成「疑似同一人」的组；
+    结果存入任务 result，供 groups 接口查询。
     """
     task = await create_face_cluster_task(
         db,
-        threshold=data.threshold if data.threshold is not None else 0.5,
-        min_group_size=data.min_group_size if data.min_group_size is not None else 2,
+        threshold=data.threshold if data.threshold is not None else EDGE_THRESHOLD,
+        min_group_size=data.min_group_size if data.min_group_size is not None else MIN_GROUP_SIZE,
     )
     return {"task_id": task.id, "message": "人脸聚合聚类任务已创建"}
 
@@ -546,6 +547,10 @@ async def cluster_groups(
             "clustered_faces": result.get("clustered_faces"),
             "singletons": result.get("singletons"),
             "threshold": result.get("threshold"),
+            "edge_threshold": result.get("edge_threshold"),
+            "merge_mean_threshold": result.get("merge_mean_threshold"),
+            "rejected_merges": result.get("rejected_merges"),
+            "split_groups": result.get("split_groups"),
         },
     }
 

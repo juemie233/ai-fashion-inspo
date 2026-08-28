@@ -1122,8 +1122,8 @@ function filterOption(input: string, option: { label?: string }): boolean {
               </a-typography-text>
             </div>
             <a-typography-text v-else type="secondary" style="font-size: 12px">
-              尚未运行过聚合聚类。点击「开始聚合聚类」按相似度把未匹配人脸分组，
-              便于整组指派给同一位博主/模特。
+              尚未运行过聚合聚类。点击「开始聚合聚类」，按相似度以平均链接策略把未匹配人脸分组
+              （组间平均相似度达标才合并，防止不同人被链成巨组），便于整组指派给同一位博主/模特。
             </a-typography-text>
             <a-typography-text v-if="clusterTask?.error" type="danger" style="font-size: 12px">
               {{ clusterTask.error }}

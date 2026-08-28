@@ -41,7 +41,11 @@ class FaceConfirmIn(BaseModel):
 
 
 class FaceClusterRunIn(BaseModel):
-    """创建人脸聚合聚类任务请求（阈值/最小组成员数可调）。"""
+    """创建人脸聚合聚类任务请求（阈值/最小组成员数可调）。
+
+    threshold 为「建边阈值」（两两直连相似度门槛，默认 0.6）；平均链接
+    合并门槛由它推导（建边阈值 - 0.15，下限 0.40），杜绝链式合并巨组。
+    """
 
     threshold: float | None = Field(None, ge=0.0, le=1.0)
     min_group_size: int | None = Field(None, ge=2, le=100)

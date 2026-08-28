@@ -85,6 +85,73 @@ def test_cluster_empty_input():
     assert result["group_count"] == 0
 
 
+# ── 链式合并回归（真实案例：0.5 并查集曾聚出 2446 张巨组）──
+
+
+def _bridge_fixture():
+    """构造「两组人 + 桥脸」：桥脸与两组各 ≈0.65 相似（超过 0.6 建边阈值）。
+
+    u/v 为 512 维正交基；w = normalize(0.65u + 0.65v + c·e)，与 u/v 各 0.65
+    相似（0.65² + 0.65² + c² = 1）。旧并查集算法会把两组链成一个组；
+    平均链接应在跨组平均相似度 ≈0.2 处拒绝合并。
+    """
+    rng = np.random.default_rng(7)
+    u = np.zeros(512, dtype=np.float32)
+    u[0] = 1.0
+    v = np.zeros(512, dtype=np.float32)
+    v[1] = 1.0
+    e = np.zeros(512, dtype=np.float32)
+    e[2] = 1.0
+    c = float(np.sqrt(1 - 2 * 0.65**2))
+    w = (0.65 * u + 0.65 * v + c * e).astype(np.float32)
+    w /= np.linalg.norm(w)
+
+    def _face(base: np.ndarray) -> np.ndarray:
+        f = base + rng.standard_normal(512).astype(np.float32) * 0.01
+        return (f / np.linalg.norm(f)).astype(np.float32)
+
+    return u, v, w, _face
+
+
+def test_cluster_rejects_chained_bridge_merge():
+    """桥脸直连边（0.65）不再把两组人链成一个组（平均链接拒绝跨组合并）。
+
+    桥脸并入其中一组后，两组间平均相似度 ≈0.2（大量 u-v 正交对稀释），
+    低于合并门槛 0.45——旧并查集算法此处会产出 5 张混合组。
+    """
+    u, v, w, _face = _bridge_fixture()
+    ids = [1, 2, 3, 4, 5]
+    embs = np.stack([_face(u), _face(u), _face(v), _face(v), w])
+
+    result = cluster_faces_from_embeddings(ids, embs)  # 默认建边阈值 0.6
+
+    assert result["group_count"] >= 2
+    assert max(g["size"] for g in result["groups"]) <= 3
+    # 每个组内只含同一「人」的脸（轴 1/轴 2），桥脸(5)不构成跨组桥接
+    for g in result["groups"]:
+        axes = {1 if i in (1, 2) else 2 for i in g["detection_ids"] if i != 5}
+        assert len(axes) <= 1
+    assert result["rejected_merges"] >= 1
+
+
+def test_cluster_split_oversized_group():
+    """巨型组保底拆分：合并结果超上限时按递进阈值在组内重聚类。"""
+    u, v, w, _face = _bridge_fixture()
+    # 4 张 u 轴脸 + 4 张 v 轴脸 + 桥脸：合并阶段产出 {u×4+w} 5 张组，
+    # 超 cap=4 → 拆分阈值 0.65/0.70 逐级重聚类 → 桥边断开 → 两个 4 人组
+    ids = list(range(1, 10))
+    embs = np.stack([_face(u) for _ in range(4)] + [_face(v) for _ in range(4)] + [w])
+
+    result = cluster_faces_from_embeddings(ids, embs, max_group_size=4)
+
+    assert result["split_groups"] == 1
+    assert result["group_count"] == 2
+    assert sorted(g["size"] for g in result["groups"]) == [4, 4]
+    for g in result["groups"]:
+        axes = {1 if i in (1, 2, 3, 4) else 2 for i in g["detection_ids"] if i != 9}
+        assert len(axes) <= 1
+
+
 def test_load_unmatched_dedupes_same_inspiration(client, upload):
     """同一素材的多张相似脸只保留一张参与聚类（按素材去重）。
 

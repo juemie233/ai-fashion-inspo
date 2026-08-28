@@ -10,6 +10,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import TaskQueue
+from app.services.face_cluster import EDGE_THRESHOLD, MIN_GROUP_SIZE
 from app.services.task_runners.common import utcnow
 
 logger = logging.getLogger(__name__)
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 async def create_face_cluster_task(
     db: AsyncSession,
-    threshold: float = 0.5,
-    min_group_size: int = 2,
+    threshold: float = EDGE_THRESHOLD,
+    min_group_size: int = MIN_GROUP_SIZE,
 ) -> TaskQueue:
     """创建「人脸聚合聚类」任务记录，返回任务对象。"""
     task = TaskQueue(
@@ -50,8 +51,8 @@ async def execute_face_cluster(db: AsyncSession, task: TaskQueue) -> None:
     params = task.result or {}
     result = await cluster_unmatched_faces(
         db,
-        threshold=float(params.get("threshold", 0.5)),
-        min_group_size=int(params.get("min_group_size", 2)),
+        threshold=float(params.get("threshold", EDGE_THRESHOLD)),
+        min_group_size=int(params.get("min_group_size", MIN_GROUP_SIZE)),
     )
 
     task.result = result
@@ -62,5 +63,7 @@ async def execute_face_cluster(db: AsyncSession, task: TaskQueue) -> None:
     await db.commit()
     logger.info(
         f"人脸聚合聚类完成: #{task.id} 人脸 {result['total_faces']} "
-        f"（method={result['method']}）组 {result['group_count']} 个"
+        f"（method={result['method']}）组 {result['group_count']} 个，"
+        f"拒绝合并 {result.get('rejected_merges', 0)} 次，"
+        f"保底拆分组 {result.get('split_groups', 0)} 个"
     )
