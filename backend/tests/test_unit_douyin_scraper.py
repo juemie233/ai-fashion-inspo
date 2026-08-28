@@ -408,3 +408,67 @@ def test_collect_search_urls_render_timeout_reports_error(monkeypatch):
     assert urls == []
     assert "未渲染" in funnel.get("error", "")
     assert "机器人验证" not in funnel.get("error", "")
+
+
+# ── 素材入库 INSERT 与真实 schema 匹配（任务 #46 回归）──
+
+
+def test_insert_inspiration_sql_matches_real_schema(tmp_path):
+    """直写 sqlite 的素材 INSERT 必须能在 ORM 真实 schema 上执行。
+
+    回归：图片路径 INSERT 漏写 updated_at 占位符（14 列 13 值），
+    sqlite 报「13 values for 14 columns」，每张图下载后入库必败，
+    整条抖音采集链路静默颗粒无收。用 ORM metadata 建表后实际执行
+    两条 SQL，防列清单/占位符/参数再次漂移。
+    """
+    import sqlite3
+
+    import app.models  # noqa: F401  # 确保全部模型注册进 metadata
+    from app.database import Base
+    from scripts import scraper_download as sdl
+    from sqlalchemy import create_engine
+
+    db_path = tmp_path / "t.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
+    # 用 sqlite3 模块执行（与生产直写路径一致，? 占位符原生支持）
+    now = "2026-08-28 12:00:00"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            sdl.INSERT_INSPIRATION_IMAGE_SQL,
+            (
+                "img-id", "scraper", "https://www.douyin.com/video/1",
+                "images/2026-08-28/a.jpg", "image", "sha256-img",
+                "caption", 1, now, now,
+            ),
+        )
+        conn.execute(
+            sdl.INSERT_INSPIRATION_VIDEO_SQL,
+            (
+                "vid-id", "scraper", "https://www.douyin.com/video/2",
+                "videos/2026-08-28/a.mp4", "thumbs/2026-08-28/a.jpg",
+                "video", "caption", 1, now, now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT updated_at, content_hash, thumbnail_path, rating, "
+            "quality_status FROM inspirations WHERE id = 'img-id'"
+        ).fetchone()
+        assert row[0] == now
+        assert row[1] == "sha256-img"
+        assert row[2] is None
+        assert row[3] == 0 and row[4] == "pending"
+        row2 = conn.execute(
+            "SELECT updated_at, content_hash, thumbnail_path, rating "
+            "FROM inspirations WHERE id = 'vid-id'"
+        ).fetchone()
+        assert row2[0] == now
+        assert row2[1] is None
+        assert row2[2] == "thumbs/2026-08-28/a.jpg"
+        assert row2[3] == 0
+    finally:
+        conn.close()

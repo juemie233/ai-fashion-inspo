@@ -38,6 +38,34 @@ from .scraper_common import (
 """单条话题的来源明细保留条数（防 source_meta 无限膨胀）。"""
 _HASHTAG_META_MAX = 10
 
+
+# ═══════════════════════════════════════════════════════════════
+#  素材入库 INSERT（直写 sqlite 路径）
+# ═══════════════════════════════════════════════════════════════
+
+"""图片入库 INSERT：列清单 / 值 / 占位符三者必须一一对应。
+
+教训：曾漏写 updated_at 的占位符（14 列 13 值），sqlite 报
+「13 values for 14 columns」，重试包装器误当网络错误反复重新下载，
+整条抖音采集链路静默颗粒无收（任务 #46）。提取为常量供回归测试
+直接执行，防止再次漂移。"""
+INSERT_INSPIRATION_IMAGE_SQL = (
+    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+    "thumbnail_path, media_type, dominant_colors, is_favorite, "
+    "quality_status, rating, is_ai_generated, content_hash, caption, "
+    "scraper_task_id, created_at, updated_at) "
+    "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', 0, 0, ?, ?, ?, ?, ?)"
+)
+
+"""视频入库 INSERT：thumbnail 为 ffmpeg 首帧非空，content_hash 暂空。"""
+INSERT_INSPIRATION_VIDEO_SQL = (
+    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
+    "thumbnail_path, media_type, dominant_colors, is_favorite, "
+    "quality_status, rating, is_ai_generated, content_hash, caption, "
+    "scraper_task_id, created_at, updated_at) "
+    "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 'pending', 0, 0, NULL, ?, ?, ?, ?)"
+)
+
 """每篇笔记提取的话题数上限（防脏数据）。"""
 _HASHTAG_PER_NOTE_MAX = 20
 
@@ -351,6 +379,8 @@ def download_batch(
                 fpath.write_bytes(content)
 
                 # 内容 MD5 去重：相同图片不同 URL（CDN 多节点）不重复入库
+                # （注意：hash 在入库成功后才写入集合——若入库失败重试，
+                # 同一内容不应被自己误判为重复，见下方成功路径）
                 if content_hash_set is not None:
                     content_md5 = hashlib.md5(content).hexdigest()
                     if content_md5 in content_hash_set:
@@ -370,7 +400,6 @@ def download_batch(
                             pass
                         existing_url_set.add(img_url)
                         break
-                    content_hash_set.add(content_md5)
 
                 # 同步写入数据库（同一事务：素材行 + 墓碑 + 向量回填任务）。
                 # 失败时回滚本批未提交部分并删除已下载文件，避免孤儿文件/孤儿行。
@@ -390,11 +419,7 @@ def download_batch(
                         batch_conn, meta, note_url
                     )  # 话题存档（幂等，每笔记一次）
                     batch_conn.execute(
-                        "INSERT INTO inspirations (id, source_type, source_url, file_path, "
-                        "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                        "quality_status, content_hash, caption, scraper_task_id, "
-                        "created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', ?, ?, ?, ?)",
+                        INSERT_INSPIRATION_IMAGE_SQL,
                         (
                             insp_id,
                             "scraper",
@@ -435,6 +460,9 @@ def download_batch(
                         pass
                     raise  # 重新抛出，让外层重试逻辑处理
 
+                # 入库成功后才记录 MD5：入库失败重试时同一内容不被自己误判为重复
+                if content_hash_set is not None:
+                    content_hash_set.add(content_md5)
                 added += 1
                 existing_url_set.add(img_url)
 
@@ -625,11 +653,7 @@ def download_videos(
             blogger_id = (meta or {}).get("blogger_id")
             save_hashtags(batch_conn, meta, note_url)  # 话题存档（幂等，每笔记一次）
             batch_conn.execute(
-                "INSERT INTO inspirations (id, source_type, source_url, file_path, "
-                "thumbnail_path, media_type, dominant_colors, is_favorite, "
-                "quality_status, content_hash, caption, scraper_task_id, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 'pending', NULL, ?, ?, ?, ?)",
+                INSERT_INSPIRATION_VIDEO_SQL,
                 (
                     insp_id,
                     "scraper",
