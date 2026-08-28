@@ -305,11 +305,12 @@ def download_batch(
     skipped_non200 = 0
     skipped_network = 0
 
-    # 单连接贯穿整批写入：攒批提交（每 20 条一次），避免每张图开连接
-    # 频繁抢占 SQLite 写锁，与 API 服务/worker 并发时显著降低锁冲突。
-    _BATCH_COMMIT = 20
+    # 每张图独立提交（素材行 + 墓碑同一事务），失败只影响当前图：
+    # 此前「攒批 20 条一次提交」在批内任一张失败时 rollback 会连同之前
+    # 已成功写入的图一起回滚（行丢失 + 文件残留成孤儿），抖音链路审查
+    # 发现（2026-08）。逐条提交后失败窗口只剩当前图，其文件随行删除。
+    _BATCH_COMMIT = 20  # 向量回填任务的攒批阈值（独立事务入队）
     batch_conn = None
-    pending_in_batch = 0
     # 本批待回填向量的素材 ID：攒批后合并为一个向量回填任务入队，
     # 避免每张图各建一个任务导致任务队列膨胀（此前 75 张图=75 个任务）。
     backfill_ids: list[str] = []
@@ -319,32 +320,30 @@ def download_batch(
     except Exception:
         batch_conn = None
 
-    def _commit_batch():
-        """提交当前攒批的写入（无写入或连接不可用时跳过）。
+    def _flush_backfill():
+        """把攒批的素材 ID 合并为一个向量回填任务入队（独立事务提交）。
 
-        提交前把本批素材合并为一个向量回填任务入队，保证素材行与
-        回填任务在同一事务内提交（要么都写，要么都回滚）。
+        素材行已逐条提交，此处失败不影响素材本身；向量回填任务缺失时
+        由 worker 启动兜底 / 手动一键回填补上（不阻塞采集主流程）。
         """
-        nonlocal pending_in_batch
-        if batch_conn is not None and pending_in_batch > 0:
-            if backfill_ids:
-                now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                batch_conn.execute(
-                    "INSERT INTO task_queue (type, status, progress, total, done, result, "
-                    "max_retries, retry_count, created_at, updated_at) "
-                    "VALUES ('vector_backfill', 'pending', 0, ?, 0, ?, 2, 0, ?, ?)",
-                    (
-                        len(backfill_ids),
-                        json.dumps(
-                            {"inspiration_ids": list(backfill_ids)}
-                        ),
-                        now_str,
-                        now_str,
-                    ),
-                )
-                backfill_ids.clear()
-            batch_conn.commit()
-            pending_in_batch = 0
+        if batch_conn is None or not backfill_ids:
+            return
+        now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        batch_conn.execute(
+            "INSERT INTO task_queue (type, status, progress, total, done, result, "
+            "max_retries, retry_count, created_at, updated_at) "
+            "VALUES ('vector_backfill', 'pending', 0, ?, 0, ?, 2, 0, ?, ?)",
+            (
+                len(backfill_ids),
+                json.dumps(
+                    {"inspiration_ids": list(backfill_ids)}
+                ),
+                now_str,
+                now_str,
+            ),
+        )
+        batch_conn.commit()
+        backfill_ids.clear()
 
     for note_url, img_url in unique:
         if added >= remaining:
@@ -401,8 +400,8 @@ def download_batch(
                         existing_url_set.add(img_url)
                         break
 
-                # 同步写入数据库（同一事务：素材行 + 墓碑 + 向量回填任务）。
-                # 失败时回滚本批未提交部分并删除已下载文件，避免孤儿文件/孤儿行。
+                # 同步写入数据库（素材行 + 墓碑同一事务，逐条提交）：
+                # 失败仅回滚当前图并删除其文件，不影响本批已入库的图。
                 if batch_conn is None:
                     raise RuntimeError("数据库连接不可用")
                 try:
@@ -443,15 +442,10 @@ def download_batch(
                         "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
                         (img_url,),
                     )
-                    # 向量回填任务攒批：本批素材合并为一个任务，在 _commit_batch 时入队
-                    backfill_ids.append(insp_id)
-                    pending_in_batch += 1
-                    if pending_in_batch >= _BATCH_COMMIT:
-                        _commit_batch()
+                    batch_conn.commit()
                 except Exception:
                     try:
-                        batch_conn.rollback()
-                        pending_in_batch = 0
+                        batch_conn.rollback()  # 清除 aborted 事务态（仅当前图受影响）
                     except Exception:
                         pass
                     try:
@@ -465,6 +459,14 @@ def download_batch(
                     content_hash_set.add(content_md5)
                 added += 1
                 existing_url_set.add(img_url)
+
+                # 向量回填任务攒批入队（独立事务；失败不阻塞采集，worker 兜底）
+                backfill_ids.append(insp_id)
+                if len(backfill_ids) >= _BATCH_COMMIT:
+                    try:
+                        _flush_backfill()
+                    except Exception:
+                        pass
 
                 # 下载间隔：模拟人类逐张保存的行为
                 time.sleep(random.uniform(0.3, 1.0))
@@ -484,8 +486,11 @@ def download_batch(
                     )
                     skipped_network += 1
 
-    # 收尾：提交剩余攒批并关闭连接
-    _commit_batch()
+    # 收尾：把剩余攒批向量任务入队并关闭连接（入队失败不阻塞，worker 兜底）
+    try:
+        _flush_backfill()
+    except Exception:
+        pass
     if batch_conn is not None:
         batch_conn.close()
 
@@ -585,21 +590,12 @@ def download_videos(
 
     added = 0
     skipped = 0
-    pending_in_batch = 0
-    _BATCH_COMMIT = 5  # 视频入库量小，攒批阈值降低
     batch_conn = None
     try:
         batch_conn = _sqlite3.connect(str(db_path))
         ensure_hashtag_table(batch_conn)  # 话题存档表兜底（独立进程）
     except Exception:
         batch_conn = None
-
-    def _commit_videos():
-        """提交当前攒批的视频写入。"""
-        nonlocal pending_in_batch
-        if batch_conn is not None and pending_in_batch > 0:
-            batch_conn.commit()
-            pending_in_batch = 0
 
     for note_url, video_url in unique:
         if added >= remaining:
@@ -642,6 +638,8 @@ def download_videos(
             # ffmpeg 提取首帧缩略图
             thumb_rel = extract_video_thumbnail_sync(fpath, today)
 
+            # 逐条提交（素材行 + 墓碑同一事务）：失败仅回滚当前视频并
+            # 删除其文件，不影响本批已入库的视频（同 download_batch 修复）。
             if batch_conn is None:
                 raise RuntimeError("数据库连接不可用")
             insp_id = str(uuid.uuid4())
@@ -651,35 +649,40 @@ def download_videos(
             meta = meta_map.get(note_url) if meta_map else None
             caption_val = (meta or {}).get("caption")
             blogger_id = (meta or {}).get("blogger_id")
-            save_hashtags(batch_conn, meta, note_url)  # 话题存档（幂等，每笔记一次）
-            batch_conn.execute(
-                INSERT_INSPIRATION_VIDEO_SQL,
-                (
-                    insp_id,
-                    "scraper",
-                    note_url or video_url,
-                    rel_path,
-                    thumb_rel,
-                    "video",
-                    caption_val,
-                    task_id,
-                    now_str,
-                    now_str,
-                ),
-            )
-            if blogger_id:
+            try:
+                save_hashtags(batch_conn, meta, note_url)  # 话题存档（幂等，每笔记一次）
                 batch_conn.execute(
-                    "INSERT OR IGNORE INTO inspiration_bloggers "
-                    "(inspiration_id, blogger_id, confidence) VALUES (?, ?, 1.0)",
-                    (insp_id, blogger_id),
+                    INSERT_INSPIRATION_VIDEO_SQL,
+                    (
+                        insp_id,
+                        "scraper",
+                        note_url or video_url,
+                        rel_path,
+                        thumb_rel,
+                        "video",
+                        caption_val,
+                        task_id,
+                        now_str,
+                        now_str,
+                    ),
                 )
-            batch_conn.execute(
-                "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
-                (video_url,),
-            )
-            pending_in_batch += 1
-            if pending_in_batch >= _BATCH_COMMIT:
-                _commit_videos()
+                if blogger_id:
+                    batch_conn.execute(
+                        "INSERT OR IGNORE INTO inspiration_bloggers "
+                        "(inspiration_id, blogger_id, confidence) VALUES (?, ?, 1.0)",
+                        (insp_id, blogger_id),
+                    )
+                batch_conn.execute(
+                    "INSERT OR IGNORE INTO scraper_seen_urls (source_url) VALUES (?)",
+                    (video_url,),
+                )
+                batch_conn.commit()
+            except Exception:
+                try:
+                    batch_conn.rollback()  # 清除 aborted 事务态（仅当前视频受影响）
+                except Exception:
+                    pass
+                raise
 
             added += 1
             existing_url_set.add(video_url)
@@ -689,7 +692,6 @@ def download_videos(
             try:
                 if batch_conn is not None:
                     batch_conn.rollback()
-                pending_in_batch = 0
             except Exception:
                 pass
             if fpath is not None:
@@ -703,7 +705,6 @@ def download_videos(
             )
             skipped += 1
 
-    _commit_videos()
     if batch_conn is not None:
         batch_conn.close()
 

@@ -445,3 +445,65 @@ pip install psutil pytest pytest-asyncio
 3. **全局错误契约**：`main.py` 注册 `AppException` 全局 exception_handler，按映射表转 404/400/401/403/500，统一输出 `{"detail": ...}`；服务层原 `HTTPException(400)` 的 SSRF 校验等改抛领域异常后语义不变。
 4. **测试可运行性**：三个新增测试模块共 65 个用例全部通过；期间修复了批量处理器对单值参数的解包、同步函数返回值不能 await、缓存键跨作用域同名互串等问题，日志断言采用 mock logger 方式规避 caplog 的阶段还原行为。
 5. **重复代码收敛**：`routers/search.py` 中 `_to_search_out` 已移除，4 处调用点直接使用 schemas 层的 `inspiration_to_out`（含顶栏导入更新）。
+
+---
+
+## 抖音采集链路审查修复（2026-08）
+
+对最近抖音采集相关代码（`backend/scripts/` 采集脚本族 + `services/scraper/tasks.py` 任务链路）按链路走查后的修复记录。
+
+### 问题 1：攒批事务回滚粒度 → 入库丢失 + 孤儿文件 ✅
+
+#### 问题描述
+`scraper_download.py` 的 `download_batch`（图片）与 `download_videos`（视频）采用「攒批 20/5 条一次提交」：批内**任一张图失败**时 `rollback()` 会连同**之前已成功写入的图**一起回滚（行丢失），而已写盘的文件只删除当前失败那张 → 前序成功图成为「DB 无记录 + 文件残留」的孤儿文件，且不会重试补写。
+
+#### 改进措施
+1. **逐张独立提交**：素材行 + 墓碑表同一事务、每张图立即 `commit`，失败仅回滚当前图并删除其文件（`batch_conn.rollback()` 仅用于清除 aborted 事务态）。
+2. **向量回填任务独立攒批**：素材 ID 攒批（阈值 20）后以独立事务合并为一个 `vector_backfill` 任务入队，入队失败不阻塞采集（worker 启动兜底 / 手动一键回填可补），不再与素材行同事务。
+
+#### 影响文件
+- `backend/scripts/scraper_download.py`
+
+#### 效果
+- 批内单张失败不再殃及已入库素材，无孤儿文件；
+- 向量回填任务仍保持「N 图 1 任务」不膨胀任务队列。
+
+---
+
+### 问题 2：`scraper_douyin.py` 使用未定义的 `_sqlite3` ✅
+
+#### 问题描述
+`run_douyin_notes_pipeline` 中 `_sqlite3.connect(...)`（话题存档兜底连接）在 `scraper_douyin.py` 模块内**从未导入** `sqlite3`（`_sqlite3` 别名只在 `scraper_download.py` / `run_scraper.py` 中定义），运行时报 `AttributeError` 被 `try/except` 吞掉 → 兜底连接恒为 `None`。当前实际影响有限（下载模块内部已完成话题存档），但属隐藏缺陷 + 隐式依赖，且补上导入后会暴露连接从不关闭的问题。
+
+#### 改进措施
+1. `scraper_douyin.py` 补 `import sqlite3 as _sqlite3`；
+2. 管线收尾关闭连接（`conn.close()`）；
+3. 顺带修复预算边界：去掉 `max(remaining, 1)` / `max(v_budget, 1)`（预算恰好耗尽时 `download_batch`/`download_videos` 以 `added >= remaining` 立即停止，不再越界多采 1 张/1 个视频）。
+
+#### 影响文件
+- `backend/scripts/scraper_douyin.py`
+
+---
+
+### 问题 3：CDP 通道任务漏斗统计失真 ✅
+
+#### 问题描述
+`run_douyin_notes_pipeline` 内部调用 `download_batch` 时丢弃 5 元组跳过计数（只取 `added`），导致 CDP 通道任务的漏斗 `summary.skipped_*` 恒为 0，任务管理页看不到跳过原因分布。
+
+#### 改进措施
+1. `run_douyin_notes_pipeline` 返回值扩展为 4 元组，新增 `skip_stats`（图片四类跳过 + 视频跳过）；
+2. `run_scraper.py` 博主/搜索两处调用点解包并累加进 `total_skipped_*`，`summary` 新增 `skipped_video` 字段，漏斗打印新增「视频跳过」行。
+
+#### 影响文件
+- `backend/scripts/scraper_douyin.py`
+- `backend/scripts/run_scraper.py`
+
+---
+
+### 回归测试
+
+`test_unit_douyin_scraper.py` 新增 2 个用例：
+- `test_download_batch_partial_failure_keeps_previous`：批内一张图失败 → 已入库的图不回滚、文件保留，失败图文件被清理（无孤儿）；
+- `test_download_batch_flushes_backfill_task`：入库素材在收尾时合并为一个向量回填任务入队。
+
+全套后端测试通过（exit 0）。

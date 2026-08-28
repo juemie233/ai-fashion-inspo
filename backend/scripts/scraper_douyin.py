@@ -15,6 +15,7 @@
 import json
 import random
 import re
+import sqlite3 as _sqlite3
 import time
 import urllib.parse
 
@@ -833,11 +834,14 @@ def run_douyin_notes_pipeline(
         source_kind: 话题存档来源标记（search | blogger）。
 
     Returns:
-        (items_found, items_added, notes_log)
+        (items_found, items_added, notes_log, skip_stats)：提取数、入库数、
+        逐篇明细、跳过统计（sk_ex/sk_h/sk_n/sk_dup 图片四类 + v_skipped 视频跳过）。
+        跳过统计供任务漏斗汇总（此前 CDP 通道丢弃导致 summary 恒 0）。
     """
     items_found = 0
     items_added = 0
     notes_log: list[dict] = []
+    skip_stats: dict = {"sk_ex": 0, "sk_h": 0, "sk_n": 0, "sk_dup": 0, "v_skipped": 0}
 
     conn = None
     try:
@@ -847,7 +851,6 @@ def run_douyin_notes_pipeline(
         ensure_hashtag_table(conn)
     except Exception:
         conn = None
-
     for i, note_url in enumerate(note_urls, 1):
         if budget is not None and items_added >= budget:
             print(
@@ -895,12 +898,14 @@ def run_douyin_notes_pipeline(
         added = 0
         sk_ex = sk_h = sk_n = sk_dup = 0
         if img_pairs:
-            # 预算剩余量；无预算（博主模式）时给单笔记宽松上限
+            # 预算剩余量；无预算（博主模式）时给单笔记宽松上限。
+            # 循环开头已保证 items_added < budget，remaining 恒 ≥ 1，
+            # 无需 max(remaining, 1)（预算恰好耗尽时 download_batch
+            # 以 added >= remaining 立即停止，不会越界多采）。
             remaining = (
                 (budget - items_added) if budget is not None
                 else 200
             )
-            remaining = max(remaining, 1)
             added, sk_ex, sk_h, sk_n, sk_dup = download_batch(
                 img_pairs,
                 task_id,
@@ -914,6 +919,11 @@ def run_douyin_notes_pipeline(
                 meta_map,
                 platform="douyin",
             )
+            # 累计跳过统计（供任务漏斗汇总）
+            skip_stats["sk_ex"] += sk_ex
+            skip_stats["sk_h"] += sk_h
+            skip_stats["sk_n"] += sk_n
+            skip_stats["sk_dup"] += sk_dup
 
         v_added = 0
         if video_pairs and download_video:
@@ -921,11 +931,13 @@ def run_douyin_notes_pipeline(
                 (budget - items_added) if budget is not None
                 else 50
             )
+            # 图片可能已把预算耗尽（v_budget=0）：download_videos 以
+            # added >= remaining 立即停止，不会越界多采
             v_added, v_skipped = download_videos(
                 video_pairs,
                 task_id,
                 existing_url_set,
-                max(v_budget, 1),
+                v_budget,
                 videos_dir,
                 today,
                 httpx_module,
@@ -934,6 +946,7 @@ def run_douyin_notes_pipeline(
                 platform="douyin",
             )
             added += v_added
+            skip_stats["v_skipped"] += v_skipped
         elif video_pairs:
             notes_log.append(
                 {
@@ -953,7 +966,6 @@ def run_douyin_notes_pipeline(
                 conn.commit()
             except Exception:
                 pass
-
         notes_log.append(
             {
                 "note": note_url,
@@ -971,7 +983,12 @@ def run_douyin_notes_pipeline(
         )
         time.sleep(random.uniform(2.0, 4.0))  # 详情页间隔风控节奏
 
-    return items_found, items_added, notes_log
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return items_found, items_added, notes_log, skip_stats
 
 
 # ═══════════════════════════════════════════════════════════════

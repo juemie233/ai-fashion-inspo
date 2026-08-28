@@ -316,6 +316,7 @@ def run_scraper_sync(task_id: int):
     total_skipped_content_dup = 0
     total_skipped_non200 = 0
     total_skipped_network = 0
+    total_skipped_video = 0
     per_search: list[dict] = []  # 每次搜索的漏斗明细
 
     def _save_resume(done_idx: int):
@@ -460,7 +461,7 @@ def run_scraper_sync(task_id: int):
                 per_search.append(
                     {"keyword": profile_url, **scroll_funnel}
                 )
-                items_found, items_added, blogger_notes = (
+                items_found, items_added, blogger_notes, skip_stats = (
                     run_douyin_notes_pipeline(
                         page,
                         task_id,
@@ -480,6 +481,11 @@ def run_scraper_sync(task_id: int):
                         source_kind="blogger",
                     )
                 )
+                total_skipped_existing += skip_stats["sk_ex"]
+                total_skipped_content_dup += skip_stats["sk_dup"]
+                total_skipped_non200 += skip_stats["sk_h"]
+                total_skipped_network += skip_stats["sk_n"]
+                total_skipped_video += skip_stats["v_skipped"]
             else:
                 # 小红书按博主：主页笔记 → 详情页全量提取
                 items_found, items_added, blogger_notes = (
@@ -507,6 +513,7 @@ def run_scraper_sync(task_id: int):
             # ── 搜索 + 即时下载：按执行计划（关键词 × 排序）逐项推进，支持断点续采 ──
             total_searches = len(plan)
 
+        # 博主模式 plan 为空列表，此循环自然空转跳过（无需分支判断）
         for plan_idx in range(done, len(plan)):
             entry = plan[plan_idx]
             kw = entry["k"]
@@ -547,7 +554,7 @@ def run_scraper_sync(task_id: int):
                             10, int(remaining * 2)
                         ),
                     )
-                    n_found, n_added, note_logs = (
+                    n_found, n_added, note_logs, skip_stats = (
                         run_douyin_notes_pipeline(
                             page,
                             task_id,
@@ -571,6 +578,11 @@ def run_scraper_sync(task_id: int):
                     )
                     items_found += n_found
                     items_added += n_added
+                    total_skipped_existing += skip_stats["sk_ex"]
+                    total_skipped_content_dup += skip_stats["sk_dup"]
+                    total_skipped_non200 += skip_stats["sk_h"]
+                    total_skipped_network += skip_stats["sk_n"]
+                    total_skipped_video += skip_stats["v_skipped"]
                     # 记录本次搜索的完整漏斗（明细截断最近 20 条防 diagnostics 膨胀）
                     per_search.append(
                         {
@@ -749,6 +761,7 @@ def run_scraper_sync(task_id: int):
                 "skipped_content_dup": total_skipped_content_dup,
                 "skipped_http_error": total_skipped_non200,
                 "skipped_network_error": total_skipped_network,
+                "skipped_video": total_skipped_video,
                 "total_added": items_added,
             },
         },
@@ -764,6 +777,7 @@ def run_scraper_sync(task_id: int):
     print(f"  ║ 内容MD5重复:    {total_skipped_content_dup}")
     print(f"  ║ HTTP 非 200:    {total_skipped_non200}")
     print(f"  ║ 网络失败:       {total_skipped_network}")
+    print(f"  ║ 视频跳过:       {total_skipped_video}")
     print(f"  ║ ★ 最终入库:     {items_added}")
     print(f"  ╚══════════════════════════════════════════")
 

@@ -685,3 +685,142 @@ def test_insert_inspiration_sql_matches_real_schema(tmp_path):
         assert row2[3] == 0
     finally:
         conn.close()
+
+
+# ── download_batch 逐条提交行为（2026-08 抖音链路审查修复回归）──
+
+
+class _FakeResp:
+    """假 httpx 响应：只提供下载所需字段。"""
+
+    def __init__(self, status_code: int = 200, content: bytes = b"fake-img"):
+        self.status_code = status_code
+        self.headers = {"content-type": "image/jpeg"}
+        self.content = content
+
+
+class _FakeHttpx:
+    """按调用顺序返回预设结果（响应或异常），记录每次请求 URL。"""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(url)
+        r = self.results[len(self.calls) - 1]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+def _make_download_env(tmp_path, monkeypatch):
+    """建真实 ORM schema 的临时库，并指向 download_batch 的读库路径。"""
+    import app.models  # noqa: F401  # 确保全部模型注册进 metadata
+    from app.database import Base
+    from sqlalchemy import create_engine
+
+    from app.config import settings
+
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    monkeypatch.setattr(settings, "storage_root", storage_root)
+    db_path = storage_root.parent / "fashion_inspo.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    return db_path
+
+
+def test_download_batch_partial_failure_keeps_previous(tmp_path, monkeypatch):
+    """批内一张图失败：已入库的图不回滚、文件保留；失败图文件被清理。
+
+    回归：此前「攒批 20 条一次提交」，批内任一张失败 rollback 会把之前
+    已成功写入的图一并回滚（行丢失 + 文件残留成孤儿）。逐条提交后失败
+    窗口只剩当前图，且其文件随行删除。
+    """
+    from scripts import scraper_download as sdl
+
+    _make_download_env(tmp_path, monkeypatch)
+    img_dir = tmp_path / "storage" / "images" / "2026-08"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    urls = [
+        ("https://www.douyin.com/video/1", "https://cdn/a.jpg"),
+        ("https://www.douyin.com/video/2", "https://cdn/b.jpg"),
+        ("https://www.douyin.com/video/3", "https://cdn/c.jpg"),
+    ]
+    # 第 2 张 3 次重试全部失败（结果序列按调用顺序：1 成功 + 3 失败 + 1 成功）
+    httpx_mod = _FakeHttpx(
+        [
+            _FakeResp(content=b"aaa"),
+            RuntimeError("网络抖动"),
+            RuntimeError("网络抖动"),
+            RuntimeError("网络抖动"),
+            _FakeResp(content=b"ccc"),
+        ]
+    )
+    monkeypatch.setattr(sdl.time, "sleep", lambda *a, **k: None)  # 加速重试退避
+
+    added, sk_ex, sk_h, sk_n, sk_dup = sdl.download_batch(
+        urls, task_id=1, existing_url_set=set(), remaining=10,
+        img_dir=img_dir, today="2026-08", httpx_module=httpx_mod,
+    )
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "fashion_inspo.db"))
+    try:
+        rows = conn.execute(
+            "SELECT source_url FROM inspirations ORDER BY source_url"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert added == 2
+    assert sk_n == 1  # 仅第 2 张计入网络失败
+    assert [r[0] for r in rows] == ["https://www.douyin.com/video/1",
+                                    "https://www.douyin.com/video/3"]
+    # 磁盘：成功 2 张各留一个文件，失败图无残留（无孤儿文件）
+    files = sorted(p.name for p in img_dir.iterdir())
+    assert len(files) == 2
+
+
+def test_download_batch_flushes_backfill_task(tmp_path, monkeypatch):
+    """入库的素材在收尾时合并为一个向量回填任务入队（独立事务）。"""
+    from scripts import scraper_download as sdl
+
+    _make_download_env(tmp_path, monkeypatch)
+    img_dir = tmp_path / "storage" / "images" / "2026-08"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    urls = [
+        ("https://www.douyin.com/video/1", "https://cdn/a.jpg"),
+        ("https://www.douyin.com/video/2", "https://cdn/b.jpg"),
+        ("https://www.douyin.com/video/3", "https://cdn/c.jpg"),
+    ]
+    httpx_mod = _FakeHttpx([_FakeResp(content=b"a"), _FakeResp(content=b"b"),
+                            _FakeResp(content=b"c")])
+    monkeypatch.setattr(sdl.time, "sleep", lambda *a, **k: None)
+
+    added, *_ = sdl.download_batch(
+        urls, task_id=1, existing_url_set=set(), remaining=10,
+        img_dir=img_dir, today="2026-08", httpx_module=httpx_mod,
+    )
+    assert added == 3
+
+    import json as _json
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "fashion_inspo.db"))
+    try:
+        task = conn.execute(
+            "SELECT type, total, result FROM task_queue "
+            "WHERE type = 'vector_backfill'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert task is not None
+    assert task[1] == 3
+    ids = _json.loads(task[2])["inspiration_ids"]
+    assert len(ids) == 3
