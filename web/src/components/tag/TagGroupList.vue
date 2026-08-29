@@ -210,6 +210,13 @@ onUnmounted(() => {
           <div
             v-for="tag in visibleTags(group)"
             :key="tag.id"
+            v-memo="[
+              selectedIds.has(tag.id),
+              deletingId === tag.id,
+              sortMode,
+              hasActiveFilter,
+              tag,
+            ]"
             class="tag-row"
             :class="{ 'row-selected': selectedIds.has(tag.id) }"
             :draggable="sortMode === 'custom' && !hasActiveFilter"
@@ -295,8 +302,8 @@ onUnmounted(() => {
 }
 
 .row-check {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   margin: 0;
   accent-color: #3b82f6;
   cursor: pointer;

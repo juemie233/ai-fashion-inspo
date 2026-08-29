@@ -38,5 +38,13 @@ export default tseslint.config(
       'no-debugger': 'warn',
     },
   },
+  {
+    // 标签管理大列表：v-for 行上使用 v-memo 做 per-item 缓存（勾选仅重渲受影响行）。
+    // Vue 编译器原生支持该写法，vue/valid-v-memo 对「v-for 内 v-memo」的拦截为误报。
+    files: ['src/components/tag/TagGroupList.vue'],
+    rules: {
+      'vue/valid-v-memo': 'off',
+    },
+  },
   prettier,
 )
