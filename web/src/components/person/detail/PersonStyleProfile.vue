@@ -2,6 +2,7 @@
 /** 风格画像卡：高频标签 / 类别分布 / 素材趋势（基于该人物素材标签聚合）。 */
 
 import type { PersonStyleProfile as StyleProfile } from '@shared/types/person'
+import { CATEGORY_LABELS } from '@/constants/tag'
 
 defineProps<{
   profile: StyleProfile
@@ -40,7 +41,7 @@ defineEmits<{
         <div class="cat-list">
           <template v-if="Object.keys(profile.by_category).length">
             <div v-for="(count, cat) in profile.by_category" :key="cat" class="cat-row">
-              <span class="cat-name">{{ cat }}</span>
+              <span class="cat-name">{{ CATEGORY_LABELS[cat] || cat }}</span>
               <span class="cat-bar"
                 ><span class="cat-fill" :style="{ width: Math.min(100, count * 8) + '%' }"
               /></span>
