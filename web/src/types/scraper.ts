@@ -55,6 +55,14 @@ export interface ScraperSource {
   note: string
 }
 
+/** Cookie 真实登录态校验结果（探测平台登录态接口得出） */
+export interface CookieVerify {
+  state: 'valid' | 'invalid' | 'unknown' | 'no_file'
+  detail: string
+  checked_at: string
+  probe_url: string
+}
+
 /** 平台 Cookie 状态 */
 export interface CookieStatus {
   platform: string
@@ -62,6 +70,8 @@ export interface CookieStatus {
   age_hours: number
   valid: boolean
   hint: string
+  /** 最近一次真实校验结果；缺省/null 表示从未校验 */
+  verify?: CookieVerify | null
 }
 
 /** 采集专用 Chrome 连接状态 */

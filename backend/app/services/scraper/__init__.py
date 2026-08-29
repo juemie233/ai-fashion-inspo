@@ -30,6 +30,11 @@ from app.services.scraper.cookies import (
     get_cookie_status,
     import_cookies,
 )
+from app.services.scraper.cookie_verify import (
+    invalidate_verification,
+    peek_verification,
+    verify_platform_cookie,
+)
 from app.services.scraper.tasks import (
     cancel_scraper_task,
     clear_all_scraper_tasks,
@@ -81,6 +86,10 @@ __all__ = [
     "delete_cookies",
     "get_cookie_status",
     "import_cookies",
+    # cookie_verify
+    "invalidate_verification",
+    "peek_verification",
+    "verify_platform_cookie",
     # tasks
     "cancel_scraper_task",
     "clear_all_scraper_tasks",

@@ -150,6 +150,22 @@ async def create_scraper_task(db: AsyncSession, data: ScraperTaskCreate) -> Scra
                 },
             )
 
+    # Cookie 真实有效性前置校验：Cookie 文件存在且已确认失效时直接拦截，
+    # 避免任务跑到一半被登录墙打断（无文件不拦截——CDP Chrome 可能已有
+    # 登录态，采集端会等待扫码）。探测结果有缓存，正常路径零额外请求。
+    if data.platform in ("xiaohongshu", "douyin"):
+        from app.services.scraper.cookie_verify import verify_platform_cookie
+
+        verify = await verify_platform_cookie(data.platform)
+        if verify["state"] == "invalid":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"{data.platform} Cookie 已失效: {verify['detail']}",
+                    "hint": "请在「源配置」页重新导入 Cookie，或点击「校验」确认登录态后再创建任务",
+                },
+            )
+
     # 构建任务配置（保留向后兼容 + 新增字段）
     config = {
         "keywords": data.keywords,

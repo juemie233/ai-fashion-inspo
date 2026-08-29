@@ -88,8 +88,10 @@ const {
   cookiePlatform,
   cookieJsonInput,
   deletingCookie,
+  verifyingCookie,
   importCookie,
   deleteCookie,
+  verifyCookie,
 } = useScraperConfig()
 
 /** 点击 Cookie 导入：执行导入，成功则刷新全量数据（来源/任务/Cookie 状态） */
@@ -102,6 +104,12 @@ async function onCookieImport() {
 async function onDeleteCookie(platform: string) {
   const ok = await deleteCookie(platform)
   if (ok) loadAll()
+}
+
+/** 点击 Cookie 校验：执行真实登录态校验，刷新 Cookie 状态（展示校验徽标） */
+async function onVerifyCookie(platform: string) {
+  const state = await verifyCookie(platform)
+  if (state !== null) loadAll()
 }
 
 // 页签切换：持久化选择；切回任务页签时刷新（定时计划「立即执行」可能在别的页签新建了任务）
@@ -403,12 +411,14 @@ onUnmounted(() => {
           :tombstone-count="tombstoneCount"
           :cookie-statuses="cookieStatuses"
           :deleting-cookie="deletingCookie"
+          :verifying-cookie="verifyingCookie"
           v-model:show-tombstone="showTombstone"
           v-model:show-cookie-import="showingCookieImport"
           v-model:cookie-platform="cookiePlatform"
           v-model:cookie-json-input="cookieJsonInput"
           @import-cookie="onCookieImport"
           @delete-cookie="onDeleteCookie"
+          @verify-cookie="onVerifyCookie"
         />
       </a-tab-pane>
 

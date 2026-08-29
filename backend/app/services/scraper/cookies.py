@@ -35,11 +35,15 @@ async def get_cookie_status(platform: str = "xiaohongshu") -> dict:
             "size_bytes": 0,
             "modified": None,
             "valid": False,
+            "verify": None,
             "hint": f"尚未导入 {platform} 的 Cookie，采集可能无法获取完整数据",
         }
 
     stat = cookie_file.stat()
     age_hours = (datetime.now().timestamp() - stat.st_mtime) / 3600
+
+    # 附带最近一次真实登录态校验结果（无则 None，管理页显示「未验证」）
+    from app.services.scraper.cookie_verify import peek_verification
 
     return {
         "platform": platform,
@@ -48,6 +52,7 @@ async def get_cookie_status(platform: str = "xiaohongshu") -> dict:
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         "age_hours": round(age_hours, 1),
         "valid": age_hours < 72,  # Cookie 通常在 72 小时内有效
+        "verify": peek_verification(platform),
         "hint": "Cookie 可用" if age_hours < 72 else f"Cookie 已过期 {round(age_hours)} 小时，建议重新导入",
     }
 
@@ -66,6 +71,11 @@ async def import_cookies(payload: dict) -> dict:
 
     cookie_file.write_text(json.dumps(cookie_data, ensure_ascii=False, indent=2), encoding="utf-8")
     count = len(cookie_data) if isinstance(cookie_data, list) else 0
+
+    # 新 Cookie 写入后清掉旧校验缓存（下次校验按新文件内容探测）
+    from app.services.scraper.cookie_verify import invalidate_verification
+    invalidate_verification(platform)
+
     return {
         "message": f"已导入 {platform} Cookie",
         "platform": platform,
@@ -84,4 +94,8 @@ async def delete_cookies(platform: str) -> dict:
         raise HTTPException(status_code=404, detail="Cookie 文件不存在")
 
     cookie_file.unlink()
+
+    from app.services.scraper.cookie_verify import invalidate_verification
+    invalidate_verification(platform)
+
     return {"message": f"已删除 {platform} Cookie", "platform": platform}

@@ -129,6 +129,16 @@ async def cookie_status(platform: str = "xiaohongshu") -> dict:
     return await scraper_service.get_cookie_status(platform)
 
 
+@router.post("/cookie-verify/{platform}")
+async def cookie_verify(platform: str) -> dict:
+    """真实校验平台 Cookie 登录态（携带 Cookie 请求平台轻量登录态接口）。
+
+    强制探测（不走缓存）；无 Cookie 文件返回 no_file，网络/风控等
+    不确定因素返回 unknown，只有确定性证据才判 invalid。
+    """
+    return await scraper_service.verify_platform_cookie(platform, force=True)
+
+
 @router.post("/cookie-import")
 async def cookie_import(payload: dict) -> dict:
     """导入平台 Cookie（JSON 格式，自动校验平台合法性）。"""

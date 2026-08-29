@@ -329,10 +329,11 @@ def download_batch(
         if batch_conn is None or not backfill_ids:
             return
         now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        # priority 显式置 0（列 NOT NULL 且无 SQL 端默认值，原生 INSERT 必须携带）
         batch_conn.execute(
-            "INSERT INTO task_queue (type, status, progress, total, done, result, "
-            "max_retries, retry_count, created_at, updated_at) "
-            "VALUES ('vector_backfill', 'pending', 0, ?, 0, ?, 2, 0, ?, ?)",
+            "INSERT INTO task_queue (type, status, priority, progress, total, done, "
+            "result, max_retries, retry_count, created_at, updated_at) "
+            "VALUES ('vector_backfill', 'pending', 0, 0, ?, 0, ?, 2, 0, ?, ?)",
             (
                 len(backfill_ids),
                 json.dumps(

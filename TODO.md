@@ -7,7 +7,9 @@
 
 ## 中优先级
 
-### Cookie 真实有效性校验
+### Cookie 真实有效性校验（✅ 已完成 2026-08-29）
+
+**实现：** `backend/app/services/scraper/cookie_verify.py` — 前置检查（文件/会话字段）+ 真实探测（小红书 `edith.../api/sns/web/v2/user/me`、抖音 `douyin.../passport/account/info/v2/`），结果带 mtime+TTL 缓存；判定原则「只有确定性证据才判 invalid，网络/风控一律 unknown」。入口：`POST /api/scraper/cookie-verify/{platform}`（管理页「校验」按钮）、`cookie-status` 附带最近校验结果、`create_scraper_task` 前置校验拦截已失效 Cookie（无文件不拦截）。测试 `tests/test_cookie_verify.py` 21 例。
 
 **背景：** Cookie 有效性仅用「文件 mtime 距今 <72h」启发式判断（`backend/app/services/scraper/cookies.py:50`），不实际校验登录态，Cookie 失效后要等任务跑到一半报错才知道。
 
