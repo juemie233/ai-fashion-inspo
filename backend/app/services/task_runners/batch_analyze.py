@@ -19,7 +19,8 @@ from app.services.ai_service import analyze_image
 from app.services.task_runners.common import (
     PermanentTaskError,
     RecoverableTaskError,
-    _ANALYZE_CONCURRENCY,
+    _analyze_concurrency,
+    _broadcast_task_event,
     _chunked,
     _is_recoverable_error,
     utcnow,
@@ -32,7 +33,10 @@ MAX_MULTI_COMBINATIONS = 10
 
 
 async def create_batch_analyze_task(
-    db: AsyncSession, inspiration_ids: list[str], skipped: int = 0
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    skipped: int = 0,
+    priority: int = 0,
 ) -> TaskQueue:
     """创建「批量分析」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
 
@@ -40,6 +44,8 @@ async def create_batch_analyze_task(
         db: 数据库会话
         inspiration_ids: 待分析的素材 ID 列表（已过滤非图片/不存在）
         skipped: 被跳过的素材数量（不存在或非图片）
+        priority: 队列优先级（越大越先执行）；批量分析为后台批任务，默认 0。
+            未来单素材即时分析可传更高值插队
 
     返回:
         新建的任务记录
@@ -47,6 +53,7 @@ async def create_batch_analyze_task(
     task = TaskQueue(
         type="batch_analyze",
         status="pending",
+        priority=priority,
         progress=0,
         total=len(inspiration_ids),
         done=0,
@@ -228,15 +235,16 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     task.error = None
     await db.commit()
 
-    # 批内并发信号量：任务内部对多张图片的分析保持原有并发（不改成单张串行）
-    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+    # 批内并发信号量：并发度从配置读取（analyze_concurrency，.env 可配）
+    concurrency = _analyze_concurrency()
+    sem = asyncio.Semaphore(concurrency)
 
     success_count = 0
     failed_items: list[tuple[str, str | None]] = []
     recoverable_failed: list[str] = []
 
-    for start in range(0, len(items), _ANALYZE_CONCURRENCY):
-        chunk = items[start:start + _ANALYZE_CONCURRENCY]
+    for start in range(0, len(items), concurrency):
+        chunk = items[start:start + concurrency]
         results = await asyncio.gather(
             *(_analyze_one(sem, iid, fp) for iid, fp in chunk)
         )
@@ -252,6 +260,7 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         task.progress = round(task.done / task.total * 100) if task.total else 100
         task.updated_at = utcnow()
         await db.commit()
+        await _broadcast_task_event(task, "progress")
         logger.info(
             f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
@@ -292,6 +301,7 @@ async def create_multi_analyze_task(
     combinations: list[dict],
     apply_tags: bool = False,
     skipped: int = 0,
+    priority: int = 0,
 ) -> TaskQueue:
     """创建「多模型 × 多提示词组合分析」任务记录，返回任务对象。
 
@@ -302,6 +312,7 @@ async def create_multi_analyze_task(
             None（执行时按模型解析当前 Prompt）, "prompt_label": 展示用标签}
         apply_tags: 是否把标签合并到素材（组合分析默认 False：只写日志与快照）
         skipped: 被跳过的素材数量（不存在或非图片）
+        priority: 队列优先级（越大越先执行）；组合分析为后台批任务，默认 0
 
     返回:
         新建的任务记录
@@ -309,6 +320,7 @@ async def create_multi_analyze_task(
     task = TaskQueue(
         type="multi_analyze",
         status="pending",
+        priority=priority,
         progress=0,
         total=len(inspiration_ids) * len(combinations),
         done=0,
@@ -462,7 +474,8 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
     await db.commit()
 
     # 批内并发信号量：同一组合内多张图片并发分析，与单模型批量分析保持一致
-    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+    concurrency = _analyze_concurrency()
+    sem = asyncio.Semaphore(concurrency)
 
     success_count = 0
     failed_items: list[tuple[str, str, str | None]] = []  # (素材 ID, 模型名, 错误)
@@ -488,8 +501,8 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
                     f"{len(done_ids)}/{len(items)} 个素材已有成功记录"
                 )
 
-        for start in range(0, len(todo), _ANALYZE_CONCURRENCY):
-            chunk = todo[start:start + _ANALYZE_CONCURRENCY]
+        for start in range(0, len(todo), concurrency):
+            chunk = todo[start:start + concurrency]
             results = await asyncio.gather(
                 *(
                     _analyze_one_multi(sem, iid, fp, model_name, prompt, apply_tags)
@@ -509,6 +522,7 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
             task.progress = round(task.done / task.total * 100) if task.total else 100
             task.updated_at = utcnow()
             await db.commit()
+            await _broadcast_task_event(task, "progress")
 
         logger.info(
             f"组合分析进度: #{task.id} {task.progress}% "

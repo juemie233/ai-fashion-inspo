@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.task import TaskQueue
 from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut
+from app.services.task_runner import _broadcast_task_event
 from app.utils.time import utcnow
 from app.worker import _STALE_HEARTBEAT_THRESHOLD
 
@@ -120,8 +121,9 @@ async def cancel_task(
             raise HTTPException(
                 status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法取消"
             )
+        # 运行中取消达到终态：广播 cancelled 事件（安全入口，失败静默降级为轮询）
+        await _broadcast_task_event(task, "cancelled", error="用户手动取消")
         return {"message": "任务已取消", "task_id": task_id}
-
     raise HTTPException(
         status_code=400,
         detail=f"仅等待中的任务可以取消并删除（当前状态 {task.status}）",

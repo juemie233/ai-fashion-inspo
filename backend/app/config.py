@@ -104,6 +104,18 @@ class Settings(BaseSettings):
     # 如需恢复「到期自动清理」，在 .env 设置 TRASH_RETENTION_DAYS=30 等正整数。
     trash_retention_days: int = 0
 
+    # 任务队列并发（worker 为独立进程 python -m app.worker）
+    # worker 同时执行的任务数：值越大整体吞吐越高，但 Ollama 显存压力与
+    # SQLite 写锁竞争也随之增大（多任务同时写进度/心跳易触发 database is locked），
+    # 建议保持 1~2；仅多卡/强机器再尝试更大值。可在 .env 用 WORKER_CONCURRENCY 覆盖
+    worker_concurrency: int = 1
+    # 批内分析并发度：批量分析/组合分析/质量审核任务内部同时分析的素材数
+    # （原写死常量 _ANALYZE_CONCURRENCY=1）。注意 worker 与 API 进程
+    # （routers/ai_shared.py 的独立信号量=2）互不感知，最坏并发出路为
+    # worker_concurrency × 本项 + API 侧 2 路；显存吃紧时优先调小本项，建议 1~2。
+    # 可在 .env 用 ANALYZE_CONCURRENCY 覆盖
+    analyze_concurrency: int = 1
+
     # 负样本初筛器（阶段 2：CLIP 向量 + sklearn 轻量分类器）
     quality_classifier_threshold: float = 0.9  # 自动拒绝的置信度阈值（宁缺毋滥，低置信度仍走 VLM 复审）
 

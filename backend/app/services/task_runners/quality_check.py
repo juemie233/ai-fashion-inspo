@@ -18,7 +18,8 @@ from app.services.ai_service import check_image_quality
 from app.services.task_runners.common import (
     PermanentTaskError,
     RecoverableTaskError,
-    _ANALYZE_CONCURRENCY,
+    _analyze_concurrency,
+    _broadcast_task_event,
     _is_recoverable_error,
     utcnow,
 )
@@ -142,7 +143,8 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     task.error = None
     await db.commit()
 
-    sem = asyncio.Semaphore(_ANALYZE_CONCURRENCY)
+    concurrency = _analyze_concurrency()
+    sem = asyncio.Semaphore(concurrency)
     approved = 0
     rejected = 0
     pending = 0
@@ -150,8 +152,8 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     ai_generated = 0
     first_error: str | None = None  # 第一条失败原因，供任务级报错
 
-    for start in range(0, len(items), _ANALYZE_CONCURRENCY):
-        chunk = items[start:start + _ANALYZE_CONCURRENCY]
+    for start in range(0, len(items), concurrency):
+        chunk = items[start:start + concurrency]
         results = await asyncio.gather(
             *(
                 _quality_check_one(
@@ -178,6 +180,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         task.progress = round(task.done / task.total * 100) if task.total else 100
         task.updated_at = utcnow()
         await db.commit()
+        await _broadcast_task_event(task, "progress")
         logger.info(
             f"质量审核进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )

@@ -1,10 +1,12 @@
-"""任务队列 worker：独立进程，轮询 task_queue 表并串行执行任务。
+"""任务队列 worker：独立进程，轮询 task_queue 表并执行任务。
 
 启动方式（在 backend 目录下）：
     python -m app.worker
 
 与 API 服务共用同一个 SQLite 文件（WAL 模式已开启，读不阻塞写），
 worker 与 API 之间通过 task_queue 表解耦。
+任务认领按 priority DESC, id ASC（高优先级先执行，同优先级 FIFO）；
+同时执行的任务数由 settings.worker_concurrency 控制（默认 1 串行）。
 """
 
 import asyncio
@@ -16,6 +18,7 @@ from datetime import timedelta
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import OperationalError
 
+from app.config import settings
 from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.service_heartbeat import ServiceHeartbeat
@@ -24,6 +27,7 @@ from app.services.task_runner import (
     PermanentTaskError,
     RecoverableTaskError,
     TASK_HANDLERS,
+    _broadcast_task_event,
     _is_recoverable_error,
     _schedule_retry,
 )
@@ -52,6 +56,7 @@ async def _claim_next_task(worker_id: str) -> int | None:
     认领规则：
     - 仅认领 status = pending 的任务
     - 若设置了 next_retry_at（重试退避），需等到该时间之后
+    - 按 priority DESC, id ASC 排序：高优先级任务先执行，同优先级保持 FIFO
     - 通过「先查询 + 条件更新」保证多 worker 实例下不会重复执行同一任务
     - 认领时记录 worker_id 与心跳时间，供心跳租约判定（替代无条件重置）
     - 多 worker 竞争写锁时 SQLite 可能报 database is locked，静默跳过本轮（下一轮再试）
@@ -67,7 +72,7 @@ async def _claim_next_task(worker_id: str) -> int | None:
                     TaskQueue.next_retry_at <= now,
                 ),
             )
-            .order_by(TaskQueue.id.asc())
+            .order_by(TaskQueue.priority.desc(), TaskQueue.id.asc())
             .limit(1)
         )
         row = result.first()
@@ -100,7 +105,10 @@ async def _claim_next_task(worker_id: str) -> int | None:
 
 
 async def _run_task(task_id: int) -> None:
-    """串行执行单个任务，处理成功 / 自动重试 / 失败标记。
+    """执行单个任务，处理成功 / 自动重试 / 失败标记。
+
+    在独立 asyncio 协程中运行（并发数由 worker_concurrency 控制，默认 1），
+    多任务并发执行时各自持有独立数据库会话，互不影响。
 
     参数:
         task_id: 任务 ID
@@ -110,6 +118,9 @@ async def _run_task(task_id: int) -> None:
         if not task:
             logger.warning(f"任务不存在: #{task_id}，跳过")
             return
+
+        # 广播「开始执行」事件（安全入口，无 WS 连接时静默降级）
+        await _broadcast_task_event(task, "running")
 
         try:
             handler = TASK_HANDLERS.get(task.type)
@@ -122,14 +133,19 @@ async def _run_task(task_id: int) -> None:
                 logger.info(
                     f"任务状态在执行期间被外部改为 {task.status}，跳过 success 覆盖: #{task.id}"
                 )
+                # 外部已置为 cancelled：补一次终态广播（paused 不在事件契约内，不广播）
+                if task.status == "cancelled":
+                    await _broadcast_task_event(task, "cancelled", error=task.error)
                 return
             task.status = "success"
             task.progress = 100
             task.error = None
             task.next_retry_at = None
             await db.commit()
+            await _broadcast_task_event(task, "success")
             logger.info(f"任务完成: #{task.id} ({task.type})")
         except RecoverableTaskError as e:
+            # 退避重试回 pending：非终态，不广播（前端经轮询/进度事件感知）
             await _schedule_retry(db, task, str(e))
             await db.commit()
         except PermanentTaskError as e:
@@ -138,6 +154,7 @@ async def _run_task(task_id: int) -> None:
             task.next_retry_at = None
             logger.error(f"任务失败（永久错误，不重试）: #{task.id} ({task.type}): {e}")
             await db.commit()
+            await _broadcast_task_event(task, "failed", error=str(e))
         except Exception as e:
             msg = str(e) or e.__class__.__name__
             if _is_recoverable_error(msg):
@@ -148,6 +165,19 @@ async def _run_task(task_id: int) -> None:
                 task.next_retry_at = None
                 logger.error(f"任务失败: #{task.id} ({task.type}): {msg}")
             await db.commit()
+            # 仅真正进入 failed 终态时广播；重试回 pending 不广播
+            if task.status == "failed":
+                await _broadcast_task_event(task, "failed", error=msg)
+
+
+async def _run_task_safe(task_id: int) -> None:
+    """并发槽位中执行单个任务：捕获所有异常，防止执行协程崩溃拖垮主循环。"""
+    try:
+        await _run_task(task_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(f"任务执行协程异常退出: #{task_id}")
 
 
 async def _reset_stale_tasks() -> None:
@@ -234,15 +264,30 @@ async def _heartbeat_loop(worker_id: str) -> None:
 
 
 async def _worker_loop(worker_id: str) -> None:
-    """worker 主循环：轮询 pending 任务并串行执行（同一时刻只跑 1 个任务）。"""
+    """worker 主循环：按 worker_concurrency 并发认领并执行任务。
+
+    每个任务在独立 asyncio 协程中执行（互不阻塞），同时执行的任务数上限由
+    settings.worker_concurrency 控制（.env 可配，默认 1 保持串行行为）。
+    并发化后既有语义保持不变：
+    - 心跳租约：心跳循环按 claimed_by 统一刷新本实例认领的全部 running 任务；
+    - 暂停/恢复/取消：各执行器按任务状态自查，_run_task 终态前二次复查兜底；
+    - 崩溃恢复：进程退出后遗留 running 任务由 _reset_stale_tasks 按心跳超时重置；
+    - 多实例：原子认领（条件 UPDATE）保证同一任务不会被重复执行。
+    注意：并发调大会增加 Ollama 显存压力与 SQLite 写锁竞争，建议 1~2。
+    """
     logger.info(f"任务队列 worker 已启动（{worker_id}），开始轮询...")
+    running: set[asyncio.Task] = set()
     while True:
         try:
-            task_id = await _claim_next_task(worker_id)
-            if task_id is None:
-                await asyncio.sleep(_POLL_INTERVAL)
-                continue
-            await _run_task(task_id)
+            # 回收已完成的执行协程（异常已在 _run_task_safe 内记录，不会丢失槽位）
+            running = {t for t in running if not t.done()}
+            concurrency = max(1, int(settings.worker_concurrency))
+            while len(running) < concurrency:
+                task_id = await _claim_next_task(worker_id)
+                if task_id is None:
+                    break
+                running.add(asyncio.create_task(_run_task_safe(task_id)))
+            await asyncio.sleep(_POLL_INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception as e:

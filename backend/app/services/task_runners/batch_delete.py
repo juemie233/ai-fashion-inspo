@@ -13,7 +13,11 @@ from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
 from app.services.file_service import delete_files_counting
 from app.services.scraper_seen_service import seal_urls
-from app.services.task_runners.common import _delete_inspiration_vectors, utcnow
+from app.services.task_runners.common import (
+    _broadcast_task_event,
+    _delete_inspiration_vectors,
+    utcnow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,9 @@ async def create_batch_delete_task(
     task = TaskQueue(
         type="batch_delete",
         status="pending",
+        # 清理类任务设为低优先级：删文件/删记录不紧急，不应插队阻塞
+        # 批量分析等分析链路任务（worker 认领按 priority DESC, id ASC）
+        priority=-5,
         progress=0,
         total=len(inspiration_ids),
         done=0,
@@ -127,4 +134,6 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     task.progress = 100
     task.updated_at = utcnow()
     await db.commit()
+    # 本任务无逐项进度循环，仅在完成点广播一次进度事件（终态 success 由 worker 统一广播）
+    await _broadcast_task_event(task, "progress")
     logger.info(f"批量删除任务完成: #{task.id} 删除 {len(deleted_ids)} 个素材")

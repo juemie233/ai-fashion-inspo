@@ -28,7 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.task import PendingVectorBackfill, TaskQueue
-from app.services.task_runners.common import PermanentTaskError, _chunked, utcnow
+from app.services.task_runners.common import (
+    PermanentTaskError,
+    _broadcast_task_event,
+    _chunked,
+    utcnow,
+)
 from app.services.vector import store as vector_store
 from app.services.vector_service import rebuild_inspiration_vectors
 
@@ -297,6 +302,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             task.progress = round(idx / total * 100)
             task.updated_at = utcnow()
             await db.commit()
+            await _broadcast_task_event(task, "progress")
             logger.info(
                 f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
             )

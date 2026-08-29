@@ -14,6 +14,7 @@ class TaskOut(BaseModel):
     id: int
     type: str
     status: str  # pending/running/success/failed/cancelled
+    priority: int = 0  # 队列优先级：越大越先执行（默认 0，清理类任务 -5）
     progress: int  # 0~100
     total: int
     done: int

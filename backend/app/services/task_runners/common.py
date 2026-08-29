@@ -9,16 +9,58 @@ from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.task import TaskQueue
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-# 批内并发度：批量分析任务量大，固定为 1（逐张串行）对单卡最稳。
-# 注意：worker 进程与 API 进程（routers/ai_shared.py 的 _analysis_semaphore=2）各自持有
-# 独立的进程内信号量，互不感知、无法跨进程共享。串行后最坏情况为 1（worker）+ 2（API）= 3 路，
-# 相比原 2+2=4 路进一步降低单卡显存溢出风险。如需整体调整，请同步修改两处。
-_ANALYZE_CONCURRENCY = 1
+
+def _analyze_concurrency() -> int:
+    """读取批内分析并发度（settings.analyze_concurrency，最小 1）。
+
+    批量分析/组合分析/质量审核任务内部同时分析的素材数，.env 用
+    ANALYZE_CONCURRENCY 配置。运行时动态读取（而非导入期快照），
+    便于测试与配置热调；值越大 Ollama 显存压力越大，建议 1~2。
+    """
+    return max(1, int(settings.analyze_concurrency))
+
+
+# 兼容旧引用：task_runner / task_runners/__init__ 仍 re-export 该名字。
+# 仅为导入期快照；执行器内部已改为调用 _analyze_concurrency() 动态读取。
+_ANALYZE_CONCURRENCY = max(1, int(settings.analyze_concurrency))
+
+
+async def _broadcast_task_event(
+    task: TaskQueue, event: str, error: str | None = None
+) -> None:
+    """按事件契约构造任务事件并通过 task_events 安全广播（永不抛错）。
+
+    事件契约见 app/services/task_events.py 模块 docstring
+    （type="task_event"，event=running/progress/success/failed/cancelled）。
+    广播失败由 task_events 内部静默降级（worker 进程无 WS 时自动跳过），
+    绝不影响任务主流程。
+
+    参数:
+        task: 任务记录（字段已落库后调用，取当前 progress/done/total）
+        event: 事件类型（running/progress/success/failed/cancelled）
+        error: 失败原因（仅 failed 事件携带）
+    """
+    from app.services.task_events import broadcast_task_event
+
+    await broadcast_task_event(
+        {
+            "type": "task_event",
+            "event": event,
+            "task_id": task.id,
+            "task_type": task.type,
+            "status": task.status,
+            "progress": task.progress,
+            "done": task.done,
+            "total": task.total,
+            "error": error,
+        }
+    )
 
 
 class RecoverableTaskError(Exception):

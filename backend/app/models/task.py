@@ -31,6 +31,10 @@ class TaskQueue(Base):
     status: Mapped[str] = mapped_column(
         String(16), default="pending", index=True
     )  # pending/running/success/failed/cancelled
+    # 优先级：越大越先被 worker 认领（认领排序 priority DESC, id ASC）。
+    # 默认 0（批量分析/向量回填/质量审核等后台批任务）；未来用户手动触发的
+    # 单个即时任务可传更高值插队；批量清理类任务可为 -5（见 batch_delete）
+    priority: Mapped[int] = mapped_column(Integer, default=0, index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)  # 0~100
     total: Mapped[int] = mapped_column(Integer, default=0)  # 批处理总数量
     done: Mapped[int] = mapped_column(Integer, default=0)  # 已完成数量

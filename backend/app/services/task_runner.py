@@ -25,6 +25,8 @@ from app.services.task_runners.common import (
     PermanentTaskError,
     RecoverableTaskError,
     _ANALYZE_CONCURRENCY,
+    _analyze_concurrency,
+    _broadcast_task_event,
     _chunked,
     _delete_inspiration_vectors,
     _is_recoverable_error,
