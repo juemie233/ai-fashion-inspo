@@ -250,8 +250,21 @@ const columns = computed<TableColumnData[]>(() => [
     width: 70,
     render: ({ record }) => {
       const row = record as HistoryItem
-      const thumb = row.thumbnail_path || row.file_path
-      if (!thumb) return '-'
+      const isVideo = !!row.file_path && /\.(mp4|webm|mov|m4v)$/i.test(row.file_path)
+      // 视频素材只能用缩略图（file_path 是 mp4，<img> 加载必破图）；缺失时显示占位符
+      const thumb = row.thumbnail_path || (isVideo ? null : row.file_path)
+      if (!thumb) {
+        return h(
+          'div',
+          {
+            title: '视频素材（缩略图生成中或缺失）',
+            style:
+              'width:48px;height:72px;display:flex;align-items:center;justify-content:center;' +
+              'border-radius:4px;background:#f2f3f5;color:#86909c;font-size:18px',
+          },
+          ['🎬'],
+        )
+      }
       const full = previewImagePath(row)
       // 缩略图：单击跳转素材详情页；悬停时右下角显示眼睛按钮，点击全屏预览
       return h(

@@ -21,6 +21,11 @@ const emit = defineEmits<{
   (e: 'togglePause'): void
   (e: 'cancelQueueItem', inspirationId: string): void
 }>()
+
+/** 判断文件路径是否为视频（缩略图缺失时禁止把 mp4 当 <img> 加载） */
+function isVideoFile(path: string | null): boolean {
+  return !!path && /\.(mp4|webm|mov|m4v)$/i.test(path)
+}
 </script>
 
 <template>
@@ -34,7 +39,7 @@ const emit = defineEmits<{
         :stroke-width="24"
         style="flex: 1"
       />
-      
+
       <a-button
         type="primary"
         @click="emit('analyzeAll')"
@@ -147,6 +152,14 @@ const emit = defineEmits<{
             :src="getFileUrl(item.thumbnail_path)"
             style="width: 80px; height: 120px; object-fit: cover; border-radius: 4px"
           />
+          <!-- 视频素材：file_path 是 mp4，不能当 <img> 加载（必破图），显示占位符 -->
+          <div
+            v-else-if="isVideoFile(item.file_path)"
+            title="视频素材（缩略图生成中或缺失）"
+            class="video-placeholder"
+          >
+            🎬
+          </div>
           <img
             v-else-if="item.file_path"
             :src="getFileUrl(item.file_path)"
@@ -189,5 +202,17 @@ const emit = defineEmits<{
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #fafafa;
+}
+
+.video-placeholder {
+  width: 80px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: #f2f3f5;
+  color: #86909c;
+  font-size: 24px;
 }
 </style>
