@@ -157,19 +157,31 @@ async function completeExtensionTask(taskId, found, added) {
   }
 }
 
-// ── 右键单图采集 ──
+// ── 右键保存单张图片 ──
 
-/** 注册右键菜单：仅对 http/https 页面的图片上下文显示 */
+/** 确保右键菜单存在（幂等）：removeAll 后重建。
+ *
+ * 旧实现只在 onInstalled 注册且静默吞掉创建错误——一旦某次注册失败
+ * （如重复 ID 冲突、profile 异常），菜单就永久消失且无任何提示，
+ * 用户「找不到右键采集入口」。改为 Service Worker 每次唤醒都在顶层
+ * 执行本函数：contextMenus 注册本身持久化，removeAll+create 幂等安全。
+ */
+async function ensureContextMenu() {
+  await chrome.contextMenus.removeAll();
+  chrome.contextMenus.create({
+    id: CONTEXT_MENU_ID,
+    title: '保存此图片到素材库',
+    contexts: ['image'],
+    documentUrlPatterns: ['http://*/*', 'https://*/*'],
+  });
+}
+
+// Service Worker 每次唤醒都会执行顶层代码：无论是否触发过 onInstalled，
+// 菜单一定被重建，右键入口始终可用
+ensureContextMenu();
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create(
-    {
-      id: CONTEXT_MENU_ID,
-      title: '采集此图片到素材库',
-      contexts: ['image'],
-      documentUrlPatterns: ['http://*/*', 'https://*/*'],
-    },
-    () => chrome.runtime.lastError // 重复创建时静默忽略（onInstalled 可能多次触发）
-  );
+  ensureContextMenu();
 });
 
 chrome.contextMenus.onClicked.addListener((info) => {
@@ -177,13 +189,17 @@ chrome.contextMenus.onClicked.addListener((info) => {
   handleContextCapture(info);
 });
 
-/** 右键采集单张图片：提取图片 URL、识别平台，走现有上传流程，
+/** 右键保存单张图片：提取图片 URL、识别平台，走现有上传流程，
  *  结果用系统通知 + 工具栏角标提示（此路径没有 popup，需要独立反馈通道） */
 async function handleContextCapture(info) {
   const imageUrl = info.srcUrl || '';
   const pageUrl = info.pageUrl || '';
   if (!imageUrl.startsWith('http')) {
-    await notifyCaptureResult(false, '采集失败', '无法获取图片地址');
+    // data:/blob: 图片无法由服务端按 URL 下载，需明确提示而非笼统失败
+    const hint = imageUrl.startsWith('blob:')
+      ? '该图片是网页动态生成的（blob 地址），暂不支持保存'
+      : '无法获取图片地址（图片可能未加载完成）';
+    await notifyCaptureResult(false, '保存失败', hint);
     return;
   }
 
@@ -203,11 +219,11 @@ async function handleContextCapture(info) {
     const analyzed = await triggerAnalysis(result.data, settings);
     await notifyCaptureResult(
       true,
-      '采集成功',
-      analyzed ? '图片已入库，AI 分析已启动' : '图片已入库'
+      '保存成功',
+      analyzed ? '图片已入库，AI 分析已启动' : '图片已保存到素材库',
     );
   } else {
-    await notifyCaptureResult(false, '采集失败', result.error || '请确认后端已启动');
+    await notifyCaptureResult(false, '保存失败', result.error || '请确认后端已启动');
   }
 }
 
