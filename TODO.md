@@ -7,20 +7,6 @@
 
 ## 中优先级
 
-### Cookie 真实有效性校验（✅ 已完成 2026-08-29）
-
-**实现：** `backend/app/services/scraper/cookie_verify.py` — 前置检查（文件/会话字段）+ 真实探测（小红书 `edith.../api/sns/web/v2/user/me`、抖音 `douyin.../passport/account/info/v2/`），结果带 mtime+TTL 缓存；判定原则「只有确定性证据才判 invalid，网络/风控一律 unknown」。入口：`POST /api/scraper/cookie-verify/{platform}`（管理页「校验」按钮）、`cookie-status` 附带最近校验结果、`create_scraper_task` 前置校验拦截已失效 Cookie（无文件不拦截）。测试 `tests/test_cookie_verify.py` 21 例。
-
-**背景：** Cookie 有效性仅用「文件 mtime 距今 <72h」启发式判断（`backend/app/services/scraper/cookies.py:50`），不实际校验登录态，Cookie 失效后要等任务跑到一半报错才知道。
-
-**目标：**
-
-- Cookie 校验：任务启动前（或 Cookie 管理页手动触发）用轻量请求实际验证登录态；失效时在采集管理页 Cookie 区显式标记「已失效」并提醒，而非等任务报错
-
-**验收标准：**
-
-- 手动将 Cookie 文件替换为失效内容后，Cookie 管理页能显示「已失效」，新建任务前置校验能拦截并提示
-
 ### 【任务】移动端真机可用性：API 地址配置页 + 功能补齐
 
 **背景：** mobile（Expo RN，仅 14 个源文件）是「浏览+搜索+上传」最小闭环。后端地址硬编码 `10.0.2.2/localhost`（`mobile/services/api.ts`），初始化后不可改，也没有任何设置界面——真机用户第一步就被阻断（对比：浏览器插件反而有 apiUrl 设置面板）。搜索、详情、任务能力也远落后于 web 端。
@@ -35,23 +21,6 @@
 
 - 真机在设置页填入局域网 IP 并通过连接测试后，可完成浏览/搜索/上传/跟踪分析全流程
 - 上传后能在手机端看到任务进度与失败原因
-
-### 【任务】任务进度 WebSocket 推送替代轮询（x 已完成 2026-08-29）
-
-**实现：** 后端 `services/task_events.py` 安全广播入口固化事件契约（task_event：running/progress/success/failed/cancelled），worker 认领/终态、batch_analyze（含 multi_analyze）/vector_backfill/quality_check 进度点、batch_delete 完成点插入广播；前端 `composables/useWebSocket.ts` 全局单例客户端（断线指数退避重连 1s→30s、25s ping 保活、reconnected 通知消费方全量刷新补漏），任务管理页/管理后台任务/批量与组合分析/标签高级任务四处轮询点改为推送驱动即时更新，轮询保留为降级路径（WS 连接时放慢至 5~30s 兜底），终态副作用 settled 幂等防双触发；`wsConnected` 真实接入并在侧边栏底部展示连接状态。
-
-**验收标准：**
-
-- 任务运行中前端进度更新无轮询间隔延迟；断开后自动降级轮询，恢复后自动重连且状态不丢
-
-### 【任务】任务队列优先级与并发可配（x 已完成 2026-08-29）
-
-**实现：** `task_queue.priority` 列（迁移 i3j4k5l6m7n8，含索引与 server_default=0 兜底历史行），worker 认领改 `priority DESC, id ASC`，批量清理类任务固定 -5 低优先级；并发可配 `WORKER_CONCURRENCY`（worker 同时执行任务数）与 `ANALYZE_CONCURRENCY`（批内分析并发），均默认 1 保持现行为，.env 可调，显存/SQLite 写锁建议已写入 config 注释；可选项「任务历史归档/清理入口」未做。
-
-**验收标准：**
-
-- 批量分析运行中提交单个素材分析，后者先于批量队列剩余项执行
-- 修改配置后 worker 并发生效，SQLite 无持续性「database is locked」
 
 ## 低优先级
 
