@@ -1,11 +1,13 @@
 /** 任务中心域：聚合任务队列与采集任务，统一筛选、分页、轮询与操作。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
-import type { UnifiedTask } from '@/types/task'
+import type { UnifiedTask, TaskEventPayload } from '@/types/task'
+import { isTaskTerminalStatus } from '@/types/task'
 import { usePolling } from '@/composables/usePolling'
+import { subscribeWs, onWsReconnected, isWsConnected } from '@/composables/useWebSocket'
 import {
   normalizeQueueTask,
   normalizeScraperTask,
@@ -18,6 +20,8 @@ const PAGE_SIZE = 20
 
 /** 任务轮询间隔（毫秒）：有活动任务时每 5 秒刷新一次 */
 const POLL_INTERVAL_MS = 5000
+/** WS 已连接时的保底轮询间隔（毫秒）：推送驱动为主，低频轮询兜底 */
+const WS_CONNECTED_POLL_MS = 30000
 
 export function useTaskCenter() {
   const tasks = ref<UnifiedTask[]>([])
@@ -148,16 +152,59 @@ export function useTaskCenter() {
     }
   }
 
-  // ===== 轮询：有活动任务时每 5 秒刷新一次，无活动则自动停止 =====
+  // ===== 轮询：有活动任务时定期刷新，无活动则自动停止 =====
+  // WS 已连接时改为推送驱动（30s 低频轮询兜底），断开时回退 5s 轮询。
 
-  const { start: startPoll, stop: stopPoll } = usePolling({
-    intervalMs: POLL_INTERVAL_MS,
+  const {
+    start: startPoll,
+    stop: stopPoll,
+    running: pollRunning,
+  } = usePolling({
+    intervalMs: () => (isWsConnected() ? WS_CONNECTED_POLL_MS : POLL_INTERVAL_MS),
     immediate: false,
     callback: () => {
       if (hasActive.value) void loadTasks()
       else stopPoll()
     },
   })
+
+  // WS 连接状态切换后重启轮询，使新间隔生效（usePolling 的间隔在 start 时解析一次）
+  watch(isWsConnected, () => {
+    if (!pollRunning.value) return
+    stopPoll()
+    startPoll()
+  })
+
+  // ===== WebSocket 推送：任务事件驱动即时更新 =====
+
+  // 全量刷新去抖：终态/新任务事件触发，300ms 合并避免事件风暴下频繁拉取
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleReload(delay = 300) {
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null
+      void loadTasks()
+    }, delay)
+  }
+
+  subscribeWs('task_event', (raw) => {
+    const ev = raw as unknown as TaskEventPayload
+    if (!ev || typeof ev.task_id !== 'number') return
+    // 就地更新匹配的队列任务行（采集任务不走 task_event，仍靠自身轮询）
+    const row = tasks.value.find((t) => t.source === 'queue' && t.id === ev.task_id)
+    if (row) {
+      if (typeof ev.progress === 'number') row.progress = ev.progress
+      if (typeof ev.done === 'number') row.done = ev.done
+      if (typeof ev.total === 'number') row.total = ev.total
+      if (ev.status) row.status = ev.status
+      if (ev.event === 'failed' && ev.error) row.error = ev.error
+    }
+    // 列表里没有该任务（新建）或已到终态：全量刷新校正计数与页码
+    if (!row || isTaskTerminalStatus(ev.status)) scheduleReload()
+  })
+
+  // 断线重连成功：全量刷新一次，补齐断线期间漏掉的事件
+  onWsReconnected(() => scheduleReload(0))
 
   return {
     tasks,

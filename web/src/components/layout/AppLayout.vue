@@ -3,6 +3,7 @@
 
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import {
   IconImage,
   IconSearch,
@@ -18,8 +19,16 @@ import {
   IconBarChart,
 } from '@arco-design/web-vue/es/icon'
 import SchemaVersionBanner from './SchemaVersionBanner.vue'
+import { useUiStore } from '@/stores/ui'
+import { connectTaskWebSocket } from '@/composables/useWebSocket'
 
 const route = useRoute()
+const uiStore = useUiStore()
+const { wsConnected } = storeToRefs(uiStore)
+
+// 应用启动即建立全局 WebSocket 连接（任务进度推送；断线自动重连，
+// 断开期间各页面自动降级为轮询）
+connectTaskWebSocket()
 
 /** 详情类路由映射回所属一级菜单，保持侧边栏高亮（如人物详情 → 人物管理） */
 const menuKey = computed(() => {
@@ -59,6 +68,12 @@ const menuKey = computed(() => {
           <a-menu-item key="tasks"><IconList />任务管理</a-menu-item>
         </a-menu-item-group>
       </a-menu>
+
+      <!-- 实时推送连接状态：WS 已连接=推送驱动，断开=自动降级轮询 -->
+      <div class="ws-status" :class="wsConnected ? 'is-connected' : 'is-disconnected'">
+        <span class="ws-dot" />
+        {{ wsConnected ? '实时推送已连接' : '轮询模式' }}
+      </div>
     </aside>
 
     <!-- 主内容区 -->
@@ -85,6 +100,41 @@ const menuKey = computed(() => {
   flex-shrink: 0;
   border-right: 1px solid #e5e7eb;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 让菜单占据剩余空间，连接状态固定在侧边栏底部 */
+.sidebar :deep(.arco-menu) {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* WebSocket 连接状态指示（侧边栏底部） */
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: #86909c;
+  border-top: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.ws-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ws-status.is-connected .ws-dot {
+  background: #00b42a;
+}
+
+.ws-status.is-disconnected .ws-dot {
+  background: #c9cdd4;
 }
 
 /* 主内容区：占据剩余空间，可垂直滚动 */

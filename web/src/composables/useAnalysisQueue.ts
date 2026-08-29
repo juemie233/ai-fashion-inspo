@@ -6,6 +6,8 @@ import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
+import { subscribeWs, isWsConnected } from '@/composables/useWebSocket'
+import { isTaskTerminalStatus } from '@/types/task'
 import type {
   QueueStats,
   ActiveAnalysis,
@@ -28,6 +30,8 @@ const IDLE_POLL_MS = 15000
 const BATCH_POLL_MS = 1000
 /** 批量任务轮询失败重试间隔（毫秒） */
 const BATCH_RETRY_MS = 3000
+/** WS 已连接时的保底轮询间隔（毫秒）：单条分析完成由 ai_analysis_done 推送驱动 */
+const WS_CONNECTED_POLL_MS = 15000
 
 export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const { requestAndNotify, checkFailureAlert } = useNotification()
@@ -42,6 +46,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let batchPollTimer: ReturnType<typeof setTimeout> | null = null
   let batchPollSeq = 0 // 轮询代际号：stop/重启时自增，使在途请求返回后不再续排
+  let batchSettled = false // 批量任务终态幂等标记：WS 推送与轮询合流后副作用只执行一次
 
   /** 加载排队中素材 */
   async function loadPendingQueue() {
@@ -111,7 +116,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     } catch {}
   }
 
-  /** 开始轮询活动分析（按是否有活动任务自动调整间隔） */
+  /** 开始轮询活动分析（按是否有活动任务自动调整间隔；WS 已连接时推送驱动为主） */
   function startPolling() {
     loadActiveAnalyses()
     scheduleNextPoll()
@@ -119,7 +124,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
 
   function scheduleNextPoll() {
     const wasActive = Object.keys(activeAnalyses.value).length > 0
-    const interval = wasActive ? ACTIVE_POLL_MS : IDLE_POLL_MS
+    const interval = isWsConnected()
+      ? WS_CONNECTED_POLL_MS
+      : wasActive
+        ? ACTIVE_POLL_MS
+        : IDLE_POLL_MS
     pollTimer = setTimeout(async () => {
       await loadActiveAnalyses()
       loadPendingQueue()
@@ -205,9 +214,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 轮询批量分析任务状态（约 1 秒一次），完成后刷新分析结果 */
+  /** 轮询批量分析任务状态（约 1 秒一次；WS 已连接时 15 秒兜底），完成后刷新分析结果 */
   function startBatchPolling(taskId: number) {
     stopBatchPolling()
+    batchSettled = false
     const seq = batchPollSeq // 当前代际：stopBatchPolling 已自增，旧链的 seq 与之不符即失效
     let consecutiveFailures = 0 // 连续失败次数，失败时有限次重试而非直接停止
     const poll = async () => {
@@ -216,29 +226,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         const { data } = await apiClient.get<TaskInfo>(`/tasks/${taskId}`)
         if (seq !== batchPollSeq) return // 在途请求返回前已被停止，丢弃结果
         consecutiveFailures = 0
-        batchTask.value = data
-        if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
-          stopBatchPolling()
-          const label = data.type === 'multi_analyze' ? '组合分析' : '批量分析'
-          if (data.status === 'success') {
-            const successCount = data.result?.success_count
-            const failedCount = data.result?.failed_count
-            const detail =
-              successCount !== undefined && failedCount !== undefined
-                ? `成功 ${successCount}，失败 ${failedCount}`
-                : '已完成'
-            Message.success(`${label}完成：${detail}`)
-          } else if (data.status === 'failed') {
-            Message.error(`${label}失败：${data.error || '未知错误'}`)
-          } else {
-            Message.info(`${label}任务已取消`)
-          }
-          loadQueue()
-          options.loadHistory?.()
-          loadActiveAnalyses()
-          return
+        handleBatchSnapshot(data)
+        if (batchTask.value && !isTaskTerminalStatus(batchTask.value.status)) {
+          const interval = isWsConnected() ? WS_CONNECTED_POLL_MS : BATCH_POLL_MS
+          batchPollTimer = setTimeout(poll, interval)
         }
-        batchPollTimer = setTimeout(poll, BATCH_POLL_MS)
       } catch {
         if (seq !== batchPollSeq) return
         consecutiveFailures += 1
@@ -253,6 +245,36 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       }
     }
     poll()
+  }
+
+  /**
+   * 统一处理一次批量任务快照（轮询返回 / WS 推送合流后共用）：
+   * 更新 batchTask 并处理终态副作用（提示/刷新）。batchSettled 幂等标记保证
+   * 终态副作用只执行一次——WS 推送与轮询谁先到谁触发。
+   */
+  function handleBatchSnapshot(data: TaskInfo) {
+    batchTask.value = data
+    if (!isTaskTerminalStatus(data.status)) return
+    if (batchSettled) return
+    batchSettled = true
+    stopBatchPolling()
+    const label = data.type === 'multi_analyze' ? '组合分析' : '批量分析'
+    if (data.status === 'success') {
+      const successCount = data.result?.success_count
+      const failedCount = data.result?.failed_count
+      const detail =
+        successCount !== undefined && failedCount !== undefined
+          ? `成功 ${successCount}，失败 ${failedCount}`
+          : '已完成'
+      Message.success(`${label}完成：${detail}`)
+    } else if (data.status === 'failed') {
+      Message.error(`${label}失败：${data.error || '未知错误'}`)
+    } else {
+      Message.info(`${label}任务已取消`)
+    }
+    loadQueue()
+    options.loadHistory?.()
+    loadActiveAnalyses()
   }
 
   /** 取消排队中的批量分析任务 */
@@ -300,6 +322,36 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       /* 静默 */
     }
   }
+
+  // ── WebSocket 推送合流 ──
+  // 1) task_event：与批量轮询同源的任务事件，即时合并 batchTask 进度/状态
+  //    （settled 标记保证终态副作用只执行一次，与 useAdminTask 同一套模式）
+  subscribeWs('task_event', (raw) => {
+    const ev = raw as {
+      task_id?: number
+      status?: string
+      progress?: number
+      done?: number
+      total?: number
+      error?: string | null
+    }
+    const current = batchTask.value
+    if (!current || !ev || ev.task_id !== current.id || batchSettled) return
+    handleBatchSnapshot({
+      ...current,
+      status: ev.status ?? current.status,
+      progress: typeof ev.progress === 'number' ? ev.progress : current.progress,
+      done: typeof ev.done === 'number' ? ev.done : current.done,
+      total: typeof ev.total === 'number' ? ev.total : current.total,
+      error: ev.error !== undefined ? ev.error : current.error,
+    })
+  })
+  // 2) ai_analysis_done：单素材分析完成（API 进程内广播）→ 即时刷新队列与历史
+  subscribeWs('ai_analysis_done', () => {
+    loadActiveAnalyses()
+    loadQueue()
+    options.loadHistory?.()
+  })
 
   /** 单条失败记录重新加入分析队列 */
   async function retryAnalysis(id: string) {

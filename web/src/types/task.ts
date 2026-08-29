@@ -1,5 +1,23 @@
 /** 任务中心统一任务类型：归一化任务队列(TaskQueue)与采集任务(ScraperTask)两类来源。 */
 
+/** WebSocket 任务事件（后端 services/task_events.py 广播，契约只增不改） */
+export interface TaskEventPayload {
+  /** 生命周期阶段：running=开始执行，progress=进度更新，success/failed/cancelled=终态 */
+  event: 'running' | 'progress' | 'success' | 'failed' | 'cancelled'
+  task_id: number
+  task_type: string
+  status: string
+  progress?: number
+  done?: number
+  total?: number
+  error?: string | null
+}
+
+/** 任务是否处于终态（与后端任务状态机一致） */
+export function isTaskTerminalStatus(status: string): boolean {
+  return status === 'success' || status === 'failed' || status === 'cancelled'
+}
+
 /** 任务来源：queue=任务队列，scraper=采集任务 */
 export type TaskSource = 'queue' | 'scraper'
 
