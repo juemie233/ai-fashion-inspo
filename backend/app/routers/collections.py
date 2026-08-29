@@ -36,8 +36,16 @@ class SmartQueryJSON(BaseModel):
     end_date: str | None = None  # 上传日期上限（YYYY-MM-DD）
 
     def to_storage(self) -> dict[str, Any]:
-        """转为入库存储结构（None 字段剔除，语义与 null 等价）。"""
-        return {k: v for k, v in self.model_dump().items() if v is not None}
+        """转为入库存储结构：剔除 None 与空默认值（空列表、默认 and 语义），
+        保证 query_json 只保留用户显式设置的筛选条件。"""
+        data = self.model_dump()
+        if not data.get("tag_ids"):
+            data.pop("tag_ids", None)
+        if not data.get("source_types"):
+            data.pop("source_types", None)
+        if data.get("tag_mode") == "and":
+            data.pop("tag_mode", None)
+        return {k: v for k, v in data.items() if v is not None}
 
 
 class CollectionCreate(BaseModel):

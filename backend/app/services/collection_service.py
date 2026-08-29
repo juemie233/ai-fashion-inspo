@@ -77,7 +77,7 @@ async def evaluate_smart_collection(
 # ── 手动合集成员查询 ──
 
 
-async def _manual_content_query(collection_id: int):
+def _manual_content_query(collection_id: int):
     """构建手动合集内容查询：成员按 position 升序，排除垃圾桶素材。"""
     return (
         select(Inspiration)
@@ -422,7 +422,7 @@ async def reorder_collections(db: AsyncSession, ordered_ids: list[int]) -> dict:
     包含不存在的合集 ID 时返回 404。
     """
     collections = (
-        await db.execute(select(Collection)).scalars().all()
+        (await db.execute(select(Collection))).scalars().all()
     )
     collection_map = {c.id: c for c in collections}
 

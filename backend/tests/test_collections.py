@@ -42,6 +42,11 @@ def get_content(client, collection_id, **params):
     return [i["id"] for i in data["items"]], data["total"]
 
 
+def delete_json(client, url, payload):
+    """TestClient.delete 不支持 json kwarg，统一走 request("DELETE")。"""
+    return client.request("DELETE", url, json=payload)
+
+
 def tag_id(client, name):
     """从分组标签列表中按名称查找标签 ID。"""
     for group in client.get("/api/tags").json():
@@ -94,10 +99,10 @@ def test_batch_add_dedup(client, upload):
     # 重复加入全部跳过，不存在的素材计入 not_found
     r = client.post(f"/api/collections/{c['id']}/inspirations",
                     json={"inspiration_ids": [a, "nonexistent-id"]})
-    assert r.json() == {"added": 0, "skipped": 2, "not_found": 1}
+    assert r.json() == {"added": 0, "skipped": 1, "not_found": 1}
 
     ids, total = get_content(client, c["id"])
-    assert sorted(ids) == [a, b]
+    assert sorted(ids) == sorted([a, b])
     assert total == 2
 
 
@@ -266,7 +271,7 @@ def test_smart_collection_tag_filters(client, upload):
         client, "红裙OR", query_json={"tag_ids": [red, dress], "tag_mode": "or"}
     )
     ids, total = get_content(client, col_or["id"])
-    assert sorted(ids) == [a, b] and total == 2
+    assert sorted(ids) == sorted([a, b]) and total == 2
 
     col_and = create_collection(
         client, "红裙AND", query_json={"tag_ids": [red, dress], "tag_mode": "and"}
@@ -305,7 +310,7 @@ def test_smart_collection_member_api_rejected(client, upload):
 
     r = client.post(f"{base}/inspirations", json={"inspiration_ids": ["x"]})
     assert r.status_code == 400
-    r = client.delete(f"{base}/inspirations", json={"inspiration_ids": ["x"]})
+    r = delete_json(client, f"{base}/inspirations", {"inspiration_ids": ["x"]})
     assert r.status_code == 400
     r = client.patch(f"{base}/items/order", json={"ordered_ids": ["x"]})
     assert r.status_code == 400
