@@ -11,6 +11,7 @@ import {
   moveToTrash as moveToTrashApi,
   type InspirationOut,
   type InspirationDetailOut,
+  type TrashReason,
 } from '@/api/inspirations'
 
 export const useInspirationsStore = defineStore('inspirations', () => {
@@ -32,24 +33,26 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   let _lastParams: Record<string, any> = {}
 
   /** 加载素材列表 */
-  async function load(params: {
-    page?: number
-    size?: number
-    source_type?: string
-    is_favorite?: boolean
-    media_type?: string
-    analysis_status?: string
-    tag_status?: string
-    quality_status?: string
-    is_ai_generated?: boolean
-    include_tags?: string
-    dominant_color?: string
-    date_from?: string
-    date_to?: string
-    ids?: string
-    rating_min?: number
-    sort?: string
-  } = {}) {
+  async function load(
+    params: {
+      page?: number
+      size?: number
+      source_type?: string
+      is_favorite?: boolean
+      media_type?: string
+      analysis_status?: string
+      tag_status?: string
+      quality_status?: string
+      is_ai_generated?: boolean
+      include_tags?: string
+      dominant_color?: string
+      date_from?: string
+      date_to?: string
+      ids?: string
+      rating_min?: number
+      sort?: string
+    } = {},
+  ) {
     loading.value = true
     if (params.size) size.value = params.size
     _lastParams = params
@@ -134,11 +137,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
   }
 
   /** 上传新素材（signal 用于取消正在进行的上传请求） */
-  async function upload(
-    formData: FormData,
-    onProgress?: (e: any) => void,
-    signal?: AbortSignal,
-  ) {
+  async function upload(formData: FormData, onProgress?: (e: any) => void, signal?: AbortSignal) {
     const item = await uploadInspiration(formData, onProgress, signal)
     items.value.unshift(item)
     total.value++
@@ -175,9 +174,9 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     }
   }
 
-  /** 移入垃圾桶（软删除，可恢复） */
-  async function remove(id: string) {
-    await moveToTrashApi(id)
+  /** 移入垃圾桶（软删除，可恢复）；reason 缺省时由后端推断为「不喜欢」 */
+  async function remove(id: string, reason?: TrashReason) {
+    await moveToTrashApi(id, reason)
     items.value = items.value.filter((i) => i.id !== id)
     total.value--
   }

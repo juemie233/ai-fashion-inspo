@@ -6,6 +6,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message, Notification } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
+import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import CollectionPickerModal from '@/components/collection/CollectionPickerModal.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
@@ -17,6 +18,7 @@ import {
   updateQualityStatus,
   fetchDominantColors,
   type DominantColorItem,
+  type TrashReason,
 } from '@/api/inspirations'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import {
@@ -413,16 +415,45 @@ function handleAddToCollection(_collectionId: number, _added: number) {
 
 // ── 删除/收藏 ──
 
-async function handleDelete(id: string) {
+// 移入垃圾桶前必选原因：单个删除与批量删除共用一个弹窗
+const trashModalOpen = ref(false)
+const pendingTrashIds = ref<string[]>([])
+
+function handleDelete(id: string) {
+  pendingTrashIds.value = [id]
+  trashModalOpen.value = true
+}
+
+/** 弹窗确认：按所选原因移入垃圾桶 */
+async function confirmTrash(reason: TrashReason) {
+  trashModalOpen.value = false
+  const ids = [...pendingTrashIds.value]
+  pendingTrashIds.value = []
+  if (ids.length === 0) return
   try {
-    await store.remove(id)
-    Message.success('已移入垃圾桶')
-    if (store.items.length === 0 && currentPage.value > 1) {
-      loadPage(currentPage.value - 1)
+    if (ids.length === 1) {
+      await store.remove(ids[0], reason)
+      Message.success('已移入垃圾桶')
+      if (store.items.length === 0 && currentPage.value > 1) {
+        loadPage(currentPage.value - 1)
+      }
+    } else {
+      const trashed = await batchTrash(reason)
+      if (trashed > 0) {
+        exitBatchMode()
+        loadPage(currentPage.value)
+      }
     }
   } catch {
     Message.error('操作失败')
   }
+}
+
+/** 批量移入垃圾桶：打开原因选择弹窗（确认后走 confirmTrash） */
+function handleBatchTrash() {
+  pendingTrashIds.value = [...selectedIds.value]
+  if (pendingTrashIds.value.length === 0) return
+  trashModalOpen.value = true
 }
 
 async function handleToggleFavorite(id: string) {
@@ -512,15 +543,6 @@ async function handleBatchFavorite(isFavorite: boolean) {
       if (selectedIds.value.has(item.id)) item.is_favorite = isFavorite
     }
     exitBatchMode()
-  }
-}
-
-/** 批量移入垃圾桶：成功后刷新列表 */
-async function handleBatchTrash() {
-  const trashed = await batchTrash()
-  if (trashed > 0) {
-    exitBatchMode()
-    loadPage(currentPage.value)
   }
 }
 
@@ -782,6 +804,13 @@ loadPage(currentPage.value)
       v-model:visible="collectionPickerOpen"
       :inspiration-ids="[...selectedIds]"
       @added="handleAddToCollection"
+    />
+
+    <!-- 移入垃圾桶原因选择（单个/批量共用，必选） -->
+    <TrashReasonModal
+      v-model:visible="trashModalOpen"
+      :count="pendingTrashIds.length"
+      @confirm="confirmTrash"
     />
 
     <!-- 保存为智能合集（命名弹窗） -->

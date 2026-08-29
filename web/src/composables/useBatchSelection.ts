@@ -9,10 +9,10 @@ import {
   batchLinkBloggers as batchLinkBloggersApi,
   batchUpdateInspirations,
   type BatchUpdateFields,
+  type TrashReason,
 } from '@/api/inspirations'
 
 export function useBatchSelection() {
-  
   /** 是否处于批量选择模式 */
   const batchMode = ref(false)
   /** 已勾选的素材 ID 集合（整体替换保证响应式） */
@@ -58,12 +58,12 @@ export function useBatchSelection() {
     }
   }
 
-  /** 批量移入垃圾桶，返回实际删除数 */
-  async function batchTrash(): Promise<number> {
+  /** 批量移入垃圾桶，返回实际删除数；reason 为删除原因（素材库入口必选） */
+  async function batchTrash(reason?: TrashReason): Promise<number> {
     const ids = [...selectedIds.value]
     if (ids.length === 0) return 0
     try {
-      const { trashed, skipped } = await batchTrashApi(ids)
+      const { trashed, skipped } = await batchTrashApi(ids, reason)
       const parts = [`已移入垃圾桶 ${trashed} 个`]
       if (skipped > 0) parts.push(`跳过 ${skipped} 个`)
       Message.success(parts.join('，'))
