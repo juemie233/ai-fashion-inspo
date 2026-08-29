@@ -188,8 +188,10 @@ import os
 import sys
 
 dest, storage_src, out_file, stats_file = sys.argv[1:5]
+# lancedb 不在此列：改由「写入锁内一致性快照」单独处理（见步骤 2.2），
+# 其文件数在任务写入期间持续增长，纳入热写入收敛循环永远追不上
 REQUIRED = ("images", "person_photos", "trash", "thumbnails",
-            "person_thumbnails", "lancedb")
+            "person_thumbnails")
 
 def stat_dir(path: str) -> dict | None:
     if not os.path.isdir(path):
@@ -268,6 +270,70 @@ PYEOF
   sleep 3
 done
 rm -f "$MISMATCH_LIST"
+
+# ── 2.2 lancedb 一致性快照：在「向量写入锁」（backend/app/services/vector/store.py
+#    的 _vector_write_lock，所有向量写入方共享的跨进程文件锁）内复制并冻结统计，
+#    保证快照不含半提交写入；锁内复制+比对必然一轮收敛（源端被锁暂停变更）。
+#    其源端统计冻结到 .lancedb_stats.json，步骤 5 以它为校验基准（时点快照语义）。
+echo ">>> [2.2/5] lancedb 一致性快照（向量写入锁内）..."
+LANCE_STATS="$DEST/.lancedb_stats.json"
+python - "$DEST" "$LANCE_STATS" <<'INNER_EOF'
+import json
+import os
+import shutil
+import sys
+
+sys.path.insert(0, "backend")
+
+dest, stats_file = sys.argv[1:3]
+src = os.path.join("backend", "storage", "lancedb")
+dst = os.path.join(dest, "storage", "lancedb")
+
+if not os.path.isdir(src):
+    print("  源端无 lancedb/ 目录（向量功能未启用），跳过")
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump(None, f)
+    sys.exit(0)
+
+from app.services.vector.store import _vector_write_lock
+
+
+def stat_dir(path: str) -> dict:
+    fc = tb = 0
+    for root, _, files in os.walk(path):
+        for fn in files:
+            fp = os.path.join(root, fn)
+            try:
+                tb += os.path.getsize(fp)
+                fc += 1
+            except OSError:
+                pass
+    return {"files": fc, "bytes": tb}
+
+
+with _vector_write_lock():
+    # 锁内：所有向量写入方（API/worker）都会被挡在锁外，复制期间源端不变
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    s = stat_dir(src)
+    t = stat_dir(dst)
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump(s, f)
+
+if s != t:
+    print(f"  !!! 锁内复制后仍不一致：源={s} 目标={t}（异常，请检查磁盘）")
+    sys.exit(3)
+print(f"  lancedb 快照完成（{s['files']} 个文件，锁内一致）")
+INNER_EOF
+RC=$?
+if [ "$RC" -eq 0 ]; then
+  :
+elif [ "$RC" -eq 3 ]; then
+  fail "lancedb 锁内快照不一致（异常场景）"
+else
+  fail "lancedb 快照失败（python 退出码 $RC；注意：锁获取需 backend 依赖可导入）"
+fi
 echo ""
 
 # ── 3. 运行时配置（不进 git 的文件，保持原相对路径，便于 restore 直接拷回）──
@@ -341,8 +407,10 @@ else:
 # 5.3 必备目录：与「冻结源端清单」比对（而非校验时刻的实时源端）。
 # 备份是时点快照：以复制收敛完成时刻的源端统计为基准，之后后台任务
 # 继续写入源端属正常现象，不应判备份失败（热写入收敛见步骤 2.1）。
+# lancedb 不在此列：改由「写入锁内一致性快照」单独处理（见步骤 2.2），
+# 其文件数在任务写入期间持续增长，纳入热写入收敛循环永远追不上
 REQUIRED = ("images", "person_photos", "trash", "thumbnails",
-            "person_thumbnails", "lancedb")
+            "person_thumbnails")
 
 def stat_dir(path: str) -> dict | None:
     if not os.path.isdir(path):
@@ -395,6 +463,28 @@ else:
     # 冻结清单已并入 manifest，清理临时文件
     try:
         os.remove(frozen_path)
+    except OSError:
+        pass
+
+# 5.4 lancedb：以「写入锁内快照时刻」冻结的源端统计为基准校验目标副本
+lance_stats_path = os.path.join(dest, ".lancedb_stats.json")
+if os.path.exists(lance_stats_path):
+    try:
+        with open(lance_stats_path, encoding="utf-8") as f:
+            lance_frozen = json.load(f)
+    except (OSError, ValueError):
+        lance_frozen = None
+    if lance_frozen is not None:
+        t = stat_dir(os.path.join(storage_dest, "lancedb"))
+        dir_stats["lancedb"] = {"source": lance_frozen, "dest": t}
+        if t is None:
+            errors.append("目标缺少 lancedb/")
+        elif lance_frozen["files"] != t["files"] or lance_frozen["bytes"] != t["bytes"]:
+            errors.append(
+                f"lancedb/ 文件数或字节数不一致：源={lance_frozen} 目标={t}"
+            )
+    try:
+        os.remove(lance_stats_path)
     except OSError:
         pass
 

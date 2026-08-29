@@ -81,19 +81,23 @@ def _fake_httpx_image_download(monkeypatch, img_bytes: bytes):
 
 
 def _fake_rebuild_vectors_success(monkeypatch):
-    """mock rebuild_inspiration_vectors：所有素材向量生成成功（不依赖真实 CLIP）。
+    """mock 向量构造接缝 _build_material_vectors：所有素材向量生成成功（不依赖真实 CLIP）。
 
-    同时 mock 落库验证的读回（真实 LanceDB 在测试临时目录中为空表）。
+    同时 mock 批量写入（不触真实 LanceDB）与落库验证的读回。
     """
     from app.services.task_runners import vector_backfill as vb_module
 
-    async def _fake(db, inspiration_id: str) -> dict:
-        return {"text": True, "image": True}
+    async def _fake(insp) -> tuple[list[float], list[float]]:
+        return [0.1] * 8, [0.2] * 8
+
+    async def _fake_batch_upsert(kind: str, items):
+        return len(items)
 
     async def _fake_get_vector(kind: str, inspiration_id: str):
         return [0.1] * (384 if kind == "text" else 512)
 
-    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", _fake)
+    monkeypatch.setattr(vb_module, "_build_material_vectors", _fake)
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", _fake_batch_upsert)
     monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
 
 

@@ -496,6 +496,47 @@ async def delete_inspiration_vectors(inspiration_id: str) -> None:
     await delete_inspiration_vectors_batch([inspiration_id])
 
 
+async def compact_vectors() -> dict[str, bool]:
+    """压缩两张向量表：合并碎片文件并清理被取代的旧版本（减少文件数）。
+
+    背景：每次单条 upsert 都会生成新的 manifest + 数据文件，文本向量全量
+    重建这类「逐条写 N 条」的操作会让目录膨胀到数千个小文件，拖慢备份与
+    目录遍历。optimize 合并数据文件，cleanup_old_versions 删除旧版本文件。
+    写入方无需感知；调用方应持有 _vector_write_lock（本函数内部加锁）。
+
+    返回:
+        {"text": bool, "image": bool}，True 表示该表压缩成功
+    """
+    from datetime import timedelta
+
+    def _compact_sync() -> dict[str, bool]:
+        stats: dict[str, bool] = {}
+        for kind in ("text", "image"):
+            try:
+                table = _table(kind)
+                table.optimize()
+                try:
+                    # older_than=0：强制清理所有被取代的旧版本文件（仅保留当前版本）。
+                    # 需要 pylance 依赖（pip install pylance），缺失时仅告警跳过——
+                    # 不影响备份正确性（备份走写入锁内一致性快照）
+                    table.cleanup_old_versions(older_than=timedelta(0))
+                except ImportError:
+                    logger.warning(
+                        f"清理旧版本跳过 ({kind})：缺少 pylance 依赖，"
+                        "请执行 pip install pylance 后重试"
+                    )
+                except Exception as e:
+                    logger.debug(f"清理旧版本跳过 ({kind}): {e}")
+                stats[kind] = True
+            except Exception as e:
+                logger.warning(f"向量表压缩失败 ({kind}): {e}")
+                stats[kind] = False
+        return stats
+
+    with _vector_write_lock():
+        return await asyncio.to_thread(_compact_sync)
+
+
 def get_status() -> dict:
     """返回 LanceDB 能力状态（供 /api/search/vector/status 使用）。"""
     if not is_lancedb_available():

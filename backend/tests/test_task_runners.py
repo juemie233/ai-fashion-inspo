@@ -171,15 +171,30 @@ async def test_quality_check_partial_failed_still_success(client, upload, ollama
 
 
 class _FakeRebuildVectors:
-    """mock rebuild_inspiration_vectors：fail_ids 中的素材返回全部失败，其余成功。"""
+    """mock _build_material_vectors：fail_ids 中的素材返回全部失败，其余成功。
+
+    （向量回填执行器已改为批量写入，接缝从 rebuild_inspiration_vectors
+    换成 _build_material_vectors + vector_store.batch_upsert_vectors。）
+    """
 
     def __init__(self) -> None:
         self.fail_ids: set[str] = set()
 
-    async def __call__(self, db, inspiration_id: str) -> dict:
-        if inspiration_id in self.fail_ids:
-            return {"text": False, "image": False}
-        return {"text": True, "image": True}
+    async def __call__(self, insp) -> tuple[list[float] | None, list[float] | None]:
+        if insp.id in self.fail_ids:
+            return None, None
+        return [0.1, 0.2], [0.3, 0.4]
+
+
+def _patch_backfill_fakes(monkeypatch, fake: "_FakeRebuildVectors") -> None:
+    """统一打桩：向量构造走 fake，批量写入/读回走内存假实现（维度与配置无关）。"""
+    monkeypatch.setattr(vb_module, "_build_material_vectors", fake)
+
+    async def fake_batch_upsert(kind: str, items):
+        return len(items)
+
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
 
 
 async def _fake_get_vector(kind: str, inspiration_id: str):
@@ -211,7 +226,7 @@ async def test_vector_backfill_all_image_failed_raises(client, upload, monkeypat
 
     fake = _FakeRebuildVectors()
     fake.fail_ids = {a, b}
-    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+    _patch_backfill_fakes(monkeypatch, fake)
 
     async with async_session() as db:
         task = await _make_backfill_task(db, [a, b])
@@ -231,9 +246,7 @@ async def test_vector_backfill_partial_success(client, upload, monkeypatch):
 
     fake = _FakeRebuildVectors()
     fake.fail_ids = {b}
-    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
-    # 落库验证：声称写入的向量可读回（真实 LanceDB 在测试临时目录中为空表）
-    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+    _patch_backfill_fakes(monkeypatch, fake)
 
     async with async_session() as db:
         task = await _make_backfill_task(db, [a, b])
@@ -253,7 +266,7 @@ async def test_vector_backfill_verify_persisted_fails(client, upload, monkeypatc
     a = upload().json()["id"]
 
     fake = _FakeRebuildVectors()  # 全部成功
-    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
+    _patch_backfill_fakes(monkeypatch, fake)
     # 读回全 None：模拟写入未持久化（目录被删/覆盖后重建为空）
     async def _missing(_kind: str, _inspiration_id: str):
         return None
@@ -298,8 +311,7 @@ async def test_vector_backfill_rerun_idempotent(client, upload, monkeypatch):
     b = upload().json()["id"]
 
     fake = _FakeRebuildVectors()  # fail_ids 为空 → 全部成功
-    monkeypatch.setattr(vb_module, "rebuild_inspiration_vectors", fake)
-    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+    _patch_backfill_fakes(monkeypatch, fake)
 
     async with async_session() as db:
         task = await _make_backfill_task(db, [a, b])

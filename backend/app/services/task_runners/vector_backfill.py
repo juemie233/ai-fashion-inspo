@@ -26,6 +26,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.inspiration import Inspiration
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.services.task_runners.common import (
@@ -233,6 +234,62 @@ async def purge_small_backfill_tasks(db: AsyncSession) -> int:
     return result.rowcount
 
 
+# 批量落盘阈值：攒够这么多条向量才向 LanceDB 写一次（批量 add 语义见
+# execute_vector_backfill 内注释）
+_LANCE_FLUSH_SIZE = 200
+
+
+async def _build_material_vectors(insp: Inspiration) -> tuple[list[float] | None, list[float] | None]:
+    """构造单个素材的 (文本向量, 图像向量)；测试通过 mock 本函数控制成败。
+
+    文本向量：无语义内容（无标签/作者/caption/主色）时为 None；
+    图像向量：仅图片素材生成（文件缺失或 CLIP 不可用时为 None）。
+    """
+    from app.services.vector.embedding import (
+        build_inspiration_text,
+        generate_image_embedding,
+        generate_text_embedding,
+    )
+
+    text = build_inspiration_text(insp)
+    text_vec = await generate_text_embedding(text) if text else None
+    image_vec: list[float] | None = None
+    if insp.media_type == "image":
+        full_path = settings.storage_root / insp.file_path
+        if full_path.exists():
+            image_vec = await generate_image_embedding(file_path=str(full_path))
+    return text_vec, image_vec
+
+
+async def _flush_vector_batches(
+    pending_text: list[tuple[str, list[float]]],
+    pending_image: list[tuple[str, list[float]]],
+) -> tuple[int, list[str], int, list[str]]:
+    """把攒批的文本/图像向量批量写入 LanceDB，返回 (文本成功数, 文本 ID, 图像成功数, 图像 ID)。
+
+    写入行数与攒批数不符时记 warning（跳过的为维度不匹配/含 NaN 等非法向量）。
+    幂等：batch_upsert 先删同批旧向量再插入，重复任务不会产生重复向量。
+    """
+    text_ids: list[str] = []
+    image_ids: list[str] = []
+    text_ok = image_ok = 0
+    if pending_text:
+        written = await vector_store.batch_upsert_vectors("text", pending_text)
+        text_ok = written
+        text_ids = [iid for iid, _ in pending_text]
+        if written != len(pending_text):
+            logger.warning(f"文本向量批量写入 {written}/{len(pending_text)} 条")
+        pending_text.clear()
+    if pending_image:
+        written = await vector_store.batch_upsert_vectors("image", pending_image)
+        image_ok = written
+        image_ids = [iid for iid, _ in pending_image]
+        if written != len(pending_image):
+            logger.warning(f"图像向量批量写入 {written}/{len(pending_image)} 条")
+        pending_image.clear()
+    return text_ok, text_ids, image_ok, image_ids
+
+
 async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     """执行向量回填任务：逐条重建素材的文本/图像向量并维护进度。
 
@@ -269,32 +326,42 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     text_ids: list[str] = []
     image_ids: list[str] = []
 
+    # 批量写入：向量攒够 _LANCE_FLUSH_SIZE 条才落盘一次。LanceDB 每次单条
+    # upsert 都会生成新的 manifest + 数据文件，全量重建（数千条逐条写）会让
+    # 目录膨胀出数千个小文件且文件数持续增长，导致备份永远无法收敛
+    # （2026-08-29 备份连续 5 轮增量修复失败的根因）。批量 add 只产生极少数
+    # fragment/manifest，与 backfill_all_vectors 的批量写入语义一致。
+    pending_text: list[tuple[str, list[float]]] = []  # (素材 ID, 文本向量)
+    pending_image: list[tuple[str, list[float]]] = []
+
     total = len(inspiration_ids)
     for idx, insp_id in enumerate(inspiration_ids, start=1):
         insp = await db.get(Inspiration, insp_id)
         is_image = insp is not None and insp.media_type == "image"
-        if text_only:
-            from app.services.vector.similarity import rebuild_text_vector
 
-            text_ok = await rebuild_text_vector(db, insp_id)
-            stats = {"text": text_ok, "image": False}
-        else:
-            stats = await rebuild_inspiration_vectors(db, insp_id)
-        if stats["text"]:
-            text_done += 1
-            text_ids.append(insp_id)
-        else:
-            text_skipped += 1
-        if stats["image"]:
-            image_done += 1
-            if is_image:
-                image_ids.append(insp_id)
-        elif is_image:
-            # text_only 模式不是生成失败，不计入 image_failed（否则会被下面的
-            # 「图像向量全部失败」判定误判为系统性故障）
-            image_failed += 0 if text_only else 1
-        else:
-            image_skipped += 1
+        # 文本向量：标签已随素材 eager load（Inspiration.tags lazy="selectin"）
+        if insp is not None:
+            text_vec, image_vec = await _build_material_vectors(insp)
+            if text_vec:
+                pending_text.append((insp_id, text_vec))
+            else:
+                text_skipped += 1
+
+            if not text_only:
+                if image_vec:
+                    pending_image.append((insp_id, image_vec))
+                elif is_image:
+                    image_failed += 1
+                else:
+                    image_skipped += 1
+
+        # 攒批落盘：任一队列达到阈值即批量写入（批量 add 只产生极少数 manifest）
+        if len(pending_text) >= _LANCE_FLUSH_SIZE or len(pending_image) >= _LANCE_FLUSH_SIZE:
+            flushed = await _flush_vector_batches(pending_text, pending_image)
+            text_done += flushed[0]
+            text_ids.extend(flushed[1])
+            image_done += flushed[2]
+            image_ids.extend(flushed[3])
 
         # 攒批更新进度（每 25 条提交一次，避免 3000+ 次 commit 拖慢任务）
         if idx % 25 == 0 or idx == total:
@@ -306,6 +373,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             logger.info(
                 f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
             )
+
+    # 收尾：清空残余批
+    flushed = await _flush_vector_batches(pending_text, pending_image)
+    text_done += flushed[0]
+    text_ids.extend(flushed[1])
+    image_done += flushed[2]
+    image_ids.extend(flushed[3])
 
     # ── 落库验证（防假成功）──
     # 背景：历史上曾出现「任务声称全部写入成功，但向量库目录随后被外部
@@ -374,6 +448,14 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
 
         vector_store.set_stored_text_formula_version(TEXT_EMBEDDING_FORMULA_VERSION)
     await db.commit()
+
+    # 批量写入完成后压缩向量表：合并碎片文件、清理被取代的旧版本，
+    # 防止目录文件数无限膨胀（失败仅记日志，不影响任务成功态）
+    try:
+        stats = await vector_store.compact_vectors()
+        logger.info(f"向量表压缩完成: {stats}")
+    except Exception as e:
+        logger.warning(f"向量表压缩失败（忽略）: {e}")
 
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "
