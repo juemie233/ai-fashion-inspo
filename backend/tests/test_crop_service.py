@@ -272,7 +272,11 @@ def test_detect_content_bounds_marks_cropped(tmp_path):
 
 
 def test_content_mode_relaxed_ratio_filter(client):
-    """内容边界模式放宽竖屏下限：被裁剪过的截图（比例 1.5）仍列入候选。"""
+    """内容边界模式放宽竖屏下限：被裁剪过的截图（比例 1.5）仍列入候选。
+
+    残留候选走字形/残留双通道：非完整截图的残留估算候选保留但默认
+    不勾选（无强字形证据时不自动勾选，交人工确认）。
+    """
     # 比例 1.5（400x600）：顶部 3 行低多样度残留 + 高多样度内容区
     width, height = 400, 600  # 比例 1.5 < 1.75
     arr = np.zeros((height, width, 3), dtype=np.uint8)
@@ -296,8 +300,9 @@ def test_content_mode_relaxed_ratio_filter(client):
     assert item["auto_ok"] is False
     assert "疑似顶部状态栏残留" in (item["note"] or "")
     assert item["crop_top"] > 0  # 标注的建议裁剪比例
-
-    # 勾选后 apply：按疑似建议比例裁剪成功
+    # 非完整截图 + 稠密杂乱内容（字形签名不可靠）：候选保留但不默认勾选
+    assert not item["auto_checked"]
+# 勾选后 apply：按疑似建议比例裁剪成功
     r = client.post(
         "/api/admin/crop-phone-screenshots/apply",
         json={"ids": [insp["id"]], "mode": "content"},

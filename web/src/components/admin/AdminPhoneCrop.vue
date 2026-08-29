@@ -57,8 +57,11 @@ interface CropCandidate {
   auto_ok: boolean
   note: string | null
   confidence: 'high' | 'medium' | 'low'
-  /** content 模式：gray_band（灰带包夹）/ status_bar（状态栏+播放器条）/ plain */
-  boundary_kind?: 'gray_band' | 'status_bar' | 'plain' | null
+  /** content 模式：gray_band（灰带包夹）/ status_bar（状态栏+播放器条）/ plain / glyph_only（字形证据，行剖面无信号） */
+  boundary_kind?: 'gray_band' | 'status_bar' | 'plain' | 'glyph_only' | null
+  /** 后端勾选决策：字形证据（左右两角齐备）的残留候选默认勾选，无字形证据的不勾。
+   * 旧响应无此字段时回退到「带建议比例即勾选」的兼容推断 */
+  auto_checked?: boolean | null
   created_at: string | null
 }
 
@@ -253,7 +256,13 @@ function defaultCheckedIds(items: CropCandidate[]): Set<string> {
       ids.add(c.id)
       continue
     }
-    // 疑似状态栏残留：后端给出建议裁剪比例即默认勾选（crop_top=残留建议值）
+    // 疑似状态栏残留：后端已按字形证据给出勾选决策（左右两角齐备才自动勾选，
+    // 纯色背景照片/海报大字等无字形候选不勾）——直接采用后端决策
+    if (typeof c.auto_checked === 'boolean') {
+      if (c.auto_checked) ids.add(c.id)
+      continue
+    }
+    // 旧响应兼容：后端给出建议裁剪比例即默认勾选（crop_top=残留建议值）
     if (c.crop_top > 0) ids.add(c.id)
   }
   return ids

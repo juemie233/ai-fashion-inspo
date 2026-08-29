@@ -98,6 +98,19 @@ _RESIDUAL_TAIL_JUMP_STRICT = 0.08
 _RESIDUAL_CONTENT_MIN_LOOSE = 0.16
 _RESIDUAL_CONTENT_MIN_STRICT = 0.25
 
+# ── 顶部状态栏字形证据检测（glyph）──
+# 行多样度剖面的原理性盲区：透明叠加状态栏（图标直接叠在照片上）没有「低多
+# 样度条带」，行剖面与照片顶部自然低多样度区域同构；而影棚纯色背景照片的反
+# 向误报（顶部纯色带 + 内容抬升被当状态栏）也无法靠行剖面排除。两者的共同
+# 解法是状态栏唯一稳定的结构特征——字形布局：时间（左上）+ 信号/电量（右上）
+# 是「小、孤立、高对比、集中两角、中间空」的连通域，与主题无关、与底图无关。
+_GLYPH_ANALYZE_W = 320  # 字形分析宽度（96 宽下状态栏字形仅数像素，分辨率不足）
+_GLYPH_TOP_FRACTION = 0.10  # 只分析图片顶部 10%（状态栏 + 少量余量）
+_GLYPH_CONTRAST = 22.0  # 局部对比二值化阈值（像素 − 5×5 均值，0~255）
+_GLYPH_MARGIN_ROWS = 2  # 字形底部再多裁的行数（缩放坐标系，覆盖图标抗锯齿边）
+_GLYPH_TOP_FRAC_CAP = 0.12  # 字形路径建议裁剪比例上限（状态栏不会超过全高 12%）
+_FULL_SCREENSHOT_RATIO = 1.8  # 完整手机截图先验：高/宽 ≥ 此值的竖图极大概率是截图
+
 # EXIF Orientation 取值：5/6/7/8 表示 90°/270° 旋转，宽高互换
 _EXIF_TRANSPOSE_90 = frozenset((5, 6, 7, 8))
 
@@ -560,7 +573,16 @@ def detect_content_bounds(path) -> dict:
             (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
         )
-    return _content_bounds_from_small(small)
+        result = _content_bounds_from_small(small)
+        # 字形证据合并（与 analyze_screenshot_combined 同口径，供 apply 路径
+        # 复现扫描阶段的字形建议）：仅当无实底条带裁剪建议时使用
+        glyph = _glyph_evidence(img)
+        result["glyph_top_frac"] = (
+            0.0 if result["top_frac"] > 0 else (glyph["top_frac"] if glyph["found"] else 0.0)
+        )
+        result["glyph_strong"] = glyph["strong"]
+        result["bounds_valid"] = True
+        return result
 
 
 def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) -> dict:
@@ -806,6 +828,157 @@ def crop_region_to_temp(path, y1_ratio: float, y2_ratio: float):
         raise
 
 
+def _glyph_evidence(img: "Image.Image") -> dict:
+    """顶部状态栏字形证据检测（透明叠加状态栏的关键信号，行剖面的盲区补丁）。
+
+    方法：取图片顶部 ``_GLYPH_TOP_FRACTION`` 裁剪并缩放到 ``_GLYPH_ANALYZE_W``
+    宽，灰度做「像素 − 5×5 均值」局部对比二值化，连通域分析后按状态栏字形
+    的布局签名判定：
+
+    - 字形连通域：高 ≤ 条带 65%、宽 ≤ 图宽 22%（排除大块内容）；
+    - 分布：左区（<28% 宽）或右区（>66% 宽）存在字形；
+    - 中区（28%~66% 宽）字形像素占比 ≤ 30%（状态栏中间是空的；
+      照片/海报的文字横跨中部会被拒绝）；
+    - 整体前景占比 ≤ 35%（复杂照片顶部满屏纹理时字形不可分辨，放弃）。
+
+    返回:
+        {"found": bool, "strong": bool, "top_frac": float}
+        strong = 左右两角字形齐备（高置信，可默认勾选）；top_frac 为建议
+        裁剪比例（字形底部 + 余量，占全图高度），未检出时为 0。
+    """
+    W, H = img.size
+    strip_h = max(12, int(H * _GLYPH_TOP_FRACTION))
+    strip = img.crop((0, 0, W, strip_h)).resize(
+        (_GLYPH_ANALYZE_W, max(6, strip_h * _GLYPH_ANALYZE_W // W)),
+        Image.Resampling.LANCZOS,
+    )
+    arr = np.asarray(strip.convert("L"), dtype=np.float32)
+    h, w = arr.shape
+
+    # 5×5 盒均值背景（cumsum 实现，条带很小，开销可忽略）
+    pad = np.pad(arr, 2, mode="edge")
+    c = np.cumsum(np.cumsum(pad, axis=0), axis=1)
+    c = np.pad(c, ((1, 0), (1, 0)))
+    box = c[5:, 5:] - c[:-5, 5:] - c[5:, :-5] + c[:-5, :-5]
+    blur = box / 25.0
+    fg = np.abs(arr - blur) > _GLYPH_CONTRAST
+    if fg.mean() > 0.35:
+        # 顶部条带满屏高对比纹理：照片内容，字形无法与内容区分
+        return {"found": False, "strong": False, "top_frac": 0.0}
+
+    not_found = {"found": False, "strong": False, "top_frac": 0.0}
+    try:
+        from scipy import ndimage
+
+        fg_d = ndimage.binary_dilation(fg, iterations=1)
+        labels, num = ndimage.label(fg_d)
+        if num == 0:
+            return not_found
+        # 状态栏字形只有时间+图标 ≈5~12 个连通域；吊灯/饰品高光碎片类照片
+        # 纹理会产出几十个小 blob。超预算不直接放弃（真实截图也可能叠在
+        # 复杂内容上），降级为「弱证据」：found=True 但 strong=False，
+        # 候选保留、不默认勾选，交人工判断
+        glyph_budget = 25
+        glyphs = []
+        budget_exceeded = False
+        kept = 0
+        for i, sl in enumerate(ndimage.find_objects(labels), start=1):
+            if sl is None:
+                continue
+            x0, x1 = sl[1].start, sl[1].stop
+            y0, y1 = sl[0].start, sl[0].stop
+            area = int((labels[sl] == i).sum())
+            bw, bh = x1 - x0, y1 - y0
+            # 尺寸门槛：状态栏数字/图标在 320 宽坐标系下高 ≥ max(5, 条带 12%)、
+            # 宽 ≥ 2px——更小的碎片是照片纹理噪声（真实 FP：拼图内容碎片
+            # 3×4px 曾凑成「时间对」误判 strong）
+            if area < 4 or bh < max(5, h * 0.12) or bw < 2:
+                continue
+            # 字形过滤：高 ≤ 条带 65%、宽 ≤ 图宽 22%（大块内容/标题排除）
+            if bh > h * 0.65 or bw > w * 0.22:
+                continue
+            # 紧凑度过滤：线条（门框/相框边、拼图网格线）fill ratio 低
+            # （面积/外接框 < 0.3），字形（文字/图标笔画）fill ratio 高
+            if area / (bw * bh) < 0.3:
+                continue
+            if kept >= glyph_budget:
+                budget_exceeded = True
+                continue
+            kept += 1
+            glyphs.append((x0, x1, y0, y1, area))
+        if not glyphs:
+            return not_found
+        # 分布签名（真实数据修正两轮）：
+        # - 国产系统时间渲染在状态栏中央偏左（26259563 样本），「中区必须空/
+        #   仅左右两角」会误拒 → 不做区域限制
+        # - 时间签名（strong）：同一 ≤18% 宽度的窗口内存在 ≥2 个「数字状」
+        #   blob——高度相近（差<40%）、水平相邻（间隙 <3% 宽）、基线对齐
+        #   （垂直中心差 <10% 条带高）。心形装饰（单 blob 孤立）、门框/相框
+        #   两侧线段（水平相距远）均不满足；海报大字（横贯大 blob）另被
+        #   宽度过滤拒绝
+        strong = False
+        if budget_exceeded:
+            # 弱证据：内容过于杂乱，时间签名不可靠，不默认勾选
+            bottom = max(g[3] for g in glyphs)
+            top_frac = min(
+                _GLYPH_TOP_FRAC_CAP,
+                (bottom + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
+            )
+            return {"found": True, "strong": False, "top_frac": round(top_frac, 6)}
+        gs = sorted(glyphs, key=lambda g: g[0])
+        for i in range(len(gs)):
+            window = [gs[i]]
+            for j in range(i + 1, len(gs)):
+                if gs[j][0] - window[-1][1] < w * 0.03:
+                    window.append(gs[j])
+                else:
+                    break
+            span = window[-1][1] - window[0][0]
+            if len(window) >= 2 and span <= w * 0.18:
+                hs = [g[3] - g[2] for g in window]
+                cs = [(g[2] + g[3]) / 2 for g in window]
+                if max(hs) / max(1, min(hs)) < 1.4 and max(cs) - min(cs) < h * 0.10:
+                    strong = True
+                    break
+        if not strong:
+            # 单 blob 回退：小字号渲染下「12:30」会合并为一个块——左上时间位
+            # （x 中心 <35% 宽）、宽 4~18%、高 15~60% 条带的紧凑块视为时间块。
+            # 手机入镜（镜面自拍，居中）不在左区，不受影响
+            for g in glyphs:
+                gw, gh = g[1] - g[0], g[3] - g[2]
+                gcx = (g[0] + g[1]) / 2
+                if (
+                    0.04 * w <= gw <= 0.18 * w
+                    and 0.15 * h <= gh <= 0.60 * h
+                    and gcx < w * 0.35
+                ):
+                    strong = True
+                    break
+        bottom = max(g[3] for g in glyphs)
+        top_frac = min(
+            _GLYPH_TOP_FRAC_CAP,
+            (bottom + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
+        )
+        return {"found": True, "strong": strong, "top_frac": round(top_frac, 6)}
+    except ImportError:
+        # 无 scipy：列密度剖面兜底（两角有前景、中部稀疏）
+        col = fg.mean(axis=0)
+        left_d = col[: int(w * 0.30)].mean()
+        mid_d = col[int(w * 0.30) : int(w * 0.66)].mean()
+        right_d = col[int(w * 0.66) :].mean()
+        if not (left_d > 0.02 or right_d > 0.02) or mid_d > max(left_d, right_d, 0.02) * 0.5:
+            return not_found
+        rows = fg.mean(axis=1)
+        nz = np.nonzero(rows > 0.02)[0]
+        if len(nz) == 0:
+            return not_found
+        top_frac = min(
+            _GLYPH_TOP_FRAC_CAP,
+            (nz[-1] + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
+        )
+        return {"found": True, "strong": False, "top_frac": round(top_frac, 6)}
+
+
 def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
     """单次解码完成「截图特征 + 内容边界」检测（扫描候选路径专用）。
 
@@ -833,11 +1006,39 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
             Image.Resampling.LANCZOS,
         )
     features = _features_from_small(small64)
-    # UI 证据（top_bar/bottom_bar 截图特征）传给内容边界估算：放宽残留
-    # 检测的内容抬升/起点门槛，让低多样度内容区的真实截图也能给出建议
-    ui_evidence = features.get("top_bar", False) or features.get("bottom_bar", False)
+    # 字形证据：透明叠加状态栏的独立信号（行剖面盲区补丁），同时用于收紧
+    # 残留估算的 UI 证据语义——bottom_bar（底部近纯色行，摄影棚白底/暗部
+    # 照片极易命中）不再单独构成放宽残留门槛的证据
+    glyph = _glyph_evidence(img)
+    ui_evidence = features.get("top_bar", False) or glyph["found"]
     try:
         bounds = _content_bounds_from_small(small96, ui_evidence=ui_evidence)
+        bounds["bounds_valid"] = True
     except ValueError:
         bounds = None
+    glyph_top = glyph["top_frac"] if glyph["found"] else 0.0
+    if bounds is None:
+        if glyph["found"]:
+            # 内容边界检测失败（整图皆内容、无包夹结构——恰是叠加状态栏最
+            # 常见的场景）：只要有字形证据仍返回字形建议，避免「明显状态栏
+            # 的截图被静默排除」
+            bounds = {
+                "top_frac": 0.0,
+                "bottom_frac": 0.0,
+                "top_edge": 0,
+                "bottom_edge": 0,
+                "correction": False,
+                "kind": "glyph_only",
+                "already_cropped": False,
+                "residual_top_frac": 0.0,
+                "bounds_valid": False,
+                "glyph_top_frac": glyph_top,
+                "glyph_strong": glyph["strong"],
+            }
+        # 无字形证据：维持 None（调用方按「检测失败」排除，语义不变）
+    else:
+        # 字形建议仅在「无实底条带裁剪建议」时使用：实底条带的 top_frac
+        # 由行剖面精确定位，比字形底部锚点更准
+        bounds["glyph_top_frac"] = 0.0 if bounds["top_frac"] > 0 else glyph_top
+        bounds["glyph_strong"] = glyph["strong"]
     return features, bounds

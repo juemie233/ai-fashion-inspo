@@ -45,6 +45,7 @@ from app.services.image_cropping import (
     detect_screenshot_features,
     probe_size as _probe_size,
     screenshot_confidence,
+    _FULL_SCREENSHOT_RATIO,
 )
 # 内部算法接缝重新导出：内容边界/状态栏修正的纯函数单测仍从本模块导入，
 # 实现已下沉到 image_cropping（纯算法 module，无需 DB/app 即可直测）。
@@ -204,16 +205,39 @@ async def scan_candidates(
                 confidence = "low"
                 bounds_result = None
             if bounds_result is None:
-                # 检测失败（未检出内容区边界/布局不规则）：无法验证截图结构，
-                # 自动化口径下静默排除（此前会带默认比例混入候选，属误列）
+                # 检测失败（未检出内容区边界/布局不规则）且无字形证据
+                # （combined 已在字形存在时返回字形建议而非 None）：静默排除
                 continue
-            if confidence == "low" and bounds_result["residual_top_frac"] <= 0:
-                # ── 自动化口径：内容边界检测只服务手机截图（抖音全屏截图）──
-                # 无任何系统 UI 特征（top_bar/bottom_bar）且无状态栏残留信号的
-                # 竖屏图大概率是普通照片（顶部纯色天空/暗部被误判为边界）——
-                # 即使算出了 top_frac 也整体静默排除，不再以「自动检测失败/
-                # 疑似非截图请人工确认」占据扫描列表
+            glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
+            glyph_strong = bounds_result.get("glyph_strong", False)
+            # ── 候选资格（FP/FN 裁决层）──
+            # 1) 低置信 + 无任何建议（残留/字形）：大概率普通照片，静默排除
+            #    （保留原规则，字形证据可救援）
+            if confidence == "low" and bounds_result["residual_top_frac"] <= 0 and glyph_top_frac <= 0:
                 continue
+            # 2) 完整截图先验：ratio ≥ 1.8 的竖图极大概率是完整手机截图
+            #    （真实库验证：明显状态栏素材全部 ratio≈2.16，误报样本全部
+            #    <1.8）。非完整截图从严——需要实底 UI 带、字形建议、或
+            #    「残留估算 + 强字形」相互印证（纯色背景照片的残留估算无
+            #    字形佐证，在此排除——历史自动勾选 FP 的根因）
+            full_screenshot = height / width >= _FULL_SCREENSHOT_RATIO
+            if not full_screenshot:
+                # 残留估算（residual）无字形佐证时保留候选但绝不默认勾选——
+                # 自动勾选误报（用户核心投诉）由勾选规则消灭，列表噪音由
+                # 人工勾选池消化
+                qualified = (
+                    bounds_result["top_frac"] > 0
+                    or bounds_result["bottom_frac"] > 0
+                    or glyph_top_frac > 0
+                    or bounds_result["residual_top_frac"] > 0
+                    or (
+                        confidence != "low"
+                        and bounds_result["already_cropped"]
+                        and features.get("top_bar", False)
+                    )
+                )
+                if not qualified:
+                    continue
             # 检出截图特征（top_bar/bottom_bar）的素材即使已裁剪干净、无
             # 残留建议也继续列入候选：它是真实截图，顶部状态栏残留肉眼
             # 可见，交给人工目检勾选（此前把这类素材静默过滤，导致
@@ -236,6 +260,7 @@ async def scan_candidates(
             "crop_bottom": crop_bottom,
             "auto_ok": True,
             "note": None,
+            "auto_checked": None,
             "confidence": confidence,
             "boundary_kind": None,
             "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
@@ -253,16 +278,27 @@ async def scan_candidates(
             item["crop_top"] = bounds_result["top_frac"]
             item["crop_bottom"] = bounds_result["bottom_frac"]
             item["boundary_kind"] = bounds_result["kind"]
-            if bounds_result["residual_top_frac"] > 0 and bounds_result["top_frac"] == 0:
+            glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
+            suggestion = max(bounds_result["residual_top_frac"], glyph_top_frac)
+            if bounds_result["top_frac"] == 0 and suggestion > 0:
                 # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
-                # 典型特征）：不自动判定可裁剪（防误裁普通照片），标注建议
-                # 比例；前端对这类候选默认勾选（一次扫描自动选上），
-                # apply 按此建议裁剪
+                # 典型特征，或实底状态栏残留）：不自动判定可裁剪（防误裁
+                # 普通照片），标注建议比例。
+                # 默认勾选收紧（历史 FP 根因）：仅「字形证据 + 左右两角齐备」
+                # 的候选默认勾选——状态栏字形是行剖面之外唯一与底图无关的
+                # 稳定信号，纯色背景照片/海报大字（无两角字形）不再自动勾选。
+                # 残留估算（residual）本身仍要求字形证据才勾选，无字形的
+                # 残留建议保持候选但由人工决定。
                 item["auto_ok"] = False
-                item["crop_top"] = bounds_result["residual_top_frac"]
+                item["crop_top"] = suggestion
+                # 默认勾选仅认强字形（时间签名）证据：完整比例先验只影响
+                # 候选资格，不构成勾选理由（ratio≈2.16 的拼图/长图无状态栏）
+                item["auto_checked"] = glyph_strong = bool(
+                    glyph_top_frac > 0 and bounds_result.get("glyph_strong", False)
+                )
                 item["note"] = (
-                    f"疑似顶部状态栏残留（建议裁剪 {bounds_result['residual_top_frac']:.1%}），"
-                    "已默认勾选，请预览确认"
+                    f"疑似顶部状态栏残留（建议裁剪 {suggestion:.1%}），"
+                    + ("已默认勾选，请预览确认" if item["auto_checked"] else "请预览确认")
                 )
             elif (
                 bounds_result["already_cropped"]
@@ -273,6 +309,7 @@ async def scan_candidates(
                 # 裁过或界面以内容为主。如实标注，不编造比例，由人工目检决定
                 item["auto_ok"] = False
                 item["crop_top"] = 0.0
+                item["auto_checked"] = False
                 item["note"] = "未检出可裁区域（可能已裁剪过），请目检确认"
         candidates.append(item)
         # 候选上限检查必须放在 append 之后：此时当前候选已入选，断点游标
@@ -414,9 +451,14 @@ async def apply_crops(
                     raise ValueError("未检测到内容区边界")
                 t_frac = bounds["top_frac"]
                 b_frac = bounds["bottom_frac"]
-                if bounds["residual_top_frac"] > 0 and t_frac == 0:
-                    # 用户已勾选 = 确认疑似残留：按建议比例裁剪顶部
-                    t_frac = bounds["residual_top_frac"]
+                if t_frac == 0 and (
+                    bounds["residual_top_frac"] > 0
+                    or bounds.get("glyph_top_frac", 0) > 0
+                ):
+                    # 用户已勾选 = 确认疑似残留：按建议比例裁剪顶部。
+                    # 与扫描同口径：实底条带 residual 与字形建议（透明叠加，
+                    # combined 的 ValueError 路径已返回字形建议 dict）取大者
+                    t_frac = max(bounds["residual_top_frac"], bounds.get("glyph_top_frac", 0))
                 if bounds["already_cropped"] and t_frac == 0 and not (
                     features.get("top_bar") or features.get("bottom_bar")
                 ):
