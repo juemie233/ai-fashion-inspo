@@ -1,9 +1,13 @@
 """图片和缩略图的静态文件服务路由。"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
+from app.models.inspiration import Inspiration
+from app.services import video_service
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -15,6 +19,37 @@ _MEDIA_EXT_TO_TYPE = {
     ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
     ".mkv": "video/x-matroska", ".webm": "video/webm",
 }
+
+
+# 注意：本路由必须注册在下方「/{file_path:path}」通配路由之前，
+# 否则 /api/files/keyframes/{id} 会被通配路由抢先匹配
+@router.get("/keyframes/{inspiration_id}")
+async def list_keyframes(inspiration_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """返回视频素材的关键帧 URL 列表（按时间序）。
+
+    行为:
+        - 非视频素材返回空 frames 列表（不报错，前端无需特判）；
+        - 视频素材首次访问时懒提取关键帧（ffmpeg 幂等提取，
+          失败静默降级返回空列表，不阻断页面渲染）；
+        - 帧文件本体由下方通配静态路由提供（storage/keyframes 在 storage_root 下，
+          .jpg 在媒体扩展名白名单内）。
+    """
+    insp = await db.get(Inspiration, inspiration_id)
+    if insp is None:
+        raise HTTPException(status_code=404, detail="素材未找到")
+    if insp.media_type != "video":
+        return {"inspiration_id": inspiration_id, "media_type": insp.media_type, "frames": []}
+
+    frames = await video_service.get_keyframes(inspiration_id)
+    if not frames:
+        frames = await video_service.extract_keyframes(insp)
+    urls = [f"/api/files/keyframes/{inspiration_id}/{f.name}" for f in frames]
+    return {
+        "inspiration_id": inspiration_id,
+        "media_type": "video",
+        "count": len(urls),
+        "frames": urls,
+    }
 
 
 @router.get("/{file_path:path}")

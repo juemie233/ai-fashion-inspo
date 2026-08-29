@@ -28,6 +28,7 @@ import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
+import VideoKeyframes from '@/components/inspiration/VideoKeyframes.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
 import { formatDate, shortenText } from '@/utils/format'
 import { CATEGORY_LABELS } from '@/constants/tag'
@@ -438,6 +439,8 @@ async function removeTag(t: InspirationTagOut) {
           <div class="image-section">
             <div v-if="detail.media_type === 'video'" class="main-image-wrap">
               <video :src="getFileUrl(detail.file_path)" controls playsinline class="main-image" />
+              <!-- 关键帧缩略图条带（懒提取，失败时组件内部静默隐藏） -->
+              <VideoKeyframes :inspiration-id="detail.id" />
             </div>
             <div v-else class="main-image-wrap">
               <img

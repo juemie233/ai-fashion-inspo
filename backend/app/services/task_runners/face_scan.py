@@ -2,6 +2,8 @@
 
 - ``face_scan``：批量检测素材人脸（增量/半增量/全量） → embed-batch 批量检测
   → 人脸明细写入 detections 表（每张人脸一条，含 embedding/bbox）。
+  扫描范围覆盖图片与视频素材：图片检测原图，视频提取关键帧后检测前 N 帧
+  （``settings.face_scan_video_max_frames``），检出人脸归属该视频素材。
   三种范围：
   - incremental：只扫无任何检测记录的素材（断点续跑：取消/失败后重跑自动
     跳过已扫部分）；
@@ -17,9 +19,9 @@
   不写人物关联表（确认由扫描审核接口完成）。
 
 批处理约定：
-- 每批 ≤64 张 且 ≤150MB（字节超限自动封批），embed-batch 每 32 张一个请求、
-  并发 4 路，均衡 GPU 吞吐与内存峰值；
-- 素材文件缺失/损坏计入 failed_files 跳过，不阻塞整批；
+- 每批 ≤64 个素材 且 ≤150MB（视频按所选帧计字节，超限自动封批），
+  embed-batch 每 32 张一个请求、并发 4 路，均衡 GPU 吞吐与内存峰值；
+- 素材文件缺失/损坏/无可用关键帧计入 failed_files 跳过，不阻塞整批；
 - face-service 不可用抛 RecoverableTaskError 交由 worker 重试（增量语义下
   重跑成本 = 未扫部分）。
 """
@@ -39,6 +41,7 @@ from app.config import settings
 from app.models.face import InspirationFaceDetection
 from app.models.inspiration import Inspiration, NOT_DELETED
 from app.models.task import TaskQueue
+from app.services import video_service
 from app.services.face_client import FaceServiceUnavailableError, face_client
 from app.services.face_match import match_all_faces
 from app.services.task_runners.common import RecoverableTaskError, _chunked, utcnow
@@ -58,7 +61,7 @@ MAX_CONSECUTIVE_FAILED_BATCHES = 10
 async def create_face_scan_task(
     db: AsyncSession, scope: str = "semi", auto_match: bool = False
 ) -> TaskQueue:
-    """创建人脸库扫描任务（total = 待扫图片素材数）。
+    """创建人脸库扫描任务（total = 待扫图片/视频素材数）。
 
     scope: ``incremental``（仅无记录素材）/ ``semi``（半增量，跳过含锁定
     记录的素材）/ ``all``（全量，跳过含锁定记录的素材）。
@@ -110,14 +113,14 @@ async def create_face_match_task(
 
 
 async def _count_scan_images(db: AsyncSession, scope: str) -> int:
-    """统计待扫图片素材数。
+    """统计待扫素材数（图片 + 视频）。
 
-    - incremental：无任何检测记录的图片素材；
-    - semi：无已确认（锁定）记录的图片素材（仅 pending 或无记录）；
-    - all：全部图片素材（含锁定素材，重写时保护锁定记录）。
+    - incremental：无任何检测记录的素材；
+    - semi：无已确认（锁定）记录的素材（仅 pending 或无记录）；
+    - all：全部素材（含锁定素材，重写时保护锁定记录）。
     """
     stmt = select(func.count()).select_from(Inspiration).where(
-        Inspiration.media_type == "image", NOT_DELETED
+        Inspiration.media_type.in_(("image", "video")), NOT_DELETED
     )
     stmt = _apply_scope_filter(stmt, scope)
     return (await db.execute(stmt)).scalar() or 0
@@ -126,7 +129,7 @@ async def _count_scan_images(db: AsyncSession, scope: str) -> int:
 async def _collect_scan_ids(db: AsyncSession, scope: str) -> list[str]:
     """收集待扫素材 ID（一次查询全部；几万 UUID 内存可控）。"""
     stmt = select(Inspiration.id).where(
-        Inspiration.media_type == "image", NOT_DELETED
+        Inspiration.media_type.in_(("image", "video")), NOT_DELETED
     )
     stmt = _apply_scope_filter(stmt, scope)
     stmt = stmt.order_by(Inspiration.created_at, Inspiration.id)  # id 兜底保证同秒内顺序稳定
@@ -191,15 +194,15 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
     # 全量重扫不再整体清空检测表：锁定（已确认）记录必须保留，
     # 其余记录在 _write_detections 中按素材先清后写。
 
-    # 一次查出全部素材的 file_path（IN 分片 500）
-    path_map: dict[str, str] = {}
+    # 一次查出全部素材的 file_path 与 media_type（IN 分片 500）
+    info_map: dict[str, tuple[str, str]] = {}
     for chunk in _chunked(ids, 500):
         rows = await db.execute(
-            select(Inspiration.id, Inspiration.file_path).where(
+            select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
                 Inspiration.id.in_(chunk)
             )
         )
-        path_map.update({r[0]: r[1] for r in rows.all()})
+        info_map.update({r[0]: (r[1], r[2] or "image") for r in rows.all()})
 
     scanned = 0
     faces_total = 0
@@ -212,9 +215,10 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
             cancelled = True
             break
 
-        # 组装一批（≤64 张 且 ≤150MB；缺失文件跳过并剔除出 id 列表）
-        batch_ids: list[str] = []
-        batch_bytes: list[bytes] = []
+        # 组装一批（≤64 个素材 且 ≤150MB；视频按所选帧计字节。
+        # 缺失文件/无可用关键帧的素材跳过并剔除出 id 列表，避免死循环）
+        batch_ids: list[str] = []  # 每素材一条（视频素材对应多帧图片）
+        batch_images: list[list[bytes]] = []  # 与 batch_ids 对齐的帧图片列表
         batch_size = 0
         while (
             start + len(batch_ids) < total
@@ -222,30 +226,44 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
             and batch_size < SCAN_BATCH_BYTES
         ):
             insp_id = ids[start + len(batch_ids)]
-            fpath = path_map.get(insp_id)
-            if not fpath:
+            info = info_map.get(insp_id)
+            if not info or not info[0]:
                 failed_files += 1
                 scanned += 1
                 ids.pop(start + len(batch_ids))
                 continue
+            fpath, media_type = info
             try:
-                full_path = Path(settings.storage_root) / fpath
-                data = await asyncio.to_thread(full_path.read_bytes)
+                if media_type == "video":
+                    # 视频：懒提取/复用关键帧，取前 N 帧参与检测，
+                    # 检出人脸归属该视频素材（帧数不足 N 时按实际帧数）
+                    frames = await video_service.extract_keyframes_for_video(
+                        insp_id, fpath
+                    )
+                    images = [
+                        await asyncio.to_thread(frame.read_bytes)
+                        for frame in frames[: settings.face_scan_video_max_frames]
+                    ]
+                    if not images:
+                        raise OSError("无可用人脸检测关键帧")
+                else:
+                    full_path = Path(settings.storage_root) / fpath
+                    images = [await asyncio.to_thread(full_path.read_bytes)]
             except OSError:
                 failed_files += 1
                 scanned += 1
                 ids.pop(start + len(batch_ids))
                 continue
             batch_ids.append(insp_id)
-            batch_bytes.append(data)
-            batch_size += len(data)
+            batch_images.append(images)
+            batch_size += sum(len(data) for data in images)
 
         if not batch_ids:
             # 剩余全部文件缺失：避免死循环
             break
 
         try:
-            faces_list = await _embed_batch_concurrent(batch_bytes)
+            faces_list = await _embed_and_merge(batch_images)
             await _write_detections(db, batch_ids, faces_list)
         except FaceServiceUnavailableError as e:
             consecutive_failures += 1
@@ -288,6 +306,27 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
         f"人脸扫描任务结束: #{task.id} scanned={scanned} faces={faces_total} "
         f"failed={failed_files} cancelled={cancelled}"
     )
+
+
+async def _embed_and_merge(batch_images: list[list[bytes]]) -> list[list[dict]]:
+    """批量提取特征并把多帧结果合并回素材维度。
+
+    视频素材贡献多帧（batch_images 每项为该素材的帧图片列表），先拍平成
+    单张图片序列走 embed-batch，再按帧数切分回各素材：各帧检出的人脸
+    按帧顺序拼接为该素材的人脸列表（face_index 由 _write_detections 连续编号）。
+    """
+    flat: list[bytes] = [img for images in batch_images for img in images]
+    flat_faces = await _embed_batch_concurrent(flat)
+    merged: list[list[dict]] = []
+    offset = 0
+    for images in batch_images:
+        count = len(images)
+        combined: list[dict] = []
+        for faces in flat_faces[offset : offset + count]:
+            combined.extend(faces)
+        merged.append(combined)
+        offset += count
+    return merged
 
 
 async def _embed_batch_concurrent(batch_bytes: list[bytes]) -> list[list[dict]]:

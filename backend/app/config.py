@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     thumbnails_dir: Path = storage_root / "thumbnails"
     videos_dir: Path = storage_root / "videos"
     trash_dir: Path = storage_root / "trash"  # 垃圾桶（软删除文件移入此目录）
+    # 视频关键帧：子目录按素材 ID 命名（storage/keyframes/{inspiration_id}/frame_001.jpg），
+    # 不入库，由 /api/files/keyframes/{id} 按需列目录返回
+    keyframes_dir: Path = storage_root / "keyframes"
     # 人物照片（模特写真）：与素材库 images/ 分离，避免被完整性检查误判为孤立文件
     person_photos_dir: Path = storage_root / "person_photos"
     person_thumbnails_dir: Path = storage_root / "person_thumbnails"
@@ -56,6 +59,12 @@ class Settings(BaseSettings):
     # 缩略图
     thumbnail_size: tuple[int, int] = (400, 600)
     thumbnail_quality: int = 85
+
+    # 视频关键帧提取（ffmpeg）
+    keyframe_interval_seconds: float = 3.0  # 固定间隔抽帧间隔（秒）
+    keyframe_scene_threshold: float = 0.0  # 场景检测阈值（0=禁用；如 0.3 表示画面变化 >30% 时抽帧）
+    keyframe_max_frames: int = 60  # 单视频关键帧数量上限（防长视频刷爆磁盘）
+    face_scan_video_max_frames: int = 3  # 人脸扫描每个视频取前 N 帧
 
     # AI / Ollama
     ollama_base_url: str = "http://localhost:11434"
@@ -150,6 +159,7 @@ class Settings(BaseSettings):
             "images": self.images_dir,
             "thumbnails": self.thumbnails_dir,
             "videos": self.videos_dir,
+            "keyframes": self.keyframes_dir,
             "trash": self.trash_dir,
             "person_photos": self.person_photos_dir,
             "person_thumbnails": self.person_thumbnails_dir,
