@@ -336,6 +336,75 @@ async def test_vector_backfill_rerun_idempotent(client, upload, monkeypatch):
         assert task.done == 2
 
 
+async def test_vector_backfill_real_load_path_with_tags(client, upload, monkeypatch):
+    """回归：真实加载路径（不 mock _build_material_vectors）带标签的素材不再抛
+    MissingGreenlet。
+
+    批量落盘重构后执行器改用 db.get 加载素材，而 InspirationTag.tag 是默认
+    lazy="select"——build_inspiration_text 同步访问 t.tag.name 触发异步环境
+    下的隐式懒加载 → "greenlet_spawn has not been called; can't call
+    await_only()"，任务运行几秒即失败。修复为显式两级 selectinload。
+    """
+    insp_id = upload().json()["id"]
+    r = client.post(
+        f"/api/inspirations/{insp_id}/tags", json={"names": ["白色"], "category": "color"}
+    )
+    assert r.status_code == 200, r.text
+
+    # 只 mock 向量生成与 LanceDB 写入/读回；素材加载、文本构造走真实路径
+    async def fake_text_emb(_text):
+        return [0.1, 0.2]
+
+    async def fake_image_emb(file_path=None):
+        return [0.3, 0.4]
+
+    from app.services.vector import embedding as emb_module
+
+    monkeypatch.setattr(emb_module, "generate_text_embedding", fake_text_emb)
+    monkeypatch.setattr(emb_module, "generate_image_embedding", fake_image_emb)
+
+    async def fake_batch_upsert(_kind, items):
+        return len(items)
+
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [insp_id])
+        # 修复前此处抛 MissingGreenlet → 任务失败
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+        assert task.status != "failed"
+        assert task.result["text_done"] == 1
+        assert task.result["image_done"] == 1
+
+
+async def test_vector_backfill_skips_deleted_inspiration(client, upload, monkeypatch):
+    """已删除（垃圾桶）素材在回填中被跳过，不生成向量也不计入失败。"""
+    insp_id = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_id}/trash")
+
+    fake = _FakeRebuildVectors()
+    _patch_backfill_fakes(monkeypatch, fake)
+    called: list[str] = []
+
+    async def spy_build(insp):
+        called.append(insp.id)
+        return [0.1], [0.2]
+
+    monkeypatch.setattr(vb_module, "_build_material_vectors", spy_build)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [insp_id])
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+        # 状态 success 由 worker _run_task 置；执行器只负责进度与统计
+        assert task.done == 1 and task.progress == 100
+        assert called == []  # 已删除素材未被构建向量
+        assert task.result["text_skipped"] == 1
+        assert task.result["image_skipped"] == 1
+
+
 async def test_quality_check_rerun_no_side_effects(client, upload, monkeypatch):
     """幂等：质量审核任务重跑不产生新的审核日志/判定记录（无副作用）。"""
     from app.models.inspiration import AIAnalysisLog, AIQualityReview

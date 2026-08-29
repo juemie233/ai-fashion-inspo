@@ -25,9 +25,11 @@ import random
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import Inspiration
+from app.models.tag import InspirationTag
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.services.task_runners.common import (
     PermanentTaskError,
@@ -336,11 +338,26 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
 
     total = len(inspiration_ids)
     for idx, insp_id in enumerate(inspiration_ids, start=1):
-        insp = await db.get(Inspiration, insp_id)
+        # 显式 selectinload 两级标签关系（Inspiration.tags → InspirationTag.tag）：
+        # build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是
+        # 默认 lazy="select"——异步会话下隐式懒加载会抛 MissingGreenlet
+        # （"greenlet_spawn has not been called"）。此前 db.get 只 eager load 了
+        # 一级 tags，二级 .tag 未加载即触发此错误。
+        # 同时过滤已删除素材：垃圾桶素材不重建向量（与旧 rebuild_* 路径语义一致）
+        insp_result = await db.execute(
+            select(Inspiration)
+            .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+            .where(Inspiration.id == insp_id, Inspiration.deleted_at.is_(None))
+        )
+        insp = insp_result.scalar_one_or_none()
         is_image = insp is not None and insp.media_type == "image"
 
-        # 文本向量：标签已随素材 eager load（Inspiration.tags lazy="selectin"）
-        if insp is not None:
+        # 文本向量：标签已随素材 eager load（上方 selectinload 两级关系）
+        if insp is None:
+            # 素材不存在或已删除（垃圾桶）：计入跳过（与旧 rebuild_* 路径口径一致）
+            text_skipped += 1
+            image_skipped += 1
+        else:
             text_vec, image_vec = await _build_material_vectors(insp)
             if text_vec:
                 pending_text.append((insp_id, text_vec))
