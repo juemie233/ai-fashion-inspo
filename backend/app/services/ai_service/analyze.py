@@ -20,7 +20,9 @@ from app.models.inspiration import AIAnalysisLog, AIAnalysisTag, Inspiration
 from app.services.ai_parser import looks_truncated, parse_analysis_response
 from app.services.ai_service.common import _read_image_base64, logger
 from app.services.ai_tag_saver import (
+    clear_ai_tags,
     iter_extracted_tags,
+    link_tag,
     resolve_tag_ids,
     save_tags,
 )
@@ -381,6 +383,133 @@ async def analyze_image(
             model_name=used_model,
         )
         return success
+
+
+async def analyze_video(
+    db: AsyncSession,
+    inspiration_id: str,
+    frame_paths: list[str],
+    model_name: str | None = None,
+    prompt: str | None = None,
+    apply_tags: bool = True,
+) -> bool:
+    """多帧融合分析视频素材：逐帧调用视觉模型，标签按帧融合后一次性落库。
+
+    融合语义（与单图分析「先清后写」语义对齐）：
+    - 标签：逐帧提取 (名称, 类别, 置信度)，同名标签取各帧最高置信度，
+      全部帧融合完成后**一次性**清旧写新——不能逐帧调 save_tags（其先清
+      后写语义会导致后一帧覆盖前一帧的标签）；
+    - 主色调：取首个产出了主色调的帧的结果；
+    - 日志：整个视频只写一条分析日志（raw_response 按帧拼接留痕，
+      processing_time 为全部帧总耗时），快照记录融合后的标签集合。
+
+    参数:
+        db: 数据库会话
+        inspiration_id: 素材 UUID（必须是视频素材，帧由调用方提取）
+        frame_paths: 关键帧相对路径列表（相对 storage_root，时间序）
+        model_name: 视觉模型名（缺省用全局默认，多模型组合分析时传入）
+        prompt: 分析 Prompt 文本（缺省用该模型当前配置的 Prompt）
+        apply_tags: 是否把融合标签写入素材；False 时只写日志与快照
+
+    返回:
+        True 表示至少一帧分析成功；全部帧失败返回 False
+    """
+    if not frame_paths:
+        logger.warning(f"视频分析无可用关键帧: {inspiration_id}")
+        return False
+
+    used_model = model_name or settings.ollama_vision_model
+    start_time = time.time()
+    used_prompt = prompt or get_model_prompt(used_model)
+    model_cfg = get_model_config(used_model)
+
+    fused: dict[str, tuple[str, float]] = {}  # 标签名 -> (类别, 最高置信度)
+    tags_data_list: list[dict] = []  # 各帧解析结果（主色调取用）
+    raw_parts: list[str] = []  # 各帧原始输出（日志留痕）
+    frame_errors: list[str] = []
+    ok_frames = 0
+
+    for idx, frame_rel in enumerate(frame_paths, start=1):
+        try:
+            image_data, file_size_mb = await _read_image_base64(frame_rel)
+            raw_response = await _call_ollama_vision(
+                image_data, used_prompt, model_cfg, file_size_mb,
+                f"{inspiration_id}#f{idx}", used_model,
+            )
+            tags_data = parse_analysis_response(raw_response)
+            if not tags_data:
+                frame_errors.append(f"第 {idx} 帧: AI 响应无法解析为 JSON")
+                logger.warning(f"视频第 {idx}/{len(frame_paths)} 帧解析失败 {inspiration_id}")
+                continue
+            ok_frames += 1
+            raw_parts.append(f"[帧 {idx}] {raw_response}")
+            tags_data_list.append(tags_data)
+            for name, category, confidence in iter_extracted_tags(tags_data):
+                existing = fused.get(name)
+                if existing is None or confidence > existing[1]:
+                    fused[name] = (category, confidence)
+        except Exception as e:
+            frame_errors.append(f"第 {idx} 帧: {e}")
+            logger.warning(f"视频第 {idx}/{len(frame_paths)} 帧分析失败 {inspiration_id}: {e}")
+
+    # 判定整体成败：至少一帧解析出结果即视为成功；全部失败或零标签按失败计
+    error_msg: str | None = None
+    if ok_frames == 0:
+        error_msg = "视频全部关键帧分析失败：" + ("；".join(frame_errors[:3]) or "未知错误")
+    elif not fused:
+        error_msg = f"视频 {ok_frames} 个关键帧均未提取到有效标签"
+
+    success = error_msg is None
+
+    try:
+        if success and apply_tags:
+            # 先清后写一次（与 save_tags 的「重新分析」语义一致），同名标签
+            # 已按帧融合去重，link_tag 内部还会处理并发与置信度更新
+            await clear_ai_tags(db, inspiration_id)
+            for name, (category, confidence) in fused.items():
+                tag = await get_or_create_tag(db, name, category, "ai_generated")
+                await link_tag(db, inspiration_id, tag.id, confidence=confidence)
+            # 主色调：取首个产出了主色调的帧
+            for tags_data in tags_data_list:
+                if isinstance(tags_data.get("dominant_colors"), list) and tags_data["dominant_colors"]:
+                    await _update_dominant_colors(db, inspiration_id, tags_data)
+                    break
+
+        await db.commit()
+
+        if success and apply_tags:
+            try:
+                from app.services.vector_service import rebuild_inspiration_vectors
+
+                await rebuild_inspiration_vectors(db, inspiration_id)
+            except Exception as vec_err:
+                logger.warning(f"视频分析完成后重建向量失败（忽略）{inspiration_id}: {vec_err}")
+    except Exception as e:
+        error_msg = error_msg or str(e)
+        success = False
+        logger.error(f"视频分析落库失败 {inspiration_id}: {e}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    processing_time = int((time.time() - start_time) * 1000)
+    extracted = [(name, cat, conf) for name, (cat, conf) in fused.items()]
+    await _write_analysis_log(
+        db,
+        inspiration_id,
+        used_prompt,
+        "\n----\n".join(raw_parts) if raw_parts else None,
+        error_msg,
+        processing_time,
+        extracted,
+        model_name=used_model,
+    )
+    logger.info(
+        f"视频多帧分析完成 {inspiration_id}: {ok_frames}/{len(frame_paths)} 帧有效，"
+        f"融合标签 {len(extracted)} 个，成功={success}"
+    )
+    return success
 
 
 def _http_error_message(

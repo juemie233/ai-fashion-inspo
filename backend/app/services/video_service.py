@@ -177,6 +177,46 @@ async def cleanup_keyframes(inspiration_id: str) -> None:
     await asyncio.to_thread(_cleanup_keyframes_sync, str(inspiration_id))
 
 
+def sample_frames(frames: list[Path], max_n: int) -> list[Path]:
+    """从时间序帧列表中均匀采样最多 max_n 帧（覆盖全片而非只取开头）。
+
+    max_n <= 0 视为不限制（返回全部帧）；帧数不超过上限时原样返回；
+    超过时按等距索引采样（首尾帧优先保留：开头交代整体、结尾常有完整
+    造型，中间均匀取点）。
+    """
+    frames = list(frames)
+    if max_n <= 0 or len(frames) <= max_n:
+        return frames
+    if max_n == 1:
+        return [frames[0]]
+    positions = [round(i * (len(frames) - 1) / (max_n - 1)) for i in range(max_n)]
+    # 去重（round 可能产生重复位置）并保持时间序
+    return [frames[i] for i in dict.fromkeys(positions)]
+
+
+async def resolve_analysis_frames(inspiration) -> list[str]:
+    """解析素材的「多帧分析源」：返回相对 storage_root 的帧路径列表。
+
+    图片素材 → [原图相对路径]（单帧，与既有 analyze_image 链路一致）；
+    视频素材 → 提取关键帧后按 ``settings.video_analysis_max_frames`` 均匀
+    采样（懒提取，ffmpeg 失败返回空列表由调用方降级）；
+    其余类型 → []。
+    """
+    media_type = getattr(inspiration, "media_type", None)
+    if media_type == "image":
+        return [inspiration.file_path]
+    if media_type != "video":
+        return []
+
+    insp_id = str(inspiration.id)
+    frames = await extract_keyframes(inspiration)
+    if not frames:
+        return []
+    max_frames = getattr(settings, "video_analysis_max_frames", 3)
+    sampled = sample_frames(frames, max_frames)
+    return [f.relative_to(settings.storage_root).as_posix() for f in sampled]
+
+
 async def cleanup_keyframes_batch(inspiration_ids: list[str]) -> None:
     """批量删除多个素材的关键帧目录（批量物理删除/清空垃圾桶时调用，幂等）。"""
     for insp_id in inspiration_ids:

@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # 可在 .env 用 ANALYZE_CONCURRENCY 覆盖
     analyze_concurrency: int = 1
 
+    # 视频多帧分析：每个视频参与 AI 分析的最大关键帧数（多帧标签按最高置信度
+    # 融合，覆盖整套穿搭的不同镜头）。帧数越多语义越全但 Ollama 调用成本线性
+    # 增长（N 帧 = N 次视觉调用）；设 1 退化为仅分析首帧的旧行为。可在 .env
+    # 用 VIDEO_ANALYSIS_MAX_FRAMES 覆盖
+    video_analysis_max_frames: int = 3
+
     # 负样本初筛器（阶段 2：CLIP 向量 + sklearn 轻量分类器）
     quality_classifier_threshold: float = 0.9  # 自动拒绝的置信度阈值（宁缺毋滥，低置信度仍走 VLM 复审）
 

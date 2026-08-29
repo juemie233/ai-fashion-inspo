@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.task import TaskQueue
-from app.services.ai_service import analyze_image
+from app.services.ai_service import analyze_image, analyze_video
 from app.services.task_runners.common import (
     PermanentTaskError,
     RecoverableTaskError,
@@ -82,18 +82,22 @@ async def _last_analysis_error(db: AsyncSession, inspiration_id: str) -> str | N
 
 
 async def _analyze_one(
-    sem: asyncio.Semaphore, inspiration_id: str, file_path: str
+    sem: asyncio.Semaphore, inspiration_id: str, frames: list[str]
 ) -> tuple[str, bool, str | None]:
-    """分析单张图片（使用独立数据库会话），返回 (素材 ID, 是否成功, 失败原因)。
+    """分析单个素材（使用独立数据库会话），返回 (素材 ID, 是否成功, 失败原因)。
 
     参数:
         sem: 批内并发信号量
         inspiration_id: 素材 ID
-        file_path: 图片相对路径
+        frames: 分析源帧相对路径列表——图片为单元素，视频为采样关键帧
+            （多帧时走 analyze_video 融合分析，单帧退化为 analyze_image）
     """
     async with sem:
         async with async_session() as db:
-            success = await analyze_image(db, inspiration_id, file_path)
+            if len(frames) > 1:
+                success = await analyze_video(db, inspiration_id, frames)
+            else:
+                success = await analyze_image(db, inspiration_id, frames[0])
             if success:
                 return inspiration_id, True, None
             error = await _last_analysis_error(db, inspiration_id)
@@ -105,28 +109,25 @@ async def _analyze_one(
             return inspiration_id, False, error
 
 
-async def _resolve_analysis_source(
+async def _resolve_analysis_frames(
     db: AsyncSession, inspiration_id: str, file_path: str, media_type: str
-) -> str | None:
-    """解析素材的分析源相对路径（相对 storage_root，供 analyze_image 读取）。
+) -> list[str]:
+    """解析素材的多帧分析源（相对 storage_root 的帧路径列表）。
 
-    图片素材 → 原文件相对路径；视频素材 → 第一关键帧相对路径
-    （首帧未提取时现场懒提取，ffmpeg 耗时；失败返回 None）；其余类型 None。
+    图片素材 → [原图相对路径]；视频素材 → 按配置采样关键帧
+    （video_service.resolve_analysis_frames，懒提取；失败返回空列表）；
+    其余类型空列表。空列表 = 分析源不可用，调用方跳过该素材。
     """
     if media_type == "image":
-        return file_path
+        return [file_path]
     if media_type == "video":
-        from app.config import settings
         from app.services import video_service
 
         insp = await db.get(Inspiration, inspiration_id)
         if insp is None:
-            return None
-        frame = await video_service.ensure_first_frame(insp)
-        if frame is None:
-            return None
-        return frame.relative_to(settings.storage_root).as_posix()
-    return None
+            return []
+        return await video_service.resolve_analysis_frames(insp)
+    return []
 
 
 async def _load_pending_items(
@@ -137,7 +138,7 @@ async def _load_pending_items(
     视频素材解析第一关键帧为分析源；关键帧提取失败的素材计入 unavailable
     （不进入分析、不算失败——ffmpeg 系统性故障时任务不该整体重试）。
 
-    返回 (待分析 (id, file_path) 列表, 已分析跳过数量, 关键帧不可用数量)。
+    返回 (待分析 (id, 帧路径列表) 列表, 已分析跳过数量, 关键帧不可用数量)。
     """
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
@@ -147,18 +148,18 @@ async def _load_pending_items(
     )
     rows = result.all()
     row_map = {r[0]: (r[1], r[2]) for r in rows}
-    items: list[tuple[str, str]] = []
+    items: list[tuple[str, list[str]]] = []
     unavailable = 0
     for iid in inspiration_ids:
         if iid not in row_map:
             continue
         fp, mt = row_map[iid]
-        source = await _resolve_analysis_source(db, iid, fp, mt)
-        if source is None:
+        frames = await _resolve_analysis_frames(db, iid, fp, mt)
+        if not frames:
             unavailable += 1
             logger.warning(f"素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
             continue
-        items.append((iid, source))
+        items.append((iid, frames))
 
     # 跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
     analyzed_ids: set[str] = set()
@@ -175,7 +176,7 @@ async def _load_pending_items(
         )
         analyzed_ids.update(r[0] for r in analyzed_result.all())
     already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
-    items = [(iid, fp) for iid, fp in items if iid not in analyzed_ids]
+    items = [(iid, fr) for iid, fr in items if iid not in analyzed_ids]
     return items, already_analyzed, unavailable
 
 
@@ -246,7 +247,7 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     for start in range(0, len(items), concurrency):
         chunk = items[start:start + concurrency]
         results = await asyncio.gather(
-            *(_analyze_one(sem, iid, fp) for iid, fp in chunk)
+            *(_analyze_one(sem, iid, frames) for iid, frames in chunk)
         )
         for iid, ok, err in results:
             if ok:
@@ -341,13 +342,13 @@ async def create_multi_analyze_task(
 
 async def _load_items(
     db: AsyncSession, inspiration_ids: list[str]
-) -> list[tuple[str, str]]:
-    """加载仍存在的图片/视频素材，返回 (素材 ID, 分析源文件路径) 列表。
+) -> list[tuple[str, list[str]]]:
+    """加载仍存在的图片/视频素材，返回 (素材 ID, 分析源帧路径列表)。
 
     与单模型批量分析不同：组合分析允许对已分析过的素材重复分析
     （对比不同模型/提示词正是核心诉求），因此不做「已分析跳过」；
     幂等恢复改为按「组合 × 素材」粒度判断（见 _load_done_ids）。
-    视频素材解析第一关键帧为分析源（提取失败的素材跳过并记日志）。
+    视频素材解析采样关键帧列表（提取失败的素材跳过并记日志）。
     """
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
@@ -357,16 +358,16 @@ async def _load_items(
     )
     rows = result.all()
     row_map = {r[0]: (r[1], r[2]) for r in rows}
-    items: list[tuple[str, str]] = []
+    items: list[tuple[str, list[str]]] = []
     for iid in inspiration_ids:
         if iid not in row_map:
             continue
         fp, mt = row_map[iid]
-        source = await _resolve_analysis_source(db, iid, fp, mt)
-        if source is None:
+        frames = await _resolve_analysis_frames(db, iid, fp, mt)
+        if not frames:
             logger.warning(f"组合分析素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
             continue
-        items.append((iid, source))
+        items.append((iid, frames))
     return items
 
 
@@ -414,22 +415,35 @@ async def _last_analysis_error_for(
 async def _analyze_one_multi(
     sem: asyncio.Semaphore,
     inspiration_id: str,
-    file_path: str,
+    frames: list[str],
     model_name: str,
     prompt: str | None,
     apply_tags: bool,
 ) -> tuple[str, str, bool, str | None]:
-    """按组合分析单张图片（独立数据库会话），返回 (素材 ID, 模型名, 是否成功, 失败原因)。"""
+    """按组合分析单个素材（独立数据库会话），返回 (素材 ID, 模型名, 是否成功, 失败原因)。
+
+    多帧（视频素材）走 analyze_video 融合分析，单帧走 analyze_image。
+    """
     async with sem:
         async with async_session() as db:
-            success = await analyze_image(
-                db,
-                inspiration_id,
-                file_path,
-                model_name=model_name,
-                prompt=prompt,
-                apply_tags=apply_tags,
-            )
+            if len(frames) > 1:
+                success = await analyze_video(
+                    db,
+                    inspiration_id,
+                    frames,
+                    model_name=model_name,
+                    prompt=prompt,
+                    apply_tags=apply_tags,
+                )
+            else:
+                success = await analyze_image(
+                    db,
+                    inspiration_id,
+                    frames[0],
+                    model_name=model_name,
+                    prompt=prompt,
+                    apply_tags=apply_tags,
+                )
             if success:
                 return inspiration_id, model_name, True, None
             error = await _last_analysis_error_for(db, inspiration_id, model_name)
@@ -505,8 +519,8 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
             chunk = todo[start:start + concurrency]
             results = await asyncio.gather(
                 *(
-                    _analyze_one_multi(sem, iid, fp, model_name, prompt, apply_tags)
-                    for iid, fp in chunk
+                    _analyze_one_multi(sem, iid, frames, model_name, prompt, apply_tags)
+                    for iid, frames in chunk
                 )
             )
             for iid, combo_model, ok, err in results:

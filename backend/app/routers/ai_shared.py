@@ -43,24 +43,16 @@ def set_queue_paused(paused: bool) -> None:
     _queue_paused = paused
 
 
-async def _resolve_analysis_source(inspiration) -> str | None:
-    """解析素材的分析源图片路径（相对 storage_root，供 analyze_image 读取）。
+async def _resolve_analysis_frames(inspiration) -> list[str]:
+    """解析素材的多帧分析源（相对 storage_root 的帧路径列表）。
 
-    图片素材 → 原文件相对路径；视频素材 → 第一关键帧相对路径（必要时现场
-    提取，ffmpeg 耗时因此在后台任务中执行）；其余类型返回 None。
+    图片素材 → [原图相对路径]；视频素材 → 按配置采样关键帧
+    （video_analysis_max_frames，懒提取，ffmpeg 耗时因此在后台任务中执行）；
+    其余类型或提取失败返回空列表。
     """
-    from app.config import settings
+    from app.services import video_service
 
-    if inspiration.media_type == "image":
-        return inspiration.file_path
-    if inspiration.media_type == "video":
-        from app.services import video_service
-
-        frame = await video_service.ensure_first_frame(inspiration)
-        if frame is None:
-            return None
-        return frame.relative_to(settings.storage_root).as_posix()
-    return None
+    return await video_service.resolve_analysis_frames(inspiration)
 
 
 async def _write_unresolvable_log(inspiration_id: str, error: str) -> None:
@@ -89,7 +81,8 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
     """后台任务：对素材执行 AI 分析并保存标签（带并发控制 + 任务追踪）。
 
     file_path 为 None 时（视频素材 / 重试路径）从数据库懒解析分析源：
-    视频 → 第一关键帧（必要时现场提取 ffmpeg），解析失败写入失败日志。
+    图片 → 原图，视频 → 按配置采样关键帧（必要时现场提取 ffmpeg），
+    多帧走 analyze_video 融合分析；解析失败写入失败日志。
     """
     if inspiration_id in _active_analyses:
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
@@ -119,10 +112,11 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                 except ValueError:
                     pass
                 _active_analyses[inspiration_id] = "正在分析..."
-                from app.services.ai_service import analyze_image
+                from app.services.ai_service import analyze_image, analyze_video
 
-                # 分析源懒解析：视频素材在此现场提取关键帧（避免阻塞 HTTP 请求）
-                if file_path is None:
+                # 分析源懒解析：视频素材在此现场提取并采样关键帧（避免阻塞 HTTP 请求）
+                frames: list[str] = [file_path] if file_path else []
+                if not frames:
                     async with async_session() as db:
                         result = await db.execute(
                             select(Inspiration).where(Inspiration.id == inspiration_id)
@@ -134,8 +128,8 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                             inspiration_id, "分析失败：素材不存在"
                         )
                         return
-                    file_path = await _resolve_analysis_source(inspiration)
-                    if file_path is None:
+                    frames = await _resolve_analysis_frames(inspiration)
+                    if not frames:
                         logger.warning(
                             f"分析源解析失败（视频关键帧提取失败）: {inspiration_id}"
                         )
@@ -147,7 +141,11 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
 
                 logger.info(f"开始 AI 分析: {inspiration_id}")
                 async with async_session() as db:
-                    success = await analyze_image(db, inspiration_id, file_path)
+                    if len(frames) > 1:
+                        # 视频：多帧融合分析（标签按帧融合后一次落库，单条日志）
+                        success = await analyze_video(db, inspiration_id, frames)
+                    else:
+                        success = await analyze_image(db, inspiration_id, frames[0])
                     # 仅分析成功时删除该素材的旧失败日志
                     if success:
                         old_logs = await db.execute(
