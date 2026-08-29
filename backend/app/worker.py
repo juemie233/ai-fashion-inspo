@@ -12,6 +12,7 @@ worker 与 API 之间通过 task_queue 表解耦。
 import asyncio
 import logging
 import os
+import time
 import uuid
 from datetime import timedelta
 
@@ -43,6 +44,13 @@ _HEARTBEAT_INTERVAL = 10.0
 
 # 心跳超时阈值（秒）：running 任务心跳超过该时长未更新，视为「认领它的 worker 已死」
 _STALE_HEARTBEAT_THRESHOLD = 90.0
+
+# 僵尸任务清扫间隔（秒）：worker 运行期周期性执行 _reset_stale_tasks。
+# 仅靠启动时的一次清扫有漏洞：关闭服务后 90s 内快速重启（restart.sh 常见
+# 耗时），遗留 running 任务的心跳仍「新鲜」，启动清扫会跳过；此后无人再
+# 检查，新 worker 不认领 running 任务 → 任务永久卡死。运行期持续清扫，
+# 心跳一过期即被重置回 pending 重新执行。
+_STALE_SWEEP_INTERVAL = 30.0
 
 
 def _build_worker_id() -> str:
@@ -277,8 +285,14 @@ async def _worker_loop(worker_id: str) -> None:
     """
     logger.info(f"任务队列 worker 已启动（{worker_id}），开始轮询...")
     running: set[asyncio.Task] = set()
+    last_stale_sweep = 0.0  # 启动后首轮即清扫（main 启动清扫后的兜底补位）
     while True:
         try:
+            # 周期性清扫心跳超时的遗留 running 任务（修复：仅启动时清扫一次，
+            # 90s 内快速重启会让遗留任务永久卡在 running——见 _STALE_SWEEP_INTERVAL）
+            if time.monotonic() - last_stale_sweep >= _STALE_SWEEP_INTERVAL:
+                last_stale_sweep = time.monotonic()
+                await _reset_stale_tasks()
             # 回收已完成的执行协程（异常已在 _run_task_safe 内记录，不会丢失槽位）
             running = {t for t in running if not t.done()}
             concurrency = max(1, int(settings.worker_concurrency))

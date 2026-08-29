@@ -50,3 +50,30 @@ async def test_reset_stale_tasks_resets_null_heartbeat(client):
     async with async_session() as db:
         task = await db.get(TaskQueue, tid)
         assert task.status == "pending"
+
+
+async def test_reset_stale_tasks_late_sweep_after_fresh_restart(client):
+    """快速重启场景回归：关闭服务后 90s 内重启，启动时心跳仍「新鲜」，
+    启动清扫会跳过该任务（存活误判）；心跳过期后的**后续清扫**必须能
+    把它重置回 pending——否则任务永久卡在 running（真实案例：向量回填
+    任务重启后卡死，无人再认领）。"""
+    tid = await _add_running_task(heartbeat_age_seconds=5)  # 重启时心跳仍新鲜
+
+    await _reset_stale_tasks()  # 模拟启动时的一次清扫
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        assert task.status == "running"  # 启动清扫确实跳过（未误伤新鲜心跳）
+
+    # 模拟时间流逝：认领它的旧 worker 已死，心跳停止更新而过期
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        task.heartbeat_at = utcnow() - timedelta(seconds=120)
+        await db.commit()
+
+    await _reset_stale_tasks()  # 模拟运行期的周期性清扫（worker 主循环每 30s）
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        assert task.status == "pending"  # 已被后续清扫重置，等待重新认领
+        assert task.claimed_by is None
