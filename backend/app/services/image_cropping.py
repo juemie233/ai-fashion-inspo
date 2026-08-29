@@ -82,6 +82,22 @@ _UI_BAND_SPIKE_MIN = 0.08  # 图标/文字行的「突变峰」单步增量下�
 # 1%~2% 的薄残留交由 residual 疑似路径人工确认，不自动裁）
 _CONTENT_MIN_CROP_FRACTION = 0.02
 
+# ── 顶部疑似残留估算参数（_residual_top_estimate）──
+# 真实状态栏条带（含透明残留）饱和度极低（实测 ≤0.12），照片顶部渐变
+# （天空/虚化背景）饱和度高（实测 0.15~0.8）——sat 是残留 vs 照片渐变
+# 的首要区分信号
+_RESIDUAL_SAT_MAX = 0.15
+# 条带后内容区多样度相对条带中位的抬升下限：有 UI 特征（截图证据）时
+# 从宽（低多样度内容区也能续上建议）。无证据时沿用原 0.08——实测照片
+# 渐变的 tail 抬升普遍 >0.15，收紧到 0.12 并不能多拦照片误报（真正的
+# 区分信号是 sat 通道与条带内部渐升检测），反而会误伤真实残留
+_RESIDUAL_TAIL_JUMP_LOOSE = 0.06
+_RESIDUAL_TAIL_JUMP_STRICT = 0.08
+# 内容区起点多样度下限：有 UI 特征图纸截图内容区常为低多样度
+# （白底/浅色穿搭图 0.15~0.25），阈值过高会漏检；无证据时用原 0.25
+_RESIDUAL_CONTENT_MIN_LOOSE = 0.16
+_RESIDUAL_CONTENT_MIN_STRICT = 0.25
+
 # EXIF Orientation 取值：5/6/7/8 表示 90°/270° 旋转，宽高互换
 _EXIF_TRANSPOSE_90 = frozenset((5, 6, 7, 8))
 
@@ -317,20 +333,34 @@ def _content_bounds(diversity: np.ndarray) -> tuple[int | None, int | None]:
     return top_edge, bottom_edge
 
 
-def _residual_top_estimate(diversity: np.ndarray) -> int:
+def _residual_top_estimate(
+    diversity: np.ndarray, saturation: np.ndarray | None = None, ui_evidence: bool = False
+) -> int:
     """疑似顶部状态栏残留的裁剪行数估算（已裁截图，图标叠加在照片上）。
 
     透明状态栏图标叠加在照片上，残留行多样度实测 0.16~0.27（图标下沿渐变
     可达 0.27），与照片顶部自然低多样度区域（暗角/天空/柜台）在行剖面上
-    几乎同构、无法可靠区分。因此本函数只做「疑似」估算，供人工确认后
-    裁剪，绝不并入自动裁剪比例。
+    几乎同构、无法仅凭多样度可靠区分。因此本函数只做「疑似」估算，供人工
+    确认后裁剪，绝不并入自动裁剪比例。
 
-    判定：顶部 8% 窗口内存在多样度 < _RESIDUAL_MED（0.28）的连续簇（≥2 行）、
-    簇中位 < _RESIDUAL_MED - 0.02（0.26）、且其后 30% 高度内内容中位显著
-    更高（≥ 簇中位 + 0.08）→ 返回簇结束后首个多样度显著升高的行。
+    区分信号（真实数据校准，2026-09）：
+    - 饱和度：真实状态栏条带（含透明残留）饱和度极低（实测 ≤0.12）；
+      照片顶部渐变（天空/虚化背景）饱和度高（实测 0.15~0.8）且随行渐升。
+      条带内 sat 中位过高 → 照片渐变，拒绝。
+    - 条带内部形态：照片渐变多样度单调渐升（前后半中位差 ≥0.05）；系统
+      UI 条带为「低位平台 + 图标小峰」，前后半持平。
+    - 内容抬升量：条带后内容区须显著更高。无 UI 证据时从严（+0.12，
+      防照片渐变误报）；有 UI 特征（top_bar/bottom_bar 截图证据）时从宽
+      （+0.06，低多样度内容区——白底/浅色穿搭图——也能续上建议）。
+    - 内容起点多样度：无证据时要求 ≥0.25（原判据）；有证据时放宽到
+      0.16，避免低多样度内容图被漏检。
 
     参数:
         diversity: 行多样度剖面
+        saturation: 行饱和度剖面（None 时跳过饱和度通道校验）
+        ui_evidence: 是否具备截图证据（detect_screenshot_features 检出
+            top_bar/bottom_bar）。True 时放宽内容抬升/起点门槛，False 时
+            从严防照片渐变误报。
 
     返回:
         建议裁剪行数（无法确认残留时返回 0）
@@ -345,10 +375,19 @@ def _residual_top_estimate(diversity: np.ndarray) -> int:
     first_med = float(np.median(diversity[0 : seg_end + 1]))
     if first_med >= _RESIDUAL_MED - 0.02:
         return 0
+    # 饱和度通道：条带内 sat 中位过高 → 照片渐变（天空/虚化），拒绝
+    if saturation is not None:
+        band_sat = float(np.median(saturation[0 : seg_end + 1]))
+        if band_sat > _RESIDUAL_SAT_MAX:
+            return 0
+    # 内容抬升量：有证据从宽（0.06），无证据沿用原 0.08
     tail = diversity[seg_end + 1 : min(n, seg_end + 1 + int(n * 0.3))]
-    if len(tail) < 5 or float(np.median(tail)) < first_med + 0.08:
+    min_jump = _RESIDUAL_TAIL_JUMP_LOOSE if ui_evidence else _RESIDUAL_TAIL_JUMP_STRICT
+    if len(tail) < 5 or float(np.median(tail)) < first_med + min_jump:
         return 0
-    threshold = max(_STATUS_BAR_MED, first_med + 0.05)
+    # 内容起点多样度：无证据用原 0.25，有证据放宽到 0.16
+    content_min = _RESIDUAL_CONTENT_MIN_LOOSE if ui_evidence else _RESIDUAL_CONTENT_MIN_STRICT
+    threshold = max(content_min, first_med + 0.05)
     for y in range(seg_end + 1, min(n, window + int(n * _STATUS_BAR_SEARCH_FRACTION))):
         if diversity[y] >= threshold:
             return y
@@ -524,9 +563,16 @@ def detect_content_bounds(path) -> dict:
     return _content_bounds_from_small(small)
 
 
-def _content_bounds_from_small(small: Image.Image) -> dict:
+def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) -> dict:
     """从缩放图计算内容边界（detect_content_bounds 的计算核心，供单次解码
     合并路径复用；扫描全量素材时避免每张图重复完整解码）。
+
+    参数:
+        small: 统一宽度缩放的 RGB 小图
+        ui_evidence: 是否具备截图证据（detect_screenshot_features 检出
+            top_bar/bottom_bar）。True 时残留估算放宽内容抬升/起点门槛，
+            让「低多样度内容区」的真实截图（白底/浅色穿搭图）也能给出
+            建议；False（无截图证据）时从严防照片渐变误报。
 
     异常:
         ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
@@ -545,9 +591,27 @@ def _content_bounds_from_small(small: Image.Image) -> dict:
     #    才允许进入状态栏精调并计入 top_frac ──
     correction = False
     top_frac = 0.0
-    if top_edge_raw > 0 and _ui_band_valid(
-        diversity, 0, top_edge_raw, top_edge_raw
-    ):
+    top_band_valid = False
+    if top_edge_raw > 0:
+        if ui_evidence:
+            # 有截图证据（状态栏/导航栏特征）：低饱和条带（sat≤0.15）比照片
+            # 渐变可信，允许更小的多样度跃变（内容区多样度本身低的截图——
+            # 白底/浅色穿搭图——也能接上状态栏边界）；照片渐变是彩色缓升，
+            # sat 高，仍走严格跃变门槛
+            _sat_ok = bool(saturation is not None) and float(
+                np.median(saturation[0:top_edge_raw])
+            ) <= _RESIDUAL_SAT_MAX
+            _jump_min = 0.05 if _sat_ok else _UI_BAND_JUMP_MIN
+            _band = diversity[0:top_edge_raw]
+            _band_med = float(np.median(_band))
+            top_band_valid = (
+                float(diversity[top_edge_raw]) - _band_med >= _jump_min
+            ) or _ui_band_valid(diversity, 0, top_edge_raw, top_edge_raw)
+        else:
+            # 无截图证据：一律走严格判据，防止普通照片顶部的纯色天空/暗部
+            # 被当作状态栏自动裁剪
+            top_band_valid = _ui_band_valid(diversity, 0, top_edge_raw, top_edge_raw)
+    if top_band_valid:
         top_edge = _status_bar_correction(diversity, top_edge_raw)
         correction = top_edge != top_edge_raw
         top_frac = top_edge / n
@@ -557,7 +621,9 @@ def _content_bounds_from_small(small: Image.Image) -> dict:
     residual_top_frac = 0.0
     if top_edge == 0:
         # 顶格残留疑似检测：不并入 top_frac（防误裁普通照片），单独返回建议
-        residual_top_frac = round(_residual_top_estimate(diversity) / n, 6)
+        residual_top_frac = round(
+            _residual_top_estimate(diversity, saturation, ui_evidence) / n, 6
+        )
 
     # ── 底部地带有效性校验（同上）：非系统 UI 的底部低多样度区域不裁 ──
     bottom_edge = bottom_edge_raw
@@ -767,8 +833,11 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
             Image.Resampling.LANCZOS,
         )
     features = _features_from_small(small64)
+    # UI 证据（top_bar/bottom_bar 截图特征）传给内容边界估算：放宽残留
+    # 检测的内容抬升/起点门槛，让低多样度内容区的真实截图也能给出建议
+    ui_evidence = features.get("top_bar", False) or features.get("bottom_bar", False)
     try:
-        bounds = _content_bounds_from_small(small96)
+        bounds = _content_bounds_from_small(small96, ui_evidence=ui_evidence)
     except ValueError:
         bounds = None
     return features, bounds

@@ -344,25 +344,29 @@ def test_content_mode_excludes_cleanly_cropped(client):
 
 
 def test_status_bar_correction_top_residual():
-    """状态栏残留修正（单元级）：顶格低多样度簇 → 后随更高内容时给出疑似裁剪建议。"""
+    """状态栏残留修正（单元级）：顶格低多样度簇 → 后随更高内容时给出疑似裁剪建议。
+
+    残留估算携带 ui_evidence=True（真实残留场景均为有状态栏/导航栏特征的
+    截图）；无截图证据时从严（_RESIDUAL_TAIL_JUMP_STRICT），防照片渐变误报。
+    """
     from app.services.crop_service import _residual_top_estimate, _status_bar_correction
 
     # 场景 1：顶格残留（行 0~1 d≈0.19~0.20）后随内容区（d≈0.30+）→ 疑似建议 2 行
     d1 = np.array([0.19, 0.20] + [0.30, 0.31, 0.29, 0.33, 0.32] * 30)
-    assert _residual_top_estimate(d1) == 2
+    assert _residual_top_estimate(d1, ui_evidence=True) == 2
 
     # 场景 1b：顶格残留较厚（5 行，d 0.16~0.27，透明状态栏图标下沿）
     # 后随内容区（d≈0.36）→ 疑似建议 5 行（实测 51e564d6 类需裁 5 行才干净）
     d1b = np.array([0.16, 0.20, 0.24, 0.27, 0.25] + [0.36] * 80)
-    assert _residual_top_estimate(d1b) == 5
+    assert _residual_top_estimate(d1b, ui_evidence=True) == 5
 
     # 场景 2：顶格但内容直接开始（d 高，无残留）→ 无疑似建议
     d2 = np.array([0.30, 0.31, 0.29, 0.33, 0.32] * 32)
-    assert _residual_top_estimate(d2) == 0
+    assert _residual_top_estimate(d2, ui_evidence=True) == 0
 
     # 场景 3：顶格低多样度簇但后随内容不高（可能是照片暗部，非残留）→ 无疑似建议
     d3 = np.array([0.19, 0.20, 0.21, 0.20, 0.22, 0.21] * 30)
-    assert _residual_top_estimate(d3) == 0
+    assert _residual_top_estimate(d3, ui_evidence=True) == 0
 
     # 场景 4：未裁截图（图标行从行 12 起，前有纯色背景，n≈200 真实规模）→ 修正到内容区起点
     d4 = np.array([0.02] * 12 + [0.18, 0.19, 0.20, 0.21, 0.20] + [0.30, 0.31] * 90)
@@ -370,6 +374,20 @@ def test_status_bar_correction_top_residual():
 
     # 场景 5：顶格残留不并入自动裁剪（top_edge=0 时修正函数不后移边界）
     assert _status_bar_correction(d1, 0) == 0
+
+    # 场景 6：内容抬升量区分有无截图证据——条带 first_med=0.19，tail 抬升
+    # 0.07（介于残留门槛 0.06 与照片门槛 0.08 之间）：有证据给出建议，
+    # 无证据（防照片渐变误报）拒绝
+    d6 = np.array([0.19] * 12 + [0.26] * 148)
+    assert _residual_top_estimate(d6, ui_evidence=True) == 12
+    assert _residual_top_estimate(d6, ui_evidence=False) == 0
+
+    # 场景 7：饱和度通道——条带高饱和（照片渐变/天空）即便形态像残留也拒绝
+    d5 = np.array([0.16, 0.20, 0.24, 0.27, 0.25] + [0.36] * 80)
+    sat_low = np.full_like(d5, 0.03)
+    sat_high = np.full(84 if len(d5) == 84 else len(d5), 0.35)
+    assert _residual_top_estimate(d5, sat_low, ui_evidence=True) == 5  # 低饱和通过
+    assert _residual_top_estimate(d5, sat_high, ui_evidence=True) == 0  # 高饱和拒绝
 
 
 def test_scan_excludes_non_vertical_and_non_manual(client):
@@ -1072,3 +1090,19 @@ def test_scan_content_mode_excludes_undetectable_layout(client):
     body = _scan(client, mode="content")
     assert body["total"] == 0
     assert body["items"] == []
+
+
+def test_scan_content_mode_keeps_ui_feature_cropped(client):
+    """回归（漏检）：检出状态栏/导航栏截图特征的素材不得被静默过滤。
+
+    修复前 content 模式对 already_cropped 且无残留建议的素材一律静默排除，
+    即使它带有明确的系统 UI 特征——用户在扫描列表里看不到这些真实截图，
+    顶部状态栏残留无法勾选处理。修复后以截图特征为准：有 UI 特征必列入。
+    """
+    data, ctype = _make_status_bar_screenshot(status_bar=25, player_bar=60)
+    _upload_screenshot(client, data, ctype)
+    body = _scan(client, mode="content")
+    assert body["total"] >= 1, body
+    item = body["items"][0]
+    assert item["confidence"] in ("high", "medium")  # 状态栏+播放器条特征明确
+    assert item["boundary_kind"] is not None

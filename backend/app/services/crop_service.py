@@ -41,17 +41,19 @@ from app.services.image_cropping import (
     analyze_screenshot_combined,
     crop_image_to_temp,
     crop_region_to_temp,
-    detect_content_bounds,
     detect_photo_band,
     detect_screenshot_features,
     probe_size as _probe_size,
     screenshot_confidence,
 )
-# 内部算法接缝重新导出：状态栏修正的纯函数单测仍从本模块导入，
+# 内部算法接缝重新导出：内容边界/状态栏修正的纯函数单测仍从本模块导入，
 # 实现已下沉到 image_cropping（纯算法 module，无需 DB/app 即可直测）。
+# detect_content_bounds 的函数体调用（apply 路径）已改用
+# analyze_screenshot_combined（携带截图特征证据），此处仅为测试兼容保留
 from app.services.image_cropping import (  # noqa: F401
     _residual_top_estimate,
     _status_bar_correction,
+    detect_content_bounds,
 )
 from app.services.inspiration_query import load_inspiration_full
 from app.services.task_runners.vector_backfill import enqueue_vector_backfills
@@ -205,21 +207,17 @@ async def scan_candidates(
                 # 检测失败（未检出内容区边界/布局不规则）：无法验证截图结构，
                 # 自动化口径下静默排除（此前会带默认比例混入候选，属误列）
                 continue
-            if (
-                bounds_result["already_cropped"]
-                and bounds_result["residual_top_frac"] <= 0
-            ):
-                # 已裁剪干净且无任何残留建议 → 跳过不列入候选（避免扫描列表
-                # 被大量已处理素材淹没）；检出「疑似状态栏残留」的仍要列入
-                # ——这是待人工确认的有效裁剪候选，与 apply_crops 的
-                # 「残留建议优先于 already_cropped 跳过」语义保持一致
-                continue
             if confidence == "low" and bounds_result["residual_top_frac"] <= 0:
                 # ── 自动化口径：内容边界检测只服务手机截图（抖音全屏截图）──
-                # 无任何系统 UI 特征且无状态栏残留信号的竖屏图大概率是普通
-                # 照片（顶部纯色天空/暗部被误判为边界）——静默排除，不再以
-                # 「自动检测失败/疑似非截图请人工确认」占据扫描列表
+                # 无任何系统 UI 特征（top_bar/bottom_bar）且无状态栏残留信号的
+                # 竖屏图大概率是普通照片（顶部纯色天空/暗部被误判为边界）——
+                # 即使算出了 top_frac 也整体静默排除，不再以「自动检测失败/
+                # 疑似非截图请人工确认」占据扫描列表
                 continue
+            # 检出截图特征（top_bar/bottom_bar）的素材即使已裁剪干净、无
+            # 残留建议也继续列入候选：它是真实截图，顶部状态栏残留肉眼
+            # 可见，交给人工目检勾选（此前把这类素材静默过滤，导致
+            # 「大部分素材找不到、无法选中」），item 构造中如实标注
         else:
             # 非 content 模式：截图特征检测（状态栏/底部栏 → 置信度分级）
             try:
@@ -265,6 +263,16 @@ async def scan_candidates(
                     f"疑似顶部状态栏残留（建议裁剪 {bounds_result['residual_top_frac']:.1%}），"
                     "确认后勾选裁剪"
                 )
+            elif (
+                bounds_result["already_cropped"]
+                and bounds_result["top_frac"] <= 0
+                and bounds_result["residual_top_frac"] <= 0
+            ):
+                # 检出截图特征（状态栏/导航栏）但未给出可裁建议：可能是已
+                # 裁过或界面以内容为主。如实标注，不编造比例，由人工目检决定
+                item["auto_ok"] = False
+                item["crop_top"] = 0.0
+                item["note"] = "未检出可裁区域（可能已裁剪过），请目检确认"
         candidates.append(item)
         # 候选上限检查必须放在 append 之后：此时当前候选已入选，断点游标
         # （last_insp_id）指向它，续扫从它之后接续，不重不漏。若放在 append
@@ -397,14 +405,28 @@ async def apply_crops(
                 continue
         elif mode == "content":
             try:
-                bounds = await asyncio.to_thread(detect_content_bounds, full)
+                # 用「特征+边界」合并检测（与扫描口径一致）：携带截图特征
+                # 证据，低多样度内容区的真实截图也能检出残留建议，避免
+                # 扫描能列、apply 却跳过的不一致
+                features, bounds = await asyncio.to_thread(analyze_screenshot_combined, full)
+                if bounds is None:
+                    raise ValueError("未检测到内容区边界")
                 t_frac = bounds["top_frac"]
                 b_frac = bounds["bottom_frac"]
                 if bounds["residual_top_frac"] > 0 and t_frac == 0:
                     # 用户已勾选 = 确认疑似残留：按建议比例裁剪顶部
                     t_frac = bounds["residual_top_frac"]
-                if bounds["already_cropped"] and t_frac == 0:
+                if bounds["already_cropped"] and t_frac == 0 and not (
+                    features.get("top_bar") or features.get("bottom_bar")
+                ):
+                    # 无截图特征且检测无建议：普通照片/已裁干净 → 跳过
                     skipped.append(_skip_entry(insp, "已裁剪过或内容占满全图，无需裁剪"))
+                    continue
+                if t_frac <= 0 and b_frac <= 0:
+                    # 有截图特征（用户确认勾选）但本函数仍无建议（如顶部
+                    # 残留比例低于门槛）：不编造比例白裁（裁剪 0/0 等于
+                    # 原样复制，属假成功），明确跳过由人工另行处理
+                    skipped.append(_skip_entry(insp, "未检出可裁区域（无有效裁剪比例）"))
                     continue
             except ValueError as e:
                 skipped.append(_skip_entry(insp, f"内容边界检测失败：{e}"))
