@@ -61,15 +61,25 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
     供「素材-标签关联保存」与「ai_extracted_tags 结构化快照」共用，
     保证两种落库方式提取出的标签集合一致（支撑多版本对比的可信度）。
     """
-    # 数据键 -> 标签类别的映射
+    # 数据键 -> 标签类别的映射（类别值为 snake_case）
+    # 新键：design_detail（款式细节）/ material（面料材质），由原 wear_style 拆分而来
     category_map = {
         "style": "style",
         "fit": "fit",
+        "design_detail": "design_detail",
+        "material": "material",
+        # 历史键兼容：wear_style（旧「穿着方式」）保留映射到遗留类别 body_part，
+        # 保证重新解析历史 AI 日志（旧格式输出）仍能正常落库
         "wear_style": "body_part",
         "attributes": "attribute",
-        "Atmosphere": "Atmosphere",
-        "Expression": "Expression",
-        "Leg_Posture": "Leg_Posture"
+        # 新键为 snake_case；旧 PascalCase 键（Atmosphere/Expression/Leg_Posture）
+        # 同样兼容历史日志，统一归入新 snake_case 类别
+        "atmosphere": "atmosphere",
+        "expression": "expression",
+        "leg_posture": "leg_posture",
+        "Atmosphere": "atmosphere",
+        "Expression": "expression",
+        "Leg_Posture": "leg_posture",
     }
 
     # 预先提取风格大类标签名：氛围标签若与风格标签近似（如「甜美」vs「甜美风」），
@@ -96,7 +106,8 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
                 if not name:
                     continue
                 # 氛围标签去重：与任一风格标签近似则跳过（保留风格标签）
-                if category == "Atmosphere" and any(
+                # 兼容旧 PascalCase 键与新 snake_case 键两种输出
+                if category == "atmosphere" and any(
                     is_similar_category_tag(name, s) for s in style_names
                 ):
                     continue

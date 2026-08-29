@@ -567,6 +567,45 @@ async def tag_batch_edit(payload: dict, db: AsyncSession = Depends(get_db)) -> d
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ============ 颜色剥离治理 ============
+
+
+@router.post("/color-strip/dry-run", status_code=status.HTTP_200_OK)
+async def tag_color_strip_dry_run(
+    payload: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """单品标签颜色剥离 dry-run：返回统计与样例，不写库。
+
+    请求体可选: {"category": "item_type", "limit": 0}
+    （category 参与治理的标签类别；limit 只处理前 N 个，0 表示全部）
+    """
+    from app.services.tag_color_strip import dry_run_color_strip
+
+    payload = payload or {}
+    category = str(payload.get("category", "item_type")).strip() or "item_type"
+    limit = int(payload.get("limit", 0) or 0)
+    return await dry_run_color_strip(db, category=category, limit=limit)
+
+
+@router.post("/color-strip/apply", status_code=status.HTTP_200_OK)
+async def tag_color_strip_apply(
+    payload: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """单品标签颜色剥离执行：剥离颜色前缀重命名/合并并补建颜色关联（单事务）。
+
+    请求体可选: {"category": "item_type", "limit": 0}
+    建议先调用 dry-run 预览统计与样例后再执行。
+    """
+    from app.services.tag_color_strip import apply_color_strip
+
+    payload = payload or {}
+    category = str(payload.get("category", "item_type")).strip() or "item_type"
+    limit = int(payload.get("limit", 0) or 0)
+    return await apply_color_strip(db, category=category, limit=limit)
+
+
 # ============ 层级树 ============
 
 

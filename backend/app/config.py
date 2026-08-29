@@ -6,6 +6,48 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 数据库文件绝对路径（不依赖进程 CWD，避免从不同目录启动时产生双库）
 _DB_PATH = Path(__file__).resolve().parent.parent / "fashion_inspo.db"
 
+# 默认 AI 分析提示词（Settings 与 ConfigConstants 兜底共用同一份文本）
+_DEFAULT_AI_ANALYSIS_PROMPT = (
+    "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签。\n\n"
+    "【核心原则：复用优先，禁止生造组合词】\n"
+    "- 优先使用常见、通用的既有词汇描述，不要把颜色和款式组合成新词；\n"
+    "- 单品名（items[].type）只含品类 + 至多 2 个关键款式特征，且不超过 12 个字"
+    "（与 TAG_NAME_MAX_LENGTH 阈值一致）；\n"
+    "- 颜色一律写在 items[].color 字段，严禁把颜色写进单品名。\n"
+    "  （错误示例：type=\"黑色尖头细跟高跟鞋\"；正确示例：type=\"尖头细跟高跟鞋\"，color=\"黑色\"）\n\n"
+    "1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风\n"
+    "   （可输出多个风格标签，无明显风格可不输出）\n\n"
+    "2. 单品识别：识别图中每一件主要服饰单品（上装/下装/外套/鞋履/袜子丝袜/配饰等）。\n"
+    '   格式：{"type": "品类+关键款式特征（≤12字，不含颜色）", "color": "颜色", "features": []}\n'
+    "   type 优先使用通用品类词：上衣/衬衫/T恤/卫衣/短裤/短裙/长裤/连衣裙/半身裙/"
+    "长筒袜/过膝袜/连裤袜/高跟鞋/运动鞋/玛丽珍鞋/马丁靴/包包/腰带 等。\n"
+    "   features 仅存放无法归入其它维度的补充说明，通常留空即可。\n\n"
+    "3. 版型（fit）：衣服的合身程度与整体轮廓剪裁。\n"
+    "   示例：紧身/宽松/修身/贴身/Oversized/直筒/A字/H型/收腰/包臀/廓形/阔腿\n\n"
+    "4. 款式细节（design_detail）：服装上可见的结构性设计特征（袖型/领型/腰位/口袋/系带/开衩等）。\n"
+    "   示例：泡泡袖/长袖/短袖/无袖/V领/圆领/高领/方领/一字肩/露肩/露背/高腰/低腰/"
+    "荷叶边/蕾丝边/系带/绑带/拉链/纽扣/口袋/开衩/百褶/双排扣/尖头/细跟/厚底/平底\n\n"
+    "5. 面料材质（material）：服装的面料、材质与质感。\n"
+    "   示例：针织/牛仔/蕾丝/雪纺/缎面/绸缎/毛呢/灯芯绒/皮革/漆皮/丝绒/纯棉/网纱/"
+    "透肉/哑光/弹性/亮片/格纹/条纹/碎花\n\n"
+    "6. 图片属性（attributes）：拍摄与画面的客观属性。\n"
+    "   示例：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍\n\n"
+    "7. 主色调提取：提取 2-3 个主要颜色（返回 hex 值）。\n\n"
+    "8. 环境氛围（atmosphere）：最多两个。"
+    "清新/甜美/性感/酷飒/优雅/休闲/复古/未来感/暗黑/学院/运动/慵懒/知性/街头/"
+    "氛围感/胶片感/高级感/少女感\n\n"
+    "9. 模特表情（expression）：微笑/大笑/冷脸/无表情/嘟嘴 等（没有则输出空数组）。\n\n"
+    "10. 腿部姿态（leg_posture）：交叉腿/并拢/分开/跷腿/踮脚/抬腿 等（没有则输出空数组）。\n\n"
+    "【向后兼容说明】历史版本的输出键 wear_style（穿着方式）已拆分为 design_detail 与 "
+    "material 两个维度；若仍输出 wear_style，系统会将其归入遗留类别 body_part，"
+    "请优先使用新键。\n\n"
+    "请以 JSON 格式输出，不要包含任何其他文字：\n"
+    '{\n  "style": [],\n  "items": [{"type": "", "color": "", "features": []}],\n'
+    '  "fit": [],\n  "design_detail": [],\n  "material": [],\n'
+    '  "attributes": [],\n  "dominant_colors": [],\n'
+    '  "atmosphere": [],\n  "expression": [],\n  "leg_posture": []\n}'
+)
+
 
 class Settings(BaseSettings):
     """应用设置类，自动从环境变量和 .env 文件加载。"""
@@ -126,21 +168,10 @@ class Settings(BaseSettings):
     quality_classifier_threshold: float = 0.9  # 自动拒绝的置信度阈值（宁缺毋滥，低置信度仍走 VLM 复审）
 
     # AI 分析 Prompt（运行时可变，前端可编辑）
-    ai_analysis_prompt: str = (
-        "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：\n\n"
-        "1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风\n"
-        "   （可以输出多个风格标签，如果没有明显风格可以不输出）\n\n"
-        "2. 单品识别：识别图中每一件主要服饰单品，包括类型+颜色+特征。\n"
-        '   格式：{"type": "单品类型", "color": "颜色", "features": ["特征1", "特征2"]}\n\n'
-        "3. 版型：宽松/修身/Oversized/直筒/紧身/A字/H型/喇叭/锥形/阔腿\n\n"
-        "4. 穿着方式/身体部位关系：过膝/露腰/高腰/V领/圆领/高领/一字肩/七分袖/长袖/短袖/无袖/拖地/迷你/中长款/长款/短款\n\n"
-        "5. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍\n\n"
-        "6. 主色调提取：提取2-3个主要颜色（返回hex值）\n\n"
-        "请以JSON格式输出，不要包含任何其他文字：\n"
-        '{\n  "style": [],\n  "items": [{"type": "", "color": "", "features": []}],\n'
-        '  "fit": [],\n  "wear_style": [],\n'
-        '  "attributes": [],\n  "dominant_colors": []\n}'
-    )
+    # 核心治理原则：单品名只含品类+关键款式特征（不含颜色、≤12 字，与
+    # TAG_NAME_MAX_LENGTH 一致），颜色一律写入 items[].color；原 wear_style
+    # 维度拆分为 design_detail（款式细节）与 material（面料材质）。
+    ai_analysis_prompt: str = _DEFAULT_AI_ANALYSIS_PROMPT
 
     # 采集引擎
     scraper_request_delay: float = 2.0  # 请求间隔（秒）
@@ -234,22 +265,8 @@ class ConfigConstants:
     
     @property
     def ai_analysis_prompt(self):
-        # 如果没有从配置中加载，使用默认值
-        return getattr(self.settings, 'ai_analysis_prompt', (
-            "你是一个专业的时尚穿搭分析助手。请分析这张穿搭图片，提取以下维度的标签：\n\n"
-            "1. 风格体系：JK制服/汉服/Lolita/Y2K/CleanFit/法式/日系/韩系/学院风/街头/新中式/复古/极简/美式复古/英伦风/波西米亚/运动风/甜美风/暗黑风\n"
-            "   （可以输出多个风格标签，如果没有明显风格可以不输出）\n\n"
-            "2. 单品识别：识别图中每一件主要服饰单品，包括类型+颜色+特征。\n"
-            '   格式：{"type": "单品类型", "color": "颜色", "features": ["特征1", "特征2"]}\n\n'
-            "3. 版型：宽松/修身/Oversized/直筒/紧身/A字/H型/喇叭/锥形/阔腿\n\n"
-            "4. 穿着方式/身体部位关系：过膝/露腰/高腰/V领/圆领/高领/一字肩/七分袖/长袖/短袖/无袖/拖地/迷你/中长款/长款/短款\n\n"
-            "5. 图片属性：露脸/不露脸/全身/半身/坐姿/站姿/对镜自拍/他拍/叠穿/单穿/街拍/棚拍\n\n"
-            "6. 主色调提取：提取2-3个主要颜色（返回hex值）\n\n"
-            "请以JSON格式输出，不要包含任何其他文字：\n"
-            '{\n  "style": [],\n  "items": [{"type": "", "color": "", "features": []}],\n'
-            '  "fit": [],\n  "wear_style": [],\n'
-            '  "attributes": [],\n  "dominant_colors": []\n}'
-        ))
+        # 优先取 settings 当前值（可能被 prompt.txt 覆盖），兜底用模块级默认文本
+        return getattr(self.settings, 'ai_analysis_prompt', _DEFAULT_AI_ANALYSIS_PROMPT)
     
     # 向量检索常量
     @property

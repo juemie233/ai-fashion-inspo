@@ -1,16 +1,21 @@
 <script setup lang="ts">
 /** 类目标签：黑色细边框 + 深灰文字 + 类目色点，全站统一（卡片、搜索结果、详情页、相似推荐共用）。 */
 
-/** 类目 → 色点颜色 */
+/** 类目 → 色点颜色（design_detail/material 为类别体系优化新增的维度） */
 const CATEGORY_COLORS: Record<string, string> = {
   style: '#8b5cf6',
   item_type: '#3b82f6',
   color: '#f59e0b',
-  body_part: '#10b981',
+  design_detail: '#14b8a6',
+  material: '#a16207',
   fit: '#ec4899',
   attribute: '#6b7280',
+  atmosphere: '#22c55e',
+  expression: '#f472b6',
+  leg_posture: '#0ea5e9',
   free: '#9ca3af',
   outfit: '#e11d48',
+  body_part: '#10b981',
 }
 
 defineProps<{

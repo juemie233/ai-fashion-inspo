@@ -10,10 +10,10 @@ describe('sortAnalysisTags', () => {
   it('按优先级排列：风格 > 氛围 > 袜 > 鞋 > 模特表情 > 其余维度', () => {
     const tags = [
       t('尖头高跟鞋', 'item_type'), // 鞋
-      t('微笑', 'Expression'), // 模特表情
+      t('微笑', 'expression'), // 模特表情
       t('法式', 'style'), // 风格
       t('连衣裙', 'item_type'), // 单品
-      t('纯欲氛围', 'Atmosphere'), // 氛围
+      t('纯欲氛围', 'atmosphere'), // 氛围
       t('过膝白袜', 'body_part'), // 袜
     ]
     const names = sortAnalysisTags(tags).map((x) => x.name)
@@ -27,18 +27,29 @@ describe('sortAnalysisTags', () => {
   })
 
   it('穿搭维度类别按确定次序排列，腿部姿态排在属性之前', () => {
-    // 回归：此前 attribute（如「七分」）与 Leg_Posture 同属兜底优先级，
+    // 回归：此前 attribute（如「七分」）与 leg_posture 同属兜底优先级，
     // 按原始顺序混排；现在各维度有确定次序。
     const tags = [
-      t('微笑', 'Expression'),
+      t('微笑', 'expression'),
       t('七分', 'attribute'),
-      t('交叉腿', 'Leg_Posture'),
+      t('交叉腿', 'leg_posture'),
       t('白色', 'color'),
       t('修身', 'fit'),
     ]
     const names = sortAnalysisTags(tags).map((x) => x.name)
     // 表情 → 颜色 → 版型 → 腿部姿态 → 属性
     expect(names).toEqual(['微笑', '白色', '修身', '交叉腿', '七分'])
+  })
+
+  it('旧 PascalCase 类别（历史快照数据）与对应 snake_case 类别同优先级', () => {
+    const tags = [
+      t('纯欲氛围', 'Atmosphere'), // 旧氛围
+      t('微笑', 'Expression'), // 旧模特表情
+      t('交叉腿', 'leg_posture'), // 新腿部姿态
+    ]
+    const names = sortAnalysisTags(tags).map((x) => x.name)
+    // 氛围(1) → 模特表情(4) → 腿部姿态(11)
+    expect(names).toEqual(['纯欲氛围', '微笑', '交叉腿'])
   })
 
   it('同一优先级内保持原有相对顺序（稳定排序）', () => {

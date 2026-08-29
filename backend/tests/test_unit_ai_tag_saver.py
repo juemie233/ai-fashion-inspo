@@ -20,7 +20,7 @@ def test_atmosphere_dropped_when_similar_to_style():
     by_cat = _names_by_category(data)
     assert by_cat.get("style") == ["甜美", "法式"]
     # 甜美风 ≈ 甜美、法式感 ≈ 法式，均被去重；浪漫与风格无关则保留
-    assert by_cat.get("Atmosphere") == ["浪漫"]
+    assert by_cat.get("atmosphere") == ["浪漫"]
 
 
 def test_atmosphere_kept_when_no_style_overlap():
@@ -31,7 +31,7 @@ def test_atmosphere_kept_when_no_style_overlap():
     }
     by_cat = _names_by_category(data)
     assert by_cat.get("style") == ["通勤"]
-    assert by_cat.get("Atmosphere") == ["浪漫", "优雅"]
+    assert by_cat.get("atmosphere") == ["浪漫", "优雅"]
 
 
 def test_exact_duplicate_across_style_and_atmosphere():
@@ -42,7 +42,7 @@ def test_exact_duplicate_across_style_and_atmosphere():
     }
     by_cat = _names_by_category(data)
     assert by_cat.get("style") == ["学院风"]
-    assert by_cat.get("Atmosphere") is None
+    assert by_cat.get("atmosphere") is None
 
 
 def test_no_atmosphere_key_is_safe():
@@ -50,4 +50,4 @@ def test_no_atmosphere_key_is_safe():
     data = {"style": ["甜美"]}
     by_cat = _names_by_category(data)
     assert by_cat.get("style") == ["甜美"]
-    assert by_cat.get("Atmosphere") is None
+    assert by_cat.get("atmosphere") is None

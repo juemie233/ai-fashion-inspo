@@ -36,8 +36,12 @@ const items = ref<TagInspiration[]>([])
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
-const sort = ref<'newest' | 'oldest' | 'confidence'>((localStorage.getItem('tag-grid-sort') as 'newest' | 'oldest' | 'confidence') || 'newest')
-const density = ref<'compact' | 'standard'>((localStorage.getItem('tag-grid-density') as 'compact' | 'standard') || 'compact')
+const sort = ref<'newest' | 'oldest' | 'confidence'>(
+  (localStorage.getItem('tag-grid-sort') as 'newest' | 'oldest' | 'confidence') || 'newest',
+)
+const density = ref<'compact' | 'standard'>(
+  (localStorage.getItem('tag-grid-density') as 'compact' | 'standard') || 'compact',
+)
 
 const sortOptions = [
   { label: '最新', value: 'newest' },
@@ -51,8 +55,12 @@ const gridItems = computed<GridBrowserItem[]>(() =>
 )
 
 // 持久化排序与密度：刷新或再次进入时保持上次选择
-watch(sort, (v) => { localStorage.setItem('tag-grid-sort', v) })
-watch(density, (v) => { localStorage.setItem('tag-grid-density', v) })
+watch(sort, (v) => {
+  localStorage.setItem('tag-grid-sort', v)
+})
+watch(density, (v) => {
+  localStorage.setItem('tag-grid-density', v)
+})
 
 // ===== 批量添加标签 =====
 const showBatchAddModal = ref(false)
@@ -117,7 +125,7 @@ async function removeOne(item: GridBrowserItem) {
     await removeTagFromInspiration(item.id, props.tag.id)
     items.value = items.value.filter((i) => i.inspiration_id !== item.id)
     total.value = Math.max(0, total.value - 1)
-    gridBrowserRef.value?.removeSelectedId(item.id)  // 同步清除选中残留
+    gridBrowserRef.value?.removeSelectedId(item.id) // 同步清除选中残留
     emit('changed', { removed: 1 })
     Message.success('已移除该标签')
   } catch {
@@ -205,15 +213,19 @@ async function batchAddTags() {
     >
       <!-- 头部：标签名 + 使用次数 -->
       <template #header-left>
-        <h3 style="margin:0">「{{ tag.name }}」</h3>
-        <a-tag size="small" style="margin-left:8px">{{ tag.usage_count }} 次</a-tag>
-        <span style="font-size:13px;color:#999;margin-left:8px">共 {{ total }} 个</span>
+        <h3 style="margin: 0">「{{ tag.name }}」</h3>
+        <a-tag size="small" style="margin-left: 8px">{{ tag.usage_count }} 次</a-tag>
+        <span style="font-size: 13px; color: #999; margin-left: 8px">共 {{ total }} 个</span>
       </template>
 
       <!-- 批量操作栏：全选 + 批量移除/批量添加 -->
       <template #batch-actions="{ ids, count, clear, allSelected, toggleAll }">
-        <a-checkbox :model-value="allSelected" :indeterminate="count > 0 && !allSelected" @change="toggleAll" />
-        <span style="font-size:13px">已选 {{ count }} 个</span>
+        <a-checkbox
+          :model-value="allSelected"
+          :indeterminate="count > 0 && !allSelected"
+          @change="toggleAll"
+        />
+        <span style="font-size: 13px">已选 {{ count }} 个</span>
         <a-popconfirm
           :content="`确认批量移除 ${count} 个关联？此操作不可恢复`"
           @ok="batchRemove(ids, clear)"
@@ -222,34 +234,31 @@ async function batchAddTags() {
             批量移除该标签
           </a-button>
         </a-popconfirm>
-        <a-button size="mini" type="secondary" @click="openBatchAdd(ids)">
-          批量添加标签
-        </a-button>
+        <a-button size="mini" type="secondary" @click="openBatchAdd(ids)"> 批量添加标签 </a-button>
         <a-button size="mini" @click="clear">取消选择</a-button>
       </template>
 
       <!-- 卡片悬停操作：移除该标签（大图按钮由通用组件内置） -->
       <template #card-actions="{ item }">
-        <a-popconfirm
-          content="确认移除该素材关联？"
-          @ok="removeOne(item)"
-        >
-          <a-button
-            size="mini"
-            type="outline"
-            status="danger"
-            :loading="removingIds.has(item.id)"
-          >移除</a-button>
+        <a-popconfirm content="确认移除该素材关联？" @ok="removeOne(item)">
+          <a-button size="mini" type="outline" status="danger" :loading="removingIds.has(item.id)"
+            >移除</a-button
+          >
         </a-popconfirm>
       </template>
     </InspirationGridBrowser>
 
     <!-- 批量添加标签弹窗 -->
     <a-modal v-model:visible="showBatchAddModal" title="批量添加标签" :footer="false" :width="480">
-      <p style="font-size:13px;color:#999;margin:0 0 12px">
+      <p style="font-size: 13px; color: #999; margin: 0 0 12px">
         将为选中的 {{ batchActionIds.length }} 个素材添加以下标签（已存在的关联自动跳过）：
       </p>
-      <a-form :model="{ batchAddNames, batchAddCategory }" label-align="left" :label-col-style="{ width: '60px' }" size="small">
+      <a-form
+        :model="{ batchAddNames, batchAddCategory }"
+        label-align="left"
+        :label-col-style="{ width: '60px' }"
+        size="small"
+      >
         <a-form-item label="标签名">
           <a-textarea
             v-model="batchAddNames"
@@ -264,18 +273,26 @@ async function batchAddTags() {
               { label: '风格', value: 'style' },
               { label: '单品', value: 'item_type' },
               { label: '颜色', value: 'color' },
-              { label: '穿着方式', value: 'body_part' },
+              { label: '款式细节', value: 'design_detail' },
+              { label: '面料', value: 'material' },
               { label: '版型', value: 'fit' },
               { label: '属性', value: 'attribute' },
               { label: '自定义', value: 'free' },
               { label: '穿搭大标签', value: 'outfit' },
+              { label: '穿着方式（遗留）', value: 'body_part' },
             ]"
           />
         </a-form-item>
       </a-form>
-      <a-space style="display:flex;justify-content:flex-end;margin-top:16px">
+      <a-space style="display: flex; justify-content: flex-end; margin-top: 16px">
         <a-button @click="showBatchAddModal = false">取消</a-button>
-        <a-button type="primary" :loading="batchAdding" :disabled="!batchAddNames.trim()" @click="batchAddTags">确认添加</a-button>
+        <a-button
+          type="primary"
+          :loading="batchAdding"
+          :disabled="!batchAddNames.trim()"
+          @click="batchAddTags"
+          >确认添加</a-button
+        >
       </a-space>
     </a-modal>
   </template>

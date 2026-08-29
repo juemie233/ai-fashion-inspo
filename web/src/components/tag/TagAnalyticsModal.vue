@@ -23,11 +23,13 @@ const trendData = ref<Array<{ bucket: string; count: number }>>([])
 const trendTag = ref<{ id: number; name: string } | null>(null)
 const trendGranularity = ref<'month' | 'week' | 'day'>('month')
 
-// ===== 类别 → 颜色（dataviz 参考色板，固定顺序，不循环） =====
+// ===== 类别 → 颜色（dataviz 参考色板，固定顺序，不循环；含新增 design_detail/material） =====
 const CATEGORY_COLORS: Record<string, string> = {
   style: '#2a78d6',
   item_type: '#eb6834',
   color: '#1baf7a',
+  design_detail: '#14b8a6',
+  material: '#a16207',
   body_part: '#eda100',
   fit: '#e87ba4',
   attribute: '#008300',

@@ -40,7 +40,23 @@ export interface HealthScanResult {
   score: number
   duplicate_threshold: number
   issues: Record<HealthIssueType, { count: number }>
+  /** 类别级健康概览（扫描结果可选携带：旧结果无此块） */
+  category_stats?: Record<string, CategoryStat>
   scanned_at: string
+}
+
+/** 健康度扫描的类别级统计（单类别指标） */
+export interface CategoryStat {
+  /** 该类标签总数 */
+  total: number
+  /** 使用中的标签数 */
+  used: number
+  /** 未使用标签数 */
+  unused: number
+  /** 使用 1-2 次的标签占比（0~1，越高越碎片化） */
+  long_tail_rate: number
+  /** 最高频标签使用次数 / 该类总使用次数（0~1） */
+  top_share: number
 }
 
 /** 健康度问题类型的中文文案 */

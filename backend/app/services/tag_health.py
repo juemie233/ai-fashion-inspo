@@ -50,6 +50,49 @@ async def _usage_counts(
     return {row[0]: row[1] for row in result.all()}
 
 
+def _build_category_stats(
+    tags: list[Tag], usage: dict[int, int]
+) -> dict[str, dict]:
+    """按类别聚合健康度指标（类别级治理视角）。
+
+    每个类别输出：total（标签总数）、used / unused（使用中/未使用）、
+    long_tail_rate（使用 1-2 次的标签占比，0~1，越高越碎片化）、
+    top_share（最高频标签使用次数 / 该类总使用次数，0~1，越高越头部集中）。
+    """
+    totals: dict[str, int] = {}
+    used: dict[str, int] = {}
+    long_tail: dict[str, int] = {}
+    usage_sum: dict[str, int] = {}
+    max_usage: dict[str, int] = {}
+    for tag in tags:
+        cat = tag.category
+        count = usage.get(tag.id, 0)
+        totals[cat] = totals.get(cat, 0) + 1
+        if count > 0:
+            used[cat] = used.get(cat, 0) + 1
+        if 1 <= count <= 2:
+            long_tail[cat] = long_tail.get(cat, 0) + 1
+        usage_sum[cat] = usage_sum.get(cat, 0) + count
+        max_usage[cat] = max(max_usage.get(cat, 0), count)
+
+    stats: dict[str, dict] = {}
+    # 按标签总数降序排列，前端表格直接按此顺序展示
+    for cat in sorted(totals, key=lambda c: totals[c], reverse=True):
+        total = totals[cat]
+        stats[cat] = {
+            "total": total,
+            "used": used.get(cat, 0),
+            "unused": total - used.get(cat, 0),
+            "long_tail_rate": round(long_tail.get(cat, 0) / total, 4) if total else 0.0,
+            "top_share": (
+                round(max_usage.get(cat, 0) / usage_sum[cat], 4)
+                if usage_sum.get(cat, 0) > 0
+                else 0.0
+            ),
+        }
+    return stats
+
+
 async def scan_tag_health(
     db: AsyncSession, duplicate_threshold: float = 0.75
 ) -> dict:
@@ -66,6 +109,16 @@ async def scan_tag_health(
                 "low_frequency":    {"count": n, "tag_ids": [...]},
                 "low_quality_name": {"count": n, "tag_ids": [...]},
                 "duplicate":        {"count": n, "pairs": [{"tag_a_id", "tag_b_id", "similarity"}]},
+            },
+            "category_stats": {
+                "<类别>": {
+                    "total": 该类标签总数,
+                    "used": 使用中的标签数,
+                    "unused": 未使用标签数,
+                    "long_tail_rate": 使用 1-2 次标签占比(0~1),
+                    "top_share": 最高频标签使用次数 / 该类总使用次数(0~1),
+                },
+                ...
             },
             "scanned_at": ISO8601,
         }
@@ -90,6 +143,7 @@ async def scan_tag_health(
             "score": 100.0,
             "duplicate_threshold": duplicate_threshold,
             "issues": empty_issues,
+            "category_stats": {},
             "scanned_at": now,
         }
 
@@ -143,6 +197,7 @@ async def scan_tag_health(
             "low_quality_name": {"count": len(low_quality_ids), "tag_ids": low_quality_ids},
             "duplicate": {"count": len(duplicate_pairs), "pairs": duplicate_pairs},
         },
+        "category_stats": _build_category_stats(list(tags), usage),
         "scanned_at": now,
     }
 

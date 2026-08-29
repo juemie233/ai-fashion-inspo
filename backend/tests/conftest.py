@@ -36,6 +36,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 # 注意：ai_extracted_tags / ai_quality_review 是 ai_analysis_log 的结构化快照子表，
 # 缺失会导致 AI 分析用例写入的快照跨用例残留，污染 model-stats 等聚合口径
 _ALL_TABLES = [
+    "collection_items",
+    "collections",
     "ai_extracted_tags",
     "ai_quality_review",
     "inspiration_bloggers",

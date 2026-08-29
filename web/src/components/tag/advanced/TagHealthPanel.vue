@@ -14,6 +14,7 @@ import TagBatchEditModal from '@/components/tag/TagBatchEditModal.vue'
 import TagDuplicateCompareModal from '@/components/tag/TagDuplicateCompareModal.vue'
 import {
   HEALTH_ISSUE_LABELS,
+  type CategoryStat,
   type DuplicateIssuePair,
   type HealthIssueItem,
   type HealthIssueType,
@@ -22,6 +23,10 @@ import {
 
 // ── 状态 ──
 const score = ref<number | null>(null)
+/** 类别级健康概览（类别名 → 指标），由扫描结果写入 */
+const categoryStats = ref<Record<string, CategoryStat>>({})
+/** 长尾率超过该阈值的类别提示「建议治理」 */
+const LONG_TAIL_WARN = 0.7
 const issueCounts = ref<Record<HealthIssueType, number>>({
   orphan: 0,
   low_frequency: 0,
@@ -57,6 +62,7 @@ const {
   onDone: (r) => {
     score.value = r.score
     scannedAt.value = r.scanned_at
+    categoryStats.value = r.category_stats ?? {}
     for (const t of ISSUE_TYPES) {
       issueCounts.value[t] = r.issues[t]?.count ?? 0
     }
@@ -67,6 +73,21 @@ const {
 })
 
 const isDuplicate = computed(() => activeIssueType.value === 'duplicate')
+
+/** 类别概览行（按扫描结果返回的标签总数降序） */
+const categoryRows = computed(() =>
+  Object.entries(categoryStats.value).map(([category, s]) => ({ category, ...s })),
+)
+
+/** 比例值（0~1）转百分比文案 */
+function percent(v: number): string {
+  return `${(v * 100).toFixed(1)}%`
+}
+
+/** 类别长尾率是否需要「建议治理」提示 */
+function needsGovern(s: CategoryStat): boolean {
+  return s.long_tail_rate > LONG_TAIL_WARN
+}
 
 function scoreColor(s: number): string {
   if (s >= 85) return '#1baf7a'
@@ -197,6 +218,39 @@ onBeforeUnmount(() => {
         <div class="chip-count">{{ issueCounts[t] }}</div>
       </div>
       <a-button type="primary" :loading="running" @click="runScan"> 重新扫描 </a-button>
+    </div>
+
+    <!-- 类别概览：各类别总量/使用/长尾率（长尾率 >70% 标红提示建议治理） -->
+    <div v-if="categoryRows.length" class="category-overview">
+      <div class="list-header">
+        <span class="list-title">类别概览</span>
+        <span class="list-total">长尾率 = 使用 1-2 次的标签占比，超过 70% 建议治理</span>
+      </div>
+      <a-table :data="categoryRows" :pagination="false" size="small" row-key="category">
+        <template #columns>
+          <a-table-column title="类别" :width="120">
+            <template #cell="{ record }">{{
+              CATEGORY_LABELS[record.category] ?? record.category
+            }}</template>
+          </a-table-column>
+          <a-table-column title="标签总数" :width="90" align="center" data-index="total" />
+          <a-table-column title="使用中" :width="80" align="center" data-index="used" />
+          <a-table-column title="未使用" :width="80" align="center" data-index="unused" />
+          <a-table-column title="长尾率" :width="170" align="center">
+            <template #cell="{ record }">
+              <span :style="{ color: needsGovern(record) ? '#e34948' : undefined }">{{
+                percent(record.long_tail_rate)
+              }}</span>
+              <a-tag v-if="needsGovern(record)" color="red" size="small" class="govern-tag"
+                >建议治理</a-tag
+              >
+            </template>
+          </a-table-column>
+          <a-table-column title="最高频占比" align="center">
+            <template #cell="{ record }">{{ percent(record.top_share) }}</template>
+          </a-table-column>
+        </template>
+      </a-table>
     </div>
 
     <!-- 明细列表 -->
@@ -357,6 +411,12 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+.category-overview {
+  flex-shrink: 0;
+}
+.govern-tag {
+  margin-left: 6px;
 }
 .list-header {
   display: flex;

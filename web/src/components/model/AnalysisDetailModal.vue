@@ -14,15 +14,20 @@ const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
 }>()
 
-/** 标签分类中文名 */
+/** 标签分类中文名（snake_case 新体系；旧 PascalCase 类别保留兜底历史快照） */
 const tagCategoryLabel: Record<string, string> = {
   style: '风格',
   item_type: '单品类型',
   color: '颜色',
+  design_detail: '款式细节',
+  material: '面料',
   fit: '版型',
   body_part: '穿着方式',
   attribute: '属性',
   outfit: '穿搭大标签',
+  atmosphere: '氛围',
+  expression: '表情',
+  leg_posture: '腿部姿态',
   Atmosphere: '氛围',
   Expression: '表情',
   Leg_Posture: '腿部姿态',
@@ -67,11 +72,13 @@ const tagCategoryLabel: Record<string, string> = {
               'item_type',
               'color',
               'fit',
+              'design_detail',
+              'material',
               'body_part',
               'attribute',
-              'Atmosphere',
-              'Expression',
-              'Leg_Posture',
+              'atmosphere',
+              'expression',
+              'leg_posture',
             ]"
             :key="cat"
             style="margin-bottom: 8px"
