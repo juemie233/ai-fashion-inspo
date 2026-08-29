@@ -17,6 +17,7 @@ import {
   IconUser,
   IconSafe,
   IconBarChart,
+  IconBookmark,
 } from '@arco-design/web-vue/es/icon'
 import SchemaVersionBanner from './SchemaVersionBanner.vue'
 import { useUiStore } from '@/stores/ui'
@@ -55,6 +56,7 @@ const menuKey = computed(() => {
           <a-menu-item key="upload"><IconUpload />上传素材</a-menu-item>
           <a-menu-item key="model-photos"><IconCamera />添加模特照片</a-menu-item>
           <a-menu-item key="search"><IconSearch />高级搜索</a-menu-item>
+          <a-menu-item key="collections"><IconBookmark />收藏合集</a-menu-item>
         </a-menu-item-group>
         <a-menu-item-group title="管理">
           <a-menu-item key="tags"><IconTags />标签管理</a-menu-item>

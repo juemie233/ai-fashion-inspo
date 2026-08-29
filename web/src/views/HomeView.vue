@@ -6,6 +6,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message, Notification } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
+import CollectionPickerModal from '@/components/collection/CollectionPickerModal.vue'
+import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
@@ -25,6 +27,8 @@ import {
   parseFocusIds,
 } from '@/utils/browseQuery'
 import { buildSourceOptions } from '@/utils/sourceLabel'
+import { createCollection } from '@/api/collections'
+import { buildSmartQuery, hasActiveFilters, type BrowseFilterState } from '@/utils/collectionQuery'
 
 const router = useRouter()
 const route = useRoute()
@@ -338,6 +342,75 @@ function setDensity(d: Density) {
   localStorage.setItem('masonry-density', d)
 }
 
+// ── 保存为合集（智能合集：序列化当前筛选条件） ──
+
+const saveCollectionOpen = ref(false)
+const saveCollectionName = ref('')
+
+/** 当前筛选是否含实质条件（无条件下保存=动态全库合集，需二次确认） */
+const filtersActive = computed(() =>
+  hasActiveFilters({
+    source: sourceFilter.value,
+    media: mediaFilter.value,
+    status: statusFilter.value,
+    quality: qualityFilter.value,
+    tags: selectedTags.value,
+    color: colorFilter.value,
+    ratingMin: ratingMin.value,
+    keyword: '',
+  } satisfies BrowseFilterState),
+)
+
+function openSaveCollection() {
+  saveCollectionName.value = ''
+  saveCollectionOpen.value = true
+}
+
+async function confirmSaveCollection() {
+  const name = saveCollectionName.value.trim()
+  if (!name) {
+    Message.warning('请输入合集名称')
+    return
+  }
+  if (!filtersActive.value) {
+    // 无条件 = 动态匹配全库，价值低且易误解，引导先筛选
+    Message.warning('请先设置筛选条件，再保存为智能合集')
+    return
+  }
+  const nameToId = (tagName: string) =>
+    tagsStore.groups.flatMap((g) => g.tags).find((t) => t.name === tagName)?.id
+  const query = buildSmartQuery(
+    {
+      source: sourceFilter.value,
+      media: mediaFilter.value,
+      status: statusFilter.value,
+      quality: qualityFilter.value,
+      tags: selectedTags.value,
+      color: colorFilter.value,
+      ratingMin: ratingMin.value,
+      keyword: '',
+    },
+    nameToId,
+  )
+  try {
+    await createCollection({ name, query_json: query })
+    Message.success(`已创建智能合集「${name}」，可在「收藏合集」页查看`)
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '保存为合集失败'))
+    return
+  }
+  saveCollectionOpen.value = false
+}
+
+// ── 批量加入合集 ──
+
+const collectionPickerOpen = ref(false)
+
+/** 批量加入合集：成功后退出批量模式（成员关系变化无需刷新卡片） */
+function handleAddToCollection(_collectionId: number, _added: number) {
+  exitBatchMode()
+}
+
 // ── 删除/收藏 ──
 
 async function handleDelete(id: string) {
@@ -489,6 +562,7 @@ loadPage(currentPage.value)
         <span class="total-count">共 {{ store.total }} 条</span>
       </div>
       <div class="header-right">
+        <a-button size="small" @click="openSaveCollection">保存为合集</a-button>
         <a-button size="small" :loading="checkingQuality" @click="handleBatchQualityCheck"
           >批量审核</a-button
         >
@@ -699,8 +773,39 @@ loadPage(currentPage.value)
       @add-tags="handleBatchAddTags"
       @add-bloggers="handleBatchAddBloggers"
       @update="handleBatchUpdate"
+      @add-collection="collectionPickerOpen = true"
       @exit="exitBatchMode()"
     />
+
+    <!-- 加入合集选择器（批量操作） -->
+    <CollectionPickerModal
+      v-model:visible="collectionPickerOpen"
+      :inspiration-ids="[...selectedIds]"
+      @added="handleAddToCollection"
+    />
+
+    <!-- 保存为智能合集（命名弹窗） -->
+    <a-modal v-model:visible="saveCollectionOpen" title="保存为智能合集" style="width: 460px">
+      <p v-if="filtersActive" style="color: #999; font-size: 12px; margin-top: 0">
+        将把当前筛选条件保存为智能合集，合集内容随素材库动态更新。
+      </p>
+      <p v-else style="color: #f0a020; font-size: 12px; margin-top: 0">
+        当前没有筛选条件——智能合集会匹配全部素材。建议先设置筛选条件。
+      </p>
+      <a-input
+        v-model="saveCollectionName"
+        placeholder="合集名称（1~50 字）"
+        allow-clear
+        max-length="50"
+        @keyup.enter="confirmSaveCollection"
+      />
+      <template #footer>
+        <div style="display: flex; justify-content: flex-end; gap: 8px">
+          <a-button size="small" @click="saveCollectionOpen = false">取消</a-button>
+          <a-button size="small" type="primary" @click="confirmSaveCollection">保存</a-button>
+        </div>
+      </template>
+    </a-modal>
 
     <!-- 瀑布流 -->
     <MasonryGrid

@@ -22,6 +22,7 @@ import {
   type TrashReason,
 } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
+import CollectionPickerModal from '@/components/collection/CollectionPickerModal.vue'
 import ImageCropModal from '@/components/inspiration/ImageCropModal.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
@@ -174,6 +175,9 @@ watch(
     if (id) loadDetail(id)
   },
 )
+
+/** 加入合集弹窗 */
+const collectionPickerOpen = ref(false)
 
 /** 切换收藏 */
 async function handleToggleFavorite() {
@@ -485,6 +489,7 @@ async function removeTag(t: InspirationTagOut) {
               >
                 {{ detail.is_favorite ? '❤️ 已收藏' : '🤍 收藏' }}
               </a-button>
+              <a-button size="small" @click="collectionPickerOpen = true">📁 加入合集</a-button>
               <!-- 五星评分：仅整数，点击星设置，再点已选星清除（0 分） -->
               <div class="rating-box" title="评分（0~5，点击星设置，再点清除）">
                 <a-rate
@@ -713,6 +718,12 @@ async function removeTag(t: InspirationTagOut) {
       @success="handleCropSuccess"
     />
   </div>
+
+  <!-- 加入合集 -->
+  <CollectionPickerModal
+    v-model:visible="collectionPickerOpen"
+    :inspiration-ids="detail ? [detail.id] : []"
+  />
 </template>
 
 <style scoped>

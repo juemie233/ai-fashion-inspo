@@ -22,6 +22,7 @@ from app.models.task import PendingVectorBackfill, TaskQueue
 from app.models.audit import AuditLog
 from app.models.tag_history import TagHistory
 from app.models.service_heartbeat import ServiceHeartbeat
+from app.models.collection import Collection, CollectionItem
 
 __all__ = [
     "Inspiration",
@@ -47,4 +48,6 @@ __all__ = [
     "AuditLog",
     "TagHistory",
     "ServiceHeartbeat",
+    "Collection",
+    "CollectionItem",
 ]

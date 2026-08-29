@@ -22,6 +22,7 @@ const emit = defineEmits<{
   (e: 'select-all'): void
   (e: 'add-tags', names: string[]): void
   (e: 'add-bloggers', personIds: number[]): void
+  (e: 'add-collection'): void
   (e: 'update', fields: BatchUpdateFields): void
   (e: 'exit'): void
 }>()
@@ -130,6 +131,7 @@ function confirmEdit() {
     <a-button size="mini" @click="emit('favorite', true)">批量收藏</a-button>
     <a-button size="mini" @click="emit('favorite', false)">取消收藏</a-button>
     <a-button size="mini" @click="openTagModal">加标签</a-button>
+    <a-button size="mini" @click="emit('add-collection')">加入合集</a-button>
     <a-select
       v-model="bloggerIds"
       multiple

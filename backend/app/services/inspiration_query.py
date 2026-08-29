@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -234,6 +234,96 @@ async def list_inspirations(
     result = await db.execute(query)
     inspirations = result.unique().scalars().all()
     return inspirations, total
+
+
+def build_filters_from_query_json(query_json: dict) -> list[ColumnElement[bool]]:
+    """把智能合集的 query_json 翻译为 SQLAlchemy 筛选条件（供合集动态求值复用）。
+
+    复用素材库列表/搜索的同一套筛选口径（关键词：标签名/作者名/文件名；
+    标签：AND/OR；评分、日期、来源、媒体类型、收藏），保证「素材库怎么筛、
+    合集就怎么算」。字段契约见 docs/收藏合集设计方案.md：
+    keyword / tag_ids / tag_mode / source_types / media_type /
+    is_favorite / min_rating / start_date / end_date；未知键忽略（向前兼容），
+    值类型非法的键同样忽略。无条件命中时仅返回「排除垃圾桶」这一条
+    （所有合集内容查询一律排除 deleted_at IS NOT NULL 的素材）。
+    """
+    # 垃圾桶素材一律不在合集内容中出现（手动/智能均排除，恢复后自动重现）
+    conditions: list[ColumnElement[bool]] = [NOT_DELETED]
+    if not isinstance(query_json, dict):
+        return conditions
+
+    # 关键词：标签名 / 作者名 / 文件名（与搜索接口同一口径）
+    keyword = query_json.get("keyword")
+    if isinstance(keyword, str) and keyword.strip():
+        keyword = keyword.strip()
+        matching_tag_ids = select(InspirationTag.inspiration_id).join(
+            Tag, InspirationTag.tag_id == Tag.id
+        ).where(Tag.name.contains(keyword))
+        conditions.append(
+            or_(
+                Inspiration.source_author.contains(keyword),
+                Inspiration.file_path.contains(keyword),
+                Inspiration.id.in_(matching_tag_ids),
+            )
+        )
+
+    # 标签：tag_id 存储，AND/OR 两种组合语义（AND：须同时包含所有标签）
+    tag_ids = query_json.get("tag_ids")
+    if isinstance(tag_ids, list) and tag_ids:
+        tag_ids = [t for t in tag_ids if isinstance(t, int)]
+    if tag_ids:
+        tag_mode = query_json.get("tag_mode")
+        if tag_mode not in ("and", "or"):
+            tag_mode = "and"
+        if tag_mode == "or":
+            conditions.append(
+                Inspiration.id.in_(
+                    select(InspirationTag.inspiration_id).where(
+                        InspirationTag.tag_id.in_(tag_ids)
+                    )
+                )
+            )
+        else:
+            for tag_id in tag_ids:
+                conditions.append(
+                    Inspiration.id.in_(
+                        select(InspirationTag.inspiration_id).where(
+                            InspirationTag.tag_id == tag_id
+                        )
+                    )
+                )
+
+    # 来源类型（列表，任一命中）
+    source_types = query_json.get("source_types")
+    if isinstance(source_types, list) and source_types:
+        source_types = [s for s in source_types if isinstance(s, str) and s]
+        if source_types:
+            conditions.append(Inspiration.source_type.in_(source_types))
+
+    # 媒体类型（image | video）
+    media_type = query_json.get("media_type")
+    if isinstance(media_type, str) and media_type:
+        conditions.append(Inspiration.media_type == media_type)
+
+    # 收藏筛选（true/false，null 忽略）
+    is_favorite = query_json.get("is_favorite")
+    if isinstance(is_favorite, bool):
+        conditions.append(Inspiration.is_favorite == is_favorite)
+
+    # 评分下限（0~5；与素材库 rating >= min_rating 同口径）
+    min_rating = query_json.get("min_rating")
+    if isinstance(min_rating, int) and not isinstance(min_rating, bool) and 0 < min_rating <= 5:
+        conditions.append(Inspiration.rating >= min_rating)
+
+    # 上传日期范围（与素材库 date_from/date_to 同口径）
+    start_date = query_json.get("start_date")
+    if isinstance(start_date, str) and start_date:
+        conditions.append(Inspiration.created_at >= start_date)
+    end_date = query_json.get("end_date")
+    if isinstance(end_date, str) and end_date:
+        conditions.append(Inspiration.created_at <= end_date)
+
+    return conditions
 
 
 async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
