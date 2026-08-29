@@ -36,29 +36,17 @@
 - 真机在设置页填入局域网 IP 并通过连接测试后，可完成浏览/搜索/上传/跟踪分析全流程
 - 上传后能在手机端看到任务进度与失败原因
 
-### 【任务】任务进度 WebSocket 推送替代轮询
+### 【任务】任务进度 WebSocket 推送替代轮询（x 已完成 2026-08-29）
 
-**背景：** 后端已实现 WebSocket 连接管理与 broadcast（`backend/app/routers/ws.py`，`ai_shared.py` 在用），但 `web/src` 无任何 WebSocket 客户端——`stores/ui.ts` 预留了 `wsConnected` 字段却从未连接，任务进度全靠 setTimeout 轮询（`useAdminTask.ts`、`useAnalysisQueue.ts`，任务管理页 5s）。属于「后端有接口、前端没入口」。
-
-**目标：**
-
-- web 建立全局 WS 连接（断线自动重连、断开时降级为轮询），订阅任务进度/状态变更事件
-- 任务管理页、批量分析队列、采集漏斗等改推送驱动，轮询保留为降级路径
-- `wsConnected` 真实接入，UI 展示连接状态
+**实现：** 后端 `services/task_events.py` 安全广播入口固化事件契约（task_event：running/progress/success/failed/cancelled），worker 认领/终态、batch_analyze（含 multi_analyze）/vector_backfill/quality_check 进度点、batch_delete 完成点插入广播；前端 `composables/useWebSocket.ts` 全局单例客户端（断线指数退避重连 1s→30s、25s ping 保活、reconnected 通知消费方全量刷新补漏），任务管理页/管理后台任务/批量与组合分析/标签高级任务四处轮询点改为推送驱动即时更新，轮询保留为降级路径（WS 连接时放慢至 5~30s 兜底），终态副作用 settled 幂等防双触发；`wsConnected` 真实接入并在侧边栏底部展示连接状态。
 
 **验收标准：**
 
 - 任务运行中前端进度更新无轮询间隔延迟；断开后自动降级轮询，恢复后自动重连且状态不丢
 
-### 【任务】任务队列优先级与并发可配
+### 【任务】任务队列优先级与并发可配（x 已完成 2026-08-29）
 
-**背景：** `task_queue` 无 priority 列，worker 按 `id ASC` FIFO 认领（`backend/app/worker.py:70`）——大批量分析会阻塞用户对单个素材的即时分析。批内并发 `_ANALYZE_CONCURRENCY = 1` 写死（`task_runners/common.py:21`），API 进程与 worker 各持独立信号量、跨进程不感知（`task_runners/common.py:17`）。
-
-**目标：**
-
-- `task_queue` 加 priority 列（默认 0）：用户手动触发的单素材分析/重试入队为高优先级，批量任务为低优先级，worker 按 `priority DESC, id ASC` 认领
-- 批内并发与 worker 并发改为 .env 配置项（附显存参考说明）
-- 可选：补任务历史归档/清理入口（当前重试上限 2 次与退避策略维持现状）
+**实现：** `task_queue.priority` 列（迁移 i3j4k5l6m7n8，含索引与 server_default=0 兜底历史行），worker 认领改 `priority DESC, id ASC`，批量清理类任务固定 -5 低优先级；并发可配 `WORKER_CONCURRENCY`（worker 同时执行任务数）与 `ANALYZE_CONCURRENCY`（批内分析并发），均默认 1 保持现行为，.env 可调，显存/SQLite 写锁建议已写入 config 注释；可选项「任务历史归档/清理入口」未做。
 
 **验收标准：**
 
@@ -162,14 +150,14 @@
 - 小红书风控严格，需先冷却账号、控制采集节奏；被风控后短期内不要重试
 - 依赖 ffmpeg（视频缩略图，系统已安装）
 
-### 视频分析功能（x 核心链路已打通 2026-08-29，多帧融合标签待做）
+### 视频分析功能（x 核心链路与多帧融合已打通 2026-08-29）
 
 > **已落地**：
 > - 关键帧提取：`services/video_service.py`（ffmpeg 固定间隔/可选场景检测、幂等懒提取、上限 60 帧、超时强杀），帧存 `storage/keyframes/{inspiration_id}/`，无新表/迁移；上传与 URL 导入后台预热，详情页首次访问兜底懒提取。
 > - AI 分析：单素材分析 / 批量分析 / 组合分析 / 重试 / 队列统计全链路放行视频——视频取第一关键帧作为分析源，标签/向量/日志与图片素材同口径；关键帧提取失败写入失败日志不阻断任务。
 > - 向量：`rebuild_image_vector` 放行视频（首帧喂 CLIP），视频进相似推荐与以图搜图；人脸扫描覆盖视频前 3 帧。
 > - 展示：`GET /api/files/keyframes/{id}` + 详情页关键帧缩略图条带；删除链路（物理删除/清空垃圾桶/批量删除/数据重置）同步清理关键帧目录。
-> - **待做**：多帧分析结果融合（当前仅分析首帧；多帧逐帧分析后按置信度合并标签）、分析结果记录「标签来自哪一帧」。
+> - **多帧融合已落地（2026-08-29）**：`analyze_video` 逐帧分析后同名标签按最高置信度融合、一次性清旧写新（规避 save_tags 先清后写语义的逐帧覆盖），主色调取首个产出的帧，整视频单条分析日志（raw_response 按帧留痕）；关键帧按 `VIDEO_ANALYSIS_MAX_FRAMES`（默认 3，设 1 退回首帧模式）均匀采样覆盖全片；批量/组合分析/单素材分析/重试全链路生效。待做：分析结果记录「标签来自哪一帧」。
 
 **背景：** 视频上传与存储已支持（inspirations 已含 video 类型，可上传 mp4），但尚未做关键帧提取与 AI 分析；穿搭内容大量以短视频形式存在（小红书/抖音），手动截图效率低。
 
