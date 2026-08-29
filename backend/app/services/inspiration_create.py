@@ -136,6 +136,13 @@ async def create_inspiration(
         raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
     await db.refresh(inspiration)
 
+    # 视频入库后后台预热关键帧（fire-and-forget：详情页展示 / 向量首帧 / 人脸扫描
+    # 均依赖关键帧，预热可避免首次访问等待 ffmpeg；失败由懒提取兜底，不影响上传）
+    if media_type == "video":
+        from app.services.video_service import prewarm_keyframes
+
+        prewarm_keyframes(inspiration)
+
     # 入库后登记向量回填（攒批）：素材 ID 进入待回填队列，累计达到阈值（100）后
     # 统一创建批量任务，避免「每上传一个素材就创建一个 total=1 小任务」。
     # 文本向量需等标签生成后才有内容，无标签时由任务内部自动跳过（后续 AI 分析
@@ -302,6 +309,12 @@ async def create_inspiration_from_url(
         delete_files(rel_path, thumb_path)
         raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
     await db.refresh(inspiration)
+
+    # 视频入库后后台预热关键帧（fire-and-forget，失败由懒提取兜底，不影响导入）
+    if media_type == "video":
+        from app.services.video_service import prewarm_keyframes
+
+        prewarm_keyframes(inspiration)
 
     # 关联标签
     if tag_names:

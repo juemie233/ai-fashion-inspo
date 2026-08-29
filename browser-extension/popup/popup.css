@@ -153,6 +153,24 @@ body {
   background: #6366f1;
 }
 
+/* 已采集（查重命中）图片：降饱和弱化显示，右上角固定标记 */
+.image-item.collected img {
+  opacity: 0.45;
+}
+
+.image-item.collected .collected-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(22, 163, 74, 0.85);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 /* 底部操作栏 */
 .footer {
   display: flex;

@@ -197,6 +197,11 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     # 物理删除文件（删除失败仅记日志，不抛异常）
     delete_files(inspiration.file_path, inspiration.thumbnail_path)
 
+    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
+    from app.services.video_service import cleanup_keyframes
+
+    await cleanup_keyframes(inspiration.id)
+
 
 async def trash_inspiration(
     db: AsyncSession,
@@ -415,6 +420,11 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
 
     # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
     await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+
+    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
+    from app.services.video_service import cleanup_keyframes_batch
+
+    await cleanup_keyframes_batch(deleted_ids)
 
     # 记录审计：清空垃圾桶（含定时自动清理）属于不可恢复的破坏性操作
     await record_audit_log(

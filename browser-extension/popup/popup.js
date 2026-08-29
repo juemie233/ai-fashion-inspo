@@ -19,6 +19,8 @@ const uploadProgressText = document.getElementById('uploadProgressText');
 let imageList = [];
 let selectedUrls = new Set();
 let metadata = {};
+// 上传前查重：已入库图片默认跳过（与 service-worker 中的设置同步）
+let skipDuplicates = true;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -58,6 +60,8 @@ async function loadSettings() {
       document.getElementById('apiUrl').value =
         settings.apiUrl || 'http://localhost:18888';
       document.getElementById('autoAnalyze').checked = settings.autoAnalyze !== false;
+      skipDuplicates = settings.skipDuplicates !== false;
+      document.getElementById('skipDuplicates').checked = skipDuplicates;
     }
   } catch (err) {
     // service worker 冷启动 / 未就绪时 sendMessage 可能失败：用默认值，不抛异常
@@ -107,6 +111,7 @@ async function loadImages() {
     imageList = (result && result.images) || [];
     metadata = (result && result.metadata) || {};
     selectedUrls.clear();
+    await markCollectedImages();
     renderImages();
     console.log(`[穿搭采集器] 提取到 ${imageList.length} 张候选图片`);
   } catch (err) {
@@ -114,6 +119,30 @@ async function loadImages() {
     console.error('[穿搭采集器] 加载图片失败:', err);
     imageGrid.innerHTML =
       '<p class="hint">无法读取当前页面。<br/>请确保在小红书或抖音页面使用此插件。</p>';
+  }
+}
+
+/** 上传前查重：按平台 ID 查询后端，把已入库的图片标记为「已采集」。
+ *
+ *  平台 ID 是页面级笔记 ID，同一页提取的所有图片共享同一个 ID，
+ *  因此一次查询即可覆盖整页；查重失败（后端未启动等）时静默降级，
+ *  不影响正常采集流程。
+ */
+async function markCollectedImages() {
+  const platformId = metadata && metadata.platformId;
+  if (!platformId || imageList.length === 0) return;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'CHECK_PLATFORM_ID',
+      platformId,
+    });
+    if (res && res.exists) {
+      imageList.forEach((img) => {
+        img.collected = true;
+      });
+    }
+  } catch (err) {
+    console.warn('[穿搭采集器] 上传前查重失败（忽略，继续正常采集）:', err);
   }
 }
 
@@ -130,7 +159,7 @@ function renderImages() {
   imageGrid.innerHTML = imageList
     .map(
       (img, i) => `
-    <div class="image-item ${selectedUrls.has(img.url) ? 'selected' : ''}"
+    <div class="image-item ${selectedUrls.has(img.url) ? 'selected' : ''} ${img.collected ? 'collected' : ''}"
          data-index="${i}"
          data-url="${escapeHtml(img.url)}">
       <!-- referrerpolicy="no-referrer"：小红书/抖音 CDN 图片通常按 Referer 防盗链，
@@ -138,6 +167,7 @@ function renderImages() {
       <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.alt)}" loading="lazy"
            referrerpolicy="no-referrer" />
       <div class="checkbox">${selectedUrls.has(img.url) ? '✓' : ''}</div>
+      ${img.collected ? '<div class="collected-badge">已采集</div>' : ''}
     </div>`
     )
     .join('');
@@ -151,8 +181,11 @@ function renderImages() {
   });
 }
 
-/** 切换选中状态 */
+/** 切换选中状态（开启查重跳过时，已采集图片不可选中） */
 function toggleSelect(url, element) {
+  const img = imageList.find((x) => x.url === url);
+  if (skipDuplicates && img && img.collected) return;
+
   if (selectedUrls.has(url)) {
     selectedUrls.delete(url);
     if (element) {
@@ -176,14 +209,15 @@ function updateFooter() {
   uploadBtn.textContent = selectedUrls.size > 0 ? `采集入库 (${selectedUrls.size})` : '采集入库';
 }
 
-/** 全选/取消全选 */
+/** 全选/取消全选（开启查重跳过时，已采集图片不参与全选） */
 function toggleSelectAll() {
-  if (selectedUrls.size === imageList.length) {
+  const selectable = imageList.filter((img) => !(skipDuplicates && img.collected));
+  if (selectable.length > 0 && selectedUrls.size === selectable.length) {
     // 取消全选
     selectedUrls.clear();
   } else {
-    // 全选
-    imageList.forEach((img) => selectedUrls.add(img.url));
+    // 全选（仅可选图片）
+    selectable.forEach((img) => selectedUrls.add(img.url));
   }
   renderImages();
 }
@@ -265,11 +299,19 @@ function setupEventListeners() {
   saveSettingsBtn.addEventListener('click', async () => {
     const apiUrl = document.getElementById('apiUrl').value;
     const autoAnalyze = document.getElementById('autoAnalyze').checked;
+    skipDuplicates = document.getElementById('skipDuplicates').checked;
     await chrome.runtime.sendMessage({
       type: 'SAVE_SETTINGS',
-      settings: { apiUrl, autoAnalyze },
+      settings: { apiUrl, autoAnalyze, skipDuplicates },
     });
     settingsPanel.classList.add('hidden');
     checkConnection();
+    // 跳过设置变更后立即重渲染：重新开启跳过时，取消已采集图片的选中状态
+    if (skipDuplicates) {
+      imageList.forEach((img) => {
+        if (img.collected) selectedUrls.delete(img.url);
+      });
+    }
+    renderImages();
   });
 }

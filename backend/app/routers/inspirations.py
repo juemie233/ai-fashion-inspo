@@ -1,6 +1,7 @@
 """灵感素材 CRUD 的 REST API 路由。"""
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -48,6 +49,33 @@ def _parse_csv_list(value: str | None) -> list[str] | None:
     if not value:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+# ── 平台 ID 查重（只读，供浏览器插件上传前去重）──
+# 注意：静态路径必须声明在 GET /{inspiration_id} 动态路由之前，避免被吞掉
+
+
+@router.get("/check-platform-id", status_code=status.HTTP_200_OK)
+async def check_platform_id(
+    platform_id: str = Query(..., min_length=1, max_length=128, description="平台素材/笔记 ID"),
+    platform: str | None = Query(None, max_length=32, description="平台标识（预留参数）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """查询平台 ID 是否已有未删除素材（浏览器插件上传前查重）。
+
+    与入库查重 check_platform_id_duplicate 语义一致：仅统计未删除素材，
+    垃圾桶素材释放平台 ID，允许「删除后重新采集」。
+    platform 参数预留：source_platform_id 的部分唯一索引为全局唯一，
+    当前查重不按平台细分。
+    """
+    result = await db.execute(
+        select(Inspiration.id).where(
+            Inspiration.source_platform_id == platform_id,
+            Inspiration.deleted_at.is_(None),
+        )
+    )
+    existing_id = result.scalars().first()
+    return {"exists": existing_id is not None, "inspiration_id": existing_id}
 
 
 # ── 人脸检测与博主匹配 ──

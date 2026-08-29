@@ -12,7 +12,7 @@
     "default_popup": "popup/popup.html",
     "default_title": "采集穿搭图片"
   },
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "contextMenus", "notifications"],
   "host_permissions": [
     "http://localhost:18888/*",
     "http://127.0.0.1:18888/*",
