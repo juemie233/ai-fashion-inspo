@@ -387,6 +387,8 @@ const conditionSummary = computed(() => {
 
 onMounted(() => {
   void loadCollections().then(() => loadContent())
+  // 预热标签库：智能合集编辑器的标签下拉首次打开即可用（避免首次点开时等待标签接口）
+  void tagsStore.load()
 })
 </script>
 
@@ -526,7 +528,10 @@ onMounted(() => {
           </div>
         </template>
       </template>
-      <a-empty v-else description="选择左侧合集，或新建一个" style="margin-top: 80px" />
+      <!-- 空状态：垂直水平居中撑满内容区，避免孤零零浮在左上角 -->
+      <div v-else class="content-empty">
+        <a-empty description="选择左侧合集，或新建一个" />
+      </div>
     </section>
 
     <!-- 智能合集条件编辑器 -->
@@ -615,19 +620,23 @@ onMounted(() => {
 
 /* 左侧列表 */
 .collection-list {
-  width: 240px;
-  min-width: 240px;
+  width: 260px;
+  min-width: 260px;
+  min-height: 420px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 10px;
   position: sticky;
   top: 16px;
+  display: flex;
+  flex-direction: column;
 }
 .list-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
   margin-bottom: 8px;
   font-size: 13px;
   font-weight: 600;
@@ -676,10 +685,25 @@ onMounted(() => {
   padding-top: 8px;
 }
 
+/* 列表区撑满剩余高度，让「拖动调整」提示稳定贴底 */
+.collection-list :deep(.arco-spin) {
+  flex: 1;
+}
+
 /* 右侧内容 */
 .collection-content {
   flex: 1;
   min-width: 0;
+}
+/* 空状态：居中撑满可视区 */
+.content-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 420px;
+  background: #fff;
+  border: 1px dashed #e5e7eb;
+  border-radius: 8px;
 }
 .content-header {
   display: flex;

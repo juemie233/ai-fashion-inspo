@@ -138,15 +138,18 @@ async function handleSave() {
         <a-input v-model="form.keyword" placeholder="可空；匹配文件名/来源等关键字段" allow-clear />
       </a-form-item>
       <a-form-item label="标签">
-        <div style="display: flex; gap: 8px; align-items: center">
+        <!-- flex:1 占满表单项内容区（content 本身是 flex，缺省宽度会收缩到内容尺寸）；
+             模式切换放选择框下方整行，标签框可占满整行宽度 -->
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
           <a-select
             v-model="form.tagIds"
             multiple
             filterable
             allow-clear
             :options="tagOptions"
-            placeholder="可多选"
-            style="flex: 1"
+            placeholder="可多选，支持搜索"
+            style="width: 100%"
+            :virtual-list-props="{ height: 240 }"
           />
           <a-radio-group
             v-model="form.tagMode"
