@@ -343,7 +343,9 @@ async function reanalyze() {
   if (!detail.value || analyzing.value) return
   analyzing.value = true
   try {
-    const { data } = await analyzeInspiration(detail.value.id)
+    // analyzeInspiration 返回的是响应体本身（{message, status, ollama_will_start}），
+    // 不是 axios 响应对象——不能再用 { data } 解构一层
+    const data = await analyzeInspiration(detail.value.id)
     if (data.ollama_will_start) {
       Message.warning(data.message || 'Ollama 正在启动中')
     } else {

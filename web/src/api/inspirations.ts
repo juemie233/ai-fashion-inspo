@@ -347,8 +347,13 @@ export async function emptyTrash(onlyExpired = false) {
   return data
 }
 
-/** 触发 AI 分析（用于手动重新分析） */
-export async function analyzeInspiration(id: string) {
+/** 触发 AI 分析（用于手动重新分析）。返回响应体本身，非 axios 响应对象 */
+export async function analyzeInspiration(id: string): Promise<{
+  message: string
+  inspiration_id: string
+  status: string
+  ollama_will_start: boolean
+}> {
   const { data } = await apiClient.post(`/ai/analyze/${id}`)
   return data
 }
