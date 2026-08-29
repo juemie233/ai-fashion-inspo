@@ -8,10 +8,14 @@
 """
 
 from app.services.task_runners.batch_analyze import (
+    MAX_MULTI_COMBINATIONS,
     _analyze_one,
+    _analyze_one_multi,
     _last_analysis_error,
     create_batch_analyze_task,
+    create_multi_analyze_task,
     execute_batch_analyze,
+    execute_multi_analyze,
 )
 from app.services.task_runners.batch_delete import (
     create_batch_delete_task,
@@ -76,6 +80,7 @@ from app.services.task_runners.vector_backfill import (
 # 新增任务类型时，在此注册对应的 execute_xxx 函数即可，worker 无需改动。
 TASK_HANDLERS = {
     "batch_analyze": execute_batch_analyze,
+    "multi_analyze": execute_multi_analyze,
     "quality_check": execute_quality_check,
     "batch_delete": execute_batch_delete,
     "deduplicate": execute_deduplicate,

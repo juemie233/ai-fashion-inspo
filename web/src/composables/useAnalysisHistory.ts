@@ -25,6 +25,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const historyPageSize = 20
   const historyFilter = ref<string | null>(null)
   const historyModelFilter = ref<string | null>(null)
+  const historyPromptFilter = ref<string | null>(null)
   const historySearchId = ref('')
   const historyStartDate = ref<number | null>(null)
   const historyEndDate = ref<number | null>(null)
@@ -32,6 +33,8 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   const historyLoading = ref(false)
   const selectedHistoryIds = ref<Set<number>>(new Set())
   const historyModelNames = ref<string[]>([])
+  /** 历史中出现过的提示词版本（内容哈希 + 记录数），供筛选下拉 */
+  const historyPromptVersions = ref<Array<{ prompt_version: string; count: number }>>([])
   const clearingFailed = ref(false)
   const retryingAll = ref(false)
 
@@ -48,6 +51,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       const params: any = { page: historyPage.value, size: historyPageSize }
       if (historyFilter.value) params.status = historyFilter.value
       if (historyModelFilter.value) params.model_name = historyModelFilter.value
+      if (historyPromptFilter.value) params.prompt_version = historyPromptFilter.value
       if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
       if (historyStartDate.value) params.start_date = toDateStr(historyStartDate.value)
       if (historyEndDate.value) params.end_date = toDateStr(historyEndDate.value)
@@ -75,6 +79,14 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
   /** 按模型筛选 */
   function filterByModel(model: string | null) {
     historyModelFilter.value = model
+    historyPage.value = 1
+    selectedHistoryIds.value = new Set()
+    loadHistory()
+  }
+
+  /** 按提示词版本（内容哈希）筛选 */
+  function filterByPrompt(version: string | null) {
+    historyPromptFilter.value = version
     historyPage.value = 1
     selectedHistoryIds.value = new Set()
     loadHistory()
@@ -116,6 +128,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       const params: any = {}
       if (historyFilter.value) params.status = historyFilter.value
       if (historyModelFilter.value) params.model_name = historyModelFilter.value
+      if (historyPromptFilter.value) params.prompt_version = historyPromptFilter.value
       if (historySearchId.value.trim()) params.inspiration_id = historySearchId.value.trim()
       if (historyStartDate.value) params.start_date = toDateStr(historyStartDate.value)
       if (historyEndDate.value) params.end_date = toDateStr(historyEndDate.value)
@@ -141,6 +154,33 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
       historyModelNames.value = data.models
     } catch {
       /* 静默 */
+    }
+  }
+
+  /** 加载历史提示词版本下拉选项 */
+  async function loadPromptVersions() {
+    try {
+      const { data } = await apiClient.get<{
+        versions: Array<{ prompt_version: string; count: number }>
+      }>('/ai/history/prompt-versions')
+      historyPromptVersions.value = data.versions
+    } catch {
+      /* 静默 */
+    }
+  }
+
+  /** 把某条分析记录提取的标签应用到素材（覆盖 AI 标签，保留手动标签） */
+  async function applyLogToMaterial(logId: number) {
+    try {
+      const { data } = await apiClient.post<{
+        message: string
+        applied: number
+        inspiration_id: string
+      }>(`/ai/history/${logId}/apply`)
+      Message.success(data.message || '已应用到素材')
+      loadHistory()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '应用失败'))
     }
   }
 
@@ -274,6 +314,7 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     historyPageSize,
     historyFilter,
     historyModelFilter,
+    historyPromptFilter,
     historySearchId,
     historyStartDate,
     historyEndDate,
@@ -281,16 +322,20 @@ export function useAnalysisHistory(options: UseAnalysisHistoryOptions = {}) {
     historyLoading,
     selectedHistoryIds,
     historyModelNames,
+    historyPromptVersions,
     clearingFailed,
     retryingAll,
     loadHistory,
     filterHistory,
     filterByModel,
+    filterByPrompt,
     searchById,
     filterByDate,
     sortByTime,
     exportHistoryCsv,
     loadModelNames,
+    loadPromptVersions,
+    applyLogToMaterial,
     toggleSelectHistory,
     selectAllHistory,
     batchDeleteHistory,

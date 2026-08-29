@@ -69,7 +69,7 @@ def _take_pre_reset_snapshot() -> tuple[Path | None, int]:
                 src.close()
                 dst.close()
 
-        for sub in ("images", "thumbnails", "videos", "lancedb"):
+        for sub in ("images", "thumbnails", "videos", "keyframes", "lancedb"):
             src = settings.storage_root / sub
             if src.exists():
                 moved_files += sum(1 for _ in src.rglob("*") if _.is_file())
@@ -219,7 +219,7 @@ async def reset_all_data(
     # 从活动存储移走的文件数由 snap_moved 统计，一并计入 files_deleted。
     storage_deleted = snap_moved
     storage_errors = []
-    for dir_path in [settings.images_dir, settings.thumbnails_dir, settings.videos_dir]:
+    for dir_path in [settings.images_dir, settings.thumbnails_dir, settings.videos_dir, settings.keyframes_dir]:
         if dir_path.exists():
             file_count = len(list(dir_path.iterdir()))
 

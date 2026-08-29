@@ -65,6 +65,30 @@ def get_all_model_prompts() -> dict[str, str]:
     return _load()
 
 
+# Prompt 版本历史文件（由 AI 设置页的「保存版本 / 回滚」接口写入，
+# 多模型组合分析读取该文件把历史版本 Prompt 解析为文本用于分析）
+_VERSIONS_FILE = Path(__file__).resolve().parent.parent.parent / "prompt_versions.json"
+
+
+def get_prompt_versions(model_name: str) -> list[dict]:
+    """读取指定模型的 Prompt 版本历史（与 AI 设置页共用 prompt_versions.json）。
+
+    返回按保存顺序排列的版本列表（最早的为 #1），每项含
+    ``prompt`` / ``saved_at`` / ``length`` 字段；文件不存在或损坏时返回空列表。
+    """
+    if not _VERSIONS_FILE.exists():
+        return []
+    try:
+        data = json.loads(_VERSIONS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            versions = data.get(model_name, [])
+        else:
+            versions = []  # 兼容旧的平铺格式（不按模型隔离的已废弃格式）
+        return versions if isinstance(versions, list) else []
+    except Exception:
+        return []
+
+
 async def copy_model_prompt(source: str, destination: str) -> None:
     """将源模型的 Prompt 复制到目标模型（无自定义 Prompt 则忽略）。"""
     async with _write_lock:

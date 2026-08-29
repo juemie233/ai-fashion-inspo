@@ -26,6 +26,7 @@ from app.services.ai_tag_saver import (
 )
 from app.services.model_config import get_model_config
 from app.services.model_prompt import get_model_prompt
+from app.services.tag_service import get_or_create_tag
 
 
 def _prompt_version(prompt: str) -> str:
@@ -39,8 +40,13 @@ async def _call_ollama_vision(
     model_cfg: dict,
     file_size_mb: float,
     inspiration_id: str,
+    model_name: str,
 ) -> str:
-    """调用 Ollama 视觉 API 获取原始输出（含截断/上下文窗口自动重试），失败抛 RuntimeError。"""
+    """调用 Ollama 视觉 API 获取原始输出（含截断/上下文窗口自动重试），失败抛 RuntimeError。
+
+    参数:
+        model_name: 本次分析使用的视觉模型名（支持多模型组合分析，不再硬编码全局默认）
+    """
     import httpx
 
     think_enabled = model_cfg.get("think", False)
@@ -70,7 +76,7 @@ async def _call_ollama_vision(
                     response = await client.post(
                         f"{settings.ollama_base_url}/api/chat",
                         json={
-                            "model": settings.ollama_vision_model,
+                            "model": model_name,
                             "messages": [
                                 {
                                     "role": "user",
@@ -109,7 +115,7 @@ async def _call_ollama_vision(
                         )
                         break
                     raise RuntimeError(
-                        _http_error_message(status, detail, file_size_mb)
+                        _http_error_message(status, detail, file_size_mb, model_name)
                     ) from e
                 except httpx.TimeoutException:
                     raise RuntimeError(
@@ -156,9 +162,18 @@ async def _call_ollama_vision(
 
 
 async def _parse_and_save_tags(
-    db: AsyncSession, inspiration_id: str, raw_response: str
+    db: AsyncSession,
+    inspiration_id: str,
+    raw_response: str,
+    apply_tags: bool = True,
 ) -> tuple[dict, list[tuple[str, str, float]], str | None]:
-    """解析模型输出并保存标签，返回 (tags_data, 提取到的标签, 错误消息)。"""
+    """解析模型输出并保存标签，返回 (tags_data, 提取到的标签, 错误消息)。
+
+    参数:
+        apply_tags: 是否把标签合并到素材（inspiration_tags 关联）。为 False 时
+            仅确保标签存在于标签表（供结构化快照引用），不建立素材关联，
+            素材的正式标签保持不变（多模型 × 多提示词组合分析场景）。
+    """
     tags_data = parse_analysis_response(raw_response)
     extracted_tags: list[tuple[str, str, float]] = []
     error_msg: str | None = None
@@ -174,7 +189,17 @@ async def _parse_and_save_tags(
         logger.warning(f"分析解析失败 {inspiration_id}: {raw_response[:200]}")
     else:
         extracted_tags = list(iter_extracted_tags(tags_data))
-        tag_count = await save_tags(db, inspiration_id, tags_data)
+        if apply_tags:
+            tag_count = await save_tags(db, inspiration_id, tags_data)
+        else:
+            # 不应用模式：只确保标签在标签表中存在（快照按 tag_id 引用），
+            # 不写入 inspiration_tags 关联，素材标签保持不变
+            name_categories = {
+                name: category for name, category, _conf in extracted_tags
+            }
+            for name, category in name_categories.items():
+                await get_or_create_tag(db, name, category, "ai_generated")
+            tag_count = len(name_categories)
         if tag_count == 0:
             error_msg = f"AI 未提取到任何有效标签（原始输出 {len(raw_response)} 字符）"
             logger.warning(f"零标签分析 {inspiration_id}: {raw_response[:200]}")
@@ -212,14 +237,20 @@ async def _write_analysis_log(
     error_msg: str | None,
     processing_time: int,
     extracted_tags: list[tuple[str, str, float]],
+    model_name: str | None = None,
 ) -> None:
-    """记录分析日志与标签快照（独立事务，即使主流程失败也能写入）。"""
+    """记录分析日志与标签快照（独立事务，即使主流程失败也能写入）。
+
+    参数:
+        model_name: 本次分析所用模型名，缺省回退到全局默认视觉模型
+    """
     try:
+        used_model = model_name or settings.ollama_vision_model
         log_entry = AIAnalysisLog(
             inspiration_id=inspiration_id,
-            model_name=settings.ollama_vision_model,
+            model_name=used_model,
             prompt_version=_prompt_version(prompt),
-            model_version=settings.ollama_vision_model,
+            model_version=used_model,
             raw_response=raw_response,
             processing_time_ms=processing_time,
             error=error_msg,
@@ -253,21 +284,33 @@ async def _write_analysis_log(
             pass
 
 
-async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -> bool:
+async def analyze_image(
+    db: AsyncSession,
+    inspiration_id: str,
+    file_path: str,
+    model_name: str | None = None,
+    prompt: str | None = None,
+    apply_tags: bool = True,
+) -> bool:
     """分析单张图片：调用视觉模型并保存提取的标签。
 
     参数:
         db: 数据库会话
         inspiration_id: 素材 UUID
         file_path: 图片文件的相对路径
+        model_name: 视觉模型名（缺省用全局默认，多模型组合分析时传入）
+        prompt: 分析 Prompt 文本（缺省用该模型当前配置的 Prompt）
+        apply_tags: 是否把标签合并到素材；False 时只写分析日志与标签快照，
+            素材的正式标签（inspiration_tags）与主色调字段保持不变
 
     返回:
         True 表示分析成功（无错误），False 表示分析失败
     """
+    used_model = model_name or settings.ollama_vision_model
     start_time = time.time()
     error_msg: str | None = None
     raw_response: str | None = None
-    prompt = ""
+    used_prompt = ""
     extracted_tags: list[tuple[str, str, float]] = []
     success = False
 
@@ -279,19 +322,21 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
             logger.warning(f"图片较大 ({file_size_mb:.1f}MB)，可能导致分析失败: {file_path}")
 
         # 按当前模型读取独立配置（隔离每个模型的超时与采样参数）
-        model_cfg = get_model_config(settings.ollama_vision_model)
-        prompt = get_model_prompt(settings.ollama_vision_model)
+        model_cfg = get_model_config(used_model)
+        used_prompt = prompt or get_model_prompt(used_model)
 
         # 调用 Ollama 视觉 API（含截断/上下文窗口自动重试）
         raw_response = await _call_ollama_vision(
-            image_data, prompt, model_cfg, file_size_mb, inspiration_id
+            image_data, used_prompt, model_cfg, file_size_mb, inspiration_id, used_model
         )
 
         # 解析分析结果并保存标签
         tags_data, extracted_tags, error_msg = await _parse_and_save_tags(
-            db, inspiration_id, raw_response
+            db, inspiration_id, raw_response, apply_tags=apply_tags
         )
-        await _update_dominant_colors(db, inspiration_id, tags_data)
+        if apply_tags:
+            # 主色调属于素材字段的写入，与标签合并同受 apply_tags 控制
+            await _update_dominant_colors(db, inspiration_id, tags_data)
 
         # 提交所有变更
         await db.commit()
@@ -301,7 +346,8 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         # 立即重建文本 + 图像向量，保证新素材可被语义搜索 / 相似推荐检索到。
         # 标签此刻已入库，文本向量有内容可生成；图像向量对视频素材自动跳过。
         # LanceDB / CLIP / Ollama 不可用时内部静默降级，不影响分析结果。
-        if success:
+        # 不应用标签模式（apply_tags=False）下素材标签未变化，无需重建向量。
+        if success and apply_tags:
             try:
                 from app.services.vector_service import rebuild_inspiration_vectors
 
@@ -327,17 +373,21 @@ async def analyze_image(db: AsyncSession, inspiration_id: str, file_path: str) -
         await _write_analysis_log(
             db,
             inspiration_id,
-            prompt,
+            used_prompt,
             raw_response,
             error_msg,
             processing_time,
             extracted_tags,
+            model_name=used_model,
         )
         return success
 
 
-def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
+def _http_error_message(
+    status: int, detail: str, file_size_mb: float, model_name: str | None = None
+) -> str:
     """将 Ollama HTTP 错误转为人可读的中文消息。"""
+    used_model = model_name or settings.ollama_vision_model
     if status == 400:
         if "image" in detail.lower() or "vision" in detail.lower():
             return f"图片格式不支持或模型不支持视觉功能 ({detail})"
@@ -347,7 +397,7 @@ def _http_error_message(status: int, detail: str, file_size_mb: float) -> str:
             return f"图片太大超出模型上下文限制。请使用更小的图片 (当前 {file_size_mb:.1f}MB)。"
         return f"请求参数错误 (400): {detail or '请检查图片格式和大小'}"
     if status == 404:
-        return f"模型 '{settings.ollama_vision_model}' 未安装。请先在模型管理页下载模型。"
+        return f"模型 '{used_model}' 未安装。请先在模型管理页下载模型。"
     if status == 413:
         return f"图片体积过大 ({file_size_mb:.1f}MB)，超过服务端限制。请压缩图片。"
     if status == 429:

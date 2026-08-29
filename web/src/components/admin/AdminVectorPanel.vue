@@ -37,6 +37,21 @@ const backfillDisabled = computed(
     !stats.value.lancedb_available,
 )
 
+/** 文本向量是否为旧公式版本（需全量重建才能启用正文 caption 语义搜索） */
+const textVectorStale = computed(() => stats.value?.text_vector_version?.stale ?? false)
+
+const rebuildingText = ref(false)
+
+/** 重建文本向量按钮禁用条件：提交中、任务进行中、无文本向量、lancedb 不可用 */
+const rebuildTextDisabled = computed(
+  () =>
+    rebuildingText.value ||
+    taskRunning.value ||
+    stats.value === null ||
+    stats.value.text_vectors === 0 ||
+    !stats.value.lancedb_available,
+)
+
 async function loadStats() {
   loading.value = true
   try {
@@ -72,6 +87,33 @@ async function handleBackfill() {
     Message.error(getApiErrorMessage(e, '创建向量回填任务失败'))
   } finally {
     submitting.value = false
+  }
+}
+
+/** 全量重建文本向量：文本公式升级（正文 caption 参与语义搜索）后使用，
+ * 跳过图像向量避免无谓的 CLIP 全库编码 */
+async function handleRebuildText() {
+  if (rebuildTextDisabled.value) return
+  rebuildingText.value = true
+  try {
+    const { data } = await apiClient.post<{
+      task_id: number | null
+      count: number
+      message: string
+    }>('/admin/vector-backfill', { rebuild_text: true })
+    if (data.task_id) {
+      Message.success(`已创建文本向量重建任务 #${data.task_id}（${data.count} 个素材）`)
+      startAdminPolling(data.task_id, () => {
+        Message.success('文本向量重建完成，正文 caption 已参与语义搜索')
+        loadStats()
+      })
+    } else {
+      Message.info(data.message || '没有可重建文本向量的素材')
+    }
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '创建文本向量重建任务失败'))
+  } finally {
+    rebuildingText.value = false
   }
 }
 
@@ -112,13 +154,18 @@ onUnmounted(() => {
           >
         </a-alert>
 
+        <a-alert v-else-if="textVectorStale" type="warning" style="margin-top: 12px">
+          文本向量公式已升级（正文 caption 已参与语义搜索），存量文本向量为旧版本。
+          点击下方「重建文本向量」后，即可按笔记正文描述词进行语义搜索（异步任务，可到「任务管理」查看进度）。
+        </a-alert>
+
         <a-alert v-else type="info" style="margin-top: 12px">
           打开素材详情卡顿的常见原因：素材尚未生成图像向量，相似推荐会现场做 CLIP 编码。
           点击下方按钮为缺失向量的素材批量回填（异步任务，可到「任务管理」查看进度）。
         </a-alert>
 
         <!-- 一键回填 -->
-        <a-space style="margin-top: 16px" align="center">
+        <a-space style="margin-top: 16px" align="center" wrap>
           <a-button
             type="primary"
             :loading="submitting"
@@ -132,6 +179,15 @@ onUnmounted(() => {
                   ? `一键向量化缺失素材（${stats.missing} 个）`
                   : '一键向量化缺失素材'
             }}
+          </a-button>
+          <a-button
+            v-if="textVectorStale"
+            type="secondary"
+            :loading="rebuildingText"
+            :disabled="rebuildTextDisabled"
+            @click="handleRebuildText"
+          >
+            重建文本向量（启用正文语义搜索）
           </a-button>
           <a-button type="secondary" :disabled="taskRunning" @click="loadStats">刷新统计</a-button>
         </a-space>

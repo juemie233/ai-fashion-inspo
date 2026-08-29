@@ -292,9 +292,28 @@ async def generate_image_embedding(
 
 # ==================== 工具函数 ====================
 
+# 文本向量内容公式版本：build_inspiration_text 的拼接公式变更时递增。
+# LanceDB 中只存向量不存原文，无法感知「向量是用旧公式算的」；版本号写入
+# lancedb 目录的标记文件（见 store.get_stored_text_formula_version），
+# 管理页据此提示「文本向量已过期，建议重建」。
+TEXT_EMBEDDING_FORMULA_VERSION = 2  # v2: 正文 caption 参与嵌入
+
+# caption 参与嵌入的最大长度（正文本身有语义价值，但过长会稀释标签信号，
+# 且 Ollama 嵌入有 context 上限——generate_text_embedding 内部还有截断重试兜底）
+_CAPTION_MAX_CHARS = 500
+
+
+def get_text_formula_version() -> int:
+    """返回当前文本向量内容公式版本号。"""
+    return TEXT_EMBEDDING_FORMULA_VERSION
+
 
 def build_inspiration_text(inspiration: Inspiration) -> str:
-    """为素材构建语义搜索用文本（标签名 + 主色调 + 作者）。
+    """为素材构建语义搜索用文本（标签名 + 主色调 + 作者 + 正文 caption）。
+
+    正文 caption（笔记描述）是标签之外的重要语义来源——用户常按描述词
+    （如「白色亚麻衬衫」「通勤穿搭」）搜索，而标签未必覆盖这些词。
+    caption 过长时截断，避免稀释标签信号。
 
     返回:
         拼接后的文本，无内容时返回空字符串
@@ -312,4 +331,12 @@ def build_inspiration_text(inspiration: Inspiration) -> str:
     if inspiration.source_author:
         parts.append(inspiration.source_author)
 
-    return "、".join(parts)
+    text = "、".join(parts)
+
+    caption = (inspiration.caption or "").strip()
+    if caption:
+        if len(caption) > _CAPTION_MAX_CHARS:
+            caption = caption[:_CAPTION_MAX_CHARS]
+        text = f"{text}\n{caption}" if text else caption
+
+    return text

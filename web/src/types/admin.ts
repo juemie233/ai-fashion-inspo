@@ -1,23 +1,63 @@
 /** 素材管理后台相关类型定义。 */
 
 /** 月度新增统计 */
-export interface MonthStat { month: string; count: number }
+export interface MonthStat {
+  month: string
+  count: number
+}
 /** 来源类型统计 */
-export interface SourceStat { source_type: string; count: number }
+export interface SourceStat {
+  source_type: string
+  count: number
+}
 /** 媒体类型统计 */
-export interface MediaStat { media_type: string; count: number }
+export interface MediaStat {
+  media_type: string
+  count: number
+}
 /** 分析状态统计 */
-export interface StatusStat { status: string; count: number; label: string }
+export interface StatusStat {
+  status: string
+  count: number
+  label: string
+}
 /** 大文件条目 */
-export interface LargeFile { id: string; file_path: string; source_type: string; created_at: string | null; size_bytes: number; exists: boolean }
+export interface LargeFile {
+  id: string
+  file_path: string
+  source_type: string
+  created_at: string | null
+  size_bytes: number
+  exists: boolean
+}
 /** 缺失文件：数据库有记录但磁盘文件不存在 */
-export interface MissingFile { file_path: string; inspiration_ids: string[] }
+export interface MissingFile {
+  file_path: string
+  inspiration_ids: string[]
+}
 /** 孤立文件：磁盘有文件但数据库无记录 */
-export interface OrphanFile { file_path: string; size_bytes: number }
+export interface OrphanFile {
+  file_path: string
+  size_bytes: number
+}
 /** 重复文件组：相同哈希的多个文件 */
-export interface DuplicateGroup { hash: string; files: { id: string; file_path: string; size_bytes: number }[] }
+export interface DuplicateGroup {
+  hash: string
+  files: { id: string; file_path: string; size_bytes: number }[]
+}
 /** 去重结果 */
-export interface DedupResult { groups_processed: number; files_deleted: number; freed_bytes: number }
+export interface DedupResult {
+  groups_processed: number
+  files_deleted: number
+  freed_bytes: number
+}
+
+/** 文本向量公式版本信息（build_inspiration_text 公式升级后提示重建） */
+export interface TextVectorVersion {
+  current: number
+  stored: number | null
+  stale: boolean
+}
 
 /** 向量化状态统计（管理页「向量管理」展示） */
 export interface VectorStats {
@@ -26,6 +66,7 @@ export interface VectorStats {
   text_vectors: number
   missing: number
   lancedb_available: boolean
+  text_vector_version: TextVectorVersion
 }
 
 /** 管理后台统计概览 */

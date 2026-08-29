@@ -6,7 +6,13 @@ import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { useNotification } from '@/composables/useNotification'
-import type { QueueStats, ActiveAnalysis, TaskInfo, QueueItem } from '@/types/analysis'
+import type {
+  QueueStats,
+  ActiveAnalysis,
+  TaskInfo,
+  QueueItem,
+  MultiAnalyzeParams,
+} from '@/types/analysis'
 
 /** 分析队列 composable 配置 */
 export interface UseAnalysisQueueOptions {
@@ -134,8 +140,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 创建批量分析任务并开始轮询 */
-  async function triggerBatchAnalyze() {
+  /** 创建批量分析任务并开始轮询（支持可选的多模型 × 多提示词组合参数） */
+  async function triggerBatchAnalyze(multi?: MultiAnalyzeParams) {
     batchAnalyzing.value = true
     try {
       const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
@@ -143,15 +149,26 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         Message.info('所有素材均已分析过，无需重复分析')
         return
       }
+      // 请求体：传了组合参数用对象格式（多模型 × 多提示词），否则保持旧版数组格式
+      const isMulti = !!multi
+      const body = isMulti
+        ? {
+            inspiration_ids: data.ids,
+            models: multi!.models,
+            prompt_ids: multi!.promptIds,
+            apply_tags: multi!.applyTags,
+          }
+        : data.ids
       // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
       const { data: created } = await apiClient.post<{
         task_id: number
         message: string
         count: number
         skipped: number
+        combinations?: number
         status?: string
         ollama_will_start?: boolean
-      }>('/ai/batch-analyze', data.ids)
+      }>('/ai/batch-analyze', body)
       if (created.ollama_will_start) {
         Message.warning(created.message || 'Ollama 正在启动中，请等待后刷新重试')
         batchAnalyzing.value = false
@@ -159,10 +176,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       }
       batchTask.value = {
         id: created.task_id,
-        type: 'batch_analyze',
+        type: isMulti ? 'multi_analyze' : 'batch_analyze',
         status: 'pending',
         progress: 0,
-        total: created.count,
+        total: isMulti ? (created.count ?? 0) * (created.combinations ?? 1) : created.count,
         done: 0,
         result: null,
         error: null,
@@ -172,10 +189,13 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
-      Message.success(`已创建批量分析任务 #${created.task_id}，共 ${created.count} 个素材`)
-      requestAndNotify('批量分析已创建', {
-        body: `任务 #${created.task_id}，${created.count} 个素材已加入队列`,
-        tag: 'batch-analyze',
+      const comboSuffix = isMulti ? `，${created.combinations} 个组合` : ''
+      Message.success(
+        `已创建${isMulti ? '组合' : '批量'}分析任务 #${created.task_id}，共 ${created.count} 个素材${comboSuffix}`,
+      )
+      requestAndNotify(isMulti ? '组合分析已创建' : '批量分析已创建', {
+        body: `任务 #${created.task_id}，${created.count} 个素材${comboSuffix}已加入队列`,
+        tag: isMulti ? 'multi-analyze' : 'batch-analyze',
       })
       startBatchPolling(created.task_id)
     } catch (e) {
@@ -199,6 +219,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         batchTask.value = data
         if (data.status === 'success' || data.status === 'failed' || data.status === 'cancelled') {
           stopBatchPolling()
+          const label = data.type === 'multi_analyze' ? '组合分析' : '批量分析'
           if (data.status === 'success') {
             const successCount = data.result?.success_count
             const failedCount = data.result?.failed_count
@@ -206,11 +227,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
               successCount !== undefined && failedCount !== undefined
                 ? `成功 ${successCount}，失败 ${failedCount}`
                 : '已完成'
-            Message.success(`批量分析完成：${detail}`)
+            Message.success(`${label}完成：${detail}`)
           } else if (data.status === 'failed') {
-            Message.error(`批量分析失败：${data.error || '未知错误'}`)
+            Message.error(`${label}失败：${data.error || '未知错误'}`)
           } else {
-            Message.info('批量分析任务已取消')
+            Message.info(`${label}任务已取消`)
           }
           loadQueue()
           options.loadHistory?.()
@@ -257,13 +278,20 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 恢复进行中的批量分析任务：刷新页面后查询是否有 pending/running 的批量分析任务并继续轮询 */
+  /** 恢复进行中的批量/组合分析任务：刷新页面后查询是否有 pending/running 的任务并继续轮询 */
   async function resumeBatchAnalyzeTask() {
     try {
-      const { data } = await apiClient.get<{ items: TaskInfo[] }>('/tasks', {
-        params: { type: 'batch_analyze', size: 20 },
-      })
-      const active = data.items.find((t) => t.status === 'pending' || t.status === 'running')
+      // 兼容两类分析任务：单模型批量分析 + 多模型组合分析
+      const [legacy, multi] = await Promise.all([
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'batch_analyze', size: 20 },
+        }),
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'multi_analyze', size: 20 },
+        }),
+      ])
+      const all = [...legacy.data.items, ...multi.data.items]
+      const active = all.find((t) => t.status === 'pending' || t.status === 'running')
       if (active) {
         batchTask.value = active
         startBatchPolling(active.id)

@@ -588,10 +588,13 @@ async def _get_missing_image_vector_ids(db: AsyncSession) -> list[str]:
 
 @router.get("/vector-stats")
 async def vector_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    """向量化状态统计：素材总数 / 已有向量数 / 缺失数（供管理页展示）。"""
+    """向量化状态统计：素材总数 / 已有向量数 / 缺失数 / 文本向量公式版本（供管理页展示）。"""
     from app.services.vector import store as vector_store
+    from app.services.vector.embedding import TEXT_EMBEDDING_FORMULA_VERSION
 
     missing_ids = await _get_missing_image_vector_ids(db)
+    text_vectors = await vector_store.count_vectors("text")
+    stored_version = vector_store.get_stored_text_formula_version()
     return {
         "total_inspirations": (
             await db.execute(
@@ -601,22 +604,46 @@ async def vector_stats(db: AsyncSession = Depends(get_db)) -> dict:
             )
         ).scalar() or 0,
         "image_vectors": await vector_store.count_vectors("image"),
-        "text_vectors": await vector_store.count_vectors("text"),
+        "text_vectors": text_vectors,
         "missing": len(missing_ids),
         "lancedb_available": vector_store.is_lancedb_available(),
+        "text_vector_version": {
+            "current": TEXT_EMBEDDING_FORMULA_VERSION,
+            "stored": stored_version,
+            # stored 为 None（从未记录）视为旧版本：v2 上线前的存量向量都由旧公式生成
+            "stale": text_vectors > 0 and stored_version != TEXT_EMBEDDING_FORMULA_VERSION,
+        },
     }
 
 
+class VectorBackfillRequest(BaseModel):
+    """向量回填触发参数。"""
+
+    rebuild_text: bool = Field(
+        default=False,
+        description="为 True 时全量重建文本向量（公式版本升级后启用正文语义搜索），跳过图像向量",
+    )
+
+
 @router.post("/vector-backfill")
-async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
+async def vector_backfill(
+    payload: VectorBackfillRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """一键为缺失向量的素材创建向量回填任务（异步，由 worker 执行）。
 
     手动触发语义：立即 flush 攒批队列——把「缺失向量的素材」与待回填表中
     积累的素材（未达自动触发阈值的）合并为一个批量任务，不等阈值。
 
+    rebuild_text=True 时改为全量重建文本向量（mode=text，跳过图像向量的
+    CLIP 编码），用于文本公式版本升级后让存量向量获得正文 caption 语义。
+
     返回 task_id 供前端轮询进度；无缺失素材且无待回填素材时返回 count=0。
     """
-    from app.services.task_runners.vector_backfill import flush_pending_vector_backfills
+    from app.services.task_runners.vector_backfill import (
+        create_vector_backfill_task,
+        flush_pending_vector_backfills,
+    )
     from app.services.vector import store as vector_store
 
     if not vector_store.is_lancedb_available():
@@ -624,6 +651,23 @@ async def vector_backfill(db: AsyncSession = Depends(get_db)) -> dict:
             status_code=400,
             detail="lancedb 未安装，请先执行：pip install lancedb",
         )
+
+    rebuild_text = bool(payload and payload.rebuild_text)
+    if rebuild_text:
+        result = await db.execute(select(Inspiration.id).where(NOT_DELETED))
+        all_ids = [row[0] for row in result.all()]
+        task = await create_vector_backfill_task(db, all_ids, mode="text")
+        if task is None:
+            return {
+                "message": "没有可重建文本向量的素材",
+                "task_id": None,
+                "count": 0,
+            }
+        return {
+            "message": f"已创建文本向量重建任务 #{task.id}，共 {task.total} 个素材",
+            "task_id": task.id,
+            "count": task.total,
+        }
 
     missing_ids = await _get_missing_image_vector_ids(db)
     task = await flush_pending_vector_backfills(db, force=True, extra_ids=missing_ids)

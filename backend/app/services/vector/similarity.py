@@ -15,6 +15,7 @@
 """
 
 import logging
+from pathlib import Path
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,27 @@ from app.services.vector.embedding import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 支持生成图像向量的素材类型：图片用原图，视频用第一关键帧
+_VECTOR_MEDIA_TYPES = ("image", "video")
+
+
+async def _resolve_vector_source_path(insp: Inspiration) -> Path | None:
+    """解析图像向量的编码源文件路径（绝对路径）。
+
+    - 图片素材：原图文件；
+    - 视频素材：第一关键帧（懒提取，video_service.ensure_first_frame）。
+    文件缺失或无帧可提取时返回 None，调用方按「无法编码」降级处理。
+    """
+    if insp.media_type == "video":
+        from app.services.video_service import ensure_first_frame
+
+        frame = await ensure_first_frame(insp)
+        return frame  # ensure_first_frame 已返回绝对路径或 None
+    if insp.media_type != "image" or not insp.file_path:
+        return None
+    full_path = settings.storage_root / insp.file_path
+    return full_path if full_path.exists() else None
 
 
 async def _load_inspiration(
@@ -70,7 +92,7 @@ async def backfill_all_vectors(
 
     说明:
         文本向量基于素材标签拼接文本（build_inspiration_text）生成；
-        图像向量基于素材图片文件生成（需 CLIP 可用）。
+        图像向量基于素材图片文件（视频素材用第一关键帧）生成（需 CLIP 可用）。
         该函数同步执行，素材量大时耗时较长，可放入脚本或后台任务运行。
     """
     if not vector_store.is_lancedb_available():
@@ -129,18 +151,18 @@ async def backfill_all_vectors(
                     else:
                         stats["text_failed"] += 1
 
-        # 图像向量
+        # 图像向量（图片用原图、视频用第一关键帧编码）
         if mode in ("all", "image"):
             if insp.id in existing_image_ids:
                 stats["image_skipped"] += 1
-            elif insp.media_type != "image":
+            elif insp.media_type not in _VECTOR_MEDIA_TYPES:
                 stats["skipped_non_image"] += 1
             else:
-                full_path = settings.storage_root / insp.file_path
-                if not full_path.exists():
+                source_path = await _resolve_vector_source_path(insp)
+                if source_path is None:
                     stats["image_failed"] += 1
                 else:
-                    vec = await generate_image_embedding(file_path=str(full_path))
+                    vec = await generate_image_embedding(file_path=str(source_path))
                     if vec:
                         image_items.append((insp.id, vec))
                         stats["image_added"] += 1
@@ -176,14 +198,14 @@ async def _get_or_build_image_vector(db: AsyncSession, inspiration: Inspiration)
         if existing:
             return existing
 
-    if inspiration.media_type != "image":
+    if inspiration.media_type not in _VECTOR_MEDIA_TYPES:
         return None
 
-    full_path = settings.storage_root / inspiration.file_path
-    if not full_path.exists():
+    source_path = await _resolve_vector_source_path(inspiration)
+    if source_path is None:
         return None
 
-    vec = await generate_image_embedding(file_path=str(full_path))
+    vec = await generate_image_embedding(file_path=str(source_path))
     if vec and vector_store.is_lancedb_available():
         await vector_store.upsert_vector("image", inspiration.id, vec)
     return vec
@@ -219,9 +241,10 @@ async def rebuild_image_vector(db: AsyncSession, inspiration_id: str) -> bool:
     """重建单个素材的图像向量（素材入库后调用，保证相似推荐可用）。
 
     语义:
-        图像向量由 CLIP 对素材原图编码生成，写入 LanceDB 图像向量表。
-        素材不存在、非图片、LanceDB 未安装、CLIP 不可用或文件缺失时
-        静默降级返回 False，不抛错（不阻断入库/分析主流程）。
+        图像向量由 CLIP 编码生成，写入 LanceDB 图像向量表：图片素材编码原图，
+        视频素材编码其第一关键帧（关键帧懒提取，见 video_service）。
+        素材不存在、类型不支持（非图片/视频）、LanceDB 未安装、CLIP 不可用或
+        源文件缺失时静默降级返回 False，不抛错（不阻断入库/分析主流程）。
 
     返回:
         True 表示重建成功；其余情况返回 False。
@@ -229,12 +252,12 @@ async def rebuild_image_vector(db: AsyncSession, inspiration_id: str) -> bool:
     if not vector_store.is_lancedb_available():
         return False
     insp = await db.get(Inspiration, inspiration_id)
-    if insp is None or insp.media_type != "image":
+    if insp is None or insp.media_type not in _VECTOR_MEDIA_TYPES:
         return False
-    full_path = settings.storage_root / insp.file_path
-    if not full_path.exists():
+    source_path = await _resolve_vector_source_path(insp)
+    if source_path is None:
         return False
-    vec = await generate_image_embedding(file_path=str(full_path))
+    vec = await generate_image_embedding(file_path=str(source_path))
     if not vec:
         return False
     return await vector_store.upsert_vector("image", insp.id, vec)
@@ -243,8 +266,9 @@ async def rebuild_image_vector(db: AsyncSession, inspiration_id: str) -> bool:
 async def rebuild_inspiration_vectors(db: AsyncSession, inspiration_id: str) -> dict:
     """重建单个素材的文本 + 图像向量（上传 / AI 分析完成后的统一入口）。
 
-    文本向量依赖标签内容，无标签时自动跳过（返回 False）；图像向量仅对
-    图片素材生成（视频跳过）。任一步骤失败均静默降级，不影响主流程。
+    文本向量依赖标签内容，无标签时自动跳过（返回 False）；图像向量对图片
+    素材编码原图、对视频素材编码第一关键帧。任一步骤失败均静默降级，
+    不影响主流程。
 
     返回:
         统计字典 {"text": bool, "image": bool}，True 表示已成功写入或无需生成。

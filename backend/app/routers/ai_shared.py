@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from app.database import async_session
-from app.models.inspiration import AIAnalysisLog
+from app.models.inspiration import AIAnalysisLog, Inspiration
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,54 @@ def set_queue_paused(paused: bool) -> None:
     _queue_paused = paused
 
 
-async def _run_analysis(inspiration_id: str, file_path: str) -> None:
-    """后台任务：对图片执行 AI 分析并保存标签（带并发控制 + 任务追踪）。"""
+async def _resolve_analysis_source(inspiration) -> str | None:
+    """解析素材的分析源图片路径（相对 storage_root，供 analyze_image 读取）。
+
+    图片素材 → 原文件相对路径；视频素材 → 第一关键帧相对路径（必要时现场
+    提取，ffmpeg 耗时因此在后台任务中执行）；其余类型返回 None。
+    """
+    from app.config import settings
+
+    if inspiration.media_type == "image":
+        return inspiration.file_path
+    if inspiration.media_type == "video":
+        from app.services import video_service
+
+        frame = await video_service.ensure_first_frame(inspiration)
+        if frame is None:
+            return None
+        return frame.relative_to(settings.storage_root).as_posix()
+    return None
+
+
+async def _write_unresolvable_log(inspiration_id: str, error: str) -> None:
+    """写入「分析源无法解析」的失败日志（与 analyze_image 失败日志同口径，
+    保证任务执行器能读到失败原因、历史页能看到失败记录）。"""
+    from app.config import settings
+
+    try:
+        async with async_session() as db:
+            db.add(
+                AIAnalysisLog(
+                    inspiration_id=inspiration_id,
+                    model_name=settings.ollama_vision_model,
+                    model_version=settings.ollama_vision_model,
+                    prompt_version="",
+                    processing_time_ms=0,
+                    error=error,
+                )
+            )
+            await db.commit()
+    except Exception as log_err:
+        logger.error(f"写入分析源解析失败日志出错 {inspiration_id}: {log_err}")
+
+
+async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> None:
+    """后台任务：对素材执行 AI 分析并保存标签（带并发控制 + 任务追踪）。
+
+    file_path 为 None 时（视频素材 / 重试路径）从数据库懒解析分析源：
+    视频 → 第一关键帧（必要时现场提取 ffmpeg），解析失败写入失败日志。
+    """
     if inspiration_id in _active_analyses:
         logger.info(f"素材已在分析队列中，跳过: {inspiration_id}")
         return
@@ -74,6 +120,30 @@ async def _run_analysis(inspiration_id: str, file_path: str) -> None:
                     pass
                 _active_analyses[inspiration_id] = "正在分析..."
                 from app.services.ai_service import analyze_image
+
+                # 分析源懒解析：视频素材在此现场提取关键帧（避免阻塞 HTTP 请求）
+                if file_path is None:
+                    async with async_session() as db:
+                        result = await db.execute(
+                            select(Inspiration).where(Inspiration.id == inspiration_id)
+                        )
+                        inspiration = result.scalar_one_or_none()
+                    if inspiration is None:
+                        logger.warning(f"分析源解析失败（素材不存在）: {inspiration_id}")
+                        await _write_unresolvable_log(
+                            inspiration_id, "分析失败：素材不存在"
+                        )
+                        return
+                    file_path = await _resolve_analysis_source(inspiration)
+                    if file_path is None:
+                        logger.warning(
+                            f"分析源解析失败（视频关键帧提取失败）: {inspiration_id}"
+                        )
+                        await _write_unresolvable_log(
+                            inspiration_id,
+                            "分析失败：视频关键帧提取失败（视频文件缺失或 ffmpeg 异常）",
+                        )
+                        return
 
                 logger.info(f"开始 AI 分析: {inspiration_id}")
                 async with async_session() as db:

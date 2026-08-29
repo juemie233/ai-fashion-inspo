@@ -27,6 +27,7 @@ const props = defineProps<{
   historyPageSize: number
   historyFilter: string | null
   historyModelFilter: string | null
+  historyPromptFilter: string | null
   historySearchId: string
   historyStartDate: number | null
   historyEndDate: number | null
@@ -34,6 +35,7 @@ const props = defineProps<{
   historyLoading: boolean
   selectedHistoryIds: Set<number>
   historyModelNames: string[]
+  historyPromptVersions: Array<{ prompt_version: string; count: number }>
   clearingFailed: boolean
   retryingAll: boolean
   queueFailedCount: number
@@ -44,6 +46,8 @@ const emit = defineEmits<{
   (e: 'filterHistory', value: string | null): void
   (e: 'update:historyModelFilter', value: string | null): void
   (e: 'filterByModel', value: string | null): void
+  (e: 'update:historyPromptFilter', value: string | null): void
+  (e: 'filterByPrompt', value: string | null): void
   (e: 'update:historySearchId', value: string): void
   (e: 'searchById'): void
   (e: 'filterByDate', start: number | null, end: number | null): void
@@ -54,6 +58,8 @@ const emit = defineEmits<{
   (e: 'clearSelection'): void
   (e: 'batchDelete'): void
   (e: 'batchRetry'): void
+  (e: 'compareBatch'): void
+  (e: 'applyLog', logId: number): void
   (e: 'viewDetail', logId: number): void
   (e: 'viewCompare', inspirationId: string): void
   (e: 'previewImage', imagePath: string): void
@@ -88,6 +94,38 @@ function onModelFilterUpdate(v: unknown) {
   const value = (v as string) || null
   emit('update:historyModelFilter', value)
   emit('filterByModel', value)
+}
+
+/** 提示词版本筛选变化：同步 v-model 并触发加载 */
+function onPromptFilterUpdate(v: unknown) {
+  const value = (v as string) || null
+  emit('update:historyPromptFilter', value)
+  emit('filterByPrompt', value)
+}
+
+// ===== 批量对比（勾选同一素材的多条记录） =====
+/** 当前勾选的记录行 */
+const selectedRows = computed(() =>
+  props.history.filter((row) => props.selectedHistoryIds.has(row.id)),
+)
+
+/** 勾选的记录是否满足对比条件：≥2 条且属于同一素材 */
+const canCompareSelected = computed(() => {
+  if (selectedRows.value.length < 2) return false
+  return new Set(selectedRows.value.map((r) => r.inspiration_id)).size === 1
+})
+
+/** 对比选中记录：不满足条件时给出提示 */
+function onCompareBatchClick() {
+  if (selectedRows.value.length < 2) {
+    Message.warning('请至少勾选 2 条记录')
+    return
+  }
+  if (!canCompareSelected.value) {
+    Message.warning('仅支持对比同一素材的分析记录，请重新勾选')
+    return
+  }
+  emit('compareBatch')
 }
 
 /** 搜索关键词变化：仅同步 v-model */
@@ -259,7 +297,9 @@ const columns = computed<TableColumnData[]>(() => [
         Tooltip,
         {
           position: 'tl',
-          content: row.model_name,
+          content: row.prompt_version
+            ? `${row.model_name} · Prompt ${row.prompt_version}`
+            : row.model_name,
         },
         {
           default: () =>
@@ -366,7 +406,7 @@ const columns = computed<TableColumnData[]>(() => [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 200,
+    width: 232,
     render: ({ record }) => {
       const row = record as HistoryItem
       return h('span', { style: 'display:flex;gap:4px;align-items:center' }, [
@@ -383,6 +423,18 @@ const columns = computed<TableColumnData[]>(() => [
                 onClick: () => emit('retryAnalysis', row.inspiration_id),
               },
               { icon: () => h(IconRefresh) },
+            )
+          : null,
+        row.status === 'success'
+          ? h(
+              Button,
+              {
+                size: 'mini',
+                type: 'secondary',
+                title: '把本次分析提取的标签应用到素材（覆盖 AI 标签，保留手动标签）',
+                onClick: () => emit('applyLog', row.id),
+              },
+              () => '应用',
             )
           : null,
         h(
@@ -479,6 +531,21 @@ const columns = computed<TableColumnData[]>(() => [
         placeholder="按模型筛选"
         allow-clear
       />
+      <a-select
+        v-if="historyPromptVersions.length"
+        :model-value="historyPromptFilter ?? undefined"
+        :options="
+          historyPromptVersions.map((v) => ({
+            label: `Prompt ${v.prompt_version} (${v.count})`,
+            value: v.prompt_version,
+          }))
+        "
+        size="small"
+        style="width: 190px"
+        @change="onPromptFilterUpdate"
+        placeholder="按提示词版本筛选"
+        allow-clear
+      />
       <a-input
         :model-value="historySearchId"
         size="small"
@@ -527,6 +594,14 @@ const columns = computed<TableColumnData[]>(() => [
     <!-- 批量操作栏 -->
     <div v-if="selectedHistoryIds.size > 0" class="batch-bar">
       <span>已选 {{ selectedHistoryIds.size }} 条</span>
+      <a-button
+        size="mini"
+        type="outline"
+        :disabled="!canCompareSelected"
+        @click="onCompareBatchClick"
+      >
+        对比选中（需同一素材）
+      </a-button>
       <a-button size="mini" type="outline" @click="emit('batchRetry')">重新分析</a-button>
       <a-popconfirm
         :content="`确定删除选中的 ${selectedHistoryIds.size} 条记录？`"

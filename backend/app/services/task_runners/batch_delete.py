@@ -104,6 +104,11 @@ async def execute_batch_delete(db: AsyncSession, task: TaskQueue) -> None:
     # 删除 LanceDB 向量，避免孤儿向量（由 vector_store 提供，未安装时静默返回）
     await _delete_inspiration_vectors(deleted_ids)
 
+    # 清理视频素材的关键帧目录（非视频目录不存在，幂等；失败仅记日志）
+    from app.services.video_service import cleanup_keyframes_batch
+
+    await cleanup_keyframes_batch(deleted_ids)
+
     # 重跑兜底：正常查询可能已无行（首次执行已删），从 result 恢复清理清单
     cleanup_list = pending_cleanup or (task.result or {}).get("pending_cleanup") or []
     freed_bytes = 0

@@ -434,6 +434,32 @@ async def list_vector_ids(kind: str) -> set[str]:
     return await asyncio.to_thread(_list_vector_ids_sync, kind)
 
 
+# 文本向量公式版本标记文件（位于 lancedb 目录）。LanceDB 表只存向量不存原文，
+# build_inspiration_text 公式升级（如 v2 加入正文 caption）后旧向量无法感知，
+# 用该文件记录「存量文本向量是用哪个版本公式生成的」，供管理页提示重建。
+_TEXT_FORMULA_MARKER = ".text-formula-version"
+
+
+def get_stored_text_formula_version() -> int | None:
+    """读取存量文本向量的公式版本号；标记文件缺失（从未记录/全新库）返回 None。"""
+    marker = settings.lancedb_dir / _TEXT_FORMULA_MARKER
+    try:
+        return int(marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def set_stored_text_formula_version(version: int) -> None:
+    """写入文本向量公式版本标记（全量文本向量重建成功后调用）。"""
+    try:
+        settings.lancedb_dir.mkdir(parents=True, exist_ok=True)
+        (settings.lancedb_dir / _TEXT_FORMULA_MARKER).write_text(
+            str(version), encoding="utf-8"
+        )
+    except OSError as e:
+        logger.warning(f"写入文本向量公式版本标记失败: {e}")
+
+
 def _delete_inspiration_batch_sync(inspiration_ids: list[str]) -> None:
     """同步批量删除多个素材在两张表中的向量（素材批量删除时调用）。
 

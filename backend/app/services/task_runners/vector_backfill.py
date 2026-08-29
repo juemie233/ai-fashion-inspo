@@ -59,13 +59,14 @@ async def _filter_existing_ids(
 
 
 async def create_vector_backfill_task(
-    db: AsyncSession, inspiration_ids: list[str]
+    db: AsyncSession, inspiration_ids: list[str], mode: str = "all"
 ) -> TaskQueue | None:
     """创建「向量回填」任务记录（去重、过滤已不存在的素材），返回任务对象。
 
     参数:
         db: 数据库会话
         inspiration_ids: 待回填向量的素材 ID 列表
+        mode: "all"（文本+图像）| "text"（仅文本，用于公式版本升级后的全量重建）
 
     返回:
         新建的任务记录；无有效素材时返回 None（调用方无需入队）。
@@ -80,7 +81,7 @@ async def create_vector_backfill_task(
         progress=0,
         total=len(existing_ids),
         done=0,
-        result={"inspiration_ids": existing_ids},
+        result={"inspiration_ids": existing_ids, "mode": mode},
         max_retries=2,
     )
     db.add(task)
@@ -238,9 +239,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         - 素材在执行期间被删除时，rebuild_* 内部按「不存在」静默返回，
           不影响任务完成。
         - 任务幂等：upsert 语义，重复执行不会产生重复向量。
+        - payload 支持 mode="text"：只重建文本向量（全量文本重建场景，
+          如公式版本升级后），跳过图像向量避免无谓的 CLIP 全库编码；
+          成功后把文本公式版本写入标记文件，管理页的「版本过期」提醒解除。
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
+    text_only = payload.get("mode") == "text"
     if not inspiration_ids:
         # 空任务：无素材可回填，直接标记完成
         task.total = 0
@@ -253,7 +258,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     text_done = 0
     text_skipped = 0
     image_done = 0
-    image_skipped = 0  # 非图片素材正常跳过
+    image_skipped = 0  # 非图片素材正常跳过；text_only 模式下不生成图像向量也计入此处
     image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
     # 声称成功的素材 ID（供收尾落库验证：防「写入时成功、事后被删」的假成功）
     text_ids: list[str] = []
@@ -263,7 +268,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     for idx, insp_id in enumerate(inspiration_ids, start=1):
         insp = await db.get(Inspiration, insp_id)
         is_image = insp is not None and insp.media_type == "image"
-        stats = await rebuild_inspiration_vectors(db, insp_id)
+        if text_only:
+            from app.services.vector.similarity import rebuild_text_vector
+
+            text_ok = await rebuild_text_vector(db, insp_id)
+            stats = {"text": text_ok, "image": False}
+        else:
+            stats = await rebuild_inspiration_vectors(db, insp_id)
         if stats["text"]:
             text_done += 1
             text_ids.append(insp_id)
@@ -274,7 +285,9 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             if is_image:
                 image_ids.append(insp_id)
         elif is_image:
-            image_failed += 1
+            # text_only 模式不是生成失败，不计入 image_failed（否则会被下面的
+            # 「图像向量全部失败」判定误判为系统性故障）
+            image_failed += 0 if text_only else 1
         else:
             image_skipped += 1
 
@@ -322,6 +335,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
 
     task.result = {
         "inspiration_ids": inspiration_ids,
+        "mode": "text" if text_only else "all",
         "text_done": text_done,
         "text_skipped": text_skipped,
         "image_done": image_done,
@@ -335,7 +349,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     # LanceDB 未安装 / 图片文件缺失），任务不能冒充「完成」，交由 worker 标记失败。
     # 判定在写「完成态」之前：异常抛出时任务仍为 running，避免「先 commit 完成态
     # 再抛异常」在进程崩溃时残留假完成。
-    if image_done == 0 and image_failed > 0:
+    if not text_only and image_done == 0 and image_failed > 0:
         detail = (
             f"向量回填失败：{image_failed} 个图片素材的图像向量全部生成失败"
             f"（成功 {image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
@@ -347,6 +361,12 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     task.progress = 100
     task.error = None
     task.updated_at = utcnow()
+    # text_only 全量重建成功：把当前公式版本写入标记文件，管理页「版本过期」提醒解除。
+    # 放在最终 commit 前，与完成态同点落盘；写入失败仅记日志不影响任务成功。
+    if text_only:
+        from app.services.vector.embedding import TEXT_EMBEDDING_FORMULA_VERSION
+
+        vector_store.set_stored_text_formula_version(TEXT_EMBEDDING_FORMULA_VERSION)
     await db.commit()
 
     logger.info(

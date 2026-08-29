@@ -58,9 +58,18 @@ async def test_analyze(
             insp = await db.get(Inspiration, inspiration_id)
             if not insp:
                 raise HTTPException(404, "素材未找到")
-            if insp.media_type != "image":
-                raise HTTPException(400, "暂不支持分析视频文件")
-            file_path = insp.file_path
+            if insp.media_type not in ("image", "video"):
+                raise HTTPException(400, "仅支持测试图片/视频素材")
+            if insp.media_type == "video":
+                # 视频：用第一关键帧做即时测试（必要时现场提取）
+                from app.services import video_service
+
+                frame = await video_service.ensure_first_frame(insp)
+                if frame is None:
+                    raise HTTPException(400, "视频关键帧提取失败，无法测试")
+                file_path = str(frame)
+            else:
+                file_path = insp.file_path
 
         full_path = (settings.storage_root / file_path).resolve()
         if not str(full_path).startswith(str(settings.storage_root.resolve())):
