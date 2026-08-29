@@ -134,6 +134,19 @@ def test_build_backup_status_basic(tmp_path):
     assert st["log_tail"] == ["line1", "line2"]
 
 
+def test_build_backup_status_history_capped_at_five(tmp_path):
+    """历史默认至多 5 条（最新在前）——任务管理页卡片不无限增长。"""
+    # 造 8 份历史备份（时间倒序取前 5）
+    for day in range(1, 9):
+        _make_backup(tmp_path, f"2026-08-{day:02d}_030000")
+
+    st = backup_service.build_backup_status(target_root=tmp_path)
+    names = [h["name"] for h in st["history"]]
+    assert len(names) == 5
+    assert names[0] == "2026-08-08_030000"  # 最新在前
+    assert "2026-08-01_030000" not in names  # 最旧的被截断
+
+
 def test_build_backup_status_running_lock(tmp_path):
     """目标根下存在 .backup.lock 并发锁 → running=True（双通道可见）。"""
     _make_backup(tmp_path, "2026-08-26_030000")

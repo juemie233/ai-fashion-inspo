@@ -118,7 +118,7 @@ def build_backup_status(
     target_root: Path | None = None,
     *,
     log_path: Path | None = None,
-    limit: int = 10,
+    limit: int = 5,
 ) -> dict:
     """汇总备份状态供任务管理页展示（只读，不触发备份）。
 
