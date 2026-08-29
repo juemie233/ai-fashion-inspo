@@ -256,12 +256,13 @@ async def scan_candidates(
             if bounds_result["residual_top_frac"] > 0 and bounds_result["top_frac"] == 0:
                 # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
                 # 典型特征）：不自动判定可裁剪（防误裁普通照片），标注建议
-                # 比例供人工目检后勾选；勾选后 apply 按此建议裁剪
+                # 比例；前端对这类候选默认勾选（一次扫描自动选上），
+                # apply 按此建议裁剪
                 item["auto_ok"] = False
                 item["crop_top"] = bounds_result["residual_top_frac"]
                 item["note"] = (
                     f"疑似顶部状态栏残留（建议裁剪 {bounds_result['residual_top_frac']:.1%}），"
-                    "确认后勾选裁剪"
+                    "已默认勾选，请预览确认"
                 )
             elif (
                 bounds_result["already_cropped"]
