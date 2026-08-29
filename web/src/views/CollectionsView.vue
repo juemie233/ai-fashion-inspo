@@ -552,7 +552,7 @@ onMounted(() => {
     <a-modal
       :visible="renameModalOpen"
       :title="renameTargetId === null ? '新建手动合集' : '编辑合集信息'"
-      style="width: 460px"
+      :width="460"
       @update:visible="renameModalOpen = $event"
     >
       <a-form
@@ -588,7 +588,7 @@ onMounted(() => {
     </a-modal>
 
     <!-- 手动合集快速添加素材（按 ID） -->
-    <a-modal v-model:visible="addOpen" title="添加素材到合集" style="width: 460px">
+    <a-modal v-model:visible="addOpen" title="添加素材到合集" :width="460">
       <p style="color: #999; font-size: 12px">
         输入素材 ID（可在素材库/详情页查看），多个用逗号或空格分隔。推荐在素材库用「批量选择 →
         加入合集」。

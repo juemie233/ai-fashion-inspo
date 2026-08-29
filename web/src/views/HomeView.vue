@@ -814,7 +814,7 @@ loadPage(currentPage.value)
     />
 
     <!-- 保存为智能合集（命名弹窗） -->
-    <a-modal v-model:visible="saveCollectionOpen" title="保存为智能合集" style="width: 460px">
+    <a-modal v-model:visible="saveCollectionOpen" title="保存为智能合集" :width="460">
       <p v-if="filtersActive" style="color: #999; font-size: 12px; margin-top: 0">
         将把当前筛选条件保存为智能合集，合集内容随素材库动态更新。
       </p>

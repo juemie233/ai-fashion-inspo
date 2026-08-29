@@ -124,7 +124,7 @@ async function handleSave() {
   <a-modal
     :visible="visible"
     :title="collectionId === null ? '新建智能合集' : '编辑智能合集条件'"
-    style="width: 520px"
+    :width="520"
     @update:visible="emit('update:visible', $event)"
   >
     <p style="color: #999; font-size: 12px; margin-top: 0">

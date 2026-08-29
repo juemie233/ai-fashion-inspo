@@ -163,7 +163,7 @@ function confirmEdit() {
   </div>
 
   <!-- 加标签弹窗 -->
-  <a-modal v-model:visible="tagModalOpen" title="批量添加标签" style="width: 460px">
+  <a-modal v-model:visible="tagModalOpen" title="批量添加标签" :width="460">
     <p style="color: #999; font-size: 12px">
       为所选 {{ count }} 个素材批量关联标签（已关联的自动跳过）。
     </p>
@@ -185,7 +185,7 @@ function confirmEdit() {
   </a-modal>
 
   <!-- 编辑元数据弹窗 -->
-  <a-modal v-model:visible="editModalOpen" title="批量编辑元数据" style="width: 460px">
+  <a-modal v-model:visible="editModalOpen" title="批量编辑元数据" :width="460">
     <p style="color: #999; font-size: 12px">
       仅更新所选 {{ count }} 个素材中你显式填写的字段，其余保持不变。
     </p>
