@@ -24,12 +24,12 @@ const emit = defineEmits<{
   (e: 'confirm', reason: TrashReason): void
 }>()
 
-const reason = ref<TrashReason | null>(null)
+const reason = ref<TrashReason | undefined>(undefined)
 
 watch(
   () => props.visible,
   (v) => {
-    if (v) reason.value = null // 每次打开重置选择
+    if (v) reason.value = undefined // 每次打开重置选择
   },
 )
 
@@ -52,7 +52,7 @@ function onOk() {
     <p style="margin: 0 0 12px; font-size: 13px; color: #666">
       将 <b>{{ count }}</b> 个素材移入垃圾桶（软删除，保留期内可恢复），请选择原因：
     </p>
-    <a-radio-group v-model:value="reason" direction="vertical" style="width: 100%">
+    <a-radio-group v-model="reason" direction="vertical" style="width: 100%">
       <a-radio v-for="r in TRASH_REASONS" :key="r.value" :value="r.value" style="padding: 4px 0">
         <b>{{ r.label }}</b>
         <span style="margin-left: 8px; font-size: 12px; color: #999">{{ r.desc }}</span>
