@@ -8,6 +8,7 @@ import axios from 'axios'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
+import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
 
 const router = useRouter()
 
@@ -82,6 +83,15 @@ const CONFIDENCE_LABELS: Record<string, { text: string; color: 'green' | 'orange
 /** 候选网格与勾选状态 */
 const candidates = ref<CropCandidate[]>([])
 const checkedIds = ref<Set<string>>(new Set())
+
+/** 候选网格密度（紧凑/标准/宽松），默认标准；偏好持久化，与素材库页面行为一致 */
+type CropGridDensity = 'compact' | 'standard' | 'comfortable'
+const gridDensity = ref<CropGridDensity>(
+  (localStorage.getItem('phone-crop-grid-density') as CropGridDensity) || 'standard',
+)
+watch(gridDensity, (v) => {
+  localStorage.setItem('phone-crop-grid-density', v)
+})
 
 /** 执行结果（duplicates/skipped 经 normalizeApplyResult 归一化，恒为数组） */
 const result = ref<CropApplyResult | null>(null)
@@ -490,35 +500,34 @@ function cropLabel(c: CropCandidate): string {
     <!-- 候选网格：人工勾选确认 -->
     <template v-if="candidates.length > 0">
       <a-divider style="margin: 12px 0" />
-      <div
-        style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap"
-      >
-        <a-checkbox
-          :model-value="checkedCount > 0 && checkedCount === candidates.length"
-          :indeterminate="checkedCount > 0 && checkedCount < candidates.length"
-          @change="toggleAll"
-        />
-        <span style="font-size: 13px">
-          已勾选 <b>{{ checkedCount }}</b> / {{ candidates.length }} 张（共扫描
-          {{ scannedTotal }} 张候选）
-        </span>
-        <a-button
-          size="small"
-          type="primary"
-          :loading="cropping"
-          :disabled="checkedCount === 0"
-          @click="handleApply"
-        >
-          {{ cropping ? '裁剪中...' : `确认裁剪（${checkedCount} 张）` }}
-        </a-button>
-      </div>
+      <!-- 候选网格：通用密度网格组件，紧凑/标准/宽松可调，默认标准 -->
+      <DensityImageGrid v-model:density="gridDensity">
+        <template #header-left>
+          <a-checkbox
+            :model-value="checkedCount > 0 && checkedCount === candidates.length"
+            :indeterminate="checkedCount > 0 && checkedCount < candidates.length"
+            @change="toggleAll"
+          />
+          <span style="font-size: 13px">
+            已勾选 <b>{{ checkedCount }}</b> / {{ candidates.length }} 张（共扫描
+            {{ scannedTotal }} 张候选）
+          </span>
+          <a-button
+            size="small"
+            type="primary"
+            :loading="cropping"
+            :disabled="checkedCount === 0"
+            @click="handleApply"
+          >
+            {{ cropping ? '裁剪中...' : `确认裁剪（${checkedCount} 张）` }}
+          </a-button>
+        </template>
 
-      <div class="crop-grid">
         <div
           v-for="c in candidates"
           :key="c.id"
           class="crop-item"
-          :class="{ checked: checkedIds.has(c.id), failed: !c.auto_ok }"
+          :class="[{ checked: checkedIds.has(c.id), failed: !c.auto_ok }, 'density-' + gridDensity]"
           @click="toggleCheck(c.id)"
           @dblclick="openPreview(thumbUrl(c), c.id)"
         >
@@ -556,7 +565,7 @@ function cropLabel(c: CropCandidate): string {
             <span v-if="checkedIds.has(c.id)">✓</span>
           </div>
         </div>
-      </div>
+      </DensityImageGrid>
       <p style="font-size: 12px; color: #999; margin-top: 8px">
         点击缩略图查看大图，双击卡片切换勾选
       </p>
@@ -712,11 +721,7 @@ function cropLabel(c: CropCandidate): string {
 </template>
 
 <style scoped>
-.crop-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 10px;
-}
+/* 网格布局（列数/间距/密度切换）由通用组件 DensityImageGrid 承担 */
 
 .crop-item {
   position: relative;
@@ -736,6 +741,15 @@ function cropLabel(c: CropCandidate): string {
   object-fit: contain; /* 完整显示细长截图，而非裁切中间一条 */
   display: block;
   background: #222;
+}
+
+/* 图片高度随密度缩放，与列宽变化匹配（紧凑更小、宽松更大） */
+.crop-item.density-compact img {
+  height: 130px;
+}
+
+.crop-item.density-comfortable img {
+  height: 210px;
 }
 
 .crop-item.checked {
