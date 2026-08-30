@@ -191,6 +191,64 @@ def test_create_from_url(client, monkeypatch):
     assert any(t["tag"]["name"] == "法式" for t in detail["tags"])
 
 
+def test_create_from_url_sends_browser_ua_and_referer(client, monkeypatch):
+    """from-url 下载带浏览器 UA 与来源页 Referer（平台 CDN 防盗链，右键保存依赖）。
+
+    回归：小红书/抖音图片 CDN 对裸 httpx 请求（默认 UA、无 Referer）常返回
+    403/占位图，导致插件右键保存「下载失败」。
+    """
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), (5, 6, 7)).save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
+    captured: dict = {}
+
+    class FakeStream:
+        def __init__(self):
+            self.headers = {
+                "content-type": "image/jpeg",
+                "content-length": str(len(img_bytes)),
+            }
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def aiter_bytes(self, _chunk_size):
+            yield img_bytes
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        def stream(self, _method, _url):
+            return FakeStream()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    r = client.post(
+        "/api/inspirations/from-url",
+        json={
+            "url": "https://sns-webpic-qc.xhscdn.com/abc.jpg",
+            "source_type": "browser_extension",
+            "source_url": "https://www.xiaohongshu.com/explore/note123",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert "Mozilla" in captured["headers"].get("User-Agent", "")
+    assert captured["headers"].get("Referer") == "https://www.xiaohongshu.com/explore/note123"
+
+
 def test_create_from_url_plugin_flow(client, monkeypatch):
     """浏览器插件采集链路：from-url 携带平台/任务字段（服务端下载规避 CORS）。"""
     buf = io.BytesIO()

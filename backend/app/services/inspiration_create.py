@@ -37,6 +37,14 @@ from app.utils.file_hash import file_sha256
 
 logger = logging.getLogger(__name__)
 
+# 下载图片用的浏览器 UA：平台图片 CDN（小红书/抖音 xhscdn 等）对非浏览器
+# 请求（默认 httpx UA）常返回 403 或占位图，右键保存/URL 导入依赖此头
+DOWNLOAD_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
 
 def _validate_download_url(url: str) -> None:
     """校验下载 URL 目标地址，拒绝 SSRF 高危目标（回环/私网/链路本地等）。
@@ -205,7 +213,12 @@ async def create_inspiration_from_url(
     filename: str | None = None
     file_path_obj: Path | None = None
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        # 浏览器 UA + 来源页 Referer：平台图片 CDN 防盗链（小红书/抖音对裸
+        # httpx 请求常返回 403/占位图，导致右键保存「下载失败」）
+        headers = {"User-Agent": DOWNLOAD_USER_AGENT}
+        if source_url:
+            headers["Referer"] = source_url
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=headers) as client:
             async with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 content_type = resp.headers.get("content-type", "")
