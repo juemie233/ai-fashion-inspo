@@ -20,7 +20,7 @@ function errorDetail(e: unknown): string {
   return ''
 }
 
-/** 裁剪模式：auto 黑边自动检测 / ratio 固定比例 / content 内容边界检测 */
+/** 裁剪模式：auto 黑边自动检测（小红书截图）/ ratio 固定比例 / content 内容边界检测（抖音截图） */
 const mode = ref<'auto' | 'ratio' | 'content'>('auto')
 /** 顶部/底部裁剪比例（百分比，仅 ratio 模式生效） */
 const cropTop = ref(3)
@@ -259,6 +259,12 @@ function defaultCheckedIds(items: CropCandidate[]): Set<string> {
   const ids = new Set<string>()
   for (const c of items) {
     if (c.auto_ok) {
+      // 后端勾选决策优先：auto 模式仅双侧黑边（小红书截图形态）勾选；
+      // content 模式仅强字形证据勾选。旧响应无此字段时回退到历史规则
+      if (typeof c.auto_checked === 'boolean') {
+        if (c.auto_checked) ids.add(c.id)
+        continue
+      }
       if (c.confidence === 'low') continue
       if (c.boundary_kind === 'plain') continue
       ids.add(c.id)
@@ -414,16 +420,15 @@ function cropLabel(c: CropCandidate): string {
 <template>
   <a-card title="手机图剪裁" size="small" style="margin-bottom: 24px">
     <p style="color: #999; font-size: 12px; margin: 0 0 12px">
-      扫描手动上传素材中的手机全屏截图（仅「手动上传 + 竖屏 高/宽 ≥ 1.75」），
-      <b>人工勾选确认后</b>执行裁剪：裁掉顶部状态栏、底部导航栏等多余区域。 原图自动备份到
+      扫描手动上传素材中的手机全屏截图（仅「手动上传 + 竖屏」），
+      <b>人工勾选确认后</b>执行裁剪。两种自动模式各对应一个平台的截图形态：
+      <b>「自动检测黑边（小红书截图）」</b>——小红书浏览态截图，上下黑边包夹图片主体，
+      检出双侧黑边才默认勾选（单侧「黑边」多为抖音截图的播放器条或照片暗部，保留候选但不勾选，
+      建议改用内容边界检测处理）；<b>「内容边界检测（抖音截图）」</b>——抖音全屏截图， 顶部透明状态栏
+      + 底部播放器条，按状态栏字形证据默认勾选，无 UI 证据的普通竖屏照片静默排除。
+      「固定比例」按设定比例裁剪，不区分平台。 原图自动备份到
       <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填；
-      标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图。
-      <br />三种模式并存：「自动检测黑边」面向深色背景截图；「固定比例」按设定比例裁剪；
-      <b>「内容边界检测」</b>面向上下被灰带/状态栏/播放器条包夹的截图，自动定位照片主体边界（100
-      张样本分析校准）。内容边界检测为自动化口径：只列手机截图候选（须检出状态栏/导航栏等系统 UI
-      特征，或抖音全屏浏览态特有的透明状态栏残留），无 UI 证据的普通竖屏照片静默排除，
-      不再出现「自动检测失败」待确认项；「疑似状态栏残留」候选按建议比例默认勾选，
-      一次扫描即自动选上，执行前请预览确认。
+      标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图（预览中可复制素材 ID）。
     </p>
 
     <a-form
@@ -435,8 +440,8 @@ function cropLabel(c: CropCandidate): string {
     >
       <a-form-item label="裁剪模式">
         <a-radio-group v-model="mode" type="button" size="small">
-          <a-radio value="auto">自动检测黑边</a-radio>
-          <a-radio value="content">内容边界检测（新）</a-radio>
+          <a-radio value="auto">自动检测黑边（小红书截图）</a-radio>
+          <a-radio value="content">内容边界检测（抖音截图）</a-radio>
           <a-radio value="ratio">固定比例</a-radio>
         </a-radio-group>
       </a-form-item>

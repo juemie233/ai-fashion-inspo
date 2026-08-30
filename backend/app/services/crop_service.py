@@ -117,8 +117,10 @@ async def scan_candidates(
 
     参数:
         db: 数据库会话
-        mode: auto（黑边自动检测，逐张计算裁剪比例）/ ratio（统一按比例裁剪）/
-            content（内容边界检测：灰带/状态栏/播放器条包夹的内容区边界。
+        mode: auto（黑边自动检测——小红书截图：上下黑边包夹图片主体，双侧
+            黑边才默认勾选）/ ratio（统一按比例裁剪）/
+            content（内容边界检测——抖音截图：状态栏/播放器条残留，按字形证据
+            勾选。
             自动化口径——只列手机截图候选：须检出系统 UI 特征（状态栏/
             导航栏）或状态栏残留信号；无 UI 证据的普通竖屏照片静默排除，
             检测失败（无内容区边界）的同样排除）
@@ -277,8 +279,14 @@ async def scan_candidates(
                 top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
                 item["crop_top"] = round(top_px / height, 6)
                 item["crop_bottom"] = round((height - 1 - bottom_px) / height, 6)
+                # 本模式为小红书截图设计：其形态是「上下黑边包夹图片主体」。
+                # 双侧黑边才默认勾选；单侧「黑边」多为抖音截图的播放器条或
+                # 照片暗部（应走 content 模式处理），保留候选但不自动勾选，
+                # 交人工判断
+                item["auto_checked"] = item["crop_top"] > 0 and item["crop_bottom"] > 0
             except ValueError as e:
                 item["auto_ok"] = False
+                item["auto_checked"] = False
                 item["note"] = f"自动检测失败：{e}"
         elif mode == "content":
             # 使用上方缓存的检测结果
