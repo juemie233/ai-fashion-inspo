@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import {
   apiClient,
   getApiBaseUrl,
+  loadApiBaseUrl,
   type Inspiration,
   type InspirationListResponse,
 } from '../services/api'
@@ -25,6 +26,8 @@ interface InspirationState {
   loading: boolean
   apiBaseUrl: string
 
+  /** App 启动初始化：从持久化存储恢复自定义后端地址并刷新数据 */
+  init: () => Promise<void>
   fetchInspirations: () => Promise<void>
   fetchMore: () => Promise<void>
   uploadImage: (uri: string) => Promise<Inspiration>
@@ -37,6 +40,13 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   page: 1,
   loading: false,
   apiBaseUrl: getApiBaseUrl(),
+
+  /** 启动初始化：恢复持久化地址（设置页保存的自定义地址）后同步状态 */
+  init: async () => {
+    const url = await loadApiBaseUrl()
+    set({ apiBaseUrl: url })
+    await get().fetchInspirations()
+  },
 
   /** 加载第一页 */
   fetchInspirations: async () => {

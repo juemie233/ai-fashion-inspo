@@ -1,9 +1,12 @@
 /** 底部 Tab 导航布局：画廊 / 搜索 / 采集。 */
 
-import { Tabs } from 'expo-router'
+import { TouchableOpacity } from 'react-native'
+import { Tabs, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 
 export default function TabLayout() {
+  const router = useRouter()
+
   return (
     <Tabs
       screenOptions={{
@@ -29,6 +32,16 @@ export default function TabLayout() {
           title: '灵感库',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="images-outline" size={size} color={color} />
+          ),
+          // 首页右上角设置入口：真机连接自定义后端地址用
+          headerRight: () => (
+            <TouchableOpacity
+              style={{ marginRight: 14, padding: 2 }}
+              onPress={() => router.push('/settings')}
+              hitSlop={8}
+            >
+              <Ionicons name="settings-outline" size={22} color="#6366f1" />
+            </TouchableOpacity>
           ),
         }}
       />
