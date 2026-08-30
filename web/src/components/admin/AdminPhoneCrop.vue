@@ -218,11 +218,24 @@ function locateAllSkipped() {
 
 /** 大图预览 */
 const previewOpen = ref(false)
+/** 复制素材 ID 到剪贴板（反馈漏检/误勾问题时用） */
+async function copyId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    Message.success('素材 ID 已复制')
+  } catch {
+    Message.error('复制失败，请手动选择复制')
+  }
+}
+
+/** 大图预览：URL + 关联素材 ID（展示于弹窗，供用户反馈问题时复制） */
 const previewUrl = ref('')
+const previewId = ref('')
 
 /** 打开大图预览 */
-function openPreview(url: string) {
+function openPreview(url: string, id = '') {
   previewUrl.value = url
+  previewId.value = id
   previewOpen.value = true
 }
 
@@ -230,6 +243,7 @@ function openPreview(url: string) {
 function closePreview() {
   previewOpen.value = false
   previewUrl.value = ''
+  previewId.value = ''
 }
 
 const scannedTotal = ref(0)
@@ -501,13 +515,13 @@ function cropLabel(c: CropCandidate): string {
           class="crop-item"
           :class="{ checked: checkedIds.has(c.id), failed: !c.auto_ok }"
           @click="toggleCheck(c.id)"
-          @dblclick="previewUrl = thumbUrl(c)"
+          @dblclick="openPreview(thumbUrl(c), c.id)"
         >
           <img
             :src="thumbUrl(c)"
             :alt="c.id"
             loading="lazy"
-            @click.stop="openPreview(thumbUrl(c))"
+            @click.stop="openPreview(thumbUrl(c), c.id)"
           />
           <div class="crop-meta">
             <span class="crop-line"> {{ c.width }}×{{ c.height }} · {{ c.ratio }} </span>
@@ -605,6 +619,32 @@ function cropLabel(c: CropCandidate): string {
           padding: 8px;
         "
       >
+        <div
+          v-if="previewId"
+          style="
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 0 8px;
+            font-size: 12px;
+            color: #ddd;
+          "
+        >
+          <span style="font-family: monospace">{{ previewId }}</span>
+          <a-button size="mini" type="outline" @click="copyId(previewId)">复制 ID</a-button>
+          <a-button
+            size="mini"
+            type="text"
+            @click="
+              () => {
+                previewOpen = false
+                router.push({ path: '/detail/' + previewId })
+              }
+            "
+          >
+            查看素材详情
+          </a-button>
+        </div>
         <img v-if="previewUrl" :src="previewUrl" alt="预览" style="width: 100%; display: block" />
       </div>
     </a-modal>
