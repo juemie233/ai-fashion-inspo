@@ -107,12 +107,6 @@ function dupTargetUrl(d: CropDuplicate): string {
 }
 
 /** 重复素材上传时间：MM-DD HH:mm */
-function dupTimeLabel(d: CropDuplicate): string {
-  if (!d.dup_created_at) return ''
-  const t = d.dup_created_at.replace('T', ' ').slice(0, 16)
-  return t.slice(5)
-}
-
 /** 保留裁剪结果：物理删除库中重复素材（不可恢复），然后重新执行本素材的裁剪 */
 async function handleDupKeepCrop() {
   const dup = currentDup.value
@@ -401,13 +395,6 @@ function thumbUrl(c: CropCandidate): string {
 function cropLabel(c: CropCandidate): string {
   return `${(c.crop_top * 100).toFixed(1)}% / ${(c.crop_bottom * 100).toFixed(1)}%`
 }
-
-/** 上传时间展示：MM-DD HH:mm */
-function timeLabel(c: { created_at: string | null }): string {
-  if (!c.created_at) return ''
-  const t = c.created_at.replace('T', ' ').slice(0, 16)
-  return t.slice(5)
-}
 </script>
 
 <template>
@@ -523,9 +510,7 @@ function timeLabel(c: { created_at: string | null }): string {
             @click.stop="openPreview(thumbUrl(c))"
           />
           <div class="crop-meta">
-            <span class="crop-line">
-              {{ timeLabel(c) }} · {{ c.width }}×{{ c.height }} · {{ c.ratio }}
-            </span>
+            <span class="crop-line"> {{ c.width }}×{{ c.height }} · {{ c.ratio }} </span>
             <span class="crop-line">
               裁剪 {{ cropLabel(c) }}
               <a-tag
@@ -593,11 +578,7 @@ function timeLabel(c: { created_at: string | null }): string {
               <img v-if="s.file_path" class="skip-thumb" :src="skipThumbUrl(s)" :alt="s.id" />
               <div class="skip-info">
                 <div class="skip-reason">{{ s.reason }}</div>
-                <div class="skip-meta">
-                  {{ s.id.slice(0, 8) }}…<template v-if="s.created_at">
-                    · {{ timeLabel({ created_at: s.created_at }) }}</template
-                  >
-                </div>
+                <div class="skip-meta">{{ s.id.slice(0, 8) }}…</div>
               </div>
               <a-button size="mini" type="text" @click="locateSkipped(s)">定位</a-button>
             </li>
@@ -659,11 +640,7 @@ function timeLabel(c: { created_at: string | null }): string {
             <div class="dup-img-wrap">
               <img :src="dupTargetUrl(currentDup)" alt="库中重复素材" />
             </div>
-            <div class="dup-side-meta">
-              {{ currentDup.dup_id.slice(0, 8) }}…<template v-if="currentDup.dup_created_at">
-                · {{ dupTimeLabel(currentDup) }}</template
-              >
-            </div>
+            <div class="dup-side-meta">{{ currentDup.dup_id.slice(0, 8) }}…</div>
           </div>
         </div>
         <p class="dup-hint">
