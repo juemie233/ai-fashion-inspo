@@ -9,8 +9,8 @@
  */
 
 import { Message } from '@arco-design/web-vue'
-import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { IconLock } from '@arco-design/web-vue/es/icon'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
@@ -133,7 +133,25 @@ async function pollUntilIdle(taskId: number) {
 }
 
 // ── 结果区：聚合（按人物）──
-const resultTab = ref<'pending' | 'confirmed' | 'unmatched'>('pending')
+/** 结果区 tab：待审核候选 / 已确认 / 未匹配人脸 / 聚合分组 */
+type ResultTab = 'pending' | 'confirmed' | 'unmatched' | 'cluster'
+const VALID_RESULT_TABS: ResultTab[] = ['pending', 'confirmed', 'unmatched', 'cluster']
+// 从 URL query 恢复当前 tab，刷新/分享链接后不再回到第一个页面
+const route = useRoute()
+const router = useRouter()
+const resultTab = ref<ResultTab>(
+  VALID_RESULT_TABS.includes(route.query.tab as ResultTab)
+    ? (route.query.tab as ResultTab)
+    : 'pending',
+)
+
+// tab 变更时同步到 URL（默认 tab 不写入 query，保持 URL 干净；与 ModelManageView 等页一致）
+watch(resultTab, (tab) => {
+  const query = { ...route.query }
+  if (tab === 'pending') delete query.tab
+  else query.tab = tab
+  router.replace({ query })
+})
 const pendingPersons = ref<PersonAggregateItem[]>([])
 const pendingPage = ref(1)
 const pendingTotal = ref(0)
@@ -605,8 +623,6 @@ onBeforeUnmount(() => {
     pollTimer = null
   }
 })
-
-const router = useRouter()
 
 /** 缩略图地址（优先缩略图，无则原图） */
 function thumbUrl(item: DetectionItem): string {
