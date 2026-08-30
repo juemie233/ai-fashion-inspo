@@ -57,11 +57,18 @@ async def load_person_library(
         for r in rows.scalars().all():
             if person_ids and r.blogger_id not in person_ids:
                 continue
+            try:
+                emb = _bytes_to_embedding(r.embedding)
+            except ValueError as e:
+                # 异常维度特征跳过（与检测表脏数据同策略）：单条脏数据不让
+                # 整个匹配任务失败，缺失人物只影响其本人的匹配结果
+                logger.warning("全库匹配跳过异常维度博主特征（blogger_id=%s）: %s", r.blogger_id, e)
+                continue
             library.append(
                 {
                     "person_type": "blogger",
                     "person_id": r.blogger_id,
-                    "embedding": _bytes_to_embedding(r.embedding),
+                    "embedding": emb,
                 }
             )
     if scope in ("all", "models"):
@@ -69,11 +76,16 @@ async def load_person_library(
         for r in rows.scalars().all():
             if person_ids and r.model_id not in person_ids:
                 continue
+            try:
+                emb = _bytes_to_embedding(r.embedding)
+            except ValueError as e:
+                logger.warning("全库匹配跳过异常维度模特特征（model_id=%s）: %s", r.model_id, e)
+                continue
             library.append(
                 {
                     "person_type": "model",
                     "person_id": r.model_id,
-                    "embedding": _bytes_to_embedding(r.embedding),
+                    "embedding": emb,
                 }
             )
     return library
@@ -158,18 +170,34 @@ async def match_all_faces(
         )
     )
     detections = rows.all()
-    total = len(detections)
+
+    # 数据前置：解析并过滤脏嵌入。真实库曾在检测表出现过非 512 维异常数据
+    # （face_cluster 同策略），单条脏数据会把整个匹配任务打成失败——
+    # 这里跳过并计数（bad_embeddings），有效人脸数 = total_faces，保证
+    # matched + unmatched == total_faces 的统计恒等式。
+    valid: list[tuple[InspirationFaceDetection, np.ndarray]] = []
+    bad_embeddings = 0
+    for d in detections:
+        emb = np.frombuffer(d.embedding, dtype=np.float32)
+        if emb.shape[0] != 512:
+            bad_embeddings += 1
+            logger.warning(
+                "全库匹配跳过异常维度嵌入（detection_id=%s, dim=%d）",
+                d.id,
+                emb.shape[0],
+            )
+            continue
+        valid.append((d, emb))
+    total = len(valid)
     matched = 0
     unmatched = 0
     changes: list[dict] = []
 
     for start in range(0, total, chunk_size):
-        chunk = detections[start : start + chunk_size]
-        faces = np.stack(
-            [_bytes_to_embedding(d.embedding) for d in chunk], axis=0
-        ).astype(np.float32)
+        chunk = valid[start : start + chunk_size]
+        faces = np.stack([emb for _det, emb in chunk], axis=0).astype(np.float32)
         results = matrix_match_faces(faces, library, thr)
-        for det, result in zip(chunk, results):
+        for (det, _emb), result in zip(chunk, results):
             if result is None:
                 new_blogger: int | None = None
                 new_model: int | None = None
@@ -222,4 +250,6 @@ async def match_all_faces(
         "library_size": len(library),
         "threshold": thr,
         "scope": scope,
+        # 被跳过的异常维度嵌入数（脏数据不参与比对，也不计入 total_faces）
+        "bad_embeddings": bad_embeddings,
     }

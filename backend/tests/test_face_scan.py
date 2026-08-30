@@ -13,8 +13,10 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import async_session
 from app.models.face import InspirationFaceDetection
+from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
 from app.services.task_runners.face_scan import (
     execute_face_match,
@@ -200,6 +202,37 @@ async def test_scan_task_incremental_and_placeholder(
         task2 = await db.get(TaskQueue, task_id2)
         assert task2.total == 0
         assert task2.progress == 100
+
+
+async def test_scan_task_missing_file_does_not_crash(client, create_blogger, monkeypatch):
+    """素材文件缺失不崩溃：磁盘文件缺失时任务跳过该素材并正常完成。
+
+    修复前：缺失文件会被 ids.pop() 从列表剔除，但循环条件仍用固定的 total
+    判断，列表缩短后越界访问 ids[start + len(batch_ids)] → IndexError
+    （list index out of range），整个扫描任务失败且无法续跑。
+    """
+    emb = _unit(3)
+    _setup_blogger(client, create_blogger, monkeypatch, emb)
+    # 纯色小图用差异明显的颜色，避免内容去重误判为重复素材
+    colors = [(200, 30, 40), (60, 70, 80), (140, 30, 120), (30, 150, 60), (250, 120, 30)]
+    insp_ids = [_upload_inspiration(client, c) for c in colors]
+    # 删除一个素材的磁盘文件（模拟文件缺失/损坏）
+    async with async_session() as db:
+        row = (
+            await db.execute(select(Inspiration).where(Inspiration.id == insp_ids[0]))
+        ).scalar_one()
+        (settings.storage_root / row.file_path).unlink()
+    _patch_embed_batch(
+        monkeypatch,
+        [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]] * 4,
+    )
+
+    task_id = await _run_scan(client)
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["scanned"] == 5
+        assert task.result["failed_files"] == 1
+        assert task.result["faces"] == 4
 
 
 async def test_scan_task_all_scope_clears(client, create_blogger, monkeypatch):

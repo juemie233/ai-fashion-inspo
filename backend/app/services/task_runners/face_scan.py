@@ -210,7 +210,11 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
     cancelled = False
     consecutive_failures = 0
     start = 0
-    while start < total:
+    # 注意：循环条件必须用实时 len(ids) 而非初始 total——缺失文件的素材会从
+    # ids 中 pop 掉，列表长度随之缩小；若用固定 total 判断，末尾文件缺失时
+    # 会越界访问 ids[start + len(batch_ids)]，抛 IndexError（list index out of range）
+    # 整个扫描任务失败，且已扫过的素材无法续跑。
+    while start < len(ids):
         if await _is_cancelled(db, task):
             cancelled = True
             break
@@ -221,7 +225,7 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
         batch_images: list[list[bytes]] = []  # 与 batch_ids 对齐的帧图片列表
         batch_size = 0
         while (
-            start + len(batch_ids) < total
+            start + len(batch_ids) < len(ids)
             and len(batch_ids) < SCAN_BATCH_SIZE
             and batch_size < SCAN_BATCH_BYTES
         ):

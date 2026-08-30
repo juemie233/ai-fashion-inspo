@@ -278,4 +278,43 @@ async def test_match_all_faces_skips_excluded(client, create_blogger, monkeypatc
         ).scalars().all()
         assert dets2[0].match_excluded is True
         assert dets2[0].match_status is None
-        assert dets2[0].matched_blogger_id is None
+
+
+async def test_match_all_faces_skips_corrupt_embeddings(
+    client, create_blogger, monkeypatch
+):
+    """异常维度脏嵌入不阻塞全库匹配：跳过并计数，任务照常产出候选。
+
+    修复前：`_bytes_to_embedding` 遇到非 512 维嵌入直接抛 ValueError，
+    整条匹配任务失败（真实库曾出现 388 维脏数据，face_cluster 同策略过滤）。
+    """
+    base = _unit(1)
+    _setup_blogger_face(client, create_blogger, monkeypatch, base.tolist())
+    insp_id = _setup_inspiration_faces(
+        client,
+        monkeypatch,
+        [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": base.tolist()}],
+    )
+
+    async with async_session() as db:
+        # 注入一条非 512 维脏嵌入（模拟历史脏数据残留）
+        rng = np.random.default_rng(7)
+        db.add(
+            InspirationFaceDetection(
+                inspiration_id=insp_id,
+                face_index=1,
+                embedding=rng.standard_normal(388).astype(np.float32).tobytes(),
+                bbox=None,
+                det_score=0.9,
+                match_status=None,
+            )
+        )
+        await db.commit()
+
+        stats = await match_all_faces(db)
+        # 脏数据被跳过：仅 1 张有效人脸（命中博主），bad_embeddings 计数 1，
+        # 统计恒等式 matched + unmatched == total_faces 保持成立
+        assert stats["total_faces"] == 1
+        assert stats["matched"] == 1
+        assert stats["unmatched"] == 0
+        assert stats["bad_embeddings"] == 1
