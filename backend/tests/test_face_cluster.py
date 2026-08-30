@@ -306,6 +306,77 @@ def test_cluster_group_detections_404_before_run(client):
     assert "尚未执行" in r.json()["detail"]
 
 
+def test_cluster_assign_confirms_unmatched_and_ids_stable(
+    client, upload, fake_face_db, create_blogger
+):
+    """整组指派回归：①聚合组内未匹配人脸（match_status 为空）可被 confirm 确认，
+    整组指派后该组从列表消失；②其余组保留原始 group_id，明细分页不串组。
+
+    线上现象（用户反馈「该组所有图片消失」）：
+    - confirm 仅认 pending，聚合组人脸（match_status 为空）整组指派 0 条 → 组不消失；
+    - groups 接口把「过滤后序号」当 group_id 返回，而 detections 接口按「原始
+      任务结果下标」解析——一组消失后其余组 group_id 前移，展开时取到已确认
+      （变空）的组 → 该组图片全部消失。
+    """
+    _seed_unmatched_detections(client, upload)  # 4 张脸 → 2 组（[0,1] 相似、[2,3] 相似）
+
+    r = client.post("/api/face-scan/cluster/run", json={})
+    task_id = r.json()["task_id"]
+
+    from app.database import async_session
+    from app.models.task import TaskQueue
+    from app.services.task_runners.face_cluster import execute_face_cluster
+
+    async def _run():
+        async with async_session() as db:
+            task = await db.get(TaskQueue, task_id)
+            task.status = "running"
+            await db.commit()
+            await execute_face_cluster(db, task)
+            await db.refresh(task)
+            task.status = "success"
+            task.progress = 100
+            await db.commit()
+
+    import asyncio
+
+    asyncio.run(_run())
+
+    groups = client.get("/api/face-scan/cluster/groups").json()["items"]
+    assert len(groups) == 2
+    gid_a, gid_b = groups[0]["group_id"], groups[1]["group_id"]
+    assert sorted([gid_a, gid_b]) == [0, 1]
+
+    # 整组指派第一组：confirm 应能确认未匹配人脸（此前全部 skipped）
+    blogger = create_blogger(name="聚合指派博主")
+    first = groups[0]
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={
+            "action": "confirm",
+            "items": [
+                {"detection_id": did, "person_type": "blogger", "person_id": blogger["id"]}
+                for did in first["detection_ids"]
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["confirmed"] == first["size"]
+    assert r.json()["skipped"] == 0
+
+    # 整组消失：列表只剩另一组，且保留原始 group_id（明细分页能正确解析）
+    groups2 = client.get("/api/face-scan/cluster/groups").json()["items"]
+    assert len(groups2) == 1
+    remain = groups2[0]
+    assert remain["group_id"] == gid_b
+    assert remain["size"] == 2
+    detail = client.get(
+        f"/api/face-scan/cluster/groups/{remain['group_id']}/detections"
+    ).json()
+    assert detail["total"] == remain["size"]
+    assert len(detail["items"]) == remain["size"]
+
+
 # ═══════════════════════════════════════════════════════════════
 #  工具
 # ═══════════════════════════════════════════════════════════════

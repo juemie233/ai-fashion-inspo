@@ -353,7 +353,21 @@ async def confirm(
         valid: list[tuple[InspirationFaceDetection, str, int]] = []
         for item in data.items:
             det = detections.get(item.detection_id)
-            if not det or det.match_status != "pending":
+            # 可确认条件：待审核候选（pending），或聚合分组内的未匹配人脸
+            # （matched_* 为空且非人工「不匹配」——整组指派复用本接口）。
+            # 已确认（锁定）/已有匹配结果/被驳回的人脸一律跳过。
+            confirmable = (
+                det is not None
+                and not det.match_excluded
+                and (
+                    det.match_status == "pending"
+                    or (
+                        det.matched_blogger_id is None
+                        and det.matched_model_id is None
+                    )
+                )
+            )
+            if not confirmable:
                 stats["skipped"] += 1
                 continue
             if item.person_type not in ("blogger", "model") or not item.person_id:
@@ -471,13 +485,16 @@ async def cluster_groups(
     result = task.result
     groups = result.get("groups") or []
 
-    # 动态过滤：只返回还有未确认人脸的组
-    filtered_groups = []
-    for g in groups:
+    # 动态过滤：只返回还有未确认人脸的组。保留原始组下标（orig_idx），
+    # 供明细分页接口按「最近一次聚类结果的下标」正确解析——此前返回过滤后
+    # 序号，一组消失后其余组 group_id 前移，展开时取到已确认（变空）的组。
+    filtered_groups: list[tuple[int, dict, int]] = []
+    for orig_idx, g in enumerate(groups):
         detection_ids = g.get("detection_ids") or []
         if not detection_ids:
             continue
-        # 检查组内是否还有未确认的人脸（matched_blogger_id 和 matched_model_id 都为空）
+        # 剩余未确认人脸数：matched_* 为空且非人工「不匹配」（整组指派后
+        # 组会变小，全确认后消失；被驳回的脸不占位，避免幽灵组）
         unmatched_count = (
             await db.execute(
                 select(func.count())
@@ -486,11 +503,12 @@ async def cluster_groups(
                     InspirationFaceDetection.id.in_(detection_ids),
                     InspirationFaceDetection.matched_blogger_id.is_(None),
                     InspirationFaceDetection.matched_model_id.is_(None),
+                    InspirationFaceDetection.match_excluded.is_(False),
                 )
             )
         ).scalar() or 0
         if unmatched_count > 0:
-            filtered_groups.append(g)
+            filtered_groups.append((orig_idx, g, unmatched_count))
 
     total = len(filtered_groups)
     start = (page - 1) * size
@@ -499,7 +517,7 @@ async def cluster_groups(
     # 每组取「最高置信度人脸」作为代表：批量拉取 det_score / 素材路径
     # 只查询未确认的人脸作为代表
     items: list[dict] = []
-    for idx, g in enumerate(page_groups, start=start):
+    for orig_idx, g, unmatched_count in page_groups:
         detection_ids = g.get("detection_ids") or []
         if not detection_ids:
             continue
@@ -517,6 +535,7 @@ async def cluster_groups(
                     InspirationFaceDetection.id.in_(detection_ids),
                     InspirationFaceDetection.matched_blogger_id.is_(None),
                     InspirationFaceDetection.matched_model_id.is_(None),
+                    InspirationFaceDetection.match_excluded.is_(False),
                 )
                 .order_by(InspirationFaceDetection.det_score.desc())
                 .limit(1)
@@ -524,8 +543,8 @@ async def cluster_groups(
         ).first()
         items.append(
             {
-                "group_id": idx,
-                "size": g.get("size", len(detection_ids)),
+                "group_id": orig_idx,
+                "size": unmatched_count,
                 "detection_ids": detection_ids,
                 "rep_detection_id": rep_row.id if rep_row else None,
                 "rep_inspiration_id": rep_row.inspiration_id if rep_row else None,

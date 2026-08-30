@@ -457,7 +457,8 @@ async def load_group_detections(
 
     返回 (items, total)；items 按 detection_id 排序稳定。
 
-    注意：只返回未确认的人脸（matched_blogger_id 和 matched_model_id 都为空）。
+    注意：只返回未确认的人脸（matched_blogger_id 和 matched_model_id 都为空），
+    并排除人工「不匹配」（match_excluded）的人脸。
     """
     if not detection_ids:
         return [], 0
@@ -469,6 +470,7 @@ async def load_group_detections(
                 InspirationFaceDetection.id.in_(detection_ids),
                 InspirationFaceDetection.matched_blogger_id.is_(None),
                 InspirationFaceDetection.matched_model_id.is_(None),
+                InspirationFaceDetection.match_excluded.is_(False),
             )
         )
     ).all()
