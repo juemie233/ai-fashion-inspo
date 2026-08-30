@@ -7,7 +7,7 @@
  * 仅展示传统/手动结果（match_status 为 NULL）与已审核（confirmed）结果。
  */
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   deleteFaceDetection,
   faceDetectInspiration,
@@ -24,6 +24,11 @@ import { getApiErrorMessage } from '@/utils/apiError'
 const props = defineProps<{
   /** 素材 ID */
   inspirationId: string
+}>()
+
+const emit = defineEmits<{
+  /** 是否存在已确认（锁定）人脸：父组件据此锁定「穿搭博主/职业模特」关联栏 */
+  (e: 'lock-change', locked: boolean): void
 }>()
 
 const detections = ref<FaceDetectionOut[]>([])
@@ -169,6 +174,15 @@ function isLocked(det: FaceDetectionOut): boolean {
 
 /** 是否存在已确认（锁定）的人脸：重新检测会覆盖未锁定结果，存在已确认人脸时禁用「检测并匹配」 */
 const hasConfirmedFace = computed(() => detections.value.some(isLocked))
+
+// 锁定状态变化时上报父组件（详情页据此锁定「穿搭博主/职业模特」关联栏）
+watch(hasConfirmedFace, (locked) => emit('lock-change', locked), { immediate: true })
+
+// 路由复用场景（详情页上一张/下一张切换素材）：inspirationId 变化后重新加载
+watch(
+  () => props.inspirationId,
+  () => load(),
+)
 
 /** 命中人物标签（穿搭博主/职业模特）：带人物类型前缀与高置信度标记 */
 function matchedTag(det: FaceDetectionOut): { text: string; model: boolean; high: boolean } | null {

@@ -53,6 +53,8 @@ const fileVersion = ref('')
 const loading = ref(true)
 /** 重新分析提交中（防重复点击） */
 const analyzing = ref(false)
+/** 是否存在已确认（锁定）人脸：由 FaceDetectionSection 上报，锁定「穿搭博主/职业模特」关联栏 */
+const faceLocked = ref(false)
 
 // ── 穿搭大标签 composable ──
 const {
@@ -574,24 +576,29 @@ async function removeTag(t: InspirationTagOut) {
               </a-descriptions>
             </div>
 
-            <!-- 关联博主（从已有列表选择添加 / 解除关联） -->
+            <!-- 关联博主（从已有列表选择添加 / 解除关联；人脸确认锁定后禁用） -->
             <PersonLinkSection
               kind="blogger"
               :persons="detail.bloggers || []"
               :inspiration-id="detail.id"
+              :disabled="faceLocked"
               @change="updateBloggers"
             />
 
-            <!-- 关联模特（从已有列表选择添加 / 解除关联） -->
+            <!-- 关联模特（从已有列表选择添加 / 解除关联；人脸确认锁定后禁用） -->
             <PersonLinkSection
               kind="model"
               :persons="detail.models || []"
               :inspiration-id="detail.id"
+              :disabled="faceLocked"
               @change="updateModels"
             />
 
             <!-- 人脸识别（博主特征库匹配） -->
-            <FaceDetectionSection :inspiration-id="detail.id" />
+            <FaceDetectionSection
+              :inspiration-id="detail.id"
+              @lock-change="(v: boolean) => (faceLocked = v)"
+            />
 
             <!-- 穿搭大标签 -->
             <OutfitTagSection

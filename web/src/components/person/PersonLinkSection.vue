@@ -20,6 +20,8 @@ const props = defineProps<{
   persons: PersonBrief[]
   /** 素材 ID */
   inspirationId: string
+  /** 人脸已确认（锁定）时禁用增删关联（关联已被人脸审核锁定） */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -135,7 +137,13 @@ async function removePerson(person: PersonBrief) {
     <div v-if="persons.length > 0" class="linked-list">
       <span v-for="p in persons" :key="p.id" class="linked-chip">
         <span class="linked-name">{{ p.name }}</span>
-        <span class="linked-remove" title="解除关联" @click="removePerson(p)">×</span>
+        <span
+          class="linked-remove"
+          :class="{ disabled: disabled }"
+          :title="disabled ? '人脸已确认锁定，不可解除关联' : '解除关联'"
+          @click="!disabled && removePerson(p)"
+          >×</span
+        >
       </span>
     </div>
     <a-typography-text v-else type="secondary" style="font-size: 13px"
@@ -147,7 +155,8 @@ async function removePerson(person: PersonBrief) {
       v-model="selectedId"
       :options="selectOptions"
       :loading="loading"
-      :placeholder="`选择要关联的${kindLabel}`"
+      :disabled="disabled"
+      :placeholder="disabled ? '人脸已确认锁定，不可新增关联' : `选择要关联的${kindLabel}`"
       size="small"
       allow-search
       allow-clear
@@ -206,6 +215,16 @@ async function removePerson(person: PersonBrief) {
 
 .linked-remove:hover {
   color: #ef4444;
+}
+
+/* 锁定态：人脸已确认，禁止解除（悬停不变红，not-allowed 光标） */
+.linked-remove.disabled {
+  cursor: not-allowed;
+  color: #c9cdd4;
+}
+
+.linked-remove.disabled:hover {
+  color: #c9cdd4;
 }
 
 .person-select {
