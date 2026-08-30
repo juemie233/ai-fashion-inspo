@@ -7,7 +7,7 @@
  * 仅展示传统/手动结果（match_status 为 NULL）与已审核（confirmed）结果。
  */
 
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   deleteFaceDetection,
   faceDetectInspiration,
@@ -167,6 +167,9 @@ function isLocked(det: FaceDetectionOut): boolean {
   return det.match_status === 'confirmed'
 }
 
+/** 是否存在已确认（锁定）的人脸：重新检测会覆盖未锁定结果，存在已确认人脸时禁用「检测并匹配」 */
+const hasConfirmedFace = computed(() => detections.value.some(isLocked))
+
 /** 命中人物标签（穿搭博主/职业模特）：带人物类型前缀与高置信度标记 */
 function matchedTag(det: FaceDetectionOut): { text: string; model: boolean; high: boolean } | null {
   const confidence = det.confidence ?? 0
@@ -197,7 +200,18 @@ onMounted(() => {
   <div class="face-detection-section">
     <div class="face-header">
       <h3 style="margin: 0">人脸识别（博主/模特特征库匹配）</h3>
-      <a-button size="mini" type="primary" :loading="detecting" @click="handleDetect">
+      <a-button
+        size="mini"
+        type="primary"
+        :loading="detecting"
+        :disabled="hasConfirmedFace"
+        :title="
+          hasConfirmedFace
+            ? '已存在已确认（锁定）的人脸，重新检测会覆盖未锁定结果，已禁用'
+            : undefined
+        "
+        @click="handleDetect"
+      >
         检测并匹配
       </a-button>
     </div>
