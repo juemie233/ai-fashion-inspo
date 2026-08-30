@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 素材卡片：瀑布流中的单个卡片，显示缩略图、标签和操作按钮。 */
 
+import { computed } from 'vue'
 import {
   IconCheck,
   IconDelete,
@@ -44,6 +45,13 @@ const emit = defineEmits<{
 const router = useRouter()
 const route = useRoute()
 
+/** 网格图片源：图片素材用原图保证清晰（缩略图仅 400x600，放大显示会发虚/有压缩感）；视频用首帧缩略图 */
+const gridSrc = computed(() => {
+  const { media_type: mt, file_path: fp, thumbnail_path: tp } = props.item
+  if (mt === 'video') return tp || fp || ''
+  return fp || tp || ''
+})
+
 /** 获取首行展示的标签（最多 4 个） */
 function displayTags() {
   return props.item.tags?.slice(0, 4).map((t) => t.tag) ?? []
@@ -86,11 +94,7 @@ function openDetail() {
         :large-src="getFileUrl(item.file_path)"
         :delay="HOVER_ZOOM_DELAY"
       >
-        <img
-          :src="getFileUrl(item.thumbnail_path || item.file_path)"
-          :alt="item.source_author || '穿搭素材'"
-          loading="lazy"
-        />
+        <img :src="getFileUrl(gridSrc)" :alt="item.source_author || '穿搭素材'" loading="lazy" />
       </HoverImagePreview>
       <template v-else>
         <video
@@ -101,8 +105,8 @@ function openDetail() {
           preload="metadata"
         />
         <img
-          v-else
-          :src="getFileUrl(item.thumbnail_path || item.file_path)"
+          v-else-if="gridSrc"
+          :src="getFileUrl(gridSrc)"
           :alt="item.source_author || '穿搭素材'"
           loading="lazy"
         />
