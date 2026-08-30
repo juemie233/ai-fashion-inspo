@@ -2,7 +2,14 @@
 
 import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Avatar, Button, Message, Popconfirm, type TableColumnData } from '@arco-design/web-vue'
+import {
+  Avatar,
+  Button,
+  Message,
+  Popconfirm,
+  Tag,
+  type TableColumnData,
+} from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { formatDate, renderTimeCell } from '@/utils/format'
 import { getFileUrl } from '@/api/inspirations'
@@ -168,7 +175,7 @@ export function usePersonList(kind: PersonKind) {
     {
       title: '人物',
       dataIndex: 'name',
-      minWidth: 160,
+      minWidth: 110,
       render: ({ record }) => {
         const row = record as Person
         return h('div', { class: 'person-cell' }, [
@@ -226,10 +233,15 @@ export function usePersonList(kind: PersonKind) {
       },
     },
     {
-      title: '小红书ID',
-      dataIndex: 'xhs_id',
-      width: 130,
-      render: ({ record }) => (record as Person).xhs_id || '-',
+      title: '人脸特征',
+      dataIndex: 'face_registered',
+      width: 88,
+      render: ({ record }) => {
+        const row = record as Person
+        return row.face_registered
+          ? h(Tag, { color: 'green', size: 'small' }, { default: () => '是' })
+          : h(Tag, { color: 'gray', size: 'small' }, { default: () => '否' })
+      },
     },
     {
       title: 'IP属地',

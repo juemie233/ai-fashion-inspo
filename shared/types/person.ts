@@ -35,6 +35,8 @@ export interface Person {
   platform_user_id?: string | null;
   xhs_id?: string | null;
   ip_location?: string | null;
+  /** 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物 */
+  face_registered?: boolean;
   profile_url?: string | null;
   avatar_path?: string | null;
   /** 人脸缩略图相对路径（博主专属：从已匹配素材的人脸检测框裁剪；模特无此字段） */

@@ -89,6 +89,11 @@ class PersonServiceBase:
             "platform_user_id": person.platform_user_id,
             "xhs_id": person.xhs_id,
             "ip_location": person.ip_location,
+            # 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物。
+            # 用 __dict__.get 避免同步序列化触发懒加载 IO（MissingGreenlet）；
+            # 列表查询已 selectinload 预加载，未预加载路径（create/update/top/suggest）
+            # 无该字段时按 False 处理（前端仅人物列表消费此列）
+            "face_registered": person.__dict__.get("face_embedding") is not None,
             "profile_url": person.profile_url,
             "avatar_path": person.avatar_path,
             "bio": person.bio,
@@ -151,6 +156,8 @@ class PersonServiceBase:
         stmt = (
             select(model, func.coalesce(count_subq.c.cnt, 0).label("cnt"))
             .outerjoin(count_subq, model.id == count_subq.c.pid)
+            # 预加载人脸特征 relationship：_to_dict 同步序列化需要（face_registered 列）
+            .options(selectinload(model.face_embedding))
         )
         if search:
             # 搜索覆盖昵称 / 小红书号 / IP 属地（任一命中即匹配）

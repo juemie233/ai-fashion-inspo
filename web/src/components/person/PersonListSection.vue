@@ -143,7 +143,7 @@ function handleExpandedChange(keys: Array<string | number>) {
         :loading="store.loading"
         row-key="id"
         :bordered="false"
-        :scroll="{ x: 1160 }"
+        :scroll="{ x: 1040 }"
         :pagination="false"
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
         @expanded-change="handleExpandedChange"

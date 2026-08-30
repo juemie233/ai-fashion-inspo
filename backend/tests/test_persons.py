@@ -48,6 +48,41 @@ def test_create_person_validation(client):
     assert client.post("/api/models", json={}).status_code == 422
 
 
+def test_list_face_registered_flag(client, create_blogger, monkeypatch):
+    """列表响应带 face_registered：未注册为 false，注册人脸特征后为 true。
+
+    回归：该字段曾因 response_model 过滤被丢弃（前端恒显示「否」），
+    且 service 同步序列化访问懒加载 relationship 曾抛 MissingGreenlet。
+    """
+    import numpy as np
+
+    blogger = create_blogger(name="人脸注册博主")
+    items = client.get("/api/bloggers", params={"size": 50}).json()["items"]
+    row = next(b for b in items if b["id"] == blogger["id"])
+    assert row["face_registered"] is False
+
+    # 注册人脸特征（模拟人脸服务返回 512 维 embedding）
+    emb = np.zeros(512, dtype=np.float32)
+    emb[0] = 1.0
+
+    async def fake_embed(image_bytes, filename="image.jpg"):
+        return {
+            "face_count": 1,
+            "faces": [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb.tolist()}],
+        }
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed)
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("a.jpg", b"photo", "image/jpeg"))],
+    )
+    assert r.status_code == 200, r.text
+
+    items2 = client.get("/api/bloggers", params={"size": 50}).json()["items"]
+    row2 = next(b for b in items2 if b["id"] == blogger["id"])
+    assert row2["face_registered"] is True
+
+
 def test_blogger_detail_with_style_profile(client, create_blogger, upload):
     """详情含素材数 + 风格画像（标签聚合）。"""
     blogger = create_blogger(name="风格博主")

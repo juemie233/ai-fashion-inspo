@@ -73,6 +73,8 @@ class _PersonOutFields(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     inspiration_count: int = 0
+    # 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物
+    face_registered: bool = False
 
     model_config = {"from_attributes": True}
 
