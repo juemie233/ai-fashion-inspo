@@ -301,31 +301,28 @@ async def scan_candidates(
                 and suggestion == 0
                 and residual_bottom > 0
             ):
-                # 仅底部残留（半透明播放器条/进度条叠加，顶部干净）：建议裁底部
+                # 仅底部残留（均匀暗带建议）：灰底渐变与播放器条人眼都难区分
+                # （20 张误报中 4 张属此类），候选保留但交人工确认，不自动勾选
                 item["auto_ok"] = False
                 item["crop_bottom"] = residual_bottom
-                # already_cropped 先验下的均匀暗带建议可信度高，默认勾选
-                item["auto_checked"] = True
+                item["auto_checked"] = False
                 item["note"] = (
                     f"疑似底部导航条/进度条残留（建议裁剪 {residual_bottom:.1%}），"
-                    "已默认勾选，请预览确认"
+                    "请预览确认"
                 )
             elif bounds_result["top_frac"] == 0 and suggestion > 0:
                 # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
                 # 典型特征，或实底状态栏残留）：不自动判定可裁剪（防误裁
                 # 普通照片），标注建议比例。
-                # 默认勾选收紧（历史 FP 根因）：仅「字形证据 + 左右两角齐备」
-                # 的候选默认勾选——状态栏字形是行剖面之外唯一与底图无关的
-                # 稳定信号，纯色背景照片/海报大字（无两角字形）不再自动勾选。
-                # 残留估算（residual）本身仍要求字形证据才勾选，无字形的
-                # 残留建议保持候选但由人工决定。
+                # 默认勾选条件（四轮真实样本校准的最终口径）：仅系统 UI 证据
+                # 齐全（top_bar+bottom_bar=high）。字形时间签名在两类样本上
+                # 分布重叠（20 张误报中 5 张签名通过、13 张真残留仅 2 张通过），
+                # 不再作为勾选依据；VLM 单问实验同样不达标（7/13、9/20）。
+                # 残留建议保留在候选中供人工勾选——误勾代价（裁坏图）远大于
+                # 漏勾（手动勾选）。
                 item["auto_ok"] = False
                 item["crop_top"] = suggestion
-                # 默认勾选仅认强字形（时间签名）证据：完整比例先验只影响
-                # 候选资格，不构成勾选理由（ratio≈2.16 的拼图/长图无状态栏）
-                item["auto_checked"] = glyph_strong = bool(
-                    glyph_top_frac > 0 and bounds_result.get("glyph_strong", False)
-                )
+                item["auto_checked"] = glyph_strong = confidence == "high"
                 item["note"] = (
                     f"疑似顶部状态栏残留（建议裁剪 {suggestion:.1%}），"
                     + ("已默认勾选，请预览确认" if item["auto_checked"] else "请预览确认")

@@ -569,7 +569,6 @@ def detect_content_bounds(path) -> dict:
     """
     with Image.open(path) as im:
         img = ImageOps.exif_transpose(im).convert("RGB")
-        src_w, src_h = img.size
         small = img.resize(
             (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
@@ -582,17 +581,6 @@ def detect_content_bounds(path) -> dict:
             0.0 if result["top_frac"] > 0 else (glyph["top_frac"] if glyph["found"] else 0.0)
         )
         result["glyph_strong"] = glyph["strong"]
-        # strong 放宽（与 combined 同口径）：已确证截图（already_cropped）+
-        # 字形存在 + 完整截图比例先验（≥1.5）→ 视为强证据。透明状态栏的字形
-        # 常因 JPEG 压缩粘连而不满足严格时间签名，但 already+ratio 先验下
-        # 误报风险可控（历史 FP 全部 ratio<1.5）
-        if (
-            not result["glyph_strong"]
-            and result["already_cropped"]
-            and result["glyph_top_frac"] > 0
-            and src_h >= 1.5 * src_w
-        ):
-            result["glyph_strong"] = True
         result["bounds_valid"] = True
         return result
 
@@ -699,11 +687,10 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
 
     # ── 底部残留估算（仅 already_cropped 时启用）──
     # 已裁截图的底部播放器条/导航栏常是「半透明暗色叠加」（多样度极低且均
-    # 匀、亮度低于内容区），_ui_band_valid 的硬跃变判据对它失效（内容区贴
-    # 边行多样度本就低，跃变不足）。already_cropped 先验把「均匀暗带」的
-    # 解释空间收窄到残留叠加（照片暗部地面会给出实底带建议走 bottom_frac，
-    # 不会进入本分支），误报风险可控；建议不并入 bottom_frac，单独返回供
-    # 人工确认（与顶部 residual_top_frac 同语义）。
+    # 匀、亮度低于内容区），_ui_band_valid 的硬跃变判据对它失效。注意：均
+    # 匀暗带也可能是构图的一部分（灰色背景板延伸/裁剩渐变，人眼都难判定），
+    # 因此建议只作候选标注、绝不自动勾选（与顶部 residual_top_frac 同语义，
+    # 由调用方交人工确认）。
     residual_bottom_frac = 0.0
     if already_cropped and bottom_edge >= n - 1:
         content_bright = float(
@@ -1078,15 +1065,8 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
         # 字形建议仅在「无实底条带裁剪建议」时使用：实底条带的 top_frac
         # 由行剖面精确定位，比字形底部锚点更准
         bounds["glyph_top_frac"] = 0.0 if bounds["top_frac"] > 0 else glyph_top
+        # strong 只认时间签名判定本身。历史教训：曾按「already_cropped +
+        # ratio≥1.5」放宽，但 already 只表示「行剖面无实底带」而非「确证
+        # 截图」，普通照片大量满足该组合（20 张真实 FP 的根因），已回退。
         bounds["glyph_strong"] = glyph["strong"]
-        # strong 放宽：已确证截图 + 字形存在 + 完整截图比例先验（≥1.5）。
-        # 透明状态栏字形常因 JPEG 压缩粘连而不满足严格时间签名
-        # （13 张真实漏检样本中 10 张因此漏勾）；历史 FP 全部 ratio<1.5
-        if (
-            not bounds["glyph_strong"]
-            and bounds["already_cropped"]
-            and bounds["glyph_top_frac"] > 0
-            and src_h >= 1.5 * src_w
-        ):
-            bounds["glyph_strong"] = True
     return features, bounds
