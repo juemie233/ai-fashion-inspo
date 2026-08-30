@@ -26,7 +26,7 @@
 
 ### 【任务】Web 体验增强包（键盘导航/深色模式/响应式/i18n/Arco 决策）
 
-**背景：** 主画廊 `HomeView.vue` 键盘事件为 0（对比 `ImageLightbox.vue:198`、`DetailView.vue:121` 已有快捷键）；全库仅单主题（`styles/arco-theme.css`），无深色模式；`AppLayout.vue` 侧边栏固定、无折叠断点，现有 16 处 `@media (max-width: 900px)` 是零散补丁；界面文案硬编码中文（`App.vue` locale 固定 zhCN），无 i18n；`/persons-arco` Arco 试点路由存在但侧边栏菜单无入口，迁移决策悬置。
+**背景：** 主画廊 `HomeView.vue` 键盘事件为 0（对比 `ImageLightbox.vue:198`、`DetailView.vue:121` 已有快捷键）；全库仅单主题（`styles/arco-theme.css`），无深色模式；`AppLayout.vue` 侧边栏固定、无折叠断点，现有 16 处 `@media (max-width: 900px)` 是零散补丁；界面文案硬编码中文（`App.vue` locale 固定 zhCN），无 i18n；Arco 试点已收尾删除（2026-08：移除 `/persons-arco` 路由与 `ArcoPersonPilotView.vue` 组件）。
 
 **目标：**
 
@@ -34,7 +34,7 @@
 - 深色模式：暗色主题 + 切换开关，持久化偏好
 - 响应式外壳：侧边栏在窄屏折叠为图标栏，统一断点策略替代零散 @media
 - i18n（可选）：如需英文界面引入 vue-i18n，个人工具可降级不做
-- Arco 试点收尾：明确「迁移 / 删除试点」，删除时移除路由与组件
+- Arco 试点收尾：已删除试点（2026-08 移除路由与组件，不再需要迁移决策）
 
 **验收标准：**
 
