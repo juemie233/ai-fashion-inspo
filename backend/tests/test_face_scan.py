@@ -578,7 +578,7 @@ async def test_scan_semi_scope_skips_confirmed(client, create_blogger, monkeypat
 
 
 async def test_scan_all_scope_preserves_locked(client, create_blogger, monkeypatch):
-    """全量重扫：保留已确认（锁定）记录，其余记录清空重写、序号从锁定数起编。"""
+    """全量重扫：保留已确认（锁定）记录；同一张人脸再次检出不再重复插入。"""
     emb = _unit(12)
     blogger = _setup_blogger(client, create_blogger, monkeypatch, emb)
     insp = _upload_inspiration(client, (100, 200, 30))
@@ -605,7 +605,8 @@ async def test_scan_all_scope_preserves_locked(client, create_blogger, monkeypat
     )
     assert r.json()["confirmed"] == 1
 
-    # 全量重扫：同一张人脸再次检出 → 锁定记录保留，新记录序号从 1 起编
+    # 全量重扫：同一张人脸再次检出 → 与锁定记录同 embedding，跳过重复插入
+    # （修复前会再插入一条 face_index=1 的相同记录，反复扫描+确认累积多条）
     _patch_embed_batch(
         monkeypatch,
         [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
@@ -616,13 +617,11 @@ async def test_scan_all_scope_preserves_locked(client, create_blogger, monkeypat
         assert task.result["scanned"] == 1
 
     dets = await _fetch_detections(insp)
-    assert len(dets) == 2
+    assert len(dets) == 1
     locked = [d for d in dets if d.match_status == "confirmed"]
     assert len(locked) == 1
     assert locked[0].id == det_id
     assert locked[0].matched_blogger_id == blogger["id"]
-    # 新检出记录序号从锁定记录数起编
-    assert any(d.match_status is None and d.face_index == 1 for d in dets)
 
 
 async def test_lock_blocks_update_unlink_delete(client, create_blogger, monkeypatch):
@@ -711,3 +710,68 @@ async def test_auto_match_default_off(client, create_blogger, monkeypatch):
         task = await db.get(TaskQueue, task_id)
         assert task.result["scanned"] == 1
         assert task.result["match_task_id"] is None
+
+
+async def test_rescan_skips_locked_same_face(client, upload):
+    """批量重扫跳过与已确认（锁定）记录相同的人脸，不累积重复记录。
+
+    回归：与单素材检测同源——全量重扫对已确认素材再次检出同一张脸时，
+    修复前会再插入一条同 embedding 记录（素材详情出现多条相同人脸）。
+    """
+    from app.services.task_runners.face_scan import _write_detections
+
+    insp_id = upload().json()["id"]
+    emb = _unit(5)
+    emb_bytes = np.asarray(emb, dtype=np.float32).tobytes()
+
+    async def _seed():
+        async with async_session() as db:
+            db.add(
+                InspirationFaceDetection(
+                    inspiration_id=insp_id,
+                    face_index=0,
+                    embedding=emb_bytes,
+                    match_status="confirmed",
+                    # matched_* 置空：仅验证「锁定记录不被重扫重复插入」，不涉及人物关联
+                )
+            )
+            await db.commit()
+
+    async def _rescan():
+        async with async_session() as db:
+            await _write_detections(
+                db,
+                [insp_id],
+                [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb}]],
+            )
+            await db.commit()  # _write_detections 不自行提交
+
+    async def _count():
+        async with async_session() as db:
+            rows = (
+                await db.execute(
+                    select(InspirationFaceDetection).where(
+                        InspirationFaceDetection.inspiration_id == insp_id
+                    )
+                )
+            ).scalars().all()
+            return len(rows)
+
+    await _seed()
+    await _rescan()
+    assert await _count() == 1  # 同脸不重复插入
+
+    # 不同人脸（新 embedding）仍正常插入
+    emb2 = _unit(6)
+
+    async def _rescan2():
+        async with async_session() as db:
+            await _write_detections(
+                db,
+                [insp_id],
+                [[{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": emb2}]],
+            )
+            await db.commit()
+
+    await _rescan2()
+    assert await _count() == 2  # 锁定 1 条 + 新脸 1 条

@@ -387,9 +387,17 @@ async def detect_inspiration_faces(
     )
     locked_detections = list(locked_rows.scalars().all())
     face_offset = len(locked_detections)
+    # 已锁定记录的 embedding 集合：反复检测同一素材时跳过同脸，避免累积重复
+    # （同一素材多次「检测并匹配 + 确认」曾各插入一条同 embedding 记录）
+    locked_embeddings = {d.embedding for d in locked_detections if d.embedding}
 
     detections = []
+    inserted = 0
     for idx, face, match in zip(range(len(faces)), faces, match_results):
+        emb_bytes = np.asarray(face["embedding"], dtype=np.float32).tobytes()
+        # 该人脸已确认（锁定）过：跳过，不重复插入（同源检测 embedding 字节级一致）
+        if emb_bytes in locked_embeddings:
+            continue
         matched_blogger_id: int | None = None
         matched_model_id: int | None = None
         best_score: float | None = None
@@ -401,8 +409,8 @@ async def detect_inspiration_faces(
             best_score = round(match["score"], 4)
         det = InspirationFaceDetection(
             inspiration_id=inspiration_id,
-            face_index=face_offset + idx,
-            embedding=np.asarray(face["embedding"], dtype=np.float32).tobytes(),
+            face_index=face_offset + inserted,
+            embedding=emb_bytes,
             # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
             # 子服务偶发缺失时置空，不影响检测匹配主流程
             bbox=json.dumps(face["bbox"]) if isinstance(face.get("bbox"), list) else None,
@@ -417,6 +425,7 @@ async def detect_inspiration_faces(
         )
         db.add(det)
         detections.append(det)
+        inserted += 1
 
     await db.commit()
 

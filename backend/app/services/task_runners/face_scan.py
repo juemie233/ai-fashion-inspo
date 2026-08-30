@@ -432,14 +432,19 @@ async def _write_detections(
                 )
             continue
         offset = len(kept)
+        # 已保留（锁定/不匹配）记录的 embedding：重扫跳过同脸，避免同一素材
+        # 反复扫描+确认后累积多条相同人脸记录（同源检测 embedding 字节级一致）
+        kept_embeddings = {d.embedding for d in kept if d.embedding}
+        inserted = 0
         for idx, face in enumerate(faces):
+            emb_bytes = np.asarray(face["embedding"], dtype=np.float32).tobytes()
+            if emb_bytes in kept_embeddings:
+                continue
             db.add(
                 InspirationFaceDetection(
                     inspiration_id=insp_id,
-                    face_index=offset + idx,
-                    embedding=np.asarray(
-                        face["embedding"], dtype=np.float32
-                    ).tobytes(),
+                    face_index=offset + inserted,
+                    embedding=emb_bytes,
                     bbox=(
                         json.dumps(face["bbox"])
                         if isinstance(face.get("bbox"), list)
@@ -453,6 +458,7 @@ async def _write_detections(
                     match_status=None,
                 )
             )
+            inserted += 1
 
 
 async def execute_face_match(db: AsyncSession, task: TaskQueue) -> None:

@@ -136,6 +136,51 @@ def test_face_thumbnail_unmatched_detection(client, create_blogger, upload, monk
     assert item["face_thumb_path"] is None
 
 
+def test_face_detect_does_not_duplicate_locked_face(
+    client, create_blogger, upload, monkeypatch
+):
+    """反复「检测并匹配 + 确认」同一素材不再累积重复人脸记录。
+
+    回归（用户反馈「素材详情出现三条相同人脸识别」）：修复前每次检测都会
+    对已确认（锁定）人脸再插入一条同 embedding 记录（face_index 递增）。
+    """
+    blogger = create_blogger(name="重复检测博")
+    _patch_embed(monkeypatch, _unit_embedding(1))
+    client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("m.jpg", b"blogger-photo", "image/jpeg"))],
+    )
+    # 素材人脸与库特征不同：检测不命中博主（matched_* 为空 → 可被 confirm）
+    _patch_embed(monkeypatch, _unit_embedding(2))
+    insp_id = upload().json()["id"]
+
+    r1 = client.post(f"/api/inspirations/{insp_id}/face-detect")
+    assert r1.status_code == 200, r1.text
+    assert len(r1.json()["detections"]) == 1
+    det_id = r1.json()["detections"][0]["id"]
+
+    # 确认（锁定）该人脸
+    r = client.post(
+        "/api/face-scan/confirm",
+        json={
+            "action": "confirm",
+            "items": [
+                {"detection_id": det_id, "person_type": "blogger", "person_id": blogger["id"]}
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["confirmed"] == 1
+
+    # 再次检测（同一张脸）：不新增记录，仍是原锁定记录
+    r2 = client.post(f"/api/inspirations/{insp_id}/face-detect")
+    assert r2.status_code == 200, r2.text
+    dets = r2.json()["detections"]
+    assert len(dets) == 1
+    assert dets[0]["id"] == det_id
+    assert dets[0]["match_status"] == "confirmed"
+
+
 def test_delete_blogger_cleans_thumbnail_cache(client, create_blogger, make_image):
     """删除博主：人脸缩略图缓存文件同步清理，不残留孤儿文件。"""
     blogger = create_blogger(name="待删博")
