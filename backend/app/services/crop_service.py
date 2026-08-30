@@ -210,10 +210,16 @@ async def scan_candidates(
                 continue
             glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
             glyph_strong = bounds_result.get("glyph_strong", False)
+            residual_bottom = bounds_result.get("residual_bottom_frac", 0)
             # ── 候选资格（FP/FN 裁决层）──
             # 1) 低置信 + 无任何建议（残留/字形）：大概率普通照片，静默排除
             #    （保留原规则，字形证据可救援）
-            if confidence == "low" and bounds_result["residual_top_frac"] <= 0 and glyph_top_frac <= 0:
+            if (
+                confidence == "low"
+                and bounds_result["residual_top_frac"] <= 0
+                and glyph_top_frac <= 0
+                and residual_bottom <= 0
+            ):
                 continue
             # 2) 完整截图先验：ratio ≥ 1.8 的竖图极大概率是完整手机截图
             #    （真实库验证：明显状态栏素材全部 ratio≈2.16，误报样本全部
@@ -230,6 +236,7 @@ async def scan_candidates(
                     or bounds_result["bottom_frac"] > 0
                     or glyph_top_frac > 0
                     or bounds_result["residual_top_frac"] > 0
+                    or residual_bottom > 0
                     or (
                         confidence != "low"
                         and bounds_result["already_cropped"]
@@ -279,8 +286,23 @@ async def scan_candidates(
             item["crop_bottom"] = bounds_result["bottom_frac"]
             item["boundary_kind"] = bounds_result["kind"]
             glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
+            residual_bottom = bounds_result.get("residual_bottom_frac", 0)
             suggestion = max(bounds_result["residual_top_frac"], glyph_top_frac)
-            if bounds_result["top_frac"] == 0 and suggestion > 0:
+            if (
+                bounds_result["top_frac"] == 0
+                and suggestion == 0
+                and residual_bottom > 0
+            ):
+                # 仅底部残留（半透明播放器条/进度条叠加，顶部干净）：建议裁底部
+                item["auto_ok"] = False
+                item["crop_bottom"] = residual_bottom
+                # already_cropped 先验下的均匀暗带建议可信度高，默认勾选
+                item["auto_checked"] = True
+                item["note"] = (
+                    f"疑似底部导航条/进度条残留（建议裁剪 {residual_bottom:.1%}），"
+                    "已默认勾选，请预览确认"
+                )
+            elif bounds_result["top_frac"] == 0 and suggestion > 0:
                 # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
                 # 典型特征，或实底状态栏残留）：不自动判定可裁剪（防误裁
                 # 普通照片），标注建议比例。
@@ -451,7 +473,10 @@ async def apply_crops(
                     raise ValueError("未检测到内容区边界")
                 t_frac = bounds["top_frac"]
                 b_frac = bounds["bottom_frac"]
-                if t_frac == 0 and (
+                if b_frac == 0 and t_frac == 0 and bounds.get("residual_bottom_frac", 0) > 0:
+                    # 用户已勾选 = 确认底部残留：按建议比例裁剪底部
+                    b_frac = bounds["residual_bottom_frac"]
+                elif t_frac == 0 and (
                     bounds["residual_top_frac"] > 0
                     or bounds.get("glyph_top_frac", 0) > 0
                 ):

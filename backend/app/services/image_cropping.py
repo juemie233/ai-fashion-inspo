@@ -569,6 +569,7 @@ def detect_content_bounds(path) -> dict:
     """
     with Image.open(path) as im:
         img = ImageOps.exif_transpose(im).convert("RGB")
+        src_w, src_h = img.size
         small = img.resize(
             (_CONTENT_ANALYZE_W, max(16, img.height * _CONTENT_ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
@@ -581,6 +582,17 @@ def detect_content_bounds(path) -> dict:
             0.0 if result["top_frac"] > 0 else (glyph["top_frac"] if glyph["found"] else 0.0)
         )
         result["glyph_strong"] = glyph["strong"]
+        # strong 放宽（与 combined 同口径）：已确证截图（already_cropped）+
+        # 字形存在 + 完整截图比例先验（≥1.5）→ 视为强证据。透明状态栏的字形
+        # 常因 JPEG 压缩粘连而不满足严格时间签名，但 already+ratio 先验下
+        # 误报风险可控（历史 FP 全部 ratio<1.5）
+        if (
+            not result["glyph_strong"]
+            and result["already_cropped"]
+            and result["glyph_top_frac"] > 0
+            and src_h >= 1.5 * src_w
+        ):
+            result["glyph_strong"] = True
         result["bounds_valid"] = True
         return result
 
@@ -685,6 +697,30 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
     # 由调用方按 already_cropped 标注、人工勾选确认兜底
     already_cropped = top_frac + bottom_frac < 0.01
 
+    # ── 底部残留估算（仅 already_cropped 时启用）──
+    # 已裁截图的底部播放器条/导航栏常是「半透明暗色叠加」（多样度极低且均
+    # 匀、亮度低于内容区），_ui_band_valid 的硬跃变判据对它失效（内容区贴
+    # 边行多样度本就低，跃变不足）。already_cropped 先验把「均匀暗带」的
+    # 解释空间收窄到残留叠加（照片暗部地面会给出实底带建议走 bottom_frac，
+    # 不会进入本分支），误报风险可控；建议不并入 bottom_frac，单独返回供
+    # 人工确认（与顶部 residual_top_frac 同语义）。
+    residual_bottom_frac = 0.0
+    if already_cropped and bottom_edge >= n - 1:
+        content_bright = float(
+            np.median(brightness[int(n * 0.3) : int(n * 0.7)])
+        )
+        # 从底部向上找「均匀暗带」：多样度中位 <0.06 且行间 std <0.02
+        y = n - 1
+        while y >= 0 and diversity[y] < 0.06:
+            y -= 1
+        band_len = n - 1 - y  # 暗带长度（不含首个内容行）
+        if (
+            2 <= band_len <= int(n * 0.15)
+            and float(np.std(diversity[y + 1 :])) < 0.02
+            and float(np.median(brightness[y + 1 :])) < content_bright * 0.92
+        ):
+            residual_bottom_frac = round(band_len / n, 6)
+
     # 灰带判定：边界外侧低饱和 + 亮度平坦（边界被校验回退到 0 / n-1 时
     # 视为无该侧地带，不参与灰带判定，避免空区间误判为灰带）
     top_gray_ok = False
@@ -718,6 +754,7 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
         "kind": kind,
         "already_cropped": already_cropped,
         "residual_top_frac": residual_top_frac,
+        "residual_bottom_frac": residual_bottom_frac,
     }
 
 
@@ -997,6 +1034,7 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
     """
     with Image.open(path) as im:
         img = ImageOps.exif_transpose(im).convert("RGB")
+        src_w, src_h = img.size
         small64 = img.resize(
             (_ANALYZE_W, max(16, img.height * _ANALYZE_W // img.width)),
             Image.Resampling.LANCZOS,
@@ -1041,4 +1079,14 @@ def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
         # 由行剖面精确定位，比字形底部锚点更准
         bounds["glyph_top_frac"] = 0.0 if bounds["top_frac"] > 0 else glyph_top
         bounds["glyph_strong"] = glyph["strong"]
+        # strong 放宽：已确证截图 + 字形存在 + 完整截图比例先验（≥1.5）。
+        # 透明状态栏字形常因 JPEG 压缩粘连而不满足严格时间签名
+        # （13 张真实漏检样本中 10 张因此漏勾）；历史 FP 全部 ratio<1.5
+        if (
+            not bounds["glyph_strong"]
+            and bounds["already_cropped"]
+            and bounds["glyph_top_frac"] > 0
+            and src_h >= 1.5 * src_w
+        ):
+            bounds["glyph_strong"] = True
     return features, bounds
