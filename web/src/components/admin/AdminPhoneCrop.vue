@@ -23,6 +23,8 @@ function errorDetail(e: unknown): string {
 
 /** 裁剪模式：auto 黑边自动检测（小红书截图）/ ratio 固定比例 / content 内容边界检测（抖音截图） */
 const mode = ref<'auto' | 'ratio' | 'content'>('auto')
+/** AI 复核（较慢）：VLM 逐候选判断顶部状态栏/底部进度条，阳性置顶+标注，勾选权仍在用户 */
+const vlmReview = ref(true)
 /** 顶部/底部裁剪比例（百分比，仅 ratio 模式生效） */
 const cropTop = ref(3)
 const cropBottom = ref(5)
@@ -30,7 +32,7 @@ const cropBottom = ref(5)
 const limit = ref(200)
 
 /** a-form 表单模型（Arco 表单要求绑定 model；本面板无校验规则，仅提供上下文） */
-const formModel = reactive({ mode, cropTop, cropBottom, limit })
+const formModel = reactive({ mode, cropTop, cropBottom, limit, vlmReview })
 
 const scanning = ref(false)
 const cropping = ref(false)
@@ -38,12 +40,15 @@ const cropping = ref(false)
 const nextCursor = ref<string | null>(null)
 /** 本次会话累计扫描的素材数（多次续扫累加） */
 const scannedCount = ref(0)
+/** 最近一次扫描的 AI 复核命中数（阳性候选已置顶展示） */
+const vlmHits = ref(0)
 
 // 扫描参数变化时已有断点作废（游标与参数无关，继续扫描会混用新旧参数），
 // 重置断点与累计计数，下次扫描从头开始
-watch([mode, cropTop, cropBottom, limit], () => {
+watch([mode, cropTop, cropBottom, limit, vlmReview], () => {
   nextCursor.value = null
   scannedCount.value = 0
+  vlmHits.value = 0
 })
 
 /** 扫描候选 */
@@ -63,6 +68,8 @@ interface CropCandidate {
   /** 后端勾选决策：字形证据（左右两角齐备）的残留候选默认勾选，无字形证据的不勾。
    * 旧响应无此字段时回退到「带建议比例即勾选」的兼容推断 */
   auto_checked?: boolean | null
+  /** AI 复核阳性：VLM 判断顶部状态栏/底部进度条存在（勾选权仍在用户，仅置顶+标注） */
+  vlm_residue?: boolean
   created_at: string | null
 }
 
@@ -302,6 +309,10 @@ interface ScanResponse {
   scanned: number
   next_cursor: string | null
   truncated: boolean
+  /** 本次扫描是否执行了 AI 复核（vlm_review 开启且有候选） */
+  vlm_reviewed?: boolean
+  /** AI 复核检出系统 UI 残留的候选数（已置顶展示） */
+  vlm_hits?: number
 }
 
 async function handleScan() {
@@ -318,11 +329,16 @@ async function handleScan() {
         limit: limit.value,
         cursor: nextCursor.value ?? undefined,
         time_budget: 60,
+        vlm_review: vlmReview.value,
       },
       { timeout: 120000 },
     )
     nextCursor.value = data.truncated ? data.next_cursor : null
     scannedCount.value += data.scanned
+    vlmHits.value = data.vlm_hits ?? 0
+    if (vlmHits.value > 0) {
+      Message.info(`AI 复核检出 ${vlmHits.value} 张候选存在系统 UI 残留，已置顶展示`)
+    }
     if (isContinuation) {
       // 续扫：追加合并新批次（后端按稳定顺序分批，新批次是尚未扫描的剩余素材）
       const known = new Set(candidates.value.map((c) => c.id))
@@ -436,9 +452,10 @@ function cropLabel(c: CropCandidate): string {
       检出双侧黑边才默认勾选（单侧「黑边」多为抖音截图的播放器条或照片暗部，保留候选但不勾选，
       建议改用内容边界检测处理）；<b>「内容边界检测（抖音截图）」</b>——抖音全屏截图， 顶部透明状态栏
       + 底部播放器条，按状态栏字形证据默认勾选，无 UI 证据的普通竖屏照片静默排除。
-      「固定比例」按设定比例裁剪，不区分平台。 原图自动备份到
-      <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填；
-      标签/收藏等信息不动。候选按上传时间倒序排列，点击缩略图可查看大图（预览中可复制素材 ID）。
+      「固定比例」按设定比例裁剪，不区分平台。原图自动备份到
+      <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填； 标签/收藏等信息不动。开启「AI
+      复核」时，VLM 逐候选判断顶部状态栏/底部进度条， 检出的候选置顶并标注（不代替人工勾选）。AI
+      复核命中候选优先， 其余候选按上传时间倒序排列。点击缩略图可查看大图（预览中可复制素材 ID）。
     </p>
 
     <a-form
@@ -478,6 +495,13 @@ function cropLabel(c: CropCandidate): string {
         <span style="margin-left: 8px; font-size: 12px; color: #999">单次最多扫描的候选数</span>
       </a-form-item>
 
+      <a-form-item label="AI 复核">
+        <a-switch v-model="vlmReview" />
+        <span style="margin-left: 8px; font-size: 12px; color: #999">
+          VLM 逐候选判断顶部状态栏/底部进度条，阳性置顶并标注（较慢，约 1.3 秒/张）
+        </span>
+      </a-form-item>
+
       <a-form-item label=" ">
         <a-button type="primary" :loading="scanning" @click="handleScan">
           {{ scanning ? '扫描中...' : nextCursor ? '继续扫描剩余素材' : '扫描候选' }}
@@ -512,6 +536,9 @@ function cropLabel(c: CropCandidate): string {
             已勾选 <b>{{ checkedCount }}</b> / {{ candidates.length }} 张（共扫描
             {{ scannedTotal }} 张候选）
           </span>
+          <a-tag v-if="vlmHits > 0" size="small" color="green" :bordered="false">
+            AI 复核命中 {{ vlmHits }} 张（已置顶）
+          </a-tag>
           <a-button
             size="small"
             type="primary"
@@ -557,6 +584,15 @@ function cropLabel(c: CropCandidate): string {
                 style="margin-left: 4px"
               >
                 {{ CONFIDENCE_LABELS[c.confidence]?.text || c.confidence }}
+              </a-tag>
+              <a-tag
+                v-if="c.vlm_residue"
+                size="small"
+                color="green"
+                :bordered="false"
+                style="margin-left: 4px"
+              >
+                AI 复核：检出 UI 残留
               </a-tag>
             </span>
             <a-tag v-if="!c.auto_ok" size="small" color="red" :bordered="false">{{ c.note }}</a-tag>

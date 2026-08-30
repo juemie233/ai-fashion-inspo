@@ -20,6 +20,8 @@
 """
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
@@ -29,7 +31,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from fastapi import HTTPException
+from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,6 +108,94 @@ def _resolve_storage_path(rel_path: str | None) -> Path | None:
     return full
 
 
+_VLM_STRIP_PROMPT_TOP = (
+    "这是某张图片顶部区域的裁条。请判断：这个条带里是否能看到手机状态栏的图标"
+    "（时间数字、信号格、电量电池、运营商文字等系统 UI 元素）？"
+    "注意：照片内容里的文字（招牌、衣服上的字）不算。"
+    '只回答 JSON：{"bar": true} 或 {"bar": false}'
+)
+_VLM_STRIP_PROMPT_BOTTOM = (
+    "这是某张手机截图底部区域的裁条。请判断：这个条带里是否有视频播放器的进度条"
+    "（横贯画面的细亮线，通常白色或半透明）？"
+    "注意：地砖缝、桌面边缘、照片内容里的横线不算。"
+    '只回答 JSON：{"bar": true} 或 {"bar": false}'
+)
+
+_vlm_client: httpx.AsyncClient | None = None
+
+
+def _parse_bar_answer(text: str) -> bool:
+    """解析 VLM 条带回答：优先 JSON，回退宽松子串匹配（兼容输出格式漂移）。
+
+    模型可能返回纯 JSON、带 markdown 围栏（```json ... ```）或带空格变体
+    （{ "bar" : true }），统一先尝试 JSON 解析；失败再按子串兜底。
+    """
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:].strip()
+    try:
+        return bool(json.loads(t).get("bar"))
+    except (ValueError, AttributeError):
+        return '"bar": true' in t.lower()
+
+
+async def _vlm_strip_check(image_bytes_func, top: bool) -> bool:
+    """VLM 单条带判断（顶部状态栏 / 底部进度条）。失败静默返回 False。"""
+    global _vlm_client
+    try:
+        if _vlm_client is None:
+            _vlm_client = httpx.AsyncClient(timeout=30)
+        payload = image_bytes_func()
+        b64 = base64.b64encode(payload).decode()
+        prompt = _VLM_STRIP_PROMPT_TOP if top else _VLM_STRIP_PROMPT_BOTTOM
+        resp = await _vlm_client.post(
+            f"{settings.ollama_base_url}/api/chat",
+            json={
+                "model": settings.ollama_vision_model,
+                "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 32, "num_ctx": 2048},
+            },
+        )
+        text = (resp.json().get("message") or {}).get("content", "")
+        return _parse_bar_answer(text)
+    except Exception as e:
+        logger.debug(f"VLM 条带复核失败（忽略）: {e}")
+        return False
+
+
+def _strip_jpeg_bytes(full: Path, top: bool, quality: int = 88) -> bytes:
+    """裁出顶部 12% / 底部 15% 条带并编码 JPEG（条带放大到 768 宽提升图标可见性）。"""
+    with Image.open(full) as im:
+        img = ImageOps.exif_transpose(im.convert("RGB"))
+        W, H = img.size
+        if top:
+            strip = img.crop((0, 0, W, int(H * 0.12)))
+            strip = strip.resize((768, max(24, strip.height * 768 // W)), Image.Resampling.LANCZOS)
+        else:
+            strip = img.crop((0, int(H * 0.85), W, H))
+            strip = strip.resize((768, max(24, strip.height * 768 // W)), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        strip.save(buf, "JPEG", quality=quality)
+        return buf.getvalue()
+
+
+async def _vlm_residue_review(full: Path) -> bool:
+    """VLM 双条带残留复核：顶部状态栏 OR 底部进度条任一命中即 True。
+
+    实验口径（33 张用户标注样本）：顶部条带特异性 19/20，底部条带对底部
+    细进度线命中 12/13。Ollama 不可用时全部返回 False（退回纯算法口径）。
+    """
+    top_hit, bottom_hit = await asyncio.gather(
+        _vlm_strip_check(lambda: _strip_jpeg_bytes(full, top=True), top=True),
+        _vlm_strip_check(lambda: _strip_jpeg_bytes(full, top=False), top=False),
+    )
+    return top_hit or bottom_hit
+
+
 async def scan_candidates(
     db: AsyncSession,
     mode: str = "auto",
@@ -112,6 +204,7 @@ async def scan_candidates(
     limit: int = 200,
     cursor: str | None = None,
     time_budget: float = 60.0,
+    vlm_review: bool = False,
 ) -> dict:
     """扫描手动上传素材中的手机全屏截图候选（只读，不执行任何裁剪）。
 
@@ -346,14 +439,44 @@ async def scan_candidates(
             truncated = True
             break
 
-    # 按上传时间倒序（最新批次在前，便于定位特定时间段导入的图）
-    candidates.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+    # ── VLM 双条带复核（可选）：对入围候选逐张判断顶部状态栏/底部进度条。
+    #    结果不强制勾选（细线残留与构图线条的边界需人工裁决），而是标注到
+    #    note 并将「AI 复核阳性」候选排到列表最前——真残留浮上来，人工勾选
+    #    只需从顶部往下核对。Ollama 不可用时静默跳过（约 1.3s/张 × 候选数）。
+    vlm_hit = 0
+    if vlm_review and candidates:
+        for c in candidates:
+            full = _resolve_storage_path(c["file_path"])
+            if full is None or not full.exists():
+                continue
+            try:
+                if await _vlm_residue_review(full):
+                    vlm_hit += 1
+                    c["vlm_residue"] = True
+                    suffix = "AI 复核：检出系统 UI 残留"
+                    c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
+                # 时间预算对 VLM 阶段同样生效，超时中断复核（已复核的保留结果）
+                if time.monotonic() > deadline:
+                    logger.info(f"VLM 复核已达时间预算，中断（候选 {len(candidates)}，已复核部分）")
+                    break
+            except Exception as e:
+                logger.debug(f"VLM 复核跳过 {c['id']}: {e}")
+        if vlm_hit:
+            logger.info(f"VLM 残留复核: {vlm_hit}/{len(candidates)} 候选检出系统 UI 残留")
+
+    # 排序：VLM 复核阳性 > 其余候选；同组内按上传时间倒序
+    candidates.sort(
+        key=lambda c: (bool(c.get("vlm_residue")), c.get("created_at") or ""),
+        reverse=True,
+    )
     return {
         "total": len(candidates),
         "items": candidates,
         "scanned": scanned,
         "next_cursor": str(last_insp_id) if truncated and last_insp_id is not None else None,
         "truncated": truncated,
+        "vlm_reviewed": bool(vlm_review and candidates),
+        "vlm_hits": vlm_hit,
     }
 
 

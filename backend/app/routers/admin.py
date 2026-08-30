@@ -696,6 +696,7 @@ class PhoneCropRequest(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000, description="单次最多返回候选数")
     cursor: str | None = Field(default=None, description="分页游标（上一批返回的 next_cursor，继续扫描剩余素材）")
     time_budget: float = Field(default=60.0, ge=5, le=300, description="单次扫描时间预算（秒），预算耗尽返回已找到候选")
+    vlm_review: bool = Field(default=True, description="AI 复核（较慢，约 1.3s/候选）：VLM 判断顶部状态栏/底部进度条，阳性候选置顶并标注")
 
 
 class PhoneCropApplyRequest(BaseModel):
@@ -724,6 +725,7 @@ async def crop_phone_screenshots_scan(
             limit=payload.limit,
             cursor=payload.cursor,
             time_budget=payload.time_budget,
+            vlm_review=payload.vlm_review,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

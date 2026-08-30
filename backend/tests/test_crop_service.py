@@ -1111,3 +1111,105 @@ def test_scan_content_mode_keeps_ui_feature_cropped(client):
     item = body["items"][0]
     assert item["confidence"] in ("high", "medium")  # 状态栏+播放器条特征明确
     assert item["boundary_kind"] is not None
+
+
+# ═══════════ VLM 双条带 AI 复核（2026-08 新增可选通道）═══════════════════════
+
+
+def test_scan_vlm_review_marks_and_prioritizes(client, monkeypatch):
+    """AI 复核（可选）：VLM 判定的残留候选标注 vlm_residue 并置顶，响应返回命中计数。
+
+    复核只置顶+标注，不代替人工勾选（勾选决策仍在后端 auto_checked 口径）。
+    上传两张不同背景色截图（避免内容去重 409）制造两个候选。
+    """
+    data, ctype = _make_vertical_screenshot()
+    data2, ctype2 = _make_vertical_screenshot(bg=(200, 200, 240))
+    _upload_screenshot(client, data, ctype)
+    _upload_screenshot(client, data2, ctype2)
+
+    calls = {"n": 0}
+
+    async def _fake_review(full):
+        calls["n"] += 1
+        return calls["n"] == 1  # 仅第一个复核的候选命中
+
+    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    r = _scan(client, mode="auto", vlm_review=True)
+
+    assert r["vlm_reviewed"] is True
+    assert r["vlm_hits"] == 1
+    assert calls["n"] == 2  # 两个候选都走了复核
+    items = r["items"]
+    assert len(items) == 2
+    # 命中候选置顶（列表第一），且 note 追加了 AI 复核标注
+    assert items[0].get("vlm_residue") is True
+    assert "AI 复核" in (items[0]["note"] or "")
+    assert all(not c.get("vlm_residue") for c in items[1:])
+
+
+def test_scan_vlm_review_can_be_disabled(client, monkeypatch):
+    """关闭 AI 复核（vlm_review=false）：不调用 VLM，响应 vlm_reviewed=False、vlm_hits=0。"""
+    data, ctype = _make_vertical_screenshot()
+    _upload_screenshot(client, data, ctype)
+
+    calls = {"n": 0}
+
+    async def _fake_review(full):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    r = _scan(client, mode="auto", vlm_review=False)
+
+    assert r["vlm_reviewed"] is False
+    assert r["vlm_hits"] == 0
+    assert calls["n"] == 0
+    assert all(not c.get("vlm_residue") for c in r["items"])
+
+
+def test_scan_vlm_review_silent_on_failure(client, monkeypatch):
+    """VLM 复核异常（Ollama 不可用等）静默跳过：扫描结果不受影响，命中数归零。"""
+    data, ctype = _make_vertical_screenshot()
+    _upload_screenshot(client, data, ctype)
+
+    async def _boom(full):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _boom)
+    r = _scan(client, mode="auto", vlm_review=True)
+
+    assert r["vlm_reviewed"] is True  # 已请求复核（尝试过）
+    assert r["vlm_hits"] == 0
+    assert len(r["items"]) == 1  # 候选本身不受影响
+    assert all(not c.get("vlm_residue") for c in r["items"])
+
+
+def test_strip_jpeg_bytes_slices_top_and_bottom(tmp_path):
+    """条带裁切（VLM 复核输入）：顶部 12% / 底部 15%，放大到 768 宽。"""
+    from app.services.crop_service import _strip_jpeg_bytes
+
+    p = tmp_path / "strip.jpg"
+    Image.new("RGB", (200, 400), (128, 128, 128)).save(p)
+
+    top = _strip_jpeg_bytes(p, top=True)  # 顶部 12% = 48px
+    bottom = _strip_jpeg_bytes(p, top=False)  # 底部 15% = 60px
+    for raw in (top, bottom):
+        assert len(raw) > 0
+    with Image.open(BytesIO(top)) as im:
+        assert im.size[0] == 768
+        assert im.size[1] == 48 * 768 // 200
+    with Image.open(BytesIO(bottom)) as im:
+        assert im.size[0] == 768
+        assert im.size[1] == 60 * 768 // 200
+
+
+def test_parse_bar_answer_variants():
+    """VLM 条带回答解析：JSON 优先，兼容 markdown 围栏与空格变体，垃圾输入回退子串。"""
+    from app.services.crop_service import _parse_bar_answer
+
+    assert _parse_bar_answer('{"bar": true}') is True
+    assert _parse_bar_answer('{"bar": false}') is False
+    assert _parse_bar_answer('```json\n{"bar": true}\n```') is True
+    assert _parse_bar_answer('{ "bar" : true }') is True
+    assert _parse_bar_answer("BAR TRUE") is False  # 无引号/冒号结构，不误判
+    assert _parse_bar_answer("") is False
