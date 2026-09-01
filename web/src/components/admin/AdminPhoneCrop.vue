@@ -688,7 +688,9 @@ function cropLabel(c: CropCandidate): string {
             @click="
               () => {
                 previewOpen = false
-                router.push({ path: '/detail/' + previewId })
+                // 新开浏览器标签页查看素材详情，不离开剪裁页（保留当前扫描/勾选状态）
+                const { href } = router.resolve({ path: '/detail/' + previewId })
+                window.open(href, '_blank', 'noopener,noreferrer')
               }
             "
           >
