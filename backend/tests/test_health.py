@@ -1,5 +1,20 @@
 """健康检查与 schema 版本握手。"""
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_frontend_probe(monkeypatch):
+    """健康检查探测前端 dev server（127.0.0.1:17777）——测试环境前端未运行，
+    Windows 下连接未监听端口常不立即拒绝而是等到 2s 超时，无谓拖慢用例。
+    测试只校验返回结构（frontend/worker 键存在），把探测替换为即时 down。"""
+    async def _fake_probe():
+        return {"status": "down", "latency_ms": None, "detail": "测试环境不探测前端"}
+
+    import app.services.health_service as hs
+
+    monkeypatch.setattr(hs, "_probe_frontend", _fake_probe)
+
 
 def test_health(client):
     r = client.get("/api/health")

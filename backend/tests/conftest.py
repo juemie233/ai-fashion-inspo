@@ -91,6 +91,35 @@ def client():
         yield c
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _mock_clip_image_encoding():
+    """全局 mock CLIP 图像向量编码，避免测试真实加载 600MB 模型（约 8s/会话）。
+
+    背景：测试环境装有 sentence-transformers/torch 且 clip-ViT-B-32 权重已
+    下载，首个触发图像向量的用例会真实加载模型（import torch + 读权重 +
+    CUDA 初始化约 6~8 秒），进程内只加载一次但全部计入该用例。测试关注的是
+    向量链路（登记/落库/回填/搜索）而非 CLIP 编码本身，故 patch
+    ``embedding._encode_image_sync``——它是所有图像向量路径（单条重建、
+    回填、以图搜图）经 ``asyncio.to_thread`` 调用的唯一同步入口，patch 后
+    返回正确维度（lancedb_image_dim）的确定性假向量，跳过模型加载。
+
+    需要真实 CLIP 的用例（如 test_clip_load_retries 直接测 _load_clip_model，
+    不经过本函数）不受影响；确需真实编码的用例可在自身 monkeypatch 中还原。
+    """
+    from app.config import settings
+    from app.services.vector import embedding as emb_module
+
+    original = emb_module._encode_image_sync
+
+    def _fake_encode(file_path=None, image_bytes=None):  # noqa: ANN001
+        # 与 LanceDB 图像表 schema 同维度，batch/upsert 维度校验通过
+        return [0.2] * settings.lancedb_image_dim
+
+    emb_module._encode_image_sync = _fake_encode
+    yield
+    emb_module._encode_image_sync = original
+
+
 @pytest.fixture(autouse=True)
 def clean_state(client):
     """每个测试前清空数据库表与存储目录，保证用例相互隔离。
