@@ -245,6 +245,15 @@ async function copyId(id: string) {
   }
 }
 
+/** 新开浏览器标签页查看素材详情（不离开剪裁页，保留扫描/勾选状态） */
+function openPreviewDetail() {
+  const id = previewId.value
+  if (!id) return
+  previewOpen.value = false
+  const { href } = router.resolve({ path: '/detail/' + id })
+  window.open(href, '_blank', 'noopener,noreferrer')
+}
+
 /** 大图预览：URL + 关联素材 ID（展示于弹窗，供用户反馈问题时复制） */
 const previewUrl = ref('')
 const previewId = ref('')
@@ -682,20 +691,7 @@ function cropLabel(c: CropCandidate): string {
         >
           <span style="font-family: monospace">{{ previewId }}</span>
           <a-button size="mini" type="outline" @click="copyId(previewId)">复制 ID</a-button>
-          <a-button
-            size="mini"
-            type="text"
-            @click="
-              () => {
-                previewOpen = false
-                // 新开浏览器标签页查看素材详情，不离开剪裁页（保留当前扫描/勾选状态）
-                const { href } = router.resolve({ path: '/detail/' + previewId })
-                window.open(href, '_blank', 'noopener,noreferrer')
-              }
-            "
-          >
-            查看素材详情
-          </a-button>
+          <a-button size="mini" type="text" @click="openPreviewDetail"> 查看素材详情 </a-button>
         </div>
         <img v-if="previewUrl" :src="previewUrl" alt="预览" style="width: 100%; display: block" />
       </div>
