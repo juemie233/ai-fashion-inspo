@@ -113,7 +113,7 @@ def _crop_face(image_bytes: bytes, bbox: list) -> bytes:
         )
         if box[2] - box[0] < 1 or box[3] - box[1] < 1:
             raise ValueError(f"人脸检测框无效: {bbox}")
-        face = img.crop(box).resize((FACE_THUMB_SIZE, FACE_THUMB_SIZE), Image.LANCZOS)
+        face = img.crop(box).resize((FACE_THUMB_SIZE, FACE_THUMB_SIZE), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         face.convert("RGB").save(buf, format="JPEG", quality=FACE_THUMB_QUALITY)
         return buf.getvalue()

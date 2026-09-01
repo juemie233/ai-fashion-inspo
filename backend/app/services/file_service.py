@@ -158,7 +158,7 @@ def _generate_image_thumbnail_sync(
 
         thumbs_dir = _ensure_date_dir(thumbs_dir or settings.thumbnails_dir)
         img = Image.open(image_path)
-        img.thumbnail(settings.thumbnail_size, Image.LANCZOS)
+        img.thumbnail(settings.thumbnail_size, Image.Resampling.LANCZOS)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         thumb_filename = f"thumb_{image_path.stem}.jpg"

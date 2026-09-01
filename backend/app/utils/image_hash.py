@@ -37,7 +37,10 @@ def perceptual_hash(path: Path, hash_size: int = 16) -> str | None:
             bits = 0
             # R/G/B 三通道分别计算 dHash 并拼接，保留颜色维度
             for band in small.split():
-                pixels = list(band.getdata())
+                # get_flattened_data：Pillow 11.3+ 新接口，getdata 将于 Pillow 14
+                # 移除；旧版本回退 getdata（返回逐像素扁平序列，用法一致）
+                data = band.get_flattened_data() if hasattr(band, "get_flattened_data") else band.getdata()
+                pixels = list(data)
                 for y in range(hash_size):
                     row_start = y * (hash_size + 1)
                     for x in range(hash_size):

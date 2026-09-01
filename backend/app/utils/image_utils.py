@@ -12,14 +12,21 @@ def extract_dominant_colors(image_path: Path, n_colors: int = 3) -> list[str]:
         img = Image.open(image_path)
         img = img.convert("RGB")
         # 缩小尺寸以提升性能
-        img = img.resize((150, 150), Image.LANCZOS)
+        img = img.resize((150, 150), Image.Resampling.LANCZOS)
 
         # 量化以减少颜色数量
         img_quantized = img.quantize(colors=16, method=Image.Quantize.MEDIANCUT)
         img_quantized = img_quantized.convert("RGB")
 
         # 统计每种颜色的像素数
-        pixels = list(img_quantized.getdata())
+        # get_flattened_data：Pillow 11.3+ 新接口，getdata 将于 Pillow 14 移除；
+        # 旧版本回退 getdata（均返回逐像素 (r,g,b) 扁平序列，Counter 用法一致）
+        data = (
+            img_quantized.get_flattened_data()
+            if hasattr(img_quantized, "get_flattened_data")
+            else img_quantized.getdata()
+        )
+        pixels = list(data)
         color_counts = Counter(pixels)
 
         # 取前 N 个颜色，转换为 hex

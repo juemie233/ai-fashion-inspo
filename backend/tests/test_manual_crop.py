@@ -275,8 +275,11 @@ def test_crop_uses_exif_oriented_height(client):
     with Image.open(full) as im:
         assert im.size == (300, 300)
         # 校正后上半区域（原图左半）为红色：红像素占比应接近 100%
+        # get_flattened_data：Pillow 11.3+ 新接口（getdata 将于 Pillow 14 移除）
+        rgb = im.convert("RGB")
+        data = rgb.get_flattened_data() if hasattr(rgb, "get_flattened_data") else rgb.getdata()
         red = blue = 0
-        for r_, g, b in im.convert("RGB").getdata():
+        for r_, g, b in data:
             if r_ > 150 and g < 100 and b < 100:
                 red += 1
             elif b > 150 and r_ < 100 and g < 100:

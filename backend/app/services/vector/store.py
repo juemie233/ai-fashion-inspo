@@ -671,8 +671,8 @@ async def compact_vectors() -> dict[str, bool]:
 
     背景：每次单条 upsert 都会生成新的 manifest + 数据文件，文本向量全量
     重建这类「逐条写 N 条」的操作会让目录膨胀到数千个小文件，拖慢备份与
-    目录遍历。optimize 合并数据文件，cleanup_old_versions 删除旧版本文件。
-    写入方无需感知；本函数内部加写锁。
+    目录遍历。optimize(cleanup_older_than=0) 合并数据文件并清理被取代的
+    旧版本文件。写入方无需感知；本函数内部加写锁。
 
     锁的位置（死锁规避）：写锁必须在 **to_thread 的工作线程内**获取，不能
     在事件循环线程持锁后 await to_thread——工作线程内 _table_for_write 自愈
@@ -693,19 +693,19 @@ async def compact_vectors() -> dict[str, bool]:
             for kind in ("text", "image"):
                 try:
                     table = _table_for_write(kind)
-                    table.optimize()
+                    # optimize 合并碎片文件，cleanup_older_than=0 强制清理所有
+                    # 被取代的旧版本文件（仅保留当前版本）——LanceDB 0.21+ 起
+                    # 该参数并入 optimize，独立的 cleanup_old_versions 已弃用。
+                    # 旧版本清理依赖 pylance（数据合并本身不需要）：缺失时回退
+                    # 仅合并、不清理（不影响正确性，只保留旧版本文件）。
                     try:
-                        # older_than=0：强制清理所有被取代的旧版本文件（仅保留当前版本）。
-                        # 需要 pylance 依赖（pip install pylance），缺失时仅告警跳过——
-                        # 不影响备份正确性（备份走写入锁内一致性快照）
-                        table.cleanup_old_versions(older_than=timedelta(0))
+                        table.optimize(cleanup_older_than=timedelta(0))
                     except ImportError:
                         logger.warning(
                             f"清理旧版本跳过 ({kind})：缺少 pylance 依赖，"
                             "请执行 pip install pylance 后重试"
                         )
-                    except Exception as e:
-                        logger.debug(f"清理旧版本跳过 ({kind}): {e}")
+                        table.optimize()
                     stats[kind] = True
                 except Exception as e:
                     logger.warning(f"向量表压缩失败 ({kind}): {e}")
