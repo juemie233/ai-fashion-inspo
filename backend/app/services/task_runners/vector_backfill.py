@@ -241,6 +241,33 @@ async def purge_small_backfill_tasks(db: AsyncSession) -> int:
 _LANCE_FLUSH_SIZE = 200
 
 
+async def _recover_failed_ids(db: AsyncSession, inspiration_ids: list[str]) -> None:
+    """失败任务收尾：把任务涉及的素材重新登记回待回填队列。
+
+    背景：flush 创建任务时会清空待回填表；若任务随后**永久失败**（如 CLIP
+    不可用 / Ollama 不可用 / 落库验证失败），这些素材的登记已被清除，既不
+    自动重试也不存在于任何队列，只有手动「一键向量化」才能找回——用户视角
+    就是「上传新素材后向量几乎全部缺失」。
+
+    这里在抛任务级异常前把素材重新登记（幂等，不触发攒批 flush——否则
+    「失败 → 重建任务 → 再失败」会在 worker 内无限循环），能力恢复后由
+    下一次 flush（手动触发 / worker 启动 / 攒批达阈值）自动重试，素材永不丢失。
+    """
+    existing_ids = await _filter_existing_ids(db, inspiration_ids)
+    if not existing_ids:
+        return
+    stmt = sqlite_insert(PendingVectorBackfill).values(
+        [{"inspiration_id": iid} for iid in existing_ids]
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["inspiration_id"])
+    await db.execute(stmt)
+    await db.commit()
+    logger.warning(
+        "向量回填任务失败，已将 %d 个素材重新登记回待回填队列（下次 flush 自动重试）",
+        len(existing_ids),
+    )
+
+
 async def _build_material_vectors(insp: Inspiration) -> tuple[list[float] | None, list[float] | None]:
     """构造单个素材的 (文本向量, 图像向量)；测试通过 mock 本函数控制成败。
 
@@ -411,6 +438,8 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             if await vector_store.get_vector("text", iid) is None
         ]
         if missing_text:
+            # 失败前重新登记：防「任务失败 + 队列已清空」导致素材永久丢失
+            await _recover_failed_ids(db, inspiration_ids)
             raise PermanentTaskError(
                 f"向量落库验证失败：抽查 {len(text_sample)} 条文本向量中 "
                 f"{len(missing_text)} 条未持久化（疑似向量库目录被外部删除/"
@@ -424,6 +453,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             if await vector_store.get_vector("image", iid) is None
         ]
         if missing_image:
+            await _recover_failed_ids(db, inspiration_ids)
             raise PermanentTaskError(
                 f"向量落库验证失败：抽查 {len(image_sample)} 条图像向量中 "
                 f"{len(missing_image)} 条未持久化（疑似向量库目录被外部删除/"
@@ -452,6 +482,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
             f"（成功 {image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
             f"图片文件缺失或写入失败"
         )
+        await _recover_failed_ids(db, inspiration_ids)
         raise PermanentTaskError(detail)
 
     task.done = total

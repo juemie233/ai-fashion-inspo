@@ -25,6 +25,9 @@ for _sub in (
     "person_thumbnails",
 ):
     os.environ[f"{_sub.upper()}_DIR"] = f"{_TMP}/storage/{_sub}"
+# lancedb_dir 同为类字段默认值（storage_root/"lancedb"），必须显式覆盖，
+# 否则测试会读写/清空真实 backend/storage/lancedb（历史事故：向量「几乎全部缺失」）
+os.environ["LANCEDB_DIR"] = f"{_TMP}/storage/lancedb"
 os.environ.pop("API_KEY", None)  # 认证测试自行设置，默认开发模式跳过
 
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
@@ -115,6 +118,7 @@ def clean_state(client):
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
         settings.storage_root / "_crop_backup",  # 裁剪原图备份（按时间戳分目录）
         settings.storage_root / "_crop_dups",  # 裁剪重复对比预览（按批次分目录）
+        settings.lancedb_dir,  # 向量库（LanceDB 落盘目录，含 .text-formula-version 标记）
     ]:
         if dir_path.exists():
             # 递归清理子目录文件：素材按「年月」子目录落盘（images/2026-08/xxx.jpg），
@@ -122,6 +126,13 @@ def clean_state(client):
             for f in dir_path.rglob("*"):
                 if f.is_file():
                     f.unlink()
+
+    # 向量库连接缓存重置：LanceDB 连接/表对象持有目录与版本基线，目录被清空后
+    # 旧连接指向已删除的数据，必须丢弃缓存让下一次操作懒加载重新连接建空表，
+    # 否则本用例与后续用例共享同一连接的陈旧视图（向量写入/读取相互污染）
+    from app.services.vector import store as vector_store
+
+    vector_store.reset_connection()
     yield
 
 

@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -36,9 +37,17 @@ IMAGE_EMBEDDING_DIM = settings.lancedb_image_dim
 # CLIP 模型缓存与加载错误状态（模块级单例，避免重复加载）
 _image_model = None
 _image_model_error: str | None = None
+# 加载失败的时间戳：失败被缓存，但带时效——超过 _CLIP_RETRY_AFTER_SECONDS
+# 后允许重新尝试加载。否则一次临时性失败（如 CUDA 显存被其它进程占满、
+# 模型文件读取抖动）会让整个进程后续所有图像向量永久失败，批量回填任务
+# 整体被标记失败，用户视角即为「新素材向量几乎全部缺失」。
+_image_model_error_at: float | None = None
 # CLIP 模型懒加载锁：_encode_image_sync 在 asyncio.to_thread 线程池中调用，
 # 并发首屏可能重复加载（模型约 600MB），加锁 + 双重检查保证只初始化一次。
 _clip_model_lock = threading.Lock()
+# 加载失败后的重试间隔（秒）：模型加载是重操作（约 600MB），失败后不宜
+# 每次调用都重试；间隔过后才清除错误重新尝试，兼顾自愈与开销。
+_CLIP_RETRY_AFTER_SECONDS = 60
 
 # 文本向量缓存（进程内，按 query 文本缓存，避免相同文本重复调用 Ollama）。
 # generate_text_embedding 为 async 函数、仅事件循环内调用，无跨线程竞争。
@@ -182,24 +191,37 @@ def _load_clip_model() -> object | None:
     """懒加载 CLIP 模型（仅在调用图像向量时加载一次，线程安全）。
 
     返回:
-        模型对象；依赖缺失或加载失败时返回 None（并记录错误原因）
+        模型对象；依赖缺失或加载失败时返回 None（并记录错误原因）。
+        失败为「带时效缓存」：超过 _CLIP_RETRY_AFTER_SECONDS 后清除错误
+        重新尝试，临时性故障（CUDA 显存被占等）可自动恢复，而非永久降级。
     """
-    global _image_model, _image_model_error
+    global _image_model, _image_model_error, _image_model_error_at
     if _image_model is not None:
         return _image_model
     if _image_model_error is not None:
-        return None
+        if _image_model_error_at is None or time.monotonic() - _image_model_error_at < _CLIP_RETRY_AFTER_SECONDS:
+            return None
+        # 重试窗口已过：清除错误，本调用重新尝试加载
+        _image_model_error = None
+        _image_model_error_at = None
 
     with _clip_model_lock:
         # 双重检查：避免线程池并发首屏重复加载（CLIP 模型约 600MB）
         if _image_model is not None:
             return _image_model
-        if _image_model_error is not None:
+        if _image_model_error is not None and (
+            _image_model_error_at is None or time.monotonic() - _image_model_error_at < _CLIP_RETRY_AFTER_SECONDS
+        ):
             return None
+        if _image_model_error is not None:
+            # 另一线程刚清除但尚未成功：本次直接尝试（不提前返回）
+            _image_model_error = None
+            _image_model_error_at = None
 
         reason = _check_clip_dependency()
         if reason:
             _image_model_error = reason
+            _image_model_error_at = time.monotonic()
             logger.warning(reason)
             return None
 
@@ -223,6 +245,7 @@ def _load_clip_model() -> object | None:
                 f"图像向量不可用：CLIP 模型未下载或加载失败（本地无缓存）。"
                 f"请先离线放置或联网下载模型 {settings.clip_model_name}。({e})"
             )
+            _image_model_error_at = time.monotonic()
             logger.error(_image_model_error)
             return None
 

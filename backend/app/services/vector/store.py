@@ -16,6 +16,7 @@ import asyncio
 import logging
 import math
 import os
+import shutil
 import threading
 import uuid
 from contextlib import contextmanager
@@ -29,11 +30,14 @@ logger = logging.getLogger(__name__)
 # 连接缓存（模块级单例，懒加载）；加锁防止线程池并发首屏重复连接
 _db = None
 _db_lock = threading.Lock()
+# 线程写锁的可重入标记（threading.local 按线程隔离）：同线程嵌套获取写锁
+# 直接放行；跨线程/跨进程仍严格互斥（见 _vector_write_lock）
+_lock_held_by_thread = threading.local()
 
 
 @contextmanager
 def _vector_write_lock() -> Iterator[None]:
-    """跨进程向量写互斥：线程锁 + 文件锁双层。
+    """跨进程向量写互斥：线程锁 + 文件锁双层（同线程可重入）。
 
     背景：LanceDB 是嵌入式单目录存储，**多进程基于各自缓存的旧版本并发提交
     写操作会互相覆盖**（后提交者以旧版本为基线，丢弃先提交者的新数据）。
@@ -44,11 +48,47 @@ def _vector_write_lock() -> Iterator[None]:
     - 文件锁：跨进程互斥（Windows 用 msvcrt，POSIX 用 fcntl），锁文件位于
       ``storage/lancedb/.vector-write.lock``，API / worker / 脚本共用
     读操作（搜索/查询）不持锁，不受影响。
+
+    可重入：同一线程已持锁时（如损坏表自愈重建时复用已持有的锁）直接放行，
+    不再重复加锁——外层持锁期间文件锁保持有效，不产生并发窗口；跨线程 /
+    跨进程仍严格互斥（threading.local 按线程隔离）。
+
+    目录重置特例（Windows）：锁文件位于 lancedb 目录内，而该目录在数据重置
+    时会被整体 rmtree——Windows 不允许删除仍打开的文件句柄。因此上下文内
+    需要删除目录时（如 _reset_storage_sync），应先调用 ``release_for_dir_reset``
+    提前关闭锁文件句柄（文件锁随句柄关闭由 OS 释放；线程锁仍由重入标记保护，
+    本线程后续嵌套获取直接放行，跨线程/跨进程的线程锁本就已在本线程手中）。
     """
+    if getattr(_lock_held_by_thread, "held", False):
+        # 可重入：外层持锁期间直接放行。释放函数由外层持锁时挂到标记上，
+        # 内层（如 _reset_storage_sync）同样可用它关闭锁文件句柄。
+        yield
+        return
+
+    def _release_for_dir_reset() -> None:
+        """关闭当前线程持有的锁文件句柄（仅供持锁内 rmtree 目录前调用）。
+
+        Windows 下锁文件随目录一起删除，打开的句柄会让 rmtree 报
+        PermissionError；句柄关闭后文件锁由 OS 释放。线程锁无需释放——
+        本线程仍在持锁临界区内（重入标记保持 True），其它线程拿不到
+        _thread_write_lock；跨进程方在目录被删后也只会在重建目录上重新
+        抢锁，不存在竞争窗口。
+        """
+        fh = getattr(_lock_held_by_thread, "fh", None)
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+            _lock_held_by_thread.fh = None
+
+    _lock_held_by_thread.release_for_dir_reset = _release_for_dir_reset
+
     with _thread_write_lock:
         lock_path = settings.lancedb_dir / ".vector-write.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "a+", encoding="utf-8") as f:
+            _lock_held_by_thread.fh = f
             if os.name == "nt":
                 import msvcrt
 
@@ -62,21 +102,29 @@ def _vector_write_lock() -> Iterator[None]:
                         f"向量写锁获取超时（其它进程持锁过久，通常为大批量回填中）: {e}"
                     ) from e
                 try:
+                    _lock_held_by_thread.held = True
                     yield
                 finally:
-                    f.seek(0)
-                    try:
-                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                    except OSError:
-                        pass
+                    _lock_held_by_thread.held = False
+                    _lock_held_by_thread.fh = None
+                    if not f.closed:
+                        f.seek(0)
+                        try:
+                            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                        except OSError:
+                            pass
             else:
                 import fcntl
 
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 try:
+                    _lock_held_by_thread.held = True
                     yield
                 finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    _lock_held_by_thread.held = False
+                    _lock_held_by_thread.fh = None
+                    if not f.closed:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 _thread_write_lock = threading.Lock()
@@ -109,6 +157,34 @@ def reset_connection() -> None:
     global _db
     with _db_lock:
         _db = None
+
+
+def _reset_storage_sync() -> None:
+    """同步执行向量库存储重置：丢连接缓存 + 删除数据目录（跨进程写锁内）。"""
+    with _vector_write_lock():
+        # 先丢缓存连接：旧连接指向将被删除的目录（及其旧表对象/版本基线），
+        # 不丢弃的话删目录后旧表对象仍尝试向已删除的路径写数据
+        reset_connection()
+        if settings.lancedb_dir.exists():
+            # Windows：锁文件 .vector-write.lock 在待删目录内且句柄仍打开，
+            # 不先关闭会让 rmtree 报 PermissionError。句柄关闭后文件锁由 OS
+            # 释放；本线程仍持线程锁与重入标记，其它写入方进不来，无竞争窗口。
+            release = getattr(_lock_held_by_thread, "release_for_dir_reset", None)
+            if release is not None:
+                release()
+            shutil.rmtree(settings.lancedb_dir)
+
+
+async def reset_lancedb_storage() -> None:
+    """重置向量库存储：跨进程写锁内先丢连接缓存再删除数据目录。
+
+    供「数据重置」（ai_reset）等高危流程调用。删除与向量写入共用同一把
+    跨进程写锁串行化，否则删除会把正在写入的 LanceDB 数据集删成「空骨架」
+    （表注册存在但 _versions/data 全空），之后所有向量操作报
+    "Table exists but could not be loaded"，管理页显示「几乎全部向量缺失」
+    ——历史事故根因。删除后进程内后续向量操作懒加载重建连接与空表。
+    """
+    await asyncio.to_thread(_reset_storage_sync)
 
 
 def _connect() -> object:
@@ -144,42 +220,135 @@ def _dim(kind: str) -> int:
     )
 
 
-def _table(kind: str) -> object:
-    """打开表，不存在时按 schema 创建。
+class _CorruptTableError(Exception):
+    """表注册存在但数据集无法加载（空骨架：_versions/data 缺失/不可读）。
 
-    LanceDB 表结构（两张表共用）：
-        id             string    行主键（uuid）
-        inspiration_id string    素材 UUID（业务唯一键）
-        vector         float32[]  向量（定长，维度随表类型而定）
-        created_at     string    写入时间（ISO）
+    读路径（_table）捕获后按「无数据」降级返回空结果；写路径改用
+    _table_for_write（须已在跨进程写锁内）触发「先备份后重建」自愈。
     """
+
+
+def _schema_for(kind: str):
+    """返回指定类型向量表的 pyarrow schema。"""
     import pyarrow as pa
 
-    db = _connect()
-    name = _table_name(kind)
-    # LanceDB 新版 list_tables() 返回 TableNames 命名元组（含 .tables 列表），
-    # 旧版返回 list[str]；统一取表名列表，否则 `name in 对象` 恒为 False，
-    # 导致每次都对已存在的表重复 create_table 抛「Table already exists」。
-    tables = db.list_tables()
-    table_names = tables.tables if hasattr(tables, "tables") else tables
-    if name in table_names:
-        return db.open_table(name)
-
-    schema = pa.schema([
+    return pa.schema([
         pa.field("id", pa.string()),
         pa.field("inspiration_id", pa.string()),
         pa.field("vector", pa.list_(pa.float32(), _dim(kind))),
         pa.field("created_at", pa.string()),
     ])
+
+
+def _create_table(db: object, kind: str, name: str) -> object:
+    """按 schema 创建空表；并发首建（already exists）时回退 open_table。"""
     logger.info(f"创建 LanceDB 表: {name} (维度 {_dim(kind)})")
     try:
-        return db.create_table(name, schema=schema)
+        return db.create_table(name, schema=_schema_for(kind))
     except Exception as e:
         # 多进程并发首建表：另一进程已抢先创建，回退 open_table 而非让写失败
         if "already exists" in str(e).lower():
             logger.warning(f"LanceDB 表已存在（并发建表），回退 open_table: {name}")
             return db.open_table(name)
         raise
+
+
+def _table(kind: str) -> object:
+    """打开表；不存在时按 schema 创建；**损坏（空骨架）时抛 _CorruptTableError**。
+
+    LanceDB 表结构（两张表共用）：
+        id             string    行主键（uuid）
+        inspiration_id string    素材 UUID（业务唯一键）
+        vector         float32[]  向量（定长，维度随表类型而定）
+        created_at     string    写入时间（ISO）
+
+    重要：本函数是锁内外双向调用的底层函数，**绝不在内部获取写锁**——
+    compact 等路径在事件循环线程持锁后 await to_thread 到工作线程执行，
+    工作线程若在此再取跨线程线程锁会与循环线程死锁（线程锁不可跨线程
+    重入）。损坏表的「备份重建」自愈由写路径的 _table_for_write 在调用方
+    已持有的写锁内完成；读路径遇到损坏按空结果降级（不建表、不破坏证据）。
+    """
+    db = _connect()
+    name = _table_name(kind)
+    try:
+        tables = db.list_tables()
+    except Exception as e:
+        # 目录异常连表列表都读不出：按表不存在处理，交由下方 create 重建
+        logger.warning(f"向量表列表读取失败，按表不存在处理 ({name}): {e}")
+        tables = []
+    # LanceDB 新版 list_tables() 返回 TableNames 命名元组（含 .tables 列表），
+    # 旧版返回 list[str]；统一取表名列表，否则 `name in 对象` 恒为 False，
+    # 导致每次都对已存在的表重复 create_table 抛「Table already exists」。
+    table_names = tables.tables if hasattr(tables, "tables") else tables
+    if name in table_names:
+        try:
+            return db.open_table(name)
+        except Exception as e:
+            # 数据集损坏（空骨架：表注册存在但 _versions/data 缺失/不可读）。
+            # 不在此自愈（本函数可能在无锁读路径调用）：抛专用异常，由写路径
+            # _table_for_write 捕获后在写锁内「先备份后重建」；读路径捕获后
+            # 降级为空结果。损坏证据（目录）保留，绝不静默销毁。
+            raise _CorruptTableError(
+                f"向量表 {name} 数据集无法加载（疑似损坏/空骨架）: {e}"
+            ) from e
+    # 表不存在：创建空表
+    return _create_table(db, kind, name)
+
+
+def _table_for_write(kind: str) -> object:
+    """写路径专用：打开表，损坏（空骨架）时在**已持有的写锁内**备份重建。
+
+    调用约定：调用方必须已持有 _vector_write_lock（所有 sync 写函数——
+    _upsert_sync / _batch_add_sync / _delete_ids_locked / _compact_sync /
+    _reset_storage_sync——均在锁内调用本函数；写锁同线程可重入）。
+
+    自愈原则：**先备份后重建，绝不静默丢弃**——历史上「空骨架」多由并发
+    删除/异常中断造成，目录里可能残留可抢救的数据文件；直接 drop_table 会
+    把它们一并销毁，用户看到的就是「几乎全部向量缺失」。这里把损坏目录
+    改名保留（.corrupt-{表名}-{时间戳}），再建新表，日志提升为 error 并
+    给出可抢救位置。备份/重建不重新取锁（调用方已持锁，且线程锁不可跨
+    线程重入——见 _table docstring 的死锁说明）。
+    """
+    try:
+        return _table(kind)
+    except _CorruptTableError as e:
+        logger.error(
+            f"{e} —— 先备份再重建（原数据已备份，勿再写入新表覆盖同名目录）"
+        )
+        name = _table_name(kind)
+        _backup_corrupt_table(name)
+        db = _connect()  # 损坏目录已改名，重新连接（建表基于新目录）
+        return _create_table(db, kind, name)
+
+
+def _backup_corrupt_table(name: str) -> None:
+    """把损坏的 LanceDB 表目录改名备份（保留可抢救数据），再重置连接。
+
+    必须在跨进程写锁内调用。备份失败（如目录已被外部删除）时回退直接
+    drop_table；备份目录保留在 lancedb 目录下（.corrupt-{表名}-{时间戳}），
+    由用户确认数据无需抢救后手动删除，或随数据重置一并清理。
+    """
+    src = settings.lancedb_dir / f"{name}.lance"  # LanceDB 表目录约定：{表名}.lance
+    if not src.exists():
+        # 目录本身已不存在：无需备份，直接走重建
+        return
+    # 先丢连接缓存：缓存连接指向将被改名的旧目录，不丢弃的话后续操作
+    # 仍基于旧路径（与 _reset_storage_sync 同理）
+    reset_connection()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = settings.lancedb_dir / f".corrupt-{name}-{stamp}"
+    try:
+        shutil.move(str(src), str(backup_path))
+        logger.error(
+            f"损坏向量表目录已备份到: {backup_path}（确认数据无需抢救后可手动删除）"
+        )
+    except Exception as e:
+        logger.warning(f"损坏向量表目录备份失败（回退 drop_table 重建）: {e}")
+        try:
+            reset_connection()
+            _connect().drop_table(name)
+        except Exception:
+            pass
 
 
 def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
@@ -208,7 +377,8 @@ def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
             # 表句柄必须在锁内打开：LanceDB 表对象持有版本基线，锁外开表会
             # 以旧版本为基线提交写操作，与并发写入互相覆盖（与 _batch_add_sync
             # 锁内开表保持一致，防止单条写入复现「955 条覆盖丢失」事故）。
-            table = _table(kind)
+            # _table_for_write：已持写锁，损坏表在此先备份再重建（同线程可重入）。
+            table = _table_for_write(kind)
             try:
                 table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
             except Exception:
@@ -234,7 +404,7 @@ def _delete_ids_locked(kind: str, inspiration_ids: list[str], chunk_size: int = 
     """无锁内部实现：分批删除指定素材的向量（调用方须已持有写锁）。"""
     if not inspiration_ids:
         return
-    table = _table(kind)
+    table = _table_for_write(kind)  # 调用方已持写锁：损坏表可安全自愈重建
     for i in range(0, len(inspiration_ids), chunk_size):
         chunk = inspiration_ids[i:i + chunk_size]
         clause = "inspiration_id IN (" + ", ".join(
@@ -297,7 +467,7 @@ def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
         return 0
     try:
         with _vector_write_lock():
-            table = _table(kind)
+            table = _table_for_write(kind)  # 已持写锁：损坏表先备份再重建
             # 真 upsert：先删除同批素材的旧向量，再批量插入，保证一个素材只有一条
             # 向量（与单条 _upsert_sync 语义一致）。分块删除，避免 IN 子句过长。
             # 注意：此处调用无锁内部版，避免嵌套加锁死锁（写锁已由本函数持有）。
@@ -502,7 +672,13 @@ async def compact_vectors() -> dict[str, bool]:
     背景：每次单条 upsert 都会生成新的 manifest + 数据文件，文本向量全量
     重建这类「逐条写 N 条」的操作会让目录膨胀到数千个小文件，拖慢备份与
     目录遍历。optimize 合并数据文件，cleanup_old_versions 删除旧版本文件。
-    写入方无需感知；调用方应持有 _vector_write_lock（本函数内部加锁）。
+    写入方无需感知；本函数内部加写锁。
+
+    锁的位置（死锁规避）：写锁必须在 **to_thread 的工作线程内**获取，不能
+    在事件循环线程持锁后 await to_thread——工作线程内 _table_for_write 自愈
+    路径会再次取线程锁，而线程锁不可跨线程重入，循环线程持锁等待工作线程、
+    工作线程阻塞等锁 → 死锁。故锁下沉到 _compact_sync 内（与其它 sync 写
+    函数的「锁在 sync 层」一致），asyncio.to_thread 仅做线程派发。
 
     返回:
         {"text": bool, "image": bool}，True 表示该表压缩成功
@@ -511,30 +687,32 @@ async def compact_vectors() -> dict[str, bool]:
 
     def _compact_sync() -> dict[str, bool]:
         stats: dict[str, bool] = {}
-        for kind in ("text", "image"):
-            try:
-                table = _table(kind)
-                table.optimize()
+        # 写锁在工作线程内获取：压缩与写入/删除串行化；同线程内
+        # _table_for_write 损坏自愈可重入，不跨线程取锁
+        with _vector_write_lock():
+            for kind in ("text", "image"):
                 try:
-                    # older_than=0：强制清理所有被取代的旧版本文件（仅保留当前版本）。
-                    # 需要 pylance 依赖（pip install pylance），缺失时仅告警跳过——
-                    # 不影响备份正确性（备份走写入锁内一致性快照）
-                    table.cleanup_old_versions(older_than=timedelta(0))
-                except ImportError:
-                    logger.warning(
-                        f"清理旧版本跳过 ({kind})：缺少 pylance 依赖，"
-                        "请执行 pip install pylance 后重试"
-                    )
+                    table = _table_for_write(kind)
+                    table.optimize()
+                    try:
+                        # older_than=0：强制清理所有被取代的旧版本文件（仅保留当前版本）。
+                        # 需要 pylance 依赖（pip install pylance），缺失时仅告警跳过——
+                        # 不影响备份正确性（备份走写入锁内一致性快照）
+                        table.cleanup_old_versions(older_than=timedelta(0))
+                    except ImportError:
+                        logger.warning(
+                            f"清理旧版本跳过 ({kind})：缺少 pylance 依赖，"
+                            "请执行 pip install pylance 后重试"
+                        )
+                    except Exception as e:
+                        logger.debug(f"清理旧版本跳过 ({kind}): {e}")
+                    stats[kind] = True
                 except Exception as e:
-                    logger.debug(f"清理旧版本跳过 ({kind}): {e}")
-                stats[kind] = True
-            except Exception as e:
-                logger.warning(f"向量表压缩失败 ({kind}): {e}")
-                stats[kind] = False
+                    logger.warning(f"向量表压缩失败 ({kind}): {e}")
+                    stats[kind] = False
         return stats
 
-    with _vector_write_lock():
-        return await asyncio.to_thread(_compact_sync)
+    return await asyncio.to_thread(_compact_sync)
 
 
 def get_status() -> dict:

@@ -202,21 +202,21 @@ async def reset_all_data(
             total_rows += rc
         await db.commit()
 
-    # 丢弃缓存的向量连接，并清空向量库目录（避免重置后残留孤儿向量）
+    # 丢弃缓存的向量连接并清空向量库目录。
+    # 必须在跨进程写锁内执行：reset 删除目录若与 worker 的向量写入并发，会把
+    # 正在写入的数据集目录删成「空骨架」（表注册存在但 _versions/data 全空），
+    # 之后所有向量操作报 "Table exists but could not be loaded"，管理页显示
+    # 大量缺失向量——历史事故根因（见 vector.store.reset_lancedb_storage）。
     from app.services.vector import store as vector_store
 
-    vector_store.reset_connection()
-    if settings.lancedb_dir.exists():
-        try:
-            await aio.to_thread(shutil.rmtree, settings.lancedb_dir)
-            logger.info(f"已清空向量库目录: {settings.lancedb_dir}")
-        except Exception as e:
-            logger.warning(f"向量库目录删除失败: {settings.lancedb_dir} — {e}")
+    await vector_store.reset_lancedb_storage()
 
-    # 清空存储目录（threadpool 异步执行，避免阻塞）。
-    # 注意：images/thumbnails/videos 已在快照阶段移动并重建为空目录，
-    # 这里 rmtree 主要兜底 lancedb（快照阶段未移动）及快照后新写入的文件；
-    # 从活动存储移走的文件数由 snap_moved 统计，一并计入 files_deleted。
+    # 清空素材存储目录（threadpool 异步执行，避免阻塞）。
+    # 注意：images/thumbnails/videos 已在快照阶段移动并重建为空目录，这里
+    # rmtree 兜底快照后新写入的文件；向量库（lancedb）不在此列——它已由上方
+    # reset_lancedb_storage() 在跨进程写锁内删除（无锁 rmtree 会与 worker 并发
+    # 写入竞争把数据集删成空骨架，见该函数 docstring）。从活动存储移走的文件
+    # 数由 snap_moved 统计，一并计入 files_deleted。
     storage_deleted = snap_moved
     storage_errors = []
     for dir_path in [settings.images_dir, settings.thumbnails_dir, settings.videos_dir, settings.keyframes_dir]:
