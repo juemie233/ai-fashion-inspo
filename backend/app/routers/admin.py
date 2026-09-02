@@ -535,7 +535,10 @@ async def audit_logs(
 class NearDuplicateScanRequest(BaseModel):
     """近似重复检测请求参数（扫描动作 + 哈希缓存补算副作用，故用 POST）。"""
 
-    limit: int = Field(1000, ge=1, le=5000, description="随机抽样图片数量上限")
+    # limit=0 表示全量扫描（服务层约定）：phash 已缓存时分组是纯内存运算，
+    # 万级素材也在秒级完成，比「随机抽样漏检后反复扫」体验更好。随机抽样
+    # 仍可显式传 500/1000/2000/5000；上限 100000 仅作防御，实际素材数远低于此。
+    limit: int = Field(1000, ge=0, le=100000, description="随机抽样图片数量上限；0 表示全量扫描")
     threshold: int = Field(32, ge=1, le=256, description="汉明距离阈值（越小越严格，768 位 RGB dHash）")
 
 

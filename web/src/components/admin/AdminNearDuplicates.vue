@@ -28,7 +28,9 @@ const emit = defineEmits<{
 }>()
 
 const threshold = ref(32)
-const limit = ref(1000)
+// 默认全库扫描（limit=0）：phash 已缓存时为纯内存分组，万级素材秒级返回，
+// 避免随机抽样把重复对漏检、反复扫都「未发现重复」的瘫痪体感
+const limit = ref(0)
 const scanning = ref(false)
 const result = ref<NearDuplicateResult | null>(null)
 
@@ -39,6 +41,7 @@ const thresholdOptions = [
 ]
 
 const limitOptions = [
+  { label: '全库扫描', value: 0 },
   { label: '随机 500 张', value: 500 },
   { label: '随机 1000 张', value: 1000 },
   { label: '随机 2000 张', value: 2000 },
@@ -85,9 +88,10 @@ async function scan() {
   try {
     result.value = await fetchNearDuplicates(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
-      Message.success(
-        `已随机扫描 ${result.value.scanned} 张，未发现近似重复（可再次扫描覆盖其他素材）`,
-      )
+      const scope = result.value.truncated
+        ? `随机扫描 ${result.value.scanned} / ${result.value.total} 张`
+        : `全库扫描 ${result.value.scanned} 张`
+      Message.success(`已${scope}，未发现近似重复`)
     } else {
       // 发现重复组 → 自动打开弹窗逐组处理
       openDupModal()
@@ -251,22 +255,27 @@ function favoriteLabel(f: NearDuplicateFile): string {
     </template>
 
     <p style="color: var(--color-text-3); font-size: 12px; margin: 0 0 12px">
-      基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印），
-      <b>全库随机抽样</b>，每次扫描覆盖不同素材；哈希首次计算后自动缓存，
-      之后扫描秒级返回。仅列出候选，需人工确认后删除。
+      基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印）。
+      <b>默认全库扫描</b>（哈希已缓存时秒级返回，不漏检）；也可改为随机抽样分批扫。
+      哈希首次计算后自动缓存。仅列出候选，需人工确认后删除。
     </p>
 
     <!-- 扫描结果汇总 -->
     <a-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
-      已随机扫描 {{ result.scanned }} / {{ result.total }} 张，未发现近似重复
-      <template v-if="result.truncated">（仅覆盖本次抽样，可再次扫描发现其他素材）</template>
+      <template v-if="result.truncated">
+        已随机扫描 {{ result.scanned }} /
+        {{ result.total }} 张，未发现近似重复（仅覆盖本次抽样，可再次扫描或改用全库扫描）
+      </template>
+      <template v-else> 已全库扫描 {{ result.scanned }} 张，未发现近似重复 </template>
     </a-alert>
 
     <template v-if="groups.length > 0">
       <p style="color: rgb(var(--warning-6)); margin-bottom: 12px">
-        ⚠️ 发现 {{ groups.length }} 组近似重复，本次随机扫描 {{ result?.scanned }} /
-        {{ result?.total }} 张
-        <template v-if="result?.truncated">（存在未覆盖素材，可再次扫描）</template>
+        ⚠️ 发现 {{ groups.length }} 组近似重复，本次{{
+          result?.truncated ? '随机扫描' : '全库扫描'
+        }}
+        {{ result?.scanned }} / {{ result?.total }} 张
+        <template v-if="result?.truncated">（存在未覆盖素材，可再次扫描或改用全库扫描）</template>
       </p>
 
       <!-- 哈希缓存进度 -->

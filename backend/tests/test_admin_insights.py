@@ -135,6 +135,20 @@ def test_near_duplicate_scan(client):
     assert len(res2["groups"]) == 1
 
 
+def test_near_duplicate_full_scan_accepted(client, upload):
+    """limit=0 全库扫描必须被接受（回归：请求模型曾限制 ge=1，全量被 422 拦截）。
+
+    随机抽样在大库中漏检率高（重复对未必同批抽中），全量扫描是「不漏检」
+    的主路径；服务层约定 limit=0 表示不限制，请求模型需放行。
+    """
+    upload()
+    r = client.post("/api/admin/near-duplicates", json={"limit": 0, "threshold": 32})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["scanned"] == 1
+    assert data["truncated"] is False  # 全量扫描不截断
+
+
 async def test_near_duplicate_scan_backfill_visibility(client):
     """近似重复扫描：backfill 写入的 phash 必须在随机抽样中可见。
 

@@ -115,11 +115,9 @@ export interface NearDuplicateResult {
   cached_total: number
 }
 
-/** 扫描视觉近似重复的图片素材（全库随机抽样 + 感知哈希缓存补算，仅返回候选） */
-export async function fetchNearDuplicates(
-  limit = 1000,
-  threshold = 32,
-): Promise<NearDuplicateResult> {
+/** 扫描视觉近似重复的图片素材（phash 分组，仅返回候选）。
+ *  limit=0 表示全库扫描（推荐，纯内存分组秒级返回、不漏检）；>0 为随机抽样数量 */
+export async function fetchNearDuplicates(limit = 0, threshold = 32): Promise<NearDuplicateResult> {
   const { data } = await apiClient.post<NearDuplicateResult>('/admin/near-duplicates', {
     limit,
     threshold,
