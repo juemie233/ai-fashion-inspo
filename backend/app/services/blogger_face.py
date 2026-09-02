@@ -18,13 +18,14 @@ from datetime import datetime, timezone
 import numpy as np
 from fastapi import HTTPException
 from PIL import Image
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
-from app.models.person import Blogger, Model
+from app.models.person import Blogger, InspirationBlogger, Model
+from app.services.audit_service import record_audit_log
 from app.services.face_client import (
     FaceServiceHttpError,
     FaceServiceUnavailableError,
@@ -289,6 +290,129 @@ async def get_blogger_face_status(db: AsyncSession, blogger_id: int) -> dict:
         "registered": True,
         "blogger_id": blogger_id,
         "updated_at": format_utc(rec.updated_at),
+    }
+
+
+async def _clear_blogger_face_detections(
+    db: AsyncSession, blogger_id: int, inspiration_ids: list[str] | None = None
+) -> int:
+    """把识别为指定博主的人脸检测记录回退为「未匹配」，返回受影响行数。
+
+    - inspiration_ids 为 None 时清空该博主全部匹配记录，否则仅清这些素材的；
+    - **绕过单条 confirmed 锁定**：这是博主维度的管理操作（整人/整批撤销），
+      与单条人脸的 set_detection_person/delete_detection 的 409 锁不同；
+    - 置空 matched_blogger_id 并把 match_status 回退为 None（未审核普通态），
+      这些人脸随即作为「未知人脸」重新出现在扫描审核页，符合用户预期；
+    - match_excluded 驳回标记保留不动（用户此前明确「这张脸不是 TA」仍有效）。
+    """
+    conds = [InspirationFaceDetection.matched_blogger_id == blogger_id]
+    if inspiration_ids is not None:
+        conds.append(InspirationFaceDetection.inspiration_id.in_(inspiration_ids))
+    result = await db.execute(
+        update(InspirationFaceDetection)
+        .where(*conds)
+        .values(matched_blogger_id=None, match_status=None)
+    )
+    return result.rowcount
+
+
+async def unregister_blogger_face(db: AsyncSession, blogger_id: int) -> dict:
+    """注销博主人脸：彻底撤销该博主的人脸绑定。
+
+    全清四样数据（一个事务）：
+    1. blogger_face_embeddings 人脸特征（删除后不再参与自动匹配）；
+    2. 指向该博主的人脸检测记录回退为未匹配（含已确认锁定的 confirmed）；
+    3. inspiration_bloggers 素材归属关联全部解除；
+    4. 人脸缩略图缓存文件在提交成功后删除（路由层调用 delete_face_thumbnail）。
+
+    博主账号本身、平台元数据、人物组均保留，可重新注册/重新关联。
+    博主不存在抛 404。返回各项清理计数。
+    """
+    blogger = await db.get(Blogger, blogger_id)
+    if not blogger:
+        raise HTTPException(status_code=404, detail="博主未找到")
+    name = blogger.name
+
+    # 1) 删人脸特征记录（无则 0 行）
+    emb_result = await db.execute(
+        delete(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == blogger_id)
+    )
+    # 2) 指向该博主的人脸检测记录全部回退为未匹配
+    cleared = await _clear_blogger_face_detections(db, blogger_id)
+    # 3) 解除全部素材归属关联
+    link_result = await db.execute(
+        delete(InspirationBlogger).where(InspirationBlogger.blogger_id == blogger_id)
+    )
+    await db.commit()
+
+    # 审计留痕（独立写操作，失败不影响主流程）
+    try:
+        await record_audit_log(
+            action="unregister_blogger_face",
+            target_type="博主",
+            count=1,
+            detail=(
+                f"注销博主「{name}」(#%d) 人脸特征：删除特征 {emb_result.rowcount} 条、"
+                f"回退人脸匹配记录 {cleared} 条、解除素材归属 {link_result.rowcount} 条"
+                % blogger_id
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 审计失败不阻断
+        logger.warning(f"注销人脸审计写入失败（忽略）: {e}")
+
+    return {
+        "blogger_id": blogger_id,
+        "registered": False,
+        "embedding_deleted": emb_result.rowcount,
+        "face_detections_cleared": cleared,
+        "inspirations_unlinked": link_result.rowcount,
+    }
+
+
+async def unbind_blogger_inspirations(
+    db: AsyncSession, blogger_id: int, inspiration_ids: list[str] | None = None
+) -> dict:
+    """解除博主与素材的归属绑定（**保留人脸特征**，以后仍可自动匹配）。
+
+    - inspiration_ids 为 None / 空：清空该博主与全部素材的归属；
+    - 传 ID 列表：仅解绑这些素材（单张/多张）。
+    同时把这些素材里识别为该博主的人脸检测记录回退为未匹配（含 confirmed
+    锁定记录，博主维度操作绕过单条锁）——语义为「这些图不是 TA」。
+
+    博主不存在抛 404；素材 ID 不在该博主名下时静默忽略（删除语句幂等）。
+    返回解除的归属关联数与回退的人脸记录数。
+    """
+    blogger = await db.get(Blogger, blogger_id)
+    if not blogger:
+        raise HTTPException(status_code=404, detail="博主未找到")
+    name = blogger.name
+
+    ids = list(dict.fromkeys(inspiration_ids)) if inspiration_ids else None
+    link_conds = [InspirationBlogger.blogger_id == blogger_id]
+    if ids is not None:
+        link_conds.append(InspirationBlogger.inspiration_id.in_(ids))
+    link_result = await db.execute(delete(InspirationBlogger).where(*link_conds))
+    cleared = await _clear_blogger_face_detections(db, blogger_id, ids)
+    await db.commit()
+
+    try:
+        scope = "全部素材" if ids is None else f"{len(ids)} 个指定素材"
+        await record_audit_log(
+            action="unbind_blogger_inspirations",
+            target_type="博主",
+            count=link_result.rowcount,
+            detail=(
+                f"解除博主「{name}」(#%d) 与{scope}的归属：解除关联 {link_result.rowcount} 条、"
+                f"回退人脸匹配记录 {cleared} 条（人脸特征保留）" % blogger_id
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 审计失败不阻断
+        logger.warning(f"解绑素材审计写入失败（忽略）: {e}")
+
+    return {
+        "blogger_id": blogger_id,
+        "inspirations_unlinked": link_result.rowcount,
+        "face_detections_cleared": cleared,
     }
 
 

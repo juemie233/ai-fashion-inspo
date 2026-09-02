@@ -263,6 +263,36 @@ export const bloggersApi = {
     const { data } = await apiClient.get<BloggerFaceStatus>(`/bloggers/${id}/face`)
     return data
   },
+
+  /** 注销博主人脸：删除人脸特征、回退所有人脸匹配记录、解除全部素材归属（博主账号保留） */
+  async unregisterFace(id: number): Promise<BloggerUnbindResult> {
+    const { data } = await apiClient.delete<BloggerUnbindResult>(`/bloggers/${id}/face`)
+    return data
+  },
+
+  /** 解除博主与素材的归属（保留人脸特征）。
+   *  inspirationIds 传空/不传 = 清空该博主全部素材归属；传数组 = 仅解绑指定素材。
+   *  同时把这些素材里识别为该博主的人脸记录回退为未匹配（含已确认锁定）。 */
+  async unbindInspirations(id: number, inspirationIds?: string[]): Promise<BloggerUnbindResult> {
+    const { data } = await apiClient.post<BloggerUnbindResult>(
+      `/bloggers/${id}/unbind-inspirations`,
+      { inspiration_ids: inspirationIds ?? null },
+    )
+    return data
+  },
+}
+
+/** 博主注销人脸 / 解绑素材的结果计数 */
+export interface BloggerUnbindResult {
+  blogger_id: number
+  /** 注销人脸时为 false（解绑素材不返回此字段） */
+  registered?: boolean
+  /** 删除的人脸特征记录数（仅注销人脸） */
+  embedding_deleted?: number
+  /** 解除的素材归属关联数 */
+  inspirations_unlinked: number
+  /** 回退为未匹配的人脸检测记录数 */
+  face_detections_cleared: number
 }
 
 /** 博主人脸注册状态 */

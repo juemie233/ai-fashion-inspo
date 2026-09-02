@@ -11,15 +11,19 @@ const FACE_MAX_TOTAL = 5
 interface Options {
   personId: Ref<number>
   api: ComputedRef<typeof bloggersApi>
+  /** 人脸绑定变化（注册/注销）后的回调：父组件据此刷新素材瀑布流与统计 */
+  onChanged?: () => void | Promise<void>
 }
 
-export function useBloggerFaceRegister({ personId, api }: Options) {
+export function useBloggerFaceRegister({ personId, api, onChanged }: Options) {
   const faceStatus = ref<{ registered: boolean; updated_at?: string | null } | null>(null)
   /** 人脸注册来源选项卡：upload 上传照片 / inspiration 从素材选择 */
   const faceTab = ref<'upload' | 'inspiration'>('upload')
   /** 已选正脸照片（UploadFileInfo 结构：支持多选/缩略图预览/单张删除） */
   const faceFileList = ref<FileItem[]>([])
   const faceUploading = ref(false)
+  /** 注销人脸进行中 */
+  const faceUnregistering = ref(false)
 
   // ── 素材选择状态（Tab2：该博主已关联素材的缩略图网格，勾选参与注册）──
   const faceInspItems = ref<PersonInspiration[]>([])
@@ -111,10 +115,30 @@ export function useBloggerFaceRegister({ personId, api }: Options) {
       faceFileList.value = []
       selectedFaceInspIds.value = new Set()
       await loadFaceStatus()
+      await onChanged?.()
     } catch (e) {
       Message.error(getApiErrorMessage(e, '人脸注册失败'))
     } finally {
       faceUploading.value = false
+    }
+  }
+
+  /** 注销人脸：删除特征、回退全部人脸匹配记录、解除全部素材归属（博主账号保留） */
+  async function handleUnregisterFace() {
+    faceUnregistering.value = true
+    try {
+      const r = await api.value.unregisterFace(personId.value)
+      Message.success(
+        `已注销人脸：回退人脸匹配 ${r.face_detections_cleared} 条、解除素材归属 ${r.inspirations_unlinked} 条`,
+      )
+      faceFileList.value = []
+      selectedFaceInspIds.value = new Set()
+      await loadFaceStatus()
+      await onChanged?.()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '注销人脸失败'))
+    } finally {
+      faceUnregistering.value = false
     }
   }
 
@@ -148,6 +172,7 @@ export function useBloggerFaceRegister({ personId, api }: Options) {
     faceTab,
     faceFileList,
     faceUploading,
+    faceUnregistering,
     faceInspItems,
     faceInspTotal,
     faceInspPage,
@@ -158,5 +183,6 @@ export function useBloggerFaceRegister({ personId, api }: Options) {
     toggleFaceInsp,
     loadFaceStatus,
     handleRegisterFace,
+    handleUnregisterFace,
   }
 }

@@ -6,6 +6,11 @@ embedding 用固定 512 维单位向量保证匹配确定性。
 
 import numpy as np
 import pytest
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
+from app.models.person import Blogger, InspirationBlogger
 
 
 def _unit_embedding(seed: int = 1) -> list[float]:
@@ -516,3 +521,193 @@ def test_detect_low_confidence_face_skips_match(client, create_blogger, upload, 
     lst_dets = sorted(lst["detections"], key=lambda d: d["face_index"])
     assert lst_dets[1]["det_score"] == 0.55
     assert lst_dets[1]["matched_blogger_id"] is None
+
+
+# ═══════════════════════════════════════════════════════════════
+#  注销人脸 / 博主维度解绑素材
+# ═══════════════════════════════════════════════════════════════
+
+
+def _link_blogger(client, insp_id: str, blogger_id: int) -> None:
+    """建立素材-博主归属关联。"""
+    r = client.post(
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger_id]}
+    )
+    assert r.status_code == 200, r.text
+
+
+def _setup_blogger_with_matched_insp(client, create_blogger, upload, monkeypatch, name):
+    """创建博主 + 注册人脸 + 上传素材并检测匹配 + 建立归属关联，返回 (blogger, insp_id)。"""
+    blogger = create_blogger(name=name)
+    emb = _unit_embedding(11)
+    _patch_embed(monkeypatch, emb)
+    rr = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        files=[("files", ("m.jpg", b"blogger-photo", "image/jpeg"))],
+    )
+    assert rr.status_code == 200, rr.text
+
+    insp_id = upload().json()["id"]
+    dr = client.post(f"/api/inspirations/{insp_id}/face-detect")
+    assert dr.status_code == 200, dr.text
+    det = dr.json()["detections"][0]
+    assert det["matched_blogger_id"] == blogger["id"]
+    _link_blogger(client, insp_id, blogger["id"])
+    return blogger, insp_id
+
+
+async def test_unregister_blogger_face_clears_all(
+    client, create_blogger, upload, monkeypatch
+):
+    """注销人脸：特征/人脸匹配记录/素材归属全清，博主账号保留。"""
+    blogger, insp_id = _setup_blogger_with_matched_insp(
+        client, create_blogger, upload, monkeypatch, "注销博"
+    )
+    bid = blogger["id"]
+
+    r = client.delete(f"/api/bloggers/{bid}/face")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["registered"] is False
+    assert body["embedding_deleted"] == 1
+    assert body["face_detections_cleared"] == 1
+    assert body["inspirations_unlinked"] == 1
+
+    async with async_session() as db:
+        # 人脸特征已删
+        emb = (
+            await db.execute(
+                select(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == bid)
+            )
+        ).scalar_one_or_none()
+        assert emb is None
+        # 人脸检测记录回退为未匹配
+        det = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalar_one()
+        assert det.matched_blogger_id is None
+        assert det.match_status is None
+        # 素材归属关联已解除
+        link_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(InspirationBlogger)
+                .where(InspirationBlogger.blogger_id == bid)
+            )
+        ).scalar()
+        assert link_count == 0
+        # 博主账号本身仍在
+        assert (await db.get(Blogger, bid)) is not None
+
+    # 状态查询变为未注册
+    assert client.get(f"/api/bloggers/{bid}/face").json()["registered"] is False
+    # 博主名下素材列表为空
+    lst = client.get(f"/api/bloggers/{bid}/inspirations").json()
+    assert lst["total"] == 0
+
+
+async def test_unregister_blogger_face_unlocks_confirmed(
+    client, create_blogger, upload, monkeypatch
+):
+    """注销人脸可回退已审核锁定（confirmed）的匹配记录（博主维度操作绕过单条锁）。"""
+    blogger, insp_id = _setup_blogger_with_matched_insp(
+        client, create_blogger, upload, monkeypatch, "锁定博"
+    )
+    bid = blogger["id"]
+    det_id = client.get(f"/api/inspirations/{insp_id}/face-detections").json()[
+        "detections"
+    ][0]["id"]
+    # 模拟扫描审核确认：直接置 confirmed（单条接口禁止改 confirmed，这里构造前置状态）
+    async with async_session() as db:
+        det = await db.get(InspirationFaceDetection, det_id)
+        det.match_status = "confirmed"
+        await db.commit()
+
+    # 注销人脸：confirmed 记录也被回退（不抛 409）
+    r = client.delete(f"/api/bloggers/{bid}/face")
+    assert r.status_code == 200, r.text
+    assert r.json()["face_detections_cleared"] == 1
+
+    async with async_session() as db:
+        det = await db.get(InspirationFaceDetection, det_id)
+        assert det.matched_blogger_id is None
+        assert det.match_status is None
+
+
+async def test_unbind_inspirations_single_keeps_face(
+    client, create_blogger, upload, monkeypatch
+):
+    """单张解绑：解除归属 + 回退该素材人脸记录，但人脸特征保留。"""
+    blogger, insp_id = _setup_blogger_with_matched_insp(
+        client, create_blogger, upload, monkeypatch, "单解绑博"
+    )
+    bid = blogger["id"]
+
+    r = client.post(
+        f"/api/bloggers/{bid}/unbind-inspirations",
+        json={"inspiration_ids": [insp_id]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["inspirations_unlinked"] == 1
+    assert body["face_detections_cleared"] == 1
+
+    async with async_session() as db:
+        # 人脸特征保留（与注销人脸的关键区别）
+        emb = (
+            await db.execute(
+                select(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == bid)
+            )
+        ).scalar_one_or_none()
+        assert emb is not None
+        # 该素材人脸记录回退为未匹配
+        det = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalar_one()
+        assert det.matched_blogger_id is None
+
+    # 人脸仍注册
+    assert client.get(f"/api/bloggers/{bid}/face").json()["registered"] is True
+
+
+def test_unbind_inspirations_clear_all(client, create_blogger, upload, monkeypatch):
+    """清空全部：不传 inspiration_ids，解除该博主所有素材归属（人脸特征保留）。"""
+    blogger, insp1 = _setup_blogger_with_matched_insp(
+        client, create_blogger, upload, monkeypatch, "清空博"
+    )
+    bid = blogger["id"]
+    # 再关联第二张素材（只建归属，不检测人脸）
+    insp2 = upload().json()["id"]
+    _link_blogger(client, insp2, bid)
+
+    r = client.post(f"/api/bloggers/{bid}/unbind-inspirations", json={})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["inspirations_unlinked"] == 2
+    # 仅 insp1 有人脸检测记录
+    assert body["face_detections_cleared"] == 1
+
+    lst = client.get(f"/api/bloggers/{bid}/inspirations").json()
+    assert lst["total"] == 0
+    # 人脸特征保留
+    assert client.get(f"/api/bloggers/{bid}/face").json()["registered"] is True
+
+
+def test_unregister_face_blogger_not_found(client):
+    """注销不存在的博主 → 404。"""
+    r = client.delete("/api/bloggers/999999/face")
+    assert r.status_code == 404
+
+
+def test_unbind_inspirations_blogger_not_found(client):
+    """解绑不存在的博主 → 404。"""
+    r = client.post("/api/bloggers/999999/unbind-inspirations", json={})
+    assert r.status_code == 404

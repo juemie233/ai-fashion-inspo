@@ -90,6 +90,54 @@ export function usePersonDetail() {
     await loadInspirations()
   }
 
+  /** 解绑后统一刷新：当前页空了回退一页，再拉素材 + 详情（头部素材数统计） */
+  async function refreshAfterUnbind() {
+    if (page.value > 1 && items.value.length <= 1) {
+      page.value -= 1
+    }
+    await Promise.all([loadInspirations(), refreshDetailStats()])
+  }
+
+  /** 仅刷新详情（更新头部「N 条素材」统计），不碰 loading 遮罩 */
+  async function refreshDetailStats() {
+    try {
+      detail.value = await api.value.fetchDetail(personId.value)
+    } catch {
+      // 统计刷新失败不阻塞
+    }
+  }
+
+  /** 解绑单个素材（仅博主）：解除归属 + 回退该素材识别为该博主的人脸记录 */
+  async function unbindOne(inspirationId: string) {
+    if (kind.value !== 'blogger') return
+    try {
+      const r = await bloggersApi.unbindInspirations(personId.value, [inspirationId])
+      Message.success(`已解除绑定（回退人脸记录 ${r.face_detections_cleared} 条）`)
+      await refreshAfterUnbind()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '解除绑定失败'))
+    }
+  }
+
+  /** 清空该博主与全部素材的绑定（人脸特征保留） */
+  const clearingAll = ref(false)
+  async function unbindAll() {
+    if (kind.value !== 'blogger') return
+    clearingAll.value = true
+    try {
+      const r = await bloggersApi.unbindInspirations(personId.value)
+      Message.success(
+        `已清空全部素材绑定：解除 ${r.inspirations_unlinked} 条关联、回退人脸记录 ${r.face_detections_cleared} 条`,
+      )
+      page.value = 1
+      await Promise.all([loadInspirations(), refreshDetailStats()])
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '清空绑定失败'))
+    } finally {
+      clearingAll.value = false
+    }
+  }
+
   // ── 照片组（模特写真：与穿搭素材分离）──
   const photoSets = ref<ModelPhotoSet[]>([])
   const photoSetsLoading = ref(false)
@@ -233,5 +281,8 @@ export function usePersonDetail() {
     loadInspirations,
     setPage,
     loadDetail,
+    unbindOne,
+    unbindAll,
+    clearingAll,
   }
 }

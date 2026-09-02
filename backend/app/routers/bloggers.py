@@ -17,6 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -34,7 +35,12 @@ from app.services.person_service import (
     PersonNotFoundError,
     blogger_service,
 )
-from app.services.blogger_face import get_blogger_face_status, register_blogger_face
+from app.services.blogger_face import (
+    get_blogger_face_status,
+    register_blogger_face,
+    unbind_blogger_inspirations,
+    unregister_blogger_face,
+)
 from app.services.face_thumbnail import (
     delete_face_thumbnail,
     ensure_blogger_face_thumbnail,
@@ -494,3 +500,42 @@ async def blogger_face_status_api(
 ) -> dict:
     """查询博主人脸注册状态。"""
     return await get_blogger_face_status(db, blogger_id)
+
+
+@router.delete("/{blogger_id}/face")
+async def unregister_blogger_face_api(
+    blogger_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """注销博主人脸：删除人脸特征、回退所有人脸匹配记录、解除全部素材归属。
+
+    博主账号本身保留（可重新注册）；人脸缩略图缓存一并清理。
+    """
+    result = await unregister_blogger_face(db, blogger_id)
+    # 人脸特征已删，缩略图缓存必然陈旧：提交成功后清理缓存文件
+    delete_face_thumbnail(blogger_id)
+    return result
+
+
+class UnbindInspirationsRequest(BaseModel):
+    """博主维度解绑素材请求：inspiration_ids 传空/不传 = 清空全部。"""
+
+    inspiration_ids: list[str] | None = Field(
+        None, description="要解绑的素材 ID 列表；为空或不传表示清空该博主全部素材归属"
+    )
+
+
+@router.post("/{blogger_id}/unbind-inspirations", status_code=status.HTTP_200_OK)
+async def unbind_blogger_inspirations_api(
+    blogger_id: int,
+    payload: UnbindInspirationsRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """解除博主与素材的归属（保留人脸特征）。
+
+    - 传 inspiration_ids：仅解绑指定素材（单张/多张）；
+    - 不传或传空数组：清空该博主与全部素材的归属。
+    同时把这些素材里识别为该博主的人脸检测记录回退为未匹配（含已确认锁定）。
+    """
+    ids = payload.inspiration_ids if payload else None
+    return await unbind_blogger_inspirations(db, blogger_id, ids)

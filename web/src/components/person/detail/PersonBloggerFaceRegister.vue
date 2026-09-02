@@ -11,11 +11,17 @@ const props = defineProps<{
   api: typeof bloggersApi
 }>()
 
+/** 人脸绑定变化（注册/注销）后通知父组件刷新素材瀑布流与统计 */
+const emit = defineEmits<{
+  (e: 'changed'): void
+}>()
+
 const {
   faceStatus,
   faceTab,
   faceFileList,
   faceUploading,
+  faceUnregistering,
   faceInspItems,
   faceInspTotal,
   faceInspPage,
@@ -25,9 +31,11 @@ const {
   loadFaceInspirations,
   toggleFaceInsp,
   handleRegisterFace,
+  handleUnregisterFace,
 } = useBloggerFaceRegister({
   personId: computed(() => props.personId),
   api: computed(() => props.api),
+  onChanged: () => emit('changed'),
 })
 
 /** 已选照片 + 素材合计数量（注册按钮禁用判断） */
@@ -116,15 +124,36 @@ const selectedTotal = computed(
           已选：{{ faceFileList.filter((f) => !!f.file).length }} 张照片 +
           {{ selectedFaceInspIds.size }} 张素材（合计 ≤ 5）
         </a-typography-text>
-        <a-button
-          size="small"
-          type="primary"
-          :loading="faceUploading"
-          :disabled="selectedTotal === 0"
-          @click="handleRegisterFace"
-        >
-          {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
-        </a-button>
+        <a-space>
+          <!-- 注销人脸：仅已注册时显示，二次确认明确提示会清空全部绑定 -->
+          <a-popconfirm
+            v-if="faceStatus?.registered"
+            type="warning"
+            :ok-loading="faceUnregistering"
+            ok-text="确认注销"
+            @ok="handleUnregisterFace"
+          >
+            <template #content>
+              <div style="max-width: 280px">
+                注销后将<b>删除人脸特征</b>（以后不再自动匹配），并
+                <b>清空该博主已匹配的人脸记录、解除全部素材归属</b>；
+                那些人脸会重新出现在人脸扫描的「未匹配」列表中。博主账号本身保留，可重新注册。
+              </div>
+            </template>
+            <a-button size="small" status="danger" :loading="faceUnregistering">
+              注销人脸
+            </a-button>
+          </a-popconfirm>
+          <a-button
+            size="small"
+            type="primary"
+            :loading="faceUploading"
+            :disabled="selectedTotal === 0"
+            @click="handleRegisterFace"
+          >
+            {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
+          </a-button>
+        </a-space>
       </div>
     </a-collapse-item>
   </a-collapse>

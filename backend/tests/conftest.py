@@ -60,6 +60,7 @@ _ALL_TABLES = [
     "model_photos",
     "model_photo_sets",
     "model_face_embeddings",
+    "blogger_face_embeddings",  # 博主人脸特征（与 model_face_embeddings 对称，清表防跨用例 face_registered 串扰）
     "blogger_enrichment_skips",
     "person_groups",
     "inspirations",
