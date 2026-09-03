@@ -90,14 +90,6 @@ export function usePersonDetail() {
     await loadInspirations()
   }
 
-  /** 解绑后统一刷新：当前页空了回退一页，再拉素材 + 详情（头部素材数统计） */
-  async function refreshAfterUnbind() {
-    if (page.value > 1 && items.value.length <= 1) {
-      page.value -= 1
-    }
-    await Promise.all([loadInspirations(), refreshDetailStats()])
-  }
-
   /** 仅刷新详情（更新头部「N 条素材」统计），不碰 loading 遮罩 */
   async function refreshDetailStats() {
     try {
@@ -107,20 +99,81 @@ export function usePersonDetail() {
     }
   }
 
-  /** 解绑单个素材（仅博主）：解除归属 + 回退该素材识别为该博主的人脸记录 */
-  async function unbindOne(inspirationId: string) {
+  // ── 人脸注销（多选）模式（仅博主）──
+  /** 是否处于「人脸注销」多选模式：进入后网格可勾选，确定后批量注销选中素材的绑定 */
+  const unbindMode = ref(false)
+  /** 勾选待注销的素材 id 集合 */
+  const unbindSelectedIds = ref<Set<string>>(new Set())
+  /** 批量注销提交中 */
+  const unbindSubmitting = ref(false)
+  /** 清空全部绑定进行中 */
+  const clearingAll = ref(false)
+
+  /** 进入 / 退出人脸注销多选模式（退出时清空勾选） */
+  function enterUnbindMode() {
+    unbindMode.value = true
+    unbindSelectedIds.value = new Set()
+  }
+  function exitUnbindMode() {
+    unbindMode.value = false
+    unbindSelectedIds.value = new Set()
+  }
+  /** 切换某个素材的勾选 */
+  function toggleUnbindSelect(id: string) {
+    const next = new Set(unbindSelectedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    unbindSelectedIds.value = next
+  }
+  /** 当前页素材是否已全选 */
+  const isCurrentPageAllSelected = computed(
+    () =>
+      items.value.length > 0 &&
+      items.value.every((i) => unbindSelectedIds.value.has(i.inspiration_id)),
+  )
+  /** 全选 / 取消全选当前页（跨页勾选保留） */
+  function toggleSelectCurrentPage() {
+    const next = new Set(unbindSelectedIds.value)
+    if (isCurrentPageAllSelected.value) {
+      items.value.forEach((i) => next.delete(i.inspiration_id))
+    } else {
+      items.value.forEach((i) => next.add(i.inspiration_id))
+    }
+    unbindSelectedIds.value = next
+  }
+
+  /** 注销后统一刷新：当前页空了回退一页，退出模式，再拉素材 + 详情统计 */
+  async function refreshAfterUnbind() {
+    if (page.value > 1 && items.value.length <= unbindSelectedIds.value.size) {
+      page.value -= 1
+    }
+    exitUnbindMode()
+    await Promise.all([loadInspirations(), refreshDetailStats()])
+  }
+
+  /** 确定注销：把勾选素材上「识别为该博主的人脸匹配」与「归属绑定」一起注销（人脸特征保留） */
+  async function confirmUnbindSelected() {
     if (kind.value !== 'blogger') return
+    const ids = [...unbindSelectedIds.value]
+    if (ids.length === 0) {
+      Message.warning('请先勾选要注销的素材')
+      return
+    }
+    unbindSubmitting.value = true
     try {
-      const r = await bloggersApi.unbindInspirations(personId.value, [inspirationId])
-      Message.success(`已解除绑定（回退人脸记录 ${r.face_detections_cleared} 条）`)
+      const r = await bloggersApi.unbindInspirations(personId.value, ids)
+      Message.success(
+        `已注销 ${ids.length} 个素材的绑定：解除归属 ${r.inspirations_unlinked} 条、回退人脸记录 ${r.face_detections_cleared} 条`,
+      )
       await refreshAfterUnbind()
     } catch (e) {
-      Message.error(getApiErrorMessage(e, '解除绑定失败'))
+      Message.error(getApiErrorMessage(e, '注销失败'))
+    } finally {
+      unbindSubmitting.value = false
     }
   }
 
   /** 清空该博主与全部素材的绑定（人脸特征保留） */
-  const clearingAll = ref(false)
   async function unbindAll() {
     if (kind.value !== 'blogger') return
     clearingAll.value = true
@@ -129,6 +182,7 @@ export function usePersonDetail() {
       Message.success(
         `已清空全部素材绑定：解除 ${r.inspirations_unlinked} 条关联、回退人脸记录 ${r.face_detections_cleared} 条`,
       )
+      exitUnbindMode()
       page.value = 1
       await Promise.all([loadInspirations(), refreshDetailStats()])
     } catch (e) {
@@ -281,8 +335,16 @@ export function usePersonDetail() {
     loadInspirations,
     setPage,
     loadDetail,
-    unbindOne,
-    unbindAll,
+    unbindMode,
+    unbindSelectedIds,
+    unbindSubmitting,
     clearingAll,
+    isCurrentPageAllSelected,
+    enterUnbindMode,
+    exitUnbindMode,
+    toggleUnbindSelect,
+    toggleSelectCurrentPage,
+    confirmUnbindSelected,
+    unbindAll,
   }
 }

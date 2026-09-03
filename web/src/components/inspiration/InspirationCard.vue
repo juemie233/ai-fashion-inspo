@@ -32,10 +32,6 @@ const props = defineProps<{
   hoverZoom?: boolean
   /** 是否显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
   showViewButton?: boolean
-  /** 是否显示「解除绑定」按钮（人物详情页解绑素材用）：显示时点击触发 unbind 事件 */
-  showUnbind?: boolean
-  /** 「解除绑定」二次确认文案（如「解除与该博主的绑定？」） */
-  unbindTip?: string
 }>()
 
 const emit = defineEmits<{
@@ -44,7 +40,6 @@ const emit = defineEmits<{
   (e: 'rate', value: number): void
   (e: 'approve'): void
   (e: 'toggleSelect'): void
-  (e: 'unbind'): void
 }>()
 
 const router = useRouter()
@@ -141,66 +136,52 @@ function openDetail() {
       </div>
 
       <!-- 悬浮操作层 -->
-      <div v-if="showActions !== false || showUnbind" class="card-overlay">
-        <!-- 解除绑定（人物详情页）：左上角文字小按钮 + 二次确认 -->
-        <a-popconfirm
-          v-if="showUnbind"
-          :content="unbindTip || '解除绑定？'"
-          :ok-button-props="{ status: 'warning' }"
-          ok-text="解除"
-          @ok="emit('unbind')"
+      <div v-if="showActions !== false" class="card-overlay">
+        <a-button
+          v-if="item.quality_status === 'rejected'"
+          size="mini"
+          shape="circle"
+          type="text"
+          status="success"
+          title="标记为通过（翻案）"
+          @click.stop="emit('approve')"
         >
-          <a-button size="mini" status="warning" type="primary" class="unbind-btn" @click.stop>
-            解除绑定
+          <template #icon>
+            <IconCheck :size="14" />
+          </template>
+        </a-button>
+        <a-popconfirm
+          content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
+          :ok-button-props="{ status: 'danger' }"
+          @ok="emit('delete')"
+        >
+          <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
+            <template #icon>
+              <IconDelete :size="14" />
+            </template>
           </a-button>
         </a-popconfirm>
-        <template v-if="showActions !== false">
-          <a-button
-            v-if="item.quality_status === 'rejected'"
-            size="mini"
-            shape="circle"
-            type="text"
-            status="success"
-            title="标记为通过（翻案）"
-            @click.stop="emit('approve')"
-          >
-            <template #icon>
-              <IconCheck :size="14" />
-            </template>
-          </a-button>
-          <a-popconfirm
-            content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
-            :ok-button-props="{ status: 'danger' }"
-            @ok="emit('delete')"
-          >
-            <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
-              <template #icon>
-                <IconDelete :size="14" />
-              </template>
-            </a-button>
-          </a-popconfirm>
-          <a-button
-            size="mini"
-            shape="circle"
-            :type="item.is_favorite ? 'primary' : 'text'"
-            :status="item.is_favorite ? 'danger' : undefined"
-            @click.stop="emit('toggleFavorite')"
-          >
-            <template #icon>
-              <IconHeartFill v-if="item.is_favorite" :size="14" />
-              <IconHeart v-else :size="14" />
-            </template>
-          </a-button>
-          <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
-          <a-rate
-            :model-value="item.rating || 0"
-            allow-clear
-            class="card-rate"
-            title="评分（点击星设置，再点清除）"
-            @click.stop
-            @change="(v: number) => emit('rate', v)"
-          />
-        </template>
+        <a-button
+          size="mini"
+          shape="circle"
+          :type="item.is_favorite ? 'primary' : 'text'"
+          :status="item.is_favorite ? 'danger' : undefined"
+          @click.stop="emit('toggleFavorite')"
+        >
+          <template #icon>
+            <IconHeartFill v-if="item.is_favorite" :size="14" />
+            <IconHeart v-else :size="14" />
+          </template>
+        </a-button>
+        <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
+        <a-rate
+          :model-value="item.rating || 0"
+          allow-clear
+          class="card-rate"
+          title="评分（点击星设置，再点清除）"
+          @click.stop
+          @change="(v: number) => emit('rate', v)"
+        />
       </div>
 
       <!-- 分析状态 -->
@@ -315,15 +296,6 @@ function openDetail() {
 }
 .card:hover .card-overlay {
   opacity: 1;
-}
-
-/* 「解除绑定」按钮：固定到左上角，与右上角常规操作区分开（人物详情页用） */
-.unbind-btn {
-  position: absolute;
-  top: 0;
-  left: 0;
-  font-size: 12px;
-  line-height: 1;
 }
 
 /* 评分控件：与收藏按钮并列，白色描边保证在任意图片上可辨；

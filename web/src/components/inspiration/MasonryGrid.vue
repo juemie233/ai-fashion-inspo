@@ -29,10 +29,6 @@ const props = defineProps<{
   showViewButton?: boolean
   /** 定位模式：这些素材 id 高亮（金色描边），列表加载后自动滚动到首个目标 */
   focusedIds?: string[]
-  /** 是否显示卡片「解除绑定」按钮（人物详情页解绑素材用） */
-  showUnbind?: boolean
-  /** 「解除绑定」二次确认文案 */
-  unbindTip?: string
 }>()
 
 const emit = defineEmits<{
@@ -41,7 +37,6 @@ const emit = defineEmits<{
   (e: 'rate', id: string, value: number): void
   (e: 'approve', id: string): void
   (e: 'toggleSelect', id: string): void
-  (e: 'unbind', id: string): void
 }>()
 
 // ── 响应式列数：断点与原 CSS columns 行为保持一致 ──
@@ -128,14 +123,11 @@ watch(
             :show-actions="showActions !== false"
             :hover-zoom="hoverZoom"
             :show-view-button="showViewButton"
-            :show-unbind="showUnbind"
-            :unbind-tip="unbindTip"
             @delete="emit('delete', item.id)"
             @toggle-favorite="emit('toggleFavorite', item.id)"
             @rate="(v: number) => emit('rate', item.id, v)"
             @approve="emit('approve', item.id)"
             @toggle-select="emit('toggleSelect', item.id)"
-            @unbind="emit('unbind', item.id)"
           />
         </div>
       </div>
