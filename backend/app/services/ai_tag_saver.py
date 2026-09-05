@@ -55,6 +55,36 @@ async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
     return tag_count
 
 
+# ---------------------------------------------------------------------------
+# 袜类裸词 type 兜底过滤
+# ---------------------------------------------------------------------------
+# 提示词口径要求「袜/丝袜/鞋靴类 type 必须以颜色开头」（如「黑色过膝袜」「白丝」），
+# 但模型仍可能漏掉颜色、只输出裸品类名（「丝袜」「过膝袜」）。此类裸词与独立
+# color 字段语义重复、无法体现颜色，落库前兜底丢弃 type（color/features 照常保留）。
+_HOSIERY_TYPE_SUFFIXES = (
+    "丝袜", "长筒袜", "过膝袜", "连裤袜", "中筒袜", "短袜", "船袜",
+    "网袜", "渔网袜", "堆堆袜", "踝袜", "袜套", "袜",
+)
+
+# 颜色描述词：type 含其中任一即视为「带了颜色」，不属于裸词（不误丢）
+_COLOR_HINTS = (
+    "黑", "白", "红", "橙", "黄", "绿", "蓝", "紫", "灰", "银",
+    "金", "棕", "粉", "米", "肤", "青", "肉",
+)
+
+
+def _is_bare_hosiery_type(item_type: str) -> bool:
+    """判断单品 type 是否为「无颜色修饰的袜类裸品类名」。
+
+    判定规则：type 以袜类结尾词收尾，且整名不含任何颜色描述字
+    （如「丝袜」「过膝袜」→ True；「黑色丝袜」「白丝」→ False）。
+    供 iter_extracted_tags 落库前丢弃无效 type。
+    """
+    if not item_type.endswith(_HOSIERY_TYPE_SUFFIXES):
+        return False
+    return not any(hint in item_type for hint in _COLOR_HINTS)
+
+
 def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
     """按与 save_tags 完全一致的规则，迭代 AI 分析结果中的 (标签名, 类别, 置信度)。
 
@@ -135,7 +165,7 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
             if isinstance(features, str):
                 features = [p.strip() for p in features.replace('，', ',').replace('、', ',').split(',') if p.strip()]
 
-            if item_type:
+            if item_type and not _is_bare_hosiery_type(item_type):
                 yield item_type, "item_type", 0.8
 
             if color:
