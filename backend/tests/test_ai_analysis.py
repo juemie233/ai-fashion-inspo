@@ -416,3 +416,123 @@ async def test_analysis_history_excludes_trash_materials(client, upload, fake_ol
     assert r3.status_code == 200
     data3 = r3.json()
     assert any(log["inspiration_id"] == insp["id"] for log in data3["items"])
+
+
+# ═══════════════════════════════════════════════════════════════
+#  失败重试与 Ollama 未连接（可恢复错误，入队而非拒绝）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_retry_all_failed_enqueues_even_when_ollama_down(client, upload, monkeypatch):
+    """Ollama 未连接时「一键重试失败」仍创建队列任务入队（此前直接拒绝，重试形同虚设）。
+
+    回归：此前 retry-all-failed 前置检查 Ollama，离线即返回「请稍后重试」且不入队，
+    用户点「一键重试失败」永远无法重启失败分析。修复后任务入队（带 retry 标志），
+    worker 执行时「无法连接 Ollama」按可恢复错误自动退避重试，Ollama 恢复后自愈。
+    """
+    import app.routers.ai_analysis as router_mod
+    from app.models.inspiration import AIAnalysisLog
+    from app.models.task import TaskQueue
+
+    insp_id = upload().json()["id"]
+    async with async_session() as db:
+        db.add(
+            AIAnalysisLog(
+                inspiration_id=insp_id,
+                model_name="qwen3-vl:8b-instruct",
+                log_type="analysis",
+                error="无法连接 Ollama 服务，请确认 Ollama 已启动",
+            )
+        )
+        await db.commit()
+
+    # 模拟 Ollama 离线且自动启动失败（is_ollama_running / start_ollama 均为 async）
+    async def _ollama_down():
+        return False
+
+    async def _start_fail():
+        return "无法启动 Ollama"
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_down)
+    monkeypatch.setattr(router_mod, "start_ollama", _start_fail)
+
+    r = client.post("/api/ai/retry-all-failed")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 1  # 不再 count=0 拒绝
+    assert data["task_id"]  # 任务已入队
+    assert data["ollama_will_start"] is True  # 仅作提示，不阻断
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, data["task_id"])
+        assert task is not None
+        assert task.type == "batch_analyze"
+        assert task.result["retry"] is True  # 强制重跑标志（不跳过已有成功日志）
+        assert task.result["inspiration_ids"] == [insp_id]
+
+
+async def test_batch_retry_logs_enqueues_when_ollama_down(client, upload, monkeypatch):
+    """批量重试勾选记录：Ollama 离线同样入队（不拒绝）。"""
+    import app.routers.ai_analysis as router_mod
+    from app.models.inspiration import AIAnalysisLog
+    from app.models.task import TaskQueue
+
+    insp_id = upload().json()["id"]
+    async with async_session() as db:
+        log = AIAnalysisLog(
+            inspiration_id=insp_id,
+            model_name="qwen3-vl:8b-instruct",
+            log_type="analysis",
+            error="无法连接 Ollama 服务",
+        )
+        db.add(log)
+        await db.commit()
+        await db.refresh(log)
+        log_id = log.id
+
+    async def _ollama_down():
+        return False
+
+    async def _start_fail():
+        return "无法启动 Ollama"
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_down)
+    monkeypatch.setattr(router_mod, "start_ollama", _start_fail)
+
+    r = client.post("/api/ai/history/batch-retry", json={"ids": [log_id]})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 1
+    async with async_session() as db:
+        task = await db.get(TaskQueue, data["task_id"])
+        assert task.result["retry"] is True
+
+
+async def test_force_retry_task_reruns_already_successful(client, upload):
+    """失败重试任务（skip_analyzed=False）不跳过已有成功日志素材；普通批量仍跳过。"""
+    from app.models.inspiration import AIAnalysisLog
+    from app.services.task_runners.batch_analyze import _load_pending_items
+
+    insp_id = upload().json()["id"]
+    async with async_session() as db:
+        db.add(
+            AIAnalysisLog(
+                inspiration_id=insp_id, model_name="m", log_type="analysis"
+            )  # error=None → 成功日志
+        )
+        await db.commit()
+
+    # 普通批量（崩溃恢复幂等）：跳过已有成功日志
+    async with async_session() as db:
+        items, already, _unavailable = await _load_pending_items(db, [insp_id])
+    assert already == 1
+    assert items == []
+
+    # 失败重试（用户显式重跑）：不跳过，即使历史上成功过
+    async with async_session() as db:
+        items2, already2, _unavailable2 = await _load_pending_items(
+            db, [insp_id], skip_analyzed=False
+        )
+    assert already2 == 0
+    assert len(items2) == 1
+    assert items2[0][0] == insp_id

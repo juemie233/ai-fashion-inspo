@@ -349,8 +349,8 @@ async def export_analysis_history_csv(
 async def retry_analysis(
     inspiration_id: str,
     db: AsyncSession = Depends(get_db),
-) -> dict:
-    """重试失败的分析。"""
+) -> dict[str, str | int | bool]:
+    """重试失败的分析（走 worker 队列：Ollama 未连接不阻断入队，视为可恢复错误自动重试）。"""
     # 先校验素材是否存在
     result = await db.execute(
         select(Inspiration).where(Inspiration.id == inspiration_id)
@@ -361,47 +361,55 @@ async def retry_analysis(
     if inspiration.media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="暂不支持分析该素材类型")
 
+    task = await create_batch_analyze_task(db, [inspiration_id], force_retry=True)
+
+    # Ollama 检查仅作提示：任务已入队，Ollama 离线时 worker 按可恢复错误自动退避重试
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    resp: dict[str, str | int | bool] = {
+        "task_id": task.id,
+        "inspiration_id": inspiration_id,
+        "message": (
+            (f"{ollama_msg}，" if not ollama_running else "")
+            + f"已重新加入分析队列（任务 #{task.id}）"
+            + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
+        ),
+        "status": "pending",
+    }
     if not ollama_running:
-        return {
-            "message": ollama_msg,
-            "inspiration_id": inspiration_id,
-            "ollama_will_start": True,
-        }
-
-    # 视频素材传 None：由后台任务懒解析第一关键帧（ffmpeg 提取耗时，不阻塞请求）
-    file_path = inspiration.file_path if inspiration.media_type == "image" else None
-
-    task = asyncio.create_task(_run_analysis(inspiration_id, file_path))
-    _analysis_tasks.add(task)
-    task.add_done_callback(_analysis_tasks.discard)
-    return {"message": "已重新加入分析队列", "inspiration_id": inspiration_id}
+        resp["ollama_will_start"] = True
+    return resp
 
 
 @router.post("/retry-all-failed")
-async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str | int]:
-    """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。"""
+async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str | int | bool]:
+    """一键重试所有失败的分析（仅取每个素材最新记录为失败的）。
+
+    修复点：Ollama 未连接不再直接拒绝入队——「无法连接 Ollama」属可恢复错误，
+    任务经 worker 队列执行并按指数退避自动重试，Ollama 恢复后自动成功。
+    此前 Ollama 离线时返回「请稍后重试」且不入队，用户点「一键重试失败」形同虚设。
+    """
     failed = await ai_svc.get_failed_analysis_targets(db)
 
     if not failed:
         return {"message": "没有失败的记录", "count": 0}
 
+    inspiration_ids = [f[0] for f in failed]
+    task = await create_batch_analyze_task(db, inspiration_ids, force_retry=True)
+
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    resp: dict[str, str | int | bool] = {
+        "task_id": task.id,
+        "message": (
+            (f"{ollama_msg}，" if not ollama_running else "")
+            + f"已将 {len(inspiration_ids)} 个素材加入分析队列（任务 #{task.id}）"
+            + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
+        ),
+        "count": len(inspiration_ids),
+        "status": "pending",
+    }
     if not ollama_running:
-        return {
-            "message": f"{ollama_msg}，请稍后 Ollama 启动后再次重试",
-            "count": 0,
-            "ollama_will_start": True,
-        }
-
-    count = 0
-    for insp_id, file_path in failed:
-        task = asyncio.create_task(_run_analysis(insp_id, file_path))
-        _analysis_tasks.add(task)
-        task.add_done_callback(_analysis_tasks.discard)
-        count += 1
-
-    return {"message": f"已将 {count} 个素材重新加入分析队列", "count": count}
+        resp["ollama_will_start"] = True
+    return resp
 
 
 @router.post("/history/batch-delete")
@@ -424,11 +432,8 @@ async def batch_delete_logs(
 async def batch_retry_logs(
     payload: dict,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str | int]:
-    """批量重试分析记录：根据日志 ID 找到对应素材并重新分析。
-
-    请求体: {"ids": [1, 2, 3]}
-    """
+) -> dict[str, str | int | bool]:
+    """批量重试分析记录：根据日志 ID 找到对应素材并重新分析（走队列，Ollama 离线不阻断）。"""
     ids = payload.get("ids", [])
     if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="请提供要重试的记录 ID 列表")
@@ -438,21 +443,23 @@ async def batch_retry_logs(
     if not rows:
         return {"message": "没有可重试的素材", "count": 0}
 
-    ollama_running, ollama_msg = await _check_ollama_before_analysis()
-    if not ollama_running:
-        return {
-            "message": f"{ollama_msg}，请稍后 Ollama 启动后再次重试",
-            "count": 0,
-            "ollama_will_start": True,
-        }
+    inspiration_ids = [r[0] for r in rows]
+    task = await create_batch_analyze_task(db, inspiration_ids, force_retry=True)
 
-    count = 0
-    for insp_id, file_path in rows:
-        task = asyncio.create_task(_run_analysis(insp_id, file_path))
-        _analysis_tasks.add(task)
-        task.add_done_callback(_analysis_tasks.discard)
-        count += 1
-    return {"message": f"已将 {count} 个素材加入分析队列", "count": count}
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    resp: dict[str, str | int | bool] = {
+        "task_id": task.id,
+        "message": (
+            (f"{ollama_msg}，" if not ollama_running else "")
+            + f"已将 {len(inspiration_ids)} 个素材加入分析队列（任务 #{task.id}）"
+            + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
+        ),
+        "count": len(inspiration_ids),
+        "status": "pending",
+    }
+    if not ollama_running:
+        resp["ollama_will_start"] = True
+    return resp
 
 
 @router.get("/history/model-names")
