@@ -14,6 +14,7 @@ import {
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
+import { isPausableTaskType } from '@/utils/taskPresentation'
 import { formatDate, renderTimeCell } from '@/utils/format'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
@@ -135,8 +136,8 @@ const columns: TableColumnData[] = [
     render: ({ record }) => {
       const row = record as UnifiedTask
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
-        // 标签网络分析任务：运行中可暂停、已暂停可恢复（后端断点续算）
-        row.type === 'tag_network_analyze' && row.status === 'running'
+        // 可暂停任务（标签网络分析/批量分析/组合分析）：运行中可暂停、已暂停可恢复
+        isPausableTaskType(row.type) && row.status === 'running'
           ? h(
               Button,
               {
@@ -148,7 +149,7 @@ const columns: TableColumnData[] = [
               { default: () => '暂停' },
             )
           : null,
-        row.type === 'tag_network_analyze' && row.status === 'paused'
+        isPausableTaskType(row.type) && row.status === 'paused'
           ? h(
               Button,
               {

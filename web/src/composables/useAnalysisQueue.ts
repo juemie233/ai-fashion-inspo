@@ -291,6 +291,36 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
+  /** 暂停运行中的批量/组合分析任务（后端任务级暂停；轮询/WS 推送继续，下一轮拉到 paused 状态） */
+  async function pauseBatchTask() {
+    if (!batchTask.value || batchTask.value.status !== 'running') return
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(
+        `/tasks/${batchTask.value.id}/pause`,
+      )
+      Message.success(data?.message || '任务已暂停')
+      // 乐观置为 paused（真实状态由轮询/WS 推送校正）
+      batchTask.value = { ...batchTask.value, status: 'paused' }
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '暂停失败'))
+    }
+  }
+
+  /** 恢复已暂停的批量/组合分析任务（后端放回 pending，worker 重新认领续算） */
+  async function resumeBatchTask() {
+    if (!batchTask.value || batchTask.value.status !== 'paused') return
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(
+        `/tasks/${batchTask.value.id}/resume`,
+      )
+      Message.success(data?.message || '任务已恢复')
+      // 乐观置为 pending（worker 认领后轮询会拉到 running）
+      batchTask.value = { ...batchTask.value, status: 'pending' }
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '恢复失败'))
+    }
+  }
+
   /** 停止批量任务轮询（自增代际号，使当前轮询链失效） */
   function stopBatchPolling() {
     batchPollSeq += 1 // 自增代际号，使当前轮询链失效，防止在途请求返回后重新调度
@@ -383,6 +413,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     togglePauseQueue,
     triggerBatchAnalyze,
     cancelBatchTask,
+    pauseBatchTask,
+    resumeBatchTask,
     retryAnalysis,
     startPolling,
     stopPolling,

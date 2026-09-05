@@ -21,6 +21,12 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # 其余类型任务不硬打断。
 _CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match", "tag_network_analyze")
 
+# 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
+# 标签网络分析（断点续算）；批量/组合分析（AI 标签分析的核心批量路径，由
+# worker 进程执行，恢复时按「已成功素材跳过」幂等续算，不受 API 进程内存
+# 暂停标志影响——暂停必须走任务级状态，见 execute_batch_analyze）。
+_PAUSABLE_RUNNING_TYPES = ("tag_network_analyze", "batch_analyze", "multi_analyze")
+
 
 @router.get("", response_model=TaskListOut)
 async def list_tasks(
@@ -135,19 +141,23 @@ async def pause_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """暂停任务（仅 tag_network_analyze 支持）：
+    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze 支持）：
 
-    - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state）；
-    - 执行器感知到 paused 状态后保存状态并返回。
+    - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state；
+      batch/multi 的进度已由执行器逐批落库，无需额外状态）；
+    - 执行器在下一个批次边界感知到 paused 后保存进度并返回。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
 
-    if task.status != "running" or task.type != "tag_network_analyze":
+    if task.status != "running" or task.type not in _PAUSABLE_RUNNING_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"仅运行中的 tag_network_analyze 任务可暂停（当前状态 {task.status}）",
+            detail=(
+                f"仅运行中的 {_PAUSABLE_RUNNING_TYPES} 任务可暂停"
+                f"（当前状态 {task.status}）"
+            ),
         )
 
     # 标记为 paused，等待执行器保存状态并返回
@@ -170,26 +180,45 @@ async def resume_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """恢复任务（仅 tag_network_analyze 支持）：
+    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze 支持）：
 
-    - 从 ``paused`` 状态恢复为 ``running``；
-    - 保留 last_stage 和 stage_state，执行器从中续算。
+    - ``tag_network_analyze``（网络图分析，断点续算）：恢复为 ``running``，
+      保留 last_stage 与 stage_state，由执行器从中续算；
+    - ``batch_analyze`` / ``multi_analyze``（批量/组合分析）：恢复为 ``pending``
+      并清空认领信息，由 worker 重新认领执行；执行器按「已有成功分析日志的
+      素材跳过」幂等续算，进度不丢失。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
 
-    if task.status != "paused" or task.type != "tag_network_analyze":
+    if task.status != "paused" or task.type not in _PAUSABLE_RUNNING_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"仅已暂停的 tag_network_analyze 任务可恢复（当前状态 {task.status}）",
+            detail=(
+                f"仅已暂停的 {_PAUSABLE_RUNNING_TYPES} 任务可恢复"
+                f"（当前状态 {task.status}）"
+            ),
         )
 
-    # 恢复为 running，保留 last_stage 和 stage_state
+    if task.type == "tag_network_analyze":
+        # 恢复为 running，保留 last_stage 和 stage_state
+        values = {"status": "running", "paused_at": None, "updated_at": utcnow()}
+    else:
+        # 批量/组合分析：放回 pending 由 worker 重新认领（幂等续算），
+        # 清空认领/心跳/暂停标记；next_retry_at 保持 None 立即可认领
+        values = {
+            "status": "pending",
+            "claimed_by": None,
+            "heartbeat_at": None,
+            "paused_at": None,
+            "next_retry_at": None,
+            "updated_at": utcnow(),
+        }
     result = await db.execute(
         update(TaskQueue)
         .where(TaskQueue.id == task_id, TaskQueue.status == "paused")
-        .values(status="running", paused_at=None, updated_at=utcnow())
+        .values(**values)
     )
     await db.commit()
     if result.rowcount == 0:

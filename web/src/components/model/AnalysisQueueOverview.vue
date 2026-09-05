@@ -17,6 +17,8 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'analyzeAll'): void
   (e: 'cancelBatchTask'): void
+  (e: 'pauseBatchTask'): void
+  (e: 'resumeBatchTask'): void
   (e: 'closeBatchTask'): void
   (e: 'togglePause'): void
   (e: 'cancelQueueItem', inspirationId: string): void
@@ -106,6 +108,28 @@ function isVideoFile(path: string | null): boolean {
           @click="emit('cancelBatchTask')"
         >
           取消任务
+        </a-button>
+        <!-- 批量/组合分析任务：运行中可暂停、已暂停可恢复（后端任务级暂停，
+             由 worker 执行，暂停对 API 进程内「队列暂停」标志不可见，独立入口） -->
+        <a-button
+          v-if="batchTask.status === 'running'"
+          size="mini"
+          type="outline"
+          status="warning"
+          style="margin-left: auto"
+          @click="emit('pauseBatchTask')"
+        >
+          ⏸ 暂停任务
+        </a-button>
+        <a-button
+          v-if="batchTask.status === 'paused'"
+          size="mini"
+          type="outline"
+          status="success"
+          style="margin-left: auto"
+          @click="emit('resumeBatchTask')"
+        >
+          ▶ 恢复任务
         </a-button>
       </div>
       <div v-if="batchTask.error" style="font-size: 12px; color: #ef4444; margin-top: 4px">

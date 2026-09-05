@@ -29,6 +29,22 @@ export interface QueueTask {
   updated_at: string
 }
 
+/** 支持「运行中暂停 / 已暂停恢复」的任务类型（与后端 _PAUSABLE_RUNNING_TYPES 对齐）：
+ * - tag_network_analyze：标签网络分析（断点续算）
+ * - batch_analyze / multi_analyze：AI 标签分析的批量/组合分析（worker 执行，
+ *   暂停后恢复按「已成功跳过」幂等续算）
+ */
+export const PAUSABLE_TASK_TYPES = [
+  'tag_network_analyze',
+  'batch_analyze',
+  'multi_analyze',
+] as const
+
+/** 判断任务类型是否支持暂停/恢复（任务列表与批量任务卡片的按钮显示统一走这里） */
+export function isPausableTaskType(type: string): boolean {
+  return (PAUSABLE_TASK_TYPES as readonly string[]).includes(type)
+}
+
 /** 采集任务原始条目（/api/scraper/tasks 返回项） */
 export interface ScraperTaskRaw {
   id: number

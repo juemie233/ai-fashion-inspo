@@ -42,6 +42,8 @@ const {
   queuePaused,
   triggerBatchAnalyze,
   cancelBatchTask,
+  pauseBatchTask,
+  resumeBatchTask,
   retryAnalysis,
   togglePauseQueue,
   cancelQueueItem,
@@ -151,6 +153,8 @@ onUnmounted(() => {
       :queue-paused="queuePaused"
       @analyze-all="triggerBatchAnalyze"
       @cancel-batch-task="cancelBatchTask"
+      @pause-batch-task="pauseBatchTask"
+      @resume-batch-task="resumeBatchTask"
       @close-batch-task="batchTask = null"
       @toggle-pause="togglePauseQueue"
       @cancel-queue-item="cancelQueueItem"

@@ -37,6 +37,7 @@ async def create_batch_analyze_task(
     inspiration_ids: list[str],
     skipped: int = 0,
     priority: int = 0,
+    force_retry: bool = False,
 ) -> TaskQueue:
     """创建「批量分析」任务记录，返回任务对象（供 API 创建任务后返回 task_id）。
 
@@ -46,6 +47,9 @@ async def create_batch_analyze_task(
         skipped: 被跳过的素材数量（不存在或非图片）
         priority: 队列优先级（越大越先执行）；批量分析为后台批任务，默认 0。
             未来单素材即时分析可传更高值插队
+        force_retry: 是否为「失败重试」任务（历史记录重试/一键重试失败）。
+            True 时执行器**不跳过**已有成功分析日志的素材——用户显式要求重跑，
+            与崩溃恢复幂等（跳过已成功）语义区分。
 
     返回:
         新建的任务记录
@@ -57,7 +61,7 @@ async def create_batch_analyze_task(
         progress=0,
         total=len(inspiration_ids),
         done=0,
-        result={"inspiration_ids": inspiration_ids, "skipped": skipped},
+        result={"inspiration_ids": inspiration_ids, "skipped": skipped, "retry": force_retry},
         max_retries=2,
     )
     db.add(task)
@@ -131,12 +135,17 @@ async def _resolve_analysis_frames(
 
 
 async def _load_pending_items(
-    db: AsyncSession, inspiration_ids: list[str]
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    skip_analyzed: bool = True,
 ) -> tuple[list[tuple[str, str]], int, int]:
     """加载仍存在的图片/视频素材，并跳过已有成功分析日志的（崩溃恢复幂等）。
 
     视频素材解析第一关键帧为分析源；关键帧提取失败的素材计入 unavailable
     （不进入分析、不算失败——ffmpeg 系统性故障时任务不该整体重试）。
+
+    skip_analyzed=False（失败重试任务）：不跳过已有成功日志的素材——用户
+    显式对历史失败记录重试，期望重新分析该素材（可能历史上成功过但最近失败）。
 
     返回 (待分析 (id, 帧路径列表) 列表, 已分析跳过数量, 关键帧不可用数量)。
     """
@@ -162,21 +171,24 @@ async def _load_pending_items(
         items.append((iid, frames))
 
     # 跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
+    # （崩溃恢复/暂停续算的幂等基础）。失败重试任务（skip_analyzed=False）不跳过。
     analyzed_ids: set[str] = set()
-    candidate_ids = [iid for iid, _ in items]
-    for chunk in _chunked(candidate_ids):
-        analyzed_result = await db.execute(
-            select(AIAnalysisLog.inspiration_id)
-            .where(
-                analysis_log_filter(),
-                AIAnalysisLog.inspiration_id.in_(chunk),
-                (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+    already_analyzed = 0
+    if skip_analyzed:
+        candidate_ids = [iid for iid, _ in items]
+        for chunk in _chunked(candidate_ids):
+            analyzed_result = await db.execute(
+                select(AIAnalysisLog.inspiration_id)
+                .where(
+                    analysis_log_filter(),
+                    AIAnalysisLog.inspiration_id.in_(chunk),
+                    (AIAnalysisLog.error.is_(None)) | (AIAnalysisLog.error == ""),
+                )
+                .distinct()
             )
-            .distinct()
-        )
-        analyzed_ids.update(r[0] for r in analyzed_result.all())
-    already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
-    items = [(iid, fr) for iid, fr in items if iid not in analyzed_ids]
+            analyzed_ids.update(r[0] for r in analyzed_result.all())
+        already_analyzed = sum(1 for iid in candidate_ids if iid in analyzed_ids)
+        items = [(iid, fr) for iid, fr in items if iid not in analyzed_ids]
     return items, already_analyzed, unavailable
 
 
@@ -228,7 +240,10 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         return
 
     # 加载待分析素材（执行期间可能被删除，仅保留仍存在的图片/视频素材）
-    items, already_analyzed, unavailable = await _load_pending_items(db, inspiration_ids)
+    # 失败重试任务（payload.retry=true）：不跳过已有成功日志的素材（强制重跑）
+    items, already_analyzed, unavailable = await _load_pending_items(
+        db, inspiration_ids, skip_analyzed=not bool(payload.get("retry"))
+    )
 
     task.total = len(items)
     task.done = 0
@@ -265,6 +280,17 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         logger.info(
             f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
+
+        # 暂停检查：外部（暂停接口）把任务标记为 paused 后，本批次边界
+        # 感知到即保存进度返回。恢复时 resume 接口放回 pending，由 worker
+        # 重新认领，_load_pending_items 自动跳过「已有成功分析日志」的素材，
+        # 从断点幂等续算（单素材分析失败同样会跳过，语义与重跑一致）。
+        await db.refresh(task)
+        if task.status == "paused":
+            logger.info(
+                f"批量分析任务已暂停: #{task.id}，进度 {task.done}/{task.total} 已保存"
+            )
+            return
 
     _raise_if_all_failed(task.total, success_count, failed_items, recoverable_failed)
 
@@ -537,6 +563,15 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
             task.updated_at = utcnow()
             await db.commit()
             await _broadcast_task_event(task, "progress")
+
+            # 暂停检查：感知到 paused 即保存进度返回，恢复时由 worker 重新
+            # 认领执行，已成功组合项（素材 × 模型 × Prompt 版本）自动跳过续算
+            await db.refresh(task)
+            if task.status == "paused":
+                logger.info(
+                    f"组合分析任务已暂停: #{task.id}，进度 {task.done}/{task.total} 已保存"
+                )
+                return
 
         logger.info(
             f"组合分析进度: #{task.id} {task.progress}% "

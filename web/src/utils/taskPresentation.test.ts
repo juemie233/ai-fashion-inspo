@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatKeywords,
+  isPausableTaskType,
   normalizeQueueTask,
   normalizeScraperTask,
   parseMaxCount,
@@ -151,5 +152,20 @@ describe('formatKeywords / parseMaxCount', () => {
   it('parseMaxCount 对非数字/缺失返回 0', () => {
     expect(parseMaxCount(null)).toBe(0)
     expect(parseMaxCount('{"max_count":"x"}')).toBe(0)
+  })
+})
+
+describe('isPausableTaskType（AI 标签分析批量/组合 + 标签网络分析可暂停）', () => {
+  it('三类任务返回 true', () => {
+    expect(isPausableTaskType('tag_network_analyze')).toBe(true)
+    expect(isPausableTaskType('batch_analyze')).toBe(true)
+    expect(isPausableTaskType('multi_analyze')).toBe(true)
+  })
+
+  it('其他任务类型返回 false', () => {
+    expect(isPausableTaskType('quality_check')).toBe(false)
+    expect(isPausableTaskType('face_scan')).toBe(false)
+    expect(isPausableTaskType('deduplicate')).toBe(false)
+    expect(isPausableTaskType('')).toBe(false)
   })
 })
