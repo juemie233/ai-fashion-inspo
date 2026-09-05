@@ -57,8 +57,18 @@ const bloggerOptions = computed(() =>
 onMounted(async () => {
   bloggerLoading.value = true
   try {
-    const { items } = await bloggersApi.fetchList({ sort: 'count', size: 100 })
-    bloggers.value = items
+    // 分页拉取全部博主（单页上限 200，循环取完）。此前只取前 100 名：
+    // 按素材数排序后，素材较少的博主（如部分抖音博主）排在 100 名之外，
+    // 批量关联的候选列表里就没有它们，用户选不到。
+    const all: Array<{ id: number; name: string; inspiration_count?: number }> = []
+    let page = 1
+    while (true) {
+      const { items, total } = await bloggersApi.fetchList({ sort: 'count', page, size: 200 })
+      all.push(...items)
+      if (all.length >= total || items.length === 0) break
+      page += 1
+    }
+    bloggers.value = all
   } catch {
     // 加载失败静默：选择器空态展示，不影响批量操作栏其它功能
   } finally {
