@@ -536,3 +536,66 @@ async def test_force_retry_task_reruns_already_successful(client, upload):
     assert already2 == 0
     assert len(items2) == 1
     assert items2[0][0] == insp_id
+
+
+async def test_retag_analysis_by_tag_ai_source_only(client, upload, monkeypatch):
+    """按标签重分析：仅对「该标签由 AI 打标」的素材建强制重跑任务（手动打标不纳入）。"""
+    import app.routers.ai_analysis as router_mod
+    from app.models.tag import InspirationTag, Tag
+    from app.models.task import TaskQueue
+
+    insp_ai = upload().json()["id"]
+    insp_manual = upload().json()["id"]
+
+    async with async_session() as db:
+        tag = Tag(name="重分析测试标签", category="style")
+        db.add(tag)
+        await db.flush()
+        db.add(InspirationTag(inspiration_id=insp_ai, tag_id=tag.id, source="ai_generated"))
+        db.add(InspirationTag(inspiration_id=insp_manual, tag_id=tag.id, source="manual"))
+        await db.commit()
+        tag_id = tag.id
+
+    async def _ollama_up():
+        return True
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_up)
+
+    r = client.post(f"/api/ai/retag/{tag_id}")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 1  # 仅 AI 打标素材
+    assert data["task_id"]
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, data["task_id"])
+        assert task.type == "batch_analyze"
+        assert task.result["retry"] is True  # 强制重跑（不跳过已有成功日志）
+        assert task.result["inspiration_ids"] == [insp_ai]
+        assert insp_manual not in task.result["inspiration_ids"]
+
+
+async def test_retag_analysis_no_ai_material(client, upload, monkeypatch):
+    """该标签下没有 AI 打标素材：返回空态（不建任务）。"""
+    import app.routers.ai_analysis as router_mod
+    from app.models.tag import InspirationTag, Tag
+
+    insp_manual = upload().json()["id"]
+    async with async_session() as db:
+        tag = Tag(name="纯手动标签", category="style")
+        db.add(tag)
+        await db.flush()
+        db.add(InspirationTag(inspiration_id=insp_manual, tag_id=tag.id, source="manual"))
+        await db.commit()
+        tag_id = tag.id
+
+    async def _ollama_up():
+        return True
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_up)
+    r = client.post(f"/api/ai/retag/{tag_id}")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 0
+    assert data["task_id"] is None
+    assert "没有由 AI 打标" in data["message"]

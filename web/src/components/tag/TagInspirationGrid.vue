@@ -13,6 +13,7 @@ import {
   type TagItem,
 } from '@/api/tags'
 import { removeTagFromInspiration, batchAddTagsToInspirations } from '@/api/inspirations'
+import apiClient from '@/api/client'
 import InspirationGridBrowser, {
   type GridBrowserItem,
 } from '@/components/inspiration/InspirationGridBrowser.vue'
@@ -194,6 +195,30 @@ async function batchAddTags() {
     batchAdding.value = false
   }
 }
+
+// ===== 重新 AI 分析该标签下的 AI 打标素材 =====
+/** 目的：提示词/词表更新后按新口径重新提取，或想「洗掉」AI 打错的该标签
+ * （重跑会先清 AI 标签再写新结果；手动/种子标签保留）。后端小端点按标签
+ * 取 source=ai_generated 素材建强制重跑任务，后台执行可查看任务进度。 */
+const reanalyzing = ref(false)
+
+async function reanalyzeAiTagged() {
+  if (!props.tag || reanalyzing.value) return
+  reanalyzing.value = true
+  try {
+    const { data } = await apiClient.post<{
+      task_id: number | null
+      count: number
+      message: string
+    }>(`/ai/retag/${props.tag.id}`)
+    if (data.task_id) Message.success(data.message)
+    else Message.info(data.message)
+  } catch {
+    Message.error('创建重新分析任务失败')
+  } finally {
+    reanalyzing.value = false
+  }
+}
 </script>
 
 <template>
@@ -211,11 +236,18 @@ async function batchAddTags() {
       @load-more="loadMore"
       @open-detail="openDetail"
     >
-      <!-- 头部：标签名 + 使用次数 -->
+      <!-- 头部：标签名 + 使用次数 + 重新分析 AI 素材 -->
       <template #header-left>
         <h3 style="margin: 0">「{{ tag.name }}」</h3>
         <a-tag size="small" style="margin-left: 8px">{{ tag.usage_count }} 次</a-tag>
         <span style="font-size: 13px; color: #999; margin-left: 8px">共 {{ total }} 个</span>
+        <a-popconfirm
+          content="将按当前提示词重新 AI 分析该标签下由 AI 打标的素材并覆盖其结果（手动/种子标签保留）；后台执行，可到任务中心查看进度。确定继续？"
+          :ok-button-props="{ loading: reanalyzing }"
+          @ok="reanalyzeAiTagged"
+        >
+          <a-button size="mini" type="outline" style="margin-left: 8px">重新分析 AI 素材</a-button>
+        </a-popconfirm>
       </template>
 
       <!-- 批量操作栏：全选 + 批量移除/批量添加 -->

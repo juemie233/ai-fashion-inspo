@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models.inspiration import Inspiration
+from app.models.tag import InspirationTag, Tag
 from app.routers.ai_shared import (
     _active_analyses,
     _analysis_tasks,
@@ -452,6 +453,66 @@ async def batch_retry_logs(
         "message": (
             (f"{ollama_msg}，" if not ollama_running else "")
             + f"已将 {len(inspiration_ids)} 个素材加入分析队列（任务 #{task.id}）"
+            + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
+        ),
+        "count": len(inspiration_ids),
+        "status": "pending",
+    }
+    if not ollama_running:
+        resp["ollama_will_start"] = True
+    return resp
+
+
+@router.post("/retag/{tag_id}")
+async def retag_analysis_by_tag(
+    tag_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str | int | bool | None]:
+    """按标签重新 AI 分析：对该标签下「由 AI 打标」的全部素材按当前提示词强制重跑。
+
+    场景（标签高级管理入口）：
+    - 提示词/词表更新后，希望该标签的素材按新口径重新提取；
+    - 想「洗掉」AI 打错的该标签——重跑会先清 AI 标签再写新结果，
+      若新模型仍打该标签则保留（如实）。
+    口径：
+    - 仅处理 source=ai_generated 的关联素材（手动/种子打标不受影响——重跑只清 AI 标签）；
+    - 走 worker 队列并带 force_retry：不跳过已有成功日志的素材（强制重跑），
+      Ollama 未连接视为可恢复错误自动退避重试，离线不阻断入队。
+
+    返回:
+        {"task_id", "count", "message", "status"}
+    """
+    tag = await db.get(Tag, tag_id)
+    if tag is None:
+        raise HTTPException(status_code=404, detail="标签未找到")
+
+    rows = await db.execute(
+        select(InspirationTag.inspiration_id)
+        .join(Inspiration, Inspiration.id == InspirationTag.inspiration_id)
+        .where(
+            InspirationTag.tag_id == tag_id,
+            InspirationTag.source == "ai_generated",
+            Inspiration.deleted_at.is_(None),
+            Inspiration.media_type.in_(("image", "video")),
+        )
+    )
+    inspiration_ids = sorted({r[0] for r in rows.all()})
+    if not inspiration_ids:
+        return {
+            "message": "该标签下没有由 AI 打标的素材，无需重新分析",
+            "task_id": None,
+            "count": 0,
+            "status": "none",
+        }
+
+    task = await create_batch_analyze_task(db, inspiration_ids, force_retry=True)
+
+    ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    resp: dict[str, str | int | bool | None] = {
+        "task_id": task.id,
+        "message": (
+            (f"{ollama_msg}，" if not ollama_running else "")
+            + f"已为「{tag.name}」标签下 {len(inspiration_ids)} 个素材创建重新分析任务（#{task.id}）"
             + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
         ),
         "count": len(inspiration_ids),
