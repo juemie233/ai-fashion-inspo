@@ -7,6 +7,7 @@ import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { addTagsToInspiration } from '@/api/inspirations'
+import { bloggersApi, type PersonBrief } from '@/api/persons'
 import apiClient from '@/api/client'
 import type { UploadQueueItem } from '@/types/upload'
 import { useUploadPrefs } from '@/composables/useUploadPrefs'
@@ -59,6 +60,29 @@ function stopUpload() {
 const sourceAuthor = ref('')
 const quickTags = ref('')
 
+// ── 绑定穿搭博主：上传成功后把素材关联到所选博主（可选，不选=不绑定）──
+const linkBloggerId = ref<number>()
+/** 博主候选（全部已建博主，名称搜索过滤） */
+const bloggerOptions = ref<Array<{ label: string; value: number }>>([])
+
+/** 分页拉取全部穿搭博主作为候选池（与 PersonLinkSection 一致，单页上限 200） */
+async function loadBloggers() {
+  try {
+    const all: PersonBrief[] = []
+    let page = 1
+    while (true) {
+      const { items, total } = await bloggersApi.fetchList({ page, size: 200, sort: 'count' })
+      all.push(...items)
+      if (all.length >= total || items.length === 0) break
+      page += 1
+    }
+    bloggerOptions.value = all.map((b) => ({ label: b.name, value: b.id }))
+  } catch {
+    // 博主列表加载失败静默：下拉为空，不影响上传主流程
+    bloggerOptions.value = []
+  }
+}
+
 // ── URL 导入 ──
 const urlInput = ref('')
 const urlImporting = ref(false)
@@ -76,7 +100,9 @@ function onDragEnter(e: DragEvent) {
   isDragging.value = true
   dragCount.value = e.dataTransfer?.items.length || 0
 }
-function onDragOver(e: DragEvent) { e.preventDefault() }
+function onDragOver(e: DragEvent) {
+  e.preventDefault()
+}
 function onDragLeave(e: DragEvent) {
   if ((e.currentTarget as HTMLElement)?.contains(e.relatedTarget as HTMLElement)) return
   isDragging.value = false
@@ -104,7 +130,7 @@ function onPaste(e: ClipboardEvent) {
 
 // ── 添加文件到队列 ──
 function addFiles(files: File[]) {
-  const imageFiles = files.filter(f => {
+  const imageFiles = files.filter((f) => {
     const ext = '.' + (f.name.split('.').pop()?.toLowerCase() || '')
     return UPLOAD_EXTS.has(ext)
   })
@@ -119,7 +145,9 @@ function addFiles(files: File[]) {
     if (remaining <= 0) {
       Message.warning(`队列已满（最多 ${MAX_QUEUE_SIZE} 个），未添加任何文件`)
     } else {
-      Message.warning(`队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`)
+      Message.warning(
+        `队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`,
+      )
     }
   }
   for (const file of accepted) {
@@ -136,13 +164,13 @@ function addFiles(files: File[]) {
 
 // ── 移除队列项 ──
 function removeFromQueue(id: string) {
-  const item = queue.value.find(q => q.id === id)
+  const item = queue.value.find((q) => q.id === id)
   if (item) URL.revokeObjectURL(item.thumbnail)
-  queue.value = queue.value.filter(q => q.id !== id)
+  queue.value = queue.value.filter((q) => q.id !== id)
 }
 
 function clearQueue() {
-  queue.value.forEach(q => URL.revokeObjectURL(q.thumbnail))
+  queue.value.forEach((q) => URL.revokeObjectURL(q.thumbnail))
   queue.value = []
 }
 
@@ -150,19 +178,23 @@ function clearQueue() {
 async function checkDuplicate(file: File): Promise<boolean> {
   const buffer = await file.arrayBuffer()
   const hashBuf = await crypto.subtle.digest('SHA-256', buffer)
-  const hash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('')
+  const hash = Array.from(new Uint8Array(hashBuf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
   if (_dedupHashes.has(hash)) return true
-  _dedupHashes.add(hash)  // 记录已检测哈希，同批队列内直接拦截重复文件
+  _dedupHashes.add(hash) // 记录已检测哈希，同批队列内直接拦截重复文件
   try {
     const { data } = await apiClient.get('/admin/check-duplicate', { params: { hash } })
     if (data.exists) return true
-  } catch { /* 忽略 */ }
+  } catch {
+    /* 忽略 */
+  }
   return false
 }
 
 // ── 开始上传 ──
 async function startUpload() {
-  const pending = queue.value.filter(q => q.status === 'pending')
+  const pending = queue.value.filter((q) => q.status === 'pending')
   if (pending.length === 0) {
     Message.warning('没有待上传的文件')
     return
@@ -175,10 +207,15 @@ async function startUpload() {
   _lastTime = Date.now()
   uploadSpeed.value = ''
 
-  const tags = quickTags.value.split(/[,，\s]+/).map(t => t.trim()).filter(Boolean)
+  const tags = quickTags.value
+    .split(/[,，\s]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
 
-  let taggedCount = 0   // 快速标签添加成功数
-  let tagFailedCount = 0  // 快速标签添加失败数
+  let taggedCount = 0 // 快速标签添加成功数
+  let tagFailedCount = 0 // 快速标签添加失败数
+  let linkedCount = 0 // 博主绑定成功数
+  let linkFailedCount = 0 // 博主绑定失败数
 
   for (const item of pending) {
     if (_stopRequested) break
@@ -210,6 +247,16 @@ async function startUpload() {
         apiClient.post(`/ai/analyze/${result.id}`).catch(() => {})
       }
 
+      // 绑定穿搭博主（幂等关联；失败不影响上传主流程，只计数提示）
+      if (linkBloggerId.value) {
+        try {
+          await bloggersApi.link(result.id, [linkBloggerId.value])
+          linkedCount++
+        } catch {
+          linkFailedCount++
+        }
+      }
+
       // 关联快速标签（自由类目，来源为手动）
       if (tags.length > 0) {
         try {
@@ -238,12 +285,12 @@ async function startUpload() {
   _abortCtrl = null
   uploading.value = false
   uploadSpeed.value = ''
-  const done = queue.value.filter(q => q.status === 'done').length
-  const failed = queue.value.filter(q => q.status === 'failed').length
-  const dups = queue.value.filter(q => q.status === 'duplicate').length
+  const done = queue.value.filter((q) => q.status === 'done').length
+  const failed = queue.value.filter((q) => q.status === 'failed').length
+  const dups = queue.value.filter((q) => q.status === 'duplicate').length
 
   if (stopped) {
-    const remain = queue.value.filter(q => q.status === 'pending').length
+    const remain = queue.value.filter((q) => q.status === 'pending').length
     Message.info(`已停止上传：完成 ${done} 个，剩余 ${remain} 个待上传`)
     return
   }
@@ -259,12 +306,18 @@ async function startUpload() {
     if (tagFailedCount > 0) Message.warning(`${tagFailedCount} 个素材快速标签添加失败`)
   }
 
+  // 博主绑定结果提示
+  if (linkBloggerId.value) {
+    if (linkedCount > 0) Message.success(`已绑定穿搭博主 ${linkedCount} 个素材`)
+    if (linkFailedCount > 0) Message.warning(`${linkFailedCount} 个素材博主绑定失败`)
+  }
+
   // 上传后行为
   if (afterUpload.value === 'home') router.push('/')
   else if (afterUpload.value === 'models?tab=queue') {
     router.push({ path: '/models', query: { tab: 'queue' } })
   } else if (afterUpload.value === 'detail' && done === 1) {
-    const uploaded = queue.value.find(q => q.status === 'done')
+    const uploaded = queue.value.find((q) => q.status === 'done')
     if (uploaded?.resultId) router.push(`/detail/${uploaded.resultId}`)
   }
 }
@@ -275,7 +328,10 @@ async function importFromUrl() {
   if (!url) return
   urlImporting.value = true
   try {
-    const tags = quickTags.value.split(',').map(t => t.trim()).filter(Boolean)
+    const tags = quickTags.value
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
     const { data } = await apiClient.post('/inspirations/from-url', {
       url,
       source_author: sourceAuthor.value.trim() || undefined,
@@ -286,6 +342,15 @@ async function importFromUrl() {
     urlInput.value = ''
     if (autoAnalyze.value) {
       apiClient.post(`/ai/analyze/${data.id}`).catch(() => {})
+    }
+    // 绑定穿搭博主（幂等；失败仅提示，不影响导入结果）
+    if (linkBloggerId.value) {
+      try {
+        await bloggersApi.link(data.id, [linkBloggerId.value])
+        Message.success('已绑定所选穿搭博主')
+      } catch {
+        Message.warning('博主绑定失败')
+      }
     }
   } catch (e) {
     Message.error(getApiErrorMessage(e, 'URL 导入失败'))
@@ -315,13 +380,15 @@ function makeProgressHandler(item: UploadQueueItem) {
   }
 }
 
-function goToDetail(id: string) { router.push(`/detail/${id}`) }
+function goToDetail(id: string) {
+  router.push(`/detail/${id}`)
+}
 
 // ── 队列统计 ──
-const queuePending = computed(() => queue.value.filter(q => q.status === 'pending').length)
-const queueDone = computed(() => queue.value.filter(q => q.status === 'done').length)
-const queueFailed = computed(() => queue.value.filter(q => q.status === 'failed').length)
-const queueDups = computed(() => queue.value.filter(q => q.status === 'duplicate').length)
+const queuePending = computed(() => queue.value.filter((q) => q.status === 'pending').length)
+const queueDone = computed(() => queue.value.filter((q) => q.status === 'done').length)
+const queueFailed = computed(() => queue.value.filter((q) => q.status === 'failed').length)
+const queueDups = computed(() => queue.value.filter((q) => q.status === 'duplicate').length)
 
 // ── 快捷键 ──
 /** 清空队列确认弹窗是否可见（按钮与 Esc 共用同一确认） */
@@ -345,12 +412,13 @@ function onKeyDown(e: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('paste', onPaste)
   document.addEventListener('keydown', onKeyDown)
+  void loadBloggers()
 })
 
 onUnmounted(() => {
   document.removeEventListener('paste', onPaste)
   document.removeEventListener('keydown', onKeyDown)
-  queue.value.forEach(q => URL.revokeObjectURL(q.thumbnail))
+  queue.value.forEach((q) => URL.revokeObjectURL(q.thumbnail))
 })
 </script>
 
@@ -404,6 +472,8 @@ onUnmounted(() => {
       v-model:auto-analyze="autoAnalyze"
       v-model:skip-duplicates="skipDuplicates"
       v-model:after-upload="afterUpload"
+      v-model:link-blogger-id="linkBloggerId"
+      :blogger-options="bloggerOptions"
       :uploading="uploading"
       :pending="queuePending"
       @save-prefs="savePrefs"
@@ -430,12 +500,7 @@ onUnmounted(() => {
     </a-modal>
 
     <!-- 视频预览弹窗 -->
-    <a-modal
-      v-model:visible="videoModalOpen"
-      title="视频预览"
-      :width="640"
-      :footer="false"
-    >
+    <a-modal v-model:visible="videoModalOpen" title="视频预览" :width="640" :footer="false">
       <video
         v-if="videoModalSrc"
         :src="videoModalSrc"

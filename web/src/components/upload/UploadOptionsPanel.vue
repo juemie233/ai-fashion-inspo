@@ -10,6 +10,10 @@ const props = defineProps<{
   autoAnalyze: boolean
   skipDuplicates: boolean
   afterUpload: UploadAfterAction
+  /** 绑定的穿搭博主 ID（上传后素材关联到该博主；可选） */
+  linkBloggerId?: number
+  /** 博主候选列表（名称搜索过滤） */
+  bloggerOptions: Array<{ label: string; value: number }>
   uploading: boolean
   pending: number
 }>()
@@ -20,6 +24,7 @@ const emit = defineEmits<{
   (e: 'update:autoAnalyze', value: boolean): void
   (e: 'update:skipDuplicates', value: boolean): void
   (e: 'update:afterUpload', value: UploadAfterAction): void
+  (e: 'update:linkBloggerId', value: number | undefined): void
   (e: 'savePrefs'): void
   (e: 'start'): void
   (e: 'stop'): void
@@ -61,10 +66,17 @@ const skipDuplicatesModel = computed({
 const afterUploadModel = computed({
   get: () => props.afterUpload,
   set: (value: unknown) => {
-    emit('update:afterUpload', ((value as UploadAfterAction) || 'stay'))
+    emit('update:afterUpload', (value as UploadAfterAction) || 'stay')
     emit('savePrefs')
   },
 })
+
+/** 博主下拉过滤：按名称关键字匹配 */
+function filterBlogger(input: string, option: { label?: string }): boolean {
+  const kw = input.trim().toLowerCase()
+  if (!kw) return true
+  return (option.label ?? '').toLowerCase().includes(kw)
+}
 </script>
 
 <template>
@@ -73,6 +85,22 @@ const afterUploadModel = computed({
       <div class="meta-row">
         <label>来源作者</label>
         <a-input v-model="sourceAuthorModel" size="small" placeholder="如 Instagram @xxx" />
+      </div>
+      <div class="meta-row">
+        <label>绑定博主</label>
+        <a-select
+          :model-value="linkBloggerId"
+          placeholder="上传后绑定穿搭博主（可选）"
+          size="small"
+          style="flex: 1; min-width: 0"
+          allow-clear
+          allow-search
+          :options="bloggerOptions"
+          :filter-option="filterBlogger"
+          @change="
+            (v: unknown) => emit('update:linkBloggerId', typeof v === 'number' ? v : undefined)
+          "
+        />
       </div>
       <div class="meta-row">
         <label>快速标签</label>
@@ -92,7 +120,7 @@ const afterUploadModel = computed({
           v-model="afterUploadModel"
           :options="afterUploadOptions"
           size="mini"
-          style="width:140px"
+          style="width: 140px"
         />
       </div>
     </div>
@@ -102,7 +130,7 @@ const afterUploadModel = computed({
       long
       :loading="uploading"
       :disabled="pending === 0"
-      style="margin-top:12px"
+      style="margin-top: 12px"
       @click="emit('start')"
     >
       {{ uploading ? '上传中...' : `开始上传 (${pending} 个)` }}
@@ -113,7 +141,7 @@ const afterUploadModel = computed({
       long
       type="text"
       status="warning"
-      style="margin-top:8px"
+      style="margin-top: 8px"
       @click="emit('stop')"
     >
       停止上传
