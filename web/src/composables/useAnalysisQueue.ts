@@ -40,6 +40,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const activeAnalyses = ref<Record<string, string>>({})
   const batchAnalyzing = ref(false)
   const batchTask = ref<TaskInfo | null>(null)
+  /** 全量分析任务列表（batch/multi，含 paused/running/pending 及近期终态），供队列区展示 */
+  const analysisTasks = ref<TaskInfo[]>([])
   const pendingQueue = ref<QueueItem[]>([])
   const queuePaused = ref(false)
 
@@ -57,6 +59,90 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       pendingQueue.value = data.items
       queuePaused.value = data.paused
     } catch {}
+  }
+
+  /** 加载全部分析任务（batch_analyze + multi_analyze，含 paused/running/pending 与近期终态）。
+   *  后端 /tasks 不传 status 即返回全部状态、按 id 倒序，分类型各取近 50 合并。 */
+  async function loadAnalysisTasks() {
+    try {
+      const [legacy, multi] = await Promise.all([
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'batch_analyze', size: 50 },
+        }),
+        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
+          params: { type: 'multi_analyze', size: 50 },
+        }),
+      ])
+      const merged = [...legacy.data.items, ...multi.data.items].sort((a, b) => b.id - a.id)
+      // 始终保留所有非终态任务（含 paused），避免被数量上限挤掉看不到暂停任务
+      const nonTerminal = merged.filter((t) => !isTaskTerminalStatus(t.status))
+      const terminal = merged.filter((t) => isTaskTerminalStatus(t.status)).slice(0, 20)
+      analysisTasks.value = [...nonTerminal, ...terminal]
+    } catch {
+      /* 静默：列表为空不影响其它功能 */
+    }
+  }
+
+  /** 行级暂停任务（运行中批量/组合分析） */
+  async function pauseTaskById(taskId: number) {
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${taskId}/pause`)
+      Message.success(data?.message || '任务已暂停')
+      const row = analysisTasks.value.find((t) => t.id === taskId)
+      if (row) row.status = 'paused'
+      if (batchTask.value?.id === taskId) batchTask.value = { ...batchTask.value, status: 'paused' }
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '暂停失败'))
+    }
+  }
+
+  /** 行级恢复任务（已暂停的批量/组合分析） */
+  async function resumeTaskById(taskId: number) {
+    try {
+      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${taskId}/resume`)
+      Message.success(data?.message || '任务已恢复')
+      // 恢复后接管对该任务的轮询（若当前没有跟踪更新的活动任务）
+      await loadAnalysisTasks()
+      const resumed = analysisTasks.value.find((t) => t.id === taskId)
+      if (resumed && !isTaskTerminalStatus(resumed.status)) {
+        const currentActive = batchTask.value && !isTaskTerminalStatus(batchTask.value.status)
+        if (!currentActive || (batchTask.value?.id ?? -Infinity) < taskId) {
+          batchTask.value = resumed
+          startBatchPolling(taskId)
+        }
+      }
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '恢复失败'))
+    }
+  }
+
+  /** 行级取消任务（pending 取消=删除记录；running 分析类不支持硬取消则后端提示） */
+  async function cancelTaskById(taskId: number) {
+    try {
+      const { data } = await apiClient.post<{ message?: string; deleted?: boolean }>(
+        `/tasks/${taskId}/cancel`,
+      )
+      Message.success(data?.message || '任务已取消')
+      if (data.deleted) {
+        analysisTasks.value = analysisTasks.value.filter((t) => t.id !== taskId)
+      } else {
+        const row = analysisTasks.value.find((t) => t.id === taskId)
+        if (row) row.status = 'cancelled'
+      }
+      loadQueue()
+      loadActiveAnalyses()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '取消失败'))
+    }
+  }
+
+  /** 把「最新非终态任务」接入现有单任务轮询/通知机制（供操作与刷新后调用） */
+  function syncActiveTask() {
+    const active = analysisTasks.value.find((t) => !isTaskTerminalStatus(t.status))
+    if (active && active.id !== batchTask.value?.id) {
+      batchTask.value = active
+      startBatchPolling(active.id)
+    }
   }
 
   /** 取消排队中的单个素材 */
@@ -132,6 +218,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     pollTimer = setTimeout(async () => {
       await loadActiveAnalyses()
       loadPendingQueue()
+      loadAnalysisTasks()
       const isActive = Object.keys(activeAnalyses.value).length > 0
       loadQueue()
       if (isActive || wasActive) {
@@ -206,6 +293,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         body: `任务 #${created.task_id}，${created.count} 个素材${comboSuffix}已加入队列`,
         tag: isMulti ? 'multi-analyze' : 'batch-analyze',
       })
+      // 立即并入任务列表（随轮询刷新校正真实状态）
+      analysisTasks.value = [batchTask.value, ...analysisTasks.value]
       startBatchPolling(created.task_id)
     } catch (e) {
       Message.error(getApiErrorMessage(e, '批量分析失败'))
@@ -254,6 +343,9 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
    */
   function handleBatchSnapshot(data: TaskInfo) {
     batchTask.value = data
+    // 同步到任务列表行（列表与单任务轮询共享同一任务状态）
+    const row = analysisTasks.value.find((t) => t.id === data.id)
+    if (row) Object.assign(row, data)
     if (!isTaskTerminalStatus(data.status)) return
     if (batchSettled) return
     batchSettled = true
@@ -275,50 +367,7 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     loadQueue()
     options.loadHistory?.()
     loadActiveAnalyses()
-  }
-
-  /** 取消排队中的批量分析任务 */
-  async function cancelBatchTask() {
-    if (!batchTask.value) return
-    try {
-      await apiClient.post(`/tasks/${batchTask.value.id}/cancel`)
-      Message.success('任务已取消')
-      stopBatchPolling()
-      batchTask.value = { ...batchTask.value, status: 'cancelled' }
-      loadQueue()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '取消失败'))
-    }
-  }
-
-  /** 暂停运行中的批量/组合分析任务（后端任务级暂停；轮询/WS 推送继续，下一轮拉到 paused 状态） */
-  async function pauseBatchTask() {
-    if (!batchTask.value || batchTask.value.status !== 'running') return
-    try {
-      const { data } = await apiClient.post<{ message?: string }>(
-        `/tasks/${batchTask.value.id}/pause`,
-      )
-      Message.success(data?.message || '任务已暂停')
-      // 乐观置为 paused（真实状态由轮询/WS 推送校正）
-      batchTask.value = { ...batchTask.value, status: 'paused' }
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '暂停失败'))
-    }
-  }
-
-  /** 恢复已暂停的批量/组合分析任务（后端放回 pending，worker 重新认领续算） */
-  async function resumeBatchTask() {
-    if (!batchTask.value || batchTask.value.status !== 'paused') return
-    try {
-      const { data } = await apiClient.post<{ message?: string }>(
-        `/tasks/${batchTask.value.id}/resume`,
-      )
-      Message.success(data?.message || '任务已恢复')
-      // 乐观置为 pending（worker 认领后轮询会拉到 running）
-      batchTask.value = { ...batchTask.value, status: 'pending' }
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '恢复失败'))
-    }
+    loadAnalysisTasks()
   }
 
   /** 停止批量任务轮询（自增代际号，使当前轮询链失效） */
@@ -330,27 +379,11 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 恢复进行中的批量/组合分析任务：刷新页面后查询是否有 pending/running 的任务并继续轮询 */
+  /** 恢复进行中的批量/组合分析任务：刷新页面后拉取全状态任务列表，
+   *  并对最新非终态任务（含暂停的）接管轮询，保证暂停任务可见可恢复 */
   async function resumeBatchAnalyzeTask() {
-    try {
-      // 兼容两类分析任务：单模型批量分析 + 多模型组合分析
-      const [legacy, multi] = await Promise.all([
-        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
-          params: { type: 'batch_analyze', size: 20 },
-        }),
-        apiClient.get<{ items: TaskInfo[] }>('/tasks', {
-          params: { type: 'multi_analyze', size: 20 },
-        }),
-      ])
-      const all = [...legacy.data.items, ...multi.data.items]
-      const active = all.find((t) => t.status === 'pending' || t.status === 'running')
-      if (active) {
-        batchTask.value = active
-        startBatchPolling(active.id)
-      }
-    } catch {
-      /* 静默 */
-    }
+    await loadAnalysisTasks()
+    syncActiveTask()
   }
 
   // ── WebSocket 推送合流 ──
@@ -365,16 +398,28 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       total?: number
       error?: string | null
     }
+    if (!ev || !ev.task_id) return
     const current = batchTask.value
-    if (!current || !ev || ev.task_id !== current.id || batchSettled) return
-    handleBatchSnapshot({
-      ...current,
-      status: ev.status ?? current.status,
-      progress: typeof ev.progress === 'number' ? ev.progress : current.progress,
-      done: typeof ev.done === 'number' ? ev.done : current.done,
-      total: typeof ev.total === 'number' ? ev.total : current.total,
-      error: ev.error !== undefined ? ev.error : current.error,
-    })
+    if (current && ev.task_id === current.id && !batchSettled) {
+      handleBatchSnapshot({
+        ...current,
+        status: ev.status ?? current.status,
+        progress: typeof ev.progress === 'number' ? ev.progress : current.progress,
+        done: typeof ev.done === 'number' ? ev.done : current.done,
+        total: typeof ev.total === 'number' ? ev.total : current.total,
+        error: ev.error !== undefined ? ev.error : current.error,
+      })
+      return
+    }
+    // 事件属于任务列表中的其它任务：就地更新该行（列表刷新也兜底）
+    const row = analysisTasks.value.find((t) => t.id === ev.task_id)
+    if (row) {
+      if (ev.status) row.status = ev.status
+      if (typeof ev.progress === 'number') row.progress = ev.progress
+      if (typeof ev.done === 'number') row.done = ev.done
+      if (typeof ev.total === 'number') row.total = ev.total
+      if (ev.error !== undefined) row.error = ev.error
+    }
   })
   // 2) ai_analysis_done：单素材分析完成（API 进程内广播）→ 即时刷新队列与历史
   subscribeWs('ai_analysis_done', () => {
@@ -404,17 +449,19 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     activeAnalyses,
     batchAnalyzing,
     batchTask,
+    analysisTasks,
     pendingQueue,
     queuePaused,
     loadQueue,
     loadActiveAnalyses,
     loadPendingQueue,
+    loadAnalysisTasks,
     cancelQueueItem,
     togglePauseQueue,
     triggerBatchAnalyze,
-    cancelBatchTask,
-    pauseBatchTask,
-    resumeBatchTask,
+    pauseTaskById,
+    resumeTaskById,
+    cancelTaskById,
     retryAnalysis,
     startPolling,
     stopPolling,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** AI 分析队列总览：进度条、批量分析入口、批量任务进度、活动分析与排队素材。 */
+/** AI 分析队列总览：进度条、分析任务列表（含暂停/进行中/排队）、活动分析与排队素材。 */
 
 import { getFileUrl } from '@/api/inspirations'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -8,7 +8,8 @@ import type { QueueStats, TaskInfo, QueueItem } from '@/types/analysis'
 defineProps<{
   queueStats: QueueStats
   batchAnalyzing: boolean
-  batchTask: TaskInfo | null
+  /** 全部分析任务（batch/multi，含 paused/running/pending 及近期终态），按 id 倒序 */
+  analysisTasks: TaskInfo[]
   activeAnalyses: Record<string, string>
   pendingQueue: QueueItem[]
   queuePaused: boolean
@@ -16,10 +17,9 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'analyzeAll'): void
-  (e: 'cancelBatchTask'): void
-  (e: 'pauseBatchTask'): void
-  (e: 'resumeBatchTask'): void
-  (e: 'closeBatchTask'): void
+  (e: 'pauseTask', task: TaskInfo): void
+  (e: 'resumeTask', task: TaskInfo): void
+  (e: 'cancelTask', task: TaskInfo): void
   (e: 'togglePause'): void
   (e: 'cancelQueueItem', inspirationId: string): void
 }>()
@@ -27,6 +27,11 @@ const emit = defineEmits<{
 /** 判断文件路径是否为视频（缩略图缺失时禁止把 mp4 当 <img> 加载） */
 function isVideoFile(path: string | null): boolean {
   return !!path && /\.(mp4|webm|mov|m4v)$/i.test(path)
+}
+
+/** 任务类型中文 */
+function taskTypeLabel(type: string): string {
+  return type === 'multi_analyze' ? '组合分析' : '批量分析'
 }
 </script>
 
@@ -52,88 +57,76 @@ function isVideoFile(path: string | null): boolean {
       </a-button>
     </div>
 
-    <!-- 批量分析任务进度（数据库驱动任务队列） -->
-    <a-card v-if="batchTask" size="small" style="margin-bottom: 16px">
+    <!-- 分析任务列表（含暂停/进行中/排队中及近期已完成，按 id 倒序） -->
+    <a-card v-if="analysisTasks.length > 0" size="small" style="margin-bottom: 16px">
       <template #title>
-        <span>批量分析任务 #{{ batchTask.id }}</span>
-        <StatusTag :status="batchTask.status" style="margin-left: 8px" />
-        <a-button
-          v-if="['success', 'failed', 'cancelled'].includes(batchTask.status)"
-          size="mini"
-          type="text"
-          style="margin-left: auto"
-          @click="emit('closeBatchTask')"
+        <span>分析任务（{{ analysisTasks.length }}）</span>
+        <span style="font-size: 12px; color: #888; margin-left: 8px"
+          >含暂停/进行中任务，可在此恢复或取消</span
         >
-          关闭
-        </a-button>
       </template>
-      <a-progress
-        type="line"
-        :percent="batchTask.progress / 100"
-        :stroke-width="20"
-        :status="
-          batchTask.status === 'failed'
-            ? 'danger'
-            : batchTask.status === 'success'
-              ? 'success'
-              : undefined
-        "
-      />
-      <div
-        style="
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-top: 6px;
-          font-size: 12px;
-          color: #888;
-          flex-wrap: wrap;
-        "
-      >
-        <span>{{ batchTask.done }} / {{ batchTask.total }} 已完成</span>
-        <span v-if="batchTask.retry_count > 0" style="color: #f0a020"
-          >已重试 {{ batchTask.retry_count }} 次</span
+
+      <div v-for="task in analysisTasks" :key="task.id" class="task-row">
+        <div class="task-head">
+          <span class="task-title">
+            {{ taskTypeLabel(task.type) }} #{{ task.id }}
+            <StatusTag :status="task.status" style="margin-left: 6px" />
+          </span>
+          <span class="task-meta">
+            {{ task.done }} / {{ task.total }} 已完成
+            <template v-if="task.retry_count > 0"> · 已重试 {{ task.retry_count }} 次</template>
+          </span>
+        </div>
+
+        <!-- 运行中：进度条；pending（含等待自动重试）：提示；paused：显示已保存进度 -->
+        <a-progress
+          v-if="task.status === 'running'"
+          type="line"
+          :percent="task.progress"
+          :stroke-width="14"
+          size="small"
+        />
+        <div
+          v-else-if="task.status === 'pending' && task.next_retry_at"
+          style="font-size: 12px; color: #f0a020"
         >
-        <span
-          v-if="batchTask.status === 'pending' && batchTask.next_retry_at"
-          style="color: #f0a020"
-          >等待自动重试中...</span
-        >
-        <a-button
-          v-if="batchTask.status === 'pending'"
-          size="mini"
-          type="outline"
-          status="danger"
-          style="margin-left: auto"
-          @click="emit('cancelBatchTask')"
-        >
-          取消任务
-        </a-button>
-        <!-- 批量/组合分析任务：运行中可暂停、已暂停可恢复（后端任务级暂停，
-             由 worker 执行，暂停对 API 进程内「队列暂停」标志不可见，独立入口） -->
-        <a-button
-          v-if="batchTask.status === 'running'"
-          size="mini"
-          type="outline"
-          status="warning"
-          style="margin-left: auto"
-          @click="emit('pauseBatchTask')"
-        >
-          ⏸ 暂停任务
-        </a-button>
-        <a-button
-          v-if="batchTask.status === 'paused'"
-          size="mini"
-          type="outline"
-          status="success"
-          style="margin-left: auto"
-          @click="emit('resumeBatchTask')"
-        >
-          ▶ 恢复任务
-        </a-button>
-      </div>
-      <div v-if="batchTask.error" style="font-size: 12px; color: #ef4444; margin-top: 4px">
-        {{ batchTask.error }}
+          等待自动重试中...
+        </div>
+        <div v-else-if="task.status === 'paused'" style="font-size: 12px; color: #666">
+          ⏸ 已暂停于 {{ task.progress }}%（{{ task.done }}/{{ task.total }}），恢复后从断点续算
+        </div>
+
+        <div v-if="task.error" class="task-error">{{ task.error }}</div>
+
+        <div class="task-actions">
+          <a-button
+            v-if="task.status === 'pending'"
+            size="mini"
+            type="outline"
+            status="danger"
+            @click="emit('cancelTask', task)"
+          >
+            取消
+          </a-button>
+          <a-button
+            v-if="task.status === 'running'"
+            size="mini"
+            type="outline"
+            status="warning"
+            @click="emit('pauseTask', task)"
+          >
+            ⏸ 暂停
+          </a-button>
+          <a-button
+            v-if="task.status === 'paused'"
+            size="mini"
+            type="outline"
+            status="success"
+            @click="emit('resumeTask', task)"
+          >
+            ▶ 恢复
+          </a-button>
+        </div>
       </div>
     </a-card>
 
@@ -210,6 +203,42 @@ function isVideoFile(path: string | null): boolean {
 </template>
 
 <style scoped>
+.task-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #f0f0f0;
+}
+.task-row:last-child {
+  border-bottom: none;
+}
+.task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.task-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.task-meta {
+  font-size: 12px;
+  color: #888;
+}
+.task-error {
+  font-size: 12px;
+  color: #ef4444;
+}
+.task-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* 排队素材 */
 .pending-queue {
   margin-bottom: 16px;
 }

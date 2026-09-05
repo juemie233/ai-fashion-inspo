@@ -14,7 +14,7 @@ import { useAnalysisQueue } from '@/composables/useAnalysisQueue'
 import { useAnalysisHistory } from '@/composables/useAnalysisHistory'
 import { useAnalysisDetail } from '@/composables/useAnalysisDetail'
 import { useAnalysisCompare } from '@/composables/useAnalysisCompare'
-import type { MultiAnalyzeParams } from '@/types/analysis'
+import type { MultiAnalyzeParams, TaskInfo } from '@/types/analysis'
 
 // 队列与历史 composable 互相依赖（轮询 / 批量操作需刷新对方数据），
 // 通过闭包回调相互注入，避免循环依赖。
@@ -37,13 +37,13 @@ const {
   queueStats,
   activeAnalyses,
   batchAnalyzing,
-  batchTask,
+  analysisTasks,
   pendingQueue,
   queuePaused,
   triggerBatchAnalyze,
-  cancelBatchTask,
-  pauseBatchTask,
-  resumeBatchTask,
+  pauseTaskById,
+  resumeTaskById,
+  cancelTaskById,
   retryAnalysis,
   togglePauseQueue,
   cancelQueueItem,
@@ -85,7 +85,6 @@ const {
   retryAllFailed,
   deleteAllFailed,
   applyLogToMaterial,
-  loadPromptVersions,
 } = historyApi
 
 const { detailVisible, detailLoading, currentDetail, viewDetail } = detailApi
@@ -143,19 +142,18 @@ onUnmounted(() => {
     <!-- 统计卡片 -->
     <AnalysisStatsCard :queue-stats="queueStats" />
 
-    <!-- 进度条 / 批量任务 / 活动分析 / 排队素材 -->
+    <!-- 进度条 / 分析任务列表（含暂停/进行中） / 活动分析 / 排队素材 -->
     <AnalysisQueueOverview
       :queue-stats="queueStats"
       :batch-analyzing="batchAnalyzing"
-      :batch-task="batchTask"
+      :analysis-tasks="analysisTasks"
       :active-analyses="activeAnalyses"
       :pending-queue="pendingQueue"
       :queue-paused="queuePaused"
       @analyze-all="triggerBatchAnalyze"
-      @cancel-batch-task="cancelBatchTask"
-      @pause-batch-task="pauseBatchTask"
-      @resume-batch-task="resumeBatchTask"
-      @close-batch-task="batchTask = null"
+      @pause-task="(t: TaskInfo) => pauseTaskById(t.id)"
+      @resume-task="(t: TaskInfo) => resumeTaskById(t.id)"
+      @cancel-task="(t: TaskInfo) => cancelTaskById(t.id)"
       @toggle-pause="togglePauseQueue"
       @cancel-queue-item="cancelQueueItem"
     />
