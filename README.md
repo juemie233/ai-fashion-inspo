@@ -91,17 +91,17 @@ chrome_debug_port: int = 9222
 
 | 模块 | 功能 |
 | ------ | ------ |
-| **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态/标签/主色调）、排序（含随机/标签数）、密度调节、分页加载、批量多选操作（收藏/移垃圾桶/加标签/编辑元数据）、浏览模式/密度/每页数量持久化 |
+| **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态/标签/主色调）、排序（含随机/标签数）、密度调节、分页加载、批量多选操作（收藏/移垃圾桶/加标签/编辑元数据）、**收藏合集**（手动合集：素材加入/移除/合集内拖拽编排；智能合集：按标签/筛选条件动态求值并支持一键固化为手动合集；合集封面/排序，垃圾桶素材不参与）、浏览模式/密度/每页数量持久化 |
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节、语义搜索（文本）、以图搜图（图片上传）、`/` 聚焦与 Esc 退出、复制搜索链接、筛选状态持久化 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
-| **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、**视频关键帧条带**（视频素材懒提取缩略图，失败静默隐藏）、下载原图、复制原始链接、标签点击跳搜索、移入垃圾桶（可选择删除原因：质量差/重复/不喜欢/隐私/其他/AI生成）、五星评分（与收藏并列，列表可筛选/排序）、**人脸识别（博主特征库匹配）**（检测并匹配 → 自动关联穿搭博主 / 疑似未知人脸 → 手动指定或解除关联，需先在博主详情页注册人脸） |
+| **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、**视频关键帧条带**（视频素材懒提取缩略图，失败静默隐藏）、下载原图、复制原始链接、标签点击跳搜索、移入垃圾桶（**必选删除原因**：质量差/重复/不喜欢/隐私/其他/AI生成，单个与批量共用原因弹窗，未选禁用确认）、五星评分（与收藏并列，列表可筛选/排序）、**人脸识别（博主特征库匹配）**（检测并匹配 → 自动关联穿搭博主 / 疑似未知人脸 → 手动指定或解除关联，需先在博主详情页注册人脸） |
 | **采集管理** | 小红书 CDP 零检测采集；**抖音 CDP 完整采集**（搜索三层策略——直连搜索页 / 搜索接口响应 / 首页搜索框兜底，反风控入口轮换自适应；搜索与按博主双模式；详情页图集多图 / 视频 / 正文 / 话题标签提取，视频下载入库，素材自动关联博主；登录 / 机器人验证感知，人工解决等待 + 诚实报错；任务结束后自动关闭采集新开的浏览器标签页）、**按博主采集**（选博主 → 进其主页逐篇打开笔记详情页，提取轮播多图/视频/正文 caption/话题标签，视频下载入库，素材自动关联博主）、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化（含跳过原因统计）、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除/**真实有效性校验**：探测平台登录态接口，失效在管理页显式标记，新建任务前置拦截已失效 Cookie）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、**话题标签存档**（笔记话题自动入库：全局去重 + 累计出现次数 + 来源追溯，新建/编辑采集任务可从话题库点击复用为关键词）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
-| **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、分栏宽度持久化 |
+| **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、**标签素材网格「重新分析 AI 素材」**（提示词更新后按新口径强制重跑该标签下全部 AI 打标素材）、分栏宽度持久化 |
 | **标签高级管理** | 独立路由页（侧边栏「标签高级管理」入口）：**健康度分析**（孤儿/低频/低质命名/疑似重复扫描 + 健康评分 + 一键修复）、**自动聚类**（名称相似 + 共现加成产出候选合并组，人工确认后合并/建别名）、**网络图分析**（Top-N 共现子图 + 社区发现 + 中心度 + 桥接节点高亮，点击节点看趋势）、**批量高级编辑**（正则查找替换/前后缀增删/格式归一化/正则批量合并，dry-run 预览 + 撞名自动合并）、**标签层级树**（parent_id 任意深度树，拖拽移动子树 + 循环检测）、**操作历史与回滚**（全部标签写操作快照，单条回滚 + 冲突检测）、**使用效果分析**（热度升降榜/标签组合/覆盖度/来源分布） |
-| **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列）、历史分页、多选批量操作、分析结果对比、**多模型 × 多提示词组合批量分析**（组合计划批量执行 + 批次对比视图）、**视频多帧融合分析**（逐帧分析后同名标签按最高置信度融合，帧数可配）、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
-| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库随机抽样 + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：auto 黑边自动检测 / 固定比例双模式 + 截图特征置信度分级；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
-| **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）、**人物组（博主跨平台绑定）**（同一现实人物在抖音/小红书各有账号时绑定为同一人——如小红书「Fox_」与「多多」：列表同组折叠为一条主账号（素材数最多者，可手动指定默认展示位）并带多平台徽标，展开可见组内各账号及其素材，详情页可绑定/解绑/切主，账号记录全部保留、按平台采集不受影响） |
-| **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/质量审核/批量删除/近似重复检测删除/采集/向量回填）、进度条与完成统计（向量/删除/审核明细）、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示） |
+| **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列，标签分析面板任务列表展示含暂停/排队中，行级暂停/恢复/取消）、历史分页、多选批量操作、分析结果对比、**多模型 × 多提示词组合批量分析**（组合计划批量执行 + 批次对比视图）、**视频多帧融合分析**（逐帧分析后同名标签按最高置信度融合，帧数可配）、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
+| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库扫描（默认不再抽样） + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：按平台分工双模式——小红书截图「auto 黑边检测」/抖音截图「内容边界检测」，截图特征置信度分级 + 字形证据/底部残留估算；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
+| **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）、**注销人脸 / 解绑素材**（博主详情多选素材批量注销已匹配人脸、批量解除素材-博主关联，素材侧已确认人脸自动防重复匹配）、**人物组（博主跨平台绑定）**（同一现实人物在抖音/小红书各有账号时绑定为同一人——如小红书「Fox_」与「多多」：列表同组折叠为一条主账号（素材数最多者，可手动指定默认展示位）并带多平台徽标，展开可见组内各账号及其素材，详情页可绑定/解绑/切主，账号记录全部保留、按平台采集不受影响） |
+| **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/向量回填/标签高级管理）、进度条与完成统计（向量/删除/审核明细）、**运行中任务暂停 / 已暂停恢复**（批量分析、组合分析、标签网络分析支持——批量/组合暂停后恢复按「已成功跳过」幂等续算）、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示） |
 | **浏览器插件** | 小红书/抖音页面一键提取穿搭图片（弹窗批量 + 任意网页右键单图采集，通知/角标反馈）；上传前按平台 ID 预查重并支持「跳过已采集的图片」开关（服务端 `check-platform-id` 只读接口，垃圾桶素材释放平台 ID 允许重采）；「上传后自动分析」开启时自动触发 AI 打标；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
 ## 快速启动
@@ -277,6 +277,7 @@ fashion-inspo/
 │   │   │   ├── tag_history.py    # 标签操作历史（before/after 快照，支持回滚）
 │   │   │   ├── person.py         # 人物模型（Blogger/Model 两表 + 素材关联 + 模特照片组/照片 + 人脸特征关系）
 │   │   │   ├── face.py           # 人脸特征库（博主人脸特征 + 素材人脸检测）
+│   │   │   ├── collection.py     # 收藏合集（collections 手动/智能 + collection_items 成员关联）
 │   │   │   ├── scraper.py        # 采集任务 + 定时采集计划 + 话题标签存档（scraper_hashtags）
 │   │   │   ├── task.py           # 异步任务队列
 │   │   │   └── audit.py          # 操作审计日志
@@ -285,6 +286,7 @@ fashion-inspo/
 │   │   │   ├── inspirations.py   # 素材 CRUD
 │   │   │   ├── tags.py           # 标签管理 + 批量/统计/扫描/排序/别名/共现/导入导出 + 高级管理（健康度/聚类/网络图/批量编辑/层级树/历史/效果分析）
 │   │   │   ├── search.py         # 多维度搜索 + 相似素材
+│   │   │   ├── collections.py    # 收藏合集（CRUD/排序/成员/智能固化）
 │   │   │   ├── bloggers.py       # 穿搭博主管理（含 CSV 导入与博主人脸注册）
 │   │   │   ├── models.py         # 职业模特管理 + 照片组（模特写真）
 │   │   │   ├── ai.py             # AI 路由聚合（拆分见 ai_*.py）
@@ -309,6 +311,7 @@ fashion-inspo/
 │   │   │   ├── inspiration_service.py  # 素材转发层 → inspiration_create/trash/query/update/dedupe/tags/state.py
 │   │   │   ├── tag_service.py    # 标签转发层 → tag_crud/tag_alias/tag_inspirations/tag_query + tag_health/tag_cluster/tag_graph/tag_effect/tag_history/tag_batch_edit.py
 │   │   │   ├── person_service.py # 人物转发层 → person/（base 基类 + services + csv_import + photo_sets）
+│   │   │   ├── collection_service.py # 收藏合集（手动/智能求值/固化/排序）
 │   │   │   ├── scraper_service.py     # 采集转发层 → scraper/（tasks 任务 + process 编排 + cookies/schedules/extension/results）
 │   │   │   ├── blogger_face.py   # 博主人脸注册（平均池化）+ 素材人脸检测匹配
 │   │   │   ├── face_thumbnail.py # 人脸缩略图裁剪（从已关联素材选图注册用）
@@ -373,6 +376,7 @@ fashion-inspo/
 │   │   │   ├── tags.ts           # 标签 API（完整）
 │   │   │   ├── tagAdvanced.ts    # 标签高级管理 API（健康度/聚类/网络图/批量编辑/层级树/历史/效果）
 │   │   │   ├── search.ts         # 搜索 API
+│   │   │   ├── collections.ts     # 收藏合集 API
 │   │   │   └── admin.ts          # 管理后台 API（导出/趋势/人物频次/审计/近似重复）
 │   │   ├── stores/               # Pinia 状态
 │   │   │   ├── inspirations.ts   # 素材状态
@@ -385,6 +389,7 @@ fashion-inspo/
 │   │   │   ├── ModelPhotoUploadView.vue # 添加模特照片（文件夹整组导入）
 │   │   │   ├── SearchView.vue    # 高级搜索
 │   │   │   ├── DetailView.vue    # 素材详情
+│   │   │   ├── CollectionsView.vue # 收藏合集（手动/智能合集：浏览/编辑排序/固化）
 │   │   │   ├── ScraperView.vue   # 采集管理
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
 │   │   │   ├── TagAdvancedManageView.vue # 标签高级管理（健康度/聚类/网络图/效果/层级树/历史 6 面板）
@@ -397,6 +402,7 @@ fashion-inspo/
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
+│   │   │   ├── collection/       # CollectionPickerModal（加入合集选择器）, SmartQueryEditorModal（智能合集条件编辑器）
 │   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志子组件
 │   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
@@ -407,6 +413,7 @@ fashion-inspo/
 │   │   ├── utils/                # 工具函数
 │   │   │   ├── sourceLabel.ts    # 来源类型中文映射
 │   │   │   ├── tagHistoryDiff.ts # 标签操作历史 before/after 差异展示
+│   │   │   ├── collectionQuery.ts # 智能合集筛选条件解析/校验/序列化
 │   │   │   └── format.ts         # 字节/耗时/日期格式化
 │   │   └── composables/          # Vue composables（useWebSocket / useSearch / useOutfitTags / useTagManage / useAdminTask / useTagAdvanced / useTaskPolling 等）
 │   ├── package.json
@@ -504,7 +511,7 @@ fashion-inspo/
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
 | `scraper_schedules` | 定时采集计划 | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count |
 | `scraper_hashtags` | 采集话题标签存档 | id, name（全局唯一）, seen_count（累计出现次数，跨任务累加）, first_seen_at/last_seen_at, source_kind（blogger/search）, source_id, note_url, source_meta（最近来源明细 JSON） |
-| `task_queue` | 异步任务队列 | type（batch_analyze/quality_check/batch_delete/deduplicate/vector_backfill/tag_health_scan/tag_cluster_scan/tag_network_analyze）, status（pending/running/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done, result, error, retry_count, next_retry_at |
+| `task_queue` | 异步任务队列 | type（batch_analyze/multi_analyze/quality_check/batch_delete/deduplicate/vector_backfill/tag_health_scan/tag_cluster_scan/tag_network_analyze）, status（pending/running/paused/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done, result, error, retry_count, next_retry_at, claimed_by（认领 worker）, heartbeat_at（心跳租约）, paused_at |
 | `pending_vector_backfills` | 向量回填攒批待处理表 | inspiration_id, type（image/text）, status, attempts — 素材上传/标签变更入队，worker 攒批重建向量（避免每素材创建小任务） |
 | `audit_logs` | 操作审计日志 | id, action（batch_delete/delete_rejected/cleanup_orphans/empty_trash/batch_trash）, target_type, count, freed_bytes, detail, created_at — 破坏性批量操作留痕 |
 | `bloggers` | 穿搭博主 | id, name, platform, platform_user_id, xhs_id（唯一）, ip_location, profile_url, avatar_path, bio, source, created_at, updated_at |
@@ -512,22 +519,33 @@ fashion-inspo/
 | `inspiration_bloggers` | 素材-博主多对多关联 | inspiration_id, blogger_id, confidence — 记录 AI 识别「图里是谁」的置信度 |
 | `inspiration_models` | 素材-模特多对多关联 | inspiration_id, model_id, confidence |
 | `model_photo_sets` | 模特照片组 | id, model_id, name（组名，默认取文件夹名）, created_at, updated_at |
+| `collection_items` | 素材-合集多对多关联（仅手动合集使用） | collection_id, inspiration_id, position（合集内拖拽顺序）, added_at |
+| `collections` | 收藏合集（手动/智能同表） | id, name（唯一）, description, cover_inspiration_id, position（列表排序）, query_json（null=手动合集；非空=智能合集筛选条件）, kind（manual/smart 由 query_json 区分）；垃圾桶素材不参与合集内容 |
 | `model_photos` | 模特照片 | id, set_id, file_path, thumbnail_path, content_hash（组内 SHA-256 去重）, sort_order, created_at |
 | `blogger_face_embeddings` | 博主人脸特征库 | id, blogger_id（唯一）, embedding（512 维 float32，平均池化）, updated_at — 素材人脸自动匹配依赖此特征库（职业模特无） |
 | `inspiration_face_detections` | 素材人脸检测 | id, inspiration_id, face_index（图内序号）, embedding, matched_blogger_id（命中博主，空为疑似未知人脸）, confidence（余弦相似度）, created_at |
 
 ### 标签类别体系
 
+> 类别为检索分组维度（与表结构正交）；AI 打标按提示词结构产出：type→`item_type`、color→`color`、design_detail→`design_detail`、material→`material`、fit→`fit`、style→`style`、attributes→`attribute`、atmosphere→`atmosphere`、expression→`expression`、leg_posture→`leg_posture`（新键均为 snake_case，旧 PascalCase 输出自动归一）。
+
 | 类别 | 示例 | 说明 |
 | ------ | ------ | ------ |
-| `style` | JK制服, 汉服, Y2K, 法式, 新中式 | 风格体系 |
-| `item_type` | 百褶裙, 过膝袜, 西装外套, 马丁靴 | 单品类型 |
-| `color` | 白色, 海军蓝, 酒红, 格纹 | 颜色 |
-| `body_part` | 过膝, 高腰, V领, 拖地 | 穿着方式 |
+| `style` | JK制服, 汉服, Y2K, 法式, 新中式, 御姐风 | 风格体系（JK 需成套制式信号，单件不判） |
+| `item_type` | 黑色过膝袜, 藏青格纹百褶短裙, 尖头细跟高跟鞋 | 单品类型（袜/鞋/裙类裸词兜底过滤，需带颜色长度款式） |
+| `design_detail` | 泡泡袖, V领, 高腰, 百褶, 开衩 | 款式细节（袖型/领型/腰位/口袋/系带等） |
+| `material` | 针织, 牛仔, 蕾丝, 丝绒, 漆皮 | 面料材质 |
+| `color` | 白色, 海军蓝, 酒红, 黑色, 格纹 | 颜色（AI 打标 type 内颜色开头 + color 字段冗余可检索） |
+| `body_part` | 露腿, 过膝, 挽袖口 | 身体部位 / 穿着位置（历史旧分类产物，新打标归入 design_detail/material 等） |
 | `fit` | 宽松, 修身, Oversized, 直筒 | 版型 |
-| `season` | 春季, 夏季, 秋季, 冬季 | 季节 |
-| `attribute` | 露脸, 全身, 对镜自拍, 叠穿 | 图片属性 |
+| `attribute` | 露脸, 全身, 坐姿, 对镜自拍 | 图片属性 |
+| `atmosphere` | 清新, 性感, 学院, 复古 | 环境氛围（AI 打标补充维度） |
+| `expression` | 微笑, 冷脸, 无表情 | 模特表情 |
+| `leg_posture` | 交叉腿, 并拢, 跷腿 | 腿部姿态 |
+| `season` | 春季, 夏季, 秋季, 冬季 | 季节（预设库） |
 | `outfit` | 御姐长腿高跟鞋穿搭, 白色系穿搭, 网球穿搭 | 穿搭大标签（精选层：手动 + AI 总结，宁缺毋滥） |
+
+> **存量治理**：AI 打标类别曾经历一轮「颜色剥离」——`item_type` 里剥离出的纯颜色词改归 `color` 并补建关联（撞名自动合并），`body_part` 的历史产物按语义重分类到 `material`/`design_detail`/`fit`，类别命名统一为 snake_case。标签健康度扫描按类别输出统计（长尾率/最高频占比）。
 
 ### 标签来源标识
 
@@ -581,6 +599,23 @@ alembic upgrade head
 | `GET` | `/api/inspirations/{id}/face-detections` | 素材人脸检测列表（含匹配博主与置信度） |
 | `PUT` | `/api/inspirations/{id}/face-detections/{det_id}` | 手动指定/解除人脸检测的博主关联（body: `{"blogger_id": 5}` 或 `{"blogger_id": null}`） |
 | `DELETE` | `/api/inspirations/{id}/face-detections/{det_id}` | 删除单条人脸检测记录 |
+
+### 收藏合集
+
+> 手动合集：成员落 `collection_items` 表（加入/移除/拖拽排序）；智能合集：`query_json` 存筛选条件（标签 AND/OR、来源、媒体、状态等），成员按条件动态求值，支持一键固化为手动合集。垃圾桶素材一律不作为合集内容。
+
+| 方法 | 路径 | 说明 |
+| ------ | ------ | ------ |
+| `GET` | `/api/collections` | 合集列表（含 kind：manual/smart、素材计数、封面） |
+| `POST` | `/api/collections` | 创建合集（手动：`{name, description?}`；智能：附加 `query_json`） |
+| `PATCH` | `/api/collections/order` | 合集排序（批量提交 position） |
+| `PATCH` | `/api/collections/{id}` | 更新合集（重命名/改描述/设封面/更新智能条件） |
+| `DELETE` | `/api/collections/{id}` | 删除合集（级联清理成员关联） |
+| `GET` | `/api/collections/{id}/inspirations` | 合集内素材列表（手动：按 position 排序；智能：按条件求值分页） |
+| `POST` | `/api/collections/{id}/inspirations` | 批量加入素材（仅手动合集） |
+| `DELETE` | `/api/collections/{id}/inspirations` | 批量移出素材（仅手动合集） |
+| `PATCH` | `/api/collections/{id}/items/order` | 合集内素材排序（拖拽编排） |
+| `POST` | `/api/collections/{id}/solidify` | 智能合集固化为手动合集（快照当前成员） |
 
 ### 搜索
 
@@ -795,7 +830,9 @@ alembic upgrade head
 | ------ | ------ | ------ |
 | `GET` | `/api/tasks` | 任务列表（分页，可按 status/type 筛选） |
 | `GET` | `/api/tasks/{id}` | 任务详情（前端进度轮询） |
-| `POST` | `/api/tasks/{id}/cancel` | 取消排队中的任务（仅 pending 可取消） |
+| `POST` | `/api/tasks/{id}/cancel` | 取消排队中的任务（仅 pending 可取消；删除记录） |
+| `POST` | `/api/tasks/{id}/pause` | 暂停运行中的批量分析/组合分析/标签网络分析任务（标记 paused，执行器批边界保存进度退出） |
+| `POST` | `/api/tasks/{id}/resume` | 恢复已暂停任务（标签网络=断点续算；批量/组合=放回 pending 重新认领，跳过已成功素材幂等续算） |
 
 > 以下重型操作均改造为「数据库驱动的异步任务」：接口秒回 `task_id`，由独立 worker 进程（`python -m app.worker`）执行、自动重试（2 次，指数退避）。worker 未启动时任务会一直停留在「排队中」；worker 并发与批内分析并发可用 `WORKER_CONCURRENCY`/`ANALYZE_CONCURRENCY` 配置（默认 1）。任务按 `priority` 降序认领（批量清理类固定 -5 低优先级）；任务生命周期事件（running/progress/success/failed/cancelled）经 WebSocket 广播，前端实时刷新、轮询降级兜底。
 >
@@ -959,14 +996,15 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，791 用例）
+### 后端（pytest，878 用例）
 
 ```bash
 # 首次：安装测试依赖
 cd backend
 pip install -r requirements-dev.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-# 运行全部测试（自动使用临时数据库与临时存储目录，不触碰真实数据）
+# 运行全部测试（自动使用临时数据库与临时存储目录，不触碰真实数据；默认 pytest-xdist
+# 多进程并行 `-n auto`，可用 `pytest -n 0` 回退串行便于调试）
 pytest
 ```
 
@@ -980,7 +1018,7 @@ pytest
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，161 用例）
+### 前端（vitest，178 用例）
 
 ```bash
 cd web
