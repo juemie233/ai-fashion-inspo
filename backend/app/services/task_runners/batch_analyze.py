@@ -281,14 +281,19 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
             f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
 
-        # 暂停检查：外部（暂停接口）把任务标记为 paused 后，本批次边界
-        # 感知到即保存进度返回。恢复时 resume 接口放回 pending，由 worker
-        # 重新认领，_load_pending_items 自动跳过「已有成功分析日志」的素材，
-        # 从断点幂等续算（单素材分析失败同样会跳过，语义与重跑一致）。
+        # 状态检查：外部可能把任务从 running 改成 paused（暂停）或 pending
+        # （暂停后立即恢复的重置）。两者都意味着「本执行实例应停止」——
+        # 只认 paused 会漏掉 pause→resume 竞态窗口：用户暂停后 worker 尚未
+        # 感知前就恢复，任务已变回 pending，若执行器继续跑，会出现「任务在跑
+        # 但状态是 pending、无暂停按钮且无法暂停」的卡死表现。故只要不再是
+        # running 就保存进度返回，由 worker 按 DB 最新状态决定下一步
+        # （paused 等待 / pending 重新认领，_load_pending_items 跳过已成功素材
+        # 幂等续算）。
         await db.refresh(task)
-        if task.status == "paused":
+        if task.status != "running":
             logger.info(
-                f"批量分析任务已暂停: #{task.id}，进度 {task.done}/{task.total} 已保存"
+                f"批量分析任务执行被外部状态中断: #{task.id} "
+                f"status={task.status}，进度 {task.done}/{task.total} 已保存"
             )
             return
 
@@ -564,12 +569,15 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
             await db.commit()
             await _broadcast_task_event(task, "progress")
 
-            # 暂停检查：感知到 paused 即保存进度返回，恢复时由 worker 重新
-            # 认领执行，已成功组合项（素材 × 模型 × Prompt 版本）自动跳过续算
+            # 状态检查：只要不再是 running（paused 暂停 / 被 resume 重置为
+            # pending 的竞态窗口）即保存进度返回，由 worker 按 DB 最新状态
+            # 决定下一步——恢复时重新认领执行，已成功组合项（素材 × 模型 ×
+            # Prompt 版本）自动跳过续算
             await db.refresh(task)
-            if task.status == "paused":
+            if task.status != "running":
                 logger.info(
-                    f"组合分析任务已暂停: #{task.id}，进度 {task.done}/{task.total} 已保存"
+                    f"组合分析任务执行被外部状态中断: #{task.id} "
+                    f"status={task.status}，进度 {task.done}/{task.total} 已保存"
                 )
                 return
 

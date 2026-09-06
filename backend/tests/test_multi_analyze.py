@@ -103,6 +103,11 @@ async def test_execute_multi_analyze_writes_log_per_combination(client, upload, 
         from app.models.task import TaskQueue
 
         task = await db.get(TaskQueue, task_id)
+        # 模拟 worker 认领：执行器只在 running 任务上运行（批边界会检查状态，
+        # pending 状态会令执行器提前返回，见 execute_multi_analyze 的状态检查）
+        task.status = "running"
+        await db.commit()
+        await db.refresh(task)
         await execute_multi_analyze(db, task)
 
         # 每个组合一条独立日志

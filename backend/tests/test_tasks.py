@@ -325,3 +325,64 @@ async def test_execute_batch_analyze_paused_early_return(client, monkeypatch):
         assert row.status == "paused"
         assert row.done == 1
         assert row.progress == 50
+
+
+async def test_execute_batch_analyze_returns_when_status_changed_to_pending(client, monkeypatch):
+    """暂停后快速恢复的竞态窗口（pause→resume 后状态为 pending）：执行器批边界
+    发现状态不再是 running 也必须提前返回，不能继续跑完全部——否则出现「任务在跑
+    但状态是 pending、UI 无暂停按钮、pause 接口又拒绝」的卡死表现。"""
+    from app.services.task_runners import batch_analyze as runner
+
+    # 建 running 的批量分析任务（2 个素材，并发 1 → 两个批次）
+    async with async_session() as db:
+        task = TaskQueue(
+            type="batch_analyze", status="running", progress=0, total=2, done=0,
+            result={"inspiration_ids": ["insp-1", "insp-2"]}, max_retries=2,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        tid = task.id
+
+    # 固定并发为 1；跳过真实素材加载
+    monkeypatch.setattr(runner, "_analyze_concurrency", lambda: 1)
+    async def _fake_load(db, inspiration_ids, skip_analyzed=True):
+        return [("insp-1", ["f1.jpg"]), ("insp-2", ["f2.jpg"])], 0, 0
+    monkeypatch.setattr(runner, "_load_pending_items", _fake_load)
+
+    # 首个素材分析期间把任务状态改为 pending（模拟 pause 后 worker 尚未感知
+    # paused 时用户就点了恢复 → resume 接口把状态放回 pending）
+    flipped = False
+
+    async def _fake_analyze_one(sem, inspiration_id, frames):
+        nonlocal flipped
+        if not flipped:
+            flipped = True
+            async with async_session() as s:
+                await s.execute(
+                    update(TaskQueue).where(TaskQueue.id == tid).values(
+                        status="pending", claimed_by=None
+                    )
+                )
+                await s.commit()
+        return inspiration_id, True, None
+
+    monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        await runner.execute_batch_analyze(db, task)
+
+        # 提前返回：状态保持 pending（由 worker 重新认领续算）、进度停留在
+        # 第一批次边界（50）、未覆盖 success 完成态、result 未被改写
+        assert task.status == "pending"
+        assert task.done == 1
+        assert task.progress == 50
+        assert task.result == {"inspiration_ids": ["insp-1", "insp-2"]}
+
+    # 数据库侧同样保持 pending 与断点进度
+    async with async_session() as db:
+        row = await db.get(TaskQueue, tid)
+        assert row.status == "pending"
+        assert row.done == 1
+        assert row.progress == 50
