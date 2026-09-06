@@ -109,6 +109,29 @@ def _is_bare_hosiery_word(name: str) -> bool:
     return not any(hint in name for hint in _COLOR_HINTS)
 
 
+# 丝袜类「长度/形态维度词」：丝袜单品名至少应写明一种长度或形态，
+# 否则「黑色丝袜」「半透明肤色丝袜」这类只含材质、不含长度的词无法区分
+# 连裤/过膝/长筒，检索无意义。含维度词的（连裤/过膝/长筒/吊带…）为合格名。
+_HOSIERY_LENGTH_HINTS = (
+    "连裤", "过膝", "及膝", "膝上", "大腿", "长筒", "中筒", "及踝",
+    "踩脚", "船袜", "短袜", "吊带", "堆堆", "渔网", "袜套",
+)
+
+
+def _is_lengthless_silk_word(name: str) -> bool:
+    """判断标签名是否为「缺长度维度的丝袜泛称」。
+
+    丝袜单品名若以「丝袜」结尾、却整名不含任何长度/形态维度词，则无法
+    区分连裤袜/过膝袜/长筒袜，判为不合格泛称（如「黑色丝袜」「肉色半透明
+    肤色丝袜」「哑光肤色丝袜」→ True；「黑色连裤丝袜」「黑色透肉连裤袜」
+    → False，正常保留）。「黑丝/白丝」是公认的黑色连裤丝袜简称（库内既有
+    标签），不在此列。
+    """
+    if not name.endswith("丝袜"):
+        return False
+    return not any(hint in name for hint in _HOSIERY_LENGTH_HINTS)
+
+
 def _is_bare_skirt_word(name: str) -> bool:
     """判断标签名是否为「仅长度修饰的裙类裸词」。
 
@@ -138,8 +161,13 @@ def _is_bare_shoe_word(name: str) -> bool:
 
 def _is_bare_garment_word(name: str) -> bool:
     """判断标签名是否为需要丢弃的服装裸词
-    （袜类裸词 / 裙类纯长度裸词 / 鞋靴固有裸品类名）。"""
-    return _is_bare_hosiery_word(name) or _is_bare_skirt_word(name) or _is_bare_shoe_word(name)
+    （袜类裸词 / 缺长度丝袜泛称 / 裙类纯长度裸词 / 鞋靴固有裸品类名）。"""
+    return (
+        _is_bare_hosiery_word(name)
+        or _is_lengthless_silk_word(name)
+        or _is_bare_skirt_word(name)
+        or _is_bare_shoe_word(name)
+    )
 
 
 def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:

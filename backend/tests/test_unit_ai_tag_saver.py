@@ -65,8 +65,29 @@ def test_bare_hosiery_type_dropped():
         ]
     }
     by_cat = _names_by_category(data)
-    # 裸词被丢弃；含颜色前缀的保留
-    assert by_cat.get("item_type") == ["黑色丝袜", "黑色过膝袜", "白丝"]
+    # 裸词与缺长度丝袜泛称（黑色丝袜）被丢弃；带长度/公认简称的保留
+    assert by_cat.get("item_type") == ["黑色过膝袜", "白丝"]
+
+
+def test_lengthless_silk_stocking_dropped():
+    """「颜色+丝袜」但未写明长度（连裤/过膝/长筒等）的泛称不落为标签。"""
+    data = {
+        "items": [
+            {"type": "黑色丝袜", "color": "黑色"},
+            {"type": "黑色半透明肤色丝袜", "color": "黑色"},
+            {"type": "肉色半透明肤色丝袜", "color": "肉色"},
+            {"type": "哑光肤色丝袜", "color": "肤色"},
+            {"type": "黑色连裤丝袜", "color": "黑色"},
+            {"type": "黑色透肉连裤袜", "color": "黑色"},
+            {"type": "黑丝连裤袜", "color": "黑色"},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    # 无长度丝袜泛称全部丢弃；连裤袜等写明长度的保留
+    assert by_cat.get("item_type") == ["黑色连裤丝袜", "黑色透肉连裤袜", "黑丝连裤袜"]
+    # 被丢弃 type 的 color 字段照常产出
+    assert "黑色" in by_cat.get("color", [])
+    assert "肉色" in by_cat.get("color", [])
 
 
 def test_hosiery_color_still_kept_when_type_dropped():
