@@ -199,7 +199,8 @@ def test_bare_shoe_word_dropped_from_type():
     by_cat = _names_by_category(data)
     # 裸鞋词丢弃；带颜色/款式修饰的保留；同单品 color 照常产出
     assert by_cat.get("item_type") == ["黑色乐福鞋", "尖头细跟高跟凉鞋"]
-    assert by_cat.get("color") == ["黑色"]
+    # 乐福鞋(裸type被丢但color保留) + 黑色乐福鞋 各带一个「黑色」
+    assert by_cat.get("color") == ["黑色", "黑色"]
 
 
 def test_bare_shoe_word_dropped_from_design_detail_and_material():
