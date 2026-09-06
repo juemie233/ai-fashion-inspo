@@ -31,15 +31,21 @@ const { notifyTagChanged } = useTagEvents()
 
 const mode = ref<Mode>('inline')
 
-watch(visible, (v) => {
-  if (v) {
-    mode.value = props.initialMode ?? 'inline'
-    initInline()
-    replaceFind.value = ''
-    replaceTo.value = ''
-    categoryTarget.value = ''
-  }
-})
+// 父组件 v-if + 固定 :visible="true" 挂载：普通 watch 不会触发，逐行编辑
+// 列表永不初始化（rows 为空、保存无效），需 immediate 在挂载时立即初始化
+watch(
+  visible,
+  (v) => {
+    if (v) {
+      mode.value = props.initialMode ?? 'inline'
+      initInline()
+      replaceFind.value = ''
+      replaceTo.value = ''
+      categoryTarget.value = ''
+    }
+  },
+  { immediate: true },
+)
 
 const categoryOptions = computed(() =>
   Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label })),

@@ -14,19 +14,29 @@ const aliasList = ref<TagAlias[]>([])
 const newAlias = ref('')
 const aliasLoading = ref(false)
 
-watch(show, (v) => {
-  if (v && props.tag) {
-    newAlias.value = ''
-    loadAliases()
-  }
-})
+// 父组件 v-if + 固定 :show="true" 挂载：普通 watch 不会触发，别名列表永不加载，
+// 需 immediate 在挂载时立即加载
+watch(
+  show,
+  (v) => {
+    if (v && props.tag) {
+      newAlias.value = ''
+      loadAliases()
+    }
+  },
+  { immediate: true },
+)
 
 async function loadAliases() {
   aliasLoading.value = true
   try {
     const all = await fetchAliases()
     aliasList.value = all.filter((a) => a.tag_id === props.tag?.id)
-  } catch { aliasList.value = [] } finally { aliasLoading.value = false }
+  } catch {
+    aliasList.value = []
+  } finally {
+    aliasLoading.value = false
+  }
 }
 
 async function handleAddAlias() {
@@ -46,23 +56,27 @@ async function handleDeleteAlias(aliasId: number) {
     await deleteAlias(aliasId)
     Message.success('别名已删除')
     await loadAliases()
-  } catch { Message.error('删除失败') }
+  } catch {
+    Message.error('删除失败')
+  }
 }
 </script>
 
 <template>
   <a-modal v-model:visible="show" title="标签别名" :footer="false" :width="520">
-    <p v-if="tag" style="font-size:13px;color:#999;margin-bottom:12px">
+    <p v-if="tag" style="font-size: 13px; color: #999; margin-bottom: 12px">
       「{{ tag.name }}」的别名：AI 识别到别名时会自动归为该标签
     </p>
-    <a-space style="margin-bottom:12px">
+    <a-space style="margin-bottom: 12px">
       <a-input
         v-model="newAlias"
         placeholder="输入别名，如：纯白"
-        style="width:240px"
+        style="width: 240px"
         @press-enter="handleAddAlias"
       />
-      <a-button type="primary" size="small" :disabled="!newAlias.trim()" @click="handleAddAlias">添加</a-button>
+      <a-button type="primary" size="small" :disabled="!newAlias.trim()" @click="handleAddAlias"
+        >添加</a-button
+      >
     </a-space>
     <a-spin :loading="aliasLoading">
       <a-list v-if="aliasList.length > 0" :bordered="true">
@@ -75,7 +89,9 @@ async function handleDeleteAlias(aliasId: number) {
           {{ a.alias }}
         </a-list-item>
       </a-list>
-      <div v-else-if="!aliasLoading" style="text-align:center;color:#999;padding:20px">暂无别名</div>
+      <div v-else-if="!aliasLoading" style="text-align: center; color: #999; padding: 20px">
+        暂无别名
+      </div>
     </a-spin>
   </a-modal>
 </template>

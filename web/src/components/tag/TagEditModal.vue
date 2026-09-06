@@ -16,16 +16,28 @@ const editName = ref('')
 const editCategory = ref('')
 const editDescription = ref('')
 
-watch(show, (v) => {
-  if (v && props.tag) {
-    editName.value = props.tag.name
-    editCategory.value = props.tag.category
-    editDescription.value = props.tag.description || ''
-  }
-})
+// 父组件用 v-if + 固定 :show="true" 挂载：组件每次打开都是全新挂载，
+// show 初始即为 true，普通 watch（无 immediate）不会触发，表单永不回填、
+// 保存时名称为空直接 return 不发请求。改为 immediate 且同时监听 tag：
+// 挂载即回填，同一弹窗切换目标标签时也同步刷新。
+watch(
+  () => [show.value, props.tag],
+  ([v]) => {
+    if (v && props.tag) {
+      editName.value = props.tag.name
+      editCategory.value = props.tag.category
+      editDescription.value = props.tag.description || ''
+    }
+  },
+  { immediate: true },
+)
 
 async function handleEdit() {
-  if (!props.tag || !editName.value.trim()) return
+  if (!props.tag) return
+  if (!editName.value.trim()) {
+    Message.warning('标签名称不能为空')
+    return
+  }
   try {
     await updateTag(props.tag.id, {
       name: editName.value.trim() !== props.tag.name ? editName.value.trim() : undefined,

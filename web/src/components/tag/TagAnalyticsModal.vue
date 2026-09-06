@@ -43,12 +43,18 @@ function categoryColor(cat: string): string {
   return CATEGORY_COLORS[cat] || MUTED_INK
 }
 
-watch(show, (v) => {
-  if (v) {
-    // 等待 modal 动画与布局完成后再加载数据
-    nextTick(() => setTimeout(load, 60))
-  }
-})
+// 父组件 v-if + 固定 :show="true" 挂载：普通 watch 不会触发，分析数据永不
+// 加载（弹窗空白、loading 空转），需 immediate 在挂载时立即加载
+watch(
+  show,
+  (v) => {
+    if (v) {
+      // 等待 modal 动画与布局完成后再加载数据
+      nextTick(() => setTimeout(load, 60))
+    }
+  },
+  { immediate: true },
+)
 
 async function load() {
   loading.value = true
