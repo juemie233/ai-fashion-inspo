@@ -38,6 +38,8 @@ class FakeOllamaClient:
     outfit_is_outfit = True
     # 穿搭分析输出覆盖（重分析测试用）；None 时用内置默认
     analysis_override: str | None = None
+    # 袜类二次验证判定（leg 裁剪定向提问的响应），默认连裤袜
+    sock_verdict: str = "连裤袜"
 
     def __init__(self, *args, **kwargs):
         pass
@@ -69,6 +71,9 @@ class FakeOllamaClient:
             return f'{{"is_outfit": {verdict}, "reason": "穿搭照片"}}'
         if "疑似由 AI 生成" in prompt:
             return '{"is_ai_generated": false, "confidence": 0.1}'
+        # 袜类二次验证（腿部放大裁剪定向提问）：返回配置的判定
+        if "腿部放大裁剪" in prompt:
+            return f'{{"sock": "{cls.sock_verdict}"}}'
         # 默认：完整穿搭分析（测试可覆盖 analysis_override 返回不同标签集）
         if cls.analysis_override is not None:
             return cls.analysis_override
@@ -599,3 +604,63 @@ async def test_retag_analysis_no_ai_material(client, upload, monkeypatch):
     assert data["count"] == 0
     assert data["task_id"] is None
     assert "没有由 AI 打标" in data["message"]
+
+
+async def test_sock_verification_downgrades_overknee_to_pantyhose(
+    client, upload, fake_ollama
+):
+    """袜类二次验证集成：整图判「黑色过膝袜」、腿部定向验证判「连裤袜」→
+    落库为「黑色连裤袜」（不再污染「黑色过膝袜」标签）。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    FakeOllamaClient.analysis_override = (
+        '{"style": ["学院风"], "items": ['
+        '{"type": "黑色过膝袜", "color": "黑色", "features": []}, '
+        '{"type": "黑色百褶短裙", "color": "黑色", "features": []}]}'
+    )
+    FakeOllamaClient.sock_verdict = "连裤袜"
+
+    insp = upload().json()
+    async with async_session() as db:
+        assert await analyze_image(db, insp["id"], insp["file_path"]) is True
+
+    tags = await _inspiration_tags(insp["id"])
+    assert "黑色连裤袜" in tags
+    assert "黑色过膝袜" not in tags
+    assert "黑色百褶短裙" in tags
+
+    # 日志保留模型原始输出（可追溯「整图判了过膝袜、验证纠正为连裤袜」）
+    async with async_session() as db:
+        from sqlalchemy import select
+
+        from app.models.inspiration import AIAnalysisLog
+
+        log = (
+            await db.execute(
+                select(AIAnalysisLog.raw_response)
+                .where(AIAnalysisLog.inspiration_id == insp["id"])
+                .order_by(AIAnalysisLog.id.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+    assert "黑色过膝袜" in log
+
+
+async def test_sock_verification_keep_when_verdict_knee(
+    client, upload, fake_ollama
+):
+    """二次验证确认过膝袜（膝上袜口可见）：保持「黑色过膝袜」标签。"""
+    from app.services.ai_service.analyze import analyze_image
+
+    FakeOllamaClient.analysis_override = (
+        '{"items": [{"type": "黑色过膝袜", "color": "黑色", "features": []}]}'
+    )
+    FakeOllamaClient.sock_verdict = "过膝袜"
+
+    insp = upload().json()
+    async with async_session() as db:
+        assert await analyze_image(db, insp["id"], insp["file_path"]) is True
+
+    tags = await _inspiration_tags(insp["id"])
+    assert "黑色过膝袜" in tags
+    assert "黑色连裤袜" not in tags

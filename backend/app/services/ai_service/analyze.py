@@ -168,6 +168,7 @@ async def _parse_and_save_tags(
     inspiration_id: str,
     raw_response: str,
     apply_tags: bool = True,
+    tags_data: dict | None = None,
 ) -> tuple[dict, list[tuple[str, str, float]], str | None]:
     """解析模型输出并保存标签，返回 (tags_data, 提取到的标签, 错误消息)。
 
@@ -175,8 +176,11 @@ async def _parse_and_save_tags(
         apply_tags: 是否把标签合并到素材（inspiration_tags 关联）。为 False 时
             仅确保标签存在于标签表（供结构化快照引用），不建立素材关联，
             素材的正式标签保持不变（多模型 × 多提示词组合分析场景）。
+        tags_data: 可选，已解析好的结果（用于落库前二次验证后传入）；
+            缺省由本函数从 raw_response 解析。
     """
-    tags_data = parse_analysis_response(raw_response)
+    if tags_data is None:
+        tags_data = parse_analysis_response(raw_response)
     extracted_tags: list[tuple[str, str, float]] = []
     error_msg: str | None = None
 
@@ -332,9 +336,20 @@ async def analyze_image(
             image_data, used_prompt, model_cfg, file_size_mb, inspiration_id, used_model
         )
 
-        # 解析分析结果并保存标签
+        # 高风险袜类（过膝/大腿/长筒袜）二次验证：用腿部放大裁剪做定向判定，
+        # 与第一轮结论不一致时改写 items（如「黑色过膝袜」验证为连裤袜）。
+        # 日志 raw_response 保留模型原始输出以便追溯；验证失败静默按原结果保存。
+        tags_data = parse_analysis_response(raw_response)
+        if tags_data:
+            from app.services.ai_service.sock_verify import maybe_verify_socks
+
+            tags_data = await maybe_verify_socks(
+                file_path, tags_data, model_cfg, used_model, inspiration_id
+            )
+
+        # 解析分析结果并保存标签（tags_data 已预解析，二次验证结果在此生效）
         tags_data, extracted_tags, error_msg = await _parse_and_save_tags(
-            db, inspiration_id, raw_response, apply_tags=apply_tags
+            db, inspiration_id, raw_response, apply_tags=apply_tags, tags_data=tags_data
         )
         if apply_tags:
             # 主色调属于素材字段的写入，与标签合并同受 apply_tags 控制
