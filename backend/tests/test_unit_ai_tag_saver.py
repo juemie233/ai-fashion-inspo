@@ -149,3 +149,58 @@ def test_skirt_like_words_not_bare_kept():
     }
     by_cat = _names_by_category(data)
     assert by_cat.get("item_type") == ["连衣裙", "半身裙", "长裙"]
+
+
+def test_bare_shoe_word_dropped_from_features():
+    """鞋靴裸词从 items.features（→body_part）漏出时被丢弃（如 "features":["细跟","高跟鞋"]）。"""
+    data = {
+        "items": [
+            {"type": "黑色尖头细跟高跟鞋", "color": "黑色",
+             "features": ["细跟", "高跟鞋"]},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    # 合规 type 保留；裸「高跟鞋」不产出 body_part 标签，细跟等细节保留
+    assert by_cat.get("item_type") == ["黑色尖头细跟高跟鞋"]
+    assert by_cat.get("body_part") == ["细跟"]
+
+
+def test_bare_shoe_word_dropped_from_type():
+    """type 为裸鞋词（无颜色，如「凉鞋」「乐福鞋」）时不落为 item_type。"""
+    data = {
+        "items": [
+            {"type": "凉鞋", "color": ""},
+            {"type": "乐福鞋", "color": "黑色"},
+            {"type": "黑色乐福鞋", "color": "黑色"},
+            {"type": "尖头细跟高跟凉鞋", "color": ""},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    # 裸鞋词丢弃；带颜色/款式修饰的保留；同单品 color 照常产出
+    assert by_cat.get("item_type") == ["黑色乐福鞋", "尖头细跟高跟凉鞋"]
+    assert by_cat.get("color") == ["黑色"]
+
+
+def test_bare_shoe_word_dropped_from_design_detail_and_material():
+    """鞋靴裸词从 design_detail / material 键漏出时同样被丢弃。"""
+    data = {
+        "items": [{"type": "黑色高跟鞋", "color": "黑色", "features": []}],
+        "design_detail": ["高跟鞋", "尖头"],
+        "material": ["皮革", "高跟鞋"],
+    }
+    by_cat = _names_by_category(data)
+    assert by_cat.get("design_detail") == ["尖头"]
+    assert by_cat.get("material") == ["皮革"]
+    assert by_cat.get("item_type") == ["黑色高跟鞋"]
+
+
+def test_bare_hosiery_kept_when_has_color():
+    """带颜色的袜类词（黑丝/黑色吊带袜）不被裸袜过滤误杀。"""
+    data = {
+        "items": [
+            {"type": "黑色吊带袜", "color": "黑色", "features": ["蕾丝花边"]},
+            {"type": "黑丝", "color": "", "features": []},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    assert by_cat.get("item_type") == ["黑色吊带袜", "黑丝"]
