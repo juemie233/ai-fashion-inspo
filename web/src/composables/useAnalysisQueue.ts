@@ -40,7 +40,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
   const activeAnalyses = ref<Record<string, string>>({})
   const batchAnalyzing = ref(false)
   const batchTask = ref<TaskInfo | null>(null)
-  /** 全量分析任务列表（batch/multi，含 paused/running/pending 及近期终态），供队列区展示 */
+  /** 分析任务列表（batch/multi，仅 pending/running/paused 等未完成任务——
+   *  完成的批量分析不再展示，避免挤占队列区；终态在「任务管理」页可查可删），按 id 倒序 */
   const analysisTasks = ref<TaskInfo[]>([])
   const pendingQueue = ref<QueueItem[]>([])
   const queuePaused = ref(false)
@@ -61,8 +62,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     } catch {}
   }
 
-  /** 加载全部分析任务（batch_analyze + multi_analyze，含 paused/running/pending 与近期终态）。
-   *  后端 /tasks 不传 status 即返回全部状态、按 id 倒序，分类型各取近 50 合并。 */
+  /** 加载分析任务列表（batch_analyze + multi_analyze）。
+   *  后端 /tasks 不传 status 即返回全部状态、按 id 倒序，分类型各取近 50 合并。
+   *  只保留未完成任务（pending/running/paused）：完成（success/failed/cancelled）
+   *  的批量分析不再展示，其进度与结果可从任务管理页 / 分析历史查看。 */
   async function loadAnalysisTasks() {
     try {
       const [legacy, multi] = await Promise.all([
@@ -74,12 +77,17 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         }),
       ])
       const merged = [...legacy.data.items, ...multi.data.items].sort((a, b) => b.id - a.id)
-      // 始终保留所有非终态任务（含 paused），避免被数量上限挤掉看不到暂停任务
-      const nonTerminal = merged.filter((t) => !isTaskTerminalStatus(t.status))
-      const terminal = merged.filter((t) => isTaskTerminalStatus(t.status)).slice(0, 20)
-      analysisTasks.value = [...nonTerminal, ...terminal]
+      // 只保留未完成任务（含 paused）：暂停任务不能被数量上限挤掉，需始终可见可恢复
+      analysisTasks.value = merged.filter((t) => !isTaskTerminalStatus(t.status))
     } catch {
       /* 静默：列表为空不影响其它功能 */
+    }
+  }
+
+  /** 终态任务即时从列表移除（完成即不再展示；配合轮询/WS 就地更新使用） */
+  function dropTerminalTasks() {
+    if (analysisTasks.value.some((t) => isTaskTerminalStatus(t.status))) {
+      analysisTasks.value = analysisTasks.value.filter((t) => !isTaskTerminalStatus(t.status))
     }
   }
 
@@ -127,7 +135,10 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         analysisTasks.value = analysisTasks.value.filter((t) => t.id !== taskId)
       } else {
         const row = analysisTasks.value.find((t) => t.id === taskId)
-        if (row) row.status = 'cancelled'
+        if (row) {
+          row.status = 'cancelled'
+          dropTerminalTasks() // cancelled 为终态：完成即不再展示
+        }
       }
       loadQueue()
       loadActiveAnalyses()
@@ -346,6 +357,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     // 同步到任务列表行（列表与单任务轮询共享同一任务状态）
     const row = analysisTasks.value.find((t) => t.id === data.id)
     if (row) Object.assign(row, data)
+    // 完成即从「分析任务」列表移除（不再展示已完成的批量分析）
+    if (isTaskTerminalStatus(data.status)) dropTerminalTasks()
     if (!isTaskTerminalStatus(data.status)) return
     if (batchSettled) return
     batchSettled = true
@@ -419,6 +432,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
       if (typeof ev.done === 'number') row.done = ev.done
       if (typeof ev.total === 'number') row.total = ev.total
       if (ev.error !== undefined) row.error = ev.error
+      // 完成即从「分析任务」列表移除（不再展示已完成的批量分析）
+      if (isTaskTerminalStatus(row.status)) dropTerminalTasks()
     }
   })
   // 2) ai_analysis_done：单素材分析完成（API 进程内广播）→ 即时刷新队列与历史

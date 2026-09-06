@@ -8,7 +8,7 @@ import type { QueueStats, TaskInfo, QueueItem } from '@/types/analysis'
 defineProps<{
   queueStats: QueueStats
   batchAnalyzing: boolean
-  /** 全部分析任务（batch/multi，含 paused/running/pending 及近期终态），按 id 倒序 */
+  /** 分析任务（batch/multi，仅 pending/running/paused 未完成任务——已完成的不再展示），按 id 倒序 */
   analysisTasks: TaskInfo[]
   activeAnalyses: Record<string, string>
   pendingQueue: QueueItem[]
@@ -57,12 +57,12 @@ function taskTypeLabel(type: string): string {
       </a-button>
     </div>
 
-    <!-- 分析任务列表（含暂停/进行中/排队中及近期已完成，按 id 倒序） -->
+    <!-- 分析任务列表（仅暂停/进行中/排队中；已完成任务自动移除，不再展示） -->
     <a-card v-if="analysisTasks.length > 0" size="small" style="margin-bottom: 16px">
       <template #title>
         <span>分析任务（{{ analysisTasks.length }}）</span>
         <span style="font-size: 12px; color: #888; margin-left: 8px"
-          >含暂停/进行中任务，可在此恢复或取消</span
+          >仅显示未完成任务；已完成的批量分析不会出现在这里</span
         >
       </template>
 
