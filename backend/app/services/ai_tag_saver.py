@@ -56,11 +56,13 @@ async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 袜类裸词 type 兜底过滤
+# 服装裸词兜底过滤（作用于所有产出路径的名称级过滤）
 # ---------------------------------------------------------------------------
-# 提示词口径要求「袜/丝袜/鞋靴类 type 必须以颜色开头」（如「黑色过膝袜」「白丝」），
-# 但模型仍可能漏掉颜色、只输出裸品类名（「丝袜」「过膝袜」）。此类裸词与独立
-# color 字段语义重复、无法体现颜色，落库前兜底丢弃 type（color/features 照常保留）。
+# 提示词口径要求袜/丝袜/鞋靴类 type 以颜色开头、裙类直接描述应带颜色和款式，
+# 但模型仍可能漏写修饰，把「丝袜」「短裙」等裸品类名写进 type / material /
+# features。此类裸词与独立 color 字段语义重复、无法体现颜色款式，落库前
+# 兜底丢弃（color 字段照常保留）。覆盖三个类别来源：item_type（type）、
+# material（material 键）、body_part（items.features）。
 _HOSIERY_TYPE_SUFFIXES = (
     "丝袜", "长筒袜", "过膝袜", "连裤袜", "中筒袜", "短袜", "船袜",
     "网袜", "渔网袜", "堆堆袜", "踝袜", "袜套", "袜",
@@ -72,17 +74,47 @@ _COLOR_HINTS = (
     "金", "棕", "粉", "米", "肤", "青", "肉",
 )
 
+# 裙类「纯长度修饰词」：type 除长度词外无任何颜色/款式/图案/材质修饰时，
+# 判为裸裙词。按长度降序排列，匹配时优先吃掉长词（如「超短」先于「短」）。
+_SKIRT_LENGTH_WORDS = ("迷你", "超短", "短")
 
-def _is_bare_hosiery_type(item_type: str) -> bool:
-    """判断单品 type 是否为「无颜色修饰的袜类裸品类名」。
 
-    判定规则：type 以袜类结尾词收尾，且整名不含任何颜色描述字
+def _is_bare_hosiery_word(name: str) -> bool:
+    """判断标签名是否为「无颜色修饰的袜类裸品类名」。
+
+    判定规则：名称以袜类结尾词收尾，且整名不含任何颜色描述字
     （如「丝袜」「过膝袜」→ True；「黑色丝袜」「白丝」→ False）。
-    供 iter_extracted_tags 落库前丢弃无效 type。
     """
-    if not item_type.endswith(_HOSIERY_TYPE_SUFFIXES):
+    if not name.endswith(_HOSIERY_TYPE_SUFFIXES):
         return False
-    return not any(hint in item_type for hint in _COLOR_HINTS)
+    return not any(hint in name for hint in _COLOR_HINTS)
+
+
+def _is_bare_skirt_word(name: str) -> bool:
+    """判断标签名是否为「仅长度修饰的裙类裸词」。
+
+    判定规则：以「裙」收尾，且去掉尾字后剩余部分只能由纯长度词
+    （短/迷你/超短）拼成，不含任何颜色/款式/图案/材质修饰
+    （如「短裙」「迷你短裙」「超短裙」→ True；「黑色百褶短裙」
+    「格纹百褶短裙」「高腰包臀短裙」→ False，正常保留）。
+    """
+    if not name.endswith("裙"):
+        return False
+    rest = name[:-1]
+    while rest:
+        for word in _SKIRT_LENGTH_WORDS:
+            if rest.startswith(word):
+                rest = rest[len(word):]
+                break
+        else:
+            # 存在长度词以外的修饰（颜色/款式/图案/材质）→ 不属于裸裙词
+            return False
+    return True
+
+
+def _is_bare_garment_word(name: str) -> bool:
+    """判断标签名是否为需要丢弃的服装裸词（袜类裸词 或 裙类纯长度裸词）。"""
+    return _is_bare_hosiery_word(name) or _is_bare_skirt_word(name)
 
 
 def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
@@ -141,6 +173,10 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
                     is_similar_category_tag(name, s) for s in style_names
                 ):
                     continue
+                # 服装裸词兜底：袜类裸词 / 裙类纯长度裸词（含 material、features
+                # 路径漏出的「丝袜」「短裙」等），一律不落库
+                if _is_bare_garment_word(name):
+                    continue
                 yield name, category, 0.8
 
     # 处理结构化单品标签 — 兼容 type/color 为列表、features 为字符串
@@ -165,7 +201,7 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
             if isinstance(features, str):
                 features = [p.strip() for p in features.replace('，', ',').replace('、', ',').split(',') if p.strip()]
 
-            if item_type and not _is_bare_hosiery_type(item_type):
+            if item_type and not _is_bare_garment_word(item_type):
                 yield item_type, "item_type", 0.8
 
             if color:
@@ -175,12 +211,12 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
                 if isinstance(feat, str):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
-                        if fv:
+                        if fv and not _is_bare_garment_word(fv):
                             yield fv, "body_part", 0.7
                 elif isinstance(feat, dict):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
-                        if fv:
+                        if fv and not _is_bare_garment_word(fv):
                             yield fv, "body_part", 0.7
 
 

@@ -93,3 +93,59 @@ def test_non_hosiery_item_types_unaffected():
     }
     by_cat = _names_by_category(data)
     assert by_cat.get("item_type") == ["针织衫", "西装外套", "JK制服"]
+
+
+def test_bare_hosiery_dropped_from_material_key():
+    """袜类裸词从 material 键漏出时同样被丢弃（如 "material": ["丝袜","皮革"]）。"""
+    data = {
+        "items": [{"type": "黑色过膝袜", "color": "黑色", "features": []}],
+        "material": ["丝袜", "皮革"],
+    }
+    by_cat = _names_by_category(data)
+    # 丝袜裸词不产出 material 标签；皮革等正常保留
+    assert by_cat.get("material") == ["皮革"]
+    assert by_cat.get("item_type") == ["黑色过膝袜"]
+
+
+def test_bare_hosiery_dropped_from_features():
+    """袜类裸词从 items.features（→body_part）漏出时同样被丢弃。"""
+    data = {
+        "items": [
+            {"type": "白色长筒袜", "color": "白色",
+             "features": ["长筒", "纯色", "丝袜"]},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    assert by_cat.get("item_type") == ["白色长筒袜"]
+    # 「丝袜」裸词不产出 body_part；其它 feature 词保留
+    assert by_cat.get("body_part") == ["长筒", "纯色"]
+
+
+def test_bare_skirt_length_word_dropped():
+    """裙类纯长度裸词（短裙/迷你短裙/超短裙）不落为 item_type。"""
+    data = {
+        "items": [
+            {"type": "短裙", "color": ""},
+            {"type": "迷你短裙", "color": ""},
+            {"type": "超短裙", "color": ""},
+            {"type": "黑色百褶短裙", "color": "黑色"},
+            {"type": "格纹百褶短裙", "color": ""},
+            {"type": "高腰包臀短裙", "color": ""},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    # 裸裙词丢弃；带颜色/款式/图案修饰的正常保留
+    assert by_cat.get("item_type") == ["黑色百褶短裙", "格纹百褶短裙", "高腰包臀短裙"]
+
+
+def test_skirt_like_words_not_bare_kept():
+    """非纯长度裙词（连衣裙/半身裙/长裙等）不受裸裙词过滤影响。"""
+    data = {
+        "items": [
+            {"type": "连衣裙", "color": ""},
+            {"type": "半身裙", "color": ""},
+            {"type": "长裙", "color": ""},
+        ]
+    }
+    by_cat = _names_by_category(data)
+    assert by_cat.get("item_type") == ["连衣裙", "半身裙", "长裙"]
