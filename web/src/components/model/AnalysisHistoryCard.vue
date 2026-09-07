@@ -363,6 +363,10 @@ const columns = computed<TableColumnData[]>(() => [
     render: ({ record }) => {
       const row = record as HistoryItem
       const err = row.error
+      // 成功记录不显示失败原因列（成功行本就没有错误，显示占位符即可）
+      if (row.status === 'success') {
+        return h('span', { style: 'font-size:12px;color:#999' }, '-')
+      }
       return err
         ? h(
             Tooltip,
@@ -417,25 +421,24 @@ const columns = computed<TableColumnData[]>(() => [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 232,
+    width: 288,
     render: ({ record }) => {
       const row = record as HistoryItem
       return h('span', { style: 'display:flex;gap:4px;align-items:center' }, [
         h(Button, { size: 'mini', onClick: () => emit('viewDetail', row.id) }, () =>
           row.status === 'success' ? '详情' : '原始输出',
         ),
-        row.status === 'error'
-          ? h(
-              Button,
-              {
-                size: 'mini',
-                type: 'secondary',
-                title: '重试分析',
-                onClick: () => emit('retryAnalysis', row.inspiration_id),
-              },
-              { icon: () => h(IconRefresh) },
-            )
-          : null,
+        // 重新标签分析：成功/失败记录都可重跑 AI 打标签（后端 force_retry）
+        h(
+          Button,
+          {
+            size: 'mini',
+            type: 'secondary',
+            title: '重新标签分析（重新对这张素材跑 AI 打标签）',
+            onClick: () => emit('retryAnalysis', row.inspiration_id),
+          },
+          { icon: () => h(IconRefresh) },
+        ),
         row.status === 'success'
           ? h(
               Button,
