@@ -69,12 +69,13 @@ def test_default_prompt_contains_new_dimensions():
     assert '"design_detail"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"material"' in _DEFAULT_AI_ANALYSIS_PROMPT
     assert '"atmosphere"' in _DEFAULT_AI_ANALYSIS_PROMPT
-    # 颜色不得写入单品名 + 复用优先原则
-    assert "颜色一律写在" in _DEFAULT_AI_ANALYSIS_PROMPT
-    assert "复用优先" in _DEFAULT_AI_ANALYSIS_PROMPT
-    # 长度约束与旧键向后兼容说明
-    assert "12" in _DEFAULT_AI_ANALYSIS_PROMPT
-    assert "wear_style" in _DEFAULT_AI_ANALYSIS_PROMPT
+    # 颜色约束：新口径要求颜色写在 type 开头（替代旧"颜色一律写入 color 字段"）；
+    # 保留原断言「color 字段也写主色」的兼容要求
+    assert "颜色必须写在开头" in _DEFAULT_AI_ANALYSIS_PROMPT
+    assert "color 再写一次主色" in _DEFAULT_AI_ANALYSIS_PROMPT
+    # 长度约束与向后兼容说明
+    assert "12 字以内" in _DEFAULT_AI_ANALYSIS_PROMPT
+    assert "features" in _DEFAULT_AI_ANALYSIS_PROMPT
 
 
 # ============ 迁移重分类规则 ============
