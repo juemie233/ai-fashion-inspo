@@ -580,6 +580,74 @@ async def test_retag_analysis_by_tag_ai_source_only(client, upload, monkeypatch)
         assert insp_manual not in task.result["inspiration_ids"]
 
 
+async def test_retag_analysis_by_tag_excludes_jk(client, upload, monkeypatch):
+    """按标签重分析 + 排除标签：带「学院风」且同时带「JK制服」的素材被剔除。"""
+    import app.routers.ai_analysis as router_mod
+    from app.models.tag import InspirationTag, Tag
+    from app.models.task import TaskQueue
+
+    # 素材1：学院风 + JK制服（应排除）；素材2：仅学院风（应纳入）
+    insp_jk = upload().json()["id"]
+    insp_pure = upload().json()["id"]
+
+    async with async_session() as db:
+        academy = Tag(name="学院风", category="style")
+        jk = Tag(name="JK制服", category="style")
+        db.add_all([academy, jk])
+        await db.flush()
+        db.add(InspirationTag(inspiration_id=insp_jk, tag_id=academy.id, source="ai_generated"))
+        db.add(InspirationTag(inspiration_id=insp_jk, tag_id=jk.id, source="ai_generated"))
+        db.add(InspirationTag(inspiration_id=insp_pure, tag_id=academy.id, source="ai_generated"))
+        await db.commit()
+        academy_id = academy.id
+        jk_id = jk.id
+
+    async def _ollama_up():
+        return True
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_up)
+
+    r = client.post(f"/api/ai/retag/{academy_id}?exclude_tag_id={jk_id}")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 1  # 仅纯学院风素材
+    assert data["task_id"]
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, data["task_id"])
+        assert task.result["inspiration_ids"] == [insp_pure]
+        assert insp_jk not in task.result["inspiration_ids"]
+
+
+async def test_retag_analysis_by_tag_all_excluded(client, upload, monkeypatch):
+    """排除后无素材：返回空态（不建任务）。"""
+    import app.routers.ai_analysis as router_mod
+    from app.models.tag import InspirationTag, Tag
+
+    insp = upload().json()["id"]
+    async with async_session() as db:
+        academy = Tag(name="学院风", category="style")
+        jk = Tag(name="JK制服", category="style")
+        db.add_all([academy, jk])
+        await db.flush()
+        db.add(InspirationTag(inspiration_id=insp, tag_id=academy.id, source="ai_generated"))
+        db.add(InspirationTag(inspiration_id=insp, tag_id=jk.id, source="ai_generated"))
+        await db.commit()
+        academy_id = academy.id
+        jk_id = jk.id
+
+    async def _ollama_up():
+        return True
+
+    monkeypatch.setattr(router_mod, "is_ollama_running", _ollama_up)
+    r = client.post(f"/api/ai/retag/{academy_id}?exclude_tag_id={jk_id}")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 0
+    assert data["task_id"] is None
+    assert "没有满足条件" in data["message"]
+
+
 async def test_retag_analysis_no_ai_material(client, upload, monkeypatch):
     """该标签下没有 AI 打标素材：返回空态（不建任务）。"""
     import app.routers.ai_analysis as router_mod

@@ -523,6 +523,9 @@ async def batch_retry_logs(
 @router.post("/retag/{tag_id}")
 async def retag_analysis_by_tag(
     tag_id: int,
+    exclude_tag_id: int | None = Query(
+        default=None, description="排除标签：同时带有该标签的素材不纳入重打"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str | int | bool | None]:
     """按标签重新 AI 分析：对该标签下「由 AI 打标」的全部素材按当前提示词强制重跑。
@@ -530,7 +533,9 @@ async def retag_analysis_by_tag(
     场景（标签高级管理入口）：
     - 提示词/词表更新后，希望该标签的素材按新口径重新提取；
     - 想「洗掉」AI 打错的该标签——重跑会先清 AI 标签再写新结果，
-      若新模型仍打该标签则保留（如实）。
+      若新模型仍打该标签则保留（如实）；
+    - 组合条件（如「带学院风、却无 JK 制服」）：用 exclude_tag_id 排除
+      同时带有另一标签的素材，只重打「含 tag 但不含 exclude」的子集。
     口径：
     - 仅处理 source=ai_generated 的关联素材（手动/种子打标不受影响——重跑只清 AI 标签）；
     - 走 worker 队列并带 force_retry：不跳过已有成功日志的素材（强制重跑），
@@ -543,6 +548,13 @@ async def retag_analysis_by_tag(
     if tag is None:
         raise HTTPException(status_code=404, detail="标签未找到")
 
+    # 排除标签存在性校验（404 更直观）
+    exclude_tag = None
+    if exclude_tag_id is not None:
+        exclude_tag = await db.get(Tag, exclude_tag_id)
+        if exclude_tag is None:
+            raise HTTPException(status_code=404, detail="排除的标签未找到")
+
     rows = await db.execute(
         select(InspirationTag.inspiration_id)
         .join(Inspiration, Inspiration.id == InspirationTag.inspiration_id)
@@ -554,9 +566,31 @@ async def retag_analysis_by_tag(
         )
     )
     inspiration_ids = sorted({r[0] for r in rows.all()})
+
+    # 排除同时带有 exclude 标签的素材（学院风 + 已有 JK 制服 → 不重跑）。
+    # 子查询取「该素材是否关联 exclude 标签」，命中则剔除。
+    if exclude_tag_id is not None:
+        if inspiration_ids:
+            exclude_rows = await db.execute(
+                select(InspirationTag.inspiration_id).where(
+                    InspirationTag.inspiration_id.in_(inspiration_ids),
+                    InspirationTag.tag_id == exclude_tag_id,
+                )
+            )
+            has_exclude = {r[0] for r in exclude_rows.all()}
+            inspiration_ids = [iid for iid in inspiration_ids if iid not in has_exclude]
+
     if not inspiration_ids:
+        message = (
+            f"「{tag.name}」标签下没有由 AI 打标的素材，无需重新分析"
+            if exclude_tag is None
+            else (
+                f"「{tag.name}」标签下没有满足条件的素材"
+                f"（已排除带「{exclude_tag.name}」的素材），无需重新分析"
+            )
+        )
         return {
-            "message": "该标签下没有由 AI 打标的素材，无需重新分析",
+            "message": message,
             "task_id": None,
             "count": 0,
             "status": "none",
@@ -566,7 +600,7 @@ async def retag_analysis_by_tag(
     inspiration_ids, _inflight = await _exclude_inflight_ids(db, inspiration_ids)
     if not inspiration_ids:
         return {
-            "message": "该标签下的素材均已在分析队列中，无需重复分析",
+            "message": "满足条件的素材均已在分析队列中，无需重复分析",
             "task_id": None,
             "count": 0,
             "status": "none",
@@ -575,11 +609,13 @@ async def retag_analysis_by_tag(
     task = await create_batch_analyze_task(db, inspiration_ids, force_retry=True)
 
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
+    exclude_note = f"、不含「{exclude_tag.name}」" if exclude_tag else ""
     resp: dict[str, str | int | bool | None] = {
         "task_id": task.id,
         "message": (
             (f"{ollama_msg}，" if not ollama_running else "")
-            + f"已为「{tag.name}」标签下 {len(inspiration_ids)} 个素材创建重新分析任务（#{task.id}）"
+            + f"已为「{tag.name}」{exclude_note} 标签下 {len(inspiration_ids)} 个素材"
+            + f"创建重新分析任务（#{task.id}）"
             + ("，worker 将自动重试直至 Ollama 恢复" if not ollama_running else "")
         ),
         "count": len(inspiration_ids),
