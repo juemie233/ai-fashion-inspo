@@ -92,7 +92,13 @@ const topOption = computed<EChartsOption | null>(() => {
     yAxis: {
       type: 'category',
       data: sorted.map((t) => t.name),
-      axisLabel: { color: '#52514e', fontSize: 11 },
+      axisLabel: {
+        color: '#52514e',
+        fontSize: 11,
+        // 长标签（如「娃娃领连衣裙」）若不设宽度会被截断：限宽 + 超出省略，悬停看全名
+        width: 72,
+        overflow: 'truncate',
+      },
       axisLine: { show: false },
       axisTick: { show: false },
     },
@@ -258,16 +264,18 @@ function onGranularityChange() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%; /* 撑满弹窗内容区：否则 flex-col 默认 auto 宽度，panel 与图表只占内容宽、右侧留白 */
   height: 100%;
 }
 .row-top {
   display: flex;
   gap: 12px;
   flex: 0 0 42%;
+  width: 100%; /* 两个并排 panel 撑满整行宽度 */
   min-height: 0;
 }
 .panel {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
   border: 1px solid #e1e0d9;
   border-radius: 8px;
@@ -289,7 +297,8 @@ function onGranularityChange() {
   font-weight: normal;
 }
 .panel-graph {
-  flex: 1;
+  flex: 1 1 0;
+  width: 100%; /* 共现关系图占满整行 */
   min-height: 0;
 }
 </style>
