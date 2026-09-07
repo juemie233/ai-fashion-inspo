@@ -723,3 +723,163 @@ async def delete_detection(db: AsyncSession, detection_id: int) -> None:
         )
     await db.delete(det)
     await db.commit()
+
+
+# ── 上传绑定博主 → 后台自动绑定主脸（F2 批量下载场景） ──
+
+
+# 上传绑定人脸后台任务并发上限：face-service 承接显存（GPU），并发过高
+# 会挤爆识别服务；同时限流避免 F2 批量上传几百张时瞬时风暴。
+_FACE_BIND_CONCURRENCY = 2
+_bind_semaphore = asyncio.Semaphore(_FACE_BIND_CONCURRENCY)
+
+
+async def bind_uploaded_inspiration_face(
+    db: AsyncSession, inspiration_id: str, blogger_id: int
+) -> dict:
+    """上传时选了博主 → 检测素材人脸并把「主脸」直接绑定到该博主（后台调用）。
+
+    来源可信场景（F2 直接下载目标博主的作品）：素材里的人脸默认就是博主本人，
+    因此检测到人脸即认定归属，无需走「扫描候选 → 人工确认」链路。
+
+    绑定策略（与用户确认的两点一致）：
+    - 主脸（det_score 最高且过质量门槛）→ matched_blogger_id=选定博主、
+      match_status='confirmed'（锁定，不再出现在人脸扫描候选区）；
+    - 其余人脸（次脸/低质脸）→ 写普通记录（matched 置空、match_status=None），
+      保留给后续人工指定或扫描处理——**不把合照中的路人脸绑死到博主**；
+    - 无人脸/检测失败 → 不写任何绑定；素材归属（inspiration_bloggers）已由
+      上传链路单独建立，不受影响。
+
+    幂等：已确认/已「不匹配」的历史记录保护不清除（与 detect_inspiration_faces
+    口径一致）；重复调用只会覆盖普通记录。
+    """
+    from app.models.inspiration import Inspiration
+
+    insp = await db.execute(
+        select(Inspiration).where(Inspiration.id == inspiration_id)
+    )
+    inspiration = insp.scalar_one_or_none()
+    if not inspiration:
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": "素材不存在"}
+
+    full_path = settings.storage_root / inspiration.file_path
+    try:
+        image_bytes = await asyncio.to_thread(full_path.read_bytes)
+    except OSError:
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": "素材文件缺失"}
+
+    # face-service 检测（Video 关键帧/图片素材此处仅处理图片路径；
+    # 视频素材人脸绑定由既有 face_scan 链路处理，上传绑定仅图片）
+    try:
+        result = await face_client.embed(image_bytes)
+    except FaceServiceUnavailableError:
+        logger.warning(f"上传绑定人脸：人脸服务不可用，跳过 {inspiration_id}")
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": "人脸服务不可用"}
+    except FaceServiceHttpError as e:
+        if e.status_code == 404:
+            # 无人脸：仅清理非锁定普通记录，保证「有记录即已扫」语义
+            await db.execute(
+                delete(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == inspiration_id,
+                    or_(
+                        InspirationFaceDetection.match_status != "confirmed",
+                        InspirationFaceDetection.match_status.is_(None),
+                    ),
+                )
+            )
+            await db.commit()
+            return {
+                "inspiration_id": inspiration_id,
+                "bound": False,
+                "reason": "未检测到人脸",
+            }
+        logger.warning(f"上传绑定人脸：检测失败 {inspiration_id}: {e}")
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": str(e)}
+
+    faces = result.get("faces", [])
+    if not faces:
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": "未检测到人脸"}
+
+    # 主脸：det_score 最高（face-service 已过滤 <0.5 低质脸）；
+    # 其余人脸按检测顺序保留为普通记录
+    main_idx = max(
+        range(len(faces)),
+        key=lambda i: float(faces[i].get("det_score", 1.0)),
+    )
+    main_face = faces[main_idx]
+    main_score = float(main_face.get("det_score", 1.0))
+    # 主脸质量门槛（与 detect_inspiration_faces 对齐）：低置信度（0.5~0.65）
+    # 人脸锁定绑定易误判（模糊/侧脸/小脸），此时不锁定、交人工后续处理
+    main_confident = main_score >= LOW_CONFIDENCE_THRESHOLD
+
+    # 清理非锁定/非「不匹配」旧记录（重新绑定覆盖普通结果）
+    await db.execute(
+        delete(InspirationFaceDetection).where(
+            InspirationFaceDetection.inspiration_id == inspiration_id,
+            InspirationFaceDetection.match_excluded.is_(False),
+            or_(
+                InspirationFaceDetection.match_status != "confirmed",
+                InspirationFaceDetection.match_status.is_(None),
+            ),
+        )
+    )
+
+    # 主脸：合格则绑定选定博主并锁定（confirmed）；不合格写普通记录交人工
+    bound = False
+    db.add(
+        InspirationFaceDetection(
+            inspiration_id=inspiration_id,
+            face_index=0,
+            embedding=np.asarray(main_face["embedding"], dtype=np.float32).tobytes(),
+            bbox=json.dumps(main_face.get("bbox", [])),
+            det_score=main_score,
+            matched_blogger_id=blogger_id if main_confident else None,
+            match_status="confirmed" if main_confident else None,
+        )
+    )
+    bound = main_confident
+    # 其余人脸（次脸/路人）→ 普通记录，不绑定（避免合照路人脸污染）
+    for idx, face in enumerate(faces, start=1):
+        if idx - 1 == main_idx:
+            continue
+        db.add(
+            InspirationFaceDetection(
+                inspiration_id=inspiration_id,
+                face_index=idx,
+                embedding=np.asarray(face["embedding"], dtype=np.float32).tobytes(),
+                bbox=json.dumps(face.get("bbox", [])),
+                det_score=float(face.get("det_score", 1.0)),
+                matched_blogger_id=None,
+                match_status=None,
+            )
+        )
+    await db.commit()
+    logger.info(
+        f"上传绑定博主主脸: 素材 {inspiration_id} → 博主 #{blogger_id}，"
+        f"共检出 {len(faces)} 张人脸，主脸置信度 {main_score:.2f}，绑定={bound}"
+    )
+    return {
+        "inspiration_id": inspiration_id,
+        "bound": bound,
+        "blogger_id": blogger_id,
+        "face_count": len(faces),
+        "main_det_score": main_score,
+    }
+
+
+async def run_upload_face_bind(inspiration_id: str, blogger_id: int) -> None:
+    """上传绑定博主后的人脸绑定后台任务（fire-and-forget，失败不致命）。
+
+    信号量限流串行/小并发执行，避免 F2 批量上传时瞬时打爆 face-service；
+    API 进程重启时未完成的任务由既有「人脸扫描」增量链路兜底（素材已有
+    归属绑定，扫描时会自动匹配），不造成数据丢失。
+    """
+    from app.database import async_session
+
+    async with _bind_semaphore:
+        async with async_session() as db:
+            try:
+                await bind_uploaded_inspiration_face(db, inspiration_id, blogger_id)
+            except Exception as e:  # noqa: BLE001 后台任务任何异常不向调用方抛出
+                logger.warning(f"上传绑定人脸后台任务失败 {inspiration_id}: {e}")
+

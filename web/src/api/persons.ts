@@ -280,6 +280,15 @@ export const bloggersApi = {
     )
     return data
   },
+
+  /** 上传选了博主后触发后台人脸绑定：检测素材人脸并把「主脸」直接绑定该博主
+   *  （异步执行，不阻塞上传；合照仅绑主脸，无人脸不绑，失败不致命）。 */
+  async bindFace(id: number, inspirationId: string): Promise<{ message: string }> {
+    const { data } = await apiClient.post<{ message: string }>(
+      `/bloggers/${id}/bind-face/${inspirationId}`,
+    )
+    return data
+  },
 }
 
 /** 博主注销人脸 / 解绑素材的结果计数 */

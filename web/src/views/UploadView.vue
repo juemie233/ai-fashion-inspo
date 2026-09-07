@@ -252,6 +252,9 @@ async function startUpload() {
         try {
           await bloggersApi.link(result.id, [linkBloggerId.value])
           linkedCount++
+          // 来源可信场景（F2 下载博主作品）：归属绑定后异步触发「主脸绑定」——
+          // 后台检测素材人脸、主脸直接绑定该博主（合照仅绑主脸，无人脸不绑）
+          bloggersApi.bindFace(linkBloggerId.value, result.id).catch(() => {})
         } catch {
           linkFailedCount++
         }
@@ -348,6 +351,8 @@ async function importFromUrl() {
       try {
         await bloggersApi.link(data.id, [linkBloggerId.value])
         Message.success('已绑定所选穿搭博主')
+        // 归属绑定后异步触发「主脸绑定」（来源可信场景，合照仅绑主脸）
+        bloggersApi.bindFace(linkBloggerId.value, data.id).catch(() => {})
       } catch {
         Message.warning('博主绑定失败')
       }

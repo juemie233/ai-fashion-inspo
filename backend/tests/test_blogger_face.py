@@ -711,3 +711,145 @@ def test_unbind_inspirations_blogger_not_found(client):
     """解绑不存在的博主 → 404。"""
     r = client.post("/api/bloggers/999999/unbind-inspirations", json={})
     assert r.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════
+#  上传绑定博主 → 后台主脸绑定（F2 批量下载场景）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _patch_multi_face(monkeypatch, faces: list[dict]):
+    """把 face_client.embed 替换为固定返回多张人脸的假实现。"""
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        return {"face_count": len(faces), "faces": faces}
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed)
+
+
+def _face(seed: int, det_score: float = 0.95) -> dict:
+    """构造一张人脸（512 维单位向量 + bbox + det_score）。"""
+    return {
+        "bbox": [0, 0, 10, 10],
+        "det_score": det_score,
+        "embedding": _unit_embedding(seed),
+    }
+
+
+async def _query_detections(inspiration_id: str) -> list[dict]:
+    """读取素材人脸检测记录（排序 face_index）。"""
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(InspirationFaceDetection)
+                .where(InspirationFaceDetection.inspiration_id == inspiration_id)
+                .order_by(InspirationFaceDetection.face_index)
+            )
+        ).scalars().all()
+        return [
+            {
+                "face_index": d.face_index,
+                "matched_blogger_id": d.matched_blogger_id,
+                "match_status": d.match_status,
+                "det_score": d.det_score,
+            }
+            for d in rows
+        ]
+
+
+async def test_upload_bind_face_single_main_confirmed(client, upload, create_blogger, monkeypatch):
+    """单脸素材：主脸直接绑定选定博主并锁定（confirmed）。"""
+    from app.services.blogger_face import bind_uploaded_inspiration_face
+
+    blogger = create_blogger(name="绑定博主")
+    insp = upload().json()
+    _patch_multi_face(monkeypatch, [_face(1, det_score=0.95)])
+
+    async with async_session() as db:
+        r = await bind_uploaded_inspiration_face(db, insp["id"], blogger["id"])
+    assert r["bound"] is True
+    assert r["face_count"] == 1
+
+    dets = await _query_detections(insp["id"])
+    assert len(dets) == 1
+    assert dets[0]["matched_blogger_id"] == blogger["id"]
+    assert dets[0]["match_status"] == "confirmed"
+
+
+async def test_upload_bind_face_group_only_main_bound(client, upload, create_blogger, monkeypatch):
+    """合照（多脸）：仅主脸绑定该博主，其余人脸保持未匹配（不绑路人）。"""
+    from app.services.blogger_face import bind_uploaded_inspiration_face
+
+    blogger = create_blogger(name="合照博主")
+    insp = upload().json()
+    # 主脸 det_score 最高（0.98），次脸低（0.70）
+    _patch_multi_face(
+        monkeypatch,
+        [_face(1, 0.70), _face(2, 0.98), _face(3, 0.72)],
+    )
+
+    async with async_session() as db:
+        r = await bind_uploaded_inspiration_face(db, insp["id"], blogger["id"])
+    assert r["bound"] is True
+    assert r["face_count"] == 3
+
+    dets = await _query_detections(insp["id"])
+    assert len(dets) == 3
+    main = next(d for d in dets if d["face_index"] == 0)
+    assert main["matched_blogger_id"] == blogger["id"]
+    assert main["match_status"] == "confirmed"
+    # 其余脸不绑定（matched_blogger_id None、非 confirmed）
+    others = [d for d in dets if d["face_index"] != 0]
+    assert all(d["matched_blogger_id"] is None for d in others)
+    assert all(d["match_status"] is None for d in others)
+
+
+async def test_upload_bind_face_no_face_skips(client, upload, create_blogger, monkeypatch):
+    """无人脸素材：不写绑定（保持无检测记录），归属由上传链路负责。"""
+    from app.services.blogger_face import bind_uploaded_inspiration_face
+
+    blogger = create_blogger(name="无脸博主")
+    insp = upload().json()
+    _patch_no_face(monkeypatch)
+
+    async with async_session() as db:
+        r = await bind_uploaded_inspiration_face(db, insp["id"], blogger["id"])
+    assert r["bound"] is False
+    assert r["reason"] == "未检测到人脸"
+    dets = await _query_detections(insp["id"])
+    assert dets == []
+
+
+async def test_upload_bind_face_low_confidence_not_locked(client, upload, create_blogger, monkeypatch):
+    """低置信主脸不锁定绑定（交人工），不被误确认。"""
+    from app.services.blogger_face import bind_uploaded_inspiration_face
+
+    blogger = create_blogger(name="低质博主")
+    insp = upload().json()
+    # 主脸 det_score=0.60（低于 0.65 门槛）
+    _patch_multi_face(monkeypatch, [_face(1, det_score=0.60)])
+
+    async with async_session() as db:
+        r = await bind_uploaded_inspiration_face(db, insp["id"], blogger["id"])
+    assert r["bound"] is False
+
+    dets = await _query_detections(insp["id"])
+    assert len(dets) == 1
+    assert dets[0]["matched_blogger_id"] is None
+    assert dets[0]["match_status"] is None
+
+
+def test_bind_face_endpoint_accepts(client, create_blogger, monkeypatch):
+    """接口触发：POST /bloggers/{id}/bind-face/{inspiration_id} 返回 200（后台异步）。"""
+    blogger = create_blogger(name="接口博主")
+    # 路由内 from app.services.blogger_face import run_upload_face_bind；
+    # patch 模块属性，避免后台真实调用人脸服务
+    async def _noop(insp_id: str, bid: int) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.services.blogger_face.run_upload_face_bind", _noop
+    )
+    r = client.post(f"/api/bloggers/{blogger['id']}/bind-face/not-a-real-insp")
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "已提交人脸绑定任务（后台异步执行）"

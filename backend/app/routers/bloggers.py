@@ -539,3 +539,29 @@ async def unbind_blogger_inspirations_api(
     """
     ids = payload.inspiration_ids if payload else None
     return await unbind_blogger_inspirations(db, blogger_id, ids)
+
+
+@router.post("/{blogger_id}/bind-face/{inspiration_id}", status_code=status.HTTP_200_OK)
+async def bind_uploaded_face_api(
+    blogger_id: int,
+    inspiration_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """上传选了博主后，后台检测素材人脸并把「主脸」直接绑定到该博主（异步）。
+
+    来源可信场景（如 F2 下载目标博主作品）：检测到人脸即认定归属——主脸
+    绑定该博主并锁定（match_status=confirmed），合照中的其余人脸保持未匹配
+    （不把路人脸绑死）；无人脸/检测失败不写绑定，素材归属不受影响。
+    后台执行不阻塞上传；失败不致命，后续人脸扫描增量链路可兜底。
+    """
+    import asyncio
+
+    from app.services.blogger_face import run_upload_face_bind
+
+    # 素材归属绑定由上传链路单独完成；此处仅触发人脸绑定后台任务
+    asyncio.create_task(run_upload_face_bind(inspiration_id, blogger_id))
+    return {
+        "message": "已提交人脸绑定任务（后台异步执行）",
+        "blogger_id": blogger_id,
+        "inspiration_id": inspiration_id,
+    }
