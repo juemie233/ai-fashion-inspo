@@ -213,6 +213,38 @@ def test_scan_content_mode_detects_status_bar(client):
     assert abs(item["crop_bottom"] - 60 / 600) < 0.01
 
 
+def test_content_mode_high_saturation_top_not_status_bar(client):
+    """回归（误报修正）：彩色照片顶部（高饱和度条带）不得被判为状态栏残留。
+
+    真实素材诊断：8 个用户误报样本中 5 个顶部条带饱和度 0.17~0.45
+    （彩色照片顶部：天空/头发/水印等），被字形证据误判 found=True →
+    列进「疑似顶部状态栏残留」候选。真实状态栏/透明残留饱和度 ≤0.12，
+    字形证据检测加饱和度门槛（>0.15 直接拒绝）后，高饱和条带不再触发。
+    """
+    width, height = 300, 600
+    rng = np.random.default_rng(11)
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    # 全图：普通照片内容（匀质灰带渐变化 + 植被噪点），无状态栏/播放器条结构
+    arr[:, :] = (150, 150, 160)
+    for y in range(height):
+        # 轻微行间亮度渐变（照片自然光感），无任何条带结构
+        arr[y] = (int(150 + 20 * (y / height)), int(150 + 15 * (y / height)), int(160 + 10 * (y / height)))
+    # 顶部 30px：染一点高饱和彩色（模拟照片顶部鲜艳天空/背景）
+    arr[:30, :] = (200, 60, 60)
+    arr[:30] = np.clip(arr[:30] + rng.integers(-10, 11, size=arr[:30].shape), 0, 255)
+    # 照片内容：中低幅度噪点（非截图条带、非满屏纹理）
+    noise = rng.integers(-25, 26, size=arr.shape)
+    arr = np.clip(arr.astype(np.int32) + noise, 0, 255).astype(np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    body = _scan(client, mode="content", vlm_review=False)
+    # 高饱和顶部条带：不是状态栏，content 模式不应列为候选
+    assert body["total"] == 0, body
+
+
 def test_content_mode_status_bar_correction(client):
     """状态栏修正：顶部「低多样度内容簇」（状态栏图标）后移内容上界。"""
     # 顶部 40px：前 10px 纯色背景，行 10~20 为「少量噪点」（模拟状态栏图标，多样度低），

@@ -107,6 +107,9 @@ _RESIDUAL_CONTENT_MIN_STRICT = 0.25
 _GLYPH_ANALYZE_W = 320  # 字形分析宽度（96 宽下状态栏字形仅数像素，分辨率不足）
 _GLYPH_TOP_FRACTION = 0.10  # 只分析图片顶部 10%（状态栏 + 少量余量）
 _GLYPH_CONTRAST = 22.0  # 局部对比二值化阈值（像素 − 5×5 均值，0~255）
+# 顶部条带饱和度上限：真实状态栏/透明残留饱和 ≤0.12，>0.15 为彩色照片顶部
+# （天空/头发/水印等）——高饱和不是状态栏，直接拒绝字形证据（批量误报修正）
+_GLYPH_MAX_SATURATION = 0.15
 _GLYPH_MARGIN_ROWS = 2  # 字形底部再多裁的行数（缩放坐标系，覆盖图标抗锯齿边）
 _GLYPH_TOP_FRAC_CAP = 0.12  # 字形路径建议裁剪比例上限（状态栏不会超过全高 12%）
 _FULL_SCREENSHOT_RATIO = 1.8  # 完整手机截图先验：高/宽 ≥ 此值的竖图极大概率是截图
@@ -878,6 +881,15 @@ def _glyph_evidence(img: "Image.Image") -> dict:
     )
     arr = np.asarray(strip.convert("L"), dtype=np.float32)
     h, w = arr.shape
+
+    # 饱和度门槛（误报修正）：真实状态栏 / 透明残留的顶部条带饱和度极低
+    # （实测 ≤0.12），而彩色照片顶部（天空/头发/衣服/水印）饱和度常 >0.15——
+    # 高饱和条带几乎不可能是状态栏，直接用饱和度拒绝，消灭「彩色照片顶被
+    # 判残留」的批量误报（真实素材诊断：8 个误报样本 5 个饱和 0.17~0.45）。
+    hsv = np.asarray(strip.convert("HSV"), dtype=np.float32)
+    strip_sat = float(hsv[..., 1].mean()) / 255.0
+    if strip_sat > _GLYPH_MAX_SATURATION:
+        return {"found": False, "strong": False, "top_frac": 0.0}
 
     # 5×5 盒均值背景（cumsum 实现，条带很小，开销可忽略）
     pad = np.pad(arr, 2, mode="edge")
