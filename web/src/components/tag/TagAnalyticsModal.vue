@@ -216,7 +216,7 @@ function onGranularityChange() {
     title="标签分析"
     :footer="false"
     :width="'90%'"
-    :modal-style="{ maxWidth: '1200px', height: '84vh' }"
+    :modal-style="{ maxWidth: '1200px' }"
   >
     <a-spin :loading="loading">
       <div class="analytics">
@@ -264,13 +264,16 @@ function onGranularityChange() {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 100%; /* 撑满弹窗内容区：否则 flex-col 默认 auto 宽度，panel 与图表只占内容宽、右侧留白 */
-  height: 100%;
+  width: 100%; /* 撑满弹窗内容区：flex-col 默认 auto 宽度，panel 与图表只占内容宽、右侧留白 */
+  /* 用固定高度替代 height:100%：Arco modal body 对 100% 高度链传递不可靠，
+     导致 .panel-graph flex:1 拿不到高度、共现图渲染高度坍缩成一条线 */
+  min-height: 640px;
 }
 .row-top {
   display: flex;
   gap: 12px;
-  flex: 0 0 42%;
+  flex: 0 0 auto;
+  height: 300px; /* 顶部两图固定高度：热门排行(260) / 趋势(220) + 标题留白 */
   width: 100%; /* 两个并排 panel 撑满整行宽度 */
   min-height: 0;
 }
@@ -282,6 +285,7 @@ function onGranularityChange() {
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* 图表超出时裁剪，避免挤压布局 */
 }
 .panel h4 {
   margin: 0 0 8px;
@@ -297,8 +301,13 @@ function onGranularityChange() {
   font-weight: normal;
 }
 .panel-graph {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   width: 100%; /* 共现关系图占满整行 */
-  min-height: 0;
+  min-height: 320px; /* 保证共现图有足够渲染高度，不被压缩成一条线 */
+}
+/* 图表容器不被 flex 压缩：panel 为 flex-col，ArcoChart 高度固定(320/260/220)，
+   默认 flex-shrink:1 会被父容器高度不足时压扁导致图表高度坍缩 */
+.panel :deep(.arco-chart) {
+  flex-shrink: 0;
 }
 </style>
