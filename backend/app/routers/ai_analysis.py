@@ -22,6 +22,7 @@ from app.routers.ai_shared import (
     _pending_queue,
     get_queue_paused,
     set_queue_paused,
+    get_in_memory_queue_ids,
     _run_analysis,
 )
 from app.services import ai_analysis_service as ai_svc
@@ -63,6 +64,27 @@ async def _check_ollama_before_analysis() -> tuple[bool, str | None]:
     return False, start_msg or "Ollama 未运行，请确认后重试"
 
 
+async def _exclude_inflight_ids(
+    db: AsyncSession, inspiration_ids: list[str]
+) -> tuple[list[str], set[str]]:
+    """过滤出「尚未在进行中」的素材 ID。
+
+    进行中 = API 进程内存队列（_active_analyses/_pending_queue）里的素材
+    ∪ 已进入任一未完成 batch_analyze/multi_analyze 任务（DB 任务队列）的素材。
+    跨队列去重：内存队列与 worker 数据库任务队列互不可见，调度前必须排除，
+    否则同一素材可能被两个队列各分析一次。
+
+    返回:
+        (未在进行中的素材 ID 列表, 被剔除的进行中素材 ID 集合)
+    """
+    in_memory = get_in_memory_queue_ids()
+    from_db = await ai_svc.get_inflight_analysis_ids(db)
+    inflight = in_memory | from_db
+    kept = [iid for iid in inspiration_ids if iid not in inflight]
+    skipped_inflight = set(inspiration_ids) - set(kept)
+    return kept, skipped_inflight
+
+
 # ============ AI 分析 ============
 
 
@@ -81,6 +103,16 @@ async def analyze_inspiration(
         raise HTTPException(status_code=404, detail="灵感素材未找到")
     if inspiration.media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="仅支持分析图片/视频素材")
+
+    # 已在「进行中/排队中」（内存队列或未完成 batch/multi 任务）则不重复调度
+    inflight = get_in_memory_queue_ids() | await ai_svc.get_inflight_analysis_ids(db)
+    if inspiration_id in inflight:
+        return {
+            "message": "该素材已在分析队列中",
+            "inspiration_id": inspiration_id,
+            "status": "analyzing",
+            "ollama_will_start": False,
+        }
 
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
     if not ollama_running:
@@ -203,9 +235,16 @@ async def batch_analyze(
     )
     inspirations = result.scalars().all()
     valid_ids = [insp.id for insp in inspirations]
+    # 排除已在「进行中/排队中」的素材（内存队列 + 数据库任务队列），避免重复分析
+    valid_ids, inflight = await _exclude_inflight_ids(db, valid_ids)
     skipped = len(inspiration_ids) - len(valid_ids)
 
     if not valid_ids:
+        if inflight and len(inspiration_ids) == len(inflight):
+            raise HTTPException(
+                status_code=400,
+                detail="所选素材均已在分析队列中，无需重复分析",
+            )
         raise HTTPException(
             status_code=404,
             detail="未找到任何可分析的图片素材"
@@ -273,8 +312,11 @@ async def analysis_queue(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/unanalyzed-ids")
 async def unanalyzed_ids(db: AsyncSession = Depends(get_db)) -> dict[str, list[str] | int]:
-    """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。"""
-    ids = await ai_svc.get_unanalyzed_ids(db)
+    """获取所有未分析过的图片素材 ID 列表（暂不分析视频）。
+
+    排除正在进行/排队中的素材（内存队列 + 数据库任务队列），避免与分析队列重复。
+    """
+    ids = await ai_svc.get_unanalyzed_ids(db, skip_ids=get_in_memory_queue_ids())
     return {"ids": ids, "count": len(ids)}
 
 
@@ -362,6 +404,17 @@ async def retry_analysis(
     if inspiration.media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="暂不支持分析该素材类型")
 
+    # 已在「进行中/排队中」则不重复调度（避免与批量任务并发重复分析）
+    kept, _inflight = await _exclude_inflight_ids(db, [inspiration_id])
+    if not kept:
+        return {
+            "message": "该素材已在分析队列中",
+            "inspiration_id": inspiration_id,
+            "status": "analyzing",
+            "ollama_will_start": False,
+            "task_id": None,
+        }
+
     task = await create_batch_analyze_task(db, [inspiration_id], force_retry=True)
 
     # Ollama 检查仅作提示：任务已入队，Ollama 离线时 worker 按可恢复错误自动退避重试
@@ -395,6 +448,10 @@ async def retry_all_failed(db: AsyncSession = Depends(get_db)) -> dict[str, str 
         return {"message": "没有失败的记录", "count": 0}
 
     inspiration_ids = [f[0] for f in failed]
+    # 排除已在「进行中/排队中」的素材，避免与其它任务重复分析
+    inspiration_ids, _inflight = await _exclude_inflight_ids(db, inspiration_ids)
+    if not inspiration_ids:
+        return {"message": "失败的记录均已在分析队列中", "count": 0}
     task = await create_batch_analyze_task(db, inspiration_ids, force_retry=True)
 
     ollama_running, ollama_msg = await _check_ollama_before_analysis()
@@ -500,6 +557,16 @@ async def retag_analysis_by_tag(
     if not inspiration_ids:
         return {
             "message": "该标签下没有由 AI 打标的素材，无需重新分析",
+            "task_id": None,
+            "count": 0,
+            "status": "none",
+        }
+
+    # 排除已在「进行中/排队中」的素材，避免与其它任务重复分析
+    inspiration_ids, _inflight = await _exclude_inflight_ids(db, inspiration_ids)
+    if not inspiration_ids:
+        return {
+            "message": "该标签下的素材均已在分析队列中，无需重复分析",
             "task_id": None,
             "count": 0,
             "status": "none",

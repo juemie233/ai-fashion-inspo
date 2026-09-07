@@ -122,12 +122,47 @@ async def get_analysis_queue_stats(db: AsyncSession) -> dict:
     }
 
 
-async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
+async def get_inflight_analysis_ids(db: AsyncSession) -> set[str]:
+    """收集所有「分析中/排队中」的素材 ID。
+
+    判定口径：素材 ID 出现在任一**未完成**（pending/running）的
+    batch_analyze / multi_analyze 任务的 result.inspiration_ids 中。
+
+    这是跨队列去重的数据库真值——API 进程内存队列（_active_analyses /
+    _pending_queue，由 analyze_inspiration 走 _run_analysis 填充）与 worker
+    数据库任务队列（batch_analyze / multi_analyze）分别去重时互不可见，
+    导致同一素材可被两个队列各分析一次；本函数让两侧都能查到「正在跑」的集合，
+    从而避免重复分析。
+    """
+    from app.models.task import TaskQueue
+
+    rows = await db.execute(
+        select(TaskQueue.result).where(
+            TaskQueue.type.in_(("batch_analyze", "multi_analyze")),
+            TaskQueue.status.in_(("pending", "running")),
+        )
+    )
+    ids: set[str] = set()
+    for (result,) in rows:
+        if isinstance(result, dict):
+            for iid in result.get("inspiration_ids") or []:
+                ids.add(iid)
+    return ids
+
+
+async def get_unanalyzed_ids(
+    db: AsyncSession, skip_ids: set[str] | None = None
+) -> list[str]:
     """返回所有未分析的素材 ID 列表（图片 + 视频，视频经首关键帧分析）。
 
     口径：没有任何「成功」标签分析日志（error IS NULL）的素材，
     **含分析失败过的素材**（与批量任务执行时的已分析跳过条件一致，
     失败素材可被「分析全部未分析」重新纳入批量分析）。
+
+    额外排除两类「进行中」的素材，避免重复分析：
+    - ``skip_ids``：API 进程内存队列（_active_analyses/_pending_queue）里
+      正在进行/排队的素材（由路由层传入）；
+    - 已进入任一未完成 batch_analyze / multi_analyze 任务（DB 任务队列）的素材。
     """
     analyzed_success_sub = (
         select(AIAnalysisLog.inspiration_id)
@@ -137,9 +172,12 @@ async def get_unanalyzed_ids(db: AsyncSession) -> list[str]:
         )
         .distinct()
     )
+    inflight = await get_inflight_analysis_ids(db)
+    excluded = inflight | (skip_ids or set())
     result = await db.execute(
         select(Inspiration.id).where(
             Inspiration.id.notin_(analyzed_success_sub),
+            Inspiration.id.notin_(list(excluded)),
             Inspiration.media_type.in_(("image", "video")),
             Inspiration.deleted_at.is_(None),
         )

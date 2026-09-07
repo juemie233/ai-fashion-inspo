@@ -138,6 +138,7 @@ async def _load_pending_items(
     db: AsyncSession,
     inspiration_ids: list[str],
     skip_analyzed: bool = True,
+    exclude_inflight: set[str] | None = None,
 ) -> tuple[list[tuple[str, str]], int, int]:
     """加载仍存在的图片/视频素材，并跳过已有成功分析日志的（崩溃恢复幂等）。
 
@@ -146,6 +147,9 @@ async def _load_pending_items(
 
     skip_analyzed=False（失败重试任务）：不跳过已有成功日志的素材——用户
     显式对历史失败记录重试，期望重新分析该素材（可能历史上成功过但最近失败）。
+
+    exclude_inflight：已被其它未完成 batch/multi 任务认领的素材 ID 集合，
+    从本任务剔除，避免并发批处理重复分析同一素材。
 
     返回 (待分析 (id, 帧路径列表) 列表, 已分析跳过数量, 关键帧不可用数量)。
     """
@@ -161,6 +165,9 @@ async def _load_pending_items(
     unavailable = 0
     for iid in inspiration_ids:
         if iid not in row_map:
+            continue
+        # 被其它未完成任务认领的素材：豁免，交由其所属任务处理
+        if exclude_inflight and iid in exclude_inflight:
             continue
         fp, mt = row_map[iid]
         frames = await _resolve_analysis_frames(db, iid, fp, mt)
@@ -216,6 +223,30 @@ def _raise_if_all_failed(
     )
 
 
+async def _inflight_excluding(db: AsyncSession, task_id: int) -> set[str]:
+    """收集除当前任务外、所有未完成（pending/running）batch/multi 任务认领的素材 ID。
+
+    并发批处理时，若两个任务都包含同一素材 ID，两个 worker 会各分析一次——
+    这是跨任务重复分析的主因之一。本函数给出「已被其它任务认领」的集合，
+    让当前任务在加载待分析素材时豁免这些 ID，交由所属任务处理。
+    """
+    from app.models.task import TaskQueue
+
+    rows = await db.execute(
+        select(TaskQueue.result).where(
+            TaskQueue.type.in_(("batch_analyze", "multi_analyze")),
+            TaskQueue.status.in_(("pending", "running")),
+            TaskQueue.id != task_id,
+        )
+    )
+    ids: set[str] = set()
+    for (result,) in rows:
+        if isinstance(result, dict):
+            for iid in result.get("inspiration_ids") or []:
+                ids.add(iid)
+    return ids
+
+
 async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     """执行批量分析任务：逐张调用 AI 分析并维护任务进度（由 worker 调用）。
 
@@ -242,7 +273,10 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     # 加载待分析素材（执行期间可能被删除，仅保留仍存在的图片/视频素材）
     # 失败重试任务（payload.retry=true）：不跳过已有成功日志的素材（强制重跑）
     items, already_analyzed, unavailable = await _load_pending_items(
-        db, inspiration_ids, skip_analyzed=not bool(payload.get("retry"))
+        db,
+        inspiration_ids,
+        skip_analyzed=not bool(payload.get("retry")),
+        exclude_inflight=await _inflight_excluding(db, task.id),
     )
 
     task.total = len(items)
@@ -372,7 +406,9 @@ async def create_multi_analyze_task(
 
 
 async def _load_items(
-    db: AsyncSession, inspiration_ids: list[str]
+    db: AsyncSession,
+    inspiration_ids: list[str],
+    exclude_inflight: set[str] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """加载仍存在的图片/视频素材，返回 (素材 ID, 分析源帧路径列表)。
 
@@ -380,6 +416,9 @@ async def _load_items(
     （对比不同模型/提示词正是核心诉求），因此不做「已分析跳过」；
     幂等恢复改为按「组合 × 素材」粒度判断（见 _load_done_ids）。
     视频素材解析采样关键帧列表（提取失败的素材跳过并记日志）。
+
+    exclude_inflight：已被其它未完成 batch/multi 任务认领的素材 ID，
+    从本任务剔除，避免并发批处理重复分析。
     """
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
@@ -392,6 +431,9 @@ async def _load_items(
     items: list[tuple[str, list[str]]] = []
     for iid in inspiration_ids:
         if iid not in row_map:
+            continue
+        # 被其它未完成任务认领的素材：豁免，交由其所属任务处理
+        if exclude_inflight and iid in exclude_inflight:
             continue
         fp, mt = row_map[iid]
         frames = await _resolve_analysis_frames(db, iid, fp, mt)
@@ -509,8 +551,10 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
-    # 加载仍存在的图片素材（执行期间可能被删除）
-    items = await _load_items(db, inspiration_ids)
+    # 加载仍存在的图片素材（执行期间可能被删除）；排除其它未完成任务认领的素材
+    items = await _load_items(
+        db, inspiration_ids, exclude_inflight=await _inflight_excluding(db, task.id)
+    )
 
     task.total = len(items) * len(combinations)
     task.done = 0

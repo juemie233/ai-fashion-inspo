@@ -43,6 +43,15 @@ def set_queue_paused(paused: bool) -> None:
     _queue_paused = paused
 
 
+def get_in_memory_queue_ids() -> set[str]:
+    """API 进程内存分析队列里所有进行中/排队中的素材 ID。
+
+    供路由层在「新增分析任务」前排除，避免与 worker 数据库任务队列重复分析
+    同一素材（内存队列与数据库任务队列互不可见，需在调度侧双向去重）。
+    """
+    return set(_active_analyses.keys()) | set(_pending_queue)
+
+
 async def _resolve_analysis_frames(inspiration) -> list[str]:
     """解析素材的多帧分析源（相对 storage_root 的帧路径列表）。
 

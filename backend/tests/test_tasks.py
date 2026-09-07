@@ -288,7 +288,7 @@ async def test_execute_batch_analyze_paused_early_return(client, monkeypatch):
 
     # 固定并发为 1；跳过真实素材加载
     monkeypatch.setattr(runner, "_analyze_concurrency", lambda: 1)
-    async def _fake_load(db, inspiration_ids, skip_analyzed=True):
+    async def _fake_load(db, inspiration_ids, skip_analyzed=True, exclude_inflight=None):
         return [("insp-1", ["f1.jpg"]), ("insp-2", ["f2.jpg"])], 0, 0
     monkeypatch.setattr(runner, "_load_pending_items", _fake_load)
 
@@ -346,7 +346,7 @@ async def test_execute_batch_analyze_returns_when_status_changed_to_pending(clie
 
     # 固定并发为 1；跳过真实素材加载
     monkeypatch.setattr(runner, "_analyze_concurrency", lambda: 1)
-    async def _fake_load(db, inspiration_ids, skip_analyzed=True):
+    async def _fake_load(db, inspiration_ids, skip_analyzed=True, exclude_inflight=None):
         return [("insp-1", ["f1.jpg"]), ("insp-2", ["f2.jpg"])], 0, 0
     monkeypatch.setattr(runner, "_load_pending_items", _fake_load)
 
