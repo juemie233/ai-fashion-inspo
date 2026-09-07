@@ -148,6 +148,7 @@ def clean_state(client):
         settings.storage_root / "quality_classifier",  # 负样本初筛器训练产物
         settings.storage_root / "_crop_backup",  # 裁剪原图备份（按时间戳分目录）
         settings.storage_root / "_crop_dups",  # 裁剪重复对比预览（按批次分目录）
+        settings.storage_root / "cookies",  # 平台 Cookie 文件（防跨用例污染，见下）
         settings.lancedb_dir,  # 向量库（LanceDB 落盘目录，含 .text-formula-version 标记）
     ]:
         if dir_path.exists():
@@ -157,6 +158,13 @@ def clean_state(client):
                 if f.is_file():
                     f.unlink()
 
+    # Cookie 校验缓存为进程内 dict（cookie_verify._verify_cache）：多个用例共享，
+    # `test_blogger_enrichment` / `test_cookie_verify` 等写入/残留的 Cookie 文件与
+    # 校验结果若不清空，会让 test_scraper 的建任务前置校验命中 invalid 或让
+    # `cookie-status` 读到残留 exists=True（此前靠各模块自清，遗留顺序污染）。
+    # 在全局 clean_state 收敛，_verify_cache 无文件 mtime 依赖时也一并清空。
+    clear_cookie_verify_cache()
+
     # 向量库连接缓存重置：LanceDB 连接/表对象持有目录与版本基线，目录被清空后
     # 旧连接指向已删除的数据，必须丢弃缓存让下一次操作懒加载重新连接建空表，
     # 否则本用例与后续用例共享同一连接的陈旧视图（向量写入/读取相互污染）
@@ -164,6 +172,17 @@ def clean_state(client):
 
     vector_store.reset_connection()
     yield
+
+
+def clear_cookie_verify_cache() -> None:
+    """清空 Cookie 校验进程内缓存（供 clean_state 与测试自助调用）。"""
+    try:
+        from app.services.scraper import cookie_verify as _cv
+
+        _cv._verify_cache.clear()
+    except Exception:
+        # 依赖可导入时清理；导入失败（如未装 scrapers 依赖）则忽略
+        pass
 
 
 def sqlite3_connect(path: str):

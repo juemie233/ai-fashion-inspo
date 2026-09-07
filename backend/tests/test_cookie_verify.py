@@ -3,6 +3,9 @@
 app/services/scraper/cookie_verify.py（TODO「Cookie 真实有效性校验」方案落地）。
 HTTP 探测全部打桩（替换 httpx.AsyncClient），不发真实网络请求；
 集成用例通过 API 导入 Cookie 文件并验证任务创建拦截。
+
+Cookie 文件与校验缓存（_verify_cache）由 conftest.clean_state 统一清理
+（原各自清理的 _clean_cache 已收敛到全局 clean_state，避免顺序污染）。
 """
 
 import asyncio
@@ -20,20 +23,6 @@ def _remove_cookie_files() -> None:
     if cookie_dir.exists():
         for f in cookie_dir.glob("*_cookies.json"):
             f.unlink()
-
-
-@pytest.fixture(autouse=True)
-def _clean_cache():
-    """每个用例前后清空校验缓存与 Cookie 文件目录。
-
-    conftest.clean_state 不清理 storage/cookies——残留文件会让本模块之外
-    的用例（如 test_scraper.py 建任务）触发真实网络探测，必须前后都清理。
-    """
-    cv._verify_cache.clear()
-    _remove_cookie_files()
-    yield
-    cv._verify_cache.clear()
-    _remove_cookie_files()
 
 
 def _write_cookies(platform: str, data) -> Path:
