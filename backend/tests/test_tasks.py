@@ -128,6 +128,16 @@ async def test_delete_terminal_task_physically_deletes(client):
         assert client.get(f"/api/tasks/{tid}").status_code == 404
 
 
+async def test_delete_paused_task_physically_deletes(client):
+    """删除已暂停的任务：物理删除（暂停任务不会被 worker 认领、无心跳、不再执行）。"""
+    tid = await _add_task(status="paused")
+
+    r = client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] is True
+    assert client.get(f"/api/tasks/{tid}").status_code == 404
+
+
 async def test_delete_pending_running_rejected(client):
     """删除 pending 任务 → 400，记录保留（待执行任务请走取消接口移除）。"""
     tid = await _add_task(status="pending")

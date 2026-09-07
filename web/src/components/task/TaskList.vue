@@ -200,21 +200,24 @@ const columns: TableColumnData[] = [
               },
             )
           : null,
-        // 队列任务记录清理：终态（cancelled/success/failed）可删；运行中任务
-        // 仅当执行进程已停止（心跳超时，如停电/崩溃遗留的僵尸任务）可删——
+        // 队列任务记录清理：终态（cancelled/success/failed）与已暂停（paused）可删；
+        // 运行中任务仅当执行进程已停止（心跳超时，如停电/崩溃遗留的僵尸任务）可删——
         // 由后端以心跳判定裁决，正常执行中的任务会返回 400 拒绝
         row.source === 'queue' &&
         (row.status === 'running' ||
           row.status === 'cancelled' ||
           row.status === 'success' ||
-          row.status === 'failed')
+          row.status === 'failed' ||
+          row.status === 'paused')
           ? h(
               Popconfirm,
               {
                 content:
                   row.status === 'running'
                     ? '任务处于运行中：仅当执行进程已停止（心跳超时）时可删除，正在执行的任务将被拒绝，确定删除？'
-                    : '确定删除该任务历史记录？',
+                    : row.status === 'paused'
+                      ? '任务已暂停（不会再自动执行），确定删除该任务记录？'
+                      : '确定删除该任务历史记录？',
                 onOk: () => emit('delete', row),
               },
               {

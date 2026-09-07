@@ -234,12 +234,14 @@ async def delete_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """删除任务记录：终态（success/failed/cancelled）与「僵尸 running」可物理删除。
+    """删除任务记录：终态（success/failed/cancelled）、暂停（paused）与「僵尸 running」可物理删除。
 
     - pending：拒绝删除（待执行任务会重新排队；如确需移除请走取消接口，
       其对 pending 即物理删除）
     - running：仅当心跳超时（认领它的 worker 已死，如停电/进程崩溃遗留的
       僵尸任务）可删除；worker 正在正常执行（心跳新鲜）的任务拒绝删除
+    - paused：允许删除——暂停任务不会被 worker 认领（仅 pending 被认领）、
+      无心跳、不会再自动执行，等同静止状态，可安全物理删除
     供任务管理页「删除任务」按钮清理历史记录（采集任务走采集专用删除接口）。
     """
     task = await db.get(TaskQueue, task_id)
@@ -259,13 +261,13 @@ async def delete_task(
                 status_code=400,
                 detail="任务正在执行中（心跳正常），不能删除",
             )
-    # 原子删除：二次确认状态仍落在可删范围（终态或僵尸 running），
+    # 原子删除：二次确认状态仍落在可删范围（终态 / 僵尸 running / 暂停），
     # 防止删除瞬间正在执行 / 已被 worker 重置为 pending
     result = await db.execute(
         delete(TaskQueue).where(
             TaskQueue.id == task_id,
             or_(
-                TaskQueue.status.in_(("success", "failed", "cancelled")),
+                TaskQueue.status.in_(("success", "failed", "cancelled", "paused")),
                 and_(
                     TaskQueue.status == "running",
                     or_(
