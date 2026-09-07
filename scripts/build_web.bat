@@ -1,34 +1,34 @@
-ï»¿@echo off
-REM AI ç©¿æ­ç´ æåº“ â€” å‰ç«¯é¡¹ç›®æ‰“åŒ…è„šæœ¬ï¼ˆWindows å…¥å£ï¼Œå§”æ‰˜ç»™ bash æ‰§è¡Œ build_web.shï¼‰
-REM ç”¨æ³•:
-REM   scripts\build_web.bat           åªæ„å»ºï¼Œäº§ç‰©åœ¨ web\dist
-REM   scripts\build_web.bat --zip     æ„å»ºåæŠŠ web\dist æ‰“æˆ dist-<æ—¶é—´æˆ³>.zip
-REM   scripts\build_web.bat --no-install  è·³è¿‡ã€Œç¼º node_modules æ—¶ npm installã€
-REM è¯´æ˜: éœ€ Git Bashï¼ˆbash åœ¨ PATHï¼‰æˆ–å·²å®‰è£… Bashï¼›å¦åˆ™å›é€€ç›´æ¥è°ƒç”¨ npm run buildã€‚
+@echo off
+REM AI ´©´îËØ²Ä¿â ¡ª Ç°¶ËÏîÄ¿´ò°ü½Å±¾£¨Windows Èë¿Ú£¬Î¯ÍĞ¸ø bash Ö´ĞĞ build_web.sh£©
+REM ÓÃ·¨:
+REM   scripts\build_web.bat           Ö»¹¹½¨£¬²úÎïÔÚ web\dist
+REM   scripts\build_web.bat --zip     ¹¹½¨ºó°Ñ web\dist ´ò³É dist-<Ê±¼ä´Á>.zip
+REM   scripts\build_web.bat --no-install  Ìø¹ı¡¸È± node_modules Ê± npm install¡¹
+REM ËµÃ÷: Ğè Git Bash£¨bash ÔÚ PATH£©»òÒÑ°²×° Bash£»·ñÔò»ØÍËÖ±½Óµ÷ÓÃ npm run build¡£
 
 setlocal
 cd /d "%~dp0.."
 
 where bash >nul 2>nul
 if %errorlevel%==0 (
-  echo ä½¿ç”¨ Git Bash æ‰§è¡Œ scripts\build_web.sh %*
+  echo Ê¹ÓÃ Git Bash Ö´ĞĞ scripts\build_web.sh %*
   bash scripts\build_web.sh %*
   goto :end
 )
 
-echo æœªæ‰¾åˆ° bashï¼Œå›é€€ä¸ºç›´æ¥è°ƒç”¨ npm run build ...
+echo Î´ÕÒµ½ bash£¬»ØÍËÎªÖ±½Óµ÷ÓÃ npm run build ...
 if not exist "web\node_modules" (
-  echo æœªæ£€æµ‹åˆ° web\node_modulesï¼Œæ‰§è¡Œ npm install ...
+  echo Î´¼ì²âµ½ web\node_modules£¬Ö´ĞĞ npm install ...
   pushd web
   call npm install
-  if errorlevel 1 (popd & echo npm install å¤±è´¥ & goto :end)
+  if errorlevel 1 (popd & echo npm install Ê§°Ü & goto :end)
   popd
 )
 pushd web
 call npm run build
-if errorlevel 1 (popd & echo å‰ç«¯æ„å»ºå¤±è´¥ & goto :end)
+if errorlevel 1 (popd & echo Ç°¶Ë¹¹½¨Ê§°Ü & goto :end)
 popd
-echo äº§ç‰©ç›®å½•: web\dist
+echo ²úÎïÄ¿Â¼: web\dist
 if "%~1"=="--zip" (
   powershell -NoProfile -Command "Compress-Archive -Path 'web\dist' -DestinationPath ('dist-' + (Get-Date -Format 'yyyy-MM-dd_HHmmss') + '.zip') -Force"
 )
