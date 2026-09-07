@@ -79,10 +79,11 @@ function taskTypeLabel(type: string): string {
         </div>
 
         <!-- 运行中：进度条；pending（含等待自动重试）：提示；paused：显示已保存进度 -->
+        <!-- 注意：后端 task.progress 为 0~100 整数，arco a-progress 的 percent 是 0~1 比例，需 /100 -->
         <a-progress
           v-if="task.status === 'running'"
           type="line"
-          :percent="task.progress"
+          :percent="task.progress / 100"
           :stroke-width="14"
           size="small"
         />
