@@ -624,9 +624,21 @@ onBeforeUnmount(() => {
   }
 })
 
-/** 缩略图地址（优先缩略图，无则原图） */
+/** 素材是否视频：media_type 为 video 时 file_path 是 mp4，不能当 <img> 加载 */
+function isVideoItem(item: DetectionItem): boolean {
+  return item.media_type === 'video'
+}
+
+/** 缩略图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)，否则 <img> 必破图） */
 function thumbUrl(item: DetectionItem): string {
+  if (isVideoItem(item)) return item.thumbnail_path ? getFileUrl(item.thumbnail_path) : ''
   return getFileUrl(item.thumbnail_path || item.file_path)
+}
+
+/** 悬停大图地址：图片用原图；视频没有可预览的静态大图，用缩略图大图（避免破图） */
+function largePreviewUrl(item: DetectionItem): string {
+  if (isVideoItem(item)) return item.thumbnail_path ? getFileUrl(item.thumbnail_path) : ''
+  return getFileUrl(item.file_path)
 }
 
 /** 人物头像地址：人脸小图（自动裁剪）→ 手动头像，均无则显示首字（与人物列表/详情约定一致） */
@@ -635,8 +647,10 @@ function personAvatarUrl(item: PersonAggregateItem): string | undefined {
   return path ? getFileUrl(path) : undefined
 }
 
-/** 聚合分组代表图地址（优先缩略图，无则原图；无任何图时返回空串） */
+/** 聚合分组代表图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)） */
 function groupThumbUrl(group: FaceClusterGroup): string {
+  const isVideo = group.rep_media_type === 'video'
+  if (isVideo) return group.rep_thumbnail_path ? getFileUrl(group.rep_thumbnail_path) : ''
   const path = group.rep_thumbnail_path || group.rep_file_path
   return path ? getFileUrl(path) : ''
 }
@@ -848,11 +862,22 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         class="detail-item"
                         @click="goDetail(item.inspiration_id)"
                       >
-                        <HoverImagePreview
-                          class="image-wrap"
-                          :large-src="getFileUrl(item.file_path)"
-                        >
+                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
                           <img :src="thumbUrl(item)" loading="lazy" />
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
                         </HoverImagePreview>
                         <a-checkbox
                           class="detail-check"
@@ -969,11 +994,22 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         class="detail-item locked-item"
                         @click="goDetail(item.inspiration_id)"
                       >
-                        <HoverImagePreview
-                          class="image-wrap"
-                          :large-src="getFileUrl(item.file_path)"
-                        >
+                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
                           <img :src="thumbUrl(item)" loading="lazy" />
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
                         </HoverImagePreview>
                         <!-- 已确认锁定：锁图标替代勾选框，不可撤销/编辑 -->
                         <span class="detail-lock"><IconLock /></span>
@@ -1054,8 +1090,15 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 class="detail-item"
                 @click="goDetail(item.inspiration_id)"
               >
-                <HoverImagePreview class="image-wrap" :large-src="getFileUrl(item.file_path)">
+                <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
                   <img :src="thumbUrl(item)" loading="lazy" />
+                  <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                  <span
+                    v-if="isVideoItem(item)"
+                    class="face-video-badge"
+                    title="视频素材，点击查看详情后播放"
+                    >▶</span
+                  >
                 </HoverImagePreview>
                 <a-checkbox
                   class="detail-check"
@@ -1186,11 +1229,22 @@ function filterOption(input: string, option: { label?: string }): boolean {
                         class="detail-item"
                         @click="goDetail(item.inspiration_id)"
                       >
-                        <HoverImagePreview
-                          class="image-wrap"
-                          :large-src="getFileUrl(item.file_path)"
-                        >
+                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
                           <img :src="thumbUrl(item)" loading="lazy" />
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
+                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
+                          <span
+                            v-if="isVideoItem(item)"
+                            class="face-video-badge"
+                            title="视频素材，点击查看详情后播放"
+                            >▶</span
+                          >
                         </HoverImagePreview>
                         <a-checkbox
                           class="detail-check"
@@ -1354,6 +1408,23 @@ function filterOption(input: string, option: { label?: string }): boolean {
   background: rgba(255, 255, 255, 0.85);
   border-radius: 4px;
   padding: 2px;
+}
+
+/* 视频素材角标：缩略图右下角，提示该素材是视频（点击卡片跳详情页播放） */
+.face-video-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  pointer-events: none;
 }
 
 /* 已确认锁定标识：左上角锁图标（替代勾选框） */

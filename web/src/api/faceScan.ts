@@ -39,6 +39,8 @@ export interface DetectionItem {
   confidence: number | null
   file_path: string
   thumbnail_path: string | null
+  /** 素材媒体类型：video 时 file_path 为 mp4，不能当 <img> 加载（前端据此防破图） */
+  media_type?: 'image' | 'video' | null
 }
 
 /** 结果查询响应（模式区分聚合/明细/未匹配） */
@@ -68,6 +70,8 @@ export interface FaceClusterGroup {
   rep_inspiration_id: string | null
   rep_file_path: string | null
   rep_thumbnail_path: string | null
+  /** 代表素材媒体类型：video 时 rep_file_path 为 mp4，不能当 <img> 加载 */
+  rep_media_type?: 'image' | 'video' | null
 }
 
 /** 人脸聚合分组查询响应 */

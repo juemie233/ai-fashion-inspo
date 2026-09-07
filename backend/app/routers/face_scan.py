@@ -230,6 +230,7 @@ async def _person_detail_page(
             InspirationFaceDetection.confidence,
             Inspiration.file_path,
             Inspiration.thumbnail_path,
+            Inspiration.media_type,
         )
         .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
         .where(
@@ -254,6 +255,7 @@ async def _person_detail_page(
             "confidence": round(r.confidence, 4) if r.confidence is not None else None,
             "file_path": r.file_path,
             "thumbnail_path": r.thumbnail_path,
+            "media_type": r.media_type,
         }
         for r in rows
     ]
@@ -289,6 +291,7 @@ async def _unmatched_page(
             subq.c.inspiration_id,
             Inspiration.file_path,
             Inspiration.thumbnail_path,
+            Inspiration.media_type,
         )
         .join(Inspiration, Inspiration.id == subq.c.inspiration_id)
         .order_by(subq.c.inspiration_id)
@@ -317,6 +320,7 @@ async def _unmatched_page(
             "inspiration_id": r.inspiration_id,
             "file_path": r.file_path,
             "thumbnail_path": r.thumbnail_path,
+            "media_type": r.media_type,
         }
         for r in rows
     ]
@@ -529,6 +533,7 @@ async def cluster_groups(
                     InspirationFaceDetection.inspiration_id,
                     Inspiration.file_path,
                     Inspiration.thumbnail_path,
+                    Inspiration.media_type,
                 )
                 .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
                 .where(
@@ -550,6 +555,7 @@ async def cluster_groups(
                 "rep_inspiration_id": rep_row.inspiration_id if rep_row else None,
                 "rep_file_path": rep_row.file_path if rep_row else None,
                 "rep_thumbnail_path": rep_row.thumbnail_path if rep_row else None,
+                "rep_media_type": rep_row.media_type if rep_row else None,
             }
         )
 
