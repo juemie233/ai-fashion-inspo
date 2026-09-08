@@ -227,6 +227,49 @@ async def _vlm_residue_review(full: Path) -> bool | None:
     return None
 
 
+def _content_candidate_qualified(bounds_result: dict, confidence: str, ratio: float) -> bool:
+    """content 模式候选资格裁决（FP/FN 裁决层）。
+
+    判定顺序（从严）：
+
+    1. 强字形（左右两角时间/信号签名）：状态栏最本质特征，单独成立
+       （不受置信度影响——字形证据本身就是 UI 证据）；
+    2. 低置信 + 无任何建议（残留/字形）：大概率普通照片，静默排除；
+    3. 完整截图先验 + UI 结构证据：ratio ≥ ``_FULL_SCREENSHOT_RATIO`` 且
+       检出字形证据（弱证据也可）或检出灰带/状态栏结构（kind = gray_band /
+       status_bar，行剖面「地带 + 硬跃变」）→ 列入。真实库验证：带状态栏的
+       抖音截图 ratio ≈ 2.05~2.17 且均有字形证据；用户标注的「上下都没有
+       问题」负样本全部 ≤ 1.98。照片即使比例达到 2.0（如 640x1280 竖版照片）
+       既无字形也无 UI 结构（kind = plain），不会混入。
+
+    其余一律不列：仅实底条带（照片暗部/灰底极易命中）、仅弱字形、仅残留
+    估算——用户标注的 24 张负样本里 3 张仅靠底部暗带、11 张仅靠弱字形误列。
+
+    参数:
+        bounds_result: ``analyze_screenshot_combined`` 的边界结果
+        confidence: 截图置信度（high/medium/low）
+        ratio: 高/宽
+
+    返回:
+        是否列入候选
+    """
+    if bounds_result.get("glyph_strong", False):
+        return True
+    glyph_found = bounds_result.get("glyph_found", False)
+    residual_bottom = bounds_result.get("residual_bottom_frac", 0)
+    if (
+        confidence == "low"
+        and bounds_result["residual_top_frac"] <= 0
+        and residual_bottom <= 0
+        and not glyph_found
+    ):
+        return False
+    if ratio < _FULL_SCREENSHOT_RATIO:
+        return False
+    has_ui_band = bounds_result.get("kind") in ("gray_band", "status_bar")
+    return bool(glyph_found or has_ui_band)
+
+
 async def scan_candidates(
     db: AsyncSession,
     mode: str = "auto",
@@ -334,49 +377,13 @@ async def scan_candidates(
                 # 检测失败（未检出内容区边界/布局不规则）且无字形证据
                 # （combined 已在字形存在时返回字形建议而非 None）：静默排除
                 continue
-            glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
-            glyph_strong = bounds_result.get("glyph_strong", False)
-            residual_bottom = bounds_result.get("residual_bottom_frac", 0)
-            # ── 候选资格（FP/FN 裁决层）──
-            # 1) 低置信 + 无任何建议（残留/字形）：大概率普通照片，静默排除
-            #    （保留原规则，字形证据可救援）
-            if (
-                confidence == "low"
-                and bounds_result["residual_top_frac"] <= 0
-                and glyph_top_frac <= 0
-                and residual_bottom <= 0
-            ):
+            # ── 候选资格（FP/FN 裁决层，口径见 _content_candidate_qualified）──
+            if not _content_candidate_qualified(bounds_result, confidence, height / width):
                 continue
-            # 2) 完整截图先验：ratio ≥ 1.8 的竖图极大概率是完整手机截图
-            #    （真实库验证：明显状态栏素材全部 ratio≈2.16，误报样本全部
-            #    <1.8）。非完整截图从严——需要实底 UI 带、字形建议、或
-            #    「残留估算 + 强字形」相互印证（纯色背景照片的残留估算无
-            #    字形佐证，在此排除——历史自动勾选 FP 的根因）
-            full_screenshot = height / width >= _FULL_SCREENSHOT_RATIO
-            if not full_screenshot:
-                # 非完整截图（ratio < 1.8）：要求「明显 UI 要素」才列候选——
-                # 弱信号（仅行剖面 top_bar、仅弱字形、仅残留估算）不单独构成
-                # 候选。真实素材诊断（用户标注 8 张「上下都没有问题」的负样本，
-                # ratio 1.32~1.78）：全部由弱信号误列——仅 top_bar 4 张、仅
-                # 残留估算 2 张、仅弱字形 2 张。
-                # 保留口径：
-                #   - 强字形（左右两角时间/信号签名，状态栏最本质特征）；
-                #   - 底部实底带（播放器条/导航栏，字形检测不适用底部）；
-                #   - 顶部实底带 + 字形佐证（实底带单独可能被照片顶部低饱和
-                #     区域误判，需字形交叉印证）。
-                has_solid_top = bounds_result["top_frac"] > 0
-                has_solid_bottom = bounds_result["bottom_frac"] > 0
-                qualified = (
-                    glyph_strong
-                    or has_solid_bottom
-                    or (has_solid_top and glyph_top_frac > 0)
-                )
-                if not qualified:
-                    continue
-            # 检出截图特征（top_bar/bottom_bar）的素材即使已裁剪干净、无
-            # 残留建议也继续列入候选：它是真实截图，顶部状态栏残留肉眼
-            # 可见，交给人工目检勾选（此前把这类素材静默过滤，导致
-            # 「大部分素材找不到、无法选中」），item 构造中如实标注
+            # 资格通过后即使已裁剪干净、无残留建议也继续列入候选：它是真实
+            # 截图（有字形/UI 结构证据），顶部状态栏残留肉眼可见，交给人工
+            # 目检勾选（此前把这类素材静默过滤，导致「大部分素材找不到、
+            # 无法选中」），item 构造中如实标注
         else:
             # 非 content 模式：截图特征检测（状态栏/底部栏 → 置信度分级）
             try:
@@ -448,7 +455,7 @@ async def scan_candidates(
                 # 漏勾（手动勾选）。
                 item["auto_ok"] = False
                 item["crop_top"] = suggestion
-                item["auto_checked"] = glyph_strong = confidence == "high"
+                item["auto_checked"] = confidence == "high"
                 item["note"] = (
                     f"疑似顶部状态栏残留（建议裁剪 {suggestion:.1%}），"
                     + ("已默认勾选，请预览确认" if item["auto_checked"] else "请预览确认")

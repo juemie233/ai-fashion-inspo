@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.config import settings
 from app.services.crop_service import (
+    _content_candidate_qualified,
     _probe_size,
     crop_image_to_temp,
     detect_content_bounds,
@@ -15,6 +16,7 @@ from app.services.crop_service import (
     detect_screenshot_features,
     screenshot_confidence,
 )
+from app.services.image_cropping import _glyph_evidence, _right_icon_supports
 
 
 def _make_vertical_screenshot(width=300, height=600, top_black=40, bottom_black=30, bg=(220, 220, 220)):
@@ -56,14 +58,28 @@ def _make_content_band_screenshot(
     return buf.getvalue(), "image/jpeg"
 
 
-def _make_status_bar_screenshot(width=300, height=600, status_bar=25, player_bar=60):
-    """构造「状态栏+播放器条」截图：顶部深色状态栏 + 中间噪点内容 + 底部黑色播放器条。"""
+def _make_status_bar_screenshot(width=300, height=600, status_bar=70, player_bar=60):
+    """构造「状态栏+播放器条」截图：顶部深色状态栏（含时间字形）+ 中间噪点内容 + 底部黑色播放器条。
+
+    状态栏高度取 70px（大于全高 10%，使字形检测条带内只有状态栏），并画上
+    「时间 + 右侧图标」字形——真实截图的状态栏必有时钟字形，这也是 content
+    模式候选资格要求的 UI 证据（深色条带单独不再构成候选）。
+    """
     arr = np.zeros((height, width, 3), dtype=np.uint8)
     arr[:status_bar, :] = (60, 60, 60)
     arr[height - player_bar :, :] = (10, 10, 10)
     rng = np.random.default_rng(7)
     content = arr[status_bar : height - player_bar]
     content[:] = rng.integers(0, 256, size=content.shape, dtype=np.uint8)
+    # 状态栏字形：时间（两段式）+ 右侧信号/电量图标（x 坐标按宽度等比缩放）
+    sx = width / 300.0
+    for x0, x1, y0, y1, color in (
+        (84, 90, 8, 19, 250),
+        (100, 127, 8, 19, 250),
+        (250, 263, 9, 18, 240),
+        (266, 279, 9, 18, 240),
+    ):
+        arr[y0:y1, int(x0 * sx) : int(x1 * sx)] = (color, color, color)
     img = Image.fromarray(arr)
     buf = BytesIO()
     img.save(buf, "JPEG")
@@ -211,15 +227,15 @@ def test_scan_content_mode_detects_gray_band(client):
 
 
 def test_scan_content_mode_detects_status_bar(client):
-    """内容边界模式扫描：状态栏+播放器条截图（上下深色地带）也能检出边界。"""
-    data, ctype = _make_status_bar_screenshot(status_bar=25, player_bar=60)
+    """内容边界模式扫描：状态栏（含时钟字形）+ 播放器条截图也能检出边界。"""
+    data, ctype = _make_status_bar_screenshot(status_bar=70, player_bar=60)
     insp = _upload_screenshot(client, data, ctype)
 
     body = _scan(client, mode="content")
     assert body["total"] == 1
     item = body["items"][0]
     assert item["auto_ok"] is True
-    assert abs(item["crop_top"] - 25 / 600) < 0.01
+    assert abs(item["crop_top"] - 70 / 600) < 0.01
     assert abs(item["crop_bottom"] - 60 / 600) < 0.01
 
 
@@ -388,6 +404,152 @@ def test_content_mode_strong_glyph_listed(client, monkeypatch):
     body = _scan(client, mode="content")
     assert body["total"] == 1
     assert body["items"][0]["id"] == insp["id"]
+
+
+def _make_status_bar_strip_image(textured: bool = False) -> Image.Image:
+    """构造合成截图顶部：平滑（或正弦纹理）底 + 时间字形 + 右侧信号图标块。
+
+    时间字形按真实截图形态建模（实测「12:30」渲染为两个连通域：窄块 + 宽块，
+    块间有正间隙）；纹理底用正弦波（局部斜率 13/px，低于局部对比阈值 22，
+    因此不会自己产生前景，但 20px 邻域灰度方差 ≈15~20 > 背景方差门槛）。
+    """
+    width, height = 300, 600
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    if textured:
+        xs = np.arange(width)
+        arr[:, :] = (65 + 25 * np.sin(2 * np.pi * xs / 24.0)).astype(np.uint8)[None, :, None]
+    else:
+        arr[:, :] = (60, 60, 60)
+    arr[12:23, 84:90] = (250, 250, 250)  # 时间窄块（模拟「1」）
+    arr[12:23, 100:127] = (250, 250, 250)  # 时间宽块（模拟「2:30」）
+    arr[13:22, 250:263] = (240, 240, 240)  # 右侧信号图标
+    arr[13:22, 266:279] = (240, 240, 240)  # 右侧电量图标
+    return Image.fromarray(arr)
+
+
+def test_glyph_evidence_detects_status_bar_signature():
+    """字形证据（真阳性保护）：平滑底上的时间数字 + 右侧图标 → strong=True。
+
+    收紧误报（下沿截断/上沿/背景方差）后，真实状态栏结构必须仍判强字形，
+    否则 content 模式会漏掉真截图。
+    """
+    g = _glyph_evidence(_make_status_bar_strip_image(), debug=True)
+    assert g["found"] is True
+    assert g["strong"] is True, g["debug"]
+    assert 0 < g["top_frac"] < 0.06  # 建议裁剪比例 ≈ 状态栏底部，远小于 12% 上限
+
+
+def test_glyph_evidence_textured_background_not_strong():
+    """字形证据（误报修正）：同样字形叠在纹理底上 → 不判强字形。
+
+    照片边缘（发丝/饰品/衣料轮廓）与印刷体文字的区别在于「周边背景是否
+    平滑」：背景灰度标准差 > _GLYPH_BG_STD_MAX 时不算状态栏字形（连通域
+    仍保留为弱证据，found=True）。
+    """
+    g = _glyph_evidence(_make_status_bar_strip_image(textured=True), debug=True)
+    assert g["found"] is True
+    assert g["strong"] is False
+
+
+def test_glyph_evidence_rejects_blob_clipped_by_strip():
+    """字形证据（误报修正）：内容被顶部 10% 条带截断（贴条带下沿）→ 无字形。"""
+    arr = np.full((600, 300, 3), 170, dtype=np.uint8)
+    arr[30:200, 50:95] = (30, 30, 30)  # 深色块跨过条带下沿（行 60）
+    g = _glyph_evidence(Image.fromarray(arr), debug=True)
+    assert g["found"] is False
+    assert any("下沿" in r["reason"] for r in g["debug"]["rejected"])
+
+
+def test_glyph_evidence_rejects_blob_at_image_top():
+    """字形证据（误报修正）：内容压在画面最顶行（条带前 8%）→ 无字形。"""
+    arr = np.full((600, 300, 3), 170, dtype=np.uint8)
+    arr[0:40, 50:95] = (30, 30, 30)  # 顶到画面顶端，但未触及条带下沿
+    g = _glyph_evidence(Image.fromarray(arr), debug=True)
+    assert g["found"] is False
+    assert any("上沿" in r["reason"] for r in g["debug"]["rejected"])
+
+
+def test_glyph_evidence_rejects_content_above_band():
+    """字形证据（误报修正）：字形带上方还有内容（照片纹理）→ 不判强字形。
+
+    状态栏文字之上是状态栏自身背景（实测真实截图前景密度 0），照片在字形
+    上方永远还有内容（实测误报 0.034~0.142）——「带上方前景密度 ≤ 1%」是
+    区分状态栏文字与照片纹理块最直接的结构信号。
+    """
+    arr = np.zeros((600, 300, 3), dtype=np.uint8)
+    arr[:, :] = (60, 60, 60)
+    arr[12:23, 84:90] = (250, 250, 250)  # 时间窄块
+    arr[12:23, 100:127] = (250, 250, 250)  # 时间宽块
+    arr[13:22, 250:263] = (240, 240, 240)
+    arr[13:22, 266:279] = (240, 240, 240)
+    # 字形带上方（行 0~6）叠加照片纹理块
+    arr[0:7, 120:170] = (200, 200, 200)
+    arr[0:7, 40:80] = (20, 20, 20)
+    g = _glyph_evidence(Image.fromarray(arr), debug=True)
+    assert g["found"] is True
+    assert g["strong"] is False
+    assert g["debug"]["fg_above"] > 0.01
+
+
+def test_right_icon_supports_requires_smooth_same_band_icon():
+    """单块时间回退的右侧印证：右区同带、低背景方差的图标块才算印证。"""
+    time_blob = (100, 140, 15, 30, 400, 0.5)
+    assert _right_icon_supports(time_blob, [time_blob], 320) is False
+    noisy = (240, 300, 14, 31, 500, 30.0)  # 右侧块但背景纹理重
+    assert _right_icon_supports(time_blob, [time_blob, noisy], 320) is False
+    off_band = (240, 300, 50, 60, 500, 1.0)  # 右侧块但垂直不同带
+    assert _right_icon_supports(time_blob, [time_blob, off_band], 320) is False
+    icon = (240, 300, 14, 31, 500, 0.8)  # 同带 + 平滑 → 成立
+    assert _right_icon_supports(time_blob, [time_blob, icon], 320) is True
+
+
+def _bounds_fixture(**overrides) -> dict:
+    """构造 analyze_screenshot_combined 的边界结果字典（默认全零）。"""
+    base = {
+        "top_frac": 0.0,
+        "bottom_frac": 0.0,
+        "top_edge": 0,
+        "bottom_edge": 0,
+        "correction": False,
+        "kind": "plain",
+        "already_cropped": False,
+        "residual_top_frac": 0.0,
+        "residual_bottom_frac": 0.0,
+        "glyph_top_frac": 0.0,
+        "glyph_strong": False,
+        "glyph_found": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_content_candidate_qualified_rules():
+    """候选资格裁决（纯函数）：强字形 / 完整截图比例+弱字形两条通道，其余排除。
+
+    用户标注 24 张「上下都没有明显要素」的负样本，误列根因是「仅实底带」
+    （3 张，照片暗部/灰底）、「仅弱字形」（11 张）、「仅残留估算」；另外
+    640x1280 竖版照片（ratio = 2.0）会被「纯比例先验」误列——因此完整截图
+    先验必须叠加字形证据才成立。
+    """
+    q = _content_candidate_qualified
+    # 1) 强字形单独成立（非完整截图、低置信也认）
+    assert q(_bounds_fixture(glyph_strong=True), "low", 1.5) is True
+    # 2) 完整截图比例 + 弱字形（真实抖音截图 ratio ≈ 2.05~2.17，均检出字形）
+    assert q(_bounds_fixture(glyph_found=True), "medium", 2.05) is True
+    assert q(_bounds_fixture(glyph_found=True, bottom_frac=0.08), "high", 2.16) is True
+    # 2b) 完整截图比例 + UI 结构（灰带/状态栏修正）——无字形但有结构证据
+    assert q(_bounds_fixture(kind="gray_band", top_frac=0.1), "medium", 2.0) is True
+    assert q(_bounds_fixture(kind="status_bar"), "medium", 2.05) is True
+    # 3) 完整截图比例但无任何 UI 证据（kind=plain）→ 排除（照片也会达到 2.0）
+    assert q(_bounds_fixture(), "medium", 2.05) is False
+    assert q(_bounds_fixture(top_frac=0.09), "medium", 2.0) is False
+    # 4) 非完整截图 + 弱信号 → 排除：仅实底带 / 仅弱字形 / 仅残留估算
+    assert q(_bounds_fixture(bottom_frac=0.08, glyph_found=True), "high", 1.5) is False
+    assert q(_bounds_fixture(top_frac=0.19, glyph_found=True), "high", 1.5) is False
+    assert q(_bounds_fixture(glyph_found=True), "medium", 1.5) is False
+    assert q(_bounds_fixture(residual_top_frac=0.15), "medium", 1.5) is False
+    # 5) 低置信且无任何建议：即使比例达到先验也排除（纯噪点图防混入）
+    assert q(_bounds_fixture(), "low", 2.2) is False
 
 
 def test_content_mode_excludes_cleanly_cropped(client):
@@ -1173,13 +1335,14 @@ def test_scan_content_mode_excludes_undetectable_layout(client):
 
 
 def test_scan_content_mode_keeps_ui_feature_cropped(client):
-    """回归（漏检）：检出状态栏/导航栏截图特征的素材不得被静默过滤。
+    """回归（漏检）：检出状态栏字形的素材不得被静默过滤。
 
     修复前 content 模式对 already_cropped 且无残留建议的素材一律静默排除，
     即使它带有明确的系统 UI 特征——用户在扫描列表里看不到这些真实截图，
-    顶部状态栏残留无法勾选处理。修复后以截图特征为准：有 UI 特征必列入。
+    顶部状态栏残留无法勾选处理。修复后以字形证据为准：有状态栏字形的
+    真实截图必列入。
     """
-    data, ctype = _make_status_bar_screenshot(status_bar=25, player_bar=60)
+    data, ctype = _make_status_bar_screenshot(status_bar=70, player_bar=60)
     _upload_screenshot(client, data, ctype)
     body = _scan(client, mode="content")
     assert body["total"] >= 1, body
