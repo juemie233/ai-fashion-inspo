@@ -354,20 +354,22 @@ async def scan_candidates(
             #    字形佐证，在此排除——历史自动勾选 FP 的根因）
             full_screenshot = height / width >= _FULL_SCREENSHOT_RATIO
             if not full_screenshot:
-                # 残留估算（residual）无字形佐证时保留候选但绝不默认勾选——
-                # 自动勾选误报（用户核心投诉）由勾选规则消灭，列表噪音由
-                # 人工勾选池消化
+                # 非完整截图（ratio < 1.8）：要求「明显 UI 要素」才列候选——
+                # 弱信号（仅行剖面 top_bar、仅弱字形、仅残留估算）不单独构成
+                # 候选。真实素材诊断（用户标注 8 张「上下都没有问题」的负样本，
+                # ratio 1.32~1.78）：全部由弱信号误列——仅 top_bar 4 张、仅
+                # 残留估算 2 张、仅弱字形 2 张。
+                # 保留口径：
+                #   - 强字形（左右两角时间/信号签名，状态栏最本质特征）；
+                #   - 底部实底带（播放器条/导航栏，字形检测不适用底部）；
+                #   - 顶部实底带 + 字形佐证（实底带单独可能被照片顶部低饱和
+                #     区域误判，需字形交叉印证）。
+                has_solid_top = bounds_result["top_frac"] > 0
+                has_solid_bottom = bounds_result["bottom_frac"] > 0
                 qualified = (
-                    bounds_result["top_frac"] > 0
-                    or bounds_result["bottom_frac"] > 0
-                    or glyph_top_frac > 0
-                    or bounds_result["residual_top_frac"] > 0
-                    or residual_bottom > 0
-                    or (
-                        confidence != "low"
-                        and bounds_result["already_cropped"]
-                        and features.get("top_bar", False)
-                    )
+                    glyph_strong
+                    or has_solid_bottom
+                    or (has_solid_top and glyph_top_frac > 0)
                 )
                 if not qualified:
                     continue

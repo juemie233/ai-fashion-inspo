@@ -78,6 +78,11 @@ _UI_BAND_NOISE_MAX = 0.09  # 压缩/JPEG 伪影噪声上限：低于此值不判
 _UI_BAND_JUMP_MIN = 0.12  # 地带 → 内容区的多样度硬跃变下限
 _UI_BAND_GRADIENT_DELTA = 0.05  # 地带前后半段中位差超过此值 → 缓升渐变（暗角）→ 拒绝
 _UI_BAND_SPIKE_MIN = 0.08  # 图标/文字行的「突变峰」单步增量下限（区别于渐变缓升）
+# 实底 UI 带饱和度上限（误报修正）：状态栏背景/播放器条饱和度极低
+# （实测 ≤0.12），带内饱和中位 > 0.30 说明是彩色照片内容（天空/衣服/背景），
+# 即便多样度跃变足够也不判为 UI 带（真实素材诊断：误报样本 f5a1482d
+# 带内 sat=0.605，曾被判 UI 带并给出 14% 裁剪建议）
+_UI_BAND_SAT_MAX = 0.30
 # 单侧最小可裁比例：低于此值的裁剪建议视为噪声置 0（真实状态栏 ≥2.5%；
 # 1%~2% 的薄残留交由 residual 疑似路径人工确认，不自动裁）
 _CONTENT_MIN_CROP_FRACTION = 0.02
@@ -623,15 +628,26 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
             # 渐变可信，允许更小的多样度跃变（内容区多样度本身低的截图——
             # 白底/浅色穿搭图——也能接上状态栏边界）；照片渐变是彩色缓升，
             # sat 高，仍走严格跃变门槛
-            _sat_ok = bool(saturation is not None) and float(
-                np.median(saturation[0:top_edge_raw])
-            ) <= _RESIDUAL_SAT_MAX
-            _jump_min = 0.05 if _sat_ok else _UI_BAND_JUMP_MIN
-            _band = diversity[0:top_edge_raw]
-            _band_med = float(np.median(_band))
-            top_band_valid = (
-                float(diversity[top_edge_raw]) - _band_med >= _jump_min
-            ) or _ui_band_valid(diversity, 0, top_edge_raw, top_edge_raw)
+            _band_sat = (
+                float(np.median(saturation[0:top_edge_raw]))
+                if saturation is not None
+                else 0.0
+            )
+            # 高饱和拒绝（误报修正）：实底系统 UI 带（状态栏背景/播放器条）
+            # 饱和度极低（实测 ≤0.12），带内饱和中位 > 0.30 说明是彩色照片
+            # 内容（天空/衣服/背景），即使跃变足够也不是 UI 带。
+            # 真实素材诊断：误报样本 f5a1482d 带内 sat=0.605，被判 UI 带后
+            # 给出 14% 裁剪建议（会裁坏图）。
+            if _band_sat > _UI_BAND_SAT_MAX:
+                top_band_valid = False
+            else:
+                _sat_ok = _band_sat <= _RESIDUAL_SAT_MAX
+                _jump_min = 0.05 if _sat_ok else _UI_BAND_JUMP_MIN
+                _band = diversity[0:top_edge_raw]
+                _band_med = float(np.median(_band))
+                top_band_valid = (
+                    float(diversity[top_edge_raw]) - _band_med >= _jump_min
+                ) or _ui_band_valid(diversity, 0, top_edge_raw, top_edge_raw)
         else:
             # 无截图证据：一律走严格判据，防止普通照片顶部的纯色天空/暗部
             # 被当作状态栏自动裁剪
@@ -971,6 +987,14 @@ def _glyph_evidence(img: "Image.Image") -> dict:
                     break
             span = window[-1][1] - window[0][0]
             if len(window) >= 2 and span <= w * 0.18:
+                # 区域限制（误报修正）：状态栏元素只在左右两角——时间在左区、
+                # 信号/电量在右区，中央是空的。画面中央出现「两个相邻数字状
+                # blob」是照片内容（水印/花纹/文字），不是状态栏。
+                # 真实素材诊断：误报样本 efef31ba 的 strong 来自中央
+                # （中心 x 占比 0.48/0.50）的两个 blob，属照片内容误判。
+                wc = (window[0][0] + window[-1][1]) / 2.0 / w
+                if not (wc < 0.40 or wc > 0.60):
+                    continue
                 hs = [g[3] - g[2] for g in window]
                 cs = [(g[2] + g[3]) / 2 for g in window]
                 if max(hs) / max(1, min(hs)) < 1.4 and max(cs) - min(cs) < h * 0.10:

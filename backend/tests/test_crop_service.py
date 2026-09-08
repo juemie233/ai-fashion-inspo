@@ -313,13 +313,15 @@ def test_detect_content_bounds_marks_cropped(tmp_path):
     assert r["top_frac"] + r["bottom_frac"] < 0.01
 
 
-def test_content_mode_relaxed_ratio_filter(client):
-    """内容边界模式放宽竖屏下限：被裁剪过的截图（比例 1.5）仍列入候选。
+def test_content_mode_weak_residual_not_listed(client):
+    """内容边界模式：仅弱残留信号（无强字形/实底带）的非完整截图不再列候选。
 
-    残留候选走字形/残留双通道：非完整截图的残留估算候选保留但默认
-    不勾选（无强字形证据时不自动勾选，交人工确认）。
+    用户反馈「上下没有明显要素」的素材被弱信号误列（标注的 8 张负样本
+    ratio 1.32~1.78，全部由行剖面 top_bar / 残留估算 / 弱字形单独命中）。
+    候选资格收紧后，弱残留不再单独构成候选——列表只保留强字形（左右两角
+    时间/信号签名）、底部实底带、或顶部实底带+字形佐证的素材。
     """
-    # 比例 1.5（400x600）：顶部 3 行低多样度残留 + 高多样度内容区
+    # 比例 1.5（400x600）：顶部 3 行低多样度残留 + 高多样度内容区（无字形）
     width, height = 400, 600  # 比例 1.5 < 1.75
     arr = np.zeros((height, width, 3), dtype=np.uint8)
     rng = np.random.default_rng(23)
@@ -333,28 +335,59 @@ def test_content_mode_relaxed_ratio_filter(client):
     img = Image.fromarray(arr)
     buf = BytesIO()
     img.save(buf, "JPEG")
-    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+    _upload_screenshot(client, buf.getvalue(), "image/jpeg")
 
-    # content 模式：比例 1.5 可见；顶部残留按「疑似」标注（人工确认后勾选）
+    # content 模式：弱残留（无强字形、无实底带）→ 不列候选（列表保持干净）
     body = _scan(client, mode="content")
-    assert body["total"] == 1
-    item = body["items"][0]
-    assert item["auto_ok"] is False
-    assert "疑似顶部状态栏残留" in (item["note"] or "")
-    assert item["crop_top"] > 0  # 标注的建议裁剪比例
-    # 非完整截图 + 稠密杂乱内容（字形签名不可靠）：候选保留但不默认勾选
-    assert not item["auto_checked"]
-# 勾选后 apply：按疑似建议比例裁剪成功
-    r = client.post(
-        "/api/admin/crop-phone-screenshots/apply",
-        json={"ids": [insp["id"]], "mode": "content"},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["processed"] == 1
+    assert body["total"] == 0
 
     # ratio 模式：仍按 1.75 过滤，不可见
     body2 = _scan(client, mode="ratio")
     assert body2["total"] == 0
+
+
+def test_content_mode_strong_glyph_listed(client, monkeypatch):
+    """内容边界模式：非完整截图但有强字形证据 → 仍列候选（收紧不误伤真残留）。"""
+    width, height = 400, 600  # 比例 1.5
+    arr = np.full((height, width, 3), 170, dtype=np.uint8)
+    rng = np.random.default_rng(29)
+    for y in range(3, height):
+        cols = rng.choice(width, size=200, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(200, 3), dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, "JPEG")
+    insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
+
+    # 伪造检测结果：强字形命中（模拟真实状态栏时间/信号签名）
+    from app.services import crop_service as cs
+
+    original = cs.analyze_screenshot_combined
+
+    def _fake_combined(path):
+        features, bounds = original(path)
+        if bounds is None:
+            bounds = {
+                "top_frac": 0.0,
+                "bottom_frac": 0.0,
+                "top_edge": 0,
+                "bottom_edge": 0,
+                "correction": False,
+                "kind": "plain",
+                "already_cropped": False,
+                "residual_top_frac": 0.0,
+                "bounds_valid": False,
+                "glyph_top_frac": 0.0,
+                "glyph_strong": False,
+            }
+        bounds["glyph_top_frac"] = 0.10  # 强字形必带建议比例（真实检测同口径）
+        bounds["glyph_strong"] = True
+        return features, bounds
+
+    monkeypatch.setattr(cs, "analyze_screenshot_combined", _fake_combined)
+    body = _scan(client, mode="content")
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == insp["id"]
 
 
 def test_content_mode_excludes_cleanly_cropped(client):
