@@ -68,8 +68,9 @@ interface CropCandidate {
   /** 后端勾选决策：字形证据（左右两角齐备）的残留候选默认勾选，无字形证据的不勾。
    * 旧响应无此字段时回退到「带建议比例即勾选」的兼容推断 */
   auto_checked?: boolean | null
-  /** AI 复核阳性：VLM 判断顶部状态栏/底部进度条存在（勾选权仍在用户，仅置顶+标注） */
-  vlm_residue?: boolean
+  /** AI 复核结果（三态）：true=阳性（检出 UI 残留，置顶标注）/ false=阴性
+   * （已从候选移除，不会再出现）/ null=未知（判定失败/超时，保守保留待人工） */
+  vlm_residue?: boolean | null
   created_at: string | null
 }
 
@@ -322,6 +323,8 @@ interface ScanResponse {
   vlm_reviewed?: boolean
   /** AI 复核检出系统 UI 残留的候选数（已置顶展示） */
   vlm_hits?: number
+  /** AI 主判移除的候选数（算法疑似但 VLM 明确未检出，已从列表剔除） */
+  vlm_removed?: number
 }
 
 async function handleScan() {
@@ -347,6 +350,10 @@ async function handleScan() {
     vlmHits.value = data.vlm_hits ?? 0
     if (vlmHits.value > 0) {
       Message.info(`AI 复核检出 ${vlmHits.value} 张候选存在系统 UI 残留，已置顶展示`)
+    }
+    const vlmRemoved = data.vlm_removed ?? 0
+    if (vlmRemoved > 0) {
+      Message.success(`AI 主判移除 ${vlmRemoved} 张算法误判（VLM 未检出系统 UI 残留）`)
     }
     if (isContinuation) {
       // 续扫：追加合并新批次（后端按稳定顺序分批，新批次是尚未扫描的剩余素材）
@@ -463,8 +470,10 @@ function cropLabel(c: CropCandidate): string {
       + 底部播放器条，按状态栏字形证据默认勾选，无 UI 证据的普通竖屏照片静默排除。
       「固定比例」按设定比例裁剪，不区分平台。原图自动备份到
       <code>storage/_crop_backup/</code>，裁剪成功后自动入队向量回填； 标签/收藏等信息不动。开启「AI
-      复核」时，VLM 逐候选判断顶部状态栏/底部进度条， 检出的候选置顶并标注（不代替人工勾选）。AI
-      复核命中候选优先， 其余候选按上传时间倒序排列。点击缩略图可查看大图（预览中可复制素材 ID）。
+      复核」时，VLM 作为<b>主判</b>逐候选判断顶部状态栏/底部进度条：检出系统 UI
+      残留的候选置顶并标注， 明确的算法误判（VLM
+      未检出）从列表移除，判定失败/超时的候选保守保留并标注「AI 复核不可用」。 AI
+      复核命中候选优先，其余候选按上传时间倒序排列。点击缩略图可查看大图（预览中可复制素材 ID）。
     </p>
 
     <a-form
@@ -602,6 +611,15 @@ function cropLabel(c: CropCandidate): string {
                 style="margin-left: 4px"
               >
                 AI 复核：检出 UI 残留
+              </a-tag>
+              <a-tag
+                v-else-if="c.vlm_residue === null"
+                size="small"
+                color="orange"
+                :bordered="false"
+                style="margin-left: 4px"
+              >
+                AI 复核不可用
               </a-tag>
             </span>
             <a-tag v-if="!c.auto_ok" size="small" color="red" :bordered="false">{{ c.note }}</a-tag>

@@ -80,8 +80,18 @@ def _upload_screenshot(client, data, ctype, **overrides):
 
 
 def _scan(client, **overrides):
-    """调用扫描候选接口。"""
-    body = {"mode": "ratio", "crop_top": 0.05, "crop_bottom": 0.05}
+    """调用扫描候选接口。
+
+    测试默认关闭 VLM 主判（vlm_review=False）——多数用例验证的是「算法
+    检出判定」，不应受 VLM 裁决干扰（VLM 行为由 test_scan_vlm_review_*
+    专门用例显式开启验证）。
+    """
+    body = {
+        "mode": "ratio",
+        "crop_top": 0.05,
+        "crop_bottom": 0.05,
+        "vlm_review": False,
+    }
     body.update(overrides)
     r = client.post("/api/admin/crop-phone-screenshots/scan", json=body)
     assert r.status_code == 200, r.text
@@ -1149,10 +1159,10 @@ def test_scan_content_mode_keeps_ui_feature_cropped(client):
 
 
 def test_scan_vlm_review_marks_and_prioritizes(client, monkeypatch):
-    """AI 复核（可选）：VLM 判定的残留候选标注 vlm_residue 并置顶，响应返回命中计数。
+    """AI 主判（方案 A）：VLM 阳性候选保留并置顶，阴性候选从列表移除。
 
-    复核只置顶+标注，不代替人工勾选（勾选决策仍在后端 auto_checked 口径）。
     上传两张不同背景色截图（避免内容去重 409）制造两个候选。
+    VLM 对第一个返回 True（阳性），第二个返回 False（阴性）→ 保留 1 个。
     """
     data, ctype = _make_vertical_screenshot()
     data2, ctype2 = _make_vertical_screenshot(bg=(200, 200, 240))
@@ -1163,20 +1173,39 @@ def test_scan_vlm_review_marks_and_prioritizes(client, monkeypatch):
 
     async def _fake_review(full):
         calls["n"] += 1
-        return calls["n"] == 1  # 仅第一个复核的候选命中
+        return calls["n"] == 1  # 第一个阳性，第二个阴性（移除）
 
     monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
     r = _scan(client, mode="auto", vlm_review=True)
 
     assert r["vlm_reviewed"] is True
     assert r["vlm_hits"] == 1
+    assert r["vlm_removed"] == 1
     assert calls["n"] == 2  # 两个候选都走了复核
     items = r["items"]
-    assert len(items) == 2
+    assert len(items) == 1  # 阴性候选已被主判移除
     # 命中候选置顶（列表第一），且 note 追加了 AI 复核标注
     assert items[0].get("vlm_residue") is True
     assert "AI 复核" in (items[0]["note"] or "")
-    assert all(not c.get("vlm_residue") for c in items[1:])
+
+
+def test_scan_vlm_review_unknown_keeps_candidate(client, monkeypatch):
+    """AI 主判（方案 A）：VLM 未知（判定失败）→ 候选保留并标注「不可用」。"""
+    data, ctype = _make_vertical_screenshot()
+    _upload_screenshot(client, data, ctype)
+
+    async def _fake_review(full):
+        return None  # 未知
+
+    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    r = _scan(client, mode="auto", vlm_review=True)
+
+    assert r["vlm_hits"] == 0
+    assert r["vlm_removed"] == 0
+    assert len(r["items"]) == 1  # 未知 → 保守保留
+    item = r["items"][0]
+    assert item.get("vlm_residue") is None
+    assert "AI 复核不可用" in (item["note"] or "")
 
 
 def test_scan_vlm_review_can_be_disabled(client, monkeypatch):
@@ -1236,12 +1265,14 @@ def test_strip_jpeg_bytes_slices_top_and_bottom(tmp_path):
 
 
 def test_parse_bar_answer_variants():
-    """VLM 条带回答解析：JSON 优先，兼容 markdown 围栏与空格变体，垃圾输入回退子串。"""
+    """VLM 条带回答解析（三态）：JSON 优先，兼容 markdown 围栏与空格变体，
+    垃圾输入/空响应返回 None（未知）——不能把解析失败当成「明确阴性」。"""
     from app.services.crop_service import _parse_bar_answer
 
     assert _parse_bar_answer('{"bar": true}') is True
     assert _parse_bar_answer('{"bar": false}') is False
     assert _parse_bar_answer('```json\n{"bar": true}\n```') is True
     assert _parse_bar_answer('{ "bar" : true }') is True
-    assert _parse_bar_answer("BAR TRUE") is False  # 无引号/冒号结构，不误判
-    assert _parse_bar_answer("") is False
+    assert _parse_bar_answer('{"bar": "是"}') is None  # 非布尔值 → 未知
+    assert _parse_bar_answer("BAR TRUE") is None  # 无引号/冒号结构，不误判
+    assert _parse_bar_answer("") is None  # 空响应 → 未知（服务异常，不能当阴性）

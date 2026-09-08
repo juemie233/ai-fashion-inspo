@@ -124,25 +124,42 @@ _VLM_STRIP_PROMPT_BOTTOM = (
 _vlm_client: httpx.AsyncClient | None = None
 
 
-def _parse_bar_answer(text: str) -> bool:
-    """解析 VLM 条带回答：优先 JSON，回退宽松子串匹配（兼容输出格式漂移）。
+def _parse_bar_answer(text: str) -> bool | None:
+    """解析 VLM 条带回答（三态）。
 
-    模型可能返回纯 JSON、带 markdown 围栏（```json ... ```）或带空格变体
-    （{ "bar" : true }），统一先尝试 JSON 解析；失败再按子串兜底。
+    优先 JSON 解析，兼容输出格式漂移（markdown 围栏/空格变体）；
+    - ``bar: true`` → True（阳性）；
+    - ``bar: false`` → False（阴性）；
+    - 无法解析（空响应/非 JSON/非布尔）→ None（未知，调用方保守处理）——
+      不能把「解析失败」当作「明确阴性」，否则服务异常会误删候选。
     """
     t = (text or "").strip()
+    if not t:
+        return None
     if t.startswith("```"):
         t = t.strip("`")
         if t.lower().startswith("json"):
             t = t[4:].strip()
     try:
-        return bool(json.loads(t).get("bar"))
+        v = json.loads(t).get("bar")
+        return True if v is True else False if v is False else None
     except (ValueError, AttributeError):
-        return '"bar": true' in t.lower()
+        low = t.lower()
+        if '"bar": true' in low:
+            return True
+        if '"bar": false' in low:
+            return False
+        return None
 
 
-async def _vlm_strip_check(image_bytes_func, top: bool) -> bool:
-    """VLM 单条带判断（顶部状态栏 / 底部进度条）。失败静默返回 False。"""
+async def _vlm_strip_check(image_bytes_func, top: bool) -> bool | None:
+    """VLM 单条带判断（顶部状态栏 / 底部进度条）。
+
+    三态返回（供「VLM 主判」裁决使用，区分「明确阴性」与「判定失败」）：
+    - True：VLM 明确检出系统 UI 元素（阳性）；
+    - False：VLM 明确未检出（阴性）；
+    - None：判定失败（服务不可用/超时/解析失败），调用方按「未知」保守处理。
+    """
     global _vlm_client
     try:
         if _vlm_client is None:
@@ -163,8 +180,8 @@ async def _vlm_strip_check(image_bytes_func, top: bool) -> bool:
         text = (resp.json().get("message") or {}).get("content", "")
         return _parse_bar_answer(text)
     except Exception as e:
-        logger.debug(f"VLM 条带复核失败（忽略）: {e}")
-        return False
+        logger.debug(f"VLM 条带复核失败（忽略，按未知处理）: {e}")
+        return None
 
 
 def _strip_jpeg_bytes(full: Path, top: bool, quality: int = 88) -> bytes:
@@ -183,17 +200,31 @@ def _strip_jpeg_bytes(full: Path, top: bool, quality: int = 88) -> bytes:
         return buf.getvalue()
 
 
-async def _vlm_residue_review(full: Path) -> bool:
-    """VLM 双条带残留复核：顶部状态栏 OR 底部进度条任一命中即 True。
+async def _vlm_residue_review(full: Path) -> bool | None:
+    """VLM 双条带残留复核（三态，供「VLM 主判」裁决）。
+
+    顶部条带与底部条带**分别**提问（`_vlm_strip_check(..., top)` 各自独立
+    判定，避免「顶部 OR 底部任一命中」的合并式提问在条带裁剪模糊时互相
+    污染）：
+    - True：顶部或底部任一明确检出系统 UI 残留（阳性——真残留/状态栏）；
+    - False：顶部与底部都明确未检出（阴性——算法疑似但 VLM 排除，即
+      「算法误判」的候选，按方案 A 从候选列表移除）；
+    - None：任一判定失败/超时/解析漂移（未知——保守保留候选，不误伤）。
 
     实验口径（33 张用户标注样本）：顶部条带特异性 19/20，底部条带对底部
-    细进度线命中 12/13。Ollama 不可用时全部返回 False（退回纯算法口径）。
+    细进度线命中 12/13。Ollama 不可用时返回 None（对应 caller 的「未知」
+    兜底：保留候选并标注，而非静默当作阴性丢弃真残留）。
     """
     top_hit, bottom_hit = await asyncio.gather(
         _vlm_strip_check(lambda: _strip_jpeg_bytes(full, top=True), top=True),
         _vlm_strip_check(lambda: _strip_jpeg_bytes(full, top=False), top=False),
     )
-    return top_hit or bottom_hit
+    # 任一阳性 → 检出；双阴性 → 排除；含未知 → 保守返回 None
+    if top_hit is True or bottom_hit is True:
+        return True
+    if top_hit is False and bottom_hit is False:
+        return False
+    return None
 
 
 async def scan_candidates(
@@ -439,30 +470,67 @@ async def scan_candidates(
             truncated = True
             break
 
-    # ── VLM 双条带复核（可选）：对入围候选逐张判断顶部状态栏/底部进度条。
-    #    结果不强制勾选（细线残留与构图线条的边界需人工裁决），而是标注到
-    #    note 并将「AI 复核阳性」候选排到列表最前——真残留浮上来，人工勾选
-    #    只需从顶部往下核对。Ollama 不可用时静默跳过（约 1.3s/张 × 候选数）。
+    # ── VLM 主判（方案 A）：对入围候选逐张判定顶部状态栏/底部进度条。
+    #    算法初筛只负责「圈定疑似范围」（快），最终裁决交给 VLM（准，约
+    #    1.3s/张 × 候选数）——三类结果分别处理：
+    #    - 阳性（检出系统 UI 残留）：保留候选，标注置顶，真残留浮到最前；
+    #    - 阴性（明确未检出）：「算法误判」的候选，按 VLM 主判移除——消除
+    #      用户核心投诉的列表噪音；
+    #    - 未知（Ollama 不可用/判定失败）：保守保留并标注（不误伤真残留，
+    #      也不因服务抖动把疑似全部丢弃）。
+    #    Ollama 不可用时全部落「未知」分支 → 候选完整保留，退回纯算法口径。
     vlm_hit = 0
+    vlm_removed = 0
     if vlm_review and candidates:
-        for c in candidates:
+        kept: list[dict] = []
+        for idx, c in enumerate(candidates):
             full = _resolve_storage_path(c["file_path"])
             if full is None or not full.exists():
+                kept.append(c)
                 continue
             try:
-                if await _vlm_residue_review(full):
-                    vlm_hit += 1
-                    c["vlm_residue"] = True
-                    suffix = "AI 复核：检出系统 UI 残留"
-                    c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
-                # 时间预算对 VLM 阶段同样生效，超时中断复核（已复核的保留结果）
-                if time.monotonic() > deadline:
-                    logger.info(f"VLM 复核已达时间预算，中断（候选 {len(candidates)}，已复核部分）")
-                    break
+                verdict = await _vlm_residue_review(full)
             except Exception as e:
                 logger.debug(f"VLM 复核跳过 {c['id']}: {e}")
-        if vlm_hit:
-            logger.info(f"VLM 残留复核: {vlm_hit}/{len(candidates)} 候选检出系统 UI 残留")
+                verdict = None
+            if verdict is True:
+                vlm_hit += 1
+                c["vlm_residue"] = True
+                suffix = "AI 复核：检出系统 UI 残留"
+                c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
+                kept.append(c)
+            elif verdict is False:
+                # VLM 明确未检出：算法疑似但 VLM 排除 → 从候选移除（主判）
+                vlm_removed += 1
+                logger.info(f"VLM 主判移除（算法疑似但未检出 UI 残留）: {c['id']}")
+                continue
+            else:
+                # 未知（判定失败/超时）：保守保留，标注待人工确认
+                c["vlm_residue"] = None
+                suffix = "AI 复核不可用，算法疑似（请人工确认）"
+                c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
+                kept.append(c)
+            # 时间预算对 VLM 阶段同样生效，超时中断复核（未复核候选转「未知」保留）
+            if time.monotonic() > deadline:
+                logger.info(
+                    f"VLM 复核已达时间预算，中断（候选 {len(candidates)}，"
+                    f"剩余未复核候选按「未知」保留）"
+                )
+                for rest in candidates[idx + 1 :]:
+                    rest["vlm_residue"] = None
+                    rest["note"] = (
+                        f"{rest['note']}；未及 AI 复核（时间预算）"
+                        if rest["note"]
+                        else "未及 AI 复核（时间预算）"
+                    )
+                    kept.append(rest)
+                break
+        candidates = kept
+        if vlm_hit or vlm_removed:
+            logger.info(
+                f"VLM 主判: 阳性 {vlm_hit}，移除 {vlm_removed}，"
+                f"剩余 {len(candidates)} 候选"
+            )
 
     # 排序：VLM 复核阳性 > 其余候选；同组内按上传时间倒序
     candidates.sort(
@@ -477,6 +545,7 @@ async def scan_candidates(
         "truncated": truncated,
         "vlm_reviewed": bool(vlm_review and candidates),
         "vlm_hits": vlm_hit,
+        "vlm_removed": vlm_removed,
     }
 
 
