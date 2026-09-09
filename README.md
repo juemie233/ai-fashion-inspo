@@ -94,12 +94,12 @@ chrome_debug_port: int = 9222
 | **素材库** | 瀑布流浏览、多维筛选（来源/媒体/状态/标签/主色调）、排序（含随机/标签数）、密度调节、分页加载、批量多选操作（收藏/移垃圾桶/加标签/编辑元数据）、**收藏合集**（手动合集：素材加入/移除/合集内拖拽编排；智能合集：按标签/筛选条件动态求值并支持一键固化为手动合集；合集封面/排序，垃圾桶素材不参与）、浏览模式/密度/每页数量持久化 |
 | **高级搜索** | 关键词搜索、标签筛选(AND/OR)、共现推荐、高级筛选(来源/媒体/日期)、排序(匹配优先)、搜索历史、分页、密度调节、语义搜索（文本）、以图搜图（图片上传）、`/` 聚焦与 Esc 退出、复制搜索链接、筛选状态持久化 |
 | **上传素材** | 拖拽/粘贴/URL导入、预览队列（视频可预览）、上传进度与速度、快速标签、元数据预设、去重检测、文件夹批量、队列管理（清空二次确认）、偏好设置持久化、500 上限校验 |
-| **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、**视频关键帧条带**（视频素材懒提取缩略图，失败静默隐藏）、下载原图、复制原始链接、标签点击跳搜索、移入垃圾桶（**必选删除原因**：质量差/重复/不喜欢/隐私/其他/AI生成，单个与批量共用原因弹窗，未选禁用确认）、五星评分（与收藏并列，列表可筛选/排序）、**人脸识别（博主特征库匹配）**（检测并匹配 → 自动关联穿搭博主 / 疑似未知人脸 → 手动指定或解除关联，需先在博主详情页注册人脸） |
+| **素材详情** | 大图预览（灯箱左右切换/缩放）、标签展示、**AI 打标纠错反馈**（AI 标签悬停「标错了」→ AI 多标/类别错/名称不规范，多标会同时移除该标签；标签区「AI 漏标了？补充」→ 补建标签；反馈落纠错库供质量看板统计）、穿搭大标签（手动选择/新建 + AI 建议一键入库）、相似素材推荐（可收藏/删除）、重新分析、**视频关键帧条带**（视频素材懒提取缩略图，失败静默隐藏）、下载原图、复制原始链接、标签点击跳搜索、移入垃圾桶（**必选删除原因**：质量差/重复/不喜欢/隐私/其他/AI生成，单个与批量共用原因弹窗，未选禁用确认）、五星评分（与收藏并列，列表可筛选/排序）、**人脸识别（博主特征库匹配）**（检测并匹配 → 自动关联穿搭博主 / 疑似未知人脸 → 手动指定或解除关联，需先在博主详情页注册人脸） |
 | **采集管理** | 小红书 CDP 零检测采集；**抖音 CDP 完整采集**（搜索三层策略——直连搜索页 / 搜索接口响应 / 首页搜索框兜底，反风控入口轮换自适应；搜索与按博主双模式；详情页图集多图 / 视频 / 正文 / 话题标签提取，视频下载入库，素材自动关联博主；登录 / 机器人验证感知，人工解决等待 + 诚实报错；任务结束后自动关闭采集新开的浏览器标签页）、**按博主采集**（选博主 → 进其主页逐篇打开笔记详情页，提取轮播多图/视频/正文 caption/话题标签，视频下载入库，素材自动关联博主）、任务分页/平台与状态筛选/排序、取消/续采（断点）/复制重采、日志查看、漏斗可视化（含跳过原因统计）、结果预览（批量删除/加载更多/跳详情）、Cookie 管理（状态/时效/导入/删除/**真实有效性校验**：探测平台登录态接口，失效在管理页显式标记，新建任务前置拦截已失效 Cookie）、Chrome 生命周期管理、定时采集（计划 CRUD/启停/立即执行）、**话题标签存档**（笔记话题自动入库：全局去重 + 累计出现次数 + 来源追溯，新建/编辑采集任务可从话题库点击复用为关键词）、统计看板（平台分布/每日趋势）、URL 墓碑表 + 内容 MD5 去重、筛选/排序/页签持久化 |
 | **标签管理** | 分组浏览/搜索/筛选、置顶 + 自定义拖拽排序、别名归一化（AI 识别同义词自动归并）、批量改类别/重命名/合并/删除（二次确认）、重复扫描、拖拽改类、批量打标、标签备注、共现关系图 + 使用趋势、导入导出、素材关联预览、**标签素材网格「重新分析 AI 素材」**（提示词更新后按新口径强制重跑该标签下全部 AI 打标素材）、分栏宽度持久化 |
-| **标签高级管理** | 独立路由页（侧边栏「标签高级管理」入口）：**健康度分析**（孤儿/低频/低质命名/疑似重复扫描 + 健康评分 + 一键修复）、**自动聚类**（名称相似 + 共现加成产出候选合并组，人工确认后合并/建别名）、**网络图分析**（Top-N 共现子图 + 社区发现 + 中心度 + 桥接节点高亮，点击节点看趋势）、**批量高级编辑**（正则查找替换/前后缀增删/格式归一化/正则批量合并，dry-run 预览 + 撞名自动合并）、**标签层级树**（parent_id 任意深度树，拖拽移动子树 + 循环检测）、**操作历史与回滚**（全部标签写操作快照，单条回滚 + 冲突检测）、**使用效果分析**（热度升降榜/标签组合/覆盖度/来源分布） |
+| **标签高级管理** | 独立路由页（侧边栏「标签高级管理」入口）：**健康度分析**（孤儿/低频/低质命名/疑似重复/**不合规命名（裸词）**五类扫描 + 健康评分 + 一键修复；不合规命名按打标命名口径列出袜/鞋/裙裸词与缺长度丝袜，附原因与关联数，可勾选「合并到…」规范标签或批量删除/编辑）、**自动聚类**（名称相似 + 共现加成产出候选合并组，人工确认后合并/建别名）、**网络图分析**（Top-N 共现子图 + 社区发现 + 中心度 + 桥接节点高亮，点击节点看趋势）、**批量高级编辑**（正则查找替换/前后缀增删/格式归一化/正则批量合并，dry-run 预览 + 撞名自动合并）、**标签层级树**（parent_id 任意深度树，拖拽移动子树 + 循环检测）、**操作历史与回滚**（全部标签写操作快照，单条回滚 + 冲突检测）、**使用效果分析**（热度升降榜/标签组合/覆盖度/来源分布） |
 | **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列，标签分析面板任务列表展示含暂停/排队中，行级暂停/恢复/取消）、历史分页、多选批量操作、分析结果对比、**多模型 × 多提示词组合批量分析**（组合计划批量执行 + 批次对比视图）、**视频多帧融合分析**（逐帧分析后同名标签按最高置信度融合，帧数可配）、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
-| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库扫描（默认不再抽样） + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：按平台分工双模式——小红书截图「auto 黑边检测」/抖音截图「内容边界检测」，截图特征置信度分级 + 字形证据/底部残留估算；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
+| **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库扫描（默认不再抽样） + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志/**提示词质量对比**——按提示词版本聚合成功率、平均标签数、纠错率与可选裸词率，用于挑选最优提示词）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：按平台分工双模式——小红书截图「auto 黑边检测」/抖音截图「内容边界检测」，截图特征置信度分级 + 字形证据/底部残留估算；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
 | **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）、**注销人脸 / 解绑素材**（博主详情多选素材批量注销已匹配人脸、批量解除素材-博主关联，素材侧已确认人脸自动防重复匹配）、**人物组（博主跨平台绑定）**（同一现实人物在抖音/小红书各有账号时绑定为同一人——如小红书「Fox_」与「多多」：列表同组折叠为一条主账号（素材数最多者，可手动指定默认展示位）并带多平台徽标，展开可见组内各账号及其素材，详情页可绑定/解绑/切主，账号记录全部保留、按平台采集不受影响） |
 | **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/向量回填/标签高级管理）、进度条与完成统计（向量/删除/审核明细）、**运行中任务暂停 / 已暂停恢复**（批量分析、组合分析、标签网络分析支持——批量/组合暂停后恢复按「已成功跳过」幂等续算）、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示） |
 | **浏览器插件** | 小红书/抖音页面一键提取穿搭图片（弹窗批量 + 任意网页右键单图采集，通知/角标反馈）；上传前按平台 ID 预查重并支持「跳过已采集的图片」开关（服务端 `check-platform-id` 只读接口，垃圾桶素材释放平台 ID 允许重采）；「上传后自动分析」开启时自动触发 AI 打标；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
@@ -275,6 +275,7 @@ fashion-inspo/
 │   │   │   ├── inspiration.py    # 穿搭素材 + AI分析日志
 │   │   │   ├── tag.py            # 标签 + 别名（含 source 来源标识）
 │   │   │   ├── tag_history.py    # 标签操作历史（before/after 快照，支持回滚）
+│   │   │   ├── tag_correction.py # AI 打标纠错记录（「标错了」反馈）
 │   │   │   ├── person.py         # 人物模型（Blogger/Model 两表 + 素材关联 + 模特照片组/照片 + 人脸特征关系）
 │   │   │   ├── face.py           # 人脸特征库（博主人脸特征 + 素材人脸检测）
 │   │   │   ├── collection.py     # 收藏合集（collections 手动/智能 + collection_items 成员关联）
@@ -311,6 +312,7 @@ fashion-inspo/
 │   │   │   ├── inspiration_service.py  # 素材转发层 → inspiration_create/trash/query/update/dedupe/tags/state.py
 │   │   │   ├── tag_service.py    # 标签转发层 → tag_crud/tag_alias/tag_inspirations/tag_query + tag_health/tag_cluster/tag_graph/tag_effect/tag_history/tag_batch_edit.py
 │   │   │   ├── person_service.py # 人物转发层 → person/（base 基类 + services + csv_import + photo_sets）
+│   │   │   ├── tag_correction_service.py # 打标纠错反馈（记录 + 按原因删/补关联 + 统计）
 │   │   │   ├── collection_service.py # 收藏合集（手动/智能求值/固化/排序）
 │   │   │   ├── scraper_service.py     # 采集转发层 → scraper/（tasks 任务 + process 编排 + cookies/schedules/extension/results）
 │   │   │   ├── blogger_face.py   # 博主人脸注册（平均池化）+ 素材人脸检测匹配
@@ -342,11 +344,13 @@ fashion-inspo/
 │   │       ├── image_utils.py    # 缩略图/颜色提取
 │   │       ├── performance.py    # 性能工具（耗时监控装饰器/BatchProcessor 并发批处理/FileCache/MemoryMonitor）
 │   │       ├── time.py           # 统一 UTC 时间与 ISO 序列化
-│   │       └── tag_normalizer.py # 标签标准化 + 同义词/别名映射
+│   │       ├── tag_normalizer.py # 标签标准化 + 同义词/别名映射
+│   │       └── tag_compliance.py # 打标命名合规规则（裸词判定，落库过滤与健康度扫描共用）
 │   ├── scripts/                  # 维护脚本
 │   │   ├── run_scraper.py         # 采集执行脚本（小红书 CDP / 抖音独立浏览器，断点续采）
 │   │   ├── cleanup_tags.py        # 数据库脏标签清洗
 │   │   ├── validate_tags.py       # 标签合法性校验
+│   │   ├── export_tag_rule_case.py # 从分析日志导出标签规则回归用例骨架
 │   │   └── diagnose_scraper.py    # 采集诊断工具
 │   └── storage/                  # 本地文件存储 (gitignore)
 │       ├── images/
@@ -401,9 +405,11 @@ fashion-inspo/
 │   │   ├── components/           # 通用组件（按域分目录）
 │   │   │   ├── layout/AppLayout.vue
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
+│   │   │   │   ├── TagCorrectionModal.vue # AI 打标纠错反馈（标错了/补充漏标）
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
 │   │   │   ├── collection/       # CollectionPickerModal（加入合集选择器）, SmartQueryEditorModal（智能合集条件编辑器）
 │   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志子组件
+│   │   │   │   ├── AdminPromptQuality.vue # 提示词版本质量对比（成功率/标签数/纠错率/裸词率）
 │   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件 + advanced/ 高级管理面板（健康度/聚类/网络图/效果/层级树/历史/批量编辑抽屉/规则行）
@@ -505,7 +511,8 @@ fashion-inspo/
 | `tags` | 标签 | id, name, category, source (seed/ai_generated/manual), pinned, sort_order, description, parent_id（层级父标签，null=根，与 category 正交）, updated_at（回滚冲突检测） |
 | `tag_aliases` | 标签别名 | id, tag_id, alias — 同义词归一化（AI 识别到别名自动归为主标签） |
 | `tag_history` | 标签操作历史 | id, batch_id（批次分组）, operation（create/rename/category_change/update/move/merge/alias_add/alias_remove/batch_edit/delete）, tag_ids, before_snapshot, after_snapshot, meta, created_at — 标签写操作 before/after 快照，支持单条回滚与冲突检测 |
-| `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence |
+| `inspiration_tags` | 素材-标签关联 | inspiration_id, tag_id, confidence, source（ai_generated/manual/seed） |
+| `tag_corrections` | AI 打标纠错记录 | id, inspiration_id（素材删除级联）, tag_id（标签删除置空）, tag_name/category（快照）, reason（multi/missing/wrong_category/bad_name）, action（removed/added/noted）, note, log_id/prompt_version/model_name（冗余当次分析，供按提示词版本聚合纠错率）, created_at |
 | `ai_analysis_log` | AI 分析日志 | inspiration_id, model_name, log_type, raw_response, processing_time_ms, error |
 | `scraper_tasks` | 采集任务 | platform, status, items_found/added, diagnostics（采集漏斗日志）, resume_token（断点续采进度） |
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
@@ -546,6 +553,21 @@ fashion-inspo/
 | `outfit` | 御姐长腿高跟鞋穿搭, 白色系穿搭, 网球穿搭 | 穿搭大标签（精选层：手动 + AI 总结，宁缺毋滥） |
 
 > **存量治理**：AI 打标类别曾经历一轮「颜色剥离」——`item_type` 里剥离出的纯颜色词改归 `color` 并补建关联（撞名自动合并），`body_part` 的历史产物按语义重分类到 `material`/`design_detail`/`fit`，类别命名统一为 snake_case。标签健康度扫描按类别输出统计（长尾率/最高频占比）。
+>
+> **命名合规**：打标命名口径（袜/鞋/裙裸词、丝袜缺长度）统一收敛在 `app/utils/tag_compliance.py`，**打标落库过滤与健康度「不合规命名」扫描共用同一份规则**——新分析不产生裸词，存量裸词可在「标签高级管理 → 健康度」勾选合并到规范标签或删除。
+
+### AI 打标质量闭环
+
+四个环节形成闭环，用于持续提升打标质量（实现见 `app/utils/tag_compliance.py`、`tag_correction_service.py`、`ai_dashboard_service.py`）：
+
+| 环节 | 入口 | 作用 |
+| ------ | ------ | ------ |
+| 规则兜底 | 打标链路自动 | 落库前丢弃袜/鞋/裙裸词与缺长度丝袜，保证新标签合规 |
+| 纠错反馈 | 素材详情「标错了」/「AI 漏标了？补充」 | 把人工判断沉淀为 `tag_corrections` 数据（含当次 prompt 版本） |
+| 质量看板 | 数据洞察 → 提示词质量对比 | 按版本对比成功率/平均标签数/纠错率/裸词率，数据化挑选提示词 |
+| 规则回归 | `backend/tests/test_tag_rule_regression.py` | 真实模型响应用例锁定规则，改规则即跑，防「改 A 坏 B」 |
+
+> 新增误标案例时，用 `python scripts/export_tag_rule_case.py --log-id <分析日志ID> --case-id <名称>` 从日志导出用例骨架，人工补 `expect.produce` / `expect.drop` 真值后放入 `backend/tests/fixtures/tag_rule_cases/` 即永久生效（不调 Ollama，毫秒级）。
 
 ### 标签来源标识
 
@@ -590,6 +612,7 @@ alembic upgrade head
 | `DELETE` | `/api/inspirations/{id}` | 彻底删除（物理，不可恢复；普通删除请用 `/trash`） |
 | `POST` | `/api/inspirations/{id}/tags` | 手动给素材关联标签（按名查找/创建，如穿搭大标签） |
 | `DELETE` | `/api/inspirations/{id}/tags/{tag_id}` | 解除素材与标签的关联 |
+| `POST` | `/api/inspirations/{id}/tag-corrections` | 提交 AI 打标纠错反馈（`reason`：multi 删关联 / missing 补关联 / wrong_category / bad_name 仅记录；冗余当次分析的 prompt 版本） |
 | `POST` | `/api/inspirations/batch-tags` | 批量给多个素材关联标签（按名查找/创建） |
 | `POST` | `/api/inspirations/batch-favorite` | 批量收藏/取消收藏素材 |
 | `POST` | `/api/inspirations/batch-trash` | 批量移入垃圾桶（软删除） |
@@ -673,7 +696,7 @@ alembic upgrade head
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
 | `POST` | `/api/tags/health/scan` | 提交健康度扫描任务（可选 `duplicate_threshold`） |
-| `GET` | `/api/tags/health/{issue_type}` | 健康度问题明细（issue_type ∈ orphan/low_frequency/low_quality_name/duplicate，分页） |
+| `GET` | `/api/tags/health/{issue_type}` | 健康度问题明细（issue_type ∈ orphan/low_frequency/low_quality_name/duplicate/**noncompliant**，分页；noncompliant 返回原因码与中文原因，实时复校过滤已改名标签） |
 | `POST` | `/api/tags/clusters/scan` | 提交自动聚类扫描任务（threshold/use_cooccurrence_boost/min_group_size） |
 | `POST` | `/api/tags/clusters/apply` | 应用候选组（`group_id` 或显式 `target_tag_id`+`source_tag_ids`；`keep_as_alias` 保留源名为别名） |
 | `POST` | `/api/tags/network/analyze` | 提交网络图分析任务（limit/min_count/category/with_communities/with_centrality） |
@@ -766,6 +789,9 @@ alembic upgrade head
 | `GET` | `/api/ai/history/model-names` | 历史模型名称列表 |
 | `GET` | `/api/ai/gpu-stats` | GPU 显存监控 |
 | `POST` | `/api/ai/unload-model` | 卸载模型释放显存 |
+| `GET` | `/api/ai/tag-corrections` | 打标纠错记录列表（分页，可按 reason 筛选） |
+| `GET` | `/api/ai/tag-corrections/stats` | 纠错统计（按原因/动作/提示词版本聚合） |
+| `GET` | `/api/ai/prompt-quality` | 提示词版本质量对比（按版本聚合成功率/平均标签数/纠错率；`include_bare_rate=true` 额外采样重放原始响应算裸词率） |
 | `GET` | `/api/ai/queue/pending` | 排队中素材（含缩略图） |
 | `DELETE` | `/api/ai/queue/{id}` | 取消排队任务 |
 | `POST` | `/api/ai/queue/pause` | 暂停队列 |
@@ -996,7 +1022,7 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，878 用例）
+### 后端（pytest，999 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -1012,7 +1038,8 @@ pytest
 
 - **集成测试**：健康检查、破坏性接口 API Key 认证（401/403、读接口不受影响）、素材上传/详情/收藏/内容去重（SHA-256）/平台 ID 去重/**软删除过滤**/物理删除、垃圾桶移入/恢复/清空/原因筛选/过期清理/**状态不变量校验**（软删除三字段同真同假，R1/R2/R3 违规检出）、标签创建/冲突/关联/幂等/解除、关键词与标签组合搜索、**标签高级管理**（操作历史快照/单条回滚/merge 回滚恢复关联与别名/冲突检测 409；健康度四类问题识别与评分/任务全链路/分页；聚类候选组生成与 apply 合并+别名+历史同批次/group_id 解析/缺源容错；批量编辑四类规则 dry-run 与执行一致/撞名自动合并/历史回滚；网络图社区/类别过滤/任务全链路 + 图算法纯函数单测；层级树懒加载/循环检测/move 历史；效果分析升降榜分窗口/组合/覆盖度/来源分布）、人物模块（博主/模特拆分后的双套 CRUD/素材关联/风格画像/删除限制/CSV 导入/照片组，以及人物频次合并统计）、**博主人脸**（注册平均池化/重新注册覆盖/无脸拒绝/超 5 张拒绝/博主不存在 404、素材人脸检测命中与未命中/手动指定与解除/删除检测——均 mock face_client）、**批量操作**（批量收藏/移垃圾桶/编辑元数据/标签与主色调筛选）、**管理后台洞察**（CSV 导出/新增趋势/人物频次/审计日志/近似重复检测）、**手机图剪裁**（候选扫描/黑边检测/截图特征置信度/跳过明细/内容重复对比预览/物理删除重复素材后重裁/重新裁剪不清空其他组预览）、**任务执行器**（批量删除任务：删记录+删文件+释放空间；向量回填攒批/质量审核防假成功：全部失败抛任务级异常、部分失败正常完成）、**AI 分析与质量审核**（完整分析保存标签、审核二分类通过/拒绝、大标签建议、质量统计、批量审核/重审任务创建——均模拟 Ollama）、**采集模块**（插件会话任务全流程与结果批量删除、任务列表分页/筛选/排序/统计、定时计划 CRUD/启停/立即执行、Cookie 导入/删除/状态与**真实登录态校验**（前置检查/平台探测解释器/网络异常不误判/缓存/任务创建前置拦截）、**抖音采集脚本单测**（作品 ID 解析/规范 URL/媒体归一化/RENDER_DATA 提取/验证码感知/搜索流程/下载批次）、**小红书采集脚本单测**（详情页轮播视频正文提取/博主页链接收集/搜索提取漏斗/博主管线）、**平台爬虫类单测**（Cookie 归一化/用户搜索解析/抖音搜索解析）、**采集进程管理**（CDP 端口检测/活动任务判定/自动续采与取消感知）、任务结果 API（分页/跨任务隔离/批量删除/墓碑联动）、**按博主采集任务**：collect_mode=user 校验 Blogger 存在（404）、自动补全 profile_url/platform_user_id、缺博主与缺 URL 双 400、**话题库查询接口**：去重/计数/排序/筛选）
 - **链路端到端旅程测试**（`test_journeys.py`，验证环节衔接而非单环节内部）：素材全旅程（上传→打标→向量→垃圾桶→恢复→再删→清空，每环节断言不变量零违规与墓碑/审计留痕）、采集旅程（插件会话→from-url 入库→任务完成→删除→墓碑→重采被拒，含恢复后墓碑仍在的防重复闭环）、失败旅程（文件缺失自愈：trash/restore 不产生悬空记录）、崩溃旅程（worker 心跳超时→`_reset_stale_tasks` 重置→重跑成功，不再假成功）
-- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）、`exceptions`（业务异常体系：AppException 基类/资源未找到与字段校验异常携带上下文属性/details 浅拷贝防外泄修改/快捷工厂函数）、`performance`（耗时监控装饰器同步+异步、BatchProcessor 并发批处理含失败隔离与并发上限、FileCache 键生成与命中、内存监控与优化装饰器、端到端组合——日志断言经 mock logger，psutil 相关用例已 mock）、`config_constants`（Settings 存储目录、ConfigConstants 各域常量访问与回退值、类型一致性验证）
+- **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`tag_compliance`（袜/鞋/裙裸词与缺长度丝袜判定边界 + 不合规原因分类）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）、`exceptions`（业务异常体系：AppException 基类/资源未找到与字段校验异常携带上下文属性/details 浅拷贝防外泄修改/快捷工厂函数）、`performance`（耗时监控装饰器同步+异步、BatchProcessor 并发批处理含失败隔离与并发上限、FileCache 键生成与命中、内存监控与优化装饰器、端到端组合——日志断言经 mock logger，psutil 相关用例已 mock）、`config_constants`（Settings 存储目录、ConfigConstants 各域常量访问与回退值、类型一致性验证）
+- **打标质量闭环**：`test_tag_rule_regression`（9 条真实模型响应用例：features/material/type 三条漏入路径、缺长度丝袜、裙/鞋裸词、合规保留）、`test_tag_corrections`（多标删关联/漏标补关联且幂等/类别错仅记录/404/非法原因/prompt 版本冗余/列表与统计）、`test_prompt_quality`（按版本聚合口径/裸词率重放/空窗口）、健康度 `noncompliant`（扫描识别 + 合规命名不误判 + 明细原因码）
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
