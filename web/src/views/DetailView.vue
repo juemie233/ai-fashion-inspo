@@ -692,16 +692,23 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
                     >
                       <template #icon><IconExclamationCircle /></template>
                     </a-button>
-                    <a-button
-                      size="mini"
-                      type="text"
-                      circle
-                      class="tag-remove-btn"
-                      title="移除该标签"
-                      @click.stop="removeTag(t)"
+                    <a-popconfirm
+                      :content="`确定移除标签「${t.tag.name}」？`"
+                      ok-text="移除"
+                      cancel-text="取消"
+                      @ok="removeTag(t)"
                     >
-                      <template #icon><IconClose /></template>
-                    </a-button>
+                      <a-button
+                        size="mini"
+                        type="text"
+                        circle
+                        class="tag-remove-btn"
+                        title="移除该标签"
+                        @click.stop
+                      >
+                        <template #icon><IconClose /></template>
+                      </a-button>
+                    </a-popconfirm>
                   </span>
                 </div>
               </div>
