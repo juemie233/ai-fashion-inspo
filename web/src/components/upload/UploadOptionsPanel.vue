@@ -33,7 +33,7 @@ const emit = defineEmits<{
 /** 上传后跳转选项 */
 const afterUploadOptions: Array<{ label: string; value: UploadAfterAction }> = [
   { label: '留在本页', value: 'stay' },
-  { label: '查看详情', value: 'detail' },
+  { label: '查看详情（新标签页）', value: 'detail' },
   { label: '去素材库', value: 'home' },
   { label: '去标签分析', value: 'models?tab=queue' },
 ]

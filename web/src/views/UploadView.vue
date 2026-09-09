@@ -321,7 +321,8 @@ async function startUpload() {
     router.push({ path: '/models', query: { tab: 'queue' } })
   } else if (afterUpload.value === 'detail' && done === 1) {
     const uploaded = queue.value.find((q) => q.status === 'done')
-    if (uploaded?.resultId) router.push(`/detail/${uploaded.resultId}`)
+    // 新开标签页查看详情（被浏览器拦截时降级当前页跳转）
+    if (uploaded?.resultId) goToDetail(uploaded.resultId)
   }
 }
 
@@ -385,8 +386,13 @@ function makeProgressHandler(item: UploadQueueItem) {
   }
 }
 
+/** 新开浏览器标签页查看素材详情（不离开上传页，保留上传队列与最近上传状态）。
+ *  非用户手势触发时（如上传完成后自动打开）可能被浏览器拦截，此时降级为当前页跳转，
+ *  避免「点了没反应」。与手机图剪裁页「查看素材详情」的实现保持一致。 */
 function goToDetail(id: string) {
-  router.push(`/detail/${id}`)
+  const { href } = router.resolve({ path: `/detail/${id}` })
+  const opened = window.open(href, '_blank', 'noopener,noreferrer')
+  if (!opened) router.push(`/detail/${id}`)
 }
 
 // ── 队列统计 ──
