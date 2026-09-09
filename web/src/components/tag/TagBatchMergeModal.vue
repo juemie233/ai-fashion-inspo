@@ -34,7 +34,7 @@ const batchMergeTargetOptions = computed(() => {
 })
 
 async function handleBatchMerge() {
-  if (!batchMergeTarget.value || props.selectedIds.size < 2) return
+  if (!batchMergeTarget.value || props.selectedIds.size < 1) return
   const sourceIds = Array.from(props.selectedIds).filter((id) => id !== batchMergeTarget.value)
   if (sourceIds.length === 0) {
     Message.warning('目标标签不能在被选中的标签中')

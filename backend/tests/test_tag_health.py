@@ -112,3 +112,44 @@ async def test_health_scan_empty_db(client):
     assert result["score"] == 100.0
     assert result["issues"]["orphan"]["count"] == 0
     assert result["issues"]["duplicate"]["count"] == 0
+    assert result["issues"]["noncompliant"]["count"] == 0
+
+
+async def test_scan_identifies_noncompliant(client):
+    """不合规命名（裸词）被识别：袜/鞋/裙裸词与缺长度丝袜，合规命名不误判。"""
+    bare_sock = _create_tag(client, "丝袜", category="item_type")
+    bare_shoe = _create_tag(client, "高跟鞋", category="item_type")
+    bare_skirt = _create_tag(client, "短裙", category="item_type")
+    lengthless = _create_tag(client, "黑色丝袜", category="item_type")
+    ok_sock = _create_tag(client, "黑色连裤丝袜", category="item_type")
+    ok_shoe = _create_tag(client, "尖头细跟高跟鞋", category="item_type")
+
+    async with async_session() as db:
+        result = await scan_tag_health(db)
+
+    ids = result["issues"]["noncompliant"]["tag_ids"]
+    assert bare_sock["id"] in ids
+    assert bare_shoe["id"] in ids
+    assert bare_skirt["id"] in ids
+    assert lengthless["id"] in ids
+    # 带颜色/长度的合规命名不误判
+    assert ok_sock["id"] not in ids
+    assert ok_shoe["id"] not in ids
+
+
+async def test_health_noncompliant_detail_reason(client):
+    """明细接口返回原因码与中文原因（供治理面板展示）。"""
+    _create_tag(client, "丝袜", category="item_type")
+    _create_tag(client, "黑色丝袜", category="item_type")
+    _create_tag(client, "凉鞋", category="item_type")
+    await _run_health_scan(client)
+
+    r = client.get("/api/tags/health/noncompliant")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] == 3
+    by_name = {item["name"]: item for item in data["items"]}
+    assert by_name["丝袜"]["reason"] == "bare_hosiery"
+    assert by_name["黑色丝袜"]["reason"] == "lengthless_silk"
+    assert by_name["凉鞋"]["reason"] == "bare_shoe"
+    assert "裸词" in by_name["丝袜"]["reason_label"]

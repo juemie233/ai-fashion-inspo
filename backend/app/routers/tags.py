@@ -402,7 +402,8 @@ async def tag_health_issues(
 ) -> dict:
     """获取最近一次健康度扫描的问题明细（分页）。
 
-    issue_type: orphan | low_frequency | low_quality_name | duplicate
+    issue_type: orphan | low_frequency | low_quality_name | duplicate | noncompliant
+    （noncompliant = 不符合打标命名口径：袜/鞋/裙裸词、缺长度丝袜）
     """
     from sqlalchemy import select
 

@@ -16,12 +16,15 @@ export interface TaskStatus {
 
 // ===== 健康度分析 =====
 
-export type HealthIssueType = 'orphan' | 'low_frequency' | 'low_quality_name' | 'duplicate'
+export type HealthIssueType =
+  'orphan' | 'low_frequency' | 'low_quality_name' | 'duplicate' | 'noncompliant'
 
 export interface HealthIssueItem extends TagBrief {
   source: string
   parent_id: number | null
   reason?: string | null
+  /** 不合规命名的中文原因（noncompliant 明细返回） */
+  reason_label?: string | null
 }
 
 /** 健康度明细中的疑似重复对，复用统一的 TagDuplicatePair 结构 */
@@ -65,6 +68,7 @@ export const HEALTH_ISSUE_LABELS: Record<HealthIssueType, string> = {
   low_frequency: '低频标签（1 次关联）',
   low_quality_name: '低质命名',
   duplicate: '疑似重复',
+  noncompliant: '不合规命名（裸词）',
 }
 
 // ===== 自动聚类 =====

@@ -5,12 +5,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { asHealthResult, fetchHealthIssue, scanHealth } from '@/api/tagAdvanced'
-import { batchDeleteTags } from '@/api/tags'
+import { batchDeleteTags, fetchTagsGrouped, type TagCategoryGroup } from '@/api/tags'
 import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
 import { useTagAnalysisTask } from '@/composables/useTagAnalysisTask'
 import { useTagSelection } from '@/composables/useTagSelection'
 import { useTagEvents } from '@/composables/useTagEvents'
 import TagBatchEditModal from '@/components/tag/TagBatchEditModal.vue'
+import TagBatchMergeModal from '@/components/tag/TagBatchMergeModal.vue'
 import TagDuplicateCompareModal from '@/components/tag/TagDuplicateCompareModal.vue'
 import {
   HEALTH_ISSUE_LABELS,
@@ -32,6 +33,7 @@ const issueCounts = ref<Record<HealthIssueType, number>>({
   low_frequency: 0,
   low_quality_name: 0,
   duplicate: 0,
+  noncompliant: 0,
 })
 const scannedAt = ref('')
 const activeIssueType = ref<HealthIssueType>('orphan')
@@ -49,7 +51,13 @@ const batchEditFormVisible = ref(false)
 /** 当前送入批量编辑表单的标签（勾选行的快照） */
 const batchEditTags = ref<HealthIssueItem[]>([])
 
-const ISSUE_TYPES: HealthIssueType[] = ['orphan', 'low_frequency', 'low_quality_name', 'duplicate']
+const ISSUE_TYPES: HealthIssueType[] = [
+  'orphan',
+  'low_frequency',
+  'low_quality_name',
+  'duplicate',
+  'noncompliant',
+]
 
 /** 健康度扫描任务：提交 → 轮询 → 写入评分/计数 */
 const {
@@ -169,6 +177,38 @@ const comparePair = ref<DuplicateIssuePair | null>(null)
 function openCompare(pair: DuplicateIssuePair) {
   comparePair.value = pair
   compareVisible.value = true
+}
+
+// ── 合并到指定标签（不合规命名治理主用：把裸词合并到规范标签）──
+const mergeVisible = ref(false)
+const mergeGroups = ref<TagCategoryGroup[]>([])
+const mergeLoading = ref(false)
+
+/** 打开合并弹窗：懒加载标签分组（目标候选），只加载一次 */
+async function openMerge() {
+  if (!hasAny.value) {
+    Message.warning('请先勾选标签')
+    return
+  }
+  if (!mergeGroups.value.length) {
+    mergeLoading.value = true
+    try {
+      mergeGroups.value = await fetchTagsGrouped()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '加载标签列表失败'))
+      return
+    } finally {
+      mergeLoading.value = false
+    }
+  }
+  mergeVisible.value = true
+}
+
+/** 合并完成：通知标签变更（事件总线会刷新当前问题列表与标签页数据） */
+function onMerged() {
+  const ids = Array.from(selectedIds.value)
+  clearSelection()
+  notifyTagChanged({ type: 'merged', tagIds: ids })
 }
 
 function onSelectionChange(keys: Array<string | number>) {
@@ -314,11 +354,25 @@ onBeforeUnmount(() => {
                 title="原因"
                 data-index="reason"
               />
+              <a-table-column
+                v-if="activeIssueType === 'noncompliant'"
+                title="原因"
+                data-index="reason_label"
+              />
             </template>
           </a-table>
           <div class="batch-bar">
             <a-space>
               <a-button size="small" :disabled="!hasAny" @click="editSelected"> 批量编辑 </a-button>
+              <a-button
+                size="small"
+                type="primary"
+                :disabled="!hasAny"
+                :loading="mergeLoading"
+                @click="openMerge"
+              >
+                合并到…
+              </a-button>
               <a-button size="small" status="danger" :disabled="!hasAny" @click="deleteSelected">
                 批量删除
               </a-button>
@@ -344,6 +398,14 @@ onBeforeUnmount(() => {
       v-model:visible="batchEditFormVisible"
       :tags="batchEditTags"
       initial-mode="inline"
+    />
+
+    <!-- 合并到指定标签（不合规命名治理：裸词合并到规范标签；变更后事件总线刷新） -->
+    <TagBatchMergeModal
+      v-model:show="mergeVisible"
+      :selected-ids="selectedIds"
+      :groups="mergeGroups"
+      @done="onMerged"
     />
 
     <!-- 疑似重复：图片对比（弹窗内合并/重命名；变更后经事件总线自动刷新） -->

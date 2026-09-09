@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
+from app.utils.tag_compliance import NONCOMPLIANT_REASONS, classify_noncompliant
 from app.utils.tag_normalizer import validate_tag_name
 
 # 健康评分扣分规则：问题键 → (每百分点扣分, 扣分上限)
@@ -20,9 +21,16 @@ SCORE_RULES: dict[str, tuple[float, float]] = {
     "low_frequency": (0.3, 15.0),
     "low_quality_name": (0.4, 20.0),
     "duplicate": (0.4, 20.0),
+    "noncompliant": (0.4, 20.0),
 }
 
-ISSUE_TYPES = ("orphan", "low_frequency", "low_quality_name", "duplicate")
+ISSUE_TYPES = (
+    "orphan",
+    "low_frequency",
+    "low_quality_name",
+    "duplicate",
+    "noncompliant",
+)
 
 
 async def _usage_counts(
@@ -136,6 +144,7 @@ async def scan_tag_health(
         "low_frequency": {"count": 0, "tag_ids": []},
         "low_quality_name": {"count": 0, "tag_ids": []},
         "duplicate": {"count": 0, "pairs": []},
+        "noncompliant": {"count": 0, "tag_ids": []},
     }
     if total == 0:
         return {
@@ -154,6 +163,9 @@ async def scan_tag_health(
     low_frequency_ids = [t.id for t in tags if usage.get(t.id, 0) == 1]
     # 低质命名：复用创建时的校验规则（纯英文/过长/标点/描述句/hex 色等）
     low_quality_ids = [t.id for t in tags if not validate_tag_name(t.name)[0]]
+    # 不合规命名：复用打标合规规则（袜/鞋/裙裸词、缺长度丝袜），
+    # 与打标落库过滤同一份口径（app/utils/tag_compliance.py）
+    noncompliant_ids = [t.id for t in tags if classify_noncompliant(t.name)]
 
     # 疑似重复：复用现有相似度扫描（类别分组 + 首字预过滤 + 线程池）
     from app.services.tag_query import find_duplicate_tag_pairs
@@ -181,6 +193,7 @@ async def scan_tag_health(
         "low_frequency": len(low_frequency_ids),
         "low_quality_name": len(low_quality_ids),
         "duplicate": len(duplicate_involved_ids),
+        "noncompliant": len(noncompliant_ids),
     }
     for key, (rate, cap) in SCORE_RULES.items():
         percent = counts[key] / total * 100.0
@@ -196,6 +209,7 @@ async def scan_tag_health(
             "low_frequency": {"count": len(low_frequency_ids), "tag_ids": low_frequency_ids},
             "low_quality_name": {"count": len(low_quality_ids), "tag_ids": low_quality_ids},
             "duplicate": {"count": len(duplicate_pairs), "pairs": duplicate_pairs},
+            "noncompliant": {"count": len(noncompliant_ids), "tag_ids": noncompliant_ids},
         },
         "category_stats": _build_category_stats(list(tags), usage),
         "scanned_at": now,
@@ -282,17 +296,25 @@ async def get_health_issue_detail(
     # 低质命名：扫描结果可能早于标签/规则的最新状态（已改名、阈值调整等）。
     # 这里实时复校，过滤掉当前已合法的过期 ID，避免合法标签仍挂在问题列表里；
     # 原因取实时校验结果，不再用含糊的「标签名不规范」兜底。
-    if issue_type == "low_quality_name":
+    if issue_type in ("low_quality_name", "noncompliant"):
         tag_items_all = await _fetch_tag_items(db, tag_ids)
         items_all = []
         for tid in tag_ids:
             item = tag_items_all.get(tid)
             if item is None:
                 continue
-            ok, reason = validate_tag_name(item["name"])
-            if not ok:
+            if issue_type == "low_quality_name":
+                ok, reason = validate_tag_name(item["name"])
+                if ok:
+                    continue
                 item["reason"] = reason
-                items_all.append(item)
+            else:
+                code = classify_noncompliant(item["name"])
+                if code is None:
+                    continue
+                item["reason"] = code
+                item["reason_label"] = NONCOMPLIANT_REASONS.get(code, code)
+            items_all.append(item)
         total = len(items_all)
         start = (page - 1) * size
         items = items_all[start : start + size]
