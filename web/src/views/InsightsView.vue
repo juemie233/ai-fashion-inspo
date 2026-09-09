@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 数据洞察页：向量管理 + 数据报表（导出/趋势/人物频次/审计日志）。 */
+/** 数据洞察页：向量管理 + 数据报表（导出/趋势/人物频次/审计日志）+ 提示词质量对比。 */
 
 import { ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -15,8 +15,8 @@ const router = useRouter()
 const route = useRoute()
 
 // ── 子页面（小菜单）状态：URL 持久化，刷新后停留在原小页面 ──
-type InsightsTab = 'vectors' | 'reports'
-const INSIGHTS_TABS: InsightsTab[] = ['vectors', 'reports']
+type InsightsTab = 'vectors' | 'reports' | 'prompt'
+const INSIGHTS_TABS: InsightsTab[] = ['vectors', 'reports', 'prompt']
 
 function initialTab(): InsightsTab {
   const t = route.query.tab
@@ -38,7 +38,7 @@ watch(activeTab, (tab) => {
 <template>
   <div class="insights-page">
     <h2>数据洞察</h2>
-    <p class="subtitle">向量状态、导出与统计报表</p>
+    <p class="subtitle">向量状态、导出与统计报表、提示词质量对比</p>
 
     <a-tabs v-model:active-key="activeTab" type="line">
       <!-- 向量管理 -->
@@ -52,9 +52,13 @@ watch(activeTab, (tab) => {
           <admin-export-panel />
           <admin-trend-chart />
           <admin-person-frequency />
-          <admin-prompt-quality class="reports-full" />
           <admin-audit-log class="reports-full" />
         </div>
+      </a-tab-pane>
+
+      <!-- 提示词质量对比（按提示词版本聚合打标质量指标） -->
+      <a-tab-pane key="prompt" title="提示词质量">
+        <admin-prompt-quality />
       </a-tab-pane>
     </a-tabs>
   </div>
