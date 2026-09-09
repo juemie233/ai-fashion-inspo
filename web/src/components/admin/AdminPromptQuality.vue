@@ -13,7 +13,7 @@ import { onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { fetchPromptQuality, type PromptQualityItem } from '@/api/admin'
-import { renderTimeCell, formatDate } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 
 const days = ref(30)
 const includeBareRate = ref(false)
@@ -142,7 +142,9 @@ onMounted(load)
         </a-table-column>
         <a-table-column title="最近使用" :width="170">
           <template #cell="{ record }">
-            {{ renderTimeCell(formatDate(record.last_used_at)) }}
+            <!-- 时间列单行显示（CLAUDE.md 约定）：模板插值只能用字符串，
+                 renderTimeCell 返回 VNode，仅适用于 render 函数列 -->
+            <span style="white-space: nowrap">{{ formatDate(record.last_used_at) }}</span>
           </template>
         </a-table-column>
       </template>

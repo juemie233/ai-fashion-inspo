@@ -41,6 +41,11 @@ export function formatDate(d: string | null | undefined): string {
  * 接收已格式化的时间文本，包装为带 ``white-space: nowrap`` 的 span；
  * render 函数列统一用它，避免各列重复手写 nowrap 样式。
  * extra 可附加 span props（如自定义颜色/class），style 与 nowrap 合并。
+ *
+ * ⚠️ 仅用于表格列的 **render 函数**（返回 VNode）。在模板插值
+ * ``{{ renderTimeCell(...) }}`` 中使用会把 VNode 当文本渲染，触发
+ * 「Converting circular structure to JSON（vnode → component）」运行时错误；
+ * 模板列请改用 ``<span style="white-space: nowrap">{{ formatDate(...) }}</span>``。
  */
 export function renderTimeCell(
   text: string | null | undefined,
