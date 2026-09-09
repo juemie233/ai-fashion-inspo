@@ -1,0 +1,23 @@
+{
+  "case_id": "bare-silk-from-material-key-2026-09",
+  "origin": [
+    {
+      "log_id": 14129,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "16e36243",
+      "created_at": "2026-09-08T03:29:32"
+    }
+  ],
+  "note": "material 键漏出的「丝袜」裸词应丢弃；合规连裤袜/短裙保留",
+  "raw_response": "{\n  \"style\": [\"御姐风\"],\n  \"items\": [\n    {\n      \"type\": \"白色系带领衬衫\",\n      \"color\": \"白色\",\n      \"features\": [\"系带\", \"露脐\", \"V领\"]\n    },\n    {\n      \"type\": \"黑色短裙\",\n      \"color\": \"黑色\",\n      \"features\": [\"纯色\", \"及膝\", \"A字\"]\n    },\n    {\n      \"type\": \"黑色连裤袜\",\n      \"color\": \"黑色\",\n      \"features\": [\"透肉\", \"无花纹\"]\n    },\n    {\n      \"type\": \"黑色尖头细跟红底高跟鞋\",\n      \"color\": \"黑色\",\n      \"features\": [\"漆皮\", \"红底\", \"细跟\"]\n    }\n  ],\n  \"fit\": [\"修身\", \"包臀\"],\n  \"design_detail\": [\"系带\", \"V领\", \"开衩\"],\n  \"material\": [\"丝袜\", \"棉质\", \"漆皮\"],\n  \"attributes\": [\"露脸\", \"坐姿\", \"正面\"],\n  \"dominant_colors\": [\n    \"#FFFFFF\",\n    \"#000000\",\n    \"#FF0000\"\n  ],\n  \"atmosphere\": [\"性感\", \"御姐\"],\n  \"expression\": [\"冷脸\"],\n  \"leg_posture\": [\"跷腿\"]\n}",
+  "expect": {
+    "produce": [
+      "黑色连裤袜",
+      "黑色短裙",
+      "黑色尖头细跟红底高跟鞋"
+    ],
+    "drop": [
+      "丝袜"
+    ]
+  }
+}

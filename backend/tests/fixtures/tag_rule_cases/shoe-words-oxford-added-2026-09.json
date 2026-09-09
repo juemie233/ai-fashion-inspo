@@ -1,0 +1,26 @@
+{
+  "case_id": "shoe-words-oxford-added-2026-09",
+  "origin": [
+    {
+      "log_id": 13956,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "16e36243",
+      "created_at": "2026-09-08T02:57:00"
+    }
+  ],
+  "note": "词表补全：牛津鞋（features 漏入）应丢弃；乐福鞋/过膝袜/百褶短裙合规保留",
+  "raw_response": "{\n  \"style\": [\"JK制服\", \"学院风\", \"甜美风\"],\n  \"items\": [\n    {\n      \"type\": \"藏青色短袖衬衫\",\n      \"color\": \"藏青\",\n      \"features\": [\"水手领\", \"三粒扣\", \"胸前刺绣\"]\n    },\n    {\n      \"type\": \"深灰色百褶短裙\",\n      \"color\": \"深灰\",\n      \"features\": [\"短裙\", \"无格纹\", \"裙摆及膝下\"]\n    },\n    {\n      \"type\": \"白色过膝袜\",\n      \"color\": \"白色\",\n      \"features\": [\"系带蝴蝶结\", \"纯色\", \"堆堆袜\"]\n    },\n    {\n      \"type\": \"黑色乐福鞋\",\n      \"color\": \"黑色\",\n      \"features\": [\"牛津鞋\", \"圆头\", \"平底\"]\n    }\n  ],\n  \"fit\": [\"修身\"],\n  \"design_detail\": [\"水手领\", \"系带\", \"百褶\"],\n  \"material\": [\"针织\", \"棉质\"],\n  \"attributes\": [\"全身\", \"站姿\", \"正面\", \"露脸\"],\n  \"dominant_colors\": [\"#2B3A67\", \"#1A1A1A\", \"#FFFFFF\"],\n  \"atmosphere\": [\"甜美\", \"学院\"],\n  \"expression\": [\"微笑\"],\n  \"leg_posture\": [\"并拢\"]\n}",
+  "expect": {
+    "produce": [
+      "黑色乐福鞋",
+      "白色过膝袜",
+      "深灰色百褶短裙",
+      "藏青色短袖衬衫"
+    ],
+    "drop": [
+      "牛津鞋",
+      "堆堆袜",
+      "短裙"
+    ]
+  }
+}

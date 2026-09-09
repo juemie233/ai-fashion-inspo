@@ -1,0 +1,23 @@
+{
+  "case_id": "lengthless-silk-translucent-2026-09",
+  "origin": [
+    {
+      "log_id": 10867,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "dd4462cb",
+      "created_at": "2026-09-06T04:49:13"
+    }
+  ],
+  "note": "半透明肤色丝袜缺长度维度应丢弃；带修饰的鞋/裙/外套保留",
+  "raw_response": "{\n  \"style\": [\"御姐风\", \"极简\"],\n  \"items\": [\n    {\n      \"type\": \"黑色短款露脐上衣\",\n      \"color\": \"黑色\",\n      \"features\": [\"露脐\", \"短款\", \"胸前有字母\"]\n    },\n    {\n      \"type\": \"黑色短款西装外套\",\n      \"color\": \"黑色\",\n      \"features\": [\"垫肩\", \"有纽扣\", \"宽松版型\"]\n    },\n    {\n      \"type\": \"黑色短款半身裙\",\n      \"color\": \"黑色\",\n      \"features\": [\"高腰\", \"包臀\", \"无图案\"]\n    },\n    {\n      \"type\": \"黑色半透明肤色丝袜\",\n      \"color\": \"黑色\",\n      \"features\": [\"半透明\", \"无花纹\", \"贴肤\"]\n    },\n    {\n      \"type\": \"黑色尖头细跟高跟鞋\",\n      \"color\": \"黑色\",\n      \"features\": [\"细跟\", \"露趾\", \"高跟\"]\n    }\n  ],\n  \"fit\": [\"包臀\", \"修身\"],\n  \"design_detail\": [\"露脐\", \"高腰\", \"一字肩\"],\n  \"material\": [\"针织\", \"丝绒\", \"纯色\"],\n  \"attributes\": [\"露脸\", \"坐姿\", \"正面\"],\n  \"dominant_colors\": [\n    \"#000000\",\n    \"#FFFFFF\"\n  ],\n  \"atmosphere\": [\"性感\", \"精致\"],\n  \"expression\": [\"冷脸\"],\n  \"leg_posture\": [\"跷腿\"]\n}",
+  "expect": {
+    "produce": [
+      "黑色尖头细跟高跟鞋",
+      "黑色短款半身裙",
+      "黑色短款西装外套"
+    ],
+    "drop": [
+      "黑色半透明肤色丝袜"
+    ]
+  }
+}

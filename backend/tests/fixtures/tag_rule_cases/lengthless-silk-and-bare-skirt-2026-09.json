@@ -1,0 +1,22 @@
+{
+  "case_id": "lengthless-silk-and-bare-skirt-2026-09",
+  "origin": [
+    {
+      "log_id": 10777,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "dd4462cb",
+      "created_at": "2026-09-06T04:23:49"
+    }
+  ],
+  "note": "缺长度丝袜（黑色丝袜）+ 裙类纯长度裸词（短裙）应丢弃，合规连衣裙保留",
+  "raw_response": "{\n  \"style\": [\"暗黑风\", \"御姐风\"],\n  \"items\": [\n    {\n      \"type\": \"黑色蕾丝长袖连衣裙\",\n      \"color\": \"黑色\",\n      \"features\": [\"透视\", \"高腰\", \"短裙\"]\n    },\n    {\n      \"type\": \"黑色丝袜\",\n      \"color\": \"黑色\",\n      \"features\": [\"半透明肤色\", \"贴肤\"]\n    }\n  ],\n  \"fit\": [\"修身\", \"包臀\"],\n  \"design_detail\": [\"蕾丝\", \"露肩\", \"高腰\"],\n  \"material\": [\"蕾丝\", \"透肉\", \"哑光\"],\n  \"attributes\": [\"露脸\", \"站姿\", \"正面\"],\n  \"dominant_colors\": [\n    \"#000000\",\n    \"#F5F5F5\"\n  ],\n  \"atmosphere\": [\"性感\", \"暗黑\"],\n  \"expression\": [\"微笑\"],\n  \"leg_posture\": [\"并拢\"]\n}",
+  "expect": {
+    "produce": [
+      "黑色蕾丝长袖连衣裙"
+    ],
+    "drop": [
+      "黑色丝袜",
+      "短裙"
+    ]
+  }
+}

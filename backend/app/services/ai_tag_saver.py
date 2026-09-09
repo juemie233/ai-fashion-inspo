@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.tag import InspirationTag, Tag
 from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
+from app.utils.tag_compliance import is_bare_garment_word
 from app.utils.tag_normalizer import is_similar_category_tag, normalize_tag_name
 
 if TYPE_CHECKING:
@@ -56,118 +57,16 @@ async def save_tags(db: AsyncSession, inspiration_id: str, data: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 服装裸词兜底过滤（作用于所有产出路径的名称级过滤）
+# 服装裸词兜底过滤
 # ---------------------------------------------------------------------------
+# 判定规则集中在 app/utils/tag_compliance.py，与「存量标签治理扫描」共用同一份
+# 口径（避免落库过滤与治理扫描两套规则打架）。此处只负责在产出前调用：
 # 提示词口径要求袜/丝袜/鞋靴类 type 以颜色开头、裙类直接描述应带颜色和款式，
 # 但模型仍可能漏写修饰，把「丝袜」「短裙」「高跟鞋」等裸品类名写进 type /
 # material / design_detail / features。此类裸词与独立 color 字段语义重复、
 # 无法体现颜色款式，落库前兜底丢弃（color 字段照常保留）。覆盖全部类别
 # 来源：item_type（type）、material（material 键）、design_detail、
 # body_part（items.features）。
-_HOSIERY_TYPE_SUFFIXES = (
-    "丝袜", "长筒袜", "过膝袜", "连裤袜", "中筒袜", "短袜", "船袜",
-    "网袜", "渔网袜", "堆堆袜", "踝袜", "袜套", "袜",
-)
-
-# 颜色描述词：type 含其中任一即视为「带了颜色」，不属于裸词（不误丢）
-_COLOR_HINTS = (
-    "黑", "白", "红", "橙", "黄", "绿", "蓝", "紫", "灰", "银",
-    "金", "棕", "粉", "米", "肤", "青", "肉",
-)
-
-# 裙类「纯长度修饰词」：type 除长度词外无任何颜色/款式/图案/材质修饰时，
-# 判为裸裙词。按长度降序排列，匹配时优先吃掉长词（如「超短」先于「短」）。
-_SKIRT_LENGTH_WORDS = ("迷你", "超短", "短")
-
-# 鞋靴类「裸品类名」：不带任何颜色/款式/图案修饰的鞋靴词。模型常把这类词
-# 单独写进 features/material/design_detail（如 "features": ["细跟", "高跟鞋"]）
-# 或当作无颜色 type，造成「高跟鞋」「凉鞋」裸标签。凡整名恰等于表内词即
-# 判为裸词丢弃；带修饰的整名不匹配（「黑色高跟鞋」「尖头细跟高跟鞋」
-# 「黑色乐福鞋」「尖头细跟高跟凉鞋」）正常保留——与裙类「短裙丢、
-# 格纹百褶短裙留」口径一致。小白鞋本身含颜色语义，不列入。
-_SHOE_BARE_WORDS = frozenset({
-    # 鞋
-    "高跟鞋", "中跟鞋", "低跟鞋", "细跟鞋", "粗跟鞋", "坡跟鞋",
-    "凉鞋", "高跟凉鞋", "凉拖", "拖鞋", "人字拖", "洞洞鞋", "沙滩鞋",
-    "乐福鞋", "帆布鞋", "运动鞋", "跑鞋", "板鞋", "老爹鞋",
-    "皮鞋", "单鞋", "玛丽珍鞋", "芭蕾鞋", "豆豆鞋", "穆勒鞋", "渔夫鞋",
-    "布鞋", "绣花鞋", "德训鞋", "网面鞋",
-    # 靴
-    "靴子", "短靴", "长靴", "中筒靴", "踝靴", "马丁靴", "切尔西靴",
-    "雪地靴", "过膝靴", "及膝靴", "雨靴", "筒靴", "机车靴", "沙漠靴",
-})
-
-
-def _is_bare_hosiery_word(name: str) -> bool:
-    """判断标签名是否为「无颜色修饰的袜类裸品类名」。
-
-    判定规则：名称以袜类结尾词收尾，且整名不含任何颜色描述字
-    （如「丝袜」「过膝袜」「吊带袜」→ True；「黑色丝袜」「白丝」→ False）。
-    """
-    if not name.endswith(_HOSIERY_TYPE_SUFFIXES):
-        return False
-    return not any(hint in name for hint in _COLOR_HINTS)
-
-
-# 丝袜类「长度/形态维度词」：丝袜单品名至少应写明一种长度或形态，
-# 否则「黑色丝袜」「半透明肤色丝袜」这类只含材质、不含长度的词无法区分
-# 连裤/过膝/长筒，检索无意义。含维度词的（连裤/过膝/长筒/吊带…）为合格名。
-_HOSIERY_LENGTH_HINTS = (
-    "连裤", "过膝", "及膝", "膝上", "大腿", "长筒", "中筒", "及踝",
-    "踩脚", "船袜", "短袜", "吊带", "堆堆", "渔网", "袜套",
-)
-
-
-def _is_lengthless_silk_word(name: str) -> bool:
-    """判断标签名是否为「缺长度维度的丝袜泛称」。
-
-    丝袜单品名若以「丝袜」结尾、却整名不含任何长度/形态维度词，则无法
-    区分连裤袜/过膝袜/长筒袜，判为不合格泛称（如「黑色丝袜」「肉色半透明
-    肤色丝袜」「哑光肤色丝袜」→ True；「黑色连裤丝袜」「黑色透肉连裤袜」
-    → False，正常保留）。「黑丝/白丝」是公认的黑色连裤丝袜简称（库内既有
-    标签），不在此列。
-    """
-    if not name.endswith("丝袜"):
-        return False
-    return not any(hint in name for hint in _HOSIERY_LENGTH_HINTS)
-
-
-def _is_bare_skirt_word(name: str) -> bool:
-    """判断标签名是否为「仅长度修饰的裙类裸词」。
-
-    判定规则：以「裙」收尾，且去掉尾字后剩余部分只能由纯长度词
-    （短/迷你/超短）拼成，不含任何颜色/款式/图案/材质修饰
-    （如「短裙」「迷你短裙」「超短裙」→ True；「黑色百褶短裙」
-    「格纹百褶短裙」「高腰包臀短裙」→ False，正常保留）。
-    """
-    if not name.endswith("裙"):
-        return False
-    rest = name[:-1]
-    while rest:
-        for word in _SKIRT_LENGTH_WORDS:
-            if rest.startswith(word):
-                rest = rest[len(word):]
-                break
-        else:
-            # 存在长度词以外的修饰（颜色/款式/图案/材质）→ 不属于裸裙词
-            return False
-    return True
-
-
-def _is_bare_shoe_word(name: str) -> bool:
-    """判断标签名是否为鞋靴固有裸品类名（如「高跟鞋」「凉鞋」「短靴」）。"""
-    return name in _SHOE_BARE_WORDS
-
-
-def _is_bare_garment_word(name: str) -> bool:
-    """判断标签名是否为需要丢弃的服装裸词
-    （袜类裸词 / 缺长度丝袜泛称 / 裙类纯长度裸词 / 鞋靴固有裸品类名）。"""
-    return (
-        _is_bare_hosiery_word(name)
-        or _is_lengthless_silk_word(name)
-        or _is_bare_skirt_word(name)
-        or _is_bare_shoe_word(name)
-    )
 
 
 def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
@@ -228,7 +127,7 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
                     continue
                 # 服装裸词兜底：袜类裸词 / 裙类纯长度裸词（含 material、features
                 # 路径漏出的「丝袜」「短裙」等），一律不落库
-                if _is_bare_garment_word(name):
+                if is_bare_garment_word(name):
                     continue
                 yield name, category, 0.8
 
@@ -254,7 +153,7 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
             if isinstance(features, str):
                 features = [p.strip() for p in features.replace('，', ',').replace('、', ',').split(',') if p.strip()]
 
-            if item_type and not _is_bare_garment_word(item_type):
+            if item_type and not is_bare_garment_word(item_type):
                 yield item_type, "item_type", 0.8
 
             if color:
@@ -264,12 +163,12 @@ def iter_extracted_tags(data: dict) -> Iterator[tuple[str, str, float]]:
                 if isinstance(feat, str):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
-                        if fv and not _is_bare_garment_word(fv):
+                        if fv and not is_bare_garment_word(fv):
                             yield fv, "body_part", 0.7
                 elif isinstance(feat, dict):
                     for fv in extract_tag_names(feat):
                         fv = normalize_tag_name(fv)
-                        if fv and not _is_bare_garment_word(fv):
+                        if fv and not is_bare_garment_word(fv):
                             yield fv, "body_part", 0.7
 
 

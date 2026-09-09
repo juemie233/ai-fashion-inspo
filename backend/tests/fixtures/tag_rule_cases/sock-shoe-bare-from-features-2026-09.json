@@ -1,0 +1,23 @@
+{
+  "case_id": "sock-shoe-bare-from-features-2026-09",
+  "origin": [
+    {
+      "log_id": 10707,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "dd4462cb",
+      "created_at": "2026-09-06T04:11:03"
+    }
+  ],
+  "note": "袜类/鞋靴裸词从 items[].features 漏入（丝袜、高跟鞋）——修复提交 8a6d5a0/318e528",
+  "raw_response": "{\"style\":[\"御姐风\"],\"items\":[{\"type\":\"黑色过膝袜\",\"color\":\"黑色\",\"features\":[\"黑色\",\"过膝\",\"丝袜\"]},{\"type\":\"黑色尖头细跟高跟鞋\",\"color\":\"黑色\",\"features\":[\"漆皮\",\"细跟\",\"高跟鞋\"]}], \"fit\":[\"修身\"],\"design_detail\":[\"高领\"],\"material\":[\"针织\"],\"attributes\":[\"坐姿\",\"露脸\"],\"dominant_colors\":[\"#000000\",\"#FFFFFF\",\"#E6B8A7\"],\"atmosphere\":[\"性感\",\"优雅\"],\"expression\":[\"微笑\"],\"leg_posture\":[\"跷腿\"]}",
+  "expect": {
+    "produce": [
+      "黑色过膝袜",
+      "黑色尖头细跟高跟鞋"
+    ],
+    "drop": [
+      "丝袜",
+      "高跟鞋"
+    ]
+  }
+}

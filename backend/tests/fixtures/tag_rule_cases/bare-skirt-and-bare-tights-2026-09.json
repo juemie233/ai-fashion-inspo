@@ -1,0 +1,23 @@
+{
+  "case_id": "bare-skirt-and-bare-tights-2026-09",
+  "origin": [
+    {
+      "log_id": 9514,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "aa65d7db",
+      "created_at": "2026-09-05T10:42:58"
+    }
+  ],
+  "note": "裙类裸词（短裙）与无颜色袜类裸词（连裤袜）应丢弃",
+  "raw_response": "[帧 1] {\n  \"style\": [],\n  \"items\": [\n    {\n      \"type\": \"短袖衬衫\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"短裙\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"连裤袜\",\n      \"color\": \"肉色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"尖头细跟高跟鞋\",\n      \"color\": \"肉色\",\n      \"features\": []\n    }\n  ],\n  \"fit\": [\"紧身\", \"包臀\"],\n  \"design_detail\": [\"系带\", \"泡泡袖\", \"高腰\"],\n  \"material\": [\"雪纺\", \"透肉\"],\n  \"attributes\": [\"不露脸\", \"全身\", \"站姿\"],\n  \"dominant_colors\": [\"#f5f5f5\", \"#e0e0e0\"],\n  \"atmosphere\": [\"性感\", \"优雅\"],\n  \"expression\": [],\n  \"leg_posture\": []\n}\n----\n[帧 2] {\n  \"style\": [],\n  \"items\": [\n    {\n      \"type\": \"短袖上衣\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"短裙\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"连裤袜\",\n      \"color\": \"肉色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"尖头细跟高跟鞋\",\n      \"color\": \"肉色\",\n      \"features\": []\n    }\n  ],\n  \"fit\": [\"修身\"],\n  \"design_detail\": [\"系带\", \"露肩\"],\n  \"material\": [\"雪纺\", \"透肉\"],\n  \"attributes\": [\"不露脸\", \"全身\", \"站姿\"],\n  \"dominant_colors\": [\"#f5f5f0\", \"#d4a017\"],\n  \"atmosphere\": [\"性感\", \"优雅\"],\n  \"expression\": [],\n  \"leg_posture\": []\n}\n----\n[帧 3] {\n  \"style\": [],\n  \"items\": [\n    {\n      \"type\": \"长袖上衣\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"短裙\",\n      \"color\": \"米色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"连裤袜\",\n      \"color\": \"肉色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"高跟鞋\",\n      \"color\": \"肉色\",\n      \"features\": [\"尖头\", \"细跟\"]\n    }\n  ],\n  \"fit\": [\"修身\", \"包臀\"],\n  \"design_detail\": [\"系带\", \"露肩\"],\n  \"material\": [\"针织\", \"透肉\"],\n  \"attributes\": [\"不露脸\", \"全身\", \"站姿\"],\n  \"dominant_colors\": [\"#f5f5f0\", \"#e0e0e0\"],\n  \"atmosphere\": [\"性感\", \"优雅\"],\n  \"expression\": [],\n  \"leg_posture\": []\n}",
+  "expect": {
+    "produce": [
+      "尖头细跟高跟鞋",
+      "短袖衬衫"
+    ],
+    "drop": [
+      "短裙",
+      "连裤袜"
+    ]
+  }
+}

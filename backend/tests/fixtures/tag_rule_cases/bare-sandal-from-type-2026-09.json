@@ -1,0 +1,22 @@
+{
+  "case_id": "bare-sandal-from-type-2026-09",
+  "origin": [
+    {
+      "log_id": 9495,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "aa65d7db",
+      "created_at": "2026-09-05T10:38:41"
+    }
+  ],
+  "note": "裸鞋词（凉鞋）作为 type 时应丢弃；合规上衣/短裙保留",
+  "raw_response": "{\n  \"style\": [\"甜美风\", \"法式\"],\n  \"items\": [\n    {\n      \"type\": \"一字肩上衣\",\n      \"color\": \"米白色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"高腰短裙\",\n      \"color\": \"米白色\",\n      \"features\": []\n    },\n    {\n      \"type\": \"凉鞋\",\n      \"color\": \"米白色\",\n      \"features\": [\"平底\", \"露趾\", \"编织\"]\n    }\n  ],\n  \"fit\": [\"修身\", \"包臀\"],\n  \"design_detail\": [\"一字肩\", \"荷叶边\", \"系带\", \"高腰\"],\n  \"material\": [\"雪纺\", \"蕾丝\", \"透肉\"],\n  \"attributes\": [\"站姿\", \"露脸\"],\n  \"dominant_colors\": [\"#FFF5E6\", \"#A2B5A9\"],\n  \"atmosphere\": [\"清新\", \"甜美\"],\n  \"expression\": [\"冷脸\"],\n  \"leg_posture\": []\n}",
+  "expect": {
+    "produce": [
+      "一字肩上衣",
+      "高腰短裙"
+    ],
+    "drop": [
+      "凉鞋"
+    ]
+  }
+}

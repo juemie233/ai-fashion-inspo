@@ -1,0 +1,23 @@
+{
+  "case_id": "shoe-words-high-boot-added-2026-09",
+  "origin": [
+    {
+      "log_id": 13920,
+      "model_name": "qwen3-vl:8b-instruct",
+      "prompt_version": "16e36243",
+      "created_at": "2026-09-08T02:49:58"
+    }
+  ],
+  "note": "词表补全：高筒靴（features 漏入）应丢弃；带颜色款式的靴子保留",
+  "raw_response": "{\n  \"style\": [\"学院风\", \"甜美风\"],\n  \"items\": [\n    {\n      \"type\": \"藏青针织Polo衫\",\n      \"color\": \"藏青\",\n      \"features\": [\"白领\", \"红白条纹袖口\", \"胸前刺绣\"]\n    },\n    {\n      \"type\": \"黑色短裙\",\n      \"color\": \"黑\",\n      \"features\": [\"纯色\", \"中长裙\", \"侧边拉链\"]\n    },\n    {\n      \"type\": \"黑色尖头细跟高跟靴\",\n      \"color\": \"黑\",\n      \"features\": [\"高筒靴\", \"拉链\", \"厚底\"]\n    }\n  ],\n  \"fit\": [\"修身\"],\n  \"design_detail\": [\"翻领\", \"纽扣\"],\n  \"material\": [\"针织\", \"皮革\"],\n  \"attributes\": [\"露脸\", \"全身\", \"站姿\", \"正面\"],\n  \"dominant_colors\": [\"#1A1A1A\", \"#2B3A67\", \"#FFFFFF\"],\n  \"atmosphere\": [\"甜美\", \"学院\"],\n  \"expression\": [\"微笑\"],\n  \"leg_posture\": [\"跷腿\"]\n}",
+  "expect": {
+    "produce": [
+      "黑色尖头细跟高跟靴",
+      "藏青针织Polo衫",
+      "黑色短裙"
+    ],
+    "drop": [
+      "高筒靴"
+    ]
+  }
+}
