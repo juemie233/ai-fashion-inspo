@@ -5,7 +5,13 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { IconLeft, IconRight, IconClose } from '@arco-design/web-vue/es/icon'
+import {
+  IconLeft,
+  IconRight,
+  IconClose,
+  IconPlus,
+  IconExclamationCircle,
+} from '@arco-design/web-vue/es/icon'
 import {
   fetchInspiration,
   toggleFavorite,
@@ -26,6 +32,7 @@ import CollectionPickerModal from '@/components/collection/CollectionPickerModal
 import ImageCropModal from '@/components/inspiration/ImageCropModal.vue'
 import CategoryTag from '@/components/inspiration/CategoryTag.vue'
 import OutfitTagSection from '@/components/inspiration/OutfitTagSection.vue'
+import TagCorrectionModal from '@/components/inspiration/TagCorrectionModal.vue'
 import SimilarSection from '@/components/inspiration/SimilarSection.vue'
 import PersonLinkSection from '@/components/person/PersonLinkSection.vue'
 import FaceDetectionSection from '@/components/inspiration/FaceDetectionSection.vue'
@@ -390,6 +397,37 @@ async function removeTag(t: InspirationTagOut) {
     Message.error('移除标签失败')
   }
 }
+
+// ── AI 打标纠错反馈（「标错了」/「补充漏标」）──
+const correctionVisible = ref(false)
+/** 反馈模式：wrong=已有标签标错；missing=AI 漏标补充 */
+const correctionMode = ref<'wrong' | 'missing'>('wrong')
+/** wrong 模式下被反馈的标签 */
+const correctionTag = ref<InspirationTagOut | null>(null)
+
+/** 打开「标错了」弹窗（针对某个 AI 标签） */
+function openTagCorrection(t: InspirationTagOut) {
+  correctionTag.value = t
+  correctionMode.value = 'wrong'
+  correctionVisible.value = true
+}
+
+/** 打开「补充漏标」弹窗 */
+function openMissingCorrection() {
+  correctionTag.value = null
+  correctionMode.value = 'missing'
+  correctionVisible.value = true
+}
+
+/** 反馈提交成功：刷新详情（多标/漏标会改动标签关联） */
+async function onCorrectionRecorded(result: { applied: boolean }) {
+  if (!result.applied || !detail.value) return
+  try {
+    detail.value = await fetchInspiration(detail.value.id)
+  } catch {
+    /* 刷新失败不影响反馈结果提示，下次进入详情页会重新加载 */
+  }
+}
 </script>
 
 <template>
@@ -619,7 +657,13 @@ async function removeTag(t: InspirationTagOut) {
 
             <!-- 标签分组 -->
             <div v-if="detail.tags.length > 0" class="tags-section">
-              <h4>标签</h4>
+              <div class="tags-header">
+                <h4>标签</h4>
+                <a-button size="mini" type="text" @click="openMissingCorrection">
+                  <template #icon><IconPlus /></template>
+                  AI 漏标了？补充
+                </a-button>
+              </div>
               <div v-for="(tags, category) in groupedTags()" :key="category" class="tag-group">
                 <span class="tag-category-label">
                   {{ CAT_LABELS[category] || category }}
@@ -637,6 +681,17 @@ async function removeTag(t: InspirationTagOut) {
                         ({{ Math.round(t.confidence * 100) }}%)</template
                       >
                     </CategoryTag>
+                    <a-button
+                      v-if="t.source !== 'manual'"
+                      size="mini"
+                      type="text"
+                      circle
+                      class="tag-correction-btn"
+                      title="标错了？反馈给纠错库"
+                      @click.stop="openTagCorrection(t)"
+                    >
+                      <template #icon><IconExclamationCircle /></template>
+                    </a-button>
                     <a-button
                       size="mini"
                       type="text"
@@ -656,6 +711,18 @@ async function removeTag(t: InspirationTagOut) {
             <a-empty v-else description="暂无标签，AI 分析后会自动生成" />
           </div>
         </div>
+
+        <!-- AI 打标纠错反馈弹窗（标错了 / 补充漏标） -->
+        <TagCorrectionModal
+          v-model:visible="correctionVisible"
+          :inspiration-id="detail.id"
+          :mode="correctionMode"
+          :tag-name="correctionTag?.tag.name"
+          :tag-category="
+            CATEGORY_LABELS[correctionTag?.tag.category || ''] || correctionTag?.tag.category
+          "
+          @recorded="onCorrectionRecorded"
+        />
 
         <!-- 相似素材推荐 -->
         <SimilarSection
@@ -828,6 +895,14 @@ async function removeTag(t: InspirationTagOut) {
   font-size: 16px;
 }
 
+/* 标签区标题行：标题 + 「AI 漏标了？补充」入口 */
+.tags-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .tag-group {
   margin-bottom: 12px;
 }
@@ -861,6 +936,20 @@ async function removeTag(t: InspirationTagOut) {
 }
 .tag-clickable:hover .tag-remove-btn {
   opacity: 1;
+}
+
+/* 「标错了」反馈按钮：同样悬停出现，颜色弱于移除按钮 */
+.tag-correction-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  transform: scale(0.85);
+  color: var(--color-text-3);
+}
+.tag-clickable:hover .tag-correction-btn {
+  opacity: 1;
+}
+.tag-correction-btn:hover {
+  color: rgb(var(--warning-6));
 }
 
 /* 下载原图按钮的链接容器 */

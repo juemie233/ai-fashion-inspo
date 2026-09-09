@@ -21,6 +21,7 @@ from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import PendingVectorBackfill, TaskQueue
 from app.models.audit import AuditLog
 from app.models.tag_history import TagHistory
+from app.models.tag_correction import TagCorrection
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.collection import Collection, CollectionItem
 
@@ -47,6 +48,7 @@ __all__ = [
     "PendingVectorBackfill",
     "AuditLog",
     "TagHistory",
+    "TagCorrection",
     "ServiceHeartbeat",
     "Collection",
     "CollectionItem",

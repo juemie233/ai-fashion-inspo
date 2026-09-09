@@ -62,6 +62,8 @@ export interface TagOut {
 export interface InspirationTagOut {
   tag: TagOut
   confidence: number
+  /** 关联来源：ai_generated / manual / seed（用于区分 AI 打标与手动标签） */
+  source: string
 }
 
 export interface InspirationListOut {
@@ -98,6 +100,39 @@ export async function addTagsToInspiration(
   source = 'manual',
 ) {
   const { data } = await apiClient.post(`/inspirations/${id}/tags`, { names, category, source })
+  return data
+}
+
+/** 打标纠错反馈原因 */
+export type TagCorrectionReason = 'multi' | 'missing' | 'wrong_category' | 'bad_name'
+
+/** 打标纠错反馈结果 */
+export interface TagCorrectionResult {
+  recorded: number
+  reason: TagCorrectionReason
+  /** 实际执行的动作：removed（删关联）/ added（补关联）/ noted（仅记录） */
+  action: 'removed' | 'added' | 'noted'
+  /** 是否真的变更了素材-标签关联 */
+  applied: boolean
+  tag_id: number | null
+  tag_name: string
+  category: string
+}
+
+/** 提交「标错了」纠错反馈（multi 删关联 / missing 补关联 / 其余仅记录） */
+export async function recordTagCorrection(
+  id: string,
+  payload: {
+    tag_name: string
+    reason: TagCorrectionReason
+    note?: string
+    category?: string
+  },
+): Promise<TagCorrectionResult> {
+  const { data } = await apiClient.post<TagCorrectionResult>(
+    `/inspirations/${id}/tag-corrections`,
+    payload,
+  )
   return data
 }
 

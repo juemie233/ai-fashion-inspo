@@ -43,6 +43,7 @@ _ALL_TABLES = [
     "collections",
     "ai_extracted_tags",
     "ai_quality_review",
+    "tag_corrections",  # 引用 inspirations/tags/ai_analysis_log，须先于三者删除
     "inspiration_bloggers",
     "inspiration_models",
     "inspiration_tags",

@@ -32,9 +32,13 @@ class TagOut(BaseModel):
 
 
 class InspirationTagOut(BaseModel):
-    """灵感-标签关联输出（含置信度）"""
+    """灵感-标签关联输出（含置信度与来源）。
+
+    source 供前端区分 AI 打标与手动标签（如仅对 AI 标签显示「标错了」入口）。
+    """
     tag: TagOut
     confidence: float
+    source: str = "ai_generated"
 
     model_config = {"from_attributes": True}
 
@@ -67,6 +71,34 @@ class BatchAddTagsRequest(BaseModel):
     )
     category: str = "free"
     source: str = "manual"
+
+
+class TagCorrectionRequest(BaseModel):
+    """AI 打标纠错反馈请求体（素材详情页「标错了」）。
+
+    reason 语义：
+    - multi：AI 多标（反馈同时删除该素材上该标签关联）
+    - missing：AI 漏标（反馈同时补建该标签关联）
+    - wrong_category：类别错（仅记录）
+    - bad_name：名称不规范（仅记录）
+    """
+
+    tag_name: Annotated[str, Field(min_length=1, max_length=64)]
+    reason: Literal["multi", "missing", "wrong_category", "bad_name"]
+    note: Annotated[str | None, Field(max_length=500)] = None
+    category: str = "free"  # 漏标补建标签时的类别（已存在标签沿用原类别）
+
+
+class TagCorrectionOut(BaseModel):
+    """纠错反馈写入结果。"""
+
+    recorded: int
+    reason: str
+    action: str  # removed / added / noted
+    applied: bool  # 是否真的变更了素材-标签关联
+    tag_id: int | None = None
+    tag_name: str
+    category: str
 
 
 class CropRequest(BaseModel):
@@ -210,6 +242,7 @@ def inspiration_to_out(inspiration: "Inspiration") -> InspirationOut:
         InspirationTagOut(
             tag=TagOut.model_validate(t.tag),
             confidence=t.confidence,
+            source=t.source,
         )
         for t in inspiration.tags
     ]

@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import async_session, get_db
 from app.models.inspiration import Inspiration
 from app.services import ai_dashboard_service
+from app.services import tag_correction_service
 from app.services.model_config import get_model_config
 from app.services.model_prompt import get_model_prompt
 from app.services.ollama_utils import is_ollama_running, start_ollama
@@ -28,6 +29,31 @@ router = APIRouter()
 async def quality_dashboard(db: AsyncSession = Depends(get_db)) -> dict:
     """分析质量总览：每日趋势、问题素材、标签覆盖率（聚合在 ai_dashboard_service）。"""
     return await ai_dashboard_service.collect_quality_dashboard(db)
+
+
+# ============ 打标纠错记录（AI 打标质量闭环） ============
+
+
+@router.get("/tag-corrections")
+async def list_tag_corrections(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
+    reason: str | None = Query(None, description="按原因筛选：multi/missing/wrong_category/bad_name"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """纠错反馈记录列表（分页，按时间倒序）。"""
+    return await tag_correction_service.list_tag_corrections(
+        db, page=page, size=size, reason=reason
+    )
+
+
+@router.get("/tag-corrections/stats")
+async def tag_correction_stats(
+    days: int = Query(30, ge=1, le=365, description="统计窗口天数"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """纠错统计：按原因 / 动作 / 提示词版本聚合（数据洞察页消费）。"""
+    return await tag_correction_service.tag_correction_stats(db, days=days)
 
 
 # ============ 单图测试 ============

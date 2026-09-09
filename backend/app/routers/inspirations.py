@@ -19,6 +19,8 @@ from app.schemas.inspiration import (
     InspirationUpdate,
     InspirationTagOut,
     MoveToTrashRequest,
+    TagCorrectionOut,
+    TagCorrectionRequest,
     TagOut,
     analysis_status_from_logs,
     inspiration_to_out,
@@ -30,6 +32,7 @@ from app.schemas.person import (
     PersonLinkRequest,
 )
 from app.services import inspiration_service
+from app.services import tag_correction_service
 from app.services.person_service import blogger_service, model_service
 from app.services.blogger_face import (
     delete_detection,
@@ -525,6 +528,27 @@ async def remove_inspiration_tag(
 ) -> dict:
     """解除素材与某个标签的关联（不删除标签本身）。"""
     return await inspiration_service.remove_inspiration_tag(db, inspiration_id, tag_id)
+
+
+@router.post("/{inspiration_id}/tag-corrections", response_model=TagCorrectionOut)
+async def record_tag_correction(
+    inspiration_id: str,
+    payload: TagCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """记录 AI 打标纠错反馈（素材详情页「标错了」）。
+
+    反馈即动作：multi（AI 多标）删除该关联、missing（AI 漏标）补建关联、
+    wrong_category / bad_name 仅记录；同时冗余当次分析的 prompt 版本供看板聚合。
+    """
+    return await tag_correction_service.record_tag_correction(
+        db,
+        inspiration_id,
+        payload.tag_name,
+        payload.reason,
+        note=payload.note,
+        category=payload.category,
+    )
 
 
 # ── 人物关联（对标 tag 关联写法；关联用 person_id 规避同名歧义）──
