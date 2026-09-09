@@ -18,6 +18,41 @@ export interface PersonFrequencyItem {
   count: number
 }
 
+/** 提示词版本质量指标（按「提示词版本 × 模型」聚合） */
+export interface PromptQualityItem {
+  prompt_version: string | null
+  /** 可读版本名（当前提示词 / 版本 #N / 未登记版本） */
+  version_label: string
+  model_name: string | null
+  analyses: number
+  successes: number
+  success_rate: number
+  /** 成功分析的平均标签数（基于结构化快照） */
+  avg_tags: number
+  corrections: number
+  /** 每百次分析的纠错反馈数 */
+  correction_rate: number
+  /** 裸词率（仅请求 include_bare_rate 时返回，采样重放原始响应） */
+  bare_rate?: number
+  last_used_at: string | null
+}
+
+/** 提示词版本质量对比（数据洞察页；includeBareRate 会重放原始响应，较慢） */
+export async function fetchPromptQuality(
+  days = 30,
+  includeBareRate = false,
+): Promise<{
+  days: number
+  total_versions: number
+  include_bare_rate: boolean
+  items: PromptQualityItem[]
+}> {
+  const { data } = await apiClient.get('/ai/prompt-quality', {
+    params: { days, include_bare_rate: includeBareRate },
+  })
+  return data
+}
+
 /** 导出全部素材为 CSV 并触发浏览器下载（走 apiClient 以携带 API Key 认证头） */
 export async function exportInspirationsCsv(): Promise<void> {
   const res = await apiClient.get<Blob>('/admin/export', { responseType: 'blob' })

@@ -8,6 +8,7 @@ import AdminVectorPanel from '@/components/admin/AdminVectorPanel.vue'
 import AdminExportPanel from '@/components/admin/AdminExportPanel.vue'
 import AdminTrendChart from '@/components/admin/AdminTrendChart.vue'
 import AdminPersonFrequency from '@/components/admin/AdminPersonFrequency.vue'
+import AdminPromptQuality from '@/components/admin/AdminPromptQuality.vue'
 import AdminAuditLog from '@/components/admin/AdminAuditLog.vue'
 
 const router = useRouter()
@@ -51,6 +52,7 @@ watch(activeTab, (tab) => {
           <admin-export-panel />
           <admin-trend-chart />
           <admin-person-frequency />
+          <admin-prompt-quality class="reports-full" />
           <admin-audit-log class="reports-full" />
         </div>
       </a-tab-pane>

@@ -221,3 +221,234 @@ async def collect_quality_dashboard(db: AsyncSession) -> dict:
         "error_distribution": await _error_distribution(db),
         "failed_items": await _failed_items(db),
     }
+
+
+# ============ 提示词版本质量对比（AI 打标质量闭环 P2） ============
+
+
+def _prompt_hash(prompt: str) -> str:
+    """Prompt 内容哈希前 8 位（与 ai_analysis_log.prompt_version 写入口径一致）。"""
+    import hashlib
+
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:8]
+
+
+def _version_labels() -> dict[str, str]:
+    """构建 prompt_version 哈希 → 可读标签的映射。
+
+    来源：prompt_configs.json 的当前提示词（标记「当前」）与
+    prompt_versions.json 的历史版本（按模型内序号标记），让看板不必显示裸哈希。
+    """
+    import json
+    from pathlib import Path
+
+    from app.services.model_prompt import get_all_model_prompts
+
+    labels: dict[str, str] = {}
+    for model, prompt in get_all_model_prompts().items():
+        if prompt:
+            labels.setdefault(_prompt_hash(prompt), f"当前提示词（{model}）")
+
+    versions_file = Path(__file__).resolve().parent.parent.parent / "prompt_versions.json"
+    if versions_file.exists():
+        try:
+            data = json.loads(versions_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict):
+            for model, versions in data.items():
+                if not isinstance(versions, list):
+                    continue
+                for idx, item in enumerate(versions, 1):
+                    prompt = item.get("prompt") if isinstance(item, dict) else None
+                    if prompt:
+                        labels.setdefault(_prompt_hash(prompt), f"版本 #{idx}（{model}）")
+    return labels
+
+
+def _collect_raw_names(tags_data: dict) -> list[str]:
+    """收集模型原始输出中的全部名称候选（含会被合规规则丢弃的裸词）。
+
+    用于计算「裸词率」——快照是过滤后的结果，看不到模型原始的命名质量，
+    必须回到 raw_response 重放。
+    """
+    from app.services.ai_parser import extract_tag_names
+
+    names: list[str] = []
+    items = tags_data.get("items") or []
+    if not isinstance(items, list):
+        items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_type = item.get("type", "")
+        if isinstance(raw_type, list):
+            raw_type = raw_type[0] if raw_type else ""
+        if str(raw_type).strip():
+            names.append(str(raw_type).strip())
+        features = item.get("features", [])
+        if isinstance(features, str):
+            features = [
+                p.strip()
+                for p in features.replace("，", ",").replace("、", ",").split(",")
+                if p.strip()
+            ]
+        for feat in features if isinstance(features, list) else []:
+            names.extend(n for n in extract_tag_names(feat) if n)
+    for key in (
+        "style", "fit", "design_detail", "material", "attributes",
+        "atmosphere", "expression", "leg_posture",
+    ):
+        values = tags_data.get(key) or []
+        if not isinstance(values, list):
+            values = [values] if values else []
+        for value in values:
+            names.extend(n for n in extract_tag_names(value) if n)
+    return names
+
+
+async def _bare_word_rate(
+    db: AsyncSession,
+    prompt_version: str | None,
+    model_name: str | None,
+    since: datetime,
+    sample: int = 100,
+) -> float:
+    """采样重放该版本最近的原始响应，计算裸词率（%）＝命中合规规则的名称占比。
+
+    仅取最近 sample 条成功日志，避免全量重放拖慢接口；样本为 0 时返回 0。
+    """
+    from app.services.ai_parser import parse_analysis_response
+    from app.utils.tag_compliance import classify_noncompliant
+
+    query = (
+        select(AIAnalysisLog.raw_response)
+        .where(
+            analysis_log_filter(),
+            AIAnalysisLog.created_at >= since,
+            AIAnalysisLog.error.is_(None),
+            AIAnalysisLog.raw_response.isnot(None),
+        )
+        .order_by(AIAnalysisLog.id.desc())
+        .limit(sample)
+    )
+    if prompt_version is None:
+        query = query.where(AIAnalysisLog.prompt_version.is_(None))
+    else:
+        query = query.where(AIAnalysisLog.prompt_version == prompt_version)
+    if model_name is not None:
+        query = query.where(AIAnalysisLog.model_name == model_name)
+
+    rows = (await db.execute(query)).scalars().all()
+    total = 0
+    bare = 0
+    for raw in rows:
+        tags_data = parse_analysis_response(raw or "")
+        if not tags_data:
+            continue
+        for name in _collect_raw_names(tags_data):
+            total += 1
+            if classify_noncompliant(name):
+                bare += 1
+    return round(bare / total * 100, 2) if total else 0.0
+
+
+async def collect_prompt_quality(
+    db: AsyncSession,
+    days: int = 30,
+    include_bare_rate: bool = False,
+) -> dict:
+    """按「提示词版本 × 模型」聚合打标质量指标（数据洞察页消费）。
+
+    指标口径：
+    - analyses / successes / success_rate：窗口内标签分析次数与成功率；
+    - avg_tags：成功分析的**平均标签数**（基于 ai_extracted_tags 结构化快照）；
+    - corrections / correction_rate：窗口内纠错反馈数与「每百次分析纠错数」
+      （来自 tag_corrections，按 prompt_version 冗余聚合）；
+    - bare_rate（可选）：采样重放 raw_response 计算的裸词率，反映模型原始命名质量。
+
+    参数:
+        days: 统计窗口天数
+        include_bare_rate: 是否计算裸词率（需重放原始响应，较慢，默认关闭）
+    """
+    from app.models.inspiration import AIAnalysisTag
+    from app.models.tag_correction import TagCorrection
+
+    since = utcnow() - timedelta(days=days)
+
+    rows = (
+        await db.execute(
+            select(
+                AIAnalysisLog.prompt_version,
+                AIAnalysisLog.model_name,
+                func.count().label("total"),
+                func.sum(case((AIAnalysisLog.error.is_(None), 1), else_=0)).label("success"),
+                func.max(AIAnalysisLog.created_at).label("last_used"),
+            )
+            .where(analysis_log_filter(), AIAnalysisLog.created_at >= since)
+            .group_by(AIAnalysisLog.prompt_version, AIAnalysisLog.model_name)
+            .order_by(func.count().desc())
+            .limit(50)
+        )
+    ).all()
+
+    # 快照标签数（分母用成功次数，快照仅在成功且非空时写入）
+    tag_rows = (
+        await db.execute(
+            select(
+                AIAnalysisLog.prompt_version,
+                AIAnalysisLog.model_name,
+                func.count(AIAnalysisTag.id),
+            )
+            .join(AIAnalysisTag, AIAnalysisTag.log_id == AIAnalysisLog.id)
+            .where(analysis_log_filter(), AIAnalysisLog.created_at >= since)
+            .group_by(AIAnalysisLog.prompt_version, AIAnalysisLog.model_name)
+        )
+    ).all()
+    tag_counts = {(r[0], r[1]): r[2] for r in tag_rows}
+
+    # 纠错反馈数（按记录时冗余的 prompt_version / model_name 聚合）
+    corr_rows = (
+        await db.execute(
+            select(
+                TagCorrection.prompt_version,
+                TagCorrection.model_name,
+                func.count(),
+            )
+            .where(TagCorrection.created_at >= since)
+            .group_by(TagCorrection.prompt_version, TagCorrection.model_name)
+        )
+    ).all()
+    corr_counts = {(r[0], r[1]): r[2] for r in corr_rows}
+
+    labels = _version_labels()
+    items: list[dict] = []
+    for version, model, total, success, last_used in rows:
+        success = success or 0
+        corrections = corr_counts.get((version, model), 0)
+        tag_total = tag_counts.get((version, model), 0)
+        item = {
+            "prompt_version": version,
+            # 历史日志的提示词可能已不在版本库中：回退显示哈希前缀，避免多行同名
+            "version_label": labels.get(
+                version or "", f"未登记版本（{version[:8] if version else '无'}）"
+            ),
+            "model_name": model,
+            "analyses": total,
+            "successes": success,
+            "success_rate": round(success / total * 100, 1) if total else 0.0,
+            "avg_tags": round(tag_total / success, 1) if success else 0.0,
+            "corrections": corrections,
+            "correction_rate": round(corrections / total * 100, 2) if total else 0.0,
+            "last_used_at": format_utc(last_used),
+        }
+        if include_bare_rate:
+            item["bare_rate"] = await _bare_word_rate(db, version, model, since)
+        items.append(item)
+
+    return {
+        "days": days,
+        "total_versions": len(items),
+        "include_bare_rate": include_bare_rate,
+        "items": items,
+    }

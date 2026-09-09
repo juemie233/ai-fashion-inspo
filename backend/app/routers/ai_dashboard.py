@@ -31,6 +31,23 @@ async def quality_dashboard(db: AsyncSession = Depends(get_db)) -> dict:
     return await ai_dashboard_service.collect_quality_dashboard(db)
 
 
+@router.get("/prompt-quality")
+async def prompt_quality(
+    days: int = Query(30, ge=1, le=365, description="统计窗口天数"),
+    include_bare_rate: bool = Query(
+        False, description="是否计算裸词率（需重放原始响应，较慢）"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """提示词版本质量对比：成功率 / 平均标签数 / 纠错率（可选裸词率）。
+
+    按「提示词版本 × 模型」聚合，供数据洞察页挑选最优提示词。
+    """
+    return await ai_dashboard_service.collect_prompt_quality(
+        db, days=days, include_bare_rate=include_bare_rate
+    )
+
+
 # ============ 打标纠错记录（AI 打标质量闭环） ============
 
 
