@@ -3,6 +3,7 @@
 不触碰真实素材库：库内哈希与博主用临时 sqlite 或直接注入，目录用 tmp_path 构造。
 """
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -230,3 +231,285 @@ def test_load_functions_tolerate_missing_db(tmp_path):
     missing = tmp_path / "不存在.db"
     assert f2.load_library_hashes(missing) == set()
     assert f2.load_douyin_bloggers(missing) == {}
+
+
+# ── 平台 ID 合成（受 source_platform_id 全局唯一索引约束）──
+
+
+def test_platform_id_unique_per_file_and_groups_by_work():
+    """同一作品的多张图必须各自唯一（否则撞唯一索引），但共享作品前缀。"""
+    img1 = f2.parse_media_filename(Path("A/2025-01-01 10-00-00_标题_image_1.webp"), "A")
+    img2 = f2.parse_media_filename(Path("A/2025-01-01 10-00-00_标题_image_2.webp"), "A")
+    video = f2.parse_media_filename(Path("A/2025-02-02 11-00-00_另一条_video.mp4"), "A")
+
+    ids = [f2.platform_id_for(x) for x in (img1, img2, video)]
+    assert len(set(ids)) == 3
+    assert f2.platform_id_for(img1) == f2.platform_id_for(img1)  # 稳定 → 天然幂等
+    prefix = f"f2:{f2.work_hash(img1.work_key)}#"
+    assert ids[0].startswith(prefix) and ids[1].startswith(prefix)
+    assert not ids[2].startswith(prefix)
+
+
+def test_platform_id_image_and_live_index_do_not_collide():
+    """回归（试跑实测缺陷）：同一作品的静态图与 live 分段都用序号 1，
+    只用数字会让两者平台 ID 相同而撞唯一索引，导致 live 分段整批写入失败。"""
+    img1 = f2.parse_media_filename(Path("A/2025-01-01 10-00-00_#jk_image_1.webp"), "A")
+    live1 = f2.parse_media_filename(Path("A/2025-01-01 10-00-00_#jk_live_1.mp4"), "A")
+    assert img1.work_key == live1.work_key  # 同一作品
+    assert f2.platform_id_for(img1) != f2.platform_id_for(live1)
+
+
+def test_insert_sql_columns_match_values():
+    """回归：列清单 / 值 / 占位符必须一一对应（历史事故：漏占位符导致静默不落库）。"""
+    sql = f2.INSERT_F2_SQL
+    columns = sql.split("(", 1)[1].split(")", 1)[0].count(",") + 1
+    values = sql.split("VALUES", 1)[1].strip().rstrip(";")
+    values = values[values.index("(") + 1 : values.rindex(")")]
+    # 逗号分隔的顶层值数量（本 SQL 的值里不含函数括号，逗号即分隔符）
+    value_count = len([v for v in values.split(",") if v.strip()])
+    placeholders = values.count("?")
+    assert columns == value_count, f"列 {columns} 个但值 {value_count} 个"
+    assert placeholders == 12  # 其余为 NULL/0/'pending' 字面量
+
+
+# ── 导入计划：四层去重 ──
+
+
+def _decisions(files, library_hashes=None, platform_ids=None, **kwargs):
+    return f2.build_import_plan(
+        files=files,
+        library_hashes=library_hashes or set(),
+        existing_platform_ids=platform_ids or set(),
+        **kwargs,
+    )
+
+
+def test_plan_skips_content_already_in_library(tmp_path):
+    files = _fake_tree(tmp_path)
+    img1 = next(f for f in files if f.path.name.endswith("image_1.webp"))
+    decisions, skipped, _ = _decisions(files, library_hashes={f2.sha256_file(img1.path)})
+    by_name = {d.item.path.name: d for d in decisions}
+    assert by_name[img1.path.name].action == "skip"
+    assert by_name[img1.path.name].reason == "已在库（内容相同）"
+    assert skipped["已在库（内容相同）"] == 1
+    assert sum(1 for d in decisions if d.action == "import") == 2
+
+
+def test_plan_skips_duplicate_content_within_batch(tmp_path):
+    """同一内容在一次导入里出现两次（重复下载/多目录）只入一次。"""
+    a = _write(tmp_path / "A" / "2025-01-01 10-00-00_标题_image_1.webp", b"same")
+    _write(tmp_path / "B" / "2025-01-01 10-00-00_标题_image_1.webp", b"same")
+    files = f2.scan_directory(tmp_path)
+    decisions, skipped, _ = _decisions(files)
+    imported = [d for d in decisions if d.action == "import"]
+    assert len(imported) == 1
+    assert skipped["批次内重复（同内容已处理）"] == 1
+    assert a  # 两个来源目录都在扫描结果里
+    assert {d.item.author_dir for d in decisions} == {"A", "B"}
+
+
+def test_plan_skips_when_platform_id_exists(tmp_path):
+    """幂等兜底：内容哈希口径变化时，平台 ID 命中也能挡住重复入库。"""
+    files = _fake_tree(tmp_path)
+    ids = {f2.platform_id_for(f) for f in files}
+    decisions, skipped, _ = _decisions(files, platform_ids=ids)
+    assert all(d.action == "skip" for d in decisions)
+    assert skipped["已在库（平台 ID 命中）"] == 3
+
+
+def test_plan_skip_live_and_author_filter(tmp_path):
+    _write(tmp_path / "里香1√" / "2025-01-01 10-00-00_#jk_live_1.mp4", b"live")
+    _write(tmp_path / "里香1√" / "2025-01-01 10-00-00_#jk_image_1.webp", b"img")
+    _write(tmp_path / "别的博主" / "2025-02-02 11-00-00_#通勤_video.mp4", b"vid")
+    files = f2.scan_directory(tmp_path)
+
+    decisions, skipped, _ = _decisions(files, skip_live=True)
+    assert skipped["按 --skip-live 跳过 live 分段"] == 1
+
+    decisions, skipped, _ = _decisions(files, authors={"里香"})
+    imported = {d.item.author_dir for d in decisions if d.action == "import"}
+    assert imported == {"里香1√"}
+    assert skipped["作者不在 --authors 范围"] == 1
+    # 目录名直接传入同样生效
+    decisions, _, _ = _decisions(files, authors={"别的博主"})
+    assert {d.item.author_dir for d in decisions if d.action == "import"} == {"别的博主"}
+
+
+def test_plan_limit_counts_works_not_files(tmp_path):
+    """--limit 的配额按「作品」计：一个图集作品只吃一个配额。
+
+    目录名用 A/Z 前缀保证扫描顺序确定（中文目录名的排序不直观）。
+    """
+    _write(tmp_path / "A账号" / "2025-01-01 10-00-00_#jk_image_1.webp", b"g1")
+    _write(tmp_path / "A账号" / "2025-01-01 10-00-00_#jk_image_2.webp", b"g2")
+    _write(tmp_path / "Z账号" / "2025-02-02 11-00-00_#通勤_video.mp4", b"v1")
+    files = f2.scan_directory(tmp_path)
+
+    decisions, skipped, deferred = _decisions(files, limit=1)
+    assert sum(1 for d in decisions if d.action == "import") == 2  # 图集 2 张＝1 个配额
+    assert deferred == 1
+    assert skipped["超出 --limit 未处理"] == 1
+
+
+def test_plan_binds_blogger_only_when_unique(tmp_path):
+    files = _fake_tree(tmp_path)
+    one = _decisions(files, bloggers={"里香": [{"id": 302, "name": "里香"}]})[0]
+    assert {d.blogger_id for d in one if d.item.author_dir == "里香1√"} == {302}
+
+    many = _decisions(
+        files,
+        bloggers={"里香": [{"id": 302, "name": "里香"}, {"id": 303, "name": "里香2√"}]},
+    )[0]
+    assert {d.blogger_id for d in many if d.item.author_dir == "里香1√"} == {None}
+
+
+# ── 真导入（临时 storage + 临时库，图片用真实 JPEG 以通过类型校验）──
+
+
+def _jpeg(path: Path, color: str = "red") -> Path:
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (48, 48), color).save(path, "JPEG")
+    return path
+
+
+def _import_lib(tmp_path: Path) -> Path:
+    """建最小素材库表结构（列与 INSERT_F2_SQL 对齐）。
+
+    按方案 A，f2 导入**不写话题存档表**，故这里不建 scraper_hashtags：
+    #话题 随 caption 落库（见 test_apply_import_writes_material_files_and_rows）。
+    """
+    db = tmp_path / "lib.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE inspirations ("
+        "id TEXT PRIMARY KEY, source_type TEXT, source_url TEXT, source_author TEXT, "
+        "source_platform_id TEXT UNIQUE, file_path TEXT, thumbnail_path TEXT, "
+        "media_type TEXT, dominant_colors TEXT, is_favorite INTEGER, quality_status TEXT, "
+        "rating INTEGER, is_ai_generated INTEGER, content_hash TEXT, caption TEXT, "
+        "scraper_task_id INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE inspiration_bloggers (inspiration_id TEXT, blogger_id INTEGER, "
+        "confidence REAL, UNIQUE(inspiration_id, blogger_id))"
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_apply_import_writes_material_files_and_rows(tmp_path):
+    """端到端：复制文件 → 建行（含正文/来源/平台 ID）→ 缩略图 → 博主关联。
+
+    按方案 A：不写话题存档表，#话题 随 caption 落库（可被文本向量/语义搜索命中）。
+    """
+    root = tmp_path / "f2"
+    _jpeg(root / "里香1√" / "2025-01-01 10-00-00_#jk_#穿搭_image_1.jpg")
+    _jpeg(root / "里香1√" / "2025-01-01 10-00-00_#jk_#穿搭_image_2.jpg", "blue")
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+
+    decisions, _, _ = _decisions(files, bloggers={"里香": [{"id": 302, "name": "里香"}]})
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=storage,
+    )
+
+    assert result["imported"] == 2 and result["failed"] == 0
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT source_type, source_author, source_platform_id, file_path, "
+        "thumbnail_path, media_type, quality_status, content_hash, caption, source_url "
+        "FROM inspirations"
+    ).fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row[0] == "douyin" and row[1] == "里香" and row[5] == "image"
+        assert row[6] == "pending"  # 采集类素材默认待质量审核
+        assert row[7]  # content_hash 已写入（去重主判据）
+        assert row[8] == "#jk #穿搭"  # 正文保留 #话题（不再单独写话题表）
+        assert row[9] is None  # source_url 留空（f2 无 aweme_id，不造伪链接）
+    assert len({r[2] for r in rows}) == 2  # 平台 ID 全局唯一
+    assert all(r[3].startswith("images/") for r in rows)
+    assert all(r[4] for r in rows)  # 缩略图已生成
+    assert (storage / rows[0][3]).exists()
+
+    assert conn.execute("SELECT COUNT(*) FROM inspiration_bloggers").fetchone()[0] == 2
+    # 不写话题存档表（方案 A）
+    tables = {
+        r[0]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert "scraper_hashtags" not in tables
+    conn.close()
+
+    # 批次清单落盘（可审计/可回滚）
+    assert result["batch_file"]
+    batch = json.loads(Path(result["batch_file"]).read_text(encoding="utf-8"))
+    assert len(batch["imported"]) == 2
+    assert batch["imported"][0]["platform_id"].startswith("f2:")
+    assert batch["imported"][0]["hashtags"] == ["jk", "穿搭"]  # 仅记录，不落表
+
+
+def test_apply_import_is_idempotent(tmp_path):
+    """重复运行：第二次全部被内容判重挡下，不产生新行。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+
+    first, _, _ = _decisions(f2.scan_directory(root))
+    f2.apply_import([d for d in first if d.action == "import"], db_path=db, storage_root=storage)
+
+    # 用更新后的库状态重算计划
+    second, skipped, _ = f2.build_import_plan(
+        files=f2.scan_directory(root),
+        library_hashes=f2.load_library_hashes(db),
+        existing_platform_ids=f2.load_library_platform_ids(db),
+    )
+    assert [d for d in second if d.action == "import"] == []
+    assert skipped["已在库（内容相同）"] == 1
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM inspirations").fetchone()[0] == 1
+    conn.close()
+
+
+def test_apply_import_records_failure_without_breaking_batch(tmp_path):
+    """非法文件（伪造扩展名）只跳过它自己，其余照常入库。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_好图_image_1.jpg")
+    bad = root / "A" / "2025-01-02 10-00-00_坏图_image_1.jpg"
+    bad.write_bytes(b"this is not an image")
+    db = _import_lib(tmp_path)
+
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+    )
+    assert result["imported"] == 1
+    assert result["failed"] == 1
+    assert "坏图" in result["errors"][0]["source_file"]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM inspirations").fetchone()[0] == 1
+    conn.close()
+
+
+def test_apply_import_no_thumbnails(tmp_path):
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    db = _import_lib(tmp_path)
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+    )
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT thumbnail_path FROM inspirations").fetchone()[0] is None
+    conn.close()

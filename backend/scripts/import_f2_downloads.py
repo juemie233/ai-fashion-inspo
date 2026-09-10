@@ -31,24 +31,46 @@
 用法
 ----
     cd backend
-    py scripts/import_f2_downloads.py --dry-run
-    py scripts/import_f2_downloads.py --dry-run --json report.json
+    python -m scripts.import_f2_downloads --dry-run           # 只出报表（默认）
+    python -m scripts.import_f2_downloads --apply             # 真导入（入库+绑博主+话题）
+    python -m scripts.import_f2_downloads --apply --authors 里香,娜娜瑜 --limit 500
+
+三条约定
+--------
+1. **导入不做标签分析**：本模块绝不调用 analyze_image，也不建向量。素材入库后
+   处于「未打标」状态，由现有的批量分析任务（一键）按需补——一次性 1.2 万张
+   要 8~41 小时 GPU，不该卡住「获取素材」这一步。
+2. **必须去重**（见 :func:`build_import_plan` 的四层判据），且重复运行幂等。
+3. **不写话题存档表**（``scraper_hashtags``）：正文里的 ``#话题`` 已经随
+   ``caption`` 落库，而 caption 参与文本向量（TEXT_EMBEDDING_FORMULA_VERSION=2），
+   语义搜索能命中，**零信息损失**；而话题库在 UI 侧只对小红书显示、唯一用途是
+   给「定时采集计划」提供候选关键词，与抖音素材入库无交集。故本路径不写入，
+   避免产生一批无处可用的数据。
 """
 
 import argparse
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 import sys
+import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-# 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于直接执行
+# 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import settings  # noqa: E402
+from app.services.file_service import (  # noqa: E402
+    _generate_image_thumbnail_sync,
+    validate_media,
+)
+
+from .scraper_common import utcnow  # noqa: E402
+from .scraper_download import extract_video_thumbnail_sync  # noqa: E402
 
 # ═══════════════════════════════════════════════════════════════
 #  常量
@@ -500,6 +522,377 @@ def print_report(report: dict, top_hashtags: int = 15) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  导入计划（去重判据）与落库
+# ═══════════════════════════════════════════════════════════════
+
+"""导入批次清单目录名（落在 storage/ 下，便于回滚与审计）。"""
+IMPORT_BATCH_DIRNAME = "import_batches"
+
+"""博主关联置信度：按作者目录名匹配（非人脸匹配），低于人脸匹配的可信度。"""
+AUTHOR_MATCH_CONFIDENCE = 0.9
+
+"""f2 导入的入库 INSERT。
+
+与采集路径的 INSERT_INSPIRATION_IMAGE_SQL 形状一致，两处差异说明：
+  - thumbnail_path 可写（本路径图片也生成缩略图），不再固定 NULL
+  - content_hash 对视频同样写入（f2 是本地文件，可低成本算哈希；采集路径的
+    视频走 URL 下载，历史实现留空）
+⚠ 列清单 / 值 / 占位符必须一一对应：历史事故（任务 #46）曾因漏占位符导致
+整条采集链路静默颗粒无收，本模块用测试锁死三者数量。
+"""
+INSERT_F2_SQL = (
+    "INSERT INTO inspirations (id, source_type, source_url, source_author, "
+    "source_platform_id, file_path, thumbnail_path, media_type, dominant_colors, "
+    "is_favorite, quality_status, rating, is_ai_generated, content_hash, caption, "
+    "scraper_task_id, created_at, updated_at) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 'pending', 0, 0, ?, ?, NULL, ?, ?)"
+)
+
+
+def work_hash(work_key: str) -> str:
+    """作品键 → 12 位短哈希（合成平台 ID 用，规避中文与长度超限）。"""
+    return hashlib.sha1(work_key.encode("utf-8")).hexdigest()[:12]
+
+
+def platform_id_for(item: ParsedFile) -> str:
+    """构造素材的 source_platform_id：``f2:{作品短哈希}#{序号}``。
+
+    ⚠ 为什么必须带**类型前缀**的序号：``ix_inspirations_source_platform_id``
+    是**全局唯一**索引（仅约束未删除素材，见 models/inspiration.py），同一
+    作品的多张图/多段视频不能共用一个平台 ID。序号还必须带类型——同一作品
+    常同时有静态图与 live 分段（``..._image_1.webp`` 与 ``..._live_1.mp4``），
+    只用数字会让两者都变成 ``#1`` 而撞唯一索引（试跑实测：live 分段整批失败）。
+
+    Args:
+        item: 已解析文件。
+
+    Returns:
+        稳定的平台 ID（同一文件重复计算结果一致 → 天然幂等）；
+        仍可按前缀 ``f2:{作品短哈希}#`` 聚合出「同一作品」的全部素材。
+    """
+    suffix = (
+        f"{item.kind}{item.index}" if item.kind in ("image", "live") else item.kind
+    )
+    return f"f2:{work_hash(item.work_key)}#{suffix}"
+
+
+@dataclass
+class ImportDecision:
+    """单个文件的导入决策。"""
+
+    item: ParsedFile
+    action: str  # import / skip
+    reason: str  # 跳过原因（action=import 时为空串）
+    platform_id: str
+    content_hash: str
+    blogger_id: int | None = None  # 匹配到的库内博主（未匹配为 None）
+
+
+def _skip_reason(
+    item: ParsedFile,
+    digest: str,
+    library_hashes: set[str],
+    seen_hashes: set[str],
+    existing_platform_ids: set[str],
+    skip_live: bool,
+) -> str:
+    """返回跳过原因（空串＝可以导入）；判据顺序即优先级。"""
+    if skip_live and item.kind == "live":
+        return "按 --skip-live 跳过 live 分段"
+    if digest in library_hashes:
+        return "已在库（内容相同）"
+    if digest in seen_hashes:
+        return "批次内重复（同内容已处理）"
+    if platform_id_for(item) in existing_platform_ids:
+        return "已在库（平台 ID 命中）"
+    return ""
+
+
+def build_import_plan(
+    files: list[ParsedFile],
+    library_hashes: set[str],
+    existing_platform_ids: set[str],
+    bloggers: dict[str, list[dict]] | None = None,
+    authors: set[str] | None = None,
+    limit: int | None = None,
+    skip_live: bool = False,
+    hash_cache: dict[Path, str] | None = None,
+) -> tuple[list[ImportDecision], dict[str, int], int]:
+    """决定每个文件「导入 / 跳过」——去重判据集中于此（纯函数，便于单测）。
+
+    去重分层（顺序即优先级，命中即跳过）：
+
+    1. **内容判重**：文件 SHA-256 命中库内 ``inspirations.content_hash``
+       （库内素材哈希覆盖率 100%，这是主判据，跨来源也有效）
+    2. **批次内判重**：同一批次里相同内容只入一次（重复下载 / 多目录同一文件）
+    3. **平台 ID 判重**：合成平台 ID 命中库内 ``source_platform_id``
+       （幂等兜底：即使哈希口径变化，重复运行也不会重复入库）
+    4. **参数过滤**：``--authors`` 只导指定作者、``--limit`` 限制作品数、
+       ``--skip-live`` 跳过 live 分段
+
+    作品维度：只要该作品还有待导入文件，就消耗一个 ``--limit`` 配额；
+    同一作品的全部文件共用同一博主关联。
+
+    Args:
+        files: 已解析文件列表。
+        library_hashes: 库内未删除素材的 content_hash 集合。
+        existing_platform_ids: 库内未删除素材的 source_platform_id 集合。
+        bloggers: 归一化博主名 → 博主列表（用于绑定；仅唯一候选才自动绑）。
+        authors: 只导入这些作者（归一化名或目录名），None 表示全部。
+        limit: 最多导入多少个作品。
+        skip_live: 是否跳过 live 实况分段视频。
+        hash_cache: 文件哈希缓存（跨调用复用，避免重复读盘）。
+
+    Returns:
+        (决策列表, 跳过原因计数, 因超出 limit 未处理的作品数)
+    """
+    cache = hash_cache if hash_cache is not None else {}
+    bloggers = bloggers or {}
+    wanted = {normalize_author(a) for a in authors} if authors else None
+
+    decisions: list[ImportDecision] = []
+    skipped: Counter = Counter()
+    seen_hashes: set[str] = set()
+    accepted_works = 0
+    deferred_works = 0
+
+    for _work_key, items in group_works(files).items():
+        digests: dict[Path, str] = {}
+        for item in items:
+            digest = cache.get(item.path)
+            if digest is None:
+                digest = sha256_file(item.path)
+                cache[item.path] = digest
+            digests[item.path] = digest
+
+        first = items[0]
+        if wanted is not None and first.author_key not in wanted and first.author_dir not in wanted:
+            skipped["作者不在 --authors 范围"] += len(items)
+            continue
+
+        reasons = [
+            _skip_reason(
+                item, digests[item.path], library_hashes, seen_hashes,
+                existing_platform_ids, skip_live,
+            )
+            for item in items
+        ]
+        if not any(not r for r in reasons):
+            for item, reason in zip(items, reasons):
+                skipped[reason] += 1
+                decisions.append(ImportDecision(
+                    item=item, action="skip", reason=reason,
+                    platform_id=platform_id_for(item), content_hash=digests[item.path],
+                ))
+            continue
+
+        if limit is not None and accepted_works >= limit:
+            for item in items:
+                skipped["超出 --limit 未处理"] += 1
+            deferred_works += 1
+            continue
+        accepted_works += 1
+
+        matched = bloggers.get(first.author_key) or []
+        blogger_id = matched[0]["id"] if len(matched) == 1 else None
+
+        for item, reason in zip(items, reasons):
+            digest = digests[item.path]
+            if reason:
+                skipped[reason] += 1
+                decisions.append(ImportDecision(
+                    item=item, action="skip", reason=reason,
+                    platform_id=platform_id_for(item), content_hash=digest,
+                    blogger_id=blogger_id,
+                ))
+                continue
+            seen_hashes.add(digest)
+            decisions.append(ImportDecision(
+                item=item, action="import", reason="",
+                platform_id=platform_id_for(item), content_hash=digest,
+                blogger_id=blogger_id,
+            ))
+
+    return decisions, dict(skipped), deferred_works
+
+
+def load_library_platform_ids(db_path: Path | None = None) -> set[str]:
+    """读取库内未删除素材的 source_platform_id 集合（导入幂等兜底）。
+
+    Args:
+        db_path: 数据库路径（缺省用 :func:`library_db_path`）。
+
+    Returns:
+        平台 ID 集合（空值与已删除素材不计入）。
+    """
+    path = db_path or library_db_path()
+    if not path.exists():
+        return set()
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return {
+            row[0]
+            for row in conn.execute(
+                "SELECT source_platform_id FROM inspirations "
+                "WHERE deleted_at IS NULL AND source_platform_id IS NOT NULL"
+            )
+        }
+    finally:
+        conn.close()
+
+
+def apply_import(
+    decisions: list[ImportDecision],
+    db_path: Path | None = None,
+    storage_root: Path | None = None,
+    make_thumbnails: bool = True,
+    batch_dir: Path | None = None,
+) -> dict:
+    """把决策为 import 的文件复制进素材库并写库——**不做标签分析、不建向量**。
+
+    步骤：合法性校验 → 复制文件 → 生成缩略图 → INSERT（含 content_hash /
+    caption / 平台 ID / 来源作者）→ 博主关联 → 落批次清单（不写话题存档表，
+    理由见模块 docstring 第 3 条）。单条失败只回滚该条（删掉已复制的文件），
+    不影响整批。
+
+    Args:
+        decisions: :func:`build_import_plan` 的结果（其中 action=skip 的会被忽略）。
+        db_path: 素材库路径（缺省 :func:`library_db_path`）。
+        storage_root: 存储根目录（缺省 settings.storage_root）。
+        make_thumbnails: 是否生成缩略图（图片走 PIL、视频走 ffmpeg 首帧）。
+        batch_dir: 批次清单目录（缺省 storage/import_batches）。
+
+    Returns:
+        统计字典：imported / failed / ids / errors / batch_file。
+    """
+    db_path = db_path or library_db_path()
+    storage_root = storage_root or settings.storage_root
+    batch_dir = batch_dir or (storage_root / IMPORT_BATCH_DIRNAME)
+    today = utcnow().strftime("%Y-%m")
+    now_str = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = sqlite3.connect(str(db_path))
+
+    imported_ids: list[str] = []
+    imported_rows: list[dict] = []
+    errors: list[dict] = []
+
+    for decision in decisions:
+        if decision.action != "import":
+            continue
+        item = decision.item
+        dest: Path | None = None
+        thumb: str | None = None
+        try:
+            # 合法性/体积校验（与上传路径同一套规则），不合格的直接跳过
+            validate_media(item.path)
+
+            sub_dir = "videos" if item.media_type == "video" else "images"
+            dest_dir = storage_root / sub_dir / today
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / f"{uuid.uuid4().hex[:16]}{item.path.suffix.lower()}"
+            shutil.copy2(item.path, dest)
+
+            if make_thumbnails:
+                if item.media_type == "video":
+                    thumb = extract_video_thumbnail_sync(dest, today)
+                else:
+                    # 显式传入 storage 下的缩略图目录：与素材文件同根，便于整体迁移/清理
+                    thumb = _generate_image_thumbnail_sync(
+                        dest, thumbs_dir=storage_root / "thumbnails"
+                    )
+
+            rel_path = f"{sub_dir}/{today}/{dest.name}"
+            insp_id = str(uuid.uuid4())
+            conn.execute(
+                INSERT_F2_SQL,
+                (
+                    insp_id,
+                    "douyin",
+                    None,  # source_url：f2 未提供 aweme_id，留空而非造伪链接
+                    item.author_key or item.author_dir,
+                    decision.platform_id,
+                    rel_path,
+                    thumb,
+                    item.media_type,
+                    decision.content_hash,
+                    item.caption or None,
+                    now_str,
+                    now_str,
+                ),
+            )
+            if decision.blogger_id:
+                conn.execute(
+                    "INSERT OR IGNORE INTO inspiration_bloggers "
+                    "(inspiration_id, blogger_id, confidence) VALUES (?, ?, ?)",
+                    (insp_id, decision.blogger_id, AUTHOR_MATCH_CONFIDENCE),
+                )
+            conn.commit()
+
+            imported_ids.append(insp_id)
+            imported_rows.append(
+                {
+                    "inspiration_id": insp_id,
+                    "file_path": rel_path,
+                    "thumbnail_path": thumb,
+                    "source_file": str(item.path),
+                    "platform_id": decision.platform_id,
+                    "author_dir": item.author_dir,
+                    "work_key": item.work_key,
+                    "media_type": item.media_type,
+                    "caption": item.caption[:200],
+                    "hashtags": item.hashtags,
+                    "blogger_id": decision.blogger_id,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条失败不影响整批
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            for leftover in (dest,):
+                if leftover is not None:
+                    try:
+                        leftover.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            errors.append({"source_file": str(item.path), "error": str(exc)[:200]})
+
+    # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚
+    batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}"
+    batch_file = batch_dir / f"{batch_id}.json"
+    try:
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        batch_file.write_text(
+            json.dumps(
+                {
+                    "batch_id": batch_id,
+                    "created_at": now_str,
+                    "db": str(db_path),
+                    "storage_root": str(storage_root),
+                    "imported": imported_rows,
+                    "errors": errors,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001
+        errors.append({"source_file": "(批次清单)", "error": str(exc)[:200]})
+        batch_file = None  # type: ignore[assignment]
+    conn.close()
+
+    return {
+        "imported": len(imported_ids),
+        "failed": len(errors),
+        "ids": imported_ids,
+        "errors": errors,
+        "batch_file": str(batch_file) if batch_file else "",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
 #  入口
 # ═══════════════════════════════════════════════════════════════
 
@@ -514,7 +907,7 @@ def main(argv: list[str] | None = None) -> int:
         进程退出码。
     """
     parser = argparse.ArgumentParser(
-        description="扫描 f2 抖音下载目录并输出与素材库的重合面报表（只读）"
+        description="f2 抖音下载目录 → 素材库：扫描报表（缺省，只读）或真导入（--apply）"
     )
     parser.add_argument(
         "--root",
@@ -523,11 +916,37 @@ def main(argv: list[str] | None = None) -> int:
         help=f"f2 的 post 目录（默认 {DEFAULT_F2_ROOT}）",
     )
     parser.add_argument(
-        "--dry-run",
+        "--apply",
         action="store_true",
-        help="只扫描出报表（当前为默认行为，显式写出便于后续加 --apply）",
+        help="真导入（写库：入库 + 博主关联 + 话题存档）；缺省只出报表、不写库",
     )
-    parser.add_argument("--json", type=Path, default=None, help="把报表另存为 JSON")
+    parser.add_argument(
+        "--authors",
+        default=None,
+        help="只导入这些作者（归一化名或目录名，逗号分隔），缺省全部",
+    )
+    parser.add_argument("--limit", type=int, default=None, help="最多导入多少个作品")
+    parser.add_argument(
+        "--skip-live", action="store_true", help="跳过 live 实况的分段视频"
+    )
+    parser.add_argument(
+        "--no-thumbnails",
+        action="store_true",
+        help="不生成缩略图（更快；列表页将缺预览图）",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="素材库路径（缺省取 settings；可指向库副本先试跑）",
+    )
+    parser.add_argument(
+        "--storage-root",
+        type=Path,
+        default=None,
+        help="存储根目录（缺省取 settings.storage_root；试跑时可指向临时目录）",
+    )
+    parser.add_argument("--json", type=Path, default=None, help="把报表/计划另存为 JSON")
     parser.add_argument("--top-hashtags", type=int, default=15, help="展示的热门话题条数")
     parser.add_argument(
         "--sec-per-tag",
@@ -537,25 +956,103 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    db_path = args.db or library_db_path()
     files = scan_directory(args.root)
     if not files:
         print(f"未在 {args.root} 找到可识别的 f2 产物文件")
         return 1
 
-    report = build_report(
-        root=args.root,
-        files=files,
-        library_hashes=load_library_hashes(),
-        bloggers=load_douyin_bloggers(),
-        sec_per_tag=args.sec_per_tag,
+    hash_cache: dict[Path, str] = {}
+    library_hashes = load_library_hashes(db_path)
+    bloggers = load_douyin_bloggers(db_path)
+
+    # ── 缺省：只读报表 ──
+    if not args.apply:
+        report = build_report(
+            root=args.root,
+            files=files,
+            library_hashes=library_hashes,
+            bloggers=bloggers,
+            hash_cache=hash_cache,
+            sec_per_tag=args.sec_per_tag,
+        )
+        print_report(report, top_hashtags=args.top_hashtags)
+        if args.json:
+            args.json.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"\n报表已写入 {args.json}")
+        return 0
+
+    # ── 真导入 ──
+    if not db_path.exists():
+        print(f"素材库不存在: {db_path}")
+        return 1
+
+    authors = (
+        {a.strip() for a in args.authors.split(",") if a.strip()}
+        if args.authors
+        else None
     )
-    print_report(report, top_hashtags=args.top_hashtags)
+    decisions, skipped, deferred_works = build_import_plan(
+        files=files,
+        library_hashes=library_hashes,
+        existing_platform_ids=load_library_platform_ids(db_path),
+        bloggers=bloggers,
+        authors=authors,
+        limit=args.limit,
+        skip_live=args.skip_live,
+        hash_cache=hash_cache,
+    )
+    to_import = [d for d in decisions if d.action == "import"]
+    work_count = len({d.item.work_key for d in to_import})
+
+    print(f"\n=== 导入计划（库: {db_path}）===")
+    print(f"待导入 {len(to_import)} 个文件 / {work_count} 个作品")
+    for reason, count in sorted(skipped.items(), key=lambda x: -x[1]):
+        print(f"   跳过 {count:>6}  {reason}")
+    if deferred_works:
+        print(f"   因 --limit 未处理的作品 {deferred_works} 个")
+    if not to_import:
+        print("没有需要导入的文件（全部已在库或已被过滤）")
+        return 0
+
+    result = apply_import(
+        to_import,
+        db_path=db_path,
+        storage_root=args.storage_root or settings.storage_root,
+        make_thumbnails=not args.no_thumbnails,
+    )
+    print("\n=== 导入完成 ===")
+    print(f"入库 {result['imported']} 个，失败 {result['failed']} 个")
+    if result["batch_file"]:
+        print(f"批次清单: {result['batch_file']}（可用于审计与回滚）")
+    for err in result["errors"][:10]:
+        print(f"   ✗ {err['source_file']}: {err['error']}")
+    print(
+        "\n注意：按约定本次导入**不做标签分析、不建向量**——素材已入库但未打标，"
+        "语义搜索/相似推荐要等打标后才可用；打标请用现有「批量分析任务」一键触发。"
+    )
 
     if args.json:
         args.json.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(
+                {
+                    "db": str(db_path),
+                    "planned": len(to_import),
+                    "works": work_count,
+                    "skipped": skipped,
+                    "deferred_works": deferred_works,
+                    "result": {
+                        k: v for k, v in result.items() if k != "ids"
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
-        print(f"\n报表已写入 {args.json}")
+        print(f"\n导入计划与结果已写入 {args.json}")
     return 0
 
 
