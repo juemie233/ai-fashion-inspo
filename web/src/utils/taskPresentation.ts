@@ -2,10 +2,11 @@
  * 任务展示纯函数：把后端任务队列 / 采集任务的原始数据归一化为 UnifiedTask，
  * 并把任务 result 汇总成直观的完成文案。
  *
- * 这是 deep module：interface 只暴露 summarizeResult / normalizeQueueTask /
- * normalizeScraperTask，内部封装了 6 种任务类型的结果拼装、状态归一化、
- * 平台与关键词展示、max_count 解析等规则。纯数据 → 数据，不接触 apiClient、
- * 路由或全局状态，因此可用一个普通对象入参在 vitest 中断言，无需 mock HTTP。
+ * 这是 deep module：interface 只暴露 summarizeResult / describeRunningTask /
+ * normalizeQueueTask / normalizeScraperTask，内部封装了各类任务的结果拼装、
+ * 运行中阶段文案、状态归一化、平台与关键词展示、max_count 解析等规则。
+ * 纯数据 → 数据，不接触 apiClient、路由或全局状态，因此可用一个普通对象入参
+ * 在 vitest 中断言，无需 mock HTTP。
  *
  * useTaskCenter 只负责加载/筛选/分页/轮询/操作，展示规则集中在此复用。
  */
@@ -142,6 +143,45 @@ export function summarizeResult(
   }
 }
 
+/**
+ * 运行中任务的阶段文案（未结束的任务在「任务」列标题下显示这一行）。
+ *
+ * 为什么需要：进度条只给百分比，长时间任务（尤其 f2 获取素材）会出现「1% 挂了
+ * 好几分钟」的观感，用户无法判断是在正常干活还是卡住了。原 f2 获取素材的下载阶段
+ * 逐作者串行且作者历史要翻页，单个作者就可能几分钟——这里把阶段、计数和预期
+ * 耗时讲清楚。
+ *
+ * @param type 任务类型
+ * @param result 后端返回的 result（含 stage 阶段标记）
+ * @param status 原始状态（pending/running/paused）
+ * @param done 已完成计数（下载阶段=作者数，入库阶段=文件数）
+ * @param total 总数（与 done 同口径）
+ */
+export function describeRunningTask(
+  type: string,
+  result: Record<string, unknown> | null,
+  status: string,
+  done: number,
+  total: number,
+): string {
+  if (type !== 'f2_import') return ''
+  if (status === 'paused') return '已暂停：已下载的文件与已入库素材都保留，可继续/重跑'
+  if (status === 'pending') return '排队中：等待 worker 认领'
+  const r = (result || {}) as Record<string, unknown>
+  const stage = typeof r.stage === 'string' ? r.stage : ''
+  const count = total > 0 ? `第 ${done}/${total} ` : ''
+  if (stage === 'download') {
+    // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
+    // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载
+    return `调 f2 下载中：${count}个作者 · 逐作者翻页，单作者约 10 秒~4 分钟`
+  }
+  if (stage === 'import') {
+    return `入库中：${count}个文件 · 复制文件并生成缩略图`
+  }
+  if (stage === 'done') return '收尾中：写入统计与批次清单'
+  return ''
+}
+
 /** 归一化任务队列条目为统一任务视图模型 */
 export function normalizeQueueTask(t: QueueTask): UnifiedTask {
   const status = normalizeTaskStatus(t.status)
@@ -158,7 +198,10 @@ export function normalizeQueueTask(t: QueueTask): UnifiedTask {
     target: t.total,
     started_at: null,
     title: TASK_TYPE_LABELS[t.type] || t.type,
-    detail: summarizeResult(t.type, t.result, t.error || ''),
+    // 已结束 → 汇总结果；未结束（排队/运行/暂停）→ 说明当前阶段在干什么
+    detail: finished
+      ? summarizeResult(t.type, t.result, t.error || '')
+      : describeRunningTask(t.type, t.result, t.status, t.done, t.total),
     error: t.error,
     created_at: t.created_at,
     finished_at: finished ? t.updated_at : null,

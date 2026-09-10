@@ -215,12 +215,36 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
     return task.id
 
 
+def _running_task_brief(row) -> dict | None:
+    """把进行中的任务压成前端展示所需的少量字段（阶段 / 进度 / 计数 / 阶段标记）。
+
+    ``stage`` 是理解 ``done/total`` 的前提：下载阶段是「作者数」，入库阶段是
+    「文件数」，界面上要说清楚（见 web 侧 describeRunningTask）。
+    """
+    if row is None:
+        return None
+    task_id, status, progress, done, total, result = row
+    stage = ""
+    if isinstance(result, dict):
+        stage = str(result.get("stage") or "")
+    return {
+        "id": task_id,
+        "status": status,
+        "progress": progress or 0,
+        "done": done or 0,
+        "total": total or 0,
+        "stage": stage,
+    }
+
+
 async def get_f2_auto_status(db: AsyncSession) -> dict:
     """自动获取的配置与到期信息（供采集管理页卡片展示）。
 
     Returns:
         {enabled, interval_hours, skip_live, available, reason, authors,
-         last_task_at, next_due_at, running_task_id}
+         last_task_at, next_due_at, running_task_id, running}
+        ``running`` 为进行中任务的简要信息（无则 None），供卡片显示
+        「正在执行 #N · 下载中：第 3/21 个作者」并说明当前阶段。
     """
     from datetime import timedelta
 
@@ -228,6 +252,20 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
 
     info = f2_import_status()
     _last_id, last_created, running = await _last_f2_task(db)
+    running_row = None
+    if running:
+        running_row = (
+            await db.execute(
+                select(
+                    TaskQueue.id,
+                    TaskQueue.status,
+                    TaskQueue.progress,
+                    TaskQueue.done,
+                    TaskQueue.total,
+                    TaskQueue.result,
+                ).where(TaskQueue.id == running)
+            )
+        ).first()
     interval_hours = max(1, int(settings.f2_import_interval_hours or 24))
     return {
         "enabled": bool(settings.f2_import_auto_enabled),
@@ -243,6 +281,7 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
             else None
         ),
         "running_task_id": running,
+        "running": _running_task_brief(running_row),
     }
 
 
@@ -268,6 +307,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     task.error = None
     task.progress = 0
+    # 阶段标记：done/total 在两个阶段含义不同（下载阶段=作者数，入库阶段=文件数），
+    # 前端要靠它解释进度文案（见 web/src/utils/taskPresentation.describeRunningTask）
+    task.result = {**opts, "stage": "download" if fetch_enabled else "import"}
     task.updated_at = utcnow()
     await db.commit()
 
@@ -367,6 +409,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     task.done = 0
     task.result = {
         **opts,
+        "stage": "import",
         "fetch": fetch_summary,
         "plan": {
             "files": len(to_import),
@@ -388,6 +431,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         task.progress = 100
         task.result = {
             **task.result,
+            "stage": "done",
             "import": {"imported": 0, "failed": 0, "batch_file": ""},
         }
         task.updated_at = utcnow()
@@ -439,6 +483,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     status_now = await _current_status(db, task.id)
     task.result = {
         **task.result,
+        "stage": "done",
         "import": {key: value for key, value in result.items() if key != "ids"},
     }
     task.progress = 100

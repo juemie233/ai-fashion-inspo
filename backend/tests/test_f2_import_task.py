@@ -393,6 +393,95 @@ async def test_execute_f2_import_does_not_block_event_loop(
     assert len(during) >= 5, f"扫描期间事件循环仅转了 {len(during)} 次，疑似被阻塞"
 
 
+async def test_execute_f2_import_records_stage(client, f2_tree):
+    """阶段标记（方案 D）：done/total 在下载阶段是作者数、入库阶段是文件数，
+    前端靠 result.stage 才能把进度讲清楚（1% 挂在几分钟时用户要知道在干什么）。
+    """
+    from app.models.task import TaskQueue
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        # 执行完 → done；且期间一定写过 import（计划算完就写）
+        assert stored.result["stage"] == "done"
+        assert stored.result["plan"]["files"] == 3
+
+
+async def test_execute_f2_import_marks_download_stage_before_import(
+    client, f2_tree, monkeypatch
+):
+    """下载阶段先把 stage 写成 download，避免前端把作者数当成文件数解释。"""
+    import sqlite3 as _sq
+
+    from app.models.task import TaskQueue
+    from app.services.task_runners import f2_import as runner
+
+    f2_dir, _root = f2_tree
+    conn = _sq.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    seen: list[str] = []
+
+    async def fake_status(_db, task_id):
+        """在下载阶段（第一个作者）偷看一眼落库的 stage。"""
+        if not seen:
+            async with async_session() as probe:
+                row = await probe.get(TaskQueue, task_id)
+                seen.append(str((row.result or {}).get("stage")))
+        return "running"
+
+    monkeypatch.setattr(runner, "_current_status", fake_status)
+    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True)
+        await task_runner.execute_f2_import(db, task)
+
+    assert seen == ["download"]
+
+
+async def test_get_f2_auto_status_exposes_running_stage(client, auto_settings):
+    """卡片要能显示「正在执行 #N（下载中：第 3/21 个作者）」，故 auto.running 必须有阶段与计数。"""
+    auto_settings.f2_import_auto_enabled = False
+    body = client.post("/api/scraper/f2-import", params={"fetch": False}).json()
+    task_id = body["task_id"]
+
+    async with async_session() as db:
+        status = await task_runner.get_f2_auto_status(db)
+
+    running = status["running"]
+    assert running is not None
+    assert running["id"] == task_id
+    assert running["status"] == "pending"
+    assert set(running) >= {"id", "status", "progress", "done", "total", "stage"}
+
+
+async def test_get_f2_auto_status_running_is_none_without_task(client, auto_settings):
+    """没有任务在跑时不下发 running（卡片据此停掉轮询）。"""
+    auto_settings.f2_import_auto_enabled = False
+
+    async with async_session() as db:
+        status = await task_runner.get_f2_auto_status(db)
+
+    assert status["running"] is None and status["running_task_id"] is None
+
+
+def test_f2_status_endpoint_includes_running_brief(client):
+    """GET /f2-status 的 auto.running 字段存在（前端类型依赖它）。"""
+    auto = client.get("/api/scraper/f2-status").json()["auto"]
+    assert "running" in auto
+
+
 def test_create_f2_import_reuses_running_task(client):
     """修复（审查 L4）：已有进行中的任务时直接复用，避免连点起多个任务。"""
     first = client.post("/api/scraper/f2-import", params={"fetch": False}).json()

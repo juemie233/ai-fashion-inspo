@@ -27,6 +27,7 @@ const AUTO: F2AutoStatus = {
   last_task_at: null,
   next_due_at: null,
   running_task_id: null,
+  running: null,
 }
 
 const STATUS = {
@@ -153,6 +154,23 @@ describe('useF2Import', () => {
     expect(status.value?.auto.enabled).toBe(true)
     expect(status.value?.auto.interval_hours).toBe(12)
     expect(status.value?.auto.next_due_at).toBe('2026-09-10T16:00:00Z')
+    expect(status.value?.auto.running).toBeNull()
+  })
+
+  it('loadStatus 解析进行中任务的阶段与计数（卡片据此说明在干什么）', async () => {
+    mocks.get.mockResolvedValue({
+      data: makeStatus({
+        running_task_id: 329,
+        running: { id: 329, status: 'running', progress: 7, done: 4, total: 21, stage: 'download' },
+      }),
+    })
+    const { status, loadStatus } = useF2Import()
+
+    await loadStatus()
+
+    expect(status.value?.auto.running_task_id).toBe(329)
+    expect(status.value?.auto.running?.stage).toBe('download')
+    expect(status.value?.auto.running?.done).toBe(4)
   })
 
   it('setAuto 透传开关与间隔，并用回包更新本地状态', async () => {

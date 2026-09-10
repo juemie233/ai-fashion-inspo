@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  describeRunningTask,
   formatKeywords,
   isPausableTaskType,
   normalizeQueueTask,
@@ -117,7 +118,48 @@ describe('summarizeResult', () => {
   })
 })
 
+describe('describeRunningTask', () => {
+  it('f2 下载阶段：说明是第几个作者并给出单作者耗时预期', () => {
+    const text = describeRunningTask('f2_import', { stage: 'download' }, 'running', 3, 21)
+    expect(text).toContain('第 3/21 个作者')
+    expect(text).toContain('翻页')
+  })
+
+  it('f2 入库阶段：按文件计数，不再说作者', () => {
+    const text = describeRunningTask('f2_import', { stage: 'import' }, 'running', 512, 11936)
+    expect(text).toContain('第 512/11936 个文件')
+    expect(text).not.toContain('作者')
+  })
+
+  it('排队/暂停有各自说明，暂停时强调产物保留', () => {
+    expect(describeRunningTask('f2_import', null, 'pending', 0, 0)).toContain('排队')
+    expect(describeRunningTask('f2_import', { stage: 'download' }, 'paused', 1, 21)).toContain(
+      '保留',
+    )
+  })
+
+  it('非 f2 任务或缺少阶段标记时不编造文案', () => {
+    expect(describeRunningTask('batch_analyze', { stage: 'download' }, 'running', 1, 2)).toBe('')
+    expect(describeRunningTask('f2_import', {}, 'running', 1, 2)).toBe('')
+  })
+})
+
 describe('normalizeQueueTask', () => {
+  it('运行中的 f2 任务在「任务」列显示阶段说明而不是空白', () => {
+    const t = normalizeQueueTask(
+      makeQueueTask({
+        type: 'f2_import',
+        status: 'running',
+        progress: 7,
+        done: 4,
+        total: 21,
+        result: { stage: 'download', fetch: true },
+      }),
+    )
+    expect(t.status).toBe('running')
+    expect(t.detail).toContain('第 4/21 个作者')
+  })
+
   it('pending 任务不标记 finished_at，target 取 total', () => {
     const t = normalizeQueueTask(makeQueueTask({ status: 'pending' }))
     expect(t.source).toBe('queue')

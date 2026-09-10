@@ -9,9 +9,13 @@
  *  - 入库前**四层去重**：同一内容不会重复入库，重复点击也安全
  */
 
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useF2Import } from '@/composables/useF2Import'
 import { formatDate } from '@/utils/format'
+import { describeRunningTask } from '@/utils/taskPresentation'
+
+const router = useRouter()
 
 const { status, statusLoading, submitting, autoSaving, loadStatus, submit, setAuto } = useF2Import()
 
@@ -59,7 +63,43 @@ const autoHint = computed(() => {
   return auto.next_due_at ? `${last}，下次 ${formatDate(auto.next_due_at)}` : last
 })
 
+// ── 进行中任务的实时说明：让「1% 挂好几分钟」有解释 ──
+// 只在确实有任务在跑时轮询（5 秒一次），没有任务时立即停，避免无意义请求。
+const running = computed(() => status.value?.auto?.running ?? null)
+const runningText = computed(() => {
+  const task = running.value
+  if (!task) return ''
+  const detail = describeRunningTask(
+    'f2_import',
+    { stage: task.stage },
+    task.status,
+    task.done,
+    task.total,
+  )
+  return `正在执行任务 #${task.id}（${task.progress}%）${detail ? ` · ${detail}` : ''}`
+})
+
+let timer: ReturnType<typeof setInterval> | null = null
+
+function stopPolling() {
+  if (timer !== null) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+watch(
+  () => status.value?.auto?.running_task_id ?? null,
+  (taskId) => {
+    stopPolling()
+    if (taskId === null) return
+    // silent：轮询不改 statusLoading，否则状态行每 5 秒闪一次加载态
+    timer = setInterval(() => void loadStatus({ silent: true }), 5000)
+  },
+)
+
 onMounted(loadStatus)
+onUnmounted(stopPolling)
 
 async function onSubmit() {
   const taskId = await submit({
@@ -100,9 +140,16 @@ async function onSubmit() {
     <a-spin :loading="statusLoading" style="display: block">
       <div v-if="status" class="f2-status" :class="{ 'is-bad': !status.available }">
         <span>{{ status.available ? '✅' : '⚠️' }} {{ status.reason }}</span>
-        <a-link @click="loadStatus">刷新状态</a-link>
+        <a-link @click="loadStatus()">刷新状态</a-link>
       </div>
     </a-spin>
+
+    <!-- 正在跑的任务：说明当前阶段与计数（进度条百分比长期不动时也心里有数） -->
+    <div v-if="runningText" class="f2-running">
+      <a-spin :size="14" />
+      <span>{{ runningText }}</span>
+      <a-link @click="router.push('/tasks')">去任务中心看进度</a-link>
+    </div>
 
     <div class="f2-options">
       <a-checkbox v-model="fetchFirst">先调用 f2 增量下载（只下新作品）</a-checkbox>
@@ -210,6 +257,19 @@ async function onSubmit() {
 
 .f2-status.is-bad {
   color: #d97706;
+}
+
+.f2-running {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: #f2f6ff;
+  font-size: 13px;
+  color: #1d2129;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .f2-options {

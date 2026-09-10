@@ -10,6 +10,18 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 
+/** 进行中任务的简要信息（后端 /api/scraper/f2-status 的 auto.running） */
+export interface F2RunningTask {
+  id: number
+  status: string
+  progress: number
+  /** 已完成计数：下载阶段是作者数，入库阶段是文件数（看 stage） */
+  done: number
+  total: number
+  /** 阶段标记：download / import / done（空串表示后端未标记） */
+  stage: string
+}
+
 /** 每日自动获取的配置与到期信息（后端 GET /api/scraper/f2-status 的 auto 字段） */
 export interface F2AutoStatus {
   /** 是否开启每日自动增量入库 */
@@ -30,6 +42,8 @@ export interface F2AutoStatus {
   next_due_at: string | null
   /** 进行中的 f2 任务 id（有则本轮不重复触发） */
   running_task_id: number | null
+  /** 进行中任务的阶段与进度（无则 null），供卡片说明「现在在干什么」 */
+  running: F2RunningTask | null
 }
 
 /** f2 可用性状态（后端 GET /api/scraper/f2-status 返回） */
@@ -72,9 +86,14 @@ export function useF2Import() {
   const submitting = ref(false)
   const autoSaving = ref(false)
 
-  /** 读取可用性（卡片挂载与刷新按钮调用） */
-  async function loadStatus(): Promise<void> {
-    statusLoading.value = true
+  /**
+   * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
+   *
+   * @param options.silent 静默刷新：不改 statusLoading（轮询每 5 秒一次，改它会让
+   *   状态行每 5 秒闪一次加载态；首次加载与手动刷新仍走非静默）。
+   */
+  async function loadStatus(options: { silent?: boolean } = {}): Promise<void> {
+    if (!options.silent) statusLoading.value = true
     try {
       const { data } = await apiClient.get<F2ImportStatus>('/scraper/f2-status')
       status.value = data
