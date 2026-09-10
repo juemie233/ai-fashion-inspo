@@ -14,6 +14,7 @@ import { getFileUrl, type InspirationOut } from '@/api/inspirations'
 import CategoryTag from './CategoryTag.vue'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import { sourceLabel } from '@/utils/sourceLabel'
+import { openInspiration } from '@/utils/openInspiration'
 
 /** 悬停放大预览的触发阈值（毫秒）：鼠标停留在素材上超过该时长才弹出放大图 */
 const HOVER_ZOOM_DELAY = 2000
@@ -65,8 +66,9 @@ function analysisStatusLabel(): string | null {
 }
 
 function goToDetail() {
-  // 携带当前筛选 query 进入详情，便于删除/返回后恢复素材库筛选状态
-  router.push({ path: `/detail/${props.item.id}`, query: route.query })
+  // 携带当前筛选 query 进入详情，便于删除/返回后恢复素材库筛选状态；
+  // 新标签页 / 当前页由全局「素材打开模式」偏好决定（openInspiration 统一处理）
+  openInspiration(router, props.item.id, route.query)
 }
 
 /** 卡片点击：批量模式下切换勾选，否则跳转详情 */

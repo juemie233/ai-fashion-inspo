@@ -17,6 +17,7 @@ import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import { formatMs, formatDate, renderTimeCell } from '@/utils/format'
 import { copyToClipboard } from '@/utils/clipboard'
 import { sortAnalysisTags } from '@/utils/tagSort'
+import { openInspiration } from '@/utils/openInspiration'
 import type { HistoryItem } from '@/types/analysis'
 
 const router = useRouter()
@@ -273,7 +274,8 @@ const columns = computed<TableColumnData[]>(() => [
             'position:relative;width:48px;height:72px;cursor:pointer;border-radius:4px;overflow:hidden',
           onMouseenter: () => startHoverPreview(full),
           onMouseleave: clearHoverPreview,
-          onClick: () => router.push({ name: 'detail', params: { id: row.inspiration_id } }),
+          // 打开方式遵循全局「素材打开模式」偏好
+          onClick: () => openInspiration(router, row.inspiration_id),
         },
         [
           h('img', {

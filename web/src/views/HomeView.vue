@@ -8,9 +8,9 @@ import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import CollectionPickerModal from '@/components/collection/CollectionPickerModal.vue'
-import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { useTagsStore } from '@/stores/tags'
+import { useUiStore, type MaterialOpenMode } from '@/stores/ui'
 import { useBatchSelection } from '@/composables/useBatchSelection'
 import { getApiErrorMessage } from '@/utils/apiError'
 import {
@@ -36,6 +36,7 @@ const router = useRouter()
 const route = useRoute()
 const store = useInspirationsStore()
 const tagsStore = useTagsStore()
+const uiStore = useUiStore()
 const {
   batchMode,
   selectedIds,
@@ -342,6 +343,18 @@ function clearAllFilters() {
 function setDensity(d: Density) {
   density.value = d
   localStorage.setItem('masonry-density', d)
+}
+
+// ── 素材打开模式（全局偏好）──
+/** 卡片点击的打开方式：新标签页（默认）/ 当前页；切换后立即对所有素材卡片生效 */
+const materialOpenMode = computed({
+  get: () => uiStore.materialOpenMode,
+  set: (v: MaterialOpenMode) => uiStore.setMaterialOpenMode(v),
+})
+
+/** 切换提示：明确该设置的作用范围，避免误以为只影响本页 */
+function onOpenModeChange() {
+  Message.info(materialOpenMode.value === 'new_tab' ? '素材将在新标签页打开' : '素材将在当前页打开')
 }
 
 // ── 保存为合集（智能合集：序列化当前筛选条件） ──
@@ -723,6 +736,21 @@ loadPage(currentPage.value)
             {{ d.label }}
           </a-button>
         </a-button-group>
+
+        <!-- 素材打开模式：全局生效（素材库/搜索/合集/相似推荐等所有素材卡片） -->
+        <a-tooltip
+          content="点击素材卡片时的打开方式，全局生效（素材库、搜索、收藏合集、相似推荐等所有素材入口）；偏好自动保存"
+        >
+          <a-radio-group
+            v-model="materialOpenMode"
+            type="button"
+            size="mini"
+            @change="onOpenModeChange"
+          >
+            <a-radio value="new_tab">新页打开</a-radio>
+            <a-radio value="current_tab">当前页打开</a-radio>
+          </a-radio-group>
+        </a-tooltip>
       </div>
     </div>
 

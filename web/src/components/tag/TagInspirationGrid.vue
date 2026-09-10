@@ -14,6 +14,7 @@ import {
 } from '@/api/tags'
 import { removeTagFromInspiration, batchAddTagsToInspirations } from '@/api/inspirations'
 import apiClient from '@/api/client'
+import { openInspiration } from '@/utils/openInspiration'
 import InspirationGridBrowser, {
   type GridBrowserItem,
 } from '@/components/inspiration/InspirationGridBrowser.vue'
@@ -113,9 +114,9 @@ function loadMore() {
   load(false)
 }
 
-/** 单击缩略图跳转详情页 */
+/** 单击缩略图打开详情页（新标签页 / 当前页由全局「素材打开模式」决定） */
 function openDetail(item: GridBrowserItem) {
-  router.push({ name: 'detail', params: { id: item.id } })
+  openInspiration(router, item.id)
 }
 
 /** 悬停快捷操作——移除该标签 */

@@ -31,6 +31,7 @@ import {
 } from '@/api/faceScan'
 import { getFileUrl } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { openInspiration } from '@/utils/openInspiration'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 
@@ -655,9 +656,9 @@ function groupThumbUrl(group: FaceClusterGroup): string {
   return path ? getFileUrl(path) : ''
 }
 
-/** 点击素材缩略图跳转素材详情页 */
+/** 点击素材缩略图打开素材详情页（新标签页 / 当前页由全局「素材打开模式」决定） */
 function goDetail(inspirationId: string) {
-  router.push(`/detail/${inspirationId}`)
+  openInspiration(router, inspirationId)
 }
 
 /** 勾选/取消（Arco checkbox change 值类型较宽，统一按真值处理；替换式 Set 触发响应式） */

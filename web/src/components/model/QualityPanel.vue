@@ -8,6 +8,7 @@ import type { EChartsOption } from 'echarts'
 import apiClient from '@/api/client'
 import { getFileUrl } from '@/api/inspirations'
 import { formatDate, renderTimeCell } from '@/utils/format'
+import { openInspiration } from '@/utils/openInspiration'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 
@@ -210,7 +211,11 @@ const failedColumns: TableColumnData[] = [
       const row = record as FailedItem
       return h(
         Button,
-        { size: 'mini', onClick: () => router.push(`/detail/${row.inspiration_id}`) },
+        {
+          size: 'mini',
+          // 打开方式遵循全局「素材打开模式」偏好
+          onClick: () => openInspiration(router, row.inspiration_id),
+        },
         () => '查看',
       )
     },

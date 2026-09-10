@@ -2,6 +2,7 @@
 /** 质量审核面板：待审核/已通过/已拒绝统计 + 未通过素材管理。 */
 
 import { getApiErrorMessage } from '@/utils/apiError'
+import { openInspiration } from '@/utils/openInspiration'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -561,9 +562,7 @@ onUnmounted(() => {
           v-model:density="rejectedDensity"
           empty-text="暂无未通过素材"
           @load-more="loadMoreRejected"
-          @open-detail="
-            (item: GridBrowserItem) => router.push({ name: 'detail', params: { id: item.id } })
-          "
+          @open-detail="(item: GridBrowserItem) => openInspiration(router, item.id)"
         >
           <!-- 批量操作栏：全选 + 批量通过 / 批量移入垃圾桶 -->
           <template #batch-actions="{ ids, count, clear, allSelected, toggleAll }">
