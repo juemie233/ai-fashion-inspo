@@ -7,14 +7,27 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Message } from '@arco-design/web-vue'
-import { useF2Import } from '../useF2Import'
+import { useF2Import, type F2AutoStatus } from '../useF2Import'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  put: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({ default: mocks }))
+
+const AUTO: F2AutoStatus = {
+  enabled: false,
+  interval_hours: 24,
+  skip_live: false,
+  available: true,
+  reason: '可增量下载 21 个已采集作者的新作品',
+  authors: 21,
+  last_task_at: null,
+  next_due_at: null,
+  running_task_id: null,
+}
 
 const STATUS = {
   available: true,
@@ -22,6 +35,12 @@ const STATUS = {
   authors: 21,
   f2_dir: 'C:/f2',
   root: 'C:/f2/Download/douyin/post',
+  auto: AUTO,
+}
+
+/** 每次返回全新对象：composable 会就地更新 status.auto，共享常量会串味到下一个用例 */
+function makeStatus(auto: Partial<F2AutoStatus> = {}) {
+  return { ...STATUS, auto: { ...AUTO, ...auto } }
 }
 
 describe('useF2Import', () => {
@@ -30,7 +49,7 @@ describe('useF2Import', () => {
   })
 
   it('loadStatus 读取可用性状态', async () => {
-    mocks.get.mockResolvedValue({ data: STATUS })
+    mocks.get.mockResolvedValue({ data: makeStatus() })
     const { status, loadStatus } = useF2Import()
 
     await loadStatus()
@@ -115,6 +134,65 @@ describe('useF2Import', () => {
 
     expect(taskId).toBeNull()
     expect(error).toHaveBeenCalledWith('任务创建失败')
+    error.mockRestore()
+  })
+
+  it('loadStatus 解析每日自动获取配置', async () => {
+    mocks.get.mockResolvedValue({
+      data: makeStatus({
+        enabled: true,
+        interval_hours: 12,
+        last_task_at: '2026-09-10T04:00:00Z',
+        next_due_at: '2026-09-10T16:00:00Z',
+      }),
+    })
+    const { status, loadStatus } = useF2Import()
+
+    await loadStatus()
+
+    expect(status.value?.auto.enabled).toBe(true)
+    expect(status.value?.auto.interval_hours).toBe(12)
+    expect(status.value?.auto.next_due_at).toBe('2026-09-10T16:00:00Z')
+  })
+
+  it('setAuto 透传开关与间隔，并用回包更新本地状态', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValue({ data: makeStatus() })
+    mocks.put.mockResolvedValue({
+      data: {
+        message: '每日自动获取素材已开启（间隔 12 小时）',
+        auto: { ...AUTO, enabled: true, interval_hours: 12 },
+      },
+    })
+    const { status, loadStatus, setAuto, autoSaving } = useF2Import()
+    await loadStatus()
+
+    const ok = await setAuto(true, 12)
+
+    expect(ok).toBe(true)
+    expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-auto', null, {
+      params: { enabled: true, interval_hours: 12, persist: true },
+    })
+    expect(status.value?.auto.enabled).toBe(true)
+    expect(status.value?.auto.interval_hours).toBe(12)
+    expect(autoSaving.value).toBe(false)
+    success.mockRestore()
+  })
+
+  it('setAuto 失败时回读状态并返回 false（避免开关停在错误位置）', async () => {
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValue({ data: makeStatus() })
+    mocks.put.mockRejectedValue({ response: { data: { detail: '写入 .env 失败' } } })
+    const { status, loadStatus, setAuto } = useF2Import()
+    await loadStatus()
+
+    const ok = await setAuto(true)
+
+    expect(ok).toBe(false)
+    expect(error).toHaveBeenCalledWith('写入 .env 失败')
+    // 回读后开关仍是后端的真实状态（关闭）
+    expect(status.value?.auto.enabled).toBe(false)
+    expect(mocks.get).toHaveBeenCalledTimes(2)
     error.mockRestore()
   })
 })

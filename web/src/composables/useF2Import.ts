@@ -10,6 +10,28 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 
+/** 每日自动获取的配置与到期信息（后端 GET /api/scraper/f2-status 的 auto 字段） */
+export interface F2AutoStatus {
+  /** 是否开启每日自动增量入库 */
+  enabled: boolean
+  /** 最小间隔（小时）：距上次任务不足则跳过本轮 */
+  interval_hours: number
+  /** 自动获取是否跳过 live 实况分段 */
+  skip_live: boolean
+  /** 环境是否可用（f2 已装 + 作者库非空） */
+  available: boolean
+  /** 不可用原因或可用性摘要 */
+  reason: string
+  /** f2 用户库里的作者数 */
+  authors: number
+  /** 最近一次 f2 任务的创建时间（ISO） */
+  last_task_at: string | null
+  /** 下次到期时间（ISO，无历史任务时为空＝随时可触发） */
+  next_due_at: string | null
+  /** 进行中的 f2 任务 id（有则本轮不重复触发） */
+  running_task_id: number | null
+}
+
 /** f2 可用性状态（后端 GET /api/scraper/f2-status 返回） */
 export interface F2ImportStatus {
   /** 是否可用（f2 已安装 + 工作目录存在 + 作者库非空） */
@@ -22,6 +44,8 @@ export interface F2ImportStatus {
   f2_dir: string
   /** 下载产物扫描目录 */
   root: string
+  /** 每日自动获取配置 */
+  auto: F2AutoStatus
 }
 
 /** 提交选项（与后端 Query 参数一一对应） */
@@ -44,6 +68,7 @@ export function useF2Import() {
   const status = ref<F2ImportStatus | null>(null)
   const statusLoading = ref(false)
   const submitting = ref(false)
+  const autoSaving = ref(false)
 
   /** 读取可用性（卡片挂载与刷新按钮调用） */
   async function loadStatus(): Promise<void> {
@@ -87,5 +112,36 @@ export function useF2Import() {
     }
   }
 
-  return { status, statusLoading, submitting, loadStatus, submit }
+  /**
+   * 设置每日自动获取（开关 / 间隔小时），成功返回 true。
+   *
+   * 后端会立即把配置写入 .env（persist=true），并回传最新的 auto 状态，
+   * 因此这里直接用返回值覆盖本地状态，避免再多发一次 status 请求。
+   */
+  async function setAuto(
+    enabled: boolean,
+    intervalHours?: number,
+    persist = true,
+  ): Promise<boolean> {
+    autoSaving.value = true
+    try {
+      const { data } = await apiClient.put<{ message: string; auto: F2AutoStatus }>(
+        '/scraper/f2-auto',
+        null,
+        { params: { enabled, interval_hours: intervalHours, persist } },
+      )
+      if (status.value) status.value.auto = data.auto
+      Message.success(data.message || '设置已保存')
+      return true
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '自动获取设置失败'))
+      // 失败后回读一次，避免界面停留在错误的开关状态
+      await loadStatus()
+      return false
+    } finally {
+      autoSaving.value = false
+    }
+  }
+
+  return { status, statusLoading, submitting, autoSaving, loadStatus, submit, setAuto }
 }

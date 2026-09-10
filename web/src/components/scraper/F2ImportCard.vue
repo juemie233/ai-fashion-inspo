@@ -9,10 +9,11 @@
  *  - 入库前**四层去重**：同一内容不会重复入库，重复点击也安全
  */
 
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useF2Import } from '@/composables/useF2Import'
+import { formatDate } from '@/utils/format'
 
-const { status, statusLoading, submitting, loadStatus, submit } = useF2Import()
+const { status, statusLoading, submitting, autoSaving, loadStatus, submit, setAuto } = useF2Import()
 
 // ── 提交选项（默认值即为日常用法：先增量下载，再全量入库）──
 const fetchFirst = ref(true)
@@ -21,6 +22,41 @@ const limit = ref<number | undefined>(undefined)
 const skipLive = ref(false)
 const makeThumbnails = ref(true)
 const showAdvanced = ref(false)
+
+// ── 每日自动获取（后端调度循环按间隔自动创建同一条入库任务）──
+const autoEnabled = computed(() => status.value?.auto?.enabled ?? false)
+const intervalHours = ref(24)
+
+// 状态回读后同步间隔输入框（用户改前端数字时不会被覆盖：仅值不同才写）
+watch(
+  () => status.value?.auto?.interval_hours,
+  (value) => {
+    if (value && value !== intervalHours.value) intervalHours.value = value
+  },
+  { immediate: true },
+)
+
+/** 开关：立刻写回后端（含 .env 持久化），失败时回读状态复原开关 */
+async function onToggleAuto(value: string | number | boolean) {
+  await setAuto(Boolean(value), intervalHours.value)
+}
+
+/** 间隔改动：开关处于开启状态时一并生效，关闭时只留作下次开启的默认值 */
+async function onIntervalChange(value: number | undefined) {
+  if (!value || value === status.value?.auto?.interval_hours) return
+  await setAuto(autoEnabled.value, value)
+}
+
+/** 「上次运行 / 下次到期」提示：说明自动获取现在的实际行为 */
+const autoHint = computed(() => {
+  const auto = status.value?.auto
+  if (!auto) return ''
+  if (!auto.enabled) return '关闭后只有点击上方按钮时才会获取素材'
+  if (auto.running_task_id) return `已有任务 #${auto.running_task_id} 在执行，本轮不重复触发`
+  if (!auto.last_task_at) return '尚无历史任务，调度循环下一轮检查时立即触发'
+  const last = `上次 ${formatDate(auto.last_task_at)}`
+  return auto.next_due_at ? `${last}，下次 ${formatDate(auto.next_due_at)}` : last
+})
 
 onMounted(loadStatus)
 
@@ -92,6 +128,35 @@ async function onSubmit() {
         {{ status?.authors ?? 0 }} 个
       </span>
     </div>
+
+    <!-- 每日自动获取：与手动按钮同一条链路，区别是由后端按间隔自动创建任务 -->
+    <div class="f2-auto">
+      <div class="f2-auto-row">
+        <a-switch
+          :model-value="autoEnabled"
+          :loading="autoSaving"
+          :disabled="!status?.available"
+          @change="onToggleAuto"
+        />
+        <span class="f2-auto-label">每日自动获取</span>
+        <a-input-number
+          v-model="intervalHours"
+          :min="1"
+          :max="720"
+          size="small"
+          style="width: 110px"
+          @change="onIntervalChange"
+        />
+        <span class="f2-tip">小时间隔</span>
+      </div>
+      <div class="f2-tip f2-auto-hint">
+        {{ autoHint }}
+        <template v-if="autoEnabled">
+          ；自动获取依赖 f2 的登录 Cookie，Cookie 失效时任务会失败并在任务中心提示，需重新导入
+          Cookie。
+        </template>
+      </div>
+    </div>
   </a-card>
 </template>
 
@@ -158,5 +223,27 @@ async function onSubmit() {
 .f2-tip {
   font-size: 12px;
   color: #9ca3af;
+}
+
+.f2-auto {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e5e9f5;
+}
+
+.f2-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.f2-auto-label {
+  font-size: 13px;
+  color: #1d2129;
+}
+
+.f2-auto-hint {
+  margin-top: 6px;
+  line-height: 1.6;
 }
 </style>

@@ -73,7 +73,15 @@ def test_f2_status_endpoint(client):
     resp = client.get("/api/scraper/f2-status")
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) >= {"available", "reason", "authors", "f2_dir", "root"}
+    assert set(body) >= {"available", "reason", "authors", "f2_dir", "root", "auto"}
+    assert set(body["auto"]) >= {
+        "enabled",
+        "interval_hours",
+        "available",
+        "last_task_at",
+        "next_due_at",
+        "running_task_id",
+    }
 
 
 def test_create_f2_import_task_endpoint(client):
@@ -269,3 +277,195 @@ def test_create_f2_import_reuses_running_task(client):
     assert first["task_id"] and second["task_id"] == first["task_id"]
     assert second.get("reused") is True
     assert "进行中" in second["message"]
+
+
+# ── 每日自动获取（方案 A：每日新增作品自动入库）──
+
+
+def _make_author_db(f2_dir: Path) -> None:
+    """在临时 f2 工作目录建最小 user_info_web 表（load_f2_authors 的唯一数据源）。"""
+    import sqlite3
+
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def auto_env(f2_tree, monkeypatch):
+    """可用的自动获取环境：f2 视为已安装 + 作者库 1 个作者。"""
+    f2_dir, _root = f2_tree
+    _make_author_db(f2_dir)
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    return f2_dir
+
+
+@pytest.fixture
+def auto_settings(monkeypatch):
+    """隔离三个自动获取配置项：用例结束后还原（含 API 直接改 settings 的情况）。"""
+    from app.config import settings
+
+    original = (
+        settings.f2_import_auto_enabled,
+        settings.f2_import_interval_hours,
+        settings.f2_import_auto_skip_live,
+    )
+    yield settings
+    (
+        settings.f2_import_auto_enabled,
+        settings.f2_import_interval_hours,
+        settings.f2_import_auto_skip_live,
+    ) = original
+
+
+async def _count_f2_tasks(db) -> int:
+    from sqlalchemy import func, select
+
+    from app.models.task import TaskQueue
+
+    return (
+        await db.execute(
+            select(func.count()).select_from(TaskQueue).where(TaskQueue.type == "f2_import")
+        )
+    ).scalar() or 0
+
+
+async def test_get_f2_auto_status_defaults(client, auto_settings):
+    """默认关闭、无历史任务：下次到期时间未知（调度循环会立即触发）。"""
+    auto_settings.f2_import_auto_enabled = False
+    auto_settings.f2_import_interval_hours = 24
+
+    async with async_session() as db:
+        status = await task_runner.get_f2_auto_status(db)
+
+    assert status["enabled"] is False
+    assert status["interval_hours"] == 24
+    assert status["last_task_at"] is None
+    assert status["next_due_at"] is None
+    assert status["running_task_id"] is None
+
+
+async def test_get_f2_auto_status_reports_last_and_next(client, auto_settings):
+    """有历史任务后：给出上次运行时间与「上次 + 间隔」的下次到期时间。"""
+    from datetime import datetime, timedelta
+
+    auto_settings.f2_import_interval_hours = 6
+    client.post("/api/scraper/f2-import", params={"fetch": False})
+
+    async with async_session() as db:
+        status = await task_runner.get_f2_auto_status(db)
+
+    last = datetime.fromisoformat(status["last_task_at"])
+    nxt = datetime.fromisoformat(status["next_due_at"])
+    assert nxt - last == timedelta(hours=6)
+    # 手动创建的任务同样算作「上次运行」，并占用进行中标记（不会重复触发）
+    assert status["running_task_id"] is not None
+
+
+async def test_maybe_schedule_skips_when_disabled(client, auto_settings):
+    """开关关闭：不创建任何任务（用户偏好手动确认）。"""
+    auto_settings.f2_import_auto_enabled = False
+
+    async with async_session() as db:
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+        assert await _count_f2_tasks(db) == 0
+
+
+async def test_maybe_schedule_creates_task_when_due(client, auto_env, auto_settings):
+    """开启 + 环境可用 + 无历史：创建任务，且自动任务总是先增量下载。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_interval_hours = 24
+
+    async with async_session() as db:
+        task_id = await task_runner.maybe_schedule_auto_import(db)
+        assert task_id is not None
+        task = await db.get(TaskQueue, task_id)
+        assert task.type == "f2_import"
+        assert task.result["fetch"] is True
+
+        # 刚创建的任务处于 pending（进行中）：本轮不重复触发
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+        assert await _count_f2_tasks(db) == 1
+
+
+async def test_maybe_schedule_respects_interval(client, auto_env, auto_settings):
+    """间隔判定：未到间隔跳过，已过间隔才创建（锚点是最近任务的创建时间）。"""
+    from datetime import timedelta
+
+    from app.services.task_runners.common import utcnow
+
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_interval_hours = 1
+
+    async with async_session() as db:
+        first = await task_runner.create_f2_import_task(db, fetch=True)
+        first.status = "success"  # 已收尾，不再阻塞下一轮
+        first.created_at = utcnow() - timedelta(minutes=30)
+        await db.commit()
+
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+
+        first.created_at = utcnow() - timedelta(hours=2)
+        await db.commit()
+
+        new_id = await task_runner.maybe_schedule_auto_import(db)
+        assert new_id is not None and new_id != first.id
+
+
+async def test_maybe_schedule_skips_when_f2_unavailable(
+    client, f2_tree, auto_settings, monkeypatch
+):
+    """环境不可用（f2 未装）：跳过并留痕，不制造失败任务。"""
+    monkeypatch.setattr(f2, "f2_available", lambda: False)
+    auto_settings.f2_import_auto_enabled = True
+
+    async with async_session() as db:
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+        assert await _count_f2_tasks(db) == 0
+
+
+def test_f2_auto_endpoint_switches_and_persists(client, auto_settings, monkeypatch):
+    """PUT /f2-auto：改配置 + 写 .env（测试里打桩落盘，不碰真实 .env）。"""
+    saved: dict[str, str] = {}
+
+    async def fake_update(updates):
+        saved.update(updates)
+
+    monkeypatch.setattr("app.routers.ai_shared._update_env_file", fake_update)
+
+    resp = client.put(
+        "/api/scraper/f2-auto",
+        params={"enabled": True, "interval_hours": 12, "skip_live": True},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["auto"]["enabled"] is True
+    assert body["auto"]["interval_hours"] == 12
+    assert body["auto"]["skip_live"] is True
+    assert "12" in body["message"]
+    assert saved == {
+        "F2_IMPORT_AUTO_ENABLED": "true",
+        "F2_IMPORT_INTERVAL_HOURS": "12",
+        "F2_IMPORT_AUTO_SKIP_LIVE": "true",
+    }
+    assert auto_settings.f2_import_auto_enabled is True
+    assert auto_settings.f2_import_interval_hours == 12
+
+    # 关闭：只改开关，间隔保持不变
+    off = client.put("/api/scraper/f2-auto", params={"enabled": False}).json()
+    assert off["auto"]["enabled"] is False
+    assert off["auto"]["interval_hours"] == 12
+    assert saved["F2_IMPORT_AUTO_ENABLED"] == "false"
+
+
+def test_f2_auto_endpoint_rejects_out_of_range_interval(client, auto_settings):
+    """间隔越界由 FastAPI 参数校验拦住（1~720 小时）。"""
+    resp = client.put("/api/scraper/f2-auto", params={"enabled": True, "interval_hours": 0})
+    assert resp.status_code == 422

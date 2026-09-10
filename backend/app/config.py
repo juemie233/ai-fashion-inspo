@@ -148,6 +148,15 @@ class Settings(BaseSettings):
     chrome_startup_timeout: int = 20  # 启动就绪轮询超时（秒）
     scraper_task_auto_retry: int = 2  # 采集任务崩溃自动续采次数上限
 
+    # f2 抖音素材：一键获取（f2 增量下载 → 去重 → 入库）
+    # 是否每日自动增量入库（关闭时只保留界面上的手动「一键获取素材」）
+    f2_import_auto_enabled: bool = False
+    # 自动获取的最小间隔（小时）：距最近一次任务创建时间不足则跳过本轮；
+    # f2 自身按 last_aweme_id 只下新作品，所以间隔内重复触发没有额外收益
+    f2_import_interval_hours: int = 24
+    # 自动获取是否跳过 live 实况分段视频（与手动入口的开关同义）
+    f2_import_auto_skip_live: bool = False
+
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）
     cors_origins: list[str] = [

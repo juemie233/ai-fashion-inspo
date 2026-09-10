@@ -46,6 +46,8 @@ from app.services.task_runners.f2_import import (
     create_f2_import_task,
     execute_f2_import,
     f2_import_status,
+    get_f2_auto_status,
+    maybe_schedule_auto_import,
 )
 from app.services.task_runners.face_scan import (
     create_face_match_task,

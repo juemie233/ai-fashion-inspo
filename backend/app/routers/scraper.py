@@ -107,14 +107,56 @@ async def create_f2_import(
 
 
 @router.get("/f2-status")
-async def f2_status() -> dict:
-    """「一键获取素材」可用性：f2 是否安装、工作目录与作者清单是否就绪。
+async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
+    """「一键获取素材」状态：可用性 + 每日自动获取的配置与到期信息。
 
-    供采集管理页的按钮置灰与提示文案使用。
+    供采集管理页的按钮置灰、开关与「上次/下次运行」提示使用。
     """
-    from app.services.task_runner import f2_import_status
+    from app.services.task_runner import f2_import_status, get_f2_auto_status
 
-    return f2_import_status()
+    info = f2_import_status()
+    info["auto"] = await get_f2_auto_status(db)
+    return info
+
+
+@router.put("/f2-auto")
+async def set_f2_auto(
+    enabled: bool = Query(..., description="是否开启每日自动增量入库"),
+    interval_hours: int | None = Query(None, ge=1, le=720, description="最小间隔（小时）"),
+    skip_live: bool | None = Query(None, description="自动获取是否跳过 live 实况分段"),
+    persist: bool = Query(True, description="是否持久化写入 .env 文件"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """开关 f2 每日自动获取素材（f2 增量下载 → 去重 → 入库）。
+
+    与手动入口同一条链路，区别是由后端调度循环按间隔自动创建任务；到期判定见
+    `maybe_schedule_auto_import`（已有任务在跑或未到间隔则跳过）。
+    配置写入 settings 并（默认）持久化到 .env，重启后保持。
+    """
+    from app.config import settings
+    from app.routers.ai_shared import _update_env_file
+    from app.services.task_runner import get_f2_auto_status
+
+    settings.f2_import_auto_enabled = enabled
+    if interval_hours is not None:
+        settings.f2_import_interval_hours = interval_hours
+    if skip_live is not None:
+        settings.f2_import_auto_skip_live = skip_live
+
+    if persist:
+        updates = {"F2_IMPORT_AUTO_ENABLED": "true" if enabled else "false"}
+        if interval_hours is not None:
+            updates["F2_IMPORT_INTERVAL_HOURS"] = str(interval_hours)
+        if skip_live is not None:
+            updates["F2_IMPORT_AUTO_SKIP_LIVE"] = "true" if skip_live else "false"
+        await _update_env_file(updates)
+
+    status = await get_f2_auto_status(db)
+    return {
+        "message": f"每日自动获取素材已{'开启' if enabled else '关闭'}"
+        f"（间隔 {status['interval_hours']} 小时）",
+        "auto": status,
+    }
 
 
 @router.get("/hashtags")

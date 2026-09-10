@@ -18,6 +18,7 @@
 import asyncio
 import logging
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -129,6 +130,112 @@ async def _current_status(db: AsyncSession, task_id: int) -> str:
     """重新读取任务当前状态（供取消/暂停判定）。"""
     result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task_id))
     return result.scalar() or "running"
+
+
+async def _last_f2_task(db: AsyncSession) -> tuple[int | None, datetime | None, int | None]:
+    """返回 (最近一条 f2_import 任务的 id, 创建时间, 进行中的任务 id)。
+
+    到期判定以「最近一条任务的创建时间」为锚：手动点过一次之后，当天不会再被
+    自动任务重复触发（f2 增量本身也只下新作品，重复触发没有收益）。
+    """
+    last_row = (
+        await db.execute(
+            select(TaskQueue.id, TaskQueue.created_at)
+            .where(TaskQueue.type == "f2_import")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).first()
+    running = (
+        await db.execute(
+            select(TaskQueue.id)
+            .where(
+                TaskQueue.type == "f2_import",
+                TaskQueue.status.in_(("pending", "running", "paused")),
+            )
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar()
+    if last_row is None:
+        return None, None, running
+    return last_row[0], last_row[1], running
+
+
+async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
+    """按配置的间隔自动创建「一键获取素材」任务（每日新增作品自动入库）。
+
+    由后端调度循环周期性调用（每 30 秒一次，见 `app/main.py`）。全部条件满足才
+    创建，任一不满足即静默跳过（只记日志，不产生噪音任务）：
+
+    1. 配置开启（``settings.f2_import_auto_enabled``，界面可切换并持久化）
+    2. 环境可用（f2 已安装 + 工作目录存在 + 作者库非空，见 :func:`f2_import_status`）
+    3. 当前没有进行中的 f2_import 任务（避免并发跑两个 f2）
+    4. 距最近一次任务创建时间 ≥ ``settings.f2_import_interval_hours``
+
+    Returns:
+        新建任务的 id；本轮无需触发时返回 None。
+    """
+    from datetime import timedelta
+
+    from app.config import settings
+
+    if not settings.f2_import_auto_enabled:
+        return None
+
+    _last_id, last_created, running = await _last_f2_task(db)
+    if running:
+        return None
+
+    interval_hours = max(1, int(settings.f2_import_interval_hours or 24))
+    if last_created is not None and (utcnow() - last_created) < timedelta(hours=interval_hours):
+        return None
+
+    status = f2_import_status()
+    if not status["available"]:
+        # 环境没准备好（f2 未装 / 作者库为空）：跳过并留痕，不制造失败任务
+        logger.info(f"[f2 自动获取] 跳过本轮：{status['reason']}")
+        return None
+
+    task = await create_f2_import_task(
+        db, fetch=True, skip_live=bool(settings.f2_import_auto_skip_live)
+    )
+    logger.info(
+        f"[f2 自动获取] 已创建任务 #{task.id}"
+        f"（间隔 {interval_hours} 小时，作者库 {status['authors']} 个）"
+    )
+    return task.id
+
+
+async def get_f2_auto_status(db: AsyncSession) -> dict:
+    """自动获取的配置与到期信息（供采集管理页卡片展示）。
+
+    Returns:
+        {enabled, interval_hours, skip_live, available, reason, authors,
+         last_task_at, next_due_at, running_task_id}
+    """
+    from datetime import timedelta
+
+    from app.config import settings
+
+    info = f2_import_status()
+    _last_id, last_created, running = await _last_f2_task(db)
+    interval_hours = max(1, int(settings.f2_import_interval_hours or 24))
+    return {
+        "enabled": bool(settings.f2_import_auto_enabled),
+        "interval_hours": interval_hours,
+        "skip_live": bool(settings.f2_import_auto_skip_live),
+        "available": info["available"],
+        "reason": info["reason"],
+        "authors": info["authors"],
+        "last_task_at": last_created.isoformat() if last_created else None,
+        "next_due_at": (
+            (last_created + timedelta(hours=interval_hours)).isoformat()
+            if last_created
+            else None
+        ),
+        "running_task_id": running,
+    }
 
 
 async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
