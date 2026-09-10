@@ -42,7 +42,7 @@ async def set_manual_upload_auto_approve(
 
 @router.post("/quality-check")
 async def batch_quality_check(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=5000),
     random: bool = Query(False, description="是否随机抽取素材（含已审查）"),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str | int]:
@@ -53,7 +53,10 @@ async def batch_quality_check(
     由独立 worker 进程异步执行，前端轮询 GET /api/tasks/{task_id} 获取进度。
 
     参数:
-        limit: 最多审核的素材数量。
+        limit: 最多审核的素材数量。上限 5000——批量导入（如 f2 抖音素材）后常有
+            上万条待审核，200 的上限需要点几十次；实测审核约 12.5 秒/张，
+            5000 条在单并发下约 17 小时，任务支持在任务管理页**暂停/取消**
+            （每批检查一次状态，已判定结果保留）。
         random: 为 True 时随机抽取 limit 个素材（含已审查，会覆盖重审）；
             为 False 时按默认顺序取前 limit 个待审核（pending）素材。
     """

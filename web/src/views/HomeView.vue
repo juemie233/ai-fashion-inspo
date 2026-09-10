@@ -29,6 +29,7 @@ import {
   parseFocusIds,
 } from '@/utils/browseQuery'
 import { buildSourceOptions } from '@/utils/sourceLabel'
+import { QUALITY_BATCH_MAX, qualityBatchHint } from '@/utils/qualityBatch'
 import { createCollection } from '@/api/collections'
 import { buildSmartQuery, hasActiveFilters, type BrowseFilterState } from '@/utils/collectionQuery'
 
@@ -494,14 +495,15 @@ const checkingQuality = ref(false)
 async function handleBatchQualityCheck() {
   checkingQuality.value = true
   try {
-    const r = await batchQualityCheck(200)
+    // 单次上限与后端 le 对齐（此前写死 200：上万条待审核要点几十次）
+    const r = await batchQualityCheck(QUALITY_BATCH_MAX)
     if (r.count === 0) {
       Message.info('没有待审核的素材')
     } else {
       // 后台任务异步执行：用带「查看进度」动作的通知引导用户去任务管理页
       Notification.success({
         title: `已提交 ${r.count} 个素材进行质量审核`,
-        content: '任务在后台执行，可稍后在任务管理页查看进度与结果',
+        content: `任务在后台执行（${qualityBatchHint(r.count)}），可稍后在任务管理页查看进度、暂停或取消`,
         duration: 8000,
       })
     }
