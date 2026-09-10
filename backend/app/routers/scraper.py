@@ -60,6 +60,34 @@ async def create_f2_import(
         if not status["available"]:
             return {"message": status["reason"], "task_id": None}
 
+    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
+    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。已有进行中的任务时
+    # 直接复用它，不新建。
+    from sqlalchemy import select
+
+    from app.models.task import TaskQueue
+
+    running = (
+        (
+            await db.execute(
+                select(TaskQueue)
+                .where(
+                    TaskQueue.type == "f2_import",
+                    TaskQueue.status.in_(("pending", "running", "paused")),
+                )
+                .order_by(TaskQueue.id.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if running:
+        return {
+            "message": f"已有进行中的一键获取素材任务（#{running.id}），请等待完成或先取消",
+            "task_id": running.id,
+            "reused": True,
+        }
+
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
     task = await create_f2_import_task(
         db,

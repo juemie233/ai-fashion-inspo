@@ -197,13 +197,29 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             task.updated_at = utcnow()
             await db.commit()
 
+        # 全部作者都失败（cookie 失效 / 风控）时不能算成功：用户会从任务中心
+        # 看到「成功 0 下载」而不知情。落一次 result 后抛错，让任务显式失败。
+        if fetch_summary["total"] and fetch_summary["ok"] == 0:
+            task.result = {**opts, "fetch": fetch_summary}
+            await db.commit()
+            raise RuntimeError(
+                f"f2 下载全部失败（{fetch_summary['failed']}/{fetch_summary['total']} 个作者），"
+                "常见原因：cookie 失效或被风控；请先手动跑一次 f2 确认能下载。"
+                "若只想入库已下载的文件，请改用「仅入库」模式（fetch=False）"
+            )
+
     # ── 阶段 2：扫描 + 去重计划 ──
-    files = f2.scan_directory(f2.DEFAULT_F2_ROOT)
-    decisions, skipped, deferred_works = f2.build_import_plan(
+    # ⚠ 必须放线程里：build_import_plan 要对整个下载目录做 SHA-256（实测 7.3 GB
+    # 约 81 秒）。同步跑会阻塞 worker 事件循环——心跳（10s 间隔 / 90s stale 阈值）
+    # 会停跳，运行中的任务可能被 _reset_stale_tasks 判为 stale 并被其它 worker
+    # 重新认领（同一批导入被并发执行），期间暂停/取消也完全失效。
+    files = await asyncio.to_thread(f2.scan_directory, f2.DEFAULT_F2_ROOT)
+    decisions, skipped, deferred_works = await asyncio.to_thread(
+        f2.build_import_plan,
         files=files,
-        library_hashes=f2.load_library_hashes(),
-        existing_platform_ids=f2.load_library_platform_ids(),
-        bloggers=f2.load_douyin_bloggers(),
+        library_hashes=await asyncio.to_thread(f2.load_library_hashes),
+        existing_platform_ids=await asyncio.to_thread(f2.load_library_platform_ids),
+        bloggers=await asyncio.to_thread(f2.load_douyin_bloggers),
         authors=authors,
         limit=limit,
         skip_live=skip_live,
@@ -286,6 +302,10 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     task.done = holder["done"]
     task.total = holder["total"]
     task.updated_at = utcnow()
+    if result.get("batch_error"):
+        # 清单缺失 = 本批无法回滚，写进任务 error 让用户一眼看到（任务仍算成功，
+        # 因为素材确实已入库）
+        task.error = f"批次清单写入失败（本批无法回滚）：{result['batch_error']}"
     if status_now in ("cancelled", "paused"):
         # 尊重外部状态：worker 见 status != running 不会覆盖为 success
         task.status = status_now

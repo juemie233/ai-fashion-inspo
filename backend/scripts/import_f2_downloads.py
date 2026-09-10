@@ -830,7 +830,11 @@ def apply_import(
 
             if make_thumbnails:
                 if item.media_type == "video":
-                    thumb = extract_video_thumbnail_sync(dest, today)
+                    # 与图片一致：显式传 storage 下的缩略图目录，避免 --storage-root
+                    # 试跑时缩略图落进真实存储（DB 里的相对路径在目标根下找不到）
+                    thumb = extract_video_thumbnail_sync(
+                        dest, today, thumbs_dir=storage_root / "thumbnails"
+                    )
                 else:
                     # 显式传入 storage 下的缩略图目录：与素材文件同根，便于整体迁移/清理
                     thumb = _generate_image_thumbnail_sync(
@@ -885,12 +889,18 @@ def apply_import(
                 conn.rollback()
             except Exception:
                 pass
-            for leftover in (dest,):
-                if leftover is not None:
-                    try:
-                        leftover.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+            # 清理本条已落盘的文件与缩略图（缩略图是相对路径，需拼回存储根，
+            # 否则每次失败都会留下一张孤儿缩略图）
+            leftovers = [dest]
+            if thumb:
+                leftovers.append(storage_root / thumb)
+            for leftover in leftovers:
+                if leftover is None:
+                    continue
+                try:
+                    leftover.unlink(missing_ok=True)
+                except Exception:
+                    pass
             errors.append({"source_file": str(item.path), "error": str(exc)[:200]})
         finally:
             processed += 1
@@ -900,6 +910,7 @@ def apply_import(
     # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚
     batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}"
     batch_file = batch_dir / f"{batch_id}.json"
+    batch_error: str | None = None
     try:
         batch_dir.mkdir(parents=True, exist_ok=True)
         batch_file.write_text(
@@ -918,7 +929,9 @@ def apply_import(
             encoding="utf-8",
         )
     except Exception as exc:  # noqa: BLE001
-        errors.append({"source_file": "(批次清单)", "error": str(exc)[:200]})
+        # 单独记录：清单写失败不影响已入库素材，但**这批将无法回滚**，
+        # 必须与「素材失败」区分开并醒目提示（曾把两者混在一个 failed 计数里）
+        batch_error = str(exc)[:200]
         batch_file = None  # type: ignore[assignment]
     conn.close()
 
@@ -928,6 +941,7 @@ def apply_import(
         "ids": imported_ids,
         "errors": errors,
         "batch_file": str(batch_file) if batch_file else "",
+        "batch_error": batch_error,
         "stopped": stopped,
     }
 
@@ -1136,6 +1150,35 @@ def latest_batch_file(batch_dir: Path) -> Path | None:
     return files[-1] if files else None
 
 
+def _table_exists(conn, name: str) -> bool:
+    """表是否存在（回滚要在「迁移未跑全的库副本」上也能给出可读结果）。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def batch_storage_root(batch_file: Path) -> Path | None:
+    """读取批次清单里记录的导入期存储根（回滚优先用它，而不是当前配置）。
+
+    清单在导入时写入了 `storage_root`；若导入用了 `--storage-root` 临时目录，
+    回滚时用当前配置去找文件会全部找不到（孤儿文件），只用当前根定位批次还可能
+    选错批次。这里把它读出来供调用方做默认值。
+
+    Args:
+        batch_file: 批次清单路径。
+
+    Returns:
+        清单记录的存储根；缺失或无法解析时返回 None。
+    """
+    try:
+        data = json.loads(Path(batch_file).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    root = data.get("storage_root")
+    return Path(root) if isinstance(root, str) and root else None
+
+
 def plan_rollback(
     batch_file: Path,
     db_path: Path,
@@ -1146,6 +1189,9 @@ def plan_rollback(
     保留判断（未被导入动作之外的改动污染才删）：素材若已经有标签关联、被收藏、
     有评分、或质量状态不再是 pending，说明用户已经用过它——默认不删，避免把
     人的后续工作一起抹掉；`force=True` 时才连这些一起删。
+
+    查询按批进行（`IN (...)` 分片）：一次回滚可能涉及上万条，逐条 SELECT 会变成
+    数万次查询。
 
     Args:
         batch_file: 导入时落盘的批次清单。
@@ -1162,24 +1208,39 @@ def plan_rollback(
     deletable: list[dict] = []
     kept: list[dict] = []
     try:
+        # 一次性取回素材状态与标签计数（分片以避开 SQLite 变量数上限）
+        ids = [r.get("inspiration_id") for r in rows if r.get("inspiration_id")]
+        states: dict[str, tuple] = {}
+        tag_counts: dict[str, int] = {}
+        has_tag_table = _table_exists(conn, "inspiration_tags")
+        for chunk in (ids[i : i + 900] for i in range(0, len(ids), 900)):
+            marks = ",".join("?" * len(chunk))
+            for insp_id, is_favorite, rating, quality_status in conn.execute(
+                "SELECT id, is_favorite, rating, quality_status FROM inspirations "
+                f"WHERE deleted_at IS NULL AND id IN ({marks})",
+                chunk,
+            ):
+                states[insp_id] = (is_favorite, rating, quality_status)
+            if has_tag_table:
+                for insp_id, count in conn.execute(
+                    "SELECT inspiration_id, COUNT(*) FROM inspiration_tags "
+                    f"WHERE inspiration_id IN ({marks}) GROUP BY inspiration_id",
+                    chunk,
+                ):
+                    tag_counts[insp_id] = count
+
         for row in rows:
             insp_id = row.get("inspiration_id")
             if not insp_id:
                 continue
-            found = conn.execute(
-                "SELECT is_favorite, rating, quality_status FROM inspirations "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (insp_id,),
-            ).fetchone()
-            if not found:
+            if insp_id not in states:
                 kept.append({**row, "keep_reason": "素材已不存在（删除过或已回滚）"})
                 continue
-            tag_links = conn.execute(
-                "SELECT COUNT(*) FROM inspiration_tags WHERE inspiration_id = ?",
-                (insp_id,),
-            ).fetchone()[0]
-            is_favorite, rating, quality_status = found
-            if not force and (tag_links or is_favorite or rating or quality_status not in (None, "pending")):
+            tag_links = tag_counts.get(insp_id, 0)
+            is_favorite, rating, quality_status = states[insp_id]
+            if not force and (
+                tag_links or is_favorite or rating or quality_status not in (None, "pending")
+            ):
                 kept.append(
                     {
                         **row,
@@ -1222,9 +1283,26 @@ def apply_rollback(
     deleted = 0
     removed_files = 0
     errors: list[dict] = []
+    has_tag_table = _table_exists(conn, "inspiration_tags")
+    has_blogger_table = _table_exists(conn, "inspiration_bloggers")
     for row in deletable:
         insp_id = row.get("inspiration_id")
         try:
+            # 顺序与项目既有约定一致（inspiration_trash 的物理删除）：先删库并提交，
+            # 再清理磁盘文件——反过来若 DB 删除失败，文件已不可逆丢失而记录还在，
+            # 素材会变成指向缺失文件的悬空条目
+            if has_tag_table:
+                conn.execute(
+                    "DELETE FROM inspiration_tags WHERE inspiration_id = ?", (insp_id,)
+                )
+            if has_blogger_table:
+                conn.execute(
+                    "DELETE FROM inspiration_bloggers WHERE inspiration_id = ?", (insp_id,)
+                )
+            conn.execute("DELETE FROM inspirations WHERE id = ?", (insp_id,))
+            conn.commit()
+            deleted += 1
+
             for rel in (row.get("file_path"), row.get("thumbnail_path")):
                 if not rel:
                     continue
@@ -1239,13 +1317,6 @@ def apply_rollback(
             frames_dir = storage_root / "keyframes" / str(insp_id)
             if frames_dir.exists():
                 shutil.rmtree(frames_dir, ignore_errors=True)
-            conn.execute("DELETE FROM inspiration_tags WHERE inspiration_id = ?", (insp_id,))
-            conn.execute(
-                "DELETE FROM inspiration_bloggers WHERE inspiration_id = ?", (insp_id,)
-            )
-            conn.execute("DELETE FROM inspirations WHERE id = ?", (insp_id,))
-            conn.commit()
-            deleted += 1
         except Exception as exc:  # noqa: BLE001 —— 单条失败不阻断整批
             try:
                 conn.rollback()
@@ -1393,8 +1464,21 @@ def main(argv: list[str] | None = None) -> int:
         if not args.apply:
             print("\n提示：本命令只预览，未删除任何数据。确认后加 --apply 执行回滚。")
             return 0
+        # 存储根优先级：显式传参 > 清单里记录的导入期存储根 > 当前配置。
+        # 导入用过 --storage-root 时，只有清单记录的那个根才找得到文件
+        recorded_root = batch_storage_root(Path(batch_file))
+        if args.storage_root:
+            rollback_root = args.storage_root
+            root_source = "命令行 --storage-root"
+        elif recorded_root:
+            rollback_root = recorded_root
+            root_source = "批次清单记录"
+        else:
+            rollback_root = settings.storage_root
+            root_source = "当前配置（清单未记录）"
+        print(f"  存储根: {rollback_root}（{root_source}）")
         result = apply_rollback(
-            deletable, db_path=db_path, storage_root=args.storage_root or settings.storage_root
+            deletable, db_path=db_path, storage_root=rollback_root
         )
         print("\n=== 回滚完成 ===")
         print(
@@ -1509,6 +1593,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"入库 {result['imported']} 个，失败 {result['failed']} 个")
     if result["batch_file"]:
         print(f"批次清单: {result['batch_file']}（可用于审计与回滚）")
+    if result.get("batch_error"):
+        # 清单缺失 = 这批无法回滚，必须醒目（此前被混进「失败」计数里）
+        print(
+            f"\n⚠ 批次清单写入失败：{result['batch_error']}\n"
+            f"  素材已入库，但**本批无法用 --rollback 撤销**；如需撤销请手工按 "
+            f"storage/import_batches 下相邻批次或素材创建时间处理。"
+        )
     for err in result["errors"][:10]:
         print(f"   ✗ {err['source_file']}: {err['error']}")
     print(

@@ -63,14 +63,19 @@ export function useF2Import() {
   async function submit(options: F2ImportOptions): Promise<number | null> {
     submitting.value = true
     try {
-      const { data } = await apiClient.post<{ task_id: number | null; message: string }>(
-        '/scraper/f2-import',
-        null,
-        { params: options },
-      )
+      const { data } = await apiClient.post<{
+        task_id: number | null
+        message: string
+        /** 后端已有进行中的同类任务，直接复用它（并发保护） */
+        reused?: boolean
+      }>('/scraper/f2-import', null, { params: options })
       if (!data.task_id) {
         Message.warning(data.message || '任务未创建')
         return null
+      }
+      if (data.reused) {
+        Message.info(data.message || '已有进行中的「一键获取素材」任务')
+        return data.task_id
       }
       Message.success('已提交「一键获取素材」任务，进度见任务中心')
       return data.task_id

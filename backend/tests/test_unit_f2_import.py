@@ -717,6 +717,158 @@ def test_latest_batch_file(tmp_path):
     assert f2.latest_batch_file(batch_dir).name == "f2-20260102-000000.json"
 
 
+# ── 代码审查修复项的回归测试 ──
+
+
+def test_apply_import_passes_thumbs_dir_for_video(tmp_path, monkeypatch):
+    """修复（审查 M1）：视频缩略图必须写进调用方的 storage 根。
+
+    回归点：extract_video_thumbnail_sync 内部默认用 settings.thumbnails_dir，
+    不传 thumbs_dir 时用 --storage-root 试跑会把缩略图落进真实存储。
+    """
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_video.mp4".replace(".mp4", ".jpg"))
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+    captured: dict = {}
+
+    def _fake_video_thumb(video_path, today, thumbs_dir=None):
+        captured["thumbs_dir"] = thumbs_dir
+        return None
+
+    monkeypatch.setattr(f2, "extract_video_thumbnail_sync", _fake_video_thumb)
+    decisions, _, _ = _decisions(files)
+    # 该文件按类型推断是 image；强制改成 video 以走视频缩略图分支
+    decisions = [
+        f2.ImportDecision(
+            item=f2.ParsedFile(
+                path=d.item.path, author_dir=d.item.author_dir, author_key=d.item.author_key,
+                work_key=d.item.work_key, created=d.item.created, body=d.item.body,
+                kind="video", index=0, media_type="video",
+            ),
+            action=d.action, reason=d.reason, platform_id=d.platform_id,
+            content_hash=d.content_hash,
+        )
+        for d in decisions
+    ]
+    f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=storage,
+    )
+
+    assert captured.get("thumbs_dir") == storage / "thumbnails"
+
+
+def test_apply_import_reports_batch_error_separately(tmp_path):
+    """修复（审查 M5）：批次清单写失败不再混进「素材失败」计数，单列 batch_error。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    db = _import_lib(tmp_path)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("占位文件，令 mkdir 失败", encoding="utf-8")
+
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        batch_dir=blocker / "import_batches",  # 父路径是文件 → 建目录必失败
+    )
+
+    assert result["imported"] == 1
+    assert result["failed"] == 0  # 素材没有失败
+    assert result["batch_error"]
+    assert result["batch_file"] == ""
+
+
+def test_apply_import_failure_removes_thumbnail(tmp_path):
+    """修复（审查 L1）：单条失败时，已生成的缩略图也要删掉（否则留孤儿文件）。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    to_import = [d for d in decisions if d.action == "import"]
+
+    # 先手插一条同平台 ID 的行 → 真导入撞唯一索引失败
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO inspirations (id, source_platform_id) VALUES ('pre', ?)",
+        (to_import[0].platform_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    result = f2.apply_import(to_import, db_path=db, storage_root=storage)
+
+    assert result["imported"] == 0 and result["failed"] == 1
+    assert list((storage / "images").rglob("*.jpg")) == []  # 主文件已清理
+    thumbs = list((storage / "thumbnails").rglob("*.jpg")) if (storage / "thumbnails").exists() else []
+    assert thumbs == []  # 缩略图也已清理
+
+
+def test_batch_storage_root_reads_recorded_root(tmp_path):
+    """修复（审查 M3）：回滚优先用清单记录的存储根。"""
+    batch = tmp_path / "b.json"
+    batch.write_text(
+        json.dumps({"storage_root": "D:/other/storage", "imported": []}), encoding="utf-8"
+    )
+    assert f2.batch_storage_root(batch) == Path("D:/other/storage")
+
+    batch.write_text("{}", encoding="utf-8")
+    assert f2.batch_storage_root(batch) is None  # 未记录
+    batch.write_text("不是 JSON", encoding="utf-8")
+    assert f2.batch_storage_root(batch) is None  # 解析失败不抛
+
+
+def test_rollback_deletes_row_before_file(tmp_path):
+    """修复（审查 M2）：先删库再删文件——DB 删除失败时文件必须仍在。
+
+    回归点：反过来的顺序会在 DB 失败后留下「记录还在、文件已丢」的悬空素材。
+    """
+    db, storage, batch_file, ids = _imported_fixture(tmp_path)
+    conn = sqlite3.connect(db)
+    rel = conn.execute("SELECT file_path FROM inspirations LIMIT 1").fetchone()[0]
+    # 用触发器模拟「DB 删除失败」（plan 阶段的 SELECT 不受影响）
+    conn.execute(
+        "CREATE TRIGGER block_delete BEFORE DELETE ON inspirations "
+        "BEGIN SELECT RAISE(ABORT, '删除被阻止'); END;"
+    )
+    conn.commit()
+    conn.close()
+
+    deletable, _kept = f2.plan_rollback(batch_file, db)
+    assert deletable, "预览阶段应仍列出条目"
+    result = f2.apply_rollback(deletable, db_path=db, storage_root=storage)
+
+    assert result["deleted"] == 0 and result["failed"] == len(deletable)
+    assert (storage / rel).exists(), "DB 删除失败时文件不得被提前删掉"
+
+
+def test_plan_rollback_tolerates_missing_tag_table(tmp_path):
+    """修复（审查 L3）：缺 inspiration_tags 表的库副本也能给出可读结果。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"], db_path=db, storage_root=storage
+    )
+
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE inspiration_tags")
+    conn.commit()
+    conn.close()
+
+    deletable, kept = f2.plan_rollback(Path(result["batch_file"]), db)
+    assert len(deletable) == 1 and kept == []
+    rolled = f2.apply_rollback(deletable, db_path=db, storage_root=storage)
+    assert rolled["deleted"] == 1  # 缺表时跳过标签清理，不报错
+
+
 # ── 进度回调与停止判据（供后台任务报告进度 / 响应暂停取消）──
 
 

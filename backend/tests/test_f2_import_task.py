@@ -4,6 +4,7 @@
 执行阶段用临时 f2 目录 + 项目自带的临时素材库（conftest 已隔离）。
 """
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -184,3 +185,87 @@ async def test_execute_f2_import_author_filter(client, f2_tree):
     async with async_session() as db:
         stored = await db.get(TaskQueue, task_id)
         assert stored.result["plan"]["files"] == 2  # 只导 里香1√ 的两张图
+
+
+# ── 代码审查修复项的回归测试 ──
+
+
+async def test_execute_f2_import_fails_when_all_downloads_fail(
+    client, f2_tree, monkeypatch
+):
+    """修复（审查 M4）：所有作者下载都失败时必须让任务显式失败。
+
+    回归点：cookie 失效时原先会以 success + 0 下载收尾，用户从任务中心
+    看到「成功」而毫不知情。
+    """
+    from app.services.task_runners import f2_import as runner
+
+    f2_dir, _root = f2_tree
+    import sqlite3 as _sq
+
+    conn = _sq.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 1)  # 每个作者都失败
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True)
+        with pytest.raises(RuntimeError, match="下载全部失败"):
+            await task_runner.execute_f2_import(db, task)
+
+
+async def test_execute_f2_import_does_not_block_event_loop(
+    client, f2_tree, monkeypatch
+):
+    """修复（审查 H1）：扫描 + 全量哈希必须在线程里跑。
+
+    回归点：build_import_plan 同步执行时（实测 7.3 GB 约 81 秒）会阻塞 worker
+    事件循环，心跳（10s/90s 阈值）停跳可能让运行中的任务被判 stale 并重复认领。
+    这里用「慢扫描」模拟重活，断言事件循环在此期间仍能转。
+    """
+    import time
+
+    f2_dir, _root = f2_tree
+    marks: dict[str, float] = {}
+
+    def slow_scan(root):
+        marks["start"] = time.monotonic()
+        time.sleep(0.5)
+        marks["end"] = time.monotonic()
+        return []
+
+    monkeypatch.setattr(f2, "scan_directory", slow_scan)
+
+    ticks: list[float] = []
+
+    async def _ticker():
+        while True:
+            ticks.append(time.monotonic())
+            await asyncio.sleep(0.02)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        ticker = asyncio.create_task(_ticker())
+        try:
+            await task_runner.execute_f2_import(db, task)
+        finally:
+            ticker.cancel()
+
+    during = [t for t in ticks if marks["start"] <= t <= marks["end"]]
+    assert len(during) >= 5, f"扫描期间事件循环仅转了 {len(during)} 次，疑似被阻塞"
+
+
+def test_create_f2_import_reuses_running_task(client):
+    """修复（审查 L4）：已有进行中的任务时直接复用，避免连点起多个任务。"""
+    first = client.post("/api/scraper/f2-import", params={"fetch": False}).json()
+    second = client.post("/api/scraper/f2-import", params={"fetch": False}).json()
+
+    assert first["task_id"] and second["task_id"] == first["task_id"]
+    assert second.get("reused") is True
+    assert "进行中" in second["message"]

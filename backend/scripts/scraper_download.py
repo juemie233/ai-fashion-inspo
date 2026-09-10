@@ -186,17 +186,23 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
 # ═══════════════════════════════════════════════════════════════
 
 
-def extract_video_thumbnail_sync(video_path: Path, today: str) -> str | None:
+def extract_video_thumbnail_sync(
+    video_path: Path, today: str, thumbs_dir: Path | None = None
+) -> str | None:
     """用 ffmpeg 提取视频首帧缩略图（同步 subprocess），失败返回 None。
 
     Args:
         video_path: 视频文件路径。
         today: 日期字符串（用于构建缩略图子目录）。
+        thumbs_dir: 缩略图根目录（缺省 settings.thumbnails_dir）。
+            调用方若在别的存储根下工作（如 f2 导入的 --storage-root 试跑），
+            必须显式传入，否则缩略图会写进真实存储、而返回的相对路径在
+            目标根下找不到（试跑污染真实存储 + 缩略图丢失）。
 
     Returns:
         缩略图相对路径（如 "thumbnails/2025-01/thumb_xxx.jpg"），失败返回 None。
     """
-    thumb_dir = settings.thumbnails_dir / today
+    thumb_dir = (thumbs_dir or settings.thumbnails_dir) / today
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_name = f"thumb_{video_path.stem}.jpg"
     thumb_path = thumb_dir / thumb_name

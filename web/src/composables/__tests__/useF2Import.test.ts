@@ -85,6 +85,27 @@ describe('useF2Import', () => {
     success.mockRestore()
   })
 
+  it('submit 复用进行中的任务时给出提示而非「已提交」', async () => {
+    const info = vi.spyOn(Message, 'info').mockImplementation((() => {}) as never)
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.post.mockResolvedValue({
+      data: {
+        task_id: 7,
+        message: '已有进行中的一键获取素材任务（#7），请等待完成或先取消',
+        reused: true,
+      },
+    })
+    const { submit } = useF2Import()
+
+    const taskId = await submit({ fetch: true })
+
+    expect(taskId).toBe(7)
+    expect(info).toHaveBeenCalled()
+    expect(success).not.toHaveBeenCalled()
+    info.mockRestore()
+    success.mockRestore()
+  })
+
   it('submit 请求异常时返回 null 并提示错误', async () => {
     const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
     mocks.post.mockRejectedValue({ response: { data: { detail: '任务创建失败' } } })
