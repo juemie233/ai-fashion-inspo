@@ -2,6 +2,7 @@
 /** 上传主区域：选择文件、导入文件夹、URL 导入。 */
 
 import { ref } from 'vue'
+import { MAX_UPLOAD_QUEUE_SIZE } from '@/constants/upload'
 
 defineProps<{
   /** URL 导入输入框值 */
@@ -22,8 +23,12 @@ const emit = defineEmits<{
 const fileInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
 
-function openFilePicker() { fileInput.value?.click() }
-function openFolder() { folderInput.value?.click() }
+function openFilePicker() {
+  fileInput.value?.click()
+}
+function openFolder() {
+  folderInput.value?.click()
+}
 
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
@@ -43,15 +48,32 @@ function onUrlInput(value: string | null) {
     <div class="upload-icon-wrap">📤</div>
     <p class="upload-title">上传穿搭素材</p>
     <p class="upload-desc">拖拽文件到此处、Ctrl+V 粘贴、或点击下方按钮</p>
-    <p class="upload-formats">JPG / PNG / WebP / GIF / MP4 · 单次最多 500 个</p>
+    <p class="upload-formats">
+      JPG / PNG / WebP / GIF / MP4 · 单次最多 {{ MAX_UPLOAD_QUEUE_SIZE }} 个
+    </p>
 
     <div class="upload-actions">
       <a-button type="primary" size="large" @click="openFilePicker">选择文件</a-button>
       <a-button size="large" @click="openFolder">📁 导入文件夹</a-button>
     </div>
 
-    <input ref="fileInput" type="file" multiple accept="image/*,video/mp4" style="display:none" @change="onFileChange" />
-    <input ref="folderInput" type="file" webkitdirectory multiple accept="image/*,video/mp4" style="display:none" @change="onFileChange" />
+    <input
+      ref="fileInput"
+      type="file"
+      multiple
+      accept="image/*,video/mp4"
+      style="display: none"
+      @change="onFileChange"
+    />
+    <input
+      ref="folderInput"
+      type="file"
+      webkitdirectory
+      multiple
+      accept="image/*,video/mp4"
+      style="display: none"
+      @change="onFileChange"
+    />
 
     <!-- URL 导入 -->
     <div class="url-import">
@@ -63,7 +85,12 @@ function onUrlInput(value: string | null) {
         @input="onUrlInput"
         @press-enter="emit('importUrl')"
       />
-      <a-button size="small" :loading="urlImporting" @click="emit('importUrl')" :disabled="!urlInput.trim()">
+      <a-button
+        size="small"
+        :loading="urlImporting"
+        @click="emit('importUrl')"
+        :disabled="!urlInput.trim()"
+      >
         导入
       </a-button>
     </div>
@@ -78,7 +105,9 @@ function onUrlInput(value: string | null) {
   border: 2px dashed #d1d5db;
   border-radius: 16px;
   text-align: center;
-  transition: border-color 0.2s, background 0.2s;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
 }
 
 .upload-zone:hover {

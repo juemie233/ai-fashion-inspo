@@ -36,7 +36,7 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 | ------ | ------ |
 | Inspiration library | Waterfall browsing, multi-dimensional filtering, sorting, density adjustment, batch operations |
 | Advanced search | Keywords / tags (AND/OR) / color / date, semantic search, reverse image search, co-occurrence recommendations, search history |
-| Upload inspirations | Drag-and-drop / paste / URL, preview queue, duplicate detection, folder batch, 500-item limit check |
+| Upload inspirations | Drag-and-drop / paste / URL, preview queue, duplicate detection, folder batch, 1500-item limit check |
 | Inspiration detail | Lightbox, tags, outfit master tags (manual + AI suggestions), similar recommendations, re-analysis |
 | Scraping management | Xiaohongshu CDP + Douyin scraping, scheduled scraping, resumable scraping, Cookie management, stats dashboard, URL tombstone dedup |
 | Tag management | Grouping / sorting / alias normalization / merging / co-occurrence network / import-export / trends |

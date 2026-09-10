@@ -14,6 +14,7 @@ import { useUploadPrefs } from '@/composables/useUploadPrefs'
 import { useRecentUploads } from '@/composables/useRecentUploads'
 import { isVideoFile } from '@/utils/media'
 import { openInNewTab } from '@/utils/openInNewTab'
+import { MAX_UPLOAD_QUEUE_SIZE } from '@/constants/upload'
 import UploadDropZone from '@/components/upload/UploadDropZone.vue'
 import UploadQueue from '@/components/upload/UploadQueue.vue'
 import UploadOptionsPanel from '@/components/upload/UploadOptionsPanel.vue'
@@ -30,9 +31,6 @@ const { recentUploads, prependRecent } = useRecentUploads()
 
 // ── 可上传扩展名（含视频；命名用 UPLOAD 而非 IMG 避免误导）──
 const UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4'])
-
-// ── 上传队列上限（页面文案承诺「单次最多 500 个」）──
-const MAX_QUEUE_SIZE = 500
 
 // ── 拖拽状态 ──
 const isDragging = ref(false)
@@ -140,14 +138,14 @@ function addFiles(files: File[]) {
     return
   }
   // 数量校验：队列已有 + 本次拖入超过上限时，按剩余容量截断
-  const remaining = MAX_QUEUE_SIZE - queue.value.length
+  const remaining = MAX_UPLOAD_QUEUE_SIZE - queue.value.length
   const accepted = remaining > 0 ? imageFiles.slice(0, remaining) : []
   if (accepted.length < imageFiles.length) {
     if (remaining <= 0) {
-      Message.warning(`队列已满（最多 ${MAX_QUEUE_SIZE} 个），未添加任何文件`)
+      Message.warning(`队列已满（最多 ${MAX_UPLOAD_QUEUE_SIZE} 个），未添加任何文件`)
     } else {
       Message.warning(
-        `队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_QUEUE_SIZE} 个）`,
+        `队列已接近上限：本次仅保留前 ${accepted.length} 个文件（上限 ${MAX_UPLOAD_QUEUE_SIZE} 个）`,
       )
     }
   }
