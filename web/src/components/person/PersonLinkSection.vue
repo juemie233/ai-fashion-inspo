@@ -9,6 +9,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import type { PersonBrief } from '@shared/types/person'
@@ -33,6 +34,14 @@ const api = props.kind === 'blogger' ? bloggersApi : modelsApi
 const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
 /** 列表排序：穿搭博主按素材数倒序（高频博主优先出现在下拉顶部）；模特按名称 */
 const listSort = props.kind === 'blogger' ? 'count' : 'name'
+
+const router = useRouter()
+
+/** 跳转人物详情页：路由统一为 /persons/:id，类型由 query.kind 区分（博主/模特）。
+ *  本组件按 kind 渲染，故直接透传自身 kind，不会混淆博主与模特。 */
+function goPersonDetail(person: PersonBrief) {
+  router.push({ path: `/persons/${person.id}`, query: { kind: props.kind } })
+}
 
 /** 全部人物（分页拉取，作为下拉候选池） */
 const allPersons = ref<PersonBrief[]>([])
@@ -136,7 +145,9 @@ async function removePerson(person: PersonBrief) {
     <!-- 已关联人物 -->
     <div v-if="persons.length > 0" class="linked-list">
       <span v-for="p in persons" :key="p.id" class="linked-chip">
-        <span class="linked-name">{{ p.name }}</span>
+        <span class="linked-name" title="查看人物详情" @click="goPersonDetail(p)">{{
+          p.name
+        }}</span>
         <span
           class="linked-remove"
           :class="{ disabled: disabled }"
@@ -203,6 +214,13 @@ async function removePerson(person: PersonBrief) {
 .linked-name {
   font-size: 13px;
   color: #374151;
+  cursor: pointer;
+}
+
+/* 名称可点击跳转人物详情：hover 用主色 + 下划线提示可点击 */
+.linked-name:hover {
+  color: rgb(var(--primary-6));
+  text-decoration: underline;
 }
 
 .linked-remove {

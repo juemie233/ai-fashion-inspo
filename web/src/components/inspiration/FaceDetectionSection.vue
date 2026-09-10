@@ -19,6 +19,7 @@ import {
 import { bloggersApi, modelsApi, type PersonBrief } from '@/api/persons'
 import { Message } from '@arco-design/web-vue'
 import { IconLock } from '@arco-design/web-vue/es/icon'
+import { useRouter } from 'vue-router'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const props = defineProps<{
@@ -30,6 +31,17 @@ const emit = defineEmits<{
   /** 是否存在已确认（锁定）人脸：父组件据此锁定「穿搭博主/职业模特」关联栏 */
   (e: 'lock-change', locked: boolean): void
 }>()
+
+const router = useRouter()
+
+/** 跳转匹配到的人物详情页（按匹配类型区分博主/模特） */
+function goMatchedPerson(det: FaceDetectionOut) {
+  if (det.matched_blogger_id != null) {
+    router.push({ path: `/persons/${det.matched_blogger_id}`, query: { kind: 'blogger' } })
+  } else if (det.matched_model_id != null) {
+    router.push({ path: `/persons/${det.matched_model_id}`, query: { kind: 'model' } })
+  }
+}
 
 const detections = ref<FaceDetectionOut[]>([])
 const loading = ref(false)
@@ -239,8 +251,15 @@ onMounted(() => {
     <div v-else class="face-list">
       <div v-for="det in detections" :key="det.id" class="face-item">
         <span class="face-index">人脸 #{{ det.face_index + 1 }}</span>
-        <!-- 已确认（锁定）：绿色标签 + 锁图标，操作按钮禁用 -->
-        <a-tag v-if="isLocked(det)" color="green" size="small">
+        <!-- 已确认（锁定）：绿色标签 + 锁图标，操作按钮禁用；点击标签跳转人物详情 -->
+        <a-tag
+          v-if="isLocked(det)"
+          color="green"
+          size="small"
+          class="face-match-tag"
+          title="查看人物详情"
+          @click="goMatchedPerson(det)"
+        >
           <IconLock /> 已确认：{{ matchedTag(det)?.text ?? '已关联人物' }}
           <template v-if="det.confidence !== null">
             （{{ (det.confidence * 100).toFixed(1) }}%）
@@ -251,6 +270,9 @@ onMounted(() => {
           v-else-if="matchedTag(det)"
           :color="matchedTag(det)?.high ? 'green' : 'arcoblue'"
           size="small"
+          class="face-match-tag"
+          title="查看人物详情"
+          @click="goMatchedPerson(det)"
         >
           {{ matchedTag(det)?.text }}
           <template v-if="det.confidence !== null">
@@ -342,5 +364,13 @@ onMounted(() => {
   font-size: 12px;
   color: #666;
   min-width: 56px;
+}
+
+/* 匹配到的人物标签可点击跳转人物详情（hover 时轻微加深提示可交互） */
+.face-match-tag {
+  cursor: pointer;
+}
+.face-match-tag:hover {
+  opacity: 0.85;
 }
 </style>
