@@ -13,6 +13,7 @@ import type { UploadQueueItem } from '@/types/upload'
 import { useUploadPrefs } from '@/composables/useUploadPrefs'
 import { useRecentUploads } from '@/composables/useRecentUploads'
 import { isVideoFile } from '@/utils/media'
+import { openInNewTab } from '@/utils/openInNewTab'
 import UploadDropZone from '@/components/upload/UploadDropZone.vue'
 import UploadQueue from '@/components/upload/UploadQueue.vue'
 import UploadOptionsPanel from '@/components/upload/UploadOptionsPanel.vue'
@@ -388,11 +389,11 @@ function makeProgressHandler(item: UploadQueueItem) {
 
 /** 新开浏览器标签页查看素材详情（不离开上传页，保留上传队列与最近上传状态）。
  *  非用户手势触发时（如上传完成后自动打开）可能被浏览器拦截，此时降级为当前页跳转，
- *  避免「点了没反应」。与手机图剪裁页「查看素材详情」的实现保持一致。 */
+ *  避免「点了没反应」；openInNewTab 的返回值可靠（内部不使用 noopener feature——
+ *  带 noopener 时 window.open 恒返回 null，会把「成功打开」误判为「被拦截」）。 */
 function goToDetail(id: string) {
   const { href } = router.resolve({ path: `/detail/${id}` })
-  const opened = window.open(href, '_blank', 'noopener,noreferrer')
-  if (!opened) router.push(`/detail/${id}`)
+  if (!openInNewTab(href)) router.push(`/detail/${id}`)
 }
 
 // ── 队列统计 ──

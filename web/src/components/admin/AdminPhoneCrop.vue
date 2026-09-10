@@ -8,6 +8,7 @@ import axios from 'axios'
 import apiClient from '@/api/client'
 import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
+import { openInNewTab } from '@/utils/openInNewTab'
 import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
 
 const router = useRouter()
@@ -252,7 +253,7 @@ function openPreviewDetail() {
   if (!id) return
   previewOpen.value = false
   const { href } = router.resolve({ path: '/detail/' + id })
-  window.open(href, '_blank', 'noopener,noreferrer')
+  openInNewTab(href)
 }
 
 /** 大图预览：URL + 关联素材 ID（展示于弹窗，供用户反馈问题时复制） */
