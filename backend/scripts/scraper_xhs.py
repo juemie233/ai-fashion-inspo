@@ -25,6 +25,8 @@ from .scraper_common import (
     human_scroll,
     clean_media_url,
     is_content_image,
+    raise_if_xhs_blocked,
+    ScraperBlockedError,
 )
 from .scraper_download import download_batch, download_videos, _HASHTAG_SAVED_COUNT
 
@@ -47,12 +49,21 @@ def extract_note_detail(page, note_url: str) -> dict:
 
     Returns:
         {"img_urls": [...], "video_urls": [...], "caption": str, "tags": [...]}
+
+    Raises:
+        ScraperBlockedError: 命中验证码/登录墙/限流等风控页（不重试，交由调用方
+            决定停止整轮或跳过本篇）；笔记已删除等非致命类型同样抛出，
+            调用方据 ``is_fatal`` 区分。
     """
     result: dict = {"img_urls": [], "video_urls": [], "caption": "", "tags": []}
     try:
         page.goto(note_url, wait_until="domcontentloaded", timeout=30000)
     except Exception:
         return result
+
+    # 风控门检：详情页被验证码/登录墙拦截时内容区永远是空的，先判再等，
+    # 避免白等 10s 后拿到空结果被误当成「这篇笔记没图片」
+    raise_if_xhs_blocked(page, note_url)
 
     # 等待详情页主体渲染（轮播图或视频）
     try:
@@ -147,12 +158,19 @@ def collect_blogger_note_urls(
 
     Returns:
         笔记详情 URL 列表（顺序按页面出现顺序）。
+
+    Raises:
+        ScraperBlockedError: 主页被风控/登录墙拦截（不重试）。
     """
     note_urls: list[str] = []
     try:
         page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
     except Exception:
         return note_urls
+
+    # 风控门检：主页被拦截时笔记网格为空，先判再等（避免白等 15s）
+    raise_if_xhs_blocked(page, profile_url)
+
     try:
         page.wait_for_selector(
             "section.note-item, a[href*='/explore/']", timeout=15000
@@ -214,6 +232,9 @@ def search_xiaohongshu(
 
     Returns:
         (pairs, funnel_dict): 每张图片的 (笔记页面 URL, 图片 CDN URL) 列表和漏斗统计数据
+
+    Raises:
+        ScraperBlockedError: 搜索页被风控/登录墙拦截（不重试，交由调用方停止整轮）。
     """
     if page.is_closed():
         raise RuntimeError("页面已关闭")
@@ -227,12 +248,18 @@ def search_xiaohongshu(
     print(f"  导航到搜索页 [{sort_label}]: {keyword}")
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
+    # 风控门检（第一道）：验证码/限流页当场可见，先判再等，避免白等 15s
+    raise_if_xhs_blocked(page, f"关键词={keyword}")
+
     # 等待搜索结果卡片渲染完成
     try:
         page.wait_for_selector("section.note-item", timeout=15000)
         print("  搜索结果已渲染")
     except Exception:
         print("  等待搜索结果超时，尝试继续...")
+        # 风控门检（第二道）：卡片始终不出且页面转成登录墙/限流文案
+        # （静默风控）——此时按风控处理，而不是当作「该关键词无结果」
+        raise_if_xhs_blocked(page, f"关键词={keyword}（无结果卡片）")
     # 拟人化：页面加载后随机停顿 + 偶发鼠标移动，模拟真人浏览前先看一页
     _rdsleep(1.5, 3.5)
     if random.random() < 0.7:
@@ -436,6 +463,17 @@ def run_blogger_mode(
     for i, note_url in enumerate(note_urls, 1):
         try:
             detail = extract_note_detail(page, note_url)
+        except ScraperBlockedError as e:
+            notes_log.append({"note": note_url, "error": str(e)[:200]})
+            if e.is_fatal:
+                # 致命风控（验证码/登录墙/限流/账号异常）：继续访问只会加重风控，
+                # 抛给调用方停止整轮（风控类错误不重试）
+                print(f"  ⛔ {e.message}，停止本轮采集")
+                raise
+            # 非致命（笔记已删除等）：跳过本篇，继续其余笔记
+            print(f"  [{i}/{len(note_urls)}] 跳过：{e.message}")
+            time.sleep(detail_delay)
+            continue
         except Exception as e:
             print(
                 f"  [{i}/{len(note_urls)}] 详情页提取失败:"

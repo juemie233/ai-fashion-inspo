@@ -226,6 +226,151 @@ def is_content_image(src: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  平台通用：风控 / 异常页面识别
+# ═══════════════════════════════════════════════════════════════
+
+"""小红书风控/异常文本特征 → 类型（按顺序匹配，命中即返回）。
+
+借鉴 MediaCrawler 的错误分类实践：把「验证码 / 登录墙 / 限流 / 账号风控」
+与「内容不存在」区分开——前者是全局信号（继续请求只会加重风控，必须停止
+整轮），后者只影响当前条目（跳过即可）。
+"""
+XHS_BLOCK_TEXT_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("captcha", ("请完成安全验证", "滑动验证", "拖动滑块", "安全验证")),
+    (
+        "login_wall",
+        ("登录后查看", "手机号登录", "扫码登录", "请先登录", "登录后查看更多"),
+    ),
+    (
+        "rate_limit",
+        ("访问频繁", "操作过于频繁", "请求过于频繁", "系统繁忙", "请稍后再试"),
+    ),
+    ("account_risk", ("账号异常", "安全限制", "设备异常", "账号已被")),
+    (
+        "not_found",
+        ("笔记不存在", "内容不存在", "笔记已删除", "当前笔记暂时无法浏览"),
+    ),
+)
+
+"""小红书验证码组件选择器：命中**且可见**才判为验证态。
+
+页面常预注入隐藏的验证容器模板，query_selector 连隐藏元素也会命中——
+不过滤可见性会把正常页面误判成验证态（抖音侧曾因此空等 180s，真实案例）。
+"""
+XHS_VERIFY_SELECTORS: tuple[str, ...] = (
+    "div[class*='captcha']",
+    "div[id*='captcha']",
+    "[class*='slider']",
+)
+
+"""致命风控类型：命中即停止本轮采集（重试会加重风控）。"""
+XHS_FATAL_BLOCK_KINDS = frozenset(
+    {"captcha", "login_wall", "rate_limit", "account_risk"}
+)
+
+"""非致命类型：仅跳过当前条目（笔记已删除/不存在）。"""
+XHS_SKIP_BLOCK_KINDS = frozenset({"not_found"})
+
+"""风控类型的说明文案（写入任务失败原因，用户可据此处理）。"""
+XHS_BLOCK_MESSAGES = {
+    "captcha": "小红书要求完成安全验证（滑块/验证码）",
+    "login_wall": "小红书登录态失效（页面出现登录墙）",
+    "rate_limit": "小红书提示访问频繁（已触发限流）",
+    "account_risk": "小红书提示账号/设备异常（已触发账号级风控）",
+    "not_found": "笔记不存在或已被删除",
+}
+
+
+class ScraperBlockedError(RuntimeError):
+    """平台风控/异常页面异常（携带类型，供调用方决定是否停止整轮）。
+
+    为什么单独建类型：风控类错误**不能重试**——重试只会把限流升级为封号，
+    只有网络抖动这类瞬时错误才值得重试。调用方据 ``is_fatal`` 区分：
+    致命 → 停止本轮采集并明确报错；非致命 → 跳过当前条目继续。
+    """
+
+    def __init__(self, kind: str, detail: str = "") -> None:
+        self.kind = kind
+        self.detail = detail
+        self.message = XHS_BLOCK_MESSAGES.get(kind, f"平台异常：{kind}")
+        super().__init__(
+            f"{self.message}（{detail}）" if detail else self.message
+        )
+
+    @property
+    def is_fatal(self) -> bool:
+        """是否属于「必须停止整轮」的致命风控（否则仅跳过当前条目）。"""
+        return self.kind in XHS_FATAL_BLOCK_KINDS
+
+
+def match_xhs_block_text(text: str) -> str:
+    """纯函数：从页面文本匹配风控信号类型（便于单测，不依赖页面对象）。
+
+    只看首屏 2000 字：正文里出现「安全验证」等词属于正常内容，
+    扫全文会把正常笔记误判成风控页。
+
+    Args:
+        text: 页面可见文本。
+
+    Returns:
+        风控类型（captcha/login_wall/rate_limit/account_risk/not_found）；
+        未命中返回空串。
+    """
+    head = (text or "")[:2000]
+    for kind, signals in XHS_BLOCK_TEXT_SIGNALS:
+        if any(sig in head for sig in signals):
+            return kind
+    return ""
+
+
+def classify_xhs_block(page) -> str:
+    """识别当前小红书页面是否为风控/异常页。
+
+    判定顺序：可见验证码组件 → 页面文本特征。
+
+    Args:
+        page: Playwright 页面对象。
+
+    Returns:
+        风控类型；正常页面返回空串。
+
+    注意：调用方应以「无内容卡片 / 无轮播图」为前置条件做双重防误判，
+    避免把「正常但空结果」的页面判成风控。
+    """
+    for sel in XHS_VERIFY_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+        except Exception:
+            continue
+        try:
+            if el and el.is_visible():
+                return "captcha"
+        except Exception:
+            continue
+    try:
+        text = page.inner_text("body") or ""
+    except Exception:
+        return ""
+    return match_xhs_block_text(text)
+
+
+def raise_if_xhs_blocked(page, detail: str = "") -> str:
+    """检测到小红书风控/异常页即抛出 ScraperBlockedError（不重试）。
+
+    Args:
+        page: Playwright 页面对象。
+        detail: 附加定位信息（如笔记 URL / 关键词），写入异常消息便于排障。
+
+    Returns:
+        正常页面返回空串（便于调用方 `if raise_if_xhs_blocked(page): ...`）。
+    """
+    kind = classify_xhs_block(page)
+    if kind:
+        raise ScraperBlockedError(kind, detail)
+    return ""
+
+
+# ═══════════════════════════════════════════════════════════════
 #  平台通用：下载请求头 / 登录检测
 # ═══════════════════════════════════════════════════════════════
 

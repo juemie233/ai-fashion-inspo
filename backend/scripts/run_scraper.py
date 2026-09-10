@@ -48,6 +48,7 @@ from .scraper_common import (
     build_download_headers,
     platform_has_login,
     ensure_platform_login,
+    ScraperBlockedError,
 )
 from .scraper_download import (
     _HASHTAG_META_MAX,
@@ -704,6 +705,25 @@ def run_scraper_sync(task_id: int):
                                 pass
                         _rdsleep(0.8, 1.5)
 
+            except ScraperBlockedError as e:
+                # 风控类错误不重试（MediaCrawler 实践：重试只会把限流升级为封号）：
+                # 继续跑下一个关键词/排序组合同样会加重风控，故记录后立即停止整轮。
+                # 断点停在本组合（不推进 done），下次重试仍从它开始，不漏采。
+                err = str(e)
+                per_search.append(
+                    {
+                        "keyword": kw,
+                        "sort_type": sort_type,
+                        "error": err,
+                    }
+                )
+                print(f"  ⛔ 命中平台风控：{err}")
+                _save_resume(plan_idx)
+                _fail(
+                    f"{err}；已停止本轮采集（风控类错误不重试）。"
+                    "请在调试 Chrome 中完成验证或重新导入 Cookie 后重试"
+                )
+                return
             except Exception as e:
                 err = str(e) or type(e).__name__
                 per_search.append(
@@ -723,6 +743,12 @@ def run_scraper_sync(task_id: int):
         import traceback
 
         err = str(e) or type(e).__name__
+        # 按博主采集路径无「关键词计划」可停，风控在这里冒泡：同样补上可操作指引
+        if isinstance(e, ScraperBlockedError) and e.is_fatal:
+            err = (
+                f"{err}；已停止本轮采集（风控类错误不重试）。"
+                "请在调试 Chrome 中完成验证或重新导入 Cookie 后重试"
+            )
         print(f"采集失败: {err}")
         traceback.print_exc()
         _fail(err)
