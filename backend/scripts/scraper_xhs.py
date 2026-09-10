@@ -321,13 +321,15 @@ def extract_image_pairs_from_cards(
             if note_id in seen_note_ids:
                 _bump("dup_note")
                 continue
+            # 立即登记已见（无图片的卡片同样登记）：滚动到新内容时会重扫整页
+            # 卡片，不立刻登记会让「无图卡片」在每轮被重复计数
+            seen_note_ids.add(note_id)
 
             # 从每张卡片中提取所有图片（轮播帖含多图）
             imgs = card.query_selector_all("img")
             if not imgs:
                 _bump("without_img")
                 continue
-            seen_note_ids.add(note_id)
             _bump("with_img")
 
             for img in imgs:
@@ -369,6 +371,7 @@ def search_xiaohongshu(
     keyword: str,
     need_count: int,
     sort_type: str = "general",
+    on_batch=None,
 ) -> tuple[list[tuple[str, str]], dict]:
     """在已登录的页面上搜索并提取图片 URL。
 
@@ -380,9 +383,17 @@ def search_xiaohongshu(
         keyword: 搜索关键词。
         need_count: 本次搜索还需采集的数量（剩余需求）。
         sort_type: 排序方式 — "general"(综合) / "time_descending"(最新) / "popularity_descending"(最热)。
+        on_batch: 可选回调 ``on_batch(pairs) -> int``，每滚动一轮把**本轮新增**
+            的 (笔记 URL, 图片 URL) 交给调用方立即落库，返回值是实际入库数。
+            对应 MediaCrawler 的「分页回调落库」：任务中途被风控打断或进程
+            被杀时，已抓到的部分不会白丢（否则整批只在最后一次性下载，
+            半途失败则该关键词颗粒无收）。传了回调时函数返回空 pairs，
+            并在累计入库数达到 need_count 时提前停止滚动（少滚少触风控）。
 
     Returns:
-        (pairs, funnel_dict): 每张图片的 (笔记页面 URL, 图片 CDN URL) 列表和漏斗统计数据
+        (pairs, funnel_dict): 未传回调时为每张图片的 (笔记页面 URL, 图片 CDN URL)
+        列表；传了回调时为空列表（内容已逐批落库）。funnel 为漏斗统计
+        （含 batches / batch_added 两个分批落库计数）。
 
     Raises:
         ScraperBlockedError: 搜索页被风控/登录墙拦截（不重试，交由调用方停止整轮）。
@@ -416,12 +427,22 @@ def search_xiaohongshu(
     if random.random() < 0.7:
         _human_mouse_move(page)
 
-    # ── 触底循环滚动 ──
+    # ── 触底循环滚动（每轮增量提取 + 立即落库）──
     MAX_SCROLLS = 10  # 滚动硬上限（真人不会滚 30 次）
     CONSECUTIVE_NO_NEW = 1  # 连续 N 次无新卡片即视为到底
     target_cards = max(10, int(need_count * 1.5))  # 已获取足够卡片即停
     no_new_count = 0
     last_card_count = 0
+
+    # 幂等状态跨轮复用：滚动重叠区域不重复解析、不重复入库
+    seen: set[str] = set()
+    seen_note_ids: set[str] = set()
+    counters: dict = {}
+    collected: list[tuple[str, str]] = []  # 无回调模式的累积结果
+    extracted_total = 0  # 本轮次累计提取到的图片对（漏斗用）
+    batch_added = 0  # 回调模式累计入库数
+    batch_count = 0  # 已落库批次数
+    total_cards = 0
 
     for scroll_i in range(MAX_SCROLLS):
         # 拟人化滚动：偶发鼠标移动 + 分步随机滚到底 + 随机停顿
@@ -436,7 +457,9 @@ def search_xiaohongshu(
             _rdsleep(0.5, 1.2)
 
         # 检查是否有新内容加载
-        cards_now = len(page.query_selector_all("section.note-item"))
+        cards = page.query_selector_all("section.note-item")
+        cards_now = len(cards)
+        total_cards = max(total_cards, cards_now)
 
         if cards_now == last_card_count:
             no_new_count += 1
@@ -444,15 +467,8 @@ def search_xiaohongshu(
             no_new_count = 0
             last_card_count = cards_now
 
-        # 已获取足够卡片，提前停止
-        if cards_now >= target_cards:
-            print(
-                f"  滚动 {scroll_i + 1} 次后已获取 {cards_now} 个卡片"
-                f"（目标 {target_cards}），停止滚动"
-            )
-            break
-
-        # 连续无新内容，页面已到底
+        # 卡片数未增长（懒加载到底）→ 不再重复解析整页，直接收尾。
+        # 判断前置到解析之前：否则每轮重扫都会把已处理的卡片再计一次数
         if no_new_count >= CONSECUTIVE_NO_NEW:
             print(
                 f"  连续 {CONSECUTIVE_NO_NEW} 次无新内容，页面已到底"
@@ -460,17 +476,34 @@ def search_xiaohongshu(
             )
             break
 
-    # ── DOM 提取 ──
-    cards = page.query_selector_all("section.note-item")
-    total_cards = len(cards)
-    print(f"  共找到 {total_cards} 个笔记卡片，开始提取图片...")
+        # 本轮增量提取（只取尚未处理过的笔记/图片）
+        new_pairs = extract_image_pairs_from_cards(
+            cards, need_count * 2, seen, seen_note_ids, counters
+        )
+        if new_pairs:
+            extracted_total += len(new_pairs)
+            batch_count += 1
+            if on_batch is not None:
+                # 立即落库：任务中途被风控打断/进程被杀时，已抓到的部分不白丢
+                batch_added += on_batch(new_pairs)
+            else:
+                collected.extend(new_pairs)
 
-    seen: set[str] = set()
-    seen_note_ids: set[str] = set()
-    counters: dict = {}
-    pairs = extract_image_pairs_from_cards(
-        cards, need_count * 2, seen, seen_note_ids, counters
-    )
+        # 回调模式：已入库足够即停，少滚少触风控
+        if on_batch is not None and batch_added >= need_count:
+            print(
+                f"  滚动 {scroll_i + 1} 次后已入库 {batch_added} 张"
+                f"（目标 {need_count}），停止滚动"
+            )
+            break
+
+        # 无回调模式沿用原策略：卡片够用即停
+        if on_batch is None and cards_now >= target_cards:
+            print(
+                f"  滚动 {scroll_i + 1} 次后已获取 {cards_now} 个卡片"
+                f"（目标 {target_cards}），停止滚动"
+            )
+            break
 
     # ── 漏斗日志 ──
     funnel = {
@@ -482,8 +515,10 @@ def search_xiaohongshu(
         "skipped_small": counters.get("small", 0),
         "skipped_icon": counters.get("icon", 0),
         "skipped_dup_img": counters.get("dup_img", 0),
-        "urls_extracted": len(pairs),
+        "urls_extracted": extracted_total,
         "target": need_count,
+        "batches": batch_count,
+        "batch_added": batch_added,
     }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
     print(f"  │ DOM 卡片总数: {total_cards}")
@@ -494,12 +529,17 @@ def search_xiaohongshu(
     print(f"  │ 跳过小尺寸:   {funnel['skipped_small']}")
     print(f"  │ 跳过图标:     {funnel['skipped_icon']}")
     print(f"  │ 跳过重复图:   {funnel['skipped_dup_img']}")
-    print(f"  │ 提取到 URL:   {len(pairs)}")
+    print(f"  │ 提取到 URL:   {extracted_total}")
+    if on_batch is not None:
+        print(f"  │ 已分批入库:   {batch_added}（{batch_count} 批）")
     print(f"  │ 目标数量:     {need_count}")
     print(f"  └──────────────────────────────────────────")
 
+    # 回调模式：图片已逐批落库，返回空列表避免调用方重复下载
+    if on_batch is not None:
+        return [], funnel
     # 超额截断：多取一倍作为下载失败缓冲，由调用方按剩余需求截断
-    return pairs[: need_count * 2], funnel
+    return collected[: need_count * 2], funnel
 
 
 # ═══════════════════════════════════════════════════════════════

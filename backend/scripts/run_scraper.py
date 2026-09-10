@@ -540,9 +540,45 @@ def run_scraper_sync(task_id: int):
             try:
                 # 按剩余需求采集：够用即停，避免滚动浏览远超所需的内容
                 remaining = max_count - items_added
+                xhs_found = 0  # 小红书回调模式下逐批累计的「提取数」
                 if platform == "xiaohongshu":
+
+                    def _flush_xhs_batch(pairs) -> int:
+                        """每轮把新增图片立即下载入库（部分成功语义）。
+
+                        对齐 MediaCrawler 的分页回调落库：滚动过程中被风控
+                        打断或进程被杀时，已抓到的图片不会白丢；返回本次实际
+                        入库数，供搜索端判断是否已满足需求并提前停止滚动。
+                        """
+                        nonlocal items_added, xhs_found
+                        nonlocal total_skipped_existing, total_skipped_content_dup
+                        nonlocal total_skipped_non200, total_skipped_network
+                        xhs_found += len(pairs)
+                        b_added, b_ex, b_h, b_n, b_dup = download_batch(
+                            pairs,
+                            task_id,
+                            existing_url_set,
+                            max(1, max_count - items_added),
+                            img_dir,
+                            today,
+                            httpx,
+                            browser_cookies,
+                            content_hash_set,
+                            platform=platform,
+                        )
+                        items_added += b_added
+                        total_skipped_existing += b_ex
+                        total_skipped_content_dup += b_dup
+                        total_skipped_non200 += b_h
+                        total_skipped_network += b_n
+                        print(
+                            f"    分批入库 +{b_added}"
+                            f"（累计 {items_added}/{max_count}）"
+                        )
+                        return b_added
+
                     urls, inner_funnel = search_xiaohongshu(
-                        page, kw, remaining, sort_type
+                        page, kw, remaining, sort_type, on_batch=_flush_xhs_batch
                     )
                 elif platform == "douyin" and page is not None:
                     # 抖音 CDP 完整通道：首页搜索框 → 回车进入精选搜索
@@ -637,26 +673,31 @@ def run_scraper_sync(task_id: int):
                     _save_resume(done)
                     continue
 
-                items_found += len(urls)
-                print(f"  提取 {len(urls)} 个 URL")
+                items_found += xhs_found + len(urls)
+                print(f"  提取 {xhs_found + len(urls)} 个 URL")
 
                 # 抖音降级通道：每次搜索后同步其浏览器 Cookie（用于 CDN 下载鉴权）
                 if platform == "douyin" and dy is not None:
                     browser_cookies = dy.cookies()
 
                 # 立即下载本批（带浏览器 Cookie；请求头按平台取 Referer）
-                added, sk_ex, sk_h, sk_n, sk_dup = download_batch(
-                    urls,
-                    task_id,
-                    existing_url_set,
-                    remaining,
-                    img_dir,
-                    today,
-                    httpx,
-                    browser_cookies,
-                    content_hash_set,
-                    platform=platform,
-                )
+                # 小红书在滚动过程中已逐批落库（on_batch），此处不再重复下载
+                if platform == "xiaohongshu":
+                    added = 0
+                    sk_ex = sk_h = sk_n = sk_dup = 0
+                else:
+                    added, sk_ex, sk_h, sk_n, sk_dup = download_batch(
+                        urls,
+                        task_id,
+                        existing_url_set,
+                        remaining,
+                        img_dir,
+                        today,
+                        httpx,
+                        browser_cookies,
+                        content_hash_set,
+                        platform=platform,
+                    )
                 items_added += added
                 total_skipped_existing += sk_ex
                 total_skipped_content_dup += sk_dup
@@ -664,12 +705,15 @@ def run_scraper_sync(task_id: int):
                 total_skipped_network += sk_n
 
                 # 记录本次搜索的完整漏斗
+                # 小红书为逐批落库（inner_funnel 已带 batch_added），不覆盖为 0
                 per_search.append(
                     {
                         "keyword": kw,
                         "sort_type": sort_type,
                         **inner_funnel,
-                        "batch_added": added,
+                        "batch_added": added + int(
+                            inner_funnel.get("batch_added", 0)
+                        ),
                         "batch_skipped_existing": sk_ex,
                         "batch_skipped_content_dup": sk_dup,
                         "batch_skipped_http": sk_h,

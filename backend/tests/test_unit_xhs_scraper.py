@@ -331,6 +331,63 @@ def test_search_xhs_dedup_across_cards():
     assert funnel["urls_extracted"] == 1
 
 
+class _GrowingSearchPage(_FakeSearchPage):
+    """卡片随滚动逐轮出现（模拟懒加载）：每次查询推进一轮。"""
+
+    def __init__(self, rounds):
+        super().__init__([])
+        self._rounds = list(rounds)
+        self.calls = 0
+
+    def query_selector_all(self, sel: str):
+        if sel != "section.note-item":
+            return []
+        cards = self._rounds[min(self.calls, len(self._rounds) - 1)]
+        self.calls += 1
+        return list(cards)
+
+
+def test_search_xhs_flushes_each_round():
+    """逐轮落库（部分成功语义）：每滚动一轮就把新增图片交给回调立即入库，
+    不再攒到最后一次性下载——中途被风控打断也不会丢已抓到的部分。"""
+    n1 = _FakeSearchCard("/explore/n1", [_FakeImg("https://img.example/1.jpg")])
+    n2 = _FakeSearchCard("/explore/n2", [_FakeImg("https://img.example/2.jpg")])
+    page = _GrowingSearchPage([[n1], [n1, n2]])
+
+    batches: list = []
+    pairs, funnel = sx.search_xiaohongshu(
+        page, "穿搭", 5, on_batch=lambda ps: (batches.append(ps), len(ps))[1]
+    )
+
+    assert pairs == []  # 已逐批落库，不再返回（避免调用方重复下载）
+    assert [len(b) for b in batches] == [1, 1]  # 第二轮只交付新增的笔记 n2
+    assert funnel["batches"] == 2
+    assert funnel["batch_added"] == 2
+    assert funnel["urls_extracted"] == 2
+
+
+def test_search_xhs_callback_stops_once_satisfied():
+    """回调报告已满足需求 → 立即停止滚动（少滚少触风控）。"""
+    n1 = _FakeSearchCard("/explore/n1", [_FakeImg("https://img.example/1.jpg")])
+    page = _GrowingSearchPage([[n1], [n1]])
+    _pairs, funnel = sx.search_xiaohongshu(
+        page, "穿搭", 3, on_batch=lambda ps: 3
+    )
+    assert funnel["batches"] == 1
+    assert page.calls == 1  # 第一轮后即停
+
+
+def test_search_xhs_no_double_delivery_across_rounds():
+    """后续轮次重复出现的卡片不得二次交付（幂等状态跨轮保持）。"""
+    n1 = _FakeSearchCard("/explore/n1", [_FakeImg("https://img.example/1.jpg")])
+    page = _GrowingSearchPage([[n1], [n1]])
+    delivered: list = []
+    sx.search_xiaohongshu(
+        page, "穿搭", 9, on_batch=lambda ps: (delivered.extend(ps), 0)[1]
+    )
+    assert len(delivered) == 1
+
+
 def test_search_xhs_url_keyword_and_sort():
     """搜索 URL 携带编码后的关键词与排序参数。"""
     page = _FakeSearchPage([])
