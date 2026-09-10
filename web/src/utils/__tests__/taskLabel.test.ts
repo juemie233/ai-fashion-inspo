@@ -18,6 +18,7 @@ describe('TASK_TYPE_LABELS', () => {
     expect(TASK_TYPE_LABELS.batch_delete).toBe('批量删除')
     expect(TASK_TYPE_LABELS.deduplicate).toBe('近似重复检测删除')
     expect(TASK_TYPE_LABELS.scraper).toBe('采集')
+    expect(TASK_TYPE_LABELS.f2_import).toBe('抖音素材获取')
     expect(TASK_TYPE_LABELS.vector_backfill).toBe('向量回填')
     expect(TASK_TYPE_LABELS.face_scan).toBe('人脸库扫描')
     expect(TASK_TYPE_LABELS.face_match).toBe('人脸匹配')

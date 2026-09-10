@@ -87,6 +87,34 @@ describe('summarizeResult', () => {
   it('未知类型返回空串', () => {
     expect(summarizeResult('some_new_type', { foo: 1 }, null)).toBe('')
   })
+
+  it('f2_import 拼接入库量与待入库量', () => {
+    const text = summarizeResult(
+      'f2_import',
+      { plan: { files: 12, skipped: { '已在库（内容相同）': 300 } }, import: { imported: 12 } },
+      null,
+    )
+    expect(text).toBe('入库 12 · 待入库 12')
+  })
+
+  it('f2_import 有垃圾桶跳过时单独标注（0 时不展示）', () => {
+    const withTrash = summarizeResult(
+      'f2_import',
+      {
+        plan: { files: 0, skipped: { '已在垃圾桶（不重新导入）': 3 } },
+        import: { imported: 0 },
+      },
+      null,
+    )
+    expect(withTrash).toContain('已在垃圾桶 3')
+
+    const none = summarizeResult(
+      'f2_import',
+      { plan: { files: 5, skipped: {} }, import: { imported: 5 } },
+      null,
+    )
+    expect(none).not.toContain('垃圾桶')
+  })
 })
 
 describe('normalizeQueueTask', () => {

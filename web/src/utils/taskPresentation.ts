@@ -121,6 +121,22 @@ export function summarizeResult(
       ]
         .filter(Boolean)
         .join(' · ')
+    case 'f2_import': {
+      // f2 一键获取素材：本次入库量 + 导入计划的分层跳过。
+      // 「已在垃圾桶」单独列出——它意味着用户主动丢弃过该内容，不会重新导入，
+      // 想恢复要去垃圾桶还原（数字为 0 时不展示，避免日常噪音）。
+      const plan = (r.plan || {}) as Record<string, unknown>
+      const skipped = (plan.skipped || {}) as Record<string, number>
+      const imported = (r.import || {}) as Record<string, unknown>
+      const trash = Number(skipped['已在垃圾桶（不重新导入）']) || 0
+      return [
+        imported.imported != null ? `入库 ${imported.imported}` : '',
+        plan.files != null ? `待入库 ${plan.files}` : '',
+        trash ? `已在垃圾桶 ${trash}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
     default:
       return ''
   }
