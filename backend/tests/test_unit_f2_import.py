@@ -138,18 +138,25 @@ def _fake_tree(tmp_path: Path) -> list[f2.ParsedFile]:
 def test_build_report_counts_new_vs_in_library(tmp_path):
     files = _fake_tree(tmp_path)
     img1 = next(f for f in files if f.path.name.endswith("image_1.webp"))
-    library_hashes = {f2.sha256_file(img1.path)}  # 只有第一张图已在库
+    # 只有第一张图已在库
+    dedup = f2.DedupIndex(
+        live_hashes={f2.sha256_file(img1.path)},
+        trash_hashes=set(),
+        live_platform_ids=set(),
+        trash_platform_ids=set(),
+    )
 
     report = f2.build_report(
         root=tmp_path,
         files=files,
-        library_hashes=library_hashes,
+        dedup=dedup,
         bloggers={"里香": [{"id": 302, "name": "里香"}]},
     )
 
     assert report["files_total"] == 3
     assert report["files_new"] == 2
     assert report["files_in_library"] == 1
+    assert report["files_in_trash"] == 0
     assert report["works_with_new"] == 2  # 图集作品有净新增、视频作品也是新的
     assert report["works_all_in_library"] == 0
     assert report["kind_stat"]["image"] == {"净新增": 1, "已入库": 1}
@@ -159,12 +166,33 @@ def test_build_report_counts_new_vs_in_library(tmp_path):
     assert report["gallery_dist"]["纯视频/实况（无图）"] == 1
 
 
+def test_build_report_separates_trash(tmp_path):
+    """垃圾桶内容不计入「净新增」（否则报表口径与导入计划不一致）。"""
+    files = _fake_tree(tmp_path)
+    img1 = next(f for f in files if f.path.name.endswith("image_1.webp"))
+    dedup = f2.DedupIndex(
+        live_hashes=set(),
+        trash_hashes={f2.sha256_file(img1.path)},
+        live_platform_ids=set(),
+        trash_platform_ids=set(),
+    )
+
+    report = f2.build_report(root=tmp_path, files=files, dedup=dedup, bloggers={})
+
+    assert report["files_new"] == 2  # 剩下 2 个文件才是净新增
+    assert report["files_in_trash"] == 1
+    assert report["works_with_trash"] == 1
+    assert report["kind_stat"]["image"] == {"净新增": 1, "已在垃圾桶": 1}
+    row = next(a for a in report["authors"] if a["author_dir"] == "里香1√")
+    assert row["trash"] == 1 and row["new"] == 1
+
+
 def test_build_report_matches_blogger_and_lists_unmatched(tmp_path):
     files = _fake_tree(tmp_path)
     report = f2.build_report(
         root=tmp_path,
         files=files,
-        library_hashes=set(),
+        dedup=f2.DedupIndex(set(), set(), set(), set()),
         bloggers={"里香": [{"id": 302, "name": "里香"}]},
     )
     by_dir = {a["author_dir"]: a for a in report["authors"]}
@@ -178,7 +206,7 @@ def test_build_report_hashtags_and_cost(tmp_path):
     report = f2.build_report(
         root=tmp_path,
         files=files,
-        library_hashes=set(),
+        dedup=f2.DedupIndex(set(), set(), set(), set()),
         bloggers={},
         sec_per_tag=10.0,
     )
@@ -194,7 +222,7 @@ def test_build_report_reuses_hash_cache(tmp_path):
     """重复调用复用哈希缓存，避免重复读盘（大目录扫描的关键优化）。"""
     files = _fake_tree(tmp_path)
     cache: dict = {}
-    f2.build_report(tmp_path, files, set(), {}, hash_cache=cache)
+    f2.build_report(tmp_path, files, f2.DedupIndex(set(), set(), set(), set()), {}, cache)
     assert len(cache) == 3
 
 
@@ -205,12 +233,14 @@ def _make_lib(tmp_path: Path) -> Path:
     db = tmp_path / "fashion_inspo.db"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE inspirations (id TEXT, content_hash TEXT, deleted_at TEXT)"
+        "CREATE TABLE inspirations (id TEXT, content_hash TEXT, deleted_at TEXT, "
+        "source_platform_id TEXT)"
     )
     conn.execute("CREATE TABLE bloggers (id INTEGER, name TEXT, platform TEXT)")
-    conn.execute("INSERT INTO inspirations VALUES ('a', 'hash-a', NULL)")
-    conn.execute("INSERT INTO inspirations VALUES ('b', 'hash-b', '2026-01-01')")  # 垃圾桶
-    conn.execute("INSERT INTO inspirations VALUES ('c', NULL, NULL)")
+    conn.execute("INSERT INTO inspirations VALUES ('a', 'hash-a', NULL, 'f2:live#image1')")
+    # 垃圾桶：内容与平台 ID 都参与判重，故两类都要断言
+    conn.execute("INSERT INTO inspirations VALUES ('b', 'hash-b', '2026-01-01', 'f2:trash#image1')")
+    conn.execute("INSERT INTO inspirations VALUES ('c', NULL, NULL, NULL)")
     conn.execute("INSERT INTO bloggers VALUES (302, '里香', 'douyin')")
     conn.execute("INSERT INTO bloggers VALUES (303, '里香2√', 'douyin')")
     conn.execute("INSERT INTO bloggers VALUES (1, '某小红书博主', 'xiaohongshu')")
@@ -219,9 +249,13 @@ def _make_lib(tmp_path: Path) -> Path:
     return db
 
 
-def test_load_library_hashes_excludes_trash_and_null(tmp_path):
-    """垃圾桶素材视为可重新入库、空哈希忽略（与 find_duplicate_by_hash 同口径）。"""
-    assert f2.load_library_hashes(_make_lib(tmp_path)) == {"hash-a"}
+def test_load_dedup_index_splits_live_and_trash(tmp_path):
+    """未删除与垃圾桶分别成集；垃圾桶也参与判重（见 load_dedup_index 的取舍说明）。"""
+    index = f2.load_dedup_index(_make_lib(tmp_path))
+    assert index.live_hashes == {"hash-a"}
+    assert index.trash_hashes == {"hash-b"}  # 空哈希忽略
+    assert index.live_platform_ids == {"f2:live#image1"}
+    assert index.trash_platform_ids == {"f2:trash#image1"}
 
 
 def test_load_douyin_bloggers_indexed_by_normalized_name(tmp_path):
@@ -233,7 +267,9 @@ def test_load_douyin_bloggers_indexed_by_normalized_name(tmp_path):
 
 def test_load_functions_tolerate_missing_db(tmp_path):
     missing = tmp_path / "不存在.db"
-    assert f2.load_library_hashes(missing) == set()
+    empty = f2.load_dedup_index(missing)
+    assert empty.live_hashes == set() and empty.trash_hashes == set()
+    assert empty.live_platform_ids == set() and empty.trash_platform_ids == set()
     assert f2.load_douyin_bloggers(missing) == {}
 
 
@@ -279,11 +315,22 @@ def test_insert_sql_columns_match_values():
 # ── 导入计划：四层去重 ──
 
 
-def _decisions(files, library_hashes=None, platform_ids=None, **kwargs):
+def _decisions(
+    files,
+    library_hashes=None,
+    platform_ids=None,
+    trash_hashes=None,
+    trash_platform_ids=None,
+    **kwargs,
+):
     return f2.build_import_plan(
         files=files,
-        library_hashes=library_hashes or set(),
-        existing_platform_ids=platform_ids or set(),
+        dedup=f2.DedupIndex(
+            live_hashes=library_hashes or set(),
+            trash_hashes=trash_hashes or set(),
+            live_platform_ids=platform_ids or set(),
+            trash_platform_ids=trash_platform_ids or set(),
+        ),
         **kwargs,
     )
 
@@ -319,6 +366,128 @@ def test_plan_skips_when_platform_id_exists(tmp_path):
     decisions, skipped, _ = _decisions(files, platform_ids=ids)
     assert all(d.action == "skip" for d in decisions)
     assert skipped["已在库（平台 ID 命中）"] == 3
+
+
+# ── 垃圾桶判重（P0：垃圾桶是负样本，不该被重新导入）──
+
+
+def test_plan_skips_content_in_trash(tmp_path):
+    """回归：用户丢进垃圾桶的内容，再次导入时必须跳过（不是重新入库）。
+
+    背景：此前判重只看未删除素材（deleted_at IS NULL），垃圾桶内容会被原样搬回来。
+    手动时代偶尔撞上，开了「每日自动获取」就是每天自动复活一次。
+    """
+    files = _fake_tree(tmp_path)
+    img1 = next(f for f in files if f.path.name.endswith("image_1.webp"))
+
+    decisions, skipped, _ = _decisions(
+        files, trash_hashes={f2.sha256_file(img1.path)}
+    )
+    by_name = {d.item.path.name: d for d in decisions}
+    assert by_name[img1.path.name].action == "skip"
+    assert by_name[img1.path.name].reason == f2.TRASH_SKIP_REASON
+    assert skipped[f2.TRASH_SKIP_REASON] == 1
+    assert sum(1 for d in decisions if d.action == "import") == 2
+
+
+def test_plan_skips_platform_id_in_trash(tmp_path):
+    """垃圾桶里的平台 ID 命中同样跳过（哈希口径变化时的兜底）。"""
+    files = _fake_tree(tmp_path)
+    ids = {f2.platform_id_for(files[0])}
+    decisions, skipped, _ = _decisions(files, trash_platform_ids=ids)
+    assert skipped[f2.TRASH_SKIP_REASON] == 1
+    assert sum(1 for d in decisions if d.action == "import") == 2
+
+
+def test_plan_live_wins_over_trash(tmp_path):
+    """同一内容既有在库记录又在垃圾桶时，按「已在库」计数（判据顺序固定）。"""
+    files = _fake_tree(tmp_path)
+    digest = f2.sha256_file(files[0].path)
+    _d, skipped, _ = _decisions(files, library_hashes={digest}, trash_hashes={digest})
+    assert skipped["已在库（内容相同）"] == 1
+    assert f2.TRASH_SKIP_REASON not in skipped
+
+
+# ── 哈希缓存（P0：避免每次运行重算整棵下载树的 SHA-256）──
+
+
+def test_hash_cache_reuses_digest_across_runs(tmp_path, monkeypatch):
+    """回归：同一文件第二次运行不再读盘算哈希（首次 7.28 GB 约 81 秒的成本只付一次）。"""
+    files = _fake_tree(tmp_path)
+    db = tmp_path / "hash.db"
+    calls = {"n": 0}
+    real = f2.sha256_file
+
+    def counting(path, chunk=1 << 20):
+        calls["n"] += 1
+        return real(path, chunk)
+
+    monkeypatch.setattr(f2, "sha256_file", counting)
+
+    with f2.HashCache(db) as cache:
+        for item in files:
+            cache.digest(item.path)
+    assert calls["n"] == len(files)
+    assert db.exists()
+
+    with f2.HashCache(db) as again:
+        for item in files:
+            again.digest(item.path)
+        stats = again.stats()
+    assert calls["n"] == len(files), "第二次运行不应再算哈希"
+    assert stats["computed"] == 0
+    assert stats["hit"] == len(files)
+    assert stats["cached_rows"] == len(files)
+
+
+def test_hash_cache_invalidates_on_change(tmp_path):
+    """文件被改写（size/mtime 变化）时必须重算，绝不能返回过期摘要。"""
+    path = tmp_path / "a.webp"
+    path.write_bytes(b"first")
+    db = tmp_path / "hash.db"
+
+    with f2.HashCache(db) as cache:
+        first = cache.digest(path)
+    path.write_bytes(b"second-content")
+    with f2.HashCache(db) as cache:
+        second = cache.digest(path)
+        assert cache.stats()["computed"] == 1
+    assert first != second
+    assert second == f2.sha256_file(path)
+
+
+def test_hash_cache_tolerates_broken_file(tmp_path):
+    """缓存文件损坏时退化為「不用缓存」，导入照常（缓存是纯优化，不能拖垮主流程）。"""
+    files = _fake_tree(tmp_path)
+    broken = tmp_path / "broken.db"
+    broken.write_bytes(b"not a sqlite file")
+
+    cache, reason = f2.open_hash_cache(broken)
+    assert cache is None and "哈希缓存不可用" in reason
+
+    decisions, _skipped, _deferred, stats = f2.build_plan_with_cache(
+        files, f2.DedupIndex(set(), set(), set(), set()), hash_cache_path=broken
+    )
+    assert sum(1 for d in decisions if d.action == "import") == 3  # 决策不受影响
+    assert "哈希缓存不可用" in stats["error"]
+
+
+def test_plan_with_cache_reports_stats(tmp_path):
+    """build_plan_with_cache：第一次实算，第二次全命中（任务结果里的哈希成本数字）。"""
+    files = _fake_tree(tmp_path)
+    db = tmp_path / "hash.db"
+    empty = f2.DedupIndex(set(), set(), set(), set())
+
+    _d1, _s1, _f1, stats1 = f2.build_plan_with_cache(files, empty, hash_cache_path=db)
+    _d2, _s2, _f2, stats2 = f2.build_plan_with_cache(files, empty, hash_cache_path=db)
+
+    assert stats1["computed"] == 3 and stats1["hit"] == 0
+    assert stats2["computed"] == 0 and stats2["hit"] == 3
+    # 关掉缓存时不做任何缓存读写
+    _d3, _s3, _f3, stats3 = f2.build_plan_with_cache(
+        files, empty, hash_cache_path=db, use_cache=False
+    )
+    assert stats3 == {}
 
 
 def test_plan_skip_live_and_author_filter(tmp_path):
@@ -475,8 +644,7 @@ def test_apply_import_is_idempotent(tmp_path):
     # 用更新后的库状态重算计划
     second, skipped, _ = f2.build_import_plan(
         files=f2.scan_directory(root),
-        library_hashes=f2.load_library_hashes(db),
-        existing_platform_ids=f2.load_library_platform_ids(db),
+        dedup=f2.load_dedup_index(db),
     )
     assert [d for d in second if d.action == "import"] == []
     assert skipped["已在库（内容相同）"] == 1
@@ -705,8 +873,7 @@ def test_apply_rollback_removes_rows_files_and_links(tmp_path):
     # 回滚后可重新导入（去重依据是库内是否还留有该内容）
     second, _skipped, _deferred = f2.build_import_plan(
         files=f2.scan_directory(tmp_path / "f2"),
-        library_hashes=f2.load_library_hashes(db),
-        existing_platform_ids=f2.load_library_platform_ids(db),
+        dedup=f2.load_dedup_index(db),
     )
     assert sum(1 for d in second if d.action == "import") == 2
 

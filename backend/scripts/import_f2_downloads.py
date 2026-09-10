@@ -21,6 +21,17 @@
 以**文件内容 SHA-256** 与库内 `inspirations.content_hash` 比对（实测库内
 10,946 条素材的 content_hash 覆盖率 100%），不依赖路径或文件名。
 
+**垃圾桶里的素材同样算「已存在」**：软删除（`deleted_at` 非空）的素材哈希也参与
+判重，理由见 :func:`load_dedup_index`——垃圾桶是负样本来源，被丢弃的内容不该在
+下次（尤其是每日自动）导入时被原样搬回来；要恢复请走垃圾桶还原。
+注意：垃圾桶被**彻底清空**后行已不存在，此时若下载目录里文件还在，仍会被重新导入。
+
+哈希成本
+--------
+判重依赖对整个下载目录算 SHA-256（实测 15,350 文件 / 7.28 GB 约 81 秒），因此
+引入 :class:`HashCache`（落盘缓存，按路径 + size + mtime 判文件未变则复用哈希），
+日常运行只算新增文件。
+
 本模块当前只实现：
   - 目录扫描与文件名解析（作品分组、正文、#话题、创建时间）
   - 与素材库的重合面统计（净新增 / 已在库）
@@ -39,13 +50,15 @@
     python -m scripts.import_f2_downloads --apply              # 只入库（不调 f2）
     python -m scripts.import_f2_downloads --apply --authors 里香,娜娜瑜 --limit 500
     python -m scripts.import_f2_downloads --fetch --fetch-limit 2   # 只下载 2 个作者试跑
+    python -m scripts.import_f2_downloads --apply --no-hash-cache    # 忽略哈希缓存重算
 
 三条约定
 --------
 1. **导入不做标签分析**：本模块绝不调用 analyze_image，也不建向量。素材入库后
    处于「未打标」状态，由现有的批量分析任务（一键）按需补——一次性 1.2 万张
    要 8~41 小时 GPU，不该卡住「获取素材」这一步。
-2. **必须去重**（见 :func:`build_import_plan` 的四层判据），且重复运行幂等。
+2. **必须去重**（见 :func:`build_import_plan` 的五层判据），且重复运行幂等；
+   垃圾桶里的内容同样不重新导入（见 :func:`load_dedup_index`）。
 3. **不写话题存档表**（``scraper_hashtags``）：正文里的 ``#话题`` 已经随
    ``caption`` 落库，而 caption 参与文本向量（TEXT_EMBEDDING_FORMULA_VERSION=2），
    语义搜索能命中，**零信息损失**；而话题库在 UI 侧只对小红书显示、唯一用途是
@@ -62,8 +75,10 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -278,6 +293,205 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
     return hasher.hexdigest()
 
 
+HASH_CACHE_DBNAME = "f2_hash_cache.db"
+
+
+def default_hash_cache_path() -> Path:
+    """哈希缓存的缺省落盘位置（与素材/缩略图同根，随项目迁移）。"""
+    return settings.storage_root / HASH_CACHE_DBNAME
+
+
+class HashCache:
+    """文件 SHA-256 的落盘缓存：``路径 → (size, mtime_ns) → 摘要``。
+
+    为什么需要：判重要对整个下载目录算 SHA-256（实测 15,350 文件 / 7.28 GB
+    约 81 秒），而这份成本**每次运行都要付一遍**——进程内的 dict 缓存不跨运行，
+    开了「每日自动获取」就变成每天固定开销，且随下载量线性增长。
+
+    判据是「路径 + 文件大小 + mtime_ns」三元组：文件被改动（重新下载 / 覆盖）
+    必然改变其中一项，缓存自动失效并重算，不会给出过期摘要。
+
+    不做的两件事（有意为之）：
+      - 不清理「已从下载目录消失」的历史行：留着只占几 MB，且路径若被重新创建，
+        size/mtime 同时撞上旧值的概率可忽略；为它引入标记清扫得不偿失。
+      - 不实现完整 Mapping 协议：调用方只需要 get/set 语义，见 :func:`_digest`。
+
+    线程约定：内部持有 sqlite 连接，**必须在创建它的线程内使用**（任务执行器
+    因此在线程内创建，见 :func:`build_plan_with_cache`）。
+    """
+
+    SCHEMA_VERSION = 1
+    TABLE = "file_hashes"
+
+    def __init__(self, db_path: Path | None = None) -> None:
+        self.db_path = Path(db_path) if db_path else default_hash_cache_path()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # WAL + busy_timeout：CLI 与后端 worker 可能同时开着这个缓存文件
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._ensure_schema()
+        self._rows: dict[str, tuple[int, int, str]] = {
+            row[0]: (row[1], row[2], row[3])
+            for row in self._conn.execute(
+                f"SELECT path, size, mtime_ns, digest FROM {self.TABLE}"
+            )
+        }
+        self._cached_rows = len(self._rows)
+        self._pending: dict[str, tuple[int, int, str]] = {}
+        self._hit = self._miss = self._computed = 0
+        self._hash_seconds = 0.0
+        self._error = ""
+
+    # ── 内部 ──
+
+    def _ensure_schema(self) -> None:
+        """建表；`PRAGMA user_version` 不含预期版本时先丢表重建（缓存可随时重算）。"""
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != self.SCHEMA_VERSION:
+            self._conn.execute(f"DROP TABLE IF EXISTS {self.TABLE}")
+            self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+        self._conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
+            "path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, "
+            "digest TEXT NOT NULL)"
+        )
+        self._conn.commit()
+
+    def _probe(self, path: Path) -> tuple[str, tuple[int, int, str]]:
+        """返回 (key, 该文件的 size/mtime/digest)；未命中抛 KeyError。"""
+        key = str(path)
+        try:
+            stat = path.stat()
+        except OSError as exc:  # 文件已被删除/不可读 → 视为未命中，让上层重算并报错
+            raise KeyError(key) from exc
+        row = self._pending.get(key) or self._rows.get(key)
+        if row and row[0] == stat.st_size and row[1] == stat.st_mtime_ns:
+            return key, row
+        raise KeyError(key)
+
+    # ── 对外 ──
+
+    def get(self, path: Path, default: str | None = None) -> str | None:
+        """dict 风格的取值：命中返回摘要，未命中返回 default。"""
+        try:
+            return self._probe(path)[1][2]
+        except KeyError:
+            return default
+
+    def __contains__(self, path: Path) -> bool:
+        try:
+            self._probe(path)
+            return True
+        except KeyError:
+            return False
+
+    def __setitem__(self, path: Path, digest: str) -> None:
+        stat = path.stat()
+        self._pending[str(path)] = (stat.st_size, stat.st_mtime_ns, digest)
+
+    def digest(self, path: Path) -> str:
+        """取哈希：命中缓存直接返回；未命中才算（并累计哈希耗时，供报表说明成本）。"""
+        try:
+            key, row = self._probe(path)
+            self._hit += 1
+            return row[2]
+        except KeyError:
+            self._miss += 1
+        started = time.monotonic()
+        value = sha256_file(path)
+        self._hash_seconds += time.monotonic() - started
+        self._computed += 1
+        self[path] = value
+        return value
+
+    def flush(self) -> int:
+        """把本次算出的哈希批量落盘（单事务）。
+
+        写缓存失败**绝不能**影响导入：异常只记进 :meth:`stats` 的 ``error``
+        字段，由调用方决定是否提示（缓存最坏情况是下次重算）。
+        """
+        if not self._pending or self._conn is None:
+            return 0
+        rows = [(key, *value) for key, value in self._pending.items()]
+        try:
+            with self._conn:
+                self._conn.executemany(
+                    f"INSERT INTO {self.TABLE} (path, size, mtime_ns, digest) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET "
+                    "size=excluded.size, mtime_ns=excluded.mtime_ns, digest=excluded.digest",
+                    rows,
+                )
+        except sqlite3.Error as exc:
+            self._error = str(exc)
+        else:
+            self._rows.update(self._pending)
+        count = len(self._pending)
+        self._pending.clear()
+        return count
+
+    def close(self) -> None:
+        """落盘并关闭连接（幂等）。"""
+        if self._conn is not None:
+            self.flush()
+            self._conn.close()
+            self._conn = None
+
+    def stats(self) -> dict:
+        """本次运行的缓存命中情况（供报表 / 任务结果展示哈希成本）。"""
+        return {
+            "db": str(self.db_path),
+            "cached_rows": self._cached_rows,
+            "hit": self._hit,
+            "miss": self._miss,
+            "computed": self._computed,
+            "hash_seconds": round(self._hash_seconds, 2),
+            "error": self._error,
+        }
+
+    def __enter__(self) -> "HashCache":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
+def _finish_cache(cache: HashCache | None) -> dict:
+    """落盘并关闭哈希缓存，返回统计（无缓存时返回空字典）。"""
+    if cache is None:
+        return {}
+    cache.flush()
+    stats = cache.stats()
+    cache.close()
+    return stats
+
+
+def open_hash_cache(db_path: Path | None = None) -> tuple[HashCache | None, str]:
+    """打开哈希缓存，返回 ``(缓存, 原因)``。
+
+    缓存是纯优化：文件损坏 / 不可写时返回 ``(None, 原因)`` 让调用方退化为全量
+    重算，**绝不能因此让导入失败**。
+    """
+    try:
+        return HashCache(db_path), ""
+    except (sqlite3.Error, OSError) as exc:
+        return None, f"哈希缓存不可用（本次全量重算哈希）：{exc}"
+
+
+def _digest(path: Path, cache: HashCache | dict[Path, str] | None) -> str:
+    """统一的取哈希入口：HashCache 走落盘缓存，dict 走进程内缓存，None 直接算。"""
+    if cache is None:
+        return sha256_file(path)
+    if isinstance(cache, HashCache):
+        return cache.digest(path)
+    hit = cache.get(path)
+    if hit:
+        return hit
+    value = sha256_file(path)
+    cache[path] = value
+    return value
+
+
 # ═══════════════════════════════════════════════════════════════
 #  素材库侧读取（只读）
 # ═══════════════════════════════════════════════════════════════
@@ -288,29 +502,69 @@ def library_db_path() -> Path:
     return settings.storage_root.parent / "fashion_inspo.db"
 
 
-def load_library_hashes(db_path: Path | None = None) -> set[str]:
-    """读取库内未删除素材的 content_hash 集合（去重判据）。
+@dataclass(frozen=True)
+class DedupIndex:
+    """去重判据所需的库内标识集合（一次读取，见 :func:`load_dedup_index`）。
+
+    区分「在库」与「垃圾桶」两类：都不该重复导入，但含义与处置不同——在库是重复，
+    垃圾桶是**用户主动丢弃**（想恢复请用垃圾桶还原，而不是让它重新进来）。
+    """
+
+    live_hashes: set[str]
+    trash_hashes: set[str]
+    live_platform_ids: set[str]
+    trash_platform_ids: set[str]
+
+
+def load_dedup_index(db_path: Path | None = None) -> DedupIndex:
+    """读取库内四类标识（未删除 / 垃圾桶 × content_hash / source_platform_id）。
+
+    为什么把垃圾桶也算作「已存在」：垃圾桶素材全部作为负样本学习输入，是用户
+    明确的取舍结果。历史上本模块只把未删除素材算作重复（`deleted_at IS NULL`），
+    结果是用户丢进垃圾桶的素材会在下一次导入时被原样搬回库——手动时代只是偶尔
+    撞上，开启「每日自动获取」后会变成每天自动复活一次，与「宁缺毋滥」冲突。
 
     Args:
         db_path: 数据库路径（缺省用 :func:`library_db_path`）。
 
     Returns:
-        content_hash 集合；数据库不存在时返回空集合。
+        :class:`DedupIndex`；数据库不存在时四类集合均为空。
     """
+    empty = DedupIndex(set(), set(), set(), set())
     path = db_path or library_db_path()
     if not path.exists():
-        return set()
+        return empty
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        return {
-            row[0]
-            for row in conn.execute(
-                "SELECT content_hash FROM inspirations "
-                "WHERE deleted_at IS NULL AND content_hash IS NOT NULL"
+        hashes = _split_by_trash(
+            conn.execute(
+                "SELECT content_hash, deleted_at IS NULL FROM inspirations "
+                "WHERE content_hash IS NOT NULL"
             )
-        }
+        )
+        platform_ids = _split_by_trash(
+            conn.execute(
+                "SELECT source_platform_id, deleted_at IS NULL FROM inspirations "
+                "WHERE source_platform_id IS NOT NULL"
+            )
+        )
     finally:
         conn.close()
+    return DedupIndex(
+        live_hashes=hashes[0],
+        trash_hashes=hashes[1],
+        live_platform_ids=platform_ids[0],
+        trash_platform_ids=platform_ids[1],
+    )
+
+
+def _split_by_trash(rows: Iterable[tuple[str, int]]) -> tuple[set[str], set[str]]:
+    """把 ``(值, 是否未删除)`` 行按「未删除 / 垃圾桶」拆成两个集合。"""
+    live: set[str] = set()
+    trash: set[str] = set()
+    for value, alive in rows:
+        (live if alive else trash).add(value)
+    return live, trash
 
 
 def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
@@ -346,9 +600,9 @@ def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
 def build_report(
     root: Path,
     files: list[ParsedFile],
-    library_hashes: set[str],
+    dedup: DedupIndex,
     bloggers: dict[str, list[dict]],
-    hash_cache: dict[Path, str] | None = None,
+    hash_cache: HashCache | dict[Path, str] | None = None,
     sec_per_tag: float = DEFAULT_SEC_PER_TAG,
 ) -> dict:
     """构建扫描报表（不改动任何数据）。
@@ -356,47 +610,52 @@ def build_report(
     Args:
         root: 扫描根目录。
         files: :func:`scan_directory` 的结果。
-        library_hashes: 库内 content_hash 集合。
+        dedup: 库内标识集合（未删除 + 垃圾桶）。
         bloggers: :func:`load_douyin_bloggers` 的结果。
-        hash_cache: 文件哈希缓存（重复调用时复用，避免重复读盘）。
+        hash_cache: 文件哈希缓存（:class:`HashCache` 落盘 / dict 进程内）。
         sec_per_tag: 打标耗时估算（秒/张）。
 
     Returns:
         报表字典（供 :func:`print_report` 打印或落 JSON）。
     """
-    cache = hash_cache if hash_cache is not None else {}
     works = group_works(files)
 
     kind_stat: dict[str, Counter] = defaultdict(Counter)
     author_stat: dict[str, Counter] = defaultdict(Counter)
     work_new_count = 0
     work_all_old = 0
-    new_files = old_files = 0
-    new_bytes = old_bytes = 0
+    works_with_trash = 0
+    new_files = old_files = trash_files = 0
+    new_bytes = old_bytes = trash_bytes = 0
     hashtag_counter: Counter = Counter()
     gallery_dist: Counter = Counter()
     new_work_rows: list[dict] = []
 
     for work_key, items in works.items():
         new_items = []
+        work_trash = 0
         for item in items:
-            digest = cache.get(item.path)
-            if digest is None:
-                digest = sha256_file(item.path)
-                cache[item.path] = digest
-            is_new = digest not in library_hashes
-            bucket = "已入库" if not is_new else "净新增"
+            digest = _digest(item.path, hash_cache)
+            is_live = digest in dedup.live_hashes
+            is_trash = not is_live and digest in dedup.trash_hashes
+            bucket = "已入库" if is_live else ("已在垃圾桶" if is_trash else "净新增")
             kind_stat[item.kind][bucket] += 1
             author_stat[item.author_dir][bucket] += 1
-            if is_new:
+            if is_live:
+                old_files += 1
+                old_bytes += item.size
+            elif is_trash:
+                work_trash += 1
+                trash_files += 1
+                trash_bytes += item.size
+            else:
                 new_items.append(item)
                 new_files += 1
                 new_bytes += item.size
                 for tag in item.hashtags:
                     hashtag_counter[tag] += 1
-            else:
-                old_files += 1
-                old_bytes += item.size
+        if work_trash:
+            works_with_trash += 1
 
         if new_items:
             work_new_count += 1
@@ -431,7 +690,8 @@ def build_report(
     # 作者维度：归一化后的匹配情况（同一作者被拆成多个目录时合并展示）
     authors: list[dict] = []
     for author_dir, counter in sorted(
-        author_stat.items(), key=lambda x: -(x[1]["净新增"] + x[1]["已入库"])
+        author_stat.items(),
+        key=lambda x: -(x[1]["净新增"] + x[1]["已入库"] + x[1]["已在垃圾桶"]),
     ):
         key = normalize_author(author_dir)
         authors.append(
@@ -440,6 +700,7 @@ def build_report(
                 "author_key": key,
                 "new": counter["净新增"],
                 "old": counter["已入库"],
+                "trash": counter["已在垃圾桶"],
                 "blogger_matched": [b["name"] for b in bloggers.get(key, [])],
                 "blogger_candidates": len(bloggers.get(key, [])),
             }
@@ -459,10 +720,13 @@ def build_report(
         "works_total": len(works),
         "works_with_new": work_new_count,
         "works_all_in_library": work_all_old,
+        "works_with_trash": works_with_trash,
         "files_new": new_files,
         "files_in_library": old_files,
+        "files_in_trash": trash_files,
         "bytes_new": new_bytes,
         "bytes_in_library": old_bytes,
+        "bytes_in_trash": trash_bytes,
         "kind_stat": {k: dict(v) for k, v in kind_stat.items()},
         "authors": authors,
         "unmatched_authors": sorted(
@@ -485,12 +749,13 @@ def build_report(
     }
 
 
-def print_report(report: dict, top_hashtags: int = 15) -> None:
+def print_report(report: dict, top_hashtags: int = 15, cache_stats: dict | None = None) -> None:
     """打印人类可读的报表。
 
     Args:
         report: :func:`build_report` 的结果。
         top_hashtags: 展示的热门话题条数。
+        cache_stats: :meth:`HashCache.stats` 的结果（说明本次哈希成本）。
     """
     gib = 1024**3
     print("\n=== f2 下载目录扫描报表（只读，未改动素材库）===")
@@ -506,23 +771,42 @@ def print_report(report: dict, top_hashtags: int = 15) -> None:
         f"净新增 {report['files_new']} 个文件（{report['bytes_new']/gib:.2f} GB）"
         f"；已在库 {hit} 个（{report['bytes_in_library']/gib:.2f} GB，命中率 {hit/total*100:.1f}%）"
     )
+    if report["files_in_trash"]:
+        print(
+            f"已在垃圾桶 {report['files_in_trash']} 个文件"
+            f"（{report['bytes_in_trash']/gib:.2f} GB，涉及 {report['works_with_trash']} 个作品）"
+            "——不会重新导入；如需恢复请到「垃圾桶」还原"
+        )
+    if cache_stats:
+        print(
+            f"哈希缓存：复用 {cache_stats['hit']} 次"
+            f"（缓存 {cache_stats['cached_rows']} 条），本次实算 {cache_stats['computed']} 个"
+            f"文件 / {cache_stats['hash_seconds']} 秒"
+        )
+        if cache_stats.get("error"):
+            print(f"   ⚠ 哈希缓存写入失败（不影响导入，下次会重算）：{cache_stats['error']}")
 
     print("\n-- 文件类型分布 --")
     for kind, counter in sorted(report["kind_stat"].items()):
         new = counter.get("净新增", 0)
         old = counter.get("已入库", 0)
-        print(f"   {kind:<7} 净新增 {new:>6}   已在库 {old:>6}   合计 {new+old:>6}")
+        trash = counter.get("已在垃圾桶", 0)
+        print(
+            f"   {kind:<7} 净新增 {new:>6}   已在库 {old:>6}   垃圾桶 {trash:>6}"
+            f"   合计 {new+old+trash:>6}"
+        )
 
     print("\n-- 净新增作品的文件构成 --")
     for label, count in sorted(report["gallery_dist"].items(), key=lambda x: -x[1]):
         print(f"   {label:<20} {count}")
 
     print("\n-- 作者（前 25）--")
-    print(f"   {'作者目录':<18}{'净新增':>7}{'已在库':>7}  库内博主匹配")
+    print(f"   {'作者目录':<18}{'净新增':>7}{'已在库':>7}{'垃圾桶':>7}  库内博主匹配")
     for author in report["authors"][:25]:
         matched = "、".join(author["blogger_matched"]) or "❌ 未匹配（待确认）"
         print(
-            f"   {author['author_dir'][:17]:<18}{author['new']:>7}{author['old']:>7}  {matched}"
+            f"   {author['author_dir'][:17]:<18}{author['new']:>7}{author['old']:>7}"
+            f"{author.get('trash', 0):>7}  {matched}"
         )
     if report["unmatched_authors"]:
         print(
@@ -616,35 +900,41 @@ class ImportDecision:
     blogger_id: int | None = None  # 匹配到的库内博主（未匹配为 None）
 
 
+TRASH_SKIP_REASON = "已在垃圾桶（不重新导入）"
+
+
 def _skip_reason(
     item: ParsedFile,
     digest: str,
-    library_hashes: set[str],
+    dedup: DedupIndex,
     seen_hashes: set[str],
-    existing_platform_ids: set[str],
     skip_live: bool,
 ) -> str:
     """返回跳过原因（空串＝可以导入）；判据顺序即优先级。"""
     if skip_live and item.kind == "live":
         return "按 --skip-live 跳过 live 分段"
-    if digest in library_hashes:
+    if digest in dedup.live_hashes:
         return "已在库（内容相同）"
+    if digest in dedup.trash_hashes:
+        return TRASH_SKIP_REASON
     if digest in seen_hashes:
         return "批次内重复（同内容已处理）"
-    if platform_id_for(item) in existing_platform_ids:
+    platform_id = platform_id_for(item)
+    if platform_id in dedup.live_platform_ids:
         return "已在库（平台 ID 命中）"
+    if platform_id in dedup.trash_platform_ids:
+        return TRASH_SKIP_REASON
     return ""
 
 
 def build_import_plan(
     files: list[ParsedFile],
-    library_hashes: set[str],
-    existing_platform_ids: set[str],
+    dedup: DedupIndex,
     bloggers: dict[str, list[dict]] | None = None,
     authors: set[str] | None = None,
     limit: int | None = None,
     skip_live: bool = False,
-    hash_cache: dict[Path, str] | None = None,
+    hash_cache: HashCache | dict[Path, str] | None = None,
 ) -> tuple[list[ImportDecision], dict[str, int], int]:
     """决定每个文件「导入 / 跳过」——去重判据集中于此（纯函数，便于单测）。
 
@@ -652,10 +942,11 @@ def build_import_plan(
 
     1. **内容判重**：文件 SHA-256 命中库内 ``inspirations.content_hash``
        （库内素材哈希覆盖率 100%，这是主判据，跨来源也有效）
-    2. **批次内判重**：同一批次里相同内容只入一次（重复下载 / 多目录同一文件）
-    3. **平台 ID 判重**：合成平台 ID 命中库内 ``source_platform_id``
+    2. **垃圾桶判重**：同一内容已被用户丢进垃圾桶 → 跳过（要恢复请用垃圾桶还原）
+    3. **批次内判重**：同一批次里相同内容只入一次（重复下载 / 多目录同一文件）
+    4. **平台 ID 判重**：合成平台 ID 命中库内 ``source_platform_id``
        （幂等兜底：即使哈希口径变化，重复运行也不会重复入库）
-    4. **参数过滤**：``--authors`` 只导指定作者、``--limit`` 限制作品数、
+    5. **参数过滤**：``--authors`` 只导指定作者、``--limit`` 限制作品数、
        ``--skip-live`` 跳过 live 分段
 
     作品维度：只要该作品还有待导入文件，就消耗一个 ``--limit`` 配额；
@@ -663,18 +954,16 @@ def build_import_plan(
 
     Args:
         files: 已解析文件列表。
-        library_hashes: 库内未删除素材的 content_hash 集合。
-        existing_platform_ids: 库内未删除素材的 source_platform_id 集合。
+        dedup: 库内标识集合（未删除 + 垃圾桶，见 :func:`load_dedup_index`）。
         bloggers: 归一化博主名 → 博主列表（用于绑定；仅唯一候选才自动绑）。
         authors: 只导入这些作者（归一化名或目录名），None 表示全部。
         limit: 最多导入多少个作品。
         skip_live: 是否跳过 live 实况分段视频。
-        hash_cache: 文件哈希缓存（跨调用复用，避免重复读盘）。
+        hash_cache: 文件哈希缓存（:class:`HashCache` 落盘 / dict 进程内）。
 
     Returns:
         (决策列表, 跳过原因计数, 因超出 limit 未处理的作品数)
     """
-    cache = hash_cache if hash_cache is not None else {}
     bloggers = bloggers or {}
     wanted = {normalize_author(a) for a in authors} if authors else None
 
@@ -685,13 +974,9 @@ def build_import_plan(
     deferred_works = 0
 
     for _work_key, items in group_works(files).items():
-        digests: dict[Path, str] = {}
-        for item in items:
-            digest = cache.get(item.path)
-            if digest is None:
-                digest = sha256_file(item.path)
-                cache[item.path] = digest
-            digests[item.path] = digest
+        digests: dict[Path, str] = {
+            item.path: _digest(item.path, hash_cache) for item in items
+        }
 
         first = items[0]
         if wanted is not None and first.author_key not in wanted and first.author_dir not in wanted:
@@ -699,10 +984,7 @@ def build_import_plan(
             continue
 
         reasons = [
-            _skip_reason(
-                item, digests[item.path], library_hashes, seen_hashes,
-                existing_platform_ids, skip_live,
-            )
+            _skip_reason(item, digests[item.path], dedup, seen_hashes, skip_live)
             for item in items
         ]
         if not any(not r for r in reasons):
@@ -744,29 +1026,44 @@ def build_import_plan(
     return decisions, dict(skipped), deferred_works
 
 
-def load_library_platform_ids(db_path: Path | None = None) -> set[str]:
-    """读取库内未删除素材的 source_platform_id 集合（导入幂等兜底）。
+def build_plan_with_cache(
+    files: list[ParsedFile],
+    dedup: DedupIndex,
+    hash_cache_path: Path | None = None,
+    use_cache: bool = True,
+    **plan_kwargs,
+) -> tuple[list[ImportDecision], dict[str, int], int, dict]:
+    """在**当前线程内**建缓存并跑 :func:`build_import_plan`（返回缓存统计）。
+
+    抽成函数是为线程安全：:class:`HashCache` 持有 sqlite 连接，不能跨线程使用，
+    因此后台任务在执行线程里调用本函数，缓存的创建 / 写入 / 落盘都发生在同一线程。
 
     Args:
-        db_path: 数据库路径（缺省用 :func:`library_db_path`）。
+        files: 已解析文件列表。
+        dedup: 库内标识集合。
+        hash_cache_path: 缓存文件路径（缺省 :func:`default_hash_cache_path`）。
+        use_cache: False 时完全不用缓存（每次全量重算，用于核对）。
+        **plan_kwargs: 透传给 :func:`build_import_plan` 的其余参数。
 
     Returns:
-        平台 ID 集合（空值与已删除素材不计入）。
+        (决策列表, 跳过原因计数, 未处理作品数, 缓存统计)。
     """
-    path = db_path or library_db_path()
-    if not path.exists():
-        return set()
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    cache, cache_error = (None, "") if not use_cache else open_hash_cache(hash_cache_path)
+    if cache is None:
+        decisions, skipped, deferred = build_import_plan(
+            files, dedup, hash_cache=None, **plan_kwargs
+        )
+        stats = {"error": cache_error} if cache_error else {}
+        return decisions, skipped, deferred, stats
     try:
-        return {
-            row[0]
-            for row in conn.execute(
-                "SELECT source_platform_id FROM inspirations "
-                "WHERE deleted_at IS NULL AND source_platform_id IS NOT NULL"
-            )
-        }
+        decisions, skipped, deferred = build_import_plan(
+            files, dedup, hash_cache=cache, **plan_kwargs
+        )
+        cache.flush()  # 先显式落盘：写入失败才会出现在 stats 里
+        stats = cache.stats()
     finally:
-        conn.close()
+        cache.close()
+    return decisions, skipped, deferred, stats
 
 
 def apply_import(
@@ -1410,6 +1707,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--limit", type=int, default=None, help="最多导入多少个作品")
     parser.add_argument(
+        "--no-hash-cache",
+        action="store_true",
+        help="不用哈希缓存（每次都重新读盘算 SHA-256；日常不必加，用于核对缓存正确性）",
+    )
+    parser.add_argument(
         "--skip-live", action="store_true", help="跳过 live 实况的分段视频"
     )
     parser.add_argument(
@@ -1537,8 +1839,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"未在 {root} 找到可识别的 f2 产物文件")
         return 1
 
-    hash_cache: dict[Path, str] = {}
-    library_hashes = load_library_hashes(db_path)
+    hash_cache: HashCache | None = None
+    cache_error = ""
+    if not args.no_hash_cache:
+        hash_cache, cache_error = open_hash_cache()
+        if hash_cache is None:
+            print(f"⚠ {cache_error}")
+    dedup = load_dedup_index(db_path)
     bloggers = load_douyin_bloggers(db_path)
 
     # ── 缺省：只读报表 ──
@@ -1546,15 +1853,21 @@ def main(argv: list[str] | None = None) -> int:
         report = build_report(
             root=root,
             files=files,
-            library_hashes=library_hashes,
+            dedup=dedup,
             bloggers=bloggers,
             hash_cache=hash_cache,
             sec_per_tag=args.sec_per_tag,
         )
-        print_report(report, top_hashtags=args.top_hashtags)
+        cache_stats = _finish_cache(hash_cache)
+        print_report(report, top_hashtags=args.top_hashtags, cache_stats=cache_stats)
         if args.json:
             args.json.write_text(
-                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+                json.dumps(
+                    {**report, "hash_cache": cache_stats},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
             )
             print(f"\n报表已写入 {args.json}")
         return 0
@@ -1566,14 +1879,14 @@ def main(argv: list[str] | None = None) -> int:
 
     decisions, skipped, deferred_works = build_import_plan(
         files=files,
-        library_hashes=library_hashes,
-        existing_platform_ids=load_library_platform_ids(db_path),
+        dedup=dedup,
         bloggers=bloggers,
         authors=authors_filter,
         limit=args.limit,
         skip_live=args.skip_live,
         hash_cache=hash_cache,
     )
+    cache_stats = _finish_cache(hash_cache)
     to_import = [d for d in decisions if d.action == "import"]
     work_count = len({d.item.work_key for d in to_import})
 
@@ -1583,6 +1896,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"   跳过 {count:>6}  {reason}")
     if deferred_works:
         print(f"   因 --limit 未处理的作品 {deferred_works} 个")
+    if cache_stats:
+        print(
+            f"   哈希缓存复用 {cache_stats['hit']} 次，本次实算 {cache_stats['computed']} 个"
+            f"文件 / {cache_stats['hash_seconds']} 秒"
+        )
+        if cache_stats.get("error"):
+            print(f"   ⚠ 哈希缓存写入失败（不影响导入）：{cache_stats['error']}")
     if not to_import:
         print("没有需要导入的文件（全部已在库或已被过滤）")
         return 0
@@ -1620,6 +1940,7 @@ def main(argv: list[str] | None = None) -> int:
                     "works": work_count,
                     "skipped": skipped,
                     "deferred_works": deferred_works,
+                    "hash_cache": cache_stats,
                     "result": {
                         k: v for k, v in result.items() if k != "ids"
                     },

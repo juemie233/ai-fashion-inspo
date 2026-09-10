@@ -171,6 +171,77 @@ async def test_execute_f2_import_second_run_is_idempotent(client, f2_tree):
                 assert stored.result["import"]["imported"] == 0
 
 
+async def test_execute_f2_import_second_run_uses_hash_cache(client, f2_tree):
+    """P0 回归：第二次运行的哈希全部命中落盘缓存（不再整棵下载树重算 SHA-256）。
+
+    回归点：规划阶段原先每次都对 15,350 文件 / 7.28 GB 重算（实测约 81 秒），
+    开了每日自动获取后变成每天固定成本，且随下载量线性增长。
+    """
+    from app.models.task import TaskQueue
+
+    first_stats = second_stats = None
+    first_seconds = second_seconds = 0.0
+    for _ in range(2):
+        async with async_session() as db:
+            task = await task_runner.create_f2_import_task(db, fetch=False)
+            task_id = task.id
+            await task_runner.execute_f2_import(db, task)
+        async with async_session() as db:
+            stored = await db.get(TaskQueue, task_id)
+            plan = stored.result["plan"]
+            if _ == 0:
+                first_stats, first_seconds = plan["hash_cache"], plan["seconds"]
+            else:
+                second_stats, second_seconds = plan["hash_cache"], plan["seconds"]
+
+    assert first_stats["computed"] == 3 and first_stats["hit"] == 0
+    assert second_stats["computed"] == 0 and second_stats["hit"] == 3
+    # 缓存文件跨任务共享（同一 storage 根），条数只增不减
+    assert second_stats["cached_rows"] >= 3
+    assert first_seconds >= 0 and second_seconds >= 0  # 规划耗时落进任务结果
+    assert second_stats["error"] == ""
+
+
+async def test_execute_f2_import_does_not_resurrect_trashed_material(client, f2_tree):
+    """P0 回归：丢进垃圾桶的素材不会被下次导入搬回来。
+
+    回归点：判重原先只看未删除素材（deleted_at IS NULL），垃圾桶内容算「可重新入库」。
+    开启每日自动获取后这会变成「每天自动复活一次」，与垃圾桶=负样本的设计冲突。
+    """
+    from app.models.task import TaskQueue
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        await task_runner.execute_f2_import(db, task)
+
+    items = client.get("/api/inspirations?size=50").json()["items"]
+    f2_items = [i for i in items if str(i["source_platform_id"]).startswith("f2:")]
+    assert len(f2_items) == 3
+    victim = f2_items[0]
+
+    resp = client.post(f"/api/inspirations/{victim['id']}/trash", json={"reason": "重复"})
+    assert resp.status_code == 200
+    assert resp.json()["deleted_at"] is not None
+    # 移入垃圾桶后默认列表不再返回它
+    left = client.get("/api/inspirations?size=50").json()["items"]
+    assert victim["id"] not in {i["id"] for i in left}
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["plan"]["files"] == 0  # 三条全部跳过
+        assert stored.result["import"]["imported"] == 0
+        assert stored.result["plan"]["skipped"]["已在垃圾桶（不重新导入）"] == 1
+
+    # 垃圾桶里那条仍在垃圾桶（没有被复活）
+    trash_ids = {i["id"] for i in client.get("/api/inspirations/trash").json()["items"]}
+    assert victim["id"] in trash_ids
+
+
 async def test_execute_f2_import_fetch_requires_f2(monkeypatch, client, f2_tree):
     """fetch=True 但 f2 不可用时：抛错让任务失败（而不是静默导入旧文件）。"""
     monkeypatch.setattr(f2, "f2_available", lambda: False)

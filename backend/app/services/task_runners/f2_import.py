@@ -18,6 +18,7 @@
 import asyncio
 import logging
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -316,21 +317,28 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             )
 
     # ── 阶段 2：扫描 + 去重计划 ──
-    # ⚠ 必须放线程里：build_import_plan 要对整个下载目录做 SHA-256（实测 7.3 GB
-    # 约 81 秒）。同步跑会阻塞 worker 事件循环——心跳（10s 间隔 / 90s stale 阈值）
-    # 会停跳，运行中的任务可能被 _reset_stale_tasks 判为 stale 并被其它 worker
-    # 重新认领（同一批导入被并发执行），期间暂停/取消也完全失效。
+    # ⚠ 必须放线程里：scan_directory + build_import_plan 是同步文件/哈希/SQLite 操作
+    # （全量重算时实测 7.3 GB 约 81 秒）。同步跑会阻塞 worker 事件循环——心跳
+    # （10s 间隔 / 90s stale 阈值）会停跳，运行中的任务可能被 _reset_stale_tasks
+    # 判为 stale 并被其它 worker 重新认领（同一批导入被并发执行），期间暂停/取消
+    # 也完全失效。哈希缓存（HashCache 落盘）把日常运行降到「只算新增文件」，
+    # 但首次/大量新增时仍可能很慢，故线程执行保持不变。
     files = await asyncio.to_thread(f2.scan_directory, f2.DEFAULT_F2_ROOT)
-    decisions, skipped, deferred_works = await asyncio.to_thread(
-        f2.build_import_plan,
-        files=files,
-        library_hashes=await asyncio.to_thread(f2.load_library_hashes),
-        existing_platform_ids=await asyncio.to_thread(f2.load_library_platform_ids),
-        bloggers=await asyncio.to_thread(f2.load_douyin_bloggers),
+    dedup = await asyncio.to_thread(f2.load_dedup_index)
+    bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
+    started = time.monotonic()
+    decisions, skipped, deferred_works, cache_stats = await asyncio.to_thread(
+        f2.build_plan_with_cache,
+        files,
+        dedup,
+        hash_cache_path=None,  # 缺省 storage/f2_hash_cache.db
+        use_cache=True,
+        bloggers=bloggers,
         authors=authors,
         limit=limit,
         skip_live=skip_live,
     )
+    plan_seconds = round(time.monotonic() - started, 1)
     to_import = [d for d in decisions if d.action == "import"]
     task.progress = _PROGRESS_AFTER_PLAN
     task.total = len(to_import)
@@ -342,11 +350,17 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "files": len(to_import),
             "skipped": skipped,
             "deferred_works": deferred_works,
+            "seconds": plan_seconds,
+            "hash_cache": cache_stats,
         },
     }
     task.updated_at = utcnow()
     await db.commit()
-    logger.info(f"f2 导入计划：待入库 {len(to_import)} 个文件（跳过 {len(skipped)} 类）")
+    logger.info(
+        f"f2 导入计划：待入库 {len(to_import)} 个文件（跳过 {len(skipped)} 类），"
+        f"规划耗时 {plan_seconds} 秒，哈希实算 "
+        f"{cache_stats.get('computed', '?')} 个文件（复用 {cache_stats.get('hit', '?')} 次）"
+    )
 
     if not to_import:
         task.progress = 100
