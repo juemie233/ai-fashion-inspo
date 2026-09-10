@@ -6,16 +6,21 @@ cd "$(dirname "$0")/.."
 
 # 统计函数：$1=文件列表（换行分隔，可为空），$2=注释行正则（awk 语法，行首匹配）
 # 输出: 代码行数 空行数 注释行数（空格分隔）
+# 注意：必须把文件作为参数逐个交给 awk，不能用 `xargs cat` 合并成一条流——
+# 末尾缺换行的文件会与下一个文件的首行粘连，导致行数少算
 count_style() {
   local files="$1" cre="$2"
   if [ -z "$files" ]; then
     echo "0 0 0"
     return
   fi
-  echo "$files" | xargs -r cat 2>/dev/null | awk -v cre="$cre" '
+  printf '%s\n' "$files" | xargs -r -d '\n' awk -v cre="$cre" '
     /^[[:space:]]*$/ { blank++; next }
     cre != "" && $0 ~ cre { comment++; next }
     { code++ }
+    END { printf "%d %d %d\n", code + 0, blank + 0, comment + 0 }
+  ' 2>/dev/null | awk '
+    { code += $1; blank += $2; comment += $3 }
     END { printf "%d %d %d", code + 0, blank + 0, comment + 0 }
   '
 }
@@ -31,25 +36,27 @@ echo "   === AI 穿搭灵感库 - 代码量统计（总行数 = 代码 + 空行 
 echo ""
 
 # 1. 后端 Python（backend 全部 .py，含 backend/scripts）
-files=$(find backend -name "*.py" -not -path "*/__pycache__/*")
+files=$(find backend -name "*.py" -not -path "*/__pycache__/*" -not -path "*/.venv/*" -not -path "*/.egg-info/*")
 read code blank comment <<< "$(count_style "$files" "$RE_PY")"
 total=$((code + blank + comment))
 echo "   后端 Python             总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 
 # 2. Web 前端（Vue/TS/CSS）
-files=$(find web/src -type f \( -name "*.ts" -o -name "*.vue" -o -name "*.css" \))
+files=$(find web/src -type f \( -name "*.ts" -o -name "*.vue" -o -name "*.css" \) -not -path "*/node_modules/*")
 read code blank comment <<< "$(count_style "$files" "$RE_TS")"
 total=$((code + blank + comment))
 echo "   Web 前端 (Vue/TS/CSS)   总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 
 # 3. 移动端（React Native：TSX/TS/JSON）
-files=$(find mobile -type f \( -name "*.tsx" -o -name "*.ts" -o -name "*.json" \))
+files=$(find mobile -type f \( -name "*.tsx" -o -name "*.ts" -o -name "*.json" \) \
+  -not -path "*/node_modules/*" -not -name "package-lock.json")
 read code blank comment <<< "$(count_style "$files" "$RE_TS")"
 total=$((code + blank + comment))
 echo "   移动端 (React Native)   总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 
 # 4. 浏览器插件（JS/HTML/CSS/JSON）
-files=$(find browser-extension -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" -o -name "*.json" \))
+files=$(find browser-extension -type f \( -name "*.js" -o -name "*.html" -o -name "*.css" -o -name "*.json" \) \
+  -not -path "*/node_modules/*" -not -name "package-lock.json")
 read code blank comment <<< "$(count_style "$files" "$RE_TS")"
 total=$((code + blank + comment))
 echo "   浏览器插件              总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
@@ -74,12 +81,14 @@ echo "   文档/配置               总 $(printf '%6s' $total)  = 代码 $(prin
 
 # 8. 总计（全仓代码文件，排除依赖与产物目录）
 files=$(find . -type f \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" -o -name "*.vue" -o -name "*.css" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.md" -o -name "*.sh" -o -name "*.bat" \) \
-  -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" \
-  -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/package-lock.json")
+  -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -not -path "*/dist/*" -not -path "*/build/*" \
+  -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/package-lock.json" \
+  -not -path "*/.venv/*" -not -path "*/site-packages/*" -not -path "*/.egg-info/*" \
+  -not -path "*/storage/*" -not -path "*/.pytest_cache/*" -not -path "*/backups/*")
 read code blank comment <<< "$(count_style "$files" "$RE_PY|$RE_TS|$RE_BAT")"
 total=$((code + blank + comment))
 echo "   ─────────────────────────────────────────────────────────"
 echo "   总计                    总 $(printf '%6s' $total)  = 代码 $(printf '%6s' $code) + 空行 $(printf '%6s' $blank) + 注释 $(printf '%6s' $comment)"
 echo ""
-echo "   $(printf '%s' "$files" | wc -l) 个文件"
+echo "   $(printf '%s\n' "$files" | wc -l) 个文件"
 echo ""
