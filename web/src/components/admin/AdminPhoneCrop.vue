@@ -9,6 +9,7 @@ import apiClient from '@/api/client'
 import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
 import { openInNewTab } from '@/utils/openInNewTab'
+import { defaultCheckedIds } from '@/utils/cropSelection'
 import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
 
 const router = useRouter()
@@ -277,37 +278,9 @@ function closePreview() {
 const scannedTotal = ref(0)
 const checkedCount = computed(() => checkedIds.value.size)
 
-/** 是否只勾选高置信候选（默认勾选 high+medium，排除 low；content 模式 plain
- * 类型无灰带/状态栏结构，可能是普通照片暗部，同样不默认勾选）。
- * content 模式后端已按自动化口径过滤：列表内仅剩手机截图候选（UI 特征或
- * 状态栏残留）。「疑似状态栏残留」候选（auto_ok=false 但带建议裁剪比例）
- * 也默认勾选——一次扫描即自动选上，免逐张手动确认；执行前有网格预览 +
- * 原图自动备份兜底。 */
-function defaultCheckedIds(items: CropCandidate[]): Set<string> {
-  const ids = new Set<string>()
-  for (const c of items) {
-    if (c.auto_ok) {
-      // 后端勾选决策优先：auto 模式仅双侧黑边（小红书截图形态）勾选；
-      // content 模式仅强字形证据勾选。旧响应无此字段时回退到历史规则
-      if (typeof c.auto_checked === 'boolean') {
-        if (c.auto_checked) ids.add(c.id)
-        continue
-      }
-      if (c.confidence === 'low') continue
-      if (c.boundary_kind === 'plain') continue
-      ids.add(c.id)
-      continue
-    }
-    // 疑似状态栏残留：后端已按字形证据给出勾选决策（左右两角齐备才自动勾选，
-    // 纯色背景照片/海报大字等无字形候选不勾）——直接采用后端决策
-    if (typeof c.auto_checked === 'boolean') {
-      if (c.auto_checked) ids.add(c.id)
-      continue
-    }
-    // 旧响应兼容：后端给出建议裁剪比例即默认勾选（crop_top=残留建议值）
-    if (c.crop_top > 0) ids.add(c.id)
-  }
-  return ids
+/** 扫描结果默认勾选集合：口径见 utils/cropSelection（content 模式默认全选）。 */
+function resolveDefaultChecked(items: CropCandidate[]): Set<string> {
+  return defaultCheckedIds(items, mode.value)
 }
 
 /** 扫描候选：只读预览，不修改任何数据。
@@ -361,11 +334,11 @@ async function handleScan() {
       const known = new Set(candidates.value.map((c) => c.id))
       const fresh = data.items.filter((c) => !known.has(c.id))
       candidates.value = [...candidates.value, ...fresh]
-      checkedIds.value = new Set([...checkedIds.value, ...defaultCheckedIds(fresh)])
+      checkedIds.value = new Set([...checkedIds.value, ...resolveDefaultChecked(fresh)])
       scannedTotal.value += data.total
     } else {
       candidates.value = data.items
-      checkedIds.value = defaultCheckedIds(data.items)
+      checkedIds.value = resolveDefaultChecked(data.items)
       scannedTotal.value = data.total
     }
     if (data.items.length === 0 && !data.truncated) {
@@ -398,7 +371,7 @@ function toggleAll() {
   if (checkedCount.value === candidates.value.length) {
     checkedIds.value = new Set()
   } else {
-    checkedIds.value = defaultCheckedIds(candidates.value)
+    checkedIds.value = resolveDefaultChecked(candidates.value)
   }
 }
 
