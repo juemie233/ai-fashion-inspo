@@ -26,6 +26,69 @@ async def scraper_sources() -> dict:
     return await scraper_service.get_scraper_sources()
 
 
+@router.post("/f2-import")
+async def create_f2_import(
+    fetch: bool = Query(True, description="是否先调 f2 增量下载（否则只入库已下载文件）"),
+    authors: str | None = Query(None, description="只处理这些作者（逗号分隔，归一化名）"),
+    limit: int | None = Query(None, ge=1, description="最多导入多少个作品"),
+    skip_live: bool = Query(False, description="跳过 live 实况的分段视频"),
+    fetch_limit: int | None = Query(None, ge=1, description="下载阶段最多处理多少个作者"),
+    make_thumbnails: bool = Query(True, description="是否生成缩略图"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
+
+    与 CLI（``python -m scripts.import_f2_downloads --fetch --apply``）同一条链路，
+    区别是走任务队列：创建任务后立即返回 task_id，由独立 worker 异步执行，
+    前端轮询 ``GET /api/tasks/{task_id}`` 获取进度。
+
+    两条约定：**导入不做标签分析/不建向量**（素材以未打标状态入库，打标请另行
+    触发批量分析任务）；**入库前四层去重**（内容哈希 / 批次内 / 合成平台 ID / 参数过滤）。
+
+    参数:
+        fetch: 是否先调 f2 下载（需要本机已装 f2 且其用户库里有作者）。
+        authors: 只处理这些作者（与下载、导入阶段共用同一归一化口径）。
+        limit: 最多导入多少个作品（按作品计，一个图集只吃一个配额）。
+        skip_live: 跳过 live 实况的分段视频。
+        fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
+        make_thumbnails: 是否生成缩略图（关掉更快，但列表页缺预览图）。
+    """
+    from app.services.task_runner import create_f2_import_task, f2_import_status
+
+    if fetch:
+        status = f2_import_status()
+        if not status["available"]:
+            return {"message": status["reason"], "task_id": None}
+
+    author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
+    task = await create_f2_import_task(
+        db,
+        authors=author_list,
+        limit=limit,
+        skip_live=skip_live,
+        fetch=fetch,
+        fetch_limit=fetch_limit,
+        make_thumbnails=make_thumbnails,
+    )
+    return {
+        "message": "已提交「一键获取素材」任务",
+        "task_id": task.id,
+        "fetch": fetch,
+        "authors": author_list,
+    }
+
+
+@router.get("/f2-status")
+async def f2_status() -> dict:
+    """「一键获取素材」可用性：f2 是否安装、工作目录与作者清单是否就绪。
+
+    供采集管理页的按钮置灰与提示文案使用。
+    """
+    from app.services.task_runner import f2_import_status
+
+    return f2_import_status()
+
+
 @router.get("/hashtags")
 async def scraper_hashtags(
     sort: str = Query("count", pattern="^(count|recent)$"),

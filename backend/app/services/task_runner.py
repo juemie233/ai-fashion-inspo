@@ -42,6 +42,11 @@ from app.services.task_runners.enrich_blogger_profile import (
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
 )
+from app.services.task_runners.f2_import import (
+    create_f2_import_task,
+    execute_f2_import,
+    f2_import_status,
+)
 from app.services.task_runners.face_scan import (
     create_face_match_task,
     create_face_scan_task,
@@ -91,6 +96,7 @@ TASK_HANDLERS = {
     "face_match": execute_face_match,
     "face_cluster": execute_face_cluster,
     "enrich_blogger_profile": execute_enrich_blogger_profile,
+    "f2_import": execute_f2_import,
     "tag_health_scan": execute_tag_health_scan,
     "tag_cluster_scan": execute_tag_cluster_scan,
     "tag_network_analyze": execute_tag_network_analyze,
