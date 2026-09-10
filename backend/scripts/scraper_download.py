@@ -82,18 +82,23 @@ _HASHTAG_SAVED_COUNT = [0]
 def ensure_hashtag_table(conn) -> None:
     """确保话题存档表存在（脚本独立进程兜底；主库由 Alembic 迁移建表）。
 
+    ⚠ DDL 必须与 Alembic 建出的真实表**逐列对齐**（尤其 NOT NULL 约束）：
+    历史上脚本侧曾把 first_seen_at 写成「可空 + 默认值」，而真实表是
+    NOT NULL 无默认值——两套 DDL 不一致让 save_hashtags 的 INSERT 在真实库
+    上必然失败，异常又被静默吞掉，导致话题存档长期 0 行却无人发现。
+
     Args:
         conn: 同步 sqlite3 连接。
     """
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS scraper_hashtags ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "name VARCHAR(64) NOT NULL UNIQUE, "
-            "seen_count INTEGER NOT NULL DEFAULT 1, "
-            "first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "source_kind VARCHAR(16) NOT NULL DEFAULT 'blogger', "
+            "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+            "name VARCHAR(64) NOT NULL, "
+            "seen_count INTEGER NOT NULL, "
+            "first_seen_at DATETIME NOT NULL, "
+            "last_seen_at DATETIME NOT NULL, "
+            "source_kind VARCHAR(16) NOT NULL, "
             "source_id INTEGER, "
             "note_url TEXT, "
             "source_meta TEXT)"
@@ -144,12 +149,14 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
                 "at": now_str,
             }
             if row is None:
+                # first_seen_at 在真实表里是 NOT NULL（无默认值），必须显式给值：
+                # 漏写会让 INSERT 必然 IntegrityError，进而被下面的 except 吞掉
                 conn.execute(
                     "INSERT INTO scraper_hashtags "
-                    "(name, seen_count, last_seen_at, source_kind, source_id, "
-                    "note_url, source_meta) "
-                    "VALUES (?, 1, ?, ?, ?, ?, ?)",
-                    (name, now_str, kind, source_id, note_url,
+                    "(name, seen_count, first_seen_at, last_seen_at, source_kind, "
+                    "source_id, note_url, source_meta) "
+                    "VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
+                    (name, now_str, now_str, kind, source_id, note_url,
                      json.dumps([item], ensure_ascii=False)),
                 )
             else:
@@ -167,8 +174,10 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
                 )
             saved += 1
             _HASHTAG_SAVED_COUNT[0] += 1
-        except Exception:
-            pass  # 话题写入失败不影响采集主流程
+        except Exception as exc:  # noqa: BLE001
+            # 话题写入失败不影响采集主流程，但**必须可见**：此前这里是静默 pass，
+            # 掩盖了「first_seen_at 缺失导致话题存档长期 0 行」的真实缺陷
+            print(f"    ⚠ 话题存档失败 #{name}: {type(exc).__name__}: {str(exc)[:80]}")
     return saved
 
 
