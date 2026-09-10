@@ -209,17 +209,21 @@ class _FakeProfilePage:
 
 
 def test_collect_blogger_urls_prefix_and_dedup():
-    """相对链接补全域名、绝对链接保留、重复去重。"""
+    """相对链接补全域名、绝对链接保留、同一笔记的不同 token 只收一次。
+
+    注意（行为变更 2026-09）：同一篇笔记在主页不同滚动轮次拿到的 href 可能
+    带不同 xsec_token，按原始 URL 串去重会重复打开同一篇详情页并重复下载
+    ⇒ 现按笔记 ID 去重，保留**首次出现**的那条 URL（其 token 仍可打开详情页）。
+    """
     page = _FakeProfilePage([
         "/explore/aaa?x=1",
         "https://www.xiaohongshu.com/explore/bbb",
-        "/explore/aaa",  # 同一篇（去重后不同 URL 由调用方语义决定；此处拼接后不同则保留）
+        "/explore/aaa",  # 同一篇笔记（不同 query）→ 去重后不保留
     ])
     urls = sx.collect_blogger_note_urls(page, "https://www.xiaohongshu.com/user/profile/1", 10)
     assert urls == [
         "https://www.xiaohongshu.com/explore/aaa?x=1",
         "https://www.xiaohongshu.com/explore/bbb",
-        "https://www.xiaohongshu.com/explore/aaa",
     ]
 
 

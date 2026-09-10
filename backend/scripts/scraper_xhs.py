@@ -32,6 +32,61 @@ from .scraper_download import download_batch, download_videos, _HASHTAG_SAVED_CO
 
 
 # ═══════════════════════════════════════════════════════════════
+#  小红书 URL 归一化（分页去重的基础）
+# ═══════════════════════════════════════════════════════════════
+
+"""笔记详情路径特征：只认这两类；用户主页 / 搜索词 / 话题页都不是笔记。
+
+对应 MediaCrawler 里按 model_type 过滤「相关搜索 / 热搜」卡片的做法：
+DOM 侧的等价物就是「链接不是笔记详情路径」一律不作为笔记处理。
+"""
+XHS_NOTE_PATH_HINTS = ("/explore/", "/discovery/item/")
+
+
+def canonical_note_url(href: str) -> str:
+    """卡片 href → 笔记详情 URL；非笔记链接返回空串。
+
+    保留 query：详情页必须带 xsec_token / xsec_source 才能打开，
+    因此这里只补全协议与域名，是否重复交给 :func:`note_id_of` 判定。
+
+    Args:
+        href: 卡片内 <a> 的 href（可能是相对路径）。
+
+    Returns:
+        绝对 URL；非笔记链接返回空串。
+    """
+    href = clean_media_url(href)
+    if not href:
+        return ""
+    url = (
+        href
+        if href.startswith("http")
+        else f"https://www.xiaohongshu.com{href}"
+    )
+    path = url.split("?", 1)[0]
+    if not any(hint in path for hint in XHS_NOTE_PATH_HINTS):
+        return ""
+    return url
+
+
+def note_id_of(note_url: str) -> str:
+    """从笔记 URL 取平台笔记 ID（去 query 后的末段）。
+
+    卡片 href 带 xsec_token，同一篇笔记在不同轮次 / 不同位置拿到的 token
+    可能不同——按原始 URL 串去重会把同一篇笔记重复采集、重复下载
+    （这正是 MediaCrawler 用 note_id + cursor 做分页幂等的理由）。
+
+    Args:
+        note_url: 笔记 URL（可带 query）。
+
+    Returns:
+        笔记 ID；无法解析时返回空串。
+    """
+    path = (note_url or "").split("?", 1)[0].rstrip("/")
+    return path.split("/")[-1] if path else ""
+
+
+# ═══════════════════════════════════════════════════════════════
 #  小红书详情页内容提取
 # ═══════════════════════════════════════════════════════════════
 
@@ -180,19 +235,22 @@ def collect_blogger_note_urls(
 
     last_count = 0
     no_new = 0
+    seen_note_ids: set[str] = set()
     for _ in range(max_scrolls):
-        # 收集当前页全部笔记链接（去重）
+        # 收集当前页全部笔记链接（按笔记 ID 去重：主页卡片 href 带
+        # xsec_token，同一篇笔记不同轮次 token 可能不同，按 URL 串去重
+        # 会重复打开同一篇详情页并重复下载）
         for link in page.query_selector_all("a[href*='/explore/']"):
-            href = link.get_attribute("href") or ""
-            url = (
-                href
-                if href.startswith("http")
-                else f"https://www.xiaohongshu.com{href}"
-            )
-            if url not in note_urls:
-                note_urls.append(url)
-                if len(note_urls) >= max_notes:
-                    return note_urls
+            note_url = canonical_note_url(link.get_attribute("href") or "")
+            if not note_url:
+                continue
+            note_id = note_id_of(note_url)
+            if note_id in seen_note_ids:
+                continue
+            seen_note_ids.add(note_id)
+            note_urls.append(note_url)
+            if len(note_urls) >= max_notes:
+                return note_urls
         if len(note_urls) == last_count:
             no_new += 1
         else:
@@ -211,6 +269,99 @@ def collect_blogger_note_urls(
 # ═══════════════════════════════════════════════════════════════
 #  小红书搜索模式
 # ═══════════════════════════════════════════════════════════════
+
+
+def extract_image_pairs_from_cards(
+    cards,
+    need_pairs: int,
+    seen_urls: set[str],
+    seen_note_ids: set[str],
+    counters: dict,
+) -> list[tuple[str, str]]:
+    """从笔记卡片提取 (笔记 URL, 图片 CDN URL)，带分页幂等与超额截断。
+
+    对齐 MediaCrawler 的分页状态机实践——分页/滚动过程中重叠部分必须对
+    「同一实体的不同表示」做归一化去重（其 API 侧是 note_id + cursor，
+    DOM 侧则是去 xsec_token 后的笔记 ID）：
+
+    - 非笔记卡片过滤：相关搜索 / 热搜 / 用户卡片没有笔记详情路径，直接跳过
+    - note_id 幂等：同一篇笔记不同 token 只处理一次（seen_note_ids）
+    - 图片 URL 幂等：滚动重叠区域的同图只取一次（seen_urls）
+    - 超额截断：够 need_pairs 张即停，不把整页图片全拉下来
+
+    counters 为调用方传入的计数器字典（原地累加，用于漏斗日志）：
+    non_note / dup_note / without_img / with_img / small / icon / dup_img。
+
+    Args:
+        cards: 卡片元素列表。
+        need_pairs: 需要的图片数量上限（超额截断）。
+        seen_urls: 已采集的图片 URL 集合（跨轮次复用）。
+        seen_note_ids: 已采集的笔记 ID 集合（跨轮次复用）。
+        counters: 漏斗计数器（原地修改）。
+
+    Returns:
+        (笔记 URL, 图片 URL) 列表。
+    """
+    pairs: list[tuple[str, str]] = []
+
+    def _bump(key: str) -> None:
+        counters[key] = counters.get(key, 0) + 1
+
+    for card in cards:
+        if len(pairs) >= need_pairs:
+            break
+        try:
+            link_el = card.query_selector("a")
+            href = (link_el.get_attribute("href") if link_el else "") or ""
+            note_url = canonical_note_url(href)
+            if not note_url:
+                _bump("non_note")
+                continue
+            note_id = note_id_of(note_url)
+            if note_id in seen_note_ids:
+                _bump("dup_note")
+                continue
+
+            # 从每张卡片中提取所有图片（轮播帖含多图）
+            imgs = card.query_selector_all("img")
+            if not imgs:
+                _bump("without_img")
+                continue
+            seen_note_ids.add(note_id)
+            _bump("with_img")
+
+            for img in imgs:
+                src = (
+                    img.get_attribute("src")
+                    or img.get_attribute("data-src")
+                    or ""
+                )
+                if not src or not src.startswith("http"):
+                    continue
+                # 过滤图标类 URL
+                if any(
+                    k in src.lower()
+                    for k in ("icon", "avatar", "logo", "favicon", "emoji")
+                ):
+                    _bump("icon")
+                    continue
+                # 过滤小尺寸（< 100px 任意边）
+                w = img.get_attribute("width") or ""
+                h = img.get_attribute("height") or ""
+                try:
+                    if w and h and (int(w) < 100 or int(h) < 100):
+                        _bump("small")
+                        continue
+                except ValueError:
+                    pass
+                if src in seen_urls:
+                    _bump("dup_img")
+                    continue
+                seen_urls.add(src)
+                pairs.append((note_url, src))
+        except Exception:
+            continue
+    return pairs
 
 
 def search_xiaohongshu(
@@ -314,80 +465,40 @@ def search_xiaohongshu(
     total_cards = len(cards)
     print(f"  共找到 {total_cards} 个笔记卡片，开始提取图片...")
 
-    pairs: list[tuple[str, str]] = []  # (笔记页面 URL, 图片 CDN URL)
     seen: set[str] = set()
-    cards_with_img = 0
-    cards_without_img = 0
-    skipped_small = 0
-    skipped_icon = 0
-
-    for card in cards[: need_count * 2]:
-        try:
-            # 提取笔记页面链接
-            note_href = ""
-            link_el = card.query_selector("a")
-            if link_el:
-                note_href = link_el.get_attribute("href") or ""
-            note_url = (
-                f"https://www.xiaohongshu.com{note_href}"
-                if note_href.startswith("/")
-                else note_href
-            )
-
-            # 从每张卡片中提取所有图片（轮播帖含多图）
-            imgs = card.query_selector_all("img")
-            if not imgs:
-                cards_without_img += 1
-                continue
-            cards_with_img += 1
-
-            for img in imgs:
-                src = (
-                    img.get_attribute("src")
-                    or img.get_attribute("data-src")
-                    or ""
-                )
-                if not src or not src.startswith("http"):
-                    continue
-                # 过滤图标类 URL
-                if any(k in src.lower() for k in ["icon", "avatar", "logo", "favicon", "emoji"]):
-                    skipped_icon += 1
-                    continue
-                # 过滤小尺寸（< 100px 任意边）
-                w = img.get_attribute("width") or ""
-                h = img.get_attribute("height") or ""
-                try:
-                    if w and h and (int(w) < 100 or int(h) < 100):
-                        skipped_small += 1
-                        continue
-                except ValueError:
-                    pass
-                if src not in seen:
-                    seen.add(src)
-                    pairs.append((note_url, src))
-        except Exception:
-            continue
+    seen_note_ids: set[str] = set()
+    counters: dict = {}
+    pairs = extract_image_pairs_from_cards(
+        cards, need_count * 2, seen, seen_note_ids, counters
+    )
 
     # ── 漏斗日志 ──
     funnel = {
         "cards_total": total_cards,
-        "cards_with_img": cards_with_img,
-        "cards_without_img": cards_without_img,
-        "skipped_small": skipped_small,
-        "skipped_icon": skipped_icon,
+        "cards_with_img": counters.get("with_img", 0),
+        "cards_without_img": counters.get("without_img", 0),
+        "skipped_non_note": counters.get("non_note", 0),
+        "skipped_dup_note": counters.get("dup_note", 0),
+        "skipped_small": counters.get("small", 0),
+        "skipped_icon": counters.get("icon", 0),
+        "skipped_dup_img": counters.get("dup_img", 0),
         "urls_extracted": len(pairs),
         "target": need_count,
     }
     print(f"  ┌─ 提取漏斗 ─────────────────────────────")
     print(f"  │ DOM 卡片总数: {total_cards}")
-    print(f"  │ 有图片的卡片: {cards_with_img}")
-    print(f"  │ 无图片的卡片: {cards_without_img}")
-    print(f"  │ 跳过小尺寸:   {skipped_small}")
-    print(f"  │ 跳过图标:     {skipped_icon}")
+    print(f"  │ 有图片的卡片: {funnel['cards_with_img']}")
+    print(f"  │ 无图片的卡片: {funnel['cards_without_img']}")
+    print(f"  │ 跳过非笔记:   {funnel['skipped_non_note']}")
+    print(f"  │ 跳过重复笔记: {funnel['skipped_dup_note']}")
+    print(f"  │ 跳过小尺寸:   {funnel['skipped_small']}")
+    print(f"  │ 跳过图标:     {funnel['skipped_icon']}")
+    print(f"  │ 跳过重复图:   {funnel['skipped_dup_img']}")
     print(f"  │ 提取到 URL:   {len(pairs)}")
     print(f"  │ 目标数量:     {need_count}")
     print(f"  └──────────────────────────────────────────")
 
+    # 超额截断：多取一倍作为下载失败缓冲，由调用方按剩余需求截断
     return pairs[: need_count * 2], funnel
 
 
