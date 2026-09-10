@@ -27,6 +27,7 @@ from .scraper_common import (
     is_content_image,
     raise_if_xhs_blocked,
     ScraperBlockedError,
+    xhs_video_urls_from_page_state,
 )
 from .scraper_download import download_batch, download_videos, _HASHTAG_SAVED_COUNT
 
@@ -89,6 +90,48 @@ def note_id_of(note_url: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 #  小红书详情页内容提取
 # ═══════════════════════════════════════════════════════════════
+
+
+def _read_video_state(page) -> dict:
+    """从详情页 window.__INITIAL_STATE__ 读取视频原片 key 与水印流地址。
+
+    DOM 里的 `<video src>` 是**带水印**的流；无水印原片的 key 只存在于页面
+    状态里。页面状态含 JS 字面量 undefined（不是合法 JSON），所以在页面上下文
+    内求值并只回传需要的字段——既避开「字符串替换 undefined 再 json.loads」
+    的脆弱做法，也不用把整个 state 序列化到 Python。
+
+    Args:
+        page: Playwright 页面对象。
+
+    Returns:
+        {"originKey": str, "masters": [str, ...]}；解析失败返回空字典。
+    """
+    try:
+        state = page.evaluate(
+            """() => {
+                try {
+                    const s = window.__INITIAL_STATE__;
+                    const noteNode = (s && s.note) || {};
+                    const map = noteNode.noteDetailMap || noteNode.note_detail_map || {};
+                    const first = Object.values(map)[0] || {};
+                    const note = first.note || first;
+                    const video = (note && note.video) || {};
+                    const consumer = video.consumer || {};
+                    const h264 = (((video.media || {}).stream) || {}).h264 || [];
+                    return {
+                        originKey: consumer.originVideoKey || consumer.origin_video_key || '',
+                        masters: Array.isArray(h264)
+                            ? h264.map(x => (x && (x.masterUrl || x.master_url)) || '').filter(Boolean)
+                            : [],
+                    };
+                } catch (e) {
+                    return null;
+                }
+            }"""
+        )
+    except Exception:
+        return {}
+    return state if isinstance(state, dict) else {}
 
 
 def extract_note_detail(page, note_url: str) -> dict:
@@ -154,6 +197,13 @@ def extract_note_detail(page, note_url: str) -> dict:
         result["img_urls"].append(src)
 
     # ── 视频：<video> 的 src（或 <source> 子标签），封面 poster 一并作为图片采集 ──
+    # ── 视频：页面状态里的无水印原片直链优先，DOM <video src> 兜底 ──
+    # 列表顺序即优先级：下载端按顺序尝试、成功即止，因此同一视频不会被
+    # 重复下载（无水印源不可用时才回落到带水印流）
+    for state_url in xhs_video_urls_from_page_state(_read_video_state(page)):
+        if state_url not in result["video_urls"]:
+            result["video_urls"].append(state_url)
+
     for video in page.query_selector_all("video"):
         vsrc = clean_media_url(video.get_attribute("src") or "")
         if not vsrc:

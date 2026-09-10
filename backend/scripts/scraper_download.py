@@ -29,6 +29,7 @@ from .scraper_common import (
     clean_media_url,
     is_content_image,
     build_download_headers,
+    xhs_image_url_candidates,
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -354,15 +355,34 @@ def download_batch(
             skipped_existing += 1
             continue
 
+        # 媒体地址降级链（对齐 MediaCrawler 的原图 / 多 CDN 实践）：
+        # 小红书卡片给的是压缩过的网页图（sns-webpic-*），这里换成原图直链
+        # （sns-img-*，四个 CDN 轮换），并保留原 URL 兜底——某个 CDN 节点
+        # 不可用时换源重试，而不是整张图直接判失败。
+        candidates = (
+            xhs_image_url_candidates(img_url)
+            if platform == "xiaohongshu"
+            else [img_url]
+        )
+
         for attempt in range(1, 4):
             try:
-                resp = httpx_module.get(
-                    img_url,
-                    headers=req_headers,
-                    timeout=30,
-                    follow_redirects=True,
-                )
-                if resp.status_code != 200:
+                # 按候选链依次尝试：命中 200 即用，全部失败才算跳过
+                resp = None
+                for candidate in candidates:
+                    resp = httpx_module.get(
+                        candidate,
+                        headers=req_headers,
+                        timeout=30,
+                        follow_redirects=True,
+                    )
+                    if resp.status_code == 200:
+                        break
+                    print(
+                        f"    换源重试（HTTP {resp.status_code}）"
+                        f" {candidate[:48]}..."
+                    )
+                if resp is None or resp.status_code != 200:
                     skipped_non200 += 1
                     break
                 ext = ".jpg"
@@ -591,6 +611,7 @@ def download_videos(
 
     added = 0
     skipped = 0
+    _downloaded_notes: set[str] = set()  # 本次运行已成功下载的笔记（候选去重用）
     batch_conn = None
     try:
         batch_conn = _sqlite3.connect(str(db_path))
@@ -601,6 +622,10 @@ def download_videos(
     for note_url, video_url in unique:
         if added >= remaining:
             break
+        # 同一笔记的多个候选地址（无水印原片 → 带水印流）按列表顺序尝试：
+        # 前一个候选成功后就不再下载其余候选，避免同一视频重复入库
+        if note_url and note_url in _downloaded_notes:
+            continue
         if video_url in existing_url_set:
             skipped += 1
             continue
@@ -687,6 +712,8 @@ def download_videos(
 
             added += 1
             existing_url_set.add(video_url)
+            if note_url:
+                _downloaded_notes.add(note_url)
             # 视频较大，下载间隔稍长
             time.sleep(random.uniform(1.0, 2.0))
         except Exception as e:

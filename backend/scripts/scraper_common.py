@@ -5,6 +5,7 @@
 """
 
 import random
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -368,6 +369,107 @@ def raise_if_xhs_blocked(page, detail: str = "") -> str:
     if kind:
         raise ScraperBlockedError(kind, detail)
     return ""
+
+
+# ═══════════════════════════════════════════════════════════════
+#  平台通用：小红书媒体地址（原图直链 / 无水印视频）
+# ═══════════════════════════════════════════════════════════════
+
+"""小红书原图 CDN 主机：轮换使用（任一节点不可用则换源重试）。
+
+页面 DOM 给的是网页缩略图（sns-webpic-*），原图在 sns-img-* 上；四个节点
+是同一图片的多副本入口——这正是 MediaCrawler 的多 CDN 轮换思路。
+"""
+XHS_IMAGE_CDN_HOSTS: tuple[str, ...] = (
+    "sns-img-qc.xhscdn.com",
+    "sns-img-hw.xhscdn.com",
+    "sns-img-bd.xhscdn.com",
+    "sns-img-qn.xhscdn.com",
+)
+
+"""小红书无水印视频直链主机前缀（originVideoKey 拼此域名即原片）。"""
+XHS_VIDEO_HOST = "https://sns-video-bd.xhscdn.com"
+
+"""图片 URL 的处理指令后缀（如 !nd_dft_wgth_webp_3）：取原图前需剥离。"""
+_XHS_IMAGE_SUFFIX_RE = re.compile(r"![^/?]*$")
+
+
+def xhs_image_trace_id(url: str) -> str:
+    """从任意 xhscdn 图片 URL 提取图片 trace_id（原图直链的路径部分）。
+
+    处理三件事：剥离 query 与 `!nd_...` 处理指令、去掉末尾斜杠、
+    保留浏览器端上传图片多出的 `spectrum/` 层级。
+
+    Args:
+        url: 图片 URL。
+
+    Returns:
+        trace_id；无法识别时返回空串。
+    """
+    cleaned = (url or "").strip().split("?", 1)[0]
+    cleaned = _XHS_IMAGE_SUFFIX_RE.sub("", cleaned).rstrip("/")
+    if not cleaned:
+        return ""
+    seg = cleaned.split("/")[-1]
+    if not seg:
+        return ""
+    return f"spectrum/{seg}" if "/spectrum/" in cleaned else seg
+
+
+def xhs_image_url_candidates(url: str) -> list[str]:
+    """小红书图片下载候选链：原图多 CDN 优先，原 URL 兜底。
+
+    DOM 卡片里的 `sns-webpic-*` 是压缩过的网页图，直接入库会拉低素材质量；
+    这里换成 `sns-img-*` 原图直链（四个 CDN 轮换），并保留原 URL 作为最后
+    兜底——任一 CDN 节点不可用时换源重试，而不是整张图判失败。
+
+    Args:
+        url: 卡片 / 详情页提取到的图片 URL。
+
+    Returns:
+        候选 URL 列表（按优先级排序，已去重）；传入空串返回空列表。
+    """
+    url = (url or "").strip()
+    if not url:
+        return []
+    if "xhscdn.com" not in url:
+        return [url]
+    trace_id = xhs_image_trace_id(url)
+    if not trace_id:
+        return [url]
+    candidates = [f"https://{host}/{trace_id}" for host in XHS_IMAGE_CDN_HOSTS]
+    if url not in candidates:
+        candidates.append(url)  # 原 URL 兜底（含 CDN 被改域名等未知情况）
+    return candidates
+
+
+def xhs_video_urls_from_page_state(state: dict) -> list[str]:
+    """从详情页状态提取视频直链：无水印原片优先，带水印流兜底。
+
+    对齐 MediaCrawler 的做法：DOM 里 `<video src>` 是**带水印**的流，原片
+    key（originVideoKey）只存在于页面状态 `window.__INITIAL_STATE__` 中，
+    拼 `https://sns-video-bd.xhscdn.com/{key}` 即无水印直链。
+
+    Args:
+        state: 页面状态里抽取出的精简结构：
+            {"originKey": str, "masters": [str, ...]}
+            （在页面上下文里求值后只取需要的字段，避免传递整个 state）。
+
+    Returns:
+        候选视频 URL 列表（无水印在前）；无视频返回空列表。
+    """
+    if not isinstance(state, dict):
+        return []
+    urls: list[str] = []
+    key = state.get("originKey") or state.get("origin_key") or ""
+    if isinstance(key, str) and key.strip():
+        urls.append(f"{XHS_VIDEO_HOST}/{key.strip()}")
+    masters = state.get("masters") or []
+    if isinstance(masters, list):
+        for master in masters:
+            if isinstance(master, str) and master and master not in urls:
+                urls.append(master)
+    return urls
 
 
 # ═══════════════════════════════════════════════════════════════
