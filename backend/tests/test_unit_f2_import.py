@@ -513,3 +513,108 @@ def test_apply_import_no_thumbnails(tmp_path):
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT thumbnail_path FROM inspirations").fetchone()[0] is None
     conn.close()
+
+
+# ── 调 f2 增量下载（--fetch；用注入的执行器，不真跑 f2）──
+
+
+def _f2_dir_with_authors(tmp_path: Path, authors=()) -> Path:
+    """造一个 f2 工作目录：含 douyin_users.db 的 user_info_web 表。"""
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    for sec, nickname, count in authors or [
+        ("MS4wLjABAAAAaaa", "里香1√", 171),
+        ("MS4wLjABAAAAbbb", "娜娜瑜√", 232),
+    ]:
+        conn.execute("INSERT INTO user_info_web VALUES (?, ?, ?)", (sec, nickname, count))
+    conn.commit()
+    conn.close()
+    return f2_dir
+
+
+def test_load_f2_authors(tmp_path):
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    authors = f2.load_f2_authors(f2_dir)
+    assert [a["nickname"] for a in authors] == ["里香1√", "娜娜瑜√"]
+    assert authors[0]["sec_user_id"] == "MS4wLjABAAAAaaa"
+    assert authors[0]["aweme_count"] == 171
+
+
+def test_load_f2_authors_tolerates_missing_db_and_table(tmp_path):
+    assert f2.load_f2_authors(tmp_path / "不存在") == []
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    sqlite3.connect(empty / f2.F2_AUTHOR_DB).close()  # 有库无表
+    assert f2.load_f2_authors(empty) == []
+
+
+def test_build_f2_command_default_flags():
+    """默认命令：主页作品 + 全部日期 + 指定下载根；不擅自改命名模板。"""
+    author = {"sec_user_id": "MS4wLjABAAAAaaa", "nickname": "里香"}
+    cmd = f2.build_f2_command(author, download_root=Path("D:/f2/Download"))
+
+    assert cmd[1:4] == ["-m", "f2", "dy"]
+    assert "-u" in cmd and cmd[cmd.index("-u") + 1] == "https://www.douyin.com/user/MS4wLjABAAAAaaa"
+    assert cmd[cmd.index("-M") + 1] == "post"
+    assert cmd[cmd.index("-i") + 1] == "all"
+    assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
+    assert "-n" not in cmd  # 缺省沿用 f2 配置的命名模板（解析依赖其形状）
+    assert "--auto-cookie" not in cmd
+
+
+def test_build_f2_command_optional_flags():
+    author = {"sec_user_id": "sec1", "nickname": "A"}
+    cmd = f2.build_f2_command(author, naming="{create}_{desc}", auto_cookie="chrome")
+    assert cmd[cmd.index("-n") + 1] == "{create}_{desc}"
+    assert cmd[cmd.index("--auto-cookie") + 1] == "chrome"
+
+
+def test_run_fetch_invokes_f2_per_author_and_continues_on_failure(tmp_path):
+    """逐作者串行调用；某个作者失败只记录并继续（cwd 必须是 f2 工作目录）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_runner(cmd, cwd):
+        calls.append((cmd, cwd))
+        return (1 if "娜娜瑜" in " ".join(cmd) or len(calls) == 2 else 0), ""
+
+    result = f2.run_fetch(f2_dir, runner=fake_runner)
+
+    assert result["total"] == 2 and result["ok"] == 1 and result["failed"] == 1
+    assert len(calls) == 2  # 失败后继续跑下一个作者
+    assert all(cwd == f2_dir for _cmd, cwd in calls)  # f2 的 cwd 必须是其工作目录
+    assert [r["nickname"] for r in result["results"]] == ["里香1√", "娜娜瑜√"]
+    assert result["results"][1]["rc"] == 1
+
+
+def test_run_fetch_author_filter_and_limit(tmp_path):
+    """--authors 复用归一化匹配（与导入阶段语义一致）；--fetch-limit 截断。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    seen: list[str] = []
+    runner = lambda cmd, cwd: (seen.append(" ".join(cmd)) or 0, "")  # noqa: E731
+
+    result = f2.run_fetch(f2_dir, authors={"里香"}, runner=runner)
+    assert result["total"] == 1 and len(seen) == 1
+
+    result = f2.run_fetch(f2_dir, limit=1, runner=runner)
+    assert result["total"] == 1
+
+
+def test_run_fetch_runner_exception_does_not_abort(tmp_path):
+    """执行器抛异常（如 f2 崩溃）也只算该作者失败。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def boom(cmd, cwd):
+        raise OSError("f2 崩溃")
+
+    result = f2.run_fetch(f2_dir, runner=boom)
+    assert result["failed"] == 2 and result["ok"] == 0
+
+
+def test_run_fetch_without_author_db_reports_error(tmp_path):
+    result = f2.run_fetch(tmp_path / "不存在", runner=lambda cmd, cwd: (0, ""))
+    assert result["total"] == 0 and result["error"]

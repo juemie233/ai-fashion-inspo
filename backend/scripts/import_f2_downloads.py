@@ -26,14 +26,19 @@
   - 与素材库的重合面统计（净新增 / 已在库）
   - 待建博主、话题清单、打标成本预估等决策报表
 
-真导入（写库、绑定博主、话题存档）在下一个提交实现。
+本模块提供两件事：**看清会进来什么**（缺省只读报表）与**一键弄进来**
+（`--apply` 入库；`--fetch` 连 f2 增量下载一起做）。
 
 用法
 ----
     cd backend
-    python -m scripts.import_f2_downloads --dry-run           # 只出报表（默认）
-    python -m scripts.import_f2_downloads --apply             # 真导入（入库+绑博主+话题）
+    # 「一键获取素材」：增量下载 → 入库（推荐日常用这条）
+    python -m scripts.import_f2_downloads --fetch --apply
+
+    python -m scripts.import_f2_downloads --dry-run            # 只出报表（缺省行为，只读）
+    python -m scripts.import_f2_downloads --apply              # 只入库（不调 f2）
     python -m scripts.import_f2_downloads --apply --authors 里香,娜娜瑜 --limit 500
+    python -m scripts.import_f2_downloads --fetch --fetch-limit 2   # 只下载 2 个作者试跑
 
 三条约定
 --------
@@ -50,10 +55,12 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import uuid
 from collections import Counter, defaultdict
@@ -76,8 +83,21 @@ from .scraper_download import extract_video_thumbnail_sync  # noqa: E402
 #  常量
 # ═══════════════════════════════════════════════════════════════
 
-"""f2 默认下载根目录（可用 --root 覆盖）。"""
-DEFAULT_F2_ROOT = Path(r"C:\Users\Administrator\Desktop\f2\Download\douyin\post")
+"""f2 默认工作目录（可用 --f2-dir 覆盖）。
+
+f2 在**自己的工作目录**下创建 `Download/` 与 `douyin_users.db`（相对路径），
+所以调用它时必须把 cwd 设到该目录，作者清单也从这里的 DB 读。
+"""
+DEFAULT_F2_DIR = Path(r"C:\Users\Administrator\Desktop\f2")
+
+"""下载产物相对 f2 工作目录的位置（f2 在 cwd 下建 Download/douyin/post/）。"""
+F2_DOWNLOAD_SUBDIR = Path("Download/douyin/post")
+
+"""f2 的作者库文件名（含 user_info_web 表：sec_user_id / nickname / aweme_count）。"""
+F2_AUTHOR_DB = "douyin_users.db"
+
+"""f2 默认下载根目录（可用 --root 覆盖；与 --f2-dir 联动）。"""
+DEFAULT_F2_ROOT = DEFAULT_F2_DIR / F2_DOWNLOAD_SUBDIR
 
 """文件名尾部类型标记：_video / _image_1 / _live_2（f2 命名模板决定）。"""
 KIND_RE = re.compile(
@@ -518,7 +538,11 @@ def print_report(report: dict, top_hashtags: int = 15) -> None:
     print(f"\n-- 话题（共 {report['hashtags_total']} 个，Top {top_hashtags}）--")
     for tag, count in report["top_hashtags"][:top_hashtags]:
         print(f"   #{tag}  {count}")
-    print("\n提示：本命令不写库；真导入（入库 + 绑定博主 + 话题存档）在后续步骤实现。")
+    print(
+        "\n提示：本命令不写库（只读报表）。确认无误后执行导入："
+        "\n    python -m scripts.import_f2_downloads --apply"
+        "（要连增量下载一起做：--fetch --apply）"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -893,6 +917,190 @@ def apply_import(
 
 
 # ═══════════════════════════════════════════════════════════════
+#  调用 f2 增量下载（--fetch）
+# ═══════════════════════════════════════════════════════════════
+
+
+def f2_available() -> bool:
+    """f2 是否已安装（以模块方式 `python -m f2` 调用）。"""
+    return importlib.util.find_spec("f2") is not None
+
+
+def load_f2_authors(f2_dir: Path) -> list[dict]:
+    """读取 f2 用户库里的作者清单（增量下载的「关注了谁」来源）。
+
+    为什么以 f2 的库为准：素材库的 `bloggers` 表**没有 sec_user_id**
+    （实测 24 个抖音博主的 platform_user_id 多为 NULL、profile_url 全空），
+    而 f2 的 `user_info_web` 存了 sec_user_id / nickname / aweme_count。
+
+    Args:
+        f2_dir: f2 工作目录（其下有 douyin_users.db）。
+
+    Returns:
+        [{"sec_user_id", "nickname", "aweme_count"}]；库或表缺失时返回空列表。
+    """
+    db = f2_dir / F2_AUTHOR_DB
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT sec_user_id, nickname, aweme_count FROM user_info_web"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    return [
+        {
+            "sec_user_id": row[0],
+            "nickname": row[1] or "",
+            "aweme_count": int(row[2] or 0),
+        }
+        for row in rows
+        if row[0]
+    ]
+
+
+def build_f2_command(
+    author: dict,
+    download_root: Path | None = None,
+    naming: str | None = None,
+    auto_cookie: str | None = None,
+) -> list[str]:
+    """构造单个作者的 f2 下载命令（主页作品 / 全部日期，增量由 f2 保证）。
+
+    - `-M post`：主页发布的作品（f2 支持 post/like/collect/mix…）
+    - `-i all`：日期区间取全部；f2 用自己记录的 last_aweme_id 跳过已下过的
+    - `-p`：下载根目录（缺省就是 f2 工作目录下的 Download/）
+    - `-n`：命名模板。**缺省不传**，沿用 f2 配置里的模板——本模块的解析器
+      依赖 `{时间}_{正文}_{类型}_{序号}` 形状，擅自改模板会让作品分组/正文解析失效
+    - `--auto-cookie`：从浏览器自动取 cookie（需先关闭该浏览器）
+
+    Args:
+        author: :func:`load_f2_authors` 的一项。
+        download_root: 下载根目录（传给 f2 的 -p）。
+        naming: 命名模板（一般不要传）。
+        auto_cookie: 浏览器名（chrome / chromium / edge …）。
+
+    Returns:
+        可直接交给 subprocess 的参数列表。
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "f2",
+        "dy",
+        "-u",
+        f"https://www.douyin.com/user/{author['sec_user_id']}",
+        "-M",
+        "post",
+        "-i",
+        "all",
+    ]
+    if download_root is not None:
+        cmd += ["-p", str(download_root)]
+    if naming:
+        cmd += ["-n", naming]
+    if auto_cookie:
+        cmd += ["--auto-cookie", auto_cookie]
+    return cmd
+
+
+def _default_runner(cmd: list[str], cwd: Path) -> tuple[int, str]:
+    """默认执行器：继承标准输出，让 f2 的下载进度实时可见。
+
+    Args:
+        cmd: 命令参数列表。
+        cwd: 工作目录（必须是 f2 工作目录）。
+
+    Returns:
+        (退出码, 附加信息)。
+    """
+    proc = subprocess.run(cmd, cwd=str(cwd), check=False)
+    return proc.returncode, ""
+
+
+def run_fetch(
+    f2_dir: Path,
+    authors: set[str] | None = None,
+    download_root: Path | None = None,
+    naming: str | None = None,
+    auto_cookie: str | None = None,
+    limit: int | None = None,
+    runner=None,
+) -> dict:
+    """串行调 f2 增量下载各作者的新作品（一次一个，避免并发触发风控）。
+
+    设计要点：
+    - **cwd 必须是 f2 工作目录**：f2 在 cwd 下读写 douyin_users.db 与 Download/，
+      cwd 不对会另起一个空作者库、把下载落到别处
+    - 单个作者失败（风控 / 网络 / cookie 失效）只记录并继续下一个，不阻断整批；
+      失败细节在 f2/logs/ 下
+    - 作者过滤复用 `--authors`（归一化名匹配），与导入阶段的语义一致
+
+    Args:
+        f2_dir: f2 工作目录。
+        authors: 只下载这些作者（归一化名，None 表示全部）。
+        download_root: 传给 f2 的 -p 下载根目录。
+        naming: 传给 f2 的 -n 命名模板（一般不要传）。
+        auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
+        limit: 最多下载多少个作者（试跑用）。
+        runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
+
+    Returns:
+        {"total", "ok", "failed", "results", "error"}；
+        results 每项含 nickname / sec_user_id / rc / cmd。
+    """
+    runner = runner or _default_runner
+    all_authors = load_f2_authors(f2_dir)
+    if not all_authors:
+        return {
+            "total": 0,
+            "ok": 0,
+            "failed": 0,
+            "results": [],
+            "error": (
+                f"未找到 f2 作者清单：{f2_dir / F2_AUTHOR_DB}（先手动跑一次 f2 "
+                f"确认能登录并下载，本命令只做「增量」）"
+            ),
+        }
+
+    wanted = {normalize_author(a) for a in authors} if authors else None
+    targets = [
+        a for a in all_authors if wanted is None or normalize_author(a["nickname"]) in wanted
+    ]
+    if limit is not None:
+        targets = targets[:limit]
+
+    results: list[dict] = []
+    ok = failed = 0
+    for author in targets:
+        cmd = build_f2_command(author, download_root, naming, auto_cookie)
+        print(f"  ▶ {author['nickname']}（抖音作品总数 {author['aweme_count']}）")
+        try:
+            rc, _info = runner(cmd, f2_dir)
+        except Exception as exc:  # noqa: BLE001 —— 单个作者失败不阻断整批
+            rc = -1
+            print(f"    ✗ 调用 f2 失败：{type(exc).__name__}: {exc}")
+        if rc == 0:
+            ok += 1
+            print("    ✓ 完成（f2 已按 last_aweme_id 跳过已下载作品）")
+        else:
+            failed += 1
+            print(f"    ✗ 退出码 {rc}，跳过该作者（详情见 {f2_dir / 'logs'}）")
+        results.append(
+            {
+                "nickname": author["nickname"],
+                "sec_user_id": author["sec_user_id"],
+                "rc": rc,
+                "cmd": " ".join(cmd),
+            }
+        )
+    return {"total": len(targets), "ok": ok, "failed": failed, "results": results}
+
+
+# ═══════════════════════════════════════════════════════════════
 #  入口
 # ═══════════════════════════════════════════════════════════════
 
@@ -912,13 +1120,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--root",
         type=Path,
-        default=DEFAULT_F2_ROOT,
-        help=f"f2 的 post 目录（默认 {DEFAULT_F2_ROOT}）",
+        default=None,
+        help=f"f2 的 post 目录（缺省跟随 --f2-dir，即 {DEFAULT_F2_ROOT}）",
+    )
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="先调 f2 增量下载（各作者主页新作品），再按所选模式处理；"
+        "与 --apply 组合即为「一条命令从下载到入库」",
+    )
+    parser.add_argument(
+        "--f2-dir",
+        type=Path,
+        default=DEFAULT_F2_DIR,
+        help=f"f2 工作目录（其下有 Download/ 与 douyin_users.db），默认 {DEFAULT_F2_DIR}",
+    )
+    parser.add_argument(
+        "--naming",
+        default=None,
+        help="传给 f2 的 -n 命名模板；缺省沿用 f2 配置（勿随意改：解析依赖默认模板形状）",
+    )
+    parser.add_argument(
+        "--auto-cookie",
+        default=None,
+        help="传给 f2 的 --auto-cookie 浏览器名（chrome/chromium/edge…），需先关闭该浏览器",
+    )
+    parser.add_argument(
+        "--fetch-limit",
+        type=int,
+        default=None,
+        help="--fetch 时最多下载多少个作者（试跑用）",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="真导入（写库：入库 + 博主关联 + 话题存档）；缺省只出报表、不写库",
+        help="真导入（写库：入库 + 博主关联）；缺省只出报表、不写库",
     )
     parser.add_argument(
         "--authors",
@@ -957,9 +1193,44 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db_path = args.db or library_db_path()
-    files = scan_directory(args.root)
+    root = args.root or (args.f2_dir / F2_DOWNLOAD_SUBDIR)
+    authors_filter = (
+        {a.strip() for a in args.authors.split(",") if a.strip()}
+        if args.authors
+        else None
+    )
+
+    # ── 可选：先调 f2 增量下载（--fetch）──
+    if args.fetch:
+        if not f2_available():
+            print(
+                "未检测到 f2（python -m f2 不可用）：先安装并配置好 cookie —— "
+                "pip install f2；本命令只做增量，首次全量请手动跑一次 f2"
+            )
+            return 1
+        print("=== 调 f2 增量下载（逐作者串行，失败不阻断）===")
+        fetch = run_fetch(
+            f2_dir=args.f2_dir,
+            authors=authors_filter,
+            download_root=args.f2_dir / "Download",
+            naming=args.naming,
+            auto_cookie=args.auto_cookie,
+            limit=args.fetch_limit,
+        )
+        if fetch.get("error"):
+            print(f"  ⚠ {fetch['error']}")
+        else:
+            print(
+                f"  下载汇总：成功 {fetch['ok']} / 失败 {fetch['failed']}"
+                f"（共 {fetch['total']} 个作者）"
+            )
+            if fetch["failed"]:
+                print("  ⚠ 有作者下载失败（多为风控/cookie 失效），已跳过，稍后可重跑")
+        print()
+
+    files = scan_directory(root)
     if not files:
-        print(f"未在 {args.root} 找到可识别的 f2 产物文件")
+        print(f"未在 {root} 找到可识别的 f2 产物文件")
         return 1
 
     hash_cache: dict[Path, str] = {}
@@ -969,7 +1240,7 @@ def main(argv: list[str] | None = None) -> int:
     # ── 缺省：只读报表 ──
     if not args.apply:
         report = build_report(
-            root=args.root,
+            root=root,
             files=files,
             library_hashes=library_hashes,
             bloggers=bloggers,
@@ -989,17 +1260,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"素材库不存在: {db_path}")
         return 1
 
-    authors = (
-        {a.strip() for a in args.authors.split(",") if a.strip()}
-        if args.authors
-        else None
-    )
     decisions, skipped, deferred_works = build_import_plan(
         files=files,
         library_hashes=library_hashes,
         existing_platform_ids=load_library_platform_ids(db_path),
         bloggers=bloggers,
-        authors=authors,
+        authors=authors_filter,
         limit=args.limit,
         skip_live=args.skip_live,
         hash_cache=hash_cache,
