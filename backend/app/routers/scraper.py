@@ -34,6 +34,9 @@ async def create_f2_import(
     skip_live: bool = Query(False, description="跳过 live 实况的分段视频"),
     fetch_limit: int | None = Query(None, ge=1, description="下载阶段最多处理多少个作者"),
     make_thumbnails: bool = Query(True, description="是否生成缩略图"),
+    since_days: int | None = Query(
+        None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史；缺省取配置）"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -43,7 +46,8 @@ async def create_f2_import(
     前端轮询 ``GET /api/tasks/{task_id}`` 获取进度。
 
     两条约定：**导入不做标签分析/不建向量**（素材以未打标状态入库，打标请另行
-    触发批量分析任务）；**入库前四层去重**（内容哈希 / 批次内 / 合成平台 ID / 参数过滤）。
+    触发批量分析任务）；**入库前五层去重**（内容哈希 / 垃圾桶 / 批次内 /
+    合成平台 ID / 参数过滤）。
 
     参数:
         fetch: 是否先调 f2 下载（需要本机已装 f2 且其用户库里有作者）。
@@ -52,6 +56,10 @@ async def create_f2_import(
         skip_live: 跳过 live 实况的分段视频。
         fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
         make_thumbnails: 是否生成缩略图（关掉更快，但列表页缺预览图）。
+        since_days: f2 只翻最近 N 天的作品。**别轻易用 0**：`-i all` 会让 f2 把
+            作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
+            翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
+            也不会漏作品。
     """
     from app.services.task_runner import create_f2_import_task, f2_import_status
 
@@ -97,6 +105,7 @@ async def create_f2_import(
         fetch=fetch,
         fetch_limit=fetch_limit,
         make_thumbnails=make_thumbnails,
+        since_days=since_days,
     )
     return {
         "message": "已提交「一键获取素材」任务",

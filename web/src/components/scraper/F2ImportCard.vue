@@ -22,6 +22,8 @@ const limit = ref<number | undefined>(undefined)
 const skipLive = ref(false)
 const makeThumbnails = ref(true)
 const showAdvanced = ref(false)
+/** f2 日期窗口（天）：只翻最近 N 天的作品。0=全历史（很慢，见下方说明） */
+const sinceDays = ref<number>(14)
 
 // ── 每日自动获取（后端调度循环按间隔自动创建同一条入库任务）──
 const autoEnabled = computed(() => status.value?.auto?.enabled ?? false)
@@ -40,7 +42,6 @@ watch(
 async function onToggleAuto(value: string | number | boolean) {
   await setAuto(Boolean(value), intervalHours.value)
 }
-
 /** 间隔改动：开关处于开启状态时一并生效，关闭时只留作下次开启的默认值 */
 async function onIntervalChange(value: number | undefined) {
   if (!value || value === status.value?.auto?.interval_hours) return
@@ -67,6 +68,7 @@ async function onSubmit() {
     limit: limit.value || undefined,
     skip_live: skipLive.value || undefined,
     make_thumbnails: makeThumbnails.value,
+    since_days: sinceDays.value,
   })
   if (taskId) await loadStatus()
 }
@@ -123,6 +125,12 @@ async function onSubmit() {
         placeholder="最多导入作品数（留空=不限）"
         style="width: 220px"
       />
+      <span class="f2-tip">只翻最近</span>
+      <a-input-number v-model="sinceDays" :min="0" :max="3650" size="small" style="width: 100px" />
+      <span class="f2-tip">
+        天的作品（默认 14；0=翻全历史）。f2 翻页固定每页等 10 秒，
+        窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
+      </span>
       <span class="f2-tip">
         下载目录：{{ status?.root || '—' }}；博主清单来自 f2 用户库，共
         {{ status?.authors ?? 0 }} 个

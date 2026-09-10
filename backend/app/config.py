@@ -156,6 +156,13 @@ class Settings(BaseSettings):
     f2_import_interval_hours: int = 24
     # 自动获取是否跳过 live 实况分段视频（与手动入口的开关同义）
     f2_import_auto_skip_live: bool = False
+    # f2 增量下载的日期窗口（天）：只让 f2 翻最近 N 天的作品。
+    # 0 = 翻全历史。为什么需要：f2 在 `-i all` 时不设 min_cursor，「翻到范围起点
+    # 就 break」永不触发，会把作者全部历史翻一遍，而每翻一页固定 sleep 一次
+    # timeout（本机 10 秒）——实测单作者 263 秒里 220 秒（84%）耗在翻页等待，
+    # 真正下载只有 36 个文件。窗口会按「该作者上次下载时间」自动放大，长时间
+    # 不跑也不会漏作品（见 scripts/import_f2_downloads.compute_fetch_interval）
+    f2_fetch_since_days: int = 14
 
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）

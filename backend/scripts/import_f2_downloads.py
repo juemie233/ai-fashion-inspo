@@ -70,6 +70,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -80,6 +81,7 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
@@ -113,6 +115,19 @@ F2_AUTHOR_DB = "douyin_users.db"
 
 """f2 默认下载根目录（可用 --root 覆盖；与 --f2-dir 联动）。"""
 DEFAULT_F2_ROOT = DEFAULT_F2_DIR / F2_DOWNLOAD_SUBDIR
+
+"""传给 f2 的日期窗口缺省天数（`-i`）。
+
+为什么必须给窗口：f2 的 `handle_user_post` 只在传了日期区间时才设 `min_cursor`，
+`-i all` 时 `min_cursor = 0`，那句「翻到范围起点就 break」永不触发——于是它会把
+作者**全部历史**翻一遍，而每翻一页（`page_counts` 默认 20）固定 sleep 一次
+`timeout`（本机配置 10 秒）。实测单个 376 作品作者的 263 秒里 220 秒（84%）花在
+这个翻页 sleep 上，真正下载只有 36 个文件。给窗口后 f2 翻过起点即停。
+"""
+DEFAULT_FETCH_SINCE_DAYS = 14
+
+"""窗口起点的回退余量（天）：避免「刚下载完就跨零点」把当天的作品漏在窗口外。"""
+WINDOW_MARGIN_DAYS = 1
 
 """文件名尾部类型标记：_video / _image_1 / _live_2（f2 命名模板决定）。"""
 KIND_RE = re.compile(
@@ -1257,6 +1272,70 @@ def f2_available() -> bool:
     return importlib.util.find_spec("f2") is not None
 
 
+def author_last_download(post_root: Path) -> dict[str, datetime]:
+    """归一化作者名 → 该作者目录的最近下载时间（目录 mtime）。
+
+    f2 把作品文件直接放在作者目录下（实测 24 个作者目录下 0 个子目录），
+    因此目录 mtime 就是「上次为这个作者下到东西的时间」，读取成本是 1 次
+    `scandir`（Windows 上 DirEntry 的 stat 不再额外落盘）。
+
+    `√` / 波浪号等同名变体（`不养羊` 与 `不养羊√`）按归一化名合并，取最新的那个。
+
+    Args:
+        post_root: f2 的 post 目录（`Download/douyin/post`）。
+
+    Returns:
+        归一化名 → mtime；目录不存在时返回空字典。
+    """
+    if not post_root.exists():
+        return {}
+    newest: dict[str, datetime] = {}
+    for entry in os.scandir(post_root):
+        if not entry.is_dir():
+            continue
+        key = normalize_author(entry.name)
+        if not key:
+            continue
+        stamp = datetime.fromtimestamp(entry.stat().st_mtime)
+        if key not in newest or stamp > newest[key]:
+            newest[key] = stamp
+    return newest
+
+
+def compute_fetch_interval(
+    since_days: int | None,
+    last_download_at: datetime | None,
+    today: date | None = None,
+) -> str:
+    """决定传给 f2 的 `-i` 值：``all`` 或 ``YYYY-MM-DD|YYYY-MM-DD``（纯函数）。
+
+    规则：
+      - ``since_days`` 为 None 或 <= 0 → ``all``（首次全量 / 显式要求全历史）
+      - 否则窗口起点取 ``min(今天 - since_days, 上次下载日 - 1 天)``：
+        超过 ``since_days`` 没跑过时窗口自动放大到「上次下载之前」，保证长时间
+        不跑也不漏作品；``since_days`` 本身作为最小宽度留作安全余量（覆盖上次
+        列表里下载失败/只落了 .tmp 的作品）
+      - 没有任何本地下载记录（新博主）→ ``all``，即首次为该作者做全量
+
+    Args:
+        since_days: 最小窗口天数；None/<=0 表示全历史。
+        last_download_at: 该作者目录的最近下载时间（:func:`author_last_download`）。
+        today: 今天（便于测试注入）。
+
+    Returns:
+        f2 `-i` 参数值。
+    """
+    if not since_days or since_days <= 0:
+        return "all"
+    end = today or utcnow().date()
+    start = end - timedelta(days=since_days)
+    if last_download_at is not None:
+        widened = last_download_at.date() - timedelta(days=WINDOW_MARGIN_DAYS)
+        if widened < start:
+            start = widened
+    return f"{start:%Y-%m-%d}|{end:%Y-%m-%d}"
+
+
 def load_f2_authors(f2_dir: Path) -> list[dict]:
     """读取 f2 用户库里的作者清单（增量下载的「关注了谁」来源）。
 
@@ -1298,11 +1377,14 @@ def build_f2_command(
     download_root: Path | None = None,
     naming: str | None = None,
     auto_cookie: str | None = None,
+    interval: str = "all",
 ) -> list[str]:
-    """构造单个作者的 f2 下载命令（主页作品 / 全部日期，增量由 f2 保证）。
+    """构造单个作者的 f2 下载命令（主页作品；增量由 f2 保证）。
 
     - `-M post`：主页发布的作品（f2 支持 post/like/collect/mix…）
-    - `-i all`：日期区间取全部；f2 用自己记录的 last_aweme_id 跳过已下过的
+    - `-i`：日期区间。**缺省调用方会给窗口**（见 :func:`compute_fetch_interval`），
+      `all` 表示翻作者全部历史——`all` 时 f2 不设 `min_cursor`，必须一路翻到底，
+      每页还固定 sleep 一次 `timeout`（本机 10 秒），所以日常增量务必给窗口
     - `-p`：下载根目录（缺省就是 f2 工作目录下的 Download/）
     - `-n`：命名模板。**缺省不传**，沿用 f2 配置里的模板——本模块的解析器
       依赖 `{时间}_{正文}_{类型}_{序号}` 形状，擅自改模板会让作品分组/正文解析失效
@@ -1313,6 +1395,7 @@ def build_f2_command(
         download_root: 下载根目录（传给 f2 的 -p）。
         naming: 命名模板（一般不要传）。
         auto_cookie: 浏览器名（chrome / chromium / edge …）。
+        interval: 传给 f2 的 `-i` 值：`all` 或 `YYYY-MM-DD|YYYY-MM-DD`。
 
     Returns:
         可直接交给 subprocess 的参数列表。
@@ -1327,7 +1410,7 @@ def build_f2_command(
         "-M",
         "post",
         "-i",
-        "all",
+        interval or "all",
     ]
     if download_root is not None:
         cmd += ["-p", str(download_root)]
@@ -1360,12 +1443,17 @@ def run_fetch(
     auto_cookie: str | None = None,
     limit: int | None = None,
     runner=None,
+    since_days: int | None = DEFAULT_FETCH_SINCE_DAYS,
+    post_root: Path | None = None,
 ) -> dict:
     """串行调 f2 增量下载各作者的新作品（一次一个，避免并发触发风控）。
 
     设计要点：
     - **cwd 必须是 f2 工作目录**：f2 在 cwd 下读写 douyin_users.db 与 Download/，
       cwd 不对会另起一个空作者库、把下载落到别处
+    - **按作者给日期窗口**（`since_days`）：`-i all` 会让 f2 把作者全部历史翻完
+      且每页固定 sleep 一次 timeout，实测 84% 的时间耗在翻页等待上；窗口按
+      「上次下载时间」自动放大，见 :func:`compute_fetch_interval`
     - 单个作者失败（风控 / 网络 / cookie 失效）只记录并继续下一个，不阻断整批；
       失败细节在 f2/logs/ 下
     - 作者过滤复用 `--authors`（归一化名匹配），与导入阶段的语义一致
@@ -1378,10 +1466,12 @@ def run_fetch(
         auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
         limit: 最多下载多少个作者（试跑用）。
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
+        since_days: 日期窗口最小天数；None/<=0 表示翻全历史（首次全量）。
+        post_root: 作者目录所在位置（缺省按 `download_root`/f2 目录推导）。
 
     Returns:
-        {"total", "ok", "failed", "results", "error"}；
-        results 每项含 nickname / sec_user_id / rc / cmd。
+        {"total", "ok", "failed", "results", "error", "windows"}；
+        results 每项含 nickname / sec_user_id / rc / cmd / interval。
     """
     runner = runner or _default_runner
     all_authors = load_f2_authors(f2_dir)
@@ -1391,6 +1481,7 @@ def run_fetch(
             "ok": 0,
             "failed": 0,
             "results": [],
+            "windows": {},
             "error": (
                 f"未找到 f2 作者清单：{f2_dir / F2_AUTHOR_DB}（先手动跑一次 f2 "
                 f"确认能登录并下载，本命令只做「增量」）"
@@ -1404,11 +1495,23 @@ def run_fetch(
     if limit is not None:
         targets = targets[:limit]
 
+    root = post_root or (
+        download_root / "douyin" / "post" if download_root else f2_dir / F2_DOWNLOAD_SUBDIR
+    )
+    last_download = author_last_download(root)
+
     results: list[dict] = []
+    windows: Counter = Counter()
     ok = failed = 0
     for author in targets:
-        cmd = build_f2_command(author, download_root, naming, auto_cookie)
-        print(f"  ▶ {author['nickname']}（抖音作品总数 {author['aweme_count']}）")
+        last_at = last_download.get(normalize_author(author["nickname"]))
+        interval = compute_fetch_interval(since_days, last_at)
+        windows[interval] += 1
+        cmd = build_f2_command(author, download_root, naming, auto_cookie, interval=interval)
+        print(
+            f"  ▶ {author['nickname']}（抖音作品总数 {author['aweme_count']}，"
+            f"窗口 {interval}）"
+        )
         try:
             rc, _info = runner(cmd, f2_dir)
         except Exception as exc:  # noqa: BLE001 —— 单个作者失败不阻断整批
@@ -1416,7 +1519,7 @@ def run_fetch(
             print(f"    ✗ 调用 f2 失败：{type(exc).__name__}: {exc}")
         if rc == 0:
             ok += 1
-            print("    ✓ 完成（f2 已按 last_aweme_id 跳过已下载作品）")
+            print("    ✓ 完成（窗口内已下载的作品会被 f2 跳过，不会重复下载）")
         else:
             failed += 1
             print(f"    ✗ 退出码 {rc}，跳过该作者（详情见 {f2_dir / 'logs'}）")
@@ -1425,10 +1528,17 @@ def run_fetch(
                 "nickname": author["nickname"],
                 "sec_user_id": author["sec_user_id"],
                 "rc": rc,
+                "interval": interval,
                 "cmd": " ".join(cmd),
             }
         )
-    return {"total": len(targets), "ok": ok, "failed": failed, "results": results}
+    return {
+        "total": len(targets),
+        "ok": ok,
+        "failed": failed,
+        "results": results,
+        "windows": dict(windows),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1685,6 +1795,14 @@ def main(argv: list[str] | None = None) -> int:
         help="--fetch 时最多下载多少个作者（试跑用）",
     )
     parser.add_argument(
+        "--since-days",
+        type=int,
+        default=settings.f2_fetch_since_days,
+        help=f"只让 f2 翻最近 N 天的作品（默认 {settings.f2_fetch_since_days} 天；"
+        "0 表示翻全历史）。窗口会按「该作者上次下载时间」自动放大，长时间不跑也不漏；"
+        "不给窗口时 f2 会把作者全部历史翻完且每页固定等 timeout 秒，日常增量会非常慢",
+    )
+    parser.add_argument(
         "--rollback",
         default=None,
         help="按批次清单回滚：传清单路径或 latest（取最新一批）。"
@@ -1822,6 +1940,7 @@ def main(argv: list[str] | None = None) -> int:
             naming=args.naming,
             auto_cookie=args.auto_cookie,
             limit=args.fetch_limit,
+            since_days=args.since_days,
         )
         if fetch.get("error"):
             print(f"  ⚠ {fetch['error']}")

@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from PIL import Image
 
 from app.database import async_session
 from app.services import task_runner
+from app.services.task_runners.common import utcnow
 from scripts import import_f2_downloads as f2
 
 
@@ -99,6 +101,57 @@ def test_create_f2_import_task_endpoint(client):
     opts = detail["result"]
     assert opts["authors"] == ["里香", "娜娜瑜"]
     assert opts["limit"] == 50 and opts["skip_live"] is True and opts["fetch"] is False
+
+
+def test_create_f2_import_task_endpoint_accepts_since_days(client):
+    """日期窗口天数透传到任务参数；越界由 FastAPI 校验拦住。"""
+    body = client.post(
+        "/api/scraper/f2-import", params={"fetch": False, "since_days": 3}
+    ).json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["since_days"] == 3
+
+    assert (
+        client.post("/api/scraper/f2-import", params={"fetch": False, "since_days": -1}).status_code
+        == 422
+    )
+
+
+async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeypatch):
+    """P0 提速回归：执行阶段必须给 f2 传日期窗口，而不是 `-i all`。
+
+    回归点：`-i all` 时 f2 不设 min_cursor，「翻到范围起点就 break」永不触发，
+    会把作者全部历史翻一遍，而每页固定 sleep 一次 timeout（实测单作者 263 秒里
+    220 秒花在翻页等待上，真正下载只有 36 个文件）。
+    """
+    import sqlite3 as _sq
+
+    from app.services.task_runners import f2_import as runner
+
+    f2_dir, _root = f2_tree
+    conn = _sq.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, since_days=7)
+        await task_runner.execute_f2_import(db, task)
+
+    assert commands, "没有调用 f2"
+    interval = commands[0][commands[0].index("-i") + 1]
+    assert interval != "all"
+    assert interval.endswith(f"|{utcnow().date():%Y-%m-%d}")
+    assert interval.startswith(f"{(utcnow() - timedelta(days=7)).date():%Y-%m-%d}")
 
 
 def test_create_f2_import_rejects_when_unavailable(client, tmp_path, monkeypatch):

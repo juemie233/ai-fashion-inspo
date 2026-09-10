@@ -4,12 +4,15 @@
 """
 
 import json
+import os
 import sqlite3
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from scripts import import_f2_downloads as f2
+from scripts.scraper_common import utcnow
 
 
 # ── 文件名解析 ──
@@ -747,6 +750,97 @@ def test_build_f2_command_optional_flags():
     cmd = f2.build_f2_command(author, naming="{create}_{desc}", auto_cookie="chrome")
     assert cmd[cmd.index("-n") + 1] == "{create}_{desc}"
     assert cmd[cmd.index("--auto-cookie") + 1] == "chrome"
+
+
+def test_build_f2_command_passes_date_window():
+    """日期窗口必须真的进命令行：f2 在 `-i all` 时不会提前结束翻页。"""
+    author = {"sec_user_id": "sec1", "nickname": "A"}
+    cmd = f2.build_f2_command(author, interval="2026-08-27|2026-09-10")
+    assert cmd[cmd.index("-i") + 1] == "2026-08-27|2026-09-10"
+    # 空/缺省回落 all，避免拼出非法参数
+    assert f2.build_f2_command(author, interval="")[cmd.index("-i") + 1] == "all"
+
+
+# ── 日期窗口（P0 提速：`-i all` 会让 f2 把作者全部历史翻完，每页固定等 timeout）──
+
+
+def test_compute_fetch_interval_all_when_disabled():
+    today = date(2026, 9, 10)
+    assert f2.compute_fetch_interval(None, None, today) == "all"
+    assert f2.compute_fetch_interval(0, None, today) == "all"
+    assert f2.compute_fetch_interval(-1, datetime(2026, 9, 9), today) == "all"
+
+
+def test_compute_fetch_interval_uses_minimum_window():
+    """没有本地下载记录（新博主）时按最小窗口取；首次仍是增量而非全量重扫。"""
+    today = date(2026, 9, 10)
+    assert f2.compute_fetch_interval(14, None, today) == "2026-08-27|2026-09-10"
+    # 昨天刚下过：仍保留 14 天最小宽度（覆盖上次列到但没下成功的作品）
+    assert (
+        f2.compute_fetch_interval(14, datetime(2026, 9, 9, 23, 50), today)
+        == "2026-08-27|2026-09-10"
+    )
+
+
+def test_compute_fetch_interval_widens_to_last_download():
+    """超过窗口天数没跑过时窗口自动放大到「上次下载日 - 1 天」，避免漏作品。"""
+    today = date(2026, 9, 10)
+    # 上次下载是 7-01 → 窗口起点取 6-30（比 14 天前更早）
+    assert (
+        f2.compute_fetch_interval(14, datetime(2026, 7, 1, 12, 0), today)
+        == "2026-06-30|2026-09-10"
+    )
+
+
+def test_author_last_download_merges_variants_and_ignores_files(tmp_path):
+    """作者目录 mtime = 上次为该作者下到东西的时间；同名变体（√）取最新。"""
+    post_root = tmp_path / "post"
+    (post_root / "不养羊").mkdir(parents=True)
+    (post_root / "不养羊√").mkdir()
+    (post_root / "随便一个文件.webp").write_bytes(b"x")  # 非目录忽略
+    old, new = 1_700_000_000, 1_800_000_000
+    os.utime(post_root / "不养羊", (old, old))
+    os.utime(post_root / "不养羊√", (new, new))
+
+    stamps = f2.author_last_download(post_root)
+
+    assert set(stamps) == {"不养羊"}
+    assert stamps["不养羊"] == datetime.fromtimestamp(new)
+    assert f2.author_last_download(tmp_path / "不存在") == {}
+
+
+def test_run_fetch_passes_per_author_window(tmp_path):
+    """每个作者按自己的目录 mtime 取窗口：新博主全量，久未更新的自动放大。"""
+    f2_dir = _f2_dir_with_authors(
+        tmp_path,
+        authors=[
+            ("MS4wLjABAAAAaaa", "里香1√", 171),
+            ("MS4wLjABAAAAbbb", "娜娜瑜√", 232),
+        ],
+    )
+    post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
+    (post_root / "里香1√").mkdir(parents=True)
+    # 里香：上次下载是 60 天前 → 窗口应放大到那天之前；娜娜瑜：目录不存在 → 最小窗口
+    stamp = (utcnow() - timedelta(days=60)).timestamp()
+    os.utime(post_root / "里香1√", (stamp, stamp))
+
+    seen: list[list[str]] = []
+    runner = lambda cmd, cwd: (seen.append(cmd) or 0, "")  # noqa: E731
+
+    result = f2.run_fetch(f2_dir, runner=runner, since_days=14)
+
+    intervals = [cmd[cmd.index("-i") + 1] for cmd in seen]
+    assert all("|" in value for value in intervals)  # 都是窗口，不再是 all
+    widened = intervals[0]
+    assert widened.startswith(f"{(utcnow() - timedelta(days=61)).date():%Y-%m-%d}")
+    assert intervals[1] == f2.compute_fetch_interval(14, None)
+    assert result["windows"] == {widened: 1, intervals[1]: 1}
+    assert result["results"][0]["interval"] == widened
+
+    # since_days=0 → 全历史（首次全量）
+    seen.clear()
+    f2.run_fetch(f2_dir, runner=runner, since_days=0)
+    assert all(cmd[cmd.index("-i") + 1] == "all" for cmd in seen)
 
 
 def test_run_fetch_invokes_f2_per_author_and_continues_on_failure(tmp_path):

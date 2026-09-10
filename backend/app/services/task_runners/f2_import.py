@@ -48,6 +48,7 @@ async def create_f2_import_task(
     fetch: bool = True,
     fetch_limit: int | None = None,
     make_thumbnails: bool = True,
+    since_days: int | None = None,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -59,6 +60,8 @@ async def create_f2_import_task(
         fetch: 是否先调 f2 增量下载（False 则只入库已下载的文件）。
         fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
         make_thumbnails: 是否生成缩略图。
+        since_days: f2 日期窗口天数（None 表示执行时取
+            ``settings.f2_fetch_since_days``；0 表示翻全历史）。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -76,6 +79,7 @@ async def create_f2_import_task(
             "fetch": fetch,
             "fetch_limit": fetch_limit,
             "make_thumbnails": make_thumbnails,
+            "since_days": since_days,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -199,7 +203,10 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         return None
 
     task = await create_f2_import_task(
-        db, fetch=True, skip_live=bool(settings.f2_import_auto_skip_live)
+        db,
+        fetch=True,
+        skip_live=bool(settings.f2_import_auto_skip_live),
+        since_days=settings.f2_fetch_since_days,
     )
     logger.info(
         f"[f2 自动获取] 已创建任务 #{task.id}"
@@ -246,6 +253,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     cancelled 则停止并标记 cancelled，置为 paused 则停止并保留 paused
     （已入库的素材与批次清单都保留，重新执行会按内容判重跳过）。
     """
+    from app.config import settings
     from scripts import import_f2_downloads as f2
 
     opts = dict(task.result or {})
@@ -254,6 +262,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     limit = opts.get("limit")
     skip_live = bool(opts.get("skip_live", False))
     make_thumbnails = bool(opts.get("make_thumbnails", True))
+    since_days = opts.get("since_days")
+    if since_days is None:
+        since_days = settings.f2_fetch_since_days
 
     task.error = None
     task.progress = 0
@@ -283,11 +294,22 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         task.done = 0
         await db.commit()
 
+        # 日期窗口：按作者目录的最近下载时间逐作者计算（见 compute_fetch_interval）。
+        # 不给窗口时 f2 会把作者全部历史翻一遍且每页固定 sleep 一次 timeout。
+        post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
+        last_download = await asyncio.to_thread(f2.author_last_download, post_root)
+
         for index, author in enumerate(targets, 1):
             if await _current_status(db, task.id) not in ("running", "pending"):
                 fetch_summary["aborted"] = True
                 break
-            cmd = f2.build_f2_command(author, download_root=f2_dir / "Download")
+            interval = f2.compute_fetch_interval(
+                since_days, last_download.get(f2.normalize_author(author["nickname"]))
+            )
+            cmd = f2.build_f2_command(
+                author, download_root=f2_dir / "Download", interval=interval
+            )
+            logger.info(f"f2 下载 {author['nickname']}（窗口 {interval}）")
             try:
                 rc = await asyncio.to_thread(_run_subprocess, cmd, f2_dir)
             except Exception as exc:  # noqa: BLE001 —— 单作者失败不阻断整批

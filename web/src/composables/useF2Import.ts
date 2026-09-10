@@ -62,6 +62,8 @@ export interface F2ImportOptions {
   fetch_limit?: number
   /** 是否生成缩略图 */
   make_thumbnails?: boolean
+  /** f2 日期窗口天数（0=全历史；缺省取后端配置，默认 14） */
+  since_days?: number
 }
 
 export function useF2Import() {
