@@ -771,6 +771,8 @@ def apply_import(
     storage_root: Path | None = None,
     make_thumbnails: bool = True,
     batch_dir: Path | None = None,
+    on_progress=None,
+    should_stop=None,
 ) -> dict:
     """把决策为 import 的文件复制进素材库并写库——**不做标签分析、不建向量**。
 
@@ -785,9 +787,12 @@ def apply_import(
         storage_root: 存储根目录（缺省 settings.storage_root）。
         make_thumbnails: 是否生成缩略图（图片走 PIL、视频走 ffmpeg 首帧）。
         batch_dir: 批次清单目录（缺省 storage/import_batches）。
+        on_progress: 可选回调 ``on_progress(done, total)``，供后台任务报告进度。
+        should_stop: 可选回调 ``should_stop() -> bool``，返回 True 时提前收尾
+            （供任务暂停/取消；已入库的部分保留，并写入批次清单）。
 
     Returns:
-        统计字典：imported / failed / ids / errors / batch_file。
+        统计字典：imported / failed / ids / errors / batch_file / stopped。
     """
     db_path = db_path or library_db_path()
     storage_root = storage_root or settings.storage_root
@@ -800,10 +805,16 @@ def apply_import(
     imported_ids: list[str] = []
     imported_rows: list[dict] = []
     errors: list[dict] = []
+    total = sum(1 for d in decisions if d.action == "import")
+    processed = 0
+    stopped = False
 
     for decision in decisions:
         if decision.action != "import":
             continue
+        if should_stop is not None and should_stop():
+            stopped = True
+            break
         item = decision.item
         dest: Path | None = None
         thumb: str | None = None
@@ -881,6 +892,10 @@ def apply_import(
                     except Exception:
                         pass
             errors.append({"source_file": str(item.path), "error": str(exc)[:200]})
+        finally:
+            processed += 1
+            if on_progress is not None:
+                on_progress(processed, total)
 
     # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚
     batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}"
@@ -913,6 +928,7 @@ def apply_import(
         "ids": imported_ids,
         "errors": errors,
         "batch_file": str(batch_file) if batch_file else "",
+        "stopped": stopped,
     }
 
 
@@ -1101,6 +1117,151 @@ def run_fetch(
 
 
 # ═══════════════════════════════════════════════════════════════
+#  按批次回滚（--rollback）
+# ═══════════════════════════════════════════════════════════════
+
+
+def latest_batch_file(batch_dir: Path) -> Path | None:
+    """取批次目录里最新的一份清单（--rollback latest 用）。
+
+    Args:
+        batch_dir: 批次清单目录。
+
+    Returns:
+        最新的清单路径；目录不存在或无清单时返回 None。
+    """
+    if not batch_dir.exists():
+        return None
+    files = sorted(batch_dir.glob("*.json"))
+    return files[-1] if files else None
+
+
+def plan_rollback(
+    batch_file: Path,
+    db_path: Path,
+    force: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """按批次清单区分「可删除」与「需保留」的条目（不写任何数据）。
+
+    保留判断（未被导入动作之外的改动污染才删）：素材若已经有标签关联、被收藏、
+    有评分、或质量状态不再是 pending，说明用户已经用过它——默认不删，避免把
+    人的后续工作一起抹掉；`force=True` 时才连这些一起删。
+
+    Args:
+        batch_file: 导入时落盘的批次清单。
+        db_path: 素材库路径。
+        force: 是否连「已被改动」的素材一起删。
+
+    Returns:
+        (可删除列表, 需保留列表)，每项含 inspiration_id / file_path /
+        thumbnail_path / 以及保留原因。
+    """
+    batch = json.loads(Path(batch_file).read_text(encoding="utf-8"))
+    rows = batch.get("imported") or []
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    deletable: list[dict] = []
+    kept: list[dict] = []
+    try:
+        for row in rows:
+            insp_id = row.get("inspiration_id")
+            if not insp_id:
+                continue
+            found = conn.execute(
+                "SELECT is_favorite, rating, quality_status FROM inspirations "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (insp_id,),
+            ).fetchone()
+            if not found:
+                kept.append({**row, "keep_reason": "素材已不存在（删除过或已回滚）"})
+                continue
+            tag_links = conn.execute(
+                "SELECT COUNT(*) FROM inspiration_tags WHERE inspiration_id = ?",
+                (insp_id,),
+            ).fetchone()[0]
+            is_favorite, rating, quality_status = found
+            if not force and (tag_links or is_favorite or rating or quality_status not in (None, "pending")):
+                kept.append(
+                    {
+                        **row,
+                        "keep_reason": (
+                            f"已被改动（标签 {tag_links} / 收藏 {is_favorite} / "
+                            f"评分 {rating} / 质量 {quality_status}）"
+                        ),
+                    }
+                )
+                continue
+            deletable.append(row)
+    finally:
+        conn.close()
+    return deletable, kept
+
+
+def apply_rollback(
+    deletable: list[dict],
+    db_path: Path,
+    storage_root: Path | None = None,
+) -> dict:
+    """实际删除（物理删除行 + 文件 + 缩略图 + 关键帧目录 + 关联表），逐条提交。
+
+    为什么是物理删除而不是进垃圾桶：本操作语义是「撤销一次错误导入」，
+    而垃圾桶素材会作为负样本参与质量学习——把误导入的素材当成「质量差」
+    负样本会污染训练数据。
+
+    单条失败只记录并继续（例如文件已被外部删掉）。
+
+    Args:
+        deletable: :func:`plan_rollback` 的「可删除」列表。
+        db_path: 素材库路径。
+        storage_root: 存储根目录（缺省 settings.storage_root）。
+
+    Returns:
+        {"deleted", "failed", "removed_files", "errors"}。
+    """
+    storage_root = storage_root or settings.storage_root
+    conn = sqlite3.connect(str(db_path))
+    deleted = 0
+    removed_files = 0
+    errors: list[dict] = []
+    for row in deletable:
+        insp_id = row.get("inspiration_id")
+        try:
+            for rel in (row.get("file_path"), row.get("thumbnail_path")):
+                if not rel:
+                    continue
+                target = storage_root / rel
+                try:
+                    if target.exists():
+                        target.unlink()
+                        removed_files += 1
+                except Exception:
+                    pass
+            # 视频关键帧目录（详情页懒提取可能已生成）
+            frames_dir = storage_root / "keyframes" / str(insp_id)
+            if frames_dir.exists():
+                shutil.rmtree(frames_dir, ignore_errors=True)
+            conn.execute("DELETE FROM inspiration_tags WHERE inspiration_id = ?", (insp_id,))
+            conn.execute(
+                "DELETE FROM inspiration_bloggers WHERE inspiration_id = ?", (insp_id,)
+            )
+            conn.execute("DELETE FROM inspirations WHERE id = ?", (insp_id,))
+            conn.commit()
+            deleted += 1
+        except Exception as exc:  # noqa: BLE001 —— 单条失败不阻断整批
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            errors.append({"inspiration_id": insp_id, "error": str(exc)[:200]})
+    conn.close()
+    return {
+        "deleted": deleted,
+        "failed": len(errors),
+        "removed_files": removed_files,
+        "errors": errors,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
 #  入口
 # ═══════════════════════════════════════════════════════════════
 
@@ -1152,6 +1313,17 @@ def main(argv: list[str] | None = None) -> int:
         help="--fetch 时最多下载多少个作者（试跑用）",
     )
     parser.add_argument(
+        "--rollback",
+        default=None,
+        help="按批次清单回滚：传清单路径或 latest（取最新一批）。"
+        "缺省只预览，加 --apply 才真删",
+    )
+    parser.add_argument(
+        "--rollback-force",
+        action="store_true",
+        help="回滚时连「已被改动」的素材（有标签/收藏/评分/非 pending）一起删",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="真导入（写库：入库 + 博主关联）；缺省只出报表、不写库",
@@ -1194,6 +1366,50 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = args.db or library_db_path()
     root = args.root or (args.f2_dir / F2_DOWNLOAD_SUBDIR)
+
+    # ── 回滚模式（只操作批次清单，不扫描 f2 目录）──
+    if args.rollback:
+        batch_dir = (args.storage_root or settings.storage_root) / IMPORT_BATCH_DIRNAME
+        batch_file = (
+            latest_batch_file(batch_dir)
+            if args.rollback == "latest"
+            else Path(args.rollback)
+        )
+        if batch_file is None or not Path(batch_file).exists():
+            print(f"未找到批次清单：{batch_file or batch_dir}")
+            return 1
+        if not db_path.exists():
+            print(f"素材库不存在: {db_path}")
+            return 1
+        deletable, kept = plan_rollback(
+            Path(batch_file), db_path, force=args.rollback_force
+        )
+        print(f"\n=== 回滚预览（清单: {batch_file}）===")
+        print(f"可删除 {len(deletable)} 条；保留 {len(kept)} 条")
+        for item in kept[:10]:
+            print(f"   保留 {item.get('file_path') or item.get('source_file')}：{item['keep_reason']}")
+        if len(kept) > 10:
+            print(f"   …另有 {len(kept) - 10} 条被保留")
+        if not args.apply:
+            print("\n提示：本命令只预览，未删除任何数据。确认后加 --apply 执行回滚。")
+            return 0
+        result = apply_rollback(
+            deletable, db_path=db_path, storage_root=args.storage_root or settings.storage_root
+        )
+        print("\n=== 回滚完成 ===")
+        print(
+            f"删除素材 {result['deleted']} 条，删除文件 {result['removed_files']} 个，"
+            f"失败 {result['failed']} 条"
+        )
+        for err in result["errors"][:10]:
+            print(f"   ✗ {err['inspiration_id']}: {err['error']}")
+        print(
+            "\n注意：回滚只撤销本批入库；同样的文件在下次导入时会被**重新收录**"
+            "（去重依据是库内是否还有该内容）。若要长期排除，请从 f2 目录删除对应文件，"
+            "或用 --authors 收窄导入范围。"
+        )
+        return 0
+
     authors_filter = (
         {a.strip() for a in args.authors.split(",") if a.strip()}
         if args.authors

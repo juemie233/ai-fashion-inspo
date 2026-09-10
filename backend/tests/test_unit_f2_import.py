@@ -394,6 +394,10 @@ def _import_lib(tmp_path: Path) -> Path:
         "CREATE TABLE inspiration_bloggers (inspiration_id TEXT, blogger_id INTEGER, "
         "confidence REAL, UNIQUE(inspiration_id, blogger_id))"
     )
+    # 回滚的「已改动」判据要查标签关联，故按真实库建出该表（内容留空）
+    conn.execute(
+        "CREATE TABLE inspiration_tags (inspiration_id TEXT, tag_id INTEGER, source TEXT)"
+    )
     conn.commit()
     conn.close()
     return db
@@ -618,3 +622,149 @@ def test_run_fetch_runner_exception_does_not_abort(tmp_path):
 def test_run_fetch_without_author_db_reports_error(tmp_path):
     result = f2.run_fetch(tmp_path / "不存在", runner=lambda cmd, cwd: (0, ""))
     assert result["total"] == 0 and result["error"]
+
+
+# ── 按批次回滚（--rollback）──
+
+
+def _imported_fixture(tmp_path: Path):
+    """跑一次真导入，返回 (db, storage, batch_file, 入库的 id 列表)。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_#jk_标题_image_1.jpg")
+    _jpeg(root / "A" / "2025-01-01 10-00-00_#jk_标题_image_2.jpg", "blue")
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=storage,
+    )
+    return db, storage, Path(result["batch_file"]), result["ids"]
+
+
+def test_plan_rollback_marks_untouched_as_deletable(tmp_path):
+    db, _storage, batch_file, ids = _imported_fixture(tmp_path)
+    deletable, kept = f2.plan_rollback(batch_file, db)
+    assert len(deletable) == 2 and kept == []
+    assert {d["inspiration_id"] for d in deletable} == set(ids)
+
+
+def test_plan_rollback_keeps_touched_material_unless_forced(tmp_path):
+    """已改动（有标签关联/收藏/评分/非 pending）的素材默认保留，避免抹掉后续工作。"""
+    db, _storage, batch_file, ids = _imported_fixture(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO inspiration_tags VALUES (?, 1, 'ai_generated')", (ids[0],))
+    conn.execute("UPDATE inspirations SET is_favorite = 1 WHERE id = ?", (ids[1],))
+    conn.commit()
+    conn.close()
+
+    deletable, kept = f2.plan_rollback(batch_file, db)
+    assert deletable == []
+    assert len(kept) == 2 and all(k["keep_reason"] for k in kept)
+
+    deletable, kept = f2.plan_rollback(batch_file, db, force=True)
+    assert len(deletable) == 2 and kept == []
+
+
+def test_plan_rollback_handles_already_removed(tmp_path):
+    db, storage, batch_file, ids = _imported_fixture(tmp_path)
+    f2.apply_rollback(
+        [{"inspiration_id": ids[0], "file_path": None, "thumbnail_path": None}],
+        db_path=db,
+        storage_root=storage,
+    )
+    deletable, kept = f2.plan_rollback(batch_file, db)
+    assert len(deletable) == 1  # 另一条仍可删
+    assert len(kept) == 1 and "已不存在" in kept[0]["keep_reason"]
+
+
+def test_apply_rollback_removes_rows_files_and_links(tmp_path):
+    db, storage, batch_file, ids = _imported_fixture(tmp_path)
+    conn = sqlite3.connect(db)
+    files = [r[0] for r in conn.execute("SELECT file_path FROM inspirations")]
+    thumbs = [r[0] for r in conn.execute("SELECT thumbnail_path FROM inspirations")]
+    conn.close()
+
+    deletable, _kept = f2.plan_rollback(batch_file, db)
+    result = f2.apply_rollback(deletable, db_path=db, storage_root=storage)
+
+    assert result["deleted"] == 2 and result["failed"] == 0
+    assert result["removed_files"] == 4  # 2 份素材文件 + 2 张缩略图
+    assert all(not (storage / rel).exists() for rel in files + thumbs)
+
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM inspirations").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM inspiration_bloggers").fetchone()[0] == 0
+    conn.close()
+
+    # 回滚后可重新导入（去重依据是库内是否还留有该内容）
+    second, _skipped, _deferred = f2.build_import_plan(
+        files=f2.scan_directory(tmp_path / "f2"),
+        library_hashes=f2.load_library_hashes(db),
+        existing_platform_ids=f2.load_library_platform_ids(db),
+    )
+    assert sum(1 for d in second if d.action == "import") == 2
+
+
+def test_latest_batch_file(tmp_path):
+    batch_dir = tmp_path / "batches"
+    assert f2.latest_batch_file(batch_dir) is None  # 目录不存在
+    batch_dir.mkdir()
+    assert f2.latest_batch_file(batch_dir) is None  # 空目录
+    (batch_dir / "f2-20260101-000000.json").write_text("{}", encoding="utf-8")
+    (batch_dir / "f2-20260102-000000.json").write_text("{}", encoding="utf-8")
+    assert f2.latest_batch_file(batch_dir).name == "f2-20260102-000000.json"
+
+
+# ── 进度回调与停止判据（供后台任务报告进度 / 响应暂停取消）──
+
+
+def test_apply_import_reports_progress(tmp_path):
+    """on_progress(done, total) 逐条回调，供后台任务写进度。"""
+    root = tmp_path / "f2"
+    for i, color in enumerate(("red", "blue", "green")):
+        _jpeg(root / "A" / f"2025-01-0{i + 1} 10-00-00_标题{i}_image_1.jpg", color)
+    db = _import_lib(tmp_path)
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    seen: list[tuple[int, int]] = []
+
+    f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+        on_progress=lambda done, total: seen.append((done, total)),
+    )
+
+    assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_apply_import_stops_when_should_stop(tmp_path):
+    """should_stop 返回 True 时提前收尾：已入库部分保留，批次清单照常落盘。"""
+    root = tmp_path / "f2"
+    for i, color in enumerate(("red", "blue", "green")):
+        _jpeg(root / "A" / f"2025-01-0{i + 1} 10-00-00_标题{i}_image_1.jpg", color)
+    db = _import_lib(tmp_path)
+    decisions, _, _ = _decisions(f2.scan_directory(root))
+    calls = {"n": 0}
+
+    def _stop() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1  # 第一条之后请求停止
+
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+        should_stop=_stop,
+    )
+
+    assert result["stopped"] is True
+    assert result["imported"] == 1
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM inspirations").fetchone()[0] == 1
+    conn.close()
+    batch = json.loads(Path(result["batch_file"]).read_text(encoding="utf-8"))
+    assert len(batch["imported"]) == 1  # 部分成功也留痕，可回滚
