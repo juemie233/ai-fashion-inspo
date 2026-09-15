@@ -3,6 +3,7 @@
 
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
+import { QUALITY_BATCH_MAX, qualityBatchHint } from '@/utils/qualityBatch'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -30,6 +31,27 @@ const qualityChecking = ref(false)
 const rechecking = ref(false)
 const randomReviewCount = ref(parseInt(localStorage.getItem('review-random-count') || '', 10) || 10) // 随机审核数量（可调）
 const randomChecking = ref(false)
+
+/** 本轮批量审核实际提交的数量（= min(待审核数, 单次上限)）：按钮文案承诺「审核全部」，
+ *  过去的实现却写死 200 条，导致上万条待审核时要反复点几十次 */
+const batchSubmitCount = computed(() =>
+  Math.min(qualityReviewStats.value?.pending ?? 0, QUALITY_BATCH_MAX),
+)
+/** 超出单次上限时提示本轮只处理上限条（剩余可再点一次） */
+const batchOverflowHint = computed(() => {
+  const pending = qualityReviewStats.value?.pending ?? 0
+  return pending > QUALITY_BATCH_MAX
+    ? `本轮处理 ${QUALITY_BATCH_MAX} 条（单次上限），剩余 ${pending - QUALITY_BATCH_MAX} 条可再点一次。`
+    : ''
+})
+/** 提交前的耗时提示（实测 12.5 秒/张，单并发） */
+const batchCostHint = computed(() => qualityBatchHint(batchSubmitCount.value))
+/** 批量审核按钮文案（两处分支共用，避免重复三份） */
+const batchButtonLabel = computed(() => {
+  if (reviewTaskActive.value) return '审核进行中…'
+  const pending = qualityReviewStats.value?.pending ?? 0
+  return pending > 0 ? `审核全部待审核 (${pending})` : '全部已审核'
+})
 
 // 持久化随机审核数量：刷新或再次进入时保持上次设置
 watch(randomReviewCount, (v) => {
@@ -177,7 +199,7 @@ async function triggerQualityCheck() {
     const { data } = await apiClient.post<{ message: string; count: number; task_id: number }>(
       '/ai/quality-check',
       null,
-      { params: { limit: 200 } },
+      { params: { limit: QUALITY_BATCH_MAX } },
     )
     reviewTask.value = {
       id: data.task_id,
@@ -194,7 +216,9 @@ async function triggerQualityCheck() {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }
-    Message.success(`已提交 ${data.count} 个素材进行审核（任务 #${data.task_id}）`)
+    Message.success(
+      `已提交 ${data.count} 个素材进行审核（任务 #${data.task_id}）；可在任务管理页暂停/取消`,
+    )
     startReviewPolling(data.task_id)
   } catch (e) {
     Message.error(getApiErrorMessage(e, '审核提交失败'))
@@ -237,7 +261,7 @@ async function recheckQuality() {
 async function randomQualityCheck() {
   const count = randomReviewCount.value
   if (!count || count < 1) {
-    Message.warning('请输入有效的随机审核数量（1~200）')
+    Message.warning(`请输入有效的随机审核数量（1~${QUALITY_BATCH_MAX}）`)
     return
   }
   randomChecking.value = true
@@ -470,25 +494,35 @@ onUnmounted(() => {
           :stroke-width="24"
           style="flex: 1"
         />
-        <a-button
-          type="primary"
-          :loading="qualityChecking"
-          :disabled="qualityReviewStats.pending === 0 || reviewTaskActive"
-          @click="triggerQualityCheck"
-        >
-          {{
-            reviewTaskActive
-              ? '审核进行中…'
-              : qualityReviewStats.pending > 0
-                ? `审核全部待审核 (${qualityReviewStats.pending})`
-                : '全部已审核'
-          }}
-        </a-button>
+        <a-tooltip :content="batchOverflowHint || batchCostHint">
+          <a-popconfirm
+            v-if="batchOverflowHint"
+            :content="`${batchOverflowHint}${batchCostHint}。提交后可在任务管理页暂停/取消。确定继续？`"
+            @ok="triggerQualityCheck"
+          >
+            <a-button
+              type="primary"
+              :loading="qualityChecking"
+              :disabled="qualityReviewStats.pending === 0 || reviewTaskActive"
+            >
+              {{ batchButtonLabel }}
+            </a-button>
+          </a-popconfirm>
+          <a-button
+            v-else
+            type="primary"
+            :loading="qualityChecking"
+            :disabled="qualityReviewStats.pending === 0 || reviewTaskActive"
+            @click="triggerQualityCheck"
+          >
+            {{ batchButtonLabel }}
+          </a-button>
+        </a-tooltip>
         <a-space :size="6" align="center">
           <a-input-number
             v-model="randomReviewCount"
             :min="1"
-            :max="200"
+            :max="QUALITY_BATCH_MAX"
             size="small"
             style="width: 88px"
             placeholder="数量"

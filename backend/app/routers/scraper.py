@@ -26,6 +26,148 @@ async def scraper_sources() -> dict:
     return await scraper_service.get_scraper_sources()
 
 
+@router.post("/f2-import")
+async def create_f2_import(
+    fetch: bool = Query(True, description="是否先调 f2 增量下载（否则只入库已下载文件）"),
+    authors: str | None = Query(None, description="只处理这些作者（逗号分隔，归一化名）"),
+    limit: int | None = Query(None, ge=1, description="最多导入多少个作品"),
+    skip_live: bool = Query(False, description="跳过 live 实况的分段视频"),
+    fetch_limit: int | None = Query(None, ge=1, description="下载阶段最多处理多少个作者"),
+    make_thumbnails: bool = Query(True, description="是否生成缩略图"),
+    since_days: int | None = Query(
+        None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史；缺省取配置）"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
+
+    与 CLI（``python -m scripts.import_f2_downloads --fetch --apply``）同一条链路，
+    区别是走任务队列：创建任务后立即返回 task_id，由独立 worker 异步执行，
+    前端轮询 ``GET /api/tasks/{task_id}`` 获取进度。
+
+    两条约定：**导入不做标签分析/不建向量**（素材以未打标状态入库，打标请另行
+    触发批量分析任务）；**入库前五层去重**（内容哈希 / 垃圾桶 / 批次内 /
+    合成平台 ID / 参数过滤）。
+
+    参数:
+        fetch: 是否先调 f2 下载（需要本机已装 f2 且其用户库里有作者）。
+        authors: 只处理这些作者（与下载、导入阶段共用同一归一化口径）。
+        limit: 最多导入多少个作品（按作品计，一个图集只吃一个配额）。
+        skip_live: 跳过 live 实况的分段视频。
+        fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
+        make_thumbnails: 是否生成缩略图（关掉更快，但列表页缺预览图）。
+        since_days: f2 只翻最近 N 天的作品。**别轻易用 0**：`-i all` 会让 f2 把
+            作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
+            翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
+            也不会漏作品。
+    """
+    from app.services.task_runner import create_f2_import_task, f2_import_status
+
+    if fetch:
+        status = f2_import_status()
+        if not status["available"]:
+            return {"message": status["reason"], "task_id": None}
+
+    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
+    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。已有进行中的任务时
+    # 直接复用它，不新建。
+    from sqlalchemy import select
+
+    from app.models.task import TaskQueue
+
+    running = (
+        (
+            await db.execute(
+                select(TaskQueue)
+                .where(
+                    TaskQueue.type == "f2_import",
+                    TaskQueue.status.in_(("pending", "running", "paused")),
+                )
+                .order_by(TaskQueue.id.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if running:
+        return {
+            "message": f"已有进行中的一键获取素材任务（#{running.id}），请等待完成或先取消",
+            "task_id": running.id,
+            "reused": True,
+        }
+
+    author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
+    task = await create_f2_import_task(
+        db,
+        authors=author_list,
+        limit=limit,
+        skip_live=skip_live,
+        fetch=fetch,
+        fetch_limit=fetch_limit,
+        make_thumbnails=make_thumbnails,
+        since_days=since_days,
+    )
+    return {
+        "message": "已提交「一键获取素材」任务",
+        "task_id": task.id,
+        "fetch": fetch,
+        "authors": author_list,
+    }
+
+
+@router.get("/f2-status")
+async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
+    """「一键获取素材」状态：可用性 + 每日自动获取的配置与到期信息。
+
+    供采集管理页的按钮置灰、开关与「上次/下次运行」提示使用。
+    """
+    from app.services.task_runner import f2_import_status, get_f2_auto_status
+
+    info = f2_import_status()
+    info["auto"] = await get_f2_auto_status(db)
+    return info
+
+
+@router.put("/f2-auto")
+async def set_f2_auto(
+    enabled: bool = Query(..., description="是否开启每日自动增量入库"),
+    interval_hours: int | None = Query(None, ge=1, le=720, description="最小间隔（小时）"),
+    skip_live: bool | None = Query(None, description="自动获取是否跳过 live 实况分段"),
+    persist: bool = Query(True, description="是否持久化写入 .env 文件"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """开关 f2 每日自动获取素材（f2 增量下载 → 去重 → 入库）。
+
+    与手动入口同一条链路，区别是由后端调度循环按间隔自动创建任务；到期判定见
+    `maybe_schedule_auto_import`（已有任务在跑或未到间隔则跳过）。
+    配置写入 settings 并（默认）持久化到 .env，重启后保持。
+    """
+    from app.config import settings
+    from app.routers.ai_shared import _update_env_file
+    from app.services.task_runner import get_f2_auto_status
+
+    settings.f2_import_auto_enabled = enabled
+    if interval_hours is not None:
+        settings.f2_import_interval_hours = interval_hours
+    if skip_live is not None:
+        settings.f2_import_auto_skip_live = skip_live
+
+    if persist:
+        updates = {"F2_IMPORT_AUTO_ENABLED": "true" if enabled else "false"}
+        if interval_hours is not None:
+            updates["F2_IMPORT_INTERVAL_HOURS"] = str(interval_hours)
+        if skip_live is not None:
+            updates["F2_IMPORT_AUTO_SKIP_LIVE"] = "true" if skip_live else "false"
+        await _update_env_file(updates)
+
+    status = await get_f2_auto_status(db)
+    return {
+        "message": f"每日自动获取素材已{'开启' if enabled else '关闭'}"
+        f"（间隔 {status['interval_hours']} 小时）",
+        "auto": status,
+    }
+
+
 @router.get("/hashtags")
 async def scraper_hashtags(
     sort: str = Query("count", pattern="^(count|recent)$"),

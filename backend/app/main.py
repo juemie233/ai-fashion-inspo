@@ -84,13 +84,16 @@ async def _sweep_expired_trash() -> None:
 
 
 async def _scraper_schedule_loop() -> None:
-    """周期性检查定时采集计划：到期则创建采集任务并推进下次执行时间。
+    """周期性检查定时采集计划与 f2 每日自动获取：到期则创建任务。
 
     独立 asyncio 任务运行于服务进程内；进程重启后由 lifespan 的
     僵尸任务清理逻辑兜底（未启动的计划保留 pending，等待下次到期重试）。
+    f2 自动获取的到期判定见 `task_runners/f2_import.maybe_schedule_auto_import`
+    （配置关闭 / 环境不可用 / 已有任务在跑 / 未到间隔 → 静默跳过）。
     """
     from app.database import async_session
     from app.services import scraper_service
+    from app.services.task_runner import maybe_schedule_auto_import
 
     while True:
         try:
@@ -99,6 +102,9 @@ async def _scraper_schedule_loop() -> None:
                 triggered = await scraper_service.run_due_schedules(db)
                 if triggered:
                     logger.info(f"[定时采集] 本次触发 {triggered} 个计划")
+                auto_id = await maybe_schedule_auto_import(db)
+                if auto_id:
+                    logger.info(f"[f2 自动获取] 本次创建任务 #{auto_id}")
         except asyncio.CancelledError:
             raise
         except Exception as e:

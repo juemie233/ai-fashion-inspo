@@ -4,6 +4,7 @@ import type { Component } from 'vue'
 import {
   IconCheckCircle,
   IconDelete,
+  IconDownload,
   IconFaceSmileFill,
   IconFileImage,
   IconSafe,
@@ -29,6 +30,7 @@ const TASK_TYPE_META: Record<string, { label: string; icon: Component; color: st
   batch_delete: { label: '批量删除', icon: IconDelete, color: 'red' },
   deduplicate: { label: '近似重复检测删除', icon: IconSync, color: 'green' },
   scraper: { label: '采集', icon: IconScan, color: 'purple' },
+  f2_import: { label: '抖音素材获取', icon: IconDownload, color: 'green' },
   vector_backfill: { label: '向量回填', icon: IconBarChart, color: 'cyan' },
   face_scan: { label: '人脸库扫描', icon: IconFaceSmileFill, color: 'lime' },
   face_match: { label: '人脸匹配', icon: IconUserGroup, color: 'magenta' },

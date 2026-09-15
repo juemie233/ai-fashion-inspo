@@ -100,6 +100,12 @@ async def _quality_check_one(
             return inspiration_id, status, reason, ai_generated
 
 
+async def _current_status(db: AsyncSession, task_id: int) -> str:
+    """重新读取任务当前状态（供取消/暂停判定）。"""
+    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task_id))
+    return result.scalar() or "running"
+
+
 async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     """执行质量审核任务：逐张调用轻量审核并维护进度（由 worker 调用）。
 
@@ -107,6 +113,10 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     但整批全部失败时（如 Ollama 未启动、请求被拒），任务不能冒充「完成」——
     抛出任务级异常交由 worker 处理：可恢复错误自动重试，永久错误标记失败，
     避免出现「显示完成 N/N 实际一张都没审」的假成功。数据库层异常由 worker 兜底。
+
+    中断语义：每批（并发数张）检查一次任务状态，被外部置为 cancelled/paused 时
+    停止并保留已判定的结果（不写 100% 进度、不做「全部失败」判定）。单任务上限
+    已放宽到 5000 张（约 17 小时），没有中断能力就会变成不可撤销的长任务。
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
@@ -151,8 +161,15 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     failed = 0  # 审核失败保持 pending 的张数（reason 非空，与「无法判定」同计数但单列）
     ai_generated = 0
     first_error: str | None = None  # 第一条失败原因，供任务级报错
+    cancelled = False
 
     for start in range(0, len(items), concurrency):
+        # 每批检查一次外部状态：上限放宽到 5000 张后单任务可跑十几小时，
+        # 必须能在任务管理页暂停/取消（与 face_scan / enrich_blogger_profile 同款）
+        if (await _current_status(db, task.id)) not in ("running", "pending"):
+            cancelled = True
+            break
+
         chunk = items[start:start + concurrency]
         results = await asyncio.gather(
             *(
@@ -193,9 +210,22 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "pending": pending,
         "failed": failed,
         "ai_generated": ai_generated,
+        "cancelled": cancelled,
     }
     # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
+
+    if cancelled:
+        # 被外部暂停/取消：保留部分结果与当前进度，并尊重外部状态
+        # （worker 见 status != running 不会覆盖为 success/failed）
+        task.status = await _current_status(db, task.id)
+        task.updated_at = utcnow()
+        await db.commit()
+        logger.info(
+            f"质量审核被中断（{task.status}）: #{task.id} 已处理 "
+            f"{task.done}/{task.total}，已判定结果保留"
+        )
+        return
 
     # 整批全部审核失败：不能标记成功。抛出任务级异常交由 worker 处理——
     # 可恢复错误（Ollama 未启动/超时/服务异常）自动重试，永久错误（请求被拒等）标记失败。

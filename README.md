@@ -101,7 +101,8 @@ chrome_debug_port: int = 9222
 | **AI 模型管理** | 模型列表/下载/切换、文本嵌入模型管理（标注/一键下载/切换）、GPU 显存监控、批量分析（异步任务队列，标签分析面板任务列表展示含暂停/排队中，行级暂停/恢复/取消）、历史分页、多选批量操作、分析结果对比、**多模型 × 多提示词组合批量分析**（组合计划批量执行 + 批次对比视图）、**视频多帧融合分析**（逐帧分析后同名标签按最高置信度融合，帧数可配）、队列可视化、参数调优（按模型隔离 + 默认值恢复 + 清除覆盖）、数据重置、质量审核（合格/不合格二分类 + 重新审核，异步）、负样本初筛器（状态/指标/训练/回滚）、快捷键（回车下载/Ctrl+S 保存） |
 | **素材管理** | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库扫描（默认不再抽样） + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志/**提示词质量对比**——按提示词版本聚合成功率、平均标签数、纠错率与可选裸词率，用于挑选最优提示词）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：按平台分工双模式——小红书截图「auto 黑边检测」/抖音截图「内容边界检测」，截图特征置信度分级 + 字形证据/底部残留估算；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材） |
 | **人物管理** | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；职业模特无此人脸能力）、**注销人脸 / 解绑素材**（博主详情多选素材批量注销已匹配人脸、批量解除素材-博主关联，素材侧已确认人脸自动防重复匹配）、**人物组（博主跨平台绑定）**（同一现实人物在抖音/小红书各有账号时绑定为同一人——如小红书「Fox_」与「多多」：列表同组折叠为一条主账号（素材数最多者，可手动指定默认展示位）并带多平台徽标，展开可见组内各账号及其素材，详情页可绑定/解绑/切主，账号记录全部保留、按平台采集不受影响） |
-| **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/向量回填/标签高级管理）、进度条与完成统计（向量/删除/审核明细）、**运行中任务暂停 / 已暂停恢复**（批量分析、组合分析、标签网络分析支持——批量/组合暂停后恢复按「已成功跳过」幂等续算）、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示） |
+| **任务管理** | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/**抖音素材获取**/向量回填/标签高级管理）、进度条与完成统计（向量/删除/审核明细）、**运行中任务的阶段文案**（如 f2 获取素材的「第 4/21 个作者 · 逐作者翻页，单作者约 10 秒~4 分钟」与「第 512/11936 个文件 · 复制文件并生成缩略图」，避免长时间停在低百分比却没说明）、**运行中任务暂停 / 已暂停恢复**（批量分析、组合分析、标签网络分析支持——批量/组合暂停后恢复按「已成功跳过」幂等续算）、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示） |
+| **抖音素材获取（f2）** | 独立的抖音采集通道（**不依赖 Chrome / CDP**，走本地 f2 按博主增量下载）：**一键获取素材**（调 f2 逐作者增量下载 → 五层去重 → 入库，一个按钮 / 一条命令）、**每日自动获取**（开关 + 间隔小时可配，后台按最近一次任务创建时间判定到期；环境不可用 / 已有任务在跑 / 未到期自动跳过，默认关闭）、**日期窗口**（默认只让 f2 翻最近 14 天并按作者目录 mtime 自适应放大——f2 在 `-i all` 时会把作者全部历史翻完且每页固定等 timeout 秒，实测单作者 84% 的时间耗在翻页等待）、**增量哈希缓存**（落盘 `storage/f2_hash_cache.db`，实测 15,303 个文件全量哈希 142 秒 → 预热后 2 秒）、**垃圾桶判重**（丢进垃圾桶的内容不会被重新导入）、导入不做标签分析（素材以未打标状态入库）、批次清单 + 一键回滚、任务中心显示阶段与「第 N/M 个作者 / 文件」计数 |
 | **浏览器插件** | 小红书/抖音页面一键提取穿搭图片（弹窗批量 + 任意网页右键单图采集，通知/角标反馈）；上传前按平台 ID 预查重并支持「跳过已采集的图片」开关（服务端 `check-platform-id` 只读接口，垃圾桶素材释放平台 ID 允许重采）；「上传后自动分析」开启时自动触发 AI 打标；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗 |
 
 ## 快速启动
@@ -170,6 +171,9 @@ TAG_NAME_MAX_LENGTH=12       # 标签名最大字数（超过即判定为「低�
 WORKER_CONCURRENCY=1         # 任务 worker 并发数（默认 1 保持串行）
 ANALYZE_CONCURRENCY=1        # 批量分析任务内并发数（默认 1）
 VIDEO_ANALYSIS_MAX_FRAMES=3  # 视频分析采样帧数（均匀采样覆盖全片，设 1 退回单帧）
+F2_IMPORT_AUTO_ENABLED=false # 抖音素材（f2）每日自动获取，默认关闭（界面上可切换）
+F2_IMPORT_INTERVAL_HOURS=24  # 自动获取最小间隔（小时）
+F2_FETCH_SINCE_DAYS=14       # f2 日期窗口：只翻最近 N 天（0=全历史，很慢；见「接入 f2」小节）
 
 # 前端 .env (web/.env)
 VITE_FRONTEND_PORT=17777     # 前端开发服务器端口
@@ -207,7 +211,38 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 >
 > **定时采集：** 「采集管理 → 定时采集」页签可创建按间隔（1 小时 ~ 每周）自动执行的计划，由后端调度循环每 30 秒检查触发；小红书定时任务依赖调试 Chrome 保持运行（可在任务表单点击「启动 Chrome」由后端拉起）。新建/编辑任务时可在「话题库」区点击历史采集到的高频话题直接加入关键词。
 
-### 5. 安装浏览器插件
+### 5. 接入 f2 抖音素材获取（可选）
+
+抖音素材除 CDP 采集外还有一条**独立通道**：用本地 [f2](https://github.com/Johnserf-Seed/f2) 按博主增量下载作品，再导入素材库——不依赖 Chrome/CDP，适合「把关注的博主一次性拉全 + 之后每天自动追更」。
+
+```bash
+# 1) 安装 f2（装在后端所用的 Python 环境里，能被 python -m f2 调起即可）
+pip install f2
+
+# 2) 在 f2 工作目录跑一次手动下载并完成登录（首次全量；之后由素材库做增量）
+#    缺省工作目录见 backend/scripts/import_f2_downloads.py 的 DEFAULT_F2_DIR，可用 --f2-dir 覆盖
+cd C:/Users/Administrator/Desktop/f2
+python -m f2 dy -u "https://www.douyin.com/user/<sec_user_id>" -M post -i all
+# Cookie 失效时：-k "粘贴 Cookie"，或 --auto-cookie chrome（需先关闭 Chrome 浏览器）
+
+# 3) 素材库侧：先只读扫描看会进来什么，确认后再入库
+cd backend
+python -m scripts.import_f2_downloads                  # 只读报表（缺省行为）
+python -m scripts.import_f2_downloads --apply          # 入库已下载的文件
+python -m scripts.import_f2_downloads --fetch --apply  # 调 f2 增量下载后入库（= 界面上的「一键获取素材」）
+```
+
+界面上对应「采集管理 → 采集任务」页的 **「一键获取素材（抖音 · f2）」** 卡片：一个按钮走完「增量下载 → 去重 → 入库」，另可开启**每日自动获取**（间隔小时可配）。
+
+> **日期窗口（快慢的关键）：** f2 在 `-i all` 时不会提前结束翻页——它会把作者的**全部历史**翻一遍，而每翻一页固定等 `timeout` 秒（f2 把这个配置当翻页间隔用，本机为 10 秒）。实测单个 376 作品作者的一次运行：263 秒里 **220 秒（84%）耗在翻页等待**，实际只下载了 36 个文件。因此本通道默认只让 f2 翻**最近 14 天**（配置项 `F2_FETCH_SINCE_DAYS`，命令行的 `--since-days 0` 表示全历史），窗口起点取 `min(今天 − N 天, 该作者上次下载日 − 1 天)`：按作者目录 mtime 自适应放大，**长时间不跑也不会漏作品**；新博主没有本地目录时首次仍走全量。窗口内已下载过的作品会被 f2 按文件名跳过，不会重复下载。
+
+> **去重与回滚：** 导入前五层判重（内容 SHA-256 / **垃圾桶** / 批次内 / 合成平台 ID / 参数过滤）——**丢进垃圾桶的内容不会被重新导入**（垃圾桶是负样本来源），想恢复请走垃圾桶还原。每次导入落一份批次清单 `storage/import_batches/f2-*.json`，可用 `python -m scripts.import_f2_downloads --rollback latest [--apply]` 先预览再撤销（只影响本批、且默认放过已被改动过的素材）。导入**不做标签分析、不建向量**，素材以未打标状态入库，打标请用「批量分析任务」。
+
+> **哈希缓存：** 判重需要遍历整个下载目录算 SHA-256（实测 15,303 个文件 / 7.25 GB 首次约 142 秒，且每次运行都要重来）。现在按「路径 + 大小 + mtime」把摘要缓存到 `storage/f2_hash_cache.db`，文件没变就直接复用——同一目录预热后 **2 秒**完成（0 个文件重算）；`--no-hash-cache` 可强制全量重算用于核对。
+
+> **博主资料回填：** f2 的用户库（`douyin_users.db` 的 `user_info_web` 表）存有 `sec_user_id` / 昵称 / 作品数，是抖音博主 ID 的权威来源。`python -m scripts.sync_blogger_ids.py --file 名单.txt [--apply] [--create-missing] [--bind-materials]` 可按「昵称 + sec_user_id」清单回填博主 ID 与主页 URL，并把已入库素材按来源作者绑定到对应博主（缺省只预览）。
+
+### 6. 安装浏览器插件
 
 1. Chrome 打开 `chrome://extensions`
 2. 开启「开发者模式」
@@ -231,14 +266,14 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 > **已知边界：** 暂不支持其他网站与视频提取；元数据仅抓作者（不含标题/正文/话题标签）；标签与博主关联需到 Web 端补。
 
 
-### 6. 启动移动端（可选）
+### 7. 启动移动端（可选）
 
 ```bash
 cd mobile
 npx expo start
 ```
 
-### 7. 同步代码到 OpenViking 索引（可选）
+### 8. 同步代码到 OpenViking 索引（可选）
 
 项目代码 / 文档 / 数据库结构可一键同步到本地 OpenViking 索引（`viking://resources/fashion-inspo/`），
 供语义检索（memfind / memsearch / memgrep）：
@@ -348,6 +383,8 @@ fashion-inspo/
 │   │       └── tag_compliance.py # 打标命名合规规则（裸词判定，落库过滤与健康度扫描共用）
 │   ├── scripts/                  # 维护脚本
 │   │   ├── run_scraper.py         # 采集执行脚本（小红书 CDP / 抖音独立浏览器，断点续采）
+│   │   ├── import_f2_downloads.py # f2 抖音下载目录 → 素材库（扫描报表 / --apply 入库 / --fetch 增量下载 / --rollback 批次回滚）
+│   │   ├── sync_blogger_ids.py    # 抖音博主 sec_user_id 回填 + 已入库素材绑定博主（清单驱动，缺省只预览）
 │   │   ├── cleanup_tags.py        # 数据库脏标签清洗
 │   │   ├── validate_tags.py       # 标签合法性校验
 │   │   ├── export_tag_rule_case.py # 从分析日志导出标签规则回归用例骨架
@@ -358,6 +395,8 @@ fashion-inspo/
 │       ├── videos/
 │       ├── keyframes/            # 视频关键帧（按素材 ID 分目录，不入库按需列目录）
 │       ├── trash/                # 垃圾桶（软删除文件移入此目录）
+│       ├── import_batches/       # f2 导入批次清单（每批一份，用于审计与 --rollback）
+│       ├── f2_hash_cache.db      # f2 导入的文件哈希缓存（避免每次运行重算整棵下载树）
 │       ├── person_photos/        # 人物照片（模特写真，与素材库 images/ 分离）
 │       ├── person_thumbnails/    # 人物照片缩略图
 │       ├── _crop_backup/         # 手机图剪裁原图备份（按时间戳分目录）
@@ -500,6 +539,11 @@ fashion-inspo/
 │  │     Chrome CDP (:9222) — 采集引擎连接真实浏览器      │     │
 │  │     小红书/抖音零检测搜索 → 图片自动下载入库         │     │
 │  └─────────────────────────────────────────────────────┘     │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │     f2（本地抖音下载器）— 抖音素材获取通道（可选）    │     │
+│  │     按博主增量下载 → 去重 → 入库（不依赖浏览器）      │     │
+│  └─────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -518,7 +562,7 @@ fashion-inspo/
 | `scraper_seen_urls` | URL 墓碑表 | source_url (PK), created_at — 删除后防止重复采集 |
 | `scraper_schedules` | 定时采集计划 | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count |
 | `scraper_hashtags` | 采集话题标签存档 | id, name（全局唯一）, seen_count（累计出现次数，跨任务累加）, first_seen_at/last_seen_at, source_kind（blogger/search）, source_id, note_url, source_meta（最近来源明细 JSON） |
-| `task_queue` | 异步任务队列 | type（batch_analyze/multi_analyze/quality_check/batch_delete/deduplicate/vector_backfill/tag_health_scan/tag_cluster_scan/tag_network_analyze）, status（pending/running/paused/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done, result, error, retry_count, next_retry_at, claimed_by（认领 worker）, heartbeat_at（心跳租约）, paused_at |
+| `task_queue` | 异步任务队列 | type（batch_analyze/multi_analyze/quality_check/batch_delete/deduplicate/vector_backfill/f2_import/face_scan/face_match/face_cluster/enrich_blogger_profile/tag_health_scan/tag_cluster_scan/tag_network_analyze）, status（pending/running/paused/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done（含义随阶段变化，见 result.stage）, result（含 `stage`：download/import/done）, error, retry_count, next_retry_at, claimed_by（认领 worker）, heartbeat_at（心跳租约）, paused_at |
 | `pending_vector_backfills` | 向量回填攒批待处理表 | inspiration_id, type（image/text）, status, attempts — 素材上传/标签变更入队，worker 攒批重建向量（避免每素材创建小任务） |
 | `audit_logs` | 操作审计日志 | id, action（batch_delete/delete_rejected/cleanup_orphans/empty_trash/batch_trash）, target_type, count, freed_bytes, detail, created_at — 破坏性批量操作留痕 |
 | `bloggers` | 穿搭博主 | id, name, platform, platform_user_id, xhs_id（唯一）, ip_location, profile_url, avatar_path, bio, source, created_at, updated_at |
@@ -829,7 +873,7 @@ alembic upgrade head
 
 | 方法 | 路径 | 说明 |
 | ------ | ------ | ------ |
-| `POST` | `/api/ai/quality-check` | 批量审核所有待审核（pending）图片素材（异步任务，返回 `task_id`） |
+| `POST` | `/api/ai/quality-check` | 批量审核待审核（pending）图片素材（异步任务，返回 `task_id`；`limit` 最多 5000，前端按当前待审数取 `min(待审数, 5000)` 并显示预估耗时） |
 | `POST` | `/api/ai/quality-recheck` | 重新审核所有已通过（approved）素材：重置为 pending 后用最新标准重判（异步任务，返回 `task_id`） |
 | `GET` | `/api/ai/quality-stats` | 质量审核统计（待审核/已通过/已拒绝/通过率） |
 | `GET` | `/api/ai/manual-upload-auto-approve` | 获取「手动上传默认免审核」配置 |
@@ -837,6 +881,8 @@ alembic upgrade head
 | `DELETE` | `/api/inspirations/quality-rejected` | 将全部已拒绝（rejected）素材移入垃圾桶（软删除，可恢复） |
 
 > **审核标准：** 判定为「合格」需是能看清整体搭配的完整真人穿搭照片。不合格包括：无人物（平铺图/尺码表/广告/纯文字）、仅单品特写、局部/裁切特写（如只有腿/脚/手臂/领口）、构图裁切过度。
+>
+> **批量上限与耗时：** 单次批量审核上限 5000 条（此前 200——f2 导入一次性带进上万张待审素材时要点几十次）。按实测约 12.5 秒/张，上限批次约 17 小时，因此前端在待审数超过上限时给出提示与二次确认，并按当前待审数估算耗时（每完成一张就落库，任务可随时取消、已判定结果保留）。
 
 > **手动上传免审核：** 默认开启（配置项 `manual_upload_auto_approve`，对应 .env 的 `MANUAL_UPLOAD_AUTO_APPROVE`）。开启后手动上传的素材直接标记为「已通过」，不进入待审核队列；关闭后恢复为待审核。可在「AI 模型管理 → 质量审核」面板一键切换。
 
@@ -869,6 +915,11 @@ alembic upgrade head
 > | `batch_delete` | `POST /api/admin/batch-delete` | 批量删除素材 |
 > | `deduplicate` | `POST /api/admin/deduplicate` | 智能去重删除 |
 > | `vector_backfill` | 素材上传/标签变更自动入队 | 向量回填（攒批机制：`pending_vector_backfills` 表聚合，worker 批量重建，不再每素材创建小任务） |
+> | `f2_import` | `POST /api/scraper/f2-import` / 每日自动获取调度 | 抖音素材获取（f2 通道）：增量下载 → 去重 → 入库；`result.stage` 标记阶段（download/import/done） |
+> | `face_scan` | `POST /api/face-scan/start` | 人脸库扫描（增量/全量，可自动接匹配任务） |
+> | `face_match` | `POST /api/face-match/run` | 全库候选人脸匹配（可限定人物范围） |
+> | `face_cluster` | `POST /api/face-scan/cluster/run` | 人脸聚合聚类（同一人跨素材合并候选） |
+> | `enrich_blogger_profile` | `POST /api/bloggers/enrich-missing-profile` | 博主主页资料补全（缺失头像/签名/IP 属地等） |
 > | `tag_health_scan` | `POST /api/tags/health/scan` | 标签健康度扫描（评分 + 四类问题 ID 列表） |
 > | `tag_cluster_scan` | `POST /api/tags/clusters/scan` | 自动聚类扫描（候选合并组） |
 > | `tag_network_analyze` | `POST /api/tags/network/analyze` | 网络图分析（社区/中心度/桥接） |
@@ -921,6 +972,9 @@ alembic upgrade head
 | `DELETE` | `/api/scraper/schedules/{id}` | 删除定时计划 |
 | `POST` | `/api/scraper/schedules/{id}/run` | 立即执行一次计划 |
 | `GET` | `/api/scraper/hashtags` | 采集话题库（`sort=count|recent`、`min_count`、`limit`，返回话题 + 累计出现次数 + 来源博主名，供新建/编辑采集任务时复用为关键词） |
+| `POST` | `/api/scraper/f2-import` | 抖音素材「一键获取素材」（f2 通道）：创建 `f2_import` 任务（`fetch` 是否先增量下载 / `authors` / `limit` / `skip_live` / `make_thumbnails` / `since_days` 日期窗口），环境不可用时返回 `task_id=null` + 原因；已有进行中任务时复用并返回 `reused=true` |
+| `GET` | `/api/scraper/f2-status` | f2 通道可用性（是否装了 f2 / 工作目录 / 作者数）+ 每日自动获取配置与到期信息 `auto`（含进行中任务的 `running`：阶段 / 进度 / 计数） |
+| `PUT` | `/api/scraper/f2-auto` | 开关每日自动获取（`enabled` / `interval_hours` / `skip_live`，默认写入 `.env` 持久化） |
 
 > **断点续采：** 失败任务可「续采」，沿用 `resume_token` 中的执行计划（关键词 × 排序）从未完成处继续，已入库图片不重复采集。
 >
@@ -929,6 +983,8 @@ alembic upgrade head
 > **定时采集：** 后端调度循环每 30 秒检查一次到期计划并创建任务；停用或改间隔会重算 `next_run_at`，执行失败照常推进并可从任务记录排查。
 >
 > **话题标签存档：** 按博主采集时从笔记详情页提取正文话题标签（`#早秋穿搭` 等）自动入库：按词全局去重、累计出现次数、记录最近来源博主/笔记（每篇笔记最多 20 个、单任务最多 10 个防脏数据）。采集任务新建/编辑表单提供「话题库」区，点击话题标签即加入关键词。
+>
+> **抖音素材（f2 通道）：** 与 CDP 采集相互独立，走本地 f2 按博主增量下载（详见 [接入 f2 抖音素材获取](#5-接入-f2-抖音素材获取可选)）。`POST /f2-import` 创建的 `f2_import` 任务在任务中心显示当前阶段（`result.stage`：`download` 下载作者 / `import` 入库文件 / `done` 收尾）——两个阶段 `done/total` 的含义不同（作者数 vs 文件数），前端据此生成「第 N/M 个作者 · 逐作者翻页，单作者约 10 秒~4 分钟」这类文案。日期窗口（`since_days`，缺省取配置 `f2_fetch_since_days`=14）是快慢的关键，`0` 表示翻全历史（会非常慢）。
 >
 > **插件任务记录：** 浏览器插件上传素材时可携带 `scraper_task_id` 表单字段（`POST /api/inspirations`），将素材关联到插件采集任务，供结果预览与统计；插件会话通过 `extension-tasks` 两端点创建/汇总任务记录。
 
@@ -1022,7 +1078,7 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，999 用例）
+### 后端（pytest，1189 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -1040,19 +1096,20 @@ pytest
 - **链路端到端旅程测试**（`test_journeys.py`，验证环节衔接而非单环节内部）：素材全旅程（上传→打标→向量→垃圾桶→恢复→再删→清空，每环节断言不变量零违规与墓碑/审计留痕）、采集旅程（插件会话→from-url 入库→任务完成→删除→墓碑→重采被拒，含恢复后墓碑仍在的防重复闭环）、失败旅程（文件缺失自愈：trash/restore 不产生悬空记录）、崩溃旅程（worker 心跳超时→`_reset_stale_tasks` 重置→重跑成功，不再假成功）
 - **服务单测**：`tag_normalizer`（同义词归一化/相似度/名校验）、`ai_parser`（畸形 JSON 修复/标签提取/截断判断）、`tag_compliance`（袜/鞋/裙裸词与缺长度丝袜判定边界 + 不合规原因分类）、`quality_learner`（训练/样本不足/回滚，向量以 mock 替代）、`image_hash`（感知哈希近似不变性/区分度/汉明距离/非法文件）、`deduplicate`（去重评分/保留建议/平局/文件缺失兜底/物理删除）、`csv_safety`（CSV 公式注入转义）、`exceptions`（业务异常体系：AppException 基类/资源未找到与字段校验异常携带上下文属性/details 浅拷贝防外泄修改/快捷工厂函数）、`performance`（耗时监控装饰器同步+异步、BatchProcessor 并发批处理含失败隔离与并发上限、FileCache 键生成与命中、内存监控与优化装饰器、端到端组合——日志断言经 mock logger，psutil 相关用例已 mock）、`config_constants`（Settings 存储目录、ConfigConstants 各域常量访问与回退值、类型一致性验证）
 - **打标质量闭环**：`test_tag_rule_regression`（9 条真实模型响应用例：features/material/type 三条漏入路径、缺长度丝袜、裙/鞋裸词、合规保留）、`test_tag_corrections`（多标删关联/漏标补关联且幂等/类别错仅记录/404/非法原因/prompt 版本冗余/列表与统计）、`test_prompt_quality`（按版本聚合口径/裸词率重放/空窗口）、健康度 `noncompliant`（扫描识别 + 合规命名不误判 + 明细原因码）
+- **f2 抖音素材通道**：`test_unit_f2_import`（文件名解析/作品分组/报表统计/**五层去重**（含垃圾桶命中与「在库优先于垃圾桶」）/**哈希缓存**（跨运行复用且不重复读盘、文件改动后失效、缓存损坏退化为全量重算）/**日期窗口**（`all` / 最小窗口 / 按作者目录 mtime 放大 / 新博主全量 / 命令透传））、`test_unit_sync_blogger_ids`（清单解析与脏数据拒绝、预览不改库、更新与新建分支、素材绑定幂等）、`test_f2_import_task`（任务创建与参数透传、执行链路入库与幂等、**二次运行哈希全命中**、**垃圾桶素材不被复活**、下载阶段先写 `stage=download`、恒失败时任务显式失败、规划不阻塞事件循环、并发复用同一任务）
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，178 用例）
+### 前端（vitest，217 用例）
 
 ```bash
 cd web
 npm test
 ```
 
-覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` 纯函数、`tagHistoryDiff`（操作历史 before/after 差异与值格式化）、`useSplitResize` 拖拽 / `useBatchSelection` 批量多选 composable、`persons`（博主/模特双 store 实例 + 请求序号防乱序）/ `inspirations` / `tags` store（mock API）、`taskLabel` 任务类型/图标映射断言。
+覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` 纯函数、`taskPresentation`（任务结果汇总 + **运行中阶段文案**：f2 下载/入库/排队/暂停，非 f2 任务不编造）、`tagHistoryDiff`（操作历史 before/after 差异与值格式化）、`useSplitResize` 拖拽 / `useBatchSelection` 批量多选 composable、`useF2Import`（f2 状态解析 / 自动获取开关 / 一键获取参数透传）、`persons`（博主/模特双 store 实例 + 请求序号防乱序）/ `inspirations` / `tags` store（mock API）、`taskLabel` 任务类型/图标映射断言。
 
 ### 约定
 
@@ -1069,6 +1126,7 @@ npm test
 | Qwen3-VL:8B-Instruct | 穿搭标签识别 | ✅ |
 | Google Chrome | CDP 采集宿主浏览器 | ⚠️ 采集时必需 |
 | Playwright | 采集引擎驱动 | ⚠️ 采集时必需 |
+| f2（`pip install f2`） | 抖音素材获取通道（按博主增量下载） | ⚠️ 用该通道时必需 |
 | ffmpeg | 视频关键帧提取 / 采集视频首帧缩略图 | ✅ 采集视频时使用 |
 
 ## 开源许可
