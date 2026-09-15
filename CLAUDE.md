@@ -9,6 +9,10 @@
 5. **禁止启动子代理**：项目内的一切开发工作（含代码迁移、重构、批量修改等）均由主会话直接完成，**不得启动 subagent / 子代理 / 并行代理**。需要并行或拆解的工作，改为在主会话内顺序执行或自行批量处理，保证每个改动的上下文完整、可追溯。
 6. **服务启停由用户手动执行**：**禁止自动执行一键重启/启动脚本**（`scripts/restart.sh`、`scripts/ensure-services.sh` 等涉及服务启停的脚本）。当代码改动需要重启后端/前端/worker 才能生效时，**不得自行执行脚本**，只需明确提示用户「需要重启服务」，由用户手动执行。
 7. **时间列单行显示**：所有表格/列表中的时间列必须保持单行（`white-space: nowrap`），禁止换行；新增或修改时间列时同样遵守（Arco 表格单元格默认 `word-break: break-all`，时间字符串在窄列下会被断行，需显式加 nowrap）。实现约定：render 函数列统一用 `web/src/utils/format.ts` 的 `renderTimeCell(text, extra?)`（内部包 nowrap span，extra 可附加颜色/class）；模板列包 `<span style="white-space: nowrap">`。
+8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/`、`scripts/`）。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
+   - **例外**：业务确实需要新位置（新增顶层文件、新增目录、必须落在仓库外）时，**先说明理由并征得用户同意**；若属长期结构，同意后同步登记进「项目结构」一节，使其成为「已登记」位置。
+   - **临时文件**（排查脚本、一次性诊断、提交信息草稿等）可以直接创建，但必须满足两条：**用完即删**（`git status` 自查，不得残留）且**不得入库**（不 `git add`、不提交）；优先落在系统临时目录或已 gitignore 的位置，不得把临时产物留在仓库根、`scripts/`、`storage/` 里冒充交付物。
+   - **判据**：提交前问自己「这个新文件的位置在本文档里登记过吗」——没有登记且未经同意，就换到已登记位置，或先来问。
 
 ## 代码探索策略（jcodemunch MCP）
 

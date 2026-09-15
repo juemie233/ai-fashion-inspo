@@ -17,6 +17,7 @@ import ScraperResultsPanel from '@/components/scraper/ScraperResultsPanel.vue'
 import ScraperConfigTab from '@/components/scraper/ScraperConfigTab.vue'
 import ScraperScheduleTab from '@/components/scraper/ScraperScheduleTab.vue'
 import ScraperStatsPanel from '@/components/scraper/ScraperStatsPanel.vue'
+import F2ImportCard from '@/components/scraper/F2ImportCard.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { ScraperTask } from '@/types/scraper'
 
@@ -347,6 +348,9 @@ onUnmounted(() => {
       <!-- 采集任务 Tab -->
       <a-tab-pane key="tasks" title="采集任务">
         <ScraperStatsPanel />
+
+        <!-- 一键获取素材（抖音 f2）：增量下载 + 去重入库 -->
+        <F2ImportCard />
 
         <ScraperTaskForm :default-max-count="defaultMaxCount" @created="onTaskCreated" />
 

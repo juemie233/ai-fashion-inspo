@@ -82,18 +82,23 @@ _HASHTAG_SAVED_COUNT = [0]
 def ensure_hashtag_table(conn) -> None:
     """确保话题存档表存在（脚本独立进程兜底；主库由 Alembic 迁移建表）。
 
+    ⚠ DDL 必须与 Alembic 建出的真实表**逐列对齐**（尤其 NOT NULL 约束）：
+    历史上脚本侧曾把 first_seen_at 写成「可空 + 默认值」，而真实表是
+    NOT NULL 无默认值——两套 DDL 不一致让 save_hashtags 的 INSERT 在真实库
+    上必然失败，异常又被静默吞掉，导致话题存档长期 0 行却无人发现。
+
     Args:
         conn: 同步 sqlite3 连接。
     """
     try:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS scraper_hashtags ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "name VARCHAR(64) NOT NULL UNIQUE, "
-            "seen_count INTEGER NOT NULL DEFAULT 1, "
-            "first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "source_kind VARCHAR(16) NOT NULL DEFAULT 'blogger', "
+            "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+            "name VARCHAR(64) NOT NULL, "
+            "seen_count INTEGER NOT NULL, "
+            "first_seen_at DATETIME NOT NULL, "
+            "last_seen_at DATETIME NOT NULL, "
+            "source_kind VARCHAR(16) NOT NULL, "
             "source_id INTEGER, "
             "note_url TEXT, "
             "source_meta TEXT)"
@@ -144,12 +149,14 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
                 "at": now_str,
             }
             if row is None:
+                # first_seen_at 在真实表里是 NOT NULL（无默认值），必须显式给值：
+                # 漏写会让 INSERT 必然 IntegrityError，进而被下面的 except 吞掉
                 conn.execute(
                     "INSERT INTO scraper_hashtags "
-                    "(name, seen_count, last_seen_at, source_kind, source_id, "
-                    "note_url, source_meta) "
-                    "VALUES (?, 1, ?, ?, ?, ?, ?)",
-                    (name, now_str, kind, source_id, note_url,
+                    "(name, seen_count, first_seen_at, last_seen_at, source_kind, "
+                    "source_id, note_url, source_meta) "
+                    "VALUES (?, 1, ?, ?, ?, ?, ?, ?)",
+                    (name, now_str, now_str, kind, source_id, note_url,
                      json.dumps([item], ensure_ascii=False)),
                 )
             else:
@@ -167,8 +174,10 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
                 )
             saved += 1
             _HASHTAG_SAVED_COUNT[0] += 1
-        except Exception:
-            pass  # 话题写入失败不影响采集主流程
+        except Exception as exc:  # noqa: BLE001
+            # 话题写入失败不影响采集主流程，但**必须可见**：此前这里是静默 pass，
+            # 掩盖了「first_seen_at 缺失导致话题存档长期 0 行」的真实缺陷
+            print(f"    ⚠ 话题存档失败 #{name}: {type(exc).__name__}: {str(exc)[:80]}")
     return saved
 
 
@@ -177,17 +186,23 @@ def save_hashtags(conn, meta: dict | None, note_url: str) -> int:
 # ═══════════════════════════════════════════════════════════════
 
 
-def extract_video_thumbnail_sync(video_path: Path, today: str) -> str | None:
+def extract_video_thumbnail_sync(
+    video_path: Path, today: str, thumbs_dir: Path | None = None
+) -> str | None:
     """用 ffmpeg 提取视频首帧缩略图（同步 subprocess），失败返回 None。
 
     Args:
         video_path: 视频文件路径。
         today: 日期字符串（用于构建缩略图子目录）。
+        thumbs_dir: 缩略图根目录（缺省 settings.thumbnails_dir）。
+            调用方若在别的存储根下工作（如 f2 导入的 --storage-root 试跑），
+            必须显式传入，否则缩略图会写进真实存储、而返回的相对路径在
+            目标根下找不到（试跑污染真实存储 + 缩略图丢失）。
 
     Returns:
         缩略图相对路径（如 "thumbnails/2025-01/thumb_xxx.jpg"），失败返回 None。
     """
-    thumb_dir = settings.thumbnails_dir / today
+    thumb_dir = (thumbs_dir or settings.thumbnails_dir) / today
     thumb_dir.mkdir(parents=True, exist_ok=True)
     thumb_name = f"thumb_{video_path.stem}.jpg"
     thumb_path = thumb_dir / thumb_name
