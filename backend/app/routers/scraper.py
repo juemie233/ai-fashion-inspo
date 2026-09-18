@@ -61,43 +61,20 @@ async def create_f2_import(
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
             也不会漏作品。
     """
-    from app.services.task_runner import create_f2_import_task, f2_import_status
+    from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
     if fetch:
         status = f2_import_status()
         if not status["available"]:
             return {"message": status["reason"], "task_id": None}
 
-    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
-    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。已有进行中的任务时
-    # 直接复用它，不新建。
-    from sqlalchemy import select
-
-    from app.models.task import TaskQueue
-
-    running = (
-        (
-            await db.execute(
-                select(TaskQueue)
-                .where(
-                    TaskQueue.type == "f2_import",
-                    TaskQueue.status.in_(("pending", "running", "paused")),
-                )
-                .order_by(TaskQueue.id.desc())
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if running:
-        return {
-            "message": f"已有进行中的一键获取素材任务（#{running.id}），请等待完成或先取消",
-            "task_id": running.id,
-            "reused": True,
-        }
-
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
-    task = await create_f2_import_task(
+
+    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
+    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」
+    # 在服务层由进程内锁串行化（自动调度循环也走同一入口），已有进行中任务时
+    # 直接复用它，不新建。
+    task, running_id = await create_f2_import_task_if_idle(
         db,
         authors=author_list,
         limit=limit,
@@ -107,6 +84,12 @@ async def create_f2_import(
         make_thumbnails=make_thumbnails,
         since_days=since_days,
     )
+    if task is None:
+        return {
+            "message": f"已有进行中的一键获取素材任务（#{running_id}），请等待完成或先取消",
+            "task_id": running_id,
+            "reused": True,
+        }
     return {
         "message": "已提交「一键获取素材」任务",
         "task_id": task.id,

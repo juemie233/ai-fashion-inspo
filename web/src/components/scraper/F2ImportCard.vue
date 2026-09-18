@@ -6,7 +6,7 @@
  *
  * 两条约定（与后端一致，界面上明确告知用户）：
  *  - 导入**不做标签分析**：素材以未打标状态入库，打标请用「批量分析任务」
- *  - 入库前**四层去重**：同一内容不会重复入库，重复点击也安全
+ *  - 入库前**五层去重**：同一内容不会重复入库，重复点击也安全
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -26,8 +26,22 @@ const limit = ref<number | undefined>(undefined)
 const skipLive = ref(false)
 const makeThumbnails = ref(true)
 const showAdvanced = ref(false)
-/** f2 日期窗口（天）：只翻最近 N 天的作品。0=全历史（很慢，见下方说明） */
-const sinceDays = ref<number>(14)
+/** f2 日期窗口（天）：只翻最近 N 天的作品。0=全历史（很慢，见下方说明）。
+ *  初值取后端配置（F2_FETCH_SINCE_DAYS），不在前端硬编码——否则改 .env 不生效：
+ *  前端总把写死的默认值随请求下发，会把后端配置顶掉。留空表示「用后端配置」。 */
+const sinceDays = ref<number | undefined>(undefined)
+
+// 只在首次拿到状态时填充默认窗口；之后轮询不回写，用户改过的值不被覆盖
+let sinceDaysFilled = false
+watch(
+  () => status.value?.fetch_since_days,
+  (value) => {
+    if (sinceDaysFilled || value == null) return
+    sinceDays.value = value
+    sinceDaysFilled = true
+  },
+  { immediate: true },
+)
 
 // ── 每日自动获取（后端调度循环按间隔自动创建同一条入库任务）──
 const autoEnabled = computed(() => status.value?.auto?.enabled ?? false)
@@ -173,10 +187,17 @@ async function onSubmit() {
         style="width: 220px"
       />
       <span class="f2-tip">只翻最近</span>
-      <a-input-number v-model="sinceDays" :min="0" :max="3650" size="small" style="width: 100px" />
+      <a-input-number
+        v-model="sinceDays"
+        :min="0"
+        :max="3650"
+        size="small"
+        style="width: 100px"
+        placeholder="用配置"
+      />
       <span class="f2-tip">
-        天的作品（默认 14；0=翻全历史）。f2 翻页固定每页等 10 秒，
-        窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
+        天的作品（默认取后端配置 {{ status?.fetch_since_days ?? '—' }} 天；0=翻全历史）。f2
+        翻页固定每页等 10 秒， 窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
       </span>
       <span class="f2-tip">
         下载目录：{{ status?.root || '—' }}；博主清单来自 f2 用户库，共

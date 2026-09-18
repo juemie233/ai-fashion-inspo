@@ -36,6 +36,7 @@ const STATUS = {
   authors: 21,
   f2_dir: 'C:/f2',
   root: 'C:/f2/Download/douyin/post',
+  fetch_since_days: 14,
   auto: AUTO,
 }
 
@@ -58,6 +59,8 @@ describe('useF2Import', () => {
     expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-status')
     expect(status.value?.available).toBe(true)
     expect(status.value?.authors).toBe(21)
+    // 默认日期窗口来自后端配置（卡片据此填初值，不硬编码 14）
+    expect(status.value?.fetch_since_days).toBe(14)
   })
 
   it('loadStatus 失败时置空并提示（不抛异常）', async () => {

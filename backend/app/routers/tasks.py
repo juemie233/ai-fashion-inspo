@@ -18,14 +18,21 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # 支持「运行中取消」的任务类型：执行器内部每批检查 cancelled 后自行停止。
 # 人脸扫描/匹配任务耗时较长（分钟级），用户需要能随时中断（增量语义下
 # 重跑自动跳过已扫部分，中断无副作用）；标签网络分析支持暂停/恢复（断点续算）；
-# 其余类型任务不硬打断。
-_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match", "tag_network_analyze")
+# f2 一键获取素材同样可中断：下载阶段逐作者、入库阶段每文件都检查任务状态，
+# 取消后已下载文件与已入库素材都保留（见 execute_f2_import）；其余类型任务不硬打断。
+_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match", "tag_network_analyze", "f2_import")
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
 # 标签网络分析（断点续算）；批量/组合分析（AI 标签分析的核心批量路径，由
 # worker 进程执行，恢复时按「已成功素材跳过」幂等续算，不受 API 进程内存
-# 暂停标志影响——暂停必须走任务级状态，见 execute_batch_analyze）。
-_PAUSABLE_RUNNING_TYPES = ("tag_network_analyze", "batch_analyze", "multi_analyze")
+# 暂停标志影响——暂停必须走任务级状态，见 execute_batch_analyze）；
+# f2 一键获取素材恢复时按内容判重幂等续算（已下载/已入库的都会跳过）。
+_PAUSABLE_RUNNING_TYPES = (
+    "tag_network_analyze",
+    "batch_analyze",
+    "multi_analyze",
+    "f2_import",
+)
 
 
 @router.get("", response_model=TaskListOut)
@@ -80,8 +87,9 @@ async def cancel_task(
 
     - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
       ``task_queue`` 表中直接移除，不保留）。
-    - ``running`` 的人脸扫描/匹配任务：标记为 cancelled（运行中取消的既有能力，
-      记录保留；执行器每批检查后自行停止）。
+    - ``running`` 且类型在 :data:`_CANCELABLE_RUNNING_TYPES` 内（人脸扫描/匹配、
+      标签网络分析、f2 一键获取素材）：标记为 cancelled（运行中取消的既有能力，
+      记录保留；执行器每批/每文件检查后自行停止）。
     - 其余状态（success/failed/cancelled 及不可运行中取消的 running 类型）：
       返回 400，记录保持不变。
 
@@ -111,7 +119,7 @@ async def cancel_task(
         return {"message": "任务已删除", "task_id": task_id, "deleted": True}
 
     if task.status == "running" and task.type in _CANCELABLE_RUNNING_TYPES:
-        # 运行中取消（仅人脸扫描/匹配）：保留记录，标记 cancelled
+        # 运行中取消：保留记录，标记 cancelled（执行器感知后自行停止，产物保留）
         result = await db.execute(
             update(TaskQueue)
             .where(
@@ -141,10 +149,11 @@ async def pause_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze 支持）：
+    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze / f2_import 支持）：
 
     - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state；
-      batch/multi 的进度已由执行器逐批落库，无需额外状态）；
+      batch/multi 的进度已由执行器逐批落库，f2_import 的已下载文件与已入库
+      素材天然保留，无需额外状态）；
     - 执行器在下一个批次边界感知到 paused 后保存进度并返回。
     """
     task = await db.get(TaskQueue, task_id)
@@ -180,13 +189,15 @@ async def resume_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze 支持）：
+    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / f2_import 支持）：
 
     - ``tag_network_analyze``（网络图分析，断点续算）：恢复为 ``running``，
       保留 last_stage 与 stage_state，由执行器从中续算；
     - ``batch_analyze`` / ``multi_analyze``（批量/组合分析）：恢复为 ``pending``
       并清空认领信息，由 worker 重新认领执行；执行器按「已有成功分析日志的
       素材跳过」幂等续算，进度不丢失。
+    - ``f2_import``（一键获取素材）：同样恢复为 ``pending`` 重新执行；增量下载
+      与内容/平台 ID 判重保证已下载、已入库的部分自动跳过。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:

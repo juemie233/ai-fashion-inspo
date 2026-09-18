@@ -642,6 +642,7 @@ def build_report(
     works_with_trash = 0
     new_files = old_files = trash_files = 0
     new_bytes = old_bytes = trash_bytes = 0
+    read_failed = 0
     hashtag_counter: Counter = Counter()
     gallery_dist: Counter = Counter()
     new_work_rows: list[dict] = []
@@ -650,7 +651,13 @@ def build_report(
         new_items = []
         work_trash = 0
         for item in items:
-            digest = _digest(item.path, hash_cache)
+            try:
+                digest = _digest(item.path, hash_cache)
+            except OSError:
+                # 单文件读不出来（扫描后消失 / 权限问题）不该让整张报表崩掉：
+                # 跳过该文件并单独计数，其余统计照常
+                read_failed += 1
+                continue
             is_live = digest in dedup.live_hashes
             is_trash = not is_live and digest in dedup.trash_hashes
             bucket = "已入库" if is_live else ("已在垃圾桶" if is_trash else "净新增")
@@ -739,6 +746,7 @@ def build_report(
         "files_new": new_files,
         "files_in_library": old_files,
         "files_in_trash": trash_files,
+        "files_read_failed": read_failed,
         "bytes_new": new_bytes,
         "bytes_in_library": old_bytes,
         "bytes_in_trash": trash_bytes,
@@ -792,6 +800,11 @@ def print_report(report: dict, top_hashtags: int = 15, cache_stats: dict | None 
             f"（{report['bytes_in_trash']/gib:.2f} GB，涉及 {report['works_with_trash']} 个作品）"
             "——不会重新导入；如需恢复请到「垃圾桶」还原"
         )
+    if report.get("files_read_failed"):
+        print(
+            f"⚠ {report['files_read_failed']} 个文件读取失败（扫描后消失或权限问题），已跳过"
+            "——不计入上面的净新增/已在库统计"
+        )
     if cache_stats:
         print(
             f"哈希缓存：复用 {cache_stats['hit']} 次"
@@ -830,7 +843,7 @@ def print_report(report: dict, top_hashtags: int = 15, cache_stats: dict | None 
         )
 
     cost = report["tag_cost"]
-    print("\n-- 打标成本预估（按实测 {} 秒/张）--".format(DEFAULT_SEC_PER_TAG))
+    print(f"\n-- 打标成本预估（按实测 {DEFAULT_SEC_PER_TAG} 秒/张）--")
     print(f"   甲 逐文件打标:            {cost['per_file_count']:>6} 次 ≈ {cost['per_file_hours']:>5} 小时")
     print(f"   丙 按作品打一次(复制标签): {cost['per_work_count']:>6} 次 ≈ {cost['per_work_hours']:>5} 小时")
     print(
@@ -989,9 +1002,18 @@ def build_import_plan(
     deferred_works = 0
 
     for _work_key, items in group_works(files).items():
-        digests: dict[Path, str] = {
-            item.path: _digest(item.path, hash_cache) for item in items
-        }
+        # 单文件哈希失败（扫描后被删除/移动、权限问题）只跳过该文件，不让整批
+        # 计划崩溃：下载目录是「活的」，扫描与哈希之间文件消失是可能发生的，
+        # 而一个文件读不出来不该让整次导入失败
+        digests: dict[Path, str] = {}
+        for item in items:
+            try:
+                digests[item.path] = _digest(item.path, hash_cache)
+            except OSError:
+                skipped["文件读取失败（扫描后消失？）"] += 1
+        items = [item for item in items if item.path in digests]
+        if not items:
+            continue
 
         first = items[0]
         if wanted is not None and first.author_key not in wanted and first.author_dir not in wanted:
@@ -1003,7 +1025,7 @@ def build_import_plan(
             for item in items
         ]
         if not any(not r for r in reasons):
-            for item, reason in zip(items, reasons):
+            for item, reason in zip(items, reasons, strict=False):
                 skipped[reason] += 1
                 decisions.append(ImportDecision(
                     item=item, action="skip", reason=reason,
@@ -1012,7 +1034,7 @@ def build_import_plan(
             continue
 
         if limit is not None and accepted_works >= limit:
-            for item in items:
+            for _ in items:
                 skipped["超出 --limit 未处理"] += 1
             deferred_works += 1
             continue
@@ -1021,7 +1043,7 @@ def build_import_plan(
         matched = bloggers.get(first.author_key) or []
         blogger_id = matched[0]["id"] if len(matched) == 1 else None
 
-        for item, reason in zip(items, reasons):
+        for item, reason in zip(items, reasons, strict=False):
             digest = digests[item.path]
             if reason:
                 skipped[reason] += 1
@@ -1223,8 +1245,10 @@ def apply_import(
             if on_progress is not None:
                 on_progress(processed, total)
 
-    # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚
-    batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}"
+    # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚。
+    # 时间戳精确到秒 + 4 位随机后缀：同秒内跑两次（CLI 与任务队列撞车）时，
+    # 纯秒级 batch_id 会互相覆盖清单文件，被覆盖的那一批就再也无法回滚了。
+    batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     batch_file = batch_dir / f"{batch_id}.json"
     batch_error: str | None = None
     try:

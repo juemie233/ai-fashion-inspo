@@ -1,11 +1,11 @@
 """f2 一键获取素材任务（task type: ``f2_import``）：创建与执行（worker 调用）。
 
-链路：调 f2 增量下载各作者新作品 → 扫描下载目录 → 四层去重 → 入库。
+链路：调 f2 增量下载各作者新作品 → 扫描下载目录 → 五层去重 → 入库。
 
 两条硬性约定（与 CLI 一致，见 scripts/import_f2_downloads.py 模块 docstring）：
   1. **导入不做标签分析**：不调用 analyze_image、不建向量；素材以未打标状态入库，
      打标交给「批量分析任务」
-  2. **必须去重**：内容 SHA-256 / 批次内 / 合成平台 ID / 参数过滤四层判据
+  2. **必须去重**：内容 SHA-256 / 垃圾桶 / 批次内 / 合成平台 ID / 参数过滤五层判据
 
 执行结构（为什么不直接 await 同步函数）：
   - 下载阶段是子进程（``python -m f2 ...``，逐作者串行），入库阶段是同步 sqlite，
@@ -89,6 +89,53 @@ async def create_f2_import_task(
     return task
 
 
+# ── 并发保护：同一时间只允许一个进行中的 f2_import 任务 ──
+
+# 进行中的状态集合（排队 / 执行 / 已暂停都算「占用」，不再新建）
+_RUNNING_F2_STATUSES = ("pending", "running", "paused")
+
+# 自动调度循环（每 30 秒 tick）与手动 API 都是「先查有无进行中任务、再创建」，
+# 两步之间有 await 窗口，理论上可同时通过检查各建一个任务——两个 f2 子进程同时
+# 翻页会放大风控风险。调度循环与路由同属后端进程（worker 只执行不创建），
+# 一把进程内锁即可把临界区串行化。
+_create_lock = asyncio.Lock()
+
+
+async def _running_f2_task_id(db: AsyncSession) -> int | None:
+    """返回进行中的 f2_import 任务 id（无则 None）。"""
+    return (
+        await db.execute(
+            select(TaskQueue.id)
+            .where(
+                TaskQueue.type == "f2_import",
+                TaskQueue.status.in_(_RUNNING_F2_STATUSES),
+            )
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar()
+
+
+async def create_f2_import_task_if_idle(
+    db: AsyncSession, **kwargs
+) -> tuple[TaskQueue | None, int | None]:
+    """并发安全地创建 f2_import 任务：已有进行中任务时复用它、不新建。
+
+    Args:
+        db: 数据库会话。
+        **kwargs: 透传给 :func:`create_f2_import_task` 的任务参数。
+
+    Returns:
+        (新建任务, None) 或 (None, 复用的进行中任务 id)——两者恰有一个非 None。
+    """
+    async with _create_lock:
+        running_id = await _running_f2_task_id(db)
+        if running_id is not None:
+            return None, running_id
+        task = await create_f2_import_task(db, **kwargs)
+        return task, None
+
+
 def _run_subprocess(cmd: list[str], cwd: Path) -> int:
     """在 f2 工作目录执行 f2（继承标准输出，下载进度实时可见）。"""
     return subprocess.run(cmd, cwd=str(cwd), check=False).returncode
@@ -101,8 +148,12 @@ def f2_import_status() -> dict:
     一次 f2，本功能只做增量）。
 
     Returns:
-        {"available": bool, "reason": str, "authors": int, "f2_dir": str, "root": str}
+        {"available": bool, "reason": str, "authors": int, "f2_dir": str, "root": str,
+         "fetch_since_days": int}
+        ``fetch_since_days`` 是默认日期窗口天数，供前端「只翻最近 N 天」输入框
+        取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
     """
+    from app.config import settings
     from scripts import import_f2_downloads as f2
 
     info = {
@@ -111,6 +162,7 @@ def f2_import_status() -> dict:
         "authors": 0,
         "f2_dir": str(f2.DEFAULT_F2_DIR),
         "root": str(f2.DEFAULT_F2_ROOT),
+        "fetch_since_days": int(settings.f2_fetch_since_days or 0),
     }
     if not f2.f2_available():
         info["reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
@@ -151,17 +203,7 @@ async def _last_f2_task(db: AsyncSession) -> tuple[int | None, datetime | None, 
             .limit(1)
         )
     ).first()
-    running = (
-        await db.execute(
-            select(TaskQueue.id)
-            .where(
-                TaskQueue.type == "f2_import",
-                TaskQueue.status.in_(("pending", "running", "paused")),
-            )
-            .order_by(TaskQueue.id.desc())
-            .limit(1)
-        )
-    ).scalar()
+    running = await _running_f2_task_id(db)
     if last_row is None:
         return None, None, running
     return last_row[0], last_row[1], running
@@ -202,12 +244,16 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         logger.info(f"[f2 自动获取] 跳过本轮：{status['reason']}")
         return None
 
-    task = await create_f2_import_task(
+    task, _reused = await create_f2_import_task_if_idle(
         db,
         fetch=True,
         skip_live=bool(settings.f2_import_auto_skip_live),
         since_days=settings.f2_fetch_since_days,
     )
+    if task is None:
+        # 锁内复查发现已有进行中任务（手动点击恰好抢先）：本轮静默跳过
+        logger.info("[f2 自动获取] 跳过本轮：已有进行中的 f2_import 任务")
+        return None
     logger.info(
         f"[f2 自动获取] 已创建任务 #{task.id}"
         f"（间隔 {interval_hours} 小时，作者库 {status['authors']} 个）"
@@ -295,7 +341,22 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     from app.config import settings
     from scripts import import_f2_downloads as f2
 
-    opts = dict(task.result or {})
+    # 只取创建任务时写入的参数键：暂停/恢复后 task.result 里会残留上一次的
+    # stage/fetch/plan/import 字段，整包当 opts 传下去会把旧产物混进新结果
+    raw_result = dict(task.result or {})
+    opts = {
+        key: raw_result[key]
+        for key in (
+            "authors",
+            "limit",
+            "skip_live",
+            "fetch",
+            "fetch_limit",
+            "make_thumbnails",
+            "since_days",
+        )
+        if key in raw_result
+    }
     authors = set(opts.get("authors") or []) or None
     fetch_enabled = bool(opts.get("fetch", True))
     limit = opts.get("limit")
@@ -369,10 +430,25 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             task.updated_at = utcnow()
             await db.commit()
 
+        # 用户取消/暂停：立即结束，不再做扫描与入库——扫描是重活（全量约 81 秒），
+        # 中断后继续跑纯属浪费，还会让「取消」看起来迟迟不生效。已下载的文件留在
+        # f2 目录，恢复/重跑时增量下载与内容判重会自动跳过它们。
+        if fetch_summary["aborted"]:
+            status_now = await _current_status(db, task.id)
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.status = status_now
+            task.updated_at = utcnow()
+            await db.commit()
+            logger.info(
+                f"f2 下载被中断（{status_now}）：已完成 "
+                f"{fetch_summary['ok']}/{fetch_summary['total']} 个作者，已下载文件保留"
+            )
+            return
+
         # 全部作者都失败（cookie 失效 / 风控）时不能算成功：用户会从任务中心
         # 看到「成功 0 下载」而不知情。落一次 result 后抛错，让任务显式失败。
         if fetch_summary["total"] and fetch_summary["ok"] == 0:
-            task.result = {**opts, "fetch": fetch_summary}
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
             await db.commit()
             raise RuntimeError(
                 f"f2 下载全部失败（{fetch_summary['failed']}/{fetch_summary['total']} 个作者），"
@@ -414,6 +490,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         "plan": {
             "files": len(to_import),
             "skipped": skipped,
+            # 结构化计数：前端展示「已在垃圾桶 N」直接读它，不必再去匹配中文跳过
+            # 原因字符串（skipped 的 key 是给人看的文案，改一个字前端就静默失效）
+            "trash_skipped": skipped.get(f2.TRASH_SKIP_REASON, 0),
             "deferred_works": deferred_works,
             "seconds": plan_seconds,
             "hash_cache": cache_stats,
@@ -450,22 +529,32 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         return holder["stop"]
 
     async def _progress_watcher() -> None:
-        """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。"""
+        """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。
+
+        进度落库是「尽力而为」：watcher 与入库线程写的是同一个 SQLite 文件
+        （线程内每文件一次 commit），偶发锁等待超时时单轮失败只记日志、下轮重试。
+        否则一次 commit 异常会顺着 ``await watcher`` 炸掉整个执行器——素材其实
+        已经入库，任务却被标记失败，是最糟的结果。
+        """
         while not finished.is_set():
             try:
                 await asyncio.wait_for(finished.wait(), timeout=_WATCH_INTERVAL)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
-            if await _current_status(db, task.id) not in ("running", "pending"):
-                holder["stop"] = True
-            task.done = holder["done"]
-            task.total = holder["total"]
-            task.progress = _PROGRESS_AFTER_PLAN + int(
-                (100 - _PROGRESS_AFTER_PLAN) * holder["done"] / holder["total"]
-            )
-            task.updated_at = utcnow()
-            await db.commit()
+            try:
+                if await _current_status(db, task.id) not in ("running", "pending"):
+                    holder["stop"] = True
+                task.done = holder["done"]
+                task.total = holder["total"]
+                task.progress = _PROGRESS_AFTER_PLAN + int(
+                    (100 - _PROGRESS_AFTER_PLAN) * holder["done"] / holder["total"]
+                )
+                task.updated_at = utcnow()
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001 —— 进度是辅助信息，不能拖垮导入
+                await db.rollback()
+                logger.warning(f"f2 导入进度落库失败（忽略，下一轮重试）：{exc}")
 
     watcher = asyncio.create_task(_progress_watcher())
     try:
@@ -481,12 +570,15 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         await watcher
 
     status_now = await _current_status(db, task.id)
+    interrupted = status_now in ("cancelled", "paused")
     task.result = {
         **task.result,
         "stage": "done",
         "import": {key: value for key, value in result.items() if key != "ids"},
     }
-    task.progress = 100
+    # 被中断的任务进度停在当前值：写 100% 会让「已取消/已暂停」看起来像跑完了
+    if not interrupted:
+        task.progress = 100
     task.done = holder["done"]
     task.total = holder["total"]
     task.updated_at = utcnow()
@@ -494,7 +586,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         # 清单缺失 = 本批无法回滚，写进任务 error 让用户一眼看到（任务仍算成功，
         # 因为素材确实已入库）
         task.error = f"批次清单写入失败（本批无法回滚）：{result['batch_error']}"
-    if status_now in ("cancelled", "paused"):
+    if interrupted:
         # 尊重外部状态：worker 见 status != running 不会覆盖为 success
         task.status = status_now
         logger.info(

@@ -289,6 +289,8 @@ async def test_execute_f2_import_does_not_resurrect_trashed_material(client, f2_
         assert stored.result["plan"]["files"] == 0  # 三条全部跳过
         assert stored.result["import"]["imported"] == 0
         assert stored.result["plan"]["skipped"]["已在垃圾桶（不重新导入）"] == 1
+        # 结构化计数：前端不必再去匹配中文跳过原因文案
+        assert stored.result["plan"]["trash_skipped"] == 1
 
     # 垃圾桶里那条仍在垃圾桶（没有被复活）
     trash_ids = {i["id"] for i in client.get("/api/inspirations/trash").json()["items"]}
@@ -519,19 +521,21 @@ def auto_env(f2_tree, monkeypatch):
 
 @pytest.fixture
 def auto_settings(monkeypatch):
-    """隔离三个自动获取配置项：用例结束后还原（含 API 直接改 settings 的情况）。"""
+    """隔离自动获取相关配置项：用例结束后还原（含 API 直接改 settings 的情况）。"""
     from app.config import settings
 
     original = (
         settings.f2_import_auto_enabled,
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
+        settings.f2_fetch_since_days,
     )
     yield settings
     (
         settings.f2_import_auto_enabled,
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
+        settings.f2_fetch_since_days,
     ) = original
 
 
@@ -682,3 +686,145 @@ def test_f2_auto_endpoint_rejects_out_of_range_interval(client, auto_settings):
     """间隔越界由 FastAPI 参数校验拦住（1~720 小时）。"""
     resp = client.put("/api/scraper/f2-auto", params={"enabled": True, "interval_hours": 0})
     assert resp.status_code == 422
+
+
+# ── 审查修复：可中断（取消/暂停）与并发保护 ──
+
+
+def test_f2_status_endpoint_reports_default_window(client, auto_settings):
+    """默认日期窗口随状态下发：前端据此填初值，不再硬编码 14 把 .env 配置顶掉。"""
+    auto_settings.f2_fetch_since_days = 21
+
+    body = client.get("/api/scraper/f2-status").json()
+    assert body["fetch_since_days"] == 21
+
+
+async def test_cancel_running_f2_import_via_api(client):
+    """运行中的 f2_import 可以从任务中心取消（执行器早已实现停止逻辑，缺的是入口）。
+
+    回归点：f2_import 不在 _CANCELABLE_RUNNING_TYPES 里，取消接口对运行中的它
+    返回 400，删除接口又因心跳正常拒绝——下载可能跑几十分钟，用户完全无法中断。
+    """
+    from app.models.task import TaskQueue
+
+    task_id = client.post("/api/scraper/f2-import", params={"fetch": False}).json()["task_id"]
+    async with async_session() as db:
+        (await db.get(TaskQueue, task_id)).status = "running"
+        await db.commit()
+
+    resp = client.post(f"/api/tasks/{task_id}/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"] == "任务已取消"
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "cancelled"
+
+
+async def test_pause_and_resume_running_f2_import(client):
+    """暂停 → paused（已下载/已入库产物保留），恢复 → pending 由 worker 幂等续算。"""
+    from app.models.task import TaskQueue
+
+    task_id = client.post("/api/scraper/f2-import", params={"fetch": False}).json()["task_id"]
+    async with async_session() as db:
+        (await db.get(TaskQueue, task_id)).status = "running"
+        await db.commit()
+
+    assert client.post(f"/api/tasks/{task_id}/pause").status_code == 200
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "paused"
+
+    assert client.post(f"/api/tasks/{task_id}/resume").status_code == 200
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "pending"
+
+
+async def test_execute_f2_import_cancel_during_download_skips_scan(
+    client, auto_env, monkeypatch
+):
+    """取消发生在下载阶段：立即收尾，不再做重活扫描。
+
+    回归点：原先 break 之后仍会跑完整扫描（全量实测约 81 秒）才停下，用户点了
+    取消却迟迟没反应；顺带确认重跑不会把上一次的产物字段带进新结果。
+    """
+    from app.models.task import TaskQueue
+    from app.services.task_runners import f2_import as runner
+
+    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+
+    async def cancelled(_db, _task_id):
+        return "cancelled"
+
+    monkeypatch.setattr(runner, "_current_status", cancelled)
+
+    def no_scan(_root):
+        raise AssertionError("下载被取消后不应再扫描目录")
+
+    monkeypatch.setattr(f2, "scan_directory", no_scan)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True)
+        task_id = task.id
+        # 上一次运行（暂停前）残留在 result 里的产物字段
+        task.result = {**task.result, "plan": {"files": 99}, "import": {"imported": 99}}
+        await db.commit()
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.status == "cancelled"
+        assert stored.result["fetch"]["aborted"] is True
+        # 旧产物不残留：opts 只取创建参数，界面不会出现自相矛盾的统计
+        assert "plan" not in stored.result and "import" not in stored.result
+
+
+async def test_execute_f2_import_paused_keeps_progress_below_full(
+    client, f2_tree, monkeypatch
+):
+    """暂停发生在入库阶段：任务保持 paused，进度停在当前值（不写成 100%）。
+
+    回归点：中断的任务原先也写 progress=100，任务中心里「已暂停」看起来像跑完了。
+    """
+    from app.models.task import TaskQueue
+    from app.services.task_runners import f2_import as runner
+
+    def fake_apply(decisions, **kwargs):
+        # 线程内的停止标记已生效（watcher 会把 paused 转成 stop）
+        return {"imported": 0, "failed": 0, "batch_file": "", "ids": []}
+
+    monkeypatch.setattr(f2, "apply_import", fake_apply)
+
+    async def paused(_db, _task_id):
+        return "paused"
+
+    monkeypatch.setattr(runner, "_current_status", paused)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.status == "paused"
+        assert stored.progress < 100
+        assert stored.result["stage"] == "done"
+
+
+async def test_create_f2_import_task_if_idle_reuses_running(client):
+    """并发保护入口：已有进行中任务时返回其 id、不新建。"""
+    first = client.post("/api/scraper/f2-import", params={"fetch": False}).json()["task_id"]
+
+    async with async_session() as db:
+        task, running_id = await task_runner.create_f2_import_task_if_idle(db, fetch=False)
+
+    assert task is None and running_id == first
+
+
+async def test_concurrent_creation_creates_single_task(client):
+    """自动调度与手动点击同时通过检查时，也只应创建一个任务（进程内锁）。"""
+
+    async def _one():
+        async with async_session() as db:
+            return await task_runner.create_f2_import_task_if_idle(db, fetch=False)
+
+    results = await asyncio.gather(_one(), _one(), _one())
+    assert sum(1 for task, _rid in results if task is not None) == 1
+
+    async with async_session() as db:
+        assert await _count_f2_tasks(db) == 1

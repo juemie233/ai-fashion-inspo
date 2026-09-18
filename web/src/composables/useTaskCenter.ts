@@ -116,7 +116,7 @@ export function useTaskCenter() {
     }
   }
 
-  /** 暂停运行中的标签网络分析任务（后端仅 tag_network_analyze 支持） */
+  /** 暂停运行中的任务（后端 _PAUSABLE_RUNNING_TYPES：标签网络分析 / 批量·组合分析 / f2 一键获取） */
   async function pauseTask(t: UnifiedTask) {
     try {
       const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/pause`)
@@ -127,7 +127,7 @@ export function useTaskCenter() {
     }
   }
 
-  /** 恢复已暂停的标签网络分析任务（断点续算） */
+  /** 恢复已暂停的任务（标签网络分析断点续算；批量分析与 f2 一键获取放回队列幂等续跑） */
   async function resumeTask(t: UnifiedTask) {
     try {
       const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/resume`)

@@ -14,8 +14,8 @@ import {
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
-import { isPausableTaskType } from '@/utils/taskPresentation'
 import { formatDate, renderTimeCell } from '@/utils/format'
+import { isCancelableTaskType, isPausableTaskType } from '@/utils/taskPresentation'
 
 defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
 const emit = defineEmits<{
@@ -132,7 +132,7 @@ const columns: TableColumnData[] = [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 180,
+    width: 220,
     render: ({ record }) => {
       const row = record as UnifiedTask
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
@@ -159,6 +159,26 @@ const columns: TableColumnData[] = [
                 onClick: () => emit('resume', row),
               },
               { default: () => '恢复' },
+            )
+          : null,
+        // 可取消的运行中任务（人脸扫描/匹配、标签网络分析、一键获取素材）：
+        // 后端标记 cancelled，执行器按批/按文件感知后自行停止；产物（已下载文件、
+        // 已入库素材、已扫描增量）都保留，重跑幂等跳过
+        row.source === 'queue' && isCancelableTaskType(row.type) && row.status === 'running'
+          ? h(
+              Popconfirm,
+              {
+                content: '确定取消该任务？已下载的文件与已入库的素材都会保留，重跑自动跳过。',
+                onOk: () => emit('cancel', row),
+              },
+              {
+                default: () =>
+                  h(
+                    Button,
+                    { size: 'small', type: 'outline', status: 'danger' },
+                    { default: () => '取消' },
+                  ),
+              },
             )
           : null,
         row.status === 'pending'
