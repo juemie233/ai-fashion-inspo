@@ -26,6 +26,10 @@ const limit = ref<number | undefined>(undefined)
 const skipLive = ref(false)
 const makeThumbnails = ref(true)
 const showAdvanced = ref(false)
+/** 是否连「未登记到博主库」的 f2 账号一起处理（默认否：f2 用户库混进的无关账号不入库） */
+const includeUnknown = ref(false)
+/** 后端识别出的「f2 里有、但库里没有对应博主」的账号名（默认会被跳过） */
+const unknownAuthors = computed(() => status.value?.unknown_authors ?? [])
 /** f2 日期窗口（天）：只翻最近 N 天的作品。0=全历史（很慢，见下方说明）。
  *  初值取后端配置（F2_FETCH_SINCE_DAYS），不在前端硬编码——否则改 .env 不生效：
  *  前端总把写死的默认值随请求下发，会把后端配置顶掉。留空表示「用后端配置」。 */
@@ -123,6 +127,7 @@ async function onSubmit() {
     skip_live: skipLive.value || undefined,
     make_thumbnails: makeThumbnails.value,
     since_days: sinceDays.value,
+    include_unknown_authors: includeUnknown.value || undefined,
   })
   if (taskId) await loadStatus()
 }
@@ -143,14 +148,14 @@ async function onSubmit() {
       <a-button
         type="primary"
         :loading="submitting"
-        :disabled="!status?.available"
+        :disabled="!status?.available && !includeUnknown"
         @click="onSubmit"
       >
         {{ fetchFirst ? '一键获取素材' : '仅入库已下载' }}
       </a-button>
     </div>
 
-    <!-- 可用性状态：不可用时说明原因（f2 未装 / 目录缺失 / 作者库为空） -->
+    <!-- 可用性状态：不可用时说明原因（f2 未装 / 目录缺失 / 用户库为空 / 对不上博主） -->
     <a-spin :loading="statusLoading" style="display: block">
       <div v-if="status" class="f2-status" :class="{ 'is-bad': !status.available }">
         <span>{{ status.available ? '✅' : '⚠️' }} {{ status.reason }}</span>
@@ -200,8 +205,16 @@ async function onSubmit() {
         翻页固定每页等 10 秒， 窗口越小越快；按作者上次下载时间会自动放大，长时间不跑也不漏。
       </span>
       <span class="f2-tip">
-        下载目录：{{ status?.root || '—' }}；博主清单来自 f2 用户库，共
+        下载目录：{{ status?.root || '—' }}；已登记博主来自 f2 用户库，共
         {{ status?.authors ?? 0 }} 个
+      </span>
+      <a-checkbox v-model="includeUnknown">包含 f2 里未登记到博主库的账号</a-checkbox>
+      <span class="f2-tip">
+        {{
+          unknownAuthors.length
+            ? `默认跳过这 ${unknownAuthors.length} 个账号：${unknownAuthors.join('、')}`
+            : 'f2 用户库里没有多出来的账号'
+        }}。f2 用户库存的是它见过的所有账号，勾选后这些账号的作品也会被下载并入库。
       </span>
     </div>
 

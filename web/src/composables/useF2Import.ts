@@ -52,8 +52,10 @@ export interface F2ImportStatus {
   available: boolean
   /** 不可用原因或可用性摘要（直接展示给用户） */
   reason: string
-  /** f2 用户库里的作者数 */
+  /** 已登记到博主库、可增量下载的作者数（不含 f2 里未登记的账号） */
   authors: number
+  /** f2 用户库里有、但库里没有对应博主的账号名（默认会被跳过，供卡片提示） */
+  unknown_authors: string[]
   /** f2 工作目录 */
   f2_dir: string
   /** 下载产物扫描目录 */
@@ -81,6 +83,8 @@ export interface F2ImportOptions {
   make_thumbnails?: boolean
   /** f2 日期窗口天数（0=全历史；缺省取后端配置，默认 14） */
   since_days?: number
+  /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
+  include_unknown_authors?: boolean
 }
 
 export function useF2Import() {

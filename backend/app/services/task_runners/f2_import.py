@@ -49,6 +49,7 @@ async def create_f2_import_task(
     fetch_limit: int | None = None,
     make_thumbnails: bool = True,
     since_days: int | None = None,
+    include_unknown_authors: bool = False,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -62,6 +63,9 @@ async def create_f2_import_task(
         make_thumbnails: 是否生成缩略图。
         since_days: f2 日期窗口天数（None 表示执行时取
             ``settings.f2_fetch_since_days``；0 表示翻全历史）。
+        include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
+            默认 False：f2 用户库存的是它见过的所有账号，混进来的无关账号
+            （实测出现过网易第五人格这类官方号）不该被下载入库。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -80,6 +84,7 @@ async def create_f2_import_task(
             "fetch_limit": fetch_limit,
             "make_thumbnails": make_thumbnails,
             "since_days": since_days,
+            "include_unknown_authors": include_unknown_authors,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -144,12 +149,16 @@ def _run_subprocess(cmd: list[str], cwd: Path) -> int:
 def f2_import_status() -> dict:
     """检查「一键获取素材」是否可用（供 API 与前端按钮状态使用）。
 
-    三个前提：f2 包已安装、f2 工作目录存在、其用户库里有作者（首次全量需手动跑
-    一次 f2，本功能只做增量）。
+    前提：f2 包已安装、f2 工作目录存在、其用户库里有**能对应到已登记博主**的账号
+    （首次全量需手动跑一次 f2，本功能只做增量）。
+
+    ``authors`` 报的是「已登记博主数」而不是 f2 账号总数：f2 用户库存的是它见过
+    的所有账号，混进来的无关账号（实测出现过网易第五人格这类官方号，被原样下载
+    入库 142 条）默认跳过，另在 ``unknown_authors`` 里列出来提示用户。
 
     Returns:
-        {"available": bool, "reason": str, "authors": int, "f2_dir": str, "root": str,
-         "fetch_since_days": int}
+        {"available": bool, "reason": str, "authors": int, "unknown_authors": list[str],
+         "f2_dir": str, "root": str, "fetch_since_days": int}
         ``fetch_since_days`` 是默认日期窗口天数，供前端「只翻最近 N 天」输入框
         取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
     """
@@ -160,6 +169,7 @@ def f2_import_status() -> dict:
         "available": False,
         "reason": "",
         "authors": 0,
+        "unknown_authors": [],
         "f2_dir": str(f2.DEFAULT_F2_DIR),
         "root": str(f2.DEFAULT_F2_ROOT),
         "fetch_since_days": int(settings.f2_fetch_since_days or 0),
@@ -171,15 +181,34 @@ def f2_import_status() -> dict:
         info["reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
         return info
     authors = f2.load_f2_authors(f2.DEFAULT_F2_DIR)
-    info["authors"] = len(authors)
     if not authors:
         info["reason"] = (
             f"f2 用户库为空（{f2.DEFAULT_F2_DIR / f2.F2_AUTHOR_DB}）："
             "请先手动跑一次 f2 完成首次下载"
         )
         return info
+
+    known, unknown = authors, []
+    bloggers = f2.load_douyin_bloggers()
+    if bloggers:
+        # 只有库内登记过抖音博主时才有白名单依据；一个都没有则按 f2 账号总数报
+        known, unknown = f2.select_known_authors(authors, bloggers)
+    names = [a["nickname"] for a in unknown]
+    info["unknown_authors"] = names
+    info["authors"] = len(known)
+    if not known:
+        info["reason"] = (
+            f"f2 用户库有 {len(authors)} 个账号，但没有一个对应到已登记的抖音博主："
+            "请先补全博主的 sec_user_id（脚本 scripts/sync_blogger_ids.py），"
+            "或勾选下方「包含未登记账号」"
+        )
+        return info
+
     info["available"] = True
-    info["reason"] = f"可增量下载 {len(authors)} 个已采集作者的新作品"
+    info["reason"] = f"可增量下载 {len(known)} 个已登记博主的新作品"
+    if names:
+        shown = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+        info["reason"] += f"；另有 {len(names)} 个未登记账号会被跳过（{shown}）"
     return info
 
 
@@ -354,6 +383,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "fetch_limit",
             "make_thumbnails",
             "since_days",
+            "include_unknown_authors",
         )
         if key in raw_result
     }
@@ -362,9 +392,36 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     limit = opts.get("limit")
     skip_live = bool(opts.get("skip_live", False))
     make_thumbnails = bool(opts.get("make_thumbnails", True))
+    include_unknown = bool(opts.get("include_unknown_authors", False))
     since_days = opts.get("since_days")
     if since_days is None:
         since_days = settings.f2_fetch_since_days
+
+    # 博主清单与 f2 账号清单：下载阶段用来判断「这个 f2 账号是否已登记」，
+    # 入库阶段用来绑定作品。默认只处理能对应到已登记博主的账号——f2 用户库存的是
+    # 它见过的所有账号，混进来的无关账号（实测出现过网易第五人格，被入库 142 条）
+    # 不该收进素材库。库内一个抖音博主都没有时没有白名单依据，退回旧口径（全部处理）。
+    f2_dir = f2.DEFAULT_F2_DIR
+    bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
+    f2_authors = await asyncio.to_thread(f2.load_f2_authors, f2_dir)
+    filter_registered = not include_unknown and bool(bloggers)
+    if filter_registered:
+        known_authors, unknown_authors = f2.select_known_authors(f2_authors, bloggers)
+    else:
+        known_authors, unknown_authors = f2_authors, []
+    skipped_unknown = [a["nickname"] for a in unknown_authors]
+
+    # 入库允许的作者范围（归一化名）＝ 博主名集合 ∪ 按 sec_user_id 命中的 f2 昵称
+    # （后者覆盖「f2 昵称与库内博主名不一致」的情况）。显式点名作者时同样受白名单
+    # 约束——要处理未登记账号请勾选「包含未登记账号」，否则会出现「下载阶段跳过、
+    # 入库阶段却放行」的口径分裂。空集合表示「一个都不导入」（不是不过滤）。
+    if filter_registered:
+        allowed_keys = set(bloggers) | {
+            f2.normalize_author(a["nickname"]) for a in known_authors
+        }
+        plan_authors: set[str] | None = authors & allowed_keys if authors else allowed_keys
+    else:
+        plan_authors = authors
 
     task.error = None
     task.progress = 0
@@ -374,7 +431,18 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     task.updated_at = utcnow()
     await db.commit()
 
-    fetch_summary = {"total": 0, "ok": 0, "failed": 0, "aborted": False}
+    fetch_summary: dict = {
+        "total": 0,
+        "ok": 0,
+        "failed": 0,
+        "aborted": False,
+        "skipped_authors": skipped_unknown,
+    }
+    if skipped_unknown:
+        logger.info(
+            f"[f2] 跳过 {len(skipped_unknown)} 个未登记到博主库的账号："
+            f"{'、'.join(skipped_unknown)}"
+        )
 
     # ── 阶段 1：调 f2 增量下载（逐作者串行；子进程放线程）──
     if fetch_enabled:
@@ -382,8 +450,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             raise RuntimeError(
                 "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
             )
-        f2_dir = f2.DEFAULT_F2_DIR
-        targets = f2.load_f2_authors(f2_dir)
+        targets = known_authors
         wanted = {f2.normalize_author(a) for a in authors} if authors else None
         if wanted is not None:
             targets = [
@@ -465,7 +532,6 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 但首次/大量新增时仍可能很慢，故线程执行保持不变。
     files = await asyncio.to_thread(f2.scan_directory, f2.DEFAULT_F2_ROOT)
     dedup = await asyncio.to_thread(f2.load_dedup_index)
-    bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
     started = time.monotonic()
     decisions, skipped, deferred_works, cache_stats = await asyncio.to_thread(
         f2.build_plan_with_cache,
@@ -474,7 +540,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         hash_cache_path=None,  # 缺省 storage/f2_hash_cache.db
         use_cache=True,
         bloggers=bloggers,
-        authors=authors,
+        # 默认只导入已登记博主的产物：扫描的是整个下载目录，里面可能留着
+        # 未登记账号（如网易第五人格）的历史文件，不该被顺带收进素材库
+        authors=plan_authors,
         limit=limit,
         skip_live=skip_live,
     )

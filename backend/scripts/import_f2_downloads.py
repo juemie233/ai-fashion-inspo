@@ -589,22 +589,75 @@ def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
         db_path: 数据库路径（缺省用 :func:`library_db_path`）。
 
     Returns:
-        归一化名 → [{"id", "name"}]（同名可能多条，故用列表）。
+        归一化名 → [{"id", "name", "platform_user_id"}]（同名可能多条，故用列表）。
+        ``platform_user_id`` 是博主的 sec_user_id，回填后作为「f2 账号 ↔ 博主」的
+        权威对应关系（见 :func:`select_known_authors`）。
     """
     path = db_path or library_db_path()
     if not path.exists():
         return {}
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        rows = conn.execute(
-            "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, platform_user_id FROM bloggers WHERE platform = 'douyin'"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # 迁移前的库副本 / 最小化测试库可能还没有 platform_user_id 列：
+            # 退回只读 id/name（此时匹配只能用昵称口径）
+            rows = [
+                (row[0], row[1], None)
+                for row in conn.execute(
+                    "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
+                ).fetchall()
+            ]
     finally:
         conn.close()
     indexed: dict[str, list[dict]] = defaultdict(list)
-    for blogger_id, name in rows:
-        indexed[normalize_author(name)].append({"id": blogger_id, "name": name})
+    for blogger_id, name, platform_user_id in rows:
+        indexed[normalize_author(name)].append(
+            {"id": blogger_id, "name": name, "platform_user_id": platform_user_id}
+        )
     return dict(indexed)
+
+
+def select_known_authors(
+    authors: list[dict], bloggers: dict[str, list[dict]]
+) -> tuple[list[dict], list[dict]]:
+    """把 f2 用户库里的账号拆成「库里已登记的博主」与「未登记账号」两拨。
+
+    为什么需要：f2 的 ``user_info_web`` 装的是**它见过/登录过的所有账号**，
+    不等于我们素材库里登记的博主。实测里面混进过「网易第五人格」这类与穿搭
+    无关的官方号，被一键获取原样下载并入库（142 条，0 条博主绑定）。
+    默认只处理能对上库内博主的账号，剩下的显式列出来。
+
+    判定口径（任一命中即算已登记）：
+      1. ``sec_user_id`` 精确命中某博主的 ``platform_user_id``（权威：同 ID 必同人）
+      2. 归一化昵称命中博主名（兜底：覆盖没回填 sec_user_id 的博主）
+
+    Args:
+        authors: :func:`load_f2_authors` 的结果。
+        bloggers: :func:`load_douyin_bloggers` 的结果。
+
+    Returns:
+        ``(已登记账号, 未登记账号)``，两者都保持入参顺序。
+    """
+    known_uids = {
+        blogger.get("platform_user_id")
+        for group in bloggers.values()
+        for blogger in group
+        if blogger.get("platform_user_id")
+    }
+    known_keys = set(bloggers)
+    known: list[dict] = []
+    unknown: list[dict] = []
+    for author in authors:
+        sec_user_id = author.get("sec_user_id")
+        matched = (sec_user_id and sec_user_id in known_uids) or (
+            normalize_author(author.get("nickname") or "") in known_keys
+        )
+        (known if matched else unknown).append(author)
+    return known, unknown
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -993,7 +1046,9 @@ def build_import_plan(
         (决策列表, 跳过原因计数, 因超出 limit 未处理的作品数)
     """
     bloggers = bloggers or {}
-    wanted = {normalize_author(a) for a in authors} if authors else None
+    # 注意：authors 用 `is not None` 判定——空集合表示「一个都不要」，不是「不过滤」
+    # （过滤链路会用空集合表达「白名单里没有可处理的作者」）
+    wanted = {normalize_author(a) for a in authors} if authors is not None else None
 
     decisions: list[ImportDecision] = []
     skipped: Counter = Counter()
@@ -1017,7 +1072,7 @@ def build_import_plan(
 
         first = items[0]
         if wanted is not None and first.author_key not in wanted and first.author_dir not in wanted:
-            skipped["作者不在 --authors 范围"] += len(items)
+            skipped["作者不在指定范围（--authors / 已登记博主）"] += len(items)
             continue
 
         reasons = [
@@ -1469,6 +1524,7 @@ def run_fetch(
     runner=None,
     since_days: int | None = DEFAULT_FETCH_SINCE_DAYS,
     post_root: Path | None = None,
+    include_unknown: bool = False,
 ) -> dict:
     """串行调 f2 增量下载各作者的新作品（一次一个，避免并发触发风控）。
 
@@ -1481,6 +1537,9 @@ def run_fetch(
     - 单个作者失败（风控 / 网络 / cookie 失效）只记录并继续下一个，不阻断整批；
       失败细节在 f2/logs/ 下
     - 作者过滤复用 `--authors`（归一化名匹配），与导入阶段的语义一致
+    - **默认只下库里已登记的博主**（见 :func:`select_known_authors`）：f2 用户库
+      装的是它见过的所有账号，混进来的无关账号（如官方游戏号）不该被下载入库；
+      `include_unknown=True` 才恢复「f2 里有谁都下」
 
     Args:
         f2_dir: f2 工作目录。
@@ -1492,9 +1551,10 @@ def run_fetch(
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
         since_days: 日期窗口最小天数；None/<=0 表示翻全历史（首次全量）。
         post_root: 作者目录所在位置（缺省按 `download_root`/f2 目录推导）。
+        include_unknown: 是否连「未登记到博主库」的 f2 账号一起下载。
 
     Returns:
-        {"total", "ok", "failed", "results", "error", "windows"}；
+        {"total", "ok", "failed", "results", "windows", "skipped_authors", "error"}；
         results 每项含 nickname / sec_user_id / rc / cmd / interval。
     """
     runner = runner or _default_runner
@@ -1506,18 +1566,33 @@ def run_fetch(
             "failed": 0,
             "results": [],
             "windows": {},
+            "skipped_authors": [],
             "error": (
                 f"未找到 f2 作者清单：{f2_dir / F2_AUTHOR_DB}（先手动跑一次 f2 "
                 f"确认能登录并下载，本命令只做「增量」）"
             ),
         }
 
-    wanted = {normalize_author(a) for a in authors} if authors else None
+    unknown: list[dict] = []
+    if not include_unknown:
+        bloggers = load_douyin_bloggers()
+        if bloggers:
+            # 只有库内登记过抖音博主时才有白名单依据；一个都没有则退回旧口径
+            all_authors, unknown = select_known_authors(all_authors, bloggers)
+
+    wanted = {normalize_author(a) for a in authors} if authors is not None else None
     targets = [
         a for a in all_authors if wanted is None or normalize_author(a["nickname"]) in wanted
     ]
     if limit is not None:
         targets = targets[:limit]
+
+    if unknown:
+        print(
+            f"  ⏭ 跳过 {len(unknown)} 个未登记到博主库的账号："
+            f"{'、'.join(a['nickname'] for a in unknown)}"
+            "（要一起处理请加 --include-unknown-authors）"
+        )
 
     root = post_root or (
         download_root / "douyin" / "post" if download_root else f2_dir / F2_DOWNLOAD_SUBDIR
@@ -1562,6 +1637,7 @@ def run_fetch(
         "failed": failed,
         "results": results,
         "windows": dict(windows),
+        "skipped_authors": [a["nickname"] for a in unknown],
     }
 
 
@@ -1813,6 +1889,12 @@ def main(argv: list[str] | None = None) -> int:
         help="传给 f2 的 --auto-cookie 浏览器名（chrome/chromium/edge…），需先关闭该浏览器",
     )
     parser.add_argument(
+        "--include-unknown-authors",
+        action="store_true",
+        help="连「未登记到博主库」的 f2 账号一起处理（默认跳过）。f2 用户库存的是"
+        "它见过的所有账号，混进来的无关账号（如游戏官方号）默认不下载也不入库",
+    )
+    parser.add_argument(
         "--fetch-limit",
         type=int,
         default=None,
@@ -1965,6 +2047,7 @@ def main(argv: list[str] | None = None) -> int:
             auto_cookie=args.auto_cookie,
             limit=args.fetch_limit,
             since_days=args.since_days,
+            include_unknown=args.include_unknown_authors,
         )
         if fetch.get("error"):
             print(f"  ⚠ {fetch['error']}")
@@ -1973,6 +2056,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"  下载汇总：成功 {fetch['ok']} / 失败 {fetch['failed']}"
                 f"（共 {fetch['total']} 个作者）"
             )
+            if fetch.get("skipped_authors"):
+                print(
+                    f"  跳过未登记账号 {len(fetch['skipped_authors'])} 个："
+                    f"{'、'.join(fetch['skipped_authors'])}"
+                )
             if fetch["failed"]:
                 print("  ⚠ 有作者下载失败（多为风控/cookie 失效），已跳过，稍后可重跑")
         print()
@@ -2020,11 +2108,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"素材库不存在: {db_path}")
         return 1
 
+    # 未显式指定作者时把导入范围收窄到「库里已登记的博主」：下载目录里可能留着
+    # 无关账号的产物（f2 用户库混进来的账号），默认不让它们入库
+    # （与 web 一键获取同一条口径，见 select_known_authors）。库内一个抖音博主都
+    # 没有时没有白名单依据，退回旧口径（全部导入）。
+    if authors_filter:
+        plan_authors: set[str] | None = authors_filter
+    elif args.include_unknown_authors or not bloggers:
+        plan_authors = None
+    else:
+        known, unknown = select_known_authors(load_f2_authors(args.f2_dir), bloggers)
+        plan_authors = {normalize_author(a["nickname"]) for a in known}
+        if unknown:
+            print(
+                f"   ⏭ 未登记账号的产物不入库：{'、'.join(a['nickname'] for a in unknown)}"
+                "（要一起导入请加 --include-unknown-authors）"
+            )
+
     decisions, skipped, deferred_works = build_import_plan(
         files=files,
         dedup=dedup,
         bloggers=bloggers,
-        authors=authors_filter,
+        authors=plan_authors,
         limit=args.limit,
         skip_live=args.skip_live,
         hash_cache=hash_cache,

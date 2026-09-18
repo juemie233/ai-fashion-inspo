@@ -828,3 +828,124 @@ async def test_concurrent_creation_creates_single_task(client):
 
     async with async_session() as db:
         assert await _count_f2_tasks(db) == 1
+
+
+# ── 未登记账号过滤（f2 用户库混进无关账号：网易第五人格事故）──
+
+
+def test_f2_status_marks_unregistered_f2_accounts(
+    client, f2_tree, create_blogger, monkeypatch
+):
+    """状态里要列出「f2 有、库里没有」的账号：卡片据此提示默认跳过它们。"""
+    import sqlite3 as _sq
+
+    f2_dir, _root = f2_tree
+    create_blogger("里香", platform="douyin")
+    _make_author_db(f2_dir)  # 插入 里香1√
+    conn = _sq.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute("INSERT INTO user_info_web VALUES ('sec_game', '网易第五人格', 171)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    status = task_runner.f2_import_status()
+
+    assert status["available"] is True
+    assert status["authors"] == 1  # 只算已登记的那个
+    assert status["unknown_authors"] == ["网易第五人格"]
+    assert "1 个" in status["reason"] and "未登记" in status["reason"]
+
+
+def test_create_f2_import_passes_include_unknown(client):
+    """高级选项「包含未登记账号」要能透传到任务参数（执行阶段据此放开过滤）。"""
+    body = client.post(
+        "/api/scraper/f2-import",
+        params={"fetch": False, "include_unknown_authors": True},
+    ).json()
+
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+
+    assert opts["include_unknown_authors"] is True
+
+
+async def test_execute_f2_import_skips_unregistered_author_dirs(
+    client, f2_tree, create_blogger
+):
+    """回归：库里只登记了 里香 时，下载目录里别的作者目录不入库。
+
+    事故现场：f2 用户库混进「网易第五人格」官方号，被一键获取原样下载并入库 142 条
+    （0 条博主绑定），而界面写的是「增量下载已采集博主的新作品」。
+    """
+    from app.models.task import TaskQueue
+
+    create_blogger("里香", platform="douyin")
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=False)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["plan"]["files"] == 2  # 只有 里香1√ 的两张图
+        skipped = stored.result["plan"]["skipped"]
+        assert skipped["作者不在指定范围（--authors / 已登记博主）"] == 1
+        assert stored.result["import"]["imported"] == 2
+
+
+async def test_execute_f2_import_include_unknown_restores_old_scope(
+    client, f2_tree, create_blogger
+):
+    """勾选「包含未登记账号」后退回旧口径：目录里的其他作者照常入库。"""
+    from app.models.task import TaskQueue
+
+    create_blogger("里香", platform="douyin")
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=False, include_unknown_authors=True
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["plan"]["files"] == 3
+        assert stored.result["import"]["imported"] == 3
+
+
+async def test_execute_f2_import_download_skips_unregistered_accounts(
+    client, f2_tree, create_blogger, monkeypatch
+):
+    """下载阶段同样按白名单收窄：未登记账号不会被调 f2 子进程（省流量 + 免风控）。"""
+    import sqlite3 as _sq
+
+    from app.models.task import TaskQueue
+    from app.services.task_runners import f2_import as runner
+
+    f2_dir, _root = f2_tree
+    create_blogger("里香", platform="douyin")
+    _make_author_db(f2_dir)
+    conn = _sq.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute("INSERT INTO user_info_web VALUES ('sec_game', '网易第五人格', 171)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["fetch"]["total"] == 1
+        assert stored.result["fetch"]["skipped_authors"] == ["网易第五人格"]
+
+    assert len(commands) == 1
+    assert all("sec_game" not in " ".join(cmd) for cmd in commands)

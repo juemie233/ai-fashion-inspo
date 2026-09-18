@@ -37,6 +37,9 @@ async def create_f2_import(
     since_days: int | None = Query(
         None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史；缺省取配置）"
     ),
+    include_unknown_authors: bool = Query(
+        False, description="是否连未登记到博主库的 f2 账号一起处理（默认跳过）"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -56,6 +59,9 @@ async def create_f2_import(
         skip_live: 跳过 live 实况的分段视频。
         fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
         make_thumbnails: 是否生成缩略图（关掉更快，但列表页缺预览图）。
+        include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
+            默认 False——f2 用户库存的是它见过的所有账号，实测混进过网易第五人格
+            这类官方号并被原样入库；默认只处理能对上游记博主的账号。
         since_days: f2 只翻最近 N 天的作品。**别轻易用 0**：`-i all` 会让 f2 把
             作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
@@ -83,6 +89,7 @@ async def create_f2_import(
         fetch_limit=fetch_limit,
         make_thumbnails=make_thumbnails,
         since_days=since_days,
+        include_unknown_authors=include_unknown_authors,
     )
     if task is None:
         return {
