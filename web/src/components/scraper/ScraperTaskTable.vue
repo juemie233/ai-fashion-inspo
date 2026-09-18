@@ -53,7 +53,11 @@ const sortOptions = [
   { label: '新增最多', value: 'most_added' },
 ]
 
-const guideSteps = ['在上方输入关键词，选择平台', '点击「开始采集」创建任务', '完成后可在素材库中查看结果']
+const guideSteps = [
+  '在上方输入关键词，选择平台',
+  '点击「开始采集」创建任务',
+  '完成后可在素材库中查看结果',
+]
 
 function onFilterPlatformChange(v: unknown) {
   emit('update:filterPlatform', (v as string) ?? '')
@@ -76,52 +80,118 @@ function onPageChange(page: number) {
 </script>
 
 <template>
-<a-card title="采集任务历史" size="small">
-  <template #extra>
-    <a-space align="center" size="small">
-      <span v-if="stats.total>0" style="font-size:12px;color:#666">共 <b>{{ stats.total }}</b> · 成功 <b style="color:#18a058">{{ stats.completed }}</b> · 失败 <b style="color:#d03050">{{ stats.failed }}</b> · {{ stats.rate }}%</span>
-      <a-select :model-value="filterPlatform" :options="platformOptions" size="mini" style="width:110px" @change="onFilterPlatformChange" />
-      <a-select :model-value="filterStatus" :options="filterOptions" size="mini" style="width:100px" @change="onFilterStatusChange" />
-      <a-select :model-value="sort" :options="sortOptions" size="mini" style="width:100px" @change="onSortChange" />
-      <a-button v-if="hasFailed" size="mini" type="outline" status="warning" :loading="retrying" @click="emit('retry-failed')">重试失败</a-button>
-      <a-popconfirm content="确定清空所有任务记录？" @ok="emit('clear-all')">
-        <a-button size="mini" :loading="clearing" type="outline" status="danger">清空</a-button>
-      </a-popconfirm>
-    </a-space>
-  </template>
-
-  <a-table
-    v-if="tasks.length"
-    :columns="columns"
-    :data="tasks"
-    :bordered="false"
-    :expanded-row-render="expandedRowRender"
-    :row-key="(r: ScraperTask) => String(r.id)"
-    size="small"
-    :pagination="false"
-  />
-
-  <a-empty v-else description="暂无采集任务">
-    <template #description>
-      <div style="max-width:420px;margin:0 auto;text-align:left">
-        <div v-for="(s, i) in guideSteps" :key="i" style="display:flex;align-items:center;gap:10px;padding:8px 0;color:#555;font-size:14px">
-          <span style="width:24px;height:24px;border-radius:50%;background:#2080f0;color:#fff;font-size:12px;font-weight:bold;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ i + 1 }}</span>
-          <span>{{ s }}</span>
-        </div>
-        <div style="margin-top:16px;padding:10px;background:#f0f9eb;border-radius:6px;color:#666;font-size:12px">💡 提示：小红书和抖音反爬严格，推荐使用<b>浏览器插件</b>一键抓取。</div>
-      </div>
+  <a-card title="CDP 采集历史（浏览器搜索 / 博主页）" size="small">
+    <template #extra>
+      <a-space align="center" size="small">
+        <span v-if="stats.total > 0" style="font-size: 12px; color: #666"
+          >共 <b>{{ stats.total }}</b> · 成功 <b style="color: #18a058">{{ stats.completed }}</b> ·
+          失败 <b style="color: #d03050">{{ stats.failed }}</b> · {{ stats.rate }}%</span
+        >
+        <a-select
+          :model-value="filterPlatform"
+          :options="platformOptions"
+          size="mini"
+          style="width: 110px"
+          @change="onFilterPlatformChange"
+        />
+        <a-select
+          :model-value="filterStatus"
+          :options="filterOptions"
+          size="mini"
+          style="width: 100px"
+          @change="onFilterStatusChange"
+        />
+        <a-select
+          :model-value="sort"
+          :options="sortOptions"
+          size="mini"
+          style="width: 100px"
+          @change="onSortChange"
+        />
+        <a-button
+          v-if="hasFailed"
+          size="mini"
+          type="outline"
+          status="warning"
+          :loading="retrying"
+          @click="emit('retry-failed')"
+          >重试失败</a-button
+        >
+        <a-popconfirm content="确定清空所有任务记录？" @ok="emit('clear-all')">
+          <a-button size="mini" :loading="clearing" type="outline" status="danger">清空</a-button>
+        </a-popconfirm>
+      </a-space>
     </template>
-  </a-empty>
 
-  <a-pagination
-    v-if="total > pageSize"
-    style="margin-top:12px;justify-content:flex-end"
-    :current="page"
-    :page-size="pageSize"
-    :total="total"
-    @change="onPageChange"
-  />
+    <a-table
+      v-if="tasks.length"
+      :columns="columns"
+      :data="tasks"
+      :bordered="false"
+      :expanded-row-render="expandedRowRender"
+      :row-key="(r: ScraperTask) => String(r.id)"
+      size="small"
+      :pagination="false"
+    />
 
-  <slot name="extra" />
-</a-card>
+    <a-empty v-else description="暂无采集任务">
+      <template #description>
+        <div style="max-width: 420px; margin: 0 auto; text-align: left">
+          <div
+            v-for="(s, i) in guideSteps"
+            :key="i"
+            style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              padding: 8px 0;
+              color: #555;
+              font-size: 14px;
+            "
+          >
+            <span
+              style="
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                background: #2080f0;
+                color: #fff;
+                font-size: 12px;
+                font-weight: bold;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-shrink: 0;
+              "
+              >{{ i + 1 }}</span
+            >
+            <span>{{ s }}</span>
+          </div>
+          <div
+            style="
+              margin-top: 16px;
+              padding: 10px;
+              background: #f0f9eb;
+              border-radius: 6px;
+              color: #666;
+              font-size: 12px;
+            "
+          >
+            💡 提示：小红书和抖音反爬严格，推荐使用<b>浏览器插件</b>一键抓取。
+          </div>
+        </div>
+      </template>
+    </a-empty>
+
+    <a-pagination
+      v-if="total > pageSize"
+      style="margin-top: 12px; justify-content: flex-end"
+      :current="page"
+      :page-size="pageSize"
+      :total="total"
+      @change="onPageChange"
+    />
+
+    <slot name="extra" />
+  </a-card>
 </template>
