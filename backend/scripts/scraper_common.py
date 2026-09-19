@@ -393,12 +393,28 @@ XHS_VIDEO_HOST = "https://sns-video-bd.xhscdn.com"
 """图片 URL 的处理指令后缀（如 !nd_dft_wgth_webp_3）：取原图前需剥离。"""
 _XHS_IMAGE_SUFFIX_RE = re.compile(r"![^/?]*$")
 
+"""网页图主机特征：sns-webpic-* 的路径是 `/{日期}/{hash}/{真实路径...}`。
+
+原图（sns-img-*）只认 `{真实路径...}`：前两段必须剥掉，**中间路径段必须保留**。
+"""
+_XHS_WEBPIC_HOST_HINT = "sns-webpic-"
+
 
 def xhs_image_trace_id(url: str) -> str:
     """从任意 xhscdn 图片 URL 提取图片 trace_id（原图直链的路径部分）。
 
-    处理三件事：剥离 query 与 `!nd_...` 处理指令、去掉末尾斜杠、
-    保留浏览器端上传图片多出的 `spectrum/` 层级。
+    处理四件事：剥离 query 与 `!nd_...` 处理指令、去掉末尾斜杠、剥掉网页图的
+    `/{日期}/{hash}/` 前置段、保留其余路径段。
+
+    **为什么要保留中间路径段**（2026-09 实测修正）：网页图路径形如
+    `/{日期}/{hash}/notes_pre_post/{fileId}!nd_dft_...`，原图直链必须是
+    `https://sns-img-*.xhscdn.com/notes_pre_post/{fileId}`；此前只取最后一段
+    会得到 `https://sns-img-*.xhscdn.com/{fileId}`，**四个原图 CDN 全部 404**
+    （实测 HTTP 404），候选链于是静默回落到末尾兜底的网页压缩图——同一张图
+    206KB vs 原图 479KB，只有 43% 体积，采集到的「素材」长期是压缩图。
+
+    剥离条件保守化：仅当主机是 `sns-webpic-*` **且**路径段 ≥3 时才剥前两段，
+    其余形态（已是原图直链、`spectrum/` 上传图、路径较浅的 URL）维持原有取法。
 
     Args:
         url: 图片 URL。
@@ -410,7 +426,13 @@ def xhs_image_trace_id(url: str) -> str:
     cleaned = _XHS_IMAGE_SUFFIX_RE.sub("", cleaned).rstrip("/")
     if not cleaned:
         return ""
-    seg = cleaned.split("/")[-1]
+    parts = [p for p in cleaned.split("/") if p]
+    if (
+        len(parts) >= 5
+        and _XHS_WEBPIC_HOST_HINT in parts[1]
+    ):
+        return "/".join(parts[4:])
+    seg = parts[-1] if parts else ""
     if not seg:
         return ""
     return f"spectrum/{seg}" if "/spectrum/" in cleaned else seg

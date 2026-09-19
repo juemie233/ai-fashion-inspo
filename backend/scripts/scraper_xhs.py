@@ -30,6 +30,7 @@ from .scraper_common import (
     xhs_video_urls_from_page_state,
 )
 from .scraper_download import download_batch, download_videos, _HASHTAG_SAVED_COUNT
+from .scraper_xhs_api import note_url_of, try_fetch_blogger_notes
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -610,16 +611,24 @@ def run_blogger_mode(
     existing_url_set: set[str],
     content_hash_set: set[str],
 ) -> tuple[int, int, list[dict]]:
-    """按博主采集：打开博主主页收集笔记 → 逐个详情页提取全量内容并入库。
+    """按博主采集：取博主笔记列表 → 逐篇提取全量内容并入库。
 
-    每个笔记提取：轮播图全部图片 + 视频（含封面 poster）+ 正文 caption；
+    每条笔记提取：轮播图全部图片 + 视频（含封面 poster）+ 正文 caption；
     入库时通过 meta_map 同步写入 caption 并建立 inspiration_bloggers 博主关联。
 
-    风控缓解：详情页访问间隔 2~4s（可经 config["detail_delay"] 调整）；
-    单个详情页提取失败跳过并记录，不影响其余笔记。
+    两条取数路径（自动选择，见 `scraper_xhs_api`）：
+
+    1. **站内接口**（首选）：`user_posted` 拿笔记列表 + 详情页 HTML 的
+       `noteDetailMap` 拿全量图片。不渲染详情页 → 绕开渲染层风控，且轮播图
+       一次拿全（主页卡片只渲染封面）。
+    2. **Playwright 详情页**（回退）：接口不可用/失败时走原路径，行为与改造前
+       完全一致——改造不降低既有采集能力。
+
+    风控缓解：详情页/接口访问间隔 2~4s（可经 config["detail_delay"] 调整）；
+    单条提取失败跳过并记录，不影响其余笔记；致命风控停止整轮（不重试）。
 
     Args:
-        page: Playwright 页面对象。
+        page: Playwright 页面对象（回退路径使用；走接口时不需要）。
         task_id: 采集任务 ID。
         blogger_id: 博主 ID。
         config: 任务配置字典。
@@ -627,7 +636,7 @@ def run_blogger_mode(
         videos_dir: 视频存储目录。
         today: 日期字符串。
         httpx_module: httpx 模块。
-        browser_cookies: 浏览器 Cookie 字典。
+        browser_cookies: 浏览器 Cookie 字典（接口路径的签名同样需要）。
         existing_url_set: 已存在 URL 集合。
         content_hash_set: 内容 MD5 集合。
 
@@ -650,10 +659,39 @@ def run_blogger_mode(
     detail_delay = float(config.get("detail_delay", 3.0))  # 详情页间隔（秒）
 
     print(f"按博主采集：blogger_id={blogger_id}，目标 {max_notes} 篇笔记")
-    note_urls = collect_blogger_note_urls(
-        page, profile_url, max_notes, max_scrolls
+
+    # 优先走站内接口（scraper_xhs_api）：不渲染详情页 → 绕开渲染层风控，
+    # 且 `noteDetailMap` 含轮播图全量（主页卡片只渲染封面）。接口不可用/失败
+    # 自动回退原有详情页路径；致命风控照常抛出停止整轮。
+    api_result = try_fetch_blogger_notes(
+        profile_url,
+        config.get("platform_user_id") or "",
+        browser_cookies,
+        max_notes,
+        detail_delay,
     )
-    print(f"  收集到 {len(note_urls)} 篇笔记")
+    api_scraper = None
+    api_notes_by_url: dict[str, dict] = {}
+    if api_result:
+        api_scraper, api_notes = api_result
+        for note in api_notes:
+            url = note_url_of(note)
+            if url:
+                api_notes_by_url[url] = note
+        note_urls = list(api_notes_by_url)
+        print(f"  接口获取 {len(note_urls)} 篇笔记（不打开详情页）")
+    else:
+        note_urls = collect_blogger_note_urls(
+            page, profile_url, max_notes, max_scrolls
+        )
+        print(f"  收集到 {len(note_urls)} 篇笔记")
+
+    def _close_api() -> None:
+        """关闭接口客户端（幂等；异常退出路径同样需要释放连接池）。"""
+        nonlocal api_scraper
+        if api_scraper is not None:
+            api_scraper.close()
+            api_scraper = None
 
     items_found = 0
     items_added = 0
@@ -663,13 +701,21 @@ def run_blogger_mode(
 
     for i, note_url in enumerate(note_urls, 1):
         try:
-            detail = extract_note_detail(page, note_url)
+            if api_scraper is not None:
+                note = api_notes_by_url[note_url]
+                detail = api_scraper.note_detail(
+                    str(note.get("note_id") or ""),
+                    str(note.get("xsec_token") or ""),
+                )
+            else:
+                detail = extract_note_detail(page, note_url)
         except ScraperBlockedError as e:
             notes_log.append({"note": note_url, "error": str(e)[:200]})
             if e.is_fatal:
                 # 致命风控（验证码/登录墙/限流/账号异常）：继续访问只会加重风控，
                 # 抛给调用方停止整轮（风控类错误不重试）
                 print(f"  ⛔ {e.message}，停止本轮采集")
+                _close_api()
                 raise
             # 非致命（笔记已删除等）：跳过本篇，继续其余笔记
             print(f"  [{i}/{len(note_urls)}] 跳过：{e.message}")
@@ -761,4 +807,5 @@ def run_blogger_mode(
             f"本次采集命中话题 {_HASHTAG_SAVED_COUNT[0]} 个"
             f"（已存档 scraper_hashtags，可用于定时采集关键词）"
         )
+    _close_api()
     return items_found, items_added, notes_log

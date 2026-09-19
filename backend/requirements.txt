@@ -22,6 +22,12 @@ httpx==0.28.1
 # Scraping
 playwright==1.49.1
 
+# 小红书站内接口签名（纯 Python 实现 x-s / x-s-common，MIT 许可）
+# 供 backend/scripts/scraper_xhs_api.py 使用：不渲染详情页即可拿轮播图全量。
+# 未安装时该路径自动回退 Playwright（见 scraper_xhs_api.xhs_api_available）。
+# 传递依赖 pycryptodome。
+xhshow==0.2.0
+
 # Utilities
 aiofiles==24.1.0
 
