@@ -5,9 +5,10 @@
 1. 本地互推：profile_url ↔ platform_user_id 可互相推导（主页 URL 含用户 ID）——
    「有 URL 无 ID」从 URL 提取，「有 ID 无 URL」直接拼接，均无需请求；
 2. 两者都缺：任务执行器先拉一次「我关注的用户」列表（一次请求拿到全部关注账号的
-   uid），这里按**昵称归一化**匹配取 uid 拼主页 URL。为什么不用搜索：实测小红书的
-   用户搜索无法按「小红书号」定位用户（返回名称相近的无关用户），而素材库里的博主
-   正是从这份关注列表导入的，昵称可以一一对应；
+   uid），这里按**昵称归一化**匹配取 uid 拼主页 URL（归一化后重名的昵称整条剔除，
+   宁可不填也不写错人）。为什么不用搜索：实测小红书的用户搜索无法按「小红书号」
+   定位用户（返回名称相近的无关用户），而素材库里的博主正是从这份关注列表导入的，
+   昵称可以一一对应；
 3. 单博主失败不阻塞整体；不覆盖已有 platform_user_id；
 4. 结果三态：
    - updated：成功补全
@@ -330,13 +331,29 @@ def build_following_index(rows: list[dict]) -> dict[str, str]:
 
     Returns:
         归一化昵称 → uid；缺昵称或缺 uid 的行跳过。
+
+    「归一化后重名」的昵称**整条剔除**：不同 uid 归一化到同一昵称时无法确定是谁，
+    宁可落入「不在关注列表」的跳过分支由用户手工填 ID，也不能随便挑一个把错误的
+    uid 永久写进库（如实测关注列表里的 `oo` 与 `oo-` 都会归一化成 `oo`）。
     """
     index: dict[str, str] = {}
+    ambiguous: set[str] = set()
     for row in rows or []:
         nickname = str(row.get("nickname") or "").strip()
         uid = str(row.get("uid") or "").strip()
-        if nickname and uid:
-            index[_normalize_name(nickname)] = uid
+        if not nickname or not uid:
+            continue
+        key = _normalize_name(nickname)
+        if not key:
+            continue
+        if key in index and index[key] != uid:
+            ambiguous.add(key)
+            continue
+        index[key] = uid
+    for key in ambiguous:
+        index.pop(key, None)
+    if ambiguous:
+        logger.warning(f"关注列表有 {len(ambiguous)} 个归一化重名昵称，已排除不参与匹配")
     return index
 
 

@@ -70,14 +70,27 @@ def test_build_following_index_skips_incomplete_rows():
             {"nickname": "  空格博  ", "uid": "u2"},
             {"nickname": "没Uid博", "uid": ""},
             {"nickname": "", "uid": "u3"},
-            {"nickname": "覆盖博", "uid": "old"},
-            {"nickname": "覆盖博", "uid": "new"},
+            {"nickname": "同号博", "uid": "u4"},
+            {"nickname": "同号博", "uid": "u4"},  # 同一 uid 重复出现无害
         ]
     )
     assert index["kitttty"] == "u1"
     assert index["空格博"] == "u2"
-    assert index["覆盖博"] == "new"
+    assert index["同号博"] == "u4"
     assert len(index) == 3  # 缺昵称/缺 uid 的行被丢弃
+
+
+def test_build_following_index_drops_ambiguous_nicknames():
+    """归一化重名的不同用户整条剔除（宁可不填，也不写错 uid）。"""
+    index = build_following_index(
+        [
+            {"nickname": "oo", "uid": "u1"},
+            {"nickname": "oo-", "uid": "u2"},  # 归一化后同为 oo
+            {"nickname": "唯一博", "uid": "u3"},
+        ]
+    )
+    assert "oo" not in index
+    assert index == {"唯一博": "u3"}
 
 
 def test_normalize_cookies():
