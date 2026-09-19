@@ -17,6 +17,7 @@ import ScraperResultsPanel from '@/components/scraper/ScraperResultsPanel.vue'
 import ScraperConfigTab from '@/components/scraper/ScraperConfigTab.vue'
 import ScraperScheduleTab from '@/components/scraper/ScraperScheduleTab.vue'
 import ScraperStatsPanel from '@/components/scraper/ScraperStatsPanel.vue'
+import ScraperRoiPanel from '@/components/scraper/ScraperRoiPanel.vue'
 import F2ImportCard from '@/components/scraper/F2ImportCard.vue'
 import F2LikeCard from '@/components/scraper/F2LikeCard.vue'
 import F2TaskHistory from '@/components/scraper/F2TaskHistory.vue'
@@ -353,6 +354,9 @@ onUnmounted(() => {
       <!-- 采集任务 Tab：按采集通道分区（抖音 f2 通道 / CDP 通道），各带自己的历史 -->
       <a-tab-pane key="tasks" title="采集任务">
         <ScraperStatsPanel />
+
+        <!-- 采集 ROI 漏斗：按关键词 / 博主看「采集量 → 入库量 → 合格率」 -->
+        <ScraperRoiPanel />
 
         <!-- ══ 通道 A：抖音 · f2 增量下载（已登记博主的主页作品 + 我的喜欢）══ -->
         <div class="channel-title">抖音 · f2 通道</div>

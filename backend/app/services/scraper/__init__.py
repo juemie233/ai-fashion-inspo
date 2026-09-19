@@ -7,6 +7,7 @@
 - ``cookies.py``：平台 Cookie 导入 / 状态 / 删除
 - ``extension.py``：浏览器插件会话任务记录
 - ``results.py``：统计看板 / 任务结果列表 / 结果批量移入垃圾桶
+- ``roi.py``：采集 ROI 漏斗（按关键词 / 博主拆解采集量 → 入库量 → 合格率）
 - ``f2_results.py``：f2 一键获取的批次结果浏览与审查（按批次清单定位本批素材）
 - ``f2_bloggers.py``：f2 入库后补建来源作者博主并绑定素材（自动登记，不进下载白名单）
 
@@ -67,6 +68,7 @@ from app.services.scraper.results import (
     get_scraper_stats,
     get_task_results,
 )
+from app.services.scraper.roi import get_collection_roi
 from app.services.scraper.f2_results import (
     RESULT_FILTERS,
     delete_f2_task_results,
@@ -129,6 +131,8 @@ __all__ = [
     "batch_delete_task_results",
     "get_scraper_stats",
     "get_task_results",
+    # roi（采集 ROI 漏斗）
+    "get_collection_roi",
     # f2 结果浏览与审查（批次清单口径）
     "RESULT_FILTERS",
     "delete_f2_task_results",

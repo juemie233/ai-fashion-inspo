@@ -360,6 +360,21 @@ async def scraper_stats(days: int = 30) -> dict:
     return await scraper_service.get_scraper_stats(days)
 
 
+@router.get("/collection-roi")
+async def collection_roi(
+    days: int = Query(180, ge=1, le=3650, description="统计窗口（天）"),
+    limit: int = Query(20, ge=1, le=200, description="每个维度最多返回多少行"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """采集 ROI 漏斗：按关键词 / 博主拆解「采集量 → 入库量 → 质量合格率」。
+
+    两个维度的取数口径不同，都不猜、不摊派：CDP 采集走任务级 `items_found`/`items_added`
+    并用素材的 `scraper_task_id` 归属合格数；f2 通道没有该关联，按素材的 `source_author`
+    聚合。样本为 0 时合格率返回 `null`（前端显示「—」），具体边界见 `coverage.notes`。
+    """
+    return await scraper_service.get_collection_roi(db, days=days, limit=limit)
+
+
 @router.get("/cdp-check/{port}")
 async def check_cdp_endpoint(port: int) -> dict:
     """检查指定端口的 Chrome 调试连接是否就绪。"""

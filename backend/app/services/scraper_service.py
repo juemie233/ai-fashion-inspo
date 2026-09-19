@@ -6,6 +6,7 @@
 - ``scraper/cookies.py``：平台 Cookie 导入 / 状态 / 删除
 - ``scraper/extension.py``：浏览器插件会话任务记录
 - ``scraper/results.py``：统计看板 / 任务结果列表 / 结果批量移入垃圾桶
+- ``scraper/roi.py``：采集 ROI 漏斗（按关键词 / 博主拆解采集量 → 入库量 → 合格率）
 
 本文件保留 ``from app.services.scraper_service import ...`` 的既有引用路径
 （含 ``_check_cdp`` / ``_scraper_pids`` 等内部符号），仅做再导出。

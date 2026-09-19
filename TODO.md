@@ -176,18 +176,6 @@
 
 - 主画廊全程可键盘操作；深色模式全页面无白底残留；窄屏（≤900px）侧边栏自动折叠
 
-### 【任务】统计洞察增强：采集 ROI 漏斗
-
-**背景：** 采集侧只看得到总数，看不到钱花在哪。`backend/app/services/scraper/results.py` 的统计是「最近 30 天 + 按平台」聚合，没有关键词/博主维度的转化视角。
-
-> **已完成**：标签使用时间趋势（`GET /api/tags/{id}/trend`，月/周/日，标签分析弹窗与网络图面板已接入）与看板 CSV 导出（数据洞察导出全库素材、AI 分析历史导出）。
-
-**目标：**
-
-- 采集 ROI：按关键词/博主维度统计「采集数 → 入库数 → 质量审核合格率」漏斗
-
-**验收标准：** 能对比不同采集关键词/博主的入库转化率与合格率。
-
 ### 【任务】人脸识别增强
 
 **背景：** face-service（InsightFace buffalo_l）已支持注册/匹配/批量，**视频关键帧人脸检测也已落地**（`task_runners/face_scan.py` 已把扫描范围从 `media_type == "image"` 放开为 image + video，按 `face_scan_video_max_frames` 取帧）。仍缺两点：匹配阈值全局固定 0.5（`backend/app/config.py:103` 的 `face_match_threshold`）无按人自适应；`face_service_url` 未配置或子服务离线时静默降级（`config.py:101`），前端只有接口报错、无显式提示。
