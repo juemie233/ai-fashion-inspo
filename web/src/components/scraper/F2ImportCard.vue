@@ -107,6 +107,38 @@ async function onSubmit() {
     await loadStatus()
   }
 }
+
+/**
+ * 「按博主全量下载」：给一个博主，下她全部作品。
+ *
+ * 为什么需要独立入口：f2 的下载目标**只来自它自己的用户库**，库里没有的账号
+ * 跑不到——从「我的喜欢」里发现一个新博主时，走「一键获取素材」会得到
+ * 「下载 0 个作者 + 入库 0」。这个入口用主页链接直接点名，不依赖 f2 用户库。
+ */
+const profileText = ref('')
+
+/** 逗号/空白分隔 → 数组；过滤空项 */
+const profileList = computed(() =>
+  profileText.value
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
+)
+const canSubmitProfile = computed(() => profileList.value.length > 0)
+
+async function onSubmitProfile() {
+  const taskId = await submit({
+    fetch: true,
+    profiles: profileList.value,
+    // 点名博主只下她，不套「已登记博主」白名单（后端已保证），也不带其他筛选条件
+    make_thumbnails: makeThumbnails.value,
+  })
+  if (taskId) {
+    profileText.value = ''
+    emit('submitted')
+    await loadStatus()
+  }
+}
 </script>
 
 <template>
@@ -129,6 +161,34 @@ async function onSubmit() {
       >
         {{ fetchFirst ? '一键获取素材' : '仅入库已下载' }}
       </a-button>
+    </div>
+
+    <!-- 按博主全量下载：从「我的喜欢」里发现新博主时的入口（f2 用户库里没有也能下） -->
+    <div class="f2-profile">
+      <div class="f2-profile-title">按博主全量下载</div>
+      <div class="f2-profile-row">
+        <a-input
+          v-model="profileText"
+          placeholder="博主主页链接 或 sec_user_id（如 https://www.douyin.com/user/MS4wLjABAAAA…，多个用逗号分隔）"
+          allow-clear
+        />
+        <a-button
+          type="outline"
+          :loading="submitting"
+          :disabled="!canSubmitProfile"
+          @click="onSubmitProfile"
+        >
+          下载她全部作品
+        </a-button>
+      </div>
+      <div class="f2-profile-tip">
+        从「我的喜欢」里发现一个没订阅过的博主？用这里。f2 只认它自己见过的账号，
+        所以「一键获取素材」下不了新博主（会得到 0 个作者）；这个入口直接按主页链接
+        点名，**首次自动翻全量**（不是只拿最近几天），下完自动入库。
+        <br />
+        ⚠ 抖音号（如 72906514384）与 v.douyin.com 短链不支持——请填完整主页链接里的
+        <code>user/</code> 后面那段。
+      </div>
     </div>
 
     <!-- 可用性状态：不可用时说明原因（f2 未装 / 目录缺失 / 用户库为空 / 对不上博主） -->
@@ -272,5 +332,41 @@ async function onSubmit() {
 .f2-tip {
   font-size: 12px;
   color: #9ca3af;
+}
+
+/* 「按博主全量下载」区块：与上方的增量入口用左侧竖线区分开 */
+.f2-profile {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-primary-light-3, #94bfff);
+  background: #f8faff;
+  border-radius: 4px;
+}
+.f2-profile-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 8px;
+}
+.f2-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.f2-profile-row :deep(.arco-input-wrapper) {
+  flex: 1;
+  min-width: 260px;
+}
+.f2-profile-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8a8f99;
+  line-height: 1.8;
+}
+.f2-profile-tip code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #f2f3f5;
 }
 </style>

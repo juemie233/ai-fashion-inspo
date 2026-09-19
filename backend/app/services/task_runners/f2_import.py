@@ -68,6 +68,7 @@ async def create_f2_import_task(
     like_user: str | None = None,
     register_bloggers: bool = True,
     like_max_counts: int | None = None,
+    profiles: list[str] | None = None,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -92,6 +93,9 @@ async def create_f2_import_task(
             「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
         like_max_counts: 「我的喜欢」最多翻多少条（None 表示执行时取
             ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。只对 like 模式生效。
+        profiles: **按博主全量下载**——博主主页链接或 sec_user_id 列表。非空时只下
+            这些博主，且**不要求它们已在 f2 用户库里**（f2 只认自己见过的账号）；
+            首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -115,6 +119,7 @@ async def create_f2_import_task(
             "like_user": like_user,
             "register_bloggers": register_bloggers,
             "like_max_counts": like_max_counts,
+            "profiles": list(profiles or []),
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -524,6 +529,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "like_user",
             "register_bloggers",
             "like_max_counts",
+            "profiles",
         )
         if key in raw_result
     }
@@ -548,6 +554,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         if _raw_max is not None
         else int(settings.f2_like_max_counts or 0),
     )
+    # 按博主全量下载：显式点名的博主（主页链接 / sec_user_id）。非空时**只下这些**，
+    # 且不需要它们已在 f2 用户库里——f2 只认自己见过的账号，这是那个限制的出口。
+    profiles = [str(p).strip() for p in (opts.get("profiles") or []) if str(p).strip()]
     register_bloggers = bool(opts.get("register_bloggers", True))
     since_days = opts.get("since_days")
     if since_days is None:
@@ -688,18 +697,52 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
                 "请先手动跑一次 f2 确认能下载，且 -u 填的是**你自己**的主页链接"
             )
 
-    # ── 阶段 1b：发布模式——逐作者串行增量下载（子进程放线程）──
+    # ── 阶段 1b：发布模式——逐作者串行下载（子进程放线程）──
     elif fetch_enabled:
         if not f2.f2_available():
             raise RuntimeError(
                 "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
             )
-        targets = known_authors
-        wanted = {f2.normalize_author(a) for a in authors} if authors else None
-        if wanted is not None:
-            targets = [
-                a for a in targets if f2.normalize_author(a["nickname"]) in wanted
-            ]
+        if profiles:
+            # 按博主全量：**显式点名**的博主直接下，不要求它先出现在 f2 用户库里
+            # （f2 只认自己见过的账号，这正是那个限制的出口）。入库白名单同理，
+            # 不能用「已登记博主」那一套——用户已经点名了。
+            parsed = [(raw, f2.profile_author(raw)) for raw in profiles]
+            invalid = [raw for raw, author in parsed if author is None]
+            if invalid:
+                raise RuntimeError(
+                    f"无法识别的博主：{'、'.join(invalid)}。"
+                    "请填完整主页链接（https://www.douyin.com/user/MS4wLjABAAAA…）"
+                    "或 sec_user_id；抖音号与 v.douyin.com 短链不支持"
+                )
+            targets = [author for _raw, author in parsed if author]
+            if not targets:
+                raise RuntimeError("按博主全量下载需要至少一个博主主页链接或 sec_user_id")
+        else:
+            targets = known_authors
+            wanted = {f2.normalize_author(a) for a in authors} if authors else None
+            if wanted is not None:
+                targets = [
+                    a for a in targets if f2.normalize_author(a["nickname"]) in wanted
+                ]
+                # 点名的作者一个都不在 f2 用户库里 → 什么都下不了。**必须响亮失败**：
+                # 任务 351 就是这么静默过去的（请求「唐思瑶ya」不在 f2 用户库，
+                # 下载 0 个作者、入库 0，状态却是 success，用户看不出任何原因）。
+                if not targets:
+                    available = sorted(a["nickname"] for a in known_authors)
+                    raise RuntimeError(
+                        f"这些作者不在 f2 用户库里，无法下载：{'、'.join(sorted(wanted))}。"
+                        "f2 的下载目标只来自它自己的用户库（它只认见过的账号），"
+                        "所以要先让 f2 认识她们——改用卡片里的「按博主全量下载」"
+                        "（填博主主页链接即可，不需要 f2 事先认识），"
+                        "或先手动跑一次 f2 采她的主页。"
+                        + (
+                            f"当前 f2 认识 {len(available)} 个账号：{'、'.join(available[:10])}"
+                            f"{'…' if len(available) > 10 else ''}"
+                            if available
+                            else "当前 f2 用户库为空"
+                        )
+                    )
         if opts.get("fetch_limit"):
             targets = targets[: int(opts["fetch_limit"])]
 
@@ -710,6 +753,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
         # 日期窗口：按作者目录的最近下载时间逐作者计算（见 compute_fetch_interval）。
         # 不给窗口时 f2 会把作者全部历史翻一遍且每页固定 sleep 一次 timeout。
+        # 新博主（无论点名还是首次）没有本地记录 → 该函数给 `all`，即全量。
         post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
         last_download = await asyncio.to_thread(f2.author_last_download, post_root)
 
@@ -717,25 +761,29 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             if await _current_status(db, task.id) not in ("running", "pending"):
                 fetch_summary["aborted"] = True
                 break
-            interval = f2.compute_fetch_interval(
-                since_days, last_download.get(f2.normalize_author(author["nickname"]))
+            display = f2.profile_display(author)
+            last_at = last_download.get(f2.normalize_author(author["nickname"] or ""))
+            # 点名博主用 compute_profile_interval：**首次全量**（否则只拿到最近
+            # since_days 天，用户以为下全了其实没有）
+            interval = (
+                f2.compute_profile_interval(since_days, last_at)
+                if profiles
+                else f2.compute_fetch_interval(since_days, last_at)
             )
             cmd = f2.build_f2_command(
                 author, download_root=f2_dir / "Download", interval=interval
             )
-            logger.info(f"f2 下载 {author['nickname']}（窗口 {interval}）")
+            logger.info(f"f2 下载 {display}（窗口 {interval}）")
             try:
                 rc = await asyncio.to_thread(_run_subprocess, cmd, f2_dir)
             except Exception as exc:  # noqa: BLE001 —— 单作者失败不阻断整批
                 rc = -1
-                logger.warning(f"f2 调用异常（{author['nickname']}）：{exc}")
+                logger.warning(f"f2 调用异常（{display}）：{exc}")
             if rc == 0:
                 fetch_summary["ok"] += 1
             else:
                 fetch_summary["failed"] += 1
-                logger.warning(
-                    f"f2 下载失败（{author['nickname']}）退出码 {rc}，跳过该作者"
-                )
+                logger.warning(f"f2 下载失败（{display}）退出码 {rc}，跳过该作者")
             task.done = index
             task.progress = int(_PROGRESS_AFTER_DOWNLOAD * index / max(1, len(targets)))
             task.updated_at = utcnow()
@@ -766,6 +814,40 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
                 "常见原因：cookie 失效或被风控；请先手动跑一次 f2 确认能下载。"
                 "若只想入库已下载的文件，请改用「仅入库」模式（fetch=False）"
             )
+
+    # 按博主全量下载：下单后 f2 已把新账号写进用户库，此时才能按 sec_user_id 反查
+    # 昵称——入库白名单是按**归一化昵称**匹配的，缺了它就会「下载成功、入库 0」。
+    # 反查不到任何昵称说明这批博主没下成：**响亮失败**，而不是报成功 + 入库 0
+    # （任务 351 就是这么静默过去的：请求的博主不在 f2 用户库，下载 0 个作者、
+    # 入库 0，状态却是 success）。
+    if profiles and fetch_enabled:
+        resolved = await asyncio.to_thread(
+            f2.resolve_profile_nicknames,
+            f2_dir,
+            [str(a.get("sec_user_id") or "") for a in targets],
+        )
+        keys = {f2.normalize_author(n) for n in resolved.values() if n}
+        fetch_summary["profiles"] = [
+            {
+                "sec_user_id": sec,
+                "nickname": resolved.get(sec, ""),
+                "url": f"https://www.douyin.com/user/{sec}",
+            }
+            for sec in (str(a.get("sec_user_id") or "") for a in targets)
+        ]
+        if not keys:
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.progress = _PROGRESS_AFTER_DOWNLOAD
+            await db.commit()
+            raise RuntimeError(
+                "这些博主一个都没下成，因此没有可入库的产物。"
+                "常见原因：cookie 失效（f2 下载需要登录态，且项目不传 "
+                "--auto-cookie，用的是 f2 配置里的 cookie）、主页链接/账号有误，"
+                "或被风控。请先手动跑一次 "
+                "`python -m f2 dy -u <主页链接> -M post -i all` 确认能下载"
+            )
+        # 点名博主的产物就是本次的入库范围（不再套「已登记博主」白名单）
+        plan_authors = keys
 
     # ── 阶段 2：扫描 + 去重计划 ──
     # ⚠ 必须放线程里：scan_directory + build_import_plan 是同步文件/哈希/SQLite 操作

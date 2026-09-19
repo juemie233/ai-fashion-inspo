@@ -236,6 +236,142 @@ def test_create_f2_import_task_endpoint_accepts_like_max_counts(client):
     )
 
 
+# ── 按博主全量下载（profiles：给一个博主 → 下她全部作品）──
+
+SEC = "MS4wLjABAAAACyG6qmWLGt5BbCvwkAfMpEf3nhGwlQqSG1MjwDIGokuUHJnIkwJzxDPu-1RRrfvk"
+
+
+def test_create_f2_import_task_endpoint_accepts_profiles(client):
+    """profiles 透传到任务参数（逗号/空格分隔都认）。"""
+    body = client.post(
+        "/api/scraper/f2-import",
+        params={
+            "fetch": False,
+            "profiles": f"https://www.douyin.com/user/{SEC}, MS4wLjABAAAAother0000",
+        },
+    ).json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+
+    assert opts["profiles"] == [f"https://www.douyin.com/user/{SEC}", "MS4wLjABAAAAother0000"]
+
+
+async def test_execute_f2_import_rejects_authors_absent_from_f2_db(
+    client, f2_tree, monkeypatch
+):
+    """**回归任务 351**：点名的作者不在 f2 用户库里时，必须显式失败并给可操作原因。
+
+    此前的行为是「下载 0 个作者 + 入库 0」但状态 success——用户完全看不出为什么。
+    """
+    f2_dir, _root = f2_tree
+    import sqlite3
+
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, authors=["唐思瑶ya"]
+        )
+        with pytest.raises(RuntimeError) as ei:
+            await task_runner.execute_f2_import(db, task)
+
+    msg = str(ei.value)
+    assert "不在 f2 用户库里" in msg
+    assert "唐思瑶ya" in msg
+    # 文案要指向可操作的出路，而不是只说「失败了」
+    assert "按博主全量下载" in msg
+    # 顺带把 f2 到底认识谁列出来，用户能自己对照
+    assert "里香" in msg
+
+
+async def test_execute_f2_import_profiles_downloads_named_blogger(
+    client, f2_tree, monkeypatch
+):
+    """核心：点名一个 f2 **不认识**的博主，也能下她全部作品并入她的库。
+
+    回归任务 351 的反面——那次请求的博主不在 f2 用户库，结果下载 0 个作者、
+    入库 0，状态却是 success。
+    """
+    f2_dir, root = f2_tree
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    # 下载目录里放一件她的产物（模拟 f2 下载完成）
+    _jpeg(root / "唐思瑶ya" / "2026-01-01 10-00-00_#穿搭_image_1.jpg")
+    # f2 下载后已把账号写进用户库（本用例模拟：按 sec 反查得到昵称）
+    monkeypatch.setattr(
+        f2, "load_f2_authors", lambda _d: [{"sec_user_id": SEC, "nickname": "唐思瑶ya", "aweme_count": 1}]
+    )
+
+    from app.services.task_runners import f2_import as runner
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, profiles=[f"https://www.douyin.com/user/{SEC}"]
+        )
+        await task_runner.execute_f2_import(db, task)
+        task_id = task.id
+
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert cmd[cmd.index("-u") + 1] == f"https://www.douyin.com/user/{SEC}"
+    # 首次点名 → 全量（否则只拿到最近 14 天，用户以为下全了）
+    assert cmd[cmd.index("-i") + 1] == "all"
+
+    # 她的产物要真的入库（入库白名单是本例的另一个回归点：按昵称匹配）
+    result = client.get(f"/api/tasks/{task_id}").json()["result"]
+    assert result["plan"]["files"] == 1
+    assert result["import"]["imported"] == 1
+    assert result["fetch"]["profiles"] == [
+        {"sec_user_id": SEC, "nickname": "唐思瑶ya", "url": f"https://www.douyin.com/user/{SEC}"}
+    ]
+
+
+async def test_execute_f2_import_profiles_fails_loudly_when_nothing_downloaded(
+    client, f2_tree, monkeypatch
+):
+    """**回归任务 351**：一个都没下成时必须显式失败并说明原因，不能报 success + 入库 0。"""
+    _f2_dir, _root = f2_tree
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    from app.services.task_runners import f2_import as runner
+
+    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+    # 反查不到任何昵称 → 说明 f2 没把她登记进用户库（下载没成）
+    monkeypatch.setattr(
+        f2,
+        "resolve_profile_nicknames",
+        lambda _d, _s: {},
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, profiles=[SEC])
+        with pytest.raises(RuntimeError, match="一个都没下成"):
+            await task_runner.execute_f2_import(db, task)
+
+
+async def test_execute_f2_import_profiles_rejects_unsupported_input(
+    client, f2_tree, monkeypatch
+):
+    """抖音号 / 短链要明确报错，而不是拼一个必然失败的 URL 然后静默入库 0。"""
+    _f2_dir, _root = f2_tree
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, profiles=["72906514384"])
+        with pytest.raises(RuntimeError, match="无法识别的博主"):
+            await task_runner.execute_f2_import(db, task)
+
+
 async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeypatch):
     """P0 提速回归：执行阶段必须给 f2 传日期窗口，而不是 `-i all`。
 

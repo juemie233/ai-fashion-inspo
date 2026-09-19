@@ -128,6 +128,12 @@ export interface F2ImportOptions {
    *  到底；点赞列表最新在前，填 100~200 可把日常增量降到一两页。代价是两次运行之间
    *  新增点赞超过该值会漏。注意 f2 的点赞模式**不读 `-i`**，日期窗口在此无效。 */
   like_max_counts?: number
+  /** **按博主全量下载**：博主主页链接或 sec_user_id 列表。
+   *  用途：给一个博主，下她**全部**作品。不要求该博主已在 f2 用户库里（f2 的下载
+   *  目标只来自它自己的用户库，库里没有的账号跑不到，这是那个限制的出口）；
+   *  首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
+   *  抖音号与 v.douyin.com 短链不支持（后端会明确报错）。 */
+  profiles?: string[]
 }
 
 export function useF2Import() {
@@ -160,8 +166,12 @@ export function useF2Import() {
   /** 提交一键获取素材任务，成功返回 task_id（失败返回 null） */
   async function submit(options: F2ImportOptions): Promise<number | null> {
     submitting.value = true
-    // 两个入口共用同一个接口，提示文案按 mode 区分（点赞入口说「一键获取素材」会让人以为点错了）
-    const label = options.mode === 'like' ? '采集我的喜欢' : '一键获取素材'
+    // 三个入口共用同一个接口，提示文案按用途区分（点赞入口说「一键获取素材」会让人以为点错了）
+    const label = options.profiles?.length
+      ? '按博主全量下载'
+      : options.mode === 'like'
+        ? '采集我的喜欢'
+        : '一键获取素材'
     try {
       const { data } = await apiClient.post<{
         task_id: number | null

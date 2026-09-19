@@ -1620,8 +1620,11 @@ def compute_fetch_interval(
         超过 ``since_days`` 没跑过时窗口自动放大到「上次下载之前」，保证长时间
         不跑也不漏作品；``since_days`` 本身作为最小宽度留作安全余量（覆盖上次
         列表里下载失败/只落了 .tmp 的作品）
-      - 没有任何本地下载记录（新博主）→ ``all``，即首次为该作者做全量
-
+      - 没有任何本地下载记录（新博主）→ 按最小窗口取，**首次也是增量而非全量重扫**
+        （见 ``test_compute_fetch_interval_uses_minimum_window``：批量增量时一次跑
+        几十个作者，让新博主也翻完整历史代价太大）。要注意这与
+        :func:`compute_profile_interval` 的口径**故意不同**——后者用于「按博主
+        全量下载」，首次必须是 `all`。
     Args:
         since_days: 最小窗口天数；None/<=0 表示全历史。
         last_download_at: 该作者目录的最近下载时间（:func:`author_last_download`）。
@@ -1639,6 +1642,34 @@ def compute_fetch_interval(
         if widened < start:
             start = widened
     return f"{start:%Y-%m-%d}|{end:%Y-%m-%d}"
+
+
+def compute_profile_interval(
+    since_days: int | None,
+    last_download_at: datetime | None,
+    today: date | None = None,
+) -> str:
+    """「按博主全量下载」的日期窗口：**首次必须全量**（纯函数）。
+
+    为什么不能用 :func:`compute_fetch_interval`：那个是给**批量增量**用的，它刻意
+    让「没有本地下载记录的新博主」也走最小窗口（避免一次给几十个作者翻完整历史，
+    其测试 ``test_compute_fetch_interval_uses_minimum_window`` 锁死了这个行为）。
+
+    但「按博主全量下载」的语义就是**把她的作品拿全**：用户点名一个博主，如果只拿到
+    最近 ``since_days`` 天，他会以为下全了其实没有。所以这里首次给 `all`；已经下过
+    之后再跑就退回窗口增量（f2 本来也会跳过已下载的文件，不容易漏）。
+
+    Args:
+        since_days: 最小窗口天数（None/<=0 表示全历史）。
+        last_download_at: 该作者目录的最近下载时间；None = 从未下过。
+        today: 今天（便于测试注入）。
+
+    Returns:
+        f2 `-i` 参数值。
+    """
+    if last_download_at is None:
+        return "all"
+    return compute_fetch_interval(since_days, last_download_at, today)
 
 
 def load_f2_authors(f2_dir: Path) -> list[dict]:
@@ -1791,6 +1822,80 @@ def like_user_url(raw: str) -> str:
     if value.startswith(("http://", "https://")):
         return value
     return f"https://www.douyin.com/user/{value}"
+
+
+"""抖音 sec_user_id 形态：`MS4wLjABAAAA` 开头 + 长串（网页端与 f2 都用它做用户标识）。"""
+_SEC_USER_ID_RE = re.compile(r"^MS4wLjABAAAA[\w-]{8,}$")
+
+
+def profile_author(raw: str) -> dict | None:
+    """「博主主页链接 / sec_user_id」→ f2 命令所需的作者字典（昵称可能未知）。
+
+    为什么需要这个入口：f2 的下载目标**只从它自己的用户库取**，库里没有的账号
+    根本跑不到。用户给一个博主要「下她全部作品」时，唯一需要的就是她的主页链接
+    或 sec_user_id —— 有了它就能让 f2 去认识这个账号。
+
+    支持两种输入：
+      - 完整主页链接（可带 query）：`https://www.douyin.com/user/MS4wLjABAAAA…`
+      - 裸 sec_user_id：`MS4wLjABAAAA…`
+
+    ⚠ 不接受抖音号（如 `72906514384`）或短链（`v.douyin.com/…`）：前者拼不出主页
+    地址，后者要先跟一次跳转才知道落点——两者都会返回 None，由调用方明确报错，
+    而不是拼一个必然失败的 URL。
+
+    Args:
+        raw: 主页链接或 sec_user_id（允许首尾空白）。
+
+    Returns:
+        ``{"sec_user_id", "nickname", "aweme_count"}``（昵称未知留空串）；
+        无法识别时返回 None。
+    """
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if "/user/" in value:
+        # 去掉 query（分享链接常带 ?...）再取 /user/ 后面那一段，最后去掉尾斜杠。
+        # ⚠ 顺序不能反：先 rstrip 会把 `.../user/` 变成 `.../user`，split 就取不到第二段
+        value = value.split("?", 1)[0].split("/user/", 1)[1]
+        value = value.rstrip("/").split("/")[0].strip()
+    if not _SEC_USER_ID_RE.match(value):
+        return None
+    return {"sec_user_id": value, "nickname": "", "aweme_count": 0}
+
+
+def profile_display(author: dict) -> str:
+    """作者字典的展示名：昵称优先，昵称未知时用 sec_user_id 前 12 位。"""
+    nickname = str(author.get("nickname") or "").strip()
+    if nickname:
+        return nickname
+    return f"（未命名 {str(author.get('sec_user_id') or '')[:12]}…）"
+
+
+def resolve_profile_nicknames(f2_dir: Path, sec_ids: list[str]) -> dict[str, str]:
+    """按 sec_user_id 反查昵称：``{sec_user_id: nickname}``。
+
+    为什么必须**下载后**才查：f2 是「见过一次才写进用户库」，用户在界面上填的
+    可能只是主页链接（没有昵称）。下载跑完 f2 已把账号登记进 `douyin_users.db`，
+    这时才能拿到昵称——而入库阶段的白名单是按**归一化昵称**匹配的（见
+    :func:`build_import_plan` 的 ``authors`` 过滤），所以缺了昵称就会「下载成功、
+    入库 0」。
+
+    Args:
+        f2_dir: f2 工作目录。
+        sec_ids: 待反查的 sec_user_id 列表。
+
+    Returns:
+        能查到昵称的 ``{sec_user_id: nickname}``；查不到的键不会出现。
+    """
+    wanted = {s for s in sec_ids if s}
+    if not wanted:
+        return {}
+    out: dict[str, str] = {}
+    for author in load_f2_authors(f2_dir):
+        sec = str(author.get("sec_user_id") or "")
+        if sec in wanted and author.get("nickname"):
+            out[sec] = str(author["nickname"])
+    return out
 
 
 def build_f2_like_command(
@@ -1955,8 +2060,17 @@ def run_fetch(
     since_days: int | None = DEFAULT_FETCH_SINCE_DAYS,
     post_root: Path | None = None,
     include_unknown: bool = False,
+    profiles: list[str] | None = None,
 ) -> dict:
-    """串行调 f2 增量下载各作者的新作品（一次一个，避免并发触发风控）。
+    """串行调 f2 下载各作者的作品（一次一个，避免并发触发风控）。
+
+    两种模式：
+
+    1. **增量**（缺省）：遍历 f2 用户库里已登记的账号，按日期窗口只看新作品。
+    2. **按博主全量**（传 ``profiles``）：只下这些**显式点名**的博主，且它们
+       **不需要先在 f2 用户库里**——这正是「f2 只认自己见过的账号」这个限制的
+       出口（见 :func:`profile_author`）。首次采某博主时 `compute_fetch_interval`
+       会给出 `all`，即把她全部作品翻一遍。
 
     设计要点：
     - **cwd 必须是 f2 工作目录**：f2 在 cwd 下读写 douyin_users.db 与 Download/，
@@ -1970,6 +2084,8 @@ def run_fetch(
     - **默认只下库里已登记的博主**（见 :func:`select_known_authors`）：f2 用户库
       装的是它见过的所有账号，混进来的无关账号（如官方游戏号）不该被下载入库；
       `include_unknown=True` 才恢复「f2 里有谁都下」
+    - 传了 ``profiles`` 时**只跑这些博主**，且跳过「已登记博主」白名单（用户已经
+      明确点名，白名单在这里只会把目标挡掉）
 
     Args:
         f2_dir: f2 工作目录。
@@ -1982,14 +2098,27 @@ def run_fetch(
         since_days: 日期窗口最小天数；None/<=0 表示翻全历史（首次全量）。
         post_root: 作者目录所在位置（缺省按 `download_root`/f2 目录推导）。
         include_unknown: 是否连「未登记到博主库」的 f2 账号一起下载。
+        profiles: 显式点名的博主（主页链接 / sec_user_id）。非空时只跑这些。
 
     Returns:
-        {"total", "ok", "failed", "results", "windows", "skipped_authors", "error"}；
-        results 每项含 nickname / sec_user_id / rc / cmd / interval。
+        {"total", "ok", "failed", "results", "windows", "skipped_authors",
+         "invalid_profiles", "error"}；results 每项含
+        nickname / sec_user_id / rc / cmd / interval。
     """
     runner = runner or _default_runner
+
+    # 显式点名的博主：先归一化，无法识别的单独收集（由调用方明确报错）
+    extra_authors: list[dict] = []
+    invalid_profiles: list[str] = []
+    for raw in profiles or []:
+        parsed = profile_author(raw)
+        if parsed is None:
+            invalid_profiles.append(str(raw))
+        else:
+            extra_authors.append(parsed)
+
     all_authors = load_f2_authors(f2_dir)
-    if not all_authors:
+    if not all_authors and not extra_authors:
         return {
             "total": 0,
             "ok": 0,
@@ -1997,6 +2126,7 @@ def run_fetch(
             "results": [],
             "windows": {},
             "skipped_authors": [],
+            "invalid_profiles": invalid_profiles,
             "error": (
                 f"未找到 f2 作者清单：{f2_dir / F2_AUTHOR_DB}（先手动跑一次 f2 "
                 f"确认能登录并下载，本命令只做「增量」）"
@@ -2004,16 +2134,22 @@ def run_fetch(
         }
 
     unknown: list[dict] = []
-    if not include_unknown:
-        bloggers = load_douyin_bloggers()
-        if bloggers:
-            # 只有库内登记过抖音博主时才有白名单依据；一个都没有则退回旧口径
-            all_authors, unknown = select_known_authors(all_authors, bloggers)
+    if extra_authors:
+        # 显式点名：只跑这些，且不做「已登记博主」过滤
+        targets = extra_authors
+    else:
+        if not include_unknown:
+            bloggers = load_douyin_bloggers()
+            if bloggers:
+                # 只有库内登记过抖音博主时才有白名单依据；一个都没有则退回旧口径
+                all_authors, unknown = select_known_authors(all_authors, bloggers)
 
-    wanted = {normalize_author(a) for a in authors} if authors is not None else None
-    targets = [
-        a for a in all_authors if wanted is None or normalize_author(a["nickname"]) in wanted
-    ]
+        wanted = {normalize_author(a) for a in authors} if authors is not None else None
+        targets = [
+            a
+            for a in all_authors
+            if wanted is None or normalize_author(a["nickname"]) in wanted
+        ]
     if limit is not None:
         targets = targets[:limit]
 
@@ -2033,14 +2169,20 @@ def run_fetch(
     windows: Counter = Counter()
     ok = failed = 0
     for author in targets:
-        last_at = last_download.get(normalize_author(author["nickname"]))
-        interval = compute_fetch_interval(since_days, last_at)
+        # 昵称未知（用户只给了主页链接、f2 还没登记过这个账号）时用 sec 前 12 位代称
+        display = profile_display(author)
+        last_at = last_download.get(normalize_author(author["nickname"] or ""))
+        # 点名博主用 compute_profile_interval：**首次全量**（否则只会拿到最近
+        # since_days 天，用户以为下全了其实没有）；批量增量仍用原口径
+        interval = (
+            compute_profile_interval(since_days, last_at)
+            if extra_authors
+            else compute_fetch_interval(since_days, last_at)
+        )
         windows[interval] += 1
         cmd = build_f2_command(author, download_root, naming, auto_cookie, interval=interval)
-        print(
-            f"  ▶ {author['nickname']}（抖音作品总数 {author['aweme_count']}，"
-            f"窗口 {interval}）"
-        )
+        aweme_count = author.get("aweme_count") or 0
+        print(f"  ▶ {display}（抖音作品总数 {aweme_count or '未知'}，窗口 {interval}）")
         try:
             rc, _info = runner(cmd, f2_dir)
         except Exception as exc:  # noqa: BLE001 —— 单个作者失败不阻断整批
@@ -2055,12 +2197,22 @@ def run_fetch(
         results.append(
             {
                 "nickname": author["nickname"],
+                "display": display,
                 "sec_user_id": author["sec_user_id"],
                 "rc": rc,
                 "interval": interval,
                 "cmd": " ".join(cmd),
             }
         )
+
+    # 下载后按 sec_user_id 反查昵称：新账号此时已被 f2 写进用户库，
+    # 入库阶段的白名单按昵称匹配，缺了它就会「下载成功、入库 0」
+    resolved: dict[str, str] = {}
+    if extra_authors:
+        resolved = resolve_profile_nicknames(
+            f2_dir, [a["sec_user_id"] for a in extra_authors]
+        )
+
     return {
         "total": len(targets),
         "ok": ok,
@@ -2068,6 +2220,8 @@ def run_fetch(
         "results": results,
         "windows": dict(windows),
         "skipped_authors": [a["nickname"] for a in unknown],
+        "invalid_profiles": invalid_profiles,
+        "resolved_profiles": resolved,
     }
 
 
@@ -2397,6 +2551,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="只导入这些作者（归一化名或目录名，逗号分隔），缺省全部",
     )
+    parser.add_argument(
+        "--profiles",
+        default=None,
+        help=(
+            "按博主全量下载：博主主页链接或 sec_user_id（逗号/空格分隔）。"
+            "只下这些博主、且不需要它们已在 f2 用户库里；首次采集自动用 -i all 翻全量"
+        ),
+    )
     parser.add_argument("--limit", type=int, default=None, help="最多导入多少个作品")
     parser.add_argument(
         "--no-hash-cache",
@@ -2497,6 +2659,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.authors
         else None
     )
+    # --profiles：按博主全量下载（主页链接或 sec_user_id，逗号/空格/换行分隔）
+    profile_filter = [
+        p.strip()
+        for p in re.split(r"[,\s]+", args.profiles or "")
+        if p.strip()
+    ]
 
     # ── 可选：先调 f2 增量下载（--fetch）──
     if args.fetch:
@@ -2516,6 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.fetch_limit,
             since_days=args.since_days,
             include_unknown=args.include_unknown_authors,
+            profiles=profile_filter,
         )
         if fetch.get("error"):
             print(f"  ⚠ {fetch['error']}")
@@ -2524,6 +2693,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"  下载汇总：成功 {fetch['ok']} / 失败 {fetch['failed']}"
                 f"（共 {fetch['total']} 个作者）"
             )
+            if fetch.get("invalid_profiles"):
+                print(
+                    f"  ⚠ 无法识别的博主 {len(fetch['invalid_profiles'])} 个："
+                    f"{'、'.join(fetch['invalid_profiles'])}"
+                    "（请填完整主页链接或 sec_user_id，抖音号/短链不支持）"
+                )
             if fetch.get("skipped_authors"):
                 print(
                     f"  跳过未登记账号 {len(fetch['skipped_authors'])} 个："
@@ -2580,7 +2755,25 @@ def main(argv: list[str] | None = None) -> int:
     # 无关账号的产物（f2 用户库混进来的账号），默认不让它们入库
     # （与 web 一键获取同一条口径，见 select_known_authors）。库内一个抖音博主都
     # 没有时没有白名单依据，退回旧口径（全部导入）。
-    if authors_filter:
+    #
+    # --profiles 优先于上面两条：用户显式点名了博主，导入范围就该是「这些博主的
+    # 产物」——名字要等下完 f2 把新账号写进用户库后才查得到（见
+    # resolve_profile_nicknames），查不到就是没下成，交给调用方报错。
+    if profile_filter:
+        resolved = fetch.get("resolved_profiles") or {} if args.fetch else {}
+        if not resolved:
+            resolved = resolve_profile_nicknames(
+                args.f2_dir,
+                [a["sec_user_id"] for a in (profile_author(p) or {} for p in profile_filter) if a],
+            )
+        plan_authors = {normalize_author(n) for n in resolved.values() if n} or None
+        if not plan_authors:
+            print(
+                "  ⚠ 无法确认这些博主的昵称（可能没下成）："
+                f"{'、'.join(profile_filter)}"
+            )
+            return 1
+    elif authors_filter:
         plan_authors: set[str] | None = authors_filter
     elif args.include_unknown_authors or not bloggers:
         plan_authors = None

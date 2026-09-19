@@ -58,6 +58,13 @@ async def create_f2_import(
         le=100000,
         description="mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）",
     ),
+    profiles: str | None = Query(
+        None,
+        description=(
+            "按博主全量下载：博主主页链接或 sec_user_id（逗号/空格分隔）。"
+            "非空时只下这些博主，且不需要它们已在 f2 用户库里；首次采集自动翻全量"
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -96,6 +103,11 @@ async def create_f2_import(
         like_max_counts: mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）。
             点赞列表最新在前，填 100~200 可把日常增量降到一两页；代价是两次运行之间
             新增点赞超过该值时会漏。
+        profiles: **按博主全量下载**——博主主页链接或 sec_user_id（逗号/空格分隔）。
+            用途：给一个博主，下她**全部**作品。非空时只下这些博主，且**不需要它们
+            已在 f2 用户库里**（f2 的下载目标只来自它自己的用户库，库里没有的账号
+            跑不到，这正是那个限制的出口）；首次采集自动用 `-i all` 翻全量，
+            入库范围就是这些博主的产物。抖音号与 v.douyin.com 短链不支持。
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
@@ -111,6 +123,9 @@ async def create_f2_import(
             return {"message": reason, "task_id": None}
 
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
+    profile_list = [
+        p.strip() for p in (profiles or "").replace(",", " ").split() if p.strip()
+    ]
 
     # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
     # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」
@@ -130,6 +145,7 @@ async def create_f2_import(
         like_user=(like_user or "").strip() or None,
         register_bloggers=register_bloggers,
         like_max_counts=like_max_counts,
+        profiles=profile_list,
     )
     if task is None:
         return {

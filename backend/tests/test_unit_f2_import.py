@@ -1628,6 +1628,166 @@ def test_run_fetch_likes_defaults_to_full_pagination(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  按博主全量下载（--profiles）：给一个博主 → 下她全部作品
+# ═══════════════════════════════════════════════════════════════
+
+"""实测形态：唐思瑶ya 的 sec_user_id（31 位主体 + 短横线）。"""
+SEC = "MS4wLjABAAAACyG6qmWLGt5BbCvwkAfMpEf3nhGwlQqSG1MjwDIGokuUHJnIkwJzxDPu-1RRrfvk"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (f"https://www.douyin.com/user/{SEC}", SEC),
+        # 分享链接常带 query
+        (f"https://www.douyin.com/user/{SEC}?from_tab_name=main", SEC),
+        # 尾斜杠
+        (f"https://www.douyin.com/user/{SEC}/", SEC),
+        (SEC, SEC),
+        (f"  {SEC}  ", SEC),
+    ],
+)
+def test_profile_author_accepts_url_and_sec_id(raw, expected):
+    parsed = f2.profile_author(raw)
+
+    assert parsed is not None
+    assert parsed["sec_user_id"] == expected
+    assert parsed["nickname"] == ""  # 昵称要等 f2 登记后才知道
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "72906514384",  # 抖音号：拼不出主页地址
+        "v.douyin.com/iABCdef/",  # 短链：要先跟一次跳转
+        "https://www.douyin.com/user/",
+        "https://www.douyin.com/user/not-a-sec-uid",
+    ],
+)
+def test_profile_author_rejects_unsupported_input(raw):
+    """不支持的输入返回 None，由调用方明确报错——不拼一个必然失败的 URL。"""
+    assert f2.profile_author(raw) is None
+
+
+def test_profile_display_uses_sec_prefix_when_nickname_unknown():
+    assert f2.profile_display({"sec_user_id": SEC, "nickname": "唐思瑶ya"}) == "唐思瑶ya"
+    assert "MS4wLjABAAAA" in f2.profile_display({"sec_user_id": SEC, "nickname": ""})
+
+
+def test_run_fetch_profiles_downloads_named_blogger_not_in_f2_db(tmp_path):
+    """核心用例（任务 351 的正面版本）：f2 用户库里**没有**这个账号，也能下。
+
+    这是「给一个博主 → 下她全部作品」的关键：目标来自用户点名的 profiles，
+    而不是 f2 自己的用户库。
+    """
+    f2_dir = _f2_dir_with_authors(tmp_path, authors=[("MS4wLjABAAAAother", "别人", 5)])
+    calls: list[list[str]] = []
+
+    result = f2.run_fetch(
+        f2_dir,
+        profiles=[f"https://www.douyin.com/user/{SEC}"],
+        post_root=tmp_path / "post",  # 空目录 → 无本地下载记录
+        runner=lambda cmd, cwd: (calls.append(cmd) or (0, "")),
+    )
+
+    assert result["total"] == 1 and result["ok"] == 1
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[cmd.index("-u") + 1] == f"https://www.douyin.com/user/{SEC}"
+    # ⚠ 首次采某博主必须翻全量：默认窗口（14 天）只会拿到最近的几篇
+    assert cmd[cmd.index("-i") + 1] == "all"
+    # 只跑点名的那一个，没把 f2 库里的「别人」带上
+    assert "别人" not in " ".join(cmd)
+
+
+def test_run_fetch_profiles_ignores_registered_blogger_whitelist(tmp_path, monkeypatch):
+    """点名博主不受「只下已登记博主」白名单影响——用户已经明确点名了。"""
+    f2_dir = _f2_dir_with_authors(tmp_path, authors=[("MS4wLjABAAAAother", "别人", 5)])
+    monkeypatch.setattr(f2, "load_douyin_bloggers", lambda: {"里香": [{"id": 1}]})
+    calls: list[list[str]] = []
+
+    result = f2.run_fetch(
+        f2_dir,
+        profiles=[SEC],
+        post_root=tmp_path / "post",
+        runner=lambda cmd, cwd: (calls.append(cmd) or (0, "")),
+    )
+
+    assert result["total"] == 1
+    assert result["skipped_authors"] == []  # 没走白名单那条路
+    assert len(calls) == 1
+
+
+def test_run_fetch_profiles_reports_invalid_input(tmp_path):
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    result = f2.run_fetch(
+        f2_dir,
+        profiles=["72906514384", "v.douyin.com/abc/", SEC],
+        post_root=tmp_path / "post",
+        runner=lambda cmd, cwd: (0, ""),
+    )
+
+    assert result["invalid_profiles"] == ["72906514384", "v.douyin.com/abc/"]
+    assert result["total"] == 1  # 只有合法的那个被下
+
+
+def test_run_fetch_profiles_works_with_empty_f2_author_db(tmp_path):
+    """f2 用户库为空时，点名博主仍要能下（不早退成「未找到 f2 作者清单」）。"""
+    f2_dir = tmp_path / "empty"
+    f2_dir.mkdir()
+
+    result = f2.run_fetch(
+        f2_dir,
+        profiles=[SEC],
+        post_root=tmp_path / "post",
+        runner=lambda cmd, cwd: (0, ""),
+    )
+
+    assert "error" not in result
+    assert result["total"] == 1
+
+
+def test_compute_profile_interval_first_time_is_all():
+    """点名博主首次必须全量——否则「下她全部作品」只会拿到最近 N 天。"""
+    today = date(2026, 9, 10)
+
+    assert f2.compute_profile_interval(14, None, today) == "all"
+    # 已经下过：退回窗口增量，且按「上次下载日 -1 天」放大（长时间不跑也不漏）
+    assert (
+        f2.compute_profile_interval(14, datetime(2026, 7, 1), today)
+        == "2026-06-30|2026-09-10"
+    )
+    # 与批量增量的口径故意不同：后者对新博主也给最小窗口（避免一次翻几十个作者的历史）
+    assert f2.compute_fetch_interval(14, None, today) == "2026-08-27|2026-09-10"
+
+
+def test_resolve_profile_nicknames_matches_by_sec_id(tmp_path):
+    """下载后按 sec_user_id 反查昵称——入库白名单按昵称匹配，缺它就是「下载成功、入库 0」。"""
+    f2_dir = _f2_dir_with_authors(tmp_path, authors=[(SEC, "唐思瑶ya", 1582)])
+
+    assert f2.resolve_profile_nicknames(f2_dir, [SEC]) == {SEC: "唐思瑶ya"}
+    assert f2.resolve_profile_nicknames(f2_dir, ["MS4wLjABAAAAmissing"]) == {}
+    assert f2.resolve_profile_nicknames(f2_dir, []) == {}
+
+
+def test_run_fetch_profiles_returns_resolved_nicknames(tmp_path):
+    """跑完要把点名博主解析成昵称回传，否则入库阶段的白名单无从下手。"""
+    f2_dir = _f2_dir_with_authors(tmp_path, authors=[(SEC, "唐思瑶ya", 1582)])
+
+    result = f2.run_fetch(
+        f2_dir,
+        profiles=[SEC],
+        post_root=tmp_path / "post",
+        runner=lambda cmd, cwd: (0, ""),
+    )
+
+    assert result["resolved_profiles"] == {SEC: "唐思瑶ya"}
+
+
+# ═══════════════════════════════════════════════════════════════
 #  真实作品 ID（新命名模板）：解析 / 平台 ID / 原帖链接 / 两套口径并存
 # ═══════════════════════════════════════════════════════════════
 
