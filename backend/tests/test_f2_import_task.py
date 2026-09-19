@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from PIL import Image
 
 from app.database import async_session
 from app.services import task_runner
+from app.services.task_runners import f2_import as f2_runner
 from app.services.task_runners.common import utcnow
 from scripts import import_f2_downloads as f2
 
@@ -1295,6 +1297,70 @@ async def test_execute_f2_import_like_mode_dedups_on_rerun(
         if str(i["source_platform_id"]).startswith("f2:")
     ]
     assert len(items) == 2  # 没有因重跑翻倍
+
+
+async def test_execute_f2_import_like_mode_reports_live_download_progress(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """「我的喜欢」下载期间持续写入「已落盘文件数 / 本次新增」与软进度。
+
+    回归背景：点赞是单条命令全量翻页，下载期可能十几分钟，此前进度只在 f2 返回后
+    一次性写 0→40%，界面上整段时间停在 0%，看不出是在下载还是卡住。
+    """
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    # 缩短轮询间隔与软进度时间常数，让「下载中」的中间态在测试里可观测
+    monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_runner, "_LIKE_PROGRESS_HALF_SECONDS", 1.0)
+
+    real_stats = f2.download_tree_stats
+
+    def _slow_like_fetch(f2_dir, like_user, download_root=None, **kwargs):
+        """模拟 f2：先落一个新文件，再慢慢「翻页」（此刻 watcher 应已把进度落库）。"""
+        _jpeg(
+            f2_like_tree
+            / "我的账号"
+            / "新作者_2026-09-15 09-00-00_新点赞的作品#tag_image_1.jpg",
+            "green",
+        )
+        time.sleep(0.3)
+        return {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "results": [{"nickname": "我的喜欢", "rc": 0, "cmd": "f2 dy -M like"}],
+        }
+
+    monkeypatch.setattr(f2, "run_fetch_likes", _slow_like_fetch)
+
+    live: list[tuple[int, dict]] = []
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+        task_id = task.id
+
+        def _spy_stats(root):
+            """每次统计时记下**上一次**落库的实时进度（任务对象由执行器就地改写）。"""
+            info = (task.result or {}).get("like_progress")
+            if info:
+                live.append((task.progress, dict(info)))
+            return real_stats(root)
+
+        monkeypatch.setattr(f2, "download_tree_stats", _spy_stats)
+        await task_runner.execute_f2_import(db, task)
+
+    assert live, "下载期间没有写入任何 like_progress 快照"
+    assert any(progress > 0 for progress, _ in live), "软进度始终为 0%"
+    assert any(info["files"] == 3 for _, info in live), "实时计数没有反映新落盘的文件"
+    assert max(info["added"] for _, info in live) == 1
+
+    # 下载产出统计保留到任务结果里（入库阶段的 plan 只讲「有多少要入库」）
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["fetch"]["downloaded"]["added"] == 1
+        assert stored.result["import"]["imported"] == 3
 
 
 async def test_execute_f2_import_like_mode_keeps_unregistered_authors(

@@ -10,6 +10,20 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 
+/** 「我的喜欢」下载阶段的实时统计（后端 result.like_progress，其它阶段为空） */
+export interface F2LikeProgress {
+  /** 产物目录内已落盘的文件总数（含往次下载） */
+  files: number
+  /** 已落盘文件的总字节数 */
+  bytes: number
+  /** 本次任务新增的文件数（点赞总数事先未知，靠它看「这轮拉回来多少」） */
+  added: number
+  /** 本次任务新增的字节数 */
+  added_bytes: number
+  /** 下载已进行的秒数（仅在软进度阶段有值，收尾时为 undefined） */
+  seconds?: number
+}
+
 /** 进行中任务的简要信息（后端 /api/scraper/f2-status 的 auto.running） */
 export interface F2RunningTask {
   id: number
@@ -18,8 +32,12 @@ export interface F2RunningTask {
   /** 已完成计数：下载阶段是作者数，入库阶段是文件数（看 stage） */
   done: number
   total: number
-  /** 阶段标记：download / import / done（空串表示后端未标记） */
+  /** 阶段标记：download / scan / import / done（空串表示后端未标记） */
   stage: string
+  /** 采集入口：post=博主主页作品；like=我的喜欢（决定阶段文案口径） */
+  fetch_mode: string
+  /** 「我的喜欢」下载期间的实时统计（无则 null） */
+  like_progress: F2LikeProgress | null
 }
 
 /** 每日自动获取的配置与到期信息（后端 GET /api/scraper/f2-status 的 auto 字段） */

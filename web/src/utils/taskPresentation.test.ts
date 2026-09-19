@@ -187,6 +187,29 @@ describe('describeRunningTask', () => {
     expect(text).toContain('我的喜欢')
     expect(text).toContain('全量翻页')
   })
+
+  it('点赞下载期把实时文件数写进文案（点赞总数未知，靠它判断在下载）', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      {
+        stage: 'download',
+        fetch_mode: 'like',
+        like_progress: { files: 3517, bytes: 2048, added: 3163 },
+      },
+      'running',
+      0,
+      0,
+    )
+    expect(text).toContain('本次新增 3163 个文件')
+    expect(text).toContain('目录内共 3517 个')
+    expect(text).toContain('我的喜欢')
+  })
+
+  it('扫描与去重阶段单独说明（别让界面停在「下载中」）', () => {
+    const text = describeRunningTask('f2_import', { stage: 'scan' }, 'running', 1, 1)
+    expect(text).toContain('扫描与去重')
+    expect(text).not.toContain('下载中')
+  })
 })
 
 describe('normalizeQueueTask', () => {

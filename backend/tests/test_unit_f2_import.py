@@ -129,6 +129,22 @@ def test_scan_directory_missing_root(tmp_path):
     assert f2.scan_directory(tmp_path / "不存在") == []
 
 
+def test_download_tree_stats_counts_files_and_bytes(tmp_path):
+    """实时进度统计：递归数文件与字节（供「我的喜欢」下载期展示「已落盘 N 个」）。"""
+    _write(tmp_path / "我的账号" / "a_image_1.webp", b"12345")
+    _write(tmp_path / "我的账号" / "a_image_2.webp", b"123")
+    _write(tmp_path / "我的账号" / "子目录" / "b_video.mp4", b"1")
+
+    stats = f2.download_tree_stats(tmp_path)
+
+    assert stats == {"files": 3, "bytes": 9}
+
+
+def test_download_tree_stats_missing_root_is_zero(tmp_path):
+    """目录还不存在（首次「我的喜欢」）：返回 0 而不是抛错。"""
+    assert f2.download_tree_stats(tmp_path / "不存在") == {"files": 0, "bytes": 0}
+
+
 # ── 报表 ──
 
 

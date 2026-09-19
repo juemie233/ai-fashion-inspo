@@ -13,6 +13,8 @@
     整个导入结束才生效
   - 入库进度由回调写入内存，另起一个 watcher 协程每 2 秒落库一次；watcher 同时
     读任务当前状态，把 cancelled/paused 转成线程内的停止标记（已入库部分保留）
+  - 「我的喜欢」的下载同理：f2 单条命令全量翻页期间，watcher 每 2 秒统计 like
+    目录里已落盘的文件数与体积（点赞总数要翻到底才知道，进度条只能按耗时给软进度）
 """
 
 import asyncio
@@ -38,6 +40,18 @@ _PROGRESS_AFTER_PLAN = 45
 
 """进度落库间隔（秒）：入库在线程内跑，靠这个间隔把进度写回任务行。"""
 _WATCH_INTERVAL = 2.0
+
+"""「我的喜欢」下载阶段的软进度上限（%）。
+
+点赞总数要全量翻页到底才知道，进度条没有真分母；这里给的是**按耗时估算**的软
+进度：起步 1%（0% 长时间不动最劝退），随耗时缓慢逼近上限后停住等 f2 收尾，再由
+扫描/入库阶段接手。真实证据是任务结果里的 ``like_progress``（已落盘文件数与体积），
+它在下载期间持续上涨。
+"""
+_LIKE_PROGRESS_CAP = 35
+
+"""软进度的时间常数（秒）：耗时达到这个点约走到上限的一半（双曲线，永不到顶）。"""
+_LIKE_PROGRESS_HALF_SECONDS = 900
 
 
 async def create_f2_import_task(
@@ -324,14 +338,22 @@ def _running_task_brief(row) -> dict | None:
     """把进行中的任务压成前端展示所需的少量字段（阶段 / 进度 / 计数 / 阶段标记）。
 
     ``stage`` 是理解 ``done/total`` 的前提：下载阶段是「作者数」，入库阶段是
-    「文件数」，界面上要说清楚（见 web 侧 describeRunningTask）。
+    「文件数」，界面上要说清楚（见 web 侧 describeRunningTask）。``fetch_mode``
+    决定文案说的是「博主主页作品」还是「我的喜欢」；``like_progress`` 只在点赞
+    下载阶段有值，给界面提供「已落盘 N 个文件 / X GB」这个真分母缺失时的证据。
     """
     if row is None:
         return None
     task_id, status, progress, done, total, result = row
     stage = ""
+    fetch_mode = ""
+    like_progress = None
     if isinstance(result, dict):
         stage = str(result.get("stage") or "")
+        fetch_mode = str(result.get("fetch_mode") or "")
+        raw_like = result.get("like_progress")
+        if isinstance(raw_like, dict):
+            like_progress = raw_like
     return {
         "id": task_id,
         "status": status,
@@ -339,6 +361,8 @@ def _running_task_brief(row) -> dict | None:
         "done": done or 0,
         "total": total or 0,
         "stage": stage,
+        "fetch_mode": fetch_mode,
+        "like_progress": like_progress,
     }
 
 
@@ -388,6 +412,71 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
         "running_task_id": running,
         "running": _running_task_brief(running_row),
     }
+
+
+async def _watch_like_download(
+    db: AsyncSession,
+    task: TaskQueue,
+    future: asyncio.Task,
+    like_root: Path,
+    baseline: dict,
+    opts: dict,
+) -> tuple[dict, dict]:
+    """一边等 f2 拉完「我的喜欢」，一边把已落盘的文件数写进任务结果。
+
+    为什么需要：点赞是单条命令全量翻页，下载期可能十几分钟；此前进度只在 f2
+    返回后一次性写 0→40%，界面长时间停在 0%，看不出是在下载还是卡住。
+
+    f2 是同步子进程（在线程里跑），本函数**不中断**它：取消/暂停仍由调用方在它
+    返回后判定，与发布模式一致（已下载文件保留，重跑自动跳过）。
+
+    Args:
+        db: 数据库会话。
+        task: 任务行。
+        future: ``asyncio.to_thread(f2.run_fetch_likes, ...)`` 的 future。
+        like_root: 「我的喜欢」产物目录（统计对象）。
+        baseline: 下载开始前的统计（用来算「本次新增」）。
+        opts: 任务参数（写回 result 时带上，避免上次执行的旧字段残留）。
+
+    Returns:
+        (``run_fetch_likes`` 的返回值, 结束时的目录统计)。
+    """
+    from scripts import import_f2_downloads as f2
+
+    started = time.monotonic()
+    while True:
+        done, _pending = await asyncio.wait({future}, timeout=_WATCH_INTERVAL)
+        stats = await asyncio.to_thread(f2.download_tree_stats, like_root)
+        elapsed = time.monotonic() - started
+        # 起步 1%：进度条长时间停在 0% 是最劝退的观感（哪怕它只是「耗时估算」），
+        # 此后随耗时缓慢逼近上限，永不到顶——真进度由入库阶段接手
+        task.progress = (
+            int(
+                (_LIKE_PROGRESS_CAP - 1)
+                * elapsed
+                / (elapsed + _LIKE_PROGRESS_HALF_SECONDS)
+            )
+            + 1
+        )
+        task.result = {
+            **opts,
+            "stage": "download",
+            "like_progress": {
+                "files": stats["files"],
+                "bytes": stats["bytes"],
+                "added": max(0, stats["files"] - baseline["files"]),
+                "added_bytes": max(0, stats["bytes"] - baseline["bytes"]),
+                "seconds": int(elapsed),
+            },
+        }
+        task.updated_at = utcnow()
+        try:
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 —— 进度是辅助信息，不能拖垮下载
+            await db.rollback()
+            logger.warning(f"f2「我的喜欢」进度落库失败（忽略，下一轮重试）：{exc}")
+        if done:
+            return future.result(), stats
 
 
 async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
@@ -497,15 +586,21 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
                 "请先在「我的喜欢」卡片里填写你的抖音主页链接"
             )
         fetch_summary["total"] = 1
-        task.total = 1
+        # 点赞总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
+        # 进度条由 watcher 按耗时给软进度
+        task.total = 0
         task.done = 0
+        task.result = {**opts, "stage": "download"}
+        task.updated_at = utcnow()
         await db.commit()
 
-        outcome = await asyncio.to_thread(
-            f2.run_fetch_likes,
-            f2_dir,
-            like_user,
-            f2_dir / "Download",
+        like_root = f2.DEFAULT_F2_LIKE_ROOT
+        baseline = await asyncio.to_thread(f2.download_tree_stats, like_root)
+        fetch_task = asyncio.create_task(
+            asyncio.to_thread(f2.run_fetch_likes, f2_dir, like_user, f2_dir / "Download")
+        )
+        outcome, final_stats = await _watch_like_download(
+            db, task, fetch_task, like_root, baseline, opts
         )
         if outcome.get("error"):
             raise RuntimeError(str(outcome["error"]))
@@ -515,22 +610,38 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         fetch_summary["cmd"] = (
             outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
         )
+        # 本次下载的真实产出（文件数 / 体积）：入库阶段的 plan 只讲「有多少要入库」，
+        # 这个字段回答「下载期到底拉回来多少」——全部被去重挡掉时也看得见
+        fetch_summary["downloaded"] = {
+            "files": final_stats["files"],
+            "bytes": final_stats["bytes"],
+            "added": max(0, final_stats["files"] - baseline["files"]),
+            "added_bytes": max(0, final_stats["bytes"] - baseline["bytes"]),
+        }
+        download_result = {
+            **opts,
+            "stage": "download",
+            "fetch": fetch_summary,
+            "like_progress": fetch_summary["downloaded"],
+        }
         task.done = 1
+        task.total = 1
         task.progress = _PROGRESS_AFTER_DOWNLOAD
+        task.result = download_result
         task.updated_at = utcnow()
         await db.commit()
 
         # 取消/暂停：与发布模式一致，立即收尾，不再做扫描与入库
         if await _current_status(db, task.id) not in ("running", "pending"):
             status_now = await _current_status(db, task.id)
-            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.result = download_result
             task.status = status_now
             task.updated_at = utcnow()
             await db.commit()
             logger.info(f"f2 拉取「我的喜欢」被中断（{status_now}）：已下载文件保留")
             return
         if fetch_summary["failed"]:
-            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.result = download_result
             await db.commit()
             raise RuntimeError(
                 "f2 拉取「我的喜欢」失败（退出码非 0），常见原因：cookie 失效或被风控；"
@@ -626,6 +737,11 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 扫描根按模式取：发布模式看 post/，点赞模式看 like/（f2 把喜欢的作品下在
     # 「我的昵称」目录下，原作者在文件名里，见 LIKE_NAMING_TEMPLATE）
     scan_root = f2.DEFAULT_F2_LIKE_ROOT if like_mode else f2.DEFAULT_F2_ROOT
+    # 扫描 + 去重是重活（大目录分钟级），单独标一个阶段：否则界面在下载结束到入库
+    # 开始的这段窗口里还停在「下载中」的文案上，看起来像卡住
+    task.result = {**task.result, "stage": "scan"}
+    task.updated_at = utcnow()
+    await db.commit()
     files = await asyncio.to_thread(f2.scan_directory, scan_root)
     dedup = await asyncio.to_thread(f2.load_dedup_index)
     started = time.monotonic()

@@ -169,6 +169,22 @@ export function summarizeResult(
 }
 
 /**
+ * 「我的喜欢」下载阶段的实时统计文案（后端 result.like_progress）。
+ *
+ * 点赞总数要全量翻页到底才知道，进度条没有真分母；这段文字就是给用户的证据：
+ * 文件数在涨 = f2 在干活，「本次新增」为 0 = 这一轮没有新赞。
+ */
+function likeDownloadText(r: Record<string, unknown>): string {
+  const lp = (r.like_progress || {}) as Record<string, unknown>
+  const files = Number(lp.files ?? 0) || 0
+  if (!files && !Number(lp.added ?? 0)) return ''
+  const bytes = Number(lp.bytes ?? 0) || 0
+  const added = Number(lp.added ?? 0) || 0
+  const size = bytes ? ` / ${formatSize(bytes)}` : ''
+  return `本次新增 ${added} 个文件 · 目录内共 ${files} 个${size}`
+}
+
+/**
  * 运行中任务的阶段文案（未结束的任务在「任务」列标题下显示这一行）。
  *
  * 为什么需要：进度条只给百分比，长时间任务（尤其 f2 获取素材）会出现「1% 挂了
@@ -199,11 +215,15 @@ export function describeRunningTask(
   if (stage === 'download') {
     if (likeMode) {
       // 喜欢列表按点赞时间排序，f2 的时间窗口按发布时间过滤，所以这里全量翻页
-      return '拉取我的喜欢（点赞）中：全量翻页，首轮可能较慢；已下载过的作品会自动跳过'
+      const live = likeDownloadText(r)
+      return `拉取我的喜欢（点赞）中：${live ? `${live} · ` : ''}全量翻页，首轮可能较慢；已下载过的作品会自动跳过`
     }
     // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
     // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载
     return `调 f2 下载中：${count}个作者 · 逐作者翻页，单作者约 10 秒~4 分钟`
+  }
+  if (stage === 'scan') {
+    return '扫描与去重中：统计下载目录里的新作品，大目录需 1~2 分钟，之后才开始入库'
   }
   if (stage === 'import') {
     return `入库中：${count}个文件 · 复制文件并生成缩略图`

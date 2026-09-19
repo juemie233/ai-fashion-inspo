@@ -56,7 +56,13 @@ const runningText = computed(() => {
   if (!task) return ''
   const detail = describeRunningTask(
     'f2_import',
-    { stage: task.stage },
+    {
+      stage: task.stage,
+      // 「我的喜欢」与博主主页共用 f2_import 类型，文案口径靠这两个字段区分：
+      // fetch_mode 决定说的是哪个入口，like_progress 提供「已下载 N 个文件」的实时证据
+      fetch_mode: task.fetch_mode,
+      like_progress: task.like_progress,
+    },
     task.status,
     task.done,
     task.total,

@@ -303,6 +303,41 @@ def scan_directory(root: Path) -> list[ParsedFile]:
     return parsed
 
 
+def download_tree_stats(root: Path) -> dict:
+    """统计下载目录里的文件数与总字节数（供「我的喜欢」下载阶段展示实时进度）。
+
+    「我的喜欢」要全量翻页才知道有多少个赞，下载期间进度条没有真分母；能作为
+    「在干活」证据的是**已经落盘的文件**——f2 每下完一个作品就写文件，这个函数
+    就是那个真值（比解析文件名的 :func:`scan_directory` 便宜得多，故可高频调用）。
+
+    Args:
+        root: 下载目录（发布模式给 post 根，点赞模式给 like 根）。
+
+    Returns:
+        {"files": 文件数, "bytes": 总字节数}；目录不存在时全 0。
+    """
+    files = 0
+    total = 0
+    if not root.exists():
+        return {"files": 0, "bytes": 0}
+    stack = [root]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue  # 目录被 f2 挪动/清理（Windows 上偶发）：本轮跳过，下轮再统计
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    files += 1
+                    total += entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue  # 文件正在写入/已被删除：不计入，避免打断统计
+    return {"files": files, "bytes": total}
+
+
 def group_works(files: list[ParsedFile]) -> dict[str, list[ParsedFile]]:
     """按作品键分组（同一作品的多图/多段视频归到一组）。
 

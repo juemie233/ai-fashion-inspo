@@ -184,7 +184,16 @@ describe('useF2Import', () => {
     mocks.get.mockResolvedValue({
       data: makeStatus({
         running_task_id: 329,
-        running: { id: 329, status: 'running', progress: 7, done: 4, total: 21, stage: 'download' },
+        running: {
+          id: 329,
+          status: 'running',
+          progress: 7,
+          done: 4,
+          total: 21,
+          stage: 'download',
+          fetch_mode: 'post',
+          like_progress: null,
+        },
       }),
     })
     const { status, loadStatus } = useF2Import()
@@ -194,6 +203,30 @@ describe('useF2Import', () => {
     expect(status.value?.auto.running_task_id).toBe(329)
     expect(status.value?.auto.running?.stage).toBe('download')
     expect(status.value?.auto.running?.done).toBe(4)
+  })
+
+  it('loadStatus 解析「我的喜欢」的实时下载统计（点赞总数未知，靠它判断在下载）', async () => {
+    mocks.get.mockResolvedValue({
+      data: makeStatus({
+        running_task_id: 341,
+        running: {
+          id: 341,
+          status: 'running',
+          progress: 3,
+          done: 0,
+          total: 0,
+          stage: 'download',
+          fetch_mode: 'like',
+          like_progress: { files: 3517, bytes: 2168000000, added: 3163, added_bytes: 2000000 },
+        },
+      }),
+    })
+    const { status, loadStatus } = useF2Import()
+
+    await loadStatus()
+
+    expect(status.value?.auto.running?.fetch_mode).toBe('like')
+    expect(status.value?.auto.running?.like_progress?.added).toBe(3163)
   })
 
   it('setAuto 透传开关与间隔，并用回包更新本地状态', async () => {
