@@ -18,9 +18,10 @@ defineEmits<{
     <a-space direction="vertical" :size="8">
       <div v-for="(p, i) in persons" :key="p.id" class="top-row" @click="$emit('go-detail', p)">
         <span class="top-rank">{{ i + 1 }}</span>
-        <a-avatar :size="28">
-          <img v-if="p.avatar_path" :src="getFileUrl(p.avatar_path)" :alt="p.name" />
-          <span v-else aria-hidden="true">👤</span>
+        <!-- image-url 传头像：Arco 只在 imageUrl 分支加 arco-avatar-image，
+             圆形裁剪才生效（插槽 img 会渲染成方形并溢出） -->
+        <a-avatar :size="28" :image-url="p.avatar_path ? getFileUrl(p.avatar_path) : undefined">
+          <span v-if="!p.avatar_path" aria-hidden="true">👤</span>
         </a-avatar>
         <span class="top-name">{{ p.name }}</span>
         <span style="color: #999; font-size: 12px">{{ p.inspiration_count ?? 0 }} 素材</span>

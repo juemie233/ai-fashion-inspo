@@ -204,22 +204,22 @@ export function usePersonList(kind: PersonKind) {
         return h('div', { class: 'person-cell' }, [
           h(
             Avatar,
-            { size: 40 },
             {
+              size: 40,
+              // 头像用 imageUrl 传入：Arco 只在 imageUrl 分支给 wrapper 加
+              // arco-avatar-image，圆形裁剪（overflow + border-radius）才生效；
+              // 插槽里的 img 不会被裁，会按原图尺寸渲染成方形并溢出容器
+              imageUrl: row.avatar_path ? getFileUrl(row.avatar_path) : undefined,
+            },
+            {
+              // 没设置过头像时用通用人形图标占位（避免名字首字与名称并排造成
+              // 「杨杨晨晨」式重复）；有 imageUrl 时 Arco 忽略这个插槽
               default: () =>
-                // 头像只有手动设置一条来源（上传/从 TA 的素材选一张）；没设置过用通用人形图标占位，
-                // 避免名字首字与名称并排造成「杨杨晨晨」式重复
-                row.avatar_path
-                  ? h('img', { src: getFileUrl(row.avatar_path), alt: row.name })
-                  : h(
-                      'svg',
-                      { viewBox: '0 0 24 24', class: 'avatar-icon', 'aria-hidden': 'true' },
-                      [
-                        h('path', {
-                          d: 'M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.4 0-10.1 1.7-10.1 5v2.4h20.2v-2.4c0-3.3-6.7-5-10.1-5z',
-                        }),
-                      ],
-                    ),
+                h('svg', { viewBox: '0 0 24 24', class: 'avatar-icon', 'aria-hidden': 'true' }, [
+                  h('path', {
+                    d: 'M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.4c-3.4 0-10.1 1.7-10.1 5v2.4h20.2v-2.4c0-3.3-6.7-5-10.1-5z',
+                  }),
+                ]),
             },
           ),
           h('span', { class: 'person-name' }, row.name),

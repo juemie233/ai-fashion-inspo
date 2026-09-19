@@ -809,9 +809,11 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 class="person-row"
               >
                 <div class="person-head" @click="toggleDetail(p)">
-                  <a-avatar :size="32">
-                    <img v-if="personAvatarUrl(p)" :src="personAvatarUrl(p)" alt="" />
-                    <template v-else>{{ p.name.slice(0, 1) }}</template>
+                  <!-- 头像用 image-url 传入（而不是插槽 img）：Arco 只在 imageUrl 分支给
+                       wrapper 加 arco-avatar-image，圆形裁剪（overflow+border-radius）才生效；
+                       插槽 img 会被渲染成方形并溢出容器 -->
+                  <a-avatar :size="32" :image-url="personAvatarUrl(p)">
+                    <template v-if="!personAvatarUrl(p)">{{ p.name.slice(0, 1) }}</template>
                   </a-avatar>
                   <span class="person-name">{{ p.name }}</span>
                   <a-tag size="small" :color="p.person_type === 'blogger' ? 'arcoblue' : 'purple'">
@@ -973,9 +975,8 @@ function filterOption(input: string, option: { label?: string }): boolean {
                 class="person-row"
               >
                 <div class="person-head" @click="toggleDetail(p)">
-                  <a-avatar :size="32">
-                    <img v-if="personAvatarUrl(p)" :src="personAvatarUrl(p)" alt="" />
-                    <template v-else>{{ p.name.slice(0, 1) }}</template>
+                  <a-avatar :size="32" :image-url="personAvatarUrl(p)">
+                    <template v-if="!personAvatarUrl(p)">{{ p.name.slice(0, 1) }}</template>
                   </a-avatar>
                   <span class="person-name">{{ p.name }}</span>
                   <a-tag size="small" color="green">
