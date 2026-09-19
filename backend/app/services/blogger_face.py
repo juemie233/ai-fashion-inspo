@@ -115,9 +115,10 @@ async def register_blogger_face(
     if inspiration_ids:
         from app.models.inspiration import Inspiration, NOT_DELETED
         from app.models.person import InspirationBlogger
+        from app.services.face_image import load_inspiration_image
 
         rows = await db.execute(
-            select(Inspiration.id, Inspiration.file_path)
+            select(Inspiration)
             .join(
                 InspirationBlogger,
                 InspirationBlogger.inspiration_id == Inspiration.id,
@@ -128,20 +129,21 @@ async def register_blogger_face(
                 NOT_DELETED,
             )
         )
-        insp_map = {r[0]: r[1] for r in rows.all()}
+        insp_map = {row.id: row for row in rows.scalars().all()}
         for iid in inspiration_ids:
-            fpath = insp_map.get(iid)
-            if not fpath:
+            row = insp_map.get(iid)
+            if row is None:
                 warnings.append(f"素材 {iid} 不存在或不属于该博主，已跳过")
                 continue
-            full_path = settings.storage_root / fpath
-            try:
-                data = await asyncio.to_thread(full_path.read_bytes)
-            except OSError as e:
-                warnings.append(f"素材 {iid} 文件读取失败（{e}），已跳过")
+            # 视频素材取首帧缩略图、其它格式统一转 JPEG：子服务只吃它能解码的图片，
+            # 直接送 mp4/webp 会 400「无法解析图片」并让整次注册失败
+            data, warning = await load_inspiration_image(row)
+            if data is None:
+                warnings.append(
+                    f"素材 {iid} {warning}" if warning else f"素材 {iid} 无法读取，已跳过"
+                )
                 continue
-            if data:
-                image_bytes_list.append(data)
+            image_bytes_list.append(data)
 
     if not image_bytes_list:
         raise HTTPException(
@@ -160,16 +162,23 @@ async def register_blogger_face(
         try:
             result = await face_client.embed(data)
         except FaceServiceHttpError as e:
-            if e.status_code == 404:
-                # 子服务 404 = 该照片未检测到人脸（业务结果）：跳过该照片，
-                # 与返回空结果语义一致；全部照片都无人脸时由下方统一提示
+            if e.status_code in (400, 404):
+                # 子服务的**这张图**级业务结果，跳过它继续处理其余照片：
+                #   404 = 未检测到人脸；400 = 子服务解不了这张图（归一化后理论上不会
+                #   再出现，但用户上传 HEIC 等格式仍可能命中）
+                # 关键：不要把单张的 400 当成整次注册失败——那正是「无法解析图片」报错的
+                # 原始诱因（视频素材被直接送检）
                 photo_results.append(
                     {
                         "index": idx,
                         "source": source,
                         "status": "skipped",
-                        "reason": "no_face",
-                        "message": "未检测到人脸",
+                        "reason": "no_face" if e.status_code == 404 else "decode_failed",
+                        "message": (
+                            "未检测到人脸"
+                            if e.status_code == 404
+                            else f"这张图无法解析（{e.detail}），建议换 JPG/PNG 照片"
+                        ),
                         "det_score": None,
                         "face_ratio": None,
                     }
@@ -241,12 +250,19 @@ async def register_blogger_face(
         reasons = "；".join(
             f"第{r['index']}张{r['message']}" for r in photo_results
         )
+        # 全部是解码失败时不要套「未检出人脸」的说法：那会把「格式不支持 / 文件损坏」
+        # 误报成「照片里没有人」，用户会一直换照片也修不好
+        all_undecodable = bool(photo_results) and all(
+            r["reason"] == "decode_failed" for r in photo_results
+        )
+        head = (
+            "所有图片都无法被人脸服务解析"
+            if all_undecodable
+            else "所有图片均未检出清晰人脸"
+        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"所有图片均未检出清晰人脸（{reasons}），"
-                "请上传正脸、光线充足的照片或更换素材"
-            ),
+            detail=f"{head}（{reasons}），请上传正脸、光线充足的照片或更换素材",
         )
 
     avg = np.mean(np.stack(embeddings, axis=0), axis=0)
@@ -438,11 +454,14 @@ async def detect_inspiration_faces(
         raise HTTPException(status_code=404, detail="素材未找到")
 
     if image_bytes is None:
-        full_path = settings.storage_root / inspiration.file_path
-        try:
-            image_bytes = full_path.read_bytes()
-        except OSError as e:
-            raise HTTPException(status_code=404, detail=f"素材文件缺失: {e}") from e
+        # 视频素材取首帧缩略图、其它格式统一转 JPEG：子服务解不了 mp4，直接送会 400
+        from app.services.face_image import load_inspiration_image
+
+        image_bytes, warning = await load_inspiration_image(inspiration)
+        if image_bytes is None:
+            raise HTTPException(
+                status_code=400, detail=f"该素材无法用于人脸检测：{warning}"
+            )
 
     try:
         result = await face_client.embed(image_bytes)
@@ -461,6 +480,12 @@ async def detect_inspiration_faces(
             )
             await db.commit()
             return await list_inspiration_detections_response(db, inspiration_id)
+        if e.status_code == 400:
+            # 子服务解不了图：改成可操作的提示，别把子服务原文丢给用户
+            raise HTTPException(
+                status_code=400,
+                detail=f"人脸识别子服务无法解码该素材（{e.detail}），请换一张素材或改用 JPG/PNG 图片",
+            ) from e
         raise HTTPException(status_code=503, detail=str(e)) from e
     except FaceServiceUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -762,14 +787,13 @@ async def bind_uploaded_inspiration_face(
     if not inspiration:
         return {"inspiration_id": inspiration_id, "bound": False, "reason": "素材不存在"}
 
-    full_path = settings.storage_root / inspiration.file_path
-    try:
-        image_bytes = await asyncio.to_thread(full_path.read_bytes)
-    except OSError:
-        return {"inspiration_id": inspiration_id, "bound": False, "reason": "素材文件缺失"}
+    # face-service 检测：视频素材取首帧缩略图、其它格式统一转 JPEG（子服务解不了
+    # mp4/webp 直传会 400）。无人脸/检测失败都不写绑定，素材归属已由上传链路单独建立。
+    from app.services.face_image import load_inspiration_image
 
-    # face-service 检测（Video 关键帧/图片素材此处仅处理图片路径；
-    # 视频素材人脸绑定由既有 face_scan 链路处理，上传绑定仅图片）
+    image_bytes, warning = await load_inspiration_image(inspiration)
+    if image_bytes is None:
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": warning}
     try:
         result = await face_client.embed(image_bytes)
     except FaceServiceUnavailableError:

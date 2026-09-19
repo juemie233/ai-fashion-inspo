@@ -853,3 +853,118 @@ def test_bind_face_endpoint_accepts(client, create_blogger, monkeypatch):
     r = client.post(f"/api/bloggers/{blogger['id']}/bind-face/not-a-real-insp")
     assert r.status_code == 200, r.text
     assert r.json()["message"] == "已提交人脸绑定任务（后台异步执行）"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  送检图片准备：视频素材取首帧缩略图 / 单张解码失败不再整次失败
+#  （回归：「人脸识别子服务错误 400: 无法解析图片，请上传有效的 JPG/PNG 文件」）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _make_video_material(client, upload) -> str:
+    """把一张上传素材改造成「视频素材」：主文件内容不可解码（模拟 mp4），缩略图是真实 JPEG。
+
+    f2 下载的抖音素材约 8% 是 mp4；此前这些素材被原样送检，子服务 cv2 解不了直接
+    400，而注册流程把它当成整次失败——这就是报错原文的来源。
+    """
+    from app.config import settings
+    from app.models.inspiration import Inspiration
+
+    insp = upload().json()
+    async with async_session() as db:
+        row = await db.get(Inspiration, insp["id"])
+        rel = f"videos/{insp['id']}.mp4"
+        path = settings.storage_root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64)
+        row.media_type = "video"
+        row.file_path = rel
+        await db.commit()
+    return insp["id"]
+
+
+def _capture_embed(monkeypatch, embedding: list[float]) -> list[bytes]:
+    """替换 embed：记录每张送检图片的字节，返回单张人脸。"""
+    sent: list[bytes] = []
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        sent.append(image_bytes)
+        return {
+            "face_count": 1,
+            "faces": [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": embedding}],
+        }
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed)
+    return sent
+
+
+async def test_register_blogger_face_video_material_uses_thumbnail(
+    client, create_blogger, upload, monkeypatch
+):
+    """视频素材注册：送检的是首帧缩略图（JPEG），mp4 字节不会被子服务看到。"""
+    blogger = create_blogger(name="视频素材博")
+    insp_id = await _make_video_material(client, upload)
+    _link_inspiration(client, insp_id, blogger["id"])
+    sent = _capture_embed(monkeypatch, _unit_embedding(9))
+
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{insp_id}"]'},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["photos_used"] == 1
+    assert len(sent) == 1
+    assert sent[0][:2] == b"\xff\xd8"  # JPEG：视频文件没有被直接送检
+    assert b"ftypmp42" not in sent[0]
+
+
+def test_register_blogger_face_subservice_400_skips_that_photo(
+    client, create_blogger, upload, monkeypatch
+):
+    """子服务对某张图返回 400（解不了）：只跳过该张，其余照片照常注册。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    blogger = create_blogger(name="坏图博")
+    insp_id = upload().json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+    calls = {"n": 0}
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise FaceServiceHttpError(400, "无法解析图片，请上传有效的 JPG/PNG 文件")
+        return {
+            "face_count": 1,
+            "faces": [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": _unit_embedding(4)}],
+        }
+
+    monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed)
+
+    r = client.post(
+        f"/api/bloggers/{blogger['id']}/face",
+        data={"inspiration_ids": f'["{insp_id}"]'},
+        files=[("files", ("up.jpg", b"upload-photo", "image/jpeg"))],
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["registered"] is True
+    assert body["photos_used"] == 1
+    skipped = [p for p in body["photo_results"] if p["status"] == "skipped"]
+    assert skipped and skipped[0]["reason"] == "decode_failed"
+    assert "无法解析" in skipped[0]["message"]
+
+
+async def test_detect_inspiration_faces_video_material_uses_thumbnail(
+    client, create_blogger, upload, monkeypatch
+):
+    """素材人脸检测同样走首帧缩略图：视频素材不再换回「无法解析图片」。"""
+    create_blogger(name="检测视频博")
+    insp_id = await _make_video_material(client, upload)
+    sent = _capture_embed(monkeypatch, _unit_embedding(3))
+
+    r = client.post(f"/api/inspirations/{insp_id}/face-detect")
+
+    assert r.status_code == 200, r.text
+    assert sent and sent[0][:2] == b"\xff\xd8"

@@ -57,8 +57,9 @@ const selectedTotal = computed(
         <a-tag v-else color="orange" size="small">未注册</a-tag>
       </template>
       <p class="face-hint">
-        上传正脸照片或从已关联素材中选择图片（两种来源合计 1~5 张），系统提取人脸特征并
-        平均池化入库；素材库中的人脸将自动与特征库匹配。重复注册将覆盖旧特征（重新注册）。
+        上传正脸照片或从已关联素材中选择图片（视频素材按首帧画面识别；两种来源合计 1~5
+        张），系统提取人脸特征并平均池化入库；素材库中的人脸将自动与特征库匹配。
+        重复注册将覆盖旧特征（重新注册）。
       </p>
 
       <a-tabs v-model:active-key="faceTab" size="small" type="line">
