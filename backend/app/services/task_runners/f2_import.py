@@ -783,6 +783,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "deferred_works": deferred_works,
             "seconds": plan_seconds,
             "hash_cache": cache_stats,
+            # 带真实作品 ID 的文件数（新命名模板产物）。为 0 说明这批素材入库后
+            # 仍点不回抖音原帖——据此判断采集侧模板是否生效。
+            "with_aweme_id": sum(1 for d in to_import if d.item.aweme_id),
         },
     }
     task.updated_at = utcnow()

@@ -126,12 +126,25 @@ F2_LIKE_SUBDIR = Path("Download/douyin/like")
 
 DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
 
+"""发布模式的命名模板：**必须带 `{aweme_id}`**，否则素材失去真实作品 ID。
+
+不传 `-n` 时 f2 用配置里的 `{create}_{desc}`——文件名里没有作品 ID，导入后
+`source_platform_id` 只能用「文件名算出来的合成哈希」、`source_url` 只能留空，
+于是历史素材一条都点不回抖音原帖（见 TODO「f2 素材可追溯」）。
+
+`{create}` 固定 19 字符（`YYYY-MM-DD HH-MM-SS`）、`{aweme_id}` 固定 19 位数字，
+两者都含数字，解析靠「19 位数字 + 紧随类型标记」锚定（见 :data:`KIND_RE_WITH_ID`）。
+"""
+POST_NAMING_TEMPLATE = "{create}_{desc}_{aweme_id}"
+
 """点赞模式必须传的命名模板：带 `{nickname}` 才能把**原作者**留在文件名里。
 
 不传时 f2 用配置里的 `{create}_{desc}`，文件落到「我的昵称」目录下后就再也
 认不出原作者了——素材的来源作者会全变成你自己、也绑不到原作者博主。
+`{aweme_id}` 的作用同发布模式：真实作品 ID（同一作品从主页与点赞两条路进来
+时，靠它而不是「作者+时间+正文」对齐，判重更稳）。
 """
-LIKE_NAMING_TEMPLATE = "{nickname}_{create}_{desc}"
+LIKE_NAMING_TEMPLATE = "{nickname}_{create}_{desc}_{aweme_id}"
 
 """「我的喜欢」入库后自动登记的博主所用的 `bloggers.source` 取值。
 
@@ -170,6 +183,23 @@ KIND_RE = re.compile(
     r"^(?:(?P<author>.+?)_)?"
     r"(?P<created>\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})_"
     r"(?P<body>.+?)_(?P<kind>video|image|live|music|cover|lyric)"
+    r"(?:_(?P<index>\d+))?$",
+    re.I,
+)
+
+"""带真实作品 ID 的命名（新模板，见 :data:`POST_NAMING_TEMPLATE` / `LIKE_NAMING_TEMPLATE`）。
+
+作品 ID 是**固定 19 位数字**且紧跟类型标记，于是锚定 `_{19位数字}_{类型}` 就能
+与正文里的数字区分开。
+
+⚠ 尝试顺序必须是「先新后旧」：旧模板正则会把 `_1234567890123456789` 当成正文的
+一部分，同一作品会算出两个作品键 → 重复入库。
+"""
+KIND_RE_WITH_ID = re.compile(
+    r"^(?:(?P<author>.+?)_)?"
+    r"(?P<created>\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})_"
+    r"(?P<body>.+?)_(?P<aweme_id>\d{19})"
+    r"_(?P<kind>video|image|live|music|cover|lyric)"
     r"(?:_(?P<index>\d+))?$",
     re.I,
 )
@@ -216,6 +246,7 @@ class ParsedFile:
     index: int  # 图集序号（无序号为 0）
     media_type: str  # 入库用 media_type（image / video）；空串表示不入库
     size: int = 0
+    aweme_id: str = ""  # 真实作品 ID（新命名才有；旧命名的历史文件为空串）
 
     @property
     def caption(self) -> str:
@@ -259,6 +290,14 @@ def parse_media_filename(path: Path, author_dir: str = "") -> ParsedFile | None:
     作者归属：文件名带作者前缀时（点赞模式）以**文件名里的原作者**为准，
     否则回落到所在目录名（发布模式的 `post/{作者}/`）。
 
+    命名兼容两种模板（**先新后旧**，顺序不可颠倒）：
+
+    - 新（带作品 ID）：`{create}_{desc}_{aweme_id}_{kind}_{index}`
+    - 旧（历史文件）：`{create}_{desc}_{kind}_{index}`
+
+    旧文件仍要能解析——`Download/` 目录里新旧混放，且重跑历史批次不能因为
+    模板变更而失效。
+
     Args:
         path: 文件路径。
         author_dir: 所属作者目录名（缺省取 path 的父目录名）。
@@ -268,7 +307,9 @@ def parse_media_filename(path: Path, author_dir: str = "") -> ParsedFile | None:
     """
     if path.suffix.lower() == TMP_EXT:
         return None
-    match = KIND_RE.match(path.stem)
+    match = KIND_RE_WITH_ID.match(path.stem)
+    if not match:
+        match = KIND_RE.match(path.stem)
     if not match:
         return None
     kind = match.group("kind").lower()
@@ -289,6 +330,7 @@ def parse_media_filename(path: Path, author_dir: str = "") -> ParsedFile | None:
         index=int(match.group("index") or 0),
         media_type=media_type,
         size=path.stat().st_size if path.exists() else 0,
+        aweme_id=match.groupdict().get("aweme_id") or "",
     )
 
 
@@ -1040,7 +1082,17 @@ def work_hash(work_key: str) -> str:
 
 
 def platform_id_for(item: ParsedFile) -> str:
-    """构造素材的 source_platform_id：``f2:{作品短哈希}#{序号}``。
+    """构造素材的 source_platform_id：``f2:{真实作品ID}#{序号}``。
+
+    两套口径（新文件有作品 ID，历史文件没有）：
+
+    - **新**（文件名含 `{aweme_id}`）：``f2:{aweme_id}#image1``——身份来自抖音
+      作品本身，与文件名无关；重命名/移动文件不再影响幂等，也无法造伪。
+    - **旧**（历史文件）：``f2:{作品短哈希}#image1``——沿用文件名合成哈希。
+
+    两套 ID 必须并存：已入库的历史素材不会自动获得新 ID，去重判据要同时认
+    （见 :func:`platform_ids_for`）。两套不会撞车——短哈希固定 12 位十六进制，
+    作品 ID 固定 19 位数字，字符集与长度都不同。
 
     ⚠ 为什么必须带**类型前缀**的序号：``ix_inspirations_source_platform_id``
     是**全局唯一**索引（仅约束未删除素材，见 models/inspiration.py），同一
@@ -1053,12 +1105,69 @@ def platform_id_for(item: ParsedFile) -> str:
 
     Returns:
         稳定的平台 ID（同一文件重复计算结果一致 → 天然幂等）；
-        仍可按前缀 ``f2:{作品短哈希}#`` 聚合出「同一作品」的全部素材。
+        仍可按前缀聚合出「同一作品」的全部素材。
+    """
+    suffix = (
+        f"{item.kind}{item.index}" if item.kind in ("image", "live") else item.kind
+    )
+    if item.aweme_id:
+        return f"f2:{item.aweme_id}#{suffix}"
+    return f"f2:{work_hash(item.work_key)}#{suffix}"
+
+
+def legacy_platform_id_for(item: ParsedFile) -> str:
+    """旧口径平台 ID（文件名合成哈希）——新文件判重时也要一起认。
+
+    为什么需要：同一作品先前用旧模板下载入库过（库里存的是哈希 ID），改用新
+    模板重下时算出来的是作品 ID，只比对新 ID 会漏判 → 重复入库。内容哈希虽是
+    主判据，但重下可能字节不同，平台 ID 这一层必须两套都查。
+
+    Args:
+        item: 已解析文件。
+
+    Returns:
+        旧口径平台 ID。
     """
     suffix = (
         f"{item.kind}{item.index}" if item.kind in ("image", "live") else item.kind
     )
     return f"f2:{work_hash(item.work_key)}#{suffix}"
+
+
+def platform_ids_for(item: ParsedFile) -> list[str]:
+    """该文件可能对应的全部平台 ID（用于「两套口径并存」的判重）。
+
+    Args:
+        item: 已解析文件。
+
+    Returns:
+        ``[主口径, ...]``；新文件含两个（作品 ID + 旧哈希），旧文件只有一个。
+    """
+    primary = platform_id_for(item)
+    legacy = legacy_platform_id_for(item)
+    return [primary] if primary == legacy else [primary, legacy]
+
+
+def source_url_for(item: ParsedFile) -> str | None:
+    """构造素材的 source_url（抖音原帖地址）；无作品 ID 时返回 None。
+
+    视频作品用 ``/video/``，图集用 ``/note/``——按**作品类型**（``kind``）判断
+    而不是 ``media_type``：图集里的 live 实况分段入库后也是 video，但它所属的
+    作品仍是图集，必须走 ``/note/`` 才能在抖音打开。
+
+    **没有作品 ID 就返回 None，绝不造伪链接**：历史素材宁可留空，也不能写一个
+    打不开的地址（前端据此决定是否显示「原始链接」）。
+
+    Args:
+        item: 已解析文件。
+
+    Returns:
+        抖音原帖 URL；无作品 ID 返回 None。
+    """
+    if not item.aweme_id:
+        return None
+    path = "video" if item.kind == "video" else "note"
+    return f"https://www.douyin.com/{path}/{item.aweme_id}"
 
 
 @dataclass
@@ -1092,11 +1201,13 @@ def _skip_reason(
         return TRASH_SKIP_REASON
     if digest in seen_hashes:
         return "批次内重复（同内容已处理）"
-    platform_id = platform_id_for(item)
-    if platform_id in dedup.live_platform_ids:
-        return "已在库（平台 ID 命中）"
-    if platform_id in dedup.trash_platform_ids:
-        return TRASH_SKIP_REASON
+    # 平台 ID 判重必须认「两套口径」：库里的历史素材存的是文件名哈希 ID，
+    # 新模板重下算出的是真实作品 ID，只比对新 ID 会漏判 → 重复入库
+    for platform_id in platform_ids_for(item):
+        if platform_id in dedup.live_platform_ids:
+            return "已在库（平台 ID 命中）"
+        if platform_id in dedup.trash_platform_ids:
+            return TRASH_SKIP_REASON
     return ""
 
 
@@ -1333,7 +1444,7 @@ def apply_import(
                 (
                     insp_id,
                     "douyin",
-                    None,  # source_url：f2 未提供 aweme_id，留空而非造伪链接
+                    source_url_for(item),  # 无作品 ID 的历史文件留空，不造伪链接
                     item.author_key or item.author_dir,
                     decision.platform_id,
                     rel_path,
@@ -1601,14 +1712,17 @@ def build_f2_command(
       `all` 表示翻作者全部历史——`all` 时 f2 不设 `min_cursor`，必须一路翻到底，
       每页还固定 sleep 一次 `timeout`（本机 10 秒），所以日常增量务必给窗口
     - `-p`：下载根目录（缺省就是 f2 工作目录下的 Download/）
-    - `-n`：命名模板。**缺省不传**，沿用 f2 配置里的模板——本模块的解析器
-      依赖 `{时间}_{正文}_{类型}_{序号}` 形状，擅自改模板会让作品分组/正文解析失效
+    - `-n`：命名模板。**缺省传 :data:`POST_NAMING_TEMPLATE`**（含 `{aweme_id}`），
+      这样新素材带真实作品 ID、能写回抖音原帖链接；不再沿用 f2 配置里的模板
+      ——配置里的 `{create}_{desc}` 不含作品 ID，会让新素材继续失去可追溯性。
+      解析器与新模板同步（见 :data:`KIND_RE_WITH_ID`），并兼容旧命名的历史文件
     - `--auto-cookie`：从浏览器自动取 cookie（需先关闭该浏览器）
 
     Args:
         author: :func:`load_f2_authors` 的一项。
         download_root: 下载根目录（传给 f2 的 -p）。
-        naming: 命名模板（一般不要传）。
+        naming: 命名模板（缺省 :data:`POST_NAMING_TEMPLATE`；覆盖时**必须**保留
+            `{aweme_id}`，否则该批素材失去作品 ID）。
         auto_cookie: 浏览器名（chrome / chromium / edge …）。
         interval: 传给 f2 的 `-i` 值：`all` 或 `YYYY-MM-DD|YYYY-MM-DD`。
 
@@ -1626,11 +1740,11 @@ def build_f2_command(
         "post",
         "-i",
         interval or "all",
+        "-n",
+        naming or POST_NAMING_TEMPLATE,
     ]
     if download_root is not None:
         cmd += ["-p", str(download_root)]
-    if naming:
-        cmd += ["-n", naming]
     if auto_cookie:
         cmd += ["--auto-cookie", auto_cookie]
     return cmd
@@ -1814,7 +1928,7 @@ def run_fetch(
         f2_dir: f2 工作目录。
         authors: 只下载这些作者（归一化名，None 表示全部）。
         download_root: 传给 f2 的 -p 下载根目录。
-        naming: 传给 f2 的 -n 命名模板（一般不要传）。
+        naming: 传给 f2 的 -n 命名模板（缺省 :data:`POST_NAMING_TEMPLATE`，含作品 ID）。
         auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
         limit: 最多下载多少个作者（试跑用）。
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
@@ -2188,7 +2302,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--naming",
         default=None,
-        help="传给 f2 的 -n 命名模板；缺省沿用 f2 配置（勿随意改：解析依赖默认模板形状）",
+        help="传给 f2 的 -n 命名模板；缺省用含 {aweme_id} 的模板（勿去掉作品 ID：去掉后素材无法追溯原帖）",
     )
     parser.add_argument(
         "--auto-cookie",

@@ -783,6 +783,13 @@ def _jpeg(path: Path, color: str = "red") -> Path:
     return path
 
 
+def _fake_mp4(path: Path) -> Path:
+    """带 ftyp 魔数的最小 mp4 头：够过 validate_media 的类型粗检（不解码）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41")
+    return path
+
+
 def _import_lib(tmp_path: Path) -> Path:
     """建最小素材库表结构（列与 INSERT_F2_SQL 对齐）。
 
@@ -965,7 +972,7 @@ def test_load_f2_authors_tolerates_missing_db_and_table(tmp_path):
 
 
 def test_build_f2_command_default_flags():
-    """默认命令：主页作品 + 全部日期 + 指定下载根；不擅自改命名模板。"""
+    """默认命令：主页作品 + 全部日期 + 指定下载根 + **带作品 ID 的命名模板**。"""
     author = {"sec_user_id": "MS4wLjABAAAAaaa", "nickname": "里香"}
     cmd = f2.build_f2_command(author, download_root=Path("D:/f2/Download"))
 
@@ -974,8 +981,11 @@ def test_build_f2_command_default_flags():
     assert cmd[cmd.index("-M") + 1] == "post"
     assert cmd[cmd.index("-i") + 1] == "all"
     assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
-    assert "-n" not in cmd  # 缺省沿用 f2 配置的命名模板（解析依赖其形状）
     assert "--auto-cookie" not in cmd
+    # 缺省必须显式传 -n 且含 {aweme_id}：不传时 f2 用配置里的 {create}_{desc}，
+    # 新素材会继续丢失真实作品 ID（无法回填原帖链接）
+    assert cmd[cmd.index("-n") + 1] == f2.POST_NAMING_TEMPLATE
+    assert "{aweme_id}" in f2.POST_NAMING_TEMPLATE
 
 
 def test_build_f2_command_optional_flags():
@@ -1532,7 +1542,10 @@ def test_like_user_url_normalizes():
 
 
 def test_build_f2_like_command_shape():
-    """点赞命令：-M like + -i all + 带 {nickname} 的命名模板（原作者留在文件名里）。"""
+    """点赞命令：-M like + -i all + 带 {nickname}/{aweme_id} 的命名模板。
+
+    原作者只存在于文件名里，作品 ID 同理（点赞列表跨作者，缺一不可）。
+    """
     cmd = f2.build_f2_like_command(
         "MS4wLjABAAAAme", download_root=Path("D:/f2/Download")
     )
@@ -1541,7 +1554,8 @@ def test_build_f2_like_command_shape():
     assert cmd[cmd.index("-u") + 1] == "https://www.douyin.com/user/MS4wLjABAAAAme"
     assert cmd[cmd.index("-M") + 1] == "like"
     assert cmd[cmd.index("-i") + 1] == "all"
-    assert cmd[cmd.index("-n") + 1] == f2.LIKE_NAMING_TEMPLATE == "{nickname}_{create}_{desc}"
+    assert cmd[cmd.index("-n") + 1] == f2.LIKE_NAMING_TEMPLATE
+    assert f2.LIKE_NAMING_TEMPLATE == "{nickname}_{create}_{desc}_{aweme_id}"
     assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
 
 
@@ -1561,3 +1575,247 @@ def test_run_fetch_likes_reports_and_requires_user(tmp_path):
         tmp_path, "MS4wLjABAAAAme", runner=lambda cmd, cwd: (1, "cookie 失效")
     )
     assert bad["failed"] == 1 and bad["ok"] == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+#  真实作品 ID（新命名模板）：解析 / 平台 ID / 原帖链接 / 两套口径并存
+# ═══════════════════════════════════════════════════════════════
+
+"""实测作品 ID 形态：19 位数字（f2 的 {aweme_id} 长度固定 19）。"""
+AWEME = "7412345678901234567"
+
+
+def _new_name(body: str = "标题", kind: str = "image_1") -> str:
+    """新模板产物名：{create}_{desc}_{aweme_id}_{kind}。"""
+    return f"2025-01-01 10-00-00_{body}_{AWEME}_{kind}.webp"
+
+
+def test_parse_new_naming_extracts_aweme_id():
+    parsed = f2.parse_media_filename(Path("A") / _new_name("标题"), "A")
+
+    assert parsed is not None
+    assert parsed.aweme_id == AWEME
+    assert parsed.body == "标题"           # 作品 ID 不能混进正文
+    assert parsed.kind == "image"
+    assert parsed.index == 1
+    assert parsed.created == "2025-01-01 10-00-00"
+    assert parsed.author_dir == "A"        # 发布模式作者仍取自目录名
+
+
+def test_parse_new_naming_with_author_prefix_and_underscore_in_body():
+    """点赞模式：作者前缀 + 正文含下划线 + 正文含数字，都要切对。"""
+    parsed = f2.parse_media_filename(
+        Path("我的账号")
+        / f"不养羊_2025-01-01 10-00-00_下一站再见吧_#jk_2024_{AWEME}_image_3.webp",
+        "我的账号",
+    )
+
+    assert parsed is not None
+    assert parsed.author_dir == "不养羊"
+    assert parsed.aweme_id == AWEME
+    assert parsed.body == "下一站再见吧_#jk_2024"
+    assert parsed.index == 3
+
+
+def test_parse_old_naming_still_works():
+    """旧命名的历史文件必须照旧能解析（Download/ 目录新旧混放）。"""
+    parsed = f2.parse_media_filename(
+        Path("里香1√") / "2025-01-01 10-00-00_标题_image_2.webp", "里香1√"
+    )
+
+    assert parsed is not None
+    assert parsed.aweme_id == ""           # 旧命名没有作品 ID
+    assert parsed.body == "标题"
+    assert parsed.index == 2
+    assert parsed.author_key == "里香"
+
+
+def test_new_regex_wins_over_old():
+    """回归：新命名若被旧正则解析，作品 ID 会混进正文 → 同一作品两个作品键。
+
+    这是「先新后旧」尝试顺序的理由，必须锁死。
+    """
+    parsed = f2.parse_media_filename(Path("A") / _new_name("标题"), "A")
+
+    assert parsed.aweme_id == AWEME
+    assert AWEME not in parsed.body
+
+
+def test_platform_id_uses_real_aweme_id():
+    """新口径：身份来自作品本身，与文件名无关。"""
+    parsed = f2.parse_media_filename(Path("A") / _new_name("标题", "image_1"), "A")
+    video = f2.parse_media_filename(
+        Path("A") / _new_name("标题", "video").replace(".webp", ".mp4"), "A"
+    )
+
+    assert f2.platform_id_for(parsed) == f"f2:{AWEME}#image1"
+    assert f2.platform_id_for(video) == f"f2:{AWEME}#video"
+    assert f2.platform_id_for(parsed) != f2.platform_id_for(video)
+
+
+def test_platform_id_survives_rename():
+    """新口径的关键收益：改名/移动不再改变平台 ID（旧口径会变）。"""
+    a = f2.parse_media_filename(Path("A") / _new_name("标题"), "A")
+    b = f2.parse_media_filename(Path("A") / _new_name("标题"), "A")
+    assert f2.platform_id_for(a) == f2.platform_id_for(b)
+
+    old_a = f2.parse_media_filename(Path("A") / "2025-01-01 10-00-00_标题_image_1.webp", "A")
+    old_b = f2.parse_media_filename(Path("A") / "2025-01-01 10-00-00_改过的标题_image_1.webp", "A")
+    assert f2.platform_id_for(old_a) != f2.platform_id_for(old_b)
+
+
+def test_platform_ids_for_new_file_returns_both_schemes():
+    """新文件要同时认「作品 ID」与「旧哈希 ID」两套（库里历史素材存的是后者）。"""
+    parsed = f2.parse_media_filename(Path("A") / _new_name("标题"), "A")
+
+    ids = f2.platform_ids_for(parsed)
+    assert ids[0] == f"f2:{AWEME}#image1"
+    assert len(ids) == 2
+    assert ids[1] == f2.legacy_platform_id_for(parsed)
+    assert ids[1].startswith("f2:") and ids[1].endswith("#image1")
+
+
+def test_platform_ids_for_old_file_single_scheme():
+    """旧文件只有一套 ID（拿不到作品 ID），去重集合不应重复。"""
+    parsed = f2.parse_media_filename(Path("A") / "2025-01-01 10-00-00_标题_image_1.webp", "A")
+
+    ids = f2.platform_ids_for(parsed)
+    assert len(ids) == 1
+    assert ids[0] == f2.platform_id_for(parsed) == f2.legacy_platform_id_for(parsed)
+
+
+@pytest.mark.parametrize(
+    "kind, suffix, expected_path",
+    [
+        ("image_1", ".webp", "note"),
+        ("live_1", ".mp4", "note"),   # 图集里的 live 分段仍属图集作品
+        ("video", ".mp4", "video"),
+    ],
+)
+def test_source_url_by_work_kind(kind, suffix, expected_path):
+    """原帖链接按**作品类型**判断，不是 media_type（live 入库是 video 但走 /note/）。"""
+    name = _new_name("标题", kind).replace(".webp", suffix)
+    parsed = f2.parse_media_filename(Path("A") / name, "A")
+
+    assert f2.source_url_for(parsed) == f"https://www.douyin.com/{expected_path}/{AWEME}"
+
+
+@pytest.mark.parametrize("kind, expected", [("cover", "note"), ("image_1", "note")])
+def test_source_url_cover_and_image_are_note(kind, expected):
+    parsed = f2.parse_media_filename(Path("A") / _new_name("标题", kind), "A")
+    assert f2.source_url_for(parsed) == f"https://www.douyin.com/{expected}/{AWEME}"
+
+
+def test_source_url_none_without_aweme_id():
+    """没有作品 ID 就留空——绝不造一个打不开的伪链接。"""
+    parsed = f2.parse_media_filename(Path("A") / "2025-01-01 10-00-00_标题_image_1.webp", "A")
+    assert f2.source_url_for(parsed) is None
+
+
+def test_plan_dedups_new_file_against_legacy_platform_id(tmp_path):
+    """回归（两套口径并存）：同一作品先前用旧模板入库，改用新模板重下必须跳过。
+
+    库里的历史素材存的是旧哈希 ID；只比对新作品 ID 会漏判 → 重复入库。
+    这里刻意不传 library_hashes：内容判据失效时，平台 ID 这一层必须自己兜住。
+    """
+    legacy_path = tmp_path / "A" / "2025-01-01 10-00-00_标题_image_1.webp"
+    _write(legacy_path, b"legacy")
+    legacy_id = f2.platform_id_for(f2.parse_media_filename(legacy_path, "A"))
+    assert legacy_id.startswith("f2:") and AWEME not in legacy_id
+
+    new_path = tmp_path / "A" / _new_name("标题")
+    _write(new_path, b"redownloaded")  # 内容与旧文件不同，内容判据不参与
+    new_item = f2.parse_media_filename(new_path, "A")
+
+    decisions, skipped, _ = _decisions([new_item], platform_ids={legacy_id})
+    assert all(d.action == "skip" for d in decisions)
+    assert skipped["已在库（平台 ID 命中）"] == 1
+
+
+def test_plan_keeps_new_platform_id_as_primary(tmp_path):
+    """落库用的是新口径 ID（作品 ID），不是去重时顺带查的旧哈希 ID。"""
+    path = tmp_path / "A" / _new_name("标题")
+    _write(path, b"img")
+    item = f2.parse_media_filename(path, "A")
+
+    decisions, _, _ = _decisions([item])
+
+    assert decisions[0].action == "import"
+    assert decisions[0].platform_id == f"f2:{AWEME}#image1"
+
+
+def test_apply_import_writes_source_url(tmp_path):
+    """新命名文件入库要写真原帖链接（本轮改动的交付点）。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / _new_name("标题").replace(".webp", ".jpg"))
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+
+    result = f2.apply_import(
+        [d for d in _decisions(files)[0] if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+    )
+    assert result["imported"] == 1
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT source_url, source_platform_id FROM inspirations").fetchone()
+    conn.close()
+    assert row[0] == f"https://www.douyin.com/note/{AWEME}"
+    assert row[1] == f"f2:{AWEME}#image1"
+
+
+def test_apply_import_video_uses_video_url(tmp_path):
+    """视频作品走 /video/（图集里的 live 分段仍走 /note/，见 source_url_for 用例）。"""
+    root = tmp_path / "f2"
+    _fake_mp4(root / "A" / _new_name("标题", "video").replace(".webp", ".mp4"))
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+
+    f2.apply_import(
+        [d for d in _decisions(files)[0] if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+    )
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT source_url FROM inspirations").fetchone()
+    conn.close()
+    assert row[0] == f"https://www.douyin.com/video/{AWEME}"
+
+
+def test_apply_import_leaves_source_url_empty_for_legacy_naming(tmp_path):
+    """旧命名文件（无作品 ID）入库仍留空——不造打不开的伪链接。"""
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题_image_1.jpg")
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+
+    f2.apply_import(
+        [d for d in _decisions(files)[0] if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+    )
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT source_url FROM inspirations").fetchone()
+    conn.close()
+    assert row[0] is None
+
+
+def test_run_fetch_passes_naming_with_aweme_id(tmp_path):
+    """端到端：run_fetch 构造的 f2 命令必须带含 {aweme_id} 的命名模板。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    calls: list[list[str]] = []
+
+    result = f2.run_fetch(
+        f2_dir, runner=lambda cmd, cwd: (calls.append(cmd) or (0, ""))
+    )
+
+    assert result["ok"] == 2
+    assert len(calls) == 2
+    for cmd in calls:
+        assert "{aweme_id}" in cmd[cmd.index("-n") + 1]
