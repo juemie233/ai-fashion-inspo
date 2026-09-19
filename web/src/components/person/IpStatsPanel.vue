@@ -1,34 +1,22 @@
 <script setup lang="ts">
-/** 博主 IP 属地统计卡片：ECharts 横向柱状图（ArcoChart 封装），仅穿搭博主页展示。 */
+/** 博主 IP 属地统计卡片：ECharts 横向柱状图（ArcoChart 封装），仅穿搭博主页展示。
+ *
+ * 图表配置与高度在 `utils/ipStatsChart.ts`（纯函数，便于用真实数据断言「标签不会被
+ * ECharts 自动藏掉」）；本组件只负责拉数据与组装。
+ */
 
 import { computed, onMounted, ref } from 'vue'
-import type { EChartsOption } from 'echarts'
 import { bloggersApi, type PersonIpStats } from '@/api/persons'
+import { buildIpStatsChartOption, ipStatsChartHeight } from '@/utils/ipStatsChart'
 import ArcoChart from '@/components/chart/ArcoChart.vue'
 
 const ipStats = ref<PersonIpStats | null>(null)
 
-/** 图表配置：y 轴地区（最多在上），x 轴人数；无数据返回 null（ArcoChart 显示空态） */
-const chartOption = computed<EChartsOption | null>(() => {
-  const items = ipStats.value?.items ?? []
-  if (items.length === 0) return null
-  const rows = [...items].reverse()
-  return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: 8, right: 40, top: 8, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', minInterval: 1 },
-    yAxis: { type: 'category', data: rows.map((i) => i.ip_location) },
-    series: [
-      {
-        type: 'bar',
-        data: rows.map((i) => i.count),
-        barMaxWidth: 18,
-        itemStyle: { color: '#18a058', borderRadius: [0, 4, 4, 0] },
-        label: { show: true, position: 'right' },
-      },
-    ],
-  }
-})
+const items = computed(() => ipStats.value?.items ?? [])
+/** 图表配置：y 轴地区（人数最多在上）、x 轴人数；无数据返回 null（ArcoChart 显示空态） */
+const chartOption = computed(() => buildIpStatsChartOption(items.value))
+/** 容器高度随类目数增长：高度不够时 ECharts 会隔一个藏一个类目名 */
+const chartHeight = computed(() => ipStatsChartHeight(items.value.length))
 
 /** 加载博主 IP 属地统计 */
 async function loadIpStats() {
@@ -51,7 +39,7 @@ onMounted(loadIpStats)
     </template>
     <ArcoChart
       :option="chartOption"
-      :height="320"
+      :height="chartHeight"
       empty-text="暂无 IP 属地数据（可从 CSV 导入或编辑博主补充）"
     />
   </a-card>

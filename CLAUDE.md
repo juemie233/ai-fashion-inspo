@@ -191,6 +191,7 @@ fashion-inspo/
 - **fix（修复）提交无限制**：修复功能的代码提交不受行数限制，完成后自动 `git commit` 并 `git push origin master`。
 - **其他类型 < 100 行**：不自动提交。仅在用户明确要求时提交。
 - **其他类型 ≥ 100 行**：自动 `git commit` 并 `git push origin master`。
+- **推送后不要等 CI**：提交推送完成即结束本轮，**禁止**轮询 / 等待 / 查询 GitHub Actions 结果（不调 CI 接口、不 `sleep` 等结果）。CI 是否通过由用户在 GitHub 上查看；若失败，用户会把错误信息贴回来，届时再修。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
 
