@@ -302,6 +302,91 @@ def test_collect_disk_works_empty_root(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  磁盘侧风险画像（不联网可得）
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_analyze_disk_keys_counts_duplicate_stems():
+    """同作者内主干重复 → 对齐键相撞，接口侧若 ≥2 条即必然多义。"""
+    disk = {"甲": ["k1", "k1", "k2"], "乙": ["k3"]}
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["works"] == 4
+    assert analysis["authors"] == 2
+    assert analysis["duplicate_stems"] == 2  # k1 出现两次
+    assert analysis["duplicate_examples"][0]["author"] == "甲"
+
+
+def test_analyze_disk_keys_flags_placeholder_time():
+    """实测存在：f2 拿到的 create_time 是整点 0 分 0 秒（网易第五人格 2 件）。"""
+    disk = {
+        "甲": [
+            "2026-08-27 00-00-00__是非_对错",
+            "2026-08-28 13-37-36_正常",
+        ]
+    }
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["placeholder_time"] == 1
+    assert analysis["missing_time"] == 0
+    assert "00-00-00" in analysis["placeholder_examples"][0]
+
+
+def test_analyze_disk_keys_flags_missing_time():
+    disk = {"甲": ["没有时间戳的主干"]}
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["missing_time"] == 1
+    assert analysis["placeholder_time"] == 0
+
+
+def test_analyze_disk_keys_counts_empty_and_truncated_body():
+    disk = {
+        "甲": [
+            "2026-08-27 10-00-00_",  # 描述为空
+            "2026-08-27 11-00-00_前半......后半",  # 被 f2 中段截断
+        ]
+    }
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["empty_body"] == 1
+    assert analysis["truncated_body"] == 1
+
+
+def test_analyze_disk_keys_like_mode_prefix_still_finds_time():
+    """点赞模式主干带作者前缀，时间戳扫描不能因此失效。"""
+    disk = {"不养羊": ["不养羊_2026-08-27 00-00-00_标题"]}
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["placeholder_time"] == 1
+    assert analysis["missing_time"] == 0
+
+
+def test_analyze_disk_keys_clean_data_is_all_zero():
+    disk = {"甲": ["2026-08-27 13-37-36_正常描述", "2026-08-28 10-00-00_另一条"]}
+    analysis = rep.analyze_disk_keys(disk)
+
+    assert analysis["duplicate_stems"] == 0
+    assert analysis["placeholder_time"] == 0
+    assert analysis["missing_time"] == 0
+
+
+def test_render_disk_analysis_mentions_risk_buckets():
+    text = rep.render_disk_analysis(rep.analyze_disk_keys({"甲": ["k1"]}))
+
+    assert "主干重复" in text
+    assert "00-00-00" in text
+    assert "不联网" in text
+
+
+def test_render_report_includes_disk_analysis_when_present():
+    report = rep.merge_reports({"甲": rep.classify_alignment(["k1"], [])})
+    report["disk_analysis"] = rep.analyze_disk_keys({"甲": ["k1"]})
+
+    assert "磁盘侧对齐风险画像" in rep.render_report(report)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  作者库
 # ═══════════════════════════════════════════════════════════════
 
@@ -331,14 +416,16 @@ def test_load_author_sec_ids_tolerates_missing(tmp_path):
 
 
 def test_main_disk_only_makes_no_requests(tmp_path, capsys):
-    """--disk-only 只扫磁盘：没有 Cookie 也必须成功返回（用于校准解析）。"""
+    """--disk-only 只扫磁盘：没有 Cookie 也必须成功返回，并给出风险画像。"""
     root = tmp_path / "Download" / "douyin" / "post"
     _write(root / "A" / "2025-01-01 10-00-00_甲_image_1.webp")
 
     code = rep.main(["--f2-dir", str(tmp_path), "--disk-only"])
 
     assert code == 0
-    assert "作者 1 个" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "作者 1 个" in out
+    assert "磁盘侧对齐风险画像" in out
 
 
 def test_main_without_cookie_fails_with_actionable_hint(tmp_path, capsys):

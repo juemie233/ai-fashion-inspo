@@ -22,6 +22,13 @@
     python -m scripts.report_f2_id_alignment --limit 1          # 先跑 1 个作者试算
     python -m scripts.report_f2_id_alignment --output report.json
     python -m scripts.report_f2_id_alignment --authors 不养羊    # 指定作者
+    python -m scripts.report_f2_id_alignment --disk-only        # 不发请求：只看磁盘侧风险画像
+
+不在联网也能得结论的部分
+------------------------
+`--disk-only` 会输出**磁盘侧对齐风险画像**：同作者内主干重复的作品数（必然落多义
+档）、时间戳为 `00-00-00` 的作品数（接口给真实时间则必然未命中）等。这些与接口
+返回什么无关，可先据此判断对齐键够不够用。
 
 Cookie（抖音作品清单接口对游客返回 403，实测）
 ---------------------------------------------
@@ -77,6 +84,9 @@ DEFAULT_PAGE_SLEEP = 3.0
 
 """f2 配置里 cookie 行的样子（yaml 单行）。"""
 _COOKIE_LINE_RE = re.compile(r"^\s*cookie\s*:\s*(?P<value>.*)$", re.M)
+
+"""对齐主干里的发布时间（与 f2 的 {create} 同形：YYYY-MM-DD HH-MM-SS）。"""
+_TIMESTAMP_IN_STEM_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}")
 
 
 @dataclass
@@ -287,6 +297,115 @@ def classify_alignment(
     }
 
 
+def analyze_disk_keys(disk: dict[str, list[str]]) -> dict:
+    """只用磁盘数据得出的**对齐风险画像**（不联网）。
+
+    为什么值得单独算：接口受 Cookie 限制暂时跑不了，但「对齐键本身是否够用」完全
+    可以从磁盘侧判定——如果同一作者下已存在重复主干，那些作品**必然**落进多义档，
+    与接口返回什么无关。
+
+    统计口径：
+
+    - ``duplicate_stems``：同一作者内主干重复的作品数。对齐键完全相同 → 接口侧若
+      有 ≥2 条即多义，若只 1 条则说明这两份是同一作品被下载了两次
+    - ``placeholder_time``：发布时间是 ``00-00-00`` 的作品。实测存在（f2 拿到的
+      create_time 为整点 0 分 0 秒），若接口给的是真实时间则**必然未命中**
+    - ``missing_time``：主干里找不到 ``YYYY-MM-DD HH-MM-SS`` 的作品（解析异常）
+    - ``empty_body``：描述为空的作品（对齐键退化成只有时间，同秒即撞）
+    - ``truncated_body``：描述被 f2 中段截断的作品（**信息性**：截断是确定性的，
+      用原始描述能复现同样结果，不构成未命中风险）
+
+    Args:
+        disk: 归一化作者名 → 作品主干列表（:func:`collect_disk_works` 的结果）。
+
+    Returns:
+        画像字典（含计数与示例）。
+    """
+    duplicate_examples: list[dict] = []
+    placeholder_examples: list[str] = []
+    missing_examples: list[str] = []
+    duplicate_works = 0
+    placeholder_time = 0
+    missing_time = 0
+    empty_body = 0
+    truncated_body = 0
+    total = 0
+
+    for author, stems in disk.items():
+        seen: dict[str, int] = {}
+        for stem in stems:
+            total += 1
+            seen[stem] = seen.get(stem, 0) + 1
+
+            match = _TIMESTAMP_IN_STEM_RE.search(stem)
+            if not match:
+                missing_time += 1
+                if len(missing_examples) < 5:
+                    missing_examples.append(f"{author}: {stem[:60]}")
+            elif match.group(0).endswith("00-00-00"):
+                placeholder_time += 1
+                if len(placeholder_examples) < 5:
+                    placeholder_examples.append(f"{author}: {stem[:60]}")
+
+            if stem.endswith("_") or stem.endswith("__"):
+                empty_body += 1
+            if "......" in stem:
+                truncated_body += 1
+
+        dups = sorted(s for s, n in seen.items() if n > 1)
+        if dups:
+            duplicate_works += sum(seen[s] for s in dups)
+            if len(duplicate_examples) < 5:
+                duplicate_examples.append(
+                    {"author": author, "count": len(dups), "sample": dups[0][:60]}
+                )
+
+    return {
+        "works": total,
+        "authors": len(disk),
+        "duplicate_stems": duplicate_works,
+        "duplicate_examples": duplicate_examples,
+        "placeholder_time": placeholder_time,
+        "placeholder_examples": placeholder_examples,
+        "missing_time": missing_time,
+        "missing_examples": missing_examples,
+        "empty_body": empty_body,
+        "truncated_body": truncated_body,
+    }
+
+
+def render_disk_analysis(analysis: dict) -> str:
+    """把磁盘侧风险画像渲染成人读文本。
+
+    Args:
+        analysis: :func:`analyze_disk_keys` 的结果。
+
+    Returns:
+        多行文本。
+    """
+    lines = [
+        "─" * 62,
+        "  磁盘侧对齐风险画像（不联网可得；解释下面三档时的背景）",
+        "─" * 62,
+        f"  作品总数            {analysis['works']}（{analysis['authors']} 个作者）",
+        f"  主干重复            {analysis['duplicate_stems']}"
+        f"（同作者内对齐键相同 → 必然落多义档）",
+        f"  时间戳为 00-00-00   {analysis['placeholder_time']}"
+        f"（若接口给真实时间则必然未命中）",
+        f"  时间戳缺失          {analysis['missing_time']}（解析异常，需排查）",
+        f"  描述为空            {analysis['empty_body']}（键退化为只有时间）",
+        f"  描述被截断          {analysis['truncated_body']}"
+        f"（信息性：截断确定性，不构成风险）",
+    ]
+    for item in analysis["duplicate_examples"]:
+        lines.append(f"    · 重复 {item['count']} 组：{item['author']} / {item['sample']}")
+    for sample in analysis["placeholder_examples"][:2]:
+        lines.append(f"    · 占位时间：{sample}")
+    for sample in analysis["missing_examples"][:2]:
+        lines.append(f"    · 缺时间戳：{sample}")
+    return "\n".join(lines)
+
+
 def merge_reports(per_author: dict[str, dict]) -> dict:
     """把各作者的对齐结果汇总成总报告。
 
@@ -354,6 +473,10 @@ def render_report(report: dict, sample: int = 5) -> str:
             lines.append(f"    ✗ {stem[:58]}")
         if result["unmatched"]:
             lines.append("      （未命中示例：描述可能被 f2 截断，或作品已删/未枚举到）")
+
+    if report.get("disk_analysis"):
+        lines.append("")
+        lines.append(render_disk_analysis(report["disk_analysis"]))
     return "\n".join(lines)
 
 
@@ -565,9 +688,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"  作者 {len(disk)} 个，作品 {sum(len(v) for v in disk.values())} 个")
 
+    # 磁盘侧风险画像：不联网可得，且是解释后续三档的背景（--disk-only 也能看）
+    disk_analysis = analyze_disk_keys(disk)
+    print()
+    print(render_disk_analysis(disk_analysis))
+
     if args.disk_only:
-        for author, stems in sorted(disk.items())[:20]:
-            print(f"  [{author}] {len(stems)} 个作品，示例：{stems[0][:60]}")
         return 0
 
     cookie = resolve_cookie(args, f2_dir)
@@ -629,6 +755,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     report = merge_reports(per_author)
+    report["disk_analysis"] = disk_analysis
     print()
     print(render_report(report, sample=args.sample))
 

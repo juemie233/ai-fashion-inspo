@@ -43,11 +43,25 @@
 > - 复用 f2 自己的 `format_file_name`（`replaceT` + `split_filename`）生成接口侧期望文件名，保证与磁盘文件名**逐字符一致**——另写一套归一化会因差一个字符全判未命中
 > - 复用 f2 的签名/过滤器枚举作品清单（`DouyinCrawler` + `UserPostFilter`），只去掉「下载媒体」这一步
 > - 严格三档：唯一对齐 / 多义 / 未命中，**多义与未命中一律不落库**；另出「接口独有」信息性计数
-> - 磁盘侧已用真实目录验证：**21 个作者 / 3,599 个作品**（与日志路记录的 3,588 磁盘作品吻合）
-> - 单测 `backend/tests/test_unit_f2_id_alignment.py`（25 项，含「接口侧主干 == 磁盘侧主干」不变量）
+> - 单测 `backend/tests/test_unit_f2_id_alignment.py`（35 项，含「接口侧主干 == 磁盘侧主干」不变量）
 >
-> **卡点**：枚举接口对**游客 Cookie 返回 403**（实测：f2 配置里只有 `UIFID_TEMP`，无 `sessionid`）。
-> 需要一个登录态抖音 Cookie 才能出真实覆盖率数字。
+> **磁盘侧风险画像（不联网可得，已用真实目录跑出）**：
+>
+> | 指标 | 实测 | 含义 |
+> | --- | --- | --- |
+> | 作品总数 | **3,599**（21 个作者） | 与日志路记录的 3,588 磁盘作品吻合 |
+> | 主干重复 | **0** | 同作者内对齐键**零碰撞** → 多义档预计 ≈ 0 |
+> | 时间戳 `00-00-00` | **2** | 网易第五人格（该账号本就未登记、不入库）→ 若接口给真实时间则必然未命中，占 0.06% |
+> | 时间戳缺失 | 0 | 解析器在真实数据上无异常 |
+> | 描述为空 | 165 | 键退化为只有时间，实测无同秒碰撞 |
+> | 描述被截断 | 47 | 信息性：截断确定性，用原始描述可复现，不构成风险 |
+>
+> **倾向**：对齐键实测够用（零碰撞），未命中下限极低（0.06%），覆盖率大概率很高——
+> 但**唯一能在联网后确认**，仍需一次枚举。
+>
+> **卡点**：枚举接口对**游客 Cookie 返回 403**（实测：f2 配置里只有 `UIFID_TEMP`，无
+> `sessionid`；另试「匿名 `TokenManager.gen_ttwid()` 生成的 ttwid」两种组合**同样 403**）。
+> 必须一个登录态抖音 Cookie 才能出真实覆盖率数字。
 
 **跑法：**
 
@@ -56,7 +70,7 @@ cd backend
 python -m scripts.report_f2_id_alignment --limit 1                    # 先试算 1 个作者
 python -m scripts.report_f2_id_alignment --cookie-file <cookie.json>  # 指定 Cookie
 python -m scripts.report_f2_id_alignment --output report.json         # 落盘 JSON 报告
-python -m scripts.report_f2_id_alignment --disk-only                  # 不发请求，仅核对解析
+python -m scripts.report_f2_id_alignment --disk-only                  # 不发请求：只出磁盘侧风险画像
 ```
 
 **待决策：** 是否值得为此让 11,936 条老素材也能点回原帖。成本：21 个作者 × 数百次 API 请求（有风控暴露面），且对齐必然存在未命中/多义（需先出覆盖率报告再决定是否落库）。
