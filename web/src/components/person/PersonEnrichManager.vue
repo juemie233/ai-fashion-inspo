@@ -65,8 +65,8 @@ function closeSkipManage() {
     <!-- 选择补全范围 -->
     <template v-if="!enrich.enrichTask">
       <p class="enrich-tip">
-        按平台分流补全：<b>小红书</b>缺主页链接 / 平台用户 ID 的走本地互推 + 按小红书号搜索
-        （联网，单次最多 20 位防触发风控）；<b>抖音</b>缺 IP 属地的直接读 f2 用户库
+        按平台分流补全：<b>小红书</b>缺主页链接 / 平台用户 ID 的走本地互推 + 按「我的关注列表」
+        昵称匹配解析用户 ID（只发一次请求，无数量上限）；<b>抖音</b>缺 IP 属地的直接读 f2 用户库
         <b>离线回填</b>（按 sec_user_id 精确匹配、只补空缺、不联网）。完成后失败博主可单独重试。
       </p>
       <div class="enrich-list">

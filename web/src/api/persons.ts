@@ -473,11 +473,10 @@ export async function fetchMissingProfiles(): Promise<{
   return data
 }
 
-/** 创建博主主页补全任务（bloggerIds 缺省 = 全部缺失博主；单次上限 20） */
+/** 创建博主主页补全任务（bloggerIds 缺省 = 全部缺失博主） */
 export async function enrichMissingProfiles(bloggerIds?: number[]): Promise<{
   task_id: number
   total: number
-  truncated: boolean
   message: string
 }> {
   const { data } = await apiClient.post('/bloggers/enrich-missing-profile', {

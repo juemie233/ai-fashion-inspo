@@ -129,113 +129,55 @@ def test_xhs_load_cookies_missing_file(tmp_path):
     assert s._load_cookies_sync() is False
 
 
-# ── 用户搜索解析 ──
+# ── 关注列表拉取（博主 uid 解析的唯一来源）──
 
 
-class _FakeUserLink:
-    def __init__(self, href: str, text: str):
-        self._href = href
-        self._text = text
+class _FakeExplorePage:
+    def __init__(self):
+        self.urls: list[str] = []
 
-    def get_attribute(self, _name: str):
-        return self._href
-
-    def inner_text(self) -> str:
-        return self._text
+    def goto(self, url, **_kw):
+        self.urls.append(url)
 
 
-class _FakeUserSearchPage:
-    def __init__(self, links, body_text="正常页面"):
-        self._links = list(links)
-        self._body = body_text
+def _make_following_scraper(page, monkeypatch):
+    """打桩浏览器/Cookie/延时的关注列表 scraper，返回 (scraper, 调用记录)。"""
+    from scripts import fetch_xhs_following as fx
 
-    def goto(self, _url, **_kw):
-        pass
-
-    def inner_text(self, _sel: str) -> str:
-        return self._body
-
-    def query_selector(self, _sel: str):
-        return object()  # 触碰即视为结果已渲染，立即结束等待循环
-
-    def wait_for_selector(self, *_a, **_k):
-        pass
-
-    def query_selector_all(self, sel: str):
-        if "/user/profile/" in sel:
-            return list(self._links)
-        return []
-
-
-def _make_logged_in_scraper(page) -> XiaohongshuScraper:
+    monkeypatch.setattr("app.scrapers.xiaohongshu.time.sleep", lambda *_a: None)
     s = _make_scraper()
     s._page = page
-    # 浏览器初始化与 Cookie 加载打桩（解析逻辑是本测试对象）
     s._ensure_browser_sync = lambda: None
     s._load_cookies_sync = lambda: True
-    return s
+    calls: dict = {}
+
+    def _fake_fetch(page_arg, max_pages=3):
+        calls["page"] = page_arg
+        calls["max_pages"] = max_pages
+        return [{"nickname": "穿搭日记", "uid": "abc123"}]
+
+    monkeypatch.setattr(fx, "fetch_following_list", _fake_fetch)
+    return s, calls
 
 
-def test_xhs_search_users_parses_name_id_and_url():
-    """用户卡片解析：昵称截断、小红书号提取、主页 URL 补全、user_id 去查询串。"""
-    links = [
-        _FakeUserLink(
-            "/user/profile/abc123?x=1",
-            "穿搭日记\n小红书号：98765432\n1 关注 2 粉丝",
-        ),
-    ]
-    out = asyncio.run(_make_logged_in_scraper(_FakeUserSearchPage(links))
-                      .search_users("穿搭", limit=10))
-    assert out == [{
-        "name": "穿搭日记",
-        # profile_url 保留原始查询串；仅 platform_user_id 去除查询串
-        "profile_url": "https://www.xiaohongshu.com/user/profile/abc123?x=1",
-        "platform_user_id": "abc123",
-        "xhs_id": "98765432",
-    }]
+def test_xhs_list_following_delegates_after_cookie_load(monkeypatch):
+    """关注列表：先落站内页面（带登录态）再调解析，max_pages 透传。"""
+    page = _FakeExplorePage()
+    s, calls = _make_following_scraper(page, monkeypatch)
+    out = s.list_following_sync(max_pages=2)
+    assert out == [{"nickname": "穿搭日记", "uid": "abc123"}]
+    assert page.urls == ["https://www.xiaohongshu.com/explore"]
+    assert calls["page"] is page
+    assert calls["max_pages"] == 2
 
 
-def test_xhs_search_users_name_truncates_at_rednote_id():
-    """昵称与「小红书号」同行时截断噪声，不把编号混进昵称。"""
-    links = [_FakeUserLink("/user/profile/u1", "穿搭日记 小红书号：abc123")]
-    out = asyncio.run(_make_logged_in_scraper(_FakeUserSearchPage(links))
-                      .search_users("穿搭"))
-    assert out[0]["name"] == "穿搭日记"
-    assert out[0]["xhs_id"] == "abc123"
-
-
-def test_xhs_search_users_dedup_by_user_id():
-    """同一用户多个卡片（卡片区 + 全局兜底重复命中）只保留一个。"""
-    links = [
-        _FakeUserLink("/user/profile/dup", "用户甲"),
-        _FakeUserLink("/user/profile/dup?from=note", "用户甲"),
-        _FakeUserLink("/user/profile/other", "用户乙"),
-    ]
-    out = asyncio.run(_make_logged_in_scraper(_FakeUserSearchPage(links))
-                      .search_users("穿搭", limit=10))
-    assert [u["platform_user_id"] for u in out] == ["dup", "other"]
-
-
-def test_xhs_search_users_respects_limit():
-    links = [_FakeUserLink(f"/user/profile/u{i}", f"用户{i}") for i in range(5)]
-    out = asyncio.run(_make_logged_in_scraper(_FakeUserSearchPage(links))
-                      .search_users("穿搭", limit=2))
-    assert len(out) == 2
-
-
-def test_xhs_search_users_non_profile_href_skipped():
-    """兜底选择器混入的非用户主页链接跳过。"""
-    links = [_FakeUserLink("/explore/n1", "一篇笔记")]
-    out = asyncio.run(_make_logged_in_scraper(_FakeUserSearchPage(links))
-                      .search_users("穿搭"))
-    assert out == []
-
-
-def test_xhs_search_users_login_wall_raises():
-    """登录墙：明确报错而非静默返回空列表（调用方据此提示导 Cookie）。"""
-    page = _FakeUserSearchPage([], body_text="登录后查看搜索结果 手机号登录")
-    with pytest.raises(RuntimeError, match="登录"):
-        asyncio.run(_make_logged_in_scraper(page).search_users("穿搭"))
+def test_xhs_list_following_without_cookies_raises(monkeypatch):
+    """未加载 Cookie → 明确报错（关注列表接口需要登录态，不能静默返回空）。"""
+    s, _ = _make_following_scraper(_FakeExplorePage(), monkeypatch)
+    s._load_cookies_sync = lambda: False
+    s.last_login_error = "Cookie 文件缺失或为空"
+    with pytest.raises(RuntimeError, match="Cookie"):
+        s.list_following_sync()
 
 
 # ═══════════════════════════════════════════════════════════════

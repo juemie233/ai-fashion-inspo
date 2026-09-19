@@ -1,7 +1,7 @@
-"""博主主页信息补全测试：本地互推 / 搜索匹配策略 / 失败原因 / 任务执行与进度。
+"""博主主页信息补全测试：本地互推 / 关注列表匹配 / 失败原因 / 任务执行与进度。
 
-搜索层（XiaohongshuScraper.search_users）通过注入假实现模拟，不依赖真实浏览器；
-任务执行器通过替换 XiaohongshuScraper 类模拟。
+匹配依据（关注列表 `XiaohongshuScraper.list_following_sync`）通过注入假实现模拟，
+不依赖真实浏览器；任务执行器通过替换 XiaohongshuScraper 类模拟。
 """
 
 import sqlite3
@@ -15,6 +15,7 @@ from app.database import async_session
 from app.models.person import Blogger
 from app.models.task import TaskQueue
 from app.services.blogger_enrichment_service import (
+    build_following_index,
     build_profile_url,
     enrich_one,
     extract_user_id_from_url,
@@ -23,7 +24,6 @@ from app.services.blogger_enrichment_service import (
 )
 from app.services.task_runners.common import PermanentTaskError
 from app.services.task_runners.enrich_blogger_profile import (
-    MAX_ENRICH_PER_TASK,
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
 )
@@ -60,6 +60,24 @@ def test_extract_user_id_from_url():
     assert extract_user_id_from_url("https://www.xiaohongshu.com/user/profile/abc123?x=y") == "abc123"
     assert extract_user_id_from_url("https://www.xiaohongshu.com/explore/123") is None
     assert build_profile_url("abc123") == "https://www.xiaohongshu.com/user/profile/abc123"
+
+
+def test_build_following_index_skips_incomplete_rows():
+    """关注列表 → {归一化昵称: uid}：全角/emoji/大小写归一化，缺字段的行丢弃。"""
+    index = build_following_index(
+        [
+            {"nickname": "Ｋｉｔｔｔｔｙ 🐱", "uid": "u1"},
+            {"nickname": "  空格博  ", "uid": "u2"},
+            {"nickname": "没Uid博", "uid": ""},
+            {"nickname": "", "uid": "u3"},
+            {"nickname": "覆盖博", "uid": "old"},
+            {"nickname": "覆盖博", "uid": "new"},
+        ]
+    )
+    assert index["kitttty"] == "u1"
+    assert index["空格博"] == "u2"
+    assert index["覆盖博"] == "new"
+    assert len(index) == 3  # 缺昵称/缺 uid 的行被丢弃
 
 
 def test_normalize_cookies():
@@ -102,7 +120,7 @@ def test_normalize_cookies():
 
 
 # ═══════════════════════════════════════════════════════════════
-#  enrich_one 各分支（注入假 search_users）
+#  enrich_one 各分支（关注列表索引由调用方传入，本层零请求）
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -111,43 +129,29 @@ async def _blogger_row(bid: int) -> Blogger:
         return await db.get(Blogger, bid)
 
 
-async def test_enrich_from_url_without_search(client):
-    """本地互推：有主页 URL 无用户 ID → 从 URL 提取，不触发搜索。"""
+async def test_enrich_from_url_without_following(client):
+    """本地互推：有主页 URL 无用户 ID → 从 URL 提取，不依赖关注列表。"""
     b = _create_blogger(
         client, "URL博", profile_url="https://www.xiaohongshu.com/user/profile/uid99"
     )
-    called = {"n": 0}
-
-    async def fake_search(keyword):
-        called["n"] += 1
-        return []
-
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
+        result = await enrich_one(db, blogger)
     assert result["status"] == "updated"
     assert result["platform_user_id"] == "uid99"
-    assert called["n"] == 0  # 未搜索
     row = await _blogger_row(b["id"])
     assert row.platform_user_id == "uid99"
     assert row.profile_url == "https://www.xiaohongshu.com/user/profile/uid99"
 
 
-async def test_enrich_build_url_without_search(client):
-    """本地互推：有用户 ID 无主页 URL → 拼接 URL，不触发搜索。"""
+async def test_enrich_build_url_without_following(client):
+    """本地互推：有用户 ID 无主页 URL → 拼接 URL。"""
     b = _create_blogger(client, "ID博", platform_user_id="uid88")
-    called = {"n": 0}
-
-    async def fake_search(keyword):
-        called["n"] += 1
-        return []
-
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
+        result = await enrich_one(db, blogger, following={})
     assert result["status"] == "updated"
     assert result["profile_url"] == "https://www.xiaohongshu.com/user/profile/uid88"
-    assert called["n"] == 0
 
 
 async def test_enrich_invalid_url_skipped(client):
@@ -155,7 +159,7 @@ async def test_enrich_invalid_url_skipped(client):
     b = _create_blogger(client, "坏URL博", profile_url="https://www.xiaohongshu.com/explore/xx")
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=None)
+        result = await enrich_one(db, blogger)
         assert result["status"] == "skipped"
         assert "无法解析" in result["reason"]
         # 已写入跳过表：不再出现在缺失列表
@@ -165,156 +169,43 @@ async def test_enrich_invalid_url_skipped(client):
         assert any(s["blogger_id"] == b["id"] for s in skips)
 
 
-async def test_enrich_single_candidate_adopted(client):
-    """两者都缺：搜索返回唯一候选 → 采纳并更新。"""
-    b = _create_blogger(client, "独苗博", xhs_id="xhs123")
-    candidate = {
-        "name": "独苗博",
-        "profile_url": "https://www.xiaohongshu.com/user/profile/cand1",
-        "platform_user_id": "cand1",
-    }
-
-    async def fake_search(keyword):
-        assert keyword == "xhs123"
-        return [candidate]
-
+async def test_enrich_from_following_by_nickname(client):
+    """两者都缺：关注列表里昵称命中 → 用 uid 拼主页 URL 并落库。"""
+    b = _create_blogger(client, "关注博", xhs_id="xhs123")
+    following = build_following_index([{"nickname": "关注博", "uid": "cand1"}])
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
+        result = await enrich_one(db, blogger, following=following)
     assert result["status"] == "updated"
     assert result["platform_user_id"] == "cand1"
     row = await _blogger_row(b["id"])
-    assert row.profile_url == candidate["profile_url"]
+    assert row.profile_url == "https://www.xiaohongshu.com/user/profile/cand1"
     assert row.platform_user_id == "cand1"
 
 
-async def test_enrich_multi_candidates_name_exact_match(client):
-    """多候选：昵称完全匹配才采纳。"""
-    b = _create_blogger(client, "重名博", xhs_id="xhs456")
-    candidates = [
-        {"name": "别人", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
-        {"name": "重名博", "profile_url": "https://www.xiaohongshu.com/user/profile/b", "platform_user_id": "b"},
-    ]
-
-    async def fake_search(keyword):
-        return candidates
-
+async def test_enrich_following_normalized_name_match(client):
+    """昵称归一化匹配：容忍大小写/全角/emoji/空格差异。"""
+    b = _create_blogger(client, "Kitttty")
+    following = build_following_index([{"nickname": "Ｋｉｔｔｔｔｙ 🐱", "uid": "b"}])
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
+        result = await enrich_one(db, blogger, following=following)
     assert result["status"] == "updated"
     assert result["platform_user_id"] == "b"
 
 
-async def test_enrich_multi_candidates_no_match_failed(client):
-    """多候选无昵称匹配 → failed（需人工核对）。"""
-    b = _create_blogger(client, "无名博", xhs_id="xhs789")
-    candidates = [
-        {"name": "甲", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
-        {"name": "乙", "profile_url": "https://www.xiaohongshu.com/user/profile/b", "platform_user_id": "b"},
-    ]
-
-    async def fake_search(keyword):
-        return candidates
-
+async def test_enrich_not_in_following_skipped(client):
+    """两者都缺且不在关注列表里 → 确定性失败自动跳过，原因给出两条出路。"""
+    b = _create_blogger(client, "取关博", xhs_id="xhs000")
     async with async_session() as db:
         blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "skipped"
-    assert "无法唯一确认" in result["reason"]
-
-
-async def test_enrich_multi_candidates_normalized_name_match(client):
-    """多候选：昵称归一化匹配（容忍大小写/全角/emoji/空格差异）采纳。"""
-    b = _create_blogger(client, "Kitttty", xhs_id="kittttty02")
-    candidates = [
-        {"name": "别人", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
-        # 小红书实际返回的昵称：全角字符 + emoji + 大小写差异
-        {"name": "Ｋｉｔｔｔｔｙ 🐱", "profile_url": "https://www.xiaohongshu.com/user/profile/b", "platform_user_id": "b"},
-    ]
-
-    async def fake_search(keyword):
-        return candidates
-
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "updated"
-    assert result["platform_user_id"] == "b"
-
-
-async def test_enrich_multi_candidates_xhs_id_match(client):
-    """多候选：候选携带与博主一致的小红书号 → 直接采纳（号匹配比昵称更可靠）。"""
-    b = _create_blogger(client, "Falling U", xhs_id="Softrin")
-    candidates = [
-        {"name": "Softrin", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a", "xhs_id": "softrin"},
-        {"name": "别的用户", "profile_url": "https://www.xiaohongshu.com/user/profile/c", "platform_user_id": "c", "xhs_id": "other"},
-    ]
-
-    async def fake_search(keyword):
-        return candidates
-
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "updated"
-    assert result["platform_user_id"] == "a"
-
-
-async def test_enrich_candidate_name_with_noise_suffix(client):
-    """候选昵称混入「小红书号：xxx」噪声后缀：归一化后仍能匹配号主。"""
-    b = _create_blogger(client, "久菜和子", xhs_id="Jiucai")
-    candidates = [
-        {"name": "其它用户", "profile_url": "https://www.xiaohongshu.com/user/profile/a", "platform_user_id": "a"},
-        {"name": "久菜和子 小红书号：Jiucai", "profile_url": "https://www.xiaohongshu.com/user/profile/d", "platform_user_id": "d"},
-    ]
-
-    async def fake_search(keyword):
-        return candidates
-
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "updated"
-    assert result["platform_user_id"] == "d"
-
-
-async def test_enrich_no_result_skipped(client):
-    """搜索无结果 → 确定性失败自动跳过。"""
-    b = _create_blogger(client, "无果博", xhs_id="xhs000")
-
-    async def fake_search(keyword):
-        return []
-
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "skipped"
-    assert "无结果" in result["reason"]
-
-
-async def test_enrich_missing_xhs_id_skipped(client):
-    """两者都缺且无小红书号 → 确定性失败自动跳过（无法定位）。"""
-    b = _create_blogger(client, "无号博")
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=None)
-    assert result["status"] == "skipped"
-    assert "缺少小红书号" in result["reason"]
-
-
-async def test_enrich_login_wall_failure_reason(client):
-    """搜索遇登录墙（未登录）→ failed 且原因明确提示未登录。"""
-    b = _create_blogger(client, "登录博", xhs_id="xhs111")
-
-    async def fake_search(keyword):
-        raise RuntimeError("小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie")
-
-    async with async_session() as db:
-        blogger = await db.get(Blogger, b["id"])
-        result = await enrich_one(db, blogger, search_users=fake_search)
-    assert result["status"] == "failed"
-    assert "未登录" in result["reason"]
+        result = await enrich_one(db, blogger, following={"别人": "u9"})
+        assert result["status"] == "skipped"
+        assert "关注列表" in result["reason"]
+        assert "手工填写" in result["reason"]
+        # 已跳过 → 不再出现在缺失列表
+        missing = await list_missing_profile_bloggers(db)
+        assert all(m.id != b["id"] for m in missing)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -336,28 +227,21 @@ def test_enrich_api_invalid_blogger_ids(client):
 
 
 async def test_enrich_api_and_execute(client):
-    """接口创建任务 → 执行器补全（本地互推博主成功、搜索博主失败）→ 明细与进度。"""
+    """接口创建任务 → 执行器补全（本地互推 + 关注列表匹配）→ 明细与进度。"""
     _create_fake_cookie()
     _create_blogger(client, "本地博", profile_url="https://www.xiaohongshu.com/user/profile/uid1")
-    _create_blogger(client, "搜索博", xhs_id="xhs777")
+    _create_blogger(client, "关注博", xhs_id="xhs777")
 
     r = client.post("/api/bloggers/enrich-missing-profile", json={})
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["total"] == 2
-    assert body["truncated"] is False
     task_id = body["task_id"]
 
-    # mock 任务执行器里的 scraper：唯一候选命中「搜索博」（执行器走同步方法）
+    # mock 任务执行器里的 scraper：关注列表里能按昵称找到「关注博」
     class _FakeScraper:
-        def search_users_sync(self, keyword):
-            return [
-                {
-                    "name": "搜索博",
-                    "profile_url": "https://www.xiaohongshu.com/user/profile/found1",
-                    "platform_user_id": "found1",
-                }
-            ]
+        def list_following_sync(self, max_pages=3):
+            return [{"nickname": "关注博", "uid": "found1"}]
 
         def close_sync(self):
             pass
@@ -392,10 +276,10 @@ async def test_enrich_api_and_execute(client):
     assert r2.status_code == 400
 
 
-async def test_enrich_task_scope_and_cap(client):
-    """范围限定与单次上限：blogger_ids 过滤 + 超过上限只处理前 MAX 个。"""
+async def test_enrich_task_scope_and_no_cap(client):
+    """范围限定：blogger_ids 过滤；不设数量上限（只发一次关注列表请求，无需分批）。"""
     ids = []
-    for i in range(MAX_ENRICH_PER_TASK + 3):
+    for i in range(23):
         b = _create_blogger(client, f"缺博{i}", xhs_id=f"xhs{i:03d}")
         ids.append(b["id"])
 
@@ -405,27 +289,25 @@ async def test_enrich_task_scope_and_cap(client):
         assert total == 2
         assert task.result["blogger_ids"] == ids[:2]
 
-    # 无范围：全量但截断到上限
+    # 无范围：全部纳入，不截断
     async with async_session() as db:
         task2, total2 = await create_enrich_blogger_profile_task(db, None)
-        assert total2 == MAX_ENRICH_PER_TASK
-        assert len(task2.result["blogger_ids"]) == MAX_ENRICH_PER_TASK
+        assert total2 == 23
+        assert len(task2.result["blogger_ids"]) == 23
 
 
 async def test_enrich_task_failure_does_not_block(client, monkeypatch):
-    """单博主失败不阻塞整体：失败原因记录，其余继续。"""
+    """单博主拿不到 uid 不阻塞整体：原因记录，其余继续。"""
     _create_fake_cookie()
     _create_blogger(client, "成功博", profile_url="https://www.xiaohongshu.com/user/profile/ok1")
-    _create_blogger(client, "失败博", xhs_id="xhs404")
+    _create_blogger(client, "缺料博", xhs_id="xhs404")
 
     class _FakeScraper:
-        def search_users_sync(self, keyword):
-            return []  # 搜索无结果 → 失败
+        def list_following_sync(self, max_pages=3):
+            return []  # 关注列表里没有「缺料博」（改过名 / 已取关）
 
         def close_sync(self):
             pass
-
-    import app.services.task_runners.enrich_blogger_profile as mod  # noqa: F401
 
     monkeypatch.setattr(
         "app.scrapers.xiaohongshu.XiaohongshuScraper", lambda **kw: _FakeScraper()
@@ -436,17 +318,17 @@ async def test_enrich_task_failure_does_not_block(client, monkeypatch):
         await db.refresh(task)
         assert task.progress == 100
         assert task.result["updated"] == 1
-        assert task.result["skipped"] == 1  # 搜索无结果 → 确定性失败自动跳过
+        assert task.result["skipped"] == 1
         assert task.result["failed"] == 0
         results = task.result["results"]
         by_name = {r["name"]: r for r in results}
         assert by_name["成功博"]["status"] == "updated"
-        assert by_name["失败博"]["status"] == "skipped"
-        assert "无结果" in by_name["失败博"]["reason"]
+        assert by_name["缺料博"]["status"] == "skipped"
+        assert "关注列表" in by_name["缺料博"]["reason"]
 
         # 跳过后不再出现在缺失列表（下一批只处理未跳过的）
         missing = await list_missing_profile_bloggers(db)
-        assert all(m.name != "失败博" for m in missing)
+        assert all(m.name != "缺料博" for m in missing)
 
 
 async def test_enrich_skip_unskip_roundtrip(client):
@@ -475,7 +357,7 @@ async def test_enrich_priority_two_missing_first(client):
     """处理顺序：两项信息都缺失的博主优先于只缺一项的（本地互推类靠后）。"""
     # 只缺 profile_url（有 platform_user_id → 本地互推可补，排在后面）
     _create_blogger(client, "缺URL博", platform_user_id="uid111")
-    # 两项都缺（需要搜索，排在前面）
+    # 两项都缺（需要关注列表解析，排在前面）
     _create_blogger(client, "全缺博", xhs_id="xhs222")
     # 只缺 platform_user_id（有 URL → 本地互推，排在后面）
     _create_blogger(client, "缺ID博", profile_url="https://www.xiaohongshu.com/user/profile/uid333")
@@ -506,6 +388,27 @@ async def test_enrich_task_missing_cookie_fails_fast(client):
     async with async_session() as db:
         task, _ = await create_enrich_blogger_profile_task(db, None)
         with pytest.raises(PermanentTaskError, match="Cookie"):
+            await execute_enrich_blogger_profile(db, task)
+
+
+async def test_enrich_task_following_fetch_error_fails_task(client, monkeypatch):
+    """关注列表接口异常 → 整任务抛出（由 worker 按重试策略处理），不留半成品结果。"""
+    _create_fake_cookie()
+    _create_blogger(client, "异常博", xhs_id="xhs666")
+
+    class _FakeScraper:
+        def list_following_sync(self, max_pages=3):
+            raise RuntimeError("关注列表接口 461（风控拦截）")
+
+        def close_sync(self):
+            pass
+
+    monkeypatch.setattr(
+        "app.scrapers.xiaohongshu.XiaohongshuScraper", lambda **kw: _FakeScraper()
+    )
+    async with async_session() as db:
+        task, _ = await create_enrich_blogger_profile_task(db, None)
+        with pytest.raises(RuntimeError, match="风控拦截"):
             await execute_enrich_blogger_profile(db, task)
 
 
@@ -643,8 +546,8 @@ async def test_douyin_backfill_empty_in_f2_is_skipped(client, tmp_path, monkeypa
         assert "没有 IP 属地" in task.result["results"][0]["reason"]
 
 
-async def test_enrich_cap_applies_only_to_online_bloggers(client, tmp_path, monkeypatch):
-    """单次上限只约束需要联网的小红书搜索；抖音离线回填全部纳入。"""
+async def test_enrich_task_includes_douyin_and_xhs_together(client, tmp_path, monkeypatch):
+    """抖音 + 小红书混合：全部纳入（无上限），抖音排在最前（离线零成本先做）。"""
     monkeypatch.setattr(
         f2,
         "DEFAULT_F2_DIR",
@@ -652,17 +555,16 @@ async def test_enrich_cap_applies_only_to_online_bloggers(client, tmp_path, monk
     )
     for i in range(5):
         _create_douyin_blogger(client, f"抖音{i}", platform_user_id=f"MS4x_{i}")
-    for i in range(MAX_ENRICH_PER_TASK + 3):
+    for i in range(23):
         _create_blogger(client, f"缺博{i}", xhs_id=f"xhs{i:03d}")
 
     async with async_session() as db:
         task, total = await create_enrich_blogger_profile_task(db, None)
 
-    assert total == 5 + MAX_ENRICH_PER_TASK  # 抖音不受上限约束
-    assert task.result["truncated"] is True
+    assert total == 5 + 23
+    assert len(task.result["blogger_ids"]) == 28
 
-    # 抖音排在最前（离线零成本先做）
-    platforms = []
+    # 抖音排在最前
     async with async_session() as db:
         rows = (
             await db.execute(

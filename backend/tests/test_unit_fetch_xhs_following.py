@@ -74,6 +74,11 @@ class TestParseXhsId:
         text = "昵称\n小红书号：abcd1234\nIP属地：浙江"
         assert fx.parse_xhs_id(text) == "abcd1234"
 
+    def test_underscore_and_hyphen_kept(self):
+        """号里的下划线/连字符不能截断（zliw_813ovo1 曾被截成 zliw）。"""
+        assert fx.parse_xhs_id("小红书号：zliw_813ovo1") == "zliw_813ovo1"
+        assert fx.parse_xhs_id("小红书号：LyiF-0412") == "LyiF-0412"
+
     def test_no_id(self):
         assert fx.parse_xhs_id("这个卡片没有小红书号") == ""
         assert fx.parse_xhs_id("") == ""

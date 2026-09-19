@@ -120,7 +120,9 @@ def parse_xhs_id(text: str) -> str:
     """
     if not text:
         return ""
-    m = re.search(r"小红书号[:：]\s*([0-9A-Za-z]{3,})", text)
+    # 小红书号允许字母/数字/下划线/连字符（如 zliw_813ovo1、LyiF_0412）；
+    # 早期只收 [0-9A-Za-z] 会在下划线处截断，导致存进库的号与真实号不符
+    m = re.search(r"小红书号[:：]\s*([0-9A-Za-z_-]{3,})", text)
     return m.group(1).strip() if m else ""
 
 

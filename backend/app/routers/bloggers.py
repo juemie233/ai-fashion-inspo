@@ -134,8 +134,8 @@ async def enrich_missing_profile(
 
     body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部有缺口的博主）
     缺口定义：小红书缺 profile_url / platform_user_id；抖音缺 ip_location。
-    任务执行：小红书走本地互推（URL↔ID）+ 按小红书号搜索用户；抖音走 f2 用户库
-    **离线**回填 IP 属地（按 sec_user_id 精确匹配、只补空缺）。
+    任务执行：小红书拉一次「关注列表」按昵称解析 uid（其余走本地 URL↔ID 互推）；
+    抖音走 f2 用户库**离线**回填 IP 属地（按 sec_user_id 精确匹配、只补空缺）。
     返回 task_id；进度/明细通过任务接口轮询。
     """
     blogger_ids = body.get("blogger_ids")
@@ -151,16 +151,10 @@ async def enrich_missing_profile(
     task, total = await create_enrich_blogger_profile_task(db, blogger_ids)
     if task is None:
         raise HTTPException(status_code=400, detail="没有资料有缺口的博主可补全")
-    # 上限只约束「需要联网的小红书搜索」；抖音离线回填不受限
-    truncated = (task.result or {}).get("truncated", False)
     return {
         "task_id": task.id,
         "total": total,
-        "truncated": truncated,
-        "message": (
-            f"本次将补全 {total} 位博主"
-            + ("（小红书超过单次上限，其余请完成后再发起）" if truncated else "")
-        ),
+        "message": f"本次将补全 {total} 位博主",
     }
 
 

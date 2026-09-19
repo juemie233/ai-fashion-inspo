@@ -919,7 +919,7 @@ alembic upgrade head
 > | `face_scan` | `POST /api/face-scan/start` | 人脸库扫描（增量/全量，可自动接匹配任务） |
 > | `face_match` | `POST /api/face-match/run` | 全库候选人脸匹配（可限定人物范围） |
 > | `face_cluster` | `POST /api/face-scan/cluster/run` | 人脸聚合聚类（同一人跨素材合并候选） |
-> | `enrich_blogger_profile` | `POST /api/bloggers/enrich-missing-profile` | 博主主页资料补全（缺失头像/签名/IP 属地等） |
+> | `enrich_blogger_profile` | `POST /api/bloggers/enrich-missing-profile` | 博主主页资料补全（小红书：主页链接 / 平台用户 ID；抖音：IP 属地） |
 > | `tag_health_scan` | `POST /api/tags/health/scan` | 标签健康度扫描（评分 + 四类问题 ID 列表） |
 > | `tag_cluster_scan` | `POST /api/tags/clusters/scan` | 自动聚类扫描（候选合并组） |
 > | `tag_network_analyze` | `POST /api/tags/network/analyze` | 网络图分析（社区/中心度/桥接） |

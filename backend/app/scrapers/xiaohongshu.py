@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 from app.scrapers.base import BaseScraper, RawContent
 
@@ -116,7 +117,7 @@ class XiaohongshuScraper(BaseScraper):
                 self.last_login_error = ""
                 return True
             except Exception as e:
-                # 记录失败原因（供 search/search_users 明确报错，避免静默走到登录墙）
+                # 记录失败原因（供 search 明确报错，避免静默走到登录墙）
                 self.last_login_error = str(e)
                 logger.warning(f"Cookie 加载失败: {e}")
         return False
@@ -212,127 +213,36 @@ class XiaohongshuScraper(BaseScraper):
 
         return await asyncio.to_thread(_search)
 
-    async def search_users(self, keyword: str, limit: int = 10) -> list[dict]:
-        """按关键词搜索小红书用户（博主主页信息补全用）。
+    def list_following_sync(self, max_pages: int = 3) -> list[dict]:
+        """拉取「我关注的用户」列表（同步；供专用单线程 executor 调用）。
 
-        与 search()（搜索笔记）不同：走搜索页「用户」结果（source=web_search_result_users），
-        解析用户卡片主页链接。页面结构变化时容错返回空列表（调用方记录失败原因）。
+        为什么是关注列表而不是「用户搜索」：实测小红书用户搜索**无法按「小红书号」定位
+        用户**——搜 `1036376990` 返回的是名称相近的无关用户（15 张卡片里没有本人，
+        且卡片内没有主页链接可点），因此「按小红书号搜索 → 唯一候选/昵称匹配」这条路
+        只会稳定地判成「无法唯一确认」。而关注列表接口一次请求就能拿到全部关注账号的
+        uid：素材库的博主正是从这份关注列表导入的，昵称可一一对应
+        （实测 281 人里能对上 27/30 个待补全博主，且访问 uid 主页确认是同一个人）。
 
-        返回候选用户列表：[{"name", "profile_url", "platform_user_id"}]。
-
-        注意：Playwright sync API 的 greenlet 绑定创建线程，浏览器初始化/Cookie/
-        页面操作必须同一线程执行——本方法整体委托 search_users_sync 在单个
-        to_thread 中完成；批量调用方（任务执行器）应使用专用单线程执行器直接
-        调用 search_users_sync，避免多次 to_thread 落不同线程触发
-        「Cannot switch to a different thread」。
-        """
-        return await asyncio.to_thread(self.search_users_sync, keyword, limit)
-
-    def search_users_sync(self, keyword: str, limit: int = 10) -> list[dict]:
-        """search_users 的同步实现（单线程内完成 浏览器初始化+Cookie+搜索）。
-
-        供任务执行器在专用单线程 executor 中调用，规避 Playwright sync API 的
-        线程切换限制（greenlet 绑定创建线程）。
+        Returns:
+            [{"nickname", "uid", ...}]（解析复用 scripts/fetch_xhs_following）；
+            未加载 Cookie 时抛 RuntimeError，接口异常向上抛（由调用方决定是否降级）。
         """
         self._ensure_browser_sync()
         if not self._load_cookies_sync():
             raise RuntimeError(
                 f"小红书 Cookie 加载失败: {self.last_login_error or 'Cookie 文件缺失或为空'}"
             )
+        from scripts import fetch_xhs_following as fx
 
-        results: list[dict] = []
-        from urllib.parse import quote
-
-        search_url = (
-            "https://www.xiaohongshu.com/search_result/"
-            f"?keyword={quote(keyword)}&source=web_search_result_users"
+        logger.info("小红书：拉取关注列表（按昵称解析博主 uid）")
+        # 关注列表接口在页面上下文里 fetch（复用登录态）：先落到站内页面再取值
+        self._page.goto(
+            "https://www.xiaohongshu.com/explore",
+            wait_until="domcontentloaded",
+            timeout=30000,
         )
-        try:
-            logger.info(f"小红书用户搜索: {keyword}")
-            self._page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-            # 自适应等待（替代固定 sleep）：轮询直到「用户卡片出现 / 结果区渲染
-            # 但无卡片（无结果，提前退出）/ 登录墙 / 超时」。结果快时不等满固定时长
-            import time
-
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                body_text = (self._page.inner_text("body") or "")[:500]
-                if "登录后查看搜索结果" in body_text or "手机号登录" in body_text:
-                    raise RuntimeError(
-                        "小红书未登录（搜索页登录墙拦截），请确认已导入有效 Cookie"
-                    )
-                if self._page.query_selector("div.user-item-box"):
-                    break  # 结果已渲染，立即继续
-                if self._page.query_selector("div.search-layout"):
-                    # 结果区域已渲染但尚无用户卡片：短暂确认后仍无则判定「无结果」提前退出
-                    time.sleep(0.5)
-                    if not self._page.query_selector("div.user-item-box"):
-                        break
-                time.sleep(0.4)
-            # 用户卡片容错选择器（按命中率依次尝试）：
-            # 优先搜索页「用户」卡片区（user-item-box，卡片内链接才是搜索结果用户），
-            # 全局 user/profile 链接兜底（注意会包含笔记卡片的作者链接，需配合
-            # 「唯一候选/昵称精确匹配」策略过滤）
-            selectors = [
-                "div.user-item-box a[href*='/user/profile/']",
-                "a[href*='/user/profile/']",
-                "a[href^='/user/profile/']",
-            ]
-            links = []
-            for idx, sel in enumerate(selectors):
-                try:
-                    # 首个选择器（用户卡片区）无结果时必超时，缩短等待减少无效耗时
-                    timeout_ms = 1500 if idx == 0 else 3000
-                    self._page.wait_for_selector(sel, timeout=timeout_ms)
-                    links = self._page.query_selector_all(sel)
-                    if links:
-                        logger.info(f"用户搜索选择器 '{sel}' 命中 {len(links)} 个")
-                        break
-                except Exception:
-                    continue
-
-            seen: set[str] = set()
-            for el in links[:limit]:
-                try:
-                    href = el.get_attribute("href") or ""
-                    if "/user/profile/" not in href:
-                        continue
-                    user_id = href.rstrip("/").split("/")[-1].split("?")[0]
-                    if not user_id or user_id in seen:
-                        continue
-                    seen.add(user_id)
-                    # 卡片文本取昵称（首个非空行）；昵称可能带「小红书号：xxx」
-                    # 后缀（同一行或相邻行），截断至「小红书号」前避免噪声混入
-                    card_text = (el.inner_text() or "").strip()
-                    text = card_text.splitlines()
-                    name = next((ln.strip() for ln in text if ln.strip()), "")[:64]
-                    name = name.split("小红书号")[0].strip()[:64]
-                    # 尝试提取卡片内的小红书号（补全「号匹配」判据用）
-                    xhs_id = None
-                    import re as _re
-
-                    m = _re.search(r"小红书号[:：]\s*([0-9a-zA-Z_-]+)", card_text)
-                    if m:
-                        xhs_id = m.group(1)
-                    url = (
-                        f"https://www.xiaohongshu.com{href}"
-                        if href.startswith("/")
-                        else href
-                    )
-                    results.append(
-                        {
-                            "name": name,
-                            "profile_url": url,
-                            "platform_user_id": user_id,
-                            "xhs_id": xhs_id,
-                        }
-                    )
-                except Exception:
-                    continue
-        except Exception as e:
-            logger.error(f"小红书用户搜索失败: {e}")
-            raise
-        return results
+        time.sleep(2)
+        return fx.fetch_following_list(self._page, max_pages=max_pages)
 
     async def get_feed(self, count: int = 20) -> list[RawContent]:
         await self._ensure_browser()

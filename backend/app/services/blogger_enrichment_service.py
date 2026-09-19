@@ -1,16 +1,18 @@
-"""博主资料补全服务：小红书走在线搜索，抖音走 f2 用户库离线回填。
+"""博主资料补全服务：小红书按关注列表解析 uid，抖音走 f2 用户库离线回填。
 
-**小红书**（为缺失 profile_url / platform_user_id 的博主补全）策略（本地互推优先，
-减少搜索与风控暴露）：
+**小红书**（为缺失 profile_url / platform_user_id 的博主补全）策略（本地优先，
+不联网搜用户）：
 1. 本地互推：profile_url ↔ platform_user_id 可互相推导（主页 URL 含用户 ID）——
-   「有 URL 无 ID」从 URL 提取，「有 ID 无 URL」直接拼接，均无需搜索；
-2. 两者都缺：使用小红书 CDP/Playwright 采集引擎按 xhs_id 搜索用户——
-   唯一候选直接采纳；多候选时昵称完全匹配才采纳；否则标记失败（需人工核对）；
+   「有 URL 无 ID」从 URL 提取，「有 ID 无 URL」直接拼接，均无需请求；
+2. 两者都缺：任务执行器先拉一次「我关注的用户」列表（一次请求拿到全部关注账号的
+   uid），这里按**昵称归一化**匹配取 uid 拼主页 URL。为什么不用搜索：实测小红书的
+   用户搜索无法按「小红书号」定位用户（返回名称相近的无关用户），而素材库里的博主
+   正是从这份关注列表导入的，昵称可以一一对应；
 3. 单博主失败不阻塞整体；不覆盖已有 platform_user_id；
 4. 结果三态：
    - updated：成功补全
-   - skipped：确定性无法补全（缺小红书号 / 搜索无结果 / 无法唯一确认 /
-     主页 URL 无法解析）——自动写入跳过表，不再出现在缺失列表，可解除后重试
+   - skipped：确定性无法补全（缺小红书号 / 不在关注列表 / 主页 URL 无法解析）
+     ——自动写入跳过表，不再出现在缺失列表，可解除后重试
    - failed：临时性问题（Cookie 缺失/登录墙/网络异常等）——不跳过，
      保留在缺失列表，问题解决后重试
 
@@ -58,11 +60,6 @@ def _normalize_name(s: str) -> str:
             out.append(ch)
     # \W 匹配非「单词字符」（中文/字母/数字之外的 emoji、标点、空白等）
     return re.sub(r"[\s\W_]+", "", "".join(out))
-
-
-def _normalize_candidate_name(name: str) -> str:
-    """候选昵称归一化（先截断「小红书号：xxx」噪声后缀，再归一化）。"""
-    return _normalize_name(name.split("小红书号")[0])
 
 
 def extract_user_id_from_url(url: str) -> str | None:
@@ -242,31 +239,36 @@ async def list_skipped(db: AsyncSession) -> list[dict]:
 
 
 async def enrich_one(
-    db: AsyncSession, blogger: Blogger, search_users=None
+    db: AsyncSession, blogger: Blogger, following: dict[str, str] | None = None
 ) -> dict:
-    """补全单个博主主页信息，返回处理明细。
+    """补全单个小红书博主的主页信息（profile_url / platform_user_id），返回处理明细。
 
     参数:
         blogger: 博主记录（须为小红书平台且缺主页信息）
-        search_users: 用户搜索函数（默认 XiaohongshuScraper.search_users；
-            测试可注入假实现）。签名: async (keyword) -> list[dict]
+        following: 「关注列表」解析结果 {归一化昵称: uid}（任务执行器一次拉全，
+            形如 :func:`build_following_index` 的输出）；缺省视为空（本地互推仍可用）
 
     返回:
-        {"blogger_id", "name", "status": "updated"|"skipped"|"failed",
+        {"blogger_id", "name", "status": "updated"|"skipped",
          "reason"?, "profile_url"?, "platform_user_id"?}
 
     状态语义：
     - updated：成功补全
-    - skipped：确定性无法补全（缺小红书号/搜索无结果/无法唯一确认/URL 解析失败），
+    - skipped：确定性无法补全（URL 无法解析 / 不在关注列表里 / 缺小红书号），
       自动写入跳过表（不再出现在缺失列表，可解除后重试）
-    - failed：临时性问题（Cookie/登录墙/网络异常），不跳过，保留重试
+
+    路径（都不联网搜用户）：
+    1. 本地互推：URL ↔ ID 互相推导（主页 URL 里就带着用户 ID）；
+    2. 关注列表：按昵称归一化命中 → 用 uid 拼主页 URL。为什么用关注列表而不是搜索：
+       实测小红书用户搜索无法按「小红书号」定位用户（返回名称相近的无关用户），
+       而素材库的博主正是从这份关注列表导入的，昵称可一一对应。
     """
     blog_id = blogger.id
     name = blogger.name
     url = blogger.profile_url
     uid = blogger.platform_user_id
 
-    # ── 1. 本地互推（缺一补一，无需搜索）──
+    # ── 1. 本地互推（缺一补一，无需任何请求）──
     if url and not uid:
         extracted = extract_user_id_from_url(url)
         if extracted:
@@ -292,63 +294,13 @@ async def enrich_one(
             "platform_user_id": uid,
         }
 
-    # ── 2. 两者都缺 → 按小红书号搜索用户 ──
-    if not blogger.xhs_id:
-        # 确定性失败：无小红书号无法定位 → 跳过
-        await mark_skipped(db, [blog_id], "缺少小红书号（xhs_id），无法搜索定位")
-        return {
-            "blogger_id": blog_id,
-            "name": name,
-            "status": "skipped",
-            "reason": "缺少小红书号（xhs_id），无法搜索定位",
-        }
-    if search_users is None:
-        from app.scrapers.xiaohongshu import XiaohongshuScraper
-
-        search_users = XiaohongshuScraper(
-            headless=True, cookie_file=None
-        ).search_users
-    try:
-        candidates = await search_users(blogger.xhs_id)
-    except Exception as e:  # noqa: BLE001 浏览器/网络/Cookie 异常属临时性问题：不跳过
-        logger.warning(f"博主 #{blog_id} 用户搜索异常: {e}")
-        return {
-            "blogger_id": blog_id,
-            "name": name,
-            "status": "failed",
-            "reason": f"用户搜索失败: {e}",
-        }
-
-    matched: dict | None = None
-    if len(candidates) == 1:
-        # 唯一候选直接采纳（搜索词即小红书号，单候选大概率是号主；
-        # 多候选才需要严格校验，避免误采纳无关用户）
-        matched = candidates[0]
-    else:
-        # 匹配优先级：小红书号精确匹配（搜索即按号发起，最可靠）→
-        # 昵称精确匹配 → 昵称归一化匹配（容忍大小写/全角/空格/emoji 差异）
-        norm_name = _normalize_name(name)
-        norm_xhs_id = _normalize_name(blogger.xhs_id or "")
-        for candidate in candidates:
-            # 小红书号匹配：大小写不敏感（号通常不区分大小写，如 Softrin/softrin）
-            cand_xhs = _normalize_name(candidate.get("xhs_id") or "")
-            if norm_xhs_id and cand_xhs == norm_xhs_id:
-                matched = candidate
-                break
-        if matched is None:
-            for candidate in candidates:
-                cand_name = candidate.get("name") or ""
-                if cand_name == name or (
-                    cand_name and _normalize_candidate_name(cand_name) == norm_name
-                ):
-                    matched = candidate
-                    break
-    if matched is None:
-        # 确定性失败：无结果/无法唯一确认 → 跳过（可解除后重试）
+    # ── 2. 两者都缺 → 从关注列表按昵称解析 uid ──
+    matched_uid = (following or {}).get(_normalize_name(name)) or ""
+    if not matched_uid:
+        # 确定性失败：不在关注列表里（改过名 / 已取关 / 本来是手工建的）→ 跳过
         reason = (
-            "搜索无结果"
-            if not candidates
-            else f"搜索结果 {len(candidates)} 个无法唯一确认（需人工核对）"
+            "不在你的小红书关注列表里，无法解析用户 ID"
+            "（需先关注 TA 或在编辑弹窗里手工填写平台用户 ID）"
         )
         await mark_skipped(db, [blog_id], reason)
         return {
@@ -358,14 +310,34 @@ async def enrich_one(
             "reason": reason,
         }
 
-    await _update(db, blogger, matched["profile_url"], matched["platform_user_id"])
+    url = build_profile_url(matched_uid)
+    await _update(db, blogger, url, matched_uid)
     return {
         "blogger_id": blog_id,
         "name": name,
         "status": "updated",
-        "profile_url": matched["profile_url"],
-        "platform_user_id": matched["platform_user_id"],
+        "profile_url": url,
+        "platform_user_id": matched_uid,
     }
+
+
+def build_following_index(rows: list[dict]) -> dict[str, str]:
+    """把关注列表解析结果转成 {归一化昵称: uid}（供 :func:`enrich_one` 匹配）。
+
+    Args:
+        rows: ``XiaohongshuScraper.list_following_sync`` 的返回值
+            （每项含 nickname / uid）。
+
+    Returns:
+        归一化昵称 → uid；缺昵称或缺 uid 的行跳过。
+    """
+    index: dict[str, str] = {}
+    for row in rows or []:
+        nickname = str(row.get("nickname") or "").strip()
+        uid = str(row.get("uid") or "").strip()
+        if nickname and uid:
+            index[_normalize_name(nickname)] = uid
+    return index
 
 
 async def _update(
