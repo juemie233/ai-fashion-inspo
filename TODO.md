@@ -37,6 +37,12 @@
 
 **背景：** 已实测**不能**从 f2 日志还原：52 个日志里 `[aweme_id]` 行与 `[完成]：文件名` 行**分行输出且并发下载**，按顺序分组后严重串味——2,703 个 ID 行对到 3,588 个磁盘作品，21.9% 多义，而「唯一」那部分只覆盖 296 个不同 ID（自相矛盾），据此回填会大面积写错。
 
+> **补充（2026-09 复核）：日志这条路现在已彻底不存在，不必再考虑。** f2 的 `logs/`
+> 目录有 100 个文件，但**只剩 3 个非空、共 23 KB，且零条 `aweme_id` / `作品ID`**——
+> 历史下载日志已被 f2 自身的日志轮转清掉（其启动时会删旧日志，日志里还能看到
+> `无法删除日志文件 logs\... 它正被另一个进程使用`）。现有 3 个非空日志是本次排查
+> 自己产生的 403 记录与一条 httpx traceback。**接口枚举是唯一路径，没有离线退路。**
+
 **唯一可行路径：** 用 f2 的 API **只枚举作品清单**（aweme_id + 发布时间 + 描述，**不下载媒体**），按「发布时间 + 描述」与磁盘文件名精确对齐，再回填 `source_platform_id` / `source_url`。
 
 > **已完成（工具侧）**：新增 `backend/scripts/report_f2_id_alignment.py`（**只读**，不含任何写库代码）：
@@ -62,6 +68,17 @@
 > **卡点**：枚举接口对**游客 Cookie 返回 403**（实测：f2 配置里只有 `UIFID_TEMP`，无
 > `sessionid`；另试「匿名 `TokenManager.gen_ttwid()` 生成的 ttwid」两种组合**同样 403**）。
 > 必须一个登录态抖音 Cookie 才能出真实覆盖率数字。
+>
+> **解锁方式（任选其一，命令已就绪）**：
+>
+> ```bash
+> cd backend
+> python -m scripts.report_f2_id_alignment --auto-cookie chrome --limit 1   # 从本机浏览器读（需先关浏览器）
+> python -m scripts.report_f2_id_alignment --cookie-file storage/cookies/douyin_cookies.json
+> ```
+>
+> 顺带：f2 配置里那份游客 Cookie 意味着**项目的「一键获取素材」当时也在 403 失败**
+> （f2_import 不传 `--auto-cookie`，f2 就用配置里那份），刷新 Cookie 会一并修好。
 
 **跑法：**
 
