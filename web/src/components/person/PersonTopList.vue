@@ -19,11 +19,7 @@ defineEmits<{
       <div v-for="(p, i) in persons" :key="p.id" class="top-row" @click="$emit('go-detail', p)">
         <span class="top-rank">{{ i + 1 }}</span>
         <a-avatar :size="28">
-          <img
-            v-if="p.avatar_path || p.face_thumb_path"
-            :src="getFileUrl((p.avatar_path || p.face_thumb_path) as string)"
-            :alt="p.name"
-          />
+          <img v-if="p.avatar_path" :src="getFileUrl(p.avatar_path)" :alt="p.name" />
           <span v-else aria-hidden="true">👤</span>
         </a-avatar>
         <span class="top-name">{{ p.name }}</span>

@@ -111,7 +111,7 @@ async function clearAvatar() {
   submitting.value = true
   try {
     await bloggersApi.clearAvatar(props.personId)
-    Message.success('已清除手动头像，改用自动匹配的人脸小图')
+    Message.success('已清除头像，列表将显示名字首字占位')
     emit('saved', null)
     emit('update:visible', false)
   } catch (e) {
@@ -175,8 +175,8 @@ async function clearAvatar() {
           />
         </div>
         <div class="avatar-upload-tip">
-          支持 JPG / PNG / WebP；上传后统一转成方形头像（长边 ≤512）， 展示优先级为「手动头像 →
-          人脸小图 → 首字」。
+          支持 JPG / PNG / WebP；上传后统一转成方形头像（长边 ≤512）。头像是手动设置的，
+          清除后显示名字首字占位。
         </div>
         <div v-if="pickedPreview" class="avatar-upload-preview">
           <img :src="pickedPreview" alt="待设置的头像" />
@@ -188,7 +188,7 @@ async function clearAvatar() {
       <a-space style="display: flex; justify-content: space-between; width: 100%">
         <a-popconfirm
           v-if="hasAvatar"
-          content="清除手动头像？将回退为自动匹配的人脸小图（或首字占位）。"
+          content="清除头像？清除后列表/详情将显示名字首字占位，且头像文件会被删除。"
           @ok="clearAvatar"
         >
           <a-button type="text" status="danger" :loading="submitting">清除头像</a-button>

@@ -38,9 +38,9 @@ export interface Person {
   /** 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物 */
   face_registered?: boolean;
   profile_url?: string | null;
+  /** 头像相对路径（相对 storage_root）：只有手动设置一条来源
+   *  （POST /api/bloggers/{id}/avatar：从 TA 的素材选一张或本地上传；为空则显示首字占位） */
   avatar_path?: string | null;
-  /** 人脸缩略图相对路径（博主专属：从已匹配素材的人脸检测框裁剪；模特无此字段） */
-  face_thumb_path?: string | null;
   bio?: string | null;
   source?: string;
   created_at?: string | null;

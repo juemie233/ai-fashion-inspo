@@ -1,7 +1,8 @@
 """博主人像头像（手动设置）测试：从素材选一张 / 本地上传 / 覆盖 / 清除 / 级联清理。
 
 头像链路：选定照片 → 统一重编码为 JPEG（长边 ≤512）→ ``storage/avatars/avatar_{id}.jpg``
-→ 写 ``avatar_path``；展示优先级为「手动头像 → 人脸小图 → 首字」。
+→ 写 ``avatar_path``。这是头像的唯一来源（不再从素材人脸检测自动裁剪）；
+``avatar_path`` 为空时前端显示名字首字占位。
 """
 
 from PIL import Image
@@ -151,7 +152,7 @@ def test_set_avatar_overwrites_previous(client, create_blogger, upload, make_ima
 
 
 def test_clear_avatar(client, create_blogger, upload):
-    """清除头像：avatar_path 置空 + 文件删除（回退到人脸小图/首字）。"""
+    """清除头像：avatar_path 置空 + 文件删除（前端回退首字占位）。"""
     from app.config import settings
 
     blogger = create_blogger(name="清头像博")

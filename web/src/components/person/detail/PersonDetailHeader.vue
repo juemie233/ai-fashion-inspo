@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 人物详情头部信息卡：头像（手动头像→人脸小图→首字）、名称 + 内容类型徽标、元信息、主页链接与操作。 */
+/** 人物详情头部信息卡：头像（手动设置，未设置显示首字）、名称 + 内容类型徽标、元信息、主页链接与操作。 */
 
 import { ref } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
@@ -26,10 +26,9 @@ defineEmits<{
 /** 头像选择弹窗开关（仅穿搭博主提供手动设置入口） */
 const avatarPickerVisible = ref(false)
 
-/** 头像地址：手动设置的头像优先，其次才是素材人脸自动裁剪的小图 */
+/** 头像地址：只有手动设置一条来源（从 TA 的素材选一张或本地上传）；未设置则显示首字 */
 function avatarSrc(): string {
-  const path = props.detail.avatar_path || props.detail.face_thumb_path
-  return path ? getFileUrl(path) : ''
+  return props.detail.avatar_path ? getFileUrl(props.detail.avatar_path) : ''
 }
 </script>
 
@@ -37,7 +36,7 @@ function avatarSrc(): string {
   <a-card size="small" class="header-card">
     <div class="header-row">
       <div class="avatar-wrap">
-        <!-- 展示优先级：手动设置的头像 → 人脸小图（自动裁剪）→ 名字首字 -->
+        <!-- 头像只有手动设置一条来源；未设置时显示名字首字 -->
         <img v-if="avatarSrc()" :src="avatarSrc()" class="avatar-img" :alt="detail.name" />
         <span v-else class="avatar-fallback">{{ detail.name.slice(0, 1) }}</span>
       </div>

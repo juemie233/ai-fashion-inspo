@@ -277,7 +277,7 @@ export const bloggersApi = {
    * 设置博主头像（覆盖旧的）：从 TA 的素材里选一张，或本地上传一张照片（二选一）。
    *
    * 后端统一重编码为 JPEG（长边 ≤512）存到 storage/avatars/，并写 avatar_path；
-   * 展示优先级「手动头像 → 人脸小图 → 首字」，因此设置后立刻生效。
+   * 这是头像的**唯一**来源（不再从素材人脸检测里自动裁剪），设置后立刻生效。
    */
   async setAvatar(id: number, payload: { inspirationId?: string; file?: File }): Promise<Blogger> {
     const formData = new FormData()
@@ -290,7 +290,7 @@ export const bloggersApi = {
     return data
   },
 
-  /** 清除手动头像（回退到人脸小图或首字占位），同时删除头像文件 */
+  /** 清除手动头像（avatar_path 置空、回退首字占位），同时删除头像文件 */
   async clearAvatar(id: number): Promise<Blogger> {
     const { data } = await apiClient.delete<Blogger>(`/bloggers/${id}/avatar`)
     return data

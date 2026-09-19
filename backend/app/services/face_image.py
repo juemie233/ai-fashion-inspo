@@ -10,9 +10,8 @@
   2. 图片统一重编码为 JPEG：子服务声明只吃 JPG/PNG，库里还有 webp（抖音图片）等
      格式；重编码保证「只要 PIL 能打开，人脸服务就能解码」
 
-不做像素级处理（不缩放、不按 EXIF 旋转）：检测返回的 bbox 会被后续裁脸复用
-（见 :mod:`app.services.face_thumbnail`），必须与送检图片坐标系一致；cv2 同样不认
-EXIF，两边口径保持一致。
+不做像素级处理（不缩放、不按 EXIF 旋转）：检测结果里的 bbox 是**送检图片**坐标系，
+后续按它裁脸/画框必须与送检图一致；cv2 同样不认 EXIF，两边口径保持一致。
 """
 
 from __future__ import annotations

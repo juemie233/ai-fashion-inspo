@@ -642,10 +642,9 @@ function largePreviewUrl(item: DetectionItem): string {
   return getFileUrl(item.file_path)
 }
 
-/** 人物头像地址：手动设置的头像 → 人脸小图（自动裁剪），均无则显示首字（与人物列表/详情约定一致） */
+/** 人物头像地址：只有手动设置一条来源（未设置则显示首字占位，与人物列表/详情一致） */
 function personAvatarUrl(item: PersonAggregateItem): string | undefined {
-  const path = item.avatar_path || item.face_thumb_path
-  return path ? getFileUrl(path) : undefined
+  return item.avatar_path ? getFileUrl(item.avatar_path) : undefined
 }
 
 /** 聚合分组代表图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)） */

@@ -351,7 +351,7 @@ fashion-inspo/
 │   │   │   ├── collection_service.py # 收藏合集（手动/智能求值/固化/排序）
 │   │   │   ├── scraper_service.py     # 采集转发层 → scraper/（tasks 任务 + process 编排 + cookies/schedules/extension/results）
 │   │   │   ├── blogger_face.py   # 博主人脸注册（平均池化）+ 素材人脸检测匹配
-│   │   │   ├── face_thumbnail.py # 人脸缩略图裁剪（从已关联素材选图注册用）
+│   │   │   ├── face_image.py     # 送检图片准备（格式归一 + 视频取首帧缩略图）
 │   │   │   ├── face_client.py    # 人脸识别子服务 HTTP 客户端（face-service）
 │   │   │   ├── file_service.py   # 文件管理
 │   │   │   ├── audit_service.py  # 操作审计日志写入

@@ -2,9 +2,12 @@
 
 - blogger_face_embeddings：一位博主一条平均池化后的 512 维特征（float32 BLOB）
 - model_face_embeddings：一位模特一条平均池化后的 512 维特征（float32 BLOB，
-  来源为模特写真照片组；与博主对称，无「人脸缩略图」能力）
+  来源为模特写真照片组；与博主特征库对称）
 - inspiration_face_detections：素材图内每张人脸一条记录（含特征与匹配结果，
   matched_blogger_id 为空表示未匹配到已知博主，即「疑似未知人脸」）
+
+注：人物头像不再由人脸检测自动裁剪生成（改由用户手动设置，
+见 :mod:`app.services.person.avatar`），因此检测记录里的 bbox 目前只作检测元数据保留。
 """
 
 from datetime import datetime
@@ -53,7 +56,7 @@ class ModelFaceEmbedding(Base):
     """模特人脸特征库：平均池化后的 512 维归一化特征（float32 BLOB，2048 字节）。
 
     来源：模特写真照片组（model_photos）中按检测置信度挑选的 Top-K 张高质量
-    人脸平均池化；与博主特征库对称，模特无「人脸缩略图」能力。
+    人脸平均池化；与博主特征库对称。
     """
 
     __tablename__ = "model_face_embeddings"
@@ -97,7 +100,7 @@ class InspirationFaceDetection(Base):
     face_index: Mapped[int] = mapped_column(Integer)  # 图内人脸序号（0 起）
     embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32
     # 人脸检测框（原图坐标 [x1, y1, x2, y2] 的 JSON 字符串，可空）：
-    # 用于从素材图中裁剪人脸小图（博主列表头像），检测子服务返回、入库保留
+    # 检测子服务返回的元数据，入库保留；人物头像已改由用户手动设置，当前无消费方
     bbox: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 人脸检测置信度（insightface det_score，0~1）：低置信度人脸不自动匹配，
     # 避免模糊/侧脸/小脸特征的误判；face-service 已过滤 <0.5 的

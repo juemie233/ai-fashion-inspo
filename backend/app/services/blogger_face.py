@@ -335,14 +335,13 @@ async def _clear_blogger_face_detections(
 async def unregister_blogger_face(db: AsyncSession, blogger_id: int) -> dict:
     """注销博主人脸：彻底撤销该博主的人脸绑定。
 
-    全清四样数据（一个事务）：
+    全清三样数据（一个事务）：
     1. blogger_face_embeddings 人脸特征（删除后不再参与自动匹配）；
     2. 指向该博主的人脸检测记录回退为未匹配（含已确认锁定的 confirmed）；
-    3. inspiration_bloggers 素材归属关联全部解除；
-    4. 人脸缩略图缓存文件在提交成功后删除（路由层调用 delete_face_thumbnail）。
+    3. inspiration_bloggers 素材归属关联全部解除。
 
-    博主账号本身、平台元数据、人物组均保留，可重新注册/重新关联。
-    博主不存在抛 404。返回各项清理计数。
+    博主账号本身、平台元数据、人物组均保留（手动设置的头像 avatar_path 也不动），
+    可重新注册/重新关联。博主不存在抛 404。返回各项清理计数。
     """
     blogger = await db.get(Blogger, blogger_id)
     if not blogger:
@@ -560,8 +559,8 @@ async def detect_inspiration_faces(
             inspiration_id=inspiration_id,
             face_index=face_offset + inserted,
             embedding=emb_bytes,
-            # 保留检测框坐标（原图 [x1,y1,x2,y2]），供博主人脸缩略图裁剪；
-            # 子服务偶发缺失时置空，不影响检测匹配主流程
+            # 保留检测框坐标（原图 [x1,y1,x2,y2]）作为检测元数据（人物头像已改由
+            # 用户手动设置，不再用它裁小图）；子服务偶发缺失时置空，不影响匹配主流程
             bbox=json.dumps(face["bbox"]) if isinstance(face.get("bbox"), list) else None,
             det_score=(
                 round(float(face["det_score"]), 4)

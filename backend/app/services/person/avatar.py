@@ -1,9 +1,8 @@
 """人物头像（手动设置）：把选定的一张照片落盘为 ``storage/avatars/avatar_{id}.jpg``。
 
-为什么需要：在此之前头像只有一条来源——素材人脸检测按 bbox 裁的小图
-（见 :mod:`app.services.face_thumbnail`），``avatar_path`` 字段与前端「手动头像」
-优先级都留着位置却没有任何写入入口。这里补上入口：用户在详情页/编辑弹窗里
-**从 TA 的素材里挑一张**（或直接上传一张照片），即成为该人物的头像。
+**头像是手动设置的唯一产物**：用户在详情页/编辑弹窗里从 TA 的素材里挑一张
+（或直接上传一张照片），即成为该人物头像；系统不再从素材人脸检测里自动裁剪头像
+（那条路已随 ``face_thumbnail`` 一并删除）。``avatar_path`` 为空时前端显示首字占位。
 
 三条约定：
   1. 头像文件按人物 id 命名、固定覆盖（``avatar_{id}.jpg``）：换头像不产生孤儿文件
@@ -122,7 +121,7 @@ async def set_blogger_avatar(
 
 
 async def clear_blogger_avatar(db: AsyncSession, blogger_id: int) -> dict:
-    """清除博主头像（回退到人脸小图/首字占位），并删除头像文件。"""
+    """清除博主头像（avatar_path 置空，前端回退为名字首字占位），并删除头像文件。"""
     blogger = await _get_blogger(db, blogger_id)
     blogger.avatar_path = None
     await db.commit()

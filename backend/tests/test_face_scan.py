@@ -293,10 +293,9 @@ async def test_match_confirm_results_flow(
         p for p in agg["items"]
         if p["person_type"] == "blogger" and p["person_id"] == blogger["id"] and p["count"] == 1
     )
-    # 人脸小图字段：前端头像展示（人脸小图 → 手动头像 → 首字）依赖该字段，
-    # 生成成功时为 faces/face_{id}.jpg，素材缺失等降级场景为 None
-    assert "face_thumb_path" in blogger_item
-    assert blogger_item["face_thumb_path"] in (None, f"faces/face_{blogger['id']}.jpg")
+    # 头像只有手动设置一条来源（未手动设置时为 None，前端显示首字占位）
+    assert blogger_item["avatar_path"] is None
+    assert "face_thumb_path" not in blogger_item
     # 明细
     detail = client.get(
         f"/api/face-scan/results?status=pending&person_id={blogger['id']}"

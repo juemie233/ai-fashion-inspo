@@ -37,11 +37,7 @@ const avatarPickerVisible = ref(false)
 /** 编辑期间设置好的头像相对路径（选择器保存后回填，用于弹窗内即时预览） */
 const avatarPath = ref<string | null>(null)
 
-const formAvatarSrc = computed(() =>
-  avatarPath.value || props.person?.face_thumb_path
-    ? getFileUrl((avatarPath.value || props.person?.face_thumb_path) as string)
-    : '',
-)
+const formAvatarSrc = computed(() => (avatarPath.value ? getFileUrl(avatarPath.value) : ''))
 
 const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
 
@@ -230,7 +226,7 @@ async function handleSubmit() {
               {{ person.avatar_path ? '更换头像' : '上传头像' }}
             </a-button>
             <span class="avatar-form-tip">
-              从 TA 的素材里选一张，或上传一张照片；设置后优先于自动裁剪的人脸小图
+              从 TA 的素材里选一张，或上传一张照片；头像是手动设置的，清除后显示名字首字
             </span>
           </div>
         </div>

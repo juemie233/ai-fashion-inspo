@@ -41,11 +41,6 @@ from app.services.blogger_face import (
     unbind_blogger_inspirations,
     unregister_blogger_face,
 )
-from app.services.face_thumbnail import (
-    delete_face_thumbnail,
-    ensure_blogger_face_thumbnail,
-    ensure_blogger_face_thumbnails,
-)
 
 router = APIRouter(prefix="/api/bloggers", tags=["bloggers"])
 
@@ -85,21 +80,13 @@ async def list_bloggers(
         face_registered_only=face_registered_only,
         grouped=grouped,
     )
-    # 批量补齐人脸缩略图（一次查询候选检测 + 缺失/过期缓存裁剪），返回 face_thumb_path
-    member_ids = [
-        m["id"] for i in items for m in (i.get("group_members") or [])
-    ]
-    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items] + member_ids)
+    # 人物组头像兜底：同组就是同一个人，主账号没有手动头像时用组内账号的
+    # （否则「组里明明有人设过头像，折叠行却显示占位图」）
     for item in items:
-        item["face_thumb_path"] = thumbs.get(item["id"])
         members = item.get("group_members") or []
-        for member in members:
-            member["face_thumb_path"] = thumbs.get(member["id"])
-        # 人物组头像兜底：同组就是同一个人，主账号没有可用人脸时用组内账号的
-        # （否则「组里明明有人脸，折叠行却显示占位图」）
-        if not item["face_thumb_path"]:
-            item["face_thumb_path"] = next(
-                (m["face_thumb_path"] for m in members if m.get("face_thumb_path")), None
+        if not item.get("avatar_path"):
+            item["avatar_path"] = next(
+                (m.get("avatar_path") for m in members if m.get("avatar_path")), None
             )
 
     return {"items": items, "total": total, "page": page, "size": size}
@@ -278,11 +265,7 @@ async def top_bloggers(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """按素材数倒序返回热门博主排行。"""
-    items = await blogger_service.top(db, limit)
-    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
-    for item in items:
-        item["face_thumb_path"] = thumbs.get(item["id"])
-    return items
+    return await blogger_service.top(db, limit)
 
 
 @router.get("/suggestions", response_model=list[BloggerOut])
@@ -291,11 +274,7 @@ async def suggest_bloggers(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """按名称模糊匹配博主（用于前端选择去重）。"""
-    items = await blogger_service.suggest(db, name)
-    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
-    for item in items:
-        item["face_thumb_path"] = thumbs.get(item["id"])
-    return items
+    return await blogger_service.suggest(db, name)
 
 
 # ── 人物组（方案 B）：同一现实人物跨平台账号绑定 ──
@@ -405,7 +384,6 @@ async def get_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> di
     count = await blogger_service.count_inspirations(db, blogger_id)
     profile = await blogger_service.style_profile(db, blogger_id)
     base = blogger_service._to_dict(blogger, count)
-    base["face_thumb_path"] = await ensure_blogger_face_thumbnail(db, blogger_id)
     return {**base, "style_profile": profile}
 
 
@@ -454,8 +432,8 @@ async def set_blogger_avatar_api(
       视频素材用首帧缩略图（视频本体不能当图片用）
     - ``file``：本地上传的 JPG/PNG/WebP 等，统一重编码为 JPEG 且长边压到 512
 
-    设置后 ``avatar_path`` 非空，前端展示优先级「手动头像 → 人脸小图 → 首字」中
-    手动头像优先，因此会立刻覆盖自动裁剪出来的人脸小图。
+    设置后 ``avatar_path`` 非空——这是头像的**唯一**来源（系统不再从素材人脸检测里
+    自动裁剪头像）；清除后前端回退为名字首字占位。
     """
     from app.services.face_image import load_inspiration_image
     from app.services.person.avatar import set_blogger_avatar
@@ -502,7 +480,7 @@ async def set_blogger_avatar_api(
 async def clear_blogger_avatar_api(
     blogger_id: int, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """清除手动头像（回退到人脸小图或首字占位），同时删除头像文件。"""
+    """清除手动头像（avatar_path 置空，前端回退首字占位），同时删除头像文件。"""
     from app.services.person.avatar import clear_blogger_avatar
 
     return await clear_blogger_avatar(db, blogger_id)
@@ -519,8 +497,7 @@ async def delete_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=404, detail=e.message)
     except PersonHasInspirationsError as e:
         raise HTTPException(status_code=400, detail=e.message)
-    # 清理人脸缩略图与头像文件（博主已删，避免残留孤儿文件）
-    delete_face_thumbnail(blogger_id)
+    # 清理头像文件（博主已删，避免残留孤儿文件）
     delete_avatar_file(blogger_id)
 
 
@@ -606,12 +583,9 @@ async def unregister_blogger_face_api(
 ) -> dict:
     """注销博主人脸：删除人脸特征、回退所有人脸匹配记录、解除全部素材归属。
 
-    博主账号本身保留（可重新注册）；人脸缩略图缓存一并清理。
+    博主账号本身保留（可重新注册）；手动设置的头像（avatar_path）不受影响。
     """
-    result = await unregister_blogger_face(db, blogger_id)
-    # 人脸特征已删，缩略图缓存必然陈旧：提交成功后清理缓存文件
-    delete_face_thumbnail(blogger_id)
-    return result
+    return await unregister_blogger_face(db, blogger_id)
 
 
 class UnbindInspirationsRequest(BaseModel):

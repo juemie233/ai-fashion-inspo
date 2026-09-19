@@ -104,8 +104,8 @@ class BloggerOut(_PersonOutFields):
     ip_location: str | None = None
     profile_url: str | None = None
     avatar_path: str | None = None
-    # 人脸缩略图相对路径（从已匹配素材的人脸检测框裁剪缓存；无则 null）
-    face_thumb_path: str | None = None
+    # 头像说明：只有一条来源——手动设置（见 POST /api/bloggers/{id}/avatar：
+    # 从 TA 的素材里选一张，或本地上传一张照片）；不再有「素材人脸自动裁剪」那条路。
     bio: str | None = None
     # 人物组（方案 B）：null=独立账号；同组时列表折叠只返回主记录
     person_group_id: int | None = None
