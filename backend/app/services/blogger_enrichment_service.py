@@ -1,6 +1,7 @@
-"""博主主页信息补全服务：为缺失 profile_url / platform_user_id 的小红书博主自动补全。
+"""博主资料补全服务：小红书走在线搜索，抖音走 f2 用户库离线回填。
 
-策略（本地互推优先，减少搜索与风控暴露）：
+**小红书**（为缺失 profile_url / platform_user_id 的博主补全）策略（本地互推优先，
+减少搜索与风控暴露）：
 1. 本地互推：profile_url ↔ platform_user_id 可互相推导（主页 URL 含用户 ID）——
    「有 URL 无 ID」从 URL 提取，「有 ID 无 URL」直接拼接，均无需搜索；
 2. 两者都缺：使用小红书 CDP/Playwright 采集引擎按 xhs_id 搜索用户——
@@ -12,6 +13,14 @@
      主页 URL 无法解析）——自动写入跳过表，不再出现在缺失列表，可解除后重试
    - failed：临时性问题（Cookie 缺失/登录墙/网络异常等）——不跳过，
      保留在缺失列表，问题解决后重试
+
+**抖音**（为缺失 IP 属地的博主回填）策略：直接读 f2 用户库
+（``douyin_users.db`` → ``user_info_web.ip_location``），**离线、零网络、零风控**：
+- 只按 ``bloggers.platform_user_id`` ↔ ``sec_user_id`` **精确匹配**（不猜昵称，
+  避免把别人的属地写进来）；
+- **只补空缺**：已有 IP 属地一律不动（用户手填/CSV 导入的值优先）；
+- 缺 ID、f2 库没有该账号、f2 库该账号没有属地 → 记 skipped 并写跳过表（可在
+  人物管理页解除跳过后重试，例如补了 ID 或让 f2 采过一次主页之后）。
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import case, delete, or_, select
+from sqlalchemy import and_, case, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -70,26 +79,43 @@ def build_profile_url(user_id: str) -> str:
 async def list_missing_profile_bloggers(
     db: AsyncSession, blogger_ids: list[int] | None = None
 ) -> list[Blogger]:
-    """查询缺失主页信息的小红书博主（profile_url 或 platform_user_id 为空）。
+    """查询「资料有缺口」的博主：小红书缺主页信息、抖音缺 IP 属地。
+
+    缺口定义：
+    - 小红书：``profile_url`` 或 ``platform_user_id`` 为空（在线搜索补全）
+    - 抖音：``ip_location`` 为空（从 f2 用户库离线回填）
 
     排除已被「跳过」的博主（确定性无法补全，避免每次重复失败）；
     临时性问题（Cookie 等）不跳过，仍在列表中供重试。
 
     参数:
-        blogger_ids: 限定范围（None/空 = 全部缺失且未跳过的博主）
+        blogger_ids: 限定范围（None/空 = 全部有缺口且未跳过的博主）
     """
     stmt = select(Blogger).where(
-        Blogger.platform == "xiaohongshu",
-        or_(Blogger.profile_url.is_(None), Blogger.platform_user_id.is_(None)),
-        ~Blogger.id.in_(
-            select(BloggerEnrichmentSkip.blogger_id)
+        or_(
+            and_(
+                Blogger.platform == "xiaohongshu",
+                or_(
+                    Blogger.profile_url.is_(None),
+                    Blogger.platform_user_id.is_(None),
+                ),
+            ),
+            and_(
+                Blogger.platform == "douyin",
+                or_(
+                    Blogger.ip_location.is_(None),
+                    Blogger.ip_location == "",
+                ),
+            ),
         ),
+        ~Blogger.id.in_(select(BloggerEnrichmentSkip.blogger_id)),
     )
     if blogger_ids:
         stmt = stmt.where(Blogger.id.in_(blogger_ids))
-    # 处理顺序：优先「两项信息都缺失」的博主（完全无法定位采集，最需要补全），
-    # 其次「缺一项」的（本地互推即可补全，随时可处理）
+    # 处理顺序：抖音离线回填零成本先做（立刻见效）；小红书里优先「两项信息都缺失」
+    # 的博主（完全无法定位采集，最需要补全），其次「缺一项」的（本地互推即可补全）
     stmt = stmt.order_by(
+        case((Blogger.platform == "douyin", 0), else_=1),
         case(
             (
                 Blogger.profile_url.is_(None) & Blogger.platform_user_id.is_(None),
@@ -100,6 +126,71 @@ async def list_missing_profile_bloggers(
         Blogger.id,
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+def load_f2_profile_map() -> dict[str, dict]:
+    """读取 f2 用户库的账号资料（{sec_user_id: {nickname, ip_location}}）。
+
+    阻塞式文件读取（sqlite 只读）：调用方放线程池；f2 目录/库缺失时返回空 dict，
+    由调用方按「f2 用户库不可用」处理（全部记为跳过并说明原因）。
+    """
+    from scripts import import_f2_downloads as f2
+
+    try:
+        return f2.load_f2_profiles(f2.DEFAULT_F2_DIR)
+    except Exception as exc:  # noqa: BLE001 —— 读不了 f2 库不该让整批补全失败
+        logger.warning(f"读取 f2 用户库失败（抖音 IP 属地回填将跳过）：{exc}")
+        return {}
+
+
+async def backfill_douyin_from_f2(
+    db: AsyncSession, blogger: Blogger, profiles: dict[str, dict]
+) -> dict:
+    """按 f2 用户库回填单个抖音博主的 IP 属地（离线；只补空缺）。
+
+    Args:
+        db: 数据库会话。
+        blogger: 抖音博主行。
+        profiles: :func:`load_f2_profile_map` 的结果（按 sec_user_id 索引）。
+
+    Returns:
+        与 :func:`enrich_one` 同形的明细：{"blogger_id", "name", "status",
+        "reason"?, "ip_location"?}；status ∈ updated / skipped。
+        「确定性无法补全」的三种情况（缺 ID / f2 库无此账号 / f2 库无属地）会写入
+        跳过表，用户补了 ID 或让 f2 采过一次后可在界面解除跳过重试。
+    """
+    detail = {"blogger_id": blogger.id, "name": blogger.name}
+
+    if blogger.ip_location:
+        # 只补空缺：已有值（手填 / CSV 导入）一律不动
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": f"已有 IP 属地（{blogger.ip_location}），按「只补空缺」策略跳过",
+        }
+
+    uid = (blogger.platform_user_id or "").strip()
+    if not uid:
+        reason = "缺少平台用户 ID（sec_user_id），无法在 f2 用户库里定位"
+        await mark_skipped(db, [blogger.id], reason)
+        return {**detail, "status": "skipped", "reason": reason}
+
+    profile = profiles.get(uid)
+    if profile is None:
+        reason = "f2 用户库里没有这个账号（需让 f2 采一次 TA 的主页后再试）"
+        await mark_skipped(db, [blogger.id], reason)
+        return {**detail, "status": "skipped", "reason": reason}
+
+    ip_location = str(profile.get("ip_location") or "").strip()
+    if not ip_location:
+        reason = "f2 用户库里该账号没有 IP 属地（需让 f2 采一次 TA 的主页后再试）"
+        await mark_skipped(db, [blogger.id], reason)
+        return {**detail, "status": "skipped", "reason": reason}
+
+    blogger.ip_location = ip_location
+    await db.commit()
+    logger.info(f"抖音博主 #{blogger.id}「{blogger.name}」IP 属地已回填：{ip_location}")
+    return {**detail, "status": "updated", "ip_location": ip_location}
 
 
 async def mark_skipped(db: AsyncSession, blogger_ids: list[int], reason: str) -> int:

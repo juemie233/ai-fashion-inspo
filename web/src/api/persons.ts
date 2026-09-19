@@ -455,10 +455,14 @@ export async function importBloggersCsv(file: File) {
 export interface MissingProfileBlogger {
   id: number
   name: string
+  /** 平台：xiaohongshu=缺主页链接/ID（在线搜索补）；douyin=缺 IP 属地（离线读 f2 库补） */
+  platform: string
   xhs_id: string | null
+  /** 平台用户 ID：抖音这一列就是 sec_user_id，缺了就没法查 IP 属地 */
+  platform_user_id: string | null
 }
 
-/** 查询缺失主页信息的博主列表 */
+/** 查询资料有缺口的博主列表（小红书缺主页信息 / 抖音缺 IP 属地） */
 export async function fetchMissingProfiles(): Promise<{
   items: MissingProfileBlogger[]
   total: number

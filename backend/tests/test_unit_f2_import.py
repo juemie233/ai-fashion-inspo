@@ -551,6 +551,51 @@ def test_load_douyin_bloggers_excludes_auto_registered(tmp_path, monkeypatch):
     assert "点赞过的作者" in with_auto
 
 
+def test_load_f2_profiles_strips_prefix(tmp_path):
+    """f2 用户库资料读取：ip_location 剥掉「IP属地：」前缀，按 sec_user_id 索引。"""
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, ip_location TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO user_info_web VALUES (?, ?, ?)",
+        [
+            ("MS4x_a", "里香", "IP属地：浙江"),
+            ("MS4x_b", "夕木", "IP属地: 广东"),  # 半角冒号同样识别
+            ("MS4x_c", "没属地", ""),
+            ("MS4x_d", "裸值不算", "浙江"),
+            (None, "无 ID", "IP属地：江苏"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    profiles = f2.load_f2_profiles(f2_dir)
+
+    assert set(profiles) == {"MS4x_a", "MS4x_b", "MS4x_c", "MS4x_d"}
+    assert profiles["MS4x_a"]["ip_location"] == "浙江"
+    assert profiles["MS4x_b"]["ip_location"] == "广东"
+    assert profiles["MS4x_c"]["ip_location"] == ""
+    # 「裸值」不是带前缀的属地写法（避免把昵称误判成属地）
+    assert profiles["MS4x_d"]["ip_location"] == ""
+
+
+def test_load_f2_profiles_missing_db_or_column(tmp_path):
+    """库不存在 / 没有 ip_location 列：返回空（调用方按「无可用资料」处理）。"""
+    assert f2.load_f2_profiles(tmp_path / "不存在") == {}
+
+    f2_dir = tmp_path / "old"
+    f2_dir.mkdir()
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute("CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT)")
+    conn.execute("INSERT INTO user_info_web VALUES ('MS4x_a', '里香')")
+    conn.commit()
+    conn.close()
+    assert f2.load_f2_profiles(f2_dir) == {}
+
+
 def test_run_fetch_skips_unregistered_authors(tmp_path, monkeypatch):
     """回归：一键/CLI 下载默认跳过未登记账号，不再把官方号的作品拉进下载目录。"""
     f2_dir = tmp_path / "f2proj"

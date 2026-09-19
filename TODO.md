@@ -80,24 +80,30 @@
 
 **验收标准：** 能设置「夜间时段 + 每批张数」自动执行；中途取消后重跑只补未打标素材；页面显示已完成/剩余/预计小时数。
 
-### 【任务】f2 博主资料回填（--sync-profiles）与补齐无 ID 博主（P1，顺手的小赢）
+### 【任务】f2 博主资料回填（签名/粉丝数/头像）与补齐无 ID 博主（P1，顺手的小赢）
 
-**背景：** f2 的用户库 `douyin_users.db` → `user_info_web` 表存着 21 个作者的 `avatar_url` / `signature` / `city` / `ip_location` / `follower_count` / `short_id` / `sec_user_id`；而库里 29 个抖音博主**头像 0 个**、只有 10 个有签名、8 个有 IP 属地。另有 **7 个博主没有 ID**：`CC辣椒酱`、`Kitty觉觉`、`Nana.`、`折乙`（×2）、`火野丽`、`燕亚轩`（f2 库里没有他们，需用户给 ID 或让 f2 采一次）。
+**背景：** f2 的用户库 `douyin_users.db` → `user_info_web` 表存着作者们的 `avatar_url` / `signature` / `city` / `ip_location` / `follower_count` / `short_id` / `sec_user_id`。另有 **8 个博主没有 ID**：`折乙`（×2）、`燕亚轩`、`油炸土豆条🍟`、`月野千夏`、`美哆酱`、`陈莽妹`、`青苹果`（f2 库里没有他们，需用户给 ID 或让 f2 采一次）。
 
-**目标：**
+> **已实现（IP 属地部分）**：人物管理页「一键补全主页」现在按平台分流——抖音博主缺失的
+> `ip_location` 由该任务**离线读 f2 用户库**回填（按 `platform_user_id` ↔ `sec_user_id`
+> 精确匹配、只补空缺、不联网），入口与跳过/解除沿用小红书那套 UX。本次实测可补 16/25 个缺口；
+> 剩下的会记入「已跳过」并写明原因（缺 ID / f2 库里没有该账号 / f2 库里该账号无属地）。
 
-- `sync_blogger_ids.py` 加 `--sync-profiles`：一次性写入 ID / 主页 URL / 签名 / IP 属地 / 粉丝数，并按既有口径下载头像到 `storage/`
-- 回填策略明确：**不覆盖已有非空字段**（除显式 `--overwrite`），重复执行幂等
-- 7 个无 ID 博主：用户提供 ID 后并入清单，或让 f2 采集一次后由 `user_info_web` 自动补齐
+**目标（剩余部分）：**
+
+- 签名 / 粉丝数：`bloggers` 表需先加列（Alembic 迁移），再从 f2 库同一次读取回填（不覆盖已有值）
+- 平台头像：`avatar_url` 下载落盘——与「头像只保留手动设置 + 人脸提取」的既有决定冲突，需先决策
+- 8 个无 ID 博主：用户提供 ID 后并入清单，或让 f2 采集一次后由 `user_info_web` 自动补齐
 
 **涉及模块：**
 
 | 模块 | 改动 |
 | ------ | ------ |
-| `backend/scripts/sync_blogger_ids.py` | `--sync-profiles` / 头像下载 / 覆盖策略 |
-| `backend/scripts/import_f2_downloads.py`（可选） | 导入时顺带回填博主资料 |
+| `backend/app/models/person.py` + `alembic/` | 新增 signature / follower_count 列 |
+| `backend/app/services/blogger_enrichment_service.py` | 扩展抖音回填（复用 `load_f2_profiles`） |
+| `backend/scripts/sync_blogger_ids.py`（可选） | `--sync-profiles` 一次性写入 ID / 主页 URL / 签名 / 粉丝数 |
 
-**验收标准：** 抖音博主的头像/签名/IP 属地填充率显著上升（ID 覆盖目标 ≥ 20/29）；重复执行不产生重复头像文件、不覆盖已有值。
+**验收标准：** 抖音博主的签名/粉丝数填充率显著上升（ID 覆盖目标 ≥ 20/29）；重复执行不覆盖已有值、不产生重复头像文件。
 
 > **注意：** 库内 ID 列名是 `bloggers.platform_user_id`，**不是** `sec_user_id`（SQL 与代码里别写错）。
 

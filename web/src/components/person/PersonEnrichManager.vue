@@ -1,10 +1,16 @@
 <script setup lang="ts">
-/** 博主主页信息补全管理：缺失列表勾选 → 任务进度/结果 → 失败重试/跳过；含已跳过解除弹窗。
- *  逻辑在 useBloggerEnrich，本组件负责弹窗 UI 与打开/关闭接线。 */
+/** 博主资料补全管理：缺口列表勾选 → 任务进度/结果 → 失败重试/跳过；含已跳过解除弹窗。
+ *  逻辑在 useBloggerEnrich，本组件负责弹窗 UI 与打开/关闭接线。
+ *
+ * 两个平台走不同策略，列表里用平台标签 + 缺口文案区分：
+ * - 小红书：缺主页链接 / 平台用户 ID（本地互推 + 在线搜索）
+ * - 抖音：缺 IP 属地（离线读 f2 用户库，按 sec_user_id 精确匹配）
+ */
 
 import { watch } from 'vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { useBloggerEnrich } from '@/composables/useBloggerEnrich'
+import type { MissingProfileBlogger } from '@/api/persons'
 
 const props = defineProps<{
   visible: boolean
@@ -17,7 +23,17 @@ const emit = defineEmits<{
 
 const enrich = useBloggerEnrich({ onFinished: () => emit('finished') })
 
-/** 打开时拉取缺失博主列表并默认全选 */
+/** 缺口文案：让用户一眼看出「这个人缺什么、为什么补不了」 */
+function gapLabel(b: MissingProfileBlogger): string {
+  if (b.platform === 'douyin') {
+    return b.platform_user_id
+      ? `缺 IP 属地（ID ${b.platform_user_id.slice(0, 12)}…）`
+      : '缺 sec_user_id'
+  }
+  return b.xhs_id ? `小红书号 ${b.xhs_id}` : '缺小红书号'
+}
+
+/** 打开时拉取缺口博主列表并默认全选 */
 watch(
   () => props.visible,
   (v) => {
@@ -49,9 +65,9 @@ function closeSkipManage() {
     <!-- 选择补全范围 -->
     <template v-if="!enrich.enrichTask">
       <p class="enrich-tip">
-        为缺失主页信息（主页链接 / 平台用户
-        ID）的小红书博主自动补全：优先本地互推，缺失时按小红书号搜索匹配。 单次最多补全 20
-        位（防触发风控），完成后失败博主可单独重试。
+        按平台分流补全：<b>小红书</b>缺主页链接 / 平台用户 ID 的走本地互推 + 按小红书号搜索
+        （联网，单次最多 20 位防触发风控）；<b>抖音</b>缺 IP 属地的直接读 f2 用户库
+        <b>离线回填</b>（按 sec_user_id 精确匹配、只补空缺、不联网）。完成后失败博主可单独重试。
       </p>
       <div class="enrich-list">
         <div v-for="b in enrich.missingItems" :key="b.id" class="enrich-row">
@@ -60,7 +76,10 @@ function closeSkipManage() {
             @change="(v: unknown) => enrich.toggleMissing(b.id, Boolean(v))"
           >
             <span class="enrich-name">{{ b.name }}</span>
-            <span class="enrich-xhs">{{ b.xhs_id || '无小红书号' }}</span>
+            <a-tag size="small" :color="b.platform === 'douyin' ? 'arcoblue' : 'orangered'">
+              {{ b.platform === 'douyin' ? '抖音' : '小红书' }}
+            </a-tag>
+            <span class="enrich-xhs">{{ gapLabel(b) }}</span>
           </a-checkbox>
         </div>
         <a-empty
@@ -114,6 +133,9 @@ function closeSkipManage() {
           style="margin: 12px 0"
           :message="
             `补全完成：成功 ${enrich.enrichUpdated} 位` +
+            (enrich.enrichDouyinUpdated > 0
+              ? `（其中抖音 IP 属地 ${enrich.enrichDouyinUpdated} 位）`
+              : '') +
             (enrich.enrichSkipped > 0
               ? `，跳过 ${enrich.enrichSkipped} 位（确定性无法获取）`
               : '') +

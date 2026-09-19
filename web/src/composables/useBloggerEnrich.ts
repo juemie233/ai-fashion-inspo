@@ -142,6 +142,10 @@ export function useBloggerEnrich({ onFinished }: Options = {}) {
   const enrichFailed = computed(
     () => (enrichTask.value?.result as { failed?: number } | null)?.failed ?? 0,
   )
+  /** 其中抖音（离线读 f2 用户库）回填成功的 IP 属地数 */
+  const enrichDouyinUpdated = computed(
+    () => (enrichTask.value?.result as { douyin_updated?: number } | null)?.douyin_updated ?? 0,
+  )
   /** 临时性失败（可重试）；确定性失败已自动跳过 */
   const enrichFailedItems = computed(() => enrichResults.value.filter((r) => r.status === 'failed'))
   /** 本次自动跳过的（确定性无法获取，展示原因） */
@@ -216,6 +220,7 @@ export function useBloggerEnrich({ onFinished }: Options = {}) {
     enrichUpdated,
     enrichSkipped,
     enrichFailed,
+    enrichDouyinUpdated,
     enrichFailedItems,
     enrichSkippedItems,
     skipManageOpen,

@@ -135,6 +135,8 @@ export function summarizeResult(
     case 'enrich_blogger_profile':
       return [
         r.updated != null ? `补全 ${r.updated}` : '',
+        // 其中抖音 IP 属地（离线读 f2 用户库）单独说明，否则「补全 N」看不出干了什么
+        r.douyin_updated ? `抖音 IP 属地 ${r.douyin_updated}` : '',
         r.skipped != null ? `跳过 ${r.skipped}` : '',
         r.failed != null ? `失败 ${r.failed}` : '',
       ]

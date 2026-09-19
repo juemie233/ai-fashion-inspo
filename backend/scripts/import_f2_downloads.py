@@ -1543,6 +1543,50 @@ def load_f2_authors(f2_dir: Path) -> list[dict]:
     ]
 
 
+def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
+    """读取 f2 用户库里的账号资料，按 sec_user_id 索引（供离线回填博主 IP 属地）。
+
+    为什么能用：f2 的 ``user_info_web`` 存着它见过账号的 ``ip_location``
+    （形如「IP属地：浙江」）——素材库的 ``bloggers.ip_location`` 正好缺这块，
+    而这份数据**离线可读**（不联网、无风控），比重新去抓主页划算得多。
+
+    Args:
+        f2_dir: f2 工作目录（其下有 douyin_users.db）。
+
+    Returns:
+        {sec_user_id: {"nickname", "ip_location"}}；``ip_location`` 已按既有口径剥掉
+        「IP属地：」前缀（复用 ``fetch_xhs_following.parse_ip_location``，全角/半角
+        冒号都认，裸值不会误判）。库/表/列缺失时返回空 dict。
+    """
+    from .fetch_xhs_following import parse_ip_location
+
+    db = f2_dir / F2_AUTHOR_DB
+    if not db.exists():
+        return {}
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT sec_user_id, nickname, ip_location FROM user_info_web"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # 极小/旧版本的库可能没有 ip_location 列：没有可回填的字段，直接当空
+            return {}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    profiles: dict[str, dict] = {}
+    for sec_user_id, nickname, ip_location in rows:
+        if not sec_user_id:
+            continue
+        profiles[sec_user_id] = {
+            "nickname": nickname or "",
+            "ip_location": parse_ip_location(ip_location or ""),
+        }
+    return profiles
+
+
 def build_f2_command(
     author: dict,
     download_root: Path | None = None,

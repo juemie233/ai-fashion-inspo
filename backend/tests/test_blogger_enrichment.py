@@ -4,6 +4,8 @@
 任务执行器通过替换 XiaohongshuScraper 类模拟。
 """
 
+import sqlite3
+
 import pytest
 from pathlib import Path
 from sqlalchemy import select
@@ -25,6 +27,7 @@ from app.services.task_runners.enrich_blogger_profile import (
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
 )
+from scripts import import_f2_downloads as f2
 
 
 def _create_fake_cookie() -> Path:
@@ -320,10 +323,10 @@ async def test_enrich_login_wall_failure_reason(client):
 
 
 def test_enrich_api_no_missing_bloggers(client):
-    """没有缺失博主 → 400。"""
+    """没有资料有缺口的博主 → 400。"""
     r = client.post("/api/bloggers/enrich-missing-profile", json={})
     assert r.status_code == 400
-    assert "没有缺失" in r.json()["detail"]
+    assert "没有资料有缺口" in r.json()["detail"]
 
 
 def test_enrich_api_invalid_blogger_ids(client):
@@ -504,3 +507,170 @@ async def test_enrich_task_missing_cookie_fails_fast(client):
         task, _ = await create_enrich_blogger_profile_task(db, None)
         with pytest.raises(PermanentTaskError, match="Cookie"):
             await execute_enrich_blogger_profile(db, task)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  抖音 IP 属地离线回填（读 f2 用户库；不联网、不需要 Cookie）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _create_douyin_blogger(client, name, platform_user_id=None, ip_location=None):
+    body = {"name": name, "platform": "douyin"}
+    if platform_user_id:
+        body["platform_user_id"] = platform_user_id
+    if ip_location:
+        body["ip_location"] = ip_location
+    r = client.post("/api/bloggers", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _write_f2_db(tmp_path, rows) -> Path:
+    """造一个 f2 用户库（ip_location 用真实的「IP属地：xx」写法）。"""
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, ip_location TEXT)"
+    )
+    conn.executemany("INSERT INTO user_info_web VALUES (?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return f2_dir
+
+
+async def test_douyin_backfill_fills_gaps_and_skips_others(
+    client, tmp_path, monkeypatch
+):
+    """一键补全的抖音分支：只补空缺、已有值不动、查不到的写跳过并说明原因。"""
+    monkeypatch.setattr(
+        f2,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(
+            tmp_path,
+            [
+                ("MS4x_a", "缺属地博", "IP属地：浙江"),
+                ("MS4x_b", "已有属地博", "IP属地：广东"),
+                # MS4x_missing 故意不在库里（f2 没见过这个账号）
+            ],
+        ),
+    )
+    filled = _create_douyin_blogger(client, "缺属地博", platform_user_id="MS4x_a")
+    kept = _create_douyin_blogger(
+        client, "已有属地博", platform_user_id="MS4x_b", ip_location="四川"
+    )
+    absent = _create_douyin_blogger(client, "f2没有博", platform_user_id="MS4x_missing")
+    no_uid = _create_douyin_blogger(client, "缺ID博")
+
+    # 缺口列表包含抖音（并带上 platform / platform_user_id 供前端显示）
+    resp = client.get("/api/bloggers/missing-profile").json()
+    douyin_items = [i for i in resp["items"] if i["platform"] == "douyin"]
+    assert {i["name"] for i in douyin_items} == {"缺属地博", "f2没有博", "缺ID博"}
+    assert all("platform_user_id" in i for i in douyin_items)
+
+    # 执行任务（只有抖音博主，不需要小红书 Cookie / 浏览器）
+    async with async_session() as db:
+        task, total = await create_enrich_blogger_profile_task(db, None)
+        assert total == 3
+        await execute_enrich_blogger_profile(db, task)
+        await db.refresh(task)
+        assert task.progress == 100
+        assert task.result["updated"] == 1
+        assert task.result["douyin_updated"] == 1
+        assert task.result["skipped"] == 2
+        assert task.result["failed"] == 0
+        by_name = {r["name"]: r for r in task.result["results"]}
+        assert by_name["缺属地博"]["status"] == "updated"
+        assert "f2 用户库" in by_name["f2没有博"]["reason"]
+        assert "sec_user_id" in by_name["缺ID博"]["reason"]
+
+    # 落库结果：空缺补上、已有值不被覆盖
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(Blogger).where(
+                    Blogger.id.in_([filled["id"], kept["id"], absent["id"], no_uid["id"]])
+                )
+            )
+        ).scalars().all()
+        by_id = {b.id: b for b in rows}
+        assert by_id[filled["id"]].ip_location == "浙江"
+        assert by_id[kept["id"]].ip_location == "四川"  # 只补空缺
+
+    # 查不到的两位进了跳过表（可在界面解除后重试），已补全的不再出现在缺口列表
+    skips = client.get("/api/bloggers/enrich-skips").json()
+    assert {s["name"] for s in skips["items"]} == {"f2没有博", "缺ID博"}
+    after = client.get("/api/bloggers/missing-profile").json()
+    assert after["total"] == 0
+
+    # 幂等：再跑一次不会改动任何值
+    async with async_session() as db:
+        task2, total2 = await create_enrich_blogger_profile_task(db, None)
+        assert (task2, total2) == (None, 0)
+
+
+async def test_douyin_backfill_does_not_overwrite_existing_value(client):
+    """服务层兜底：即使被显式点名，已有 IP 属地也不覆盖（「只补空缺」策略）。"""
+    from app.services.blogger_enrichment_service import backfill_douyin_from_f2
+
+    blogger = _create_douyin_blogger(
+        client, "手填属地博", platform_user_id="MS4x_a", ip_location="上海"
+    )
+    async with async_session() as db:
+        row = await db.get(Blogger, blogger["id"])
+        result = await backfill_douyin_from_f2(db, row, {"MS4x_a": {"ip_location": "浙江"}})
+        await db.refresh(row)
+    assert result["status"] == "skipped"
+    assert "只补空缺" in result["reason"]
+    assert row.ip_location == "上海"
+
+
+async def test_douyin_backfill_empty_in_f2_is_skipped(client, tmp_path, monkeypatch):
+    """f2 库里有这个账号但没有属地：跳过并提示「让 f2 采一次主页」。"""
+    monkeypatch.setattr(
+        f2,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(tmp_path, [("MS4x_a", "空属地博", "")]),
+    )
+    _create_douyin_blogger(client, "空属地博", platform_user_id="MS4x_a")
+
+    async with async_session() as db:
+        task, _ = await create_enrich_blogger_profile_task(db, None)
+        await execute_enrich_blogger_profile(db, task)
+        await db.refresh(task)
+        assert task.result["updated"] == 0
+        assert task.result["skipped"] == 1
+        assert "没有 IP 属地" in task.result["results"][0]["reason"]
+
+
+async def test_enrich_cap_applies_only_to_online_bloggers(client, tmp_path, monkeypatch):
+    """单次上限只约束需要联网的小红书搜索；抖音离线回填全部纳入。"""
+    monkeypatch.setattr(
+        f2,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(tmp_path, [(f"MS4x_{i}", f"抖音{i}", "IP属地：浙江") for i in range(5)]),
+    )
+    for i in range(5):
+        _create_douyin_blogger(client, f"抖音{i}", platform_user_id=f"MS4x_{i}")
+    for i in range(MAX_ENRICH_PER_TASK + 3):
+        _create_blogger(client, f"缺博{i}", xhs_id=f"xhs{i:03d}")
+
+    async with async_session() as db:
+        task, total = await create_enrich_blogger_profile_task(db, None)
+
+    assert total == 5 + MAX_ENRICH_PER_TASK  # 抖音不受上限约束
+    assert task.result["truncated"] is True
+
+    # 抖音排在最前（离线零成本先做）
+    platforms = []
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(Blogger.id, Blogger.platform).where(
+                    Blogger.id.in_(task.result["blogger_ids"])
+                )
+            )
+        ).all()
+        by_id = {bid: p for bid, p in rows}
+        platforms = [by_id.get(i) for i in task.result["blogger_ids"][:5]]
+    assert platforms == ["douyin"] * 5

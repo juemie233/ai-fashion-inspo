@@ -130,11 +130,12 @@ async def enrich_missing_profile(
     body: dict,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """创建「博主主页信息补全」异步任务（人物管理页一键补全）。
+    """创建「博主资料补全」异步任务（人物管理页一键补全）。
 
-    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部缺失主页信息的小红书博主）
-    缺失定义：profile_url 或 platform_user_id 为空。
-    任务执行：本地互推（URL↔ID）优先，缺失时按小红书号搜索用户匹配。
+    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部有缺口的博主）
+    缺口定义：小红书缺 profile_url / platform_user_id；抖音缺 ip_location。
+    任务执行：小红书走本地互推（URL↔ID）+ 按小红书号搜索用户；抖音走 f2 用户库
+    **离线**回填 IP 属地（按 sec_user_id 精确匹配、只补空缺）。
     返回 task_id；进度/明细通过任务接口轮询。
     """
     blogger_ids = body.get("blogger_ids")
@@ -144,24 +145,21 @@ async def enrich_missing_profile(
     ):
         raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
     from app.services.task_runners.enrich_blogger_profile import (
-        MAX_ENRICH_PER_TASK,
         create_enrich_blogger_profile_task,
     )
 
     task, total = await create_enrich_blogger_profile_task(db, blogger_ids)
     if task is None:
-        raise HTTPException(
-            status_code=400,
-            detail="没有缺失主页信息的小红书博主可补全",
-        )
-    truncated = total > MAX_ENRICH_PER_TASK
+        raise HTTPException(status_code=400, detail="没有资料有缺口的博主可补全")
+    # 上限只约束「需要联网的小红书搜索」；抖音离线回填不受限
+    truncated = (task.result or {}).get("truncated", False)
     return {
         "task_id": task.id,
         "total": total,
         "truncated": truncated,
         "message": (
             f"本次将补全 {total} 位博主"
-            + ("（超过单次上限，其余请完成后再发起）" if truncated else "")
+            + ("（小红书超过单次上限，其余请完成后再发起）" if truncated else "")
         ),
     }
 
@@ -170,9 +168,10 @@ async def enrich_missing_profile(
 async def missing_profile_bloggers(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """缺失主页信息的小红书博主列表（人物管理页补全功能用）。
+    """资料有缺口的博主列表（人物管理页补全功能用）。
 
-    缺失定义：profile_url 或 platform_user_id 为空。
+    缺口定义：小红书缺 profile_url / platform_user_id；抖音缺 ip_location。
+    返回 platform 与平台相关字段，前端据此显示「缺小红书号 / 缺 sec_user_id」。
     """
     from app.services.blogger_enrichment_service import (
         list_missing_profile_bloggers,
@@ -181,7 +180,13 @@ async def missing_profile_bloggers(
     bloggers = await list_missing_profile_bloggers(db)
     return {
         "items": [
-            {"id": b.id, "name": b.name, "xhs_id": b.xhs_id}
+            {
+                "id": b.id,
+                "name": b.name,
+                "platform": b.platform,
+                "xhs_id": b.xhs_id,
+                "platform_user_id": b.platform_user_id,
+            }
             for b in bloggers
         ],
         "total": len(bloggers),
