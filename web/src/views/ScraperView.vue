@@ -18,6 +18,7 @@ import ScraperConfigTab from '@/components/scraper/ScraperConfigTab.vue'
 import ScraperScheduleTab from '@/components/scraper/ScraperScheduleTab.vue'
 import ScraperStatsPanel from '@/components/scraper/ScraperStatsPanel.vue'
 import F2ImportCard from '@/components/scraper/F2ImportCard.vue'
+import F2LikeCard from '@/components/scraper/F2LikeCard.vue'
 import F2TaskHistory from '@/components/scraper/F2TaskHistory.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { ScraperTask } from '@/types/scraper'
@@ -26,6 +27,9 @@ import type { ScraperTask } from '@/types/scraper'
 const activeTab = ref<'tasks' | 'config' | 'schedules'>(
   (localStorage.getItem('scraper-active-tab') as 'tasks' | 'config' | 'schedules') || 'tasks',
 )
+
+/** 抖音采集历史组件引用：两条 f2 入口提交任务后立刻刷新历史（否则要等 WS 首个事件） */
+const f2History = ref<InstanceType<typeof F2TaskHistory> | null>(null)
 
 // ===== 各业务域 composable =====
 const {
@@ -346,15 +350,24 @@ onUnmounted(() => {
     <p class="subtitle">自动化采集小红书和抖音的穿搭内容</p>
 
     <a-tabs v-model:active-key="activeTab" type="line">
-      <!-- 采集任务 Tab -->
+      <!-- 采集任务 Tab：按采集通道分区（抖音 f2 通道 / CDP 通道），各带自己的历史 -->
       <a-tab-pane key="tasks" title="采集任务">
         <ScraperStatsPanel />
 
-        <!-- 一键获取素材（抖音 f2）：增量下载 + 去重入库 -->
-        <F2ImportCard />
+        <!-- ══ 通道 A：抖音 · f2 增量下载（已登记博主的主页作品 + 我的喜欢）══ -->
+        <div class="channel-title">抖音 · f2 通道</div>
 
-        <!-- 抖音采集历史（f2 增量下载）：与下方 CDP 采集历史分开 -->
-        <F2TaskHistory />
+        <!-- 一键获取素材（抖音 f2）：增量下载 → 去重入库 -->
+        <F2ImportCard @submitted="f2History?.reload()" />
+
+        <!-- 我的喜欢（点赞作品）：填自己的主页链接，全量翻页后按同一套判重入库 -->
+        <F2LikeCard @submitted="f2History?.reload()" />
+
+        <!-- 抖音采集历史（f2 增量下载）：两条入口的任务都在这里，可展开结果审查 -->
+        <F2TaskHistory ref="f2History" />
+
+        <!-- ══ 通道 B：CDP 浏览器通道（小红书 / 抖音搜索、博主页）══ -->
+        <div class="channel-title">CDP 通道（小红书 / 抖音搜索、博主页）</div>
 
         <ScraperTaskForm :default-max-count="defaultMaxCount" @created="onTaskCreated" />
 
@@ -446,5 +459,14 @@ onUnmounted(() => {
 .subtitle {
   color: #999;
   margin-bottom: 16px;
+}
+/* 采集通道分区标题：抖音 f2 通道 / CDP 通道 */
+.channel-title {
+  margin: 4px 0 12px;
+  padding-left: 8px;
+  border-left: 3px solid #165dff;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d2129;
 }
 </style>

@@ -541,7 +541,7 @@ def auto_env(f2_tree, monkeypatch):
 
 @pytest.fixture
 def auto_settings(monkeypatch):
-    """隔离自动获取相关配置项：用例结束后还原（含 API 直接改 settings 的情况）。"""
+    """隔离自动获取与「我的喜欢」相关配置项：用例结束后还原（含 API 直接改 settings 的情况）。"""
     from app.config import settings
 
     original = (
@@ -549,6 +549,7 @@ def auto_settings(monkeypatch):
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
         settings.f2_fetch_since_days,
+        settings.f2_like_user,
     )
     yield settings
     (
@@ -556,6 +557,7 @@ def auto_settings(monkeypatch):
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
         settings.f2_fetch_since_days,
+        settings.f2_like_user,
     ) = original
 
 
@@ -1158,3 +1160,206 @@ async def test_f2_task_results_404_for_other_task_type(client):
 
     assert client.get(f"/api/scraper/f2-tasks/{other_id}/results").status_code == 404
     assert client.get("/api/scraper/f2-tasks/999999/results").status_code == 404
+
+
+# ── 「我的喜欢」（点赞模式）──
+
+
+@pytest.fixture
+def f2_like_tree(tmp_path, monkeypatch):
+    """把「我的喜欢」产物根指向临时目录：一个作品两张图，文件名带原作者前缀。"""
+    like_root = tmp_path / "like"
+    author_dir = like_root / "我的账号"  # f2 把喜欢的作品统统下在「我的昵称」目录下
+    _jpeg(author_dir / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.jpg")
+    _jpeg(author_dir / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_2.jpg", "blue")
+    monkeypatch.setattr(f2, "DEFAULT_F2_LIKE_ROOT", like_root)
+    return like_root
+
+
+def _stub_like_fetch(monkeypatch, calls: dict | None = None):
+    """打桩 f2 的点赞抓取：只记录入参并返回成功，不真的跑 f2。"""
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    def _fake(f2_dir, like_user, download_root=None, **kwargs):
+        if calls is not None:
+            calls["like_user"] = like_user
+            calls["download_root"] = str(download_root)
+        return {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "results": [{"nickname": "我的喜欢", "rc": 0, "cmd": "f2 dy -M like"}],
+        }
+
+    monkeypatch.setattr(f2, "run_fetch_likes", _fake)
+
+
+def test_create_f2_import_like_mode_passes_params(client):
+    """API 透传 mode/like_user（任务参数里能查到，执行阶段据此走点赞链路）。"""
+    body = client.post(
+        "/api/scraper/f2-import",
+        params={"fetch": False, "mode": "like", "like_user": "MS4wLjABAAAAme"},
+    ).json()
+
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+
+    assert opts["fetch_mode"] == "like"
+    assert opts["like_user"] == "MS4wLjABAAAAme"
+
+
+def test_f2_like_user_endpoint_persists_and_rejects_bad_input(client, auto_settings, monkeypatch):
+    """「我的主页链接」保存：归一成链接 + 写 .env + 状态回读；非法输入 400。"""
+    saved: dict[str, str] = {}
+
+    async def fake_update(updates):
+        saved.update(updates)
+
+    monkeypatch.setattr("app.routers.ai_shared._update_env_file", fake_update)
+
+    body = client.put(
+        "/api/scraper/f2-like-user", params={"like_user": "MS4wLjABAAAAme"}
+    ).json()
+
+    assert body["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+    assert saved == {"F2_LIKE_USER": "https://www.douyin.com/user/MS4wLjABAAAAme"}
+    # 状态接口回读，前端据此回填输入框
+    assert client.get("/api/scraper/f2-status").json()["like_user"] == body["like_user"]
+
+    assert (
+        client.put("/api/scraper/f2-like-user", params={"like_user": "我 的主页"}).status_code
+        == 400
+    )
+
+    cleared = client.put("/api/scraper/f2-like-user", params={"like_user": ""}).json()
+    assert cleared["like_user"] == "" and saved["F2_LIKE_USER"] == ""
+
+
+async def test_execute_f2_import_like_mode_imports_by_original_author(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """点赞端到端：作者取自文件名前缀，素材归到原作者而不是「我的账号」。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_like_fetch(monkeypatch, calls)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["fetch"]["mode"] == "like"
+        assert stored.result["fetch"]["ok"] == 1
+        assert stored.result["plan"]["files"] == 2
+        assert stored.result["import"]["imported"] == 2
+
+    assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+    items = [
+        i
+        for i in client.get("/api/inspirations?size=50").json()["items"]
+        if str(i["source_platform_id"]).startswith("f2:")
+    ]
+    assert len(items) == 2
+    assert {i["source_author"] for i in items} == {"不养羊"}
+
+
+async def test_execute_f2_import_like_mode_dedups_on_rerun(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """去重要求：同一批喜欢的作品重跑（或重复点赞）不再入库。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+
+    for index in range(2):
+        async with async_session() as db:
+            task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+            task_id = task.id
+            await task_runner.execute_f2_import(db, task)
+        async with async_session() as db:
+            stored = await db.get(TaskQueue, task_id)
+            if index == 0:
+                assert stored.result["import"]["imported"] == 2
+            else:
+                assert stored.result["plan"]["files"] == 0
+                assert stored.result["import"]["imported"] == 0
+
+    items = [
+        i
+        for i in client.get("/api/inspirations?size=50").json()["items"]
+        if str(i["source_platform_id"]).startswith("f2:")
+    ]
+    assert len(items) == 2  # 没有因重跑翻倍
+
+
+async def test_execute_f2_import_like_mode_keeps_unregistered_authors(
+    client, f2_like_tree, create_blogger, auto_settings, monkeypatch
+):
+    """口径：点赞模式不做作者白名单（喜欢的作品天然跨作者），未登记作者照样入库。
+
+    与发布模式对照：发布模式只处理已登记博主（见
+    test_execute_f2_import_skips_unregistered_author_dirs）；点赞是用户自己的
+    明确收藏行为，全收才符合语义，去重仍然生效。
+    """
+    from app.models.task import TaskQueue
+
+    create_blogger("里香", platform="douyin")  # 让白名单生效，但不含「不养羊」
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["plan"]["files"] == 2
+        assert (
+            stored.result["plan"]["skipped"].get("作者不在指定范围（--authors / 已登记博主）", 0)
+            == 0
+        )
+
+
+async def test_execute_f2_import_like_mode_requires_like_user(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """没填「我的主页链接」：直接给出可操作错误，不白跑一次 f2。"""
+    auto_settings.f2_like_user = ""
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+        with pytest.raises(RuntimeError, match="未配置「我的主页链接」"):
+            await task_runner.execute_f2_import(db, task)
+
+
+def test_f2_status_like_availability_is_independent_of_blogger_whitelist(
+    client, tmp_path, auto_settings, monkeypatch
+):
+    """「我的喜欢」可用性只取决于 f2 + 目录 + 主页链接，与「已登记博主」白名单无关。
+
+    否则「库里没登记抖音博主」的用户会被按钮挡住——而点赞列表本来就跨作者。
+    """
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
+
+    auto_settings.f2_like_user = ""
+    without_user = task_runner.f2_import_status()
+    assert without_user["like_available"] is False
+    assert "未配置「我的主页链接」" in without_user["like_reason"]
+    assert without_user["available"] is False  # 用户库为空，发布模式仍不可用
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    with_user = task_runner.f2_import_status()
+    assert with_user["like_available"] is True
+    assert with_user["like_user"] == auto_settings.f2_like_user
+    assert "我的喜欢" in with_user["like_reason"]

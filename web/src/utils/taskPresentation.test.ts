@@ -140,6 +140,15 @@ describe('summarizeResult', () => {
     )
     expect(none).not.toContain('垃圾桶')
   })
+
+  it('f2_import 点赞入口（fetch_mode=like）标出「我的喜欢」', () => {
+    const text = summarizeResult(
+      'f2_import',
+      { fetch_mode: 'like', plan: { files: 7 }, import: { imported: 7 } },
+      null,
+    )
+    expect(text).toBe('我的喜欢 · 入库 7')
+  })
 })
 
 describe('describeRunningTask', () => {
@@ -165,6 +174,18 @@ describe('describeRunningTask', () => {
   it('非 f2 任务或缺少阶段标记时不编造文案', () => {
     expect(describeRunningTask('batch_analyze', { stage: 'download' }, 'running', 1, 2)).toBe('')
     expect(describeRunningTask('f2_import', {}, 'running', 1, 2)).toBe('')
+  })
+
+  it('点赞入口（fetch_mode=like）的下载阶段说明全量翻页', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      { stage: 'download', fetch_mode: 'like' },
+      'running',
+      0,
+      1,
+    )
+    expect(text).toContain('我的喜欢')
+    expect(text).toContain('全量翻页')
   })
 })
 

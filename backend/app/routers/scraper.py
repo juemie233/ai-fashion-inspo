@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -40,6 +40,14 @@ async def create_f2_import(
     include_unknown_authors: bool = Query(
         False, description="是否连未登记到博主库的 f2 账号一起处理（默认跳过）"
     ),
+    mode: str = Query(
+        "post",
+        pattern="^(post|like)$",
+        description="post=博主主页作品（默认）；like=我的喜欢（点赞，需 like_user）",
+    ),
+    like_user: str | None = Query(
+        None, description="mode=like 时用我的主页链接 / sec_user_id（缺省取已保存的配置）"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -66,6 +74,11 @@ async def create_f2_import(
             作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
             也不会漏作品。
+        mode: `post`=博主主页作品（默认）；`like`=我的喜欢（点赞）。
+            like 模式不逐作者、不给时间窗口（喜欢列表按点赞时间排序，f2 的 -i 按
+            发布时间过滤，窗口会漏掉「最近点赞的老视频」），也不做作者白名单
+            （喜欢的作品天然跨作者），入库仍走五层判重。
+        like_user: mode=like 时的「我的主页链接 / sec_user_id」（缺省取已保存配置）。
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
@@ -90,6 +103,8 @@ async def create_f2_import(
         make_thumbnails=make_thumbnails,
         since_days=since_days,
         include_unknown_authors=include_unknown_authors,
+        fetch_mode=mode,
+        like_user=(like_user or "").strip() or None,
     )
     if task is None:
         return {
@@ -217,6 +232,41 @@ async def set_f2_auto(
         "message": f"每日自动获取素材已{'开启' if enabled else '关闭'}"
         f"（间隔 {status['interval_hours']} 小时）",
         "auto": status,
+    }
+
+
+@router.put("/f2-like-user")
+async def set_f2_like_user(
+    like_user: str = Query("", description="我的抖音主页链接或 sec_user_id（空=清除）"),
+    persist: bool = Query(True, description="是否持久化写入 .env 文件"),
+) -> dict:
+    """保存「我的喜欢」用的主页链接。
+
+    抖音的点赞列表只有本人可见，f2 的 `-M like` 要求 `-u` 填**你自己的**主页链接；
+    这里接受完整链接（`https://www.douyin.com/user/…`）或纯 sec_user_id，
+    归一成链接后写入 settings 与 .env（默认持久化），下次采集直接用。
+    """
+    from app.config import settings
+    from app.routers.ai_shared import _update_env_file
+    from scripts import import_f2_downloads as f2
+
+    raw = (like_user or "").strip()
+    if raw and (len(raw) < 4 or any(ch.isspace() for ch in raw)):
+        raise HTTPException(
+            status_code=400,
+            detail="请填写抖音主页链接（https://www.douyin.com/user/…）或 sec_user_id（不含空格）",
+        )
+
+    normalized = f2.like_user_url(raw)
+    settings.f2_like_user = normalized
+    if persist:
+        await _update_env_file({"F2_LIKE_USER": normalized})
+
+    return {
+        "message": (
+            f"已保存「我的主页链接」：{normalized}" if normalized else "已清除「我的主页链接」"
+        ),
+        "like_user": normalized,
     }
 
 

@@ -12,6 +12,7 @@ import {
   SORT_MODE_LABELS,
 } from '@/composables/useScraperSchedules'
 import { PLATFORM_LABELS } from '@/composables/useScraperTasks'
+import F2AutoCard from '@/components/scraper/F2AutoCard.vue'
 import type { ScraperSchedule } from '@/types/scraper'
 
 const {
@@ -225,6 +226,9 @@ function getColumns() {
 
 <template>
   <div>
+    <!-- 抖音 f2 通道的排期：每日自动获取（密钥词计划是本页另一类排期） -->
+    <F2AutoCard />
+
     <a-card title="新建定时计划" size="small" style="margin-bottom: 16px">
       <a-form
         :model="{

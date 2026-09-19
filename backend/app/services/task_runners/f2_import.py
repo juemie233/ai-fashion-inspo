@@ -50,6 +50,8 @@ async def create_f2_import_task(
     make_thumbnails: bool = True,
     since_days: int | None = None,
     include_unknown_authors: bool = False,
+    fetch_mode: str = "post",
+    like_user: str | None = None,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -66,6 +68,9 @@ async def create_f2_import_task(
         include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
             默认 False：f2 用户库存的是它见过的所有账号，混进来的无关账号
             （实测出现过网易第五人格这类官方号）不该被下载入库。
+        fetch_mode: ``post``（博主主页作品）或 ``like``（我的喜欢）。
+        like_user: 「我的喜欢」用的主页链接 / sec_user_id（缺省取
+            ``settings.f2_like_user``）。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -85,6 +90,8 @@ async def create_f2_import_task(
             "make_thumbnails": make_thumbnails,
             "since_days": since_days,
             "include_unknown_authors": include_unknown_authors,
+            "fetch_mode": fetch_mode,
+            "like_user": like_user,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -165,6 +172,7 @@ def f2_import_status() -> dict:
     from app.config import settings
     from scripts import import_f2_downloads as f2
 
+    like_user = str(settings.f2_like_user or "")
     info = {
         "available": False,
         "reason": "",
@@ -172,12 +180,34 @@ def f2_import_status() -> dict:
         "unknown_authors": [],
         "f2_dir": str(f2.DEFAULT_F2_DIR),
         "root": str(f2.DEFAULT_F2_ROOT),
+        "like_root": str(f2.DEFAULT_F2_LIKE_ROOT),
+        # 「我的喜欢」需要我自己主页链接（点赞列表只有本人可见）；前端据此回填输入框。
+        # 可用性与发布模式分开判定：点赞不依赖「已登记博主」白名单。
+        "like_user": like_user,
+        "like_available": False,
+        "like_reason": "",
         "fetch_since_days": int(settings.f2_fetch_since_days or 0),
     }
-    if not f2.f2_available():
+
+    f2_ok = f2.f2_available()
+    dir_ok = f2.DEFAULT_F2_DIR.exists()
+    info["like_available"] = bool(f2_ok and dir_ok and like_user)
+    if info["like_available"]:
+        info["like_reason"] = "已配置「我的主页链接」，可采集我的喜欢（点赞作品）"
+    elif not f2_ok:
+        info["like_reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
+    elif not dir_ok:
+        info["like_reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
+    else:
+        info["like_reason"] = (
+            "未配置「我的主页链接」：点赞列表只有本人可见，"
+            "请先填写你自己的抖音主页链接或 sec_user_id"
+        )
+
+    if not f2_ok:
         info["reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
         return info
-    if not f2.DEFAULT_F2_DIR.exists():
+    if not dir_ok:
         info["reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
         return info
     authors = f2.load_f2_authors(f2.DEFAULT_F2_DIR)
@@ -384,6 +414,8 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "make_thumbnails",
             "since_days",
             "include_unknown_authors",
+            "fetch_mode",
+            "like_user",
         )
         if key in raw_result
     }
@@ -393,6 +425,10 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     skip_live = bool(opts.get("skip_live", False))
     make_thumbnails = bool(opts.get("make_thumbnails", True))
     include_unknown = bool(opts.get("include_unknown_authors", False))
+    fetch_mode = str(opts.get("fetch_mode") or "post")
+    # 「我」的主页链接：点赞列表只有本人可见，任务没带就用配置里记住的那个
+    like_user = str(opts.get("like_user") or settings.f2_like_user or "").strip()
+    like_mode = fetch_mode == "like"
     since_days = opts.get("since_days")
     if since_days is None:
         since_days = settings.f2_fetch_since_days
@@ -401,10 +437,14 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 入库阶段用来绑定作品。默认只处理能对应到已登记博主的账号——f2 用户库存的是
     # 它见过的所有账号，混进来的无关账号（实测出现过网易第五人格，被入库 142 条）
     # 不该收进素材库。库内一个抖音博主都没有时没有白名单依据，退回旧口径（全部处理）。
+    #
+    # 点赞（喜欢）模式例外：喜欢列表天然跨作者（点的是谁的作品都有），按白名单挡掉
+    # 就失去意义，故不做作者过滤——入库仍走五层判重（内容哈希 / 垃圾桶 / 批次内 /
+    # 平台 ID / 参数过滤），不会重复。
     f2_dir = f2.DEFAULT_F2_DIR
     bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
     f2_authors = await asyncio.to_thread(f2.load_f2_authors, f2_dir)
-    filter_registered = not include_unknown and bool(bloggers)
+    filter_registered = (not include_unknown) and (not like_mode) and bool(bloggers)
     if filter_registered:
         known_authors, unknown_authors = f2.select_known_authors(f2_authors, bloggers)
     else:
@@ -436,6 +476,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         "ok": 0,
         "failed": 0,
         "aborted": False,
+        "mode": fetch_mode,
         "skipped_authors": skipped_unknown,
     }
     if skipped_unknown:
@@ -444,8 +485,60 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             f"{'、'.join(skipped_unknown)}"
         )
 
-    # ── 阶段 1：调 f2 增量下载（逐作者串行；子进程放线程）──
-    if fetch_enabled:
+    # ── 阶段 1a：「我的喜欢」——单条命令全量翻页（不逐作者、不做时间窗口）──
+    if fetch_enabled and like_mode:
+        if not f2.f2_available():
+            raise RuntimeError(
+                "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
+            )
+        if not like_user:
+            raise RuntimeError(
+                "未配置「我的主页链接」：点赞列表只有本人可见，"
+                "请先在「我的喜欢」卡片里填写你的抖音主页链接"
+            )
+        fetch_summary["total"] = 1
+        task.total = 1
+        task.done = 0
+        await db.commit()
+
+        outcome = await asyncio.to_thread(
+            f2.run_fetch_likes,
+            f2_dir,
+            like_user,
+            f2_dir / "Download",
+        )
+        if outcome.get("error"):
+            raise RuntimeError(str(outcome["error"]))
+        fetch_summary["ok"] = int(outcome.get("ok") or 0)
+        fetch_summary["failed"] = int(outcome.get("failed") or 0)
+        fetch_summary["like_user"] = f2.like_user_url(like_user)
+        fetch_summary["cmd"] = (
+            outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
+        )
+        task.done = 1
+        task.progress = _PROGRESS_AFTER_DOWNLOAD
+        task.updated_at = utcnow()
+        await db.commit()
+
+        # 取消/暂停：与发布模式一致，立即收尾，不再做扫描与入库
+        if await _current_status(db, task.id) not in ("running", "pending"):
+            status_now = await _current_status(db, task.id)
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.status = status_now
+            task.updated_at = utcnow()
+            await db.commit()
+            logger.info(f"f2 拉取「我的喜欢」被中断（{status_now}）：已下载文件保留")
+            return
+        if fetch_summary["failed"]:
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            await db.commit()
+            raise RuntimeError(
+                "f2 拉取「我的喜欢」失败（退出码非 0），常见原因：cookie 失效或被风控；"
+                "请先手动跑一次 f2 确认能下载，且 -u 填的是**你自己**的主页链接"
+            )
+
+    # ── 阶段 1b：发布模式——逐作者串行增量下载（子进程放线程）──
+    elif fetch_enabled:
         if not f2.f2_available():
             raise RuntimeError(
                 "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
@@ -530,7 +623,10 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 判为 stale 并被其它 worker 重新认领（同一批导入被并发执行），期间暂停/取消
     # 也完全失效。哈希缓存（HashCache 落盘）把日常运行降到「只算新增文件」，
     # 但首次/大量新增时仍可能很慢，故线程执行保持不变。
-    files = await asyncio.to_thread(f2.scan_directory, f2.DEFAULT_F2_ROOT)
+    # 扫描根按模式取：发布模式看 post/，点赞模式看 like/（f2 把喜欢的作品下在
+    # 「我的昵称」目录下，原作者在文件名里，见 LIKE_NAMING_TEMPLATE）
+    scan_root = f2.DEFAULT_F2_LIKE_ROOT if like_mode else f2.DEFAULT_F2_ROOT
+    files = await asyncio.to_thread(f2.scan_directory, scan_root)
     dedup = await asyncio.to_thread(f2.load_dedup_index)
     started = time.monotonic()
     decisions, skipped, deferred_works, cache_stats = await asyncio.to_thread(

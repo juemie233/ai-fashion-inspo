@@ -163,6 +163,10 @@ class Settings(BaseSettings):
     # 真正下载只有 36 个文件。窗口会按「该作者上次下载时间」自动放大，长时间
     # 不跑也不会漏作品（见 scripts/import_f2_downloads.compute_fetch_interval）
     f2_fetch_since_days: int = 14
+    # 「我的喜欢」（抖音点赞）采集用的**自己**主页链接或 sec_user_id。
+    # 为什么必须由用户提供：抖音的点赞列表只有本人可见，f2 的 `-M like` 要求
+    # `-u` 填自己的主页链接；界面首次填写后会写回 .env（见 PUT /api/scraper/f2-like-user）
+    f2_like_user: str = ""
 
     # 安全
     api_key: str = ""  # API 密钥，为空则跳过认证（开发模式）

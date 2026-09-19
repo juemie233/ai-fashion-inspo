@@ -116,6 +116,23 @@ F2_AUTHOR_DB = "douyin_users.db"
 """f2 默认下载根目录（可用 --root 覆盖；与 --f2-dir 联动）。"""
 DEFAULT_F2_ROOT = DEFAULT_F2_DIR / F2_DOWNLOAD_SUBDIR
 
+"""f2 点赞（喜欢）模式的产物根目录。
+
+f2 的目录规则是 `{path}/douyin/{mode}/{nickname}/`，而点赞模式的目标用户是
+**你自己**——所有喜欢的作品都下在「我的昵称」这一个目录下，原作者只存在于
+文件名里（见 :data:`LIKE_NAMING_TEMPLATE`）。
+"""
+F2_LIKE_SUBDIR = Path("Download/douyin/like")
+
+DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
+
+"""点赞模式必须传的命名模板：带 `{nickname}` 才能把**原作者**留在文件名里。
+
+不传时 f2 用配置里的 `{create}_{desc}`，文件落到「我的昵称」目录下后就再也
+认不出原作者了——素材的来源作者会全变成你自己、也绑不到原作者博主。
+"""
+LIKE_NAMING_TEMPLATE = "{nickname}_{create}_{desc}"
+
 """传给 f2 的日期窗口缺省天数（`-i`）。
 
 为什么必须给窗口：f2 的 `handle_user_post` 只在传了日期区间时才设 `min_cursor`，
@@ -129,9 +146,18 @@ DEFAULT_FETCH_SINCE_DAYS = 14
 """窗口起点的回退余量（天）：避免「刚下载完就跨零点」把当天的作品漏在窗口外。"""
 WINDOW_MARGIN_DAYS = 1
 
-"""文件名尾部类型标记：_video / _image_1 / _live_2（f2 命名模板决定）。"""
+"""文件名尾部类型标记：_video / _image_1 / _live_2（f2 命名模板决定）。
+
+两种命名都要认（同一作品从不同入口下载时，作品键必须一致才能判重）：
+- **发布模式**（post）：`{create}_{desc}_image_1.webp`——作者来自所在目录名
+- **点赞/收藏模式**（like）：f2 把喜欢的作品**统统下在「我的昵称」目录下**，
+  原作者只存在于文件名里，故命名模板带 `{nickname}`，形如
+  `不养羊_2026-09-14 10-31-14_下一站再见吧#jk_#jk_image_1.webp`
+  （前缀为可选；作者名自身含下划线也能正确回溯，如 `美羊羊桑__2026-…`）
+"""
 KIND_RE = re.compile(
-    r"^(?P<created>\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})_"
+    r"^(?:(?P<author>.+?)_)?"
+    r"(?P<created>\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})_"
     r"(?P<body>.+?)_(?P<kind>video|image|live|music|cover|lyric)"
     r"(?:_(?P<index>\d+))?$",
     re.I,
@@ -219,6 +245,9 @@ def normalize_author(name: str) -> str:
 def parse_media_filename(path: Path, author_dir: str = "") -> ParsedFile | None:
     """解析 f2 产物文件名；不符合命名规则（残file等）返回 None。
 
+    作者归属：文件名带作者前缀时（点赞模式）以**文件名里的原作者**为准，
+    否则回落到所在目录名（发布模式的 `post/{作者}/`）。
+
     Args:
         path: 文件路径。
         author_dir: 所属作者目录名（缺省取 path 的父目录名）。
@@ -235,7 +264,7 @@ def parse_media_filename(path: Path, author_dir: str = "") -> ParsedFile | None:
     media_type = KIND_TO_MEDIA.get(kind)
     if media_type is None:
         return None  # 原声/歌词等不属素材
-    author = author_dir or path.parent.name
+    author = match.group("author") or author_dir or path.parent.name
     created = match.group("created")
     body = match.group("body")
     return ParsedFile(
@@ -1498,6 +1527,139 @@ def build_f2_command(
     if auto_cookie:
         cmd += ["--auto-cookie", auto_cookie]
     return cmd
+
+
+def like_user_url(raw: str) -> str:
+    """把「我的主页链接 / sec_user_id」统一成 f2 的 `-u` 取值。
+
+    f2 的点赞/收藏模式要求填**自己的主页链接**；用户常常只粘贴 sec_user_id
+    （或整段主页 URL），这里都归一成 URL，避免让用户自己拼。
+
+    Args:
+        raw: 主页链接或 sec_user_id（允许含空白）。
+
+    Returns:
+        可直接作为 `-u` 的字符串；输入为空时返回空串。
+    """
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    return f"https://www.douyin.com/user/{value}"
+
+
+def build_f2_like_command(
+    like_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    interval: str = "all",
+) -> list[str]:
+    """构造「我的喜欢」（点赞作品）的 f2 命令。
+
+    与发布模式的三点不同：
+    1. `-M like`：拉登录账号自己的点赞列表（只有本人可见，故 `-u` 必须是你的主页）
+    2. 必传 `-n {nickname}_{create}_{desc}`：产物统统落在「我的昵称」目录下，
+       原作者只能靠文件名保留（见 :data:`LIKE_NAMING_TEMPLATE`）
+    3. 默认 `-i all`：喜欢列表按**点赞时间**排序，而 f2 的 `-i` 按**作品发布时间**
+       过滤——用日期窗口会漏掉「最近点赞的老视频」，所以这里不做时间收窄；
+       重复下载由 f2 的文件跳过与入库侧五层判重兜住
+
+    Args:
+        like_user: 我的主页链接或 sec_user_id。
+        download_root: 下载根目录（传给 f2 的 -p）。
+        auto_cookie: 浏览器名（chrome / chromium / edge …）。
+        interval: 传给 f2 的 `-i` 值，缺省 `all`（见上）。
+
+    Returns:
+        可直接交给 subprocess 的参数列表。
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "f2",
+        "dy",
+        "-u",
+        like_user_url(like_user),
+        "-M",
+        "like",
+        "-i",
+        interval or "all",
+        "-n",
+        LIKE_NAMING_TEMPLATE,
+    ]
+    if download_root is not None:
+        cmd += ["-p", str(download_root)]
+    if auto_cookie:
+        cmd += ["--auto-cookie", auto_cookie]
+    return cmd
+
+
+def run_fetch_likes(
+    f2_dir: Path,
+    like_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    runner=None,
+) -> dict:
+    """拉取「我的喜欢」（点赞的作品）：单条命令，不逐作者循环。
+
+    Args:
+        f2_dir: f2 工作目录（cwd 必须是它，否则另起空作者库、下载落到别处）。
+        like_user: 我的主页链接或 sec_user_id。
+        download_root: 传给 f2 的 -p 下载根目录。
+        auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
+        runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
+
+    Returns:
+        {"total", "ok", "failed", "results", "cmd", "error"}（结构与 :func:`run_fetch`
+        对齐，便于复用同一套任务结果展示）。
+    """
+    runner = runner or _default_runner
+    if not (like_user or "").strip():
+        return {
+            "total": 0,
+            "ok": 0,
+            "failed": 0,
+            "results": [],
+            "cmd": [],
+            "error": "未配置「我的主页链接」：点赞列表只有本人可见，请先填写你的抖音主页链接",
+        }
+
+    url = like_user_url(like_user)
+    cmd = build_f2_like_command(
+        like_user, download_root=download_root, auto_cookie=auto_cookie
+    )
+    print(f"  ▶ 我的喜欢（{url}）")
+    print(
+        "    · 喜欢列表按点赞时间排序，f2 的 -i 按发布时间过滤，故用 -i all 全量翻页；"
+        "已下载过的文件 f2 会跳过，入库侧还有五层判重"
+    )
+    try:
+        rc, _info = runner(cmd, f2_dir)
+    except Exception as exc:  # noqa: BLE001 —— 与 run_fetch 一致：单次失败不抛，交由上层报错
+        rc = -1
+        print(f"    ✗ 调用 f2 失败：{type(exc).__name__}: {exc}")
+    if rc == 0:
+        print("    ✓ 完成")
+    else:
+        print(f"    ✗ 退出码 {rc}，详情见 {f2_dir / 'logs'}")
+
+    return {
+        "total": 1,
+        "ok": 1 if rc == 0 else 0,
+        "failed": 0 if rc == 0 else 1,
+        "results": [
+            {
+                "nickname": "我的喜欢",
+                "sec_user_id": url,
+                "rc": rc,
+                "interval": "all",
+                "cmd": " ".join(cmd),
+            }
+        ],
+        "cmd": cmd,
+    }
 
 
 def _default_runner(cmd: list[str], cwd: Path) -> tuple[int, str]:

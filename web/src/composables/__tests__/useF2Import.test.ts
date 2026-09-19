@@ -37,13 +37,17 @@ const STATUS = {
   unknown_authors: ['网易第五人格'],
   f2_dir: 'C:/f2',
   root: 'C:/f2/Download/douyin/post',
+  like_root: 'C:/f2/Download/douyin/like',
+  like_user: '',
+  like_available: false,
+  like_reason: '未配置「我的主页链接」',
   fetch_since_days: 14,
   auto: AUTO,
 }
 
 /** 每次返回全新对象：composable 会就地更新 status.auto，共享常量会串味到下一个用例 */
-function makeStatus(auto: Partial<F2AutoStatus> = {}) {
-  return { ...STATUS, auto: { ...AUTO, ...auto } }
+function makeStatus(auto: Partial<F2AutoStatus> = {}, extra: Partial<typeof STATUS> = {}) {
+  return { ...STATUS, ...extra, auto: { ...AUTO, ...auto } }
 }
 
 describe('useF2Import', () => {
@@ -231,5 +235,53 @@ describe('useF2Import', () => {
     expect(status.value?.auto.enabled).toBe(false)
     expect(mocks.get).toHaveBeenCalledTimes(2)
     error.mockRestore()
+  })
+
+  it('submit 透传「我的喜欢」模式与主页链接', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.post.mockResolvedValue({ data: { task_id: 51, message: '已提交' } })
+    const { submit } = useF2Import()
+
+    await submit({ fetch: true, mode: 'like', like_user: 'MS4wLjABAAAAme' })
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: { fetch: true, mode: 'like', like_user: 'MS4wLjABAAAAme' },
+    })
+    success.mockRestore()
+  })
+
+  it('setLikeUser 保存主页链接并回读可用性（点赞入口据此放行）', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValueOnce({ data: makeStatus() })
+    mocks.put.mockResolvedValue({
+      data: {
+        message: '已保存「我的主页链接」',
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      },
+    })
+    const { status, loadStatus, setLikeUser, likeUserSaving } = useF2Import()
+    await loadStatus()
+
+    // 保存后回读：后端此时已能采集我的喜欢
+    mocks.get.mockResolvedValueOnce({
+      data: makeStatus(
+        {},
+        {
+          like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+          like_available: true,
+          like_reason: '已配置「我的主页链接」，可采集我的喜欢（点赞作品）',
+        },
+      ),
+    })
+    const ok = await setLikeUser('MS4wLjABAAAAme')
+
+    expect(ok).toBe(true)
+    expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-like-user', null, {
+      params: { like_user: 'MS4wLjABAAAAme', persist: true },
+    })
+    expect(status.value?.like_user).toBe('https://www.douyin.com/user/MS4wLjABAAAAme')
+    expect(status.value?.like_available).toBe(true)
+    expect(likeUserSaving.value).toBe(false)
+    success.mockRestore()
   })
 })

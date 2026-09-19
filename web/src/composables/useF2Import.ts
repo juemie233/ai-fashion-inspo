@@ -60,6 +60,14 @@ export interface F2ImportStatus {
   f2_dir: string
   /** 下载产物扫描目录 */
   root: string
+  /** 「我的喜欢」（点赞）产物扫描目录 */
+  like_root: string
+  /** 已保存的「我的主页链接」（点赞列表只有本人可见，采集我的喜欢时必须填自己） */
+  like_user: string
+  /** 「我的喜欢」是否可用（f2 + 工作目录 + 已配置主页链接；与博主白名单无关） */
+  like_available: boolean
+  /** 「我的喜欢」不可用原因 / 可用性摘要 */
+  like_reason: string
   /** 后端配置的默认日期窗口天数（F2_FETCH_SINCE_DAYS）：作为「只翻最近 N 天」的初值，
    *  避免前端硬编码默认值把 .env 配置顶掉 */
   fetch_since_days: number
@@ -85,6 +93,10 @@ export interface F2ImportOptions {
   since_days?: number
   /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
   include_unknown_authors?: boolean
+  /** 采集模式：post=博主主页作品（缺省）；like=我的喜欢（点赞，需 like_user） */
+  mode?: 'post' | 'like'
+  /** mode=like 时的「我的主页链接 / sec_user_id」（缺省用后端已保存的配置） */
+  like_user?: string
 }
 
 export function useF2Import() {
@@ -92,6 +104,7 @@ export function useF2Import() {
   const statusLoading = ref(false)
   const submitting = ref(false)
   const autoSaving = ref(false)
+  const likeUserSaving = ref(false)
 
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
@@ -171,5 +184,44 @@ export function useF2Import() {
     }
   }
 
-  return { status, statusLoading, submitting, autoSaving, loadStatus, submit, setAuto }
+  /**
+   * 保存「我的喜欢」用的主页链接（空串表示清除），成功返回 true。
+   *
+   * 点赞列表只有本人可见，f2 的 `-M like` 要求填自己的主页链接；后端会归一成
+   * URL 并写入 .env（persist=true），之后手动/任务都直接用这个配置。
+   */
+  async function setLikeUser(likeUser: string, persist = true): Promise<boolean> {
+    likeUserSaving.value = true
+    try {
+      const { data } = await apiClient.put<{ message: string; like_user: string }>(
+        '/scraper/f2-like-user',
+        null,
+        { params: { like_user: likeUser, persist } },
+      )
+      if (status.value) {
+        status.value.like_user = data.like_user
+        // 链接变了，可用性随之变化：回读一次拿到 like_available / like_reason
+        await loadStatus({ silent: true })
+      }
+      Message.success(data.message || '已保存')
+      return true
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '保存「我的主页链接」失败'))
+      return false
+    } finally {
+      likeUserSaving.value = false
+    }
+  }
+
+  return {
+    status,
+    statusLoading,
+    submitting,
+    autoSaving,
+    likeUserSaving,
+    loadStatus,
+    submit,
+    setAuto,
+    setLikeUser,
+  }
 }

@@ -44,6 +44,9 @@ function openResults(task: UnifiedTask) {
   resultsTaskId.value = task.id
 }
 
+/** 供父组件调用：两条 f2 入口提交任务后立即刷新（不必等 WS 首个事件） */
+defineExpose({ reload: () => loadTasks() })
+
 onMounted(() => {
   void loadTasks()
   startPoll()

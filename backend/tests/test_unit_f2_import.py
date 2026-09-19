@@ -6,6 +6,7 @@
 import json
 import os
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -1355,3 +1356,116 @@ def test_apply_import_stops_when_should_stop(tmp_path):
     conn.close()
     batch = json.loads(Path(result["batch_file"]).read_text(encoding="utf-8"))
     assert len(batch["imported"]) == 1  # 部分成功也留痕，可回滚
+
+
+# ── 「我的喜欢」（点赞模式）：命名带作者前缀、命令形状、去重口径 ──
+
+
+def test_parse_like_filename_keeps_original_author():
+    """点赞产物在「我的昵称」目录下，原作者只能从文件名前缀还原。"""
+    parsed = f2.parse_media_filename(
+        Path("我的账号") / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.webp",
+        "我的账号",
+    )
+
+    assert parsed is not None
+    assert parsed.author_dir == "不养羊"  # 不是目录名「我的账号」
+    assert parsed.author_key == "不养羊"
+    assert parsed.created == "2026-09-14 10-31-14"
+    assert parsed.kind == "image" and parsed.index == 1
+    assert parsed.caption == "下一站再见吧#地铁jk #jk"
+
+
+def test_parse_like_filename_author_with_underscore():
+    """作者名自带下划线（美羊羊桑_）时，前缀不能被切错。"""
+    parsed = f2.parse_media_filename(
+        Path("我的账号") / "美羊羊桑__2026-09-14 10-31-14_#jk_video.mp4", "我的账号"
+    )
+
+    assert parsed is not None
+    assert parsed.author_dir == "美羊羊桑_"
+    assert parsed.author_key == "美羊羊桑"  # 归一化去掉尾部下划线
+    assert parsed.kind == "video"
+
+
+def test_post_and_like_naming_share_work_key_and_platform_id():
+    """同一作品从主页与「我的喜欢」两条路进来，作品键与平台 ID 必须一致（判重根基）。"""
+    post = f2.parse_media_filename(
+        Path("不养羊") / "2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.webp", "不养羊"
+    )
+    like = f2.parse_media_filename(
+        Path("我的账号") / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.webp",
+        "我的账号",
+    )
+
+    assert post is not None and like is not None
+    assert post.work_key == like.work_key
+    assert f2.platform_id_for(post) == f2.platform_id_for(like)
+
+
+def test_plan_dedups_like_file_against_post_import(tmp_path):
+    """回归（去重要求）：已从博主主页入库过的作品，从「我的喜欢」再来一次必须跳过。"""
+    write_ = _write
+    write_(tmp_path / "不养羊" / "2026-09-14 10-31-14_标题_image_1.webp", b"img")
+    post_files = f2.scan_directory(tmp_path)
+    digest = f2.sha256_file(post_files[0].path)
+
+    like_root = tmp_path / "like" / "我的账号"
+    write_(like_root / "不养羊_2026-09-14 10-31-14_标题_image_1.webp", b"img")
+    like_files = f2.scan_directory(tmp_path / "like")
+
+    decisions, skipped, _ = _decisions(like_files, library_hashes={digest})
+
+    assert all(d.action == "skip" for d in decisions)
+    assert skipped["已在库（内容相同）"] == 1
+
+
+def test_parse_media_filename_post_naming_unchanged():
+    """发布模式命名（无作者前缀）行为不变：作者仍取自目录名。"""
+    parsed = f2.parse_media_filename(
+        Path("里香1√") / "2025-01-01 10-00-00_标题_image_2.webp", "里香1√"
+    )
+
+    assert parsed is not None
+    assert parsed.author_dir == "里香1√"
+    assert parsed.author_key == "里香"
+    assert parsed.index == 2
+
+
+def test_like_user_url_normalizes():
+    assert f2.like_user_url("") == ""
+    assert f2.like_user_url("  MS4wLjABAAAAxyz  ") == "https://www.douyin.com/user/MS4wLjABAAAAxyz"
+    url = "https://www.douyin.com/user/MS4wLjABAAAAxyz"
+    assert f2.like_user_url(url) == url
+
+
+def test_build_f2_like_command_shape():
+    """点赞命令：-M like + -i all + 带 {nickname} 的命名模板（原作者留在文件名里）。"""
+    cmd = f2.build_f2_like_command(
+        "MS4wLjABAAAAme", download_root=Path("D:/f2/Download")
+    )
+
+    assert cmd[:4] == [sys.executable, "-m", "f2", "dy"]
+    assert cmd[cmd.index("-u") + 1] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+    assert cmd[cmd.index("-M") + 1] == "like"
+    assert cmd[cmd.index("-i") + 1] == "all"
+    assert cmd[cmd.index("-n") + 1] == f2.LIKE_NAMING_TEMPLATE == "{nickname}_{create}_{desc}"
+    assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
+
+
+def test_run_fetch_likes_reports_and_requires_user(tmp_path):
+    """没配主页链接直接给出可操作错误；配了则跑一条命令并汇报退出码。"""
+    missing = f2.run_fetch_likes(tmp_path, "")
+    assert missing["total"] == 0 and "未配置" in missing["error"]
+
+    calls: list[list[str]] = []
+    ok = f2.run_fetch_likes(
+        tmp_path, "MS4wLjABAAAAme", runner=lambda cmd, cwd: (calls.append(cmd) or (0, ""))
+    )
+    assert ok["total"] == 1 and ok["ok"] == 1 and ok["failed"] == 0
+    assert calls and calls[0][calls[0].index("-M") + 1] == "like"
+
+    bad = f2.run_fetch_likes(
+        tmp_path, "MS4wLjABAAAAme", runner=lambda cmd, cwd: (1, "cookie 失效")
+    )
+    assert bad["failed"] == 1 and bad["ok"] == 0

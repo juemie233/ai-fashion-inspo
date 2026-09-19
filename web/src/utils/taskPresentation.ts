@@ -153,6 +153,8 @@ export function summarizeResult(
       const planned = Number(plan.files ?? 0) || 0
       const trash = Number(plan.trash_skipped ?? skipped['已在垃圾桶（不重新导入）'] ?? 0) || 0
       return [
+        // 点赞入口（我的喜欢）与博主主页入口同类型，靠 fetch_mode 区分
+        r.fetch_mode === 'like' ? '我的喜欢' : '',
         imported.imported != null ? `入库 ${imported.imported}` : '',
         // 计划数与实际入库数一致时不重复展示；不一致（有失败）才补一句计划量
         planned && planned !== importedCount ? `计划 ${planned}` : '',
@@ -192,8 +194,13 @@ export function describeRunningTask(
   if (status === 'pending') return '排队中：等待 worker 认领'
   const r = (result || {}) as Record<string, unknown>
   const stage = typeof r.stage === 'string' ? r.stage : ''
+  const likeMode = r.fetch_mode === 'like'
   const count = total > 0 ? `第 ${done}/${total} ` : ''
   if (stage === 'download') {
+    if (likeMode) {
+      // 喜欢列表按点赞时间排序，f2 的时间窗口按发布时间过滤，所以这里全量翻页
+      return '拉取我的喜欢（点赞）中：全量翻页，首轮可能较慢；已下载过的作品会自动跳过'
+    }
     // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
     // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载
     return `调 f2 下载中：${count}个作者 · 逐作者翻页，单作者约 10 秒~4 分钟`
@@ -209,6 +216,9 @@ export function describeRunningTask(
 export function normalizeQueueTask(t: QueueTask): UnifiedTask {
   const status = normalizeTaskStatus(t.status)
   const finished = status === 'success' || status === 'failed' || status === 'cancelled'
+  // 抖音两条入口共用 f2_import 类型：点赞入口（我的喜欢）在标题上区分开，
+  // 否则任务中心/抖音采集历史里两行看起来一模一样
+  const likeImport = t.type === 'f2_import' && t.result?.fetch_mode === 'like'
   return {
     id: t.id,
     source: 'queue',
@@ -220,7 +230,7 @@ export function normalizeQueueTask(t: QueueTask): UnifiedTask {
     done: t.done,
     target: t.total,
     started_at: null,
-    title: TASK_TYPE_LABELS[t.type] || t.type,
+    title: likeImport ? '抖音我的喜欢' : TASK_TYPE_LABELS[t.type] || t.type,
     // 已结束 → 汇总结果；未结束（排队/运行/暂停）→ 说明当前阶段在干什么
     detail: finished
       ? summarizeResult(t.type, t.result, t.error || '')
