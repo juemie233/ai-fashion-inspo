@@ -38,16 +38,34 @@ def f2_tree(tmp_path, monkeypatch):
 
 
 # ── 可用性检查 ──
+# 注意：f2_import_status 的分支顺序是「f2 是否安装 → 工作目录是否存在 → 作者库」，
+# 而 f2_available() 取决于**运行环境是否装了 f2**（本机装了、CI 没装）。因此本组
+# 用例一律显式打桩 f2_available，否则在 CI（无 f2）会先命中「未检测到 f2」分支。
+
+
+def test_f2_import_status_reports_missing_f2(monkeypatch):
+    """f2 未安装：给出安装指引（CI 等未装 f2 的环境走的就是这条分支）。"""
+    monkeypatch.setattr(f2, "f2_available", lambda: False)
+
+    status = task_runner.f2_import_status()
+
+    assert status["available"] is False
+    assert "未检测到 f2" in status["reason"]
 
 
 def test_f2_import_status_reports_reason_when_unavailable(tmp_path, monkeypatch):
+    """f2 已装但工作目录不存在：报「未找到 f2 工作目录」而不是安装指引。"""
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
     monkeypatch.setattr(f2, "DEFAULT_F2_DIR", tmp_path / "不存在")
+
     status = task_runner.f2_import_status()
+
     assert status["available"] is False
     assert "未找到 f2 工作目录" in status["reason"]
 
 
 def test_f2_import_status_available_with_authors(tmp_path, monkeypatch):
+    """f2 已装 + 目录存在 + 作者库有账号：可用。"""
     f2_dir = tmp_path / "f2proj"
     f2_dir.mkdir()
     import sqlite3
@@ -59,10 +77,12 @@ def test_f2_import_status_available_with_authors(tmp_path, monkeypatch):
     conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
     conn.commit()
     conn.close()
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
     monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
     monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
 
     status = task_runner.f2_import_status()
+
     assert status["available"] is True
     assert status["authors"] == 1
     assert "1 个" in status["reason"]
