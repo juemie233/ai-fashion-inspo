@@ -239,8 +239,13 @@ def test_resolve_cookie_explicit_flag_beats_auto_cookie(tmp_path, monkeypatch):
     assert cookie == "sessionid=explicit"
 
 
+@requires_f2
 def test_cookie_from_browser_raises_when_empty(monkeypatch):
-    """浏览器里没有抖音 Cookie 时要报明确原因，而不是返回空串让下游困惑。"""
+    """浏览器里没有抖音 Cookie 时要报明确原因，而不是返回空串让下游困惑。
+
+    本用例要 monkeypatch `f2.utils.utils` 的函数，因此**必须在装了 f2 的环境跑**；
+    缺守卫时 CI（未装 f2）会直接报 ModuleNotFoundError 把整轮测试染红。
+    """
     import f2.utils.utils as f2u
 
     monkeypatch.setattr(f2u, "get_cookie_from_browser", lambda b, d="": {})

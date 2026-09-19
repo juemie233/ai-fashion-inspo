@@ -1850,8 +1850,11 @@ def test_run_fetch_passes_naming_with_aweme_id(tmp_path):
 
 
 # ── 与 f2 本体的契约：模板必须被 f2 接受，且 f2 生成的产物必须能被解析回来 ──
-
-f2_module = pytest.importorskip("f2", reason="需要 f2 本体校验命名模板契约")
+#
+# 守卫必须写在**每个用例内部**，不能写成模块级 `pytest.importorskip("f2")`：模块级
+# 一次跳过会连带把本文件其余 120 多个与 f2 无关的用例（解析/判重/回滚/URL 构造）
+# 一起跳过——CI 未装 f2 时 127 个用例只报「1 skipped」，等于整条 f2 链路没有 CI 覆盖
+# （实测确认：模块级 importorskip 在缺依赖时把整个模块记为 1 个 skip）。
 
 
 def test_f2_accepts_our_naming_templates():
@@ -1860,6 +1863,7 @@ def test_f2_accepts_our_naming_templates():
     f2 只允许 {nickname}/{create}/{aweme_id}/{desc}/{uid} + 分隔符 `-`/`_`，
     改模板后必须过这一关（实测 invalid=[]）。
     """
+    pytest.importorskip("f2", reason="需要 f2 本体校验命名模板契约")
     from f2.apps.douyin.cli import check_invalid_naming
 
     allowed = ["{nickname}", "{create}", "{aweme_id}", "{desc}", "{uid}"]
@@ -1876,6 +1880,7 @@ def test_f2_generated_filename_round_trips(kind_suffix):
     此前只用「手写的假文件名」测正则，没验证过 **f2 真实产物**；这里调 f2 自己的
     format_file_name 生成文件名，再走 parse_media_filename，锁死真实契约。
     """
+    pytest.importorskip("f2", reason="需要 f2 本体生成真实产物名")
     from f2.apps.douyin.utils import format_file_name
     from f2.utils.utils import replaceT
 
@@ -1899,6 +1904,7 @@ def test_f2_generated_filename_round_trips(kind_suffix):
 
 def test_f2_generated_like_filename_round_trips():
     """点赞模式同理（带作者前缀）。"""
+    pytest.importorskip("f2", reason="需要 f2 本体生成真实产物名")
     from f2.apps.douyin.utils import format_file_name
     from f2.utils.utils import replaceT
 
