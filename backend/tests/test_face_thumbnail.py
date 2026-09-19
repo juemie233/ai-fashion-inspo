@@ -1,7 +1,12 @@
-"""博主人脸缩略图测试：bbox 裁剪纯函数 + 端到端链路（检测匹配 → 列表返回人脸小图）。
+"""博主人脸缩略图（人物头像）测试：bbox 裁剪纯函数 + 头像是怎么挑出来/换掉的。
 
 链路：素材人脸检测入库 bbox → 匹配博主 → 博主列表接口补齐 face_thumb_path →
-缓存文件为 96x96 有效 JPEG；无匹配/删除博主等边界各自验证。
+缓存为 ``faces/face_{博主id}_{检测id}.jpg``。
+
+除裁剪本身，这里锁死三条「头像来源」规则（都是回归项）：
+  - 未审核的 AI 候选（pending）与人工「不匹配」的脸**不能**当头像；
+  - 视频素材的检测不参与（bbox 是抽帧坐标，裁 mp4/海报会错或失败）；
+  - 来源变化（换素材/改派/驳回/素材被删）后头像自动重裁，不留旧脸。
 """
 
 import io
@@ -11,9 +16,12 @@ import pytest
 from PIL import Image
 
 from app.config import settings
+from app.database import async_session
 from app.services.face_thumbnail import (
+    FACE_THUMB_DIR,
     FACE_THUMB_SIZE,
     _crop_face,
+    clear_face_thumbnails,
     face_thumb_rel_path,
 )
 
@@ -36,6 +44,51 @@ def _patch_embed(monkeypatch, embedding: list[float]):
         }
 
     monkeypatch.setattr("app.services.blogger_face.face_client.embed", fake_embed)
+
+
+async def _seed_detection(
+    insp_id: str,
+    blogger_id: int,
+    *,
+    bbox: str = "[10, 10, 50, 50]",
+    confidence: float | None = 0.9,
+    match_status: str | None = None,
+    match_excluded: bool = False,
+) -> int:
+    """直接写一条人脸检测记录（用于构造 pending / 驳回 / 多来源等场景）。"""
+    from app.models.face import InspirationFaceDetection
+
+    async with async_session() as db:
+        det = InspirationFaceDetection(
+            inspiration_id=insp_id,
+            face_index=0,
+            embedding=np.zeros(512, dtype=np.float32).tobytes(),
+            bbox=bbox,
+            det_score=0.9,
+            matched_blogger_id=blogger_id,
+            confidence=confidence,
+            match_status=match_status,
+            match_excluded=match_excluded,
+        )
+        db.add(det)
+        await db.commit()
+        await db.refresh(det)
+        return det.id
+
+
+async def _set_media_type(insp_id: str, media_type: str) -> None:
+    from app.models.inspiration import Inspiration
+
+    async with async_session() as db:
+        row = await db.get(Inspiration, insp_id)
+        row.media_type = media_type
+        await db.commit()
+
+
+def _thumb_of(client, blogger_id: int) -> str | None:
+    """列表接口里该博主的 face_thumb_path。"""
+    items = client.get("/api/bloggers", params={"size": 200}).json()["items"]
+    return next(i["face_thumb_path"] for i in items if i["id"] == blogger_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -85,37 +138,34 @@ def test_face_thumbnail_end_to_end(client, create_blogger, upload, monkeypatch):
     insp_id = upload().json()["id"]
     r = client.post(f"/api/inspirations/{insp_id}/face-detect")
     assert r.status_code == 200, r.text
-    assert r.json()["detections"][0]["matched_blogger_id"] == blogger["id"]
+    det = r.json()["detections"][0]
+    assert det["matched_blogger_id"] == blogger["id"]
 
-    # 列表接口返回人脸缩略图相对路径
-    lst = client.get("/api/bloggers").json()
-    item = next(i for i in lst["items"] if i["id"] == blogger["id"])
-    assert item["face_thumb_path"] == f"faces/face_{blogger['id']}.jpg"
+    # 列表接口返回人脸缩略图相对路径（缓存键含来源检测 id）
+    expected = face_thumb_rel_path(blogger["id"], det["id"])
+    assert _thumb_of(client, blogger["id"]) == expected
 
     # 缓存文件存在且为 96x96 有效 JPEG
-    cached = settings.storage_root / face_thumb_rel_path(blogger["id"])
+    cached = settings.storage_root / expected
     assert cached.is_file()
     with Image.open(cached) as img:
         assert img.size == (FACE_THUMB_SIZE, FACE_THUMB_SIZE)
         assert img.format == "JPEG"
 
     # 再次请求列表：命中缓存（路径不变，不重复裁剪）
-    lst2 = client.get("/api/bloggers").json()
-    item2 = next(i for i in lst2["items"] if i["id"] == blogger["id"])
-    assert item2["face_thumb_path"] == item["face_thumb_path"]
+    assert _thumb_of(client, blogger["id"]) == expected
 
     # 详情接口同样带人脸缩略图
     detail = client.get(f"/api/bloggers/{blogger['id']}").json()
-    assert detail["face_thumb_path"] == item["face_thumb_path"]
+    assert detail["face_thumb_path"] == expected
 
 
 def test_face_thumbnail_absent_without_detection(client, create_blogger):
     """博主没有匹配到任何素材人脸：face_thumb_path 为 null，不生成缓存文件。"""
     blogger = create_blogger(name="无人脸博")
-    lst = client.get("/api/bloggers").json()
-    item = next(i for i in lst["items"] if i["id"] == blogger["id"])
-    assert item["face_thumb_path"] is None
-    assert not (settings.storage_root / face_thumb_rel_path(blogger["id"])).exists()
+    assert _thumb_of(client, blogger["id"]) is None
+    faces_dir = settings.storage_root / FACE_THUMB_DIR
+    assert not list(faces_dir.glob(f"face_{blogger['id']}_*.jpg"))
 
 
 def test_face_thumbnail_unmatched_detection(client, create_blogger, upload, monkeypatch):
@@ -131,9 +181,122 @@ def test_face_thumbnail_unmatched_detection(client, create_blogger, upload, monk
     r = client.post(f"/api/inspirations/{insp_id}/face-detect")
     assert r.json()["detections"][0]["matched_blogger_id"] is None
 
-    lst = client.get("/api/bloggers").json()
-    item = next(i for i in lst["items"] if i["id"] == blogger["id"])
-    assert item["face_thumb_path"] is None
+    assert _thumb_of(client, blogger["id"]) is None
+
+
+# ═══════════════════════════════════════════════════════════════
+#  头像来源规则（回归：头像必须只来自「可信 + 可裁剪」的人脸）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_pending_candidate_not_used_as_avatar(client, create_blogger, upload):
+    """未审核的 AI 候选（pending）不能当头像；人工确认后才可以。"""
+    from app.models.face import InspirationFaceDetection
+
+    blogger = create_blogger(name="候选博")
+    insp_id = upload().json()["id"]
+    det_id = await _seed_detection(insp_id, blogger["id"], match_status="pending")
+
+    assert _thumb_of(client, blogger["id"]) is None
+
+    async with async_session() as db:
+        det = await db.get(InspirationFaceDetection, det_id)
+        det.match_status = "confirmed"
+        await db.commit()
+
+    assert _thumb_of(client, blogger["id"]) == face_thumb_rel_path(blogger["id"], det_id)
+
+
+async def test_excluded_face_not_used_as_avatar(client, create_blogger, upload):
+    """人工「不匹配」的脸（match_excluded）不能当头像。"""
+    blogger = create_blogger(name="驳回博")
+    insp_id = upload().json()["id"]
+    await _seed_detection(insp_id, blogger["id"], match_excluded=True)
+
+    assert _thumb_of(client, blogger["id"]) is None
+
+
+async def test_video_detection_not_used_as_avatar(client, create_blogger, upload):
+    """视频素材的人脸检测不参与头像：bbox 是抽帧坐标，裁 mp4/海报会错或失败。"""
+    blogger = create_blogger(name="视频博")
+    insp_id = upload().json()["id"]
+    await _set_media_type(insp_id, "video")
+    await _seed_detection(insp_id, blogger["id"])
+
+    assert _thumb_of(client, blogger["id"]) is None
+
+
+async def test_avatar_refreshes_when_source_changes(client, create_blogger, upload):
+    """来源变化（出现更高置信度的人脸）后头像自动重裁，旧缓存清理。"""
+    blogger = create_blogger(name="换脸博")
+    first_insp = upload().json()["id"]
+    first_det = await _seed_detection(first_insp, blogger["id"], confidence=0.6)
+
+    first_path = _thumb_of(client, blogger["id"])
+    assert first_path == face_thumb_rel_path(blogger["id"], first_det)
+    assert (settings.storage_root / first_path).is_file()
+
+    # 新增一条更高置信度的检测（模拟新素材匹配到同一博主）
+    second_insp = upload().json()["id"]
+    second_det = await _seed_detection(second_insp, blogger["id"], confidence=0.95)
+
+    second_path = _thumb_of(client, blogger["id"])
+    assert second_path == face_thumb_rel_path(blogger["id"], second_det)
+    assert (settings.storage_root / second_path).is_file()
+    # 旧来源的缓存被清理，不会在 faces/ 里留旧脸
+    assert not (settings.storage_root / first_path).exists()
+
+
+async def test_avatar_group_falls_back_to_member_face(client, create_blogger, upload):
+    """人物组头像兜底：主账号没有可用人脸时，用组内账号的人脸小图。"""
+    primary = create_blogger(name="组主账号", platform="douyin")
+    member = create_blogger(name="组内账号", platform="xiaohongshu")
+    insp_id = upload().json()["id"]
+    det_id = await _seed_detection(insp_id, member["id"])
+
+    r = client.post(
+        "/api/bloggers/groups/link",
+        json={"blogger_id": member["id"], "target_blogger_id": primary["id"]},
+    )
+    assert r.status_code == 200, r.text
+
+    # 组内账号自己有没有头像，决定折叠行能不能兜底
+    member_thumb = face_thumb_rel_path(member["id"], det_id)
+    items = client.get("/api/bloggers", params={"size": 200}).json()["items"]
+    row = next(i for i in items if i["id"] in (primary["id"], member["id"]))
+    assert row["face_thumb_path"] == member_thumb
+
+
+def test_clear_face_thumbnails_removes_legacy_and_new(client, create_blogger, make_image):
+    """清理头像缓存：新旧命名（face_{id}.jpg / face_{id}_{det}.jpg）一起删，不残留孤儿。"""
+    blogger = create_blogger(name="清理博")
+    faces_dir = settings.storage_root / FACE_THUMB_DIR
+    faces_dir.mkdir(parents=True, exist_ok=True)
+    data, _ctype = make_image(color=(30, 160, 90))
+    legacy = faces_dir / f"face_{blogger['id']}.jpg"
+    current = faces_dir / f"face_{blogger['id']}_42.jpg"
+    other = faces_dir / f"face_{blogger['id'] + 1}_7.jpg"  # 别的博主，不该被删
+    for path in (legacy, current, other):
+        path.write_bytes(data)
+
+    assert clear_face_thumbnails(blogger["id"]) == 2
+    assert not legacy.exists() and not current.exists()
+    assert other.exists()
+
+
+def test_delete_blogger_cleans_thumbnail_cache(client, create_blogger, make_image):
+    """删除博主：人脸缩略图缓存文件同步清理，不残留孤儿文件。"""
+    blogger = create_blogger(name="待删博")
+    faces_dir = settings.storage_root / FACE_THUMB_DIR
+    faces_dir.mkdir(parents=True, exist_ok=True)
+    data, _ctype = make_image(color=(30, 160, 90))
+    cached = faces_dir / f"face_{blogger['id']}_9.jpg"
+    cached.write_bytes(data)
+    assert cached.is_file()
+
+    r = client.delete(f"/api/bloggers/{blogger['id']}")
+    assert r.status_code == 204
+    assert not cached.exists()
 
 
 def test_face_detect_does_not_duplicate_locked_face(
@@ -179,17 +342,3 @@ def test_face_detect_does_not_duplicate_locked_face(
     assert len(dets) == 1
     assert dets[0]["id"] == det_id
     assert dets[0]["match_status"] == "confirmed"
-
-
-def test_delete_blogger_cleans_thumbnail_cache(client, create_blogger, make_image):
-    """删除博主：人脸缩略图缓存文件同步清理，不残留孤儿文件。"""
-    blogger = create_blogger(name="待删博")
-    cached = settings.storage_root / face_thumb_rel_path(blogger["id"])
-    cached.parent.mkdir(parents=True, exist_ok=True)
-    data, _ctype = make_image(color=(30, 160, 90))
-    cached.write_bytes(data)
-    assert cached.is_file()
-
-    r = client.delete(f"/api/bloggers/{blogger['id']}")
-    assert r.status_code == 204
-    assert not cached.exists()

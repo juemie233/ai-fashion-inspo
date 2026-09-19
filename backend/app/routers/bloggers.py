@@ -85,12 +85,22 @@ async def list_bloggers(
         face_registered_only=face_registered_only,
         grouped=grouped,
     )
-    # 批量补齐人脸缩略图（一次查询候选检测 + 缺失缓存裁剪），返回 face_thumb_path
-    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items])
+    # 批量补齐人脸缩略图（一次查询候选检测 + 缺失/过期缓存裁剪），返回 face_thumb_path
+    member_ids = [
+        m["id"] for i in items for m in (i.get("group_members") or [])
+    ]
+    thumbs = await ensure_blogger_face_thumbnails(db, [i["id"] for i in items] + member_ids)
     for item in items:
         item["face_thumb_path"] = thumbs.get(item["id"])
-        for member in item.get("group_members") or []:
+        members = item.get("group_members") or []
+        for member in members:
             member["face_thumb_path"] = thumbs.get(member["id"])
+        # 人物组头像兜底：同组就是同一个人，主账号没有可用人脸时用组内账号的
+        # （否则「组里明明有人脸，折叠行却显示占位图」）
+        if not item["face_thumb_path"]:
+            item["face_thumb_path"] = next(
+                (m["face_thumb_path"] for m in members if m.get("face_thumb_path")), None
+            )
 
     return {"items": items, "total": total, "page": page, "size": size}
 
