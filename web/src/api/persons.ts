@@ -273,6 +273,29 @@ export const bloggersApi = {
     return data
   },
 
+  /**
+   * 设置博主头像（覆盖旧的）：从 TA 的素材里选一张，或本地上传一张照片（二选一）。
+   *
+   * 后端统一重编码为 JPEG（长边 ≤512）存到 storage/avatars/，并写 avatar_path；
+   * 展示优先级「手动头像 → 人脸小图 → 首字」，因此设置后立刻生效。
+   */
+  async setAvatar(id: number, payload: { inspirationId?: string; file?: File }): Promise<Blogger> {
+    const formData = new FormData()
+    if (payload.file) formData.append('file', payload.file)
+    if (payload.inspirationId) formData.append('inspiration_id', payload.inspirationId)
+    // 显式 multipart：全局默认 application/json 会让 axios 把 FormData 序列化成 JSON（后端 422）
+    const { data } = await apiClient.post<Blogger>(`/bloggers/${id}/avatar`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return data
+  },
+
+  /** 清除手动头像（回退到人脸小图或首字占位），同时删除头像文件 */
+  async clearAvatar(id: number): Promise<Blogger> {
+    const { data } = await apiClient.delete<Blogger>(`/bloggers/${id}/avatar`)
+    return data
+  },
+
   /** 注销博主人脸：删除人脸特征、回退所有人脸匹配记录、解除全部素材归属（博主账号保留） */
   async unregisterFace(id: number): Promise<BloggerUnbindResult> {
     const { data } = await apiClient.delete<BloggerUnbindResult>(`/bloggers/${id}/face`)

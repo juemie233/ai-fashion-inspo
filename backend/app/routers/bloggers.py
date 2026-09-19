@@ -438,17 +438,90 @@ async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -
         raise HTTPException(status_code=404, detail=e.message)
 
 
+@router.post("/{blogger_id}/avatar", response_model=BloggerOut)
+async def set_blogger_avatar_api(
+    blogger_id: int,
+    file: UploadFile | None = File(None, description="本地上传的照片（与 inspiration_id 二选一）"),
+    inspiration_id: str | None = Form(
+        None, description="从 TA 的素材里选一张（与 file 二选一）"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """设置博主头像（覆盖旧的）：从该博主的素材里选一张，或直接上传一张照片。
+
+    两种来源二选一：
+    - ``inspiration_id``：必须已关联到该博主（前端的选择器只列 TA 的素材）；
+      视频素材用首帧缩略图（视频本体不能当图片用）
+    - ``file``：本地上传的 JPG/PNG/WebP 等，统一重编码为 JPEG 且长边压到 512
+
+    设置后 ``avatar_path`` 非空，前端展示优先级「手动头像 → 人脸小图 → 首字」中
+    手动头像优先，因此会立刻覆盖自动裁剪出来的人脸小图。
+    """
+    from app.services.face_image import load_inspiration_image
+    from app.services.person.avatar import set_blogger_avatar
+
+    if bool(file) == bool(inspiration_id):
+        raise HTTPException(
+            status_code=400, detail="请二选一：从素材里选一张，或上传一张照片"
+        )
+
+    if file is not None:
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="上传的文件为空")
+        return await set_blogger_avatar(db, blogger_id, data, source="upload")
+
+    # 从素材选择：必须属于该博主（避免借头像接口读别人的素材或任意素材）
+    from sqlalchemy import select
+
+    from app.models.inspiration import NOT_DELETED, Inspiration
+    from app.models.person import InspirationBlogger
+
+    row = (
+        await db.execute(
+            select(Inspiration)
+            .join(InspirationBlogger, InspirationBlogger.inspiration_id == Inspiration.id)
+            .where(
+                Inspiration.id == inspiration_id,
+                InspirationBlogger.blogger_id == blogger_id,
+                NOT_DELETED,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=400, detail="该素材不存在、已删除或不属于这位博主"
+        )
+    data, warning = await load_inspiration_image(row)
+    if data is None:
+        raise HTTPException(status_code=400, detail=f"这张素材无法用作头像：{warning}")
+    return await set_blogger_avatar(db, blogger_id, data, source="inspiration")
+
+
+@router.delete("/{blogger_id}/avatar", response_model=BloggerOut)
+async def clear_blogger_avatar_api(
+    blogger_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """清除手动头像（回退到人脸小图或首字占位），同时删除头像文件。"""
+    from app.services.person.avatar import clear_blogger_avatar
+
+    return await clear_blogger_avatar(db, blogger_id)
+
+
 @router.delete("/{blogger_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> None:
     """删除博主：仅当该博主无关联素材时允许删除，否则返回 400。"""
+    from app.services.person.avatar import delete_avatar_file
+
     try:
         await blogger_service.delete(db, blogger_id)
     except PersonNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message)
     except PersonHasInspirationsError as e:
         raise HTTPException(status_code=400, detail=e.message)
-    # 清理人脸缩略图缓存（博主已删，避免残留孤儿文件）
+    # 清理人脸缩略图与头像文件（博主已删，避免残留孤儿文件）
     delete_face_thumbnail(blogger_id)
+    delete_avatar_file(blogger_id)
 
 
 @router.get("/{blogger_id}/inspirations")

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-/** 人物详情头部信息卡：头像（人脸小图→手动头像→首字）、名称 + 内容类型徽标、元信息、主页链接与操作。 */
+/** 人物详情头部信息卡：头像（手动头像→人脸小图→首字）、名称 + 内容类型徽标、元信息、主页链接与操作。 */
 
+import { ref } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 import { PERSON_PLATFORM_LABELS, type PersonDetail, type PersonType } from '@shared/types/person'
 import PersonTypeTag from '@/components/person/PersonTypeTag.vue'
+import PersonAvatarPicker from '@/components/person/PersonAvatarPicker.vue'
 
-defineProps<{
+const props = defineProps<{
   detail: PersonDetail
   kind: PersonType
   kindLabel: string
@@ -17,20 +19,26 @@ defineEmits<{
   delete: []
   /** 点击简介区域的「AI 生成」：由详情页打开编辑弹窗并自动生成简介 */
   'generate-bio': []
+  /** 头像更新/清除后：由详情页重新拉取详情 */
+  'avatar-changed': []
 }>()
+
+/** 头像选择弹窗开关（仅穿搭博主提供手动设置入口） */
+const avatarPickerVisible = ref(false)
+
+/** 头像地址：手动设置的头像优先，其次才是素材人脸自动裁剪的小图 */
+function avatarSrc(): string {
+  const path = props.detail.avatar_path || props.detail.face_thumb_path
+  return path ? getFileUrl(path) : ''
+}
 </script>
 
 <template>
   <a-card size="small" class="header-card">
     <div class="header-row">
       <div class="avatar-wrap">
-        <!-- 展示优先级：人脸小图（自动裁剪）→ 手动头像 → 名字首字 -->
-        <img
-          v-if="detail.face_thumb_path || detail.avatar_path"
-          :src="getFileUrl(detail.face_thumb_path || (detail.avatar_path as string))"
-          class="avatar-img"
-          :alt="detail.name"
-        />
+        <!-- 展示优先级：手动设置的头像 → 人脸小图（自动裁剪）→ 名字首字 -->
+        <img v-if="avatarSrc()" :src="avatarSrc()" class="avatar-img" :alt="detail.name" />
         <span v-else class="avatar-fallback">{{ detail.name.slice(0, 1) }}</span>
       </div>
 
@@ -77,6 +85,10 @@ defineEmits<{
       </div>
 
       <div class="header-actions">
+        <!-- 手动设置头像（仅穿搭博主）：从 TA 的素材里选一张，或上传一张照片 -->
+        <a-button v-if="kind === 'blogger'" type="secondary" @click="avatarPickerVisible = true">
+          {{ detail.avatar_path ? '更换头像' : '上传头像' }}
+        </a-button>
         <a-button type="secondary" @click="$emit('edit')">编辑</a-button>
         <a-popconfirm
           :content="`确定删除${kindLabel}「${detail.name}」？仅当该人物无关联素材时才可删除。`"
@@ -86,6 +98,15 @@ defineEmits<{
         </a-popconfirm>
       </div>
     </div>
+
+    <PersonAvatarPicker
+      v-if="kind === 'blogger'"
+      v-model:visible="avatarPickerVisible"
+      :person-id="detail.id"
+      :person-name="detail.name"
+      :has-avatar="Boolean(detail.avatar_path)"
+      @saved="$emit('avatar-changed')"
+    />
   </a-card>
 </template>
 

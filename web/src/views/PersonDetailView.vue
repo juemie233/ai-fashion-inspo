@@ -96,6 +96,7 @@ async function onFaceChanged() {
           @edit="showForm = true"
           @delete="handleDelete"
           @generate-bio="handleHeaderGenerateBio"
+          @avatar-changed="loadDetail"
         />
 
         <!-- 人物组（方案 B）：同一现实人物跨平台账号（仅穿搭博主） -->

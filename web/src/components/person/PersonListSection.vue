@@ -169,8 +169,8 @@ function handleExpandedChange(keys: Array<string | number>) {
               @click="goDetail(m)"
             >
               <img
-                v-if="m.face_thumb_path || m.avatar_path"
-                :src="getFileUrl(m.face_thumb_path || (m.avatar_path as string))"
+                v-if="m.avatar_path || m.face_thumb_path"
+                :src="getFileUrl((m.avatar_path || m.face_thumb_path) as string)"
                 :alt="m.name"
                 class="group-member-avatar"
               />

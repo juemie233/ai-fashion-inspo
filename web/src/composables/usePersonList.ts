@@ -207,10 +207,10 @@ export function usePersonList(kind: PersonKind) {
             { size: 40 },
             {
               default: () =>
-                // 展示优先级：人脸小图（自动裁剪）→ 手动头像 → SVG 人形占位
-                row.face_thumb_path || row.avatar_path
+                // 展示优先级：手动设置的头像 → 人脸小图（自动裁剪）→ SVG 人形占位
+                row.avatar_path || row.face_thumb_path
                   ? h('img', {
-                      src: getFileUrl(row.face_thumb_path || (row.avatar_path as string)),
+                      src: getFileUrl((row.avatar_path || row.face_thumb_path) as string),
                       alt: row.name,
                     })
                   : // 无头像时用通用人形图标占位，避免名字首字与名称并排造成「杨杨晨晨」式重复

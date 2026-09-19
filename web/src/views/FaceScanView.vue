@@ -642,9 +642,9 @@ function largePreviewUrl(item: DetectionItem): string {
   return getFileUrl(item.file_path)
 }
 
-/** 人物头像地址：人脸小图（自动裁剪）→ 手动头像，均无则显示首字（与人物列表/详情约定一致） */
+/** 人物头像地址：手动设置的头像 → 人脸小图（自动裁剪），均无则显示首字（与人物列表/详情约定一致） */
 function personAvatarUrl(item: PersonAggregateItem): string | undefined {
-  const path = item.face_thumb_path || item.avatar_path
+  const path = item.avatar_path || item.face_thumb_path
   return path ? getFileUrl(path) : undefined
 }
 

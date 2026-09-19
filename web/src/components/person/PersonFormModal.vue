@@ -5,8 +5,10 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { computed, ref, watch } from 'vue'
 import { Message, type FormInstance, type FieldRule } from '@arco-design/web-vue'
 import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
+import { getFileUrl } from '@/api/inspirations'
 import type { Person } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
+import PersonAvatarPicker from '@/components/person/PersonAvatarPicker.vue'
 
 const props = defineProps<{
   show: boolean
@@ -30,6 +32,16 @@ const formRef = ref<FormInstance | null>(null)
 const submitting = ref(false)
 /** AI 生成简介的加载态（调用 /{kind}/{id}/generate-bio） */
 const generatingBio = ref(false)
+/** 头像设置弹窗开关（仅编辑已存在的穿搭博主时可用：头像要从 TA 的素材里挑） */
+const avatarPickerVisible = ref(false)
+/** 编辑期间设置好的头像相对路径（选择器保存后回填，用于弹窗内即时预览） */
+const avatarPath = ref<string | null>(null)
+
+const formAvatarSrc = computed(() =>
+  avatarPath.value || props.person?.face_thumb_path
+    ? getFileUrl((avatarPath.value || props.person?.face_thumb_path) as string)
+    : '',
+)
 
 const kindLabel = props.kind === 'blogger' ? '穿搭博主' : '职业模特'
 
@@ -96,6 +108,7 @@ watch(
       profile_url: p?.profile_url ?? null,
       bio: p?.bio ?? null,
     }
+    avatarPath.value = p?.avatar_path ?? null
   },
 )
 
@@ -208,6 +221,21 @@ async function handleSubmit() {
         />
       </a-form-item>
 
+      <a-form-item v-if="kind === 'blogger' && person" label="人物头像">
+        <div class="avatar-form-row">
+          <img v-if="formAvatarSrc" :src="formAvatarSrc" class="avatar-form-img" :alt="form.name" />
+          <span v-else class="avatar-form-fallback">{{ (form.name || '?').slice(0, 1) }}</span>
+          <div class="avatar-form-side">
+            <a-button size="small" type="secondary" @click="avatarPickerVisible = true">
+              {{ person.avatar_path ? '更换头像' : '上传头像' }}
+            </a-button>
+            <span class="avatar-form-tip">
+              从 TA 的素材里选一张，或上传一张照片；设置后优先于自动裁剪的人脸小图
+            </span>
+          </div>
+        </div>
+      </a-form-item>
+
       <a-form-item label="主页链接" field="profile_url">
         <a-input
           :model-value="form.profile_url ?? undefined"
@@ -248,6 +276,16 @@ async function handleSubmit() {
       </a-form-item>
     </a-form>
 
+    <!-- 头像设置弹窗：保存后即时预览（头像本身已入库，无需等「保存」） -->
+    <PersonAvatarPicker
+      v-if="kind === 'blogger' && person"
+      v-model:visible="avatarPickerVisible"
+      :person-id="person.id"
+      :person-name="person.name"
+      :has-avatar="Boolean(avatarPath)"
+      @saved="(path: string | null) => (avatarPath = path)"
+    />
+
     <template #footer>
       <a-space style="display: flex; justify-content: flex-end">
         <a-button @click="emit('update:show', false)">取消</a-button>
@@ -256,3 +294,49 @@ async function handleSubmit() {
     </template>
   </a-modal>
 </template>
+
+<style scoped>
+/* 头像行：预览圆形头像 + 操作按钮/说明（编辑已有博主时展示） */
+.avatar-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar-form-img,
+.avatar-form-fallback {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.avatar-form-img {
+  object-fit: cover;
+  border: 1px solid #e5e6eb;
+}
+
+.avatar-form-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef1f6;
+  color: #4a5a7a;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.avatar-form-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.avatar-form-tip {
+  font-size: 12px;
+  color: #86909c;
+  line-height: 1.6;
+}
+</style>
