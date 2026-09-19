@@ -35,7 +35,11 @@ function makeRawTask(over: Partial<QueueTask> = {}): QueueTask {
     progress: 100,
     total: 38,
     done: 38,
-    result: { stage: 'done', plan: { files: 38 }, import: { imported: 38 } },
+    result: {
+      stage: 'done',
+      plan: { files: 38 },
+      import: { imported: 38, batch_file: '/tmp/import_batches/f2-338.json' },
+    },
     error: null,
     created_at: '2026-09-15T01:41:19Z',
     updated_at: '2026-09-15T01:47:33Z',
@@ -54,7 +58,7 @@ describe('useF2TaskHistory', () => {
 
   it('只按 f2_import 类型拉取并归一化历史', async () => {
     mocks.get.mockResolvedValue({ data: { items: [makeRawTask()], total: 4 } })
-    const { tasks, total, loadTasks } = useF2TaskHistory()
+    const { tasks, total, resultTaskIds, loadTasks } = useF2TaskHistory()
 
     await loadTasks()
 
@@ -68,6 +72,26 @@ describe('useF2TaskHistory', () => {
     expect(tasks.value[0].status).toBe('success')
     // 完成态展示汇总文案（复用任务中心的 summarizeResult）
     expect(tasks.value[0].detail).toBe('入库 38')
+    // 有批次清单的任务才给「查看结果」入口
+    expect([...resultTaskIds.value]).toEqual([338])
+  })
+
+  it('没有批次结果的任务不进结果入口（未导入/未落清单）', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        items: [
+          makeRawTask({ id: 1, result: { import: { imported: 0, batch_file: '/tmp/x.json' } } }),
+          makeRawTask({ id: 2, result: { stage: 'download' } }),
+          makeRawTask({ id: 3, result: null }),
+        ],
+        total: 3,
+      },
+    })
+    const { resultTaskIds, loadTasks } = useF2TaskHistory()
+
+    await loadTasks()
+
+    expect(resultTaskIds.value.size).toBe(0)
   })
 
   it('首次加载失败：清空列表并提示', async () => {

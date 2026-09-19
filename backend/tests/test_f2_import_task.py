@@ -949,3 +949,192 @@ async def test_execute_f2_import_download_skips_unregistered_accounts(
 
     assert len(commands) == 1
     assert all("sec_game" not in " ".join(cmd) for cmd in commands)
+
+
+# ── 结果浏览与审查（按批次清单定位本批素材）──
+
+
+async def _import_once(fetch: bool = False) -> int:
+    """跑一次 f2 导入（临时目录 + 临时库），返回任务 id。"""
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=fetch)
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+    return task_id
+
+
+async def test_f2_task_results_lists_batch(client, f2_tree):
+    """浏览本批结果：条目来自批次清单，状态（在库/垃圾桶/已彻底删除）以库内现状为准。"""
+    task_id = await _import_once()
+
+    resp = client.get(f"/api/scraper/f2-tasks/{task_id}/results")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["has_batch"] is True
+    assert data["batch_id"]
+    assert data["counts"] == {
+        "total": 3,
+        "live": 3,
+        "trash": 0,
+        "gone": 0,
+        "pending": 3,
+        "approved": 0,
+        "rejected": 0,
+    }
+    assert data["total"] == 3
+    assert len(data["items"]) == 3
+    first = data["items"][0]
+    assert {
+        "id",
+        "state",
+        "quality_status",
+        "media_type",
+        "caption",
+        "author",
+        "file_path",
+        "thumbnail_path",
+        "trash_reason",
+    } <= set(first)
+    assert first["state"] == "pending"
+    # 实际文件路径以库内为准（清单路径只作备份）；f2 树里有图也有视频
+    assert first["file_path"].split("/", 1)[0] in {"images", "videos", "trash"}
+    # 作者维度：两个目录 → 至少 2 个作者可筛
+    assert sum(a["count"] for a in data["authors"]) == 3
+
+
+async def test_f2_task_results_filters(client, f2_tree):
+    """筛选口径：状态与作者都能收窄，且 total 随筛选变化。"""
+    task_id = await _import_once()
+    data = client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()
+    author = data["authors"][0]["name"]
+
+    only_author = client.get(
+        f"/api/scraper/f2-tasks/{task_id}/results", params={"author": author}
+    ).json()
+    assert only_author["total"] == data["authors"][0]["count"]
+    assert {i["author"] for i in only_author["items"]} == {author}
+
+    assert (
+        client.get(
+            f"/api/scraper/f2-tasks/{task_id}/results", params={"state": "trash"}
+        ).json()["total"]
+        == 0
+    )
+    assert (
+        client.get(
+            f"/api/scraper/f2-tasks/{task_id}/results", params={"state": "不支持"}
+        ).status_code
+        == 400
+    )
+
+
+async def test_f2_task_results_trash_then_restore(client, f2_tree):
+    """审查动作：移入垃圾桶（软删除）→ 计数与筛选随之变化 → 还原回素材库。"""
+    task_id = await _import_once()
+    ids = [i["id"] for i in client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()["items"]]
+
+    resp = client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/trash",
+        json={"ids": ids[:2], "reason": "质量差"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"requested": 2, "trashed": 2, "skipped": 0}
+
+    trashed = client.get(
+        f"/api/scraper/f2-tasks/{task_id}/results", params={"state": "trash"}
+    ).json()
+    assert trashed["total"] == 2
+    assert trashed["counts"]["trash"] == 2 and trashed["counts"]["live"] == 1
+    assert {i["trash_reason"] for i in trashed["items"]} == {"质量差"}
+    # 已不在素材库列表（与素材库口径一致）
+    assert all(i["id"] not in {x["id"] for x in client.get("/api/inspirations?size=50").json()["items"]} for i in trashed["items"])
+
+    resp = client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/restore", json={"ids": ids[:2]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["restored"] == 2
+
+    back = client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()
+    assert back["counts"]["trash"] == 0 and back["counts"]["live"] == 3
+
+
+async def test_f2_task_results_trash_rejects_bad_reason(client, f2_tree):
+    """删除原因必须是素材库枚举之一（状态机口径统一，不另开后门）。"""
+    task_id = await _import_once()
+    item_id = client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()["items"][0]["id"]
+
+    resp = client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/trash",
+        json={"ids": [item_id], "reason": "随便写的"},
+    )
+
+    assert resp.status_code == 400
+    assert "删除原因" in resp.json()["detail"]
+
+
+async def test_f2_task_results_ignores_ids_outside_batch(client, f2_tree):
+    """只允许操作属于本批的素材：批次外的 ID 被忽略，全为批次外时 400。"""
+    task_id = await _import_once()
+    item_id = client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()["items"][0]["id"]
+
+    mixed = client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/trash",
+        json={"ids": [item_id, "不在本批的素材"], "reason": "重复"},
+    )
+    assert mixed.status_code == 200
+    assert mixed.json() == {"requested": 2, "trashed": 1, "skipped": 1}
+
+    foreign = client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/restore", json={"ids": ["不在本批的素材"]}
+    )
+    assert foreign.status_code == 400
+
+
+async def test_f2_task_results_delete_creates_batch_delete_task(client, f2_tree):
+    """彻底删除：立即返回 batch_delete 任务（worker 执行物理删除），并留审计。"""
+    from sqlalchemy import select
+
+    from app.models.audit import AuditLog
+    from app.models.task import TaskQueue
+
+    task_id = await _import_once()
+    ids = [i["id"] for i in client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()["items"]]
+
+    resp = client.post(f"/api/scraper/f2-tasks/{task_id}/results/delete", json={"ids": ids})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 3 and body["task_id"]
+    async with async_session() as db:
+        delete_task = await db.get(TaskQueue, body["task_id"])
+        assert delete_task.type == "batch_delete"
+        assert set(delete_task.result["inspiration_ids"]) == set(ids)
+        audits = (
+            await db.execute(
+                select(AuditLog).where(AuditLog.action == "batch_delete")
+            )
+        ).scalars().all()
+        assert audits and audits[-1].count == 3
+
+
+async def test_f2_task_results_without_batch(client):
+    """还没跑完入库（没有批次清单）的任务：不给结果入口，返回空批次而非报错。"""
+    body = client.post("/api/scraper/f2-import", params={"fetch": False}).json()
+
+    data = client.get(f"/api/scraper/f2-tasks/{body['task_id']}/results").json()
+
+    assert data["has_batch"] is False
+    assert data["items"] == [] and data["total"] == 0
+    assert data["counts"]["total"] == 0
+
+
+async def test_f2_task_results_404_for_other_task_type(client):
+    """非 f2 导入任务（如批量删除）不能借这个接口浏览结果。"""
+    async with async_session() as db:
+        other = await task_runner.create_batch_delete_task(db, ["x"], label="t")
+        other_id = other.id
+
+    assert client.get(f"/api/scraper/f2-tasks/{other_id}/results").status_code == 404
+    assert client.get("/api/scraper/f2-tasks/999999/results").status_code == 404

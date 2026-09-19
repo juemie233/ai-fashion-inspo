@@ -27,11 +27,24 @@ export function useF2TaskHistory() {
   const loading = ref(false)
   const total = ref(0)
   const page = ref(1)
+  /** 有批次清单可浏览的任务 id（结果里 import.batch_file 非空才有「查看结果」入口） */
+  const resultTaskIds = ref<Set<number>>(new Set())
 
   const pageCount = computed(() => Math.max(1, Math.ceil(total.value / F2_HISTORY_PAGE_SIZE)))
   const hasActive = computed(() =>
     tasks.value.some((t) => t.status === 'pending' || t.status === 'running'),
   )
+
+  /** 该任务是否有可浏览的批次结果：入库阶段落盘了批次清单且确实入了素材 */
+  function hasBatchResults(result: Record<string, unknown> | null): boolean {
+    const summary = result?.import
+    if (!summary || typeof summary !== 'object') return false
+    const { batch_file: batchFile, imported } = summary as {
+      batch_file?: unknown
+      imported?: unknown
+    }
+    return Boolean(batchFile) && Number(imported ?? 0) > 0
+  }
 
   /**
    * 拉取当前页历史。
@@ -44,7 +57,9 @@ export function useF2TaskHistory() {
       const { data } = await apiClient.get<{ items: QueueTask[]; total: number }>('/tasks', {
         params: { type: 'f2_import', page: page.value, size: F2_HISTORY_PAGE_SIZE },
       })
-      tasks.value = (data.items || []).map(normalizeQueueTask)
+      const items = data.items || []
+      tasks.value = items.map(normalizeQueueTask)
+      resultTaskIds.value = new Set(items.filter((t) => hasBatchResults(t.result)).map((t) => t.id))
       total.value = data.total || 0
       // 记录减少后当前页可能越界，回退到最后一页
       page.value = Math.min(page.value, pageCount.value)
@@ -104,6 +119,7 @@ export function useF2TaskHistory() {
     page,
     pageCount,
     hasActive,
+    resultTaskIds,
     loadTasks,
     onPageChange,
     startPoll,

@@ -1669,6 +1669,48 @@ def _table_exists(conn, name: str) -> bool:
     return row is not None
 
 
+def load_batch_manifest(batch_file: Path | str | None) -> dict:
+    """读取一份批次清单（:func:`apply_import` 落盘的 JSON）。
+
+    清单是「本批导入了哪些素材」的唯一依据：f2 素材没有 scraper_task_id
+    （该列外键指向 scraper_tasks 表），回溯、结果浏览与 ``--rollback`` 都靠它。
+
+    Args:
+        batch_file: 清单路径（可为 None / 不存在的路径）。
+
+    Returns:
+        {"imported": [...], "errors": [...], "batch_id": str, "created_at": str,
+         "storage_root": str, "db": str}；文件缺失或损坏时返回空结构
+        （调用方按「本批无结果」处理，不抛异常）。
+    """
+    empty = {
+        "imported": [],
+        "errors": [],
+        "batch_id": "",
+        "created_at": "",
+        "storage_root": "",
+        "db": "",
+    }
+    if not batch_file:
+        return empty
+    try:
+        data = json.loads(Path(batch_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    imported = data.get("imported")
+    errors = data.get("errors")
+    return {
+        "imported": imported if isinstance(imported, list) else [],
+        "errors": errors if isinstance(errors, list) else [],
+        "batch_id": str(data.get("batch_id") or ""),
+        "created_at": str(data.get("created_at") or ""),
+        "storage_root": str(data.get("storage_root") or ""),
+        "db": str(data.get("db") or ""),
+    }
+
+
 def batch_storage_root(batch_file: Path) -> Path | None:
     """读取批次清单里记录的导入期存储根（回滚优先用它，而不是当前配置）。
 
@@ -1682,12 +1724,8 @@ def batch_storage_root(batch_file: Path) -> Path | None:
     Returns:
         清单记录的存储根；缺失或无法解析时返回 None。
     """
-    try:
-        data = json.loads(Path(batch_file).read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    root = data.get("storage_root")
-    return Path(root) if isinstance(root, str) and root else None
+    root = load_batch_manifest(batch_file)["storage_root"]
+    return Path(root) if root else None
 
 
 def plan_rollback(

@@ -7,6 +7,7 @@
 - ``cookies.py``：平台 Cookie 导入 / 状态 / 删除
 - ``extension.py``：浏览器插件会话任务记录
 - ``results.py``：统计看板 / 任务结果列表 / 结果批量移入垃圾桶
+- ``f2_results.py``：f2 一键获取的批次结果浏览与审查（按批次清单定位本批素材）
 
 ``scraper_service.py`` 保留为兼容薄壳（re-export 全部符号），既有引用不变。
 """
@@ -65,6 +66,13 @@ from app.services.scraper.results import (
     get_scraper_stats,
     get_task_results,
 )
+from app.services.scraper.f2_results import (
+    RESULT_FILTERS,
+    delete_f2_task_results,
+    get_f2_task_results,
+    restore_f2_task_results,
+    trash_f2_task_results,
+)
 
 # 兼容别名：_utcnow 与 app.utils.time.utcnow 实现一致（收敛历史遗留）
 from app.utils.time import utcnow as _utcnow
@@ -119,6 +127,12 @@ __all__ = [
     "batch_delete_task_results",
     "get_scraper_stats",
     "get_task_results",
+    # f2 结果浏览与审查（批次清单口径）
+    "RESULT_FILTERS",
+    "delete_f2_task_results",
+    "get_f2_task_results",
+    "restore_f2_task_results",
+    "trash_f2_task_results",
     # 兼容
     "_utcnow",
 ]

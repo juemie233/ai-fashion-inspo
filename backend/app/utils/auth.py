@@ -2,9 +2,8 @@
 
 import hmac
 import re
-from typing import Pattern
 
-from fastapi import Depends, HTTPException, Security
+from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 from app.config import settings
@@ -62,6 +61,8 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     ("DELETE", "/api/scraper/tasks/{task_id}"),
     ("DELETE", "/api/scraper/tasks"),
     ("POST", "/api/scraper/tasks/{task_id}/results/batch-delete"),
+    # f2 结果审查的「彻底删除」（不可恢复；同批的移入垃圾桶/还原属可恢复操作，不进清单）
+    ("POST", "/api/scraper/f2-tasks/{task_id}/results/delete"),
     # 任务队列历史记录删除（仅终态任务，物理删除）
     ("DELETE", "/api/tasks/{task_id}"),
     # 模型卸载（删除磁盘模型）
@@ -79,7 +80,7 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
 ]
 
 
-def _compile_pattern(path_template: str) -> Pattern[str]:
+def _compile_pattern(path_template: str) -> re.Pattern[str]:
     """将路径模板编译为正则：{name} 匹配单段，{name:path} 匹配含斜杠的多段。"""
     # 先处理带 :path 转换器的（贪婪匹配任意路径段），再处理普通参数（单段）
     pattern = re.sub(r"\{[^}]+\:path\}", ".+", path_template)
@@ -88,7 +89,7 @@ def _compile_pattern(path_template: str) -> Pattern[str]:
 
 
 # 预编译清单，避免每次请求重复编译
-_DESTRUCTIVE_PATTERNS: list[tuple[str, Pattern[str]]] = [
+_DESTRUCTIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (method, _compile_pattern(path_template))
     for method, path_template in DESTRUCTIVE_ROUTES
 ]

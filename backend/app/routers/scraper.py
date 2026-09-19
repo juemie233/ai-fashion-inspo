@@ -118,6 +118,68 @@ async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
     return info
 
 
+@router.get("/f2-tasks/{task_id}/results")
+async def f2_task_results(
+    task_id: int,
+    page: int = Query(1, ge=1),
+    size: int = Query(60, ge=1, le=200),
+    state: str = Query(
+        "all", description="筛选：all/pending/approved/rejected/trash/gone"
+    ),
+    author: str = Query("", description="只保留该作者（source_author 精确匹配）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """浏览某次「一键获取素材」任务产出的素材（供采集管理页的结果与审查面板）。
+
+    归属以该任务落盘的**批次清单**为准（f2 素材没有 scraper_task_id 可关联）；
+    每条素材的当前状态（是否在垃圾桶、质量审核状态、实际文件路径）以数据库为准。
+    """
+    return await scraper_service.get_f2_task_results(
+        db, task_id, page=page, size=size, state=state, author=author
+    )
+
+
+@router.post("/f2-tasks/{task_id}/results/trash")
+async def f2_task_results_trash(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把本批素材移入垃圾桶（软删除，可在垃圾桶恢复；同时作为负样本）。
+
+    请求体: {"ids": [...], "reason": "质量差"}
+    """
+    return await scraper_service.trash_f2_task_results(
+        db, task_id, payload.get("ids") or [], payload.get("reason")
+    )
+
+
+@router.post("/f2-tasks/{task_id}/results/restore")
+async def f2_task_results_restore(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """还原本批已在垃圾桶的素材（逐条复用单条恢复逻辑，单条失败不影响其余）。
+
+    请求体: {"ids": [...]}
+    """
+    return await scraper_service.restore_f2_task_results(db, task_id, payload.get("ids") or [])
+
+
+@router.post("/f2-tasks/{task_id}/results/delete")
+async def f2_task_results_delete(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """彻底删除本批素材（不可恢复）：创建 batch_delete 任务，由 worker 执行。
+
+    请求体: {"ids": [...]}
+    """
+    return await scraper_service.delete_f2_task_results(db, task_id, payload.get("ids") or [])
+
+
 @router.put("/f2-auto")
 async def set_f2_auto(
     enabled: bool = Query(..., description="是否开启每日自动增量入库"),
