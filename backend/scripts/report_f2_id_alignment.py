@@ -31,15 +31,18 @@
 档）、时间戳为 `00-00-00` 的作品数（接口给真实时间则必然未命中）等。这些与接口
 返回什么无关，可先据此判断对齐键够不够用。
 
-Cookie（抖音作品清单接口对游客返回 403，实测）
----------------------------------------------
-优先 `--cookie` / `--cookie-file`；也可以用 `--auto-cookie chrome` 从**本机浏览器**
-读（f2 同款机制，需先关闭该浏览器）；都没有时读 f2 配置
-（`<f2-dir>/f2/conf/app.yaml` 或 `<f2-dir>/conf/app.yaml`）。
-
-⚠ 实测即便补上**匿名** `ttwid`（`TokenManager.gen_ttwid()`，无需登录）也仍是 403，
-必须有真实登录态。另外注意：f2 配置里如果只有 `UIFID_TEMP` 这类游客 Cookie，
-枚举同样 403——那意味着项目的 f2 下载链路当时也是失败的。
+Cookie 与 f2 版本（两个坑，先读再跑）
+-------------------------------------
+1. **必须用 f2 工作目录里那份 f2**（项目靠 `cwd=f2_dir` 跑 `python -m f2` 用的就是
+   它）。PyPI 上的 f2 最新只到 `0.0.1.7`（2024-12-31），其抖音签名已失效——用旧版
+   调作品清单接口**稳定 403**。本工具用 `ensure_clone_f2_on_path` 自动处理，并在
+   启动时打印实际用的 f2 路径。**这是 403 的真正成因**（实测：同一份 f2 生成的签名
+   URL，换 3 种浏览器 TLS 指纹仍然 403；改回克隆版同一请求 200）。
+2. **Cookie**：`--cookie` / `--cookie-file` / `--auto-cookie chrome`（需先关闭浏览器）
+   / 否则回落 f2 配置。本次跑通用的是从 Chrome 读出的登录态 Cookie。
+   ⚠ **「游客 Cookie 是否也能枚举」尚未验证**：早先「游客 → 403」的结论是在旧版 f2
+   下得到的，不能归因于 Cookie；后来想复测时 f2 配置里的 cookie 已是空值（字段数 0，
+   返回 `status=None`），没有得到干净结论。别把「必须有登录态」当成已证事实。
 
 对齐键的精确性
 --------------
@@ -83,7 +86,6 @@ LEGACY_LIKE_NAMING = LIKE_NAMING_TEMPLATE.replace("_{aweme_id}", "")
 
 """抖音作品清单接口的每页条数（f2 帮助里建议不超过 20）。"""
 DEFAULT_PAGE_COUNTS = 20
-
 """翻页间隔（秒）：接口自带风控，别打太快。"""
 DEFAULT_PAGE_SLEEP = 3.0
 
@@ -182,8 +184,9 @@ def cookie_field_names(cookie: str) -> list[str]:
 def looks_logged_out(cookie: str) -> bool:
     """是否明显是**游客** Cookie（缺 sessionid 系列）。
 
-    抖音作品清单接口用游客 Cookie 会 403（实测）。提前识别能给出可操作的提示，
-    而不是让用户对着一串 HTTP 403 猜原因。
+    只用于给出提示，**不是**失败判据：早先「游客 Cookie → 403」的观察是在旧版 f2
+    （签名已失效）下得到的，不能归因于 Cookie 本身，故此处仅提示「本次跑通用的是
+    登录态」。
 
     Args:
         cookie: Cookie 字符串。
@@ -490,6 +493,43 @@ def render_report(report: dict, sample: int = 5) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
+def ensure_clone_f2_on_path(f2_dir: Path) -> str:
+    """把 f2 工作目录插到 `sys.path` 最前，确保导入的是**项目实际在用的那份 f2**。
+
+    ⚠ 这一步不能省（2026-09 实测踩坑）：PyPI 上的 f2 最新只到 `0.0.1.7`
+    （2024-12-31 发布），其抖音签名已失效——用**旧版**调作品清单接口稳定返回
+    **HTTP 403**，即使带完全有效的登录态 Cookie。而 f2 工作目录是 git clone，
+    项目通过「`cwd=f2_dir` 跑 `python -m f2`」用的正是克隆里那一份。
+
+    本工具在**进程内** import f2（不像项目那样起子进程），若不明式插路径，拿到的是
+    site-packages 里的旧版 → 403。插路径后需清掉已导入的旧模块，否则不生效。
+
+    Args:
+        f2_dir: f2 工作目录（内含 `f2/` 包）。
+
+    Returns:
+        实际生效的 f2 包文件路径；该目录下没有 `f2/` 包时返回空串（回退 site-packages）。
+    """
+    root = str(f2_dir)
+    if not (f2_dir / "f2" / "__init__.py").is_file():
+        return ""
+
+    loaded = sys.modules.get("f2")
+    if loaded is not None and getattr(loaded, "__file__", "").startswith(root):
+        return loaded.__file__  # 已经是这一份，无需重导
+
+    if root in sys.path:
+        sys.path.remove(root)
+    sys.path.insert(0, root)
+    if loaded is not None:
+        for name in [m for m in list(sys.modules) if m == "f2" or m.startswith("f2.")]:
+            del sys.modules[name]
+
+    import f2  # noqa: PLC0415 —— 必须在插路径之后导入
+
+    return getattr(f2, "__file__", "")
+
+
 async def enumerate_author_works(
     sec_user_id: str,
     cookie: str,
@@ -747,6 +787,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.disk_only:
         return 0
 
+    # ⚠ 必须在**任何** f2 用法之前把克隆目录插到 sys.path 最前：否则用到
+    # site-packages 里那份 2024-12-31 的旧 f2，签名失效 → 稳定 403
+    # （详见 ensure_clone_f2_on_path；含 --auto-cookie 内部的 f2 导入）
+    f2_pkg = ensure_clone_f2_on_path(f2_dir)
+    if f2_pkg:
+        print(f"f2 包：{f2_pkg}")
+    else:
+        print(
+            f"⚠️  {f2_dir} 下没有 f2/ 包，将使用 site-packages 的 f2——"
+            "PyPI 最新版（0.0.1.7, 2024-12-31）签名可能已失效并返回 403"
+        )
+
     cookie = resolve_cookie(args, f2_dir)
     if not cookie:
         print(
@@ -755,12 +807,13 @@ def main(argv: list[str] | None = None) -> int:
             "（需先关闭浏览器）/ 或先刷新 f2 配置里的 cookie"
         )
         return 1
+
     names = cookie_field_names(cookie)
     print(f"Cookie 字段 {len(names)} 个：{names[:8]}{'…' if len(names) > 8 else ''}")
     if looks_logged_out(cookie):
         print(
-            "⚠️  Cookie 里没有 sessionid 系列字段，疑似**游客态**——接口大概率返回 403。\n"
-            "    刷新方式：关闭浏览器后执行  f2 dy --auto-cookie chrome"
+            "⚠️  Cookie 里没有 sessionid 系列字段（疑似游客态）——不一定会失败，\n"
+            "    但本次跑通用的是登录态 Cookie；若这里 403，先换成登录态再试。"
         )
 
     sec_ids = load_author_sec_ids(f2_dir)

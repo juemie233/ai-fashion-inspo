@@ -8,6 +8,7 @@ f2 的 replaceT/split_filename 逐字符一致，故直接调用 f2 校验（未
 import importlib.util
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,63 @@ def _write(path: Path, content: bytes = b"x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     return path
+
+
+def test_ensure_clone_f2_on_path_prefers_clone(tmp_path):
+    """回归（P0）：必须用 f2 工作目录里那份 f2，否则签名失效 → 稳定 403。
+
+    实测：site-packages 的 f2 只到 0.0.1.7（2024-12-31），带有效 Cookie 也 403；
+    克隆版同一请求成功。这里用假 f2 包验证「插路径 + 清旧模块」的机制本身。
+    """
+    fake_root = tmp_path / "fakef2"
+    (fake_root / "f2").mkdir(parents=True)
+    (fake_root / "f2" / "__init__.py").write_text("__version__ = 'fake'", encoding="utf-8")
+
+    saved_path = list(sys.path)
+    saved_modules = {
+        k: v for k, v in sys.modules.items() if k == "f2" or k.startswith("f2.")
+    }
+    try:
+        got = rep.ensure_clone_f2_on_path(fake_root)
+
+        assert got, "应返回实际生效的 f2 包路径"
+        assert str(fake_root) in got
+        assert sys.path[0] == str(fake_root)
+        assert sys.modules["f2"].__version__ == "fake"  # 旧模块已清掉重导
+    finally:
+        sys.path[:] = saved_path
+        for name in [m for m in list(sys.modules) if m == "f2" or m.startswith("f2.")]:
+            del sys.modules[name]
+        sys.modules.update(saved_modules)
+
+
+def test_ensure_clone_f2_on_path_without_package_returns_empty(tmp_path):
+    """目录里没有 f2/ 包时返回空串，让调用方回退 site-packages 并给出告警。"""
+    assert rep.ensure_clone_f2_on_path(tmp_path) == ""
+
+
+def test_ensure_clone_f2_on_path_idempotent(tmp_path):
+    """已是克隆版时直接返回，不重复清模块（避免无谓的重导开销）。"""
+    fake_root = tmp_path / "fakef2"
+    (fake_root / "f2").mkdir(parents=True)
+    (fake_root / "f2" / "__init__.py").write_text("__version__ = 'fake'", encoding="utf-8")
+
+    saved_path = list(sys.path)
+    saved_modules = {
+        k: v for k, v in sys.modules.items() if k == "f2" or k.startswith("f2.")
+    }
+    try:
+        first = rep.ensure_clone_f2_on_path(fake_root)
+        module_before = sys.modules["f2"]
+        second = rep.ensure_clone_f2_on_path(fake_root)
+
+        assert first == second
+        assert sys.modules["f2"] is module_before  # 没有被重导
+    finally:
+        sys.path[:] = saved_path
+        for name in [m for m in list(sys.modules) if m == "f2" or m.startswith("f2.")]:
+            del sys.modules[name]
+        sys.modules.update(saved_modules)
 
 
 # ═══════════════════════════════════════════════════════════════
