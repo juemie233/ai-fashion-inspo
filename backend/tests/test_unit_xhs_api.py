@@ -115,6 +115,9 @@ def _resp(html: str, url: str = "https://www.xiaohongshu.com/explore/abc") -> ht
          "?xsec_token=ABQR7PuX&xsec_source=pc_search",
          "669f1785000000002401c45c"),
         ("/user/profile/5e3a2b1c9f4d8e7a", "5e3a2b1c9f4d8e7a"),
+        # 字符集与 blogger_enrichment_service.PROFILE_ID_RE 同口径：`-`/`_` 也合法，
+        # 不能因为用了 str.isalnum() 就静默回退 Playwright
+        ("/user/profile/uid-with_dash", "uid-with_dash"),
         # 非主页链接必须返回空串：否则会把笔记 ID 当 uid 传给接口
         ("https://www.xiaohongshu.com/explore/669f1785000000002401c45c", ""),
         ("https://www.xiaohongshu.com/search_result?keyword=穿搭", ""),
@@ -569,6 +572,28 @@ def test_try_fetch_reraises_fatal_block(monkeypatch):
             "https://www.xiaohongshu.com/user/profile/uid1", "", {"a1": "v"}, 10
         )
     assert ei.value.is_fatal is True
+
+
+@requires_xhshow
+def test_try_fetch_falls_back_on_non_fatal_block(monkeypatch):
+    """非致命类型（not_found）必须回退而不是抛出。
+
+    回归：not_found 在 scraper_common 里的语义是「跳过当前条目」，此前与致命风控
+    一起 re-raise，会被 run_scraper 的兜底 except 当成整轮失败（原因写成
+    「笔记不存在或已被删除」），把可跳过的状态升级成任务失败。
+    """
+    closed: list[bool] = []
+
+    def boom(self, user_id, max_notes, delay=1.0):
+        raise sc.ScraperBlockedError("not_found", "内容不存在")
+
+    monkeypatch.setattr(api.XhsApiScraper, "blogger_notes", boom)
+    monkeypatch.setattr(api.XhsApiScraper, "close", lambda self: closed.append(True))
+    result = api.try_fetch_blogger_notes(
+        "https://www.xiaohongshu.com/user/profile/uid1", "", {"a1": "v"}, 10
+    )
+    assert result is None
+    assert closed == [True]  # 回退路径同样要释放连接池
 
 
 @requires_xhshow

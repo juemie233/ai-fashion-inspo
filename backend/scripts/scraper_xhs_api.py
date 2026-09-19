@@ -32,6 +32,7 @@
 """
 
 import json
+import re
 from urllib.parse import quote
 
 import httpx
@@ -89,6 +90,13 @@ _XHS_FATAL_STATUS = {
     471: "account_risk",
 }
 
+"""user_id 允许的字符集（与 `blogger_enrichment_service.PROFILE_ID_RE` 同口径）。
+
+不用 `str.isalnum()`：那会把带 `-`/`_` 的 uid 判成非法并静默回退 Playwright——
+本项目解析同类主页 URL 的地方一直认这两个字符，两处口径不能打架。
+"""
+_USER_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+
 
 class XhsApiError(RuntimeError):
     """接口采集失败（非风控）：调用方据此回退 Playwright 路径。"""
@@ -120,7 +128,7 @@ def user_id_of(profile_url: str) -> str:
     if "/user/profile/" not in path:
         return ""
     uid = path.split("/user/profile/", 1)[1].split("/")[0].strip()
-    return uid if uid.isalnum() else ""
+    return uid if _USER_ID_RE.fullmatch(uid) else ""
 
 
 def cookie_dict(cookies, domain_hint: str = "xiaohongshu") -> dict[str, str]:
@@ -556,8 +564,12 @@ def try_fetch_blogger_notes(
 ) -> tuple[XhsApiScraper, list[dict]] | None:
     """尽力用接口拉博主笔记列表；不可用或失败时返回 ``None`` 让调用方回退。
 
-    致命风控照常抛出：此时回退 Playwright 只会在已被限流的账号上继续加压，
-    必须停止整轮（与 ``run_blogger_mode`` 中详情页风控的处理口径一致）。
+    **只有致命风控**（验证码/登录墙/限流/账号异常）照常抛出：此时回退 Playwright
+    只会在已被限流的账号上继续加压，必须停止整轮（与 ``run_blogger_mode`` 中详情页
+    风控的处理口径一致）。非致命类型（``not_found``：博主被删/不可见）**必须回退**
+    ——它在 ``scraper_common`` 里的语义是「跳过当前条目」，从这里抛出去会被
+    ``run_scraper`` 的兜底 ``except`` 当成整轮失败（原因写成「笔记不存在或已被删除」），
+    把一个可跳过的状态升级成任务失败。
 
     Args:
         profile_url: 博主主页 URL。
@@ -579,11 +591,14 @@ def try_fetch_blogger_notes(
     try:
         scraper = XhsApiScraper(cookies)
         notes = scraper.blogger_notes(user_id, max_notes, delay)
-    except ScraperBlockedError:
+    except ScraperBlockedError as e:
         if scraper:
             scraper.close()
-        raise
-    except Exception as e:  # 任何非风控失败都回退，保证不劣于改造前
+        if e.is_fatal:
+            raise
+        print(f"  接口不可用（{e.message}），回退详情页路径")
+        return None
+    except Exception as e:  # 其他非风控失败同样回退，保证不劣于改造前
         if scraper:
             scraper.close()
         print(f"  接口采集不可用（{type(e).__name__}: {str(e)[:100]}），回退详情页路径")

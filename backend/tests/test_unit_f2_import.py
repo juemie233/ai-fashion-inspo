@@ -1617,6 +1617,34 @@ def test_parse_new_naming_with_author_prefix_and_underscore_in_body():
     assert parsed.index == 3
 
 
+def test_parse_new_naming_with_empty_body():
+    """正文为空的作品（f2 的 {desc} 可为空）必须仍按新命名解析。
+
+    回归：此前新正则要求正文非空，`{create}__{aweme_id}_{kind}`（连续两个下划线）
+    落回旧正则被当成「正文里含作品 ID 的旧文件」——作品 ID 与原帖链接静默丢失。
+    """
+    parsed = f2.parse_media_filename(
+        Path("A") / f"2025-01-01 10-00-00__{AWEME}_video.mp4", "A"
+    )
+
+    assert parsed is not None
+    assert parsed.aweme_id == AWEME
+    assert parsed.body == ""
+    assert f2.source_url_for(parsed) == f"https://www.douyin.com/video/{AWEME}"
+    assert f2.platform_id_for(parsed) == f"f2:{AWEME}#video"
+
+
+def test_old_naming_body_ending_with_digits_still_uses_old_regex():
+    """正文与作品 ID 之间没有分隔下划线时不误判为新命名（放宽 body 的守界）。"""
+    parsed = f2.parse_media_filename(
+        Path("A") / f"2025-01-01 10-00-00_正文{AWEME}_image_1.webp", "A"
+    )
+
+    assert parsed is not None
+    assert parsed.aweme_id == ""            # 数字紧贴正文 → 不是作品 ID
+    assert parsed.body == f"正文{AWEME}"
+
+
 def test_parse_old_naming_still_works():
     """旧命名的历史文件必须照旧能解析（Download/ 目录新旧混放）。"""
     parsed = f2.parse_media_filename(
