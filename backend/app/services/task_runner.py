@@ -44,6 +44,7 @@ from app.services.task_runners.enrich_blogger_profile import (
 )
 from app.services.task_runners.f2_import import (
     create_f2_import_task,
+    create_f2_import_task_if_idle,
     execute_f2_import,
     f2_import_status,
     get_f2_auto_status,

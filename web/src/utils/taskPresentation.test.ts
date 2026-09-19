@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   describeRunningTask,
   formatKeywords,
+  isCancelableTaskType,
   isPausableTaskType,
   normalizeQueueTask,
   normalizeScraperTask,
@@ -89,29 +90,52 @@ describe('summarizeResult', () => {
     expect(summarizeResult('some_new_type', { foo: 1 }, null)).toBe('')
   })
 
-  it('f2_import 拼接入库量与待入库量', () => {
+  it('f2_import 入库量与计划量一致时只显示入库数', () => {
     const text = summarizeResult(
       'f2_import',
       { plan: { files: 12, skipped: { '已在库（内容相同）': 300 } }, import: { imported: 12 } },
       null,
     )
-    expect(text).toBe('入库 12 · 待入库 12')
+    expect(text).toBe('入库 12')
   })
 
-  it('f2_import 有垃圾桶跳过时单独标注（0 时不展示）', () => {
-    const withTrash = summarizeResult(
+  it('f2_import 有失败时补出计划量（完成态不再说「待入库」）', () => {
+    const text = summarizeResult(
+      'f2_import',
+      { plan: { files: 12 }, import: { imported: 10, failed: 2 } },
+      null,
+    )
+    expect(text).toBe('入库 10 · 计划 12')
+  })
+
+  it('f2_import 垃圾桶计数优先读结构化字段 trash_skipped', () => {
+    const text = summarizeResult(
       'f2_import',
       {
-        plan: { files: 0, skipped: { '已在垃圾桶（不重新导入）': 3 } },
+        plan: { files: 0, trash_skipped: 3, skipped: {} },
         import: { imported: 0 },
       },
       null,
     )
-    expect(withTrash).toContain('已在垃圾桶 3')
+    expect(text).toContain('已在垃圾桶 3')
+  })
 
+  it('f2_import 旧任务结果回退解析中文跳过原因', () => {
+    const legacy = summarizeResult(
+      'f2_import',
+      {
+        plan: { files: 0, skipped: { '已在垃圾桶（不重新导入）': 2 } },
+        import: { imported: 0 },
+      },
+      null,
+    )
+    expect(legacy).toContain('已在垃圾桶 2')
+  })
+
+  it('f2_import 垃圾桶计数为 0 时不展示', () => {
     const none = summarizeResult(
       'f2_import',
-      { plan: { files: 5, skipped: {} }, import: { imported: 5 } },
+      { plan: { files: 5, trash_skipped: 0, skipped: {} }, import: { imported: 5 } },
       null,
     )
     expect(none).not.toContain('垃圾桶')
@@ -225,11 +249,12 @@ describe('formatKeywords / parseMaxCount', () => {
   })
 })
 
-describe('isPausableTaskType（AI 标签分析批量/组合 + 标签网络分析可暂停）', () => {
-  it('三类任务返回 true', () => {
+describe('isPausableTaskType（批量/组合分析、标签网络分析、f2 一键获取可暂停）', () => {
+  it('四类任务返回 true', () => {
     expect(isPausableTaskType('tag_network_analyze')).toBe(true)
     expect(isPausableTaskType('batch_analyze')).toBe(true)
     expect(isPausableTaskType('multi_analyze')).toBe(true)
+    expect(isPausableTaskType('f2_import')).toBe(true)
   })
 
   it('其他任务类型返回 false', () => {
@@ -237,5 +262,23 @@ describe('isPausableTaskType（AI 标签分析批量/组合 + 标签网络分析
     expect(isPausableTaskType('face_scan')).toBe(false)
     expect(isPausableTaskType('deduplicate')).toBe(false)
     expect(isPausableTaskType('')).toBe(false)
+  })
+})
+
+describe('isCancelableTaskType（运行中可取消：与后端白名单对齐）', () => {
+  it('f2 一键获取素材运行中可取消（执行器有停止逻辑，入口不能缺）', () => {
+    expect(isCancelableTaskType('f2_import')).toBe(true)
+  })
+
+  it('人脸扫描/匹配与标签网络分析同样可取消', () => {
+    expect(isCancelableTaskType('face_scan')).toBe(true)
+    expect(isCancelableTaskType('face_match')).toBe(true)
+    expect(isCancelableTaskType('tag_network_analyze')).toBe(true)
+  })
+
+  it('批量分析等不支持运行中取消（只能暂停）', () => {
+    expect(isCancelableTaskType('batch_analyze')).toBe(false)
+    expect(isCancelableTaskType('quality_check')).toBe(false)
+    expect(isCancelableTaskType('')).toBe(false)
   })
 })

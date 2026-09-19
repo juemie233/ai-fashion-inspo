@@ -6,6 +6,11 @@
  * 密度切换按钮与网格列数 / 间距由本组件统一管理，供素材库 / 剪裁等页面复用，
  * 避免各页面重复实现密度控制与网格样式。密度为 v-model：父组件持有状态并自行持久化。
  *
+ * 列数策略：
+ * - 默认「自适应」：auto-fill + minmax(下限, 1fr)，列数随容器宽度变化；
+ * - 传入 :columns="{ compact, standard, comfortable }" 则改为**每档固定列数**
+ *   （用 minmax(0, 1fr) 保证单元可收缩，图片不会把轨道顶宽而溢出）。
+ *
  * 用法：
  *   <DensityImageGrid v-model:density="density">
  *     <template #header-left> …工具栏内容（可选）… </template>
@@ -13,7 +18,16 @@
  *   </DensityImageGrid>
  */
 
+import { computed } from 'vue'
+
 export type DensityMode = 'compact' | 'standard' | 'comfortable'
+
+/** 每档固定列数（传 columns 时使用） */
+export interface DensityColumns {
+  compact: number
+  standard: number
+  comfortable: number
+}
 
 /** 密度选项展示文案（与素材库页面一致） */
 const DENSITY_OPTIONS: { label: string; value: DensityMode }[] = [
@@ -22,22 +36,32 @@ const DENSITY_OPTIONS: { label: string; value: DensityMode }[] = [
   { label: '宽松', value: 'comfortable' },
 ]
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     /** 当前密度（v-model），默认为标准 */
     density?: DensityMode
     /** 是否展示密度切换按钮组，默认展示 */
     showSwitch?: boolean
+    /** 固定列数覆盖（不传则按密度用 auto-fill 自适应列数） */
+    columns?: DensityColumns
   }>(),
   {
     density: 'standard',
     showSwitch: true,
+    columns: undefined,
   },
 )
 
 const emit = defineEmits<{
   (e: 'update:density', v: DensityMode): void
 }>()
+
+/** 固定列数模式下由内联样式覆盖 grid-template-columns（间距仍用密度类） */
+const bodyStyle = computed(() => {
+  const count = props.columns?.[props.density]
+  if (!count) return undefined
+  return { gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }
+})
 </script>
 
 <template>
@@ -58,7 +82,7 @@ const emit = defineEmits<{
     </div>
 
     <!-- 网格主体：密度决定列数与间距，默认插槽内容直接作为网格单元 -->
-    <div :class="['density-grid-body', 'density-' + density]">
+    <div :class="['density-grid-body', 'density-' + density]" :style="bodyStyle">
       <slot />
     </div>
   </div>

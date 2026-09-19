@@ -34,16 +34,34 @@ export interface QueueTask {
  * - tag_network_analyze：标签网络分析（断点续算）
  * - batch_analyze / multi_analyze：AI 标签分析的批量/组合分析（worker 执行，
  *   暂停后恢复按「已成功跳过」幂等续算）
+ * - f2_import：一键获取素材（已下载文件与已入库素材保留，恢复按内容判重续算）
  */
 export const PAUSABLE_TASK_TYPES = [
   'tag_network_analyze',
   'batch_analyze',
   'multi_analyze',
+  'f2_import',
 ] as const
 
 /** 判断任务类型是否支持暂停/恢复（任务列表与批量任务卡片的按钮显示统一走这里） */
 export function isPausableTaskType(type: string): boolean {
   return (PAUSABLE_TASK_TYPES as readonly string[]).includes(type)
+}
+
+/** 支持「运行中取消」的任务类型（与后端 _CANCELABLE_RUNNING_TYPES 对齐）：
+ * - face_scan / face_match：人脸扫描与匹配（增量语义，重跑自动跳过已扫部分）
+ * - f2_import：一键获取素材（取消后已下载文件与已入库素材保留）
+ */
+export const CANCELABLE_TASK_TYPES = [
+  'face_scan',
+  'face_match',
+  'tag_network_analyze',
+  'f2_import',
+] as const
+
+/** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */
+export function isCancelableTaskType(type: string): boolean {
+  return (CANCELABLE_TASK_TYPES as readonly string[]).includes(type)
 }
 
 /** 采集任务原始条目（/api/scraper/tasks 返回项） */
@@ -126,13 +144,18 @@ export function summarizeResult(
       // f2 一键获取素材：本次入库量 + 导入计划的分层跳过。
       // 「已在垃圾桶」单独列出——它意味着用户主动丢弃过该内容，不会重新导入，
       // 想恢复要去垃圾桶还原（数字为 0 时不展示，避免日常噪音）。
+      // 计数优先读结构化字段 plan.trash_skipped（后端跳过原因的中文文案改动
+      // 不该让前端静默失效）；旧任务结果没有该字段时回退解析文案。
       const plan = (r.plan || {}) as Record<string, unknown>
       const skipped = (plan.skipped || {}) as Record<string, number>
       const imported = (r.import || {}) as Record<string, unknown>
-      const trash = Number(skipped['已在垃圾桶（不重新导入）']) || 0
+      const importedCount = Number(imported.imported ?? 0) || 0
+      const planned = Number(plan.files ?? 0) || 0
+      const trash = Number(plan.trash_skipped ?? skipped['已在垃圾桶（不重新导入）'] ?? 0) || 0
       return [
         imported.imported != null ? `入库 ${imported.imported}` : '',
-        plan.files != null ? `待入库 ${plan.files}` : '',
+        // 计划数与实际入库数一致时不重复展示；不一致（有失败）才补一句计划量
+        planned && planned !== importedCount ? `计划 ${planned}` : '',
         trash ? `已在垃圾桶 ${trash}` : '',
       ]
         .filter(Boolean)

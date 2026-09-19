@@ -276,7 +276,11 @@ async function createTask() {
 </script>
 
 <template>
-  <a-card title="新建采集任务" style="margin-bottom: 16px" size="small">
+  <a-card
+    title="新建 CDP 采集任务（小红书 / 抖音搜索、博主页）"
+    style="margin-bottom: 16px"
+    size="small"
+  >
     <a-form
       :model="{ formPlatform, formKeywords, formMaxCount, formSortMode, formCdp, formCdpPort }"
       label-align="left"

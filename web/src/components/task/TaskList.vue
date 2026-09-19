@@ -14,15 +14,22 @@ import {
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
-import { isPausableTaskType } from '@/utils/taskPresentation'
 import { formatDate, renderTimeCell } from '@/utils/format'
+import { isCancelableTaskType, isPausableTaskType } from '@/utils/taskPresentation'
 
-defineProps<{ tasks: UnifiedTask[]; loading: boolean }>()
+const props = defineProps<{
+  tasks: UnifiedTask[]
+  loading: boolean
+  /** 该行是否可点开「查看结果」（按域决定：目前只有 f2 一键获取的批次结果可浏览）；
+   *  不传则「操作」列不出现该按钮 */
+  canViewResults?: (t: UnifiedTask) => boolean
+}>()
 const emit = defineEmits<{
   cancel: [t: UnifiedTask]
   delete: [t: UnifiedTask]
   pause: [t: UnifiedTask]
   resume: [t: UnifiedTask]
+  results: [t: UnifiedTask]
 }>()
 
 /** 进度列：队列任务显示百分比进度条，采集任务运行中显示加载态 */
@@ -132,10 +139,22 @@ const columns: TableColumnData[] = [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 180,
+    width: 220,
     render: ({ record }) => {
       const row = record as UnifiedTask
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
+        // 结果浏览入口（按域开关，如 f2 一键获取的批次结果）：由调用方决定哪些行可点开
+        props.canViewResults?.(row)
+          ? h(
+              Button,
+              {
+                size: 'small',
+                type: 'outline',
+                onClick: () => emit('results', row),
+              },
+              { default: () => '查看结果' },
+            )
+          : null,
         // 可暂停任务（标签网络分析/批量分析/组合分析）：运行中可暂停、已暂停可恢复
         isPausableTaskType(row.type) && row.status === 'running'
           ? h(
@@ -159,6 +178,26 @@ const columns: TableColumnData[] = [
                 onClick: () => emit('resume', row),
               },
               { default: () => '恢复' },
+            )
+          : null,
+        // 可取消的运行中任务（人脸扫描/匹配、标签网络分析、一键获取素材）：
+        // 后端标记 cancelled，执行器按批/按文件感知后自行停止；产物（已下载文件、
+        // 已入库素材、已扫描增量）都保留，重跑幂等跳过
+        row.source === 'queue' && isCancelableTaskType(row.type) && row.status === 'running'
+          ? h(
+              Popconfirm,
+              {
+                content: '确定取消该任务？已下载的文件与已入库的素材都会保留，重跑自动跳过。',
+                onOk: () => emit('cancel', row),
+              },
+              {
+                default: () =>
+                  h(
+                    Button,
+                    { size: 'small', type: 'outline', status: 'danger' },
+                    { default: () => '取消' },
+                  ),
+              },
             )
           : null,
         row.status === 'pending'

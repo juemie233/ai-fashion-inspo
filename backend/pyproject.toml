@@ -14,8 +14,13 @@ select = ["E", "W", "F", "B", "UP"]
 ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
-# 迁移脚本与配置入口允许宽泛异常捕获
-"app/db_migrations.py" = ["B902"]
+# 迁移脚本允许裸 except（兜底补列时不让单个异常中断启动）
+# 注：原先写的 B902 不是 ruff 实现的规则（属 flake8-bugbear 独有），
+# 新版 ruff 会以 "Unknown rule selector" 直接拒绝整份配置，导致 ruff check 不可用
+"app/db_migrations.py" = ["E722"]
+# 任务执行器再导出层：这里刻意把各 task_runners 的公开符号转发出来（旧调用点
+# 仍 import app.services.task_runner），不是未使用导入
+"app/services/task_runner.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"
