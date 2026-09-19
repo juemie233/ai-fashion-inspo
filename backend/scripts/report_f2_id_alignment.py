@@ -22,6 +22,7 @@
     python -m scripts.report_f2_id_alignment --limit 1          # 先跑 1 个作者试算
     python -m scripts.report_f2_id_alignment --output report.json
     python -m scripts.report_f2_id_alignment --authors 不养羊    # 指定作者
+    python -m scripts.report_f2_id_alignment --auto-cookie chrome  # 从浏览器读 Cookie
     python -m scripts.report_f2_id_alignment --disk-only        # 不发请求：只看磁盘侧风险画像
 
 不在联网也能得结论的部分
@@ -32,9 +33,13 @@
 
 Cookie（抖音作品清单接口对游客返回 403，实测）
 ---------------------------------------------
-优先 `--cookie` / `--cookie-file`；都没有时读 f2 配置（`<f2-dir>/f2/conf/app.yaml`
-或 `<f2-dir>/conf/app.yaml`）。**注意**：f2 配置里如果只有 `UIFID_TEMP` 这类游客
-Cookie，枚举会 403——需要先用 `f2 dy --auto-cookie chrome`（需关闭浏览器）刷新。
+优先 `--cookie` / `--cookie-file`；也可以用 `--auto-cookie chrome` 从**本机浏览器**
+读（f2 同款机制，需先关闭该浏览器）；都没有时读 f2 配置
+（`<f2-dir>/f2/conf/app.yaml` 或 `<f2-dir>/conf/app.yaml`）。
+
+⚠ 实测即便补上**匿名** `ttwid`（`TokenManager.gen_ttwid()`，无需登录）也仍是 403，
+必须有真实登录态。另外注意：f2 配置里如果只有 `UIFID_TEMP` 这类游客 Cookie，
+枚举同样 403——那意味着项目的 f2 下载链路当时也是失败的。
 
 对齐键的精确性
 --------------
@@ -646,6 +651,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--cookie", default="", help="抖音 Cookie 字符串")
     parser.add_argument("--cookie-file", default="", help="从文件读 Cookie（JSON 或文本）")
+    parser.add_argument(
+        "--auto-cookie",
+        default="",
+        help=(
+            "从本机浏览器读抖音 Cookie（chrome/edge/firefox/chromium/brave/vivaldi…）。"
+            "会读取浏览器保存的登录凭证，执行前请关闭该浏览器"
+        ),
+    )
     parser.add_argument("--conf", default="", help="f2 配置文件路径（缺省自动定位）")
     parser.add_argument("--page-counts", type=int, default=DEFAULT_PAGE_COUNTS)
     parser.add_argument("--sleep", type=float, default=DEFAULT_PAGE_SLEEP, help="翻页间隔秒")
@@ -659,8 +672,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def cookie_from_browser(browser: str, domain: str = "douyin.com") -> str:
+    """从本机浏览器读指定域名的 Cookie（f2 的 `--auto-cookie` 同款机制）。
+
+    ⚠ 这会读取浏览器保存的 Cookie（含登录凭证）。**由使用者显式传 `--auto-cookie`
+    触发**——本工具不会替你决定去读。f2 官方要求执行前**关闭该浏览器**（Cookie
+    库被占用时读不到）。
+
+    Args:
+        browser: 浏览器名（chrome / edge / firefox / chromium / brave / vivaldi …）。
+        domain: 域名后缀过滤。
+
+    Returns:
+        `a=b; c=d` 形式的 Cookie 字符串。
+
+    Raises:
+        RuntimeError: 未装 f2，或该浏览器里没有该域名的 Cookie。
+    """
+    try:
+        from f2.utils.utils import get_cookie_from_browser, split_dict_cookie
+    except ImportError as e:  # pragma: no cover - 未装 f2 的环境
+        raise RuntimeError("未安装 f2，无法使用 --auto-cookie") from e
+
+    cookie = split_dict_cookie(get_cookie_from_browser(browser, domain))
+    if not cookie:
+        raise RuntimeError(
+            f"无法从 {browser} 浏览器中获取 {domain} 的 Cookie"
+            "（请先关闭该浏览器，并确认已登录抖音）"
+        )
+    return cookie
+
+
 def resolve_cookie(args: argparse.Namespace, f2_dir: Path) -> str:
-    """按优先级取 Cookie：--cookie > --cookie-file > f2 配置。"""
+    """按优先级取 Cookie：--cookie > --cookie-file > --auto-cookie > f2 配置。"""
     if args.cookie:
         return normalize_cookie(args.cookie)
     if args.cookie_file:
@@ -668,6 +712,13 @@ def resolve_cookie(args: argparse.Namespace, f2_dir: Path) -> str:
             return normalize_cookie(Path(args.cookie_file).read_text(encoding="utf-8"))
         except OSError as e:
             print(f"⚠️  读 Cookie 文件失败：{e}")
+    if getattr(args, "auto_cookie", ""):
+        try:
+            cookie = cookie_from_browser(args.auto_cookie)
+            print(f"已从 {args.auto_cookie} 浏览器读取 Cookie")
+            return cookie
+        except Exception as e:  # noqa: BLE001 —— 读不到就继续回落，别中断
+            print(f"⚠️  --auto-cookie {args.auto_cookie} 失败：{str(e)[:160]}")
     conf = Path(args.conf) if args.conf else find_conf_path(f2_dir)
     return normalize_cookie(read_cookie_from_conf(conf)) if conf else ""
 
@@ -700,7 +751,8 @@ def main(argv: list[str] | None = None) -> int:
     if not cookie:
         print(
             "❌ 没有 Cookie。抖音作品清单接口对游客返回 403，必须提供登录态 Cookie：\n"
-            "   --cookie '<cookie 串>' / --cookie-file <文件> / 或先刷新 f2 配置里的 cookie"
+            "   --cookie '<cookie 串>' / --cookie-file <文件> / --auto-cookie chrome"
+            "（需先关闭浏览器）/ 或先刷新 f2 配置里的 cookie"
         )
         return 1
     names = cookie_field_names(cookie)

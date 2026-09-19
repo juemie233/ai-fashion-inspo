@@ -126,6 +126,72 @@ def test_resolve_cookie_reads_browser_extension_export(tmp_path):
     assert rep.looks_logged_out(cookie) is False
 
 
+# ── --auto-cookie：从本机浏览器读（打桩，不碰真实浏览器）──
+
+
+def _args(**kw):
+    class Args:
+        pass
+
+    args = Args()
+    args.cookie = ""
+    args.cookie_file = ""
+    args.auto_cookie = ""
+    args.conf = ""
+    for key, value in kw.items():
+        setattr(args, key, value)
+    return args
+
+
+def test_resolve_cookie_auto_cookie_is_used_before_conf(tmp_path, monkeypatch):
+    """--auto-cookie 优先于 f2 配置里的（可能过期的游客）Cookie。"""
+    _write(tmp_path / "conf" / "app.yaml", b"cookie: UIFID_TEMP=stale\n")
+    monkeypatch.setattr(
+        rep, "cookie_from_browser", lambda browser, domain="douyin.com": "sessionid=fresh"
+    )
+
+    assert rep.resolve_cookie(_args(auto_cookie="chrome"), tmp_path) == "sessionid=fresh"
+
+
+def test_resolve_cookie_auto_cookie_failure_falls_back_to_conf(tmp_path, monkeypatch, capsys):
+    """读浏览器失败（没关浏览器/没登录）不能中断，要回落并给出可读提示。"""
+
+    def boom(browser, domain="douyin.com"):
+        raise RuntimeError("无法从 chrome 浏览器中获取 Cookie")
+
+    monkeypatch.setattr(rep, "cookie_from_browser", boom)
+    _write(tmp_path / "conf" / "app.yaml", b"cookie: UIFID_TEMP=fallback\n")
+
+    cookie = rep.resolve_cookie(_args(auto_cookie="chrome"), tmp_path)
+
+    assert cookie == "UIFID_TEMP=fallback"
+    assert "auto-cookie chrome 失败" in capsys.readouterr().out
+
+
+def test_resolve_cookie_explicit_flag_beats_auto_cookie(tmp_path, monkeypatch):
+    """显式给的 Cookie 优先级最高，不应被浏览器读取覆盖。"""
+    monkeypatch.setattr(
+        rep, "cookie_from_browser", lambda browser, domain="douyin.com": "sessionid=browser"
+    )
+
+    cookie = rep.resolve_cookie(
+        _args(cookie="sessionid=explicit", auto_cookie="chrome"), tmp_path
+    )
+
+    assert cookie == "sessionid=explicit"
+
+
+def test_cookie_from_browser_raises_when_empty(monkeypatch):
+    """浏览器里没有抖音 Cookie 时要报明确原因，而不是返回空串让下游困惑。"""
+    import f2.utils.utils as f2u
+
+    monkeypatch.setattr(f2u, "get_cookie_from_browser", lambda b, d="": {})
+    monkeypatch.setattr(f2u, "split_dict_cookie", lambda d: "")
+
+    with pytest.raises(RuntimeError, match="无法从 chrome 浏览器"):
+        rep.cookie_from_browser("chrome")
+
+
 # ═══════════════════════════════════════════════════════════════
 #  文件名主干（对齐键）
 # ═══════════════════════════════════════════════════════════════
