@@ -215,4 +215,24 @@ describe('useF2Results', () => {
     expect(r.items.value).toEqual([])
     expect(r.counts.value.total).toBe(0)
   })
+
+  it('登记博主：提交本批补登记并汇总提示，随后按当前筛选重新拉取', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValue(respond(THREE))
+    mocks.post.mockResolvedValue({
+      data: { created: 5, reused: 2, linked: 9, existing: 0, ambiguous: 1, task_id: 338 },
+    })
+    const r = useF2Results()
+    await r.open(338)
+    resetGet()
+
+    await r.registerBloggers()
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-tasks/338/results/register-bloggers')
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('新建博主 5 个'))
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('同名多候选已跳过'))
+    expect(mocks.get).toHaveBeenCalled() // 动作后刷新
+    expect(r.acting.value).toBe(false)
+    success.mockRestore()
+  })
 })

@@ -115,6 +115,9 @@ export interface F2ImportOptions {
   mode?: 'post' | 'like'
   /** mode=like 时的「我的主页链接 / sec_user_id」（缺省用后端已保存的配置） */
   like_user?: string
+  /** mode=like 时：入库后把未登记的来源作者补建成抖音博主并绑定素材（缺省开；
+   *  补建的博主标记为「自动登记」，不算已登记博主、不进一键获取素材的下载白名单） */
+  register_bloggers?: boolean
 }
 
 export function useF2Import() {

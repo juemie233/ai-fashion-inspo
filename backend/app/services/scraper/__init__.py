@@ -8,6 +8,7 @@
 - ``extension.py``：浏览器插件会话任务记录
 - ``results.py``：统计看板 / 任务结果列表 / 结果批量移入垃圾桶
 - ``f2_results.py``：f2 一键获取的批次结果浏览与审查（按批次清单定位本批素材）
+- ``f2_bloggers.py``：f2 入库后补建来源作者博主并绑定素材（自动登记，不进下载白名单）
 
 ``scraper_service.py`` 保留为兼容薄壳（re-export 全部符号），既有引用不变。
 """
@@ -70,6 +71,7 @@ from app.services.scraper.f2_results import (
     RESULT_FILTERS,
     delete_f2_task_results,
     get_f2_task_results,
+    register_f2_task_bloggers,
     restore_f2_task_results,
     trash_f2_task_results,
 )
@@ -131,6 +133,7 @@ __all__ = [
     "RESULT_FILTERS",
     "delete_f2_task_results",
     "get_f2_task_results",
+    "register_f2_task_bloggers",
     "restore_f2_task_results",
     "trash_f2_task_results",
     # 兼容

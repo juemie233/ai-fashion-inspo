@@ -1423,6 +1423,146 @@ async def test_execute_f2_import_like_mode_keeps_unregistered_authors(
         )
 
 
+async def _run_like_import(**kwargs) -> int:
+    """跑一次「我的喜欢」导入（临时目录 + 临时库），返回任务 id。"""
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="like", **kwargs
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+    return task_id
+
+
+async def test_execute_f2_import_like_mode_registers_source_authors(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """「我的喜欢」入库后：未登记的来源作者自动建成抖音博主并绑定本批素材。
+
+    同时锁死两个口径：
+      - 补建的博主标记「自动登记」，**不算已登记博主**（不进下载白名单）
+      - 素材归属指向原作者的博主记录（而不是「我的账号」）
+    """
+    from sqlalchemy import select
+
+    from app.models.person import Blogger, InspirationBlogger
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+
+    task_id = await _run_like_import()
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        stats = stored.result["bloggers"]
+        assert stats["created"] == 1 and stats["linked"] == 2
+        bloggers = (await db.execute(select(Blogger))).scalars().all()
+        assert [(b.name, b.platform, b.source) for b in bloggers] == [
+            ("不养羊", "douyin", "auto_collect")
+        ]
+        links = (await db.execute(select(InspirationBlogger))).scalars().all()
+        assert {link.blogger_id for link in links} == {bloggers[0].id}
+        assert len(links) == 2
+
+    # 白名单口径：自动登记的博主不算「已登记博主」→ 不会进一键获取素材的下载名单
+    assert f2.load_douyin_bloggers() == {}
+    assert "不养羊" in f2.load_douyin_bloggers(include_auto=True)
+
+
+async def test_execute_f2_import_like_mode_can_skip_blogger_registration(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """建任务时关掉自动登记：素材照常入库，但不动博主库。"""
+    from sqlalchemy import select
+
+    from app.models.person import Blogger
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+
+    task_id = await _run_like_import(register_bloggers=False)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert "bloggers" not in stored.result
+        assert stored.result["import"]["imported"] == 2
+        assert (await db.execute(select(Blogger))).scalars().all() == []
+
+
+async def test_execute_f2_import_post_mode_does_not_register_bloggers(
+    client, f2_tree, auto_settings, monkeypatch
+):
+    """发布模式不自动建博主：那条链路的作者本来就受白名单约束，口径不同不混用。"""
+    from sqlalchemy import select
+
+    from app.models.person import Blogger
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+
+    task_id = await _import_once()
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert "bloggers" not in stored.result
+        assert (await db.execute(select(Blogger))).scalars().all() == []
+
+
+async def test_f2_task_register_bloggers_endpoint_backfills_and_is_idempotent(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """结果面板「登记博主」：为关掉自动登记/更早的批次手工回填，重复点幂等。"""
+    from sqlalchemy import select
+
+    from app.models.person import Blogger, InspirationBlogger
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+    task_id = await _run_like_import(register_bloggers=False)
+
+    first = client.post(f"/api/scraper/f2-tasks/{task_id}/results/register-bloggers").json()
+    assert first["created"] == 1 and first["linked"] == 2 and first["task_id"] == task_id
+
+    again = client.post(f"/api/scraper/f2-tasks/{task_id}/results/register-bloggers").json()
+    assert again["created"] == 0 and again["reused"] == 1
+    assert again["linked"] == 0 and again["existing"] == 2  # 已建立的关联不重复计数
+
+    async with async_session() as db:
+        assert len((await db.execute(select(Blogger))).scalars().all()) == 1
+        assert len((await db.execute(select(InspirationBlogger))).scalars().all()) == 2
+
+
+def test_f2_register_bloggers_endpoint_404_for_other_task_type(client):
+    """非 f2 任务不能借这个接口建博主。"""
+    assert (
+        client.post("/api/scraper/f2-tasks/999999/results/register-bloggers").status_code == 404
+    )
+
+
+async def test_promote_auto_registered_blogger_enters_download_whitelist(
+    client, auto_settings
+):
+    """「纳入追踪」：source 改回 manual，之后就算已登记博主（进下载白名单）。"""
+    from app.models.person import Blogger
+
+    async with async_session() as db:
+        blogger = Blogger(name="点赞过的作者", platform="douyin", source="auto_collect")
+        db.add(blogger)
+        await db.commit()
+        await db.refresh(blogger)
+        blogger_id = blogger.id
+
+    assert f2.load_douyin_bloggers() == {}  # 自动登记：不算已登记博主
+
+    body = client.post(f"/api/bloggers/{blogger_id}/promote").json()
+
+    assert body["source"] == "manual"
+    assert "点赞过的作者" in f2.load_douyin_bloggers()
+
+
 async def test_execute_f2_import_like_mode_requires_like_user(
     client, f2_like_tree, auto_settings, monkeypatch
 ):

@@ -18,10 +18,11 @@ import { usePersonsStore, type PersonKind } from '@/stores/persons'
 import type { Person } from '@shared/types/person'
 import { PERSON_PLATFORM_LABELS } from '@shared/types/person'
 
-/** 来源中文映射 */
+/** 来源中文映射（auto_collect：「我的喜欢」入库时按来源作者自动登记的博主） */
 export const SOURCE_LABELS: Record<string, string> = {
   manual: '手动',
   ai_generated: 'AI 生成',
+  auto_collect: '自动登记',
 }
 
 export function usePersonList(kind: PersonKind) {
@@ -140,6 +141,25 @@ export function usePersonList(kind: PersonKind) {
     }
   }
 
+  /**
+   * 「纳入追踪」：把「我的喜欢」自动登记的博主转为已登记博主。
+   *
+   * 自动登记的博主算素材归属、但不算已登记博主，所以「一键获取素材（博主主页）」
+   * 不会去下载 TA 的主页作品（避免点赞几百个作者后被一次性全量翻页）。用户确认要
+   * 追踪时点这个按钮，source 改回 manual 即进下载白名单。
+   */
+  async function handlePromote(person: Person) {
+    try {
+      await bloggersApi.promote(person.id)
+      Message.success(
+        `已把「${person.name}」纳入追踪：后续「一键获取素材」会增量下载 TA 的主页作品`,
+      )
+      await store.load(true)
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '纳入追踪失败'))
+    }
+  }
+
   /** 跳转人物详情：携带列表上下文（kind/页码/搜索/平台/排序），详情页返回或刷新后可恢复 */
   function goDetail(person: Person) {
     const query: Record<string, string> = { kind }
@@ -203,6 +223,20 @@ export function usePersonList(kind: PersonKind) {
             },
           ),
           h('span', { class: 'person-name' }, row.name),
+          // 「我的喜欢」入库时自动登记的博主：算素材归属但不算已登记博主（不进下载
+          // 白名单），列表里明确标出来，用户点「纳入追踪」后才开始抓主页作品
+          row.source === 'auto_collect'
+            ? h(
+                Tag,
+                {
+                  size: 'small',
+                  color: 'orange',
+                  title:
+                    '由「我的喜欢」采集自动登记；点「纳入追踪」后才会进「一键获取素材」的下载白名单',
+                },
+                { default: () => '自动登记' },
+              )
+            : null,
         ])
       },
     },
@@ -296,6 +330,24 @@ export function usePersonList(kind: PersonKind) {
             { size: 'small', type: 'secondary', onClick: () => openEdit(row) },
             { default: () => '编辑' },
           ),
+          // 自动登记的博主（我的喜欢来源作者）：一键纳入追踪白名单
+          kind === 'blogger' && row.source === 'auto_collect'
+            ? h(
+                Popconfirm,
+                {
+                  content: `把「${row.name}」纳入追踪？之后「一键获取素材」会增量下载 TA 的主页作品（f2 要翻页，作者多时较慢）。`,
+                  onOk: () => handlePromote(row),
+                },
+                {
+                  default: () =>
+                    h(
+                      Button,
+                      { size: 'small', type: 'outline', status: 'warning' },
+                      { default: () => '纳入追踪' },
+                    ),
+                },
+              )
+            : null,
           h(
             Popconfirm,
             {
@@ -361,6 +413,7 @@ export function usePersonList(kind: PersonKind) {
     openCreate,
     openEdit,
     handleDelete,
+    handlePromote,
     goDetail,
     onSearchKeydown,
     columns,

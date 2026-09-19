@@ -230,6 +230,15 @@ export const bloggersApi = {
     return data
   },
 
+  /**
+   * 把「自动登记」的博主纳入追踪（source 改回 manual）：
+   * 之后「一键获取素材（博主主页）」会增量下载 TA 的主页新作品。
+   */
+  async promote(bloggerId: number): Promise<Blogger> {
+    const { data } = await apiClient.post<Blogger>(`/bloggers/${bloggerId}/promote`)
+    return data
+  },
+
   /** 查询人物组完整信息（组内各账号 + 主账号） */
   async fetchGroupInfo(groupId: number): Promise<PersonGroupInfo> {
     const { data } = await apiClient.get<PersonGroupInfo>(`/bloggers/groups/${groupId}`)

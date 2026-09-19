@@ -66,6 +66,7 @@ async def create_f2_import_task(
     include_unknown_authors: bool = False,
     fetch_mode: str = "post",
     like_user: str | None = None,
+    register_bloggers: bool = True,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -85,6 +86,9 @@ async def create_f2_import_task(
         fetch_mode: ``post``（博主主页作品）或 ``like``（我的喜欢）。
         like_user: 「我的喜欢」用的主页链接 / sec_user_id（缺省取
             ``settings.f2_like_user``）。
+        register_bloggers: 「我的喜欢」入库后是否把未登记的来源作者补建成抖音博主
+            并绑定本批素材（默认 True；只对 like 模式生效）。补建的博主标记为
+            「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -106,6 +110,7 @@ async def create_f2_import_task(
             "include_unknown_authors": include_unknown_authors,
             "fetch_mode": fetch_mode,
             "like_user": like_user,
+            "register_bloggers": register_bloggers,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -505,6 +510,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "include_unknown_authors",
             "fetch_mode",
             "like_user",
+            "register_bloggers",
         )
         if key in raw_result
     }
@@ -518,6 +524,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 「我」的主页链接：点赞列表只有本人可见，任务没带就用配置里记住的那个
     like_user = str(opts.get("like_user") or settings.f2_like_user or "").strip()
     like_mode = fetch_mode == "like"
+    register_bloggers = bool(opts.get("register_bloggers", True))
     since_days = opts.get("since_days")
     if since_days is None:
         since_days = settings.f2_fetch_since_days
@@ -851,11 +858,43 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     status_now = await _current_status(db, task.id)
     interrupted = status_now in ("cancelled", "paused")
+
+    # ── 阶段 3b：「我的喜欢」补登记来源作者博主 ──
+    # 点赞列表天然跨作者，入库时大部分素材的作者在博主库里没有记录（实测 585 个
+    # 原作者里只有 20 个已登记），素材归属会空着。这一步把未登记的来源作者补建成
+    # 抖音博主并绑定本批素材（标记为「自动登记」：算博主但**不进下载白名单**，
+    # 避免下次一键获取突然去翻几百个主页）。
+    # 位置放在入库之后：清单里才有 inspiration_id 与作者；失败不影响已入库素材。
+    bloggers_stats: dict | None = None
+    if like_mode and register_bloggers and result.get("batch_file"):
+        task.result = {**task.result, "stage": "blogger"}
+        task.updated_at = utcnow()
+        await db.commit()
+        try:
+            entries = (await asyncio.to_thread(f2.load_batch_manifest, result["batch_file"]))[
+                "imported"
+            ]
+            from app.services.scraper.f2_bloggers import register_batch_bloggers
+
+            bloggers_stats = await register_batch_bloggers(db, entries)
+            logger.info(
+                f"f2「我的喜欢」博主登记：新建 {bloggers_stats['created']} 个、"
+                f"复用 {bloggers_stats['reused']} 个、绑定素材 {bloggers_stats['linked']} 条"
+                f"（同名多候选跳过 {bloggers_stats['ambiguous']} 个）"
+            )
+        except Exception as exc:  # noqa: BLE001 —— 素材已入库，登记失败不该让任务失败
+            await db.rollback()
+            bloggers_stats = None
+            task.error = f"来源作者博主自动登记失败（素材已入库，可在结果面板手工重试）：{exc}"
+            logger.warning(f"f2 自动登记博主失败：{exc}")
+
     task.result = {
         **task.result,
         "stage": "done",
         "import": {key: value for key, value in result.items() if key != "ids"},
     }
+    if bloggers_stats is not None:
+        task.result["bloggers"] = bloggers_stats
     # 被中断的任务进度停在当前值：写 100% 会让「已取消/已暂停」看起来像跑完了
     if not interrupted:
         task.progress = 100

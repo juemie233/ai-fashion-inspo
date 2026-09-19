@@ -48,6 +48,10 @@ async def create_f2_import(
     like_user: str | None = Query(
         None, description="mode=like 时用我的主页链接 / sec_user_id（缺省取已保存的配置）"
     ),
+    register_bloggers: bool = Query(
+        True,
+        description="mode=like 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -79,6 +83,9 @@ async def create_f2_import(
             发布时间过滤，窗口会漏掉「最近点赞的老视频」），也不做作者白名单
             （喜欢的作品天然跨作者），入库仍走五层判重。
         like_user: mode=like 时的「我的主页链接 / sec_user_id」（缺省取已保存配置）。
+        register_bloggers: mode=like 时，入库后是否把**未登记的来源作者**补建成抖音
+            博主并绑定本批素材（默认开）。补建的博主标记为「自动登记」，不算已登记
+            博主、不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
@@ -111,6 +118,7 @@ async def create_f2_import(
         include_unknown_authors=include_unknown_authors,
         fetch_mode=mode,
         like_user=(like_user or "").strip() or None,
+        register_bloggers=register_bloggers,
     )
     if task is None:
         return {
@@ -199,6 +207,19 @@ async def f2_task_results_delete(
     请求体: {"ids": [...]}
     """
     return await scraper_service.delete_f2_task_results(db, task_id, payload.get("ids") or [])
+
+
+@router.post("/f2-tasks/{task_id}/results/register-bloggers")
+async def f2_task_results_register_bloggers(
+    task_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """把本批未绑定博主的来源作者补登记为抖音博主并绑定素材（幂等，可重复点）。
+
+    自动路径在「我的喜欢」入库后（创建任务时的 ``register_bloggers``）；这个入口
+    用于手工回填：老批次、或建任务时关掉了自动登记。补建的博主标记为「自动登记」，
+    不进「一键获取素材」的下载白名单。
+    """
+    return await scraper_service.register_f2_task_bloggers(db, task_id)
 
 
 @router.put("/f2-auto")

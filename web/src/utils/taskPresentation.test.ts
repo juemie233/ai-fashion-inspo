@@ -149,6 +149,32 @@ describe('summarizeResult', () => {
     )
     expect(text).toBe('我的喜欢 · 入库 7')
   })
+
+  it('f2_import 报告自动登记的来源作者博主数（为 0 时不占版面）', () => {
+    const withBloggers = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'like',
+        plan: { files: 7 },
+        import: { imported: 7 },
+        bloggers: { created: 12, linked: 7 },
+      },
+      null,
+    )
+    expect(withBloggers).toBe('我的喜欢 · 入库 7 · 新登记博主 12')
+
+    const none = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'like',
+        plan: { files: 7 },
+        import: { imported: 7 },
+        bloggers: { created: 0, linked: 0, reused: 3 },
+      },
+      null,
+    )
+    expect(none).not.toContain('博主')
+  })
 })
 
 describe('describeRunningTask', () => {
@@ -209,6 +235,12 @@ describe('describeRunningTask', () => {
     const text = describeRunningTask('f2_import', { stage: 'scan' }, 'running', 1, 1)
     expect(text).toContain('扫描与去重')
     expect(text).not.toContain('下载中')
+  })
+
+  it('入库后的博主登记阶段单独说明', () => {
+    const text = describeRunningTask('f2_import', { stage: 'blogger' }, 'running', 1, 1)
+    expect(text).toContain('登记来源作者博主')
+    expect(text).toContain('不进下载白名单')
   })
 })
 

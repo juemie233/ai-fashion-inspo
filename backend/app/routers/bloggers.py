@@ -414,6 +414,20 @@ async def update_blogger(
         raise HTTPException(status_code=409, detail=e.message)
 
 
+@router.post("/{blogger_id}/promote", response_model=BloggerOut)
+async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """把「自动登记」的博主纳入追踪（source 改回 manual）。
+
+    自动登记的博主来自「我的喜欢」入库时补建的来源作者：算博主、也算素材归属，
+    但**不算已登记博主**，因此不会被「一键获取素材（博主主页）」下载。用户确认
+    想追踪这个人时点这里，之后增量下载就会带上 TA 的主页作品。
+    """
+    try:
+        return await blogger_service.update(db, blogger_id, {"source": "manual"})
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+
+
 @router.delete("/{blogger_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> None:
     """删除博主：仅当该博主无关联素材时允许删除，否则返回 400。"""

@@ -59,6 +59,23 @@ const linkStub = defineComponent({
     return h('a', this.$slots.default?.())
   },
 })
+/** a-checkbox 桩：渲染真实 input[type=checkbox]，便于断言开关对提交参数的影响 */
+const checkboxStub = defineComponent({
+  name: 'ACheckbox',
+  props: { modelValue: { type: Boolean, default: false } },
+  emits: ['update:modelValue'],
+  render() {
+    return h('label', [
+      h('input', {
+        type: 'checkbox',
+        checked: this.modelValue,
+        onChange: (e: Event) =>
+          this.$emit('update:modelValue', (e.target as HTMLInputElement).checked),
+      }),
+      this.$slots.default?.(),
+    ])
+  },
+})
 
 function makeStatus(over: Record<string, unknown> = {}) {
   return {
@@ -99,6 +116,7 @@ async function mountCard(status = makeStatus()) {
         'a-input': inputStub,
         'a-spin': spinStub,
         'a-link': linkStub,
+        'a-checkbox': checkboxStub,
       },
     },
   })
@@ -172,8 +190,35 @@ describe('F2LikeCard', () => {
         fetch: true,
         mode: 'like',
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        register_bloggers: true,
       },
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+
+  it('「同时登记穿搭博主」开关默认开，取消勾选后按 false 下发', async () => {
+    const wrapper = await mountCard(
+      makeStatus({
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        like_available: true,
+      }),
+    )
+    mocks.post.mockResolvedValue({ data: { task_id: 62, message: '已提交' } })
+
+    const checkbox = wrapper.find('.f2l-options input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    await checkbox.setValue(false)
+    await buttons(wrapper).submit.trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: {
+        fetch: true,
+        mode: 'like',
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        register_bloggers: false,
+      },
+    })
   })
 })

@@ -133,6 +133,17 @@ DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
 """
 LIKE_NAMING_TEMPLATE = "{nickname}_{create}_{desc}"
 
+"""「我的喜欢」入库后自动登记的博主所用的 `bloggers.source` 取值。
+
+为什么需要这个标记：点赞列表天然跨作者（实测 3452 个文件涉及 585 个原作者，
+其中只有 20 个已在博主库），入库时把这些来源作者补建成博主能让素材归属清楚；
+但**它们不该进 `一键获取素材` 的下载白名单**——否则下次增量下载会去翻 565 个
+主页的全部历史（f2 每页固定 sleep，量级是小时/天，且风控风险高）。
+:func:`load_douyin_bloggers` 默认把这些账号排除在「已登记博主」之外，
+用户在博主列表里确认后可以「纳入追踪」（source 改回 manual）。
+"""
+AUTO_BLOGGER_SOURCE = "auto_collect"
+
 """传给 f2 的日期窗口缺省天数（`-i`）。
 
 为什么必须给窗口：f2 的 `handle_user_post` 只在传了日期区间时才设 `min_cursor`，
@@ -646,11 +657,17 @@ def _split_by_trash(rows: Iterable[tuple[str, int]]) -> tuple[set[str], set[str]
     return live, trash
 
 
-def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
-    """读取库内抖音博主，按归一化名索引（用于作品绑定博主）。
+def load_douyin_bloggers(
+    db_path: Path | None = None, include_auto: bool = False
+) -> dict[str, list[dict]]:
+    """读取库内抖音博主，按归一化名索引（用于作品绑定博主 / 下载白名单）。
 
     Args:
         db_path: 数据库路径（缺省用 :func:`library_db_path`）。
+        include_auto: 是否连「自动登记」的博主（``source=AUTO_BLOGGER_SOURCE``，
+            由「我的喜欢」入库时补建）一起返回。默认 False：自动登记的账号**不算
+            已登记博主**，不进「一键获取素材」的下载白名单（见
+            :data:`AUTO_BLOGGER_SOURCE`）；用户确认后改回 manual 即视为已登记。
 
     Returns:
         归一化名 → [{"id", "name", "platform_user_id"}]（同名可能多条，故用列表）。
@@ -662,19 +679,30 @@ def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
         return {}
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
+        where = "platform = 'douyin'"
+        if not include_auto:
+            # source 为 NULL 的旧记录按「已登记」处理（自动登记一定会写这个标记）
+            where += f" AND (source IS NULL OR source != '{AUTO_BLOGGER_SOURCE}')"
         try:
             rows = conn.execute(
-                "SELECT id, name, platform_user_id FROM bloggers WHERE platform = 'douyin'"
+                f"SELECT id, name, platform_user_id FROM bloggers WHERE {where}"
             ).fetchall()
         except sqlite3.OperationalError:
-            # 迁移前的库副本 / 最小化测试库可能还没有 platform_user_id 列：
-            # 退回只读 id/name（此时匹配只能用昵称口径）
-            rows = [
-                (row[0], row[1], None)
-                for row in conn.execute(
-                    "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
+            # 迁移前的库副本 / 最小化测试库可能缺少 source 列：退回不过滤自动登记
+            # 的口径（此时无法区分自动登记，全部按已登记处理）
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, platform_user_id FROM bloggers "
+                    "WHERE platform = 'douyin'"
                 ).fetchall()
-            ]
+            except sqlite3.OperationalError:
+                # 连 platform_user_id 都没有：只剩 id/name（匹配只能用昵称口径）
+                rows = [
+                    (row[0], row[1], None)
+                    for row in conn.execute(
+                        "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
+                    ).fetchall()
+                ]
     finally:
         conn.close()
     indexed: dict[str, list[dict]] = defaultdict(list)

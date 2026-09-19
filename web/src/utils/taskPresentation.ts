@@ -149,6 +149,9 @@ export function summarizeResult(
       const plan = (r.plan || {}) as Record<string, unknown>
       const skipped = (plan.skipped || {}) as Record<string, number>
       const imported = (r.import || {}) as Record<string, unknown>
+      // 来源作者博主补登记（「我的喜欢」入库后）：只报新建数，复用/绑定不占版面
+      const bloggers = (r.bloggers || {}) as Record<string, unknown>
+      const bloggerCreated = Number(bloggers.created ?? 0) || 0
       const importedCount = Number(imported.imported ?? 0) || 0
       const planned = Number(plan.files ?? 0) || 0
       const trash = Number(plan.trash_skipped ?? skipped['已在垃圾桶（不重新导入）'] ?? 0) || 0
@@ -159,6 +162,7 @@ export function summarizeResult(
         // 计划数与实际入库数一致时不重复展示；不一致（有失败）才补一句计划量
         planned && planned !== importedCount ? `计划 ${planned}` : '',
         trash ? `已在垃圾桶 ${trash}` : '',
+        bloggerCreated ? `新登记博主 ${bloggerCreated}` : '',
       ]
         .filter(Boolean)
         .join(' · ')
@@ -227,6 +231,10 @@ export function describeRunningTask(
   }
   if (stage === 'import') {
     return `入库中：${count}个文件 · 复制文件并生成缩略图`
+  }
+  if (stage === 'blogger') {
+    // 「我的喜欢」入库后的补登记：点赞作者动辄几百个，这一步要逐个建博主并绑定素材
+    return '登记来源作者博主中：把未登记的点赞作者补建成抖音博主并绑定本批素材（不进下载白名单）'
   }
   if (stage === 'done') return '收尾中：写入统计与批次清单'
   return ''

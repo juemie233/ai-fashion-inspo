@@ -520,6 +520,37 @@ def test_select_known_authors_empty_bloggers_keeps_everyone():
     assert known == [] and len(unknown) == 1
 
 
+def test_load_douyin_bloggers_excludes_auto_registered(tmp_path, monkeypatch):
+    """「自动登记」的博主（我的喜欢来源作者）不算已登记博主：不进下载白名单。
+
+    include_auto=True 才返回它们（博主管理页确认后改回 manual 即视为已登记）。
+    """
+    db = tmp_path / "lib.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE bloggers (id INTEGER PRIMARY KEY, name TEXT, platform TEXT, "
+        "platform_user_id TEXT, source TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO bloggers VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, "里香", "douyin", "MS4x_lixiang", "manual"),
+            (2, "点赞过的作者", "douyin", None, f2.AUTO_BLOGGER_SOURCE),
+            (3, "老记录无 source", "douyin", None, None),
+            (4, "小红书博主", "xiaohongshu", None, "manual"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(f2, "library_db_path", lambda: db)
+
+    default = f2.load_douyin_bloggers()
+    assert set(default) == {"里香", "老记录无 source"}
+
+    with_auto = f2.load_douyin_bloggers(include_auto=True)
+    assert "点赞过的作者" in with_auto
+
+
 def test_run_fetch_skips_unregistered_authors(tmp_path, monkeypatch):
     """回归：一键/CLI 下载默认跳过未登记账号，不再把官方号的作品拉进下载目录。"""
     f2_dir = tmp_path / "f2proj"

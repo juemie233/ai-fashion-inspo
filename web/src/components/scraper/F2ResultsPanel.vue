@@ -61,6 +61,7 @@ const {
   trashSelected,
   restoreSelected,
   deleteSelected,
+  registerBloggers,
 } = useF2Results()
 
 // 打开面板即加载本批结果（任务 id 变化时重新拉取）
@@ -126,6 +127,12 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
           </template>
         </span>
         <span v-if="batchId" class="f2r-batch">批次 {{ batchId }}</span>
+        <!-- 来源作者补登记：自动路径在「我的喜欢」入库后；这里供老批次/关掉自动登记时手工补 -->
+        <a-tooltip
+          content="把本批未绑定博主的来源作者补建成抖音博主并绑定素材（幂等；补建的博主标记「自动登记」，不进一键获取素材的下载白名单）"
+        >
+          <a-button size="mini" :loading="acting" @click="registerBloggers">登记博主</a-button>
+        </a-tooltip>
         <a-button size="mini" :loading="loading" @click="reload()">刷新</a-button>
         <a-button size="mini" @click="emit('close')">收起</a-button>
       </div>

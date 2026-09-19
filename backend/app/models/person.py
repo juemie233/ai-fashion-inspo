@@ -46,7 +46,8 @@ class _PersonBaseFields:
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)  # 简介
     source: Mapped[str] = mapped_column(
         String(16), default="manual", index=True
-    )  # manual | ai_generated
+    )  # manual 手动 | ai_generated AI 创建 | auto_collect 采集自动登记（如「我的喜欢」
+    # 入库时补建的来源作者：算博主但**不算已登记**，不进「一键获取素材」下载白名单）
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, onupdate=utcnow

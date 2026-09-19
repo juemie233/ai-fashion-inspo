@@ -45,11 +45,15 @@ async function onSaveUser() {
   if (ok) likeUserTouched = false
 }
 
+/** 采集选项：入库后自动登记来源作者为穿搭博主（默认开） */
+const registerBloggers = ref(true)
+
 async function onSubmit() {
   const taskId = await submit({
     fetch: true,
     mode: 'like',
     like_user: likeUser.value.trim() || undefined,
+    register_bloggers: registerBloggers.value,
   })
   if (taskId) {
     emit('submitted')
@@ -80,6 +84,15 @@ async function onSubmit() {
       <a-spin v-if="statusLoading" :size="12" />
       <span>{{ status.like_available ? '✅' : '⚠️' }} {{ status.like_reason }}</span>
       <a-link @click="loadStatus()">刷新状态</a-link>
+    </div>
+
+    <div class="f2l-options">
+      <a-checkbox v-model="registerBloggers">同时登记穿搭博主并绑定素材</a-checkbox>
+      <span class="f2l-option-tip">
+        未登记的来源作者会自动建成抖音博主（标记「自动登记」）并绑定本批素材；
+        它们**不算已登记博主**，所以不会被「一键获取素材」下载——想追踪某个人时，
+        去「博主管理」点「纳入追踪」。
+      </span>
     </div>
 
     <div class="f2l-tips">
@@ -121,6 +134,21 @@ async function onSubmit() {
 .f2l-status.is-bad {
   background: #fff7e6;
   color: #a86a00;
+}
+.f2l-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.f2l-option-tip {
+  font-size: 12px;
+  color: #9ca3af;
+  line-height: 1.6;
+  flex: 1;
+  min-width: 0;
 }
 .f2l-tips {
   margin-top: 10px;

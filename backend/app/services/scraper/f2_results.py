@@ -236,6 +236,26 @@ async def get_f2_task_results(
     }
 
 
+async def register_f2_task_bloggers(db: AsyncSession, task_id: int) -> dict:
+    """把本批素材里未绑定博主的来源作者补登记为抖音博主，并绑定素材。
+
+    自动路径在任务执行里（「我的喜欢」入库后，见 ``execute_f2_import``）；这个入口
+    供结果面板手工回填：老批次、或创建任务时关掉了自动登记的情况。幂等——已有博主
+    按归一化名复用，已建立的素材关联自动跳过，可以放心重复点。
+
+    Returns:
+        ``register_batch_bloggers`` 的统计字段 + task_id / batch_id。
+    """
+    from app.services.scraper.f2_bloggers import register_batch_bloggers
+
+    task = await _load_f2_task(db, task_id)
+    entries, batch_id = _batch_entries(task)
+    if not entries:
+        raise HTTPException(status_code=400, detail="该任务没有可登记的批次清单")
+    stats = await register_batch_bloggers(db, entries)
+    return {**stats, "task_id": task.id, "batch_id": batch_id}
+
+
 async def _allowed_ids(db: AsyncSession, task_id: int, ids: list[str]) -> list[str]:
     """把请求里的 ID 收敛到「确实属于该任务批次」的范围（越权/脏 ID 直接丢弃）。"""
     task = await _load_f2_task(db, task_id)

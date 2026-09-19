@@ -272,6 +272,43 @@ export function useF2Results() {
     }
   }
 
+  /**
+   * 手工补登记本批未绑定博主的来源作者（幂等，可重复点）。
+   *
+   * 自动路径在「我的喜欢」入库后（未登记的来源作者自动建成抖音博主并绑定素材）；
+   * 这个入口用于老批次、或建任务时关掉了自动登记的情况。补建的博主标记为
+   * 「自动登记」，不算已登记博主、不进一键获取素材的下载白名单。
+   */
+  async function registerBloggers() {
+    if (openTaskId.value === null) return
+    acting.value = true
+    try {
+      const { data } = await apiClient.post(
+        `/scraper/f2-tasks/${openTaskId.value}/results/register-bloggers`,
+      )
+      const { created, reused, linked, ambiguous } = data as {
+        created: number
+        reused: number
+        linked: number
+        ambiguous: number
+      }
+      const parts = [
+        created ? `新建博主 ${created} 个` : '',
+        linked ? `绑定素材 ${linked} 条` : '',
+        reused ? `复用已有博主 ${reused} 个` : '',
+        ambiguous ? `${ambiguous} 个同名多候选已跳过（去博主管理手工绑定）` : '',
+      ].filter(Boolean)
+      const text = parts.join(' · ') || '本批没有需要登记的来源作者'
+      if (created || linked || reused) Message.success(text)
+      else Message.info(text)
+      await afterAction()
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '登记来源作者博主失败'))
+    } finally {
+      acting.value = false
+    }
+  }
+
   return {
     // 状态
     openTaskId,
@@ -302,5 +339,6 @@ export function useF2Results() {
     trashSelected,
     restoreSelected,
     deleteSelected,
+    registerBloggers,
   }
 }
