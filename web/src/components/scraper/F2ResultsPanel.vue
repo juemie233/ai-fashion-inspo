@@ -29,8 +29,10 @@ const reason = ref<TrashReason>('质量差')
 /** 网格密度（v-model 给 DensityImageGrid）：与素材库/搜索页一样本地记住选择 */
 type DensityMode = 'compact' | 'standard' | 'comfortable'
 const DENSITY_STORAGE_KEY = 'f2-results-density'
+/** 列数规格：紧凑 6 / 标准 4 / 宽松 3（本面板图片偏大，默认「宽松」三张一行） */
+const GRID_COLUMNS = { compact: 6, standard: 4, comfortable: 3 }
 const density = ref<DensityMode>(
-  (localStorage.getItem(DENSITY_STORAGE_KEY) as DensityMode | null) ?? 'standard',
+  (localStorage.getItem(DENSITY_STORAGE_KEY) as DensityMode | null) ?? 'comfortable',
 )
 watch(density, (value) => localStorage.setItem(DENSITY_STORAGE_KEY, value))
 
@@ -164,7 +166,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
       <!-- 图片浏览：网格容器与密度切换、缩略图卡、悬停大图全部走 common 公共组件。
            网格不做内部滚动（自适应列数 + 单元 min-width: 0），从根上避免横向滚动条 -->
       <div v-else>
-        <DensityImageGrid v-model:density="density">
+        <DensityImageGrid v-model:density="density" :columns="GRID_COLUMNS">
           <template #header-left>
             <a-button size="mini" @click="selectAllLoaded">
               {{ allLoadedSelected() ? '取消全选' : '全选已加载' }}
