@@ -147,12 +147,15 @@ export function usePersonList(kind: PersonKind) {
    * 自动登记的博主算素材归属、但不算已登记博主，所以「一键获取素材（博主主页）」
    * 不会去下载 TA 的主页作品（避免点赞几百个作者后被一次性全量翻页）。用户确认要
    * 追踪时点这个按钮，source 改回 manual 即进下载白名单。
+   *
+   * 注意：进白名单只是必要条件——f2 还得知道该账号的 sec_user_id（见 run_fetch 的
+   * targets 取自 f2 自己的用户库），所以提示文案要把这个前提讲清楚。
    */
   async function handlePromote(person: Person) {
     try {
       await bloggersApi.promote(person.id)
       Message.success(
-        `已把「${person.name}」纳入追踪：后续「一键获取素材」会增量下载 TA 的主页作品`,
+        `已把「${person.name}」纳入追踪：f2 用户库里已有该账号时，「一键获取素材」会增量下载 TA 的主页作品`,
       )
       await store.load(true)
     } catch (e) {
@@ -335,7 +338,7 @@ export function usePersonList(kind: PersonKind) {
             ? h(
                 Popconfirm,
                 {
-                  content: `把「${row.name}」纳入追踪？之后「一键获取素材」会增量下载 TA 的主页作品（f2 要翻页，作者多时较慢）。`,
+                  content: `把「${row.name}」纳入追踪？TA 会进入「一键获取素材」的下载名单（前提：f2 用户库里已有该账号，即曾用 f2 抓过 TA 的主页）。`,
                   onOk: () => handlePromote(row),
                 },
                 {
