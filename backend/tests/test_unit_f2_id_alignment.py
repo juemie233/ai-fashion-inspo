@@ -74,6 +74,58 @@ def test_find_conf_path_prefers_nested_layout(tmp_path):
     assert rep.find_conf_path(tmp_path) == flat
 
 
+def test_resolve_cookie_prefers_flag_then_file_then_conf(tmp_path):
+    """优先级：--cookie > --cookie-file > f2 配置。"""
+    _write(tmp_path / "f2" / "conf" / "app.yaml", b'cookie: "from_conf=1"\n')
+    cfile = tmp_path / "douyin_cookies.json"
+    cfile.write_text('[{"name":"sessionid","value":"from_file"}]', encoding="utf-8")
+
+    class Args:
+        pass
+
+    args = Args()
+    args.cookie = ""
+    args.cookie_file = ""
+    args.conf = ""
+    assert rep.resolve_cookie(args, tmp_path) == "from_conf=1"
+
+    args.cookie_file = str(cfile)
+    assert rep.resolve_cookie(args, tmp_path) == "sessionid=from_file"
+
+    args.cookie = "sessionid=from_flag"
+    assert rep.resolve_cookie(args, tmp_path) == "sessionid=from_flag"
+
+
+def test_resolve_cookie_reads_browser_extension_export(tmp_path):
+    """回归（用户实际路径）：浏览器插件导出的 JSON 数组要能被 --cookie-file 吃下。
+
+    与 storage/cookies/xiaohongshu_cookies.json 同一种形态；且识别出这是**登录态**
+    （有 sessionid），不会误报游客态提示。
+    """
+    path = tmp_path / "douyin_cookies.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"name": "sessionid", "value": "abc123", "domain": ".douyin.com"},
+                {"name": "UIFID_TEMP", "value": "tmp", "domain": ".douyin.com"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class Args:
+        pass
+
+    args = Args()
+    args.cookie = ""
+    args.cookie_file = str(path)
+    args.conf = ""
+
+    cookie = rep.resolve_cookie(args, tmp_path)
+    assert cookie == "sessionid=abc123; UIFID_TEMP=tmp"
+    assert rep.looks_logged_out(cookie) is False
+
+
 # ═══════════════════════════════════════════════════════════════
 #  文件名主干（对齐键）
 # ═══════════════════════════════════════════════════════════════

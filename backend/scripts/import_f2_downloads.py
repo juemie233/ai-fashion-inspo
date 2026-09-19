@@ -1148,26 +1148,34 @@ def platform_ids_for(item: ParsedFile) -> list[str]:
     return [primary] if primary == legacy else [primary, legacy]
 
 
-def source_url_for(item: ParsedFile) -> str | None:
+def source_url_for(item: ParsedFile, is_video_work: bool = False) -> str | None:
     """构造素材的 source_url（抖音原帖地址）；无作品 ID 时返回 None。
 
-    视频作品用 ``/video/``，图集用 ``/note/``——按**作品类型**（``kind``）判断
-    而不是 ``media_type``：图集里的 live 实况分段入库后也是 video，但它所属的
-    作品仍是图集，必须走 ``/note/`` 才能在抖音打开。
+    路径按**作品类型**决定，不是按单个文件的 ``media_type``：
+
+    - 视频作品 → ``/video/{aweme_id}``
+    - 图集作品 → ``/note/{aweme_id}``（图集里的 live 实况分段入库后也是 video，
+      但它所属的作品仍是图集）
+
+    ``kind`` 单独判断不够：视频作品的**封面**（f2 的 ``-v`` 开关，kind=``cover``）
+    属于视频作品，只按 kind 会写成 ``/note/`` 而打不开。因此调用方应把「同一作品
+    下是否存在 video 文件」传进来（:func:`apply_import` 已按作品分组计算）；不传时
+    退化为只按 kind 判断。
 
     **没有作品 ID 就返回 None，绝不造伪链接**：历史素材宁可留空，也不能写一个
     打不开的地址（前端据此决定是否显示「原始链接」）。
 
     Args:
         item: 已解析文件。
+        is_video_work: 该文件所属作品是否为视频作品（同组内有 video 文件）。
 
     Returns:
         抖音原帖 URL；无作品 ID 返回 None。
     """
     if not item.aweme_id:
         return None
-    path = "video" if item.kind == "video" else "note"
-    return f"https://www.douyin.com/{path}/{item.aweme_id}"
+    is_video = is_video_work or item.kind == "video"
+    return f"https://www.douyin.com/{'video' if is_video else 'note'}/{item.aweme_id}"
 
 
 @dataclass
@@ -1405,6 +1413,12 @@ def apply_import(
     processed = 0
     stopped = False
 
+    # 作品类型判据：同一作品下只要有 video 文件就是视频作品。封面（kind=cover）
+    # 单看 kind 会被误判成图集，写出打不开的 /note/ 链接。
+    video_work_keys = {
+        d.item.work_key for d in decisions if d.item.kind == "video"
+    }
+
     for decision in decisions:
         if decision.action != "import":
             continue
@@ -1444,7 +1458,10 @@ def apply_import(
                 (
                     insp_id,
                     "douyin",
-                    source_url_for(item),  # 无作品 ID 的历史文件留空，不造伪链接
+                    # 无作品 ID 的历史文件留空，不造伪链接
+                    source_url_for(
+                        item, is_video_work=item.work_key in video_work_keys
+                    ),
                     item.author_key or item.author_dir,
                     decision.platform_id,
                     rel_path,

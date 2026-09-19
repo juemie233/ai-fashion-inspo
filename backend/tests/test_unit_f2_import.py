@@ -1819,3 +1819,117 @@ def test_run_fetch_passes_naming_with_aweme_id(tmp_path):
     assert len(calls) == 2
     for cmd in calls:
         assert "{aweme_id}" in cmd[cmd.index("-n") + 1]
+
+
+# ── 与 f2 本体的契约：模板必须被 f2 接受，且 f2 生成的产物必须能被解析回来 ──
+
+f2_module = pytest.importorskip("f2", reason="需要 f2 本体校验命名模板契约")
+
+
+def test_f2_accepts_our_naming_templates():
+    """回归（P0）：模板若被 f2 的校验器拒绝，整条下载命令直接失败。
+
+    f2 只允许 {nickname}/{create}/{aweme_id}/{desc}/{uid} + 分隔符 `-`/`_`，
+    改模板后必须过这一关（实测 invalid=[]）。
+    """
+    from f2.apps.douyin.cli import check_invalid_naming
+
+    allowed = ["{nickname}", "{create}", "{aweme_id}", "{desc}", "{uid}"]
+    separators = ["-", "_"]
+
+    assert check_invalid_naming(f2.POST_NAMING_TEMPLATE, allowed, separators) == []
+    assert check_invalid_naming(f2.LIKE_NAMING_TEMPLATE, allowed, separators) == []
+
+
+@pytest.mark.parametrize("kind_suffix", ["_image_1.webp", "_video.mp4", "_live_1.mp4"])
+def test_f2_generated_filename_round_trips(kind_suffix):
+    """回归（P0）：模板 → f2 生成文件名 → 我方解析，必须拿回真实作品 ID。
+
+    此前只用「手写的假文件名」测正则，没验证过 **f2 真实产物**；这里调 f2 自己的
+    format_file_name 生成文件名，再走 parse_media_filename，锁死真实契约。
+    """
+    from f2.apps.douyin.utils import format_file_name
+    from f2.utils.utils import replaceT
+
+    created = "2026-09-14 10-31-14"
+    aweme = "7412345678901234567"
+    raw_desc = "#jk 穿搭 分享"
+
+    stem = format_file_name(
+        f2.POST_NAMING_TEMPLATE,
+        {"create_time": created, "aweme_id": aweme, "desc": replaceT(raw_desc)},
+    )
+    # f2 在模板结果后面自己拼 `_{类型}[_{序号}]`（见 f2/apps/douyin/dl.py）
+    parsed = f2.parse_media_filename(Path("A") / f"{stem}{kind_suffix}", "A")
+
+    assert parsed is not None
+    assert parsed.aweme_id == aweme
+    assert parsed.created == created
+    assert parsed.body == "#jk_穿搭_分享"  # 作品 ID 没混进正文
+    assert f2.platform_id_for(parsed).startswith(f"f2:{aweme}#")
+
+
+def test_f2_generated_like_filename_round_trips():
+    """点赞模式同理（带作者前缀）。"""
+    from f2.apps.douyin.utils import format_file_name
+    from f2.utils.utils import replaceT
+
+    created = "2026-09-14 10-31-14"
+    aweme = "7412345678901234567"
+    stem = format_file_name(
+        f2.LIKE_NAMING_TEMPLATE,
+        {
+            "create_time": created,
+            "aweme_id": aweme,
+            "desc": replaceT("#jk 穿搭"),
+            "nickname": "不养羊",
+        },
+    )
+    parsed = f2.parse_media_filename(
+        Path("我的账号") / f"{stem}_image_1.webp", "我的账号"
+    )
+
+    assert parsed is not None
+    assert parsed.author_dir == "不养羊"  # 作者来自文件名前缀，不是目录名
+    assert parsed.aweme_id == aweme
+    assert parsed.body == "#jk_穿搭"
+
+
+# ── 作品类型归属：封面属于视频作品 ──
+
+
+def test_source_url_cover_of_video_work_goes_to_video():
+    """回归：视频作品的封面（kind=cover）必须走 /video/，只按 kind 会写成 /note/ 打不开。"""
+    cover = f2.parse_media_filename(
+        Path("A") / _new_name("标题", "cover").replace(".webp", ".jpg"), "A"
+    )
+    assert cover.kind == "cover"
+
+    # 不传作品类型：退化为按 kind 判断（/note/）
+    assert f2.source_url_for(cover) == f"https://www.douyin.com/note/{AWEME}"
+    # 传了「同作品有 video 文件」：纠正为 /video/
+    assert (
+        f2.source_url_for(cover, is_video_work=True)
+        == f"https://www.douyin.com/video/{AWEME}"
+    )
+
+
+def test_apply_import_cover_of_video_work_uses_video_url(tmp_path):
+    """端到端：同一作品下同时有 video 与 cover 时，cover 也要写 /video/。"""
+    root = tmp_path / "f2"
+    _fake_mp4(root / "A" / _new_name("标题", "video").replace(".webp", ".mp4"))
+    _fake_mp4(root / "A" / _new_name("标题", "cover").replace(".webp", ".jpg"))
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+
+    f2.apply_import(
+        [d for d in _decisions(files)[0] if d.action == "import"],
+        db_path=db,
+        storage_root=tmp_path / "storage",
+        make_thumbnails=False,
+    )
+
+    conn = sqlite3.connect(db)
+    urls = {row[0] for row in conn.execute("SELECT source_url FROM inspirations")}
+    conn.close()
+    assert urls == {f"https://www.douyin.com/video/{AWEME}"}  # 两条都必须是 /video/
