@@ -67,6 +67,7 @@ async def create_f2_import_task(
     fetch_mode: str = "post",
     like_user: str | None = None,
     register_bloggers: bool = True,
+    like_max_counts: int | None = None,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -89,6 +90,8 @@ async def create_f2_import_task(
         register_bloggers: 「我的喜欢」入库后是否把未登记的来源作者补建成抖音博主
             并绑定本批素材（默认 True；只对 like 模式生效）。补建的博主标记为
             「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
+        like_max_counts: 「我的喜欢」最多翻多少条（None 表示执行时取
+            ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。只对 like 模式生效。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -111,6 +114,7 @@ async def create_f2_import_task(
             "fetch_mode": fetch_mode,
             "like_user": like_user,
             "register_bloggers": register_bloggers,
+            "like_max_counts": like_max_counts,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -205,6 +209,10 @@ def f2_import_status() -> dict:
         "like_user": like_user,
         "like_available": False,
         "like_reason": "",
+        # 「我的喜欢」每次最多翻多少条（0=全量）。前端据此显示并允许改。
+        # 为什么需要：f2 的点赞分页没有「遇到已下载就停」，全量翻页每次都要空等
+        # 每页一次 timeout（本机 10 秒），且零新增时进度条会停在 0 像卡死。
+        "like_max_counts": int(settings.f2_like_max_counts or 0),
         "fetch_since_days": int(settings.f2_fetch_since_days or 0),
     }
 
@@ -353,9 +361,11 @@ def _running_task_brief(row) -> dict | None:
     stage = ""
     fetch_mode = ""
     like_progress = None
+    like_max_counts = 0
     if isinstance(result, dict):
         stage = str(result.get("stage") or "")
         fetch_mode = str(result.get("fetch_mode") or "")
+        like_max_counts = int(result.get("like_max_counts") or 0)
         raw_like = result.get("like_progress")
         if isinstance(raw_like, dict):
             like_progress = raw_like
@@ -367,6 +377,8 @@ def _running_task_brief(row) -> dict | None:
         "total": total or 0,
         "stage": stage,
         "fetch_mode": fetch_mode,
+        # 0=全量翻页；>0=增量（前端据此把下载期文案从「全量翻页」改成「最近 N 条」）
+        "like_max_counts": like_max_counts,
         "like_progress": like_progress,
     }
 
@@ -511,6 +523,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "fetch_mode",
             "like_user",
             "register_bloggers",
+            "like_max_counts",
         )
         if key in raw_result
     }
@@ -524,6 +537,17 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 「我」的主页链接：点赞列表只有本人可见，任务没带就用配置里记住的那个
     like_user = str(opts.get("like_user") or settings.f2_like_user or "").strip()
     like_mode = fetch_mode == "like"
+    # 点赞增量条数（0=全量）。收窄的是 f2 的翻页量（`-o`）：点赞分页没有「遇到已下载
+    # 就停」，全量每次都要空翻到底；点赞列表最新在前，只翻最近 N 条即可覆盖新增。
+    # ⚠ 必须用 `is not None` 判定：显式传 0 表示「本次要全量」，不能被非零的配置项
+    # 覆盖掉（用 `or` 会把 0 当成「没传」）。
+    _raw_max = opts.get("like_max_counts")
+    like_max_counts = max(
+        0,
+        int(_raw_max)
+        if _raw_max is not None
+        else int(settings.f2_like_max_counts or 0),
+    )
     register_bloggers = bool(opts.get("register_bloggers", True))
     since_days = opts.get("since_days")
     if since_days is None:
@@ -581,7 +605,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             f"{'、'.join(skipped_unknown)}"
         )
 
-    # ── 阶段 1a：「我的喜欢」——单条命令全量翻页（不逐作者、不做时间窗口）──
+    # ── 阶段 1a：「我的喜欢」——单条命令翻页（不逐作者、不做时间窗口）──
     if fetch_enabled and like_mode:
         if not f2.f2_available():
             raise RuntimeError(
@@ -594,17 +618,25 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             )
         fetch_summary["total"] = 1
         # 点赞总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
-        # 进度条由 watcher 按耗时给软进度
+        # 进度条由 watcher 按耗时给软进度。
+        # 增量模式（like_max_counts>0）另有作用：翻页量有上界，不会再出现「零新增却
+        # 空翻到底、进度条长时间停在 0」。
         task.total = 0
         task.done = 0
-        task.result = {**opts, "stage": "download"}
+        task.result = {**opts, "stage": "download", "like_max_counts": like_max_counts}
         task.updated_at = utcnow()
         await db.commit()
 
         like_root = f2.DEFAULT_F2_LIKE_ROOT
         baseline = await asyncio.to_thread(f2.download_tree_stats, like_root)
         fetch_task = asyncio.create_task(
-            asyncio.to_thread(f2.run_fetch_likes, f2_dir, like_user, f2_dir / "Download")
+            asyncio.to_thread(
+                f2.run_fetch_likes,
+                f2_dir,
+                like_user,
+                f2_dir / "Download",
+                max_counts=like_max_counts,
+            )
         )
         outcome, final_stats = await _watch_like_download(
             db, task, fetch_task, like_root, baseline, opts
@@ -614,6 +646,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         fetch_summary["ok"] = int(outcome.get("ok") or 0)
         fetch_summary["failed"] = int(outcome.get("failed") or 0)
         fetch_summary["like_user"] = f2.like_user_url(like_user)
+        fetch_summary["like_max_counts"] = like_max_counts
         fetch_summary["cmd"] = (
             outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
         )

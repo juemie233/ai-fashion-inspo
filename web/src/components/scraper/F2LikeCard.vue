@@ -4,8 +4,10 @@
  * 与「一键获取素材」（博主主页作品）的差别只在**下载入口**：
  *  - f2 的 `-M like` 拉的是登录账号自己的点赞列表，所以必须填**你自己**的主页链接
  *    （点赞列表只有本人可见；填一次即写入 .env，之后自动带上）
- *  - 喜欢列表按**点赞时间**排序，而 f2 的时间窗口按**作品发布时间**过滤，所以这里
- *    全量翻页（比发布模式慢）；已下载过的文件 f2 会跳过
+ *  - **不能靠日期窗口提速**：f2 的点赞模式根本不读 `-i`（源码实测，不是"按发布时间
+ *    过滤会漏"的问题，而是这个参数在此模式下无效）。真正能收窄翻页量的是
+ *    `-o/--max-counts`（本卡片的「每次最多翻」），因为 f2 的点赞分页没有
+ *    「遇到已下载就停」、每页还要固定等一次 timeout
  *  - 入库完全复用同一条链路：五层判重（内容哈希 / 垃圾桶 / 批次内 / 平台 ID / 参数），
  *    同一作品从主页与喜欢两条路进来都不会重复；结果审查也在下方「抖音采集历史」里
  */
@@ -15,8 +17,17 @@ import { useF2Import } from '@/composables/useF2Import'
 
 const emit = defineEmits<{ (e: 'submitted'): void }>()
 
-const { status, statusLoading, submitting, likeUserSaving, loadStatus, submit, setLikeUser } =
-  useF2Import()
+const {
+  status,
+  statusLoading,
+  submitting,
+  likeUserSaving,
+  likeMaxSaving,
+  loadStatus,
+  submit,
+  setLikeUser,
+  setLikeMaxCounts,
+} = useF2Import()
 
 /** 「我的主页链接 / sec_user_id」输入框：初始值取后端已保存的配置 */
 const likeUser = ref('')
@@ -32,17 +43,46 @@ watch(
   { immediate: true },
 )
 
+/** 「每次最多翻多少条点赞」：0=全量；初始值取后端已保存的配置 */
+const likeMaxCounts = ref(0)
+
+let likeMaxTouched = false
+watch(
+  () => status.value?.like_max_counts,
+  (value) => {
+    if (likeMaxTouched || value == null) return
+    likeMaxCounts.value = value
+  },
+  { immediate: true },
+)
+
 const savedLikeUser = computed(() => status.value?.like_user ?? '')
+const savedLikeMax = computed(() => status.value?.like_max_counts ?? 0)
 const dirty = computed(() => likeUser.value.trim() !== savedLikeUser.value)
+const maxDirty = computed(() => (likeMaxCounts.value || 0) !== savedLikeMax.value)
 const canSubmit = computed(
   () => Boolean(status.value?.like_available) && Boolean(likeUser.value.trim()),
 )
+
+/** 输入非数字/负数时的兜底：按 0（全量）处理，避免把非法值发给后端 */
+const safeMaxCounts = computed(() => {
+  const n = Number(likeMaxCounts.value)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+})
 
 onMounted(loadStatus)
 
 async function onSaveUser() {
   const ok = await setLikeUser(likeUser.value.trim())
   if (ok) likeUserTouched = false
+}
+
+async function onSaveMax() {
+  const ok = await setLikeMaxCounts(safeMaxCounts.value)
+  if (ok) {
+    likeMaxTouched = false
+    likeMaxCounts.value = safeMaxCounts.value
+  }
 }
 
 /** 采集选项：入库后自动登记来源作者为穿搭博主（默认开） */
@@ -54,6 +94,8 @@ async function onSubmit() {
     mode: 'like',
     like_user: likeUser.value.trim() || undefined,
     register_bloggers: registerBloggers.value,
+    // 0 = 全量（显式传，表示本次就要全量，别被配置顶掉）
+    like_max_counts: safeMaxCounts.value,
   })
   if (taskId) {
     emit('submitted')
@@ -80,6 +122,29 @@ async function onSubmit() {
       </a-button>
     </div>
 
+    <div class="f2l-row f2l-row-max">
+      <span class="f2l-label">每次最多翻</span>
+      <a-input-number
+        v-model="likeMaxCounts"
+        :min="0"
+        :max="100000"
+        :step="50"
+        placeholder="0"
+        style="width: 130px"
+        @input="likeMaxTouched = true"
+      />
+      <span class="f2l-unit">条点赞</span>
+      <a-button size="small" :loading="likeMaxSaving" :disabled="!maxDirty" @click="onSaveMax">
+        保存
+      </a-button>
+      <span class="f2l-option-tip">
+        <b>0 = 全量翻到底</b>（默认）。填 100~200 可把日常增量降到一两页： f2
+        的点赞分页**没有「遇到已下载就停」**，从最新一路翻到底、每页还固定等一次 timeout（本机 10
+        秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增点赞
+        超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。
+      </span>
+    </div>
+
     <div v-if="status" class="f2l-status" :class="{ 'is-bad': !status.like_available }">
       <a-spin v-if="statusLoading" :size="12" />
       <span>{{ status.like_available ? '✅' : '⚠️' }} {{ status.like_reason }}</span>
@@ -101,8 +166,9 @@ async function onSubmit() {
         <code>user/</code> 后面那段就是 sec_user_id），保存后写入 .env，下次直接用。
       </div>
       <div>
-        · 喜欢列表按点赞时间排序、f2 的时间窗口按发布时间过滤，因此本入口**全量翻页**
-        （比「一键获取素材」慢）；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
+        · 慢的原因不是「按发布时间过滤会漏」，而是 f2 的点赞模式**根本不读 `-i`**
+        （源码实测），且点赞分页没有「遇到已下载就停」——所以提速只能靠上面的
+        「每次最多翻」；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
       </div>
       <div>
         · 入库不做标签分析（素材为未打标状态）；结果浏览与审查在下方「抖音采集历史」里
@@ -118,6 +184,17 @@ async function onSubmit() {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.f2l-row-max {
+  margin-top: 10px;
+}
+.f2l-label {
+  font-size: 13px;
+  color: #4b5563;
+}
+.f2l-unit {
+  font-size: 13px;
+  color: #4b5563;
 }
 .f2l-status {
   display: flex;

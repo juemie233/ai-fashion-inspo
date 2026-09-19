@@ -1,5 +1,6 @@
 /**
- * F2LikeCard（采集我的喜欢）测试：主页链接的回填/保存、可用性门控与提交参数。
+ * F2LikeCard（采集我的喜欢）测试：主页链接的回填/保存、可用性门控与提交参数，
+ * 以及「每次最多翻多少条」（like_max_counts / f2 的 `-o`）的保存与透传。
  *
  * 这条入口与「一键获取素材」共用同一个后端点，差别只在 `mode=like` 与主页链接；
  * 一旦参数漏传就会去拉博主主页（不该发生），所以这里把参数形状锁死。
@@ -41,6 +42,24 @@ const inputStub = defineComponent({
       value: this.modelValue,
       onInput: (e: Event) => {
         const value = (e.target as HTMLInputElement).value
+        this.$emit('update:modelValue', value)
+        this.$emit('input', value)
+      },
+    })
+  },
+})
+/** a-input-number 桩：number 型 v-model，渲染成 <input type="number">（带 .f2l-max 类便于定位） */
+const inputNumberStub = defineComponent({
+  name: 'AInputNumber',
+  props: { modelValue: { type: Number, default: 0 } },
+  emits: ['update:modelValue', 'input'],
+  render() {
+    return h('input', {
+      class: 'f2l-max',
+      type: 'number',
+      value: this.modelValue,
+      onInput: (e: Event) => {
+        const value = Number((e.target as HTMLInputElement).value)
         this.$emit('update:modelValue', value)
         this.$emit('input', value)
       },
@@ -89,6 +108,7 @@ function makeStatus(over: Record<string, unknown> = {}) {
     like_user: '',
     like_available: false,
     like_reason: '未配置「我的主页链接」：点赞列表只有本人可见',
+    like_max_counts: 0,
     fetch_since_days: 14,
     auto: {
       enabled: false,
@@ -114,6 +134,7 @@ async function mountCard(status = makeStatus()) {
         'a-card': cardStub,
         'a-button': buttonStub,
         'a-input': inputStub,
+        'a-input-number': inputNumberStub,
         'a-spin': spinStub,
         'a-link': linkStub,
         'a-checkbox': checkboxStub,
@@ -124,10 +145,15 @@ async function mountCard(status = makeStatus()) {
   return wrapper
 }
 
-/** 卡片里两个按钮：0=保存主页链接，1=采集我的喜欢 */
+/** 卡片里三个按钮：保存主页链接 / 保存翻页条数 / 采集我的喜欢（按文案定位，避免下标脆断） */
 function buttons(wrapper: VueWrapper) {
   const all = wrapper.findAll('button')
-  return { save: all[0], submit: all[1] }
+  const byText = (text: string) => all.find((b) => b.text().includes(text))
+  return {
+    save: byText('保存')!,
+    saveMax: all.filter((b) => b.text().includes('保存'))[1],
+    submit: byText('采集我的喜欢')!,
+  }
 }
 
 describe('F2LikeCard', () => {
@@ -191,6 +217,7 @@ describe('F2LikeCard', () => {
         mode: 'like',
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
         register_bloggers: true,
+        like_max_counts: 0, // 缺省全量（显式传 0，避免被后端配置顶掉）
       },
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
@@ -218,7 +245,73 @@ describe('F2LikeCard', () => {
         mode: 'like',
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
         register_bloggers: false,
+        like_max_counts: 0,
       },
     })
+  })
+
+  // ── 「每次最多翻多少条」（like_max_counts / f2 的 `-o`）──
+
+  it('翻页条数从状态回填（0=全量）', async () => {
+    const wrapper = await mountCard(makeStatus({ like_max_counts: 150 }))
+
+    expect((wrapper.find('.f2l-max').element as HTMLInputElement).value).toBe('150')
+  })
+
+  it('保存翻页条数：PUT 到 f2-like-max-counts 并更新状态', async () => {
+    const wrapper = await mountCard()
+    mocks.put.mockResolvedValue({
+      data: { message: '已保存：每次最多翻 150 条点赞（增量模式）', like_max_counts: 150 },
+    })
+
+    await wrapper.find('.f2l-max').setValue('150')
+    await buttons(wrapper).saveMax.trigger('click')
+    await flushPromises()
+
+    expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-like-max-counts', null, {
+      params: { max_counts: 150, persist: true },
+    })
+    expect((wrapper.find('.f2l-max').element as HTMLInputElement).value).toBe('150')
+  })
+
+  it('提交时把翻页条数带上（增量模式真的下发到后端）', async () => {
+    const wrapper = await mountCard(
+      makeStatus({
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        like_available: true,
+        like_max_counts: 200,
+      }),
+    )
+    mocks.post.mockResolvedValue({ data: { task_id: 63, message: '已提交' } })
+
+    await buttons(wrapper).submit.trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: {
+        fetch: true,
+        mode: 'like',
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        register_bloggers: true,
+        like_max_counts: 200,
+      },
+    })
+  })
+
+  it('翻页条数非法（负数/空）时按 0=全量下发，不把非法值发给后端', async () => {
+    const wrapper = await mountCard(
+      makeStatus({
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        like_available: true,
+      }),
+    )
+    mocks.post.mockResolvedValue({ data: { task_id: 64, message: '已提交' } })
+
+    await wrapper.find('.f2l-max').setValue('-30')
+    await buttons(wrapper).submit.trigger('click')
+    await flushPromises()
+
+    const params = (mocks.post.mock.calls[0][2] as { params: Record<string, unknown> }).params
+    expect(params.like_max_counts).toBe(0)
   })
 })

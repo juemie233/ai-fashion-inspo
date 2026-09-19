@@ -1797,23 +1797,35 @@ def build_f2_like_command(
     like_user: str,
     download_root: Path | None = None,
     auto_cookie: str | None = None,
-    interval: str = "all",
+    max_counts: int = 0,
 ) -> list[str]:
     """构造「我的喜欢」（点赞作品）的 f2 命令。
 
     与发布模式的三点不同：
+
     1. `-M like`：拉登录账号自己的点赞列表（只有本人可见，故 `-u` 必须是你的主页）
-    2. 必传 `-n {nickname}_{create}_{desc}`：产物统统落在「我的昵称」目录下，
-       原作者只能靠文件名保留（见 :data:`LIKE_NAMING_TEMPLATE`）
-    3. 默认 `-i all`：喜欢列表按**点赞时间**排序，而 f2 的 `-i` 按**作品发布时间**
-       过滤——用日期窗口会漏掉「最近点赞的老视频」，所以这里不做时间收窄；
-       重复下载由 f2 的文件跳过与入库侧五层判重兜住
+    2. 必传 `-n {nickname}_{create}_{desc}_{aweme_id}`：产物统统落在「我的昵称」目录下，
+       原作者与作品 ID 只能靠文件名保留（见 :data:`LIKE_NAMING_TEMPLATE`）
+    3. **不传 `-i`**：f2 的点赞模式根本不读 `interval`
+
+    关于第 3 点（2026-09 读 f2 源码更正）：此前这里传 `-i all` 并注释「喜欢列表按点赞
+    时间排序，而 f2 的 `-i` 按作品发布时间过滤，用日期窗口会漏掉最近点赞的老视频」
+    ——**那个过滤器在点赞模式里不存在**：`handler.handle_user_like` 与
+    `handler.fetch_user_like_videos` 都不读 `interval`（实测 `'interval' in 源码 ==
+    False`），传进去纯属无效参数。结论（不按日期收窄）恰好是对的，但理由错了，留着会
+    误导后人以为「可以用 `-i` 收窄点赞增量」。
+
+    真正能收窄翻页量的是 **`-o/--max-counts`**：f2 的点赞分页从 `cursor=0` 一路翻到底、
+    **没有「遇到已下载就停」**，每页还固定 `asyncio.sleep(timeout)`（本机 10 秒）。点赞
+    列表最新在前，所以只翻最近 `max_counts` 条即可覆盖新增。
 
     Args:
         like_user: 我的主页链接或 sec_user_id。
         download_root: 下载根目录（传给 f2 的 -p）。
         auto_cookie: 浏览器名（chrome / chromium / edge …）。
-        interval: 传给 f2 的 `-i` 值，缺省 `all`（见上）。
+        max_counts: 最多翻多少条点赞作品（`-o`）。0 表示全量翻到底（默认，与改造前一致）；
+            填 100~200 可把日常增量降到一两页。代价：两次运行之间新增点赞超过该值时
+            会漏，故需要提速时再开。
 
     Returns:
         可直接交给 subprocess 的参数列表。
@@ -1827,11 +1839,11 @@ def build_f2_like_command(
         like_user_url(like_user),
         "-M",
         "like",
-        "-i",
-        interval or "all",
         "-n",
         LIKE_NAMING_TEMPLATE,
     ]
+    if max_counts > 0:
+        cmd += ["-o", str(max_counts)]
     if download_root is not None:
         cmd += ["-p", str(download_root)]
     if auto_cookie:
@@ -1844,6 +1856,7 @@ def run_fetch_likes(
     like_user: str,
     download_root: Path | None = None,
     auto_cookie: str | None = None,
+    max_counts: int = 0,
     runner=None,
 ) -> dict:
     """拉取「我的喜欢」（点赞的作品）：单条命令，不逐作者循环。
@@ -1853,11 +1866,12 @@ def run_fetch_likes(
         like_user: 我的主页链接或 sec_user_id。
         download_root: 传给 f2 的 -p 下载根目录。
         auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
+        max_counts: 最多翻多少条点赞作品（`-o`）。0 = 全量翻到底（默认，与改造前一致）。
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
 
     Returns:
-        {"total", "ok", "failed", "results", "cmd", "error"}（结构与 :func:`run_fetch`
-        对齐，便于复用同一套任务结果展示）。
+        {"total", "ok", "failed", "results", "cmd", "error", "max_counts"}（结构与
+        :func:`run_fetch` 对齐，便于复用同一套任务结果展示）。
     """
     runner = runner or _default_runner
     if not (like_user or "").strip():
@@ -1872,13 +1886,22 @@ def run_fetch_likes(
 
     url = like_user_url(like_user)
     cmd = build_f2_like_command(
-        like_user, download_root=download_root, auto_cookie=auto_cookie
+        like_user,
+        download_root=download_root,
+        auto_cookie=auto_cookie,
+        max_counts=max_counts,
     )
     print(f"  ▶ 我的喜欢（{url}）")
-    print(
-        "    · 喜欢列表按点赞时间排序，f2 的 -i 按发布时间过滤，故用 -i all 全量翻页；"
-        "已下载过的文件 f2 会跳过，入库侧还有五层判重"
-    )
+    if max_counts > 0:
+        print(
+            f"    · 增量模式：只翻最近 {max_counts} 条点赞（-o {max_counts}）；"
+            "已下载过的文件 f2 会跳过，入库侧还有五层判重"
+        )
+    else:
+        print(
+            "    · 全量翻页（f2 的点赞分页没有「遇到已下载就停」，每页还要固定等一次"
+            " timeout，故慢）；已下载过的文件 f2 会跳过，入库侧还有五层判重"
+        )
     try:
         rc, _info = runner(cmd, f2_dir)
     except Exception as exc:  # noqa: BLE001 —— 与 run_fetch 一致：单次失败不抛，交由上层报错
@@ -1898,11 +1921,12 @@ def run_fetch_likes(
                 "nickname": "我的喜欢",
                 "sec_user_id": url,
                 "rc": rc,
-                "interval": "all",
+                "max_counts": max_counts,
                 "cmd": " ".join(cmd),
             }
         ],
         "cmd": cmd,
+        "max_counts": max_counts,
     }
 
 

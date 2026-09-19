@@ -139,6 +139,103 @@ def test_create_f2_import_task_endpoint_accepts_since_days(client):
     )
 
 
+# ── 「我的喜欢」增量翻页（like_max_counts / -o）：f2 点赞分页无「遇到已下载就停」──
+
+
+def test_f2_status_exposes_like_max_counts(client):
+    """状态里要带 like_max_counts，前端才能显示「增量 N 条 / 全量」。"""
+    body = client.get("/api/scraper/f2-status").json()
+    assert "like_max_counts" in body
+    assert isinstance(body["like_max_counts"], int)
+
+
+def test_set_like_max_counts_endpoint_persists(client, monkeypatch):
+    """保存端点：写 settings + 落 .env（测试里打桩落盘，不碰真实 .env）。"""
+    from app.config import settings
+
+    written: list[dict] = []
+
+    async def fake_update(payload: dict) -> None:
+        written.append(payload)
+
+    monkeypatch.setattr("app.routers.ai_shared._update_env_file", fake_update)
+
+    resp = client.put("/api/scraper/f2-like-max-counts", params={"max_counts": 150})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["like_max_counts"] == 150
+    assert "150" in body["message"]
+    assert settings.f2_like_max_counts == 150
+    assert written and written[0]["F2_LIKE_MAX_COUNTS"] == "150"
+
+    # 0 = 恢复全量
+    zero = client.put("/api/scraper/f2-like-max-counts", params={"max_counts": 0}).json()
+    assert zero["like_max_counts"] == 0
+    assert "全量" in zero["message"]
+    assert settings.f2_like_max_counts == 0
+
+
+def test_set_like_max_counts_endpoint_rejects_negative(client):
+    assert (
+        client.put("/api/scraper/f2-like-max-counts", params={"max_counts": -1}).status_code
+        == 422
+    )
+
+
+async def test_like_max_counts_explicit_zero_beats_nonzero_setting(
+    client, monkeypatch, f2_like_tree
+):
+    """回归：任务显式传 0（要求本次全量）不能被非零的配置项覆盖。
+
+    用 `or` 取默认值会把 0 当成「没传」，于是「偶发一次全量」永远做不到。
+    本用例走真实执行路径（execute_f2_import），打桩的 run_fetch_likes 记录入参。
+    """
+    from app.config import settings
+    from app.services.task_runners import f2_import as runner
+
+    monkeypatch.setattr(settings, "f2_fetch_since_days", None, raising=False)
+    monkeypatch.setattr(settings, "f2_like_max_counts", 150, raising=False)
+
+    async def fake_download(_db, _task, _future, _root, _baseline, _opts):
+        return ({"ok": 1, "failed": 0, "results": []}, {"files": 0, "bytes": 0})
+
+    monkeypatch.setattr(runner, "_watch_like_download", fake_download)
+
+    for task_value, expected in ((0, 0), (None, 150), (88, 88)):
+        calls: dict = {}
+        _stub_like_fetch(monkeypatch, calls)
+
+        async with async_session() as db:
+            task = await task_runner.create_f2_import_task(
+                db,
+                fetch=True,
+                fetch_mode="like",
+                like_user="sec1",
+                like_max_counts=task_value,
+            )
+            await task_runner.execute_f2_import(db, task)
+
+        assert calls.get("max_counts") == expected, (
+            f"like_max_counts={task_value!r} 应解析为 {expected}"
+        )
+
+
+def test_create_f2_import_task_endpoint_accepts_like_max_counts(client):
+    """点赞增量条数透传到任务参数；越界同样被拦住。"""
+    body = client.post(
+        "/api/scraper/f2-import", params={"fetch": False, "mode": "like", "like_max_counts": 88}
+    ).json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["like_max_counts"] == 88 and opts["fetch_mode"] == "like"
+
+    assert (
+        client.post(
+            "/api/scraper/f2-import", params={"fetch": False, "like_max_counts": -1}
+        ).status_code
+        == 422
+    )
+
+
 async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeypatch):
     """P0 提速回归：执行阶段必须给 f2 传日期窗口，而不是 `-i all`。
 
@@ -1217,6 +1314,7 @@ def _stub_like_fetch(monkeypatch, calls: dict | None = None):
         if calls is not None:
             calls["like_user"] = like_user
             calls["download_root"] = str(download_root)
+            calls["max_counts"] = kwargs.get("max_counts")
         return {
             "total": 1,
             "ok": 1,

@@ -52,6 +52,12 @@ async def create_f2_import(
         True,
         description="mode=like 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）",
     ),
+    like_max_counts: int | None = Query(
+        None,
+        ge=0,
+        le=100000,
+        description="mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -79,13 +85,17 @@ async def create_f2_import(
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
             也不会漏作品。
         mode: `post`=博主主页作品（默认）；`like`=我的喜欢（点赞）。
-            like 模式不逐作者、不给时间窗口（喜欢列表按点赞时间排序，f2 的 -i 按
-            发布时间过滤，窗口会漏掉「最近点赞的老视频」），也不做作者白名单
-            （喜欢的作品天然跨作者），入库仍走五层判重。
+            like 模式不逐作者、不给时间窗口，也不做作者白名单（喜欢的作品天然跨作者），
+            入库仍走五层判重。
+            注：**f2 的点赞模式根本不读 `-i`**（源码实测），所以这里传不传日期窗口都
+            一样——能收窄翻页量的只有 `like_max_counts`。
         like_user: mode=like 时的「我的主页链接 / sec_user_id」（缺省取已保存配置）。
         register_bloggers: mode=like 时，入库后是否把**未登记的来源作者**补建成抖音
             博主并绑定本批素材（默认开）。补建的博主标记为「自动登记」，不算已登记
             博主、不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
+        like_max_counts: mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）。
+            点赞列表最新在前，填 100~200 可把日常增量降到一两页；代价是两次运行之间
+            新增点赞超过该值时会漏。
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
@@ -119,6 +129,7 @@ async def create_f2_import(
         fetch_mode=mode,
         like_user=(like_user or "").strip() or None,
         register_bloggers=register_bloggers,
+        like_max_counts=like_max_counts,
     )
     if task is None:
         return {
@@ -294,6 +305,43 @@ async def set_f2_like_user(
             f"已保存「我的主页链接」：{normalized}" if normalized else "已清除「我的主页链接」"
         ),
         "like_user": normalized,
+    }
+
+
+@router.put("/f2-like-max-counts")
+async def set_f2_like_max_counts(
+    max_counts: int = Query(
+        0, ge=0, le=100000, description="最多翻多少条点赞（0=全量翻到底）"
+    ),
+    persist: bool = Query(True, description="是否持久化写入 .env 文件"),
+) -> dict:
+    """保存「我的喜欢」每次最多翻多少条点赞作品。
+
+    为什么需要：f2 的点赞分页**没有「遇到已下载就停」**——它从 `cursor=0` 一路翻到底，
+    且每页固定 `asyncio.sleep(timeout)`（本机 10 秒）。点赞目录 919 个作品即 ≥46 页、
+    ≥7.7 分钟纯等待，**每次运行都一样，哪怕零新增**；同时进度条按「已落盘文件数」
+    计算，零新增时会全程停在 0，看起来像卡死。
+
+    点赞列表最新在前，所以只翻最近 N 条即可覆盖新增（f2 的 `-o/--max-counts` 确实
+    gate 住翻页循环）。代价：两次运行之间新增点赞超过 N 条会漏，故默认 0（全量，
+    行为与改造前一致）。
+    """
+    from app.config import settings
+    from app.routers.ai_shared import _update_env_file
+
+    settings.f2_like_max_counts = max(0, int(max_counts or 0))
+    if persist:
+        await _update_env_file(
+            {"F2_LIKE_MAX_COUNTS": str(settings.f2_like_max_counts)}
+        )
+
+    return {
+        "message": (
+            f"已保存：每次最多翻 {settings.f2_like_max_counts} 条点赞（增量模式）"
+            if settings.f2_like_max_counts
+            else "已保存：全量翻页到底"
+        ),
+        "like_max_counts": settings.f2_like_max_counts,
     }
 
 

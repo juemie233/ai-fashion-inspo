@@ -86,6 +86,11 @@ export interface F2ImportStatus {
   like_available: boolean
   /** 「我的喜欢」不可用原因 / 可用性摘要 */
   like_reason: string
+  /** 「我的喜欢」每次最多翻多少条点赞（0=全量翻到底）。
+   *  为什么需要：f2 的点赞分页没有「遇到已下载就停」，每页还固定等一次 timeout，
+   *  全量时零新增也要空翻数分钟，且进度条会因「无新文件」停在 0；点赞列表最新在
+   *  前，填 100~200 即可覆盖日常新增 */
+  like_max_counts: number
   /** 后端配置的默认日期窗口天数（F2_FETCH_SINCE_DAYS）：作为「只翻最近 N 天」的初值，
    *  避免前端硬编码默认值把 .env 配置顶掉 */
   fetch_since_days: number
@@ -118,6 +123,11 @@ export interface F2ImportOptions {
   /** mode=like 时：入库后把未登记的来源作者补建成抖音博主并绑定素材（缺省开；
    *  补建的博主标记为「自动登记」，不算已登记博主、不进一键获取素材的下载白名单） */
   register_bloggers?: boolean
+  /** mode=like 时最多翻多少条点赞（0=全量翻到底）。
+   *  收窄的是 f2 的翻页量（`-o`）：点赞分页没有「遇到已下载就停」，全量每次都要空翻
+   *  到底；点赞列表最新在前，填 100~200 可把日常增量降到一两页。代价是两次运行之间
+   *  新增点赞超过该值会漏。注意 f2 的点赞模式**不读 `-i`**，日期窗口在此无效。 */
+  like_max_counts?: number
 }
 
 export function useF2Import() {
@@ -126,6 +136,7 @@ export function useF2Import() {
   const submitting = ref(false)
   const autoSaving = ref(false)
   const likeUserSaving = ref(false)
+  const likeMaxSaving = ref(false)
 
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
@@ -236,15 +247,48 @@ export function useF2Import() {
     }
   }
 
+  /**
+   * 保存「我的喜欢」每次最多翻多少条点赞（0=全量），成功返回 true。
+   *
+   * 为什么需要收窄：f2 的点赞分页**没有「遇到已下载就停」**，从 cursor=0 一路翻到底，
+   * 每页还固定 `asyncio.sleep(timeout)`（本机 10 秒）——点赞目录 919 个作品即 ≥46 页、
+   * ≥7.7 分钟纯等待，每次运行都一样，哪怕零新增；同时进度条按「已落盘文件数」算，
+   * 零新增时会全程停在 0，看起来像卡死。
+   *
+   * 点赞列表最新在前，所以只翻最近 N 条即可覆盖新增：后端把它转成 f2 的
+   * `-o/--max-counts`（实测该参数确实 gate 住翻页循环）。
+   * ⚠ f2 的点赞模式**不读 `-i`**（源码实测），所以日期窗口在这里无效——能收窄的只有它。
+   */
+  async function setLikeMaxCounts(maxCounts: number, persist = true): Promise<boolean> {
+    likeMaxSaving.value = true
+    try {
+      const { data } = await apiClient.put<{ message: string; like_max_counts: number }>(
+        '/scraper/f2-like-max-counts',
+        null,
+        { params: { max_counts: maxCounts, persist } },
+      )
+      if (status.value) status.value.like_max_counts = data.like_max_counts
+      Message.success(data.message || '已保存')
+      return true
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '保存「点赞翻页条数」失败'))
+      return false
+    } finally {
+      likeMaxSaving.value = false
+    }
+  }
+
   return {
     status,
     statusLoading,
     submitting,
     autoSaving,
     likeUserSaving,
+    likeMaxSaving,
     loadStatus,
     submit,
     setAuto,
     setLikeUser,
+    setLikeMaxCounts,
   }
 }

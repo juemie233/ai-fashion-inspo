@@ -179,6 +179,8 @@ export function summarizeResult(
  *
  * 点赞总数要全量翻页到底才知道，进度条没有真分母；这段文字就是给用户的证据：
  * 文件数在涨 = f2 在干活，「本次新增」为 0 = 这一轮没有新赞。
+ * 注意全量模式下**零新增时进度条会一直停在 0**（它按已落盘文件数算），所以这段
+ * 文案比进度条更可信。
  */
 function likeDownloadText(r: Record<string, unknown>): string {
   const lp = (r.like_progress || {}) as Record<string, unknown>
@@ -220,9 +222,15 @@ export function describeRunningTask(
   const count = total > 0 ? `第 ${done}/${total} ` : ''
   if (stage === 'download') {
     if (likeMode) {
-      // 喜欢列表按点赞时间排序，f2 的时间窗口按发布时间过滤，所以这里全量翻页
+      // 点赞模式：f2 的点赞分页没有「遇到已下载就停」，全量时要空翻到底（每页固定
+      // 等一次 timeout）；`like_max_counts>0` 时只翻最近 N 条（列表最新在前），快得多。
+      // 注：f2 的点赞模式**不读 `-i`**，日期窗口在这里无效，能收窄的只有这个条数。
       const live = likeDownloadText(r)
-      return `拉取我的喜欢（点赞）中：${live ? `${live} · ` : ''}全量翻页，首轮可能较慢；已下载过的作品会自动跳过`
+      const maxCounts = Number(r.like_max_counts ?? 0) || 0
+      const scope = maxCounts
+        ? `增量：只翻最近 ${maxCounts} 条点赞`
+        : '全量翻页（零新增时进度条会停在 0，属正常），首轮可能较慢'
+      return `拉取我的喜欢（点赞）中：${live ? `${live} · ` : ''}${scope}；已下载过的作品会自动跳过`
     }
     // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
     // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载

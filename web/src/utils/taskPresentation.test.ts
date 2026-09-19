@@ -212,6 +212,31 @@ describe('describeRunningTask', () => {
     )
     expect(text).toContain('我的喜欢')
     expect(text).toContain('全量翻页')
+    // 全量时进度条会因「无新文件」停在 0，文案要提前说明，别让用户以为卡死
+    expect(text).toContain('进度条会停在 0')
+  })
+
+  it('点赞增量模式（like_max_counts>0）改说「只翻最近 N 条」', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      { stage: 'download', fetch_mode: 'like', like_max_counts: 150 },
+      'running',
+      0,
+      0,
+    )
+    expect(text).toContain('增量：只翻最近 150 条点赞')
+    expect(text).not.toContain('全量翻页')
+  })
+
+  it('like_max_counts=0 仍按全量口径描述（显式 0 与缺省一致）', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      { stage: 'download', fetch_mode: 'like', like_max_counts: 0 },
+      'running',
+      0,
+      0,
+    )
+    expect(text).toContain('全量翻页')
   })
 
   it('点赞下载期把实时文件数写进文案（点赞总数未知，靠它判断在下载）', () => {

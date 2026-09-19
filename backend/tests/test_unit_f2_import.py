@@ -1542,9 +1542,14 @@ def test_like_user_url_normalizes():
 
 
 def test_build_f2_like_command_shape():
-    """点赞命令：-M like + -i all + 带 {nickname}/{aweme_id} 的命名模板。
+    """点赞命令：-M like + 带 {nickname}/{aweme_id} 的命名模板 + **不传 `-i`**。
 
     原作者只存在于文件名里，作品 ID 同理（点赞列表跨作者，缺一不可）。
+
+    回归点（2026-09 读 f2 源码更正）：f2 的点赞模式 `handle_user_like` /
+    `fetch_user_like_videos` **都不读 `interval`**，`-i` 纯属无效参数——此前传
+    `-i all` 并注释「f2 按发布时间过滤，窗口会漏掉最近点赞的老视频」，那描述的是
+    一个不存在的过滤器，会误导后人以为能用 `-i` 收窄点赞增量。
     """
     cmd = f2.build_f2_like_command(
         "MS4wLjABAAAAme", download_root=Path("D:/f2/Download")
@@ -1553,10 +1558,27 @@ def test_build_f2_like_command_shape():
     assert cmd[:4] == [sys.executable, "-m", "f2", "dy"]
     assert cmd[cmd.index("-u") + 1] == "https://www.douyin.com/user/MS4wLjABAAAAme"
     assert cmd[cmd.index("-M") + 1] == "like"
-    assert cmd[cmd.index("-i") + 1] == "all"
+    assert "-i" not in cmd  # 点赞模式不读 interval，传了是无效参数
     assert cmd[cmd.index("-n") + 1] == f2.LIKE_NAMING_TEMPLATE
     assert f2.LIKE_NAMING_TEMPLATE == "{nickname}_{create}_{desc}_{aweme_id}"
     assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
+    assert "-o" not in cmd  # 缺省全量翻到底（行为与改造前一致）
+
+
+def test_build_f2_like_command_incremental_adds_max_counts():
+    """增量模式：`max_counts>0` 时传 `-o`（唯一能收窄 f2 点赞翻页量的参数）。
+
+    为什么需要：f2 的点赞分页没有「遇到已下载就停」，每页还固定 sleep 一次 timeout；
+    点赞列表最新在前，只翻最近 N 条即可覆盖新增。
+    """
+    cmd = f2.build_f2_like_command("MS4wLjABAAAAme", max_counts=150)
+
+    assert cmd[cmd.index("-o") + 1] == "150"
+    assert "-i" not in cmd
+
+    # 0 / 负数都视为「全量」，不拼出非法参数
+    assert "-o" not in f2.build_f2_like_command("sec", max_counts=0)
+    assert "-o" not in f2.build_f2_like_command("sec", max_counts=-5)
 
 
 def test_run_fetch_likes_reports_and_requires_user(tmp_path):
@@ -1575,6 +1597,34 @@ def test_run_fetch_likes_reports_and_requires_user(tmp_path):
         tmp_path, "MS4wLjABAAAAme", runner=lambda cmd, cwd: (1, "cookie 失效")
     )
     assert bad["failed"] == 1 and bad["ok"] == 0
+
+
+def test_run_fetch_likes_passes_max_counts_and_reports_it(tmp_path):
+    """增量条数要真的进命令行，并回显在结果里（任务结果据此显示「最近 N 条」）。"""
+    seen: list[list[str]] = []
+    result = f2.run_fetch_likes(
+        tmp_path,
+        "MS4wLjABAAAAme",
+        max_counts=120,
+        runner=lambda cmd, cwd: (seen.append(cmd) or (0, "")),
+    )
+
+    assert result["max_counts"] == 120
+    assert result["results"][0]["max_counts"] == 120
+    assert seen and seen[0][seen[0].index("-o") + 1] == "120"
+
+
+def test_run_fetch_likes_defaults_to_full_pagination(tmp_path):
+    """缺省 max_counts=0 → 不传 `-o`（全量，行为与改造前一致）。"""
+    seen: list[list[str]] = []
+    result = f2.run_fetch_likes(
+        tmp_path,
+        "MS4wLjABAAAAme",
+        runner=lambda cmd, cwd: (seen.append(cmd) or (0, "")),
+    )
+
+    assert result["max_counts"] == 0
+    assert seen and "-o" not in seen[0]
 
 
 # ═══════════════════════════════════════════════════════════════
