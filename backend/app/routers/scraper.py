@@ -84,8 +84,14 @@ async def create_f2_import(
 
     if fetch:
         status = f2_import_status()
-        if not status["available"]:
-            return {"message": status["reason"], "task_id": None}
+        # 两个入口的可用性口径不同，别互相借用：发布模式可用性依赖「已登记博主」
+        # 白名单（f2 用户库混进的无关账号默认跳过），点赞模式只要求 f2 + 工作目录 +
+        # 已配置我的主页链接（点赞列表天然跨作者）。用发布模式的口径去挡点赞，
+        # 用户会被一个与点赞无关的理由（「没有一个账号对应到已登记的抖音博主」）拒绝。
+        ready = status["like_available"] if mode == "like" else status["available"]
+        if not ready:
+            reason = status["like_reason"] if mode == "like" else status["reason"]
+            return {"message": reason, "task_id": None}
 
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
 

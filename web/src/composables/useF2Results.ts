@@ -7,6 +7,7 @@
 import { computed, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
+import { getApiErrorMessage } from '@/utils/apiError'
 import type { TrashReason } from '@/api/inspirations'
 
 /** 单条素材的审查状态：质量审核状态 / 垃圾桶 / 已彻底删除 */
@@ -122,8 +123,9 @@ export function useF2Results() {
       task.value = data.task || null
       batchId.value = data.batch_id || ''
       page = targetPage
-    } catch {
-      Message.error('加载本批素材失败')
+    } catch (e) {
+      // 带上后端 detail（批次清单缺失 / 素材 ID 非法等都有可操作的原因）
+      Message.error(getApiErrorMessage(e, '加载本批素材失败'))
     } finally {
       loading.value = false
     }
@@ -217,8 +219,8 @@ export function useF2Results() {
         skipped ? `已移入垃圾桶 ${trashed} 个（${skipped} 个跳过）` : `已移入垃圾桶 ${trashed} 个`,
       )
       await afterAction()
-    } catch {
-      Message.error('移入垃圾桶失败')
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '移入垃圾桶失败'))
     } finally {
       acting.value = false
     }
@@ -241,8 +243,8 @@ export function useF2Results() {
         skipped ? `已还原 ${restored} 个（${skipped} 个跳过）` : `已还原 ${restored} 个`,
       )
       await afterAction()
-    } catch {
-      Message.error('还原失败')
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '还原失败'))
     } finally {
       acting.value = false
     }
@@ -263,8 +265,8 @@ export function useF2Results() {
           'worker 执行完成后点「刷新」即可看到「已彻底删除」状态',
       )
       await afterAction()
-    } catch {
-      Message.error('提交彻底删除失败')
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '提交彻底删除失败'))
     } finally {
       acting.value = false
     }

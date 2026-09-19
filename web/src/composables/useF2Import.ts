@@ -146,6 +146,8 @@ export function useF2Import() {
   /** 提交一键获取素材任务，成功返回 task_id（失败返回 null） */
   async function submit(options: F2ImportOptions): Promise<number | null> {
     submitting.value = true
+    // 两个入口共用同一个接口，提示文案按 mode 区分（点赞入口说「一键获取素材」会让人以为点错了）
+    const label = options.mode === 'like' ? '采集我的喜欢' : '一键获取素材'
     try {
       const { data } = await apiClient.post<{
         task_id: number | null
@@ -158,10 +160,10 @@ export function useF2Import() {
         return null
       }
       if (data.reused) {
-        Message.info(data.message || '已有进行中的「一键获取素材」任务')
+        Message.info(data.message || `已有进行中的「${label}」任务`)
         return data.task_id
       }
-      Message.success('已提交「一键获取素材」任务，进度见任务中心')
+      Message.success(`已提交「${label}」任务，进度见任务中心`)
       return data.task_id
     } catch (e) {
       Message.error(getApiErrorMessage(e, '提交失败'))

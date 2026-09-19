@@ -283,7 +283,8 @@ async def restore_f2_task_results(
     """把本批已在垃圾桶的素材还原回素材库。
 
     逐条复用单条恢复逻辑（文件移回、三字段状态机、平台 ID 冲突前置检查），
-    单条失败计入 skipped 继续处理其余素材。
+    单条失败计入 skipped 继续处理其余素材。单条审计置 False，由这里汇总一条
+    ``batch_restore``——与批量移入垃圾桶的口径一致（还原几千条不该写几千条审计）。
 
     Returns:
         {"requested": int, "restored": int, "skipped": int}
@@ -296,7 +297,7 @@ async def restore_f2_task_results(
     skipped = len(ids) - len(target)
     for inspiration_id in target:
         try:
-            await restore_inspiration(db, inspiration_id)
+            await restore_inspiration(db, inspiration_id, audit=False)
             restored += 1
         except HTTPException:
             skipped += 1

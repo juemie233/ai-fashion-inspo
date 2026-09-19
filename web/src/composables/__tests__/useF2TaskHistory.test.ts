@@ -94,12 +94,14 @@ describe('useF2TaskHistory', () => {
     expect(resultTaskIds.value.size).toBe(0)
   })
 
-  it('首次加载失败：清空列表并提示', async () => {
+  it('首次加载失败：返回 false 并提示（不向上抛）', async () => {
     const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
     mocks.get.mockRejectedValue(new Error('boom'))
     const { tasks, loadTasks } = useF2TaskHistory()
 
-    await expect(loadTasks()).rejects.toThrow()
+    // 不抛：调用点包含即发即忘的翻页/刷新按钮与任务操作后的 reload，
+    // 抛出会变成未处理的 rejection，还会被 useTaskActions 误报成「操作失败」
+    await expect(loadTasks()).resolves.toBe(false)
 
     expect(tasks.value).toEqual([])
     expect(error).toHaveBeenCalled()
@@ -111,7 +113,7 @@ describe('useF2TaskHistory', () => {
     mocks.get.mockRejectedValue(new Error('boom'))
     const { loadTasks } = useF2TaskHistory()
 
-    await expect(loadTasks({ silent: true })).rejects.toThrow()
+    await expect(loadTasks({ silent: true })).resolves.toBe(false)
 
     expect(error).not.toHaveBeenCalled()
     error.mockRestore()

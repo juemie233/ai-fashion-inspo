@@ -269,8 +269,16 @@ async def trash_inspiration(
     return inspiration
 
 
-async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
-    """从垃圾桶恢复素材：文件移回媒体目录，清除 deleted_at 与 trash_reason。"""
+async def restore_inspiration(
+    db: AsyncSession, inspiration_id: str, audit: bool = True
+) -> Inspiration:
+    """从垃圾桶恢复素材：文件移回媒体目录，清除 deleted_at 与 trash_reason。
+
+    参数:
+        audit: 是否写入单条审计（批量入口逐条调用时应传 False，由批量汇总一条审计，
+            与 :func:`trash_inspiration` 的口径一致——否则还原 3000 个素材会写 3000
+            条审计日志，既拖慢还原也淹没审计面板）
+    """
     inspiration = await load_inspiration_full(db, inspiration_id)
     if not inspiration:
         raise HTTPException(status_code=404, detail="灵感素材未找到")
@@ -318,10 +326,11 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     except IntegrityError:
         # 并发竞态：恢复期间同平台 ID 被新素材抢先入库，撞部分唯一索引。
         # 恢复标记随事务回滚（素材仍在垃圾桶），转 409 提示用户重试
+        # （from None：原始 IntegrityError 是内部实现细节，对用户没有意义）
         raise HTTPException(
             status_code=409,
             detail="恢复失败：该平台 ID 已被其它素材占用（并发冲突），请刷新后重试",
-        )
+        ) from None
 
     paths_changed = False
     try:
@@ -344,11 +353,13 @@ async def restore_inspiration(db: AsyncSession, inspiration_id: str) -> Inspirat
     await db.refresh(inspiration)
 
     # 记录审计：恢复素材留痕（含原删除原因/来源），链路可回放
-    await record_audit_log(
-        action="restore",
-        count=1,
-        detail=f"原原因：{prev_reason or '未知'}；原来源：{'自动移动' if prev_source == 'auto' else '手动移入'}",
-    )
+    # （批量入口逐条调用时经 audit=False 跳过，由批量汇总一条审计）
+    if audit:
+        await record_audit_log(
+            action="restore",
+            count=1,
+            detail=f"原原因：{prev_reason or '未知'}；原来源：{'自动移动' if prev_source == 'auto' else '手动移入'}",
+        )
     return inspiration
 
 

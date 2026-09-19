@@ -1084,6 +1084,37 @@ async def test_f2_task_results_trash_then_restore(client, f2_tree):
     assert back["counts"]["trash"] == 0 and back["counts"]["live"] == 3
 
 
+async def test_f2_task_results_restore_writes_one_summary_audit(client, f2_tree):
+    """批量还原只写一条汇总审计（对齐批量移入垃圾桶的口径，不逐条留痕）。"""
+    from sqlalchemy import select
+
+    from app.models.audit import AuditLog
+
+    task_id = await _import_once()
+    ids = [i["id"] for i in client.get(f"/api/scraper/f2-tasks/{task_id}/results").json()["items"]]
+
+    client.post(
+        f"/api/scraper/f2-tasks/{task_id}/results/trash",
+        json={"ids": ids, "reason": "质量差"},
+    )
+    resp = client.post(f"/api/scraper/f2-tasks/{task_id}/results/restore", json={"ids": ids})
+    assert resp.json()["restored"] == len(ids)
+
+    async with async_session() as db:
+        restore_audits = (
+            (
+                await db.execute(
+                    select(AuditLog).where(AuditLog.action.in_(("restore", "batch_restore")))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    # 3 条素材只留 1 条 batch_restore（逐条的 restore 被 audit=False 抑制）
+    assert [a.action for a in restore_audits] == ["batch_restore"]
+    assert restore_audits[0].count == len(ids)
+
+
 async def test_f2_task_results_trash_rejects_bad_reason(client, f2_tree):
     """删除原因必须是素材库枚举之一（状态机口径统一，不另开后门）。"""
     task_id = await _import_once()
@@ -1429,3 +1460,47 @@ def test_f2_status_like_availability_is_independent_of_blogger_whitelist(
     assert with_user["like_available"] is True
     assert with_user["like_user"] == auto_settings.f2_like_user
     assert "我的喜欢" in with_user["like_reason"]
+
+
+def test_f2_import_like_mode_not_blocked_by_blogger_whitelist(
+    client, tmp_path, create_blogger, auto_settings, monkeypatch
+):
+    """点赞入口不被「已登记博主」白名单挡住（回归：曾沿用发布模式的 available 判定）。
+
+    同一个环境（f2 已装 + 工作目录在 + 用户库里有账号，但那个账号**没有**对应到
+    已登记博主）下：发布模式应拒绝并说明白名单原因，点赞模式（已配置主页链接）
+    应照常建任务——点赞列表本来就跨作者，与白名单无关。
+    """
+    import sqlite3
+
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec-x', '某未登记号', 3)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
+    create_blogger("里香", platform="douyin")  # 白名单生效，但不含 f2 里的账号
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+    blocked = client.post("/api/scraper/f2-import", params={"fetch": True}).json()
+    assert blocked["task_id"] is None
+    assert "已登记" in blocked["message"]  # 发布模式：讲的是博主白名单
+
+    created = client.post(
+        "/api/scraper/f2-import", params={"fetch": True, "mode": "like"}
+    ).json()
+    assert created["task_id"] is not None
+
+    # 未配置主页链接时，点赞入口才被自己的理由挡住
+    auto_settings.f2_like_user = ""
+    blocked_like = client.post(
+        "/api/scraper/f2-import", params={"fetch": True, "mode": "like"}
+    ).json()
+    assert blocked_like["task_id"] is None
+    assert "我的主页链接" in blocked_like["message"]

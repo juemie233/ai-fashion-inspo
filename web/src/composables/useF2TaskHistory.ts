@@ -10,6 +10,7 @@
 import { computed, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
+import { getApiErrorMessage } from '@/utils/apiError'
 import type { TaskEventPayload, UnifiedTask } from '@/types/task'
 import { normalizeQueueTask, type QueueTask } from '@/utils/taskPresentation'
 import { usePolling } from '@/composables/usePolling'
@@ -47,11 +48,16 @@ export function useF2TaskHistory() {
   }
 
   /**
-   * 拉取当前页历史。
+   * 拉取当前页历史，返回是否成功（**不向上抛**）。
    *
-   * @param options.silent 静默刷新（轮询用）：不改 loading，避免表格每 5 秒闪一次骨架
+   * 不抛的理由：调用点既有轮询（失败要停轮询）、也有任务操作后的刷新
+   * （useTaskActions 把 reload 放在 try 里，抛出会让「取消成功」被误报成
+   * 「取消失败」），还有即发即忘的翻页/刷新按钮（抛出会变成未处理的 rejection）。
+   * 成败用返回值表达，由调用方决定后续动作。
+   *
+   * @param options.silent 静默刷新（轮询 / WS / 操作后刷新）：不 loading、不弹错
    */
-  async function loadTasks(options: { silent?: boolean } = {}) {
+  async function loadTasks(options: { silent?: boolean } = {}): Promise<boolean> {
     if (!options.silent) loading.value = true
     try {
       const { data } = await apiClient.get<{ items: QueueTask[]; total: number }>('/tasks', {
@@ -63,9 +69,10 @@ export function useF2TaskHistory() {
       total.value = data.total || 0
       // 记录减少后当前页可能越界，回退到最后一页
       page.value = Math.min(page.value, pageCount.value)
+      return true
     } catch (e) {
-      if (!options.silent) Message.error('加载抖音采集历史失败')
-      throw e
+      if (!options.silent) Message.error(getApiErrorMessage(e, '加载抖音采集历史失败'))
+      return false
     } finally {
       loading.value = false
     }
@@ -76,13 +83,17 @@ export function useF2TaskHistory() {
     void loadTasks()
   }
 
-  // 有任务在跑时轮询进度；跑完或空闲即停（新任务靠 WS 事件与首次加载兜底）
+  // 有任务在跑时轮询进度；跑完或空闲即停（新任务靠 WS 事件与首次加载兜底）。
+  // 轮询失败（后端不可达）也停：继续每 5 秒打一次没有意义，等 WS 事件或下一次操作再启。
   const { start: startPoll, stop: stopPoll } = usePolling({
     intervalMs: POLL_INTERVAL_MS,
     immediate: false,
-    callback: () => {
-      if (hasActive.value) void loadTasks({ silent: true }).catch(() => stopPoll())
-      else stopPoll()
+    callback: async () => {
+      if (!hasActive.value) {
+        stopPoll()
+        return
+      }
+      if (!(await loadTasks({ silent: true }))) stopPoll()
     },
   })
   watch(hasActive, (active) => {
@@ -100,16 +111,16 @@ export function useF2TaskHistory() {
     reloadTimer = setTimeout(() => {
       reloadTimer = null
       // 静默刷新：失败不弹错（WS 事件驱动的刷新不该打断用户）
-      void loadTasks({ silent: true }).catch(() => {})
+      void loadTasks({ silent: true })
     }, 300)
   })
 
   const { cancelTask, deleteTask, pauseTask, resumeTask } = useTaskActions({
     onQueueTaskDeleted: () => {
       // 物理删除后页码可能变化，重新拉当前页
-      void loadTasks({ silent: true }).catch(() => {})
+      void loadTasks({ silent: true })
     },
-    reload: () => loadTasks({ silent: true }),
+    reload: () => void loadTasks({ silent: true }),
   })
 
   return {
