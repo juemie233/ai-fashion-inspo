@@ -196,6 +196,17 @@ function createPersonApi(kind: 'bloggers' | 'models') {
   }
 }
 
+/** 人物头像设置结果（POST/DELETE /api/bloggers/{id}/avatar） */
+export interface AvatarSetResult {
+  /** 头像相对路径（相对 storage_root）；清除后为 null */
+  avatar_path: string | null
+  /** 头像是从照片里裁出的人脸特写（false = 照片里没检出人脸，用了整张照片） */
+  face_cropped: boolean
+  /** 后端给用户看的提示文案（已提取人脸 / 未检出人脸回退整张 / 已清除） */
+  message: string
+  blogger?: Blogger
+}
+
 /** 穿搭博主 API（/api/bloggers）：含人脸特征注册与人物组绑定 */
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
@@ -276,23 +287,27 @@ export const bloggersApi = {
   /**
    * 设置博主头像（覆盖旧的）：从 TA 的素材里选一张，或本地上传一张照片（二选一）。
    *
-   * 后端统一重编码为 JPEG（长边 ≤512）存到 storage/avatars/，并写 avatar_path；
-   * 这是头像的**唯一**来源（不再从素材人脸检测里自动裁剪），设置后立刻生效。
+   * 后端会**提取人像**：送人脸识别子服务取照片里最大的一张人脸，按检测框外扩裁成
+   * 256×256 正方形头像；照片里没检出人脸（或人脸子服务不可用）时回退整张照片
+   * （长边 ≤512）。返回 face_cropped 说明走的是哪条路。
    */
-  async setAvatar(id: number, payload: { inspirationId?: string; file?: File }): Promise<Blogger> {
+  async setAvatar(
+    id: number,
+    payload: { inspirationId?: string; file?: File },
+  ): Promise<AvatarSetResult> {
     const formData = new FormData()
     if (payload.file) formData.append('file', payload.file)
     if (payload.inspirationId) formData.append('inspiration_id', payload.inspirationId)
     // 显式 multipart：全局默认 application/json 会让 axios 把 FormData 序列化成 JSON（后端 422）
-    const { data } = await apiClient.post<Blogger>(`/bloggers/${id}/avatar`, formData, {
+    const { data } = await apiClient.post<AvatarSetResult>(`/bloggers/${id}/avatar`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     return data
   },
 
-  /** 清除手动头像（avatar_path 置空、回退首字占位），同时删除头像文件 */
-  async clearAvatar(id: number): Promise<Blogger> {
-    const { data } = await apiClient.delete<Blogger>(`/bloggers/${id}/avatar`)
+  /** 清除头像（avatar_path 置空、回退首字占位），同时删除头像文件 */
+  async clearAvatar(id: number): Promise<AvatarSetResult> {
+    const { data } = await apiClient.delete<AvatarSetResult>(`/bloggers/${id}/avatar`)
     return data
   },
 

@@ -1,14 +1,38 @@
-"""博主人像头像（手动设置）测试：从素材选一张 / 本地上传 / 覆盖 / 清除 / 级联清理。
+"""博主人像头像（手动设置）测试：从素材选一张 / 本地上传 / 人脸提取 / 兜底 / 清除。
 
-头像链路：选定照片 → 统一重编码为 JPEG（长边 ≤512）→ ``storage/avatars/avatar_{id}.jpg``
-→ 写 ``avatar_path``。这是头像的唯一来源（不再从素材人脸检测自动裁剪）；
-``avatar_path`` 为空时前端显示名字首字占位。
+头像链路：选定照片 → **提取人像**（送人脸识别子服务取照片里最大的人脸，按检测框
+外扩裁成 256×256 正方形；照片里没检出人脸或子服务不可用时回退整张照片）→
+``storage/avatars/avatar_{id}.jpg`` → 写 ``avatar_path``。这是头像的唯一来源
+（不再按博主从素材人脸检测里自动生成）；``avatar_path`` 为空时前端显示名字首字占位。
 """
 
+import io
+
+import numpy as np
 from PIL import Image
 
 from app.database import async_session
-from app.services.person.avatar import AVATAR_MAX_SIDE, avatar_rel_path
+from app.services.face_crop import FACE_CROP_SIZE
+from app.services.person.avatar import AVATAR_MAX_SIDE
+
+
+def _patch_face_embed(monkeypatch, faces: list[dict]):
+    """把人脸子服务的 embed 换成假实现（返回给定人脸列表）。"""
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        return {"face_count": len(faces), "faces": faces}
+
+    monkeypatch.setattr("app.services.face_crop.face_client.embed", fake_embed)
+
+
+def _patch_no_face(monkeypatch):
+    """模拟「照片里没有检出人脸」：子服务返回 404。"""
+    from app.services.face_client import FaceServiceHttpError
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceHttpError(404, "未检测到人脸")
+
+    monkeypatch.setattr("app.services.face_crop.face_client.embed", fake_embed)
 
 
 def _link_inspiration(client, insp_id: str, blogger_id: int) -> None:
@@ -17,42 +41,109 @@ def _link_inspiration(client, insp_id: str, blogger_id: int) -> None:
 
 
 def _set_avatar_from_material(client, blogger_id: int, insp_id: str):
-    return client.post(
-        f"/api/bloggers/{blogger_id}/avatar", data={"inspiration_id": insp_id}
-    )
+    return client.post(f"/api/bloggers/{blogger_id}/avatar", data={"inspiration_id": insp_id})
 
 
-def test_set_avatar_from_linked_material(client, create_blogger, upload, make_image):
-    """从该博主的素材里选一张：落盘为 JPEG 头像（长边 ≤512）并写 avatar_path。"""
+def test_set_avatar_extracts_face_from_photo(client, create_blogger, upload, monkeypatch):
+    """从素材设置头像：提取照片里的人脸，输出 256×256 正方形人像。"""
     from app.config import settings
 
-    blogger = create_blogger(name="选素材当头像")
-    insp_id = upload().json()["id"]
+    blogger = create_blogger(name="提人脸当头像")
+    insp_id = upload(size=(200, 120)).json()["id"]  # 非正方形照片，验证确实按人脸裁
     _link_inspiration(client, insp_id, blogger["id"])
+    _patch_face_embed(
+        monkeypatch,
+        [
+            # 两张脸：应挑面积大的那张（画面主体），而不是 det_score 更高的那张
+            {"bbox": [10, 10, 80, 80], "det_score": 0.9, "embedding": [0.0] * 512},
+            {"bbox": [150, 80, 175, 105], "det_score": 0.99, "embedding": [0.0] * 512},
+        ],
+    )
 
     r = _set_avatar_from_material(client, blogger["id"], insp_id)
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["avatar_path"] == avatar_rel_path(blogger["id"])
-
-    avatar_file = settings.storage_root / body["avatar_path"]
-    assert avatar_file.is_file()
-    with Image.open(avatar_file) as img:
+    assert body["face_cropped"] is True
+    assert "人脸" in body["message"]
+    with Image.open(settings.storage_root / body["avatar_path"]) as img:
         assert img.format == "JPEG"
-        assert max(img.size) <= AVATAR_MAX_SIDE
+        assert img.size == (FACE_CROP_SIZE, FACE_CROP_SIZE)  # 正方形人像
 
     # 详情接口回读（前端据此渲染）
-    detail = client.get(f"/api/bloggers/{blogger['id']}").json()
-    assert detail["avatar_path"] == body["avatar_path"]
+    assert client.get(f"/api/bloggers/{blogger['id']}").json()["avatar_path"] == body["avatar_path"]
 
 
-def test_set_avatar_from_upload(client, create_blogger, make_image):
-    """本地上传一张照片（用真实图片字节，走 multipart）。"""
+def test_set_avatar_falls_back_to_whole_photo_when_no_face(
+    client, create_blogger, upload, monkeypatch
+):
+    """照片里没检出人脸：回退整张照片（长边 ≤512），提示说明走的是回退。"""
+    from app.config import settings
+
+    blogger = create_blogger(name="无人脸当头像")
+    insp_id = upload(size=(200, 120)).json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+    _patch_no_face(monkeypatch)
+
+    r = _set_avatar_from_material(client, blogger["id"], insp_id)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["face_cropped"] is False
+    assert "整张照片" in body["message"]
+    with Image.open(settings.storage_root / body["avatar_path"]) as img:
+        assert max(img.size) <= AVATAR_MAX_SIDE
+        assert img.size != (FACE_CROP_SIZE, FACE_CROP_SIZE)
+
+
+def test_set_avatar_falls_back_when_face_service_unavailable(
+    client, create_blogger, upload, monkeypatch
+):
+    """人脸子服务未配置/不可用：不报错，回退整张照片。"""
+    from app.config import settings
+    from app.services.face_client import FaceServiceUnavailableError
+
+    blogger = create_blogger(name="服务不可用博")
+    insp_id = upload(size=(120, 200)).json()["id"]
+    _link_inspiration(client, insp_id, blogger["id"])
+
+    async def fake_embed(image_bytes: bytes, filename: str = "image.jpg") -> dict:
+        raise FaceServiceUnavailableError("未配置人脸识别子服务（FACE_SERVICE_URL）")
+
+    monkeypatch.setattr("app.services.face_crop.face_client.embed", fake_embed)
+
+    r = _set_avatar_from_material(client, blogger["id"], insp_id)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["face_cropped"] is False
+    assert (settings.storage_root / r.json()["avatar_path"]).is_file()
+
+
+def test_crop_face_pads_and_clamps(make_image):
+    """裁剪纯函数：bbox 外扩 20% 且 clamp 到图内，输出正方形 JPEG。"""
+    from app.services.face_crop import crop_face
+
+    data, _ctype = make_image(size=(100, 100))
+    out = crop_face(data, [40, 40, 60, 60], size=64)
+    with Image.open(io.BytesIO(out)) as img:
+        assert img.size == (64, 64)
+        assert img.format == "JPEG"
+    # 越界 bbox 同样不报错（clamp 到图内）
+    out2 = crop_face(data, [-20, -20, 30, 30], size=32)
+    with Image.open(io.BytesIO(out2)) as img:
+        assert img.size == (32, 32)
+
+
+def test_set_avatar_from_upload(client, create_blogger, make_image, monkeypatch):
+    """本地上传一张照片（multipart）：同样走人脸提取。"""
     from app.config import settings
 
     blogger = create_blogger(name="上传当头像")
-    data, ctype = make_image(color=(120, 40, 200))
+    data, ctype = make_image(color=(120, 40, 200), size=(160, 160))
+    _patch_face_embed(
+        monkeypatch,
+        [{"bbox": [30, 30, 90, 90], "det_score": 0.95, "embedding": np.zeros(512).tolist()}],
+    )
 
     r = client.post(
         f"/api/bloggers/{blogger['id']}/avatar",
@@ -60,13 +151,14 @@ def test_set_avatar_from_upload(client, create_blogger, make_image):
     )
 
     assert r.status_code == 200, r.text
-    avatar_file = settings.storage_root / r.json()["avatar_path"]
-    assert avatar_file.is_file()
-    with Image.open(avatar_file) as img:
-        assert img.format == "JPEG"
+    assert r.json()["face_cropped"] is True
+    with Image.open(settings.storage_root / r.json()["avatar_path"]) as img:
+        assert img.size == (FACE_CROP_SIZE, FACE_CROP_SIZE)
 
 
-async def test_set_avatar_from_video_material_uses_thumbnail(client, create_blogger, upload):
+async def test_set_avatar_from_video_material_uses_thumbnail(
+    client, create_blogger, upload, monkeypatch
+):
     """视频素材当头像：用首帧缩略图（视频本体不能当图片解码）。"""
     from app.config import settings
     from app.models.inspiration import Inspiration
@@ -85,9 +177,12 @@ async def test_set_avatar_from_video_material_uses_thumbnail(client, create_blog
         row.file_path = rel
         await db.commit()
 
+    _patch_face_embed(monkeypatch, [{"bbox": [5, 5, 40, 40], "det_score": 0.9}])
+
     r = _set_avatar_from_material(client, blogger["id"], insp["id"])
 
     assert r.status_code == 200, r.text
+    assert r.json()["face_cropped"] is True
     assert (settings.storage_root / r.json()["avatar_path"]).is_file()
 
 
@@ -116,7 +211,7 @@ def test_set_avatar_rejects_bad_sources(client, create_blogger, upload, make_ima
     missing_insp = _set_avatar_from_material(client, blogger["id"], "not-a-real-id")
     assert missing_insp.status_code == 400
 
-    # 坏图（不是图片字节）→ 400 人话提示
+    # 坏图（不是图片字节）→ 400 人话提示（归一化阶段就失败，不经过人脸子服务）
     broken = client.post(
         f"/api/bloggers/{blogger['id']}/avatar",
         files={"file": ("broken.jpg", b"definitely-not-an-image", "image/jpeg")},

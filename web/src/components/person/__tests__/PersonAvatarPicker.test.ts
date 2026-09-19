@@ -10,6 +10,7 @@
 import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { Message } from '@arco-design/web-vue'
 import PersonAvatarPicker from '../PersonAvatarPicker.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -146,8 +147,15 @@ describe('PersonAvatarPicker', () => {
     expect(wrapper.text()).toContain('视频首帧')
   })
 
-  it('从素材选择：选中后「设为头像」提交 inspiration_id', async () => {
-    mocks.post.mockResolvedValue({ data: { id: 7, avatar_path: 'avatars/avatar_7.jpg' } })
+  it('从素材选择：提交 inspiration_id，并提示后端说明（提取人脸/整张照片）', async () => {
+    mocks.post.mockResolvedValue({
+      data: {
+        avatar_path: 'avatars/avatar_7.jpg',
+        face_cropped: true,
+        message: '已提取照片里的人脸作为头像',
+      },
+    })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     const wrapper = await mountPicker()
 
     // 未选择时提交按钮禁用
@@ -164,10 +172,15 @@ describe('PersonAvatarPicker', () => {
     expect(body).toBeInstanceOf(FormData)
     expect((body as FormData).get('inspiration_id')).toBe('a')
     expect(wrapper.emitted('saved')?.[0]).toEqual(['avatars/avatar_7.jpg'])
+    // 文案来自后端：用户需要知道这次是「提取了人脸」还是「回退整张照片」
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('已提取照片里的人脸'))
+    success.mockRestore()
   })
 
   it('已设置头像时提供「清除头像」', async () => {
-    mocks.delete.mockResolvedValue({ data: { id: 7, avatar_path: null } })
+    mocks.delete.mockResolvedValue({
+      data: { avatar_path: null, face_cropped: false, message: '已清除头像' },
+    })
     const wrapper = await mountPicker({ hasAvatar: true })
 
     const clear = wrapper.findAll('button').find((b) => b.text().includes('清除头像'))

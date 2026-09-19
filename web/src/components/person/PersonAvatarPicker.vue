@@ -4,8 +4,11 @@
  * 为什么单独一个组件：详情页头部与编辑弹窗都要能设置头像，且都要「素材网格 + 上传」
  * 两套来源；收敛在这里避免两处各写一遍（以及两处各自踩 FormData/分页的坑）。
  *
+ * 后端会从选中的照片里**提取人像**（取最大人脸裁成正方形）；照片里没检出人脸时
+ * 回退整张照片，提示文案由后端返回的 message 说明走的是哪条路。
+ *
  * 素材网格复用 common 公共组件 DensityImageGrid（列数随密度、单元 min-width: 0），
- * 与素材库各处口径一致；上传走 multipart（后端统一转 JPEG 且长边压到 512）。
+ * 与素材库各处口径一致；上传走 multipart。
  */
 
 import { computed, ref, watch } from 'vue'
@@ -93,12 +96,13 @@ async function submit() {
   if (!canSubmit.value) return
   submitting.value = true
   try {
-    const blogger = await bloggersApi.setAvatar(props.personId, {
+    const result = await bloggersApi.setAvatar(props.personId, {
       inspirationId: tab.value === 'material' ? selectedInspId.value : undefined,
       file: tab.value === 'upload' ? (pickedFile.value ?? undefined) : undefined,
     })
-    Message.success(`已设置「${props.personName}」的头像`)
-    emit('saved', blogger.avatar_path ?? null)
+    // 文案由后端给：走的是「提取人脸」还是「整张照片」回退，用户需要知道
+    Message.success(`已设置「${props.personName}」的头像：${result.message}`)
+    emit('saved', result.avatar_path)
     emit('update:visible', false)
   } catch (e) {
     Message.error(getApiErrorMessage(e, '设置头像失败'))
@@ -110,8 +114,8 @@ async function submit() {
 async function clearAvatar() {
   submitting.value = true
   try {
-    await bloggersApi.clearAvatar(props.personId)
-    Message.success('已清除头像，列表将显示名字首字占位')
+    const result = await bloggersApi.clearAvatar(props.personId)
+    Message.success(result.message || '已清除头像')
     emit('saved', null)
     emit('update:visible', false)
   } catch (e) {
@@ -154,6 +158,9 @@ async function clearAvatar() {
             description="TA 还没有素材，可切到「上传照片」"
             style="padding: 24px 0"
           />
+          <div v-else class="avatar-pick-hint">
+            点一张照片 → 「设为头像」：系统会从照片里提取人脸作为头像
+          </div>
           <a-pagination
             v-if="total > PAGE_SIZE"
             style="margin-top: 12px; justify-content: center"
@@ -175,8 +182,8 @@ async function clearAvatar() {
           />
         </div>
         <div class="avatar-upload-tip">
-          支持 JPG / PNG / WebP；上传后统一转成方形头像（长边 ≤512）。头像是手动设置的，
-          清除后显示名字首字占位。
+          支持 JPG / PNG / WebP；系统会从照片里提取人脸作为头像（取最大的一张脸并外扩裁剪），
+          照片里没检出人脸时用整张照片。
         </div>
         <div v-if="pickedPreview" class="avatar-upload-preview">
           <img :src="pickedPreview" alt="待设置的头像" />
@@ -245,6 +252,12 @@ async function clearAvatar() {
   position: absolute;
   left: 2px;
   bottom: 2px;
+}
+
+.avatar-pick-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #86909c;
 }
 
 .avatar-upload-row {

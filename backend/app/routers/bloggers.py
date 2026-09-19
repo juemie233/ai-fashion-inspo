@@ -416,7 +416,7 @@ async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -
         raise HTTPException(status_code=404, detail=e.message)
 
 
-@router.post("/{blogger_id}/avatar", response_model=BloggerOut)
+@router.post("/{blogger_id}/avatar")
 async def set_blogger_avatar_api(
     blogger_id: int,
     file: UploadFile | None = File(None, description="本地上传的照片（与 inspiration_id 二选一）"),
@@ -430,10 +430,14 @@ async def set_blogger_avatar_api(
     两种来源二选一：
     - ``inspiration_id``：必须已关联到该博主（前端的选择器只列 TA 的素材）；
       视频素材用首帧缩略图（视频本体不能当图片用）
-    - ``file``：本地上传的 JPG/PNG/WebP 等，统一重编码为 JPEG 且长边压到 512
+    - ``file``：本地上传的 JPG/PNG/WebP 等
 
-    设置后 ``avatar_path`` 非空——这是头像的**唯一**来源（系统不再从素材人脸检测里
-    自动裁剪头像）；清除后前端回退为名字首字占位。
+    拿到照片后**提取人像**：送人脸识别子服务取照片里最大的一张人脸，按检测框外扩
+    裁成 256×256 正方形头像；照片里没检出人脸（或人脸子服务不可用）时回退整张照片
+    （长边 ≤512）。
+
+    Returns:
+        {"avatar_path": str, "face_cropped": bool, "message": str, "blogger": {...}}
     """
     from app.services.face_image import load_inspiration_image
     from app.services.person.avatar import set_blogger_avatar
@@ -476,11 +480,15 @@ async def set_blogger_avatar_api(
     return await set_blogger_avatar(db, blogger_id, data, source="inspiration")
 
 
-@router.delete("/{blogger_id}/avatar", response_model=BloggerOut)
+@router.delete("/{blogger_id}/avatar")
 async def clear_blogger_avatar_api(
     blogger_id: int, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """清除手动头像（avatar_path 置空，前端回退首字占位），同时删除头像文件。"""
+    """清除头像（avatar_path 置空，前端回退首字占位），同时删除头像文件。
+
+    Returns:
+        {"avatar_path": None, "face_cropped": False, "message": str}
+    """
     from app.services.person.avatar import clear_blogger_avatar
 
     return await clear_blogger_avatar(db, blogger_id)
