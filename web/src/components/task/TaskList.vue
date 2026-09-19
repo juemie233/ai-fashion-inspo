@@ -139,7 +139,7 @@ const columns: TableColumnData[] = [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 280,
+    width: 220,
     render: ({ record }) => {
       const row = record as UnifiedTask
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [

@@ -4,6 +4,10 @@
  * 嵌在「抖音采集历史」卡片内（由该卡片按任务 id 打开）。三种动作与素材库口径一致：
  * 移入垃圾桶（软删除，可还原，同时作为负样本）、还原、彻底删除（不可恢复，
  * 后端创建 batch_delete 任务由 worker 执行）。
+ *
+ * 图片浏览一律走 common 下的公共组件：DensityImageGrid（自适应列数 + 密度切换）
+ * + ThumbCard（内含 HoverImagePreview 悬停大图）+ LoadMoreBar。
+ * 自建网格曾因为固定六列 + 网格项最小宽度而把容器撑出横向滚动条，故不再自绘布局。
  */
 
 import { ref, watch } from 'vue'
@@ -11,6 +15,7 @@ import { useRouter } from 'vue-router'
 import { TRASH_REASON_OPTIONS, getFileUrl, type TrashReason } from '@/api/inspirations'
 import { openInspiration } from '@/utils/openInspiration'
 import { formatDate } from '@/utils/format'
+import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
 import ThumbCard from '@/components/common/ThumbCard.vue'
 import LoadMoreBar from '@/components/common/LoadMoreBar.vue'
 import { useF2Results, type F2ResultFilter, type F2ResultItem } from '@/composables/useF2Results'
@@ -20,6 +25,14 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 
 const router = useRouter()
 const reason = ref<TrashReason>('质量差')
+
+/** 网格密度（v-model 给 DensityImageGrid）：与素材库/搜索页一样本地记住选择 */
+type DensityMode = 'compact' | 'standard' | 'comfortable'
+const DENSITY_STORAGE_KEY = 'f2-results-density'
+const density = ref<DensityMode>(
+  (localStorage.getItem(DENSITY_STORAGE_KEY) as DensityMode | null) ?? 'standard',
+)
+watch(density, (value) => localStorage.setItem(DENSITY_STORAGE_KEY, value))
 
 const {
   task,
@@ -33,11 +46,11 @@ const {
   loading,
   acting,
   selectedIds,
-  hasMore,
   selectedItems,
   selectedLive,
   selectedTrashed,
   open,
+  reload,
   setFilter,
   setAuthor,
   loadMore,
@@ -64,7 +77,7 @@ const filterOptions: { label: string; value: F2ResultFilter }[] = [
   { label: '已彻底删除', value: 'gone' },
 ]
 
-/** 列表里所有条目都已勾选（仅统计可操作项） */
+/** 列表里所有可操作条目都已勾选 */
 function allLoadedSelected(): boolean {
   const selectable = items.value.filter((i) => i.state !== 'gone')
   return selectable.length > 0 && selectable.every((i) => selectedIds.value.has(i.id))
@@ -101,7 +114,8 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
           <b>{{ counts.trash }}</b> · 已彻底删除 <b>{{ counts.gone }}</b>
         </span>
       </div>
-      <a-space size="small">
+      <!-- 右侧信息行用可换行的 flex（a-space 默认不换行，窄屏会把面板撑出横向滚动条） -->
+      <div class="f2r-head-actions">
         <span v-if="task" class="f2r-meta">
           任务 #{{ task.id }} · {{ formatDate(task.created_at) }} · 导入 {{ task.imported }} 条
           <template v-if="task.failed">（失败 {{ task.failed }}）</template>
@@ -112,7 +126,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
         <span v-if="batchId" class="f2r-batch">批次 {{ batchId }}</span>
         <a-button size="mini" :loading="loading" @click="reload()">刷新</a-button>
         <a-button size="mini" @click="emit('close')">收起</a-button>
-      </a-space>
+      </div>
     </div>
 
     <div class="f2r-filter">
@@ -138,61 +152,6 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
       />
     </div>
 
-    <div class="f2r-actions">
-      <a-space size="small" wrap>
-        <a-button size="mini" @click="selectAllLoaded">
-          {{ allLoadedSelected() ? '取消全选' : '全选已加载' }}
-        </a-button>
-        <span class="f2r-meta">已选 {{ selectedItems.length }}</span>
-        <a-select
-          v-model="reason"
-          :options="TRASH_REASON_OPTIONS"
-          size="mini"
-          style="width: 110px"
-        />
-        <a-popconfirm
-          :content="`确定把选中的 ${selectedLive.length} 个素材移入垃圾桶？（可在垃圾桶还原）`"
-          :disabled="selectedLive.length === 0"
-          @ok="trashSelected(reason)"
-        >
-          <a-button
-            size="mini"
-            type="outline"
-            status="warning"
-            :disabled="!selectedLive.length"
-            :loading="acting"
-          >
-            移入垃圾桶<template v-if="selectedLive.length">（{{ selectedLive.length }}）</template>
-          </a-button>
-        </a-popconfirm>
-        <a-button
-          size="mini"
-          type="outline"
-          status="success"
-          :disabled="!selectedTrashed.length"
-          :loading="acting"
-          @click="restoreSelected"
-        >
-          还原<template v-if="selectedTrashed.length">（{{ selectedTrashed.length }}）</template>
-        </a-button>
-        <a-popconfirm
-          content="彻底删除不可恢复（连同磁盘文件与向量），确定提交批量删除任务？"
-          :disabled="selectedItems.length === 0"
-          @ok="deleteSelected"
-        >
-          <a-button
-            size="mini"
-            type="outline"
-            status="danger"
-            :disabled="!selectedItems.length"
-            :loading="acting"
-          >
-            彻底删除<template v-if="selectedItems.length">（{{ selectedItems.length }}）</template>
-          </a-button>
-        </a-popconfirm>
-      </a-space>
-    </div>
-
     <a-spin :loading="loading" style="display: block">
       <div v-if="!items.length && !loading" class="f2r-empty">
         {{
@@ -201,53 +160,128 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
             : '这批任务没有可浏览的结果（未落批次清单或未导入任何文件）'
         }}
       </div>
-      <div v-else class="f2r-grid">
-        <div v-for="item in items" :key="item.id" class="f2r-cell">
-          <ThumbCard
-            v-if="item.state !== 'gone'"
-            :src="getFileUrl(item.thumbnail_path || item.file_path || '')"
-            :video-src="
-              item.media_type === 'video' && !item.thumbnail_path
-                ? getFileUrl(item.file_path || '')
-                : undefined
-            "
-            :selected="selectedIds.has(item.id)"
-            :hover-src="previewSrc(item)"
-            @click="toggleSelect(item.id)"
-          >
-            <template #extra>
-              <div class="f2r-check">
-                <a-checkbox :model-value="selectedIds.has(item.id)" size="small" />
-              </div>
-              <a-tag
-                v-if="stateTag(item)"
-                class="f2r-tag"
-                size="small"
-                :color="stateTag(item)!.color"
-              >
-                {{ stateTag(item)!.text }}
-              </a-tag>
-              <a-button class="f2r-open" size="mini" type="text" @click.stop="openDetail(item.id)">
-                查看详情
-              </a-button>
-            </template>
-            <template #footer>
-              <div class="f2r-caption" :title="item.caption">
-                <b>{{ item.author || '未知博主' }}</b> · {{ item.caption || '（无正文）' }}
-              </div>
-            </template>
-          </ThumbCard>
 
-          <!-- 已被彻底删除：保留占位以说明「本批导入过、现已不存在」 -->
-          <div v-else class="f2r-gone">
-            <div class="f2r-gone-mark">🗑️ 已彻底删除</div>
-            <div class="f2r-gone-meta">{{ item.author || '未知博主' }}</div>
-            <div class="f2r-gone-meta" :title="item.caption">
-              {{ item.caption || '（无正文）' }}
+      <!-- 图片浏览：网格容器与密度切换、缩略图卡、悬停大图全部走 common 公共组件。
+           网格不做内部滚动（自适应列数 + 单元 min-width: 0），从根上避免横向滚动条 -->
+      <div v-else>
+        <DensityImageGrid v-model:density="density">
+          <template #header-left>
+            <a-button size="mini" @click="selectAllLoaded">
+              {{ allLoadedSelected() ? '取消全选' : '全选已加载' }}
+            </a-button>
+            <span class="f2r-meta">已选 {{ selectedItems.length }}</span>
+            <a-select
+              v-model="reason"
+              :options="TRASH_REASON_OPTIONS"
+              size="mini"
+              style="width: 110px"
+            />
+            <a-popconfirm
+              :content="`确定把选中的 ${selectedLive.length} 个素材移入垃圾桶？（可在垃圾桶还原）`"
+              :disabled="selectedLive.length === 0"
+              @ok="trashSelected(reason)"
+            >
+              <a-button
+                size="mini"
+                type="outline"
+                status="warning"
+                :disabled="!selectedLive.length"
+                :loading="acting"
+              >
+                移入垃圾桶<template v-if="selectedLive.length"
+                  >（{{ selectedLive.length }}）</template
+                >
+              </a-button>
+            </a-popconfirm>
+            <a-button
+              size="mini"
+              type="outline"
+              status="success"
+              :disabled="!selectedTrashed.length"
+              :loading="acting"
+              @click="restoreSelected"
+            >
+              还原<template v-if="selectedTrashed.length"
+                >（{{ selectedTrashed.length }}）</template
+              >
+            </a-button>
+            <a-popconfirm
+              content="彻底删除不可恢复（连同磁盘文件与向量），确定提交批量删除任务？"
+              :disabled="selectedItems.length === 0"
+              @ok="deleteSelected"
+            >
+              <a-button
+                size="mini"
+                type="outline"
+                status="danger"
+                :disabled="!selectedItems.length"
+                :loading="acting"
+              >
+                彻底删除<template v-if="selectedItems.length"
+                  >（{{ selectedItems.length }}）</template
+                >
+              </a-button>
+            </a-popconfirm>
+          </template>
+
+          <div
+            v-for="item in items"
+            :key="item.id"
+            class="f2r-cell"
+            @click="item.state !== 'gone' && toggleSelect(item.id)"
+          >
+            <ThumbCard
+              v-if="item.state !== 'gone'"
+              :src="getFileUrl(item.thumbnail_path || item.file_path || '')"
+              :video-src="
+                item.media_type === 'video' && !item.thumbnail_path
+                  ? getFileUrl(item.file_path || '')
+                  : undefined
+              "
+              :alt="item.caption || item.author || 'f2 素材'"
+              :selected="selectedIds.has(item.id)"
+              :hover-src="previewSrc(item)"
+            >
+              <template #extra>
+                <div class="f2r-check">
+                  <a-checkbox :model-value="selectedIds.has(item.id)" size="small" />
+                </div>
+                <a-tag
+                  v-if="stateTag(item)"
+                  class="f2r-tag"
+                  size="small"
+                  :color="stateTag(item)!.color"
+                >
+                  {{ stateTag(item)!.text }}
+                </a-tag>
+                <a-button
+                  class="f2r-open"
+                  size="mini"
+                  type="text"
+                  @click.stop="openDetail(item.id)"
+                >
+                  查看详情
+                </a-button>
+              </template>
+              <template #footer>
+                <div class="f2r-caption" :title="item.caption">
+                  <b>{{ item.author || '未知博主' }}</b> · {{ item.caption || '（无正文）' }}
+                </div>
+              </template>
+            </ThumbCard>
+
+            <!-- 已被彻底删除：保留占位以说明「本批导入过、现已不存在」 -->
+            <div v-else class="f2r-gone">
+              <div class="f2r-gone-mark">🗑️ 已彻底删除</div>
+              <div class="f2r-gone-meta">{{ item.author || '未知博主' }}</div>
+              <div class="f2r-gone-meta" :title="item.caption">
+                {{ item.caption || '（无正文）' }}
+              </div>
             </div>
           </div>
-        </div>
+        </DensityImageGrid>
       </div>
+
       <LoadMoreBar :loading="loading" :loaded="items.length" :total="total" @load-more="loadMore" />
     </a-spin>
   </div>
@@ -260,13 +294,24 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fafbfc;
+  /* 面板内不允许横向滚动：所有行内元素换行，网格列数由 DensityImageGrid 自适应 */
+  overflow-x: hidden;
 }
 .f2r-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+/* 右侧信息行：可换行 + 可收缩（长任务信息/批次号不会把面板撑宽） */
+.f2r-head-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 .f2r-title {
   font-size: 14px;
@@ -281,9 +326,10 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
 .f2r-batch {
   color: #999;
   font-size: 12px;
+  /* 批次号是长串，允许在窄屏下换行，避免把头部撑宽 */
+  word-break: break-all;
 }
-.f2r-filter,
-.f2r-actions {
+.f2r-filter {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -296,31 +342,9 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   padding: 32px 0;
   font-size: 13px;
 }
-.f2r-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 12px;
-  max-height: 68vh;
-  overflow-y: auto;
-  padding: 4px;
-  margin-top: 10px;
-}
-@media (max-width: 1200px) {
-  .f2r-grid {
-    grid-template-columns: repeat(5, 1fr);
-  }
-}
-@media (max-width: 900px) {
-  .f2r-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-@media (max-width: 600px) {
-  .f2r-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
+/* 网格单元：min-width: 0 允许收缩到轨道宽度以下，图片不会把网格撑宽 */
 .f2r-cell {
+  min-width: 0;
   cursor: pointer;
 }
 .f2r-check {
@@ -332,6 +356,8 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   position: absolute;
   top: 4px;
   left: 4px;
+  max-width: calc(100% - 40px);
+  overflow: hidden;
 }
 .f2r-open {
   position: absolute;
@@ -367,6 +393,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
   justify-content: center;
   gap: 4px;
   text-align: center;
+  min-width: 0;
 }
 .f2r-gone-mark {
   color: #98a2b3;
