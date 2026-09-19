@@ -7,6 +7,7 @@ import apiClient from '@/api/client'
 import type { UnifiedTask, TaskEventPayload } from '@/types/task'
 import { isTaskTerminalStatus } from '@/types/task'
 import { usePolling } from '@/composables/usePolling'
+import { useTaskActions } from '@/composables/useTaskActions'
 import { subscribeWs, onWsReconnected, isWsConnected } from '@/composables/useWebSocket'
 import {
   normalizeQueueTask,
@@ -85,58 +86,16 @@ export function useTaskCenter() {
   }
 
   // ===== 操作 =====
+  // 四个操作收敛在 useTaskActions（采集管理页的抖音采集历史复用同一份实现）
 
-  async function cancelTask(t: UnifiedTask) {
-    const url = t.source === 'queue' ? `/tasks/${t.id}/cancel` : `/scraper/tasks/${t.id}/cancel`
-    try {
-      const { data } = await apiClient.post<{ message?: string; deleted?: boolean }>(url)
-      // 队列任务 pending 取消 = 后端物理删除（deleted: true）；运行中取消仅标记 cancelled
-      const deleted = data?.deleted === true
-      Message.success(data?.message || (deleted ? '任务已删除' : '已取消'))
-      if (deleted) {
-        // 本地先移除该行即时反馈（无需整页刷新），随后全量刷新校正页码
-        tasks.value = tasks.value.filter((x) => !(x.source === 'queue' && x.id === t.id))
-        page.value = Math.min(page.value, Math.max(1, pageCount.value))
-      }
-      await loadTasks()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '取消失败'))
-    }
-  }
-
-  async function deleteTask(t: UnifiedTask) {
-    try {
-      // 采集任务记录在 scraper_tasks 表，走采集专用删除接口；队列任务走通用删除接口
-      const url = t.source === 'scraper' ? `/scraper/tasks/${t.id}` : `/tasks/${t.id}`
-      await apiClient.delete(url)
-      Message.success('已删除')
-      loadTasks()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '删除失败'))
-    }
-  }
-
-  /** 暂停运行中的标签网络分析任务（后端仅 tag_network_analyze 支持） */
-  async function pauseTask(t: UnifiedTask) {
-    try {
-      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/pause`)
-      Message.success(data?.message || '任务已暂停')
-      loadTasks()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '暂停失败'))
-    }
-  }
-
-  /** 恢复已暂停的标签网络分析任务（断点续算） */
-  async function resumeTask(t: UnifiedTask) {
-    try {
-      const { data } = await apiClient.post<{ message?: string }>(`/tasks/${t.id}/resume`)
-      Message.success(data?.message || '任务已恢复')
-      loadTasks()
-    } catch (e) {
-      Message.error(getApiErrorMessage(e, '恢复失败'))
-    }
-  }
+  const { cancelTask, deleteTask, pauseTask, resumeTask } = useTaskActions({
+    onQueueTaskDeleted: (t) => {
+      // 本地先移除该行即时反馈（无需整页刷新），随后全量刷新校正页码
+      tasks.value = tasks.value.filter((x) => !(x.source === 'queue' && x.id === t.id))
+      page.value = Math.min(page.value, Math.max(1, pageCount.value))
+    },
+    reload: loadTasks,
+  })
 
   async function retryFailedScraper() {
     try {

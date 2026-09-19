@@ -1,11 +1,11 @@
 """f2 一键获取素材任务（task type: ``f2_import``）：创建与执行（worker 调用）。
 
-链路：调 f2 增量下载各作者新作品 → 扫描下载目录 → 四层去重 → 入库。
+链路：调 f2 增量下载各作者新作品 → 扫描下载目录 → 五层去重 → 入库。
 
 两条硬性约定（与 CLI 一致，见 scripts/import_f2_downloads.py 模块 docstring）：
   1. **导入不做标签分析**：不调用 analyze_image、不建向量；素材以未打标状态入库，
      打标交给「批量分析任务」
-  2. **必须去重**：内容 SHA-256 / 批次内 / 合成平台 ID / 参数过滤四层判据
+  2. **必须去重**：内容 SHA-256 / 垃圾桶 / 批次内 / 合成平台 ID / 参数过滤五层判据
 
 执行结构（为什么不直接 await 同步函数）：
   - 下载阶段是子进程（``python -m f2 ...``，逐作者串行），入库阶段是同步 sqlite，
@@ -49,6 +49,7 @@ async def create_f2_import_task(
     fetch_limit: int | None = None,
     make_thumbnails: bool = True,
     since_days: int | None = None,
+    include_unknown_authors: bool = False,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -62,6 +63,9 @@ async def create_f2_import_task(
         make_thumbnails: 是否生成缩略图。
         since_days: f2 日期窗口天数（None 表示执行时取
             ``settings.f2_fetch_since_days``；0 表示翻全历史）。
+        include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
+            默认 False：f2 用户库存的是它见过的所有账号，混进来的无关账号
+            （实测出现过网易第五人格这类官方号）不该被下载入库。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -80,6 +84,7 @@ async def create_f2_import_task(
             "fetch_limit": fetch_limit,
             "make_thumbnails": make_thumbnails,
             "since_days": since_days,
+            "include_unknown_authors": include_unknown_authors,
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -87,6 +92,53 @@ async def create_f2_import_task(
     await db.commit()
     await db.refresh(task)
     return task
+
+
+# ── 并发保护：同一时间只允许一个进行中的 f2_import 任务 ──
+
+# 进行中的状态集合（排队 / 执行 / 已暂停都算「占用」，不再新建）
+_RUNNING_F2_STATUSES = ("pending", "running", "paused")
+
+# 自动调度循环（每 30 秒 tick）与手动 API 都是「先查有无进行中任务、再创建」，
+# 两步之间有 await 窗口，理论上可同时通过检查各建一个任务——两个 f2 子进程同时
+# 翻页会放大风控风险。调度循环与路由同属后端进程（worker 只执行不创建），
+# 一把进程内锁即可把临界区串行化。
+_create_lock = asyncio.Lock()
+
+
+async def _running_f2_task_id(db: AsyncSession) -> int | None:
+    """返回进行中的 f2_import 任务 id（无则 None）。"""
+    return (
+        await db.execute(
+            select(TaskQueue.id)
+            .where(
+                TaskQueue.type == "f2_import",
+                TaskQueue.status.in_(_RUNNING_F2_STATUSES),
+            )
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar()
+
+
+async def create_f2_import_task_if_idle(
+    db: AsyncSession, **kwargs
+) -> tuple[TaskQueue | None, int | None]:
+    """并发安全地创建 f2_import 任务：已有进行中任务时复用它、不新建。
+
+    Args:
+        db: 数据库会话。
+        **kwargs: 透传给 :func:`create_f2_import_task` 的任务参数。
+
+    Returns:
+        (新建任务, None) 或 (None, 复用的进行中任务 id)——两者恰有一个非 None。
+    """
+    async with _create_lock:
+        running_id = await _running_f2_task_id(db)
+        if running_id is not None:
+            return None, running_id
+        task = await create_f2_import_task(db, **kwargs)
+        return task, None
 
 
 def _run_subprocess(cmd: list[str], cwd: Path) -> int:
@@ -97,20 +149,30 @@ def _run_subprocess(cmd: list[str], cwd: Path) -> int:
 def f2_import_status() -> dict:
     """检查「一键获取素材」是否可用（供 API 与前端按钮状态使用）。
 
-    三个前提：f2 包已安装、f2 工作目录存在、其用户库里有作者（首次全量需手动跑
-    一次 f2，本功能只做增量）。
+    前提：f2 包已安装、f2 工作目录存在、其用户库里有**能对应到已登记博主**的账号
+    （首次全量需手动跑一次 f2，本功能只做增量）。
+
+    ``authors`` 报的是「已登记博主数」而不是 f2 账号总数：f2 用户库存的是它见过
+    的所有账号，混进来的无关账号（实测出现过网易第五人格这类官方号，被原样下载
+    入库 142 条）默认跳过，另在 ``unknown_authors`` 里列出来提示用户。
 
     Returns:
-        {"available": bool, "reason": str, "authors": int, "f2_dir": str, "root": str}
+        {"available": bool, "reason": str, "authors": int, "unknown_authors": list[str],
+         "f2_dir": str, "root": str, "fetch_since_days": int}
+        ``fetch_since_days`` 是默认日期窗口天数，供前端「只翻最近 N 天」输入框
+        取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
     """
+    from app.config import settings
     from scripts import import_f2_downloads as f2
 
     info = {
         "available": False,
         "reason": "",
         "authors": 0,
+        "unknown_authors": [],
         "f2_dir": str(f2.DEFAULT_F2_DIR),
         "root": str(f2.DEFAULT_F2_ROOT),
+        "fetch_since_days": int(settings.f2_fetch_since_days or 0),
     }
     if not f2.f2_available():
         info["reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
@@ -119,15 +181,34 @@ def f2_import_status() -> dict:
         info["reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
         return info
     authors = f2.load_f2_authors(f2.DEFAULT_F2_DIR)
-    info["authors"] = len(authors)
     if not authors:
         info["reason"] = (
             f"f2 用户库为空（{f2.DEFAULT_F2_DIR / f2.F2_AUTHOR_DB}）："
             "请先手动跑一次 f2 完成首次下载"
         )
         return info
+
+    known, unknown = authors, []
+    bloggers = f2.load_douyin_bloggers()
+    if bloggers:
+        # 只有库内登记过抖音博主时才有白名单依据；一个都没有则按 f2 账号总数报
+        known, unknown = f2.select_known_authors(authors, bloggers)
+    names = [a["nickname"] for a in unknown]
+    info["unknown_authors"] = names
+    info["authors"] = len(known)
+    if not known:
+        info["reason"] = (
+            f"f2 用户库有 {len(authors)} 个账号，但没有一个对应到已登记的抖音博主："
+            "请先补全博主的 sec_user_id（脚本 scripts/sync_blogger_ids.py），"
+            "或勾选下方「包含未登记账号」"
+        )
+        return info
+
     info["available"] = True
-    info["reason"] = f"可增量下载 {len(authors)} 个已采集作者的新作品"
+    info["reason"] = f"可增量下载 {len(known)} 个已登记博主的新作品"
+    if names:
+        shown = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
+        info["reason"] += f"；另有 {len(names)} 个未登记账号会被跳过（{shown}）"
     return info
 
 
@@ -151,17 +232,7 @@ async def _last_f2_task(db: AsyncSession) -> tuple[int | None, datetime | None, 
             .limit(1)
         )
     ).first()
-    running = (
-        await db.execute(
-            select(TaskQueue.id)
-            .where(
-                TaskQueue.type == "f2_import",
-                TaskQueue.status.in_(("pending", "running", "paused")),
-            )
-            .order_by(TaskQueue.id.desc())
-            .limit(1)
-        )
-    ).scalar()
+    running = await _running_f2_task_id(db)
     if last_row is None:
         return None, None, running
     return last_row[0], last_row[1], running
@@ -202,12 +273,16 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         logger.info(f"[f2 自动获取] 跳过本轮：{status['reason']}")
         return None
 
-    task = await create_f2_import_task(
+    task, _reused = await create_f2_import_task_if_idle(
         db,
         fetch=True,
         skip_live=bool(settings.f2_import_auto_skip_live),
         since_days=settings.f2_fetch_since_days,
     )
+    if task is None:
+        # 锁内复查发现已有进行中任务（手动点击恰好抢先）：本轮静默跳过
+        logger.info("[f2 自动获取] 跳过本轮：已有进行中的 f2_import 任务")
+        return None
     logger.info(
         f"[f2 自动获取] 已创建任务 #{task.id}"
         f"（间隔 {interval_hours} 小时，作者库 {status['authors']} 个）"
@@ -295,15 +370,58 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     from app.config import settings
     from scripts import import_f2_downloads as f2
 
-    opts = dict(task.result or {})
+    # 只取创建任务时写入的参数键：暂停/恢复后 task.result 里会残留上一次的
+    # stage/fetch/plan/import 字段，整包当 opts 传下去会把旧产物混进新结果
+    raw_result = dict(task.result or {})
+    opts = {
+        key: raw_result[key]
+        for key in (
+            "authors",
+            "limit",
+            "skip_live",
+            "fetch",
+            "fetch_limit",
+            "make_thumbnails",
+            "since_days",
+            "include_unknown_authors",
+        )
+        if key in raw_result
+    }
     authors = set(opts.get("authors") or []) or None
     fetch_enabled = bool(opts.get("fetch", True))
     limit = opts.get("limit")
     skip_live = bool(opts.get("skip_live", False))
     make_thumbnails = bool(opts.get("make_thumbnails", True))
+    include_unknown = bool(opts.get("include_unknown_authors", False))
     since_days = opts.get("since_days")
     if since_days is None:
         since_days = settings.f2_fetch_since_days
+
+    # 博主清单与 f2 账号清单：下载阶段用来判断「这个 f2 账号是否已登记」，
+    # 入库阶段用来绑定作品。默认只处理能对应到已登记博主的账号——f2 用户库存的是
+    # 它见过的所有账号，混进来的无关账号（实测出现过网易第五人格，被入库 142 条）
+    # 不该收进素材库。库内一个抖音博主都没有时没有白名单依据，退回旧口径（全部处理）。
+    f2_dir = f2.DEFAULT_F2_DIR
+    bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
+    f2_authors = await asyncio.to_thread(f2.load_f2_authors, f2_dir)
+    filter_registered = not include_unknown and bool(bloggers)
+    if filter_registered:
+        known_authors, unknown_authors = f2.select_known_authors(f2_authors, bloggers)
+    else:
+        known_authors, unknown_authors = f2_authors, []
+    skipped_unknown = [a["nickname"] for a in unknown_authors]
+
+    # 入库允许的作者范围（归一化名）＝ 博主名集合 ∪ 按 sec_user_id 命中的 f2 昵称
+    # （后者覆盖「f2 昵称与库内博主名不一致」的情况）。显式点名作者时同样受白名单
+    # 约束——要处理未登记账号请勾选「包含未登记账号」，否则会出现「下载阶段跳过、
+    # 入库阶段却放行」的口径分裂。空集合表示「一个都不导入」（不是不过滤）。
+    if filter_registered:
+        allowed_keys = set(bloggers) | {
+            f2.normalize_author(a["nickname"]) for a in known_authors
+        }
+        plan_authors: set[str] | None = authors & allowed_keys if authors else allowed_keys
+    else:
+        plan_authors = authors
 
     task.error = None
     task.progress = 0
@@ -313,7 +431,18 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     task.updated_at = utcnow()
     await db.commit()
 
-    fetch_summary = {"total": 0, "ok": 0, "failed": 0, "aborted": False}
+    fetch_summary: dict = {
+        "total": 0,
+        "ok": 0,
+        "failed": 0,
+        "aborted": False,
+        "skipped_authors": skipped_unknown,
+    }
+    if skipped_unknown:
+        logger.info(
+            f"[f2] 跳过 {len(skipped_unknown)} 个未登记到博主库的账号："
+            f"{'、'.join(skipped_unknown)}"
+        )
 
     # ── 阶段 1：调 f2 增量下载（逐作者串行；子进程放线程）──
     if fetch_enabled:
@@ -321,8 +450,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             raise RuntimeError(
                 "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
             )
-        f2_dir = f2.DEFAULT_F2_DIR
-        targets = f2.load_f2_authors(f2_dir)
+        targets = known_authors
         wanted = {f2.normalize_author(a) for a in authors} if authors else None
         if wanted is not None:
             targets = [
@@ -369,10 +497,25 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             task.updated_at = utcnow()
             await db.commit()
 
+        # 用户取消/暂停：立即结束，不再做扫描与入库——扫描是重活（全量约 81 秒），
+        # 中断后继续跑纯属浪费，还会让「取消」看起来迟迟不生效。已下载的文件留在
+        # f2 目录，恢复/重跑时增量下载与内容判重会自动跳过它们。
+        if fetch_summary["aborted"]:
+            status_now = await _current_status(db, task.id)
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+            task.status = status_now
+            task.updated_at = utcnow()
+            await db.commit()
+            logger.info(
+                f"f2 下载被中断（{status_now}）：已完成 "
+                f"{fetch_summary['ok']}/{fetch_summary['total']} 个作者，已下载文件保留"
+            )
+            return
+
         # 全部作者都失败（cookie 失效 / 风控）时不能算成功：用户会从任务中心
         # 看到「成功 0 下载」而不知情。落一次 result 后抛错，让任务显式失败。
         if fetch_summary["total"] and fetch_summary["ok"] == 0:
-            task.result = {**opts, "fetch": fetch_summary}
+            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
             await db.commit()
             raise RuntimeError(
                 f"f2 下载全部失败（{fetch_summary['failed']}/{fetch_summary['total']} 个作者），"
@@ -389,7 +532,6 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 但首次/大量新增时仍可能很慢，故线程执行保持不变。
     files = await asyncio.to_thread(f2.scan_directory, f2.DEFAULT_F2_ROOT)
     dedup = await asyncio.to_thread(f2.load_dedup_index)
-    bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
     started = time.monotonic()
     decisions, skipped, deferred_works, cache_stats = await asyncio.to_thread(
         f2.build_plan_with_cache,
@@ -398,7 +540,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         hash_cache_path=None,  # 缺省 storage/f2_hash_cache.db
         use_cache=True,
         bloggers=bloggers,
-        authors=authors,
+        # 默认只导入已登记博主的产物：扫描的是整个下载目录，里面可能留着
+        # 未登记账号（如网易第五人格）的历史文件，不该被顺带收进素材库
+        authors=plan_authors,
         limit=limit,
         skip_live=skip_live,
     )
@@ -414,6 +558,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         "plan": {
             "files": len(to_import),
             "skipped": skipped,
+            # 结构化计数：前端展示「已在垃圾桶 N」直接读它，不必再去匹配中文跳过
+            # 原因字符串（skipped 的 key 是给人看的文案，改一个字前端就静默失效）
+            "trash_skipped": skipped.get(f2.TRASH_SKIP_REASON, 0),
             "deferred_works": deferred_works,
             "seconds": plan_seconds,
             "hash_cache": cache_stats,
@@ -450,22 +597,32 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         return holder["stop"]
 
     async def _progress_watcher() -> None:
-        """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。"""
+        """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。
+
+        进度落库是「尽力而为」：watcher 与入库线程写的是同一个 SQLite 文件
+        （线程内每文件一次 commit），偶发锁等待超时时单轮失败只记日志、下轮重试。
+        否则一次 commit 异常会顺着 ``await watcher`` 炸掉整个执行器——素材其实
+        已经入库，任务却被标记失败，是最糟的结果。
+        """
         while not finished.is_set():
             try:
                 await asyncio.wait_for(finished.wait(), timeout=_WATCH_INTERVAL)
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
-            if await _current_status(db, task.id) not in ("running", "pending"):
-                holder["stop"] = True
-            task.done = holder["done"]
-            task.total = holder["total"]
-            task.progress = _PROGRESS_AFTER_PLAN + int(
-                (100 - _PROGRESS_AFTER_PLAN) * holder["done"] / holder["total"]
-            )
-            task.updated_at = utcnow()
-            await db.commit()
+            try:
+                if await _current_status(db, task.id) not in ("running", "pending"):
+                    holder["stop"] = True
+                task.done = holder["done"]
+                task.total = holder["total"]
+                task.progress = _PROGRESS_AFTER_PLAN + int(
+                    (100 - _PROGRESS_AFTER_PLAN) * holder["done"] / holder["total"]
+                )
+                task.updated_at = utcnow()
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001 —— 进度是辅助信息，不能拖垮导入
+                await db.rollback()
+                logger.warning(f"f2 导入进度落库失败（忽略，下一轮重试）：{exc}")
 
     watcher = asyncio.create_task(_progress_watcher())
     try:
@@ -481,12 +638,15 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         await watcher
 
     status_now = await _current_status(db, task.id)
+    interrupted = status_now in ("cancelled", "paused")
     task.result = {
         **task.result,
         "stage": "done",
         "import": {key: value for key, value in result.items() if key != "ids"},
     }
-    task.progress = 100
+    # 被中断的任务进度停在当前值：写 100% 会让「已取消/已暂停」看起来像跑完了
+    if not interrupted:
+        task.progress = 100
     task.done = holder["done"]
     task.total = holder["total"]
     task.updated_at = utcnow()
@@ -494,7 +654,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         # 清单缺失 = 本批无法回滚，写进任务 error 让用户一眼看到（任务仍算成功，
         # 因为素材确实已入库）
         task.error = f"批次清单写入失败（本批无法回滚）：{result['batch_error']}"
-    if status_now in ("cancelled", "paused"):
+    if interrupted:
         # 尊重外部状态：worker 见 status != running 不会覆盖为 success
         task.status = status_now
         logger.info(

@@ -32,10 +32,12 @@ const AUTO: F2AutoStatus = {
 
 const STATUS = {
   available: true,
-  reason: '可增量下载 21 个已采集作者的新作品',
+  reason: '可增量下载 21 个已登记博主的新作品',
   authors: 21,
+  unknown_authors: ['网易第五人格'],
   f2_dir: 'C:/f2',
   root: 'C:/f2/Download/douyin/post',
+  fetch_since_days: 14,
   auto: AUTO,
 }
 
@@ -58,6 +60,23 @@ describe('useF2Import', () => {
     expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-status')
     expect(status.value?.available).toBe(true)
     expect(status.value?.authors).toBe(21)
+    // 默认日期窗口来自后端配置（卡片据此填初值，不硬编码 14）
+    expect(status.value?.fetch_since_days).toBe(14)
+    // f2 用户库里未登记到博主的账号：卡片据此提示默认会跳过
+    expect(status.value?.unknown_authors).toEqual(['网易第五人格'])
+  })
+
+  it('submit 透传「包含未登记账号」开关', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.post.mockResolvedValue({ data: { task_id: 43, message: '已提交' } })
+    const { submit } = useF2Import()
+
+    await submit({ fetch: true, include_unknown_authors: true })
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: { fetch: true, include_unknown_authors: true },
+    })
+    success.mockRestore()
   })
 
   it('loadStatus 失败时置空并提示（不抛异常）', async () => {

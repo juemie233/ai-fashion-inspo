@@ -315,7 +315,7 @@ def test_insert_sql_columns_match_values():
     assert placeholders == 12  # 其余为 NULL/0/'pending' 字面量
 
 
-# ── 导入计划：四层去重 ──
+# ── 导入计划：五层去重 ──
 
 
 def _decisions(
@@ -409,6 +409,146 @@ def test_plan_live_wins_over_trash(tmp_path):
     _d, skipped, _ = _decisions(files, library_hashes={digest}, trash_hashes={digest})
     assert skipped["已在库（内容相同）"] == 1
     assert f2.TRASH_SKIP_REASON not in skipped
+
+
+def test_plan_tolerates_file_deleted_after_scan(tmp_path):
+    """扫描后文件消失不能让整批计划崩溃：跳过该文件并单独计数。
+
+    回归点：下载目录是「活的」（f2 在写、用户可能清理），原先哈希抛
+    FileNotFoundError 会让整个 build_import_plan 失败 → 整次导入任务失败。
+    """
+    files = _fake_tree(tmp_path)
+    gone = next(f for f in files if f.path.name.endswith("image_1.webp"))
+    gone.path.unlink()
+
+    decisions, skipped, _ = _decisions(files)
+
+    assert skipped["文件读取失败（扫描后消失？）"] == 1
+    assert all(d.item.path != gone.path for d in decisions)
+    # 同作品的另一张图与另一作者的视频照常入库
+    assert sum(1 for d in decisions if d.action == "import") == 2
+
+
+def test_build_report_counts_read_failures(tmp_path):
+    """报表同样容错：单文件读不出来只计数，不让整张报表崩掉。"""
+    files = _fake_tree(tmp_path)
+    next(f for f in files if f.path.name.endswith("video.mp4")).path.unlink()
+
+    report = f2.build_report(
+        root=tmp_path,
+        files=files,
+        dedup=f2.DedupIndex(
+            live_hashes=set(),
+            trash_hashes=set(),
+            live_platform_ids=set(),
+            trash_platform_ids=set(),
+        ),
+        bloggers={},
+    )
+
+    assert report["files_read_failed"] == 1
+    assert report["files_new"] == 2
+    assert report["files_total"] == 3
+
+
+# ── 已登记博主白名单（f2 用户库混进无关账号时的过滤依据）──
+
+
+def test_load_douyin_bloggers_carries_sec_user_id(tmp_path):
+    """博主清单要带上 platform_user_id（sec_user_id）：它是 f2 账号 ↔ 博主的权威对应。"""
+    db = tmp_path / "lib.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE bloggers (id INTEGER PRIMARY KEY, name TEXT, platform TEXT, "
+        "platform_user_id TEXT)"
+    )
+    conn.execute("INSERT INTO bloggers VALUES (1, '里香.', 'douyin', 'MS4x_lixiang')")
+    conn.execute("INSERT INTO bloggers VALUES (2, '某书博主', 'xiaohongshu', 'XHS1')")
+    conn.commit()
+    conn.close()
+
+    bloggers = f2.load_douyin_bloggers(db)
+
+    assert bloggers["里香"][0]["platform_user_id"] == "MS4x_lixiang"
+    assert "某书博主" not in bloggers  # 非抖音平台不参与匹配
+
+
+def test_select_known_authors_matches_by_sec_user_id_then_name():
+    """回归：f2 用户库里的官方号（网易第五人格）必须被判为「未登记」。
+
+    判定口径：sec_user_id 命中博主 platform_user_id（权威）或归一化昵称命中博主名。
+    """
+    authors = [
+        {"sec_user_id": "MS4x_u1", "nickname": "夕木_", "aweme_count": 1},
+        {"sec_user_id": "MS4x_u2", "nickname": "改名了也行", "aweme_count": 1},
+        {"sec_user_id": "MS4x_u3", "nickname": "网易第五人格", "aweme_count": 1},
+    ]
+    bloggers = {
+        # 昵称口径命中（博主没回填 sec_user_id）
+        "夕木": [{"id": 304, "name": "夕木.", "platform_user_id": None}],
+        # 昵称对不上但 sec_user_id 对得上 → 仍算已登记
+        "某某": [{"id": 9, "name": "某某", "platform_user_id": "MS4x_u2"}],
+    }
+
+    known, unknown = f2.select_known_authors(authors, bloggers)
+
+    assert [a["nickname"] for a in known] == ["夕木_", "改名了也行"]
+    assert [a["nickname"] for a in unknown] == ["网易第五人格"]
+
+
+def test_select_known_authors_empty_bloggers_keeps_everyone():
+    """库里一个抖音博主都没有时没有白名单依据：调用方据此退回旧口径（见 run_fetch）。"""
+    authors = [{"sec_user_id": "MS4x_u3", "nickname": "网易第五人格", "aweme_count": 1}]
+    known, unknown = f2.select_known_authors(authors, {})
+    assert known == [] and len(unknown) == 1
+
+
+def test_run_fetch_skips_unregistered_authors(tmp_path, monkeypatch):
+    """回归：一键/CLI 下载默认跳过未登记账号，不再把官方号的作品拉进下载目录。"""
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.executemany(
+        "INSERT INTO user_info_web VALUES (?, ?, 1)",
+        [("MS4x_lixiang", "里香1√"), ("MS4x_game", "网易第五人格")],
+    )
+    conn.commit()
+    conn.close()
+
+    db = tmp_path / "lib.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE bloggers (id INTEGER PRIMARY KEY, name TEXT, platform TEXT, "
+        "platform_user_id TEXT)"
+    )
+    conn.execute("INSERT INTO bloggers VALUES (1, '里香', 'douyin', 'MS4x_lixiang')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(f2, "library_db_path", lambda: db)
+
+    commands: list[str] = []
+    result = f2.run_fetch(
+        f2_dir=f2_dir,
+        download_root=tmp_path / "Download",
+        runner=lambda cmd, cwd: (commands.append(cmd[-1]) or (0, "")),
+    )
+
+    assert result["total"] == 1  # 只下 里香1√
+    assert result["skipped_authors"] == ["网易第五人格"]
+    assert all("网易第五人格" not in cmd for cmd in commands)
+
+    # 显式放开：两个账号都下
+    commands.clear()
+    forced = f2.run_fetch(
+        f2_dir=f2_dir,
+        download_root=tmp_path / "Download",
+        runner=lambda cmd, cwd: (commands.append(cmd[-1]) or (0, "")),
+        include_unknown=True,
+    )
+    assert forced["total"] == 2 and forced["skipped_authors"] == []
 
 
 # ── 哈希缓存（P0：避免每次运行重算整棵下载树的 SHA-256）──
@@ -505,7 +645,7 @@ def test_plan_skip_live_and_author_filter(tmp_path):
     decisions, skipped, _ = _decisions(files, authors={"里香"})
     imported = {d.item.author_dir for d in decisions if d.action == "import"}
     assert imported == {"里香1√"}
-    assert skipped["作者不在 --authors 范围"] == 1
+    assert skipped["作者不在指定范围（--authors / 已登记博主）"] == 1
     # 目录名直接传入同样生效
     decisions, _, _ = _decisions(files, authors={"别的博主"})
     assert {d.item.author_dir for d in decisions if d.action == "import"} == {"别的博主"}
@@ -1046,6 +1186,36 @@ def test_apply_import_reports_batch_error_separately(tmp_path):
     assert result["failed"] == 0  # 素材没有失败
     assert result["batch_error"]
     assert result["batch_file"] == ""
+
+
+def test_apply_import_batch_id_unique_within_same_second(tmp_path, monkeypatch):
+    """修复（审查 L2）：同秒内跑两批不能互相覆盖批次清单（否则那一批无法回滚）。
+
+    回归点：batch_id 原先只到秒（f2-YYYYMMDD-HHMMSS），CLI 与任务队列撞车时
+    后写的清单会覆盖先写的，被覆盖那批的 ids 就此丢失。
+    """
+    fixed = datetime(2026, 1, 2, 3, 4, 5)
+    monkeypatch.setattr(f2, "utcnow", lambda: fixed)
+
+    root = tmp_path / "f2"
+    _jpeg(root / "A" / "2025-01-01 10-00-00_标题A_image_1.jpg")
+    _jpeg(root / "B" / "2025-02-02 11-00-00_标题B_image_1.jpg", "blue")
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+    decisions, _, _ = _decisions(files)
+    to_import = [d for d in decisions if d.action == "import"]
+    assert len(to_import) == 2
+
+    first = f2.apply_import(to_import[:1], db_path=db, storage_root=storage)
+    second = f2.apply_import(to_import[1:], db_path=db, storage_root=storage)
+
+    assert first["batch_file"] != second["batch_file"]
+    assert Path(first["batch_file"]).exists() and Path(second["batch_file"]).exists()
+    # 仍以秒级时间戳开头（人读顺序与 latest_batch_file 的字典序取值都不变）
+    assert Path(second["batch_file"]).name.startswith("f2-20260102-030405-")
+    for path, expected in ((first["batch_file"], 1), (second["batch_file"], 1)):
+        assert len(json.loads(Path(path).read_text(encoding="utf-8"))["imported"]) == expected
 
 
 def test_apply_import_failure_removes_thumbnail(tmp_path):

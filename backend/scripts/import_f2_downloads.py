@@ -589,22 +589,75 @@ def load_douyin_bloggers(db_path: Path | None = None) -> dict[str, list[dict]]:
         db_path: 数据库路径（缺省用 :func:`library_db_path`）。
 
     Returns:
-        归一化名 → [{"id", "name"}]（同名可能多条，故用列表）。
+        归一化名 → [{"id", "name", "platform_user_id"}]（同名可能多条，故用列表）。
+        ``platform_user_id`` 是博主的 sec_user_id，回填后作为「f2 账号 ↔ 博主」的
+        权威对应关系（见 :func:`select_known_authors`）。
     """
     path = db_path or library_db_path()
     if not path.exists():
         return {}
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        rows = conn.execute(
-            "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, platform_user_id FROM bloggers WHERE platform = 'douyin'"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # 迁移前的库副本 / 最小化测试库可能还没有 platform_user_id 列：
+            # 退回只读 id/name（此时匹配只能用昵称口径）
+            rows = [
+                (row[0], row[1], None)
+                for row in conn.execute(
+                    "SELECT id, name FROM bloggers WHERE platform = 'douyin'"
+                ).fetchall()
+            ]
     finally:
         conn.close()
     indexed: dict[str, list[dict]] = defaultdict(list)
-    for blogger_id, name in rows:
-        indexed[normalize_author(name)].append({"id": blogger_id, "name": name})
+    for blogger_id, name, platform_user_id in rows:
+        indexed[normalize_author(name)].append(
+            {"id": blogger_id, "name": name, "platform_user_id": platform_user_id}
+        )
     return dict(indexed)
+
+
+def select_known_authors(
+    authors: list[dict], bloggers: dict[str, list[dict]]
+) -> tuple[list[dict], list[dict]]:
+    """把 f2 用户库里的账号拆成「库里已登记的博主」与「未登记账号」两拨。
+
+    为什么需要：f2 的 ``user_info_web`` 装的是**它见过/登录过的所有账号**，
+    不等于我们素材库里登记的博主。实测里面混进过「网易第五人格」这类与穿搭
+    无关的官方号，被一键获取原样下载并入库（142 条，0 条博主绑定）。
+    默认只处理能对上库内博主的账号，剩下的显式列出来。
+
+    判定口径（任一命中即算已登记）：
+      1. ``sec_user_id`` 精确命中某博主的 ``platform_user_id``（权威：同 ID 必同人）
+      2. 归一化昵称命中博主名（兜底：覆盖没回填 sec_user_id 的博主）
+
+    Args:
+        authors: :func:`load_f2_authors` 的结果。
+        bloggers: :func:`load_douyin_bloggers` 的结果。
+
+    Returns:
+        ``(已登记账号, 未登记账号)``，两者都保持入参顺序。
+    """
+    known_uids = {
+        blogger.get("platform_user_id")
+        for group in bloggers.values()
+        for blogger in group
+        if blogger.get("platform_user_id")
+    }
+    known_keys = set(bloggers)
+    known: list[dict] = []
+    unknown: list[dict] = []
+    for author in authors:
+        sec_user_id = author.get("sec_user_id")
+        matched = (sec_user_id and sec_user_id in known_uids) or (
+            normalize_author(author.get("nickname") or "") in known_keys
+        )
+        (known if matched else unknown).append(author)
+    return known, unknown
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -642,6 +695,7 @@ def build_report(
     works_with_trash = 0
     new_files = old_files = trash_files = 0
     new_bytes = old_bytes = trash_bytes = 0
+    read_failed = 0
     hashtag_counter: Counter = Counter()
     gallery_dist: Counter = Counter()
     new_work_rows: list[dict] = []
@@ -650,7 +704,13 @@ def build_report(
         new_items = []
         work_trash = 0
         for item in items:
-            digest = _digest(item.path, hash_cache)
+            try:
+                digest = _digest(item.path, hash_cache)
+            except OSError:
+                # 单文件读不出来（扫描后消失 / 权限问题）不该让整张报表崩掉：
+                # 跳过该文件并单独计数，其余统计照常
+                read_failed += 1
+                continue
             is_live = digest in dedup.live_hashes
             is_trash = not is_live and digest in dedup.trash_hashes
             bucket = "已入库" if is_live else ("已在垃圾桶" if is_trash else "净新增")
@@ -739,6 +799,7 @@ def build_report(
         "files_new": new_files,
         "files_in_library": old_files,
         "files_in_trash": trash_files,
+        "files_read_failed": read_failed,
         "bytes_new": new_bytes,
         "bytes_in_library": old_bytes,
         "bytes_in_trash": trash_bytes,
@@ -792,6 +853,11 @@ def print_report(report: dict, top_hashtags: int = 15, cache_stats: dict | None 
             f"（{report['bytes_in_trash']/gib:.2f} GB，涉及 {report['works_with_trash']} 个作品）"
             "——不会重新导入；如需恢复请到「垃圾桶」还原"
         )
+    if report.get("files_read_failed"):
+        print(
+            f"⚠ {report['files_read_failed']} 个文件读取失败（扫描后消失或权限问题），已跳过"
+            "——不计入上面的净新增/已在库统计"
+        )
     if cache_stats:
         print(
             f"哈希缓存：复用 {cache_stats['hit']} 次"
@@ -830,7 +896,7 @@ def print_report(report: dict, top_hashtags: int = 15, cache_stats: dict | None 
         )
 
     cost = report["tag_cost"]
-    print("\n-- 打标成本预估（按实测 {} 秒/张）--".format(DEFAULT_SEC_PER_TAG))
+    print(f"\n-- 打标成本预估（按实测 {DEFAULT_SEC_PER_TAG} 秒/张）--")
     print(f"   甲 逐文件打标:            {cost['per_file_count']:>6} 次 ≈ {cost['per_file_hours']:>5} 小时")
     print(f"   丙 按作品打一次(复制标签): {cost['per_work_count']:>6} 次 ≈ {cost['per_work_hours']:>5} 小时")
     print(
@@ -980,7 +1046,9 @@ def build_import_plan(
         (决策列表, 跳过原因计数, 因超出 limit 未处理的作品数)
     """
     bloggers = bloggers or {}
-    wanted = {normalize_author(a) for a in authors} if authors else None
+    # 注意：authors 用 `is not None` 判定——空集合表示「一个都不要」，不是「不过滤」
+    # （过滤链路会用空集合表达「白名单里没有可处理的作者」）
+    wanted = {normalize_author(a) for a in authors} if authors is not None else None
 
     decisions: list[ImportDecision] = []
     skipped: Counter = Counter()
@@ -989,13 +1057,22 @@ def build_import_plan(
     deferred_works = 0
 
     for _work_key, items in group_works(files).items():
-        digests: dict[Path, str] = {
-            item.path: _digest(item.path, hash_cache) for item in items
-        }
+        # 单文件哈希失败（扫描后被删除/移动、权限问题）只跳过该文件，不让整批
+        # 计划崩溃：下载目录是「活的」，扫描与哈希之间文件消失是可能发生的，
+        # 而一个文件读不出来不该让整次导入失败
+        digests: dict[Path, str] = {}
+        for item in items:
+            try:
+                digests[item.path] = _digest(item.path, hash_cache)
+            except OSError:
+                skipped["文件读取失败（扫描后消失？）"] += 1
+        items = [item for item in items if item.path in digests]
+        if not items:
+            continue
 
         first = items[0]
         if wanted is not None and first.author_key not in wanted and first.author_dir not in wanted:
-            skipped["作者不在 --authors 范围"] += len(items)
+            skipped["作者不在指定范围（--authors / 已登记博主）"] += len(items)
             continue
 
         reasons = [
@@ -1003,7 +1080,7 @@ def build_import_plan(
             for item in items
         ]
         if not any(not r for r in reasons):
-            for item, reason in zip(items, reasons):
+            for item, reason in zip(items, reasons, strict=False):
                 skipped[reason] += 1
                 decisions.append(ImportDecision(
                     item=item, action="skip", reason=reason,
@@ -1012,7 +1089,7 @@ def build_import_plan(
             continue
 
         if limit is not None and accepted_works >= limit:
-            for item in items:
+            for _ in items:
                 skipped["超出 --limit 未处理"] += 1
             deferred_works += 1
             continue
@@ -1021,7 +1098,7 @@ def build_import_plan(
         matched = bloggers.get(first.author_key) or []
         blogger_id = matched[0]["id"] if len(matched) == 1 else None
 
-        for item, reason in zip(items, reasons):
+        for item, reason in zip(items, reasons, strict=False):
             digest = digests[item.path]
             if reason:
                 skipped[reason] += 1
@@ -1223,8 +1300,10 @@ def apply_import(
             if on_progress is not None:
                 on_progress(processed, total)
 
-    # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚
-    batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}"
+    # 批次清单：记录本批导入的 id 与来源，便于审计与将来一键回滚。
+    # 时间戳精确到秒 + 4 位随机后缀：同秒内跑两次（CLI 与任务队列撞车）时，
+    # 纯秒级 batch_id 会互相覆盖清单文件，被覆盖的那一批就再也无法回滚了。
+    batch_id = f"f2-{utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
     batch_file = batch_dir / f"{batch_id}.json"
     batch_error: str | None = None
     try:
@@ -1445,6 +1524,7 @@ def run_fetch(
     runner=None,
     since_days: int | None = DEFAULT_FETCH_SINCE_DAYS,
     post_root: Path | None = None,
+    include_unknown: bool = False,
 ) -> dict:
     """串行调 f2 增量下载各作者的新作品（一次一个，避免并发触发风控）。
 
@@ -1457,6 +1537,9 @@ def run_fetch(
     - 单个作者失败（风控 / 网络 / cookie 失效）只记录并继续下一个，不阻断整批；
       失败细节在 f2/logs/ 下
     - 作者过滤复用 `--authors`（归一化名匹配），与导入阶段的语义一致
+    - **默认只下库里已登记的博主**（见 :func:`select_known_authors`）：f2 用户库
+      装的是它见过的所有账号，混进来的无关账号（如官方游戏号）不该被下载入库；
+      `include_unknown=True` 才恢复「f2 里有谁都下」
 
     Args:
         f2_dir: f2 工作目录。
@@ -1468,9 +1551,10 @@ def run_fetch(
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
         since_days: 日期窗口最小天数；None/<=0 表示翻全历史（首次全量）。
         post_root: 作者目录所在位置（缺省按 `download_root`/f2 目录推导）。
+        include_unknown: 是否连「未登记到博主库」的 f2 账号一起下载。
 
     Returns:
-        {"total", "ok", "failed", "results", "error", "windows"}；
+        {"total", "ok", "failed", "results", "windows", "skipped_authors", "error"}；
         results 每项含 nickname / sec_user_id / rc / cmd / interval。
     """
     runner = runner or _default_runner
@@ -1482,18 +1566,33 @@ def run_fetch(
             "failed": 0,
             "results": [],
             "windows": {},
+            "skipped_authors": [],
             "error": (
                 f"未找到 f2 作者清单：{f2_dir / F2_AUTHOR_DB}（先手动跑一次 f2 "
                 f"确认能登录并下载，本命令只做「增量」）"
             ),
         }
 
-    wanted = {normalize_author(a) for a in authors} if authors else None
+    unknown: list[dict] = []
+    if not include_unknown:
+        bloggers = load_douyin_bloggers()
+        if bloggers:
+            # 只有库内登记过抖音博主时才有白名单依据；一个都没有则退回旧口径
+            all_authors, unknown = select_known_authors(all_authors, bloggers)
+
+    wanted = {normalize_author(a) for a in authors} if authors is not None else None
     targets = [
         a for a in all_authors if wanted is None or normalize_author(a["nickname"]) in wanted
     ]
     if limit is not None:
         targets = targets[:limit]
+
+    if unknown:
+        print(
+            f"  ⏭ 跳过 {len(unknown)} 个未登记到博主库的账号："
+            f"{'、'.join(a['nickname'] for a in unknown)}"
+            "（要一起处理请加 --include-unknown-authors）"
+        )
 
     root = post_root or (
         download_root / "douyin" / "post" if download_root else f2_dir / F2_DOWNLOAD_SUBDIR
@@ -1538,6 +1637,7 @@ def run_fetch(
         "failed": failed,
         "results": results,
         "windows": dict(windows),
+        "skipped_authors": [a["nickname"] for a in unknown],
     }
 
 
@@ -1569,6 +1669,48 @@ def _table_exists(conn, name: str) -> bool:
     return row is not None
 
 
+def load_batch_manifest(batch_file: Path | str | None) -> dict:
+    """读取一份批次清单（:func:`apply_import` 落盘的 JSON）。
+
+    清单是「本批导入了哪些素材」的唯一依据：f2 素材没有 scraper_task_id
+    （该列外键指向 scraper_tasks 表），回溯、结果浏览与 ``--rollback`` 都靠它。
+
+    Args:
+        batch_file: 清单路径（可为 None / 不存在的路径）。
+
+    Returns:
+        {"imported": [...], "errors": [...], "batch_id": str, "created_at": str,
+         "storage_root": str, "db": str}；文件缺失或损坏时返回空结构
+        （调用方按「本批无结果」处理，不抛异常）。
+    """
+    empty = {
+        "imported": [],
+        "errors": [],
+        "batch_id": "",
+        "created_at": "",
+        "storage_root": "",
+        "db": "",
+    }
+    if not batch_file:
+        return empty
+    try:
+        data = json.loads(Path(batch_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    imported = data.get("imported")
+    errors = data.get("errors")
+    return {
+        "imported": imported if isinstance(imported, list) else [],
+        "errors": errors if isinstance(errors, list) else [],
+        "batch_id": str(data.get("batch_id") or ""),
+        "created_at": str(data.get("created_at") or ""),
+        "storage_root": str(data.get("storage_root") or ""),
+        "db": str(data.get("db") or ""),
+    }
+
+
 def batch_storage_root(batch_file: Path) -> Path | None:
     """读取批次清单里记录的导入期存储根（回滚优先用它，而不是当前配置）。
 
@@ -1582,12 +1724,8 @@ def batch_storage_root(batch_file: Path) -> Path | None:
     Returns:
         清单记录的存储根；缺失或无法解析时返回 None。
     """
-    try:
-        data = json.loads(Path(batch_file).read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    root = data.get("storage_root")
-    return Path(root) if isinstance(root, str) and root else None
+    root = load_batch_manifest(batch_file)["storage_root"]
+    return Path(root) if root else None
 
 
 def plan_rollback(
@@ -1789,6 +1927,12 @@ def main(argv: list[str] | None = None) -> int:
         help="传给 f2 的 --auto-cookie 浏览器名（chrome/chromium/edge…），需先关闭该浏览器",
     )
     parser.add_argument(
+        "--include-unknown-authors",
+        action="store_true",
+        help="连「未登记到博主库」的 f2 账号一起处理（默认跳过）。f2 用户库存的是"
+        "它见过的所有账号，混进来的无关账号（如游戏官方号）默认不下载也不入库",
+    )
+    parser.add_argument(
         "--fetch-limit",
         type=int,
         default=None,
@@ -1941,6 +2085,7 @@ def main(argv: list[str] | None = None) -> int:
             auto_cookie=args.auto_cookie,
             limit=args.fetch_limit,
             since_days=args.since_days,
+            include_unknown=args.include_unknown_authors,
         )
         if fetch.get("error"):
             print(f"  ⚠ {fetch['error']}")
@@ -1949,6 +2094,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"  下载汇总：成功 {fetch['ok']} / 失败 {fetch['failed']}"
                 f"（共 {fetch['total']} 个作者）"
             )
+            if fetch.get("skipped_authors"):
+                print(
+                    f"  跳过未登记账号 {len(fetch['skipped_authors'])} 个："
+                    f"{'、'.join(fetch['skipped_authors'])}"
+                )
             if fetch["failed"]:
                 print("  ⚠ 有作者下载失败（多为风控/cookie 失效），已跳过，稍后可重跑")
         print()
@@ -1996,11 +2146,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"素材库不存在: {db_path}")
         return 1
 
+    # 未显式指定作者时把导入范围收窄到「库里已登记的博主」：下载目录里可能留着
+    # 无关账号的产物（f2 用户库混进来的账号），默认不让它们入库
+    # （与 web 一键获取同一条口径，见 select_known_authors）。库内一个抖音博主都
+    # 没有时没有白名单依据，退回旧口径（全部导入）。
+    if authors_filter:
+        plan_authors: set[str] | None = authors_filter
+    elif args.include_unknown_authors or not bloggers:
+        plan_authors = None
+    else:
+        known, unknown = select_known_authors(load_f2_authors(args.f2_dir), bloggers)
+        plan_authors = {normalize_author(a["nickname"]) for a in known}
+        if unknown:
+            print(
+                f"   ⏭ 未登记账号的产物不入库：{'、'.join(a['nickname'] for a in unknown)}"
+                "（要一起导入请加 --include-unknown-authors）"
+            )
+
     decisions, skipped, deferred_works = build_import_plan(
         files=files,
         dedup=dedup,
         bloggers=bloggers,
-        authors=authors_filter,
+        authors=plan_authors,
         limit=args.limit,
         skip_live=args.skip_live,
         hash_cache=hash_cache,

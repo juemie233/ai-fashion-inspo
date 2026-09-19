@@ -1,6 +1,6 @@
 /** f2「一键获取素材」的状态与提交逻辑。
  *
- * 后端链路：`POST /api/scraper/f2-import` 创建后台任务（f2 增量下载 → 四层去重 →
+ * 后端链路：`POST /api/scraper/f2-import` 创建后台任务（f2 增量下载 → 五层去重 →
  * 入库），由独立 worker 执行，进度在「任务中心」查看；本组合式只负责可用性检查
  * 与提交，不持有任务进度（避免与任务中心重复轮询）。
  */
@@ -52,12 +52,17 @@ export interface F2ImportStatus {
   available: boolean
   /** 不可用原因或可用性摘要（直接展示给用户） */
   reason: string
-  /** f2 用户库里的作者数 */
+  /** 已登记到博主库、可增量下载的作者数（不含 f2 里未登记的账号） */
   authors: number
+  /** f2 用户库里有、但库里没有对应博主的账号名（默认会被跳过，供卡片提示） */
+  unknown_authors: string[]
   /** f2 工作目录 */
   f2_dir: string
   /** 下载产物扫描目录 */
   root: string
+  /** 后端配置的默认日期窗口天数（F2_FETCH_SINCE_DAYS）：作为「只翻最近 N 天」的初值，
+   *  避免前端硬编码默认值把 .env 配置顶掉 */
+  fetch_since_days: number
   /** 每日自动获取配置 */
   auto: F2AutoStatus
 }
@@ -78,6 +83,8 @@ export interface F2ImportOptions {
   make_thumbnails?: boolean
   /** f2 日期窗口天数（0=全历史；缺省取后端配置，默认 14） */
   since_days?: number
+  /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
+  include_unknown_authors?: boolean
 }
 
 export function useF2Import() {

@@ -37,6 +37,9 @@ async def create_f2_import(
     since_days: int | None = Query(
         None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史；缺省取配置）"
     ),
+    include_unknown_authors: bool = Query(
+        False, description="是否连未登记到博主库的 f2 账号一起处理（默认跳过）"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -56,48 +59,28 @@ async def create_f2_import(
         skip_live: 跳过 live 实况的分段视频。
         fetch_limit: 下载阶段最多处理多少个作者（试跑用）。
         make_thumbnails: 是否生成缩略图（关掉更快，但列表页缺预览图）。
+        include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
+            默认 False——f2 用户库存的是它见过的所有账号，实测混进过网易第五人格
+            这类官方号并被原样入库；默认只处理能对上游记博主的账号。
         since_days: f2 只翻最近 N 天的作品。**别轻易用 0**：`-i all` 会让 f2 把
             作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
             也不会漏作品。
     """
-    from app.services.task_runner import create_f2_import_task, f2_import_status
+    from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
     if fetch:
         status = f2_import_status()
         if not status["available"]:
             return {"message": status["reason"], "task_id": None}
 
-    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
-    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。已有进行中的任务时
-    # 直接复用它，不新建。
-    from sqlalchemy import select
-
-    from app.models.task import TaskQueue
-
-    running = (
-        (
-            await db.execute(
-                select(TaskQueue)
-                .where(
-                    TaskQueue.type == "f2_import",
-                    TaskQueue.status.in_(("pending", "running", "paused")),
-                )
-                .order_by(TaskQueue.id.desc())
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if running:
-        return {
-            "message": f"已有进行中的一键获取素材任务（#{running.id}），请等待完成或先取消",
-            "task_id": running.id,
-            "reused": True,
-        }
-
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
-    task = await create_f2_import_task(
+
+    # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
+    # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」
+    # 在服务层由进程内锁串行化（自动调度循环也走同一入口），已有进行中任务时
+    # 直接复用它，不新建。
+    task, running_id = await create_f2_import_task_if_idle(
         db,
         authors=author_list,
         limit=limit,
@@ -106,7 +89,14 @@ async def create_f2_import(
         fetch_limit=fetch_limit,
         make_thumbnails=make_thumbnails,
         since_days=since_days,
+        include_unknown_authors=include_unknown_authors,
     )
+    if task is None:
+        return {
+            "message": f"已有进行中的一键获取素材任务（#{running_id}），请等待完成或先取消",
+            "task_id": running_id,
+            "reused": True,
+        }
     return {
         "message": "已提交「一键获取素材」任务",
         "task_id": task.id,
@@ -126,6 +116,68 @@ async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
     info = f2_import_status()
     info["auto"] = await get_f2_auto_status(db)
     return info
+
+
+@router.get("/f2-tasks/{task_id}/results")
+async def f2_task_results(
+    task_id: int,
+    page: int = Query(1, ge=1),
+    size: int = Query(60, ge=1, le=200),
+    state: str = Query(
+        "all", description="筛选：all/pending/approved/rejected/trash/gone"
+    ),
+    author: str = Query("", description="只保留该作者（source_author 精确匹配）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """浏览某次「一键获取素材」任务产出的素材（供采集管理页的结果与审查面板）。
+
+    归属以该任务落盘的**批次清单**为准（f2 素材没有 scraper_task_id 可关联）；
+    每条素材的当前状态（是否在垃圾桶、质量审核状态、实际文件路径）以数据库为准。
+    """
+    return await scraper_service.get_f2_task_results(
+        db, task_id, page=page, size=size, state=state, author=author
+    )
+
+
+@router.post("/f2-tasks/{task_id}/results/trash")
+async def f2_task_results_trash(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """把本批素材移入垃圾桶（软删除，可在垃圾桶恢复；同时作为负样本）。
+
+    请求体: {"ids": [...], "reason": "质量差"}
+    """
+    return await scraper_service.trash_f2_task_results(
+        db, task_id, payload.get("ids") or [], payload.get("reason")
+    )
+
+
+@router.post("/f2-tasks/{task_id}/results/restore")
+async def f2_task_results_restore(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """还原本批已在垃圾桶的素材（逐条复用单条恢复逻辑，单条失败不影响其余）。
+
+    请求体: {"ids": [...]}
+    """
+    return await scraper_service.restore_f2_task_results(db, task_id, payload.get("ids") or [])
+
+
+@router.post("/f2-tasks/{task_id}/results/delete")
+async def f2_task_results_delete(
+    task_id: int,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """彻底删除本批素材（不可恢复）：创建 batch_delete 任务，由 worker 执行。
+
+    请求体: {"ids": [...]}
+    """
+    return await scraper_service.delete_f2_task_results(db, task_id, payload.get("ids") or [])
 
 
 @router.put("/f2-auto")
