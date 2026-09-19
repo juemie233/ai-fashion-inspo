@@ -187,6 +187,7 @@ fashion-inspo/
 - chore: 工具/配置
 
 注意事项：
+- **默认分支固定为 `master`**：开发、提交、推送一律在 `master` 上进行（`git push origin master`）；功能分支只在用户明确要求时使用，且分支合并后**不要**继续在旧分支上提交。
 - **fix（修复）提交无限制**：修复功能的代码提交不受行数限制，完成后自动 `git commit` 并 `git push origin master`。
 - **其他类型 < 100 行**：不自动提交。仅在用户明确要求时提交。
 - **其他类型 ≥ 100 行**：自动 `git commit` 并 `git push origin master`。
