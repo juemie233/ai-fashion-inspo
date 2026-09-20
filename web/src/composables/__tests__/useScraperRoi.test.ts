@@ -6,7 +6,13 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatCount, formatRate, useScraperRoi, type CollectionRoi } from '../useScraperRoi'
+import {
+  compareAddRate,
+  formatCount,
+  formatRate,
+  useScraperRoi,
+  type CollectionRoi,
+} from '../useScraperRoi'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -116,5 +122,34 @@ describe('ROI 展示格式化', () => {
     expect(formatCount(undefined)).toBe('—')
     expect(formatCount(0)).toBe('0')
     expect(formatCount(301)).toBe('301')
+  })
+})
+
+describe('入库率排序比较器（compareAddRate）', () => {
+  /** 按比较器对一列入库率排序（模拟表格点击表头后的结果顺序） */
+  function sorted(rates: (number | null)[], direction: 'ascend' | 'descend') {
+    return [...rates].sort((a, b) => compareAddRate(a, b, direction))
+  }
+
+  it('升序：数值由小到大', () => {
+    expect(sorted([58.8, 12.5, 96.2], 'ascend')).toEqual([12.5, 58.8, 96.2])
+  })
+
+  it('降序：数值由大到小（找「最划算的关键词」用这个方向）', () => {
+    expect(sorted([58.8, 12.5, 96.2], 'descend')).toEqual([96.2, 58.8, 12.5])
+  })
+
+  it('null（发现数为 0，展示「—」）升序降序都排在末尾，不冒充最高入库率', () => {
+    expect(sorted([null, 58.8, null, 12.5], 'ascend')).toEqual([12.5, 58.8, null, null])
+    expect(sorted([null, 58.8, null, 12.5], 'descend')).toEqual([58.8, 12.5, null, null])
+  })
+
+  it('两个 null 视为相等（保持稳定排序）', () => {
+    expect(compareAddRate(null, null, 'ascend')).toBe(0)
+    expect(compareAddRate(null, null, 'descend')).toBe(0)
+  })
+
+  it('0% 是真实数值，与 null（无数据）区别对待', () => {
+    expect(sorted([null, 0, 30], 'ascend')).toEqual([0, 30, null])
   })
 })

@@ -5,6 +5,7 @@ import { computed, nextTick, ref } from 'vue'
 import {
   ROI_CHANNEL_LABELS,
   ROI_RANGES,
+  compareAddRate,
   formatCount,
   formatRate,
   useScraperRoi,
@@ -15,34 +16,75 @@ const { roi, loading, days, dimension, loadRoi, hasRows, notes } = useScraperRoi
 /** 是否展开看板（默认折叠，与采集统计看板一致） */
 const expanded = ref(false)
 
+/** 入库率排序方向；'' = 尚未排序（首次点击升序，之后升/降互切） */
+const addRateSort = ref<'' | 'ascend' | 'descend'>('')
+
+/**
+ * 入库率列的排序配置。
+ *
+ * `sortOrder` 必须受控：Arco 默认的点击循环是「升 → 降 → 取消排序」，第三次
+ * 点击会把排序清掉；这里由 `addRateSort` 决定方向，点击回调只做升降互切。
+ * `sorter` 用 compareAddRate，保证「—」（发现数为 0）恒定排在末尾。
+ */
+function addRateSortable() {
+  return {
+    sortDirections: ['ascend', 'descend'] as ('ascend' | 'descend')[],
+    sortOrder: addRateSort.value,
+    sorter: (
+      a: Record<string, unknown>,
+      b: Record<string, unknown>,
+      extra: { direction: 'ascend' | 'descend' },
+    ): number =>
+      compareAddRate(a.add_rate as number | null, b.add_rate as number | null, extra.direction),
+  }
+}
+
+/** 表头排序回调：只在升序 / 降序之间切换（第三次点击回到升序，不取消排序） */
+function onSorterChange(field: string, direction: string) {
+  if (field !== 'add_rate') return
+  addRateSort.value = direction === 'descend' ? 'descend' : 'ascend'
+}
+
 /** 关键词维度列 */
-const keywordColumns = [
+const keywordColumns = computed(() => [
   { title: '关键词', dataIndex: 'keyword', slotName: 'label', width: 160 },
   { title: '任务', dataIndex: 'tasks', width: 64 },
   { title: '发现', dataIndex: 'found', width: 72 },
   { title: '入库', dataIndex: 'added', width: 72 },
-  { title: '入库率', dataIndex: 'add_rate', slotName: 'addRate', width: 84 },
+  {
+    title: '入库率',
+    dataIndex: 'add_rate',
+    slotName: 'addRate',
+    width: 84,
+    sortable: addRateSortable(),
+  },
   { title: '可归属', dataIndex: 'attributed', slotName: 'attributed', width: 84 },
   { title: '通过', dataIndex: 'approved', width: 64 },
   { title: '不合格', dataIndex: 'rejected', width: 72 },
   { title: '待审', dataIndex: 'pending', width: 64 },
   { title: '合格率(已审)', dataIndex: 'approved_rate', slotName: 'approvedRate', width: 100 },
-]
+])
 
 /** 博主维度列（f2 行没有任务级口径，对应列显示 —） */
-const authorColumns = [
+const authorColumns = computed(() => [
   { title: '博主', dataIndex: 'name', slotName: 'author', width: 170 },
   { title: '通道', dataIndex: 'channel', slotName: 'channel', width: 96 },
   { title: '任务', dataIndex: 'tasks', slotName: 'tasks', width: 64 },
   { title: '发现', dataIndex: 'found', slotName: 'found', width: 72 },
   { title: '入库', dataIndex: 'added', slotName: 'added', width: 72 },
-  { title: '入库率', dataIndex: 'add_rate', slotName: 'addRate', width: 84 },
+  {
+    title: '入库率',
+    dataIndex: 'add_rate',
+    slotName: 'addRate',
+    width: 84,
+    sortable: addRateSortable(),
+  },
   { title: '素材数', dataIndex: 'imported', width: 72 },
   { title: '通过', dataIndex: 'approved', width: 64 },
   { title: '不合格', dataIndex: 'rejected', width: 72 },
   { title: '待审', dataIndex: 'pending', width: 64 },
   { title: '合格率(已审)', dataIndex: 'approved_rate', slotName: 'approvedRate', width: 100 },
-]
+])
 
 /** 口径概览：扫了多少任务、有多少素材能归属到质量审核 */
 const coverageText = computed(() => {
@@ -107,6 +149,7 @@ async function refresh() {
             row-key="keyword"
             size="small"
             :scroll="{ x: 900 }"
+            @sorter-change="onSorterChange"
           >
             <template #label="{ record }">
               <span class="roi-name">{{ record.keyword }}</span>
@@ -139,6 +182,7 @@ async function refresh() {
             :row-key="(row: Record<string, unknown>) => `${row.channel}-${row.name}`"
             size="small"
             :scroll="{ x: 1020 }"
+            @sorter-change="onSorterChange"
           >
             <template #author="{ record }">
               <span class="roi-name">{{ record.name }}</span>

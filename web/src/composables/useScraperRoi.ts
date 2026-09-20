@@ -77,6 +77,25 @@ export function formatCount(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : String(value)
 }
 
+/**
+ * 入库率排序比较器：null（发现数为 0，展示为「—」）**恒定排在末尾**，
+ * 其余按数值升序 / 降序。
+ *
+ * 为什么不直接用 Arco 内置比较器（`valueA > valueB ? 1 : -1` 再按方向取反）：
+ * 内置比较器把 null 当最小值参与比较，降序时「—」会翻到最前面，看上去像
+ * 「入库率最高」的行——无数据的行不该占据榜首。
+ */
+export function compareAddRate(
+  a: number | null,
+  b: number | null,
+  direction: 'ascend' | 'descend',
+): number {
+  if (a === null && b === null) return 0
+  if (a === null) return 1
+  if (b === null) return -1
+  return direction === 'ascend' ? a - b : b - a
+}
+
 /** 采集 ROI 状态与加载，由 ScraperRoiPanel 消费。 */
 export function useScraperRoi() {
   const roi = ref<CollectionRoi | null>(null)
