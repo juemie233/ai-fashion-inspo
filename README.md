@@ -515,6 +515,7 @@ fashion-inspo/
     ├── backfill_vectors.py       # 存量素材向量回填
     ├── restart.sh                # 一键重启前后端 + worker
     ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，手动执行）
+    ├── project_stats.py          # 项目体量统计（代码行数 / 数据与存储 / 仓库体积 / 测试数 / 最大源文件，支持 --json）
     └── generate_icons.py         # 生成插件图标
 ```
 
