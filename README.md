@@ -367,6 +367,8 @@ fashion-inspo/
 │   │   │   ├── audit_service.py  # 操作审计日志写入
 │   │   │   ├── near_duplicate_service.py  # 近似重复检测（感知哈希分组）
 │   │   │   ├── crop_service.py   # 手机图剪裁
+│   │   │   ├── image_cropping.py # 纯图像裁剪算法（黑边/截图特征/内容边界；字形证据已拆出，见下）
+│   │   │   ├── image_cropping_glyph.py  # 顶部状态栏字形证据检测（独立证据体系，阈值常量随迁）
 │   │   │   ├── admin_stats_service.py    # 管理后台统计
 │   │   │   ├── chrome_manager.py # 采集专用 Chrome 生命周期
 │   │   │   ├── gpu_service.py / model_config.py / model_prompt.py  # AI 模型/GPU/参数
