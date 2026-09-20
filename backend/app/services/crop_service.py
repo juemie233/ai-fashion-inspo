@@ -270,6 +270,19 @@ def _content_candidate_qualified(bounds_result: dict, confidence: str, ratio: fl
     return bool(glyph_found or has_ui_band)
 
 
+def _resolve_scan_cursor(cursor: str | None) -> str | None:
+    """解析分页游标（素材主键为 UUID 字符串，规范化后做字符串比较）。
+
+    不能 int() 转换（曾导致续扫恒 400）；与库中存储格式严格一致。
+    """
+    if cursor is None:
+        return None
+    try:
+        return str(uuid.UUID(cursor))
+    except ValueError:
+        raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的素材 id）") from None
+
+
 async def scan_candidates(
     db: AsyncSession,
     mode: str = "auto",
@@ -318,14 +331,7 @@ async def scan_candidates(
     # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
     min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
 
-    cursor_id: str | None = None
-    if cursor is not None:
-        try:
-            # 素材主键为 UUID 字符串：规范化（小写连字符形式）后做字符串比较，
-            # 与库中存储格式严格一致；不能 int() 转换（曾导致续扫恒 400）
-            cursor_id = str(uuid.UUID(cursor))
-        except ValueError:
-            raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的素材 id）") from None
+    cursor_id = _resolve_scan_cursor(cursor)
 
     query = select(Inspiration).where(
         Inspiration.source_type == "manual_upload",
@@ -350,127 +356,9 @@ async def scan_candidates(
             break
         scanned += 1
         last_insp_id = insp.id
-        full = _resolve_storage_path(insp.file_path)
-        if full is None or not full.exists():
+        item = await _scan_one_candidate(insp, mode, crop_top, crop_bottom, min_ratio)
+        if item is None:
             continue
-        try:
-            # PIL 文件头读取是阻塞 I/O，放线程池执行（与下方 detect_* 一致）
-            width, height = await asyncio.to_thread(_probe_size, full)
-        except Exception:
-            continue  # 无法解码的图片不做候选
-        if height / width < min_ratio:
-            continue
-
-        # content 模式：单次解码合并「截图特征 + 内容边界」（性能关键——
-        # 全量扫描 5000+ 张时每张只解码一次，旧实现要解码三次）
-        bounds_result = None
-        if mode == "content":
-            try:
-                features, bounds_result = await asyncio.to_thread(
-                    analyze_screenshot_combined, full
-                )
-                confidence = screenshot_confidence(features)
-            except Exception:
-                confidence = "low"
-                bounds_result = None
-            if bounds_result is None:
-                # 检测失败（未检出内容区边界/布局不规则）且无字形证据
-                # （combined 已在字形存在时返回字形建议而非 None）：静默排除
-                continue
-            # ── 候选资格（FP/FN 裁决层，口径见 _content_candidate_qualified）──
-            if not _content_candidate_qualified(bounds_result, confidence, height / width):
-                continue
-            # 资格通过后即使已裁剪干净、无残留建议也继续列入候选：它是真实
-            # 截图（有字形/UI 结构证据），顶部状态栏残留肉眼可见，交给人工
-            # 目检勾选（此前把这类素材静默过滤，导致「大部分素材找不到、
-            # 无法选中」），item 构造中如实标注
-        else:
-            # 非 content 模式：截图特征检测（状态栏/底部栏 → 置信度分级）
-            try:
-                features = await asyncio.to_thread(detect_screenshot_features, full)
-                confidence = screenshot_confidence(features)
-            except Exception:
-                confidence = "low"
-
-        item: dict = {
-            "id": insp.id,
-            "file_path": str(insp.file_path),
-            "width": width,
-            "height": height,
-            "ratio": round(height / width, 3),
-            "crop_top": crop_top,
-            "crop_bottom": crop_bottom,
-            "auto_ok": True,
-            "note": None,
-            "auto_checked": None,
-            "confidence": confidence,
-            "boundary_kind": None,
-            "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
-        }
-        if mode == "auto":
-            try:
-                top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
-                item["crop_top"] = round(top_px / height, 6)
-                item["crop_bottom"] = round((height - 1 - bottom_px) / height, 6)
-                # 本模式为小红书截图设计：其形态是「上下黑边包夹图片主体」。
-                # 双侧黑边才默认勾选；单侧「黑边」多为抖音截图的播放器条或
-                # 照片暗部（应走 content 模式处理），保留候选但不自动勾选，
-                # 交人工判断
-                item["auto_checked"] = item["crop_top"] > 0 and item["crop_bottom"] > 0
-            except ValueError as e:
-                item["auto_ok"] = False
-                item["auto_checked"] = False
-                item["note"] = f"自动检测失败：{e}"
-        elif mode == "content":
-            # 使用上方缓存的检测结果
-            item["crop_top"] = bounds_result["top_frac"]
-            item["crop_bottom"] = bounds_result["bottom_frac"]
-            item["boundary_kind"] = bounds_result["kind"]
-            glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
-            residual_bottom = bounds_result.get("residual_bottom_frac", 0)
-            suggestion = max(bounds_result["residual_top_frac"], glyph_top_frac)
-            if (
-                bounds_result["top_frac"] == 0
-                and suggestion == 0
-                and residual_bottom > 0
-            ):
-                # 仅底部残留（均匀暗带建议）：灰底渐变与播放器条人眼都难区分
-                # （20 张误报中 4 张属此类），候选保留但交人工确认，不自动勾选
-                item["auto_ok"] = False
-                item["crop_bottom"] = residual_bottom
-                item["auto_checked"] = False
-                item["note"] = (
-                    f"疑似底部导航条/进度条残留（建议裁剪 {residual_bottom:.1%}），"
-                    "请预览确认"
-                )
-            elif bounds_result["top_frac"] == 0 and suggestion > 0:
-                # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
-                # 典型特征，或实底状态栏残留）：不自动判定可裁剪（防误裁
-                # 普通照片），标注建议比例。
-                # 默认勾选条件（四轮真实样本校准的最终口径）：仅系统 UI 证据
-                # 齐全（top_bar+bottom_bar=high）。字形时间签名在两类样本上
-                # 分布重叠（20 张误报中 5 张签名通过、13 张真残留仅 2 张通过），
-                # 不再作为勾选依据；VLM 单问实验同样不达标（7/13、9/20）。
-                # 残留建议保留在候选中供人工勾选——误勾代价（裁坏图）远大于
-                # 漏勾（手动勾选）。
-                item["auto_ok"] = False
-                item["crop_top"] = suggestion
-                item["auto_checked"] = confidence == "high"
-                item["note"] = (
-                    f"疑似顶部状态栏残留（建议裁剪 {suggestion:.1%}），"
-                    + ("已默认勾选，请预览确认" if item["auto_checked"] else "请预览确认")
-                )
-            elif (
-                bounds_result["already_cropped"]
-                and bounds_result["top_frac"] <= 0
-                and bounds_result["residual_top_frac"] <= 0
-            ):
-                # 检出截图特征（状态栏/导航栏）但未给出可裁建议：可能是已
-                # 裁过或界面以内容为主。如实标注，不编造比例，由人工目检决定
-                item["auto_ok"] = False
-                item["crop_top"] = 0.0
-                item["auto_checked"] = False
-                item["note"] = "未检出可裁区域（可能已裁剪过），请目检确认"
         candidates.append(item)
         # 候选上限检查必须放在 append 之后：此时当前候选已入选，断点游标
         # （last_insp_id）指向它，续扫从它之后接续，不重不漏。若放在 append
@@ -478,69 +366,11 @@ async def scan_candidates(
         if limit > 0 and len(candidates) >= limit:
             truncated = True
             break
-
-    # ── VLM 主判（方案 A）：对入围候选逐张判定顶部状态栏/底部进度条。
-    #    算法初筛只负责「圈定疑似范围」（快），最终裁决交给 VLM（准，约
-    #    1.3s/张 × 候选数）——三类结果分别处理：
-    #    - 阳性（检出系统 UI 残留）：保留候选，标注置顶，真残留浮到最前；
-    #    - 阴性（明确未检出）：「算法误判」的候选，按 VLM 主判移除——消除
-    #      用户核心投诉的列表噪音；
-    #    - 未知（Ollama 不可用/判定失败）：保守保留并标注（不误伤真残留，
-    #      也不因服务抖动把疑似全部丢弃）。
-    #    Ollama 不可用时全部落「未知」分支 → 候选完整保留，退回纯算法口径。
+    # ── VLM 主判（方案 A）：对入围候选逐张裁决（口径见 _apply_vlm_review）──
     vlm_hit = 0
     vlm_removed = 0
     if vlm_review and candidates:
-        kept: list[dict] = []
-        for idx, c in enumerate(candidates):
-            full = _resolve_storage_path(c["file_path"])
-            if full is None or not full.exists():
-                kept.append(c)
-                continue
-            try:
-                verdict = await _vlm_residue_review(full)
-            except Exception as e:
-                logger.debug(f"VLM 复核跳过 {c['id']}: {e}")
-                verdict = None
-            if verdict is True:
-                vlm_hit += 1
-                c["vlm_residue"] = True
-                suffix = "AI 复核：检出系统 UI 残留"
-                c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
-                kept.append(c)
-            elif verdict is False:
-                # VLM 明确未检出：算法疑似但 VLM 排除 → 从候选移除（主判）
-                vlm_removed += 1
-                logger.info(f"VLM 主判移除（算法疑似但未检出 UI 残留）: {c['id']}")
-                continue
-            else:
-                # 未知（判定失败/超时）：保守保留，标注待人工确认
-                c["vlm_residue"] = None
-                suffix = "AI 复核不可用，算法疑似（请人工确认）"
-                c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
-                kept.append(c)
-            # 时间预算对 VLM 阶段同样生效，超时中断复核（未复核候选转「未知」保留）
-            if time.monotonic() > deadline:
-                logger.info(
-                    f"VLM 复核已达时间预算，中断（候选 {len(candidates)}，"
-                    f"剩余未复核候选按「未知」保留）"
-                )
-                for rest in candidates[idx + 1 :]:
-                    rest["vlm_residue"] = None
-                    rest["note"] = (
-                        f"{rest['note']}；未及 AI 复核（时间预算）"
-                        if rest["note"]
-                        else "未及 AI 复核（时间预算）"
-                    )
-                    kept.append(rest)
-                break
-        candidates = kept
-        if vlm_hit or vlm_removed:
-            logger.info(
-                f"VLM 主判: 阳性 {vlm_hit}，移除 {vlm_removed}，"
-                f"剩余 {len(candidates)} 候选"
-            )
-
+        candidates, vlm_hit, vlm_removed = await _apply_vlm_review(candidates, deadline)
     # 排序：VLM 复核阳性 > 其余候选；同组内按上传时间倒序
     candidates.sort(
         key=lambda c: (bool(c.get("vlm_residue")), c.get("created_at") or ""),
@@ -558,6 +388,207 @@ async def scan_candidates(
     }
 
 
+
+
+async def _scan_one_candidate(
+    insp: Inspiration, mode: str, crop_top: float, crop_bottom: float, min_ratio: float
+) -> dict | None:
+    """检测单个素材是否为手机截图候选，返回候选条目；不列入时返回 None。
+
+    只读、不落库：写库与候选上限/时间预算由 scan_candidates 的循环负责。
+    """
+
+    full = _resolve_storage_path(insp.file_path)
+    if full is None or not full.exists():
+        return None
+    try:
+        # PIL 文件头读取是阻塞 I/O，放线程池执行（与下方 detect_* 一致）
+        width, height = await asyncio.to_thread(_probe_size, full)
+    except Exception:
+        return None  # 无法解码的图片不做候选
+    if height / width < min_ratio:
+        return None
+
+    # content 模式：单次解码合并「截图特征 + 内容边界」（性能关键——
+    # 全量扫描 5000+ 张时每张只解码一次，旧实现要解码三次）
+    bounds_result = None
+    if mode == "content":
+        try:
+            features, bounds_result = await asyncio.to_thread(
+                analyze_screenshot_combined, full
+            )
+            confidence = screenshot_confidence(features)
+        except Exception:
+            confidence = "low"
+            bounds_result = None
+        if bounds_result is None:
+            # 检测失败（未检出内容区边界/布局不规则）且无字形证据
+            # （combined 已在字形存在时返回字形建议而非 None）：静默排除
+            return None
+        # ── 候选资格（FP/FN 裁决层，口径见 _content_candidate_qualified）──
+        if not _content_candidate_qualified(bounds_result, confidence, height / width):
+            return None
+        # 资格通过后即使已裁剪干净、无残留建议也继续列入候选：它是真实
+        # 截图（有字形/UI 结构证据），顶部状态栏残留肉眼可见，交给人工
+        # 目检勾选（此前把这类素材静默过滤，导致「大部分素材找不到、
+        # 无法选中」），item 构造中如实标注
+    else:
+        # 非 content 模式：截图特征检测（状态栏/底部栏 → 置信度分级）
+        try:
+            features = await asyncio.to_thread(detect_screenshot_features, full)
+            confidence = screenshot_confidence(features)
+        except Exception:
+            confidence = "low"
+
+    item: dict = {
+        "id": insp.id,
+        "file_path": str(insp.file_path),
+        "width": width,
+        "height": height,
+        "ratio": round(height / width, 3),
+        "crop_top": crop_top,
+        "crop_bottom": crop_bottom,
+        "auto_ok": True,
+        "note": None,
+        "auto_checked": None,
+        "confidence": confidence,
+        "boundary_kind": None,
+        "created_at": insp.created_at.isoformat(sep=" ") if insp.created_at else None,
+    }
+    if mode == "auto":
+        try:
+            top_px, bottom_px = await asyncio.to_thread(detect_photo_band, full)
+            item["crop_top"] = round(top_px / height, 6)
+            item["crop_bottom"] = round((height - 1 - bottom_px) / height, 6)
+            # 本模式为小红书截图设计：其形态是「上下黑边包夹图片主体」。
+            # 双侧黑边才默认勾选；单侧「黑边」多为抖音截图的播放器条或
+            # 照片暗部（应走 content 模式处理），保留候选但不自动勾选，
+            # 交人工判断
+            item["auto_checked"] = item["crop_top"] > 0 and item["crop_bottom"] > 0
+        except ValueError as e:
+            item["auto_ok"] = False
+            item["auto_checked"] = False
+            item["note"] = f"自动检测失败：{e}"
+    elif mode == "content":
+        # 使用上方缓存的检测结果
+        item["crop_top"] = bounds_result["top_frac"]
+        item["crop_bottom"] = bounds_result["bottom_frac"]
+        item["boundary_kind"] = bounds_result["kind"]
+        glyph_top_frac = bounds_result.get("glyph_top_frac", 0)
+        residual_bottom = bounds_result.get("residual_bottom_frac", 0)
+        suggestion = max(bounds_result["residual_top_frac"], glyph_top_frac)
+        if (
+            bounds_result["top_frac"] == 0
+            and suggestion == 0
+            and residual_bottom > 0
+        ):
+            # 仅底部残留（均匀暗带建议）：灰底渐变与播放器条人眼都难区分
+            # （20 张误报中 4 张属此类），候选保留但交人工确认，不自动勾选
+            item["auto_ok"] = False
+            item["crop_bottom"] = residual_bottom
+            item["auto_checked"] = False
+            item["note"] = (
+                f"疑似底部导航条/进度条残留（建议裁剪 {residual_bottom:.1%}），"
+                "请预览确认"
+            )
+        elif bounds_result["top_frac"] == 0 and suggestion > 0:
+            # 疑似顶部状态栏残留（透明图标叠加照片——抖音全屏浏览态的
+            # 典型特征，或实底状态栏残留）：不自动判定可裁剪（防误裁
+            # 普通照片），标注建议比例。
+            # 默认勾选条件（四轮真实样本校准的最终口径）：仅系统 UI 证据
+            # 齐全（top_bar+bottom_bar=high）。字形时间签名在两类样本上
+            # 分布重叠（20 张误报中 5 张签名通过、13 张真残留仅 2 张通过），
+            # 不再作为勾选依据；VLM 单问实验同样不达标（7/13、9/20）。
+            # 残留建议保留在候选中供人工勾选——误勾代价（裁坏图）远大于
+            # 漏勾（手动勾选）。
+            item["auto_ok"] = False
+            item["crop_top"] = suggestion
+            item["auto_checked"] = confidence == "high"
+            item["note"] = (
+                f"疑似顶部状态栏残留（建议裁剪 {suggestion:.1%}），"
+                + ("已默认勾选，请预览确认" if item["auto_checked"] else "请预览确认")
+            )
+        elif (
+            bounds_result["already_cropped"]
+            and bounds_result["top_frac"] <= 0
+            and bounds_result["residual_top_frac"] <= 0
+        ):
+            # 检出截图特征（状态栏/导航栏）但未给出可裁建议：可能是已
+            # 裁过或界面以内容为主。如实标注，不编造比例，由人工目检决定
+            item["auto_ok"] = False
+            item["crop_top"] = 0.0
+            item["auto_checked"] = False
+            item["note"] = "未检出可裁区域（可能已裁剪过），请目检确认"
+    return item
+
+
+async def _apply_vlm_review(
+    candidates: list[dict], deadline: float
+) -> tuple[list[dict], int, int]:
+    """VLM 主判（方案 A）：对入围候选逐张判定顶部状态栏/底部进度条，
+    算法初筛只负责「圈定疑似范围」（快），最终裁决交给 VLM（准，约
+    1.3s/张 × 候选数）——三类结果分别处理：
+
+    - 阳性（检出系统 UI 残留）：保留候选，标注置顶，真残留浮到最前；
+    - 阴性（明确未检出）：「算法误判」的候选，按 VLM 主判移除——消除
+      用户核心投诉的列表噪音；
+    - 未知（Ollama 不可用/判定失败）：保守保留并标注（不误伤真残留，
+      也不因服务抖动把疑似全部丢弃）。
+
+    Ollama 不可用时全部落「未知」分支 → 候选完整保留，退回纯算法口径。
+    返回 (保留的候选, 阳性数, 移除数)。
+    """
+    vlm_hit = 0
+    vlm_removed = 0
+    kept: list[dict] = []
+    for idx, c in enumerate(candidates):
+        full = _resolve_storage_path(c["file_path"])
+        if full is None or not full.exists():
+            kept.append(c)
+            continue
+        try:
+            verdict = await _vlm_residue_review(full)
+        except Exception as e:
+            logger.debug(f"VLM 复核跳过 {c['id']}: {e}")
+            verdict = None
+        if verdict is True:
+            vlm_hit += 1
+            c["vlm_residue"] = True
+            suffix = "AI 复核：检出系统 UI 残留"
+            c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
+            kept.append(c)
+        elif verdict is False:
+            # VLM 明确未检出：算法疑似但 VLM 排除 → 从候选移除（主判）
+            vlm_removed += 1
+            logger.info(f"VLM 主判移除（算法疑似但未检出 UI 残留）: {c['id']}")
+            continue
+        else:
+            # 未知（判定失败/超时）：保守保留，标注待人工确认
+            c["vlm_residue"] = None
+            suffix = "AI 复核不可用，算法疑似（请人工确认）"
+            c["note"] = f"{c['note']}；{suffix}" if c["note"] else suffix
+            kept.append(c)
+        # 时间预算对 VLM 阶段同样生效，超时中断复核（未复核候选转「未知」保留）
+        if time.monotonic() > deadline:
+            logger.info(
+                f"VLM 复核已达时间预算，中断（候选 {len(candidates)}，"
+                f"剩余未复核候选按「未知」保留）"
+            )
+            for rest in candidates[idx + 1 :]:
+                rest["vlm_residue"] = None
+                rest["note"] = (
+                    f"{rest['note']}；未及 AI 复核（时间预算）"
+                    if rest["note"]
+                    else "未及 AI 复核（时间预算）"
+                )
+                kept.append(rest)
+            break
+    if vlm_hit or vlm_removed:
+        logger.info(
+            f"VLM 主判: 阳性 {vlm_hit}，移除 {vlm_removed}，"
+            f"剩余 {len(kept)} 候选"
+        )
+    return kept, vlm_hit, vlm_removed
 def _skip_entry(insp: Inspiration, reason: str) -> dict:
     """构造跳过明细条目，附带素材文件信息供前端缩略图展示与素材库定位跳转。
 
@@ -628,6 +659,88 @@ async def apply_crops(
     )
     insp_map = {insp.id: insp for insp in result.scalars()}
 
+    # 逐张确定裁剪比例（跳过原因与比例决策见 _build_crop_plans）
+    plans, skipped = await _build_crop_plans(
+        ids, insp_map, mode, crop_top, crop_bottom, min_ratio
+    )
+
+    if not plans:
+        return {
+            "processed": 0,
+            "skipped": skipped,
+            "duplicates": [],
+            "backup_dir": None,
+            "vector_task_id": None,
+        }
+
+    # 重复对比预览按「批次子目录」存放（清理与创建的口径见 _prepare_dup_batch_dir）
+    async with _dups_dir_lock:
+        dup_batch = _prepare_dup_batch_dir()
+    # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
+    backup_dir = (
+        settings.storage_root / "_crop_backup" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    )
+    successes: list[tuple[Inspiration, str | None, str | None, str | None]] = []
+    duplicates: list[dict] = []
+    # 本批次已成功裁剪素材的新内容哈希 → 素材：同批次后续素材重复命中时，
+    # 数据库尚未提交（哈希还没写回），必须在本批次内互查才能检出重复
+    seen_hashes: dict[str, Inspiration] = {}
+    for insp, full, t_frac, b_frac in plans:
+        kind, payload = await _crop_one_inspiration(
+            db, insp, full, t_frac, b_frac, backup_dir, dup_batch, seen_hashes
+        )
+        if kind == "ok":
+            successes.append(payload)
+            if payload[1]:
+                seen_hashes[payload[1]] = insp
+        elif kind == "dup":
+            duplicates.append(payload)
+        else:
+            skipped.append(_skip_entry(insp, payload))
+
+    await _persist_crop_successes(db, successes)
+
+    # 向量回填（攒批）：登记失败不影响主流程（口径见 _enqueue_crop_vectors）
+    vector_task_id = await _enqueue_crop_vectors(db, successes)
+
+    logger.info(
+        f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"
+        f"跳过 {len(skipped)}，内容重复待用户决策 {len(duplicates)}，备份 {backup_dir}"
+    )
+
+    # 记录审计：批量裁剪替换素材图片属破坏性操作（原图仅备份可手动恢复），留痕便于追溯
+    if successes:
+        from app.services.audit_service import record_audit_log
+
+        await record_audit_log(
+            action="crop",
+            count=len(successes),
+            detail=f"手机图裁剪成功 {len(successes)} 个素材（备份于 {backup_dir}）",
+        )
+
+    return {
+        "processed": len(successes),
+        "skipped": skipped,
+        "duplicates": duplicates,
+        "backup_dir": str(backup_dir) if successes else None,
+        "vector_task_id": vector_task_id,
+    }
+
+
+async def _build_crop_plans(
+    ids: list[str],
+    insp_map: dict[str, Inspiration],
+    mode: str,
+    crop_top: float,
+    crop_bottom: float,
+    min_ratio: float,
+) -> tuple[list[tuple[Inspiration, Path, float, float]], list[dict]]:
+    """逐张确定裁剪比例：返回 (可执行计划, 跳过明细)。
+
+    不满足条件的素材（记录不存在/已入垃圾桶/非手动上传/非图片/文件缺失或
+    无法解码/非竖屏/检测失败/无有效比例）一律进 skipped，由前端列出原因；
+    mode=auto 走黑边检测、content 走「特征+边界」合并检测、ratio 用传入比例。
+    """
     # 逐张确定裁剪比例并执行
     plans: list[tuple[Inspiration, Path, float, float]] = []
     skipped: list[dict] = []
@@ -708,153 +821,161 @@ async def apply_crops(
         else:
             t_frac, b_frac = crop_top, crop_bottom
         plans.append((insp, full, t_frac, b_frac))
+    return plans, skipped
 
-    if not plans:
-        return {
-            "processed": 0,
-            "skipped": skipped,
-            "duplicates": [],
-            "backup_dir": None,
-            "vector_task_id": None,
-        }
 
-    # 重复对比预览按「批次子目录」存放：用户逐组决策时，前端会仅携带单张
-    # 素材重新调用 apply（如「保留裁剪结果」），若在此处清空整个目录会把
-    # 其他组的预览一并删掉。因此只清理除「最近一个批次」外的残留批次，
-    # 最近批次（含本组其他待决策预览）必须保留到本组决策结束。
-    # 清理与批次创建在进程内加锁串行化，避免并发 apply 互相删除对方预览。
-    async with _dups_dir_lock:
-        dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
-        if dups_dir.exists():
-            old_batches = sorted(
-                (d for d in dups_dir.iterdir() if d.is_dir()),
-                key=lambda d: d.stat().st_mtime,
-                reverse=True,
-            )
-            for batch_dir in old_batches[1:]:
-                shutil.rmtree(batch_dir, ignore_errors=True)
-        # 本批次标识：重新 apply 时创建新批次，避免与旧预览混放
-        dup_batch = dups_dir / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+def _prepare_dup_batch_dir() -> Path:
+    """准备本批次的「重复对比预览」目录，并清理历史批次（应在 _dups_dir_lock 内调用）。
 
-    # 逐张执行裁剪（PIL 操作为阻塞 I/O，放线程池）
-    backup_dir = (
-        settings.storage_root / "_crop_backup" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    )
-    successes: list[tuple[Inspiration, str | None, str | None, str | None]] = []
-    duplicates: list[dict] = []
-    # 本批次已成功裁剪素材的新内容哈希 → 素材：同批次后续素材重复命中时，
-    # 数据库尚未提交（哈希还没写回），必须在本批次内互查才能检出重复
-    seen_hashes: dict[str, Inspiration] = {}
-    for insp, full, t_frac, b_frac in plans:
-        tmp: Path | None = None
-        backup_path: Path | None = None
-        replaced = False
-        new_thumb: str | None = None
-        try:
-            tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
+    为什么只清理除最近一个批次外的目录：用户逐组决策时，前端会仅携带单张
+    素材重新调用 apply（如「保留裁剪结果」），若清空整个目录会把其他组的
+    预览一并删掉。最近批次（含本组其他待决策预览）必须保留到本组决策结束。
+    清理与批次创建在进程内加锁串行化，避免并发 apply 互相删除对方预览。
+    """
+    dups_dir = settings.storage_root / DUP_PREVIEW_DIR_NAME
+    if dups_dir.exists():
+        old_batches = sorted(
+            (d for d in dups_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for batch_dir in old_batches[1:]:
+            shutil.rmtree(batch_dir, ignore_errors=True)
+    # 本批次标识：重新 apply 时创建新批次，避免与旧预览混放
+    dup_batch = dups_dir / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return dup_batch
 
-            # 新内容哈希 + 去重检查：命中重复时保留裁剪结果预览，交用户对比决策，
-            # 不再自动丢弃（原图与库中素材均保留，由用户决定删除哪一张）
-            new_hash = await asyncio.to_thread(file_sha256, tmp)
-            dup_id = None
-            dup_insp: Inspiration | None = None
-            if new_hash:
-                dup_id = (
-                    await db.execute(
-                        select(Inspiration.id).where(
-                            Inspiration.content_hash == new_hash,
-                            Inspiration.id != insp.id,
-                            NOT_DELETED,
-                        )
+
+async def _crop_one_inspiration(
+    db: AsyncSession,
+    insp: Inspiration,
+    full: Path,
+    t_frac: float,
+    b_frac: float,
+    backup_dir: Path,
+    dup_batch: Path,
+    seen_hashes: dict[str, Inspiration],
+) -> tuple[str, object]:
+    """裁剪单张素材，返回 (结果类型, 载荷)。
+
+    结果类型三态（调用方据此归集）：
+      - ``"ok"``：载荷为 (insp, 新哈希, 新缩略图, 主色调)，可直接 append 进 successes；
+      - ``"dup"``：裁剪结果与库内/本批素材内容重复，载荷为待用户决策的预览条目；
+      - ``"failed"``：载荷为失败原因文案（原图已回滚，tmp 已清理）。
+
+    seen_hashes 只读：本批已成功素材的新哈希由调用方登记，保持单一写入点。
+    """
+    tmp: Path | None = None
+    backup_path: Path | None = None
+    replaced = False
+    new_thumb: str | None = None
+    try:
+        tmp = await asyncio.to_thread(crop_image_to_temp, full, t_frac, b_frac)
+
+        # 新内容哈希 + 去重检查：命中重复时保留裁剪结果预览，交用户对比决策，
+        # 不再自动丢弃（原图与库中素材均保留，由用户决定删除哪一张）
+        new_hash = await asyncio.to_thread(file_sha256, tmp)
+        dup_id = None
+        dup_insp: Inspiration | None = None
+        if new_hash:
+            dup_id = (
+                await db.execute(
+                    select(Inspiration.id).where(
+                        Inspiration.content_hash == new_hash,
+                        Inspiration.id != insp.id,
+                        NOT_DELETED,
                     )
-                ).scalars().first()
-                # 同批次已成功裁剪（尚未写库）的素材同样参与去重
-                if dup_id is None and new_hash in seen_hashes:
-                    dup_insp = seen_hashes[new_hash]
-                    dup_id = dup_insp.id
-            if dup_id:
-                if dup_insp is None:
-                    dup_insp = (
-                        await db.execute(
-                            select(Inspiration).where(Inspiration.id == dup_id)
-                        )
-                    ).scalar_one_or_none()
-                # 裁剪结果预览移入本批次目录（与素材同卷，直接 rename）
-                dup_batch.mkdir(parents=True, exist_ok=True)
-                preview = dup_batch / f"{insp.id}_{dup_id}{tmp.suffix}"
-                os.replace(tmp, preview)
-                tmp = None
-                duplicates.append(
-                    {
-                        "id": insp.id,
-                        "dup_id": dup_id,
-                        "dup_file_path": dup_insp.file_path if dup_insp else None,
-                        "dup_thumbnail_path": dup_insp.thumbnail_path if dup_insp else None,
-                        "dup_created_at": (
-                            dup_insp.created_at.isoformat(sep=" ")
-                            if dup_insp and dup_insp.created_at
-                            else None
-                        ),
-                        "preview_path": str(preview.relative_to(settings.storage_root)),
-                        "reason": f"裁剪结果与素材 {dup_id} 内容重复",
-                    }
                 )
-                continue
-
-            # 主色调在临时文件上提前重算（仅原值非空时刷新）：
-            # 放到替换原图之前执行，替换后便不再有失败点需要回滚
-            colors = insp.dominant_colors
-            if colors is not None:
-                new_colors = await asyncio.to_thread(extract_dominant_colors, tmp)
-                colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
-
-            # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪同一素材时覆盖备份
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            backup_name = f"{insp.id}_{datetime.now().strftime('%H%M%S%f')}{full.suffix}"
-            backup_path = backup_dir / backup_name
-            shutil.copy2(full, backup_path)
-            os.replace(tmp, full)
+            ).scalars().first()
+            # 同批次已成功裁剪（尚未写库）的素材同样参与去重
+            if dup_id is None and new_hash in seen_hashes:
+                dup_insp = seen_hashes[new_hash]
+                dup_id = dup_insp.id
+        if dup_id:
+            if dup_insp is None:
+                dup_insp = (
+                    await db.execute(
+                        select(Inspiration).where(Inspiration.id == dup_id)
+                    )
+                ).scalar_one_or_none()
+            # 裁剪结果预览移入本批次目录（与素材同卷，直接 rename）
+            dup_batch.mkdir(parents=True, exist_ok=True)
+            preview = dup_batch / f"{insp.id}_{dup_id}{tmp.suffix}"
+            os.replace(tmp, preview)
             tmp = None
-            replaced = True
+            return "dup", (
+                {
+                    "id": insp.id,
+                    "dup_id": dup_id,
+                    "dup_file_path": dup_insp.file_path if dup_insp else None,
+                    "dup_thumbnail_path": dup_insp.thumbnail_path if dup_insp else None,
+                    "dup_created_at": (
+                        dup_insp.created_at.isoformat(sep=" ")
+                        if dup_insp and dup_insp.created_at
+                        else None
+                    ),
+                    "preview_path": str(preview.relative_to(settings.storage_root)),
+                    "reason": f"裁剪结果与素材 {dup_id} 内容重复",
+                }
+            )
 
-            # 重新生成缩略图：失败（返回 None）时删除旧缩略图并置空，避免缩略图
-            # 仍指向修改前的内容造成错配（前端将回退展示原图）。
-            # generate_thumbnail 内部捕获异常返回 None；若意外抛出（如实现变更），
-            # 由外层 except 触发「从备份恢复原图」的回滚，保证磁盘与数据库一致。
-            thumb_path = insp.thumbnail_path
-            new_thumb = await generate_thumbnail(full)
+        # 主色调在临时文件上提前重算（仅原值非空时刷新）：
+        # 放到替换原图之前执行，替换后便不再有失败点需要回滚
+        colors = insp.dominant_colors
+        if colors is not None:
+            new_colors = await asyncio.to_thread(extract_dominant_colors, tmp)
+            colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
+
+        # 备份原图 → 原子替换。备份名带毫秒时间戳，避免同秒重复裁剪同一素材时覆盖备份
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_name = f"{insp.id}_{datetime.now().strftime('%H%M%S%f')}{full.suffix}"
+        backup_path = backup_dir / backup_name
+        shutil.copy2(full, backup_path)
+        os.replace(tmp, full)
+        tmp = None
+        replaced = True
+
+        # 重新生成缩略图：失败（返回 None）时删除旧缩略图并置空，避免缩略图
+        # 仍指向修改前的内容造成错配（前端将回退展示原图）。
+        # generate_thumbnail 内部捕获异常返回 None；若意外抛出（如实现变更），
+        # 由外层 except 触发「从备份恢复原图」的回滚，保证磁盘与数据库一致。
+        thumb_path = insp.thumbnail_path
+        new_thumb = await generate_thumbnail(full)
+        if new_thumb:
+            if thumb_path and (settings.storage_root / thumb_path) != (settings.storage_root / new_thumb):
+                (settings.storage_root / thumb_path).unlink(missing_ok=True)
+            thumb_path = new_thumb
+        else:
+            if thumb_path:
+                (settings.storage_root / thumb_path).unlink(missing_ok=True)
+            thumb_path = None
+            logger.warning(f"裁剪后缩略图生成失败，已置空旧缩略图: {insp.id}")
+
+        return "ok", (insp, new_hash or None, thumb_path, colors)
+    except Exception as e:
+        # 原图已被替换但后续失败：从备份恢复原文件，保持磁盘与数据库一致；
+        # 若新缩略图已写入，一并删除（避免与恢复后的原图错配）
+        if replaced:
             if new_thumb:
-                if thumb_path and (settings.storage_root / thumb_path) != (settings.storage_root / new_thumb):
-                    (settings.storage_root / thumb_path).unlink(missing_ok=True)
-                thumb_path = new_thumb
-            else:
-                if thumb_path:
-                    (settings.storage_root / thumb_path).unlink(missing_ok=True)
-                thumb_path = None
-                logger.warning(f"裁剪后缩略图生成失败，已置空旧缩略图: {insp.id}")
+                (settings.storage_root / new_thumb).unlink(missing_ok=True)
+            if backup_path is not None and backup_path.exists():
+                try:
+                    shutil.copy2(backup_path, full)
+                    logger.error(f"裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
+                except Exception as restore_err:
+                    logger.error(
+                        f"裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
+                        f"err={e}, restore_err={restore_err}"
+                    )
+        if tmp is not None and tmp.exists():
+            tmp.unlink(missing_ok=True)
+        return "failed", f"处理失败: {e}"
 
-            successes.append((insp, new_hash or None, thumb_path, colors))
-            if new_hash:
-                seen_hashes[new_hash] = insp
-        except Exception as e:
-            # 原图已被替换但后续失败：从备份恢复原文件，保持磁盘与数据库一致；
-            # 若新缩略图已写入，一并删除（避免与恢复后的原图错配）
-            if replaced:
-                if new_thumb:
-                    (settings.storage_root / new_thumb).unlink(missing_ok=True)
-                if backup_path is not None and backup_path.exists():
-                    try:
-                        shutil.copy2(backup_path, full)
-                        logger.error(f"裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
-                    except Exception as restore_err:
-                        logger.error(
-                            f"裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
-                            f"err={e}, restore_err={restore_err}"
-                        )
-            if tmp is not None and tmp.exists():
-                tmp.unlink(missing_ok=True)
-            skipped.append(_skip_entry(insp, f"处理失败: {e}"))
 
+async def _persist_crop_successes(
+    db: AsyncSession, successes: list[tuple[Inspiration, str | None, str | None, str | None]]
+) -> None:
+    """把裁剪结果写回数据库并提交（标签/收藏/来源等字段不动）。"""
     # 写回数据库（标签/收藏/来源等字段不动）
     for insp, new_hash, thumb_path, colors in successes:
         if new_hash:
@@ -865,6 +986,14 @@ async def apply_crops(
         insp.updated_at = utcnow()
     await db.commit()
 
+
+async def _enqueue_crop_vectors(db: AsyncSession, successes: list) -> int | None:
+    """登记向量回填（攒批）：图像向量按新图重建，文本向量沿用现有标签。
+
+    素材 ID 进入待回填队列，累计达到阈值（100）后统一创建批量任务；未达阈值
+    时返回 None（素材保留在待回填表，不会丢失）。登记失败不影响主流程。
+    注意：enqueue 不再内部提交，裁剪变更已在调用方 commit，这里需显式提交登记行。
+    """
     # 向量回填（攒批）：图像向量按新图重建，文本向量沿用现有标签。
     # 素材 ID 进入待回填队列，累计达到阈值（100）后统一创建批量任务；
     # 未达阈值时 vector_task_id 为 None（素材保留在待回填表，不会丢失）。
@@ -878,29 +1007,7 @@ async def apply_crops(
             vector_task_id = task.id if task else None
         except Exception:
             logger.exception("裁剪后登记向量回填失败，不影响裁剪主流程")
-
-    logger.info(
-        f"手机图裁剪完成: 确认 {len(ids)}，成功 {len(successes)}，"
-        f"跳过 {len(skipped)}，内容重复待用户决策 {len(duplicates)}，备份 {backup_dir}"
-    )
-
-    # 记录审计：批量裁剪替换素材图片属破坏性操作（原图仅备份可手动恢复），留痕便于追溯
-    if successes:
-        from app.services.audit_service import record_audit_log
-
-        await record_audit_log(
-            action="crop",
-            count=len(successes),
-            detail=f"手机图裁剪成功 {len(successes)} 个素材（备份于 {backup_dir}）",
-        )
-
-    return {
-        "processed": len(successes),
-        "skipped": skipped,
-        "duplicates": duplicates,
-        "backup_dir": str(backup_dir) if successes else None,
-        "vector_task_id": vector_task_id,
-    }
+    return vector_task_id
 
 
 # ── 手动裁剪（素材详情页单张裁剪）──────────────────────────────────────────
