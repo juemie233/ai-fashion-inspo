@@ -21,9 +21,10 @@
 """
 
 import asyncio
+import inspect
 import time
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,11 +70,28 @@ async def _count_missing_phash(db: AsyncSession) -> int:
     ).scalar() or 0
 
 
+async def _notify_batch(
+    on_batch: Callable[[int, int], Awaitable[None] | None] | None,
+    computed: int,
+    remaining: int,
+) -> None:
+    """调用进度回调；回调是协程函数时等待它完成（后台任务传的正是 async 回调）。
+
+    早期实现直接同步调用，遇到 `execute_phash_backfill` 的 async `_on_batch` 时
+    协程根本不会执行——任务进度永远停在 0%，只在最后一次性写终值。
+    """
+    if on_batch is None:
+        return
+    result = on_batch(computed, remaining)
+    if inspect.isawaitable(result):
+        await result
+
+
 async def backfill_phash_cache(
     db: AsyncSession,
     *,
     budget_seconds: float = BACKFILL_TIME_BUDGET_SECONDS,
-    on_batch: Callable[[int, int], None] | None = None,
+    on_batch: Callable[[int, int], Awaitable[None] | None] | None = None,
 ) -> dict:
     """补算缺失的感知哈希（写回 `inspirations.phash`），最多跑 ``budget_seconds`` 秒。
 
@@ -83,7 +101,8 @@ async def backfill_phash_cache(
     Args:
         db: 数据库会话。
         budget_seconds: 时间预算（秒）；``0`` 表示只统计不补算（扫描接口的「只看现状」用法）。
-        on_batch: 每轮结束后的回调 ``(已补算总数, 仍未缓存数)``，供后台任务写进度。
+        on_batch: 每轮结束后的回调 ``(已补算总数, 仍未缓存数)``，供后台任务写进度；
+            可为同步函数或协程函数（协程会被等待）。
 
     Returns:
         ``{"computed": 本次新算出的哈希数, "missing": 仍未缓存数,
@@ -158,8 +177,7 @@ async def backfill_phash_cache(
             # 本轮一张都没算出来：记下这些行并进入下一轮（下一轮排除它们，
             # 因此不会原地打转；预算到点也会正常返回）
             unhashable.update(mid for mid, _path in rows)
-            if on_batch is not None:
-                on_batch(computed_total, missing)
+            await _notify_batch(on_batch, computed_total, missing)
             continue
 
         for mid, phash in computed:
@@ -168,8 +186,7 @@ async def backfill_phash_cache(
             )
         await db.commit()
         computed_total += len(computed)
-        if on_batch is not None:
-            on_batch(computed_total, max(0, missing - len(computed)))
+        await _notify_batch(on_batch, computed_total, max(0, missing - len(computed)))
 
 
 async def _collect_scoring_ids(

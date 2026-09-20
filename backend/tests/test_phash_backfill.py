@@ -151,6 +151,22 @@ class TestScanBudget:
         assert cached[bad_id] is None
 
 
+    async def test_async_on_batch_callback_is_awaited(self, client, upload):
+        """进度回调可以是协程函数，必须被 await——否则后台任务进度永远停在 0%。"""
+        ids = _upload_images(upload, 3)
+        _clear_phash(ids)
+        seen: list[tuple[int, int]] = []
+
+        async def _on_batch(computed: int, remaining: int) -> None:
+            seen.append((computed, remaining))
+
+        async with async_session() as db:
+            result = await nd.backfill_phash_cache(db, budget_seconds=30.0, on_batch=_on_batch)
+
+        assert result["computed"] == 3
+        assert seen == [(3, 0)]  # 协程真的执行了，而不是被静默丢弃
+
+
 class TestBackfillTask:
     async def test_task_fills_cache_and_is_idempotent(self, client, upload):
         """后台任务：一次性补齐 → 进度 100 / complete；再创建时缓存已完整 → 400。"""
