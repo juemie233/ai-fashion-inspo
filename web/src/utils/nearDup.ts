@@ -34,6 +34,32 @@ export function collectIdsToDelete(group: NearDuplicateGroup, decision: DupDecis
 }
 
 /**
+ * 提交删除后按删除决定就地更新候选组：剔除已提交删除的素材，组内不足 2 张的整组丢弃。
+ *
+ * 为什么不在提交后**立刻重扫**：删除是后台任务，提交瞬间素材还在库里，重扫会把刚处理过的
+ * 组原样再查出来，于是弹窗又自动打开、进度还退回第 1 组——用户刚做完选择就被弹回选择页。
+ * 就地更新让列表立刻反映决定；库里真实状态在任务跑完后由用户再扫一次确认。
+ *
+ * @param groups 当前候选组
+ * @param deletedIds 已提交删除的素材 ID
+ * @returns 更新后的候选组（只保留仍有 ≥2 张的组）
+ */
+export function dropSubmittedFiles(
+  groups: NearDuplicateGroup[],
+  deletedIds: ReadonlySet<string>,
+): NearDuplicateGroup[] {
+  if (deletedIds.size === 0) {
+    return groups
+  }
+  return groups
+    .map((group) => ({
+      ...group,
+      files: (group.files ?? []).filter((f) => !deletedIds.has(f.id)),
+    }))
+    .filter((group) => group.files.length >= 2)
+}
+
+/**
  * 扫描范围文案：区分「随机抽样」「全库扫描」「缓存未就绪只扫了已缓存部分」三种口径。
  *
  * 为什么要单独判定第三种：扫描接口只做**限时**补算，大库首扫时缓存可能只有一半，

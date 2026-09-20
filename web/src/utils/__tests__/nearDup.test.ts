@@ -1,7 +1,12 @@
 /** nearDup 决策纯函数单测：覆盖保留左边/右边/跳过与多张组边界。 */
 
 import { describe, expect, it } from 'vitest'
-import { collectIdsToDelete, nearDupScopeLabel, type DupDecision } from '@/utils/nearDup'
+import {
+  collectIdsToDelete,
+  dropSubmittedFiles,
+  nearDupScopeLabel,
+  type DupDecision,
+} from '@/utils/nearDup'
 import type { NearDuplicateGroup } from '@/api/admin'
 
 /** 构造测试用近似重复组（files 按评分降序，第一张为建议保留） */
@@ -70,6 +75,39 @@ describe('collectIdsToDelete', () => {
     for (const d of ['keep-left', 'keep-right', 'skip'] as DupDecision[]) {
       expect(collectIdsToDelete(g, d)).toEqual([])
     }
+  })
+})
+
+describe('dropSubmittedFiles', () => {
+  it('两张组删掉一张：不足 2 张，整组从列表移出（不再被弹窗重复对待）', () => {
+    const g = makeGroup(['a', 'b'])
+    expect(dropSubmittedFiles([g], new Set(['b']))).toEqual([])
+  })
+
+  it('四张组删两张：仍有 2 张，保留该组且只剩未删的素材', () => {
+    const g = makeGroup(['a', 'b', 'c', 'd'])
+    const out = dropSubmittedFiles([g], new Set(['c', 'd']))
+    expect(out).toHaveLength(1)
+    expect(out[0].files.map((f) => f.id)).toEqual(['a', 'b'])
+  })
+
+  it('「都保留（跳过）」的组不受影响：决定删除的 ID 为空时原样返回', () => {
+    const groups = [makeGroup(['a', 'b']), makeGroup(['c', 'd'])]
+    expect(dropSubmittedFiles(groups, new Set())).toBe(groups)
+  })
+
+  it('只影响命中的组：未命中的组原样保留', () => {
+    const hit = makeGroup(['a', 'b'])
+    const other = makeGroup(['c', 'd'])
+    const out = dropSubmittedFiles([hit, other], new Set(['b']))
+    expect(out).toHaveLength(1)
+    expect(out[0].files.map((f) => f.id)).toEqual(['c', 'd'])
+  })
+
+  it('不改动入参：返回新组对象，原组 files 不被就地修改', () => {
+    const g = makeGroup(['a', 'b', 'c'])
+    dropSubmittedFiles([g], new Set(['c']))
+    expect(g.files.map((f) => f.id)).toEqual(['a', 'b', 'c'])
   })
 })
 

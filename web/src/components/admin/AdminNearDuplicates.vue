@@ -20,7 +20,7 @@ import {
 import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
-import { collectIdsToDelete, nearDupScopeLabel } from '@/utils/nearDup'
+import { collectIdsToDelete, dropSubmittedFiles, nearDupScopeLabel } from '@/utils/nearDup'
 import { usePolling } from '@/composables/usePolling'
 
 const emit = defineEmits<{
@@ -62,8 +62,8 @@ const dupIndex = ref(0)
 const deletingIds = ref<Set<string>>(new Set())
 /** 全部处理完成（进入提交确认视图） */
 const allDone = ref(false)
-/** 提交删除任务中 */
-const submitting = ref(false)
+/** 提交删除后的提示：此刻素材正在后台删除，不能说「未发现近似重复」 */
+const submittedNotice = ref('')
 
 /** 当前组 */
 const currentGroup = computed<NearDuplicateGroup | null>(
@@ -87,6 +87,7 @@ const keeperHint = computed<string>(() => {
 async function scan() {
   scanning.value = true
   result.value = null
+  submittedNotice.value = ''
   try {
     result.value = await fetchNearDuplicates(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
@@ -260,26 +261,27 @@ async function deleteBoth() {
 }
 
 /** 提交删除：把全部待删 ID 交给父组件（批量删除任务 + 审计留痕） */
-async function confirmSubmit() {
+function confirmSubmit() {
   if (deletingIds.value.size === 0) {
     Message.info('没有需要删除的素材')
     closeDupModal()
     return
   }
-  submitting.value = true
-  try {
-    emit('delete-selected', [...deletingIds.value])
-    Message.success(`已提交删除任务：${deletingIds.value.size} 个冗余素材（后台物理删除）`)
-    showDupModal.value = false
-    dupGroups.value = []
-    // 提交后重新扫描，刷新当前列表状态
-    await scan()
-  } catch (e) {
-    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    Message.error(detail || '提交删除失败')
-  } finally {
-    submitting.value = false
+  const ids = new Set(deletingIds.value)
+  emit('delete-selected', [...ids])
+  Message.success(`已提交删除任务：${ids.size} 个冗余素材（后台物理删除）`)
+  // 就地按决定更新候选列表，**不要立刻重扫**：删除是后台任务，提交瞬间素材还在库里，
+  // 重扫会把刚处理过的组原样查回来 → 弹窗又自动打开、进度退回第 1 组
+  //（用户刚做完选择就被弹回选择页）。库里真实状态等任务跑完后由用户再扫一次确认。
+  if (result.value) {
+    result.value.groups = dropSubmittedFiles(result.value.groups, ids)
   }
+  submittedNotice.value =
+    groups.value.length > 0
+      ? `已提交删除 ${ids.size} 个冗余素材（后台物理删除），列表已按决定更新，剩余 ${groups.value.length} 组待确认`
+      : `已提交删除 ${ids.size} 个冗余素材（后台物理删除），删除完成后可重新扫描确认`
+  showDupModal.value = false
+  dupGroups.value = []
 }
 
 function fileUrl(f: NearDuplicateFile): string {
@@ -359,7 +361,15 @@ function favoriteLabel(f: NearDuplicateFile): string {
     </a-alert>
 
     <!-- 扫描结果汇总 -->
-    <a-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
+    <!-- 刚提交删除：删除在后台跑，此刻说「未发现近似重复」是假话 -->
+    <a-alert v-if="submittedNotice" type="success" style="margin-bottom: 12px">
+      {{ submittedNotice }}
+    </a-alert>
+    <a-alert
+      v-else-if="result && result.groups.length === 0"
+      type="success"
+      style="margin-bottom: 12px"
+    >
       <template v-if="result.missing > 0">
         已扫描已缓存的 {{ result.scanned }} 张（哈希缓存还差 {{ result.missing }} 张未补齐），
         暂未发现近似重复；补齐缓存后再扫一次才能覆盖全库
@@ -395,7 +405,6 @@ function favoriteLabel(f: NearDuplicateFile): string {
     title="近似重复素材对比"
     :width="'92%'"
     :modal-style="{ maxWidth: '1200px' }"
-    :closable="!submitting"
     :mask-closable="false"
     :esc-to-close="false"
     :footer="false"
@@ -488,16 +497,11 @@ function favoriteLabel(f: NearDuplicateFile): string {
               :content="`将物理删除 ${deleteCount} 个素材（文件与记录不可恢复），确定继续？`"
               @ok="confirmSubmit"
             >
-              <a-button
-                type="primary"
-                status="danger"
-                :loading="submitting"
-                :disabled="deleteCount === 0"
-              >
+              <a-button type="primary" status="danger" :disabled="deleteCount === 0">
                 确认提交删除（{{ deleteCount }} 个）
               </a-button>
             </a-popconfirm>
-            <a-button :disabled="submitting" @click="closeDupModal">关闭（不删除）</a-button>
+            <a-button @click="closeDupModal">关闭（不删除）</a-button>
           </a-space>
         </template>
       </a-result>
