@@ -619,29 +619,22 @@ def detect_content_bounds(path) -> dict:
         return result
 
 
-def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) -> dict:
-    """从缩放图计算内容边界（detect_content_bounds 的计算核心，供单次解码
-    合并路径复用；扫描全量素材时避免每张图重复完整解码）。
+def _top_band_analysis(
+    diversity: "np.ndarray",
+    saturation: "np.ndarray | None",
+    top_edge_raw: int,
+    ui_evidence: bool,
+    n: int,
+) -> dict:
+    """顶部地带有效性校验 + 状态栏精调 + 顶部残留估算。
 
-    参数:
-        small: 统一宽度缩放的 RGB 小图
-        ui_evidence: 是否具备截图证据（detect_screenshot_features 检出
-            top_bar/bottom_bar）。True 时残留估算放宽内容抬升/起点门槛，
-            让「低多样度内容区」的真实截图（白底/浅色穿搭图）也能给出
-            建议；False（无截图证据）时从严防照片渐变误报。
+    照片顶部自然低多样度（暗角/渐变/纯色块）不是系统 UI，即便 _content_bounds
+    算出了边界也不裁；只有通过 _ui_band_valid 的地带才允许进入状态栏精调并
+    计入 top_frac。有截图证据（ui_evidence）时残留估算放宽内容抬升/起点门槛，
+    让「低多样度内容区」的真实截图（白底/浅色穿搭图）也能给出建议。
 
-    异常:
-        ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
+    返回 {top_edge, top_frac, correction, residual_top_frac}。
     """
-    brightness, saturation, diversity = _profiles_from_small(small)
-    n = len(diversity)
-    if n < 8:
-        raise ValueError("图片过小，无法检测内容边界")
-
-    top_edge_raw, bottom_edge_raw = _content_bounds(diversity)
-    if top_edge_raw is None or bottom_edge_raw is None or bottom_edge_raw <= top_edge_raw:
-        raise ValueError("未检测到内容区边界")
-
     # ── 顶部地带有效性校验：照片顶部自然低多样度（暗角/渐变/纯色块）不是系统 UI，
     #    即便 _content_bounds 算出了边界也不裁；只有通过 _ui_band_valid 的地带
     #    才允许进入状态栏精调并计入 top_frac ──
@@ -691,7 +684,26 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
         residual_top_frac = round(
             _residual_top_estimate(diversity, saturation, ui_evidence) / n, 6
         )
+    return {
+        "top_edge": top_edge,
+        "top_frac": top_frac,
+        "correction": correction,
+        "residual_top_frac": residual_top_frac,
+    }
 
+
+def _bottom_band_analysis(
+    diversity: "np.ndarray",
+    brightness: "np.ndarray",
+    bottom_edge_raw: int,
+    n: int,
+) -> tuple[int, float]:
+    """底部地带有效性校验与边界微调：返回 (bottom_edge, bottom_frac)。
+
+    非系统 UI 的底部低多样度区域不裁；底部边界会向上回退到亮度恢复正常处
+    （播放器条/导航栏顶部常为半透明渐变过渡，content_bounds 会把过渡行算进
+    内容区，裁后残留暗带；最多回退 3 行，防误伤照片暗部）。
+    """
     # ── 底部地带有效性校验（同上）：非系统 UI 的底部低多样度区域不裁 ──
     bottom_edge = bottom_edge_raw
     bottom_frac = 0.0
@@ -712,24 +724,23 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
         bottom_frac = (n - 1 - bottom_edge) / n
     else:
         bottom_edge = n - 1
+    return bottom_edge, bottom_frac
 
-    # 内容区占比下限校验（防灰带过厚/内容区过小误判）
-    frac = (bottom_edge - top_edge + 1) / n
-    if frac < _CONTENT_FRACTION_MIN:
-        raise ValueError(f"内容区占比过小（{frac:.0%}），布局不规则")
 
-    # 单侧最小可裁比例门槛：真实状态栏/导航栏/手势条都有一定高度，
-    # 低于门槛的微比例（如 0.8%）是照片边缘噪声，置 0
-    if top_frac < _CONTENT_MIN_CROP_FRACTION:
-        top_frac = 0.0
-    if bottom_frac < _CONTENT_MIN_CROP_FRACTION:
-        bottom_frac = 0.0
+def _residual_bottom_band(
+    diversity: "np.ndarray",
+    brightness: "np.ndarray",
+    n: int,
+    already_cropped: bool,
+    bottom_edge: int,
+) -> float:
+    """底部残留估算：返回建议裁剪比例（仅 already_cropped 时可能非 0）。
 
-    # 已裁剪干净：两侧合计可裁比例 <1%。不抛异常、不设内容占比上限——
-    # 薄边框截图与残留修正（如顶部状态栏图标残余）都可正常给出裁剪建议，
-    # 由调用方按 already_cropped 标注、人工勾选确认兜底
-    already_cropped = top_frac + bottom_frac < 0.01
-
+    已裁截图的底部播放器条/导航栏常是「半透明暗色叠加」（多样度极低且均匀、
+    亮度低于内容区），_ui_band_valid 的硬跃变判据对它失效。注意：均匀暗带
+    也可能是构图的一部分（灰色背景板延伸/裁剩渐变，人眼都难判定），因此建议
+    只作候选标注、绝不自动勾选（与顶部 residual_top_frac 同语义）。
+    """
     # ── 底部残留估算（仅 already_cropped 时启用）──
     # 已裁截图的底部播放器条/导航栏常是「半透明暗色叠加」（多样度极低且均
     # 匀、亮度低于内容区），_ui_band_valid 的硬跃变判据对它失效。注意：均
@@ -752,7 +763,23 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
             and float(np.median(brightness[y + 1 :])) < content_bright * 0.92
         ):
             residual_bottom_frac = round(band_len / n, 6)
+    return residual_bottom_frac
 
+
+def _band_kind(
+    brightness: "np.ndarray",
+    saturation: "np.ndarray | None",
+    top_edge: int,
+    bottom_edge: int,
+    correction: bool,
+    residual_top_frac: float,
+    n: int,
+) -> str:
+    """边界外侧的形态判定：gray_band（双侧灰带）/ status_bar / plain。
+
+    边界被校验回退到 0 / n-1 时视为「无该侧地带」，不参与灰带判定，
+    避免空区间被误判为灰带。
+    """
     # 灰带判定：边界外侧低饱和 + 亮度平坦（边界被校验回退到 0 / n-1 时
     # 视为无该侧地带，不参与灰带判定，避免空区间误判为灰带）
     top_gray_ok = False
@@ -776,7 +803,64 @@ def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) ->
         kind = "status_bar"
     else:
         kind = "plain"
+    return kind
 
+
+def _content_bounds_from_small(small: Image.Image, ui_evidence: bool = False) -> dict:
+    """从缩放图计算内容边界（detect_content_bounds 的计算核心，供单次解码
+    合并路径复用；扫描全量素材时避免每张图重复完整解码）。
+
+    参数:
+        small: 统一宽度缩放的 RGB 小图
+        ui_evidence: 是否具备截图证据（detect_screenshot_features 检出
+            top_bar/bottom_bar）。True 时残留估算放宽内容抬升/起点门槛，
+            让「低多样度内容区」的真实截图（白底/浅色穿搭图）也能给出
+            建议；False（无截图证据）时从严防照片渐变误报。
+
+    异常:
+        ValueError: 未检测到内容区或布局不合理（内容区占比过小等）
+    """
+    brightness, saturation, diversity = _profiles_from_small(small)
+    n = len(diversity)
+    if n < 8:
+        raise ValueError("图片过小，无法检测内容边界")
+
+    top_edge_raw, bottom_edge_raw = _content_bounds(diversity)
+    if top_edge_raw is None or bottom_edge_raw is None or bottom_edge_raw <= top_edge_raw:
+        raise ValueError("未检测到内容区边界")
+
+    top = _top_band_analysis(diversity, saturation, top_edge_raw, ui_evidence, n)
+    top_edge = top["top_edge"]
+    top_frac = top["top_frac"]
+    correction = top["correction"]
+    residual_top_frac = top["residual_top_frac"]
+    bottom_edge, bottom_frac = _bottom_band_analysis(
+        diversity, brightness, bottom_edge_raw, n
+    )
+    # 内容区占比下限校验（防灰带过厚/内容区过小误判）
+    frac = (bottom_edge - top_edge + 1) / n
+    if frac < _CONTENT_FRACTION_MIN:
+        raise ValueError(f"内容区占比过小（{frac:.0%}），布局不规则")
+
+    # 单侧最小可裁比例门槛：真实状态栏/导航栏/手势条都有一定高度，
+    # 低于门槛的微比例（如 0.8%）是照片边缘噪声，置 0
+    if top_frac < _CONTENT_MIN_CROP_FRACTION:
+        top_frac = 0.0
+    if bottom_frac < _CONTENT_MIN_CROP_FRACTION:
+        bottom_frac = 0.0
+
+    # 已裁剪干净：两侧合计可裁比例 <1%。不抛异常、不设内容占比上限——
+    # 薄边框截图与残留修正（如顶部状态栏图标残余）都可正常给出裁剪建议，
+    # 由调用方按 already_cropped 标注、人工勾选确认兜底
+    already_cropped = top_frac + bottom_frac < 0.01
+
+    # 底部残留估算（仅 already_cropped 时启用；口径见 _residual_bottom_band）
+    residual_bottom_frac = _residual_bottom_band(
+        diversity, brightness, n, already_cropped, bottom_edge
+    )
+    kind = _band_kind(
+        brightness, saturation, top_edge, bottom_edge, correction, residual_top_frac, n
+    )
     return {
         "top_frac": round(top_frac, 6),
         "bottom_frac": round(bottom_frac, 6),
@@ -922,6 +1006,99 @@ def _right_icon_supports(g: tuple, glyphs: list[tuple], w: int) -> bool:
         if overlap >= 0.5 * min(g[3] - g[2], o[3] - o[2]):
             return True
     return False
+
+
+def _glyph_top_frac(bottom_row: int, h: int) -> float:
+    """字形底行 → 建议裁剪比例（占全图高度，带上限 ``_GLYPH_TOP_FRAC_CAP``）。
+
+    该公式原在 :func:`_glyph_evidence` 里重复三次（弱证据 / 正常返回 /
+    无 scipy 兜底），收敛到一处避免改余量或上限时漏改。
+    """
+    return min(_GLYPH_TOP_FRAC_CAP, (bottom_row + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION)
+
+
+def _glyph_time_signature(
+    glyphs: list[tuple[int, int, int, int, int, float]], fg: "np.ndarray", h: int, w: int
+) -> tuple[bool, str]:
+    """时间签名判定（strong）：返回 (是否强证据, 说明文案)。
+
+    两种成立路径：
+
+    1. **多 blob 时间签名**：同一 ≤18% 宽度的窗口内存在 ≥2 个「数字状」blob——
+       高度相近（差 <40%）、水平相邻（间隙 <3% 宽）、基线对齐（垂直中心差
+       <10% 条带高），且位于左右两角（中央 x 占比 <0.40 或 >0.60）、块上方
+       无前景、周边背景平滑。心形装饰（单 blob 孤立）、门框/相框两侧线段
+       （水平相距远）、海报大字（横贯大 blob，另被宽度过滤拒绝）均不满足。
+    2. **单块回退**：小字号渲染下「12:30」合并成一块——左上时间位（x 中心
+       <35% 宽）、宽 4%~18%、高 15%~上限的紧凑块，附加两道印证：垂直中心落在
+       条带上半部（真实时间块 36%，照片内容块常在 80%）、右区存在同带低背景
+       方差的图标块（信号/电量）——左侧孤立一块不构成状态栏。
+    """
+    strong = False
+    strong_note = ""
+    gs = sorted(glyphs, key=lambda g: g[0])
+    for i in range(len(gs)):
+        window = [gs[i]]
+        for j in range(i + 1, len(gs)):
+            gap = gs[j][0] - window[-1][1]
+            # 相邻字形必须水平「不重叠且紧邻」：状态栏「12:30」的每个数字
+            # 各自成块、块间有正间隙（实测间隙 1px）。水平重叠的两个 blob
+            # 是同一内容块被局部对比二值化切碎（照片纹理常见），不是时间签名
+            if 0 <= gap < w * 0.03:
+                window.append(gs[j])
+            elif gap < 0:
+                continue
+            else:
+                break
+        span = window[-1][1] - window[0][0]
+        if len(window) >= 2 and w * _GLYPH_MIN_SPAN_FRAC <= span <= w * 0.18:
+            # 区域限制（误报修正）：状态栏元素只在左右两角——时间在左区、
+            # 信号/电量在右区，中央是空的。画面中央出现「两个相邻数字状
+            # blob」是照片内容（水印/花纹/文字），不是状态栏。
+            # 真实素材诊断：误报样本 efef31ba 的 strong 来自中央
+            # （中心 x 占比 0.48/0.50）的两个 blob，属照片内容误判。
+            wc = (window[0][0] + window[-1][1]) / 2.0 / w
+            if not (wc < 0.40 or wc > 0.60):
+                continue
+            hs = [g[3] - g[2] for g in window]
+            cs = [(g[2] + g[3]) / 2 for g in window]
+            band_top = min(g[2] for g in window)
+            above_fg = float(fg[:band_top].mean()) if band_top > 0 else 0.0
+            if (
+                max(hs) / max(1, min(hs)) < 1.4
+                and max(cs) - min(cs) < h * 0.10
+                and max(cs) <= h * _GLYPH_MAX_CENTER_Y
+                and max(hs) <= h * _GLYPH_MAX_HEIGHT_FRAC
+                and above_fg <= _GLYPH_ABOVE_FG_MAX
+                and all(g[5] <= _GLYPH_BG_STD_MAX for g in window)
+            ):
+                strong = True
+                strong_note = f"时间签名：{len(window)} 个相邻字形（中心 x 占比 {wc:.2f}）"
+                break
+    if not strong:
+        # 单 blob 回退：小字号渲染下「12:30」会合并为一个块——左上时间位
+        # （x 中心 <35% 宽）、宽 4~18%、高 15%~上限的紧凑块视为时间块。
+        # 手机入镜（镜面自拍，居中）不在左区，不受影响。
+        # 附加两道印证（误报修正）：① 垂直中心落在条带上半部（真实
+        # 时间块 36%，照片内容块常在 80%）；② 右区存在同带、低背景方差
+        # 的图标块（状态栏右侧信号/电量）——左侧孤立一块不构成状态栏。
+        for g in glyphs:
+            gw, gh = g[1] - g[0], g[3] - g[2]
+            gcx = (g[0] + g[1]) / 2
+            above_fg = float(fg[: g[2]].mean()) if g[2] > 0 else 0.0
+            if (
+                0.04 * w <= gw <= 0.18 * w
+                and 0.15 * h <= gh <= _GLYPH_MAX_HEIGHT_FRAC * h
+                and gcx < w * _GLYPH_TIME_X_MAX
+                and g[5] <= _GLYPH_BG_STD_MAX
+                and (g[2] + g[3]) / 2 <= h * _GLYPH_MAX_CENTER_Y
+                and above_fg <= _GLYPH_ABOVE_FG_MAX
+                and _right_icon_supports(g, glyphs, w)
+            ):
+                strong = True
+                strong_note = f"单块时间回退（中心 x 占比 {gcx / w:.2f}）"
+                break
+    return strong, strong_note
 
 
 def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
@@ -1123,83 +1300,12 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         #   （垂直中心差 <10% 条带高）。心形装饰（单 blob 孤立）、门框/相框
         #   两侧线段（水平相距远）均不满足；海报大字（横贯大 blob）另被
         #   宽度过滤拒绝
-        strong = False
-        strong_note = ""
         if budget_exceeded:
-            # 弱证据：内容过于杂乱，时间签名不可靠，不默认勾选
-            bottom = max(g[3] for g in glyphs)
-            top_frac = min(
-                _GLYPH_TOP_FRAC_CAP,
-                (bottom + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
-            )
-            return _result(True, False, top_frac, "超连通域预算 → 弱证据")
-        gs = sorted(glyphs, key=lambda g: g[0])
-        for i in range(len(gs)):
-            window = [gs[i]]
-            for j in range(i + 1, len(gs)):
-                gap = gs[j][0] - window[-1][1]
-                # 相邻字形必须水平「不重叠且紧邻」：状态栏「12:30」的每个数字
-                # 各自成块、块间有正间隙（实测间隙 1px）。水平重叠的两个 blob
-                # 是同一内容块被局部对比二值化切碎（照片纹理常见），不是时间签名
-                if 0 <= gap < w * 0.03:
-                    window.append(gs[j])
-                elif gap < 0:
-                    continue
-                else:
-                    break
-            span = window[-1][1] - window[0][0]
-            if len(window) >= 2 and w * _GLYPH_MIN_SPAN_FRAC <= span <= w * 0.18:
-                # 区域限制（误报修正）：状态栏元素只在左右两角——时间在左区、
-                # 信号/电量在右区，中央是空的。画面中央出现「两个相邻数字状
-                # blob」是照片内容（水印/花纹/文字），不是状态栏。
-                # 真实素材诊断：误报样本 efef31ba 的 strong 来自中央
-                # （中心 x 占比 0.48/0.50）的两个 blob，属照片内容误判。
-                wc = (window[0][0] + window[-1][1]) / 2.0 / w
-                if not (wc < 0.40 or wc > 0.60):
-                    continue
-                hs = [g[3] - g[2] for g in window]
-                cs = [(g[2] + g[3]) / 2 for g in window]
-                band_top = min(g[2] for g in window)
-                above_fg = float(fg[:band_top].mean()) if band_top > 0 else 0.0
-                if (
-                    max(hs) / max(1, min(hs)) < 1.4
-                    and max(cs) - min(cs) < h * 0.10
-                    and max(cs) <= h * _GLYPH_MAX_CENTER_Y
-                    and max(hs) <= h * _GLYPH_MAX_HEIGHT_FRAC
-                    and above_fg <= _GLYPH_ABOVE_FG_MAX
-                    and all(g[5] <= _GLYPH_BG_STD_MAX for g in window)
-                ):
-                    strong = True
-                    strong_note = f"时间签名：{len(window)} 个相邻字形（中心 x 占比 {wc:.2f}）"
-                    break
-        if not strong:
-            # 单 blob 回退：小字号渲染下「12:30」会合并为一个块——左上时间位
-            # （x 中心 <35% 宽）、宽 4~18%、高 15%~上限的紧凑块视为时间块。
-            # 手机入镜（镜面自拍，居中）不在左区，不受影响。
-            # 附加两道印证（误报修正）：① 垂直中心落在条带上半部（真实
-            # 时间块 36%，照片内容块常在 80%）；② 右区存在同带、低背景方差
-            # 的图标块（状态栏右侧信号/电量）——左侧孤立一块不构成状态栏。
-            for g in glyphs:
-                gw, gh = g[1] - g[0], g[3] - g[2]
-                gcx = (g[0] + g[1]) / 2
-                above_fg = float(fg[: g[2]].mean()) if g[2] > 0 else 0.0
-                if (
-                    0.04 * w <= gw <= 0.18 * w
-                    and 0.15 * h <= gh <= _GLYPH_MAX_HEIGHT_FRAC * h
-                    and gcx < w * _GLYPH_TIME_X_MAX
-                    and g[5] <= _GLYPH_BG_STD_MAX
-                    and (g[2] + g[3]) / 2 <= h * _GLYPH_MAX_CENTER_Y
-                    and above_fg <= _GLYPH_ABOVE_FG_MAX
-                    and _right_icon_supports(g, glyphs, w)
-                ):
-                    strong = True
-                    strong_note = f"单块时间回退（中心 x 占比 {gcx / w:.2f}）"
-                    break
-        bottom = max(g[3] for g in glyphs)
-        top_frac = min(
-            _GLYPH_TOP_FRAC_CAP,
-            (bottom + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
-        )
+                    # 弱证据：内容过于杂乱，时间签名不可靠，不默认勾选
+                    top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h)
+                    return _result(True, False, top_frac, "超连通域预算 → 弱证据")
+        strong, strong_note = _glyph_time_signature(glyphs, fg, h, w)
+        top_frac = _glyph_top_frac(max(g[3] for g in glyphs), h)
         return _result(True, strong, top_frac, strong_note)
     except ImportError:
         # 无 scipy：列密度剖面兜底（两角有前景、中部稀疏）
@@ -1213,10 +1319,7 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         nz = np.nonzero(rows > 0.02)[0]
         if len(nz) == 0:
             return _result(False, False, 0.0, "无 scipy：无前景行")
-        top_frac = min(
-            _GLYPH_TOP_FRAC_CAP,
-            (nz[-1] + _GLYPH_MARGIN_ROWS) / h * _GLYPH_TOP_FRACTION,
-        )
+        top_frac = _glyph_top_frac(int(nz[-1]), h)
         return _result(True, False, top_frac, "无 scipy：列剖面兜底")
 
 
