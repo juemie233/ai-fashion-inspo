@@ -461,7 +461,7 @@ fashion-inspo/
 │   │   │   │   ├── DetailMediaPane.vue / DetailInfoPanel.vue / DetailTrashModal.vue # 素材详情页左栏/右栏/垃圾桶弹窗
 │   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
 │   │   │   ├── collection/       # CollectionPickerModal（加入合集选择器）, SmartQueryEditorModal（智能合集条件编辑器）
-│   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志子组件
+│   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志/手机图剪裁结果区子组件
 │   │   │   │   ├── AdminPromptQuality.vue # 提示词版本质量对比（成功率/标签数/纠错率/裸词率）
 │   │   │   ├── scraper/          # 采集任务表单/表格/日志/漏斗/结果/源配置/定时采集/统计看板/采集 ROI 子组件
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
@@ -469,7 +469,7 @@ fashion-inspo/
 │   │   │   ├── person/           # PersonTypeTag, PersonFormModal, PersonLinkSection, PersonAvatarPicker（从 TA 的素材选头像）, PersonEnrichManager（一键补全主页）
 │   │   │   │   └── face/         # 人脸库扫描页结果区子组件（待审核候选/已确认/未匹配人脸/聚合分组）
 │   │   │   └── upload/           # 上传拖拽/队列/选项子组件
-│   │   ├── types/                # 跨组件复用的 TS 类型（admin/analysis/scraper/upload/tagAdvanced）
+│   │   ├── types/                # 跨组件复用的 TS 类型（admin/analysis/crop/inspiration/scraper/task/tag/tagAdvanced/upload）
 │   │   ├── utils/                # 工具函数
 │   │   │   ├── sourceLabel.ts    # 来源类型中文映射
 │   │   │   ├── tagHistoryDiff.ts # 标签操作历史 before/after 差异展示

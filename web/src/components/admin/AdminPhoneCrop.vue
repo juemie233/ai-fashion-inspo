@@ -10,7 +10,8 @@ import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
 import { openInNewTab } from '@/utils/openInNewTab'
 import { defaultCheckedIds } from '@/utils/cropSelection'
-import DensityImageGrid from '@/components/common/DensityImageGrid.vue'
+import type { CropCandidate, CropGridDensity } from '@/types/crop'
+import AdminCropResultsPanel from '@/components/admin/AdminCropResultsPanel.vue'
 
 const router = useRouter()
 
@@ -53,49 +54,13 @@ watch([mode, cropTop, cropBottom, limit, vlmReview], () => {
   vlmHits.value = 0
 })
 
-/** 扫描候选 */
-interface CropCandidate {
-  id: string
-  file_path: string
-  width: number
-  height: number
-  ratio: number
-  crop_top: number
-  crop_bottom: number
-  auto_ok: boolean
-  note: string | null
-  confidence: 'high' | 'medium' | 'low'
-  /** content 模式：gray_band（灰带包夹）/ status_bar（状态栏+播放器条）/ plain / glyph_only（字形证据，行剖面无信号） */
-  boundary_kind?: 'gray_band' | 'status_bar' | 'plain' | 'glyph_only' | null
-  /** 后端勾选决策：字形证据（左右两角齐备）的残留候选默认勾选，无字形证据的不勾。
-   * 旧响应无此字段时回退到「带建议比例即勾选」的兼容推断 */
-  auto_checked?: boolean | null
-  /** AI 复核结果（三态）：true=阳性（检出 UI 残留，置顶标注）/ false=阴性
-   * （已从候选移除，不会再出现）/ null=未知（判定失败/超时，保守保留待人工） */
-  vlm_residue?: boolean | null
-  created_at: string | null
-}
-
-/** content 模式检测类型展示文案 */
-const BOUNDARY_LABELS: Record<string, string> = {
-  gray_band: '灰带包夹',
-  status_bar: '状态栏+播放器条',
-  plain: '内容边界',
-}
-
-/** 置信度展示文案与标签颜色（Arco Tag 使用 color 预设色，无 type 语义色） */
-const CONFIDENCE_LABELS: Record<string, { text: string; color: 'green' | 'orange' | 'gray' }> = {
-  high: { text: '高置信', color: 'green' },
-  medium: { text: '中置信', color: 'orange' },
-  low: { text: '低置信', color: 'gray' },
-}
+/** 扫描候选与网格密度类型见 types/crop.ts（结果区子组件同样引用） */
 
 /** 候选网格与勾选状态 */
 const candidates = ref<CropCandidate[]>([])
 const checkedIds = ref<Set<string>>(new Set())
 
 /** 候选网格密度（紧凑/标准/宽松），默认标准；偏好持久化，与素材库页面行为一致 */
-type CropGridDensity = 'compact' | 'standard' | 'comfortable'
 const gridDensity = ref<CropGridDensity>(
   (localStorage.getItem('phone-crop-grid-density') as CropGridDensity) || 'standard',
 )
@@ -213,27 +178,10 @@ function handleDupModalClose() {
   if (r && r.processed > 0) handleRescan()
 }
 
-/** 跳过明细折叠面板：全部跳过时默认展开，便于立即查看原因并逐条定位 */
-const skippedExpanded = ref<string[]>([])
-watch(result, (r) => {
-  skippedExpanded.value = r && r.processed === 0 && r.skipped.length > 0 ? ['skipped'] : []
-})
-
-/** 跳过素材缩略图（缩略图缺失时回退原图） */
-function skipThumbUrl(s: CropApplyResult['skipped'][number]): string {
-  return getFileUrl(s.thumbnail_path || s.file_path || '')
-}
-
-/** 在素材库中定位单条被跳过的素材（列表仅展示该素材并高亮） */
-function locateSkipped(s: CropApplyResult['skipped'][number]) {
-  router.push({ path: '/', query: { focus: s.id } })
-}
-
-/** 在素材库中定位全部被跳过的素材 */
-function locateAllSkipped() {
-  if (!result.value) return
-  const ids = result.value.skipped.map((s) => s.id).join(',')
-  router.push({ path: '/', query: { focus: ids } })
+/** 在素材库中定位（单条素材 ID 或逗号分隔的多个 ID）：列表仅展示这些素材并高亮。
+ *  原为结果区内的 locateSkipped / locateAllSkipped，拆组件后统一由这里处理。 */
+function locateInLibrary(focus: string) {
+  router.push({ path: '/', query: { focus } })
 }
 
 /** 大图预览 */
@@ -422,15 +370,7 @@ async function handleApply() {
   }
 }
 
-/** 候选缩略图地址（缩略图可能存在缺失，回退原图） */
-function thumbUrl(c: CropCandidate): string {
-  return getFileUrl(c.file_path)
-}
-
-/** 裁剪比例展示文案 */
-function cropLabel(c: CropCandidate): string {
-  return `${(c.crop_top * 100).toFixed(1)}% / ${(c.crop_bottom * 100).toFixed(1)}%`
-}
+/** 候选缩略图地址 / 裁剪比例文案：随候选网格一起搬到 AdminCropResultsPanel */
 </script>
 
 <template>
@@ -514,144 +454,22 @@ function cropLabel(c: CropCandidate): string {
       </a-form-item>
     </a-form>
 
-    <!-- 候选网格：人工勾选确认 -->
-    <template v-if="candidates.length > 0">
-      <a-divider style="margin: 12px 0" />
-      <!-- 候选网格：通用密度网格组件，紧凑/标准/宽松可调，默认标准 -->
-      <DensityImageGrid v-model:density="gridDensity">
-        <template #header-left>
-          <a-checkbox
-            :model-value="checkedCount > 0 && checkedCount === candidates.length"
-            :indeterminate="checkedCount > 0 && checkedCount < candidates.length"
-            @change="toggleAll"
-          />
-          <span style="font-size: 13px">
-            已勾选 <b>{{ checkedCount }}</b> / {{ candidates.length }} 张（共扫描
-            {{ scannedTotal }} 张候选）
-          </span>
-          <a-tag v-if="vlmHits > 0" size="small" color="green" :bordered="false">
-            AI 复核命中 {{ vlmHits }} 张（已置顶）
-          </a-tag>
-          <a-button
-            size="small"
-            type="primary"
-            :loading="cropping"
-            :disabled="checkedCount === 0"
-            @click="handleApply"
-          >
-            {{ cropping ? '裁剪中...' : `确认裁剪（${checkedCount} 张）` }}
-          </a-button>
-        </template>
-
-        <div
-          v-for="c in candidates"
-          :key="c.id"
-          class="crop-item"
-          :class="[{ checked: checkedIds.has(c.id), failed: !c.auto_ok }, 'density-' + gridDensity]"
-          @click="toggleCheck(c.id)"
-          @dblclick="openPreview(thumbUrl(c), c.id)"
-        >
-          <img
-            :src="thumbUrl(c)"
-            :alt="c.id"
-            loading="lazy"
-            @click.stop="openPreview(thumbUrl(c), c.id)"
-          />
-          <div class="crop-meta">
-            <span class="crop-line"> {{ c.width }}×{{ c.height }} · {{ c.ratio }} </span>
-            <span class="crop-line">
-              裁剪 {{ cropLabel(c) }}
-              <a-tag
-                v-if="c.boundary_kind"
-                size="small"
-                :bordered="false"
-                color="arcoblue"
-                style="margin-left: 4px"
-              >
-                {{ BOUNDARY_LABELS[c.boundary_kind] || c.boundary_kind }}
-              </a-tag>
-              <a-tag
-                size="small"
-                :bordered="false"
-                :color="CONFIDENCE_LABELS[c.confidence]?.color || 'gray'"
-                style="margin-left: 4px"
-              >
-                {{ CONFIDENCE_LABELS[c.confidence]?.text || c.confidence }}
-              </a-tag>
-              <a-tag
-                v-if="c.vlm_residue"
-                size="small"
-                color="green"
-                :bordered="false"
-                style="margin-left: 4px"
-              >
-                AI 复核：检出 UI 残留
-              </a-tag>
-              <a-tag
-                v-else-if="c.vlm_residue === null"
-                size="small"
-                color="orange"
-                :bordered="false"
-                style="margin-left: 4px"
-              >
-                AI 复核不可用
-              </a-tag>
-            </span>
-            <a-tag v-if="!c.auto_ok" size="small" color="red" :bordered="false">{{ c.note }}</a-tag>
-          </div>
-          <div class="crop-check" :class="{ checked: checkedIds.has(c.id) }">
-            <span v-if="checkedIds.has(c.id)">✓</span>
-          </div>
-        </div>
-      </DensityImageGrid>
-      <p style="font-size: 12px; color: #999; margin-top: 8px">
-        点击缩略图查看大图，双击卡片切换勾选
-      </p>
-    </template>
-
-    <!-- 执行结果 -->
-    <template v-if="result">
-      <a-divider style="margin: 12px 0" />
-      <a-alert :type="result.processed > 0 ? 'success' : 'warning'" style="margin-bottom: 8px">
-        成功裁剪 {{ result.processed }} 张 · 跳过 {{ result.skipped.length }} 张
-        <template v-if="result.duplicates.length > 0">
-          · 内容重复 {{ result.duplicates.length }} 组待处理
-        </template>
-        <template v-if="result.vector_task_id">
-          · 已入队向量回填任务 #{{ result.vector_task_id }}（worker 执行）
-        </template>
-        <template v-if="result.backup_dir">
-          · 原图备份：<code>{{ result.backup_dir }}</code>
-        </template>
-      </a-alert>
-
-      <a-collapse
-        v-if="result.skipped.length > 0"
-        v-model:active-key="skippedExpanded"
-        style="margin-top: 8px"
-      >
-        <a-collapse-item key="skipped">
-          <template #header>
-            <span>跳过明细（{{ result.skipped.length }} 张）· 点击「定位」在素材库中精确跳转</span>
-          </template>
-          <div v-if="result.skipped.length > 1" style="margin-bottom: 8px">
-            <a-button size="mini" type="primary" @click="locateAllSkipped">
-              全部在素材库中定位（{{ result.skipped.length }} 张）
-            </a-button>
-          </div>
-          <ul class="skip-list">
-            <li v-for="s in result.skipped" :key="s.id" class="skip-item">
-              <img v-if="s.file_path" class="skip-thumb" :src="skipThumbUrl(s)" :alt="s.id" />
-              <div class="skip-info">
-                <div class="skip-reason">{{ s.reason }}</div>
-                <div class="skip-meta">{{ s.id.slice(0, 8) }}…</div>
-              </div>
-              <a-button size="mini" type="text" @click="locateSkipped(s)">定位</a-button>
-            </li>
-          </ul>
-        </a-collapse-item>
-      </a-collapse>
-    </template>
+    <!-- 候选网格 + 执行结果 + 跳过明细：拆到结果区子组件（状态仍在父组件） -->
+    <AdminCropResultsPanel
+      v-model:grid-density="gridDensity"
+      :candidates="candidates"
+      :checked-ids="checkedIds"
+      :checked-count="checkedCount"
+      :scanned-total="scannedTotal"
+      :vlm-hits="vlmHits"
+      :cropping="cropping"
+      :result="result"
+      @toggle-check="toggleCheck"
+      @toggle-all="toggleAll"
+      @apply="handleApply"
+      @open-preview="openPreview"
+      @locate="locateInLibrary"
+    />
 
     <!-- 大图预览弹窗 -->
     <a-modal
