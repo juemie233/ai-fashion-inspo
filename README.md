@@ -459,7 +459,7 @@ fashion-inspo/
 │   │   │   ├── inspiration/      # MasonryGrid, InspirationCard, ImageLightbox, OutfitTagSection, SimilarSection
 │   │   │   │   ├── TagCorrectionModal.vue # AI 打标纠错反馈（标错了/补充漏标）
 │   │   │   │   ├── DetailMediaPane.vue / DetailInfoPanel.vue / DetailTrashModal.vue # 素材详情页左栏/右栏/垃圾桶弹窗
-│   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, QualityPanel, ReviewPanel
+│   │   │   ├── model/            # ModelListPanel, AnalysisPanel(+子组件), SettingsPanel, SettingsTestCard, QualityPanel, ReviewPanel
 │   │   │   ├── collection/       # CollectionPickerModal（加入合集选择器）, SmartQueryEditorModal（智能合集条件编辑器）
 │   │   │   ├── admin/            # 统计/任务/疑似AI复核/重复/近似重复/完整性检查/导出/趋势/人物频次/审计日志/手机图剪裁结果区子组件
 │   │   │   │   ├── AdminPromptQuality.vue # 提示词版本质量对比（成功率/标签数/纠错率/裸词率）
