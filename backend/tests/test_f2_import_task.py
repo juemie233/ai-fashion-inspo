@@ -17,6 +17,7 @@ from app.database import async_session
 from app.services import task_runner
 from app.services.task_runners import f2_import as f2_runner
 from app.services.task_runners.common import utcnow
+from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
 
 
@@ -34,8 +35,8 @@ def f2_tree(tmp_path, monkeypatch):
     _jpeg(root / "里香1√" / "2025-01-01 10-00-00_#jk_标题_image_1.jpg")
     _jpeg(root / "里香1√" / "2025-01-01 10-00-00_#jk_标题_image_2.jpg", "blue")
     _jpeg(root / "某博主" / "2025-02-02 11-00-00_#通勤_标题_video.mp4".replace(".mp4", ".jpg"), "green")
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
-    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", root)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_ROOT", root)
     return f2_dir, root
 
 
@@ -47,7 +48,7 @@ def f2_tree(tmp_path, monkeypatch):
 
 def test_f2_import_status_reports_missing_f2(monkeypatch):
     """f2 未安装：给出安装指引（CI 等未装 f2 的环境走的就是这条分支）。"""
-    monkeypatch.setattr(f2, "f2_available", lambda: False)
+    patch_f2(monkeypatch, "f2_available", lambda: False)
 
     status = task_runner.f2_import_status()
 
@@ -57,8 +58,8 @@ def test_f2_import_status_reports_missing_f2(monkeypatch):
 
 def test_f2_import_status_reports_reason_when_unavailable(tmp_path, monkeypatch):
     """f2 已装但工作目录不存在：报「未找到 f2 工作目录」而不是安装指引。"""
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", tmp_path / "不存在")
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "不存在")
 
     status = task_runner.f2_import_status()
 
@@ -79,9 +80,9 @@ def test_f2_import_status_available_with_authors(tmp_path, monkeypatch):
     conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
-    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_ROOT", f2_dir / "Download")
 
     status = task_runner.f2_import_status()
 
@@ -142,7 +143,7 @@ async def test_f2_authors_endpoint_lists_whitelist_with_material_counts(
             ("sec-wy", "网易第五人格", 42),  # 库内只有自动登记记录 → 未登记
         ],
     )
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
 
     async with async_session() as db:
         db.add(
@@ -202,7 +203,7 @@ async def test_f2_authors_endpoint_without_douyin_bloggers(client, tmp_path, mon
     """库里一个抖音博主都没登记：白名单不生效（全部账号都会被处理），如实说明。"""
     f2_dir = tmp_path / "f2proj"
     _make_f2_author_db(f2_dir, [("sec-wy", "网易第五人格", 42)])
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
 
     body = client.get("/api/scraper/f2-authors").json()
 
@@ -214,7 +215,7 @@ async def test_f2_authors_endpoint_without_douyin_bloggers(client, tmp_path, mon
 
 def test_f2_authors_endpoint_without_f2_dir(client, tmp_path, monkeypatch):
     """f2 目录不存在：返回空清单与原因，而不是 500。"""
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", tmp_path / "不存在")
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "不存在")
 
     body = client.get("/api/scraper/f2-authors").json()
 
@@ -420,7 +421,7 @@ async def test_execute_f2_import_rejects_authors_absent_from_f2_db(
     conn.execute("INSERT INTO user_info_web VALUES ('sec1', '里香1√', 171)")
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(
@@ -447,12 +448,12 @@ async def test_execute_f2_import_profiles_downloads_named_blogger(
     入库 0，状态却是 success。
     """
     f2_dir, root = f2_tree
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     # 下载目录里放一件她的产物（模拟 f2 下载完成）
     _jpeg(root / "唐思瑶ya" / "2026-01-01 10-00-00_#穿搭_image_1.jpg")
     # f2 下载后已把账号写进用户库（本用例模拟：按 sec 反查得到昵称）
-    monkeypatch.setattr(
-        f2, "load_f2_authors", lambda _d: [{"sec_user_id": SEC, "nickname": "唐思瑶ya", "aweme_count": 1}]
+    patch_f2(
+        monkeypatch, "load_f2_authors", lambda _d: [{"sec_user_id": SEC, "nickname": "唐思瑶ya", "aweme_count": 1}]
     )
 
     from app.services.task_runners import f2_import as runner
@@ -489,15 +490,14 @@ async def test_execute_f2_import_profiles_fails_loudly_when_nothing_downloaded(
 ):
     """**回归任务 351**：一个都没下成时必须显式失败并说明原因，不能报 success + 入库 0。"""
     _f2_dir, _root = f2_tree
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     from app.services.task_runners import f2_import as runner
 
     monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
     # 反查不到任何昵称 → 说明 f2 没把她登记进用户库（下载没成）
-    monkeypatch.setattr(
-        f2,
-        "resolve_profile_nicknames",
+    patch_f2(
+        monkeypatch, "resolve_profile_nicknames",
         lambda _d, _s: {},
     )
 
@@ -512,7 +512,7 @@ async def test_execute_f2_import_profiles_rejects_unsupported_input(
 ):
     """抖音号 / 短链要明确报错，而不是拼一个必然失败的 URL 然后静默入库 0。"""
     _f2_dir, _root = f2_tree
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True, profiles=["72906514384"])
@@ -540,7 +540,7 @@ async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeyp
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     commands: list[list[str]] = []
     monkeypatch.setattr(
         runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
@@ -559,7 +559,7 @@ async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeyp
 
 def test_create_f2_import_rejects_when_unavailable(client, tmp_path, monkeypatch):
     """fetch=True 但环境不可用时：不建任务，返回原因（供前端提示）。"""
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", tmp_path / "不存在")
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "不存在")
     resp = client.post("/api/scraper/f2-import", params={"fetch": True})
     assert resp.status_code == 200
     body = resp.json()
@@ -706,7 +706,7 @@ async def test_execute_f2_import_does_not_resurrect_trashed_material(client, f2_
 
 async def test_execute_f2_import_fetch_requires_f2(monkeypatch, client, f2_tree):
     """fetch=True 但 f2 不可用时：抛错让任务失败（而不是静默导入旧文件）。"""
-    monkeypatch.setattr(f2, "f2_available", lambda: False)
+    patch_f2(monkeypatch, "f2_available", lambda: False)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True)
@@ -752,7 +752,7 @@ async def test_execute_f2_import_fails_when_all_downloads_fail(
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 1)  # 每个作者都失败
 
     async with async_session() as db:
@@ -781,7 +781,7 @@ async def test_execute_f2_import_does_not_block_event_loop(
         marks["end"] = time.monotonic()
         return []
 
-    monkeypatch.setattr(f2, "scan_directory", slow_scan)
+    patch_f2(monkeypatch, "scan_directory", slow_scan)
 
     ticks: list[float] = []
 
@@ -838,7 +838,7 @@ async def test_execute_f2_import_marks_download_stage_before_import(
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     seen: list[str] = []
 
     async def fake_status(_db, task_id):
@@ -922,7 +922,7 @@ def auto_env(f2_tree, monkeypatch):
     """可用的自动获取环境：f2 视为已安装 + 作者库 1 个作者。"""
     f2_dir, _root = f2_tree
     _make_author_db(f2_dir)
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     return f2_dir
 
 
@@ -1048,7 +1048,7 @@ async def test_maybe_schedule_skips_when_f2_unavailable(
     client, f2_tree, auto_settings, monkeypatch
 ):
     """环境不可用（f2 未装）：跳过并留痕，不制造失败任务。"""
-    monkeypatch.setattr(f2, "f2_available", lambda: False)
+    patch_f2(monkeypatch, "f2_available", lambda: False)
     auto_settings.f2_import_auto_enabled = True
 
     async with async_session() as db:
@@ -1164,7 +1164,7 @@ async def test_execute_f2_import_cancel_during_download_skips_scan(
     def no_scan(_root):
         raise AssertionError("下载被取消后不应再扫描目录")
 
-    monkeypatch.setattr(f2, "scan_directory", no_scan)
+    patch_f2(monkeypatch, "scan_directory", no_scan)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True)
@@ -1196,7 +1196,7 @@ async def test_execute_f2_import_paused_keeps_progress_below_full(
         # 线程内的停止标记已生效（watcher 会把 paused 转成 stop）
         return {"imported": 0, "failed": 0, "batch_file": "", "ids": []}
 
-    monkeypatch.setattr(f2, "apply_import", fake_apply)
+    patch_f2(monkeypatch, "apply_import", fake_apply)
 
     async def paused(_db, _task_id):
         return "paused"
@@ -1255,7 +1255,7 @@ def test_f2_status_marks_unregistered_f2_accounts(
     conn.execute("INSERT INTO user_info_web VALUES ('sec_game', '网易第五人格', 171)")
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     status = task_runner.f2_import_status()
 
@@ -1340,7 +1340,7 @@ async def test_execute_f2_import_download_skips_unregistered_accounts(
     conn.commit()
     conn.close()
 
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     commands: list[list[str]] = []
     monkeypatch.setattr(
         runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
@@ -1590,13 +1590,13 @@ def f2_like_tree(tmp_path, monkeypatch):
     author_dir = like_root / "我的账号"  # f2 把喜欢的作品统统下在「我的昵称」目录下
     _jpeg(author_dir / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.jpg")
     _jpeg(author_dir / "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_2.jpg", "blue")
-    monkeypatch.setattr(f2, "DEFAULT_F2_LIKE_ROOT", like_root)
+    patch_f2(monkeypatch, "DEFAULT_F2_LIKE_ROOT", like_root)
     return like_root
 
 
 def _stub_like_fetch(monkeypatch, calls: dict | None = None):
     """打桩 f2 的点赞抓取：只记录入参并返回成功，不真的跑 f2。"""
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     def _fake(f2_dir, like_user, download_root=None, **kwargs):
         if calls is not None:
@@ -1610,7 +1610,7 @@ def _stub_like_fetch(monkeypatch, calls: dict | None = None):
             "results": [{"nickname": "我的喜欢", "rc": 0, "cmd": "f2 dy -M like"}],
         }
 
-    monkeypatch.setattr(f2, "run_fetch_likes", _fake)
+    patch_f2(monkeypatch, "run_fetch_likes", _fake)
 
 
 def test_create_f2_import_like_mode_passes_params(client):
@@ -1727,7 +1727,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
     from app.models.task import TaskQueue
 
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
     # 缩短轮询间隔与软进度时间常数，让「下载中」的中间态在测试里可观测
     monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
     monkeypatch.setattr(f2_runner, "_LIKE_PROGRESS_HALF_SECONDS", 1.0)
@@ -1750,7 +1750,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
             "results": [{"nickname": "我的喜欢", "rc": 0, "cmd": "f2 dy -M like"}],
         }
 
-    monkeypatch.setattr(f2, "run_fetch_likes", _slow_like_fetch)
+    patch_f2(monkeypatch, "run_fetch_likes", _slow_like_fetch)
 
     live: list[tuple[int, dict]] = []
 
@@ -1765,7 +1765,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
                 live.append((task.progress, dict(info)))
             return real_stats(root)
 
-        monkeypatch.setattr(f2, "download_tree_stats", _spy_stats)
+        patch_f2(monkeypatch, "download_tree_stats", _spy_stats)
         await task_runner.execute_f2_import(db, task)
 
     assert live, "下载期间没有写入任何 like_progress 快照"
@@ -1887,7 +1887,7 @@ async def test_execute_f2_import_post_mode_does_not_register_bloggers(
     from app.models.task import TaskQueue
 
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     task_id = await _import_once()
 
@@ -1954,7 +1954,7 @@ async def test_execute_f2_import_like_mode_requires_like_user(
 ):
     """没填「我的主页链接」：直接给出可操作错误，不白跑一次 f2。"""
     auto_settings.f2_like_user = ""
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "f2_available", lambda: True)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
@@ -1971,9 +1971,9 @@ def test_f2_status_like_availability_is_independent_of_blogger_whitelist(
     """
     f2_dir = tmp_path / "f2proj"
     f2_dir.mkdir()
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
-    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_ROOT", f2_dir / "Download")
 
     auto_settings.f2_like_user = ""
     without_user = task_runner.f2_import_status()
@@ -2008,9 +2008,9 @@ def test_f2_import_like_mode_not_blocked_by_blogger_whitelist(
     conn.execute("INSERT INTO user_info_web VALUES ('sec-x', '某未登记号', 3)")
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "f2_available", lambda: True)
-    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
-    monkeypatch.setattr(f2, "DEFAULT_F2_ROOT", f2_dir / "Download")
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_ROOT", f2_dir / "Download")
     create_blogger("里香", platform="douyin")  # 白名单生效，但不含 f2 里的账号
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
 

@@ -28,14 +28,14 @@
 
 - **批次回滚进界面**：任务中心对 `f2_import` 任务给「查看本批 / 回滚本批」入口，复用 `--rollback` 的既有语义（默认只预览、`--apply` 才删、只动本批且默认放过已被改动过的素材）
 - **先预览再确认**：界面提交前先出「新增 N / 跳过 M（含原因）」再让用户确认入库（CLI 缺省就是这个行为，界面现在是直接建任务）——符合「宁缺毋滥、手动确认」的偏好
-- **下载目录清理**：加 `--prune-downloads`（**默认保留**）。入库是 `shutil.copy2` 到 `storage/`（`import_f2_downloads.py:833`），f2 的 `Download/` 那 7.28 GB 已冗余；开启后 Download/ 不再无限增长
+- **下载目录清理**：加 `--prune-downloads`（**默认保留**）。入库是 `shutil.copy2` 到 `storage/`（`f2_apply.py` 的 `apply_import`），f2 的 `Download/` 那 7.28 GB 已冗余；开启后 Download/ 不再无限增长
 - **下载阶段并发**：逐作者串行 → 可配 2~3 并发（先量一次单作者耗时再定默认值；**同一 cookie 并发有风控风险，默认仍为 1**）
 
 **涉及模块：**
 
 | 模块 | 改动 |
 | ------ | ------ |
-| `backend/scripts/import_f2_downloads.py` | `--prune-downloads`、预览报表接任务选项 |
+| `backend/scripts/f2_cli.py`（参数）、`backend/scripts/f2_apply.py`（入库） | `--prune-downloads`、预览报表接任务选项 |
 | `backend/app/services/task_runners/f2_import.py` | 预览模式、回滚任务（或直接调 `plan_rollback`/`apply_rollback`） |
 | `backend/app/routers/scraper.py` | 预览/回滚接口 |
 | `web/src/components/scraper/F2ImportCard.vue`、任务中心 | 预览确认弹窗、回滚按钮 |
@@ -173,7 +173,7 @@
 
 | 模块 | 改动 |
 | ------ | ------ |
-| `backend/scripts/import_f2_downloads.py` | `apply_import` 恢复 `save_hashtags` 调用与统计回显 |
+| `backend/scripts/f2_apply.py` | `apply_import` 恢复 `save_hashtags` 调用与统计回显 |
 | `web/src/components/scraper/ScraperScheduleTab.vue` | 话题库放开到抖音（两处 `v-if` + 文案） |
 
 **验收标准：**

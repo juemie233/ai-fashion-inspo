@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
 from scripts.scraper_common import utcnow
 
@@ -542,7 +543,7 @@ def test_load_douyin_bloggers_excludes_auto_registered(tmp_path, monkeypatch):
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "library_db_path", lambda: db)
+    patch_f2(monkeypatch, "library_db_path", lambda: db)
 
     default = f2.load_douyin_bloggers()
     assert set(default) == {"里香", "老记录无 source"}
@@ -620,7 +621,7 @@ def test_run_fetch_skips_unregistered_authors(tmp_path, monkeypatch):
     conn.execute("INSERT INTO bloggers VALUES (1, '里香', 'douyin', 'MS4x_lixiang')")
     conn.commit()
     conn.close()
-    monkeypatch.setattr(f2, "library_db_path", lambda: db)
+    patch_f2(monkeypatch, "library_db_path", lambda: db)
 
     commands: list[str] = []
     result = f2.run_fetch(
@@ -658,7 +659,7 @@ def test_hash_cache_reuses_digest_across_runs(tmp_path, monkeypatch):
         calls["n"] += 1
         return real(path, chunk)
 
-    monkeypatch.setattr(f2, "sha256_file", counting)
+    patch_f2(monkeypatch, "sha256_file", counting)
 
     with f2.HashCache(db) as cache:
         for item in files:
@@ -1245,7 +1246,7 @@ def test_apply_import_passes_thumbs_dir_for_video(tmp_path, monkeypatch):
         captured["thumbs_dir"] = thumbs_dir
         return None
 
-    monkeypatch.setattr(f2, "extract_video_thumbnail_sync", _fake_video_thumb)
+    patch_f2(monkeypatch, "extract_video_thumbnail_sync", _fake_video_thumb)
     decisions, _, _ = _decisions(files)
     # 该文件按类型推断是 image；强制改成 video 以走视频缩略图分支
     decisions = [
@@ -1298,7 +1299,7 @@ def test_apply_import_batch_id_unique_within_same_second(tmp_path, monkeypatch):
     后写的清单会覆盖先写的，被覆盖那批的 ids 就此丢失。
     """
     fixed = datetime(2026, 1, 2, 3, 4, 5)
-    monkeypatch.setattr(f2, "utcnow", lambda: fixed)
+    patch_f2(monkeypatch, "utcnow", lambda: fixed)
 
     root = tmp_path / "f2"
     _jpeg(root / "A" / "2025-01-01 10-00-00_标题A_image_1.jpg")
@@ -1705,7 +1706,7 @@ def test_run_fetch_profiles_downloads_named_blogger_not_in_f2_db(tmp_path):
 def test_run_fetch_profiles_ignores_registered_blogger_whitelist(tmp_path, monkeypatch):
     """点名博主不受「只下已登记博主」白名单影响——用户已经明确点名了。"""
     f2_dir = _f2_dir_with_authors(tmp_path, authors=[("MS4wLjABAAAAother", "别人", 5)])
-    monkeypatch.setattr(f2, "load_douyin_bloggers", lambda: {"里香": [{"id": 1}]})
+    patch_f2(monkeypatch, "load_douyin_bloggers", lambda: {"里香": [{"id": 1}]})
     calls: list[list[str]] = []
 
     result = f2.run_fetch(

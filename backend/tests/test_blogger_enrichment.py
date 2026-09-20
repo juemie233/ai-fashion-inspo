@@ -27,6 +27,7 @@ from app.services.task_runners.enrich_blogger_profile import (
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
 )
+from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
 
 
@@ -459,9 +460,8 @@ async def test_douyin_backfill_fills_gaps_and_skips_others(
     client, tmp_path, monkeypatch
 ):
     """一键补全的抖音分支：只补空缺、已有值不动、查不到的写跳过并说明原因。"""
-    monkeypatch.setattr(
-        f2,
-        "DEFAULT_F2_DIR",
+    patch_f2(
+        monkeypatch, "DEFAULT_F2_DIR",
         _write_f2_db(
             tmp_path,
             [
@@ -543,9 +543,8 @@ async def test_douyin_backfill_does_not_overwrite_existing_value(client):
 
 async def test_douyin_backfill_empty_in_f2_is_skipped(client, tmp_path, monkeypatch):
     """f2 库里有这个账号但没有属地：跳过并提示「让 f2 采一次主页」。"""
-    monkeypatch.setattr(
-        f2,
-        "DEFAULT_F2_DIR",
+    patch_f2(
+        monkeypatch, "DEFAULT_F2_DIR",
         _write_f2_db(tmp_path, [("MS4x_a", "空属地博", "")]),
     )
     _create_douyin_blogger(client, "空属地博", platform_user_id="MS4x_a")
@@ -561,9 +560,8 @@ async def test_douyin_backfill_empty_in_f2_is_skipped(client, tmp_path, monkeypa
 
 async def test_enrich_task_includes_douyin_and_xhs_together(client, tmp_path, monkeypatch):
     """抖音 + 小红书混合：全部纳入（无上限），抖音排在最前（离线零成本先做）。"""
-    monkeypatch.setattr(
-        f2,
-        "DEFAULT_F2_DIR",
+    patch_f2(
+        monkeypatch, "DEFAULT_F2_DIR",
         _write_f2_db(tmp_path, [(f"MS4x_{i}", f"抖音{i}", "IP属地：浙江") for i in range(5)]),
     )
     for i in range(5):
