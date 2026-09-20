@@ -95,6 +95,61 @@ describe('useF2Import', () => {
     warn.mockRestore()
   })
 
+  it('loadAuthors 读取博主清单（白名单 + 未登记账号 + 各自素材数）', async () => {
+    const overview = {
+      available: true,
+      f2_dir: 'C:/f2',
+      filter_active: true,
+      registered_count: 1,
+      unknown_count: 1,
+      note: '另有 1 个 f2 账号未登记到博主库，默认会被跳过',
+      registered: [
+        {
+          nickname: '里香1√',
+          sec_user_id: 'sec-lixiang',
+          aweme_count: 171,
+          materials: 512,
+          blogger_id: 304,
+          blogger_name: '里香',
+          profile_url: 'https://www.douyin.com/user/sec-lixiang',
+        },
+      ],
+      unknown: [
+        {
+          nickname: '网易第五人格',
+          sec_user_id: 'sec-wy',
+          aweme_count: 42,
+          materials: 142,
+          blogger_id: null,
+          blogger_name: null,
+          profile_url: 'https://www.douyin.com/user/sec-wy',
+        },
+      ],
+    }
+    mocks.get.mockResolvedValue({ data: overview })
+    const { f2Authors, authorsLoading, loadAuthors } = useF2Import()
+
+    await loadAuthors()
+
+    expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-authors')
+    expect(authorsLoading.value).toBe(false)
+    expect(f2Authors.value?.registered[0].materials).toBe(512)
+    expect(f2Authors.value?.registered[0].profile_url).toContain('/user/sec-lixiang')
+    expect(f2Authors.value?.unknown[0].blogger_id).toBeNull()
+  })
+
+  it('loadAuthors 失败时置空并提示（清单不影响主流程）', async () => {
+    const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
+    mocks.get.mockRejectedValue(new Error('boom'))
+    const { f2Authors, loadAuthors } = useF2Import()
+
+    await loadAuthors()
+
+    expect(f2Authors.value).toBeNull()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('submit 透传选项并返回 task_id', async () => {
     const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     mocks.post.mockResolvedValue({ data: { task_id: 42, message: '已提交' } })

@@ -75,6 +75,31 @@ const checkboxStub = defineComponent({
   },
 })
 
+/** 表格桩件：按列的 slotName 渲染每一行的作用域插槽，便于断言单元格内容 */
+const tableStub = defineComponent({
+  name: 'ATable',
+  props: {
+    columns: { type: Array, default: () => [] },
+    data: { type: Array, default: () => [] },
+  },
+  render() {
+    const columns = this.columns as { dataIndex: string; slotName?: string }[]
+    const rows = this.data as Record<string, unknown>[]
+    return h(
+      'table',
+      rows.map((row) =>
+        h(
+          'tr',
+          columns.map((col) => {
+            const slot = col.slotName ? this.$slots[col.slotName] : undefined
+            return h('td', slot ? slot({ record: row }) : String(row[col.dataIndex] ?? ''))
+          }),
+        ),
+      ),
+    )
+  },
+})
+
 function makeStatus(over: Record<string, unknown> = {}) {
   return {
     available: true,
@@ -105,23 +130,80 @@ function makeStatus(over: Record<string, unknown> = {}) {
   }
 }
 
-async function mountCard(status = makeStatus()) {
-  mocks.get.mockResolvedValue({ data: status })
-  const wrapper = mount(F2ImportCard, {
-    global: {
-      stubs: {
-        'a-card': cardStub,
-        'a-button': buttonStub,
-        'a-input': inputStub,
-        'a-input-number': inputNumberStub,
-        'a-spin': spinStub,
-        'a-link': linkStub,
-        'a-checkbox': checkboxStub,
-      },
-    },
-  })
+/** Arco 桩组件表（卡片用到的组件全部打桩，测试只关心提交参数与清单渲染） */
+const STUBS = {
+  'a-card': cardStub,
+  'a-button': buttonStub,
+  'a-input': inputStub,
+  'a-input-number': inputNumberStub,
+  'a-spin': spinStub,
+  'a-link': linkStub,
+  'a-checkbox': checkboxStub,
+  'a-table': tableStub,
+}
+
+/** 用给定的 GET 实现挂载卡片 */
+async function mountWithResponses(
+  get: (url: string) => Promise<{ data: unknown }>,
+): Promise<VueWrapper> {
+  mocks.get.mockImplementation(get)
+  const wrapper = mount(F2ImportCard, { global: { stubs: STUBS } })
   await flushPromises()
   return wrapper
+}
+
+async function mountCard(status = makeStatus()) {
+  return mountWithResponses(() => Promise.resolve({ data: status }))
+}
+
+/** 博主清单响应（GET /scraper/f2-authors） */
+function makeAuthors(over: Record<string, unknown> = {}) {
+  return {
+    available: true,
+    f2_dir: 'C:/f2',
+    filter_active: true,
+    registered_count: 1,
+    unknown_count: 1,
+    note: '另有 1 个 f2 账号未登记到博主库，默认会被跳过；勾选「包含 f2 里未登记到博主库的账号」才会处理它们',
+    registered: [
+      {
+        nickname: '里香1√',
+        sec_user_id: 'sec-lixiang',
+        aweme_count: 171,
+        materials: 512,
+        blogger_id: 304,
+        blogger_name: '里香',
+        profile_url: 'https://www.douyin.com/user/sec-lixiang',
+      },
+    ],
+    unknown: [
+      {
+        nickname: '网易第五人格',
+        sec_user_id: 'sec-wy',
+        aweme_count: 42,
+        materials: 142,
+        blogger_id: null,
+        blogger_name: null,
+        profile_url: 'https://www.douyin.com/user/sec-wy',
+      },
+    ],
+    ...over,
+  }
+}
+
+/** 状态与博主清单分开返回：清单请求走清单，其余（f2-status）走状态 */
+async function mountCardWithAuthors(
+  authors = makeAuthors(),
+  status = makeStatus(),
+): Promise<VueWrapper> {
+  return mountWithResponses((url) =>
+    Promise.resolve({ data: url === '/scraper/f2-authors' ? authors : status }),
+  )
+}
+
+/** 按文案定位链接 */
+function linkByText(wrapper: VueWrapper, text: string) {
+  return wrapper.findAll('a').find((a) => a.text().includes(text))!
 }
 
 const SEC = 'MS4wLjABAAAACyG6qmWLGt5BbCvwkAfMpEf3nhGwlQqSG1MjwDIGokuUHJnIkwJzxDPu-1RRrfvk'
@@ -203,5 +285,66 @@ describe('F2ImportCard · 按博主全量下载', () => {
 
     // reused 也返回 task_id → 仍算提交成功（走同一轮轮询）
     expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+})
+
+describe('F2ImportCard · 已登记博主清单', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('默认不展开：不请求清单接口', async () => {
+    const wrapper = await mountCardWithAuthors()
+
+    expect(wrapper.text()).toContain('查看已登记博主（19）')
+    expect(mocks.get).not.toHaveBeenCalledWith('/scraper/f2-authors')
+  })
+
+  it('展开后拉取清单：昵称链到抖音主页、显示总作品与已入库素材数', async () => {
+    const wrapper = await mountCardWithAuthors()
+
+    await linkByText(wrapper, '查看已登记博主').trigger('click')
+    await flushPromises()
+
+    expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-authors')
+    const nameLink = linkByText(wrapper, '里香1√')
+    expect(nameLink.attributes('href')).toBe('https://www.douyin.com/user/sec-lixiang')
+    const rowText = wrapper.find('tr').text()
+    expect(rowText).toContain('里香') // 库内博主名
+    expect(rowText).toContain('171') // f2 记录的总作品数
+    expect(rowText).toContain('512') // 已入库素材数
+  })
+
+  it('展示说明文案（还有多少未登记账号会被跳过）', async () => {
+    const wrapper = await mountCardWithAuthors()
+
+    await linkByText(wrapper, '查看已登记博主').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.f2-authors-note').text()).toContain('1 个 f2 账号未登记')
+  })
+
+  it('再次点击收起清单，不会重复请求', async () => {
+    const wrapper = await mountCardWithAuthors()
+
+    await linkByText(wrapper, '查看已登记博主').trigger('click')
+    await flushPromises()
+    await linkByText(wrapper, '收起已登记博主').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.f2-authors').exists()).toBe(false)
+    expect(mocks.get.mock.calls.filter((c) => c[0] === '/scraper/f2-authors')).toHaveLength(1)
+  })
+
+  it('白名单里没有账号时给出引导文案而不是空表格', async () => {
+    const wrapper = await mountCardWithAuthors(
+      makeAuthors({ registered: [], registered_count: 0, filter_active: false }),
+    )
+
+    await linkByText(wrapper, '查看已登记博主').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('table').exists()).toBe(false)
+    expect(wrapper.text()).toContain('白名单里暂无账号')
   })
 })

@@ -98,6 +98,41 @@ export interface F2ImportStatus {
   auto: F2AutoStatus
 }
 
+/** f2 博主清单的一行（后端 GET /api/scraper/f2-authors 返回） */
+export interface F2AuthorRow {
+  /** f2 用户库里的昵称（可能与库内博主名不同） */
+  nickname: string
+  /** sec_user_id（抖音主页 user/ 后面那段） */
+  sec_user_id: string
+  /** f2 记录的作品总数（她主页一共多少作品） */
+  aweme_count: number
+  /** 已入库素材数（按来源作者聚合，不含垃圾桶） */
+  materials: number
+  /** 命中库内博主时的博主 id / 名称；未登记账号为 null */
+  blogger_id: number | null
+  blogger_name: string | null
+  /** 抖音主页链接（sec_user_id 缺失时为空串） */
+  profile_url: string
+}
+
+/** f2 博主清单：下载白名单里到底有谁、各自已入库多少条素材 */
+export interface F2AuthorsOverview {
+  /** f2 用户库里是否有账号（空库时清单没意义） */
+  available: boolean
+  /** f2 工作目录 */
+  f2_dir: string
+  /** 下载白名单是否生效。库里一个抖音博主都没登记时为 false（此时不按作者过滤） */
+  filter_active: boolean
+  /** 白名单内的已登记博主（素材多的在前） */
+  registered: F2AuthorRow[]
+  /** f2 有、库里没有对应博主的账号（默认会被跳过） */
+  unknown: F2AuthorRow[]
+  registered_count: number
+  unknown_count: number
+  /** 一句话说明（库为空 / 白名单未生效 / 有未登记账号） */
+  note: string
+}
+
 /** 提交选项（与后端 Query 参数一一对应） */
 export interface F2ImportOptions {
   /** 是否先调 f2 增量下载（否则只入库已下载文件） */
@@ -143,6 +178,9 @@ export function useF2Import() {
   const autoSaving = ref(false)
   const likeUserSaving = ref(false)
   const likeMaxSaving = ref(false)
+  /** 博主清单（展开清单时才拉取，不参与状态轮询） */
+  const f2Authors = ref<F2AuthorsOverview | null>(null)
+  const authorsLoading = ref(false)
 
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
@@ -160,6 +198,20 @@ export function useF2Import() {
       Message.warning(getApiErrorMessage(e, 'f2 状态读取失败'))
     } finally {
       statusLoading.value = false
+    }
+  }
+
+  /** 读取 f2 博主清单（展开清单时调，也可手动刷新） */
+  async function loadAuthors(): Promise<void> {
+    authorsLoading.value = true
+    try {
+      const { data } = await apiClient.get<F2AuthorsOverview>('/scraper/f2-authors')
+      f2Authors.value = data
+    } catch (e) {
+      f2Authors.value = null
+      Message.warning(getApiErrorMessage(e, 'f2 博主清单读取失败'))
+    } finally {
+      authorsLoading.value = false
     }
   }
 
@@ -295,7 +347,10 @@ export function useF2Import() {
     autoSaving,
     likeUserSaving,
     likeMaxSaving,
+    f2Authors,
+    authorsLoading,
     loadStatus,
+    loadAuthors,
     submit,
     setAuto,
     setLikeUser,

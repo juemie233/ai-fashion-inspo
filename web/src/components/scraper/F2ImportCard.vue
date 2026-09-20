@@ -18,7 +18,16 @@ const router = useRouter()
 
 const emit = defineEmits<{ (e: 'submitted'): void }>()
 
-const { status, statusLoading, submitting, loadStatus, submit } = useF2Import()
+const {
+  status,
+  statusLoading,
+  submitting,
+  loadStatus,
+  submit,
+  f2Authors,
+  authorsLoading,
+  loadAuthors,
+} = useF2Import()
 
 // ── 提交选项（默认值即为日常用法：先增量下载，再全量入库）──
 const fetchFirst = ref(true)
@@ -139,6 +148,24 @@ async function onSubmitProfile() {
     await loadStatus()
   }
 }
+
+// ── 已登记博主清单：白名单里到底有谁、各自已入库多少条素材 ──
+/** 是否展开清单（展开时才拉数据，避免每次进页面都多一次请求） */
+const showAuthors = ref(false)
+
+/** 清单表格列（昵称链到抖音主页，便于核对是不是同一个人） */
+const authorColumns = [
+  { title: '博主（f2 昵称）', dataIndex: 'nickname', slotName: 'nickname', width: 200 },
+  { title: '库内博主', dataIndex: 'bloggerName', slotName: 'bloggerName', width: 140 },
+  { title: '总作品', dataIndex: 'aweme_count', slotName: 'awemeCount', width: 88 },
+  { title: '已入库素材', dataIndex: 'materials', slotName: 'materials', width: 104 },
+]
+
+async function toggleAuthors() {
+  showAuthors.value = !showAuthors.value
+  // 展开时若已有数据就不再重复请求；需要最新数据用「刷新状态」或清单上的刷新按钮
+  if (showAuthors.value && !f2Authors.value) await loadAuthors()
+}
 </script>
 
 <template>
@@ -196,6 +223,47 @@ async function onSubmitProfile() {
       <div v-if="status" class="f2-status" :class="{ 'is-bad': !status.available }">
         <span>{{ status.available ? '✅' : '⚠️' }} {{ status.reason }}</span>
         <a-link @click="loadStatus()">刷新状态</a-link>
+      </div>
+    </a-spin>
+
+    <!-- 已登记博主清单：白名单里有谁、各自已入库多少条素材（展开时才拉取） -->
+    <div class="f2-authors-bar">
+      <a-link @click="toggleAuthors">
+        {{ showAuthors ? '收起已登记博主' : `查看已登记博主（${status?.authors ?? 0}）` }}
+      </a-link>
+      <span class="f2-tip">看一下白名单里到底有谁、各自带来多少条素材</span>
+      <a-link v-if="showAuthors" @click="loadAuthors()">刷新清单</a-link>
+    </div>
+
+    <a-spin v-if="showAuthors" :loading="authorsLoading" style="display: block">
+      <div v-if="f2Authors" class="f2-authors">
+        <a-table
+          v-if="f2Authors.registered.length"
+          :columns="authorColumns"
+          :data="f2Authors.registered"
+          :pagination="false"
+          row-key="sec_user_id"
+          size="small"
+          :scroll="{ x: 540 }"
+        >
+          <template #nickname="{ record }">
+            <a-link v-if="record.profile_url" :href="record.profile_url" target="_blank">
+              {{ record.nickname || `${record.sec_user_id.slice(0, 12)}…` }}
+            </a-link>
+            <span v-else>{{ record.nickname || '（无昵称）' }}</span>
+          </template>
+          <template #bloggerName="{ record }">
+            <span :class="{ 'f2-dim': record.blogger_name === record.nickname }">
+              {{ record.blogger_name || '—' }}
+            </span>
+          </template>
+          <template #awemeCount="{ record }">
+            {{ record.aweme_count || '—' }}
+          </template>
+          <template #materials="{ record }">{{ record.materials }}</template>
+        </a-table>
+        <div v-else class="f2-tip">白名单里暂无账号——先补全博主的 sec_user_id 或跑一次 f2</div>
+        <div class="f2-authors-note">{{ f2Authors.note }}</div>
       </div>
     </a-spin>
 
@@ -331,6 +399,27 @@ async function onSubmitProfile() {
 
 .f2-tip {
   font-size: 12px;
+  color: #9ca3af;
+}
+
+/* 已登记博主清单：状态行下面一行入口 + 展开后的表格 */
+.f2-authors-bar {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.f2-authors {
+  margin-top: 8px;
+}
+.f2-authors-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8a8f99;
+}
+/* 库内博主名与 f2 昵称一致时弱化，避免两列看起来重复 */
+.f2-dim {
   color: #9ca3af;
 }
 

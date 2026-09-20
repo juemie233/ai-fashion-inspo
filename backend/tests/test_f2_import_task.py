@@ -108,6 +108,121 @@ def test_f2_status_endpoint(client):
     }
 
 
+def _make_f2_author_db(f2_dir, rows: list[tuple[str, str, int]]) -> None:
+    """造一个 f2 用户库（douyin_users.db），rows 为 (sec_user_id, nickname, aweme_count)。"""
+    import sqlite3
+
+    f2_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.executemany("INSERT INTO user_info_web VALUES (?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+
+async def test_f2_authors_endpoint_lists_whitelist_with_material_counts(
+    client, tmp_path, monkeypatch
+):
+    """f2 博主清单：白名单账号带「已入库素材数」，未登记账号单独一档。
+
+    回归背景：卡片只报「可增量下载 19 个已登记博主」，用户看不到这 19 个是谁、
+    各自带来多少素材，也看不到 f2 库里还有哪些账号会被跳过。
+    「自动登记」的博主（我的喜欢来源作者）不算已登记 → 必须落在未登记那一档。
+    """
+    from app.models.person import Blogger
+    from app.models.inspiration import Inspiration
+
+    f2_dir = tmp_path / "f2proj"
+    _make_f2_author_db(
+        f2_dir,
+        [
+            ("sec-lixiang", "里香1√", 171),  # 归一化名命中库内博主「里香」
+            ("sec-wy", "网易第五人格", 42),  # 库内只有自动登记记录 → 未登记
+        ],
+    )
+    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+
+    async with async_session() as db:
+        db.add(
+            Blogger(name="里香", platform="douyin", platform_user_id="sec-lixiang")
+        )
+        db.add(
+            Blogger(
+                name="网易第五人格",
+                platform="douyin",
+                source=f2.AUTO_BLOGGER_SOURCE,
+            )
+        )
+        # 素材：里香 2 条（一条已进垃圾桶，不计入）、网易 1 条
+        for path, author, deleted in (
+            ("images/a.jpg", "里香", False),
+            ("images/b.jpg", "里香", False),
+            ("images/c.jpg", "里香", True),
+            ("images/d.jpg", "网易第五人格", False),
+        ):
+            db.add(
+                Inspiration(
+                    source_type="douyin",
+                    source_author=author,
+                    file_path=path,
+                    media_type="image",
+                    deleted_at=utcnow() if deleted else None,
+                )
+            )
+        await db.commit()
+
+    resp = client.get("/api/scraper/f2-authors")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["available"] is True
+    assert body["filter_active"] is True
+    assert body["registered_count"] == 1
+    assert body["unknown_count"] == 1
+
+    registered = body["registered"][0]
+    assert registered["nickname"] == "里香1√"
+    assert registered["sec_user_id"] == "sec-lixiang"
+    assert registered["aweme_count"] == 171
+    assert registered["materials"] == 2  # 垃圾桶那条不计
+    assert registered["blogger_id"] is not None
+    assert registered["blogger_name"] == "里香"
+    assert registered["profile_url"] == "https://www.douyin.com/user/sec-lixiang"
+
+    unknown = body["unknown"][0]
+    assert unknown["nickname"] == "网易第五人格"
+    assert unknown["materials"] == 1
+    assert unknown["blogger_id"] is None
+    assert "未登记到博主库" in body["note"]
+
+
+async def test_f2_authors_endpoint_without_douyin_bloggers(client, tmp_path, monkeypatch):
+    """库里一个抖音博主都没登记：白名单不生效（全部账号都会被处理），如实说明。"""
+    f2_dir = tmp_path / "f2proj"
+    _make_f2_author_db(f2_dir, [("sec-wy", "网易第五人格", 42)])
+    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", f2_dir)
+
+    body = client.get("/api/scraper/f2-authors").json()
+
+    assert body["filter_active"] is False
+    assert body["registered_count"] == 1
+    assert body["unknown_count"] == 0
+    assert "白名单尚未生效" in body["note"]
+
+
+def test_f2_authors_endpoint_without_f2_dir(client, tmp_path, monkeypatch):
+    """f2 目录不存在：返回空清单与原因，而不是 500。"""
+    monkeypatch.setattr(f2, "DEFAULT_F2_DIR", tmp_path / "不存在")
+
+    body = client.get("/api/scraper/f2-authors").json()
+
+    assert body["available"] is False
+    assert body["registered"] == [] and body["unknown"] == []
+    assert "用户库为空或不存在" in body["note"]
+
+
 def test_create_f2_import_task_endpoint(client):
     """POST 创建任务：返回 task_id，参数落进任务 result（供执行阶段读取）。"""
     resp = client.post(

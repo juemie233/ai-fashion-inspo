@@ -761,6 +761,41 @@ def load_douyin_bloggers(
     return dict(indexed)
 
 
+def match_authors(
+    authors: list[dict], bloggers: dict[str, list[dict]]
+) -> list[tuple[dict, dict | None]]:
+    """把 f2 账号逐条对上库内已登记博主：``[(f2 账号, 博主 | None)]``。
+
+    ``None`` 表示该账号未登记到博主库。判定口径与 :func:`select_known_authors`
+    完全一致（本函数就是它的实现，两处共用同一段判断，避免「下载白名单」与
+    「博主清单展示」各写一套后漂移）；同名多候选时取第一条（白名单只看是否命中）。
+
+    Args:
+        authors: :func:`load_f2_authors` 的结果。
+        bloggers: :func:`load_douyin_bloggers` 的结果。
+
+    Returns:
+        与 ``authors`` 等长、同顺序的配对列表（供展示每行对应的博主 id/名称）。
+    """
+    by_uid: dict[str, dict] = {}
+    for group in bloggers.values():
+        for blogger in group:
+            uid = blogger.get("platform_user_id")
+            if uid:
+                by_uid.setdefault(uid, blogger)
+    matched: list[tuple[dict, dict | None]] = []
+    for author in authors:
+        sec_user_id = author.get("sec_user_id")
+        # 1) sec_user_id 精确命中（权威：同 ID 必同人）
+        blogger = by_uid.get(sec_user_id) if sec_user_id else None
+        # 2) 归一化昵称命中（兜底：覆盖没回填 sec_user_id 的博主）
+        if blogger is None:
+            group = bloggers.get(normalize_author(author.get("nickname") or "")) or []
+            blogger = group[0] if group else None
+        matched.append((author, blogger))
+    return matched
+
+
 def select_known_authors(
     authors: list[dict], bloggers: dict[str, list[dict]]
 ) -> tuple[list[dict], list[dict]]:
@@ -782,21 +817,10 @@ def select_known_authors(
     Returns:
         ``(已登记账号, 未登记账号)``，两者都保持入参顺序。
     """
-    known_uids = {
-        blogger.get("platform_user_id")
-        for group in bloggers.values()
-        for blogger in group
-        if blogger.get("platform_user_id")
-    }
-    known_keys = set(bloggers)
     known: list[dict] = []
     unknown: list[dict] = []
-    for author in authors:
-        sec_user_id = author.get("sec_user_id")
-        matched = (sec_user_id and sec_user_id in known_uids) or (
-            normalize_author(author.get("nickname") or "") in known_keys
-        )
-        (known if matched else unknown).append(author)
+    for author, blogger in match_authors(authors, bloggers):
+        (known if blogger is not None else unknown).append(author)
     return known, unknown
 
 

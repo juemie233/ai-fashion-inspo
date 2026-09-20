@@ -174,6 +174,17 @@ async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
     return info
 
 
+@router.get("/f2-authors")
+async def f2_authors(db: AsyncSession = Depends(get_db)) -> dict:
+    """列出 f2 用户库里的账号，并标出哪些在「一键获取素材」的下载白名单里。
+
+    为什么需要：卡片只报一句「可增量下载 19 个已登记博主」，用户看不到这 19 个
+    到底是谁、各自已经带来多少素材，也看不到 f2 库里还有哪些账号会被跳过。
+    判定口径与执行侧共用（见 services/scraper/f2_authors.py）。
+    """
+    return await scraper_service.get_f2_authors(db)
+
+
 @router.get("/f2-tasks/{task_id}/results")
 async def f2_task_results(
     task_id: int,
