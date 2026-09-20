@@ -8,7 +8,7 @@
  */
 
 import { computed, ref } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import {
   fetchNearDuplicates,
@@ -177,7 +177,7 @@ function openDupModal() {
   showDupModal.value = true
 }
 
-/** 关闭弹窗（未提交的删除决定作废） */
+/** 关闭对比弹窗（只收界面状态；删除决定由 :func:`submitDecisions` 负责提交） */
 function closeDupModal() {
   showDupModal.value = false
   dupGroups.value = []
@@ -260,19 +260,18 @@ async function deleteBoth() {
   }
 }
 
-/** 提交删除：把全部待删 ID 交给父组件（批量删除任务 + 审计留痕） */
-function confirmSubmit() {
-  if (deletingIds.value.size === 0) {
-    Message.info('没有需要删除的素材')
-    closeDupModal()
-    return
-  }
+/**
+ * 提交累计的删除决定：交给父组件（批量删除任务 + 审计留痕），并就地更新候选列表。
+ *
+ * **不立刻重扫**：删除是后台任务，提交瞬间素材还在库里，重扫会把刚处理过的组原样
+ * 查回来 → 弹窗又自动打开、进度退回第 1 组（用户刚做完选择就被弹回选择页）。
+ * 库里真实状态等任务跑完后由用户再扫一次确认。
+ */
+function submitDecisions() {
   const ids = new Set(deletingIds.value)
+  if (ids.size === 0) return
   emit('delete-selected', [...ids])
   Message.success(`已提交删除任务：${ids.size} 个冗余素材（后台物理删除）`)
-  // 就地按决定更新候选列表，**不要立刻重扫**：删除是后台任务，提交瞬间素材还在库里，
-  // 重扫会把刚处理过的组原样查回来 → 弹窗又自动打开、进度退回第 1 组
-  //（用户刚做完选择就被弹回选择页）。库里真实状态等任务跑完后由用户再扫一次确认。
   if (result.value) {
     result.value.groups = dropSubmittedFiles(result.value.groups, ids)
   }
@@ -280,8 +279,42 @@ function confirmSubmit() {
     groups.value.length > 0
       ? `已提交删除 ${ids.size} 个冗余素材（后台物理删除），列表已按决定更新，剩余 ${groups.value.length} 组待确认`
       : `已提交删除 ${ids.size} 个冗余素材（后台物理删除），删除完成后可重新扫描确认`
-  showDupModal.value = false
-  dupGroups.value = []
+}
+
+/**
+ * 退出对比弹窗（右上角 X / 「退出」/「完成」都走这里）——**已做的决定不丢**。
+ *
+ * 还有未提交的决定时先确认一次：删除是物理删除、不可恢复，不能默默替用户决定，
+ * 但默认动作是「一并提交」（这正是用户按保留左边/右边时表达的意思）。
+ */
+function requestExit() {
+  const count = deletingIds.value.size
+  if (count === 0) {
+    closeDupModal()
+    return
+  }
+  Modal.confirm({
+    title: `还有 ${count} 个未提交的删除决定`,
+    content: `退出前要一并提交吗？提交后由后台任务物理删除，文件与记录不可恢复。`,
+    okText: '一并提交并退出',
+    cancelText: '放弃这些决定',
+    onOk: () => {
+      submitDecisions()
+      closeDupModal()
+    },
+    onCancel: () => closeDupModal(),
+  })
+}
+
+/** 提交确认视图的「确认提交删除」 */
+function confirmSubmit() {
+  if (deletingIds.value.size === 0) {
+    Message.info('没有需要删除的素材')
+    closeDupModal()
+    return
+  }
+  submitDecisions()
+  closeDupModal()
 }
 
 function fileUrl(f: NearDuplicateFile): string {
@@ -400,15 +433,16 @@ function favoriteLabel(f: NearDuplicateFile): string {
   </a-card>
 
   <!-- 近似重复逐组对比弹窗：左右并排大图 + 保留决策 -->
+  <!-- 单向绑定 :visible（不用 v-model）：点 X 时弹窗不能自己先关掉，要先问「已选的是否提交」 -->
   <a-modal
-    v-model:visible="showDupModal"
+    :visible="showDupModal"
     title="近似重复素材对比"
     :width="'92%'"
     :modal-style="{ maxWidth: '1200px' }"
     :mask-closable="false"
     :esc-to-close="false"
     :footer="false"
-    @cancel="closeDupModal"
+    @cancel="requestExit"
   >
     <!-- 逐组决策视图 -->
     <template v-if="!allDone && currentGroup">
@@ -455,6 +489,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
       <p class="dup-hint">
         组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；可保留一张（其余将
         <strong>永久删除</strong>，文件与记录不可恢复），或点「删除两张」将当前两张一并删除。
+        中途「退出」时已做的决定不会丢：弹窗会问你要不要一并提交。
       </p>
 
       <div class="dup-actions">
@@ -479,6 +514,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
             删除两张
           </a-button>
         </a-popconfirm>
+        <a-button type="text" @click="requestExit">退出</a-button>
       </div>
 
       <div class="dup-progress">已决定删除 {{ deleteCount }} 个素材</div>
@@ -501,7 +537,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
                 确认提交删除（{{ deleteCount }} 个）
               </a-button>
             </a-popconfirm>
-            <a-button @click="closeDupModal">关闭（不删除）</a-button>
+            <a-button @click="requestExit">退出</a-button>
           </a-space>
         </template>
       </a-result>
@@ -515,7 +551,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
         </template>
         <template #extra>
           <a-space style="display: flex; justify-content: center; width: 100%">
-            <a-button @click="closeDupModal">完成</a-button>
+            <a-button @click="requestExit">完成</a-button>
           </a-space>
         </template>
       </a-result>
