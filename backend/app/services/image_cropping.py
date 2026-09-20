@@ -1101,6 +1101,130 @@ def _glyph_time_signature(
     return strong, strong_note
 
 
+def _glyph_strip_features(img: "Image.Image") -> tuple:
+    """取顶部条带并算出字形检测所需的灰度/前景/饱和度：
+
+    返回 (灰度 arr, 前景掩码 fg, 前景占比 fg_ratio, 条带饱和度 strip_sat, h, w) ——
+    h/w 是条带在分析宽度下的像素尺寸（不是原图尺寸）。
+
+    前景 = 「像素 − 5×5 均值」的局部对比二值化结果（cumsum 实现盒均值，
+    条带很小、开销可忽略）。饱和度单独取出用于拒绝彩色照片顶部。
+    """
+    W, H = img.size
+    strip_h = max(12, int(H * _GLYPH_TOP_FRACTION))
+    strip = img.crop((0, 0, W, strip_h)).resize(
+        (_GLYPH_ANALYZE_W, max(6, strip_h * _GLYPH_ANALYZE_W // W)),
+        Image.Resampling.LANCZOS,
+    )
+    arr = np.asarray(strip.convert("L"), dtype=np.float32)
+    h, w = arr.shape
+
+    # 饱和度门槛（误报修正）：真实状态栏 / 透明残留的顶部条带饱和度极低
+    # （实测 ≤0.12），而彩色照片顶部（天空/头发/衣服/水印）饱和度常 >0.15——
+    # 高饱和条带几乎不可能是状态栏，直接用饱和度拒绝，消灭「彩色照片顶被
+    # 判残留」的批量误报（真实素材诊断：8 个误报样本 5 个饱和 0.17~0.45）。
+    hsv = np.asarray(strip.convert("HSV"), dtype=np.float32)
+    strip_sat = float(hsv[..., 1].mean()) / 255.0
+
+    # 5×5 盒均值背景（cumsum 实现，条带很小，开销可忽略）
+    pad = np.pad(arr, 2, mode="edge")
+    c = np.cumsum(np.cumsum(pad, axis=0), axis=1)
+    c = np.pad(c, ((1, 0), (1, 0)))
+    box = c[5:, 5:] - c[:-5, 5:] - c[5:, :-5] + c[:-5, :-5]
+    blur = box / 25.0
+    fg = np.abs(arr - blur) > _GLYPH_CONTRAST
+    fg_ratio = float(fg.mean())
+    return arr, fg, fg_ratio, strip_sat, h, w
+
+
+def _collect_glyph_components(fg: "np.ndarray", h: int, w: int, reject, bg_std) -> tuple:
+    """连通域分析 + 逐块过滤，返回 (字形块列表, 是否超预算, 连通域总数)。
+
+    过滤口径（顺序即从严顺序，被剔除的块交给 reject 记录调试信息）：
+    尺寸下限（面积/高/宽）→ 贴条带下沿/上沿 → 高宽上限 → 紧凑度（线条与
+    网格 fill ratio 低）→ 连通域预算（超出即降级为弱证据，不默认勾选）。
+
+    返回的连通域总数为 0 表示「无连通域」，与「有连通域但全被过滤」是两种
+    不同情况（调用方给不同提示）。
+    """
+    glyphs: list[tuple[int, int, int, int, int, float]] = []
+
+    from scipy import ndimage
+
+    fg_d = ndimage.binary_dilation(fg, iterations=1)
+    labels, num = ndimage.label(fg_d)
+    # 状态栏字形只有时间+图标 ≈5~12 个连通域；吊灯/饰品高光碎片类照片
+    # 纹理会产出几十个小 blob。超预算不直接放弃（真实截图也可能叠在
+    # 复杂内容上），降级为「弱证据」：found=True 但 strong=False，
+    # 候选保留、不默认勾选，交人工判断
+    glyph_budget = 25
+    budget_exceeded = False
+    kept = 0
+    for i, sl in enumerate(ndimage.find_objects(labels), start=1):
+        if sl is None:
+            continue
+        x0, x1 = sl[1].start, sl[1].stop
+        y0, y1 = sl[0].start, sl[0].stop
+        area = int((labels[sl] == i).sum())
+        bw, bh = x1 - x0, y1 - y0
+        # 尺寸门槛：状态栏数字/图标在 320 宽坐标系下高 ≥ max(5, 条带 12%)、
+        # 宽 ≥ 2px——更小的碎片是照片纹理噪声（真实 FP：拼图内容碎片
+        # 3×4px 曾凑成「时间对」误判 strong）
+        if area < 4 or bh < max(5, h * 0.12) or bw < 2:
+            reject(x0, x1, y0, y1, area, "过小（面积/高/宽）")
+            continue
+        # 下沿截断剔除（误报修正）：照片内容在条带下沿被「切一刀」，其
+        # 连通域必然延伸到条带最后一行；真实状态栏字形完整落在条带内，
+        # 底部留有大量余量（实测真实截图字形底 ≈ 条带 45%，误报样本
+        # 全部贴到条带下沿）。贴边 blob 是照片内容，不是状态栏字形。
+        if y1 >= h - 1:
+            reject(x0, x1, y0, y1, area, "贴条带下沿（内容被截断）")
+            continue
+        # 上沿剔除（误报修正）：状态栏文字不会压在图片最顶端（垂直居中于
+        # 状态栏，上沿实测在条带 23%~26% 处），贴最顶行的连通域是照片
+        # 内容压到画面顶端（真实 FP：发丝/背景块 y0=0）。
+        if y0 < h * _GLYPH_MIN_TOP_FRAC:
+            reject(x0, x1, y0, y1, area, "贴条带上沿（照片内容顶到画面顶）")
+            continue
+        # 字形过滤：高 ≤ 条带 65%、宽 ≤ 图宽 22%（大块内容/标题排除）
+        if bh > h * 0.65 or bw > w * 0.22:
+            reject(x0, x1, y0, y1, area, "过大（高/宽超限）")
+            continue
+        # 紧凑度过滤：线条（门框/相框边、拼图网格线）fill ratio 低
+        # （面积/外接框 < 0.3），字形（文字/图标笔画）fill ratio 高
+        if area / (bw * bh) < 0.3:
+            reject(x0, x1, y0, y1, area, "紧凑度不足（线条/网格）")
+            continue
+        if kept >= glyph_budget:
+            budget_exceeded = True
+            reject(x0, x1, y0, y1, area, "超连通域预算")
+            continue
+        kept += 1
+        glyphs.append((x0, x1, y0, y1, area, bg_std(x0, x1, y0, y1)[0]))
+
+    return glyphs, budget_exceeded, num
+
+
+def _glyph_fallback_profile(fg: "np.ndarray", h: int, w: int) -> tuple:
+    """无 scipy 时的兜底：列密度剖面（两角有前景、中部稀疏）。
+
+    返回 (found, top_frac, note)；判不出前景时为 (False, 0.0, 原因)。
+    精度低于连通域路径，故一律按弱证据返回（调用方传 strong=False）。
+    """
+    col = fg.mean(axis=0)
+    left_d = col[: int(w * 0.30)].mean()
+    mid_d = col[int(w * 0.30) : int(w * 0.66)].mean()
+    right_d = col[int(w * 0.66) :].mean()
+    if not (left_d > 0.02 or right_d > 0.02) or mid_d > max(left_d, right_d, 0.02) * 0.5:
+        return False, 0.0, "无 scipy：列剖面不满足"
+    rows = fg.mean(axis=1)
+    nz = np.nonzero(rows > 0.02)[0]
+    if len(nz) == 0:
+        return False, 0.0, "无 scipy：无前景行"
+    top_frac = _glyph_top_frac(int(nz[-1]), h)
+    return True, top_frac, "无 scipy：列剖面兜底"
+
+
 def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
     """顶部状态栏字形证据检测（透明叠加状态栏的关键信号，行剖面的盲区补丁）。
 
@@ -1141,30 +1265,7 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         strong = 左右两角字形齐备（高置信，可默认勾选）；top_frac 为建议
         裁剪比例（字形底部 + 余量，占全图高度），未检出时为 0。
     """
-    W, H = img.size
-    strip_h = max(12, int(H * _GLYPH_TOP_FRACTION))
-    strip = img.crop((0, 0, W, strip_h)).resize(
-        (_GLYPH_ANALYZE_W, max(6, strip_h * _GLYPH_ANALYZE_W // W)),
-        Image.Resampling.LANCZOS,
-    )
-    arr = np.asarray(strip.convert("L"), dtype=np.float32)
-    h, w = arr.shape
-
-    # 饱和度门槛（误报修正）：真实状态栏 / 透明残留的顶部条带饱和度极低
-    # （实测 ≤0.12），而彩色照片顶部（天空/头发/衣服/水印）饱和度常 >0.15——
-    # 高饱和条带几乎不可能是状态栏，直接用饱和度拒绝，消灭「彩色照片顶被
-    # 判残留」的批量误报（真实素材诊断：8 个误报样本 5 个饱和 0.17~0.45）。
-    hsv = np.asarray(strip.convert("HSV"), dtype=np.float32)
-    strip_sat = float(hsv[..., 1].mean()) / 255.0
-
-    # 5×5 盒均值背景（cumsum 实现，条带很小，开销可忽略）
-    pad = np.pad(arr, 2, mode="edge")
-    c = np.cumsum(np.cumsum(pad, axis=0), axis=1)
-    c = np.pad(c, ((1, 0), (1, 0)))
-    box = c[5:, 5:] - c[:-5, 5:] - c[5:, :-5] + c[:-5, :-5]
-    blur = box / 25.0
-    fg = np.abs(arr - blur) > _GLYPH_CONTRAST
-    fg_ratio = float(fg.mean())
+    arr, fg, fg_ratio, strip_sat, h, w = _glyph_strip_features(img)
 
     glyphs: list[tuple[int, int, int, int, int, float]] = []
     rejected: list[dict] = []  # 调试：被剔除的连通域及原因
@@ -1236,60 +1337,13 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         return _result(False, False, 0.0, f"前景占比 {fg_ratio:.3f} > 0.35")
 
     try:
-        from scipy import ndimage
-
-        fg_d = ndimage.binary_dilation(fg, iterations=1)
-        labels, num = ndimage.label(fg_d)
+        # scipy 缺失时，由 _collect_glyph_components 内部的 import 抛 ImportError，
+        # 落到下面的无 scipy 兜底分支
+        glyphs, budget_exceeded, num = _collect_glyph_components(
+            fg, h, w, _reject, _bg_stats
+        )
         if num == 0:
             return _result(False, False, 0.0, "无连通域")
-        # 状态栏字形只有时间+图标 ≈5~12 个连通域；吊灯/饰品高光碎片类照片
-        # 纹理会产出几十个小 blob。超预算不直接放弃（真实截图也可能叠在
-        # 复杂内容上），降级为「弱证据」：found=True 但 strong=False，
-        # 候选保留、不默认勾选，交人工判断
-        glyph_budget = 25
-        budget_exceeded = False
-        kept = 0
-        for i, sl in enumerate(ndimage.find_objects(labels), start=1):
-            if sl is None:
-                continue
-            x0, x1 = sl[1].start, sl[1].stop
-            y0, y1 = sl[0].start, sl[0].stop
-            area = int((labels[sl] == i).sum())
-            bw, bh = x1 - x0, y1 - y0
-            # 尺寸门槛：状态栏数字/图标在 320 宽坐标系下高 ≥ max(5, 条带 12%)、
-            # 宽 ≥ 2px——更小的碎片是照片纹理噪声（真实 FP：拼图内容碎片
-            # 3×4px 曾凑成「时间对」误判 strong）
-            if area < 4 or bh < max(5, h * 0.12) or bw < 2:
-                _reject(x0, x1, y0, y1, area, "过小（面积/高/宽）")
-                continue
-            # 下沿截断剔除（误报修正）：照片内容在条带下沿被「切一刀」，其
-            # 连通域必然延伸到条带最后一行；真实状态栏字形完整落在条带内，
-            # 底部留有大量余量（实测真实截图字形底 ≈ 条带 45%，误报样本
-            # 全部贴到条带下沿）。贴边 blob 是照片内容，不是状态栏字形。
-            if y1 >= h - 1:
-                _reject(x0, x1, y0, y1, area, "贴条带下沿（内容被截断）")
-                continue
-            # 上沿剔除（误报修正）：状态栏文字不会压在图片最顶端（垂直居中于
-            # 状态栏，上沿实测在条带 23%~26% 处），贴最顶行的连通域是照片
-            # 内容压到画面顶端（真实 FP：发丝/背景块 y0=0）。
-            if y0 < h * _GLYPH_MIN_TOP_FRAC:
-                _reject(x0, x1, y0, y1, area, "贴条带上沿（照片内容顶到画面顶）")
-                continue
-            # 字形过滤：高 ≤ 条带 65%、宽 ≤ 图宽 22%（大块内容/标题排除）
-            if bh > h * 0.65 or bw > w * 0.22:
-                _reject(x0, x1, y0, y1, area, "过大（高/宽超限）")
-                continue
-            # 紧凑度过滤：线条（门框/相框边、拼图网格线）fill ratio 低
-            # （面积/外接框 < 0.3），字形（文字/图标笔画）fill ratio 高
-            if area / (bw * bh) < 0.3:
-                _reject(x0, x1, y0, y1, area, "紧凑度不足（线条/网格）")
-                continue
-            if kept >= glyph_budget:
-                budget_exceeded = True
-                _reject(x0, x1, y0, y1, area, "超连通域预算")
-                continue
-            kept += 1
-            glyphs.append((x0, x1, y0, y1, area, _bg_stats(x0, x1, y0, y1)[0]))
         if not glyphs:
             return _result(False, False, 0.0, "无通过过滤的连通域")
         # 分布签名（真实数据修正两轮）：
@@ -1309,18 +1363,8 @@ def _glyph_evidence(img: "Image.Image", debug: bool = False) -> dict:
         return _result(True, strong, top_frac, strong_note)
     except ImportError:
         # 无 scipy：列密度剖面兜底（两角有前景、中部稀疏）
-        col = fg.mean(axis=0)
-        left_d = col[: int(w * 0.30)].mean()
-        mid_d = col[int(w * 0.30) : int(w * 0.66)].mean()
-        right_d = col[int(w * 0.66) :].mean()
-        if not (left_d > 0.02 or right_d > 0.02) or mid_d > max(left_d, right_d, 0.02) * 0.5:
-            return _result(False, False, 0.0, "无 scipy：列剖面不满足")
-        rows = fg.mean(axis=1)
-        nz = np.nonzero(rows > 0.02)[0]
-        if len(nz) == 0:
-            return _result(False, False, 0.0, "无 scipy：无前景行")
-        top_frac = _glyph_top_frac(int(nz[-1]), h)
-        return _result(True, False, top_frac, "无 scipy：列剖面兜底")
+        found, top_frac, note = _glyph_fallback_profile(fg, h, w)
+        return _result(found, False, top_frac, note)
 
 
 def analyze_screenshot_combined(path) -> tuple[dict, dict | None]:
