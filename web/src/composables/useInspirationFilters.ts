@@ -222,6 +222,7 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
     qualityFilter.value = 'all'
     selectedTags.value = []
     colorFilter.value = ''
+    ratingMin.value = ''
     sortMode.value = 'newest'
     options.reloadFirstPage()
   }

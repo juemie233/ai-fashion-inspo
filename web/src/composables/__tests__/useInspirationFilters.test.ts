@@ -101,9 +101,8 @@ describe('useInspirationFilters', () => {
     expect(filters.sourceFilter.value).toBe('all')
     expect(filters.selectedTags.value).toEqual([])
     expect(filters.colorFilter.value).toBe('')
-    // 已知缺口（本次重构保持行为不变）：clearAllFilters 未复位评分筛选，
-    // 与 resetFiltersForFocus 的口径不一致——即「清除全部筛选」会漏掉「★N 分及以上」。
-    expect(filters.ratingMin.value).toBe('4')
+    // 评分筛选同样要复位：原先漏了它，「清除全部筛选」后「★N 分及以上」仍然生效
+    expect(filters.ratingMin.value).toBe('')
     expect(filters.sortMode.value).toBe('newest')
     expect(filters.focusedIds.value).toEqual(['x']) // 定位模式不在此处清除
     expect(reloadFirstPage).toHaveBeenCalledTimes(1)
