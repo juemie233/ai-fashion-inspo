@@ -553,13 +553,42 @@ async def near_duplicates(
     近似重复（不同压缩/缩放/水印），由前端并排预览后人工确认删除。
 
     扫描规则：全库图片**随机抽样**（每次覆盖不同素材）；感知哈希首次计算后
-    缓存到 inspirations.phash，本接口会顺带补算缺失哈希（单次有限额）。
+    缓存到 inspirations.phash，本接口会顺带补算缺失哈希，但**有时间预算**
+    （`BACKFILL_TIME_BUDGET_SECONDS`）——大库全量补算需数十分钟，压在一次请求里
+    会超时。返回里的 `missing` / `cache_complete` 说明缓存是否已就绪：未就绪时
+    用 `POST /api/admin/phash-backfill` 起后台任务一次性补齐。
     """
     from app.services.near_duplicate_service import scan_near_duplicates
 
     return await scan_near_duplicates(
         db, limit=payload.limit, threshold=payload.threshold
     )
+
+
+@router.post("/phash-backfill")
+async def phash_backfill(db: AsyncSession = Depends(get_db)) -> dict:
+    """创建「感知哈希缓存补齐」后台任务（近似重复扫描的前置）。
+
+    扫描接口只做限时补算（避免请求超时），本接口把剩余缺失交给 worker 一次性补齐。
+    幂等：已有 pending/running 同类任务时返回该任务（`reused=true`）不重复入队；
+    缓存已完整时返回 400。返回 200 而非 201：本接口是「确保缓存就绪」的幂等语义，
+    复用既有任务同样算成功。
+    """
+    from app.services.task_runner import create_phash_backfill_task
+
+    created = await create_phash_backfill_task(db)
+    if created["task_id"] is None:
+        if created["total"] == 0:
+            raise HTTPException(status_code=400, detail="哈希缓存已完整，无需补齐")
+    total = created["total"]
+    return {
+        **created,
+        "message": (
+            f"已有补齐任务在跑（#{created['task_id']}，待补约 {total} 张），可在任务中心查看进度"
+            if created["reused"]
+            else f"已创建哈希缓存补齐任务（{total} 张），可在任务中心查看进度"
+        ),
+    }
 
 
 # ============ 向量化管理（一键回填缺失向量） ============

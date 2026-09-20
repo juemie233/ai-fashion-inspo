@@ -7,13 +7,23 @@
 - **全库随机抽样**：`ORDER BY RANDOM()` 每次覆盖不同素材，不再固定扫描
   「最新 N 张」——旧素材的近似重复同样会被发现，多次扫描结果不重复。
 - **感知哈希缓存**：phash 首次计算后写入 `inspirations.phash`，后续扫描
-  零解码（纯内存分组，秒级响应）；单次请求最多补算 `BACKFILL_PER_SCAN`
-  张缺失哈希，存量库分批渐进补齐。
+  零解码（纯内存分组，秒级响应）；缺失哈希由 :func:`backfill_phash_cache`
+  补算，**单次调用有时间预算**（`BACKFILL_TIME_BUDGET_SECONDS`），剩余部分
+  交给后台任务 `phash_backfill` 或下一次扫描继续。
 - 素材文件被替换（如手机图剪裁）后 phash 置空，下次扫描懒重算。
 - 哈希计算为阻塞 I/O，统一放线程池执行。
+
+⚠ 为什么补算必须有预算（2026-09 实测事故）：库里 11,568 张 f2 抖音原图没有 phash，
+单张实测 **142 ms**（中位 0.25 MB、最大 1.92 MB 的大图解码），全量补齐约 **27 分钟**。
+早期实现是「一次请求内 `while True` 补到一张不剩」，于是前端 / 反代先超时（用户看到
+「接口异常」），而后端还在继续跑。现在扫描最多补 `BACKFILL_TIME_BUDGET_SECONDS` 秒，
+并且**每轮都没算出哈希时立即停手**（文件缺失/损坏的行否则会让循环原地打转）。
 """
 
 import asyncio
+import time
+
+from collections.abc import Callable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,8 +44,128 @@ from app.utils.time import format_utc
 DEFAULT_THRESHOLD = 32
 # 默认扫描上限（0 表示不限）；同步接口，超大库建议分批或后续改造为任务队列
 DEFAULT_LIMIT = 1000
-# 单次扫描最多补算的缺失 phash 数：控制首跑/增量成本，缓存渐进完备后扫描零解码
+# 单次扫描最多补算的缺失 phash 数（单轮批大小）：控制单轮内存与单次线程池批处理规模
 BACKFILL_PER_SCAN = 300
+# 单次调用的补算**时间**预算（秒）。HTTP 接口必须在这个量级内返回：大库全量补算
+# 需数十分钟（实测 11,568 张大图约 27 分钟），压在一次请求里必然超时。
+# 剩余缺失由后台任务 phash_backfill（worker 执行，无请求超时约束）继续补齐。
+BACKFILL_TIME_BUDGET_SECONDS = 5.0
+
+
+async def _count_missing_phash(db: AsyncSession) -> int:
+    """统计仍未缓存感知哈希的图片素材数（不含垃圾桶）。"""
+    return (
+        await db.execute(
+            select(func.count(Inspiration.id)).where(
+                NOT_DELETED,
+                Inspiration.media_type == "image",
+                Inspiration.phash.is_(None),
+            )
+        )
+    ).scalar() or 0
+
+
+async def backfill_phash_cache(
+    db: AsyncSession,
+    *,
+    budget_seconds: float = BACKFILL_TIME_BUDGET_SECONDS,
+    on_batch: Callable[[int, int], None] | None = None,
+) -> dict:
+    """补算缺失的感知哈希（写回 `inspirations.phash`），最多跑 ``budget_seconds`` 秒。
+
+    幂等：只算 `phash IS NULL` 的行，算过的不再重算；每轮独立 commit。
+    到点即返回（`complete=False`），由调用方决定继续（再点一次）还是交给后台任务。
+
+    Args:
+        db: 数据库会话。
+        budget_seconds: 时间预算（秒）；``0`` 表示只统计不补算（扫描接口的「只看现状」用法）。
+        on_batch: 每轮结束后的回调 ``(已补算总数, 仍未缓存数)``，供后台任务写进度。
+
+    Returns:
+        ``{"computed": 本次新算出的哈希数, "missing": 仍未缓存数,
+        "complete": 是否已全部就绪, "unhashable": 算不出哈希的素材数}``。
+        ``unhashable`` 指文件缺失/损坏等永远算不出哈希的行——**必须排除**，
+        否则补算循环会一直查到同一批行原地打转。
+    """
+    storage_root = settings.storage_root
+    started = time.monotonic()
+    computed_total = 0
+    unhashable: set[str] = set()
+
+    while True:
+        missing = await _count_missing_phash(db)
+        if missing == 0:
+            return {
+                "computed": computed_total,
+                "missing": 0,
+                "complete": True,
+                "unhashable": len(unhashable),
+            }
+        if budget_seconds <= 0 or time.monotonic() - started >= budget_seconds:
+            return {
+                "computed": computed_total,
+                "missing": missing,
+                "complete": False,
+                "unhashable": len(unhashable),
+            }
+
+        # 每轮随机取一批：优先让不同素材先拿到哈希（扫描抽样才有意义），
+        # 并排除已知算不出哈希的行（否则会反复命中同一批，永远没有进展）
+        stmt = select(Inspiration.id, Inspiration.file_path).where(
+            NOT_DELETED,
+            Inspiration.media_type == "image",
+            Inspiration.phash.is_(None),
+        )
+        if unhashable:
+            stmt = stmt.where(Inspiration.id.notin_(sorted(unhashable)))
+        rows = (
+            await db.execute(stmt.order_by(func.random()).limit(BACKFILL_PER_SCAN))
+        ).all()
+
+        if not rows:
+            # 剩下的行都算不出哈希：停手，交给调用方按 unhashable 处理
+            return {
+                "computed": computed_total,
+                "missing": missing,
+                "complete": False,
+                "unhashable": len(unhashable),
+            }
+
+        def _compute_hashes(batch: list) -> list[tuple[str, str]]:
+            """同步计算缺失素材的感知哈希（线程池执行，避免阻塞事件循环）。
+
+            ``batch`` 显式传参（而不是闭包捕获循环变量）：避免「加进线程池时
+            循环已进入下一轮」造成的错批问题。
+            """
+            out: list[tuple[str, str]] = []
+            for mid, mpath in batch:
+                if not mpath:
+                    continue
+                full = storage_root / mpath
+                if not full.exists():
+                    continue
+                phash = perceptual_hash(full)
+                if phash:
+                    out.append((mid, phash))
+            return out
+
+        computed = await asyncio.to_thread(_compute_hashes, rows)
+        if not computed:
+            # 本轮一张都没算出来：记下这些行并进入下一轮（下一轮排除它们，
+            # 因此不会原地打转；预算到点也会正常返回）
+            unhashable.update(mid for mid, _path in rows)
+            if on_batch is not None:
+                on_batch(computed_total, missing)
+            continue
+
+        for mid, phash in computed:
+            await db.execute(
+                update(Inspiration).where(Inspiration.id == mid).values(phash=phash)
+            )
+        await db.commit()
+        computed_total += len(computed)
+        if on_batch is not None:
+            on_batch(computed_total, max(0, missing - len(computed)))
 
 
 async def _collect_scoring_ids(
@@ -145,9 +275,11 @@ async def scan_near_duplicates(
 ) -> dict:
     """扫描视觉近似重复的图片素材，返回分组候选（不删除）。
 
-    本接口带「phash 缓存补算」副作用（幂等，写回成功计算的哈希）：
-    - 全库图片随机抽样参与分组，每次覆盖不同素材；
-    - 缺失哈希的素材按随机顺序补算（单次最多 BACKFILL_PER_SCAN 张）。
+    本接口带「phash 缓存补算」副作用（幂等，写回成功计算的哈希），但**有时间预算**：
+    最多补 :data:`BACKFILL_TIME_BUDGET_SECONDS` 秒就返回，避免大库首扫把请求拖到超时
+    （实测 11,568 张大图需约 27 分钟）。返回里的 ``missing`` / ``cache_complete``
+    告诉调用方缓存是否已就绪：未就绪时本次扫描只覆盖已缓存部分，需要后台任务
+    （``phash_backfill``）或再次扫描继续补齐。
     """
     storage_root = settings.storage_root
 
@@ -159,49 +291,12 @@ async def scan_near_duplicates(
         )
     ).scalar() or 0
 
-    # ── 1) 补算缺失哈希：循环回卷，直到所有素材都有 phash 缓存 ──
-    # 每次随机抽 BACKFILL_PER_SCAN 张补算，commit 后继续检查，
-    # 确保最终所有素材的 phash 都就绪，扫描时抽样可见全部数据。
-    total_computed: list[tuple[str, str]] = []
-    while True:
-        missing_rows = (
-            await db.execute(
-                select(Inspiration.id, Inspiration.file_path)
-                .where(
-                    NOT_DELETED,
-                    Inspiration.media_type == "image",
-                    Inspiration.phash.is_(None),
-                )
-                .order_by(func.random())
-                .limit(BACKFILL_PER_SCAN)
-            )
-        ).all()
-
-        if not missing_rows:
-            break  # 已全部补算
-
-        def _compute_hashes() -> list[tuple[str, str]]:
-            """同步计算缺失素材的感知哈希（线程池执行，避免阻塞事件循环）。"""
-            out: list[tuple[str, str]] = []
-            for mid, mpath in missing_rows:
-                if not mpath:
-                    continue
-                full = storage_root / mpath
-                if not full.exists():
-                    continue
-                phash = perceptual_hash(full)
-                if phash:
-                    out.append((mid, phash))
-            return out
-
-        computed = await asyncio.to_thread(_compute_hashes)
-        if computed:
-            total_computed.extend(computed)
-            for mid, phash in computed:
-                await db.execute(
-                    update(Inspiration).where(Inspiration.id == mid).values(phash=phash)
-                )
-        await db.commit()
+    # ── 1) 补算缺失哈希（限时）──
+    # 显式传预算（而不是依赖默认参数）：调用方/测试可以按需调大调小，
+    # 后台任务则用更长预算一次补完
+    backfill = await backfill_phash_cache(
+        db, budget_seconds=BACKFILL_TIME_BUDGET_SECONDS
+    )
 
     # ── 2) 全库随机抽样：仅取已有哈希缓存的素材参与分组 ──
     # commit 后同一个 session 的查询应当能看到已提交数据；
@@ -271,6 +366,10 @@ async def scan_near_duplicates(
         "total": total,
         "truncated": total > len(items),
         "threshold": threshold,
-        "backfilled": len(total_computed),
+        "backfilled": backfill["computed"],
         "cached_total": cached_total,
+        # 缓存就绪度：未就绪时本次只覆盖了已缓存部分（前端据此提示「先补齐」）
+        "missing": backfill["missing"],
+        "cache_complete": backfill["complete"],
+        "unhashable": backfill["unhashable"],
     }

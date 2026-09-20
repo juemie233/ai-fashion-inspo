@@ -1,7 +1,7 @@
 /** nearDup 决策纯函数单测：覆盖保留左边/右边/跳过与多张组边界。 */
 
 import { describe, expect, it } from 'vitest'
-import { collectIdsToDelete, type DupDecision } from '@/utils/nearDup'
+import { collectIdsToDelete, nearDupScopeLabel, type DupDecision } from '@/utils/nearDup'
 import type { NearDuplicateGroup } from '@/api/admin'
 
 /** 构造测试用近似重复组（files 按评分降序，第一张为建议保留） */
@@ -70,5 +70,32 @@ describe('collectIdsToDelete', () => {
     for (const d of ['keep-left', 'keep-right', 'skip'] as DupDecision[]) {
       expect(collectIdsToDelete(g, d)).toEqual([])
     }
+  })
+})
+
+describe('nearDupScopeLabel', () => {
+  it('缓存完整 + limit=0：报「全库扫描 N 张」', () => {
+    expect(
+      nearDupScopeLabel({ scanned: 19568, total: 19568, truncated: false, missing: 0 }, 0),
+    ).toBe('全库扫描 19568 张')
+  })
+
+  it('随机抽样（limit>0）：报「随机扫描 N / M 张」', () => {
+    expect(
+      nearDupScopeLabel({ scanned: 500, total: 19568, truncated: true, missing: 0 }, 500),
+    ).toBe('随机扫描 500 / 19568 张')
+  })
+
+  it('缓存未补齐：不说「全库/随机」，如实说明只覆盖已缓存部分', () => {
+    // 用户看到的超时事故场景：11k 张没缓存，扫描只覆盖一半
+    expect(
+      nearDupScopeLabel({ scanned: 11762, total: 23904, truncated: true, missing: 12142 }, 0),
+    ).toBe('已扫描已缓存的 11762 张（哈希缓存还差 12142 张未补齐）')
+  })
+
+  it('缓存未补齐时优先于随机抽样口径（避免把缓存问题说成抽样）', () => {
+    expect(
+      nearDupScopeLabel({ scanned: 300, total: 2000, truncated: true, missing: 20 }, 500),
+    ).toBe('已扫描已缓存的 300 张（哈希缓存还差 20 张未补齐）')
   })
 })

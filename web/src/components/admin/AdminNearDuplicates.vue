@@ -12,6 +12,7 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import {
   fetchNearDuplicates,
+  startPhashBackfill,
   type NearDuplicateFile,
   type NearDuplicateGroup,
   type NearDuplicateResult,
@@ -19,7 +20,8 @@ import {
 import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
-import { collectIdsToDelete } from '@/utils/nearDup'
+import { collectIdsToDelete, nearDupScopeLabel } from '@/utils/nearDup'
+import { usePolling } from '@/composables/usePolling'
 
 const emit = defineEmits<{
   (e: 'delete-selected', ids: string[]): void
@@ -88,18 +90,80 @@ async function scan() {
   try {
     result.value = await fetchNearDuplicates(limit.value, threshold.value)
     if (result.value.groups.length === 0) {
-      const scope = result.value.truncated
-        ? `随机扫描 ${result.value.scanned} / ${result.value.total} 张`
-        : `全库扫描 ${result.value.scanned} 张`
-      Message.success(`已${scope}，未发现近似重复`)
+      Message.success(`已${nearDupScopeLabel(result.value, limit.value)}，未发现近似重复`)
     } else {
       // 发现重复组 → 自动打开弹窗逐组处理
       openDupModal()
     }
-  } catch {
-    Message.error('近似重复扫描失败')
+    // 缓存没补齐时提示一次（扫描接口只做限时补算，缺口交给后台任务）
+    if (result.value.missing > 0) {
+      Message.warning(
+        `哈希缓存还差 ${result.value.missing} 张未补齐：本次只覆盖已缓存部分，可点「后台补齐哈希缓存」一次补完`,
+      )
+    }
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '近似重复扫描失败'))
   } finally {
     scanning.value = false
+  }
+}
+
+// ── 哈希缓存后台补齐（扫描接口限时补算，剩余缺口交给 worker）──
+const backfillBusy = ref(false)
+const backfillTaskId = ref<number | null>(null)
+const backfillProgress = ref(0)
+const backfillStatus = ref('')
+const backfillMessage = ref('')
+
+/** 任务轮询：3 秒一次，终态即停并提示（进度写进 backfillProgress） */
+const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
+  intervalMs: 3000,
+  immediate: true,
+  callback: async () => {
+    const id = backfillTaskId.value
+    if (id === null) return
+    try {
+      const { data } = await apiClient.get<{
+        status: string
+        progress: number
+        done: number
+        total: number
+        result: { complete?: boolean; unhashable?: number; missing?: number } | null
+      }>(`/tasks/${id}`)
+      backfillProgress.value = data.progress ?? 0
+      backfillStatus.value = data.status
+      if (!['pending', 'running'].includes(data.status)) {
+        stopBackfillPolling()
+        const complete = data.result?.complete ?? false
+        backfillMessage.value = complete
+          ? '哈希缓存已补齐，可重新扫描（现在覆盖全库）'
+          : `补齐结束：仍有 ${data.result?.missing ?? 0} 张未缓存（其中 ${
+              data.result?.unhashable ?? 0
+            } 张文件缺失或格式不支持）`
+        Message.success(backfillMessage.value)
+      }
+    } catch {
+      // 轮询失败静默：任务详情在任务中心仍可查看
+    }
+  },
+})
+
+/** 启动后台补齐任务（幂等：已有任务在跑时复用同一个） */
+async function startBackfill() {
+  backfillBusy.value = true
+  try {
+    const data = await startPhashBackfill()
+    backfillTaskId.value = data.task_id
+    backfillProgress.value = 0
+    backfillStatus.value = 'running'
+    backfillMessage.value = data.message
+    Message.success(data.message)
+    if (data.task_id !== null) startBackfillPolling()
+  } catch (e) {
+    // 缓存已完整时接口返回 400，按提示处理而不是报错
+    Message.info(getApiErrorMessage(e, '创建补齐任务失败'))
+  } finally {
+    backfillBusy.value = false
   }
 }
 
@@ -257,12 +321,50 @@ function favoriteLabel(f: NearDuplicateFile): string {
     <p style="color: var(--color-text-3); font-size: 12px; margin: 0 0 12px">
       基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印）。
       <b>默认全库扫描</b>（哈希已缓存时秒级返回，不漏检）；也可改为随机抽样分批扫。
-      哈希首次计算后自动缓存。仅列出候选，需人工确认后删除。
+      哈希首次计算后自动缓存；<b>大库首扫只做限时补算</b>，缺口可用「后台补齐哈希缓存」
+      一次补完（补算要解码原图，万级大图约需数十分钟，走后台任务不会卡住页面）。
+      仅列出候选，需人工确认后删除。
     </p>
+
+    <!-- 哈希缓存缺口：给出「后台补齐」入口（扫描接口限时补算，补不完的走 worker） -->
+    <a-alert v-if="result && result.missing > 0" type="warning" style="margin-bottom: 12px">
+      <template #title>哈希缓存未补齐：还差 {{ result.missing }} 张</template>
+      本次扫描只覆盖了已缓存的 {{ result.cached_total }} / {{ result.total }} 张（本次补算
+      {{ result.backfilled }} 张），可能漏掉重复对。
+      <template v-if="result.unhashable > 0">
+        （另有 {{ result.unhashable }} 张文件缺失或格式不支持，补算不动）
+      </template>
+      <div style="margin-top: 8px">
+        <a-space align="center">
+          <a-button
+            size="small"
+            type="primary"
+            :loading="backfillBusy"
+            :disabled="backfillStatus === 'running' || backfillStatus === 'pending'"
+            @click="startBackfill"
+          >
+            后台补齐哈希缓存
+          </a-button>
+          <a-progress
+            v-if="backfillStatus === 'running' || backfillStatus === 'pending'"
+            :percent="backfillProgress / 100"
+            size="small"
+            style="width: 220px"
+          />
+          <a-typography-text v-if="backfillMessage" type="secondary" style="font-size: 12px">
+            {{ backfillMessage }}
+          </a-typography-text>
+        </a-space>
+      </div>
+    </a-alert>
 
     <!-- 扫描结果汇总 -->
     <a-alert v-if="result && result.groups.length === 0" type="success" style="margin-bottom: 12px">
-      <template v-if="result.truncated">
+      <template v-if="result.missing > 0">
+        已扫描已缓存的 {{ result.scanned }} 张（哈希缓存还差 {{ result.missing }} 张未补齐），
+        暂未发现近似重复；补齐缓存后再扫一次才能覆盖全库
+      </template>
+      <template v-else-if="result.truncated || limit > 0">
         已随机扫描 {{ result.scanned }} /
         {{ result.total }} 张，未发现近似重复（仅覆盖本次抽样，可再次扫描或改用全库扫描）
       </template>
@@ -271,22 +373,8 @@ function favoriteLabel(f: NearDuplicateFile): string {
 
     <template v-if="groups.length > 0">
       <p style="color: rgb(var(--warning-6)); margin-bottom: 12px">
-        ⚠️ 发现 {{ groups.length }} 组近似重复，本次{{
-          result?.truncated ? '随机扫描' : '全库扫描'
-        }}
-        {{ result?.scanned }} / {{ result?.total }} 张
-        <template v-if="result?.truncated">（存在未覆盖素材，可再次扫描或改用全库扫描）</template>
+        ⚠️ 发现 {{ groups.length }} 组近似重复，{{ nearDupScopeLabel(result!, limit) }}
       </p>
-
-      <!-- 哈希缓存进度 -->
-      <a-alert
-        v-if="result && result.cached_total < result.total"
-        type="info"
-        style="margin-bottom: 12px"
-      >
-        感知哈希缓存 {{ result.cached_total }} / {{ result.total }} 张（本次新增
-        {{ result.backfilled }} 张），缓存完备后扫描无需重新解码图片
-      </a-alert>
 
       <a-space align="center" style="margin-bottom: 12px">
         <a-button type="primary" @click="openDupModal"

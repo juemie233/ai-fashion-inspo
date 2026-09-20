@@ -77,6 +77,10 @@ from app.services.task_runners.tag_health import (
     create_tag_health_scan_task,
     execute_tag_health_scan,
 )
+from app.services.task_runners.phash_backfill import (
+    create_phash_backfill_task,
+    execute_phash_backfill,
+)
 from app.services.task_runners.vector_backfill import (
     VECTOR_BACKFILL_BATCH_SIZE,
     create_vector_backfill_task,
@@ -95,6 +99,7 @@ TASK_HANDLERS = {
     "batch_delete": execute_batch_delete,
     "deduplicate": execute_deduplicate,
     "vector_backfill": execute_vector_backfill,
+    "phash_backfill": execute_phash_backfill,
     "face_scan": execute_face_scan,
     "face_match": execute_face_match,
     "face_cluster": execute_face_cluster,

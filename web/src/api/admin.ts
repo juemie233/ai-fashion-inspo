@@ -144,19 +144,38 @@ export interface NearDuplicateResult {
   total: number
   truncated: boolean
   threshold: number
-  /** 本次补算并缓存的感知哈希数（首跑/增量渐进补齐，之后为 0） */
+  /** 本次补算并缓存的感知哈希数（限时补算，未补完的交给后台任务） */
   backfilled: number
   /** 当前已缓存感知哈希的图片数（全库渐进完备） */
   cached_total: number
+  /** 仍未缓存感知哈希的图片数（>0 时本次扫描只覆盖已缓存部分） */
+  missing: number
+  /** 哈希缓存是否已完整（未完整时建议先跑后台补齐任务） */
+  cache_complete: boolean
+  /** 算不出哈希的素材数（文件缺失/损坏，重跑也补不上） */
+  unhashable: number
 }
 
 /** 扫描视觉近似重复的图片素材（phash 分组，仅返回候选）。
- *  limit=0 表示全库扫描（推荐，纯内存分组秒级返回、不漏检）；>0 为随机抽样数量 */
+ *  limit=0 表示全库扫描（推荐，纯内存分组秒级返回、不漏检）；>0 为随机抽样数量。
+ *  接口只做**限时**补算（避免大库首扫把请求拖到超时），缺口看返回的 missing/cache_complete */
 export async function fetchNearDuplicates(limit = 0, threshold = 32): Promise<NearDuplicateResult> {
   const { data } = await apiClient.post<NearDuplicateResult>('/admin/near-duplicates', {
     limit,
     threshold,
   })
+  return data
+}
+
+/** 启动「感知哈希缓存补齐」后台任务（把扫描接口没补完的缺口交给 worker 一次补完）。
+ *  幂等：已有进行中任务时返回该任务（reused=true）；缓存已完整时接口返回 400 */
+export async function startPhashBackfill(): Promise<{
+  task_id: number | null
+  total: number
+  reused: boolean
+  message: string
+}> {
+  const { data } = await apiClient.post('/admin/phash-backfill')
   return data
 }
 
