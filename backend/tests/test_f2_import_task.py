@@ -588,6 +588,8 @@ async def test_execute_f2_import_ingests_files_and_records_result(
         assert stored.result["import"]["failed"] == 0
         assert stored.progress == 100 and stored.done == 3
         assert stored.error is None
+        # 在会话内取批号清单路径（会话关闭后不再访问 ORM 属性）
+        batch_path = Path(stored.result["import"]["batch_file"])
 
     # 素材已入库且**未打标**（导入不做标签分析）
     detail = client.get("/api/inspirations?size=50").json()
@@ -599,13 +601,15 @@ async def test_execute_f2_import_ingests_files_and_records_result(
         assert item["source_type"] == "douyin"
         assert item["quality_status"] == "pending"
 
-    # 批次清单落盘（可回滚）——落在 storage 根目录下，与素材/缩略图同根
-    from app.config import settings
-
-    batch_dir = settings.storage_root / f2.IMPORT_BATCH_DIRNAME
-    batches = sorted(batch_dir.glob("*.json"))
-    assert batches, "批次清单未落盘"
-    payload = json.loads(batches[-1].read_text(encoding="utf-8"))
+    # 批次清单落盘（可回滚）——落在 storage 根目录下，与素材/缩略图同根。
+    # ⚠ 必须按**任务结果里的 batch_file** 取，不能 glob 目录再取「最新的那份」：
+    # storage 根在 xdist 多 worker 间共享，别的用例（如 profiles/like 模式用例）
+    # 也会往同一目录写清单；清单名是 `f2-{秒级时间戳}-{4位随机}`，同秒写入时
+    # 字典序由随机后缀决定 —— glob 出来的「最新」可能是**别人的那一批**，
+    # 断言就会读到别的批次的 imported 数量（CI 实测：期望 3 实得 1）。
+    batch_file = batch_path
+    assert batch_file.exists(), f"批次清单未落盘：{batch_file}"
+    payload = json.loads(batch_file.read_text(encoding="utf-8"))
     assert len(payload["imported"]) == 3
 
 
