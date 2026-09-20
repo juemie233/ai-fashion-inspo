@@ -223,6 +223,39 @@ def test_f2_authors_endpoint_without_f2_dir(client, tmp_path, monkeypatch):
     assert "用户库为空或不存在" in body["note"]
 
 
+def test_select_post_targets_parses_profiles_and_rejects_bad_input():
+    """阶段 1b 目标选择（纯函数）：点名博主可解析主页链接/sec_user_id；
+    抖音号与短链明确报错——不接受「拼一个必然失败的 URL」再静默失败。"""
+    from app.services.task_runners.f2_import import _select_post_targets
+
+    sec = "MS4wLjABAAAAexample01"
+    targets = _select_post_targets(
+        [f"https://www.douyin.com/user/{sec}", sec], [], None, None
+    )
+    assert [a["sec_user_id"] for a in targets] == [sec, sec]
+
+    with pytest.raises(RuntimeError, match="无法识别的博主"):
+        _select_post_targets(["72906514384"], [], None, None)
+
+
+def test_select_post_targets_fails_loudly_when_named_authors_not_in_f2_db():
+    """点名作者一个都不在 f2 用户库：响亮失败（任务 351 曾静默「成功 + 入库 0」）。
+
+    fetch_limit 只截断目标数量（试跑用），不影响上面的失败判定。
+    """
+    from app.services.task_runners.f2_import import _select_post_targets
+
+    known = [{"sec_user_id": "s1", "nickname": "里香", "aweme_count": 10}]
+    with pytest.raises(RuntimeError, match="不在 f2 用户库里"):
+        _select_post_targets([], known, {"唐思瑶ya"}, None)
+
+    three = [
+        {"sec_user_id": f"s{i}", "nickname": f"博主{i}", "aweme_count": 1}
+        for i in range(3)
+    ]
+    assert len(_select_post_targets([], three, None, 2)) == 2
+
+
 def test_create_f2_import_task_endpoint(client):
     """POST 创建任务：返回 task_id，参数落进任务 result（供执行阶段读取）。"""
     resp = client.post(

@@ -501,13 +501,20 @@ async def _watch_like_download(
             return future.result(), stats
 
 
+
+
 async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     """执行 f2 一键获取素材（由 worker 调用）。
 
     执行期间每处理完一个作者 / 每 2 秒检查一次任务状态：被外部置为
     cancelled 则停止并标记 cancelled，置为 paused 则停止并保留 paused
     （已入库的素材与批次清单都保留，重新执行会按内容判重跳过）。
+
+    本函数只做参数解析与**阶段编排**：每个阶段（与 task.result 的 stage 标记
+    一一对应）拆到下方 ``_xxx_stage`` 私有函数，便于单独阅读与定位——
+    下载 1a/1b → 扫描计划 2 → 入库 3 → 博主登记 3b → 收尾。
     """
+
     from app.config import settings
     from scripts import import_f2_downloads as f2
 
@@ -614,250 +621,340 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             f"{'、'.join(skipped_unknown)}"
         )
 
+    # 下载目标（点名博主 / 白名单命中）：仅发布模式会填充，其它模式保持空列表
+    targets: list[dict] = []
+
+    # 下载阶段两个分支都要求本机可用 f2（跑不起来就不必往下走）：一次校验即可
+    if fetch_enabled and not f2.f2_available():
+        raise RuntimeError(
+            "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
+        )
+
     # ── 阶段 1a：「我的喜欢」——单条命令翻页（不逐作者、不做时间窗口）──
     if fetch_enabled and like_mode:
-        if not f2.f2_available():
-            raise RuntimeError(
-                "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
-            )
-        if not like_user:
-            raise RuntimeError(
-                "未配置「我的主页链接」：点赞列表只有本人可见，"
-                "请先在「我的喜欢」卡片里填写你的抖音主页链接"
-            )
-        fetch_summary["total"] = 1
-        # 点赞总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
-        # 进度条由 watcher 按耗时给软进度。
-        # 增量模式（like_max_counts>0）另有作用：翻页量有上界，不会再出现「零新增却
-        # 空翻到底、进度条长时间停在 0」。
-        task.total = 0
-        task.done = 0
-        task.result = {**opts, "stage": "download", "like_max_counts": like_max_counts}
-        task.updated_at = utcnow()
-        await db.commit()
-
-        like_root = f2.DEFAULT_F2_LIKE_ROOT
-        baseline = await asyncio.to_thread(f2.download_tree_stats, like_root)
-        fetch_task = asyncio.create_task(
-            asyncio.to_thread(
-                f2.run_fetch_likes,
-                f2_dir,
-                like_user,
-                f2_dir / "Download",
-                max_counts=like_max_counts,
-            )
-        )
-        outcome, final_stats = await _watch_like_download(
-            db, task, fetch_task, like_root, baseline, opts
-        )
-        if outcome.get("error"):
-            raise RuntimeError(str(outcome["error"]))
-        fetch_summary["ok"] = int(outcome.get("ok") or 0)
-        fetch_summary["failed"] = int(outcome.get("failed") or 0)
-        fetch_summary["like_user"] = f2.like_user_url(like_user)
-        fetch_summary["like_max_counts"] = like_max_counts
-        fetch_summary["cmd"] = (
-            outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
-        )
-        # 本次下载的真实产出（文件数 / 体积）：入库阶段的 plan 只讲「有多少要入库」，
-        # 这个字段回答「下载期到底拉回来多少」——全部被去重挡掉时也看得见
-        fetch_summary["downloaded"] = {
-            "files": final_stats["files"],
-            "bytes": final_stats["bytes"],
-            "added": max(0, final_stats["files"] - baseline["files"]),
-            "added_bytes": max(0, final_stats["bytes"] - baseline["bytes"]),
-        }
-        download_result = {
-            **opts,
-            "stage": "download",
-            "fetch": fetch_summary,
-            "like_progress": fetch_summary["downloaded"],
-        }
-        task.done = 1
-        task.total = 1
-        task.progress = _PROGRESS_AFTER_DOWNLOAD
-        task.result = download_result
-        task.updated_at = utcnow()
-        await db.commit()
-
-        # 取消/暂停：与发布模式一致，立即收尾，不再做扫描与入库
-        if await _current_status(db, task.id) not in ("running", "pending"):
-            status_now = await _current_status(db, task.id)
-            task.result = download_result
-            task.status = status_now
-            task.updated_at = utcnow()
-            await db.commit()
-            logger.info(f"f2 拉取「我的喜欢」被中断（{status_now}）：已下载文件保留")
+        if await _fetch_likes_stage(
+            db, task, opts, f2_dir, like_user, like_max_counts, fetch_summary
+        ):
             return
-        if fetch_summary["failed"]:
-            task.result = download_result
-            await db.commit()
-            raise RuntimeError(
-                "f2 拉取「我的喜欢」失败（退出码非 0），常见原因：cookie 失效或被风控；"
-                "请先手动跑一次 f2 确认能下载，且 -u 填的是**你自己**的主页链接"
-            )
 
     # ── 阶段 1b：发布模式——逐作者串行下载（子进程放线程）──
     elif fetch_enabled:
-        if not f2.f2_available():
-            raise RuntimeError(
-                "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
-            )
-        if profiles:
-            # 按博主全量：**显式点名**的博主直接下，不要求它先出现在 f2 用户库里
-            # （f2 只认自己见过的账号，这正是那个限制的出口）。入库白名单同理，
-            # 不能用「已登记博主」那一套——用户已经点名了。
-            parsed = [(raw, f2.profile_author(raw)) for raw in profiles]
-            invalid = [raw for raw, author in parsed if author is None]
-            if invalid:
-                raise RuntimeError(
-                    f"无法识别的博主：{'、'.join(invalid)}。"
-                    "请填完整主页链接（https://www.douyin.com/user/MS4wLjABAAAA…）"
-                    "或 sec_user_id；抖音号与 v.douyin.com 短链不支持"
-                )
-            targets = [author for _raw, author in parsed if author]
-            if not targets:
-                raise RuntimeError("按博主全量下载需要至少一个博主主页链接或 sec_user_id")
-        else:
-            targets = known_authors
-            wanted = {f2.normalize_author(a) for a in authors} if authors else None
-            if wanted is not None:
-                targets = [
-                    a for a in targets if f2.normalize_author(a["nickname"]) in wanted
-                ]
-                # 点名的作者一个都不在 f2 用户库里 → 什么都下不了。**必须响亮失败**：
-                # 任务 351 就是这么静默过去的（请求「唐思瑶ya」不在 f2 用户库，
-                # 下载 0 个作者、入库 0，状态却是 success，用户看不出任何原因）。
-                if not targets:
-                    available = sorted(a["nickname"] for a in known_authors)
-                    raise RuntimeError(
-                        f"这些作者不在 f2 用户库里，无法下载：{'、'.join(sorted(wanted))}。"
-                        "f2 的下载目标只来自它自己的用户库（它只认见过的账号），"
-                        "所以要先让 f2 认识她们——改用卡片里的「按博主全量下载」"
-                        "（填博主主页链接即可，不需要 f2 事先认识），"
-                        "或先手动跑一次 f2 采她的主页。"
-                        + (
-                            f"当前 f2 认识 {len(available)} 个账号：{'、'.join(available[:10])}"
-                            f"{'…' if len(available) > 10 else ''}"
-                            if available
-                            else "当前 f2 用户库为空"
-                        )
-                    )
-        if opts.get("fetch_limit"):
-            targets = targets[: int(opts["fetch_limit"])]
-
-        fetch_summary["total"] = len(targets)
-        task.total = len(targets)
-        task.done = 0
-        await db.commit()
-
-        # 日期窗口：按作者目录的最近下载时间逐作者计算（见 compute_fetch_interval）。
-        # 不给窗口时 f2 会把作者全部历史翻一遍且每页固定 sleep 一次 timeout。
-        # 新博主（无论点名还是首次）没有本地记录 → 该函数给 `all`，即全量。
-        post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
-        last_download = await asyncio.to_thread(f2.author_last_download, post_root)
-
-        for index, author in enumerate(targets, 1):
-            if await _current_status(db, task.id) not in ("running", "pending"):
-                fetch_summary["aborted"] = True
-                break
-            display = f2.profile_display(author)
-            last_at = last_download.get(f2.normalize_author(author["nickname"] or ""))
-            # 点名博主用 compute_profile_interval：**首次全量**（否则只拿到最近
-            # since_days 天，用户以为下全了其实没有）
-            interval = (
-                f2.compute_profile_interval(since_days, last_at)
-                if profiles
-                else f2.compute_fetch_interval(since_days, last_at)
-            )
-            cmd = f2.build_f2_command(
-                author, download_root=f2_dir / "Download", interval=interval
-            )
-            logger.info(f"f2 下载 {display}（窗口 {interval}）")
-            try:
-                rc = await asyncio.to_thread(_run_subprocess, cmd, f2_dir)
-            except Exception as exc:  # noqa: BLE001 —— 单作者失败不阻断整批
-                rc = -1
-                logger.warning(f"f2 调用异常（{display}）：{exc}")
-            if rc == 0:
-                fetch_summary["ok"] += 1
-            else:
-                fetch_summary["failed"] += 1
-                logger.warning(f"f2 下载失败（{display}）退出码 {rc}，跳过该作者")
-            task.done = index
-            task.progress = int(_PROGRESS_AFTER_DOWNLOAD * index / max(1, len(targets)))
-            task.updated_at = utcnow()
-            await db.commit()
-
-        # 用户取消/暂停：立即结束，不再做扫描与入库——扫描是重活（全量约 81 秒），
-        # 中断后继续跑纯属浪费，还会让「取消」看起来迟迟不生效。已下载的文件留在
-        # f2 目录，恢复/重跑时增量下载与内容判重会自动跳过它们。
-        if fetch_summary["aborted"]:
-            status_now = await _current_status(db, task.id)
-            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
-            task.status = status_now
-            task.updated_at = utcnow()
-            await db.commit()
-            logger.info(
-                f"f2 下载被中断（{status_now}）：已完成 "
-                f"{fetch_summary['ok']}/{fetch_summary['total']} 个作者，已下载文件保留"
-            )
+        targets = _select_post_targets(
+            profiles, known_authors, authors, opts.get("fetch_limit")
+        )
+        if await _fetch_posts_stage(
+            db, task, opts, targets, profiles, since_days, f2_dir, fetch_summary
+        ):
             return
 
-        # 全部作者都失败（cookie 失效 / 风控）时不能算成功：用户会从任务中心
-        # 看到「成功 0 下载」而不知情。落一次 result 后抛错，让任务显式失败。
-        if fetch_summary["total"] and fetch_summary["ok"] == 0:
-            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
-            await db.commit()
-            raise RuntimeError(
-                f"f2 下载全部失败（{fetch_summary['failed']}/{fetch_summary['total']} 个作者），"
-                "常见原因：cookie 失效或被风控；请先手动跑一次 f2 确认能下载。"
-                "若只想入库已下载的文件，请改用「仅入库」模式（fetch=False）"
-            )
-
-    # 按博主全量下载：下单后 f2 已把新账号写进用户库，此时才能按 sec_user_id 反查
-    # 昵称——入库白名单是按**归一化昵称**匹配的，缺了它就会「下载成功、入库 0」。
-    # 反查不到任何昵称说明这批博主没下成：**响亮失败**，而不是报成功 + 入库 0
-    # （任务 351 就是这么静默过去的：请求的博主不在 f2 用户库，下载 0 个作者、
-    # 入库 0，状态却是 success）。
+    # 点名博主：反查昵称成功即以这批产物为入库范围（不再套「已登记博主」白名单）
     if profiles and fetch_enabled:
-        resolved = await asyncio.to_thread(
-            f2.resolve_profile_nicknames,
-            f2_dir,
-            [str(a.get("sec_user_id") or "") for a in targets],
+        plan_authors = await _resolve_named_profile_keys(
+            db, task, opts, targets, fetch_summary, f2_dir
         )
-        keys = {f2.normalize_author(n) for n in resolved.values() if n}
-        fetch_summary["profiles"] = [
-            {
-                "sec_user_id": sec,
-                "nickname": resolved.get(sec, ""),
-                "url": f"https://www.douyin.com/user/{sec}",
-            }
-            for sec in (str(a.get("sec_user_id") or "") for a in targets)
-        ]
-        if not keys:
-            task.result = {**opts, "stage": "download", "fetch": fetch_summary}
-            task.progress = _PROGRESS_AFTER_DOWNLOAD
-            await db.commit()
-            raise RuntimeError(
-                "这些博主一个都没下成，因此没有可入库的产物。"
-                "常见原因：cookie 失效（f2 下载需要登录态，且项目不传 "
-                "--auto-cookie，用的是 f2 配置里的 cookie）、主页链接/账号有误，"
-                "或被风控。请先手动跑一次 "
-                "`python -m f2 dy -u <主页链接> -M post -i all` 确认能下载"
-            )
-        # 点名博主的产物就是本次的入库范围（不再套「已登记博主」白名单）
-        plan_authors = keys
 
     # ── 阶段 2：扫描 + 去重计划 ──
-    # ⚠ 必须放线程里：scan_directory + build_import_plan 是同步文件/哈希/SQLite 操作
-    # （全量重算时实测 7.3 GB 约 81 秒）。同步跑会阻塞 worker 事件循环——心跳
-    # （10s 间隔 / 90s stale 阈值）会停跳，运行中的任务可能被 _reset_stale_tasks
-    # 判为 stale 并被其它 worker 重新认领（同一批导入被并发执行），期间暂停/取消
-    # 也完全失效。哈希缓存（HashCache 落盘）把日常运行降到「只算新增文件」，
-    # 但首次/大量新增时仍可能很慢，故线程执行保持不变。
-    # 扫描根按模式取：发布模式看 post/，点赞模式看 like/（f2 把喜欢的作品下在
-    # 「我的昵称」目录下，原作者在文件名里，见 LIKE_NAMING_TEMPLATE）
+    to_import = await _scan_and_plan_stage(
+        db, task, opts, bloggers, plan_authors, limit, skip_live, like_mode, fetch_summary
+    )
+    if not to_import:
+        return
+
+    # ── 阶段 3：入库（同步 sqlite 放线程；进度回调 + 状态检查）──
+    result, holder = await _apply_import_stage(db, task, to_import, make_thumbnails)
+
+    status_now = await _current_status(db, task.id)
+    interrupted = status_now in ("cancelled", "paused")
+
+    # ── 阶段 3b：「我的喜欢」补登记来源作者博主 ──
+    bloggers_stats = await _register_like_bloggers_stage(
+        db, task, result, like_mode, register_bloggers
+    )
+
+    # ── 收尾 ──
+    await _finalize_import(
+        db, task, result, holder, bloggers_stats, interrupted, status_now
+    )
+
+
+async def _fetch_likes_stage(
+    db: AsyncSession,
+    task: TaskQueue,
+    opts: dict,
+    f2_dir: Path,
+    like_user: str,
+    like_max_counts: int,
+    fetch_summary: dict,
+) -> bool:
+    """阶段 1a：「我的喜欢」——单条命令翻页（不逐作者、不做时间窗口）。
+
+    返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
+    from scripts import import_f2_downloads as f2
+
+    if not like_user:
+        raise RuntimeError(
+            "未配置「我的主页链接」：点赞列表只有本人可见，"
+            "请先在「我的喜欢」卡片里填写你的抖音主页链接"
+        )
+    fetch_summary["total"] = 1
+    # 点赞总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
+    # 进度条由 watcher 按耗时给软进度。
+    # 增量模式（like_max_counts>0）另有作用：翻页量有上界，不会再出现「零新增却
+    # 空翻到底、进度条长时间停在 0」。
+    task.total = 0
+    task.done = 0
+    task.result = {**opts, "stage": "download", "like_max_counts": like_max_counts}
+    task.updated_at = utcnow()
+    await db.commit()
+
+    like_root = f2.DEFAULT_F2_LIKE_ROOT
+    baseline = await asyncio.to_thread(f2.download_tree_stats, like_root)
+    fetch_task = asyncio.create_task(
+        asyncio.to_thread(
+            f2.run_fetch_likes,
+            f2_dir,
+            like_user,
+            f2_dir / "Download",
+            max_counts=like_max_counts,
+        )
+    )
+    outcome, final_stats = await _watch_like_download(
+        db, task, fetch_task, like_root, baseline, opts
+    )
+    if outcome.get("error"):
+        raise RuntimeError(str(outcome["error"]))
+    fetch_summary["ok"] = int(outcome.get("ok") or 0)
+    fetch_summary["failed"] = int(outcome.get("failed") or 0)
+    fetch_summary["like_user"] = f2.like_user_url(like_user)
+    fetch_summary["like_max_counts"] = like_max_counts
+    fetch_summary["cmd"] = (
+        outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
+    )
+    # 本次下载的真实产出（文件数 / 体积）：入库阶段的 plan 只讲「有多少要入库」，
+    # 这个字段回答「下载期到底拉回来多少」——全部被去重挡掉时也看得见
+    fetch_summary["downloaded"] = {
+        "files": final_stats["files"],
+        "bytes": final_stats["bytes"],
+        "added": max(0, final_stats["files"] - baseline["files"]),
+        "added_bytes": max(0, final_stats["bytes"] - baseline["bytes"]),
+    }
+    download_result = {
+        **opts,
+        "stage": "download",
+        "fetch": fetch_summary,
+        "like_progress": fetch_summary["downloaded"],
+    }
+    task.done = 1
+    task.total = 1
+    task.progress = _PROGRESS_AFTER_DOWNLOAD
+    task.result = download_result
+    task.updated_at = utcnow()
+    await db.commit()
+
+    # 取消/暂停：与发布模式一致，立即收尾，不再做扫描与入库
+    if await _current_status(db, task.id) not in ("running", "pending"):
+        status_now = await _current_status(db, task.id)
+        task.result = download_result
+        task.status = status_now
+        task.updated_at = utcnow()
+        await db.commit()
+        logger.info(f"f2 拉取「我的喜欢」被中断（{status_now}）：已下载文件保留")
+        return True
+    if fetch_summary["failed"]:
+        task.result = download_result
+        await db.commit()
+        raise RuntimeError(
+            "f2 拉取「我的喜欢」失败（退出码非 0），常见原因：cookie 失效或被风控；"
+            "请先手动跑一次 f2 确认能下载，且 -u 填的是**你自己**的主页链接"
+        )
+    # 下载完成且未被中断：交给阶段 2 扫描入库
+    return False
+
+
+def _select_post_targets(
+    profiles: list[str],
+    known_authors: list[dict],
+    authors: set[str] | None,
+    fetch_limit: int | None,
+) -> list[dict]:
+    """阶段 1b 的目标选择：点名博主优先，否则走白名单（可再被 authors 收窄）。
+
+    两类「一个都下不了」的情况都**响亮失败**（见各 raise 的注释），不再出现
+    下载 0 个作者却报 success 的静默失败。"""
+    from scripts import import_f2_downloads as f2
+
+    if profiles:
+        # 按博主全量：**显式点名**的博主直接下，不要求它先出现在 f2 用户库里
+        # （f2 只认自己见过的账号，这正是那个限制的出口）。入库白名单同理，
+        # 不能用「已登记博主」那一套——用户已经点名了。
+        parsed = [(raw, f2.profile_author(raw)) for raw in profiles]
+        invalid = [raw for raw, author in parsed if author is None]
+        if invalid:
+            raise RuntimeError(
+                f"无法识别的博主：{'、'.join(invalid)}。"
+                "请填完整主页链接（https://www.douyin.com/user/MS4wLjABAAAA…）"
+                "或 sec_user_id；抖音号与 v.douyin.com 短链不支持"
+            )
+        targets = [author for _raw, author in parsed if author]
+        if not targets:
+            raise RuntimeError("按博主全量下载需要至少一个博主主页链接或 sec_user_id")
+    else:
+        targets = known_authors
+        wanted = {f2.normalize_author(a) for a in authors} if authors else None
+        if wanted is not None:
+            targets = [
+                a for a in targets if f2.normalize_author(a["nickname"]) in wanted
+            ]
+            # 点名的作者一个都不在 f2 用户库里 → 什么都下不了。**必须响亮失败**：
+            # 任务 351 就是这么静默过去的（请求「唐思瑶ya」不在 f2 用户库，
+            # 下载 0 个作者、入库 0，状态却是 success，用户看不出任何原因）。
+            if not targets:
+                available = sorted(a["nickname"] for a in known_authors)
+                raise RuntimeError(
+                    f"这些作者不在 f2 用户库里，无法下载：{'、'.join(sorted(wanted))}。"
+                    "f2 的下载目标只来自它自己的用户库（它只认见过的账号），"
+                    "所以要先让 f2 认识她们——改用卡片里的「按博主全量下载」"
+                    "（填博主主页链接即可，不需要 f2 事先认识），"
+                    "或先手动跑一次 f2 采她的主页。"
+                    + (
+                        f"当前 f2 认识 {len(available)} 个账号：{'、'.join(available[:10])}"
+                        f"{'…' if len(available) > 10 else ''}"
+                        if available
+                        else "当前 f2 用户库为空"
+                    )
+                )
+    if fetch_limit:
+        targets = targets[: int(fetch_limit)]
+
+    return targets
+
+
+async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targets: list[dict],
+                   profiles: list[str], since_days: int, f2_dir: Path,
+                   fetch_summary: dict) -> bool:
+    """阶段 1b：发布模式——逐作者串行下载（子进程放线程）。
+
+    返回 True 表示任务已被取消/暂停（已落库，调用方直接返回）。"""
+    from scripts import import_f2_downloads as f2
+
+    fetch_summary["total"] = len(targets)
+    task.total = len(targets)
+    task.done = 0
+    await db.commit()
+
+    # 日期窗口：按作者目录的最近下载时间逐作者计算（见 compute_fetch_interval）。
+    # 不给窗口时 f2 会把作者全部历史翻一遍且每页固定 sleep 一次 timeout。
+    # 新博主（无论点名还是首次）没有本地记录 → 该函数给 `all`，即全量。
+    post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
+    last_download = await asyncio.to_thread(f2.author_last_download, post_root)
+
+    for index, author in enumerate(targets, 1):
+        if await _current_status(db, task.id) not in ("running", "pending"):
+            fetch_summary["aborted"] = True
+            break
+        display = f2.profile_display(author)
+        last_at = last_download.get(f2.normalize_author(author["nickname"] or ""))
+        # 点名博主用 compute_profile_interval：**首次全量**（否则只拿到最近
+        # since_days 天，用户以为下全了其实没有）
+        interval = (
+            f2.compute_profile_interval(since_days, last_at)
+            if profiles
+            else f2.compute_fetch_interval(since_days, last_at)
+        )
+        cmd = f2.build_f2_command(
+            author, download_root=f2_dir / "Download", interval=interval
+        )
+        logger.info(f"f2 下载 {display}（窗口 {interval}）")
+        try:
+            rc = await asyncio.to_thread(_run_subprocess, cmd, f2_dir)
+        except Exception as exc:  # noqa: BLE001 —— 单作者失败不阻断整批
+            rc = -1
+            logger.warning(f"f2 调用异常（{display}）：{exc}")
+        if rc == 0:
+            fetch_summary["ok"] += 1
+        else:
+            fetch_summary["failed"] += 1
+            logger.warning(f"f2 下载失败（{display}）退出码 {rc}，跳过该作者")
+        task.done = index
+        task.progress = int(_PROGRESS_AFTER_DOWNLOAD * index / max(1, len(targets)))
+        task.updated_at = utcnow()
+        await db.commit()
+
+    # 用户取消/暂停：立即结束，不再做扫描与入库——扫描是重活（全量约 81 秒），
+    # 中断后继续跑纯属浪费，还会让「取消」看起来迟迟不生效。已下载的文件留在
+    # f2 目录，恢复/重跑时增量下载与内容判重会自动跳过它们。
+    if fetch_summary["aborted"]:
+        status_now = await _current_status(db, task.id)
+        task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+        task.status = status_now
+        task.updated_at = utcnow()
+        await db.commit()
+        logger.info(
+            f"f2 下载被中断（{status_now}）：已完成 "
+            f"{fetch_summary['ok']}/{fetch_summary['total']} 个作者，已下载文件保留"
+        )
+        return True
+
+    # 全部作者都失败（cookie 失效 / 风控）时不能算成功：用户会从任务中心
+    # 看到「成功 0 下载」而不知情。落一次 result 后抛错，让任务显式失败。
+    if fetch_summary["total"] and fetch_summary["ok"] == 0:
+        task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+        await db.commit()
+        raise RuntimeError(
+            f"f2 下载全部失败（{fetch_summary['failed']}/{fetch_summary['total']} 个作者），"
+            "常见原因：cookie 失效或被风控；请先手动跑一次 f2 确认能下载。"
+            "若只想入库已下载的文件，请改用「仅入库」模式（fetch=False）"
+        )
+    return False
+
+
+async def _resolve_named_profile_keys(db: AsyncSession, task: TaskQueue, opts: dict,
+                            targets: list[dict], fetch_summary: dict,
+                            f2_dir: Path) -> set[str]:
+    """点名博主的昵称反查（决定本次入库范围）。
+
+    下单后 f2 已把新账号写进用户库，此时才能按 sec_user_id 反查昵称——入库白名单
+    是按**归一化昵称**匹配的，缺了它就会「下载成功、入库 0」。反查不到任何昵称说明
+    这批博主没下成：响亮失败，而不是报成功 + 入库 0。"""
+    from scripts import import_f2_downloads as f2
+
+    resolved = await asyncio.to_thread(
+        f2.resolve_profile_nicknames,
+        f2_dir,
+        [str(a.get("sec_user_id") or "") for a in targets],
+    )
+    keys = {f2.normalize_author(n) for n in resolved.values() if n}
+    fetch_summary["profiles"] = [
+        {
+            "sec_user_id": sec,
+            "nickname": resolved.get(sec, ""),
+            "url": f"https://www.douyin.com/user/{sec}",
+        }
+        for sec in (str(a.get("sec_user_id") or "") for a in targets)
+    ]
+    if not keys:
+        task.result = {**opts, "stage": "download", "fetch": fetch_summary}
+        task.progress = _PROGRESS_AFTER_DOWNLOAD
+        await db.commit()
+        raise RuntimeError(
+            "这些博主一个都没下成，因此没有可入库的产物。"
+            "常见原因：cookie 失效（f2 下载需要登录态，且项目不传 "
+            "--auto-cookie，用的是 f2 配置里的 cookie）、主页链接/账号有误，"
+            "或被风控。请先手动跑一次 "
+            "`python -m f2 dy -u <主页链接> -M post -i all` 确认能下载"
+        )
+    # 点名博主的产物就是本次的入库范围（不再套「已登记博主」白名单）
+    return keys
+
+
+async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bloggers: dict,
+                     plan_authors: set[str] | None, limit: int | None, skip_live: bool,
+                     like_mode: bool, fetch_summary: dict) -> list:
+    """阶段 2：扫描下载目录 + 去重计划（放线程，否则阻塞 worker 事件循环）。
+
+    无可入库文件时本函数直接落「done」结果并返回空列表，调用方据此收工。"""
+    from scripts import import_f2_downloads as f2
+
     scan_root = f2.DEFAULT_F2_LIKE_ROOT if like_mode else f2.DEFAULT_F2_ROOT
     # 扫描 + 去重是重活（大目录分钟级），单独标一个阶段：否则界面在下载结束到入库
     # 开始的这段窗口里还停在「下载中」的文案上，看起来像卡住
@@ -920,9 +1017,17 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         }
         task.updated_at = utcnow()
         await db.commit()
-        return
+        return []
+    return to_import
 
-    # ── 阶段 3：入库（同步 sqlite 放线程；进度回调 + 状态检查）──
+
+async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list,
+                    make_thumbnails: bool) -> tuple[dict, dict]:
+    """阶段 3：入库（同步 sqlite 放线程；进度 watcher + 状态检查）。
+
+    返回 (apply_import 结果, 进度 holder)。"""
+    from scripts import import_f2_downloads as f2
+
     holder = {"done": 0, "total": len(to_import), "stop": False}
     finished = asyncio.Event()
 
@@ -973,16 +1078,14 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     finally:
         finished.set()
         await watcher
+    return result, holder
 
-    status_now = await _current_status(db, task.id)
-    interrupted = status_now in ("cancelled", "paused")
 
-    # ── 阶段 3b：「我的喜欢」补登记来源作者博主 ──
-    # 点赞列表天然跨作者，入库时大部分素材的作者在博主库里没有记录（实测 585 个
-    # 原作者里只有 20 个已登记），素材归属会空着。这一步把未登记的来源作者补建成
-    # 抖音博主并绑定本批素材（标记为「自动登记」：算博主但**不进下载白名单**，
-    # 避免下次一键获取突然去翻几百个主页）。
-    # 位置放在入库之后：清单里才有 inspiration_id 与作者；失败不影响已入库素材。
+async def _register_like_bloggers_stage(db: AsyncSession, task: TaskQueue, result: dict,
+                              like_mode: bool, register_bloggers: bool) -> dict | None:
+    """阶段 3b：「我的喜欢」补登记来源作者博主（失败不影响已入库素材）。"""
+    from scripts import import_f2_downloads as f2
+
     bloggers_stats: dict | None = None
     if like_mode and register_bloggers and result.get("batch_file"):
         task.result = {**task.result, "stage": "blogger"}
@@ -1005,6 +1108,13 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             bloggers_stats = None
             task.error = f"来源作者博主自动登记失败（素材已入库，可在结果面板手工重试）：{exc}"
             logger.warning(f"f2 自动登记博主失败：{exc}")
+    return bloggers_stats
+
+
+async def _finalize_import(db: AsyncSession, task: TaskQueue, result: dict, holder: dict,
+                 bloggers_stats: dict | None, interrupted: bool,
+                 status_now: str) -> None:
+    """收尾：写终态与结果（被中断时尊重外部状态，不覆盖为 success）。"""
 
     task.result = {
         **task.result,
@@ -1032,3 +1142,4 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         )
     await db.commit()
     logger.info(f"f2 导入完成：入库 {result['imported']}，失败 {result['failed']}")
+
