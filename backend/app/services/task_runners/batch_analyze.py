@@ -134,16 +134,35 @@ async def _resolve_analysis_frames(
     return []
 
 
+async def _resolve_frames_for(
+    db: AsyncSession, inspiration_id: str
+) -> list[str]:
+    """分析前按需解析某素材的分析帧（懒抽帧入口）。
+
+    加载阶段只登记视频、不抽帧，真正进入分析批次时才调用本函数；返回空列表
+    表示分析源不可用（素材已删/ffmpeg 提取失败），调用方计入 unavailable。
+    """
+    insp = await db.get(Inspiration, inspiration_id)
+    if insp is None:
+        return []
+    return await _resolve_analysis_frames(
+        db, inspiration_id, insp.file_path, insp.media_type
+    )
+
+
 async def _load_pending_items(
     db: AsyncSession,
     inspiration_ids: list[str],
     skip_analyzed: bool = True,
     exclude_inflight: set[str] | None = None,
-) -> tuple[list[tuple[str, str]], int, int]:
+) -> tuple[list[tuple[str, list[str] | None]], int, int]:
     """加载仍存在的图片/视频素材，并跳过已有成功分析日志的（崩溃恢复幂等）。
 
-    视频素材解析第一关键帧为分析源；关键帧提取失败的素材计入 unavailable
-    （不进入分析、不算失败——ffmpeg 系统性故障时任务不该整体重试）。
+    **视频素材这里只登记、不抽帧**（帧列表返回 None，由执行器在进入分析批次时
+    按需抽取，见 _resolve_frames_for）。原先在加载阶段对全部视频逐个跑 ffmpeg，
+    实测 1753 个视频要一小时上下，期间：进度恒为 0%、一条分析日志都不写、
+    取消与暂停都要等这段跑完——用户看到的就是「跑了十几分钟没有任何产出且停不掉」。
+    改为按需抽取后，第一个素材（尤其是图片）几秒内就开始出标签与进度。
 
     skip_analyzed=False（失败重试任务）：不跳过已有成功日志的素材——用户
     显式对历史失败记录重试，期望重新分析该素材（可能历史上成功过但最近失败）。
@@ -151,7 +170,9 @@ async def _load_pending_items(
     exclude_inflight：已被其它未完成 batch/multi 任务认领的素材 ID 集合，
     从本任务剔除，避免并发批处理重复分析同一素材。
 
-    返回 (待分析 (id, 帧路径列表) 列表, 已分析跳过数量, 关键帧不可用数量)。
+    返回 (待分析 (id, 帧路径列表或 None) 列表, 已分析跳过数量, 关键帧不可用数量)。
+    第三个返回值恒为 0：不可用素材改为在分析阶段统计（见 execute_batch_analyze），
+    保留三元组形状以免调用方解包处连锁改动。
     """
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.media_type).where(
@@ -161,7 +182,7 @@ async def _load_pending_items(
     )
     rows = result.all()
     row_map = {r[0]: (r[1], r[2]) for r in rows}
-    items: list[tuple[str, list[str]]] = []
+    items: list[tuple[str, list[str] | None]] = []
     unavailable = 0
     for iid in inspiration_ids:
         if iid not in row_map:
@@ -170,12 +191,12 @@ async def _load_pending_items(
         if exclude_inflight and iid in exclude_inflight:
             continue
         fp, mt = row_map[iid]
-        frames = await _resolve_analysis_frames(db, iid, fp, mt)
-        if not frames:
-            unavailable += 1
-            logger.warning(f"素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
-            continue
-        items.append((iid, frames))
+        if mt == "video":
+            # 视频：只登记，抽帧推迟到该素材进入分析批次时（懒抽帧）
+            items.append((iid, None))
+        else:
+            # 图片：分析源就是原图本身，无需任何预处理
+            items.append((iid, [fp]))
 
     # 跳过「已有成功标签分析日志」的素材，避免重跑时对前 N 张再次调用 Ollama
     # （崩溃恢复/暂停续算的幂等基础）。失败重试任务（skip_analyzed=False）不跳过。
@@ -209,8 +230,12 @@ def _raise_if_all_failed(
 
     采用宽松判定：只要存在可恢复错误的失败样本，就按可恢复处理（Ollama 瞬时故障时
     不同图片可能报不同错误，若要求「全部可恢复」才会被误判为永久失败、放弃重试）。
+
+    ``failed_items`` 为空（无一例真正进入分析——例如本批全是关键帧提取失败、
+    已在执行器内计入 unavailable 的视频）视为「没有失败样本」，直接返回，
+    避免下面取 ``failed_items[0]`` 越界。
     """
-    if task_total == 0 or success_count > 0:
+    if task_total == 0 or success_count > 0 or not failed_items:
         return
     if recoverable_failed:
         sample = failed_items[0][1] or "未知错误"
@@ -249,6 +274,10 @@ async def _inflight_excluding(db: AsyncSession, task_id: int) -> set[str]:
 
 async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     """执行批量分析任务：逐张调用 AI 分析并维护任务进度（由 worker 调用）。
+
+    视频素材的关键帧在**该素材进入分析批次时**才抽取（懒抽帧），不做「先抽完
+    全部视频再开始分析」的前置阶段——否则大任务会出现长时间 0% 且无任何标签、
+    取消/暂停也要等抽帧跑完才能生效。
 
     参数:
         db: 任务生命周期会话（用于更新任务进度与状态）
@@ -295,8 +324,20 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
 
     for start in range(0, len(items), concurrency):
         chunk = items[start:start + concurrency]
+        # 懒抽帧：本批次里 frames 为 None 的视频此时才抽关键帧（加载阶段不抽）。
+        # 抽帧失败（文件缺失/ffmpeg 报错）计入 unavailable 并跳过，不算分析失败
+        # ——ffmpeg 系统性故障时任务不该整体重试。
+        resolvable: list[tuple[str, list[str]]] = []
+        for iid, frames in chunk:
+            if frames is None:
+                frames = await _resolve_frames_for(db, iid)
+                if not frames:
+                    unavailable += 1
+                    logger.warning(f"素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
+                    continue
+            resolvable.append((iid, frames))
         results = await asyncio.gather(
-            *(_analyze_one(sem, iid, frames) for iid, frames in chunk)
+            *(_analyze_one(sem, iid, frames) for iid, frames in resolvable)
         )
         for iid, ok, err in results:
             if ok:
@@ -315,8 +356,8 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
             f"批量分析进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
 
-        # 状态检查：外部可能把任务从 running 改成 paused（暂停）或 pending
-        # （暂停后立即恢复的重置）。两者都意味着「本执行实例应停止」——
+        # 状态检查：外部可能把任务从 running 改成 paused（暂停）、cancelled（取消）
+        # 或 pending（暂停后立即恢复的重置）。三者都意味着「本执行实例应停止」——
         # 只认 paused 会漏掉 pause→resume 竞态窗口：用户暂停后 worker 尚未
         # 感知前就恢复，任务已变回 pending，若执行器继续跑，会出现「任务在跑
         # 但状态是 pending、无暂停按钮且无法暂停」的卡死表现。故只要不再是
@@ -409,13 +450,14 @@ async def _load_items(
     db: AsyncSession,
     inspiration_ids: list[str],
     exclude_inflight: set[str] | None = None,
-) -> list[tuple[str, list[str]]]:
-    """加载仍存在的图片/视频素材，返回 (素材 ID, 分析源帧路径列表)。
+) -> list[tuple[str, list[str] | None]]:
+    """加载仍存在的图片/视频素材，返回 (素材 ID, 分析源帧路径列表或 None)。
 
     与单模型批量分析不同：组合分析允许对已分析过的素材重复分析
     （对比不同模型/提示词正是核心诉求），因此不做「已分析跳过」；
     幂等恢复改为按「组合 × 素材」粒度判断（见 _load_done_ids）。
-    视频素材解析采样关键帧列表（提取失败的素材跳过并记日志）。
+    与批量分析同样**不在加载阶段给视频抽帧**（帧列表为 None，进入分析批次时
+    才按需抽取），避免分析开始前长时间 0% 无产出。
 
     exclude_inflight：已被其它未完成 batch/multi 任务认领的素材 ID，
     从本任务剔除，避免并发批处理重复分析。
@@ -428,7 +470,7 @@ async def _load_items(
     )
     rows = result.all()
     row_map = {r[0]: (r[1], r[2]) for r in rows}
-    items: list[tuple[str, list[str]]] = []
+    items: list[tuple[str, list[str] | None]] = []
     for iid in inspiration_ids:
         if iid not in row_map:
             continue
@@ -436,11 +478,8 @@ async def _load_items(
         if exclude_inflight and iid in exclude_inflight:
             continue
         fp, mt = row_map[iid]
-        frames = await _resolve_analysis_frames(db, iid, fp, mt)
-        if not frames:
-            logger.warning(f"组合分析素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
-            continue
-        items.append((iid, frames))
+        # 视频只登记不抽帧（懒抽帧）；图片的分析源就是原图本身
+        items.append((iid, None if mt == "video" else [fp]))
     return items
 
 
@@ -592,10 +631,22 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
 
         for start in range(0, len(todo), concurrency):
             chunk = todo[start:start + concurrency]
+            # 懒抽帧：视频素材在本批次才抽关键帧（加载阶段不抽）；抽帧失败的
+            # 素材跳过并记日志，不阻断其它组合项
+            resolvable: list[tuple[str, list[str]]] = []
+            for iid, frames in chunk:
+                if frames is None:
+                    frames = await _resolve_frames_for(db, iid)
+                    if not frames:
+                        logger.warning(
+                            f"组合分析素材分析源不可用（视频关键帧提取失败），跳过: {iid}"
+                        )
+                        continue
+                resolvable.append((iid, frames))
             results = await asyncio.gather(
                 *(
                     _analyze_one_multi(sem, iid, frames, model_name, prompt, apply_tags)
-                    for iid, frames in chunk
+                    for iid, frames in resolvable
                 )
             )
             for iid, combo_model, ok, err in results:
@@ -630,7 +681,9 @@ async def execute_multi_analyze(db: AsyncSession, task: TaskQueue) -> None:
             f"({task.done}/{task.total})，当前组合 {model_name} × {prompt_label}"
         )
 
-    if task.total and success_count == 0:
+    # 全部组合项都因分析源不可用被跳过时 failed_items 为空，不构成「全部失败」
+    # （下面还要取 failed_items[0] 作为样例），直接落完成态
+    if task.total and success_count == 0 and failed_items:
         if recoverable_failed:
             sample = failed_items[0][2] or "未知错误"
             raise RecoverableTaskError(

@@ -124,7 +124,8 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 行级取消任务（pending 取消=删除记录；running 分析类不支持硬取消则后端提示） */
+  /** 行级取消任务（pending 取消=删除记录；running 的批量/组合分析等支持运行中取消，
+   *  标记 cancelled 停止执行，已产出的分析日志与标签全部保留） */
   async function cancelTaskById(taskId: number) {
     try {
       const { data } = await apiClient.post<{ message?: string; deleted?: boolean }>(

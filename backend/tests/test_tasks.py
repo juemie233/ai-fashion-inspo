@@ -86,8 +86,12 @@ async def test_cancel_non_pending_task_rejected(client):
 
 
 async def test_cancel_running_task_rejected(client):
-    """取消执行中的普通任务 → 400（不硬打断、不删除）。"""
-    tid = await _add_task(status="running")
+    """取消执行中的普通任务 → 400（不硬打断、不删除）。
+
+    用 deduplicate（不在运行中可取消白名单内）验证拒绝分支——批量/组合分析
+    已纳入白名单，见下方两个用例。
+    """
+    tid = await _add_task(status="running", type_="deduplicate")
 
     r = client.post(f"/api/tasks/{tid}/cancel")
     assert r.status_code == 400, r.text
@@ -103,6 +107,21 @@ async def test_cancel_running_face_scan_still_cancelled(client):
     body = r.json()
     assert body["deleted"] is False
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "cancelled"
+
+
+async def test_cancel_running_batch_analyze_cancelled(client):
+    """运行中的批量分析可取消 → 标记 cancelled（记录保留，执行器下个批次边界停止）。
+
+    全库级批量分析动辄跑数十小时，没有取消入口时用户只能干等；已产出的
+    分析日志与标签保留，重新「分析未分析」即可幂等续算。
+    """
+    for task_type in ("batch_analyze", "multi_analyze"):
+        tid = await _add_task(status="running", type_=task_type)
+
+        r = client.post(f"/api/tasks/{tid}/cancel")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"] is False
+        assert client.get(f"/api/tasks/{tid}").json()["status"] == "cancelled"
 
 
 async def test_cancel_again_after_delete_returns_404(client):
@@ -396,3 +415,126 @@ async def test_execute_batch_analyze_returns_when_status_changed_to_pending(clie
         assert row.status == "pending"
         assert row.done == 1
         assert row.progress == 50
+
+
+async def test_load_pending_items_defers_video_keyframes(client, upload, monkeypatch):
+    """加载阶段不为视频抽帧（懒抽帧）：帧列表返回 None，ffmpeg 留到分析批次再跑。
+
+    回归背景：原先加载阶段对全部视频逐个抽关键帧，实测 1753 个视频要一小时上下，
+    这段时间进度恒为 0%、一条分析日志都不写、取消与暂停都无从生效——用户看到的
+    就是「跑了十几分钟没有任何产出且停不掉」。
+    """
+    from app.models.inspiration import Inspiration
+    from app.services.task_runners import batch_analyze as runner
+
+    img_id = upload().json()["id"]
+    vid_id = upload().json()["id"]
+    async with async_session() as db:
+        await db.execute(
+            update(Inspiration).where(Inspiration.id == vid_id).values(media_type="video")
+        )
+        await db.commit()
+
+    extracted: list[str] = []
+
+    async def _spy(db_, iid, fp, mt):
+        extracted.append(iid)
+        return ["keyframes/x/frame_001.jpg"]
+
+    monkeypatch.setattr(runner, "_resolve_analysis_frames", _spy)
+
+    async with async_session() as db:
+        items, already, unavailable = await runner._load_pending_items(db, [img_id, vid_id])
+
+    assert extracted == []  # 加载阶段一次抽帧都不做
+    assert already == 0
+    assert unavailable == 0
+    frames_by_id = dict(items)
+    assert len(frames_by_id[img_id] or []) == 1  # 图片：分析源就是原图
+    assert frames_by_id[vid_id] is None  # 视频：登记为待抽帧
+
+
+async def test_execute_batch_analyze_resolves_video_frames_lazily(client, monkeypatch):
+    """执行器在视频进入分析批次时才抽帧，并把抽到的帧交给分析函数。"""
+    from app.services.task_runners import batch_analyze as runner
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="batch_analyze", status="running", progress=0, total=1, done=0,
+            result={"inspiration_ids": ["vid-1"]}, max_retries=2,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        tid = task.id
+
+    monkeypatch.setattr(runner, "_analyze_concurrency", lambda: 1)
+
+    async def _fake_load(db, inspiration_ids, skip_analyzed=True, exclude_inflight=None):
+        return [("vid-1", None)], 0, 0  # 视频：加载阶段帧列表为 None
+
+    monkeypatch.setattr(runner, "_load_pending_items", _fake_load)
+
+    async def _fake_resolve(db, iid):
+        assert iid == "vid-1"
+        return ["keyframes/vid-1/frame_001.jpg"]
+
+    monkeypatch.setattr(runner, "_resolve_frames_for", _fake_resolve)
+
+    seen: list[list[str]] = []
+
+    async def _fake_analyze_one(sem, iid, frames):
+        seen.append(frames)
+        return iid, True, None
+
+    monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        await runner.execute_batch_analyze(db, task)
+        assert task.progress == 100
+        assert task.result["success_count"] == 1
+        assert task.result["unavailable"] == 0
+
+    assert seen == [["keyframes/vid-1/frame_001.jpg"]]
+
+
+async def test_execute_batch_analyze_counts_unavailable_video(client, monkeypatch):
+    """抽帧失败的视频计入 unavailable 并跳过：不算分析失败，也不误报「全部失败」。"""
+    from app.services.task_runners import batch_analyze as runner
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="batch_analyze", status="running", progress=0, total=1, done=0,
+            result={"inspiration_ids": ["vid-bad"]}, max_retries=2,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        tid = task.id
+
+    monkeypatch.setattr(runner, "_analyze_concurrency", lambda: 1)
+
+    async def _fake_load(db, inspiration_ids, skip_analyzed=True, exclude_inflight=None):
+        return [("vid-bad", None)], 0, 0
+
+    monkeypatch.setattr(runner, "_load_pending_items", _fake_load)
+
+    async def _fake_resolve(db, iid):
+        return []  # ffmpeg 无帧产出
+
+    monkeypatch.setattr(runner, "_resolve_frames_for", _fake_resolve)
+
+    async def _fake_analyze_one(sem, iid, frames):  # pragma: no cover - 不应被调用
+        raise AssertionError("分析源不可用的素材不应进入分析")
+
+    monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, tid)
+        await runner.execute_batch_analyze(db, task)
+        # 全部素材都不可用时不再抛「全部失败」（failed_items 为空，此前会越界）
+        assert task.progress == 100
+        assert task.result["unavailable"] == 1
+        assert task.result["success_count"] == 0
+        assert task.result["failed_count"] == 0

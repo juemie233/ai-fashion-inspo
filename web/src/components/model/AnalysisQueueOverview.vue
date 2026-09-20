@@ -154,6 +154,15 @@ function taskTypeLabel(type: string): string {
             v-if="task.status === 'running'"
             size="mini"
             type="outline"
+            status="danger"
+            @click="emit('cancelTask', task)"
+          >
+            取消
+          </a-button>
+          <a-button
+            v-if="task.status === 'running'"
+            size="mini"
+            type="outline"
             status="warning"
             @click="emit('pauseTask', task)"
           >

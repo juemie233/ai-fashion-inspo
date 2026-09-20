@@ -63,12 +63,12 @@ const alertStub = defineComponent({
 })
 
 /** 按未分析数量挂载队列总览（总数为「已分析 100 + 未分析 N」，保证统计自洽） */
-function mountOverview(unanalyzed: number): VueWrapper {
+function mountOverview(unanalyzed: number, analysisTasks: unknown[] = []): VueWrapper {
   return mount(AnalysisQueueOverview, {
     props: {
       queueStats: { total: 100 + unanalyzed, analyzed: 100, unanalyzed, failed: 0 },
       batchAnalyzing: false,
-      analysisTasks: [],
+      analysisTasks: analysisTasks as never,
       activeAnalyses: {},
       pendingQueue: [],
       queuePaused: false,
@@ -80,9 +80,29 @@ function mountOverview(unanalyzed: number): VueWrapper {
         'a-progress': progressStub,
         'a-card': cardStub,
         'a-alert': alertStub,
+        StatusTag: true,
       },
     },
   })
+}
+
+/** 一条运行中的批量分析任务（用于验证行内「取消 / 暂停」入口） */
+function runningTask() {
+  return {
+    id: 7,
+    type: 'batch_analyze',
+    status: 'running',
+    progress: 0,
+    total: 18259,
+    done: 0,
+    result: null,
+    error: null,
+    retry_count: 0,
+    max_retries: 2,
+    next_retry_at: null,
+    created_at: '2026-09-20T01:13:25Z',
+    updated_at: '2026-09-20T01:28:00Z',
+  }
 }
 
 /** 「分析 N 个」按钮（与「分析全部未分析」按钮区分：后者文案里没有「个」） */
@@ -129,5 +149,32 @@ describe('AnalysisQueueOverview · 按指定数量分析', () => {
     const button = countButton(wrapper)
     expect(button.attributes('disabled')).toBeDefined()
     expect(button.text().trim()).toBe('无可分析素材')
+  })
+})
+
+describe('AnalysisQueueOverview · 运行中任务的取消入口', () => {
+  /** 按文案定位按钮 */
+  function buttonByText(wrapper: VueWrapper, text: string) {
+    return wrapper.findAll('button').find((b) => b.text().trim() === text)!
+  }
+
+  it('运行中的任务同时提供「取消」与「暂停」，取消发出 cancelTask', async () => {
+    const wrapper = mountOverview(300, [runningTask()])
+
+    const cancel = buttonByText(wrapper, '取消')
+    expect(cancel).toBeTruthy()
+    expect(buttonByText(wrapper, '⏸ 暂停')).toBeTruthy()
+
+    await cancel.trigger('click')
+    expect(wrapper.emitted('cancelTask')?.[0]?.[0]).toMatchObject({
+      id: 7,
+      status: 'running',
+    })
+  })
+
+  it('取消按钮不只出现在 pending 行（运行中也能取消，不再只能干等）', () => {
+    const wrapper = mountOverview(300, [runningTask()])
+    const cancelButtons = wrapper.findAll('button').filter((b) => b.text().trim() === '取消')
+    expect(cancelButtons).toHaveLength(1)
   })
 })

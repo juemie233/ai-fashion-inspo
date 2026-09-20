@@ -19,8 +19,19 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # 人脸扫描/匹配任务耗时较长（分钟级），用户需要能随时中断（增量语义下
 # 重跑自动跳过已扫部分，中断无副作用）；标签网络分析支持暂停/恢复（断点续算）；
 # f2 一键获取素材同样可中断：下载阶段逐作者、入库阶段每文件都检查任务状态，
-# 取消后已下载文件与已入库素材都保留（见 execute_f2_import）；其余类型任务不硬打断。
-_CANCELABLE_RUNNING_TYPES = ("face_scan", "face_match", "tag_network_analyze", "f2_import")
+# 取消后已下载文件与已入库素材都保留（见 execute_f2_import）；
+# 批量/组合分析（AI 标签分析）同样可中断：执行器每个批次边界检查任务状态，
+# 已写入的分析日志与标签全部保留，取消后重新「分析未分析」即可续算
+# （已有成功日志的素材会被跳过）。全库级批量动辄跑数十小时，没有取消入口
+# 用户只能干等——「无法取消」与「暂停也要等当前批次跑完」是明确的产品缺陷。
+_CANCELABLE_RUNNING_TYPES = (
+    "face_scan",
+    "face_match",
+    "tag_network_analyze",
+    "f2_import",
+    "batch_analyze",
+    "multi_analyze",
+)
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
 # 标签网络分析（断点续算）；批量/组合分析（AI 标签分析的核心批量路径，由
@@ -88,8 +99,9 @@ async def cancel_task(
     - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
       ``task_queue`` 表中直接移除，不保留）。
     - ``running`` 且类型在 :data:`_CANCELABLE_RUNNING_TYPES` 内（人脸扫描/匹配、
-      标签网络分析、f2 一键获取素材）：标记为 cancelled（运行中取消的既有能力，
-      记录保留；执行器每批/每文件检查后自行停止）。
+      标签网络分析、f2 一键获取素材、批量/组合分析）：标记为 cancelled（运行中取消
+      的既有能力，记录保留；执行器每批/每文件检查后自行停止，已产出的分析日志与
+      标签全部保留）。
     - 其余状态（success/failed/cancelled 及不可运行中取消的 running 类型）：
       返回 400，记录保持不变。
 
