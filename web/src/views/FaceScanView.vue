@@ -9,29 +9,27 @@
  */
 
 import { Message } from '@arco-design/web-vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { IconLock } from '@arco-design/web-vue/es/icon'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
-  fetchFaceClusterDetections,
-  fetchFaceClusterGroups,
-  fetchFaceClusterTask,
   fetchFaceScanResults,
   fetchFaceScanTask,
-  runFaceCluster,
   runFaceMatch,
   startFaceScan,
   type DetectionItem,
   type FaceClusterGroup,
-  type FaceClusterGroups,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
 import { getFileUrl } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
+import { pollTaskUntilIdle } from '@/utils/taskPollUntilIdle'
+import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
+import { usePolling } from '@/composables/usePolling'
 import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 
@@ -45,7 +43,6 @@ const autoMatch = ref(false)
 const starting = ref(false)
 const cancelling = ref(false)
 const matching = ref(false)
-let pollTimer: number | null = null
 
 /** 是否有任务在运行（决定轮询与按钮态）；
  *  聚类任务状态（clusterTask）声明于下方聚类区，computed 惰性求值无时序问题 */
@@ -118,19 +115,19 @@ async function startMatch() {
   }
 }
 
-/** 轮询任务直到终态（3s 间隔；任务完成后刷新结果区） */
+/** 轮询扫描/匹配任务直到终态（3s 间隔；任务完成后刷新结果区） */
 async function pollUntilIdle(taskId: number) {
-  while (true) {
-    await new Promise((r) => setTimeout(r, 3000))
-    const status = await fetchFaceScanTask()
-    scanTask.value = status.scan_task
-    matchTask.value = status.match_task
-    const current = [status.scan_task, status.match_task].find((t) => t?.id === taskId)
-    if (!current || !['running', 'pending'].includes(current.status)) {
-      await refreshAll()
-      return
-    }
-  }
+  await pollTaskUntilIdle({
+    taskId,
+    intervalMs: 3000,
+    refresh: async () => {
+      const status = await fetchFaceScanTask()
+      scanTask.value = status.scan_task
+      matchTask.value = status.match_task
+      return [status.scan_task, status.match_task].find((t) => t?.id === taskId) ?? null
+    },
+    onIdle: refreshAll,
+  })
 }
 
 // ── 结果区：聚合（按人物）──
@@ -406,189 +403,34 @@ async function assignUnmatched() {
 }
 
 // ── 人脸聚合分组（未匹配人脸按疑似同一人聚类）──
-const clusterTask = ref<FaceScanTaskOut | null>(null)
-const clusterGroups = ref<FaceClusterGroup[]>([])
-const clusterTotal = ref(0)
-const clusterPage = ref(1)
-const clusterSummary = ref<FaceClusterGroups['summary']>(null)
-const clusterLoading = ref(false)
-const clustering = ref(false)
-// 展开的组：group_id → 明细分页状态
-const expandedGroupId = ref<number | null>(null)
-const groupDetailItems = ref<DetectionItem[]>([])
-const groupDetailTotal = ref(0)
-const groupDetailPage = ref(1)
-const groupDetailLoading = ref(false)
-const groupChecked = ref<Set<number>>(new Set())
-const groupActionBusy = ref(false)
-// 整组指派目标（复用未匹配区的人物选择器状态）
-const clusterAssignKind = ref<'blogger' | 'model'>('blogger')
-const clusterAssignPersonId = ref<number | undefined>(undefined)
-
-/** 拉取最近聚类任务状态 */
-async function loadClusterTask() {
-  try {
-    const { cluster_task } = await fetchFaceClusterTask()
-    clusterTask.value = cluster_task
-  } catch {
-    /* 静默：聚类未运行过时不报错 */
-  }
-}
-
-/** 开始人脸聚合聚类 */
-async function startCluster() {
-  clustering.value = true
-  try {
-    const { task_id, message } = await runFaceCluster()
-    Message.success(message)
-    await loadClusterTask()
-    void pollClusterUntilIdle(task_id)
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '创建聚类任务失败'))
-  } finally {
-    clustering.value = false
-  }
-}
-
-/** 轮询聚类任务直到终态，完成后刷新分组 */
-async function pollClusterUntilIdle(taskId: number) {
-  while (true) {
-    await new Promise((r) => setTimeout(r, 2000))
-    await loadClusterTask()
-    const current = clusterTask.value
-    if (!current || current.id !== taskId || !['running', 'pending'].includes(current.status)) {
-      await loadClusterGroups()
-      return
-    }
-  }
-}
-
-/** 加载聚合分组（分页） */
-async function loadClusterGroups() {
-  clusterLoading.value = true
-  try {
-    const data = await fetchFaceClusterGroups({ page: clusterPage.value, size: 20 })
-    clusterGroups.value = data.items
-    clusterTotal.value = data.total
-    clusterSummary.value = data.summary
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '加载聚合分组失败'))
-  } finally {
-    clusterLoading.value = false
-  }
-}
-
-/** 展开/收起某分组：加载组内人脸明细 */
-async function toggleGroupDetail(group: FaceClusterGroup) {
-  if (expandedGroupId.value === group.group_id) {
-    expandedGroupId.value = null
-    groupChecked.value = new Set()
-    return
-  }
-  expandedGroupId.value = group.group_id
-  groupChecked.value = new Set()
-  groupDetailPage.value = 1
-  await loadGroupDetail()
-}
-
-async function loadGroupDetail() {
-  if (expandedGroupId.value === null) return
-  groupDetailLoading.value = true
-  try {
-    const data = await fetchFaceClusterDetections(expandedGroupId.value, {
-      page: groupDetailPage.value,
-      size: 50,
-    })
-    groupDetailItems.value = data.items
-    groupDetailTotal.value = data.total
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '加载组内人脸失败'))
-  } finally {
-    groupDetailLoading.value = false
-  }
-}
-
-/** 整组指派给所选人物（复用 confirm 批量指派链路） */
-async function assignGroup(group: FaceClusterGroup) {
-  if (!clusterAssignPersonId.value) {
-    Message.warning('请选择要指派的人物')
-    return
-  }
-  const targetIds = group.detection_ids ?? []
-  if (targetIds.length === 0) {
-    Message.warning('该组没有可指派的人脸')
-    return
-  }
-  groupActionBusy.value = true
-  try {
-    const result = await confirmFaceScan(
-      'confirm',
-      targetIds.map((id) => ({
-        detection_id: id,
-        person_type: clusterAssignKind.value,
-        person_id: clusterAssignPersonId.value,
-      })),
-    )
-    Message.success(
-      `已整组指派 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
-    )
-    groupChecked.value.clear()
-    await Promise.all([loadClusterGroups(), loadUnmatched()])
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '整组指派失败'))
-  } finally {
-    groupActionBusy.value = false
-  }
-}
-
-/** 指派勾选的人脸给所选人物（部分选择后指定博主） */
-async function assignCheckedGroup() {
-  if (groupChecked.value.size === 0) {
-    Message.warning('请先勾选要指派的人脸')
-    return
-  }
-  if (!clusterAssignPersonId.value) {
-    Message.warning('请选择要指派的人物')
-    return
-  }
-  groupActionBusy.value = true
-  try {
-    const result = await confirmFaceScan(
-      'confirm',
-      [...groupChecked.value].map((id) => ({
-        detection_id: id,
-        person_type: clusterAssignKind.value,
-        person_id: clusterAssignPersonId.value,
-      })),
-    )
-    Message.success(
-      `已指派勾选 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
-    )
-    groupChecked.value.clear()
-    await Promise.all([loadClusterGroups(), loadUnmatched()])
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '指派勾选失败'))
-  } finally {
-    groupActionBusy.value = false
-  }
-}
-
-/** 全选当前组全部人脸（跨分页拉全量后勾选；非仅当前页） */
-async function selectAllGroup(group: FaceClusterGroup) {
-  const allIds = group.detection_ids ?? []
-  if (allIds.length === 0) {
-    Message.warning('该组没有可勾选的人脸')
-    return
-  }
-  groupChecked.value = new Set(allIds)
-  Message.success(`已全选该组 ${allIds.length} 张人脸`)
-}
-
-/** 清空当前组勾选 */
-function clearGroupChecked() {
-  groupChecked.value = new Set()
-}
-
+// 状态、请求与轮询全部搬到 useFaceClusterGroups（与扫描/匹配/审核链路解耦）；
+// 同名解构，模板无需改动。唯一的跨域依赖「指派后刷新未匹配区」以回调注入。
+const {
+  clusterTask,
+  clusterGroups,
+  clusterTotal,
+  clusterPage,
+  clusterLoading,
+  clustering,
+  expandedGroupId,
+  groupDetailItems,
+  groupDetailTotal,
+  groupDetailPage,
+  groupDetailLoading,
+  groupChecked,
+  groupActionBusy,
+  clusterAssignKind,
+  clusterAssignPersonId,
+  loadClusterTask,
+  startCluster,
+  loadClusterGroups,
+  toggleGroupDetail,
+  loadGroupDetail,
+  assignGroup,
+  assignCheckedGroup,
+  selectAllGroup,
+  clearGroupChecked,
+} = useFaceClusterGroups({ loadUnmatched: () => loadUnmatched() })
 // ── 汇总刷新 ──
 async function refreshAll() {
   await Promise.all([
@@ -608,21 +450,22 @@ async function reloadDetailIfOpen() {
 }
 
 // ── 生命周期 ──
+// 任务状态轮询：有任务在跑时每 3s 刷新一次。定时器句柄与卸载清理交给 usePolling
+// （原先手写的 window.setInterval + onBeforeUnmount(clearInterval) 正是它要替掉的骨架）。
+const { start: startTaskPolling } = usePolling({
+  intervalMs: 3000,
+  immediate: false, // 首帧由下面 onMounted 的 refreshTasks 负责，避免重复请求
+  callback: () => {
+    if (busy.value) void refreshTasks()
+  },
+})
+
 onMounted(async () => {
   await refreshTasks()
   await refreshAll()
   await loadClusterGroups()
   await loadAssignOptions()
-  pollTimer = window.setInterval(() => {
-    if (busy.value) void refreshTasks()
-  }, 3000)
-})
-
-onBeforeUnmount(() => {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer)
-    pollTimer = null
-  }
+  startTaskPolling()
 })
 
 /** 素材是否视频：media_type 为 video 时 file_path 是 mp4，不能当 <img> 加载 */
