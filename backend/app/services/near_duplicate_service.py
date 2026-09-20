@@ -50,6 +50,10 @@ BACKFILL_PER_SCAN = 300
 # 需数十分钟（实测 11,568 张大图约 27 分钟），压在一次请求里必然超时。
 # 剩余缺失由后台任务 phash_backfill（worker 执行，无请求超时约束）继续补齐。
 BACKFILL_TIME_BUDGET_SECONDS = 5.0
+# 分带倒排索引的最小带宽（位）。带宽 = 768 // (threshold+1)：阈值越大带越窄、桶越宽，
+# 候选集会膨胀到比簇数还宽（反而更慢）。低于此值时 `_group` 回退逐簇线性扫描。
+# 实测阈值 32（带宽 23）走索引：比较 2.82 亿 → 4.8 万、24 秒 → 0.6 秒。
+_MIN_BAND_WIDTH = 9
 
 
 async def _count_missing_phash(db: AsyncSession) -> int:
@@ -217,28 +221,112 @@ def _group(items: list[dict], threshold: int) -> list[dict]:
 
     只返回成员 ≥ 2 的组；每组计算保留建议（评分最高者，平局取创建更早）。
     哈希已预转为 int，距离比较直接 XOR + bit_count，避免反复解析 hex。
-    """
-    clusters: list[dict] = []
-    for item in items:
-        placed = False
-        for cluster in clusters:
-            if (cluster["rep_phash_int"] ^ item["phash_int"]).bit_count() <= threshold:
-                cluster["items"].append(item)
-                placed = True
-                break
-        if not placed:
-            clusters.append({"rep_phash_int": item["phash_int"], "items": [item]})
 
+    性能（2026-09 实测）：库内绝大多数图片互不相似（23,904 张 → 23,672 个簇，
+    只有 229 组 ≥2 成员），逐簇线性比较是 O(素材数 × 簇数)：实测 **2.82 亿次比较、
+    24 秒**（全库扫描接口因此要 29 秒，前端文案「秒级返回」是虚的）。这里改用
+    **分带倒排索引**（:func:`_group_banded`），把比较次数压到 4.8 万、24 秒 → 0.6 秒，
+    且分组结果与逐簇扫描**逐字节一致**（真实库 229 组全等，已用规范化 JSON 比对）。
+    阈值过大导致带宽过窄时（桶会退化得比簇数还宽）回退逐簇扫描，两条路径结果相同。
+    """
+    band_count = threshold + 1
+    band_width = 768 // band_count
+    if band_width >= _MIN_BAND_WIDTH:
+        members, reps = _group_banded(items, threshold, band_count, band_width)
+    else:
+        members, reps = _group_linear(items, threshold)
+    return _clusters_to_groups(members, reps)
+
+
+def _group_linear(
+    items: list[dict], threshold: int
+) -> tuple[list[list[dict]], list[int]]:
+    """逐簇线性扫描（原实现，作为分带索引的对照与退化回退）。
+
+    Returns:
+        ``(簇成员列表, 簇代表哈希)``，均按簇创建顺序。
+    """
+    members: list[list[dict]] = []
+    reps: list[int] = []
+    for item in items:
+        h = item["phash_int"]
+        for i, rep in enumerate(reps):
+            if (rep ^ h).bit_count() <= threshold:
+                members[i].append(item)
+                break
+        else:
+            reps.append(h)
+            members.append([item])
+    return members, reps
+
+
+def _group_banded(
+    items: list[dict], threshold: int, band_count: int, band_width: int
+) -> tuple[list[list[dict]], list[int]]:
+    """分带倒排索引版贪心分组：候选集只含「与本素材共享某个带」的簇。
+
+    为什么这样**不会漏**（鸽巢原理）：把 768 位哈希切成 k = threshold+1 个宽 w 的带，
+    两个哈希若有 d ≤ threshold 位不同，则最多污染 d 个带（每个被污染的带至少含 1 个
+    差异位），未被污染的带 ≥ k − d ≥ k − threshold = 1 —— 必然至少有一个带完全相同。
+    因此「共享至少一个带」是「距离 ≤ threshold」的必要条件，索引只会缩小候选集，
+    不会漏掉真正的匹配。
+
+    为什么结果与逐簇扫描一致：候选按**簇创建顺序**排序后逐个验距离，取第一个满足的；
+    没有候选 → 新开一簇。簇的创建顺序、代表哈希、成员归属因此与线性版完全相同。
+
+    索引条目数 = 簇数 × k（实测 23,672 × 33 ≈ 78 万条，峰值内存约 140 MB），
+    换来比较次数从 2.82 亿降到 4.8 万；带宽过窄时由调用方改用线性版。
+    """
+    mask = (1 << band_width) - 1
+    shifts = [b * band_width for b in range(band_count)]
+    index: dict[int, list[int]] = {}
+    members: list[list[dict]] = []
+    reps: list[int] = []
+
+    for item in items:
+        h = item["phash_int"]
+        # 每个带一个整型键：band_no << band_width | band_value（单 int 键比元组键省内存）
+        keys = [(b << band_width) | ((h >> shift) & mask) for b, shift in enumerate(shifts)]
+
+        candidates: list[int] = []
+        for key in keys:
+            bucket = index.get(key)
+            if bucket is not None:
+                candidates.extend(bucket)
+
+        best = -1
+        if candidates:
+            # 按簇创建顺序取第一个真正满足距离的（与线性扫描的语义一致）
+            for i in sorted(set(candidates)):
+                if (reps[i] ^ h).bit_count() <= threshold:
+                    best = i
+                    break
+
+        if best >= 0:
+            members[best].append(item)
+        else:
+            ci = len(members)
+            reps.append(h)
+            members.append([item])
+            for key in keys:
+                bucket = index.get(key)
+                if bucket is None:
+                    index[key] = [ci]
+                else:
+                    bucket.append(ci)
+    return members, reps
+
+
+def _clusters_to_groups(members: list[list[dict]], reps: list[int]) -> list[dict]:
+    """簇（成员列表 + 代表哈希）→ 输出分组：只保留 ≥2 成员的簇，附保留建议与可回收空间。"""
     groups: list[dict] = []
-    for cluster in clusters:
-        if len(cluster["items"]) < 2:
+    for ci, cluster_members in enumerate(members):
+        if len(cluster_members) < 2:
             continue
-        members = cluster["items"]
+        rep = reps[ci]
         # 保留建议：评分降序，再按创建时间升序（更早优先），最后按 id
-        members.sort(
-            key=lambda f: (-f["score"], f["created_at"] or "", f["id"])
-        )
-        keeper = members[0]
+        cluster_members.sort(key=lambda f: (-f["score"], f["created_at"] or "", f["id"]))
+        keeper = cluster_members[0]
         files = [
             {
                 "id": m["id"],
@@ -248,14 +336,14 @@ def _group(items: list[dict], threshold: int) -> list[dict]:
                 "created_at": format_utc(m["created_at"]),
                 "size_bytes": m["size_bytes"],
                 "score": m["score"],
-                "distance": (cluster["rep_phash_int"] ^ m["phash_int"]).bit_count(),
+                "distance": (rep ^ m["phash_int"]).bit_count(),
             }
-            for m in members
+            for m in cluster_members
         ]
         wasted_bytes = sum(f["size_bytes"] for f in files if f["id"] != keeper["id"])
         groups.append(
             {
-                "rep_phash": f"{cluster['rep_phash_int']:0192x}",
+                "rep_phash": f"{rep:0192x}",
                 "files": files,
                 "keeper_id": keeper["id"],
                 "wasted_bytes": wasted_bytes,
