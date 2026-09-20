@@ -30,6 +30,8 @@
        → 重建主色调 → 入队向量回填任务。
 
 约定与保护:
+    - **只处理 ``source_type=manual_upload`` 的素材**（采集/插件来源不碰）：扫描按来源
+      过滤，执行阶段逐条再校验一次，口径与手机图剪裁页（``app.services.crop_service``）一致。
     - 标签、收藏、来源等信息完全不动。
     - 原图先备份到 storage/_crop_backup/{时间戳}/，误操作可手动恢复。
     - 裁剪结果若与库中其他素材内容重复，该条自动跳过并保留原图。
@@ -73,6 +75,11 @@ from app.utils.time import utcnow
 DEFAULT_CANDIDATE_FILE = Path(__file__).resolve().parent / "crop_candidates.json"
 DEFAULT_MIN_RATIO = 1.75  # 高/宽 ≥ 1.75 视为竖屏截图候选（9:16≈1.78、19.5:9≈2.17）
 
+# 来源固定为手动上传：本功能（含手机图剪裁页）只处理手动上传素材，采集/插件来源不碰。
+# 原先这里是 `--source-type` 参数，能改成 scraper/douyin 等来源——与功能约定冲突，
+# 且执行阶段完全不校验来源（清单里写谁就裁谁），故去掉该入口并两阶段都比对来源。
+SOURCE_TYPE = "manual_upload"
+
 
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
@@ -96,11 +103,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_CANDIDATE_FILE,
         help="候选清单 JSON 路径（默认 scripts/crop_candidates.json）",
-    )
-    parser.add_argument(
-        "--source-type",
-        default="manual_upload",
-        help="扫描的来源类型（默认 manual_upload）",
     )
     parser.add_argument(
         "--min-ratio",
@@ -142,7 +144,7 @@ async def scan_candidates(args: argparse.Namespace) -> None:
                 Inspiration.quality_status,
                 Inspiration.created_at,
             ).where(
-                Inspiration.source_type == args.source_type,
+                Inspiration.source_type == SOURCE_TYPE,
                 Inspiration.deleted_at.is_(None),
                 Inspiration.file_path.isnot(None),
             )
@@ -208,7 +210,7 @@ async def scan_candidates(args: argparse.Namespace) -> None:
         "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
         "total_candidates": len(candidates),
         "params": {
-            "source_type": args.source_type,
+            "source_type": SOURCE_TYPE,
             "min_ratio": args.min_ratio,
             "crop_top": args.crop_top,
             "crop_bottom": args.crop_bottom,
@@ -284,6 +286,14 @@ async def apply_crops(args: argparse.Namespace) -> None:
             insp = insp_map.get(insp_id)
             if insp is None or insp.deleted_at is not None:
                 skipped.append((insp_id, "记录不存在或已入垃圾桶"))
+                continue
+            # 来源/类型再校验一次（清单可能来自旧版扫描或人工编辑）：
+            # 与手机图剪裁页同口径——只处理手动上传的图片素材
+            if insp.source_type != SOURCE_TYPE:
+                skipped.append((insp_id, "仅支持处理手动上传素材"))
+                continue
+            if insp.media_type != "image":
+                skipped.append((insp_id, "非图片素材"))
                 continue
             full = settings.storage_root / insp.file_path
             if not full.exists():
