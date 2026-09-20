@@ -466,12 +466,14 @@ fashion-inspo/
 │   │   │   ├── search/           # SearchBar, TagFilter + 搜索面板子组件
 │   │   │   ├── tag/              # 标签列表/工具栏/弹窗子组件 + advanced/ 高级管理面板（健康度/聚类/网络图/效果/层级树/历史/批量编辑抽屉/规则行）
 │   │   │   ├── person/           # PersonTypeTag, PersonFormModal, PersonLinkSection, PersonAvatarPicker（从 TA 的素材选头像）, PersonEnrichManager（一键补全主页）
+│   │   │   │   └── face/         # 人脸库扫描页结果区子组件（待审核候选/已确认/未匹配人脸/聚合分组）
 │   │   │   └── upload/           # 上传拖拽/队列/选项子组件
 │   │   ├── types/                # 跨组件复用的 TS 类型（admin/analysis/scraper/upload/tagAdvanced）
 │   │   ├── utils/                # 工具函数
 │   │   │   ├── sourceLabel.ts    # 来源类型中文映射
 │   │   │   ├── tagHistoryDiff.ts # 标签操作历史 before/after 差异展示
 │   │   │   ├── collectionQuery.ts # 智能合集筛选条件解析/校验/序列化
+│   │   │   ├── faceMedia.ts      # 人脸库扫描页媒体地址（缩略图/大图/头像/组代表图）
 │   │   │   └── format.ts         # 字节/耗时/日期格式化
 │   │   └── composables/          # Vue composables（useWebSocket / useSearch / useOutfitTags / useTagManage / useAdminTask / useTagAdvanced / useTaskPolling 等）
 │   ├── package.json

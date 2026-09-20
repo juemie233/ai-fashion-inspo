@@ -1,0 +1,146 @@
+/* 人脸库扫描页（FaceScanView）结果区的共用样式。
+ *
+ * 为什么是独立 CSS 而不是留在视图的 <style scoped> 里：模板已按 tab 拆到
+ * components/person/face/*.vue，而 scoped 样式只作用于**本组件模板**的元素——
+ * 拆出去的人脸卡片/明细网格/角标都拿不到原作用域，样式会整片失效。
+ * 与其在 4 个子组件里各抄一份（.detail-grid 等要被 3 个组件共用），
+ * 不如收敛到一处：所有规则统一挂在页面根类 .face-scan-page 下，
+ * 既只有一处定义，也不会泄漏到其它页面。
+ */
+
+.face-scan-page .person-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.face-scan-page .person-row {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.face-scan-page .person-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.face-scan-page .person-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.face-scan-page .detail-block {
+  margin-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 10px;
+}
+
+.face-scan-page .detail-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.face-scan-page .detail-item {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #eef0f3;
+  cursor: pointer;
+}
+
+.face-scan-page .detail-item img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+
+.face-scan-page .detail-item .arco-checkbox {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+/* 视频素材角标：缩略图右下角，提示该素材是视频（点击卡片跳详情页播放） */
+.face-scan-page .face-video-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+/* 已确认锁定标识：左上角锁图标（替代勾选框） */
+.face-scan-page .detail-lock {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: #009a29;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+}
+
+.face-scan-page .detail-conf {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.face-scan-page .detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.face-scan-page .assign-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* 聚合分组代表图：组头像（人脸缩略图） */
+.face-scan-page .group-rep-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.face-scan-page .unmatched-grid {
+  min-height: 80px;
+}
+
+@media (max-width: 900px) {
+  .face-scan-page .detail-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

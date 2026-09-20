@@ -11,7 +11,6 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { IconLock } from '@arco-design/web-vue/es/icon'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import {
   confirmFaceScan,
@@ -20,18 +19,22 @@ import {
   runFaceMatch,
   startFaceScan,
   type DetectionItem,
-  type FaceClusterGroup,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
-import { getFileUrl } from '@/api/inspirations'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
 import { pollTaskUntilIdle } from '@/utils/taskPollUntilIdle'
 import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
 import { usePolling } from '@/composables/usePolling'
-import HoverImagePreview from '@/components/common/HoverImagePreview.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
+import FaceClusterTab from '@/components/person/face/FaceClusterTab.vue'
+import FaceConfirmedTab from '@/components/person/face/FaceConfirmedTab.vue'
+import FacePendingTab from '@/components/person/face/FacePendingTab.vue'
+import FaceUnmatchedTab from '@/components/person/face/FaceUnmatchedTab.vue'
+// 结果区样式已随模板拆到子组件：scoped 样式不跨组件生效，故收敛到共享样式表
+// （统一挂在 .face-scan-page 下，仅本页生效）
+import '@/styles/faceScan.css'
 
 // ── 任务区 ──
 const scanTask = ref<FaceScanTaskOut | null>(null)
@@ -468,37 +471,38 @@ onMounted(async () => {
   startTaskPolling()
 })
 
+// ── 结果区分页/事件回调（原为模板内联箭头函数，拆组件后收敛为命名处理函数）──
+function onPendingPageChange(p: number) {
+  pendingPage.value = p
+  loadAggregates()
+}
+
+function onConfirmedPageChange(p: number) {
+  confirmedPage.value = p
+  loadAggregates()
+}
+
+function onDetailPageChange(p: number) {
+  detailPage.value = p
+  loadDetail()
+}
+
+function onUnmatchedPageChange(p: number) {
+  unmatchedPage.value = p
+  loadUnmatched()
+}
+
+function onClusterPageChange(p: number) {
+  clusterPage.value = p
+  loadClusterGroups()
+}
+
+function onGroupDetailPageChange(p: number) {
+  groupDetailPage.value = p
+  loadGroupDetail()
+}
+
 /** 素材是否视频：media_type 为 video 时 file_path 是 mp4，不能当 <img> 加载 */
-function isVideoItem(item: DetectionItem): boolean {
-  return item.media_type === 'video'
-}
-
-/** 缩略图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)，否则 <img> 必破图） */
-function thumbUrl(item: DetectionItem): string {
-  if (isVideoItem(item)) return item.thumbnail_path ? getFileUrl(item.thumbnail_path) : ''
-  return getFileUrl(item.thumbnail_path || item.file_path)
-}
-
-/** 悬停大图地址：图片用原图；视频没有可预览的静态大图，用缩略图大图（避免破图） */
-function largePreviewUrl(item: DetectionItem): string {
-  if (isVideoItem(item)) return item.thumbnail_path ? getFileUrl(item.thumbnail_path) : ''
-  return getFileUrl(item.file_path)
-}
-
-/** 人物头像地址：只有手动设置一条来源（未设置则显示首字占位，与人物列表/详情一致） */
-function personAvatarUrl(item: PersonAggregateItem): string | undefined {
-  return item.avatar_path ? getFileUrl(item.avatar_path) : undefined
-}
-
-/** 聚合分组代表图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)） */
-function groupThumbUrl(group: FaceClusterGroup): string {
-  const isVideo = group.rep_media_type === 'video'
-  if (isVideo) return group.rep_thumbnail_path ? getFileUrl(group.rep_thumbnail_path) : ''
-  const path = group.rep_thumbnail_path || group.rep_file_path
-  return path ? getFileUrl(path) : ''
-}
-
-/** 点击素材缩略图打开素材详情页（新标签页 / 当前页由全局「素材打开模式」决定） */
 function goDetail(inspirationId: string) {
   openInspiration(router, inspirationId)
 }
@@ -644,531 +648,105 @@ function filterOption(input: string, option: { label?: string }): boolean {
       <a-tabs v-model:active-key="resultTab" type="line" @change="refreshAll">
         <!-- 待审核候选 -->
         <a-tab-pane key="pending" title="待审核候选">
-          <a-spin :loading="personsLoading" style="display: block">
-            <div v-if="pendingPersons.length > 0" class="person-list">
-              <div
-                v-for="p in pendingPersons"
-                :key="`${p.person_type}:${p.person_id}`"
-                class="person-row"
-              >
-                <div class="person-head" @click="toggleDetail(p)">
-                  <!-- 头像用 image-url 传入（而不是插槽 img）：Arco 只在 imageUrl 分支给
-                       wrapper 加 arco-avatar-image，圆形裁剪（overflow+border-radius）才生效；
-                       插槽 img 会被渲染成方形并溢出容器 -->
-                  <a-avatar :size="32" :image-url="personAvatarUrl(p)">
-                    <template v-if="!personAvatarUrl(p)">{{ p.name.slice(0, 1) }}</template>
-                  </a-avatar>
-                  <span class="person-name">{{ p.name }}</span>
-                  <a-tag size="small" :color="p.person_type === 'blogger' ? 'arcoblue' : 'purple'">
-                    {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
-                  </a-tag>
-                  <a-typography-text type="secondary" style="font-size: 12px">
-                    {{ p.count }} 条候选 · 最高 {{ (p.best_conf ?? 0).toFixed(2) }}
-                  </a-typography-text>
-                </div>
-                <a-space :size="6">
-                  <a-button
-                    size="mini"
-                    type="primary"
-                    :loading="detailActionBusy"
-                    @click.stop="actOnPerson(p, 'confirm', true)"
-                  >
-                    确认高分（≥0.75）
-                  </a-button>
-                  <a-button
-                    size="mini"
-                    type="primary"
-                    :loading="detailActionBusy"
-                    @click.stop="actOnPerson(p, 'confirm')"
-                  >
-                    全部确认
-                  </a-button>
-                  <a-button
-                    size="mini"
-                    status="danger"
-                    :loading="detailActionBusy"
-                    @click.stop="actOnPerson(p, 'reject')"
-                  >
-                    全部驳回
-                  </a-button>
-                </a-space>
-
-                <!-- 展开明细 -->
-                <div v-if="detailKey === `${p.person_type}:${p.person_id}`" class="detail-block">
-                  <a-spin :loading="detailLoading" style="display: block">
-                    <div
-                      v-if="detailItems.length > 0"
-                      class="detail-grid"
-                      :style="{ gridTemplateColumns: `repeat(${gridColumns}, 1fr)` }"
-                    >
-                      <div
-                        v-for="item in detailItems"
-                        :key="item.detection_id"
-                        class="detail-item"
-                        @click="goDetail(item.inspiration_id)"
-                      >
-                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
-                          <img :src="thumbUrl(item)" loading="lazy" />
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                        </HoverImagePreview>
-                        <a-checkbox
-                          class="detail-check"
-                          :model-value="detailChecked.has(item.detection_id)"
-                          @click.stop
-                          @change="(v: unknown) => toggleDetailChecked(item.detection_id, v)"
-                        />
-                        <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
-                      </div>
-                    </div>
-                    <a-empty v-else description="该人物暂无候选明细" size="small" />
-                  </a-spin>
-                  <div class="detail-actions">
-                    <a-space :size="8">
-                      <a-radio-group v-model="gridColumns" type="button" size="mini">
-                        <a-radio :value="3">3 列</a-radio>
-                        <a-radio :value="4">4 列</a-radio>
-                        <a-radio :value="5">5 列</a-radio>
-                        <a-radio :value="6">6 列</a-radio>
-                      </a-radio-group>
-                      <a-pagination
-                        v-if="detailTotal > 50"
-                        size="mini"
-                        :current="detailPage"
-                        :page-size="50"
-                        :total="detailTotal"
-                        @change="
-                          (p: number) => {
-                            detailPage = p
-                            loadDetail()
-                          }
-                        "
-                      />
-                    </a-space>
-                    <a-space :size="6">
-                      <a-button
-                        size="mini"
-                        :disabled="detailItems.length === 0"
-                        @click="toggleSelectAllDetail"
-                      >
-                        {{
-                          detailItems.length > 0 &&
-                          detailItems.every((i) => detailChecked.has(i.detection_id))
-                            ? '取消全选'
-                            : '全选'
-                        }}
-                      </a-button>
-                      <a-button
-                        size="mini"
-                        type="primary"
-                        :loading="detailActionBusy"
-                        @click="actOnChecked('confirm')"
-                      >
-                        确认勾选
-                      </a-button>
-                      <a-button
-                        size="mini"
-                        status="danger"
-                        :loading="detailActionBusy"
-                        @click="actOnChecked('reject')"
-                      >
-                        驳回勾选
-                      </a-button>
-                    </a-space>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <a-empty v-else description="暂无待审核候选，先运行扫描与匹配" />
-            <a-pagination
-              v-if="pendingTotal > 50"
-              style="margin-top: 12px; justify-content: center"
-              :current="pendingPage"
-              :page-size="50"
-              :total="pendingTotal"
-              @change="
-                (p: number) => {
-                  pendingPage = p
-                  loadAggregates()
-                }
-              "
-            />
-          </a-spin>
+          <FacePendingTab
+            v-model:grid-columns="gridColumns"
+            :persons="pendingPersons"
+            :loading="personsLoading"
+            :page="pendingPage"
+            :total="pendingTotal"
+            :detail-key="detailKey"
+            :detail-items="detailItems"
+            :detail-page="detailPage"
+            :detail-total="detailTotal"
+            :detail-loading="detailLoading"
+            :detail-checked="detailChecked"
+            :action-busy="detailActionBusy"
+            @toggle-detail="toggleDetail"
+            @act-on-person="actOnPerson"
+            @page-change="onPendingPageChange"
+            @detail-page-change="onDetailPageChange"
+            @toggle-detail-checked="toggleDetailChecked"
+            @select-all-detail="toggleSelectAllDetail"
+            @act-on-checked="actOnChecked"
+            @open-inspiration="goDetail"
+          />
         </a-tab-pane>
 
         <!-- 已确认 -->
         <a-tab-pane key="confirmed" title="已确认">
-          <a-spin :loading="personsLoading" style="display: block">
-            <div v-if="confirmedPersons.length > 0" class="person-list">
-              <div
-                v-for="p in confirmedPersons"
-                :key="`${p.person_type}:${p.person_id}`"
-                class="person-row"
-              >
-                <div class="person-head" @click="toggleDetail(p)">
-                  <a-avatar :size="32" :image-url="personAvatarUrl(p)">
-                    <template v-if="!personAvatarUrl(p)">{{ p.name.slice(0, 1) }}</template>
-                  </a-avatar>
-                  <span class="person-name">{{ p.name }}</span>
-                  <a-tag size="small" color="green">
-                    {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
-                  </a-tag>
-                  <a-typography-text type="secondary" style="font-size: 12px">
-                    {{ p.count }} 条已确认
-                  </a-typography-text>
-                </div>
-                <div v-if="detailKey === `${p.person_type}:${p.person_id}`" class="detail-block">
-                  <a-spin :loading="detailLoading" style="display: block">
-                    <div v-if="detailItems.length > 0" class="detail-grid">
-                      <div
-                        v-for="item in detailItems"
-                        :key="item.detection_id"
-                        class="detail-item locked-item"
-                        @click="goDetail(item.inspiration_id)"
-                      >
-                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
-                          <img :src="thumbUrl(item)" loading="lazy" />
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                        </HoverImagePreview>
-                        <!-- 已确认锁定：锁图标替代勾选框，不可撤销/编辑 -->
-                        <span class="detail-lock"><IconLock /></span>
-                        <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
-                      </div>
-                    </div>
-                    <a-empty v-else description="该人物暂无已确认明细" size="small" />
-                  </a-spin>
-                  <div class="detail-actions">
-                    <a-pagination
-                      v-if="detailTotal > 50"
-                      size="mini"
-                      :current="detailPage"
-                      :page-size="50"
-                      :total="detailTotal"
-                      @change="
-                        (p: number) => {
-                          detailPage = p
-                          loadDetail()
-                        }
-                      "
-                    />
-                    <a-typography-text type="secondary" style="font-size: 12px">
-                      已确认关联已锁定，不可修改或撤销
-                    </a-typography-text>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <a-empty v-else description="暂无已确认关联" />
-            <a-pagination
-              v-if="confirmedTotal > 50"
-              style="margin-top: 12px; justify-content: center"
-              :current="confirmedPage"
-              :page-size="50"
-              :total="confirmedTotal"
-              @change="
-                (p: number) => {
-                  confirmedPage = p
-                  loadAggregates()
-                }
-              "
-            />
-          </a-spin>
+          <FaceConfirmedTab
+            :persons="confirmedPersons"
+            :loading="personsLoading"
+            :page="confirmedPage"
+            :total="confirmedTotal"
+            :detail-key="detailKey"
+            :detail-items="detailItems"
+            :detail-page="detailPage"
+            :detail-total="detailTotal"
+            :detail-loading="detailLoading"
+            @toggle-detail="toggleDetail"
+            @page-change="onConfirmedPageChange"
+            @detail-page-change="onDetailPageChange"
+            @open-inspiration="goDetail"
+          />
         </a-tab-pane>
 
         <!-- 未匹配人脸 -->
         <a-tab-pane key="unmatched" title="未匹配人脸">
-          <div class="assign-bar">
-            <a-radio-group
-              v-model="assignKind"
-              type="button"
-              size="small"
-              @change="loadAssignOptions"
-            >
-              <a-radio value="blogger">穿搭博主</a-radio>
-              <a-radio value="model">职业模特</a-radio>
-            </a-radio-group>
-            <a-select
-              v-model="assignPersonId"
-              :options="assignOptions"
-              :loading="assignLoading"
-              placeholder="选择要指派的人物"
-              size="small"
-              style="width: 240px"
-              allow-search
-              :filter-option="filterOption"
-            />
-            <a-button size="small" type="primary" :loading="assigning" @click="assignUnmatched">
-              指派勾选（{{ unmatchedChecked.size }}）
-            </a-button>
-          </div>
-          <a-spin :loading="unmatchedLoading" style="display: block">
-            <div v-if="unmatchedItems.length > 0" class="detail-grid unmatched-grid">
-              <div
-                v-for="item in unmatchedItems"
-                :key="item.detection_id"
-                class="detail-item"
-                @click="goDetail(item.inspiration_id)"
-              >
-                <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
-                  <img :src="thumbUrl(item)" loading="lazy" />
-                  <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                  <span
-                    v-if="isVideoItem(item)"
-                    class="face-video-badge"
-                    title="视频素材，点击查看详情后播放"
-                    >▶</span
-                  >
-                </HoverImagePreview>
-                <a-checkbox
-                  class="detail-check"
-                  :model-value="unmatchedChecked.has(item.detection_id)"
-                  @click.stop
-                  @change="(v: unknown) => toggleUnmatchedChecked(item.detection_id, v)"
-                />
-              </div>
-            </div>
-            <a-empty v-else description="暂无未匹配人脸" />
-            <a-pagination
-              v-if="unmatchedTotal > 50"
-              style="margin-top: 12px; justify-content: center"
-              :current="unmatchedPage"
-              :page-size="50"
-              :total="unmatchedTotal"
-              @change="
-                (p: number) => {
-                  unmatchedPage = p
-                  loadUnmatched()
-                }
-              "
-            />
-          </a-spin>
+          <FaceUnmatchedTab
+            v-model:assign-kind="assignKind"
+            v-model:assign-person-id="assignPersonId"
+            :items="unmatchedItems"
+            :loading="unmatchedLoading"
+            :page="unmatchedPage"
+            :total="unmatchedTotal"
+            :checked="unmatchedChecked"
+            :assign-options="assignOptions"
+            :assign-loading="assignLoading"
+            :assigning="assigning"
+            :filter-option="filterOption"
+            @load-assign-options="loadAssignOptions"
+            @assign="assignUnmatched"
+            @page-change="onUnmatchedPageChange"
+            @toggle-checked="toggleUnmatchedChecked"
+            @open-inspiration="goDetail"
+          />
         </a-tab-pane>
 
         <!-- 聚合分组（未匹配人脸按疑似同一人聚类） -->
         <a-tab-pane key="cluster" title="聚合分组">
-          <div class="assign-bar">
-            <a-radio-group
-              v-model="clusterAssignKind"
-              type="button"
-              size="small"
-              @change="loadAssignOptions"
-            >
-              <a-radio value="blogger">穿搭博主</a-radio>
-              <a-radio value="model">职业模特</a-radio>
-            </a-radio-group>
-            <a-select
-              v-model="clusterAssignPersonId"
-              :options="assignOptions"
-              :loading="assignLoading"
-              placeholder="选择要指派的人物（整组）"
-              size="small"
-              style="width: 240px"
-              allow-search
-              :filter-option="filterOption"
-            />
-            <a-button
-              size="small"
-              type="primary"
-              :loading="clustering"
-              :disabled="busy"
-              @click="startCluster"
-            >
-              开始聚合聚类
-            </a-button>
-          </div>
-
-          <a-spin :loading="clusterLoading" style="display: block">
-            <!-- 聚类任务状态 -->
-            <div v-if="clusterTask" class="task-line">
-              聚类 <StatusTag :status="clusterTask.status" />
-              <a-progress
-                v-if="['running', 'pending'].includes(clusterTask.status)"
-                :percent="clusterTask.progress / 100"
-                size="small"
-                style="width: 320px"
-              />
-              <a-typography-text type="secondary" style="font-size: 12px">
-                <template v-if="clusterTask.result?.total_faces !== undefined">
-                  共 {{ clusterTask.result.total_faces }} 张未匹配人脸
-                  <template v-if="clusterTask.result.group_count !== undefined">
-                    · 聚类出 {{ clusterTask.result.group_count }} 组
-                  </template>
-                  <template v-if="clusterTask.result.singletons !== undefined">
-                    · {{ clusterTask.result.singletons }} 张人脸
-                  </template>
-                </template>
-              </a-typography-text>
-            </div>
-            <a-typography-text v-else type="secondary" style="font-size: 12px">
-              尚未运行过聚合聚类。点击「开始聚合聚类」，按相似度以平均链接策略把未匹配人脸分组
-              （组间平均相似度达标才合并，防止不同人被链成巨组），便于整组指派给同一位博主/模特。
-            </a-typography-text>
-            <a-typography-text v-if="clusterTask?.error" type="danger" style="font-size: 12px">
-              {{ clusterTask.error }}
-            </a-typography-text>
-
-            <!-- 分组列表 -->
-            <div v-if="clusterGroups.length > 0" class="person-list" style="margin-top: 12px">
-              <div v-for="g in clusterGroups" :key="g.group_id" class="person-row">
-                <div class="person-head" @click="toggleGroupDetail(g)">
-                  <img
-                    v-if="g.rep_file_path"
-                    :src="groupThumbUrl(g)"
-                    class="group-rep-img"
-                    :alt="`组${g.group_id}`"
-                  />
-                  <a-avatar v-else :size="32">{{ g.size }}</a-avatar>
-                  <span class="person-name">疑似同一人 · {{ g.size }} 张人脸</span>
-                  <a-typography-text type="secondary" style="font-size: 12px">
-                    组 #{{ g.group_id }}
-                  </a-typography-text>
-                </div>
-                <a-space :size="6">
-                  <a-button
-                    size="mini"
-                    type="primary"
-                    :loading="groupActionBusy"
-                    :disabled="!clusterAssignPersonId"
-                    @click.stop="assignGroup(g)"
-                  >
-                    整组指派
-                  </a-button>
-                  <a-button size="mini" @click.stop="toggleGroupDetail(g)">
-                    {{ expandedGroupId === g.group_id ? '收起' : '查看人脸' }}
-                  </a-button>
-                </a-space>
-
-                <!-- 展开：组内人脸网格 + 勾选指派 -->
-                <div v-if="expandedGroupId === g.group_id" class="detail-block">
-                  <a-spin :loading="groupDetailLoading" style="display: block">
-                    <div v-if="groupDetailItems.length > 0" class="detail-grid">
-                      <div
-                        v-for="item in groupDetailItems"
-                        :key="item.detection_id"
-                        class="detail-item"
-                        @click="goDetail(item.inspiration_id)"
-                      >
-                        <HoverImagePreview class="image-wrap" :large-src="largePreviewUrl(item)">
-                          <img :src="thumbUrl(item)" loading="lazy" />
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                          <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                          <span
-                            v-if="isVideoItem(item)"
-                            class="face-video-badge"
-                            title="视频素材，点击查看详情后播放"
-                            >▶</span
-                          >
-                        </HoverImagePreview>
-                        <a-checkbox
-                          class="detail-check"
-                          :model-value="groupChecked.has(item.detection_id)"
-                          @click.stop
-                          @change="(v: unknown) => toggleGroupChecked(item.detection_id, v)"
-                        />
-                        <span v-if="item.confidence !== null" class="detail-conf">
-                          {{ item.confidence.toFixed(2) }}
-                        </span>
-                      </div>
-                    </div>
-                    <a-empty v-else description="该组暂无明细" size="small" />
-                  </a-spin>
-                  <div class="detail-actions">
-                    <a-space :size="8">
-                      <a-pagination
-                        v-if="groupDetailTotal > 50"
-                        size="mini"
-                        :current="groupDetailPage"
-                        :page-size="50"
-                        :total="groupDetailTotal"
-                        @change="
-                          (p: number) => {
-                            groupDetailPage = p
-                            loadGroupDetail()
-                          }
-                        "
-                      />
-                      <a-typography-text type="secondary" style="font-size: 12px">
-                        已勾选 {{ groupChecked.size }} / {{ g.size }} 张
-                      </a-typography-text>
-                    </a-space>
-                    <a-space :size="6">
-                      <a-button
-                        size="mini"
-                        :disabled="groupDetailLoading"
-                        @click="selectAllGroup(g)"
-                      >
-                        全选
-                      </a-button>
-                      <a-button
-                        size="mini"
-                        :disabled="groupChecked.size === 0"
-                        @click="clearGroupChecked"
-                      >
-                        清空
-                      </a-button>
-                      <a-button
-                        size="mini"
-                        type="primary"
-                        :loading="groupActionBusy"
-                        :disabled="groupChecked.size === 0 || !clusterAssignPersonId"
-                        @click="assignCheckedGroup"
-                      >
-                        指派勾选（{{ groupChecked.size }}）
-                      </a-button>
-                    </a-space>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <a-empty
-              v-else-if="!clusterLoading && !clusterTask"
-              description="暂无聚合分组，先运行「开始聚合聚类」"
-            />
-            <a-pagination
-              v-if="clusterTotal > 20"
-              style="margin-top: 12px; justify-content: center"
-              :current="clusterPage"
-              :page-size="20"
-              :total="clusterTotal"
-              @change="
-                (p: number) => {
-                  clusterPage = p
-                  loadClusterGroups()
-                }
-              "
-            />
-          </a-spin>
+          <FaceClusterTab
+            v-model:cluster-assign-kind="clusterAssignKind"
+            v-model:cluster-assign-person-id="clusterAssignPersonId"
+            :cluster-task="clusterTask"
+            :cluster-groups="clusterGroups"
+            :cluster-total="clusterTotal"
+            :cluster-page="clusterPage"
+            :cluster-loading="clusterLoading"
+            :clustering="clustering"
+            :expanded-group-id="expandedGroupId"
+            :group-detail-items="groupDetailItems"
+            :group-detail-total="groupDetailTotal"
+            :group-detail-page="groupDetailPage"
+            :group-detail-loading="groupDetailLoading"
+            :group-checked="groupChecked"
+            :group-action-busy="groupActionBusy"
+            :assign-options="assignOptions"
+            :assign-loading="assignLoading"
+            :busy="busy"
+            :filter-option="filterOption"
+            @load-assign-options="loadAssignOptions"
+            @start-cluster="startCluster"
+            @toggle-group-detail="toggleGroupDetail"
+            @assign-group="assignGroup"
+            @load-group-detail-page="onGroupDetailPageChange"
+            @select-all-group="selectAllGroup"
+            @clear-group-checked="clearGroupChecked"
+            @assign-checked-group="assignCheckedGroup"
+            @page-change="onClusterPageChange"
+            @toggle-group-checked="toggleGroupChecked"
+            @open-inspiration="goDetail"
+          />
         </a-tab-pane>
       </a-tabs>
     </a-card>
@@ -1176,6 +754,8 @@ function filterOption(input: string, option: { label?: string }): boolean {
 </template>
 
 <style scoped>
+/* 结果区（人物列表/明细网格/角标/指派栏）的样式随模板拆到子组件，已迁到
+   styles/faceScan.css（scoped 不跨组件生效）；这里只留本视图自身标记的样式。 */
 .face-scan-page {
   max-width: 1100px;
   margin: 0 auto;
@@ -1191,142 +771,5 @@ function filterOption(input: string, option: { label?: string }): boolean {
   align-items: center;
   gap: 12px;
   margin-top: 10px;
-}
-
-.person-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.person-row {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 8px 12px;
-}
-
-.person-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  flex: 1;
-}
-
-.person-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.detail-block {
-  margin-top: 10px;
-  border-top: 1px dashed #e5e7eb;
-  padding-top: 10px;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 8px;
-}
-
-.detail-item {
-  position: relative;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid #eef0f3;
-  cursor: pointer;
-}
-
-.detail-item img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  display: block;
-}
-
-.detail-item .arco-checkbox {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 4px;
-  padding: 2px;
-}
-
-/* 视频素材角标：缩略图右下角，提示该素材是视频（点击卡片跳详情页播放） */
-.face-video-badge {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 10px;
-  pointer-events: none;
-}
-
-/* 已确认锁定标识：左上角锁图标（替代勾选框） */
-.detail-lock {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: #009a29;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 4px;
-}
-
-.detail-conf {
-  position: absolute;
-  bottom: 4px;
-  right: 4px;
-  font-size: 11px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-.detail-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
-}
-
-.assign-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-/* 聚合分组代表图：组头像（人脸缩略图） */
-.group-rep-img {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.unmatched-grid {
-  min-height: 80px;
-}
-
-@media (max-width: 900px) {
-  .detail-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 </style>
