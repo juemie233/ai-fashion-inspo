@@ -106,3 +106,59 @@ describe('useAnalysisQueue.loadAnalysisTasks（已完成批量分析不再展示
     expect(analysisTasks.value.map((t) => t.id)).toEqual([7])
   })
 })
+
+describe('useAnalysisQueue.triggerBatchAnalyze（按指定数量分析）', () => {
+  /** 模拟「未分析 ID 列表 + 任务创建 + 批量轮询」三段响应 */
+  function mockAnalyzeFlow(unanalyzed: string[]) {
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/ai/unanalyzed-ids') {
+        return Promise.resolve({ data: { ids: unanalyzed, count: unanalyzed.length } })
+      }
+      if (url.startsWith('/tasks/')) {
+        return Promise.resolve({ data: makeTask(999, 'success') })
+      }
+      if (url === '/ai/queue') {
+        return Promise.resolve({
+          data: { total: unanalyzed.length, analyzed: 0, unanalyzed: unanalyzed.length, failed: 0 },
+        })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, active_analyses: {}, paused: false } })
+    })
+    mocks.post.mockResolvedValue({
+      data: {
+        task_id: 999,
+        message: '已创建批量分析任务',
+        count: unanalyzed.length,
+        skipped: 0,
+        status: 'pending',
+      },
+    })
+  }
+
+  it('传数量时只提交前 N 个未分析素材', async () => {
+    mockAnalyzeFlow(['a', 'b', 'c', 'd', 'e'])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze(undefined, 2)
+
+    expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b'])
+  })
+
+  it('不传数量时提交全部未分析素材（保持原有行为）', async () => {
+    mockAnalyzeFlow(['a', 'b', 'c'])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze()
+
+    expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b', 'c'])
+  })
+
+  it('数量超过实际未分析数时按实际数量提交，不报错', async () => {
+    mockAnalyzeFlow(['a', 'b'])
+
+    const { triggerBatchAnalyze } = useAnalysisQueue()
+    await triggerBatchAnalyze(undefined, 999)
+
+    expect(mocks.post).toHaveBeenCalledWith('/ai/batch-analyze', ['a', 'b'])
+  })
+})

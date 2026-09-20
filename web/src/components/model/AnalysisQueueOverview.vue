@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /** AI 分析队列总览：进度条、分析任务列表（含暂停/进行中/排队）、活动分析与排队素材。 */
 
+import { computed, ref } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 import StatusTag from '@/components/common/StatusTag.vue'
 import type { QueueStats, TaskInfo, QueueItem } from '@/types/analysis'
 
-defineProps<{
+const props = defineProps<{
   queueStats: QueueStats
   batchAnalyzing: boolean
   /** 分析任务（batch/multi，仅 pending/running/paused 未完成任务——已完成的不再展示），按 id 倒序 */
@@ -17,12 +18,28 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'analyzeAll'): void
+  /** 按指定数量分析：只提交前 N 个未分析素材 */
+  (e: 'analyzeCount', count: number): void
   (e: 'pauseTask', task: TaskInfo): void
   (e: 'resumeTask', task: TaskInfo): void
   (e: 'cancelTask', task: TaskInfo): void
   (e: 'togglePause'): void
   (e: 'cancelQueueItem', inspirationId: string): void
 }>()
+
+/** 自定义分析数量（默认为一批较小的量，便于分批打标而不必一次跑完全库） */
+const DEFAULT_ANALYZE_COUNT = 50
+const analyzeCount = ref(DEFAULT_ANALYZE_COUNT)
+
+/** 实际提交数量：夹在 1 ~ 当前未分析数之间，避免按钮文案与实际提交数量不一致 */
+const analyzeLimit = computed(() =>
+  Math.max(1, Math.min(analyzeCount.value, props.queueStats.unanalyzed)),
+)
+
+/** 「分析 N 个」按钮文案（无可分析素材时不谎报数量） */
+const analyzeButtonLabel = computed(() =>
+  props.queueStats.unanalyzed === 0 ? '无可分析素材' : `分析 ${analyzeLimit.value} 个`,
+)
 
 /** 判断文件路径是否为视频（缩略图缺失时禁止把 mp4 当 <img> 加载） */
 function isVideoFile(path: string | null): boolean {
@@ -37,8 +54,10 @@ function taskTypeLabel(type: string): string {
 
 <template>
   <div>
-    <!-- 进度条 + 操作 -->
-    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px">
+    <!-- 进度条 + 操作（窄屏下允许换行，避免数量输入框把进度条挤成一条缝） -->
+    <div
+      style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap"
+    >
       <a-progress
         v-if="queueStats.total > 0"
         type="line"
@@ -55,6 +74,28 @@ function taskTypeLabel(type: string): string {
       >
         {{ queueStats.unanalyzed > 0 ? `分析全部未分析 (${queueStats.unanalyzed})` : '全部已分析' }}
       </a-button>
+
+      <!-- 指定数量分析：输入任意 N（上限为当前未分析数），分批打标不必一次跑完全库 -->
+      <div class="analyze-count">
+        <span class="analyze-count-label">分析数量</span>
+        <a-input-number
+          v-model="analyzeCount"
+          :min="1"
+          :max="Math.max(queueStats.unanalyzed, 1)"
+          :step="10"
+          :disabled="queueStats.unanalyzed === 0"
+          size="small"
+          style="width: 110px"
+        />
+        <a-button
+          type="outline"
+          :loading="batchAnalyzing"
+          :disabled="queueStats.unanalyzed === 0"
+          @click="emit('analyzeCount', analyzeLimit)"
+        >
+          {{ analyzeButtonLabel }}
+        </a-button>
+      </div>
     </div>
 
     <!-- 分析任务列表（仅暂停/进行中/排队中；已完成任务自动移除，不再展示） -->
@@ -204,6 +245,18 @@ function taskTypeLabel(type: string): string {
 </template>
 
 <style scoped>
+/* 指定数量分析：数量输入框 + 「分析 N 个」按钮 */
+.analyze-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.analyze-count-label {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+
 .task-row {
   display: flex;
   flex-direction: column;

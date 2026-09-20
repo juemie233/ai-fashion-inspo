@@ -247,8 +247,13 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
     }
   }
 
-  /** 创建批量分析任务并开始轮询（支持可选的多模型 × 多提示词组合参数） */
-  async function triggerBatchAnalyze(multi?: MultiAnalyzeParams) {
+  /** 创建批量分析任务并开始轮询（支持可选的多模型 × 多提示词组合参数）
+   *
+   * @param multi 组合分析参数；缺省为单模型 × 单提示词的普通批量分析
+   * @param limit 本次最多分析多少个素材（缺省或 <= 0 表示分析全部未分析素材）；
+   *     超出实际未分析数量时按实际数量提交，最终数量以后端返回的 count 为准
+   */
+  async function triggerBatchAnalyze(multi?: MultiAnalyzeParams, limit?: number) {
     batchAnalyzing.value = true
     try {
       const { data } = await apiClient.get<{ ids: string[]; count: number }>('/ai/unanalyzed-ids')
@@ -256,16 +261,18 @@ export function useAnalysisQueue(options: UseAnalysisQueueOptions = {}) {
         Message.info('所有素材均已分析过，无需重复分析')
         return
       }
+      // 指定数量时只取前 N 个未分析素材，其余留待下次（分析过的素材下次不再出现在列表里）
+      const ids = limit && limit > 0 ? data.ids.slice(0, limit) : data.ids
       // 请求体：传了组合参数用对象格式（多模型 × 多提示词），否则保持旧版数组格式
       const isMulti = !!multi
       const body = isMulti
         ? {
-            inspiration_ids: data.ids,
+            inspiration_ids: ids,
             models: multi!.models,
             prompt_ids: multi!.promptIds,
             apply_tags: multi!.applyTags,
           }
-        : data.ids
+        : ids
       // 创建批量分析任务，立即拿到 task_id，后续轮询任务状态
       const { data: created } = await apiClient.post<{
         task_id: number

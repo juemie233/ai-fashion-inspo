@@ -151,6 +151,7 @@ onUnmounted(() => {
       :pending-queue="pendingQueue"
       :queue-paused="queuePaused"
       @analyze-all="triggerBatchAnalyze"
+      @analyze-count="(count: number) => triggerBatchAnalyze(undefined, count)"
       @pause-task="(t: TaskInfo) => pauseTaskById(t.id)"
       @resume-task="(t: TaskInfo) => resumeTaskById(t.id)"
       @cancel-task="(t: TaskInfo) => cancelTaskById(t.id)"
