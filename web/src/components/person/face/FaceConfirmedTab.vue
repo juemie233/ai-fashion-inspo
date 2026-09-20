@@ -85,13 +85,6 @@ const {
                     title="视频素材，点击查看详情后播放"
                     >▶</span
                   >
-                  <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                  <span
-                    v-if="isVideoItem(item)"
-                    class="face-video-badge"
-                    title="视频素材，点击查看详情后播放"
-                    >▶</span
-                  >
                 </HoverImagePreview>
                 <!-- 已确认锁定：锁图标替代勾选框，不可撤销/编辑 -->
                 <span class="detail-lock"><IconLock /></span>

@@ -139,13 +139,6 @@ const {
                     title="视频素材，点击查看详情后播放"
                     >▶</span
                   >
-                  <!-- 视频素材角标：缩略图可能无动态大图，提示可跳详情页播放 -->
-                  <span
-                    v-if="isVideoItem(item)"
-                    class="face-video-badge"
-                    title="视频素材，点击查看详情后播放"
-                    >▶</span
-                  >
                 </HoverImagePreview>
                 <a-checkbox
                   class="detail-check"
