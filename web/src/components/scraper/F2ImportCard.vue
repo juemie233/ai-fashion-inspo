@@ -11,7 +11,9 @@
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import type { TableColumnData } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
+import { authorColumnSorter } from '@/utils/f2Authors'
 import { describeRunningTask } from '@/utils/taskPresentation'
 
 const router = useRouter()
@@ -153,12 +155,34 @@ async function onSubmitProfile() {
 /** 是否展开清单（展开时才拉数据，避免每次进页面都多一次请求） */
 const showAuthors = ref(false)
 
-/** 清单表格列（昵称链到抖音主页，便于核对是不是同一个人） */
-const authorColumns = [
+/** 清单表格列（昵称链到抖音主页，便于核对是不是同一个人）
+ *
+ * 「总作品 / 已入库素材」两列可点表头排序：首次点击降序（多的在前），再点升序，
+ * 第三次取消排序（Arco `sortDirections` 的固定循环）。
+ */
+const authorColumns: TableColumnData[] = [
   { title: '博主（f2 昵称）', dataIndex: 'nickname', slotName: 'nickname', width: 200 },
   { title: '库内博主', dataIndex: 'bloggerName', slotName: 'bloggerName', width: 140 },
-  { title: '总作品', dataIndex: 'aweme_count', slotName: 'awemeCount', width: 88 },
-  { title: '已入库素材', dataIndex: 'materials', slotName: 'materials', width: 104 },
+  {
+    title: '总作品',
+    dataIndex: 'aweme_count',
+    slotName: 'awemeCount',
+    width: 88,
+    sortable: {
+      sortDirections: ['descend', 'ascend'],
+      sorter: authorColumnSorter('aweme_count'),
+    },
+  },
+  {
+    title: '已入库素材',
+    dataIndex: 'materials',
+    slotName: 'materials',
+    width: 104,
+    sortable: {
+      sortDirections: ['descend', 'ascend'],
+      sorter: authorColumnSorter('materials'),
+    },
+  },
 ]
 
 async function toggleAuthors() {

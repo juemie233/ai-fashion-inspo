@@ -336,6 +336,43 @@ describe('F2ImportCard · 已登记博主清单', () => {
     expect(mocks.get.mock.calls.filter((c) => c[0] === '/scraper/f2-authors')).toHaveLength(1)
   })
 
+  it('总作品 / 已入库素材 两列可点表头排序（首次降序，方向由 sorter 自己处理）', async () => {
+    const wrapper = await mountCardWithAuthors()
+
+    await linkByText(wrapper, '查看已登记博主').trigger('click')
+    await flushPromises()
+
+    type SortableColumn = {
+      title: string
+      dataIndex: string
+      sortable?: {
+        sortDirections: string[]
+        sorter: (
+          a: Record<string, unknown>,
+          b: Record<string, unknown>,
+          extra: { direction: 'ascend' | 'descend' },
+        ) => number
+      }
+    }
+    const columns = wrapper.findComponent(tableStub).props('columns') as SortableColumn[]
+
+    for (const [title, field] of [
+      ['总作品', 'aweme_count'],
+      ['已入库素材', 'materials'],
+    ] as const) {
+      const column = columns.find((c) => c.title === title)
+      expect(column, `清单缺少「${title}」列`).toBeTruthy()
+      // Arco 按 sortDirections 顺序循环：首次点击降序（多的在前），再点升序，第三次取消
+      expect(column!.sortable?.sortDirections).toEqual(['descend', 'ascend'])
+      const sorter = column!.sortable!.sorter
+      const small = { [field]: 3 }
+      const big = { [field]: 10 }
+      // Arco 传自定义 sorter 时不会自己套 direction，方向必须由 sorter 内部体现
+      expect(sorter(small, big, { direction: 'descend' })).toBeGreaterThan(0)
+      expect(sorter(small, big, { direction: 'ascend' })).toBeLessThan(0)
+    }
+  })
+
   it('白名单里没有账号时给出引导文案而不是空表格', async () => {
     const wrapper = await mountCardWithAuthors(
       makeAuthors({ registered: [], registered_count: 0, filter_active: false }),
