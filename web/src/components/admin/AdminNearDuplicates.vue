@@ -8,7 +8,7 @@
  */
 
 import { computed, ref } from 'vue'
-import { Message, Modal } from '@arco-design/web-vue'
+import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import {
   fetchNearDuplicates,
@@ -282,28 +282,15 @@ function submitDecisions() {
 }
 
 /**
- * 退出对比弹窗（右上角 X / 「退出」/「完成」都走这里）——**已做的决定不丢**。
+ * 退出对比弹窗（右上角 X / 「退出」/ 「完成」都走这里）——**已做的决定一律提交**。
  *
- * 还有未提交的决定时先确认一次：删除是物理删除、不可恢复，不能默默替用户决定，
- * 但默认动作是「一并提交」（这正是用户按保留左边/右边时表达的意思）。
+ * 这里曾弹一次「一并提交 / 放弃这些决定」确认，但实测反馈「对比完好像没删」——多半是
+ * 误点了放弃（或按了 Esc）。「保留左边 / 保留右边」本身就是明确的删除确认（按钮旁已写明
+ * 其余将永久删除），所以退出就按决定执行：有决定 → 提交删除任务；没有决定 → 纯关闭。
  */
 function requestExit() {
-  const count = deletingIds.value.size
-  if (count === 0) {
-    closeDupModal()
-    return
-  }
-  Modal.confirm({
-    title: `还有 ${count} 个未提交的删除决定`,
-    content: `退出前要一并提交吗？提交后由后台任务物理删除，文件与记录不可恢复。`,
-    okText: '一并提交并退出',
-    cancelText: '放弃这些决定',
-    onOk: () => {
-      submitDecisions()
-      closeDupModal()
-    },
-    onCancel: () => closeDupModal(),
-  })
+  submitDecisions() // 没有决定时内部直接返回，等于纯关闭
+  closeDupModal()
 }
 
 /** 提交确认视图的「确认提交删除」 */
@@ -489,7 +476,7 @@ function favoriteLabel(f: NearDuplicateFile): string {
       <p class="dup-hint">
         组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；可保留一张（其余将
         <strong>永久删除</strong>，文件与记录不可恢复），或点「删除两张」将当前两张一并删除。
-        中途「退出」时已做的决定不会丢：弹窗会问你要不要一并提交。
+        中途「退出」时已做的决定会自动提交（后台物理删除），不会白选。
       </p>
 
       <div class="dup-actions">

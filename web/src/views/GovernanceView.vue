@@ -95,9 +95,14 @@ function handleAdminTaskDone() {
         : r?.label === 'analysis_failed'
           ? '分析失败素材'
           : '素材'
-    Message.success(
-      `已删除 ${r?.deleted_count ?? 0} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`,
-    )
+    const deleted = r?.deleted_count ?? 0
+    if (deleted === 0 && (task?.total ?? 0) > 0) {
+      // 提交的 ID 已不在库里（多为列表陈旧时的重复提交）：如实说明，别显示
+      // 「已删除 0 个素材」让人以为删除没生效
+      Message.warning('这批素材已不在库中（可能已被删除过），本次没有删除任何记录')
+    } else {
+      Message.success(`已删除 ${deleted} 个${label}，释放 ${formatSize(r?.freed_bytes ?? 0)} 空间`)
+    }
   }
   adminTask.value = null
   loadAll()
