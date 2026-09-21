@@ -17,6 +17,7 @@ def _file(
     favorite: bool = False,
     thumb: str | None = None,
     created: datetime | None = None,
+    source_url: str | None = None,
 ) -> dict:
     """构造 build_hash_map(include_meta=True) 产出的文件条目结构。"""
     return {
@@ -26,6 +27,7 @@ def _file(
         "thumbnail_path": thumb,
         "is_favorite": favorite,
         "created_at": created or datetime.now(timezone.utc).replace(tzinfo=None),
+        "source_url": source_url,
     }
 
 
@@ -52,6 +54,35 @@ def test_score_groups_keeps_highest_scored(tmp_path):
     assert details[0]["kept"]["id"] == "rich"
     assert details[0]["kept"]["score"] == 130
     assert "有标签" in details[0]["kept"]["reasons"]
+
+
+def test_score_groups_prefers_copy_with_source_url(tmp_path):
+    """两条完全相同的副本评分打平时：保留有来源链接（真实作品 ID）的那条。
+
+    回归（2026-09 f2 点赞重复入库的存量清理）：同一素材被入库两次，一条带真实作品 ID
+    与原帖链接、一条是文件名合成 ID 且无链接。两者标签/收藏/分析/缩略图完全相同，
+    旧规则按「创建更早 → ID 更小」决定，可能保留没有链接的那条 —— 清理重复就把
+    能点回抖音原帖的入口一起删掉了。
+    """
+    (tmp_path / "img").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "img" / "linked.jpg").write_bytes(b"x")
+    (tmp_path / "img" / "plain.jpg").write_bytes(b"x")
+    newer = datetime.now(timezone.utc).replace(tzinfo=None)
+    older = newer - timedelta(days=1)
+    group = [(
+        "h1",
+        [
+            # 有链接的反而更晚创建：规则必须靠得来源链接的加分，而不是创建时间
+            _file("linked", path="img/linked.jpg", created=newer, source_url="https://www.douyin.com/note/1"),
+            _file("plain", path="img/plain.jpg", created=older),
+        ],
+    )]
+
+    details, ids_to_delete, _ = _score_groups(group, set(), set(), tmp_path)
+
+    assert ids_to_delete == ["plain"]
+    assert details[0]["kept"]["id"] == "linked"
+    assert "有来源链接" in details[0]["kept"]["reasons"]
 
 
 def test_score_groups_tiebreak_earlier_created(tmp_path):

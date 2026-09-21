@@ -107,8 +107,8 @@ def _score_groups(
 ) -> tuple[list[dict], list[str], list[tuple[str, str | None]]]:
     """按评分规则决定每组的保留副本与冗余副本。
 
-    评分规则：有标签 +100、已收藏 +50、AI 分析成功 +30、有缩略图 +10、
-    创建时间更早优先（平局时 ID 更小）。
+    评分规则：有标签 +100、已收藏 +50、有来源链接 +40、AI 分析成功 +30、
+    有缩略图 +10、创建时间更早优先（平局时 ID 更小）。
     返回 (详情列表, 待删除 ID, 待删除文件路径列表)。
     """
     details: list[dict] = []
@@ -126,6 +126,12 @@ def _score_groups(
             if f["is_favorite"]:
                 score += 50
                 reasons.append("已收藏")
+            if f.get("source_url"):
+                # 有来源链接优先：f2 新命名能给出真实作品 ID 与原帖（/note/<id>、/video/<id>），
+                # 历史合成 ID 的同内容副本没有链接——评分打平时若按创建时间/ID 决定，
+                # 可能保留没有链接的那条，清理重复会把原帖入口一起删掉（2026-09 实测 112 组）
+                score += 40
+                reasons.append("有来源链接")
             if f["id"] in analyzed_ids:
                 score += 30
                 reasons.append("AI 已分析")
@@ -200,7 +206,7 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     # 同步逐块读文件算 MD5 会阻塞事件循环数分钟，放入线程池执行
     result = await db.execute(
         select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path,
-               Inspiration.is_favorite, Inspiration.created_at)
+               Inspiration.is_favorite, Inspiration.created_at, Inspiration.source_url)
         .where(Inspiration.deleted_at.is_(None))
     )
     hash_map = await asyncio.to_thread(

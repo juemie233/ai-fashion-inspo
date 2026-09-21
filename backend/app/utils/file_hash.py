@@ -43,7 +43,8 @@ def build_hash_map(
 
     参数:
         db_records: 查询结果行，首列为素材 ID，第二列为 file_path
-            （include_meta=True 时后续依次为 thumbnail_path、is_favorite、created_at）
+            （include_meta=True 时后续依次为 thumbnail_path、is_favorite、created_at、
+            source_url）
         storage_root: 存储根目录
         include_meta: 是否附带缩略图路径、收藏、创建时间等元数据
 
@@ -71,5 +72,8 @@ def build_hash_map(
             entry["thumbnail_path"] = row[2]
             entry["is_favorite"] = row[3]
             entry["created_at"] = row[4]
+            if len(row) >= 6:
+                # 去重时用于「优先保留能点回原帖的那条」（见 _score_groups）
+                entry["source_url"] = row[5]
         hash_map.setdefault(fhash, []).append(entry)
     return hash_map
