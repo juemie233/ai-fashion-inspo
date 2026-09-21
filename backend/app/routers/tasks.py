@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -54,13 +54,21 @@ async def list_tasks(
     type: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """分页查询任务列表，可按状态 / 类型筛选。"""
+    """分页查询任务列表，可按状态 / 类型筛选。
+
+    排序：**已暂停的排最前**（等着用户点「继续」或「取消」，不该被新任务挤到后面），
+    同组内仍按 id 倒序（最新在前）。与前端 `compareUnifiedTasks` 同一口径——前端把
+    队列任务与采集任务合并后才分页，两侧顺序一致才不会来回跳。
+    """
     query = select(TaskQueue)
     if status:
         query = query.where(TaskQueue.status == status)
     if type:
         query = query.where(TaskQueue.type == type)
-    query = query.order_by(TaskQueue.id.desc())
+    query = query.order_by(
+        case((TaskQueue.status == "paused", 0), else_=1),
+        TaskQueue.id.desc(),
+    )
 
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0

@@ -36,6 +36,22 @@ async def test_list_tasks(client):
     assert len(data["items"]) == 2
 
 
+async def test_list_tasks_paused_first(client):
+    """已暂停的任务排最前（哪怕它比别的任务更早创建），同组内仍按最新在前。"""
+    paused_old = await _add_task(status="paused", type_="batch_analyze")
+    running_new = await _add_task(status="running", type_="batch_analyze")
+    success_newest = await _add_task(status="success", type_="deduplicate")
+
+    data = client.get("/api/tasks").json()
+    assert data["total"] == 3
+    assert [t["id"] for t in data["items"]] == [paused_old, success_newest, running_new]
+    assert data["items"][0]["status"] == "paused"
+
+    # 分页第二页不该重复出现暂停任务（排序发生在 SQL 里，不是前端重排）
+    second = client.get("/api/tasks", params={"page": 2, "size": 1}).json()
+    assert second["items"][0]["id"] == success_newest
+
+
 async def test_list_tasks_filter_by_status(client):
     """按状态筛选任务。"""
     await _add_task(status="pending", type_="batch_analyze")

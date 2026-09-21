@@ -116,8 +116,10 @@ export function useAdminTask() {
   /** 恢复进行中的后台任务：刷新页面后查询是否有 pending/running 的删除/去重/向量回填任务并继续轮询 */
   async function resumeAdminTask(onDone: () => void) {
     try {
+      // 取 100 条而不是 20 条：任务列表现在「已暂停的任务排最前」，暂停任务多了会把
+      // 在跑的删除/去重任务挤出最近 20 条，导致刷新后进度条不再续接（任务本身照跑）
       const { data } = await apiClient.get<{ items: AdminTask[] }>('/tasks', {
-        params: { size: 20 },
+        params: { size: 100 },
       })
       const active = data.items.find(
         (t) =>

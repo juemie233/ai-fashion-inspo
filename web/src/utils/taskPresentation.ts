@@ -3,8 +3,8 @@
  * 并把任务 result 汇总成直观的完成文案。
  *
  * 这是 deep module：interface 只暴露 summarizeResult / describeRunningTask /
- * normalizeQueueTask / normalizeScraperTask，内部封装了各类任务的结果拼装、
- * 运行中阶段文案、状态归一化、平台与关键词展示、max_count 解析等规则。
+ * compareUnifiedTasks / normalizeQueueTask / normalizeScraperTask，内部封装了各类任务的
+ * 结果拼装、运行中阶段文案、状态归一化、平台与关键词展示、max_count 解析等规则。
  * 纯数据 → 数据，不接触 apiClient、路由或全局状态，因此可用一个普通对象入参
  * 在 vitest 中断言，无需 mock HTTP。
  *
@@ -28,6 +28,22 @@ export interface QueueTask {
   error: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * 任务列表排序：**已暂停的排最前**，其余按创建时间倒序（最新在前）。
+ *
+ * 为什么暂停优先：暂停任务是需要用户处理的（点「继续」或「取消」），把它留在
+ * 「等你去点」的位置最顺手；否则它会被源源不断的新任务一层层压到后面。
+ * 与后端 `/api/tasks` 的排序口径一致（`ORDER BY status='paused' 优先, id DESC`），
+ * 双端一致才不会出现「翻页时顺序跳变」。
+ *
+ * 纯函数：入参是已归一化的任务，可在 vitest 里直接断言，无需 mock HTTP。
+ */
+export function compareUnifiedTasks(a: UnifiedTask, b: UnifiedTask): number {
+  const pausedDiff = Number(b.status === 'paused') - Number(a.status === 'paused')
+  if (pausedDiff !== 0) return pausedDiff
+  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
 }
 
 /** 支持「运行中暂停 / 已暂停恢复」的任务类型（与后端 _PAUSABLE_RUNNING_TYPES 对齐）：

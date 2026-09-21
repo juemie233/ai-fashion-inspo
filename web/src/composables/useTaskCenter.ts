@@ -10,6 +10,7 @@ import { usePolling } from '@/composables/usePolling'
 import { useTaskActions } from '@/composables/useTaskActions'
 import { subscribeWs, onWsReconnected, isWsConnected } from '@/composables/useWebSocket'
 import {
+  compareUnifiedTasks,
   normalizeQueueTask,
   normalizeScraperTask,
   type QueueTask,
@@ -45,9 +46,8 @@ export function useTaskCenter() {
       ])
       const queue = (qRes.data.items || []).map(normalizeQueueTask)
       const scraper = (sRes.data.items || []).map(normalizeScraperTask)
-      tasks.value = [...queue, ...scraper].sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      )
+      // 排序口径见 compareUnifiedTasks：已暂停的最前（等着用户处理），其余最新在前
+      tasks.value = [...queue, ...scraper].sort(compareUnifiedTasks)
       // 任务数量缩减后页码可能超出总页数，回退到最后一页
       page.value = Math.min(page.value, Math.max(1, pageCount.value))
     } catch {

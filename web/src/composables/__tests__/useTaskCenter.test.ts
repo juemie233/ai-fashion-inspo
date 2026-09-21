@@ -237,3 +237,44 @@ describe('useTaskCenter.pauseTask / resumeTask 标签网络分析任务暂停恢
     )
   })
 })
+
+describe('useTaskCenter.loadTasks 排序（已暂停优先）', () => {
+  /** 后台队列原始行（/tasks 返回项；created_at 用 ISO 便于比较） */
+  function queueRow(id: number, status: string, created_at: string) {
+    return {
+      id,
+      type: 'batch_analyze',
+      status,
+      progress: 0,
+      total: 10,
+      done: 0,
+      result: null,
+      error: null,
+      created_at,
+      updated_at: created_at,
+    }
+  }
+
+  it('已暂停的任务排最前（哪怕更早创建），同组内仍按最新在前', async () => {
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/tasks') {
+        return Promise.resolve({
+          data: {
+            items: [
+              queueRow(9, 'success', '2026-09-21T10:00:00Z'),
+              queueRow(7, 'paused', '2026-09-20T08:00:00Z'), // 更早，但暂停要排最前
+              queueRow(8, 'running', '2026-09-21T09:00:00Z'),
+            ],
+          },
+        })
+      }
+      return Promise.resolve({ data: { items: [] } })
+    })
+
+    const tc = useTaskCenter()
+    await tc.loadTasks()
+
+    expect(tc.pageItems.value.map((t) => t.id)).toEqual([7, 9, 8])
+    expect(tc.pageItems.value[0].status).toBe('paused')
+  })
+})
