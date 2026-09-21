@@ -380,6 +380,48 @@ def test_plan_skips_duplicate_content_within_batch(tmp_path):
     assert {d.item.author_dir for d in decisions} == {"A", "B"}
 
 
+def test_plan_skips_same_work_segment_downloaded_twice(tmp_path):
+    """同一作品的同一分段被下载成两个文件（历史命名无 aweme_id + 新命名带 aweme_id）只入一次。
+
+    回归（用户反馈 2026-09-21 任务 #365「抖音我的喜欢」重复入库）：同组内所有文件的
+    跳过原因被一次性算完，此刻第一条还没登记进 seen_hashes，于是两条都判为可导入。
+    """
+    _write(tmp_path / "作者" / "2025-01-01 10-00-00_标题_image_1.webp", b"same")
+    _write(
+        tmp_path / "作者" / "2025-01-01 10-00-00_标题_7405539058576903424_image_1.webp",
+        b"same",
+    )
+    files = f2.scan_directory(tmp_path)
+    assert len(files) == 2
+
+    decisions, skipped, _ = _decisions(files)
+    imported = [d for d in decisions if d.action == "import"]
+    assert len(imported) == 1, f"同作品同分段重复入库：{[d.item.path.name for d in imported]}"
+    # 留下带真实作品 ID 的那份（platform_id / source_url 更完整）
+    assert imported[0].item.aweme_id == "7405539058576903424"
+    assert skipped["批次内重复（同内容已处理）"] == 1
+
+
+def test_plan_skips_same_work_segment_with_different_bytes(tmp_path):
+    """同一作品同一分段但字节不同（重新下载/转码）：仍视为同一素材，只入一次。
+
+    内容哈希挡不住（字节不同）、平台 ID 只比对库内（本批还没入）——必须按
+    「作品 + 分段」判重，否则同一作品会被下两次、重复入库两次。
+    """
+    _write(tmp_path / "作者" / "2025-01-01 10-00-00_标题_image_1.webp", b"old-bytes")
+    _write(
+        tmp_path / "作者" / "2025-01-01 10-00-00_标题_7405539058576903424_image_1.webp",
+        b"new-bytes",
+    )
+    files = f2.scan_directory(tmp_path)
+
+    decisions, skipped, _ = _decisions(files)
+    imported = [d for d in decisions if d.action == "import"]
+    assert len(imported) == 1, f"同作品同分段重复入库：{[d.item.path.name for d in imported]}"
+    assert imported[0].item.aweme_id == "7405539058576903424"
+    assert skipped["批次内重复（同作品同分段已处理）"] == 1
+
+
 def test_plan_skips_when_platform_id_exists(tmp_path):
     """幂等兜底：内容哈希口径变化时，平台 ID 命中也能挡住重复入库。"""
     files = _fake_tree(tmp_path)
@@ -784,10 +826,15 @@ def _jpeg(path: Path, color: str = "red") -> Path:
     return path
 
 
-def _fake_mp4(path: Path) -> Path:
-    """带 ftyp 魔数的最小 mp4 头：够过 validate_media 的类型粗检（不解码）。"""
+def _fake_mp4(path: Path, content: bytes | None = None) -> Path:
+    """带 ftyp 魔数的最小 mp4 头：够过 validate_media 的类型粗检（不解码）。
+
+    ``content`` 可覆盖默认字节：同一作品下的 video 与其封面 cover 要给**不同内容**，
+    否则会被「批次内同内容」判重跳过（真实素材字节本来就不同，同内容是测试假象）。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41")
+    default = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
+    path.write_bytes(content or default)
     return path
 
 
@@ -2163,7 +2210,10 @@ def test_apply_import_cover_of_video_work_uses_video_url(tmp_path):
     """端到端：同一作品下同时有 video 与 cover 时，cover 也要写 /video/。"""
     root = tmp_path / "f2"
     _fake_mp4(root / "A" / _new_name("标题", "video").replace(".webp", ".mp4"))
-    _fake_mp4(root / "A" / _new_name("标题", "cover").replace(".webp", ".jpg"))
+    _fake_mp4(
+        root / "A" / _new_name("标题", "cover").replace(".webp", ".jpg"),
+        b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41cover",
+    )
     files = f2.scan_directory(root)
     db = _import_lib(tmp_path)
 

@@ -384,6 +384,18 @@ def _skip_reason(
     return ""
 
 
+def asset_key(item: ParsedFile) -> str:
+    """作品内「分段」标识：同一作品的同一分段只应入库一次。
+
+    为什么内容哈希不够：同一分段可能被下载两次且**字节不同**（重新下载 / 转码 /
+    换了命名模板），此时哈希判重失效；而平台 ID 只比对**库内**已有素材，挡不住
+    同一批次里出现的第二次（实测 2026-09-21 任务 #365：抖音「我的喜欢」里同一作品的
+    同一分段以「旧命名（无 aweme_id）+ 新命名（带 aweme_id）」两份文件同时存在，
+    一个批次里重复入库两次）。
+    """
+    return f"{item.work_key}#{item.kind}{item.index}"
+
+
 def build_import_plan(
     files: list[ParsedFile],
     dedup: DedupIndex,
@@ -400,7 +412,9 @@ def build_import_plan(
     1. **内容判重**：文件 SHA-256 命中库内 ``inspirations.content_hash``
        （库内素材哈希覆盖率 100%，这是主判据，跨来源也有效）
     2. **垃圾桶判重**：同一内容已被用户丢进垃圾桶 → 跳过（要恢复请用垃圾桶还原）
-    3. **批次内判重**：同一批次里相同内容只入一次（重复下载 / 多目录同一文件）
+    3. **批次内判重**：同一批次里相同内容（重复下载 / 多目录同一文件）只入一次；
+       同一作品的同一分段（``work_key`` + 类型 + 序号）也只入一次——后者是重新下载/转码
+       导致字节不同时的兜底（实测「我的喜欢」里新旧两套命名各下一份 → 重复入库）
     4. **平台 ID 判重**：合成平台 ID 命中库内 ``source_platform_id``
        （幂等兜底：即使哈希口径变化，重复运行也不会重复入库）
     5. **参数过滤**：``--authors`` 只导指定作者、``--limit`` 限制作品数、
@@ -429,6 +443,7 @@ def build_import_plan(
     decisions: list[ImportDecision] = []
     skipped: Counter = Counter()
     seen_hashes: set[str] = set()
+    seen_assets: set[str] = set()  # 已计划导入的「作品 + 分段」，同分段只入一次
     accepted_works = 0
     deferred_works = 0
 
@@ -451,10 +466,24 @@ def build_import_plan(
             skipped["作者不在指定范围（--authors / 已登记博主）"] += len(items)
             continue
 
-        reasons = [
-            _skip_reason(item, digests[item.path], dedup, seen_hashes, skip_live)
-            for item in items
-        ]
+        # 同组内先排序：带真实作品 ID 的文件优先——它的 platform_id / source_url 更完整，
+        # 「同作品同分段」判重时应当留下它、跳过不带 ID 的历史重名文件
+        items.sort(key=lambda i: (not i.aweme_id, str(i.path)))
+
+        # 逐条顺序算原因，并在「本批接收」时**立即**登记内容哈希与分段键：同一组内
+        # （或后续组）的同内容、同分段文件因此都能被挡住。此前是一次性算完一组的原因、
+        # 登记却发生在后面的决策循环里，于是同组内两条完全相同的文件双双入库（实测 bug）
+        reasons: list[str] = []
+        for item in items:
+            digest = digests[item.path]
+            key = asset_key(item)
+            reason = _skip_reason(item, digest, dedup, seen_hashes, skip_live)
+            if not reason and key in seen_assets:
+                reason = "批次内重复（同作品同分段已处理）"
+            if not reason:
+                seen_hashes.add(digest)
+                seen_assets.add(key)
+            reasons.append(reason)
         if not any(not r for r in reasons):
             for item, reason in zip(items, reasons, strict=False):
                 skipped[reason] += 1
@@ -484,7 +513,6 @@ def build_import_plan(
                     blogger_id=blogger_id,
                 ))
                 continue
-            seen_hashes.add(digest)
             decisions.append(ImportDecision(
                 item=item, action="import", reason="",
                 platform_id=platform_id_for(item), content_hash=digest,
