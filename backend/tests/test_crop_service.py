@@ -114,6 +114,25 @@ def _scan(client, **overrides):
     return r.json()
 
 
+def _scan_all(client, **overrides):
+    """扫描候选并自动跟完所有分段，返回 (合并后的候选列表, 最后一次响应)。
+
+    content 模式分「完整截图 / 已裁过」两段扫描（先高产出段，见 crop_service 的
+    _STAGE_FULL 说明）。用例验证「候选资格结论」时用它，免得素材落在第二段被
+    误判成「没列出来」。
+    """
+    items: list[dict] = []
+    body: dict = {}
+    cursor = None
+    for _ in range(10):  # 段数有限：10 次足够，同时防实现出错时死循环
+        body = _scan(client, cursor=cursor, **overrides) if cursor else _scan(client, **overrides)
+        items.extend(body["items"])
+        cursor = body["next_cursor"]
+        if not body["truncated"] or not cursor:
+            break
+    return items, body
+
+
 def _file_size(insp_id, client):
     """从数据库读取素材文件的 (宽, 高, content_hash)。"""
     import asyncio
@@ -354,8 +373,8 @@ def test_content_mode_weak_residual_not_listed(client):
     _upload_screenshot(client, buf.getvalue(), "image/jpeg")
 
     # content 模式：弱残留（无强字形、无实底带）→ 不列候选（列表保持干净）
-    body = _scan(client, mode="content")
-    assert body["total"] == 0
+    items, _body = _scan_all(client, mode="content")
+    assert items == []
 
     # ratio 模式：仍按 1.75 过滤，不可见
     body2 = _scan(client, mode="ratio")
@@ -401,9 +420,70 @@ def test_content_mode_strong_glyph_listed(client, monkeypatch):
         return features, bounds
 
     monkeypatch.setattr(cs, "analyze_screenshot_combined", _fake_combined)
-    body = _scan(client, mode="content")
-    assert body["total"] == 1
-    assert body["items"][0]["id"] == insp["id"]
+    items, _body = _scan_all(client, mode="content")
+    assert len(items) == 1
+    assert items[0]["id"] == insp["id"]
+
+
+def test_content_scan_stages_full_screenshot_first(client, monkeypatch):
+    """content 模式分段扫描：先扫「完整截图」段，扫完再把游标切到「已裁过」段。
+
+    回归（用户反馈「内容边界检测（抖音截图）似乎失效」）：两段混在一轮按 id 随机
+    顺序解码时，60 秒预算几乎全花在已裁过的截图与普通照片上（单张完整解码 ~85ms，
+    预算只够 ~630 张），连扫多轮候选都是 0，看起来像功能坏了。现在第一段只解码
+    完整截图比例（合格候选几乎都在这一段），第一轮就能出候选；第二段（已裁过、
+    只认强字形证据）由用户点「继续扫描」时接着扫。
+    """
+    from app.services import crop_service as cs
+
+    original = cs.analyze_screenshot_combined
+
+    def _fake_combined(path):
+        """伪造强字形命中（模拟真实状态栏时间/信号签名）。"""
+        features, bounds = original(path)
+        if bounds is None:
+            bounds = {
+                "top_frac": 0.0,
+                "bottom_frac": 0.0,
+                "top_edge": 0,
+                "bottom_edge": 0,
+                "correction": False,
+                "kind": "plain",
+                "already_cropped": False,
+                "residual_top_frac": 0.0,
+                "bounds_valid": False,
+                "glyph_top_frac": 0.0,
+                "glyph_strong": False,
+            }
+        bounds["glyph_top_frac"] = 0.10
+        bounds["glyph_strong"] = True
+        return features, bounds
+
+    monkeypatch.setattr(cs, "analyze_screenshot_combined", _fake_combined)
+
+    # 「已裁过」比例（400x600 = 1.5）：只有强字形证据才能入选 → 属第二段
+    width, height = 400, 600
+    arr = np.full((height, width, 3), 170, dtype=np.uint8)
+    rng = np.random.default_rng(41)
+    for y in range(3, height):
+        cols = rng.choice(width, size=200, replace=False)
+        arr[y, cols] = rng.integers(0, 256, size=(200, 3), dtype=np.uint8)
+    buf = BytesIO()
+    Image.fromarray(arr).save(buf, "JPEG")
+    cropped_id = _upload_screenshot(client, buf.getvalue(), "image/jpeg")["id"]
+    # 完整截图比例（300x600 = 2.0）：属第一段
+    full_data, full_ctype = _make_vertical_screenshot(bg=(180, 200, 230))
+    _upload_screenshot(client, full_data, full_ctype)
+
+    first = _scan(client, mode="content")
+    assert cropped_id not in [i["id"] for i in first["items"]], "第一段不该处理已裁过的素材"
+    assert first["truncated"] is True
+    assert first["next_cursor"] == "cropped:"  # 段游标：接下来扫已裁过段
+
+    second = _scan(client, mode="content", cursor=first["next_cursor"])
+    assert [i["id"] for i in second["items"]] == [cropped_id], "第二段应列出强字形的已裁截图"
+    assert second["truncated"] is False
+    assert second["next_cursor"] is None
 
 
 def _make_status_bar_strip_image(textured: bool = False) -> Image.Image:

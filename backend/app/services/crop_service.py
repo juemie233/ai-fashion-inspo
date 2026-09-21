@@ -74,7 +74,18 @@ MIN_RATIO = 1.75
 # content 模式的竖屏下限放宽到 1.3：已被裁剪过的截图比例可能掉到 1.3~1.75
 # （原 2.17 裁 40% 后 ≈1.3），顶部状态栏残留仍需二次裁剪；内容边界检测
 # 自带「内容区占比」与「残留簇 + 后随内容更高」校验兜底，不会误裁普通照片。
+# ⚠ 这个区间按「第二轮」扫描，不与完整截图混在一轮里——原因见 _STAGE_FULL/_STAGE_CROPPED。
 CONTENT_MIN_RATIO = 1.3
+
+# ── content 模式分段扫描（2026-09 实测修复）──
+# 检测每张要完整解码（实测 ~85 ms），60 秒预算只够 ~630 张；而全库 9,714 张手动上传里
+# 只有 1,578 张是完整截图比例（ratio ≥ _FULL_SCREENSHOT_RATIO），合格候选 618 张**全部**
+# 在这一段；1.75~2.0 的 940 张合格 0 张，1.3~1.75 的 6,860 张只有 2 张（ratio 1.69、
+# 字形强证据命中——状态栏大多已在第一次裁剪时被切掉）。旧实现把两段混在一起按 id 随机
+# 顺序解码，实测连扫两轮（627 / 597 张）候选为 0 —— 用户看到的就是「内容边界检测失效」。
+# 现在分两段：先扫完整截图（高产出，第一轮就出候选），扫完再扫已裁过的（只认强字形证据）。
+_STAGE_FULL = "full"
+_STAGE_CROPPED = "cropped"
 # 默认裁剪比例（相对图片高度）
 DEFAULT_CROP_TOP = 0.03  # 顶部 3%（状态栏区域）
 DEFAULT_CROP_BOTTOM = 0.05  # 底部 5%（底部导航栏/手势条区域）
@@ -270,17 +281,28 @@ def _content_candidate_qualified(bounds_result: dict, confidence: str, ratio: fl
     return bool(glyph_found or has_ui_band)
 
 
-def _resolve_scan_cursor(cursor: str | None) -> str | None:
-    """解析分页游标（素材主键为 UUID 字符串，规范化后做字符串比较）。
+def _resolve_scan_cursor(cursor: str | None) -> tuple[str, str | None]:
+    """解析分页游标，返回 ``(阶段, 素材 id 或 None)``。
 
-    不能 int() 转换（曾导致续扫恒 400）；与库中存储格式严格一致。
+    游标格式 ``<阶段>:<素材 id>``（阶段 ∈ full / cropped，id 为空表示该阶段从头开始）；
+    兼容旧格式（纯素材 UUID，来自分段前的实现）→ 按「完整截图段」处理，语义等价。
+
+    素材主键为 UUID 字符串，规范化后做字符串比较。不能 int() 转换（曾导致续扫恒 400）；
+    与库中存储格式严格一致。
     """
     if cursor is None:
-        return None
+        return _STAGE_FULL, None
+    stage, sep, raw = cursor.partition(":")
+    if not sep:
+        stage, raw = _STAGE_FULL, cursor  # 旧格式：纯 UUID 游标
+    if stage not in (_STAGE_FULL, _STAGE_CROPPED):
+        raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的 next_cursor）")
+    if not raw:
+        return stage, None
     try:
-        return str(uuid.UUID(cursor))
+        return stage, str(uuid.UUID(raw))
     except ValueError:
-        raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的素材 id）") from None
+        raise ValueError(f"分页游标格式无效：{cursor}（应为上次扫描返回的 next_cursor）") from None
 
 
 async def scan_candidates(
@@ -303,14 +325,18 @@ async def scan_candidates(
             勾选。
             自动化口径——只列手机截图候选：须检出系统 UI 特征（状态栏/
             导航栏）或状态栏残留信号；无 UI 证据的普通竖屏照片静默排除，
-            检测失败（无内容区边界）的同样排除）
+            检测失败（无内容区边界）的同样排除。
+            **分段扫描**：先扫「完整截图比例」（ratio ≥ 2.0，抖音截图正常形态，
+            合格候选几乎都在这一段），这一段扫完再扫「已裁过 / 长竖图」
+            （1.3~2.0，只认字形强证据）——检测每张要完整解码 ~85ms，混在一起扫会
+            把 60 秒预算全花在几乎不可能入选的素材上，连扫多轮都零候选）
         crop_top: 顶部裁剪比例（仅 ratio 模式生效）
         crop_bottom: 底部裁剪比例（仅 ratio 模式生效）
         limit: 单次最多返回的候选数（0 表示不限制）
-        cursor: 分页游标（上一批返回的 next_cursor；素材按 id 全序分批扫描，
-            传游标从断点继续，避免大批量素材单次请求超时。注意 id 为 UUID，
-            顺序稳定但与上传时间无关——只保证分批不重不漏，不代表先后批次
-            的新旧关系）
+        cursor: 分页游标（上一批返回的 next_cursor，格式 ``<阶段>:<素材 id>``）。
+            素材按 id 全序分批扫描（id 为 UUID，顺序稳定但与上传时间无关——只保证
+            分批不重不漏，不代表批次新旧）；content 模式的阶段游标先 ``full:`` 后
+            ``cropped:``，前端原样回传即可
         time_budget: 单次扫描的时间预算（秒）。素材量大（5000+ 竖屏）时
             全量检测远超前端请求超时，预算耗尽即返回已找到的候选并置
             truncated=True，由前端提示用户继续扫描。
@@ -320,7 +346,7 @@ async def scan_candidates(
             "total": 本次扫描列入候选的数量（受 limit 封顶，等于 len(items））,
             "items": [候选列表，同旧结构],
             "scanned": 本次实际扫描的素材数,
-            "next_cursor": 截断时下一次扫描的起点（素材 id）；扫完返回 None,
+            "next_cursor": 截断时下一次扫描的起点（``<阶段>:<素材 id>``）；扫完返回 None,
             "truncated": 是否因时间预算/候选上限提前结束（还有未扫描素材）,
         }
     """
@@ -331,7 +357,7 @@ async def scan_candidates(
     # content 模式放宽竖屏下限（被裁剪过的截图比例可低至 1.3）
     min_ratio = MIN_RATIO if mode != "content" else CONTENT_MIN_RATIO
 
-    cursor_id = _resolve_scan_cursor(cursor)
+    stage, cursor_id = _resolve_scan_cursor(cursor)
 
     query = select(Inspiration).where(
         Inspiration.source_type == "manual_upload",
@@ -346,6 +372,7 @@ async def scan_candidates(
 
     candidates: list[dict] = []
     scanned = 0
+    deferred = 0  # content 模式：属于另一段的素材数（决定是否还要切到下一段）
     truncated = False
     last_insp_id: str | None = None
     deadline = time.monotonic() + max(1.0, time_budget)
@@ -356,7 +383,11 @@ async def scan_candidates(
             break
         scanned += 1
         last_insp_id = insp.id
-        item = await _scan_one_candidate(insp, mode, crop_top, crop_bottom, min_ratio)
+        item, postponed = await _scan_one_candidate(
+            insp, mode, crop_top, crop_bottom, min_ratio, stage
+        )
+        if postponed:
+            deferred += 1
         if item is None:
             continue
         candidates.append(item)
@@ -376,11 +407,19 @@ async def scan_candidates(
         key=lambda c: (bool(c.get("vlm_residue")), c.get("created_at") or ""),
         reverse=True,
     )
+    # 分段：完整截图段扫完而库里还有「已裁过」素材时，把游标切到第二段（从头开始扫）
+    if mode == "content" and stage == _STAGE_FULL and not truncated and deferred:
+        truncated = True
+        next_cursor = f"{_STAGE_CROPPED}:"
+    else:
+        next_cursor = (
+            f"{stage}:{last_insp_id}" if truncated and last_insp_id is not None else None
+        )
     return {
         "total": len(candidates),
         "items": candidates,
         "scanned": scanned,
-        "next_cursor": str(last_insp_id) if truncated and last_insp_id is not None else None,
+        "next_cursor": next_cursor,
         "truncated": truncated,
         "vlm_reviewed": bool(vlm_review and candidates),
         "vlm_hits": vlm_hit,
@@ -391,23 +430,38 @@ async def scan_candidates(
 
 
 async def _scan_one_candidate(
-    insp: Inspiration, mode: str, crop_top: float, crop_bottom: float, min_ratio: float
-) -> dict | None:
-    """检测单个素材是否为手机截图候选，返回候选条目；不列入时返回 None。
+    insp: Inspiration,
+    mode: str,
+    crop_top: float,
+    crop_bottom: float,
+    min_ratio: float,
+    stage: str = _STAGE_FULL,
+) -> tuple[dict | None, bool]:
+    """检测单个素材是否为手机截图候选。
 
     只读、不落库：写库与候选上限/时间预算由 scan_candidates 的循环负责。
+
+    返回:
+        ``(候选条目或 None, 是否因「不属于本轮阶段」被推迟到下一段)``。content 模式
+        分「完整截图 / 已裁过」两段扫描（见 :data:`_STAGE_FULL`），不属于本轮阶段的
+        素材**不做解码**（贵在解码），只回报被推迟，供调用方决定是否切段。
     """
 
     full = _resolve_storage_path(insp.file_path)
     if full is None or not full.exists():
-        return None
+        return None, False
     try:
         # PIL 文件头读取是阻塞 I/O，放线程池执行（与下方 detect_* 一致）
         width, height = await asyncio.to_thread(_probe_size, full)
     except Exception:
-        return None  # 无法解码的图片不做候选
-    if height / width < min_ratio:
-        return None
+        return None, False  # 无法解码的图片不做候选
+    ratio = height / width
+    if ratio < min_ratio:
+        return None, False
+    if mode == "content":
+        is_full_screenshot = ratio >= _FULL_SCREENSHOT_RATIO
+        if (stage == _STAGE_FULL) is not is_full_screenshot:
+            return None, True  # 交给另一段（先完整截图，再已裁过）
 
     # content 模式：单次解码合并「截图特征 + 内容边界」（性能关键——
     # 全量扫描 5000+ 张时每张只解码一次，旧实现要解码三次）
@@ -424,10 +478,10 @@ async def _scan_one_candidate(
         if bounds_result is None:
             # 检测失败（未检出内容区边界/布局不规则）且无字形证据
             # （combined 已在字形存在时返回字形建议而非 None）：静默排除
-            return None
+            return None, False
         # ── 候选资格（FP/FN 裁决层，口径见 _content_candidate_qualified）──
-        if not _content_candidate_qualified(bounds_result, confidence, height / width):
-            return None
+        if not _content_candidate_qualified(bounds_result, confidence, ratio):
+            return None, False
         # 资格通过后即使已裁剪干净、无残留建议也继续列入候选：它是真实
         # 截图（有字形/UI 结构证据），顶部状态栏残留肉眼可见，交给人工
         # 目检勾选（此前把这类素材静默过滤，导致「大部分素材找不到、
@@ -519,7 +573,7 @@ async def _scan_one_candidate(
             item["crop_top"] = 0.0
             item["auto_checked"] = False
             item["note"] = "未检出可裁区域（可能已裁剪过），请目检确认"
-    return item
+    return item, False
 
 
 async def _apply_vlm_review(
