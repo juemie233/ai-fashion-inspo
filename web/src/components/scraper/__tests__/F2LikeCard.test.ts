@@ -78,20 +78,91 @@ const linkStub = defineComponent({
     return h('a', this.$slots.default?.())
   },
 })
-/** a-checkbox 桩：渲染真实 input[type=checkbox]，便于断言开关对提交参数的影响 */
+/** a-checkbox 桩：渲染真实 input[type=checkbox]。
+ *  - 独立使用（卡片里的「同时登记穿搭博主」、弹窗里的「全选」）：布尔 v-model / model-value
+ *  - 在 a-checkbox-group 内（收藏夹清单）：从注入的组上下文取选中态，点击时切成员
+ */
 const checkboxStub = defineComponent({
   name: 'ACheckbox',
-  props: { modelValue: { type: Boolean, default: false } },
-  emits: ['update:modelValue'],
+  inject: { group: { from: 'arcoCheckboxGroup', default: null } },
+  props: {
+    modelValue: { type: Boolean, default: false },
+    value: { type: String, default: '' },
+  },
+  emits: ['update:modelValue', 'change'],
   render() {
+    const group = this.group as { value: string[]; toggle: (v: string) => void } | null
+    if (group) {
+      const checked = (group.value ?? []).includes(this.value)
+      return h('label', { class: 'f2l-folder' }, [
+        h('input', {
+          type: 'checkbox',
+          value: this.value,
+          checked,
+          onChange: () => group.toggle(this.value),
+        }),
+        this.$slots.default?.(),
+      ])
+    }
     return h('label', [
       h('input', {
         type: 'checkbox',
         checked: this.modelValue,
-        onChange: (e: Event) =>
-          this.$emit('update:modelValue', (e.target as HTMLInputElement).checked),
+        onChange: (e: Event) => {
+          const checked = (e.target as HTMLInputElement).checked
+          this.$emit('update:modelValue', checked)
+          this.$emit('change', checked)
+        },
       }),
       this.$slots.default?.(),
+    ])
+  },
+})
+/** a-checkbox-group 桩：受控数组 + 注入组上下文，供上面的 checkbox 桩成员切换 */
+const checkboxGroupStub = defineComponent({
+  name: 'ACheckboxGroup',
+  provide() {
+    // 用 getter 惰性读 props：provide() 的执行时机早于 props 就绪，直接取值会拿到 undefined
+    const self = this as unknown as {
+      modelValue?: string[]
+      $emit: (event: string, ...args: unknown[]) => void
+    }
+    return {
+      arcoCheckboxGroup: {
+        get value() {
+          return self.modelValue ?? []
+        },
+        toggle(v: string) {
+          const next = [...(self.modelValue ?? [])]
+          const index = next.indexOf(v)
+          if (index >= 0) next.splice(index, 1)
+          else next.push(v)
+          self.$emit('update:modelValue', next)
+        },
+      },
+    }
+  },
+  props: { modelValue: { type: Array, default: () => [] } },
+  emits: ['update:modelValue'],
+  render() {
+    return h('div', { class: 'f2l-group' }, this.$slots.default?.())
+  },
+})
+/** a-modal 桩：visible 为真时渲染内容，并给一个「确定」按钮触发 ok */
+const modalStub = defineComponent({
+  name: 'AModal',
+  props: {
+    visible: { type: Boolean, default: false },
+    title: { type: String, default: '' },
+    okText: { type: String, default: '确定' },
+  },
+  emits: ['update:visible', 'ok'],
+  render() {
+    if (!this.visible) return null
+    return h('div', { class: 'f2l-modal' }, [
+      h('div', { class: 'f2l-modal-title' }, this.title),
+      this.$slots.default?.(),
+      h('button', { class: 'f2l-modal-ok', onClick: () => this.$emit('ok') }, this.okText),
     ])
   },
 })
@@ -129,8 +200,25 @@ function makeStatus(over: Record<string, unknown> = {}) {
   }
 }
 
-async function mountCard(status = makeStatus(), mode: 'like' | 'collection' = 'like') {
-  mocks.get.mockResolvedValue({ data: status })
+async function mountCard(
+  status = makeStatus(),
+  mode: 'like' | 'collection' = 'like',
+  collects: { id: string; name: string; total: number }[] | null = null,
+) {
+  // 收藏模式的卡片会额外拉收藏夹清单（先扫描），这里按 URL 分别返回
+  mocks.get.mockImplementation((url: string) =>
+    Promise.resolve({
+      data:
+        url === '/scraper/f2-collects'
+          ? {
+              folders: collects ?? [],
+              total_folders: (collects ?? []).length,
+              total_works: (collects ?? []).reduce((sum, f) => sum + f.total, 0),
+              cookie_source: 'conf/app.yaml',
+            }
+          : status,
+    }),
+  )
   const wrapper = mount(F2LikeCard, {
     props: { mode },
     global: {
@@ -142,6 +230,8 @@ async function mountCard(status = makeStatus(), mode: 'like' | 'collection' = 'l
         'a-spin': spinStub,
         'a-link': linkStub,
         'a-checkbox': checkboxStub,
+        'a-checkbox-group': checkboxGroupStub,
+        'a-modal': modalStub,
       },
     },
   })
@@ -334,7 +424,8 @@ describe('F2LikeCard', () => {
     // 点赞可用、收藏不可用时不能被放行：可用性必须读 collect_* 字段
     expect(wrapper.find('.f2l-status').text()).toContain('可采集我的收藏')
 
-    await buttons(wrapper, '采集我的收藏').submit.trigger('click')
+    // 收藏卡片有两个动作：「先扫描收藏夹」（主）与「一键下载全部收藏」（老口径）
+    await buttons(wrapper, '一键下载全部收藏').submit.trigger('click')
     await flushPromises()
 
     expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
@@ -362,6 +453,94 @@ describe('F2LikeCard', () => {
     )
 
     expect(wrapper.find('.f2l-status').text()).toContain('收藏列表只有本人可见')
-    expect(buttons(wrapper, '采集我的收藏').submit.attributes('disabled')).toBeDefined()
+    expect(buttons(wrapper, '先扫描收藏夹').submit.attributes('disabled')).toBeDefined()
+    expect(buttons(wrapper, '一键下载全部收藏').submit.attributes('disabled')).toBeDefined()
+  })
+
+  // ── 「先扫描、后下载」：夹默认全选，勾掉的夹一件都不下 ──
+
+  /** 收藏可用 + 已配主页链接（否则卡片上的按钮是禁用的，点了不会发请求） */
+  const READY_COLLECT_STATUS = () =>
+    makeStatus({
+      like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+      collect_available: true,
+      collect_reason: '已配置「我的主页链接」，可采集我的收藏（抖音收藏列表）',
+    })
+
+  const FOLDERS = [
+    { id: '111', name: '秘书OL', total: 96 },
+    { id: '222', name: '股票', total: 1 },
+    { id: '333', name: '过膝袜短袜JK', total: 334 },
+  ]
+
+  it('先扫描：拉收藏夹清单 → 弹窗列出全部夹且默认全选', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+
+    expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-collects')
+    const modal = wrapper.find('.f2l-modal')
+    expect(modal.exists()).toBe(true)
+    expect(modal.text()).toContain('秘书OL（96 件）')
+    expect(modal.text()).toContain('股票（1 件）')
+    // 默认全选：三个夹的复选框都是选中的
+    const boxes = modal.findAll('.f2l-folder input[type="checkbox"]')
+    expect(boxes).toHaveLength(3)
+    expect(boxes.every((b) => (b.element as HTMLInputElement).checked)).toBe(true)
+    expect(modal.text()).toContain('3 / 3 个夹')
+    expect(modal.text()).toContain('431 / 431 件')
+  })
+
+  it('勾掉不想要的夹：只把剩下的 collect_ids 下发给后端', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+    mocks.post.mockResolvedValue({ data: { task_id: 81, message: '已提交' } })
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+    // 取消勾选「股票」
+    const boxes = wrapper.findAll('.f2l-folder input[type="checkbox"]')
+    await boxes[1].setValue(false)
+    await wrapper.find('.f2l-modal-ok').trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: {
+        fetch: true,
+        mode: 'collection',
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        register_bloggers: true,
+        like_max_counts: 0,
+        collect_ids: ['111', '333'],
+      },
+    })
+    expect(wrapper.emitted('submitted')).toBeTruthy()
+    // 提交后弹窗关闭
+    expect(wrapper.find('.f2l-modal').exists()).toBe(false)
+  })
+
+  it('一个夹都没勾：不下发任何任务（避免误点成「全下」）', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+    // 点「全选 / 全不选」→ 全不选（原本是全选状态，点一下即清空）
+    await wrapper.find('.f2l-collect-head input[type="checkbox"]').setValue(false)
+    await flushPromises()
+    await wrapper.find('.f2l-modal-ok').trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(wrapper.find('.f2l-modal').exists()).toBe(true) // 弹窗留着让用户改
+  })
+
+  it('扫描结果为空时不打开弹窗（提示改用「一键下载全部收藏」）', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', [])
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.f2l-modal').exists()).toBe(false)
+    expect(mocks.post).not.toHaveBeenCalled()
   })
 })

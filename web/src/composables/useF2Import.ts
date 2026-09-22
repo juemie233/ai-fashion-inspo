@@ -24,6 +24,29 @@ export interface F2LikeProgress {
   seconds?: number
 }
 
+/** 一个抖音收藏夹（后端 GET /api/scraper/f2-collects 的 folders 项） */
+export interface F2CollectFolder {
+  /** 收藏夹 ID（下载时按它指定「只下这个夹」） */
+  id: string
+  /** 收藏夹名（用户自己起的，如「过膝袜短袜JK」） */
+  name: string
+  /** 夹内作品数（下载进度就用它当分母） */
+  total: number
+  /** 最近收藏时间（f2 已格式化成 `YYYY-MM-DD HH-MM-SS`，无则空串） */
+  last_collect_at: string
+}
+
+/** 「先扫描」的结果：收藏夹清单（只读，不下载任何媒体） */
+export interface F2CollectFolders {
+  folders: F2CollectFolder[]
+  /** 收藏夹总数 */
+  total_folders: number
+  /** 各夹作品数之和（含跨夹重复，仅供量级参考） */
+  total_works: number
+  /** Cookie 来源（f2 配置文件路径，出错时给用户看） */
+  cookie_source: string
+}
+
 /** 进行中任务的简要信息（后端 /api/scraper/f2-status 的 auto.running） */
 export interface F2RunningTask {
   id: number
@@ -181,6 +204,10 @@ export interface F2ImportOptions {
    *  首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
    *  抖音号与 v.douyin.com 短链不支持（后端会明确报错）。 */
   profiles?: string[]
+  /** mode=collection 时**只下这些收藏夹**（夹 ID，来自「先扫描」的结果）。
+   *  非空时后端不再走平铺收藏列表，改为逐夹枚举作品后交给 f2 的下载器——
+   *  没被选中的夹一件都不会下载。空 = 老口径（平铺收藏，含所有收藏夹）。 */
+  collect_ids?: string[]
 }
 
 export function useF2Import() {
@@ -193,6 +220,9 @@ export function useF2Import() {
   /** 博主清单（展开清单时才拉取，不参与状态轮询） */
   const f2Authors = ref<F2AuthorsOverview | null>(null)
   const authorsLoading = ref(false)
+  /** 「先扫描」结果：收藏夹清单（供勾选，默认全选） */
+  const collectFolders = ref<F2CollectFolders | null>(null)
+  const collectScanning = ref(false)
 
   /**
    * 读取可用性（卡片挂载、刷新按钮与「有任务在跑」时的轮询都调它）。
@@ -224,6 +254,30 @@ export function useF2Import() {
       Message.warning(getApiErrorMessage(e, 'f2 博主清单读取失败'))
     } finally {
       authorsLoading.value = false
+    }
+  }
+
+  /**
+   * 「先扫描」：列出抖音收藏夹（夹名 / 夹 ID / 夹内作品数），只读、不下载任何媒体。
+   *
+   * 为什么要先扫描：平铺的「我的收藏」会把收藏夹里的作品一并下下来（实测 31 个夹
+   * 约 2000 件，其中混着「股票 / 哲学 / 历史」这类明显不想要的 1 件夹），用户需要
+   * 在下载前看到清单、勾掉不要的夹，再只下勾选的。
+   *
+   * @returns 扫描结果；失败（Cookie 失效 / 风控）返回 null 并提示原因。
+   */
+  async function scanCollects(): Promise<F2CollectFolders | null> {
+    collectScanning.value = true
+    try {
+      const { data } = await apiClient.get<F2CollectFolders>('/scraper/f2-collects')
+      collectFolders.value = data
+      return data
+    } catch (e) {
+      collectFolders.value = null
+      Message.error(getApiErrorMessage(e, '读取收藏夹失败'))
+      return null
+    } finally {
+      collectScanning.value = false
     }
   }
 
@@ -370,8 +424,11 @@ export function useF2Import() {
     likeMaxSaving,
     f2Authors,
     authorsLoading,
+    collectFolders,
+    collectScanning,
     loadStatus,
     loadAuthors,
+    scanCollects,
     submit,
     setAuto,
     setLikeUser,

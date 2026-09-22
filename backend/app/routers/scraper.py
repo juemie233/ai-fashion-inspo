@@ -75,6 +75,13 @@ async def create_f2_import(
             "非空时只下这些博主，且不需要它们已在 f2 用户库里；首次采集自动翻全量"
         ),
     ),
+    collect_ids: str | None = Query(
+        None,
+        description=(
+            "mode=collection 时**只下这些收藏夹**（夹 ID，逗号分隔；来自 GET /f2-collects）。"
+            "缺省/空 = 老口径：下平铺收藏列表（含所有收藏夹）"
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """一键获取素材：调 f2 增量下载抖音作品 → 去重 → 入库。
@@ -145,6 +152,7 @@ async def create_f2_import(
     profile_list = [
         p.strip() for p in (profiles or "").replace(",", " ").split() if p.strip()
     ]
+    collect_id_list = [c.strip() for c in (collect_ids or "").split(",") if c.strip()]
 
     # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
     # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」
@@ -165,6 +173,7 @@ async def create_f2_import(
         register_bloggers=register_bloggers,
         like_max_counts=like_max_counts,
         profiles=profile_list,
+        collect_ids=collect_id_list,
     )
     if task is None:
         return {
@@ -191,6 +200,34 @@ async def f2_status(db: AsyncSession = Depends(get_db)) -> dict:
     info = f2_import_status()
     info["auto"] = await get_f2_auto_status(db)
     return info
+
+
+@router.get("/f2-collects")
+async def f2_collects() -> dict:
+    """**先扫描**：列出抖音收藏夹（夹名 / 夹 ID / 夹内作品数），只读、不下载任何媒体。
+
+    为什么要先扫描：平铺的「我的收藏」会把收藏夹里的作品一并下下来（实测 31 个夹、
+    约 2000 件，里面混着「股票 / 哲学 / 历史」这类明显不想要的），用户在下载前需要
+    看到清单并**勾掉不想要的夹**，只下勾选的。
+
+    实现：走 f2 的收藏夹接口（`collects/list/`）只取元数据；Cookie 从 f2 配置整份
+    YAML 解析（不是截 `cookie:` 那一行——那样只有 172 字符的残缺登录态，接口会返回
+    「200 但内容为空」）。同步返回：收藏夹清单通常 1~2 页，2~5 秒。
+    """
+    from scripts import import_f2_downloads as f2
+
+    try:
+        data = await asyncio.to_thread(f2.list_collect_folders)
+    except Exception as exc:  # noqa: BLE001 —— 风控/Cookie 失效都要给用户可读原因
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"读取收藏夹失败：{exc}。"
+                "常见原因：f2 配置里的 Cookie 失效（请手动跑一次 f2 重新登录）"
+                "或接口风控（稍后重试）"
+            ),
+        ) from exc
+    return data
 
 
 @router.get("/f2-authors")

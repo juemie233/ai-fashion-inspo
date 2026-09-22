@@ -197,6 +197,8 @@ export function summarizeResult(
         planned && planned !== importedCount ? `计划 ${planned}` : '',
         trash ? `已在垃圾桶 ${trash}` : '',
         bloggerCreated ? `新登记博主 ${bloggerCreated}` : '',
+        // 「先扫描、后下载」：本次只下了哪几个收藏夹（没勾的夹一件都没下）
+        collectFolderText(r),
         // 收藏模式：本批素材聚合进「抖音收藏」合集的结果
         collectText(r),
         // 「我的列表」模式：下载结束后跨模式重复合并（like ↔ collection → 硬链接）
@@ -259,6 +261,50 @@ function mergeText(r: Record<string, unknown>): string {
 }
 
 /**
+ * 「按选中收藏夹下载」的进度文案（后端 result.collect_progress）。
+ *
+ * 与平铺收藏的区别：分母是真的——各夹 total_number 之和，所以这里能给出
+ * 「已处理 n/m 件」与当前夹；平铺模式只能按耗时给软进度（点赞/收藏总数要翻到底才知道）。
+ * 没有该字段（平铺模式 / 尚未开始逐夹枚举）时返回空串，回落到原有文案。
+ */
+function collectProgressText(r: Record<string, unknown>): string {
+  // 该字段只由「按选中收藏夹下载」那条链路写入，因此**用字段存在与否**判定走哪条文案：
+  // 刚进入下载阶段时各计数还是 0（夹清单要 1~2 秒才回来），此时也该说「逐夹列举作品」，
+  // 而不是回落成平铺收藏的文案（用户明明勾了夹，文案却说在翻整个收藏列表）。
+  if (r.collect_progress == null) return ''
+  const cp = (r.collect_progress || {}) as Record<string, unknown>
+  const folders = Array.isArray(cp.folders) ? cp.folders : []
+  const works = Number(cp.works ?? 0) || 0
+  const totalWorks = Number(cp.total_works ?? 0) || 0
+  const current = typeof cp.current === 'string' ? cp.current : ''
+  const at = current ? `正在下载收藏夹「${current}」` : '正在逐夹列举作品'
+  const doneFolders = `已完成 ${folders.length} 个夹`
+  const worksText = totalWorks
+    ? `已处理 ${works}/${totalWorks} 件`
+    : `已处理 ${works} 件（正在取夹内清单）`
+  return `只下勾选的收藏夹：${at} · ${doneFolders} · ${worksText}；已下载过的作品会自动跳过`
+}
+
+/**
+ * 「按选中收藏夹下载」的完成文案（后端 result.fetch.collect）。
+ *
+ * 「先扫描、后下载」的那条链路才会写这个字段：这里报「下了几个夹、共处理多少件」，
+ * 让用户一眼看到自己勾掉的那些夹确实一件都没下。平铺收藏没有它，返回空串。
+ */
+function collectFolderText(r: Record<string, unknown>): string {
+  const fetch = (r.fetch || {}) as Record<string, unknown>
+  const collect = (fetch.collect || {}) as Record<string, unknown>
+  const folders = Array.isArray(collect.folders) ? collect.folders : []
+  if (!folders.length) return ''
+  const works = folders.reduce(
+    (sum, f) => sum + (Number((f as Record<string, unknown>).works ?? 0) || 0),
+    0,
+  )
+  const missing = Array.isArray(collect.missing_folders) ? collect.missing_folders.length : 0
+  return `按收藏夹下载 ${folders.length} 个夹 · ${works} 件${missing ? `（${missing} 个夹已不存在）` : ''}`
+}
+
+/**
  * 运行中任务的阶段文案（未结束的任务在「任务」列标题下显示这一行）。
  *
  * 为什么需要：进度条只给百分比，长时间任务（尤其 f2 获取素材）会出现「1% 挂了
@@ -297,6 +343,10 @@ export function describeRunningTask(
   const count = total > 0 ? `第 ${done}/${total} ` : ''
   if (stage === 'download') {
     if (personalMode) {
+      // 「先扫描、后下载」（按选中收藏夹）：逐夹枚举作品后交给 f2 下载器，
+      // 分母是各夹 total_number 之和（真分母），比平铺模式的软进度可信
+      const byFolder = collectProgressText(r)
+      if (byFolder) return byFolder
       // 「我的列表」模式：f2 的分页没有「遇到已下载就停」，全量时要空翻到底（每页固定
       // 等一次 timeout）；`like_max_counts>0` 时只翻最近 N 条（列表最新在前），快得多。
       // 注：f2 的点赞/收藏模式**不读 `-i`**，日期窗口在这里无效，能收窄的只有这个条数。

@@ -358,6 +358,62 @@ describe('useF2Import', () => {
     success.mockRestore()
   })
 
+  it('submit 透传选中的收藏夹（先扫描、后下载：只下勾选的夹）', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.post.mockResolvedValue({ data: { task_id: 52, message: '已提交' } })
+    const { submit } = useF2Import()
+
+    await submit({
+      fetch: true,
+      mode: 'collection',
+      like_user: 'MS4wLjABAAAAme',
+      collect_ids: ['111', '333'],
+    })
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: {
+        fetch: true,
+        mode: 'collection',
+        like_user: 'MS4wLjABAAAAme',
+        collect_ids: ['111', '333'],
+      },
+    })
+    success.mockRestore()
+  })
+
+  it('scanCollects 读取收藏夹清单（夹名 / 件数）并缓存到 collectFolders', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        folders: [
+          { id: '111', name: '秘书OL', total: 96, last_collect_at: '' },
+          { id: '222', name: '股票', total: 1, last_collect_at: '' },
+        ],
+        total_folders: 2,
+        total_works: 97,
+        cookie_source: 'conf/app.yaml',
+      },
+    })
+    const { scanCollects, collectFolders, collectScanning } = useF2Import()
+
+    const data = await scanCollects()
+
+    expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-collects')
+    expect(data?.total_folders).toBe(2)
+    expect(collectFolders.value?.folders[0].name).toBe('秘书OL')
+    expect(collectScanning.value).toBe(false)
+  })
+
+  it('scanCollects 失败（Cookie 失效 / 风控）返回 null 并置空清单', async () => {
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    mocks.get.mockRejectedValue(new Error('boom'))
+    const { scanCollects, collectFolders } = useF2Import()
+
+    expect(await scanCollects()).toBeNull()
+    expect(collectFolders.value).toBeNull()
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+
   it('setLikeUser 保存主页链接并回读可用性（点赞入口据此放行）', async () => {
     const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     mocks.get.mockResolvedValueOnce({ data: makeStatus() })

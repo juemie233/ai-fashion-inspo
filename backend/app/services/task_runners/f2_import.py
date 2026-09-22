@@ -95,6 +95,7 @@ async def create_f2_import_task(
     register_bloggers: bool = True,
     like_max_counts: int | None = None,
     profiles: list[str] | None = None,
+    collect_ids: list[str] | None = None,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -125,6 +126,10 @@ async def create_f2_import_task(
         profiles: **按博主全量下载**——博主主页链接或 sec_user_id 列表。非空时只下
             这些博主，且**不要求它们已在 f2 用户库里**（f2 只认自己见过的账号）；
             首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
+        collect_ids: `fetch_mode=collection` 时**只下这些收藏夹**（夹 ID，来自
+            `GET /api/scraper/f2-collects` 的扫描结果）。非空时不再走平铺收藏列表，
+            改为逐夹枚举作品后交给 f2 的下载器——没被选中的夹一件都不会下载。
+            空列表 = 老口径（下平铺收藏，含所有收藏夹）。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -149,6 +154,7 @@ async def create_f2_import_task(
             "register_bloggers": register_bloggers,
             "like_max_counts": like_max_counts,
             "profiles": list(profiles or []),
+            "collect_ids": list(collect_ids or []),
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -600,6 +606,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "register_bloggers",
             "like_max_counts",
             "profiles",
+            "collect_ids",
         )
         if key in raw_result
     }
@@ -627,6 +634,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 按博主全量下载：显式点名的博主（主页链接 / sec_user_id）。非空时**只下这些**，
     # 且不需要它们已在 f2 用户库里——f2 只认自己见过的账号，这是那个限制的出口。
     profiles = [str(p).strip() for p in (opts.get("profiles") or []) if str(p).strip()]
+    # 「先扫描、后下载」选中的收藏夹（夹 ID）：非空时只下这些夹（见
+    # _fetch_collects_by_folder_stage），空列表保持老口径（平铺收藏）
+    collect_ids = [str(c).strip() for c in (opts.get("collect_ids") or []) if str(c).strip()]
     register_bloggers = bool(opts.get("register_bloggers", True))
     since_days = opts.get("since_days")
     if since_days is None:
@@ -694,7 +704,14 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         )
 
     # ── 阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）──
-    if fetch_enabled and personal_mode:
+    if fetch_enabled and personal_mode and collect_ids and fetch_mode == "collection":
+        # 「先扫描、后下载」：只下选中的收藏夹（逐夹枚举 + f2 下载器，页间可中断）
+        if await _fetch_collects_by_folder_stage(
+            db, task, opts, f2_dir, like_user, collect_ids, like_max_counts, fetch_summary
+        ):
+            return
+
+    elif fetch_enabled and personal_mode:
         if await _fetch_personal_stage(
             db, task, opts, f2_dir, fetch_mode, like_user, like_max_counts, fetch_summary
         ):
@@ -856,6 +873,178 @@ async def _fetch_personal_stage(
         )
     # 下载完成且未被中断：交给阶段 2 扫描入库
     return False
+
+
+async def _fetch_collects_by_folder_stage(
+    db: AsyncSession,
+    task: TaskQueue,
+    opts: dict,
+    f2_dir: Path,
+    like_user: str,
+    collect_ids: list[str],
+    max_per_folder: int,
+    fetch_summary: dict,
+) -> bool:
+    """阶段 1a′：「先扫描、后下载」——**只下载选中的收藏夹**（逐夹枚举 + f2 下载器）。
+
+    与平铺 `-M collection`（:func:`_fetch_personal_stage`）的区别：
+
+    1. 作品清单来自**收藏夹接口**（按夹），没被选中的夹一件都不会下载——这是这个
+       入口存在的全部理由（平铺收藏会把所有夹一起下，实测 31 个夹约 2000 件，
+       里面混着「股票 / 哲学 / 历史」这类不想要的）
+    2. 进度分母是**真的**：每个夹的 `total_number` 已知，进度条不再是按耗时估的软进度
+    3. **页间可中断**：逐页处理并在每页前后看停止标记，所以暂停/取消能在下载中途
+       真正生效（平铺模式走 f2 子进程，取消要等整条命令跑完）
+
+    返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
+    from scripts import import_f2_downloads as f2
+
+    label = f"我的收藏（{len(collect_ids)} 个收藏夹）"
+    if not like_user:
+        raise RuntimeError(
+            "未配置「我的主页链接」：收藏列表只有本人可见，"
+            "请先在「我的收藏」卡片里填写你的抖音主页链接"
+        )
+
+    personal_root = f2.DEFAULT_F2_COLLECT_ROOT
+    holder: dict = {
+        "stop": False,
+        "works": 0,
+        "total_works": 0,
+        "folders": [],
+        "current": "",
+    }
+    finished = asyncio.Event()
+    baseline = await asyncio.to_thread(f2.download_tree_stats, personal_root)
+
+    task.total = len(collect_ids)
+    task.done = 0
+    task.result = {**opts, "stage": "download", "collect_progress": _collect_progress(holder)}
+    task.updated_at = utcnow()
+    await db.commit()
+
+    def _on_progress(stats: dict) -> None:
+        """下载线程内回调（同步）：只更新内存里的计数，落库交给 watcher。"""
+        holder["works"] = int(stats.get("works") or 0)
+        holder["total_works"] = int(stats.get("total_works") or 0)
+        holder["folders"] = stats.get("folders") or []
+        current = stats.get("current") or {}
+        holder["current"] = str(current.get("name") or "")
+
+    def _should_stop() -> bool:
+        return holder["stop"]
+
+    def _run() -> dict:
+        return f2.download_collect_folders(
+            f2_dir,
+            like_user,
+            collect_ids,
+            max_counts=max_per_folder,
+            should_stop=_should_stop,
+            on_progress=_on_progress,
+        )
+
+    async def _watcher() -> None:
+        """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。"""
+        while not finished.is_set():
+            try:
+                await asyncio.wait_for(finished.wait(), timeout=_WATCH_INTERVAL)
+                break
+            except TimeoutError:
+                pass
+            try:
+                if await _current_status(db, task.id) not in ("running", "pending"):
+                    holder["stop"] = True
+                task.done = len(holder["folders"])
+                task.progress = _collect_progress_pct(holder)
+                task.result = {
+                    **opts,
+                    "stage": "download",
+                    "collect_progress": _collect_progress(holder),
+                }
+                task.updated_at = utcnow()
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001 —— 进度是辅助信息，不能拖垮下载
+                await db.rollback()
+                logger.warning(f"f2 收藏夹下载进度落库失败（忽略，下一轮重试）：{exc}")
+
+    fetch_task = asyncio.create_task(asyncio.to_thread(_run))
+    watcher = asyncio.create_task(_watcher())
+    try:
+        outcome = await fetch_task
+    finally:
+        finished.set()
+        await watcher
+
+    final_stats = await asyncio.to_thread(f2.download_tree_stats, personal_root)
+    fetch_summary["ok"] = 1
+    fetch_summary["failed"] = 0
+    fetch_summary["like_user"] = f2.like_user_url(like_user)
+    fetch_summary["collect"] = {
+        "folders": outcome.get("folders") or [],
+        "works": int(outcome.get("works") or 0),
+        "stopped": bool(outcome.get("stopped")),
+        "missing_folders": outcome.get("missing_folders") or [],
+        "per_folder_max_counts": max_per_folder,
+    }
+    fetch_summary["downloaded"] = {
+        "files": final_stats["files"],
+        "bytes": final_stats["bytes"],
+        "added": max(0, final_stats["files"] - baseline["files"]),
+        "added_bytes": max(0, final_stats["bytes"] - baseline["bytes"]),
+    }
+    merge_stats = await asyncio.to_thread(f2.merge_personal_duplicates)
+    fetch_summary["merge"] = merge_stats
+    download_result = {
+        **opts,
+        "stage": "download",
+        "fetch": fetch_summary,
+        "collect_progress": _collect_progress(holder),
+    }
+    task.done = len(holder["folders"])
+    task.total = max(1, len(collect_ids))
+    task.progress = _PROGRESS_AFTER_DOWNLOAD
+    task.result = download_result
+    task.updated_at = utcnow()
+    await db.commit()
+
+    # 取消/暂停：立即收尾，不再做扫描与入库（已下载文件保留，重跑按内容判重跳过）
+    if await _current_status(db, task.id) not in ("running", "pending"):
+        status_now = await _current_status(db, task.id)
+        task.result = download_result
+        task.status = status_now
+        task.updated_at = utcnow()
+        await db.commit()
+        logger.info(
+            f"f2 拉取「{label}」被中断（{status_now}）："
+            f"已完成 {len(holder['folders'])} 个夹、{holder['works']} 件，已下载文件保留"
+        )
+        return True
+    logger.info(
+        f"f2 按收藏夹下载完成：{len(holder['folders'])} 个夹、{holder['works']} 件"
+        f"（新落盘 {fetch_summary['downloaded']['added']} 个文件）"
+    )
+    return False
+
+
+def _collect_progress(holder: dict) -> dict:
+    """收藏夹下载进度的对外结构（任务结果里的 ``collect_progress``）。"""
+    return {
+        "works": int(holder.get("works") or 0),
+        "total_works": int(holder.get("total_works") or 0),
+        "folders": holder.get("folders") or [],
+        "current": str(holder.get("current") or ""),
+    }
+
+
+def _collect_progress_pct(holder: dict) -> int:
+    """按「已处理作品数 / 选中的夹作品总数」算百分比（下载阶段占 1~40%）。"""
+    total = int(holder.get("total_works") or 0)
+    if total <= 0:
+        # 还没枚举到分母：按已完成的夹数给个粗略起点，别停在 0%
+        return 1
+    done = min(total, int(holder.get("works") or 0))
+    return max(1, min(_PROGRESS_AFTER_DOWNLOAD, int(_PROGRESS_AFTER_DOWNLOAD * done / total)))
 
 
 def _select_post_targets(

@@ -13,6 +13,7 @@
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
 
 const props = withDefaults(
@@ -37,7 +38,8 @@ const copy = computed(() =>
         speedTip:
           'f2 的收藏分页**没有「遇到已下载就停」**（POST + 纯 cookie 翻页），每页还固定等一次 ' +
           'timeout（本机 10 秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增收藏' +
-          '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。',
+          '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。**按收藏夹下载时，它是' +
+          '「每个夹」的上限**（每个夹各取最近 N 条）。',
         collectTip:
           '入库后本批素材会自动聚合进「抖音收藏」合集（收藏合计里能看到数量与体积），' +
           '不做标签分析（素材为未打标状态）。',
@@ -61,7 +63,10 @@ const {
   submitting,
   likeUserSaving,
   likeMaxSaving,
+  collectFolders,
+  collectScanning,
   loadStatus,
+  scanCollects,
   submit,
   setLikeUser,
   setLikeMaxCounts,
@@ -136,6 +141,86 @@ async function onSaveMax() {
 /** 采集选项：入库后自动登记来源作者为穿搭博主（默认开） */
 const registerBloggers = ref(true)
 
+// ── 「先扫描、后下载」（仅收藏模式）：先列收藏夹，勾掉不要的，再只下勾选的 ──
+
+/** 收藏夹选择弹窗是否打开 */
+const folderModalOpen = ref(false)
+/** 勾选状态：夹 ID 集合（**扫描后默认全选**，用户取消掉不想要的） */
+const checkedFolderIds = ref<string[]>([])
+/** 全选/全不选用的派生值 */
+const allChecked = computed(
+  () => folderList.value.length > 0 && checkedFolderIds.value.length === folderList.value.length,
+)
+const folderList = computed(() => collectFolders.value?.folders ?? [])
+/** 勾选的夹数与它们包含的作品数（给按钮与弹窗做量级提示） */
+const checkedFolders = computed(() =>
+  folderList.value.filter((f) => checkedFolderIds.value.includes(f.id)),
+)
+const checkedWorks = computed(() =>
+  checkedFolders.value.reduce((sum, f) => sum + (f.total || 0), 0),
+)
+const folderTotalWorks = computed(() =>
+  folderList.value.reduce((sum, f) => sum + (f.total || 0), 0),
+)
+
+function toggleAllFolders(checked: boolean) {
+  checkedFolderIds.value = checked ? folderList.value.map((f) => f.id) : []
+}
+
+/** 全选复选框的 change 回调（Arco 的 value 类型是联合类型，这里收窄成布尔） */
+function onToggleAll(checked: boolean | (string | number | boolean)[]) {
+  toggleAllFolders(Boolean(checked))
+}
+
+/** 「先扫描收藏夹」：只读拉清单 → 打开弹窗（默认全选） */
+async function onScanFolders() {
+  const data = await scanCollects()
+  if (!data) return
+  if (!data.folders.length) {
+    Message.warning('这个账号下没有收藏夹：可以直接用「一键下载全部收藏」')
+    return
+  }
+  // 夹默认全选：用户只需要取消掉不想要的，而不是一个个勾
+  checkedFolderIds.value = data.folders.map((f) => f.id)
+  folderModalOpen.value = true
+}
+
+/** 弹窗确认：只下载勾选的收藏夹 */
+async function onDownloadCheckedFolders() {
+  if (!checkedFolderIds.value.length) {
+    Message.warning('至少勾选一个收藏夹（不想要的取消勾选即可）')
+    return
+  }
+  const taskId = await submit({
+    fetch: true,
+    mode: 'collection',
+    like_user: likeUser.value.trim() || undefined,
+    register_bloggers: registerBloggers.value,
+    like_max_counts: safeMaxCounts.value,
+    collect_ids: checkedFolderIds.value,
+  })
+  if (taskId) {
+    folderModalOpen.value = false
+    emit('submitted')
+    await loadStatus({ silent: true })
+  }
+}
+
+/** 收藏模式的「一键下载全部收藏」：老口径（平铺收藏列表，含未分类与所有收藏夹） */
+async function onDownloadAllCollects() {
+  const taskId = await submit({
+    fetch: true,
+    mode: 'collection',
+    like_user: likeUser.value.trim() || undefined,
+    register_bloggers: registerBloggers.value,
+    like_max_counts: safeMaxCounts.value,
+  })
+  if (taskId) {
+    emit('submitted')
+    await loadStatus({ silent: true })
+  }
+}
+
 async function onSubmit() {
   const taskId = await submit({
     fetch: true,
@@ -165,7 +250,26 @@ async function onSubmit() {
       <a-button size="small" :loading="likeUserSaving" :disabled="!dirty" @click="onSaveUser">
         保存
       </a-button>
-      <a-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="onSubmit">
+      <template v-if="isCollect">
+        <a-button
+          type="primary"
+          :loading="collectScanning"
+          :disabled="!canSubmit"
+          @click="onScanFolders"
+        >
+          {{ collectScanning ? '正在扫描收藏夹…' : '先扫描收藏夹' }}
+        </a-button>
+        <a-button :loading="submitting" :disabled="!canSubmit" @click="onDownloadAllCollects">
+          一键下载全部收藏
+        </a-button>
+      </template>
+      <a-button
+        v-else
+        type="primary"
+        :loading="submitting"
+        :disabled="!canSubmit"
+        @click="onSubmit"
+      >
         {{ copy.button }}
       </a-button>
     </div>
@@ -216,8 +320,44 @@ async function onSubmit() {
         **根本不读 `-i`**（源码实测），且分页没有「遇到已下载就停」——所以提速只能靠上面的
         「每次最多翻」；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
       </div>
+      <div v-if="isCollect">
+        · <b>先扫描、后下载</b>：点「先扫描收藏夹」会列出你的收藏夹（名字 + 件数，**默认全选**），
+        把不想要的（比如「股票」「哲学」这类）取消勾选，再只下勾选的 —— 没被选中的夹
+        一件都不会下载。
+      </div>
       <div>· {{ copy.collectTip }}结果浏览与审查在下方「抖音采集历史」里 点「查看结果」。</div>
     </div>
+
+    <a-modal
+      v-model:visible="folderModalOpen"
+      :title="`选择要下载的收藏夹（共 ${folderList.length} 个）`"
+      :ok-loading="submitting"
+      ok-text="只下载勾选的"
+      cancel-text="取消"
+      :width="640"
+      @ok="onDownloadCheckedFolders"
+    >
+      <div class="f2l-collect-head">
+        <a-checkbox :model-value="allChecked" @change="onToggleAll">全选 / 全不选</a-checkbox>
+        <span class="f2l-option-tip">
+          <b>默认全选</b>：把不想要的取消勾选即可。本次将下载 <b>{{ checkedFolders.length }}</b> /
+          {{ folderList.length }} 个夹，约 <b>{{ checkedWorks }}</b> /
+          {{ folderTotalWorks }} 件作品。
+        </span>
+      </div>
+      <a-checkbox-group v-model="checkedFolderIds" class="f2l-collect-list">
+        <a-checkbox v-for="f in folderList" :key="f.id" :value="f.id">
+          {{ f.name || '未命名收藏夹' }}（{{ f.total }} 件）
+        </a-checkbox>
+      </a-checkbox-group>
+      <div class="f2l-option-tip f2l-collect-foot">
+        · 下载落点、命名模板、判重与「抖音收藏」合集聚合都与原来完全一致；
+        每个夹最多取「每次最多翻」条（0 = 该夹全量）。
+        <br />
+        · 不在任何收藏夹里的「未分类收藏」不在这份清单里 —— 需要的话用卡片上的
+        「一键下载全部收藏」。
+      </div>
+    </a-modal>
   </a-card>
 </template>
 
@@ -280,5 +420,26 @@ async function onSubmit() {
   padding: 0 3px;
   border-radius: 3px;
   background: #f2f3f5;
+}
+.f2l-collect-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.f2l-collect-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+}
+.f2l-collect-foot {
+  margin-top: 10px;
+  line-height: 1.8;
 }
 </style>

@@ -1825,6 +1825,136 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
 
 
+def _stub_collect_folder_download(monkeypatch, calls: dict):
+    """打桩「按选中收藏夹下载」：往收藏产物根写一张真图，模拟 f2 落盘。"""
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    # 平铺链路必须**不被走到**（走到就说明 collect_ids 没生效）
+    patch_f2(
+        monkeypatch,
+        "run_fetch_collects",
+        lambda *_a, **_k: pytest.fail("选中收藏夹时不该走平铺收藏命令"),
+    )
+
+    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None):
+        calls["collect_ids"] = list(collect_ids)
+        calls["max_counts"] = max_counts
+        calls["user"] = user
+        root = f2.DEFAULT_F2_COLLECT_ROOT / "我的账号"
+        _jpeg(root / "不养羊_2026-09-14 10-31-14_下一站再见吧#jk_7670881947199742833_image_1.jpg")
+        stats = {
+            "cookie_source": "假配置",
+            "root": str(root),
+            "folders": [{"id": collect_ids[0], "name": "秘书OL", "total": 1, "works": 1}],
+            "works": 1,
+            "total_works": 1,
+            "current": {},
+            "stopped": False,
+            "missing_folders": [],
+        }
+        if on_progress:
+            on_progress(stats)
+        return stats
+
+    patch_f2(monkeypatch, "download_collect_folders", _fake)
+
+
+async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
+    client, auto_settings, monkeypatch
+):
+    """「先扫描、后下载」：带 collect_ids 时逐夹下载，入库与合集聚合照常。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_collect_folder_download(monkeypatch, calls)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", collect_ids=["7650133299343595322"]
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        fetch = stored.result["fetch"]
+        assert fetch["collect"]["folders"][0]["name"] == "秘书OL"
+        assert fetch["collect"]["works"] == 1
+        assert fetch["mode"] == "collection"
+        # 落盘的那张图照常入库，并聚合进「抖音收藏」合集
+        assert stored.result["import"]["imported"] == 1
+        assert stored.result["collection"]["added"] == 1
+
+    assert calls["collect_ids"] == ["7650133299343595322"]
+    assert calls["max_counts"] == 0  # 未配置「每次最多翻」= 每个夹全量
+    assert calls["user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+
+async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """不带 collect_ids：仍是平铺收藏（含未分类）——老口径不能被新入口悄悄改掉。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_collect_fetch(monkeypatch, calls)
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2.DEFAULT_F2_LIKE_ROOT)
+    patch_f2(
+        monkeypatch,
+        "download_collect_folders",
+        lambda *_a, **_k: pytest.fail("没有选中收藏夹时不该走逐夹下载"),
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="collection")
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["fetch"]["mode"] == "collection"
+        assert stored.result["import"]["imported"] == 2
+
+    assert calls["fetch"] == "collect"
+
+
+def test_f2_collects_endpoint_returns_folder_list(client, monkeypatch):
+    """GET /api/scraper/f2-collects：扫描（只读）返回收藏夹清单。"""
+    patch_f2(
+        monkeypatch,
+        "list_collect_folders",
+        lambda: {
+            "folders": [
+                {"id": "111", "name": "秘书OL", "total": 96, "last_collect_at": ""},
+                {"id": "222", "name": "股票", "total": 1, "last_collect_at": ""},
+            ],
+            "total_folders": 2,
+            "total_works": 97,
+            "cookie_source": "conf/app.yaml",
+        },
+    )
+
+    data = client.get("/api/scraper/f2-collects").json()
+
+    assert data["total_folders"] == 2
+    assert data["total_works"] == 97
+    assert [f["name"] for f in data["folders"]] == ["秘书OL", "股票"]
+
+
+def test_f2_collects_endpoint_reports_readable_error(client, monkeypatch):
+    """Cookie 失效 / 风控：接口返回 400 + 可读原因（而不是 500 堆栈）。"""
+    def _boom():
+        raise RuntimeError("f2 配置里没有 Cookie")
+
+    patch_f2(monkeypatch, "list_collect_folders", _boom)
+
+    response = client.get("/api/scraper/f2-collects")
+
+    assert response.status_code == 400
+    assert "Cookie" in response.json()["detail"]
+
+
 async def test_execute_f2_import_like_mode_merges_cross_mode_duplicates(
     client, f2_like_tree, auto_settings, monkeypatch, tmp_path
 ):

@@ -207,6 +207,47 @@ describe('summarizeResult', () => {
     )
     expect(text).toBe('我的喜欢 · 入库 7')
   })
+
+  it('「先扫描、后下载」报本次只下了哪几个收藏夹', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        fetch: {
+          collect: {
+            folders: [
+              { id: '111', name: '秘书OL', total: 96, works: 90 },
+              { id: '333', name: '长黑高', total: 268, works: 20 },
+            ],
+            missing_folders: [],
+          },
+        },
+        plan: { files: 110 },
+        import: { imported: 110 },
+      },
+      null,
+    )
+    expect(text).toContain('按收藏夹下载 2 个夹 · 110 件')
+  })
+
+  it('勾选的夹已被删除时在结果里点出来', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        fetch: {
+          collect: {
+            folders: [{ id: '111', name: '秘书OL', total: 1, works: 1 }],
+            missing_folders: ['999'],
+          },
+        },
+        plan: { files: 1 },
+        import: { imported: 1 },
+      },
+      null,
+    )
+    expect(text).toContain('1 个夹已不存在')
+  })
 })
 
 describe('describeRunningTask', () => {
@@ -305,6 +346,44 @@ describe('describeRunningTask', () => {
     const text = describeRunningTask('f2_import', { stage: 'blogger' }, 'running', 1, 1)
     expect(text).toContain('登记来源作者博主')
     expect(text).toContain('不进下载白名单')
+  })
+
+  it('按收藏夹下载：用夹的真分母报进度（而不是按耗时估的软进度）', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      {
+        stage: 'download',
+        fetch_mode: 'collection',
+        collect_progress: {
+          works: 120,
+          total_works: 1755,
+          current: '长黑高',
+          folders: [{ id: '111', name: '秘书OL', total: 96, works: 96 }],
+        },
+      },
+      'running',
+      1,
+      31,
+    )
+    expect(text).toContain('只下勾选的收藏夹')
+    expect(text).toContain('正在下载收藏夹「长黑高」')
+    expect(text).toContain('已完成 1 个夹')
+    expect(text).toContain('已处理 120/1755 件')
+  })
+
+  it('还没枚举到分母时也给得出「在取夹内清单」（不回落成平铺文案）', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      {
+        stage: 'download',
+        fetch_mode: 'collection',
+        collect_progress: { works: 0, total_works: 0, current: '', folders: [] },
+      },
+      'running',
+      0,
+      3,
+    )
+    expect(text).toContain('正在逐夹列举作品')
   })
 })
 
