@@ -80,12 +80,18 @@ export interface F2ImportStatus {
   root: string
   /** 「我的喜欢」（点赞）产物扫描目录 */
   like_root: string
-  /** 已保存的「我的主页链接」（点赞列表只有本人可见，采集我的喜欢时必须填自己） */
+  /** 「我的收藏」（抖音收藏列表）产物扫描目录 */
+  collect_root: string
+  /** 已保存的「我的主页链接」（点赞/收藏列表只有本人可见，采集时必须填自己） */
   like_user: string
   /** 「我的喜欢」是否可用（f2 + 工作目录 + 已配置主页链接；与博主白名单无关） */
   like_available: boolean
   /** 「我的喜欢」不可用原因 / 可用性摘要 */
   like_reason: string
+  /** 「我的收藏」是否可用（前提与点赞一致：f2 + 工作目录 + 已配置主页链接） */
+  collect_available: boolean
+  /** 「我的收藏」不可用原因 / 可用性摘要 */
+  collect_reason: string
   /** 「我的喜欢」每次最多翻多少条点赞（0=全量翻到底）。
    *  为什么需要：f2 的点赞分页没有「遇到已下载就停」，每页还固定等一次 timeout，
    *  全量时零新增也要空翻数分钟，且进度条会因「无新文件」停在 0；点赞列表最新在
@@ -152,7 +158,7 @@ export interface F2ImportOptions {
   /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
   include_unknown_authors?: boolean
   /** 采集模式：post=博主主页作品（缺省）；like=我的喜欢（点赞，需 like_user） */
-  mode?: 'post' | 'like'
+  mode?: 'post' | 'like' | 'collection'
   /** mode=like 时的「我的主页链接 / sec_user_id」（缺省用后端已保存的配置） */
   like_user?: string
   /** mode=like 时：入库后把未登记的来源作者补建成抖音博主并绑定素材（缺省开；

@@ -108,6 +108,9 @@ function makeStatus(over: Record<string, unknown> = {}) {
     like_user: '',
     like_available: false,
     like_reason: '未配置「我的主页链接」：点赞列表只有本人可见',
+    collect_root: 'C:/f2/Download/douyin/collection',
+    collect_available: false,
+    collect_reason: '未配置「我的主页链接」：收藏列表只有本人可见',
     like_max_counts: 0,
     fetch_since_days: 14,
     auto: {
@@ -126,9 +129,10 @@ function makeStatus(over: Record<string, unknown> = {}) {
   }
 }
 
-async function mountCard(status = makeStatus()) {
+async function mountCard(status = makeStatus(), mode: 'like' | 'collection' = 'like') {
   mocks.get.mockResolvedValue({ data: status })
   const wrapper = mount(F2LikeCard, {
+    props: { mode },
     global: {
       stubs: {
         'a-card': cardStub,
@@ -145,14 +149,14 @@ async function mountCard(status = makeStatus()) {
   return wrapper
 }
 
-/** 卡片里三个按钮：保存主页链接 / 保存翻页条数 / 采集我的喜欢（按文案定位，避免下标脆断） */
-function buttons(wrapper: VueWrapper) {
+/** 卡片里三个按钮：保存主页链接 / 保存翻页条数 / 提交（按文案定位，避免下标脆断） */
+function buttons(wrapper: VueWrapper, submitText = '采集我的喜欢') {
   const all = wrapper.findAll('button')
   const byText = (text: string) => all.find((b) => b.text().includes(text))
   return {
     save: byText('保存')!,
     saveMax: all.filter((b) => b.text().includes('保存'))[1],
-    submit: byText('采集我的喜欢')!,
+    submit: byText(submitText)!,
   }
 }
 
@@ -313,5 +317,51 @@ describe('F2LikeCard', () => {
 
     const params = (mocks.post.mock.calls[0][2] as { params: Record<string, unknown> }).params
     expect(params.like_max_counts).toBe(0)
+  })
+
+  it('收藏模式：按 mode=collection 提交，文案与可用性走收藏字段', async () => {
+    const wrapper = await mountCard(
+      makeStatus({
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        collect_available: true,
+        collect_reason: '已配置「我的主页链接」，可采集我的收藏（抖音收藏列表）',
+      }),
+      'collection',
+    )
+    mocks.post.mockResolvedValue({ data: { task_id: 71, message: '已提交' } })
+
+    expect(wrapper.text()).toContain('采集我的收藏')
+    // 点赞可用、收藏不可用时不能被放行：可用性必须读 collect_* 字段
+    expect(wrapper.find('.f2l-status').text()).toContain('可采集我的收藏')
+
+    await buttons(wrapper, '采集我的收藏').submit.trigger('click')
+    await flushPromises()
+
+    expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
+      params: {
+        fetch: true,
+        mode: 'collection',
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        register_bloggers: true,
+        like_max_counts: 0,
+      },
+    })
+    expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+
+  it('收藏模式：收藏不可用时提交按钮禁用（不借用点赞的可用性）', async () => {
+    const wrapper = await mountCard(
+      makeStatus({
+        like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
+        like_available: true,
+        like_reason: '已配置「我的主页链接」，可采集我的喜欢（点赞作品）',
+        collect_available: false,
+        collect_reason: '未配置「我的主页链接」：收藏列表只有本人可见',
+      }),
+      'collection',
+    )
+
+    expect(wrapper.find('.f2l-status').text()).toContain('收藏列表只有本人可见')
+    expect(buttons(wrapper, '采集我的收藏').submit.attributes('disabled')).toBeDefined()
   })
 })

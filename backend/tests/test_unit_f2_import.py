@@ -1629,6 +1629,56 @@ def test_build_f2_like_command_incremental_adds_max_counts():
     assert "-o" not in f2.build_f2_like_command("sec", max_counts=-5)
 
 
+def test_build_f2_collect_command_shape():
+    """收藏命令：-M collection + 带 {nickname}/{aweme_id} 的命名模板 + **不传 `-i`**。
+
+    与点赞模式同形（都是「我的列表」），但 mode 与产物目录必须分开——否则收藏会被下到
+    like 目录、与「我的喜欢」混在一起，扫描时张冠李戴。
+    """
+    cmd = f2.build_f2_collect_command(
+        "MS4wLjABAAAAme", download_root=Path("D:/f2/Download")
+    )
+
+    assert cmd[:4] == [sys.executable, "-m", "f2", "dy"]
+    assert cmd[cmd.index("-u") + 1] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+    assert cmd[cmd.index("-M") + 1] == "collection"
+    assert "-i" not in cmd  # 收藏模式同样不读 interval
+    assert cmd[cmd.index("-n") + 1] == f2.COLLECT_NAMING_TEMPLATE
+    # 原作者与真实作品 ID 必须留在文件名里（判重与绑博主的依据）
+    assert "{nickname}" in f2.COLLECT_NAMING_TEMPLATE
+    assert "{aweme_id}" in f2.COLLECT_NAMING_TEMPLATE
+    assert cmd[cmd.index("-p") + 1] == str(Path("D:/f2/Download"))
+    assert "-o" not in cmd  # 缺省全量翻到底
+
+    # 产物根目录与点赞分开（扫描/入库按模式取对应目录）
+    assert f2.DEFAULT_F2_COLLECT_ROOT != f2.DEFAULT_F2_LIKE_ROOT
+    assert "collection" in str(f2.DEFAULT_F2_COLLECT_ROOT)
+
+
+def test_run_fetch_collects_requires_user_and_uses_collect_mode(tmp_path):
+    """没配主页链接给中文错误且不调 f2；配了则跑收藏命令并标明「我的收藏」。"""
+    calls: list[list[str]] = []
+    missing = f2.run_fetch_collects(
+        tmp_path, "", runner=lambda cmd, cwd: (calls.append(cmd) or (0, ""))
+    )
+    assert missing["total"] == 0 and "我的主页链接" in missing["error"]
+    assert "我的收藏" in missing["error"]
+    assert calls == [], "缺配置时不该调 f2"
+
+    seen: list[list[str]] = []
+    ok = f2.run_fetch_collects(
+        tmp_path,
+        "MS4wLjABAAAAme",
+        max_counts=30,
+        runner=lambda cmd, cwd: (seen.append(cmd) or (0, "")),
+    )
+    assert ok["total"] == 1 and ok["ok"] == 1 and ok["failed"] == 0
+    assert ok["results"][0]["nickname"] == "我的收藏"
+    assert ok["results"][0]["max_counts"] == 30
+    assert seen and seen[0][seen[0].index("-M") + 1] == "collection"
+    assert seen[0][seen[0].index("-o") + 1] == "30"
+
+
 def test_run_fetch_likes_reports_and_requires_user(tmp_path):
     """没配主页链接直接给出可操作错误；配了则跑一条命令并汇报退出码。"""
     missing = f2.run_fetch_likes(tmp_path, "")

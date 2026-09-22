@@ -42,21 +42,31 @@ async def create_f2_import(
     ),
     mode: str = Query(
         "post",
-        pattern="^(post|like)$",
-        description="post=博主主页作品（默认）；like=我的喜欢（点赞，需 like_user）",
+        pattern="^(post|like|collection)$",
+        description=(
+            "post=博主主页作品（默认）；like=我的喜欢（点赞）；"
+            "collection=我的收藏（抖音收藏列表，入库后自动聚合进「抖音收藏」合集）。"
+            "后两者都需要 like_user"
+        ),
     ),
     like_user: str | None = Query(
-        None, description="mode=like 时用我的主页链接 / sec_user_id（缺省取已保存的配置）"
+        None,
+        description=(
+            "mode=like/collection 时用我的主页链接 / sec_user_id"
+            "（缺省取已保存的配置；点赞与收藏列表都只有本人可见）"
+        ),
     ),
     register_bloggers: bool = Query(
         True,
-        description="mode=like 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）",
+        description=(
+            "mode=like/collection 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）"
+        ),
     ),
     like_max_counts: int | None = Query(
         None,
         ge=0,
         le=100000,
-        description="mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）",
+        description="mode=like/collection 时最多翻多少条（0/缺省=全量翻到底）",
     ),
     profiles: str | None = Query(
         None,
@@ -91,18 +101,21 @@ async def create_f2_import(
             作者全部历史翻完且每页固定等 timeout 秒（实测单作者 84% 的时间花在
             翻页等待上）；窗口会按「该作者上次下载时间」自动放大，长时间不跑
             也不会漏作品。
-        mode: `post`=博主主页作品（默认）；`like`=我的喜欢（点赞）。
-            like 模式不逐作者、不给时间窗口，也不做作者白名单（喜欢的作品天然跨作者），
-            入库仍走五层判重。
-            注：**f2 的点赞模式根本不读 `-i`**（源码实测），所以这里传不传日期窗口都
-            一样——能收窄翻页量的只有 `like_max_counts`。
-        like_user: mode=like 时的「我的主页链接 / sec_user_id」（缺省取已保存配置）。
-        register_bloggers: mode=like 时，入库后是否把**未登记的来源作者**补建成抖音
-            博主并绑定本批素材（默认开）。补建的博主标记为「自动登记」，不算已登记
-            博主、不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
-        like_max_counts: mode=like 时最多翻多少条点赞（0/缺省=全量翻到底）。
-            点赞列表最新在前，填 100~200 可把日常增量降到一两页；代价是两次运行之间
-            新增点赞超过该值时会漏。
+        mode: `post`=博主主页作品（默认）；`like`=我的喜欢（点赞）；
+            `collection`=我的收藏（抖音收藏列表）。
+            后两者（「我的列表」）都不逐作者、不给时间窗口，也不做作者白名单
+            （点赞/收藏的作品天然跨作者），入库仍走五层判重；collection 模式在入库
+            之后会把本批素材聚合进「抖音收藏」合集（收藏合计里直接看到数量与体积）。
+            注：**f2 的点赞/收藏模式根本不读 `-i`**（源码实测），所以这里传不传日期
+            窗口都一样——能收窄翻页量的只有 `like_max_counts`。
+        like_user: mode=like/collection 时的「我的主页链接 / sec_user_id」
+            （缺省取已保存配置；两种列表都只有本人可见）。
+        register_bloggers: mode=like/collection 时，入库后是否把**未登记的来源作者**
+            补建成抖音博主并绑定本批素材（默认开）。补建的博主标记为「自动登记」，
+            不算已登记博主、不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
+        like_max_counts: mode=like/collection 时最多翻多少条（0/缺省=全量翻到底）。
+            列表最新在前，填 100~200 可把日常增量降到一两页；代价是两次运行之间
+            新增超过该值时会漏。
         profiles: **按博主全量下载**——博主主页链接或 sec_user_id（逗号/空格分隔）。
             用途：给一个博主，下她**全部**作品。非空时只下这些博主，且**不需要它们
             已在 f2 用户库里**（f2 的下载目标只来自它自己的用户库，库里没有的账号
@@ -113,13 +126,19 @@ async def create_f2_import(
 
     if fetch:
         status = f2_import_status()
-        # 两个入口的可用性口径不同，别互相借用：发布模式可用性依赖「已登记博主」
-        # 白名单（f2 用户库混进的无关账号默认跳过），点赞模式只要求 f2 + 工作目录 +
-        # 已配置我的主页链接（点赞列表天然跨作者）。用发布模式的口径去挡点赞，
-        # 用户会被一个与点赞无关的理由（「没有一个账号对应到已登记的抖音博主」）拒绝。
-        ready = status["like_available"] if mode == "like" else status["available"]
+        # 三个入口的可用性口径不同，别互相借用：发布模式可用性依赖「已登记博主」
+        # 白名单（f2 用户库混进的无关账号默认跳过）；点赞/收藏只要求 f2 + 工作目录 +
+        # 已配置我的主页链接（这些列表天然跨作者）。用发布模式的口径去挡它们，
+        # 用户会被一个与点赞/收藏无关的理由（「没有一个账号对应到已登记的抖音博主」）拒绝。
+        personal = mode in ("like", "collection")
+        ready = status["like_available"] if personal else status["available"]
         if not ready:
-            reason = status["like_reason"] if mode == "like" else status["reason"]
+            if mode == "collection":
+                reason = status.get("collect_reason") or status.get("reason", "")
+            elif mode == "like":
+                reason = status["like_reason"]
+            else:
+                reason = status["reason"]
             return {"message": reason, "task_id": None}
 
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]

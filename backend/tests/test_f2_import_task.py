@@ -27,6 +27,80 @@ def _jpeg(path: Path, color: str = "red") -> Path:
     return path
 
 
+async def test_status_exposes_collect_fields(client):
+    """可用性状态要带收藏模式的字段（前端据此门控「采集我的收藏」）。"""
+    from app.services.task_runner import f2_import_status
+
+    info = f2_import_status()
+    assert "collect_root" in info and "collect_available" in info and "collect_reason" in info
+    assert str(info["collect_root"]).endswith("collection")
+    # 点赞与收藏的前提相同（f2 + 工作目录 + 已配置主页链接）
+    assert info["collect_available"] == info["like_available"]
+
+
+async def test_collect_stage_aggregates_into_douyin_collection(client, upload):
+    """收藏模式：本批入库素材自动聚合进「抖音收藏」合集，且重复调用不重复加。
+
+    这是本功能与「我的喜欢」唯一不同的收尾步骤：素材入库后要能在收藏合计里看到，
+    所以落在一个固定名字的手动合集上（幂等：已加入的不再重复）。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.task import TaskQueue
+
+    ids = [upload().json()["id"] for _ in range(2)]
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="f2_import", status="running", progress=90, total=2, done=2,
+            result={}, max_retries=1,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        stats = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
+        assert stats is not None
+        assert stats["name"] == "抖音收藏"
+        assert stats["created"] is True
+        assert stats["added"] == 2
+        assert task.result["collection"]["name"] == "抖音收藏"
+
+        # 幂等：同一批再跑一次不重复加入
+        again = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
+        assert again["created"] is False
+        assert again["added"] == 0
+        assert again["skipped"] == 2
+
+        collection = (
+            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+        ).scalars().one()
+        items = (
+            await db.execute(
+                select(CollectionItem).where(CollectionItem.collection_id == collection.id)
+            )
+        ).scalars().all()
+        assert {item.inspiration_id for item in items} == set(ids)
+
+
+async def test_collect_stage_noop_without_imported_ids(client):
+    """没有入库素材时不建空合集（避免「抖音收藏」被误建）。"""
+    from app.models.task import TaskQueue
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="f2_import", status="running", progress=90, total=0, done=0,
+            result={}, max_retries=1,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        assert await f2_runner._aggregate_collect_stage(db, task, {"ids": []}) is None
+        assert "collection" not in (task.result or {})
+
+
 @pytest.fixture
 def f2_tree(tmp_path, monkeypatch):
     """把 f2 的工作目录/下载目录指向临时目录，并放两个作品的文件。"""
@@ -348,7 +422,7 @@ async def test_like_max_counts_explicit_zero_beats_nonzero_setting(
     async def fake_download(_db, _task, _future, _root, _baseline, _opts):
         return ({"ok": 1, "failed": 0, "results": []}, {"files": 0, "bytes": 0})
 
-    monkeypatch.setattr(runner, "_watch_like_download", fake_download)
+    monkeypatch.setattr(runner, "_watch_personal_download", fake_download)
 
     for task_value, expected in ((0, 0), (None, 150), (88, 88)):
         calls: dict = {}

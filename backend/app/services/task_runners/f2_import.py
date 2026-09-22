@@ -53,6 +53,32 @@ _LIKE_PROGRESS_CAP = 35
 """软进度的时间常数（秒）：耗时达到这个点约走到上限的一半（双曲线，永不到顶）。"""
 _LIKE_PROGRESS_HALF_SECONDS = 900
 
+"""「我的列表」类模式：点赞（我的喜欢）与收藏（我的收藏）。
+
+两者同形——都是 f2 拉**登录账号自己**的列表（只有本人可见，故必须填「我的主页链接」）、
+作品全下在「我的昵称」目录下、原作者与作品 ID 只存在于文件名里；因此共用同一套下载阶段、
+进度口径（``like_progress``）与扫描/入库逻辑，差别只有 f2 的 ``-M`` 取值、产物根目录
+与界面文案（文案由 ``fetch_mode`` 决定，见 web/src/utils/taskPresentation.ts）。
+"""
+PERSONAL_FETCH_MODES = ("like", "collection")
+
+"""收藏模式入库后聚合到的合集名（收藏合计里据此看到数量与体积）。"""
+COLLECT_COLLECTION_NAME = "抖音收藏"
+
+
+def _personal_scan_root(f2, fetch_mode: str):
+    """「我的列表」模式的产物根目录（点赞 / 收藏）。"""
+    return (
+        f2.DEFAULT_F2_COLLECT_ROOT
+        if fetch_mode == "collection"
+        else f2.DEFAULT_F2_LIKE_ROOT
+    )
+
+
+def _personal_label(fetch_mode: str) -> str:
+    """「我的列表」模式的中文名（日志与错误提示用）。"""
+    return "我的收藏" if fetch_mode == "collection" else "我的喜欢"
+
 
 async def create_f2_import_task(
     db: AsyncSession,
@@ -85,14 +111,17 @@ async def create_f2_import_task(
         include_unknown_authors: 是否连「未登记到博主库」的 f2 账号一起处理。
             默认 False：f2 用户库存的是它见过的所有账号，混进来的无关账号
             （实测出现过网易第五人格这类官方号）不该被下载入库。
-        fetch_mode: ``post``（博主主页作品）或 ``like``（我的喜欢）。
-        like_user: 「我的喜欢」用的主页链接 / sec_user_id（缺省取
-            ``settings.f2_like_user``）。
-        register_bloggers: 「我的喜欢」入库后是否把未登记的来源作者补建成抖音博主
-            并绑定本批素材（默认 True；只对 like 模式生效）。补建的博主标记为
-            「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
-        like_max_counts: 「我的喜欢」最多翻多少条（None 表示执行时取
-            ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。只对 like 模式生效。
+        fetch_mode: ``post``（博主主页作品）、``like``（我的喜欢）或
+            ``collection``（我的收藏）。后两者都是「我的列表」模式：必须填
+            「我的主页链接」，产物落在各自的固定目录，入库后不做作者白名单过滤。
+        like_user: 「我的喜欢 / 我的收藏」用的主页链接 / sec_user_id（缺省取
+            ``settings.f2_like_user``）——两种模式都要**你自己**的主页链接
+            （点赞与收藏列表都只有本人可见）。
+        register_bloggers: 「我的列表」入库后是否把未登记的来源作者补建成抖音博主
+            并绑定本批素材（默认 True；只对 like / collection 模式生效）。补建的博主
+            标记为「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
+        like_max_counts: 「我的列表」最多翻多少条（None 表示执行时取
+            ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。两种模式通用。
         profiles: **按博主全量下载**——博主主页链接或 sec_user_id 列表。非空时只下
             这些博主，且**不要求它们已在 f2 用户库里**（f2 只认自己见过的账号）；
             首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
@@ -209,11 +238,15 @@ def f2_import_status() -> dict:
         "f2_dir": str(f2.DEFAULT_F2_DIR),
         "root": str(f2.DEFAULT_F2_ROOT),
         "like_root": str(f2.DEFAULT_F2_LIKE_ROOT),
-        # 「我的喜欢」需要我自己主页链接（点赞列表只有本人可见）；前端据此回填输入框。
-        # 可用性与发布模式分开判定：点赞不依赖「已登记博主」白名单。
+        "collect_root": str(f2.DEFAULT_F2_COLLECT_ROOT),
+        # 「我的喜欢 / 我的收藏」需要我自己主页链接（两者都只有本人可见）；
+        # 前端据此回填输入框。可用性与发布模式分开判定：它们不依赖「已登记博主」白名单。
         "like_user": like_user,
         "like_available": False,
         "like_reason": "",
+        # 收藏模式的可用性：前提与点赞一致（f2 可用 + 工作目录存在 + 配了主页链接）
+        "collect_available": False,
+        "collect_reason": "",
         # 「我的喜欢」每次最多翻多少条（0=全量）。前端据此显示并允许改。
         # 为什么需要：f2 的点赞分页没有「遇到已下载就停」，全量翻页每次都要空等
         # 每页一次 timeout（本机 10 秒），且零新增时进度条会停在 0 像卡死。
@@ -224,15 +257,23 @@ def f2_import_status() -> dict:
     f2_ok = f2.f2_available()
     dir_ok = f2.DEFAULT_F2_DIR.exists()
     info["like_available"] = bool(f2_ok and dir_ok and like_user)
+    info["collect_available"] = info["like_available"]
     if info["like_available"]:
         info["like_reason"] = "已配置「我的主页链接」，可采集我的喜欢（点赞作品）"
+        info["collect_reason"] = "已配置「我的主页链接」，可采集我的收藏（抖音收藏列表）"
     elif not f2_ok:
         info["like_reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
+        info["collect_reason"] = info["like_reason"]
     elif not dir_ok:
         info["like_reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
+        info["collect_reason"] = info["like_reason"]
     else:
         info["like_reason"] = (
             "未配置「我的主页链接」：点赞列表只有本人可见，"
+            "请先填写你自己的抖音主页链接或 sec_user_id"
+        )
+        info["collect_reason"] = (
+            "未配置「我的主页链接」：收藏列表只有本人可见，"
             "请先填写你自己的抖音主页链接或 sec_user_id"
         )
 
@@ -436,17 +477,17 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
     }
 
 
-async def _watch_like_download(
+async def _watch_personal_download(
     db: AsyncSession,
     task: TaskQueue,
     future: asyncio.Task,
-    like_root: Path,
+    personal_root: Path,
     baseline: dict,
     opts: dict,
 ) -> tuple[dict, dict]:
-    """一边等 f2 拉完「我的喜欢」，一边把已落盘的文件数写进任务结果。
+    """一边等 f2 拉完「我的喜欢 / 我的收藏」，一边把已落盘的文件数写进任务结果。
 
-    为什么需要：点赞是单条命令全量翻页，下载期可能十几分钟；此前进度只在 f2
+    为什么需要：这类模式是单条命令全量翻页，下载期可能十几分钟；此前进度只在 f2
     返回后一次性写 0→40%，界面长时间停在 0%，看不出是在下载还是卡住。
 
     f2 是同步子进程（在线程里跑），本函数**不中断**它：取消/暂停仍由调用方在它
@@ -455,20 +496,20 @@ async def _watch_like_download(
     Args:
         db: 数据库会话。
         task: 任务行。
-        future: ``asyncio.to_thread(f2.run_fetch_likes, ...)`` 的 future。
-        like_root: 「我的喜欢」产物目录（统计对象）。
+        future: ``asyncio.to_thread(f2.run_fetch_likes/run_fetch_collects, ...)`` 的 future。
+        personal_root: 「我的列表」产物目录（统计对象）。
         baseline: 下载开始前的统计（用来算「本次新增」）。
         opts: 任务参数（写回 result 时带上，避免上次执行的旧字段残留）。
 
     Returns:
-        (``run_fetch_likes`` 的返回值, 结束时的目录统计)。
+        (f2 拉取函数的返回值, 结束时的目录统计)。
     """
     from scripts import import_f2_downloads as f2
 
     started = time.monotonic()
     while True:
         done, _pending = await asyncio.wait({future}, timeout=_WATCH_INTERVAL)
-        stats = await asyncio.to_thread(f2.download_tree_stats, like_root)
+        stats = await asyncio.to_thread(f2.download_tree_stats, personal_root)
         elapsed = time.monotonic() - started
         # 起步 1%：进度条长时间停在 0% 是最劝退的观感（哪怕它只是「耗时估算」），
         # 此后随耗时缓慢逼近上限，永不到顶——真进度由入库阶段接手
@@ -496,11 +537,9 @@ async def _watch_like_download(
             await db.commit()
         except Exception as exc:  # noqa: BLE001 —— 进度是辅助信息，不能拖垮下载
             await db.rollback()
-            logger.warning(f"f2「我的喜欢」进度落库失败（忽略，下一轮重试）：{exc}")
+            logger.warning(f"f2 进度落库失败（忽略，下一轮重试）：{exc}")
         if done:
             return future.result(), stats
-
-
 
 
 async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
@@ -512,7 +551,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     本函数只做参数解析与**阶段编排**：每个阶段（与 task.result 的 stage 标记
     一一对应）拆到下方 ``_xxx_stage`` 私有函数，便于单独阅读与定位——
-    下载 1a/1b → 扫描计划 2 → 入库 3 → 博主登记 3b → 收尾。
+    下载 1a/1b → 扫描计划 2 → 入库 3 → 博主登记 3b →（收藏模式）合集聚合 3c → 收尾。
     """
 
     from app.config import settings
@@ -547,9 +586,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     make_thumbnails = bool(opts.get("make_thumbnails", True))
     include_unknown = bool(opts.get("include_unknown_authors", False))
     fetch_mode = str(opts.get("fetch_mode") or "post")
-    # 「我」的主页链接：点赞列表只有本人可见，任务没带就用配置里记住的那个
+    # 「我」的主页链接：点赞/收藏列表只有本人可见，任务没带就用配置里记住的那个
     like_user = str(opts.get("like_user") or settings.f2_like_user or "").strip()
-    like_mode = fetch_mode == "like"
+    personal_mode = fetch_mode in PERSONAL_FETCH_MODES
     # 点赞增量条数（0=全量）。收窄的是 f2 的翻页量（`-o`）：点赞分页没有「遇到已下载
     # 就停」，全量每次都要空翻到底；点赞列表最新在前，只翻最近 N 条即可覆盖新增。
     # ⚠ 必须用 `is not None` 判定：显式传 0 表示「本次要全量」，不能被非零的配置项
@@ -574,13 +613,13 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 它见过的所有账号，混进来的无关账号（实测出现过网易第五人格，被入库 142 条）
     # 不该收进素材库。库内一个抖音博主都没有时没有白名单依据，退回旧口径（全部处理）。
     #
-    # 点赞（喜欢）模式例外：喜欢列表天然跨作者（点的是谁的作品都有），按白名单挡掉
-    # 就失去意义，故不做作者过滤——入库仍走五层判重（内容哈希 / 垃圾桶 / 批次内 /
-    # 平台 ID / 参数过滤），不会重复。
+    # 点赞/收藏（我的列表）模式例外：这些列表天然跨作者（点/收的是谁的作品都有），
+    # 按白名单挡掉就失去意义，故不做作者过滤——入库仍走五层判重（内容哈希 / 垃圾桶 /
+    # 批次内 / 平台 ID / 参数过滤），不会重复。
     f2_dir = f2.DEFAULT_F2_DIR
     bloggers = await asyncio.to_thread(f2.load_douyin_bloggers)
     f2_authors = await asyncio.to_thread(f2.load_f2_authors, f2_dir)
-    filter_registered = (not include_unknown) and (not like_mode) and bool(bloggers)
+    filter_registered = (not include_unknown) and (not personal_mode) and bool(bloggers)
     if filter_registered:
         known_authors, unknown_authors = f2.select_known_authors(f2_authors, bloggers)
     else:
@@ -630,10 +669,10 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "未检测到 f2（python -m f2 不可用）：请先安装 f2 并手动完成一次下载"
         )
 
-    # ── 阶段 1a：「我的喜欢」——单条命令翻页（不逐作者、不做时间窗口）──
-    if fetch_enabled and like_mode:
-        if await _fetch_likes_stage(
-            db, task, opts, f2_dir, like_user, like_max_counts, fetch_summary
+    # ── 阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）──
+    if fetch_enabled and personal_mode:
+        if await _fetch_personal_stage(
+            db, task, opts, f2_dir, fetch_mode, like_user, like_max_counts, fetch_summary
         ):
             return
 
@@ -655,7 +694,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     # ── 阶段 2：扫描 + 去重计划 ──
     to_import = await _scan_and_plan_stage(
-        db, task, opts, bloggers, plan_authors, limit, skip_live, like_mode, fetch_summary
+        db, task, opts, bloggers, plan_authors, limit, skip_live, fetch_mode, fetch_summary
     )
     if not to_import:
         return
@@ -666,10 +705,14 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     status_now = await _current_status(db, task.id)
     interrupted = status_now in ("cancelled", "paused")
 
-    # ── 阶段 3b：「我的喜欢」补登记来源作者博主 ──
-    bloggers_stats = await _register_like_bloggers_stage(
-        db, task, result, like_mode, register_bloggers
+    # ── 阶段 3b：「我的列表」补登记来源作者博主 ──
+    bloggers_stats = await _register_personal_bloggers_stage(
+        db, task, result, personal_mode, register_bloggers
     )
+
+    # ── 阶段 3c：「我的收藏」把本批素材聚合进「抖音收藏」合集 ──
+    if fetch_mode == "collection":
+        await _aggregate_collect_stage(db, task, result)
 
     # ── 收尾 ──
     await _finalize_import(
@@ -677,27 +720,29 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     )
 
 
-async def _fetch_likes_stage(
+async def _fetch_personal_stage(
     db: AsyncSession,
     task: TaskQueue,
     opts: dict,
     f2_dir: Path,
+    fetch_mode: str,
     like_user: str,
     like_max_counts: int,
     fetch_summary: dict,
 ) -> bool:
-    """阶段 1a：「我的喜欢」——单条命令翻页（不逐作者、不做时间窗口）。
+    """阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）。
 
     返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
     from scripts import import_f2_downloads as f2
 
+    label = _personal_label(fetch_mode)
     if not like_user:
         raise RuntimeError(
-            "未配置「我的主页链接」：点赞列表只有本人可见，"
-            "请先在「我的喜欢」卡片里填写你的抖音主页链接"
+            f"未配置「我的主页链接」：{label}只有本人可见，"
+            f"请先在「{label}」卡片里填写你的抖音主页链接"
         )
     fetch_summary["total"] = 1
-    # 点赞总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
+    # 总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
     # 进度条由 watcher 按耗时给软进度。
     # 增量模式（like_max_counts>0）另有作用：翻页量有上界，不会再出现「零新增却
     # 空翻到底、进度条长时间停在 0」。
@@ -707,19 +752,20 @@ async def _fetch_likes_stage(
     task.updated_at = utcnow()
     await db.commit()
 
-    like_root = f2.DEFAULT_F2_LIKE_ROOT
-    baseline = await asyncio.to_thread(f2.download_tree_stats, like_root)
+    personal_root = _personal_scan_root(f2, fetch_mode)
+    fetcher = f2.run_fetch_collects if fetch_mode == "collection" else f2.run_fetch_likes
+    baseline = await asyncio.to_thread(f2.download_tree_stats, personal_root)
     fetch_task = asyncio.create_task(
         asyncio.to_thread(
-            f2.run_fetch_likes,
+            fetcher,
             f2_dir,
             like_user,
             f2_dir / "Download",
             max_counts=like_max_counts,
         )
     )
-    outcome, final_stats = await _watch_like_download(
-        db, task, fetch_task, like_root, baseline, opts
+    outcome, final_stats = await _watch_personal_download(
+        db, task, fetch_task, personal_root, baseline, opts
     )
     if outcome.get("error"):
         raise RuntimeError(str(outcome["error"]))
@@ -758,13 +804,13 @@ async def _fetch_likes_stage(
         task.status = status_now
         task.updated_at = utcnow()
         await db.commit()
-        logger.info(f"f2 拉取「我的喜欢」被中断（{status_now}）：已下载文件保留")
+        logger.info(f"f2 拉取「{label}」被中断（{status_now}）：已下载文件保留")
         return True
     if fetch_summary["failed"]:
         task.result = download_result
         await db.commit()
         raise RuntimeError(
-            "f2 拉取「我的喜欢」失败（退出码非 0），常见原因：cookie 失效或被风控；"
+            f"f2 拉取「{label}」失败（退出码非 0），常见原因：cookie 失效或被风控；"
             "请先手动跑一次 f2 确认能下载，且 -u 填的是**你自己**的主页链接"
         )
     # 下载完成且未被中断：交给阶段 2 扫描入库
@@ -949,13 +995,17 @@ async def _resolve_named_profile_keys(db: AsyncSession, task: TaskQueue, opts: d
 
 async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bloggers: dict,
                      plan_authors: set[str] | None, limit: int | None, skip_live: bool,
-                     like_mode: bool, fetch_summary: dict) -> list:
+                     fetch_mode: str, fetch_summary: dict) -> list:
     """阶段 2：扫描下载目录 + 去重计划（放线程，否则阻塞 worker 事件循环）。
 
     无可入库文件时本函数直接落「done」结果并返回空列表，调用方据此收工。"""
     from scripts import import_f2_downloads as f2
 
-    scan_root = f2.DEFAULT_F2_LIKE_ROOT if like_mode else f2.DEFAULT_F2_ROOT
+    scan_root = (
+        _personal_scan_root(f2, fetch_mode)
+        if fetch_mode in PERSONAL_FETCH_MODES
+        else f2.DEFAULT_F2_ROOT
+    )
     # 扫描 + 去重是重活（大目录分钟级），单独标一个阶段：否则界面在下载结束到入库
     # 开始的这段窗口里还停在「下载中」的文案上，看起来像卡住
     task.result = {**task.result, "stage": "scan"}
@@ -1081,13 +1131,13 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
     return result, holder
 
 
-async def _register_like_bloggers_stage(db: AsyncSession, task: TaskQueue, result: dict,
-                              like_mode: bool, register_bloggers: bool) -> dict | None:
-    """阶段 3b：「我的喜欢」补登记来源作者博主（失败不影响已入库素材）。"""
+async def _register_personal_bloggers_stage(db: AsyncSession, task: TaskQueue, result: dict,
+                              personal_mode: bool, register_bloggers: bool) -> dict | None:
+    """阶段 3b：「我的喜欢 / 我的收藏」补登记来源作者博主（失败不影响已入库素材）。"""
     from scripts import import_f2_downloads as f2
 
     bloggers_stats: dict | None = None
-    if like_mode and register_bloggers and result.get("batch_file"):
+    if personal_mode and register_bloggers and result.get("batch_file"):
         task.result = {**task.result, "stage": "blogger"}
         task.updated_at = utcnow()
         await db.commit()
@@ -1099,7 +1149,7 @@ async def _register_like_bloggers_stage(db: AsyncSession, task: TaskQueue, resul
 
             bloggers_stats = await register_batch_bloggers(db, entries)
             logger.info(
-                f"f2「我的喜欢」博主登记：新建 {bloggers_stats['created']} 个、"
+                f"f2「我的列表」博主登记：新建 {bloggers_stats['created']} 个、"
                 f"复用 {bloggers_stats['reused']} 个、绑定素材 {bloggers_stats['linked']} 条"
                 f"（同名多候选跳过 {bloggers_stats['ambiguous']} 个）"
             )
@@ -1109,6 +1159,62 @@ async def _register_like_bloggers_stage(db: AsyncSession, task: TaskQueue, resul
             task.error = f"来源作者博主自动登记失败（素材已入库，可在结果面板手工重试）：{exc}"
             logger.warning(f"f2 自动登记博主失败：{exc}")
     return bloggers_stats
+
+
+async def _aggregate_collect_stage(db: AsyncSession, task: TaskQueue, result: dict) -> dict | None:
+    """阶段 3c：「我的收藏」把本批入库素材聚合进「抖音收藏」合集。
+
+    为什么用合集而不是标签：合集的语义就是「一批素材的集合」（收藏合计里直接看到数量
+    与体积），而标签是 AI/手动语义、会进入标签治理（去重/合并/健康扫描）——收藏来源是
+    事实而非语义，不该污染标签体系。
+
+    幂等：合集不存在则创建，已加入的素材不会重复（collection_items 有唯一约束）。
+    失败不影响已入库素材，只写进任务 error 提示人工处理。
+    """
+    imported_ids = [str(i) for i in (result.get("ids") or []) if i]
+    if not imported_ids:
+        return None
+    from app.services import collection_service
+    from app.models.collection import Collection
+
+    try:
+        collection = (
+            await db.execute(
+                select(Collection).where(Collection.name == COLLECT_COLLECTION_NAME)
+            )
+        ).scalars().first()
+        if collection is None:
+            data = await collection_service.create_collection(
+                db,
+                name=COLLECT_COLLECTION_NAME,
+                description="由「一键获取我的收藏」自动聚合：本合集的素材来自抖音收藏列表",
+                query_json=None,
+            )
+            collection_id = int(data["id"])
+            created = True
+        else:
+            collection_id = int(collection.id)
+            created = False
+        added = await collection_service.add_inspirations(db, collection_id, imported_ids)
+        stats = {
+            "id": collection_id,
+            "name": COLLECT_COLLECTION_NAME,
+            "created": created,
+            "added": int(added.get("added") or 0),
+            "skipped": int(added.get("skipped") or 0),
+        }
+        task.result = {**task.result, "collection": stats}
+        await db.commit()
+        logger.info(
+            f"f2「我的收藏」已聚合进合集「{COLLECT_COLLECTION_NAME}」#{collection_id}："
+            f"新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条）"
+        )
+        return stats
+    except Exception as exc:  # noqa: BLE001 —— 素材已入库，聚合失败不该让任务失败
+        await db.rollback()
+        task.error = f"加入「{COLLECT_COLLECTION_NAME}」合集失败（素材已入库）：{exc}"
+        logger.warning(f"f2 收藏合集聚合失败：{exc}")
+        return None
 
 
 async def _finalize_import(db: AsyncSession, task: TaskQueue, result: dict, holder: dict,

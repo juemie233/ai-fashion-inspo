@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from .scraper_common import utcnow  # noqa: E402
 
 from .f2_common import (  # noqa: E402
+    COLLECT_NAMING_TEMPLATE,
     DEFAULT_FETCH_SINCE_DAYS,
     F2_AUTHOR_DB,
     F2_DOWNLOAD_SUBDIR,
@@ -361,39 +362,33 @@ def resolve_profile_nicknames(f2_dir: Path, sec_ids: list[str]) -> dict[str, str
     return out
 
 
-def build_f2_like_command(
-    like_user: str,
+def _build_personal_command(
+    user: str,
+    mode: str,
+    naming: str,
     download_root: Path | None = None,
     auto_cookie: str | None = None,
     max_counts: int = 0,
 ) -> list[str]:
-    """构造「我的喜欢」（点赞作品）的 f2 命令。
+    """构造「我的列表」类模式（点赞 `like` / 收藏 `collection`）的 f2 命令。
 
-    与发布模式的三点不同：
+    这两种模式同形，差别只有 mode 与命名模板：
 
-    1. `-M like`：拉登录账号自己的点赞列表（只有本人可见，故 `-u` 必须是你的主页）
-    2. 必传 `-n {nickname}_{create}_{desc}_{aweme_id}`：产物统统落在「我的昵称」目录下，
-       原作者与作品 ID 只能靠文件名保留（见 :data:`LIKE_NAMING_TEMPLATE`）
-    3. **不传 `-i`**：f2 的点赞模式根本不读 `interval`
-
-    关于第 3 点（2026-09 读 f2 源码更正）：此前这里传 `-i all` 并注释「喜欢列表按点赞
-    时间排序，而 f2 的 `-i` 按作品发布时间过滤，用日期窗口会漏掉最近点赞的老视频」
-    ——**那个过滤器在点赞模式里不存在**：`handler.handle_user_like` 与
-    `handler.fetch_user_like_videos` 都不读 `interval`（实测 `'interval' in 源码 ==
-    False`），传进去纯属无效参数。结论（不按日期收窄）恰好是对的，但理由错了，留着会
-    误导后人以为「可以用 `-i` 收窄点赞增量」。
-
-    真正能收窄翻页量的是 **`-o/--max-counts`**：f2 的点赞分页从 `cursor=0` 一路翻到底、
-    **没有「遇到已下载就停」**，每页还固定 `asyncio.sleep(timeout)`（本机 10 秒）。点赞
-    列表最新在前，所以只翻最近 `max_counts` 条即可覆盖新增。
+    1. `-M like|collection`：拉**登录账号自己**的列表（只有本人可见，故 `-u` 必须是你的主页）
+    2. 必传带 `{nickname}` 的 `-n`：产物统统落在「我的昵称」目录下，原作者与作品 ID
+       只能靠文件名保留
+    3. **不传 `-i`**：实测 f2 的 `handle_user_like` / `handle_user_collection` 都不读
+       `interval`，传进去是无效参数（不是「会漏」的问题，是这个参数在此模式下不存在）。
+       真正能收窄翻页量的是 `-o/--max-counts`：分页从 `cursor=0` 一路翻到底、没有
+       「遇到已下载就停」，每页还固定 `asyncio.sleep(timeout)`。
 
     Args:
-        like_user: 我的主页链接或 sec_user_id。
+        user: 我的主页链接或 sec_user_id。
+        mode: f2 的 `-M` 取值（`like` / `collection`）。
+        naming: `-n` 命名模板。
         download_root: 下载根目录（传给 f2 的 -p）。
         auto_cookie: 浏览器名（chrome / chromium / edge …）。
-        max_counts: 最多翻多少条点赞作品（`-o`）。0 表示全量翻到底（默认，与改造前一致）；
-            填 100~200 可把日常增量降到一两页。代价：两次运行之间新增点赞超过该值时
-            会漏，故需要提速时再开。
+        max_counts: 最多翻多少条（`-o`）。0 表示全量翻到底。
 
     Returns:
         可直接交给 subprocess 的参数列表。
@@ -404,11 +399,11 @@ def build_f2_like_command(
         "f2",
         "dy",
         "-u",
-        like_user_url(like_user),
+        like_user_url(user),
         "-M",
-        "like",
+        mode,
         "-n",
-        LIKE_NAMING_TEMPLATE,
+        naming,
     ]
     if max_counts > 0:
         cmd += ["-o", str(max_counts)]
@@ -419,22 +414,88 @@ def build_f2_like_command(
     return cmd
 
 
-def run_fetch_likes(
-    f2_dir: Path,
+def build_f2_like_command(
     like_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    max_counts: int = 0,
+) -> list[str]:
+    """构造「我的喜欢」（点赞作品）的 f2 命令。
+
+    参数口径见 :func:`_build_personal_command`（点赞 / 收藏同形）。这里单独保留一个
+    入口是因为 CLI 与测试都按名字引用它。
+
+    Args:
+        like_user: 我的主页链接或 sec_user_id。
+        download_root: 下载根目录（传给 f2 的 -p）。
+        auto_cookie: 浏览器名（chrome / chromium / edge …）。
+        max_counts: 最多翻多少条点赞作品（`-o`）。0 表示全量翻到底。
+
+    Returns:
+        可直接交给 subprocess 的参数列表。
+    """
+    return _build_personal_command(
+        like_user,
+        "like",
+        LIKE_NAMING_TEMPLATE,
+        download_root=download_root,
+        auto_cookie=auto_cookie,
+        max_counts=max_counts,
+    )
+
+
+def build_f2_collect_command(
+    collect_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    max_counts: int = 0,
+) -> list[str]:
+    """构造「我的收藏」（抖音收藏列表）的 f2 命令。
+
+    与「我的喜欢」同形（见 :func:`_build_personal_command`），差别只有 `-M collection`
+    与命名模板；f2 的收藏接口是 POST + 纯 cookie，同样不支持 `-i` 日期窗口。
+
+    Args:
+        collect_user: 我的主页链接或 sec_user_id。
+        download_root: 下载根目录（传给 f2 的 -p）。
+        auto_cookie: 浏览器名（chrome / chromium / edge …）。
+        max_counts: 最多翻多少条收藏作品（`-o`）。0 表示全量翻到底。
+
+    Returns:
+        可直接交给 subprocess 的参数列表。
+    """
+    return _build_personal_command(
+        collect_user,
+        "collection",
+        COLLECT_NAMING_TEMPLATE,
+        download_root=download_root,
+        auto_cookie=auto_cookie,
+        max_counts=max_counts,
+    )
+
+
+def _run_personal_fetch(
+    f2_dir: Path,
+    user: str,
+    mode: str,
+    naming: str,
+    label: str,
     download_root: Path | None = None,
     auto_cookie: str | None = None,
     max_counts: int = 0,
     runner=None,
 ) -> dict:
-    """拉取「我的喜欢」（点赞的作品）：单条命令，不逐作者循环。
+    """拉取「我的列表」（点赞 / 收藏）：单条命令，不逐作者循环。
 
     Args:
         f2_dir: f2 工作目录（cwd 必须是它，否则另起空作者库、下载落到别处）。
-        like_user: 我的主页链接或 sec_user_id。
+        user: 我的主页链接或 sec_user_id。
+        mode: f2 的 `-M` 取值（`like` / `collection`）。
+        naming: `-n` 命名模板。
+        label: 结果里的展示名（「我的喜欢」/「我的收藏」）。
         download_root: 传给 f2 的 -p 下载根目录。
         auto_cookie: 传给 f2 的 --auto-cookie 浏览器名。
-        max_counts: 最多翻多少条点赞作品（`-o`）。0 = 全量翻到底（默认，与改造前一致）。
+        max_counts: 最多翻多少条（`-o`）。0 = 全量翻到底。
         runner: 可注入的执行器（签名 (cmd, cwd) -> (returncode, info)），便于单测。
 
     Returns:
@@ -442,32 +503,36 @@ def run_fetch_likes(
         :func:`run_fetch` 对齐，便于复用同一套任务结果展示）。
     """
     runner = runner or _default_runner
-    if not (like_user or "").strip():
+    if not (user or "").strip():
         return {
             "total": 0,
             "ok": 0,
             "failed": 0,
             "results": [],
             "cmd": [],
-            "error": "未配置「我的主页链接」：点赞列表只有本人可见，请先填写你的抖音主页链接",
+            "error": (
+                f"未配置「我的主页链接」：{label}只有本人可见，请先填写你的抖音主页链接"
+            ),
         }
 
-    url = like_user_url(like_user)
-    cmd = build_f2_like_command(
-        like_user,
+    url = like_user_url(user)
+    cmd = _build_personal_command(
+        user,
+        mode,
+        naming,
         download_root=download_root,
         auto_cookie=auto_cookie,
         max_counts=max_counts,
     )
-    print(f"  ▶ 我的喜欢（{url}）")
+    print(f"  ▶ {label}（{url}）")
     if max_counts > 0:
         print(
-            f"    · 增量模式：只翻最近 {max_counts} 条点赞（-o {max_counts}）；"
+            f"    · 增量模式：只翻最近 {max_counts} 条（-o {max_counts}）；"
             "已下载过的文件 f2 会跳过，入库侧还有五层判重"
         )
     else:
         print(
-            "    · 全量翻页（f2 的点赞分页没有「遇到已下载就停」，每页还要固定等一次"
+            "    · 全量翻页（f2 的分页没有「遇到已下载就停」，每页还要固定等一次"
             " timeout，故慢）；已下载过的文件 f2 会跳过，入库侧还有五层判重"
         )
     try:
@@ -486,7 +551,7 @@ def run_fetch_likes(
         "failed": 0 if rc == 0 else 1,
         "results": [
             {
-                "nickname": "我的喜欢",
+                "nickname": label,
                 "sec_user_id": url,
                 "rc": rc,
                 "max_counts": max_counts,
@@ -496,6 +561,50 @@ def run_fetch_likes(
         "cmd": cmd,
         "max_counts": max_counts,
     }
+
+
+def run_fetch_likes(
+    f2_dir: Path,
+    like_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    max_counts: int = 0,
+    runner=None,
+) -> dict:
+    """拉取「我的喜欢」（点赞的作品）（实现见 :func:`_run_personal_fetch`）。"""
+    return _run_personal_fetch(
+        f2_dir,
+        like_user,
+        "like",
+        LIKE_NAMING_TEMPLATE,
+        "我的喜欢",
+        download_root=download_root,
+        auto_cookie=auto_cookie,
+        max_counts=max_counts,
+        runner=runner,
+    )
+
+
+def run_fetch_collects(
+    f2_dir: Path,
+    collect_user: str,
+    download_root: Path | None = None,
+    auto_cookie: str | None = None,
+    max_counts: int = 0,
+    runner=None,
+) -> dict:
+    """拉取「我的收藏」（抖音收藏列表）（实现见 :func:`_run_personal_fetch`）。"""
+    return _run_personal_fetch(
+        f2_dir,
+        collect_user,
+        "collection",
+        COLLECT_NAMING_TEMPLATE,
+        "我的收藏",
+        download_root=download_root,
+        auto_cookie=auto_cookie,
+        max_counts=max_counts,
+        runner=runner,
+    )
 
 
 def _default_runner(cmd: list[str], cwd: Path) -> tuple[int, str]:

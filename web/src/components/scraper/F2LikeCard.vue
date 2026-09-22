@@ -1,21 +1,59 @@
 <script setup lang="ts">
-/** 抖音「采集我的喜欢」（点赞作品）卡片：拉取自己的点赞列表 → 去重 → 入库。
+/** 抖音「采集我的列表」卡片：点赞（我的喜欢）与收藏（我的收藏）共用。
  *
- * 与「一键获取素材」（博主主页作品）的差别只在**下载入口**：
- *  - f2 的 `-M like` 拉的是登录账号自己的点赞列表，所以必须填**你自己**的主页链接
- *    （点赞列表只有本人可见；填一次即写入 .env，之后自动带上）
- *  - **不能靠日期窗口提速**：f2 的点赞模式根本不读 `-i`（源码实测，不是"按发布时间
- *    过滤会漏"的问题，而是这个参数在此模式下无效）。真正能收窄翻页量的是
- *    `-o/--max-counts`（本卡片的「每次最多翻」），因为 f2 的点赞分页没有
+ * 两种模式同形——f2 拉的都是**登录账号自己**的列表，差别只有 `-M` 取值与产物目录：
+ *  - `-M like`（点赞）/ `-M collection`（收藏）：都只有本人可见，所以必须填**你自己**
+ *    的主页链接（填一次即写入 .env，之后自动带上，两种模式共用这一个配置）
+ *  - **不能靠日期窗口提速**：f2 的点赞/收藏模式根本不读 `-i`（源码实测）。真正能收窄
+ *    翻页量的是 `-o/--max-counts`（本卡片的「每次最多翻」），因为 f2 的分页没有
  *    「遇到已下载就停」、每页还要固定等一次 timeout
  *  - 入库完全复用同一条链路：五层判重（内容哈希 / 垃圾桶 / 批次内 / 平台 ID / 参数），
- *    同一作品从主页与喜欢两条路进来都不会重复；结果审查也在下方「抖音采集历史」里
+ *    同一作品从主页、喜欢、收藏三条路进来都不会重复；收藏模式还会把本批素材聚合进
+ *    「抖音收藏」合集（收藏合计里直接看到数量与体积）；结果审查在「抖音采集历史」里
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
 import { useF2Import } from '@/composables/useF2Import'
 
+const props = withDefaults(
+  defineProps<{
+    /** 我的列表类型：点赞（我的喜欢）/ 收藏（我的收藏） */
+    mode?: 'like' | 'collection'
+  }>(),
+  { mode: 'like' },
+)
+
 const emit = defineEmits<{ (e: 'submitted'): void }>()
+
+/** 文案与字段随模式切换（点赞/收藏的实现完全共用，只有说法不同） */
+const isCollect = computed(() => props.mode === 'collection')
+const copy = computed(() =>
+  isCollect.value
+    ? {
+        title: '采集我的收藏（抖音收藏列表）',
+        button: '采集我的收藏',
+        unit: '条收藏',
+        listName: '收藏列表',
+        speedTip:
+          'f2 的收藏分页**没有「遇到已下载就停」**（POST + 纯 cookie 翻页），每页还固定等一次 ' +
+          'timeout（本机 10 秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增收藏' +
+          '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。',
+        collectTip:
+          '入库后本批素材会自动聚合进「抖音收藏」合集（收藏合计里能看到数量与体积），' +
+          '不做标签分析（素材为未打标状态）。',
+      }
+    : {
+        title: '采集我的喜欢（抖音点赞）',
+        button: '采集我的喜欢',
+        unit: '条点赞',
+        listName: '点赞列表',
+        speedTip:
+          'f2 的点赞分页**没有「遇到已下载就停」**，从最新一路翻到底、每页还固定等一次 ' +
+          'timeout（本机 10 秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增点赞' +
+          '超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。',
+        collectTip: '入库不做标签分析（素材为未打标状态）。',
+      },
+)
 
 const {
   status,
@@ -60,9 +98,17 @@ const savedLikeUser = computed(() => status.value?.like_user ?? '')
 const savedLikeMax = computed(() => status.value?.like_max_counts ?? 0)
 const dirty = computed(() => likeUser.value.trim() !== savedLikeUser.value)
 const maxDirty = computed(() => (likeMaxCounts.value || 0) !== savedLikeMax.value)
-const canSubmit = computed(
-  () => Boolean(status.value?.like_available) && Boolean(likeUser.value.trim()),
+
+/** 当前模式的可用性与原因（点赞与收藏的前提相同，但字段分开，便于各自提示） */
+const available = computed(() =>
+  isCollect.value
+    ? Boolean(status.value?.collect_available)
+    : Boolean(status.value?.like_available),
 )
+const availabilityReason = computed(() =>
+  isCollect.value ? (status.value?.collect_reason ?? '') : (status.value?.like_reason ?? ''),
+)
+const canSubmit = computed(() => available.value && Boolean(likeUser.value.trim()))
 
 /** 输入非数字/负数时的兜底：按 0（全量）处理，避免把非法值发给后端 */
 const safeMaxCounts = computed(() => {
@@ -91,7 +137,7 @@ const registerBloggers = ref(true)
 async function onSubmit() {
   const taskId = await submit({
     fetch: true,
-    mode: 'like',
+    mode: props.mode,
     like_user: likeUser.value.trim() || undefined,
     register_bloggers: registerBloggers.value,
     // 0 = 全量（显式传，表示本次就要全量，别被配置顶掉）
@@ -105,7 +151,7 @@ async function onSubmit() {
 </script>
 
 <template>
-  <a-card title="采集我的喜欢（抖音点赞）" size="small" style="margin-bottom: 16px">
+  <a-card :title="copy.title" size="small" style="margin-bottom: 16px">
     <div class="f2l-row">
       <a-input
         v-model="likeUser"
@@ -118,7 +164,7 @@ async function onSubmit() {
         保存
       </a-button>
       <a-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="onSubmit">
-        采集我的喜欢
+        {{ copy.button }}
       </a-button>
     </div>
 
@@ -133,21 +179,18 @@ async function onSubmit() {
         style="width: 130px"
         @input="likeMaxTouched = true"
       />
-      <span class="f2l-unit">条点赞</span>
+      <span class="f2l-unit">{{ copy.unit }}</span>
       <a-button size="small" :loading="likeMaxSaving" :disabled="!maxDirty" @click="onSaveMax">
         保存
       </a-button>
       <span class="f2l-option-tip">
-        <b>0 = 全量翻到底</b>（默认）。填 100~200 可把日常增量降到一两页： f2
-        的点赞分页**没有「遇到已下载就停」**，从最新一路翻到底、每页还固定等一次 timeout（本机 10
-        秒），全量时零新增也要空翻几分钟。代价：两次运行之间新增点赞
-        超过该条数时会漏，攒了很久没采就填大一点或填 0 全量。
+        <b>0 = 全量翻到底</b>（默认）。填 100~200 可把日常增量降到一两页： {{ copy.speedTip }}
       </span>
     </div>
 
-    <div v-if="status" class="f2l-status" :class="{ 'is-bad': !status.like_available }">
+    <div v-if="status" class="f2l-status" :class="{ 'is-bad': !available }">
       <a-spin v-if="statusLoading" :size="12" />
-      <span>{{ status.like_available ? '✅' : '⚠️' }} {{ status.like_reason }}</span>
+      <span>{{ available ? '✅' : '⚠️' }} {{ availabilityReason }}</span>
       <a-link @click="loadStatus()">刷新状态</a-link>
     </div>
 
@@ -162,18 +205,16 @@ async function onSubmit() {
 
     <div class="f2l-tips">
       <div>
-        · 点赞列表只有本人可见：这里填**你自己**的主页链接（网页版打开你的主页，地址栏
-        <code>user/</code> 后面那段就是 sec_user_id），保存后写入 .env，下次直接用。
+        · {{ copy.listName }}只有本人可见：这里填**你自己**的主页链接（网页版打开你的主页，地址栏
+        <code>user/</code> 后面那段就是 sec_user_id），保存后写入 .env，下次直接用
+        <template v-if="isCollect">（与「我的喜欢」共用同一个配置）</template>。
       </div>
       <div>
-        · 慢的原因不是「按发布时间过滤会漏」，而是 f2 的点赞模式**根本不读 `-i`**
-        （源码实测），且点赞分页没有「遇到已下载就停」——所以提速只能靠上面的
+        · 慢的原因不是「按发布时间过滤会漏」，而是 f2 的{{ isCollect ? '收藏' : '点赞' }}模式
+        **根本不读 `-i`**（源码实测），且分页没有「遇到已下载就停」——所以提速只能靠上面的
         「每次最多翻」；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
       </div>
-      <div>
-        · 入库不做标签分析（素材为未打标状态）；结果浏览与审查在下方「抖音采集历史」里
-        点「查看结果」。
-      </div>
+      <div>· {{ copy.collectTip }}结果浏览与审查在下方「抖音采集历史」里 点「查看结果」。</div>
     </div>
   </a-card>
 </template>

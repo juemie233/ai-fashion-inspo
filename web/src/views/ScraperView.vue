@@ -365,7 +365,10 @@ onUnmounted(() => {
         <F2ImportCard @submitted="f2History?.reload()" />
 
         <!-- 我的喜欢（点赞作品）：填自己的主页链接，全量翻页后按同一套判重入库 -->
-        <F2LikeCard @submitted="f2History?.reload()" />
+        <F2LikeCard mode="like" @submitted="f2History?.reload()" />
+
+        <!-- 我的收藏（抖音收藏列表）：同一套链路，入库后聚合进「抖音收藏」合集 -->
+        <F2LikeCard mode="collection" @submitted="f2History?.reload()" />
 
         <!-- 抖音采集历史（f2 增量下载）：两条入口的任务都在这里，可展开结果审查 -->
         <F2TaskHistory ref="f2History" />

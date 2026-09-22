@@ -41,6 +41,17 @@ F2_LIKE_SUBDIR = Path("Download/douyin/like")
 
 DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
 
+"""f2 收藏模式的产物根目录（`-M collection`）。
+
+与点赞模式同形：f2 的目录规则是 `{path}/douyin/{mode}/{nickname}/`，收藏的目标用户也是
+**你自己**——所有收藏的作品都下在「我的昵称」这一个目录下，原作者只存在于文件名里
+（见 :data:`COLLECT_NAMING_TEMPLATE`）。f2 的 mode 目录名就是 `collection`（实测
+`handler.handle_user_collection` → `get_or_add_user_data` 拼 mode 子目录）。
+"""
+F2_COLLECT_SUBDIR = Path("Download/douyin/collection")
+
+DEFAULT_F2_COLLECT_ROOT = DEFAULT_F2_DIR / F2_COLLECT_SUBDIR
+
 """发布模式的命名模板：**必须带 `{aweme_id}`**，否则素材失去真实作品 ID。
 
 不传 `-n` 时 f2 用配置里的 `{create}_{desc}`——文件名里没有作品 ID，导入后
@@ -60,6 +71,15 @@ POST_NAMING_TEMPLATE = "{create}_{desc}_{aweme_id}"
 时，靠它而不是「作者+时间+正文」对齐，判重更稳）。
 """
 LIKE_NAMING_TEMPLATE = "{nickname}_{create}_{desc}_{aweme_id}"
+
+"""收藏模式必须传的命名模板：与点赞模式同形（`{nickname}` 保留原作者 + 真实作品 ID）。
+
+收藏列表（`-M collection`）同样把作品全下在**你自己**的昵称目录下，原作者与作品 ID
+只能靠文件名保留；理由与 :data:`LIKE_NAMING_TEMPLATE` 完全一致（判重、绑博主、
+点回原帖）。同一作品既被点赞又被收藏时，两个入口算出的作品键与平台 ID 一致，
+入库侧的五层判重才会挡住重复。
+"""
+COLLECT_NAMING_TEMPLATE = "{nickname}_{create}_{desc}_{aweme_id}"
 
 """「我的喜欢」入库后自动登记的博主所用的 `bloggers.source` 取值。
 

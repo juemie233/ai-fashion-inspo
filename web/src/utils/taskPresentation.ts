@@ -174,13 +174,15 @@ export function summarizeResult(
       const planned = Number(plan.files ?? 0) || 0
       const trash = Number(plan.trash_skipped ?? skipped['已在垃圾桶（不重新导入）'] ?? 0) || 0
       return [
-        // 点赞入口（我的喜欢）与博主主页入口同类型，靠 fetch_mode 区分
-        r.fetch_mode === 'like' ? '我的喜欢' : '',
+        // 「我的列表」入口（点赞/收藏）与博主主页入口同类型，靠 fetch_mode 区分
+        r.fetch_mode === 'collection' ? '我的收藏' : r.fetch_mode === 'like' ? '我的喜欢' : '',
         imported.imported != null ? `入库 ${imported.imported}` : '',
         // 计划数与实际入库数一致时不重复展示；不一致（有失败）才补一句计划量
         planned && planned !== importedCount ? `计划 ${planned}` : '',
         trash ? `已在垃圾桶 ${trash}` : '',
         bloggerCreated ? `新登记博主 ${bloggerCreated}` : '',
+        // 收藏模式：本批素材聚合进「抖音收藏」合集的结果
+        collectText(r),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -209,6 +211,19 @@ function likeDownloadText(r: Record<string, unknown>): string {
 }
 
 /**
+ * 收藏模式的合集聚合结果（后端 result.collection）：本批素材加进「抖音收藏」合集的条数。
+ * 没有该字段（其它模式）时返回空串。
+ */
+function collectText(r: Record<string, unknown>): string {
+  const c = (r.collection || {}) as Record<string, unknown>
+  const name = typeof c.name === 'string' && c.name ? c.name : ''
+  if (!name) return ''
+  const added = Number(c.added ?? 0) || 0
+  const created = c.created === true ? '（新建）' : ''
+  return `已加入「${name}」合集${created} +${added}`
+}
+
+/**
  * 运行中任务的阶段文案（未结束的任务在「任务」列标题下显示这一行）。
  *
  * 为什么需要：进度条只给百分比，长时间任务（尤其 f2 获取素材）会出现「1% 挂了
@@ -234,19 +249,22 @@ export function describeRunningTask(
   if (status === 'pending') return '排队中：等待 worker 认领'
   const r = (result || {}) as Record<string, unknown>
   const stage = typeof r.stage === 'string' ? r.stage : ''
-  const likeMode = r.fetch_mode === 'like'
+  const personalMode = r.fetch_mode === 'like' || r.fetch_mode === 'collection'
+  const collectMode = r.fetch_mode === 'collection'
+  const listLabel = collectMode ? '我的收藏' : '我的喜欢'
+  const listName = collectMode ? '收藏' : '点赞'
   const count = total > 0 ? `第 ${done}/${total} ` : ''
   if (stage === 'download') {
-    if (likeMode) {
-      // 点赞模式：f2 的点赞分页没有「遇到已下载就停」，全量时要空翻到底（每页固定
+    if (personalMode) {
+      // 「我的列表」模式：f2 的分页没有「遇到已下载就停」，全量时要空翻到底（每页固定
       // 等一次 timeout）；`like_max_counts>0` 时只翻最近 N 条（列表最新在前），快得多。
-      // 注：f2 的点赞模式**不读 `-i`**，日期窗口在这里无效，能收窄的只有这个条数。
+      // 注：f2 的点赞/收藏模式**不读 `-i`**，日期窗口在这里无效，能收窄的只有这个条数。
       const live = likeDownloadText(r)
       const maxCounts = Number(r.like_max_counts ?? 0) || 0
       const scope = maxCounts
-        ? `增量：只翻最近 ${maxCounts} 条点赞`
+        ? `增量：只翻最近 ${maxCounts} 条${listName}`
         : '全量翻页（零新增时进度条会停在 0，属正常），首轮可能较慢'
-      return `拉取我的喜欢（点赞）中：${live ? `${live} · ` : ''}${scope}；已下载过的作品会自动跳过`
+      return `拉取${listLabel}（${listName}）中：${live ? `${live} · ` : ''}${scope}；已下载过的作品会自动跳过`
     }
     // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
     // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载
@@ -259,10 +277,14 @@ export function describeRunningTask(
     return `入库中：${count}个文件 · 复制文件并生成缩略图`
   }
   if (stage === 'blogger') {
-    // 「我的喜欢」入库后的补登记：点赞作者动辄几百个，这一步要逐个建博主并绑定素材
-    return '登记来源作者博主中：把未登记的点赞作者补建成抖音博主并绑定本批素材（不进下载白名单）'
+    // 「我的列表」入库后的补登记：来源作者动辄几百个，这一步要逐个建博主并绑定素材
+    return `登记来源作者博主中：把未登记的${listName}作者补建成抖音博主并绑定本批素材（不进下载白名单）`
   }
-  if (stage === 'done') return '收尾中：写入统计与批次清单'
+  if (stage === 'done') {
+    return collectMode
+      ? '收尾中：写入统计、批次清单与「抖音收藏」合集'
+      : '收尾中：写入统计与批次清单'
+  }
   return ''
 }
 
@@ -270,9 +292,11 @@ export function describeRunningTask(
 export function normalizeQueueTask(t: QueueTask): UnifiedTask {
   const status = normalizeTaskStatus(t.status)
   const finished = status === 'success' || status === 'failed' || status === 'cancelled'
-  // 抖音两条入口共用 f2_import 类型：点赞入口（我的喜欢）在标题上区分开，
-  // 否则任务中心/抖音采集历史里两行看起来一模一样
-  const likeImport = t.type === 'f2_import' && t.result?.fetch_mode === 'like'
+  // 抖音三个入口共用 f2_import 类型：点赞/收藏入口在标题上区分开，
+  // 否则任务中心/抖音采集历史里几行看起来一模一样
+  const personalMode = t.result?.fetch_mode
+  const personalTitle =
+    personalMode === 'collection' ? '抖音我的收藏' : personalMode === 'like' ? '抖音我的喜欢' : ''
   return {
     id: t.id,
     source: 'queue',
@@ -284,7 +308,7 @@ export function normalizeQueueTask(t: QueueTask): UnifiedTask {
     done: t.done,
     target: t.total,
     started_at: null,
-    title: likeImport ? '抖音我的喜欢' : TASK_TYPE_LABELS[t.type] || t.type,
+    title: personalTitle || TASK_TYPE_LABELS[t.type] || t.type,
     // 已结束 → 汇总结果；未结束（排队/运行/暂停）→ 说明当前阶段在干什么
     detail: finished
       ? summarizeResult(t.type, t.result, t.error || '')
