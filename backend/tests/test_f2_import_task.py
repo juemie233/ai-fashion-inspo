@@ -1687,6 +1687,77 @@ def _stub_like_fetch(monkeypatch, calls: dict | None = None):
     patch_f2(monkeypatch, "run_fetch_likes", _fake)
 
 
+def _stub_collect_fetch(monkeypatch, calls: dict | None = None):
+    """打桩 f2 的收藏抓取：只记录入参并返回成功，不真的跑 f2。"""
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+
+    def _fake(f2_dir, collect_user, download_root=None, **kwargs):
+        if calls is not None:
+            calls["fetch"] = "collect"
+            calls["like_user"] = collect_user
+            calls["download_root"] = str(download_root)
+            calls["max_counts"] = kwargs.get("max_counts")
+        return {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "results": [{"nickname": "我的收藏", "rc": 0, "cmd": "f2 dy -M collection"}],
+        }
+
+    patch_f2(monkeypatch, "run_fetch_collects", _fake)
+
+
+async def test_execute_f2_import_collect_mode_aggregates_into_collection(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """收藏端到端：走收藏命令与收藏产物目录，入库后自动聚合进「抖音收藏」合集。
+
+    这是本功能与「我的喜欢」唯一的差别所在，其余（下载阶段、五层判重、来源作者
+    补登记）都是共用实现——所以这里重点锁「跑的是收藏链路」+「素材落进合集」。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_collect_fetch(monkeypatch, calls)
+    # 收藏产物根指向同一棵假树（两种模式的目录结构一致：{我的昵称}/{原作者}_{时间}_…）
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2.DEFAULT_F2_LIKE_ROOT)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="collection")
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        # 状态由 worker 收尾（这里直接调执行器，故不判 status，与点赞用例一致）
+        assert stored.result["fetch"]["mode"] == "collection"
+        assert stored.result["import"]["imported"] == 2
+        collection_stats = stored.result["collection"]
+        assert collection_stats["name"] == "抖音收藏"
+        assert collection_stats["created"] is True
+        assert collection_stats["added"] == 2
+
+        collection = (
+            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+        ).scalars().one()
+        member_ids = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == collection.id
+                )
+            )
+        ).scalars().all()
+        assert len(member_ids) == 2
+
+    # 走的必须是收藏链路（run_fetch_collects），而不是点赞/主页作品
+    assert calls["fetch"] == "collect"
+    assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+
 def test_create_f2_import_like_mode_passes_params(client):
     """API 透传 mode/like_user（任务参数里能查到，执行阶段据此走点赞链路）。"""
     body = client.post(

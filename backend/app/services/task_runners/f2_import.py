@@ -398,8 +398,9 @@ def _running_task_brief(row) -> dict | None:
 
     ``stage`` 是理解 ``done/total`` 的前提：下载阶段是「作者数」，入库阶段是
     「文件数」，界面上要说清楚（见 web 侧 describeRunningTask）。``fetch_mode``
-    决定文案说的是「博主主页作品」还是「我的喜欢」；``like_progress`` 只在点赞
-    下载阶段有值，给界面提供「已落盘 N 个文件 / X GB」这个真分母缺失时的证据。
+    决定文案说的是「博主主页作品」「我的喜欢」还是「我的收藏」；``like_progress``
+    只在「我的列表」（点赞/收藏）下载阶段有值，给界面提供「已落盘 N 个文件 / X GB」
+    这个真分母缺失时的证据。
     """
     if row is None:
         return None

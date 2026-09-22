@@ -20,8 +20,12 @@ import {
 import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
-import { collectIdsToDelete, dropSubmittedFiles, nearDupScopeLabel } from '@/utils/nearDup'
-import type { DupDecision } from '@/utils/nearDup'
+import {
+  collectIdsToDelete,
+  dropSubmittedFiles,
+  nearDupScopeLabel,
+  type DupDecision,
+} from '@/utils/nearDup'
 import { usePolling } from '@/composables/usePolling'
 
 const emit = defineEmits<{
