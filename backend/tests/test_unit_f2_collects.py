@@ -81,7 +81,14 @@ def fake_runtime(monkeypatch):
 
 
 def _patch_crawler(monkeypatch, responses: list):
-    """把 f2 的 DouyinCrawler 换成假的（生产代码在函数内 import，取的是模块属性）。"""
+    """把 f2 的 DouyinCrawler 换成假的（生产代码在函数内 import，取的是模块属性）。
+
+    ⚠ 依赖守卫写在**用例内部**（经由本助手）：f2 只装在本机，CI 上没有。模块级
+    ``pytest.importorskip`` 会把本文件里与 f2 无关的用例（命名模板、空勾选分支、
+    import 顺序守卫）一起跳过，等于白丢覆盖——仓库既有约定见
+    ``test_unit_f2_import.py`` 末尾「守卫必须写在每个用例内部」那段。
+    """
+    pytest.importorskip("f2", reason="需要 f2 本体来打桩收藏夹接口")
     import f2.apps.douyin.crawler as crawler_mod
 
     monkeypatch.setattr(
@@ -187,7 +194,8 @@ class _FakeDownloader:
 
 
 def _patch_download_stack(monkeypatch, folder_pages, folder_list_response, handler_box):
-    """把 f2 的 crawler / handler / utils 三处都换成假的。"""
+    """把 f2 的 crawler / handler / utils 三处都换成假的（依赖守卫见 :func:`_patch_crawler`）。"""
+    pytest.importorskip("f2", reason="需要 f2 本体来打桩 handler / downloader")
     import f2.apps.douyin.handler as handler_mod
     import f2.apps.douyin.utils as utils_mod
 
