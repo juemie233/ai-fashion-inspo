@@ -156,6 +156,10 @@ class Settings(BaseSettings):
     f2_import_interval_hours: int = 24
     # 自动获取是否跳过 live 实况分段视频（与手动入口的开关同义）
     f2_import_auto_skip_live: bool = False
+    # 自动获取走哪个入口：post=已登记博主主页作品 / like=我的喜欢 / collection=我的收藏。
+    # 后两者是「我的列表」模式，需要配置 F2_LIKE_USER（我的主页链接）；未配置时
+    # 调度循环会跳过本轮并记日志，不制造失败任务。
+    f2_import_auto_mode: str = "post"
     # f2 增量下载的日期窗口（天）：只让 f2 翻最近 N 天的作品。
     # 0 = 翻全历史。为什么需要：f2 在 `-i all` 时不设 min_cursor，「翻到范围起点
     # 就 break」永不触发，会把作者全部历史翻一遍，而每翻一页固定 sleep 一次

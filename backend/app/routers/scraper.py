@@ -284,6 +284,15 @@ async def set_f2_auto(
     enabled: bool = Query(..., description="是否开启每日自动增量入库"),
     interval_hours: int | None = Query(None, ge=1, le=720, description="最小间隔（小时）"),
     skip_live: bool | None = Query(None, description="自动获取是否跳过 live 实况分段"),
+    mode: str | None = Query(
+        None,
+        pattern="^(post|like|collection)$",
+        description=(
+            "自动获取走哪个入口：post=已登记博主主页作品（默认）；"
+            "like=我的喜欢；collection=我的收藏（入库后聚合进「抖音收藏」合集）。"
+            "后两者需要先配置「我的主页链接」"
+        ),
+    ),
     persist: bool = Query(True, description="是否持久化写入 .env 文件"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -291,6 +300,7 @@ async def set_f2_auto(
 
     与手动入口同一条链路，区别是由后端调度循环按间隔自动创建任务；到期判定见
     `maybe_schedule_auto_import`（已有任务在跑或未到间隔则跳过）。
+    ``mode`` 决定自动跑哪个入口（博主主页作品 / 我的喜欢 / 我的收藏）。
     配置写入 settings 并（默认）持久化到 .env，重启后保持。
     """
     from app.config import settings
@@ -302,6 +312,8 @@ async def set_f2_auto(
         settings.f2_import_interval_hours = interval_hours
     if skip_live is not None:
         settings.f2_import_auto_skip_live = skip_live
+    if mode is not None:
+        settings.f2_import_auto_mode = mode
 
     if persist:
         updates = {"F2_IMPORT_AUTO_ENABLED": "true" if enabled else "false"}
@@ -309,12 +321,19 @@ async def set_f2_auto(
             updates["F2_IMPORT_INTERVAL_HOURS"] = str(interval_hours)
         if skip_live is not None:
             updates["F2_IMPORT_AUTO_SKIP_LIVE"] = "true" if skip_live else "false"
+        if mode is not None:
+            updates["F2_IMPORT_AUTO_MODE"] = mode
         await _update_env_file(updates)
 
     status = await get_f2_auto_status(db)
+    mode_label = {
+        "post": "博主主页作品",
+        "like": "我的喜欢",
+        "collection": "我的收藏",
+    }.get(status["mode"], status["mode"])
     return {
         "message": f"每日自动获取素材已{'开启' if enabled else '关闭'}"
-        f"（间隔 {status['interval_hours']} 小时）",
+        f"（间隔 {status['interval_hours']} 小时，入口：{mode_label}）",
         "auto": status,
     }
 

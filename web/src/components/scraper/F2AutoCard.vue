@@ -15,6 +15,15 @@ const { status, statusLoading, autoSaving, loadStatus, setAuto } = useF2Import()
 const autoEnabled = computed(() => status.value?.auto?.enabled ?? false)
 const intervalHours = ref(24)
 
+/** 自动获取的入口：博主主页作品 / 我的喜欢 / 我的收藏（后两者需要「我的主页链接」） */
+const autoMode = ref<'post' | 'like' | 'collection'>('post')
+
+/** 「我的列表」模式当前是否可用（未配主页链接时禁用并说明原因） */
+const personalReady = computed(() => Boolean(status.value?.auto?.like_available))
+const personalReason = computed(
+  () => status.value?.auto?.like_reason || '需先在「采集我的喜欢 / 收藏」卡片里填写我的主页链接',
+)
+
 // 状态回读后同步间隔输入框（用户改前端数字时不会被覆盖：仅值不同才写）
 watch(
   () => status.value?.auto?.interval_hours,
@@ -24,15 +33,35 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => status.value?.auto?.mode,
+  (value) => {
+    if (
+      (value === 'post' || value === 'like' || value === 'collection') &&
+      value !== autoMode.value
+    ) {
+      autoMode.value = value
+    }
+  },
+  { immediate: true },
+)
+
 /** 开关：立刻写回后端（含 .env 持久化），失败时回读状态复原开关 */
 async function onToggleAuto(value: string | number | boolean) {
-  await setAuto(Boolean(value), intervalHours.value)
+  await setAuto(Boolean(value), intervalHours.value, true, autoMode.value)
 }
 
 /** 间隔改动：开关处于开启状态时一并生效，关闭时只留作下次开启的默认值 */
 async function onIntervalChange(value: number | undefined) {
   if (!value || value === status.value?.auto?.interval_hours) return
-  await setAuto(autoEnabled.value, value)
+  await setAuto(autoEnabled.value, value, true, autoMode.value)
+}
+
+/** 入口改动：立刻写回后端（与开关、间隔一并持久化） */
+async function onModeChange(value: unknown) {
+  // a-select 的 change 值类型很宽（含对象/数组），这里按白名单收敛
+  const mode = value === 'like' || value === 'collection' ? value : 'post'
+  await setAuto(autoEnabled.value, intervalHours.value, true, mode)
 }
 
 /** 「上次运行 / 下次到期」提示：说明自动获取现在的实际行为 */
@@ -71,6 +100,20 @@ onMounted(loadStatus)
         <span class="f2a-tip">小时间隔</span>
       </div>
 
+      <div class="f2a-row f2a-row-mode">
+        <span class="f2a-label">获取入口</span>
+        <a-select :model-value="autoMode" size="small" style="width: 220px" @change="onModeChange">
+          <a-option value="post">已登记博主的主页新作品</a-option>
+          <a-option value="like" :disabled="!personalReady">我的喜欢（点赞作品）</a-option>
+          <a-option value="collection" :disabled="!personalReady">
+            我的收藏（抖音收藏列表）
+          </a-option>
+        </a-select>
+        <span v-if="autoMode !== 'post' && !personalReady" class="f2a-tip">
+          {{ personalReason }}
+        </span>
+      </div>
+
       <div class="f2a-tip f2a-hint">
         {{ autoHint }}
         <template v-if="autoEnabled">
@@ -80,8 +123,9 @@ onMounted(loadStatus)
       </div>
 
       <div class="f2a-tip">
-        只自动获取「已登记博主的主页新作品」；「我的喜欢」需要全量翻页，故不参与自动获取，
-        请在「采集任务」页签手动触发。
+        「我的喜欢 / 我的收藏」是整份列表翻页（比按博主增量慢得多，且 f2 每页固定等一次
+        timeout），开启前建议先在对应卡片里手动跑一次并设好「每次最多翻」；「我的收藏」
+        入库后会自动聚合进「抖音收藏」合集。
       </div>
     </a-spin>
   </a-card>
@@ -93,6 +137,9 @@ onMounted(loadStatus)
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.f2a-row-mode {
+  margin-top: 8px;
 }
 .f2a-label {
   font-size: 13px;

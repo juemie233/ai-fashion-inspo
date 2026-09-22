@@ -1009,6 +1009,7 @@ def auto_settings(monkeypatch):
         settings.f2_import_auto_enabled,
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
+        settings.f2_import_auto_mode,
         settings.f2_fetch_since_days,
         settings.f2_like_user,
     )
@@ -1017,6 +1018,7 @@ def auto_settings(monkeypatch):
         settings.f2_import_auto_enabled,
         settings.f2_import_interval_hours,
         settings.f2_import_auto_skip_live,
+        settings.f2_import_auto_mode,
         settings.f2_fetch_since_days,
         settings.f2_like_user,
     ) = original
@@ -1092,6 +1094,51 @@ async def test_maybe_schedule_creates_task_when_due(client, auto_env, auto_setti
         # 刚创建的任务处于 pending（进行中）：本轮不重复触发
         assert await task_runner.maybe_schedule_auto_import(db) is None
         assert await _count_f2_tasks(db) == 1
+
+
+async def test_maybe_schedule_honors_collection_mode(client, auto_env, auto_settings):
+    """自动获取入口跟随配置：mode=collection 时任务按「我的收藏」模式创建。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_auto_mode = "collection"
+    auto_settings.f2_like_user = "https://www.douyin.com/user/sec1"
+
+    async with async_session() as db:
+        task_id = await task_runner.maybe_schedule_auto_import(db)
+        assert task_id is not None
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["fetch_mode"] == "collection"
+        assert task.result["like_user"] == "https://www.douyin.com/user/sec1"
+
+
+async def test_maybe_schedule_personal_mode_skips_without_like_user(
+    client, auto_env, auto_settings
+):
+    """个人列表模式缺「我的主页链接」时跳过：不制造注定失败的任务。"""
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_auto_mode = "like"
+    auto_settings.f2_like_user = ""
+
+    async with async_session() as db:
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+        assert await _count_f2_tasks(db) == 0
+
+
+async def test_maybe_schedule_falls_back_to_post_for_unknown_mode(
+    client, auto_env, auto_settings
+):
+    """配置里的模式值不合法时按 post 处理，不因脏配置停掉自动获取。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_auto_mode = "nonsense"
+
+    async with async_session() as db:
+        task_id = await task_runner.maybe_schedule_auto_import(db)
+        assert task_id is not None
+        task = await db.get(TaskQueue, task_id)
+        assert task.result["fetch_mode"] == "post"
 
 
 async def test_maybe_schedule_respects_interval(client, auto_env, auto_settings):

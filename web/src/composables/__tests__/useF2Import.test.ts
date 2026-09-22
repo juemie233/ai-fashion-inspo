@@ -19,10 +19,13 @@ vi.mock('@/api/client', () => ({ default: mocks }))
 
 const AUTO: F2AutoStatus = {
   enabled: false,
+  mode: 'post',
   interval_hours: 24,
   skip_live: false,
   available: true,
   reason: '可增量下载 21 个已采集作者的新作品',
+  like_available: false,
+  like_reason: '未配置「我的主页链接」',
   authors: 21,
   last_task_at: null,
   next_due_at: null,
@@ -305,6 +308,23 @@ describe('useF2Import', () => {
     expect(status.value?.auto.enabled).toBe(true)
     expect(status.value?.auto.interval_hours).toBe(12)
     expect(autoSaving.value).toBe(false)
+    success.mockRestore()
+  })
+
+  it('setAuto 显式指定入口时下发 mode（未指定则沿用后端已保存的模式）', async () => {
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    mocks.get.mockResolvedValue({ data: makeStatus() })
+    mocks.put.mockResolvedValue({
+      data: { message: '已开启', auto: { ...AUTO, enabled: true, mode: 'collection' } },
+    })
+    const { loadStatus, setAuto } = useF2Import()
+    await loadStatus()
+
+    await setAuto(true, 24, true, 'collection')
+
+    expect(mocks.put).toHaveBeenCalledWith('/scraper/f2-auto', null, {
+      params: { enabled: true, interval_hours: 24, persist: true, mode: 'collection' },
+    })
     success.mockRestore()
   })
 

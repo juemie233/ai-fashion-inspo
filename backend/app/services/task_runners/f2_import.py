@@ -371,7 +371,16 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         return None
 
     status = f2_import_status()
-    if not status["available"]:
+    mode = str(settings.f2_import_auto_mode or "post")
+    if mode not in ("post", *PERSONAL_FETCH_MODES):
+        logger.warning(f"[f2 自动获取] 配置的模式 {mode!r} 不支持，按 post 处理")
+        mode = "post"
+    if mode in PERSONAL_FETCH_MODES:
+        # 「我的列表」模式的前提是配了「我的主页链接」（点赞/收藏只有本人可见）
+        if not status["like_available"]:
+            logger.info(f"[f2 自动获取] 跳过本轮：{status['like_reason']}")
+            return None
+    elif not status["available"]:
         # 环境没准备好（f2 未装 / 作者库为空）：跳过并留痕，不制造失败任务
         logger.info(f"[f2 自动获取] 跳过本轮：{status['reason']}")
         return None
@@ -381,6 +390,8 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         fetch=True,
         skip_live=bool(settings.f2_import_auto_skip_live),
         since_days=settings.f2_fetch_since_days,
+        fetch_mode=mode,
+        like_user=str(settings.f2_like_user or "") or None,
     )
     if task is None:
         # 锁内复查发现已有进行中任务（手动点击恰好抢先）：本轮静默跳过
@@ -388,7 +399,7 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         return None
     logger.info(
         f"[f2 自动获取] 已创建任务 #{task.id}"
-        f"（间隔 {interval_hours} 小时，作者库 {status['authors']} 个）"
+        f"（间隔 {interval_hours} 小时，模式 {mode}，作者库 {status['authors']} 个）"
     )
     return task.id
 
@@ -434,8 +445,10 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
     """自动获取的配置与到期信息（供采集管理页卡片展示）。
 
     Returns:
-        {enabled, interval_hours, skip_live, available, reason, authors,
+        {enabled, mode, interval_hours, skip_live, available, reason, authors,
          last_task_at, next_due_at, running_task_id, running}
+        ``mode`` 是自动获取走的入口（post / like / collection），``like_available``
+        供界面提示「我的列表模式需要先配我的主页链接」。
         ``running`` 为进行中任务的简要信息（无则 None），供卡片显示
         「正在执行 #N · 下载中：第 3/21 个作者」并说明当前阶段。
     """
@@ -462,10 +475,14 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
     interval_hours = max(1, int(settings.f2_import_interval_hours or 24))
     return {
         "enabled": bool(settings.f2_import_auto_enabled),
+        "mode": str(settings.f2_import_auto_mode or "post"),
         "interval_hours": interval_hours,
         "skip_live": bool(settings.f2_import_auto_skip_live),
         "available": info["available"],
         "reason": info["reason"],
+        # 「我的列表」模式（like/collection）的前提：配了我的主页链接
+        "like_available": info["like_available"],
+        "like_reason": info["like_reason"],
         "authors": info["authors"],
         "last_task_at": last_created.isoformat() if last_created else None,
         "next_due_at": (

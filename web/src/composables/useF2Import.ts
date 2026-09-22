@@ -44,6 +44,8 @@ export interface F2RunningTask {
 export interface F2AutoStatus {
   /** 是否开启每日自动增量入库 */
   enabled: boolean
+  /** 自动获取走哪个入口：post=博主主页作品 / like=我的喜欢 / collection=我的收藏 */
+  mode: string
   /** 最小间隔（小时）：距上次任务不足则跳过本轮 */
   interval_hours: number
   /** 自动获取是否跳过 live 实况分段 */
@@ -52,6 +54,10 @@ export interface F2AutoStatus {
   available: boolean
   /** 不可用原因或可用性摘要 */
   reason: string
+  /** 「我的列表」模式（like/collection）是否可用（需先配「我的主页链接」） */
+  like_available: boolean
+  /** 「我的列表」模式不可用的原因 */
+  like_reason: string
   /** f2 用户库里的作者数 */
   authors: number
   /** 最近一次 f2 任务的创建时间（ISO） */
@@ -265,13 +271,22 @@ export function useF2Import() {
     enabled: boolean,
     intervalHours?: number,
     persist = true,
+    mode?: 'post' | 'like' | 'collection',
   ): Promise<boolean> {
     autoSaving.value = true
     try {
       const { data } = await apiClient.put<{ message: string; auto: F2AutoStatus }>(
         '/scraper/f2-auto',
         null,
-        { params: { enabled, interval_hours: intervalHours, persist } },
+        {
+          params: {
+            enabled,
+            interval_hours: intervalHours,
+            persist,
+            // 入口只在显式指定时下发（未指定＝沿用后端已保存的模式）
+            ...(mode ? { mode } : {}),
+          },
+        },
       )
       if (status.value) status.value.auto = data.auto
       Message.success(data.message || '设置已保存')
