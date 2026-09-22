@@ -25,6 +25,7 @@ f2 自带的 `-M collects`（收藏夹模式）虽然能按夹下，但它的选
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -48,6 +49,57 @@ COLLECTS_FOLDER_PAGE_LIMIT = 5
 
 """每页取多少个作品（f2 帮助里建议不超过 20）。"""
 COLLECTS_WORKS_PAGE_COUNTS = 20
+
+"""「库里已有、跳过下载」的作品 ID 最多记多少个（供合集补齐；防止任务结果被撑爆）。"""
+SKIPPED_ID_LIMIT = 5000
+
+
+def index_mode_works(root: Path | str) -> dict[str, list[Path]]:
+    """扫描一个「我的列表」产物目录，按**作品 ID** 归集文件路径（供跨模式预链接用）。
+
+    用现有的文件名解析器认名字（新旧模板都认），所以：
+    - 新模板（带 `{aweme_id}`）的文件能被归到作品上
+    - 旧模板的历史文件没有作品 ID，归不了 → 不参与预链接（那部分照旧下载一次，
+      再靠下游的「跨模式重复合并」把磁盘收回来）
+
+    Args:
+        root: 产物根目录（如 `Download/douyin/like`）。
+
+    Returns:
+        ``{作品 ID: [文件路径, ...]}``；目录不存在时返回空字典。
+    """
+    from .f2_common import scan_directory
+
+    index: dict[str, list[Path]] = {}
+    for item in scan_directory(Path(root)):
+        if item.aweme_id:
+            index.setdefault(item.aweme_id, []).append(item.path)
+    return index
+
+
+def _prelink(source: Path, target_dir: Path) -> bool:
+    """把 source 硬链接到 target_dir 下的同名路径；已存在或失败时返回 False。
+
+    为什么用硬链接：两个目录里都必须留着文件（f2 判断「下过没有」只看当前模式目录里
+    有没有同名文件），硬链接让两个路径指向同一份数据——既不重复下载，也不占两份磁盘。
+    同名是可靠的：点赞/收藏用同一个命名模板、元数据来自同一个接口，同一作品算出的
+    文件名一致（实测 87/87 个分段同名同字节）。
+
+    Args:
+        source: 另一个模式目录里已有的文件。
+        target_dir: 本次下载的目标目录（f2 会去那里找「已下载」）。
+
+    Returns:
+        True 表示新建了链接，``source`` 会在目标目录里被 f2 认作「已下载」。
+    """
+    target = target_dir / source.name
+    if target.exists():
+        return False  # 已经有（真下载或此前的链接）：别动它
+    try:
+        os.link(source, target)
+    except OSError:
+        return False  # 跨卷 / 被占用 / 权限：让 f2 正常下载，不影响功能
+    return True
 
 
 def load_f2_runtime(f2_dir: Path | str | None = None) -> tuple[dict, str]:
@@ -216,14 +268,20 @@ async def _download_folders_async(
     max_counts: int,
     should_stop,
     on_progress,
+    existing_aweme_ids: set[str] | None = None,
+    link_from_root: Path | str | None = None,
 ) -> dict:
     """按选中的收藏夹下载（本体；由 :func:`download_collect_folders` 包 asyncio.run）。"""
-    from f2.apps.douyin.handler import DouyinHandler
-    from f2.apps.douyin.utils import SecUserIdFetcher, create_user_folder
-
     from .f2_fetch import like_user_url
 
     kwargs, cookie_source = load_f2_runtime(f2_dir)
+    # ⚠ 顺序不能颠倒：必须在 load_f2_runtime **之后**才 import f2 的类。那次调用会把
+    # 克隆版 f2 插到 sys.path 最前、并清掉已导入的旧模块；先 import 的话拿到的是
+    # site-packages 里那份 2024-12-31 的旧版（签名已失效）——收藏夹接口直接 403
+    # （实测：探针里先 import 后 load，`collects/video/list/` 稳定 403）。
+    from f2.apps.douyin.handler import DouyinHandler
+    from f2.apps.douyin.utils import SecUserIdFetcher, create_user_folder
+
     kwargs["mode"] = "collection"  # 决定产物目录 {path}/douyin/collection/{我的昵称}/
     kwargs["naming"] = COLLECT_NAMING_TEMPLATE
     kwargs["folderize"] = False  # 不按夹分子目录：扫描/入库只认「我的昵称」这一层
@@ -254,6 +312,15 @@ async def _download_folders_async(
     profile = await handler.fetch_user_profile(sec_user_id)
     user_path = create_user_folder(kwargs, profile.nickname)
 
+    # F：下载前就知道哪些不用下
+    # 1) 库里已有（按真实作品 ID）：下了也是白下（入库必然判重跳过），直接跳过并把
+    #    作品 ID 带出去，让合集把那件补上（E）
+    existing = {str(a) for a in (existing_aweme_ids or set()) if a}
+    # 2) 另一个「我的列表」目录（like/）里已有：把文件硬链接过来，f2 见到就跳过
+    #    只从**同类目录**预链接：实测 like↔collection 的 87 个同名分段字节完全一致，
+    #    而 post↔like 有 40/76 个不同（like 侧更清晰）——从 post 预链接会冻住低清版本
+    link_index = index_mode_works(link_from_root) if link_from_root else {}
+
     stats = {
         "cookie_source": cookie_source,
         "root": str(user_path),
@@ -264,18 +331,43 @@ async def _download_folders_async(
         "current": {},
         "stopped": False,
         "missing_folders": missing,
+        "skipped_existing": 0,  # 库里已有、跳过下载的作品数
+        "skipped_existing_ids": [],  # 上面这些作品的 ID（供合集补齐）
+        "prelinked": 0,  # 从同类目录预链接过来的文件数
+        "link_index_size": len(link_index),
     }
     if on_progress is not None:
         on_progress(_snapshot(stats))
 
     async def _download_page(aweme_list: list) -> None:
-        await handler.downloader.create_download_tasks(kwargs, aweme_list, user_path)
+        """一页作品：先剔掉「库里已有」的，再把同类目录里已有的硬链接过来，最后交给 f2。
+
+        交给 f2 的那批即使部分文件已存在也无妨：f2 自己按「目标文件存在即跳过」，
+        所以预链接成功的那部分不会产生任何下载；预链接失败（跨卷等）则照常下载。
+        """
+        todo = []
+        for work in aweme_list:
+            aweme_id = str(work.get("aweme_id") or "")
+            if aweme_id and aweme_id in existing:
+                stats["skipped_existing"] += 1
+                if len(stats["skipped_existing_ids"]) < SKIPPED_ID_LIMIT:
+                    stats["skipped_existing_ids"].append(aweme_id)
+                continue
+            todo.append(work)
+        if link_index:
+            for work in todo:
+                for source in link_index.get(str(work.get("aweme_id") or ""), []):
+                    if _prelink(source, user_path):
+                        stats["prelinked"] += 1
+        if todo:
+            await handler.downloader.create_download_tasks(kwargs, todo, user_path)
 
     for index, folder in enumerate(folders, 1):
         if should_stop():
             stats["stopped"] = True
             break
         stats["current"] = {"id": folder["id"], "name": folder["name"], "index": index}
+        skipped_before = stats["skipped_existing"]
         done = await _iter_folder_works(
             handler,
             folder["id"],
@@ -285,7 +377,13 @@ async def _download_folders_async(
         )
         stats["works"] += done
         stats["folders"].append(
-            {"id": folder["id"], "name": folder["name"], "total": folder["total"], "works": done}
+            {
+                "id": folder["id"],
+                "name": folder["name"],
+                "total": folder["total"],
+                "works": done,
+                "skipped_existing": stats["skipped_existing"] - skipped_before,
+            }
         )
         if on_progress is not None:
             on_progress(_snapshot(stats))
@@ -321,12 +419,21 @@ def download_collect_folders(
     max_counts: int = 0,
     should_stop=None,
     on_progress=None,
+    existing_aweme_ids: set[str] | None = None,
+    link_from_root: Path | str | None = None,
 ) -> dict:
     """只下载**选中的收藏夹**里的作品（先扫描、后下载里的「下载」这一步）。
 
     与平铺 `-M collection` 的区别：作品清单来自 `collects/video/list/`（按夹），
     因此**没被选中的夹一件都不会下载**。文件落点、命名模板、跳过规则与 f2 CLI
     完全一致，故下游（跨模式合并 → 扫描 → 五层判重 → 入库）无需任何改动。
+
+    **下载前的两道过滤（省掉重复下载）**：
+
+    1. ``existing_aweme_ids``：素材库里已有的作品 → 整件跳过（下了也只会被判重跳过），
+       作品 ID 记进 ``skipped_existing_ids`` 供合集补齐
+    2. ``link_from_root``：另一个「我的列表」目录（如 like/）里已有的文件 → 硬链接到
+       本次目标目录，f2 见到同文件即跳过（不重复下载、磁盘也只占一份）
 
     Args:
         f2_dir: f2 工作目录。
@@ -335,11 +442,14 @@ def download_collect_folders(
         max_counts: **每个夹**最多取最近多少件（0=该夹全量）。
         should_stop: 无参可调用对象，返回 True 时停止（暂停/取消中途生效）。
         on_progress: ``on_progress(stats) -> None``，每处理完一个夹回调一次。
+        existing_aweme_ids: 库内已有素材对应的**真实作品 ID**集合（跳过下载）。
+        link_from_root: 另一个同类产物根目录（预链接来源）；不传则不预链接。
 
     Returns:
-        ``{"cookie_source", "root", "folders": [{"id","name","total","works"}],
-        "works": int, "total_works": int, "current": dict, "stopped": bool,
-        "missing_folders": [...]}``
+        ``{"cookie_source", "root", "folders": [{"id","name","total","works",
+        "skipped_existing"}], "works": int, "total_works": int, "current": dict,
+        "stopped": bool, "skipped_existing": int, "skipped_existing_ids": [...],
+        "prelinked": int, "link_index_size": int, "missing_folders": [...]}``
     """
     stop = should_stop or (lambda: False)
     if not collect_ids:
@@ -353,9 +463,20 @@ def download_collect_folders(
             "current": {},
             "stopped": False,
             "missing_folders": [],
+            "skipped_existing": 0,
+            "skipped_existing_ids": [],
+            "prelinked": 0,
+            "link_index_size": 0,
         }
     return asyncio.run(
         _download_folders_async(
-            f2_dir, user, [str(c) for c in collect_ids], max_counts, stop, on_progress
+            f2_dir,
+            user,
+            [str(c) for c in collect_ids],
+            max_counts,
+            stop,
+            on_progress,
+            existing_aweme_ids=existing_aweme_ids,
+            link_from_root=link_from_root,
         )
     )

@@ -248,6 +248,49 @@ describe('summarizeResult', () => {
     )
     expect(text).toContain('1 个夹已不存在')
   })
+
+  it('报告下载前省下的重复下载（已在库跳过 / 复用已有文件）', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        fetch: {
+          collect: {
+            folders: [{ id: '111', name: '秘书OL', total: 96, works: 96, skipped_existing: 40 }],
+            skipped_existing: 40,
+            prelinked: 12,
+            missing_folders: [],
+          },
+        },
+        plan: { files: 56 },
+        import: { imported: 56 },
+      },
+      null,
+    )
+    expect(text).toContain('已在库跳过 40 件')
+    expect(text).toContain('复用已有文件 12 个')
+  })
+
+  it('没有跳过任何作品时不占版面', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        fetch: {
+          collect: {
+            folders: [{ id: '111', name: '秘书OL', total: 3, works: 3, skipped_existing: 0 }],
+            skipped_existing: 0,
+            prelinked: 0,
+            missing_folders: [],
+          },
+        },
+        plan: { files: 3 },
+        import: { imported: 3 },
+      },
+      null,
+    )
+    expect(text).toBe('我的收藏 · 入库 3 · 按收藏夹下载 1 个夹 · 3 件')
+  })
 })
 
 describe('describeRunningTask', () => {

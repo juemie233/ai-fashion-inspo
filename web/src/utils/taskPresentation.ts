@@ -301,7 +301,17 @@ function collectFolderText(r: Record<string, unknown>): string {
     0,
   )
   const missing = Array.isArray(collect.missing_folders) ? collect.missing_folders.length : 0
-  return `按收藏夹下载 ${folders.length} 个夹 · ${works} 件${missing ? `（${missing} 个夹已不存在）` : ''}`
+  // 下载前的过滤成效：已在库而整件跳过 / 从同类目录预链接（都没产生下载）
+  const skipped = Number(collect.skipped_existing ?? 0) || 0
+  const prelinked = Number(collect.prelinked ?? 0) || 0
+  const saved: string[] = []
+  if (skipped) saved.push(`已在库跳过 ${skipped} 件`)
+  if (prelinked) saved.push(`复用已有文件 ${prelinked} 个`)
+  return [
+    `按收藏夹下载 ${folders.length} 个夹 · ${works} 件`,
+    missing ? `（${missing} 个夹已不存在）` : '',
+    saved.length ? `· ${saved.join(' · ')}` : '',
+  ].join('')
 }
 
 /**

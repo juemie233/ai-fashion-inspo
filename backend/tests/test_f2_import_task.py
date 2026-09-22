@@ -1835,21 +1835,29 @@ def _stub_collect_folder_download(monkeypatch, calls: dict):
         lambda *_a, **_k: pytest.fail("选中收藏夹时不该走平铺收藏命令"),
     )
 
-    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None):
+    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None,
+              existing_aweme_ids=None, link_from_root=None):
         calls["collect_ids"] = list(collect_ids)
         calls["max_counts"] = max_counts
         calls["user"] = user
+        calls["existing_aweme_ids"] = set(existing_aweme_ids or set())
+        calls["link_from_root"] = str(link_from_root or "")
         root = f2.DEFAULT_F2_COLLECT_ROOT / "我的账号"
         _jpeg(root / "不养羊_2026-09-14 10-31-14_下一站再见吧#jk_7670881947199742833_image_1.jpg")
         stats = {
             "cookie_source": "假配置",
             "root": str(root),
-            "folders": [{"id": collect_ids[0], "name": "秘书OL", "total": 1, "works": 1}],
+            "folders": [{"id": collect_ids[0], "name": "秘书OL", "total": 1, "works": 1,
+                         "skipped_existing": 0}],
             "works": 1,
             "total_works": 1,
             "current": {},
             "stopped": False,
             "missing_folders": [],
+            "skipped_existing": 0,
+            "skipped_existing_ids": [],
+            "prelinked": 0,
+            "link_index_size": 0,
         }
         if on_progress:
             on_progress(stats)
@@ -1888,6 +1896,97 @@ async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
     assert calls["collect_ids"] == ["7650133299343595322"]
     assert calls["max_counts"] == 0  # 未配置「每次最多翻」= 每个夹全量
     assert calls["user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+    # F 的接线：库内已有作品 ID 集合与「同类目录预链接来源」都要传下去
+    assert calls["link_from_root"] == str(f2.DEFAULT_F2_LIKE_ROOT)
+    assert isinstance(calls["existing_aweme_ids"], set)
+
+
+async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_collection(
+    client, auto_settings, monkeypatch
+):
+    """E：已在库、本次没重新入库（被 F 跳过）的收藏作品也要补进「抖音收藏」合集。"""
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    # 仓库里已有一件「早就采过」的收藏作品（真实作品 ID 形态的平台 ID）
+    async with async_session() as db:
+        db.add(
+            Inspiration(
+                id="existing-collect-material",
+                source_type="douyin",
+                source_platform_id="f2:7670881947199742833#image_1",
+                source_url="https://www.douyin.com/note/7670881947199742833",
+                file_path="images/2026-08/x.jpg",
+                media_type="image",
+            )
+        )
+        await db.commit()
+
+    calls: dict = {}
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    # 下载阶段：这件作品被 F 跳过（没产生文件），只记下作品 ID
+    patch_f2(
+        monkeypatch,
+        "run_fetch_collects",
+        lambda *_a, **_k: pytest.fail("选中收藏夹时不该走平铺收藏命令"),
+    )
+
+    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None,
+              existing_aweme_ids=None, link_from_root=None):
+        calls["existing_aweme_ids"] = set(existing_aweme_ids or set())
+        stats = {
+            "cookie_source": "假配置",
+            "root": str(f2.DEFAULT_F2_COLLECT_ROOT),
+            "folders": [{"id": collect_ids[0], "name": "秘书OL", "total": 1, "works": 1,
+                         "skipped_existing": 1}],
+            "works": 1,
+            "total_works": 1,
+            "current": {},
+            "stopped": False,
+            "missing_folders": [],
+            "skipped_existing": 1,
+            "skipped_existing_ids": ["7670881947199742833"],
+            "prelinked": 0,
+            "link_index_size": 0,
+        }
+        if on_progress:
+            on_progress(stats)
+        return stats
+
+    patch_f2(monkeypatch, "download_collect_folders", _fake)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", collect_ids=["7650133299343595322"]
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["import"]["imported"] == 0  # 本次一件都没入库
+        stats = stored.result["collection"]
+        assert stats["from_existing"] == 1
+        assert stats["added"] == 1
+
+        collection = (
+            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+        ).scalars().one()
+        member_ids = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == collection.id
+                )
+            )
+        ).scalars().all()
+        assert list(member_ids) == ["existing-collect-material"]
+
+    # F 的过滤集合里要有这件作品，否则它根本不会被跳过
+    assert "7670881947199742833" in calls["existing_aweme_ids"]
 
 
 async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -235,7 +236,7 @@ def test_download_only_touches_selected_folders_and_hands_works_to_f2(
     assert stats["works"] == 2
     assert stats["total_works"] == 96  # 进度分母来自夹的 total_number
     assert stats["folders"] == [
-        {"id": "111", "name": "秘书OL", "total": 96, "works": 2}
+        {"id": "111", "name": "秘书OL", "total": 96, "works": 2, "skipped_existing": 0}
     ]
     assert stats["root"].endswith("还行吧")
     assert stats["missing_folders"] == []
@@ -318,6 +319,56 @@ def test_download_stops_between_folders_when_should_stop(fake_runtime, monkeypat
     assert [p["aweme_id"] for page in handler.downloader.pages for p in page] == ["a1"]
 
 
+def test_download_skips_works_already_in_library(fake_runtime, monkeypatch):
+    """F-1：库里已有的作品整件跳过（不下也不交给下载器），ID 带出来供合集补齐。"""
+    folder_list = _folder_response([("111", "秘书OL", 3)])
+    box: list = []
+    _patch_download_stack(monkeypatch, {"111": [["a1", "a2", "a3"]]}, folder_list, box)
+
+    stats = f2.download_collect_folders(
+        Path("x"), "u", ["111"], existing_aweme_ids={"a1", "a3"}
+    )
+
+    handler = box[0]
+    # 只把 a2 交给了下载器
+    assert [p["aweme_id"] for page in handler.downloader.pages for p in page] == ["a2"]
+    assert stats["skipped_existing"] == 2
+    assert stats["skipped_existing_ids"] == ["a1", "a3"]
+    # works 仍是「看到的作品数」：进度分母口径不变
+    assert stats["works"] == 3
+    # 按夹也记了跳过数
+    assert stats["folders"][0]["skipped_existing"] == 2
+
+
+def test_download_prelinks_files_from_other_mode_root(fake_runtime, monkeypatch, tmp_path):
+    """F-2：同类目录（like/）里已有的文件硬链接到目标目录，f2 见到即跳过（不重复下载）。"""
+    like_root = tmp_path / "like" / "我的账号"
+    like_root.mkdir(parents=True)
+    name = "不养羊_2026-09-14 10-31-14_下一站再见吧#jk_7670881947199742833_image_1.jpg"
+    source = like_root / name
+    source.write_bytes(b"bytes-of-this-work")
+    target_dir = tmp_path / "collection" / "我的账号"
+    target_dir.mkdir(parents=True)
+
+    folder_list = _folder_response([("111", "A", 1)])
+    box: list = []
+    _patch_download_stack(monkeypatch, {"111": [["7670881947199742833"]]}, folder_list, box)
+    # 让 user_path 指向我们准备好的目标目录
+    import f2.apps.douyin.utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "create_user_folder", lambda kwargs, nickname: target_dir)
+
+    stats = f2.download_collect_folders(
+        Path("x"), "u", ["111"], link_from_root=tmp_path / "like"
+    )
+
+    linked = target_dir / name
+    assert linked.exists()
+    assert os.stat(linked).st_ino == os.stat(source).st_ino  # 同一份数据，不是复制
+    assert stats["prelinked"] == 1
+    assert stats["link_index_size"] == 1
+
+
 def test_download_without_selection_is_a_noop(fake_runtime, monkeypatch):
     """没勾选任何夹：直接返回空结果（不联网、不构造任何 f2 客户端）。"""
     called = []
@@ -348,3 +399,34 @@ def test_download_does_not_write_f2_user_db(fake_runtime, monkeypatch):
 def test_collect_naming_matches_shared_template():
     """命名模板与采集侧共用同一份常量（换个模板就会让判重/原作者全部失效）。"""
     assert f2_collects._collect_naming() == f2.COLLECT_NAMING_TEMPLATE
+
+
+def test_f2_classes_are_imported_after_clone_is_on_path():
+    """结构守卫：f2 的类必须**在 load_f2_runtime 之后**才 import。
+
+    为什么值得一条用例：`load_f2_runtime` 才会把克隆版 f2 插到 sys.path 最前并清掉
+    已导入的旧模块。顺序颠倒时拿到的是 site-packages 里那份旧版（签名失效），收藏夹
+    接口直接 403——而且**只在进程内第一次执行时**显现（之前有别的调用先把克隆版放好
+    就看不出来），是最难复现的一类错。这里用 AST 把顺序钉死。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(f2_collects._download_folders_async)))
+    load_line = next(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_f2_runtime"
+    )
+    f2_import_lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("f2.")
+    ]
+    assert f2_import_lines, "这条守卫要盯的 f2 import 不见了，请同步更新用例"
+    assert all(load_line < line for line in f2_import_lines), (
+        "f2 的类必须在 load_f2_runtime 之后 import，否则可能用到旧版 f2（403）"
+    )

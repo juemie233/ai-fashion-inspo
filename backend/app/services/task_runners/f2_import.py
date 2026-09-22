@@ -743,10 +743,38 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         )
 
     # ── 阶段 2：扫描 + 去重计划 ──
+    # 收藏模式顺手把「本次扫描到的作品 ID」带出来：合集要收的是你的收藏全集，
+    # 而不是「本批新入库的那几条」（已在库的会被判重跳过，见阶段 3c）
+    collect_scope: dict = {}
     to_import = await _scan_and_plan_stage(
-        db, task, opts, bloggers, plan_authors, limit, skip_live, fetch_mode, fetch_summary
+        db,
+        task,
+        opts,
+        bloggers,
+        plan_authors,
+        limit,
+        skip_live,
+        fetch_mode,
+        fetch_summary,
+        collect_scope=collect_scope if fetch_mode == "collection" else None,
     )
+    # 合集补齐的范围（仅收藏模式）：本次扫描到的作品 ∪ 本次枚举到但被 F 跳过（已在库）的作品
+    collect_extras: list[str] = []
+    if fetch_mode == "collection":
+        collect_extras = list(collect_scope.get("aweme_ids") or [])
+        collect_extras += list(
+            (fetch_summary.get("collect") or {}).get("skipped_existing_ids") or []
+        )
     if not to_import:
+        # 本批没有要入库的文件，但收藏模式仍要把「已在库」的部分补进合集，
+        # 否则零新增的那几轮合集永远不更新
+        if collect_extras:
+            await _aggregate_collect_stage(
+                db,
+                task,
+                {"ids": []},
+                extra_ids=await collect_library_ids_by_aweme(db, collect_extras),
+            )
         return
 
     # ── 阶段 3：入库（同步 sqlite 放线程；进度回调 + 状态检查）──
@@ -762,7 +790,14 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     # ── 阶段 3c：「我的收藏」把本批素材聚合进「抖音收藏」合集 ──
     if fetch_mode == "collection":
-        await _aggregate_collect_stage(db, task, result)
+        # 合集 = 本批新入库的 + 本次扫描/枚举到但已在库的（E：否则「先喜欢后收藏」
+        # 的作品永远进不了合集）
+        await _aggregate_collect_stage(
+            db,
+            task,
+            result,
+            extra_ids=await collect_library_ids_by_aweme(db, collect_extras),
+        )
 
     # ── 收尾 ──
     await _finalize_import(
@@ -916,6 +951,10 @@ async def _fetch_collects_by_folder_stage(
         )
 
     personal_root = f2.DEFAULT_F2_COLLECT_ROOT
+    # F（下载前两道过滤）：库内已有作品 → 整件跳过；另一个「我的列表」目录里已有
+    # 文件 → 硬链接过来让 f2 跳过。两者都只为「省一次重复下载」，不影响入库结果。
+    existing_aweme_ids = await known_library_aweme_ids(db)
+    link_from_root = f2.DEFAULT_F2_LIKE_ROOT  # 只从 like/ 预链接：那里的字节与收藏一致
     holder: dict = {
         "stop": False,
         "works": 0,
@@ -951,6 +990,8 @@ async def _fetch_collects_by_folder_stage(
             max_counts=max_per_folder,
             should_stop=_should_stop,
             on_progress=_on_progress,
+            existing_aweme_ids=existing_aweme_ids,
+            link_from_root=link_from_root,
         )
 
     async def _watcher() -> None:
@@ -995,6 +1036,10 @@ async def _fetch_collects_by_folder_stage(
         "stopped": bool(outcome.get("stopped")),
         "missing_folders": outcome.get("missing_folders") or [],
         "per_folder_max_counts": max_per_folder,
+        # F 的成效：库内已有而跳过下载的作品数 / 从同类目录预链接过来的文件数
+        "skipped_existing": int(outcome.get("skipped_existing") or 0),
+        "skipped_existing_ids": outcome.get("skipped_existing_ids") or [],
+        "prelinked": int(outcome.get("prelinked") or 0),
     }
     fetch_summary["downloaded"] = {
         "files": final_stats["files"],
@@ -1241,10 +1286,17 @@ async def _resolve_named_profile_keys(db: AsyncSession, task: TaskQueue, opts: d
 
 async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bloggers: dict,
                      plan_authors: set[str] | None, limit: int | None, skip_live: bool,
-                     fetch_mode: str, fetch_summary: dict) -> list:
+                     fetch_mode: str, fetch_summary: dict,
+                     collect_scope: dict | None = None) -> list:
     """阶段 2：扫描下载目录 + 去重计划（放线程，否则阻塞 worker 事件循环）。
 
-    无可入库文件时本函数直接落「done」结果并返回空列表，调用方据此收工。"""
+    无可入库文件时本函数直接落「done」结果并返回空列表，调用方据此收工。
+
+    Args:
+        collect_scope: 收藏模式传入一个 dict，函数会把「本次扫描到的作品 ID」写进
+            ``collect_scope["aweme_ids"]``（供合集补齐用：合集要收的是收藏全集，
+            而不是「本批新入库」）。
+    """
     from scripts import import_f2_downloads as f2
 
     scan_root = (
@@ -1275,6 +1327,12 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
     )
     plan_seconds = round(time.monotonic() - started, 1)
     to_import = [d for d in decisions if d.action == "import"]
+    if collect_scope is not None:
+        # 本次扫描到的作品 ID（含被判重跳过、没入库的那些）：合集补齐要用它把
+        # 「你的收藏全集」补齐，而不是只收本批新入库的几条
+        collect_scope["aweme_ids"] = sorted(
+            {d.item.aweme_id for d in decisions if d.item.aweme_id}
+        )
     task.progress = _PROGRESS_AFTER_PLAN
     task.total = len(to_import)
     task.done = 0
@@ -1407,18 +1465,107 @@ async def _register_personal_bloggers_stage(db: AsyncSession, task: TaskQueue, r
     return bloggers_stats
 
 
-async def _aggregate_collect_stage(db: AsyncSession, task: TaskQueue, result: dict) -> dict | None:
-    """阶段 3c：「我的收藏」把本批入库素材聚合进「抖音收藏」合集。
+async def known_library_aweme_ids(db: AsyncSession) -> set[str]:
+    """库内已登记的**真实作品 ID**集合（含垃圾桶），用于「下载前跳过已入库作品」。
+
+    为什么含垃圾桶：垃圾桶是五层判重里独立的一层（被丢弃的内容不复活），它的作品
+    同样不该再下一遍——下了也会被判重跳过，纯浪费带宽。
+
+    只认 `f2:<19 位数字>#…` 这一种平台 ID：旧素材存的是「文件名算出来的合成哈希」，
+    与作品 ID 无法互推，那部分只能靠内容哈希在入库阶段判重（这里不假装知道）。
+
+    Returns:
+        作品 ID 字符串集合（19 位数字）。
+    """
+    from app.models.inspiration import Inspiration
+
+    rows = await db.execute(
+        select(Inspiration.source_platform_id).where(
+            Inspiration.source_platform_id.like("f2:%")
+        )
+    )
+    ids: set[str] = set()
+    for (platform_id,) in rows:
+        head = str(platform_id).split("#", 1)[0]  # f2:<作品 ID>
+        value = head[3:]
+        if len(value) == 19 and value.isdigit():
+            ids.add(value)
+    return ids
+
+
+"""合集补齐时单条 SQL 的 IN 规模（SQLite 变量上限 999，留余量）。"""
+_EXTRA_ID_CHUNK = 400
+
+
+async def collect_library_ids_by_aweme(
+    db: AsyncSession, aweme_ids: list[str] | set[str]
+) -> list[str]:
+    """把作品 ID 解析成库内**未删除**素材 ID（供「抖音收藏」合集补齐）。
+
+    为什么需要它：「先扫描、后下载」会把**已在库**的作品整件跳过（省一次下载），
+    而这些作品明明在你的收藏里，却永远进不了「抖音收藏」合集——合集只收「本批新入库」
+    的那部分。这里按平台 ID 前缀把它们找回来一并入合集（E）。
+
+    只取未删除的素材：合集里不该出现垃圾桶内容（垃圾桶是负样本区）。
+
+    Args:
+        db: 数据库会话。
+        aweme_ids: 作品 ID（19 位数字）。
+
+    Returns:
+        命中的素材 ID 列表（去重）。
+    """
+    from sqlalchemy import func
+
+    from app.models.inspiration import Inspiration
+
+    wanted = sorted({str(a) for a in aweme_ids if a})
+    if not wanted:
+        return []
+    # 平台 ID 形如 `f2:<作品 ID>#<类型><序号>`：用 substr/instr 把中间的 ID 抠出来做
+    # IN 比较（一次查询搞定一批；逐条 LIKE 拼 OR 会退化成几百次扫描）
+    aweme_of_platform = func.substr(
+        Inspiration.source_platform_id,
+        4,
+        func.instr(Inspiration.source_platform_id, "#") - 4,
+    )
+    found: list[str] = []
+    for start in range(0, len(wanted), _EXTRA_ID_CHUNK):
+        chunk = wanted[start : start + _EXTRA_ID_CHUNK]
+        rows = await db.execute(
+            select(Inspiration.id).where(
+                Inspiration.deleted_at.is_(None),
+                Inspiration.source_platform_id.like("f2:%#%"),
+                aweme_of_platform.in_(chunk),
+            )
+        )
+        found.extend(str(row[0]) for row in rows)
+    return sorted(set(found))
+
+
+async def _aggregate_collect_stage(
+    db: AsyncSession,
+    task: TaskQueue,
+    result: dict,
+    extra_ids: list[str] | None = None,
+) -> dict | None:
+    """阶段 3c：「我的收藏」把本批素材聚合进「抖音收藏」合集。
 
     为什么用合集而不是标签：合集的语义就是「一批素材的集合」（收藏合计里直接看到数量
     与体积），而标签是 AI/手动语义、会进入标签治理（去重/合并/健康扫描）——收藏来源是
     事实而非语义，不该污染标签体系。
 
+    **合集要收的是「你的收藏」，不是「本批新入库的那几条」**：所以除了本批入库的素材，
+    还要带上 ``extra_ids``——本次扫描/枚举到、但**已在库**因而没重新入库的素材
+    （见 :func:`collect_library_ids_by_aweme`）。少了它，凡是「先喜欢/采集过、后来又
+    收藏」的作品都会永远缺席合集。
+
     幂等：合集不存在则创建，已加入的素材不会重复（collection_items 有唯一约束）。
     失败不影响已入库素材，只写进任务 error 提示人工处理。
     """
     imported_ids = [str(i) for i in (result.get("ids") or []) if i]
-    if not imported_ids:
+    target_ids = list(dict.fromkeys(imported_ids + [str(i) for i in (extra_ids or []) if i]))
+    if not target_ids:
         return None
     from app.services import collection_service
     from app.models.collection import Collection
@@ -1441,19 +1588,23 @@ async def _aggregate_collect_stage(db: AsyncSession, task: TaskQueue, result: di
         else:
             collection_id = int(collection.id)
             created = False
-        added = await collection_service.add_inspirations(db, collection_id, imported_ids)
+        added = await collection_service.add_inspirations(db, collection_id, target_ids)
         stats = {
             "id": collection_id,
             "name": COLLECT_COLLECTION_NAME,
             "created": created,
             "added": int(added.get("added") or 0),
             "skipped": int(added.get("skipped") or 0),
+            # 本次是「已在库、未重新入库但补进合集」的条数（让前端/日志能解释合集为何
+            # 比「本批入库」多）
+            "from_existing": len([i for i in target_ids if i not in set(imported_ids)]),
         }
         task.result = {**task.result, "collection": stats}
         await db.commit()
         logger.info(
             f"f2「我的收藏」已聚合进合集「{COLLECT_COLLECTION_NAME}」#{collection_id}："
-            f"新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条）"
+            f"新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条，"
+            f"其中已在库补入 {stats['from_existing']} 条）"
         )
         return stats
     except Exception as exc:  # noqa: BLE001 —— 素材已入库，聚合失败不该让任务失败
