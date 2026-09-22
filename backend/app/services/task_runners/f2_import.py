@@ -221,10 +221,16 @@ def f2_import_status() -> dict:
     入库 142 条）默认跳过，另在 ``unknown_authors`` 里列出来提示用户。
 
     Returns:
-        {"available": bool, "reason": str, "authors": int, "unknown_authors": list[str],
-         "f2_dir": str, "root": str, "fetch_since_days": int}
-        ``fetch_since_days`` 是默认日期窗口天数，供前端「只翻最近 N 天」输入框
-        取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
+        {``available``, ``reason``, ``authors``, ``unknown_authors``, ``f2_dir``, ``root``,
+         ``like_root``, ``collect_root``, ``like_user``, ``like_available``, ``like_reason``,
+         ``collect_available``, ``collect_reason``, ``like_max_counts``, ``fetch_since_days``}
+        - ``available``/``reason``：发布模式（已登记博主主页作品）的可用性与原因；
+        - ``like_*`` / ``collect_*``：「我的喜欢 / 我的收藏」各自的可用性与原因
+          （前提相同：f2 可用 + 工作目录存在 + 配了「我的主页链接」）；
+        - ``like_root`` / ``collect_root``：两种「我的列表」模式的产物目录；
+        - ``like_max_counts``：「我的列表」每次最多翻多少条（0=全量）；
+        - ``fetch_since_days``：默认日期窗口天数，供前端「只翻最近 N 天」输入框
+          取初值——否则前端会硬编码一个默认值并随请求下发，把 .env 里的配置顶掉。
     """
     from app.config import settings
     from scripts import import_f2_downloads as f2

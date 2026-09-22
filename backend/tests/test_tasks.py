@@ -279,6 +279,35 @@ async def test_pause_non_pausable_type_rejected(client):
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "running"
 
 
+def test_whitelists_match_frontend_contract():
+    """锁定暂停/取消白名单内容：改这里必须同步前端（前端用例同样锁定这份清单）。
+
+    跨语言无法共用常量，靠两侧用例把「人工对齐」变成会红的事实——否则会出现
+    「界面有按钮、后端 400」或反过来的静默错位。
+    """
+    from app.routers.tasks import (
+        _CANCELABLE_RUNNING_TYPES,
+        _PAUSABLE_RUNNING_TYPES,
+    )
+
+    assert set(_PAUSABLE_RUNNING_TYPES) == {
+        "tag_network_analyze",
+        "batch_analyze",
+        "multi_analyze",
+        "quality_check",
+        "f2_import",
+    }
+    assert set(_CANCELABLE_RUNNING_TYPES) == {
+        "face_scan",
+        "face_match",
+        "tag_network_analyze",
+        "f2_import",
+        "batch_analyze",
+        "multi_analyze",
+        "quality_check",
+    }
+
+
 async def test_pause_non_running_rejected(client):
     """暂停非 running 状态（pending）→ 400。"""
     tid = await _add_task(status="pending", type_="batch_analyze")

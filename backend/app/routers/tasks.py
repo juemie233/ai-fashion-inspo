@@ -24,6 +24,10 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # 已写入的分析日志与标签全部保留，取消后重新「分析未分析」即可续算
 # （已有成功日志的素材会被跳过）。全库级批量动辄跑数十小时，没有取消入口
 # 用户只能干等——「无法取消」与「暂停也要等当前批次跑完」是明确的产品缺陷。
+# 质量审核同理可中断（每批检查一次，已判定的 quality_status 与审核日志保留）。
+#
+# ⚠ 前端 `web/src/utils/taskPresentation.ts` 的 CANCELABLE_TASK_TYPES 必须与本表一致
+# （否则界面上不显示取消按钮，或显示了后端却拒绝）；两侧都有用例锁内容，改一处会两处红。
 _CANCELABLE_RUNNING_TYPES = (
     "face_scan",
     "face_match",
@@ -31,6 +35,7 @@ _CANCELABLE_RUNNING_TYPES = (
     "f2_import",
     "batch_analyze",
     "multi_analyze",
+    "quality_check",
 )
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
@@ -40,6 +45,9 @@ _CANCELABLE_RUNNING_TYPES = (
 # 质量审核（与批量分析同一套「查 status 即停」语义：每批（并发数张）检查一次，
 # 已判定的素材已写 quality_status 与审核日志，恢复时只查剩下的 pending）；
 # f2 一键获取素材恢复时按内容判重幂等续算（已下载/已入库的都会跳过）。
+#
+# ⚠ 前端 `web/src/utils/taskPresentation.ts` 的 PAUSABLE_TASK_TYPES 必须与本表一致
+# （否则界面不显示暂停/继续按钮，或显示了后端却拒绝）；两侧都有用例锁内容。
 _PAUSABLE_RUNNING_TYPES = (
     "tag_network_analyze",
     "batch_analyze",
@@ -110,9 +118,9 @@ async def cancel_task(
     - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
       ``task_queue`` 表中直接移除，不保留）。
     - ``running`` 且类型在 :data:`_CANCELABLE_RUNNING_TYPES` 内（人脸扫描/匹配、
-      标签网络分析、f2 一键获取素材、批量/组合分析）：标记为 cancelled（运行中取消
-      的既有能力，记录保留；执行器每批/每文件检查后自行停止，已产出的分析日志与
-      标签全部保留）。
+      标签网络分析、f2 一键获取素材、批量/组合分析、质量审核）：标记为 cancelled
+      （运行中取消的既有能力，记录保留；执行器每批/每文件检查后自行停止，已产出的
+      分析日志、标签与审核结果全部保留）。
     - 其余状态（success/failed/cancelled 及不可运行中取消的 running 类型）：
       返回 400，记录保持不变。
 

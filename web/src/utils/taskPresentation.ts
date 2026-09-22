@@ -53,6 +53,9 @@ export function compareUnifiedTasks(a: UnifiedTask, b: UnifiedTask): number {
  * - quality_check：质量审核（同样按批次边界停；已判定的素材写了 quality_status
  *   与审核日志，恢复时只查剩下的 pending）
  * - f2_import：一键获取素材（已下载文件与已入库素材保留，恢复按内容判重续算）
+ *
+ * ⚠ 这份清单与后端 `app/routers/tasks.py` 的白名单靠人工对齐（跨语言无法共用常量），
+ * 两侧都有用例锁内容——改一处必须同步另一处。
  */
 export const PAUSABLE_TASK_TYPES = [
   'tag_network_analyze',
@@ -69,13 +72,23 @@ export function isPausableTaskType(type: string): boolean {
 
 /** 支持「运行中取消」的任务类型（与后端 _CANCELABLE_RUNNING_TYPES 对齐）：
  * - face_scan / face_match：人脸扫描与匹配（增量语义，重跑自动跳过已扫部分）
+ * - tag_network_analyze：标签网络分析（断点续算）
  * - f2_import：一键获取素材（取消后已下载文件与已入库素材保留）
+ * - batch_analyze / multi_analyze：AI 标签分析的批量/组合分析（每批检查一次，
+ *   已写入的分析日志与标签保留）
+ * - quality_check：质量审核（每批检查一次，已判定的 quality_status 与审核日志保留）
+ *
+ * ⚠ 这份清单与后端 `app/routers/tasks.py` 的白名单靠人工对齐（跨语言无法共用常量），
+ * 两侧都有用例锁内容——改一处必须同步另一处，否则界面不显示按钮或后端直接 400。
  */
 export const CANCELABLE_TASK_TYPES = [
   'face_scan',
   'face_match',
   'tag_network_analyze',
   'f2_import',
+  'batch_analyze',
+  'multi_analyze',
+  'quality_check',
 ] as const
 
 /** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */

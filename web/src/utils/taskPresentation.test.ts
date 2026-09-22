@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  CANCELABLE_TASK_TYPES,
+  PAUSABLE_TASK_TYPES,
   describeRunningTask,
   formatKeywords,
   isCancelableTaskType,
@@ -374,6 +376,36 @@ describe('isPausableTaskType（批量/组合分析、标签网络分析、质量
   })
 })
 
+describe('可暂停/可取消白名单内容锁定（与后端 app/routers/tasks.py 人工对齐）', () => {
+  it('可暂停清单与后端一致', () => {
+    // 后端 tests/test_tasks.py::test_whitelists_match_frontend_contract 锁同一份内容：
+    // 任何一侧新增/删除类型都会让另一侧用例变红，避免「界面有按钮后端 400」
+    expect([...PAUSABLE_TASK_TYPES].sort()).toEqual(
+      [
+        'batch_analyze',
+        'f2_import',
+        'multi_analyze',
+        'quality_check',
+        'tag_network_analyze',
+      ].sort(),
+    )
+  })
+
+  it('可取消清单与后端一致（含质量审核与批量/组合分析）', () => {
+    expect([...CANCELABLE_TASK_TYPES].sort()).toEqual(
+      [
+        'batch_analyze',
+        'face_match',
+        'face_scan',
+        'f2_import',
+        'multi_analyze',
+        'quality_check',
+        'tag_network_analyze',
+      ].sort(),
+    )
+  })
+})
+
 describe('isCancelableTaskType（运行中可取消：与后端白名单对齐）', () => {
   it('f2 一键获取素材运行中可取消（执行器有停止逻辑，入口不能缺）', () => {
     expect(isCancelableTaskType('f2_import')).toBe(true)
@@ -385,9 +417,14 @@ describe('isCancelableTaskType（运行中可取消：与后端白名单对齐�
     expect(isCancelableTaskType('tag_network_analyze')).toBe(true)
   })
 
-  it('批量分析等不支持运行中取消（只能暂停）', () => {
-    expect(isCancelableTaskType('batch_analyze')).toBe(false)
-    expect(isCancelableTaskType('quality_check')).toBe(false)
+  it('批量/组合分析与质量审核同样可取消（后端白名单一直允许，此前前端漏了 → 界面缺按钮）', () => {
+    expect(isCancelableTaskType('batch_analyze')).toBe(true)
+    expect(isCancelableTaskType('multi_analyze')).toBe(true)
+    expect(isCancelableTaskType('quality_check')).toBe(true)
+  })
+
+  it('不在白名单内的类型返回 false', () => {
+    expect(isCancelableTaskType('deduplicate')).toBe(false)
     expect(isCancelableTaskType('')).toBe(false)
   })
 })
