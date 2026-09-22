@@ -15,6 +15,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
+import {
+  loadFolderSelection,
+  restoreFolderSelection,
+  saveFolderSelection,
+} from '@/utils/f2CollectSelection'
 
 const props = withDefaults(
   defineProps<{
@@ -147,6 +152,8 @@ const registerBloggers = ref(true)
 const folderModalOpen = ref(false)
 /** 勾选状态：夹 ID 集合（**扫描后默认全选**，用户取消掉不想要的） */
 const checkedFolderIds = ref<string[]>([])
+/** 弹窗里那句提示：说明这次勾选是「恢复上次选择」还是「默认全选」 */
+const selectionHint = ref('')
 /** 全选/全不选用的派生值 */
 const allChecked = computed(
   () => folderList.value.length > 0 && checkedFolderIds.value.length === folderList.value.length,
@@ -172,7 +179,7 @@ function onToggleAll(checked: boolean | (string | number | boolean)[]) {
   toggleAllFolders(Boolean(checked))
 }
 
-/** 「先扫描收藏夹」：只读拉清单 → 打开弹窗（默认全选） */
+/** 「先扫描收藏夹」：只读拉清单 → 打开弹窗（**有上次选择就恢复，否则默认全选**） */
 async function onScanFolders() {
   const data = await scanCollects()
   if (!data) return
@@ -180,8 +187,18 @@ async function onScanFolders() {
     Message.warning('这个账号下没有收藏夹：可以直接用「一键下载全部收藏」')
     return
   }
-  // 夹默认全选：用户只需要取消掉不想要的，而不是一个个勾
-  checkedFolderIds.value = data.folders.map((f) => f.id)
+  // 记住上次的选择（本地只留最近一次）：夹增删后只恢复仍然存在的那些，
+  // 一个都不剩就回退成默认全选——不能凭空勾一个已经没了的夹
+  const restored = restoreFolderSelection(
+    loadFolderSelection(),
+    data.folders.map((f) => f.id),
+  )
+  checkedFolderIds.value = restored.ids
+  selectionHint.value = restored.fromSaved
+    ? `已恢复上次的选择（${restored.ids.length} 个夹）${
+        restored.staleCount ? `，上次勾的 ${restored.staleCount} 个夹已不存在` : ''
+      }；点「全选 / 全不选」可改成全部`
+    : '夹默认全选：把不想要的取消勾选即可（这次的选择会被记住）。'
   folderModalOpen.value = true
 }
 
@@ -200,6 +217,8 @@ async function onDownloadCheckedFolders() {
     collect_ids: checkedFolderIds.value,
   })
   if (taskId) {
+    // 只有真的按这个选择下了任务才记：只扫描不下载不该覆盖上次的选择
+    saveFolderSelection(checkedFolderIds.value)
     folderModalOpen.value = false
     emit('submitted')
     await loadStatus({ silent: true })
@@ -321,9 +340,9 @@ async function onSubmit() {
         「每次最多翻」；已下载过的文件 f2 会跳过，入库还有五层判重，重复点击安全。
       </div>
       <div v-if="isCollect">
-        · <b>先扫描、后下载</b>：点「先扫描收藏夹」会列出你的收藏夹（名字 + 件数，**默认全选**），
+        · <b>先扫描、后下载</b>：点「先扫描收藏夹」会列出你的收藏夹（名字 + 件数），
         把不想要的（比如「股票」「哲学」这类）取消勾选，再只下勾选的 —— 没被选中的夹
-        一件都不会下载。
+        一件都不会下载。<b>你的勾选会被本地记住（只留最近一次）</b>，下次扫描自动恢复。
       </div>
       <div>· {{ copy.collectTip }}结果浏览与审查在下方「抖音采集历史」里 点「查看结果」。</div>
     </div>
@@ -340,9 +359,9 @@ async function onSubmit() {
       <div class="f2l-collect-head">
         <a-checkbox :model-value="allChecked" @change="onToggleAll">全选 / 全不选</a-checkbox>
         <span class="f2l-option-tip">
-          <b>默认全选</b>：把不想要的取消勾选即可。本次将下载 <b>{{ checkedFolders.length }}</b> /
-          {{ folderList.length }} 个夹，约 <b>{{ checkedWorks }}</b> /
-          {{ folderTotalWorks }} 件作品。
+          {{ selectionHint }}
+          本次将下载 <b>{{ checkedFolders.length }}</b> / {{ folderList.length }} 个夹，约
+          <b>{{ checkedWorks }}</b> / {{ folderTotalWorks }} 件作品。
         </span>
       </div>
       <a-checkbox-group v-model="checkedFolderIds" class="f2l-collect-list">

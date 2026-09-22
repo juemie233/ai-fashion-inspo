@@ -253,6 +253,8 @@ function buttons(wrapper: VueWrapper, submitText = '采集我的喜欢') {
 describe('F2LikeCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // 收藏夹选择是本地记忆的：不清掉会串到下一个用例
+    localStorage.clear()
   })
 
   it('主页链接从状态回填；未配置时提交按钮禁用', async () => {
@@ -542,5 +544,82 @@ describe('F2LikeCard', () => {
 
     expect(wrapper.find('.f2l-modal').exists()).toBe(false)
     expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  // ── 本地记住上次的收藏夹选择（只留最近一次）──
+
+  it('第一次扫描：默认全选，并说明这次的选择会被记住', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+
+    const modal = wrapper.find('.f2l-modal')
+    expect(
+      modal
+        .findAll('.f2l-folder input[type="checkbox"]')
+        .every((b) => (b.element as HTMLInputElement).checked),
+    ).toBe(true)
+    expect(modal.text()).toContain('默认全选')
+    expect(modal.text()).toContain('记住')
+    expect(localStorage.getItem('f2-collect-folders')).toBeNull() // 只扫描不写记录
+  })
+
+  it('确认下载后记住选择：再次扫描时恢复上次的勾选', async () => {
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+    mocks.post.mockResolvedValue({ data: { task_id: 91, message: '已提交' } })
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+    // 取消勾选「股票」后确认下载
+    await wrapper.findAll('.f2l-folder input[type="checkbox"]')[1].setValue(false)
+    await wrapper.find('.f2l-modal-ok').trigger('click')
+    await flushPromises()
+
+    const saved = JSON.parse(localStorage.getItem('f2-collect-folders') as string)
+    expect(saved.ids).toEqual(['111', '333'])
+
+    // 再扫描一次：应当恢复上次的选择（「股票」仍未勾），而不是回到默认全选
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+
+    const boxes = wrapper.findAll('.f2l-folder input[type="checkbox"]')
+    expect((boxes[0].element as HTMLInputElement).checked).toBe(true)
+    expect((boxes[1].element as HTMLInputElement).checked).toBe(false)
+    expect((boxes[2].element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('.f2l-modal').text()).toContain('已恢复上次的选择（2 个夹）')
+  })
+
+  it('上次勾的夹已不存在：只恢复仍存在的，并在提示里点出失效数量', async () => {
+    localStorage.setItem(
+      'f2-collect-folders',
+      JSON.stringify({ ids: ['111', '999'], savedAt: '2026-09-22T00:00:00.000Z' }),
+    )
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+
+    const boxes = wrapper.findAll('.f2l-folder input[type="checkbox"]')
+    expect((boxes[0].element as HTMLInputElement).checked).toBe(true) // 111 仍在
+    expect((boxes[1].element as HTMLInputElement).checked).toBe(false) // 222 上次没勾
+    expect(wrapper.find('.f2l-modal').text()).toContain('上次勾的 1 个夹已不存在')
+  })
+
+  it('只扫描不下载：不覆盖上次的选择', async () => {
+    localStorage.setItem(
+      'f2-collect-folders',
+      JSON.stringify({ ids: ['111'], savedAt: '2026-09-22T00:00:00.000Z' }),
+    )
+    const wrapper = await mountCard(READY_COLLECT_STATUS(), 'collection', FOLDERS)
+
+    await buttons(wrapper, '先扫描收藏夹').submit.trigger('click')
+    await flushPromises()
+    // 改一下勾选但直接关掉弹窗（不确认）
+    await wrapper.findAll('.f2l-folder input[type="checkbox"]')[1].setValue(true)
+    await flushPromises()
+
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(JSON.parse(localStorage.getItem('f2-collect-folders') as string).ids).toEqual(['111'])
   })
 })
