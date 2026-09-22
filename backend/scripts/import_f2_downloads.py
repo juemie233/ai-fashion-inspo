@@ -148,6 +148,7 @@ from .f2_apply import (  # noqa: F401
     apply_import,
 )
 from .f2_collects import (  # noqa: F401
+    COLLECTS_FOLDER_PAGE_COUNTS,
     COLLECTS_FOLDER_PAGE_LIMIT,
     COLLECTS_PAGE_SLEEP,
     COLLECTS_WORKS_PAGE_COUNTS,
@@ -216,6 +217,7 @@ __all__ = [
     "KIND_RE_WITH_ID",
     "KIND_TO_MEDIA",
     "COLLECT_NAMING_TEMPLATE",
+    "COLLECTS_FOLDER_PAGE_COUNTS",
     "COLLECTS_FOLDER_PAGE_LIMIT",
     "COLLECTS_PAGE_SLEEP",
     "COLLECTS_WORKS_PAGE_COUNTS",

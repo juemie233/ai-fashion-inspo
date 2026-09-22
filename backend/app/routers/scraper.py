@@ -66,7 +66,10 @@ async def create_f2_import(
         None,
         ge=0,
         le=100000,
-        description="mode=like/collection 时最多翻多少条（0/缺省=全量翻到底）",
+        description=(
+            "mode=like/collection 时最多翻多少条（0/缺省=全量翻到底）。"
+            "**按收藏夹下载（带 collect_ids）时是「每个夹」的上限**：每个夹各取最近 N 件"
+        ),
     ),
     profiles: str | None = Query(
         None,

@@ -31,12 +31,19 @@ from pathlib import Path
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .f2_common import DEFAULT_F2_DIR  # noqa: E402
+from .f2_common import COLLECT_NAMING_TEMPLATE, DEFAULT_F2_DIR  # noqa: E402
 
 """翻页间隔（秒）：收藏夹接口与作品列表接口都自带风控，别打太快。"""
 COLLECTS_PAGE_SLEEP = 2.0
 
-"""收藏夹清单最多翻几页（每页 20 个夹）——正常人的收藏夹不会超过这个量级。"""
+"""收藏夹清单每页取多少个夹（接口的分页粒度，与作品列表的 page_counts 不同）。"""
+COLLECTS_FOLDER_PAGE_COUNTS = 20
+
+"""收藏夹清单最多翻几页（默认 5 页 = 100 个夹）——正常人的收藏夹不会超过这个量级。
+
+⚠ 达到上限会**静默截断**：只影响清单完整度（少列的夹不会出现在勾选列表里），
+不会下错东西；真碰到 100+ 个夹再把这个值调大。
+"""
 COLLECTS_FOLDER_PAGE_LIMIT = 5
 
 """每页取多少个作品（f2 帮助里建议不超过 20）。"""
@@ -110,7 +117,7 @@ async def _list_folders_async(kwargs: dict, page_limit: int) -> list[dict]:
     for page_index in range(max(1, page_limit)):
         async with DouyinCrawler(kwargs) as crawler:
             response = await crawler.fetch_user_collects(
-                UserCollects(cursor=cursor, count=20)
+                UserCollects(cursor=cursor, count=COLLECTS_FOLDER_PAGE_COUNTS)
             )
         page = UserCollectsFilter(response or {})
         ids = page.collects_id or []
@@ -124,11 +131,6 @@ async def _list_folders_async(kwargs: dict, page_limit: int) -> list[dict]:
                     "id": str(collects_id),
                     "name": names[i] if i < len(names) else "",
                     "total": int(totals[i]) if i < len(totals) and totals[i] else 0,
-                    "last_collect_at": (
-                        page.last_collect_time[i]
-                        if page.last_collect_time and i < len(page.last_collect_time)
-                        else 0
-                    ),
                 }
             )
         if not page.has_more:
@@ -152,9 +154,13 @@ def list_collect_folders(
         page_limit: 最多翻几页。
 
     Returns:
-        ``{"folders": [{"id", "name", "total", "last_collect_at"}, ...],
+        ``{"folders": [{"id", "name", "total"}, ...],
         "total_folders": int, "total_works": int, "cookie_source": str}``
         ``total_works`` 是各夹 ``total`` 之和（含跨夹重复，仅供量级参考）。
+
+    为什么不含「最近收藏时间」：接口在夹没被收藏过时会给 f2 过滤器一个空值，过滤器
+    把它格式化成字面量 ``"Invalid timestamp"``（垃圾串）；而这个字段目前没有消费方
+    （夹的排序由接口自己保证最新在前），留着只会带来一份需要清洗的数据。
     """
     kwargs, cookie_source = load_f2_runtime(f2_dir)
     folders = asyncio.run(_list_folders_async(kwargs, page_limit))
@@ -219,7 +225,7 @@ async def _download_folders_async(
 
     kwargs, cookie_source = load_f2_runtime(f2_dir)
     kwargs["mode"] = "collection"  # 决定产物目录 {path}/douyin/collection/{我的昵称}/
-    kwargs["naming"] = _collect_naming()
+    kwargs["naming"] = COLLECT_NAMING_TEMPLATE
     kwargs["folderize"] = False  # 不按夹分子目录：扫描/入库只认「我的昵称」这一层
     kwargs["interval"] = "all"  # 收藏模式不读日期窗口，显式给值只是避免 f2 的空参告警
     # 与 CLI 路径产出**完全一致**：不下封面/文案/原声（这三样要么不入库、要么会
@@ -260,7 +266,7 @@ async def _download_folders_async(
         "missing_folders": missing,
     }
     if on_progress is not None:
-        on_progress(dict(stats))
+        on_progress(_snapshot(stats))
 
     async def _download_page(aweme_list: list) -> None:
         await handler.downloader.create_download_tasks(kwargs, aweme_list, user_path)
@@ -282,15 +288,29 @@ async def _download_folders_async(
             {"id": folder["id"], "name": folder["name"], "total": folder["total"], "works": done}
         )
         if on_progress is not None:
-            on_progress(dict(stats))
+            on_progress(_snapshot(stats))
 
     return stats
 
 
+def _snapshot(stats: dict) -> dict:
+    """给回调的进度**快照**（拷贝嵌套结构）。
+
+    为什么必须拷贝：``on_progress`` 是在下载线程里被调用的，而消费者（任务执行器的
+    watcher 协程）会把这个结构写进任务结果并落库。若直接传内部结构，watcher 会在
+    「另一个线程正在往 folders 里 append」的同时序列化它——轻则读到半截列表，
+    重则序列化过程中列表变长（跨线程共享可变对象），所以这里一律传副本。
+    """
+    return {
+        **stats,
+        "folders": [dict(f) for f in stats.get("folders") or []],
+        "current": dict(stats.get("current") or {}),
+        "missing_folders": list(stats.get("missing_folders") or []),
+    }
+
+
 def _collect_naming() -> str:
     """收藏模式的命名模板（与 :data:`f2_common.COLLECT_NAMING_TEMPLATE` 同一份）。"""
-    from .f2_common import COLLECT_NAMING_TEMPLATE
-
     return COLLECT_NAMING_TEMPLATE
 
 
@@ -318,15 +338,19 @@ def download_collect_folders(
 
     Returns:
         ``{"cookie_source", "root", "folders": [{"id","name","total","works"}],
-        "works": int, "stopped": bool, "missing_folders": [...]}``
+        "works": int, "total_works": int, "current": dict, "stopped": bool,
+        "missing_folders": [...]}``
     """
     stop = should_stop or (lambda: False)
     if not collect_ids:
+        # 与真路径同形：调用方无需为「没勾任何夹」写分支
         return {
             "cookie_source": "",
             "root": "",
             "folders": [],
             "works": 0,
+            "total_works": 0,
+            "current": {},
             "stopped": False,
             "missing_folders": [],
         }

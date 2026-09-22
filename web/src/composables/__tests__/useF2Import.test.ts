@@ -378,6 +378,8 @@ describe('useF2Import', () => {
         collect_ids: ['111', '333'],
       },
     })
+    // 提示文案要说清是「按收藏夹下载」，否则用户以为又全量下了一遍收藏
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('按收藏夹下载（2 个夹）'))
     success.mockRestore()
   })
 
@@ -385,8 +387,8 @@ describe('useF2Import', () => {
     mocks.get.mockResolvedValue({
       data: {
         folders: [
-          { id: '111', name: '秘书OL', total: 96, last_collect_at: '' },
-          { id: '222', name: '股票', total: 1, last_collect_at: '' },
+          { id: '111', name: '秘书OL', total: 96 },
+          { id: '222', name: '股票', total: 1 },
         ],
         total_folders: 2,
         total_works: 97,

@@ -32,8 +32,6 @@ export interface F2CollectFolder {
   name: string
   /** 夹内作品数（下载进度就用它当分母） */
   total: number
-  /** 最近收藏时间（f2 已格式化成 `YYYY-MM-DD HH-MM-SS`，无则空串） */
-  last_collect_at: string
 }
 
 /** 「先扫描」的结果：收藏夹清单（只读，不下载任何媒体） */
@@ -287,9 +285,11 @@ export function useF2Import() {
     // 三个入口共用同一个接口，提示文案按用途区分（点赞入口说「一键获取素材」会让人以为点错了）
     const label = options.profiles?.length
       ? '按博主全量下载'
-      : options.mode === 'like'
-        ? '采集我的喜欢'
-        : '一键获取素材'
+      : options.collect_ids?.length
+        ? `按收藏夹下载（${options.collect_ids.length} 个夹）`
+        : options.mode === 'like'
+          ? '采集我的喜欢'
+          : '一键获取素材'
     try {
       const { data } = await apiClient.post<{
         task_id: number | null

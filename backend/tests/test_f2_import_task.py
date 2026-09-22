@@ -1919,6 +1919,36 @@ async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(
     assert calls["fetch"] == "collect"
 
 
+async def test_execute_f2_import_ignores_collect_ids_for_non_collection_mode(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """collect_ids 只对收藏模式生效：点赞模式仍走平铺点赞链路（不误用收藏夹下载）。"""
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_like_fetch(monkeypatch, calls)
+    patch_f2(
+        monkeypatch,
+        "download_collect_folders",
+        lambda *_a, **_k: pytest.fail("点赞模式不该走收藏夹下载"),
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="like", collect_ids=["7650133299343595322"]
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["fetch"]["mode"] == "like"
+        assert stored.result["import"]["imported"] == 2
+
+    assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+
 def test_f2_collects_endpoint_returns_folder_list(client, monkeypatch):
     """GET /api/scraper/f2-collects：扫描（只读）返回收藏夹清单。"""
     patch_f2(

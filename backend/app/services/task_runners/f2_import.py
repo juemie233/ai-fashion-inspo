@@ -122,7 +122,9 @@ async def create_f2_import_task(
             并绑定本批素材（默认 True；只对 like / collection 模式生效）。补建的博主
             标记为「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
         like_max_counts: 「我的列表」最多翻多少条（None 表示执行时取
-            ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。两种模式通用。
+            ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。两种模式通用；
+            **带 collect_ids（按收藏夹下载）时是「每个夹」的上限**（每夹各取最近 N 件，
+            否则大夹会把小夹饿死——实测夹内作品数从 1 到 334 差三个数量级）。
         profiles: **按博主全量下载**——博主主页链接或 sec_user_id 列表。非空时只下
             这些博主，且**不要求它们已在 f2 用户库里**（f2 只认自己见过的账号）；
             首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
@@ -704,6 +706,13 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         )
 
     # ── 阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）──
+    if not fetch_enabled and collect_ids:
+        # 只入库（fetch=false）时没有「要下哪些夹」这回事：扫描的是整个收藏目录，
+        # 勾选结果无从生效。响亮记一笔，别让调用方以为「只下了勾选的夹」。
+        logger.warning(
+            f"[f2] fetch=false 时 collect_ids（{len(collect_ids)} 个夹）不生效："
+            "本次只入库已下载的文件，不做任何筛选"
+        )
     if fetch_enabled and personal_mode and collect_ids and fetch_mode == "collection":
         # 「先扫描、后下载」：只下选中的收藏夹（逐夹枚举 + f2 下载器，页间可中断）
         if await _fetch_collects_by_folder_stage(
@@ -995,6 +1004,13 @@ async def _fetch_collects_by_folder_stage(
     }
     merge_stats = await asyncio.to_thread(f2.merge_personal_duplicates)
     fetch_summary["merge"] = merge_stats
+    if merge_stats["linked"] or merge_stats["conflict"] or merge_stats["failed"]:
+        samples = f"；样例：{'；'.join(merge_stats['samples'])}" if merge_stats["samples"] else ""
+        logger.info(
+            f"[f2 跨模式重复] 合并 {merge_stats['linked']} 个文件（省 "
+            f"{merge_stats['saved_bytes'] / 1048576:.1f} MB），内容不同保留两份 "
+            f"{merge_stats['conflict']}，失败 {merge_stats['failed']}{samples}"
+        )
     download_result = {
         **opts,
         "stage": "download",

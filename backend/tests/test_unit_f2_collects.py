@@ -110,13 +110,9 @@ def test_list_collect_folders_parses_names_counts_and_totals(fake_runtime, monke
     assert data["total_works"] == 431
     assert data["cookie_source"] == "假配置"
     assert [f["name"] for f in data["folders"]] == ["秘书OL", "股票", "过膝袜短袜JK"]
-    # last_collect_at 是 f2 过滤器格式化过的字符串（不是原始时间戳秒数）
-    assert data["folders"][0] == {
-        "id": "111",
-        "name": "秘书OL",
-        "total": 96,
-        "last_collect_at": "2023-11-15 06-13-20",
-    }
+    # 只给「夹名 / 夹 ID / 件数」：最近收藏时间没有消费方，且接口缺失时是
+    # f2 过滤器产出的垃圾串（"Invalid timestamp"），故不返回该字段
+    assert data["folders"][0] == {"id": "111", "name": "秘书OL", "total": 96}
 
 
 def test_list_collect_folders_pages_until_has_more_is_false(fake_runtime, monkeypatch):
@@ -246,6 +242,24 @@ def test_download_only_touches_selected_folders_and_hands_works_to_f2(
     # 进度回调：先给分母（0/96），每个夹完成后给一次
     assert progress[0]["works"] == 0 and progress[0]["total_works"] == 96
     assert progress[-1]["works"] == 2
+
+
+def test_progress_callbacks_are_snapshots_not_live_structures(fake_runtime, monkeypatch):
+    """进度回调必须给**快照**：消费者（任务执行器的 watcher）会跨线程读它并落库。
+
+    别名到内部结构的话，早先那次回调拿到的 folders 会随后续 append 一起变长——
+    这里用「每次回调看到几个夹」把它锁死：0（刚拿到分母）→ 1 → 2。
+    """
+    folder_list = _folder_response([("111", "A", 1), ("222", "B", 1)])
+    box: list = []
+    _patch_download_stack(monkeypatch, {"111": [["a1"]], "222": [["b1"]]}, folder_list, box)
+
+    payloads: list[dict] = []
+    f2.download_collect_folders(Path("x"), "u", ["111", "222"], on_progress=payloads.append)
+
+    assert [len(p["folders"]) for p in payloads] == [0, 1, 2]
+    # current 也是副本：最后一页之后仍能看到「当前夹」是最后一次设置的那个
+    assert payloads[-1]["current"]["name"] == "B"
 
 
 def test_download_reports_missing_folders(fake_runtime, monkeypatch):
