@@ -37,11 +37,14 @@ _CANCELABLE_RUNNING_TYPES = (
 # 标签网络分析（断点续算）；批量/组合分析（AI 标签分析的核心批量路径，由
 # worker 进程执行，恢复时按「已成功素材跳过」幂等续算，不受 API 进程内存
 # 暂停标志影响——暂停必须走任务级状态，见 execute_batch_analyze）；
+# 质量审核（与批量分析同一套「查 status 即停」语义：每批（并发数张）检查一次，
+# 已判定的素材已写 quality_status 与审核日志，恢复时只查剩下的 pending）；
 # f2 一键获取素材恢复时按内容判重幂等续算（已下载/已入库的都会跳过）。
 _PAUSABLE_RUNNING_TYPES = (
     "tag_network_analyze",
     "batch_analyze",
     "multi_analyze",
+    "quality_check",
     "f2_import",
 )
 
@@ -169,11 +172,12 @@ async def pause_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze / f2_import 支持）：
+    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check / f2_import 支持）：
 
     - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state；
-      batch/multi 的进度已由执行器逐批落库，f2_import 的已下载文件与已入库
-      素材天然保留，无需额外状态）；
+      batch/multi 的进度已由执行器逐批落库，quality_check 的已判定结果写在
+      `quality_status` 与审核日志里，f2_import 的已下载文件与已入库素材天然保留，
+      都无需额外状态）；
     - 执行器在下一个批次边界感知到 paused 后保存进度并返回。
     """
     task = await db.get(TaskQueue, task_id)
@@ -209,13 +213,15 @@ async def resume_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / f2_import 支持）：
+    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check / f2_import 支持）：
 
     - ``tag_network_analyze``（网络图分析，断点续算）：恢复为 ``running``，
       保留 last_stage 与 stage_state，由执行器从中续算；
     - ``batch_analyze`` / ``multi_analyze``（批量/组合分析）：恢复为 ``pending``
       并清空认领信息，由 worker 重新认领执行；执行器按「已有成功分析日志的
       素材跳过」幂等续算，进度不丢失。
+    - ``quality_check``（质量审核）：同样恢复为 ``pending`` 重新执行；执行器只查
+      ``quality_status == 'pending'`` 的素材，已判定的（approved/rejected）自动跳过。
     - ``f2_import``（一键获取素材）：同样恢复为 ``pending`` 重新执行；增量下载
       与内容/平台 ID 判重保证已下载、已入库的部分自动跳过。
     """

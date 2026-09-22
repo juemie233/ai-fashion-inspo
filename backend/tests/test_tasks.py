@@ -243,9 +243,35 @@ async def test_pause_multi_analyze_running(client):
     assert client.get(f"/api/tasks/{tid}").json()["status"] == "paused"
 
 
-async def test_pause_non_pausable_type_rejected(client):
-    """暂停非可暂停类型（quality_check）→ 400，记录保持 running。"""
+async def test_pause_quality_check_running(client):
+    """运行中的质量审核任务可暂停（与标签分析同一套「批次边界停」语义）。"""
     tid = await _add_task(status="running", type_="quality_check")
+
+    r = client.post(f"/api/tasks/{tid}/pause")
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "任务已暂停"
+    async with async_session() as db:
+        row = await db.get(TaskQueue, tid)
+        assert row.status == "paused"
+        assert row.paused_at is not None
+
+
+async def test_resume_quality_check_back_to_pending(client):
+    """恢复质量审核：放回 pending 由 worker 重新认领（执行器只查剩下的 pending 素材）。"""
+    tid = await _add_task(status="paused", type_="quality_check")
+
+    r = client.post(f"/api/tasks/{tid}/resume")
+    assert r.status_code == 200, r.text
+    async with async_session() as db:
+        row = await db.get(TaskQueue, tid)
+        assert row.status == "pending"
+        assert row.claimed_by is None
+        assert row.paused_at is None
+
+
+async def test_pause_non_pausable_type_rejected(client):
+    """暂停非可暂停类型（face_scan）→ 400，记录保持 running。"""
+    tid = await _add_task(status="running", type_="face_scan")
 
     r = client.post(f"/api/tasks/{tid}/pause")
     assert r.status_code == 400, r.text

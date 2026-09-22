@@ -50,12 +50,15 @@ export function compareUnifiedTasks(a: UnifiedTask, b: UnifiedTask): number {
  * - tag_network_analyze：标签网络分析（断点续算）
  * - batch_analyze / multi_analyze：AI 标签分析的批量/组合分析（worker 执行，
  *   暂停后恢复按「已成功跳过」幂等续算）
+ * - quality_check：质量审核（同样按批次边界停；已判定的素材写了 quality_status
+ *   与审核日志，恢复时只查剩下的 pending）
  * - f2_import：一键获取素材（已下载文件与已入库素材保留，恢复按内容判重续算）
  */
 export const PAUSABLE_TASK_TYPES = [
   'tag_network_analyze',
   'batch_analyze',
   'multi_analyze',
+  'quality_check',
   'f2_import',
 ] as const
 
@@ -244,8 +247,14 @@ export function describeRunningTask(
   done: number,
   total: number,
 ): string {
+  // 暂停文案对所有可暂停类型都适用（f2 说「产物保留」，其余说「已处理的记入结果、恢复不重复」），
+  // 因此放在 f2 专属分支之前——否则质量审核/批量分析暂停后会一行说明都没有
+  if (status === 'paused') {
+    return type === 'f2_import'
+      ? '已暂停：已下载的文件与已入库素材都保留，可继续/重跑'
+      : '已暂停：已处理的素材已记入结果，点「继续」从断点接着跑（已处理的不重复）'
+  }
   if (type !== 'f2_import') return ''
-  if (status === 'paused') return '已暂停：已下载的文件与已入库素材都保留，可继续/重跑'
   if (status === 'pending') return '排队中：等待 worker 认领'
   const r = (result || {}) as Record<string, unknown>
   const stage = typeof r.stage === 'string' ? r.stage : ''

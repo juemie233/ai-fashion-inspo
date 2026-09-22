@@ -197,6 +197,13 @@ describe('describeRunningTask', () => {
     )
   })
 
+  it('质量审核/批量分析暂停时也有说明（不能只有 f2 才有暂停文案）', () => {
+    const text = describeRunningTask('quality_check', { stage: 'import' }, 'paused', 20, 100)
+    expect(text).toContain('已暂停')
+    expect(text).toContain('不重复')
+    expect(describeRunningTask('batch_analyze', null, 'paused', 1, 2)).toContain('已暂停')
+  })
+
   it('非 f2 任务或缺少阶段标记时不编造文案', () => {
     expect(describeRunningTask('batch_analyze', { stage: 'download' }, 'running', 1, 2)).toBe('')
     expect(describeRunningTask('f2_import', {}, 'running', 1, 2)).toBe('')
@@ -350,16 +357,17 @@ describe('formatKeywords / parseMaxCount', () => {
   })
 })
 
-describe('isPausableTaskType（批量/组合分析、标签网络分析、f2 一键获取可暂停）', () => {
-  it('四类任务返回 true', () => {
+describe('isPausableTaskType（批量/组合分析、标签网络分析、质量审核、f2 一键获取可暂停）', () => {
+  it('五类任务返回 true', () => {
     expect(isPausableTaskType('tag_network_analyze')).toBe(true)
     expect(isPausableTaskType('batch_analyze')).toBe(true)
     expect(isPausableTaskType('multi_analyze')).toBe(true)
+    // 质量审核与批量分析同一套「批次边界停」语义：已判定的写了 quality_status 与审核日志
+    expect(isPausableTaskType('quality_check')).toBe(true)
     expect(isPausableTaskType('f2_import')).toBe(true)
   })
 
   it('其他任务类型返回 false', () => {
-    expect(isPausableTaskType('quality_check')).toBe(false)
     expect(isPausableTaskType('face_scan')).toBe(false)
     expect(isPausableTaskType('deduplicate')).toBe(false)
     expect(isPausableTaskType('')).toBe(false)
