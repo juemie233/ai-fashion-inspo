@@ -71,11 +71,13 @@ const {
 const likeUser = ref('')
 
 // 用户没动过输入框时才回填（避免轮询把正在输入的内容覆盖掉）
-let likeUserTouched = false
+// 用 ref 而不是 `let xxx = false`：后者在脚本里只被赋过 false，模板里的
+// `likeUserTouched = true` 会被 ts-plugin 按控制流窄化成字面量 false 而报 2322
+const likeUserTouched = ref(false)
 watch(
   () => status.value?.like_user,
   (value) => {
-    if (likeUserTouched || value == null) return
+    if (likeUserTouched.value || value == null) return
     likeUser.value = value
   },
   { immediate: true },
@@ -84,11 +86,11 @@ watch(
 /** 「每次最多翻多少条点赞」：0=全量；初始值取后端已保存的配置 */
 const likeMaxCounts = ref(0)
 
-let likeMaxTouched = false
+const likeMaxTouched = ref(false)
 watch(
   () => status.value?.like_max_counts,
   (value) => {
-    if (likeMaxTouched || value == null) return
+    if (likeMaxTouched.value || value == null) return
     likeMaxCounts.value = value
   },
   { immediate: true },
@@ -120,13 +122,13 @@ onMounted(loadStatus)
 
 async function onSaveUser() {
   const ok = await setLikeUser(likeUser.value.trim())
-  if (ok) likeUserTouched = false
+  if (ok) likeUserTouched.value = false
 }
 
 async function onSaveMax() {
   const ok = await setLikeMaxCounts(safeMaxCounts.value)
   if (ok) {
-    likeMaxTouched = false
+    likeMaxTouched.value = false
     likeMaxCounts.value = safeMaxCounts.value
   }
 }
