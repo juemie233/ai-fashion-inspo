@@ -177,6 +177,36 @@ describe('summarizeResult', () => {
     )
     expect(none).not.toContain('博主')
   })
+
+  it('f2_import 报告跨模式重复合并（like ↔ collection 硬链接省下的空间）', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        fetch: { merge: { linked: 95, saved_bytes: 45.2 * 1024 * 1024 } },
+        plan: { files: 300 },
+        import: { imported: 300 },
+      },
+      null,
+    )
+    expect(text).toContain('我的收藏')
+    expect(text).toContain('合并跨模式重复 95 个')
+    expect(text).toContain('省 45.2 MB')
+  })
+
+  it('没有合并到重复时不占版面（绝大多数运行）', () => {
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'like',
+        fetch: { merge: { linked: 0, saved_bytes: 0, conflict: 0, failed: 0 } },
+        plan: { files: 7 },
+        import: { imported: 7 },
+      },
+      null,
+    )
+    expect(text).toBe('我的喜欢 · 入库 7')
+  })
 })
 
 describe('describeRunningTask', () => {

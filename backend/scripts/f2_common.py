@@ -1,4 +1,4 @@
-"""f2 素材文件名解析与目录扫描（自 scripts/import_f2_downloads.py 拆出，行为不变）。"""
+"""f2 素材文件名解析、目录扫描与「我的列表」跨模式重复合并（自 scripts/import_f2_downloads.py 拆出）。"""
 
 import os
 import re
@@ -347,3 +347,163 @@ def group_works(files: list[ParsedFile]) -> dict[str, list[ParsedFile]]:
     for items in works.values():
         items.sort(key=lambda f: (f.kind != "image", f.index, f.path.name))
     return dict(works)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  跨模式重复产物合并（「我的喜欢」↔「我的收藏」）
+# ═══════════════════════════════════════════════════════════════
+
+"""创建硬链接用的临时文件名后缀。
+
+先在同目录建临时链接、再用 :func:`os.replace` 覆盖目标，替换是**原子**的：不会
+出现「目标已被删掉、链接还没建好」的空窗——那个空窗里如果 f2 正好在跑，它会认为
+这个作品没下过而重新下载。后缀不用 ``.tmp``（那是 f2 下载中残file的标记，两套
+临时文件撞在一起会让排查变难）。
+"""
+MERGE_TMP_SUFFIX = ".mergetmp"
+
+"""差异 / 失败样例最多记录几条（只用于日志，避免刷屏）。"""
+_MERGE_SAMPLE_LIMIT = 5
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    """两个路径是否指向同一份数据（同设备 + 同 inode），用于识别已经合并过的。"""
+    try:
+        a, b = left.stat(), right.stat()
+    except OSError:
+        return False
+    return a.st_dev == b.st_dev and a.st_ino == b.st_ino
+
+
+def _replace_with_link(target: Path, source: Path) -> str:
+    """把 target 换成指向 source 同一份数据的硬链接。
+
+    Args:
+        target: 被替换的副本（保留原文件名，不删除路径）。
+        source: 保留的那一份。
+
+    Returns:
+        成功返回空串；失败返回原因（跨卷 / 文件被占用 / 权限不足等），调用方据此
+        保留两份并计入统计——**绝不能因为合并失败影响下载与入库**。
+    """
+    tmp = target.with_name(target.name + MERGE_TMP_SUFFIX)
+    try:
+        tmp.unlink(missing_ok=True)
+        os.link(source, tmp)
+        os.replace(tmp, target)
+        if not _same_file(source, target):
+            return f"{target.name}: 替换后不是同一份数据"
+    except OSError as exc:
+        return f"{target.name}: {exc}"
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return ""
+
+
+def merge_personal_duplicates(roots: list[Path] | None = None) -> dict:
+    """把「我的喜欢」与「我的收藏」产物目录里同一作品的同一分段合并成硬链接。
+
+    **为什么需要（2026-09-22 实测）**：f2 判断「这个作品下过没有」的唯一依据是
+    *当前模式目录里同名文件是否存在*（``f2/dl/base_downloader.py``：
+    ``if full_path.exists(): 跳过``），而目录是 ``{path}/douyin/{mode}/{昵称}/``
+    （``f2/apps/douyin/utils.py: create_user_folder``）——mode 是路径的一部分，
+    **f2 没有下载台账，目录本身就是台账**。于是同一作品既被点赞又被收藏时，
+    like 与 collection 两个入口各下一次、各存一份（实测 22 个交集作品 / 87 个
+    分段 / 45.2 MB），而入库侧按平台 ID 只收一条，多出来的那份纯属占地方。
+
+    **为什么是硬链接而不是删掉一份**：被删的那一侧下次跑 f2 会**重新下载**
+    （目录即台账），重复只会复发。硬链接让两个路径指向同一份数据——两个目录里
+    文件都还在（两侧「存在即跳过」继续有效），磁盘只算一份；实测同卷 NTFS 上
+    :func:`os.link` 可用。
+
+    **为什么只认「内容完全相同」**：实测 like 与 collection 对同一作品下的字节
+    完全一致（87/87 个分段），可以安全合并；而 post 与 like 之间 76 个同名分段
+    里有 40 个**字节不同**（like 侧更大、清晰度更高），那种情况必须保留两份、
+    绝不合并（合并会丢清晰度）。因此本函数只处理「我的列表」类目录，
+    **不要把 post 根目录传进来**。
+
+    Args:
+        roots: 「我的列表」产物根目录列表；缺省 = like + collection 两个根。
+
+    Returns:
+        {"roots": [...], "scanned": int, "candidates": int, "linked": int,
+         "saved_bytes": int, "conflict": int, "failed": int, "samples": [...]}
+        ``candidates`` 是跨模式同作品同分段的候选对数，``saved_bytes`` 是合并后
+        少占的字节数。重复运行为幂等：已合并过的（同一份数据）不再计入。
+    """
+    from .f2_hash_cache import sha256_file  # 与入库判重共用同一套哈希实现
+    from .f2_plan import asset_key  # 分段键与入库判重同一口径，禁止另算一套
+
+    requested = (
+        list(roots) if roots is not None else [DEFAULT_F2_LIKE_ROOT, DEFAULT_F2_COLLECT_ROOT]
+    )
+    root_list: list[Path] = []
+    seen_roots: set[str] = set()
+    for root in requested:
+        path = Path(root)
+        if str(path) in seen_roots:  # 同一个目录传两次会让候选翻倍
+            continue
+        seen_roots.add(str(path))
+        root_list.append(path)
+
+    entries: list[tuple[Path, ParsedFile]] = []
+    for root in root_list:
+        entries.extend((root, item) for item in scan_directory(root))
+
+    groups: dict[str, list[tuple[Path, ParsedFile]]] = defaultdict(list)
+    for root, item in entries:
+        groups[asset_key(item)].append((root, item))
+
+    stats: dict = {
+        "roots": [str(root) for root in root_list],
+        "scanned": len(entries),
+        "candidates": 0,
+        "linked": 0,
+        "saved_bytes": 0,
+        "conflict": 0,
+        "failed": 0,
+        "samples": [],
+    }
+
+    def _sample(text: str) -> None:
+        if len(stats["samples"]) < _MERGE_SAMPLE_LIMIT:
+            stats["samples"].append(text)
+
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        # 每个根目录最多留一份：只在**跨模式**之间合并（同模式内的重复不属本函数
+        # 处理范围，判据也不一样——那要靠命名模板与批次内判重，见 f2_plan.asset_key）
+        items.sort(key=lambda pair: str(pair[1].path))
+        keeper_root, keeper = items[0]
+        used_roots = {str(keeper_root)}
+        for root, item in items[1:]:
+            key = str(root)
+            if key in used_roots:
+                continue
+            used_roots.add(key)
+            stats["candidates"] += 1
+            if _same_file(keeper.path, item.path):
+                continue  # 已经合并过：幂等，不计入节省
+            if item.size != keeper.size or item.size <= 0:
+                stats["conflict"] += 1
+                _sample(
+                    f"大小不同：{keeper.path.name}（{keeper.size}）"
+                    f" vs {item.path.name}（{item.size}）"
+                )
+                continue
+            if sha256_file(item.path) != sha256_file(keeper.path):
+                stats["conflict"] += 1
+                _sample(f"内容不同：{keeper.path.name} vs {item.path.name}")
+                continue
+            reason = _replace_with_link(item.path, keeper.path)
+            if reason:
+                stats["failed"] += 1
+                _sample(f"链接失败：{reason}")
+                continue
+            stats["linked"] += 1
+            stats["saved_bytes"] += item.size
+    return stats

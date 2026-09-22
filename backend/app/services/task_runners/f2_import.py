@@ -756,6 +756,9 @@ async def _fetch_personal_stage(
 ) -> bool:
     """阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）。
 
+    下载结束后先做一次**跨模式重复合并**（like ↔ collection 里同一作品的同一分段
+    合并成硬链接，见 :func:`f2.merge_personal_duplicates`），再交给阶段 2 扫描。
+
     返回 True 表示任务已被取消/暂停（收尾已落库，调用方直接返回）。"""
     from scripts import import_f2_downloads as f2
 
@@ -808,6 +811,20 @@ async def _fetch_personal_stage(
         "added": max(0, final_stats["files"] - baseline["files"]),
         "added_bytes": max(0, final_stats["bytes"] - baseline["bytes"]),
     }
+    # 下载阶段收尾：把 like / collection 两个「我的列表」目录里同一作品的同一分段
+    # 合并成硬链接。f2 判断「下过没有」只看**当前模式目录里有没有同名文件**（它没有
+    # 下载台账，目录本身就是台账），所以两个列表交叉的作品会被各下一次、各存一份；
+    # 合并后两个目录里文件都还在（两侧「存在即跳过」继续有效），磁盘只占一份。
+    # 放线程：要扫两个目录并比对内容，不能阻塞 worker 事件循环。
+    merge_stats = await asyncio.to_thread(f2.merge_personal_duplicates)
+    fetch_summary["merge"] = merge_stats
+    if merge_stats["linked"] or merge_stats["conflict"] or merge_stats["failed"]:
+        samples = f"；样例：{'；'.join(merge_stats['samples'])}" if merge_stats["samples"] else ""
+        logger.info(
+            f"[f2 跨模式重复] 合并 {merge_stats['linked']} 个文件（省 "
+            f"{merge_stats['saved_bytes'] / 1048576:.1f} MB），内容不同保留两份 "
+            f"{merge_stats['conflict']}，失败 {merge_stats['failed']}{samples}"
+        )
     download_result = {
         **opts,
         "stage": "download",

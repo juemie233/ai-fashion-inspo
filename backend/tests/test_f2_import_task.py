@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import os
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -1803,6 +1804,48 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     # 走的必须是收藏链路（run_fetch_collects），而不是点赞/主页作品
     assert calls["fetch"] == "collect"
     assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
+
+
+async def test_execute_f2_import_like_mode_merges_cross_mode_duplicates(
+    client, f2_like_tree, auto_settings, monkeypatch, tmp_path
+):
+    """下载结束后自动合并跨模式重复：like 与 collection 同名同内容 → 硬链接。
+
+    f2 判断「下过没有」只看**当前模式目录里有没有同名文件**（没有下载台账），
+    所以同一作品被点赞又被收藏时会各存一份；合并后两个目录里文件都还在（两侧的
+    「存在即跳过」继续有效），磁盘只占一份。
+    """
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_like_fetch(monkeypatch)
+    like_dir = f2.DEFAULT_F2_LIKE_ROOT / "我的账号"
+    dup_name = "不养羊_2026-09-14 10-31-14_下一站再见吧#地铁jk_#jk_image_1.jpg"
+    payload = (like_dir / dup_name).read_bytes()
+    coll_root = tmp_path / "collection"
+    coll_dir = coll_root / "我的账号"
+    coll_dir.mkdir(parents=True)
+    dup_copy = coll_dir / dup_name
+    dup_copy.write_bytes(payload)  # 同一作品又被收藏：同名同内容
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", coll_root)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="like")
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        merge = stored.result["fetch"]["merge"]
+        assert stored.result["import"]["imported"] == 2
+
+    assert merge["linked"] == 1
+    assert merge["saved_bytes"] == len(payload)
+    assert (merge["conflict"], merge["failed"]) == (0, 0)
+    like_file = like_dir / dup_name
+    assert dup_copy.exists() and like_file.exists()  # 两侧路径都必须留着
+    assert os.stat(like_file).st_ino == os.stat(dup_copy).st_ino
+    assert like_file.read_bytes() == payload
 
 
 def test_create_f2_import_like_mode_passes_params(client):

@@ -199,6 +199,8 @@ export function summarizeResult(
         bloggerCreated ? `新登记博主 ${bloggerCreated}` : '',
         // 收藏模式：本批素材聚合进「抖音收藏」合集的结果
         collectText(r),
+        // 「我的列表」模式：下载结束后跨模式重复合并（like ↔ collection → 硬链接）
+        mergeText(r),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -237,6 +239,23 @@ function collectText(r: Record<string, unknown>): string {
   const added = Number(c.added ?? 0) || 0
   const created = c.created === true ? '（新建）' : ''
   return `已加入「${name}」合集${created} +${added}`
+}
+
+/**
+ * 跨模式重复合并的结果文案（后端 result.fetch.merge）。
+ *
+ * 背景：f2 判断「这个作品下过没有」只看**当前模式目录里有没有同名文件**（它没有
+ * 下载台账），所以同一作品既被点赞又被收藏时，两个目录各下一份、各存一份。后端在
+ * 下载结束后把「同名 + 内容完全相同」的那些合并成硬链接——两个目录里文件都还在
+ * （f2 两侧的跳过逻辑继续有效），磁盘只占一份。没合并到东西时不占版面。
+ */
+function mergeText(r: Record<string, unknown>): string {
+  const fetch = (r.fetch || {}) as Record<string, unknown>
+  const merge = (fetch.merge || {}) as Record<string, unknown>
+  const linked = Number(merge.linked ?? 0) || 0
+  if (!linked) return ''
+  const saved = Number(merge.saved_bytes ?? 0) || 0
+  return `合并跨模式重复 ${linked} 个${saved ? ` · 省 ${formatSize(saved)}` : ''}`
 }
 
 /**
