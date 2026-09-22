@@ -333,6 +333,7 @@ async def _download_folders_async(
         "missing_folders": missing,
         "skipped_existing": 0,  # 库里已有、跳过下载的作品数
         "skipped_existing_ids": [],  # 上面这些作品的 ID（供合集补齐）
+        "skipped_ids_truncated": False,  # ID 列表被 SKIPPED_ID_LIMIT 截断（合集会少补）
         "prelinked": 0,  # 从同类目录预链接过来的文件数
         "link_index_size": len(link_index),
     }
@@ -352,6 +353,10 @@ async def _download_folders_async(
                 stats["skipped_existing"] += 1
                 if len(stats["skipped_existing_ids"]) < SKIPPED_ID_LIMIT:
                     stats["skipped_existing_ids"].append(aweme_id)
+                else:
+                    # 超上限就只保计数：ID 列表是给合集补齐用的，截断意味着「这些作品
+                    # 这一轮不会补进合集」，必须让上层看得见（别静默失真）
+                    stats["skipped_ids_truncated"] = True
                 continue
             todo.append(work)
         if link_index:
@@ -449,7 +454,8 @@ def download_collect_folders(
         ``{"cookie_source", "root", "folders": [{"id","name","total","works",
         "skipped_existing"}], "works": int, "total_works": int, "current": dict,
         "stopped": bool, "skipped_existing": int, "skipped_existing_ids": [...],
-        "prelinked": int, "link_index_size": int, "missing_folders": [...]}``
+        "skipped_ids_truncated": bool, "prelinked": int, "link_index_size": int,
+        "missing_folders": [...]}``
     """
     stop = should_stop or (lambda: False)
     if not collect_ids:
@@ -465,6 +471,7 @@ def download_collect_folders(
             "missing_folders": [],
             "skipped_existing": 0,
             "skipped_existing_ids": [],
+            "skipped_ids_truncated": False,
             "prelinked": 0,
             "link_index_size": 0,
         }

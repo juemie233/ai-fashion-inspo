@@ -1856,6 +1856,7 @@ def _stub_collect_folder_download(monkeypatch, calls: dict):
             "missing_folders": [],
             "skipped_existing": 0,
             "skipped_existing_ids": [],
+            "skipped_ids_truncated": False,
             "prelinked": 0,
             "link_index_size": 0,
         }
@@ -1950,6 +1951,7 @@ async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_col
             "missing_folders": [],
             "skipped_existing": 1,
             "skipped_existing_ids": ["7670881947199742833"],
+            "skipped_ids_truncated": False,
             "prelinked": 0,
             "link_index_size": 0,
         }

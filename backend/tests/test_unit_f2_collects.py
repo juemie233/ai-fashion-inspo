@@ -377,6 +377,22 @@ def test_download_prelinks_files_from_other_mode_root(fake_runtime, monkeypatch,
     assert stats["link_index_size"] == 1
 
 
+def test_download_flags_truncated_skip_id_list(fake_runtime, monkeypatch):
+    """ID 列表被上限截断时要显式置标记（否则合集少补了却无人知道）。"""
+    monkeypatch.setattr(f2_collects, "SKIPPED_ID_LIMIT", 1)
+    folder_list = _folder_response([("111", "A", 3)])
+    box: list = []
+    _patch_download_stack(monkeypatch, {"111": [["a1", "a2", "a3"]]}, folder_list, box)
+
+    stats = f2.download_collect_folders(
+        Path("x"), "u", ["111"], existing_aweme_ids={"a1", "a2", "a3"}
+    )
+
+    assert stats["skipped_existing"] == 3
+    assert stats["skipped_existing_ids"] == ["a1"]  # 只留前 1 条
+    assert stats["skipped_ids_truncated"] is True
+
+
 def test_download_without_selection_is_a_noop(fake_runtime, monkeypatch):
     """没勾选任何夹：直接返回空结果（不联网、不构造任何 f2 客户端）。"""
     called = []

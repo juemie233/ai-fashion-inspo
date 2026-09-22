@@ -1039,8 +1039,14 @@ async def _fetch_collects_by_folder_stage(
         # F 的成效：库内已有而跳过下载的作品数 / 从同类目录预链接过来的文件数
         "skipped_existing": int(outcome.get("skipped_existing") or 0),
         "skipped_existing_ids": outcome.get("skipped_existing_ids") or [],
+        "skipped_ids_truncated": bool(outcome.get("skipped_ids_truncated")),
         "prelinked": int(outcome.get("prelinked") or 0),
     }
+    if fetch_summary["collect"]["skipped_ids_truncated"]:
+        logger.warning(
+            f"[f2 收藏夹] 已入库作品 ID 超过 {f2.SKIPPED_ID_LIMIT} 条被截断："
+            "本轮合集只补入前若干条，其余下次运行会补上"
+        )
     fetch_summary["downloaded"] = {
         "files": final_stats["files"],
         "bytes": final_stats["bytes"],
@@ -1523,7 +1529,9 @@ async def collect_library_ids_by_aweme(
     if not wanted:
         return []
     # 平台 ID 形如 `f2:<作品 ID>#<类型><序号>`：用 substr/instr 把中间的 ID 抠出来做
-    # IN 比较（一次查询搞定一批；逐条 LIKE 拼 OR 会退化成几百次扫描）
+    # IN 比较（一次查询搞定一批；逐条 LIKE 拼 OR 会退化成几百次扫描）。
+    # `instr`/`substr` 是 SQLite 方言——本项目数据库就是 SQLite（见 CLAUDE.md），
+    # 若将来换库，这里要改成对应的字符串函数。
     aweme_of_platform = func.substr(
         Inspiration.source_platform_id,
         4,
@@ -1567,6 +1575,9 @@ async def _aggregate_collect_stage(
     target_ids = list(dict.fromkeys(imported_ids + [str(i) for i in (extra_ids or []) if i]))
     if not target_ids:
         return None
+    # 先把「本批入库」的集合算出来：下面统计「已在库补入」要按元素判定，
+    # 写成 `i not in set(imported_ids)` 会每条都重建一次集合（O(n²)）
+    imported_set = set(imported_ids)
     from app.services import collection_service
     from app.models.collection import Collection
 
@@ -1597,7 +1608,7 @@ async def _aggregate_collect_stage(
             "skipped": int(added.get("skipped") or 0),
             # 本次是「已在库、未重新入库但补进合集」的条数（让前端/日志能解释合集为何
             # 比「本批入库」多）
-            "from_existing": len([i for i in target_ids if i not in set(imported_ids)]),
+            "from_existing": sum(1 for i in target_ids if i not in imported_set),
         }
         task.result = {**task.result, "collection": stats}
         await db.commit()
