@@ -25,11 +25,38 @@ DEFAULT_F2_DIR = Path(r"C:\Users\Administrator\Desktop\f2")
 """下载产物相对 f2 工作目录的位置（f2 在 cwd 下建 Download/douyin/post/）。"""
 F2_DOWNLOAD_SUBDIR = Path("Download/douyin/post")
 
+
+def resolve_download_root(configured: Path | str | None = None) -> Path:
+    """解析「传给 f2 `-p` 的产物根目录」（其下由 f2 自建 `douyin/{mode}/{昵称}/`）。
+
+    为什么可配：产物实测 19 GB 且随采集持续增长（本机 C 盘曾被它占满）。配置项是
+    `.env` 的 `F2_DOWNLOAD_ROOT`，指到别的盘即可——**f2 的安装目录、作者库
+    `douyin_users.db`、conf、logs 仍留在** :data:`DEFAULT_F2_DIR`，只有媒体产物搬走。
+
+    缺省与历史行为完全一致：`<f2 工作目录>/Download`。
+
+    Args:
+        configured: 显式指定的根目录（缺省读 ``settings.f2_download_root``）。
+
+    Returns:
+        绝对路径；目录由 f2 自己创建，这里不做存在性检查。
+    """
+    value = configured
+    if value is None:
+        from app.config import settings  # 与 f2_hash_cache 同口径：读同一份 .env
+
+        value = settings.f2_download_root
+    return Path(value) if value else DEFAULT_F2_DIR / "Download"
+
+
+"""f2 产物的实际根目录（`-p` 取值；可用 `.env` 的 `F2_DOWNLOAD_ROOT` 指到别的盘）。"""
+DEFAULT_F2_DOWNLOAD_ROOT = resolve_download_root()
+
 """f2 的作者库文件名（含 user_info_web 表：sec_user_id / nickname / aweme_count）。"""
 F2_AUTHOR_DB = "douyin_users.db"
 
-"""f2 默认下载根目录（可用 --root 覆盖；与 --f2-dir 联动）。"""
-DEFAULT_F2_ROOT = DEFAULT_F2_DIR / F2_DOWNLOAD_SUBDIR
+"""f2 默认下载根目录（发布模式；与传给 f2 的 `-p` 同一个根）。"""
+DEFAULT_F2_ROOT = DEFAULT_F2_DOWNLOAD_ROOT / "douyin" / "post"
 
 """f2 点赞（喜欢）模式的产物根目录。
 
@@ -39,7 +66,7 @@ f2 的目录规则是 `{path}/douyin/{mode}/{nickname}/`，而点赞模式的目
 """
 F2_LIKE_SUBDIR = Path("Download/douyin/like")
 
-DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
+DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DOWNLOAD_ROOT / "douyin" / "like"
 
 """f2 收藏模式的产物根目录（`-M collection`）。
 
@@ -50,7 +77,7 @@ DEFAULT_F2_LIKE_ROOT = DEFAULT_F2_DIR / F2_LIKE_SUBDIR
 """
 F2_COLLECT_SUBDIR = Path("Download/douyin/collection")
 
-DEFAULT_F2_COLLECT_ROOT = DEFAULT_F2_DIR / F2_COLLECT_SUBDIR
+DEFAULT_F2_COLLECT_ROOT = DEFAULT_F2_DOWNLOAD_ROOT / "douyin" / "collection"
 
 """发布模式的命名模板：**必须带 `{aweme_id}`**，否则素材失去真实作品 ID。
 

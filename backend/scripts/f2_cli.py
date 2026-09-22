@@ -14,6 +14,7 @@ from app.config import settings  # noqa: E402
 from .f2_apply import apply_import  # noqa: E402
 from .f2_common import (  # noqa: E402
     DEFAULT_F2_DIR,
+    DEFAULT_F2_DOWNLOAD_ROOT,
     DEFAULT_F2_ROOT,
     DEFAULT_SEC_PER_TAG,
     F2_DOWNLOAD_SUBDIR,
@@ -183,7 +184,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db_path = args.db or library_db_path()
-    root = args.root or (args.f2_dir / F2_DOWNLOAD_SUBDIR)
+    root = args.root or (
+        args.f2_dir / F2_DOWNLOAD_SUBDIR
+        if str(args.f2_dir) != str(DEFAULT_F2_DIR)
+        else DEFAULT_F2_ROOT
+    )
 
     # ── 回滚模式（只操作批次清单，不扫描 f2 目录）──
     if args.rollback:
@@ -265,7 +270,11 @@ def main(argv: list[str] | None = None) -> int:
         fetch = run_fetch(
             f2_dir=args.f2_dir,
             authors=authors_filter,
-            download_root=args.f2_dir / "Download",
+            download_root=(
+                args.f2_dir / "Download"
+                if str(args.f2_dir) != str(DEFAULT_F2_DIR)
+                else DEFAULT_F2_DOWNLOAD_ROOT
+            ),
             naming=args.naming,
             auto_cookie=args.auto_cookie,
             limit=args.fetch_limit,

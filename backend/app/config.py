@@ -1,6 +1,7 @@
 """应用配置：通过 Pydantic Settings 管理所有配置项。"""
 
 from pathlib import Path
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 数据库文件绝对路径（不依赖进程 CWD，避免从不同目录启动时产生双库）
@@ -149,6 +150,11 @@ class Settings(BaseSettings):
     scraper_task_auto_retry: int = 2  # 采集任务崩溃自动续采次数上限
 
     # f2 抖音素材：一键获取（f2 增量下载 → 去重 → 入库）
+    # f2 产物根目录（传给 f2 的 `-p`；其下是 douyin/{post|like|collection}/{昵称}/）。
+    # 缺省 None = f2 工作目录下的 Download（历史行为）。为什么要可配：产物实测 19 GB
+    # 且随采集持续增长，C 盘紧张时用 .env 的 F2_DOWNLOAD_ROOT 指到别的盘即可——f2 的
+    # 安装目录、作者库 douyin_users.db、conf、logs 仍留在原处。
+    f2_download_root: Path | None = None
     # 是否每日自动增量入库（关闭时只保留界面上的手动「一键获取素材」）
     f2_import_auto_enabled: bool = False
     # 自动获取的最小间隔（小时）：距最近一次任务创建时间不足则跳过本轮；
@@ -194,6 +200,39 @@ class Settings(BaseSettings):
     backup_startup_delay_minutes: int = 10  # 启动后延迟多久再检查（避开迁移/初始化竞争）
     backup_min_interval_hours: int = 20  # 距上次成功备份小于此时长则跳过
     backup_tick_hours: int = 6  # 常驻循环的检查周期
+
+    @model_validator(mode="after")
+    def _derive_storage_dirs(self) -> "Settings":
+        """把各存储子目录钉在**生效的** storage_root 上。
+
+        为什么需要：pydantic 的字段默认值在**类定义时**求值，所以只设环境变量
+        ``STORAGE_ROOT`` 时 storage_root 变了，而 images_dir / thumbnails_dir /
+        videos_dir / trash_dir / keyframes_dir / person_photos_dir /
+        person_thumbnails_dir / lancedb_dir 仍指着仓库里的 backend/storage ——
+        「一半搬到新盘、一半留在旧盘」，迁移后会写错地方、读时又找不到文件。
+        （tests/conftest.py 早就逐项覆盖绕过了这个坑，可见它真实存在。）
+
+        判据用「是否等于类定义期的默认值」而不是 ``model_fields_set``：后者对
+        env/.env 来源字段的行为依赖 pydantic-settings 的实现细节，这里不赌。
+
+        Returns:
+            self（各子目录已按 storage_root 重算）。
+        """
+        default_root = Path(__file__).resolve().parent.parent / "storage"
+        for name in (
+            "images",
+            "thumbnails",
+            "videos",
+            "trash",
+            "keyframes",
+            "person_photos",
+            "person_thumbnails",
+            "lancedb",
+        ):
+            field = f"{name}_dir"
+            if getattr(self, field) == default_root / name:  # 没被显式改过 → 跟随
+                setattr(self, field, self.storage_root / name)
+        return self
 
     @property
     def storage_dirs(self) -> dict[str, Path]:

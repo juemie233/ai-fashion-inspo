@@ -848,7 +848,7 @@ async def _fetch_personal_stage(
             fetcher,
             f2_dir,
             like_user,
-            f2_dir / "Download",
+            f2.DEFAULT_F2_DOWNLOAD_ROOT,
             max_counts=like_max_counts,
         )
     )
@@ -1188,7 +1188,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
     # 日期窗口：按作者目录的最近下载时间逐作者计算（见 compute_fetch_interval）。
     # 不给窗口时 f2 会把作者全部历史翻一遍且每页固定 sleep 一次 timeout。
     # 新博主（无论点名还是首次）没有本地记录 → 该函数给 `all`，即全量。
-    post_root = f2_dir / f2.F2_DOWNLOAD_SUBDIR
+    post_root = f2.DEFAULT_F2_ROOT
     last_download = await asyncio.to_thread(f2.author_last_download, post_root)
 
     for index, author in enumerate(targets, 1):
@@ -1205,7 +1205,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
             else f2.compute_fetch_interval(since_days, last_at)
         )
         cmd = f2.build_f2_command(
-            author, download_root=f2_dir / "Download", interval=interval
+            author, download_root=f2.DEFAULT_F2_DOWNLOAD_ROOT, interval=interval
         )
         logger.info(f"f2 下载 {display}（窗口 {interval}）")
         try:

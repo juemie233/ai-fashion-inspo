@@ -84,6 +84,7 @@ from .f2_common import (  # noqa: F401
     COLLECT_NAMING_TEMPLATE,
     DEFAULT_F2_COLLECT_ROOT,
     DEFAULT_F2_DIR,
+    DEFAULT_F2_DOWNLOAD_ROOT,
     DEFAULT_F2_LIKE_ROOT,
     DEFAULT_F2_ROOT,
     DEFAULT_FETCH_SINCE_DAYS,
@@ -107,6 +108,7 @@ from .f2_common import (  # noqa: F401
     merge_personal_duplicates,
     normalize_author,
     parse_media_filename,
+    resolve_download_root,
     scan_directory,
 )
 from .f2_hash_cache import (  # noqa: F401
@@ -200,6 +202,7 @@ __all__ = [
     "BIG_GALLERY_THRESHOLD",
     "DEFAULT_F2_COLLECT_ROOT",
     "DEFAULT_F2_DIR",
+    "DEFAULT_F2_DOWNLOAD_ROOT",
     "DEFAULT_F2_LIKE_ROOT",
     "DEFAULT_F2_ROOT",
     "DEFAULT_FETCH_SINCE_DAYS",
@@ -272,6 +275,7 @@ __all__ = [
     "print_report",
     "profile_author",
     "profile_display",
+    "resolve_download_root",
     "resolve_profile_nicknames",
     "run_fetch",
     "run_fetch_collects",

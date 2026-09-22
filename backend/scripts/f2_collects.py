@@ -32,7 +32,11 @@ from pathlib import Path
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .f2_common import COLLECT_NAMING_TEMPLATE, DEFAULT_F2_DIR  # noqa: E402
+from .f2_common import (  # noqa: E402
+    COLLECT_NAMING_TEMPLATE,
+    DEFAULT_F2_DIR,
+    DEFAULT_F2_DOWNLOAD_ROOT,
+)
 
 """翻页间隔（秒）：收藏夹接口与作品列表接口都自带风控，别打太快。"""
 COLLECTS_PAGE_SLEEP = 2.0
@@ -151,7 +155,7 @@ def load_f2_runtime(f2_dir: Path | str | None = None) -> tuple[dict, str]:
             # 产物落点与 f2 CLI 完全一致（`-p <f2 工作目录>/Download`）：
             # {path}/douyin/{mode}/{我的昵称}/。⚠ 必须绝对路径——配置里那个相对
             # "Download" 会被解析到**后端进程的 cwd**，文件就下错地方了。
-            "path": str(root / "Download"),
+            "path": str(DEFAULT_F2_DOWNLOAD_ROOT),
             "page_counts": COLLECTS_WORKS_PAGE_COUNTS,
         },
         str(conf_path),
