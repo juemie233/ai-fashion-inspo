@@ -12,6 +12,8 @@ like 与 collection 各下一次、各存一份；入库侧按平台 ID 只收�
 import os
 from pathlib import Path
 
+import pytest
+
 from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
 
@@ -183,3 +185,15 @@ def test_merge_default_roots_are_like_and_collection(monkeypatch, tmp_path):
     # post 侧不在处理范围内：它既没被合并、也没被算进候选
     assert not _same_data(post_file, like_dir / IMAGE_1)
     assert os.stat(post_file).st_nlink == 1
+
+
+def test_guard_rejects_real_roots():
+    """越界保护有效：用真实默认根目录调用合并必须被拦下（测试绝不许动真实下载目录）。
+
+    为什么锁这条：个人列表模式下载后会自动调用合并，而「我的喜欢」类用例常常只 patch
+    一侧根目录——漏 patch 的那一侧就是用户真实的 Download/douyin，测试会去扫它、并在
+    名字/大小/内容都一样时**硬链接替换真实文件**（已实测发生过）。保护由 conftest 的
+    ``guard_f2_merge_off_real_roots`` 提供，这里同时验证它确实挂在合并函数上。
+    """
+    with pytest.raises(AssertionError, match="越界到真实目录"):
+        f2.merge_personal_duplicates()

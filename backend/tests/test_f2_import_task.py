@@ -22,6 +22,25 @@ from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
 
 
+@pytest.fixture(autouse=True)
+def isolate_personal_roots(tmp_path, monkeypatch):
+    """把「我的喜欢 / 我的收藏」两个产物根目录都指到临时目录（本模块 autouse）。
+
+    为什么必须两侧一起 patch：个人列表模式下载结束后会自动跑一次跨模式重复合并
+    （见 ``f2.merge_personal_duplicates``），它按默认值读这两个根目录。本模块的
+    「我的喜欢」用例只 patch like 侧（``f2_like_tree``），不一起 patch collect 侧
+    就会让合并去扫用户**真实的** ``Download/douyin/collection``（实测：全量套件里
+    11 次调用带着真实收藏目录）。这里统一指到临时目录，越界由 conftest 的
+    ``guard_f2_merge_off_real_roots`` 断言兜底。
+    """
+    like_root = tmp_path / "like"
+    collect_root = tmp_path / "collection"
+    like_root.mkdir()
+    collect_root.mkdir()
+    patch_f2(monkeypatch, "DEFAULT_F2_LIKE_ROOT", like_root)
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", collect_root)
+
+
 def _jpeg(path: Path, color: str = "red") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (48, 48), color).save(path, "JPEG")

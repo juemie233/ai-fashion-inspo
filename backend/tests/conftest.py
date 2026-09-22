@@ -175,6 +175,41 @@ def clean_state(client):
     yield
 
 
+@pytest.fixture(autouse=True)
+def guard_f2_merge_off_real_roots(tmp_path, monkeypatch):
+    """禁止测试让「跨模式重复合并」碰到真实下载目录（越界即失败）。
+
+    为什么需要（实测踩坑）：个人列表模式（like / collection）下载结束后会自动跑一次
+    跨模式重复合并（``scripts.f2_common.merge_personal_duplicates``），它按**默认值**
+    读 ``DEFAULT_F2_LIKE_ROOT`` / ``DEFAULT_F2_COLLECT_ROOT``。用例只 patch 一侧
+    （「我的喜欢」的用例都只 patch like 根）时，另一侧就指向用户**真实的**
+    ``Download/douyin`` —— 测试会去扫真实目录（慢），并在名字、大小、内容恰好相同时
+    **改动真实文件**（硬链接替换）。这里给合并函数套一层断言：任何越出 ``tmp_path``
+    的根目录立刻让用例失败；根目录本身由各测试模块自己 patch 到临时目录。
+    """
+    from scripts import f2_common
+    from scripts import import_f2_downloads as f2_shell
+
+    real_merge = f2_common.merge_personal_duplicates
+    allowed = str(tmp_path)
+
+    def guarded(roots=None):
+        requested = (
+            list(roots) if roots is not None
+            else [f2_common.DEFAULT_F2_LIKE_ROOT, f2_common.DEFAULT_F2_COLLECT_ROOT]
+        )
+        for root in requested:
+            if not str(root).startswith(allowed):
+                raise AssertionError(
+                    f"跨模式重复合并越界到真实目录：{root}。"
+                    "请把「我的列表」两个根目录都 patch 到 tmp_path（见本 fixture 注释）"
+                )
+        return real_merge(requested)
+
+    monkeypatch.setattr(f2_common, "merge_personal_duplicates", guarded)
+    monkeypatch.setattr(f2_shell, "merge_personal_duplicates", guarded)
+
+
 def clear_cookie_verify_cache() -> None:
     """清空 Cookie 校验进程内缓存（供 clean_state 与测试自助调用）。"""
     try:
