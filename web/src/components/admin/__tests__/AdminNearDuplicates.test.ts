@@ -165,4 +165,65 @@ describe('AdminNearDuplicates 删除流程', () => {
 
     expect(wrapper.emitted('delete-selected')).toBeUndefined()
   })
+
+  it('可翻页回看并改主意：提交时按最后一次选择算（防误删）', async () => {
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd'])])
+
+    // 第 1 组先误选「保留右边」（会删 aaa）→ 自动进入第 2 组
+    await button(wrapper, '保留右边').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 2 / 2 组')
+
+    // 翻回第 1 组改选「保留左边」（应删 bbb，撤销掉 aaa）
+    await button(wrapper, '← 上一组').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 1 / 2 组')
+    expect(wrapper.text()).toContain('本组已选：保留右边')
+
+    await button(wrapper, '保留左边').trigger('click')
+    await flushPromises()
+
+    // 第 2 组保持未决定 → 直接去提交，只该删第 1 组按最后一次选择算出的 bbb
+    await button(wrapper, '← 上一组').trigger('click')
+    await flushPromises()
+    await button(wrapper, '去提交').trigger('click')
+    await flushPromises()
+    await button(wrapper, '确认提交删除').trigger('click')
+    await wrapper.find('button.popconfirm-ok').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('delete-selected')?.[0]).toEqual([['bbb']])
+  })
+
+  it('翻页边界：第 1 组不能上一组，最后一组不能下一组', async () => {
+    const wrapper = await mountScanned([group(['aaa', 'bbb']), group(['ccc', 'ddd'])])
+
+    expect(button(wrapper, '← 上一组').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '下一组 →').attributes('disabled')).toBeUndefined()
+
+    await button(wrapper, '下一组 →').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 2 / 2 组')
+    expect(button(wrapper, '下一组 →').attributes('disabled')).toBeDefined()
+    // 只翻页不决策：不应产生任何待删素材
+    expect(wrapper.text()).toContain('已决定删除 0 个素材')
+  })
+
+  it('连点保护：决定后紧接着的第二次点击不会决定下一组', async () => {
+    const wrapper = await mountScanned([
+      group(['aaa', 'bbb']),
+      group(['ccc', 'ddd']),
+      group(['eee', 'fff']),
+    ])
+
+    // 手快连点两下「保留左边」：第二下必须被 300ms 保护挡掉，
+    // 否则第 2 组会被同一个按钮决定掉（两张原本要留的图被删）
+    await button(wrapper, '保留左边').trigger('click')
+    await button(wrapper, '保留左边').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第 2 / 3 组') // 只前进了一组
+    expect(wrapper.text()).toContain('已处理 1 / 3 组')
+    expect(wrapper.text()).toContain('已决定删除 1 个素材') // 只有第 1 组的 bbb
+  })
 })

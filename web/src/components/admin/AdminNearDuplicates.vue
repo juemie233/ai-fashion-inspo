@@ -21,6 +21,7 @@ import { getFileUrl } from '@/api/inspirations'
 import { formatSize } from '@/utils/format'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { collectIdsToDelete, dropSubmittedFiles, nearDupScopeLabel } from '@/utils/nearDup'
+import type { DupDecision } from '@/utils/nearDup'
 import { usePolling } from '@/composables/usePolling'
 
 const emit = defineEmits<{
@@ -58,8 +59,14 @@ const showDupModal = ref(false)
 const dupGroups = ref<NearDuplicateGroup[]>([])
 /** 当前组下标（0 起） */
 const dupIndex = ref(0)
-/** 累计决定删除的素材 ID 集合 */
-const deletingIds = ref<Set<string>>(new Set())
+/**
+ * 逐组的保留决策（组对象 → 决策）。
+ *
+ * 为什么记「决策」而不是只累加待删 ID：这样才能来回翻页改主意——改选时该组旧决策对应的
+ * ID 会被自动撤掉（见 deletingIds），最终提交的就是用户最后看到的那批；只累加 ID 的话
+ * 「点快了误删」无法挽回。
+ */
+const dupDecisions = ref<Map<NearDuplicateGroup, DupDecision>>(new Map())
 /** 全部处理完成（进入提交确认视图） */
 const allDone = ref(false)
 /** 提交删除后的提示：此刻素材正在后台删除，不能说「未发现近似重复」 */
@@ -73,8 +80,28 @@ const currentGroup = computed<NearDuplicateGroup | null>(
 const leftFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[0] ?? null)
 /** 当前组右边素材（组内第二张） */
 const rightFile = computed<NearDuplicateFile | null>(() => currentGroup.value?.files[1] ?? null)
+/** 当前组已做的决策（未决定为 null） */
+const currentDecision = computed<DupDecision | null>(() => {
+  const g = currentGroup.value
+  return g ? (dupDecisions.value.get(g) ?? null) : null
+})
+/** 待删素材 ID 集合：由各组当前决策现算，改主意后自动同步 */
+const deletingIds = computed<Set<string>>(() => {
+  const ids = new Set<string>()
+  for (const g of dupGroups.value) {
+    const decision = dupDecisions.value.get(g)
+    if (!decision) continue
+    for (const id of collectIdsToDelete(g, decision)) ids.add(id)
+  }
+  return ids
+})
 /** 已决定删除数量 */
 const deleteCount = computed(() => deletingIds.value.size)
+/** 已做出决策的组数 */
+const decidedCount = computed(() => dupGroups.value.filter((g) => dupDecisions.value.has(g)).length)
+/** 能否上下翻页 */
+const canPrev = computed(() => dupIndex.value > 0)
+const canNext = computed(() => dupIndex.value < dupGroups.value.length - 1)
 
 /** 建议保留素材（评分最高者）ID 前 8 位提示 */
 const keeperHint = computed<string>(() => {
@@ -172,7 +199,7 @@ async function startBackfill() {
 function openDupModal() {
   dupGroups.value = groups.value.map((g) => g)
   dupIndex.value = 0
-  deletingIds.value = new Set()
+  dupDecisions.value = new Map()
   allDone.value = false
   showDupModal.value = true
 }
@@ -181,13 +208,34 @@ function openDupModal() {
 function closeDupModal() {
   showDupModal.value = false
   dupGroups.value = []
+  dupDecisions.value = new Map()
 }
 
-/** 记录删除决定并切到下一组（或进入完成视图） */
-function decideDelete(idsToDelete: string[]) {
-  for (const id of idsToDelete) {
-    deletingIds.value.add(id)
-  }
+/**
+ * 决策后短暂忽略再次点击（毫秒）。
+ *
+ * 这是「点快了误删」的直接防线：做出决定会立刻切到下一组，手快连点两下就会把下一组
+ * 也按同一个按钮决定掉（两张原本想保留的图被删）。300ms 只挡连点，不挡正常操作。
+ */
+const DECISION_GUARD_MS = 300
+const decisionLocked = ref(false)
+
+/**
+ * 记录当前组的保留决策并切到下一组（已是最后一组则进入提交确认视图）。
+ *
+ * 同一组重复决策 = 改主意：直接覆盖，待删集合由 :data:`deletingIds` 现算，
+ * 不会残留上一次决策的 ID。
+ */
+function decide(decision: DupDecision) {
+  const g = currentGroup.value
+  if (!g || decisionLocked.value) return
+  const next = new Map(dupDecisions.value)
+  next.set(g, decision)
+  dupDecisions.value = next
+  decisionLocked.value = true
+  setTimeout(() => {
+    decisionLocked.value = false
+  }, DECISION_GUARD_MS)
   if (dupIndex.value < dupGroups.value.length - 1) {
     dupIndex.value += 1
   } else {
@@ -195,25 +243,40 @@ function decideDelete(idsToDelete: string[]) {
   }
 }
 
+/** 上一组 / 下一组：只翻页回看，不改动任何决策（改主意请直接点按钮重选） */
+function goPrev() {
+  if (!canPrev.value) return
+  dupIndex.value -= 1
+  // 翻页是明确的动作：解除连点保护，否则翻回来立刻改主意会被 300ms 挡掉
+  decisionLocked.value = false
+}
+
+function goNext() {
+  if (!canNext.value) return
+  dupIndex.value += 1
+  decisionLocked.value = false
+}
+
+/** 决策的中文名（用于「本组已选：…」提示） */
+function decisionLabel(decision: DupDecision): string {
+  if (decision === 'keep-left') return '保留左边'
+  if (decision === 'keep-right') return '保留右边'
+  return '都保留（跳过本组）'
+}
+
 /** 保留左边：删除该组其余全部素材 */
 function keepLeft() {
-  const g = currentGroup.value
-  if (!g) return
-  decideDelete(collectIdsToDelete(g, 'keep-left'))
+  decide('keep-left')
 }
 
 /** 保留右边：删除该组除右图外的全部素材 */
 function keepRight() {
-  const g = currentGroup.value
-  if (!g) return
-  decideDelete(collectIdsToDelete(g, 'keep-right'))
+  decide('keep-right')
 }
 
 /** 都保留（跳过本组） */
 function skipGroup() {
-  const g = currentGroup.value
-  if (!g) return
-  decideDelete(collectIdsToDelete(g, 'skip'))
+  decide('skip')
 }
 
 /** 正在提交「删除两张」的删除任务 */
@@ -244,6 +307,10 @@ async function deleteBoth() {
     g.files = g.files.filter((f) => f.id !== left.id && f.id !== right.id)
     if (g.files.length < 2) {
       dupGroups.value.splice(dupIndex.value, 1)
+      // 该组已移出队列：连同它的决策一起丢掉（deletingIds 由现存组的决策现算）
+      const next = new Map(dupDecisions.value)
+      next.delete(g)
+      dupDecisions.value = next
       if (dupGroups.value.length === 0) {
         // 候选队列清空：若还有待提交的删除决定，进入提交确认视图；否则显示空状态
         if (deletingIds.value.size > 0) {
@@ -439,6 +506,13 @@ function favoriteLabel(f: NearDuplicateFile): string {
         <a-tag color="arcoblue" size="small" style="margin-left: 8px"
           >建议保留：{{ keeperHint }}</a-tag
         >
+        <a-tag v-if="currentDecision" color="green" size="small" style="margin-left: 8px">
+          本组已选：{{ decisionLabel(currentDecision) }}（可改）
+        </a-tag>
+        <a-space style="margin-left: 12px">
+          <a-button size="mini" :disabled="!canPrev" @click="goPrev">← 上一组</a-button>
+          <a-button size="mini" :disabled="!canNext" @click="goNext">下一组 →</a-button>
+        </a-space>
       </div>
 
       <div class="dup-compare">
@@ -476,16 +550,27 @@ function favoriteLabel(f: NearDuplicateFile): string {
       <p class="dup-hint">
         组内共有 {{ currentGroup?.files.length ?? 0 }} 张，此处对比前两张；可保留一张（其余将
         <strong>永久删除</strong>，文件与记录不可恢复），或点「删除两张」将当前两张一并删除。
+        可随时用「← 上一组 / 下一组 →」翻页回看：回到已决定的组再点一次就是改主意，
+        提交时按最后一次选择算（决定后 0.3 秒内的连点会被忽略，防手快误删下一组）。
         中途「退出」时已做的决定会自动提交（后台物理删除），不会白选。
       </p>
 
       <div class="dup-actions">
-        <a-button type="primary" :disabled="deletingBoth" @click="keepLeft">保留左边</a-button>
-        <a-button type="primary" status="warning" :disabled="deletingBoth" @click="keepRight"
+        <a-button
+          :type="currentDecision === 'keep-left' ? 'primary' : 'outline'"
+          :disabled="deletingBoth || decisionLocked"
+          @click="keepLeft"
+          >保留左边</a-button
+        >
+        <a-button
+          :type="currentDecision === 'keep-right' ? 'primary' : 'outline'"
+          status="warning"
+          :disabled="deletingBoth || decisionLocked"
+          @click="keepRight"
           >保留右边</a-button
         >
-        <a-button type="text" :disabled="deletingBoth" @click="skipGroup"
-          >都保留（跳过本组）</a-button
+        <a-button type="text" :disabled="deletingBoth || decisionLocked" @click="skipGroup"
+          >都保留（跳过本组）{{ currentDecision === 'skip' ? ' ✓' : '' }}</a-button
         >
         <a-popconfirm
           :ok-button-props="{ type: 'primary', status: 'danger' }"
@@ -502,9 +587,15 @@ function favoriteLabel(f: NearDuplicateFile): string {
           </a-button>
         </a-popconfirm>
         <a-button type="text" @click="requestExit">退出</a-button>
+        <a-button v-if="deleteCount > 0" type="primary" status="danger" @click="allDone = true"
+          >去提交（{{ deleteCount }} 个）</a-button
+        >
       </div>
 
-      <div class="dup-progress">已决定删除 {{ deleteCount }} 个素材</div>
+      <div class="dup-progress">
+        已决定删除 {{ deleteCount }} 个素材 · 已处理 {{ decidedCount }} / {{ dupGroups.length }} 组
+        <template v-if="decidedCount < dupGroups.length">（未决定的组会保留原样）</template>
+      </div>
     </template>
 
     <!-- 全部处理完：提交确认视图 -->
