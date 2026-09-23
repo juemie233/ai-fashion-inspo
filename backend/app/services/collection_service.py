@@ -19,7 +19,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.collection import Collection, CollectionItem
+from app.models.collection import (
+    DOUYIN_AUTO_SOURCE,
+    DOUYIN_ROOT_COLLECTION_NAME,
+    MANUAL_ROOT_COLLECTION_NAME,
+    MANUAL_ROOT_QUERY,
+    Collection,
+    CollectionItem,
+)
 from app.models.inspiration import Inspiration, NOT_DELETED
 from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag
@@ -114,12 +121,39 @@ async def _require_manual(collection: Collection) -> None:
         )
 
 
-async def _name_taken(db: AsyncSession, name: str, exclude_id: int | None = None) -> bool:
-    """检查合集名是否已存在（重名 409）。"""
+async def _name_taken(
+    db: AsyncSession,
+    name: str,
+    exclude_id: int | None = None,
+    parent_id: int | None = None,
+) -> bool:
+    """检查**同层**是否已有同名合集（重名 409）。
+
+    为什么按层判定：抖音收藏夹名（二级）与用户自建合集（一级）本来就可能同名
+    （例如都叫「穿搭」），全局唯一会让二级夹建不出来。
+    """
     query = select(Collection.id).where(Collection.name == name)
+    query = (
+        query.where(Collection.parent_id.is_(None))
+        if parent_id is None
+        else query.where(Collection.parent_id == parent_id)
+    )
     if exclude_id is not None:
         query = query.where(Collection.id != exclude_id)
     return (await db.execute(query)).scalar() is not None
+
+
+async def _validate_parent(db: AsyncSession, parent_id: int | None) -> Collection | None:
+    """校验父合集合法：存在、且本身是一级（最多两级）。返回父对象或 None。"""
+    if parent_id is None:
+        return None
+    parent = await db.get(Collection, parent_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="父收藏夹未找到")
+    if parent.parent_id is not None:
+        raise HTTPException(status_code=400, detail="收藏夹最多两级，不能挂在二级之下")
+    return parent
+
 
 
 # ── 序列化 ──
@@ -147,12 +181,22 @@ async def collection_to_dict(db: AsyncSession, collection: Collection) -> dict:
         query_json = _load_query_json(collection)
 
     cover_id, cover_thumbnail = await _resolve_cover(db, collection)
+    child_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Collection)
+            .where(Collection.parent_id == collection.id)
+        )
+    ).scalar() or 0
     return {
         "id": collection.id,
         "name": collection.name,
         "description": collection.description,
         "kind": collection.kind,
         "position": collection.position,
+        "parent_id": collection.parent_id,
+        "auto_source": collection.auto_source,
+        "child_count": child_count,
         "cover_inspiration_id": cover_id,
         "cover_thumbnail_path": cover_thumbnail,
         "item_count": item_count,
@@ -203,12 +247,90 @@ async def _resolve_cover(
 
 
 async def list_collections(db: AsyncSession) -> list[dict]:
-    """合集列表（按 position 升序），逐个序列化。"""
+    """合集列表：一级按 position 升序，每个一级后面紧跟它的二级（同样按 position）。
+
+    返回**扁平**列表（含 parent_id），排序已保证「父在前、子紧随」——前端只需按
+    parent_id 分组即可渲染两级，无需自己排序。子合集不会单独出现在别处。
+    """
     result = await db.execute(
         select(Collection).order_by(Collection.position.asc(), Collection.id.asc())
     )
-    collections = result.scalars().all()
-    return [await collection_to_dict(db, c) for c in collections]
+    collections = list(result.scalars().all())
+    roots = [c for c in collections if c.parent_id is None]
+    children: dict[int, list[Collection]] = {}
+    for c in collections:
+        if c.parent_id is not None:
+            children.setdefault(c.parent_id, []).append(c)
+
+    ordered: list[Collection] = []
+    for root in roots:
+        ordered.append(root)
+        ordered.extend(children.pop(root.id, []))
+    # 父合集已删除但子行还在（历史脏数据/外键未开时的残留）：当成一级展示，
+    # 免得它们在列表里凭空消失
+    for orphans in children.values():
+        ordered.extend(orphans)
+    return [await collection_to_dict(db, c) for c in ordered]
+
+
+async def ensure_root_collections(db: AsyncSession) -> dict[str, int]:
+    """确保两个**一级**收藏夹存在（幂等），返回 ``{名字: id}``。
+
+    一级只有两类（用户口径）：系统入库手动收藏（智能合集，按 ``is_favorite`` 动态
+    求值）与抖音入库自动收藏（f2 自动维护的父节点，二级挂在它下面）。
+
+    迁移里已经建好，这里再兜一层是为了「结构性不变量」能自愈：用户删掉一级节点、
+    或新库还没来得及跑迁移时，接口不会出现「少了一个一级分类」的残缺状态。
+
+    Returns:
+        两个一级合集的名字 → id。
+    """
+    manual = await _ensure_one(
+        db,
+        MANUAL_ROOT_COLLECTION_NAME,
+        description="素材库里手动点过收藏的素材（按 is_favorite 动态求值，自动同步）",
+        query_json=MANUAL_ROOT_QUERY,
+    )
+    douyin = await _ensure_one(
+        db,
+        DOUYIN_ROOT_COLLECTION_NAME,
+        description="由「获取我的收藏」自动聚合：二级收藏夹与抖音侧的收藏夹一一对应",
+        auto_source=DOUYIN_AUTO_SOURCE,
+    )
+    return {MANUAL_ROOT_COLLECTION_NAME: manual, DOUYIN_ROOT_COLLECTION_NAME: douyin}
+
+
+async def _ensure_one(
+    db: AsyncSession,
+    name: str,
+    description: str,
+    query_json: dict | None = None,
+    auto_source: str | None = None,
+) -> int:
+    """按名字取一级合集，没有就建（幂等，供 :func:`ensure_root_collections` 用）。"""
+    existing = (
+        await db.execute(
+            select(Collection.id).where(
+                Collection.name == name, Collection.parent_id.is_(None)
+            )
+        )
+    ).scalar()
+    if existing is not None:
+        return int(existing)
+    query = select(func.max(Collection.position)).where(Collection.parent_id.is_(None))
+    max_position = (await db.execute(query)).scalar()
+    collection = Collection(
+        name=name,
+        description=description,
+        position=(max_position or 0) + 1,
+        query_json=json.dumps(query_json, ensure_ascii=False) if query_json else None,
+        parent_id=None,
+        auto_source=auto_source,
+    )
+    db.add(collection)
+    await db.commit()
+    await db.refresh(collection)
+    return int(collection.id)
 
 
 async def create_collection(
@@ -216,24 +338,38 @@ async def create_collection(
     name: str,
     description: str | None = None,
     query_json: dict | None = None,
+    parent_id: int | None = None,
+    auto_source: str | None = None,
 ) -> dict:
-    """创建合集；query_json 非空时为智能合集。重名返回 409。"""
-    if await _name_taken(db, name):
+    """创建合集；query_json 非空时为智能合集。同层重名返回 409。
+
+    ``parent_id`` 非空即建二级收藏夹（父必须是一级，最多两级）；
+    ``auto_source`` 由同步流程内部传（如 ``douyin``），用户接口不暴露。
+    """
+    await _validate_parent(db, parent_id)
+    if await _name_taken(db, name, parent_id=parent_id):
         raise HTTPException(status_code=409, detail=f"合集名称「{name}」已存在")
-    # position 追加到列表末尾（越大越靠后）
-    max_position = (
-        await db.execute(select(func.max(Collection.position)))
-    ).scalar()
+    # position 追加到**同层**末尾（越大越靠后）
+    max_query = select(func.max(Collection.position))
+    max_query = (
+        max_query.where(Collection.parent_id.is_(None))
+        if parent_id is None
+        else max_query.where(Collection.parent_id == parent_id)
+    )
+    max_position = (await db.execute(max_query)).scalar()
     collection = Collection(
         name=name,
         description=description,
         position=(max_position or 0) + 1,
         query_json=json.dumps(query_json, ensure_ascii=False) if query_json else None,
+        parent_id=parent_id,
+        auto_source=auto_source,
     )
     db.add(collection)
     await db.commit()
     await db.refresh(collection)
     return await collection_to_dict(db, collection)
+
 
 
 async def update_collection(
@@ -255,7 +391,14 @@ async def update_collection(
     collection = await get_collection(db, collection_id)
 
     if name is not None and name != collection.name:
-        if await _name_taken(db, name, exclude_id=collection.id):
+        # 自动同步的收藏夹名由抖音侧决定：改名会让下一次同步按原名再建一个，
+        # 于是「同步来的」和「改过名的」两个夹长期并存
+        if collection.is_auto:
+            raise HTTPException(
+                status_code=400,
+                detail=f"「{collection.name}」由同步流程自动维护，名称不可修改",
+            )
+        if await _name_taken(db, name, exclude_id=collection.id, parent_id=collection.parent_id):
             raise HTTPException(status_code=409, detail=f"合集名称「{name}」已存在")
         collection.name = name
     if description is not None:
@@ -283,8 +426,18 @@ async def update_collection(
 
 
 async def delete_collection(db: AsyncSession, collection_id: int) -> None:
-    """删除合集（手动合集级联删成员关系、智能合集仅删自身，素材均无损）。"""
+    """删除合集（手动合集级联删成员关系、智能合集仅删自身，素材均无损）。
+
+    二级子合集一并删除。这里**显式**删子节点而不是只靠数据库的 ON DELETE CASCADE：
+    迁移新增的 parent_id 外键在「PRAGMA foreign_keys 未开」的连接上不会触发级联
+    （测试库、手工 sqlite3 连接都可能如此），那样会留下挂在不存在的父下的孤儿夹。
+    """
     collection = await get_collection(db, collection_id)
+    children = (
+        await db.execute(select(Collection).where(Collection.parent_id == collection_id))
+    ).scalars().all()
+    for child in children:
+        await db.delete(child)
     await db.delete(collection)
     await db.commit()
 

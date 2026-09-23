@@ -174,6 +174,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await db.commit()
             logger.info(f"已导入 {added} 个预设标签")
 
+    # 收藏合集的两个一级节点（系统入库手动收藏 / 抖音入库自动收藏）：迁移里已建，
+    # 这里兜一层保证结构不变量自愈（用户删过、或新库迁移尚未覆盖时不会缺一级分类）
+    from app.services import collection_service
+    async with async_session() as db:
+        roots = await collection_service.ensure_root_collections(db)
+        logger.info(f"收藏合集一级节点就绪：{roots}")
+
     # 垃圾桶：保留期 > 0 时才启动时清理一次过期素材，并拉起周期性自动清理任务；
     # 保留期 <= 0（禁用自动回收）时跳过，垃圾桶素材永不自动删除。
     from app.services import inspiration_service

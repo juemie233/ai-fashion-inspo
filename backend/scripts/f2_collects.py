@@ -25,8 +25,10 @@ f2 自带的 `-M collects`（收藏夹模式）虽然能按夹下，但它的选
 """
 
 import asyncio
+import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
@@ -56,6 +58,62 @@ COLLECTS_WORKS_PAGE_COUNTS = 20
 
 """「库里已有、跳过下载」的作品 ID 最多记多少个（供合集补齐；防止任务结果被撑爆）。"""
 SKIPPED_ID_LIMIT = 5000
+
+"""收藏夹归属清单的文件名（写在产物目录里，即 `{昵称}/_collect_folders.json`）。
+
+为什么需要它：按夹下载时 ``folderize=False``，文件**平铺**在昵称目录下，路径里
+不带收藏夹名——入库阶段无从知道某件作品属于哪个收藏夹，也就建不出二级收藏夹。
+这份清单把「作品 ID → 收藏夹」记在旁边，入库阶段据此建二级并归位。
+
+非媒体文件，文件名也不符合 f2 命名模板，故不会被扫描/入库流程当成素材。
+"""
+COLLECT_FOLDER_MAP_NAME = "_collect_folders.json"
+
+
+def _merge_folder_map(path: Path, folders: dict[str, dict]) -> dict:
+    """把本次枚举到的收藏夹归属合并进清单文件（旧数据保留，按夹取并集）。
+
+    取并集而不是覆盖：``max_counts`` 限制、翻页中断、只勾了部分夹的多次运行都会
+    只看到一部分作品，覆盖会把上一次的归属抹掉。
+
+    Returns:
+        写盘后的清单结构（含 version / updated_at / folders）；写不进去时返回 None
+        （归属清单是**辅助信息**，任何写盘问题都不该让下载失败）。
+    """
+    merged: dict[str, dict] = {}
+    if path.exists():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8")) or {}
+            for fid, entry in (old.get("folders") or {}).items():
+                merged[str(fid)] = {
+                    "name": str(entry.get("name") or ""),
+                    "aweme_ids": [str(a) for a in (entry.get("aweme_ids") or []) if a],
+                }
+        except (OSError, ValueError, AttributeError) as exc:
+            # 清单坏了不该让下载失败：这一份重建，最坏情况是二级归属缺一轮
+            print(f"[警告] 收藏夹清单读取失败，按空清单重建：{exc}", flush=True)
+    for fid, entry in folders.items():
+        prev = merged.get(fid) or {"name": "", "aweme_ids": []}
+        name = entry.get("name") or prev.get("name") or ""
+        ids = sorted({*prev["aweme_ids"], *(str(a) for a in entry.get("aweme_ids") or [] if a)})
+        merged[fid] = {"name": name, "aweme_ids": ids}
+
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "folders": merged,
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        # 目录可能还不存在（本次一件都没下载、全部被跳过时 f2 不建目录）
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        # 目录不存在/只读/磁盘满：下载已经成功，不能因为一份归属清单把整批算成失败
+        print(f"[警告] 收藏夹归属清单写入失败（二级归属缺本轮）：{exc}", flush=True)
+        return None
+    return payload
 
 
 def index_mode_works(root: Path | str) -> dict[str, list[Path]]:
@@ -340,9 +398,17 @@ async def _download_folders_async(
         "skipped_ids_truncated": False,  # ID 列表被 SKIPPED_ID_LIMIT 截断（合集会少补）
         "prelinked": 0,  # 从同类目录预链接过来的文件数
         "link_index_size": len(link_index),
+        # 收藏夹归属清单落点（入库阶段据此建二级收藏夹）
+        "folder_map_file": "",
     }
     if on_progress is not None:
         on_progress(_snapshot(stats))
+
+    # 当前正在处理的夹（_download_page 靠它把作品 ID 记到正确的夹上）
+    current_folder: dict = {"id": "", "name": ""}
+    # 本次枚举到的「作品 ID → 收藏夹」归属；含被跳过（库里已有）的作品——
+    # 它们同样属于这个夹，入库阶段要靠它把已在库的作品补进对应的二级收藏夹
+    seen_ids: dict[str, list[str]] = {}
 
     async def _download_page(aweme_list: list) -> None:
         """一页作品：先剔掉「库里已有」的，再把同类目录里已有的硬链接过来，最后交给 f2。
@@ -350,9 +416,13 @@ async def _download_folders_async(
         交给 f2 的那批即使部分文件已存在也无妨：f2 自己按「目标文件存在即跳过」，
         所以预链接成功的那部分不会产生任何下载；预链接失败（跨卷等）则照常下载。
         """
+        folder_id = str(current_folder.get("id") or "")
+        bucket = seen_ids.setdefault(folder_id, []) if folder_id else None
         todo = []
         for work in aweme_list:
             aweme_id = str(work.get("aweme_id") or "")
+            if bucket is not None and aweme_id:
+                bucket.append(aweme_id)
             if aweme_id and aweme_id in existing:
                 stats["skipped_existing"] += 1
                 if len(stats["skipped_existing_ids"]) < SKIPPED_ID_LIMIT:
@@ -375,6 +445,7 @@ async def _download_folders_async(
         if should_stop():
             stats["stopped"] = True
             break
+        current_folder["id"], current_folder["name"] = str(folder["id"]), folder["name"]
         stats["current"] = {"id": folder["id"], "name": folder["name"], "index": index}
         skipped_before = stats["skipped_existing"]
         done = await _iter_folder_works(
@@ -396,6 +467,22 @@ async def _download_folders_async(
         )
         if on_progress is not None:
             on_progress(_snapshot(stats))
+
+    # 收藏夹归属清单：即使中途停止也要落盘（已枚举到的部分照样有归属），
+    # 但空清单不写——不能让一次「什么都没枚举到」的运行把落点文件建成空壳
+    if any(seen_ids.values()):
+        map_path = Path(user_path) / COLLECT_FOLDER_MAP_NAME
+        name_of = {str(f["id"]): f["name"] for f in folders}
+        written = _merge_folder_map(
+            map_path,
+            {
+                fid: {"name": name_of.get(fid) or "", "aweme_ids": ids}
+                for fid, ids in seen_ids.items()
+                if ids
+            },
+        )
+        if written is not None:
+            stats["folder_map_file"] = str(map_path)
 
     return stats
 
@@ -459,7 +546,12 @@ def download_collect_folders(
         "skipped_existing"}], "works": int, "total_works": int, "current": dict,
         "stopped": bool, "skipped_existing": int, "skipped_existing_ids": [...],
         "skipped_ids_truncated": bool, "prelinked": int, "link_index_size": int,
-        "missing_folders": [...]}``
+        "missing_folders": [...], "folder_map_file": str}``
+
+        ``folder_map_file`` 是落在产物目录里的收藏夹归属清单
+        （``{昵称}/_collect_folders.json``，见 :data:`COLLECT_FOLDER_MAP_NAME`），
+        入库阶段据此把作品归到对应的二级收藏夹；本次一件都没枚举到时不写文件，
+        该字段为空串。
     """
     stop = should_stop or (lambda: False)
     if not collect_ids:
@@ -478,6 +570,7 @@ def download_collect_folders(
             "skipped_ids_truncated": False,
             "prelinked": 0,
             "link_index_size": 0,
+            "folder_map_file": "",
         }
     return asyncio.run(
         _download_folders_async(

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -281,6 +282,82 @@ def test_download_reports_missing_folders(fake_runtime, monkeypatch):
 
     assert stats["missing_folders"] == ["999"]
     assert stats["works"] == 1
+
+
+def test_download_writes_collect_folder_map(fake_runtime, monkeypatch, tmp_path):
+    """按夹下载要写下「作品 ID → 收藏夹」归属清单（二级收藏夹的唯一依据）。
+
+    文件平铺在昵称目录下、路径不带夹名，只有这份清单能回答「这件作品属于哪个夹」。
+    被跳过（库里已有）的作品同样要记：它一样是这个夹里的作品，入库阶段要靠它
+    把已在库的那件补进对应的二级收藏夹。
+    """
+    pytest.importorskip("f2", reason="需要 f2 本体来打桩 handler / downloader")
+    import f2.apps.douyin.utils as utils_mod
+
+    folder_list = _folder_response([("111", "秘书OL", 2), ("222", "股票", 1)])
+    box: list = []
+    _patch_download_stack(
+        monkeypatch, {"111": [["a1", "a2"]], "222": [["b1"]]}, folder_list, box
+    )
+    # 落点换成真实临时目录：本用例要读回写下的清单
+    monkeypatch.setattr(
+        utils_mod, "create_user_folder", lambda kwargs, nickname: tmp_path / str(nickname)
+    )
+
+    stats = f2.download_collect_folders(
+        Path("x"), "u", ["111", "222"], existing_aweme_ids={"a2"}
+    )
+
+    map_path = Path(stats["folder_map_file"])
+    assert map_path.name == "_collect_folders.json"
+    assert map_path.parent.name == "还行吧"
+    payload = json.loads(map_path.read_text(encoding="utf-8"))
+    by_name = {e["name"]: e["aweme_ids"] for e in payload["folders"].values()}
+    assert by_name == {"秘书OL": ["a1", "a2"], "股票": ["b1"]}
+    # 清单是 json、文件名不符合 f2 命名模板 → 不会被扫描/入库当成素材
+    from scripts.f2_common import parse_media_filename
+
+    assert parse_media_filename(map_path) is None
+
+
+def test_collect_folder_map_merges_previous_runs(tmp_path):
+    """多次运行取并集：max_counts / 中断 / 只勾部分夹都不该把已有归属抹掉。"""
+    path = tmp_path / "_collect_folders.json"
+    f2_collects._merge_folder_map(path, {"111": {"name": "秘书OL", "aweme_ids": ["a1"]}})
+    f2_collects._merge_folder_map(
+        path, {"111": {"name": "秘书OL", "aweme_ids": ["a1", "a2"]}, "222": {"name": "股票", "aweme_ids": ["b1"]}}
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    assert payload["folders"]["111"]["aweme_ids"] == ["a1", "a2"]
+    assert payload["folders"]["222"] == {"name": "股票", "aweme_ids": ["b1"]}
+
+
+def test_collect_folder_map_rebuilds_on_corrupt_file(tmp_path):
+    """清单损坏时按空清单重建（下载不能因为一份辅助清单失败）。"""
+    path = tmp_path / "_collect_folders.json"
+    path.write_text("{ 这不是 json", encoding="utf-8")
+
+    payload = f2_collects._merge_folder_map(
+        path, {"111": {"name": "秘书OL", "aweme_ids": ["a1"]}}
+    )
+
+    assert payload is not None
+    assert json.loads(path.read_text(encoding="utf-8"))["folders"]["111"]["aweme_ids"] == ["a1"]
+
+
+def test_collect_folder_map_write_failure_is_not_fatal(tmp_path):
+    """写不进去时返回 None 而不是抛错——归属清单是辅助信息，不能让下载整批失败。"""
+    blocker = tmp_path / "同名文件"
+    blocker.write_text("占位", encoding="utf-8")  # 拿文件当目录 → mkdir 必然失败
+
+    assert (
+        f2_collects._merge_folder_map(
+            blocker / "_collect_folders.json", {"111": {"name": "A", "aweme_ids": ["a1"]}}
+        )
+        is None
+    )
 
 
 def test_download_respects_per_folder_max_counts(fake_runtime, monkeypatch):

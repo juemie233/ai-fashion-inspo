@@ -199,7 +199,7 @@ export function summarizeResult(
         bloggerCreated ? `新登记博主 ${bloggerCreated}` : '',
         // 「先扫描、后下载」：本次只下了哪几个收藏夹（没勾的夹一件都没下）
         collectFolderText(r),
-        // 收藏模式：本批素材聚合进「抖音收藏」合集的结果
+        // 收藏模式：本批素材归位到「抖音入库自动收藏」收藏夹（二级按抖音收藏夹）
         collectText(r),
         // 「我的列表」模式：下载结束后跨模式重复合并（like ↔ collection → 硬链接）
         mergeText(r),
@@ -231,8 +231,11 @@ function likeDownloadText(r: Record<string, unknown>): string {
 }
 
 /**
- * 收藏模式的合集聚合结果（后端 result.collection）：本批素材加进「抖音收藏」合集的条数。
- * 没有该字段（其它模式）时返回空串。
+ * 收藏模式的收藏夹归位结果（后端 result.collection）：本批作品进了一级收藏夹多少条、
+ * 二级收藏夹建了几个。没有该字段（其它模式）时返回空串。
+ *
+ * 二级收藏夹（抖音收藏夹维度）一起报出来：只报「+N」会让人以为还是原来那种扁平合集，
+ * 看不出「作品被分到哪个夹」这层新语义。
  */
 function collectText(r: Record<string, unknown>): string {
   const c = (r.collection || {}) as Record<string, unknown>
@@ -240,7 +243,9 @@ function collectText(r: Record<string, unknown>): string {
   if (!name) return ''
   const added = Number(c.added ?? 0) || 0
   const created = c.created === true ? '（新建）' : ''
-  return `已加入「${name}」合集${created} +${added}`
+  const folders = Number(c.folder_count ?? 0) || 0
+  const folderText = folders ? ` · 二级收藏夹 ${folders} 个` : ''
+  return `已加入「${name}」${created} +${added}${folderText}`
 }
 
 /**
@@ -383,7 +388,7 @@ export function describeRunningTask(
   }
   if (stage === 'done') {
     return collectMode
-      ? '收尾中：写入统计、批次清单与「抖音收藏」合集'
+      ? '收尾中：写入统计、批次清单并归位到「抖音入库自动收藏」'
       : '收尾中：写入统计与批次清单'
   }
   return ''

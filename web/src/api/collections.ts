@@ -24,6 +24,12 @@ export interface CollectionOut {
   description: string | null
   kind: CollectionKind
   position: number
+  /** 父收藏夹 ID：一级为 null，二级为所属一级合集的 ID（最多两级） */
+  parent_id: number | null
+  /** 自动维护来源：'douyin' = 抖音同步自动建（名字不可改）；用户自建为 null */
+  auto_source: string | null
+  /** 直接子收藏夹数（一级节点用） */
+  child_count: number
   cover_inspiration_id: string | null
   cover_thumbnail_path: string | null
   /** 手动合集 = 成员数；智能合集 = null（进入合集页才懒计算精确数） */
@@ -49,6 +55,8 @@ export async function createCollection(payload: {
   name: string
   description?: string | null
   query_json?: SmartCollectionQuery | null
+  /** 非空即建二级收藏夹（父必须是一级合集） */
+  parent_id?: number | null
 }): Promise<CollectionOut> {
   const { data } = await apiClient.post<CollectionOut>('/collections', payload)
   return data

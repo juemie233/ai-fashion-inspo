@@ -50,6 +50,35 @@ const collections = ref<CollectionOut[]>([])
 const listLoading = ref(false)
 const currentId = ref<number | null>(null)
 const current = computed(() => collections.value.find((c) => c.id === currentId.value) ?? null)
+/** 当前二级收藏夹所属一级的名字（一级自己的内容区不显示面包屑） */
+const parentName = computed(() => {
+  const parentId = current.value?.parent_id
+  if (parentId == null) return null
+  return collections.value.find((c) => c.id === parentId)?.name ?? null
+})
+
+// 两级结构：一级（parent_id 为空）渲染成组，二级跟在各一级下面。
+// 后端已保证「一级后面紧跟它的二级」的顺序，这里只做分组。
+const rootCollections = computed(() => collections.value.filter((c) => c.parent_id === null))
+const childrenOf = (id: number) => collections.value.filter((c) => c.parent_id === id)
+/** 折叠的一级节点（默认展开：抖音收藏夹要一眼看得见） */
+const collapsed = ref<Set<number>>(new Set())
+
+function toggleCollapse(id: number) {
+  const next = new Set(collapsed.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsed.value = next
+}
+
+/** 列表项副标题：一级显示子夹数（+ 素材数），二级显示素材数 */
+function itemMeta(c: CollectionOut): string {
+  if (c.kind === 'smart') return '智能合集'
+  const own = c.item_count ?? 0
+  const children = childrenOf(c.id).length
+  if (children > 0) return `${children} 个收藏夹 · ${own} 个素材`
+  return `${own} 个素材`
+}
 
 async function loadCollections() {
   listLoading.value = true
@@ -124,10 +153,22 @@ async function handleEditorSaved() {
 // 手动合集新建/重命名共用弹窗
 const renameModalOpen = ref(false)
 const renameTargetId = ref<number | null>(null) // null = 新建手动合集
+// 新建时的父收藏夹：非空表示建二级（挂在选中的一级之下）
+const renameParentId = ref<number | null>(null)
 const renameForm = reactive({ name: '', description: '' })
 
 function openCreateManual() {
   renameTargetId.value = null
+  renameParentId.value = null
+  renameForm.name = ''
+  renameForm.description = ''
+  renameModalOpen.value = true
+}
+
+/** 在某个一级合集下新建二级收藏夹 */
+function openCreateChild(parentId: number) {
+  renameTargetId.value = null
+  renameParentId.value = parentId
   renameForm.name = ''
   renameForm.description = ''
   renameModalOpen.value = true
@@ -136,7 +177,12 @@ function openCreateManual() {
 function openRename() {
   const c = current.value
   if (!c) return
+  if (c.auto_source) {
+    Message.warning('该收藏夹由抖音同步自动维护，名称不可修改')
+    return
+  }
   renameTargetId.value = c.id
+  renameParentId.value = c.parent_id
   renameForm.name = c.name
   renameForm.description = c.description ?? ''
   renameModalOpen.value = true
@@ -151,8 +197,12 @@ async function confirmRename() {
   try {
     const { updateCollection: update, createCollection: create } = await import('@/api/collections')
     if (renameTargetId.value === null) {
-      await create({ name, description: renameForm.description.trim() || null })
-      Message.success('已创建合集')
+      await create({
+        name,
+        description: renameForm.description.trim() || null,
+        parent_id: renameParentId.value,
+      })
+      Message.success(renameParentId.value === null ? '已创建合集' : '已创建二级收藏夹')
     } else {
       await update(renameTargetId.value, {
         name,
@@ -405,32 +455,59 @@ onMounted(() => {
       </div>
 
       <a-spin :loading="listLoading" style="display: block">
-        <div
-          v-for="c in collections"
-          :key="c.id"
-          class="collection-item"
-          :class="{ active: c.id === currentId, 'drag-over': dragOverId === c.id }"
-          draggable="true"
-          @dragstart="onCollectionDragStart(c.id)"
-          @dragover.prevent="dragOverId = c.id"
-          @dragleave="dragOverId = null"
-          @drop.prevent="onCollectionDrop(c.id)"
-          @click="currentId = c.id"
-        >
-          <span class="collection-kind">{{ c.kind === 'smart' ? '⚡' : '📁' }}</span>
-          <div class="collection-info">
-            <div class="collection-name" :title="c.name">{{ c.name }}</div>
-            <div class="collection-meta">
-              {{ c.kind === 'smart' ? '智能' : `${c.item_count ?? 0} 个素材` }}
+        <!-- 两级：每个一级渲染成组，二级紧随其下（缩进 + 折角） -->
+        <template v-for="c in rootCollections" :key="c.id">
+          <div
+            class="collection-item"
+            :class="{ active: c.id === currentId, 'drag-over': dragOverId === c.id }"
+            draggable="true"
+            @dragstart="onCollectionDragStart(c.id)"
+            @dragover.prevent="dragOverId = c.id"
+            @dragleave="dragOverId = null"
+            @drop.prevent="onCollectionDrop(c.id)"
+            @click="currentId = c.id"
+          >
+            <span
+              v-if="c.child_count > 0"
+              class="collapse-toggle"
+              :title="collapsed.has(c.id) ? '展开二级收藏夹' : '收起二级收藏夹'"
+              @click.stop="toggleCollapse(c.id)"
+            >
+              {{ collapsed.has(c.id) ? '▸' : '▾' }}
+            </span>
+            <span v-else class="collapse-toggle placeholder"></span>
+            <span class="collection-kind">{{ c.kind === 'smart' ? '⚡' : '📁' }}</span>
+            <div class="collection-info">
+              <div class="collection-name" :title="c.name">{{ c.name }}</div>
+              <div class="collection-meta">{{ itemMeta(c) }}</div>
             </div>
           </div>
-        </div>
+
+          <template v-if="!collapsed.has(c.id)">
+            <div
+              v-for="child in childrenOf(c.id)"
+              :key="child.id"
+              class="collection-item child"
+              :class="{ active: child.id === currentId }"
+              @click="currentId = child.id"
+            >
+              <span class="collection-kind">└</span>
+              <div class="collection-info">
+                <div class="collection-name" :title="child.name">{{ child.name }}</div>
+                <div class="collection-meta">{{ itemMeta(child) }}</div>
+              </div>
+            </div>
+            <div v-if="c.kind !== 'smart'" class="child-create" @click="openCreateChild(c.id)">
+              ＋ 在此新建二级收藏夹
+            </div>
+          </template>
+        </template>
         <a-empty
           v-if="collections.length === 0 && !listLoading"
           description="暂无合集，点击上方按钮新建"
         />
       </a-spin>
-      <div class="drag-hint">拖动调整合集顺序</div>
+      <div class="drag-hint">拖动一级合集调整顺序；二级收藏夹由抖音同步维护</div>
     </aside>
 
     <!-- 右侧内容区 -->
@@ -439,7 +516,9 @@ onMounted(() => {
         <div class="content-header">
           <div class="content-title">
             <h2>{{ current.name }}</h2>
+            <span v-if="parentName" class="content-parent">{{ parentName }} /</span>
             <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">⚡ 智能合集</a-tag>
+            <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
             <span class="content-total">共 {{ total }} 个素材</span>
           </div>
           <div class="content-actions">
@@ -455,7 +534,14 @@ onMounted(() => {
                 <a-button size="small" type="primary" @click="saveItemOrder">保存顺序</a-button>
                 <a-button size="small" @click="ordering = false">取消排序</a-button>
               </template>
-              <a-button size="small" @click="openRename">重命名</a-button>
+              <a-tooltip
+                :disabled="!current.auto_source"
+                content="由抖音同步自动维护，名称以抖音侧的收藏夹名为准"
+              >
+                <a-button size="small" :disabled="!!current.auto_source" @click="openRename"
+                  >重命名</a-button
+                >
+              </a-tooltip>
             </template>
             <a-button size="small" status="danger" type="text" @click="confirmDelete"
               >删除合集</a-button
@@ -556,7 +642,13 @@ onMounted(() => {
     <!-- 手动合集新建/重命名 -->
     <a-modal
       :visible="renameModalOpen"
-      :title="renameTargetId === null ? '新建手动合集' : '编辑合集信息'"
+      :title="
+        renameTargetId !== null
+          ? '编辑合集信息'
+          : renameParentId !== null
+            ? `在「${collections.find((c) => c.id === renameParentId)?.name ?? ''}」下新建二级收藏夹`
+            : '新建手动合集'
+      "
       :width="460"
       @update:visible="renameModalOpen = $event"
     >
@@ -661,6 +753,35 @@ onMounted(() => {
 .collection-item.drag-over {
   border-top: 2px solid #2080f0;
 }
+/* 二级收藏夹：缩进 + 更淡的字色，视觉上从属于上面那个一级 */
+.collection-item.child {
+  padding-left: 26px;
+}
+.collection-item.child .collection-name {
+  font-size: 12.5px;
+  color: #4e5969;
+}
+.collapse-toggle {
+  width: 12px;
+  font-size: 10px;
+  color: #86909c;
+  flex: none;
+  text-align: center;
+}
+.collapse-toggle.placeholder {
+  visibility: hidden;
+}
+.child-create {
+  padding: 4px 10px 4px 26px;
+  font-size: 11px;
+  color: #86909c;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.child-create:hover {
+  color: #2080f0;
+  background: #f5f7fa;
+}
 .collection-kind {
   font-size: 14px;
 }
@@ -726,6 +847,11 @@ onMounted(() => {
 .content-total {
   font-size: 13px;
   color: #999;
+}
+/* 二级收藏夹的父级面包屑（一级名下没有这段） */
+.content-parent {
+  font-size: 13px;
+  color: #86909c;
 }
 .content-actions {
   display: flex;

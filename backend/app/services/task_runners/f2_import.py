@@ -27,6 +27,10 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.collection import (
+    DOUYIN_AUTO_SOURCE as COLLECTION_DOUYIN_AUTO_SOURCE,
+    DOUYIN_ROOT_COLLECTION_NAME as COLLECTION_DOUYIN_ROOT_NAME,
+)
 from app.models.task import TaskQueue
 from app.services.task_runners.common import utcnow
 
@@ -62,8 +66,17 @@ _LIKE_PROGRESS_HALF_SECONDS = 900
 """
 PERSONAL_FETCH_MODES = ("like", "collection")
 
-"""收藏模式入库后聚合到的合集名（收藏合计里据此看到数量与体积）。"""
-COLLECT_COLLECTION_NAME = "抖音收藏"
+"""收藏模式的一级收藏夹：抖音侧自动收藏的总入口（二级是各个抖音收藏夹）。
+
+名字与来源标记的唯一口径在 ``app.models.collection``（迁移里也建同名节点）。
+"""
+DOUYIN_ROOT_COLLECTION_NAME = COLLECTION_DOUYIN_ROOT_NAME
+
+"""一级自动收藏夹的维护来源标记（自动合集禁止改名，可删除后由同步重建）。"""
+DOUYIN_AUTO_SOURCE = COLLECTION_DOUYIN_AUTO_SOURCE
+
+"""收藏夹归属清单文件名（与 scripts/f2_collects.py 的常量保持一致）。"""
+_COLLECT_FOLDER_MAP_NAME = "_collect_folders.json"
 
 
 def _personal_scan_root(f2, fetch_mode: str):
@@ -73,6 +86,98 @@ def _personal_scan_root(f2, fetch_mode: str):
         if fetch_mode == "collection"
         else f2.DEFAULT_F2_LIKE_ROOT
     )
+
+
+def load_collect_folder_map(root) -> dict[str, list[str]]:
+    """读「作品 ID → 抖音收藏夹」清单，返回 ``{收藏夹名: [作品 ID, ...]}``。
+
+    清单由按夹下载时写出（见 ``scripts/f2_collects.py``）：文件平铺在昵称目录下，
+    路径里不带收藏夹名，只有这份清单能回答「这件作品属于哪个夹」。
+
+    多个昵称目录（换过账号/改过昵称）的清单会合并；同名夹取并集。清单缺失
+    （平铺 ``-M collection`` 下载、旧批次）时返回空字典——此时作品只进一级节点。
+
+    Args:
+        root: 收藏产物根目录（…/douyin/collection）。
+
+    Returns:
+        收藏夹名 → 作品 ID 列表（README 见 :data:`_COLLECT_FOLDER_MAP_NAME`）。
+    """
+    import json
+
+    base = Path(root)
+    if not base.is_dir():
+        return {}
+    # 清单落在「昵称」目录下：既认根目录直下，也认一层子目录（f2 的产物结构）
+    candidates = [base / _COLLECT_FOLDER_MAP_NAME]
+    candidates += [
+        child / _COLLECT_FOLDER_MAP_NAME
+        for child in sorted(base.iterdir())
+        if child.is_dir()
+    ]
+    merged: dict[str, set[str]] = {}
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError) as exc:
+            logger.warning(f"收藏夹清单读取失败（忽略该文件）：{path} -> {exc}")
+            continue
+        for entry in (payload.get("folders") or {}).values():
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            bucket = merged.setdefault(name, set())
+            bucket.update(str(a) for a in (entry.get("aweme_ids") or []) if a)
+    return {name: sorted(ids) for name, ids in merged.items() if ids}
+
+
+async def ensure_collection(
+    db: AsyncSession,
+    name: str,
+    parent_id: int | None = None,
+    auto_source: str | None = None,
+    description: str | None = None,
+) -> tuple[int, bool]:
+    """按（名字 + 父）取合集，不存在则建；返回 ``(id, 是否新建)``。
+
+    幂等：同一批/多批同步反复调用只会建一次。并发下靠唯一索引兜底——两个任务同时
+    建同一个夹时后者拿到 409，这里回退成「查询已有」而不是让整个任务失败。
+    """
+    from fastapi import HTTPException
+
+    from app.models.collection import Collection
+    from app.services import collection_service
+
+    query = select(Collection).where(Collection.name == name)
+    query = (
+        query.where(Collection.parent_id.is_(None))
+        if parent_id is None
+        else query.where(Collection.parent_id == parent_id)
+    )
+    existing = (await db.execute(query)).scalars().first()
+    if existing is not None:
+        return int(existing.id), False
+    try:
+        data = await collection_service.create_collection(
+            db,
+            name=name,
+            description=description,
+            query_json=None,
+            parent_id=parent_id,
+            auto_source=auto_source,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        await db.rollback()
+        again = (await db.execute(query)).scalars().first()
+        if again is None:
+            raise
+        return int(again.id), False
+    return int(data["id"]), True
+
 
 
 def _personal_label(fetch_mode: str) -> str:
@@ -760,20 +865,24 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     )
     # 合集补齐的范围（仅收藏模式）：本次扫描到的作品 ∪ 本次枚举到但被 F 跳过（已在库）的作品
     collect_extras: list[str] = []
+    # 抖音收藏夹归属（作品 ID → 收藏夹名）：来自按夹下载写的清单；平铺下载时为空
+    collect_folder_map: dict[str, list[str]] = {}
     if fetch_mode == "collection":
         collect_extras = list(collect_scope.get("aweme_ids") or [])
         collect_extras += list(
             (fetch_summary.get("collect") or {}).get("skipped_existing_ids") or []
         )
+        collect_folder_map = load_collect_folder_map(_personal_scan_root(f2, fetch_mode))
     if not to_import:
         # 本批没有要入库的文件，但收藏模式仍要把「已在库」的部分补进合集，
         # 否则零新增的那几轮合集永远不更新
-        if collect_extras:
+        if collect_extras or collect_folder_map:
             await _aggregate_collect_stage(
                 db,
                 task,
                 {"ids": []},
                 extra_ids=await collect_library_ids_by_aweme(db, collect_extras),
+                folder_map=collect_folder_map,
             )
         return
 
@@ -788,15 +897,16 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         db, task, result, personal_mode, register_bloggers
     )
 
-    # ── 阶段 3c：「我的收藏」把本批素材聚合进「抖音收藏」合集 ──
+    # ── 阶段 3c：「我的收藏」按抖音收藏夹归位到两级收藏夹 ──
     if fetch_mode == "collection":
         # 合集 = 本批新入库的 + 本次扫描/枚举到但已在库的（E：否则「先喜欢后收藏」
-        # 的作品永远进不了合集）
+        # 的作品永远进不了合集）；二级归属来自按夹下载写的清单（P）
         await _aggregate_collect_stage(
             db,
             task,
             result,
             extra_ids=await collect_library_ids_by_aweme(db, collect_extras),
+            folder_map=collect_folder_map,
         )
 
     # ── 收尾 ──
@@ -1556,10 +1666,21 @@ async def _aggregate_collect_stage(
     task: TaskQueue,
     result: dict,
     extra_ids: list[str] | None = None,
+    folder_map: dict[str, list[str]] | None = None,
 ) -> dict | None:
-    """阶段 3c：「我的收藏」把本批素材聚合进「抖音收藏」合集。
+    """阶段 3c：「我的收藏」把作品归位到**两级**收藏夹。
 
-    为什么用合集而不是标签：合集的语义就是「一批素材的集合」（收藏合计里直接看到数量
+    结构（用户口径，见 models/collection.py）：
+
+    - 一级「抖音入库自动收藏」：抖音自动收藏的总入口，**同时汇总全部作品**
+      （点进去就是收藏全集，不会因为分了二级反而看不到总数）；
+    - 二级：名字与抖音侧收藏夹一一对应（归属来自按夹下载时写的
+      ``_collect_folders.json``，见 :func:`load_collect_folder_map`）。
+
+    没有归属信息的作品（平铺 ``-M collection`` 下载、清单缺失、清单里没记到的）
+    只进一级节点——宁可少一层细分，也不要猜一个收藏夹名。
+
+    为什么用合集而不是标签：合集的语义就是「一批素材的集合」（合集里直接看到数量
     与体积），而标签是 AI/手动语义、会进入标签治理（去重/合并/健康扫描）——收藏来源是
     事实而非语义，不该污染标签体系。
 
@@ -1573,55 +1694,78 @@ async def _aggregate_collect_stage(
     """
     imported_ids = [str(i) for i in (result.get("ids") or []) if i]
     target_ids = list(dict.fromkeys(imported_ids + [str(i) for i in (extra_ids or []) if i]))
-    if not target_ids:
+    folder_map = folder_map or {}
+    if not target_ids and not folder_map:
         return None
     # 先把「本批入库」的集合算出来：下面统计「已在库补入」要按元素判定，
     # 写成 `i not in set(imported_ids)` 会每条都重建一次集合（O(n²)）
     imported_set = set(imported_ids)
     from app.services import collection_service
-    from app.models.collection import Collection
 
     try:
-        collection = (
-            await db.execute(
-                select(Collection).where(Collection.name == COLLECT_COLLECTION_NAME)
-            )
-        ).scalars().first()
-        if collection is None:
-            data = await collection_service.create_collection(
+        root_id, root_created = await ensure_collection(
+            db,
+            DOUYIN_ROOT_COLLECTION_NAME,
+            auto_source=DOUYIN_AUTO_SOURCE,
+            description="由「获取我的收藏」自动聚合：二级收藏夹与抖音侧的收藏夹一一对应",
+        )
+
+        # 二级：逐个抖音收藏夹归位（空夹不建——里头的作品可能还没入库）
+        folder_stats: list[dict] = []
+        attributed: set[str] = set()
+        for folder_name in sorted(folder_map):
+            ids = await collect_library_ids_by_aweme(db, folder_map[folder_name])
+            if not ids:
+                continue
+            child_id, child_created = await ensure_collection(
                 db,
-                name=COLLECT_COLLECTION_NAME,
-                description="由「一键获取我的收藏」自动聚合：本合集的素材来自抖音收藏列表",
-                query_json=None,
+                folder_name,
+                parent_id=root_id,
+                auto_source=DOUYIN_AUTO_SOURCE,
+                description=f"抖音收藏夹「{folder_name}」（随「获取我的收藏」自动同步）",
             )
-            collection_id = int(data["id"])
-            created = True
-        else:
-            collection_id = int(collection.id)
-            created = False
-        added = await collection_service.add_inspirations(db, collection_id, target_ids)
+            child_added = await collection_service.add_inspirations(db, child_id, ids)
+            attributed.update(ids)
+            folder_stats.append(
+                {
+                    "id": child_id,
+                    "name": folder_name,
+                    "created": child_created,
+                    "added": int(child_added.get("added") or 0),
+                    "skipped": int(child_added.get("skipped") or 0),
+                }
+            )
+
+        # 一级节点汇总：本批入库 + 已在库补入 + 各二级夹归位的作品（去重）
+        root_ids = list(dict.fromkeys([*target_ids, *sorted(attributed)]))
+        added = await collection_service.add_inspirations(db, root_id, root_ids)
         stats = {
-            "id": collection_id,
-            "name": COLLECT_COLLECTION_NAME,
-            "created": created,
+            "id": root_id,
+            "name": DOUYIN_ROOT_COLLECTION_NAME,
+            "created": root_created,
             "added": int(added.get("added") or 0),
             "skipped": int(added.get("skipped") or 0),
             # 本次是「已在库、未重新入库但补进合集」的条数（让前端/日志能解释合集为何
             # 比「本批入库」多）
-            "from_existing": sum(1 for i in target_ids if i not in imported_set),
+            "from_existing": sum(1 for i in root_ids if i not in imported_set),
+            # 二级收藏夹（抖音收藏夹维度）
+            "folders": folder_stats,
+            "folder_count": len(folder_stats),
+            "attributed": len(attributed),
         }
         task.result = {**task.result, "collection": stats}
         await db.commit()
         logger.info(
-            f"f2「我的收藏」已聚合进合集「{COLLECT_COLLECTION_NAME}」#{collection_id}："
-            f"新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条，"
-            f"其中已在库补入 {stats['from_existing']} 条）"
+            f"f2「我的收藏」已归位到「{DOUYIN_ROOT_COLLECTION_NAME}」#{root_id}："
+            f"一级新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条，"
+            f"其中已在库补入 {stats['from_existing']} 条）；"
+            f"二级收藏夹 {len(folder_stats)} 个，共归位 {len(attributed)} 条"
         )
         return stats
     except Exception as exc:  # noqa: BLE001 —— 素材已入库，聚合失败不该让任务失败
         await db.rollback()
-        task.error = f"加入「{COLLECT_COLLECTION_NAME}」合集失败（素材已入库）：{exc}"
-        logger.warning(f"f2 收藏合集聚合失败：{exc}")
+        task.error = f"归位到「{DOUYIN_ROOT_COLLECTION_NAME}」收藏夹失败（素材已入库）：{exc}"
+        logger.warning(f"f2 收藏合集归位失败：{exc}")
         return None
 
 

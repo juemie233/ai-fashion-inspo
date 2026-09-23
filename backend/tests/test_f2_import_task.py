@@ -58,11 +58,11 @@ async def test_status_exposes_collect_fields(client):
     assert info["collect_available"] == info["like_available"]
 
 
-async def test_collect_stage_aggregates_into_douyin_collection(client, upload):
-    """收藏模式：本批入库素材自动聚合进「抖音收藏」合集，且重复调用不重复加。
+async def test_collect_stage_aggregates_into_douyin_root_collection(client, upload):
+    """收藏模式：本批入库素材归位到一级「抖音入库自动收藏」，且重复调用不重复加。
 
-    这是本功能与「我的喜欢」唯一不同的收尾步骤：素材入库后要能在收藏合计里看到，
-    所以落在一个固定名字的手动合集上（幂等：已加入的不再重复）。
+    一级节点在迁移里就建好了（自动合集），所以这里 created 为 False；幂等由
+    collection_items 的唯一约束保证。
     """
     from sqlalchemy import select
 
@@ -82,10 +82,10 @@ async def test_collect_stage_aggregates_into_douyin_collection(client, upload):
 
         stats = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
         assert stats is not None
-        assert stats["name"] == "抖音收藏"
-        assert stats["created"] is True
+        assert stats["name"] == "抖音入库自动收藏"
         assert stats["added"] == 2
-        assert task.result["collection"]["name"] == "抖音收藏"
+        assert stats["folder_count"] == 0  # 没有归属清单 → 不建二级
+        assert task.result["collection"]["name"] == "抖音入库自动收藏"
 
         # 幂等：同一批再跑一次不重复加入
         again = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
@@ -94,8 +94,12 @@ async def test_collect_stage_aggregates_into_douyin_collection(client, upload):
         assert again["skipped"] == 2
 
         collection = (
-            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
         ).scalars().one()
+        assert collection.parent_id is None
+        assert collection.auto_source == "douyin"
         items = (
             await db.execute(
                 select(CollectionItem).where(CollectionItem.collection_id == collection.id)
@@ -104,8 +108,114 @@ async def test_collect_stage_aggregates_into_douyin_collection(client, upload):
         assert {item.inspiration_id for item in items} == set(ids)
 
 
+async def test_collect_stage_builds_second_level_from_folder_map(client):
+    """有归属清单时建二级收藏夹：名字 = 抖音收藏夹名，一级节点同时汇总全部作品。
+
+    这是本次修复的核心：原先所有收藏作品都倒进一个扁平合集，看不出抖音侧的收藏夹
+    维度；现在二级对应收藏夹，一级是总入口（点进去能看到收藏全集）。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+
+    # 两件已在库的收藏作品（平台 ID 形态与真实数据一致，供按作品 ID 反查）
+    async with async_session() as db:
+        for aweme_id in ("7400000000000000001", "7400000000000000002"):
+            db.add(
+                Inspiration(
+                    id=f"collect-{aweme_id}",
+                    source_type="douyin",
+                    source_platform_id=f"f2:{aweme_id}#image_1",
+                    source_url=f"https://www.douyin.com/note/{aweme_id}",
+                    file_path=f"images/2026-09/{aweme_id}.webp",
+                    media_type="image",
+                )
+            )
+        await db.commit()
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="f2_import", status="running", progress=90, total=0, done=0,
+            result={}, max_retries=1,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        stats = await f2_runner._aggregate_collect_stage(
+            db,
+            task,
+            {"ids": []},
+            extra_ids=["collect-7400000000000000001", "collect-7400000000000000002"],
+            folder_map={
+                "秘书OL": ["7400000000000000001"],
+                "股票": ["7400000000000000002"],
+                # 清单里有、但库里没有的夹：不建空合集
+                "哲学": ["7400000000000000999"],
+            },
+        )
+
+        assert stats is not None
+        assert stats["name"] == "抖音入库自动收藏"
+        assert stats["folder_count"] == 2
+        assert {f["name"] for f in stats["folders"]} == {"秘书OL", "股票"}
+        assert stats["attributed"] == 2
+
+        root = (
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
+        ).scalars().one()
+        children = (
+            await db.execute(
+                select(Collection).where(Collection.parent_id == root.id)
+            )
+        ).scalars().all()
+        assert {c.name for c in children} == {"秘书OL", "股票"}
+        assert all(c.auto_source == "douyin" for c in children)
+
+        async def _members(cid: int) -> set[str]:
+            rows = await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == cid
+                )
+            )
+            return set(rows.scalars().all())
+
+        # 一级汇总全集，二级各自归位
+        assert await _members(root.id) == {
+            "collect-7400000000000000001",
+            "collect-7400000000000000002",
+        }
+        by_name = {c.name: await _members(c.id) for c in children}
+        assert by_name == {
+            "秘书OL": {"collect-7400000000000000001"},
+            "股票": {"collect-7400000000000000002"},
+        }
+
+    # 平铺下载（无归属清单）时只进一级，不猜收藏夹名
+    async with async_session() as db:
+        task = TaskQueue(
+            type="f2_import", status="running", progress=90, total=0, done=0,
+            result={}, max_retries=1,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        flat = await f2_runner._aggregate_collect_stage(
+            db,
+            task,
+            {"ids": []},
+            extra_ids=["collect-7400000000000000001"],
+            folder_map={},
+        )
+        assert flat["folder_count"] == 0
+
+
 async def test_collect_stage_noop_without_imported_ids(client):
-    """没有入库素材时不建空合集（避免「抖音收藏」被误建）。"""
+    """没有入库素材、也没有收藏夹归属时不写结果（不产生空合集聚合）。"""
     from app.models.task import TaskQueue
 
     async with async_session() as db:
@@ -1777,10 +1887,10 @@ def _stub_collect_fetch(monkeypatch, calls: dict | None = None):
 async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     client, f2_like_tree, auto_settings, monkeypatch
 ):
-    """收藏端到端：走收藏命令与收藏产物目录，入库后自动聚合进「抖音收藏」合集。
+    """收藏端到端：走收藏命令与收藏产物目录，入库后归位到一级「抖音入库自动收藏」。
 
     这是本功能与「我的喜欢」唯一的差别所在，其余（下载阶段、五层判重、来源作者
-    补登记）都是共用实现——所以这里重点锁「跑的是收藏链路」+「素材落进合集」。
+    补登记）都是共用实现——所以这里重点锁「跑的是收藏链路」+「素材落进收藏夹」。
     """
     from sqlalchemy import select
 
@@ -1804,13 +1914,16 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
         assert stored.result["fetch"]["mode"] == "collection"
         assert stored.result["import"]["imported"] == 2
         collection_stats = stored.result["collection"]
-        assert collection_stats["name"] == "抖音收藏"
-        assert collection_stats["created"] is True
+        assert collection_stats["name"] == "抖音入库自动收藏"
         assert collection_stats["added"] == 2
+        assert collection_stats["folder_count"] == 0  # 平铺收藏命令没有夹归属
 
         collection = (
-            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
         ).scalars().one()
+        assert collection.parent_id is None and collection.auto_source == "douyin"
         member_ids = (
             await db.execute(
                 select(CollectionItem.inspiration_id).where(
@@ -1890,7 +2003,7 @@ async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
         assert fetch["collect"]["folders"][0]["name"] == "秘书OL"
         assert fetch["collect"]["works"] == 1
         assert fetch["mode"] == "collection"
-        # 落盘的那张图照常入库，并聚合进「抖音收藏」合集
+        # 落盘的那张图照常入库，并归位到一级「抖音入库自动收藏」
         assert stored.result["import"]["imported"] == 1
         assert stored.result["collection"]["added"] == 1
 
@@ -1905,7 +2018,7 @@ async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
 async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_collection(
     client, auto_settings, monkeypatch
 ):
-    """E：已在库、本次没重新入库（被 F 跳过）的收藏作品也要补进「抖音收藏」合集。"""
+    """E：已在库、本次没重新入库（被 F 跳过）的收藏作品也要补进「抖音入库自动收藏」。"""
     from sqlalchemy import select
 
     from app.models.collection import Collection, CollectionItem
@@ -1976,7 +2089,9 @@ async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_col
         assert stats["added"] == 1
 
         collection = (
-            await db.execute(select(Collection).where(Collection.name == "抖音收藏"))
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
         ).scalars().one()
         member_ids = (
             await db.execute(

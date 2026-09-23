@@ -157,6 +157,125 @@ def test_name_length_validation(client):
     assert client.post("/api/collections", json={"name": "x" * 51}).status_code == 422
 
 
+# ── 两级收藏夹 ──
+
+
+async def test_ensure_root_collections_is_idempotent(client):
+    """两个一级收藏夹由 ensure_root_collections 幂等保证存在。
+
+    结构（用户口径）：系统入库手动收藏 = 智能合集（is_favorite）；
+    抖音入库自动收藏 = 手动合集 + auto_source=douyin（二级挂在它下面）。
+
+    注：测试的 clean_state 每个用例前清空所有表，所以这里显式调用（生产由
+    启动钩子 + 迁移负责）。
+    """
+    from app.database import async_session
+    from app.services import collection_service
+
+    async with async_session() as db:
+        first = await collection_service.ensure_root_collections(db)
+        second = await collection_service.ensure_root_collections(db)
+    assert first == second  # 幂等：第二次不新建
+
+    listed = {c["name"]: c for c in client.get("/api/collections").json()}
+    manual = listed[collection_service.MANUAL_ROOT_COLLECTION_NAME]
+    assert manual["kind"] == "smart"
+    assert manual["parent_id"] is None
+    assert manual["query_json"] == {"is_favorite": True}
+
+    douyin = listed[collection_service.DOUYIN_ROOT_COLLECTION_NAME]
+    assert douyin["kind"] == "manual"
+    assert douyin["parent_id"] is None
+    assert douyin["auto_source"] == "douyin"
+    assert douyin["id"] == first[collection_service.DOUYIN_ROOT_COLLECTION_NAME]
+
+
+def test_child_collection_and_per_level_name_uniqueness(client, upload):
+    """二级收藏夹：挂在父下、同层重名 409、跨层可同名、最多两级。"""
+    parent = create_collection(client, "父级")
+    child = client.post(
+        "/api/collections", json={"name": "穿搭", "parent_id": parent["id"]}
+    )
+    assert child.status_code == 201, child.text
+    child = child.json()
+    assert child["parent_id"] == parent["id"]
+    assert child["auto_source"] is None
+
+    # 同层重名 → 409；换个父（或一级）同名 → 允许（否则抖音收藏夹名会和用户自建撞死）
+    assert (
+        client.post(
+            "/api/collections", json={"name": "穿搭", "parent_id": parent["id"]}
+        ).status_code
+        == 409
+    )
+    assert client.post("/api/collections", json={"name": "穿搭"}).status_code == 201
+
+    # 三级：不能挂在二级之下
+    deep = client.post(
+        "/api/collections", json={"name": "更深一层", "parent_id": child["id"]}
+    )
+    assert deep.status_code == 400
+
+    # 不存在的父 → 404
+    assert (
+        client.post(
+            "/api/collections", json={"name": "孤儿", "parent_id": 99999}
+        ).status_code
+        == 404
+    )
+
+
+def test_level_one_lists_children_right_after_itself(client):
+    """列表顺序：一级后面紧跟它的二级（前端按 parent_id 分组即可渲染两级）。"""
+    parent = create_collection(client, "带子的父级")
+    child = client.post(
+        "/api/collections", json={"name": "子夹甲", "parent_id": parent["id"]}
+    ).json()
+
+    listed = client.get("/api/collections").json()
+    ids = [c["id"] for c in listed]
+    assert ids[ids.index(parent["id"]) + 1] == child["id"]
+    assert listed[ids.index(parent["id"])]["child_count"] == 1
+
+
+async def test_auto_collection_cannot_be_renamed(client):
+    """自动同步的收藏夹名由抖音侧决定：改名 400（否则下次同步会再建一个）。
+
+    可删除：删掉后如果抖音那边还有这个夹，下一次同步会按需重建。
+    """
+    from app.database import async_session
+    from app.services import collection_service
+
+    async with async_session() as db:
+        roots = await collection_service.ensure_root_collections(db)
+    douyin_id = roots[collection_service.DOUYIN_ROOT_COLLECTION_NAME]
+
+    r = client.patch(f"/api/collections/{douyin_id}", json={"name": "我改的名字"})
+    assert r.status_code == 400
+    assert "自动维护" in r.json()["detail"]
+
+    assert client.delete(f"/api/collections/{douyin_id}").status_code == 204
+    # 删掉后再 ensure 会重建（自愈）；SQLite 未用 AUTOINCREMENT，id 可能被复用，
+    # 所以判「名字回来了」而不是判 id 不同
+    async with async_session() as db:
+        again = await collection_service.ensure_root_collections(db)
+    assert collection_service.DOUYIN_ROOT_COLLECTION_NAME in again
+    names = [c["name"] for c in client.get("/api/collections").json()]
+    assert names.count(collection_service.DOUYIN_ROOT_COLLECTION_NAME) == 1
+
+
+def test_deleting_parent_removes_children(client):
+    """删父合集：二级一并删除（它们是父的子分类，单独留下没有意义）。"""
+    parent = create_collection(client, "将被删的父级")
+    child = client.post(
+        "/api/collections", json={"name": "跟着走的子夹", "parent_id": parent["id"]}
+    ).json()
+
+    assert client.delete(f"/api/collections/{parent['id']}").status_code == 204
+    remaining = {c["id"] for c in client.get("/api/collections").json()}
+    assert child["id"] not in remaining
+
+
 # ── 排序 ──
 
 

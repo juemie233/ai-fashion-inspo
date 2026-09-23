@@ -45,7 +45,8 @@ async def create_f2_import(
         pattern="^(post|like|collection)$",
         description=(
             "post=博主主页作品（默认）；like=我的喜欢（点赞）；"
-            "collection=我的收藏（抖音收藏列表，入库后自动聚合进「抖音收藏」合集）。"
+            "collection=我的收藏（抖音收藏列表，入库后归位到「抖音入库自动收藏」，"
+            "按抖音收藏夹建二级收藏夹）。"
             "后两者都需要 like_user"
         ),
     ),
@@ -115,7 +116,8 @@ async def create_f2_import(
             `collection`=我的收藏（抖音收藏列表）。
             后两者（「我的列表」）都不逐作者、不给时间窗口，也不做作者白名单
             （点赞/收藏的作品天然跨作者），入库仍走五层判重；collection 模式在入库
-            之后会把本批素材聚合进「抖音收藏」合集（收藏合计里直接看到数量与体积）。
+            之后把作品归位到「抖音入库自动收藏」收藏夹，二级收藏夹与抖音侧的收藏夹
+            一一对应（归属来自按夹下载时写的清单，平铺下载时只进一级节点）。
             注：**f2 的点赞/收藏模式根本不读 `-i`**（源码实测），所以这里传不传日期
             窗口都一样——能收窄翻页量的只有 `like_max_counts`。
         like_user: mode=like/collection 时的「我的主页链接 / sec_user_id」
@@ -329,7 +331,7 @@ async def set_f2_auto(
         pattern="^(post|like|collection)$",
         description=(
             "自动获取走哪个入口：post=已登记博主主页作品（默认）；"
-            "like=我的喜欢；collection=我的收藏（入库后聚合进「抖音收藏」合集）。"
+            "like=我的喜欢；collection=我的收藏（入库后归位到「抖音入库自动收藏」）。"
             "后两者需要先配置「我的主页链接」"
         ),
     ),

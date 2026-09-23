@@ -54,6 +54,8 @@ class CollectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=50, description="合集名 1~50 字")
     description: str | None = None
     query_json: SmartQueryJSON | None = None
+    # 非空即建二级收藏夹（父必须是一级；最多两级，见 models/collection.py）
+    parent_id: int | None = Field(None, description="父收藏夹 ID（二级才有）")
 
 
 class CollectionUpdate(BaseModel):
@@ -91,6 +93,9 @@ class CollectionOut(BaseModel):
     description: str | None = None
     kind: str  # manual 手动合集 / smart 智能合集
     position: int
+    parent_id: int | None = None  # 二级收藏夹的父 ID；一级为 null
+    auto_source: str | None = None  # 自动维护来源（douyin）；用户自建为 null
+    child_count: int = 0  # 直接子收藏夹数（一级节点用）
     cover_inspiration_id: str | None = None
     cover_thumbnail_path: str | None = None
     item_count: int | None = None  # 手动 = 成员数；智能 = null（懒计算）
@@ -113,7 +118,7 @@ class CollectionOut(BaseModel):
 
 @router.get("", response_model=list[CollectionOut])
 async def list_collections(db: AsyncSession = Depends(get_db)) -> list[CollectionOut]:
-    """获取合集列表（按 position 升序）。
+    """获取合集列表（一级按 position 升序，二级紧随其父）。
 
     手动合集 item_count 为成员数；智能合集为 null（懒计算，避免进列表页全量求值）。
     """
@@ -125,12 +130,16 @@ async def list_collections(db: AsyncSession = Depends(get_db)) -> list[Collectio
 async def create_collection(
     body: CollectionCreate, db: AsyncSession = Depends(get_db)
 ) -> CollectionOut:
-    """创建合集（重名 409）；带 query_json 时创建智能合集。"""
+    """创建合集（同层重名 409）；带 query_json 时创建智能合集。
+
+    ``parent_id`` 非空时创建二级收藏夹（父必须是一级合集）。
+    """
     data = await collection_service.create_collection(
         db,
         body.name,
         description=body.description,
         query_json=body.query_json.to_storage() if body.query_json else None,
+        parent_id=body.parent_id,
     )
     return CollectionOut(**data)
 
