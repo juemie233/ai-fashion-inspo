@@ -374,7 +374,22 @@ async function onCollectionDrop(targetId: number) {
 // ── 拖拽排序：合集内素材（排序模式下的缩略图条带） ──
 
 const ordering = ref(false)
+// 拖拽中的成员 ID：只在 onItemDragStart/onItemDrop 之间传递，不需要响应式，
+// 所以用普通变量（**并且在模板里通过函数赋值**，见下）
 let draggingItemId: string | null = null
+
+/**
+ * 记录正在拖拽的成员。
+ *
+ * 为什么不在模板里直接写 `@dragstart="draggingItemId = it.id"`：那是全项目唯一一处
+ * 「模板内给普通 let 变量赋值」的写法，IDE 的 Vue 语言服务会把该绑定按初始值推断成
+ * `null` 从而报 2322（`不能将类型"string"分配给类型"null"`），而 vue-tsc 命令行不报
+ * ——两边口径不一致。包一层函数既消除歧义，也与上面合集拖拽（onCollectionDragStart）
+ * 的写法保持一致。
+ */
+function onItemDragStart(id: string) {
+  draggingItemId = id
+}
 
 function enterOrdering() {
   if (total.value > 200) {
@@ -598,7 +613,7 @@ onMounted(() => {
               :key="it.id"
               class="ordering-card"
               draggable="true"
-              @dragstart="draggingItemId = it.id"
+              @dragstart="onItemDragStart(it.id)"
               @dragover.prevent
               @drop.prevent="onItemDrop(it.id)"
             >
