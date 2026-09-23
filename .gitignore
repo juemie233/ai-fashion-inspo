@@ -23,6 +23,10 @@ backend/storage/
 # 裁剪脚本候选清单（运行时数据）
 scripts/crop_candidates.json
 
+# OpenViking 同步增量状态（运行时数据，机器相关；删除即退化为全量同步）
+scripts/.sync_openviking_state.json
+scripts/.sync_openviking_state.json.tmp
+
 # 手动数据备份
 backups/
 
