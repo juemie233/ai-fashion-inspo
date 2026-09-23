@@ -37,6 +37,9 @@ export interface Person {
   ip_location?: string | null;
   /** 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物 */
   face_registered?: boolean;
+  /** 按人人脸匹配阈值（0~1 余弦相似度）：null/undefined = 跟随全局配置；
+   *  对同一人不同角度/妆造导致特征波动大的情况可单独调低，不影响他人 */
+  face_match_threshold?: number | null;
   profile_url?: string | null;
   /** 头像相对路径（相对 storage_root）：只有手动设置一条来源
    *  （POST /api/bloggers/{id}/avatar：从 TA 的素材选一张或本地上传；为空则显示首字占位） */

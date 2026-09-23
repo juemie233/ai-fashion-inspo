@@ -26,6 +26,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
 import { pollTaskUntilIdle } from '@/utils/taskPollUntilIdle'
 import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
+import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 import { usePolling } from '@/composables/usePolling'
 import StatusTag from '@/components/common/StatusTag.vue'
 import FaceClusterTab from '@/components/person/face/FaceClusterTab.vue'
@@ -46,6 +47,14 @@ const autoMatch = ref(false)
 const starting = ref(false)
 const cancelling = ref(false)
 const matching = ref(false)
+
+// 人脸子服务可用性：离线时**事前**提示并禁用动作，而不是点了按钮才拿到 503。
+// 探测与结果缓存在 composable 内，人物详情页的人脸注册面板共用同一次探测。
+const {
+  status: faceService,
+  offline: faceServiceOffline,
+  load: loadFaceServiceStatus,
+} = useFaceServiceStatus()
 
 /** 是否有任务在运行（决定轮询与按钮态）；
  *  聚类任务状态（clusterTask）声明于下方聚类区，computed 惰性求值无时序问题 */
@@ -464,6 +473,7 @@ const { start: startTaskPolling } = usePolling({
 })
 
 onMounted(async () => {
+  await loadFaceServiceStatus()
   await refreshTasks()
   await refreshAll()
   await loadClusterGroups()
@@ -556,6 +566,21 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
 <template>
   <div class="face-scan-page">
+    <!-- 子服务离线提示：事前给出原因，而不是等点了按钮才报 503 -->
+    <a-alert
+      v-if="faceServiceOffline"
+      type="warning"
+      class="face-service-alert"
+      show-icon
+      title="人脸识别子服务未启动或不可达"
+    >
+      <div>{{ faceService?.message }}</div>
+      <div class="face-service-alert-tip">
+        人脸相关动作（扫描 / 重匹配 / 注册 / 检测）已暂时禁用。启动 face-service
+        后刷新本页即可恢复； 若 FACE_SERVICE_URL 未配置，则人脸功能整体不可用。
+      </div>
+    </a-alert>
+
     <!-- 任务卡片 -->
     <a-card size="small" class="task-card" title="人脸库扫描">
       <template #extra>
@@ -575,12 +600,17 @@ function filterOption(input: string, option: { label?: string }): boolean {
             size="small"
             type="primary"
             :loading="starting"
-            :disabled="busy"
+            :disabled="busy || faceServiceOffline"
             @click="startScan"
           >
             开始扫描
           </a-button>
-          <a-button size="small" :loading="matching" :disabled="busy" @click="startMatch">
+          <a-button
+            size="small"
+            :loading="matching"
+            :disabled="busy || faceServiceOffline"
+            @click="startMatch"
+          >
             全库重匹配
           </a-button>
           <a-button
@@ -764,6 +794,18 @@ function filterOption(input: string, option: { label?: string }): boolean {
 
 .task-card {
   margin-bottom: 16px;
+}
+
+/* 子服务离线提示条 */
+.face-service-alert {
+  margin-bottom: 12px;
+}
+
+.face-service-alert-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #86909c;
+  line-height: 1.6;
 }
 
 .task-line {

@@ -71,17 +71,6 @@
 
 - 主画廊全程可键盘操作；深色模式全页面无白底残留；窄屏（≤900px）侧边栏自动折叠
 
-### 【任务】人脸识别增强
-
-**背景：** face-service（InsightFace buffalo_l）已支持注册/匹配/批量，**视频关键帧人脸检测也已落地**（`task_runners/face_scan.py` 已把扫描范围从 `media_type == "image"` 放开为 image + video，按 `face_scan_video_max_frames` 取帧）。仍缺两点：匹配阈值全局固定 0.5（`backend/app/config.py:103` 的 `face_match_threshold`）无按人自适应；`face_service_url` 未配置或子服务离线时静默降级（`config.py:101`），前端只有接口报错、无显式提示。
-
-**目标：**
-
-- 按人自适应阈值：允许对匹配分数波动大的人单独调整阈值（存人物表）
-- 降级显式化：face-service 不可达时，前端人脸相关入口显示「子服务未启动/离线」状态提示（而非点击报错）
-
-**验收标准：** 可为单个博主调整阈值并立即生效；停掉 face-service 后前端能明确提示原因。
-
 ### 【任务】备份与局域网安全增强
 
 **背景：** 备份仅本地双通道（`backup_target_path` 指定目录 + schtasks 定时，`services/backup_service.py`），无增量、无备份后校验/恢复演练、无异地容灾。安全方面 `api_key` 为空即读接口全开放（`config.py:133`，`main.py:229` 仅破坏性接口要求 X-API-Key），mobile 与插件连接后端均不带鉴权 header。
@@ -205,6 +194,36 @@
 | `web/src/components/model/**` | 排程配置与展示 |
 
 **验收标准：** 能设置「夜间时段 + 每批张数」自动执行；中途取消后重跑只补未打标素材。
+
+### 【任务】抖音按关键词/话题下载（f2 抖音侧无此模式，属新增能力）
+
+**背景：** 起因是「f2 能不能下载 JK 标签的图片或视频」。查证结论：**抖音侧 f2 没有任何按标签/关键词/话题下载的能力**，这是上游未实现，不是我们接错。（1）`f2/__init__.py:35` 的 `DOUYIN_MODE_LIST` 只有 one/post/like/collection/collects/music/mix/live/related/friend，**没有 search**；同文件 `:48` 的 `TIKTOK_MODE_LIST` 里**明确有 `search`**——该能力 f2 只给 TikTok 做了。（2）`apps/douyin/handler.py` 注册的 11 个 `@mode_handler` 同样没有 search。（3）`apps/douyin/api.py` 的 46 个端点里**没有任何话题（challenge/hashtag）端点**。（4）`apps/douyin/utils.py:673-1182` 的 URL 解析只认 `user/`、`video/`、`note/`、`collection/`、`live/`、`reflow/`，所以话题页（`/hashtag/…`）与搜索页链接喂给 `-M one` 也不认。但抖音的综合搜索在 f2 里是**半成品**：`api.py:49` 的 `POST_SEARCH`（`/aweme/v1/web/general/search/single/`）定义后全库无人调用；`model.py:250` 的 `PostSearch` 请求模型缺 `filter_selected` 默认值（现在实例化即报错）。反证是**限定版已接线**——`fetch_home_post_search(user_id, keyword)`（博主主页内按关键词搜作品）是通的，说明抖音关键词搜索链路连同 `a_bogus` 签名（`XBogusManager`）本就能跑，只是没暴露成模式。另：**图片不是障碍**，图集走 `dl.py:218 download_images`（`images` → `.webp`，实况动图走 `images_video`），能下就会下。
+
+**目标（三条路线，成本递增，选一条即可）：**
+
+- **A（零代码，现状兜底）**：不开发。抖音里搜关键词/进话题页 → 手动**点赞或加收藏夹** → 走现有 like/collection/collects 模式下载。缺点是要手点。
+- **B（加抖音 `search` 模式）**：照抄 TikTok 的 `search` 模式补四处——`crawler.fetch_post_search` + `filter.PostSearchFilter` + `handler` 上 `@mode_handler("search")` + 白名单加 `"search"`；端点常量、请求模型（补个默认值）、签名设施、以及抖音同类实现 `fetch_home_post_search` 全都现成。f2 侧改动不大，**主要工作量在 app 侧**（新任务类型 + 前端入口 + 结果预览）。
+- **C（话题下全集）**：另接 `/aweme/v1/web/challenge/detail/`（取 ch_id）+ `/aweme/v1/web/challenge/aweme/`（按 ch_id 翻页），f2 里一点没有。**这两个接口当前是否可用尚未验证**（查证当晚 GitHub 代理不通，只能从 f2 源码侧确认「它没有」）。
+
+**已知风险（是「为何不做」的主要理由）：** 综合搜索返回的是抖音**推荐排序的流，不是标签全集**——靠 `offset`/`search_id` 翻页，深度有限，风控或未登录下可能直接空返回；`a_bogus` 与 cookie 有效性直接决定成败，属于易碎链路。另有一条未验证的疑点：issue `Johnserf-Seed/f2#275` 标题为「纯图片博主图片基本无法下载」，**内容未能打开核实**，若做 B/C 需先确认图文博主是否受影响。
+
+**涉及模块：**
+
+| 模块 | 改动 |
+| ------ | ------ |
+| f2 克隆（`C:\Users\Administrator\Desktop\f2\f2`，非本仓库） | `apps/douyin/{crawler,filter,handler}.py` + `__init__.py` 的 `DOUYIN_MODE_LIST`（仅路线 B/C） |
+| `backend/scripts/f2_cli.py` | 透出 `-M search` 与关键词参数（当前模式由我们显式传参） |
+| `backend/app/services/task_runners/f2_import.py` | 关键词下载阶段（物料枚举来源从「博主/收藏夹」扩展到「搜索结果」） |
+| `backend/app/routers/scraper.py`、`web/src/components/scraper/**` | 关键词输入与结果预览入口 |
+| `TODO.md` 本条目 | 实施后删除 |
+
+**验收标准：**
+
+- 给一个关键词（如「JK制服」）能枚举并下载作品，且**先预览再入库**（沿用现有「宁缺毋滥、手动确认」的偏好）
+- 下载结果按现有 5 层判重（内容哈希 / 垃圾桶 / 批内 / 平台 ID / 参数过滤）走，不产生重复素材
+- 搜索翻页有明确上限与提前停止条件，空返回/风控时给出可读的失败原因，而不是静默 0 条
+
+**为何低优先：** 目的是「多弄些 JK 素材」，而路线 A（收藏/点赞后走现成链路）**今天就能达到同样效果**，只多一步手动；B/C 要动 f2 上游代码 + app 侧入口，且踩在抖音搜索风控与「结果流非全集」的不确定性上，收益/风险比不明。另注：若本意是**用库里已打好的 AI 标签筛素材**（本地 `JK制服` 标签，现有 1.3 万标签 / 2.6 万素材），那与 f2 无关，属 app 内标签筛选，不需要本任务。
 
 ## 备注
 

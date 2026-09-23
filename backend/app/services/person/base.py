@@ -97,6 +97,8 @@ class PersonServiceBase:
             "profile_url": person.profile_url,
             "avatar_path": person.avatar_path,
             "bio": person.bio,
+            # 按人人脸匹配阈值（None = 前端显示为「跟随全局」）
+            "face_match_threshold": getattr(person, "face_match_threshold", None),
             "source": person.source,
             "created_at": person.created_at,
             "updated_at": person.updated_at,

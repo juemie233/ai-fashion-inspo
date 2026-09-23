@@ -40,6 +40,8 @@ export interface PersonForm {
   profile_url?: string | null
   avatar_path?: string | null
   bio?: string | null
+  /** 按人人脸匹配阈值（0~1）：显式传 null 清除，回退全局配置 */
+  face_match_threshold?: number | null
 }
 
 /** 人物素材项（与标签详情素材结构一致） */

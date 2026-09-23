@@ -11,7 +11,11 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models.face import InspirationFaceDetection
-from app.services.face_match import match_all_faces, matrix_match_faces
+from app.services.face_match import (
+    load_person_library,
+    match_all_faces,
+    matrix_match_faces,
+)
 
 
 def _unit(seed: int) -> np.ndarray:
@@ -66,6 +70,86 @@ def test_matrix_match_empty_faces():
     """空人脸：返回空列表。"""
     library = [{"person_type": "blogger", "person_id": 1, "embedding": _unit(1)}]
     assert matrix_match_faces(np.zeros((0, 512), dtype=np.float32), library, 0.5) == []
+
+
+def _unit_axis(i: int) -> np.ndarray:
+    """第 i 维为 1 的 512 维单位向量（坐标轴）。"""
+    v = np.zeros(512, dtype=np.float32)
+    v[i] = 1.0
+    return v
+
+
+def _with_cos(cos_val: float, seed: int) -> np.ndarray:
+    """构造与 e0 夹角余弦**精确等于** cos_val 的 512 维单位向量。
+
+    按人阈值测试需要可控的相似度：这样能直接指定「某脸对该人 0.50、
+    对另一人 0.55」这种组合，而不必依赖随机向量的近似夹角。
+    """
+    e0 = _unit_axis(0)
+    rng = np.random.default_rng(seed)
+    perp = rng.standard_normal(512).astype(np.float32)
+    perp[0] = 0.0  # 与 e0 正交
+    perp /= np.linalg.norm(perp)
+    v = cos_val * e0 + np.sqrt(1.0 - cos_val**2) * perp
+    return (v / np.linalg.norm(v)).astype(np.float32)
+
+
+def test_matrix_match_per_person_threshold_not_stolen_by_stricter_person():
+    """按人阈值：先各自达标再取最优，高分但阈值更严的人不得挤掉达标者。
+
+    构造：脸对博主 A 相似度 0.50（A 阈值 0.30，达标）、对模特 B 相似度 0.55
+    （B 阈值 0.60，不达标）。若先取全局 argmax（B，0.55）再卡单一阈值，
+    会误判命中 B；按人阈值应命中 A。
+    """
+    face = _unit_axis(0)
+    library = [
+        {
+            "person_type": "blogger",
+            "person_id": 1,
+            "embedding": _with_cos(0.50, 1),
+            "threshold": 0.30,
+        },
+        {
+            "person_type": "model",
+            "person_id": 2,
+            "embedding": _with_cos(0.55, 2),
+            "threshold": 0.60,
+        },
+    ]
+    results = matrix_match_faces(np.stack([face], axis=0), library, threshold=0.5)
+    assert results[0] is not None
+    assert results[0]["person_type"] == "blogger"
+    assert results[0]["person_id"] == 1
+    assert results[0]["score"] == pytest.approx(0.50, abs=1e-3)
+
+
+def test_matrix_match_per_person_threshold_all_fail_returns_none():
+    """全员不达标 → None：掩码后相似度全为 -inf，不能误取 argmax 下标 0。"""
+    face = _unit_axis(0)
+    library = [
+        {
+            "person_type": "blogger",
+            "person_id": 1,
+            "embedding": _with_cos(0.50, 1),
+            "threshold": 0.90,
+        },
+        {
+            "person_type": "model",
+            "person_id": 2,
+            "embedding": _with_cos(0.55, 2),
+            "threshold": 0.80,
+        },
+    ]
+    assert matrix_match_faces(np.stack([face], axis=0), library, threshold=0.5) == [None]
+
+
+def test_matrix_match_missing_threshold_falls_back_to_argument():
+    """库条目未带 threshold 键时回退 threshold 参数（兼容旧调用方）。"""
+    face = _unit_axis(0)
+    library = [{"person_type": "blogger", "person_id": 1, "embedding": _with_cos(0.50, 1)}]
+    assert matrix_match_faces(np.stack([face], axis=0), library, threshold=0.6) == [None]
+    hit = matrix_match_faces(np.stack([face], axis=0), library, threshold=0.4)
+    assert hit[0] is not None and hit[0]["person_id"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -318,3 +402,104 @@ async def test_match_all_faces_skips_corrupt_embeddings(
         assert stats["matched"] == 1
         assert stats["unmatched"] == 0
         assert stats["bad_embeddings"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════
+#  按人自适应阈值
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_load_person_library_carries_per_person_threshold(
+    client, create_blogger, monkeypatch
+):
+    """特征库条目带各自阈值：未配置用默认，配了用自身的（互不影响）。"""
+    base = _unit(1)
+    blogger = _setup_blogger_face(client, create_blogger, monkeypatch, base.tolist())
+
+    async with async_session() as db:
+        library = await load_person_library(db, default_threshold=0.42)
+        assert len(library) == 1
+        assert library[0]["threshold"] == pytest.approx(0.42)  # 未配置 → 回退默认
+
+    # PATCH 配置阈值后，特征库立即带上它（无需重新注册人脸）
+    r = client.patch(
+        f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": 0.31}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["face_match_threshold"] == pytest.approx(0.31)
+
+    async with async_session() as db:
+        library = await load_person_library(db, default_threshold=0.42)
+        assert library[0]["threshold"] == pytest.approx(0.31)
+
+
+async def test_person_threshold_range_validation_and_clear(
+    client, create_blogger, create_model
+):
+    """阈值接口：越界拒绝、可设置、显式传 null 清除回退全局；模特共享同一字段。"""
+    blogger = create_blogger(name="阈值博主")
+    r = client.patch(f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": 1.5})
+    assert r.status_code == 422  # 越界拒绝（0~1）
+
+    r = client.patch(f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": 0.4})
+    assert r.status_code == 200, r.text
+    assert r.json()["face_match_threshold"] == pytest.approx(0.4)
+
+    r = client.patch(f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["face_match_threshold"] is None  # 清除 → 回退全局
+
+    model = create_model(name="阈值模特")
+    r = client.patch(f"/api/models/{model['id']}", json={"face_match_threshold": 0.35})
+    assert r.status_code == 200, r.text
+    assert r.json()["face_match_threshold"] == pytest.approx(0.35)
+
+
+async def test_match_all_faces_uses_per_person_threshold(
+    client, create_blogger, monkeypatch
+):
+    """端到端：调低某人阈值后，原本漏匹配的脸立刻命中；清除后恢复不匹配。
+
+    脸与该博主相似度固定 0.45：全局阈值 0.5 → 不匹配；把该博主阈值调到
+    0.40 → 立刻命中；清除阈值（回退全局）→ 又不匹配。
+    """
+    face_vec = _with_cos(0.45, 11)
+    blogger = _setup_blogger_face(
+        client, create_blogger, monkeypatch, _unit_axis(0).tolist()
+    )
+    insp_id = _setup_inspiration_faces(
+        client,
+        monkeypatch,
+        [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": face_vec.tolist()}],
+    )
+
+    async with async_session() as db:
+        stats = await match_all_faces(db, threshold=0.5)
+        assert stats["matched"] == 0, "全局 0.5 下 0.45 不应命中"
+
+    r = client.patch(
+        f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": 0.40}
+    )
+    assert r.status_code == 200, r.text
+
+    async with async_session() as db:
+        stats = await match_all_faces(db, threshold=0.5)
+        assert stats["matched"] == 1, "该博主阈值调到 0.40 后应立刻命中"
+        det = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalars().one()
+        assert det.matched_blogger_id == blogger["id"]
+        assert det.matched_model_id is None
+        assert det.confidence == pytest.approx(0.45, abs=1e-3)
+
+    r = client.patch(
+        f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": None}
+    )
+    assert r.status_code == 200, r.text
+    async with async_session() as db:
+        stats = await match_all_faces(db, threshold=0.5)
+        assert stats["matched"] == 0, "清除阈值回退全局后应恢复不匹配"

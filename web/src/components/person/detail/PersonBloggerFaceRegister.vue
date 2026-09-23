@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /** 博主人脸特征注册折叠面板：上传照片 与/或 从已关联素材选择（合计 1~5 张）。 */
 
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { getFileUrl } from '@/api/inspirations'
 import { bloggersApi } from '@/api/persons'
 import { useBloggerFaceRegister } from '@/composables/useBloggerFaceRegister'
+import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 
 const props = defineProps<{
   personId: number
@@ -15,6 +16,16 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'changed'): void
 }>()
+
+// 子服务离线时事前提示并禁用注册（与扫描页共用同一次探测）
+const {
+  status: faceService,
+  offline: faceServiceOffline,
+  load: loadFaceServiceStatus,
+} = useFaceServiceStatus()
+onMounted(() => {
+  void loadFaceServiceStatus()
+})
 
 const {
   faceStatus,
@@ -61,6 +72,10 @@ const selectedTotal = computed(
         张），系统提取人脸特征并平均池化入库；素材库中的人脸将自动与特征库匹配。
         重复注册将覆盖旧特征（重新注册）。
       </p>
+
+      <a-alert v-if="faceServiceOffline" type="warning" show-icon class="face-offline-alert">
+        {{ faceService?.message || '人脸识别子服务未启动或不可达' }}
+      </a-alert>
 
       <a-tabs v-model:active-key="faceTab" size="small" type="line">
         <!-- Tab1：上传照片（原有方式） -->
@@ -149,7 +164,7 @@ const selectedTotal = computed(
             size="small"
             type="primary"
             :loading="faceUploading"
-            :disabled="selectedTotal === 0"
+            :disabled="selectedTotal === 0 || faceServiceOffline"
             @click="handleRegisterFace"
           >
             {{ faceStatus?.registered ? '重新注册' : '注册人脸' }}
@@ -172,6 +187,10 @@ const selectedTotal = computed(
   margin: 8px 0;
   font-size: 12px;
   color: #999;
+}
+/* 子服务离线提示：与扫描页同款告知方式 */
+.face-offline-alert {
+  margin: 8px 0;
 }
 .face-upload-row {
   display: flex;

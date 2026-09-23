@@ -25,6 +25,7 @@ from app.models.face import (
     InspirationFaceDetection,
     ModelFaceEmbedding,
 )
+from app.models.person import Blogger, Model
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +45,33 @@ async def load_person_library(
     db: AsyncSession,
     scope: str = "all",
     person_ids: list[int] | None = None,
+    default_threshold: float | None = None,
 ) -> list[dict]:
     """加载人物特征库（博主/模特按 scope 过滤）。
 
     scope: "all"（博主+模特合并）/ "bloggers" / "models"；
     person_ids: 限定具体人物（建议配合单一 scope 使用，避免博主/模特 id 撞号歧义）；
     None 或空列表表示不限。
+
+    每个条目带自己的 ``threshold`` 实现**按人自适应**：人物表配了
+    ``face_match_threshold`` 就用它，否则用 ``default_threshold``
+    （缺省取 ``settings.face_match_threshold``）。这样一个人调低阈值
+    不会顺带放宽其他人。
     """
+    fallback = (
+        default_threshold
+        if default_threshold is not None
+        else settings.face_match_threshold
+    )
     library: list[dict] = []
     if scope in ("all", "bloggers"):
-        rows = await db.execute(select(BloggerFaceEmbedding))
-        for r in rows.scalars().all():
+        # 外连接人物表取各自阈值（特征行在、人物已删的孤儿记录按 fallback 处理）
+        rows = await db.execute(
+            select(BloggerFaceEmbedding, Blogger.face_match_threshold).outerjoin(
+                Blogger, Blogger.id == BloggerFaceEmbedding.blogger_id
+            )
+        )
+        for r, person_threshold in rows.all():
             if person_ids and r.blogger_id not in person_ids:
                 continue
             try:
@@ -69,11 +86,18 @@ async def load_person_library(
                     "person_type": "blogger",
                     "person_id": r.blogger_id,
                     "embedding": emb,
+                    "threshold": (
+                        person_threshold if person_threshold is not None else fallback
+                    ),
                 }
             )
     if scope in ("all", "models"):
-        rows = await db.execute(select(ModelFaceEmbedding))
-        for r in rows.scalars().all():
+        rows = await db.execute(
+            select(ModelFaceEmbedding, Model.face_match_threshold).outerjoin(
+                Model, Model.id == ModelFaceEmbedding.model_id
+            )
+        )
+        for r, person_threshold in rows.all():
             if person_ids and r.model_id not in person_ids:
                 continue
             try:
@@ -86,6 +110,9 @@ async def load_person_library(
                     "person_type": "model",
                     "person_id": r.model_id,
                     "embedding": emb,
+                    "threshold": (
+                        person_threshold if person_threshold is not None else fallback
+                    ),
                 }
             )
     return library
@@ -96,26 +123,38 @@ def matrix_match_faces(
     library: list[dict],
     threshold: float,
 ) -> list[dict | None]:
-    """矩阵匹配：每张脸对全库取最高分者，低于阈值视为未匹配。
+    """矩阵匹配：每张脸对全库取最高分者，低于**该人物自身阈值**视为未匹配。
 
     参数:
         face_embeddings: (F, 512) float32，已归一化
-        library: load_person_library 输出（空库返回全 None）
-        threshold: 余弦相似度阈值（低于视为未知人脸）
+        library: load_person_library 输出（空库返回全 None）；条目可带
+            "threshold"（该人物自己的阈值），缺失该键时用 threshold 兜底
+        threshold: 兜底阈值（库条目未带 threshold 时使用）
 
     返回:
         与 F 等长的列表：{"person_type", "person_id", "score"} 或 None。
+
+    按人阈值的关键：不能先取全局 argmax 再卡单一阈值——那样「分数够自己阈值」
+    的人会被另一个分数更高、但阈值也更严的人挤掉，等于阈值没生效。这里先按
+    各自阈值就地掩码（不达标的相似度置 -inf），再取 argmax，语义是「在所有
+    达标的人里挑最像的」。全员同阈值时结果与旧实现逐字节一致。
     """
     f_count = face_embeddings.shape[0]
     if f_count == 0 or not library:
         return [None] * f_count
     persons = np.stack([item["embedding"] for item in library], axis=0)  # (P, 512)
+    thresholds = np.asarray(
+        [item.get("threshold", threshold) for item in library], dtype=np.float32
+    )  # (P,)
     scores = face_embeddings @ persons.T  # (F, P)
+    # 就地掩码，避免再分配一个同尺寸的布尔矩阵（分块上限 1 万张脸）
+    np.copyto(scores, -np.inf, where=scores < thresholds[None, :])
     best_idx = scores.argmax(axis=1)
     best_scores = scores[np.arange(f_count), best_idx]
     results: list[dict | None] = []
     for i in range(f_count):
-        if best_scores[i] < threshold:
+        # 全员不达标时掩码后全为 -inf，argmax 仍返回下标 0，须显式判否
+        if not np.isfinite(best_scores[i]):
             results.append(None)
             continue
         item = library[int(best_idx[i])]
@@ -148,7 +187,9 @@ async def match_all_faces(
     返回统计: total_faces / matched / unmatched / updated / library_size。
     """
     thr = threshold if threshold is not None else settings.face_match_threshold
-    library = await load_person_library(db, scope=scope, person_ids=person_ids)
+    library = await load_person_library(
+        db, scope=scope, person_ids=person_ids, default_threshold=thr
+    )
     rows = await db.execute(
         select(
             InspirationFaceDetection.id,

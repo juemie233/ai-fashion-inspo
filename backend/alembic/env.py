@@ -31,8 +31,14 @@ env_url = os.environ.get("ALEMBIC_DB_URL")
 if env_url:
     config.set_main_option("sqlalchemy.url", env_url)
 elif not config.get_main_option("sqlalchemy.url"):
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
+    # 真实库取 app 配置的 database_url（异步驱动换同步驱动），**不能**再从
+    # storage_root 推导：存储根自「存储与 f2 产物根目录可配置」起可指向其它盘，
+    # 推导路径会随之漂移。曾推导出 G:\fashion_inspo.db（0.0MB 空库），使
+    # ``revision --autogenerate`` 拿空库与 metadata 对比，生成「建全部表」的
+    # 错误迁移，且 ``alembic current`` 读不到任何版本。
+    config.set_main_option(
+        "sqlalchemy.url", settings.database_url.replace("+aiosqlite", "")
+    )
 
 target_metadata = Base.metadata
 

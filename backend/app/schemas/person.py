@@ -61,6 +61,8 @@ class _PersonUpdateFields(BaseModel):
     profile_url: str | None = None
     avatar_path: str | None = None
     bio: str | None = None
+    # 按人人脸匹配阈值：显式传 null 清除（回退全局 settings.face_match_threshold）
+    face_match_threshold: float | None = Field(None, ge=0.0, le=1.0)
 
     _validate_name = field_validator("name")(_strip_name)
 
@@ -75,6 +77,8 @@ class _PersonOutFields(BaseModel):
     inspiration_count: int = 0
     # 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物
     face_registered: bool = False
+    # 按人人脸匹配阈值（None = 用全局 settings.face_match_threshold）
+    face_match_threshold: float | None = None
 
     model_config = {"from_attributes": True}
 

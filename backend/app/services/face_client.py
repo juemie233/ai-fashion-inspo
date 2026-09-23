@@ -83,9 +83,13 @@ class FaceRecognitionClient:
             logger.warning("人脸识别子服务请求失败: %s", e)
             raise FaceServiceUnavailableError(f"人脸识别子服务不可用: {e}") from e
 
-    async def health(self) -> dict:
-        """健康检查：服务状态 + 模型加载情况 + 已注册数量。"""
-        return await self._request("GET", "/health")
+    async def health(self, timeout: float | None = None) -> dict:
+        """健康检查：服务状态 + 模型加载情况 + 已注册数量。
+
+        timeout: 覆盖默认超时（秒）。状态轮询场景传小值（如 3s），
+            避免子服务卡死时把探测接口一起拖到 30s。
+        """
+        return await self._request("GET", "/health", timeout=timeout)
 
     async def embed(self, image_bytes: bytes, filename: str = "image.jpg") -> dict:
         """人脸检测 + 特征提取（图片字节 → 人脸列表与 512 维特征）。"""

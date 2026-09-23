@@ -195,3 +195,22 @@ export async function fetchFaceClusterDetections(
   )
   return data
 }
+
+/** 人脸识别子服务可用性（供人脸入口**事前**提示，而不是点了才报错） */
+export interface FaceServiceStatus {
+  /** 是否配置了 FACE_SERVICE_URL */
+  enabled: boolean
+  /** 子服务是否可达（enabled=false 时恒为 false） */
+  reachable: boolean
+  url: string
+  /** 中文原因，可直接展示给用户 */
+  message: string
+  /** 子服务 /health 详情（reachable=true 时才有） */
+  detail?: Record<string, unknown> | null
+}
+
+/** 查询人脸子服务状态：接口恒返回 200，可用性看 enabled/reachable */
+export async function fetchFaceServiceStatus(): Promise<FaceServiceStatus> {
+  const { data } = await apiClient.get<FaceServiceStatus>('/face-scan/service-status')
+  return data
+}

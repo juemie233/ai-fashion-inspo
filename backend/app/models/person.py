@@ -44,6 +44,10 @@ class _PersonBaseFields:
     profile_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # 主页链接
     avatar_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # 头像文件路径
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)  # 简介
+    # 按人自适应的余弦相似度匹配阈值：为空表示回退全局
+    # ``settings.face_match_threshold``（默认 0.5）。对同一人不同角度/妆造
+    # 导致特征波动大的人物可单独调（调低减少漏匹配），互不影响他人。
+    face_match_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(
         String(16), default="manual", index=True
     )  # manual 手动 | ai_generated AI 创建 | auto_collect 采集自动登记（如「我的喜欢」

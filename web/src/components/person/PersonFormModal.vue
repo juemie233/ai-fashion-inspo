@@ -50,6 +50,7 @@ const form = ref<PersonForm>({
   ip_location: null,
   profile_url: null,
   bio: null,
+  face_match_threshold: null,
 })
 
 const rules: Record<string, FieldRule | FieldRule[]> = {
@@ -103,6 +104,7 @@ watch(
       ip_location: p?.ip_location ?? null,
       profile_url: p?.profile_url ?? null,
       bio: p?.bio ?? null,
+      face_match_threshold: p?.face_match_threshold ?? null,
     }
     avatarPath.value = p?.avatar_path ?? null
   },
@@ -214,6 +216,27 @@ async function handleSubmit() {
           placeholder="用于「按博主采集」，可留空"
           :max-length="128"
           @input="(v: string) => (form.platform_user_id = v || null)"
+        />
+      </a-form-item>
+
+      <a-form-item field="face_match_threshold">
+        <template #label>
+          <span>人脸阈值</span>
+          <a-tooltip
+            content="匹配余弦相似度门槛：越高越严（宁可漏匹配也不误匹配）。留空 = 跟随全局配置（默认 0.5）。只影响本人，不改变其他人。"
+          >
+            <span class="threshold-help">?</span>
+          </a-tooltip>
+        </template>
+        <a-input-number
+          :model-value="form.face_match_threshold ?? undefined"
+          :min="0"
+          :max="1"
+          :step="0.05"
+          :precision="2"
+          allow-empty
+          placeholder="留空 = 跟随全局配置"
+          @update:model-value="(v: number | undefined) => (form.face_match_threshold = v ?? null)"
         />
       </a-form-item>
 
@@ -334,5 +357,21 @@ async function handleSubmit() {
   font-size: 12px;
   color: #86909c;
   line-height: 1.6;
+}
+
+/* 「人脸阈值」标签旁的说明图标 */
+.threshold-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: #e5e6eb;
+  color: #4e5969;
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
 }
 </style>

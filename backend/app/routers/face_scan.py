@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.face import InspirationFaceDetection
 from app.models.inspiration import Inspiration
@@ -73,6 +74,47 @@ async def run_match(
         db, scope=scope, person_ids=person_ids, threshold=data.threshold
     )
     return {"task_id": task.id}
+
+
+# 子服务探测超时：状态接口面向前端轮询，不能被子服务卡死拖满默认 30s
+FACE_SERVICE_PROBE_TIMEOUT = 3.0
+
+
+@router.get("/service-status")
+async def face_service_status() -> dict:
+    """人脸识别子服务可用性（供前端**事前**提示，而不是点了才报错）。
+
+    始终返回 200：可用性本身就是查询结果，不是请求错误。三种状态：
+    - ``enabled=false``：``FACE_SERVICE_URL`` 留空（未部署子服务）；
+    - ``reachable=false``：已配置但探不通（子服务未启动 / 端口不通 / 超时）；
+    - ``reachable=true``：正常，附子服务 ``/health`` 的模型与注册数详情。
+    """
+    from app.services.face_client import FaceServiceUnavailableError, face_client
+
+    url = settings.face_service_url
+    if not face_client.enabled:
+        return {
+            "enabled": False,
+            "reachable": False,
+            "url": url,
+            "message": "未配置人脸识别子服务（FACE_SERVICE_URL），人脸相关功能不可用",
+        }
+    try:
+        detail = await face_client.health(timeout=FACE_SERVICE_PROBE_TIMEOUT)
+    except FaceServiceUnavailableError as e:
+        return {
+            "enabled": True,
+            "reachable": False,
+            "url": url,
+            "message": f"人脸识别子服务未启动或不可达：{e}",
+        }
+    return {
+        "enabled": True,
+        "reachable": True,
+        "url": url,
+        "message": "人脸识别子服务正常",
+        "detail": detail,
+    }
 
 
 @router.get("/task")
