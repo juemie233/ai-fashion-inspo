@@ -276,7 +276,7 @@ def download_batch(
     # 构建平台匹配的请求头（带浏览器 Cookie 以通过 CDN 鉴权）
     req_headers = build_download_headers(platform, cookies)
 
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    db_path = settings.db_file_path
 
     # 按图片 URL 去重（同一图片可能在不同卡片/搜索中重复出现）
     unique: list[tuple[str, str]] = []
@@ -589,7 +589,7 @@ def download_videos(
     # 单个视频下载大小上限：避免超大视频撑爆磁盘
     max_video_bytes = MAX_VIDEO_BYTES.get(platform, DEFAULT_VIDEO_MAX_BYTES)
 
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    db_path = settings.db_file_path
 
     # 视频 URL 内存去重
     unique: list[tuple[str, str]] = []

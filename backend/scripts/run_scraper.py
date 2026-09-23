@@ -139,7 +139,7 @@ def _update_task_sync(task_id: int, fields: dict) -> None:
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = [*fields.values(), task_id]
-    db_path = settings.storage_root.parent / "fashion_inspo.db"
+    db_path = settings.db_file_path
     conn = _sqlite3.connect(str(db_path))
     try:
         conn.execute(f"UPDATE scraper_tasks SET {sets} WHERE id = ?", values)

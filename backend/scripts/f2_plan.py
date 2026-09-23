@@ -32,8 +32,14 @@ from .f2_hash_cache import (  # noqa: E402
 
 
 def library_db_path() -> Path:
-    """素材库 SQLite 路径（与采集脚本、conftest 口径一致）。"""
-    return settings.storage_root.parent / "fashion_inspo.db"
+    """素材库 SQLite 路径（唯一口径见 :attr:`Settings.db_file_path`）。
+
+    历史教训：这里原先是 ``settings.storage_root.parent / "fashion_inspo.db"``，
+    只在库文件恰好位于 storage 上一级时成立。``STORAGE_ROOT`` 指到别的盘后算出的
+    是盘根下的**空库**，于是判重形同虚设、入库全部 ``no such table: inspirations``
+    （实测任务 #370：4970 件作品 0 入库）。
+    """
+    return settings.db_file_path
 
 
 @dataclass(frozen=True)

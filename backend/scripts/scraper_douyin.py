@@ -845,9 +845,7 @@ def run_douyin_notes_pipeline(
 
     conn = None
     try:
-        conn = _sqlite3.connect(
-            str(settings.storage_root.parent / "fashion_inspo.db")
-        )
+        conn = _sqlite3.connect(str(settings.db_file_path))
         ensure_hashtag_table(conn)
     except Exception:
         conn = None

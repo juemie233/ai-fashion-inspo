@@ -715,7 +715,13 @@ class _FakeHttpx:
 
 
 def _make_download_env(tmp_path, monkeypatch):
-    """建真实 ORM schema 的临时库，并指向 download_batch 的读库路径。"""
+    """建真实 ORM schema 的临时库，并指向 download_batch 的读库路径。
+
+    库文件口径是 ``settings.database_url``（→ ``Settings.db_file_path``），
+    与 ``storage_root`` 无关：改 storage_root 不会（也不该）搬走库文件——历史 bug
+    正是按 ``storage_root.parent`` 猜库路径，STORAGE_ROOT 指到别的盘时算出空库
+    （见 docs/收藏合集两级结构.md 第三节）。
+    """
     import app.models  # noqa: F401  # 确保全部模型注册进 metadata
     from app.database import Base
     from sqlalchemy import create_engine
@@ -725,7 +731,10 @@ def _make_download_env(tmp_path, monkeypatch):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
     monkeypatch.setattr(settings, "storage_root", storage_root)
-    db_path = storage_root.parent / "fashion_inspo.db"
+    db_path = tmp_path / "fashion_inspo.db"
+    monkeypatch.setattr(
+        settings, "database_url", f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    )
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     engine.dispose()

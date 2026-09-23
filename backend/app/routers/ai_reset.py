@@ -59,7 +59,7 @@ def _take_pre_reset_snapshot() -> tuple[Path | None, int]:
         # 拷贝 .db/-wal/-shm 在并发写入时拿到半截数据）
         import sqlite3
 
-        db_src = settings.storage_root.parent / "fashion_inspo.db"
+        db_src = settings.db_file_path
         if db_src.exists():
             src = sqlite3.connect(str(db_src))
             dst = sqlite3.connect(str(snap_dir / "fashion_inspo.db"))

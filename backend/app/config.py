@@ -235,6 +235,24 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def db_file_path(self) -> Path:
+        """素材库 SQLite 文件路径（由 ``database_url`` 推导，与异步引擎同源）。
+
+        这是**唯一**的库文件口径：脚本要用 sqlite3 直连素材库时一律走这里。
+
+        为什么不能用 ``storage_root.parent / "fashion_inspo.db"`` 推算：那套口径
+        只在「库文件恰好放在 storage 的上一级」时凑巧成立。``STORAGE_ROOT`` 一旦
+        被指到别的盘（本项目实测 ``STORAGE_ROOT=G:/fashion-inspo-storage``），
+        ``.parent`` 就变成盘根，算出来是 ``G:\\fashion_inspo.db``——一个**空库**。
+        后果不是报错而是静默走偏：f2 判重读空库（全部作品都「库里没有」）、入库
+        写空库（``no such table: inspirations``，整批 4970 件全灭）。
+        """
+        from sqlalchemy.engine import make_url
+
+        db_name = make_url(self.database_url).database
+        return Path(db_name) if db_name else _DB_PATH
+
+    @property
     def storage_dirs(self) -> dict[str, Path]:
         """返回所有存储目录的映射。"""
         return {

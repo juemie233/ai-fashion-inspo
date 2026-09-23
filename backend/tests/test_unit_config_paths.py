@@ -104,3 +104,36 @@ def test_three_mode_roots_hang_off_download_root():
     assert f2_common.DEFAULT_F2_LIKE_ROOT == root / 'douyin' / 'like'
     assert f2_common.DEFAULT_F2_COLLECT_ROOT == root / 'douyin' / 'collection'
 
+
+def test_db_file_path_follows_database_url_not_storage_parent(clean_storage_env, tmp_path):
+    """库文件路径必须由 DATABASE_URL 推导，不能按 storage_root.parent 猜。
+
+    回归（任务 #370）：`STORAGE_ROOT=G:/fashion-inspo-storage` 时
+    `storage_root.parent / "fashion_inspo.db"` 算出的是 `G:\\fashion_inspo.db`
+    ——一个空库。后果是静默走偏：f2 判重读空库（全部作品都「库里没有」）、
+    入库写空库（`no such table: inspirations`，4970 件作品 0 入库）。
+    """
+    db = tmp_path / 'elsewhere' / 'fashion_inspo.db'
+    settings = _fresh_settings(
+        storage_root=tmp_path / 'g-drive-storage',
+        database_url=f'sqlite+aiosqlite:///{db.as_posix()}',
+    )
+
+    assert settings.db_file_path == db
+    # 与 storage 的上一级**无关**（这正是原实现的谬误）
+    assert settings.db_file_path != settings.storage_root.parent / 'fashion_inspo.db'
+
+
+def test_library_db_path_uses_the_same_single_source(monkeypatch, tmp_path):
+    """f2 判重/入库用的库路径必须与 app 的库文件口径一致（单一口径）。"""
+    from scripts import f2_plan
+
+    db = tmp_path / 'same-source' / 'fashion_inspo.db'
+    settings = _fresh_settings(
+        storage_root=tmp_path / 'storage',
+        database_url=f'sqlite+aiosqlite:///{db.as_posix()}',
+    )
+    monkeypatch.setattr(f2_plan, 'settings', settings, raising=False)
+
+    assert f2_plan.library_db_path() == db == settings.db_file_path
+
