@@ -18,7 +18,10 @@
 #   - 运行时配置（.env / prompt 配置 / web/.env.local）+ git HEAD
 #   - 备份后校验：integrity_check、SQL 内存试导、必备目录、文件数/字节数比对
 #   - manifest.json 清单 + SUCCESS/FAILED 标记 + 可靠退出码
-#   - 并发锁 backup.lock（防止计划任务与启动补备撞车）
+#   - 并发锁 backup.lock（防止计划任务与启动补备撞车）；过期锁（被强杀的残留）
+#     自动清除，见下方 LOCK_MAX_AGE_HOURS
+#   - 素材存储根跟随 app.config 的 storage_root（.env 的 STORAGE_ROOT），
+#     数据盘迁移后不会备份到旧树
 #   - rotation：日备留 7 份 + 周备（周日）留 4 份
 #
 # 退出码:
@@ -36,6 +39,22 @@ export PYTHONIOENCODING=utf-8
 
 cd "$(dirname "$0")/.."
 PROJECT_ROOT="$(pwd -W 2>/dev/null || pwd)"
+
+# ── 解析「生效的」素材存储根：优先 app.config（读 .env 的 STORAGE_ROOT）──
+# 为什么不能写死 backend/storage：数据盘迁移后（.env 里 STORAGE_ROOT=G:/...），写死会去
+# 备份旧目录下那份**已不再变化**的树，还会写上 SUCCESS——静默备错数据。
+STORAGE_DIR=""
+if command -v python >/dev/null 2>&1; then
+  STORAGE_DIR="$(cd backend 2>/dev/null && python -c 'from app.config import settings; print(settings.storage_root)' 2>/dev/null)"
+fi
+case "$STORAGE_DIR" in
+  /*|[A-Za-z]:*) : ;;   # 绝对路径（POSIX 或 Windows 盘符）
+  *) STORAGE_DIR="" ;;
+esac
+if [ -z "$STORAGE_DIR" ] || [ ! -d "$STORAGE_DIR" ]; then
+  STORAGE_DIR="$PROJECT_ROOT/backend/storage"
+  echo "提示：未能从 app.config 读到 storage_root，回退 $STORAGE_DIR"
+fi
 
 # ── 参数解析 ──
 TARGET=""
@@ -82,7 +101,28 @@ if [ "$ALLOW_SAME_DISK" -ne 1 ] && [ -n "$PROJ_DRIVE" ] && [ -n "$TGT_DRIVE" ] &
 fi
 
 # ── 并发锁（锁放目标根，所有触发通道互斥）──
+#
+# ⚠ 过期锁自愈（实测踩坑）：下面的 trap 只在脚本正常/可捕获退出时执行；被强杀
+# （后端被 stop、关机）时锁会永久留在目标根，之后**每一次**备份都被「已有备份在
+# 进行中」挡掉——实测 2026-09-19 那次中断后，接下来 7 天没有一次备份跑成功。
+#
+# 判据：锁目录 mtime 超过 LOCK_MAX_AGE_HOURS 即视为上次被中断的残留（正常一次备份
+# 只要几分钟，6 小时上限非常宽松）。锁里记的 pid 只用于报错提示——MSYS 的 pid 与
+# Windows pid 不是同一套，不靠它做生死判断。可用 BACKUP_LOCK_MAX_AGE_HOURS 覆盖。
+LOCK_MAX_AGE_HOURS="${BACKUP_LOCK_MAX_AGE_HOURS:-6}"
 LOCK_DIR="$TARGET_ROOT/.backup.lock"
+if [ -d "$LOCK_DIR" ]; then
+  _lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)"
+  _lock_age_s=$(( $(date +%s) - _lock_mtime ))
+  _lock_pid="$(cut -d" " -f1 "$LOCK_DIR/pid" 2>/dev/null || echo "")"
+  if [ "$_lock_age_s" -gt $((LOCK_MAX_AGE_HOURS * 3600)) ]; then
+    echo "发现过期锁（已 $((_lock_age_s / 3600)) 小时，pid=${_lock_pid:-未知}）：判为上次被中断的残留，清除后继续。"
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+  else
+    echo "已有备份在进行中（锁存在 $((_lock_age_s / 60)) 分钟，pid=${_lock_pid:-未知}），本次跳过。"
+    exit 0
+  fi
+fi
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "已有备份在进行中（锁存在：$LOCK_DIR），本次跳过。"
   exit 0
@@ -94,8 +134,9 @@ STAMP="$(date +%Y-%m-%d_%H%M%S)"
 DEST="$TARGET_ROOT/$STAMP"
 mkdir -p "$DEST" || { echo "无法创建本次备份目录: $DEST"; exit 1; }
 
-# 日志：同时写本次备份目录与 backend/storage/logs/backup.log
-LOG_DIR="backend/storage/logs"
+# 日志：同时写本次备份目录与「实际素材存储根」下的 logs/backup.log
+# （与后端 backup_service 读的 settings.storage_root/logs/backup.log 是同一个文件）
+LOG_DIR="$STORAGE_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/backup.log"
 exec > >(tee -a "$DEST/backup.log" "$LOGFILE") 2>&1
@@ -145,12 +186,12 @@ echo ""
 # ── 2. 素材存储（robocopy 镜像，排除可重建/临时目录）──
 echo ">>> [2/5] 备份素材存储（robocopy）..."
 STORAGE_OK=0
-if [ -d backend/storage ]; then
+if [ -d "$STORAGE_DIR" ]; then
   if command -v robocopy >/dev/null 2>&1; then
     # 退出码 0-7 成功；/XD 目录名在源下任意层级匹配，支持通配。
     # _pre_reset_snapshot / _pre_restore_snapshot 为 reset/restore 前的 7 天临时
     # 安全网（内含整库素材副本），不应重复打进长期备份，故一并排除。
-    robocopy "backend/storage" "$DEST/storage" //E \
+    robocopy "$STORAGE_DIR" "$DEST/storage" //E \
       //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
       //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
     RC=$?
@@ -161,12 +202,12 @@ if [ -d backend/storage ]; then
       fail "素材存储备份出错（robocopy 退出码 $RC）"
     fi
   else
-    cp -r backend/storage "$DEST/storage"
+    cp -r "$STORAGE_DIR" "$DEST/storage"
     echo "  素材存储备份完成（cp）"
     STORAGE_OK=1
   fi
 else
-  fail "未找到 backend/storage，跳过素材存储备份"
+  fail "未找到素材存储目录（$STORAGE_DIR），跳过素材存储备份"
 fi
 
 # ── 2.1 热写入收敛：备份期间后台任务（标签分析/向量回填等）可能持续写入
@@ -182,7 +223,7 @@ FROZEN_STATS="$DEST/.source_stats.json"
 REPAIR_MAX=5
 repair_n=0
 while :; do
-  python - "$DEST" "backend/storage" "$MISMATCH_LIST" "$FROZEN_STATS" <<'PYEOF'
+  python - "$DEST" "$STORAGE_DIR" "$MISMATCH_LIST" "$FROZEN_STATS" <<'PYEOF'
 import json
 import os
 import sys
@@ -252,7 +293,7 @@ PYEOF
     if command -v robocopy >/dev/null 2>&1; then
       # /MIR 修复：同时处理「源端新增」与「源端删除」两类漂移；
       # 正在写入中的文件复制失败由下一轮重试兜底
-      robocopy "backend/storage/$d" "$DEST/storage/$d" //MIR \
+      robocopy "$STORAGE_DIR/$d" "$DEST/storage/$d" //MIR \
         //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
         //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
       RC=$?
@@ -263,7 +304,7 @@ PYEOF
       fi
     else
       rm -rf "$DEST/storage/$d"
-      cp -r "backend/storage/$d" "$DEST/storage/$d"
+      cp -r "$STORAGE_DIR/$d" "$DEST/storage/$d"
       echo "    已重同步 $d/（cp）"
     fi
   done < "$MISMATCH_LIST"
@@ -277,7 +318,7 @@ rm -f "$MISMATCH_LIST"
 #    其源端统计冻结到 .lancedb_stats.json，步骤 5 以它为校验基准（时点快照语义）。
 echo ">>> [2.2/5] lancedb 一致性快照（向量写入锁内）..."
 LANCE_STATS="$DEST/.lancedb_stats.json"
-python - "$DEST" "$LANCE_STATS" <<'INNER_EOF'
+python - "$DEST" "$LANCE_STATS" "$STORAGE_DIR" <<'INNER_EOF'
 import json
 import os
 import shutil
@@ -285,8 +326,8 @@ import sys
 
 sys.path.insert(0, "backend")
 
-dest, stats_file = sys.argv[1:3]
-src = os.path.join("backend", "storage", "lancedb")
+dest, stats_file, storage_src = sys.argv[1:4]
+src = os.path.join(storage_src, "lancedb")
 dst = os.path.join(dest, "storage", "lancedb")
 
 if not os.path.isdir(src):
@@ -357,7 +398,7 @@ echo ""
 
 # ── 5. 校验 + manifest ──
 echo ">>> [5/5] 校验备份并生成 manifest..."
-python - "$DEST" "backend/storage" "$VERIFY_HASH" "$GIT_HEAD" <<'PYEOF'
+python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" <<'PYEOF'
 import hashlib
 import json
 import os
