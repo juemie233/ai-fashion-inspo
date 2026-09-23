@@ -200,6 +200,11 @@ def apply_rollback(
     """
     storage_root = storage_root or settings.storage_root
     conn = sqlite3.connect(str(db_path))
+    # 必须打开外键：collection_items / inspiration_face_detections / tag_corrections /
+    # ai_analysis_log 等全靠 ON DELETE CASCADE 跟随删除，而 sqlite3 连接**默认不启用**
+    # 外键——不开的话回滚会留下一批指向已删素材的孤儿行（合集里出现打不开的空条目，
+    # 统计口径也会虚高）。collections.cover_inspiration_id 的 SET NULL 同理需要它。
+    conn.execute("PRAGMA foreign_keys=ON")
     deleted = 0
     removed_files = 0
     errors: list[dict] = []

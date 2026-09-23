@@ -33,6 +33,17 @@ const buttonStub = defineComponent({
     return h('button', this.$slots.default?.())
   },
 })
+/** a-popconfirm 桩：渲染默认插槽 + 一个「确认」按钮（点它等于用户点了确认） */
+const popconfirmStub = defineComponent({
+  name: 'APopconfirm',
+  emits: ['ok'],
+  render() {
+    return h('span', [
+      this.$slots.default?.(),
+      h('button', { class: 'popconfirm-ok', onClick: () => this.$emit('ok') }, '确认'),
+    ])
+  },
+})
 const inputStub = defineComponent({
   name: 'AInput',
   props: { modelValue: { type: String, default: '' } },
@@ -225,6 +236,7 @@ async function mountCard(
       stubs: {
         'a-card': cardStub,
         'a-button': buttonStub,
+        'a-popconfirm': popconfirmStub,
         'a-input': inputStub,
         'a-input-number': inputNumberStub,
         'a-spin': spinStub,
@@ -426,8 +438,13 @@ describe('F2LikeCard', () => {
     // 点赞可用、收藏不可用时不能被放行：可用性必须读 collect_* 字段
     expect(wrapper.find('.f2l-status').text()).toContain('可采集我的收藏')
 
-    // 收藏卡片有两个动作：「先扫描收藏夹」（主）与「一键下载全部收藏」（老口径）
+    // 收藏卡片有两个动作：「先扫描收藏夹」（主）与「一键下载全部收藏」（老口径）；
+    // 后者会连同无关的收藏夹一起收进来，所以现在包了一层确认——必须先点确认才发请求
     await buttons(wrapper, '一键下载全部收藏').submit.trigger('click')
+    await flushPromises()
+    expect(mocks.post).not.toHaveBeenCalled()
+
+    await wrapper.find('button.popconfirm-ok').trigger('click')
     await flushPromises()
 
     expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {

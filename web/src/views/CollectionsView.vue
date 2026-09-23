@@ -56,6 +56,11 @@ const parentName = computed(() => {
   if (parentId == null) return null
   return collections.value.find((c) => c.id === parentId)?.name ?? null
 })
+/** 当前合集的二级收藏夹（非空 = 这是分类节点：内容区展示收藏夹卡片） */
+const currentChildren = computed(() => {
+  const id = current.value?.id
+  return id == null ? [] : childrenOf(id)
+})
 
 // 两级结构：一级（parent_id 为空）渲染成组，二级跟在各一级下面。
 // 后端已保证「一级后面紧跟它的二级」的顺序，这里只做分组。
@@ -554,6 +559,35 @@ onMounted(() => {
           匹配条件：{{ conditionSummary }}
         </a-alert>
 
+        <!-- 一级收藏夹：只当分类，列出二级收藏夹卡片（不做混合素材墙） -->
+        <div v-if="currentChildren.length" class="folder-list">
+          <p class="folder-tip">
+            这是分类节点：素材按抖音上的收藏夹分别存放，点开某个收藏夹查看素材。
+          </p>
+          <div class="folder-grid">
+            <div
+              v-for="child in currentChildren"
+              :key="child.id"
+              class="folder-card"
+              @click="currentId = child.id"
+            >
+              <div class="folder-cover">
+                <img
+                  v-if="child.cover_thumbnail_path"
+                  :src="getFileUrl(child.cover_thumbnail_path)"
+                  alt=""
+                />
+                <span v-else class="folder-cover-empty">📂</span>
+              </div>
+              <div class="folder-name" :title="child.name">{{ child.name }}</div>
+              <div class="folder-count">{{ child.item_count ?? 0 }} 个素材</div>
+            </div>
+          </div>
+          <div v-if="current.item_count" class="folder-unclassified">
+            另有 {{ current.item_count }} 个素材没有归到任何收藏夹（平铺收藏/归属缺失），见下方。
+          </div>
+        </div>
+
         <!-- 排序模式：缩略图条带拖拽编排 -->
         <div v-if="ordering" class="ordering-strip">
           <p class="ordering-tip">拖动缩略图调整展示顺序，完成后点击「保存顺序」。</p>
@@ -574,7 +608,7 @@ onMounted(() => {
 
         <!-- 瀑布流内容 -->
         <template v-else>
-          <div v-if="current.kind === 'manual'" class="content-toolbar">
+          <div v-if="current.kind === 'manual' && !currentChildren.length" class="content-toolbar">
             <a-button size="small" @click="addOpen = true">＋ 添加素材</a-button>
             <a-button v-if="!batchMode" size="small" @click="enterBatchMode()">批量选择</a-button>
           </div>
@@ -593,25 +627,27 @@ onMounted(() => {
             <a-button size="mini" type="text" @click="exitBatchMode()">退出批量</a-button>
           </div>
 
-          <MasonryGrid
-            :items="items"
-            :loading="contentLoading"
-            density="standard"
-            :selectable="batchMode"
-            :selected-ids="selectedIds"
-            :show-view-button="batchMode"
-            :show-actions="false"
-            @toggle-select="toggleSelect"
-          />
-
-          <div v-if="total > pageSize" class="pagination-wrapper">
-            <a-pagination
-              :current="page"
-              :total="total"
-              :page-size="pageSize"
-              @change="onPageChange"
+          <template v-if="!currentChildren.length || items.length">
+            <MasonryGrid
+              :items="items"
+              :loading="contentLoading"
+              density="standard"
+              :selectable="batchMode"
+              :selected-ids="selectedIds"
+              :show-view-button="batchMode"
+              :show-actions="false"
+              @toggle-select="toggleSelect"
             />
-          </div>
+
+            <div v-if="total > pageSize" class="pagination-wrapper">
+              <a-pagination
+                :current="page"
+                :total="total"
+                :page-size="pageSize"
+                @change="onPageChange"
+              />
+            </div>
+          </template>
         </template>
       </template>
       <!-- 空状态：垂直水平居中撑满内容区，避免孤零零浮在左上角 -->
@@ -852,6 +888,67 @@ onMounted(() => {
 .content-parent {
   font-size: 13px;
   color: #86909c;
+}
+
+/* 分类节点（一级）的收藏夹卡片墙：像抖音的收藏夹列表，而不是混合素材墙 */
+.folder-list {
+  margin-bottom: 16px;
+}
+.folder-tip {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #86909c;
+}
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.folder-card {
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #fff;
+  transition: all 0.15s;
+}
+.folder-card:hover {
+  border-color: #94bfff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+.folder-cover {
+  height: 96px;
+  background: #f7f8fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.folder-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.folder-cover-empty {
+  font-size: 28px;
+  opacity: 0.5;
+}
+.folder-name {
+  padding: 8px 10px 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-count {
+  padding: 2px 10px 10px;
+  font-size: 11px;
+  color: #86909c;
+}
+.folder-unclassified {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #ff7d00;
 }
 .content-actions {
   display: flex;

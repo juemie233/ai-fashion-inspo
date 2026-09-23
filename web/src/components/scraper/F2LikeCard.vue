@@ -278,9 +278,17 @@ async function onSubmit() {
         >
           {{ collectScanning ? '正在扫描收藏夹…' : '先扫描收藏夹' }}
         </a-button>
-        <a-button :loading="submitting" :disabled="!canSubmit" @click="onDownloadAllCollects">
-          一键下载全部收藏
-        </a-button>
+        <a-popconfirm
+          :content="
+            '这会下载并入库**全部**收藏夹的内容（含股票、哲学这类与穿搭无关的夹）。' +
+            '建议改用「先扫描收藏夹」只勾想要的夹 —— 那样未勾选的夹既不会下载，也不会入库。'
+          "
+          ok-text="仍然全部下载"
+          cancel-text="改用勾选"
+          @ok="onDownloadAllCollects"
+        >
+          <a-button :loading="submitting" :disabled="!canSubmit">一键下载全部收藏</a-button>
+        </a-popconfirm>
       </template>
       <a-button
         v-else
@@ -342,7 +350,12 @@ async function onSubmit() {
       <div v-if="isCollect">
         · <b>先扫描、后下载</b>：点「先扫描收藏夹」会列出你的收藏夹（名字 + 件数），
         把不想要的（比如「股票」「哲学」这类）取消勾选，再只下勾选的 —— 没被选中的夹
-        一件都不会下载。<b>你的勾选会被本地记住（只留最近一次）</b>，下次扫描自动恢复。
+        <b>既不会下载，也不会入库</b>（入库范围同样只看勾选的夹）。
+        <b>你的勾选会被本地记住（只留最近一次）</b>，下次扫描自动恢复。
+      </div>
+      <div v-if="isCollect">
+        · 入库后在「收藏合集」页按抖音收藏夹分成二级收藏夹；直接用「一键下载全部收藏」
+        则会把所有夹（含不相干的）一次性收进来，所以那个按钮会先弹确认。
       </div>
       <div>· {{ copy.collectTip }}结果浏览与审查在下方「抖音采集历史」里 点「查看结果」。</div>
     </div>

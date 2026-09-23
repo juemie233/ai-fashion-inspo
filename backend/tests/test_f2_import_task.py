@@ -109,10 +109,10 @@ async def test_collect_stage_aggregates_into_douyin_root_collection(client, uplo
 
 
 async def test_collect_stage_builds_second_level_from_folder_map(client):
-    """有归属清单时建二级收藏夹：名字 = 抖音收藏夹名，一级节点同时汇总全部作品。
+    """有归属清单时建二级收藏夹：名字 = 抖音收藏夹名；一级只当分类、不装作品。
 
-    这是本次修复的核心：原先所有收藏作品都倒进一个扁平合集，看不出抖音侧的收藏夹
-    维度；现在二级对应收藏夹，一级是总入口（点进去能看到收藏全集）。
+    这是本次修复的核心：原先所有收藏作品都倒进一个扁平合集（2658 条混在一起），
+    现在二级对应抖音收藏夹，一级点进去看到的是收藏夹而不是混合列表。
     """
     from sqlalchemy import select
 
@@ -162,6 +162,8 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
         assert stats["folder_count"] == 2
         assert {f["name"] for f in stats["folders"]} == {"秘书OL", "股票"}
         assert stats["attributed"] == 2
+        # 两件作品都有归属 → 一级不装任何作品（纯分类节点）
+        assert stats["unattributed"] == 0
 
         root = (
             await db.execute(
@@ -184,18 +186,15 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
             )
             return set(rows.scalars().all())
 
-        # 一级汇总全集，二级各自归位
-        assert await _members(root.id) == {
-            "collect-7400000000000000001",
-            "collect-7400000000000000002",
-        }
+        # 一级只当分类（不汇总），作品各自归位到对应收藏夹
+        assert await _members(root.id) == set()
         by_name = {c.name: await _members(c.id) for c in children}
         assert by_name == {
             "秘书OL": {"collect-7400000000000000001"},
             "股票": {"collect-7400000000000000002"},
         }
 
-    # 平铺下载（无归属清单）时只进一级，不猜收藏夹名
+    # 平铺下载（无归属清单）时只进一级：没有夹可归，总得有个去处，且不猜夹名
     async with async_session() as db:
         task = TaskQueue(
             type="f2_import", status="running", progress=90, total=0, done=0,
@@ -208,10 +207,20 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
             db,
             task,
             {"ids": []},
-            extra_ids=["collect-7400000000000000001"],
+            extra_ids=["collect-7400000000000000002"],
             folder_map={},
         )
         assert flat["folder_count"] == 0
+        assert flat["unattributed"] == 1
+        root_id = flat["id"]
+        members = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == root_id
+                )
+            )
+        ).scalars().all()
+        assert list(members) == ["collect-7400000000000000002"]
 
 
 async def test_collect_stage_noop_without_imported_ids(client):
@@ -1938,8 +1947,33 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     assert calls["like_user"] == "https://www.douyin.com/user/MS4wLjABAAAAme"
 
 
+def _write_collect_folder_map(root, folders: dict) -> None:
+    """写收藏夹归属清单（格式契约见 scripts/f2_collects.py 的 ``_merge_folder_map``）。
+
+    Args:
+        root: 收藏产物根目录（清单写在 ``{root}/_collect_folders.json``）。
+        folders: ``{收藏夹 ID: (收藏夹名, [作品 ID, ...])}``。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "_collect_folders.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-09-23 16:00:00",
+                "folders": {
+                    str(fid): {"name": name, "aweme_ids": list(ids)}
+                    for fid, (name, ids) in folders.items()
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _stub_collect_folder_download(monkeypatch, calls: dict):
-    """打桩「按选中收藏夹下载」：往收藏产物根写一张真图，模拟 f2 落盘。"""
+    """打桩「按选中收藏夹下载」：往收藏产物根写一张真图 + 归属清单，模拟 f2 落盘。"""
     patch_f2(monkeypatch, "f2_available", lambda: True)
     # 平铺链路必须**不被走到**（走到就说明 collect_ids 没生效）
     patch_f2(
@@ -1957,6 +1991,10 @@ def _stub_collect_folder_download(monkeypatch, calls: dict):
         calls["link_from_root"] = str(link_from_root or "")
         root = f2.DEFAULT_F2_COLLECT_ROOT / "我的账号"
         _jpeg(root / "不养羊_2026-09-14 10-31-14_下一站再见吧#jk_7670881947199742833_image_1.jpg")
+        # 真实下载会把「作品 ID → 收藏夹」写进清单；入库阶段按它限定范围与建二级
+        _write_collect_folder_map(
+            root, {collect_ids[0]: ("秘书OL", ["7670881947199742833"])}
+        )
         stats = {
             "cookie_source": "假配置",
             "root": str(root),
@@ -2003,9 +2041,13 @@ async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
         assert fetch["collect"]["folders"][0]["name"] == "秘书OL"
         assert fetch["collect"]["works"] == 1
         assert fetch["mode"] == "collection"
-        # 落盘的那张图照常入库，并归位到一级「抖音入库自动收藏」
+        # 落盘的那张图照常入库，并归位到二级「秘书OL」（一级是纯分类节点）
         assert stored.result["import"]["imported"] == 1
-        assert stored.result["collection"]["added"] == 1
+        stats = stored.result["collection"]
+        assert stats["added"] == 0  # 一级不装作品
+        assert stats["folder_count"] == 1
+        assert stats["folders"][0]["name"] == "秘书OL"
+        assert stats["folders"][0]["added"] == 1
 
     assert calls["collect_ids"] == ["7650133299343595322"]
     assert calls["max_counts"] == 0  # 未配置「每次最多翻」= 每个夹全量
@@ -2013,6 +2055,116 @@ async def test_execute_f2_import_collect_ids_downloads_only_selected_folders(
     # F 的接线：库内已有作品 ID 集合与「同类目录预链接来源」都要传下去
     assert calls["link_from_root"] == str(f2.DEFAULT_F2_LIKE_ROOT)
     assert isinstance(calls["existing_aweme_ids"], set)
+
+
+async def test_execute_f2_import_collect_ids_scopes_import_to_selected_folders(
+    client, auto_settings, monkeypatch
+):
+    """勾选的收藏夹 = **入库范围**：未勾选夹里已躺在硬盘上的文件一件都不入库。
+
+    回归（用户实测）：下载阶段只下勾选的夹，但入库阶段原先扫的是**整个**收藏目录
+    ——没勾的夹只要文件在硬盘上就照样被收进素材库。结果就是「我明明只勾了两个夹，
+    股票/哲学那些也全进来了」。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(
+        monkeypatch,
+        "run_fetch_collects",
+        lambda *_a, **_k: pytest.fail("选中收藏夹时不该走平铺收藏命令"),
+    )
+
+    selected_aweme = "7000000000000000001"
+    unselected_aweme = "7000000000000000002"
+
+    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None,
+              existing_aweme_ids=None, link_from_root=None):
+        root = f2.DEFAULT_F2_COLLECT_ROOT / "我的账号"
+        # 勾选的夹里的作品
+        _jpeg(root / f"作者A_2026-09-01 10-00-00_穿搭#jk_{selected_aweme}_image_1.jpg")
+        # 没勾的夹里早就下好的作品（平铺那次留下的）——不该被顺带入库
+        _jpeg(root / f"作者B_2026-09-01 10-00-00_股票_{unselected_aweme}_image_1.jpg")
+        _write_collect_folder_map(root, {"111": ("秘书OL", [selected_aweme])})
+        stats = {
+            "cookie_source": "假配置",
+            "root": str(root),
+            "folders": [
+                {"id": "111", "name": "秘书OL", "total": 1, "works": 1, "skipped_existing": 0}
+            ],
+            "works": 1,
+            "total_works": 1,
+            "current": {},
+            "stopped": False,
+            "missing_folders": [],
+            "skipped_existing": 0,
+            "skipped_existing_ids": [],
+            "skipped_ids_truncated": False,
+            "prelinked": 0,
+            "link_index_size": 0,
+        }
+        if on_progress:
+            on_progress(stats)
+        return stats
+
+    patch_f2(monkeypatch, "download_collect_folders", _fake)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", collect_ids=["111"]
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["import"]["imported"] == 1, "只该入库勾选夹里的那件"
+        # 没勾的夹那件被范围过滤挡掉，并在结果里留痕（不静默丢弃）
+        assert stored.result["plan"]["scoped_out"] == 1
+
+        rows = (
+            await db.execute(
+                select(Inspiration.source_platform_id).where(
+                    Inspiration.deleted_at.is_(None)
+                )
+            )
+        ).scalars().all()
+        assert len(rows) == 1 and selected_aweme in rows[0]
+
+        # 它归到了「秘书OL」这个二级收藏夹，一级仍为空（纯分类节点）
+        root = (
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
+        ).scalars().one()
+        child = (
+            await db.execute(
+                select(Collection).where(
+                    Collection.parent_id == root.id, Collection.name == "秘书OL"
+                )
+            )
+        ).scalars().one()
+        child_members = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == child.id
+                )
+            )
+        ).scalars().all()
+        assert len(child_members) == 1
+        root_members = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == root.id
+                )
+            )
+        ).scalars().all()
+        assert list(root_members) == []
 
 
 async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_collection(
@@ -2052,6 +2204,11 @@ async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_col
     def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None,
               existing_aweme_ids=None, link_from_root=None):
         calls["existing_aweme_ids"] = set(existing_aweme_ids or set())
+        # 按夹下载即使一件都没新下（全被 F 跳过）也会写归属清单
+        _write_collect_folder_map(
+            f2.DEFAULT_F2_COLLECT_ROOT / "我的账号",
+            {collect_ids[0]: ("秘书OL", ["7670881947199742833"])},
+        )
         stats = {
             "cookie_source": "假配置",
             "root": str(f2.DEFAULT_F2_COLLECT_ROOT),
@@ -2085,18 +2242,30 @@ async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_col
         stored = await db.get(TaskQueue, task_id)
         assert stored.result["import"]["imported"] == 0  # 本次一件都没入库
         stats = stored.result["collection"]
-        assert stats["from_existing"] == 1
-        assert stats["added"] == 1
+        assert stats["folder_count"] == 1
+        folder = stats["folders"][0]
+        assert folder["name"] == "秘书OL"
+        assert folder["added"] == 1
+        # 本次一件都没新入库，这件是从「已在库」补进来的（E 的语义，按夹同口径）
+        assert folder["from_existing"] == 1
+        assert stats["added"] == 0  # 一级不装作品
 
-        collection = (
+        root = (
             await db.execute(
                 select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
+        ).scalars().one()
+        child = (
+            await db.execute(
+                select(Collection).where(
+                    Collection.parent_id == root.id, Collection.name == "秘书OL"
+                )
             )
         ).scalars().one()
         member_ids = (
             await db.execute(
                 select(CollectionItem.inspiration_id).where(
-                    CollectionItem.collection_id == collection.id
+                    CollectionItem.collection_id == child.id
                 )
             )
         ).scalars().all()

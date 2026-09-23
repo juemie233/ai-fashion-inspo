@@ -88,20 +88,20 @@ def _personal_scan_root(f2, fetch_mode: str):
     )
 
 
-def load_collect_folder_map(root) -> dict[str, list[str]]:
-    """读「作品 ID → 抖音收藏夹」清单，返回 ``{收藏夹名: [作品 ID, ...]}``。
+def load_collect_folder_entries(root) -> dict[str, dict]:
+    """读「收藏夹 ID → {name, 作品 ID}」清单（原始结构，供按夹限定入库范围用）。
 
     清单由按夹下载时写出（见 ``scripts/f2_collects.py``）：文件平铺在昵称目录下，
     路径里不带收藏夹名，只有这份清单能回答「这件作品属于哪个夹」。
 
-    多个昵称目录（换过账号/改过昵称）的清单会合并；同名夹取并集。清单缺失
-    （平铺 ``-M collection`` 下载、旧批次）时返回空字典——此时作品只进一级节点。
+    多个昵称目录（换过账号/改过昵称）的清单会合并；同一夹 ID 取并集。清单缺失
+    （平铺 ``-M collection`` 下载、旧批次）时返回空字典。
 
     Args:
         root: 收藏产物根目录（…/douyin/collection）。
 
     Returns:
-        收藏夹名 → 作品 ID 列表（README 见 :data:`_COLLECT_FOLDER_MAP_NAME`）。
+        ``{收藏夹 ID: {"name": str, "aweme_ids": [作品 ID, ...]}}``。
     """
     import json
 
@@ -111,11 +111,9 @@ def load_collect_folder_map(root) -> dict[str, list[str]]:
     # 清单落在「昵称」目录下：既认根目录直下，也认一层子目录（f2 的产物结构）
     candidates = [base / _COLLECT_FOLDER_MAP_NAME]
     candidates += [
-        child / _COLLECT_FOLDER_MAP_NAME
-        for child in sorted(base.iterdir())
-        if child.is_dir()
+        child / _COLLECT_FOLDER_MAP_NAME for child in sorted(base.iterdir()) if child.is_dir()
     ]
-    merged: dict[str, set[str]] = {}
+    merged: dict[str, dict] = {}
     for path in candidates:
         if not path.is_file():
             continue
@@ -124,12 +122,37 @@ def load_collect_folder_map(root) -> dict[str, list[str]]:
         except (OSError, ValueError) as exc:
             logger.warning(f"收藏夹清单读取失败（忽略该文件）：{path} -> {exc}")
             continue
-        for entry in (payload.get("folders") or {}).values():
-            name = str(entry.get("name") or "").strip()
-            if not name:
+        for folder_id, entry in (payload.get("folders") or {}).items():
+            ids = {str(a) for a in (entry.get("aweme_ids") or []) if a}
+            if not ids:
                 continue
-            bucket = merged.setdefault(name, set())
-            bucket.update(str(a) for a in (entry.get("aweme_ids") or []) if a)
+            prev = merged.setdefault(str(folder_id), {"name": "", "aweme_ids": set()})
+            prev["name"] = prev["name"] or str(entry.get("name") or "").strip()
+            prev["aweme_ids"] |= ids
+    return {
+        fid: {"name": entry["name"], "aweme_ids": sorted(entry["aweme_ids"])}
+        for fid, entry in merged.items()
+    }
+
+
+def load_collect_folder_map(root) -> dict[str, list[str]]:
+    """读「作品 ID → 抖音收藏夹」清单，返回 ``{收藏夹名: [作品 ID, ...]}``（按名聚合）。
+
+    建二级收藏夹用这个视图（二级的名字就是收藏夹名）；限定入库范围请用
+    :func:`load_collect_folder_entries`（那份按夹 ID 索引，勾选状态是夹 ID）。
+
+    Args:
+        root: 收藏产物根目录（…/douyin/collection）。
+
+    Returns:
+        收藏夹名 → 作品 ID 列表；清单缺失时为空字典。
+    """
+    merged: dict[str, set[str]] = {}
+    for entry in load_collect_folder_entries(root).values():
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        merged.setdefault(name, set()).update(entry["aweme_ids"])
     return {name: sorted(ids) for name, ids in merged.items() if ids}
 
 
@@ -812,11 +835,11 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
 
     # ── 阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）──
     if not fetch_enabled and collect_ids:
-        # 只入库（fetch=false）时没有「要下哪些夹」这回事：扫描的是整个收藏目录，
-        # 勾选结果无从生效。响亮记一笔，别让调用方以为「只下了勾选的夹」。
-        logger.warning(
-            f"[f2] fetch=false 时 collect_ids（{len(collect_ids)} 个夹）不生效："
-            "本次只入库已下载的文件，不做任何筛选"
+        # 只入库（fetch=false）也认收藏夹范围：不下载，但只把勾选夹的作品入库。
+        # 这样「修正一批误入库/补一批漏入库」都不必重新下载。
+        logger.info(
+            f"[f2] fetch=false + collect_ids（{len(collect_ids)} 个夹）：不下载，"
+            "只入库这些收藏夹里已下载的作品"
         )
     if fetch_enabled and personal_mode and collect_ids and fetch_mode == "collection":
         # 「先扫描、后下载」：只下选中的收藏夹（逐夹枚举 + f2 下载器，页间可中断）
@@ -851,6 +874,33 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 收藏模式顺手把「本次扫描到的作品 ID」带出来：合集要收的是你的收藏全集，
     # 而不是「本批新入库的那几条」（已在库的会被判重跳过，见阶段 3c）
     collect_scope: dict = {}
+    # 勾选的收藏夹 = 入库范围白名单（None 表示不限定）。收藏目录里躺着**所有**夹的
+    # 历史文件，「只下勾选的夹」不足以让它们不进库——入库这一步必须同样只看勾选的夹。
+    allowed_aweme_ids: set[str] | None = None
+    folder_entries: dict[str, dict] = {}
+    if fetch_mode == "collection":
+        folder_entries = load_collect_folder_entries(_personal_scan_root(f2, fetch_mode))
+        if collect_ids:
+            allowed_aweme_ids = set()
+            for folder_id in collect_ids:
+                entry = folder_entries.get(str(folder_id))
+                if entry:
+                    allowed_aweme_ids.update(entry["aweme_ids"])
+            if not allowed_aweme_ids:
+                # 勾了夹但清单里没有任何作品 ID：宁可什么都不入库，也不要退化成
+                # 「整棵树都收」（那正是用户要避免的：无关内容混进素材库）
+                logger.warning(
+                    f"[f2] 勾选的 {len(collect_ids)} 个收藏夹在归属清单里没有作品记录，"
+                    "本次不入库任何文件（请用「先扫描收藏夹」重新下载以生成归属清单）"
+                )
+                task.error = (
+                    "勾选的收藏夹没有归属记录：本次未入库任何文件。"
+                    "请改用「先扫描收藏夹 → 下载勾选的夹」重新生成归属清单。"
+                )
+                task.result = {**task.result, "stage": "done", "scope_empty": True}
+                task.updated_at = utcnow()
+                await db.commit()
+                return
     to_import = await _scan_and_plan_stage(
         db,
         task,
@@ -862,6 +912,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         fetch_mode,
         fetch_summary,
         collect_scope=collect_scope if fetch_mode == "collection" else None,
+        allowed_aweme_ids=allowed_aweme_ids,
     )
     # 合集补齐的范围（仅收藏模式）：本次扫描到的作品 ∪ 本次枚举到但被 F 跳过（已在库）的作品
     collect_extras: list[str] = []
@@ -872,7 +923,19 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         collect_extras += list(
             (fetch_summary.get("collect") or {}).get("skipped_existing_ids") or []
         )
-        collect_folder_map = load_collect_folder_map(_personal_scan_root(f2, fetch_mode))
+        # 二级归属：按「作品 ID → 收藏夹名」聚合（限定范围时只保留**勾选**的夹，
+        # 否则同一作品同时属于勾选夹与未勾选夹时，会给没勾的夹也建出一个二级）
+        if allowed_aweme_ids is None:
+            collect_folder_map = load_collect_folder_map(_personal_scan_root(f2, fetch_mode))
+        else:
+            selected_folder_ids = {str(c) for c in collect_ids}
+            collect_folder_map = {
+                entry["name"]: sorted(set(entry["aweme_ids"]) & allowed_aweme_ids)
+                for folder_id, entry in folder_entries.items()
+                if folder_id in selected_folder_ids
+                and entry["name"]
+                and (set(entry["aweme_ids"]) & allowed_aweme_ids)
+            }
     if not to_import:
         # 本批没有要入库的文件，但收藏模式仍要把「已在库」的部分补进合集，
         # 否则零新增的那几轮合集永远不更新
@@ -1403,7 +1466,8 @@ async def _resolve_named_profile_keys(db: AsyncSession, task: TaskQueue, opts: d
 async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bloggers: dict,
                      plan_authors: set[str] | None, limit: int | None, skip_live: bool,
                      fetch_mode: str, fetch_summary: dict,
-                     collect_scope: dict | None = None) -> list:
+                     collect_scope: dict | None = None,
+                     allowed_aweme_ids: set[str] | None = None) -> list:
     """阶段 2：扫描下载目录 + 去重计划（放线程，否则阻塞 worker 事件循环）。
 
     无可入库文件时本函数直接落「done」结果并返回空列表，调用方据此收工。
@@ -1412,6 +1476,9 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
         collect_scope: 收藏模式传入一个 dict，函数会把「本次扫描到的作品 ID」写进
             ``collect_scope["aweme_ids"]``（供合集补齐用：合集要收的是收藏全集，
             而不是「本批新入库」）。
+        allowed_aweme_ids: **入库范围白名单**（勾选的收藏夹里的作品 ID）。非 None 时
+            扫描结果先按它过滤：没勾的夹即使文件早就躺在硬盘上也不入库。这是「我只勾了
+            两个夹」这句承诺的另一半——下载阶段只下勾选的夹，入库阶段必须同样只看它们。
     """
     from scripts import import_f2_downloads as f2
 
@@ -1426,7 +1493,17 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
     task.updated_at = utcnow()
     await db.commit()
     files = await asyncio.to_thread(f2.scan_directory, scan_root)
+    scoped_out = 0
+    if allowed_aweme_ids is not None:
+        kept = [f for f in files if f.aweme_id and f.aweme_id in allowed_aweme_ids]
+        scoped_out = len(files) - len(kept)
+        files = kept
+        logger.info(
+            f"收藏夹范围过滤：{len(kept)} 个文件在勾选的夹内，跳过 {scoped_out} 个"
+            "（未勾选的夹 / 无作品 ID 的历史产物）"
+        )
     dedup = await asyncio.to_thread(f2.load_dedup_index)
+
     started = time.monotonic()
     decisions, skipped, deferred_works, cache_stats = await asyncio.to_thread(
         f2.build_plan_with_cache,
@@ -1468,6 +1545,8 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
             # 带真实作品 ID 的文件数（新命名模板产物）。为 0 说明这批素材入库后
             # 仍点不回抖音原帖——据此判断采集侧模板是否生效。
             "with_aweme_id": sum(1 for d in to_import if d.item.aweme_id),
+            # 因不在勾选的收藏夹内而没入库的文件数（0 = 没限定范围/全都命中）
+            "scoped_out": scoped_out,
         },
     }
     task.updated_at = utcnow()
@@ -1672,13 +1751,12 @@ async def _aggregate_collect_stage(
 
     结构（用户口径，见 models/collection.py）：
 
-    - 一级「抖音入库自动收藏」：抖音自动收藏的总入口，**同时汇总全部作品**
-      （点进去就是收藏全集，不会因为分了二级反而看不到总数）；
+    - 一级「抖音入库自动收藏」是**纯分类节点**，本身不装作品（点进去看到的是收藏夹）；
     - 二级：名字与抖音侧收藏夹一一对应（归属来自按夹下载时写的
       ``_collect_folders.json``，见 :func:`load_collect_folder_map`）。
 
-    没有归属信息的作品（平铺 ``-M collection`` 下载、清单缺失、清单里没记到的）
-    只进一级节点——宁可少一层细分，也不要猜一个收藏夹名。
+    **没有归属信息的作品**（平铺 ``-M collection`` 下载、清单缺失、清单里没记到的）
+    才落在一级节点上——它们没有收藏夹可归，总得有个去处。正常按夹下载时一级恒为空。
 
     为什么用合集而不是标签：合集的语义就是「一批素材的集合」（合集里直接看到数量
     与体积），而标签是 AI/手动语义、会进入标签治理（去重/合并/健康扫描）——收藏来源是
@@ -1733,11 +1811,15 @@ async def _aggregate_collect_stage(
                     "created": child_created,
                     "added": int(child_added.get("added") or 0),
                     "skipped": int(child_added.get("skipped") or 0),
+                    # 该夹里「已在库、本次没重新入库但补进来」的条数（与一级同口径，
+                    # 便于解释「本夹数量 > 本批新入库」）
+                    "from_existing": sum(1 for i in ids if i not in imported_set),
                 }
             )
 
-        # 一级节点汇总：本批入库 + 已在库补入 + 各二级夹归位的作品（去重）
-        root_ids = list(dict.fromkeys([*target_ids, *sorted(attributed)]))
+        # 一级节点只收「没有归属」的作品：能归到某个抖音收藏夹的一律只进二级，
+        # 免得一级又变回「2658 件全塞在一起」的那个混合列表
+        root_ids = [insp_id for insp_id in target_ids if insp_id not in attributed]
         added = await collection_service.add_inspirations(db, root_id, root_ids)
         stats = {
             "id": root_id,
@@ -1752,6 +1834,8 @@ async def _aggregate_collect_stage(
             "folders": folder_stats,
             "folder_count": len(folder_stats),
             "attributed": len(attributed),
+            # 归位失败、只能落在一级的条数（正常为 0：说明每个作品都找到了自己的夹）
+            "unattributed": len(root_ids),
         }
         task.result = {**task.result, "collection": stats}
         await db.commit()
