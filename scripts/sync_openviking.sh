@@ -146,10 +146,12 @@ STATE_BASENAME = ".sync_openviking_state.json"
 DECISIONS_DIR_REL = "docs/decisions"
 DECISIONS_DIR = os.path.join(ROOT, "docs", "decisions")
 DECISIONS_BODY_CAP = 600  # 单条提交正文上限（字符），超出则截断并标注完整正文所在提交
+# 本脚本生成的周文件名形态：清理过期文件时只认这一种，绝不误删目录里别的文件
+DECISIONS_WEEK_RE = re.compile(r"^\d{4}-W\d{2}\.md$")
 
 
 # ---------- 1a. 生成决策台账（派生文档，必须先于目录遍历） ----------
-def write_decisions_docs() -> int:
+def write_decisions_docs(dry_run: bool = False) -> int:
     """把 git log 按 ISO 周切成 docs/decisions/<年>-W<周>.md，供检索「为什么这么做」。
 
     动机：代码与注释能回答「是什么」，但取舍理由大多只存在于提交正文里，而
@@ -161,9 +163,12 @@ def write_decisions_docs() -> int:
       且这个目录本身能聚合出「决策台账总览」；
     - 正文截断到 DECISIONS_BODY_CAP（实测中位 313 / p90 813 字符），截断处标注
       完整正文所在提交，避免产生巨型文件；
-    - 内容由提交历史唯一决定，可重复生成（幂等），无需人工维护。
+    - 内容由提交历史唯一决定，可重复生成（幂等），无需人工维护；
+    - 只保留当前桶对应的周文件，过期周文件删除（见下）；
+    - ``dry_run`` 为真时**不落盘**：dry-run 的语义是「只看会同步什么」，写盘会
+      让工作区多出派生文件、并把一次预览变成实际改动。
 
-    返回生成的周文件数；git 不可用时返回 -1（不影响其余同步流程）。
+    返回本次桶对应的周文件数；git 不可用时返回 -1（不影响其余同步流程）。
     """
     fmt = "###%x09%h%x09%ad%x09%s%x09%b%x1e"
     try:
@@ -206,6 +211,28 @@ def write_decisions_docs() -> int:
         buckets.setdefault(key, []).append(entry)
 
     os.makedirs(DECISIONS_DIR, exist_ok=True)
+    # 过期周文件：桶由当前 git 历史唯一决定，历史被改写（rebase/amend）或跨年后
+    # 旧周文件不会自行消失。留着会被当成本周决策一起索引（检索到已不存在的结论），
+    # 因此这里按「文件名是周文件 且 不在本次桶内」清理。
+    stale = [
+        fn
+        for fn in os.listdir(DECISIONS_DIR)
+        if DECISIONS_WEEK_RE.match(fn) and fn[:-3] not in buckets
+    ]
+    if dry_run:
+        log(
+            f"[信息] --dry-run：决策台账跳过落盘（本次将生成 {len(buckets)} 个周文件"
+            + (f"，清理 {len(stale)} 个过期周文件" if stale else "")
+            + "）"
+        )
+        return len(buckets)
+    for fn in stale:
+        try:
+            os.remove(os.path.join(DECISIONS_DIR, fn))
+        except OSError as e:
+            log(f"[警告] 删除过期决策周文件失败 {fn}：{e}")
+    if stale:
+        log(f"[信息] 决策台账清理过期周文件：{len(stale)} 个（{'、'.join(sorted(stale))}）")
     for key, entries in buckets.items():
         header = (
             f"# 决策台账 {key}\n\n"
@@ -220,8 +247,8 @@ def write_decisions_docs() -> int:
     return len(buckets)
 
 
-_decisions_weeks = write_decisions_docs()
-if _decisions_weeks >= 0:
+_decisions_weeks = write_decisions_docs(DRY_RUN)
+if _decisions_weeks >= 0 and not DRY_RUN:
     log(
         f"[信息] 决策台账已生成：{_decisions_weeks} 个周文件"
         f"（{DECISIONS_DIR_REL}/，随本次同步一起入库）"

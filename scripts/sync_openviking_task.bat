@@ -40,6 +40,16 @@ if not defined BASH_EXE (
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
+REM Rotate the log once it passes ~5 MB, keeping exactly one previous generation.
+REM The task appends on every daily run and nothing ever truncates the file, so
+REM without this the log grows without bound (and the sync URL/HTTP lines are only
+REM useful for the most recent runs anyway).
+set "LOG_MAX_BYTES=5242880"
+if exist "%LOG_FILE%" for %%F in ("%LOG_FILE%") do if %%~zF GEQ %LOG_MAX_BYTES% (
+  if exist "%LOG_FILE%.1" del "%LOG_FILE%.1" >nul 2>&1
+  move /y "%LOG_FILE%" "%LOG_FILE%.1" >nul 2>&1
+)
+
 REM Convert backslashes to forward slashes for Git Bash.
 set "PROJECT_BASH=%PROJECT_DIR:\=/%"
 set "SCRIPT_PATH=%PROJECT_BASH%/scripts/sync_openviking.sh"
