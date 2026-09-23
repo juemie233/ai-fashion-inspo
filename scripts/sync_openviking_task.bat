@@ -44,6 +44,16 @@ REM Convert backslashes to forward slashes for Git Bash.
 set "PROJECT_BASH=%PROJECT_DIR:\=/%"
 set "SCRIPT_PATH=%PROJECT_BASH%/scripts/sync_openviking.sh"
 
+REM Warm up the embedding model first: after an idle gap Ollama unloads it, and a
+REM cold load makes the first embedding burst slow enough to fail at the client
+REM (see the 2026-09-23 retry storm) -- warming costs a second and removes that
+REM cold path entirely. Ollama must already be listening, so probe it first.
+echo [sync_task] %date% %time% warming up embedding model >> "%LOG_FILE%"
+set "WARMUP_JSON=%TEMP%\ov_sync_warmup.json"
+echo {"model":"qwen3-embedding:0.6b","input":"warmup"}>"%WARMUP_JSON%"
+curl -s -o nul -m 300 -X POST -H "Content-Type: application/json" --data "@%WARMUP_JSON%" http://127.0.0.1:11434/api/embed >> "%LOG_FILE%" 2>&1
+del "%WARMUP_JSON%" >nul 2>&1
+
 echo [sync_task] %date% %time% starting >> "%LOG_FILE%"
 "%BASH_EXE%" -c "bash '%SCRIPT_PATH%'" >> "%LOG_FILE%" 2>&1
 set "RC=%errorlevel%"
