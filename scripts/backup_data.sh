@@ -43,7 +43,10 @@ PROJECT_ROOT="$(pwd -W 2>/dev/null || pwd)"
 # ── 解析「生效的」素材存储根：优先 app.config（读 .env 的 STORAGE_ROOT）──
 # 为什么不能写死 backend/storage：数据盘迁移后（.env 里 STORAGE_ROOT=G:/...），写死会去
 # 备份旧目录下那份**已不再变化**的树，还会写上 SUCCESS——静默备错数据。
+# 回退到旧树时把来源记进 manifest（storage_dir_source=fallback）：调度器看不到 stdout，
+# 只有落进 manifest 与告警列表，才能被事后校验/审计发现「这次备的可能不是现网那棵树」。
 STORAGE_DIR=""
+STORAGE_DIR_SOURCE="config"
 if command -v python >/dev/null 2>&1; then
   STORAGE_DIR="$(cd backend 2>/dev/null && python -c 'from app.config import settings; print(settings.storage_root)' 2>/dev/null)"
 fi
@@ -53,7 +56,9 @@ case "$STORAGE_DIR" in
 esac
 if [ -z "$STORAGE_DIR" ] || [ ! -d "$STORAGE_DIR" ]; then
   STORAGE_DIR="$PROJECT_ROOT/backend/storage"
-  echo "提示：未能从 app.config 读到 storage_root，回退 $STORAGE_DIR"
+  STORAGE_DIR_SOURCE="fallback"
+  echo "⚠ 未能从 app.config 读到 storage_root（或目录不存在），回退 $STORAGE_DIR"
+  echo "⚠ 若数据盘已迁移，本次备份的可能不是现网素材树；已在 manifest 标记 fallback 并计入告警。"
 fi
 
 # ── 参数解析 ──
@@ -112,9 +117,18 @@ fi
 LOCK_MAX_AGE_HOURS="${BACKUP_LOCK_MAX_AGE_HOURS:-6}"
 LOCK_DIR="$TARGET_ROOT/.backup.lock"
 if [ -d "$LOCK_DIR" ]; then
-  _lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)"
-  _lock_age_s=$(( $(date +%s) - _lock_mtime ))
+  _lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")"
   _lock_pid="$(cut -d" " -f1 "$LOCK_DIR/pid" 2>/dev/null || echo "")"
+  # 锁龄判据必须 fail-closed：mtime 读不到（stat 失败/权限/非 GNU stat）时按「进行中」
+  # 处理并跳过本次，绝不因为「读不到时间」就删掉别人正在使用的锁——那会让并发保护
+  # 失效，同一目标根下两个备份并行写快照、并发跑 rotation。
+  case "$_lock_mtime" in
+    ''|*[!0-9]*)
+      echo "已有备份在进行中（锁存在但 mtime 不可读，pid=${_lock_pid:-未知}），本次跳过。"
+      exit 0
+      ;;
+  esac
+  _lock_age_s=$(( $(date +%s) - _lock_mtime ))
   if [ "$_lock_age_s" -gt $((LOCK_MAX_AGE_HOURS * 3600)) ]; then
     echo "发现过期锁（已 $((_lock_age_s / 3600)) 小时，pid=${_lock_pid:-未知}）：判为上次被中断的残留，清除后继续。"
     rm -rf "$LOCK_DIR" 2>/dev/null || true
@@ -398,7 +412,7 @@ echo ""
 
 # ── 5. 校验 + manifest ──
 echo ">>> [5/5] 校验备份并生成 manifest..."
-python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" <<'PYEOF'
+python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" "$STORAGE_DIR_SOURCE" <<'PYEOF'
 import hashlib
 import json
 import os
@@ -406,7 +420,15 @@ import sqlite3
 import sys
 
 dest, storage_src, verify_hash, git_head = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4]
+storage_src_kind = sys.argv[5]
 errors, warnings = [], []
+# 回退到 backend/storage 时显式告警：调度器只读 manifest，stdout 无人看。
+# 这条告警落进 manifest.warnings，事后校验/审计才查得出「这次备的可能不是现网那棵树」。
+if storage_src_kind != "config":
+    warnings.append(
+        f"素材存储根未能从 app.config 解析（source={storage_src_kind}），"
+        f"本次备份的是回退目录 {storage_src}"
+    )
 
 # 5.1 数据库完整性
 db_path = os.path.join(dest, "fashion_inspo.db")
@@ -559,6 +581,8 @@ if verify_hash:
 manifest = {
     "timestamp": os.path.basename(dest),
     "git_head": git_head,
+    "storage_dir": storage_src,
+    "storage_dir_source": storage_src_kind,
     "db_size": os.path.getsize(db_path) if os.path.exists(db_path) else 0,
     "sql_size": os.path.getsize(sql_path) if os.path.exists(sql_path) else 0,
     "table_counts": counts,
