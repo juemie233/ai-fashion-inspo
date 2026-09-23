@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import async_session
 from app.models.face import InspirationFaceDetection
 from app.services.face_match import (
@@ -150,6 +151,51 @@ def test_matrix_match_missing_threshold_falls_back_to_argument():
     assert matrix_match_faces(np.stack([face], axis=0), library, threshold=0.6) == [None]
     hit = matrix_match_faces(np.stack([face], axis=0), library, threshold=0.4)
     assert hit[0] is not None and hit[0]["person_id"] == 1
+
+
+def test_matrix_match_non_finite_threshold_falls_back_instead_of_bypassing():
+    """条目阈值为 None / nan 时必须回退兜底值，不能变成「永不掩码」。
+
+    回归：``np.asarray([None], dtype=np.float32)`` 得到 nan，而 ``score < nan``
+    恒为 False → 掩码对该人物失效，哪怕相似度只有 0.45（兜底阈值 0.5）也会以
+    最高分挤掉真正达标的人。nan 阈值同理。
+    """
+    face = _unit_axis(0)
+    # 博主 1：相似度更高（0.45）但阈值缺失 → 应按兜底 0.5 判不达标
+    # 模特 2：相似度 0.40，自身阈值 0.30 → 唯一达标者
+    for bad_threshold in (None, float("nan"), "不是数字"):
+        library = [
+            {
+                "person_type": "blogger",
+                "person_id": 1,
+                "embedding": _with_cos(0.45, 1),
+                "threshold": bad_threshold,
+            },
+            {
+                "person_type": "model",
+                "person_id": 2,
+                "embedding": _with_cos(0.40, 2),
+                "threshold": 0.30,
+            },
+        ]
+        results = matrix_match_faces(np.stack([face], axis=0), library, threshold=0.5)
+        assert results[0] is not None, f"阈值={bad_threshold!r} 时不应全员落空"
+        assert results[0]["person_id"] == 2, f"阈值={bad_threshold!r} 时不该被未达标者顶掉"
+        assert results[0]["score"] == pytest.approx(0.40, abs=1e-3)
+
+
+def test_matrix_match_non_finite_default_threshold_uses_settings():
+    """兜底阈值本身非有限值时回退 settings，不能让 nan 传染给整库。
+
+    判据用等价性：传 nan 的结果必须与显式传 ``settings.face_match_threshold``
+    完全一致（两者都走同一条掩码路径）。
+    """
+    face = _unit_axis(0)
+    library = [{"person_type": "blogger", "person_id": 1, "embedding": _with_cos(0.10, 1)}]
+    faces = np.stack([face], axis=0)
+    assert matrix_match_faces(faces, library, threshold=float("nan")) == (
+        matrix_match_faces(faces, library, threshold=settings.face_match_threshold)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -503,3 +549,37 @@ async def test_match_all_faces_uses_per_person_threshold(
     async with async_session() as db:
         stats = await match_all_faces(db, threshold=0.5)
         assert stats["matched"] == 0, "清除阈值回退全局后应恢复不匹配"
+
+
+async def test_match_all_faces_report_labels_threshold_source(
+    client, create_blogger, monkeypatch
+):
+    """报告区分兜底阈值与自定义阈值：threshold 只是兜底值，不能当成唯一阈值。
+
+    回归：原先报告只有 ``threshold``（= 本次调用的兜底值），页面上看起来像是
+    「本次匹配只用这一个阈值」，而实际每个配了阈值的人物各按自身阈值判定。
+    """
+    _setup_blogger_face(
+        client, create_blogger, monkeypatch, _unit_axis(0).tolist()
+    )
+
+    async with async_session() as db:
+        uniform = await match_all_faces(db, threshold=0.5)
+    assert uniform["threshold"] == pytest.approx(0.5)
+    assert uniform["default_threshold"] == pytest.approx(0.5)
+    assert uniform["custom_threshold_count"] == 0
+    assert uniform["threshold_mode"] == "uniform"
+
+    blogger = _setup_blogger_face(
+        client, create_blogger, monkeypatch, _unit_axis(1).tolist()
+    )
+    r = client.patch(
+        f"/api/bloggers/{blogger['id']}", json={"face_match_threshold": 0.33}
+    )
+    assert r.status_code == 200, r.text
+
+    async with async_session() as db:
+        per_person = await match_all_faces(db, threshold=0.5)
+    assert per_person["default_threshold"] == pytest.approx(0.5), "兜底值应原样回报"
+    assert per_person["custom_threshold_count"] == 1, "只有配了阈值的那 1 人计入"
+    assert per_person["threshold_mode"] == "per_person"

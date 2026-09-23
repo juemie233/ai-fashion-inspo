@@ -41,6 +41,21 @@ def _bytes_to_embedding(data: bytes) -> np.ndarray:
     return emb
 
 
+def _sanitize_threshold(raw: object, fallback: float) -> float:
+    """阈值显式转换：None / 非数字 / 非有限值一律回退兜底阈值。
+
+    必须显式转换，不能让 numpy 代劳：``np.asarray([None], dtype=np.float32)``
+    得到的是 ``nan``，而 ``score < nan`` 恒为 False —— 掩码失效，该人物对任何
+    人脸都「达标」，等于阈值被悄悄绕过（分数再低也会命中）。库里条目带的
+    ``threshold`` 若为 None（人物表该字段为空却仍写进了键）正是这种情形。
+    """
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    return value if np.isfinite(value) else fallback
+
+
 async def load_person_library(
     db: AsyncSession,
     scope: str = "all",
@@ -129,7 +144,8 @@ def matrix_match_faces(
         face_embeddings: (F, 512) float32，已归一化
         library: load_person_library 输出（空库返回全 None）；条目可带
             "threshold"（该人物自己的阈值），缺失该键时用 threshold 兜底
-        threshold: 兜底阈值（库条目未带 threshold 时使用）
+        threshold: 兜底阈值（库条目未带 threshold 时使用）；None / 非有限值
+            回退 ``settings.face_match_threshold``
 
     返回:
         与 F 等长的列表：{"person_type", "person_id", "score"} 或 None。
@@ -143,8 +159,10 @@ def matrix_match_faces(
     if f_count == 0 or not library:
         return [None] * f_count
     persons = np.stack([item["embedding"] for item in library], axis=0)  # (P, 512)
+    fallback = _sanitize_threshold(threshold, settings.face_match_threshold)
     thresholds = np.asarray(
-        [item.get("threshold", threshold) for item in library], dtype=np.float32
+        [_sanitize_threshold(item.get("threshold", fallback), fallback) for item in library],
+        dtype=np.float32,
     )  # (P,)
     scores = face_embeddings @ persons.T  # (F, P)
     # 就地掩码，避免再分配一个同尺寸的布尔矩阵（分块上限 1 万张脸）
@@ -184,11 +202,24 @@ async def match_all_faces(
     - 只更新命中结果有变化的行（diff 后批量 UPDATE），避免无谓写库；
     - 分块执行控制峰值内存（默认每 1 万张人脸一块）。
 
-    返回统计: total_faces / matched / unmatched / updated / library_size。
+    返回统计: total_faces / matched / unmatched / updated / library_size /
+    default_threshold / custom_threshold_count / bad_embeddings。
+
+    ``threshold`` 只是**兜底**值：库里配了 ``face_match_threshold`` 的人物
+    按各自的阈值判定，因此另出 ``default_threshold``（兜底值本身）与
+    ``custom_threshold_count``（配了独立阈值的人数），避免把兜底值误读成
+    「本次匹配用的唯一阈值」。
     """
     thr = threshold if threshold is not None else settings.face_match_threshold
     library = await load_person_library(
         db, scope=scope, person_ids=person_ids, default_threshold=thr
+    )
+    # 自定义阈值人数：条目里的 threshold 一律是 float（load_person_library
+    # 已解析），与兜底值不等即视为该人物自配
+    custom_threshold_count = sum(
+        1
+        for item in library
+        if abs(float(item.get("threshold", thr)) - float(thr)) > 1e-9
     )
     rows = await db.execute(
         select(
@@ -290,6 +321,9 @@ async def match_all_faces(
         "updated": len(changes),
         "library_size": len(library),
         "threshold": thr,
+        "default_threshold": thr,
+        "custom_threshold_count": custom_threshold_count,
+        "threshold_mode": "per_person" if custom_threshold_count else "uniform",
         "scope": scope,
         # 被跳过的异常维度嵌入数（脏数据不参与比对，也不计入 total_faces）
         "bad_embeddings": bad_embeddings,

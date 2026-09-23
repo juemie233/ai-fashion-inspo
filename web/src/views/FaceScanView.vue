@@ -56,6 +56,24 @@ const {
   load: loadFaceServiceStatus,
 } = useFaceServiceStatus()
 
+/** 手动复检子服务中（离线提示条的「重新检测」按钮 loading） */
+const checkingFaceService = ref(false)
+
+/** 手动复检：供用户在启动 face-service 后立刻恢复，不必等自动复检或刷新页面 */
+async function recheckFaceService() {
+  checkingFaceService.value = true
+  try {
+    await loadFaceServiceStatus()
+    if (faceServiceOffline.value) {
+      Message.warning(faceService.value?.message || '仍未探测到人脸识别子服务')
+    } else {
+      Message.success('人脸识别子服务已可用')
+    }
+  } finally {
+    checkingFaceService.value = false
+  }
+}
+
 /** 是否有任务在运行（决定轮询与按钮态）；
  *  聚类任务状态（clusterTask）声明于下方聚类区，computed 惰性求值无时序问题 */
 const busy = computed(
@@ -472,6 +490,17 @@ const { start: startTaskPolling } = usePolling({
   },
 })
 
+// 子服务离线期间的自动复检：启动 face-service 属于用户手动操作，页面不刷新时
+// 离线态会一直挂着（按钮永久禁用）。离线时每 15s 复检一次，恢复后自动解除
+// 禁用；在线时不发请求（避免常驻轮询）。
+const { start: startFaceServicePolling } = usePolling({
+  intervalMs: 15000,
+  immediate: false,
+  callback: () => {
+    if (faceServiceOffline.value) void loadFaceServiceStatus()
+  },
+})
+
 onMounted(async () => {
   await loadFaceServiceStatus()
   await refreshTasks()
@@ -479,6 +508,7 @@ onMounted(async () => {
   await loadClusterGroups()
   await loadAssignOptions()
   startTaskPolling()
+  startFaceServicePolling()
 })
 
 // ── 结果区分页/事件回调（原为模板内联箭头函数，拆组件后收敛为命名处理函数）──
@@ -577,8 +607,17 @@ function filterOption(input: string, option: { label?: string }): boolean {
       <div>{{ faceService?.message }}</div>
       <div class="face-service-alert-tip">
         人脸相关动作（扫描 / 重匹配 / 注册 / 检测）已暂时禁用。启动 face-service
-        后刷新本页即可恢复； 若 FACE_SERVICE_URL 未配置，则人脸功能整体不可用。
+        后本页会自动恢复（离线期间每 15 秒复检一次），也可点「重新检测」立即探测； 若
+        FACE_SERVICE_URL 未配置，则人脸功能整体不可用。
       </div>
+      <a-button
+        size="mini"
+        class="face-service-alert-btn"
+        :loading="checkingFaceService"
+        @click="recheckFaceService"
+      >
+        重新检测
+      </a-button>
     </a-alert>
 
     <!-- 任务卡片 -->
@@ -661,6 +700,12 @@ function filterOption(input: string, option: { label?: string }): boolean {
           <template v-if="matchTask.result?.matched !== undefined">
             全库比对 {{ matchTask.result.total_faces }} 张人脸 · 命中
             {{ matchTask.result.matched }} · 未命中 {{ matchTask.result.unmatched }}
+            <template v-if="matchTask.result.default_threshold !== undefined">
+              · 兜底阈值 {{ matchTask.result.default_threshold }}
+              <template v-if="Number(matchTask.result.custom_threshold_count) > 0">
+                （另 {{ matchTask.result.custom_threshold_count }} 人按各自阈值判定）
+              </template>
+            </template>
           </template>
         </a-typography-text>
       </div>
@@ -806,6 +851,11 @@ function filterOption(input: string, option: { label?: string }): boolean {
   font-size: 12px;
   color: #86909c;
   line-height: 1.6;
+}
+
+/* 手动复检按钮：贴在提示条末尾，不与提示文案同行 */
+.face-service-alert-btn {
+  margin-top: 8px;
 }
 
 .task-line {
