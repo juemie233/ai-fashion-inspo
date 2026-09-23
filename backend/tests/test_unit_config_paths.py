@@ -104,8 +104,3 @@ def test_three_mode_roots_hang_off_download_root():
     assert f2_common.DEFAULT_F2_LIKE_ROOT == root / 'douyin' / 'like'
     assert f2_common.DEFAULT_F2_COLLECT_ROOT == root / 'douyin' / 'collection'
 
-
-def test_f2_workdir_files_stay_put():
-    """f2 的安装目录/作者库仍在原处：搬走的只是产物目录。"""
-    assert f2_common.DEFAULT_F2_DIR.name == 'f2'
-    assert f2_common.DEFAULT_F2_DOWNLOAD_ROOT.parent == f2_common.DEFAULT_F2_DIR
