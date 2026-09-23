@@ -240,6 +240,66 @@ async def test_collect_stage_noop_without_imported_ids(client):
         assert "collection" not in (task.result or {})
 
 
+async def test_collect_stage_failure_lands_in_notices_not_error(client):
+    """归位失败属于「任务成功但有话要说」：必须进 result.notices。
+
+    回归：原先写 task.error，而 worker 在任务正常返回时会把 error 清成 None
+    （``app/worker.py`` 成功分支），于是这条提示**从来没被用户看到过**。
+    """
+    from app.models.task import TaskQueue
+    from app.services import collection_service
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("模拟归位失败")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(collection_service, "add_inspirations", _boom)
+    try:
+        async with async_session() as db:
+            task = TaskQueue(
+                type="f2_import", status="running", progress=90, total=0, done=0,
+                result={}, max_retries=1,
+            )
+            db.add(task)
+            await db.commit()
+            await db.refresh(task)
+
+            result = await f2_runner._aggregate_collect_stage(
+                db, task, {"ids": []}, extra_ids=["x"], folder_map={"秘书OL": ["1"]}
+            )
+        assert result is None
+        assert task.error is None, "不能再依赖 error：worker 成功时会清掉它"
+        assert "收藏夹归位失败（素材已入库）" in (task.result or {}).get("notices", [])
+    finally:
+        monkeypatch.undo()
+
+
+async def test_finalize_import_reports_batch_error_as_notice(client):
+    """批次清单写失败（本批无法回滚）要进 notices，而不是被 worker 清掉的 error。"""
+    from app.models.task import TaskQueue
+
+    async with async_session() as db:
+        task = TaskQueue(
+            type="f2_import", status="running", progress=50, total=1, done=1,
+            result={}, max_retries=1,
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        await f2_runner._finalize_import(
+            db,
+            task,
+            {"imported": 1, "failed": 0, "batch_file": "", "batch_error": "磁盘满"},
+            {"done": 1, "total": 1},
+            None,
+            False,
+            "running",
+        )
+        assert task.error is None
+        assert "批次清单写入失败：本批无法回滚" in (task.result or {}).get("notices", [])
+
+
 @pytest.fixture
 def f2_tree(tmp_path, monkeypatch):
     """把 f2 的工作目录/下载目录指向临时目录，并放两个作品的文件。"""
@@ -2126,6 +2186,7 @@ async def test_execute_f2_import_collect_ids_scopes_import_to_selected_folders(
         assert stored.result["import"]["imported"] == 1, "只该入库勾选夹里的那件"
         # 没勾的夹那件被范围过滤挡掉，并在结果里留痕（不静默丢弃）
         assert stored.result["plan"]["scoped_out"] == 1
+        assert "未勾选的收藏夹跳过 1 个文件" in stored.result["notices"]
 
         rows = (
             await db.execute(
@@ -2165,6 +2226,115 @@ async def test_execute_f2_import_collect_ids_scopes_import_to_selected_folders(
             )
         ).scalars().all()
         assert list(root_members) == []
+
+
+async def test_scope_empty_fails_loudly_through_worker(client, monkeypatch):
+    """勾了夹却没有归属记录：必须是一条**可见的失败**，而不是绿色的 0 入库。
+
+    回归（实测过）：这条分支原先只写 task.error，而 worker 在任务正常返回时执行
+    ``task.error = None``（见 app/worker.py 成功分支）——最终用户看到的是
+    status=success / progress=100 / error=None / 一件没入库，没有任何解释。
+    现在改为抛 PermanentTaskError：worker 走永久错误分支，状态 failed、原因可见。
+    """
+    from app.config import settings as app_settings
+    from app.models.task import TaskQueue
+    from app.worker import _claim_next_task, _run_task_safe
+
+    monkeypatch.setattr(
+        app_settings,
+        "f2_like_user",
+        "https://www.douyin.com/user/MS4wLjABAAAAme",
+        raising=False,
+    )
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(
+        monkeypatch,
+        "run_fetch_collects",
+        lambda *_a, **_k: pytest.fail("选中收藏夹时不该走平铺收藏命令"),
+    )
+
+    def _fake(f2_dir, user, collect_ids, max_counts=0, should_stop=None, on_progress=None,
+              existing_aweme_ids=None, link_from_root=None):
+        # 关键：**不写** _collect_folders.json（模拟清单缺失/写失败/夹是空的）
+        stats = {
+            "cookie_source": "假配置",
+            "root": str(f2.DEFAULT_F2_COLLECT_ROOT / "我的账号"),
+            "folders": [{"id": collect_ids[0], "name": "秘书OL", "total": 3, "works": 0,
+                         "skipped_existing": 0}],
+            "works": 0,
+            "total_works": 3,
+            "current": {},
+            "stopped": False,
+            "missing_folders": [],
+            "skipped_existing": 0,
+            "skipped_existing_ids": [],
+            "skipped_ids_truncated": False,
+            "prelinked": 0,
+            "link_index_size": 0,
+            "folder_map_file": "",
+        }
+        if on_progress:
+            on_progress(stats)
+        return stats
+
+    patch_f2(monkeypatch, "download_collect_folders", _fake)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", collect_ids=["111"]
+        )
+        task_id = task.id
+
+    assert await _claim_next_task("worker-review") == task_id
+    await _run_task_safe(task_id)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.status == "failed"
+        assert "勾选的收藏夹没有归属记录" in (stored.error or "")
+        assert (stored.result or {}).get("scope_empty") is True
+
+
+async def test_ensure_collection_survives_insert_race(client, monkeypatch):
+    """并发建同一个夹时（唯一索引是最终裁决者）回退成「查询已有」，不让任务失败。
+
+    竞态：SELECT 到 INSERT 之间别人先建出来了。实测撞的是 IntegrityError
+    （`UNIQUE constraint failed: collections.name`），不是 HTTPException——
+    原实现只捕 HTTPException，所以这条路径会直接把归位阶段打挂。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection
+    from app.services import collection_service
+
+    real_create = collection_service.create_collection
+
+    async def _racing_create(db, **kwargs):
+        # 对手（另一个进程）在我们 INSERT 之前先建好了同名的夹
+        async with async_session() as other:
+            other.add(
+                Collection(
+                    name=kwargs["name"],
+                    position=99,
+                    parent_id=kwargs.get("parent_id"),
+                    auto_source=kwargs.get("auto_source"),
+                )
+            )
+            await other.commit()
+        return await real_create(db, **kwargs)
+
+    monkeypatch.setattr(collection_service, "create_collection", _racing_create)
+
+    async with async_session() as db:
+        collection_id, created = await f2_runner.ensure_collection(
+            db, "并发新建的夹", auto_source="douyin"
+        )
+        winner = (
+            await db.execute(select(Collection).where(Collection.name == "并发新建的夹"))
+        ).scalars().one()
+
+    assert created is False
+    assert collection_id == winner.id
 
 
 async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_collection(

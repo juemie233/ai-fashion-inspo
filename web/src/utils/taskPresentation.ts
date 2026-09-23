@@ -189,6 +189,10 @@ export function summarizeResult(
       const importedCount = Number(imported.imported ?? 0) || 0
       const planned = Number(plan.files ?? 0) || 0
       const trash = Number(plan.trash_skipped ?? skipped['已在垃圾桶（不重新导入）'] ?? 0) || 0
+      // 后端 result.notices：「任务成功但有话要说」（范围挡掉多少文件、批次清单写失败、
+      // 归位失败…）。为什么不走 error 字段：worker 成功时会把 error 清成 None，写在那里
+      // 用户永远看不到（实测），所以后端改写成 notices，这里负责展示。
+      const notices = Array.isArray(r.notices) ? r.notices.map((n) => `⚠ ${String(n)}`) : []
       return [
         // 「我的列表」入口（点赞/收藏）与博主主页入口同类型，靠 fetch_mode 区分
         r.fetch_mode === 'collection' ? '我的收藏' : r.fetch_mode === 'like' ? '我的喜欢' : '',
@@ -203,6 +207,7 @@ export function summarizeResult(
         collectText(r),
         // 「我的列表」模式：下载结束后跨模式重复合并（like ↔ collection → 硬链接）
         mergeText(r),
+        ...notices,
       ]
         .filter(Boolean)
         .join(' · ')

@@ -246,11 +246,23 @@ class Settings(BaseSettings):
         ``.parent`` 就变成盘根，算出来是 ``G:\\fashion_inspo.db``——一个**空库**。
         后果不是报错而是静默走偏：f2 判重读空库（全部作品都「库里没有」）、入库
         写空库（``no such table: inspirations``，整批 4970 件全灭）。
+
+        ``resolve()`` 不是装饰：相对 URL（``sqlite+aiosqlite:///./x.db``）在
+        sqlite3 那一侧本来就是按**进程 CWD** 解释的，解析成绝对路径才能保证
+        「脚本算出的路径」与「引擎真正打开的库」是同一个文件。内存库没有文件可解析
+        （``:memory:`` 会被当成字面文件名），这里直接报错而不是让调用方拿着一个
+        不存在的路径去读——那会让判重静默失效（读不到库 → 判重索引为空 → 全部当新作品）。
         """
         from sqlalchemy.engine import make_url
 
-        db_name = make_url(self.database_url).database
-        return Path(db_name) if db_name else _DB_PATH
+        url = make_url(self.database_url)
+        if url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:"):
+            raise ValueError(
+                f"数据库不是文件型 SQLite（database_url={self.database_url}）："
+                "需要文件库才能给脚本/判重提供路径"
+            )
+        db_name = url.database
+        return Path(db_name).resolve() if db_name else _DB_PATH
 
     @property
     def storage_dirs(self) -> dict[str, Path]:

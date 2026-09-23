@@ -28,7 +28,6 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path，便于模块方式执行
@@ -39,6 +38,7 @@ from .f2_common import (  # noqa: E402
     DEFAULT_F2_DIR,
     DEFAULT_F2_DOWNLOAD_ROOT,
 )
+from .scraper_common import utcnow  # noqa: E402
 
 """翻页间隔（秒）：收藏夹接口与作品列表接口都自带风控，别打太快。"""
 COLLECTS_PAGE_SLEEP = 2.0
@@ -100,7 +100,9 @@ def _merge_folder_map(path: Path, folders: dict[str, dict]) -> dict:
 
     payload = {
         "version": 1,
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        # 与项目其余时间戳同口径（UTC naive，见 app.utils.time.utcnow）：
+        # 本地时间会让跨时区/跨机器比对「这份清单是什么时候写的」产生歧义
+        "updated_at": utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "folders": merged,
     }
     tmp = path.with_name(path.name + ".tmp")

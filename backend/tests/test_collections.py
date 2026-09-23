@@ -276,6 +276,85 @@ def test_deleting_parent_removes_children(client):
     assert child["id"] not in remaining
 
 
+async def test_ensure_root_collections_survives_insert_race(client):
+    """启动钩子里的 ensure 也必须扛住并发插入：SELECT 落空 + INSERT 撞唯一索引 → 回退查询已有。
+
+    真实后果比 f2 那条更重：``ensure_root_collections`` 跑在 lifespan 里，异常冒泡
+    出去就是**后端起不来**（worker 正在跑收藏任务时建同一个一级节点，窗口虽窄但真实）。
+    """
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.collection import Collection
+    from app.services import collection_service
+
+    class _Miss:
+        """假装「一条都没查到」的最小结果对象（_ensure_one 只用到 scalar）。"""
+
+        def scalar(self):
+            return None
+
+    name = collection_service.MANUAL_ROOT_COLLECTION_NAME
+    async with async_session() as db:
+        real_execute = db.execute
+        state = {"pending": True}
+
+        async def _flaky(stmt, *args, **kwargs):
+            if state["pending"] and name in str(stmt):
+                state["pending"] = False
+                # 对手抢在我们 INSERT 之前建好了同名一级节点
+                async with async_session() as other:
+                    other.add(Collection(name=name, position=7))
+                    await other.commit()
+                return _Miss()
+            return await real_execute(stmt, *args, **kwargs)
+
+        db.execute = _flaky  # type: ignore[method-assign]
+        try:
+            roots = await collection_service.ensure_root_collections(db)
+        finally:
+            db.execute = real_execute  # type: ignore[method-assign]
+
+        winner = (
+            await db.execute(select(Collection).where(Collection.name == name))
+        ).scalars().one()
+
+    assert roots[name] == winner.id
+
+
+async def test_list_collections_query_count_stays_flat(client):
+    """列表接口的 SQL 条数不随合集数量增长（两级结构下能挂几十个收藏夹）。
+
+    回归：原先逐条 ``collection_to_dict`` → 每个合集 1 次成员计数 + 1 次封面查询，
+    31 个收藏夹时列表页一次约 100 条 SQL。批量序列化后应稳定在个位数。
+    """
+    from sqlalchemy import event
+
+    from app.database import async_session, engine
+    from app.models.collection import Collection
+    from app.services import collection_service
+
+    async with async_session() as db:
+        for i in range(25):
+            db.add(Collection(name=f"查询数夹{i}", position=100 + i))
+        await db.commit()
+
+    statements: list[str] = []
+
+    def _before_execute(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _before_execute)
+    try:
+        async with async_session() as db:
+            data = await collection_service.list_collections(db)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _before_execute)
+
+    assert len(data) >= 25
+    assert len(statements) <= 10, f"列表接口 SQL 条数应恒定，实际 {len(statements)}：{statements}"
+
+
 # ── 排序 ──
 
 

@@ -81,7 +81,8 @@ function itemMeta(c: CollectionOut): string {
   if (c.kind === 'smart') return '智能合集'
   const own = c.item_count ?? 0
   const children = childrenOf(c.id).length
-  if (children > 0) return `${children} 个收藏夹 · ${own} 个素材`
+  // 分类节点自己没有成员时只报收藏夹数：写「0 个素材」会被读成「这个夹是空的」
+  if (children > 0) return own > 0 ? `${children} 个收藏夹 · ${own} 个素材` : `${children} 个收藏夹`
   return `${own} 个素材`
 }
 

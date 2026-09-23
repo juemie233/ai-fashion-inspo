@@ -208,6 +208,22 @@ describe('summarizeResult', () => {
     expect(text).toBe('我的喜欢 · 入库 7')
   })
 
+  it('result.notices 要展示出来（后端软失败提示不能静默）', () => {
+    // 后端把「任务成功但有话要说」写进 result.notices：范围挡掉多少文件、批次清单写失败、
+    // 归位失败…。为什么不写 error：worker 成功时会把 error 清成 None（实测），用户看不到。
+    const text = summarizeResult(
+      'f2_import',
+      {
+        fetch_mode: 'collection',
+        plan: { files: 12, scoped_out: 2613 },
+        import: { imported: 12 },
+        notices: ['未勾选的收藏夹跳过 2613 个文件'],
+      },
+      null,
+    )
+    expect(text).toContain('⚠ 未勾选的收藏夹跳过 2613 个文件')
+  })
+
   it('「先扫描、后下载」报本次只下了哪几个收藏夹', () => {
     const text = summarizeResult(
       'f2_import',

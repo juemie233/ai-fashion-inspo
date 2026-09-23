@@ -246,6 +246,101 @@ async def _resolve_cover(
 # ── CRUD ──
 
 
+async def _batch_serialize(db: AsyncSession, collections: list[Collection]) -> list[dict]:
+    """批量序列化合集（列表接口专用）：把 N+1 次查询压成常数次。
+
+    为什么值得单独写一条路：``collection_to_dict`` 每个合集要查一次成员数 + 一次封面
+    （封面还可能再查一次素材），一级只有两三个合集时无所谓；但两级结构下一个一级下能
+    挂几十个收藏夹（实测抖音侧 31 个），列表页一次就要上百条 SQL。
+
+    语义与逐条序列化**完全一致**：
+    - ``item_count``：手动合集 = collection_items 行数（含垃圾桶素材的行，口径不变）；
+    - 封面：显式指定且素材未删 > 「加入最早」的未删成员（added_at, position 升序）；
+    - 智能合集：item_count 恒为 null，封面仍走动态求值（数量少，保持逐条）。
+    """
+    if not collections:
+        return []
+    manual_ids = [c.id for c in collections if c.query_json is None]
+
+    # 1) 成员数（一次 GROUP BY）
+    counts: dict[int, int] = {}
+    if manual_ids:
+        rows = await db.execute(
+            select(CollectionItem.collection_id, func.count())
+            .where(CollectionItem.collection_id.in_(manual_ids))
+            .group_by(CollectionItem.collection_id)
+        )
+        counts = {int(cid): int(n) for cid, n in rows.all()}
+
+    # 2) 显式封面：一次取回缩略图（素材已删/进垃圾桶时按「无显式封面」处理，与逐条一致）
+    explicit: dict[int, tuple[str, str | None]] = {}
+    cover_ids = [c.cover_inspiration_id for c in collections if c.cover_inspiration_id]
+    if cover_ids:
+        rows = await db.execute(
+            select(Inspiration.id, Inspiration.thumbnail_path).where(
+                Inspiration.id.in_(cover_ids), NOT_DELETED
+            )
+        )
+        by_id = {str(i): t for i, t in rows.all()}
+        for c in collections:
+            hit = by_id.get(str(c.cover_inspiration_id)) if c.cover_inspiration_id else None
+            if hit is not None:
+                explicit[c.id] = (str(c.cover_inspiration_id), hit)
+
+    # 3) 自动封面：一次窗口函数取每个手动合集「加入最早」的未删成员
+    auto_covers: dict[int, tuple[str, str | None]] = {}
+    pending = [cid for cid in manual_ids if cid not in explicit]
+    if pending:
+        ranked = (
+            select(
+                CollectionItem.collection_id.label("cid"),
+                Inspiration.id.label("insp_id"),
+                Inspiration.thumbnail_path.label("thumb"),
+                func.row_number()
+                .over(
+                    partition_by=CollectionItem.collection_id,
+                    order_by=(CollectionItem.added_at.asc(), CollectionItem.position.asc()),
+                )
+                .label("rn"),
+            )
+            .join(Inspiration, Inspiration.id == CollectionItem.inspiration_id)
+            .where(CollectionItem.collection_id.in_(pending), NOT_DELETED)
+            .subquery()
+        )
+        rows = await db.execute(select(ranked).where(ranked.c.rn == 1))
+        auto_covers = {
+            int(cid): (str(insp_id), thumb) for cid, insp_id, thumb, _rn in rows.all()
+        }
+
+    # 4) 逐个组装（只有智能合集的动态封面仍需单独求值）
+    out: list[dict] = []
+    for c in collections:
+        if c.query_json is None:
+            cover_id, cover_thumb = explicit.get(c.id) or auto_covers.get(c.id, (None, None))
+            out.append(
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "description": c.description,
+                    "kind": c.kind,
+                    "position": c.position,
+                    "parent_id": c.parent_id,
+                    "auto_source": c.auto_source,
+                    "child_count": sum(1 for x in collections if x.parent_id == c.id),
+                    "cover_inspiration_id": cover_id,
+                    "cover_thumbnail_path": cover_thumb,
+                    "item_count": counts.get(c.id, 0),
+                    "query_json": None,
+                    "created_at": c.created_at,
+                    "updated_at": c.updated_at,
+                }
+            )
+        else:
+            # 智能合集：数量少（用户自建 + 一级①），保持逐条序列化的既有语义
+            out.append(await collection_to_dict(db, c))
+    return out
+
+
 async def list_collections(db: AsyncSession) -> list[dict]:
     """合集列表：一级按 position 升序，每个一级后面紧跟它的二级（同样按 position）。
 
@@ -270,7 +365,7 @@ async def list_collections(db: AsyncSession) -> list[dict]:
     # 免得它们在列表里凭空消失
     for orphans in children.values():
         ordered.extend(orphans)
-    return [await collection_to_dict(db, c) for c in ordered]
+    return await _batch_serialize(db, ordered)
 
 
 async def ensure_root_collections(db: AsyncSession) -> dict[str, int]:
@@ -307,14 +402,20 @@ async def _ensure_one(
     query_json: dict | None = None,
     auto_source: str | None = None,
 ) -> int:
-    """按名字取一级合集，没有就建（幂等，供 :func:`ensure_root_collections` 用）。"""
-    existing = (
-        await db.execute(
-            select(Collection.id).where(
-                Collection.name == name, Collection.parent_id.is_(None)
-            )
+    """按名字取一级合集，没有就建（幂等，供 :func:`ensure_root_collections` 用）。
+
+    ⚠ 必须兜住 IntegrityError：同层唯一索引是最终裁决者，而「SELECT 到 INSERT
+    之间被别人建出来」这件事在多进程下真会发生（worker 跑收藏任务时也会建同一个
+    一级节点，此时后端正在启动）。不兜的话异常会冒泡出 lifespan，**服务起不来**。
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    def _lookup():
+        return select(Collection.id).where(
+            Collection.name == name, Collection.parent_id.is_(None)
         )
-    ).scalar()
+
+    existing = (await db.execute(_lookup())).scalar()
     if existing is not None:
         return int(existing)
     query = select(func.max(Collection.position)).where(Collection.parent_id.is_(None))
@@ -328,8 +429,14 @@ async def _ensure_one(
         auto_source=auto_source,
     )
     db.add(collection)
-    await db.commit()
-    await db.refresh(collection)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = (await db.execute(_lookup())).scalar()
+        if existing is None:
+            raise
+        return int(existing)
     return int(collection.id)
 
 

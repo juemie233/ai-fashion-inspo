@@ -137,3 +137,27 @@ def test_library_db_path_uses_the_same_single_source(monkeypatch, tmp_path):
 
     assert f2_plan.library_db_path() == db == settings.db_file_path
 
+
+def test_db_file_path_resolves_relative_url(clean_storage_env):
+    """相对 DATABASE_URL 必须解析成绝对路径——否则 server/worker/脚本在不同 CWD 下各建一个库。
+
+    sqlite3 那一侧本来就是把相对路径按进程 CWD 解释的，解析成绝对路径才能保证
+    「脚本算出的路径」与「引擎真正打开的库」是同一个文件。
+    """
+    settings = _fresh_settings(database_url='sqlite+aiosqlite:///./tmp_rel.db')
+
+    assert settings.db_file_path.is_absolute()
+    assert settings.db_file_path.name == 'tmp_rel.db'
+
+
+def test_db_file_path_rejects_memory_database(clean_storage_env):
+    """内存库没有文件可给脚本用：显式报错，而不是返回一个不存在的路径。
+
+    静默返回假路径的后果：``load_dedup_index`` 读不到文件 → 判重索引为空 →
+    所有作品都被当成新作品（这正是线上那次 4970 件全量重导的成因形态）。
+    """
+    settings = _fresh_settings(database_url='sqlite+aiosqlite:///:memory:')
+
+    with pytest.raises(ValueError, match='文件型 SQLite'):
+        settings.db_file_path
+

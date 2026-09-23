@@ -32,7 +32,7 @@ from app.models.collection import (
     DOUYIN_ROOT_COLLECTION_NAME as COLLECTION_DOUYIN_ROOT_NAME,
 )
 from app.models.task import TaskQueue
-from app.services.task_runners.common import utcnow
+from app.services.task_runners.common import PermanentTaskError, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -166,9 +166,12 @@ async def ensure_collection(
     """按（名字 + 父）取合集，不存在则建；返回 ``(id, 是否新建)``。
 
     幂等：同一批/多批同步反复调用只会建一次。并发下靠唯一索引兜底——两个任务同时
-    建同一个夹时后者拿到 409，这里回退成「查询已有」而不是让整个任务失败。
+    建同一个夹时，插入会撞 `UNIQUE constraint failed: collections.name`（**抛的是
+    IntegrityError，不是 HTTPException**，实测），这里回退成「查询已有」而不是让
+    整个任务失败。
     """
     from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
 
     from app.models.collection import Collection
     from app.services import collection_service
@@ -191,6 +194,13 @@ async def ensure_collection(
             parent_id=parent_id,
             auto_source=auto_source,
         )
+    except IntegrityError:
+        # 竞态：SELECT 到 INSERT 之间被别人建出来了（唯一索引是最终裁决者）
+        await db.rollback()
+        again = (await db.execute(query)).scalars().first()
+        if again is None:
+            raise
+        return int(again.id), False
     except HTTPException as exc:
         if exc.status_code != 409:
             raise
@@ -206,6 +216,20 @@ async def ensure_collection(
 def _personal_label(fetch_mode: str) -> str:
     """「我的列表」模式的中文名（日志与错误提示用）。"""
     return "我的收藏" if fetch_mode == "collection" else "我的喜欢"
+
+
+def _append_notice(task: TaskQueue, message: str) -> None:
+    """把「任务成功、但有事要说」的提示追加到 ``task.result["notices"]``。
+
+    为什么不写 ``task.error``：worker 在任务正常返回时会把它清成 None
+    （``app/worker.py`` 成功分支 ``task.error = None``），写在那里等于没写——
+    实测过：任务终态是 success、error 为 None、用户什么都看不到。
+    这里的提示由前端 ``summarizeResult`` 渲染，所以**保持一句话以内**。
+    """
+    notices = [str(n) for n in ((task.result or {}).get("notices") or [])]
+    if message not in notices:
+        notices.append(message)
+    task.result = {**(task.result or {}), "notices": notices}
 
 
 async def create_f2_import_task(
@@ -888,19 +912,20 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
                     allowed_aweme_ids.update(entry["aweme_ids"])
             if not allowed_aweme_ids:
                 # 勾了夹但清单里没有任何作品 ID：宁可什么都不入库，也不要退化成
-                # 「整棵树都收」（那正是用户要避免的：无关内容混进素材库）
+                # 「整棵树都收」（那正是用户要避免的：无关内容混进素材库）。
+                # 这里**必须抛错**：任务一件都没干成，标成 success 等于静默骗人
+                # （而且 worker 会把 task.error 清掉，连原因都留不下）。
                 logger.warning(
                     f"[f2] 勾选的 {len(collect_ids)} 个收藏夹在归属清单里没有作品记录，"
                     "本次不入库任何文件（请用「先扫描收藏夹」重新下载以生成归属清单）"
                 )
-                task.error = (
-                    "勾选的收藏夹没有归属记录：本次未入库任何文件。"
-                    "请改用「先扫描收藏夹 → 下载勾选的夹」重新生成归属清单。"
-                )
                 task.result = {**task.result, "stage": "done", "scope_empty": True}
                 task.updated_at = utcnow()
                 await db.commit()
-                return
+                raise PermanentTaskError(
+                    "勾选的收藏夹没有归属记录：本次未入库任何文件。"
+                    "请改用「先扫描收藏夹 → 下载勾选的夹」重新生成归属清单。"
+                )
     to_import = await _scan_and_plan_stage(
         db,
         task,
@@ -1549,6 +1574,11 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
             "scoped_out": scoped_out,
         },
     }
+    if scoped_out:
+        # 范围过滤是「用户看不见就被挡掉」的典型场景：必须留痕，否则他只会觉得
+        # 「怎么少了这么多」。注意**必须在上面的 task.result 整体赋值之后**再追加，
+        # 否则会被这次赋值覆盖掉（踩过一次：notices 直接消失）。
+        _append_notice(task, f"未勾选的收藏夹跳过 {scoped_out} 个文件")
     task.updated_at = utcnow()
     await db.commit()
     logger.info(
@@ -1778,6 +1808,9 @@ async def _aggregate_collect_stage(
     # 先把「本批入库」的集合算出来：下面统计「已在库补入」要按元素判定，
     # 写成 `i not in set(imported_ids)` 会每条都重建一次集合（O(n²)）
     imported_set = set(imported_ids)
+    # 记下 id 备用于失败分支：rollback 会把 session 内对象全部 expire，届时连
+    # ``task.id`` 都要重新 IO（在同步上下文里读过期属性会直接抛 MissingGreenlet）
+    task_id = int(task.id)
     from app.services import collection_service
 
     try:
@@ -1848,8 +1881,13 @@ async def _aggregate_collect_stage(
         return stats
     except Exception as exc:  # noqa: BLE001 —— 素材已入库，聚合失败不该让任务失败
         await db.rollback()
-        task.error = f"归位到「{DOUYIN_ROOT_COLLECTION_NAME}」收藏夹失败（素材已入库）：{exc}"
-        logger.warning(f"f2 收藏合集归位失败：{exc}")
+        # rollback 之后原 task 实例已过期：重新取一份再写提示（见上面的 task_id 注释）
+        fresh = await db.get(TaskQueue, task_id)
+        if fresh is not None:
+            _append_notice(fresh, "收藏夹归位失败（素材已入库）")
+            fresh.updated_at = utcnow()
+            await db.commit()
+        logger.warning(f"f2 收藏合集归位失败（素材已入库，任务仍成功）：{exc}")
         return None
 
 
@@ -1872,9 +1910,9 @@ async def _finalize_import(db: AsyncSession, task: TaskQueue, result: dict, hold
     task.total = holder["total"]
     task.updated_at = utcnow()
     if result.get("batch_error"):
-        # 清单缺失 = 本批无法回滚，写进任务 error 让用户一眼看到（任务仍算成功，
-        # 因为素材确实已入库）
-        task.error = f"批次清单写入失败（本批无法回滚）：{result['batch_error']}"
+        # 清单缺失 = 本批无法回滚。任务仍算成功（素材确实已入库），但这条必须让
+        # 用户看得见——所以进 result.notices 而不是 task.error（后者会被 worker 清掉）
+        _append_notice(task, "批次清单写入失败：本批无法回滚")
     if interrupted:
         # 尊重外部状态：worker 见 status != running 不会覆盖为 success
         task.status = status_now
