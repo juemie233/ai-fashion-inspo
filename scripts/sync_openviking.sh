@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
 # OpenViking 索引同步脚本（Git Bash 版）
-# 用途：把项目「代码 + 文档 + 数据库结构」增量同步到 OpenViking
+# 用途：把项目「代码 + 文档 + 数据库结构 + 决策台账」增量同步到 OpenViking
 #       索引（viking://resources/fashion-inspo/），供语义检索。
 # 用法：双击 scripts/sync_openviking.bat（推荐），或在 Git Bash 中执行：
 #         bash scripts/sync_openviking.sh            # 增量（默认）
 #         bash scripts/sync_openviking.sh --full     # 忽略状态文件，强制全量
-#         bash scripts/sync_openviking.sh --dry-run  # 只预览，不上传也不写状态
+#         bash scripts/sync_openviking.sh --dry-run  # 只预览，不上传也不落状态（仍会刷新决策台账）
 # 说明：
 #   - 增量判定按「文件内容 sha1」比对，状态落 scripts/.sync_openviking_state.json。
 #     该文件是机器相关运行时数据，已在 .gitignore 忽略；删掉它即退化为全量同步。
@@ -14,6 +14,9 @@
 #     也会重写并标记 modified，照样重跑一遍 L0/L1 摘要。本地模型是单卡串行的，
 #     全量重跑一次要几十分钟，所以「跳过未变文件」只能在客户端做。
 #   - 测试目录与测试文件一律不入索引（见 TEST_DIR_NAMES / TEST_FILE_RE）。
+#   - 每次运行会先把 git log 落成 docs/decisions/<年>-W<周>.md 决策台账（派生文档，
+#     已在 .gitignore 忽略），补上「取舍理由只写在提交正文里、而提交不进索引」的
+#     短板；docs/ 与 .md 本就在收录范围内，生成后自动随本次同步入库。
 #   - 幂等（upsert），同步后向量/摘要由 OpenViking 后台异步生成。
 # ============================================================
 set -euo pipefail
@@ -67,11 +70,13 @@ echo "=============================================="
 "$PY" - "$WIN_ROOT" "$FULL_SYNC" "$DRY_RUN" <<'PY'
 # -*- coding: utf-8 -*-
 """OpenViking 索引同步核心逻辑：扫描源码/文档、生成数据库结构文档、按内容 sha1 增量分批上传"""
+import datetime
 import hashlib
 import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.request
@@ -136,6 +141,91 @@ TEST_FILE_RE = re.compile(
 # 本脚本自己的增量状态文件（scripts/ 也在白名单里、.json 也在扩展名白名单里，
 # 不显式排除会被当成源码索引进去，而且它每次运行都变，会无限自我重传）
 STATE_BASENAME = ".sync_openviking_state.json"
+
+# 决策台账（派生文档；已在 .gitignore 忽略，不入库、不需要人工维护）
+DECISIONS_DIR_REL = "docs/decisions"
+DECISIONS_DIR = os.path.join(ROOT, "docs", "decisions")
+DECISIONS_BODY_CAP = 600  # 单条提交正文上限（字符），超出则截断并标注完整正文所在提交
+
+
+# ---------- 1a. 生成决策台账（派生文档，必须先于目录遍历） ----------
+def write_decisions_docs() -> int:
+    """把 git log 按 ISO 周切成 docs/decisions/<年>-W<周>.md，供检索「为什么这么做」。
+
+    动机：代码与注释能回答「是什么」，但取舍理由大多只存在于提交正文里，而
+    commit message 完全不在索引范围内（OpenViking 只索引文件）。把历史自动落成
+    文件、随同步一起进索引，补上「决策理由检索不到」这块短板。
+
+    设计：
+    - 按 ISO 周切分而非整月/整仓：单文件控制在数十 KB，L0/L1 摘要才有意义，
+      且这个目录本身能聚合出「决策台账总览」；
+    - 正文截断到 DECISIONS_BODY_CAP（实测中位 313 / p90 813 字符），截断处标注
+      完整正文所在提交，避免产生巨型文件；
+    - 内容由提交历史唯一决定，可重复生成（幂等），无需人工维护。
+
+    返回生成的周文件数；git 不可用时返回 -1（不影响其余同步流程）。
+    """
+    fmt = "###%x09%h%x09%ad%x09%s%x09%b%x1e"
+    try:
+        proc = subprocess.run(
+            ["git", "-C", ROOT, "log", "--date=short", f"--pretty=format:{fmt}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+        )
+    except Exception as e:  # git 缺失/超时都不该让整次同步失败
+        log(f"[警告] 读取 git log 失败，跳过决策台账：{e}")
+        return -1
+    if proc.returncode != 0:
+        log(f"[警告] git log 退出码 {proc.returncode}，跳过决策台账")
+        return -1
+
+    buckets: dict[str, list[str]] = {}
+    for raw in proc.stdout.split("\x1e"):
+        # maxsplit=4：提交正文里可能有制表符，不能被当成字段分隔符
+        parts = raw.strip().split("\t", 4)
+        if len(parts) < 4:
+            continue
+        _marker, sha, date, subject = parts[0], parts[1], parts[2], parts[3]
+        body = parts[4].strip() if len(parts) >= 5 else ""
+        if len(body) > DECISIONS_BODY_CAP:
+            body = (
+                body[:DECISIONS_BODY_CAP].rstrip()
+                + f"\n\n…（正文已截断，完整内容见提交 {sha}）"
+            )
+        try:
+            iso = datetime.date.fromisoformat(date).isocalendar()
+            key = f"{iso[0]}-W{iso[1]:02d}"
+        except ValueError:
+            key = date[:7] or "unknown"
+        entry = f"## {sha} {date} {subject}"
+        if body:
+            entry += f"\n\n{body}"
+        buckets.setdefault(key, []).append(entry)
+
+    os.makedirs(DECISIONS_DIR, exist_ok=True)
+    for key, entries in buckets.items():
+        header = (
+            f"# 决策台账 {key}\n\n"
+            "> 由 `scripts/sync_openviking.sh` 从 `git log` 自动生成，"
+            "供语义检索「为什么这么做」。\n"
+            "> 每条对应一次提交：`<短哈希> <日期> <主题>` + 提交正文（取舍理由）。\n"
+            "> 自动生成、随同步刷新，请勿手改——要改就改提交本身。\n\n"
+        )
+        path = os.path.join(DECISIONS_DIR, f"{key}.md")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(header + "\n\n".join(entries) + "\n")
+    return len(buckets)
+
+
+_decisions_weeks = write_decisions_docs()
+if _decisions_weeks >= 0:
+    log(
+        f"[信息] 决策台账已生成：{_decisions_weeks} 个周文件"
+        f"（{DECISIONS_DIR_REL}/，随本次同步一起入库）"
+    )
 
 files = set()
 skipped_tests = 0      # 按文件名命中测试模式而跳过的文件

@@ -27,6 +27,10 @@ scripts/crop_candidates.json
 scripts/.sync_openviking_state.json
 scripts/.sync_openviking_state.json.tmp
 
+# 决策台账（由 scripts/sync_openviking.sh 从 git log 生成；派生数据不入库，
+# 内容与提交历史一一对应，要改就改提交，不要手改这些文件）
+docs/decisions/
+
 # 手动数据备份
 backups/
 
