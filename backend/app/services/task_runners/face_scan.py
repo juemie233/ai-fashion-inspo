@@ -51,9 +51,15 @@ logger = logging.getLogger(__name__)
 # 每批素材数上限与字节上限（原图上传体积控制，超限自动封批）
 SCAN_BATCH_SIZE = 64
 SCAN_BATCH_BYTES = 150 * 1024 * 1024
-# embed-batch 单请求张数与并发路数
-EMBED_REQUEST_SIZE = 32
-EMBED_CONCURRENCY = 4
+# embed-batch 单请求张数与并发路数。
+#
+# 两者必须配套：一波扫描批 64 个素材，切出的请求数 = ceil(64 / EMBED_REQUEST_SIZE)，
+# 而**只有并发的请求数超过子服务推理线程池（默认 8 线程）才能喂满它**。
+# 32×4 的旧组合一波只有 2 个请求在飞 → 线程池只忙 2 个线程（实测瓶颈就在这里：
+# 串行 16.8 张/秒，8 线程可达 60 张/秒）。8×8 让一波正好切出 8 个请求，
+# 同时把在途图片数（内存）从 128 张降到 64 张。
+EMBED_REQUEST_SIZE = 8
+EMBED_CONCURRENCY = 8
 # 连续失败批数阈值：超过视为系统性故障直接终止（交 worker 重试）
 MAX_CONSECUTIVE_FAILED_BATCHES = 10
 

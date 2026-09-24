@@ -46,10 +46,22 @@
 | ---- | ---- | ---- |
 | GET | /health | 健康检查 + 模型加载状态 |
 | POST | /api/face/embed | 上传图片，返回人脸检测框与 512 维特征 |
+| POST | /api/face/embed-batch | 批量上传多张图片、逐张返回结果（素材库人脸扫描用；单张无脸或解码失败记 item 级错误，不拖垮整批） |
 | POST | /api/face/register | 注册人脸（form: person_id, person_name, file） |
 | POST | /api/face/match | 人脸匹配（form: file, top_k=5），返回余弦相似度 top-k |
 | GET | /api/face/persons | 已注册人脸列表 |
 | DELETE | /api/face/persons/{id} | 删除注册 |
+
+## 性能
+
+解码 + 检测 + 特征提取是 CPU+GPU 重活，**统一放在推理线程池里跑**，不占用事件循环——
+否则单个 uvicorn 事件循环会被逐张推理堵死，主后端开再多并发也会被串行化。
+
+- `FACE_EMBED_WORKERS`（环境变量，默认 8）：推理线程池上限。要与主后端
+  `EMBED_CONCURRENCY` 对齐才能喂满；**不要**改成默认执行器的 32 线程（内存与 GPU 会互相抢占）。
+- 实测（300 张真实素材 / RTX 5060 Ti）：串行 59.6 ms/张（16.8 张/秒）→ 4 线程 2.87× →
+  **8 线程 3.6×**（60 张/秒）；1000 张持续 57 张/秒、无衰减。
+- 只提高主后端并发**没有用**：改前实测「8 路并发 / 串行」只有 1.03×，必须两侧同时具备。
 
 ## 数据
 

@@ -14,14 +14,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from .face import face_engine
+from .face import FaceResult, face_engine
 from .storage import (
     all_embeddings,
     delete_person,
@@ -38,14 +41,43 @@ router = APIRouter()
 # 匹配阈值：低于该余弦相似度视为「未匹配到」（insightface 惯例 0.4~0.5 区间）
 MATCH_THRESHOLD = 0.45
 
+# 推理线程池：解码 + 检测 + 特征提取是 CPU+GPU 重活，直接在协程里调用会**阻塞事件循环**
+# ——一次只能处理一张，客户端并发再多也被串行化。实测（300 张真实素材、本机 5060 Ti）：
+#   串行 59.6 ms/张（16.8 张/秒）→ 4 线程 48.2 张/秒（2.87×）→ 8 线程 60.0 张/秒（3.6×），
+#   1000 张持续 57 张/秒且无衰减。依据：onnxruntime 的 session.run 线程安全，cv2 解码释放 GIL。
+# 线程数用环境变量可调，默认 8 与主后端 EMBED_CONCURRENCY 对齐；**不要用默认执行器**
+# （默认 32 线程）——本机可用内存有限，线程过多会让内存与 GPU 互相抢占。
+FACE_EMBED_WORKERS = max(1, int(os.getenv("FACE_EMBED_WORKERS", "8")))
+_EXECUTOR = ThreadPoolExecutor(max_workers=FACE_EMBED_WORKERS, thread_name_prefix="face-embed")
+
 
 def _decode_image(data: bytes) -> np.ndarray:
-    """解码上传图片为 BGR ndarray（失败抛 400）。"""
+    """解码上传图片为 BGR ndarray（失败抛 400）。
+
+    空字节必须在进 cv2 之前拦下：`cv2.imdecode` 对空 buffer 会抛 AssertionError
+    而不是返回 None，批处理里那会升级成整批 503（主后端按批次失败重试，连续多次
+    直接终止整个扫描任务）。按「这张用不了」记 item 级错误才是正确语义。
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="图片内容为空")
     arr = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(status_code=400, detail="无法解析图片，请上传有效的 JPG/PNG 文件")
     return img
+
+
+def _decode_and_extract(data: bytes) -> list[FaceResult]:
+    """在线程池里执行「解码 + 检测 + 特征提取」（重活，必须离开事件循环）。
+
+    解码失败仍抛 HTTPException（语义不变，由调用方按「这张用不了」处理）。
+    """
+    return face_engine.extract(_decode_image(data))
+
+
+async def _extract_in_pool(data: bytes) -> list[FaceResult]:
+    """把「解码 + 推理」丢进线程池执行，避免阻塞事件循环。"""
+    return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, _decode_and_extract, data)
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -67,9 +99,10 @@ async def health() -> dict:
 async def embed_face(file: UploadFile = File(...)) -> dict:
     """上传一张图片，检测其中的人脸并返回 512 维特征向量。"""
     data = await file.read()
-    img = _decode_image(data)
     try:
-        faces = face_engine.extract(img)
+        faces = await _extract_in_pool(data)
+    except HTTPException:
+        raise  # 解码失败：保持 400 语义
     except Exception as e:  # noqa: BLE001
         logger.exception("特征提取失败")
         raise HTTPException(status_code=503, detail=f"人脸模型不可用: {e}") from e
@@ -100,8 +133,10 @@ async def embed_face_batch(files: list[UploadFile] = File(...)) -> dict:
     items: list[dict] = []
     for index, file in enumerate(files):
         data = await file.read()
+        # 解码与推理都在线程池里跑：本请求内逐张串行（内存有界），
+        # 跨请求并行由线程池提供——主后端默认 8 路并发，正好喂满线程池。
         try:
-            img = _decode_image(data)
+            faces = await _extract_in_pool(data)
         except HTTPException as e:
             items.append(
                 {
@@ -113,8 +148,6 @@ async def embed_face_batch(files: list[UploadFile] = File(...)) -> dict:
                 }
             )
             continue
-        try:
-            faces = face_engine.extract(img)
         except Exception as e:  # noqa: BLE001
             logger.exception("批量特征提取失败")
             raise HTTPException(status_code=503, detail=f"人脸模型不可用: {e}") from e
@@ -145,9 +178,10 @@ async def register_face(
     if not person_id.strip() or not person_name.strip():
         raise HTTPException(status_code=422, detail="person_id 与 person_name 不能为空")
     data = await file.read()
-    img = _decode_image(data)
     try:
-        faces = face_engine.extract(img)
+        faces = await _extract_in_pool(data)
+    except HTTPException:
+        raise  # 解码失败：保持 400 语义
     except Exception as e:  # noqa: BLE001
         logger.exception("特征提取失败")
         raise HTTPException(status_code=503, detail=f"人脸模型不可用: {e}") from e
@@ -164,9 +198,10 @@ async def match_face(
 ) -> dict:
     """上传图片，与全部已注册人脸做余弦匹配，返回 top-k（低于阈值的不返回）。"""
     data = await file.read()
-    img = _decode_image(data)
     try:
-        faces = face_engine.extract(img)
+        faces = await _extract_in_pool(data)
+    except HTTPException:
+        raise  # 解码失败：保持 400 语义
     except Exception as e:  # noqa: BLE001
         logger.exception("特征提取失败")
         raise HTTPException(status_code=503, detail=f"人脸模型不可用: {e}") from e
