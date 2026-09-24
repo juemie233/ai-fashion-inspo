@@ -69,6 +69,11 @@ const autoHint = computed(() => {
   const auto = status.value?.auto
   if (!auto) return ''
   if (!auto.enabled) return '关闭后只有手动点击「一键获取素材 / 采集我的喜欢」时才会获取'
+  // 收藏模式调度器会直接跳过（必须手选收藏夹，见后端 maybe_schedule_auto_import）：
+  // 这时再说「下次 … 触发」就是骗人，宁可明说它不会跑
+  if (auto.collection_unsupported) {
+    return '当前选的「我的收藏」不支持自动获取（必须手选收藏夹），调度循环会跳过，不会自动跑'
+  }
   if (auto.running_task_id) return `已有任务 #${auto.running_task_id} 在执行，本轮不重复触发`
   if (!auto.last_task_at) return '尚无历史任务，调度循环下一轮检查时立即触发'
   const last = `上次 ${formatDate(auto.last_task_at)}`

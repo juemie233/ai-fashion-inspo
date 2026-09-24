@@ -79,6 +79,8 @@ export interface F2AutoStatus {
   like_available: boolean
   /** 「我的列表」模式不可用的原因 */
   like_reason: string
+  /** 当前模式是 collection 时为 true：收藏模式必须手选收藏夹，调度器会跳过它 */
+  collection_unsupported: boolean
   /** f2 用户库里的作者数 */
   authors: number
   /** 最近一次 f2 任务的创建时间（ISO） */

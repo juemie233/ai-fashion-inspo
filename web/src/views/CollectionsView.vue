@@ -624,9 +624,17 @@ onMounted(() => {
 
         <!-- 瀑布流内容 -->
         <template v-else>
-          <!-- 只有「能装素材的合集」才给添加入口：分类节点（一级/有子夹）不给 -->
+          <!-- 只有「能装素材的合集」才给添加入口。判定必须与后端一致
+               （collection_service._require_container）：被拦的是**分类节点**——
+               一级同步节点（parent_id 为空且 auto_source 非空）与已经有子夹的合集。
+               同步的**二级**收藏夹是正常容器，仍要给添加入口，否则界面会把后端允许的
+               能力藏起来（曾写成「任何 auto_source 都藏」，与本意不符）。 -->
           <div
-            v-if="current.kind === 'manual' && !currentChildren.length && !current.auto_source"
+            v-if="
+              current.kind === 'manual' &&
+              !currentChildren.length &&
+              !(current.parent_id === null && current.auto_source)
+            "
             class="content-toolbar"
           >
             <a-button size="small" @click="addOpen = true">＋ 添加素材</a-button>

@@ -240,6 +240,15 @@ def _append_notice(task: TaskQueue, message: str) -> None:
     task.result = {**(task.result or {}), "notices": notices}
 
 
+def _brief_reason(exc: BaseException, limit: int = 60) -> str:
+    """把异常压成一句能给用户看的原因（HTTPException 取 detail，其余取首行）。"""
+    from fastapi import HTTPException
+
+    detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+    text = " ".join(str(detail).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 async def create_f2_import_task(
     db: AsyncSession,
     authors: list[str] | None = None,
@@ -1946,7 +1955,7 @@ async def _aggregate_collect_stage(
         # rollback 之后原 task 实例已过期：重新取一份再写提示（见上面的 task_id 注释）
         fresh = await db.get(TaskQueue, task_id)
         if fresh is not None:
-            _append_notice(fresh, "收藏夹归位失败（素材已入库）")
+            _append_notice(fresh, f"收藏夹归位失败（素材已入库）：{_brief_reason(exc)}")
             fresh.updated_at = utcnow()
             await db.commit()
         logger.warning(f"f2 收藏合集归位失败（素材已入库，任务仍成功）：{exc}")

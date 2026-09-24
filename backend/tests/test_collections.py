@@ -399,6 +399,33 @@ async def test_category_node_rejects_members(client, upload):
     )
 
 
+async def test_auto_second_level_accepts_members(client, upload):
+    """同步维护的**二级**收藏夹是正常容器：可以加素材。
+
+    这是 _require_container 的边界：被拦的只有「一级同步节点」与「有子夹的合集」。
+    写宽（任何 auto_source 都拦）会把各抖音收藏夹变成只读，同步来的夹就没法手工补图了；
+    前端工具栏的显示条件必须与这条规则一致（否则界面藏掉后端允许的能力）。
+    """
+    from app.database import async_session
+    from app.services import collection_service
+
+    async with async_session() as db:
+        roots = await collection_service.ensure_root_collections(db)
+    douyin_id = roots[collection_service.DOUYIN_ROOT_COLLECTION_NAME]
+
+    child = client.post(
+        "/api/collections",
+        json={"name": "同步来的二级夹", "parent_id": douyin_id},
+    ).json()
+    insp = upload().json()["id"]
+    r = client.post(
+        f"/api/collections/{child['id']}/inspirations", json={"inspiration_ids": [insp]}
+    )
+    assert r.status_code == 200, r.text
+    ids, total = get_content(client, child["id"])
+    assert total == 1 and ids == [insp]
+
+
 def test_child_creation_requires_empty_parent(client, upload):
     """给「里面还有素材」的合集建子夹 → 400（否则它同时是分类又是容器）。"""
     parent = create_collection(client, "有素材的父")

@@ -26,6 +26,7 @@ const AUTO: F2AutoStatus = {
   reason: '可增量下载 21 个已采集作者的新作品',
   like_available: false,
   like_reason: '未配置「我的主页链接」',
+  collection_unsupported: false,
   authors: 21,
   last_task_at: null,
   next_due_at: null,

@@ -290,7 +290,10 @@ async def test_collect_stage_failure_lands_in_notices_not_error(client):
             )
         assert result is None
         assert task.error is None, "不能再依赖 error：worker 成功时会清掉它"
-        assert "收藏夹归位失败（素材已入库）" in (task.result or {}).get("notices", [])
+        notices = (task.result or {}).get("notices", [])
+        assert any(n.startswith("收藏夹归位失败（素材已入库）") for n in notices)
+        # 原因要带上（否则用户只看到「失败了」却不知道该怎么办）
+        assert "模拟归位失败" in notices[0]
     finally:
         monkeypatch.undo()
 
@@ -580,6 +583,37 @@ def test_create_f2_import_task_endpoint_accepts_since_days(client):
         client.post("/api/scraper/f2-import", params={"fetch": False, "since_days": -1}).status_code
         == 422
     )
+
+
+async def test_create_f2_import_task_endpoint_forwards_allow_all_collect(client):
+    """接口层的 `allow_all_collect` 必须真的落到任务参数里。
+
+    这是「确认后才允许导入全部收藏」这条安全链的**接线点**：前端点了确认 → 带上参数 →
+    路由 → create_f2_import_task_if_idle(**kwargs) → 任务 result。任何一环改名都会让
+    用户确认过的操作仍然被拒（fail-closed，不会误导入，但功能静默失效）。
+    """
+    from app.models.task import TaskQueue
+
+    body = client.post(
+        "/api/scraper/f2-import",
+        params={"fetch": True, "mode": "collection", "allow_all_collect": True},
+    ).json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["fetch_mode"] == "collection"
+    assert opts["allow_all_collect"] is True
+
+    # 收尾掉第一个任务（并发保护会复用进行中的任务，见 create_f2_import_task_if_idle），
+    # 再建一个不传该参数的：默认必须是 false（平铺收藏被拒的那条路径）
+    async with async_session() as db:
+        first = await db.get(TaskQueue, body["task_id"])
+        first.status = "success"
+        await db.commit()
+
+    body = client.post(
+        "/api/scraper/f2-import", params={"fetch": True, "mode": "collection"}
+    ).json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["allow_all_collect"] is False
 
 
 # ── 「我的喜欢」增量翻页（like_max_counts / -o）：f2 点赞分页无「遇到已下载就停」──
