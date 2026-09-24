@@ -603,8 +603,13 @@ def test_create_f2_import_task_accepts_every_collect_ids_encoding(client, query)
     而后端参数名是 `collect_ids`（无方括号）→ **永远收到空**。于是「我勾了 19 个收藏夹」
     被后端理解成「一个都没勾」：旧代码退回平铺收藏、把整棵收藏目录收进素材库
     （任务 #386/#387），加上硬前置之后又变成任务一开始就失败（#389）。
+
+    ⚠ 用 `fetch=false` 是有意的：`fetch=true` 时路由**先做 f2 可用性预检**，CI 的
+    Linux runner 没装 f2 → 直接返回「未检测到 f2」而不建任务（这条用例只在本地绿、
+    CI 红过一次）。这里验的是「查询串怎么解析、怎么落到任务参数」，与下载可用性无关，
+    与本文件既有约定一致（见 test_create_f2_import_task_endpoint_accepts_since_days）。
     """
-    resp = client.post(f"/api/scraper/f2-import?fetch=true&mode=collection&{query}")
+    resp = client.post(f"/api/scraper/f2-import?fetch=false&mode=collection&{query}")
     body = resp.json()
     assert body["task_id"], body
 
@@ -613,13 +618,17 @@ def test_create_f2_import_task_accepts_every_collect_ids_encoding(client, query)
 
 
 def test_create_f2_import_task_accepts_axios_profiles_array(client):
-    """「按博主全量下载」的 profiles 同样要认 axios 的数组写法（同一个根因）。"""
+    """「按博主全量下载」的 profiles 同样要认 axios 的数组写法（同一个根因）。
+
+    `fetch=false` 同样是为了跳过 f2 可用性预检（见上一条用例的说明）。
+    """
     resp = client.post(
-        "/api/scraper/f2-import?fetch=true"
+        "/api/scraper/f2-import?fetch=false"
         "&profiles[]=https://www.douyin.com/user/sec1"
         "&profiles[]=https://www.douyin.com/user/sec2"
     )
     body = resp.json()
+    assert body["task_id"], body
     opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
     assert opts["profiles"] == [
         "https://www.douyin.com/user/sec1",
@@ -633,13 +642,17 @@ async def test_create_f2_import_task_endpoint_forwards_allow_all_collect(client)
     这是「确认后才允许导入全部收藏」这条安全链的**接线点**：前端点了确认 → 带上参数 →
     路由 → create_f2_import_task_if_idle(**kwargs) → 任务 result。任何一环改名都会让
     用户确认过的操作仍然被拒（fail-closed，不会误导入，但功能静默失效）。
+
+    `fetch=false` 是为了跳过路由的 f2 可用性预检（CI 上没有 f2，`fetch=true` 会直接
+    返回「未检测到 f2」而不建任务）；参数的透传路径与 `fetch` 取值无关。
     """
     from app.models.task import TaskQueue
 
     body = client.post(
         "/api/scraper/f2-import",
-        params={"fetch": True, "mode": "collection", "allow_all_collect": True},
+        params={"fetch": False, "mode": "collection", "allow_all_collect": True},
     ).json()
+    assert body["task_id"], body
     opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
     assert opts["fetch_mode"] == "collection"
     assert opts["allow_all_collect"] is True
@@ -652,8 +665,9 @@ async def test_create_f2_import_task_endpoint_forwards_allow_all_collect(client)
         await db.commit()
 
     body = client.post(
-        "/api/scraper/f2-import", params={"fetch": True, "mode": "collection"}
+        "/api/scraper/f2-import", params={"fetch": False, "mode": "collection"}
     ).json()
+    assert body["task_id"], body
     opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
     assert opts["allow_all_collect"] is False
 
