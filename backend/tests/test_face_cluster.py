@@ -426,9 +426,79 @@ def _seed_unmatched_detections(client, upload, count: int = 4):
     import asyncio
 
     asyncio.run(_seed())
+    return insp_ids
 
 
 @pytest.fixture
 def fake_face_db():
     """占位 fixture：明确聚类集成测试不依赖真实人脸识别服务（无操作）。"""
     yield None
+
+
+def test_cluster_group_detections_carry_media_type(client, upload, fake_face_db):
+    """聚合分组明细必须回传 media_type（回归：悬停大图把视频的 mp4 当 <img> 加载）。
+
+    前端 `largePreviewUrl` 以 file_path 作悬停大图，只在 `media_type == "video"` 时
+    改走缩略图。聚合分组明细此前漏回传该字段，于是视频素材的悬停浮层空白——
+    用户反馈为「悬停功能失效」；线上人脸检测约有 15% 落在视频素材上。
+    """
+    import asyncio
+
+    from app.database import async_session
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+    from app.services.task_runners.face_cluster import execute_face_cluster
+
+    insp_ids = _seed_unmatched_detections(client, upload)
+
+    # 把第 1 条素材改成视频（file_path 为 mp4），对齐真实数据形态
+    video_insp_id = insp_ids[0]
+
+    async def _make_video():
+        async with async_session() as db:
+            insp = await db.get(Inspiration, video_insp_id)
+            insp.media_type = "video"
+            insp.file_path = "videos/2026/09/probe.mp4"
+            await db.commit()
+
+    asyncio.run(_make_video())
+
+    r = client.post("/api/face-scan/cluster/run", json={})
+    assert r.status_code == 201
+    task_id = r.json()["task_id"]
+
+    async def _run():
+        async with async_session() as db:
+            task = await db.get(TaskQueue, task_id)
+            task.status = "running"
+            await db.commit()
+            await execute_face_cluster(db, task)
+            await db.refresh(task)
+            task.status = "success"
+            task.progress = 100
+            await db.commit()
+
+    asyncio.run(_run())
+
+    groups = client.get("/api/face-scan/cluster/groups").json()["items"]
+    assert groups, "聚类应至少产出一个分组"
+
+    # 逐组取明细（不依赖分组顺序），覆盖全部明细项
+    items: list[dict] = []
+    for group in groups:
+        resp = client.get(f"/api/face-scan/cluster/groups/{group['group_id']}/detections")
+        assert resp.status_code == 200
+        items.extend(resp.json()["items"])
+    assert items, "分组明细不应为空"
+
+    # ① 每条明细都必须带 media_type（缺字段即回归）
+    missing = [i["detection_id"] for i in items if "media_type" not in i]
+    assert missing == [], f"明细缺 media_type：{missing}"
+    # ② 视频素材那条必须是 video，前端据此改走缩略图
+    video_item = next(i for i in items if i["inspiration_id"] == video_insp_id)
+    assert video_item["media_type"] == "video"
+    assert video_item["file_path"].endswith(".mp4")
+    # ③ 图片素材不能被误判成视频
+    for item in items:
+        if item["inspiration_id"] != video_insp_id:
+            assert item["media_type"] == "image"

@@ -488,6 +488,7 @@ async def load_group_detections(
                 InspirationFaceDetection.confidence,
                 Inspiration.file_path,
                 Inspiration.thumbnail_path,
+                Inspiration.media_type,
             )
             .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
             .where(InspirationFaceDetection.id.in_(chunk))
@@ -503,6 +504,9 @@ async def load_group_detections(
             else None,
             "file_path": by_id[did].file_path,
             "thumbnail_path": by_id[did].thumbnail_path,
+            # 必须回传：前端据此判断 file_path 是 mp4 还是图片，视频素材的悬停大图
+            # 走缩略图、否则 <img> 加载 mp4 会得到空白浮层（与候选/未匹配两处一致）。
+            "media_type": by_id[did].media_type,
         }
         for did in chunk
         if did in by_id

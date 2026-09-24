@@ -542,7 +542,6 @@ function onGroupDetailPageChange(p: number) {
   loadGroupDetail()
 }
 
-/** 素材是否视频：media_type 为 video 时 file_path 是 mp4，不能当 <img> 加载 */
 function goDetail(inspirationId: string) {
   openInspiration(router, inspirationId)
 }

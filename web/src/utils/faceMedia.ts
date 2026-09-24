@@ -8,9 +8,25 @@
 import { getFileUrl } from '@/api/inspirations'
 import type { DetectionItem, FaceClusterGroup, PersonAggregateItem } from '@/api/faceScan'
 
+/** 视频文件后缀：media_type 缺失时的兜底判据（后端漏字段时不至于把 mp4 当图片加载） */
+const VIDEO_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)$/i
+
+/** 媒体类型判定：以 media_type 为准，缺失时回退看路径后缀。
+ *
+ * 后端应在每个明细接口回传 media_type；此处兜底是因为「接口新增字段时漏传」已经
+ * 真实发生过一次（聚合分组明细）——结果是悬停大图拿 mp4 去当 <img> 加载，浮层空白。
+ */
+function isVideoMedia(
+  mediaType: string | null | undefined,
+  filePath: string | null | undefined,
+): boolean {
+  if (mediaType) return mediaType === 'video'
+  return VIDEO_EXT_RE.test(filePath ?? '')
+}
+
 /** 素材是否视频：media_type 为 video 时 file_path 是 mp4，不能当 <img> 加载 */
 export function isVideoItem(item: DetectionItem): boolean {
-  return item.media_type === 'video'
+  return isVideoMedia(item.media_type, item.file_path)
 }
 
 /** 缩略图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)，否则 <img> 必破图） */
@@ -32,7 +48,7 @@ export function personAvatarUrl(item: PersonAggregateItem): string | undefined {
 
 /** 聚合分组代表图地址（优先缩略图；视频素材绝不回退到 file_path(mp4)） */
 export function groupThumbUrl(group: FaceClusterGroup): string {
-  const isVideo = group.rep_media_type === 'video'
+  const isVideo = isVideoMedia(group.rep_media_type, group.rep_file_path)
   if (isVideo) return group.rep_thumbnail_path ? getFileUrl(group.rep_thumbnail_path) : ''
   const path = group.rep_thumbnail_path || group.rep_file_path
   return path ? getFileUrl(path) : ''
