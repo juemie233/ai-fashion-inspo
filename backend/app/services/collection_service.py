@@ -121,6 +121,52 @@ async def _require_manual(collection: Collection) -> None:
         )
 
 
+async def _child_count(db: AsyncSession, collection_id: int) -> int:
+    """直接子收藏夹数。"""
+    return int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(Collection)
+                .where(Collection.parent_id == collection_id)
+            )
+        ).scalar()
+        or 0
+    )
+
+
+async def _require_container(db: AsyncSession, collection: Collection) -> None:
+    """校验「这个合集能直接装素材」——分类节点不能，返回 400。
+
+    分类节点的定义（两条取或）：
+
+    - **同步维护的一级节点**（``auto_source`` 非空且没有父）：例如「抖音入库自动
+      收藏」，它是纯分类节点，素材由同步归位到它的子收藏夹。注意**只拦一级**：
+      ``auto_source`` 的二级（各抖音收藏夹、未分类收藏）正是装素材的地方；
+    - **已经有子收藏夹的节点**：一旦下面挂了子夹，它就是分类节点（前端也只给它渲染
+      收藏夹卡片、不渲染素材网格）——往里加素材等于加到一个看不见的地方。
+
+    用户口径：「一级收藏夹应该是不允许有素材收藏添加进来的」。这条规则必须落在
+    服务层：前端隐藏按钮只是体验，规则由后端守住。
+    """
+    if collection.parent_id is None and collection.auto_source is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"「{collection.name}」是同步自动维护的一级分类节点，"
+                "素材由同步归位到它下面的子收藏夹，不能直接加入"
+            ),
+        )
+    if await _child_count(db, collection.id) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"「{collection.name}」下面已经有子收藏夹，它是分类节点，"
+                "素材请放进子收藏夹"
+            ),
+        )
+
+
 async def _name_taken(
     db: AsyncSession,
     name: str,
@@ -452,8 +498,30 @@ async def create_collection(
 
     ``parent_id`` 非空即建二级收藏夹（父必须是一级，最多两级）；
     ``auto_source`` 由同步流程内部传（如 ``douyin``），用户接口不暴露。
+
+    建二级时父必须是**空容器**：父里已经有素材就说明它同时是分类又是容器，
+    与「一级不装素材」的口径冲突，直接 400 让人先把素材移走。
     """
-    await _validate_parent(db, parent_id)
+    parent = await _validate_parent(db, parent_id)
+    if parent is not None:
+        parent_members = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(CollectionItem)
+                    .where(CollectionItem.collection_id == parent.id)
+                )
+            ).scalar()
+            or 0
+        )
+        if parent_members:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"「{parent.name}」里还有 {parent_members} 个素材：分类节点不装素材，"
+                    "请先把它们移出（或移到别的合集）再建子收藏夹"
+                ),
+            )
     if await _name_taken(db, name, parent_id=parent_id):
         raise HTTPException(status_code=409, detail=f"合集名称「{name}」已存在")
     # position 追加到**同层**末尾（越大越靠后）
@@ -557,10 +625,12 @@ async def add_inspirations(
 ) -> dict:
     """批量加入素材到手动合集（请求内去重、跳过已加入与不存在的素材）。
 
-    智能合集返回 400；新成员 append 到末尾（position = 当前最大值 + 1）。
+    智能合集返回 400；分类节点（一级/有子夹）返回 400（见 :func:`_require_container`）；
+    新成员 append 到末尾（position = 当前最大值 + 1）。
     """
     collection = await get_collection(db, collection_id)
     await _require_manual(collection)
+    await _require_container(db, collection)
 
     # 请求内去重，保持首次出现顺序
     seen: set[str] = set()

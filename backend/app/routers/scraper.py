@@ -83,7 +83,16 @@ async def create_f2_import(
         None,
         description=(
             "mode=collection 时**只下这些收藏夹**（夹 ID，逗号分隔；来自 GET /f2-collects）。"
-            "缺省/空 = 老口径：下平铺收藏列表（含所有收藏夹）"
+            "未勾选的夹既不会下载也不会入库。缺省/空 = 不导入任何文件（除非 "
+            "allow_all_collect=true）"
+        ),
+    ),
+    allow_all_collect: bool = Query(
+        False,
+        description=(
+            "mode=collection 且没勾收藏夹时，是否允许「平铺收藏」导入**全部**收藏"
+            "（含未勾选的夹）。默认 false —— 这条路径会把无关的夹也收进素材库，"
+            "只有前端在确认弹窗后才置 true"
         ),
     ),
     db: AsyncSession = Depends(get_db),
@@ -179,6 +188,7 @@ async def create_f2_import(
         like_max_counts=like_max_counts,
         profiles=profile_list,
         collect_ids=collect_id_list,
+        allow_all_collect=allow_all_collect,
     )
     if task is None:
         return {

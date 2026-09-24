@@ -236,21 +236,25 @@ function likeDownloadText(r: Record<string, unknown>): string {
 }
 
 /**
- * 收藏模式的收藏夹归位结果（后端 result.collection）：本批作品进了一级收藏夹多少条、
- * 二级收藏夹建了几个。没有该字段（其它模式）时返回空串。
+ * 收藏模式的收藏夹归位结果（后端 result.collection）：按抖音收藏夹归位了多少条、
+ * 建了几个二级收藏夹。没有该字段（其它模式）时返回空串。
  *
- * 二级收藏夹（抖音收藏夹维度）一起报出来：只报「+N」会让人以为还是原来那种扁平合集，
- * 看不出「作品被分到哪个夹」这层新语义。
+ * 注意**一级恒不装素材**（added/skipped 恒为 0），真正的数字是 attributed（按夹归位）
+ * 与 unclassified（没有归属、落进二级「未分类收藏」的条数）。
  */
 function collectText(r: Record<string, unknown>): string {
   const c = (r.collection || {}) as Record<string, unknown>
   const name = typeof c.name === 'string' && c.name ? c.name : ''
   if (!name) return ''
-  const added = Number(c.added ?? 0) || 0
-  const created = c.created === true ? '（新建）' : ''
+  const attributed = Number(c.attributed ?? 0) || 0
+  const unclassified = Number(c.unclassified ?? 0) || 0
+  const total = attributed + unclassified
   const folders = Number(c.folder_count ?? 0) || 0
-  const folderText = folders ? ` · 二级收藏夹 ${folders} 个` : ''
-  return `已加入「${name}」${created} +${added}${folderText}`
+  if (!total && !folders) return ''
+  const parts = [`「${name}」归位 ${total} 条`]
+  if (folders) parts.push(`二级收藏夹 ${folders} 个`)
+  if (unclassified) parts.push(`其中未分类 ${unclassified} 条`)
+  return parts.join(' · ')
 }
 
 /**

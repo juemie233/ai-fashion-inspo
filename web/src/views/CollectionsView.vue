@@ -624,7 +624,11 @@ onMounted(() => {
 
         <!-- 瀑布流内容 -->
         <template v-else>
-          <div v-if="current.kind === 'manual' && !currentChildren.length" class="content-toolbar">
+          <!-- 只有「能装素材的合集」才给添加入口：分类节点（一级/有子夹）不给 -->
+          <div
+            v-if="current.kind === 'manual' && !currentChildren.length && !current.auto_source"
+            class="content-toolbar"
+          >
             <a-button size="small" @click="addOpen = true">＋ 添加素材</a-button>
             <a-button v-if="!batchMode" size="small" @click="enterBatchMode()">批量选择</a-button>
           </div>

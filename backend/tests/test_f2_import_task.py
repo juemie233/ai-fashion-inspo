@@ -59,10 +59,10 @@ async def test_status_exposes_collect_fields(client):
 
 
 async def test_collect_stage_aggregates_into_douyin_root_collection(client, upload):
-    """收藏模式：本批入库素材归位到一级「抖音入库自动收藏」，且重复调用不重复加。
+    """没有归属信息的素材进二级「未分类收藏」，**一级恒为空**（分类节点不装素材）。
 
-    一级节点在迁移里就建好了（自动合集），所以这里 created 为 False；幂等由
-    collection_items 的唯一约束保证。
+    回归：早先这批没有归属的素材被塞进一级，于是「抖音入库自动收藏」又变成一个
+    几千件混在一起的大列表——用户口径是一级不允许有素材加进来。
     """
     from sqlalchemy import select
 
@@ -83,29 +83,39 @@ async def test_collect_stage_aggregates_into_douyin_root_collection(client, uplo
         stats = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
         assert stats is not None
         assert stats["name"] == "抖音入库自动收藏"
-        assert stats["added"] == 2
-        assert stats["folder_count"] == 0  # 没有归属清单 → 不建二级
-        assert task.result["collection"]["name"] == "抖音入库自动收藏"
+        assert stats["added"] == 0, "一级不装素材"
+        assert stats["unclassified"] == 2
+        assert stats["folder_count"] == 1  # 只有「未分类收藏」
 
         # 幂等：同一批再跑一次不重复加入
         again = await f2_runner._aggregate_collect_stage(db, task, {"ids": ids})
         assert again["created"] is False
-        assert again["added"] == 0
-        assert again["skipped"] == 2
+        assert again["folders"][0]["added"] == 0
+        assert again["folders"][0]["skipped"] == 2
 
-        collection = (
+        root = (
             await db.execute(
                 select(Collection).where(Collection.name == "抖音入库自动收藏")
             )
         ).scalars().one()
-        assert collection.parent_id is None
-        assert collection.auto_source == "douyin"
+        assert root.parent_id is None
+        assert root.auto_source == "douyin"
+        unc = (
+            await db.execute(
+                select(Collection).where(
+                    Collection.parent_id == root.id,
+                    Collection.name == f2_runner.UNCLASSIFIED_COLLECTION_NAME,
+                )
+            )
+        ).scalars().one()
         items = (
             await db.execute(
-                select(CollectionItem).where(CollectionItem.collection_id == collection.id)
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == unc.id
+                )
             )
         ).scalars().all()
-        assert {item.inspiration_id for item in items} == set(ids)
+        assert set(items) == set(ids)
 
 
 async def test_collect_stage_builds_second_level_from_folder_map(client):
@@ -162,8 +172,8 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
         assert stats["folder_count"] == 2
         assert {f["name"] for f in stats["folders"]} == {"秘书OL", "股票"}
         assert stats["attributed"] == 2
-        # 两件作品都有归属 → 一级不装任何作品（纯分类节点）
-        assert stats["unattributed"] == 0
+        # 两件作品都有归属 → 没有「未分类」这一项
+        assert stats["unclassified"] == 0
 
         root = (
             await db.execute(
@@ -194,7 +204,7 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
             "股票": {"collect-7400000000000000002"},
         }
 
-    # 平铺下载（无归属清单）时只进一级：没有夹可归，总得有个去处，且不猜夹名
+    # 平铺下载（无归属清单）时进二级「未分类收藏」：没有夹可归，但也不能塞进一级
     async with async_session() as db:
         task = TaskQueue(
             type="f2_import", status="running", progress=90, total=0, done=0,
@@ -210,17 +220,28 @@ async def test_collect_stage_builds_second_level_from_folder_map(client):
             extra_ids=["collect-7400000000000000002"],
             folder_map={},
         )
-        assert flat["folder_count"] == 0
-        assert flat["unattributed"] == 1
+        assert flat["folder_count"] == 1
+        assert flat["unclassified"] == 1
+        assert flat["added"] == 0
         root_id = flat["id"]
+        unc_id = flat["folders"][0]["id"]
+        assert flat["folders"][0]["name"] == f2_runner.UNCLASSIFIED_COLLECTION_NAME
         members = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == unc_id
+                )
+            )
+        ).scalars().all()
+        assert list(members) == ["collect-7400000000000000002"]
+        # 一级仍然是空的
+        assert (
             await db.execute(
                 select(CollectionItem.inspiration_id).where(
                     CollectionItem.collection_id == root_id
                 )
             )
-        ).scalars().all()
-        assert list(members) == ["collect-7400000000000000002"]
+        ).scalars().all() == []
 
 
 async def test_collect_stage_noop_without_imported_ids(client):
@@ -1295,20 +1316,31 @@ async def test_maybe_schedule_creates_task_when_due(client, auto_env, auto_setti
         assert await _count_f2_tasks(db) == 1
 
 
-async def test_maybe_schedule_honors_collection_mode(client, auto_env, auto_settings):
-    """自动获取入口跟随配置：mode=collection 时任务按「我的收藏」模式创建。"""
-    from app.models.task import TaskQueue
+async def test_maybe_schedule_skips_collection_mode(client, auto_env, auto_settings):
+    """自动获取**不支持**收藏模式：跳过而不是造一个「导入全部收藏」的任务。
 
+    回归：收藏模式必须手选收藏夹（execute_f2_import 的硬前置），自动获取没有「勾选」
+    这回事——原来它会创建一个平铺收藏任务，把整个收藏目录（含用户不想要的夹）
+    全收进素材库。
+    """
     auto_settings.f2_import_auto_enabled = True
     auto_settings.f2_import_auto_mode = "collection"
     auto_settings.f2_like_user = "https://www.douyin.com/user/sec1"
 
     async with async_session() as db:
-        task_id = await task_runner.maybe_schedule_auto_import(db)
-        assert task_id is not None
-        task = await db.get(TaskQueue, task_id)
-        assert task.result["fetch_mode"] == "collection"
-        assert task.result["like_user"] == "https://www.douyin.com/user/sec1"
+        assert await task_runner.maybe_schedule_auto_import(db) is None
+        assert await _count_f2_tasks(db) == 0
+
+
+async def test_auto_status_flags_collection_unsupported(client, auto_env, auto_settings):
+    """状态接口要把「收藏模式不支持自动获取」告诉前端（否则开关看着能用却永远不跑）。"""
+    auto_settings.f2_import_auto_enabled = True
+    auto_settings.f2_import_auto_mode = "collection"
+
+    async with async_session() as db:
+        status = await task_runner.get_f2_auto_status(db)
+    assert status["mode"] == "collection"
+    assert status["collection_unsupported"] is True
 
 
 async def test_maybe_schedule_personal_mode_skips_without_like_user(
@@ -1956,10 +1988,11 @@ def _stub_collect_fetch(monkeypatch, calls: dict | None = None):
 async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     client, f2_like_tree, auto_settings, monkeypatch
 ):
-    """收藏端到端：走收藏命令与收藏产物目录，入库后归位到一级「抖音入库自动收藏」。
+    """收藏端到端：走收藏命令与收藏产物目录，素材进二级「未分类收藏」。
 
     这是本功能与「我的喜欢」唯一的差别所在，其余（下载阶段、五层判重、来源作者
     补登记）都是共用实现——所以这里重点锁「跑的是收藏链路」+「素材落进收藏夹」。
+    平铺批次没有夹归属，所以进「未分类收藏」；**一级恒为空**。
     """
     from sqlalchemy import select
 
@@ -1973,7 +2006,9 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
     patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2.DEFAULT_F2_LIKE_ROOT)
 
     async with async_session() as db:
-        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="collection")
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", allow_all_collect=True
+        )
         task_id = task.id
         await task_runner.execute_f2_import(db, task)
 
@@ -1984,19 +2019,35 @@ async def test_execute_f2_import_collect_mode_aggregates_into_collection(
         assert stored.result["import"]["imported"] == 2
         collection_stats = stored.result["collection"]
         assert collection_stats["name"] == "抖音入库自动收藏"
-        assert collection_stats["added"] == 2
-        assert collection_stats["folder_count"] == 0  # 平铺收藏命令没有夹归属
+        assert collection_stats["added"] == 0, "一级不装素材"
+        assert collection_stats["unclassified"] == 2
+        assert collection_stats["folder_count"] == 1
 
-        collection = (
+        root = (
             await db.execute(
                 select(Collection).where(Collection.name == "抖音入库自动收藏")
             )
         ).scalars().one()
-        assert collection.parent_id is None and collection.auto_source == "douyin"
+        assert root.parent_id is None and root.auto_source == "douyin"
+        assert (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == root.id
+                )
+            )
+        ).scalars().all() == []
+        child = (
+            await db.execute(
+                select(Collection).where(
+                    Collection.parent_id == root.id,
+                    Collection.name == f2_runner.UNCLASSIFIED_COLLECTION_NAME,
+                )
+            )
+        ).scalars().one()
         member_ids = (
             await db.execute(
                 select(CollectionItem.inspiration_id).where(
-                    CollectionItem.collection_id == collection.id
+                    CollectionItem.collection_id == child.id
                 )
             )
         ).scalars().all()
@@ -2228,6 +2279,187 @@ async def test_execute_f2_import_collect_ids_scopes_import_to_selected_folders(
         assert list(root_members) == []
 
 
+async def test_collect_mode_without_folder_selection_is_rejected(
+    client, auto_settings, monkeypatch
+):
+    """收藏模式**没勾收藏夹**时直接失败，一个文件都不下也不入库。
+
+    回归（实测两次）：任务 #386、#387 都是「平铺收藏」——没带 collect_ids，于是把
+    整棵收藏目录（用户明确不想要的股票/哲学夹也在内）各收了 2627 件进素材库。
+    现在平铺路径默认拒绝，必须显式 `allow_all_collect=true` 才放行。
+    """
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+    from app.worker import _claim_next_task, _run_task_safe
+    from sqlalchemy import select
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(
+        monkeypatch,
+        "run_fetch_collects",
+        lambda *_a, **_k: pytest.fail("被拒绝的任务不该真的去下载"),
+    )
+    patch_f2(
+        monkeypatch,
+        "download_collect_folders",
+        lambda *_a, **_k: pytest.fail("没勾收藏夹时不该走逐夹下载"),
+    )
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="collection")
+        task_id = task.id
+
+    # 走真实 worker 收尾：状态与错误文案由 worker 落库
+    assert await _claim_next_task("worker-review") == task_id
+    await _run_task_safe(task_id)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.status == "failed"
+        assert "需要先选收藏夹" in (stored.error or "")
+        assert (stored.result or {}).get("selection_required") is True
+        assert (
+            await db.execute(select(Inspiration).where(Inspiration.deleted_at.is_(None)))
+        ).scalars().all() == []
+
+
+async def test_collect_mode_allow_all_puts_everything_in_unclassified(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """显式确认「全部收藏」时：能导入，但素材进二级「未分类收藏」，**一级恒为空**。
+
+    用户口径：一级收藏夹不允许有素材加进来（它是分类节点）。
+    """
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    calls: dict = {}
+    _stub_collect_fetch(monkeypatch, calls)
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2.DEFAULT_F2_LIKE_ROOT)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", allow_all_collect=True
+        )
+        task_id = task.id
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["import"]["imported"] == 2
+        stats = stored.result["collection"]
+        assert stats["added"] == 0, "一级不允许有素材"
+        assert stats["unclassified"] == 2
+        assert stats["folder_count"] == 1  # 只有「未分类收藏」这一个二级
+        assert stats["folders"][0]["name"] == "未分类收藏"
+
+        root = (
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
+        ).scalars().one()
+        root_members = (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == root.id
+                )
+            )
+        ).scalars().all()
+        assert list(root_members) == [], "一级收藏夹必须是空的"
+
+        unc = (
+            await db.execute(
+                select(Collection).where(
+                    Collection.parent_id == root.id,
+                    Collection.name == "未分类收藏",
+                )
+            )
+        ).scalars().one()
+        assert len(
+            (
+                await db.execute(
+                    select(CollectionItem.inspiration_id).where(
+                        CollectionItem.collection_id == unc.id
+                    )
+                )
+            ).scalars().all()
+        ) == 2
+
+
+async def test_aggregate_collect_stage_keeps_root_empty(client):
+    """归位阶段直接验证：有归属的进各二级、没归属的进「未分类收藏」，一级不动。"""
+    from sqlalchemy import select
+
+    from app.models.collection import Collection, CollectionItem
+    from app.models.inspiration import Inspiration
+    from app.models.task import TaskQueue
+
+    async with async_session() as db:
+        for aweme_id in ("7400000000000000011", "7400000000000000012"):
+            db.add(
+                Inspiration(
+                    id=f"unc-{aweme_id}",
+                    source_type="douyin",
+                    source_platform_id=f"f2:{aweme_id}#image_1",
+                    source_url=f"https://www.douyin.com/note/{aweme_id}",
+                    file_path=f"images/2026-09/{aweme_id}.webp",
+                    media_type="image",
+                )
+            )
+        await db.commit()
+
+    async with async_session() as db:
+        task = TaskQueue(type="f2_import", status="running", result={}, max_retries=1)
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+
+        stats = await f2_runner._aggregate_collect_stage(
+            db,
+            task,
+            {"ids": []},
+            extra_ids=["unc-7400000000000000011", "unc-7400000000000000012"],
+            folder_map={"穿搭": ["7400000000000000011"]},
+        )
+        assert stats["attributed"] == 1
+        assert stats["unclassified"] == 1
+        assert stats["added"] == 0
+
+        root = (
+            await db.execute(
+                select(Collection).where(Collection.name == "抖音入库自动收藏")
+            )
+        ).scalars().one()
+        by_name: dict[str, set] = {}
+        for child in (
+            await db.execute(select(Collection).where(Collection.parent_id == root.id))
+        ).scalars().all():
+            by_name[child.name] = set(
+                (
+                    await db.execute(
+                        select(CollectionItem.inspiration_id).where(
+                            CollectionItem.collection_id == child.id
+                        )
+                    )
+                ).scalars().all()
+            )
+        assert by_name == {
+            "穿搭": {"unc-7400000000000000011"},
+            "未分类收藏": {"unc-7400000000000000012"},
+        }
+        assert (
+            await db.execute(
+                select(CollectionItem.inspiration_id).where(
+                    CollectionItem.collection_id == root.id
+                )
+            )
+        ).scalars().all() == []
+
+
 async def test_scope_empty_fails_loudly_through_worker(client, monkeypatch):
     """勾了夹却没有归属记录：必须是一条**可见的失败**，而不是绿色的 0 入库。
 
@@ -2448,7 +2680,11 @@ async def test_execute_f2_import_collect_mode_adds_existing_library_works_to_col
 async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(
     client, f2_like_tree, auto_settings, monkeypatch
 ):
-    """不带 collect_ids：仍是平铺收藏（含未分类）——老口径不能被新入口悄悄改掉。"""
+    """显式 allow_all_collect=true 时才走平铺收藏（含未分类）——这条老口径仍可用。
+
+    默认情况下它会被拒（见 test_collect_mode_without_folder_selection_is_rejected）：
+    平铺收藏把用户没勾的夹也一起收进来，正是 #386/#387 两次误入库的成因。
+    """
     from app.models.task import TaskQueue
 
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
@@ -2462,7 +2698,9 @@ async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(
     )
 
     async with async_session() as db:
-        task = await task_runner.create_f2_import_task(db, fetch=True, fetch_mode="collection")
+        task = await task_runner.create_f2_import_task(
+            db, fetch=True, fetch_mode="collection", allow_all_collect=True
+        )
         task_id = task.id
         await task_runner.execute_f2_import(db, task)
 
@@ -2470,6 +2708,9 @@ async def test_execute_f2_import_without_collect_ids_keeps_flat_collect_path(
         stored = await db.get(TaskQueue, task_id)
         assert stored.result["fetch"]["mode"] == "collection"
         assert stored.result["import"]["imported"] == 2
+        # 平铺批次没有归属 → 全部进「未分类收藏」，一级仍空
+        assert stored.result["collection"]["added"] == 0
+        assert stored.result["collection"]["unclassified"] == 2
 
     assert calls["fetch"] == "collect"
 

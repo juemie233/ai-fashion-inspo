@@ -78,6 +78,14 @@ DOUYIN_AUTO_SOURCE = COLLECTION_DOUYIN_AUTO_SOURCE
 """收藏夹归属清单文件名（与 scripts/f2_collects.py 的常量保持一致）。"""
 _COLLECT_FOLDER_MAP_NAME = "_collect_folders.json"
 
+"""没有收藏夹归属的作品落在哪个二级收藏夹。
+
+一级「抖音入库自动收藏」是**纯分类节点，永远不装素材**（用户口径：一级不允许有素材
+加进来）。所以「平铺收藏」这类没有归属信息的作品需要一个二级去处，取名对齐抖音侧
+的「未分类」。正常按夹下载时这个夹不会出现。
+"""
+UNCLASSIFIED_COLLECTION_NAME = "未分类收藏"
+
 
 def _personal_scan_root(f2, fetch_mode: str):
     """「我的列表」模式的产物根目录（点赞 / 收藏）。"""
@@ -248,6 +256,7 @@ async def create_f2_import_task(
     like_max_counts: int | None = None,
     profiles: list[str] | None = None,
     collect_ids: list[str] | None = None,
+    allow_all_collect: bool = False,
 ) -> TaskQueue:
     """创建「f2 一键获取素材」任务记录，返回任务对象。
 
@@ -282,8 +291,13 @@ async def create_f2_import_task(
             首次采集自动用 `-i all` 翻全量，入库范围就是这些博主的产物。
         collect_ids: `fetch_mode=collection` 时**只下这些收藏夹**（夹 ID，来自
             `GET /api/scraper/f2-collects` 的扫描结果）。非空时不再走平铺收藏列表，
-            改为逐夹枚举作品后交给 f2 的下载器——没被选中的夹一件都不会下载。
-            空列表 = 老口径（下平铺收藏，含所有收藏夹）。
+            改为逐夹枚举作品后交给 f2 的下载器——没被选中的夹一件都不会下载，
+            **也不会入库**（入库范围同样按勾选的夹过滤）。
+        allow_all_collect: 没勾任何收藏夹时是否允许「平铺收藏」导入**全部**收藏
+            （含用户没勾的夹）。默认 False：这条路径会把用户明确不想要的夹
+            （股票/哲学这类）也收进素材库，实测已发生两次（任务 #386、#387），
+            所以改成必须显式确认——前端「一键下载全部收藏」按钮会在确认弹窗后
+            才把它置为 True。
 
     Returns:
         新建的任务对象（total/done 由执行阶段填充）。
@@ -309,6 +323,7 @@ async def create_f2_import_task(
             "like_max_counts": like_max_counts,
             "profiles": list(profiles or []),
             "collect_ids": list(collect_ids or []),
+            "allow_all_collect": bool(allow_all_collect),
         },
         max_retries=1,  # 下载与入库都幂等，失败可安全重跑
     )
@@ -546,6 +561,14 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
         if not status["like_available"]:
             logger.info(f"[f2 自动获取] 跳过本轮：{status['like_reason']}")
             return None
+        if mode == "collection":
+            # 收藏模式必须**手选收藏夹**（见 execute_f2_import 的硬前置）：
+            # 自动获取没有「勾选」这回事，跑起来只会导入整个收藏目录。
+            logger.info(
+                "[f2 自动获取] 跳过本轮：收藏模式需要手选收藏夹，"
+                "请在采集卡片上点「先扫描收藏夹」手动运行"
+            )
+            return None
     elif not status["available"]:
         # 环境没准备好（f2 未装 / 作者库为空）：跳过并留痕，不制造失败任务
         logger.info(f"[f2 自动获取] 跳过本轮：{status['reason']}")
@@ -639,9 +662,10 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
             )
         ).first()
     interval_hours = max(1, int(settings.f2_import_interval_hours or 24))
+    auto_mode = str(settings.f2_import_auto_mode or "post")
     return {
         "enabled": bool(settings.f2_import_auto_enabled),
-        "mode": str(settings.f2_import_auto_mode or "post"),
+        "mode": auto_mode,
         "interval_hours": interval_hours,
         "skip_live": bool(settings.f2_import_auto_skip_live),
         "available": info["available"],
@@ -649,6 +673,9 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
         # 「我的列表」模式（like/collection）的前提：配了我的主页链接
         "like_available": info["like_available"],
         "like_reason": info["like_reason"],
+        # 收藏模式不支持自动获取（没有「手选收藏夹」这回事，自动跑只会导入整个收藏
+        # 目录）：前端据此把开关说明写清楚，避免用户以为它能自动同步收藏夹
+        "collection_unsupported": auto_mode == "collection",
         "authors": info["authors"],
         "last_task_at": last_created.isoformat() if last_created else None,
         "next_due_at": (
@@ -761,6 +788,7 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             "like_max_counts",
             "profiles",
             "collect_ids",
+            "allow_all_collect",
         )
         if key in raw_result
     }
@@ -770,6 +798,8 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     skip_live = bool(opts.get("skip_live", False))
     make_thumbnails = bool(opts.get("make_thumbnails", True))
     include_unknown = bool(opts.get("include_unknown_authors", False))
+    # 没勾收藏夹时是否允许导入「全部收藏」：默认 False（见 create_f2_import_task 说明）
+    allow_all_collect = bool(opts.get("allow_all_collect", False))
     fetch_mode = str(opts.get("fetch_mode") or "post")
     # 「我」的主页链接：点赞/收藏列表只有本人可见，任务没带就用配置里记住的那个
     like_user = str(opts.get("like_user") or settings.f2_like_user or "").strip()
@@ -833,6 +863,19 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     task.result = {**opts, "stage": "download" if fetch_enabled else "import"}
     task.updated_at = utcnow()
     await db.commit()
+
+    # 收藏模式的硬前置：**没勾收藏夹就什么都不做**（除非显式确认「全部收藏」）。
+    # 平铺收藏会把整棵收藏目录（用户明确不想要的夹也在内）全收进素材库——实测
+    # 任务 #386、#387 各因此进了 2627 件无关内容。放在下载之前拦，连下载都不必跑。
+    if fetch_mode == "collection" and not collect_ids and not allow_all_collect:
+        task.result = {**task.result, "stage": "done", "selection_required": True}
+        task.updated_at = utcnow()
+        await db.commit()
+        raise PermanentTaskError(
+            "收藏模式需要先选收藏夹：请在卡片上点「先扫描收藏夹」，"
+            "勾选要归档的夹再下载（未勾选的夹既不会下载也不会入库）。"
+            "确实要导入全部收藏（含未勾选的夹）时，请用「一键下载全部收藏」并确认。"
+        )
 
     fetch_summary: dict = {
         "total": 0,
@@ -1781,12 +1824,13 @@ async def _aggregate_collect_stage(
 
     结构（用户口径，见 models/collection.py）：
 
-    - 一级「抖音入库自动收藏」是**纯分类节点**，本身不装作品（点进去看到的是收藏夹）；
+    - 一级「抖音入库自动收藏」是**纯分类节点，永远不装素材**（用户明确要求：一级
+      不允许有素材加进来）；点进去看到的是收藏夹卡片；
     - 二级：名字与抖音侧收藏夹一一对应（归属来自按夹下载时写的
-      ``_collect_folders.json``，见 :func:`load_collect_folder_map`）。
-
-    **没有归属信息的作品**（平铺 ``-M collection`` 下载、清单缺失、清单里没记到的）
-    才落在一级节点上——它们没有收藏夹可归，总得有个去处。正常按夹下载时一级恒为空。
+      ``_collect_folders.json``，见 :func:`load_collect_folder_map`）；
+    - **没有归属信息的作品**（平铺 ``-M collection`` 下载、清单缺失、清单里没记到的）
+      落进二级「未分类收藏」——它们没有夹可归，但也不能塞进一级，否则一级又变成
+      「几千件混在一起」的列表。正常按夹下载时这个夹不会出现。
 
     为什么用合集而不是标签：合集的语义就是「一批素材的集合」（合集里直接看到数量
     与体积），而标签是 AI/手动语义、会进入标签治理（去重/合并/健康扫描）——收藏来源是
@@ -1850,33 +1894,51 @@ async def _aggregate_collect_stage(
                 }
             )
 
-        # 一级节点只收「没有归属」的作品：能归到某个抖音收藏夹的一律只进二级，
-        # 免得一级又变回「2658 件全塞在一起」的那个混合列表
-        root_ids = [insp_id for insp_id in target_ids if insp_id not in attributed]
-        added = await collection_service.add_inspirations(db, root_id, root_ids)
+        # 没有归属的作品（平铺收藏 / 清单缺失）落二级「未分类收藏」——
+        # **一级永远不装素材**（用户口径：一级只允许是分类节点）。早先把它们塞进
+        # 一级，结果就是「一级又是 2658 件混在一起」。
+        unclassified_ids = [insp_id for insp_id in target_ids if insp_id not in attributed]
+        unclassified_stats: dict | None = None
+        if unclassified_ids:
+            unc_id, unc_created = await ensure_collection(
+                db,
+                UNCLASSIFIED_COLLECTION_NAME,
+                parent_id=root_id,
+                auto_source=DOUYIN_AUTO_SOURCE,
+                description="没有收藏夹归属的收藏作品（平铺下载/清单缺失时才会出现）",
+            )
+            unc_added = await collection_service.add_inspirations(db, unc_id, unclassified_ids)
+            unclassified_stats = {
+                "id": unc_id,
+                "name": UNCLASSIFIED_COLLECTION_NAME,
+                "created": unc_created,
+                "added": int(unc_added.get("added") or 0),
+                "skipped": int(unc_added.get("skipped") or 0),
+                "from_existing": sum(1 for i in unclassified_ids if i not in imported_set),
+            }
+            folder_stats.append(unclassified_stats)
+
         stats = {
             "id": root_id,
             "name": DOUYIN_ROOT_COLLECTION_NAME,
             "created": root_created,
-            "added": int(added.get("added") or 0),
-            "skipped": int(added.get("skipped") or 0),
-            # 本次是「已在库、未重新入库但补进合集」的条数（让前端/日志能解释合集为何
-            # 比「本批入库」多）
-            "from_existing": sum(1 for i in root_ids if i not in imported_set),
-            # 二级收藏夹（抖音收藏夹维度）
+            # 一级恒为 0：素材只能进二级收藏夹（分类节点不装素材）
+            "added": 0,
+            "skipped": 0,
+            # 二级收藏夹（抖音收藏夹维度 + 可能的「未分类收藏」）
             "folders": folder_stats,
             "folder_count": len(folder_stats),
             "attributed": len(attributed),
-            # 归位失败、只能落在一级的条数（正常为 0：说明每个作品都找到了自己的夹）
-            "unattributed": len(root_ids),
+            # 没有归属、落进「未分类收藏」的条数
+            "unclassified": len(unclassified_ids),
+            "unclassified_collection": unclassified_stats,
         }
         task.result = {**task.result, "collection": stats}
         await db.commit()
         logger.info(
             f"f2「我的收藏」已归位到「{DOUYIN_ROOT_COLLECTION_NAME}」#{root_id}："
-            f"一级新增 {stats['added']} 条（已在合集内跳过 {stats['skipped']} 条，"
-            f"其中已在库补入 {stats['from_existing']} 条）；"
-            f"二级收藏夹 {len(folder_stats)} 个，共归位 {len(attributed)} 条"
+            f"二级收藏夹 {len(folder_stats)} 个（按夹归位 {len(attributed)} 条，"
+            f"未分类 {len(unclassified_ids)} 条）；一级不装素材"
         )
         return stats
     except Exception as exc:  # noqa: BLE001 —— 素材已入库，聚合失败不该让任务失败

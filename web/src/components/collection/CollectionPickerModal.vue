@@ -35,7 +35,18 @@ const creating = ref(false)
 const newName = ref('')
 const newDesc = ref('')
 
-const manualCollections = computed(() => collections.value.filter((c) => c.kind === 'manual'))
+/**
+ * 可加入素材的合集：手动合集里排除**分类节点**。
+ *
+ * 分类节点 = 同步维护的一级节点（如「抖音入库自动收藏」）或已经有子收藏夹的合集——
+ * 后端对它们直接 400（见 collection_service._require_container），所以这里也不列出来，
+ * 否则用户选中后只会拿到一句报错。素材要放进具体的二级收藏夹。
+ */
+const manualCollections = computed(() =>
+  collections.value.filter(
+    (c) => c.kind === 'manual' && !(c.parent_id === null && c.auto_source) && !c.child_count,
+  ),
+)
 
 watch(
   () => props.visible,

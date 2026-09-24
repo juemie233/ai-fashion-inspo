@@ -454,6 +454,8 @@ describe('F2LikeCard', () => {
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
         register_bloggers: true,
         like_max_counts: 0,
+        // 确认弹窗通过后才带的显式许可：后端默认拒绝平铺导入（含未勾选的夹）
+        allow_all_collect: true,
       },
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()

@@ -355,6 +355,69 @@ async def test_list_collections_query_count_stays_flat(client):
     assert len(statements) <= 10, f"列表接口 SQL 条数应恒定，实际 {len(statements)}：{statements}"
 
 
+# ── 分类节点不装素材（一级恒为空） ──
+
+
+async def test_category_node_rejects_members(client, upload):
+    """分类节点（同步一级 / 有子夹的合集）不能直接加素材：API 返回 400。
+
+    用户口径：「一级收藏夹应该是不允许有素材收藏添加进来的」。前端隐藏按钮只是体验，
+    规则由服务层守住——所以这里直接打接口。
+    """
+    from app.database import async_session
+    from app.services import collection_service
+
+    # ① 同步维护的一级节点（抖音入库自动收藏，auto_source=douyin）
+    async with async_session() as db:
+        roots = await collection_service.ensure_root_collections(db)
+    douyin_id = roots[collection_service.DOUYIN_ROOT_COLLECTION_NAME]
+
+    insp = upload().json()["id"]
+    r = client.post(
+        f"/api/collections/{douyin_id}/inspirations", json={"inspiration_ids": [insp]}
+    )
+    assert r.status_code == 400
+    assert "分类节点" in r.json()["detail"]
+
+    # ② 用户自建的一级 + 子夹：父变成分类节点后同样拒绝
+    parent = create_collection(client, "自建分类父")
+    child = client.post(
+        "/api/collections", json={"name": "自建子夹", "parent_id": parent["id"]}
+    ).json()
+    r = client.post(
+        f"/api/collections/{parent['id']}/inspirations", json={"inspiration_ids": [insp]}
+    )
+    assert r.status_code == 400
+    assert "分类节点" in r.json()["detail"]
+    # 子夹照常可加
+    assert (
+        client.post(
+            f"/api/collections/{child['id']}/inspirations",
+            json={"inspiration_ids": [insp]},
+        ).status_code
+        == 200
+    )
+
+
+def test_child_creation_requires_empty_parent(client, upload):
+    """给「里面还有素材」的合集建子夹 → 400（否则它同时是分类又是容器）。"""
+    parent = create_collection(client, "有素材的父")
+    insp = upload().json()["id"]
+    assert (
+        client.post(
+            f"/api/collections/{parent['id']}/inspirations",
+            json={"inspiration_ids": [insp]},
+        ).status_code
+        == 200
+    )
+
+    r = client.post(
+        "/api/collections", json={"name": "想挂进去的子夹", "parent_id": parent["id"]}
+    )
+    assert r.status_code == 400
+    assert "分类节点不装素材" in r.json()["detail"]
+
+
 # ── 排序 ──
 
 

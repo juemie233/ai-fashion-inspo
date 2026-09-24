@@ -105,12 +105,16 @@ onMounted(loadStatus)
         <a-select :model-value="autoMode" size="small" style="width: 220px" @change="onModeChange">
           <a-option value="post">已登记博主的主页新作品</a-option>
           <a-option value="like" :disabled="!personalReady">我的喜欢（点赞作品）</a-option>
-          <a-option value="collection" :disabled="!personalReady">
-            我的收藏（抖音收藏列表）
-          </a-option>
+          <!-- 收藏模式需要手选收藏夹，自动获取做不到 → 直接禁选，而不是让它夜里
+               悄悄把整个收藏目录（含不想要的夹）全收进来 -->
+          <a-option value="collection" disabled>我的收藏（需手选收藏夹，不支持自动）</a-option>
         </a-select>
         <span v-if="autoMode !== 'post' && !personalReady" class="f2a-tip">
           {{ personalReason }}
+        </span>
+        <span v-else-if="autoMode === 'collection'" class="f2a-tip">
+          收藏模式必须手选收藏夹：自动获取没有「勾选」这回事，会连同你不想归档的夹一起收进来；
+          请到「采集我的收藏」卡片点「先扫描收藏夹」手动运行。
         </span>
       </div>
 
@@ -125,8 +129,8 @@ onMounted(loadStatus)
       <div class="f2a-tip">
         「我的喜欢 / 我的收藏」是整份列表翻页（比按博主增量慢得多，且 f2 每页固定等一次
         timeout），开启前建议先在对应卡片里手动跑一次并设好「每次最多翻」；「我的收藏」
-        入库后会按抖音收藏夹归位到「抖音入库自动收藏」下的二级收藏夹（自动获取走的是
-        平铺口径，所有夹都会收，建议手动用「先扫描收藏夹」只勾想要的夹）。
+        入库后会按抖音收藏夹归位到「抖音入库自动收藏」下的二级收藏夹（一级只当分类、
+        不装素材）。收藏模式不支持自动获取：它必须手选收藏夹。
       </div>
     </a-spin>
   </a-card>

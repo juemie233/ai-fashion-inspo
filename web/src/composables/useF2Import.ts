@@ -204,8 +204,13 @@ export interface F2ImportOptions {
   profiles?: string[]
   /** mode=collection 时**只下这些收藏夹**（夹 ID，来自「先扫描」的结果）。
    *  非空时后端不再走平铺收藏列表，改为逐夹枚举作品后交给 f2 的下载器——
-   *  没被选中的夹一件都不会下载。空 = 老口径（平铺收藏，含所有收藏夹）。 */
+   *  没被选中的夹一件都不会下载，**也不会入库**。 */
   collect_ids?: string[]
+  /** mode=collection 且没勾收藏夹时，是否允许导入**全部**收藏（含未勾选的夹）。
+   *  默认 false：后端会直接拒绝（这条路径正是「我只想要 19 个夹，结果 31 个夹
+   *  全进来了」的成因）。只有用户在「一键下载全部收藏」的确认弹窗上点了确认，
+   *  这里才传 true。 */
+  allow_all_collect?: boolean
 }
 
 export function useF2Import() {

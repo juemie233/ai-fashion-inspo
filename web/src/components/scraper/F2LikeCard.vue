@@ -225,7 +225,9 @@ async function onDownloadCheckedFolders() {
   }
 }
 
-/** 收藏模式的「一键下载全部收藏」：老口径（平铺收藏列表，含未分类与所有收藏夹） */
+/** 收藏模式的「一键下载全部收藏」：平铺收藏列表（含未勾选的所有收藏夹）。
+ *  后端默认**拒绝**平铺导入（那正是「只想要 19 个夹却进了 31 个夹」的成因），
+ *  只有用户在确认弹窗上确认后，才显式带 allow_all_collect=true。 */
 async function onDownloadAllCollects() {
   const taskId = await submit({
     fetch: true,
@@ -233,6 +235,7 @@ async function onDownloadAllCollects() {
     like_user: likeUser.value.trim() || undefined,
     register_bloggers: registerBloggers.value,
     like_max_counts: safeMaxCounts.value,
+    allow_all_collect: true,
   })
   if (taskId) {
     emit('submitted')
