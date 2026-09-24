@@ -376,7 +376,9 @@ describe('useF2Import', () => {
         fetch: true,
         mode: 'collection',
         like_user: 'MS4wLjABAAAAme',
-        collect_ids: ['111', '333'],
+        // **逗号分隔字符串**：数组会被 axios 序列化成 `collect_ids[]=…`，
+        // 后端按 collect_ids 取值 → 收到空 → 勾的夹全丢（真实事故）
+        collect_ids: '111,333',
       },
     })
     // 提示文案要说清是「按收藏夹下载」，否则用户以为又全量下了一遍收藏

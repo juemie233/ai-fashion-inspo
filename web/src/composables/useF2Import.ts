@@ -286,6 +286,25 @@ export function useF2Import() {
     }
   }
 
+  /**
+   * 组装查询参数：**数组一律自己拼成逗号分隔的字符串**。
+   *
+   * 为什么不能直接把数组交给 axios：axios 1.x 默认把数组序列化成
+   * `collect_ids[]=111&collect_ids[]=222`（键带方括号），而后端（FastAPI）按
+   * `collect_ids` 取值 → **永远收到空**。真实后果：用户勾了 19 个收藏夹，后端当成
+   * 「一个都没勾」——旧代码退回平铺收藏把整棵目录收进素材库（任务 #386/#387），
+   * 加了硬前置之后又变成任务一开始就失败（#389）。显式拼串后这种"静默丢参数"
+   * 不可能再发生（后端也同时兼容三种写法，见 routers/scraper.py 的 _split_multi）。
+   */
+  function toWireParams(options: F2ImportOptions): Record<string, unknown> {
+    const { collect_ids, profiles, ...rest } = options
+    return {
+      ...rest,
+      ...(collect_ids?.length ? { collect_ids: collect_ids.join(',') } : {}),
+      ...(profiles?.length ? { profiles: profiles.join(',') } : {}),
+    }
+  }
+
   /** 提交一键获取素材任务，成功返回 task_id（失败返回 null） */
   async function submit(options: F2ImportOptions): Promise<number | null> {
     submitting.value = true
@@ -303,7 +322,7 @@ export function useF2Import() {
         message: string
         /** 后端已有进行中的同类任务，直接复用它（并发保护） */
         reused?: boolean
-      }>('/scraper/f2-import', null, { params: options })
+      }>('/scraper/f2-import', null, { params: toWireParams(options) })
       if (!data.task_id) {
         Message.warning(data.message || '任务未创建')
         return null

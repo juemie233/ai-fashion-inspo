@@ -229,7 +229,8 @@ describe('F2ImportCard · 按博主全量下载', () => {
     expect(mocks.post).toHaveBeenCalledWith('/scraper/f2-import', null, {
       params: {
         fetch: true,
-        profiles: [`https://www.douyin.com/user/${SEC}`],
+        // 逗号分隔字符串（不是数组）：数组会被 axios 序列化成 `profiles[]=…` → 后端收不到
+        profiles: `https://www.douyin.com/user/${SEC}`,
         make_thumbnails: true,
       },
     })
@@ -246,8 +247,10 @@ describe('F2ImportCard · 按博主全量下载', () => {
     await profileButton(wrapper).trigger('click')
     await flushPromises()
 
-    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string[] } }).params
-    expect(params.profiles).toEqual([SEC, 'https://www.douyin.com/user/MS4wLjABAAAAother0000'])
+    // **逗号分隔字符串**而不是数组：数组会被 axios 序列化成 `profiles[]=…`，
+    // 后端按 profiles 取值 → 收到空，「按博主全量下载」会静默退化成普通增量
+    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
+    expect(params.profiles).toBe(`${SEC},https://www.douyin.com/user/MS4wLjABAAAAother0000`)
   })
 
   it('没填时按钮禁用，不会发出空 profiles 的请求', async () => {

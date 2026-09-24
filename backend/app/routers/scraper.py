@@ -20,6 +20,27 @@ from app.services.chrome_manager import chrome_manager
 router = APIRouter(prefix="/api/scraper", tags=["scraper"])
 
 
+def _split_multi(values: list[str] | None, legacy_array: list[str] | None) -> list[str]:
+    """把多值查询参数归一成列表，兼容三种写法（都会出现，必须都认）。
+
+    1. ``?collect_ids=111,222``           —— 逗号分隔（文档里的口径，前端现在就这么发）
+    2. ``?collect_ids=111&collect_ids=222`` —— 重复键
+    3. ``?collect_ids[]=111&collect_ids[]=222`` —— **axios 默认的数组序列化**
+
+    第 3 种是真事故：前端一直用 axios 的 `params` 传数组，后端按 `collect_ids`
+    取值，于是**永远收到空**——「我勾了 19 个收藏夹」被后端理解成「一个都没勾」，
+    旧代码因此退回平铺收藏、把整棵目录全收进素材库（任务 #386/#387），加上硬前置
+    之后又变成任务一开始就失败（#389）。所以这里三种都收，前端也改成显式拼串。
+    """
+    out: list[str] = []
+    # 逗号/空白/全角逗号都算分隔符：profiles 允许空格分隔（用户粘贴多个链接时常见）
+    for chunk in [*(values or []), *(legacy_array or [])]:
+        for part in str(chunk).replace("，", ",").replace(",", " ").split():
+            if part:
+                out.append(part)
+    return out
+
+
 @router.get("/sources")
 async def scraper_sources() -> dict:
     """列出所有可用的采集源及其状态。"""
@@ -72,20 +93,34 @@ async def create_f2_import(
             "**按收藏夹下载（带 collect_ids）时是「每个夹」的上限**：每个夹各取最近 N 件"
         ),
     ),
-    profiles: str | None = Query(
+    profiles: list[str] | None = Query(
         None,
         description=(
-            "按博主全量下载：博主主页链接或 sec_user_id（逗号/空格分隔）。"
+            "按博主全量下载：博主主页链接或 sec_user_id（逗号/空格分隔，"
+            "也接受重复键与 axios 的 `profiles[]` 数组写法）。"
             "非空时只下这些博主，且不需要它们已在 f2 用户库里；首次采集自动翻全量"
         ),
     ),
-    collect_ids: str | None = Query(
+    profiles_array: list[str] | None = Query(
+        None,
+        alias="profiles[]",
+        include_in_schema=False,
+        description="兼容 axios 默认数组序列化（`profiles[]=a&profiles[]=b`）",
+    ),
+    collect_ids: list[str] | None = Query(
         None,
         description=(
-            "mode=collection 时**只下这些收藏夹**（夹 ID，逗号分隔；来自 GET /f2-collects）。"
-            "未勾选的夹既不会下载也不会入库。缺省/空 = 不导入任何文件（除非 "
+            "mode=collection 时**只下这些收藏夹**（夹 ID，逗号分隔；来自 GET /f2-collects；"
+            "也接受重复键与 axios 的 `collect_ids[]` 数组写法）。"
+            "未勾选的夹既不会下载也不会入库。空 = 不导入任何文件（除非 "
             "allow_all_collect=true）"
         ),
+    ),
+    collect_ids_array: list[str] | None = Query(
+        None,
+        alias="collect_ids[]",
+        include_in_schema=False,
+        description="兼容 axios 默认数组序列化（`collect_ids[]=a&collect_ids[]=b`）",
     ),
     allow_all_collect: bool = Query(
         False,
@@ -163,10 +198,8 @@ async def create_f2_import(
             return {"message": reason, "task_id": None}
 
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
-    profile_list = [
-        p.strip() for p in (profiles or "").replace(",", " ").split() if p.strip()
-    ]
-    collect_id_list = [c.strip() for c in (collect_ids or "").split(",") if c.strip()]
+    profile_list = _split_multi(profiles, profiles_array)
+    collect_id_list = _split_multi(collect_ids, collect_ids_array)
 
     # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →
     # f2 子进程并发下载、同一平台 ID 撞唯一索引堆失败）。「查进行中 + 创建」

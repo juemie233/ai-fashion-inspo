@@ -532,7 +532,10 @@ describe('F2LikeCard', () => {
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
         register_bloggers: true,
         like_max_counts: 0,
-        collect_ids: ['111', '333'],
+        // **必须是逗号分隔的字符串**，不能是数组：数组会被 axios 序列化成
+        // `collect_ids[]=111&collect_ids[]=333`，后端按 collect_ids 取值 → 收到空
+        // → 用户勾的夹全部丢失（真实事故，见 useF2Import.toWireParams 注释）
+        collect_ids: '111,333',
       },
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()

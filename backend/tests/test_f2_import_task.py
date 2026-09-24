@@ -585,6 +585,48 @@ def test_create_f2_import_task_endpoint_accepts_since_days(client):
     )
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        # 文档口径：逗号分隔（前端现在显式拼串，就用这个）
+        "collect_ids=111,222",
+        # 重复键：其它客户端 / 手写 curl 常见写法
+        "collect_ids=111&collect_ids=222",
+        # **axios 默认的数组序列化**——真实事故的形态，必须兼容
+        "collect_ids[]=111&collect_ids[]=222",
+    ],
+)
+def test_create_f2_import_task_accepts_every_collect_ids_encoding(client, query):
+    """三种收藏夹 ID 编码都必须解析出同一批夹。
+
+    回归（真实事故）：前端用 axios 的 `params` 传数组 → `collect_ids[]=111&...`，
+    而后端参数名是 `collect_ids`（无方括号）→ **永远收到空**。于是「我勾了 19 个收藏夹」
+    被后端理解成「一个都没勾」：旧代码退回平铺收藏、把整棵收藏目录收进素材库
+    （任务 #386/#387），加上硬前置之后又变成任务一开始就失败（#389）。
+    """
+    resp = client.post(f"/api/scraper/f2-import?fetch=true&mode=collection&{query}")
+    body = resp.json()
+    assert body["task_id"], body
+
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["collect_ids"] == ["111", "222"]
+
+
+def test_create_f2_import_task_accepts_axios_profiles_array(client):
+    """「按博主全量下载」的 profiles 同样要认 axios 的数组写法（同一个根因）。"""
+    resp = client.post(
+        "/api/scraper/f2-import?fetch=true"
+        "&profiles[]=https://www.douyin.com/user/sec1"
+        "&profiles[]=https://www.douyin.com/user/sec2"
+    )
+    body = resp.json()
+    opts = client.get(f"/api/tasks/{body['task_id']}").json()["result"]
+    assert opts["profiles"] == [
+        "https://www.douyin.com/user/sec1",
+        "https://www.douyin.com/user/sec2",
+    ]
+
+
 async def test_create_f2_import_task_endpoint_forwards_allow_all_collect(client):
     """接口层的 `allow_all_collect` 必须真的落到任务参数里。
 
