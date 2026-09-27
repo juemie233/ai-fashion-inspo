@@ -21,6 +21,8 @@
 
 import logging
 import random
+from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -241,11 +243,23 @@ _LANCE_FLUSH_SIZE = 200
 
 # 进度提交 / 状态检查的间隔（条）：每这么多条提交一次进度并读一次任务状态。
 # 25 是既有口径（避免 3000+ 次 commit 拖慢任务）；暂停与取消挂在同一个检查点上，
-# 因此点下按钮后最多再处理 25 条就生效（图像素材含 CLIP 编码，约 1~3 秒/条）。
+# 因此点下按钮后最多再处理 25 条就生效。
+# 这个窗口同时就是**图像编码的批量大小**：整窗图片一次交给 CLIP（见
+# embedding.generate_image_embeddings），25 张一批正好落在单卡 GPU 的舒适区间，
+# 比逐张 encode 快数倍（batch=1 时 GPU 大量时间在等数据搬运）。
 _PROGRESS_EVERY = 25
 
 # 统计字段（累计口径：暂停恢复后要把前几轮的计数带上）
-_COUNT_KEYS = ("text_done", "text_skipped", "image_done", "image_skipped", "image_failed")
+# text_failed：有语义内容但文本嵌入失败——必须与 text_skipped（本来就无文本可嵌入）
+# 分开计，否则失败会被当成「这条没文本」静默吞掉（2026-09-27 的故障形态）。
+_COUNT_KEYS = (
+    "text_done",
+    "text_skipped",
+    "text_failed",
+    "image_done",
+    "image_skipped",
+    "image_failed",
+)
 
 # 执行器认定的「用户要求停」状态：只有这两个状态会让执行器中断收尾。
 # 为什么不用「!= running」当判据：pending 的语义是「排队等待被 worker 认领」，
@@ -268,42 +282,88 @@ def _previous_totals(payload: dict) -> dict[str, int]:
     return {key: int(payload.get(key) or 0) for key in _COUNT_KEYS}
 
 
+class _ItemVectors(NamedTuple):
+    """单条素材的向量构造结果（窗口批量编码的返回元素）。
+
+    text_failed 用来区分两种「没有文本向量」：本来就无语义内容（合法跳过，记
+    text_skipped）与有内容但嵌入失败（记 text_failed，需登记回队列重试）。
+    """
+
+    text: list[float] | None
+    image: list[float] | None
+    text_failed: bool = False
+
+
+@dataclass
+class _RunStats:
+    """本轮执行的计数与待落盘缓冲（累计口径由 base 兜住，见 _previous_totals）。"""
+
+    base: dict[str, int]
+    text_done: int = 0
+    text_skipped: int = 0
+    text_failed: int = 0
+    image_done: int = 0
+    image_skipped: int = 0
+    image_failed: int = 0
+    # 本轮声称成功写入的素材 ID（供收尾落库验证：防「写入时成功、事后被删」的假成功）
+    text_ids: list[str] = field(default_factory=list)
+    image_ids: list[str] = field(default_factory=list)
+    # 有文本却嵌入失败的素材：收尾时重新登记回待回填队列，避免向量永久缺失
+    failed_text_ids: list[str] = field(default_factory=list)
+    # 攒批缓冲：向量攒够 _LANCE_FLUSH_SIZE 条才落盘一次
+    pending_text: list[tuple[str, list[float]]] = field(default_factory=list)
+    pending_image: list[tuple[str, list[float]]] = field(default_factory=list)
+
+    async def flush(self, force: bool = False) -> None:
+        """攒批落盘：达到阈值（或 force）时才写 LanceDB，并累加成功计数。"""
+        if not force and (
+            len(self.pending_text) < _LANCE_FLUSH_SIZE
+            and len(self.pending_image) < _LANCE_FLUSH_SIZE
+        ):
+            return
+        flushed = await _flush_vector_batches(self.pending_text, self.pending_image)
+        self.text_done += flushed[0]
+        self.text_ids.extend(flushed[1])
+        self.image_done += flushed[2]
+        self.image_ids.extend(flushed[3])
+
+    def result(self, payload: dict, remaining: int) -> dict:
+        """组装任务 result：计数一律写**累计值**（base + 本轮）。
+
+        暂停恢复后本轮只处理了断点之后的素材，写本轮数字会让用户以为前几轮白做了。
+        """
+        return {
+            **payload,
+            "mode": "text" if payload.get("mode") == "text" else "all",
+            "text_done": self.base["text_done"] + self.text_done,
+            "text_skipped": self.base["text_skipped"] + self.text_skipped,
+            "text_failed": self.base["text_failed"] + self.text_failed,
+            "image_done": self.base["image_done"] + self.image_done,
+            "image_skipped": self.base["image_skipped"] + self.image_skipped,
+            "image_failed": self.base["image_failed"] + self.image_failed,
+            "remaining": remaining,
+        }
+
+
 async def _finalize_interrupted(
-    db: AsyncSession,
-    task: TaskQueue,
-    payload: dict,
-    base: dict[str, int],
-    run_text_done: int,
-    run_text_skipped: int,
-    run_image_done: int,
-    run_image_skipped: int,
-    run_image_failed: int,
-    pending_text: list[tuple[str, list[float]]],
-    pending_image: list[tuple[str, list[float]]],
-    total: int,
+    db: AsyncSession, task: TaskQueue, payload: dict, stats: _RunStats, total: int
 ) -> None:
     """暂停/取消收尾：把已算好但未落盘的向量写掉，记录累计统计，然后停下。
 
-    为什么要落盘：攒批上限 200 条，检查点停下的那一刻可能还压着最多 199 条
-    **已经算完**的向量（文本 embedding 或 CLIP 图像编码都不便宜）。不写就全作废、
-    恢复时重算——那等于「暂停要付双倍代价」，用户会认为暂停没生效。
+    为什么要落盘：攒批上限 200 条，检查点停下的那一刻可能还压着上百条**已经算完**
+    的向量（文本 embedding 或 CLIP 图像编码都不便宜）。不写就全作废、恢复时重算
+    ——那等于「暂停要付双倍代价」，用户会认为暂停没生效。
+
+    失败登记：本轮嵌入失败的文本素材重新登记回待回填队列——暂停不该让它们丢失。
 
     为什么不标 100% / 不改状态：暂停与取消的**状态由接口侧写**，这里只负责
     「保存进度并停下」；worker 收尾时见 ``status != running`` 不会覆盖成 success
     （见 app/worker.py 成功分支的状态复查），所以 paused/cancelled 会被保留。
     """
-    flushed = await _flush_vector_batches(pending_text, pending_image)
-    task.result = {
-        **payload,
-        "mode": "text" if payload.get("mode") == "text" else "all",
-        "text_done": base["text_done"] + run_text_done + flushed[0],
-        "text_skipped": base["text_skipped"] + run_text_skipped,
-        "image_done": base["image_done"] + run_image_done + flushed[2],
-        "image_skipped": base["image_skipped"] + run_image_skipped,
-        "image_failed": base["image_failed"] + run_image_failed,
-        # 还剩多少条没处理：恢复时从 task.done 这个断点接着跑
-        "remaining": max(0, total - int(task.done or 0)),
-    }
+    await stats.flush(force=True)
+    if stats.failed_text_ids:
+        await _recover_failed_ids(db, stats.failed_text_ids)
+    task.result = stats.result(payload, remaining=max(0, total - int(task.done or 0)))
     task.updated_at = utcnow()
     await db.commit()
     logger.info(
@@ -339,26 +399,87 @@ async def _recover_failed_ids(db: AsyncSession, inspiration_ids: list[str]) -> N
     )
 
 
-async def _build_material_vectors(insp: Inspiration) -> tuple[list[float] | None, list[float] | None]:
-    """构造单个素材的 (文本向量, 图像向量)；测试通过 mock 本函数控制成败。
+async def _load_window_inspirations(
+    db: AsyncSession, inspiration_ids: list[str]
+) -> dict[str, Inspiration]:
+    """一次 IN 查询加载一个窗口的素材（含两级标签关系）。
 
-    文本向量：无语义内容（无标签/作者/caption/主色）时为 None；
-    图像向量：仅图片素材生成（文件缺失或 CLIP 不可用时为 None）。
+    - 显式 selectinload 两级标签关系（Inspiration.tags → InspirationTag.tag）：
+      build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是默认
+      lazy="select"——异步会话下隐式懒加载会抛 MissingGreenlet
+      （"greenlet_spawn has not been called"）。此前逐条 db.get 只 eager load 了
+      一级 tags，二级 .tag 未加载即触发此错误。
+    - 过滤已删除素材：垃圾桶素材不重建向量（与旧 rebuild_* 路径语义一致）。
+    - 一个窗口一条查询（≤_PROGRESS_EVERY 个 ID）：逐条 execute 会把每条素材的
+      往返都压在关键路径上；25 个 ID 远低于「长 IN 子句只返回 1 行」的规模阈值
+      （分批 500 的原因见 _filter_existing_ids 的说明）。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .where(
+            Inspiration.id.in_(inspiration_ids),
+            Inspiration.deleted_at.is_(None),
+        )
+    )
+    return {insp.id: insp for insp in result.scalars().all()}
+
+
+async def _build_material_vectors(
+    inss: list[Inspiration], with_images: bool = True
+) -> list[_ItemVectors]:
+    """构造**一个窗口**素材的向量：文本逐条嵌入、图像整窗一次批量 CLIP。
+
+    接缝说明：测试 mock 本函数控制成败（入参是窗口里的素材列表，返回等长的
+    _ItemVectors 列表），因此执行器本身不直接依赖 Ollama / CLIP。
+
+    为什么要批量：CLIP 逐张 encode（batch=1）时 GPU 大量时间在等数据搬运，
+    整窗一次前向能快数倍（见 embedding.generate_image_embeddings）。
+
+    参数:
+        inss: 本窗口的素材（已排除不存在/已删除的）
+        with_images: mode="text"（全量重建文本）时为 False——跳过图像编码，
+            否则「只重建文本」会白跑一遍全库 CLIP
+
+    返回:
+        与 inss 等长的结果列表
     """
     from app.services.vector.embedding import (
         build_inspiration_text,
-        generate_image_embedding,
+        generate_image_embeddings,
         generate_text_embedding,
     )
 
-    text = build_inspiration_text(insp)
-    text_vec = await generate_text_embedding(text) if text else None
-    image_vec: list[float] | None = None
-    if insp.media_type == "image":
-        full_path = settings.storage_root / insp.file_path
-        if full_path.exists():
-            image_vec = await generate_image_embedding(file_path=str(full_path))
-    return text_vec, image_vec
+    texts = [build_inspiration_text(insp) for insp in inss]
+    text_vecs: list[list[float] | None] = []
+    for text in texts:
+        text_vecs.append(await generate_text_embedding(text) if text else None)
+
+    image_vecs: list[list[float] | None] = [None] * len(inss)
+    if with_images:
+        image_paths = [
+            str(settings.storage_root / insp.file_path)
+            for insp in inss
+            if insp.media_type == "image"
+        ]
+        if image_paths:
+            encoded = await generate_image_embeddings(image_paths)
+            # 等长契约由 generate_image_embeddings 保证；万一返回偏短，缺失的路径取不到
+            # 向量 → 该素材计入 image_failed（而不是整窗抛错中断任务）
+            by_path = dict(zip(image_paths, encoded, strict=False))
+            for i, insp in enumerate(inss):
+                if insp.media_type == "image":
+                    image_vecs[i] = by_path.get(str(settings.storage_root / insp.file_path))
+
+    return [
+        _ItemVectors(
+            text=text_vecs[i],
+            image=image_vecs[i],
+            # 有语义内容却拿不到向量 = 嵌入失败（generate_text_embedding 内部已重试过）
+            text_failed=bool(texts[i]) and text_vecs[i] is None,
+        )
+        for i in range(len(inss))
+    ]
 
 
 async def _flush_vector_batches(
@@ -391,24 +512,29 @@ async def _flush_vector_batches(
 
 
 async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
-    """执行向量回填任务：逐条重建素材的文本/图像向量并维护进度。
+    """执行向量回填任务：按窗口批量重建素材的文本/图像向量并维护进度。
 
     参数:
         db: 任务生命周期会话（用于更新任务进度与状态）
         task: 任务记录
 
     说明:
-        - 素材在执行期间被删除时，rebuild_* 内部按「不存在」静默返回，
-          不影响任务完成。
+        - 素材在执行期间被删除时按「跳过」计，不影响任务完成。
         - 任务幂等：upsert 语义，重复执行不会产生重复向量。
         - payload 支持 mode="text"：只重建文本向量（全量文本重建场景，
           如公式版本升级后），跳过图像向量避免无谓的 CLIP 全库编码；
           成功后把文本公式版本写入标记文件，管理页的「版本过期」提醒解除。
-        - **可暂停 / 可取消**：每个进度检查点（每 _PROGRESS_EVERY 条）读一次任务
-          状态，一旦被置为 paused / cancelled（_STOP_STATUSES）就把已算向量落盘
-          并返回，由 worker 按 DB 最新状态决定下一步；paused 后「继续」由接口把
-          任务放回 pending 重新认领，本函数从 ``task.done`` 断点续算（不重跑已
-          处理素材——图像向量要逐张跑 CLIP 编码，全量重来等于暂停白等）。
+        - **窗口批量**：每 _PROGRESS_EVERY 条为一个窗口，一次 IN 查询加载素材、
+          文本逐条嵌入、图像整窗一次 CLIP 前向（见 _build_material_vectors）。
+          逐张 encode 时 GPU 大量时间在等数据搬运，批量前向是回填提速的关键。
+        - **可暂停 / 可取消**：每个窗口边界（每 _PROGRESS_EVERY 条）提交进度后读
+          一次任务状态，一旦被置为 paused / cancelled（_STOP_STATUSES）就把已算
+          向量落盘并返回，由 worker 按 DB 最新状态决定下一步；paused 后「继续」由
+          接口把任务放回 pending 重新认领，本函数从 ``task.done`` 断点续算（不重跑
+          已处理素材——图像向量要逐张跑 CLIP 编码，全量重来等于暂停白等）。
+        - **文本嵌入失败不再静默**：失败计入 text_failed（与「本来就无文本」的
+          text_skipped 分开），收尾时重新登记回待回填队列；本轮「全失败零成功」则
+          抛永久错误，不让任务冒充成功（与图像链路同口径）。
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
@@ -422,24 +548,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
-    run_text_done = 0
-    run_text_skipped = 0
-    run_image_done = 0
-    run_image_skipped = 0  # 非图片素材正常跳过；text_only 模式下不生成图像向量也计入此处
-    run_image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
-    # 声称成功的素材 ID（本轮；供收尾落库验证：防「写入时成功、事后被删」的假成功）
-    text_ids: list[str] = []
-    image_ids: list[str] = []
-    # 累计口径：恢复执行时本轮只处理断点之后的素材，结果里要带上前几轮的计数
-    base = _previous_totals(payload)
-
-    # 批量写入：向量攒够 _LANCE_FLUSH_SIZE 条才落盘一次。LanceDB 每次单条
-    # upsert 都会生成新的 manifest + 数据文件，全量重建（数千条逐条写）会让
-    # 目录膨胀出数千个小文件且文件数持续增长，导致备份永远无法收敛
-    # （2026-08-29 备份连续 5 轮增量修复失败的根因）。批量 add 只产生极少数
-    # fragment/manifest，与 backfill_all_vectors 的批量写入语义一致。
-    pending_text: list[tuple[str, list[float]]] = []  # (素材 ID, 文本向量)
-    pending_image: list[tuple[str, list[float]]] = []
+    # 计数与待落盘缓冲：base 是累计口径的底（恢复执行时本轮只处理断点之后的素材，
+    # 结果里要带上前几轮的计数），pending_* 是攒批缓冲。
+    # 为什么攒批写入：LanceDB 每次单条 upsert 都会生成新的 manifest + 数据文件，
+    # 全量重建（数千条逐条写）会让目录膨胀出数千个小文件且文件数持续增长，导致备份
+    # 永远无法收敛（2026-08-29 备份连续 5 轮增量修复失败的根因）。批量 add 只产生
+    # 极少数 fragment/manifest，与 backfill_all_vectors 的批量写入语义一致。
+    stats = _RunStats(base=_previous_totals(payload))
 
     total = len(inspiration_ids)
     # 断点续算：从上次提交的 done 继续（暂停恢复 / 失败重试都走这里）
@@ -456,94 +571,76 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         )
         return
 
-    for idx, insp_id in enumerate(inspiration_ids[start_idx:], start=start_idx + 1):
-        # 显式 selectinload 两级标签关系（Inspiration.tags → InspirationTag.tag）：
-        # build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是
-        # 默认 lazy="select"——异步会话下隐式懒加载会抛 MissingGreenlet
-        # （"greenlet_spawn has not been called"）。此前 db.get 只 eager load 了
-        # 一级 tags，二级 .tag 未加载即触发此错误。
-        # 同时过滤已删除素材：垃圾桶素材不重建向量（与旧 rebuild_* 路径语义一致）
-        insp_result = await db.execute(
-            select(Inspiration)
-            .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
-            .where(Inspiration.id == insp_id, Inspiration.deleted_at.is_(None))
+    window_start = start_idx
+    while window_start < total:
+        window_ids = inspiration_ids[window_start : window_start + _PROGRESS_EVERY]
+        # 一次 IN 查询加载整窗素材（逐条 execute 会把每条素材的往返都压在关键路径上）
+        by_id = await _load_window_inspirations(db, window_ids)
+        present = [by_id[i] for i in window_ids if i in by_id]
+        built = (
+            await _build_material_vectors(present, with_images=not text_only)
+            if present
+            else []
         )
-        insp = insp_result.scalar_one_or_none()
-        is_image = insp is not None and insp.media_type == "image"
+        vec_by_id = {insp.id: built[i] for i, insp in enumerate(present)}
 
-        # 文本向量：标签已随素材 eager load（上方 selectinload 两级关系）
-        if insp is None:
-            # 素材不存在或已删除（垃圾桶）：计入跳过（与旧 rebuild_* 路径口径一致）
-            run_text_skipped += 1
-            run_image_skipped += 1
-        else:
-            text_vec, image_vec = await _build_material_vectors(insp)
-            if text_vec:
-                pending_text.append((insp_id, text_vec))
+        for insp_id in window_ids:
+            insp = by_id.get(insp_id)
+            vectors = vec_by_id.get(insp_id)
+            if vectors is None:
+                # 素材不存在或已删除（垃圾桶）：计入跳过（与旧 rebuild_* 路径口径一致）
+                stats.text_skipped += 1
+                stats.image_skipped += 1
+                continue
+
+            if vectors.text:
+                stats.pending_text.append((insp_id, vectors.text))
+            elif vectors.text_failed:
+                # 有语义内容却嵌入失败：计入失败并登记，收尾时重新入队重试
+                # （旧实现把它并进 text_skipped，于是向量缺了一片而任务显示成功）
+                stats.text_failed += 1
+                stats.failed_text_ids.append(insp_id)
             else:
-                run_text_skipped += 1
+                stats.text_skipped += 1
 
             if not text_only:
-                if image_vec:
-                    pending_image.append((insp_id, image_vec))
-                elif is_image:
-                    run_image_failed += 1
+                if vectors.image:
+                    stats.pending_image.append((insp_id, vectors.image))
+                elif insp is not None and insp.media_type == "image":
+                    stats.image_failed += 1
                 else:
-                    run_image_skipped += 1
+                    stats.image_skipped += 1
 
         # 攒批落盘：任一队列达到阈值即批量写入（批量 add 只产生极少数 manifest）
-        if len(pending_text) >= _LANCE_FLUSH_SIZE or len(pending_image) >= _LANCE_FLUSH_SIZE:
-            flushed = await _flush_vector_batches(pending_text, pending_image)
-            run_text_done += flushed[0]
-            text_ids.extend(flushed[1])
-            run_image_done += flushed[2]
-            image_ids.extend(flushed[3])
+        await stats.flush()
 
-        # 攒批更新进度（每 25 条提交一次，避免 3000+ 次 commit 拖慢任务）
-        if idx % _PROGRESS_EVERY == 0 or idx == total:
-            task.done = idx
-            task.progress = round(idx / total * 100)
-            task.updated_at = utcnow()
-            await db.commit()
-            await _broadcast_task_event(task, "progress")
-            logger.info(
-                f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
-            )
+        # 进度在窗口边界提交（每 _PROGRESS_EVERY 条一次，避免数千次 commit 拖慢任务）
+        done_now = window_start + len(window_ids)
+        task.done = done_now
+        task.progress = round(done_now / total * 100)
+        task.updated_at = utcnow()
+        await db.commit()
+        await _broadcast_task_event(task, "progress")
+        logger.info(f"向量回填进度: #{task.id} {task.progress}% ({done_now}/{total})")
 
-            # 状态检查：外部可能把任务改成 paused（暂停）/ cancelled（取消）。
-            # 必须紧跟在 commit 之后 refresh：本地未提交的 done/progress 会被丢弃。
-            await db.refresh(task)
-            if task.status in _STOP_STATUSES:
-                await _finalize_interrupted(
-                    db,
-                    task,
-                    payload,
-                    base,
-                    run_text_done,
-                    run_text_skipped,
-                    run_image_done,
-                    run_image_skipped,
-                    run_image_failed,
-                    pending_text,
-                    pending_image,
-                    total,
-                )
-                return
+        # 状态检查：外部可能把任务改成 paused（暂停）/ cancelled（取消）。
+        # 必须紧跟在 commit 之后 refresh：本地未提交的 done/progress 会被丢弃。
+        await db.refresh(task)
+        if task.status in _STOP_STATUSES:
+            await _finalize_interrupted(db, task, payload, stats, total)
+            return
+        window_start = done_now
 
     # 收尾：清空残余批
-    flushed = await _flush_vector_batches(pending_text, pending_image)
-    run_text_done += flushed[0]
-    text_ids.extend(flushed[1])
-    run_image_done += flushed[2]
-    image_ids.extend(flushed[3])
+    await stats.flush(force=True)
 
     # ── 落库验证（防假成功）──
     # 背景：历史上曾出现「任务声称全部写入成功，但向量库目录随后被外部
     # 删除/覆盖，管理页显示大量缺失向量」的假成功（2026-08 复现）。写入
     # 本身成功与「数据最终存在」是两回事，这里抽查读回验证，失败即任务
     # 报错，不再冒充完成——用户能看到失败原因而不是静默缺失。
-    if text_ids:
-        text_sample = random.sample(text_ids, min(20, len(text_ids)))
+    if stats.text_ids:
+        text_sample = random.sample(stats.text_ids, min(20, len(stats.text_ids)))
         missing_text = [
             iid
             for iid in text_sample
@@ -557,8 +654,8 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
                 f"{len(missing_text)} 条未持久化（疑似向量库目录被外部删除/"
                 f"覆盖，或写入未真正落盘）。请检查 backend/storage/lancedb 目录。"
             )
-    if image_ids:
-        image_sample = random.sample(image_ids, min(20, len(image_ids)))
+    if stats.image_ids:
+        image_sample = random.sample(stats.image_ids, min(20, len(stats.image_ids)))
         missing_image = [
             iid
             for iid in image_sample
@@ -572,17 +669,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
                 f"覆盖，或写入未真正落盘）。请检查 backend/storage/lancedb 目录。"
             )
 
-    task.result = {
-        "inspiration_ids": inspiration_ids,
-        "mode": "text" if text_only else "all",
-        # 累计口径：暂停恢复后本轮的 run_* 只是剩余部分，加上前几轮的 base 才是全量
-        "text_done": base["text_done"] + run_text_done,
-        "text_skipped": base["text_skipped"] + run_text_skipped,
-        "image_done": base["image_done"] + run_image_done,
-        "image_skipped": base["image_skipped"] + run_image_skipped,
-        "image_failed": base["image_failed"] + run_image_failed,
-        "remaining": 0,
-    }
+    task.result = stats.result(payload, remaining=0)
     # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
 
@@ -592,14 +679,36 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     # 再抛异常」在进程崩溃时残留假完成。
     # 判据用**本轮**计数（不是累计）：恢复后的剩余批全失败同样是系统性故障，
     # 不能因为「前面几轮成功过」就放过。
-    if not text_only and run_image_done == 0 and run_image_failed > 0:
+    if not text_only and stats.image_done == 0 and stats.image_failed > 0:
         detail = (
-            f"向量回填失败：{run_image_failed} 个图片素材的图像向量全部生成失败"
-            f"（本轮成功 {run_image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
+            f"向量回填失败：{stats.image_failed} 个图片素材的图像向量全部生成失败"
+            f"（本轮成功 {stats.image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
             f"图片文件缺失或写入失败"
         )
         await _recover_failed_ids(db, inspiration_ids)
         raise PermanentTaskError(detail)
+
+    # 文本侧同口径：有内容要嵌入却一条都没成功（典型是 Ollama 被 VLM / 人脸任务
+    # 抢占、请求整体超时），同样不能冒充完成——否则用户看到「成功」而文本向量缺一片。
+    if stats.text_failed > 0 and stats.text_done == 0:
+        detail = (
+            f"向量回填失败：{stats.text_failed} 个素材的文本向量全部生成失败"
+            f"（本轮成功 0）。常见原因：Ollama 未启动、嵌入模型缺失，"
+            f"或被其它 AI 任务抢占导致请求超时"
+        )
+        await _recover_failed_ids(db, stats.failed_text_ids)
+        raise PermanentTaskError(detail)
+
+    # 非系统性的零散文本失败：重新登记回待回填队列。旧实现是「一次超时就永久缺一条
+    # 文本向量」，这里改为登记，能力恢复后由下一次 flush（手动 / 攒批达到阈值 /
+    # worker 启动兜底）自动重试，素材不丢。
+    if stats.failed_text_ids:
+        logger.warning(
+            "向量回填有 %d 个素材文本嵌入失败，已重新登记待回填队列（本轮成功 %d）",
+            len(stats.failed_text_ids),
+            stats.text_done,
+        )
+        await _recover_failed_ids(db, stats.failed_text_ids)
 
     task.done = total
     task.progress = 100
@@ -616,14 +725,15 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     # 批量写入完成后压缩向量表：合并碎片文件、清理被取代的旧版本，
     # 防止目录文件数无限膨胀（失败仅记日志，不影响任务成功态）
     try:
-        stats = await vector_store.compact_vectors()
-        logger.info(f"向量表压缩完成: {stats}")
+        compact_stats = await vector_store.compact_vectors()
+        logger.info(f"向量表压缩完成: {compact_stats}")
     except Exception as e:
         logger.warning(f"向量表压缩失败（忽略）: {e}")
 
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "
-        f"文本 {task.result['text_done']}（跳过 {task.result['text_skipped']}），"
+        f"文本 {task.result['text_done']}（跳过 {task.result['text_skipped']}，"
+        f"失败 {task.result['text_failed']}），"
         f"图像 {task.result['image_done']}"
         f"（跳过 {task.result['image_skipped']}，失败 {task.result['image_failed']}）"
     )

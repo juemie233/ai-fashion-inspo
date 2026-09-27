@@ -92,6 +92,27 @@ describe('summarizeResult', () => {
     expect(summarizeResult('some_new_type', { foo: 1 }, null)).toBe('')
   })
 
+  it('vector_backfill 拼接向量入库与跳过统计', () => {
+    const text = summarizeResult(
+      'vector_backfill',
+      { image_done: 120, text_done: 118, image_skipped: 0, text_skipped: 2 },
+      null,
+    )
+    expect(text).toBe('图像向量 120 · 文本向量 118 · 跳过 2')
+  })
+
+  it('vector_backfill 文本嵌入失败要显式展示（不再并进「跳过」）', () => {
+    // 文本嵌入超时（Ollama 被其它 AI 任务抢占）过去被算成「跳过」，任务显示成功
+    // 却缺一片文本向量；现在必须是可见的失败数 + 已登记待重试
+    const text = summarizeResult(
+      'vector_backfill',
+      { image_done: 50, text_done: 30, text_failed: 20, text_skipped: 0, image_skipped: 0 },
+      null,
+    )
+    expect(text).toContain('文本失败 20（已登记待重试）')
+    expect(text).not.toContain('跳过')
+  })
+
   it('f2_import 入库量与计划量一致时只显示入库数', () => {
     const text = summarizeResult(
       'f2_import',

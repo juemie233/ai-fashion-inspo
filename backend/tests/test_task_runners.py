@@ -2,12 +2,12 @@
 
 import httpx
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.config import settings
 from app.database import async_session
 from app.models.inspiration import Inspiration
-from app.models.task import TaskQueue
+from app.models.task import PendingVectorBackfill, TaskQueue
 from app.services.task_runners.batch_delete import (
     create_batch_delete_task,
     execute_batch_delete,
@@ -171,19 +171,30 @@ async def test_quality_check_partial_failed_still_success(client, upload, ollama
 
 
 class _FakeRebuildVectors:
-    """mock _build_material_vectors：fail_ids 中的素材返回全部失败，其余成功。
+    """mock _build_material_vectors（**窗口批量**接缝）：fail_ids 中的素材返回全部失败，
+    其余成功；text_fail_ids 中的素材只让文本失败（图像照常成功）。
 
-    （向量回填执行器已改为批量写入，接缝从 rebuild_inspiration_vectors
-    换成 _build_material_vectors + vector_store.batch_upsert_vectors。）
+    执行器已改为整窗批量编码，所以接缝入参是「一个窗口的素材列表」，返回等长的
+    _ItemVectors 列表（不再是单条素材的二元组）。
+    fail_ids / text_fail_ids 同时置 text_failed=True：文本「有内容却拿不到向量」必须
+    计入 text_failed 而不是 text_skipped，否则失败会被当成「这条没文本」静默吞掉。
     """
 
     def __init__(self) -> None:
         self.fail_ids: set[str] = set()
+        self.text_fail_ids: set[str] = set()
 
-    async def __call__(self, insp) -> tuple[list[float] | None, list[float] | None]:
-        if insp.id in self.fail_ids:
-            return None, None
-        return [0.1, 0.2], [0.3, 0.4]
+    async def __call__(self, inss, with_images: bool = True) -> list:
+        return [
+            vb_module._ItemVectors(
+                text=None
+                if (insp.id in self.fail_ids or insp.id in self.text_fail_ids)
+                else [0.1, 0.2],
+                image=None if insp.id in self.fail_ids else [0.3, 0.4],
+                text_failed=insp.id in self.fail_ids or insp.id in self.text_fail_ids,
+            )
+            for insp in inss
+        ]
 
 
 def _patch_backfill_fakes(monkeypatch, fake: "_FakeRebuildVectors") -> None:
@@ -262,7 +273,9 @@ async def test_vector_backfill_partial_success(client, upload, monkeypatch):
         assert task.result["image_done"] == 1
         assert task.result["image_failed"] == 1
         assert task.result["text_done"] == 1
-        assert task.result["text_skipped"] == 1
+        # 失败计入 text_failed，不再混进 text_skipped（否则「缺向量」会被当成「没文本」）
+        assert task.result["text_failed"] == 1
+        assert task.result["text_skipped"] == 0
         assert task.done == 2
         assert task.progress == 100
 
@@ -365,10 +378,11 @@ async def _seed_image_inspirations(n: int) -> list[str]:
 
 
 class _FlippingVectors:
-    """逐条返回可用向量；第 flip_at 次调用后把任务状态改成 new_status。
+    """逐条返回可用向量；累计处理到第 flip_at 条后把任务状态改成 new_status。
 
     模拟真实竞态：状态由**接口进程**（另一个会话）改写，执行器只能在下一次
-    ``db.refresh(task)`` 时看到——这正是每个进度检查点要做的事。
+    ``db.refresh(task)`` 时看到——这正是每个窗口边界要做的事。
+    接缝是窗口（整窗一次编码），所以 calls 按**素材条数**累计，断言口径与逐条时一致。
     """
 
     def __init__(self, task_id: int, flip_at: int, new_status: str) -> None:
@@ -377,9 +391,9 @@ class _FlippingVectors:
         self.flip_at = flip_at
         self.new_status = new_status
 
-    async def __call__(self, insp) -> tuple[list[float], list[float]]:
-        self.calls += 1
-        if self.calls == self.flip_at:
+    async def __call__(self, inss, with_images: bool = True) -> list:
+        self.calls += len(inss)
+        if self.calls >= self.flip_at:
             async with async_session() as other:
                 await other.execute(
                     update(TaskQueue)
@@ -387,7 +401,7 @@ class _FlippingVectors:
                     .values(status=self.new_status)
                 )
                 await other.commit()
-        return [0.1, 0.2], [0.3, 0.4]
+        return [vb_module._ItemVectors([0.1, 0.2], [0.3, 0.4]) for _ in inss]
 
 
 async def test_vector_backfill_pause_then_resume_from_checkpoint(client, monkeypatch):
@@ -524,16 +538,17 @@ async def test_vector_backfill_real_load_path_with_tags(client, upload, monkeypa
     assert r.status_code == 200, r.text
 
     # 只 mock 向量生成与 LanceDB 写入/读回；素材加载、文本构造走真实路径
+    # （图像走批量接缝 generate_image_embeddings：整窗一次编码）
     async def fake_text_emb(_text):
         return [0.1, 0.2]
 
-    async def fake_image_emb(file_path=None):
-        return [0.3, 0.4]
+    async def fake_image_embs(file_paths):
+        return [[0.3, 0.4] for _ in file_paths]
 
     from app.services.vector import embedding as emb_module
 
     monkeypatch.setattr(emb_module, "generate_text_embedding", fake_text_emb)
-    monkeypatch.setattr(emb_module, "generate_image_embedding", fake_image_emb)
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
 
     async def fake_batch_upsert(_kind, items):
         return len(items)
@@ -560,9 +575,9 @@ async def test_vector_backfill_skips_deleted_inspiration(client, upload, monkeyp
     _patch_backfill_fakes(monkeypatch, fake)
     called: list[str] = []
 
-    async def spy_build(insp):
-        called.append(insp.id)
-        return [0.1], [0.2]
+    async def spy_build(inss, with_images: bool = True):
+        called.extend(insp.id for insp in inss)
+        return [vb_module._ItemVectors([0.1], [0.2]) for _ in inss]
 
     monkeypatch.setattr(vb_module, "_build_material_vectors", spy_build)
 
@@ -575,6 +590,149 @@ async def test_vector_backfill_skips_deleted_inspiration(client, upload, monkeyp
         assert called == []  # 已删除素材未被构建向量
         assert task.result["text_skipped"] == 1
         assert task.result["image_skipped"] == 1
+
+
+async def test_vector_backfill_batches_image_encoding_per_window(client, monkeypatch):
+    """图像编码按窗口批量：整窗图片一次交给 generate_image_embeddings。
+
+    这是「回填提速」的落点——单卡上逐张 encode（batch=1）时 GPU 大量时间在等数据
+    搬运，整窗一次前向才是关键。这里锁住批量粒度：30 条素材 = 两个窗口 = 两次调用，
+    分别是 _PROGRESS_EVERY 张与 5 张（不是 30 次单张）。
+    """
+    ids = await _seed_image_inspirations(30)
+    batches: list[list[str]] = []
+
+    async def fake_image_embs(file_paths):
+        batches.append(list(file_paths))
+        return [[0.3, 0.4] for _ in file_paths]
+
+    async def fake_batch_upsert(_kind, items):
+        return len(items)
+
+    from app.services.vector import embedding as emb_module
+
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert [len(batch) for batch in batches] == [vb_module._PROGRESS_EVERY, 5]
+        assert task.result["image_done"] == 30
+
+
+async def test_vector_backfill_text_failure_requeued_not_silent(client, upload, monkeypatch):
+    """文本嵌入失败：计入 text_failed（不混进 text_skipped）并重新登记待回填队列。
+
+    旧行为：请求超时后 return None，被当成「这条本来就没文本」静默跳过——任务显示
+    成功、文本向量却永久缺失，且不会再有任何重试（2026-09-27 实测连续 27 分钟每条
+    都如此）。
+    """
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()
+    fake.text_fail_ids = {a}  # 只让文本失败，图像照常成功
+    _patch_backfill_fakes(monkeypatch, fake)
+
+    async with async_session() as db:
+        # 清掉上传时登记的待回填行，确保下面的登记确实是执行器写的
+        await db.execute(delete(PendingVectorBackfill))
+        await db.commit()
+
+        task = await _make_backfill_task(db, [a, b])
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert task.result["text_failed"] == 1
+        assert task.result["text_done"] == 1
+        assert task.result["text_skipped"] == 0  # 失败不再被算成「无文本」
+        assert task.result["image_done"] == 2  # 文本失败不影响图像链路
+        requeued = (
+            await db.execute(select(PendingVectorBackfill.inspiration_id))
+        ).scalars().all()
+        assert list(requeued) == [a]  # 已登记：能力恢复后自动重试，不会永久缺失
+        assert task.done == 2 and task.progress == 100
+
+
+async def test_vector_backfill_all_text_failed_raises(client, upload, monkeypatch):
+    """文本嵌入全失败（零成功）→ 抛永久错误，不冒充成功（与图像链路同口径）。
+
+    典型场景：Ollama 被 VLM / 人脸任务抢占，嵌入请求整体超时。若此时任务报成功，
+    用户看到的就是「成功但文本向量缺一片」，而且不会再有重试。
+    """
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    fake = _FakeRebuildVectors()
+    fake.text_fail_ids = {a, b}  # 文本全失败、图像正常
+    _patch_backfill_fakes(monkeypatch, fake)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [a, b])
+        with pytest.raises(PermanentTaskError) as exc:
+            await vb_module.execute_vector_backfill(db, task)
+        assert "文本向量全部生成失败" in str(exc.value)
+
+        await db.refresh(task)
+        assert task.result["text_failed"] == 2
+        assert task.result["text_done"] == 0
+
+
+async def test_vector_backfill_text_only_skips_image_encoding(client, monkeypatch):
+    """mode="text"（全量重建文本向量）：完全跳过 CLIP，并写入公式版本标记。
+
+    管理页「重建文本向量」按钮走这条路（routers/admin.py 创建 mode="text" 任务），
+    跳过图像向量的意义就是别为纯文本重建白跑一遍全库 CLIP；窗口批量改造后必须仍然
+    一张图都不编码，否则这个按钮会悄悄变成「全库 CLIP + 文本」双倍开销。
+    """
+    ids = await _seed_image_inspirations(30)
+    image_batches: list[list[str]] = []
+    stored_versions: list[int] = []
+
+    async def fake_image_embs(file_paths):
+        image_batches.append(list(file_paths))
+        return [[0.3, 0.4] for _ in file_paths]
+
+    async def fake_text_emb(_text):
+        return [0.1, 0.2]
+
+    async def fake_batch_upsert(_kind, items):
+        return len(items)
+
+    from app.services.vector import embedding as emb_module
+    from app.services.vector.embedding import TEXT_EMBEDDING_FORMULA_VERSION
+
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
+    monkeypatch.setattr(emb_module, "generate_text_embedding", fake_text_emb)
+    # 种子素材本身没有标签/正文，这里让它们都有语义内容（否则全是 text_skipped）
+    monkeypatch.setattr(emb_module, "build_inspiration_text", lambda _insp: "法式穿搭")
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+    monkeypatch.setattr(
+        vb_module.vector_store,
+        "set_stored_text_formula_version",
+        lambda version: stored_versions.append(version),
+    )
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        task.result = {**(task.result or {}), "mode": "text"}
+        await db.commit()
+
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert image_batches == []  # text 模式一张图都不编码
+        assert task.result["text_done"] == 30
+        assert task.result["image_done"] == 0
+        assert task.result["image_failed"] == 0
+        assert task.result["mode"] == "text"
+        assert stored_versions == [TEXT_EMBEDDING_FORMULA_VERSION]
+        assert task.done == 30 and task.progress == 100
 
 
 async def test_quality_check_rerun_no_side_effects(client, upload, monkeypatch):

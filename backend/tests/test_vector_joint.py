@@ -29,20 +29,26 @@ from app.services.vector import store as vector_store
 
 
 class _FakeRebuildVectorsReal:
-    """mock _build_material_vectors：返回与 LanceDB schema 同维度的真实向量。
+    """mock _build_material_vectors（窗口批量接缝）：返回与 LanceDB schema 同维度的真实向量。
 
     文本 384 维（lancedb_text_dim）、图像 512 维（lancedb_image_dim）——
     真实 batch_upsert_vectors 会按维度校验，维度不符直接跳过（记 warning），
     因此 mock 必须返回正确维度，否则「真实落库」断言必然失败且难以定位。
+    入参是**一个窗口**的素材列表，返回等长的 _ItemVectors 列表（执行器整窗批量编码）。
     """
 
     def __init__(self) -> None:
         self.fail_ids: set[str] = set()
 
-    async def __call__(self, insp) -> tuple[list[float] | None, list[float] | None]:
-        if insp.id in self.fail_ids:
-            return None, None
-        return [0.1] * settings.lancedb_text_dim, [0.2] * settings.lancedb_image_dim
+    async def __call__(self, inss, with_images: bool = True) -> list:
+        return [
+            vb_module._ItemVectors(
+                text=None if insp.id in self.fail_ids else [0.1] * settings.lancedb_text_dim,
+                image=None if insp.id in self.fail_ids else [0.2] * settings.lancedb_image_dim,
+                text_failed=insp.id in self.fail_ids,
+            )
+            for insp in inss
+        ]
 
 
 # ═══════════════════════════════════════════════════════════════

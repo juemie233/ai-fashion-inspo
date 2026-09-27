@@ -92,6 +92,15 @@ def _cache_image_embedding(file_path: str, vec: list[float]) -> None:
 
 # ==================== 文本向量（Ollama all-minilm） ====================
 
+# 文本嵌入的超时与重试：Ollama 被 VLM（质量审核 / AI 分析）或人脸任务抢占时，
+# 单次嵌入请求可能整体卡住——2026-09-27 实测连续 27 分钟内每条都卡满 30 秒才超时，
+# 期间文本向量被静默跳过（只计 text_skipped），任务照样报成功。
+# 正常响应约 0.15 秒、冷加载模型约 3 秒，15 秒已是 100 倍余量；2 次尝试加 1.5 秒
+# 退避，最坏约 31 秒/条，与旧行为（单次 30 秒超时后放弃）持平，但瞬时抖动可自愈。
+_TEXT_TIMEOUT_S = 15.0
+_TEXT_ATTEMPTS = 2
+_TEXT_RETRY_BACKOFF_S = 1.5
+
 
 async def generate_text_embedding(text: str) -> list[float] | None:
     """通过 Ollama embedding 模型生成文本向量（带进程内缓存）。
@@ -101,11 +110,15 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     嵌入失败 → 向量永久缺失」。本函数按 1024/512/256 字符逐级截断重试，
     保证长文本素材也能得到向量（语义损失可接受，优于直接缺失）。
 
+    瞬时故障（请求异常 / 5xx / 429）按 :data:`_TEXT_ATTEMPTS` 次重试，全部失败
+    才返回 None——调用方据此区分「无文本可嵌入」与「编码失败」，不能把后者当
+    前者静默跳过（否则任务报成功、文本向量却缺了一片）。
+
     参数:
         text: 待嵌入的文本
 
     返回:
-        向量列表；Ollama 未启动、模型缺失或调用失败时返回 None
+        向量列表；Ollama 未启动、模型缺失、请求超时或调用失败时返回 None
     """
     text = (text or "").strip()
     if not text:
@@ -116,36 +129,56 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     # 逐级截断重试：None=全文，超长报 context 错误时依次减半
     for limit in (None, 1024, 512, 256):
         payload = text if limit is None else text[:limit]
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    f"{settings.ollama_base_url}/api/embeddings",
-                    json={
-                        "model": settings.ollama_embedding_model,
-                        "prompt": payload,
-                    },
-                )
-                if resp.status_code == 200:
-                    embedding = resp.json().get("embedding")
-                    if not embedding:
-                        logger.warning(f"文本嵌入返回空结果: {payload[:50]}")
-                        return None
-                    result = list(embedding)
-                    _cache_text_embedding(text, result)
-                    return result
-                body = resp.text or ""
-                if "context length" in body.lower():
-                    logger.warning(
-                        f"文本嵌入超长（{len(text)} 字符），截断到 {limit} 字符重试: "
-                        f"{body[:120]}"
+        for attempt in range(1, _TEXT_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=_TEXT_TIMEOUT_S) as client:
+                    resp = await client.post(
+                        f"{settings.ollama_base_url}/api/embeddings",
+                        json={
+                            "model": settings.ollama_embedding_model,
+                            "prompt": payload,
+                        },
                     )
-                    continue  # 下一轮截断重试
+            except Exception as e:
+                # httpx 超时异常的 str() 是空串，必须带上类型名——否则日志里
+                # 只剩「生成文本向量失败: 」，2026-09-27 那 27 分钟的故障就是
+                # 因为这行空日志而难以定位。
+                detail = f"{type(e).__name__}: {e or '无详情'}"
+                if attempt < _TEXT_ATTEMPTS:
+                    logger.warning(
+                        f"文本嵌入请求异常（{detail}），{_TEXT_RETRY_BACKOFF_S}s 后重试: "
+                        f"{payload[:50]}"
+                    )
+                    await asyncio.sleep(_TEXT_RETRY_BACKOFF_S)
+                    continue
                 logger.error(
-                    f"文本嵌入模型失败 (HTTP {resp.status_code}): {body[:200]}"
+                    f"生成文本向量失败（已尝试 {_TEXT_ATTEMPTS} 次）: {detail}"
                 )
                 return None
-        except Exception as e:
-            logger.error(f"生成文本向量失败: {e}")
+            if resp.status_code == 200:
+                embedding = resp.json().get("embedding")
+                if not embedding:
+                    logger.warning(f"文本嵌入返回空结果: {payload[:50]}")
+                    return None
+                result = list(embedding)
+                _cache_text_embedding(text, result)
+                return result
+            body = resp.text or ""
+            if "context length" in body.lower():
+                logger.warning(
+                    f"文本嵌入超长（{len(text)} 字符），截断到 {limit} 字符重试: "
+                    f"{body[:120]}"
+                )
+                break  # 跳出尝试循环，换下一个更短的截断档
+            if resp.status_code >= 500 or resp.status_code == 429:
+                if attempt < _TEXT_ATTEMPTS:
+                    logger.warning(
+                        f"文本嵌入服务端错误 (HTTP {resp.status_code})，"
+                        f"{_TEXT_RETRY_BACKOFF_S}s 后重试"
+                    )
+                    await asyncio.sleep(_TEXT_RETRY_BACKOFF_S)
+                    continue
+            logger.error(f"文本嵌入模型失败 (HTTP {resp.status_code}): {body[:200]}")
             return None
     return None
 
@@ -292,7 +325,7 @@ def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list
             _cache_image_embedding(file_path, result)
         return result
     except Exception as e:
-        logger.error(f"生成图像向量失败: {e}")
+        logger.error(f"生成图像向量失败: {type(e).__name__}: {e or '无详情'}")
         return None
 
 
@@ -311,6 +344,93 @@ async def generate_image_embedding(
     if file_path is None and image_bytes is None:
         return None
     return await asyncio.to_thread(_encode_image_sync, file_path, image_bytes)
+
+
+async def generate_image_embeddings(file_paths: list[str]) -> list[list[float] | None]:
+    """批量生成图像向量：一次 CLIP 前向处理多张图。
+
+    为什么要批量：CLIP 在单卡上逐张 encode（batch=1）时 GPU 大部分时间在等数据
+    搬运，向量回填这类「同一批素材一起编码」的场景批量做能快数倍；sentence-transformers
+    的 encode 内部按 batch_size 组批（默认 32，≥ 调用方的窗口大小），因此这里把整窗
+    一次性交给它即可，无需自己拼 tensor。
+
+    参数:
+        file_paths: 图片文件绝对路径列表
+
+    返回:
+        与入参**等长**的列表，逐槽位对应；某项为 None 表示该素材编码失败
+        （图片缺失/损坏、CLIP 不可用、显存不足等），不影响同批其它素材。
+    """
+    if not file_paths:
+        return []
+    return await asyncio.to_thread(_encode_images_sync, file_paths)
+
+
+def _encode_images_sync(file_paths: list[str]) -> list[list[float] | None]:
+    """同步批量编码（CPU/GPU 密集，由调用方放入线程池）。
+
+    先逐条查缓存，未命中的一次性交给 CLIP；整批 encode 抛错（如显存不足）时回落到
+    逐张编码，避免一张坏图或一次 OOM 拖垮整个窗口。
+    """
+    results: list[list[float] | None] = [None] * len(file_paths)
+    misses: list[tuple[int, str]] = []
+    for idx, path in enumerate(file_paths):
+        cached = _get_cached_image_embedding(path)
+        if cached is not None:
+            results[idx] = cached
+        else:
+            misses.append((idx, path))
+    if not misses:
+        return results
+
+    model = _load_clip_model()
+    if model is None:
+        return results
+
+    from PIL import Image
+
+    images: list[object] = []
+    idxs: list[int] = []
+    for idx, path in misses:
+        try:
+            if not Path(path).exists():
+                logger.warning(f"图片不存在，无法生成图像向量: {path}")
+                continue
+            img = Image.open(path)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            images.append(img)
+            idxs.append(idx)
+        except Exception as e:
+            logger.error(f"读取图片失败，跳过该素材: {path} ({type(e).__name__}: {e})")
+
+    if not images:
+        return results
+
+    rows: list[object] = []
+    try:
+        rows = list(model.encode(images))
+    except Exception as e:
+        logger.warning(
+            f"批量图像编码失败（{type(e).__name__}: {e or '无详情'}），"
+            f"回落到逐张编码 {len(images)} 张"
+        )
+        for img in images:
+            try:
+                rows.append(model.encode(img))
+            except Exception as e2:
+                logger.error(f"逐张图像编码失败: {type(e2).__name__}: {e2 or '无详情'}")
+                rows.append(None)
+
+    # 批量编码返回行数理论上与 images 等长；万一不齐（ST 内部异常丢弃），剩下的槽位
+    # 保持 None = 该素材图像向量失败，由调用方按条计入失败，不让整批崩掉。
+    for idx, embedding in zip(idxs, rows, strict=False):
+        if embedding is None:
+            continue
+        vec = [float(x) for x in embedding.tolist()]
+        results[idx] = vec
+        _cache_image_embedding(file_paths[idx], vec)
+    return results
 
 
 # ==================== 工具函数 ====================

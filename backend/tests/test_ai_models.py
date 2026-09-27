@@ -23,6 +23,10 @@ class FakeResponse:
     def __init__(self, status_code=200, payload=None):
         self.status_code = status_code
         self._payload = payload if payload is not None else {}
+        # httpx.Response.text 的最小模拟：非 200 时调用方要读它判断错误类型
+        # （如 Ollama 的 "context length" 超长提示）。缺这个属性会让请求路径抛
+        # AttributeError，而不是走「降级返回 None」的分支。
+        self.text = ""
 
     def json(self):
         return self._payload

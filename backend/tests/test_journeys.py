@@ -81,14 +81,15 @@ def _fake_httpx_image_download(monkeypatch, img_bytes: bytes):
 
 
 def _fake_rebuild_vectors_success(monkeypatch):
-    """mock 向量构造接缝 _build_material_vectors：所有素材向量生成成功（不依赖真实 CLIP）。
+    """mock 向量构造接缝 _build_material_vectors（窗口批量）：所有素材向量生成成功。
 
-    同时 mock 批量写入（不触真实 LanceDB）与落库验证的读回。
+    接缝入参是**一个窗口**的素材列表，返回等长的 _ItemVectors 列表（执行器已改为整窗
+    一次 CLIP 前向）。同时 mock 批量写入（不触真实 LanceDB）与落库验证的读回。
     """
     from app.services.task_runners import vector_backfill as vb_module
 
-    async def _fake(insp) -> tuple[list[float], list[float]]:
-        return [0.1] * 8, [0.2] * 8
+    async def _fake(inss, with_images: bool = True) -> list:
+        return [vb_module._ItemVectors([0.1] * 8, [0.2] * 8) for _ in inss]
 
     async def _fake_batch_upsert(kind: str, items):
         return len(items)

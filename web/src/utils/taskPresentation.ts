@@ -131,10 +131,13 @@ export function summarizeResult(
   const r = result as Record<string, unknown>
   switch (type) {
     case 'vector_backfill':
-      // 向量回填：展示图像/文本向量入库与跳过统计，替代抽象的「N/N」
+      // 向量回填：展示图像/文本向量入库与跳过统计，替代抽象的「N/N」。
+      // text_failed 单独列出：文本嵌入失败（Ollama 被其它 AI 任务抢占而超时）过去被
+      // 并进「跳过」，任务显示成功却缺一片向量；现在它是失败数，必须让用户看见。
       return [
         r.image_done != null ? `图像向量 ${r.image_done}` : '',
         r.text_done != null ? `文本向量 ${r.text_done}` : '',
+        r.text_failed ? `文本失败 ${r.text_failed}（已登记待重试）` : '',
         r.image_skipped || r.text_skipped
           ? `跳过 ${(Number(r.image_skipped) || 0) + (Number(r.text_skipped) || 0)}`
           : '',
