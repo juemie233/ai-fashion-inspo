@@ -20,6 +20,26 @@ from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
 
 
+def inspiration_load_options() -> tuple:
+    """素材响应序列化所需的**链式**预加载选项（唯一出处，别再复制）。
+
+    为什么必须链式：`inspiration_to_out` 会读关联的**内层实体**——
+    `t.tag` / `t.blogger` / `t.model`。模型里 `tags`/`bloggers`/`models` 是
+    ``lazy="selectin"``（外层集合自动加载），但内层实体是默认 ``lazy="select"``：
+    只加载外层集合、忘了链式，就会在**序列化时**异步懒加载报 MissingGreenlet（接口 500）。
+
+    为什么收敛到一处（2026-09-27 事故）：这段链式原先复制了 8 份，其中
+    ``vector/similarity.py`` 那份漏了 bloggers/models——候选素材只要带人物关联就崩，
+    而前端把 500 静默吞成「暂无相似素材」，排查代价极大。复制粘贴是那次事故的
+    结构性原因，所以只留这一处；新增「读素材 → 序列化」的查询一律用它。
+    """
+    return (
+        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+        selectinload(Inspiration.models).selectinload(InspirationModel.model),
+    )
+
+
 async def load_inspiration_full(
     db: AsyncSession, inspiration_id: str
 ) -> Inspiration | None:
@@ -30,11 +50,7 @@ async def load_inspiration_full(
     """
     result = await db.execute(
         select(Inspiration)
-        .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
-        )
+        .options(*inspiration_load_options())
         .where(Inspiration.id == inspiration_id)
     )
     return result.unique().scalar_one_or_none()
@@ -68,11 +84,7 @@ async def list_inspirations(
     返回:
         (素材列表, 总数)
     """
-    query = select(Inspiration).options(
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-        selectinload(Inspiration.models).selectinload(InspirationModel.model),
-    ).where(NOT_DELETED)
+    query = select(Inspiration).options(*inspiration_load_options()).where(NOT_DELETED)
 
     if ids:
         query = query.where(Inspiration.id.in_(ids))
@@ -359,10 +371,9 @@ async def get_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration:
     result = await db.execute(
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            *inspiration_load_options(),
+            # 详情额外要分析日志（列表不需要，别放进公共选项）
             selectinload(Inspiration.analysis_logs),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
         )
         .where(Inspiration.id == inspiration_id)
     )

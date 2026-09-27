@@ -86,7 +86,14 @@ class InspirationTag(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="tags"
     )
-    tag: Mapped["Tag"] = relationship("Tag", back_populates="inspirations")
+    # raise_on_sql：内层实体**必须**由调用方链式预加载（见
+    # inspiration_query.inspiration_load_options）。异步会话下漏了预加载时，
+    # 默认 lazy="select" 会在序列化深处抛 MissingGreenlet（难定位，且表现为接口 500）；
+    # raise_on_sql 让它当场抛 InvalidRequestError 并**点名这个属性**。
+    # 2026-09-27 的候选序列化 500 事故就是漏了内层预加载。
+    tag: Mapped["Tag"] = relationship(
+        "Tag", back_populates="inspirations", lazy="raise_on_sql"
+    )
 
     __table_args__ = (
         UniqueConstraint("inspiration_id", "tag_id", name="uq_inspiration_tag"),

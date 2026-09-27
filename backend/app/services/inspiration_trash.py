@@ -12,12 +12,9 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import Inspiration, utcnow
-from app.models.person import InspirationBlogger, InspirationModel
-from app.models.tag import InspirationTag
 from app.services.audit_service import record_audit_log
 from app.services.file_service import (
     delete_files,
@@ -25,7 +22,7 @@ from app.services.file_service import (
     move_to_trash,
     restore_from_trash,
 )
-from app.services.inspiration_query import load_inspiration_full
+from app.services.inspiration_query import inspiration_load_options, load_inspiration_full
 from app.services.inspiration_state import (
     _mark_restored,
     _mark_trashed,
@@ -373,9 +370,7 @@ async def list_trash(
     query = (
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(Inspiration.deleted_at.isnot(None))
     )

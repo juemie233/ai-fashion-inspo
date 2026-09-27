@@ -3,12 +3,10 @@
 from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.inspiration import Inspiration, NOT_DELETED, utcnow
-from app.models.person import InspirationBlogger, InspirationModel
-from app.models.tag import InspirationTag
 from app.schemas.inspiration import InspirationUpdate
+from app.services.inspiration_query import inspiration_load_options
 
 
 async def update_inspiration(
@@ -20,9 +18,7 @@ async def update_inspiration(
     result = await db.execute(
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(Inspiration.id == inspiration_id)
     )

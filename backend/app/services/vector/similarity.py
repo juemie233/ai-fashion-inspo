@@ -23,8 +23,8 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import Inspiration
-from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag
+from app.services.inspiration_query import inspiration_load_options
 from app.services.vector import store as vector_store
 from app.services.vector.embedding import (
     build_inspiration_text,
@@ -76,9 +76,7 @@ async def _load_inspiration(
     result = await db.execute(
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(
             Inspiration.id == inspiration_id,

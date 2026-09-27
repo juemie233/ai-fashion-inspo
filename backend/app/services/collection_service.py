@@ -17,7 +17,6 @@ import json
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.collection import (
     DOUYIN_AUTO_SOURCE,
@@ -28,9 +27,10 @@ from app.models.collection import (
     CollectionItem,
 )
 from app.models.inspiration import Inspiration, NOT_DELETED
-from app.models.person import InspirationBlogger, InspirationModel
-from app.models.tag import InspirationTag
-from app.services.inspiration_query import build_filters_from_query_json
+from app.services.inspiration_query import (
+    build_filters_from_query_json,
+    inspiration_load_options,
+)
 
 
 def _load_query_json(collection: Collection) -> dict:
@@ -51,9 +51,7 @@ def _smart_base_query(collection: Collection):
     return (
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(*filters)
     )
@@ -89,9 +87,7 @@ def _manual_content_query(collection_id: int):
     return (
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .join(CollectionItem, CollectionItem.inspiration_id == Inspiration.id)
         .where(

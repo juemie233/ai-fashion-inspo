@@ -165,7 +165,12 @@ class InspirationBlogger(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="bloggers"
     )
-    blogger: Mapped["Blogger"] = relationship("Blogger", back_populates="inspirations")
+    # raise_on_sql：必须链式预加载（见 inspiration_query.inspiration_load_options），
+    # 否则异步序列化时抛 MissingGreenlet（表现为接口 500）；raise_on_sql 让漏预加载
+    # 当场点名属性。2026-09-27 的候选序列化 500 事故就出在这条关系上。
+    blogger: Mapped["Blogger"] = relationship(
+        "Blogger", back_populates="inspirations", lazy="raise_on_sql"
+    )
 
     __table_args__ = (
         UniqueConstraint("inspiration_id", "blogger_id", name="uq_inspiration_blogger"),
@@ -202,7 +207,10 @@ class InspirationModel(Base):
     inspiration: Mapped["Inspiration"] = relationship(
         "Inspiration", back_populates="models"
     )
-    model: Mapped["Model"] = relationship("Model", back_populates="inspirations")
+    # 同 InspirationBlogger.blogger：内层实体必须链式预加载，漏了当场报错
+    model: Mapped["Model"] = relationship(
+        "Model", back_populates="inspirations", lazy="raise_on_sql"
+    )
 
     __table_args__ = (
         UniqueConstraint("inspiration_id", "model_id", name="uq_inspiration_model"),

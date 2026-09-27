@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +28,7 @@ from app.models.tag import InspirationTag
 from app.models.audit import AuditLog
 from app.services import admin_stats_service, backup_service, inspiration_service
 from app.services.audit_service import record_audit_log
+from app.services.inspiration_query import inspiration_load_options
 from app.utils.csv_safety import sanitize_csv_cell
 from app.utils.file_hash import build_hash_map
 from app.utils.time import format_utc
@@ -382,9 +382,7 @@ async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
     result = await db.execute(
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(NOT_DELETED)
         .order_by(Inspiration.created_at.desc())

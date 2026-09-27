@@ -7,7 +7,6 @@ import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
@@ -17,9 +16,8 @@ from app.models.inspiration import (
     analysis_log_filter,
     latest_analysis_log_subquery,
 )
-from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
-from app.schemas.inspiration import InspirationListOut, InspirationOut, inspiration_to_out
+from app.schemas.inspiration import InspirationListOut, inspiration_to_out
 from app.schemas.search import (
     SimilarItemOut,
     SimilarOut,
@@ -34,6 +32,7 @@ from app.services.embedding_service import (
     get_image_embedding_status,
     get_text_embedding_status,
 )
+from app.services.inspiration_query import inspiration_load_options
 from app.services.vector_service import find_similar_hybrid
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -91,9 +90,7 @@ async def search_inspirations(
     # 注意：inspiration_to_out 会访问 bloggers/models 的内层实体（t.blogger/t.model），
     # 必须链式 selectinload，否则 async 下触发懒加载抛 MissingGreenlet（500）
     base_query = select(Inspiration).options(
-        selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-        selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-        selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        *inspiration_load_options(),
     ).where(Inspiration.deleted_at.is_(None))
 
     # 收集筛选条件
@@ -465,9 +462,7 @@ async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiratio
     result = await db.execute(
         select(Inspiration)
         .options(
-            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
-            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
-            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+            *inspiration_load_options(),
         )
         .where(
             Inspiration.id == inspiration_id,
