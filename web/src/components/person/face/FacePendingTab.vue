@@ -81,7 +81,18 @@ const {
           <a-avatar :size="32" :image-url="personAvatarUrl(p)">
             <template v-if="!personAvatarUrl(p)">{{ p.name.slice(0, 1) }}</template>
           </a-avatar>
-          <span class="person-name">{{ p.name }}</span>
+          <!-- 名字即入口：新标签页打开该人物详情页（/persons/:id?kind=blogger|model，
+               kind 决定详情页按穿搭博主还是职业模特呈现，与 FaceDetectionSection 同口径）。
+               @click.stop 挡住行点击，避免「开了新标签，当前页还把明细展开了」 -->
+          <a
+            class="person-name person-name-link"
+            :href="`/persons/${p.person_id}?kind=${p.person_type}`"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="在新标签页查看该人物的详情页"
+            @click.stop
+            >{{ p.name }}</a
+          >
           <a-tag size="small" :color="p.person_type === 'blogger' ? 'arcoblue' : 'purple'">
             {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
           </a-tag>

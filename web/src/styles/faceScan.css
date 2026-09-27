@@ -33,6 +33,17 @@
   font-size: 14px;
 }
 
+/* 人物名字即入口：点击在新标签页打开该穿搭博主/职业模特的详情页。
+   颜色随主题主色（与站内其它文字链接一致），悬停加下划线给出可点提示 */
+.face-scan-page .person-name-link {
+  color: rgb(var(--primary-6));
+  text-decoration: none;
+}
+
+.face-scan-page .person-name-link:hover {
+  text-decoration: underline;
+}
+
 .face-scan-page .detail-block {
   margin-top: 10px;
   border-top: 1px dashed #e5e7eb;
