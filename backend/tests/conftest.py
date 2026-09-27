@@ -299,3 +299,62 @@ def create_model(client):
         return r.json()
 
     return _create
+
+
+@pytest.fixture
+def rich_inspiration(client, upload, create_blogger, create_model):
+    """上传一张**关系填满**的素材：标签 + 博主 + 模特。
+
+    为什么需要它（2026-09-27 的教训）：默认的 `upload` 造出的素材没有任何人物关联，
+    而 `inspiration_to_out` 会读关联的**内层实体**（`t.tag` / `t.blogger` / `t.model`）。
+    漏了链式预加载时，只有「真的带关联」的数据才会在序列化时触发异步懒加载报错
+    （MissingGreenlet → 接口 500）——于是所有用 `upload` 的端到端用例都在空关系上跑，
+    结构性漏测（「素材 4ee7f266 没有相似推荐」就是这么漏掉的）。
+    凡是要验证「读素材 → 序列化」的端点，都该用这个夹具，**并让它充当候选**。
+
+    返回 dict：{"id", "blogger_id", "model_id", "blogger_name", "model_name", "tag"}
+    """
+
+    def _create(
+        color: tuple[int, int, int] | None = None,
+        tag: str = "白色",
+        tag_category: str = "color",
+        **overrides,
+    ) -> dict:
+        r = upload(color=color, **overrides)
+        assert r.status_code == 201, r.text
+        insp_id = r.json()["id"]
+
+        r = client.post(
+            f"/api/inspirations/{insp_id}/tags",
+            json={"names": [tag], "category": tag_category},
+        )
+        assert r.status_code == 200, r.text
+
+        # 人物名带 ID 前缀：多个 rich 素材共存时便于断言「是哪一个」
+        blogger_name = f"关联博主{insp_id[:6]}"
+        blogger = create_blogger(name=blogger_name)
+        r = client.post(
+            f"/api/inspirations/{insp_id}/bloggers",
+            json={"person_ids": [blogger["id"]]},
+        )
+        assert r.status_code == 200, r.text
+
+        model_name = f"关联模特{insp_id[:6]}"
+        model = create_model(name=model_name)
+        r = client.post(
+            f"/api/inspirations/{insp_id}/models",
+            json={"person_ids": [model["id"]]},
+        )
+        assert r.status_code == 200, r.text
+
+        return {
+            "id": insp_id,
+            "blogger_id": blogger["id"],
+            "model_id": model["id"],
+            "blogger_name": blogger_name,
+            "model_name": model_name,
+            "tag": tag,
+        }
+
+    return _create
