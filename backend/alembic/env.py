@@ -22,7 +22,15 @@ import app.models  # noqa: F401  导入全部模型，注册到 Base.metadata
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # ⚠️ disable_existing_loggers=False 必须显式传：fileConfig() 默认是 True，
+    # 会**禁用所有未在 alembic.ini 里声明的 logger**。而应用是在服务进程启动时跑
+    # 迁移的（database.run_migrations），一旦迁移执行，uvicorn.access / uvicorn.error /
+    # app.* 就被整体禁用——请求日志、`Application startup complete.`、以及 500 的
+    # traceback 全部消失，没有任何提示。
+    # 实测代价（2026-09-27 排查「素材没有相似推荐」）：接口稳定 500，但
+    # logs/backend.log 里一行相关日志都没有（连请求行都没有），只能靠在进程内复现
+    # 才找到根因。别再把它改回默认值。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # 同步 SQLite URL，优先级：环境变量 > alembic.ini 显式值 > settings 默认（真实库）。
 # 这样命令行 `alembic upgrade head` 默认作用于真实库，而脚本/测试可通过
