@@ -1,6 +1,6 @@
 """任务队列优先级与并发配置：认领排序、并发度读取、生命周期事件广播。"""
 
-from sqlalchemy import select
+from sqlalchemy import update
 
 import app.services.task_events as task_events_module
 from app.database import async_session
@@ -11,7 +11,7 @@ from app.services.task_runners.batch_analyze import (
     create_multi_analyze_task,
 )
 from app.services.task_runners.batch_delete import create_batch_delete_task
-from app.worker import _claim_next_task, _run_task_safe
+from app.worker import GPU_EXCLUSIVE_TASK_TYPES, _claim_next_task, _run_task_safe
 
 
 async def _add_task(
@@ -37,12 +37,18 @@ async def test_claim_order_prefers_higher_priority(client):
     claimed = await _claim_next_task("worker-test")
 
     assert claimed == high_id
+    assert claimed != low_id  # 先创建但优先级低的不该被抢先
 
 
 async def test_claim_order_fifo_within_same_priority(client):
-    """同优先级保持 FIFO：按 id ASC 认领。"""
-    first_id = await _add_task(priority=0)
-    second_id = await _add_task(priority=0)
+    """同优先级保持 FIFO：按 id ASC 认领。
+
+    这里用不吃 GPU 的类型（f2_import）：本用例考的是**排序**，而批次分析属
+    重负载互斥组——连续认领两个组内任务时第二个会被互斥挡住（那是预期行为，
+    见下方互斥用例），拿它测 FIFO 会考错东西。
+    """
+    first_id = await _add_task(priority=0, type_="f2_import")
+    second_id = await _add_task(priority=0, type_="f2_import")
 
     claimed = await _claim_next_task("worker-test")
 
@@ -72,6 +78,76 @@ async def test_claim_skips_not_yet_retryable(client):
     claimed = await _claim_next_task("worker-test")
     assert claimed == later_id
     assert claimed != blocked_id
+
+
+# ═══════════════════════════════════════════════════════════════
+#  重负载任务互斥（GPU_EXCLUSIVE_TASK_TYPES）
+#  背景：2026-09-27 实测向量回填与质量审核、人脸匹配同时跑时，每次文本嵌入都
+#  卡满 30 秒超时（25 条一个检查点 12.7 分钟，单独跑只要 5.4 秒）。
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_gpu_exclusive_group_covers_named_types():
+    """互斥组覆盖「向量回填 + 质量审核 + 人脸匹配/扫描」，且不牵连不吃 GPU 的任务。
+
+    后一条同样重要：f2_import（下载入库）、batch_delete、deduplicate 等不吃 GPU，
+    把它们也拉进互斥组就是白白让它们陪着一起等。
+    """
+    assert {"vector_backfill", "quality_check", "face_match", "face_scan"} <= (
+        GPU_EXCLUSIVE_TASK_TYPES
+    )
+    assert GPU_EXCLUSIVE_TASK_TYPES.isdisjoint(
+        {"f2_import", "batch_delete", "deduplicate", "phash_backfill"}
+    )
+
+
+async def test_two_gpu_tasks_never_running_together(client):
+    """互斥：两个 worker 实例连续认领，不会让两个重负载任务同时 running。
+
+    这正是 2026-09-27 18:32 的场景（supervisor 重启后新旧 worker 短暂重叠），
+    也是 worker_concurrency > 1 时的保证——判定必须在同一条带条件 UPDATE 里，
+    先查后判断在多进程下无效。
+    """
+    low = await _add_task(type_="vector_backfill", priority=0)
+    high = await _add_task(type_="quality_check", priority=10)
+
+    claimed_first = await _claim_next_task("worker-a")
+    claimed_second = await _claim_next_task("worker-b")
+
+    assert claimed_first == high  # 高优先级先进
+    assert claimed_second is None  # 互斥组已有任务在跑 → 第二个不得认领
+    assert claimed_first != low
+
+
+async def test_gpu_busy_does_not_block_plain_tasks(client):
+    """互斥组忙时，不吃 GPU 的任务照常认领（哪怕它的优先级更低）。"""
+    await _add_task(type_="quality_check", status="running")
+    gpu_pending = await _add_task(type_="vector_backfill", priority=100)
+    plain = await _add_task(type_="f2_import", priority=0)
+
+    claimed = await _claim_next_task("worker-test")
+
+    assert claimed == plain
+    assert claimed != gpu_pending
+
+
+async def test_gpu_task_claimed_once_group_is_free(client):
+    """互斥只挡「同时」，不挡「排队」：组内任务结束后立即被认领（不会永久卡住）。"""
+    running_id = await _add_task(type_="face_scan", status="running")
+    gpu_pending = await _add_task(type_="vector_backfill", priority=50)
+
+    assert await _claim_next_task("worker-test") is None  # 组内已有任务在跑
+
+    # 模拟该任务跑完（或失败/取消进入终态）
+    async with async_session() as db:
+        await db.execute(
+            update(TaskQueue)
+            .where(TaskQueue.id == running_id)
+            .values(status="success")
+        )
+        await db.commit()
+
+    assert await _claim_next_task("worker-test") == gpu_pending
 
 
 async def test_default_and_custom_priority(client):

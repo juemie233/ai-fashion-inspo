@@ -7,6 +7,8 @@
 worker 与 API 之间通过 task_queue 表解耦。
 任务认领按 priority DESC, id ASC（高优先级先执行，同优先级 FIFO）；
 同时执行的任务数由 settings.worker_concurrency 控制（默认 1 串行）。
+重负载任务（GPU_EXCLUSIVE_TASK_TYPES：向量回填 / 质量审核 / 批量分析 /
+人脸扫描与匹配）全局串行，不吃 GPU 的任务不受影响——见该常量的说明。
 """
 
 import asyncio
@@ -16,7 +18,7 @@ import time
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import case, delete, or_, select, update
 from sqlalchemy.exc import OperationalError
 
 from app.config import settings
@@ -52,6 +54,32 @@ _STALE_HEARTBEAT_THRESHOLD = 90.0
 # 心跳一过期即被重置回 pending 重新执行。
 _STALE_SWEEP_INTERVAL = 30.0
 
+# ── 重负载任务互斥组 ──
+# 组内任务都吃同一份稀缺资源（GPU：CLIP 图像编码 / VLM 视觉推理 / 人脸推理；
+# face_match 是 numpy 矩阵乘但同样整批占满 CPU 与数据库），同时跑只会互相拖慢：
+# 实测 2026-09-27 18:06–18:33，向量回填与质量审核、人脸匹配挤在一起时，每次
+# 文本嵌入都卡满 30 秒超时才失败（25 条一个检查点耗时 12.7 分钟），而单独跑时
+# 同一个检查点只要 5.4 秒——吞吐差了 130 倍。因此组内任务**全局串行**。
+#
+# 判定写在认领语句里（而不是先查后判断）：多 worker 进程重叠（supervisor 重启
+# 时旧进程可能还没退出、或手工 extra 起了一个）或 worker_concurrency > 1 时，
+# 只有同一条带条件 UPDATE 才能保证「两个重负载任务不会同时 running」。
+#
+# 不在组内的任务（f2_import 下载入库、deduplicate/phash_backfill 图像计算、
+# batch_delete、enrich_blogger_profile 抓主页、tag_* 扫描）不吃 GPU，重负载任务
+# 运行期间照常认领执行，不陪着一起等——这就是互斥只发生在组内的意义。
+# 新增任务类型时：若它会大量占用 GPU / 整批打满 CPU，加进这个集合。
+GPU_EXCLUSIVE_TASK_TYPES: frozenset[str] = frozenset(
+    {
+        "vector_backfill",  # CLIP 图像编码 + Ollama 文本嵌入
+        "quality_check",  # VLM 视觉推理（批量）
+        "batch_analyze",  # VLM 视觉推理（批量）
+        "multi_analyze",  # VLM 视觉推理（多模型组合）
+        "face_scan",  # 人脸推理（face-service embed_batch）
+        "face_match",  # 全库人脸相似度矩阵乘（numpy，整批占 CPU + DB）
+    }
+)
+
 
 def _build_worker_id() -> str:
     """生成当前 worker 实例的唯一标识（pid + 随机后缀）。"""
@@ -65,12 +93,28 @@ async def _claim_next_task(worker_id: str) -> int | None:
     - 仅认领 status = pending 的任务
     - 若设置了 next_retry_at（重试退避），需等到该时间之后
     - 按 priority DESC, id ASC 排序：高优先级任务先执行，同优先级保持 FIFO
+    - **重负载互斥**（GPU_EXCLUSIVE_TASK_TYPES）：组内已有任务在 running 时，
+      不认领组内任务（改去认领不吃 GPU 的任务，或本轮什么都不认领），避免两个
+      重负载任务同时抢 GPU / 整批打满 CPU
     - 通过「先查询 + 条件更新」保证多 worker 实例下不会重复执行同一任务
     - 认领时记录 worker_id 与心跳时间，供心跳租约判定（替代无条件重置）
     - 多 worker 竞争写锁时 SQLite 可能报 database is locked，静默跳过本轮（下一轮再试）
     """
     now = utcnow()
     async with async_session() as db:
+        # 互斥组是否有任务正在跑（同一条件既用于选任务，也用于原子认领）
+        exclusive_running = (
+            select(TaskQueue.id)
+            .where(
+                TaskQueue.status == "running",
+                TaskQueue.type.in_(GPU_EXCLUSIVE_TASK_TYPES),
+            )
+            .exists()
+        )
+        claimable = or_(
+            TaskQueue.type.not_in(GPU_EXCLUSIVE_TASK_TYPES),
+            ~exclusive_running,
+        )
         result = await db.execute(
             select(TaskQueue.id)
             .where(
@@ -80,7 +124,13 @@ async def _claim_next_task(worker_id: str) -> int | None:
                     TaskQueue.next_retry_at <= now,
                 ),
             )
-            .order_by(TaskQueue.priority.desc(), TaskQueue.id.asc())
+            # 可认领的排前面：互斥组忙时把不吃 GPU 的任务挑出来执行，不让它们
+            # 陪着一起等；同为可认领/不可认领时仍按 priority DESC, id ASC
+            .order_by(
+                case((claimable, 1), else_=0).desc(),
+                TaskQueue.priority.desc(),
+                TaskQueue.id.asc(),
+            )
             .limit(1)
         )
         row = result.first()
@@ -88,11 +138,16 @@ async def _claim_next_task(worker_id: str) -> int | None:
             return None
 
         task_id = row[0]
-        # 原子认领：仅当仍为 pending 时才置为 running，避免重复执行
+        # 原子认领：仅当仍为 pending **且互斥条件仍成立**时才置为 running。
+        # 后一个条件防的是「查询到这里之间，另一个进程抢走了互斥组名额」。
         try:
             result = await db.execute(
                 update(TaskQueue)
-                .where(TaskQueue.id == task_id, TaskQueue.status == "pending")
+                .where(
+                    TaskQueue.id == task_id,
+                    TaskQueue.status == "pending",
+                    claimable,
+                )
                 .values(
                     status="running",
                     claimed_by=worker_id,
