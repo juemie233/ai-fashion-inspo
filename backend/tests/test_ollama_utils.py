@@ -47,6 +47,9 @@ async def test_start_ollama_does_not_spawn_when_port_busy(monkeypatch):
     async def always_listening() -> bool:
         return True
 
+    # 自动启动只支持 Windows，CI 跑在 Linux 上：注入平台判定，别让用例走到早退分支
+    # （否则守卫逻辑在 CI 里等于没被覆盖）
+    monkeypatch.setattr(ollama_utils, "_is_windows", lambda: True)
     monkeypatch.setattr(ollama_utils, "is_ollama_running", never_running)
     monkeypatch.setattr(ollama_utils, "is_ollama_port_listening", always_listening)
     monkeypatch.setattr(ollama_utils.asyncio, "create_subprocess_exec", fake_exec)
@@ -68,7 +71,20 @@ async def test_start_ollama_returns_running_when_api_answers(monkeypatch):
     async def boom() -> bool:
         raise AssertionError("已在运行时不应探测端口")
 
+    monkeypatch.setattr(ollama_utils, "_is_windows", lambda: True)
     monkeypatch.setattr(ollama_utils, "is_ollama_running", always_running)
     monkeypatch.setattr(ollama_utils, "is_ollama_port_listening", boom)
 
     assert await ollama_utils.start_ollama() == "Ollama 已在运行"
+
+
+async def test_start_ollama_noop_on_non_windows(monkeypatch):
+    """非 Windows 平台不尝试启动（保持原行为：直接返回 None）。"""
+
+    async def boom() -> bool:
+        raise AssertionError("非 Windows 平台不该再去探测 Ollama")
+
+    monkeypatch.setattr(ollama_utils, "_is_windows", lambda: False)
+    monkeypatch.setattr(ollama_utils, "is_ollama_running", boom)
+
+    assert await ollama_utils.start_ollama() is None

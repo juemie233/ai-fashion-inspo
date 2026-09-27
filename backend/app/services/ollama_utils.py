@@ -32,6 +32,15 @@ def _ollama_host_port() -> tuple[str, int]:
     return parsed.hostname or "127.0.0.1", parsed.port or 11434
 
 
+def _is_windows() -> bool:
+    """当前是否 Windows（自动启动走 PowerShell，只有 Windows 支持）。
+
+    单独抽成函数是为了让平台分支可注入：CI 跑在 Linux 上，若用例直接依赖
+    os.name，两个「端口守卫」用例会在 Linux 上走到早退分支而失去意义。
+    """
+    return os.name == "nt"
+
+
 async def is_ollama_running() -> bool:
     """检查 Ollama 服务是否正在运行。
 
@@ -89,11 +98,12 @@ async def start_ollama() -> str | None:
 
     通过 PowerShell 启动 ollama serve 后台服务，并等待 Ollama API 就绪后返回。
     端口已有人监听时**不启动新实例**，只等它就绪（见模块 docstring）。
+    非 Windows 平台直接返回 None（不尝试启动）。
 
     返回:
         成功启动时返回提示信息（中文），失败返回 None。
     """
-    if os.name != "nt":
+    if not _is_windows():
         return None
 
     # 检查是否已经在运行
