@@ -1,5 +1,7 @@
 """任务执行器（task_runners）回归测试：批量删除、质量审核任务的创建与执行。"""
 
+import asyncio
+
 import httpx
 import pytest
 from sqlalchemy import delete, func, select, update
@@ -733,6 +735,57 @@ async def test_vector_backfill_text_only_skips_image_encoding(client, monkeypatc
         assert task.result["mode"] == "text"
         assert stored_versions == [TEXT_EMBEDDING_FORMULA_VERSION]
         assert task.done == 30 and task.progress == 100
+
+
+async def test_vector_backfill_text_embed_concurrency_follows_setting(client, monkeypatch):
+    """文本嵌入并发度受 VECTOR_EMBED_CONCURRENCY 控制：默认 1（顺序），调大才并发。
+
+    为什么默认 1：实测 Ollama 服务端默认串行处理嵌入（OLLAMA_NUM_PARALLEL 未设置）
+    时，8 路并发比顺序慢 1.7 倍——客户端并发只是把请求堆在服务端排队。所以这个开关
+    要等 OLLAMA_NUM_PARALLEL 调大后再打开。本用例同时锁住「默认不并发」与
+    「调大后确实并发」，避免默认值被误改、或开关变成摆设。
+    """
+    ids = await _seed_image_inspirations(6)
+    state = {"now": 0, "peak": 0}
+
+    async def fake_text_emb(_text):
+        state["now"] += 1
+        state["peak"] = max(state["peak"], state["now"])
+        await asyncio.sleep(0.01)  # 让并发有机会真正重叠
+        state["now"] -= 1
+        return [0.1, 0.2]
+
+    async def fake_batch_upsert(_kind, items):
+        return len(items)
+
+    async def fake_image_embs(file_paths):
+        return [[0.3, 0.4] for _ in file_paths]
+
+    from app.services.vector import embedding as emb_module
+
+    monkeypatch.setattr(emb_module, "generate_text_embedding", fake_text_emb)
+    # 图像链路也一并打桩：本用例只关心文本嵌入的并发，别让真 CLIP 去读不存在的
+    # 种子图片路径（否则全部图像失败 → 触发「图像全失败」的防假成功抛错）
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
+    # 种子素材本身没有标签/正文，这里让它们都有语义内容（否则全是 text_skipped）
+    monkeypatch.setattr(emb_module, "build_inspiration_text", lambda _insp: "法式穿搭")
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+
+    async def run_once() -> None:
+        state["now"] = state["peak"] = 0
+        async with async_session() as db:
+            task = await _make_backfill_task(db, ids)
+            await vb_module.execute_vector_backfill(db, task)
+
+    # 默认 1：顺序执行，峰值并发 1
+    await run_once()
+    assert state["peak"] == 1
+
+    # 调到 4：出现真正的并发
+    monkeypatch.setattr(settings, "vector_embed_concurrency", 4)
+    await run_once()
+    assert state["peak"] > 1
 
 
 async def test_quality_check_rerun_no_side_effects(client, upload, monkeypatch):

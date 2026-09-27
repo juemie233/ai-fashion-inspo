@@ -19,6 +19,7 @@
 只影响统计计数。
 """
 
+import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
@@ -273,6 +274,16 @@ _COUNT_KEYS = (
 _STOP_STATUSES = ("paused", "cancelled")
 
 
+def _embed_concurrency() -> int:
+    """窗口内文本嵌入的并发度（settings.vector_embed_concurrency，最小 1）。
+
+    运行时动态读取（而非导入期快照），便于测试与配置热调。
+    默认 1 的原因见 config.py 该字段注释：Ollama 默认串行处理嵌入请求，客户端
+    并发实测更慢（8 路 0.6×），必须先把服务端 OLLAMA_NUM_PARALLEL 调大才有意义。
+    """
+    return max(1, int(settings.vector_embed_concurrency))
+
+
 def _previous_totals(payload: dict) -> dict[str, int]:
     """取上一轮（暂停/重试前）已累计的统计，缺省为 0。
 
@@ -451,9 +462,19 @@ async def _build_material_vectors(
     )
 
     texts = [build_inspiration_text(insp) for insp in inss]
-    text_vecs: list[list[float] | None] = []
-    for text in texts:
-        text_vecs.append(await generate_text_embedding(text) if text else None)
+    # 文本嵌入：默认顺序执行（_embed_concurrency() 默认 1）。并发度可用
+    # VECTOR_EMBED_CONCURRENCY 调大，但**先要把 Ollama 侧 OLLAMA_NUM_PARALLEL 调大**
+    # ——实测服务端默认串行时，客户端 8 路并发比顺序慢 1.7 倍（详见 config.py）。
+    # gather 保序：text_vecs[i] 与 texts[i] 一一对应。
+    sem = asyncio.Semaphore(_embed_concurrency())
+
+    async def _embed(text: str) -> list[float] | None:
+        if not text:
+            return None
+        async with sem:
+            return await generate_text_embedding(text)
+
+    text_vecs = list(await asyncio.gather(*(_embed(text) for text in texts)))
 
     image_vecs: list[list[float] | None] = [None] * len(inss)
     if with_images:

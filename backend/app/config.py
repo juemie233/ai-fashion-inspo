@@ -120,6 +120,15 @@ class Settings(BaseSettings):
     # 可在 .env 用 ANALYZE_CONCURRENCY 覆盖
     analyze_concurrency: int = 1
 
+    # 向量回填「窗口内文本嵌入」的并发度
+    # 实测（2026-09-27，all-minilm 已加载、空闲）：Ollama 服务端默认串行处理嵌入
+    # 请求（OLLAMA_NUM_PARALLEL 未设置），8 路并发比顺序慢 1.7 倍（0.16s → 0.27s）
+    # ——客户端并发只是把请求堆在服务端排队，还白白多付连接开销。因此本项**默认 1
+    # （顺序）**：只有先把 Ollama 的 OLLAMA_NUM_PARALLEL 调大（如 4）并重启 Ollama，
+    # 再把它跟着调大才有意义（调完请先量一次再定值）。
+    # 可在 .env 用 VECTOR_EMBED_CONCURRENCY 覆盖
+    vector_embed_concurrency: int = 1
+
     # 视频多帧分析：每个视频参与 AI 分析的最大关键帧数（多帧标签按最高置信度
     # 融合，覆盖整套穿搭的不同镜头）。帧数越多语义越全但 Ollama 调用成本线性
     # 增长（N 帧 = N 次视觉调用）；设 1 退化为仅分析首帧的旧行为。可在 .env
