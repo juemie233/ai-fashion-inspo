@@ -92,6 +92,9 @@ from app.services.task_runners.vector_backfill import (
 
 # 任务类型 → 执行函数的分发表：worker 按 task.type 分发到对应执行器。
 # 新增任务类型时，在此注册对应的 execute_xxx 函数即可，worker 无需改动。
+# ⚠ 但若新任务会大量占用 GPU（CLIP/VLM/人脸推理）或整批打满 CPU，必须同时登记到
+# app/worker.py 的 GPU_EXCLUSIVE_TASK_TYPES，否则它会与其它重负载任务并发抢资源
+# ——实测向量回填与质量审核同时跑时，同一个检查点从 5.4 秒退化到 12.7 分钟。
 TASK_HANDLERS = {
     "batch_analyze": execute_batch_analyze,
     "multi_analyze": execute_multi_analyze,

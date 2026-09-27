@@ -15,7 +15,7 @@ import StatusTag from '@/components/common/StatusTag.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate, renderTimeCell } from '@/utils/format'
-import { isCancelableTaskType, isPausableTaskType } from '@/utils/taskPresentation'
+import { taskRowActions } from '@/utils/taskPresentation'
 
 const props = defineProps<{
   tasks: UnifiedTask[]
@@ -142,6 +142,8 @@ const columns: TableColumnData[] = [
     width: 220,
     render: ({ record }) => {
       const row = record as UnifiedTask
+      // 按钮矩阵的唯一判据（与后端接收矩阵同口径、可单测；见 taskRowActions 注释）
+      const actions = taskRowActions(row.status, row.type, row.source)
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
         // 结果浏览入口（按域开关，如 f2 一键获取的批次结果）：由调用方决定哪些行可点开
         props.canViewResults?.(row)
@@ -155,9 +157,8 @@ const columns: TableColumnData[] = [
               { default: () => '查看结果' },
             )
           : null,
-        // 可暂停任务（标签网络分析 / 批量·组合分析 / 质量审核 / f2 一键获取 /
-        // 向量回填）：运行中可暂停、已暂停可恢复
-        isPausableTaskType(row.type) && row.status === 'running'
+        // 运行中 + 可暂停类型 → 暂停
+        actions.canPause
           ? h(
               Button,
               {
@@ -169,7 +170,8 @@ const columns: TableColumnData[] = [
               { default: () => '暂停' },
             )
           : null,
-        isPausableTaskType(row.type) && row.status === 'paused'
+        // 已暂停 + 可暂停类型 → 恢复
+        actions.canResume
           ? h(
               Button,
               {
@@ -181,14 +183,10 @@ const columns: TableColumnData[] = [
               { default: () => '恢复' },
             )
           : null,
-        // 可取消任务（人脸扫描/匹配、标签网络分析、一键获取素材、批量/组合分析、
-        // 质量审核、向量回填）：运行中取消由后端标记 cancelled、执行器感知后自行停止；
-        // **已暂停的也允许直接取消**（不必先恢复再取消）——暂停任务不占资源，
-        // 后端对可暂停类型接受 paused→cancelled。产物（已下载文件、已入库素材、
-        // 已写入的向量/标签/审核结果）都保留，重跑幂等跳过
-        row.source === 'queue' &&
-        isCancelableTaskType(row.type) &&
-        (row.status === 'running' || row.status === 'paused')
+        // 可取消（运行中按可取消白名单、已暂停按可暂停白名单）：后端标记 cancelled，
+        // 执行器在下一个检查点感知后自行停止；产物（已下载文件、已入库素材、已写入的
+        // 向量/标签/审核结果）全部保留，重跑幂等跳过
+        actions.canCancel
           ? h(
               Popconfirm,
               {
@@ -205,7 +203,7 @@ const columns: TableColumnData[] = [
               },
             )
           : null,
-        row.status === 'pending'
+        actions.canDelete
           ? h(
               Popconfirm,
               {

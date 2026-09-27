@@ -100,6 +100,69 @@ export function isCancelableTaskType(type: string): boolean {
   return (CANCELABLE_TASK_TYPES as readonly string[]).includes(type)
 }
 
+/** 重负载任务类型（组内全局串行）：与后端 app/worker.py 的 GPU_EXCLUSIVE_TASK_TYPES 对齐。
+ *
+ * 组内任务都吃同一份稀缺资源（CLIP 图像编码 / VLM 视觉推理 / 人脸推理；face_match
+ * 是整批 numpy 但同样打满 CPU 与数据库），后端认领时保证组内不并发。
+ * 前端只需要它来解释「排队中」：被互斥挡住的排队不是故障，也不是 worker 没起来。
+ *
+ * ⚠ 与后端靠人工对齐（跨语言无法共用常量），两侧都有用例锁内容——改一处必须同步
+ * 另一处（后端 tests/test_task_queue_priority.py，前端本文件所在目录的用例）。
+ */
+export const GPU_EXCLUSIVE_TASK_TYPES = [
+  'vector_backfill',
+  'quality_check',
+  'batch_analyze',
+  'multi_analyze',
+  'face_scan',
+  'face_match',
+] as const
+
+/** 判断任务类型是否属重负载互斥组（排队文案据此解释「为什么还没开始」） */
+export function isGpuExclusiveTaskType(type: string): boolean {
+  return (GPU_EXCLUSIVE_TASK_TYPES as readonly string[]).includes(type)
+}
+
+/** 任务行可执行的动作（任务列表「操作」列按钮的唯一判据） */
+export interface TaskRowActions {
+  /** 运行中且可暂停 → 显示「暂停」 */
+  canPause: boolean
+  /** 已暂停且可暂停 → 显示「恢复」 */
+  canResume: boolean
+  /** 可取消：运行中看可取消白名单；已暂停看**可暂停**白名单；采集任务不走这里 */
+  canCancel: boolean
+  /** 排队中 → 显示「删除」（队列任务物理删除，采集任务仅标记 cancelled） */
+  canDelete: boolean
+}
+
+/**
+ * 汇总一行的可用动作，与后端 app/routers/tasks.py 的接收矩阵严格同口径：
+ * - `running` + 可暂停 → 可暂停；`running` + 可取消 → 可取消
+ * - `paused` + 可暂停 → 可恢复；`paused` + **可暂停** → 可取消
+ *   （后端只对可暂停类型接受 paused→cancelled：`face_scan`/`face_match` 可取消但
+ *   不可暂停，它们的 paused 行不能显示「取消」，否则点了必然 400）
+ * - `pending` → 可删除
+ *
+ * 为什么收敛成一个纯函数：原先四个条件分散在 TaskList.vue 的 render 函数里，
+ * 既容易与后端漂移，又没法测——`a-table` 在测试环境未注册，行内 render 根本
+ * 挂不出来（组件级用例覆盖不到）。这里是唯一判据，用例直接断言它。
+ */
+export function taskRowActions(
+  status: string,
+  type: string,
+  source: UnifiedTask['source'],
+): TaskRowActions {
+  const pausable = isPausableTaskType(type)
+  return {
+    canPause: status === 'running' && pausable,
+    canResume: status === 'paused' && pausable,
+    canCancel:
+      source === 'queue' &&
+      ((status === 'running' && isCancelableTaskType(type)) || (status === 'paused' && pausable)),
+    canDelete: status === 'pending',
+  }
+}
+
 /** 采集任务原始条目（/api/scraper/tasks 返回项） */
 export interface ScraperTaskRaw {
   id: number
@@ -362,6 +425,12 @@ export function describeRunningTask(
     return type === 'f2_import'
       ? '已暂停：已下载的文件与已入库素材都保留，可继续/重跑'
       : '已暂停：已处理的素材已记入结果，点「继续」从断点接着跑（已处理的不重复）'
+  }
+  // 重负载任务之间的互斥等待要说清楚：后端组内全局串行，所以「排队中」可能是被
+  // 另一个重负载任务挡住，而不是 worker 没起来——不解释会被误判成卡住/故障。
+  // 只描述规则本身（不说「当前正有任务在跑」），因此不受任务列表分页影响，永远为真。
+  if (status === 'pending' && isGpuExclusiveTaskType(type)) {
+    return '排队中：与其它重负载任务（分析 / 审核 / 人脸 / 回填）互斥，待其结束后自动开始'
   }
   if (type !== 'f2_import') return ''
   if (status === 'pending') return '排队中：等待 worker 认领'

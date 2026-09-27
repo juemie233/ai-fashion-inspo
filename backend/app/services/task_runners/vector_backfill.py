@@ -245,10 +245,13 @@ _LANCE_FLUSH_SIZE = 200
 # 进度提交 / 状态检查的间隔（条）：每这么多条提交一次进度并读一次任务状态。
 # 25 是既有口径（避免 3000+ 次 commit 拖慢任务）；暂停与取消挂在同一个检查点上，
 # 因此点下按钮后最多再处理 25 条就生效。
-# 这个窗口同时就是**图像编码的批量大小**：整窗图片一次交给 CLIP（见
-# embedding.generate_image_embeddings），25 张一批正好落在单卡 GPU 的舒适区间，
-# 比逐张 encode 快数倍（batch=1 时 GPU 大量时间在等数据搬运）。
 _PROGRESS_EVERY = 25
+
+# 图像编码的批量大小（张）：一次交给 CLIP 的图片数。25 落在单卡 GPU 的舒适区间，
+# 比逐张 encode 快数倍（batch=1 时 GPU 大量时间在等数据搬运；实测 3.3×）。
+# **刻意与 _PROGRESS_EVERY 分开**：进度提交间隔是可调的运营参数（想少 commit 就调大），
+# 不该顺带决定 CLIP 一次吃多少张图——两者绑死时把进度间隔调到 200 就是显存尖峰。
+_ENCODE_BATCH_SIZE = 25
 
 # 统计字段（累计口径：暂停恢复后要把前几轮的计数带上）
 # text_failed：有语义内容但文本嵌入失败——必须与 text_skipped（本来就无文本可嵌入）
@@ -484,10 +487,14 @@ async def _build_material_vectors(
             if insp.media_type == "image"
         ]
         if image_paths:
-            encoded = await generate_image_embeddings(image_paths)
-            # 等长契约由 generate_image_embeddings 保证；万一返回偏短，缺失的路径取不到
-            # 向量 → 该素材计入 image_failed（而不是整窗抛错中断任务）
-            by_path = dict(zip(image_paths, encoded, strict=False))
+            # 按 _ENCODE_BATCH_SIZE 切块（与进度提交间隔解耦，见该常量注释）
+            by_path: dict[str, list[float] | None] = {}
+            for start in range(0, len(image_paths), _ENCODE_BATCH_SIZE):
+                chunk = image_paths[start : start + _ENCODE_BATCH_SIZE]
+                encoded = await generate_image_embeddings(chunk)
+                # 等长契约由 generate_image_embeddings 保证；万一返回偏短，缺失的路径
+                # 取不到向量 → 该素材计入 image_failed（而不是整窗抛错中断任务）
+                by_path.update(dict(zip(chunk, encoded, strict=False)))
             for i, insp in enumerate(inss):
                 if insp.media_type == "image":
                     image_vecs[i] = by_path.get(str(settings.storage_root / insp.file_path))

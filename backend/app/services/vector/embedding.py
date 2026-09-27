@@ -97,6 +97,9 @@ def _cache_image_embedding(file_path: str, vec: list[float]) -> None:
 # 期间文本向量被静默跳过（只计 text_skipped），任务照样报成功。
 # 正常响应约 0.15 秒、冷加载模型约 3 秒，15 秒已是 100 倍余量；2 次尝试加 1.5 秒
 # 退避，最坏约 31 秒/条，与旧行为（单次 30 秒超时后放弃）持平，但瞬时抖动可自愈。
+# 取舍（2026-09-27 审查确认保留）：超长卡顿场景下，旧的 30 秒单次可能成功、这里会
+# 判失败——但失败已不再静默（计入 text_failed、重新登记待回填、全失败则任务失败），
+# 属安全失败。若日志里出现 text_failed 尖峰，第一动作是把这里调回 20~30 秒。
 _TEXT_TIMEOUT_S = 15.0
 _TEXT_ATTEMPTS = 2
 _TEXT_RETRY_BACKOFF_S = 1.5

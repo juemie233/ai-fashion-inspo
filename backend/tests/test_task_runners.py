@@ -595,11 +595,11 @@ async def test_vector_backfill_skips_deleted_inspiration(client, upload, monkeyp
 
 
 async def test_vector_backfill_batches_image_encoding_per_window(client, monkeypatch):
-    """图像编码按窗口批量：整窗图片一次交给 generate_image_embeddings。
+    """图像编码按 _ENCODE_BATCH_SIZE 切块批量：不再逐张 encode。
 
     这是「回填提速」的落点——单卡上逐张 encode（batch=1）时 GPU 大量时间在等数据
-    搬运，整窗一次前向才是关键。这里锁住批量粒度：30 条素材 = 两个窗口 = 两次调用，
-    分别是 _PROGRESS_EVERY 张与 5 张（不是 30 次单张）。
+    搬运，批量一次前向才是关键（实测 3.3×）。这里锁住批量粒度：30 条素材的编码
+    调用远少于 30 次，且每次不超过 _ENCODE_BATCH_SIZE。
     """
     ids = await _seed_image_inspirations(30)
     batches: list[list[str]] = []
@@ -622,8 +622,41 @@ async def test_vector_backfill_batches_image_encoding_per_window(client, monkeyp
         await vb_module.execute_vector_backfill(db, task)
         await db.refresh(task)
 
-        assert [len(batch) for batch in batches] == [vb_module._PROGRESS_EVERY, 5]
+        assert sum(len(batch) for batch in batches) == 30  # 一张不漏
+        assert max(len(batch) for batch in batches) <= vb_module._ENCODE_BATCH_SIZE
+        assert len(batches) < 30  # 确实批量了，不是逐张
         assert task.result["image_done"] == 30
+
+
+async def test_vector_backfill_encode_batch_decoupled_from_progress(client, monkeypatch):
+    """编码批量由 _ENCODE_BATCH_SIZE 决定，**不随**进度提交间隔（_PROGRESS_EVERY）变化。
+
+    两个常量绑死时的坑：为了少 commit 把进度间隔调到 200，CLIP 就会一次吃 200 张图
+    （显存尖峰）。这里把进度间隔调到 30、编码批量设 10，断言仍是 3 批 10 张。
+    """
+    ids = await _seed_image_inspirations(30)
+    batches: list[list[str]] = []
+
+    async def fake_image_embs(file_paths):
+        batches.append(list(file_paths))
+        return [[0.3, 0.4] for _ in file_paths]
+
+    async def fake_batch_upsert(_kind, items):
+        return len(items)
+
+    from app.services.vector import embedding as emb_module
+
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
+    monkeypatch.setattr(vb_module.vector_store, "batch_upsert_vectors", fake_batch_upsert)
+    monkeypatch.setattr(vb_module.vector_store, "get_vector", _fake_get_vector)
+    monkeypatch.setattr(vb_module, "_PROGRESS_EVERY", 30)
+    monkeypatch.setattr(vb_module, "_ENCODE_BATCH_SIZE", 10)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        await vb_module.execute_vector_backfill(db, task)
+
+        assert [len(batch) for batch in batches] == [10, 10, 10]
 
 
 async def test_vector_backfill_text_failure_requeued_not_silent(client, upload, monkeypatch):

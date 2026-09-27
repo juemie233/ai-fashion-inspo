@@ -8,15 +8,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   CANCELABLE_TASK_TYPES,
+  GPU_EXCLUSIVE_TASK_TYPES,
   PAUSABLE_TASK_TYPES,
   describeRunningTask,
   formatKeywords,
   isCancelableTaskType,
+  isGpuExclusiveTaskType,
   isPausableTaskType,
   normalizeQueueTask,
   normalizeScraperTask,
   parseMaxCount,
   summarizeResult,
+  taskRowActions,
   type QueueTask,
   type ScraperTaskRaw,
 } from './taskPresentation'
@@ -624,5 +627,98 @@ describe('isCancelableTaskType（运行中可取消：与后端白名单对齐�
   it('不在白名单内的类型返回 false', () => {
     expect(isCancelableTaskType('deduplicate')).toBe(false)
     expect(isCancelableTaskType('')).toBe(false)
+  })
+})
+
+describe('重负载互斥组（与后端 app/worker.py 人工对齐）', () => {
+  it('清单内容与后端 GPU_EXCLUSIVE_TASK_TYPES 一致', () => {
+    // 后端 tests/test_task_queue_priority.py::test_gpu_exclusive_group_covers_named_types
+    // 锁同一份内容：任何一侧增删都会让对方用例变红
+    expect([...GPU_EXCLUSIVE_TASK_TYPES].sort()).toEqual(
+      [
+        'batch_analyze',
+        'face_match',
+        'face_scan',
+        'multi_analyze',
+        'quality_check',
+        'vector_backfill',
+      ].sort(),
+    )
+  })
+
+  it('不吃 GPU 的类型不在组内（否则它们会陪着一起等）', () => {
+    expect(isGpuExclusiveTaskType('f2_import')).toBe(false)
+    expect(isGpuExclusiveTaskType('batch_delete')).toBe(false)
+    expect(isGpuExclusiveTaskType('deduplicate')).toBe(false)
+  })
+
+  it('排队中的重负载任务说明「在等其它重负载任务」，而不是空白', () => {
+    const text = describeRunningTask('quality_check', null, 'pending', 0, 0)
+    expect(text).toContain('互斥')
+    // 不吃 GPU 的任务不该套用这句（否则是假信息）
+    expect(describeRunningTask('batch_delete', null, 'pending', 0, 0)).toBe('')
+  })
+})
+
+describe('taskRowActions（任务列表按钮矩阵，与后端接收矩阵同口径）', () => {
+  it('运行中：可暂停类型给「暂停」，可取消类型给「取消」', () => {
+    expect(taskRowActions('running', 'vector_backfill', 'queue')).toEqual({
+      canPause: true,
+      canResume: false,
+      canCancel: true,
+      canDelete: false,
+    })
+    // 可取消但不可暂停（人脸扫描）：只有取消，没有暂停
+    expect(taskRowActions('running', 'face_scan', 'queue')).toEqual({
+      canPause: false,
+      canResume: false,
+      canCancel: true,
+      canDelete: false,
+    })
+  })
+
+  it('已暂停：可暂停类型给「恢复」+「取消」', () => {
+    expect(taskRowActions('paused', 'vector_backfill', 'queue')).toEqual({
+      canPause: false,
+      canResume: true,
+      canCancel: true,
+      canDelete: false,
+    })
+  })
+
+  it('已暂停但不是可暂停类型：不给取消（后端只对可暂停类型接受 paused→cancelled）', () => {
+    // face_scan/face_match 可取消但不可暂停——它们的 paused 行若显示「取消」，点了必然 400
+    expect(taskRowActions('paused', 'face_scan', 'queue')).toEqual({
+      canPause: false,
+      canResume: false,
+      canCancel: false,
+      canDelete: false,
+    })
+  })
+
+  it('排队中：只给「删除」', () => {
+    expect(taskRowActions('pending', 'quality_check', 'queue')).toEqual({
+      canPause: false,
+      canResume: false,
+      canCancel: false,
+      canDelete: true,
+    })
+  })
+
+  it('采集任务不显示取消/删除到队列接口（source=scraper）', () => {
+    const actions = taskRowActions('running', 'face_scan', 'scraper')
+    expect(actions.canCancel).toBe(false)
+    expect(actions.canDelete).toBe(false)
+  })
+
+  it('终态任务不给任何动作', () => {
+    for (const status of ['success', 'failed', 'cancelled']) {
+      expect(taskRowActions(status, 'vector_backfill', 'queue')).toEqual({
+        canPause: false,
+        canResume: false,
+        canCancel: false,
+        canDelete: false,
+      })
+    }
   })
 })

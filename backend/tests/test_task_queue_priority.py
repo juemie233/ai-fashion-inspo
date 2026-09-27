@@ -88,14 +88,21 @@ async def test_claim_skips_not_yet_retryable(client):
 
 
 async def test_gpu_exclusive_group_covers_named_types():
-    """互斥组覆盖「向量回填 + 质量审核 + 人脸匹配/扫描」，且不牵连不吃 GPU 的任务。
+    """互斥组内容精确锁定（与前端 GPU_EXCLUSIVE_TASK_TYPES 人工对齐）。
 
+    用 == 而不是「包含」：两侧各有一份清单（跨语言无法共用常量），任一侧增删都
+    必须让用例变红——前端对应 web/src/utils/taskPresentation.test.ts 的同名用例。
     后一条同样重要：f2_import（下载入库）、batch_delete、deduplicate 等不吃 GPU，
     把它们也拉进互斥组就是白白让它们陪着一起等。
     """
-    assert {"vector_backfill", "quality_check", "face_match", "face_scan"} <= (
-        GPU_EXCLUSIVE_TASK_TYPES
-    )
+    assert GPU_EXCLUSIVE_TASK_TYPES == {
+        "vector_backfill",
+        "quality_check",
+        "batch_analyze",
+        "multi_analyze",
+        "face_scan",
+        "face_match",
+    }
     assert GPU_EXCLUSIVE_TASK_TYPES.isdisjoint(
         {"f2_import", "batch_delete", "deduplicate", "phash_backfill"}
     )
