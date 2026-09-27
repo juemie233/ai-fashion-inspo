@@ -63,6 +63,7 @@ export const PAUSABLE_TASK_TYPES = [
   'multi_analyze',
   'quality_check',
   'f2_import',
+  'vector_backfill',
 ] as const
 
 /** 判断任务类型是否支持暂停/恢复（任务列表与批量任务卡片的按钮显示统一走这里） */
@@ -77,6 +78,8 @@ export function isPausableTaskType(type: string): boolean {
  * - batch_analyze / multi_analyze：AI 标签分析的批量/组合分析（每批检查一次，
  *   已写入的分析日志与标签保留）
  * - quality_check：质量审核（每批检查一次，已判定的 quality_status 与审核日志保留）
+ * - vector_backfill：向量回填（每个进度检查点检查一次：已写入 LanceDB 的向量保留，
+ *   剩余素材下次「一键向量化」或重新攒批时自动补上）
  *
  * ⚠ 这份清单与后端 `app/routers/tasks.py` 的白名单靠人工对齐（跨语言无法共用常量），
  * 两侧都有用例锁内容——改一处必须同步另一处，否则界面不显示按钮或后端直接 400。
@@ -89,6 +92,7 @@ export const CANCELABLE_TASK_TYPES = [
   'batch_analyze',
   'multi_analyze',
   'quality_check',
+  'vector_backfill',
 ] as const
 
 /** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */

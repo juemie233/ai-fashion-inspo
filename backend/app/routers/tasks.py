@@ -25,6 +25,9 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # （已有成功日志的素材会被跳过）。全库级批量动辄跑数十小时，没有取消入口
 # 用户只能干等——「无法取消」与「暂停也要等当前批次跑完」是明确的产品缺陷。
 # 质量审核同理可中断（每批检查一次，已判定的 quality_status 与审核日志保留）。
+# 向量回填同理（每 _PROGRESS_EVERY 条一个检查点）：它是全库级任务（数千条素材要
+# 逐条跑文本 embedding / CLIP 图像编码），已写入 LanceDB 的向量天然幂等，
+# 取消后「一键向量化」或攒批重跑会自动补上没做的那些。
 #
 # ⚠ 前端 `web/src/utils/taskPresentation.ts` 的 CANCELABLE_TASK_TYPES 必须与本表一致
 # （否则界面上不显示取消按钮，或显示了后端却拒绝）；两侧都有用例锁内容，改一处会两处红。
@@ -36,6 +39,7 @@ _CANCELABLE_RUNNING_TYPES = (
     "batch_analyze",
     "multi_analyze",
     "quality_check",
+    "vector_backfill",
 )
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。
@@ -45,6 +49,8 @@ _CANCELABLE_RUNNING_TYPES = (
 # 质量审核（与批量分析同一套「查 status 即停」语义：每批（并发数张）检查一次，
 # 已判定的素材已写 quality_status 与审核日志，恢复时只查剩下的 pending）；
 # f2 一键获取素材恢复时按内容判重幂等续算（已下载/已入库的都会跳过）。
+# 向量回填恢复时从 task.done 断点续算：只处理剩余素材，不重跑已编码的
+# （图像向量要逐张跑 CLIP，「暂停等于白等」不可接受）。
 #
 # ⚠ 前端 `web/src/utils/taskPresentation.ts` 的 PAUSABLE_TASK_TYPES 必须与本表一致
 # （否则界面不显示暂停/继续按钮，或显示了后端却拒绝）；两侧都有用例锁内容。
@@ -54,6 +60,7 @@ _PAUSABLE_RUNNING_TYPES = (
     "multi_analyze",
     "quality_check",
     "f2_import",
+    "vector_backfill",
 )
 
 
@@ -118,9 +125,12 @@ async def cancel_task(
     - ``pending``（等待运行）：物理删除该任务记录（需求：取消后从历史与
       ``task_queue`` 表中直接移除，不保留）。
     - ``running`` 且类型在 :data:`_CANCELABLE_RUNNING_TYPES` 内（人脸扫描/匹配、
-      标签网络分析、f2 一键获取素材、批量/组合分析、质量审核）：标记为 cancelled
-      （运行中取消的既有能力，记录保留；执行器每批/每文件检查后自行停止，已产出的
-      分析日志、标签与审核结果全部保留）。
+      标签网络分析、f2 一键获取素材、批量/组合分析、质量审核、向量回填）：标记为
+      cancelled（运行中取消的既有能力，记录保留；执行器每批/每文件检查后自行停止，
+      已产出的分析日志、标签、审核结果与向量全部保留）。
+    - ``paused`` 且类型在 :data:`_PAUSABLE_RUNNING_TYPES` 内：**直接标记 cancelled**
+      （终态）——暂停中的任务不占资源，用户点「取消」就是不想做了，没必要先恢复再取消。
+      暂停任务不会被 worker 认领（只认领 pending），所以这里没有竞态。
     - 其余状态（success/failed/cancelled 及不可运行中取消的 running 类型）：
       返回 400，记录保持不变。
 
@@ -149,14 +159,25 @@ async def cancel_task(
             )
         return {"message": "任务已删除", "task_id": task_id, "deleted": True}
 
+    # 运行中（白名单内）或已暂停（可暂停类型）都可取消：前者执行器感知后自行停止，
+    # 后者本来就停着，直接置终态。两者都用带状态条件的原子 UPDATE 防并发改状态。
+    cancelable_states: tuple[str, ...]
     if task.status == "running" and task.type in _CANCELABLE_RUNNING_TYPES:
-        # 运行中取消：保留记录，标记 cancelled（执行器感知后自行停止，产物保留）
+        cancelable_states = ("running",)
+    elif task.status == "paused" and task.type in _PAUSABLE_RUNNING_TYPES:
+        cancelable_states = ("paused",)
+    else:
+        cancelable_states = ()
+
+    if cancelable_states:
         result = await db.execute(
             update(TaskQueue)
             .where(
                 TaskQueue.id == task_id,
-                TaskQueue.status == "running",
-                TaskQueue.type.in_(_CANCELABLE_RUNNING_TYPES),
+                TaskQueue.status.in_(cancelable_states),
+                TaskQueue.type.in_(
+                    tuple(set(_CANCELABLE_RUNNING_TYPES) | set(_PAUSABLE_RUNNING_TYPES))
+                ),
             )
             .values(status="cancelled", error="用户手动取消", updated_at=utcnow())
         )
@@ -166,7 +187,7 @@ async def cancel_task(
             raise HTTPException(
                 status_code=400, detail=f"任务状态已变化（当前状态 {task.status}），无法取消"
             )
-        # 运行中取消达到终态：广播 cancelled 事件（安全入口，失败静默降级为轮询）
+        # 取消达到终态：广播 cancelled 事件（安全入口，失败静默降级为轮询）
         await _broadcast_task_event(task, "cancelled", error="用户手动取消")
         return {"message": "任务已取消", "task_id": task_id}
     raise HTTPException(
@@ -180,13 +201,15 @@ async def pause_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check / f2_import 支持）：
+    """暂停任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check /
+    f2_import / vector_backfill 支持）：
 
     - 标记为 ``paused``，保存当前中间状态（last_stage + stage_state；
       batch/multi 的进度已由执行器逐批落库，quality_check 的已判定结果写在
       `quality_status` 与审核日志里，f2_import 的已下载文件与已入库素材天然保留，
+      vector_backfill 的进度落在 ``done`` 且已算向量已批量写入 LanceDB，
       都无需额外状态）；
-    - 执行器在下一个批次边界感知到 paused 后保存进度并返回。
+    - 执行器在下一个批次/进度检查点感知到 paused 后保存进度并返回。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:
@@ -221,7 +244,8 @@ async def resume_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check / f2_import 支持）：
+    """恢复任务（tag_network_analyze / batch_analyze / multi_analyze / quality_check /
+    f2_import / vector_backfill 支持）：
 
     - ``tag_network_analyze``（网络图分析，断点续算）：恢复为 ``running``，
       保留 last_stage 与 stage_state，由执行器从中续算；
@@ -232,6 +256,9 @@ async def resume_task(
       ``quality_status == 'pending'`` 的素材，已判定的（approved/rejected）自动跳过。
     - ``f2_import``（一键获取素材）：同样恢复为 ``pending`` 重新执行；增量下载
       与内容/平台 ID 判重保证已下载、已入库的部分自动跳过。
+    - ``vector_backfill``（向量回填）：同样恢复为 ``pending``；执行器从 ``done``
+      这个断点续算，**不重跑已编码的素材**（图像向量要逐张跑 CLIP，全量重来的
+      代价不能接受），已写入 LanceDB 的向量保持幂等。
     """
     task = await db.get(TaskQueue, task_id)
     if not task:

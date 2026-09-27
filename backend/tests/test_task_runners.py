@@ -2,7 +2,7 @@
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.config import settings
 from app.database import async_session
@@ -203,10 +203,17 @@ async def _fake_get_vector(kind: str, inspiration_id: str):
 
 
 async def _make_backfill_task(db, inspiration_ids: list[str]) -> TaskQueue:
-    """直接构造向量回填任务（绕过 create 的数据库过滤，聚焦执行器逻辑验证）。"""
+    """直接构造向量回填任务（绕过 create 的数据库过滤，聚焦执行器逻辑验证）。
+
+    状态取 ``running`` 而非 ``pending``：真实调用链里 worker 先原子认领
+    （pending → running，见 app/worker.py ``_claim_next_task``）才把任务交给
+    执行器，执行器循环内的检查点是**严格**的——只要不再是 running 就停下。
+    若这里造 pending，任务会在第一个检查点被判定为「被外部中断」而提前返回，
+    收尾的落库验证 / 防假成功判定根本走不到，用例就测不到真实行为。
+    """
     task = TaskQueue(
         type="vector_backfill",
-        status="pending",
+        status="running",
         progress=0,
         total=len(inspiration_ids),
         done=0,
@@ -334,6 +341,171 @@ async def test_vector_backfill_rerun_idempotent(client, upload, monkeypatch):
         }
         assert second == first
         assert task.done == 2
+
+
+# ============ 向量回填：暂停 / 取消 / 断点续算 ============
+
+
+async def _seed_image_inspirations(n: int) -> list[str]:
+    """直接插 n 条图片素材（不走上传接口）：本组用例只验执行器的停止/续算语义。"""
+    ids = [f"vb-stop-{i:03d}" for i in range(n)]
+    async with async_session() as db:
+        for iid in ids:
+            db.add(
+                Inspiration(
+                    id=iid,
+                    source_type="manual_upload",
+                    source_url=f"https://example.com/{iid}",
+                    file_path=f"images/2026-09/{iid}.webp",
+                    media_type="image",
+                )
+            )
+        await db.commit()
+    return ids
+
+
+class _FlippingVectors:
+    """逐条返回可用向量；第 flip_at 次调用后把任务状态改成 new_status。
+
+    模拟真实竞态：状态由**接口进程**（另一个会话）改写，执行器只能在下一次
+    ``db.refresh(task)`` 时看到——这正是每个进度检查点要做的事。
+    """
+
+    def __init__(self, task_id: int, flip_at: int, new_status: str) -> None:
+        self.calls = 0
+        self.task_id = task_id
+        self.flip_at = flip_at
+        self.new_status = new_status
+
+    async def __call__(self, insp) -> tuple[list[float], list[float]]:
+        self.calls += 1
+        if self.calls == self.flip_at:
+            async with async_session() as other:
+                await other.execute(
+                    update(TaskQueue)
+                    .where(TaskQueue.id == self.task_id)
+                    .values(status=self.new_status)
+                )
+                await other.commit()
+        return [0.1, 0.2], [0.3, 0.4]
+
+
+async def test_vector_backfill_pause_then_resume_from_checkpoint(client, monkeypatch):
+    """暂停：在进度检查点感知后把已算向量落盘并停下；恢复从 task.done 断点续算。
+
+    用户要求：向量回填要能暂停。若恢复时从头重来，图像向量要重跑 CLIP——
+    那等于「暂停付双倍代价」，用户会认为暂停没生效。所以这里同时锁两件事：
+    ① 停下时进度落在检查点上、已算向量已落盘；② 恢复只处理剩余素材。
+    """
+    ids = await _seed_image_inspirations(60)
+    interval = vb_module._PROGRESS_EVERY
+    stop_at = interval * 2  # 第一个检查点之后再暂停 → 第二个检查点停下
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        task_id = task.id
+        fake = _FlippingVectors(task_id, flip_at=interval + 1, new_status="paused")
+        _patch_backfill_fakes(monkeypatch, fake)
+
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert task.status == "paused"  # 执行器不改外部写入的状态
+        assert task.done == stop_at
+        assert task.progress < 100
+        assert task.result["image_done"] == stop_at
+        assert task.result["text_done"] == stop_at
+        assert task.result["remaining"] == 60 - stop_at
+        assert fake.calls == stop_at  # 只处理到检查点
+
+    # 恢复：接口把任务放回 pending → worker 重新认领为 running（这里直接再执行一次）
+    async with async_session() as db:
+        await db.execute(
+            update(TaskQueue).where(TaskQueue.id == task_id).values(status="running")
+        )
+        await db.commit()
+        resumed = await db.get(TaskQueue, task_id)
+        fake2 = _FlippingVectors(task_id, flip_at=10**9, new_status="running")
+        _patch_backfill_fakes(monkeypatch, fake2)
+
+        await vb_module.execute_vector_backfill(db, resumed)
+        await db.refresh(resumed)
+
+        # 断点续算：只编码剩余 10 条，前 50 条不重跑
+        assert fake2.calls == 60 - stop_at
+        assert resumed.done == 60
+        assert resumed.progress == 100
+        # 结果计数是**累计值**（50 + 10），不是本轮的 10
+        assert resumed.result["image_done"] == 60
+        assert resumed.result["text_done"] == 60
+        assert resumed.result["remaining"] == 0
+
+
+async def test_vector_backfill_cancel_stops_and_keeps_partial_result(client, monkeypatch):
+    """取消：执行器停下、状态保持 cancelled、不留 100% 假完成、已算向量落盘。"""
+    ids = await _seed_image_inspirations(30)
+    interval = vb_module._PROGRESS_EVERY
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        fake = _FlippingVectors(task.id, flip_at=1, new_status="cancelled")
+        _patch_backfill_fakes(monkeypatch, fake)
+
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert task.status == "cancelled"  # 不被覆盖成 success
+        assert task.progress < 100  # 不能冒充完成
+        assert task.done == interval  # 停在第一个检查点
+        assert task.result["image_done"] == interval
+        assert task.result["text_done"] == interval
+        assert task.result["remaining"] == 30 - interval
+
+
+async def test_vector_backfill_pending_mid_flight_is_not_a_stop_signal(client, monkeypatch):
+    """执行中被置回 pending（暂停后立刻「继续」）：继续算完，不当中断。
+
+    锁定判据：执行器只把 paused / cancelled 当停止信号，pending 的语义是
+    「排队等待被认领」，不是「停下」。若误把 pending 也当停止，收尾的落库验证 /
+    防假成功 / 版本标记会被静默跳过（内部直接调用执行器时任务本就是 pending）。
+    """
+    ids = await _seed_image_inspirations(30)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, ids)
+        fake = _FlippingVectors(task.id, flip_at=1, new_status="pending")
+        _patch_backfill_fakes(monkeypatch, fake)
+
+        await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+        assert fake.calls == len(ids), "pending 不该中断执行"
+        assert task.done == len(ids)
+        assert task.progress == 100
+        assert task.result["image_done"] == len(ids)
+        assert task.result["remaining"] == 0
+
+
+async def test_vector_backfill_skips_when_already_stopped(client, monkeypatch):
+    """进入执行前已被暂停/取消：一条都不处理（不白跑一批素材）。"""
+    ids = await _seed_image_inspirations(3)
+
+    for status in ("paused", "cancelled"):
+        async with async_session() as db:
+            task = await _make_backfill_task(db, ids)
+            await db.execute(
+                update(TaskQueue).where(TaskQueue.id == task.id).values(status=status)
+            )
+            await db.commit()
+            fake = _FlippingVectors(task.id, flip_at=10**9, new_status=status)
+            _patch_backfill_fakes(monkeypatch, fake)
+
+            await vb_module.execute_vector_backfill(db, task)
+            await db.refresh(task)
+
+            assert fake.calls == 0, f"状态={status} 时不该编码任何素材"
+            assert task.status == status
+            assert task.progress == 0
 
 
 async def test_vector_backfill_real_load_path_with_tags(client, upload, monkeypatch):

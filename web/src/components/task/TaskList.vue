@@ -155,7 +155,8 @@ const columns: TableColumnData[] = [
               { default: () => '查看结果' },
             )
           : null,
-        // 可暂停任务（标签网络分析/批量分析/组合分析）：运行中可暂停、已暂停可恢复
+        // 可暂停任务（标签网络分析 / 批量·组合分析 / 质量审核 / f2 一键获取 /
+        // 向量回填）：运行中可暂停、已暂停可恢复
         isPausableTaskType(row.type) && row.status === 'running'
           ? h(
               Button,
@@ -180,10 +181,14 @@ const columns: TableColumnData[] = [
               { default: () => '恢复' },
             )
           : null,
-        // 可取消的运行中任务（人脸扫描/匹配、标签网络分析、一键获取素材）：
-        // 后端标记 cancelled，执行器按批/按文件感知后自行停止；产物（已下载文件、
-        // 已入库素材、已扫描增量）都保留，重跑幂等跳过
-        row.source === 'queue' && isCancelableTaskType(row.type) && row.status === 'running'
+        // 可取消任务（人脸扫描/匹配、标签网络分析、一键获取素材、批量/组合分析、
+        // 质量审核、向量回填）：运行中取消由后端标记 cancelled、执行器感知后自行停止；
+        // **已暂停的也允许直接取消**（不必先恢复再取消）——暂停任务不占资源，
+        // 后端对可暂停类型接受 paused→cancelled。产物（已下载文件、已入库素材、
+        // 已写入的向量/标签/审核结果）都保留，重跑幂等跳过
+        row.source === 'queue' &&
+        isCancelableTaskType(row.type) &&
+        (row.status === 'running' || row.status === 'paused')
           ? h(
               Popconfirm,
               {

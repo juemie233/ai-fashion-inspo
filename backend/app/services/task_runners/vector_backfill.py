@@ -38,7 +38,6 @@ from app.services.task_runners.common import (
     utcnow,
 )
 from app.services.vector import store as vector_store
-from app.services.vector_service import rebuild_inspiration_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +239,78 @@ async def purge_small_backfill_tasks(db: AsyncSession) -> int:
 # execute_vector_backfill 内注释）
 _LANCE_FLUSH_SIZE = 200
 
+# 进度提交 / 状态检查的间隔（条）：每这么多条提交一次进度并读一次任务状态。
+# 25 是既有口径（避免 3000+ 次 commit 拖慢任务）；暂停与取消挂在同一个检查点上，
+# 因此点下按钮后最多再处理 25 条就生效（图像素材含 CLIP 编码，约 1~3 秒/条）。
+_PROGRESS_EVERY = 25
+
+# 统计字段（累计口径：暂停恢复后要把前几轮的计数带上）
+_COUNT_KEYS = ("text_done", "text_skipped", "image_done", "image_skipped", "image_failed")
+
+# 执行器认定的「用户要求停」状态：只有这两个状态会让执行器中断收尾。
+# 为什么不用「!= running」当判据：pending 的语义是「排队等待被 worker 认领」，
+# 不是「停下」。两点原因——
+# ① 暂停后立刻点「继续」时接口把任务置回 pending，此刻继续算下去正好符合
+#   用户意图（再停一次、再由 worker 重新认领纯属白绕一圈）；
+# ② 内部直接调用执行器（测试 / 脚本）时任务本就是 pending，若把 pending 当停止
+#    信号，收尾的落库验证 / 防假成功 / 版本标记会被静默跳过（曾据此漏测）。
+# 生产链路上 worker 先原子认领（pending → running）再调用本执行器，因此这里只
+# 需要识别显式停止信号即可。
+_STOP_STATUSES = ("paused", "cancelled")
+
+
+def _previous_totals(payload: dict) -> dict[str, int]:
+    """取上一轮（暂停/重试前）已累计的统计，缺省为 0。
+
+    为什么需要：「暂停 → 继续」只处理断点之后的素材，本轮计数天然不完整；
+    结果里必须写**累计值**，否则用户看到「文本 500」会以为前面的 2500 条白做了。
+    """
+    return {key: int(payload.get(key) or 0) for key in _COUNT_KEYS}
+
+
+async def _finalize_interrupted(
+    db: AsyncSession,
+    task: TaskQueue,
+    payload: dict,
+    base: dict[str, int],
+    run_text_done: int,
+    run_text_skipped: int,
+    run_image_done: int,
+    run_image_skipped: int,
+    run_image_failed: int,
+    pending_text: list[tuple[str, list[float]]],
+    pending_image: list[tuple[str, list[float]]],
+    total: int,
+) -> None:
+    """暂停/取消收尾：把已算好但未落盘的向量写掉，记录累计统计，然后停下。
+
+    为什么要落盘：攒批上限 200 条，检查点停下的那一刻可能还压着最多 199 条
+    **已经算完**的向量（文本 embedding 或 CLIP 图像编码都不便宜）。不写就全作废、
+    恢复时重算——那等于「暂停要付双倍代价」，用户会认为暂停没生效。
+
+    为什么不标 100% / 不改状态：暂停与取消的**状态由接口侧写**，这里只负责
+    「保存进度并停下」；worker 收尾时见 ``status != running`` 不会覆盖成 success
+    （见 app/worker.py 成功分支的状态复查），所以 paused/cancelled 会被保留。
+    """
+    flushed = await _flush_vector_batches(pending_text, pending_image)
+    task.result = {
+        **payload,
+        "mode": "text" if payload.get("mode") == "text" else "all",
+        "text_done": base["text_done"] + run_text_done + flushed[0],
+        "text_skipped": base["text_skipped"] + run_text_skipped,
+        "image_done": base["image_done"] + run_image_done + flushed[2],
+        "image_skipped": base["image_skipped"] + run_image_skipped,
+        "image_failed": base["image_failed"] + run_image_failed,
+        # 还剩多少条没处理：恢复时从 task.done 这个断点接着跑
+        "remaining": max(0, total - int(task.done or 0)),
+    }
+    task.updated_at = utcnow()
+    await db.commit()
+    logger.info(
+        f"向量回填任务被外部状态中断: #{task.id} status={task.status} "
+        f"进度 {task.done}/{task.total}，已算向量已落盘，恢复时从断点续算"
+    )
+
 
 async def _recover_failed_ids(db: AsyncSession, inspiration_ids: list[str]) -> None:
     """失败任务收尾：把任务涉及的素材重新登记回待回填队列。
@@ -333,6 +404,11 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         - payload 支持 mode="text"：只重建文本向量（全量文本重建场景，
           如公式版本升级后），跳过图像向量避免无谓的 CLIP 全库编码；
           成功后把文本公式版本写入标记文件，管理页的「版本过期」提醒解除。
+        - **可暂停 / 可取消**：每个进度检查点（每 _PROGRESS_EVERY 条）读一次任务
+          状态，一旦被置为 paused / cancelled（_STOP_STATUSES）就把已算向量落盘
+          并返回，由 worker 按 DB 最新状态决定下一步；paused 后「继续」由接口把
+          任务放回 pending 重新认领，本函数从 ``task.done`` 断点续算（不重跑已
+          处理素材——图像向量要逐张跑 CLIP 编码，全量重来等于暂停白等）。
     """
     payload = task.result or {}
     inspiration_ids = payload.get("inspiration_ids") or []
@@ -346,14 +422,16 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
-    text_done = 0
-    text_skipped = 0
-    image_done = 0
-    image_skipped = 0  # 非图片素材正常跳过；text_only 模式下不生成图像向量也计入此处
-    image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
-    # 声称成功的素材 ID（供收尾落库验证：防「写入时成功、事后被删」的假成功）
+    run_text_done = 0
+    run_text_skipped = 0
+    run_image_done = 0
+    run_image_skipped = 0  # 非图片素材正常跳过；text_only 模式下不生成图像向量也计入此处
+    run_image_failed = 0  # 图片素材但图像向量生成失败（CLIP 不可用/文件缺失/写入失败等）
+    # 声称成功的素材 ID（本轮；供收尾落库验证：防「写入时成功、事后被删」的假成功）
     text_ids: list[str] = []
     image_ids: list[str] = []
+    # 累计口径：恢复执行时本轮只处理断点之后的素材，结果里要带上前几轮的计数
+    base = _previous_totals(payload)
 
     # 批量写入：向量攒够 _LANCE_FLUSH_SIZE 条才落盘一次。LanceDB 每次单条
     # upsert 都会生成新的 manifest + 数据文件，全量重建（数千条逐条写）会让
@@ -364,7 +442,21 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     pending_image: list[tuple[str, list[float]]] = []
 
     total = len(inspiration_ids)
-    for idx, insp_id in enumerate(inspiration_ids, start=1):
+    # 断点续算：从上次提交的 done 继续（暂停恢复 / 失败重试都走这里）
+    start_idx = max(0, min(int(task.done or 0), total))
+
+    # 进入执行前先看一次状态：只拦「明确要求停」的 paused/cancelled。
+    # 这里**故意不拦 pending**：正常流程里 pending 表示「等待或重新排队执行」，
+    # 内部直接调用执行器（测试 / 脚本）时任务也常是 pending；循环内用同一个
+    # _STOP_STATUSES 判据，语义前后一致。
+    await db.refresh(task)
+    if task.status in _STOP_STATUSES:
+        logger.info(
+            f"向量回填任务开始前已被外部置为 {task.status}: #{task.id}，本次不执行"
+        )
+        return
+
+    for idx, insp_id in enumerate(inspiration_ids[start_idx:], start=start_idx + 1):
         # 显式 selectinload 两级标签关系（Inspiration.tags → InspirationTag.tag）：
         # build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是
         # 默认 lazy="select"——异步会话下隐式懒加载会抛 MissingGreenlet
@@ -382,33 +474,33 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
         # 文本向量：标签已随素材 eager load（上方 selectinload 两级关系）
         if insp is None:
             # 素材不存在或已删除（垃圾桶）：计入跳过（与旧 rebuild_* 路径口径一致）
-            text_skipped += 1
-            image_skipped += 1
+            run_text_skipped += 1
+            run_image_skipped += 1
         else:
             text_vec, image_vec = await _build_material_vectors(insp)
             if text_vec:
                 pending_text.append((insp_id, text_vec))
             else:
-                text_skipped += 1
+                run_text_skipped += 1
 
             if not text_only:
                 if image_vec:
                     pending_image.append((insp_id, image_vec))
                 elif is_image:
-                    image_failed += 1
+                    run_image_failed += 1
                 else:
-                    image_skipped += 1
+                    run_image_skipped += 1
 
         # 攒批落盘：任一队列达到阈值即批量写入（批量 add 只产生极少数 manifest）
         if len(pending_text) >= _LANCE_FLUSH_SIZE or len(pending_image) >= _LANCE_FLUSH_SIZE:
             flushed = await _flush_vector_batches(pending_text, pending_image)
-            text_done += flushed[0]
+            run_text_done += flushed[0]
             text_ids.extend(flushed[1])
-            image_done += flushed[2]
+            run_image_done += flushed[2]
             image_ids.extend(flushed[3])
 
         # 攒批更新进度（每 25 条提交一次，避免 3000+ 次 commit 拖慢任务）
-        if idx % 25 == 0 or idx == total:
+        if idx % _PROGRESS_EVERY == 0 or idx == total:
             task.done = idx
             task.progress = round(idx / total * 100)
             task.updated_at = utcnow()
@@ -418,11 +510,31 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
                 f"向量回填进度: #{task.id} {task.progress}% ({idx}/{total})"
             )
 
+            # 状态检查：外部可能把任务改成 paused（暂停）/ cancelled（取消）。
+            # 必须紧跟在 commit 之后 refresh：本地未提交的 done/progress 会被丢弃。
+            await db.refresh(task)
+            if task.status in _STOP_STATUSES:
+                await _finalize_interrupted(
+                    db,
+                    task,
+                    payload,
+                    base,
+                    run_text_done,
+                    run_text_skipped,
+                    run_image_done,
+                    run_image_skipped,
+                    run_image_failed,
+                    pending_text,
+                    pending_image,
+                    total,
+                )
+                return
+
     # 收尾：清空残余批
     flushed = await _flush_vector_batches(pending_text, pending_image)
-    text_done += flushed[0]
+    run_text_done += flushed[0]
     text_ids.extend(flushed[1])
-    image_done += flushed[2]
+    run_image_done += flushed[2]
     image_ids.extend(flushed[3])
 
     # ── 落库验证（防假成功）──
@@ -463,11 +575,13 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     task.result = {
         "inspiration_ids": inspiration_ids,
         "mode": "text" if text_only else "all",
-        "text_done": text_done,
-        "text_skipped": text_skipped,
-        "image_done": image_done,
-        "image_skipped": image_skipped,
-        "image_failed": image_failed,
+        # 累计口径：暂停恢复后本轮的 run_* 只是剩余部分，加上前几轮的 base 才是全量
+        "text_done": base["text_done"] + run_text_done,
+        "text_skipped": base["text_skipped"] + run_text_skipped,
+        "image_done": base["image_done"] + run_image_done,
+        "image_skipped": base["image_skipped"] + run_image_skipped,
+        "image_failed": base["image_failed"] + run_image_failed,
+        "remaining": 0,
     }
     # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
@@ -476,10 +590,12 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
     # LanceDB 未安装 / 图片文件缺失），任务不能冒充「完成」，交由 worker 标记失败。
     # 判定在写「完成态」之前：异常抛出时任务仍为 running，避免「先 commit 完成态
     # 再抛异常」在进程崩溃时残留假完成。
-    if not text_only and image_done == 0 and image_failed > 0:
+    # 判据用**本轮**计数（不是累计）：恢复后的剩余批全失败同样是系统性故障，
+    # 不能因为「前面几轮成功过」就放过。
+    if not text_only and run_image_done == 0 and run_image_failed > 0:
         detail = (
-            f"向量回填失败：{image_failed} 个图片素材的图像向量全部生成失败"
-            f"（成功 {image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
+            f"向量回填失败：{run_image_failed} 个图片素材的图像向量全部生成失败"
+            f"（本轮成功 {run_image_done}）。常见原因：CLIP 模型不可用、LanceDB 未安装、"
             f"图片文件缺失或写入失败"
         )
         await _recover_failed_ids(db, inspiration_ids)
@@ -507,6 +623,7 @@ async def execute_vector_backfill(db: AsyncSession, task: TaskQueue) -> None:
 
     logger.info(
         f"向量回填任务执行完毕: #{task.id} "
-        f"文本 {text_done}（跳过 {text_skipped}），"
-        f"图像 {image_done}（跳过 {image_skipped}，失败 {image_failed}）"
+        f"文本 {task.result['text_done']}（跳过 {task.result['text_skipped']}），"
+        f"图像 {task.result['image_done']}"
+        f"（跳过 {task.result['image_skipped']}，失败 {task.result['image_failed']}）"
     )

@@ -48,7 +48,10 @@ export function useTaskActions(options: UseTaskActionsOptions = {}) {
     }
   }
 
-  /** 暂停运行中的任务（后端 _PAUSABLE_RUNNING_TYPES：标签网络分析 / 批量·组合分析 / f2 一键获取） */
+  /**
+   * 暂停运行中的任务（后端 _PAUSABLE_RUNNING_TYPES：标签网络分析 / 批量·组合分析 /
+   * 质量审核 / f2 一键获取 / 向量回填）
+   */
   async function pauseTask(task: UnifiedTask) {
     try {
       const { data } = await apiClient.post<{ message?: string }>(`/tasks/${task.id}/pause`)
@@ -59,7 +62,10 @@ export function useTaskActions(options: UseTaskActionsOptions = {}) {
     }
   }
 
-  /** 恢复已暂停的任务（标签网络分析断点续算；批量分析与 f2 一键获取放回队列幂等续跑） */
+  /**
+   * 恢复已暂停的任务（标签网络分析断点续算；批量分析 / 质量审核 / f2 一键获取 /
+   * 向量回填放回队列幂等续跑）
+   */
   async function resumeTask(task: UnifiedTask) {
     try {
       const { data } = await apiClient.post<{ message?: string }>(`/tasks/${task.id}/resume`)

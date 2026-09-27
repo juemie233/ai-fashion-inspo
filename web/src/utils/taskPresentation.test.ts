@@ -527,14 +527,16 @@ describe('formatKeywords / parseMaxCount', () => {
   })
 })
 
-describe('isPausableTaskType（批量/组合分析、标签网络分析、质量审核、f2 一键获取可暂停）', () => {
-  it('五类任务返回 true', () => {
+describe('isPausableTaskType（批量/组合分析、标签网络分析、质量审核、f2 一键获取、向量回填可暂停）', () => {
+  it('六类任务返回 true', () => {
     expect(isPausableTaskType('tag_network_analyze')).toBe(true)
     expect(isPausableTaskType('batch_analyze')).toBe(true)
     expect(isPausableTaskType('multi_analyze')).toBe(true)
     // 质量审核与批量分析同一套「批次边界停」语义：已判定的写了 quality_status 与审核日志
     expect(isPausableTaskType('quality_check')).toBe(true)
     expect(isPausableTaskType('f2_import')).toBe(true)
+    // 向量回填：每 _PROGRESS_EVERY 条一个检查点，暂停后已算向量落盘、恢复从断点续算
+    expect(isPausableTaskType('vector_backfill')).toBe(true)
   })
 
   it('其他任务类型返回 false', () => {
@@ -555,6 +557,8 @@ describe('可暂停/可取消白名单内容锁定（与后端 app/routers/tasks
         'multi_analyze',
         'quality_check',
         'tag_network_analyze',
+        // 向量回填：执行器每个进度检查点读一次状态，暂停/取消都能停下并保留已算向量
+        'vector_backfill',
       ].sort(),
     )
   })
@@ -569,6 +573,7 @@ describe('可暂停/可取消白名单内容锁定（与后端 app/routers/tasks
         'multi_analyze',
         'quality_check',
         'tag_network_analyze',
+        'vector_backfill',
       ].sort(),
     )
   })
@@ -589,6 +594,10 @@ describe('isCancelableTaskType（运行中可取消：与后端白名单对齐�
     expect(isCancelableTaskType('batch_analyze')).toBe(true)
     expect(isCancelableTaskType('multi_analyze')).toBe(true)
     expect(isCancelableTaskType('quality_check')).toBe(true)
+  })
+
+  it('向量回填可取消（点「取消」后最多再处理一个检查点的量就停）', () => {
+    expect(isCancelableTaskType('vector_backfill')).toBe(true)
   })
 
   it('不在白名单内的类型返回 false', () => {

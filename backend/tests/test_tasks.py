@@ -296,6 +296,7 @@ def test_whitelists_match_frontend_contract():
         "multi_analyze",
         "quality_check",
         "f2_import",
+        "vector_backfill",
     }
     assert set(_CANCELABLE_RUNNING_TYPES) == {
         "face_scan",
@@ -305,7 +306,73 @@ def test_whitelists_match_frontend_contract():
         "batch_analyze",
         "multi_analyze",
         "quality_check",
+        "vector_backfill",
     }
+
+
+async def test_cancel_paused_task_marks_cancelled(client):
+    """已暂停的可暂停任务可直接取消（终态 cancelled），不必先恢复再取消。
+
+    用户视角：暂停中的任务不占资源，「取消」就是不想做了——原先只能先恢复
+    （重新排队跑起来）再取消，等于逼用户把不想做的任务跑一段。
+    """
+    tid = await _add_task(status="paused", type_="vector_backfill")
+
+    r = client.post(f"/api/tasks/{tid}/cancel")
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "任务已取消"
+    async with async_session() as db:
+        row = await db.get(TaskQueue, tid)
+        assert row.status == "cancelled"
+        assert row.error == "用户手动取消"
+
+
+async def test_cancel_paused_task_of_non_pausable_type_rejected(client):
+    """暂停态但类型不在可暂停白名单里（脏数据）→ 400，不改状态。"""
+    tid = await _add_task(status="paused", type_="face_scan")
+
+    r = client.post(f"/api/tasks/{tid}/cancel")
+    assert r.status_code == 400, r.text
+    assert client.get(f"/api/tasks/{tid}").json()["status"] == "paused"
+
+
+async def test_cancel_running_vector_backfill(client):
+    """运行中的向量回填可取消（全库级任务，用户必须能随时中断）。"""
+    tid = await _add_task(status="running", type_="vector_backfill")
+
+    r = client.post(f"/api/tasks/{tid}/cancel")
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/tasks/{tid}").json()["status"] == "cancelled"
+
+
+async def test_pause_running_vector_backfill(client):
+    """运行中的向量回填可暂停（执行器每个进度检查点感知后落盘并停下）。"""
+    tid = await _add_task(status="running", type_="vector_backfill")
+
+    r = client.post(f"/api/tasks/{tid}/pause")
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/tasks/{tid}").json()["status"] == "paused"
+
+
+async def test_resume_paused_vector_backfill_requeues_pending(client):
+    """恢复向量回填：放回 pending 由 worker 重新认领，执行器从 task.done 断点续算。"""
+    tid = await _add_task(status="paused", type_="vector_backfill")
+    async with async_session() as db:
+        await db.execute(
+            update(TaskQueue)
+            .where(TaskQueue.id == tid)
+            .values(claimed_by="worker-x", heartbeat_at=utcnow(), done=25)
+        )
+        await db.commit()
+
+    r = client.post(f"/api/tasks/{tid}/resume")
+    assert r.status_code == 200, r.text
+    async with async_session() as db:
+        row = await db.get(TaskQueue, tid)
+        assert row.status == "pending"
+        assert row.claimed_by is None and row.heartbeat_at is None
+        # done 断点必须保留：清掉就等于恢复后从头重跑（图像向量要重跑 CLIP）
+        assert row.done == 25
 
 
 async def test_pause_non_running_rejected(client):
