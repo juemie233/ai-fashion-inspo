@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models.inspiration import Inspiration
+from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag
 from app.services.vector import store as vector_store
 from app.services.vector.embedding import (
@@ -58,14 +59,27 @@ async def _resolve_vector_source_path(insp: Inspiration) -> Path | None:
 async def _load_inspiration(
     db: AsyncSession, inspiration_id: str
 ) -> Inspiration | None:
-    """加载素材（预加载标签），不存在时返回 None。
+    """加载素材（预加载标签与博主/模特关联链），不存在时返回 None。
 
-    必须显式 selectinload 标签，避免异步环境下访问未加载的
-    关系触发 MissingGreenlet。
+    必须**链式** selectinload，否则异步环境下访问未加载的关系会触发
+    MissingGreenlet（500）：
+    - ``tags.tag``：响应里的标签名（InspirationTag.tag 默认 lazy="select"）；
+    - ``bloggers.blogger`` / ``models.model``：``inspiration_to_out`` 会读内层实体
+      （``t.blogger`` / ``t.model``）——只加载外层集合不够。
+
+    2026-09-27 用户报「某素材没有相似推荐」的根因就是后者：候选素材由本函数加载，
+    原实现只预加载了 tags.tag，候选里只要有一个带人物关联，序列化即懒加载报错 →
+    /api/search/similar/{id} 返回 500 → 前端 useSimilarItems 静默 catch 成空列表，
+    界面显示「暂无相似素材（需要先回填向量…）」——一个与真实原因无关的提示。
+    与 routers/search.py 的加载器（同函数名）保持同一套预加载，别再分叉。
     """
     result = await db.execute(
         select(Inspiration)
-        .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))
+        .options(
+            selectinload(Inspiration.tags).selectinload(InspirationTag.tag),
+            selectinload(Inspiration.bloggers).selectinload(InspirationBlogger.blogger),
+            selectinload(Inspiration.models).selectinload(InspirationModel.model),
+        )
         .where(
             Inspiration.id == inspiration_id,
             Inspiration.deleted_at.is_(None),
@@ -378,7 +392,8 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
 
-    dot_product = sum(x * y for x, y in zip(a, b))
+    # 长度已在上面校验过，这里显式声明不要求等长（否则维度不一致时应返回 0.0 而不是抛错）
+    dot_product = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
 
@@ -398,7 +413,7 @@ async def find_similar_images(
 
     当图像向量不可用或无向量数据时，由 /api/search/similar/{id} 回退到本函数。
     """
-    from app.models.tag import InspirationTag, Tag
+    from app.models.tag import InspirationTag
 
     # 获取源素材的所有标签
     result = await db.execute(

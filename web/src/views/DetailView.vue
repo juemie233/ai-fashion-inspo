@@ -74,6 +74,7 @@ let detailSeq = 0 // 请求序号，防止参数快速切换时旧响应覆盖�
 const {
   similarItems,
   similarLoading,
+  similarFailed,
   similarSourceLabel,
   loadSimilar,
   batchMode,
@@ -508,6 +509,7 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
         <SimilarSection
           :items="similarItems"
           :loading="similarLoading"
+          :failed="similarFailed"
           :batch-mode="batchMode"
           :batch-selected-ids="batchSelectedIds"
           v-model:batch-tag-names="batchTagNames"

@@ -10,6 +10,8 @@ const props = defineProps<{
   items: SimilarItemOut[]
   /** 相似推荐加载中 */
   loading: boolean
+  /** 相似推荐加载失败（接口 500 等）：与「确实没有相似素材」区分展示 */
+  failed: boolean
   /** 是否处于批量选择模式 */
   batchMode: boolean
   /** 批量模式下已勾选的相似素材 ID */
@@ -47,6 +49,11 @@ const batchTagNamesModel = computed<string[]>({
     <div class="similar-header">
       <h4>相似素材推荐</h4>
       <a-spin v-if="loading" :size="14" />
+      <!-- 加载失败与「没有相似素材」是两回事：前者要说清是后端出错，否则会被
+           误读成「这张图还没有向量」，把一个 500 查成数据问题（真发生过） -->
+      <span v-else-if="items.length === 0 && failed" class="similar-empty-hint failed-hint">
+        相似推荐加载失败（后端返回错误，不影响详情展示）——请查看后端日志
+      </span>
       <span v-else-if="items.length === 0" class="similar-empty-hint">
         暂无相似素材（需要先回填向量，或在图像向量不可用时依赖标签匹配）
       </span>
@@ -132,6 +139,11 @@ const batchTagNamesModel = computed<string[]>({
 .similar-empty-hint {
   font-size: 12px;
   color: #999;
+}
+
+/* 加载失败用警示色，避免与「暂无相似素材」的灰提示混淆 */
+.failed-hint {
+  color: #d4380d;
 }
 
 .similar-count {

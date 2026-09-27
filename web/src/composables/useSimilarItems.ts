@@ -35,6 +35,12 @@ export function useSimilarItems(
 ) {
   const similarItems = ref<SimilarItemOut[]>([])
   const similarLoading = ref(false)
+  /** 相似推荐**加载失败**（接口 500 等）——必须与「确实没有相似素材」区分开。
+   *
+   * 2026-09-27 用户报「某素材没有相似推荐」：真因是接口 500（候选素材带人物关联，
+   * 序列化时异步懒加载报错），而这里原先静默 catch 成空列表，界面显示
+   * 「暂无相似素材（需要先回填向量…）」——把后端故障伪装成数据缺失，白查很久。 */
+  const similarFailed = ref(false)
   const batchMode = ref(false) // 是否处于批量选择模式
   const batchSelectedIds = ref<string[]>([]) // 勾选的相似素材 ID
   const batchTagNames = ref<string[]>([]) // 要批量添加的大标签（预填当前素材大标签）
@@ -52,10 +58,13 @@ export function useSimilarItems(
       const data = await fetchSimilar(id, 10)
       if (!isCurrentSeq(seq)) return // 过期响应不覆盖新数据
       similarItems.value = data.similar
+      similarFailed.value = false
     } catch {
-      // 相似推荐失败不影响详情展示，静默降级
+      // 相似推荐失败不影响详情展示，但**不能显示成「没有相似素材」**：
+      // 标记失败，由界面给出「加载失败」而不是「暂无」（详见 similarFailed 注释）
       if (!isCurrentSeq(seq)) return
       similarItems.value = []
+      similarFailed.value = true
     } finally {
       if (isCurrentSeq(seq)) similarLoading.value = false
     }
@@ -68,7 +77,9 @@ export function useSimilarItems(
       // 竞态防护：批量打标在途时切换了素材，丢弃旧素材的相似列表
       if (detail.value?.id !== id) return
       similarItems.value = data.similar
+      similarFailed.value = false
     } catch {
+      // 后台刷新失败保持原列表（旧数据仍可用），不翻转成「没有相似素材」
       /* 静默降级 */
     }
   }
@@ -161,6 +172,7 @@ export function useSimilarItems(
   return {
     similarItems,
     similarLoading,
+    similarFailed,
     similarSourceLabel,
     loadSimilar,
     refreshSimilar,

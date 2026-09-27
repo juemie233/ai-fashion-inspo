@@ -124,6 +124,46 @@ def test_search_with_blogger_and_model_links(client, upload, create_blogger, cre
     assert r2.json()["source"]["id"] == insp_id
 
 
+def test_similar_recommendation_with_person_linked_candidate(client, upload, create_blogger):
+    """回归：相似推荐的**候选**带人物关联时不再 500（否则界面谎报「暂无相似素材」）。
+
+    2026-09-27 用户报「素材 4ee7f266 没有相似推荐」，根因在候选序列化：
+    `vector/similarity._load_inspiration` 只链式预加载了 tags.tag，没预加载
+    bloggers.blogger / models.model；候选里只要有一个带人物关联，
+    `inspiration_to_out` 访问 `t.blogger` 就懒加载 → async 下 MissingGreenlet
+    → /api/search/similar/{id} 返回 500 → 前端 useSimilarItems 把异常静默 catch
+    成空列表，界面显示「暂无相似素材（需要先回填向量…）」——与真实原因无关。
+
+    原用例（上面那个）只上传了一个素材，相似列表恒为空，候选序列化这条路径从未
+    被覆盖，所以这个 bug 一直没被发现；这里必须**真的造出一个候选**。
+    """
+    source = upload().json()["id"]
+    candidate = upload().json()["id"]
+
+    # 两者共享一个标签 → 走标签兜底路径，不依赖向量库
+    for insp_id in (source, candidate):
+        r = client.post(
+            f"/api/inspirations/{insp_id}/tags",
+            json={"names": ["白色"], "category": "color"},
+        )
+        assert r.status_code == 200, r.text
+
+    # 关键：给候选挂上人物关联（修复前正是这一步让整个接口 500）
+    blogger = create_blogger(name="候选关联博主")
+    r = client.post(
+        f"/api/inspirations/{candidate}/bloggers",
+        json={"person_ids": [blogger["id"]]},
+    )
+    assert r.status_code == 200, r.text
+
+    resp = client.get(f"/api/search/similar/{source}")
+    assert resp.status_code == 200, resp.text
+    similar = resp.json()["similar"]
+    assert [item["inspiration"]["id"] for item in similar] == [candidate]
+    # 候选的人物关联要能正确序列化出来（而不是抛错）
+    assert [b["id"] for b in similar[0]["inspiration"]["bloggers"]] == [blogger["id"]]
+
+
 # ============ 文本嵌入超长截断重试 ============
 
 
