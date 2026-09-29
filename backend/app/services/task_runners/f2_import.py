@@ -437,6 +437,13 @@ def f2_import_status() -> dict:
         # 收藏模式的可用性：前提与点赞一致（f2 可用 + 工作目录存在 + 配了主页链接）
         "collect_available": False,
         "collect_reason": "",
+        # 「按博主全量下载」（profiles：点名主页链接/sec_user_id → 下这个博主的全部作品）
+        # 的可用性单独一档：只要 f2 能跑、工作目录在就够——它**不依赖 f2 用户库里有没有
+        # 这个账号**，首次采集自己会翻全量。沿用发布模式的 available 会把这个入口挡在
+        # 「已登记博主白名单」之外（点赞入口栽过同一个坑，见 tests 里的
+        # test_f2_import_like_mode_not_blocked_by_blogger_whitelist）。
+        "profiles_available": False,
+        "profiles_reason": "",
         # 「我的喜欢」每次最多翻多少条（0=全量）。前端据此显示并允许改。
         # 为什么需要：f2 的点赞分页没有「遇到已下载就停」，全量翻页每次都要空等
         # 每页一次 timeout（本机 10 秒），且零新增时进度条会停在 0 像卡死。
@@ -446,6 +453,16 @@ def f2_import_status() -> dict:
 
     f2_ok = f2.f2_available()
     dir_ok = f2.DEFAULT_F2_DIR.exists()
+
+    # 按博主全量下载：与点赞/收藏一样只要求「f2 可用 + 工作目录存在」（见上文字段注释）
+    info["profiles_available"] = bool(f2_ok and dir_ok)
+    if info["profiles_available"]:
+        info["profiles_reason"] = "可点名下载指定博主的全部作品（首次翻全量，之后增量）"
+    elif not f2_ok:
+        info["profiles_reason"] = "未检测到 f2（python -m f2 不可用）：请先安装 f2"
+    else:
+        info["profiles_reason"] = f"未找到 f2 工作目录：{f2.DEFAULT_F2_DIR}"
+
     info["like_available"] = bool(f2_ok and dir_ok and like_user)
     info["collect_available"] = info["like_available"]
     if info["like_available"]:

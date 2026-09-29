@@ -1,0 +1,57 @@
+/**
+ * 博主详情页「下载所有作品」的判据与提交参数（纯函数，便于单测）。
+ *
+ * 为什么单独成文件：这个按钮的可用性同时取决于「人物够不够格」（抖音 + 主页链接）
+ * 与「f2 通道是否就绪」，判据混在组件里既没法测（该页用 Arco 卡片 + 瀑布流，测试
+ * 环境挂不出来），也容易与后端 `/api/scraper/f2-import` 的 profiles 口径漂移。
+ *
+ * 后端口径（routers/scraper.py 的 profiles 参数）：传博主主页链接或 sec_user_id，
+ * **不要求该博主先在 f2 用户库里**（f2 的下载目标只来自它自己的用户库，库里没有的
+ * 账号跑不到，profiles 正是那个限制的出口）；首次采集自动用 `-i all` 翻全量，
+ * 之后按日期窗口增量。
+ */
+
+import type { F2ImportOptions } from '@/composables/useF2Import'
+
+/** 参与判定的最小人物字段（PersonDetail 的子集，便于直接把 detail 传进来） */
+export interface WorksDownloadSubject {
+  platform?: string | null
+  profile_url?: string | null
+}
+
+/**
+ * 能否「下载所有作品」：必须是**抖音博主**且填了主页链接。
+ *
+ * - 限定抖音：作品下载走 f2（抖音专用通道），小红书博主没有对应能力；
+ * - 必须有主页链接：f2 靠主页链接 / sec_user_id 定位账号，没有它无从下起。
+ */
+export function canDownloadWorks(subject: WorksDownloadSubject): boolean {
+  return subject.platform === 'douyin' && Boolean((subject.profile_url ?? '').trim())
+}
+
+/** 按钮不可用的原因（可用时返回空串），用于 hover 提示 */
+export function downloadWorksDisabledReason(subject: WorksDownloadSubject): string {
+  if (subject.platform !== 'douyin') {
+    return '仅支持抖音博主：作品下载走 f2 的抖音通道'
+  }
+  if (!(subject.profile_url ?? '').trim()) {
+    return '该博主还没有主页链接：先点「编辑」补上抖音主页链接，才能定位到她的作品'
+  }
+  return ''
+}
+
+/**
+ * 「下载所有作品」的提交参数。
+ *
+ * **不带 `since_days`**：首次点名该博主时后端会自动用 `-i all` 翻全量（见 profiles
+ * 口径），之后按日期窗口增量——既满足「下全部作品」，又不必每次点击都翻全量
+ * （f2 每页固定等一次 timeout，全量翻页很慢）。
+ */
+export function worksDownloadOptions(profileUrl: string): F2ImportOptions {
+  return {
+    fetch: true,
+    mode: 'post',
+    profiles: [profileUrl.trim()],
+    make_thumbnails: true,
+  }
+}

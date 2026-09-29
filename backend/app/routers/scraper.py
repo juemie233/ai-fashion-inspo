@@ -180,25 +180,35 @@ async def create_f2_import(
     """
     from app.services.task_runner import create_f2_import_task_if_idle, f2_import_status
 
-    if fetch:
-        status = f2_import_status()
-        # 三个入口的可用性口径不同，别互相借用：发布模式可用性依赖「已登记博主」
-        # 白名单（f2 用户库混进的无关账号默认跳过）；点赞/收藏只要求 f2 + 工作目录 +
-        # 已配置我的主页链接（这些列表天然跨作者）。用发布模式的口径去挡它们，
-        # 用户会被一个与点赞/收藏无关的理由（「没有一个账号对应到已登记的抖音博主」）拒绝。
-        personal = mode in ("like", "collection")
-        ready = status["like_available"] if personal else status["available"]
-        if not ready:
-            if mode == "collection":
-                reason = status.get("collect_reason") or status.get("reason", "")
-            elif mode == "like":
-                reason = status["like_reason"]
-            else:
-                reason = status["reason"]
-            return {"message": reason, "task_id": None}
-
+    # 参数解析放在可用性判定之前：profiles 的可用性口径与发布模式不同（见下）
     author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
     profile_list = _split_multi(profiles, profiles_array)
+
+    if fetch:
+        status = f2_import_status()
+        # 四个入口的可用性口径不同，别互相借用：发布模式依赖「已登记博主」白名单
+        # （f2 用户库混进的无关账号默认跳过）；点赞/收藏只要求 f2 + 工作目录 +
+        # 已配置我的主页链接（这些列表天然跨作者）；**按博主全量下载（profiles）
+        # 只要求 f2 + 工作目录**——它点名的 sec_user_id / 主页链接不需要先在 f2
+        # 用户库里（首次采集自己会翻全量）。借用发布模式的口径会把「给一个还没进
+        # f2 用户库的博主下全部作品」挡在白名单外，而那正是这个入口的用途。
+        personal = mode in ("like", "collection")
+        if profile_list:
+            ready = status["profiles_available"]
+            reason = status.get("profiles_reason") or status.get("reason", "")
+        elif personal:
+            ready = status["like_available"]
+            reason = (
+                status.get("collect_reason", "")
+                if mode == "collection"
+                else status["like_reason"]
+            )
+        else:
+            ready = status["available"]
+            reason = status["reason"]
+        if not ready:
+            return {"message": reason, "task_id": None}
+
     collect_id_list = _split_multi(collect_ids, collect_ids_array)
 
     # 并发保护：同一时刻只允许一个「一键获取素材」任务（连点会起多个任务 →

@@ -351,6 +351,9 @@ def test_f2_import_status_reports_missing_f2(monkeypatch):
 
     assert status["available"] is False
     assert "未检测到 f2" in status["reason"]
+    # 按博主全量下载同样不可用（它只依赖 f2 + 工作目录，比发布模式宽松）
+    assert status["profiles_available"] is False
+    assert "未检测到 f2" in status["profiles_reason"]
 
 
 def test_f2_import_status_reports_reason_when_unavailable(tmp_path, monkeypatch):
@@ -3330,3 +3333,48 @@ def test_f2_import_like_mode_not_blocked_by_blogger_whitelist(
     ).json()
     assert blocked_like["task_id"] is None
     assert "我的主页链接" in blocked_like["message"]
+
+
+def test_f2_import_profiles_not_blocked_by_f2_user_library(
+    client, tmp_path, create_blogger, monkeypatch
+):
+    """按博主全量下载（profiles）不被「f2 用户库 / 已登记博主白名单」挡住。
+
+    回归（2026-09-27 给博主详情页加「下载所有作品」时发现）：这个入口的用途正是
+    「点名一个**还没进 f2 用户库**的博主，下她全部作品」（见 routers/scraper.py 的
+    profiles 说明），而可用性判定原先沿用发布模式的 available——它要求 f2 用户库非空、
+    且至少一个账号对应到已登记博主，于是这个入口在它最该起作用的场景被拒。
+    点赞入口栽过同一个坑（见上一用例），这里是同一根因的第四个可用性口径。
+    """
+    import sqlite3
+
+    f2_dir = tmp_path / "f2proj"
+    f2_dir.mkdir()
+    # 用户库存在但为空：发布模式没有账号可下 → available=False
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", f2_dir)
+    patch_f2(monkeypatch, "DEFAULT_F2_ROOT", f2_dir / "Download")
+    create_blogger("唐思瑶ya", platform="douyin")
+    profile = f"https://www.douyin.com/user/{SEC}"
+
+    # 口径差异：发布模式不可用（用户库空），按博主全量下载可用
+    status = task_runner.f2_import_status()
+    assert status["available"] is False
+    assert status["profiles_available"] is True
+    assert "点名" in status["profiles_reason"]
+
+    blocked = client.post("/api/scraper/f2-import", params={"fetch": True}).json()
+    assert blocked["task_id"] is None
+    assert "用户库为空" in blocked["message"]
+
+    created = client.post(
+        "/api/scraper/f2-import", params={"fetch": True, "profiles": profile}
+    ).json()
+    assert created["task_id"] is not None, created
+    assert created["message"].startswith("已提交")

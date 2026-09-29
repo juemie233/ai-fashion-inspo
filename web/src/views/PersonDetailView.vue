@@ -6,7 +6,7 @@
  */
 
 import { usePersonDetail } from '@/composables/usePersonDetail'
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
@@ -17,6 +17,8 @@ import PersonPhotoSets from '@/components/person/detail/PersonPhotoSets.vue'
 import PersonBloggerFaceRegister from '@/components/person/detail/PersonBloggerFaceRegister.vue'
 import PersonModelFaceRegister from '@/components/person/detail/PersonModelFaceRegister.vue'
 import PersonGroupCard from '@/components/person/detail/PersonGroupCard.vue'
+import { useF2Import } from '@/composables/useF2Import'
+import { downloadWorksDisabledReason, worksDownloadOptions } from '@/utils/bloggerWorks'
 
 const {
   personId,
@@ -75,6 +77,41 @@ async function onFaceChanged() {
   page.value = 1
   await Promise.all([loadDetail()])
 }
+
+// ── 「下载所有作品」（仅穿搭博主：点名她的主页链接，让 f2 翻全量下载并入库）──
+const { status: f2Status, loadStatus: loadF2Status, submit: submitF2Import } = useF2Import()
+
+// 进博主页时读一次 f2 状态（模特页没有这个入口，不为此多发请求）：
+// 按钮的可用性既要看人物够不够格，也要看 f2 通道本身是否就绪
+watch(
+  kind,
+  (value) => {
+    if (value === 'blogger') void loadF2Status({ silent: true })
+  },
+  { immediate: true },
+)
+
+/** 按钮禁用状态与原因：先看人物（平台/主页链接），再看 f2 通道就绪度 */
+const worksDownload = computed(() => {
+  const person = detail.value
+  if (!person || kind.value !== 'blogger') return { disabled: true, reason: '' }
+  const personReason = downloadWorksDisabledReason(person)
+  if (personReason) return { disabled: true, reason: personReason }
+  if (!f2Status.value?.profiles_available) {
+    return {
+      disabled: true,
+      reason: f2Status.value?.profiles_reason || '正在检查 f2 通道可用性…',
+    }
+  }
+  return { disabled: false, reason: '' }
+})
+
+/** 提交「下载该博主全部作品」任务（并发保护与提示由 useF2Import.submit 统一处理） */
+async function downloadAllWorks() {
+  const url = (detail.value?.profile_url ?? '').trim()
+  if (!url) return
+  await submitF2Import(worksDownloadOptions(url))
+}
 </script>
 
 <template>
@@ -93,6 +130,9 @@ async function onFaceChanged() {
           :kind="kind"
           :kind-label="kindLabel"
           :profile-url-safe="isProfileUrlSafe"
+          :works-download-disabled="worksDownload.disabled"
+          :works-download-reason="worksDownload.reason"
+          @download-works="downloadAllWorks"
           @edit="showForm = true"
           @delete="handleDelete"
           @generate-bio="handleHeaderGenerateBio"

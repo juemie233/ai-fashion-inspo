@@ -12,6 +12,10 @@ const props = defineProps<{
   kind: PersonType
   kindLabel: string
   profileUrlSafe: boolean
+  /** 「下载所有作品」不可用（非抖音博主 / 没主页链接 / f2 通道未就绪） */
+  worksDownloadDisabled: boolean
+  /** 不可用原因（hover 提示；可用时为空串） */
+  worksDownloadReason: string
 }>()
 
 defineEmits<{
@@ -21,6 +25,8 @@ defineEmits<{
   'generate-bio': []
   /** 头像更新/清除后：由详情页重新拉取详情 */
   'avatar-changed': []
+  /** 下载该博主的全部作品：由详情页提交 f2 任务 */
+  'download-works': []
 }>()
 
 /** 头像选择弹窗开关（仅穿搭博主提供手动设置入口） */
@@ -84,6 +90,21 @@ function avatarSrc(): string {
       </div>
 
       <div class="header-actions">
+        <!-- 下载该博主的全部作品（仅穿搭博主）：点名她的主页链接，让 f2 翻全量下载并
+             入库；已下载过的作品自动跳过，首次会较久（进度在任务中心）。
+             不可用时（非抖音 / 没主页链接 / f2 未就绪）改为禁用 + hover 说明原因。 -->
+        <template v-if="kind === 'blogger'">
+          <a-popconfirm
+            v-if="!worksDownloadDisabled"
+            content="将下载该博主主页的全部作品并入库（首次翻全量，之后只下新增；已下载过的自动跳过）。首次可能较久，确定开始？"
+            @ok="$emit('download-works')"
+          >
+            <a-button type="secondary">下载所有作品</a-button>
+          </a-popconfirm>
+          <a-tooltip v-else :content="worksDownloadReason">
+            <a-button type="secondary" disabled>下载所有作品</a-button>
+          </a-tooltip>
+        </template>
         <!-- 手动设置头像（仅穿搭博主）：从 TA 的素材里选一张，或上传一张照片 -->
         <a-button v-if="kind === 'blogger'" type="secondary" @click="avatarPickerVisible = true">
           {{ detail.avatar_path ? '更换头像' : '上传头像' }}

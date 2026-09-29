@@ -121,6 +121,11 @@ export interface F2ImportStatus {
   collect_available: boolean
   /** 「我的收藏」不可用原因 / 可用性摘要 */
   collect_reason: string
+  /** **按博主全量下载**是否可用（f2 + 工作目录；它点名 sec_user_id/主页链接，
+   *  不依赖 f2 用户库里有没有该账号，也不吃博主白名单） */
+  profiles_available: boolean
+  /** 「按博主全量下载」不可用原因 / 可用性摘要 */
+  profiles_reason: string
   /** 「我的喜欢」每次最多翻多少条点赞（0=全量翻到底）。
    *  为什么需要：f2 的点赞分页没有「遇到已下载就停」，每页还固定等一次 timeout，
    *  全量时零新增也要空翻数分钟，且进度条会因「无新文件」停在 0；点赞列表最新在
