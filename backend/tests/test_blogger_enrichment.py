@@ -459,7 +459,7 @@ def _write_f2_db(tmp_path, rows) -> Path:
 async def test_douyin_backfill_fills_gaps_and_skips_others(
     client, tmp_path, monkeypatch
 ):
-    """一键补全的抖音分支：只补空缺、已有值不动、查不到的写跳过并说明原因。"""
+    """一键补全的抖音分支：只补空缺、已有值不动、查不到的**只记原因不进跳过表**。"""
     patch_f2(
         monkeypatch, "DEFAULT_F2_DIR",
         _write_f2_db(
@@ -513,16 +513,24 @@ async def test_douyin_backfill_fills_gaps_and_skips_others(
         assert by_id[filled["id"]].ip_location == "浙江"
         assert by_id[kept["id"]].ip_location == "四川"  # 只补空缺
 
-    # 查不到的两位进了跳过表（可在界面解除后重试），已补全的不再出现在缺口列表
+    # 查不到的两位**不进跳过表**：抖音这几种原因都可重试（补 ID / 让 f2 采一次），
+    # 写跳过表会把博主永久移出缺口列表——正是 2026-09-27「一朵芝士不在补全列表里」
+    # 的成因（跑过一次补全后列表被清空）。已补全的那位则不再出现在缺口列表。
     skips = client.get("/api/bloggers/enrich-skips").json()
-    assert {s["name"] for s in skips["items"]} == {"f2没有博", "缺ID博"}
+    assert skips["items"] == []
     after = client.get("/api/bloggers/missing-profile").json()
-    assert after["total"] == 0
+    assert {i["name"] for i in after["items"] if i["platform"] == "douyin"} == {
+        "f2没有博",
+        "缺ID博",
+    }
 
-    # 幂等：再跑一次不会改动任何值
+    # 再跑一次：那两位仍可重试（这正是「不写跳过表」的目的——条件具备后还能补），
+    # 已补全的那位不会重复出现在任务里
     async with async_session() as db:
         task2, total2 = await create_enrich_blogger_profile_task(db, None)
-        assert (task2, total2) == (None, 0)
+        assert task2 is not None
+        assert total2 == 2
+        assert set(task2.result["blogger_ids"]) == {absent["id"], no_uid["id"]}
 
 
 async def test_douyin_backfill_does_not_overwrite_existing_value(client):
@@ -587,3 +595,44 @@ async def test_enrich_task_includes_douyin_and_xhs_together(client, tmp_path, mo
         by_id = {bid: p for bid, p in rows}
         platforms = [by_id.get(i) for i in task.result["blogger_ids"][:5]]
     assert platforms == ["douyin"] * 5
+
+
+async def test_douyin_gap_blogger_stays_in_missing_list(client, tmp_path, monkeypatch):
+    """抖音缺口博主跑过补全后**仍在补全列表里**（不写跳过表）。
+
+    回归（2026-09-27「一朵芝士为什么不在一键补全列表里」）：原先抖音的三种
+    「条件未具备」（缺 sec_user_id / f2 库里没有这个账号 / f2 库该账号没属地）
+    也被当成「确定性无法补全」写入跳过表，而补全列表会排除跳过博主 → 跑过一次补全后
+    列表被清空（实测缺口抖音博主 439 个、跳过表 450 行、列表 0 个），用户再也看不到
+    这些人。这三种原因都可重试（补 ID / 让 f2 采一次主页），不该永久跳过。
+    """
+    patch_f2(
+        monkeypatch,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(tmp_path, [("MS4x_a", "空属地博", "")]),
+    )
+    # 两个缺口抖音博主：一个连 sec_user_id 都没有，一个有 ID 但 f2 库里没有属地
+    no_id = _create_douyin_blogger(client, "缺ID博")
+    no_ip = _create_douyin_blogger(client, "空属地博", platform_user_id="MS4x_a")
+
+    async with async_session() as db:
+        task, total = await create_enrich_blogger_profile_task(db, None)
+        assert total == 2
+        await execute_enrich_blogger_profile(db, task)
+        await db.refresh(task)
+
+        assert task.result["updated"] == 0
+        assert task.result["skipped"] == 2
+        # 关键断言：一条跳过行都不该写（写了就会把博主永久移出列表）
+        assert await list_skipped(db) == []
+
+    # 用户视角：两位都还在「一键补全」列表里（就是这个接口喂的列表）
+    items = client.get("/api/bloggers/missing-profile").json()["items"]
+    listed = {item["id"] for item in items}
+    assert {no_id["id"], no_ip["id"]} <= listed
+
+    # 再跑一次仍能建任务（不会变成「没有可补全的博主」）
+    async with async_session() as db:
+        task2, total2 = await create_enrich_blogger_profile_task(db, None)
+        assert task2 is not None
+        assert total2 == 2

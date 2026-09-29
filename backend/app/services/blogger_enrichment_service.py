@@ -22,8 +22,14 @@
 - 只按 ``bloggers.platform_user_id`` ↔ ``sec_user_id`` **精确匹配**（不猜昵称，
   避免把别人的属地写进来）；
 - **只补空缺**：已有 IP 属地一律不动（用户手填/CSV 导入的值优先）；
-- 缺 ID、f2 库没有该账号、f2 库该账号没有属地 → 记 skipped 并写跳过表（可在
-  人物管理页解除跳过后重试，例如补了 ID 或让 f2 采过一次主页之后）。
+- 三种「条件未具备」（缺 ID / f2 库里没有该账号 / f2 库该账号没有属地）**只记在本轮
+  结果明细里，不写跳过表**——它们全都可重试（补 ID、让 f2 采一次主页），博主继续留在
+  补全列表里等条件具备。跳过表从此只由小红书路径写入（缺小红书号 / 不在关注列表，
+  那才是确定性无法获取的）。
+
+  ⚠️ 2026-09-27 修：原先这三种情况也写跳过表，而补全列表会排除跳过博主 → 跑过一次
+  补全后列表被清空（实测缺口抖音博主 439 个、跳过表 450 行、列表 0 个），
+  「一键补全」从此不出现在界面上（用户问的就是「一朵芝士为什么不在一键补全列表里」）。
 """
 
 from __future__ import annotations
@@ -154,8 +160,8 @@ async def backfill_douyin_from_f2(
     Returns:
         与 :func:`enrich_one` 同形的明细：{"blogger_id", "name", "status",
         "reason"?, "ip_location"?}；status ∈ updated / skipped。
-        「确定性无法补全」的三种情况（缺 ID / f2 库无此账号 / f2 库无属地）会写入
-        跳过表，用户补了 ID 或让 f2 采过一次后可在界面解除跳过重试。
+        **三种「条件未具备」只返回 skipped 明细、不写跳过表**（见模块 docstring）：
+        博主仍留在补全列表，补了 ID 或让 f2 采过一次后再跑即可。
     """
     detail = {"blogger_id": blogger.id, "name": blogger.name}
 
@@ -169,21 +175,36 @@ async def backfill_douyin_from_f2(
 
     uid = (blogger.platform_user_id or "").strip()
     if not uid:
-        reason = "缺少平台用户 ID（sec_user_id），无法在 f2 用户库里定位"
-        await mark_skipped(db, [blogger.id], reason)
-        return {**detail, "status": "skipped", "reason": reason}
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "缺少平台用户 ID（sec_user_id），本轮无法在 f2 用户库里定位；"
+                "补上 TA 的主页链接/sec_user_id 后再跑即可（不写跳过表，仍留在补全列表）"
+            ),
+        }
 
     profile = profiles.get(uid)
     if profile is None:
-        reason = "f2 用户库里没有这个账号（需让 f2 采一次 TA 的主页后再试）"
-        await mark_skipped(db, [blogger.id], reason)
-        return {**detail, "status": "skipped", "reason": reason}
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "f2 用户库里没有这个账号：让 f2 采一次 TA 的主页后再跑即可"
+                "（不写跳过表，仍留在补全列表）"
+            ),
+        }
 
     ip_location = str(profile.get("ip_location") or "").strip()
     if not ip_location:
-        reason = "f2 用户库里该账号没有 IP 属地（需让 f2 采一次 TA 的主页后再试）"
-        await mark_skipped(db, [blogger.id], reason)
-        return {**detail, "status": "skipped", "reason": reason}
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "f2 用户库里该账号没有 IP 属地：让 f2 采一次 TA 的主页后再跑即可"
+                "（不写跳过表，仍留在补全列表）"
+            ),
+        }
 
     blogger.ip_location = ip_location
     await db.commit()
