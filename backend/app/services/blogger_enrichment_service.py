@@ -80,6 +80,162 @@ def build_profile_url(user_id: str) -> str:
     return f"https://www.xiaohongshu.com/user/profile/{user_id}"
 
 
+# 抖音主页 URL 前缀（与 scraper/f2_authors.py 的 _DOUYIN_USER_URL 同口径）：
+# 回填 sec_user_id 时一并补出主页链接，博主立刻就能用「下载所有作品」
+_DOUYIN_PROFILE_URL = "https://www.douyin.com/user/"
+
+
+async def backfill_douyin_ids_from_f2(
+    db: AsyncSession, profiles: dict[str, dict], blogger_ids: list[int] | None = None
+) -> dict:
+    """按「归一化昵称唯一命中」给抖音博主回填 ``sec_user_id``（顺带补主页链接）。
+
+    为什么需要：抖音侧的补全（回填 IP 属地）必须先在 f2 用户库里按 ``sec_user_id``
+    定位，而实测 439 个缺口抖音博主里有 437 个**连 sec_user_id 都没有**——不解决这
+    一步，「一键补全」对他们永远只能回一句「缺少平台用户 ID」。f2 用户库里有昵称，
+    昵称归一化后能与博主名对应（「下载白名单」本来就是这么匹配的，见
+    ``scripts/f2_plan.match_authors``），这里把同一口径复用过来，反方向把 ID 写回库。
+
+    **安全前提（为什么不是「有昵称就写」）**：写错 ID 会把别人的作品与 IP 属地认到
+    这个人头上，所以只在**两侧都唯一**时才写：
+    1. f2 用户库里该昵称只能有 1 个账号（多个同昵称账号 → 整条剔除）；
+    2. 库内待回填的博主里该昵称也只能出现 1 次（同名博主 → 整条剔除；与小红书侧
+       「归一化后重名的昵称整条剔除」同一原则）；
+    3. 候选 ``sec_user_id`` 未被别的博主占用（不抢别人的 ID）；
+    4. 只补空缺：已有 ``platform_user_id`` 的博主不动，``profile_url`` 仅在为空时补。
+
+    Args:
+        db: 数据库会话。
+        profiles: :func:`load_f2_profile_map` 的结果（``{sec_user_id: {nickname, ...}}``）。
+        blogger_ids: 限定范围（None = 全部缺 ID 的抖音博主）。
+
+    Returns:
+        ``{"filled", "ambiguous_blogger", "ambiguous_f2", "not_found", "already_used",
+        "details"}``；``details`` 逐条给出 filled / skipped（含原因）。
+        **跳过只写在本轮明细里，不写跳过表**——这些原因都可重试（见模块 docstring）。
+    """
+    from collections import Counter, defaultdict
+
+    from scripts import import_f2_downloads as f2
+
+    stmt = select(Blogger).where(
+        Blogger.platform == "douyin",
+        or_(
+            Blogger.platform_user_id.is_(None),
+            Blogger.platform_user_id == "",
+        ),
+    )
+    if blogger_ids:
+        stmt = stmt.where(Blogger.id.in_(blogger_ids))
+    candidates = list((await db.execute(stmt)).scalars().all())
+
+    stats: dict = {
+        "filled": 0,
+        "ambiguous_blogger": 0,
+        "ambiguous_f2": 0,
+        "not_found": 0,
+        "already_used": 0,
+        "details": [],
+    }
+    if not candidates:
+        return stats
+
+    # 昵称 → f2 账号（同一昵称可能有多个账号，交给下面的「唯一」判定剔除）
+    by_nickname: dict[str, list[str]] = defaultdict(list)
+    for sec_user_id, profile in profiles.items():
+        key = f2.normalize_author(profile.get("nickname") or "")
+        if key:
+            by_nickname[key].append(sec_user_id)
+
+    # 库内重名（只看待回填的这批）：同名博主整条剔除，宁可不填也不写错
+    nickname_counts = Counter(f2.normalize_author(b.name or "") for b in candidates)
+    # 已被别的博主占用的 ID：不抢
+    occupied = {
+        uid
+        for uid in (
+            await db.execute(
+                select(Blogger.platform_user_id).where(
+                    Blogger.platform == "douyin",
+                    Blogger.platform_user_id.is_not(None),
+                    Blogger.platform_user_id != "",
+                )
+            )
+        ).scalars().all()
+        if uid
+    }
+
+    for blogger in candidates:
+        detail = {"blogger_id": blogger.id, "name": blogger.name}
+        key = f2.normalize_author(blogger.name or "")
+        if not key:
+            stats["not_found"] += 1
+            stats["details"].append(
+                {**detail, "status": "skipped", "reason": "博主语义名为空，无法按昵称匹配"}
+            )
+            continue
+        if nickname_counts[key] > 1:
+            stats["ambiguous_blogger"] += 1
+            stats["details"].append(
+                {
+                    **detail,
+                    "status": "skipped",
+                    "reason": "库内有多个同名博主，无法确定是哪一个（宁可不填，避免写错 ID）",
+                }
+            )
+            continue
+        matches = by_nickname.get(key) or []
+        if not matches:
+            stats["not_found"] += 1
+            stats["details"].append(
+                {
+                    **detail,
+                    "status": "skipped",
+                    "reason": "f2 用户库里没有同名账号（让 f2 采一次 TA 的主页后再试）",
+                }
+            )
+            continue
+        if len(matches) > 1:
+            stats["ambiguous_f2"] += 1
+            stats["details"].append(
+                {
+                    **detail,
+                    "status": "skipped",
+                    "reason": (
+                        f"f2 用户库里有 {len(matches)} 个同名账号，无法确定是哪一个"
+                        "（宁可不填，避免把别人的作品算到 TA 头上）"
+                    ),
+                }
+            )
+            continue
+
+        sec_user_id = matches[0]
+        if sec_user_id in occupied:
+            stats["already_used"] += 1
+            stats["details"].append(
+                {
+                    **detail,
+                    "status": "skipped",
+                    "reason": "该账号已绑定到另一位博主，不重复绑定",
+                }
+            )
+            continue
+
+        blogger.platform_user_id = sec_user_id
+        if not (blogger.profile_url or "").strip():
+            blogger.profile_url = f"{_DOUYIN_PROFILE_URL}{sec_user_id}"
+        occupied.add(sec_user_id)
+        stats["filled"] += 1
+        stats["details"].append(
+            {**detail, "status": "filled", "sec_user_id": sec_user_id}
+        )
+        logger.info(
+            f"抖音博主 #{blogger.id}「{blogger.name}」按昵称唯一命中回填 sec_user_id"
+        )
+
+    await db.commit()
+    return stats
+
+
 async def list_missing_profile_bloggers(
     db: AsyncSession, blogger_ids: list[int] | None = None
 ) -> list[Blogger]:

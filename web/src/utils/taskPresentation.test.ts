@@ -116,6 +116,24 @@ describe('summarizeResult', () => {
     expect(text).not.toContain('跳过')
   })
 
+  it('enrich_blogger_profile 拼接补全/抖音明细，ID 回填单独列出', () => {
+    const text = summarizeResult(
+      'enrich_blogger_profile',
+      { updated: 12, skipped: 5, failed: 0, douyin_updated: 9, douyin_ids_filled: 7 },
+      null,
+    )
+    expect(text).toBe('补全 12 · 抖音 IP 属地 9 · 抖音 ID 回填 7 · 跳过 5 · 失败 0')
+  })
+
+  it('enrich_blogger_profile：抖音 ID 回填为 0 时不占版面', () => {
+    const text = summarizeResult(
+      'enrich_blogger_profile',
+      { updated: 0, skipped: 2, failed: 0, douyin_updated: 0, douyin_ids_filled: 0 },
+      null,
+    )
+    expect(text).toBe('补全 0 · 跳过 2 · 失败 0')
+  })
+
   it('f2_import 入库量与计划量一致时只显示入库数', () => {
     const text = summarizeResult(
       'f2_import',

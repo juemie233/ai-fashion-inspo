@@ -26,6 +26,7 @@ from app.models.person import Blogger
 from app.models.task import TaskQueue
 from app.services.blogger_enrichment_service import (
     backfill_douyin_from_f2,
+    backfill_douyin_ids_from_f2,
     build_following_index,
     enrich_one,
     list_missing_profile_bloggers,
@@ -129,6 +130,20 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         )
 
     try:
+        # 抖音侧第一步：**先按昵称唯一命中补 sec_user_id**（顺带补主页链接）。
+        # 为什么必须在循环之前：没有 sec_user_id 就无法在 f2 用户库里定位，
+        # IP 属地永远补不上（实测 439 个缺口抖音博主里 437 个缺 ID）。
+        # 补完再进循环，同一次任务里就能接着把 IP 属地补上。
+        douyin_ids: dict = {"filled": 0, "details": []}
+        if any(p == "douyin" for p in platforms.values()):
+            if f2_profiles is None:
+                f2_profiles = await asyncio.to_thread(load_f2_profile_map)
+            douyin_ids = await backfill_douyin_ids_from_f2(db, f2_profiles, ids)
+            if douyin_ids["filled"]:
+                logger.info(
+                    f"按昵称唯一命中回填 {douyin_ids['filled']} 位抖音博主的 sec_user_id"
+                )
+
         # 小红书侧：一次拉全关注列表（按昵称解析 uid 的唯一来源），失败即整任务失败
         following_index: dict[str, str] = {}
         if needs_browser:
@@ -197,6 +212,8 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         "failed": failed,
         # 其中抖音（离线 f2 用户库）回填成功数：前端据此说明「IP 属地补了 N 位」
         "douyin_updated": douyin_updated,
+        # 其中「按昵称唯一命中补上 sec_user_id」的位数（补上方能补 IP 属地）
+        "douyin_ids_filled": douyin_ids["filled"],
         "cancelled": cancelled,
     }
     if cancelled:

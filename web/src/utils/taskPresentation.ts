@@ -239,6 +239,9 @@ export function summarizeResult(
         r.updated != null ? `补全 ${r.updated}` : '',
         // 其中抖音 IP 属地（离线读 f2 用户库）单独说明，否则「补全 N」看不出干了什么
         r.douyin_updated ? `抖音 IP 属地 ${r.douyin_updated}` : '',
+        // 其中「按昵称唯一命中补上 sec_user_id」的位数：补不上 ID 就补不了属地，
+        // 这一步干了多少要看得见（0 不显示，避免日常噪音）
+        r.douyin_ids_filled ? `抖音 ID 回填 ${r.douyin_ids_filled}` : '',
         r.skipped != null ? `跳过 ${r.skipped}` : '',
         r.failed != null ? `失败 ${r.failed}` : '',
       ]

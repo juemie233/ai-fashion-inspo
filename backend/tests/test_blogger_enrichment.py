@@ -636,3 +636,74 @@ async def test_douyin_gap_blogger_stays_in_missing_list(client, tmp_path, monkey
         task2, total2 = await create_enrich_blogger_profile_task(db, None)
         assert task2 is not None
         assert total2 == 2
+
+
+async def test_douyin_id_backfilled_by_unique_nickname_then_ip(
+    client, tmp_path, monkeypatch
+):
+    """缺 sec_user_id 的抖音博主：按昵称唯一命中补上 ID + 主页链接，并在同一次任务里补 IP 属地。
+
+    回归（2026-09-29）：439 个缺口抖音博主里有 437 个**连 sec_user_id 都没有**，
+    补全对他们只能回一句「缺少平台用户 ID」。f2 用户库里有昵称（「下载白名单」本来就是
+    按归一化昵称匹配的，见 scripts/f2_plan.match_authors），反方向把 ID 写回去，
+    同一次任务里就能接着补属地——否则这些人永远补不上。
+    """
+    patch_f2(
+        monkeypatch,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(tmp_path, [("MS4x_cheese", "一朵芝士", "IP属地：浙江")]),
+    )
+    # 无 ID、无属地、无主页链接（就是「一朵芝士」的真实形态）
+    blogger = _create_douyin_blogger(client, "一朵芝士")
+
+    async with async_session() as db:
+        task, total = await create_enrich_blogger_profile_task(db, None)
+        assert total == 1
+        await execute_enrich_blogger_profile(db, task)
+        await db.refresh(task)
+
+    assert task.result["douyin_ids_filled"] == 1
+    assert task.result["douyin_updated"] == 1  # 同一次任务里连属地一起补上
+    assert task.result["updated"] == 1
+    row = await _blogger_row(blogger["id"])
+    assert row.platform_user_id == "MS4x_cheese"
+    assert row.profile_url == "https://www.douyin.com/user/MS4x_cheese"
+    assert row.ip_location == "浙江"
+
+
+async def test_douyin_id_backfill_refuses_ambiguous_or_occupied(client):
+    """宁可少填也不写错：两侧重名、以及会抢别人 ID 的情况一律跳过并写明原因。
+
+    写错 ID 会把别人的作品与 IP 属地认到这个人头上，所以只在**两侧都唯一**时才写。
+    """
+    from app.services.blogger_enrichment_service import backfill_douyin_ids_from_f2
+
+    dup_in_f2 = _create_douyin_blogger(client, "重名在F2博")
+    same_a = _create_douyin_blogger(client, "库内重名博")
+    same_b = _create_douyin_blogger(client, "库内重名博")
+    # 该 ID 已被 owner 占用；「想抢ID博」按昵称会匹配到它 → 不能抢
+    _create_douyin_blogger(client, "占用者", platform_user_id="MS4x_taken")
+    want = _create_douyin_blogger(client, "想抢ID博")
+
+    profiles = {
+        "MS4x_dup1": {"nickname": "重名在F2博", "ip_location": ""},
+        "MS4x_dup2": {"nickname": "重名在F2博", "ip_location": ""},
+        "MS4x_same": {"nickname": "库内重名博", "ip_location": ""},
+        "MS4x_taken": {"nickname": "想抢ID博", "ip_location": ""},
+    }
+    async with async_session() as db:
+        stats = await backfill_douyin_ids_from_f2(db, profiles)
+
+    assert stats["filled"] == 0
+    assert stats["ambiguous_f2"] == 1  # f2 库里同名两个账号
+    assert stats["ambiguous_blogger"] == 2  # 库内两个同名博主
+    assert stats["already_used"] == 1  # 会抢别人已占用的 ID
+    for blogger in (dup_in_f2, same_a, same_b, want):
+        row = await _blogger_row(blogger["id"])
+        assert row.platform_user_id is None
+        assert row.profile_url is None
+    # 跳过原因要能看懂（前端在本轮结果里展示）
+    reasons = {d["name"]: d["reason"] for d in stats["details"]}
+    assert "同名账号" in reasons["重名在F2博"]
+    assert "同名博主" in reasons["库内重名博"]
+    assert "已绑定" in reasons["想抢ID博"]
