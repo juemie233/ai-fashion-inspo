@@ -97,11 +97,13 @@ const worksDownload = computed(() => {
   if (!person || kind.value !== 'blogger') return { disabled: true, reason: '' }
   const personReason = downloadWorksDisabledReason(person)
   if (personReason) return { disabled: true, reason: personReason }
-  if (!f2Status.value?.profiles_available) {
-    return {
-      disabled: true,
-      reason: f2Status.value?.profiles_reason || '正在检查 f2 通道可用性…',
-    }
+  const { value: status } = f2Status
+  // 状态还没回来、或后端版本较旧（status 里没有这一档口径）时**先放行**，让后端给出
+  // 准确理由：否则「新前端 + 还没重启的后端」会让按钮永久禁用，用户只看到一句
+  // 无从下手的提示——而禁用态的意义本来就是「说清为什么不能点」
+  if (!status || status.profiles_available === undefined) return { disabled: false, reason: '' }
+  if (!status.profiles_available) {
+    return { disabled: true, reason: status.profiles_reason || 'f2 通道未就绪' }
   }
   return { disabled: false, reason: '' }
 })
