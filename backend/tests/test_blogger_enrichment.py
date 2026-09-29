@@ -707,3 +707,227 @@ async def test_douyin_id_backfill_refuses_ambiguous_or_occupied(client):
     assert "同名账号" in reasons["重名在F2博"]
     assert "同名博主" in reasons["库内重名博"]
     assert "已绑定" in reasons["想抢ID博"]
+
+
+# ═══════════════════════════════════════════════════════════════
+#  抖音：按需解析主页标识（作品 ID → 作者 sec_user_id）
+#
+#  场景：从「我的喜欢 / 我的收藏」采回来的素材只带作者昵称，补建出的博主没有主页
+#  链接 → 详情页「下载所有作品」点不动。这些用例锁住三条路径与两条安全闸门。
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_aweme_id_from_source_pure():
+    """作品 ID 只认「真实 ID」：新口径 platform_id 或作品链接；历史哈希一律不认。"""
+    from app.services.blogger_enrichment_service import aweme_id_from_source
+
+    aweme = "7624898240707091963"
+    assert aweme_id_from_source(f"f2:{aweme}#image1", None) == aweme
+    assert aweme_id_from_source(None, f"https://www.douyin.com/note/{aweme}") == aweme
+    assert aweme_id_from_source(None, f"https://www.douyin.com/video/{aweme}") == aweme
+    # 历史素材：文件名合成的 12 位哈希 / 无作品 ID 的链接
+    assert aweme_id_from_source("f2:184ef89706bf#image2", None) is None
+    assert aweme_id_from_source("f2:184ef89706bf#image2", "https://www.douyin.com/note/1") is None
+    assert aweme_id_from_source(None, None) is None
+
+
+async def _attach_douyin_work(client, upload, blogger_id, platform_id, source_url):
+    """给博主造一条带作品 ID 的素材（真实上传 + 关联接口，再补上来源字段）。"""
+    from sqlalchemy import update
+
+    from app.models.inspiration import Inspiration
+
+    r = upload(source_type="douyin")
+    assert r.status_code == 201, r.text
+    insp_id = r.json()["id"]
+    r = client.post(
+        f"/api/inspirations/{insp_id}/bloggers", json={"person_ids": [blogger_id]}
+    )
+    assert r.status_code == 200, r.text
+    async with async_session() as db:
+        await db.execute(
+            update(Inspiration)
+            .where(Inspiration.id == insp_id)
+            .values(source_platform_id=platform_id, source_url=source_url)
+        )
+        await db.commit()
+    return insp_id
+
+
+async def test_resolve_douyin_profile_derives_url_from_existing_sec_id(
+    client, tmp_path, monkeypatch
+):
+    """路径一（本地互推）：已有 sec_user_id 只缺链接 → 直接拼，零网络。"""
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "无f2库")
+    blogger = _create_douyin_blogger(client, "有ID没链接博", platform_user_id="MS4wLy_local")
+
+    resp = client.post(f"/api/bloggers/{blogger['id']}/resolve-douyin-profile")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["source"] == "local"
+    assert body["profile_url"] == "https://www.douyin.com/user/MS4wLy_local"
+
+    row = await _blogger_row(blogger["id"])
+    assert row.profile_url == "https://www.douyin.com/user/MS4wLy_local"
+
+
+async def test_resolve_douyin_profile_by_nickname_from_f2_db(
+    client, tmp_path, monkeypatch
+):
+    """路径二（离线）：f2 用户库里昵称唯一命中 → 补 ID + 链接 + 顺手补 IP 属地。"""
+    patch_f2(
+        monkeypatch,
+        "DEFAULT_F2_DIR",
+        _write_f2_db(tmp_path, [("MS4x_liked", "被喜欢的作者", "IP属地：福建")]),
+    )
+    blogger = _create_douyin_blogger(client, "被喜欢的作者")
+
+    resp = client.post(f"/api/bloggers/{blogger['id']}/resolve-douyin-profile")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["source"] == "f2_nickname"
+
+    row = await _blogger_row(blogger["id"])
+    assert row.platform_user_id == "MS4x_liked"
+    assert row.profile_url == "https://www.douyin.com/user/MS4x_liked"
+    assert row.ip_location == "福建"  # f2 顺手带回来的属地，空缺才填
+
+
+async def test_resolve_douyin_profile_by_aweme_writes_when_nickname_matches(
+    client, upload, tmp_path, monkeypatch
+):
+    """路径三（联网）：拿素材的真实作品 ID 让 f2 反查作者，昵称一致才写库。"""
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "无f2库")
+    aweme = "7624898240707091963"
+    calls: list[tuple] = []
+
+    def fake_resolve(f2_dir, aweme_id, work_url=None, **kwargs):
+        calls.append((str(aweme_id), work_url))
+        return {
+            "ok": True,
+            "sec_user_id": "MS4wLy_from_aweme",
+            "nickname": "1123木头人",
+            "ip_location": "福建",
+            "detected": "user_info_new",
+            "rc": 1,
+            "cmd": ["f2"],
+            "reason": "",
+        }
+
+    patch_f2(monkeypatch, "resolve_f2_author_by_aweme", fake_resolve)
+    blogger = _create_douyin_blogger(client, "1123木头人")
+    await _attach_douyin_work(
+        client, upload, blogger["id"], f"f2:{aweme}#image1",
+        f"https://www.douyin.com/note/{aweme}",
+    )
+
+    resp = client.post(f"/api/bloggers/{blogger['id']}/resolve-douyin-profile")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["source"] == "f2_aweme"
+    # 反查用的是这条素材的真实作品 ID 与它的原始链接
+    assert calls == [(aweme, f"https://www.douyin.com/note/{aweme}")]
+
+    row = await _blogger_row(blogger["id"])
+    assert row.platform_user_id == "MS4wLy_from_aweme"
+    assert row.profile_url == "https://www.douyin.com/user/MS4wLy_from_aweme"
+    assert row.ip_location == "福建"
+
+
+async def test_resolve_douyin_profile_refuses_nickname_mismatch(
+    client, upload, tmp_path, monkeypatch
+):
+    """安全闸门一：反查到的作者不是这位博主 → **不写库**，只回原因。"""
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "无f2库")
+    aweme = "7624898240707091963"
+
+    def fake_resolve(f2_dir, aweme_id, work_url=None, **kwargs):
+        return {
+            "ok": True,
+            "sec_user_id": "MS4wLy_someone_else",
+            "nickname": "别人的账号",
+            "ip_location": "",
+            "detected": "user_info_new",
+            "rc": 1,
+            "cmd": [],
+            "reason": "",
+        }
+
+    patch_f2(monkeypatch, "resolve_f2_author_by_aweme", fake_resolve)
+    blogger = _create_douyin_blogger(client, "1123木头人")
+    await _attach_douyin_work(client, upload, blogger["id"], f"f2:{aweme}#image1", None)
+
+    resp = client.post(f"/api/bloggers/{blogger['id']}/resolve-douyin-profile")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert "不一致" in body["reason"] or "不一致" in body["attempts"][0]["reason"]
+
+    row = await _blogger_row(blogger["id"])
+    assert row.platform_user_id is None  # 宁可不填，也不绑错人
+    assert row.profile_url is None
+
+
+async def test_resolve_douyin_profile_refuses_id_taken_by_another_blogger(
+    client, upload, tmp_path, monkeypatch
+):
+    """安全闸门二：该 sec_user_id 已属于另一位博主 → 不抢（与批量回填同一原则）。"""
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "无f2库")
+    aweme = "7624898240707091963"
+    owner = _create_douyin_blogger(client, "占用者", platform_user_id="MS4wLy_taken")
+
+    def fake_resolve(f2_dir, aweme_id, work_url=None, **kwargs):
+        return {
+            "ok": True,
+            "sec_user_id": "MS4wLy_taken",
+            "nickname": "想抢ID博",
+            "ip_location": "",
+            "detected": "user_info_new",
+            "rc": 0,
+            "cmd": [],
+            "reason": "",
+        }
+
+    patch_f2(monkeypatch, "resolve_f2_author_by_aweme", fake_resolve)
+    blogger = _create_douyin_blogger(client, "想抢ID博")
+    await _attach_douyin_work(client, upload, blogger["id"], f"f2:{aweme}#image1", None)
+
+    body = client.post(
+        f"/api/bloggers/{blogger['id']}/resolve-douyin-profile"
+    ).json()
+    assert body["ok"] is False
+    assert "已绑定" in body["attempts"][0]["reason"]
+
+    assert (await _blogger_row(blogger["id"])).platform_user_id is None
+    assert (await _blogger_row(owner["id"])).platform_user_id == "MS4wLy_taken"
+
+
+async def test_resolve_douyin_profile_without_work_reports_reason(
+    client, tmp_path, monkeypatch
+):
+    """没有任何带真实作品 ID 的素材 → 明确提示「手工填一次主页链接」。"""
+    patch_f2(monkeypatch, "DEFAULT_F2_DIR", tmp_path / "无f2库")
+    blogger = _create_douyin_blogger(client, "没有作品ID的博")
+
+    body = client.post(
+        f"/api/bloggers/{blogger['id']}/resolve-douyin-profile"
+    ).json()
+    assert body["ok"] is False
+    assert "作品 ID" in body["reason"]
+    assert body["source"] == ""
+
+
+async def test_resolve_douyin_profile_rejects_other_platform(client):
+    """非抖音博主：接口直接 400（作品下载只有抖音通道）。"""
+    xhs = _create_blogger(client, "小红书博主")
+    resp = client.post(f"/api/bloggers/{xhs['id']}/resolve-douyin-profile")
+    assert resp.status_code == 400
+    assert "抖音" in resp.json()["detail"]
+
+
+async def test_resolve_douyin_profile_unknown_blogger_404(client):
+    resp = client.post("/api/bloggers/999999/resolve-douyin-profile")
+    assert resp.status_code == 404

@@ -1019,6 +1019,187 @@ def test_load_f2_authors_tolerates_missing_db_and_table(tmp_path):
     assert f2.load_f2_authors(empty) == []
 
 
+# ── 按作品 ID 反查作者（-M one；用注入的执行器，不真跑 f2）──
+
+
+def _f2_dir_with_video_db(tmp_path: Path, rows=()) -> Path:
+    """造一个 f2 工作目录：含 douyin_videos.db 的 video_info 表（作品 → 作者映射）。"""
+    f2_dir = tmp_path / "f2videos"
+    f2_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(f2_dir / f2.F2_VIDEO_DB)
+    conn.execute(
+        "CREATE TABLE video_info (aweme_id TEXT, sec_user_id TEXT, nickname TEXT)"
+    )
+    conn.executemany("INSERT INTO video_info VALUES (?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return f2_dir
+
+
+def test_load_f2_video_authors_reads_mapping_and_tolerates_missing(tmp_path):
+    """作品级映射可读；库/表缺失一律当空（实测本机长期没有这个库）。"""
+    assert f2.load_f2_video_authors(tmp_path / "不存在") == {}
+
+    f2_dir = _f2_dir_with_video_db(
+        tmp_path, [("7624898240707091963", "MS4wLjABAAAAaaa", "1123木头人")]
+    )
+    assert f2.load_f2_video_authors(f2_dir) == {
+        "7624898240707091963": {
+            "sec_user_id": "MS4wLjABAAAAaaa",
+            "nickname": "1123木头人",
+        }
+    }
+
+    empty = tmp_path / "emptyvideos"
+    empty.mkdir()
+    sqlite3.connect(empty / f2.F2_VIDEO_DB).close()  # 有库无表
+    assert f2.load_f2_video_authors(empty) == {}
+
+
+def test_build_f2_one_command_flags():
+    """单作品反查命令：`-M one` + 作品链接 + 命名模板 + 下载根。"""
+    url = "https://www.douyin.com/note/7624898240707091963"
+    cmd = f2.build_f2_one_command(url, download_root=Path("D:/tmp/f2resolve"))
+
+    assert cmd[1:4] == ["-m", "f2", "dy"]
+    assert cmd[cmd.index("-u") + 1] == url
+    assert cmd[cmd.index("-M") + 1] == "one"
+    assert cmd[cmd.index("-n") + 1] == f2.POST_NAMING_TEMPLATE
+    assert cmd[cmd.index("-p") + 1] == str(Path("D:/tmp/f2resolve"))
+
+
+def test_build_f2_one_command_omits_optional_flags():
+    cmd = f2.build_f2_one_command("https://www.douyin.com/note/1")
+    assert "-p" not in cmd and "--auto-cookie" not in cmd
+
+
+def test_resolve_author_by_aweme_succeeds_on_new_user_row_despite_exit_code(tmp_path):
+    """成功信号是「f2 用户库多了一行」，**不是退出码**。
+
+    实测 f2 跑 `-M one` 必然以退出码 1 结束：它写完作者资料后去写 ``video_info``，
+    而该 checkout 给作品数据加了 ``caption`` 字段却没同步表结构（`table video_info
+    has no column named caption`）。作者资料落在崩溃之前——这里把退出码固定成 1，
+    锁死「不看退出码」这个口径，防止有人「顺手」把它改成 rc == 0 才算成功。
+    """
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def fake_runner(cmd, cwd):
+        conn = sqlite3.connect(Path(cwd) / f2.F2_AUTHOR_DB)
+        conn.execute(
+            "INSERT INTO user_info_web VALUES (?, ?, ?)",
+            ("MS4wLjABAAAAnew", "1123木头人", 27),
+        )
+        conn.commit()
+        conn.close()
+        return 1, ""
+
+    res = f2.resolve_f2_author_by_aweme(
+        f2_dir, "7624898240707091963", runner=fake_runner
+    )
+
+    assert res["ok"] is True
+    assert res["sec_user_id"] == "MS4wLjABAAAAnew"
+    assert res["nickname"] == "1123木头人"
+    assert res["detected"] == "user_info_new"
+    assert res["rc"] == 1  # 退出码 1 但结果有效
+    assert res["cmd"][res["cmd"].index("-M") + 1] == "one"
+
+
+def test_resolve_author_by_aweme_uses_default_note_url(tmp_path):
+    """只给作品 ID 时按 `note/<id>` 拼链接（实测图集作品这条链接可用）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    seen: list[list[str]] = []
+
+    def fake_runner(cmd, cwd):
+        seen.append(cmd)
+        return 0, ""
+
+    f2.resolve_f2_author_by_aweme(f2_dir, "7624898240707091963", runner=fake_runner)
+    assert seen[0][seen[0].index("-u") + 1] == (
+        "https://www.douyin.com/note/7624898240707091963"
+    )
+
+
+def test_resolve_author_by_aweme_falls_back_to_video_info(tmp_path):
+    """没有新增行（作者已在 f2 库里）时退回作品级映射。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    conn = sqlite3.connect(f2_dir / f2.F2_VIDEO_DB)
+    conn.execute(
+        "CREATE TABLE video_info (aweme_id TEXT, sec_user_id TEXT, nickname TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO video_info VALUES (?, ?, ?)",
+        ("7624898240707091963", "MS4wLjABAAAAold", "1123木头人"),
+    )
+    conn.commit()
+    conn.close()
+
+    res = f2.resolve_f2_author_by_aweme(
+        f2_dir, "7624898240707091963", runner=lambda cmd, cwd: (0, "")
+    )
+    assert res["ok"] is True
+    assert res["sec_user_id"] == "MS4wLjABAAAAold"
+    assert res["detected"] == "video_info"
+
+
+def test_resolve_author_by_aweme_reports_reason_when_nothing_new(tmp_path):
+    """既没新增行、也没有作品级映射 → 明确失败原因（不猜）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    res = f2.resolve_f2_author_by_aweme(
+        f2_dir, "7624898240707091963", runner=lambda cmd, cwd: (1, "")
+    )
+    assert res["ok"] is False
+    assert res["sec_user_id"] == ""
+    assert "没有新增作者记录" in res["reason"]
+
+
+def test_resolve_author_by_aweme_rejects_ambiguous_multiple_new_rows(tmp_path):
+    """一次多出两个新账号时不猜是谁（宁可不填，也不写错 ID）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def fake_runner(cmd, cwd):
+        conn = sqlite3.connect(Path(cwd) / f2.F2_AUTHOR_DB)
+        conn.executemany(
+            "INSERT INTO user_info_web VALUES (?, ?, ?)",
+            [("MS4wLjABAAAAx", "甲", 1), ("MS4wLjABAAAAy", "乙", 1)],
+        )
+        conn.commit()
+        conn.close()
+        return 0, ""
+
+    res = f2.resolve_f2_author_by_aweme(
+        f2_dir, "7624898240707091963", runner=fake_runner
+    )
+    assert res["ok"] is False
+    assert "无法确定" in res["reason"]
+
+
+def test_resolve_author_by_aweme_cleans_temp_download_root(tmp_path):
+    """反查用的临时产物目录用完即删（f2 一旦不崩就会真下这个作品）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    roots: list[Path] = []
+
+    def fake_runner(cmd, cwd):
+        roots.append(Path(cmd[cmd.index("-p") + 1]))
+        (roots[-1] / "douyin" / "post" / "某作者").mkdir(parents=True, exist_ok=True)
+        return 1, ""
+
+    f2.resolve_f2_author_by_aweme(f2_dir, "7624898240707091963", runner=fake_runner)
+    assert roots and not roots[0].exists()
+
+
+def test_resolve_author_by_aweme_reports_runner_failure(tmp_path):
+    """执行器抛异常 → 明确的失败原因，不向上抛（调用方据此提示用户）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def boom(cmd, cwd):
+        raise OSError("f2 起不来")
+
+    res = f2.resolve_f2_author_by_aweme(f2_dir, "1", runner=boom)
+    assert res["ok"] is False
+    assert "OSError" in res["reason"]
+
+
 def test_build_f2_command_default_flags():
     """默认命令：主页作品 + 全部日期 + 指定下载根 + **带作品 ID 的命名模板**。"""
     author = {"sec_user_id": "MS4wLjABAAAAaaa", "nickname": "里香"}

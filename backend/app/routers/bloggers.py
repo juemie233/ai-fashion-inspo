@@ -401,6 +401,40 @@ async def update_blogger(
         raise HTTPException(status_code=409, detail=e.message)
 
 
+@router.post("/{blogger_id}/resolve-douyin-profile", status_code=status.HTTP_200_OK)
+async def resolve_douyin_profile_api(
+    blogger_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """解析抖音博主的主页标识（sec_user_id + 主页链接），供「下载所有作品」直接可用。
+
+    使用场景：从抖音「我的喜欢 / 我的收藏」采回来的素材只带**作者昵称**（f2 把原作者
+    写进文件名，目录名却是「我」），补建的博主没有主页链接 → 详情页按钮点不动，只能
+    手工补链接。本接口按成本从低到高尝试：本地互推 → f2 用户库按昵称唯一命中（离线）
+    → 拿素材里的**真实作品 ID** 跑一次 ``f2 -M one`` 反查作者（联网，约 20~40 秒，
+    故前端需给足超时并提示等待）。
+
+    安全：联网反查回来的作者昵称必须与博主名一致，且该账号未被别的博主占用，否则
+    **不写库**、只返回原因（细节见 ``blogger_enrichment_service.resolve_douyin_profile``）。
+
+    Returns:
+        ``{"ok", "blogger_id", "name", "profile_url", "platform_user_id",
+        "ip_location", "source", "attempts", "reason"}``；
+        非抖音博主返回 400，博主不存在返回 404；解析失败是 200 + ``ok=false``
+        （带可读原因，前端提示用户手工补链接）。
+    """
+    from app.services.blogger_enrichment_service import resolve_douyin_profile
+
+    try:
+        blogger = await blogger_service.get(db, blogger_id)
+    except PersonNotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message) from e
+    if blogger.platform != "douyin":
+        raise HTTPException(
+            status_code=400, detail="仅抖音博主支持：作品下载走 f2 的抖音通道"
+        )
+    return await resolve_douyin_profile(db, blogger)
+
+
 @router.post("/{blogger_id}/promote", response_model=BloggerOut)
 async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """把「自动登记」的博主纳入追踪（source 改回 manual）。

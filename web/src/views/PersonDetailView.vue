@@ -6,7 +6,7 @@
  */
 
 import { usePersonDetail } from '@/composables/usePersonDetail'
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
@@ -17,8 +17,7 @@ import PersonPhotoSets from '@/components/person/detail/PersonPhotoSets.vue'
 import PersonBloggerFaceRegister from '@/components/person/detail/PersonBloggerFaceRegister.vue'
 import PersonModelFaceRegister from '@/components/person/detail/PersonModelFaceRegister.vue'
 import PersonGroupCard from '@/components/person/detail/PersonGroupCard.vue'
-import { useF2Import } from '@/composables/useF2Import'
-import { downloadWorksDisabledReason, worksDownloadOptions } from '@/utils/bloggerWorks'
+import { useWorksDownload } from '@/composables/useWorksDownload'
 
 const {
   personId,
@@ -79,7 +78,17 @@ async function onFaceChanged() {
 }
 
 // ── 「下载所有作品」（仅穿搭博主：点名她的主页链接，让 f2 翻全量下载并入库）──
-const { status: f2Status, loadStatus: loadF2Status, submit: submitF2Import } = useF2Import()
+// 素材来自抖音「我的喜欢 / 我的收藏」时博主可能没有主页链接：composable 会先用素材里的
+// 真实作品 ID 自动解析出作者主页，再提交下载（解析失败会给出后端原因）
+const {
+  loadStatus: loadF2Status,
+  resolving: worksResolving,
+  state: worksDownload,
+  downloadAllWorks,
+} = useWorksDownload(
+  () => (kind.value === 'blogger' && detail.value ? detail.value : null),
+  loadDetail,
+)
 
 // 进博主页时读一次 f2 状态（模特页没有这个入口，不为此多发请求）：
 // 按钮的可用性既要看人物够不够格，也要看 f2 通道本身是否就绪
@@ -90,30 +99,6 @@ watch(
   },
   { immediate: true },
 )
-
-/** 按钮禁用状态与原因：先看人物（平台/主页链接），再看 f2 通道就绪度 */
-const worksDownload = computed(() => {
-  const person = detail.value
-  if (!person || kind.value !== 'blogger') return { disabled: true, reason: '' }
-  const personReason = downloadWorksDisabledReason(person)
-  if (personReason) return { disabled: true, reason: personReason }
-  const { value: status } = f2Status
-  // 状态还没回来、或后端版本较旧（status 里没有这一档口径）时**先放行**，让后端给出
-  // 准确理由：否则「新前端 + 还没重启的后端」会让按钮永久禁用，用户只看到一句
-  // 无从下手的提示——而禁用态的意义本来就是「说清为什么不能点」
-  if (!status || status.profiles_available === undefined) return { disabled: false, reason: '' }
-  if (!status.profiles_available) {
-    return { disabled: true, reason: status.profiles_reason || 'f2 通道未就绪' }
-  }
-  return { disabled: false, reason: '' }
-})
-
-/** 提交「下载该博主全部作品」任务（并发保护与提示由 useF2Import.submit 统一处理） */
-async function downloadAllWorks() {
-  const url = (detail.value?.profile_url ?? '').trim()
-  if (!url) return
-  await submitF2Import(worksDownloadOptions(url))
-}
 </script>
 
 <template>
@@ -134,6 +119,8 @@ async function downloadAllWorks() {
           :profile-url-safe="isProfileUrlSafe"
           :works-download-disabled="worksDownload.disabled"
           :works-download-reason="worksDownload.reason"
+          :works-download-needs-resolve="worksDownload.needsResolve"
+          :works-download-resolving="worksResolving"
           @download-works="downloadAllWorks"
           @edit="showForm = true"
           @delete="handleDelete"

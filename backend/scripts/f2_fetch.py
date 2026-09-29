@@ -3,9 +3,11 @@
 import importlib.util
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -20,6 +22,7 @@ from .f2_common import (  # noqa: E402
     DEFAULT_FETCH_SINCE_DAYS,
     F2_AUTHOR_DB,
     F2_DOWNLOAD_SUBDIR,
+    F2_VIDEO_DB,
     LIKE_NAMING_TEMPLATE,
     POST_NAMING_TEMPLATE,
     WINDOW_MARGIN_DAYS,
@@ -214,6 +217,228 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
             "ip_location": parse_ip_location(ip_location or ""),
         }
     return profiles
+
+
+def load_f2_video_authors(f2_dir: Path) -> dict[str, dict]:
+    """读取 f2 作品库的「作品 → 作者」映射（``video_info`` 表）。
+
+    为什么单独读这张表：``video_info`` 存着 f2 下过的作品的 ``aweme_id`` 与
+    ``sec_user_id``/``nickname``——**作品级**映射，不用按昵称猜，也就不会认错人
+    （昵称匹配的命中率实测极低，见 :func:`resolve_f2_author_by_aweme`）。
+
+    实测本机的 ``douyin_videos.db`` 长期不存在：只有单作品（``-M one``）与主页作品
+    模式会写它，点赞/收藏模式的写入在 f2 源码里被注释掉了。文件/表/列缺失一律当空。
+
+    Args:
+        f2_dir: f2 工作目录（其下有 douyin_videos.db）。
+
+    Returns:
+        ``{aweme_id: {"sec_user_id", "nickname"}}``；不可读时返回空 dict。
+    """
+    db = f2_dir / F2_VIDEO_DB
+    if not db.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT aweme_id, sec_user_id, nickname FROM video_info"
+            ).fetchall()
+        except sqlite3.Error:
+            return {}
+    finally:
+        conn.close()
+    return {
+        str(aweme_id): {
+            "sec_user_id": sec_user_id or "",
+            "nickname": nickname or "",
+        }
+        for aweme_id, sec_user_id, nickname in rows
+        if aweme_id
+    }
+
+
+def build_f2_one_command(
+    work_url: str,
+    download_root: Path | None = None,
+    naming: str | None = None,
+    auto_cookie: str | None = None,
+) -> list[str]:
+    """构造「按单个作品反查作者」的 f2 命令（``-M one``）。
+
+    ``-M one`` 让 f2 走 ``fetch_one_video(aweme_id)`` 拉作品详情，详情里带着**作者**的
+    ``sec_user_id``，f2 随即把作者资料写进自己的用户库（见
+    :func:`resolve_f2_author_by_aweme`）。
+
+    Args:
+        work_url: 作品链接（``https://www.douyin.com/note/<aweme_id>`` 或
+            ``.../video/<aweme_id>``，也可以是 ``v.douyin.com`` 短链）。
+        download_root: 传给 f2 的 ``-p``。反查不关心媒体产物，但**必须**给一个
+            临时目录：f2 的这套 checkout 若被修好（见 :func:`resolve_f2_author_by_aweme`
+            的说明）就会真的下这个作品，落到素材库里就是一份重复产物。
+        naming: 传给 f2 的 ``-n`` 命名模板（缺省 :data:`POST_NAMING_TEMPLATE`）。
+        auto_cookie: 浏览器名（chrome / chromium / edge …）。
+
+    Returns:
+        可直接交给 subprocess 的参数列表。
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "f2",
+        "dy",
+        "-u",
+        work_url,
+        "-M",
+        "one",
+        "-n",
+        naming or POST_NAMING_TEMPLATE,
+    ]
+    if download_root is not None:
+        cmd += ["-p", str(download_root)]
+    if auto_cookie:
+        cmd += ["--auto-cookie", auto_cookie]
+    return cmd
+
+
+def resolve_f2_author_by_aweme(
+    f2_dir: Path,
+    aweme_id: str,
+    work_url: str | None = None,
+    naming: str | None = None,
+    auto_cookie: str | None = None,
+    runner=None,
+) -> dict:
+    """拿一个抖音作品 ID 让 f2 反查作者（= f2 用户库里的**新增**账号）。
+
+    为什么需要：排在「我的喜欢 / 我的收藏」下的作品只保留了作者**昵称**（f2 把原作者
+    写进文件名，目录名却是「我」），而「下载 TA 的全部作品」必须知道作者的
+    ``sec_user_id``。按昵称猜要 f2 恰好见过那个账号，实测 439 个缺口博主只命中 1 个；
+    **作品 ID 才是精确的**——让 f2 跑一次 ``-M one``，它会拉到作品详情（内含作者
+    ``sec_user_id``）并把作者资料 INSERT 进 ``douyin_users.db``。
+
+    ⚠️ 两条实测结论，决定了这里的判定口径：
+
+    1. **不看退出码**：f2 的这次运行必然以退出码 1 结束——它写完作者资料后去写
+       ``douyin_videos.db`` 的 ``video_info``，而该 checkout 给作品数据加了 ``caption``
+       字段却没同步表结构（``table video_info has no column named caption``）。作者资料
+       落在崩溃**之前**，所以成功信号是「用户库多了一行」。
+    2. **可能没有新增行**：作者本来就在 f2 库里时不会多行。此时退回到
+       :func:`load_f2_video_authors` 的作品级映射（f2 修好表结构后可用；修好前为空）。
+
+    Args:
+        f2_dir: f2 工作目录（cwd 必须是它，否则另起一个空作者库）。
+        aweme_id: 作品 ID。
+        work_url: 作品链接；缺省按 ``https://www.douyin.com/note/<aweme_id>`` 拼。
+        naming: 传给 f2 的 ``-n`` 命名模板。
+        auto_cookie: 传给 f2 的 ``--auto-cookie`` 浏览器名。
+        runner: 可注入的执行器（签名 ``(cmd, cwd) -> (returncode, info)``），便于单测。
+
+    Returns:
+        ``{"ok", "sec_user_id", "nickname", "ip_location", "detected", "rc", "cmd",
+        "reason"}``；``detected`` ∈ ``user_info_new``（新增作者行）/ ``video_info``
+        （作品级映射）。``ok=False`` 时 ``reason`` 说明原因（调用方据此提示用户）。
+    """
+    runner = runner or _default_runner
+    aweme_id = str(aweme_id or "").strip()
+    url = (work_url or "").strip() or f"https://www.douyin.com/note/{aweme_id}"
+
+    before = {a["sec_user_id"] for a in load_f2_authors(f2_dir)}
+
+    # 临时产物目录：反查不需要媒体，但 f2 一旦不崩就会真下这个作品（见函数说明）
+    tmp_root = Path(tempfile.mkdtemp(prefix="f2_resolve_"))
+    try:
+        cmd = build_f2_one_command(
+            url, download_root=tmp_root, naming=naming, auto_cookie=auto_cookie
+        )
+        try:
+            rc, _info = runner(cmd, f2_dir)
+        except Exception as exc:  # noqa: BLE001 —— 单次反查失败由调用方提示，不抛
+            return {
+                "ok": False,
+                "sec_user_id": "",
+                "nickname": "",
+                "ip_location": "",
+                "detected": "",
+                "rc": -1,
+                "cmd": cmd,
+                "reason": f"调用 f2 失败：{type(exc).__name__}: {exc}",
+            }
+
+        new_rows = [
+            a for a in load_f2_authors(f2_dir) if a["sec_user_id"] not in before
+        ]
+        if len(new_rows) == 1:
+            sec_user_id = new_rows[0]["sec_user_id"]
+            ip_location = ""
+            try:
+                ip_location = str(
+                    (load_f2_profiles(f2_dir).get(sec_user_id) or {}).get(
+                        "ip_location"
+                    )
+                    or ""
+                )
+            except Exception:  # noqa: BLE001 —— 属地是赠品，读不到不影响反查
+                ip_location = ""
+            return {
+                "ok": True,
+                "sec_user_id": sec_user_id,
+                "nickname": new_rows[0]["nickname"],
+                "ip_location": ip_location,
+                "detected": "user_info_new",
+                "rc": rc,
+                "cmd": cmd,
+                "reason": "",
+            }
+        if len(new_rows) > 1:
+            names = "、".join(a["nickname"] for a in new_rows[:5])
+            return {
+                "ok": False,
+                "sec_user_id": "",
+                "nickname": "",
+                "ip_location": "",
+                "detected": "",
+                "rc": rc,
+                "cmd": cmd,
+                "reason": (
+                    f"一次跑出 {len(new_rows)} 个新账号（{names}），无法确定哪个是"
+                    "这个作品的作者"
+                ),
+            }
+
+        # 没有新增：作者大概率已在 f2 库里，退回作品级映射
+        video = load_f2_video_authors(f2_dir).get(aweme_id)
+        if video and video.get("sec_user_id"):
+            sec_user_id = video["sec_user_id"]
+            return {
+                "ok": True,
+                "sec_user_id": sec_user_id,
+                "nickname": video.get("nickname") or "",
+                "ip_location": "",
+                "detected": "video_info",
+                "rc": rc,
+                "cmd": cmd,
+                "reason": "",
+            }
+
+        return {
+            "ok": False,
+            "sec_user_id": "",
+            "nickname": "",
+            "ip_location": "",
+            "detected": "",
+            "rc": rc,
+            "cmd": cmd,
+            "reason": (
+                "f2 没有新增作者记录：该作品的作者可能已在 f2 用户库里（此时按昵称"
+                "匹配更省事），也可能这个作品已失效 / 需要重新登录抖音"
+            ),
+        }
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def build_f2_command(

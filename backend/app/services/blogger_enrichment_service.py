@@ -30,6 +30,12 @@
   ⚠️ 2026-09-27 修：原先这三种情况也写跳过表，而补全列表会排除跳过博主 → 跑过一次
   补全后列表被清空（实测缺口抖音博主 439 个、跳过表 450 行、列表 0 个），
   「一键补全」从此不出现在界面上（用户问的就是「一朵芝士为什么不在一键补全列表里」）。
+
+**抖音：按需解析主页标识**（:func:`resolve_douyin_profile`，博主详情页点「下载所有作品」
+时触发，不进批量补全任务）：从「我的喜欢 / 我的收藏」采回来的素材只带作者昵称、目录名
+却是「我」，补建出的博主没有主页链接 → 按钮点不动。该函数按「本地互推 → f2 用户库按昵称
+唯一命中（离线）→ 拿素材的真实作品 ID 跑一次 ``f2 -M one`` 反查作者（联网）」逐级尝试。
+联网那一步**必须交叉验证昵称**且不抢别人已占用的 ID，不一致就不写库（详见函数说明）。
 """
 
 from __future__ import annotations
@@ -366,6 +372,292 @@ async def backfill_douyin_from_f2(
     await db.commit()
     logger.info(f"抖音博主 #{blogger.id}「{blogger.name}」IP 属地已回填：{ip_location}")
     return {**detail, "status": "updated", "ip_location": ip_location}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  抖音：按「作品 ID」反查作者 sec_user_id（按需，单博主一次）
+# ═══════════════════════════════════════════════════════════════
+
+"""抖音作品 ID 形态：19 位数字（与 ``scripts.f2_plan.platform_id_for`` 的新口径一致）。
+
+**必须是数字**：历史素材存的是 12 位十六进制短哈希（``f2:184ef89706bf#image2``），
+那是文件名合成的，追不回作者——按位数挡掉，别拿去给 f2 当作品 ID。
+"""
+_DOUYIN_AWEME_IN_PLATFORM_ID_RE = re.compile(r"^f2:(\d{15,})#")
+_DOUYIN_AWEME_IN_URL_RE = re.compile(r"/(?:note|video)/(\d{15,})")
+
+
+def aweme_id_from_source(
+    source_platform_id: str | None, source_url: str | None
+) -> str | None:
+    """从素材的来源字段提取抖音作品 ID（纯函数；取不到返回 None）。
+
+    先看 ``source_platform_id``（``f2:{aweme_id}#image1``，抖音作品本身是权威身份），
+    再退回 ``source_url``（``https://www.douyin.com/note/{aweme_id}``）——两者其一
+    有真实作品 ID 即可反查作者。
+
+    Args:
+        source_platform_id: 素材的平台 ID。
+        source_url: 素材的原始链接。
+
+    Returns:
+        19 位作品 ID；两处都没有（或只有历史哈希）时返回 None。
+    """
+    m = _DOUYIN_AWEME_IN_PLATFORM_ID_RE.match((source_platform_id or "").strip())
+    if m:
+        return m.group(1)
+    m = _DOUYIN_AWEME_IN_URL_RE.search((source_url or "").strip())
+    return m.group(1) if m else None
+
+
+async def find_blogger_awemes(
+    db: AsyncSession, blogger_id: int, limit: int = 3
+) -> list[tuple[str, str]]:
+    """挑出可用于反查作者的抖音作品：``[(aweme_id, source_url)]``（最新优先）。
+
+    为什么取最新几条而不是固定第一条：反查要真跑一次 f2（约 20~40 秒），而被删 /
+    转私密的作品反查不到作者——素材越新越可能还在。同一作品的多个素材只留一条。
+
+    Args:
+        db: 数据库会话。
+        blogger_id: 博主 ID。
+        limit: 最多返回多少个作品。
+
+    Returns:
+        去重后的 ``(aweme_id, source_url)`` 列表（``source_url`` 可能为空串）；
+        该博主没有任何带真实作品 ID 的素材时返回空列表。
+    """
+    from app.models.inspiration import NOT_DELETED, Inspiration
+    from app.models.person import InspirationBlogger
+
+    rows = (
+        await db.execute(
+            select(Inspiration.source_platform_id, Inspiration.source_url)
+            .join(
+                InspirationBlogger,
+                InspirationBlogger.inspiration_id == Inspiration.id,
+            )
+            .where(InspirationBlogger.blogger_id == blogger_id, NOT_DELETED)
+            .order_by(Inspiration.created_at.desc())
+            .limit(max(limit * 8, 24))
+        )
+    ).all()
+
+    works: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for platform_id, url in rows:
+        aweme_id = aweme_id_from_source(platform_id, url)
+        if not aweme_id or aweme_id in seen:
+            continue
+        seen.add(aweme_id)
+        works.append((aweme_id, (url or "").strip()))
+        if len(works) >= limit:
+            break
+    return works
+
+
+async def _sec_id_taken(
+    db: AsyncSession, sec_user_id: str, exclude_blogger_id: int
+) -> bool:
+    """该 ``sec_user_id`` 是否已绑定到**别的**抖音博主（不抢别人的 ID）。"""
+    row = (
+        await db.execute(
+            select(Blogger.id).where(
+                Blogger.platform == "douyin",
+                Blogger.platform_user_id == sec_user_id,
+                Blogger.id != exclude_blogger_id,
+            )
+        )
+    ).first()
+    return row is not None
+
+
+async def _apply_resolved_profile(
+    db: AsyncSession, blogger: Blogger, sec_user_id: str, ip_location: str = ""
+) -> None:
+    """把反查到的作者信息写回博主（**只补空缺**，已有值一律不动）。
+
+    - ``platform_user_id``：有了它，「下载所有作品」与 IP 属地回填都能定位账号；
+    - ``profile_url``：仅为空时按抖音主页模板补；
+    - ``ip_location``：f2 顺手带回来的属地，同样只补空缺（手填/CSV 导入的值优先）。
+    """
+    blogger.platform_user_id = sec_user_id
+    if not (blogger.profile_url or "").strip():
+        blogger.profile_url = f"{_DOUYIN_PROFILE_URL}{sec_user_id}"
+    if ip_location and not (blogger.ip_location or "").strip():
+        blogger.ip_location = ip_location
+    await db.commit()
+    logger.info(
+        f"抖音博主 #{blogger.id}「{blogger.name}」已解析出主页（sec_user_id={sec_user_id}）"
+    )
+
+
+async def resolve_douyin_profile(
+    db: AsyncSession, blogger: Blogger, max_works: int = 3
+) -> dict:
+    """按需解析一个抖音博主的主页标识（``sec_user_id`` + 主页链接）。
+
+    用户场景：抖音「我的喜欢 / 我的收藏」采回来的素材只带了**作者昵称**（f2 把原作者
+    写进文件名，目录名却是「我」），补建出来的博主没有主页链接 → 博主详情页的
+    「下载所有作品」点不动，只能手工去补链接。这里给出**不用手填**的三条路径，按
+    成本从低到高依次尝试：
+
+    1. **本地互推**：已有 ``platform_user_id`` 只缺链接 → 直接拼（零网络、零风险）；
+    2. **f2 用户库按昵称唯一命中**（离线）：昵称归一化后两侧都唯一才用（安全前提与
+       :func:`backfill_douyin_ids_from_f2` 完全一致：重名整条剔除 + 不抢别人已占用的 ID）；
+    3. **按作品 ID 让 f2 反查**（联网，约 20~40 秒）：拿库里这个博主某个素材的真实
+       作品 ID 跑一次 ``f2 -M one``，f2 会拉到作品详情（内含作者 ``sec_user_id``）并把
+       作者资料写进它自己的用户库，我们把新增的那一行取回来（细节见
+       ``scripts.f2_fetch.resolve_f2_author_by_aweme``）。
+
+    ⚠ **第 3 条必须交叉验证昵称**：f2 反查回来的是「这个作品的作者」，如果它与博主名
+    归一化后不一致，说明素材归属本身可能有问题（或作品已失效被替换）——此时**不写库**，
+    宁可报错让用户看到，也不能把一个陌生账号绑到这个博主头上。同一条保护也用在
+    「该 sec_user_id 已被别的博主占用」时。
+
+    Args:
+        db: 数据库会话。
+        blogger: 抖音博主行（其它平台直接返回失败原因）。
+        max_works: 联网反查最多尝试几个作品（每个约 20~40 秒）。
+
+    Returns:
+        ``{"ok", "blogger_id", "name", "profile_url", "platform_user_id",
+        "ip_location", "source", "attempts", "reason"}``；``source`` ∈
+        ``local`` / ``f2_nickname`` / ``f2_aweme``（``ok=False`` 时为空串）。
+        失败只回原因，**不改库**。
+    """
+    import asyncio
+
+    from scripts import import_f2_downloads as f2
+
+    detail: dict = {
+        "ok": False,
+        "blogger_id": blogger.id,
+        "name": blogger.name,
+        "profile_url": blogger.profile_url or "",
+        "platform_user_id": blogger.platform_user_id or "",
+        "ip_location": blogger.ip_location or "",
+        "source": "",
+        "attempts": [],
+        "reason": "",
+    }
+
+    if blogger.platform != "douyin":
+        return {**detail, "reason": "仅抖音博主支持：作品下载走 f2 的抖音通道"}
+
+    key = f2.normalize_author(blogger.name or "")
+    uid = (blogger.platform_user_id or "").strip()
+    url = (blogger.profile_url or "").strip()
+
+    # ── 1. 本地互推：有 ID 缺链接，直接拼（零网络）──
+    if uid and not url:
+        await _apply_resolved_profile(db, blogger, uid)
+        return {
+            **detail,
+            "ok": True,
+            "profile_url": blogger.profile_url or "",
+            "platform_user_id": uid,
+            "source": "local",
+            "reason": "",
+        }
+    if uid and url:
+        return {
+            **detail,
+            "ok": True,
+            "source": "local",
+            "reason": "该博主已有主页链接，无需解析",
+        }
+
+    # ── 2. f2 用户库按昵称唯一命中（离线）──
+    if key:
+        profiles = await asyncio.to_thread(load_f2_profile_map)
+        matches = [
+            sec
+            for sec, profile in profiles.items()
+            if f2.normalize_author(profile.get("nickname") or "") == key
+        ]
+        if len(matches) == 1 and not await _sec_id_taken(db, matches[0], blogger.id):
+            sec_user_id = matches[0]
+            ip_location = str((profiles.get(sec_user_id) or {}).get("ip_location") or "")
+            await _apply_resolved_profile(db, blogger, sec_user_id, ip_location)
+            return {
+                **detail,
+                "ok": True,
+                "profile_url": blogger.profile_url or "",
+                "platform_user_id": sec_user_id,
+                "ip_location": blogger.ip_location or "",
+                "source": "f2_nickname",
+                "reason": "",
+            }
+
+    # ── 3. 按作品 ID 让 f2 反查（联网；每个作品一次 f2 运行）──
+    works = await find_blogger_awemes(db, blogger.id, limit=max_works)
+    if not works:
+        return {
+            **detail,
+            "reason": (
+                "这位博主的素材里没有可用的抖音作品 ID（历史素材只有文件名哈希，"
+                "追不回作者）：请在博主编辑弹窗里手工填一次抖音主页链接"
+            ),
+        }
+
+    attempts: list[dict] = []
+    for aweme_id, source_url in works:
+        result = await asyncio.to_thread(
+            f2.resolve_f2_author_by_aweme,
+            f2.DEFAULT_F2_DIR,
+            aweme_id,
+            source_url or None,
+        )
+        sec_user_id = str(result.get("sec_user_id") or "")
+        f2_nickname = str(result.get("nickname") or "")
+        attempts.append(
+            {
+                "aweme_id": aweme_id,
+                "ok": bool(result.get("ok")),
+                "sec_user_id": sec_user_id,
+                "nickname": f2_nickname,
+                "reason": str(result.get("reason") or ""),
+            }
+        )
+        if not result.get("ok") or not sec_user_id:
+            continue
+        if f2.normalize_author(f2_nickname) != key:
+            # 反查到的作者 ≠ 这位博主：不写库（见 docstring 的交叉验证说明）
+            attempts[-1]["reason"] = (
+                f"反查到的作者是「{f2_nickname}」，与博主名「{blogger.name}」不一致，"
+                "已放弃写入（宁可不填，也不把别人的账号绑到 TA 头上）"
+            )
+            continue
+        if await _sec_id_taken(db, sec_user_id, blogger.id):
+            attempts[-1]["reason"] = "该账号已绑定到另一位博主，不重复绑定"
+            continue
+
+        await _apply_resolved_profile(
+            db, blogger, sec_user_id, str(result.get("ip_location") or "")
+        )
+        return {
+            **detail,
+            "ok": True,
+            "profile_url": blogger.profile_url or "",
+            "platform_user_id": sec_user_id,
+            "ip_location": blogger.ip_location or "",
+            "source": "f2_aweme",
+            "attempts": attempts,
+            "reason": "",
+        }
+
+    return {
+        **detail,
+        "attempts": attempts,
+        "reason": (
+            "自动解析没成功："
+            + "；".join(
+                f"作品 {a['aweme_id']}：{a['reason'] or '未知原因'}" for a in attempts
+            )
+            + "。可在博主编辑弹窗里手工填抖音主页链接后重试"
+        ),
+    }
 
 
 async def mark_skipped(db: AsyncSession, blogger_ids: list[int], reason: str) -> int:

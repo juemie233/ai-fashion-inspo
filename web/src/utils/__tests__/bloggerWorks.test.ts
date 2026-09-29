@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canDownloadWorks,
+  canResolveProfile,
   downloadWorksDisabledReason,
   worksDownloadOptions,
 } from '../bloggerWorks'
@@ -43,6 +44,32 @@ describe('downloadWorksDisabledReason', () => {
     expect(downloadWorksDisabledReason({ platform: 'douyin', profile_url: null })).toContain(
       '主页链接',
     )
+  })
+
+  it('缺链接但能自动解析时不给出禁用原因（按钮可用，改由确认框说明先解析）', () => {
+    expect(downloadWorksDisabledReason({ platform: 'douyin', profile_url: null }, true)).toBe('')
+    // 非抖音即使能「解析」也不放行
+    expect(downloadWorksDisabledReason({ platform: 'xiaohongshu' }, true)).toContain('仅支持抖音')
+  })
+})
+
+describe('canResolveProfile', () => {
+  it('抖音 + 没主页链接 + f2 可用 → 可自动解析', () => {
+    expect(canResolveProfile({ platform: 'douyin', profile_url: null }, true)).toBe(true)
+    expect(canResolveProfile({ platform: 'douyin', profile_url: '  ' }, true)).toBe(true)
+  })
+
+  it('f2 状态未知（还没回来 / 后端较旧）先放行，由后端给出准确理由', () => {
+    expect(canResolveProfile({ platform: 'douyin', profile_url: null }, undefined)).toBe(true)
+  })
+
+  it('f2 通道明确不可用时不放行（解析与下载都走 f2）', () => {
+    expect(canResolveProfile({ platform: 'douyin', profile_url: null }, false)).toBe(false)
+  })
+
+  it('已有主页链接 / 非抖音 → 不需要解析', () => {
+    expect(canResolveProfile({ platform: 'douyin', profile_url: DOUYIN_URL }, true)).toBe(false)
+    expect(canResolveProfile({ platform: 'xiaohongshu', profile_url: null }, true)).toBe(false)
   })
 })
 

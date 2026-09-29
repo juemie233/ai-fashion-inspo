@@ -209,9 +209,40 @@ export interface AvatarSetResult {
   blogger?: Blogger
 }
 
+/** 「解析抖音主页」结果：ok=false 时 reason 是给用户看的原因（提示后让 TA 手工补链接） */
+export interface DouyinProfileResolveResult {
+  ok: boolean
+  blogger_id: number
+  name: string
+  profile_url: string
+  platform_user_id: string
+  /** f2 顺手带回来的 IP 属地（只补空缺；空串表示没拿到） */
+  ip_location: string
+  /** 解析路径：local（本地互推）/ f2_nickname（f2 用户库昵称命中）/ f2_aweme（按作品反查） */
+  source: string
+  reason: string
+}
+
 /** 穿搭博主 API（/api/bloggers）：含人脸特征注册与人物组绑定 */
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
+
+  /**
+   * 解析抖音博主的主页标识（sec_user_id + 主页链接）。
+   *
+   * 用在「下载所有作品」之前：素材来自抖音「我的喜欢 / 我的收藏」时只带作者昵称，补建的
+   * 博主没有主页链接。后端按「本地互推 → f2 用户库昵称唯一命中（离线）→ 拿素材的真实作品
+   * ID 跑一次 f2 反查作者（联网）」逐级解析；联网那一步实测 20~40 秒，故单独放大超时
+   * （默认 30 秒会先超时）。
+   */
+  async resolveDouyinProfile(bloggerId: number): Promise<DouyinProfileResolveResult> {
+    const { data } = await apiClient.post<DouyinProfileResolveResult>(
+      `/bloggers/${bloggerId}/resolve-douyin-profile`,
+      undefined,
+      { timeout: 120000 },
+    )
+    return data
+  },
 
   // ── 人物组（方案 B）：同一现实人物跨平台账号绑定 ──
 

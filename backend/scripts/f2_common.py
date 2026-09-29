@@ -55,6 +55,14 @@ DEFAULT_F2_DOWNLOAD_ROOT = resolve_download_root()
 """f2 的作者库文件名（含 user_info_web 表：sec_user_id / nickname / aweme_count）。"""
 F2_AUTHOR_DB = "douyin_users.db"
 
+"""f2 的作品库文件名（含 video_info 表：aweme_id / sec_user_id / nickname）。
+
+它是**作品 → 作者**的离线映射（不需要按昵称猜），但只有 f2 的「单作品」
+（``-M one``）与「主页作品」模式会写它——点赞/收藏模式里的写入在 f2 源码里是
+注释掉的（见 f2 的 ``handler.handle_user_like``）。
+"""
+F2_VIDEO_DB = "douyin_videos.db"
+
 """f2 默认下载根目录（发布模式；与传给 f2 的 `-p` 同一个根）。"""
 DEFAULT_F2_ROOT = DEFAULT_F2_DOWNLOAD_ROOT / "douyin" / "post"
 

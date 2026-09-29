@@ -29,12 +29,41 @@ export function canDownloadWorks(subject: WorksDownloadSubject): boolean {
   return subject.platform === 'douyin' && Boolean((subject.profile_url ?? '').trim())
 }
 
-/** 按钮不可用的原因（可用时返回空串），用于 hover 提示 */
-export function downloadWorksDisabledReason(subject: WorksDownloadSubject): string {
+/**
+ * 能否「先自动解析抖音主页、再下载」：抖音博主 + 还没有主页链接 + f2 通道可用。
+ *
+ * 由来：抖音「我的喜欢 / 我的收藏」采回来的素材只带**作者昵称**（f2 把原作者写进文件名，
+ * 目录名却是「我」），补建出的博主没有主页链接 → 按钮原来只能禁用，用户得去抖音复制一次
+ * 主页链接再手工填。后端 `POST /api/bloggers/{id}/resolve-douyin-profile` 能用素材里的
+ * **真实作品 ID** 反查出作者主页（细节见 backend 的 blogger_enrichment_service），所以
+ * 「缺链接」不再是死路，前端据此把这个按钮从「禁用」改成「先解析再下载」。
+ *
+ * `profilesAvailable` 传 `undefined`（f2 状态还没回来 / 后端版本较旧）时**先放行**：与
+ * 按钮可用性一贯的宽严口径一致——能点、让后端给出准确理由，好过永久禁用只留一句提示。
+ */
+export function canResolveProfile(
+  subject: WorksDownloadSubject,
+  profilesAvailable?: boolean,
+): boolean {
+  if (subject.platform !== 'douyin') return false
+  if ((subject.profile_url ?? '').trim()) return false
+  return profilesAvailable !== false
+}
+
+/** 按钮不可用的原因（可用时返回空串），用于 hover 提示。
+ *
+ * `canResolve` 为 true 表示「没链接但能自动解析」——此时按钮可用，原因留空
+ * （由确认弹窗说明会先解析主页）。
+ */
+export function downloadWorksDisabledReason(
+  subject: WorksDownloadSubject,
+  canResolve = false,
+): string {
   if (subject.platform !== 'douyin') {
     return '仅支持抖音博主：作品下载走 f2 的抖音通道'
   }
   if (!(subject.profile_url ?? '').trim()) {
+    if (canResolve) return ''
     return '该博主还没有主页链接：先点「编辑」补上抖音主页链接，才能定位到她的作品'
   }
   return ''
