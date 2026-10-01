@@ -143,8 +143,16 @@ async function onSaveMax() {
   }
 }
 
-/** 采集选项：入库后自动登记来源作者为穿搭博主（默认开） */
+/** 采集选项：入库后自动登记来源作者为穿搭博主（默认开；**收藏模式恒不生效**） */
 const registerBloggers = ref(true)
+
+/** 实际下发的开关：收藏模式恒 false。
+ *
+ * 后端也强制同一口径（``f2_import.personal_registers_bloggers``），这里前端一起收口是为了
+ * 界面上不出现「勾了却没生效」的假选项——收藏跨主题（股票/哲学/公考/游戏），自动建号
+ * 只会堆与穿搭无关的空壳。
+ */
+const registersBloggers = computed(() => registerBloggers.value && !isCollect.value)
 
 // ── 「先扫描、后下载」（仅收藏模式）：先列收藏夹，勾掉不要的，再只下勾选的 ──
 
@@ -212,7 +220,7 @@ async function onDownloadCheckedFolders() {
     fetch: true,
     mode: 'collection',
     like_user: likeUser.value.trim() || undefined,
-    register_bloggers: registerBloggers.value,
+    register_bloggers: registersBloggers.value,
     like_max_counts: safeMaxCounts.value,
     collect_ids: checkedFolderIds.value,
   })
@@ -233,7 +241,7 @@ async function onDownloadAllCollects() {
     fetch: true,
     mode: 'collection',
     like_user: likeUser.value.trim() || undefined,
-    register_bloggers: registerBloggers.value,
+    register_bloggers: registersBloggers.value,
     like_max_counts: safeMaxCounts.value,
     allow_all_collect: true,
   })
@@ -248,7 +256,7 @@ async function onSubmit() {
     fetch: true,
     mode: props.mode,
     like_user: likeUser.value.trim() || undefined,
-    register_bloggers: registerBloggers.value,
+    register_bloggers: registersBloggers.value,
     // 0 = 全量（显式传，表示本次就要全量，别被配置顶掉）
     like_max_counts: safeMaxCounts.value,
   })
@@ -328,11 +336,18 @@ async function onSubmit() {
     </div>
 
     <div class="f2l-options">
-      <a-checkbox v-model="registerBloggers">同时登记穿搭博主并绑定素材</a-checkbox>
-      <span class="f2l-option-tip">
-        未登记的来源作者会自动建成抖音博主（标记「自动登记」）并绑定本批素材；
-        它们<b>不算已登记博主</b>，所以不会被「一键获取素材」下载——想追踪某个人时，
-        去「博主管理」点「纳入追踪」。
+      <template v-if="!isCollect">
+        <a-checkbox v-model="registerBloggers">同时登记穿搭博主并绑定素材</a-checkbox>
+        <span class="f2l-option-tip">
+          未登记的来源作者会自动建成抖音博主（标记「自动登记」）并绑定本批素材；
+          它们<b>不算已登记博主</b>，所以不会被「一键获取素材」下载——想追踪某个人时，
+          去「博主管理」点「纳入追踪」。
+        </span>
+      </template>
+      <span v-else class="f2l-option-tip">
+        收藏<b>不会</b>自动补建博主：收藏天然跨主题（股票/哲学/公考/游戏…），自动建号只会
+        在库里堆与穿搭无关的空壳，素材照常入库。确实需要归属人时，去「抖音采集历史」的
+        结果面板点「登记博主」。
       </span>
     </div>
 

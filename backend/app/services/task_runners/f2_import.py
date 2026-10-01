@@ -87,6 +87,27 @@ _COLLECT_FOLDER_MAP_NAME = "_collect_folders.json"
 UNCLASSIFIED_COLLECTION_NAME = "未分类收藏"
 
 
+def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
+    """本次「我的列表」导入是否补建来源作者博主（纯函数，唯一口径）。
+
+    **收藏模式永远不补建**（2026-10-01 用户口径）：收藏是个「先收起来」的池子，天然跨主题
+    （实测夹里有股票/哲学/公考/游戏），自动建号只会在库里堆出与穿搭无关的空壳——实测
+    451 位自动登记博主里只有 1% 名字与穿搭相关，用户还得手工清理一遍。**「我的喜欢」保留**
+    自动登记：那是主要素材来源，素材需要归属人。
+
+    收藏批次若确实要归属人，仍可在「抖音采集历史」的结果面板手工点「登记博主」补
+    （见 ``POST /api/scraper/f2-tasks/{id}/results/register-bloggers``）。
+
+    Args:
+        fetch_mode: ``post`` / ``like`` / ``collection``。
+        requested: 调用方是否要求登记（接口参数，缺省 True）。
+
+    Returns:
+        归一化后的开关；建任务与执行都用它，保证任务记录与实际行为一致。
+    """
+    return bool(requested) and fetch_mode != "collection"
+
+
 def _personal_scan_root(f2, fetch_mode: str):
     """「我的列表」模式的产物根目录（点赞 / 收藏）。"""
     return (
@@ -289,7 +310,8 @@ async def create_f2_import_task(
             ``settings.f2_like_user``）——两种模式都要**你自己**的主页链接
             （点赞与收藏列表都只有本人可见）。
         register_bloggers: 「我的列表」入库后是否把未登记的来源作者补建成抖音博主
-            并绑定本批素材（默认 True；只对 like / collection 模式生效）。补建的博主
+            并绑定本批素材（默认 True；**只对 like 生效**：collection 由
+            :func:`personal_registers_bloggers` 强制关闭，见那里的说明）。补建的博主
             标记为「自动登记」，不算已登记博主、不进「一键获取素材」的下载白名单。
         like_max_counts: 「我的列表」最多翻多少条（None 表示执行时取
             ``settings.f2_like_max_counts``；0/None 表示全量翻到底）。两种模式通用；
@@ -328,7 +350,9 @@ async def create_f2_import_task(
             "include_unknown_authors": include_unknown_authors,
             "fetch_mode": fetch_mode,
             "like_user": like_user,
-            "register_bloggers": register_bloggers,
+            "register_bloggers": personal_registers_bloggers(
+                fetch_mode, register_bloggers
+            ),
             "like_max_counts": like_max_counts,
             "profiles": list(profiles or []),
             "collect_ids": list(collect_ids or []),
@@ -847,7 +871,11 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     # 「先扫描、后下载」选中的收藏夹（夹 ID）：非空时只下这些夹（见
     # _fetch_collects_by_folder_stage），空列表保持老口径（平铺收藏）
     collect_ids = [str(c).strip() for c in (opts.get("collect_ids") or []) if str(c).strip()]
-    register_bloggers = bool(opts.get("register_bloggers", True))
+    # 同一个纯函数在建任务时也用过：直接构造的任务（测试/旧记录）在这里再兜一层，
+    # 保证「收藏不补建博主」这条口径不依赖调用方
+    register_bloggers = personal_registers_bloggers(
+        fetch_mode, bool(opts.get("register_bloggers", True))
+    )
     since_days = opts.get("since_days")
     if since_days is None:
         since_days = settings.f2_fetch_since_days

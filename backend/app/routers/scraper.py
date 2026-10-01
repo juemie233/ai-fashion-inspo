@@ -81,7 +81,9 @@ async def create_f2_import(
     register_bloggers: bool = Query(
         True,
         description=(
-            "mode=like/collection 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）"
+            "mode=like 时把未登记的来源作者补建成抖音博主并绑定素材（默认开）。"
+            "**collection 恒不补建**（收藏跨主题，自动建号只会堆空壳），如需归属请在"
+            "结果面板手工「登记博主」"
         ),
     ),
     like_max_counts: int | None = Query(
@@ -166,9 +168,10 @@ async def create_f2_import(
             窗口都一样——能收窄翻页量的只有 `like_max_counts`。
         like_user: mode=like/collection 时的「我的主页链接 / sec_user_id」
             （缺省取已保存配置；两种列表都只有本人可见）。
-        register_bloggers: mode=like/collection 时，入库后是否把**未登记的来源作者**
-            补建成抖音博主并绑定本批素材（默认开）。补建的博主标记为「自动登记」，
-            不算已登记博主、不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
+        register_bloggers: mode=like 时，入库后是否把**未登记的来源作者**补建成抖音博主
+            并绑定本批素材（默认开）。补建的博主标记为「自动登记」，不算已登记博主、
+            不进「一键获取素材」的下载白名单；在博主列表点「纳入追踪」才进。
+            **collection 模式忽略此参数**（恒不补建，见 ``personal_registers_bloggers``）。
         like_max_counts: mode=like/collection 时最多翻多少条（0/缺省=全量翻到底）。
             列表最新在前，填 100~200 可把日常增量降到一两页；代价是两次运行之间
             新增超过该值时会漏。
@@ -368,8 +371,8 @@ async def f2_task_results_register_bloggers(
     """把本批未绑定博主的来源作者补登记为抖音博主并绑定素材（幂等，可重复点）。
 
     自动路径在「我的喜欢」入库后（创建任务时的 ``register_bloggers``）；这个入口
-    用于手工回填：老批次、或建任务时关掉了自动登记。补建的博主标记为「自动登记」，
-    不进「一键获取素材」的下载白名单。
+    用于手工回填：老批次、建任务时关掉了自动登记，或**收藏批次**（收藏恒不自动补建）。
+    补建的博主标记为「自动登记」，不进「一键获取素材」的下载白名单。
     """
     return await scraper_service.register_f2_task_bloggers(db, task_id)
 

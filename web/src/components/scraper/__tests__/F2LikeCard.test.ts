@@ -452,13 +452,26 @@ describe('F2LikeCard', () => {
         fetch: true,
         mode: 'collection',
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: true,
+        // 收藏恒不补建博主（2026-10-01 口径）：开关不出现，值也恒为 false
+        register_bloggers: false,
         like_max_counts: 0,
         // 确认弹窗通过后才带的显式许可：后端默认拒绝平铺导入（含未勾选的夹）
         allow_all_collect: true,
       },
     })
     expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+
+  it('收藏模式不显示「同时登记穿搭博主」开关（该机制对收藏已取消）', async () => {
+    const collectWrapper = await mountCard(READY_COLLECT_STATUS(), 'collection')
+    expect(collectWrapper.text()).not.toContain('同时登记穿搭博主')
+    // 但要说清为什么，以及去哪里手工补登记
+    expect(collectWrapper.text()).toContain('自动补建博主')
+    expect(collectWrapper.text()).toContain('登记博主')
+
+    // 点赞模式保持不变
+    const likeWrapper = await mountCard()
+    expect(likeWrapper.text()).toContain('同时登记穿搭博主')
   })
 
   it('收藏模式：收藏不可用时提交按钮禁用（不借用点赞的可用性）', async () => {
@@ -530,7 +543,7 @@ describe('F2LikeCard', () => {
         fetch: true,
         mode: 'collection',
         like_user: 'https://www.douyin.com/user/MS4wLjABAAAAme',
-        register_bloggers: true,
+        register_bloggers: false, // 收藏恒不补建博主（见上一条用例）
         like_max_counts: 0,
         // **必须是逗号分隔的字符串**，不能是数组：数组会被 axios 序列化成
         // `collect_ids[]=111&collect_ids[]=333`，后端按 collect_ids 取值 → 收到空

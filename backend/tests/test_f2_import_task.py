@@ -3180,6 +3180,59 @@ async def test_execute_f2_import_like_mode_can_skip_blogger_registration(
         assert (await db.execute(select(Blogger))).scalars().all() == []
 
 
+def test_personal_registers_bloggers_truth_table():
+    """「我的列表」是否补建博主：like 看开关，**collection 恒不补建**（纯函数口径）。"""
+    from app.services.task_runners.f2_import import personal_registers_bloggers
+
+    assert personal_registers_bloggers("like", True) is True
+    assert personal_registers_bloggers("like", False) is False
+    # 收藏：显式要求也不补建（2026-10-01 口径）
+    assert personal_registers_bloggers("collection", True) is False
+    assert personal_registers_bloggers("collection", False) is False
+    # 发布模式本来就不走这条链路
+    assert personal_registers_bloggers("post", True) is True
+    assert personal_registers_bloggers("post", False) is False
+
+
+async def test_execute_f2_import_collect_mode_does_not_register_bloggers(
+    client, f2_like_tree, auto_settings, monkeypatch
+):
+    """「我的收藏」入库后**不补建博主**：素材照常入库，博主库一个不动。
+
+    背景（2026-10-01）：收藏是「先收起来」的池子，天然跨主题（股票/哲学/公考/游戏），
+    自动建号只在库里堆与穿搭无关的空壳（实测 451 位自动登记博主里只有 1% 与穿搭相关）。
+    「我的喜欢」保持自动登记，所以这里同时断言任务记录里的开关被归一成 False——
+    口径由 ``personal_registers_bloggers`` 一处说了算。
+    """
+    from sqlalchemy import select
+
+    from app.models.person import Blogger
+    from app.models.task import TaskQueue
+
+    auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
+    _stub_collect_fetch(monkeypatch)
+    # 收藏产物根指向同一棵树（文件名同样带原作者前缀，具备补建博主的一切条件）
+    patch_f2(monkeypatch, "DEFAULT_F2_COLLECT_ROOT", f2_like_tree)
+
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(
+            db,
+            fetch=True,
+            fetch_mode="collection",
+            register_bloggers=True,  # 显式要求也无效：收藏恒不补建
+            allow_all_collect=True,
+        )
+        task_id = task.id
+        assert task.result["register_bloggers"] is False
+        await task_runner.execute_f2_import(db, task)
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert "bloggers" not in stored.result  # 登记阶段没有跑
+        assert stored.result["import"]["imported"] == 2  # 素材照常入库
+        assert (await db.execute(select(Blogger))).scalars().all() == []
+
+
 async def test_execute_f2_import_post_mode_does_not_register_bloggers(
     client, f2_tree, auto_settings, monkeypatch
 ):

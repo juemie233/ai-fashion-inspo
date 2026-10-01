@@ -13,6 +13,10 @@
      用户在博主列表确认后点「纳入追踪」即改回 manual。
   3. **幂等**：博主按**归一化名**匹配复用（与导入侧的绑定口径一致），素材-博主
      关联走 `blogger_service.link_batch`（已存在自动跳过），重复执行不会产生重复记录。
+
+**只有「我的喜欢」会自动走到这里**（2026-10-01 口径）：收藏链路恒不补建，见
+``task_runners/f2_import.personal_registers_bloggers``；收藏批次要归属人只能从结果面板
+手工调 ``POST /api/scraper/f2-tasks/{id}/results/register-bloggers``（走本模块同一套规则）。
 """
 
 from __future__ import annotations
