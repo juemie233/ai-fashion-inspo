@@ -1,9 +1,10 @@
 /**
- * 博主详情页「下载所有作品」的判据与提交参数（纯函数，便于单测）。
+ * 「按博主下载作品」的判据、点名标识与提交参数（纯函数，便于单测）。
  *
- * 为什么单独成文件：这个按钮的可用性同时取决于「人物够不够格」（抖音 + 主页链接）
- * 与「f2 通道是否就绪」，判据混在组件里既没法测（该页用 Arco 卡片 + 瀑布流，测试
- * 环境挂不出来），也容易与后端 `/api/scraper/f2-import` 的 profiles 口径漂移。
+ * 为什么单独成文件：这些判据既用在博主详情页的「下载所有作品」按钮上，也用在采集页
+ * 「一键获取素材（抖音 · f2）」的博主选择器上——两处必须同一口径（都提交后端
+ * `/api/scraper/f2-import` 的 `profiles` 参数）；混在组件里既没法测（那两处分别是
+ * Arco 卡片 + 瀑布流 / 表格，测试环境挂不出来），也容易与后端口径漂移。
  *
  * 后端口径（routers/scraper.py 的 profiles 参数）：传博主主页链接或 sec_user_id，
  * **不要求该博主先在 f2 用户库里**（f2 的下载目标只来自它自己的用户库，库里没有的
@@ -17,6 +18,38 @@ import type { F2ImportOptions } from '@/composables/useF2Import'
 export interface WorksDownloadSubject {
   platform?: string | null
   profile_url?: string | null
+  platform_user_id?: string | null
+}
+
+/** 博主的「f2 点名标识」：优先主页链接，退回 sec_user_id（后端两者都收）。
+ *
+ * 两者都为空 → 空串，表示当前点名不了（要先解析或手工填主页链接）。抽成函数是因为
+ * 「有没有标识」这个判据在详情页按钮与采集页选择器上必须一致。
+ */
+export function bloggerProfileKey(subject: {
+  profile_url?: string | null
+  platform_user_id?: string | null
+}): string {
+  return (subject.profile_url ?? '').trim() || (subject.platform_user_id ?? '').trim()
+}
+
+/** 合并多组点名标识并去重（去空白、丢空项、按原值去重，保持先后顺序）。
+ *
+ * 采集页「按博主全量下载」有两个来源：选择器选的已登记博主 + 手填的主页链接。
+ * 同一个人被两种方式都点名时只提交一次，避免 f2 白跑一遍。
+ */
+export function mergeProfileKeys(...sources: string[][]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const list of sources) {
+    for (const raw of list) {
+      const value = (raw ?? '').trim()
+      if (!value || seen.has(value)) continue
+      seen.add(value)
+      out.push(value)
+    }
+  }
+  return out
 }
 
 /**

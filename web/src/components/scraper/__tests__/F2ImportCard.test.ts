@@ -66,6 +66,19 @@ const linkStub = defineComponent({
     return h('a', this.$slots.default?.())
   },
 })
+/** 博主选择器桩：渲染候选项文案，测试通过 emit('change', ids) 模拟选中 */
+const selectStub = defineComponent({
+  name: 'ASelect',
+  props: {
+    modelValue: { type: Array, default: () => [] },
+    options: { type: Array, default: () => [] },
+  },
+  emits: ['update:modelValue', 'change', 'search'],
+  render() {
+    const labels = (this.options as Array<{ label: string }>).map((o) => o.label)
+    return h('div', { class: 'select-stub' }, labels.join('|'))
+  },
+})
 const checkboxStub = defineComponent({
   name: 'ACheckbox',
   props: { modelValue: { type: Boolean, default: false } },
@@ -136,10 +149,16 @@ const STUBS = {
   'a-button': buttonStub,
   'a-input': inputStub,
   'a-input-number': inputNumberStub,
+  'a-select': selectStub,
   'a-spin': spinStub,
   'a-link': linkStub,
   'a-checkbox': checkboxStub,
   'a-table': tableStub,
+}
+
+/** 博主选择器候选响应（GET /bloggers） */
+function makePickerBloggers(items: unknown[] = [PICKER_BLOGGER]) {
+  return { items, total: items.length, page: 1, size: 40 }
 }
 
 /** 用给定的 GET 实现挂载卡片 */
@@ -152,8 +171,11 @@ async function mountWithResponses(
   return wrapper
 }
 
+/** 默认挂载：f2 状态走 /scraper/f2-status，博主选择器候选走 /bloggers */
 async function mountCard(status = makeStatus()) {
-  return mountWithResponses(() => Promise.resolve({ data: status }))
+  return mountWithResponses((url) =>
+    Promise.resolve({ data: url === '/bloggers' ? makePickerBloggers() : status }),
+  )
 }
 
 /** 博主清单响应（GET /scraper/f2-authors） */
@@ -191,14 +213,16 @@ function makeAuthors(over: Record<string, unknown> = {}) {
   }
 }
 
-/** 状态与博主清单分开返回：清单请求走清单，其余（f2-status）走状态 */
+/** 状态与博主清单分开返回：清单请求走清单，博主候选走选择器，其余（f2-status）走状态 */
 async function mountCardWithAuthors(
   authors = makeAuthors(),
   status = makeStatus(),
 ): Promise<VueWrapper> {
-  return mountWithResponses((url) =>
-    Promise.resolve({ data: url === '/scraper/f2-authors' ? authors : status }),
-  )
+  return mountWithResponses((url) => {
+    if (url === '/scraper/f2-authors') return Promise.resolve({ data: authors })
+    if (url === '/bloggers') return Promise.resolve({ data: makePickerBloggers() })
+    return Promise.resolve({ data: status })
+  })
 }
 
 /** 按文案定位链接 */
@@ -207,6 +231,16 @@ function linkByText(wrapper: VueWrapper, text: string) {
 }
 
 const SEC = 'MS4wLjABAAAACyG6qmWLGt5BbCvwkAfMpEf3nhGwlQqSG1MjwDIGokuUHJnIkwJzxDPu-1RRrfvk'
+
+/** 选择器候选里的一位已登记抖音博主（唐思瑶ya 的真实 sec_user_id，便于人工核对） */
+const PICKER_BLOGGER = {
+  id: 315,
+  name: '唐思瑶ya',
+  platform: 'douyin',
+  profile_url: `https://www.douyin.com/user/${SEC}`,
+  platform_user_id: SEC,
+  inspiration_count: 12,
+}
 
 /** 卡片里「下载她全部作品」按钮（按文案定位） */
 function profileButton(wrapper: VueWrapper) {
@@ -288,6 +322,60 @@ describe('F2ImportCard · 按博主全量下载', () => {
 
     // reused 也返回 task_id → 仍算提交成功（走同一轮轮询）
     expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+
+  // ── 博主选择器：不必再去抖音复制主页链接 ──
+
+  it('从选择器选中已登记博主即可提交（不用手填链接）', async () => {
+    const wrapper = await mountCard()
+    mocks.post.mockResolvedValue({ data: { task_id: 81, message: '已提交' } })
+
+    // 选择器桩：模拟用户选中「唐思瑶ya」
+    wrapper.findComponent({ name: 'ASelect' }).vm.$emit('change', [PICKER_BLOGGER.id])
+    await flushPromises()
+    await profileButton(wrapper).trigger('click')
+    await flushPromises()
+
+    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
+    expect(params.profiles).toBe(`https://www.douyin.com/user/${SEC}`)
+    expect(wrapper.emitted('submitted')).toBeTruthy()
+  })
+
+  it('选择器选中的博主与手填链接合并去重后一起提交', async () => {
+    const wrapper = await mountCard()
+    mocks.post.mockResolvedValue({ data: { task_id: 82, message: '已提交' } })
+
+    wrapper.findComponent({ name: 'ASelect' }).vm.$emit('change', [PICKER_BLOGGER.id])
+    await flushPromises()
+    // 手填里重复点名同一个人 + 另加一个库外账号
+    await wrapper
+      .find('.f2-profile input')
+      .setValue(`https://www.douyin.com/user/${SEC}, MS4wLjABAAAAother0000`)
+    await profileButton(wrapper).trigger('click')
+    await flushPromises()
+
+    const params = (mocks.post.mock.calls[0][2] as { params: { profiles: string } }).params
+    // 选择器在前、手填在后；重复的那一个只提交一次
+    expect(params.profiles).toBe(`https://www.douyin.com/user/${SEC},MS4wLjABAAAAother0000`)
+  })
+
+  it('选中的博主缺主页标识时给出提示，且没有可提交标识时按钮禁用', async () => {
+    const wrapper = await mountWithResponses((url) =>
+      Promise.resolve({
+        data:
+          url === '/bloggers'
+            ? makePickerBloggers([{ ...PICKER_BLOGGER, profile_url: null, platform_user_id: null }])
+            : makeStatus(),
+      }),
+    )
+
+    wrapper.findComponent({ name: 'ASelect' }).vm.$emit('change', [PICKER_BLOGGER.id])
+    await flushPromises()
+
+    expect(wrapper.find('.f2-profile-warn').text()).toContain('还没有主页链接')
+    expect(wrapper.find('.f2-profile-warn').text()).toContain('自动解析主页')
+    // 只有这一位、且她没有标识 → 没有可提交的点名对象
+    expect(profileButton(wrapper).attributes('disabled')).toBeDefined()
   })
 })
 

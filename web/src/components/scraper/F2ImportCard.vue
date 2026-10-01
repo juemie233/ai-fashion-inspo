@@ -13,6 +13,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { TableColumnData } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
+import { useDouyinBloggerPicker } from '@/composables/useDouyinBloggerPicker'
+import { mergeProfileKeys } from '@/utils/bloggerWorks'
 import { authorColumnSorter } from '@/utils/f2Authors'
 import { describeRunningTask } from '@/utils/taskPresentation'
 
@@ -125,15 +127,38 @@ async function onSubmit() {
  * 为什么需要独立入口：f2 的下载目标**只来自它自己的用户库**，库里没有的账号
  * 跑不到——从「我的喜欢」里发现一个新博主时，走「一键获取素材」会得到
  * 「下载 0 个作者 + 入库 0」。这个入口用主页链接直接点名，不依赖 f2 用户库。
+ *
+ * 点名方式两种，可混用：① 上面的选择器从**已登记抖音博主**里挑（名字/主页链接现成）；
+ * ② 手粘主页链接（库外的博主、或只想试一个人的时候）。
  */
 const profileText = ref('')
 
-/** 逗号/空白分隔 → 数组；过滤空项 */
-const profileList = computed(() =>
+/** 手填的标识（逗号/空白分隔 → 数组；过滤空项） */
+const manualProfileList = computed(() =>
   profileText.value
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean),
+)
+
+// 博主选择器：打开卡片就取一次「素材数最多的前 N 位抖音博主」，之后按关键字远程搜索
+const {
+  selectOptions: pickerOptions,
+  loading: pickerLoading,
+  selectedIds: pickerSelectedIds,
+  selectedKeys: pickerSelectedKeys,
+  missing: pickerMissing,
+  resolving: pickerResolving,
+  search: searchBloggers,
+  onChange: onPickerChange,
+  resolveMissing: resolveMissingProfiles,
+  clear: clearPicker,
+} = useDouyinBloggerPicker()
+onMounted(() => void searchBloggers())
+
+/** 最终提交的标识：选择器选中的博主 + 手填链接，去重 */
+const profileList = computed(() =>
+  mergeProfileKeys(pickerSelectedKeys.value, manualProfileList.value),
 )
 const canSubmitProfile = computed(() => profileList.value.length > 0)
 
@@ -146,6 +171,7 @@ async function onSubmitProfile() {
   })
   if (taskId) {
     profileText.value = ''
+    clearPicker()
     emit('submitted')
     await loadStatus()
   }
@@ -218,10 +244,19 @@ async function toggleAuthors() {
     <div class="f2-profile">
       <div class="f2-profile-title">按博主全量下载</div>
       <div class="f2-profile-row">
-        <a-input
-          v-model="profileText"
-          placeholder="博主主页链接 或 sec_user_id（如 https://www.douyin.com/user/MS4wLjABAAAA…，多个用逗号分隔）"
+        <!-- 选择器：直接从已登记抖音博主里挑（可搜索、可多选） -->
+        <a-select
+          v-model="pickerSelectedIds"
+          :options="pickerOptions"
+          :loading="pickerLoading"
+          :filter-option="false"
+          multiple
+          allow-search
           allow-clear
+          placeholder="搜索并选择已登记抖音博主（可多选）"
+          class="f2-profile-picker"
+          @search="searchBloggers"
+          @change="onPickerChange"
         />
         <a-button
           type="outline"
@@ -232,13 +267,31 @@ async function toggleAuthors() {
           下载她全部作品
         </a-button>
       </div>
+      <div class="f2-profile-row" style="margin-top: 8px">
+        <a-input
+          v-model="profileText"
+          placeholder="也可直接粘贴主页链接 / sec_user_id（库外博主，多个用逗号分隔）"
+          allow-clear
+        />
+      </div>
+      <!-- 选中的博主缺主页标识：先解析再提交（否则后端点名不到她） -->
+      <div v-if="pickerMissing.length" class="f2-profile-warn">
+        <span
+          >{{
+            pickerMissing.map((p) => p.name).join('、')
+          }}
+          还没有主页链接/sec_user_id，提交时会被跳过：</span
+        >
+        <a-link :loading="pickerResolving" @click="resolveMissingProfiles()">自动解析主页</a-link>
+        <span class="f2-tip">（用她的素材作品 ID 反查，约 20~40 秒/人）</span>
+      </div>
       <div class="f2-profile-tip">
         从「我的喜欢」里发现一个没订阅过的博主？用这里。f2 只认它自己见过的账号，
-        所以「一键获取素材」下不了新博主（会得到 0 个作者）；这个入口直接按主页链接
-        点名，<b>首次自动翻全量</b>（不是只拿最近几天），下完自动入库。
+        所以「一键获取素材」下不了新博主（会得到 0 个作者）；这个入口直接点名，
+        <b>首次自动翻全量</b>（不是只拿最近几天），下完自动入库。
         <br />
-        ⚠ 抖音号（如 72906514384）与 v.douyin.com 短链不支持——请填完整主页链接里的
-        <code>user/</code> 后面那段。
+        ⚠ 抖音号（如 72906514384）与 v.douyin.com 短链不支持——手填时请用完整主页链接里的
+        <code>user/</code> 后面那段；从上面选择器挑的博主不受此限。
       </div>
     </div>
 
@@ -470,6 +523,21 @@ async function toggleAuthors() {
 .f2-profile-row :deep(.arco-input-wrapper) {
   flex: 1;
   min-width: 260px;
+}
+/* 博主选择器与下方手填框同宽（flex 一份），避免选择器被挤成很窄的一条 */
+.f2-profile-picker {
+  flex: 1;
+  min-width: 320px;
+}
+/* 已选博主缺主页标识：橙色提示行（不阻断提交，但要说清谁会掉队） */
+.f2-profile-warn {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #d97706;
 }
 .f2-profile-tip {
   margin-top: 8px;

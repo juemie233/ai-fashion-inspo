@@ -7,9 +7,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  bloggerProfileKey,
   canDownloadWorks,
   canResolveProfile,
   downloadWorksDisabledReason,
+  mergeProfileKeys,
   worksDownloadOptions,
 } from '../bloggerWorks'
 
@@ -89,5 +91,31 @@ describe('worksDownloadOptions', () => {
 
   it('链接两侧空白会被去掉（避免把带空格的链接当成另一个账号）', () => {
     expect(worksDownloadOptions(`  ${DOUYIN_URL}  `).profiles).toEqual([DOUYIN_URL])
+  })
+})
+
+describe('bloggerProfileKey', () => {
+  it('优先主页链接，退回 sec_user_id（后端两种都收）', () => {
+    expect(bloggerProfileKey({ profile_url: DOUYIN_URL, platform_user_id: 'MS4w_x' })).toBe(
+      DOUYIN_URL,
+    )
+    expect(bloggerProfileKey({ profile_url: '  ', platform_user_id: 'MS4w_x' })).toBe('MS4w_x')
+  })
+
+  it('两者都空 → 空串（采集页选择器据此标记「缺主页链接」）', () => {
+    expect(bloggerProfileKey({})).toBe('')
+    expect(bloggerProfileKey({ profile_url: null, platform_user_id: null })).toBe('')
+  })
+})
+
+describe('mergeProfileKeys', () => {
+  it('合并选择器与手填，去空白、丢空项、按原值去重且保持顺序', () => {
+    expect(mergeProfileKeys([DOUYIN_URL, 'MS4w_x', '  '], [`  ${DOUYIN_URL}  `, 'MS4w_y'])).toEqual(
+      [DOUYIN_URL, 'MS4w_x', 'MS4w_y'],
+    )
+  })
+
+  it('全部为空 → 空数组（提交按钮据此禁用）', () => {
+    expect(mergeProfileKeys([], ['', '   '])).toEqual([])
   })
 })
