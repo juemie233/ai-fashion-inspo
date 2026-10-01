@@ -39,9 +39,6 @@ from app.services.model_face import (
     register_model_face,
 )
 from app.services.person_service import (
-    PersonConflictError,
-    PersonHasInspirationsError,
-    PersonNotFoundError,
     model_service,
 )
 
@@ -124,10 +121,7 @@ async def suggest_models(
 @router.get("/{model_id}", response_model=ModelDetailOut)
 async def get_model(model_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """获取模特详情（含素材数与风格画像）。"""
-    try:
-        model = await model_service.get(db, model_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    model = await model_service.get(db, model_id)
 
     count = await model_service.count_inspirations(db, model_id)
     profile = await model_service.style_profile(db, model_id)
@@ -140,23 +134,13 @@ async def update_model(
     model_id: int, data: ModelUpdate, db: AsyncSession = Depends(get_db)
 ) -> dict:
     """更新模特信息（部分更新；显式传 null 的字段会被清空）。"""
-    try:
-        return await model_service.update(db, model_id, data.model_dump(exclude_unset=True))
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await model_service.update(db, model_id, data.model_dump(exclude_unset=True))
 
 
 @router.delete("/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_model(model_id: int, db: AsyncSession = Depends(get_db)) -> None:
     """删除模特：仅当该模特无关联素材时允许删除，否则返回 400。"""
-    try:
-        await model_service.delete(db, model_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonHasInspirationsError as e:
-        raise HTTPException(status_code=400, detail=e.message)
+    await model_service.delete(db, model_id)
 
 
 @router.get("/{model_id}/inspirations")
@@ -198,10 +182,7 @@ async def list_photo_sets(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """分页获取模特照片组（含照片数与封面）。"""
-    try:
-        items, total = await model_service.list_photo_sets(db, model_id, page, size)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    items, total = await model_service.list_photo_sets(db, model_id, page, size)
     return {"items": items, "total": total, "page": page, "size": size}
 
 
@@ -216,10 +197,7 @@ async def create_photo_set(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """创建模特照片组（组名缺省回退「未命名照片组」）。"""
-    try:
-        return await model_service.create_photo_set(db, model_id, data.name)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    return await model_service.create_photo_set(db, model_id, data.name)
 
 
 @router.get("/{model_id}/photo-sets/{set_id}", response_model=ModelPhotoSetDetailOut)
@@ -231,10 +209,7 @@ async def get_photo_set(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """获取照片组详情（含分页照片列表）。"""
-    try:
-        photo_set = await model_service.get_photo_set(db, set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    photo_set = await model_service.get_photo_set(db, set_id)
     if photo_set.model_id != model_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
 
@@ -252,16 +227,10 @@ async def update_photo_set(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """更新照片组名称。"""
-    try:
-        photo_set = await model_service.get_photo_set(db, set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    photo_set = await model_service.get_photo_set(db, set_id)
     if photo_set.model_id != model_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
-    try:
-        return await model_service.update_photo_set(db, set_id, data.name)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await model_service.update_photo_set(db, set_id, data.name)
 
 
 @router.delete("/{model_id}/photo-sets/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -271,10 +240,7 @@ async def delete_photo_set(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """删除照片组（级联删除照片与物理文件）。"""
-    try:
-        photo_set = await model_service.get_photo_set(db, set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    photo_set = await model_service.get_photo_set(db, set_id)
     if photo_set.model_id != model_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
     await model_service.delete_photo_set(db, set_id)
@@ -293,10 +259,7 @@ async def add_photo_to_set(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """上传一张照片到照片组（组内内容去重）。"""
-    try:
-        photo_set = await model_service.get_photo_set(db, set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    photo_set = await model_service.get_photo_set(db, set_id)
     if photo_set.model_id != model_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
     return await model_service.add_photo_to_set(db, set_id, file, sort_order)
@@ -313,16 +276,10 @@ async def delete_photo(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """删除照片组内的单张照片（校验照片归属 set_id，防跨组误删）。"""
-    try:
-        photo_set = await model_service.get_photo_set(db, set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    photo_set = await model_service.get_photo_set(db, set_id)
     if photo_set.model_id != model_id:
         raise HTTPException(status_code=404, detail="照片组未找到")
-    try:
-        await model_service.delete_photo(db, photo_id, set_id=set_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    await model_service.delete_photo(db, photo_id, set_id=set_id)
     return {"removed": 1}
 
 

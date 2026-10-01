@@ -30,9 +30,6 @@ from app.schemas.person import (
     PersonImportResult,
 )
 from app.services.person_service import (
-    PersonConflictError,
-    PersonHasInspirationsError,
-    PersonNotFoundError,
     blogger_service,
 )
 from app.services.blogger_face import (
@@ -305,12 +302,7 @@ async def link_bloggers_group_api(
         raise HTTPException(status_code=422, detail="target_blogger_id 必须为整数")
     if group_id is not None and not isinstance(group_id, int):
         raise HTTPException(status_code=422, detail="group_id 必须为整数")
-    try:
-        return await link_bloggers(db, blogger_id, target_blogger_id, group_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await link_bloggers(db, blogger_id, target_blogger_id, group_id)
 
 
 @router.post("/groups/unlink", status_code=status.HTTP_200_OK)
@@ -327,12 +319,7 @@ async def unlink_blogger_group_api(
     blogger_id = body.get("blogger_id")
     if not isinstance(blogger_id, int):
         raise HTTPException(status_code=422, detail="blogger_id 必须为整数")
-    try:
-        return await unlink_blogger(db, blogger_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await unlink_blogger(db, blogger_id)
 
 
 @router.post("/groups/{group_id}/set-primary", status_code=status.HTTP_200_OK)
@@ -350,12 +337,7 @@ async def set_primary_blogger_api(
     blogger_id = body.get("blogger_id")
     if not isinstance(blogger_id, int):
         raise HTTPException(status_code=422, detail="blogger_id 必须为整数")
-    try:
-        return await set_primary_blogger(db, group_id, blogger_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await set_primary_blogger(db, group_id, blogger_id)
 
 
 @router.get("/groups/{group_id}", status_code=status.HTTP_200_OK)
@@ -366,19 +348,13 @@ async def group_info_api(
     """查询人物组完整信息（组内各账号 + 主账号）。"""
     from app.services.person.person_groups import get_group_info
 
-    try:
-        return await get_group_info(db, group_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    return await get_group_info(db, group_id)
 
 
 @router.get("/{blogger_id}", response_model=BloggerDetailOut)
 async def get_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """获取博主详情（含素材数与风格画像）。"""
-    try:
-        blogger = await blogger_service.get(db, blogger_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    blogger = await blogger_service.get(db, blogger_id)
 
     count = await blogger_service.count_inspirations(db, blogger_id)
     profile = await blogger_service.style_profile(db, blogger_id)
@@ -391,14 +367,9 @@ async def update_blogger(
     blogger_id: int, data: BloggerUpdate, db: AsyncSession = Depends(get_db)
 ) -> dict:
     """更新博主信息（部分更新；显式传 null 的字段会被清空）。"""
-    try:
-        return await blogger_service.update(
-            db, blogger_id, data.model_dump(exclude_unset=True)
-        )
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+    return await blogger_service.update(
+        db, blogger_id, data.model_dump(exclude_unset=True)
+    )
 
 
 @router.post("/{blogger_id}/resolve-douyin-profile", status_code=status.HTTP_200_OK)
@@ -424,10 +395,7 @@ async def resolve_douyin_profile_api(
     """
     from app.services.blogger_enrichment_service import resolve_douyin_profile
 
-    try:
-        blogger = await blogger_service.get(db, blogger_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message) from e
+    blogger = await blogger_service.get(db, blogger_id)
     if blogger.platform != "douyin":
         raise HTTPException(
             status_code=400, detail="仅抖音博主支持：作品下载走 f2 的抖音通道"
@@ -443,10 +411,7 @@ async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -
     但**不算已登记博主**，因此不会被「一键获取素材（博主主页）」下载。用户确认
     想追踪这个人时点这里，之后增量下载就会带上 TA 的主页作品。
     """
-    try:
-        return await blogger_service.update(db, blogger_id, {"source": "manual"})
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    return await blogger_service.update(db, blogger_id, {"source": "manual"})
 
 
 @router.post("/{blogger_id}/avatar")
@@ -532,12 +497,7 @@ async def delete_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) ->
     """删除博主：仅当该博主无关联素材时允许删除，否则返回 400。"""
     from app.services.person.avatar import delete_avatar_file
 
-    try:
-        await blogger_service.delete(db, blogger_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
-    except PersonHasInspirationsError as e:
-        raise HTTPException(status_code=400, detail=e.message)
+    await blogger_service.delete(db, blogger_id)
     # 清理头像文件（博主已删，避免残留孤儿文件）
     delete_avatar_file(blogger_id)
 

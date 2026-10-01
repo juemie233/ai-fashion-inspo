@@ -11,6 +11,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from app.services.person.base import (
+    PersonConflictError,
+    PersonHasInspirationsError,
+    PersonNotFoundError,
+)
 from app.config import settings
 from app.database import init_db, run_migrations
 from app.db_migrations import compute_schema_version, ensure_schema
@@ -266,6 +271,27 @@ async def destructive_api_key_middleware(
             status_code=403, content={"detail": "API 密钥无效"}
         )
     return await call_next(request)
+
+# ── 人物模块的领域异常 → HTTP 状态码（集中一处，路由层不再逐处转译）──
+# 这三个异常此前在每个路由里被 try/except 手工翻译成 404/409/400（29 处样板，顺带带来
+# ruff B904）。现在只在这里声明一次：服务层直接抛领域异常，由 Starlette 统一转成
+# {"detail": ...}，与原先手工 HTTPException 的响应完全一致。
+@app.exception_handler(PersonNotFoundError)
+async def _person_not_found_handler(request: Request, exc: PersonNotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": exc.message})
+
+
+@app.exception_handler(PersonConflictError)
+async def _person_conflict_handler(request: Request, exc: PersonConflictError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": exc.message})
+
+
+@app.exception_handler(PersonHasInspirationsError)
+async def _person_has_inspirations_handler(
+    request: Request, exc: PersonHasInspirationsError
+) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": exc.message})
+
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:

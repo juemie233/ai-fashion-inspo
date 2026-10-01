@@ -7,7 +7,7 @@
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.person.base import PersonNotFoundError, PersonServiceBase
+from app.services.person.base import PersonServiceBase
 from app.services.person_bio import BioGenerationError, PersonBioInputs, generate_person_bio
 
 # 平台 → 中文标签（与前端 PERSON_PLATFORM_LABELS 保持一致）
@@ -20,10 +20,7 @@ async def generate_person_bio_endpoint(
     person_id: int,
 ) -> dict:
     """生成人物简介（不入库），供前端「AI 生成」按钮调用。"""
-    try:
-        person = await service.get(db, person_id)
-    except PersonNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+    person = await service.get(db, person_id)
 
     style_profile = await service.style_profile(db, person_id)
     top_tags = style_profile.get("top_tags") or []
