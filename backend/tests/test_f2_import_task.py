@@ -7,6 +7,7 @@
 import asyncio
 import json
 import os
+import sqlite3
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -3033,7 +3034,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
     patch_f2(monkeypatch, "f2_available", lambda: True)
     # 缩短轮询间隔与软进度时间常数，让「下载中」的中间态在测试里可观测
     monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
-    monkeypatch.setattr(f2_runner, "_LIKE_PROGRESS_HALF_SECONDS", 1.0)
+    monkeypatch.setattr(f2_runner, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
 
     real_stats = f2.download_tree_stats
 
@@ -3063,7 +3064,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
 
         def _spy_stats(root):
             """每次统计时记下**上一次**落库的实时进度（任务对象由执行器就地改写）。"""
-            info = (task.result or {}).get("like_progress")
+            info = (task.result or {}).get("download_progress")
             if info:
                 live.append((task.progress, dict(info)))
             return real_stats(root)
@@ -3071,7 +3072,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
         patch_f2(monkeypatch, "download_tree_stats", _spy_stats)
         await task_runner.execute_f2_import(db, task)
 
-    assert live, "下载期间没有写入任何 like_progress 快照"
+    assert live, "下载期间没有写入任何 download_progress 快照"
     assert any(progress > 0 for progress, _ in live), "软进度始终为 0%"
     assert any(info["files"] == 3 for _, info in live), "实时计数没有反映新落盘的文件"
     assert max(info["added"] for _, info in live) == 1
@@ -3081,6 +3082,68 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
         stored = await db.get(TaskQueue, task_id)
         assert stored.result["fetch"]["downloaded"]["added"] == 1
         assert stored.result["import"]["imported"] == 3
+
+
+async def test_execute_f2_import_post_mode_reports_live_download_progress(
+    client, f2_tree, monkeypatch
+):
+    """发布模式（逐作者）下载期也要有实时进度：第几位作者 + 已落盘文件数。
+
+    2026-10-01 用户报：下载目录里已经落了两千张图，界面还停在「第 0/1 个作者 · 0%」——
+    因为进度只在**每个作者跑完**后才写一次。现在改为共用「我的喜欢」那套观察器：
+    下载期间每 2 秒写 download_progress（含 author_index/author_total）+ 软进度。
+    """
+    from app.models.task import TaskQueue
+    from app.services.task_runners import f2_import as f2_runner
+
+    f2_dir, root = f2_tree
+    # f2 用户库里放一个作者，否则发布模式没有下载目标（不会进入下载阶段）
+    conn = sqlite3.connect(f2_dir / f2.F2_AUTHOR_DB)
+    conn.execute(
+        "CREATE TABLE user_info_web (sec_user_id TEXT, nickname TEXT, aweme_count INTEGER)"
+    )
+    conn.execute("INSERT INTO user_info_web VALUES ('sec-lixiang', '里香1√', 171)")
+    conn.commit()
+    conn.close()
+    patch_f2(monkeypatch, "f2_available", lambda: True)
+    monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_runner, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
+
+    real_stats = f2.download_tree_stats
+
+    def _slow_download(cmd, cwd):
+        """模拟 f2 逐作者下载：先落一个新文件，再「翻页」一会儿（此刻观察器应已落库）。"""
+        _jpeg(root / "里香1√" / "2025-01-02 10-00-00_#jk_新作品_image_1.jpg", "yellow")
+        time.sleep(0.3)
+        return 0
+
+    monkeypatch.setattr(f2_runner, "_run_subprocess", _slow_download)
+
+    live: list[tuple[int, dict]] = []
+    async with async_session() as db:
+        task = await task_runner.create_f2_import_task(db, fetch=True)
+        task_id = task.id
+
+        def _spy_stats(path):
+            """每次统计时记下**上一次**落库的实时进度。"""
+            info = (task.result or {}).get("download_progress")
+            if info:
+                live.append((task.progress, dict(info)))
+            return real_stats(path)
+
+        patch_f2(monkeypatch, "download_tree_stats", _spy_stats)
+        await task_runner.execute_f2_import(db, task)
+
+    assert live, "发布模式下载期间没有写入任何 download_progress 快照"
+    assert any(progress > 0 for progress, _ in live), "发布模式下载期软进度始终为 0%"
+    # 正在跑的是第 1 个作者（本用例 f2 用户库里只有一位）——修好前这里会是 0
+    assert {info["author_index"] for _, info in live} == {1}
+    assert all(info["author_total"] == 1 for _, info in live)
+    assert any(info["added"] >= 1 for _, info in live), "实时计数没有反映新落盘的文件"
+
+    async with async_session() as db:
+        stored = await db.get(TaskQueue, task_id)
+        assert stored.result["import"]["imported"] == 4  # 原 3 个 + 模拟新落的 1 个
 
 
 async def test_execute_f2_import_like_mode_keeps_unregistered_authors(

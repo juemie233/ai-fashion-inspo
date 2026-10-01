@@ -1,4 +1,4 @@
-/**
+﻿/**
  * useF2Import 测试：一键获取素材的可用性检查与任务提交。
  *
  * 关注两件事：① 提交参数要按界面选项透传（后端据此决定是否下载/收窄范围）；
@@ -251,7 +251,7 @@ describe('useF2Import', () => {
           total: 21,
           stage: 'download',
           fetch_mode: 'post',
-          like_progress: null,
+          download_progress: null,
         },
       }),
     })
@@ -276,7 +276,7 @@ describe('useF2Import', () => {
           total: 0,
           stage: 'download',
           fetch_mode: 'like',
-          like_progress: { files: 3517, bytes: 2168000000, added: 3163, added_bytes: 2000000 },
+          download_progress: { files: 3517, bytes: 2168000000, added: 3163, added_bytes: 2000000 },
         },
       }),
     })
@@ -285,7 +285,7 @@ describe('useF2Import', () => {
     await loadStatus()
 
     expect(status.value?.auto.running?.fetch_mode).toBe('like')
-    expect(status.value?.auto.running?.like_progress?.added).toBe(3163)
+    expect(status.value?.auto.running?.download_progress?.added).toBe(3163)
   })
 
   it('setAuto 透传开关与间隔，并用回包更新本地状态', async () => {

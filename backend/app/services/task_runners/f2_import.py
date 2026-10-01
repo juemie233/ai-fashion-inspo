@@ -49,19 +49,32 @@ _WATCH_INTERVAL = 2.0
 
 点赞总数要全量翻页到底才知道，进度条没有真分母；这里给的是**按耗时估算**的软
 进度：起步 1%（0% 长时间不动最劝退），随耗时缓慢逼近上限后停住等 f2 收尾，再由
-扫描/入库阶段接手。真实证据是任务结果里的 ``like_progress``（已落盘文件数与体积），
+扫描/入库阶段接手。真实证据是任务结果里的 ``download_progress``（已落盘文件数与体积），
 它在下载期间持续上涨。
 """
-_LIKE_PROGRESS_CAP = 35
+_PERSONAL_PROGRESS_CAP = 35
 
-"""软进度的时间常数（秒）：耗时达到这个点约走到上限的一半（双曲线，永不到顶）。"""
-_LIKE_PROGRESS_HALF_SECONDS = 900
+"""软进度的时间常数（秒）：耗时达到这个点约走到上限的一半（双曲线，永不到顶）。
+
+发布模式（逐作者）用同一个常数：作者数才是真分母，但**单个作者**内部没有分母
+（f2 一路翻页、每页固定等一次 timeout），所以每位作者区间内也用软进度爬。
+"""
+_SOFT_PROGRESS_HALF_SECONDS = 900
+
+
+def _soft_fraction(elapsed: float) -> float:
+    """软进度比例：0 → 1，随耗时双曲线逼近但**永不到顶**（纯函数，便于单测）。
+
+    同一作者内用它在「该作者的进度区间」里爬：`elapsed` 秒时约走完一半、
+    15 分钟约 0.5、时间再长也不会到 1（剩下的留给「作者完成」这一步）。
+    """
+    return elapsed / (elapsed + _SOFT_PROGRESS_HALF_SECONDS)
 
 """「我的列表」类模式：点赞（我的喜欢）与收藏（我的收藏）。
 
 两者同形——都是 f2 拉**登录账号自己**的列表（只有本人可见，故必须填「我的主页链接」）、
 作品全下在「我的昵称」目录下、原作者与作品 ID 只存在于文件名里；因此共用同一套下载阶段、
-进度口径（``like_progress``）与扫描/入库逻辑，差别只有 f2 的 ``-M`` 取值、产物根目录
+进度口径（``download_progress``）与扫描/入库逻辑，差别只有 f2 的 ``-M`` 取值、产物根目录
 与界面文案（文案由 ``fetch_mode`` 决定，见 web/src/utils/taskPresentation.ts）。
 """
 PERSONAL_FETCH_MODES = ("like", "collection")
@@ -650,7 +663,7 @@ def _running_task_brief(row) -> dict | None:
 
     ``stage`` 是理解 ``done/total`` 的前提：下载阶段是「作者数」，入库阶段是
     「文件数」，界面上要说清楚（见 web 侧 describeRunningTask）。``fetch_mode``
-    决定文案说的是「博主主页作品」「我的喜欢」还是「我的收藏」；``like_progress``
+    决定文案说的是「博主主页作品」「我的喜欢」还是「我的收藏」；``download_progress``
     只在「我的列表」（点赞/收藏）下载阶段有值，给界面提供「已落盘 N 个文件 / X GB」
     这个真分母缺失时的证据。
     """
@@ -659,15 +672,15 @@ def _running_task_brief(row) -> dict | None:
     task_id, status, progress, done, total, result = row
     stage = ""
     fetch_mode = ""
-    like_progress = None
+    download_progress = None
     like_max_counts = 0
     if isinstance(result, dict):
         stage = str(result.get("stage") or "")
         fetch_mode = str(result.get("fetch_mode") or "")
         like_max_counts = int(result.get("like_max_counts") or 0)
-        raw_like = result.get("like_progress")
-        if isinstance(raw_like, dict):
-            like_progress = raw_like
+        raw_progress = result.get("download_progress")
+        if isinstance(raw_progress, dict):
+            download_progress = raw_progress
     return {
         "id": task_id,
         "status": status,
@@ -678,7 +691,7 @@ def _running_task_brief(row) -> dict | None:
         "fetch_mode": fetch_mode,
         # 0=全量翻页；>0=增量（前端据此把下载期文案从「全量翻页」改成「最近 N 条」）
         "like_max_counts": like_max_counts,
-        "like_progress": like_progress,
+        "download_progress": download_progress,
     }
 
 
@@ -740,59 +753,64 @@ async def get_f2_auto_status(db: AsyncSession) -> dict:
     }
 
 
-async def _watch_personal_download(
+async def _watch_download(
     db: AsyncSession,
     task: TaskQueue,
     future: asyncio.Task,
-    personal_root: Path,
+    root: Path,
     baseline: dict,
     opts: dict,
-) -> tuple[dict, dict]:
-    """一边等 f2 拉完「我的喜欢 / 我的收藏」，一边把已落盘的文件数写进任务结果。
+    progress_at,
+    extra: dict | None = None,
+    result_extra: dict | None = None,
+) -> tuple[object, dict]:
+    """一边等 f2 下载，一边把「已落盘文件数 + 软进度」持续写进任务行（两种下载共用）。
 
-    为什么需要：这类模式是单条命令全量翻页，下载期可能十几分钟；此前进度只在 f2
-    返回后一次性写 0→40%，界面长时间停在 0%，看不出是在下载还是卡住。
+    为什么通用化（2026-10-01 用户报「下载目录已落两千张图，界面还停在 0%」）：
+    这套观察器原先只服务「我的喜欢 / 我的收藏」；发布模式（逐作者）**只在每个作者
+    结束后**才写一次进度，于是下载第一个作者期间 `done=0 / progress=0%`，界面上只有
+    一句「第 0/1 个作者」——哪怕磁盘上已经落了两千张图，看起来也像卡死。
 
-    f2 是同步子进程（在线程里跑），本函数**不中断**它：取消/暂停仍由调用方在它
-    返回后判定，与发布模式一致（已下载文件保留，重跑自动跳过）。
+    现在两种下载共用同一套观察器，差别只在 `progress_at`（百分比口径）：
+      - 我的列表：一次命令全量翻页，软进度逼近 ``_PERSONAL_PROGRESS_CAP``；
+      - 发布模式：逐作者，软进度在**该作者的进度区间**里爬（作者数才是真分母）。
+
+    f2 是同步子进程（在线程里跑），本函数**不中断**它：取消/暂停仍由调用方在它返回后
+    判定（已下载文件保留，重跑自动跳过）。
 
     Args:
         db: 数据库会话。
         task: 任务行。
-        future: ``asyncio.to_thread(f2.run_fetch_likes/run_fetch_collects, ...)`` 的 future。
-        personal_root: 「我的列表」产物目录（统计对象）。
-        baseline: 下载开始前的统计（用来算「本次新增」）。
+        future: ``asyncio.to_thread(...)`` 的 future（f2 调用或 ``_run_subprocess``）。
+        root: 统计对象（产物目录；发布模式用 post 根，逐作者以 baseline 差值算新增）。
+        baseline: 本次下载开始前的统计（用来算「本次新增」）。
         opts: 任务参数（写回 result 时带上，避免上次执行的旧字段残留）。
+        progress_at: ``(elapsed: float) -> int``，本次的进度百分比口径。
+        extra: 追加进 ``download_progress`` 的字段（发布模式记「第 i/N 个作者」）。
+        result_extra: 追加进任务结果的**顶层**字段（发布模式用来保留 ``fetch`` 摘要）。
 
     Returns:
-        (f2 拉取函数的返回值, 结束时的目录统计)。
+        ``(future 的返回值, 结束时的目录统计)``；future 抛异常时原样抛出，由调用方处理。
     """
     from scripts import import_f2_downloads as f2
 
     started = time.monotonic()
     while True:
         done, _pending = await asyncio.wait({future}, timeout=_WATCH_INTERVAL)
-        stats = await asyncio.to_thread(f2.download_tree_stats, personal_root)
+        stats = await asyncio.to_thread(f2.download_tree_stats, root)
         elapsed = time.monotonic() - started
-        # 起步 1%：进度条长时间停在 0% 是最劝退的观感（哪怕它只是「耗时估算」），
-        # 此后随耗时缓慢逼近上限，永不到顶——真进度由入库阶段接手
-        task.progress = (
-            int(
-                (_LIKE_PROGRESS_CAP - 1)
-                * elapsed
-                / (elapsed + _LIKE_PROGRESS_HALF_SECONDS)
-            )
-            + 1
-        )
+        task.progress = progress_at(elapsed)
         task.result = {
             **opts,
+            **(result_extra or {}),
             "stage": "download",
-            "like_progress": {
+            "download_progress": {
                 "files": stats["files"],
                 "bytes": stats["bytes"],
                 "added": max(0, stats["files"] - baseline["files"]),
                 "added_bytes": max(0, stats["bytes"] - baseline["bytes"]),
                 "seconds": int(elapsed),
+                **(extra or {}),
             },
         }
         task.updated_at = utcnow()
@@ -803,6 +821,31 @@ async def _watch_personal_download(
             logger.warning(f"f2 进度落库失败（忽略，下一轮重试）：{exc}")
         if done:
             return future.result(), stats
+
+
+async def _watch_personal_download(
+    db: AsyncSession,
+    task: TaskQueue,
+    future: asyncio.Task,
+    personal_root: Path,
+    baseline: dict,
+    opts: dict,
+) -> tuple[dict, dict]:
+    """「我的喜欢 / 我的收藏」的观察器：软进度逼近 ``_PERSONAL_PROGRESS_CAP``（实现见上）。"""
+    return await _watch_download(
+        db,
+        task,
+        future,
+        personal_root,
+        baseline,
+        opts,
+        # 起步 1%：进度条长时间停在 0% 是最劝退的观感（哪怕它只是「耗时估算」），
+        # 此后随耗时缓慢逼近上限，永不到顶——真进度由入库阶段接手
+        progress_at=lambda elapsed: int(
+            (_PERSONAL_PROGRESS_CAP - 1) * _soft_fraction(elapsed)
+        )
+        + 1,
+    )
 
 
 async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
@@ -1127,7 +1170,7 @@ async def _fetch_personal_stage(
             f"请先在「{label}」卡片里填写你的抖音主页链接"
         )
     fetch_summary["total"] = 1
-    # 总数要翻到底才知道：下载期不给 done/total（计数看 like_progress 的文件数），
+    # 总数要翻到底才知道：下载期不给 done/total（计数看 download_progress 的文件数），
     # 进度条由 watcher 按耗时给软进度。
     # 增量模式（like_max_counts>0）另有作用：翻页量有上界，不会再出现「零新增却
     # 空翻到底、进度条长时间停在 0」。
@@ -1187,7 +1230,7 @@ async def _fetch_personal_stage(
         **opts,
         "stage": "download",
         "fetch": fetch_summary,
-        "like_progress": fetch_summary["downloaded"],
+        "download_progress": fetch_summary["downloaded"],
     }
     task.done = 1
     task.total = 1
@@ -1505,8 +1548,52 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
             author, download_root=f2.DEFAULT_F2_DOWNLOAD_ROOT, interval=interval
         )
         logger.info(f"f2 下载 {display}（窗口 {interval}）")
+        # 下载**期间**也要有实时进度（2026-10-01 用户报「磁盘已落两千张图、界面还是
+        # 第 0/1 个作者 · 0%」）：单个作者内部 f2 一路翻页、每页固定等一次 timeout，
+        # 没有分母，所以用「作者数作真分母 + 该作者区间内软进度」，并把已落盘文件数
+        # 每 2 秒写进 download_progress（界面据此显示「目录内共 N 个 · 本次新增 K」）。
+        baseline = await asyncio.to_thread(f2.download_tree_stats, post_root)
+        author_extra = {
+            "author_index": index,
+            "author_total": len(targets),
+            "author": display,
+        }
+        task.result = {
+            **opts,
+            "stage": "download",
+            "fetch": fetch_summary,
+            "download_progress": {
+                "files": baseline["files"],
+                "bytes": baseline["bytes"],
+                "added": 0,
+                "added_bytes": 0,
+                "seconds": 0,
+                **author_extra,
+            },
+        }
+        task.updated_at = utcnow()
+        await db.commit()
         try:
-            rc = await asyncio.to_thread(_run_subprocess, cmd, f2_dir)
+            rc, _stats = await _watch_download(
+                db,
+                task,
+                asyncio.create_task(
+                    asyncio.to_thread(_run_subprocess, cmd, f2_dir)
+                ),
+                post_root,
+                baseline,
+                opts,
+                # 进度口径：已完成的作者 + 当前作者区间内的软进度，再乘进 0~40% 的下载区间。
+                # `index - 1` 保证「正在跑第 1 个作者」时从 1% 起步而不是直接跳到 40%。
+                progress_at=lambda elapsed, i=index: int(
+                    _PROGRESS_AFTER_DOWNLOAD
+                    * (i - 1 + _soft_fraction(elapsed))
+                    / max(1, len(targets))
+                )
+                + 1,
+                extra=author_extra,
+                result_extra={"fetch": fetch_summary},
+            )
         except Exception as exc:  # noqa: BLE001 —— 单作者失败不阻断整批
             rc = -1
             logger.warning(f"f2 调用异常（{display}）：{exc}")

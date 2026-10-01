@@ -1,4 +1,4 @@
-# AI 穿搭素材库
+﻿# AI 穿搭素材库
 
 > **[English](README.en.md) | 中文**（英文文档为翻译产物，中文为源，可用 `python scripts/translate_docs.py` 重新生成）
 
@@ -1091,7 +1091,7 @@ alembic upgrade head
 | `GET` | `/api/scraper/hashtags` | 采集话题库（`sort=count|recent`、`min_count`、`limit`，返回话题 + 累计出现次数 + 来源博主名，供新建/编辑采集任务时复用为关键词） |
 | `GET` | `/api/scraper/collection-roi?days=&limit=` | 采集 ROI 漏斗：按**关键词 / 博主**拆解「发现 → 入库 → 合格率」；返回 `by_keyword` / `by_author` / `coverage`（含口径说明 `notes`）。合格率 = 通过 /(通过+不合格)，只算已审核样本，样本为 0 时返回 `null`（前端显示「—」而非 0%） |
 | `POST` | `/api/scraper/f2-import` | 抖音素材「一键获取素材」（f2 通道）：创建 `f2_import` 任务（`fetch` 是否先增量下载 / `authors` / `limit` / `skip_live` / `make_thumbnails` / `since_days` 日期窗口 / `mode=post\|like` / `like_user` / `register_bloggers`），环境不可用时返回 `task_id=null` + 原因；已有进行中任务时复用并返回 `reused=true`。`mode=like`（「我的喜欢」）不逐作者、不加时间窗口、不做作者白名单，只用点赞模式自己的可用性口径（避免被「没有账号对应到已登记博主」这类与点赞无关的理由拒绝） |
-| `GET` | `/api/scraper/f2-status` | f2 通道可用性（是否装了 f2 / 工作目录 / 作者数 / 点赞模式 `like_available` 与 `like_reason` / 已保存的我的主页链接）+ 每日自动获取配置与到期信息 `auto`（含进行中任务的 `running`：阶段 / 进度 / 计数 / 下载期实时进度 `like_progress`） |
+| `GET` | `/api/scraper/f2-status` | f2 通道可用性（是否装了 f2 / 工作目录 / 作者数 / 点赞模式 `like_available` 与 `like_reason` / 已保存的我的主页链接）+ 每日自动获取配置与到期信息 `auto`（含进行中任务的 `running`：阶段 / 进度 / 计数 / 下载期实时进度 `download_progress`） |
 | `PUT` | `/api/scraper/f2-auto` | 开关每日自动获取（`enabled` / `interval_hours` / `skip_live`，默认写入 `.env` 持久化） |
 | `PUT` | `/api/scraper/f2-like-user` | 保存「我的抖音主页链接 / sec_user_id」（点赞列表只有本人可见，f2 的 `-M like` 要求 `-u` 填自己的主页；传空清除） |
 | `GET` | `/api/scraper/f2-tasks/{task_id}/results` | 某次 f2 获取的批次结果（供结果与审查面板）：`state=all\|pending\|approved\|rejected\|trash\|gone` 按审核/垃圾桶状态筛选 + `author` 只看某作者 + 分页；归属以该任务落盘的批次清单为准，每条素材的当前状态以数据库为准 |
@@ -1110,7 +1110,7 @@ alembic upgrade head
 >
 > **抖音素材（f2 通道）：** 与 CDP 采集相互独立，走本地 f2 按博主增量下载（详见 [接入 f2 抖音素材获取](#5-接入-f2-抖音素材获取可选)）。`POST /f2-import` 创建的 `f2_import` 任务在任务中心显示当前阶段（`result.stage`：`download` 下载 / `scan` 扫描 / `import` 入库 / `blogger` 登记博主 / `done` 收尾）——`done/total` 的含义**随阶段变化**（发布模式的下载阶段是作者数、入库阶段是文件数；「我的喜欢」两种都是文件数），前端据此生成「第 N/M 个作者 · 逐作者翻页，单作者约 10 秒~4 分钟」这类文案。日期窗口（`since_days`，缺省取配置 `f2_fetch_since_days`=14）是快慢的关键，`0` 表示翻全历史（会非常慢）。
 >
-> **「我的喜欢」通道（`mode=like`）：** 抖音的点赞列表只有本人可见，因此要先在 f2 卡片里保存「我的抖音主页链接」（`PUT /f2-like-user`），之后一条命令即可把点赞过的作品全部拉回来。它与发布模式有三处刻意的不同：**不逐作者**（喜欢天然跨作者，用你自己的主页作为 `-u`）、**不加时间窗口**（喜欢列表按点赞时间排序，而 f2 的 `-i` 按发布时间过滤，窗口会漏掉「最近点赞的老视频」）、**不做作者白名单**（发布模式默认只处理能对上游记博主的账号，点赞模式用不到这个口径）。下载期进度是「诚实但有限」的：点赞总数要翻到底才知道，所以这段时间不给 `done/total`，改由观察器每 2 秒写 `like_progress`（已落盘文件数 / 体积 / 本次新增 / 已耗时），进度条走**软进度**——从 1% 起步、随耗时逼近 35% 上限（`_LIKE_PROGRESS_CAP`，900 秒约走完一半差距）且永不到顶，真正的进度由入库阶段接手。**入库后自动登记博主**：把本批未登记的来源作者补建成抖音博主并绑定素材（`register_bloggers`，默认开），补建的博主 `source=auto_collect`——算博主、算素材归属，但**不算已登记博主**、不进发布模式的下载白名单；在博主列表点「纳入追踪」（`POST /api/bloggers/{id}/promote`）才转正，也可以在批次结果页手动批量登记。
+> **「我的喜欢」通道（`mode=like`）：** 抖音的点赞列表只有本人可见，因此要先在 f2 卡片里保存「我的抖音主页链接」（`PUT /f2-like-user`），之后一条命令即可把点赞过的作品全部拉回来。它与发布模式有三处刻意的不同：**不逐作者**（喜欢天然跨作者，用你自己的主页作为 `-u`）、**不加时间窗口**（喜欢列表按点赞时间排序，而 f2 的 `-i` 按发布时间过滤，窗口会漏掉「最近点赞的老视频」）、**不做作者白名单**（发布模式默认只处理能对上游记博主的账号，点赞模式用不到这个口径）。下载期进度是「诚实但有限」的：点赞总数要翻到底才知道，所以这段时间不给 `done/total`，改由观察器每 2 秒写 `download_progress`（已落盘文件数 / 体积 / 本次新增 / 已耗时），进度条走**软进度**——从 1% 起步、随耗时逼近 35% 上限（`_download_progress_CAP`，900 秒约走完一半差距）且永不到顶，真正的进度由入库阶段接手。**入库后自动登记博主**：把本批未登记的来源作者补建成抖音博主并绑定素材（`register_bloggers`，默认开），补建的博主 `source=auto_collect`——算博主、算素材归属，但**不算已登记博主**、不进发布模式的下载白名单；在博主列表点「纳入追踪」（`POST /api/bloggers/{id}/promote`）才转正，也可以在批次结果页手动批量登记。
 >
 > **插件任务记录：** 浏览器插件上传素材时可携带 `scraper_task_id` 表单字段（`POST /api/inspirations`），将素材关联到插件采集任务，供结果预览与统计；插件会话通过 `extension-tasks` 两端点创建/汇总任务记录。
 

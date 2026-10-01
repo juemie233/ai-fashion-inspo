@@ -291,15 +291,14 @@ export function summarizeResult(
 }
 
 /**
- * 「我的喜欢」下载阶段的实时统计文案（后端 result.like_progress）。
+ * f2 **下载期间**的实时统计文案（后端 result.download_progress，三种下载入口共用）。
  *
- * 点赞总数要全量翻页到底才知道，进度条没有真分母；这段文字就是给用户的证据：
- * 文件数在涨 = f2 在干活，「本次新增」为 0 = 这一轮没有新赞。
- * 注意全量模式下**零新增时进度条会一直停在 0**（它按已落盘文件数算），所以这段
- * 文案比进度条更可信。
+ * 下载总数事先未知（点赞要翻到底、单个作者内部也没有分母），进度条只能给软进度；
+ * 这段文字才是给用户的证据：文件数在涨 = f2 在干活，「本次新增」为 0 = 这一轮没有新作品。
+ * 注意全量模式下**零新增时软进度也可能看起来不动**，所以这段文案比进度条更可信。
  */
-function likeDownloadText(r: Record<string, unknown>): string {
-  const lp = (r.like_progress || {}) as Record<string, unknown>
+function downloadProgressText(r: Record<string, unknown>): string {
+  const lp = (r.download_progress || {}) as Record<string, unknown>
   const files = Number(lp.files ?? 0) || 0
   if (!files && !Number(lp.added ?? 0)) return ''
   const bytes = Number(lp.bytes ?? 0) || 0
@@ -453,7 +452,7 @@ export function describeRunningTask(
       // 「我的列表」模式：f2 的分页没有「遇到已下载就停」，全量时要空翻到底（每页固定
       // 等一次 timeout）；`like_max_counts>0` 时只翻最近 N 条（列表最新在前），快得多。
       // 注：f2 的点赞/收藏模式**不读 `-i`**，日期窗口在这里无效，能收窄的只有这个条数。
-      const live = likeDownloadText(r)
+      const live = downloadProgressText(r)
       const maxCounts = Number(r.like_max_counts ?? 0) || 0
       const scope = maxCounts
         ? `增量：只翻最近 ${maxCounts} 条${listName}`
@@ -461,8 +460,17 @@ export function describeRunningTask(
       return `拉取${listLabel}（${listName}）中：${live ? `${live} · ` : ''}${scope}；已下载过的作品会自动跳过`
     }
     // f2 逐个作者跑子进程，每个作者都要把作品列表翻页（每页固定等 timeout 秒），
-    // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载
-    return `调 f2 下载中：${count}个作者 · 逐作者翻页，单作者约 10 秒~4 分钟`
+    // 单作者十几秒到几分钟；已下载过的作品会被跳过，不会重复下载。
+    // ⚠️ `done` 只在**作者跑完**后才 +1，所以正在跑的是第 done+1 个——直接显示 done/N
+    // 会让第一个作者期间显示「第 0/1 个作者」（2026-10-01 用户报的那个）。
+    const live = downloadProgressText(r)
+    const current = total > 0 ? Math.min(done + 1, total) : done
+    const position = total > 0 ? `第 ${current}/${total} 个作者` : `${done} 个作者`
+    const who =
+      typeof r.download_progress === 'object' && r.download_progress
+        ? String((r.download_progress as Record<string, unknown>).author || '')
+        : ''
+    return `调 f2 下载中：${position}${who ? `（${who}）` : ''}${live ? ` · ${live}` : ''} · 逐作者翻页，单作者约 10 秒~4 分钟`
   }
   if (stage === 'scan') {
     return '扫描与去重中：统计下载目录里的新作品，大目录需 1~2 分钟，之后才开始入库'

@@ -352,9 +352,11 @@ describe('summarizeResult', () => {
 })
 
 describe('describeRunningTask', () => {
-  it('f2 下载阶段：说明是第几个作者并给出单作者耗时预期', () => {
+  it('f2 下载阶段：说明**正在跑**第几个作者（done 是已完成数，所以要 +1）', () => {
+    // done 只在作者跑完才 +1：done=3 表示前 3 个已完成、正在跑第 4 个。
+    // 曾直接显示 done/N，于是第一个作者期间是「第 0/1 个作者」（2026-10-01 用户报的）
     const text = describeRunningTask('f2_import', { stage: 'download' }, 'running', 3, 21)
-    expect(text).toContain('第 3/21 个作者')
+    expect(text).toContain('第 4/21 个作者')
     expect(text).toContain('翻页')
   })
 
@@ -426,7 +428,7 @@ describe('describeRunningTask', () => {
       {
         stage: 'download',
         fetch_mode: 'like',
-        like_progress: { files: 3517, bytes: 2048, added: 3163 },
+        download_progress: { files: 3517, bytes: 2048, added: 3163 },
       },
       'running',
       0,
@@ -435,6 +437,55 @@ describe('describeRunningTask', () => {
     expect(text).toContain('本次新增 3163 个文件')
     expect(text).toContain('目录内共 3517 个')
     expect(text).toContain('我的喜欢')
+  })
+
+  it('发布模式下载期：显示**正在跑**的作者（done+1）与已落盘文件数', () => {
+    // done 只在作者跑完才 +1，所以第一个作者期间是 done=0/total=1：
+    // 直接显示 done/N 会说成「第 0/1 个作者」（2026-10-01 用户报的那个 bug）
+    const first = describeRunningTask(
+      'f2_import',
+      {
+        stage: 'download',
+        fetch_mode: 'post',
+        download_progress: {
+          files: 2145,
+          bytes: 1024,
+          added: 380,
+          author_index: 1,
+          author_total: 1,
+          author: '唐思瑶ya',
+        },
+      },
+      'running',
+      0,
+      1,
+    )
+    expect(first).toContain('第 1/1 个作者')
+    expect(first).not.toContain('第 0/')
+    expect(first).toContain('唐思瑶ya')
+    expect(first).toContain('本次新增 380 个文件')
+    expect(first).toContain('目录内共 2145 个')
+
+    // 第 3 个作者正在跑（前两个已完成）→ 第 3/5
+    const third = describeRunningTask(
+      'f2_import',
+      { stage: 'download', fetch_mode: 'post' },
+      'running',
+      2,
+      5,
+    )
+    expect(third).toContain('第 3/5 个作者')
+  })
+
+  it('发布模式下载期没有实时统计时，至少不出现「第 0/N 个作者」', () => {
+    const text = describeRunningTask(
+      'f2_import',
+      { stage: 'download', fetch_mode: 'post' },
+      'running',
+      0,
+      1,
+    )
+    expect(text).toContain('第 1/1 个作者')
   })
 
   it('扫描与去重阶段单独说明（别让界面停在「下载中」）', () => {
@@ -501,7 +552,8 @@ describe('normalizeQueueTask', () => {
       }),
     )
     expect(t.status).toBe('running')
-    expect(t.detail).toContain('第 4/21 个作者')
+    // done=4（已完成 4 个）→ 正在跑第 5 个；下文口径同 describeRunningTask 的下载阶段
+    expect(t.detail).toContain('第 5/21 个作者')
   })
 
   it('pending 任务不标记 finished_at，target 取 total', () => {

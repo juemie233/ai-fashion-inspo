@@ -10,18 +10,28 @@ import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
 
-/** 「我的喜欢」下载阶段的实时统计（后端 result.like_progress，其它阶段为空） */
-export interface F2LikeProgress {
+/** f2 **下载期间**的实时统计（后端 result.download_progress；非下载阶段为空）。
+ *
+ * 三种下载入口共用：我的喜欢 / 我的收藏（一次命令全量翻页）+ 发布模式（逐作者，
+ * 额外带 author_index/author_total/author）。
+ */
+export interface F2DownloadProgress {
   /** 产物目录内已落盘的文件总数（含往次下载） */
   files: number
   /** 已落盘文件的总字节数 */
   bytes: number
-  /** 本次任务新增的文件数（点赞总数事先未知，靠它看「这轮拉回来多少」） */
+  /** 本次任务新增的文件数（总数事先未知，靠它看「这轮拉回来多少」） */
   added: number
   /** 本次任务新增的字节数 */
   added_bytes: number
   /** 下载已进行的秒数（仅在软进度阶段有值，收尾时为 undefined） */
   seconds?: number
+  /** 发布模式：正在下载第几个作者（1 起） */
+  author_index?: number
+  /** 发布模式：本批共几个作者 */
+  author_total?: number
+  /** 发布模式：正在下载的作者展示名 */
+  author?: string
 }
 
 /** 一个抖音收藏夹（后端 GET /api/scraper/f2-collects 的 folders 项） */
@@ -57,8 +67,8 @@ export interface F2RunningTask {
   stage: string
   /** 采集入口：post=博主主页作品；like=我的喜欢（决定阶段文案口径） */
   fetch_mode: string
-  /** 「我的喜欢」下载期间的实时统计（无则 null） */
-  like_progress: F2LikeProgress | null
+  /** f2 下载期间的实时统计（无则 null）：三种下载入口都有 */
+  download_progress: F2DownloadProgress | null
 }
 
 /** 每日自动获取的配置与到期信息（后端 GET /api/scraper/f2-status 的 auto 字段） */
