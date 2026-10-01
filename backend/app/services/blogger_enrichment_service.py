@@ -116,8 +116,10 @@ async def backfill_douyin_ids_from_f2(
         blogger_ids: 限定范围（None = 全部缺 ID 的抖音博主）。
 
     Returns:
-        ``{"filled", "ambiguous_blogger", "ambiguous_f2", "not_found", "already_used",
-        "details"}``；``details`` 逐条给出 filled / skipped（含原因）。
+        ``{"filled", "ambiguous_blogger", "ambiguous_f2", "not_found", "empty_name",
+        "already_used", "details"}``；``details`` 逐条给出 filled / skipped（含原因）。
+        ``not_found`` 只统计「f2 库里没有同名账号」，博主名解析不出关键词的单独计入
+        ``empty_name``（否则任务摘要会把两者混成一句「f2 库里没有」）。
         **跳过只写在本轮明细里，不写跳过表**——这些原因都可重试（见模块 docstring）。
     """
     from collections import Counter, defaultdict
@@ -140,6 +142,7 @@ async def backfill_douyin_ids_from_f2(
         "ambiguous_blogger": 0,
         "ambiguous_f2": 0,
         "not_found": 0,
+        "empty_name": 0,
         "already_used": 0,
         "details": [],
     }
@@ -174,7 +177,8 @@ async def backfill_douyin_ids_from_f2(
         detail = {"blogger_id": blogger.id, "name": blogger.name}
         key = f2.normalize_author(blogger.name or "")
         if not key:
-            stats["not_found"] += 1
+            # 与「f2 库里没有同名账号」分开计数：原因不同，混在一起会把任务摘要读歪
+            stats["empty_name"] += 1
             stats["details"].append(
                 {**detail, "status": "skipped", "reason": "博主语义名为空，无法按昵称匹配"}
             )
@@ -493,7 +497,7 @@ async def _apply_resolved_profile(
 
 
 async def resolve_douyin_profile(
-    db: AsyncSession, blogger: Blogger, max_works: int = 3
+    db: AsyncSession, blogger: Blogger, max_works: int = 2
 ) -> dict:
     """按需解析一个抖音博主的主页标识（``sec_user_id`` + 主页链接）。
 
@@ -518,7 +522,9 @@ async def resolve_douyin_profile(
     Args:
         db: 数据库会话。
         blogger: 抖音博主行（其它平台直接返回失败原因）。
-        max_works: 联网反查最多尝试几个作品（每个约 20~40 秒）。
+        max_works: 联网反查最多尝试几个作品。默认 2：每次 f2 运行上限 90 秒
+            （``f2_fetch.RESOLVE_RUN_TIMEOUT_S``），两次即 180 秒——再多就会让 HTTP 请求
+            长时间挂着，而**前端超时后重试通常会秒回**（第一次的解析结果已写库）。
 
     Returns:
         ``{"ok", "blogger_id", "name", "profile_url", "platform_user_id",
@@ -593,11 +599,19 @@ async def resolve_douyin_profile(
     # ── 3. 按作品 ID 让 f2 反查（联网；每个作品一次 f2 运行）──
     works = await find_blogger_awemes(db, blogger.id, limit=max_works)
     if not works:
+        # 两种原因都写出来：名字里没有可用文字时，昵称路径本来就走不通（否则用户只看到
+        # 「没有作品 ID」，会以为补个作品就万事大吉）
+        prefix = (
+            "这位博主的名字里没有可用的文字（只有符号/emoji），无法在 f2 用户库里按昵称匹配；"
+            if not key
+            else ""
+        )
         return {
             **detail,
             "reason": (
-                "这位博主的素材里没有可用的抖音作品 ID（历史素材只有文件名哈希，"
-                "追不回作者）：请在博主编辑弹窗里手工填一次抖音主页链接"
+                f"{prefix}这位博主的素材里没有可用的抖音作品 ID"
+                "（历史素材只有文件名哈希，追不回作者）："
+                "请在博主编辑弹窗里手工填一次抖音主页链接"
             ),
         }
 

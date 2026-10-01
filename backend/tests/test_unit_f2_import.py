@@ -6,6 +6,7 @@
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1198,6 +1199,31 @@ def test_resolve_author_by_aweme_reports_runner_failure(tmp_path):
     res = f2.resolve_f2_author_by_aweme(f2_dir, "1", runner=boom)
     assert res["ok"] is False
     assert "OSError" in res["reason"]
+
+
+def test_resolve_author_by_aweme_reports_timeout(tmp_path):
+    """反查超时 → 专门的原因文案（不是含糊的「调用 f2 失败」）。
+
+    为什么要限时：反查是**同步**跑在请求线程里的，f2 一旦卡在风控/登录页，不限时就会让
+    子进程与请求线程一直挂着（前端超时了服务端还在跑）。
+    """
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def slow(cmd, cwd):
+        raise subprocess.TimeoutExpired(cmd="f2", timeout=1)
+
+    res = f2.resolve_f2_author_by_aweme(f2_dir, "1", runner=slow)
+    assert res["ok"] is False
+    assert "超时" in res["reason"]
+    assert str(int(f2.RESOLVE_RUN_TIMEOUT_S)) in res["reason"]
+
+
+def test_run_with_timeout_kills_long_command(tmp_path):
+    """限时执行器：超时抛 ``TimeoutExpired``（子进程由 subprocess 杀掉，不留孤儿）。"""
+    with pytest.raises(subprocess.TimeoutExpired):
+        f2._run_with_timeout(
+            [sys.executable, "-c", "import time; time.sleep(5)"], tmp_path, 0.5
+        )
 
 
 def test_build_f2_command_default_flags():

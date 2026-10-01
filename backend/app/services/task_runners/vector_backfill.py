@@ -419,10 +419,11 @@ async def _load_window_inspirations(
     """一次 IN 查询加载一个窗口的素材（含两级标签关系）。
 
     - 显式 selectinload 两级标签关系（Inspiration.tags → InspirationTag.tag）：
-      build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是默认
-      lazy="select"——异步会话下隐式懒加载会抛 MissingGreenlet
-      （"greenlet_spawn has not been called"）。此前逐条 db.get 只 eager load 了
-      一级 tags，二级 .tag 未加载即触发此错误。
+      build_inspiration_text 会同步访问 t.tag.name，而 InspirationTag.tag 是
+      ``lazy="raise_on_sql"``——异步会话下未预加载会当场抛 InvalidRequestError
+      并被记为文本向量失败（此前逐条 db.get 只 eager load 了一级 tags，二级 .tag
+      未加载即触发 MissingGreenlet）。这里只取标签是**刻意例外**（本函数不序列化素材），
+      与 inspiration_query.inspiration_load_options 的关系见那个函数的说明。
     - 过滤已删除素材：垃圾桶素材不重建向量（与旧 rebuild_* 路径语义一致）。
     - 一个窗口一条查询（≤_PROGRESS_EVERY 个 ID）：逐条 execute 会把每条素材的
       往返都压在关键路径上；25 个 ID 远低于「长 IN 子句只返回 1 行」的规模阈值

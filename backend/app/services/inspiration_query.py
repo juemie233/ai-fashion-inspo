@@ -25,13 +25,18 @@ def inspiration_load_options() -> tuple:
 
     为什么必须链式：`inspiration_to_out` 会读关联的**内层实体**——
     `t.tag` / `t.blogger` / `t.model`。模型里 `tags`/`bloggers`/`models` 是
-    ``lazy="selectin"``（外层集合自动加载），但内层实体是默认 ``lazy="select"``：
-    只加载外层集合、忘了链式，就会在**序列化时**异步懒加载报 MissingGreenlet（接口 500）。
+    ``lazy="selectin"``（外层集合自动加载），但内层实体是 ``lazy="raise_on_sql"``：
+    只加载外层集合、忘了链式，就会在序列化时当场抛 InvalidRequestError（接口 500）。
 
     为什么收敛到一处（2026-09-27 事故）：这段链式原先复制了 8 份，其中
     ``vector/similarity.py`` 那份漏了 bloggers/models——候选素材只要带人物关联就崩，
     而前端把 500 静默吞成「暂无相似素材」，排查代价极大。复制粘贴是那次事故的
-    结构性原因，所以只留这一处；新增「读素材 → 序列化」的查询一律用它。
+    结构性原因，所以凡「读素材 → 序列化」的查询一律用它。
+
+    **两处刻意例外**（只喂 ``build_inspiration_text``、从不序列化，故只取标签）：
+    ``vector/similarity.py::backfill_all_vectors`` 与
+    ``task_runners/vector_backfill.py::_load_window_inspirations``。它们改叫本函数也安全，
+    但那会为「整库回填」的每个窗口多两次无关查询——保持现状即可，别再新增第三处手写链。
     """
     return (
         selectinload(Inspiration.tags).selectinload(InspirationTag.tag),

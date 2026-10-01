@@ -59,6 +59,9 @@ async def _sample_ids(limit: int) -> list[str]:
 async def _check_one(insp_id: str) -> tuple[list[str], int, int]:
     """检查一条素材（独立会话，与一次 HTTP 请求同构）。
 
+    每一步都自带 try：**任何一条素材出问题都只记为一条失败**，不能让整轮抽样中断
+    （否则「跑 2000 条」可能在第 3 条就崩掉，且看不出是哪条）。
+
     返回 (失败描述列表, 序列化过的候选数, 其中带人物关联的候选数)。
     """
     failures: list[str] = []
@@ -66,7 +69,10 @@ async def _check_one(insp_id: str) -> tuple[list[str], int, int]:
     linked_candidates = 0
 
     async with async_session() as db:
-        source = await _load_inspiration(db, insp_id)
+        try:
+            source = await _load_inspiration(db, insp_id)
+        except Exception as e:
+            return [_describe(insp_id, "加载素材", e)], 0, 0
         if source is None:
             return failures, 0, 0
 
@@ -82,7 +88,14 @@ async def _check_one(insp_id: str) -> tuple[list[str], int, int]:
             return failures, 0, 0
 
         for hit in hits:
-            cand = hit["inspiration"]
+            # 结果结构变了（不是 {"inspiration": ...}）时记一条失败继续跑，别整轮崩
+            cand = hit.get("inspiration") if isinstance(hit, dict) else None
+            if cand is None:
+                failures.append(
+                    f"{insp_id}  [候选结构]  相似结果缺少 inspiration 字段"
+                    f"（{type(hit).__name__}）"
+                )
+                continue
             candidates += 1
             if cand.bloggers or cand.models:
                 linked_candidates += 1

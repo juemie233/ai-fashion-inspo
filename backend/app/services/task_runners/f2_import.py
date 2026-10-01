@@ -104,8 +104,10 @@ def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
 
     Returns:
         归一化后的开关；建任务与执行都用它，保证任务记录与实际行为一致。
+        **只有 like 可能为 True**：发布模式那条链路的作者本来就受白名单约束（不建号，
+        两条链路口径不同不混用），收藏恒不补建（见上）。
     """
-    return bool(requested) and fetch_mode != "collection"
+    return fetch_mode == "like" and bool(requested)
 
 
 def _personal_scan_root(f2, fetch_mode: str):

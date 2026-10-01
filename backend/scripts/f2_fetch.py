@@ -304,6 +304,26 @@ def build_f2_one_command(
     return cmd
 
 
+def _run_with_timeout(cmd: list[str], cwd: Path, timeout: float) -> tuple[int, str]:
+    """跑一次 f2 命令并**限时**（超时抛 ``subprocess.TimeoutExpired``，由调用方说明原因）。
+
+    为什么不给 :func:`_default_runner` 全局加超时：那个执行器同时用于「按博主全量下载」——
+    点名的博主首次要翻全部历史，正常就要跑几分钟到几十分钟，一刀切会把它误杀。超时只加在
+    **单作品反查**这种「本来就该几十秒结束」的调用上（``subprocess.run`` 超时会先杀掉子进程
+    再抛异常，不会留下孤儿进程）。
+    """
+    proc = subprocess.run(cmd, cwd=str(cwd), check=False, timeout=timeout)
+    return proc.returncode, ""
+
+
+"""单次「按作品反查作者」的 f2 运行上限（秒）。
+
+实测一次 ``-M one`` 连 f2 启动 + 版本检查 + 拉作品详情约 20~40 秒，90 秒是给慢网络留的余量。
+超时后本次反查记为失败并写清原因，而不是让请求线程一直挂着。
+"""
+RESOLVE_RUN_TIMEOUT_S = 90.0
+
+
 def resolve_f2_author_by_aweme(
     f2_dir: Path,
     aweme_id: str,
@@ -342,7 +362,9 @@ def resolve_f2_author_by_aweme(
         "reason"}``；``detected`` ∈ ``user_info_new``（新增作者行）/ ``video_info``
         （作品级映射）。``ok=False`` 时 ``reason`` 说明原因（调用方据此提示用户）。
     """
-    runner = runner or _default_runner
+    runner = runner or (
+        lambda cmd, cwd: _run_with_timeout(cmd, cwd, RESOLVE_RUN_TIMEOUT_S)
+    )
     aweme_id = str(aweme_id or "").strip()
     url = (work_url or "").strip() or f"https://www.douyin.com/note/{aweme_id}"
 
@@ -356,6 +378,21 @@ def resolve_f2_author_by_aweme(
         )
         try:
             rc, _info = runner(cmd, f2_dir)
+        except subprocess.TimeoutExpired:
+            # 限时到了：子进程已被杀掉（见 _run_with_timeout），这里只负责说清原因
+            return {
+                "ok": False,
+                "sec_user_id": "",
+                "nickname": "",
+                "ip_location": "",
+                "detected": "",
+                "rc": -1,
+                "cmd": cmd,
+                "reason": (
+                    f"f2 反查超时（>{RESOLVE_RUN_TIMEOUT_S:.0f} 秒）：该作品可能已失效，"
+                    "或 f2 卡在风控/登录页；稍后重试，或改用手工填主页链接"
+                ),
+            }
         except Exception as exc:  # noqa: BLE001 —— 单次反查失败由调用方提示，不抛
             return {
                 "ok": False,

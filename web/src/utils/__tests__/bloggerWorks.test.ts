@@ -8,7 +8,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   bloggerProfileKey,
-  canDownloadWorks,
   canResolveProfile,
   downloadWorksDisabledReason,
   mergeProfileKeys,
@@ -16,25 +15,6 @@ import {
 } from '../bloggerWorks'
 
 const DOUYIN_URL = 'https://www.douyin.com/user/MS4wLjABAAAAtang'
-
-describe('canDownloadWorks', () => {
-  it('抖音博主 + 有主页链接 → 可下载', () => {
-    expect(canDownloadWorks({ platform: 'douyin', profile_url: DOUYIN_URL })).toBe(true)
-  })
-
-  it('小红书博主不可下载（作品下载走 f2 的抖音通道）', () => {
-    expect(
-      canDownloadWorks({ platform: 'xiaohongshu', profile_url: 'https://www.xiaohongshu.com/x' }),
-    ).toBe(false)
-  })
-
-  it('抖音博主但没有主页链接 → 不可下载（f2 无从定位账号）', () => {
-    expect(canDownloadWorks({ platform: 'douyin', profile_url: null })).toBe(false)
-    expect(canDownloadWorks({ platform: 'douyin', profile_url: '' })).toBe(false)
-    // 只有空白字符同样视为没有
-    expect(canDownloadWorks({ platform: 'douyin', profile_url: '   ' })).toBe(false)
-  })
-})
 
 describe('downloadWorksDisabledReason', () => {
   it('可用时返回空串（按钮不加提示）', () => {

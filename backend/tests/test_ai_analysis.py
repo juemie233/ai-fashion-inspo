@@ -11,6 +11,8 @@
 import httpx
 import pytest
 
+from app.config import settings
+
 from app.database import async_session
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag, Tag
@@ -156,14 +158,10 @@ async def test_reanalysis_preserves_manual_and_seed_tags(
     client.post(f"/api/inspirations/{insp['id']}/tags", json={"names": ["手动标签"]})
     # 预置一个种子标签并关联（模拟种子标签关联 source=manual）
     async with async_session() as db:
-        from sqlalchemy import select
-
         from app.models.tag import InspirationTag
 
-        seed = (
-            await db.execute(select(Tag).where(Tag.name == "法式"))
-        ).scalar_one_or_none()
         # 法式 已作为 AI 关联存在；额外造一个种子标签并手动关联
+        # （这里原先还有个未使用的 `seed =` 查询，ruff 报未用变量，已删）
         seed_tag = Tag(name="种子测试标签", category="free", source="seed")
         db.add(seed_tag)
         await db.flush()
@@ -324,8 +322,10 @@ def test_outfit_tags_suggest_no_tags(client, upload, fake_ollama):
     assert r.json()["suggestions"] == []
 
 
-def test_quality_stats(client, upload):
+def test_quality_stats(client, upload, monkeypatch):
     """质量审核统计口径：pending/approved/rejected 计数与通过率。"""
+    # 依赖「手动上传默认免审核」这条默认行为：界面能改且会写进真实 .env，显式固定住
+    monkeypatch.setattr(settings, "manual_upload_auto_approve", True)
     upload()  # manual_upload 默认 approved
     b = upload().json()["id"]
     c = upload().json()["id"]
@@ -352,8 +352,10 @@ def test_quality_check_creates_task(client, upload):
     assert data["task_id"] is not None
 
 
-def test_quality_recheck_resets_approved(client, upload):
+def test_quality_recheck_resets_approved(client, upload, monkeypatch):
     """重新审核：approved 重置为 pending 后提交任务。"""
+    # 同上：本用例要的是「上传即 approved」这条默认行为，显式固定开关
+    monkeypatch.setattr(settings, "manual_upload_auto_approve", True)
     upload()  # approved
     r = client.post("/api/ai/quality-recheck")
     assert r.status_code == 200
@@ -364,7 +366,7 @@ def test_quality_recheck_resets_approved(client, upload):
 
 def test_quality_rejected_to_trash(client, upload):
     """已拒绝素材批量移入垃圾桶（软删除）：列表移除、reason=质量差、可恢复。"""
-    a = upload().json()["id"]
+    upload()  # 造一条不影响断言的素材（原先赋给未使用的变量，ruff 报未用变量）
     b = upload().json()["id"]
     client.patch(f"/api/inspirations/{b}", json={"quality_status": "rejected"})
 

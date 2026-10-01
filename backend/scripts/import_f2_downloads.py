@@ -165,6 +165,8 @@ from .f2_collects import (  # noqa: F401
 from .f2_fetch import (  # noqa: F401
     _SEC_USER_ID_RE,
     _default_runner,
+    _run_with_timeout,
+    RESOLVE_RUN_TIMEOUT_S,
     author_last_download,
     build_f2_command,
     build_f2_collect_command,
@@ -287,6 +289,7 @@ __all__ = [
     "resolve_download_root",
     "resolve_f2_author_by_aweme",
     "resolve_profile_nicknames",
+    "RESOLVE_RUN_TIMEOUT_S",
     "run_fetch",
     "run_fetch_collects",
     "run_fetch_likes",

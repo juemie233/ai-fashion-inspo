@@ -5,8 +5,11 @@ import sqlite3
 from app.config import settings
 
 
-def test_upload_and_list(client, upload):
+def test_upload_and_list(client, upload, monkeypatch):
     """上传素材后可在列表与详情中查询到。"""
+    # 本用例断言「手动上传默认免审核」这条**默认**行为，所以显式固定它：该开关在界面上
+    # 可改且会写进真实 .env，跟着环境走会让用例时红时绿（代码没坏）
+    monkeypatch.setattr(settings, "manual_upload_auto_approve", True)
     r = upload(source_type="manual_upload")
     assert r.status_code == 201, r.text
     data = r.json()

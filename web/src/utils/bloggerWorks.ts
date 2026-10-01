@@ -53,16 +53,6 @@ export function mergeProfileKeys(...sources: string[][]): string[] {
 }
 
 /**
- * 能否「下载所有作品」：必须是**抖音博主**且填了主页链接。
- *
- * - 限定抖音：作品下载走 f2（抖音专用通道），小红书博主没有对应能力；
- * - 必须有主页链接：f2 靠主页链接 / sec_user_id 定位账号，没有它无从下起。
- */
-export function canDownloadWorks(subject: WorksDownloadSubject): boolean {
-  return subject.platform === 'douyin' && Boolean((subject.profile_url ?? '').trim())
-}
-
-/**
  * 能否「先自动解析抖音主页、再下载」：抖音博主 + 还没有主页链接 + f2 通道可用。
  *
  * 由来：抖音「我的喜欢 / 我的收藏」采回来的素材只带**作者昵称**（f2 把原作者写进文件名，

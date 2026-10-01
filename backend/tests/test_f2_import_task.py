@@ -3181,16 +3181,19 @@ async def test_execute_f2_import_like_mode_can_skip_blogger_registration(
 
 
 def test_personal_registers_bloggers_truth_table():
-    """「我的列表」是否补建博主：like 看开关，**collection 恒不补建**（纯函数口径）。"""
+    """「我的列表」是否补建博主：**只有 like 可能为 True**（纯函数口径）。
+
+    - collection：恒不补建（2026-10-01 口径，显式要求也不生效）；
+    - post：那条链路的作者本来就受白名单约束，不建号（口径不同不混用）——这一格曾经是
+      True，只靠调用点的 personal_mode 兜着，太容易踩，改成显式 False。
+    """
     from app.services.task_runners.f2_import import personal_registers_bloggers
 
     assert personal_registers_bloggers("like", True) is True
     assert personal_registers_bloggers("like", False) is False
-    # 收藏：显式要求也不补建（2026-10-01 口径）
     assert personal_registers_bloggers("collection", True) is False
     assert personal_registers_bloggers("collection", False) is False
-    # 发布模式本来就不走这条链路
-    assert personal_registers_bloggers("post", True) is True
+    assert personal_registers_bloggers("post", True) is False
     assert personal_registers_bloggers("post", False) is False
 
 

@@ -35,6 +35,8 @@ export function useDouyinBloggerPicker() {
   const selectedMap = ref<Record<number, PickerBlogger>>({})
   /** 正在自动解析主页标识（每人一次联网反查，约 20~40 秒） */
   const resolving = ref(false)
+  /** 解析进度（串行逐个；界面据此显示「解析中 2/3」，避免看起来像卡死） */
+  const progress = ref<{ done: number; total: number }>({ done: 0, total: 0 })
 
   /** 竞态 token：只有最后一次搜索的响应会被采用 */
   let searchToken = 0
@@ -115,12 +117,16 @@ export function useDouyinBloggerPicker() {
   /**
    * 对「已选但缺主页标识」的博主逐个自动解析（后端按她的素材作品 ID 反查作者）。
    *
+   * **串行**（不并发）：每人一次 f2 运行、共用一个抖音 cookie 会话，并发容易触发风控；
+   * 代价是选 3 个人最长约 2 分钟，所以用 `progress` 让界面显示「解析中 2/3」。
+   *
    * Returns: 解析成功的人数（失败会逐条提示原因，不抛异常）。
    */
   async function resolveMissing(): Promise<number> {
     const targets = missing.value
     if (!targets.length) return 0
     resolving.value = true
+    progress.value = { done: 0, total: targets.length }
     let ok = 0
     try {
       for (const person of targets) {
@@ -143,10 +149,12 @@ export function useDouyinBloggerPicker() {
             `「${person.name}」自动解析失败：${e instanceof Error ? e.message : '请求出错'}`,
           )
         }
+        progress.value = { done: progress.value.done + 1, total: targets.length }
       }
       if (ok) Message.success(`已解析 ${ok} 位博主的主页链接，可以开始下载了`)
     } finally {
       resolving.value = false
+      progress.value = { done: 0, total: 0 }
     }
     return ok
   }
@@ -166,6 +174,7 @@ export function useDouyinBloggerPicker() {
     selectedKeys,
     missing,
     resolving,
+    progress,
     search,
     onChange,
     resolveMissing,

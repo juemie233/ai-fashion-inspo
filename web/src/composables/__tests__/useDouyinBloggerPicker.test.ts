@@ -181,4 +181,35 @@ describe('useDouyinBloggerPicker', () => {
     expect(selectedIds.value).toEqual([])
     expect(selectedKeys.value).toEqual([])
   })
+
+  it('串行解析给出进度：开始即定总数，结束复位（界面据此显示「解析中 i/N」）', async () => {
+    mocks.get.mockResolvedValue(
+      listResponse([
+        blogger({ id: 5, name: '缺链接甲', profile_url: null, platform_user_id: null }),
+        blogger({ id: 6, name: '缺链接乙', profile_url: null, platform_user_id: null }),
+      ]),
+    )
+    mocks.post.mockResolvedValue({
+      data: {
+        ok: true,
+        blogger_id: 5,
+        name: '缺链接甲',
+        profile_url: 'https://www.douyin.com/user/MS4wLy_x',
+        platform_user_id: 'MS4wLy_x',
+        ip_location: '',
+        source: 'f2_aweme',
+        reason: '',
+      },
+    })
+    const { search, onChange, resolveMissing, progress } = useDouyinBloggerPicker()
+    await search()
+    onChange([5, 6])
+    expect(progress.value).toEqual({ done: 0, total: 0 })
+
+    const pending = resolveMissing() // 不 await：先看同步设定好的总数
+    expect(progress.value).toEqual({ done: 0, total: 2 })
+
+    await pending
+    expect(progress.value).toEqual({ done: 0, total: 0 }) // 结束后复位，避免界面停在「2/2」
+  })
 })

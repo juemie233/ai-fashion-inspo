@@ -149,12 +149,19 @@ const {
   selectedKeys: pickerSelectedKeys,
   missing: pickerMissing,
   resolving: pickerResolving,
+  progress: pickerProgress,
   search: searchBloggers,
   onChange: onPickerChange,
   resolveMissing: resolveMissingProfiles,
   clear: clearPicker,
 } = useDouyinBloggerPicker()
-onMounted(() => void searchBloggers())
+
+// 状态与候选一起拿：f2 **明确不可用**时选择器点不动，就不必再拉一次博主清单
+// （状态还没回来 / 后端版本较旧时 `undefined`，照常拉）
+onMounted(async () => {
+  await loadStatus()
+  if (status.value?.profiles_available !== false) void searchBloggers()
+})
 
 /** 最终提交的标识：选择器选中的博主 + 手填链接，去重 */
 const profileList = computed(() =>
@@ -282,7 +289,13 @@ async function toggleAuthors() {
           }}
           还没有主页链接/sec_user_id，提交时会被跳过：</span
         >
-        <a-link :loading="pickerResolving" @click="resolveMissingProfiles()">自动解析主页</a-link>
+        <a-link :loading="pickerResolving" @click="resolveMissingProfiles()">
+          {{
+            pickerResolving && pickerProgress.total
+              ? `解析中 ${pickerProgress.done}/${pickerProgress.total}…`
+              : '自动解析主页'
+          }}
+        </a-link>
         <span class="f2-tip">（用她的素材作品 ID 反查，约 20~40 秒/人）</span>
       </div>
       <div class="f2-profile-tip">

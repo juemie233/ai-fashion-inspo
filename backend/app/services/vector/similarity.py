@@ -110,6 +110,8 @@ async def backfill_all_vectors(
     if not vector_store.is_lancedb_available():
         return {"error": "lancedb 未安装，请先执行：pip install lancedb"}
 
+    # 只取标签是**刻意例外**：本函数只把素材喂给 build_inspiration_text，从不序列化响应，
+    # 所以不链人物（理由与例外清单见 inspiration_query.inspiration_load_options）
     query = (
         select(Inspiration)
         .options(selectinload(Inspiration.tags).selectinload(InspirationTag.tag))

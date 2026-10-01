@@ -232,14 +232,16 @@ export const bloggersApi = {
    *
    * 用在「下载所有作品」之前：素材来自抖音「我的喜欢 / 我的收藏」时只带作者昵称，补建的
    * 博主没有主页链接。后端按「本地互推 → f2 用户库昵称唯一命中（离线）→ 拿素材的真实作品
-   * ID 跑一次 f2 反查作者（联网）」逐级解析；联网那一步实测 20~40 秒，故单独放大超时
-   * （默认 30 秒会先超时）。
+   * ID 跑一次 f2 反查作者（联网）」逐级解析；联网那一步实测 20~40 秒。
+   *
+   * 超时给到 200 秒：后端最多试 2 个作品、每个 f2 运行上限 90 秒（最坏 180 秒）。真超时也
+   * 不必慌——第一次的解析结果通常已经写库，再点一次会走「本地互推」秒回。
    */
   async resolveDouyinProfile(bloggerId: number): Promise<DouyinProfileResolveResult> {
     const { data } = await apiClient.post<DouyinProfileResolveResult>(
       `/bloggers/${bloggerId}/resolve-douyin-profile`,
       undefined,
-      { timeout: 120000 },
+      { timeout: 200000 },
     )
     return data
   },
