@@ -44,7 +44,7 @@ from app.models.task import TaskQueue
 from app.services import video_service
 from app.services.face_client import FaceServiceUnavailableError, face_client
 from app.services.face_match import match_all_faces
-from app.services.task_runners.common import RecoverableTaskError, _chunked, utcnow
+from app.services.task_runners.common import is_cancelled, RecoverableTaskError, _chunked, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -169,12 +169,6 @@ def _apply_scope_filter(stmt: Select, scope: str) -> Select:
     return stmt
 
 
-async def _is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
-    """检查任务是否被外部置为 cancelled（每批调用一次）。"""
-    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task.id))
-    return (result.scalar() or "running") == "cancelled"
-
-
 async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
     """执行人脸库扫描任务：分批检测素材并写 detections（增量/全量）。"""
     payload = task.result or {}
@@ -221,7 +215,7 @@ async def execute_face_scan(db: AsyncSession, task: TaskQueue) -> None:
     # 会越界访问 ids[start + len(batch_ids)]，抛 IndexError（list index out of range）
     # 整个扫描任务失败，且已扫过的素材无法续跑。
     while start < len(ids):
-        if await _is_cancelled(db, task):
+        if await is_cancelled(db, task):
             cancelled = True
             break
 
@@ -416,7 +410,7 @@ async def _write_detections(
             ),
         )
     )
-    for insp_id, faces in zip(inspiration_ids, faces_list):
+    for insp_id, faces in zip(inspiration_ids, faces_list, strict=False):
         locked = locked_by_insp.get(insp_id, [])
         excluded = excluded_by_insp.get(insp_id, [])
         # 锁定 + 不匹配记录一起重排序号（保持原相对顺序，锁在前、不匹配在后），
@@ -442,7 +436,7 @@ async def _write_detections(
         # 反复扫描+确认后累积多条相同人脸记录（同源检测 embedding 字节级一致）
         kept_embeddings = {d.embedding for d in kept if d.embedding}
         inserted = 0
-        for idx, face in enumerate(faces):
+        for _idx, face in enumerate(faces):
             emb_bytes = np.asarray(face["embedding"], dtype=np.float32).tobytes()
             if emb_bytes in kept_embeddings:
                 continue

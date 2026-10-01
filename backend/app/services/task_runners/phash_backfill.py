@@ -21,7 +21,7 @@ from app.services.near_duplicate_service import (
     _count_missing_phash,
     backfill_phash_cache,
 )
-from app.services.task_runners.common import utcnow
+from app.services.task_runners.common import is_cancelled, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ async def execute_phash_backfill(db: AsyncSession, task: TaskQueue) -> None:
         db, budget_seconds=budget_seconds, on_batch=_on_batch
     )
 
-    if await _is_cancelled(db, task):
+    if await is_cancelled(db, task):
         cancelled = True
 
     missing_now = await _count_missing_phash(db)
@@ -139,14 +139,6 @@ async def execute_phash_backfill(db: AsyncSession, task: TaskQueue) -> None:
             f"哈希缓存补齐任务结束: #{task.id}，补 {result['computed']} 张，"
             f"仍缺 {missing_now} 张（其中算不出哈希 {result['unhashable']} 张）"
         )
-
-
-async def _is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
-    """检查任务是否被外部置为 cancelled。"""
-    status = (
-        await db.execute(select(TaskQueue.status).where(TaskQueue.id == task.id))
-    ).scalar()
-    return (status or "running") == "cancelled"
 
 
 async def _unhashable_sample(db: AsyncSession, unhashable_count: int) -> list[dict]:

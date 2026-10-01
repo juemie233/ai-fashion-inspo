@@ -32,7 +32,7 @@ from app.services.blogger_enrichment_service import (
     list_missing_profile_bloggers,
     load_f2_profile_map,
 )
-from app.services.task_runners.common import PermanentTaskError, utcnow
+from app.services.task_runners.common import is_cancelled, PermanentTaskError, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +67,6 @@ async def create_enrich_blogger_profile_task(
     await db.refresh(task)
     logger.info(f"已创建博主资料补全任务: #{task.id}，{len(ids)} 个博主")
     return task, len(ids)
-
-
-async def _is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
-    """检查任务是否被外部置为 cancelled（每处理一个博主后调用）。"""
-    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task.id))
-    return (result.scalar() or "running") == "cancelled"
 
 
 async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> None:
@@ -157,7 +151,7 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
             )
 
         for idx, blogger_id in enumerate(ids, start=1):
-            if await _is_cancelled(db, task):
+            if await is_cancelled(db, task):
                 cancelled = True
                 break
             blogger = await db.get(Blogger, blogger_id)

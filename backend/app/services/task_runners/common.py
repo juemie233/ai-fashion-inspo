@@ -7,6 +7,7 @@
 import logging
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -69,6 +70,19 @@ class RecoverableTaskError(Exception):
 
 class PermanentTaskError(Exception):
     """永久错误：任务不应重试（图片损坏 / 文件不存在等）。"""
+
+
+async def is_cancelled(db: AsyncSession, task: TaskQueue) -> bool:
+    """任务是否被外部置为 ``cancelled``（各任务执行器统一的取消检查）。
+
+    为什么收敛到一处：此前 enrich_blogger_profile / face_scan / phash_backfill 各写了一份
+    同名同义的实现。口径只留一个来源——**只有显式 cancelled 才算取消**，``paused`` 不算
+    （暂停要保留 stage_state 以便原处恢复，由执行器自己判定暂停时机）。
+    """
+    status = (
+        await db.execute(select(TaskQueue.status).where(TaskQueue.id == task.id))
+    ).scalar()
+    return (status or "running") == "cancelled"
 
 
 def _is_recoverable_error(message: str) -> bool:

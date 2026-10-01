@@ -61,6 +61,29 @@ async def load_inspiration_full(
     return result.unique().scalar_one_or_none()
 
 
+async def load_live_inspiration(
+    db: AsyncSession, inspiration_id: str
+) -> Inspiration | None:
+    """加载**未删除**的素材（含链式关联预加载）；不存在或在垃圾桶时返回 None。
+
+    与 :func:`load_inspiration_full` 的差别只有 ``deleted_at IS NULL`` 这一条：相似推荐与
+    以图搜图都不该把垃圾桶素材当候选，也不该给垃圾桶里的素材出推荐。
+
+    此前这段在两个模块里各写了一份同名同义的 ``_load_inspiration``
+    （``routers/search.py`` 与 ``services/vector/similarity.py``）——其中一份漏了 bloggers/models
+    的链式预加载，正是 2026-09-27「某素材没有相似推荐」那起 500 的结构性原因。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(*inspiration_load_options())
+        .where(
+            Inspiration.id == inspiration_id,
+            Inspiration.deleted_at.is_(None),
+        )
+    )
+    return result.unique().scalar_one_or_none()
+
+
 async def list_inspirations(
     db: AsyncSession,
     page: int = 1,

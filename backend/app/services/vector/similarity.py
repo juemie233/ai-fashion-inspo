@@ -24,7 +24,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag
-from app.services.inspiration_query import inspiration_load_options
+from app.services.inspiration_query import load_live_inspiration
 from app.services.vector import store as vector_store
 from app.services.vector.embedding import (
     build_inspiration_text,
@@ -54,36 +54,6 @@ async def _resolve_vector_source_path(insp: Inspiration) -> Path | None:
         return None
     full_path = settings.storage_root / insp.file_path
     return full_path if full_path.exists() else None
-
-
-async def _load_inspiration(
-    db: AsyncSession, inspiration_id: str
-) -> Inspiration | None:
-    """加载素材（预加载标签与博主/模特关联链），不存在时返回 None。
-
-    必须**链式** selectinload，否则异步环境下访问未加载的关系会触发
-    MissingGreenlet（500）：
-    - ``tags.tag``：响应里的标签名（InspirationTag.tag 默认 lazy="select"）；
-    - ``bloggers.blogger`` / ``models.model``：``inspiration_to_out`` 会读内层实体
-      （``t.blogger`` / ``t.model``）——只加载外层集合不够。
-
-    2026-09-27 用户报「某素材没有相似推荐」的根因就是后者：候选素材由本函数加载，
-    原实现只预加载了 tags.tag，候选里只要有一个带人物关联，序列化即懒加载报错 →
-    /api/search/similar/{id} 返回 500 → 前端 useSimilarItems 静默 catch 成空列表，
-    界面显示「暂无相似素材（需要先回填向量…）」——一个与真实原因无关的提示。
-    与 routers/search.py 的加载器（同函数名）保持同一套预加载，别再分叉。
-    """
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            *inspiration_load_options(),
-        )
-        .where(
-            Inspiration.id == inspiration_id,
-            Inspiration.deleted_at.is_(None),
-        )
-    )
-    return result.unique().scalar_one_or_none()
 
 
 async def backfill_all_vectors(
@@ -239,7 +209,7 @@ async def rebuild_text_vector(db: AsyncSession, inspiration_id: str) -> bool:
     """
     if not vector_store.is_lancedb_available():
         return False
-    insp = await _load_inspiration(db, inspiration_id)
+    insp = await load_live_inspiration(db, inspiration_id)
     if insp is None:
         return False
     text = build_inspiration_text(insp)
@@ -330,7 +300,7 @@ async def find_similar_hybrid(
                 if hit["inspiration_id"] == source_id:
                     continue
                 cand_id = hit["inspiration_id"]
-                cand = await _load_inspiration(db, cand_id)
+                cand = await load_live_inspiration(db, cand_id)
                 if cand is None:
                     continue
                 shared = _count_shared_tags(cand, source_tag_ids)
@@ -357,7 +327,7 @@ async def find_similar_hybrid(
                 for item in tag_hits:
                     if item["id"] in used_ids or item["id"] == source_id:
                         continue
-                    cand = await _load_inspiration(db, item["id"])
+                    cand = await load_live_inspiration(db, item["id"])
                     if cand is None:
                         continue
                     out_items.append({
@@ -374,7 +344,7 @@ async def find_similar_hybrid(
     if not out_items:
         tag_hits = await find_similar_images(db, source_id, top_k)
         for item in tag_hits:
-            cand = await _load_inspiration(db, item["id"])
+            cand = await load_live_inspiration(db, item["id"])
             if cand is None:
                 continue
             out_items.append({

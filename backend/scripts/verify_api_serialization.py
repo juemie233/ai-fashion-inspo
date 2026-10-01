@@ -36,7 +36,7 @@ from sqlalchemy import func, select  # noqa: E402
 
 from app.database import async_session  # noqa: E402
 from app.models.inspiration import Inspiration  # noqa: E402
-from app.routers.search import _load_inspiration  # noqa: E402
+from app.services.inspiration_query import load_live_inspiration  # noqa: E402
 from app.schemas.inspiration import inspiration_to_out  # noqa: E402
 from app.services.vector.similarity import find_similar_hybrid  # noqa: E402
 
@@ -70,7 +70,7 @@ async def _check_one(insp_id: str) -> tuple[list[str], int, int]:
 
     async with async_session() as db:
         try:
-            source = await _load_inspiration(db, insp_id)
+            source = await load_live_inspiration(db, insp_id)
         except Exception as e:
             return [_describe(insp_id, "加载素材", e)], 0, 0
         if source is None:

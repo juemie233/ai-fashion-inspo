@@ -32,7 +32,7 @@ from app.services.embedding_service import (
     get_image_embedding_status,
     get_text_embedding_status,
 )
-from app.services.inspiration_query import inspiration_load_options
+from app.services.inspiration_query import load_live_inspiration, inspiration_load_options
 from app.services.vector_service import find_similar_hybrid
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -109,7 +109,6 @@ async def search_inspirations(
 
     # 关键词搜索：标签名、作者名、文件名
     if keyword:
-        kw = f"%{keyword}%"
         matching_tag_ids = select(InspirationTag.inspiration_id).join(
             Tag, InspirationTag.tag_id == Tag.id
         ).where(Tag.name.contains(keyword))
@@ -315,7 +314,7 @@ async def vector_search(
 
     items: list[VectorSearchItem] = []
     for hit in hits:
-        insp = await _load_inspiration(db, hit["inspiration_id"])
+        insp = await load_live_inspiration(db, hit["inspiration_id"])
         if insp:
             items.append(
                 VectorSearchItem(
@@ -364,7 +363,7 @@ async def similar_inspirations(
     图像向量不可用或无向量数据时，回退到纯标签匹配。
     结果中 match_source 标记：visual（视觉）/ hybrid（混合）/ tag（标签）。
     """
-    source = await _load_inspiration(db, inspiration_id)
+    source = await load_live_inspiration(db, inspiration_id)
     if not source:
         raise HTTPException(status_code=404, detail="素材未找到")
 
@@ -451,25 +450,6 @@ async def tag_cooccurrence(
 
 
 
-
-
-async def _load_inspiration(db: AsyncSession, inspiration_id: str) -> Inspiration | None:
-    """加载素材（预加载标签与博主/模特关联链，排除垃圾桶素材），不存在时返回 None。
-
-    与 search_inspirations 的加载器保持一致：inspiration_to_out 访问关联内层
-    实体时必须链式 selectinload，否则 async 下懒加载抛 MissingGreenlet。
-    """
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            *inspiration_load_options(),
-        )
-        .where(
-            Inspiration.id == inspiration_id,
-            Inspiration.deleted_at.is_(None),
-        )
-    )
-    return result.unique().scalar_one_or_none()
 
 
 async def _save_temp_image(file: UploadFile) -> Path:

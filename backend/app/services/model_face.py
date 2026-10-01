@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import numpy as np
 from fastapi import HTTPException
@@ -31,7 +31,7 @@ from app.services.blogger_face import (
     _image_size,
 )
 from app.services.face_client import FaceServiceUnavailableError, face_client
-from app.utils.time import format_utc
+from app.utils.time import utcnow_iso, format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +42,6 @@ DEFAULT_TOP_K = 5
 EMBED_BATCH_SIZE = 32
 # 照片文件读取并发上限（磁盘 I/O 放线程池）
 READ_CONCURRENCY = 8
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 async def register_model_face(
@@ -149,7 +145,7 @@ async def register_model_face(
         record = ModelFaceEmbedding(model_id=model_id)
         db.add(record)
     record.embedding = avg.astype(np.float32).tobytes()
-    record.updated_at = datetime.now(timezone.utc)
+    record.updated_at = datetime.now(UTC)
     await db.commit()
 
     return {
@@ -160,7 +156,7 @@ async def register_model_face(
         "photos_total": len(photos),
         "qualified": len(candidates),  # 通过质量过滤的人脸总数（Top-K 的前 K 张）
         "warnings": warnings,
-        "updated_at": _now_iso(),
+        "updated_at": utcnow_iso(),
     }
 
 

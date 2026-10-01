@@ -13,7 +13,7 @@ import asyncio
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import numpy as np
 from fastapi import HTTPException
@@ -32,7 +32,7 @@ from app.services.face_client import (
     face_client,
 )
 from app.services.face_match import load_person_library, matrix_match_faces
-from app.utils.time import format_utc
+from app.utils.time import utcnow_iso, format_utc
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,6 @@ MAX_REGISTER_PHOTOS = 5
 # （用宽度占比而非面积占比：高清大图中正常半身照/全身照的面积占比普遍 < 3%，会误判）
 LOW_CONFIDENCE_THRESHOLD = 0.65
 MIN_FACE_WIDTH_RATIO = 0.05
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _image_size(data: bytes) -> tuple[int, int] | None:
@@ -279,7 +275,7 @@ async def register_blogger_face(
         record = BloggerFaceEmbedding(blogger_id=blogger_id)
         db.add(record)
     record.embedding = avg.astype(np.float32).tobytes()
-    record.updated_at = datetime.now(timezone.utc)
+    record.updated_at = datetime.now(UTC)
     await db.commit()
 
     return {
@@ -289,7 +285,7 @@ async def register_blogger_face(
         "photos_used": len(embeddings),
         "photos_total": len(image_bytes_list),
         "warnings": warnings,
-        "updated_at": _now_iso(),
+        "updated_at": utcnow_iso(),
         "photo_results": photo_results,
     }
 
@@ -522,7 +518,7 @@ async def detect_inspiration_faces(
             axis=0,
         )
         high_results = matrix_match_faces(high_embs, library, threshold)
-        for i, result in zip(high_conf_indices, high_results):
+        for i, result in zip(high_conf_indices, high_results, strict=False):
             match_results[i] = result
 
     # 查出该素材已锁定的记录：新检出人脸的 face_index 从锁定记录数起编，
@@ -541,7 +537,7 @@ async def detect_inspiration_faces(
 
     detections = []
     inserted = 0
-    for idx, face, match in zip(range(len(faces)), faces, match_results):
+    for _idx, face, match in zip(range(len(faces)), faces, match_results, strict=False):
         emb_bytes = np.asarray(face["embedding"], dtype=np.float32).tobytes()
         # 该人脸已确认（锁定）过：跳过，不重复插入（同源检测 embedding 字节级一致）
         if emb_bytes in locked_embeddings:
