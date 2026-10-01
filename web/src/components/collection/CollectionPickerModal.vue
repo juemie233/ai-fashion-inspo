@@ -112,10 +112,16 @@ function confirmAdd() {
 </script>
 
 <template>
+  <!-- ⚠️ 宽度必须用 `:width`，**不能**写成 style="width: 480px"：
+       Arco 只把 `:width`/`:modal-style` 合并进 .arco-modal（mergedModalStyle），而裸 `style`
+       会由 $attrs 透传到 `.arco-modal-container`——那是 `position: fixed; left: 0; width: 100%`
+       的全屏容器（见 Arco modal.js 的 mergeProps(..., $attrs)）。被写上 width 后整层容器只剩
+       左侧 480px 宽，弹窗就贴到网页最左边了（2026-10-01 用户报的就是这个，实测容器内联样式
+       变成 "z-index: 1001; width: 480px;"）。回归用例见 __tests__/CollectionPickerModal.test.ts。 -->
   <a-modal
     :visible="visible"
+    :width="480"
     title="加入合集"
-    style="width: 480px"
     @update:visible="emit('update:visible', $event)"
   >
     <a-spin :loading="loading" style="display: block">
