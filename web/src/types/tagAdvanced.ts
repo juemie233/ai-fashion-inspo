@@ -184,12 +184,6 @@ export interface TreeItem extends TagBrief {
   has_children: boolean
 }
 
-export interface TreePage {
-  items: TreeItem[]
-  total: number
-  parent_id: number | null
-}
-
 // ===== 操作历史 =====
 
 export type HistoryOperation =

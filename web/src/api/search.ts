@@ -42,7 +42,9 @@ export async function searchInspirations(query: SearchQuery) {
 
 /** 搜索建议（标签名自动补全） */
 export async function fetchSuggestions(q: string) {
-  const { data } = await apiClient.get<{ items: TagSuggestion[] }>('/search/suggestions', { params: { q } })
+  const { data } = await apiClient.get<{ items: TagSuggestion[] }>('/search/suggestions', {
+    params: { q },
+  })
   return data.items || data
 }
 
@@ -123,12 +125,6 @@ export async function vectorSearchImage(file: File, topK = 20) {
   const { data } = await apiClient.post<VectorSearchOut>('/search/vector', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
-  return data
-}
-
-/** 查询向量检索能力状态 */
-export async function fetchVectorStatus() {
-  const { data } = await apiClient.get<VectorStatusOut>('/search/vector/status')
   return data
 }
 

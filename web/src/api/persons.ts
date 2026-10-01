@@ -595,18 +595,6 @@ export async function fetchModelPhotoSet(
   return data
 }
 
-/** 更新照片组名称 */
-export async function updateModelPhotoSet(
-  modelId: number,
-  setId: number,
-  name: string,
-): Promise<ModelPhotoSet> {
-  const { data } = await apiClient.patch<ModelPhotoSet>(`/models/${modelId}/photo-sets/${setId}`, {
-    name,
-  })
-  return data
-}
-
 /** 删除照片组（级联删除照片与文件） */
 export async function deleteModelPhotoSet(modelId: number, setId: number) {
   await apiClient.delete(`/models/${modelId}/photo-sets/${setId}`)
@@ -632,14 +620,6 @@ export async function uploadModelPhoto(
       onUploadProgress: onProgress,
       signal,
     },
-  )
-  return data
-}
-
-/** 删除照片组内的单张照片 */
-export async function deleteModelPhoto(modelId: number, setId: number, photoId: number) {
-  const { data } = await apiClient.delete<{ removed: number }>(
-    `/models/${modelId}/photo-sets/${setId}/photos/${photoId}`,
   )
   return data
 }

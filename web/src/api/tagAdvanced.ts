@@ -14,7 +14,6 @@ import type {
   HistoryOperation,
   NetworkAnalysisResult,
   SourceDist,
-  TaskStatus,
   TreeItem,
   TrendingItem,
 } from '@/types/tagAdvanced'
@@ -184,14 +183,7 @@ export async function fetchSourceDist() {
 
 // ===== 任务状态（供面板复用） =====
 
-/** 查询任务状态（GET /api/tasks/{id}） */
-export async function fetchTaskStatus(taskId: number) {
-  const { data } = await apiClient.get<TaskStatus>(`/tasks/${taskId}`)
-  return data
-}
-
 // 任务类型 → 结果类型映射（供面板把 task.result 安全转型）
-export type TagAnalysisTaskType = 'tag_health_scan' | 'tag_cluster_scan' | 'tag_network_analyze'
 
 export function asHealthResult(result: Record<string, unknown> | null): HealthScanResult | null {
   return result ? (result as unknown as HealthScanResult) : null

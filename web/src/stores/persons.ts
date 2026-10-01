@@ -101,5 +101,3 @@ export function usePersonsStore(kind: PersonKind) {
     save,
   }))()
 }
-
-export type PersonsStore = ReturnType<typeof usePersonsStore>

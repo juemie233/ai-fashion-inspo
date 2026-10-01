@@ -317,12 +317,6 @@ export async function updateRating(id: string, rating: number) {
   return data
 }
 
-/** 手动裁剪请求：保留区域上下边界（相对 EXIF 校正后图片高度的比例，0~1） */
-export interface CropRegionRequest {
-  y1_ratio: number
-  y2_ratio: number
-}
-
 /** 手动裁剪素材图片（保留中间区域，裁掉上下部分），返回更新后的素材 */
 export async function cropInspirationRegion(
   id: string,

@@ -30,7 +30,6 @@ let socket: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let pingTimer: ReturnType<typeof setInterval> | null = null
 let reconnectAttempt = 0
-let manuallyClosed = false
 
 const handlers = new Map<string, Set<WsHandler>>()
 const reconnectedHandlers = new Set<() => void>()
@@ -97,7 +96,6 @@ function connect() {
   ) {
     return
   }
-  manuallyClosed = false
   try {
     socket = new WebSocket(resolveWsUrl())
   } catch {
@@ -139,25 +137,12 @@ function connect() {
 }
 
 function scheduleReconnect() {
-  if (manuallyClosed || reconnectTimer) return
+  if (reconnectTimer) return
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     reconnectAttempt += 1
     connect()
   }, backoffMs())
-}
-
-/** 显式关闭连接（应用卸载等场景；一般无需调用） */
-export function closeTaskWebSocket() {
-  manuallyClosed = true
-  stopPing()
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  socket?.close()
-  socket = null
-  setConnected(false)
 }
 
 /**
