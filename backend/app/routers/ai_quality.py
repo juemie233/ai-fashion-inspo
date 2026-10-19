@@ -184,6 +184,53 @@ async def quality_stats_by_source(db: AsyncSession = Depends(get_db)) -> dict[st
     return {"items": items, "total": sum(i["total"] for i in items)}
 
 
+@router.get("/quality-prompt-ab")
+async def quality_prompt_ab(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    """按 prompt 指纹对比审核结果，回答「换 prompt 后通过率是不是变了」。
+
+    分组依据是 `ai_quality_review.prompt_hash`（老 #5 落的指纹）：
+    - 同一份 prompt → 同一组，可直接比较通过率；
+    - 历史审核没有 hash（NULL），归到 `unknown` 组并标注，提醒「这组不可比」；
+    - `pass_rate` 只在**已判定**样本上计算：失败/无法判定（pending）混进分母会让
+      「模型不稳定的时期」看起来像是「prompt 变严了」。
+
+    Returns:
+        {"items": [{prompt_hash, total, approved, rejected, pending, pass_rate, known}], "count": n}
+    """
+    result = await db.execute(
+        select(
+            AIQualityReview.prompt_hash,
+            AIQualityReview.result,
+            func.count(AIQualityReview.id),
+        ).group_by(AIQualityReview.prompt_hash, AIQualityReview.result)
+    )
+
+    grouped: dict[str, dict[str, int]] = {}
+    for prompt_hash, status, count in result.all():
+        key = prompt_hash or "unknown"
+        bucket = grouped.setdefault(key, {"total": 0, "approved": 0, "rejected": 0, "pending": 0})
+        bucket[status] = bucket.get(status, 0) + count
+        bucket["total"] += count
+
+    items = []
+    for prompt_hash, bucket in sorted(grouped.items(), key=lambda kv: -kv[1]["total"]):
+        decided = bucket["approved"] + bucket["rejected"]
+        items.append(
+            {
+                # 只回前 8 位：完整 sha256 对排查没帮助，缩短后便于在 UI 里显示
+                "prompt_hash": prompt_hash[:8] if prompt_hash != "unknown" else "unknown",
+                "known": prompt_hash != "unknown",
+                "total": bucket["total"],
+                "approved": bucket["approved"],
+                "rejected": bucket["rejected"],
+                "pending": bucket["pending"],
+                "pass_rate": round(bucket["approved"] / decided * 100, 1) if decided else 0,
+            }
+        )
+
+    return {"items": items, "count": len(items)}
+
+
 @router.get("/quality-gray")
 async def quality_gray(
     limit: int = Query(100, ge=1, le=500),
