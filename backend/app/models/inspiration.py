@@ -284,3 +284,23 @@ def latest_analysis_log_subquery() -> Any:
         .group_by(AIAnalysisLog.inspiration_id)
         .subquery()
     )
+
+class QualityCorrection(Base):
+    """质量审核的「误判反馈」记录（审查 P0：误判反馈闭环）。
+
+    与 `quality_reviewed_by='human'` 的区别：那只是「人工改过状态」，本表记录**为什么改**——
+    原判定是什么、应该是什么、错在哪一类（复用 `quality_reason_code` 枚举）、补充说明。
+    有了它，prompt 调优与初筛器重训才有「已知误判集」可用。
+    """
+
+    __tablename__ = "quality_corrections"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    inspiration_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("inspirations.id", ondelete="CASCADE"), index=True
+    )
+    original_status: Mapped[str] = mapped_column(String(16))  # AI 原判定 approved/rejected
+    corrected_status: Mapped[str] = mapped_column(String(16))  # 人工纠正为 approved/rejected
+    reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 错在哪类（复用原因码）
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)  # 自由备注
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

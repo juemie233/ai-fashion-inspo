@@ -1,6 +1,6 @@
 """AI 子路由：质量审核相关接口。"""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,6 +182,59 @@ async def quality_stats_by_source(db: AsyncSession = Depends(get_db)) -> dict[st
         )
 
     return {"items": items, "total": sum(i["total"] for i in items)}
+
+
+@router.post("/quality-corrections")
+async def create_quality_correction(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """提交一次「AI 判错了」的反馈（审查 P0 误判反馈闭环）。
+
+    请求体: {"inspiration_id": "...", "corrected_status": "approved|rejected",
+             "reason_code": "not_outfit|single_item|...", "note": "可选说明"}
+
+    会把素材状态同步改过来并置 `quality_reviewed_by='human'`（随机复审不再覆盖）。
+    """
+    inspiration_id = str(payload.get("inspiration_id") or "").strip()
+    corrected_status = str(payload.get("corrected_status") or "").strip()
+    if not inspiration_id:
+        raise HTTPException(status_code=400, detail="请提供 inspiration_id")
+    from app.services.quality_correction import record_correction
+
+    try:
+        return await record_correction(
+            db,
+            inspiration_id,
+            corrected_status,
+            reason_code=payload.get("reason_code") or None,
+            note=payload.get("note") or None,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.get("/quality-corrections")
+async def list_quality_corrections(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """分页列出误判反馈（按时间倒序）。"""
+    from app.services.quality_correction import list_corrections
+
+    items, total = await list_corrections(db, page=page, size=size)
+    return {"items": items, "total": total, "page": page, "size": size}
+
+
+@router.get("/quality-corrections/stats")
+async def quality_correction_stats(db: AsyncSession = Depends(get_db)) -> dict:
+    """误判反馈统计：按错误类型与「原判定→纠正」方向分组。"""
+    from app.services.quality_correction import correction_stats
+
+    return await correction_stats(db)
 
 
 @router.get("/quality-prompt-ab")
