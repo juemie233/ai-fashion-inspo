@@ -7,6 +7,7 @@
 import { computed, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
+import { toggleAllInSet, toggleInSet } from '@/utils/setOps'
 import { getApiErrorMessage } from '@/utils/apiError'
 import type { TrashReason } from '@/api/inspirations'
 
@@ -182,17 +183,13 @@ export function useF2Results() {
   }
 
   function toggleSelect(id: string) {
-    const next = new Set(selectedIds.value)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    selectedIds.value = next
+    selectedIds.value = toggleInSet(selectedIds.value, id)
   }
 
   /** 全选/取消全选：只作用于已加载且可操作的条目（已彻底删除的不可操作） */
   function selectAllLoaded() {
     const selectable = items.value.filter((i) => i.state !== 'gone').map((i) => i.id)
-    const allSelected = selectable.length > 0 && selectable.every((id) => selectedIds.value.has(id))
-    selectedIds.value = allSelected ? new Set() : new Set(selectable)
+    selectedIds.value = toggleAllInSet(selectable, selectedIds.value)
   }
 
   /** 审查动作共同的收尾：清空勾选、按当前筛选重新拉取（计数与现状都会变） */

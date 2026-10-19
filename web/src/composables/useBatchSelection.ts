@@ -11,6 +11,7 @@ import {
   type BatchUpdateFields,
   type TrashReason,
 } from '@/api/inspirations'
+import { toggleAllInSet, toggleInSet } from '@/utils/setOps'
 
 export function useBatchSelection() {
   /** 是否处于批量选择模式 */
@@ -32,16 +33,12 @@ export function useBatchSelection() {
 
   /** 切换单个素材勾选 */
   function toggleSelect(id: string) {
-    const next = new Set(selectedIds.value)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    selectedIds.value = next
+    selectedIds.value = toggleInSet(selectedIds.value, id)
   }
 
   /** 全选 / 取消全选当前列表 */
   function toggleSelectAll(allIds: string[]) {
-    const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.value.has(id))
-    selectedIds.value = allSelected ? new Set() : new Set(allIds)
+    selectedIds.value = toggleAllInSet(allIds, selectedIds.value)
   }
 
   /** 批量收藏 / 取消收藏，返回实际更新数 */

@@ -9,10 +9,11 @@
  *  - 入库前**五层去重**：同一内容不会重复入库，重复点击也安全
  */
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { TableColumnData } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
+import { usePolling } from '@/composables/usePolling'
 import { useDouyinBloggerPicker } from '@/composables/useDouyinBloggerPicker'
 import { mergeProfileKeys } from '@/utils/bloggerWorks'
 import { authorColumnSorter } from '@/utils/f2Authors'
@@ -83,27 +84,24 @@ const runningText = computed(() => {
   return `正在执行任务 #${task.id}（${task.progress}%）${detail ? ` · ${detail}` : ''}`
 })
 
-let timer: ReturnType<typeof setInterval> | null = null
-
-function stopPolling() {
-  if (timer !== null) {
-    clearInterval(timer)
-    timer = null
-  }
-}
+// 进行中任务的状态轮询：定时器生命周期（含卸载自动停止）交给 usePolling，
+// 不再在本组件里手写 setInterval —— 项目里已有 8 处用它，这里是唯一自己实现的一份。
+const { start: startStatusPolling, stop: stopStatusPolling } = usePolling({
+  intervalMs: 5000,
+  // silent：轮询不改 statusLoading，否则状态行每 5 秒闪一次加载态
+  callback: () => void loadStatus({ silent: true }),
+  immediate: false,
+})
 
 watch(
   () => status.value?.auto?.running_task_id ?? null,
   (taskId) => {
-    stopPolling()
-    if (taskId === null) return
-    // silent：轮询不改 statusLoading，否则状态行每 5 秒闪一次加载态
-    timer = setInterval(() => void loadStatus({ silent: true }), 5000)
+    stopStatusPolling()
+    if (taskId !== null) startStatusPolling()
   },
 )
 
 onMounted(loadStatus)
-onUnmounted(stopPolling)
 
 async function onSubmit() {
   const taskId = await submit({
