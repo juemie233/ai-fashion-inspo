@@ -136,7 +136,7 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)) -> dict[str, str |
 
 
 @router.get("/quality-stats")
-async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | float]:
+async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """质量审核统计：待审核/已通过/已拒绝数量及通过率（仅图片素材）。"""
     result = await db.execute(
         select(
@@ -178,6 +178,18 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | f
     )
     avg_ms = avg_result.scalar()
 
+    # 按结构化原因码分组（仅被拒素材）：驱动前端「按原因筛选」与质量看板
+    reason_result = await db.execute(
+        select(Inspiration.quality_reason_code, func.count(Inspiration.id))
+        .where(
+            Inspiration.media_type == "image",
+            Inspiration.deleted_at.is_(None),
+            Inspiration.quality_status == "rejected",
+        )
+        .group_by(Inspiration.quality_reason_code)
+    )
+    reason_counts = {(code or "unknown"): count for code, count in reason_result.all()}
+
     return {
         "total": total,
         "pending": pending,
@@ -186,4 +198,6 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | f
         "pass_rate": pass_rate,
         "ai_generated": ai_generated,
         "avg_seconds": round(float(avg_ms) / 1000, 1) if avg_ms else 0,
+        # 被拒素材的原因分布：{not_outfit: 120, single_item: 33, ...}
+        "reason_counts": reason_counts,
     }

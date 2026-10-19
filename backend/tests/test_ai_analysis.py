@@ -849,3 +849,43 @@ async def test_quality_review_records_prompt_hash(client, upload, fake_ollama):
     assert re.fullmatch(r"[0-9a-f]{64}", stats["prompt_hash"] or ""), stats["prompt_hash"]
     assert stats["model_name"] == settings.ollama_vision_model
     assert stats["raw_output"], "应保留模型原始输出，供复盘与 prompt 调优"
+
+async def test_quality_reason_code_set_on_reject(client, upload, fake_ollama):
+    """被拒素材写入结构化原因码（P0）：模型未给合法 code 时兜底 not_outfit。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = False
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    async with async_session() as db:
+        status, _reason, _ai = await check_image_quality(db, insp["id"], insp["file_path"])
+    assert status == "rejected"
+
+    async with async_session() as db:
+        saved = await db.get(Inspiration, insp["id"])
+        assert saved.quality_reason_code in {
+            "not_outfit", "single_item", "partial", "low_quality", "ad", "other"
+        }, saved.quality_reason_code
+
+
+async def test_quality_reason_code_cleared_on_approve(client, upload, fake_ollama):
+    """通过时原因码为 NULL（同时清掉上一次的结构化原因）。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    async with async_session() as db:
+        await check_image_quality(db, insp["id"], insp["file_path"])
+    async with async_session() as db:
+        saved = await db.get(Inspiration, insp["id"])
+        assert saved.quality_reason_code is None
+
+
+def test_quality_stats_has_reason_counts(client):
+    """统计接口返回按原因码分组的分布（驱动前端按原因筛选）。"""
+    body = client.get("/api/ai/quality-stats").json()
+    assert "reason_counts" in body
+    assert isinstance(body["reason_counts"], dict)

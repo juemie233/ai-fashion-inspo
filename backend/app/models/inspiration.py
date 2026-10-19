@@ -84,6 +84,9 @@ class Inspiration(Base):
     # 判定来源：ai=模型审核 / human=人工翻案或手动设置 / None=历史数据（未知）。
     # 用途：随机复审（force=True）不得覆盖人工判定，否则人工翻案会被下一次复审推翻。
     quality_reviewed_by: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 拒绝原因的结构化编码（not_outfit/single_item/partial/low_quality/ad/other；
+    # 初筛器拒绝记 prefilter_reject）；approved 时为 NULL。自由文本 reason 保留给人看。
+    quality_reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     is_ai_generated: Mapped[bool] = mapped_column(
         Boolean, default=False, index=True
     )  # 疑似 AI 生成标记（只标记不拒绝，与 quality_status 正交）

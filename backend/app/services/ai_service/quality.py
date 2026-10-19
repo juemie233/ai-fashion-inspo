@@ -15,6 +15,9 @@ from app.services.ai_parser import parse_analysis_response, parse_is_outfit
 from app.services.ai_service.common import _read_image_base64, logger
 from app.services.model_config import get_model_config
 
+"""拒绝原因码白名单（与 prompt 里的枚举保持一致；approved 时为 None）。"""
+REASON_CODES = {"not_outfit", "single_item", "partial", "low_quality", "ad", "other"}
+
 
 async def _ollama_vision_chat(
     image_data: str, prompt: str, model_cfg: dict, temperature: float
@@ -130,6 +133,7 @@ async def _write_quality_result(
     reason: str | None,
     is_ai_generated: bool,
     force: bool,
+    reason_code: str | None = None,
 ) -> str | None:
     """写回质量审核结果（CAS），返回 None 表示成功，否则返回错误描述。
 
@@ -152,6 +156,8 @@ async def _write_quality_result(
                 quality_status=status,
                 quality_reason=reason,
                 is_ai_generated=is_ai_generated,
+                # 结构化拒绝原因：approved 时为 None（同时清掉上一次的结构化原因）
+                quality_reason_code=reason_code,
                 # 判定来源：本条由模型判定（人工判定在 inspiration_update 服务里写 human）
                 quality_reviewed_by="ai",
             )
@@ -217,7 +223,11 @@ async def check_image_quality(
         "2. 仅单品特写：只拍某一件单品，无真人整体穿着\n"
         "3. 局部/裁切特写：有真人但只拍到局部（如只有腿、只有脚、只有手臂、只有颈部领口），看不清整体搭配\n"
         "4. 构图裁切过度：人物主体被裁掉大部分，无法判断完整穿搭\n"
-        '只输出 JSON，格式：{"is_outfit": true 或 false, "reason": "一句话简短理由"}'
+        '只输出 JSON，格式：{"is_outfit": true 或 false, "reason": "一句话简短理由", '
+        '"reason_code": "not_outfit|single_item|partial|low_quality|ad|other"}\n'
+        "reason_code 说明（仅 is_outfit=false 时必填）："
+        "not_outfit=不是穿搭内容；single_item=只有单品特写没有穿在身上；"
+        'partial=身体/穿搭被大幅裁切；low_quality=模糊低清或严重遮挡；ad=广告/文字/截图；other=其它。'
     )
 
     ai_prompt = (
@@ -268,7 +278,7 @@ async def check_image_quality(
                 reason = f"初筛器判定为垃圾素材（置信度 {proba:.2f}）"
                 # 写回 DB 与 VLM 路径一致（CAS：仅 pending 时写入），避免素材永远停在 pending
                 err = await _write_quality_result(
-                    db, inspiration_id, "rejected", reason, False, force
+                    db, inspiration_id, "rejected", reason, False, force, "prefilter_reject"
                 )
                 if err:
                     return "pending", err, False
@@ -293,6 +303,12 @@ async def check_image_quality(
 
     reason = str(parsed.get("reason", "")).strip() or ("穿搭照片" if is_outfit else "非穿搭内容")
     status = "approved" if is_outfit else "rejected"
+    # 结构化原因码：模型给了合法值就用，否则按判定兜底（rejected → not_outfit），
+    # approved 一律 None。自由文本 reason 仍保留（人看），code 用于筛选与统计。
+    code_raw = str(parsed.get("reason_code", "")).strip()
+    reason_code = code_raw if code_raw in REASON_CODES else (None if is_outfit else "not_outfit")
+    if stats is not None:
+        stats["reason_code"] = reason_code
 
     # 第二步：仅对通过穿搭判断的图片做 AI 生成检测（非穿搭内容无需检测，省一次调用）
     ai_generated = False
@@ -311,6 +327,7 @@ async def check_image_quality(
         reason if not is_outfit else None,
         ai_generated,
         force,
+        reason_code,
     )
     if err:
         return "pending", err, False
