@@ -93,13 +93,35 @@ export function getFileUrl(relativePath: string): string {
 }
 
 /** 手动给素材关联标签（按名称查找/创建） */
+/** 同名标签已存在但类别与请求不同（后端只复用、不改类别） */
+export interface TagCategoryMismatch {
+  id: number
+  name: string
+  /** 库里实际的类别（如 body_part） */
+  category: string
+  /** 本次请求想要的类别（如 outfit） */
+  requested: string
+  /** 该素材此前是否已关联过这个标签 */
+  already_linked: boolean
+}
+
+export interface AddTagsResult {
+  added: Array<{ id: number; name: string; category: string }>
+  count: number
+  category_mismatch: TagCategoryMismatch[]
+}
+
 export async function addTagsToInspiration(
   id: string,
   names: string[],
   category = 'outfit',
   source = 'manual',
-) {
-  const { data } = await apiClient.post(`/inspirations/${id}/tags`, { names, category, source })
+): Promise<AddTagsResult> {
+  const { data } = await apiClient.post<AddTagsResult>(`/inspirations/${id}/tags`, {
+    names,
+    category,
+    source,
+  })
   return data
 }
 

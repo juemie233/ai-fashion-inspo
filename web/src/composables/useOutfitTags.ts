@@ -13,6 +13,7 @@ import {
   type InspirationTagOut,
 } from '@/api/inspirations'
 import { fetchTagsGrouped } from '@/api/tags'
+import { CATEGORY_LABELS } from '@/constants/tag'
 import type { OutfitTagOption } from '@/types/inspiration'
 
 /**
@@ -54,9 +55,26 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
     if (!detail.value || outfitSelected.value.length === 0) return
     outfitAdding.value = true
     try {
-      await addTagsToInspiration(detail.value.id, outfitSelected.value, 'outfit', 'manual')
+      const res = await addTagsToInspiration(
+        detail.value.id,
+        outfitSelected.value,
+        'outfit',
+        'manual',
+      )
       outfitSelected.value = []
-      Message.success('已添加大标签')
+      // 同名标签已存在且类别不是「穿搭大标签」时，后端只复用不改类别 → 大标签区不会显示。
+      // 必须明确告诉用户，否则表现就是「提示成功但打不上」。
+      const mismatched = res.category_mismatch ?? []
+      if (mismatched.length > 0) {
+        const detailText = mismatched
+          .map((m) => `「${m.name}」（现为${CATEGORY_LABELS[m.category] || m.category}）`)
+          .join('、')
+        Message.warning(
+          `${detailText} 已是小标签，不能直接当穿搭大标签。请换个名字（如「裸足穿搭」），或到「标签管理」把它的类别改成穿搭大标签`,
+        )
+      } else {
+        Message.success('已添加大标签')
+      }
       await _refreshDetail(detail.value.id)
       loadOutfitOptions()
     } catch {

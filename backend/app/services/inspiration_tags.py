@@ -125,6 +125,10 @@ async def add_inspiration_tags(
         raise HTTPException(status_code=400, detail="请提供标签名称列表")
 
     added = []
+    # 同名标签已存在但类别与本次请求不同：只复用、**不改类别**（改类别会把这个标签从原
+    # 小标签体系里移走，影响其它已用到它的素材）。这种情况显式回报给前端提示，避免
+    # 「提示已添加、但大标签区看不到」的静默失败。
+    category_mismatch: list[dict] = []
     for raw in names:
         name = str(raw).strip()
         if not name:
@@ -137,6 +141,17 @@ async def add_inspiration_tags(
             )
         )
         if existing.scalar_one_or_none():
+            # 已关联过：仍要检查类别，否则用户完全收不到任何反馈
+            if tag.category != category:
+                category_mismatch.append(
+                    {
+                        "id": tag.id,
+                        "name": tag.name,
+                        "category": tag.category,
+                        "requested": category,
+                        "already_linked": True,
+                    }
+                )
             continue
         db.add(
             InspirationTag(
@@ -144,6 +159,16 @@ async def add_inspiration_tags(
                 source="manual",
             )
         )
+        if tag.category != category:
+            category_mismatch.append(
+                {
+                    "id": tag.id,
+                    "name": tag.name,
+                    "category": tag.category,
+                    "requested": category,
+                    "already_linked": False,
+                }
+            )
         added.append({"id": tag.id, "name": tag.name, "category": tag.category})
 
     await db.commit()
@@ -151,7 +176,7 @@ async def add_inspiration_tags(
     # 标签变更后重建文本向量，保持语义搜索结果最新（LanceDB/Ollama 不可用时静默降级）
     await rebuild_text_vector(db, inspiration_id)
 
-    return {"added": added, "count": len(added)}
+    return {"added": added, "count": len(added), "category_mismatch": category_mismatch}
 
 
 async def remove_inspiration_tag(
