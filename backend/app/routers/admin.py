@@ -1,11 +1,8 @@
 """素材管理后台 — 统计、完整性检查、批量操作、导出与趋势分析。"""
 
 import asyncio
-import csv
-import io
 import logging
 import time
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select, update
@@ -27,9 +24,6 @@ from app.models.tag import InspirationTag
 from app.services import admin_stats_service, backup_service, inspiration_service
 from app.services import audit_service
 from app.services.audit_service import record_audit_log
-from app.services.inspiration_query import inspiration_load_options
-from app.utils.csv_safety import sanitize_csv_cell
-from app.utils.time import format_utc
 from app.schemas.admin import NearDuplicateScanRequest, PhoneCropRequest, PhoneCropApplyRequest, VectorBackfillRequest
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -254,54 +248,10 @@ async def deduplicate_files(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.get("/export")
 async def export_inspirations(db: AsyncSession = Depends(get_db)) -> Response:
-    """导出全部未删除素材为 CSV（含标签与关联人物），供 Excel/表格工具离线分析。
-
-    响应为 UTF-8（带 BOM，Excel 打开不乱码），Content-Disposition 触发浏览器下载。
-    """
-    result = await db.execute(
-        select(Inspiration)
-        .options(
-            *inspiration_load_options(),
-        )
-        .where(NOT_DELETED)
-        .order_by(Inspiration.created_at.desc())
-    )
-    inspirations = result.unique().scalars().all()
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "id", "source_type", "source_author", "source_url", "media_type",
-        "is_favorite", "quality_status", "quality_reason", "is_ai_generated",
-        "dominant_colors", "tags", "bloggers", "models", "created_at", "updated_at",
-    ])
-    for insp in inspirations:
-        tags = "|".join(t.tag.name for t in insp.tags)
-        bloggers = "|".join(b.blogger.name for b in insp.bloggers)
-        models = "|".join(m.model.name for m in insp.models)
-        row = [
-            insp.id,
-            insp.source_type,
-            insp.source_author or "",
-            insp.source_url or "",
-            insp.media_type,
-            "1" if insp.is_favorite else "0",
-            insp.quality_status or "",
-            insp.quality_reason or "",
-            "1" if insp.is_ai_generated else "0",
-            insp.dominant_colors or "",
-            tags,
-            bloggers,
-            models,
-            format_utc(insp.created_at) or "",
-            format_utc(insp.updated_at) or "",
-        ]
-        # 防 CSV 公式注入：用户/模型可控的单元格以 = + - @ 开头时加 ' 转义
-        writer.writerow([sanitize_csv_cell(x) for x in row])
-
-    filename = f"inspirations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    """导出全部未删除素材为 CSV（UTF-8 BOM，浏览器直接下载）；内容在 ``admin_stats_service``。"""
+    filename, text = await admin_stats_service.export_inspirations_csv(db)
     return Response(
-        content="\ufeff" + buf.getvalue(),
+        content="\ufeff" + text,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

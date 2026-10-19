@@ -10,7 +10,7 @@ from app.utils.file_hash import build_hash_map
 
 import asyncio
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,10 @@ from app.models.inspiration import (
 from app.models.scraper import ScraperSeenURL
 from app.models.tag import Tag, InspirationTag
 from app.utils.time import utcnow
+import csv
+import io
+from app.utils.csv_safety import sanitize_csv_cell
+from app.services.inspiration_query import inspiration_load_options
 
 # 素材媒体目录：完整性检查/存储统计只扫描这些目录，排除 lancedb（向量库）、
 # logs（日志）、cookies、debug 等非素材数据，否则会把向量库内部文件误判为
@@ -404,3 +408,55 @@ async def integrity_check(db: AsyncSession) -> dict:
         # inspiration_service.verify_trash_invariants；空列表 = 健康
         "trash_invariants": await inspiration_service.verify_trash_invariants(db),
     }
+
+
+async def export_inspirations_csv(db: AsyncSession) -> tuple[str, str]:
+    """导出全部未删除素材为 CSV，返回 ``(filename, csv_text)``（不含 BOM）。
+
+    从 ``routers/admin.py`` 下沉（C-3）：服务层只产出文本，HTTP 细节（BOM / Content-Type /
+    Content-Disposition）留给路由，避免业务层依赖 FastAPI 的 Response。
+    """
+    result = await db.execute(
+        select(Inspiration)
+        .options(
+            *inspiration_load_options(),
+        )
+        .where(NOT_DELETED)
+        .order_by(Inspiration.created_at.desc())
+    )
+    inspirations = result.unique().scalars().all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "source_type", "source_author", "source_url", "media_type",
+        "is_favorite", "quality_status", "quality_reason", "is_ai_generated",
+        "dominant_colors", "tags", "bloggers", "models", "created_at", "updated_at",
+    ])
+    for insp in inspirations:
+        tags = "|".join(t.tag.name for t in insp.tags)
+        bloggers = "|".join(b.blogger.name for b in insp.bloggers)
+        models = "|".join(m.model.name for m in insp.models)
+        row = [
+            insp.id,
+            insp.source_type,
+            insp.source_author or "",
+            insp.source_url or "",
+            insp.media_type,
+            "1" if insp.is_favorite else "0",
+            insp.quality_status or "",
+            insp.quality_reason or "",
+            "1" if insp.is_ai_generated else "0",
+            insp.dominant_colors or "",
+            tags,
+            bloggers,
+            models,
+            format_utc(insp.created_at) or "",
+            format_utc(insp.updated_at) or "",
+        ]
+        # 防 CSV 公式注入：用户/模型可控的单元格以 = + - @ 开头时加 ' 转义
+        writer.writerow([sanitize_csv_cell(x) for x in row])
+
+    filename = f"inspirations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return filename, buf.getvalue()
+
