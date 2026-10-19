@@ -1,3 +1,4 @@
+from app.services import inspiration_service
 from app.utils.time import format_utc
 from app.utils.file_hash import build_hash_map
 """素材管理统计服务：概览仪表盘聚合与存储目录扫描。
@@ -344,3 +345,62 @@ async def largest_files(
         return files[:limit]
 
     return await asyncio.to_thread(_collect)
+
+
+async def integrity_check(db: AsyncSession) -> dict:
+    """数据完整性检查（管理页巡检）：
+    - missing_files: 数据库有记录但文件不存在的素材
+    - orphan_files: 磁盘上有文件但数据库无对应记录的文件
+    """
+    storage_root = settings.storage_root
+
+    # 所有数据库记录的 file_path 和 thumbnail_path（排除垃圾桶：其文件已移入 trash/）
+    db_files_result = (await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path)
+        .where(NOT_DELETED)
+    )).all()
+
+    db_file_paths: set[str] = set()
+    id_by_path: dict[str, list[str]] = {}  # path → [id, ...]
+    for row in db_files_result:
+        for p in (row[1], row[2]):
+            if p:
+                db_file_paths.add(p)
+                id_by_path.setdefault(p, []).append(row[0])
+
+    # 检查 missing files（磁盘 exists 属阻塞 I/O，放线程池）
+    def _find_missing() -> list[dict]:
+        missing: list[dict] = []
+        for file_path, ids in id_by_path.items():
+            fpath = storage_root / file_path
+            if not fpath.exists():
+                missing.append({
+                    "file_path": file_path,
+                    "inspiration_ids": list(set(ids)),
+                })
+        return missing
+
+    missing_files = await asyncio.to_thread(_find_missing)
+
+    # 扫描磁盘媒体文件，找孤立文件（scan_storage_files 已排除 lancedb/logs 等非素材目录）
+    disk_files = await asyncio.to_thread(scan_storage_files)
+    orphan_files: list[dict] = []
+    orphan_total_size = 0
+    for rel_path, size in disk_files.items():
+        if rel_path not in db_file_paths:
+            orphan_files.append({
+                "file_path": rel_path,
+                "size_bytes": size,
+            })
+            orphan_total_size += size
+
+    return {
+        "missing_files": missing_files,
+        "missing_count": len(missing_files),
+        "orphan_files": orphan_files,
+        "orphan_count": len(orphan_files),
+        "orphan_total_size_bytes": orphan_total_size,
+        # 垃圾桶状态不变量违规（R1/R2/R3）：软删除三字段必须同真同假，见
+        # inspiration_service.verify_trash_invariants；空列表 = 健康
+        "trash_invariants": await inspiration_service.verify_trash_invariants(db),
+    }
