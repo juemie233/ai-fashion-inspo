@@ -29,7 +29,8 @@ const baseline = new Set(
 
 let raw = ''
 try {
-  raw = execFileSync('npx', ['-y', 'ts-prune', '-p', 'tsconfig.json'], {
+  // 钉版本：ts-prune 升级会改变报告格式/路径形态，导致基线整体失配（门禁瞬间报「新增 268 条」）
+  raw = execFileSync('npx', ['-y', 'ts-prune@0.10.3', '-p', 'tsconfig.json'], {
     cwd: path.join(root, 'web'),
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -44,7 +45,8 @@ for (const line of raw.split('\n')) {
   if (!s || s.startsWith('npm ')) continue
   const m = s.match(/^(.*):(\d+) - (.*)$/)
   if (!m) continue
-  current.add(`${cut(m[1])}:${m[2]} - ${m[3]}`)
+  // 不含行号：插入代码会让后续行号整体位移，行号不能当标识
+  current.add(`${cut(m[1])} - ${m[3]}`)
 }
 
 const added = [...current].filter((l) => !baseline.has(l)).sort()
@@ -56,3 +58,4 @@ if (added.length > 0) {
   process.exit(1)
 }
 console.log(`前端死代码检查通过（基线 ${baseline.size} 条，无新增）`)
+

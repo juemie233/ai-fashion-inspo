@@ -197,7 +197,7 @@ export function usePersonList(kind: PersonKind) {
 
   // ── 表格列定义 ──
 
-  const columns: TableColumnData[] = [
+  const columns = computed<TableColumnData[]>(() => [
     {
       title: '人物',
       dataIndex: 'name',
@@ -291,8 +291,10 @@ export function usePersonList(kind: PersonKind) {
       dataIndex: 'inspiration_count',
       width: 96,
       // 表头可点击排序：升序找「素材最少」（常用于发现空人物），降序找高频人物。
-      // Arco 的受控排序由 onSorterChange 接管，这里只需声明可排序。
+      // sortOrder 是受控回显（刷新/往返详情后箭头仍指向当前方向）；点击由 onSorterChange 接管。
       sortable: { sortDirections: ['descend', 'ascend'] },
+      sortOrder:
+        store.sort === 'count' ? (store.order === 'asc' ? 'ascend' : 'descend') : undefined,
       render: ({ record }) => h('span', String((record as Person).inspiration_count ?? 0)),
     },
     // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
@@ -368,7 +370,7 @@ export function usePersonList(kind: PersonKind) {
         ])
       },
     },
-  ]
+  ])
 
   // ── 热门排行（侧栏展示）──
 
@@ -406,6 +408,13 @@ export function usePersonList(kind: PersonKind) {
     await loadBloggerStats()
   })
 
+  /** 下拉切换排序方式：素材数排序一律回到「降序」（与「素材数最多」文案一致）。
+   *  否则会继承上一次表头点击留下的方向，出现「下拉写着最多、实际最少在前」的矛盾。 */
+  function onSortPicked() {
+    store.order = 'desc'
+    store.reload()
+  }
+
   /** 表头点击排序：目前只有「素材数」列可排序，方向由后端 order 参数控制。
    *  升序用于找「素材最少」（例如发现空仓人物），降序用于找高频人物。 */
   function onSorterChange(dataIndex: string, direction: string) {
@@ -442,5 +451,6 @@ export function usePersonList(kind: PersonKind) {
     expandedGroupIds,
     setExpandedGroupIds,
     onSorterChange,
+    onSortPicked,
   }
 }

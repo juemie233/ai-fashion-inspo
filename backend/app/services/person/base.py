@@ -183,7 +183,7 @@ class PersonServiceBase:
         if grouped and self.model is Blogger and not platform:
             return await self._list_grouped(db, stmt, sort, order, page, size)
 
-        # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数倒序）
+        # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数，order 控制升/降）
         if sort == "name":
             stmt = stmt.order_by(model.name.asc(), model.id.desc())
         elif sort == "count":

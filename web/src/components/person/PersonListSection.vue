@@ -35,6 +35,7 @@ const {
   goDetail,
   onSearchKeydown,
   onSorterChange,
+  onSortPicked,
   columns,
   topPersons,
   missingTotal,
@@ -112,7 +113,7 @@ function handleExpandedChange(keys: Array<string | number>) {
           v-model="store.sort"
           :options="sortOptions"
           style="width: 140px"
-          @change="store.reload()"
+          @change="onSortPicked"
         />
       </a-space>
     </a-card>

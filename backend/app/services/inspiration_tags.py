@@ -16,6 +16,7 @@ async def batch_add_tags(
     names: list[str],
     category: str = "free",
     source: str = "manual",
+    strict_category: bool = False,
 ) -> dict:
     """批量给多个素材关联标签（按名称查找或创建，已关联的自动跳过）。
 
@@ -113,8 +114,16 @@ async def add_inspiration_tags(
     names: list[str],
     category: str = "free",
     source: str = "manual",
+    strict_category: bool = False,
 ) -> dict:
-    """手动给素材关联标签（按名称查找或创建，已关联的自动跳过）。"""
+    """手动给素材关联标签（按名称查找或创建，已关联的自动跳过）。
+
+    Args:
+        strict_category: 严格类别模式。为 True 时，若同名标签已存在但类别与 ``category``
+            不同，**不建立关联**（只回报 ``category_mismatch``）。用于「穿搭大标签」这类
+            需要类别精确的入口——否则会把一个身体部位标签当大标签静默挂上，用户以为没生效。
+            AI 分析等批量打标保持 False（宁可关联上也不丢标签）。
+    """
     from app.services.vector_service import rebuild_text_vector
 
     inspiration = await db.get(Inspiration, inspiration_id)
@@ -153,13 +162,8 @@ async def add_inspiration_tags(
                     }
                 )
             continue
-        db.add(
-            InspirationTag(
-                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0,
-                source="manual",
-            )
-        )
-        if tag.category != category:
+        mismatched = tag.category != category
+        if mismatched:
             category_mismatch.append(
                 {
                     "id": tag.id,
@@ -169,6 +173,15 @@ async def add_inspiration_tags(
                     "already_linked": False,
                 }
             )
+            if strict_category:
+                # 严格模式（穿搭大标签）：类别不符就不建链，避免「挂成别的类别」的隐性错关联
+                continue
+        db.add(
+            InspirationTag(
+                inspiration_id=inspiration_id, tag_id=tag.id, confidence=1.0,
+                source="manual",
+            )
+        )
         added.append({"id": tag.id, "name": tag.name, "category": tag.category})
 
     await db.commit()

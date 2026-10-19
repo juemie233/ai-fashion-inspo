@@ -116,11 +116,14 @@ export async function addTagsToInspiration(
   names: string[],
   category = 'outfit',
   source = 'manual',
+  /** 严格类别：为 true 时，同名但类别不符的标签不会被关联（只回报 category_mismatch） */
+  strictCategory = false,
 ): Promise<AddTagsResult> {
   const { data } = await apiClient.post<AddTagsResult>(`/inspirations/${id}/tags`, {
     names,
     category,
     source,
+    strict_category: strictCategory,
   })
   return data
 }

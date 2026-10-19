@@ -70,7 +70,7 @@ export function useOutfitTags(detail: Ref<InspirationDetailOut | null>) {
           .map((m) => `「${m.name}」（现为${CATEGORY_LABELS[m.category] || m.category}）`)
           .join('、')
         Message.warning(
-          `${detailText} 已是小标签，不能直接当穿搭大标签。请换个名字（如「裸足穿搭」），或到「标签管理」把它的类别改成穿搭大标签`,
+          `${detailText} 已是小标签，不能直接当穿搭大标签（本次未添加）。请换个名字（如「裸足穿搭」），或到「标签管理」把它的类别改成穿搭大标签`,
         )
       } else {
         Message.success('已添加大标签')

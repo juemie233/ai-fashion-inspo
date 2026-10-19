@@ -511,12 +511,15 @@ async def add_inspiration_tags(
     names = payload.get("names", [])
     category = payload.get("category", "free")
     source = payload.get("source", "manual")
+    # 严格类别模式：穿搭大标签等入口传 true —— 类别不符时不建链（只回报 mismatch）
+    strict_category = bool(payload.get("strict_category", False))
     return await inspiration_service.add_inspiration_tags(
         db,
         inspiration_id,
         names,
         category=category,
         source=source,
+        strict_category=strict_category,
     )
 
 

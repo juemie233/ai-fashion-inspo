@@ -38,3 +38,42 @@ def test_add_outfit_tag_new_name_has_no_mismatch(client, upload):
     assert r.status_code == 200, r.text
     assert r.json()["category_mismatch"] == []
     assert r.json()["count"] == 1
+
+
+def test_strict_category_does_not_link_mismatched_tag(client, upload):
+    """严格模式：类别不符时**不建立关联**（大标签入口用，避免隐性错关联）。"""
+    insp = upload().json()["id"]
+    # 先有小标签「裸足」（body_part）
+    r = client.post(f"/api/inspirations/{insp}/tags", json={"names": ["裸足"], "category": "body_part"})
+    assert r.status_code == 200, r.text
+
+    # 严格模式当大标签加 → 回报 mismatch 且 count=0（没挂）
+    r2 = client.post(
+        f"/api/inspirations/{insp}/tags",
+        json={"names": ["裸足"], "category": "outfit", "strict_category": True},
+    )
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert body["count"] == 0, body
+    assert body["added"] == [], body
+    assert len(body["category_mismatch"]) == 1, body
+    assert body["category_mismatch"][0]["category"] == "body_part"
+
+
+def test_non_strict_keeps_link_but_reports(client, upload):
+    """非严格模式（默认，AI 打标等）：仍然建立关联，只回报类别不符。
+
+    用两条素材隔离：素材 A 先把「裸足」建成 body_part，素材 B 再用 outfit 加 → 因为 B
+    此前没关联过它，所以会被真的挂上（count=1），同时回报类别不符。
+    """
+    insp_a = upload().json()["id"]
+    insp_b = upload().json()["id"]
+    client.post(f"/api/inspirations/{insp_a}/tags", json={"names": ["裸足"], "category": "body_part"})
+    r = client.post(
+        f"/api/inspirations/{insp_b}/tags",
+        json={"names": ["裸足"], "category": "outfit"},
+    )
+    body = r.json()
+    assert body["count"] == 1, body
+    assert len(body["category_mismatch"]) == 1, body
+    assert body["category_mismatch"][0]["already_linked"] is False
