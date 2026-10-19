@@ -1,0 +1,270 @@
+# 前端死代码基线（ts-prune 快照，2026-10）。由 scripts/check-web-dead-code.mjs 比对，
+# 只对**新增**条目报错。shared/types/* 与 mobile（React Native）共用，属已知误报。
+shared/types/api.ts:10 - PaginatedResponse
+shared/types/api.ts:18 - ApiError
+shared/types/api.ts:4 - PaginationParams
+shared/types/inspiration.ts:10 - AnalysisStatus
+shared/types/inspiration.ts:13 - TAG_CATEGORIES (used in module)
+shared/types/inspiration.ts:20 - TAG_CATEGORY_LABELS
+shared/types/inspiration.ts:4 - SourceType
+shared/types/inspiration.ts:7 - MediaType
+shared/types/person.ts:20 - PERSON_TYPES (used in module)
+shared/types/person.ts:24 - PERSON_TYPE_LABELS
+shared/types/person.ts:71 - PersonImportError (used in module)
+shared/types/person.ts:9 - PERSON_PLATFORMS (used in module)
+shared/types/person.ts:95 - PersonStyleProfile (used in module)
+shared/types/tag.ts:15 - TagCategoryGroup
+shared/types/tag.ts:6 - Tag (used in module)
+src/api/admin.ts:100 - fetchAuditLogs
+src/api/admin.ts:121 - NearDuplicateFile (used in module)
+src/api/admin.ts:13 - PersonFrequencyItem (used in module)
+src/api/admin.ts:162 - fetchNearDuplicates
+src/api/admin.ts:172 - startPhashBackfill
+src/api/admin.ts:183 - BackupHistoryItem (used in module)
+src/api/admin.ts:190 - BackupStatus (used in module)
+src/api/admin.ts:202 - fetchBackupStatus
+src/api/admin.ts:22 - PromptQualityItem (used in module)
+src/api/admin.ts:41 - fetchPromptQuality
+src/api/admin.ts:57 - exportInspirationsCsv
+src/api/admin.ts:7 - TrendPoint (used in module)
+src/api/admin.ts:73 - fetchInspirationTrend
+src/api/admin.ts:81 - fetchPersonFrequency
+src/api/admin.ts:89 - AuditLogItem (used in module)
+src/api/aiModelStats.ts:20 - fetchModelStats
+src/api/inspirations.ts:107 - TagCorrectionReason (used in module)
+src/api/inspirations.ts:110 - TagCorrectionResult (used in module)
+src/api/inspirations.ts:123 - recordTagCorrection
+src/api/inspirations.ts:140 - BatchAddTagsResult (used in module)
+src/api/inspirations.ts:15 - TrashSource (used in module)
+src/api/inspirations.ts:166 - BatchLinkBloggersResult (used in module)
+src/api/inspirations.ts:18 - TRASH_REASON_OPTIONS
+src/api/inspirations.ts:321 - cropInspirationRegion
+src/api/inspirations.ts:334 - deleteInspiration
+src/api/inspirations.ts:352 - restoreInspiration
+src/api/inspirations.ts:358 - fetchTrash
+src/api/inspirations.ts:370 - emptyTrash
+src/api/inspirations.ts:380 - analyzeInspiration
+src/api/inspirations.ts:393 - FaceDetectionOut (used in module)
+src/api/inspirations.ts:408 - FaceDetectionsOut (used in module)
+src/api/inspirations.ts:415 - faceDetectInspiration
+src/api/inspirations.ts:435 - fetchFaceDetections
+src/api/inspirations.ts:441 - updateFaceDetection
+src/api/inspirations.ts:460 - deleteFaceDetection
+src/api/inspirations.ts:484 - batchUnmarkAi
+src/api/inspirations.ts:490 - deleteRejectedInspirations
+src/api/inspirations.ts:56 - TagOut (used in module)
+src/api/inspirations.ts:82 - AnalysisLogOut (used in module)
+src/api/inspirations.ts:9 - QualityStatus (used in module)
+src/api/keyframes.ts:15 - fetchKeyframes
+src/api/keyframes.ts:6 - KeyframesOut (used in module)
+src/api/persons.ts:157 - createModelPhotoSet
+src/api/persons.ts:187 - uploadModelPhoto
+src/api/persons.ts:260 - BloggerUnbindResult (used in module)
+src/api/persons.ts:27 - PersonPlatform (used in module)
+src/api/persons.ts:273 - BloggerFaceStatus (used in module)
+src/api/persons.ts:280 - PersonGroupInfo (used in module)
+src/api/persons.ts:297 - FacePhotoResult (used in module)
+src/api/persons.ts:309 - BloggerFaceRegisterResult (used in module)
+src/api/persons.ts:47 - ModelFaceRegisterResult
+src/api/persons.ts:85 - AvatarSetResult (used in module)
+src/api/persons.ts:96 - DouyinProfileResolveResult (used in module)
+src/api/search.ts:24 - TagSuggestion (used in module)
+src/api/search.ts:29 - CooccurrenceTag (used in module)
+src/api/search.ts:44 - fetchSuggestions
+src/api/search.ts:52 - fetchCooccurrence
+src/api/search.ts:69 - VectorSearchOut (used in module)
+src/api/search.ts:85 - SimilarOut (used in module)
+src/api/search.ts:91 - VectorStatusOut
+src/api/tagAdvanced.ts:107 - fetchTree
+src/api/tagAdvanced.ts:117 - moveTags
+src/api/tagAdvanced.ts:128 - fetchHistory
+src/api/tagAdvanced.ts:144 - rollbackHistory
+src/api/tagAdvanced.ts:154 - fetchTrending
+src/api/tagAdvanced.ts:164 - fetchCombinations
+src/api/tagAdvanced.ts:173 - fetchCoverage
+src/api/tagAdvanced.ts:179 - fetchSourceDist
+src/api/tagAdvanced.ts:188 - asHealthResult
+src/api/tagAdvanced.ts:192 - asClusterResult
+src/api/tagAdvanced.ts:196 - asNetworkResult
+src/api/tagAdvanced.ts:24 - scanHealth
+src/api/tagAdvanced.ts:32 - fetchHealthIssue
+src/api/tagAdvanced.ts:46 - scanClusters
+src/api/tagAdvanced.ts:57 - applyClusters
+src/api/tagAdvanced.ts:79 - analyzeNetwork
+src/api/tagAdvanced.ts:99 - batchEditTags
+src/api/tags.ts:138 - TagInspiration
+src/api/tags.ts:148 - fetchTagInspirations
+src/api/tags.ts:161 - batchRemoveTagInspirations
+src/api/tags.ts:172 - exportTags
+src/api/tags.ts:178 - importTags
+src/api/tags.ts:185 - TagAlias (used in module)
+src/api/tags.ts:193 - fetchAliases
+src/api/tags.ts:205 - deleteAlias
+src/api/tags.ts:212 - CooccurrenceNode (used in module)
+src/api/tags.ts:219 - CooccurrenceEdge (used in module)
+src/api/tags.ts:225 - CooccurrenceNetwork (used in module)
+src/api/tags.ts:231 - fetchCooccurrenceNetwork
+src/api/tags.ts:238 - TopTag (used in module)
+src/api/tags.ts:246 - fetchTopTags
+src/api/tags.ts:251 - TagTrendPoint (used in module)
+src/api/tags.ts:257 - fetchTagTrend
+src/api/tags.ts:33 - createTag
+src/api/tags.ts:69 - getSimilarSuggestions
+src/api/tags.ts:89 - batchChangeCategory
+src/api/tags.ts:98 - batchRenameTags
+src/composables/useAdminTask.ts:20 - useAdminTask
+src/composables/useAnalysisCompare.ts:9 - useAnalysisCompare
+src/composables/useAnalysisDetail.ts:9 - useAnalysisDetail
+src/composables/useAnalysisHistory.ts:12 - UseAnalysisHistoryOptions (used in module)
+src/composables/useAnalysisHistory.ts:19 - useAnalysisHistory
+src/composables/useAnalysisQueue.ts:20 - UseAnalysisQueueOptions (used in module)
+src/composables/useBloggerEnrich.ts:18 - EnrichTaskState (used in module)
+src/composables/useBloggerEnrich.ts:33 - useBloggerEnrich
+src/composables/useBloggerFaceRegister.ts:18 - useBloggerFaceRegister
+src/composables/useBloggerImport.ts:9 - useBloggerImport
+src/composables/useBrowseContext.ts:19 - useBrowseContext
+src/composables/useChromeManager.ts:10 - CHROME_STATE_LABELS
+src/composables/useChromeManager.ts:18 - CHROME_STATE_TAG
+src/composables/useChromeManager.ts:25 - useChromeManager
+src/composables/useCollectionMutations.ts:21 - useCollectionMutations
+src/composables/useDouyinBloggerPicker.ts:23 - PickerBlogger (used in module)
+src/composables/useF2Import.ts:107 - F2ImportStatus (used in module)
+src/composables/useF2Import.ts:152 - F2AuthorRow (used in module)
+src/composables/useF2Import.ts:169 - F2AuthorsOverview (used in module)
+src/composables/useF2Import.ts:18 - F2DownloadProgress (used in module)
+src/composables/useF2Import.ts:38 - F2CollectFolder (used in module)
+src/composables/useF2Import.ts:48 - F2CollectFolders (used in module)
+src/composables/useF2Import.ts:59 - F2RunningTask (used in module)
+src/composables/useF2Results.ts:15 - F2ResultState (used in module)
+src/composables/useF2Results.ts:18 - F2ResultFilter (used in module)
+src/composables/useF2Results.ts:38 - F2ResultCounts (used in module)
+src/composables/useF2Results.ts:49 - F2ResultTaskBrief (used in module)
+src/composables/useF2TaskHistory.ts:21 - F2_HISTORY_PAGE_SIZE (used in module)
+src/composables/useFaceClusterGroups.ts:27 - UseFaceClusterGroupsOptions (used in module)
+src/composables/useFaceClusterGroups.ts:32 - useFaceClusterGroups
+src/composables/useFaceScanActions.ts:27 - useFaceScanActions
+src/composables/useGpuMonitor.ts:10 - GpuStats (used in module)
+src/composables/useGpuMonitor.ts:21 - GpuTrendPoint (used in module)
+src/composables/useGpuMonitor.ts:27 - useGpuMonitor
+src/composables/useHomeActions.ts:47 - useHomeActions
+src/composables/useInspirationFilters.ts:21 - SourceFilter (used in module)
+src/composables/useInspirationFilters.ts:23 - MediaFilter (used in module)
+src/composables/useInspirationFilters.ts:24 - StatusFilter (used in module)
+src/composables/useInspirationFilters.ts:25 - QualityFilter (used in module)
+src/composables/useInspirationFilters.ts:26 - SortMode (used in module)
+src/composables/useInspirationFilters.ts:29 - UseInspirationFiltersOptions (used in module)
+src/composables/useModelFaceRegister.ts:13 - useModelFaceRegister
+src/composables/useOutfitTags.ts:22 - useOutfitTags
+src/composables/usePersonDetail.ts:22 - usePersonDetail
+src/composables/usePersonList.ts:22 - SOURCE_LABELS (used in module)
+src/composables/usePersonList.ts:28 - usePersonList
+src/composables/useQualityLearner.ts:18 - LearnerMeta (used in module)
+src/composables/useQualityLearner.ts:28 - LearnerDataset (used in module)
+src/composables/useQualityLearner.ts:37 - LearnerStatus (used in module)
+src/composables/useQualityLearner.ts:45 - useQualityLearner
+src/composables/useQualityLearner.ts:8 - LearnerMetrics (used in module)
+src/composables/useRecentUploads.ts:18 - useRecentUploads
+src/composables/useSchemaCheck.ts:7 - useSchemaCheck
+src/composables/useScraperConfig.ts:9 - useScraperConfig
+src/composables/useScraperFunnel.ts:8 - useScraperFunnel
+src/composables/useScraperLog.ts:8 - useScraperLog
+src/composables/useScraperResults.ts:16 - useScraperResults
+src/composables/useScraperRoi.ts:24 - RoiAuthorRow (used in module)
+src/composables/useScraperRoi.ts:40 - RoiCoverage (used in module)
+src/composables/useScraperRoi.ts:57 - ROI_RANGES
+src/composables/useScraperRoi.ts:65 - ROI_CHANNEL_LABELS
+src/composables/useScraperRoi.ts:7 - RoiKeywordRow (used in module)
+src/composables/useScraperSchedules.ts:12 - INTERVAL_OPTIONS (used in module)
+src/composables/useScraperSchedules.ts:22 - intervalLabel
+src/composables/useScraperSchedules.ts:27 - SORT_MODE_LABELS
+src/composables/useScraperSchedules.ts:32 - useScraperSchedules
+src/composables/useScraperStats.ts:16 - DayStat (used in module)
+src/composables/useScraperStats.ts:24 - ScraperStats (used in module)
+src/composables/useScraperStats.ts:37 - useScraperStats
+src/composables/useScraperStats.ts:7 - PlatformStat (used in module)
+src/composables/useScraperTasks.ts:15 - PLATFORM_LABELS (used in module)
+src/composables/useScraperTasks.ts:21 - useScraperTasks
+src/composables/useSearch.ts:20 - SEARCH_SORT_OPTIONS (used in module)
+src/composables/useSearch.ts:33 - useSearch
+src/composables/useSplitResize.ts:5 - SplitResizeOptions (used in module)
+src/composables/useTagAdvanced.ts:11 - AdvancedTab (used in module)
+src/composables/useTagAdvanced.ts:13 - ADVANCED_TABS (used in module)
+src/composables/useTagAdvanced.ts:34 - useTagAdvanced
+src/composables/useTagEvents.ts:11 - TagEventType (used in module)
+src/composables/useTagEvents.ts:14 - TagEventPayload (used in module)
+src/composables/useTagMerge.ts:12 - useTagMerge
+src/composables/useUploadPrefs.ts:6 - useUploadPrefs
+src/composables/useWebSocket.ts:182 - connectTaskWebSocket
+src/composables/useWebSocket.ts:19 - WsMessageType (used in module)
+src/composables/useWebSocket.ts:24 - WsMessage (used in module)
+src/composables/useWorksDownload.ts:34 - WorksDownloadState (used in module)
+src/constants/tag.ts:30 - SOURCE_LABELS
+src/router/index.ts:123 - default
+src/stores/aiModels.ts:24 - useAiModelsStore
+src/stores/aiModels.ts:7 - OllamaModel (used in module)
+src/stores/ui.ts:7 - MaterialOpenMode (used in module)
+src/types/admin.ts:108 - ServiceHealthItem (used in module)
+src/types/admin.ts:119 - ServiceHealth
+src/types/admin.ts:14 - MediaStat (used in module)
+src/types/admin.ts:19 - StatusStat (used in module)
+src/types/admin.ts:25 - LargeFile
+src/types/admin.ts:34 - MissingFile
+src/types/admin.ts:39 - OrphanFile
+src/types/admin.ts:4 - MonthStat (used in module)
+src/types/admin.ts:44 - DuplicateGroup
+src/types/admin.ts:49 - DedupResult
+src/types/admin.ts:56 - TextVectorVersion (used in module)
+src/types/admin.ts:63 - VectorStats
+src/types/admin.ts:73 - Stats
+src/types/admin.ts:9 - SourceStat (used in module)
+src/types/analysis.ts:126 - CompareBatchRecord (used in module)
+src/types/analysis.ts:59 - PromptOption
+src/types/analysis.ts:78 - TagDetail (used in module)
+src/types/crop.ts:32 - CropGridDensity
+src/types/crop.ts:9 - CropCandidate
+src/types/scraper.ts:19 - FunnelSearch (used in module)
+src/types/scraper.ts:59 - CookieVerify (used in module)
+src/types/tag.ts:14 - TagDuplicateSide (used in module)
+src/types/tagAdvanced.ts:103 - NetworkEdge (used in module)
+src/types/tagAdvanced.ts:109 - CommunityInfo (used in module)
+src/types/tagAdvanced.ts:130 - BatchEditScope (used in module)
+src/types/tagAdvanced.ts:148 - BatchEditPreviewItem (used in module)
+src/types/tagAdvanced.ts:157 - BatchEditSummary (used in module)
+src/types/tagAdvanced.ts:173 - RULE_TYPE_LABELS
+src/types/tagAdvanced.ts:214 - HistoryPage
+src/types/tagAdvanced.ts:22 - HealthIssueItem (used in module)
+src/types/tagAdvanced.ts:222 - HISTORY_OP_LABELS
+src/types/tagAdvanced.ts:31 - DuplicateIssuePair (used in module)
+src/types/tagAdvanced.ts:52 - CategoryStat (used in module)
+src/types/tagAdvanced.ts:66 - HEALTH_ISSUE_LABELS
+src/types/tagAdvanced.ts:76 - ClusterMember (used in module)
+src/types/tagAdvanced.ts:78 - ClusterGroup (used in module)
+src/types/tagAdvanced.ts:95 - NetworkNode (used in module)
+src/types/task.ts:22 - TaskSource (used in module)
+src/types/upload.ts:4 - UploadQueueItem
+src/utils/apiGuard.ts:12 - FieldShape (used in module)
+src/utils/browseQuery.ts:17 - FOCUS_QUERY_KEY (used in module)
+src/utils/browseQuery.ts:8 - DEFAULT_BROWSE_SORT (used in module)
+src/utils/collectionQuery.ts:23 - TagNameToId (used in module)
+src/utils/cropResult.ts:15 - CropApplyResult (used in module)
+src/utils/cropResult.ts:4 - CropDuplicate (used in module)
+src/utils/cropSelection.ts:26 - CropMode (used in module)
+src/utils/f2Authors.ts:10 - AuthorSortField (used in module)
+src/utils/f2CollectSelection.ts:16 - F2FolderSelection (used in module)
+src/utils/f2CollectSelection.ts:23 - RestoredSelection (used in module)
+src/utils/faceMedia.ts:45 - personAvatarUrl
+src/utils/format.ts:100 - safeJsonParse
+src/utils/format.ts:17 - formatVram
+src/utils/format.ts:62 - formatUptime
+src/utils/media.ts:6 - isVideoFile
+src/utils/scraperKeywords.ts:20 - KeywordTaskLike (used in module)
+src/utils/tagHistoryDiff.ts:18 - HistoryDiffRow (used in module)
+src/utils/tagHistoryDiff.ts:6 - HISTORY_FIELD_LABELS (used in module)
+src/utils/tagSort.ts:4 - SortableTag (used in module)
+src/utils/taskLabel.ts:50 - TASK_TYPE_ICONS
+src/utils/taskLabel.ts:62 - TASK_STATUS_LABELS
+src/utils/taskLabel.ts:77 - taskStatusType
+src/utils/taskLabel.ts:90 - taskTypeTagColor
+src/utils/taskLabel.ts:97 - formatDuration (used in module)
+src/utils/taskPollUntilIdle.ts:4 - PollableTask (used in module)
+src/utils/taskPresentation.ts:127 - TaskRowActions (used in module)
