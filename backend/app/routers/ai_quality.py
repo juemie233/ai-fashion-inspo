@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.models.inspiration import AIAnalysisLog, AIQualityReview, Inspiration
 from app.routers.ai_shared import _update_env_file
 from app.services.ollama_utils import is_ollama_running, start_ollama
 
@@ -182,6 +182,63 @@ async def quality_stats_by_source(db: AsyncSession = Depends(get_db)) -> dict[st
         )
 
     return {"items": items, "total": sum(i["total"] for i in items)}
+
+
+@router.get("/quality-gray")
+async def quality_gray(
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """列出「灰区」素材供**人工优先复审**：初筛器最没把握的那批。
+
+    灰区定义：最近一次审核日志里初筛器给出的垃圾概率落在
+    `0.5 <= confidence < quality_classifier_threshold` 区间 —— 模型差一点就判垃圾，
+    这类样本人工看一眼的收益远高于随机抽样。
+
+    Args:
+        limit: 最多返回多少条（按置信度降序 = 越接近阈值越优先）
+
+    Returns:
+        {"items": [{id, confidence, quality_status, quality_reason_code}], "threshold": 0.85}
+    """
+    threshold = settings.quality_classifier_threshold
+    subq = (
+        select(
+            AIQualityReview.log_id,
+            func.max(AIQualityReview.id).label("latest_id"),
+        )
+        .group_by(AIQualityReview.log_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            Inspiration.id,
+            AIQualityReview.confidence,
+            Inspiration.quality_status,
+            Inspiration.quality_reason_code,
+        )
+        .join(AIAnalysisLog, AIAnalysisLog.inspiration_id == Inspiration.id)
+        .join(AIQualityReview, AIQualityReview.log_id == AIAnalysisLog.id)
+        .join(subq, subq.c.latest_id == AIQualityReview.id)
+        .where(
+            Inspiration.deleted_at.is_(None),
+            AIQualityReview.confidence.isnot(None),
+            AIQualityReview.confidence >= 0.5,
+            AIQualityReview.confidence < threshold,
+        )
+        .order_by(AIQualityReview.confidence.desc())
+        .limit(limit)
+    )
+    items = [
+        {
+            "id": row[0],
+            "confidence": row[1],
+            "quality_status": row[2],
+            "quality_reason_code": row[3],
+        }
+        for row in result.all()
+    ]
+    return {"items": items, "threshold": threshold, "count": len(items)}
 
 
 @router.get("/quality-stats")

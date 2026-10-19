@@ -250,6 +250,9 @@ class AIQualityReview(Base):
     raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 初筛器给出的「垃圾概率」（0~1，仅当本次审核跑了初筛器时有值）。
+    # 用于「灰区优先人工复审」：0.5 ~ 阈值之间的样本模型最没把握，人工看收益最大。
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # 关联关系
     log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="quality_reviews")

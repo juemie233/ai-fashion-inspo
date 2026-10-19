@@ -112,6 +112,7 @@ async def _quality_check_one(
                     raw_output=stats.get("raw_output") if stats else None,
                     prompt_hash=stats.get("prompt_hash") if stats else None,
                     model_name=stats.get("model_name") if stats else None,
+                    confidence=stats.get("prefilter_score") if stats else None,
                 )
             )
             await db.commit()

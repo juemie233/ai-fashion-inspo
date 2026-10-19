@@ -354,11 +354,15 @@ async def check_image_quality(
         prefilter = await _classifier_prefilter(inspiration_id, prefilter_vector)
         if stats is not None:
             stats["prefilter"] = "skipped" if prefilter is None else "pass"
+            if prefilter is not None:
+                # 初筛器的垃圾概率：灰区（0.5~阈值）的人工复审优先级最高
+                stats["prefilter_score"] = prefilter[1]
         if prefilter is not None:
             is_garbage, proba = prefilter
             if is_garbage:
                 if stats is not None:
                     stats["prefilter"] = "hit"
+                    stats["prefilter_score"] = round(proba, 4)
                 reason = f"初筛器判定为垃圾素材（置信度 {proba:.2f}）"
                 # 写回 DB 与 VLM 路径一致（CAS：仅 pending 时写入），避免素材永远停在 pending
                 err = await _write_quality_result(
