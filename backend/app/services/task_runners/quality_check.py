@@ -124,6 +124,26 @@ async def _current_status(db: AsyncSession, task_id: int) -> str:
     return result.scalar() or "running"
 
 
+def _audit_path(media_type: str, file_path: str, thumbnail_path: str | None) -> str:
+    """返回送审用的文件路径。
+
+    视频审核用首帧缩略图（AI 视觉模型只接受图片）：上传时 ffmpeg 已抽好首帧，
+    审核时直接用，避免逐条再跑 ffmpeg；没有缩略图才退回原文件（会读图失败 → 保持
+    pending 并在原因里写明，不静默漏审）。图片始终用原文件，保证复审能看清细节。
+
+    Args:
+        media_type: 素材类型（image / video）
+        file_path: 原始文件相对路径
+        thumbnail_path: 缩略图相对路径（视频首帧）
+
+    Returns:
+        实际传给 AI 审核的文件相对路径
+    """
+    if media_type == "video" and thumbnail_path:
+        return thumbnail_path
+    return file_path
+
+
 async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     """执行质量审核任务：逐张调用轻量审核并维护进度（由 worker 调用）。
 
@@ -148,15 +168,22 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
 
     # 加载待审核的图片素材（执行期间可能已被人工翻案）：
     # 随机复审不限制状态，覆盖重审已审查素材；普通审核仅保留仍 pending 的
-    stmt = select(Inspiration.id, Inspiration.file_path).where(
+    stmt = select(
+        Inspiration.id,
+        Inspiration.file_path,
+        Inspiration.media_type,
+        Inspiration.thumbnail_path,
+    ).where(
         Inspiration.id.in_(inspiration_ids),
-        Inspiration.media_type == "image",
+        # 视频也参与审核（老 #1）：视觉模型只吃图片，视频用上传时 ffmpeg 抽的首帧缩略图。
+        # 没有缩略图的视频退回原文件，会因读图失败保持 pending 并在原因里写明（不静默漏审）。
+        Inspiration.media_type.in_(("image", "video")),
     )
     if not is_random:
         stmt = stmt.where(Inspiration.quality_status == "pending")
     result = await db.execute(stmt)
     rows = result.all()
-    insp_map = {r[0]: r[1] for r in rows}
+    insp_map = {r[0]: _audit_path(r[2], r[1], r[3]) for r in rows}
     items = [(iid, insp_map[iid]) for iid in inspiration_ids if iid in insp_map]
 
     # 一次性批量预取全部图像向量供初筛器复用：逐条 get_vector 每次都会全表加载
@@ -171,10 +198,12 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         await db.execute(
             select(Inspiration.id).where(
                 Inspiration.id.in_(inspiration_ids),
-                Inspiration.media_type == "image",
+                # 与上面口径一致：图片 + 视频都算「可审核」
+                Inspiration.media_type.in_(("image", "video")),
             )
         )
     ).scalars().all()
+    # not_image 现语义为「既不是图片也不是视频」（如音频/文档），含义已在文档说明
     skipped_not_image = len(inspiration_ids) - len(existing_image_ids)
     skipped_not_pending = 0 if is_random else len(existing_image_ids) - len(items)
     skipped_detail = {

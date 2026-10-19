@@ -48,7 +48,7 @@ async def batch_quality_check(
 ) -> dict[str, str | int]:
     """批量审核图片素材。
 
-    只处理图片素材；审核结果直接写回 quality_status（approved/rejected）。
+    处理图片与视频素材（视频取首帧缩略图送审）；审核结果直接写回 quality_status。
     已改造为数据库驱动任务队列：创建任务记录后立即返回 task_id，
     由独立 worker 进程异步执行，前端轮询 GET /api/tasks/{task_id} 获取进度。
 
@@ -66,7 +66,8 @@ async def batch_quality_check(
 
     # 随机复审抽取所有图片素材（含已审查），普通审核仅取 pending；均排除垃圾桶素材
     stmt = select(Inspiration.id).where(
-        Inspiration.media_type == "image",
+        # 视频也参与审核（老 #1）：执行器会用首帧缩略图送审
+        Inspiration.media_type.in_(("image", "video")),
         Inspiration.deleted_at.is_(None),
     )
     if random:
@@ -137,14 +138,14 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)) -> dict[str, str |
 
 @router.get("/quality-stats")
 async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
-    """质量审核统计：待审核/已通过/已拒绝数量及通过率（仅图片素材）。"""
+    """质量审核统计：待审核/已通过/已拒绝数量及通过率（图片 + 视频；视频按首帧审核）。"""
     result = await db.execute(
         select(
             func.coalesce(Inspiration.quality_status, "pending"),
             func.count(Inspiration.id),
         )
         .where(
-            Inspiration.media_type == "image",
+            Inspiration.media_type.in_(("image", "video")),
             Inspiration.deleted_at.is_(None),
         )
         .group_by(func.coalesce(Inspiration.quality_status, "pending"))
@@ -160,7 +161,7 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]
     # 疑似 AI 生成素材数（与 quality_status 正交，独立统计）
     ai_result = await db.execute(
         select(func.count(Inspiration.id)).where(
-            Inspiration.media_type == "image",
+            Inspiration.media_type.in_(("image", "video")),
             Inspiration.is_ai_generated.is_(True),
             Inspiration.deleted_at.is_(None),
         )
@@ -182,7 +183,7 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]
     reason_result = await db.execute(
         select(Inspiration.quality_reason_code, func.count(Inspiration.id))
         .where(
-            Inspiration.media_type == "image",
+            Inspiration.media_type.in_(("image", "video")),
             Inspiration.deleted_at.is_(None),
             Inspiration.quality_status == "rejected",
         )
