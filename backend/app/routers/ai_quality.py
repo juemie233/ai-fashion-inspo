@@ -136,6 +136,54 @@ async def recheck_quality(db: AsyncSession = Depends(get_db)) -> dict[str, str |
     }
 
 
+@router.get("/quality-stats-by-source")
+async def quality_stats_by_source(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    """按素材来源统计审核通过率，用于发现「哪个采集源/平台质量差」。
+
+    与 `/quality-stats` 同口径（图片 + 视频、排除垃圾桶），但按 `source_type` 分组，
+    每组给出总数与三状态计数，`pass_rate` 只在「已判定的素材」上计算（pending 不进分母）。
+
+    Returns:
+        {"items": [{source_type, total, approved, rejected, pending, pass_rate}], ...}
+    """
+    result = await db.execute(
+        select(
+            Inspiration.source_type,
+            func.coalesce(Inspiration.quality_status, "pending"),
+            func.count(Inspiration.id),
+        )
+        .where(
+            Inspiration.media_type.in_(("image", "video")),
+            Inspiration.deleted_at.is_(None),
+        )
+        .group_by(Inspiration.source_type, func.coalesce(Inspiration.quality_status, "pending"))
+    )
+
+    grouped: dict[str, dict[str, int]] = {}
+    for source_type, status, count in result.all():
+        key = source_type or "unknown"
+        bucket = grouped.setdefault(key, {"total": 0, "approved": 0, "rejected": 0, "pending": 0})
+        bucket[status] = bucket.get(status, 0) + count
+        bucket["total"] += count
+
+    items = []
+    for source_type, bucket in sorted(grouped.items(), key=lambda kv: -kv[1]["total"]):
+        decided = bucket["approved"] + bucket["rejected"]
+        items.append(
+            {
+                "source_type": source_type,
+                "total": bucket["total"],
+                "approved": bucket["approved"],
+                "rejected": bucket["rejected"],
+                "pending": bucket["pending"],
+                # 只在已判定素材上算通过率：pending 混进分母会让「待审多」的来源显得质量差
+                "pass_rate": round(bucket["approved"] / decided * 100, 1) if decided else 0,
+            }
+        )
+
+    return {"items": items, "total": sum(i["total"] for i in items)}
+
+
 @router.get("/quality-stats")
 async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
     """质量审核统计：待审核/已通过/已拒绝数量及通过率（图片 + 视频；视频按首帧审核）。"""
