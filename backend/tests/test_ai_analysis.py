@@ -738,3 +738,52 @@ async def test_sock_verification_keep_when_verdict_knee(
     tags = await _inspiration_tags(insp["id"])
     assert "黑色过膝袜" in tags
     assert "黑色连裤袜" not in tags
+
+async def test_quality_prefilter_reports_skipped_without_vector(client, upload, fake_ollama):
+    """初筛器效果回报（#10）：测试环境无图像向量 → 初筛器跳过，需如实回报 skipped。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True  # 防被前面的 rejected 用例污染全局状态
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    stats: dict = {}
+    async with async_session() as db:
+        status, _reason, _ai = await check_image_quality(
+            db, insp["id"], insp["file_path"], stats=stats
+        )
+
+    assert status == "approved"
+    assert stats["prefilter"] == "skipped"
+
+
+async def test_quality_prefilter_reports_disabled_on_force(client, upload, fake_ollama):
+    """随机复审（force=True）刻意不走初筛器 → 回报 disabled，而不是伪装成 skipped。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    stats: dict = {}
+    async with async_session() as db:
+        status, _reason, _ai = await check_image_quality(
+            db, insp["id"], insp["file_path"], force=True, stats=stats
+        )
+
+    assert status == "approved"
+    assert stats["prefilter"] == "disabled"
+
+
+async def test_quality_stats_argument_is_optional(client, upload, fake_ollama):
+    """不传 stats 时行为不变（向后兼容：其它调用方与测试无需改动）。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    async with async_session() as db:
+        status, _reason, _ai = await check_image_quality(db, insp["id"], insp["file_path"])
+
+    assert status == "approved"

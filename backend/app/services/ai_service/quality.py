@@ -168,6 +168,7 @@ async def check_image_quality(
     file_path: str,
     force: bool = False,
     prefilter_vector: list[float] | None = None,
+    stats: dict | None = None,
 ) -> tuple[str, str, bool]:
     """轻量质量审核：分两步——先做穿搭二分类，通过后再单独做 AI 生成检测。
 
@@ -182,6 +183,10 @@ async def check_image_quality(
             默认 False 仅写入 pending 素材，避免覆盖人工翻案
         prefilter_vector: 预取的图像向量（批量审核场景由任务执行器一次性批量读取，
             供初筛器复用，避免逐条 get_vector 造成 O(N²) 全表扫描）
+        stats: 可选的出参字典。本函数会写入 ``prefilter`` 键，取值：
+            ``hit``（初筛器直接判垃圾）、``pass``（初筛通过，继续 VLM）、
+            ``skipped``（无向量/未训练分类器）、``disabled``（force 复审不走初筛）。
+            任务执行器据此统计「初筛器拦了多少 / 有多少根本没跑」，此前这两项完全不可见。
 
     返回:
         (status, reason, is_ai_generated) — status 为 approved/rejected/pending
@@ -224,11 +229,18 @@ async def check_image_quality(
 
     # 阶段 2：负样本初筛器前置初筛（仅普通审核生效；随机复审 force=True 走完整 VLM，
     # 未训练分类器 / 无图像向量时静默跳过）
-    if not force:
+    if force:
+        if stats is not None:
+            stats["prefilter"] = "disabled"
+    else:
         prefilter = await _classifier_prefilter(inspiration_id, prefilter_vector)
+        if stats is not None:
+            stats["prefilter"] = "skipped" if prefilter is None else "pass"
         if prefilter is not None:
             is_garbage, proba = prefilter
             if is_garbage:
+                if stats is not None:
+                    stats["prefilter"] = "hit"
                 reason = f"初筛器判定为垃圾素材（置信度 {proba:.2f}）"
                 # 写回 DB 与 VLM 路径一致（CAS：仅 pending 时写入），避免素材永远停在 pending
                 err = await _write_quality_result(

@@ -67,6 +67,7 @@ async def _quality_check_one(
     file_path: str,
     prefilter_vector: list[float] | None = None,
     force: bool = False,
+    stats: dict | None = None,
 ) -> tuple[str, str, str, bool]:
     """审核单张图片（独立数据库会话），返回 (素材 ID, 状态, 原因, 是否疑似 AI)。
 
@@ -81,7 +82,12 @@ async def _quality_check_one(
             # 记录单条耗时：供 /ai/quality-stats 的「实测平均耗时」与前端 ETA 使用
             started = time.monotonic()
             status, reason, ai_generated = await check_image_quality(
-                db, inspiration_id, file_path, force=force, prefilter_vector=prefilter_vector
+                db,
+                inspiration_id,
+                file_path,
+                force=force,
+                prefilter_vector=prefilter_vector,
+                stats=stats,
             )
             elapsed_ms = int((time.monotonic() - started) * 1000)
             # 写入质量审核日志（失败时记录原因，供前端排查）
@@ -155,6 +161,24 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     if vector_store.is_lancedb_available():
         vec_map = await vector_store.get_vectors_batch("image", [iid for iid, _ in items])
 
+    # 跳过明细（#7）：此前 skipped 是「保留字段」从未真正统计。这里用「请求数 - 实际审核数」
+    # 拆成两类，用户能直接看出「为什么只审了 N 张」。
+    existing_image_ids = (
+        await db.execute(
+            select(Inspiration.id).where(
+                Inspiration.id.in_(inspiration_ids),
+                Inspiration.media_type == "image",
+            )
+        )
+    ).scalars().all()
+    skipped_not_image = len(inspiration_ids) - len(existing_image_ids)
+    skipped_not_pending = 0 if is_random else len(existing_image_ids) - len(items)
+    skipped_detail = {
+        "not_image": max(0, skipped_not_image),
+        "not_pending": max(0, skipped_not_pending),
+        "total": max(0, len(inspiration_ids) - len(items)),
+    }
+
     task.total = len(items)
     task.done = 0
     task.progress = 0
@@ -169,6 +193,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     failed = 0  # 审核失败保持 pending 的张数（reason 非空，与「无法判定」同计数但单列）
     ai_generated = 0
     first_error: str | None = None  # 第一条失败原因，供任务级报错
+    prefilter_counts = {"hit": 0, "pass": 0, "skipped": 0, "disabled": 0}
     cancelled = False
 
     for start in range(0, len(items), concurrency):
@@ -179,14 +204,25 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
             break
 
         chunk = items[start:start + concurrency]
+        # 每条一个出参字典，collect 后汇总初筛器结果（#10）
+        per_item_stats = [{} for _ in chunk]
         results = await asyncio.gather(
             *(
                 _quality_check_one(
-                    sem, iid, fp, prefilter_vector=vec_map.get(iid), force=is_random
+                    sem,
+                    iid,
+                    fp,
+                    prefilter_vector=vec_map.get(iid),
+                    force=is_random,
+                    # 每条一个字典：初筛器结果由 check_image_quality 写入对应项
+                    stats=per_item_stats[idx],
                 )
-                for iid, fp in chunk
+                for idx, (iid, fp) in enumerate(chunk)
             )
         )
+        for item_stats in per_item_stats:
+            key = str(item_stats.get("prefilter", "skipped"))
+            prefilter_counts[key] = prefilter_counts.get(key, 0) + 1
         for _iid, status, _reason, _ai in results:
             if status == "approved":
                 approved += 1
@@ -220,6 +256,10 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "failed": failed,
         # 失败率：全部失败已单独抛任务级异常；这里覆盖「大面积失败但没到 100%」的可见性
         "failed_ratio": failed_ratio,
+        # 跳过明细：为什么请求 100 条却只审了 80 条
+        "skipped_detail": skipped_detail,
+        # 初筛器效果：直接判垃圾多少 / 通过多少 / 无向量跳过多少 / force 复审未启用
+        "prefilter": prefilter_counts,
         "ai_generated": ai_generated,
         "cancelled": cancelled,
     }
