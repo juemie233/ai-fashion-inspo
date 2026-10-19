@@ -17,10 +17,10 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.schemas.person import UnbindInspirationsRequest
 from app.schemas.person import (
     BloggerCreate,
     BloggerDetailOut,
@@ -587,14 +587,6 @@ async def unregister_blogger_face_api(
     博主账号本身保留（可重新注册）；手动设置的头像（avatar_path）不受影响。
     """
     return await unregister_blogger_face(db, blogger_id)
-
-
-class UnbindInspirationsRequest(BaseModel):
-    """博主维度解绑素材请求：inspiration_ids 传空/不传 = 清空全部。"""
-
-    inspiration_ids: list[str] | None = Field(
-        None, description="要解绑的素材 ID 列表；为空或不传表示清空该博主全部素材归属"
-    )
 
 
 @router.post("/{blogger_id}/unbind-inspirations", status_code=status.HTTP_200_OK)

@@ -7,7 +7,6 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,18 +33,10 @@ from app.services.task_runner import (
     create_multi_analyze_task,
 )
 from app.utils.csv_safety import sanitize_csv_cell
+from app.schemas.ai_analysis import BatchAnalyzeRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-class BatchAnalyzeRequest(BaseModel):
-    """批量分析请求体（兼容旧版纯数组与多模型组合分析对象两种格式）。"""
-
-    inspiration_ids: list[str]
-    models: list[str] | None = None  # 视觉模型名列表（多选）；缺省用全局默认模型
-    prompt_ids: list[int] | None = None  # 提示词版本 ID 列表（0 = 当前默认提示词）
-    apply_tags: bool = True  # 是否把标签合并到素材（组合分析默认 False）
 
 
 async def _check_ollama_before_analysis() -> tuple[bool, str | None]:

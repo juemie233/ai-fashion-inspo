@@ -292,3 +292,11 @@ class ModelPhotoSetDetailOut(ModelPhotoSetOut):
     total: int = 0
     page: int = 1
     size: int = 100
+
+
+class UnbindInspirationsRequest(BaseModel):
+    """博主维度解绑素材请求：inspiration_ids 传空/不传 = 清空全部。"""
+
+    inspiration_ids: list[str] | None = Field(
+        None, description="要解绑的素材 ID 列表；为空或不传表示清空该博主全部素材归属"
+    )
