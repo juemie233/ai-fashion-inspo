@@ -234,6 +234,25 @@ def _precheck_image(image_data: str) -> str | None:
     return None
 
 
+def _should_sample_ai_check(inspiration_id: str, rate: float) -> bool:
+    """按素材 ID 的哈希做稳定抽样（同一素材结论可复现，便于复盘与回归）。
+
+    Args:
+        inspiration_id: 素材 UUID
+        rate: 抽样比例，0 表示全不抽、>=1 表示全抽
+
+    Returns:
+        本次是否对「被拒素材」补做 AI 生成检测
+    """
+    if rate <= 0:
+        return False
+    if rate >= 1:
+        return True
+    digest = hashlib.sha256(inspiration_id.encode("utf-8")).hexdigest()
+    # 取前 8 位十六进制映射到 [0,1)
+    return int(digest[:8], 16) / 0x100000000 < rate
+
+
 async def check_image_quality(
     db: AsyncSession,
     inspiration_id: str,
@@ -375,9 +394,13 @@ async def check_image_quality(
     if stats is not None:
         stats["reason_code"] = reason_code
 
-    # 第二步：仅对通过穿搭判断的图片做 AI 生成检测（非穿搭内容无需检测，省一次调用）
+    # 第二步：AI 生成检测。通过穿搭的必检；被拒的按比例抽样（见 quality_rejected_ai_sample_rate）
     ai_generated = False
-    if is_outfit:
+    # 通过穿搭必检；被拒素材按比例抽样检测（让「AI 生成且非穿搭」可统计，成本可控）
+    should_check_ai = is_outfit or _should_sample_ai_check(
+        inspiration_id, settings.quality_rejected_ai_sample_rate
+    )
+    if should_check_ai:
         raw_ai, err_ai = await _ollama_vision_chat(image_data, ai_prompt, model_cfg, temperature=0.0)
         # AI 检测失败/空结果默认不标记，宁可不标，避免误报
         if not err_ai:
