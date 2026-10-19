@@ -25,7 +25,7 @@ from app.schemas.search import (
     VectorSearchOut,
     VectorStatusOut,
 )
-from app.services import vector_store
+from app.services import search_suggest_service, vector_store
 from app.services.embedding_service import (
     generate_image_embedding,
     generate_text_embedding,
@@ -391,19 +391,8 @@ async def search_suggestions(
     limit: int = Query(8, ge=1, le=20),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """根据输入前缀返回匹配的标签名建议（用于搜索框自动补全）。"""
-    result = await db.execute(
-        select(Tag.name, func.count(InspirationTag.inspiration_id).label("cnt"))
-        .outerjoin(InspirationTag, Tag.id == InspirationTag.tag_id)
-        .where(Tag.name.contains(q))
-        .group_by(Tag.name)
-        .order_by(func.count(InspirationTag.inspiration_id).desc())
-        .limit(limit)
-    )
-    return [
-        {"name": row[0], "usage_count": row[1]}
-        for row in result.all()
-    ]
+    """根据输入前缀返回匹配的标签名建议；查询在 ``search_suggest_service``。"""
+    return await search_suggest_service.search_suggestions(db, q, limit)
 
 
 @router.get("/tag-cooccurrence")
@@ -412,44 +401,8 @@ async def tag_cooccurrence(
     limit: int = Query(10, ge=1, le=30),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """获取与指定标签经常一同出现的其他标签（共现分析）。"""
-    tag_result = await db.execute(select(Tag.id).where(Tag.name == tag_name))
-    tag_row = tag_result.first()
-    if not tag_row:
-        return {"tag": tag_name, "related": []}
-
-    tag_id = tag_row[0]
-
-    # 查找与 tag_name 共享素材最多的其他标签
-    related = await db.execute(
-        select(
-            Tag.name,
-            Tag.category,
-            func.count(InspirationTag.inspiration_id).label("shared_count"),
-        )
-        .join(InspirationTag, Tag.id == InspirationTag.tag_id)
-        .where(
-            InspirationTag.inspiration_id.in_(
-                select(InspirationTag.inspiration_id).where(
-                    InspirationTag.tag_id == tag_id
-                )
-            ),
-            Tag.id != tag_id,
-        )
-        .group_by(Tag.name, Tag.category)
-        .order_by(func.count(InspirationTag.inspiration_id).desc())
-        .limit(limit)
-    )
-    return {
-        "tag": tag_name,
-        "related": [
-            {"name": row[0], "category": row[1], "shared_count": row[2]}
-            for row in related.all()
-        ],
-    }
-
-
-
+    """与指定标签常一起出现的其他标签；查询在 ``search_suggest_service``。"""
+    return await search_suggest_service.tag_cooccurrence(db, tag_name, limit)
 
 
 async def _save_temp_image(file: UploadFile) -> Path:
