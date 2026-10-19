@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」
+    # 质量审核前置规则检查（尺寸过小/近乎纯色/极端比例直接拒，省两次 VLM 调用）。
+    # 默认关闭：规则会拦下纯色占位图，对既有数据口径有影响，确认符合预期后再开启。
+    quality_precheck_enabled: bool = False
 
     # 标签命名质量
     # 标签名超过该字数判定为「低质命名（过长）」：标签健康度扫描与 AI 打标提取共用同一阈值，

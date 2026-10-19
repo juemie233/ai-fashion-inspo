@@ -124,7 +124,13 @@ def ollama_fail_first(monkeypatch):
     _FailFirstOllama.call_count = 0
 
 
-async def test_quality_check_all_failed_raises_permanent(client, upload, ollama_all_fail):
+async def test_quality_check_all_failed_raises_permanent(
+    client, upload, ollama_all_fail, monkeypatch
+):
+    # 本用例模拟「Ollama 全部失败」，而上传夹具是纯色小图，会先被前置规则拦下 → 显式绕过预检
+    from app.services.ai_service import quality as quality_mod
+
+    monkeypatch.setattr(quality_mod, "_precheck_image", lambda _data: None)
     """质量审核整批失败（Ollama 400）：任务抛永久错误，不再冒充「完成 2/2」。"""
     a = upload().json()["id"]
     b = upload().json()["id"]

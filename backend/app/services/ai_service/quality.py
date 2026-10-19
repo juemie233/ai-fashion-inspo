@@ -186,6 +186,54 @@ async def _write_quality_result(
     return None
 
 
+"""前置规则检查阈值：命中即直接拒绝，省掉两次 VLM 调用（审查新 P1）。"""
+
+MIN_SIDE_PX = 64
+"""短边小于该值视为「尺寸过小」：再怎么审也看不清穿搭。"""
+
+MAX_UNIQUE_COLORS = 64
+"""去重颜色数不超过该值视为「近乎纯色」：空图/纯色块/占位图，不可能是有效穿搭。"""
+
+MAX_ASPECT_RATIO = 8.0
+"""长短边比超过该值视为「极端比例」（长条截图/拼接条），穿搭主体必然被裁掉。"""
+
+
+def _precheck_image(image_data: str) -> str | None:
+    """在调用 VLM 之前做规则预检，命中返回 `quality_reason_code`，否则 None。
+
+    仅在 `settings.quality_precheck_enabled` 开启时才会被调用（默认关闭）。
+
+    只拦「肉眼可判、模型也判不准」的硬性垃圾：尺寸过小、近乎纯色、极端长宽比。
+    误拦代价低（随机复审可 force 覆盖），但能省下整轮两次 VLM 调用，对上千条待审素材收益明显。
+
+    Args:
+        image_data: data URL（`_read_image_base64` 的返回值）
+
+    Returns:
+        命中时返回原因码（`low_quality` / `partial`），否则 None
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    try:
+        payload = image_data.split(",", 1)[-1]
+        with Image.open(io.BytesIO(base64.b64decode(payload))) as im:
+            width, height = im.size
+            if min(width, height) < MIN_SIDE_PX:
+                return "low_quality"
+            long_side, short_side = max(width, height), min(width, height)
+            if short_side and long_side / short_side > MAX_ASPECT_RATIO:
+                return "partial"
+            colors = im.convert("RGB").resize((64, 64)).getcolors(maxcolors=MAX_UNIQUE_COLORS + 1)
+            if colors is not None and len(colors) <= MAX_UNIQUE_COLORS:
+                return "low_quality"
+    except Exception:  # 解析失败交给下游 VLM 判（不要因预检把素材卡死在 pending）
+        return None
+    return None
+
+
 async def check_image_quality(
     db: AsyncSession,
     inspiration_id: str,
@@ -248,6 +296,23 @@ async def check_image_quality(
 
     try:
         image_data, _ = await _read_image_base64(file_path)
+        # 规则预检：命中即拒，省掉两次 VLM 调用（原因码进 stats，供复盘与统计）
+        precheck_code = _precheck_image(image_data) if settings.quality_precheck_enabled else None
+        if precheck_code:
+            precheck_reason = {
+                "low_quality": "前置规则：图片过小或近乎纯色，无法判断穿搭",
+                "partial": "前置规则：图片比例极端，穿搭主体不完整",
+            }.get(precheck_code, "前置规则命中")
+            if stats is not None:
+                stats["prefilter"] = "skipped"
+                stats["reason_code"] = precheck_code
+                stats["raw_output"] = precheck_reason
+            err = await _write_quality_result(
+                db, inspiration_id, "rejected", precheck_reason, False, force, precheck_code
+            )
+            if err:
+                return "pending", err, False
+            return "rejected", precheck_reason, False
     except FileNotFoundError:
         # 文件缺失：确定性失败，直接拒绝并写回，避免永久停留 pending
         err = await _write_quality_result(
