@@ -7,6 +7,8 @@
 
 import asyncio
 
+from datetime import timedelta
+
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +22,7 @@ from app.models.inspiration import (
 )
 from app.models.scraper import ScraperSeenURL
 from app.models.tag import Tag, InspirationTag
+from app.utils.time import utcnow
 
 # 素材媒体目录：完整性检查/存储统计只扫描这些目录，排除 lancedb（向量库）、
 # logs（日志）、cookies、debug 等非素材数据，否则会把向量库内部文件误判为
@@ -177,6 +180,28 @@ async def _query_distributions(db: AsyncSession) -> dict[str, list]:
             {"media_type": s[0] or "unknown", "count": s[1]} for s in media_stats
         ],
         "by_month": [{"month": s[0], "count": s[1]} for s in month_stats],
+    }
+
+
+async def query_inspiration_trend(db: AsyncSession, days: int) -> dict:
+    """按天统计新增素材数量（近 N 天），供管理页趋势图使用。
+
+    ``created_at`` 按项目约定为 UTC（``utcnow`` 写入），截止时间必须同样用 UTC 计算，
+    否则在非 UTC 时区（如 UTC+8）下按天边界整体偏移。
+    """
+    cutoff = utcnow() - timedelta(days=days)
+    rows = (await db.execute(
+        select(
+            func.strftime("%Y-%m-%d", Inspiration.created_at).label("day"),
+            func.count(Inspiration.id).label("cnt"),
+        )
+        .where(Inspiration.created_at >= cutoff, NOT_DELETED)
+        .group_by("day")
+        .order_by("day")
+    )).all()
+    return {
+        "days": days,
+        "trend": [{"day": r[0], "count": r[1]} for r in rows],
     }
 
 
