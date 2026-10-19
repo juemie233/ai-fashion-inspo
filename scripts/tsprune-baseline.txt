@@ -271,3 +271,7 @@ src/utils/taskLabel.ts - taskStatusType
 src/utils/taskLabel.ts - taskTypeTagColor
 src/utils/taskPollUntilIdle.ts - PollableTask (used in module)
 src/utils/taskPresentation.ts - TaskRowActions (used in module)
+src/api/aiQuality.ts - QualityCorrectionPayload (used in module)
+src/api/aiQuality.ts - QualityCorrectionResult (used in module)
+src/api/aiQuality.ts - submitQualityCorrection
+# 2026-10：api/aiQuality.ts 的 3 个导出被 ReviewPanel.vue 使用，ts-prune 未解析 .vue 导入，属已知误报

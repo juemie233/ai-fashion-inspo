@@ -21,6 +21,8 @@ export interface GridBrowserItem {
   [key: string]: unknown
   /** 结构化拒绝原因码（审核面板用于展示中文标签） */
   quality_reason_code?: string | null
+  /** 质量审核状态（误判反馈弹窗据此决定默认翻转方向） */
+  quality_status?: string | null
 }
 
 export type GridDensity = 'compact' | 'standard'

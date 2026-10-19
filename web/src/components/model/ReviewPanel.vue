@@ -5,6 +5,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
 import { QUALITY_BATCH_MAX, qualityBatchHint } from '@/utils/qualityBatch'
 import { QUALITY_REASON_OPTIONS, qualityReasonLabel } from '@/utils/qualityReason'
+import { submitQualityCorrection } from '@/api/aiQuality'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -308,6 +309,7 @@ async function randomQualityCheck() {
 
 // 未通过素材列表
 interface RejectedItem {
+  quality_status?: string | null
   id: string
   thumbnail_path?: string | null
   file_path: string
@@ -385,6 +387,43 @@ function loadMoreRejected() {
   if (rejectedLoading.value) return // 防止加载中重复点击导致跳页
   rejectedPage.value += 1
   loadRejectedItems(false)
+}
+
+/** 误判反馈弹窗状态：默认把判定「翻转」过来（rejected → approved），减少一次点击 */
+const correctionOpen = ref(false)
+const correctionItem = ref<RejectedItem | GridBrowserItem | null>(null)
+const correctionStatus = ref<'approved' | 'rejected'>('approved')
+const correctionReason = ref('')
+const correctionNote = ref('')
+const correctionSubmitting = ref(false)
+
+function openCorrection(item: RejectedItem | GridBrowserItem) {
+  correctionItem.value = item
+  correctionStatus.value = item.quality_status === 'approved' ? 'rejected' : 'approved'
+  correctionReason.value = ''
+  correctionNote.value = ''
+  correctionOpen.value = true
+}
+
+async function submitCorrection() {
+  const item = correctionItem.value
+  if (!item) return
+  correctionSubmitting.value = true
+  try {
+    await submitQualityCorrection({
+      inspiration_id: item.id,
+      corrected_status: correctionStatus.value,
+      reason_code: correctionReason.value || undefined,
+      note: correctionNote.value.trim() || undefined,
+    })
+    Message.success('已记录误判反馈，素材判定已按你的选择改正')
+    correctionOpen.value = false
+    await Promise.all([loadRejectedItems(true), loadQualityReview()])
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '提交失败'))
+  } finally {
+    correctionSubmitting.value = false
+  }
 }
 
 async function approveItem(id: string) {
@@ -670,6 +709,13 @@ onUnmounted(() => {
               @click="approveItem(item.id)"
               >✓ 翻案</a-button
             >
+            <a-button
+              size="mini"
+              type="outline"
+              style="margin-left: 6px"
+              @click="openCorrection(item)"
+              >判错了</a-button
+            >
           </template>
 
           <!-- 卡片附加：审核原因 -->
@@ -688,6 +734,44 @@ onUnmounted(() => {
         </InspirationGridBrowser>
       </a-card>
 
+      <!-- 误判反馈弹窗：选正确判定 + 错在哪类 + 备注；提交后状态即时改正 -->
+      <a-modal
+        v-model:visible="correctionOpen"
+        title="AI 判错了"
+        :ok-loading="correctionSubmitting"
+        ok-text="提交反馈"
+        cancel-text="取消"
+        @ok="submitCorrection"
+      >
+        <div class="correction-form">
+          <div class="correction-row">
+            <div class="correction-label">应该判为</div>
+            <a-radio-group v-model="correctionStatus">
+              <a-radio value="approved">通过（其实是穿搭）</a-radio>
+              <a-radio value="rejected">拒绝（确实不该通过）</a-radio>
+            </a-radio-group>
+          </div>
+          <div class="correction-row">
+            <div class="correction-label">错在哪类（可选）</div>
+            <a-select
+              v-model="correctionReason"
+              :options="QUALITY_REASON_OPTIONS"
+              allow-clear
+              style="width: 100%"
+            />
+          </div>
+          <div class="correction-row">
+            <div class="correction-label">补充说明（可选）</div>
+            <a-textarea
+              v-model="correctionNote"
+              :max-length="200"
+              show-word-limit
+              placeholder="例如：只有单品特写，但确实是穿搭展示"
+            />
+          </div>
+        </div>
+      </a-modal>
+
       <!-- 说明 -->
       <a-alert type="info">
         <template #title>💡 待审核与已通过的素材</template>
@@ -701,6 +785,18 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 误判反馈弹窗：三行「标签 + 控件」，不需要 Form 组件（也避开其类型约束） */
+.correction-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.correction-label {
+  font-size: 13px;
+  color: var(--color-text-2);
+  margin-bottom: 6px;
+}
+
 /* 审核原因：覆盖在图片顶部的半透明红条，不占用布局高度、不遮挡底部悬停按钮 */
 .rejected-reason {
   position: absolute;
