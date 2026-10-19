@@ -30,6 +30,13 @@ from app.utils.time import format_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
+NEGATIVE_EXCLUDED_TRASH_REASONS = ("隐私",)
+"""不作为负样本的垃圾桶原因（审查老 #9）。
+
+「隐私」图不是「穿得不好」——把它学进初筛器会让分类器把「露肤/私密场景」这类**正常穿搭**
+也判成垃圾。其余原因（质量差/重复/不喜欢/其他/AI生成）仍全部计入，保持原有口径。
+"""
+
 _MODEL_DIR = settings.storage_root / "quality_classifier"
 _MODEL_PATH = _MODEL_DIR / "classifier.joblib"
 _META_PATH = _MODEL_DIR / "meta.json"
@@ -62,14 +69,22 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
     # 负样本 = 垃圾桶中所有图片素材（不限删除原因）。
     # 口径与「垃圾桶待删除素材」保持一致：用户移入垃圾桶即明确不想要，
     # 无论原因是质量差/重复/不喜欢/隐私/其他，全部作为负样本。
-    negative_ids = (
+    negative_rows = (
         await db.execute(
-            select(Inspiration.id).where(
+            select(Inspiration.id, Inspiration.trash_reason).where(
                 Inspiration.media_type == "image",
                 Inspiration.deleted_at.isnot(None),
+                # 「隐私」不作为负样本（口径见 NEGATIVE_EXCLUDED_TRASH_REASONS）
+                Inspiration.trash_reason.notin_(NEGATIVE_EXCLUDED_TRASH_REASONS),
             )
         )
-    ).scalars().all()
+    ).all()
+    negative_ids = [r[0] for r in negative_rows]
+    # 按删除原因分层统计：让人能看出负样本构成（哪个原因的样本占大头）
+    negative_by_reason: dict[str, int] = {}
+    for _id, reason in negative_rows:
+        key = reason or "未标注"
+        negative_by_reason[key] = negative_by_reason.get(key, 0) + 1
 
     # 批量读取已存储的图像向量（一次表加载），避免逐条 get_vector 造成 O(N²) 扫描
     pos_map = await vector_store.get_vectors_batch("image", list(positive_ids))
@@ -87,6 +102,9 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
             y.append(0)
 
     stats = {
+        # 负样本已排除「隐私」；negative_by_reason 是**排除后**的构成
+        "negative_by_reason": negative_by_reason,
+        "excluded_reasons": list(NEGATIVE_EXCLUDED_TRASH_REASONS),
         "positive_total": len(positive_ids),
         "negative_total": len(negative_ids),
         "with_vector": len(X),
