@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from app.scrapers.base import BaseScraper, RawContent
+from app.scrapers.base import BaseScraper, launch_sync_page, RawContent
 
 logger = logging.getLogger(__name__)
 
@@ -26,19 +26,10 @@ class DouyinScraper(BaseScraper):
             return
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=self.headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        # UA/视口由 base.launch_sync_page 统一（launch 参数两个平台不同，各自传）
+        self._browser, self._context, self._page = launch_sync_page(
+            self._pw, self.headless, ["--no-sandbox", "--disable-dev-shm-usage"]
         )
-        self._context = self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1920, "height": 1080},
-        )
-        self._page = self._context.new_page()
 
     async def _ensure_browser(self) -> None:
         if self._browser is not None:

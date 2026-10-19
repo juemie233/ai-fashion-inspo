@@ -6,7 +6,7 @@ import logging
 import os
 import time
 
-from app.scrapers.base import BaseScraper, RawContent
+from app.scrapers.base import BaseScraper, RawContent, launch_sync_page
 
 logger = logging.getLogger(__name__)
 
@@ -82,19 +82,13 @@ class XiaohongshuScraper(BaseScraper):
         except ImportError:
             raise RuntimeError(
                 "未安装 Playwright: pip install playwright && playwright install chromium"
-            )
+            ) from None
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-        )
-        self._context = self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1920, "height": 1080},
+        # UA/视口由 base.launch_sync_page 统一；launch 参数与反检测脚本仍是小红书自己的
+        self._browser, self._context, self._page = launch_sync_page(
+            self._pw,
+            self.headless,
+            ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
         )
         self._context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -205,7 +199,7 @@ class XiaohongshuScraper(BaseScraper):
                             image_urls=image_urls,
                             caption=caption,
                         ))
-                    except Exception as e:
+                    except Exception:
                         continue
             except Exception as e:
                 logger.error(f"小红书搜索失败: {e}")
