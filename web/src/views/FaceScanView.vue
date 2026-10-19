@@ -28,6 +28,7 @@ import { pollTaskUntilIdle } from '@/utils/taskPollUntilIdle'
 import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
 import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 import { usePolling } from '@/composables/usePolling'
+import { useFaceScanActions } from '@/composables/useFaceScanActions'
 import StatusTag from '@/components/common/StatusTag.vue'
 import FaceClusterTab from '@/components/person/face/FaceClusterTab.vue'
 import FaceConfirmedTab from '@/components/person/face/FaceConfirmedTab.vue'
@@ -97,71 +98,6 @@ async function refreshTasks() {
 }
 
 /** 开始扫描（增量/全量） */
-async function startScan() {
-  starting.value = true
-  try {
-    const { task_id, total } = await startFaceScan(scope.value, autoMatch.value)
-    Message.success(`扫描任务已创建（待扫 ${total} 个素材）`)
-    detailChecked.value.clear()
-    await refreshTasks()
-    void pollUntilIdle(task_id)
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '创建扫描任务失败'))
-  } finally {
-    starting.value = false
-  }
-}
-
-/** 取消任务（运行中的人脸任务也可取消，增量续跑） */
-async function cancelTask() {
-  const task = scanTask.value ?? matchTask.value
-  if (!task) return
-  cancelling.value = true
-  try {
-    const { data } = await import('@/api/client').then((m) =>
-      m.default.post(`/tasks/${task.id}/cancel`),
-    )
-    Message.success((data as { message?: string }).message || '任务已取消')
-    await refreshTasks()
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '取消失败'))
-  } finally {
-    cancelling.value = false
-  }
-}
-
-/** 全库重匹配（不动 GPU，秒级~分钟级） */
-async function startMatch() {
-  matching.value = true
-  try {
-    const { task_id } = await runFaceMatch({ scope: 'all' })
-    Message.success('全库重匹配任务已创建')
-    await refreshTasks()
-    void pollUntilIdle(task_id)
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '创建匹配任务失败'))
-  } finally {
-    matching.value = false
-  }
-}
-
-/** 轮询扫描/匹配任务直到终态（3s 间隔；任务完成后刷新结果区） */
-async function pollUntilIdle(taskId: number) {
-  await pollTaskUntilIdle({
-    taskId,
-    intervalMs: 3000,
-    refresh: async () => {
-      const status = await fetchFaceScanTask()
-      scanTask.value = status.scan_task
-      matchTask.value = status.match_task
-      return [status.scan_task, status.match_task].find((t) => t?.id === taskId) ?? null
-    },
-    onIdle: refreshAll,
-  })
-}
-
-// ── 结果区：聚合（按人物）──
-/** 结果区 tab：待审核候选 / 已确认 / 未匹配人脸 / 聚合分组 */
 type ResultTab = 'pending' | 'confirmed' | 'unmatched' | 'cluster'
 const VALID_RESULT_TABS: ResultTab[] = ['pending', 'confirmed', 'unmatched', 'cluster']
 // 从 URL query 恢复当前 tab，刷新/分享链接后不再回到第一个页面
@@ -214,6 +150,19 @@ const detailTotal = ref(0)
 const detailLoading = ref(false)
 const detailChecked = ref<Set<number>>(new Set())
 const detailActionBusy = ref(false)
+
+const { startScan, cancelTask, startMatch, pollUntilIdle } = useFaceScanActions({
+  scanTask,
+  matchTask,
+  scope,
+  autoMatch,
+  starting,
+  cancelling,
+  matching,
+  detailChecked,
+  refreshTasks,
+  refreshAll,
+})
 /** 候选网格列数（3~6 可选，默认 6） */
 const gridColumns = ref<number>(6)
 
