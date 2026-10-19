@@ -54,3 +54,32 @@ def test_precheck_passes_normal_image():
 def test_precheck_tolerates_broken_data():
     """无法解析的数据不拦（交给下游 VLM/读图报错），避免把素材卡死在 pending。"""
     assert _precheck_image("data:image/jpeg;base64,bm90LWFuLWltYWdl") is None
+
+
+async def test_precheck_end_to_end_rejects_solid_upload(client, upload, monkeypatch):
+    """开关打开时，纯色上传图会被规则直接拒（不调用任何模型），并落 reason_code。"""
+    from app.config import settings
+    from app.database import async_session
+    from app.models.inspiration import Inspiration
+    from app.services.ai_service.quality import check_image_quality
+
+    monkeypatch.setattr(settings, "quality_precheck_enabled", True)
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    stats: dict = {}
+    async with async_session() as db:
+        status, reason, ai = await check_image_quality(
+            db, insp["id"], insp["file_path"], stats=stats
+        )
+
+    assert status == "rejected"
+    assert "前置规则" in reason
+    assert ai is False
+    # 规则命中单独一态，不混进「初筛器跳过」
+    assert stats["prefilter"] == "precheck"
+    assert stats["reason_code"] in {"low_quality", "partial"}
+    async with async_session() as db:
+        saved = await db.get(Inspiration, insp["id"])
+        assert saved.quality_status == "rejected"
+        assert saved.quality_reason_code == stats["reason_code"]

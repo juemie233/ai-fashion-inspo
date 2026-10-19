@@ -69,3 +69,22 @@ def test_correction_stats_shape(client, upload):
     assert stats["total"] >= 1
     assert stats["by_reason_code"].get("partial", 0) >= 1
     assert stats["by_direction"].get("rejected->approved", 0) >= 1
+
+
+def test_correction_rejects_invalid_reason_code(client, upload):
+    """reason_code 白名单校验：任意字符串不能写进结构化原因。"""
+    insp = upload().json()
+    r = _submit(client, insp["id"], "approved", reason_code="我瞎编的原因")
+    assert r.status_code == 400
+
+
+def test_correction_to_approved_clears_reason_text(client, upload):
+    """纠正为通过时，拒绝原因文本与原因码都要清掉（避免矛盾展示）。"""
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "rejected"})
+    r = _submit(client, insp["id"], "approved", reason_code="not_outfit")
+    assert r.status_code == 200, r.text
+
+    detail = client.get(f"/api/inspirations/{insp['id']}").json()
+    assert detail["quality_status"] == "approved"
+    assert not detail.get("quality_reason"), detail.get("quality_reason")

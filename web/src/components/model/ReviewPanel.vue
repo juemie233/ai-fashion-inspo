@@ -389,6 +389,13 @@ function loadMoreRejected() {
   loadRejectedItems(false)
 }
 
+/** 纠错可选的原因：排除系统态码（`prefilter_reject` / `unknown` 不是「人工认为错在哪」） */
+const correctionReasonOptions = computed(() =>
+  QUALITY_REASON_OPTIONS.filter(
+    (o) => o.value && o.value !== 'prefilter_reject' && o.value !== 'unknown',
+  ),
+)
+
 /** 误判反馈弹窗状态：默认把判定「翻转」过来（rejected → approved），减少一次点击 */
 const correctionOpen = ref(false)
 const correctionItem = ref<RejectedItem | GridBrowserItem | null>(null)
@@ -755,7 +762,7 @@ onUnmounted(() => {
             <div class="correction-label">错在哪类（可选）</div>
             <a-select
               v-model="correctionReason"
-              :options="QUALITY_REASON_OPTIONS"
+              :options="correctionReasonOptions"
               allow-clear
               style="width: 100%"
             />

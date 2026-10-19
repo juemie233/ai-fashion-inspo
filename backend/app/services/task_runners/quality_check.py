@@ -227,7 +227,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
     failed = 0  # 审核失败保持 pending 的张数（reason 非空，与「无法判定」同计数但单列）
     ai_generated = 0
     first_error: str | None = None  # 第一条失败原因，供任务级报错
-    prefilter_counts = {"hit": 0, "pass": 0, "skipped": 0, "disabled": 0}
+    prefilter_counts = {"hit": 0, "pass": 0, "skipped": 0, "disabled": 0, "precheck": 0}
     cancelled = False
 
     for start in range(0, len(items), concurrency):
@@ -240,6 +240,8 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         chunk = items[start:start + concurrency]
         # 每条一个出参字典，collect 后汇总初筛器结果（#10）
         per_item_stats = [{} for _ in chunk]
+        # return_exceptions=True：单条素材的 DB/日志异常不能拖垮整批（几千条的任务里
+        # 一条写失败就整体失败，代价过高）。异常在下面按「失败一条」计入。
         results = await asyncio.gather(
             *(
                 _quality_check_one(
@@ -252,12 +254,21 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
                     stats=per_item_stats[idx],
                 )
                 for idx, (iid, fp) in enumerate(chunk)
-            )
+            ),
+            return_exceptions=True,
         )
         for item_stats in per_item_stats:
             key = str(item_stats.get("prefilter", "skipped"))
             prefilter_counts[key] = prefilter_counts.get(key, 0) + 1
-        for _iid, status, _reason, _ai in results:
+        for result in results:
+            if isinstance(result, Exception):
+                # 该条整体失败（如写日志时 DB 异常）：计入 failed，原因写进任务级报错
+                failed += 1
+                pending += 1
+                if first_error is None:
+                    first_error = f"审核异常: {str(result)[:100]}"
+                continue
+            _iid, status, _reason, _ai = result
             if status == "approved":
                 approved += 1
             elif status == "rejected":

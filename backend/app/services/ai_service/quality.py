@@ -347,7 +347,8 @@ async def check_image_quality(
                 "partial": "前置规则：图片比例极端，穿搭主体不完整",
             }.get(precheck_code, "前置规则命中")
             if stats is not None:
-                stats["prefilter"] = "skipped"
+                # 规则预检 ≠ 初筛器跳过：单独一态，避免任务结果里「跳过」被误读成「无向量」
+                stats["prefilter"] = "precheck"
                 stats["reason_code"] = precheck_code
                 stats["raw_output"] = precheck_reason
             err = await _write_quality_result(

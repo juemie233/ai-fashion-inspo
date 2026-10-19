@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration, QualityCorrection
+from app.services.ai_service.quality import REASON_CODES
 
 VALID_STATUS = ("approved", "rejected")
 
@@ -40,6 +41,9 @@ async def record_correction(
     """
     if corrected_status not in VALID_STATUS:
         raise ValueError("corrected_status 只能是 approved 或 rejected")
+    if reason_code is not None and reason_code not in REASON_CODES:
+        # 白名单校验：否则任意字符串会写进 quality_reason_code，前端「按原因筛选」永远匹配不上
+        raise ValueError(f"reason_code 不合法：{reason_code}")
 
     inspiration = await db.get(Inspiration, inspiration_id)
     if not inspiration:
@@ -59,8 +63,9 @@ async def record_correction(
     inspiration.quality_status = corrected_status
     inspiration.quality_reviewed_by = "human"
     if corrected_status == "approved":
-        # 通过时清掉拒绝原因码，避免「已通过却带着拒绝原因」的矛盾数据
+        # 通过时同时清掉「原因码」与「原因文本」，避免「已通过却带着拒绝原因」的矛盾展示
         inspiration.quality_reason_code = None
+        inspiration.quality_reason = None
 
     await db.commit()
     await db.refresh(correction)

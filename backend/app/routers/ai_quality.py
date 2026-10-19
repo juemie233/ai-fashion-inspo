@@ -363,7 +363,7 @@ async def quality_gray(
         limit: 最多返回多少条（按置信度降序 = 越接近阈值越优先）
 
     Returns:
-        {"items": [{id, confidence, quality_status, quality_reason_code}], "threshold": 0.85}
+        {"items": [{id, confidence, quality_status, quality_reason_code}], "threshold": 0.9}
     """
     threshold = settings.quality_classifier_threshold
     subq = (
@@ -406,17 +406,25 @@ async def quality_gray(
 
 
 @router.get("/quality-stats")
-async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def quality_stats(
+    include_trashed: bool = Query(
+        False, description="是否把已入垃圾桶的素材计入统计（自动入垃圾桶开启时会用到）"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
     """质量审核统计：待审核/已通过/已拒绝数量及通过率（图片 + 视频；视频按首帧审核）。"""
+    base_where = [Inspiration.media_type.in_(("image", "video"))]
+    if not include_trashed:
+        # 默认只看「活跃池」；自动入垃圾桶开启后 rejected 会被移出，数字骤降是预期，
+        # 需要看历史全貌时传 include_trashed=true
+        base_where.append(Inspiration.deleted_at.is_(None))
+
     result = await db.execute(
         select(
             func.coalesce(Inspiration.quality_status, "pending"),
             func.count(Inspiration.id),
         )
-        .where(
-            Inspiration.media_type.in_(("image", "video")),
-            Inspiration.deleted_at.is_(None),
-        )
+        .where(*base_where)
         .group_by(func.coalesce(Inspiration.quality_status, "pending"))
     )
     counts = {status: count for status, count in result.all()}
@@ -444,6 +452,8 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, object]
             AIAnalysisLog.log_type == "quality_check",
             AIAnalysisLog.error.is_(None),
             AIAnalysisLog.processing_time_ms.isnot(None),
+            # 只算**当前模型**的均值：换模型后混合平均会让 ETA 系统性失真
+            AIAnalysisLog.model_version == settings.ollama_vision_model,
         )
     )
     avg_ms = avg_result.scalar()
