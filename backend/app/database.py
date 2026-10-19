@@ -26,7 +26,7 @@ if settings.debug:
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection: Any, connection_record: Any) -> None:
+def _enable_sqlite_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
     """每次建立连接时启用 SQLite 外键约束。
 
     SQLite 默认关闭外键，导致 ON DELETE SET NULL / ON DELETE CASCADE 失效。

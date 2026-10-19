@@ -191,7 +191,7 @@ def _build_plans(
     return plans
 
 
-def _format_preview(plans: list[dict], tags_by_id: dict[int, Tag]) -> list[dict]:
+def _format_preview(plans: list[dict], _tags_by_id: dict[int, Tag]) -> list[dict]:
     """把计划格式化为前端预览项。"""
     preview = []
     for p in plans:

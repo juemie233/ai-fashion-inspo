@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile
-from app.exceptions import validation_error, file_error, processing_error
+from app.exceptions import validation_error
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,7 +74,7 @@ def _validate_download_url(url: str) -> None:
             or ip.is_multicast
         ):
             raise validation_error(
-                "url", 
+                "url",
                 "下载地址指向内网/保留地址，已拒绝（SSRF 防护）"
             )
 
