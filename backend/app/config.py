@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # 被拒素材中**抽样**做 AI 生成检测的比例（0~1）。此前只有「通过穿搭」的素材才做检测，
     # 导致「AI 生成且非穿搭」永远统计不到；抽样让这个交叉维度可用，同时控制调用成本。
     quality_rejected_ai_sample_rate: float = 0.1
+    # 质量审核判 rejected 时**自动移入垃圾桶**（默认关闭）。
+    # 关闭时的语义是「只标记不删除」：素材仍在「未通过素材」里可人工翻案。
+    # 打开后新判 rejected 的素材会带 deleted_at/trash_reason/trash_source 三字段一起入垃圾桶
+    # （与软删除不变量一致，可在垃圾桶恢复），并从质量审核列表里消失。
+    quality_auto_trash_rejected: bool = False
 
     # 标签命名质量
     # 标签名超过该字数判定为「低质命名（过长）」：标签健康度扫描与 AI 打标提取共用同一阈值，

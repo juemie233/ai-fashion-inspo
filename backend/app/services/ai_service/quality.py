@@ -14,6 +14,7 @@ from app.models.inspiration import Inspiration
 from app.services.ai_parser import parse_analysis_response, parse_is_outfit
 from app.services.ai_service.common import _read_image_base64, logger
 from app.services.model_config import get_model_config
+from app.utils.time import utcnow
 
 """拒绝原因码白名单（与 prompt 里的枚举保持一致；approved 时为 None）。"""
 REASON_CODES = {"not_outfit", "single_item", "partial", "low_quality", "ad", "other"}
@@ -126,6 +127,27 @@ async def _classifier_prefilter(
     return await quality_learner.predict_vector(vector)
 
 
+def _auto_trash_fields(status: str) -> dict:
+    """按「自动入垃圾桶」开关决定是否需要附带软删除三字段。
+
+    三字段必须**同时**写入（deleted_at / trash_reason / trash_source），否则会破坏
+    「垃圾桶状态不变量」（同真同假）；因此这里返回整组而不是单个字段。
+
+    Args:
+        status: 本次判定 approved / rejected
+
+    Returns:
+        rejected 且开关打开时返回三字段，否则空字典
+    """
+    if status != "rejected" or not settings.quality_auto_trash_rejected:
+        return {}
+    return {
+        "deleted_at": utcnow(),
+        "trash_reason": "质量差",
+        "trash_source": "auto",
+    }
+
+
 async def _write_quality_result(
     db: AsyncSession,
     inspiration_id: str,
@@ -153,6 +175,8 @@ async def _write_quality_result(
             update(Inspiration)
             .where(Inspiration.id == inspiration_id)
             .values(
+                # 自动入垃圾桶：三字段整组写入，保持软删除不变量
+                **_auto_trash_fields(status),
                 quality_status=status,
                 quality_reason=reason,
                 is_ai_generated=is_ai_generated,
