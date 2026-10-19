@@ -4,6 +4,8 @@
 Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
 """
 
+import hashlib
+
 from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -228,6 +230,12 @@ async def check_image_quality(
         '只输出 JSON，格式：{"is_ai_generated": true 或 false, "confidence": 0.0 到 1.0, "evidence": ["痕迹1", "痕迹2"]}'
     )
 
+    # prompt 指纹与模型名：供审核日志落库，便于「同一 prompt 可比、跨 prompt 分组统计」
+    outfit_prompt_hash = hashlib.sha256(outfit_prompt.encode("utf-8")).hexdigest()
+    if stats is not None:
+        stats["prompt_hash"] = outfit_prompt_hash
+        stats["model_name"] = settings.ollama_vision_model
+
     try:
         image_data, _ = await _read_image_base64(file_path)
     except FileNotFoundError:
@@ -271,6 +279,9 @@ async def check_image_quality(
     if err:
         return "pending", f"审核失败: {err}", False
 
+    if stats is not None:
+        # 只留穿搭分类这一步的原始输出：它才是 quality_status 的依据
+        stats["raw_output"] = raw[:2000]
     # 解析 JSON（复用增强过的解析器，能处理注释/脏输出）
     parsed = parse_analysis_response(raw)
     if not isinstance(parsed, dict) or "is_outfit" not in parsed:

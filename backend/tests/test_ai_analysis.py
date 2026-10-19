@@ -830,3 +830,22 @@ async def test_quality_force_review_does_not_override_human(client, upload, fake
         saved = await db.get(Inspiration, insp["id"])
         assert saved.quality_status == "approved", "人工判定必须保留"
         assert saved.quality_reviewed_by == "human"
+
+async def test_quality_review_records_prompt_hash(client, upload, fake_ollama):
+    """审核日志的复盘三件套（老 #4/#5）：prompt 指纹、模型名、模型原始输出。"""
+    import re
+
+    from app.config import settings
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    stats: dict = {}
+    async with async_session() as db:
+        await check_image_quality(db, insp["id"], insp["file_path"], stats=stats)
+
+    assert re.fullmatch(r"[0-9a-f]{64}", stats["prompt_hash"] or ""), stats["prompt_hash"]
+    assert stats["model_name"] == settings.ollama_vision_model
+    assert stats["raw_output"], "应保留模型原始输出，供复盘与 prompt 调优"

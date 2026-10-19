@@ -108,6 +108,10 @@ async def _quality_check_one(
                     result=status,
                     reason=reason,
                     reviewed_at=utcnow(),
+                    # 复盘三件套：模型原始输出、prompt 指纹、模型名（历史数据为空）
+                    raw_output=stats.get("raw_output") if stats else None,
+                    prompt_hash=stats.get("prompt_hash") if stats else None,
+                    model_name=stats.get("model_name") if stats else None,
                 )
             )
             await db.commit()

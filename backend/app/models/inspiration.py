@@ -242,6 +242,11 @@ class AIQualityReview(Base):
     reviewed_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+    # 以下三列用于「事后复盘」：模型原始输出（JSON 文本）、prompt 指纹、模型名。
+    # 此前只存判定与原因，prompt 调优时无法回答「模型当时到底看到了什么、回了什么」。
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # 关联关系
     log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="quality_reviews")
