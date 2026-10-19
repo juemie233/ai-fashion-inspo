@@ -4,7 +4,7 @@
 Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
 """
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -135,6 +135,9 @@ async def _write_quality_result(
     避免覆盖人工翻案；初筛器拒绝与 VLM 审核两条路径共用本函数。
     用条件 UPDATE 原子完成「判定 + 写入」，避免 check-then-act 竞态。
 
+    **人工判定优先**：`quality_reviewed_by='human'` 的素材一律不覆盖，即使 force=True
+    （随机复审）也不覆盖 —— 否则人工翻案会被下一次复审推翻。命中时返回可读原因。
+
     校验 rowcount：CAS 分支 0 行受影响（素材已被人工翻案/并发审核抢先）
     时返回「判定未生效」描述，调用方据此把结果记为未判定（pending），
     避免把从未落账的判定记入审核日志与任务统计。
@@ -147,6 +150,18 @@ async def _write_quality_result(
                 quality_status=status,
                 quality_reason=reason,
                 is_ai_generated=is_ai_generated,
+                # 判定来源：本条由模型判定（人工判定在 inspiration_update 服务里写 human）
+                quality_reviewed_by="ai",
+            )
+        )
+        # 人工判定优先：quality_reviewed_by='human' 且不在 pending 的素材一律不覆盖，
+        # **即使 force=True（随机复审）也不覆盖** —— 否则人工翻案会被下一次复审推翻。
+        # 人工把它设回 pending 表示「我要重审」，那种情况允许覆盖。
+        stmt = stmt.where(
+            or_(
+                Inspiration.quality_reviewed_by.is_(None),
+                Inspiration.quality_reviewed_by != "human",
+                Inspiration.quality_status == "pending",
             )
         )
         if not force:
@@ -154,8 +169,9 @@ async def _write_quality_result(
             stmt = stmt.where(Inspiration.quality_status == "pending")
         result = await db.execute(stmt)
         await db.commit()
-        if not force and result.rowcount == 0:
-            return "素材审核状态已被人工修改，本次判定未写入（跳过）"
+        if result.rowcount == 0:
+            # 人工已判定（或并发抢先）→ 明确回报，不静默丢弃
+            return "素材已由人工判定，本次自动审核未覆盖（跳过）"
     except Exception as e:
         logger.warning(f"质量审核写回失败 {inspiration_id}: {e}")
         return f"写回失败: {str(e)[:100]}"

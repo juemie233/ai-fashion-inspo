@@ -35,6 +35,8 @@ async def update_inspiration(
     if data.quality_status is not None:
         # 人工复核翻案：修改审核状态，同时处理原因
         inspiration.quality_status = data.quality_status
+        # 人工改质量状态 → 记来源，供随机复审判断「不得覆盖人工判定」
+        inspiration.quality_reviewed_by = "human"
         if data.quality_status in ("approved", "pending"):
             inspiration.quality_reason = None
         else:
@@ -94,6 +96,8 @@ async def batch_update_inspirations(
         values["is_ai_generated"] = is_ai_generated
     if quality_status is not None:
         values["quality_status"] = quality_status
+        # 人工（含批量）改质量状态 → 记来源
+        values["quality_reviewed_by"] = "human"
         # 与单条更新语义一致：翻案为 approved/pending 清空原因；
         # rejected 时本函数无原因参数，一并清空旧原因避免张冠李戴
         values["quality_reason"] = None

@@ -81,6 +81,9 @@ class Inspiration(Base):
         String(16), default="pending", index=True
     )  # 质量审核状态：pending/approved/rejected
     quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # 拒绝原因
+    # 判定来源：ai=模型审核 / human=人工翻案或手动设置 / None=历史数据（未知）。
+    # 用途：随机复审（force=True）不得覆盖人工判定，否则人工翻案会被下一次复审推翻。
+    quality_reviewed_by: Mapped[str | None] = mapped_column(String(8), nullable=True)
     is_ai_generated: Mapped[bool] = mapped_column(
         Boolean, default=False, index=True
     )  # 疑似 AI 生成标记（只标记不拒绝，与 quality_status 正交）

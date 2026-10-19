@@ -787,3 +787,46 @@ async def test_quality_stats_argument_is_optional(client, upload, fake_ollama):
         status, _reason, _ai = await check_image_quality(db, insp["id"], insp["file_path"])
 
     assert status == "approved"
+
+async def test_quality_ai_review_marks_source(client, upload, fake_ollama):
+    """模型判定成功时，quality_reviewed_by 记为 ai（供随机复审判断是否可覆盖）。"""
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = True
+    insp = upload().json()
+    client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "pending"})
+
+    async with async_session() as db:
+        status, _reason, _ai = await check_image_quality(db, insp["id"], insp["file_path"])
+    assert status == "approved"
+
+    async with async_session() as db:
+        saved = await db.get(Inspiration, insp["id"])
+        assert saved.quality_reviewed_by == "ai"
+
+
+async def test_quality_force_review_does_not_override_human(client, upload, fake_ollama):
+    """人工翻案后，随机复审（force=True）不得覆盖人工判定（老 #2）。
+
+    复审的意义是「抽查模型判得准不准」，不是推翻人工结论；此前的 force=True 会无条件
+    UPDATE，导致人工通过的素材被下一次复审改回 rejected。
+    """
+    from app.services.ai_service.quality import check_image_quality
+
+    FakeOllamaClient.outfit_is_outfit = False  # 模型这次会判 rejected
+    insp = upload().json()
+    # 人工翻案为 approved（走 PATCH → 记 human）
+    r = client.patch(f"/api/inspirations/{insp['id']}", json={"quality_status": "approved"})
+    assert r.status_code == 200, r.text
+
+    async with async_session() as db:
+        status, reason, _ai = await check_image_quality(
+            db, insp["id"], insp["file_path"], force=True
+        )
+
+    assert status == "pending", "人工判定未被覆盖时应回报 pending"
+    assert "人工" in reason
+    async with async_session() as db:
+        saved = await db.get(Inspiration, insp["id"])
+        assert saved.quality_status == "approved", "人工判定必须保留"
+        assert saved.quality_reviewed_by == "human"
