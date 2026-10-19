@@ -37,6 +37,8 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
         search?: string
         platform?: string
         sort?: 'newest' | 'name' | 'count'
+        /** 素材数排序方向（sort=count 时生效） */
+        order?: 'asc' | 'desc'
         /** 仅返回已注册人脸库的人物（用于人脸检测手动选择） */
         face_registered_only?: boolean
         /** 按人物组折叠（方案 B，仅博主）：同组只返回主账号，组内账号在 group_members */

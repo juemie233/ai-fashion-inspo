@@ -52,6 +52,8 @@ async def list_models(
     search: str | None = Query(None, description="名称模糊搜索"),
     platform: str | None = Query(None, description="平台筛选"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
+    # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     # 人脸检测约束：仅保留已注册人脸库的模特（确保只匹配候选人脸库内的人）
     face_registered_only: bool = Query(False, description="仅返回已注册人脸库的人物"),
     db: AsyncSession = Depends(get_db),
@@ -70,6 +72,7 @@ async def list_models(
         search=search,
         platform=platform,
         sort=sort,
+        order=order,
         face_registered_only=face_registered_only,
     )
     return {"items": items, "total": total, "page": page, "size": size}

@@ -66,12 +66,13 @@ export function usePersonList(kind: PersonKind) {
     if (store.search.trim()) query.q = store.search.trim()
     if (store.platform) query.platform = store.platform
     if (store.sort !== 'count') query.sort = store.sort
+    if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
     router.replace({ path: '/persons', query })
   }
 
   /** 列表上下文变化时同步 URL：翻页/搜索/平台/排序任意变更即反映到地址栏 */
   watch(
-    () => [store.page, store.search, store.platform, store.sort] as const,
+    () => [store.page, store.search, store.platform, store.sort, store.order] as const,
     () => syncUrl(),
   )
 
@@ -84,6 +85,7 @@ export function usePersonList(kind: PersonKind) {
     store.search = typeof q.q === 'string' ? q.q : ''
     store.platform = typeof q.platform === 'string' ? q.platform : ''
     store.sort = q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
+    store.order = q.order === 'asc' ? 'asc' : 'desc'
   }
 
   /** 加载后修正页码越界（如删除后总页数减少），并同步 URL */
@@ -170,6 +172,7 @@ export function usePersonList(kind: PersonKind) {
     if (store.search.trim()) query.q = store.search.trim()
     if (store.platform) query.platform = store.platform
     if (store.sort !== 'count') query.sort = store.sort
+    if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
     router.push({ path: `/persons/${person.id}`, query })
   }
 
@@ -286,7 +289,10 @@ export function usePersonList(kind: PersonKind) {
     {
       title: '素材数',
       dataIndex: 'inspiration_count',
-      width: 80,
+      width: 96,
+      // 表头可点击排序：升序找「素材最少」（常用于发现空人物），降序找高频人物。
+      // Arco 的受控排序由 onSorterChange 接管，这里只需声明可排序。
+      sortable: { sortDirections: ['descend', 'ascend'] },
       render: ({ record }) => h('span', String((record as Person).inspiration_count ?? 0)),
     },
     // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
@@ -400,6 +406,16 @@ export function usePersonList(kind: PersonKind) {
     await loadBloggerStats()
   })
 
+  /** 表头点击排序：目前只有「素材数」列可排序，方向由后端 order 参数控制。
+   *  升序用于找「素材最少」（例如发现空仓人物），降序用于找高频人物。 */
+  function onSorterChange(dataIndex: string, direction: string) {
+    if (dataIndex !== 'inspiration_count') return
+    store.sort = 'count'
+    // Arco 传来的是 'ascend' | 'descend' | null（签名标成 string）；非 ascend 一律降序
+    store.order = direction === 'ascend' ? 'asc' : 'desc'
+    void loadAndSync()
+  }
+
   return {
     store,
     kindLabel,
@@ -425,5 +441,6 @@ export function usePersonList(kind: PersonKind) {
     restoreFromUrl,
     expandedGroupIds,
     setExpandedGroupIds,
+    onSorterChange,
   }
 }

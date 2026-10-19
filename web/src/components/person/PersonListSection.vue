@@ -34,6 +34,7 @@ const {
   openCreate,
   goDetail,
   onSearchKeydown,
+  onSorterChange,
   columns,
   topPersons,
   missingTotal,
@@ -147,6 +148,7 @@ function handleExpandedChange(keys: Array<string | number>) {
         :pagination="false"
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
         @expanded-change="handleExpandedChange"
+        @sorter-change="onSorterChange"
       >
         <template #expand-row="{ record }">
           <!-- 人物组展开行：显示组内其余账号（方案 B） -->

@@ -43,6 +43,13 @@ describe('persons store', () => {
     vi.restoreAllMocks()
   })
 
+  it('素材数排序默认降序（order=desc，表头点击可切换）', () => {
+    const store = usePersonsStore('blogger')
+    expect(store.order).toBe('desc')
+    store.order = 'asc'
+    expect(store.order).toBe('asc')
+  })
+
   it('默认排序为素材数最多（count）', () => {
     const store = usePersonsStore('blogger')
     expect(store.sort).toBe('count')
@@ -60,14 +67,22 @@ describe('persons store', () => {
 
     expect(store.persons).toHaveLength(2)
     expect(store.total).toBe(2)
-    expect(mockBloggerFetch).toHaveBeenCalledWith(
-      expect.objectContaining({ page: 1, size: 20 })
-    )
+    expect(mockBloggerFetch).toHaveBeenCalledWith(expect.objectContaining({ page: 1, size: 20 }))
   })
 
   it('博主与模特使用各自 API（kind 分流）', async () => {
-    mockBloggerFetch.mockResolvedValue({ items: [makePerson(1, '博主')], total: 1, page: 1, size: 20 })
-    mockModelFetch.mockResolvedValue({ items: [makePerson(2, '模特')], total: 1, page: 1, size: 20 })
+    mockBloggerFetch.mockResolvedValue({
+      items: [makePerson(1, '博主')],
+      total: 1,
+      page: 1,
+      size: 20,
+    })
+    mockModelFetch.mockResolvedValue({
+      items: [makePerson(2, '模特')],
+      total: 1,
+      page: 1,
+      size: 20,
+    })
 
     const bloggerStore = usePersonsStore('blogger')
     const modelStore = usePersonsStore('model')
@@ -104,7 +119,7 @@ describe('persons store', () => {
         search: '小美',
         platform: 'xiaohongshu',
         sort: 'count',
-      })
+      }),
     )
   })
 
@@ -126,7 +141,7 @@ describe('persons store', () => {
         () =>
           new Promise((resolve) => {
             resolveOld = resolve
-          })
+          }),
       )
       .mockResolvedValueOnce({
         items: [makePerson(9, '最新结果')],
@@ -135,8 +150,8 @@ describe('persons store', () => {
         size: 20,
       })
 
-    const p1 = store.load(true)  // 第一次请求（挂起）
-    await store.load(true)       // 第二次请求（立即返回）
+    const p1 = store.load(true) // 第一次请求（挂起）
+    await store.load(true) // 第二次请求（立即返回）
     await new Promise((r) => setTimeout(r, 0))
 
     // 过期响应后到：不应覆盖新列表

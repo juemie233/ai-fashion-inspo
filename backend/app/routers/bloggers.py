@@ -49,6 +49,8 @@ async def list_bloggers(
     search: str | None = Query(None, description="名称模糊搜索"),
     platform: str | None = Query(None, description="平台筛选"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
+    # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     # 人脸检测约束：仅保留已注册人脸库的博主（确保只匹配候选人脸库内的人）
     face_registered_only: bool = Query(False, description="仅返回已注册人脸库的博主"),
     # 人物组折叠（方案 B）：同组只返回主记录，组内账号放 group_members；
@@ -74,6 +76,7 @@ async def list_bloggers(
         search=search,
         platform=platform,
         sort=sort,
+        order=order,
         face_registered_only=face_registered_only,
         grouped=grouped,
     )
@@ -558,11 +561,11 @@ async def register_blogger_face_api(
         except (ValueError, TypeError):
             raise HTTPException(
                 status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
-            )
+            ) from None
         if not isinstance(parsed, list):
             raise HTTPException(
                 status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
-            )
+            ) from None
         ids = [str(i) for i in parsed if str(i).strip()]
 
     return await register_blogger_face(db, blogger_id, image_bytes_list, ids)

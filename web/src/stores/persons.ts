@@ -33,6 +33,8 @@ export function usePersonsStore(kind: PersonKind) {
   const platform = ref('')
   /** 排序方式：newest | name | count（默认素材数最多） */
   const sort = ref<'newest' | 'name' | 'count'>('count')
+  /** 素材数排序方向（仅 sort=count 时生效）：表头点击可切换 */
+  const order = ref<'asc' | 'desc'>('desc')
   /** 按人物组折叠（方案 B，仅博主）：同组只显示主账号；平台筛选时后端自动平铺 */
   const grouped = ref(kind === 'blogger')
 
@@ -52,6 +54,8 @@ export function usePersonsStore(kind: PersonKind) {
         search: search.value || undefined,
         platform: platform.value || undefined,
         sort: sort.value,
+        // 仅 sort=count 时有意义（表头点击切换升降序）
+        order: order.value,
         grouped: grouped.value,
       })
       if (seq !== loadSeq) return // 已有更新的请求，丢弃过期响应
@@ -94,6 +98,7 @@ export function usePersonsStore(kind: PersonKind) {
     search,
     platform,
     sort,
+    order,
     grouped,
     load,
     reload,

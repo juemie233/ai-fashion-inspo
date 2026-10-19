@@ -122,6 +122,7 @@ class PersonServiceBase:
         search: str | None = None,
         platform: str | None = None,
         sort: str = "newest",
+        order: str = "desc",
         face_registered_only: bool = False,
         grouped: bool = False,
     ) -> tuple[list[dict], int]:
@@ -180,13 +181,18 @@ class PersonServiceBase:
 
         # 人物组折叠：仅穿搭博主且不指定平台时生效（平铺分页交给 _list_grouped）
         if grouped and self.model is Blogger and not platform:
-            return await self._list_grouped(db, stmt, sort, page, size)
+            return await self._list_grouped(db, stmt, sort, order, page, size)
 
         # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数倒序）
         if sort == "name":
             stmt = stmt.order_by(model.name.asc(), model.id.desc())
         elif sort == "count":
-            stmt = stmt.order_by(func.coalesce(count_subq.c.cnt, 0).desc(), model.id.desc())
+            # 素材数排序：order 控制方向；同数时用 id 兜底，保证分页稳定
+            cnt_col = func.coalesce(count_subq.c.cnt, 0)
+            if order == "asc":
+                stmt = stmt.order_by(cnt_col.asc(), model.id.asc())
+            else:
+                stmt = stmt.order_by(cnt_col.desc(), model.id.desc())
         else:
             stmt = stmt.order_by(model.created_at.desc(), model.id.desc())
 
@@ -204,6 +210,7 @@ class PersonServiceBase:
         db: AsyncSession,
         stmt,
         sort: str,
+        order: str,
         page: int,
         size: int,
     ) -> tuple[list[dict], int]:
@@ -279,7 +286,12 @@ class PersonServiceBase:
         if sort == "name":
             folded.sort(key=lambda x: (x["name"], x["id"]))
         elif sort == "count":
-            folded.sort(key=lambda x: (-x["inspiration_count"], x["id"]))
+            # 与平铺路径同一口径：order 控制方向，同数按 id 兜底
+            folded.sort(
+                key=lambda x: (x["inspiration_count"], x["id"])
+                if order == "asc"
+                else (-x["inspiration_count"], x["id"])
+            )
         else:
             folded.sort(
                 key=lambda x: (
@@ -338,7 +350,7 @@ class PersonServiceBase:
             db.expunge(person)
             raise PersonConflictError(
                 f"{self.label}的小红书号（xhs_id）已被其它记录占用"
-            )
+            ) from None
         await db.refresh(person)
         return self._to_dict(person)
 
@@ -363,7 +375,7 @@ class PersonServiceBase:
         except IntegrityError:
             raise PersonConflictError(
                 f"{self.label}的小红书号（xhs_id）已被其它记录占用"
-            )
+            ) from None
         await db.refresh(person)
         return self._to_dict(person)
 
