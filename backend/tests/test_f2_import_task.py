@@ -18,6 +18,7 @@ from PIL import Image
 from app.database import async_session
 from app.services import task_runner
 from app.services.task_runners import f2_import as f2_runner
+from app.services.task_runners import f2_progress
 from app.services.task_runners.common import utcnow
 from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
@@ -3034,7 +3035,8 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
     patch_f2(monkeypatch, "f2_available", lambda: True)
     # 缩短轮询间隔与软进度时间常数，让「下载中」的中间态在测试里可观测
     monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
-    monkeypatch.setattr(f2_runner, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
+    monkeypatch.setattr(f2_progress, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_progress, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
 
     real_stats = f2.download_tree_stats
 
@@ -3107,7 +3109,8 @@ async def test_execute_f2_import_post_mode_reports_live_download_progress(
     conn.close()
     patch_f2(monkeypatch, "f2_available", lambda: True)
     monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
-    monkeypatch.setattr(f2_runner, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
+    monkeypatch.setattr(f2_progress, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_progress, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
 
     real_stats = f2.download_tree_stats
 
