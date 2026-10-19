@@ -19,6 +19,8 @@ export interface GridBrowserItem {
   thumbnail_path?: string | null
   media_type?: string
   [key: string]: unknown
+  /** 结构化拒绝原因码（审核面板用于展示中文标签） */
+  quality_reason_code?: string | null
 }
 
 export type GridDensity = 'compact' | 'standard'

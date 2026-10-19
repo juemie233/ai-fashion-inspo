@@ -237,6 +237,8 @@ async def list_inspirations(
     analysis_status: str | None = None,  # done | pending | error
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
+    # 按结构化拒绝原因筛选（仅 quality_status=rejected 时有意义）
+    quality_reason_code: str | None = None,
     is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
     include_tags: str | None = Query(None, description="逗号分隔的标签名（需同时包含）"),
     dominant_color: str | None = Query(None, description="主色调 hex 值（子串匹配）"),
@@ -263,6 +265,7 @@ async def list_inspirations(
         analysis_status=analysis_status,
         tag_status=tag_status,
         quality_status=quality_status,
+        quality_reason_code=quality_reason_code,
         is_ai_generated=is_ai_generated,
         include_tags=include_list,
         dominant_color=dominant_color,

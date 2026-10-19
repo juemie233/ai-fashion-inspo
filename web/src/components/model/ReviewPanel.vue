@@ -4,6 +4,7 @@
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
 import { QUALITY_BATCH_MAX, qualityBatchHint } from '@/utils/qualityBatch'
+import { QUALITY_REASON_OPTIONS, qualityReasonLabel } from '@/utils/qualityReason'
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
@@ -26,6 +27,8 @@ interface QualityReviewStats {
   ai_generated: number
   /** 实测平均审核耗时（秒）：0 表示暂无成功样本，前端退回兜底常量 */
   avg_seconds?: number
+  /** 被拒素材按结构化原因码分组（后端 quality_reason_code） */
+  reason_counts?: Record<string, number>
 }
 const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
@@ -335,6 +338,18 @@ const rejectedGridItems = computed<GridBrowserItem[]>(() =>
   rejectedItems.value.map((i) => ({ ...i, media_type: 'image' })),
 )
 
+/** 按原因筛选未通过素材（空串=全部） */
+const rejectedReasonFilter = ref('')
+
+/** 原因筛选下拉：标签里带数量，直接看出哪类拒绝最多 */
+const rejectedReasonOptions = computed(() => {
+  const counts = qualityReviewStats.value?.reason_counts ?? {}
+  return QUALITY_REASON_OPTIONS.map((o) => ({
+    label: o.value && counts[o.value] ? `${o.label}（${counts[o.value]}）` : o.label,
+    value: o.value,
+  }))
+})
+
 async function loadRejectedItems(reset = true) {
   if (reset) rejectedPage.value = 1
   const page = rejectedPage.value
@@ -344,7 +359,16 @@ async function loadRejectedItems(reset = true) {
     const { data } = await apiClient.get<{ items: RejectedItem[]; total: number }>(
       '/inspirations',
       {
-        params: { quality_status: 'rejected', size: rejectedPageSize, page, sort: 'newest' },
+        params: {
+          quality_status: 'rejected',
+          size: rejectedPageSize,
+          page,
+          sort: 'newest',
+          // 按原因筛选（后端 quality_reason_code）；空串表示全部
+          ...(rejectedReasonFilter.value
+            ? { quality_reason_code: rejectedReasonFilter.value }
+            : {}),
+        },
       },
     )
     if (seq !== rejectedSeq) return // 忽略过期响应
@@ -568,6 +592,13 @@ onUnmounted(() => {
       <!-- 未通过素材列表 -->
       <a-card size="small" title="未通过素材" style="margin-bottom: 16px">
         <template #extra>
+          <a-select
+            v-model="rejectedReasonFilter"
+            :options="rejectedReasonOptions"
+            size="small"
+            style="width: 150px; margin-right: 6px"
+            @change="loadRejectedItems(true)"
+          />
           <a-tag color="red" size="small">{{ rejectedTotal }} 个</a-tag>
           <a-button
             size="mini"
@@ -644,6 +675,13 @@ onUnmounted(() => {
           <!-- 卡片附加：审核原因 -->
           <template #card-extra="{ item }">
             <div class="rejected-reason" :title="String(item.quality_reason || '')">
+              <a-tag
+                v-if="item.quality_reason_code"
+                size="small"
+                color="orange"
+                style="margin-right: 4px"
+                >{{ qualityReasonLabel(item.quality_reason_code) }}</a-tag
+              >
               {{ item.quality_reason || '未说明原因' }}
             </div>
           </template>

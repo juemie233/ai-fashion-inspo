@@ -94,6 +94,7 @@ async def list_inspirations(
     analysis_status: str | None = None,  # done | pending | error
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
+    quality_reason_code: str | None = None,  # 结构化拒绝原因（not_outfit/single_item/...）
     is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
     include_tags: list[str] | None = None,  # 需同时包含的标签名（AND 语义）
     dominant_color: str | None = None,      # 主色调（hex 子串匹配）
@@ -122,6 +123,8 @@ async def list_inspirations(
         query = query.where(Inspiration.is_favorite == is_favorite)
     if media_type:
         query = query.where(Inspiration.media_type == media_type)
+    if quality_reason_code:
+        query = query.where(Inspiration.quality_reason_code == quality_reason_code)
     if quality_status:
         query = query.where(
             func.coalesce(Inspiration.quality_status, "pending") == quality_status
