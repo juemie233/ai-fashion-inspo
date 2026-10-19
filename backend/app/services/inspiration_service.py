@@ -13,6 +13,9 @@
 """
 
 # ── 创建 / 导入 ──
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.inspiration import Inspiration
 from app.services.inspiration_create import (  # noqa: F401
     create_inspiration,
     create_inspiration_from_url,
@@ -55,3 +58,23 @@ from app.services.inspiration_state import (  # noqa: F401
 )
 # ── 去重 ──
 from app.services.inspiration_dedupe import find_duplicate_by_hash  # noqa: F401
+
+
+async def check_duplicate_hash(db: AsyncSession, content_hash: str) -> dict:
+    """上传前去重：按 SHA-256 判断文件是否已存在。
+
+    Returns:
+        ``{"exists": bool, "inspiration_id": str | None, "file_path": str | None}``
+
+    优先走 content_hash 索引列；存量素材未回填哈希时由 :func:`find_duplicate_by_hash`
+    回退扫描并回填。从 ``routers/admin.py`` 下沉（C-3），路由只留参数校验。
+    """
+    dup_id = await find_duplicate_by_hash(db, content_hash)
+    if not dup_id:
+        return {"exists": False, "inspiration_id": None, "file_path": None}
+    row = await db.execute(select(Inspiration.file_path).where(Inspiration.id == dup_id))
+    return {
+        "exists": True,
+        "inspiration_id": dup_id,
+        "file_path": row.scalar_one_or_none(),
+    }

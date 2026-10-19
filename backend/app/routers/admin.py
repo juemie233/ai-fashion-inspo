@@ -310,25 +310,8 @@ async def check_duplicate(
     hash: str = Query(..., min_length=64, max_length=64, description="文件 SHA-256 哈希"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """检查指定 SHA-256 的文件是否已存在（上传前去重）。
-
-    优先走 content_hash 索引列；存量素材未回填哈希时自动回退扫描并回填。
-    """
-    from app.services.inspiration_service import find_duplicate_by_hash
-
-    dup_id = await find_duplicate_by_hash(db, hash)
-    if dup_id:
-        result = await db.execute(
-            select(Inspiration.file_path).where(Inspiration.id == dup_id)
-        )
-        fpath = result.scalar_one_or_none()
-        return {
-            "exists": True,
-            "inspiration_id": dup_id,
-            "file_path": fpath,
-        }
-
-    return {"exists": False, "inspiration_id": None, "file_path": None}
+    """检查指定 SHA-256 的文件是否已存在（上传前去重）；查询在 ``inspiration_service``。"""
+    return await inspiration_service.check_duplicate_hash(db, hash)
 
 
 @router.get("/duplicates")
