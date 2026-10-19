@@ -5,7 +5,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,6 @@ from app.models.inspiration import (
     latest_analysis_log_subquery,
     utcnow,
 )
-from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 from app.models.tag import InspirationTag
 from app.services import admin_stats_service, backup_service, inspiration_service
 from app.services import audit_service
@@ -271,51 +270,8 @@ async def person_frequency(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。
-
-    博主与模特已拆分两表，本统计合并两者返回；``person_type`` 保留以区分来源。
-    """
-    combined = (
-        select(
-            Blogger.id.label("id"),
-            Blogger.name.label("name"),
-            Blogger.platform.label("platform"),
-            func.count(InspirationBlogger.inspiration_id).label("cnt"),
-        )
-        .join(InspirationBlogger, InspirationBlogger.blogger_id == Blogger.id)
-        .join(Inspiration, Inspiration.id == InspirationBlogger.inspiration_id)
-        .where(NOT_DELETED)
-        .group_by(Blogger.id, Blogger.name, Blogger.platform)
-        .union_all(
-            select(
-                Model.id.label("id"),
-                Model.name.label("name"),
-                Model.platform.label("platform"),
-                func.count(InspirationModel.inspiration_id).label("cnt"),
-            )
-            .join(InspirationModel, InspirationModel.model_id == Model.id)
-            .join(Inspiration, Inspiration.id == InspirationModel.inspiration_id)
-            .where(NOT_DELETED)
-            .group_by(Model.id, Model.name, Model.platform)
-        )
-        .subquery()
-    )
-    rows = (await db.execute(
-        select(combined.c.id, combined.c.name, combined.c.platform, combined.c.cnt)
-        .select_from(combined)
-        .order_by(combined.c.cnt.desc(), combined.c.name.asc())
-        .limit(limit)
-    )).all()
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "person_type": "blogger",
-            "platform": r[2],
-            "count": r[3],
-        }
-        for r in rows
-    ]
+    """按关联素材数量降序返回人物（博主+模特合并）；查询在 ``admin_stats_service``。"""
+    return await admin_stats_service.person_frequency(db, limit)
 
 
 @router.get("/audit-logs")

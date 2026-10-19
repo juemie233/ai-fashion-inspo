@@ -30,6 +30,7 @@ import csv
 import io
 from app.utils.csv_safety import sanitize_csv_cell
 from app.services.inspiration_query import inspiration_load_options
+from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 
 # 素材媒体目录：完整性检查/存储统计只扫描这些目录，排除 lancedb（向量库）、
 # logs（日志）、cookies、debug 等非素材数据，否则会把向量库内部文件误判为
@@ -460,3 +461,53 @@ async def export_inspirations_csv(db: AsyncSession) -> tuple[str, str]:
     filename = f"inspirations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return filename, buf.getvalue()
 
+
+async def person_frequency(
+    db: AsyncSession,
+    limit: int = 20,
+) -> list[dict]:
+    """按关联素材数量降序返回人物（排除垃圾桶素材），辅助识别高频模特/博主。
+
+    博主与模特已拆分两表，本统计合并两者返回；``person_type`` 保留以区分来源。
+    """
+    combined = (
+        select(
+            Blogger.id.label("id"),
+            Blogger.name.label("name"),
+            Blogger.platform.label("platform"),
+            func.count(InspirationBlogger.inspiration_id).label("cnt"),
+        )
+        .join(InspirationBlogger, InspirationBlogger.blogger_id == Blogger.id)
+        .join(Inspiration, Inspiration.id == InspirationBlogger.inspiration_id)
+        .where(NOT_DELETED)
+        .group_by(Blogger.id, Blogger.name, Blogger.platform)
+        .union_all(
+            select(
+                Model.id.label("id"),
+                Model.name.label("name"),
+                Model.platform.label("platform"),
+                func.count(InspirationModel.inspiration_id).label("cnt"),
+            )
+            .join(InspirationModel, InspirationModel.model_id == Model.id)
+            .join(Inspiration, Inspiration.id == InspirationModel.inspiration_id)
+            .where(NOT_DELETED)
+            .group_by(Model.id, Model.name, Model.platform)
+        )
+        .subquery()
+    )
+    rows = (await db.execute(
+        select(combined.c.id, combined.c.name, combined.c.platform, combined.c.cnt)
+        .select_from(combined)
+        .order_by(combined.c.cnt.desc(), combined.c.name.asc())
+        .limit(limit)
+    )).all()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "person_type": "blogger",
+            "platform": r[2],
+            "count": r[3],
+        }
+        for r in rows
+    ]
