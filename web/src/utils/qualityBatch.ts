@@ -24,10 +24,16 @@ export const QUALITY_BATCH_DEFAULT = 200
  * @param concurrency 后端并发数（默认 1，与 settings.analyze_concurrency 默认值一致）
  * @returns 小时数；count 非法时返回 0
  */
-export function estimateQualityHours(count: number, concurrency = 1): number {
+export function estimateQualityHours(
+  count: number,
+  concurrency = 1,
+  /** 单张实测平均耗时（秒）；不传则用兜底常量。由 /ai/quality-stats 的 avg_seconds 提供 */
+  secPerItem?: number,
+): number {
   if (!Number.isFinite(count) || count <= 0) return 0
   const parallel = concurrency > 0 ? concurrency : 1
-  return Math.round(((count * QUALITY_SEC_PER_ITEM) / parallel / 3600) * 10) / 10
+  const per = secPerItem && secPerItem > 0 ? secPerItem : QUALITY_SEC_PER_ITEM
+  return Math.round(((count * per) / parallel / 3600) * 10) / 10
 }
 
 /**
@@ -37,8 +43,11 @@ export function estimateQualityHours(count: number, concurrency = 1): number {
  * @param concurrency 后端并发数
  * @returns 展示文案
  */
-export function qualityBatchHint(count: number, concurrency = 1): string {
-  const hours = estimateQualityHours(count, concurrency)
+export function qualityBatchHint(count: number, concurrency = 1, secPerItem?: number): string {
+  const hours = estimateQualityHours(count, concurrency, secPerItem)
   if (hours <= 0) return '0 条'
-  return `${count} 条 · 预计约 ${hours} 小时（12.5 秒/张，可在任务管理页暂停/取消）`
+  const per = secPerItem && secPerItem > 0 ? secPerItem : QUALITY_SEC_PER_ITEM
+  // 实测值来自最近成功的审核日志；没有数据时退回兜底常量，文案里标明来源避免误导
+  const source = secPerItem && secPerItem > 0 ? '实测均值' : '兜底估值'
+  return `${count} 条 · 预计约 ${hours} 小时（${per} 秒/张，${source}；可在任务管理页暂停/取消）`
 }

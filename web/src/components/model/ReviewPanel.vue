@@ -24,6 +24,8 @@ interface QualityReviewStats {
   rejected: number
   pass_rate: number
   ai_generated: number
+  /** 实测平均审核耗时（秒）：0 表示暂无成功样本，前端退回兜底常量 */
+  avg_seconds?: number
 }
 const qualityReviewStats = ref<QualityReviewStats | null>(null)
 const qualityReviewLoading = ref(false)
@@ -44,8 +46,10 @@ const batchOverflowHint = computed(() => {
     ? `本轮处理 ${QUALITY_BATCH_MAX} 条（单次上限），剩余 ${pending - QUALITY_BATCH_MAX} 条可再点一次。`
     : ''
 })
-/** 提交前的耗时提示（实测 12.5 秒/张，单并发） */
-const batchCostHint = computed(() => qualityBatchHint(batchSubmitCount.value))
+/** 提交前的耗时提示：优先用后端实测均值（avg_seconds），没有数据时才用兜底常量 */
+const batchCostHint = computed(() =>
+  qualityBatchHint(batchSubmitCount.value, 1, qualityReviewStats.value?.avg_seconds),
+)
 /** 批量审核按钮文案（两处分支共用，避免重复三份） */
 const batchButtonLabel = computed(() => {
   if (reviewTaskActive.value) return '审核进行中…'

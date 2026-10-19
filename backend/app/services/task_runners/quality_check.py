@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,9 @@ from app.services.task_runners.common import (
 from app.services.vector import store as vector_store
 
 logger = logging.getLogger(__name__)
+
+"""失败率告警阈值：超过该比例即写入 result.warning（全部失败另有任务级异常兜底）。"""
+QUALITY_FAIL_WARN_RATIO = 0.2
 
 
 async def create_quality_check_task(
@@ -74,15 +78,19 @@ async def _quality_check_one(
     """
     async with sem:
         async with async_session() as db:
+            # 记录单条耗时：供 /ai/quality-stats 的「实测平均耗时」与前端 ETA 使用
+            started = time.monotonic()
             status, reason, ai_generated = await check_image_quality(
                 db, inspiration_id, file_path, force=force, prefilter_vector=prefilter_vector
             )
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             # 写入质量审核日志（失败时记录原因，供前端排查）
             log_entry = AIAnalysisLog(
                 inspiration_id=inspiration_id,
                 model_name=settings.ollama_vision_model,
                 log_type="quality_check",
                 model_version=settings.ollama_vision_model,
+                processing_time_ms=elapsed_ms,
                 error=reason if status == "pending" else None,
             )
             db.add(log_entry)
@@ -202,6 +210,7 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
             f"质量审核进度: #{task.id} {task.progress}% ({task.done}/{task.total})"
         )
 
+    failed_ratio = round(failed / task.total, 3) if task.total else 0.0
     task.result = {
         "inspiration_ids": inspiration_ids,
         "skipped": payload.get("skipped", 0),
@@ -209,9 +218,16 @@ async def execute_quality_check(db: AsyncSession, task: TaskQueue) -> None:
         "rejected": rejected,
         "pending": pending,
         "failed": failed,
+        # 失败率：全部失败已单独抛任务级异常；这里覆盖「大面积失败但没到 100%」的可见性
+        "failed_ratio": failed_ratio,
         "ai_generated": ai_generated,
         "cancelled": cancelled,
     }
+    if failed_ratio >= QUALITY_FAIL_WARN_RATIO:
+        task.result["warning"] = (
+            f"本次审核失败 {failed}/{task.total}（{failed_ratio:.0%}），"
+            f"请检查 Ollama 服务与模型状态；失败项已保持待审核，可稍后重新提交"
+        )
     # 统计结果先落库：即使下面判定失败抛出任务级异常，失败详情也能在任务记录中查到
     await db.commit()
 

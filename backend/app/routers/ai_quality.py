@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.inspiration import Inspiration
+from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.routers.ai_shared import _update_env_file
 from app.services.ollama_utils import is_ollama_running, start_ollama
 
@@ -167,6 +167,17 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | f
     )
     ai_generated = ai_result.scalar() or 0
 
+    # 实测平均耗时（秒）：只统计成功的审核日志（失败项耗时无参考价值），
+    # 供前端把「审核全部」的耗时从写死的 12.5 秒/张换成真实值
+    avg_result = await db.execute(
+        select(func.avg(AIAnalysisLog.processing_time_ms)).where(
+            AIAnalysisLog.log_type == "quality_check",
+            AIAnalysisLog.error.is_(None),
+            AIAnalysisLog.processing_time_ms.isnot(None),
+        )
+    )
+    avg_ms = avg_result.scalar()
+
     return {
         "total": total,
         "pending": pending,
@@ -174,4 +185,5 @@ async def quality_stats(db: AsyncSession = Depends(get_db)) -> dict[str, int | f
         "rejected": rejected,
         "pass_rate": pass_rate,
         "ai_generated": ai_generated,
+        "avg_seconds": round(float(avg_ms) / 1000, 1) if avg_ms else 0,
     }
