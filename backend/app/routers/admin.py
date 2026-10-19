@@ -29,7 +29,6 @@ from app.services import admin_stats_service, backup_service, inspiration_servic
 from app.services.audit_service import record_audit_log
 from app.services.inspiration_query import inspiration_load_options
 from app.utils.csv_safety import sanitize_csv_cell
-from app.utils.file_hash import build_hash_map
 from app.utils.time import format_utc
 from app.schemas.admin import NearDuplicateScanRequest, PhoneCropRequest, PhoneCropApplyRequest, VectorBackfillRequest
 
@@ -314,31 +313,10 @@ async def check_duplicate(
     return await inspiration_service.check_duplicate_hash(db, hash)
 
 
-@router.get("/duplicates")
+@router.get("/find-duplicates")
 async def find_duplicates(db: AsyncSession = Depends(get_db)) -> dict:
-    """通过文件哈希检测完全重复的素材。"""
-    result = await db.execute(
-        select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
-    )
-    hash_map = await asyncio.to_thread(build_hash_map, result.all(), settings.storage_root)
-
-    duplicates = [
-        {"hash": h, "files": files}
-        for h, files in hash_map.items()
-        if len(files) > 1
-    ]
-
-    dup_count = sum(len(d["files"]) - 1 for d in duplicates)
-    dup_size = sum(
-        d["files"][0]["size_bytes"] * (len(d["files"]) - 1)
-        for d in duplicates
-    )
-
-    return {
-        "duplicate_groups": duplicates,
-        "duplicate_count": dup_count,
-        "wasted_bytes": dup_size,
-    }
+    """检测完全重复的素材（SHA-256 相同）；查询在 ``admin_stats_service``。"""
+    return await admin_stats_service.find_duplicates(db)
 
 
 @router.post("/deduplicate")
@@ -574,32 +552,8 @@ async def _get_missing_image_vector_ids(db: AsyncSession) -> list[str]:
 
 @router.get("/vector-stats")
 async def vector_stats(db: AsyncSession = Depends(get_db)) -> dict:
-    """向量化状态统计：素材总数 / 已有向量数 / 缺失数 / 文本向量公式版本（供管理页展示）。"""
-    from app.services.vector import store as vector_store
-    from app.services.vector.embedding import TEXT_EMBEDDING_FORMULA_VERSION
-
-    missing_ids = await _get_missing_image_vector_ids(db)
-    text_vectors = await vector_store.count_vectors("text")
-    stored_version = vector_store.get_stored_text_formula_version()
-    return {
-        "total_inspirations": (
-            await db.execute(
-                select(func.count()).select_from(Inspiration).where(
-                    NOT_DELETED, Inspiration.media_type == "image"
-                )
-            )
-        ).scalar() or 0,
-        "image_vectors": await vector_store.count_vectors("image"),
-        "text_vectors": text_vectors,
-        "missing": len(missing_ids),
-        "lancedb_available": vector_store.is_lancedb_available(),
-        "text_vector_version": {
-            "current": TEXT_EMBEDDING_FORMULA_VERSION,
-            "stored": stored_version,
-            # stored 为 None（从未记录）视为旧版本：v2 上线前的存量向量都由旧公式生成
-            "stale": text_vectors > 0 and stored_version != TEXT_EMBEDDING_FORMULA_VERSION,
-        },
-    }
+    """向量化状态统计；查询在 ``admin_stats_service``。"""
+    return await admin_stats_service.vector_stats(db)
 
 
 @router.post("/vector-backfill")
