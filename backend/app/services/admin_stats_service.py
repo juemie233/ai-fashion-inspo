@@ -1,3 +1,4 @@
+from app.utils.file_hash import build_hash_map
 """素材管理统计服务：概览仪表盘聚合与存储目录扫描。
 
 此前 admin_stats 的 10+ 条聚合查询全部写在 routers/admin.py（152 行函数），
@@ -222,4 +223,88 @@ async def collect_stats(db: AsyncSession) -> dict:
             {"status": "pending", "count": analysis["pending_count"], "label": "未分析"},
         ],
         **distributions,
+    }
+
+async def _get_missing_image_vector_ids(db: AsyncSession) -> list[str]:
+    """计算缺失图像向量的素材 ID 列表（图片素材 - 已有图像向量）。
+
+    详情页相似推荐对无向量素材会现场做 CLIP 编码（单张数秒）导致卡顿，
+    本函数用于找出这些「未入库」素材，供一键回填。
+    """
+    from app.services.vector import store as vector_store
+
+    # 全部有效图片素材
+    result = await db.execute(
+        select(Inspiration.id).where(
+            NOT_DELETED,
+            Inspiration.media_type == "image",
+        )
+    )
+    all_image_ids = [row[0] for row in result.all()]
+    if not all_image_ids:
+        return []
+
+    # 已有图像向量的素材
+    existing = await vector_store.list_vector_ids("image")
+    return [i for i in all_image_ids if i not in existing]
+
+
+async def find_duplicates(db: AsyncSession) -> dict:
+    """通过文件哈希检测完全重复的素材（按 storage_root 扫描文件大小/哈希）。
+
+    从 ``routers/admin.py`` 下沉（C-3）。
+    """
+    result = await db.execute(
+        select(Inspiration.id, Inspiration.file_path).where(NOT_DELETED)
+    )
+    hash_map = await asyncio.to_thread(build_hash_map, result.all(), settings.storage_root)
+
+    duplicates = [
+        {"hash": h, "files": files}
+        for h, files in hash_map.items()
+        if len(files) > 1
+    ]
+
+    dup_count = sum(len(d["files"]) - 1 for d in duplicates)
+    dup_size = sum(
+        d["files"][0]["size_bytes"] * (len(d["files"]) - 1)
+        for d in duplicates
+    )
+
+    return {
+        "duplicate_groups": duplicates,
+        "duplicate_count": dup_count,
+        "wasted_bytes": dup_size,
+    }
+
+
+async def vector_stats(db: AsyncSession) -> dict:
+    """向量化状态统计：素材总数 / 已有向量数 / 缺失数 / 文本向量公式版本。
+
+    从 ``routers/admin.py`` 下沉（C-3）。
+    """
+    from app.services.vector import store as vector_store
+    from app.services.vector.embedding import TEXT_EMBEDDING_FORMULA_VERSION
+
+    missing_ids = await _get_missing_image_vector_ids(db)
+    text_vectors = await vector_store.count_vectors("text")
+    stored_version = vector_store.get_stored_text_formula_version()
+    return {
+        "total_inspirations": (
+            await db.execute(
+                select(func.count()).select_from(Inspiration).where(
+                    NOT_DELETED, Inspiration.media_type == "image"
+                )
+            )
+        ).scalar() or 0,
+        "image_vectors": await vector_store.count_vectors("image"),
+        "text_vectors": text_vectors,
+        "missing": len(missing_ids),
+        "lancedb_available": vector_store.is_lancedb_available(),
+        "text_vector_version": {
+            "current": TEXT_EMBEDDING_FORMULA_VERSION,
+            "stored": stored_version,
+            # stored 为 None（从未记录）视为旧版本：v2 上线前的存量向量都由旧公式生成
+            "stale": text_vectors > 0 and stored_version != TEXT_EMBEDDING_FORMULA_VERSION,
+        },
     }
