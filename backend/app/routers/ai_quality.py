@@ -1,5 +1,6 @@
 """AI 子路由：质量审核相关接口。"""
 
+from fastapi.responses import Response
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -235,6 +236,69 @@ async def quality_correction_stats(db: AsyncSession = Depends(get_db)) -> dict:
     from app.services.quality_correction import correction_stats
 
     return await correction_stats(db)
+
+
+@router.get("/quality-export.csv")
+async def export_quality_csv(db: AsyncSession = Depends(get_db)) -> Response:
+    """导出质量审核结果 CSV（上限 10000 条，按审核时间倒序）。
+
+    列：审核 ID / 素材 ID / 判定 / 原因码 / 原因 / 模型 / prompt 指纹（前 8 位）/ 初筛置信度 / 时间。
+    带 BOM 让 Excel 正确识别中文；所有展示字段都过 `sanitize_csv_cell` 防公式注入
+    （原因与备注来自模型输出，属不可信内容）。
+    """
+    import csv
+    import io
+
+    from app.utils.csv_safety import sanitize_csv_cell
+
+    rows = (
+        await db.execute(
+            select(
+                AIQualityReview.id,
+                AIAnalysisLog.inspiration_id,
+                AIQualityReview.result,
+                Inspiration.quality_reason_code,
+                AIQualityReview.reason,
+                AIQualityReview.model_name,
+                AIQualityReview.prompt_hash,
+                AIQualityReview.confidence,
+                AIQualityReview.reviewed_at,
+            )
+            .join(AIAnalysisLog, AIQualityReview.log_id == AIAnalysisLog.id)
+            .outerjoin(Inspiration, AIAnalysisLog.inspiration_id == Inspiration.id)
+            .order_by(AIQualityReview.id.desc())
+            .limit(10000)
+        )
+    ).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        ["审核ID", "素材ID", "判定", "原因码", "原因", "模型", "prompt指纹", "初筛置信度", "时间"]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                sanitize_csv_cell(str(x)) if x is not None else ""
+                for x in (
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    (row[6] or "")[:8],
+                    row[7],
+                    row[8].isoformat() if row[8] else "",
+                )
+            ]
+        )
+    csv_bytes = output.getvalue().encode("utf-8-sig")  # BOM 让 Excel 正确识别中文
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="quality_reviews.csv"'},
+    )
 
 
 @router.get("/quality-prompt-ab")
