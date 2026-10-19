@@ -105,19 +105,36 @@ export function formatDuration(seconds: number): string {
   return rm > 0 ? `${h} 小时 ${rm} 分` : `${h} 小时`
 }
 
-/** 预测运行中任务的剩余时间（仅采集任务与批量 AI 分析）；信息不足时返回 null */
-export function predictEta(task: UnifiedTask): string | null {
+/**
+ * 预测运行中任务的剩余时间（仅采集任务与批量 AI 分析）；信息不足时返回 null。
+ *
+ * 批量 AI 分析用「平均耗时 × 未完成素材数」（口径见用户 2026-10 的需求）：
+ * - 平均耗时的唯一来源是 AI 模型管理页那份统计（`/ai/model-stats` 的全部模型汇总，
+ *   按分析次数加权），由调用方取好后通过 `avgMsPerItem` 传入；
+ * - 未完成数按「一条素材 = 一次分析」计，**暂不折算视频的多帧**（视频会逐帧跑模型，
+ *   真实耗时更高，这里按用户要求先忽略）；
+ * - 拿不到平均耗时（统计还没攒够、请求失败）时回退到原来的「按已完成的实测速率外推」，
+ *   保证永远有可用估算而不是空着。
+ */
+export function predictEta(task: UnifiedTask, avgMsPerItem?: number | null): string | null {
   if (task.status !== 'running') return null
   if (task.type !== 'batch_analyze' && task.type !== 'scraper') return null
+  const { done, target } = task
+  if (target <= 0 || target <= done) return null
+  const remaining = target - done
+
+  if (task.type === 'batch_analyze' && avgMsPerItem && avgMsPerItem > 0) {
+    return formatDuration((remaining * avgMsPerItem) / 1000)
+  }
+
   const startTs = task.started_at
     ? new Date(task.started_at).getTime()
     : new Date(task.created_at).getTime()
   if (!startTs || Number.isNaN(startTs)) return null
   const elapsedSec = (Date.now() - startTs) / 1000
   if (elapsedSec < 10) return null // 运行时间太短，速率不稳定，先不预测
-  const { done, target } = task
-  if (done <= 0 || target <= 0 || target <= done) return null
+  if (done <= 0) return null
   const rate = done / elapsedSec
   if (rate <= 0) return null
-  return formatDuration((target - done) / rate)
+  return formatDuration(remaining / rate)
 }

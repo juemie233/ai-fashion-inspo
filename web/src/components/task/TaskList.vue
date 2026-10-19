@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 任务列表：统一展示任务队列与采集任务。 */
 
-import { h } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import {
   Tag,
   Progress,
@@ -16,6 +16,18 @@ import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate, renderTimeCell } from '@/utils/format'
 import { taskRowActions } from '@/utils/taskPresentation'
+import { fetchModelStats, overallAvgMs } from '@/api/aiModelStats'
+
+/** 批量 AI 分析的「平均耗时（毫秒）」：取自 AI 模型管理的统计（全部模型汇总）。
+ *  拿不到就留 null，`predictEta` 会回退到按实测速率外推。 */
+const modelAvgMs = ref<number | null>(null)
+onMounted(async () => {
+  try {
+    modelAvgMs.value = overallAvgMs(await fetchModelStats())
+  } catch {
+    modelAvgMs.value = null
+  }
+})
 
 const props = defineProps<{
   tasks: UnifiedTask[]
@@ -120,7 +132,7 @@ const columns: TableColumnData[] = [
     width: 110,
     render: ({ record }) => {
       const row = record as UnifiedTask
-      const eta = predictEta(row)
+      const eta = predictEta(row, modelAvgMs.value)
       return eta
         ? h(TypographyText, { type: 'secondary' }, { default: () => eta })
         : h(TypographyText, { type: 'secondary' }, { default: () => '—' })
