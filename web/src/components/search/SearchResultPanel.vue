@@ -168,12 +168,14 @@ const sortModeModel = computed({
         </a-alert>
       </div>
 
+      <!-- 不开启悬停大图预览（hover-zoom）：预览层是「指针穿透」的居中大图，会盖住卡片右上角
+           的悬浮操作层（含五星评分）；点星星时点击穿透到卡片 → 打开详情页，表现为「选不了评分」。
+           素材库的同类预览也只在质量审核（AI 筛选）场景开启，这里保持一致（默认关闭）。 -->
       <MasonryGrid
         :items="results"
         :loading="searching"
         :density="density"
         :badges="vectorMode !== 'none' ? vectorBadges : undefined"
-        :hover-zoom="true"
         @delete="emit('delete', $event)"
         @toggle-favorite="emit('toggleFavorite', $event)"
         @rate="(id: string, v: number) => emit('rate', id, v)"
