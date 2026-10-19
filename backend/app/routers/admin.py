@@ -24,8 +24,8 @@ from app.models.inspiration import (
 )
 from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
 from app.models.tag import InspirationTag
-from app.models.audit import AuditLog
 from app.services import admin_stats_service, backup_service, inspiration_service
+from app.services import audit_service
 from app.services.audit_service import record_audit_log
 from app.services.inspiration_query import inspiration_load_options
 from app.utils.csv_safety import sanitize_csv_cell
@@ -57,36 +57,8 @@ async def largest_files(
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """列出占用空间最大的前 N 个文件。"""
-    storage_root = settings.storage_root
-    result = (await db.execute(
-        select(Inspiration.id, Inspiration.file_path, Inspiration.source_type, Inspiration.created_at)
-        .where(NOT_DELETED)
-        .order_by(Inspiration.created_at.desc())
-    )).all()
-
-    # 磁盘 stat 属阻塞 I/O，放线程池避免大库时卡事件循环
-    def _collect() -> list[dict]:
-        files = []
-        for row in result:
-            fpath = storage_root / row[1] if row[1] else None
-            size = 0
-            exists = False
-            if fpath and fpath.exists():
-                size = fpath.stat().st_size
-                exists = True
-            files.append({
-                "id": row[0],
-                "file_path": row[1],
-                "source_type": row[2],
-                "created_at": format_utc(row[3]),
-                "size_bytes": size,
-                "exists": exists,
-            })
-        files.sort(key=lambda f: f["size_bytes"], reverse=True)
-        return files[:limit]
-
-    return await asyncio.to_thread(_collect)
+    """列出占用空间最大的前 N 个文件；扫描在 ``admin_stats_service``。"""
+    return await admin_stats_service.largest_files(db, limit)
 
 
 @router.get("/integrity-check")
@@ -455,23 +427,8 @@ async def audit_logs(
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """按时间倒序返回破坏性操作审计日志。"""
-    result = await db.execute(
-        select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit)
-    )
-    rows = result.scalars().all()
-    return [
-        {
-            "id": r.id,
-            "action": r.action,
-            "target_type": r.target_type,
-            "count": r.count,
-            "freed_bytes": r.freed_bytes,
-            "detail": r.detail,
-            "created_at": format_utc(r.created_at),
-        }
-        for r in rows
-    ]
+    """按时间倒序返回破坏性操作审计日志；查询在 ``audit_service``。"""
+    return await audit_service.query_audit_logs(db, limit)
 
 
 @router.post("/near-duplicates")

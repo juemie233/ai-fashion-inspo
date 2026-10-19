@@ -1,3 +1,4 @@
+from app.utils.time import format_utc
 from app.utils.file_hash import build_hash_map
 """素材管理统计服务：概览仪表盘聚合与存储目录扫描。
 
@@ -308,3 +309,38 @@ async def vector_stats(db: AsyncSession) -> dict:
             "stale": text_vectors > 0 and stored_version != TEXT_EMBEDDING_FORMULA_VERSION,
         },
     }
+
+async def largest_files(
+    db: AsyncSession,
+    limit: int = 20,
+) -> list[dict]:
+    """列出占用空间最大的前 N 个文件。"""
+    storage_root = settings.storage_root
+    result = (await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.source_type, Inspiration.created_at)
+        .where(NOT_DELETED)
+        .order_by(Inspiration.created_at.desc())
+    )).all()
+
+    # 磁盘 stat 属阻塞 I/O，放线程池避免大库时卡事件循环
+    def _collect() -> list[dict]:
+        files = []
+        for row in result:
+            fpath = storage_root / row[1] if row[1] else None
+            size = 0
+            exists = False
+            if fpath and fpath.exists():
+                size = fpath.stat().st_size
+                exists = True
+            files.append({
+                "id": row[0],
+                "file_path": row[1],
+                "source_type": row[2],
+                "created_at": format_utc(row[3]),
+                "size_bytes": size,
+                "exists": exists,
+            })
+        files.sort(key=lambda f: f["size_bytes"], reverse=True)
+        return files[:limit]
+
+    return await asyncio.to_thread(_collect)

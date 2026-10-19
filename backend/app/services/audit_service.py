@@ -1,5 +1,8 @@
 """操作审计日志服务：记录破坏性操作的统一入口。"""
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.utils.time import format_utc
 import logging
 
 from app.database import async_session
@@ -36,3 +39,25 @@ async def record_audit_log(
             await db.commit()
     except Exception as e:
         logger.warning(f"写入审计日志失败（忽略）: action={action} — {e}")
+
+async def query_audit_logs(
+    db: AsyncSession,
+    limit: int = 50,
+) -> list[dict]:
+    """按时间倒序返回破坏性操作审计日志。"""
+    result = await db.execute(
+        select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit)
+    )
+    rows = result.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "action": r.action,
+            "target_type": r.target_type,
+            "count": r.count,
+            "freed_bytes": r.freed_bytes,
+            "detail": r.detail,
+            "created_at": format_utc(r.created_at),
+        }
+        for r in rows
+    ]
