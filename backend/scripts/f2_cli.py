@@ -162,6 +162,15 @@ def main(argv: list[str] | None = None) -> int:
         help="不生成缩略图（更快；列表页将缺预览图）",
     )
     parser.add_argument(
+        "--prune-downloads",
+        action="store_true",
+        help=(
+            "入库成功后删除 f2 下载目录里的源文件（**默认保留**）。"
+            "f2 的 Download/ 只增不减（实测冗余 7 GB+），开启后不再无限增长；"
+            "只删本批确实入库成功的文件，跳过/失败的原样保留"
+        ),
+    )
+    parser.add_argument(
         "--db",
         type=Path,
         default=None,
@@ -417,9 +426,12 @@ def main(argv: list[str] | None = None) -> int:
         db_path=db_path,
         storage_root=args.storage_root or settings.storage_root,
         make_thumbnails=not args.no_thumbnails,
+        prune_downloads=args.prune_downloads,
     )
     print("\n=== 导入完成 ===")
     print(f"入库 {result['imported']} 个，失败 {result['failed']} 个")
+    if args.prune_downloads:
+        print(f"已清理 f2 下载目录源文件 {result.get('pruned', 0)} 个")
     if result["batch_file"]:
         print(f"批次清单: {result['batch_file']}（可用于审计与回滚）")
     if result.get("batch_error"):

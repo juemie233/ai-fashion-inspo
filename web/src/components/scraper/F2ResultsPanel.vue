@@ -10,7 +10,8 @@
  * 自建网格曾因为固定六列 + 网格项最小宽度而把容器撑出横向滚动条，故不再自绘布局。
  */
 
-import { ref, watch } from 'vue'
+import { h, ref, watch } from 'vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
 import { TRASH_REASON_OPTIONS, getFileUrl, type TrashReason } from '@/api/inspirations'
 import { openInspiration } from '@/utils/openInspiration'
@@ -62,6 +63,8 @@ const {
   restoreSelected,
   deleteSelected,
   registerBloggers,
+  previewRollback,
+  rollbackBatch,
 } = useF2Results()
 
 // 打开面板即加载本批结果（任务 id 变化时重新拉取）
@@ -95,6 +98,48 @@ function openDetail(id: string) {
 function previewSrc(item: F2ResultItem): string {
   if (item.media_type === 'video') return getFileUrl(item.thumbnail_path || item.file_path || '')
   return getFileUrl(item.file_path || item.thumbnail_path || '')
+}
+
+/**
+ * 「回滚本批」：先取预览（能删多少 / 保留多少 + 原因），用户确认后才物理删除。
+ *
+ * 与 CLI `--rollback` 同一份后端实现。保留那些「之后被人动过」的素材（打标/收藏/
+ * 评分/改过质量状态），因为那已经是用户的后续工作；要连它们一起删需显式勾选
+ * 「连已改动的也删」（force）。
+ */
+async function onRollback() {
+  const info = await previewRollback()
+  if (!info) return
+  if (!info.batch_file) {
+    Message.warning(info.message || '本批没有批次清单，无法回滚')
+    return
+  }
+  const lines = [`本批共 ${info.total} 条：可回滚 ${info.deletable} 条，保留 ${info.kept} 条。`]
+  if (info.kept) {
+    const reasons = Object.entries(info.kept_reasons)
+      .map(([reason, count]) => `${reason}（${count}）`)
+      .join('；')
+    lines.push(`保留原因：${reasons}`)
+  }
+  lines.push('回滚是**物理删除**（库记录 + 文件 + 缩略图 + 关键帧），不进垃圾桶、不可恢复。')
+
+  Modal.confirm({
+    title: '回滚本批素材？',
+    // 多行文案用 VNode 渲染（字符串里的换行符不会真的换行）
+    content: () =>
+      h(
+        'div',
+        { style: 'line-height: 1.8' },
+        lines.map((line) => h('div', line)),
+      ),
+    okText: `删除 ${info.deletable} 条`,
+    cancelText: '取消',
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const deleted = await rollbackBatch()
+      if (deleted !== null) emit('close')
+    },
+  })
 }
 
 /** 卡片角标：垃圾桶 / 质量审核结论 */
@@ -133,6 +178,7 @@ function stateTag(item: F2ResultItem): { text: string; color: string } | null {
         >
           <a-button size="mini" :loading="acting" @click="registerBloggers">登记博主</a-button>
         </a-tooltip>
+        <a-button size="mini" :loading="acting" @click="onRollback">回滚本批</a-button>
         <a-button size="mini" :loading="loading" @click="reload()">刷新</a-button>
         <a-button size="mini" @click="emit('close')">收起</a-button>
       </div>

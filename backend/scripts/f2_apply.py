@@ -1,6 +1,7 @@
 """素材入库（自 scripts/import_f2_downloads.py 拆出，行为不变）。"""
 
 import json
+import logging
 import shutil
 import sqlite3
 import sys
@@ -35,6 +36,8 @@ INSERT_F2_SQL = (
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 'pending', 0, 0, ?, ?, NULL, ?, ?)"
 )
 
+logger = logging.getLogger(__name__)
+
 
 def apply_import(
     decisions: list[ImportDecision],
@@ -44,6 +47,7 @@ def apply_import(
     batch_dir: Path | None = None,
     on_progress=None,
     should_stop=None,
+    prune_downloads: bool = False,
 ) -> dict:
     """把决策为 import 的文件复制进素材库并写库——**不做标签分析、不建向量**。
 
@@ -61,9 +65,13 @@ def apply_import(
         on_progress: 可选回调 ``on_progress(done, total)``，供后台任务报告进度。
         should_stop: 可选回调 ``should_stop() -> bool``，返回 True 时提前收尾
             （供任务暂停/取消；已入库的部分保留，并写入批次清单）。
+        prune_downloads: 入库成功后**删除 f2 下载目录里的源文件**（默认 False）。
+            f2 的 Download/ 只增不减（实测 7.28 GB 冗余），开启后不再无限增长；
+            只删「本批确实入库成功」的文件——跳过/失败的保持原样（跳过可能是临时
+            判重，下次还能导）。删失败只记日志，不算导入失败。
 
     Returns:
-        统计字典：imported / failed / ids / errors / batch_file / stopped。
+        统计字典：imported / failed / ids / errors / batch_file / stopped / pruned。
     """
     db_path = db_path or library_db_path()
     storage_root = storage_root or settings.storage_root
@@ -79,6 +87,7 @@ def apply_import(
     total = sum(1 for d in decisions if d.action == "import")
     processed = 0
     stopped = False
+    pruned = 0
 
     # 作品类型判据：同一作品下只要有 video 文件就是视频作品。封面（kind=cover）
     # 单看 kind 会被误判成图集，写出打不开的 /note/ 链接。
@@ -164,6 +173,16 @@ def apply_import(
                     "blogger_id": decision.blogger_id,
                 }
             )
+
+            # 入库已提交 → 可选删除 f2 下载目录里的源文件（默认可不开）。
+            # 放在 commit 之后：先保库再删盘，删失败最多留一份冗余文件，不会出现
+            # 「文件没了、库里也没有」；跳过/失败的文件不进这里。
+            if prune_downloads:
+                try:
+                    item.path.unlink(missing_ok=True)
+                    pruned += 1
+                except OSError as exc:
+                    logger.warning(f"清理 f2 源文件失败（忽略）{item.path}: {exc}")
         except Exception as exc:  # noqa: BLE001 —— 单条失败不影响整批
             try:
                 conn.rollback()
@@ -225,4 +244,5 @@ def apply_import(
         "batch_file": str(batch_file) if batch_file else "",
         "batch_error": batch_error,
         "stopped": stopped,
+        "pruned": pruned,
     }

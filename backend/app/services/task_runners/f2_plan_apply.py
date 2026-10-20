@@ -201,6 +201,8 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
             f2.apply_import,
             to_import,
             make_thumbnails=make_thumbnails,
+            # 入库成功后是否删掉 f2 下载目录里的源文件（默认关，见 create_f2_import_task）
+            prune_downloads=bool((task.result or {}).get("prune_downloads")),
             on_progress=_on_progress,
             should_stop=_should_stop,
         )

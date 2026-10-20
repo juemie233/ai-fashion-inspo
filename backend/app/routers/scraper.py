@@ -55,6 +55,14 @@ async def create_f2_import(
     skip_live: bool = Query(False, description="跳过 live 实况的分段视频"),
     fetch_limit: int | None = Query(None, ge=1, description="下载阶段最多处理多少个作者"),
     make_thumbnails: bool = Query(True, description="是否生成缩略图"),
+    prune_downloads: bool = Query(
+        False,
+        description=(
+            "入库成功后是否删除 f2 下载目录里的源文件（**默认保留**）。"
+            "f2 的 Download/ 只增不减，开启后不再无限增长；只删本批入库成功的文件，"
+            "跳过/失败的原样保留"
+        ),
+    ),
     since_days: int | None = Query(
         None, ge=0, le=3650, description="f2 日期窗口天数（0=全历史；缺省取配置）"
     ),
@@ -226,6 +234,7 @@ async def create_f2_import(
         fetch=fetch,
         fetch_limit=fetch_limit,
         make_thumbnails=make_thumbnails,
+        prune_downloads=prune_downloads,
         since_days=since_days,
         include_unknown_authors=include_unknown_authors,
         fetch_mode=mode,
@@ -248,6 +257,35 @@ async def create_f2_import(
         "fetch": fetch,
         "authors": author_list,
     }
+
+
+@router.get("/f2-preview")
+async def f2_preview(
+    authors: str | None = Query(None, description="只算这些作者（逗号分隔，归一化名）"),
+    limit: int | None = Query(None, ge=1, description="最多算多少个作品"),
+    skip_live: bool = Query(False, description="跳过 live 实况的分段视频"),
+    mode: str = Query("post", pattern="^(post|like|collection)$"),
+    include_unknown_authors: bool = Query(False, description="是否连未登记博主一起算"),
+) -> dict:
+    """入库前预览：返回「新增 N 个文件 / M 个作品、跳过明细（含原因）」，**不写库**。
+
+    与 ``POST /f2-import`` 用同一条「扫描 → 五层判重」链路（``build_import_plan``），
+    所以数字与真正入库一致；区别只在于它是只读的。
+
+    ⚠️ 预览的是**下载目录里已有的产物**：任务参数带 ``fetch=true`` 时会先增量下载，
+    新下下来的作品不在预览里 —— 实际入库可能更多（预览是下限，不是承诺值）。
+    首次预览会实算全目录哈希（15k 文件约 80 秒），之后走哈希缓存（1~2 秒）。
+    """
+    from app.services.scraper import f2_preview as preview_service
+
+    author_list = [a.strip() for a in (authors or "").split(",") if a.strip()]
+    return await preview_service.preview_f2_import(
+        authors=author_list,
+        limit=limit,
+        skip_live=skip_live,
+        include_unknown_authors=include_unknown_authors,
+        fetch_mode=mode,
+    )
 
 
 @router.get("/f2-status")
@@ -321,6 +359,41 @@ async def f2_task_results(
     return await scraper_service.get_f2_task_results(
         db, task_id, page=page, size=size, state=state, author=author
     )
+
+
+@router.get("/f2-tasks/{task_id}/rollback/preview")
+async def f2_task_rollback_preview(
+    task_id: int,
+    force: bool = Query(
+        False,
+        description="是否连「已被改动」的素材一起删（默认保留：打过标/收藏/评分的不动）",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """预览「回滚本批」（只读）：返回可删/保留数量与保留原因，**不删任何数据**。
+
+    与 CLI ``--rollback``（不带 ``--apply``）同一份实现：只撤销本批导入、且之后
+    没被人改动过的素材；已经打标/收藏/评分/改过质量状态的一律保留。
+    """
+    from app.services.scraper import f2_results
+
+    return await f2_results.preview_f2_task_rollback(db, task_id, force=force)
+
+
+@router.post("/f2-tasks/{task_id}/rollback")
+async def f2_task_rollback(
+    task_id: int,
+    force: bool = Query(False, description="是否连「已被改动」的素材一起删"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """执行「回滚本批」：**物理删除**本批素材（库行 + 文件 + 缩略图 + 关键帧）。
+
+    与 CLI ``--rollback --apply`` 语义一致，且不做垃圾桶软删除——撤销误导入的素材
+    若进垃圾桶，会作为「质量差」负样本污染质量学习。操作留审计（`f2_rollback`）。
+    """
+    from app.services.scraper import f2_results
+
+    return await f2_results.rollback_f2_task(db, task_id, force=force)
 
 
 @router.post("/f2-tasks/{task_id}/results/trash")

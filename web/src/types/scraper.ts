@@ -96,3 +96,25 @@ export interface ScraperSchedule {
   run_count: number
   created_at: string
 }
+
+/** 入库前预览结果（后端 `GET /api/scraper/f2-preview`，与入库共用判重链路）。 */
+export interface F2PreviewResult {
+  /** 扫描根目录 */
+  root: string
+  /** 扫描到的可识别文件总数 */
+  files: number
+  /** 预计要导入的文件数（判重后） */
+  files_to_import: number
+  /** 预计入库的作品数（一个图集算一个作品） */
+  works: number
+  /** 跳过明细：{ 原因: 数量 } */
+  skipped: Record<string, number>
+  /** 因 limit 未处理的作品数 */
+  deferred_works: number
+  /** 本次统计的作者范围（null = 不限） */
+  authors_scope: string[] | null
+  /** 扫描目录里是否有任何可识别产物 */
+  has_any: boolean
+  /** 哈希缓存统计（首次全量算、之后命中缓存；供排查「为什么这次慢」） */
+  hash_cache?: Record<string, unknown>
+}

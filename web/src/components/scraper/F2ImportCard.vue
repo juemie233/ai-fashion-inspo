@@ -13,6 +13,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { TableColumnData } from '@arco-design/web-vue'
 import { useF2Import } from '@/composables/useF2Import'
+import type { F2PreviewResult } from '@/types/scraper'
 import { usePolling } from '@/composables/usePolling'
 import { useDouyinBloggerPicker } from '@/composables/useDouyinBloggerPicker'
 import { mergeProfileKeys } from '@/utils/bloggerWorks'
@@ -27,8 +28,10 @@ const {
   status,
   statusLoading,
   submitting,
+  previewing,
   loadStatus,
   submit,
+  preview,
   f2Authors,
   authorsLoading,
   loadAuthors,
@@ -40,7 +43,33 @@ const authorsText = ref('')
 const limit = ref<number | undefined>(undefined)
 const skipLive = ref(false)
 const makeThumbnails = ref(true)
+/** 入库成功后删掉 f2 下载目录里的源文件（默认否：Download/ 只增不减，但删了不可恢复） */
+const pruneDownloads = ref(false)
 const showAdvanced = ref(false)
+
+// ── 入库前预览（「宁缺毋滥、手动确认」）：先看新增/跳过明细，再决定是否入库 ──
+const previewVisible = ref(false)
+const previewResult = ref<F2PreviewResult | null>(null)
+/** 当前提交参数（预览与确认入库共用同一份，避免确认时参数被改过） */
+function currentOptions() {
+  return {
+    fetch: fetchFirst.value,
+    authors: authorsText.value.trim() || undefined,
+    limit: limit.value || undefined,
+    skip_live: skipLive.value || undefined,
+    make_thumbnails: makeThumbnails.value,
+    prune_downloads: pruneDownloads.value,
+    since_days: sinceDays.value,
+    include_unknown_authors: includeUnknown.value || undefined,
+  }
+}
+
+async function onPreview() {
+  const data = await preview(currentOptions())
+  if (!data) return
+  previewResult.value = data
+  previewVisible.value = true
+}
 /** 是否连「未登记到博主库」的 f2 账号一起处理（默认否：f2 用户库混进的无关账号不入库） */
 const includeUnknown = ref(false)
 /** 后端识别出的「f2 里有、但库里没有对应博主」的账号名（默认会被跳过） */
@@ -104,16 +133,9 @@ watch(
 onMounted(loadStatus)
 
 async function onSubmit() {
-  const taskId = await submit({
-    fetch: fetchFirst.value,
-    authors: authorsText.value.trim() || undefined,
-    limit: limit.value || undefined,
-    skip_live: skipLive.value || undefined,
-    make_thumbnails: makeThumbnails.value,
-    since_days: sinceDays.value,
-    include_unknown_authors: includeUnknown.value || undefined,
-  })
+  const taskId = await submit(currentOptions())
   if (taskId) {
+    previewVisible.value = false
     emit('submitted')
     await loadStatus()
   }
@@ -235,14 +257,18 @@ async function toggleAuthors() {
           >
         </div>
       </div>
-      <a-button
-        type="primary"
-        :loading="submitting"
-        :disabled="!status?.available && !includeUnknown"
-        @click="onSubmit"
-      >
-        {{ fetchFirst ? '一键获取素材' : '仅入库已下载' }}
-      </a-button>
+      <a-space>
+        <!-- 先预览再确认：CLI 缺省就是这个行为（只出计划、不入库） -->
+        <a-button :loading="previewing" @click="onPreview">预览</a-button>
+        <a-button
+          type="primary"
+          :loading="submitting"
+          :disabled="!status?.available && !includeUnknown"
+          @click="onSubmit"
+        >
+          {{ fetchFirst ? '一键获取素材' : '仅入库已下载' }}
+        </a-button>
+      </a-space>
     </div>
 
     <!-- 按博主全量下载：从「我的喜欢」里发现新博主时的入口（f2 用户库里没有也能下） -->
@@ -366,6 +392,7 @@ async function toggleAuthors() {
       <a-checkbox v-model="fetchFirst">先调用 f2 增量下载（只下新作品）</a-checkbox>
       <a-checkbox v-model="makeThumbnails">生成缩略图</a-checkbox>
       <a-checkbox v-model="skipLive">跳过 live 实况分段视频</a-checkbox>
+      <a-checkbox v-model="pruneDownloads">入库后清理下载目录源文件</a-checkbox>
       <a-link @click="showAdvanced = !showAdvanced">
         {{ showAdvanced ? '收起高级选项' : '高级选项' }}
       </a-link>
@@ -409,6 +436,50 @@ async function toggleAuthors() {
         }}。f2 用户库存的是它见过的所有账号，勾选后这些账号的作品也会被下载并入库。
       </span>
     </div>
+
+    <!-- 入库前预览：新增/跳过明细 + 确认入库（确认时用同一份参数，避免边看边改） -->
+    <a-modal
+      v-model:visible="previewVisible"
+      title="入库前预览"
+      :footer="false"
+      :width="560"
+      unmount-on-close
+    >
+      <template v-if="previewResult">
+        <div v-if="!previewResult.has_any" class="f2-preview-empty">
+          下载目录里没有可识别的 f2 产物（{{ previewResult.root }}）。<br />
+          勾选「先调用 f2 增量下载」再点「一键获取素材」才会去下载。
+        </div>
+        <template v-else>
+          <div class="f2-preview-sum">
+            预计新增 <b>{{ previewResult.files_to_import }}</b> 个文件 /
+            <b>{{ previewResult.works }}</b> 个作品（扫描到 {{ previewResult.files }} 个文件）
+          </div>
+          <div v-if="previewResult.deferred_works" class="f2-preview-note">
+            另有 {{ previewResult.deferred_works }} 个作品因「最多导入作品数」未处理。
+          </div>
+          <div v-if="Object.keys(previewResult.skipped).length" class="f2-preview-skip">
+            <div class="f2-preview-skip-title">跳过（已在库 / 重复 / 被过滤）：</div>
+            <div
+              v-for="(count, reason) in previewResult.skipped"
+              :key="reason"
+              class="f2-preview-skip-row"
+            >
+              <span>{{ reason }}</span>
+              <b>{{ count }}</b>
+            </div>
+          </div>
+          <div class="f2-preview-note">
+            预览只统计<b>下载目录里已有</b>的产物；勾选了「先调用 f2
+            增量下载」的话，任务会先下新作品， 实际入库可能更多（预览是下限）。
+          </div>
+        </template>
+      </template>
+      <div class="f2-preview-actions">
+        <a-button @click="previewVisible = false">取消</a-button>
+        <a-button type="primary" :loading="submitting" @click="onSubmit">确认入库</a-button>
+      </div>
+    </a-modal>
   </a-card>
 </template>
 
@@ -560,5 +631,53 @@ async function toggleAuthors() {
   padding: 0 3px;
   border-radius: 3px;
   background: #f2f3f5;
+}
+
+/* ── 入库前预览弹窗 ── */
+.f2-preview-sum {
+  font-size: 14px;
+  color: #1d2129;
+  margin-bottom: 8px;
+}
+.f2-preview-sum b {
+  color: #165dff;
+}
+.f2-preview-empty {
+  font-size: 13px;
+  color: #8a8f99;
+  line-height: 1.9;
+}
+.f2-preview-note {
+  font-size: 12px;
+  color: #8a8f99;
+  line-height: 1.8;
+  margin-top: 8px;
+}
+.f2-preview-skip {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: #f7f8fa;
+}
+.f2-preview-skip-title {
+  font-size: 12px;
+  color: #4e5969;
+  margin-bottom: 4px;
+}
+.f2-preview-skip-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8a8f99;
+  line-height: 1.9;
+}
+.f2-preview-skip-row b {
+  color: #4e5969;
+}
+.f2-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 </style>

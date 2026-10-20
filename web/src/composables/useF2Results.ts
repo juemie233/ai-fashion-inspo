@@ -58,6 +58,24 @@ export interface F2ResultTaskBrief {
   fetch_total: number
 }
 
+/** 「回滚本批」的预览结果（后端 plan_rollback，与 CLI --rollback 同源） */
+interface F2RollbackPreview {
+  batch_id: string
+  batch_file: string
+  storage_root: string
+  /** 批次清单里记录的导入条数 */
+  total: number
+  /** 可删除（本批导入且之后没被改动过） */
+  deletable: number
+  /** 需保留（已被打标/收藏/评分/改过质量状态） */
+  kept: number
+  /** 保留原因分布：{ 原因文案: 条数 } */
+  kept_reasons: Record<string, number>
+  /** 可删样例（前 20 条，供确认时扫一眼是不是这批） */
+  sample: { inspiration_id: string; file_path: string }[]
+  message?: string
+}
+
 /** 结果面板每页加载数量（与后端 size 上限 200 对齐留余量） */
 const PAGE_SIZE = 60
 
@@ -306,6 +324,63 @@ export function useF2Results() {
     }
   }
 
+  /** 回滚本批的预览结果（可删 / 保留 + 原因 + 样例） */
+  const rollbackInfo = ref<F2RollbackPreview | null>(null)
+
+  /**
+   * 预览「回滚本批」：只读，返回能删多少、保留多少（含原因）。
+   *
+   * 与 CLI `--rollback`（不带 `--apply`）同一份后端实现：只撤销本批导入、且之后
+   * 没被人动过的素材；已经打标/收藏/评分/改过质量状态的一律保留（force 才删）。
+   */
+  async function previewRollback(force = false): Promise<F2RollbackPreview | null> {
+    if (openTaskId.value === null) return null
+    acting.value = true
+    try {
+      const { data } = await apiClient.get<F2RollbackPreview>(
+        `/scraper/f2-tasks/${openTaskId.value}/rollback/preview`,
+        { params: { force } },
+      )
+      rollbackInfo.value = data
+      return data
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '预览回滚失败'))
+      return null
+    } finally {
+      acting.value = false
+    }
+  }
+
+  /**
+   * 执行「回滚本批」：物理删除本批素材（库行 + 文件 + 缩略图 + 关键帧）。
+   *
+   * 语义与 CLI `--rollback --apply` 一致，**不进垃圾桶**——撤销误导入的素材若进
+   * 垃圾桶，会作为「质量差」负样本污染质量学习。
+   */
+  async function rollbackBatch(force = false): Promise<number | null> {
+    if (openTaskId.value === null) return null
+    acting.value = true
+    try {
+      const { data } = await apiClient.post<{ deleted: number; kept: number; failed: number }>(
+        `/scraper/f2-tasks/${openTaskId.value}/rollback`,
+        null,
+        { params: { force } },
+      )
+      Message.success(
+        `已回滚 ${data.deleted} 条${data.kept ? `，保留 ${data.kept} 条（已被改动过）` : ''}` +
+          (data.failed ? `，失败 ${data.failed} 条` : ''),
+      )
+      rollbackInfo.value = null
+      await afterAction()
+      return data.deleted
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '回滚本批失败'))
+      return null
+    } finally {
+      acting.value = false
+    }
+  }
+
   return {
     // 状态
     openTaskId,
@@ -324,6 +399,7 @@ export function useF2Results() {
     selectedItems,
     selectedLive,
     selectedTrashed,
+    rollbackInfo,
     // 操作
     open,
     close,
@@ -337,5 +413,7 @@ export function useF2Results() {
     restoreSelected,
     deleteSelected,
     registerBloggers,
+    previewRollback,
+    rollbackBatch,
   }
 }

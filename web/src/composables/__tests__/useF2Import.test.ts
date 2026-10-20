@@ -170,6 +170,53 @@ describe('useF2Import', () => {
     success.mockRestore()
   })
 
+  it('preview 只把「与扫描相关」的选项发给预览接口（不传 fetch/since_days）', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        root: 'E:/f2/post',
+        files: 10,
+        files_to_import: 7,
+        works: 3,
+        skipped: { 内容已在库: 3 },
+        deferred_works: 0,
+        authors_scope: ['里香'],
+        has_any: true,
+      },
+    })
+    const { preview, previewing } = useF2Import()
+
+    const data = await preview({
+      fetch: true,
+      authors: '里香',
+      limit: 50,
+      skip_live: true,
+      include_unknown_authors: true,
+    })
+
+    expect(data?.files_to_import).toBe(7)
+    expect(mocks.get).toHaveBeenCalledWith('/scraper/f2-preview', {
+      params: {
+        authors: '里香',
+        limit: 50,
+        skip_live: true,
+        mode: 'post',
+        include_unknown_authors: true,
+      },
+    })
+    // 预览是同步等待结果的（界面要弹窗），结束后必须复位 loading
+    expect(previewing.value).toBe(false)
+  })
+
+  it('preview 失败时返回 null 并提示（不把错误当空结果）', async () => {
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    mocks.get.mockRejectedValue(new Error('boom'))
+    const { preview } = useF2Import()
+
+    expect(await preview({ fetch: false })).toBeNull()
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+
   it('submit 在后端未创建任务时提示原因、不误报成功', async () => {
     const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
     const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)

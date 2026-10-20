@@ -9,6 +9,7 @@ import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import apiClient from '@/api/client'
 import { getApiErrorMessage } from '@/utils/apiError'
+import type { F2PreviewResult } from '@/types/scraper'
 
 /** f2 **下载期间**的实时统计（后端 result.download_progress；非下载阶段为空）。
  *
@@ -197,6 +198,8 @@ export interface F2ImportOptions {
   fetch_limit?: number
   /** 是否生成缩略图 */
   make_thumbnails?: boolean
+  /** 入库成功后是否删除 f2 下载目录里的源文件（默认否：f2 的 Download/ 只增不减） */
+  prune_downloads?: boolean
   /** f2 日期窗口天数（0=全历史；缺省取后端配置，默认 14） */
   since_days?: number
   /** 是否连「未登记到博主库」的 f2 账号一起处理（缺省否：只处理已登记博主） */
@@ -234,6 +237,8 @@ export function useF2Import() {
   const status = ref<F2ImportStatus | null>(null)
   const statusLoading = ref(false)
   const submitting = ref(false)
+  /** 预览请求进行中（与「提交任务」分开：预览慢但不动数据） */
+  const previewing = ref(false)
   const autoSaving = ref(false)
   const likeUserSaving = ref(false)
   const likeMaxSaving = ref(false)
@@ -317,6 +322,34 @@ export function useF2Import() {
       ...rest,
       ...(collect_ids?.length ? { collect_ids: collect_ids.join(',') } : {}),
       ...(profiles?.length ? { profiles: profiles.join(',') } : {}),
+    }
+  }
+
+  /**
+   * 入库前预览（只读）：跑同一条「扫描 → 五层判重」，返回「新增多少 / 跳过多少（含原因）」。
+   *
+   * 后端与入库共用 `build_import_plan`，所以数字与真正入库一致；差别只在于它不写库。
+   * ⚠️ 预览的是**下载目录里已有的产物**：`fetch=true` 时会先增量下载，新下下来的
+   * 作品不在预览里（预览是下限，不是承诺值）。
+   */
+  async function preview(options: F2ImportOptions): Promise<F2PreviewResult | null> {
+    previewing.value = true
+    try {
+      const { data } = await apiClient.get<F2PreviewResult>('/scraper/f2-preview', {
+        params: {
+          authors: options.authors || undefined,
+          limit: options.limit,
+          skip_live: options.skip_live || undefined,
+          mode: options.mode ?? 'post',
+          include_unknown_authors: options.include_unknown_authors || undefined,
+        },
+      })
+      return data
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '预览失败'))
+      return null
+    } finally {
+      previewing.value = false
     }
   }
 
@@ -460,6 +493,7 @@ export function useF2Import() {
     status,
     statusLoading,
     submitting,
+    previewing,
     autoSaving,
     likeUserSaving,
     likeMaxSaving,
@@ -471,6 +505,7 @@ export function useF2Import() {
     loadAuthors,
     scanCollects,
     submit,
+    preview,
     setAuto,
     setLikeUser,
     setLikeMaxCounts,

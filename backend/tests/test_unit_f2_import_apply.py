@@ -845,3 +845,62 @@ def test_apply_import_cover_of_video_work_uses_video_url(tmp_path):
     conn.close()
     assert urls == {f"https://www.douyin.com/video/{AWEME}"}  # 两条都必须是 /video/
 
+
+
+# ── --prune-downloads（入库后清理 f2 源文件，默认关）──
+
+
+def test_apply_import_prune_downloads_default_off(tmp_path):
+    """默认不删源文件：入库是 copy，f2 下载目录保持原样（防误删唯一副本）。"""
+    root = tmp_path / "f2"
+    img = root / "里香1√" / "2025-01-01 10-00-00_#jk_image_1.jpg"
+    _jpeg(img)
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+
+    decisions, _, _ = _decisions(files, bloggers={"里香": [{"id": 302, "name": "里香"}]})
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=storage,
+    )
+
+    assert result["imported"] == 1
+    assert result["pruned"] == 0
+    assert img.exists()  # 源文件仍在
+    assert list((storage / "images").rglob("*.jpg"))  # 入库副本也在
+
+
+def test_apply_import_prune_downloads_deletes_only_imported_sources(tmp_path):
+    """prune=True：只删本批入库成功的源文件；被跳过的不动；重扫后只剩跳过的那份。"""
+    root = tmp_path / "f2"
+    imported_img = root / "里香1√" / "2025-01-01 10-00-00_#jk_image_1.jpg"
+    skipped_img = root / "里香1√" / "2025-01-01 10-00-00_#jk_image_2.jpg"
+    _jpeg(imported_img)
+    _jpeg(skipped_img, "blue")
+    files = f2.scan_directory(root)
+    db = _import_lib(tmp_path)
+    storage = tmp_path / "storage"
+
+    # skipped_img 的内容哈希已在库 → 计划里是 skip，不会进 apply，也不该被删
+    decisions, skipped, _ = _decisions(
+        files,
+        library_hashes={f2.sha256_file(skipped_img)},
+        bloggers={"里香": [{"id": 302, "name": "里香"}]},
+    )
+    assert skipped  # 有跳过原因
+    result = f2.apply_import(
+        [d for d in decisions if d.action == "import"],
+        db_path=db,
+        storage_root=storage,
+        prune_downloads=True,
+    )
+
+    assert result["imported"] == 1
+    assert result["pruned"] == 1
+    assert not imported_img.exists()   # 已入库 → 源文件清理
+    assert skipped_img.exists()        # 未入库 → 原样保留
+    # 幂等：只清成功的那份，重扫不会凭空多出文件
+    remaining = {p.path for p in f2.scan_directory(root)}
+    assert remaining == {skipped_img}
