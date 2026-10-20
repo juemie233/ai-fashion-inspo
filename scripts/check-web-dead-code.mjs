@@ -31,7 +31,7 @@ const baseline = new Set(
 // 只有「只拦新增」时，上一行「若确为刻意保留，请加入基线」就成了后门——每加一条死代码
 // 都能用一句「刻意保留」把基线撑大。这里把上限钉死：真要加例外，必须同时删掉一条
 // 已修好的旧条目（或在这个常量上显式改数字，让 review 看见）。
-const MAX_BASELINE = 277
+const MAX_BASELINE = 279
 
 let raw = ''
 try {

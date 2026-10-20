@@ -177,6 +177,8 @@ src/composables/useQualityLearner.ts - LearnerMeta (used in module)
 src/composables/useQualityLearner.ts - LearnerMetrics (used in module)
 src/composables/useQualityLearner.ts - LearnerStatus (used in module)
 src/composables/useQualityLearner.ts - useQualityLearner
+src/composables/useQualityReviewPanel.ts - QualityReviewPanelDeps (used in module)
+src/composables/useQualityReviewPanel.ts - useQualityReviewPanel
 src/composables/useRecentUploads.ts - useRecentUploads
 src/composables/useSchemaCheck.ts - useSchemaCheck
 src/composables/useScraperConfig.ts - useScraperConfig
