@@ -6,6 +6,9 @@ import pytest
 from app.database import async_session
 from app.services import task_runner
 from app.services.task_runners import f2_import as f2_runner
+# 切片 D 之后「我的列表」下载阶段住在 f2_fetch_stages，`_watch_personal_download`
+# 由该模块读取：patch 旧模块（f2_import）不生效且不报错。
+from app.services.task_runners import f2_fetch_stages
 from app.services.task_runners.common import utcnow
 from f2_patch import patch_f2
 from scripts import import_f2_downloads as f2
@@ -213,7 +216,7 @@ async def test_like_max_counts_explicit_zero_beats_nonzero_setting(
     async def fake_download(_db, _task, _future, _root, _baseline, _opts):
         return ({"ok": 1, "failed": 0, "results": []}, {"files": 0, "bytes": 0})
 
-    monkeypatch.setattr(runner, "_watch_personal_download", fake_download)
+    monkeypatch.setattr(f2_fetch_stages, "_watch_personal_download", fake_download)
 
     for task_value, expected in ((0, 0), (None, 150), (88, 88)):
         calls: dict = {}

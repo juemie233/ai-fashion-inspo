@@ -11,6 +11,11 @@ import pytest
 from app.database import async_session
 from app.services import task_runner
 from app.services.task_runners import f2_import as f2_runner
+# 切片 D 之后下载阶段住在 f2_fetch_stages：`_run_subprocess` / `_WATCH_INTERVAL` 由
+# **该模块**读取，patch 旧模块（f2_import）不生效且不报错（调用的是真子进程），
+# 所以这两项必须 patch f2_fetch_stages。`_current_status` 仍 patch f2_import——
+# f2_fetch_stages 的同名函数是转发壳（见其 docstring），两边都指向同一个实现。
+from app.services.task_runners import f2_fetch_stages
 from app.services.task_runners import f2_progress
 from app.services.task_runners.common import utcnow
 from f2_patch import patch_f2
@@ -92,7 +97,7 @@ async def test_execute_f2_import_profiles_downloads_named_blogger(
 
     commands: list[list[str]] = []
     monkeypatch.setattr(
-        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+        f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
     )
 
     async with async_session() as db:
@@ -127,7 +132,7 @@ async def test_execute_f2_import_profiles_fails_loudly_when_nothing_downloaded(
 
     from app.services.task_runners import f2_import as runner
 
-    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+    monkeypatch.setattr(f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: 0)
     # 反查不到任何昵称 → 说明 f2 没把她登记进用户库（下载没成）
     patch_f2(
         monkeypatch, "resolve_profile_nicknames",
@@ -178,7 +183,7 @@ async def test_execute_f2_import_fetch_uses_date_window(client, f2_tree, monkeyp
     patch_f2(monkeypatch, "f2_available", lambda: True)
     commands: list[list[str]] = []
     monkeypatch.setattr(
-        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+        f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
     )
 
     async with async_session() as db:
@@ -379,7 +384,7 @@ async def test_execute_f2_import_fails_when_all_downloads_fail(
     conn.close()
 
     patch_f2(monkeypatch, "f2_available", lambda: True)
-    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 1)  # 每个作者都失败
+    monkeypatch.setattr(f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: 1)  # 每个作者都失败
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True)
@@ -479,7 +484,7 @@ async def test_execute_f2_import_marks_download_stage_before_import(
         return "running"
 
     monkeypatch.setattr(runner, "_current_status", fake_status)
-    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+    monkeypatch.setattr(f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: 0)
 
     async with async_session() as db:
         task = await task_runner.create_f2_import_task(db, fetch=True)
@@ -500,7 +505,7 @@ async def test_execute_f2_import_cancel_during_download_skips_scan(
     from app.models.task import TaskQueue
     from app.services.task_runners import f2_import as runner
 
-    monkeypatch.setattr(runner, "_run_subprocess", lambda cmd, cwd: 0)
+    monkeypatch.setattr(f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: 0)
 
     async def cancelled(_db, _task_id):
         return "cancelled"
@@ -631,7 +636,7 @@ async def test_execute_f2_import_download_skips_unregistered_accounts(
     patch_f2(monkeypatch, "f2_available", lambda: True)
     commands: list[list[str]] = []
     monkeypatch.setattr(
-        runner, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
+        f2_fetch_stages, "_run_subprocess", lambda cmd, cwd: (commands.append(cmd) or 0)
     )
 
     async with async_session() as db:
@@ -1175,7 +1180,7 @@ async def test_execute_f2_import_like_mode_reports_live_download_progress(
     auto_settings.f2_like_user = "https://www.douyin.com/user/MS4wLjABAAAAme"
     patch_f2(monkeypatch, "f2_available", lambda: True)
     # 缩短轮询间隔与软进度时间常数，让「下载中」的中间态在测试里可观测
-    monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_fetch_stages, "_WATCH_INTERVAL", 0.01)
     monkeypatch.setattr(f2_progress, "_WATCH_INTERVAL", 0.01)
     monkeypatch.setattr(f2_progress, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
 
@@ -1250,7 +1255,7 @@ async def test_execute_f2_import_post_mode_reports_live_download_progress(
     conn.commit()
     conn.close()
     patch_f2(monkeypatch, "f2_available", lambda: True)
-    monkeypatch.setattr(f2_runner, "_WATCH_INTERVAL", 0.01)
+    monkeypatch.setattr(f2_fetch_stages, "_WATCH_INTERVAL", 0.01)
     monkeypatch.setattr(f2_progress, "_WATCH_INTERVAL", 0.01)
     monkeypatch.setattr(f2_progress, "_SOFT_PROGRESS_HALF_SECONDS", 1.0)
 
@@ -1262,7 +1267,7 @@ async def test_execute_f2_import_post_mode_reports_live_download_progress(
         time.sleep(0.3)
         return 0
 
-    monkeypatch.setattr(f2_runner, "_run_subprocess", _slow_download)
+    monkeypatch.setattr(f2_fetch_stages, "_run_subprocess", _slow_download)
 
     live: list[tuple[int, dict]] = []
     async with async_session() as db:
