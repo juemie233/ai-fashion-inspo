@@ -7,6 +7,15 @@
 
 ## 中优先级
 
+- [~] 继续拆分两个巨型文件（方法与剩余边界见 `docs/代码检查.md`「结构性欠账」一节）
+  - [x] `crop_service.py` 1238 → 1059：抽出 `crop_candidates.py`、`crop_vlm.py`
+  - [x] `f2_import.py` 2005 → 1931：抽出 `f2_library_ids.py`
+  - [ ] `f2_import.py` 切片 B：任务创建/调度（`create_f2_import_task` … `get_f2_auto_status`，约 460 行）→ `f2_task.py`
+  - [ ] `f2_import.py` 切片 D：取数阶段（`_fetch_personal_stage` … `_resolve_named_profile_keys`，约 530 行）→ `f2_fetch_stages.py`
+  - [ ] `f2_import.py` 切片 E：规划与入库（约 200 行）→ `f2_plan_apply.py`
+  - [ ] `f2_import.py` 切片 F：聚合与收尾（`_aggregate_collect_stage` / `_finalize_import`，约 170 行）→ `f2_finalize.py`
+  - [ ] `crop_service.py`：候选扫描（`scan_candidates` / `_scan_one_candidate`，约 340 行）→ `crop_scan.py`（需先抽共享助手，否则成环）
+
 ### 【任务】移动端真机可用性：功能补齐（P1/P2）
 
 **背景：** mobile（Expo RN）是「浏览+搜索+上传」最小闭环。**P0 的 API 地址配置已完成**——`mobile/app/settings.tsx` 可查看/修改/测试后端地址，`mobile/services/api.ts` 用 AsyncStorage 持久化并在请求拦截器里动态注入 baseURL，真机第一步不再被阻断。搜索、详情、任务能力仍远落后于 web 端。
