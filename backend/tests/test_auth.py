@@ -81,3 +81,27 @@ def test_destructive_without_key_config_skipped(client):
     assert r.status_code == 404  # 人物不存在（而非 401）
     r = client.delete("/api/inspirations/trash")
     assert r.status_code == 200
+
+
+def test_same_effect_routes_are_covered(client, monkeypatch):
+    """同效旁路必须一起进清单：PATCH 批量改名/改类别 与 不可逆的裁剪「应用」。
+
+    2026-10-20 审查发现：`POST /api/tags/batch-edit` 已在清单里，但做同一件事的
+    `PATCH /api/tags/batch-rename` 与 `PATCH /api/tags/batch-category` 不在——
+    同一破坏效果换个方法就绕过了 X-API-Key。裁剪 apply 会不可逆改写原图，同样补入。
+    """
+    monkeypatch.setattr(settings, "api_key", TEST_KEY)
+
+    assert (
+        client.patch("/api/tags/batch-rename", json={"items": []}).status_code == 401
+    )
+    assert (
+        client.patch("/api/tags/batch-category", json={"items": [], "category": "free"})
+        .status_code
+        == 401
+    )
+    assert (
+        client.post("/api/admin/crop-phone-screenshots/apply", json={"ids": []}).status_code
+        == 401
+    )
+

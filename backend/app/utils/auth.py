@@ -49,6 +49,11 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     ("POST", "/api/tags/{tag_id}/inspirations/batch-remove"),
     # 标签批量高级编辑（dry_run=false 改名/合并）
     ("POST", "/api/tags/batch-edit"),
+    # 同效的 PATCH 批量改名 / 批量改类别：与 batch-edit 的效果相同（批量覆盖写），
+    # 2026-10-20 审查发现此前只有 POST batch-edit 进了清单——同一个破坏效果换个
+    # 方法就能绕过认证，属于「清单与路由漂移」。
+    ("PATCH", "/api/tags/batch-rename"),
+    ("PATCH", "/api/tags/batch-category"),
     # 自动聚类应用（批量合并标签，删除源标签）
     ("POST", "/api/tags/clusters/apply"),
     # 标签操作历史回滚（批量写回数据）
@@ -77,6 +82,9 @@ DESTRUCTIVE_ROUTES: list[tuple[str, str]] = [
     # 模特照片删除（物理删除）
     ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}"),
     ("DELETE", "/api/models/{model_id}/photo-sets/{set_id}/photos/{photo_id}"),
+    # 手机截图裁剪「应用」：会**不可逆改写原图**（备份在 storage/_crop_backup，需人工恢复），
+    # 并同步重算内容哈希 / 缩略图 / 向量 —— 属批量破坏性写，2026-10-20 审查补入。
+    ("POST", "/api/admin/crop-phone-screenshots/apply"),
 ]
 
 
