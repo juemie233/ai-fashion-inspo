@@ -4,6 +4,7 @@
 由 worker 进程（app/worker.py）通过 TASK_HANDLERS 分发表调度。
 execute_deduplicate 原为 182 行巨型函数，现按阶段拆分为：
 - _collect_tagged_analyzed_ids：批量查询「有标签/已分析」素材 ID
+- _collect_manual_investment：批量查询「手工投入」（在合集里 / 人工审核过 / 打过评分）
 - _score_groups：评分并决定每组保留副本
 - _delete_files：物理删除冗余文件并统计释放空间
 """
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.collection import CollectionItem
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.tag import InspirationTag
 from app.models.task import TaskQueue
@@ -99,18 +101,73 @@ async def _collect_tagged_analyzed_ids(
     return tagged_ids, analyzed_ids
 
 
+async def _collect_manual_investment(
+    db: AsyncSession, all_ids: list[str]
+) -> tuple[set[str], set[str], set[str]]:
+    """批量查询「用户手工投入」的三个信号，供去重评分使用。
+
+    为什么需要（2026-10-20 审查发现）：原先的评分只认「标签 / 收藏 / 来源链接 /
+    AI 分析 / 缩略图」。但一条副本被**手工加进合集**、被**人工审核过**、被**打过评分**，
+    同样是无法自动重建的投入；删掉它等于把用户的工作一起删了，而且都不报错：
+
+    - 在合集里：`collection_items` 有 `ON DELETE CASCADE`，副本一删成员行跟着消失，
+      合集**静默少一张图**；
+    - 人工审核过：`quality_reviewed_by == "human"` 是人给的判定，删掉换了条 pending 的，
+      判定就丢了。注意**不能**用 `quality_status == "approved"` 判——手动上传按配置会
+      自动通过（`manual_upload_auto_approve`），那会把「自动通过」误当人工投入；
+    - 打过评分：`rating > 0` 是用户手点出来的。
+
+    与 `_collect_tagged_analyzed_ids` 一样分片查询，避免 IN(...) 超过 SQLite 变量上限。
+    """
+    in_collection: set[str] = set()
+    for chunk in _chunked(all_ids):
+        rows = await db.execute(
+            select(CollectionItem.inspiration_id)
+            .where(CollectionItem.inspiration_id.in_(chunk))
+            .distinct()
+        )
+        in_collection.update(r[0] for r in rows.all())
+
+    human_reviewed: set[str] = set()
+    rated: set[str] = set()
+    for chunk in _chunked(all_ids):
+        rows = await db.execute(
+            select(Inspiration.id, Inspiration.quality_reviewed_by, Inspiration.rating)
+            .where(Inspiration.id.in_(chunk))
+        )
+        for insp_id, reviewed_by, rating in rows.all():
+            if reviewed_by == "human":
+                human_reviewed.add(insp_id)
+            if rating:
+                rated.add(insp_id)
+
+    return in_collection, human_reviewed, rated
+
+
 def _score_groups(
     dup_groups: list[tuple[str, list[dict]]],
     tagged_ids: set[str],
     analyzed_ids: set[str],
     storage_root: Path,
+    *,
+    in_collection: set[str] | None = None,
+    human_reviewed: set[str] | None = None,
+    rated: set[str] | None = None,
 ) -> tuple[list[dict], list[str], list[tuple[str, str | None]]]:
     """按评分规则决定每组的保留副本与冗余副本。
 
-    评分规则：有标签 +100、已收藏 +50、有来源链接 +40、AI 分析成功 +30、
-    有缩略图 +10、创建时间更早优先（平局时 ID 更小）。
+    评分规则（越靠前越是「无法自动重建的人工投入」）：
+        有标签 +100、在合集里 +60、已收藏 +50、人工审核过 +45、有来源链接 +40、
+        AI 分析成功 +30、用户评分 +20、有缩略图 +10；平局时创建时间更早优先、再平 ID 更小。
+
+    「在合集里 / 人工审核过 / 用户评分」是 2026-10-20 补的维度：这三者都是用户手工
+    投入，删掉不可恢复（合集成员行还会被 CASCADE 一起删），但此前完全没进评分。
+
     返回 (详情列表, 待删除 ID, 待删除文件路径列表)。
     """
+    in_collection = in_collection or set()
+    human_reviewed = human_reviewed or set()
+    rated = rated or set()
     details: list[dict] = []
     ids_to_delete: list[str] = []
     files_to_delete: list[tuple[str, str | None]] = []
@@ -123,9 +180,15 @@ def _score_groups(
             if f["id"] in tagged_ids:
                 score += 100
                 reasons.append("有标签")
+            if f["id"] in in_collection:
+                score += 60
+                reasons.append("在合集里")
             if f["is_favorite"]:
                 score += 50
                 reasons.append("已收藏")
+            if f["id"] in human_reviewed:
+                score += 45
+                reasons.append("人工审核过")
             if f.get("source_url"):
                 # 有来源链接优先：f2 新命名能给出真实作品 ID 与原帖（/note/<id>、/video/<id>），
                 # 历史合成 ID 的同内容副本没有链接——评分打平时若按创建时间/ID 决定，
@@ -135,6 +198,9 @@ def _score_groups(
             if f["id"] in analyzed_ids:
                 score += 30
                 reasons.append("AI 已分析")
+            if f["id"] in rated:
+                score += 20
+                reasons.append("用户评分")
             if f["thumbnail_path"]:
                 score += 10
                 reasons.append("有缩略图")
@@ -230,8 +296,15 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     # 阶段 2：评分并决定每组保留哪个
     all_ids = [f["id"] for _h, group in dup_groups for f in group]
     tagged_ids, analyzed_ids = await _collect_tagged_analyzed_ids(db, all_ids)
+    in_collection, human_reviewed, rated = await _collect_manual_investment(db, all_ids)
     details, ids_to_delete, files_to_delete = _score_groups(
-        dup_groups, tagged_ids, analyzed_ids, storage_root
+        dup_groups,
+        tagged_ids,
+        analyzed_ids,
+        storage_root,
+        in_collection=in_collection,
+        human_reviewed=human_reviewed,
+        rated=rated,
     )
 
     if not ids_to_delete:
