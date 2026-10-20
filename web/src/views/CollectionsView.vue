@@ -14,8 +14,6 @@ import {
   fetchCollectionInspirations,
   fetchCollections,
   removeFromCollection,
-  reorderCollectionItems,
-  reorderCollections,
   type CollectionOut,
 } from '@/api/collections'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -25,6 +23,8 @@ import { describeSmartQuery } from '@/utils/collectionQuery'
 import { useTagsStore } from '@/stores/tags'
 import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useCollectionMutations } from '@/composables/useCollectionMutations'
+import { useCollectionListDnd } from '@/composables/useCollectionListDnd'
+import { useCollectionItemOrdering } from '@/composables/useCollectionItemOrdering'
 import type { InspirationOut } from '@/api/inspirations'
 
 const tagsStore = useTagsStore()
@@ -180,108 +180,17 @@ async function handleBatchRemove() {
   }
 }
 
-// ── 拖拽排序：合集列表 ──
+// ── 拖拽排序：合集列表（实现见 composables/useCollectionListDnd.ts）──
 
-const dragOverId = ref<number | null>(null)
-let draggingCollectionId: number | null = null
+const { dragOverId, onCollectionDragStart, onCollectionDrop } = useCollectionListDnd({
+  collections,
+  loadCollections,
+})
 
-function onCollectionDragStart(id: number) {
-  draggingCollectionId = id
-}
+// ── 拖拽排序：合集内素材（实现见 composables/useCollectionItemOrdering.ts）──
 
-async function onCollectionDrop(targetId: number) {
-  const from = draggingCollectionId
-  draggingCollectionId = null
-  dragOverId.value = null
-  if (from === null || from === targetId) return
-  const ids = collections.value.map((c) => c.id)
-  const fromIdx = ids.indexOf(from)
-  const toIdx = ids.indexOf(targetId)
-  if (fromIdx === -1 || toIdx === -1) return
-  ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0])
-  // 乐观更新 + 后端持久化
-  collections.value.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id))
-  try {
-    await reorderCollections(ids)
-    await loadCollections()
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '排序保存失败'))
-    loadCollections()
-  }
-}
-
-// ── 拖拽排序：合集内素材（排序模式下的缩略图条带） ──
-
-const ordering = ref(false)
-// 拖拽中的成员 ID：只在 onItemDragStart/onItemDrop 之间传递，不需要响应式，
-// 所以用普通变量（**并且在模板里通过函数赋值**，见下）
-let draggingItemId: string | null = null
-
-/**
- * 记录正在拖拽的成员。
- *
- * 为什么不在模板里直接写 `@dragstart="draggingItemId = it.id"`：那是全项目唯一一处
- * 「模板内给普通 let 变量赋值」的写法，IDE 的 Vue 语言服务会把该绑定按初始值推断成
- * `null` 从而报 2322（`不能将类型"string"分配给类型"null"`），而 vue-tsc 命令行不报
- * ——两边口径不一致。包一层函数既消除歧义，也与上面合集拖拽（onCollectionDragStart）
- * 的写法保持一致。
- */
-function onItemDragStart(id: string) {
-  draggingItemId = id
-}
-
-function enterOrdering() {
-  if (total.value > 200) {
-    Message.warning('素材过多，建议先用筛选精简后再编排顺序')
-    return
-  }
-  ordering.value = true
-  // 排序模式需要全量成员（分页瀑布流不便于编排），一次拉取
-  void loadAllForOrdering()
-}
-
-const orderedItems = ref<InspirationOut[]>([])
-
-async function loadAllForOrdering() {
-  const c = current.value
-  if (!c) return
-  try {
-    const data = await fetchCollectionInspirations(c.id, { page: 1, size: 500 })
-    orderedItems.value = data.items
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '加载成员失败'))
-  }
-}
-
-async function onItemDrop(targetId: string) {
-  const from = draggingItemId
-  draggingItemId = null
-  if (!from || from === targetId) return
-  const ids = orderedItems.value.map((i) => i.id)
-  const fromIdx = ids.indexOf(from)
-  const toIdx = ids.indexOf(targetId)
-  if (fromIdx === -1 || toIdx === -1) return
-  ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0])
-  orderedItems.value = ids
-    .map((id) => orderedItems.value.find((i) => i.id === id))
-    .filter((i): i is InspirationOut => !!i)
-}
-
-async function saveItemOrder() {
-  const c = current.value
-  if (!c) return
-  try {
-    await reorderCollectionItems(
-      c.id,
-      orderedItems.value.map((i) => i.id),
-    )
-    Message.success('顺序已保存')
-    ordering.value = false
-    loadContent()
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '保存顺序失败'))
-  }
-}
+const { ordering, orderedItems, onItemDragStart, enterOrdering, onItemDrop, saveItemOrder } =
+  useCollectionItemOrdering({ current, total, loadContent })
 
 // ── 条件摘要 ──
 

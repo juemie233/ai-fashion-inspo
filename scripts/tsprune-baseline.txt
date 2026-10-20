@@ -1,6 +1,10 @@
 # 前端死代码基线（ts-prune@0.10.3 快照，2026-10）。由 scripts/check-web-dead-code.mjs 比对，
 # 只对**新增**条目报错。格式：<仓库内相对路径> - <符号名>（**不含行号**，避免插入代码后整体位移）。
 # 已知误报：shared/types/* 与 mobile（React Native）共用；(used in module) 为模块内使用。
+# 2026-10：api/aiQuality.ts 的 3 个导出被 ReviewPanel.vue 使用，ts-prune 未解析 .vue 导入，属已知误报
+# 已知误报（2026-10-20 补）：ts-prune 只解析 .ts，**不追踪 .vue SFC 里的引用**，
+# 因此只被视图使用的 composable / 类型导出必然被报成死代码（useCollectionMutations、
+# useFaceScanActions 等历史条目同理）。新增这类模块时把它们加入本文件，并在提交信息里说明。
 shared/types/api.ts - ApiError
 shared/types/api.ts - PaginatedResponse
 shared/types/api.ts - PaginationParams
@@ -32,6 +36,9 @@ src/api/admin.ts - fetchPersonFrequency
 src/api/admin.ts - fetchPromptQuality
 src/api/admin.ts - startPhashBackfill
 src/api/aiModelStats.ts - fetchModelStats
+src/api/aiQuality.ts - QualityCorrectionPayload (used in module)
+src/api/aiQuality.ts - QualityCorrectionResult (used in module)
+src/api/aiQuality.ts - submitQualityCorrection
 src/api/inspirations.ts - AddTagsResult (used in module)
 src/api/inspirations.ts - AnalysisLogOut (used in module)
 src/api/inspirations.ts - BatchAddTagsResult (used in module)
@@ -129,6 +136,8 @@ src/composables/useBrowseContext.ts - useBrowseContext
 src/composables/useChromeManager.ts - CHROME_STATE_LABELS
 src/composables/useChromeManager.ts - CHROME_STATE_TAG
 src/composables/useChromeManager.ts - useChromeManager
+src/composables/useCollectionItemOrdering.ts - useCollectionItemOrdering
+src/composables/useCollectionListDnd.ts - useCollectionListDnd
 src/composables/useCollectionMutations.ts - useCollectionMutations
 src/composables/useDouyinBloggerPicker.ts - PickerBlogger (used in module)
 src/composables/useF2Import.ts - F2AuthorRow (used in module)
@@ -145,6 +154,8 @@ src/composables/useF2Results.ts - F2ResultTaskBrief (used in module)
 src/composables/useF2TaskHistory.ts - F2_HISTORY_PAGE_SIZE (used in module)
 src/composables/useFaceClusterGroups.ts - UseFaceClusterGroupsOptions (used in module)
 src/composables/useFaceClusterGroups.ts - useFaceClusterGroups
+src/composables/useFaceDetailPanel.ts - ResultTab (used in module)
+src/composables/useFaceDetailPanel.ts - useFaceDetailPanel
 src/composables/useFaceScanActions.ts - useFaceScanActions
 src/composables/useGpuMonitor.ts - GpuStats (used in module)
 src/composables/useGpuMonitor.ts - GpuTrendPoint (used in module)
@@ -271,7 +282,3 @@ src/utils/taskLabel.ts - taskStatusType
 src/utils/taskLabel.ts - taskTypeTagColor
 src/utils/taskPollUntilIdle.ts - PollableTask (used in module)
 src/utils/taskPresentation.ts - TaskRowActions (used in module)
-src/api/aiQuality.ts - QualityCorrectionPayload (used in module)
-src/api/aiQuality.ts - QualityCorrectionResult (used in module)
-src/api/aiQuality.ts - submitQualityCorrection
-# 2026-10：api/aiQuality.ts 的 3 个导出被 ReviewPanel.vue 使用，ts-prune 未解析 .vue 导入，属已知误报
