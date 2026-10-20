@@ -104,3 +104,8 @@ web/playwright-report/
 
 # 忽略插件
 .expert-mode
+
+# 质量分析 Prompt 配置（运行时被后端重写，属数据不属代码）
+prompt_configs.json
+backend/prompt_configs.json
+
