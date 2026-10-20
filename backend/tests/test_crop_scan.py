@@ -230,7 +230,9 @@ def test_content_mode_strong_glyph_listed(client, monkeypatch):
     insp = _upload_screenshot(client, buf.getvalue(), "image/jpeg")
 
     # 伪造检测结果：强字形命中（模拟真实状态栏时间/信号签名）
-    from app.services import crop_service as cs
+    # 切片 ⑤ 之后扫描逻辑住在 crop_scan：`analyze_screenshot_combined` 由**该模块**
+    # 读取，patch 旧模块（crop_service）不生效且不报错，只会静默扫不出候选。
+    from app.services import crop_scan as cs
 
     original = cs.analyze_screenshot_combined
 
@@ -269,7 +271,7 @@ def test_content_scan_stages_full_screenshot_first(client, monkeypatch):
     完整截图比例（合格候选几乎都在这一段），第一轮就能出候选；第二段（已裁过、
     只认强字形证据）由用户点「继续扫描」时接着扫。
     """
-    from app.services import crop_service as cs
+    from app.services import crop_scan as cs
 
     original = cs.analyze_screenshot_combined
 
@@ -605,7 +607,7 @@ def test_scan_vlm_review_marks_and_prioritizes(client, monkeypatch):
         calls["n"] += 1
         return calls["n"] == 1  # 第一个阳性，第二个阴性（移除）
 
-    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    monkeypatch.setattr("app.services.crop_scan._vlm_residue_review", _fake_review)
     r = _scan(client, mode="auto", vlm_review=True)
 
     assert r["vlm_reviewed"] is True
@@ -627,7 +629,7 @@ def test_scan_vlm_review_unknown_keeps_candidate(client, monkeypatch):
     async def _fake_review(full):
         return None  # 未知
 
-    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    monkeypatch.setattr("app.services.crop_scan._vlm_residue_review", _fake_review)
     r = _scan(client, mode="auto", vlm_review=True)
 
     assert r["vlm_hits"] == 0
@@ -649,7 +651,7 @@ def test_scan_vlm_review_can_be_disabled(client, monkeypatch):
         calls["n"] += 1
         return True
 
-    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _fake_review)
+    monkeypatch.setattr("app.services.crop_scan._vlm_residue_review", _fake_review)
     r = _scan(client, mode="auto", vlm_review=False)
 
     assert r["vlm_reviewed"] is False
@@ -666,7 +668,7 @@ def test_scan_vlm_review_silent_on_failure(client, monkeypatch):
     async def _boom(full):
         raise RuntimeError("ollama down")
 
-    monkeypatch.setattr("app.services.crop_service._vlm_residue_review", _boom)
+    monkeypatch.setattr("app.services.crop_scan._vlm_residue_review", _boom)
     r = _scan(client, mode="auto", vlm_review=True)
 
     assert r["vlm_reviewed"] is True  # 已请求复核（尝试过）
