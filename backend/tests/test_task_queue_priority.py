@@ -229,3 +229,124 @@ async def test_worker_concurrency_config(client, monkeypatch):
     assert settings.worker_concurrency == 1
     monkeypatch.setattr(settings, "analyze_concurrency", 2)
     assert settings.analyze_concurrency == 2
+
+
+# ── 失败路径的 rollback 与崩溃恢复的重试上限（2026-10-20 审查修复）──
+
+
+async def test_failed_task_rolls_back_handler_partial_writes(client, monkeypatch):
+    """handler 在 flush 后抛错：半成品写入必须被回滚，不能随 status=failed 一起提交。
+
+    审查前的行为：`_run_task` 的异常分支直接改状态并 commit，handler 已 flush 未提交的
+    行（如 quality_check 先写的 AIAnalysisLog）会被一起落库 —— 任务显示失败，日志却记了
+    「处理过」。这里用 AuditLog 复刻同一场景。
+    """
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.audit import AuditLog
+    from app.services.task_runners.common import PermanentTaskError
+
+    async def _partial_then_boom(db, task):
+        db.add(AuditLog(action="should_not_persist", count=1))
+        await db.flush()  # 已进事务，但还没提交
+        raise PermanentTaskError("模拟永久失败")
+
+    monkeypatch.setitem(TASK_HANDLERS, "batch_analyze", _partial_then_boom)
+    task_id = await _add_task(type_="batch_analyze", status="running")
+
+    await _run_task_safe(task_id)
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        leftover = (
+            await db.execute(select(AuditLog).where(AuditLog.action == "should_not_persist"))
+        ).scalars().all()
+
+    assert task.status == "failed"
+    assert task.error == "模拟永久失败"
+    assert leftover == []  # 半成品被 rollback 丢弃
+
+
+async def test_recoverable_failure_rolls_back_and_requeues(client, monkeypatch):
+    """可恢复失败：同样先回滚半成品，再回 pending 并计一次重试。"""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.audit import AuditLog
+    from app.services.task_runners.common import RecoverableTaskError
+
+    async def _partial_then_retry(db, task):
+        db.add(AuditLog(action="should_not_persist_either", count=1))
+        await db.flush()
+        raise RecoverableTaskError("Ollama 暂时不可用")
+
+    monkeypatch.setitem(TASK_HANDLERS, "batch_analyze", _partial_then_retry)
+    task_id = await _add_task(type_="batch_analyze", status="running")
+
+    await _run_task_safe(task_id)
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        leftover = (
+            await db.execute(
+                select(AuditLog).where(AuditLog.action == "should_not_persist_either")
+            )
+        ).scalars().all()
+
+    assert task.status == "pending"
+    assert task.retry_count == 1
+    assert task.next_retry_at is not None
+    assert leftover == []
+
+
+async def test_reset_stale_tasks_caps_retries(client):
+    """崩溃恢复：心跳超时 → pending 且 retry_count+1；用尽重试 → failed；新鲜心跳不动。"""
+    from datetime import timedelta
+
+    from app.database import async_session
+    from app.utils.time import utcnow
+    from app.worker import _STALE_HEARTBEAT_THRESHOLD, _reset_stale_tasks
+
+    dead_hb = utcnow() - timedelta(seconds=_STALE_HEARTBEAT_THRESHOLD + 60)
+
+    async with async_session() as db:
+        retryable = TaskQueue(
+            type="batch_analyze", status="running", progress=30, total=2, done=1,
+            result={}, max_retries=2, retry_count=1, claimed_by="dead-worker",
+            heartbeat_at=dead_hb,
+        )
+        exhausted = TaskQueue(
+            type="batch_analyze", status="running", progress=30, total=2, done=1,
+            result={}, max_retries=2, retry_count=2, claimed_by="dead-worker",
+            heartbeat_at=dead_hb,
+        )
+        alive = TaskQueue(
+            type="batch_analyze", status="running", progress=30, total=2, done=1,
+            result={}, max_retries=2, retry_count=0, claimed_by="live-worker",
+            heartbeat_at=utcnow(),
+        )
+        db.add_all([retryable, exhausted, alive])
+        await db.commit()
+        retryable_id, exhausted_id, alive_id = retryable.id, exhausted.id, alive.id
+
+    await _reset_stale_tasks()
+
+    async with async_session() as db:
+        retryable = await db.get(TaskQueue, retryable_id)
+        exhausted = await db.get(TaskQueue, exhausted_id)
+        alive = await db.get(TaskQueue, alive_id)
+
+    # 未用尽：回 pending，重试次数 +1，认领信息清空
+    assert retryable.status == "pending"
+    assert retryable.retry_count == 2
+    assert retryable.claimed_by is None
+    assert retryable.heartbeat_at is None
+
+    # 已用尽：直接 failed，不再无限重跑
+    assert exhausted.status == "failed"
+    assert "重试次数已用尽" in (exhausted.error or "")
+
+    # 心跳新鲜（别的 worker 正在跑）：完全不动
+    assert alive.status == "running"
+    assert alive.claimed_by == "live-worker"

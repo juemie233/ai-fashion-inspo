@@ -18,8 +18,9 @@ import time
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy import and_, case, delete, or_, select, update
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session, init_db
@@ -173,6 +174,30 @@ async def _claim_next_task(worker_id: str) -> int | None:
         return task_id
 
 
+async def _reload_for_failure(
+    db: AsyncSession, task_id: int
+) -> TaskQueue | None:
+    """失败处理前先回滚 handler 的未提交写入，再重新取任务行。
+
+    为什么必须先 rollback（2026-10-20 审查发现的通用缺陷）：各执行器常在中途
+    ``db.add(...)`` + ``flush()``、稍后逐轮 commit（例如 quality_check 先写
+    AIAnalysisLog / AIQualityReview 再提交）。若在 flush 之后抛错，直接
+    ``task.status = "failed"`` + commit，会把这些**半成品**一起落库——任务显示失败，
+    但日志/复核记录却写了「处理过」，下游统计与复审都会读到假数据。
+
+    rollback 之后原 task 实例已过期（属性访问需要异步刷新），所以必须 ``db.get`` 重新取；
+    任务若已被删除（如 404 清理），返回 None 让调用方安全跳过终态写入。
+    """
+    try:
+        await db.rollback()
+    except Exception as exc:  # noqa: BLE001 —— 回滚失败也不能掩盖原始异常
+        logger.warning(f"任务 #{task_id} 失败后 rollback 出错（继续标记终态）: {exc}")
+    fresh = await db.get(TaskQueue, task_id)
+    if fresh is None:
+        logger.warning(f"任务 #{task_id} 在失败处理时已不存在（可能被删除），跳过终态写入")
+    return fresh
+
+
 async def _run_task(task_id: int) -> None:
     """执行单个任务，处理成功 / 自动重试 / 失败标记。
 
@@ -215,9 +240,15 @@ async def _run_task(task_id: int) -> None:
             logger.info(f"任务完成: #{task.id} ({task.type})")
         except RecoverableTaskError as e:
             # 退避重试回 pending：非终态，不广播（前端经轮询/进度事件感知）
+            task = await _reload_for_failure(db, task_id)
+            if task is None:
+                return
             await _schedule_retry(db, task, str(e))
             await db.commit()
         except PermanentTaskError as e:
+            task = await _reload_for_failure(db, task_id)
+            if task is None:
+                return
             task.status = "failed"
             task.error = str(e)
             task.next_retry_at = None
@@ -225,6 +256,9 @@ async def _run_task(task_id: int) -> None:
             await db.commit()
             await _broadcast_task_event(task, "failed", error=str(e))
         except Exception as e:
+            task = await _reload_for_failure(db, task_id)
+            if task is None:
+                return
             msg = str(e) or e.__class__.__name__
             if _is_recoverable_error(msg):
                 await _schedule_retry(db, task, msg)
@@ -258,30 +292,55 @@ async def _reset_stale_tasks() -> None:
 
     相比原先「无条件重置全部 running」，心跳租约能安全支持多 worker 部署：
     任一 worker 重启都不会误重置另一存活 worker 正在执行的任务。
+
+    **重试次数上限（2026-10-20 审查发现）**：重置同时把 `retry_count + 1`。此前只改状态
+    不加计数，一个「必崩」的任务会在每次 worker 重启时被重新执行，永远跑不完、也永
+    不进入 failed；现在用尽 `max_retries` 的直接判失败，与 `_schedule_retry` 的口径一致。
     """
     now = utcnow()
     stale_before = now - timedelta(seconds=_STALE_HEARTBEAT_THRESHOLD)
+    stale_cond = and_(
+        TaskQueue.status == "running",
+        or_(
+            TaskQueue.heartbeat_at.is_(None),
+            TaskQueue.heartbeat_at < stale_before,
+        ),
+    )
     async with async_session() as db:
+        # 1) 重试次数已用尽：崩溃也算一次失败，直接判失败（否则无限重启循环）
+        exhausted = await db.execute(
+            update(TaskQueue)
+            .where(stale_cond, TaskQueue.retry_count >= TaskQueue.max_retries)
+            .values(
+                status="failed",
+                error="进程异常终止：worker 心跳超时且重试次数已用尽，任务标记失败",
+                claimed_by=None,
+                heartbeat_at=None,
+                updated_at=now,
+            )
+        )
+        # 2) 其余：回 pending 并把这次崩溃计为一次重试
         result = await db.execute(
             update(TaskQueue)
-            .where(
-                TaskQueue.status == "running",
-                or_(
-                    TaskQueue.heartbeat_at.is_(None),
-                    TaskQueue.heartbeat_at < stale_before,
-                ),
-            )
+            .where(stale_cond)
             .values(
                 status="pending",
                 error="进程异常终止：worker 心跳超时，任务已重置待重新执行",
+                retry_count=TaskQueue.retry_count + 1,
                 claimed_by=None,
                 heartbeat_at=None,
                 updated_at=now,
             )
         )
         await db.commit()
+        if exhausted.rowcount:
+            logger.error(
+                f"已把 {exhausted.rowcount} 个心跳超时且重试耗尽的遗留任务标记为 failed"
+            )
         if result.rowcount:
-            logger.warning(f"已重置 {result.rowcount} 个心跳超时的遗留 running 任务为 pending")
+            logger.warning(
+                f"已重置 {result.rowcount} 个心跳超时的遗留 running 任务为 pending（重试次数 +1）"
+            )
 
         # 清理僵尸服务心跳（已死的 worker 实例留下的心跳行），避免表无限膨胀
         await db.execute(
