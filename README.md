@@ -115,7 +115,7 @@ chrome_debug_port: int = 9222
 ### 质量审核体系完善（10-19，14 个提交）
 
 > 把「质量审核」从「二分类 + 手动翻案」补成可追溯、可复盘、成本可控的闭环。逐条取舍见各提交信息。
-> **8 个关键取舍的完整论证见 [docs/decisions/2026-10-19-quality-audit.md](docs/decisions/2026-10-19-quality-audit.md)**（默认关闭的开关、pass_rate 分母、unknown 不可比、负样本排除隐私、哈希抽样、人工判定优先、枚举与文本并存、灰区口径）。
+> **8 个关键取舍**（默认关闭的开关 / pass_rate 分母 / unknown 不可比 / 负样本排除隐私 / 哈希抽样 / 人工判定优先 / 枚举与文本并存 / 灰区口径）的完整论证见本机 docs/decisions/2026-10-19-quality-audit.md —— 该目录按仓库约定**不入库**（.gitignore L32），仅供本地查阅。
 
 - **视频纳入审核**（`60dd6ac`）：此前只取 `media_type=image`，视频既不通过也不拒绝、永远 pending，统计分母也是错的；现在视频用上传时 ffmpeg 抽好的**首帧缩略图**送审，无缩略图退回原文件（读图失败 → pending + 原因，不静默漏审）。新增模块级 `_audit_path()` 承载这个选择。
 - **随机复审不覆盖人工翻案**（`878c310`）：新增 `inspirations.quality_reviewed_by`（ai/human）；`human` 且非 pending 的素材**即使 `force=True` 也不覆盖**，命中返回可读原因；人工改状态（单个 PATCH / 批量更新）自动记 `human`，人工设回 pending 视为「要重审」仍允许覆盖。
