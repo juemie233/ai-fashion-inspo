@@ -22,6 +22,9 @@ from app.services.task_runners.common import (
     _analyze_concurrency,
     _broadcast_task_event,
     _is_recoverable_error,
+    # 与 f2 导入共用同一份实现（原先各写一遍）：这里保留同名别名，
+    # `monkeypatch.setattr(quality_check, "_current_status", fake)` 依然生效。
+    current_status as _current_status,
     utcnow,
 )
 from app.services.vector import store as vector_store
@@ -117,12 +120,6 @@ async def _quality_check_one(
             )
             await db.commit()
             return inspiration_id, status, reason, ai_generated
-
-
-async def _current_status(db: AsyncSession, task_id: int) -> str:
-    """重新读取任务当前状态（供取消/暂停判定）。"""
-    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task_id))
-    return result.scalar() or "running"
 
 
 def _audit_path(media_type: str, file_path: str, thumbnail_path: str | None) -> str:

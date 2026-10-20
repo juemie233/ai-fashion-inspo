@@ -13,6 +13,7 @@
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,20 +29,13 @@ from app.services.task_runners.f2_progress import _PROGRESS_AFTER_PLAN, _WATCH_I
 logger = logging.getLogger(__name__)
 
 
-async def _current_status(db: AsyncSession, task_id: int) -> str:
-    """重新读取任务当前状态（供取消/暂停判定）。
+"""状态读取函数：由编排层注入（见 ``execute_f2_import`` 的调用点）。
 
-    转发到 ``f2_import._current_status``，延迟导入有两个原因：
-
-    1. **测试的 monkeypatch 点**：tests/test_f2_import_execute.py 一律
-       ``monkeypatch.setattr(f2_import, "_current_status", ...)`` 来模拟取消/暂停，
-       阶段函数必须走这里才能让 patch 生效（照抄实现会**静默**失效：真读库返回
-       running，取消永远不发生）；
-    2. 避免 f2_import 与本模块在模块级互相导入（f2_import 文末要再导出本模块符号）。
-    """
-    from app.services.task_runners.f2_import import _current_status as impl
-
-    return await impl(db, task_id)
+为什么不从 common 直接 import：测试用
+``monkeypatch.setattr(f2_import, "_current_status", fake)`` 模拟取消/暂停，
+本模块自持名字的话拿到的是导入期快照——patch 不生效、取消**静默**不发生。
+"""
+StatusReader = Callable[[AsyncSession, int], Awaitable[str]]
 
 
 async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bloggers: dict,
@@ -157,7 +151,7 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
 
 
 async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list,
-                    make_thumbnails: bool) -> tuple[dict, dict]:
+                    make_thumbnails: bool, status_of: StatusReader) -> tuple[dict, dict]:
     """阶段 3：入库（同步 sqlite 放线程；进度 watcher + 状态检查）。
 
     返回 (apply_import 结果, 进度 holder)。"""
@@ -188,7 +182,7 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
             except TimeoutError:
                 pass
             try:
-                if await _current_status(db, task.id) not in ("running", "pending"):
+                if await status_of(db, task.id) not in ("running", "pending"):
                     holder["stop"] = True
                 task.done = holder["done"]
                 task.total = holder["total"]

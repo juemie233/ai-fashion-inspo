@@ -5,13 +5,13 @@
 的目标作者选择与逐作者下载、点名博主的主页链接解析。入库（扫描/去重/写入）与收尾
 结算不在本模块。
 
-`_current_status` 在这里**转发**到 ``f2_import``（见该函数 docstring）：阶段函数读任务
-状态必须走同一个 monkeypatch 点，否则测试里模拟的「取消 / 暂停」对搬家后的代码无效，
-且失败是**静默**的（真读库返回 running，什么都不发生）。
+任务状态读取函数 ``current_status`` 由编排层**注入**（参数 ``status_of``），本模块不自持：
+自持的话测试的取消/暂停 patch 会静默失效（详见 ``StatusReader`` 的注释）。
 """
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,19 +32,15 @@ from app.services.task_runners.f2_progress import (
 logger = logging.getLogger(__name__)
 
 
-async def _current_status(db: AsyncSession, task_id: int) -> str:
-    """重新读取任务当前状态（供取消/暂停判定）。
+"""状态读取函数：由编排层注入（见 ``execute_f2_import``），而不是本模块自己持有。
 
-    转发到 ``f2_import._current_status``，延迟导入有两个原因：
-
-    1. **测试的 monkeypatch 点**：tests/test_f2_import_execute.py 一律
-       ``monkeypatch.setattr(f2_import, "_current_status", ...)`` 来模拟取消/暂停，
-       阶段函数必须走这里才能让 patch 生效（照抄实现就会**静默**失效）；
-    2. 避免 f2_import 与本模块在模块级互相导入（f2_import 文末要再导出本模块符号）。
-    """
-    from app.services.task_runners.f2_import import _current_status as impl
-
-    return await impl(db, task_id)
+为什么要注入：阶段函数在循环里问「任务被取消了没」，而测试是用
+``monkeypatch.setattr(f2_import, "_current_status", fake)`` 模拟取消/暂停的。
+如果本模块自己 `from common import current_status`，拿到的是**导入期快照**，
+patch 不会生效、取消也**静默**不发生——这正是 2026-10-20 拆分时踩过的坑。
+参数注入让「谁持有名字、谁被 patch」保持单一：编排层持有，阶段函数只调用。
+"""
+StatusReader = Callable[[AsyncSession, int], Awaitable[str]]
 
 
 async def _fetch_personal_stage(
@@ -56,6 +52,7 @@ async def _fetch_personal_stage(
     like_user: str,
     like_max_counts: int,
     fetch_summary: dict,
+    status_of: StatusReader,
 ) -> bool:
     """阶段 1a：「我的喜欢 / 我的收藏」——单条命令翻页（不逐作者、不做时间窗口）。
 
@@ -142,8 +139,8 @@ async def _fetch_personal_stage(
     await db.commit()
 
     # 取消/暂停：与发布模式一致，立即收尾，不再做扫描与入库
-    if await _current_status(db, task.id) not in ("running", "pending"):
-        status_now = await _current_status(db, task.id)
+    if await status_of(db, task.id) not in ("running", "pending"):
+        status_now = await status_of(db, task.id)
         task.result = download_result
         task.status = status_now
         task.updated_at = utcnow()
@@ -170,6 +167,7 @@ async def _fetch_collects_by_folder_stage(
     collect_ids: list[str],
     max_per_folder: int,
     fetch_summary: dict,
+    status_of: StatusReader,
 ) -> bool:
     """阶段 1a′：「先扫描、后下载」——**只下载选中的收藏夹**（逐夹枚举 + f2 下载器）。
 
@@ -245,7 +243,7 @@ async def _fetch_collects_by_folder_stage(
             except TimeoutError:
                 pass
             try:
-                if await _current_status(db, task.id) not in ("running", "pending"):
+                if await status_of(db, task.id) not in ("running", "pending"):
                     holder["stop"] = True
                 task.done = len(holder["folders"])
                 task.progress = _collect_progress_pct(holder)
@@ -318,8 +316,8 @@ async def _fetch_collects_by_folder_stage(
     await db.commit()
 
     # 取消/暂停：立即收尾，不再做扫描与入库（已下载文件保留，重跑按内容判重跳过）
-    if await _current_status(db, task.id) not in ("running", "pending"):
-        status_now = await _current_status(db, task.id)
+    if await status_of(db, task.id) not in ("running", "pending"):
+        status_now = await status_of(db, task.id)
         task.result = download_result
         task.status = status_now
         task.updated_at = utcnow()
@@ -416,7 +414,7 @@ def _select_post_targets(
 
 async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targets: list[dict],
                    profiles: list[str], since_days: int, f2_dir: Path,
-                   fetch_summary: dict) -> bool:
+                   fetch_summary: dict, status_of: StatusReader) -> bool:
     """阶段 1b：发布模式——逐作者串行下载（子进程放线程）。
 
     返回 True 表示任务已被取消/暂停（已落库，调用方直接返回）。"""
@@ -434,7 +432,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
     last_download = await asyncio.to_thread(f2.author_last_download, post_root)
 
     for index, author in enumerate(targets, 1):
-        if await _current_status(db, task.id) not in ("running", "pending"):
+        if await status_of(db, task.id) not in ("running", "pending"):
             fetch_summary["aborted"] = True
             break
         display = f2.profile_display(author)
@@ -523,7 +521,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
     # 中断后继续跑纯属浪费，还会让「取消」看起来迟迟不生效。已下载的文件留在
     # f2 目录，恢复/重跑时增量下载与内容判重会自动跳过它们。
     if fetch_summary["aborted"]:
-        status_now = await _current_status(db, task.id)
+        status_now = await status_of(db, task.id)
         task.result = {**opts, "stage": "download", "fetch": fetch_summary}
         task.status = status_now
         task.updated_at = utcnow()

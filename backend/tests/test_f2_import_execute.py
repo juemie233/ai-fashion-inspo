@@ -13,8 +13,9 @@ from app.services import task_runner
 from app.services.task_runners import f2_import as f2_runner
 # 切片 D 之后下载阶段住在 f2_fetch_stages：`_run_subprocess` / `_WATCH_INTERVAL` 由
 # **该模块**读取，patch 旧模块（f2_import）不生效且不报错（调用的是真子进程），
-# 所以这两项必须 patch f2_fetch_stages。`_current_status` 仍 patch f2_import——
-# f2_fetch_stages 的同名函数是转发壳（见其 docstring），两边都指向同一个实现。
+# 所以这两项必须 patch f2_fetch_stages。`_current_status` 仍 patch f2_import：
+# 编排层（execute_f2_import）持有这个名字，并把它作为 `status_of` **注入**给各阶段函数，
+# 所以 patch 一处就能同时影响取数阶段与入库阶段（见 f2_fetch_stages 的 StatusReader 注释）。
 from app.services.task_runners import f2_fetch_stages
 from app.services.task_runners import f2_progress
 from app.services.task_runners.common import utcnow

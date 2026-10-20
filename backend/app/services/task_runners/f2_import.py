@@ -33,7 +33,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import TaskQueue
-from app.services.task_runners.common import PermanentTaskError, utcnow
+from app.services.task_runners.common import (
+    PermanentTaskError,
+    # 取消/暂停判定：实现住在 common.py，这里持有同名别名是为了让
+    # `monkeypatch.setattr(f2_import, "_current_status", fake)` 继续生效（测试依赖），
+    # 同时把同一个可调用对象**注入**给各阶段函数（见 execute_f2_import 的调用点）。
+    current_status as _current_status,
+    utcnow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -308,12 +315,6 @@ def f2_import_status() -> dict:
         shown = "、".join(names[:5]) + ("…" if len(names) > 5 else "")
         info["reason"] += f"；另有 {len(names)} 个未登记账号会被跳过（{shown}）"
     return info
-
-
-async def _current_status(db: AsyncSession, task_id: int) -> str:
-    """重新读取任务当前状态（供取消/暂停判定）。"""
-    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task_id))
-    return result.scalar() or "running"
 
 
 async def _last_f2_task(db: AsyncSession) -> tuple[int | None, datetime | None, int | None]:
@@ -664,13 +665,29 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
     if fetch_enabled and personal_mode and collect_ids and fetch_mode == "collection":
         # 「先扫描、后下载」：只下选中的收藏夹（逐夹枚举 + f2 下载器，页间可中断）
         if await _fetch_collects_by_folder_stage(
-            db, task, opts, f2_dir, like_user, collect_ids, like_max_counts, fetch_summary
+            db,
+            task,
+            opts,
+            f2_dir,
+            like_user,
+            collect_ids,
+            like_max_counts,
+            fetch_summary,
+            status_of=_current_status,
         ):
             return
 
     elif fetch_enabled and personal_mode:
         if await _fetch_personal_stage(
-            db, task, opts, f2_dir, fetch_mode, like_user, like_max_counts, fetch_summary
+            db,
+            task,
+            opts,
+            f2_dir,
+            fetch_mode,
+            like_user,
+            like_max_counts,
+            fetch_summary,
+            status_of=_current_status,
         ):
             return
 
@@ -680,7 +697,15 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
             profiles, known_authors, authors, opts.get("fetch_limit")
         )
         if await _fetch_posts_stage(
-            db, task, opts, targets, profiles, since_days, f2_dir, fetch_summary
+            db,
+            task,
+            opts,
+            targets,
+            profiles,
+            since_days,
+            f2_dir,
+            fetch_summary,
+            status_of=_current_status,
         ):
             return
 
@@ -771,7 +796,9 @@ async def execute_f2_import(db: AsyncSession, task: TaskQueue) -> None:
         return
 
     # ── 阶段 3：入库（同步 sqlite 放线程；进度回调 + 状态检查）──
-    result, holder = await _apply_import_stage(db, task, to_import, make_thumbnails)
+    result, holder = await _apply_import_stage(
+        db, task, to_import, make_thumbnails, status_of=_current_status
+    )
 
     status_now = await _current_status(db, task.id)
     interrupted = status_now in ("cancelled", "paused")

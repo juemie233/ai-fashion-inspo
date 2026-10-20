@@ -178,3 +178,21 @@ async def _schedule_retry(db: AsyncSession, task: TaskQueue, error_msg: str) -> 
         task.status = "failed"
         task.next_retry_at = None
         logger.error(f"任务已超过最大重试次数，标记失败: #{task.id}")
+
+
+async def current_status(db: AsyncSession, task_id: int) -> str:
+    """重新读取任务当前状态（供取消 / 暂停判定）。
+
+    为什么放在共用模块：几乎所有长任务执行器都要在循环里问「任务被取消了没」——
+    f2 导入的三个取数阶段、入库阶段、质量审核任务都各有一份同样的实现（甚至
+    转发壳），重复到「改一处漏两处」。这里定一处，各执行器按需引用。
+
+    **测试约定（很重要）**：执行器要能在测试里被模拟取消/暂停，就必须让
+    `monkeypatch.setattr(<执行器模块>, "_current_status", fake)` 生效——所以调用方
+    应该在**自己的模块里**持有这个名字（`from ... import current_status as
+    _current_status`，或由编排层把它作为参数注入阶段函数），不要在调用点写
+    `common.current_status(...)`：那样 patch 不到，取消行为会**静默失效**。
+    """
+    result = await db.execute(select(TaskQueue.status).where(TaskQueue.id == task_id))
+    return result.scalar() or "running"
+
