@@ -155,7 +155,7 @@ async def scan_tag_clusters(
     def _compute_pairs() -> list[tuple[int, int, float, str]]:
         """CPU 密集的候选对计算（放线程池执行，避免阻塞事件循环）。"""
         pairs: list[tuple[int, int, float, str]] = []
-        for category, cat_tags in by_category.items():
+        for _category, cat_tags in by_category.items():
             n = len(cat_tags)
             if n < 2:
                 continue

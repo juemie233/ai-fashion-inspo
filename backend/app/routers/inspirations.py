@@ -212,7 +212,7 @@ async def create_from_url(
         try:
             scraper_task_id = int(scraper_task_id)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="scraper_task_id 非法")
+            raise HTTPException(status_code=400, detail="scraper_task_id 非法") from None
 
     inspiration = await inspiration_service.create_inspiration_from_url(
         db,

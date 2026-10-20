@@ -85,13 +85,13 @@ class Blogger(_PersonBaseFields, Base):
         back_populates="blogger",
         cascade="all, delete-orphan",
     )
-    face_embedding: Mapped["BloggerFaceEmbedding | None"] = relationship(
+    face_embedding: Mapped["BloggerFaceEmbedding | None"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "BloggerFaceEmbedding",
         back_populates="blogger",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationFaceDetection",
         back_populates="matched_blogger",
     )
@@ -125,13 +125,13 @@ class Model(_PersonBaseFields, Base):
         back_populates="model",
         cascade="all, delete-orphan",
     )
-    face_embedding: Mapped["ModelFaceEmbedding | None"] = relationship(
+    face_embedding: Mapped["ModelFaceEmbedding | None"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "ModelFaceEmbedding",
         back_populates="model",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationFaceDetection",
         back_populates="matched_model",
     )
@@ -162,7 +162,7 @@ class InspirationBlogger(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
 
     # 关联关系
-    inspiration: Mapped["Inspiration"] = relationship(
+    inspiration: Mapped["Inspiration"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Inspiration", back_populates="bloggers"
     )
     # raise_on_sql：必须链式预加载（见 inspiration_query.inspiration_load_options），
@@ -204,7 +204,7 @@ class InspirationModel(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
 
     # 关联关系
-    inspiration: Mapped["Inspiration"] = relationship(
+    inspiration: Mapped["Inspiration"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Inspiration", back_populates="models"
     )
     # 同 InspirationBlogger.blogger：内层实体必须链式预加载，漏了当场报错

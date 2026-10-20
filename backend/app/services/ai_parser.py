@@ -189,17 +189,24 @@ def repair_truncated_json(text: str) -> str | None:
     escaped = False
     for ch in fragment:
         if escaped:
-            escaped = False; continue
+            escaped = False
+            continue
         if ch == '\\':
-            escaped = True; continue
+            escaped = True
+            continue
         if ch == '"':
-            in_string = not in_string; continue
+            in_string = not in_string
+            continue
         if in_string:
             continue
-        if ch == '{': brackets.append('}')
-        elif ch == '[': brackets.append(']')
-        elif ch == '}' and brackets and brackets[-1] == '}': brackets.pop()
-        elif ch == ']' and brackets and brackets[-1] == ']': brackets.pop()
+        if ch == '{':
+            brackets.append('}')
+        elif ch == '[':
+            brackets.append(']')
+        elif ch == '}' and brackets and brackets[-1] == '}':
+            brackets.pop()
+        elif ch == ']' and brackets and brackets[-1] == ']':
+            brackets.pop()
 
     # 闭合末尾未闭合的字符串（模型被截断时常见）
     if in_string:

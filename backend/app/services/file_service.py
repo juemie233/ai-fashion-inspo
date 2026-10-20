@@ -69,7 +69,7 @@ def validate_media(path: Path, content_type: str | None = None) -> None:
                 head = f.read(12)
         except OSError as e:
             _log.warning(f"视频魔数读取失败: {path} — {e}")
-            raise HTTPException(status_code=400, detail="文件不是有效的视频（无法读取）")
+            raise HTTPException(status_code=400, detail="文件不是有效的视频（无法读取）") from None
         if b"ftyp" not in head:
             raise HTTPException(status_code=400, detail="文件不是有效的视频（缺少 MP4 头）")
         return
@@ -82,7 +82,7 @@ def validate_media(path: Path, content_type: str | None = None) -> None:
             img.verify()
     except Exception as e:
         _log.warning(f"图片校验失败: {path} — {e}")
-        raise HTTPException(status_code=400, detail="文件不是有效的图片，请检查文件是否损坏")
+        raise HTTPException(status_code=400, detail="文件不是有效的图片，请检查文件是否损坏") from None
 
 
 async def _generate_video_thumbnail(

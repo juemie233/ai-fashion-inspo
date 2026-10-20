@@ -10,20 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-from app.config import settings
-from app.database import get_db
-from app.models.inspiration import (
+from app.config import settings  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.database import get_db  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.models.inspiration import (  # noqa: E402  (有意延迟导入：避免循环依赖)
     AIAnalysisLog,
     Inspiration,
     NOT_DELETED,
     latest_analysis_log_subquery,
     utcnow,
 )
-from app.models.tag import InspirationTag
-from app.services import admin_stats_service, backup_service, inspiration_service
-from app.services import audit_service
-from app.services.audit_service import record_audit_log
-from app.schemas.admin import NearDuplicateScanRequest, PhoneCropRequest, PhoneCropApplyRequest, VectorBackfillRequest
+from app.models.tag import InspirationTag  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.services import admin_stats_service, backup_service, inspiration_service  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.services import audit_service  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.services.audit_service import record_audit_log  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.schemas.admin import NearDuplicateScanRequest, PhoneCropRequest, PhoneCropApplyRequest, VectorBackfillRequest  # noqa: E402  (有意延迟导入：避免循环依赖)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -447,7 +447,7 @@ async def crop_phone_screenshots_scan(
             vlm_review=payload.vlm_review,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.post("/crop-phone-screenshots/apply")
@@ -470,4 +470,4 @@ async def crop_phone_screenshots_apply(
             crop_bottom=payload.crop_bottom,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None

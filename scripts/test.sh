@@ -33,3 +33,7 @@ echo "✅ 全部测试通过"
 # 迁移漂移门禁：ORM 模型与库结构必须一致（见 docs/代码检查.md）
 (cd backend && python scripts/check_alembic_drift.py)
 
+
+# 后端 lint 门禁：全仓 ruff 必须零告警（存量已于 2026-10 清零）
+(cd backend && python -m ruff check app)
+

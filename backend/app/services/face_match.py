@@ -269,7 +269,7 @@ async def match_all_faces(
         chunk = valid[start : start + chunk_size]
         faces = np.stack([emb for _det, emb in chunk], axis=0).astype(np.float32)
         results = matrix_match_faces(faces, library, thr)
-        for (det, _emb), result in zip(chunk, results):
+        for (det, _emb), result in zip(chunk, results, strict=False):
             if result is None:
                 new_blogger: int | None = None
                 new_model: int | None = None

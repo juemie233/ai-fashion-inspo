@@ -331,7 +331,7 @@ async def analysis_history(
             start_date, end_date, sort_by, prompt_version,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}")
+        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}") from None
 
 
 @router.get("/history/export")
@@ -352,7 +352,7 @@ async def export_analysis_history_csv(
             prompt_version,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}")
+        raise HTTPException(status_code=400, detail=f"时间参数格式错误: {e}") from None
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -781,7 +781,7 @@ async def compare_analyses(
     try:
         return await ai_svc.get_analysis_comparison(db, inspiration_id)
     except ai_svc.AIAnalysisNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
 
 
 @router.post("/compare-batch")
@@ -806,9 +806,9 @@ async def compare_analyses_batch(
     try:
         return await ai_svc.compare_logs_batch(db, log_ids)
     except ai_svc.AIAnalysisNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.post("/history/{log_id}/apply")
@@ -824,9 +824,9 @@ async def apply_analysis_log_to_material(
     try:
         result = await ai_svc.apply_analysis_to_material(db, log_id)
     except ai_svc.AIAnalysisNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {
         "message": f"已把 {result['applied']} 个标签应用到素材",
         **result,

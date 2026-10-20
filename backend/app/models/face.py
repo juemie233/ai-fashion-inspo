@@ -44,7 +44,7 @@ class BloggerFaceEmbedding(Base):
     )
 
     # 关联关系
-    blogger: Mapped["Blogger"] = relationship(
+    blogger: Mapped["Blogger"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Blogger", back_populates="face_embedding"
     )
 
@@ -71,7 +71,7 @@ class ModelFaceEmbedding(Base):
     )
 
     # 关联关系
-    model: Mapped["Model"] = relationship("Model", back_populates="face_embedding")
+    model: Mapped["Model"] = relationship("Model", back_populates="face_embedding")  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
 
     def __repr__(self) -> str:
         return f"<ModelFaceEmbedding(model_id={self.model_id})>"
@@ -131,13 +131,13 @@ class InspirationFaceDetection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     # 关联关系
-    inspiration: Mapped["Inspiration"] = relationship(
+    inspiration: Mapped["Inspiration"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Inspiration", back_populates="face_detections"
     )
-    matched_blogger: Mapped["Blogger | None"] = relationship(
+    matched_blogger: Mapped["Blogger | None"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Blogger", back_populates="face_detections"
     )
-    matched_model: Mapped["Model | None"] = relationship(
+    matched_model: Mapped["Model | None"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Model", back_populates="face_detections"
     )
 

@@ -235,7 +235,7 @@ async def batch_edit_tags(
             if rule.get("type") in ("regex_replace", "regex_merge"):
                 re.compile(rule.get("pattern", ""))
     except re.error as e:
-        raise ValueError(f"正则表达式无效: {e}")
+        raise ValueError(f"正则表达式无效: {e}") from None
 
     # 收集全部作用标签（各规则 scope 取并集），并记录每条规则的 scope 标签集合
     # （规则管道按各自 scope 过滤，避免误作用于其它规则的标签）

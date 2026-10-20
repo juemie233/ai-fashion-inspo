@@ -52,7 +52,7 @@ async def _ensure_model_installed(model_name: str) -> None:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}") from None
 
 
 @router.get("/models")
@@ -103,7 +103,7 @@ async def list_models() -> dict:
             "embedding_model": embedding,
         }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}") from None
 
 
 async def _get_ollama_uptime_seconds() -> int | None:
@@ -209,7 +209,7 @@ async def model_detail(model_name: str) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}")
+        raise HTTPException(status_code=503, detail=f"无法连接 Ollama: {e}") from None
 
     details = data.get("details") or {}
     model_info = data.get("model_info") or {}
@@ -260,7 +260,7 @@ async def copy_model(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"复制失败: {e}")
+        raise HTTPException(status_code=500, detail=f"复制失败: {e}") from None
 
 
 @router.delete("/models/{model_name:path}")
@@ -283,7 +283,7 @@ async def delete_model(model_name: str) -> dict[str, str]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}") from None
 
 
 @router.put("/models/active")
@@ -335,7 +335,7 @@ async def unload_model(model_name: str = Query(...)) -> dict[str, str]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"卸载失败: {e}")
+        raise HTTPException(status_code=503, detail=f"卸载失败: {e}") from None
 
 
 # ============ 模型统计 ============

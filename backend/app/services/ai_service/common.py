@@ -31,7 +31,7 @@ def _read_image_base64_sync(file_path: str) -> tuple[str, float]:
     try:
         full_path.relative_to(storage_root)
     except ValueError:
-        raise ValueError(f"非法的文件路径: {file_path}")
+        raise ValueError(f"非法的文件路径: {file_path}") from None
     if not full_path.exists():
         raise FileNotFoundError(f"图片不存在: {full_path}")
     if not full_path.is_file():

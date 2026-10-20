@@ -559,7 +559,7 @@ def _get_vectors_sync(kind: str, inspiration_ids: list[str]) -> dict[str, list[f
         insp_col = arrow_table["inspiration_id"].to_pylist()
         vec_col = arrow_table["vector"].to_pylist()
         result: dict[str, list[float]] = {}
-        for insp_id, vec in zip(insp_col, vec_col):
+        for insp_id, vec in zip(insp_col, vec_col, strict=False):
             if insp_id in id_set:
                 result[str(insp_id)] = [float(x) for x in vec]
         return result

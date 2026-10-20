@@ -41,7 +41,7 @@ async def import_bloggers_csv(db: AsyncSession, file: UploadFile) -> dict:
     except UnicodeDecodeError:
         raise HTTPException(
             status_code=400, detail="文件编码不是 UTF-8，请转换为 UTF-8 后重试"
-        )
+        ) from None
 
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:

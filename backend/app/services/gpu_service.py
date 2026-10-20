@@ -56,7 +56,7 @@ async def _query_nvidia_smi(result: dict) -> None:
         except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise Exception("nvidia-smi 查询超时")
+            raise Exception("nvidia-smi 查询超时") from None
         if proc.returncode == 0 and stdout:
             line = stdout.decode().strip().split("\n")[0]  # 取第一张 GPU
             parts = [p.strip() for p in line.split(",")]

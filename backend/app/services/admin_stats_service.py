@@ -8,29 +8,29 @@ from app.utils.file_hash import build_hash_map
 若干 ≤60 行的小函数，便于单独阅读与测试。
 """
 
-import asyncio
+import asyncio  # noqa: E402  (有意延迟导入：避免循环依赖)
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta  # noqa: E402  (有意延迟导入：避免循环依赖)
 
-from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select, text  # noqa: E402  (有意延迟导入：避免循环依赖)
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402  (有意延迟导入：避免循环依赖)
 
-from app.config import settings
-from app.models.inspiration import (
+from app.config import settings  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.models.inspiration import (  # noqa: E402  (有意延迟导入：避免循环依赖)
     AIAnalysisLog,
     Inspiration,
     NOT_DELETED,
     analysis_log_filter,
     latest_analysis_log_subquery,
 )
-from app.models.scraper import ScraperSeenURL
-from app.models.tag import Tag, InspirationTag
-from app.utils.time import utcnow
-import csv
-import io
-from app.utils.csv_safety import sanitize_csv_cell
-from app.services.inspiration_query import inspiration_load_options
-from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model
+from app.models.scraper import ScraperSeenURL  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.models.tag import Tag, InspirationTag  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.utils.time import utcnow  # noqa: E402  (有意延迟导入：避免循环依赖)
+import csv  # noqa: E402  (有意延迟导入：避免循环依赖)
+import io  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.utils.csv_safety import sanitize_csv_cell  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.services.inspiration_query import inspiration_load_options  # noqa: E402  (有意延迟导入：避免循环依赖)
+from app.models.person import Blogger, InspirationBlogger, InspirationModel, Model  # noqa: E402  (有意延迟导入：避免循环依赖)
 
 # 素材媒体目录：完整性检查/存储统计只扫描这些目录，排除 lancedb（向量库）、
 # logs（日志）、cookies、debug 等非素材数据，否则会把向量库内部文件误判为

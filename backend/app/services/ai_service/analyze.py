@@ -123,9 +123,9 @@ async def _call_ollama_vision(
                     raise RuntimeError(
                         f"AI 模型响应超时 ({settings.ai_analysis_timeout} 秒)，"
                         "请检查 Ollama 是否正常运行或尝试增大超时时间"
-                    )
+                    ) from None
                 except httpx.ConnectError:
-                    raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动")
+                    raise RuntimeError("无法连接 Ollama 服务，请确认 Ollama 已启动") from None
 
                 result = response.json()
                 if not isinstance(result, dict) or "message" not in result:
@@ -397,7 +397,10 @@ async def analyze_image(
             extracted_tags,
             model_name=used_model,
         )
-        return success
+
+    # 注意：return 必须放在 finally 之外。放在 finally 里会**吞掉** try 块的异常
+    # （Python 语义：finally 中的 return 会取代正在传播的异常），导致失败被伪装成正常返回。
+    return success
 
 
 async def analyze_video(

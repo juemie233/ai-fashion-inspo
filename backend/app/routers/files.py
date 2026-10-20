@@ -65,7 +65,7 @@ async def serve_file(file_path: str) -> FileResponse:
         if not full_path.is_relative_to(root):
             raise HTTPException(status_code=403, detail="访问被拒绝")
     except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="无效路径")
+        raise HTTPException(status_code=400, detail="无效路径") from None
 
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status_code=404, detail="文件未找到")

@@ -45,6 +45,6 @@ async def generate_person_bio_endpoint(
     try:
         bio = await generate_person_bio(inputs)
     except BioGenerationError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from None
 
     return {"bio": bio}

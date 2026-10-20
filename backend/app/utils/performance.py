@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def async_performance_monitor(func_name: str = None):
     """性能监控装饰器：记录函数执行时间。
-    
+
     Args:
         func_name: 函数名称，默认使用函数名
     """
@@ -68,12 +68,12 @@ class BatchProcessor:
         task_name: str = "批量任务"
     ) -> list[Any]:
         """并行处理批量任务。
-        
+
         Args:
             tasks: 任务列表，每个元素为 (参数, 函数) 元组；
                    参数可为单值或元组/列表（自动归一化为位置参数）
             task_name: 任务名称，用于日志
-            
+
         Returns:
             结果列表，与输入顺序一致
         """
@@ -156,13 +156,13 @@ async def process_files_concurrently(
     use_cache: bool = True
 ) -> list[Any]:
     """并发处理文件列表。
-    
+
     Args:
         file_paths: 文件路径列表
         process_func: 处理函数，接受文件路径作为参数
         max_concurrent: 最大并发数
         use_cache: 是否使用缓存
-        
+
     Returns:
         处理结果列表
     """
@@ -200,12 +200,12 @@ async def process_images_parallel(
     batch_size: int = 10
 ) -> list[Any]:
     """并行处理图片，分批执行避免内存溢出。
-    
+
     Args:
         image_paths: 图片路径列表
         process_func: 处理函数
         batch_size: 每批处理数量
-        
+
     Returns:
         处理结果列表
     """

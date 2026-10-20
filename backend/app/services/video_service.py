@@ -208,7 +208,7 @@ async def resolve_analysis_frames(inspiration) -> list[str]:
     if media_type != "video":
         return []
 
-    insp_id = str(inspiration.id)
+    str(inspiration.id)
     frames = await extract_keyframes(inspiration)
     if not frames:
         return []

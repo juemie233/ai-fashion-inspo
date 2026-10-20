@@ -134,7 +134,7 @@ async def test_analyze(
             Image.open(BytesIO(image_bytes)).convert("RGB").save(buf, "JPEG", quality=95)
             image_bytes = buf.getvalue()
         except Exception as e:
-            raise HTTPException(400, f"WebP 转换失败: {e}")
+            raise HTTPException(400, f"WebP 转换失败: {e}") from None
 
     image_data = b64.b64encode(image_bytes).decode("utf-8")
     prompt = custom_prompt or get_model_prompt(settings.ollama_vision_model)

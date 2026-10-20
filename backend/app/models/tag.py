@@ -83,7 +83,7 @@ class InspirationTag(Base):
     )
 
     # 关联关系
-    inspiration: Mapped["Inspiration"] = relationship(
+    inspiration: Mapped["Inspiration"] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "Inspiration", back_populates="tags"
     )
     # raise_on_sql：内层实体**必须**由调用方链式预加载（见

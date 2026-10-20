@@ -222,7 +222,7 @@ def betweenness_centrality_batch(
         processed = idx + 1
         if processed % batch_size == 0:
             progress = 55 + int(processed / total_sources * 35)  # 55~90%
-            state = TagNetworkState(
+            TagNetworkState(
                 stage="betweenness_centrality",
                 progress=progress,
                 iteration=processed,
@@ -304,7 +304,8 @@ def _prune_edges(
         return edge_pairs
     from collections import defaultdict
 
-    key = lambda a, b: (min(a, b), max(a, b))
+    def key(a, b):
+        return (min(a, b), max(a, b))
     # 按权重降序贪心：一条边入列当且仅当两端点已保留边数均未达上限
     ranked = sorted(
         edge_pairs, key=lambda ab: -pair_weight.get(key(ab[0], ab[1]), 0)

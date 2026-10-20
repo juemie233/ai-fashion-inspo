@@ -5,7 +5,7 @@ from typing import Any
 
 class AppException(Exception):
     """基础异常类，所有自定义异常的基类。
-    
+
     注意：避免使用 BaseException 作为类名，因为这是Python内置类。
     """
 

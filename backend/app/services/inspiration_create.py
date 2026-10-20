@@ -63,7 +63,7 @@ def _validate_download_url(url: str) -> None:
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
-        raise validation_error("url", "下载地址无法解析")
+        raise validation_error("url", "下载地址无法解析") from None
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if (
@@ -141,7 +141,7 @@ async def create_inspiration(
         # 并发下撞唯一约束（如平台 ID 部分唯一索引）：清理已落盘文件后转 409，
         # 避免残留孤儿文件与 500
         delete_files(file_path, thumb_path)
-        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
+        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）") from None
     await db.refresh(inspiration)
 
     # 视频入库后后台预热关键帧（fire-and-forget：详情页展示 / 向量首帧 / 人脸扫描
@@ -266,17 +266,17 @@ async def create_inspiration_from_url(
         # 流式读取中途超时：清理半写文件，避免残留孤儿文件
         if file_path_obj and file_path_obj.exists():
             file_path_obj.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问")
+        raise HTTPException(status_code=400, detail="下载超时，请检查 URL 是否可访问") from None
     except httpx.HTTPStatusError:
         if file_path_obj and file_path_obj.exists():
             file_path_obj.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="下载失败：目标地址返回非 2xx 状态码")
+        raise HTTPException(status_code=400, detail="下载失败：目标地址返回非 2xx 状态码") from None
     except Exception:
         # 网络/磁盘等其它异常：清理半写文件；内部细节只记日志，不泄露给客户端
         logger.exception(f"URL 下载失败: {url[:100]}")
         if file_path_obj and file_path_obj.exists():
             file_path_obj.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="下载失败，请检查 URL 是否可访问")
+        raise HTTPException(status_code=400, detail="下载失败，请检查 URL 是否可访问") from None
 
     # 校验真实文件类型（PIL 解码是阻塞 I/O，放线程池执行）
     try:
@@ -320,7 +320,7 @@ async def create_inspiration_from_url(
         # 并发下撞唯一约束（如平台 ID 部分唯一索引）：清理已落盘文件后转 409，
         # 避免残留孤儿文件与 500
         delete_files(rel_path, thumb_path)
-        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）")
+        raise HTTPException(status_code=409, detail="该素材已存在（平台 ID 冲突）") from None
     await db.refresh(inspiration)
 
     # 视频入库后后台预热关键帧（fire-and-forget，失败由懒提取兜底，不影响导入）

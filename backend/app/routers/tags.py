@@ -40,7 +40,7 @@ async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)) -> Tag
     try:
         tag = await tag_service.create_tag(db, data.name, data.category)
     except tag_service.TagConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+        raise HTTPException(status_code=409, detail=e.message) from None
     return TagOut(
         id=tag.id,
         name=tag.name,
@@ -84,7 +84,7 @@ async def batch_rename_tags(
     try:
         updated = await tag_service.batch_rename_tags(db, tag_ids, find_str, replace_str)
     except tag_service.TagConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+        raise HTTPException(status_code=409, detail=e.message) from None
     return {"updated": updated, "find": find_str, "replace": replace_str}
 
 
@@ -102,9 +102,9 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
             description=data.description,
         )
     except tag_service.TagNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
     except tag_service.TagConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+        raise HTTPException(status_code=409, detail=e.message) from None
     return TagOut(
         id=tag.id,
         name=tag.name,
@@ -157,7 +157,7 @@ async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(
             db, data.source_tag_id, data.target_tag_id
         )
     except tag_service.TagNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
     return {"message": f"已将 '{source_name}' 合并到 '{target_name}'"}
 
 
@@ -317,9 +317,9 @@ async def create_alias(
     try:
         obj = await tag_service.create_alias(db, tag_id, alias)
     except tag_service.TagNotFoundError as e:
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message) from None
     except tag_service.TagConflictError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+        raise HTTPException(status_code=409, detail=e.message) from None
     return obj
 
 
@@ -368,9 +368,9 @@ async def rollback_tag_history(
     try:
         return await rollback_history(db, history_id)
     except TagHistoryNotFoundError:
-        raise HTTPException(status_code=404, detail="历史记录未找到")
+        raise HTTPException(status_code=404, detail="历史记录未找到") from None
     except TagHistoryRollbackError as e:
-        raise HTTPException(status_code=409, detail=e.message)
+        raise HTTPException(status_code=409, detail=e.message) from None
 
 
 # ============ 健康度扫描 ============
@@ -424,7 +424,7 @@ async def tag_health_issues(
     try:
         return await get_health_issue_detail(db, task.result, issue_type, page, size)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 # ============ 自动聚类 ============
@@ -566,7 +566,7 @@ async def tag_batch_edit(payload: dict, db: AsyncSession = Depends(get_db)) -> d
     try:
         return await batch_edit_tags(db, rules, dry_run=dry_run)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 # ============ 颜色剥离治理 ============

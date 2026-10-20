@@ -158,7 +158,7 @@ class CollectionItem(Base):
     collection: Mapped["Collection"] = relationship(
         "Collection", back_populates="items"
     )
-    inspiration: Mapped["Inspiration"] = relationship("Inspiration")
+    inspiration: Mapped["Inspiration"] = relationship("Inspiration")  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
 
     __table_args__ = (
         UniqueConstraint("collection_id", "inspiration_id", name="uq_collection_inspiration"),

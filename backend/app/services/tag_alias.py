@@ -69,7 +69,7 @@ async def create_alias(
         existing_obj = existing.scalar_one_or_none()
         if existing_obj:
             return existing_obj  # 并发冲突：别名非本次新增，不写操作历史
-        raise TagConflictError(f"别名 '{alias}' 已存在")
+        raise TagConflictError(f"别名 '{alias}' 已存在") from None
     await db.refresh(obj)
 
     # 记录操作历史（随调用方事务一并提交）

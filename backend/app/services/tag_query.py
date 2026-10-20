@@ -122,7 +122,7 @@ async def find_duplicate_tag_pairs(
 
     def _compute_pairs() -> list[dict]:
         pairs = []
-        for category, cat_tags in by_category.items():
+        for _category, cat_tags in by_category.items():
             if len(cat_tags) < 2:
                 continue
             for i in range(len(cat_tags)):
@@ -162,7 +162,7 @@ async def export_tags(db: AsyncSession) -> list[dict]:
     """导出所有标签为列表（含类别、来源、使用次数）。"""
     grouped = await get_all_tags_grouped(db)
     export_data = []
-    for category, tags in grouped.items():
+    for _category, tags in grouped.items():
         for t in tags:
             export_data.append({
                 "name": t["name"],

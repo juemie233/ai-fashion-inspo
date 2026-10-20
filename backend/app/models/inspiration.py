@@ -117,7 +117,7 @@ class Inspiration(Base):
     )
 
     # 关联关系
-    tags: Mapped[list["InspirationTag"]] = relationship(
+    tags: Mapped[list["InspirationTag"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationTag",
         back_populates="inspiration",
         cascade="all, delete-orphan",
@@ -129,19 +129,19 @@ class Inspiration(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    bloggers: Mapped[list["InspirationBlogger"]] = relationship(
+    bloggers: Mapped[list["InspirationBlogger"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationBlogger",
         back_populates="inspiration",
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    models: Mapped[list["InspirationModel"]] = relationship(
+    models: Mapped[list["InspirationModel"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationModel",
         back_populates="inspiration",
         cascade="all, delete-orphan",
         lazy="selectin",
     )
-    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(
+    face_detections: Mapped[list["InspirationFaceDetection"]] = relationship(  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
         "InspirationFaceDetection",
         back_populates="inspiration",
         cascade="all, delete-orphan",
@@ -223,7 +223,7 @@ class AIAnalysisTag(Base):
 
     # 关联关系
     log: Mapped["AIAnalysisLog"] = relationship("AIAnalysisLog", back_populates="extracted_tags")
-    tag: Mapped["Tag"] = relationship("Tag")
+    tag: Mapped["Tag"] = relationship("Tag")  # noqa: F821  (关系目标按 SQLAlchemy 注册名解析，无需运行期导入)
 
 
 class AIQualityReview(Base):

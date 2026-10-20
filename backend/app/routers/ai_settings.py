@@ -330,7 +330,7 @@ async def update_person_bio_prompt_endpoint(body: dict) -> dict[str, str | int]:
     try:
         await set_person_bio_prompt(prompt)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     return {
         "message": f"人物简介 Prompt 已更新（{len(prompt)} 字符）",
         "length": len(prompt),
