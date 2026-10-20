@@ -103,9 +103,9 @@ jobs:
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
       # 覆盖率 68% 是**棘轮底线**（只能往上调）：测试被误删/跳过时这里会红。
-      - name: pytest 全量 + 覆盖率棘轮（≥67%）
+      - name: pytest 全量 + 覆盖率棘轮（≥69%）
         run: |
-          python -m pytest -q --tb=long --cov --cov-fail-under=67 \
+          python -m pytest -q --tb=long --cov --cov-fail-under=69 \
             --cov-report=term:skip-covered 2>&1 | tee pytest.log
           exit ${PIPESTATUS[0]}
 

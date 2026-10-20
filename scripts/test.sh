@@ -4,7 +4,7 @@
 #   bash scripts/test.sh --cov    后端额外输出行级覆盖率报告（term-missing）
 #
 # 门禁清单（顺序即输出编号）：
-#    1. 后端 pytest 全量 + 覆盖率棘轮 ≥67%（临时库/临时存储，不碰真实数据）
+#    1. 后端 pytest 全量 + 覆盖率棘轮 ≥69%（临时库/临时存储，不碰真实数据）
 #    2. 后端 ruff（零告警）
 #    3. 后端 vulture（死代码，--min-confidence 80 必须 0 条）
 #    4. 后端 mypy 棘轮（只查已清零的模块，列表只增不减）
@@ -26,14 +26,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PYTHON_BIN:-python}"
 COV="${1:-}"
 
-echo "===== 1/11 后端测试 + 覆盖率棘轮（≥67%）====="
+echo "===== 1/11 后端测试 + 覆盖率棘轮（≥69%）====="
 cd "$ROOT/backend"
-# 覆盖率底线是**棘轮**：只能往上调。当前 67.9%（2026-10-20 实测；垃圾桶服务层补用例前 67.1%）。
+# 覆盖率底线是**棘轮**：只能往上调。当前 69.3%（2026-10-20 实测；垃圾桶/标签/更新三条服务层补用例前 67.9%）。
 # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
 if [[ "$COV" == "--cov" ]]; then
-  "$PY" -m pytest --cov --cov-fail-under=67 --cov-report=term-missing
+  "$PY" -m pytest --cov --cov-fail-under=69 --cov-report=term-missing
 else
-  "$PY" -m pytest --cov --cov-fail-under=67 --cov-report=term:skip-covered
+  "$PY" -m pytest --cov --cov-fail-under=69 --cov-report=term:skip-covered
 fi
 
 echo ""

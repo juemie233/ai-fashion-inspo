@@ -34,7 +34,10 @@ async def batch_add_tags(
     for name in raw_names:
         tags.append(await get_or_create_tag(db, name, category, source))
 
-    tag_ids = [t.id for t in tags]
+    # 再按 tag_id 去重：上面的去重发生在**归一化之前**，"JK" 与 "JK "（尾部空格）
+    # 会落到同一个标签，若不去重，同一素材会插两条相同关联并撞
+    # UNIQUE(inspiration_id, tag_id)——2026-10-20 由服务层用例发现（此前会 500）。
+    tag_ids = list(dict.fromkeys(t.id for t in tags))
 
     # 一次性校验素材存在性，避免逐个 db.get
     found_result = await db.execute(
@@ -75,8 +78,12 @@ async def batch_add_tags(
                 async with db.begin_nested():
                     await db.flush()
             except IntegrityError:
-                # 并发下同一关联已被其他请求插入：回滚 SAVEPOINT，移除失败对象后跳过
-                db.expunge(link)
+                # 并发下同一关联已被其他请求插入：SAVEPOINT 已回滚，对象可能已**脱离会话**，
+                # 直接 expunge 会抛 InvalidRequestError（一次可忽略的冲突被放大成 500）。
+                # 先判断再移除，并记住这对已存在，后续素材不再重复尝试。
+                if link in db:
+                    db.expunge(link)
+                existing_pairs.add((inspiration_id, tag_id))
                 skipped_existing += 1
                 continue
             added_for_this += 1
