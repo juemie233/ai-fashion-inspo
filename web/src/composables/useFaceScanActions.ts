@@ -5,7 +5,7 @@
  */
 
 import { Message } from '@arco-design/web-vue'
-import { ref, type Ref } from 'vue'
+import type { Ref } from 'vue'
 import type { FaceScanTaskOut } from '@/api/faceScan'
 import { fetchFaceScanTask, runFaceMatch, startFaceScan } from '@/api/faceScan'
 import { getApiErrorMessage } from '@/utils/apiError'

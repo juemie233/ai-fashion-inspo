@@ -19,7 +19,7 @@ interface CollectionMutationDeps {
 }
 
 export function useCollectionMutations(opts: CollectionMutationDeps) {
-  const { collections, current, currentId, loadCollections, loadContent } = opts
+  const { current, loadCollections, loadContent } = opts
 
   const renameModalOpen = ref(false)
   const renameTargetId = ref<number | null>(null) // null = 新建手动合集

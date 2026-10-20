@@ -6,34 +6,27 @@
  * 支持「编辑条件」「转手动（固化）」。
  */
 
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { Message, Modal } from '@arco-design/web-vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import {
-  addToCollection,
-  createCollection,
-  deleteCollection,
   fetchCollectionInspirations,
   fetchCollections,
   removeFromCollection,
   reorderCollectionItems,
   reorderCollections,
-  solidifyCollection,
   type CollectionOut,
-  type SmartCollectionQuery,
 } from '@/api/collections'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 import { getFileUrl } from '@/api/inspirations'
 import { describeSmartQuery } from '@/utils/collectionQuery'
 import { useTagsStore } from '@/stores/tags'
-import { useInspirationsStore } from '@/stores/inspirations'
 import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useCollectionMutations } from '@/composables/useCollectionMutations'
 import type { InspirationOut } from '@/api/inspirations'
 
-const store = useInspirationsStore()
 const tagsStore = useTagsStore()
 const {
   batchMode,
@@ -144,18 +137,6 @@ function onPageChange(p: number) {
 }
 
 // ── 新建 / 重命名 / 删除 ──
-
-const editorVisible = ref(false)
-const editingCollection = ref<CollectionOut | null>(null)
-
-function openCreateSmart() {
-  editingCollection.value = null
-  editorVisible.value = true
-}
-
-async function handleEditorSaved() {
-  await loadCollections()
-}
 
 // 手动合集新建/重命名共用弹窗
 const {
@@ -549,16 +530,6 @@ onMounted(() => {
       :initial-query="editingSmart?.query_json ?? null"
       :initial-name="editingSmart?.name ?? ''"
       @saved="handleSmartSaved"
-    />
-
-    <!-- 智能合集创建（collectionId=null → 编辑器走创建分支） -->
-    <SmartQueryEditorModal
-      :visible="editorVisible"
-      :collection-id="null"
-      :initial-query="null"
-      initial-name=""
-      @update:visible="editorVisible = $event"
-      @saved="handleEditorSaved"
     />
 
     <!-- 手动合集新建/重命名 -->

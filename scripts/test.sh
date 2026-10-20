@@ -12,7 +12,7 @@
 #    6. 真实库漂移（ORM ↔ 现有库；无库环境自动跳过）
 #    7. 前端 vue-tsc 类型检查
 #    8. 前端 vitest
-#    9. 前端 eslint（带 --max-warnings 棘轮：只能降不能升）
+#    9. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
 #   10. 前端死代码基线（ts-prune，只拦新增）
 #   11. 前端格式（只查本次改动文件；全库检查会因 45 个历史文件永远为红）
 #
@@ -70,9 +70,9 @@ cd "$ROOT/web"
 node node_modules/vitest/vitest.mjs run
 
 echo ""
-echo "===== 9/11 前端 lint（eslint，棘轮 73）====="
+echo "===== 9/11 前端 lint（eslint，棘轮 34）====="
 cd "$ROOT/web"
-node node_modules/eslint/bin/eslint.js . --max-warnings 73
+node node_modules/eslint/bin/eslint.js . --max-warnings 34
 
 echo ""
 echo "===== 10/11 前端死代码基线（ts-prune）====="

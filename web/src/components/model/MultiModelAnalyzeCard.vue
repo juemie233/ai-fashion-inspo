@@ -8,7 +8,7 @@ import type { PromptOption, MultiAnalyzeParams } from '@/types/analysis'
 /** 与后端约定的一致：组合数上限（超出时禁止提交） */
 const MAX_COMBINATIONS = 10
 
-const props = defineProps<{
+defineProps<{
   /** 是否有分析任务正在提交（父级批量分析状态复用） */
   submitting: boolean
 }>()

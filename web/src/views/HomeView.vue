@@ -3,7 +3,7 @@
 
 import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Message, Notification } from '@arco-design/web-vue'
+import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
@@ -14,13 +14,7 @@ import { useUiStore, type MaterialOpenMode } from '@/stores/ui'
 import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useInspirationFilters } from '@/composables/useInspirationFilters'
 import { useHomeActions } from '@/composables/useHomeActions'
-import { getApiErrorMessage } from '@/utils/apiError'
-import { batchQualityCheck, updateQualityStatus, type TrashReason } from '@/api/inspirations'
-import type { BatchUpdateFields } from '@/api/inspirations'
 import { buildBrowseParams, storedBrowsePageSize, PAGE_SIZE_STORAGE_KEY } from '@/utils/browseQuery'
-import { QUALITY_BATCH_MAX, qualityBatchHint } from '@/utils/qualityBatch'
-import { createCollection } from '@/api/collections'
-import { buildSmartQuery } from '@/utils/collectionQuery'
 
 const router = useRouter()
 const route = useRoute()
@@ -201,7 +195,6 @@ const {
   checkingQuality,
   handleBatchQualityCheck,
   handleApprove,
-  approvingIds,
   handleBatchFavorite,
   handleBatchAddTags,
   handleBatchAddBloggers,

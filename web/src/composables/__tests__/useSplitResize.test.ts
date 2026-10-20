@@ -1,7 +1,7 @@
 /** useSplitResize 拖拽分栏 composable 单测。 */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createApp, nextTick, type ComponentPublicInstance } from 'vue'
+import { createApp, nextTick } from 'vue'
 import { useSplitResize } from '../useSplitResize'
 
 /** 在真实组件上下文中调用 composable（消除 onUnmounted 无实例警告） */
@@ -27,7 +27,17 @@ function withSetup<T>(composable: () => T) {
 function mockRect(width: number, left = 0) {
   const el = document.createElement('div')
   el.getBoundingClientRect = () =>
-    ({ left, width, top: 0, height: 0, right: left + width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ({
+      left,
+      width,
+      top: 0,
+      height: 0,
+      right: left + width,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect
   return el
 }
 

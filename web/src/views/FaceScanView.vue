@@ -16,15 +16,12 @@ import {
   confirmFaceScan,
   fetchFaceScanResults,
   fetchFaceScanTask,
-  runFaceMatch,
-  startFaceScan,
   type DetectionItem,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
-import { pollTaskUntilIdle } from '@/utils/taskPollUntilIdle'
 import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
 import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 import { usePolling } from '@/composables/usePolling'
@@ -151,7 +148,7 @@ const detailLoading = ref(false)
 const detailChecked = ref<Set<number>>(new Set())
 const detailActionBusy = ref(false)
 
-const { startScan, cancelTask, startMatch, pollUntilIdle } = useFaceScanActions({
+const { startScan, cancelTask, startMatch } = useFaceScanActions({
   scanTask,
   matchTask,
   scope,

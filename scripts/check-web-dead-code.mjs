@@ -27,6 +27,12 @@ const baseline = new Set(
     .filter((l) => l && !l.startsWith('#')),
 )
 
+// 基线条数上限（棘轮）：基线只能降不能升。
+// 只有「只拦新增」时，上一行「若确为刻意保留，请加入基线」就成了后门——每加一条死代码
+// 都能用一句「刻意保留」把基线撑大。这里把上限钉死：真要加例外，必须同时删掉一条
+// 已修好的旧条目（或在这个常量上显式改数字，让 review 看见）。
+const MAX_BASELINE = 273
+
 let raw = ''
 try {
   // 钉版本：ts-prune 升级会改变报告格式/路径形态，导致基线整体失配（门禁瞬间报「新增 268 条」）
@@ -54,8 +60,22 @@ if (added.length > 0) {
   console.error(`前端新增死代码 ${added.length} 条：`)
   for (const l of added.slice(0, 20)) console.error(`  ${l}`)
   if (added.length > 20) console.error(`  …另有 ${added.length - 20} 条`)
-  console.error('\n若确为刻意保留，请加入 scripts/tsprune-baseline.txt 并注明原因。')
+  console.error(
+    '\n若确为刻意保留，请加入 scripts/tsprune-baseline.txt 并注明原因；' +
+      '但基线有上限（MAX_BASELINE），加一条就得先删一条已修好的。'
+  )
   process.exit(1)
 }
-console.log(`前端死代码检查通过（基线 ${baseline.size} 条，无新增）`)
+
+if (baseline.size > MAX_BASELINE) {
+  console.error(
+    `基线膨胀：${baseline.size} 条 > 上限 ${MAX_BASELINE} 条。` +
+      '\n基线只能降不能升：请把已修好/已删除的条目从 scripts/tsprune-baseline.txt 删掉。'
+  )
+  process.exit(1)
+}
+
+console.log(
+  `前端死代码检查通过（基线 ${baseline.size}/${MAX_BASELINE} 条，无新增；当前报告 ${current.size} 条）`
+)
 

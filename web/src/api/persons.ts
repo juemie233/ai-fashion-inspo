@@ -1,21 +1,9 @@
 /** 人物相关 API 调用（穿搭博主 / 职业模特已拆分两表，工厂生成两组端点）。 */
 
-import type { AxiosProgressEvent } from 'axios'
 import { createPersonApi } from './personBase'
 import apiClient from './client'
-import type {
-  Blogger,
-  Model,
-  ModelPhoto,
-  ModelPhotoSet,
-  ModelPhotoSetDetail,
-  ModelPhotoSetListOut,
-  PersonBrief,
-  PersonDetail,
-  PersonImportResult,
-  PersonListOut,
-  PersonPlatform,
-} from '@shared/types/person'
+// 只导入本文件**代码里**用到的类型；其余类型由下方 `export type { ... } from` 直接转发
+import type { Blogger, PersonPlatform } from '@shared/types/person'
 
 export type {
   Blogger,
