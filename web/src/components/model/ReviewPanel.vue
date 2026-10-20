@@ -13,6 +13,7 @@ import apiClient from '@/api/client'
 import { deleteRejectedInspirations, batchUpdateInspirations, batchTrash } from '@/api/inspirations'
 import QualityLearnerCard from '@/components/model/QualityLearnerCard.vue'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
+import QualityInsightsPanel from '@/components/model/QualityInsightsPanel.vue'
 import InspirationGridBrowser, {
   type GridBrowserItem,
 } from '@/components/inspiration/InspirationGridBrowser.vue'
@@ -534,6 +535,9 @@ onUnmounted(() => {
           { title: '疑似 AI', value: qualityReviewStats.ai_generated },
         ]"
       />
+
+      <!-- 质量洞察：按来源通过率 / 灰区复审 / prompt A/B -->
+      <QualityInsightsPanel />
 
       <!-- 手动上传免审核配置 -->
       <a-card size="small" style="margin-bottom: 16px">
