@@ -3,6 +3,7 @@
 
 import { computed, onMounted } from 'vue'
 import { useQualityLearner } from '@/composables/useQualityLearner'
+import { formatDateTime } from '@/utils/format'
 import StatCardGrid from '@/components/common/StatCardGrid.vue'
 
 const { status, loading, training, resetting, loadStatus, train, reset } = useQualityLearner()
@@ -75,7 +76,7 @@ onMounted(loadStatus)
           ]"
         />
         <p v-if="status.meta" style="font-size: 11px; color: #999; margin: 0 0 8px">
-          最近训练 {{ status.meta.trained_at?.slice(0, 16).replace('T', ' ') }} · 训练样本
+          最近训练 {{ formatDateTime(status.meta.trained_at) }} · 训练样本
           {{ status.meta.sample_total }}（正 {{ status.meta.positive }} / 负
           {{ status.meta.negative }}）· 验证集 {{ status.meta.metrics.test_size }} 条 · 混矩阵 TN
           {{ status.meta.metrics.confusion.tn }} / FP {{ status.meta.metrics.confusion.fp }} / FN

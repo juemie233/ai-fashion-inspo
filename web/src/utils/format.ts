@@ -37,6 +37,26 @@ export function formatDate(d: string | null | undefined): string {
 }
 
 /**
+ * 紧凑时间：``YYYY-MM-DD HH:mm``（可选到秒），列表 / 卡片 / 详情里的时间统一走它。
+ *
+ * 为什么不复用 `formatDate`：`toLocaleString` 受系统 locale 与浏览器实现影响，
+ * 同一份数据在不同机器上可能显示成 `2026/1/5 14:30:00`、`2026-01-05 14:30:00` 或带
+ * 上午/下午，宽度还会变（时间列被挤到换行）。这里手工补零，输出**定宽可控**，
+ * 也不依赖 locale；要「人类可读的完整时间」仍可用 `formatDate`。
+ *
+ * 之前有 4 处各写各的（`iso.slice(0, 16).replace('T', ' ')` / `slice(0, 19)` /
+ * `new Date().toLocaleString()`），2026-10-20 代码审查统一到本函数。
+ */
+export function formatDateTime(d: string | Date | null | undefined, withSeconds = false): string {
+  if (!d) return '-'
+  const date = d instanceof Date ? d : new Date(d)
+  if (isNaN(date.getTime())) return '-'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const base = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return withSeconds ? `${base}:${pad(date.getSeconds())}` : base
+}
+
+/**
  * 表格时间列渲染辅助（项目规则：时间列必须单行显示，禁止换行）。
  * 接收已格式化的时间文本，包装为带 ``white-space: nowrap`` 的 span；
  * render 函数列统一用它，避免各列重复手写 nowrap 样式。

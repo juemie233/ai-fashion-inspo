@@ -4,6 +4,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { formatDateTime } from '@/utils/format'
 import { buildHistoryDiff, formatHistoryValue } from '@/utils/tagHistoryDiff'
 import { fetchHistory, rollbackHistory } from '@/api/tagAdvanced'
 import { HISTORY_OP_LABELS, type HistoryItem, type HistoryOperation } from '@/types/tagAdvanced'
@@ -80,9 +81,9 @@ function confirmRollback(item: HistoryItem) {
   })
 }
 
+/** 时间统一走 utils/format 的定宽格式（原先本地 slice(0,19) 与其它面板不一致）。 */
 function formatTime(iso: string | null): string {
-  if (!iso) return '—'
-  return iso.slice(0, 19).replace('T', ' ')
+  return formatDateTime(iso, true)
 }
 
 onMounted(() => {
@@ -162,7 +163,7 @@ onMounted(() => {
     <a-modal v-model:visible="detailVisible" title="操作详情" :footer="false" :width="640">
       <div v-if="detailItem" class="detail-meta">
         <a-tag>{{ HISTORY_OP_LABELS[detailItem.operation] ?? detailItem.operation }}</a-tag>
-        <span>{{ formatTime(detailItem.created_at) }}</span>
+        <span style="white-space: nowrap">{{ formatTime(detailItem.created_at) }}</span>
         <span v-if="detailItem.batch_id">批次 {{ detailItem.batch_id }}</span>
       </div>
       <div v-for="row in diffRows" :key="row.tag_id" class="diff-row">

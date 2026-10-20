@@ -5,6 +5,7 @@ import { mount } from '@vue/test-utils'
 import {
   formatBytes,
   formatDate,
+  formatDateTime,
   formatMs,
   formatSize,
   normalizeModelName,
@@ -121,5 +122,32 @@ describe('renderTimeCell', () => {
     expect(wrapper.element.style.whiteSpace).toBe('nowrap')
     expect(wrapper.element.style.color).toBe('red')
     wrapper.unmount()
+  })
+})
+
+describe('formatDateTime', () => {
+  it('定宽补零：不受 locale 影响，1 月/个位数时也补零', () => {
+    // 本地时区构造，避免 UTC 偏移导致跨天
+    const d = new Date(2026, 0, 5, 9, 7, 3)
+    expect(formatDateTime(d)).toBe('2026-01-05 09:07')
+    expect(formatDateTime(d, true)).toBe('2026-01-05 09:07:03')
+  })
+
+  it('接受 ISO 字符串（后端 created_at / trained_at 就是这种）', () => {
+    const d = new Date(2026, 9, 20, 14, 30, 0)
+    expect(formatDateTime(d.toISOString())).toBe('2026-10-20 14:30')
+  })
+
+  it('空值与非法值统一回退 "-"（模板里直接插值不会崩）', () => {
+    expect(formatDateTime(null)).toBe('-')
+    expect(formatDateTime(undefined)).toBe('-')
+    expect(formatDateTime('')).toBe('-')
+    expect(formatDateTime('not-a-date')).toBe('-')
+  })
+
+  it('输出定宽（14 / 19 字符）：时间列不会因宽度变化换行', () => {
+    const d = new Date(2026, 11, 31, 23, 59, 58)
+    expect(formatDateTime(d)).toHaveLength(16)
+    expect(formatDateTime(d, true)).toHaveLength(19)
   })
 })

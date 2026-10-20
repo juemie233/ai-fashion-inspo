@@ -4,6 +4,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { formatDateTime } from '@/utils/format'
 import { asHealthResult, fetchHealthIssue, scanHealth } from '@/api/tagAdvanced'
 import { batchDeleteTags, fetchTagsGrouped, type TagCategoryGroup } from '@/api/tags'
 import { CATEGORY_LABELS, SOURCE_LABELS } from '@/constants/tag'
@@ -242,7 +243,8 @@ onBeforeUnmount(() => {
         </div>
         <div class="score-sub">
           <template v-if="scannedAt"
-            >扫描时间 {{ scannedAt.slice(0, 16).replace('T', ' ') }}</template
+            >扫描时间
+            <span style="white-space: nowrap">{{ formatDateTime(scannedAt) }}</span></template
           >
           <template v-else>尚未扫描</template>
         </div>

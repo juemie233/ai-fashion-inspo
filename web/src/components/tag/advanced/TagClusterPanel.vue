@@ -15,7 +15,7 @@ const minGroupSize = ref(2)
 
 // ── 扫描结果 ──
 const groups = ref<ClusterGroup[]>([])
-const scannedAt = ref('')
+// 原先还有个 scannedAt：只写不读（模板从未展示），2026-10-20 审查删除
 const checkedIds = ref<string[]>([])
 
 // ── 应用确认弹窗 ──
@@ -41,7 +41,6 @@ const {
   onDone: (r) => {
     groups.value = r.groups
     checkedIds.value = []
-    scannedAt.value = new Date().toLocaleString()
     Message.success(r.total ? `聚类完成：发现 ${r.total} 个候选组` : '未发现相似标签候选组')
   },
   onError: (e) => Message.error(getApiErrorMessage(e, '提交聚类任务失败')),
