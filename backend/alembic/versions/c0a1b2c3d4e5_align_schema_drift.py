@@ -29,12 +29,29 @@ branch_labels = None
 depends_on = None
 
 
+def _indexes(table: str) -> set[str]:
+    """当前库里该表已有的索引名（用于把「对齐」写成幂等操作）。
+
+    本迁移假定升级对象是**漂移老库**（缺索引），但空库 `alembic upgrade head` 时
+    baseline / 后续迁移已经把这些索引建好了——直接 `create_index` 会撞
+    `index ... already exists`，整条迁移链断在最后一条（2026-10-20 实测）。
+    漂移对齐类迁移必须「先看再改」，否则灾备恢复路径（空库 → upgrade head）走不通。
+    """
+    return {idx["name"] for idx in sa.inspect(op.get_bind()).get_indexes(table)}
+
+
+def _columns(table: str) -> set[str]:
+    """当前库里该表已有的列名（同上：让「删列/建索引」对空库幂等）。"""
+    return {col["name"] for col in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
     """按「先表内、后跨表」的顺序对齐漂移。"""
     # 1) 遗留临时表（上次中断的 batch_alter_table 残留，0 行）
     op.execute("DROP TABLE IF EXISTS _alembic_tmp_ai_analysis_log")
 
     # 2) ai_analysis_log：类型收窄 + log_type NOT NULL + 索引对齐
+    ai_indexes = _indexes("ai_analysis_log")
     with op.batch_alter_table("ai_analysis_log", schema=None) as batch_op:
         batch_op.alter_column(
             "log_type",
@@ -45,13 +62,18 @@ def upgrade() -> None:
         )
         batch_op.alter_column("prompt_version", existing_type=sa.TEXT(), type_=sa.String(length=64))
         batch_op.alter_column("model_version", existing_type=sa.TEXT(), type_=sa.String(length=64))
-        batch_op.drop_index("ix_ai_analysis_log_model_name")
-        batch_op.create_index("ix_ai_analysis_log_model_version", ["model_version"])
-        batch_op.create_index("ix_ai_analysis_log_prompt_version", ["prompt_version"])
+        if "ix_ai_analysis_log_model_name" in ai_indexes:
+            batch_op.drop_index("ix_ai_analysis_log_model_name")
+        if "ix_ai_analysis_log_model_version" not in ai_indexes:
+            batch_op.create_index("ix_ai_analysis_log_model_version", ["model_version"])
+        if "ix_ai_analysis_log_prompt_version" not in ai_indexes:
+            batch_op.create_index("ix_ai_analysis_log_prompt_version", ["prompt_version"])
 
     # 3) collection_items：模型未声明的多余索引
+    ci_indexes = _indexes("collection_items")
     with op.batch_alter_table("collection_items", schema=None) as batch_op:
-        batch_op.drop_index("ix_collection_items_inspiration_id")
+        if "ix_collection_items_inspiration_id" in ci_indexes:
+            batch_op.drop_index("ix_collection_items_inspiration_id")
 
     # 4) collections：补 parent_id 外键
     with op.batch_alter_table("collections", schema=None) as batch_op:
@@ -60,6 +82,7 @@ def upgrade() -> None:
         )
 
     # 5) inspirations：类型 / NOT NULL / 索引
+    insp_indexes = _indexes("inspirations")
     with op.batch_alter_table("inspirations", schema=None) as batch_op:
         batch_op.alter_column("content_hash", existing_type=sa.TEXT(), type_=sa.String(length=64))
         batch_op.alter_column(
@@ -75,8 +98,10 @@ def upgrade() -> None:
             nullable=False,
         )
         batch_op.alter_column("trash_reason", existing_type=sa.TEXT(), type_=sa.String(length=32))
-        batch_op.create_index("ix_inspirations_quality_status", ["quality_status"])
-        batch_op.create_index("ix_inspirations_scraper_task_id", ["scraper_task_id"])
+        if "ix_inspirations_quality_status" not in insp_indexes:
+            batch_op.create_index("ix_inspirations_quality_status", ["quality_status"])
+        if "ix_inspirations_scraper_task_id" not in insp_indexes:
+            batch_op.create_index("ix_inspirations_scraper_task_id", ["scraper_task_id"])
         # 旧外键没有 ondelete 语义；SQLite 下 batch 会整表重建，正好按模型重建为 SET NULL
         batch_op.create_foreign_key(
             "fk_inspirations_scraper_task_id",
@@ -96,10 +121,12 @@ def upgrade() -> None:
         )
 
     # 7) scraper_tasks：模型已删除 is_deleted
-    with op.batch_alter_table("scraper_tasks", schema=None) as batch_op:
-        batch_op.drop_column("is_deleted")
+    if "is_deleted" in _columns("scraper_tasks"):
+        with op.batch_alter_table("scraper_tasks", schema=None) as batch_op:
+            batch_op.drop_column("is_deleted")
 
     # 8) tags：NOT NULL / 类型 / 索引
+    tag_indexes = _indexes("tags")
     with op.batch_alter_table("tags", schema=None) as batch_op:
         batch_op.alter_column("source", existing_type=sa.TEXT(), nullable=False)
         batch_op.alter_column(
@@ -107,7 +134,8 @@ def upgrade() -> None:
         )
         batch_op.alter_column("sort_order", existing_type=sa.INTEGER(), nullable=False)
         batch_op.alter_column("description", existing_type=sa.TEXT(), type_=sa.String(length=255))
-        batch_op.create_index("ix_tags_source", ["source"])
+        if "ix_tags_source" not in tag_indexes:
+            batch_op.create_index("ix_tags_source", ["source"])
 
 
 def downgrade() -> None:
