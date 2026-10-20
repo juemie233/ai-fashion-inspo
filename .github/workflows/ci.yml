@@ -1,7 +1,12 @@
 name: CI
 
-# 质量门禁：push / PR 到主分支时自动执行前端 lint+类型+测试 与 后端全量测试。
+# 质量门禁：push / PR 到主分支时自动执行，与本地 `scripts/test.sh` 对齐。
+#   前端：eslint（棘轮 73）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
+#   后端：ruff（零告警）+ 迁移链自检（空库 → 与 ORM 一致）+ pytest 全量
 # 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
+#
+# ⚠️ 只有 GitHub 镜像会触发本工作流：`origin` 指向 gitee，gitee 侧没有 CI。
+# 所以推 gitee 前请先在本地跑 `bash scripts/test.sh`——那是唯一能在推送前拦住问题的门。
 #
 # 开发阶段约定：项目当前仅在本地运行（npm run dev + uvicorn），尚未进入
 # 部署阶段，CI 不做产物构建（vite build）——只保留能抓问题的 lint / 类型
@@ -42,8 +47,11 @@ jobs:
       - name: 类型检查（vue-tsc，不产出构建产物）
         run: npm run type-check
 
+      - name: 死代码基线（ts-prune，只拦新增）
+        run: node ../scripts/check-web-dead-code.mjs
+
   backend:
-    name: 后端（pytest 全量）
+    name: 后端（lint / 迁移 / pytest 全量）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,6 +78,17 @@ jobs:
           # 完全够用），CI 走降级路径验证聚类算法逻辑；hnsw 主路径在本地 /
           # 生产环境（wheel 与 CPU 匹配）真实运行。
           pip uninstall -y hnswlib
+
+      # 后端 lint：与本地 `scripts/test.sh` 同一道门禁（存量已于 2026-10 清零）
+      - name: ruff（零告警）
+        run: python -m ruff check app
+
+      # 迁移链自检：临时空库 → `alembic upgrade head` → 结构必须与 ORM 一致。
+      # 为什么必须在 CI 跑：本地建库走 create_all + stamp head，迁移链平时不执行，
+      # 「空库跑不通 / 空库少约束」只有在这里才暴露（2026-10-20 就是这样发现链尾
+      # 对齐迁移撞索引、以及漏了 12 处 NOT NULL/唯一索引的）。全程用临时库，不碰真实数据。
+      - name: 迁移链自检（空库 → 与 ORM 一致）
+        run: python scripts/check_fresh_migrations.py
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
