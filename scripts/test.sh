@@ -29,3 +29,7 @@ node node_modules/vitest/vitest.mjs run
 
 echo ""
 echo "✅ 全部测试通过"
+
+# 迁移漂移门禁：ORM 模型与库结构必须一致（见 docs/代码检查.md）
+(cd backend && python scripts/check_alembic_drift.py)
+
