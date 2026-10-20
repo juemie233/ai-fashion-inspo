@@ -424,13 +424,21 @@ async def purge_trash(db: AsyncSession, only_expired: bool = False) -> dict:
     for insp in items:
         freed_bytes += delete_files_counting(insp.file_path, insp.thumbnail_path)
 
-    # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
-    await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+    # 后面两步是「尽力清理」，不能阻断审计：DB 记录已经删了，清理失败最多留孤儿
+    # 文件/向量；若异常冒泡跳过审计，就成了「清空了垃圾桶但没人知道」（审查发现）。
+    try:
+        # 删除向量库中的文本/图像向量（垃圾桶素材向量在清空时一并清理）
+        await vector_store.delete_inspiration_vectors_batch(deleted_ids)
+    except Exception as e:  # noqa: BLE001 —— 审计优先
+        logger.warning(f"清空垃圾桶时删除向量失败（忽略，不影响审计）: {e}")
 
-    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
-    from app.services.video_service import cleanup_keyframes_batch
+    try:
+        # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
+        from app.services.video_service import cleanup_keyframes_batch
 
-    await cleanup_keyframes_batch(deleted_ids)
+        await cleanup_keyframes_batch(deleted_ids)
+    except Exception as e:  # noqa: BLE001 —— 同上
+        logger.warning(f"清空垃圾桶时清理关键帧失败（忽略，不影响审计）: {e}")
 
     # 记录审计：清空垃圾桶（含定时自动清理）属于不可恢复的破坏性操作
     await record_audit_log(

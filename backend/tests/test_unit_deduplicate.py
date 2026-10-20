@@ -315,3 +315,51 @@ async def test_execute_deduplicate_prefers_manual_investment(client):
     kept = task.result["details"][0]["kept"]
     assert kept["id"] == "d-invested"
     assert {"在合集里", "人工审核过", "用户评分"} <= set(kept["reasons"])
+
+
+async def test_execute_deduplicate_audits_even_if_vector_delete_fails(client, monkeypatch):
+    """向量/文件清理失败也必须写审计：DB 行已经不可恢复地删了，不能「删了但没人知道」。
+
+    审查发现：原顺序是「删向量 → 删文件 → 写审计」，前者抛错就跳过审计。
+    """
+    import app.services.task_runners.deduplicate as dedupe_module
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.database import async_session
+    from app.models.audit import AuditLog
+    from app.models.inspiration import Inspiration
+
+    async def _boom(_ids):
+        raise RuntimeError("向量库挂了")
+
+    monkeypatch.setattr(dedupe_module, "_delete_inspiration_vectors", _boom)
+
+    root = settings.storage_root
+    (root / "images").mkdir(parents=True, exist_ok=True)
+    data = b"\xff\xd8\xff" + b"audit-bytes" * 64
+    (root / "images" / "audit-a.jpg").write_bytes(data)
+    (root / "images" / "audit-b.jpg").write_bytes(data)
+
+    async with async_session() as db:
+        db.add_all([
+            Inspiration(id="audit-a", source_type="manual_upload",
+                        file_path="images/audit-a.jpg", content_hash="h-audit",
+                        media_type="image", quality_status="pending"),
+            Inspiration(id="audit-b", source_type="manual_upload",
+                        file_path="images/audit-b.jpg", content_hash="h-audit",
+                        media_type="image", quality_status="pending"),
+        ])
+        await db.commit()
+
+    async with async_session() as db:
+        task = await dedupe_module.create_deduplicate_task(db)
+        await dedupe_module.execute_deduplicate(db, task)
+
+    async with async_session() as db:
+        audits = (
+            await db.execute(select(AuditLog.action, AuditLog.count).where(AuditLog.action == "deduplicate"))
+        ).all()
+
+    assert audits == [("deduplicate", 1)]
+    assert task.result["files_deleted"] == 1

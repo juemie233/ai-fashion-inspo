@@ -355,6 +355,13 @@ async def _batch_serialize(db: AsyncSession, collections: list[Collection]) -> l
         }
 
     # 4) 逐个组装（只有智能合集的动态封面仍需单独求值）
+    # 子节点数先按 parent_id 聚合一次（O(n)）：原先在循环里
+    # `sum(1 for x in collections if x.parent_id == c.id)` 是 O(n²)，
+    # 合集一多（几百个）就会在这一行吃掉可观的 CPU。
+    child_counts: dict[int | None, int] = {}
+    for x in collections:
+        child_counts[x.parent_id] = child_counts.get(x.parent_id, 0) + 1
+
     out: list[dict] = []
     for c in collections:
         if c.query_json is None:
@@ -368,7 +375,7 @@ async def _batch_serialize(db: AsyncSession, collections: list[Collection]) -> l
                     "position": c.position,
                     "parent_id": c.parent_id,
                     "auto_source": c.auto_source,
-                    "child_count": sum(1 for x in collections if x.parent_id == c.id),
+                    "child_count": child_counts.get(c.id, 0),
                     "cover_inspiration_id": cover_id,
                     "cover_thumbnail_path": cover_thumb,
                     "item_count": counts.get(c.id, 0),

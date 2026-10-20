@@ -324,3 +324,32 @@ async def test_delete_inspiration_requires_trash_first(client, upload):
         with pytest.raises(HTTPException) as unknown:
             await inspiration_trash.delete_inspiration(db, insp_id)
     assert unknown.value.status_code == 404
+
+
+async def test_purge_trash_audits_even_if_vector_delete_fails(client, upload, monkeypatch):
+    """清空垃圾桶时向量清理失败，审计仍必须落库（记录已删、不可恢复）。"""
+    from sqlalchemy import select
+
+    from app.models.audit import AuditLog
+    from app.services import vector_store
+
+    async def _boom(_ids):
+        raise RuntimeError("向量库挂了")
+
+    monkeypatch.setattr(vector_store, "delete_inspiration_vectors_batch", _boom)
+
+    insp_id = upload().json()["id"]
+    async with async_session() as db:
+        await inspiration_trash.trash_inspiration(db, insp_id, "重复")
+
+    async with async_session() as db:
+        result = await inspiration_trash.purge_trash(db)
+
+    assert result["deleted"] == 1
+    async with async_session() as db:
+        audits = (
+            await db.execute(
+                select(AuditLog.action, AuditLog.count).where(AuditLog.action == "empty_trash")
+            )
+        ).all()
+    assert audits == [("empty_trash", 1)]

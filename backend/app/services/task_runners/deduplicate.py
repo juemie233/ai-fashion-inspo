@@ -331,9 +331,17 @@ async def execute_deduplicate(db: AsyncSession, task: TaskQueue) -> None:
     await db.commit()
 
     # 删除 LanceDB 向量，避免孤儿向量（由 vector_store 提供，未安装时静默返回）
-    await _delete_inspiration_vectors(ids_to_delete)
-
-    freed_bytes = _delete_files(files_to_delete, storage_root)
+    # 与文件删除都**不阻断审计**：DB 记录已经不可恢复地删了，这两步只是清理磁盘/索引，
+    # 失败顶多留孤儿文件/向量；若让异常冒泡跳过审计，就变成「删了但没人知道」（审查发现）。
+    freed_bytes = 0
+    try:
+        await _delete_inspiration_vectors(ids_to_delete)
+    except Exception as e:  # noqa: BLE001 —— 审计优先，清理失败只记日志
+        logger.warning(f"删除去重素材向量失败（忽略，不影响审计）: {e}")
+    try:
+        freed_bytes = _delete_files(files_to_delete, storage_root)
+    except Exception as e:  # noqa: BLE001 —— 同上
+        logger.warning(f"删除冗余文件失败（忽略，不影响审计）: {e}")
 
     # 记录审计：智能去重物理删除属不可恢复的破坏性操作，留痕便于追溯
     # （含实际删除清单的统计，而非触发时的计划数）
