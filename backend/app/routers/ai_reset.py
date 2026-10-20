@@ -3,7 +3,7 @@
 import json
 import logging
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -89,7 +89,7 @@ def cleanup_expired_snapshots() -> int:
 
     在后端启动时调用一次（reset/restore 均为低频操作，无需周期轮询）。
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=PRE_RESET_SNAPSHOT_RETENTION_DAYS)
+    cutoff = datetime.now(UTC) - timedelta(days=PRE_RESET_SNAPSHOT_RETENTION_DAYS)
     cleaned = 0
     for parent_name in ("_pre_reset_snapshot", "_pre_restore_snapshot"):
         parent = settings.storage_root / parent_name
@@ -99,7 +99,7 @@ def cleanup_expired_snapshots() -> int:
             if not child.is_dir():
                 continue
             try:
-                mtime = datetime.fromtimestamp(child.stat().st_mtime, tz=timezone.utc)
+                mtime = datetime.fromtimestamp(child.stat().st_mtime, tz=UTC)
                 if mtime < cutoff:
                     shutil.rmtree(child, ignore_errors=True)
                     cleaned += 1

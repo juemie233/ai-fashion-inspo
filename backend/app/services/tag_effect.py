@@ -4,7 +4,7 @@
 数据量级（数千标签 × 数万素材）下毫秒级完成，无需异步任务。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,7 @@ async def get_trending_tags(
     一次 SQL 按 (tag_id, 窗口) 聚合近 2×days 天内的关联（素材 created_at
     分桶，仅统计未删除素材），内存算 delta 后取上升/下降 Top-N。
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(days=days)
     prev_cutoff = now - timedelta(days=2 * days)
 

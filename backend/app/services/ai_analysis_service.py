@@ -9,7 +9,7 @@
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -196,7 +196,7 @@ def _parse_iso_dt(value: str) -> datetime:
         text = text[:-1] + "+00:00"
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 
@@ -536,12 +536,12 @@ def _build_analysis_item(log: AIAnalysisLog, structured_tags: list[str] | None) 
         "parsed_response": parsed,
         "structured_tags": tags,
         "tags_count": {
-            "style": len((parsed.get("style") or [])),
-            "items": len((parsed.get("items") or [])),
-            "fit": len((parsed.get("fit") or [])),
-            "wear_style": len((parsed.get("wear_style") or [])),
-            "attributes": len((parsed.get("attributes") or [])),
-            "colors": len((parsed.get("dominant_colors") or [])),
+            "style": len(parsed.get("style") or []),
+            "items": len(parsed.get("items") or []),
+            "fit": len(parsed.get("fit") or []),
+            "wear_style": len(parsed.get("wear_style") or []),
+            "attributes": len(parsed.get("attributes") or []),
+            "colors": len(parsed.get("dominant_colors") or []),
         },
     }
 

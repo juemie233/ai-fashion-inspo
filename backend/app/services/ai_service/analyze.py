@@ -129,7 +129,7 @@ async def _call_ollama_vision(
 
                 result = response.json()
                 if not isinstance(result, dict) or "message" not in result:
-                    raise RuntimeError(f"Ollama 返回格式异常，缺少 message 字段")
+                    raise RuntimeError("Ollama 返回格式异常，缺少 message 字段")
                 raw_response = result["message"].get("content") or ""
                 if raw_response and result.get("done_reason") != "length":
                     got_complete = True

@@ -43,7 +43,6 @@ async def _query_ollama_ps(result: dict) -> None:
 async def _query_nvidia_smi(result: dict) -> None:
     """尝试 nvidia-smi 获取物理 GPU 总显存（比 Ollama 更准确，优先使用）。"""
     try:
-        import subprocess
 
         proc = await asyncio.create_subprocess_exec(
             "nvidia-smi",
@@ -54,7 +53,7 @@ async def _query_nvidia_smi(result: dict) -> None:
         )
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             raise Exception("nvidia-smi 查询超时")

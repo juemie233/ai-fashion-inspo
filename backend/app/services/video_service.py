@@ -106,7 +106,7 @@ async def extract_keyframes_for_video(
         )
         try:
             await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except ProcessLookupError:

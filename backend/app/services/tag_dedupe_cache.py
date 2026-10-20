@@ -5,6 +5,7 @@
 
 import hashlib
 from typing import Any
+from datetime import UTC
 
 # 简单内存缓存（单实例足够，无需 Redis）
 _cache: dict[str, dict[str, Any]] = {}
@@ -26,11 +27,11 @@ def get_cached(key: str) -> dict[str, Any] | None:
 
 def set_cached(key: str, pairs: list[dict], total: int) -> None:
     """写入缓存。"""
-    from datetime import datetime, timezone
+    from datetime import datetime
     _cache[key] = {
         "pairs": pairs,
         "total": total,
-        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "computed_at": datetime.now(UTC).isoformat(),
     }
 
 

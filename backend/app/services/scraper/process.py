@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -76,7 +75,7 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str, bool]:
                 return True, f"端口 {port} 可达，但未能确认调试协议", False
         else:
             return False, f"端口 {port} 无响应（请先在命令行中启动调试 Chrome）", False
-    except socket.timeout:
+    except TimeoutError:
         return False, f"端口 {port} 连接超时", False
     except Exception as e:
         return False, f"端口检测异常: {e}", False

@@ -107,7 +107,7 @@ def _read_log_tail(path: Path, max_lines: int = 40) -> list[str]:
     if not path.is_file():
         return []
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except OSError:
         return []

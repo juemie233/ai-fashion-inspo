@@ -18,7 +18,7 @@
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,7 +66,7 @@ class TagHistoryRollbackError(Exception):
 
 def new_batch_id(prefix: str = "b") -> str:
     """生成批次 ID（同一批操作的 history 分组）。"""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{ts}-{uuid.uuid4().hex[:6]}"
 
 

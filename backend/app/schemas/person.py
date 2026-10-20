@@ -114,7 +114,7 @@ class BloggerOut(_PersonOutFields):
     # 人物组（方案 B）：null=独立账号；同组时列表折叠只返回主记录
     person_group_id: int | None = None
     # 折叠视图：组内其余账号（展开显示用）；独立账号/平铺视图为空数组
-    group_members: list["BloggerOut"] = []
+    group_members: list[BloggerOut] = []
     # 组内平台去重列表（多平台徽标，如 ["douyin", "xiaohongshu"]）
     group_platforms: list[str] = []
 

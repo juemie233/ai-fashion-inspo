@@ -20,8 +20,9 @@ import shutil
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from datetime import datetime, UTC
+from typing import Any
+from collections.abc import Iterator
 
 from app.config import settings
 
@@ -132,7 +133,7 @@ _thread_write_lock = threading.Lock()
 
 def _utc_str() -> str:
     """返回当前 UTC 时间的 ISO 字符串。"""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _sql_quote(value: str) -> str:

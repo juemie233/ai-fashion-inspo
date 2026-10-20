@@ -253,7 +253,7 @@ async def list_inspirations(
     # 解析CSV格式参数
     include_list = _parse_csv_list(include_tags)
     id_list = _parse_csv_list(ids)
-    
+
     # 调用服务层查询
     inspirations, total = await inspiration_service.list_inspirations(
         db,

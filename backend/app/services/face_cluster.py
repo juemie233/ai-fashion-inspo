@@ -32,7 +32,6 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models.face import InspirationFaceDetection
 from app.models.inspiration import Inspiration
 

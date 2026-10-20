@@ -4,7 +4,7 @@
 路由层明细接口与测试复用。
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,7 +137,7 @@ async def scan_tag_health(
     tags_result = await db.execute(select(Tag))
     tags = tags_result.scalars().all()
     total = len(tags)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     empty_issues: dict = {
         "orphan": {"count": 0, "tag_ids": []},

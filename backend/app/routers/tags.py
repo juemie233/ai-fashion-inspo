@@ -19,6 +19,7 @@ from app.schemas.tag import (
     TagUpdate,
 )
 from app.services import tag_service
+from datetime import UTC
 
 router = APIRouter(prefix="/api/tags", tags=["tags"])
 
@@ -254,9 +255,9 @@ async def tag_inspirations(
 @router.get("/export")
 async def export_tags(db: AsyncSession = Depends(get_db)) -> dict:
     """导出所有标签为 JSON（含类别、来源、使用次数）。"""
-    from datetime import datetime, timezone
+    from datetime import datetime
     export_data = await tag_service.export_tags(db)
-    return {"tags": export_data, "exported_at": datetime.now(timezone.utc).isoformat()}
+    return {"tags": export_data, "exported_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/import", status_code=status.HTTP_200_OK)

@@ -109,7 +109,7 @@ async def _generate_video_thumbnail(
         # 超时强制终止，避免损坏视频让上传请求永久挂起
         try:
             await asyncio.wait_for(proc.wait(), timeout=_FFMPEG_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except ProcessLookupError:
