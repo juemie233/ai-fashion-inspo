@@ -150,7 +150,7 @@ async def _aggregate_collect_stage(
             "unclassified": len(unclassified_ids),
             "unclassified_collection": unclassified_stats,
         }
-        task.result = {**task.result, "collection": stats}
+        task.result = {**(task.result or {}), "collection": stats}
         await db.commit()
         logger.info(
             f"f2「我的收藏」已归位到「{DOUYIN_ROOT_COLLECTION_NAME}」#{root_id}："
@@ -176,7 +176,7 @@ async def _finalize_import(db: AsyncSession, task: TaskQueue, result: dict, hold
     """收尾：写终态与结果（被中断时尊重外部状态，不覆盖为 success）。"""
 
     task.result = {
-        **task.result,
+        **(task.result or {}),
         "stage": "done",
         "import": {key: value for key, value in result.items() if key != "ids"},
     }

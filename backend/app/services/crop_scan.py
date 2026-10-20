@@ -148,6 +148,7 @@ async def scan_candidates(
         reverse=True,
     )
     # 分段：完整截图段扫完而库里还有「已裁过」素材时，把游标切到第二段（从头开始扫）
+    next_cursor: str | None = None
     if mode == "content" and stage == _STAGE_FULL and not truncated and deferred:
         truncated = True
         next_cursor = f"{_STAGE_CROPPED}:"
@@ -263,8 +264,8 @@ async def _scan_one_candidate(
             item["auto_ok"] = False
             item["auto_checked"] = False
             item["note"] = f"自动检测失败：{e}"
-    elif mode == "content":
-        # 使用上方缓存的检测结果
+    elif mode == "content" and bounds_result is not None:
+        # 使用上方缓存的检测结果（content 模式必然拿到边界结果，否则上面已 return）
         item["crop_top"] = bounds_result["top_frac"]
         item["crop_bottom"] = bounds_result["bottom_frac"]
         item["boundary_kind"] = bounds_result["kind"]

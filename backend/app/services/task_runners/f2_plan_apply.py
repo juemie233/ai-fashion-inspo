@@ -70,7 +70,7 @@ async def _scan_and_plan_stage(db: AsyncSession, task: TaskQueue, opts: dict, bl
     )
     # 扫描 + 去重是重活（大目录分钟级），单独标一个阶段：否则界面在下载结束到入库
     # 开始的这段窗口里还停在「下载中」的文案上，看起来像卡住
-    task.result = {**task.result, "stage": "scan"}
+    task.result = {**(task.result or {}), "stage": "scan"}
     task.updated_at = utcnow()
     await db.commit()
     files = await asyncio.to_thread(f2.scan_directory, scan_root)
@@ -171,7 +171,7 @@ async def _apply_import_stage(db: AsyncSession, task: TaskQueue, to_import: list
         holder["total"] = max(1, total)
 
     def _should_stop() -> bool:
-        return holder["stop"]
+        return bool(holder["stop"])
 
     async def _progress_watcher() -> None:
         """定时把线程内进度落库，并把外部 cancelled/paused 转成停止标记。
@@ -223,7 +223,7 @@ async def _register_personal_bloggers_stage(db: AsyncSession, task: TaskQueue, r
 
     bloggers_stats: dict | None = None
     if personal_mode and register_bloggers and result.get("batch_file"):
-        task.result = {**task.result, "stage": "blogger"}
+        task.result = {**(task.result or {}), "stage": "blogger"}
         task.updated_at = utcnow()
         await db.commit()
         try:

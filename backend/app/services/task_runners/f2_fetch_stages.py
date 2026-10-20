@@ -475,6 +475,23 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
         }
         task.updated_at = utcnow()
         await db.commit()
+
+        def _progress_at(elapsed: float, i: int = index) -> int:
+            """进度口径：已完成的作者 + 当前作者区间内的软进度，再乘进 0~40% 的下载区间。
+
+            `i - 1` 保证「正在跑第 1 个作者」时从 1% 起步而不是直接跳到 40%。
+            写成具名函数而不是 lambda：lambda 带默认参数时 mypy 推不出
+            ``Callable[[float], int]``（watch_download 的参数类型）。
+            """
+            return (
+                int(
+                    _PROGRESS_AFTER_DOWNLOAD
+                    * (i - 1 + _soft_fraction(elapsed))
+                    / max(1, len(targets))
+                )
+                + 1
+            )
+
         try:
             rc, _stats = await _watch_download(
                 db,
@@ -485,14 +502,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
                 post_root,
                 baseline,
                 opts,
-                # 进度口径：已完成的作者 + 当前作者区间内的软进度，再乘进 0~40% 的下载区间。
-                # `index - 1` 保证「正在跑第 1 个作者」时从 1% 起步而不是直接跳到 40%。
-                progress_at=lambda elapsed, i=index: int(
-                    _PROGRESS_AFTER_DOWNLOAD
-                    * (i - 1 + _soft_fraction(elapsed))
-                    / max(1, len(targets))
-                )
-                + 1,
+                progress_at=_progress_at,
                 extra=author_extra,
                 result_extra={"fetch": fetch_summary},
             )

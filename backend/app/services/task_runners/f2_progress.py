@@ -17,6 +17,10 @@ import asyncio
 import subprocess
 import time
 from pathlib import Path
+
+from collections.abc import Callable
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task import TaskQueue
 from app.services.task_runners.common import utcnow
@@ -76,10 +80,10 @@ async def _watch_download(
     root: Path,
     baseline: dict,
     opts: dict,
-    progress_at,
+    progress_at: Callable[[float], int],
     extra: dict | None = None,
     result_extra: dict | None = None,
-) -> tuple[object, dict]:
+) -> tuple[Any, dict]:
     """一边等 f2 下载，一边把「已落盘文件数 + 软进度」持续写进任务行（两种下载共用）。
 
     为什么通用化（2026-10-01 用户报「下载目录已落两千张图，界面还停在 0%」）：

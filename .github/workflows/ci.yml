@@ -83,6 +83,16 @@ jobs:
       - name: ruff（零告警）
         run: python -m ruff check app
 
+      # 后端死代码：置信度 80 下必须 0 条（2026-10 已清零，见 docs/代码检查.md）
+      - name: vulture（死代码）
+        run: python -m vulture app --min-confidence 80
+
+      # 后端类型：mypy 棘轮（只查已清零的模块，清单在 scripts/check_types.py）。
+      # 全仓存量约 370 个类型错误，一次性清零不现实；棘轮保证「新代码不再欠债」，
+      # 每修好一个模块就往清单里加一行。
+      - name: mypy 棘轮（类型检查）
+        run: python scripts/check_types.py
+
       # 迁移链自检：临时空库 → `alembic upgrade head` → 结构必须与 ORM 一致。
       # 为什么必须在 CI 跑：本地建库走 create_all + stamp head，迁移链平时不执行，
       # 「空库跑不通 / 空库少约束」只有在这里才暴露（2026-10-20 就是这样发现链尾

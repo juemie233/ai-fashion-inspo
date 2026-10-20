@@ -27,6 +27,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,7 +162,7 @@ async def _running_f2_task_id(db: AsyncSession) -> int | None:
 
 
 async def create_f2_import_task_if_idle(
-    db: AsyncSession, **kwargs
+    db: AsyncSession, **kwargs: Any
 ) -> tuple[TaskQueue | None, int | None]:
     """并发安全地创建 f2_import 任务：已有进行中任务时复用它、不新建。
 
@@ -206,7 +207,7 @@ def f2_import_status() -> dict:
     from scripts import import_f2_downloads as f2
 
     like_user = str(settings.f2_like_user or "")
-    info = {
+    info: dict[str, Any] = {
         "available": False,
         "reason": "",
         "authors": 0,
@@ -284,7 +285,8 @@ def f2_import_status() -> dict:
         )
         return info
 
-    known, unknown = authors, []
+    known: Any = authors
+    unknown: list[dict] = []
     bloggers = f2.load_douyin_bloggers()
     if bloggers:
         # 只有库内登记过抖音博主时才有白名单依据；一个都没有则按 f2 账号总数报
@@ -405,7 +407,7 @@ async def maybe_schedule_auto_import(db: AsyncSession) -> int | None:
     return task.id
 
 
-def _running_task_brief(row) -> dict | None:
+def _running_task_brief(row: Any) -> dict | None:
     """把进行中的任务压成前端展示所需的少量字段（阶段 / 进度 / 计数 / 阶段标记）。
 
     ``stage`` 是理解 ``done/total`` 的前提：下载阶段是「作者数」，入库阶段是

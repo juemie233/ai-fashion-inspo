@@ -16,6 +16,7 @@ web/src/utils/taskPresentation.ts）。
 
 import logging
 from pathlib import Path
+from types import ModuleType
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,7 +84,7 @@ def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
     return fetch_mode == "like" and bool(requested)
 
 
-def _personal_scan_root(f2, fetch_mode: str):
+def _personal_scan_root(f2: ModuleType, fetch_mode: str) -> Path:
     """「我的列表」模式的产物根目录（点赞 / 收藏）。"""
     return (
         f2.DEFAULT_F2_COLLECT_ROOT
@@ -92,7 +93,7 @@ def _personal_scan_root(f2, fetch_mode: str):
     )
 
 
-def load_collect_folder_entries(root) -> dict[str, dict]:
+def load_collect_folder_entries(root: str | Path) -> dict[str, dict]:
     """读「收藏夹 ID → {name, 作品 ID}」清单（原始结构，供按夹限定入库范围用）。
 
     清单由按夹下载时写出（见 ``scripts/f2_collects.py``）：文件平铺在昵称目录下，
@@ -139,7 +140,7 @@ def load_collect_folder_entries(root) -> dict[str, dict]:
     }
 
 
-def load_collect_folder_map(root) -> dict[str, list[str]]:
+def load_collect_folder_map(root: str | Path) -> dict[str, list[str]]:
     """读「作品 ID → 抖音收藏夹」清单，返回 ``{收藏夹名: [作品 ID, ...]}``（按名聚合）。
 
     建二级收藏夹用这个视图（二级的名字就是收藏夹名）；限定入库范围请用
