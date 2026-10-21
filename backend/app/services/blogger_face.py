@@ -62,8 +62,13 @@ def _face_width_ratio(bbox: list, img_size: tuple[int, int] | None) -> float | N
     """
     if len(bbox) != 4 or img_size is None:
         return None
+    width = float(img_size[0])
+    if width <= 0:
+        # 尺寸读不出来时按「无法判定」处理：宁可放过（不跳过低置信度以外的照片），
+        # 也不能在这里除零把整次注册打成 500
+        return None
     bw = float(bbox[2] - bbox[0])
-    return round(bw / float(img_size[0]), 4)
+    return round(bw / width, 4)
 
 
 # ── 博主人脸注册 ──
@@ -291,7 +296,9 @@ async def register_blogger_face(
 
 
 async def get_blogger_face_status(db: AsyncSession, blogger_id: int) -> dict:
-    """查询博主人脸注册状态。"""
+    """查询博主人脸注册状态（博主不存在时 404，避免"未注册"被误当成可注册）。"""
+    if await db.get(Blogger, blogger_id) is None:
+        raise HTTPException(status_code=404, detail="博主未找到")
     record = await db.execute(
         select(BloggerFaceEmbedding).where(BloggerFaceEmbedding.blogger_id == blogger_id)
     )
