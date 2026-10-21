@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from sqlalchemy import delete, func, or_, select
@@ -347,7 +348,10 @@ class PersonServiceBase:
             async with db.begin_nested():
                 await db.flush()
         except IntegrityError:
-            db.expunge(person)
+            # SAVEPOINT 回滚后对象可能**已被移出 session**，此时 expunge 会抛
+            # InvalidRequestError，把本该是 409 的冲突变成 500。这里容错清理。
+            with contextlib.suppress(Exception):
+                db.expunge(person)
             raise PersonConflictError(
                 f"{self.label}的小红书号（xhs_id）已被其它记录占用"
             ) from None

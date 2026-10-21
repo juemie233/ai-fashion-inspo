@@ -64,7 +64,14 @@ async def evaluate_smart_collection(
 
     排序与素材库默认一致（上传时间倒序）；size 为 None 时返回全量
     （固化用），否则分页。
+
+    手动合集调用本函数返回 400：它的内容来自 collection_items，不存在「按条件求值」；
+    若静默按空条件求值，会把**全库素材**当成该合集内容返回（固化时尤其危险）。
     """
+    if collection.query_json is None:
+        raise HTTPException(
+            status_code=400, detail="该合集是手动合集，不支持按条件求值"
+        )
     query = _smart_base_query(collection).order_by(
         Inspiration.created_at.desc(), Inspiration.id.desc()
     )
@@ -473,7 +480,9 @@ async def _ensure_one(
         name=name,
         description=description,
         position=(max_position or 0) + 1,
-        query_json=json.dumps(query_json, ensure_ascii=False) if query_json else None,
+        query_json=(
+            json.dumps(query_json, ensure_ascii=False) if query_json is not None else None
+        ),
         parent_id=None,
         auto_source=auto_source,
     )
@@ -497,7 +506,10 @@ async def create_collection(
     parent_id: int | None = None,
     auto_source: str | None = None,
 ) -> dict:
-    """创建合集；query_json 非空时为智能合集。同层重名返回 409。
+    """创建合集；``query_json`` **不为 None** 时为智能合集。同层重名返回 409。
+
+    注意判定用 ``is not None`` 而不是真值：``query_json={}`` 表示「无条件智能合集」
+    （全部素材），若按真值判定会被当成手动合集，用户建完发现是个空合集。
 
     ``parent_id`` 非空即建二级收藏夹（父必须是一级，最多两级）；
     ``auto_source`` 由同步流程内部传（如 ``douyin``），用户接口不暴露。
@@ -539,7 +551,9 @@ async def create_collection(
         name=name,
         description=description,
         position=(max_position or 0) + 1,
-        query_json=json.dumps(query_json, ensure_ascii=False) if query_json else None,
+        query_json=(
+            json.dumps(query_json, ensure_ascii=False) if query_json is not None else None
+        ),
         parent_id=parent_id,
         auto_source=auto_source,
     )
@@ -643,9 +657,15 @@ async def add_inspirations(
             seen.add(insp_id)
             ordered_ids.append(insp_id)
 
-    # 过滤不存在的素材
+    # 过滤不存在**以及已进垃圾桶**的素材：合集内容查询本身就排除软删除素材
+    # （见 _manual_content_query），若把垃圾桶素材加进来，会产生「有成员行但
+    # 合集里看不到、计数也是 0」的幽灵成员；恢复素材后它又会突然冒出来。
     existing = (
-        await db.execute(select(Inspiration.id).where(Inspiration.id.in_(ordered_ids)))
+        await db.execute(
+            select(Inspiration.id).where(
+                Inspiration.id.in_(ordered_ids), Inspiration.deleted_at.is_(None)
+            )
+        )
     ).scalars().all()
     not_found = len(ordered_ids) - len(existing)
 
