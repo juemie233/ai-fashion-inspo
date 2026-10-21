@@ -104,6 +104,10 @@ async def get_candidate(run_id: int, filename: str, db: AsyncSession = Depends(g
     run = await db.get(GenerationRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
+    if not run.batch_dir:
+        # 批次刚建、目录还没定（batch_dir 在 create_run 里 flush 后写入）→ 直接 404，
+        # 否则 settings.storage_root / "" 会把 storage 根当成批次目录
+        raise HTTPException(status_code=404, detail="该批次还没有候选目录")
     # 白名单：只允许纯文件名（拒绝 ../ 与绝对路径）
     safe_name = Path(filename).name
     if safe_name != filename or not safe_name.endswith(".png"):

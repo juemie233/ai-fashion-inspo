@@ -132,6 +132,24 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
     out_dir = _candidate_dir(run)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    try:
+        await _execute_with_client(db, task, run, spec, params, seeds, template, client, out_dir)
+    finally:
+        await client.aclose()
+
+
+async def _execute_with_client(
+    db: AsyncSession,
+    task: TaskQueue,
+    run: GenerationRun,
+    spec: dict,
+    params: dict,
+    seeds: list[int],
+    template: dict,
+    client: ComfyUIClient,
+    out_dir: Path,
+) -> None:
+    """真正的执行体（拆出来只为让 :func:`execute_image_gen` 能 finally 关连接池）。"""
     run.status = "running"
     run.error = None
     await _mark_stage(db, task, run, "checking_vram")
@@ -224,7 +242,14 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
                 image.get("filename") or "", image.get("subfolder") or ""
             )
             target = out_dir / _CANDIDATE_NAME.format(idx=idx, seed=seed)
-            target.write_bytes(data)
+            try:
+                target.write_bytes(data)
+            except OSError as exc:
+                # 目录可能在生成期间被「丢弃」删掉 → 给出可操作的原因，
+                # 而不是让 worker 记一条看不出所以然的未知异常
+                raise ComfyUIError(
+                    f"写入候选图失败（候选目录可能已被丢弃）：{exc}", kind="http"
+                ) from exc
         except ComfyUIError as exc:
             run.failed += 1
             run.error = _friendly_error(exc)

@@ -373,6 +373,60 @@ def _batch_file_of(task: TaskQueue) -> Path | None:
     return Path(raw) if raw else None
 
 
+async def _plan_rollback_for_task(
+    db: AsyncSession, task_id: int, force: bool
+) -> tuple[dict, list[dict]]:
+    """计算回滚计划（只读），返回 ``(给前端的预览, 可删条目列表)``。
+
+    抽出来是为了**只 plan 一次**：预览与执行各自 plan 会在大批次上白扫两遍，
+    而且两次之间数据可能变化 —— 用户看到的「可删 N 条」与实际删除数就会对不上。
+    """
+    from scripts import import_f2_downloads as f2
+
+    task = await _load_f2_task(db, task_id)
+    batch_file = _batch_file_of(task)
+    if batch_file is None or not batch_file.exists():
+        return (
+            {
+                "batch_id": "",
+                "batch_file": "",
+                "storage_root": "",
+                "total": 0,
+                "deletable": 0,
+                "kept": 0,
+                "kept_reasons": {},
+                "sample": [],
+                "message": "本批没有批次清单（通常是入库阶段未落盘或写失败），无法回滚",
+            },
+            [],
+        )
+
+    db_path = f2.library_db_path()
+    deletable, kept = await asyncio.to_thread(
+        f2.plan_rollback, batch_file, db_path, force
+    )
+    manifest = f2.load_batch_manifest(batch_file)
+    kept_reasons: dict[str, int] = {}
+    for item in kept:
+        reason = str(item.get("keep_reason") or "未知原因")
+        kept_reasons[reason] = kept_reasons.get(reason, 0) + 1
+    recorded_root = f2.batch_storage_root(batch_file)
+    preview = {
+        "batch_id": str(manifest.get("batch_id") or ""),
+        "batch_file": str(batch_file),
+        "storage_root": str(recorded_root or settings.storage_root),
+        "total": len(manifest.get("imported") or []),
+        "deletable": len(deletable),
+        "kept": len(kept),
+        "kept_reasons": kept_reasons,
+        "sample": [
+            {"inspiration_id": r.get("inspiration_id"), "file_path": r.get("file_path")}
+            for r in deletable[:20]
+        ],
+    }
+    return preview, deletable
+
+
 async def preview_f2_task_rollback(
     db: AsyncSession, task_id: int, force: bool = False
 ) -> dict:
@@ -386,46 +440,8 @@ async def preview_f2_task_rollback(
         ``{"batch_id", "batch_file", "storage_root", "total", "deletable", "kept",
         "kept_reasons", "sample", "message"?}``
     """
-    from scripts import import_f2_downloads as f2
-
-    task = await _load_f2_task(db, task_id)
-    batch_file = _batch_file_of(task)
-    if batch_file is None or not batch_file.exists():
-        return {
-            "batch_id": "",
-            "batch_file": "",
-            "storage_root": "",
-            "total": 0,
-            "deletable": 0,
-            "kept": 0,
-            "kept_reasons": {},
-            "sample": [],
-            "message": "本批没有批次清单（通常是入库阶段未落盘或写失败），无法回滚",
-        }
-
-    db_path = f2.library_db_path()
-    deletable, kept = await asyncio.to_thread(
-        f2.plan_rollback, batch_file, db_path, force
-    )
-    manifest = f2.load_batch_manifest(batch_file)
-    kept_reasons: dict[str, int] = {}
-    for item in kept:
-        reason = str(item.get("keep_reason") or "未知原因")
-        kept_reasons[reason] = kept_reasons.get(reason, 0) + 1
-    recorded_root = f2.batch_storage_root(batch_file)
-    return {
-        "batch_id": str(manifest.get("batch_id") or ""),
-        "batch_file": str(batch_file),
-        "storage_root": str(recorded_root or settings.storage_root),
-        "total": len(manifest.get("imported") or []),
-        "deletable": len(deletable),
-        "kept": len(kept),
-        "kept_reasons": kept_reasons,
-        "sample": [
-            {"inspiration_id": r.get("inspiration_id"), "file_path": r.get("file_path")}
-            for r in deletable[:20]
-        ],
-    }
+    preview, _deletable = await _plan_rollback_for_task(db, task_id, force)
+    return preview
 
 
 async def rollback_f2_task(
@@ -440,15 +456,9 @@ async def rollback_f2_task(
     """
     from scripts import import_f2_downloads as f2
 
-    preview = await preview_f2_task_rollback(db, task_id, force)
+    preview, deletable = await _plan_rollback_for_task(db, task_id, force)
     if not preview["batch_file"]:
         return {**preview, "deleted": 0, "failed": 0, "removed_files": 0, "errors": []}
-
-    batch_file = Path(preview["batch_file"])
-    db_path = f2.library_db_path()
-    deletable, _kept = await asyncio.to_thread(
-        f2.plan_rollback, batch_file, db_path, force
-    )
     if not deletable:
         return {
             **preview,
@@ -462,7 +472,7 @@ async def rollback_f2_task(
     stats = await asyncio.to_thread(
         f2.apply_rollback,
         deletable,
-        db_path=db_path,
+        db_path=f2.library_db_path(),
         storage_root=Path(preview["storage_root"]),
     )
     # 留痕：物理删除属破坏性操作，审计与其它删除路径保持一致

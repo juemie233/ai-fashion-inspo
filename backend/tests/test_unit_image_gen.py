@@ -62,6 +62,9 @@ class _FakeClient:
     async def interrupt(self) -> None:
         return None
 
+    async def aclose(self) -> None:
+        return None
+
 
 async def _make_run(seeds: list[int], *, status: str = "queued") -> tuple[int, int]:
     """造一条批次 + 任务，返回 (run_id, task_id)。"""
@@ -271,6 +274,13 @@ async def test_discard_run_removes_candidates_only(client):
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "01_seed-1.png").write_bytes(_png_bytes())
         await generation_service.confirm_import(db, run_id, ["01_seed-1.png"])
+        # 丢弃要求批次已终态（执行中丢目录会让 runner 崩）——先把状态推到 done
+        run = await db.get(GenerationRun, run_id)
+        run.status = "done"
+        task = await db.get(TaskQueue, run.task_id) if run.task_id else None
+        if task is not None:
+            task.status = "success"
+        await db.commit()
 
         result = await generation_service.discard_run(db, run_id)
         assert result["removed_files"] == 1
@@ -466,3 +476,123 @@ async def test_execute_i2i_uploads_references_then_generates(client, monkeypatch
     assert workflow["6"]["inputs"]["images"] == {"image_1": ["4", 0]}
     assert workflow["7"]["inputs"]["latent_image"] == ["6", 2]
     assert run.status == "done"
+
+
+# ── 审查修复回归（2026-10-21）──
+
+
+async def test_detail_returns_task_stage(client):
+    """详情接口要带任务阶段：否则前端「等待显存已等 N 秒」永远是 0。"""
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "阶段信息"})
+        task = await db.get(TaskQueue, out["task_id"])
+        task.status = "running"
+        task.progress = 40
+        task.result = {"run_id": out["run_id"], "stage": "waiting_vram", "waited_seconds": 30}
+        await db.commit()
+
+        detail = await generation_service.list_candidates(db, out["run_id"])
+
+    assert detail["task"]["status"] == "running"
+    assert detail["task"]["progress"] == 40
+    assert detail["task"]["result"]["waited_seconds"] == 30
+
+
+async def test_discard_rejected_while_running(client):
+    """执行中的批次不能丢弃：删目录会让 runner 写文件失败。"""
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "在跑"})
+        task = await db.get(TaskQueue, out["task_id"])
+        task.status = "running"
+        run = await db.get(GenerationRun, out["run_id"])
+        run.status = "running"
+        await db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.discard_run(db, out["run_id"])
+        assert "仍在生成中" in str(exc.value.detail)
+
+
+async def test_discard_rejected_while_task_pending(client):
+    """批次已终态但任务还排队（数据不一致）也不能删目录。"""
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "排队"})
+        task = await db.get(TaskQueue, out["task_id"])
+        task.status = "pending"
+        run = await db.get(GenerationRun, out["run_id"])
+        run.status = "done"
+        await db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.discard_run(db, out["run_id"])
+        assert "请先取消" in str(exc.value.detail)
+
+
+async def test_confirm_rejects_unknown_tag(client):
+    """无效标签 id 要在提交前拦成 400，而不是 flush 时撞外键变 500。"""
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "标签"})
+        folder = settings.storage_root / f"generated/{out['run_id']}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "01_seed-1.png").write_bytes(_png_bytes())
+
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.confirm_import(
+                db, out["run_id"], ["01_seed-1.png"], tag_ids=[999999]
+            )
+        assert "标签不存在" in str(exc.value.detail)
+
+
+async def test_confirm_partial_failure_leaves_no_orphan_files(client, monkeypatch):
+    """第 2 张失败时，第 1 张已复制的文件要一起清掉（否则磁盘留孤儿）。"""
+    from app.services import generation_service as svc
+
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "部分失败", "count": 2})
+        folder = settings.storage_root / f"generated/{out['run_id']}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "01_seed-1.png").write_bytes(_png_bytes("red"))
+        (folder / "02_seed-2.png").write_bytes(_png_bytes("blue"))
+
+        real = svc.create_inspiration_from_file
+        calls = {"n": 0}
+
+        async def _boom(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise HTTPException(status_code=500, detail="模拟缩略图失败")
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(svc, "create_inspiration_from_file", _boom)
+
+        with pytest.raises(HTTPException):
+            await generation_service.confirm_import(
+                db, out["run_id"], ["01_seed-1.png", "02_seed-2.png"]
+            )
+
+    # 第 1 张复制进 storage 的文件应被清理，且库里没有残留行
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(Inspiration.id).where(Inspiration.generation_run_id == out["run_id"])
+            )
+        ).scalars().all()
+    assert rows == []
+    images_dir = settings.images_dir
+    leftovers = [p for p in images_dir.rglob("*.png") if p.stat().st_size > 0]
+    assert leftovers == []
+
+
+async def test_i2i_size_limit_message_matches_spec(client):
+    """i2i 上限是 1024²，报错文案不能拿 1328 说事。"""
+    await _add_reference_image("ref-size")
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db,
+                {"kind": "i2i", "prompt": "x", "reference_ids": ["ref-size"],
+                 "width": 1328, "height": 1328},
+            )
+        detail = str(exc.value.detail)
+        assert "1048576" in detail
+        assert "1328×1328" not in detail

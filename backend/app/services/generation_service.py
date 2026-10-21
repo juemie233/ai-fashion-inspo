@@ -26,9 +26,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.generation import GenerationRun
 from app.models.inspiration import Inspiration
+from app.models.tag import Tag
 from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.probe import MODEL_SPECS
+from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
 from app.utils.file_hash import file_sha256
 from app.utils.time import utcnow
@@ -74,10 +76,13 @@ def _validate_params(payload: dict, spec: dict) -> dict:
     height = _int_or(payload.get("height"), spec["defaults"]["height"])
     if width < 256 or height < 256:
         raise HTTPException(status_code=400, detail="尺寸过小：宽高最小 256")
-    if width * height > min(MAX_PIXELS, int(spec.get("max_pixels") or MAX_PIXELS)):
+    # 上限按档位算：Z-Image 可到 1328²，Qwen-Image 2.1 只有 1024²（权重更大）
+    limit = min(MAX_PIXELS, int(spec.get("max_pixels") or MAX_PIXELS))
+    if width * height > limit:
+        side = int(limit**0.5)
         raise HTTPException(
             status_code=400,
-            detail=f"尺寸过大：宽×高不能超过 {MAX_PIXELS}（约 1328×1328），否则会显存不足",
+            detail=f"尺寸过大：当前模型宽×高不能超过 {limit}（约 {side}×{side}），否则会显存不足",
         )
 
     count = _int_or(payload.get("count"), 1)
@@ -114,6 +119,25 @@ def _validate_params(payload: dict, spec: dict) -> dict:
         "negative": str(payload.get("negative") or "").strip() or None,
         "reference_ids": list(payload.get("reference_ids") or []),
     }
+
+
+async def _rollback_created(
+    db: AsyncSession, created: list[tuple[str, str | None]]
+) -> None:
+    """回滚本次已创建的入库：先删磁盘文件，再回滚事务。
+
+    顺序很关键——DB 行还在事务里（未提交），先回滚就不知道要删哪些文件了；
+    而文件先删掉不会造成「有行没文件」的悬空素材（行随回滚一起消失）。
+    """
+    if not created:
+        await db.rollback()
+        return
+    for file_path, thumb_path in created:
+        try:
+            delete_files(file_path, thumb_path)
+        except Exception as exc:  # noqa: BLE001 —— 清理失败不能掩盖原始异常
+            logger.warning(f"回滚入库时删除文件失败（忽略）{file_path}: {exc}")
+    await db.rollback()
 
 
 async def _assert_references_exist(db: AsyncSession, ids: list[str]) -> None:
@@ -271,7 +295,22 @@ async def list_candidates(db: AsyncSession, run_id: int) -> dict:
                 }
             )
 
+    # 任务侧信息：进度百分比与 result 里的 stage / waited_seconds。
+    # 「等待显存」的秒数只存在于 task.result（run.params 是提交时的参数快照，不会有它），
+    # 不返回这里前端就只能显示 0 秒（曾出现的问题）。
+    task_info: dict | None = None
+    if run.task_id:
+        task = await db.get(TaskQueue, run.task_id)
+        if task is not None:
+            task_info = {
+                "id": task.id,
+                "status": task.status,
+                "progress": task.progress,
+                "result": task.result if isinstance(task.result, dict) else {},
+            }
+
     return {
+        "task": task_info,
         "run": {
             "id": run.id,
             "kind": run.kind,
@@ -309,8 +348,22 @@ async def confirm_import(
     if not filenames:
         raise HTTPException(status_code=400, detail="请至少选择一张图")
 
+    if tag_ids:
+        # 无效标签 id 会在 flush 时撞外键抛 IntegrityError（500），提前拦成 400
+        rows = await db.execute(select(Tag.id).where(Tag.id.in_(tag_ids)))
+        known = {r[0] for r in rows.all()}
+        missing = [t for t in tag_ids if t not in known]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"标签不存在：{', '.join(str(t) for t in missing)}",
+            )
+
     folder = _run_dir(run)
     imported_ids: list[str] = []
+    # 本次已入库素材的 (file_path, thumbnail_path)：任一后续条目失败时要把它们的文件删掉，
+    # 否则「文件已复制、DB 行随事务回滚」→ 磁盘上留孤儿图（找不到、也占空间）
+    created_files: list[tuple[str, str | None]] = []
     skipped: list[dict] = []
     for name in filenames:
         # 只允许批次目录内的文件名，防路径穿越（../ 之类）
@@ -329,10 +382,15 @@ async def confirm_import(
                 caption=run.prompt if caption_from_prompt else None,
             )
             imported_ids.append(insp.id)
+            created_files.append((insp.file_path, insp.thumbnail_path))
         except HTTPException as exc:
             if exc.status_code == 409:
                 skipped.append({"filename": name, "reason": "已存在（内容重复）"})
                 continue
+            await _rollback_created(db, created_files)
+            raise
+        except Exception:
+            await _rollback_created(db, created_files)
             raise
 
     await db.commit()
@@ -349,6 +407,20 @@ async def discard_run(db: AsyncSession, run_id: int) -> dict:
     run = await db.get(GenerationRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
+
+    # 执行中的批次不能丢目录：runner 还在往这个目录写，删了会撞 FileNotFoundError
+    # 把任务搞成「未知异常」，而批次状态已经是 cancelled，两边对不上。
+    if run.status in ("queued", "running", "waiting_vram"):
+        raise HTTPException(
+            status_code=400,
+            detail="本批仍在生成中：请先取消，等任务停止后再丢弃",
+        )
+    if run.task_id:
+        task = await db.get(TaskQueue, run.task_id)
+        if task is not None and task.status in ("pending", "running"):
+            raise HTTPException(
+                status_code=400, detail="任务尚未停止（排队中/执行中），请先取消再丢弃"
+            )
 
     folder = _run_dir(run)
     removed = 0

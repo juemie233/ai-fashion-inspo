@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 """探测用的短超时：UI 每次打开都会调，不能等 10 秒。"""
 PROBE_TIMEOUT = 2.0
 
+"""全量 /object_info 的缓存（ComfyUI 节点表有数 MB，每次 /status 都拉一次不划算）。
+
+缓存 60 秒：模型文件放对目录后用户会点「刷新环境」，一分钟内看到旧结果会困惑，
+所以 TTL 不能太长；但也足够挡住「同一页面反复刷新」的重复拉取。
+"""
+_OBJECT_INFO_TTL = 60.0
+_object_info_cache: dict[str, tuple[float, dict]] = {}
+
+
+async def _object_info_cached(client: ComfyUIClient) -> dict:
+    """带 TTL 的 ``/object_info``。键是 base_url（多实例/换端口时不会串）。"""
+    import time as _time
+
+    key = client.base_url
+    hit = _object_info_cache.get(key)
+    now = _time.monotonic()
+    if hit and now - hit[0] < _OBJECT_INFO_TTL:
+        return hit[1]
+    info = await client.object_info()
+    _object_info_cache[key] = (now, info)
+    return info
+
 """模型档位定义。
 
 - ``workflow``：模板名（对应 ``workflows/<name>.json``）
@@ -119,7 +141,17 @@ async def probe(client: ComfyUIClient | None = None) -> ProbedStatus:
     Args:
         client: 可注入（测试用）；缺省按配置新建。
     """
+    own_client = client is None
     client = client or ComfyUIClient(settings.comfyui_base_url, timeout=PROBE_TIMEOUT)
+    try:
+        return await _probe_with(client)
+    finally:
+        if own_client:
+            await client.aclose()
+
+
+async def _probe_with(client: ComfyUIClient) -> ProbedStatus:
+    """探测主体（拆出来只为让 :func:`probe` 能 finally 关连接池）。"""
     status = ProbedStatus()
     try:
         stats = await client.system_stats()
@@ -144,7 +176,7 @@ async def probe(client: ComfyUIClient | None = None) -> ProbedStatus:
 
     # 模型自检：只看模板依赖的那几个文件在不在 ComfyUI 的下拉选项里
     try:
-        info = await client.object_info()
+        info = await _object_info_cached(client)
     except ComfyUIError as exc:
         status.reason = f"读取 ComfyUI 节点信息失败：{exc}"
         status.models = {key: "unknown" for key in MODEL_SPECS}

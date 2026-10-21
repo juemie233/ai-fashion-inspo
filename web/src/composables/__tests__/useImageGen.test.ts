@@ -77,8 +77,15 @@ describe('useImageGen', () => {
 
   it('阶段文案覆盖「等待显存」与失败原因（前端要能解释在等什么）', async () => {
     mocks.fetchRun.mockResolvedValue({
-      run: { ...RUN_DETAIL.run, status: 'waiting_vram', params: { waited_seconds: 40 } },
+      run: { ...RUN_DETAIL.run, status: 'waiting_vram' },
       items: [],
+      // 等待秒数来自 task.result（runner 写的是任务侧，不是提交参数快照）
+      task: {
+        id: 3,
+        status: 'running',
+        progress: 0,
+        result: { stage: 'waiting_vram', waited_seconds: 40, vram_free_gib: 2.3 },
+      },
     })
     const gen = useImageGen()
     // 直接注入 detail 的路径：靠 submit 拉取
@@ -87,6 +94,7 @@ describe('useImageGen', () => {
     await gen.submit({ prompt: 'x' })
     expect(gen.stageText.value).toContain('等待显存')
     expect(gen.stageText.value).toContain('40')
+    expect(gen.stageText.value).toContain('2.3') // 顺带把空闲显存说出来
 
     mocks.fetchRun.mockResolvedValue({
       run: { ...RUN_DETAIL.run, status: 'failed', error: '显存不足：请关闭浏览器标签' },

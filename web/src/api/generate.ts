@@ -53,9 +53,18 @@ export interface GenerationCandidate {
   url: string
 }
 
+/** 任务侧信息：进度百分比 + result 里的 stage / waited_seconds。 */
+export interface GenerationTaskInfo {
+  id: number
+  status: string
+  progress: number
+  result: { stage?: string; waited_seconds?: number; vram_free_gib?: number; [k: string]: unknown }
+}
+
 export interface GenerationRunDetail {
   run: GenerationRun
   items: GenerationCandidate[]
+  task?: GenerationTaskInfo | null
 }
 
 export interface CreateRunPayload {

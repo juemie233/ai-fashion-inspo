@@ -287,3 +287,61 @@ async def test_upload_image_posts_multipart_and_returns_name():
     assert seen["path"] == "/upload/image"
     assert "multipart/form-data" in seen["ctype"]
     assert seen["body_has_png"] is True
+
+
+# ── 审查修复：探测缓存 / 连接复用 ──
+
+
+async def test_probe_caches_object_info(monkeypatch):
+    """全量 object_info 有数 MB：60 秒内重复 /status 不该重复拉。"""
+    from app.services.comfyui import probe as probe_mod
+
+    calls = {"n": 0}
+
+    class _C:
+        base_url = "http://cache-test"
+
+        async def system_stats(self) -> dict:
+            return {"system": {"comfyui_version": "x"},
+                    "devices": [{"vram_total": 16 * 2**30, "vram_free": 15 * 2**30}]}
+
+        async def object_info(self, node: str | None = None) -> dict:
+            calls["n"] += 1
+            return {
+                "UNETLoader": {"input": {"required": {"unet_name": [["z_image_turbo_int8_convrot.safetensors"]]}}},
+                "CLIPLoader": {"input": {"required": {"clip_name": [["qwen_3_4b_fp8_mixed.safetensors"]]}}},
+                "VAELoader": {"input": {"required": {"vae_name": [["ae.safetensors"]]}}},
+                "KSampler": {}, "CLIPTextEncode": {}, "ConditioningZeroOut": {},
+                "EmptySD3LatentImage": {}, "ModelSamplingAuraFlow": {},
+                "VAEDecode": {}, "SaveImage": {},
+            }
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _no_resident() -> list[dict]:
+        return []
+
+    monkeypatch.setattr(probe_mod, "ollama_resident", _no_resident)
+    probe_mod._object_info_cache.clear()
+
+    await probe_mod.probe(_C())
+    await probe_mod.probe(_C())
+    assert calls["n"] == 1  # 第二次命中缓存
+
+
+async def test_client_reuses_connection(monkeypatch):
+    """同一 client 连续请求应复用同一个 AsyncClient（出图期间轮询几十次）。"""
+    created: list[object] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"devices": []})
+
+    client = _client(handler)
+    await client.system_stats()
+    first = client._http
+    await client.system_stats()
+    assert client._http is first  # 复用
+    await client.aclose()
+    assert client._http is None
+    created.append(first)

@@ -89,17 +89,31 @@ class ComfyUIClient:
         self.timeout = timeout
         self.poll_interval = poll_interval
         self._transport = transport
+        self._http: httpx.AsyncClient | None = None
 
     # ── 内部：统一的请求入口，把网络异常翻译成 not_running ──
     async def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            base_url=self.base_url, timeout=self.timeout, transport=self._transport
-        )
+        """惰性创建并复用一个连接池。
+
+        出图期间一张图要几十次轮询（每 0.5 秒一次）；每次新建 ``AsyncClient``
+        等于每次重新 TCP 握手，白白增加延迟。实例由 :meth:`aclose` 显式关闭。
+        """
+        if self._http is None:
+            self._http = httpx.AsyncClient(
+                base_url=self.base_url, timeout=self.timeout, transport=self._transport
+            )
+        return self._http
+
+    async def aclose(self) -> None:
+        """关闭底层连接池（调用方用完必须关，否则连接泄漏）。"""
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         try:
-            async with await self._client() as client:
-                return await client.request(method, path, **kwargs)
+            client = await self._client()
+            return await client.request(method, path, **kwargs)
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             raise ComfyUINotRunningError(
                 f"ComfyUI 未启动或端口不通（{self.base_url}）",

@@ -24,6 +24,7 @@ import {
   type GenerationCandidate,
   type GenerationRunBrief,
   type GenerationRun,
+  type GenerationTaskInfo,
   type PromptPreview,
   type GenerationRunDetail,
 } from '@/api/generate'
@@ -47,13 +48,27 @@ export function useImageGen() {
   const run = computed<GenerationRun | null>(() => detail.value?.run ?? null)
   const candidates = computed<GenerationCandidate[]>(() => detail.value?.items ?? [])
   const active = computed(() => !!run.value && ACTIVE_STATUSES.has(run.value.status))
+  /** 任务侧信息（状态/进度/result），null 表示接口没返回（旧数据或任务已被清理）。 */
+  const taskInfo = computed<GenerationTaskInfo | null>(() => detail.value?.task ?? null)
+
+  /** 任务阶段（runner 写在 task.result 里：stage / waited_seconds / vram_free_gib）。 */
+  const taskStage = computed(() => {
+    const result = taskInfo.value?.result
+    return {
+      stage: typeof result?.stage === 'string' ? result.stage : '',
+      waited: Number(result?.waited_seconds ?? 0),
+      vramFree: typeof result?.vram_free_gib === 'number' ? result.vram_free_gib : null,
+    }
+  })
+
   /** 生成中的人话说明（含「等待显存」的秒数与占用者）。 */
   const stageText = computed(() => {
     const r = run.value
     if (!r) return ''
     if (r.status === 'waiting_vram') {
-      const waited = Number((r.params as { waited_seconds?: number })?.waited_seconds ?? 0)
-      return `等待显存（已等 ${waited} 秒）：Ollama 正占着 GPU，可执行 ollama stop 或稍候`
+      const { waited, vramFree } = taskStage.value
+      const free = vramFree == null ? '' : `，当前空闲 ${vramFree} GiB`
+      return `等待显存（已等 ${waited} 秒${free}）：Ollama 正占着 GPU，可执行 ollama stop 或稍候`
     }
     if (r.status === 'queued') return '排队中（等待 worker 认领）'
     if (r.status === 'running') return `生成中 ${r.done}/${r.total}`
@@ -233,6 +248,8 @@ export function useImageGen() {
     selected,
     active,
     stageText,
+    taskStage,
+    taskInfo,
     lastSeed,
     history,
     historyLoading,
