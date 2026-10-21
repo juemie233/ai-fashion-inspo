@@ -85,6 +85,7 @@ chrome_debug_port: int = 9222
 | 移动端     | React Native (Expo) + Zustand                                                                |
 | 浏览器插件 | Chrome Extension Manifest V3                                                                 |
 | AI 推理    | Ollama + Qwen3-VL:8B-Instruct（本地 GPU）                                                    |
+| 本地出图   | ComfyUI（外部进程，`127.0.0.1:8188`）+ Z-Image-Turbo int8 / Qwen-Image 2.1                |
 | 采集引擎   | Playwright + CDP 连接真实 Chrome（零检测采集）                                               |
 
 ## 功能概览
@@ -102,11 +103,65 @@ chrome_debug_port: int = 9222
 | **质量审核**           | 图片 + 视频（视频取首帧缩略图）二分类审核，异步任务（可暂停/恢复/取消，上限 5000 条）；**负样本初筛器**前置拦截高置信垃圾（命中/通过/无向量跳过/force 未启用四态统计）；**结构化拒绝原因**（不是穿搭/只有单品特写/穿搭被裁切/模糊遮挡/广告截图/其它）支持筛选与分布统计；**误判反馈闭环**（「判错了」弹窗记录原判定/纠正结果/错在哪类，提交即改正状态并置为人工判定）；**人工判定不可被随机复审覆盖**；灰区（初筛置信度 0.5~阈值）优先人工复审；被拒素材抽样做 AI 生成检测；前置规则检查（过小/纯色/极端比例，默认关闭）；**审核日志可复盘**（模型原始输出 / prompt 指纹 / 模型名 / 初筛置信度）；按来源统计通过率、按 prompt 指纹做 A/B 对比、结果导出 CSV；通过率与耗时基于**实测均值**；失败率超阈值告警、跳过明细可见；可选「判为不合格自动入垃圾桶」                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **素材管理**           | 按小菜单分区的管理后台（子页面状态经 URL 持久化，刷新保持）：概览（统计/分布/最大文件）、疑似 AI 复核（勾选后批量删除或重新标记为非 AI，悬停卡片点 👁 浏览详情）、批量清理（无标签/分析失败）、数据完整性检查、重复文件检测与去重、近似重复检测（感知哈希分组 + 全库扫描（默认不再抽样） + 并排预览 + 人工确认删除，哈希缓存渐进补齐后秒级扫描）、向量化回填（一键补全缺失图像向量）、垃圾桶（软删除素材的恢复/彻底删除/清空，默认不自动回收）、数据洞察（CSV 导出/新增趋势图/人物频次排行/操作审计日志/**提示词质量对比**——按提示词版本聚合成功率、平均标签数、纠错率与可选裸词率，用于挑选最优提示词）、**手机图剪裁**（扫描手动上传竖屏截图 → 人工勾选确认 → 一键裁剪状态栏/底部导航栏区域：按平台分工双模式——小红书截图「auto 黑边检测」/抖音截图「内容边界检测」，截图特征置信度分级 + 字形证据/底部残留估算；原图自动备份 + 向量回填；跳过素材支持在素材库中精确定位跳转；裁剪结果与库中素材内容重复时左右对比展示，由用户决定保留哪一张——可物理删除重复素材）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **人物管理**           | **穿搭博主 / 职业模特双 Tab 独立管理**（两类已物理拆分为独立表与 API，业务逻辑各自演进）：列表（名称搜索/平台筛选/排序）、新建/编辑/删除（仅无关联素材时可删）、热门排行、风格画像（高频标签/类别分布/趋势）、**IP 属地统计**（按属地聚合博主数/素材数，横向条形图不隐藏任何一档标签）、素材关联（详情页按博主/模特分区块搜索添加/解除）、**博主 CSV 导入**（按小红书号 upsert）、**模特照片组**（选择文件夹整组导入到选定模特、照片组浏览/灯箱/删除、组内 SHA-256 去重）、**博主头像**（两种来源二选一：从 TA 已关联的素材里选一张（视频取首帧缩略图），或本地上传一张照片；取到照片后**提取人像**——送人脸子服务取最大人脸、按检测框外扩裁成 256×256 正方形，无脸或子服务不可用时回退整张照片；列表与详情按**圆形**展示，可一键清除）、**博主 人脸特征注册**（上传正脸照片 与/或 从已关联素材中选图，两种来源合计 1~5 张，注册/重新注册，素材人脸自动匹配依赖此特征库；**匹配阈值可按人单独配置**——未配置的走兜底阈值，匹配报告区分「兜底阈值 + 另 N 人按各自阈值判定」；**子服务离线态显式化**：离线时人脸动作禁用并给出提示，离线期间每 15 秒自动复检、也可点「重新检测」，启动子服务后不必刷新页面；职业模特无此人脸能力）、**注销人脸 / 解绑素材**（博主详情多选素材批量注销已匹配人脸、批量解除素材-博主关联，素材侧已确认人脸自动防重复匹配）、**一键补全主页（按平台分流）**（小红书：拉一次「我关注的用户」列表按昵称归一化解析 uid，补 `profile_url` / `platform_user_id`，其余走本地 URL↔ID 互推——**不按小红书号搜用户**，实测搜不到本人；抖音：离线读 f2 用户库按 `sec_user_id` 精确匹配回填 IP 属地，**只补空缺**；补不到的记入「已跳过」写明原因，可解除后重试）、**人物组（博主跨平台绑定）**（同一现实人物在抖音/小红书各有账号时绑定为同一人——如小红书「Fox_」与「多多」：列表同组折叠为一条主账号（素材数最多者，可手动指定默认展示位）并带多平台徽标，展开可见组内各账号及其素材，详情页可绑定/解绑/切主，账号记录全部保留、按平台采集不受影响） |
-| **任务管理**           | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/**抖音素材获取**/向量回填/标签高级管理）、进度条与完成统计（向量/删除/审核明细）、**运行中任务的阶段文案**（如 f2 获取素材的「第 4/21 个作者 · 逐作者翻页，单作者约 10 秒~4 分钟」与「第 512/11936 个文件 · 复制文件并生成缩略图」，避免长时间停在低百分比却没说明；「我的喜欢」下载期另显示实时计数）、**运行中任务暂停 / 已暂停恢复 / 取消**（可暂停与可取消的类型见接口白名单：批量分析、组合分析、标签网络分析、质量审核、f2 一键获取、向量回填；已暂停的可暂停类型也能直接取消，不必先恢复——批量/组合/质量审核暂停后恢复按「已成功跳过」幂等续算，向量回填从 `done` 断点续算；可暂停 / 可取消 / **重负载互斥** 三份类型清单前后端同一份、由测试锁定）、已暂停任务排到列表最前、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **任务管理**           | 聚合任务队列与采集任务统一查看：分页/状态与类型筛选（类型中文映射 + 图标 + 颜色区分：批量分析/组合分析/质量审核/批量删除/近似重复检测删除/采集/**抖音素材获取**/向量回填/标签高级管理/**本地出图**）、进度条与完成统计（向量/删除/审核明细）、**运行中任务的阶段文案**（如 f2 获取素材的「第 4/21 个作者 · 逐作者翻页，单作者约 10 秒~4 分钟」与「第 512/11936 个文件 · 复制文件并生成缩略图」，避免长时间停在低百分比却没说明；「我的喜欢」下载期另显示实时计数）、**运行中任务暂停 / 已暂停恢复 / 取消**（可暂停与可取消的类型见接口白名单：批量分析、组合分析、标签网络分析、质量审核、f2 一键获取、向量回填；已暂停的可暂停类型也能直接取消，不必先恢复——批量/组合/质量审核暂停后恢复按「已成功跳过」幂等续算，向量回填从 `done` 断点续算；可暂停 / 可取消 / **重负载互斥** 三份类型清单前后端同一份、由测试锁定）、已暂停任务排到列表最前、取消排队任务、失败采集一键重试、**任务进度 WebSocket 实时推送**（断线自动重连 + 轮询降级兜底，侧边栏展示连接状态）、预计剩余时间、**数据备份状态卡片**（自动补备开关 / 备份进行中（双通道运行锁）/ 最近成功备份 / 历史记录（成功失败标记）/ 备份日志尾部，只读实时展示）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **抖音素材获取（f2）** | 独立的抖音采集通道（**不依赖 Chrome / CDP**，走本地 f2 按博主增量下载）：**一键获取素材**（调 f2 逐作者增量下载 → 五层去重 → 入库，一个按钮 / 一条命令）、**「我的喜欢」通道**（`mode=like`：只给「我的主页链接」就能把点赞过的作品全部拉回来，不逐作者、不加时间窗口——喜欢列表按点赞时间排序，f2 的 `-i` 按发布时间过滤会漏掉「最近点赞的老视频」；**下载期实时进度**：观察器每 2 秒统计下载目录的「已下载 N 个 / 已下载 X MB」，软进度从 1% 起步、按耗时缓慢逼近 35% 上限（900 秒约走完一半差距，永不到顶），长时间下载不再看起来卡死）、**「我的收藏」通道**（`mode=collection`：拉抖音收藏列表，跨作者、同样不加时间窗口；**先扫描、后下载**——先列出收藏夹与每个夹的作品数，勾选后只下选中的夹（夹默认全选，选择本地只保留最近一次），入库后按「作品 ID → 收藏夹」清单自动归位到二级收藏夹；下载前先过滤已入库与可从「我的喜欢」复用的作品，入库集合取并集）、**「我的喜欢 / 我的收藏」交叉作品自动合并为硬链接**（同一作品不再各存一份）、**入库后自动登记博主**（「我的喜欢」天然跨作者，入库后把未登记的来源作者补建成抖音博主并绑定本批素材；补建的博主标记为「自动登记」——算博主也算素材归属，但**不算已登记博主**、不进「一键获取素材」的下载白名单，在博主列表点「纳入追踪」才转正，也可以按批次结果页手动登记）、**每日自动获取**（开关 + 间隔小时可配，后台按最近一次任务创建时间判定到期；环境不可用 / 已有任务在跑 / 未到期自动跳过，默认关闭）、**日期窗口**（默认只让 f2 翻最近 14 天并按作者目录 mtime 自适应放大——f2 在 `-i all` 时会把作者全部历史翻完且每页固定等 timeout 秒，实测单作者 84% 的时间耗在翻页等待）、**增量哈希缓存**（落盘 `storage/f2_hash_cache.db`，实测 15,303 个文件全量哈希 142 秒 → 预热后 2 秒）、**垃圾桶判重**（丢进垃圾桶的内容不会被重新导入）、导入不做标签分析（素材以未打标状态入库）、批次清单 + 一键回滚、任务中心显示阶段与「第 N/M 个作者 / 文件」计数                                                       |
+| **本地出图（ComfyUI）** | 独立路由页（侧边栏「本地出图」）：**文生图**（Z-Image-Turbo int8，1024² 约 6.8 s）与**图生图**（Qwen-Image 2.1，1~10 张参考图改款 / 多单品拼穿搭，单图约 21 s、3 图约 38 s）；参数面板（prompt / 负向 / 尺寸预设 / 步数 / 张数 / seed）+ **从素材标签反推 prompt**（分段可改）；**候选区两段式**——先生成到 `storage/generated/`，勾选后才入库（默认待审核、标记「AI 生成」、不自动进合集）；**生成历史 + 同参重跑**；素材详情「用这张图改款」直达；出图前**显存守门**（等 Ollama 释放，不打断正在跑的打标）、与打标/审核任务**全局互斥**、四类失败给可执行文案（未启动 / 模型不匹配 / 显存不足 / 超时）；候选目录过期自动清理 |
 | **浏览器插件**         | 小红书/抖音页面一键提取穿搭图片（弹窗批量 + 任意网页右键单图采集，通知/角标反馈）；上传前按平台 ID 预查重并支持「跳过已采集的图片」开关（服务端 `check-platform-id` 只读接口，垃圾桶素材释放平台 ID 允许重采）；「上传后自动分析」开启时自动触发 AI 打标；每次采集会话自动生成任务记录，采集管理页可查看插件采集历史、结果与漏斗                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-## 最近更新（2026-09-20 ~ 10-19，120 个提交）
+## 最近更新（2026-10-20 ~ 10-21，42 个提交）
+
+> 上一次刷新本文档是 `f53f781`（10-20），本节汇总其后至 `859dfbd` 的全部提交。
+> 出图接入是这两天的主线（9 个提交），其余为 f2 通道收尾、两轮代码审查修复与结构性欠账收尾。
+> 完整方案见 [docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)，模型安装见
+> [docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)。
+
+### 本地出图（ComfyUI）接入（10-21，9 个提交）
+
+把「本地出图」做成项目能力，而不是另开一个 ComfyUI 网页：生成结果先进候选区，勾选后才入库。
+
+- **P0 基础链路**（`21d865e`）：新增任务类型 `image_gen`（挂进 `TASK_HANDLERS`，并加入**重负载互斥组**——它与打标/审核/向量回填全局串行，因为要和 Ollama 抢同一块 16 GB 显存）；`generation_runs` 表（参数快照 + 状态机 + 工作流指纹）+ `inspirations.generation_run_id`（`ON DELETE SET NULL`，删批次不连带删素材）；`services/comfyui/` 包（客户端 / 模板注入 / 就绪探测 / 显存守门）；从 `create_inspiration` 抽出 `create_inspiration_from_file()` 供上传与出图两条入口共用（缩略图 / sha256 去重 / 质量状态 / 向量回填登记）。
+- **两段式交互**：图先落 `storage/generated/<run_id>/`，前端候选区勾选后 `POST /runs/{id}/confirm` 才入库——废图不占库容、不进统计、不进打标队列。
+- **显存守门（排队等待）**：出图前查 ComfyUI `vram_free` 与 Ollama 驻留；判定顺序是「够 → 过；**Ollama 没大模型驻留 → 也过**（那是 ComfyUI 自己的缓存）；否则等」。`ca29036` 修掉两次误判：只看 `vram_free >= need` 会让**第二次出图白等 15 分钟**（模型驻留后 free 天然很低）；0.03 GiB 的 embedding 模型也会误伤（新增 `OLLAMA_SIGNIFICANT_GIB = 2.0` 门槛）。两条都有回归用例。
+- **错误可执行**：ComfyUI 未启动 / 工作流与模型不匹配 / 显存不足 / 超时 四类各自给人话；启动自检用 `/object_info` 比对模板节点与模型文件下拉项，缺节点直接报「版本不匹配」，不让用户点了才炸。
+- **P1 四项**（`4465004`）：同参重跑（新建批次保留历史，`retry?seed=`）、生成历史列表、过期候选清理（挂进 30 秒调度循环，只删终态超期批次）、参考图入口。
+- **图生图打通**（`5f735d5`）：Qwen-Image 2.1 edit，单图换装 **20.8 s/张**、3 张单品拼穿搭 **37.5 s**（`b2223cf` 实测）。
+  - 排查踩坑：`qwen3.5_9b_..._pe_i2i` 看着像文本编码器，实际是官方那条**提示词改写 LLM**（接 `TextGenerate`）；真正的图像条件编码器是 `qwen3vl_8b_*`。误用不报错、只出**纯噪声**。
+  - 两个接口细节：AUTOGROW 输入的 API 序列化是**嵌套 dict**（`images.image_1`，传列表被 400）；**图生图的 latent 必须取自 `TextEncodeQwenImage21` 第 3 个输出**，接 `EmptyLatentImage` 能跑完但输出噪声。
+- **多参考图 + 直达入口**（`b2223cf`）：支持 1~10 张参考（官方上限），素材详情页「用这张图改款」→ `/generate?ref=<id>` 自动预填。
+- **两轮审查修复**（`cf7678b`、`efaa667`、`859dfbd`）：等待进度透出（原先读错字段恒为 0）、入库部分失败清孤儿文件、执行中禁止丢弃批次、无效标签 400、i2i 尺寸文案按档位、f2 回滚只 plan 一次、`/object_info` 60 秒缓存、HTTP 连接复用；前端修「尺寸预设不生效」（`computed(...).value` 解构导致固定 1024）与「参考图/反推共用一个输入框」；文生图带参考图改为显式 400（含档位与生成方式不匹配校验）。
+- **质量口径**：生成图 `source_type='generated'` + `is_ai_generated=1` + `quality_status='pending'`；**`collect_samples` 负样本排除 AI 生成图**（否则废片会教初筛器「AI 特征=垃圾」，误杀日后采集素材）；素材统计新增 `generated_count`。
+
+### f2 通道收尾三件（10-20，`53abebe`）
+
+- **入库前预览确认**：CLI 缺省只出计划不入库，界面原先一点就建任务。新增 `GET /api/scraper/f2-preview`，跑同一条「扫描 → 五层判重」链路（`build_plan_with_cache`），只回「新增 N 个文件 / M 个作品 + 跳过明细（含原因）」；作者口径与执行阶段一致。前端「预览」→ 弹窗 → 「确认入库」，确认时复用同一份参数。判重走哈希缓存：15,350 文件首次约 81 秒、之后 1~2 秒。
+- **批次回滚进界面**：`GET /f2-tasks/{id}/rollback/preview` + `POST .../rollback`，复用 CLI 的 `plan_rollback`/`apply_rollback`；默认只撤销「本批导入且之后没被人动过」的素材（打标/收藏/评分/改过质量状态的保留并给出原因），`force` 才连它们一起删；**物理删除而非进垃圾桶**（撤销误导入的素材进垃圾桶会当负样本污染学习）；写 `f2_rollback` 审计。
+- **`--prune-downloads`（默认关）**：入库 commit 成功后才删 f2 源文件（先保库再删盘），只删本批入库成功的，跳过/失败的原样保留。
+
+### 两轮代码审查修复（10-20 ~ 10-21）
+
+- **破坏性接口认证补齐同效旁路**（`e072c9c`）：`PATCH /tags/batch-rename`、`PATCH /tags/batch-category` 与已认证的 `POST /tags/batch-edit` 同效却不在清单；`POST /admin/crop-phone-screenshots/apply`（不可逆改写原图）也补入。
+- **去重评分纳入手工投入**（`47b7a2b`）：原先只认标签/收藏/来源链接/AI分析/缩略图，漏了「在合集里」「人工审核过」「用户评分」——删掉它们不报错也不可恢复（合集成员行还会被 CASCADE 带走）。覆盖率 49% → 90%。
+- **任务失败路径先回滚**（`485cf55`）：执行器在 `flush` 后抛错时，半成品写入会随 `status=failed` 一起提交（任务显示失败、日志却记了「处理过」）；崩溃恢复同时加**重试上限**，不再无限重跑。
+- **破坏性清理失败也要留审计**（`60b56be`）：去重/清空垃圾桶的「删向量 → 删文件 → 写审计」一旦中间抛错就跳过审计，等于「删了但没人知道」；合集列表 `child_count` 的 O(n²) 一并改掉。
+- **时间格式化统一**（`fda2071`）：新增 `formatDateTime()`（手工补零、不受 locale 影响、定宽 16/19 字符），替换 4 处手写 `slice(0,16)` / `toLocaleString`，删掉一处只写不读的死状态。
+
+### 结构性欠账收尾（10-20）
+
+- `image_cropping`（1031 行）抽出「内容边界证据链」→ 451 + 619（`ce30586`）；`crop_service` 候选扫描抽出后完成拆分（`d6fc164`）；`f2_import`（853 行）按 A~F 六片拆完（`79d646a`…`9454c2f`）。
+- 前端三个超 800 行视图抽出 composable：`CollectionsView` 873→782、`FaceScanView` 812→689、`ReviewPanel` 831→568（`4d76609`、`8768c7d`）。
+- `_current_status` 收敛到 `task_runners/common.py` 并改为**参数注入**（`7860521`）——顺带说明为什么不能靠"重复导入"来保持 monkeypatch 接缝。
+
+### 门禁与测试体系（10-20）
+
+- `scripts/test.sh` 现在是 **11 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
+- **覆盖率棘轮** 67 → **69**（当前 70%）；**mypy 棘轮** 9 个模块（`check_types.py`）；**eslint 警告** 73 → 34（`--max-warnings 34`）；**死代码基线** 279 条（`MAX_BASELINE` 上限，跨平台路径归一化两次修正：`1b34a1c`、`8d74fd6`）。
+- 测试补齐：垃圾桶服务层 10 条（覆盖率 30%→91%）、素材创建 8 条（48%→63%）、标签 CRUD/打标/更新 11 条（顺带修「归一化后重名」500）。
+
+### 文档（10-20 ~ 10-21）
+
+- 新增 [docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)（供 AI 执行的安装手册，含实测数据与故障对照）、[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)（632 行方案 + 15 节实施记录）、`TODO.md` 相应条目收敛。
+
+## 历史更新（2026-09-20 ~ 10-19，120 个提交）
 
 > 上一次刷新本文档是 `8a899a3`（09-20 22:13），本节汇总其后至 `be81c6e` 的全部提交。
 > 质量审核相关改动集中在 10-19 的一组提交（见下表第一节），其余为 09-20 ~ 09-24 的历史条目。
@@ -372,6 +427,33 @@ scripts\sync_openviking.bat   # 双击一键同步（需本地 OpenViking 服务
 - **每日增量同步**：`scripts/sync_openviking_task.bat` 供 Windows 任务计划每日调用；同时从 `git log` 生成决策台账（`docs/decisions/` 按周归档），供语义检索回溯「某个改动为什么这么做」。
 - 同步前预热 embedding 模型，消除首次同步的冷启动失败窗口；dry-run 结果落盘、过期周文件与日志自动轮转。
 
+### 9. 启用本地出图（ComfyUI，可选）
+
+出图是**外部工具**，不经本项目启动；本项目只通过后端调用它。装法与模型清单见
+[docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)，接入设计见
+[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)。
+
+```bash
+# 1) 装 ComfyUI portable（RTX 50 系需要 PyTorch cu128+；portable 包自带，先校验）
+#    解压到仓库之外，例如 D:\AI\ComfyUI，双击 run_nvidia_gpu.bat 启动（默认 127.0.0.1:8188）
+
+# 2) 权重放进 ComfyUI 的内层 models 目录（放错目录 = 模型列表里看不到）
+#    models/diffusion_models/z_image_turbo_int8_convrot.safetensors   （文生图）
+#    models/text_encoders/qwen_3_4b_fp8_mixed.safetensors
+#    models/vae/ae.safetensors
+#    models/diffusion_models/qwen_image_2.1_int8_convrot.safetensors  （图生图）
+#    models/text_encoders/qwen3vl_8b_w4a8.safetensors                 （图生图文本编码器）
+#    models/vae/qwen_image_2.1_vae_bf16.safetensors
+
+# 3) 后端会自动探测，无需改配置；Web 侧边栏「本地出图」页顶部会显示
+#    ComfyUI 版本、可用显存与各档位是否就位（未就绪时运行按钮置灰并给启动指引）
+```
+
+- **显存互斥**：出图与打标/审核任务属同一重负载互斥组，不会同时抢 GPU；Ollama 模型占着显存时
+  任务会显示「等待显存（已等 N 秒）」，可 `ollama stop <模型>` 加速。
+- **16 GB 卡的边界**：Z-Image 1024² 峰值约 15.1 GiB；Qwen-Image 2.1 上限 1024²、单批 ≤4 张。
+- **许可**：Qwen-Image 2.1 为 Qwen Research License（默认仅研究/评估，商用需另行授权）。
+
 ## 项目结构
 
 ```
@@ -399,6 +481,7 @@ fashion-inspo/
 │   │   │   ├── collection.py     # 收藏合集（collections 手动/智能 + collection_items 成员关联）
 │   │   │   ├── scraper.py        # 采集任务 + 定时采集计划 + 话题标签存档（scraper_hashtags）
 │   │   │   ├── task.py           # 异步任务队列
+│   │   │   ├── generation.py     # 出图批次（参数快照 + 状态机 + 工作流指纹）
 │   │   │   └── audit.py          # 操作审计日志
 │   │   ├── schemas/              # Pydantic 请求/响应
 │   │   ├── routers/              # API 路由
@@ -413,6 +496,7 @@ fashion-inspo/
 │   │   │   ├── ai_models.py      # 模型管理 + GPU + 模型统计
 │   │   │   ├── ai_analysis.py    # 分析 + 队列 + 历史 + 对比
 │   │   │   ├── ai_quality.py     # 质量审核
+│   │   │   ├── generate.py       # 本地出图（状态/提交/候选/入库/重跑/清理）
 │   │   │   ├── ai_settings.py    # Prompt + 参数调优
 │   │   │   ├── ai_dashboard.py   # 分析质量仪表盘
 │   │   │   ├── ai_outfit.py      # 穿搭大标签建议
@@ -449,9 +533,11 @@ fashion-inspo/
 │   │   │   ├── gpu_service.py / model_config.py / model_prompt.py  # AI 模型/GPU/参数
 │   │   │   ├── quality_learner.py       # 负样本初筛器（sklearn 逻辑回归）
 │   │   │   ├── quality_correction.py    # 质量审核误判反馈（记录 + 改正状态 + 统计）
+│   │   │   ├── comfyui/          # 本地出图对接（client 客户端 / workflow 模板注入与自检 / probe 就绪探测 / vram 显存守门 / prompt_builder 素材反推）
+│   │   │   ├── generation_service.py    # 出图批次（建批次 / 候选 / 确认入库 / 重跑 / 过期清理）
 │   │   │   ├── scraper_seen_service.py  # URL 墓碑表读写
 │   │   │   ├── task_runner.py   # 异步任务执行框架
-│   │   │   ├── task_runners/     # 异步任务执行器（f2_import / enrich_blogger_profile / batch_analyze / quality_check / batch_delete / deduplicate / vector_backfill / face_scan / face_cluster / tag_health / tag_cluster / tag_graph）
+│   │   │   ├── task_runners/     # 异步任务执行器（f2_import / enrich_blogger_profile / batch_analyze / quality_check / batch_delete / deduplicate / vector_backfill / face_scan / face_cluster / tag_health / tag_cluster / tag_graph / image_gen）
 │   │   │   ├── vector/           # 向量检索（embedding / store / similarity）
 │   │   │   ├── embedding_service.py  # 薄壳 → vector.embedding
 │   │   │   ├── vector_service.py     # 薄壳 → vector.similarity
@@ -532,6 +618,7 @@ fashion-inspo/
 │   │   │   ├── SearchView.vue    # 高级搜索
 │   │   │   ├── DetailView.vue    # 素材详情
 │   │   │   ├── CollectionsView.vue # 收藏合集（手动/智能合集：浏览/编辑排序/固化）
+│   │   │   ├── GenerateView.vue  # 本地出图（参数 + 候选区 + 确认入库 + 生成历史）
 │   │   │   ├── ScraperView.vue   # 采集管理
 │   │   │   ├── TagManageView.vue # 标签管理（全功能）
 │   │   │   ├── TagAdvancedManageView.vue # 标签高级管理（健康度/聚类/网络图/效果/层级树/历史 6 面板）
@@ -670,7 +757,8 @@ fashion-inspo/
 | `scraper_seen_urls`           | URL 墓碑表                              | source_url (PK), created_at — 删除后防止重复采集                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `scraper_schedules`           | 定时采集计划                            | platform, keywords, max_count, sort_mode, enabled, interval_minutes, next_run_at, last_task_id, run_count                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `scraper_hashtags`            | 采集话题标签存档                        | id, name（全局唯一）, seen_count（累计出现次数，跨任务累加）, first_seen_at/last_seen_at, source_kind（blogger/search）, source_id, note_url, source_meta（最近来源明细 JSON）                                                                                                                                                                                                                                                                                                                                                               |
-| `task_queue`                  | 异步任务队列                            | type（batch_analyze/multi_analyze/quality_check/batch_delete/deduplicate/vector_backfill/f2_import/face_scan/face_match/face_cluster/enrich_blogger_profile/tag_health_scan/tag_cluster_scan/tag_network_analyze）, status（pending/running/paused/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done（含义随阶段变化，见 result.stage）, result（含 `stage`：download/import/done）, error, retry_count, next_retry_at, claimed_by（认领 worker）, heartbeat_at（心跳租约）, paused_at |
+| `task_queue`                  | 异步任务队列                            | type（batch_analyze/multi_analyze/quality_check/batch_delete/deduplicate/vector_backfill/f2_import/face_scan/face_match/face_cluster/enrich_blogger_profile/tag_health_scan/tag_cluster_scan/tag_network_analyze/**image_gen**）, status（pending/running/paused/success/failed/cancelled）, priority（越大越先被 worker 认领，批量清理类固定 -5）, progress, total/done（含义随阶段变化，见 result.stage）, result（含 `stage`：download/import/done）, error, retry_count, next_retry_at, claimed_by（认领 worker）, heartbeat_at（心跳租约）, paused_at |
+| `generation_runs`          | 本地出图批次                            | id, kind（t2i/i2i）, status（queued/running/waiting_vram/done/failed/cancelled）, prompt, negative, params_json（宽高/步数/cfg/sampler/seeds 快照）, model_key, workflow_name（模板名）, workflow_hash（模板指纹，ComfyUI 升级可追溯）, reference_ids（i2i 参考素材）, batch_dir（storage/generated/<id>）, total/done/failed, error, task_id, created_at, updated_at |
 | `pending_vector_backfills`    | 向量回填攒批待处理表                    | inspiration_id, type（image/text）, status, attempts — 素材上传/标签变更入队，worker 攒批重建向量（避免每素材创建小任务）                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `audit_logs`                  | 操作审计日志                            | id, action（batch_delete/delete_rejected/cleanup_orphans/empty_trash/batch_trash）, target_type, count, freed_bytes, detail, created_at — 破坏性批量操作留痕                                                                                                                                                                                                                                                                                                                                                                                 |
 | `bloggers`                    | 穿搭博主                                | id, name, platform, platform_user_id, xhs_id（唯一）, ip_location, profile_url, avatar_path, bio, source, **face_match_threshold（按人自适应人脸匹配阈值，null=用兜底阈值）**, created_at, updated_at                                                                                                                                                                                                                                                                                                                                        |
@@ -1209,6 +1297,26 @@ alembic upgrade head
 | `GET`  | `/api/admin/audit-logs?limit=`            | 操作审计日志（按时间倒序）                                                                                                                                   |
 | `POST` | `/api/admin/near-duplicates`              | 近似重复检测（全库随机抽样 + 感知哈希分组，仅返回候选、不删除；哈希首次计算后缓存到 `inspirations.phash`，单次请求渐进补算缺失哈希）                         |
 
+### 本地出图（ComfyUI）
+
+| 方法     | 路径                                                 | 说明                                                                                          |
+| -------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/generate/status`                               | 就绪状态：ComfyUI 版本/显存、各档位模型是否就位、Ollama 当前驻留                              |
+| `GET`    | `/api/generate/models`                               | 模型档位与默认参数、参数上限（张数/像素/步数）                                                |
+| `POST`   | `/api/generate/runs`                                 | 提交出图批次（`kind=t2i/i2i`；i2i 需 `reference_ids` 1~10 个）→ 返回 `run_id` + `task_id`     |
+| `GET`    | `/api/generate/runs`                                 | 最近批次列表（生成历史）                                                                      |
+| `GET`    | `/api/generate/runs/{id}`                            | 批次详情 + 候选图（含 `imported` 标记）+ 任务阶段（`task.result.stage` / 等待显存秒数）      |
+| `GET`    | `/api/generate/runs/{id}/candidates/{filename}`      | 读取候选图（文件名白名单校验）                                                                |
+| `POST`   | `/api/generate/runs/{id}/confirm`                    | 勾选的候选图入库（`source_type=generated`、`is_ai_generated=true`、`quality_status=pending`） |
+| `POST`   | `/api/generate/runs/{id}/retry`                      | 同参重跑（新建批次；`seed=0` 随机、`>0` 复现）                                                |
+| `POST`   | `/api/generate/runs/{id}/cancel`                     | 取消（已生成的候选图保留）                                                                    |
+| `DELETE` | `/api/generate/runs/{id}`                            | 丢弃候选目录（执行中的批次拒绝，需先取消）                                                    |
+| `POST`   | `/api/generate/runs/cleanup`                         | 清理过期候选目录（默认 7 天，定时任务也会调用）                                               |
+| `POST`   | `/api/generate/prompt/preview`                       | 从素材标签/正文/主色反推 prompt（分段返回，可逐段删改）                                       |
+
+> 出图参数有服务端硬上限：**单批 1~4 张**、**Z-Image ≤1328² / Qwen-Image 2.1 ≤1024²**、**步数 1~30**；
+> 文生图带 `reference_ids` 会显式 400（避免"以为是按参考图生成"）；`kind` 与模型档位不匹配同样 400。
+
 ### 其他
 
 | 方法  | 路径                | 说明                                                      |
@@ -1223,7 +1331,9 @@ alembic upgrade head
 
 后端默认**不启用**认证（开发模式）。若服务暴露在局域网/外网，建议为破坏性接口启用 API Key 保护。
 
-**保护范围**：数据重置、批量删除、清空垃圾桶、去重删除、标签删除/合并、模型卸载、删除博主/模特、删除模特照片组/照片等**不可恢复或批量破坏性**接口；读接口与普通写操作（上传、收藏、移入垃圾桶等）不受影响。
+**保护范围**：数据重置、批量删除、清空垃圾桶、去重删除、标签删除/合并、模型卸载、删除博主/模特、删除模特照片组/照片、**同效的批量改名/改类别（PATCH）与手机图裁剪「应用」**等**不可恢复或批量破坏性**接口；读接口与普通写操作（上传、收藏、移入垃圾桶、本地出图的确认入库等）不受影响。
+
+> 本地出图的接口全部不在保护范围：`DELETE /api/generate/runs/{id}` 只删本批次自己生成的候选文件，已入库素材与历史记录不受影响（执行中的批次会被拒，必须先取消）。
 
 ```bash
 # 1. 生成密钥并获取启用指引
@@ -1271,14 +1381,14 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
 
-**一键运行全部测试**（后端 + 前端类型检查 + vitest，Git Bash）：
+**一键运行全部门禁**（11 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
 
 ```bash
 bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，1679 用例）
+### 后端（pytest，1807 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -1303,9 +1413,9 @@ pytest
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
-> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前约 52%）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **70%**；门禁棘轮 `--cov-fail-under=69`）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，463 用例 / 58 个文件）
+### 前端（vitest，478 用例 / 60 个文件）
 
 ```bash
 cd web
@@ -1331,6 +1441,7 @@ npm test
 | Playwright             | 采集引擎驱动                        |   ⚠️ 采集时必需   |
 | f2（`pip install f2`） | 抖音素材获取通道（按博主增量下载）  | ⚠️ 用该通道时必需 |
 | ffmpeg                 | 视频关键帧提取 / 采集视频首帧缩略图 | ✅ 采集视频时使用 |
+| ComfyUI（本机 `D:\AI\ComfyUI`） | 本地出图（文生图 / 图生图） | ⚠️ 用出图时必需 |
 
 ## 开源许可
 
