@@ -164,6 +164,7 @@ from .f2_collects import (  # noqa: F401
 )
 from .f2_fetch import (  # noqa: F401
     _SEC_USER_ID_RE,
+    MAX_FETCH_CONCURRENCY,
     _default_runner,
     _run_with_timeout,
     RESOLVE_RUN_TIMEOUT_S,
@@ -291,6 +292,7 @@ __all__ = [
     "resolve_profile_nicknames",
     "RESOLVE_RUN_TIMEOUT_S",
     "run_fetch",
+    "MAX_FETCH_CONCURRENCY",
     "run_fetch_collects",
     "run_fetch_likes",
     "scan_directory",

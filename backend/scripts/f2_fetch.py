@@ -883,6 +883,23 @@ def _default_runner(cmd: list[str], cwd: Path) -> tuple[int, str]:
     return proc.returncode, ""
 
 
+"""下载阶段并发上限。
+
+为什么默认 1 且上限只有 3：f2 是**同一个 cookie** 在跑，并发越高越容易触发抖音风控；
+而且多个 f2 进程会同时写它自己的工作库（douyin_users.db），SQLite 写锁会互相等待。
+用户明确要求提速时才调到 2~3，出问题（风控/写入锁）直接回落 1。
+"""
+MAX_FETCH_CONCURRENCY = 3
+
+"""下载失败/成功时的并发安全打印（多线程下 print 会串行化，但仍可能交错）。"""
+_print_lock = __import__("threading").Lock()
+
+
+def _log(msg: str) -> None:
+    with _print_lock:
+        print(msg, flush=True)
+
+
 def run_fetch(
     f2_dir: Path,
     authors: set[str] | None = None,
@@ -895,6 +912,7 @@ def run_fetch(
     post_root: Path | None = None,
     include_unknown: bool = False,
     profiles: list[str] | None = None,
+    concurrency: int = 1,
 ) -> dict:
     """串行调 f2 下载各作者的作品（一次一个，避免并发触发风控）。
 
@@ -933,6 +951,9 @@ def run_fetch(
         post_root: 作者目录所在位置（缺省按 `download_root`/f2 目录推导）。
         include_unknown: 是否连「未登记到博主库」的 f2 账号一起下载。
         profiles: 显式点名的博主（主页链接 / sec_user_id）。非空时只跑这些。
+        concurrency: 下载阶段并发作者数（默认 1 = 串行，保持既有行为）。
+            **同一 cookie 并发有风控风险**，且多个 f2 进程会争 f2 自己的工作库写锁；
+            上限 3（见 :data:`MAX_FETCH_CONCURRENCY`），只在明确要提速时调大。
 
     Returns:
         {"total", "ok", "failed", "results", "windows", "skipped_authors",
@@ -1001,8 +1022,14 @@ def run_fetch(
 
     results: list[dict] = []
     windows: Counter = Counter()
-    ok = failed = 0
-    for author in targets:
+    workers = max(1, min(int(concurrency or 1), MAX_FETCH_CONCURRENCY))
+    if concurrency and int(concurrency) > MAX_FETCH_CONCURRENCY:
+        _log(
+            f"  ⚠ 下载并发被限制为 {MAX_FETCH_CONCURRENCY}（同一 cookie 并发过高会触发风控）"
+        )
+
+    def _fetch_one(author: dict) -> dict:
+        """下载单个作者，返回结果条目（不修改共享状态，便于并发）。"""
         # 昵称未知（用户只给了主页链接、f2 还没登记过这个账号）时用 sec 前 12 位代称
         display = profile_display(author)
         last_at = last_download.get(normalize_author(author["nickname"] or ""))
@@ -1013,31 +1040,58 @@ def run_fetch(
             if extra_authors
             else compute_fetch_interval(since_days, last_at)
         )
-        windows[interval] += 1
         cmd = build_f2_command(author, download_root, naming, auto_cookie, interval=interval)
         aweme_count = author.get("aweme_count") or 0
-        print(f"  ▶ {display}（抖音作品总数 {aweme_count or '未知'}，窗口 {interval}）")
+        _log(f"  ▶ {display}（抖音作品总数 {aweme_count or '未知'}，窗口 {interval}）")
         try:
             rc, _info = runner(cmd, f2_dir)
         except Exception as exc:  # noqa: BLE001 —— 单个作者失败不阻断整批
             rc = -1
-            print(f"    ✗ 调用 f2 失败：{type(exc).__name__}: {exc}")
+            _log(f"    ✗ 调用 f2 失败：{type(exc).__name__}: {exc}")
         if rc == 0:
-            ok += 1
-            print("    ✓ 完成（窗口内已下载的作品会被 f2 跳过，不会重复下载）")
+            _log("    ✓ 完成（窗口内已下载的作品会被 f2 跳过，不会重复下载）")
         else:
-            failed += 1
-            print(f"    ✗ 退出码 {rc}，跳过该作者（详情见 {f2_dir / 'logs'}）")
-        results.append(
-            {
-                "nickname": author["nickname"],
-                "display": display,
-                "sec_user_id": author["sec_user_id"],
-                "rc": rc,
-                "interval": interval,
-                "cmd": " ".join(cmd),
-            }
-        )
+            _log(f"    ✗ 退出码 {rc}，跳过该作者（详情见 {f2_dir / 'logs'}）")
+        return {
+            "nickname": author["nickname"],
+            "display": display,
+            "sec_user_id": author["sec_user_id"],
+            "rc": rc,
+            "interval": interval,
+            "cmd": " ".join(cmd),
+        }
+
+    if workers == 1:
+        # 串行路径：与并发改造前完全一致（默认行为不变）
+        for author in targets:
+            entry = _fetch_one(author)
+            windows[entry["interval"]] += 1
+            results.append(entry)
+    else:
+        # 并发路径：仍然「按 targets 顺序」收集结果，便于日志与报表对齐
+        from concurrent.futures import ThreadPoolExecutor
+
+        _log(f"  ⚡ 下载并发 {workers} 个作者（同一 cookie，风控风险自负）")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_fetch_one, author) for author in targets]
+            for future in futures:  # 按提交顺序取结果
+                try:
+                    entry = future.result()
+                except Exception as exc:  # noqa: BLE001 —— 线程内异常兜底
+                    entry = {
+                        "nickname": "",
+                        "display": "?",
+                        "sec_user_id": "",
+                        "rc": -1,
+                        "interval": "",
+                        "cmd": "",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                windows[entry["interval"]] += 1
+                results.append(entry)
+
+    ok = sum(1 for r in results if r["rc"] == 0)
+    failed = len(results) - ok
 
     # 下载后按 sec_user_id 反查昵称：新账号此时已被 f2 写进用户库，
     # 入库阶段的白名单按昵称匹配，缺了它就会「下载成功、入库 0」

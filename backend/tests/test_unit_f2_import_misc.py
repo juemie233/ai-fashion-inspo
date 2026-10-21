@@ -977,3 +977,76 @@ def test_source_url_cover_of_video_work_goes_to_video():
         == f"https://www.douyin.com/video/{AWEME}"
     )
 
+
+
+# ── 下载阶段并发（默认 1 保持串行；上限 3）──
+
+
+def test_run_fetch_default_is_serial_and_order_preserved(tmp_path):
+    """默认并发 1：行为与改造前一致 —— 逐个跑，结果顺序与 targets 一致。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    order: list[str] = []
+
+    def runner(cmd, cwd):
+        # -u 传的是完整主页链接，取末段才是 sec_user_id
+        order.append(cmd[cmd.index("-u") + 1].rsplit("/", 1)[-1] if "-u" in cmd else "?")
+        return 0, ""
+
+    result = f2.run_fetch(f2_dir=f2_dir, runner=runner, since_days=1)
+
+    assert result["ok"] == result["total"] > 0
+    assert order == [r["sec_user_id"].rsplit("/", 1)[-1] for r in result["results"]]
+
+
+def test_run_fetch_concurrency_runs_multiple_but_keeps_result_order(tmp_path):
+    """并发 2：确实并行执行，但结果仍按 targets 顺序收集（报表/日志可对齐）。"""
+    import threading
+    import time
+
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    lock = threading.Lock()
+    inflight = {"now": 0, "max": 0}
+
+    def runner(cmd, cwd):
+        with lock:
+            inflight["now"] += 1
+            inflight["max"] = max(inflight["max"], inflight["now"])
+        time.sleep(0.05)
+        with lock:
+            inflight["now"] -= 1
+        return 0, ""
+
+    result = f2.run_fetch(f2_dir=f2_dir, runner=runner, since_days=1, concurrency=2)
+
+    assert result["ok"] == result["total"]
+    assert inflight["max"] >= 2  # 真的并发了
+    # 结果顺序 = targets 顺序（并发不改变报表顺序）
+    assert [r["nickname"] for r in result["results"]] == ["里香1√", "娜娜瑜√"]
+
+
+def test_run_fetch_concurrency_is_capped(tmp_path, capsys):
+    """并发数超过上限时被压到 MAX_FETCH_CONCURRENCY，并打印原因。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+
+    def runner(cmd, cwd):
+        return 0, ""
+
+    f2.run_fetch(f2_dir=f2_dir, runner=runner, since_days=1, concurrency=99)
+    out = capsys.readouterr().out
+    assert f"限制为 {f2.MAX_FETCH_CONCURRENCY}" in out
+
+
+def test_run_fetch_concurrency_failure_is_isolated(tmp_path):
+    """并发下单个作者失败不影响其它作者（失败计数正确）。"""
+    f2_dir = _f2_dir_with_authors(tmp_path)
+    seen: list[str] = []
+
+    def runner(cmd, cwd):
+        sec = cmd[cmd.index("-u") + 1].rsplit("/", 1)[-1] if "-u" in cmd else "?"
+        seen.append(sec)
+        return (1 if len(seen) == 1 else 0), ""
+
+    result = f2.run_fetch(f2_dir=f2_dir, runner=runner, since_days=1, concurrency=2)
+
+    assert result["failed"] == 1
+    assert result["ok"] == result["total"] - 1

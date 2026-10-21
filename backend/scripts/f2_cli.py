@@ -162,6 +162,15 @@ def main(argv: list[str] | None = None) -> int:
         help="不生成缩略图（更快；列表页将缺预览图）",
     )
     parser.add_argument(
+        "--fetch-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "下载阶段并发作者数（默认 1 = 串行）。**同一 cookie 并发有风控风险**，"
+            "且多个 f2 进程会争它自己的工作库写锁；上限 3，只在明确要提速时调大"
+        ),
+    )
+    parser.add_argument(
         "--prune-downloads",
         action="store_true",
         help=(
