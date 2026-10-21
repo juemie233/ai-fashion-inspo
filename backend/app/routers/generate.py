@@ -128,6 +128,25 @@ async def confirm_import(
     )
 
 
+@router.post("/runs/{run_id}/retry")
+async def retry_run(
+    run_id: int,
+    seed: int = Query(0, description="0=随机新 seed；>0 复现指定 seed"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """同参数再生成（新建批次，历史保留）。"""
+    return await generation_service.retry_run(db, run_id, seed=seed)
+
+
+@router.post("/runs/cleanup")
+async def cleanup_runs(
+    days: int | None = Query(None, ge=0, le=365, description="保留天数（缺省取配置 7 天）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """清理过期候选目录（不动已入库素材与历史记录）。"""
+    return await generation_service.cleanup_expired_runs(db, days)
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """取消批次：把队列任务标记为 cancelled（已出的图保留在候选区）。"""

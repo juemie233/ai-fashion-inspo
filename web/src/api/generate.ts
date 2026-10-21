@@ -59,7 +59,7 @@ export interface GenerationRunDetail {
 }
 
 export interface CreateRunPayload {
-  kind?: 't2i'
+  kind?: 't2i' | 'i2i'
   prompt: string
   negative?: string
   width?: number
@@ -69,6 +69,22 @@ export interface CreateRunPayload {
   seed?: number
   count?: number
   model_key?: string
+  /** 参考素材 id（i2i 必填 1~10 个） */
+  reference_ids?: string[]
+}
+
+/** 生成历史的一条（列表用）。 */
+export interface GenerationRunBrief {
+  id: number
+  kind: string
+  status: string
+  prompt: string
+  model_key: string
+  total: number
+  done: number
+  failed: number
+  error: string | null
+  created_at: string | null
 }
 
 export interface PromptPreview {
@@ -117,6 +133,22 @@ export async function discardRun(runId: number): Promise<{ removed_files: number
 export async function previewPrompt(inspirationIds: string[]): Promise<PromptPreview> {
   const { data } = await apiClient.post<PromptPreview>('/generate/prompt/preview', {
     inspiration_ids: inspirationIds,
+  })
+  return data
+}
+
+export async function listRuns(limit = 20): Promise<{ items: GenerationRunBrief[] }> {
+  const { data } = await apiClient.get('/generate/runs', { params: { limit } })
+  return data
+}
+
+/** 同参数再生成（seed=0 随机；>0 复现）。 */
+export async function retryRun(
+  runId: number,
+  seed = 0,
+): Promise<{ run_id: number; task_id: number; seed: number }> {
+  const { data } = await apiClient.post(`/generate/runs/${runId}/retry`, null, {
+    params: { seed },
   })
   return data
 }

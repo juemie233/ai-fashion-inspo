@@ -16,10 +16,13 @@ import {
   discardRun,
   fetchRun,
   fetchStatus,
+  listRuns,
   previewPrompt,
+  retryRun,
   type CreateRunPayload,
   type GenerateStatus,
   type GenerationCandidate,
+  type GenerationRunBrief,
   type GenerationRun,
   type PromptPreview,
   type GenerationRunDetail,
@@ -37,6 +40,9 @@ export function useImageGen() {
   const detail = ref<GenerationRunDetail | null>(null)
   const lastSeed = ref<number | null>(null)
   const selected = ref<Set<string>>(new Set())
+  /** 生成历史（最近 20 批），用于「同参重跑」入口 */
+  const history = ref<GenerationRunBrief[]>([])
+  const historyLoading = ref(false)
 
   const run = computed<GenerationRun | null>(() => detail.value?.run ?? null)
   const candidates = computed<GenerationCandidate[]>(() => detail.value?.items ?? [])
@@ -155,6 +161,43 @@ export function useImageGen() {
    * 放在 composable 里而不是 view 里：视图只做编排，且 ts-prune 看不到 .vue 引用，
    * 直接在视图里调 api 会被误判成死代码（项目死代码门禁对 .vue 是盲的）。
    */
+  async function loadHistory(): Promise<void> {
+    historyLoading.value = true
+    try {
+      const out = await listRuns(20)
+      history.value = out.items
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '读取生成历史失败'))
+    } finally {
+      historyLoading.value = false
+    }
+  }
+
+  /**
+   * 同参重跑：新建批次（历史保留），seed=0 随机、>0 复现。
+   *
+   * 为什么不在原批次上重跑：原批次的 done/total 与候选文件会被覆盖，
+   * 「这批参数产出了哪张图」就查不清了。
+   */
+  async function retry(sourceRunId: number, seed = 0): Promise<number | null> {
+    submitting.value = true
+    try {
+      const out = await retryRun(sourceRunId, seed)
+      runId.value = out.run_id
+      lastSeed.value = out.seed
+      Message.success(`已按原参数重跑（seed ${out.seed}）`)
+      detail.value = await fetchRun(out.run_id)
+      startPoll()
+      await loadHistory()
+      return out.run_id
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '重跑失败'))
+      return null
+    } finally {
+      submitting.value = false
+    }
+  }
+
   async function promptFrom(ids: string[]): Promise<string | null> {
     if (!ids.length) return null
     try {
@@ -191,6 +234,8 @@ export function useImageGen() {
     active,
     stageText,
     lastSeed,
+    history,
+    historyLoading,
     // 动作
     loadStatus,
     submit,
@@ -200,6 +245,8 @@ export function useImageGen() {
     confirm,
     cancel,
     promptFrom,
+    loadHistory,
+    retry,
     discard,
     stopPoll,
   }

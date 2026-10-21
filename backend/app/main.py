@@ -111,6 +111,12 @@ async def _scraper_schedule_loop() -> None:
                 auto_id = await maybe_schedule_auto_import(db)
                 if auto_id:
                     logger.info(f"[f2 自动获取] 本次创建任务 #{auto_id}")
+                # 出图候选目录过期清理（终态批次 + 超过保留天数；幂等，无过期时几乎零开销）
+                from app.services.generation_service import cleanup_expired_runs
+
+                cleaned = await cleanup_expired_runs(db)
+                if cleaned["removed"]:
+                    logger.info(f"[出图清理] 删除 {cleaned['removed']} 个过期候选目录")
         except asyncio.CancelledError:
             raise
         except Exception as e:

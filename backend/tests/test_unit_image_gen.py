@@ -311,3 +311,62 @@ async def test_negative_samples_exclude_ai_generated(client):
         _X, _y, stats = await collect_samples(db)
 
     assert stats["negative_total"] == 1  # 只有采集的那张
+
+
+# ── P1：同参重跑 / 过期清理 ──
+
+
+async def test_retry_creates_new_run_with_same_params(client):
+    """重跑新建批次（历史保留），参数与参考图沿用原批次。"""
+    async with async_session() as db:
+        first = await generation_service.create_run(
+            db, {"prompt": "重跑测试", "count": 2, "width": 1024, "height": 1024}
+        )
+        second = await generation_service.retry_run(db, first["run_id"], seed=8888)
+
+        assert second["run_id"] != first["run_id"]
+        assert second["seed"] == 8888
+        run2 = await db.get(GenerationRun, second["run_id"])
+        params2 = json.loads(run2.params_json)
+        assert params2["seeds"] == [8888, 8889]
+        assert run2.prompt == "重跑测试"
+        assert run2.workflow_name == "z_image_t2i"
+
+
+async def test_retry_randomises_seed_by_default(client):
+    async with async_session() as db:
+        first = await generation_service.create_run(db, {"prompt": "重跑随机", "count": 1})
+        second = await generation_service.retry_run(db, first["run_id"])
+        assert second["seed"] > 0
+        assert second["run_id"] != first["run_id"]
+
+
+async def test_cleanup_removes_only_expired_terminal_runs(client):
+    """清理只删「终态 + 超期」批次的候选目录；已入库素材与历史行不动。"""
+    from datetime import timedelta
+
+    from app.utils.time import utcnow
+
+    async with async_session() as db:
+        old = await generation_service.create_run(db, {"prompt": "过期批次"})
+        fresh = await generation_service.create_run(db, {"prompt": "新批次"})
+        for info in (old, fresh):
+            folder = settings.storage_root / f"generated/{info['run_id']}"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "01_seed-1.png").write_bytes(_png_bytes())
+
+        # 把「过期批次」改成终态 + 30 天前
+        run_old = await db.get(GenerationRun, old["run_id"])
+        run_old.status = "done"
+        run_old.created_at = utcnow() - timedelta(days=30)
+        run_fresh = await db.get(GenerationRun, fresh["run_id"])
+        run_fresh.status = "done"
+        await db.commit()
+
+        result = await generation_service.cleanup_expired_runs(db, days=7)
+
+        assert result["removed"] == 1
+        assert not (settings.storage_root / f"generated/{old['run_id']}").exists()
+        assert (settings.storage_root / f"generated/{fresh['run_id']}").exists()
+        # 历史行仍在（清理只动磁盘）
+        assert await db.get(GenerationRun, old["run_id"]) is not None

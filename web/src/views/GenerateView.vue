@@ -8,9 +8,10 @@
  * 且生成时会与打标任务互斥（后端 GPU 互斥组），必要时排队等 Ollama 释放显存。
  */
 
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useImageGen } from '@/composables/useImageGen'
 import { getFileUrl } from '@/api/inspirations'
+import { formatDateTime } from '@/utils/format'
 
 const {
   status,
@@ -22,6 +23,8 @@ const {
   active,
   stageText,
   lastSeed,
+  history,
+  historyLoading,
   loadStatus,
   submit,
   toggle,
@@ -32,6 +35,8 @@ const {
   promptFrom,
   discard,
   stopPoll,
+  loadHistory,
+  retry,
 } = useImageGen()
 
 // ── 参数 ──
@@ -48,6 +53,20 @@ const sizePresets = [
 ]
 const size = ref('1024x1024')
 const [width, height] = computed(() => size.value.split('x').map(Number)).value
+
+// ── 生成方式：文生图 / 图生图（参考图）──
+/** i2i 是否可用：后端探测到 Qwen-Image 2.1 档位就绪才允许选（否则按钮置灰并说明） */
+const i2iReady = computed(() => status.value?.models?.qwen_2_1_i2i === 'ok')
+const kind = ref<'t2i' | 'i2i'>('t2i')
+
+/** 参考素材 id（逗号/空格分隔，1~10 个） */
+const refIdsList = computed(() =>
+  refIdsText.value
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
+)
+const refCountOk = computed(() => refIdsList.value.length >= 1 && refIdsList.value.length <= 10)
 
 // ── 从素材反推 prompt ──
 const refIdsText = ref('')
@@ -71,6 +90,7 @@ async function onPreviewPrompt() {
 async function onSubmit() {
   if (!prompt.value.trim()) return
   await submit({
+    kind: kind.value,
     prompt: prompt.value.trim(),
     negative: negative.value.trim() || undefined,
     width,
@@ -78,16 +98,35 @@ async function onSubmit() {
     steps: steps.value,
     count: count.value,
     seed: seed.value,
+    reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
   })
 }
 
-const canSubmit = computed(() => !!prompt.value.trim() && !submitting.value && !active.value)
+const ready = computed(() => status.value?.ready === true)
+
+/** 历史刷新：批次进入终态时拉一次，避免用户手动刷新页面 */
+watch(
+  () => run.value?.status,
+  (st) => {
+    if (st && ['done', 'failed', 'cancelled'].includes(st)) void loadHistory()
+  },
+)
+
+const canSubmit = computed(
+  () =>
+    !!prompt.value.trim() &&
+    !submitting.value &&
+    !active.value &&
+    (kind.value === 't2i' || (i2iReady.value && refCountOk.value)),
+)
 
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
 const selectedCount = computed(() => selected.value.size)
-const ready = computed(() => status.value?.ready === true)
 
-onMounted(loadStatus)
+onMounted(() => {
+  void loadStatus()
+  void loadHistory()
+})
 onUnmounted(stopPoll)
 </script>
 
@@ -125,6 +164,25 @@ onUnmounted(stopPoll)
     <div class="gen-grid">
       <!-- 左：参数 -->
       <a-card class="gen-card" :bordered="false">
+        <div class="gen-label">生成方式</div>
+        <a-radio-group v-model="kind" type="button" size="small">
+          <a-radio value="t2i">文生图（Z-Image，约 7 秒/张）</a-radio>
+          <a-radio value="i2i" :disabled="!i2iReady">
+            参考图改款（Qwen-Image 2.1{{ i2iReady ? '，约 20~45 秒/张' : '：未就绪' }}）
+          </a-radio>
+        </a-radio-group>
+        <div v-if="kind === 'i2i'" class="gen-row">
+          <a-input
+            v-model="refIdsText"
+            placeholder="参考素材 ID（1~10 个，逗号分隔）"
+            allow-clear
+          />
+          <span class="gen-hint">{{ refIdsList.length }}/10</span>
+        </div>
+        <div v-if="kind === 'i2i'" class="gen-hint">
+          参考图决定「主体与版型」，描述写「要改成什么」。当前 {{ refIdsList.length }} 个参考。
+        </div>
+
         <div class="gen-label">描述（prompt）</div>
         <a-textarea
           v-model="prompt"
@@ -223,6 +281,45 @@ onUnmounted(stopPoll)
         </template>
       </a-card>
     </div>
+
+    <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->
+    <a-card class="gen-card gen-history" :bordered="false">
+      <div class="gen-result-head">
+        <span class="gen-label" style="margin: 0">生成历史</span>
+        <a-button size="mini" :loading="historyLoading" @click="loadHistory">刷新</a-button>
+      </div>
+      <div v-if="!history.length" class="gen-empty">还没有生成记录。</div>
+      <a-table
+        v-else
+        :data="history"
+        :pagination="false"
+        row-key="id"
+        size="small"
+        :scroll="{ x: 720 }"
+      >
+        <template #columns>
+          <a-table-column title="#" data-index="id" :width="70" />
+          <a-table-column title="描述" data-index="prompt" :width="320" ellipsis />
+          <a-table-column title="状态" :width="110">
+            <template #cell="{ record }">
+              {{ record.status }}（{{ record.done }}/{{ record.total }}）
+            </template>
+          </a-table-column>
+          <a-table-column title="时间" :width="150">
+            <template #cell="{ record }">
+              <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
+            </template>
+          </a-table-column>
+          <a-table-column title="操作" :width="150">
+            <template #cell="{ record }">
+              <a-button size="mini" :loading="submitting" @click="retry(record.id)">
+                同参重跑
+              </a-button>
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
+    </a-card>
   </div>
 </template>
 
@@ -329,6 +426,9 @@ onUnmounted(stopPoll)
 .gen-item img {
   width: 100%;
   display: block;
+}
+.gen-history {
+  margin-top: 12px;
 }
 .gen-item-meta {
   display: flex;

@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import shutil
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -30,6 +31,7 @@ from app.services.comfyui import workflow as wf
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.inspiration_create import create_inspiration_from_file
 from app.utils.file_hash import file_sha256
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -352,3 +354,74 @@ async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
             }
         )
     return out
+
+
+async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
+    """同参数再生成一次（可指定 seed 复现/变体）。
+
+    刻意**新建一个批次**而不是复用原批次：生成历史保留「哪次参数产出了哪张图」，
+    复用会让原批次的 done/total 与候选文件互相覆盖，等于丢掉可复现性。
+
+    Args:
+        seed: 0 = 随机新 seed；>0 则用它（复现某张图）。
+    """
+    run = await db.get(GenerationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="出图批次不存在")
+
+    params = json.loads(run.params_json or "{}")
+    payload = {
+        "kind": run.kind,
+        "prompt": run.prompt,
+        "negative": run.negative,
+        "width": params.get("width"),
+        "height": params.get("height"),
+        "steps": params.get("steps"),
+        "cfg": params.get("cfg"),
+        "count": params.get("count") or run.total or 1,
+        "model_key": run.model_key,
+        "reference_ids": json.loads(run.reference_ids or "[]"),
+        "seed": seed,
+    }
+    return await create_run(db, payload)
+
+
+async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dict:
+    """清理过期候选目录（不动已入库素材、不删历史记录）。
+
+    规则：终态批次（done/failed/cancelled）且创建时间早于 ``days`` 天的，删掉它的
+    候选目录；数据库行保留——生成历史仍可查，只是图不在地上了（反正用户没确认入库）。
+
+    Args:
+        days: 保留天数（缺省取 ``settings.image_gen_keep_candidates_days``）。
+
+    Returns:
+        ``{"scanned": 批次数, "removed": 删掉的目录数, "freed_dirs": [...]}``
+    """
+    keep_days = days if days is not None else settings.image_gen_keep_candidates_days
+    if keep_days <= 0:
+        return {"scanned": 0, "removed": 0}
+
+    cutoff = utcnow() - timedelta(days=keep_days)
+    rows = await db.execute(
+        select(GenerationRun).where(
+            GenerationRun.status.in_(("done", "failed", "cancelled")),
+            GenerationRun.created_at < cutoff,
+        )
+    )
+    runs = rows.scalars().all()
+    removed: list[str] = []
+    for run in runs:
+        folder = _run_dir(run)
+        if not folder.exists():
+            continue
+        # 删除前再确认目录落在 storage_root 内（batch_dir 是从 DB 读出来的，防写坏）
+        try:
+            if str(folder.resolve()).startswith(str(settings.storage_root.resolve())):
+                await asyncio.to_thread(shutil.rmtree, folder, True)
+                removed.append(run.batch_dir)
+        except OSError as exc:
+            logger.warning(f"清理候选目录失败（忽略）{folder}: {exc}")
+    if removed:
+        logger.info(f"[出图清理] 删除 {len(removed)} 个过期候选目录（保留 {keep_days} 天）")
+    return {"scanned": len(runs), "removed": len(removed)}
