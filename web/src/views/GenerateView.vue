@@ -55,30 +55,38 @@ const sizePresets = [
   { label: '768 × 1344（竖版，适合穿搭）', value: '768x1344' },
 ]
 const size = ref('1024x1024')
-const [width, height] = computed(() => size.value.split('x').map(Number)).value
+/** 当前预设对应的宽高。
+
+原来是 `const [width, height] = computed(...).value` —— 那会在 setup 时求值一次并
+把当时的 1024/1024 固定下来，用户换预设（1328²/竖版）根本不生效。必须保持响应式。
+*/
+const sizeDims = computed(() => size.value.split('x').map(Number))
+const width = computed(() => sizeDims.value[0] ?? 1024)
+const height = computed(() => sizeDims.value[1] ?? 1024)
 
 // ── 生成方式：文生图 / 图生图（参考图）──
 /** i2i 是否可用：后端探测到 Qwen-Image 2.1 档位就绪才允许选（否则按钮置灰并说明） */
 const i2iReady = computed(() => status.value?.models?.qwen_2_1_i2i === 'ok')
 const kind = ref<'t2i' | 'i2i'>('t2i')
 
-/** 参考素材 id（逗号/空格分隔，1~10 个） */
-const refIdsList = computed(() =>
-  refIdsText.value
-    .split(/[,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean),
-)
+/** 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 */
+const refIdsText = ref('')
+const refIdsList = computed(() => splitIds(refIdsText.value))
 const refCountOk = computed(() => refIdsList.value.length >= 1 && refIdsList.value.length <= 10)
 
-// ── 从素材反推 prompt ──
-const refIdsText = ref('')
-const previewing = ref(false)
-async function onPreviewPrompt() {
-  const ids = refIdsText.value
+/** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
+function splitIds(text: string): string[] {
+  return text
     .split(/[,，\s]+/)
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+// ── 从素材反推 prompt（与参考图是不同的输入框：反推只是"读素材写描述"，不会拿它出图）──
+const rewriteIdsText = ref('')
+const previewing = ref(false)
+async function onPreviewPrompt() {
+  const ids = splitIds(rewriteIdsText.value)
   if (!ids.length) return
   previewing.value = true
   try {
@@ -96,8 +104,8 @@ async function onSubmit() {
     kind: kind.value,
     prompt: prompt.value.trim(),
     negative: negative.value.trim() || undefined,
-    width,
-    height,
+    width: width.value,
+    height: height.value,
     steps: steps.value,
     count: count.value,
     seed: seed.value,
@@ -202,7 +210,7 @@ onUnmounted(stopPoll)
 
         <div class="gen-row">
           <a-input
-            v-model="refIdsText"
+            v-model="rewriteIdsText"
             placeholder="从素材反推：粘贴素材 ID（逗号分隔）"
             allow-clear
           />
