@@ -16,14 +16,19 @@ const root = path.resolve(import.meta.dirname, '..')
 const mark = path.basename(root)
 const cut = (p) => {
   const s = p.replaceAll('\\', '/')
-  const out = s.includes(`${mark}/`)
-    ? s.split(`${mark}/`, 2)[1]
-    : s.replace(/^(\.\.\/)+/, '').replace(/^\//, '')
-  // 跨平台归一化（2026-10 CI 失败根因）：ts-prune 在 Linux（CI）输出**绝对路径**，按仓库名截断后
-  // 会带 `web/` 前缀（`web/src/api/x.ts`）；本地（Windows）输出的是「相对 web/」的路径（`src/api/x.ts`）。
-  // 不统一就会整批失配——CI 实测报 15 条「新增」，全是 shared/types、types 下的导出。
-  // 这里统一去掉 web/ 前缀，使两种环境产出与基线相同的形态。
-  return out.replace(/^web\//, '')
+  // 用 lastIndexOf 而不是 split：CI 的检出路径是 /home/runner/work/<repo>/<repo>/...，
+  // 仓库名会出现**两次**，取第一个会把剩下的 `fashion-inspo/...` 当结果（实测返回空）。
+  // 取最后一次出现，才能稳定拿到仓库内的相对路径。
+  const idx = s.lastIndexOf(`${mark}/`)
+  const inner = idx >= 0 ? s.slice(idx + mark.length + 1) : s
+  return (
+    inner
+      // 相对 web/ 的形态（`../shared/types/x.ts`）→ 仓库根相对
+      .replace(/^(\.\.\/)+/, '')
+      .replace(/^\//, '')
+      // 绝对路径截断后会带 `web/` 前缀；本地相对路径不会。统一去掉，与基线形态一致。
+      .replace(/^web\//, '')
+  )
 }
 
 const baseline = new Set(
