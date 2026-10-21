@@ -16,8 +16,14 @@ const root = path.resolve(import.meta.dirname, '..')
 const mark = path.basename(root)
 const cut = (p) => {
   const s = p.replaceAll('\\', '/')
-  if (s.includes(`${mark}/`)) return s.split(`${mark}/`, 2)[1]
-  return s.replace(/^(\.\.\/)+/, '').replace(/^\//, '')
+  const out = s.includes(`${mark}/`)
+    ? s.split(`${mark}/`, 2)[1]
+    : s.replace(/^(\.\.\/)+/, '').replace(/^\//, '')
+  // 跨平台归一化（2026-10 CI 失败根因）：ts-prune 在 Linux（CI）输出**绝对路径**，按仓库名截断后
+  // 会带 `web/` 前缀（`web/src/api/x.ts`）；本地（Windows）输出的是「相对 web/」的路径（`src/api/x.ts`）。
+  // 不统一就会整批失配——CI 实测报 15 条「新增」，全是 shared/types、types 下的导出。
+  // 这里统一去掉 web/ 前缀，使两种环境产出与基线相同的形态。
+  return out.replace(/^web\//, '')
 }
 
 const baseline = new Set(
