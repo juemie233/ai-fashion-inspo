@@ -9,9 +9,12 @@
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useImageGen } from '@/composables/useImageGen'
 import { getFileUrl } from '@/api/inspirations'
 import { formatDateTime } from '@/utils/format'
+
+const route = useRoute()
 
 const {
   status,
@@ -124,6 +127,12 @@ const activePreset = computed(() => sizePresets.find((p) => p.value === size.val
 const selectedCount = computed(() => selected.value.size)
 
 onMounted(() => {
+  // 从素材详情「用这张图改款」跳进来：预填参考图并切到图生图
+  const refParam = route.query.ref
+  if (typeof refParam === 'string' && refParam.trim()) {
+    refIdsText.value = refParam.trim()
+    kind.value = 'i2i'
+  }
   void loadStatus()
   void loadHistory()
 })

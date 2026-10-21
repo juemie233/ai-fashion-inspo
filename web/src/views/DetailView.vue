@@ -427,6 +427,14 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
                 <template #icon><IconRight /></template>
               </a-button>
             </a-button-group>
+            <!-- 以这张图为参考去出图：跳到出图页并预填参考 ID（Qwen-Image 2.1 图生图） -->
+            <a-button
+              size="mini"
+              title="把这张图作为参考，生成改款/搭配图"
+              @click="router.push({ path: '/generate', query: { ref: route.params.id as string } })"
+            >
+              用这张图改款
+            </a-button>
           </div>
         </div>
 

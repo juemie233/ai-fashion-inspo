@@ -180,7 +180,10 @@ async def _query_distributions(db: AsyncSession) -> dict[str, list]:
         .limit(12)
     )).all()
 
+    by_source = {s[0] or "unknown": s[1] for s in source_stats}
     return {
+        # 生成图单独给一个数：素材总量会被「本地出图」抬升，看采集进度时不该算进去
+        "generated_count": int(by_source.get("generated", 0)),
         "by_source_type": [
             {"source_type": s[0] or "unknown", "count": s[1]} for s in source_stats
         ],
