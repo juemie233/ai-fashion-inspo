@@ -504,6 +504,53 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
     return await create_run(db, payload)
 
 
+async def regenerate_candidate(
+    db: AsyncSession, run_id: int, filename: str, seed: int = 0
+) -> dict:
+    """对**单张**候选图换 seed 重出（新建一个只含 1 张的批次）。
+
+    为什么单独一个入口而不是复用 ``retry_run``：整批重跑会重出全部 4 张，而用户通常
+    只对其中一张不满意（构图差/手崩了）。单张重出把成本压到 6.8 s（Z-Image），
+    也避免旧批次里已入库的那几张被重新生成一遍。
+
+    Args:
+        run_id: 原批次 id。
+        filename: 候选图文件名（形如 ``02_seed-123456.png``）；用于取出原 seed。
+        seed: 新 seed；0 = 随机（不能沿用原 seed，否则出同一张）。
+
+    Returns:
+        与 :func:`create_run` 同结构（新批次）。
+    """
+    run = await db.get(GenerationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="出图批次不存在")
+
+    # 原 seed 只用于提示，不参与生成（沿用就等于重出同一张图）
+    original_seed = 0
+    stem = Path(filename).stem
+    _, _, seed_str = stem.partition("_seed-")
+    original_seed = int(seed_str) if seed_str.isdigit() else 0
+
+    params = json.loads(run.params_json or "{}")
+    payload = {
+        "kind": run.kind,
+        "prompt": run.prompt,
+        "negative": run.negative,
+        "width": params.get("width"),
+        "height": params.get("height"),
+        "steps": params.get("steps"),
+        "cfg": params.get("cfg"),
+        "count": 1,
+        "model_key": run.model_key,
+        "reference_ids": json.loads(run.reference_ids or "[]"),
+        "seed": seed,
+    }
+    out = await create_run(db, payload)
+    out["original_seed"] = original_seed
+    out["source_run_id"] = run_id
+    return out
+
+
 async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dict:
     """清理过期候选目录（不动已入库素材、不删历史记录）。
 

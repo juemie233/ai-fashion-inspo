@@ -629,3 +629,34 @@ async def test_model_kind_must_match_generation_kind(client):
                  "reference_ids": ["ref-kind"]},
             )
         assert "文生图" in str(exc.value.detail)
+
+
+async def test_regenerate_single_candidate_creates_one_image_run(client):
+    """单张重出：新建只含 1 张的批次，且不能沿用原 seed（否则出同一张）。"""
+    async with async_session() as db:
+        out = await generation_service.create_run(db, {"prompt": "单张重出", "count": 2, "seed": 500})
+        folder = settings.storage_root / f"generated/{out['run_id']}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "02_seed-501.png").write_bytes(_png_bytes())
+
+        new = await generation_service.regenerate_candidate(
+            db, out["run_id"], "02_seed-501.png"
+        )
+        assert new["run_id"] != out["run_id"]
+        assert new["total"] == 1
+        assert new["original_seed"] == 501
+        assert new["source_run_id"] == out["run_id"]
+        assert new["seed"] != 501  # 随机换了 seed
+
+        run = await db.get(GenerationRun, new["run_id"])
+        assert json.loads(run.params_json)["seeds"] == [new["seed"]]
+
+        # 指定 seed 时按指定值走
+        fixed = await generation_service.regenerate_candidate(
+            db, out["run_id"], "02_seed-501.png", seed=777
+        )
+        assert fixed["seed"] == 777
+
+        # 原批次不受影响
+        old = await db.get(GenerationRun, out["run_id"])
+        assert old.total == 2

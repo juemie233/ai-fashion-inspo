@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   cancelRun: vi.fn(),
   discardRun: vi.fn(),
   previewPrompt: vi.fn(),
+  retryRun: vi.fn(),
+  regenerateCandidate: vi.fn(),
+  listRuns: vi.fn(),
 }))
 
 vi.mock('@/api/generate', () => mocks)
@@ -146,6 +149,29 @@ describe('useImageGen', () => {
     const gen = useImageGen()
     expect(await gen.confirm()).toBe(0)
     expect(mocks.confirmImport).not.toHaveBeenCalled()
+  })
+
+  it('regenerate 对单张换 seed 重出并切到新批次', async () => {
+    mocks.createRun.mockResolvedValue({ run_id: 7, task_id: 3, seed: 1, batch_dir: 'x', total: 2 })
+    mocks.fetchRun.mockResolvedValue(RUN_DETAIL)
+    mocks.regenerateCandidate.mockResolvedValue({
+      run_id: 9,
+      task_id: 4,
+      seed: 88888,
+      original_seed: 11,
+    })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+
+    const gen = useImageGen()
+    await gen.submit({ prompt: 'x' })
+    const newId = await gen.regenerate(RUN_DETAIL.items[0])
+
+    expect(newId).toBe(9)
+    expect(mocks.regenerateCandidate).toHaveBeenCalledWith(7, '01_seed-11.png')
+    expect(gen.runId.value).toBe(9)
+    expect(gen.lastSeed.value).toBe(88888)
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('88888'))
+    success.mockRestore()
   })
 
   it('discard 清空当前批次状态', async () => {

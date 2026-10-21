@@ -142,6 +142,17 @@ async def retry_run(
     return await generation_service.retry_run(db, run_id, seed=seed)
 
 
+@router.post("/runs/{run_id}/regenerate")
+async def regenerate_candidate(
+    run_id: int,
+    filename: str = Query(..., description="要重出的候选图文件名（如 02_seed-123456.png）"),
+    seed: int = Query(0, description="新 seed；0=随机（沿用原 seed 会出同一张）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """单张换 seed 重出（新建只含 1 张的批次，不动原批次）。"""
+    return await generation_service.regenerate_candidate(db, run_id, filename, seed)
+
+
 @router.post("/runs/cleanup")
 async def cleanup_runs(
     days: int | None = Query(None, ge=0, le=365, description="保留天数（缺省取配置 7 天）"),

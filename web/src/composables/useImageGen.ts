@@ -18,6 +18,7 @@ import {
   fetchStatus,
   listRuns,
   previewPrompt,
+  regenerateCandidate,
   retryRun,
   type CreateRunPayload,
   type GenerateStatus,
@@ -213,6 +214,33 @@ export function useImageGen() {
     }
   }
 
+  /**
+   * 对**某一张**候选图换 seed 重出。
+   *
+   * 为什么不做「整批重跑」：用户通常只对其中一张不满意（构图/手崩），整批重跑会连同
+   * 已经满意、甚至已入库的那几张一起重出，白烧算力还可能重出更差的。
+   */
+  async function regenerate(item: GenerationCandidate): Promise<number | null> {
+    if (runId.value === null) return null
+    submitting.value = true
+    try {
+      const out = await regenerateCandidate(runId.value, item.filename)
+      Message.success(`已用新 seed ${out['seed']} 重出（原 seed ${out['original_seed']}）`)
+      // 切到新批次（只含 1 张），原批次仍留在历史里
+      runId.value = out.run_id
+      lastSeed.value = out.seed
+      detail.value = await fetchRun(out.run_id)
+      startPoll()
+      await loadHistory()
+      return out.run_id
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '重出失败'))
+      return null
+    } finally {
+      submitting.value = false
+    }
+  }
+
   async function promptFrom(ids: string[]): Promise<string | null> {
     if (!ids.length) return null
     try {
@@ -264,6 +292,7 @@ export function useImageGen() {
     promptFrom,
     loadHistory,
     retry,
+    regenerate,
     discard,
     stopPoll,
   }

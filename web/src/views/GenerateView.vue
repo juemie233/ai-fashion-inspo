@@ -10,9 +10,12 @@
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
 import { getFileUrl } from '@/api/inspirations'
 import { formatDateTime } from '@/utils/format'
+import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 
 const route = useRoute()
 
@@ -40,6 +43,7 @@ const {
   stopPoll,
   loadHistory,
   retry,
+  regenerate,
 } = useImageGen()
 
 // ── 参数 ──
@@ -80,6 +84,46 @@ function splitIds(text: string): string[] {
     .split(/[,，\s]+/)
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+// ── 参考图图形化选择（替代粘 ID）──
+const pickerVisible = ref(false)
+function onPickConfirm(ids: string[]): void {
+  refIdsText.value = ids.join(', ')
+}
+
+// ── 出图配方（localStorage）──
+const { presets, save: savePreset, remove: removePreset } = useGenerationPresets()
+const presetName = ref('')
+function currentPreset(): GenerationPreset {
+  return {
+    name: presetName.value,
+    prompt: prompt.value,
+    negative: negative.value,
+    size: size.value,
+    steps: steps.value,
+    count: count.value,
+    kind: kind.value,
+  }
+}
+function onSavePreset(): void {
+  if (savePreset(currentPreset())) {
+    Message.success(`已保存配方「${presetName.value.trim()}」`)
+    presetName.value = ''
+  } else {
+    Message.warning('请给配方起个名字')
+  }
+}
+function onApplyPreset(name: string): void {
+  const preset = presets.value.find((p) => p.name === name)
+  if (!preset) return
+  prompt.value = preset.prompt
+  negative.value = preset.negative
+  size.value = preset.size
+  steps.value = preset.steps
+  count.value = preset.count
+  kind.value = preset.kind === 'i2i' && !i2iReady.value ? 't2i' : preset.kind
+  Message.success(`已载入配方「${preset.name}」`)
 }
 
 // ── 从素材反推 prompt（与参考图是不同的输入框：反推只是"读素材写描述"，不会拿它出图）──
@@ -194,6 +238,7 @@ onUnmounted(stopPoll)
             placeholder="参考素材 ID（1~10 个，逗号分隔）"
             allow-clear
           />
+          <a-button @click="pickerVisible = true">选择图片</a-button>
           <span class="gen-hint">{{ refIdsList.length }}/10</span>
         </div>
         <div v-if="kind === 'i2i'" class="gen-hint">
@@ -235,6 +280,29 @@ onUnmounted(stopPoll)
             <template #prefix>seed</template>
           </a-input-number>
           <span class="gen-hint">0 = 随机（提交后会把真实 seed 显示在结果区，便于复现）</span>
+        </div>
+
+        <div class="gen-label">出图配方（保存当前参数，下次一键载入）</div>
+        <div class="gen-row">
+          <a-input
+            v-model="presetName"
+            placeholder="配方名，如「极简工作室」"
+            allow-clear
+            style="flex: 1"
+          />
+          <a-button :disabled="!presetName.trim()" @click="onSavePreset">保存配方</a-button>
+        </div>
+        <div v-if="presets.length" class="gen-preset-list">
+          <a-tag
+            v-for="p in presets"
+            :key="p.name"
+            closable
+            class="gen-preset-tag"
+            @click="onApplyPreset(p.name)"
+            @close="removePreset(p.name)"
+          >
+            {{ p.name }}
+          </a-tag>
         </div>
 
         <div class="gen-actions">
@@ -289,6 +357,16 @@ onUnmounted(stopPoll)
               <div class="gen-item-meta">
                 <span>seed {{ item.seed }}</span>
                 <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
+                <a-button
+                  v-if="!item.imported"
+                  size="mini"
+                  type="text"
+                  :loading="submitting"
+                  title="用新 seed 重出这一张"
+                  @click.stop="regenerate(item)"
+                >
+                  换 seed
+                </a-button>
               </div>
             </div>
           </div>
@@ -298,6 +376,13 @@ onUnmounted(stopPoll)
         </template>
       </a-card>
     </div>
+
+    <ReferencePickerModal
+      v-model:visible="pickerVisible"
+      :selected-ids="refIdsList"
+      :max="10"
+      @confirm="onPickConfirm"
+    />
 
     <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->
     <a-card class="gen-card gen-history" :bordered="false">
@@ -443,6 +528,15 @@ onUnmounted(stopPoll)
 .gen-item img {
   width: 100%;
   display: block;
+}
+.gen-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.gen-preset-tag {
+  cursor: pointer;
 }
 .gen-history {
   margin-top: 12px;

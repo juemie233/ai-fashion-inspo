@@ -72,6 +72,8 @@ export interface VectorStats {
 /** 管理后台统计概览 */
 export interface Stats {
   total_count: number
+  /** 其中 AI 生成（source_type=generated）的条数 */
+  generated_count?: number
   total_size_bytes: number
   thumbnail_size_bytes: number
   images_size_bytes: number

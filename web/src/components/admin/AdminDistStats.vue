@@ -40,11 +40,20 @@ function statusColor(s: string): string {
             <span>{{ sourceLabel(s.source_type) }}</span>
             <span class="dist-bar-wrap">
               <span
-class="dist-bar"
-                :style="{ width: Math.max(s.count / stats.total_count * 100, 2) + '%', background: sourceColor(s.source_type) }">
-              </span>
+                class="dist-bar"
+                :style="{
+                  width: Math.max((s.count / stats.total_count) * 100, 2) + '%',
+                  background: sourceColor(s.source_type),
+                }"
+              ></span>
             </span>
             <span>{{ s.count }}</span>
+          </div>
+          <!-- 生成图单独点出来：它会抬高「素材总量」，看采集进度时不该算进去 -->
+          <div v-if="stats?.generated_count" class="dist-note">
+            其中 AI 生成 <b>{{ stats.generated_count }}</b> 条（{{
+              ((stats.generated_count / Math.max(1, stats.total_count)) * 100).toFixed(1)
+            }}%）
           </div>
         </div>
         <a-empty v-else description="暂无数据" size="small" />
@@ -57,8 +66,14 @@ class="dist-bar"
             <span>{{ m.month }}</span>
             <span class="dist-bar-wrap">
               <span
-class="dist-bar" style="background: #2080f0"
-                :style="{ width: Math.max(m.count / Math.max(...stats.by_month.map(x => x.count)) * 100, 2) + '%' }">
+                class="dist-bar"
+                style="background: #2080f0"
+                :style="{
+                  width:
+                    Math.max((m.count / Math.max(...stats.by_month.map((x) => x.count))) * 100, 2) +
+                    '%',
+                }"
+              >
               </span>
             </span>
             <span>{{ m.count }}</span>
@@ -76,8 +91,12 @@ class="dist-bar" style="background: #2080f0"
             <span>{{ s.label }}</span>
             <span class="dist-bar-wrap">
               <span
-class="dist-bar"
-                :style="{ width: Math.max(s.count / stats.total_count * 100, 2) + '%', background: statusColor(s.status) }">
+                class="dist-bar"
+                :style="{
+                  width: Math.max((s.count / stats.total_count) * 100, 2) + '%',
+                  background: statusColor(s.status),
+                }"
+              >
               </span>
             </span>
             <span>{{ s.count }}</span>
@@ -90,11 +109,19 @@ class="dist-bar"
       <a-card title="媒体类型分布" size="small" style="flex: 1">
         <div v-if="stats?.by_media_type?.length">
           <div v-for="m in stats.by_media_type" :key="m.media_type" class="dist-item">
-            <span>{{ m.media_type === 'image' ? '🖼 图片' : m.media_type === 'video' ? '🎬 视频' : m.media_type }}</span>
+            <span>{{
+              m.media_type === 'image'
+                ? '🖼 图片'
+                : m.media_type === 'video'
+                  ? '🎬 视频'
+                  : m.media_type
+            }}</span>
             <span class="dist-bar-wrap">
               <span
-class="dist-bar" style="background: #18a058"
-                :style="{ width: Math.max(m.count / stats.total_count * 100, 2) + '%' }">
+                class="dist-bar"
+                style="background: #18a058"
+                :style="{ width: Math.max((m.count / stats.total_count) * 100, 2) + '%' }"
+              >
               </span>
             </span>
             <span>{{ m.count }}</span>
@@ -147,5 +174,10 @@ class="dist-bar" style="background: #18a058"
   border-radius: 7px;
   transition: width 0.4s ease;
   min-width: 4px;
+}
+.dist-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #8a8f99;
 }
 </style>

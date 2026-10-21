@@ -161,3 +161,15 @@ export async function retryRun(
   })
   return data
 }
+
+/** 单张换 seed 重出（新建只含 1 张的批次，不动原批次）。 */
+export async function regenerateCandidate(
+  runId: number,
+  filename: string,
+  seed = 0,
+): Promise<{ run_id: number; task_id: number; seed: number; original_seed: number }> {
+  const { data } = await apiClient.post(`/generate/runs/${runId}/regenerate`, null, {
+    params: { filename, seed },
+  })
+  return data
+}
