@@ -2,7 +2,7 @@
 # AI 穿搭素材库 — 数据备份脚本（增强版）
 #
 # 用法:
-#   bash scripts/backup_data.sh <目标目录> [--allow-same-disk] [--verify-hash]
+#   bash scripts/backup_data.sh <目标目录> [--allow-same-disk] [--verify-hash] [--verify-sample N]
 #
 # 示例:
 #   bash scripts/backup_data.sh E:/fashion-inspo-backups           # 推荐：异盘
@@ -65,10 +65,16 @@ fi
 TARGET=""
 ALLOW_SAME_DISK=0
 VERIFY_HASH=0
+# 抽样哈希数量：默认 200。只校验「大小相同但内容不同」的静默损坏，
+# 成本约 N×单文件（200 张图≈数十 MB），比全量 --verify-hash 便宜几个数量级。
+VERIFY_SAMPLE=200
 while [ $# -gt 0 ]; do
   case "$1" in
     --allow-same-disk) ALLOW_SAME_DISK=1; shift ;;
     --verify-hash) VERIFY_HASH=1; shift ;;
+    --verify-sample)
+      [ $# -ge 2 ] || { echo "--verify-sample 需要参数"; exit 1; }
+      VERIFY_SAMPLE="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,30p' "$0"; exit 0 ;;
     -*)
@@ -160,7 +166,7 @@ echo "  数据备份  $STAMP"
 echo "=============================================="
 echo "目标目录: $DEST"
 echo "项目根:   $PROJECT_ROOT"
-echo "哈希校验: $([ "$VERIFY_HASH" -eq 1 ] && echo 全量SHA-256 || echo 关)"
+echo "哈希校验: $([ "$VERIFY_HASH" -eq 1 ] && echo 全量SHA-256 || echo "抽样 ${VERIFY_SAMPLE} 个")"
 echo ""
 
 BACKUP_FAILED=0
@@ -412,6 +418,17 @@ echo ""
 
 # ── 5. 校验 + manifest ──
 echo ">>> [5/5] 校验备份并生成 manifest..."
+# ── 5.5b 抽样哈希校验（未开全量哈希时）──
+# 单开一步而不是塞进下面的 inline python：校验逻辑在 backend/scripts/verify_backup_sample.py，
+# 那边有单测覆盖（区分「真损坏」与「备份后源端又写」），这里只负责调用并把结果 JSON 交给 manifest。
+# 注意 `|| true`：校验失败不该中断备份流程，结果会由下面的 python 转成 errors 并决定退出码。
+if [ "$VERIFY_HASH" -eq 0 ] && [ "$VERIFY_SAMPLE" -gt 0 ] && [ -d "$DEST/storage" ]; then
+  echo ">>> 抽样哈希校验（${VERIFY_SAMPLE} 个文件，抓「大小相同内容不同」）..."
+  python backend/scripts/verify_backup_sample.py --src "$STORAGE_DIR" --dest "$DEST/storage" --sample "$VERIFY_SAMPLE" --seed 0 --json "$DEST/.hash_sample.json" || true
+else
+  echo ">>> 抽样哈希校验：跳过（已开全量哈希或抽样数为 0）"
+fi
+
 python - "$DEST" "$STORAGE_DIR" "$VERIFY_HASH" "$GIT_HEAD" "$STORAGE_DIR_SOURCE" <<'PYEOF'
 import hashlib
 import json
@@ -577,6 +594,27 @@ if verify_hash:
                 except OSError as e:
                     warnings.append(f"哈希计算失败 {rel}: {e}")
 
+# 5.5b 抽样哈希（未开全量哈希时）
+# 为什么单开一步而不是塞进下面的 inline python：校验逻辑放 backend/scripts/verify_backup_sample.py，
+# 那边有单测覆盖（区分「真损坏」与「备份后源端又写」），这里只负责调用与收录结果。
+hash_sample: dict | None = None
+sample_json = os.path.join(dest, ".hash_sample.json")
+if os.path.exists(sample_json):
+    try:
+        with open(sample_json, encoding="utf-8") as f:
+            hash_sample = json.load(f)
+    except (OSError, ValueError):
+        hash_sample = None
+    try:
+        os.remove(sample_json)
+    except OSError:
+        pass
+if hash_sample:
+    for rel in hash_sample.get("corrupt", []):
+        errors.append(f"抽样哈希不一致（大小相同内容不同，疑似静默损坏）：{rel}")
+    for rel in hash_sample.get("missing", []):
+        errors.append(f"抽样文件在备份端缺失：{rel}")
+
 # 5.6 写 manifest
 manifest = {
     "timestamp": os.path.basename(dest),
@@ -588,6 +626,7 @@ manifest = {
     "table_counts": counts,
     "dir_stats": dir_stats,
     "verify_hash": verify_hash,
+    "hash_sample": hash_sample,
     "hashes": hashes,
     "warnings": warnings,
 }

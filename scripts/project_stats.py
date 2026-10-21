@@ -59,10 +59,27 @@ CODE_AREAS = [
     ("Web 组件 web/src/components", "web/src/components"),
     ("Web composables", "web/src/composables"),
     ("Web utils", "web/src/utils"),
-    ("Web api/stores/types", "web/src/api"),
+    ("Web api", "web/src/api"),
+    ("Web stores", "web/src/stores"),
+    ("Web types", "web/src/types"),
+    ("Web router", "web/src/router"),
+    ("Web styles", "web/src/styles"),
+    ("Web constants", "web/src/constants"),
     ("移动端 mobile", "mobile"),
     ("浏览器插件 browser-extension", "browser-extension"),
     ("共享类型 shared", "shared"),
+    # 根 scripts/（备份、门禁、迁移等工具脚本）
+    ("仓库脚本 scripts/", "scripts"),
+]
+
+"""只扫**顶层文件**的区域（其子目录已被 CODE_AREAS 覆盖，递归会重复计数）。
+
+为什么需要：`web/src` 顶层还有 main.ts / App.vue / router / styles 等约 2 千行，
+既不属 views/components 也不属 composables；但若把 `web/src` 整目录递归加进来，
+会和上面五个 Web 分块重复统计一遍。
+"""
+TOP_LEVEL_AREAS = [
+    ("Web 入口与样式 web/src/*", "web/src"),
 ]
 
 """存储子目录（相对 backend/storage），用于体量报告。"""
@@ -275,6 +292,22 @@ def collect(root: Path) -> dict:
     total_files = total_lines = 0
     for label, rel in CODE_AREAS:
         files, lines = count_lines(iter_files(root / rel, SOURCE_EXTS))
+        if files:
+            code[label] = {"files": files, "lines": lines}
+            total_files += files
+            total_lines += lines
+    for label, rel in TOP_LEVEL_AREAS:
+        base = root / rel
+        top_files = (
+            [
+                p
+                for p in base.glob("*")
+                if p.is_file() and p.suffix in SOURCE_EXTS and p.name not in SKIP_FILES
+            ]
+            if base.exists()
+            else []
+        )
+        files, lines = count_lines(top_files)
         if files:
             code[label] = {"files": files, "lines": lines}
             total_files += files

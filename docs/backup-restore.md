@@ -36,9 +36,37 @@ bash scripts/backup_data.sh E:/fashion-inspo-backups
 # 临时同盘备份（会被强警告，需加 --allow-same-disk）
 bash scripts/backup_data.sh backups --allow-same-disk
 
-# 额外对所有素材做全量 SHA-256（默认关，较慢）
+# 额外对所有素材做全量 SHA-256（默认关，较慢：3.2 万素材/几十 GB 读一遍）
 bash scripts/backup_data.sh E:/fashion-inspo-backups --verify-hash
+
+# 抽样哈希（默认已开 200 个）：只抓「大小相同但内容不同」的静默损坏
+bash scripts/backup_data.sh E:/fashion-inspo-backups --verify-sample 500
+bash scripts/backup_data.sh E:/fashion-inspo-backups --verify-sample 0   # 关掉抽样
 ```
+
+**三层校验分别抓什么**（默认就跑前两层，第三层按需）：
+
+| 层 | 手段 | 抓得住 | 成本 |
+| --- | --- | --- | --- |
+| 1 | `PRAGMA integrity_check` + 关键表行数 + SQL 内存试导 | DB 损坏 / 备份不可导入 | 秒级 |
+| 2 | 与「冻结源端清单」比对文件数 + 字节数 + 必备目录 | 漏复制 / 目录缺失 / 数量对不上 | 秒级（只 stat） |
+| 3 | **抽样哈希（默认 200 个，`--verify-sample N`）** | **大小一模一样、内容却坏**（坏道、复制中断、被改写） | 约 N×单文件，200 张图≈数十 MB |
+| 3' | 全量 SHA-256（`--verify-hash`） | 同上，覆盖面 100% | 几十 GB 全读 |
+
+抽样实现见 `backend/scripts/verify_backup_sample.py`（有单测）。两个刻意的设计：
+
+- **抽样是确定性的**（`--seed 0` 固定）：同一批备份重跑得到同一组样本，便于复查；
+- **区分「内容不一致」与「备份后源端又写」**：备份是时点快照，复制完成后后台任务继续
+  往源端写入是正常的；只有「大小完全相同、哈希却不同」才判为静默损坏（写进 manifest 的
+  `errors` 并让退出码为 2），大小已变的样本只记为 `changed` 告警。
+
+结果落在 `manifest.json` 的 `hash_sample` 字段：`{total, sample, checked, missing, corrupt, changed, ok}`。
+
+**增量评估结论（2026-10-21）**：素材存储**已经是增量的** —— `robocopy /E` 只复制新增/变更
+文件，收敛阶段用 `/MIR` 只重同步不一致目录，所以「全量备份」实际只搬运增量；真正的全量成本
+在 **DB 快照与 SQL 明文导出**（实测 464.8 MB → `fashion_inspo.db` 465 MB + `fashion_inspo.sql`
+369 MB，每次全量写）。因此**不引入单独的文件级增量方案**（收益低、恢复复杂度高）；若将来库再
+翻倍，优先考虑「DB 快照保留 3 份 + 更早的只留 SQL」这类策略，而不是自研增量格式。
 
 备份完成后看 `SUCCESS` 标记与退出码：`0` 成功，`2` 备份/校验失败（失败目录写 `FAILED`，保留排障，不自动删除）。日志同时写入备份目录的 `backup.log` 与 `backend/storage/logs/backup.log`。
 
@@ -176,6 +204,7 @@ scripts\restore_task.bat
 | 文件 | 作用 |
 | ---- | ---- |
 | `scripts/backup_data.sh` | 备份主脚本（一致性快照 + SQL 导出 + robocopy + 校验 + 标记 + rotation + 锁） |
+| `backend/scripts/verify_backup_sample.py` | 抽样哈希校验（默认 200 个；区分「真损坏」与「备份后源端又写」） |
 | `scripts/backup_task.bat` | 供 schtasks 调用的每日备份包装 |
 | `scripts/restore_data.sh` | 恢复主脚本（前置检查 + 恢复前快照 + 还原 + 校验） |
 | `scripts/restore_task.bat` | 恢复包装（无参时自动选最新 SUCCESS 备份） |

@@ -84,7 +84,7 @@ async def build_prompt(db: AsyncSession, inspiration_ids: list[str]) -> dict:
         select(Tag.category, Tag.name, func.max(InspirationTag.confidence))
         .join(InspirationTag, InspirationTag.tag_id == Tag.id)
         .where(InspirationTag.inspiration_id.in_(inspiration_ids))
-        .group_by(Tag.gender, Tag.category, Tag.name)
+        .group_by(Tag.category, Tag.name)
         .order_by(func.max(InspirationTag.confidence).desc())
         .limit(40)
     )
