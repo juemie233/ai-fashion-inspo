@@ -179,21 +179,36 @@ async def create_run(
     kind = str(payload.get("kind") or "t2i")
     if kind not in ("t2i", "i2i"):
         raise HTTPException(status_code=400, detail="kind 只能是 t2i 或 i2i")
+
+    # 档位与生成方式必须匹配：否则会拿编辑模板去跑「文生图」（缺参考图 → 500）
+    spec_kind = str(spec.get("kind") or "t2i")
+    if spec_kind != kind:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"档位 {model_key} 是「{'参考图改款' if spec_kind == 'i2i' else '文生图'}」模型，"
+                f"与当前生成方式不符：请把 kind 改为 {spec_kind}，或换用对应档位"
+            ),
+        )
+
+    ref_ids = [str(x) for x in (payload.get("reference_ids") or []) if str(x).strip()]
     if kind == "i2i":
-        if spec["kind"] != "i2i":
-            raise HTTPException(
-                status_code=400,
-                detail=f"档位 {model_key} 不支持参考图，请用 qwen_2_1_i2i",
-            )
-        ref_ids = [str(x) for x in (payload.get("reference_ids") or []) if str(x).strip()]
         max_refs = int(spec.get("max_refs") or 10)
         if not 1 <= len(ref_ids) <= max_refs:
             raise HTTPException(
                 status_code=400, detail=f"图生图需要 1~{max_refs} 张参考素材，当前 {len(ref_ids)} 张"
             )
         await _assert_references_exist(db, ref_ids)
-    else:
-        ref_ids = []
+    elif ref_ids:
+        # 显式报错而不是静默丢弃：静默丢弃会让用户以为「按这张图生成了」，
+        # 结果却是纯文字从零画出来的图 —— 这类"看起来成功了"的错最坑
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "文生图不接受参考素材：如需按参考图生成，请把生成方式切换为"
+                "「参考图改款」（kind=i2i）"
+            ),
+        )
 
     params = _validate_params(payload, spec)
     template, digest = wf.load_template(spec["workflow"])

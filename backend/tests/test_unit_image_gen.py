@@ -596,3 +596,36 @@ async def test_i2i_size_limit_message_matches_spec(client):
         detail = str(exc.value.detail)
         assert "1048576" in detail
         assert "1328×1328" not in detail
+
+
+async def test_t2i_rejects_reference_images(client):
+    """文生图带参考图必须显式报错：静默丢弃会让用户以为「按这张图生成」了。"""
+    await _add_reference_image("ref-stray")
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db,
+                {"kind": "t2i", "prompt": "米色针织", "reference_ids": ["ref-stray"]},
+            )
+        detail = str(exc.value.detail)
+        assert "文生图不接受参考素材" in detail
+        assert "i2i" in detail
+
+
+async def test_model_kind_must_match_generation_kind(client):
+    """档位与生成方式不匹配要拦（否则会拿编辑模板跑文生图，缺参考图直接 500）。"""
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db, {"kind": "t2i", "prompt": "x", "model_key": "qwen_2_1_i2i"}
+            )
+        assert "参考图改款" in str(exc.value.detail)
+
+        await _add_reference_image("ref-kind")
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db,
+                {"kind": "i2i", "prompt": "x", "model_key": "z_image_int8",
+                 "reference_ids": ["ref-kind"]},
+            )
+        assert "文生图" in str(exc.value.detail)
