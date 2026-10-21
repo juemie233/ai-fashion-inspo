@@ -196,3 +196,41 @@ def check_models(workflow: dict, object_info: dict) -> list[str]:
                 if options and name not in options:
                     missing.append(f"{ctype}.{field}={name}（当前可选：{', '.join(options[:5])}）")
     return missing
+
+
+def build_edit_workflow(
+    template: dict,
+    *,
+    reference_names: list[str],
+    **params: Any,
+) -> dict:
+    """构造「参考图编辑」工作流：把 N 张参考图接进 Qwen 2.1 的条件编码节点。
+
+    Qwen-Image 2.1 的参考图通过 ``TextEncodeQwenImage21`` 的 AUTOGROW 输入
+    ``images`` 传进去，API 序列化形如 ``{"image_1": ["4", 0], "image_2": ["5", 0]}``
+    —— **嵌套 dict，不是列表**（实测：传列表会被 400 拒）。
+
+    模板里已经连好第 1 张（``__REF_1__`` + ``images.image_1``）；第 2 张起在本函数里
+    动态追加 ``LoadImage`` 节点（id 从 20 起）并挂到 ``images.image_{i}``，上限由调用方
+    （``MODEL_SPECS[...]["max_refs"]``）保证 ≤10 —— 这也是 Qwen 2.1 的官方上限。
+
+    Args:
+        template: :func:`load_template` 读出的 ``qwen_edit`` 模板。
+        reference_names: 已上传到 ComfyUI ``input`` 目录的文件名（1~10 个）。
+        **params: 注入的标量参数（PROMPT/SEED/... 以及 ``REF_1``）。
+
+    Raises:
+        ValueError: 参考图数量不在 1~10。
+    """
+    if not 1 <= len(reference_names) <= 10:
+        raise ValueError(f"参考图数量需在 1~10 之间，实际 {len(reference_names)}")
+
+    workflow = inject(template, REF_1=reference_names[0], **params)
+
+    # 第 2 张起：追加 LoadImage 节点并扩展条件节点的 images 映射
+    images = workflow["6"]["inputs"]["images"]
+    for index, name in enumerate(reference_names[1:], start=2):
+        node_id = str(19 + index)  # 21, 22, ...
+        workflow[node_id] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        images[f"image_{index}"] = [node_id, 0]
+    return workflow

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.generation import GenerationRun
+from app.models.inspiration import Inspiration
 from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.client import ComfyUIClient, ComfyUIError
@@ -153,6 +155,26 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         raise PermanentTaskError(run.error) from exc
 
+    # ── 1.5) 图生图：把参考图先上传到 ComfyUI（每批只传一次）──
+    reference_names: list[str] = []
+    if run.kind == "i2i":
+        ref_ids = json.loads(run.reference_ids or "[]")
+        if not ref_ids:
+            raise PermanentTaskError("图生图缺少参考素材，请重新提交")
+        for idx, insp_id in enumerate(ref_ids, start=1):
+            insp = await db.get(Inspiration, insp_id)
+            if insp is None or insp.deleted_at is not None:
+                raise PermanentTaskError(f"参考素材已不存在或被删除：{insp_id}")
+            source = settings.storage_root / insp.file_path
+            if not source.exists():
+                raise PermanentTaskError(f"参考素材文件缺失：{insp.file_path}")
+            data = await asyncio.to_thread(source.read_bytes)
+            uploaded = await client.upload_image(
+                data, f"gen_ref_{run.id}_{idx}{source.suffix.lower() or '.png'}"
+            )
+            reference_names.append(uploaded)
+        logger.info(f"参考图已上传 {len(reference_names)} 张（run #{run.id}）")
+
     # ── 2) 逐张生成 ──
     for idx, seed in enumerate(seeds, start=1):
         if await _is_cancelled(db, task):
@@ -163,8 +185,7 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
 
         await _mark_stage(db, task, run, "generating", current_index=idx, current_seed=seed)
         try:
-            workflow = wf.inject(
-                template,
+            common = dict(
                 PROMPT=run.prompt,
                 SEED=seed,
                 WIDTH=int(params.get("width") or 1024),
@@ -176,6 +197,16 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
                 SHIFT=float(params.get("shift") or 3.0),
                 PREFIX=f"gen_{run.id}_{idx:02d}",
             )
+            if run.kind == "i2i":
+                workflow = wf.build_edit_workflow(
+                    template,
+                    reference_names=reference_names,
+                    NEGATIVE=run.negative or "",
+                    RESOLUTION=int(params.get("width") or 1024),
+                    **{k: v for k, v in common.items() if k not in ("WIDTH", "HEIGHT")},
+                )
+            else:
+                workflow = wf.inject(template, **common)
             prompt_id = await client.submit(workflow)
 
             async def _tick() -> bool:

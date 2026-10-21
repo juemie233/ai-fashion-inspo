@@ -207,3 +207,83 @@ def test_model_files_in_groups_by_node():
     grouped = wf.model_files_in(template)
     assert grouped["UNETLoader"] == ["z_image_turbo_int8_convrot.safetensors"]
     assert json.dumps(grouped)  # 可序列化（写日志/接口返回）
+
+
+# ── i2i：编辑模板与参考图上传 ──
+
+
+def test_edit_template_injects_single_reference():
+    """单参考图：模板直出，images 是嵌套 dict（列表会被 ComfyUI 400 拒）。"""
+    template, digest = wf.load_template("qwen_edit")
+    assert len(digest) == 16
+    workflow = wf.build_edit_workflow(
+        template,
+        reference_names=["ref_a.png"],
+        PROMPT="把上衣换成米白针织开衫",
+        NEGATIVE="",
+        SEED=7,
+        STEPS=25,
+        CFG=1.0,
+        SAMPLER="euler",
+        SCHEDULER="simple",
+        RESOLUTION=1024,
+        PREFIX="gen_1_01",
+    )
+    assert workflow["4"]["inputs"]["image"] == "ref_a.png"
+    assert workflow["6"]["inputs"]["images"] == {"image_1": ["4", 0]}
+    # 图生图的 latent 必须来自条件节点（参考图编码），不是空 latent
+    assert workflow["7"]["inputs"]["latent_image"] == ["6", 2]
+    assert workflow["7"]["inputs"]["steps"] == 25
+
+
+def test_edit_template_appends_extra_references():
+    """多参考图：第 2 张起动态追加 LoadImage 节点并挂到 images.image_{i}。"""
+    template, _ = wf.load_template("qwen_edit")
+    workflow = wf.build_edit_workflow(
+        template,
+        reference_names=["a.png", "b.png", "c.png"],
+        PROMPT="拼一套穿搭",
+        NEGATIVE="",
+        SEED=1,
+        STEPS=25,
+        CFG=1.0,
+        SAMPLER="euler",
+        SCHEDULER="simple",
+        RESOLUTION=1024,
+        PREFIX="p",
+    )
+    assert workflow["6"]["inputs"]["images"] == {
+        "image_1": ["4", 0],
+        "image_2": ["21", 0],
+        "image_3": ["22", 0],
+    }
+    assert workflow["21"]["class_type"] == "LoadImage"
+    assert workflow["22"]["inputs"]["image"] == "c.png"
+
+
+def test_edit_reference_count_is_bounded():
+    """Qwen 2.1 官方上限 10 张：越界要在构造阶段就拒绝。"""
+    template, _ = wf.load_template("qwen_edit")
+    kwargs = dict(PROMPT="x", NEGATIVE="", SEED=1, STEPS=25, CFG=1.0,
+                  SAMPLER="euler", SCHEDULER="simple", RESOLUTION=1024, PREFIX="p")
+    with pytest.raises(ValueError):
+        wf.build_edit_workflow(template, reference_names=[], **kwargs)
+    with pytest.raises(ValueError):
+        wf.build_edit_workflow(template, reference_names=[f"{i}.png" for i in range(11)], **kwargs)
+
+
+async def test_upload_image_posts_multipart_and_returns_name():
+    """参考图必须上传到 ComfyUI 的 input 目录（LoadImage 只认那里）。"""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["ctype"] = request.headers.get("content-type", "")
+        seen["body_has_png"] = b"PNG" in request.content
+        return httpx.Response(200, json={"name": "ref_up.png", "subfolder": "", "type": "input"})
+
+    name = await _client(handler).upload_image(b"\x89PNG-bytes", "ref.png")
+    assert name == "ref_up.png"
+    assert seen["path"] == "/upload/image"
+    assert "multipart/form-data" in seen["ctype"]
+    assert seen["body_has_png"] is True

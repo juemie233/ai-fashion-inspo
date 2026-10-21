@@ -370,3 +370,99 @@ async def test_cleanup_removes_only_expired_terminal_runs(client):
         assert (settings.storage_root / f"generated/{fresh['run_id']}").exists()
         # 历史行仍在（清理只动磁盘）
         assert await db.get(GenerationRun, old["run_id"]) is not None
+
+
+# ── i2i：参考图校验与执行 ──
+
+
+async def _add_reference_image(insp_id: str, *, media: str = "image", deleted: bool = False) -> str:
+    """造一张「真实存在」的参考素材（文件落到 storage，行写进库）。"""
+    rel = f"images/2026-10/{insp_id}.png"
+    path = settings.storage_root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_png_bytes())
+    async with async_session() as db:
+        db.add(
+            Inspiration(
+                id=insp_id,
+                source_type="douyin",
+                file_path=rel,
+                media_type=media,
+                quality_status="approved",
+                deleted_at=None if not deleted else __import__("datetime").datetime(2026, 10, 1),
+            )
+        )
+        await db.commit()
+    return rel
+
+
+async def test_i2i_requires_reference_images(client):
+    """图生图没给参考图 → 提交前就拒（别让用户等几十秒才失败）。"""
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(db, {"kind": "i2i", "prompt": "改款"})
+        assert "参考素材" in str(exc.value.detail)
+
+
+async def test_i2i_rejects_missing_or_wrong_type_reference(client):
+    await _add_reference_image("ref-video", media="video")
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db, {"kind": "i2i", "prompt": "x", "reference_ids": ["not-exist"]}
+            )
+        assert "不存在" in str(exc.value.detail)
+
+        with pytest.raises(HTTPException) as exc:
+            await generation_service.create_run(
+                db, {"kind": "i2i", "prompt": "x", "reference_ids": ["ref-video"]}
+            )
+        assert "必须是图片" in str(exc.value.detail)
+
+
+async def test_i2i_create_run_records_references(client):
+    await _add_reference_image("ref-ok-1")
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db, {"kind": "i2i", "prompt": "把上衣换成米白针织开衫", "reference_ids": ["ref-ok-1"]}
+        )
+        run = await db.get(GenerationRun, out["run_id"])
+        assert run.kind == "i2i"
+        assert run.model_key == "qwen_2_1_i2i"
+        assert run.workflow_name == "qwen_edit"
+        assert json.loads(run.reference_ids) == ["ref-ok-1"]
+
+
+async def test_execute_i2i_uploads_references_then_generates(client, monkeypatch):
+    """i2i 执行：先把参考图上传到 ComfyUI，再逐张走编辑模板（latent 来自条件节点）。"""
+    uploaded: list[str] = []
+    submitted: list[dict] = []
+
+    class _EditClient(_FakeClient):
+        async def upload_image(self, data: bytes, filename: str) -> str:
+            uploaded.append(filename)
+            return f"up_{filename}"
+
+        async def submit(self, workflow: dict, client_id: str = "x") -> str:
+            submitted.append(workflow)
+            return "pid-edit"
+
+    monkeypatch.setattr(runner, "ComfyUIClient", _EditClient)
+    await _add_reference_image("ref-exec")
+
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db, {"kind": "i2i", "prompt": "换成米白开衫", "reference_ids": ["ref-exec"], "count": 1}
+        )
+        task = await db.get(TaskQueue, out["task_id"])
+        await runner.execute_image_gen(db, task)
+        run = await db.get(GenerationRun, out["run_id"])
+
+    # 文件名带 run id（会被其他用例推进），只校验形态
+    assert uploaded == [f"gen_ref_{out['run_id']}_1.png"]
+    assert len(submitted) == 1
+    workflow = submitted[0]
+    # 参考图接进 images.image_1，latent 用条件节点的第三个输出
+    assert workflow["6"]["inputs"]["images"] == {"image_1": ["4", 0]}
+    assert workflow["7"]["inputs"]["latent_image"] == ["6", 2]
+    assert run.status == "done"

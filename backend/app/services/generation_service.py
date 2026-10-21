@@ -116,6 +116,26 @@ def _validate_params(payload: dict, spec: dict) -> dict:
     }
 
 
+async def _assert_references_exist(db: AsyncSession, ids: list[str]) -> None:
+    """校验参考素材存在、未删除、是图片、且文件还在。
+
+    任何一条不满足都在**提交前**报错：跑到一半才发现缺图，用户已经等了几十秒。
+    """
+    rows = await db.execute(
+        select(Inspiration.id, Inspiration.file_path, Inspiration.media_type, Inspiration.deleted_at)
+        .where(Inspiration.id.in_(ids))
+    )
+    found = {r[0]: r for r in rows.all()}
+    for insp_id in ids:
+        row = found.get(insp_id)
+        if row is None or row[3] is not None:
+            raise HTTPException(status_code=400, detail=f"参考素材不存在或已删除：{insp_id}")
+        if row[2] != "image":
+            raise HTTPException(status_code=400, detail=f"参考素材必须是图片：{insp_id}")
+        if not (settings.storage_root / row[1]).exists():
+            raise HTTPException(status_code=400, detail=f"参考素材文件缺失：{insp_id}")
+
+
 async def create_run(
     db: AsyncSession, payload: dict, *, task_factory=None
 ) -> dict:
@@ -125,7 +145,9 @@ async def create_run(
         payload: 前端提交的表单（见 API 契约）。
         task_factory: 建任务的可调用对象（测试注入用，缺省用任务队列的服务函数）。
     """
-    model_key = str(payload.get("model_key") or "z_image_int8")
+    kind_hint = str(payload.get("kind") or "t2i")
+    default_model = "qwen_2_1_i2i" if kind_hint == "i2i" else "z_image_int8"
+    model_key = str(payload.get("model_key") or default_model)
     spec = MODEL_SPECS.get(model_key)
     if spec is None:
         raise HTTPException(status_code=400, detail=f"未知模型档位: {model_key}")
@@ -134,11 +156,20 @@ async def create_run(
     if kind not in ("t2i", "i2i"):
         raise HTTPException(status_code=400, detail="kind 只能是 t2i 或 i2i")
     if kind == "i2i":
-        # 图生图需要 Qwen-Image 档位；一期尚未接入，明确拒绝而不是静默降级成文生图
-        raise HTTPException(
-            status_code=400,
-            detail="图生图（参考图）尚未开放：需先安装并接入 Qwen-Image 2.1 档位",
-        )
+        if spec["kind"] != "i2i":
+            raise HTTPException(
+                status_code=400,
+                detail=f"档位 {model_key} 不支持参考图，请用 qwen_2_1_i2i",
+            )
+        ref_ids = [str(x) for x in (payload.get("reference_ids") or []) if str(x).strip()]
+        max_refs = int(spec.get("max_refs") or 10)
+        if not 1 <= len(ref_ids) <= max_refs:
+            raise HTTPException(
+                status_code=400, detail=f"图生图需要 1~{max_refs} 张参考素材，当前 {len(ref_ids)} 张"
+            )
+        await _assert_references_exist(db, ref_ids)
+    else:
+        ref_ids = []
 
     params = _validate_params(payload, spec)
     template, digest = wf.load_template(spec["workflow"])
@@ -152,7 +183,7 @@ async def create_run(
         model_key=model_key,
         workflow_name=spec["workflow"],
         workflow_hash=digest,
-        reference_ids=None,
+        reference_ids=json.dumps(ref_ids) if kind == "i2i" else None,
         batch_dir="",
         total=params["count"],
         done=0,

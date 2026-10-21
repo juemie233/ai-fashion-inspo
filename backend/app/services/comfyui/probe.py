@@ -45,6 +45,24 @@ MODEL_SPECS: dict[str, dict] = {
         },
         "max_pixels": 1328 * 1328,
     },
+    "qwen_2_1_i2i": {
+        "label": "Qwen-Image 2.1（参考图改款，1024² 约 20~45 秒）",
+        "workflow": "qwen_edit",
+        "kind": "i2i",
+        "vram_gib": 14.5,
+        "max_refs": 10,
+        "defaults": {
+            "width": 1024,
+            "height": 1024,
+            "steps": 25,
+            "cfg": 1.0,
+            "sampler": "euler",
+            "scheduler": "simple",
+            "shift": 3.0,
+        },
+        # Qwen-Image 2.1 在 16 GB 上 1024² 已是上限（权重 13.6 GiB + 激活）
+        "max_pixels": 1024 * 1024,
+    },
 }
 
 

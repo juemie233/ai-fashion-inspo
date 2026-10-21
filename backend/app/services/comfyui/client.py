@@ -244,6 +244,23 @@ class ComfyUIClient:
         except ComfyUIError as exc:  # pragma: no cover - 只记日志
             logger.warning(f"清理 ComfyUI 队列失败（忽略）: {exc}")
 
+    async def upload_image(self, data: bytes, filename: str) -> str:
+        """把参考图上传到 ComfyUI 的 input 目录，返回它认得的文件名。
+
+        为什么必须上传而不是给绝对路径：``LoadImage`` 只能读 ComfyUI 自己的 input
+        目录（路径白名单），给外部路径会被静默忽略或报「invalid image file」。
+        """
+        files = {"image": (filename, data, "image/png")}
+        resp = await self._request(
+            "POST", "/upload/image", files=files, data={"overwrite": "true"}
+        )
+        if resp.status_code != 200:
+            raise ComfyUIError(
+                f"上传参考图失败（HTTP {resp.status_code}）", detail=resp.text[:300]
+            )
+        body = resp.json()
+        return str(body.get("name") or filename)
+
     async def fetch_image(
         self, filename: str, subfolder: str = "", folder_type: str = "output"
     ) -> bytes:
