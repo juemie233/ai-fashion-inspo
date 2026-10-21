@@ -285,10 +285,19 @@ async def list_scraper_tasks(
 
 
 async def delete_single_scraper_task(db: AsyncSession, task_id: int) -> dict:
-    """物理删除单条采集任务（素材的 scraper_task_id 自动置 NULL，不删除素材）。"""
+    """物理删除单条采集任务（素材的 scraper_task_id 自动置 NULL，不删除素材）。
+
+    只允许删终态：``pending`` / ``running`` 的记录一删，采集子进程还在跑却再也没有
+    记录可查（进度、日志页、取消入口全部失效），与 ``/api/tasks`` 的删除语义保持一致。
+    """
     task = await db.get(ScraperTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="采集任务未找到")
+    if task.status in ("pending", "running"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务状态为 {task.status}，正在采集或等待执行，请先取消再删除",
+        )
     await db.delete(task)
     await db.commit()
     # 记录审计：物理删除采集任务历史属破坏性操作，留痕便于追溯
@@ -302,8 +311,14 @@ async def delete_single_scraper_task(db: AsyncSession, task_id: int) -> dict:
 
 
 async def clear_all_scraper_tasks(db: AsyncSession) -> dict:
-    """物理删除所有采集任务历史记录。"""
-    result = await db.execute(delete(ScraperTask))
+    """物理删除采集任务**历史**记录（保留 pending / running）。
+
+    为什么不能全删：清空历史时若把正在跑的任务记录也删掉，子进程仍在写库/下载，
+    但界面上再也看不到它，也无法取消——等于制造一个不可见的在跑任务。
+    """
+    result = await db.execute(
+        delete(ScraperTask).where(ScraperTask.status.notin_(("pending", "running")))
+    )
     await db.commit()
     # 记录审计：清空采集任务历史属不可恢复的破坏性操作
     await record_audit_log(
