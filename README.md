@@ -128,6 +128,7 @@ chrome_debug_port: int = 9222
   - 排查踩坑：`qwen3.5_9b_..._pe_i2i` 看着像文本编码器，实际是官方那条**提示词改写 LLM**（接 `TextGenerate`）；真正的图像条件编码器是 `qwen3vl_8b_*`。误用不报错、只出**纯噪声**。
   - 两个接口细节：AUTOGROW 输入的 API 序列化是**嵌套 dict**（`images.image_1`，传列表被 400）；**图生图的 latent 必须取自 `TextEncodeQwenImage21` 第 3 个输出**，接 `EmptyLatentImage` 能跑完但输出噪声。
 - **多参考图 + 直达入口**（`b2223cf`）：支持 1~10 张参考（官方上限），素材详情页「用这张图改款」→ `/generate?ref=<id>` 自动预填。
+- **P2 收尾**（`682f951`）：单张换 seed 重出（不只是整批重跑）、参考图图形化选择器（替代粘 ID）、出图配方（localStorage 预设）、生成量在来源分布里单独展示。
 - **两轮审查修复**（`cf7678b`、`efaa667`、`859dfbd`）：等待进度透出（原先读错字段恒为 0）、入库部分失败清孤儿文件、执行中禁止丢弃批次、无效标签 400、i2i 尺寸文案按档位、f2 回滚只 plan 一次、`/object_info` 60 秒缓存、HTTP 连接复用；前端修「尺寸预设不生效」（`computed(...).value` 解构导致固定 1024）与「参考图/反推共用一个输入框」；文生图带参考图改为显式 400（含档位与生成方式不匹配校验）。
 - **质量口径**：生成图 `source_type='generated'` + `is_ai_generated=1` + `quality_status='pending'`；**`collect_samples` 负样本排除 AI 生成图**（否则废片会教初筛器「AI 特征=垃圾」，误杀日后采集素材）；素材统计新增 `generated_count`。
 
