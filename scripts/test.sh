@@ -31,9 +31,9 @@ cd "$ROOT/backend"
 # 覆盖率底线是**棘轮**：只能往上调。当前 69.3%（2026-10-20 实测；垃圾桶/标签/更新三条服务层补用例前 67.9%）。
 # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
 if [[ "$COV" == "--cov" ]]; then
-  "$PY" -m pytest --cov --cov-fail-under=73 --cov-report=term-missing
+  "$PY" -m pytest --cov --cov-fail-under=75 --cov-report=term-missing
 else
-  "$PY" -m pytest --cov --cov-fail-under=73 --cov-report=term:skip-covered
+  "$PY" -m pytest --cov --cov-fail-under=75 --cov-report=term:skip-covered
 fi
 
 echo ""

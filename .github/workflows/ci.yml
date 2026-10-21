@@ -105,7 +105,7 @@ jobs:
       # 覆盖率 68% 是**棘轮底线**（只能往上调）：测试被误删/跳过时这里会红。
       - name: pytest 全量 + 覆盖率棘轮（≥69%）
         run: |
-          python -m pytest -q --tb=long --cov --cov-fail-under=73 \
+          python -m pytest -q --tb=long --cov --cov-fail-under=75 \
             --cov-report=term:skip-covered 2>&1 | tee pytest.log
           exit ${PIPESTATUS[0]}
 
