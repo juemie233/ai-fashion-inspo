@@ -8,6 +8,7 @@ import {
   IconImage,
   IconSearch,
   IconUpload,
+  IconRobot,
   IconCamera,
   IconTags,
   IconScan,
@@ -54,6 +55,7 @@ const menuKey = computed(() => {
         <a-menu-item-group title="浏览">
           <a-menu-item key="home"><IconImage />素材库</a-menu-item>
           <a-menu-item key="upload"><IconUpload />上传素材</a-menu-item>
+          <a-menu-item key="generate"><IconRobot />本地出图</a-menu-item>
           <a-menu-item key="model-photos"><IconCamera />添加模特照片</a-menu-item>
           <a-menu-item key="search"><IconSearch />高级搜索</a-menu-item>
           <a-menu-item key="collections"><IconBookmark />收藏合集</a-menu-item>

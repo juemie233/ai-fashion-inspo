@@ -18,6 +18,12 @@ const router = createRouter({
       meta: { title: '上传素材' },
     },
     {
+      path: '/generate',
+      name: 'generate',
+      component: () => import('@/views/GenerateView.vue'),
+      meta: { title: '本地出图' },
+    },
+    {
       path: '/collections',
       name: 'collections',
       component: () => import('@/views/CollectionsView.vue'),

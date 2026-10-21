@@ -6,6 +6,7 @@ export const SOURCE_TYPE_LABELS: Record<string, string> = {
   douyin: '抖音',
   scraper: '自动采集',
   manual_upload: '手动上传',
+  generated: 'AI 生成',
   browser_extension: '浏览器插件',
   batch_import: '目录导入',
   url_import: '链接导入',

@@ -93,6 +93,7 @@ export const CANCELABLE_TASK_TYPES = [
   'multi_analyze',
   'quality_check',
   'vector_backfill',
+  'image_gen',
 ] as const
 
 /** 判断任务类型是否支持运行中取消（任务列表的取消按钮显示走这里） */
@@ -116,6 +117,8 @@ export const GPU_EXCLUSIVE_TASK_TYPES = [
   'multi_analyze',
   'face_scan',
   'face_match',
+  // ComfyUI 出图：与 Ollama 抢同一块显存（后端 worker.py 同步维护）
+  'image_gen',
 ] as const
 
 /** 判断任务类型是否属重负载互斥组（排队文案据此解释「为什么还没开始」） */

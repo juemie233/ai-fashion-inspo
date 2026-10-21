@@ -102,6 +102,8 @@ async def test_gpu_exclusive_group_covers_named_types():
         "multi_analyze",
         "face_scan",
         "face_match",
+        # ComfyUI 出图：与 Ollama 抢同一块显存，必须与上面几种互斥
+        "image_gen",
     }
     assert GPU_EXCLUSIVE_TASK_TYPES.isdisjoint(
         {"f2_import", "batch_delete", "deduplicate", "phash_backfill"}

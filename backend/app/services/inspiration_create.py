@@ -7,6 +7,7 @@ inspiration_dedupe，两条创建路径共用同一套「先查重后落盘」�
 import asyncio
 import ipaddress
 import logging
+import shutil
 import socket
 import uuid
 from datetime import datetime
@@ -22,9 +23,12 @@ from app.config import settings
 from app.models.inspiration import Inspiration
 from app.models.tag import InspirationTag
 from app.services.file_service import (
+    _ensure_date_dir,
+    _generate_filename,
     delete_files,
     generate_thumbnail,
     save_upload,
+    validate_media,
 )
 from app.services.inspiration_dedupe import (
     check_platform_id_duplicate,
@@ -77,6 +81,100 @@ def _validate_download_url(url: str) -> None:
                 "url",
                 "下载地址指向内网/保留地址，已拒绝（SSRF 防护）"
             )
+
+
+async def create_inspiration_from_file(
+    db: AsyncSession,
+    *,
+    src_path: Path,
+    source_type: str = "generated",
+    generation_run_id: int | None = None,
+    is_ai_generated: bool = False,
+    tag_ids: list[int] | None = None,
+    caption: str | None = None,
+) -> Inspiration:
+    """把**磁盘上已有的图片**入库（本地出图的确认入库走这里）。
+
+    与 :func:`create_inspiration` 的区别只在入口：后者从 ``UploadFile`` 流式落盘，
+    这里直接复制已有文件。入库之后的五件事（缩略图 / sha256 / 内容去重 / 质量状态 /
+    向量回填登记）**完全共用**，避免两条入口各自踩一遍同样的坑：
+
+    1. 先复制再校验：源文件在候选区，复制失败/校验失败时清理副本，候选文件不受影响
+       （用户可以重试或只丢副本，不该因为入库失败把生成的图也弄丢）；
+    2. 内容哈希去重：同一张图重复确认入库 → 抛 409（前端按「已存在，跳过」处理）；
+    3. 生成图默认 ``quality_status='pending'``：质量参差，必须过审核，不自动通过；
+    4. 登记向量回填：与上传一致，等打标后由任务重建文本/图像向量；
+    5. 标签：可选的 ``tag_ids`` 直接挂上（从 prompt 反推时顺便带过来）。
+
+    Args:
+        src_path: 源图片绝对路径（候选目录下的 png）。
+        source_type: 素材来源类型，默认 ``generated``。
+        generation_run_id: 出图批次 id（写入 ``inspirations.generation_run_id``）。
+        is_ai_generated: 是否标记「疑似 AI 生成」。
+        tag_ids: 可选，入库时直接关联的标签。
+        caption: 可选，正文/描述（生成图可存 prompt，便于后续检索）。
+
+    Raises:
+        HTTPException(409): 内容已存在。
+        HTTPException(400): 文件不是有效图片。
+    """
+    dest_dir = _ensure_date_dir(settings.images_dir)
+    filename = _generate_filename(src_path.name)
+    dest = dest_dir / filename
+    await asyncio.to_thread(shutil.copy2, src_path, dest)
+
+    thumb_path: str | None = None
+    try:
+        await asyncio.to_thread(validate_media, dest, None)
+        thumb_path = await generate_thumbnail(dest, settings.thumbnails_dir)
+    except Exception:
+        delete_files(str(dest), None)
+        raise
+
+    today = datetime.now().strftime("%Y-%m")
+    rel_file_path = f"images/{today}/{filename}"
+
+    content_hash = await asyncio.to_thread(file_sha256, dest)
+    if content_hash and await find_duplicate_by_hash(db, content_hash):
+        delete_files(rel_file_path, thumb_path)
+        raise HTTPException(status_code=409, detail="该素材已存在（内容重复）")
+
+    inspiration = Inspiration(
+        source_type=source_type,
+        file_path=rel_file_path,
+        thumbnail_path=thumb_path,
+        content_hash=content_hash,
+        media_type="image",
+        quality_status="pending",
+        is_ai_generated=is_ai_generated,
+        generation_run_id=generation_run_id,
+        caption=caption,
+    )
+    db.add(inspiration)
+    try:
+        await db.flush()
+    except IntegrityError:
+        delete_files(rel_file_path, thumb_path)
+        raise HTTPException(status_code=409, detail="该素材已存在") from None
+    await db.refresh(inspiration)
+
+    if tag_ids:
+        for tag_id in tag_ids:
+            db.add(
+                InspirationTag(
+                    inspiration_id=inspiration.id, tag_id=tag_id, source="manual"
+                )
+            )
+        await db.flush()
+
+    try:
+        from app.services.task_runners.vector_backfill import enqueue_vector_backfills
+
+        await enqueue_vector_backfills(db, [inspiration.id])
+    except Exception as e:
+        logger.warning(f"登记向量回填失败（忽略，不影响入库）: {e}")
+
+    return inspiration
 
 
 async def create_inspiration(

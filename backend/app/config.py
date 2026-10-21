@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     # 必须显式传入更大的 num_ctx
     ai_num_ctx: int = 16384
 
+    # ── 本地出图（ComfyUI）──
+    # 只允许本机回环地址：ComfyUI 无鉴权且能读写任意路径，绝不能暴露到局域网。
+    comfyui_base_url: str = "http://127.0.0.1:8188"
+    comfyui_timeout: float = 10.0  # 单次 HTTP 超时（秒）；就绪探测另用更短的 2 秒
+    image_gen_timeout: int = 600  # 单张生成总超时（秒），超时主动 interrupt
+    image_gen_poll_interval: float = 0.5  # 轮询 /history 的间隔（秒）
+    # 等待显存上限：Ollama 模型可能在上一次打标任务后仍驻留，等它自然过期而不是强杀
+    image_gen_wait_vram_seconds: int = 900
+    image_gen_keep_candidates_days: int = 7  # 未确认候选目录保留天数（过期清理）
+
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」

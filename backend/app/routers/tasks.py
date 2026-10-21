@@ -40,6 +40,7 @@ _CANCELABLE_RUNNING_TYPES = (
     "multi_analyze",
     "quality_check",
     "vector_backfill",
+    "image_gen",
 )
 
 # 支持「运行中暂停」的任务类型：执行器每批检查 paused 后保存进度并返回。

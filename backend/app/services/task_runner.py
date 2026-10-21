@@ -95,6 +95,8 @@ from app.services.task_runners.vector_backfill import (
 # ⚠ 但若新任务会大量占用 GPU（CLIP/VLM/人脸推理）或整批打满 CPU，必须同时登记到
 # app/worker.py 的 GPU_EXCLUSIVE_TASK_TYPES，否则它会与其它重负载任务并发抢资源
 # ——实测向量回填与质量审核同时跑时，同一个检查点从 5.4 秒退化到 12.7 分钟。
+from app.services.task_runners.image_gen import execute_image_gen  # noqa: E402
+
 TASK_HANDLERS = {
     "batch_analyze": execute_batch_analyze,
     "multi_analyze": execute_multi_analyze,
@@ -111,4 +113,5 @@ TASK_HANDLERS = {
     "tag_health_scan": execute_tag_health_scan,
     "tag_cluster_scan": execute_tag_cluster_scan,
     "tag_network_analyze": execute_tag_network_analyze,
+    "image_gen": execute_image_gen,
 }

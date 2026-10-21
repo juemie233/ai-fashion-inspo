@@ -56,6 +56,10 @@ class Inspiration(Base):
         Integer, ForeignKey("scraper_tasks.id", ondelete="SET NULL"),
         nullable=True, index=True,
     )  # 关联采集任务，用于追溯来源
+    generation_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("generation_runs.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )  # 关联出图批次（仅 source_type='generated' 有值）：溯源 + 同参再生成
 
     file_path: Mapped[str] = mapped_column(Text)
     thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -84,6 +84,7 @@ GPU_EXCLUSIVE_TASK_TYPES: frozenset[str] = frozenset(
         "multi_analyze",  # VLM 视觉推理（多模型组合）
         "face_scan",  # 人脸推理（face-service embed_batch）
         "face_match",  # 全库人脸相似度矩阵乘（numpy，整批占 CPU + DB）
+        "image_gen",  # ComfyUI 出图（与 Ollama 抢同一块显存，必须与上面互斥）
     }
 )
 

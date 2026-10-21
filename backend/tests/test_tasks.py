@@ -307,6 +307,7 @@ def test_whitelists_match_frontend_contract():
         "multi_analyze",
         "quality_check",
         "vector_backfill",
+        "image_gen",
     }
 
 

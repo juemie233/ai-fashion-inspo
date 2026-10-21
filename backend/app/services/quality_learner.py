@@ -69,11 +69,17 @@ async def collect_samples(db: AsyncSession) -> tuple[list[list[float]], list[int
     # 负样本 = 垃圾桶中所有图片素材（不限删除原因）。
     # 口径与「垃圾桶待删除素材」保持一致：用户移入垃圾桶即明确不想要，
     # 无论原因是质量差/重复/不喜欢/隐私/其他，全部作为负样本。
+    #
+    # **排除 AI 生成图（is_ai_generated=True）**：本地出图的废片被丢进垃圾桶，多是
+    # 「构图/风格不满意」，与「采集到的垃圾素材」不是一回事。混进负样本会让初筛器
+    # 学到「AI 生成特征 = 垃圾」，进而误杀日后采集到的、风格接近 AI 的优质素材。
+    # 若将来产品口径改为「接受 AI 生成图作负样本」，删掉这一行并同步更新本注释。
     negative_rows = (
         await db.execute(
             select(Inspiration.id, Inspiration.trash_reason).where(
                 Inspiration.media_type == "image",
                 Inspiration.deleted_at.isnot(None),
+                Inspiration.is_ai_generated.is_(False),
                 # 「隐私」不作为负样本（口径见 NEGATIVE_EXCLUDED_TRASH_REASONS）
                 Inspiration.trash_reason.notin_(NEGATIVE_EXCLUDED_TRASH_REASONS),
             )

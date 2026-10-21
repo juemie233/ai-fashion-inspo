@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import init_db, run_migrations
 from app.db_migrations import compute_schema_version, ensure_schema
 from app.routers import (
+    generate,
     inspirations,
     tags,
     files,
@@ -322,6 +323,7 @@ app.include_router(bloggers.router)
 app.include_router(models.router)
 app.include_router(face_scan.router)
 app.include_router(face_scan.match_router)
+app.include_router(generate.router)
 app.include_router(health.router)
 app.include_router(collections.router)
 

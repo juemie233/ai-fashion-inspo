@@ -38,6 +38,7 @@ const TASK_TYPE_META: Record<string, { label: string; icon: Component; color: st
   enrich_blogger_profile: { label: '博主主页补全', icon: IconUser, color: 'gold' },
   tag_health_scan: { label: '标签健康扫描', icon: IconCheckCircle, color: 'pinkpurple' },
   tag_cluster_scan: { label: '标签聚类扫描', icon: IconMindMapping, color: 'cyan' },
+  image_gen: { label: '本地出图', icon: IconFileImage, color: 'skyblue' },
   tag_network_analyze: { label: '标签网络分析', icon: IconRelation, color: 'orangered' },
 }
 

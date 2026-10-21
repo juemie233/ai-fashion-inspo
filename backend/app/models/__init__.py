@@ -24,6 +24,7 @@ from app.models.tag_history import TagHistory
 from app.models.tag_correction import TagCorrection
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.collection import Collection, CollectionItem
+from app.models.generation import GenerationRun
 
 __all__ = [
     "Inspiration",
@@ -51,5 +52,6 @@ __all__ = [
     "TagCorrection",
     "ServiceHeartbeat",
     "Collection",
+    "GenerationRun",
     "CollectionItem",
 ]
