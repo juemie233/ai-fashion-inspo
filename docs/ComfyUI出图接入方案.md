@@ -1,6 +1,6 @@
 # 接入 ComfyUI 一键生成图片 · 技术方案
 
-> 版本 1.0 · 2026-10-21 · 状态：**设计定稿，待评审后按 P0→P2 分期实施**
+> 版本 1.1 · 2026-10-21 · 状态：**P0 已实施并端到端跑通**（见第 15 节实施记录）；P1/P2 待做
 >
 > 定位：本文是**实施方案**，不是科普。每节都给出「改哪个文件、加哪张表、什么契约、怎么验收」，
 > 以及**为什么这么定**（含被否决的选项）。外部工具安装见 `docs/图片生成模型安装清单.md`。
@@ -630,3 +630,65 @@ docs/ComfyUI出图接入方案.md                          本文
 | 中文注释/UI | ✅ | — |
 | 核心链路补测试 | ✅ | 第 11 节；负样本改动必须带回归用例 |
 | 模块 ≤ 1000 行、视图 ≤ 800 行 | ✅ | 最大的 `image_gen.py` 预估 ~250 行 |
+
+---
+
+## 15. 实施记录（P0，2026-10-21）
+
+### 15.1 已完成
+
+| 项 | 落地位置 |
+| --- | --- |
+| 任务类型 `image_gen` + 进 GPU 互斥组 + 可取消清单 | `worker.py`、`services/task_runner.py`、`routers/tasks.py` |
+| ComfyUI 客户端（错误分四类） | `services/comfyui/client.py` |
+| 模板 + 占位符注入 + 节点/模型自检 | `services/comfyui/workflow.py`、`workflows/z_image_t2i.json` |
+| 就绪探测（2 秒超时、可降级） | `services/comfyui/probe.py` |
+| 显存守门（排队等待） | `services/comfyui/vram.py` |
+| 从素材反推 prompt | `services/comfyui/prompt_builder.py` |
+| 执行器（逐张落盘、取消、人话错误） | `services/task_runners/image_gen.py` |
+| 批次/候选/确认入库/丢弃 | `services/generation_service.py` |
+| 8 个 REST 端点 | `routers/generate.py` |
+| 数据模型 + 迁移 | `models/generation.py`、`alembic/versions/c92d4f8329ac_*.py` |
+| 入库共用管线 | `inspiration_create.create_inspiration_from_file()` |
+| 负样本排除生成图（决策 2） | `quality_learner.collect_samples()` |
+| 前端页面（参数 + 候选区 + 确认入库） | `views/GenerateView.vue`、`composables/useImageGen.ts`、`api/generate.ts` |
+
+### 15.2 端到端实测（真实 ComfyUI + 真实 GPU，临时库/临时存储，未污染项目数据）
+
+| 场景 | 结果 |
+| --- | --- |
+| 建批次 | 0.05 s |
+| 首张（含模型加载） | 34.9 s / 2 张 |
+| 热跑（模型驻留） | **13.7 s / 2 张（约 6.8 s/张）** |
+| 候选落盘 | `generated/<run_id>/01_seed-361813526.png` 等，seed 编进文件名 |
+| 工作流指纹 | `2fa6245dcf7fd6ab` 写入 `generation_runs.workflow_hash` |
+| 确认入库 | `source_type=generated`、`is_ai_generated=True`、`quality_status=pending`、`generation_run_id` 正确 |
+| 重复入库 | 幂等：`imported=0, skipped=1`（内容哈希命中） |
+| 就绪探测 | ComfyUI 关闭时 `ready=false` + 「双击 run_nvidia_gpu.bat」；开启后 `z_image_int8=ok` |
+
+### 15.3 实施中修掉的两个设计缺陷（文档已同步修正）
+
+1. **显存守门第一次误判**：原判定是「`vram_free >= need` 才放行」。但模型一旦驻留，
+   `vram_free` 天然很低——**第二次出图必然白等 15 分钟**。改为三档判定：
+   够 → 过；**Ollama 没驻留 → 也过**（那是 ComfyUI 自己的缓存）；否则才等。
+2. **小模型误伤**：本机空闲时只有 14.8 GiB 可用（总 15.9，桌面/驱动吃掉约 1 GiB），
+   而 Z-Image 需求 15.0 GiB —— 只要 Ollama 驻留了 0.03 GiB 的 embedding 模型就会白等。
+   增加门槛 `OLLAMA_SIGNIFICANT_GIB = 2.0`：低于该值视为可忽略。
+   两条都有回归用例（`tests/test_unit_comfyui_vram.py`）。
+
+### 15.4 与方案原文的偏差
+
+| 原文 | 实际 | 原因 |
+| --- | --- | --- |
+| 用户提交 `count` 后按 seed 连续递增 | 已实现（`seed_base + i`） | 与方案一致，无偏差 |
+| i2i 在 P2 | P0 就返回 400「图生图尚未开放」 | 权重已装，但 edit 工作流模板未验证，宁可明确拒绝也不静默降级 |
+| 参数快照含 `reference_ids` | 建表保留字段，P2 才写值 | 与分期一致 |
+| 统计口径拆「生成量」 | **未做** | 属 P1；当前 `source_type` 已能筛出，先不虚高总数即可 |
+
+### 15.5 下一步（P1 建议顺序）
+
+1. 生成历史列表页（`GET /runs` 已就绪，缺前端入口）；
+2. 「同参重跑 / 单张换 seed 重生成」（`POST /runs/{id}/retry` 未实现）；
+3. 候选目录过期清理（`image_gen_keep_candidates_days` 已进配置，缺定时任务）；
+4. 统计面板加「AI 生成」维度。
+

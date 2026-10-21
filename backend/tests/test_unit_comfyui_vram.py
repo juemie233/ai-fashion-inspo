@@ -75,6 +75,20 @@ async def test_timeout_mentions_the_culprit(monkeypatch):
     assert "ollama stop" in message
 
 
+async def test_small_ollama_model_is_ignored(monkeypatch):
+    """本机实测：空闲时只有 14.8 GiB 可用（总 15.9），而需求是 15.0 GiB。
+
+    若把 0.03 GiB 的 embedding 模型也算成「占用」，每次出图都会白等 15 分钟 ——
+    所以门槛以下的驻留一律忽略，直接执行。
+    """
+    monkeypatch.setattr(
+        vram_mod, "ollama_resident", _residents([{"name": "all-minilm:latest", "size_gib": 0.03}])
+    )
+    client = _Client([14.8])
+    await wait_for_vram(client, 15.0, wait_seconds=600)
+    assert client.calls == 1
+
+
 async def test_stop_signal_cancels(monkeypatch):
     monkeypatch.setattr(vram_mod, "ollama_resident", _no_resident)
     client = _Client([0.5])

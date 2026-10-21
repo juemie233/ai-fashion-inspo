@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 """轮询间隔（秒）：显存释放通常在几秒到十几秒内发生，10 秒粒度足够且不吵。"""
 CHECK_INTERVAL = 10.0
 
+"""「值得等」的 Ollama 驻留显存门槛（GiB）。
+
+为什么需要：本机实测空闲时 ComfyUI 只有 14.8 GiB 可用（总 15.9，驱动/桌面吃掉约 1 GiB），
+而 Z-Image 的保守需求是 15.0 GiB —— 只要 Ollama 驻留了**任何**模型（哪怕 0.03 GiB 的
+embedding 模型）都会触发「显存不足」并白等 15 分钟。真实冲突只来自大模型（VLM 5~19 GiB），
+所以低于该门槛的驻留一律忽略（ComfyUI 自己能 offload 这点小事）。
+"""
+OLLAMA_SIGNIFICANT_GIB = 2.0
+
 
 class VramTimeoutError(ComfyUIError):
     """等到上限仍然没有足够显存。"""
@@ -80,11 +89,12 @@ async def wait_for_vram(
         if free >= need_gib:
             return
         residents = await ollama_resident()
-        if not residents:
+        significant = [m for m in residents if float(m.get("size_gib") or 0) >= OLLAMA_SIGNIFICANT_GIB]
+        if not significant:
             # 显存低但不是 Ollama 占的 → 是 ComfyUI 自己的模型缓存，它会自行调度
             logger.info(
-                f"显存偏低（{free} GiB < {need_gib} GiB）但无 Ollama 驻留，"
-                "按 ComfyUI 自身缓存处理，直接执行"
+                f"显存偏低（{free} GiB < {need_gib} GiB）但没有大模型驻留"
+                f"（{len(residents)} 个小模型可忽略），按 ComfyUI 自身缓存处理，直接执行"
             )
             return
 
@@ -92,7 +102,7 @@ async def wait_for_vram(
         if on_wait is not None:
             await on_wait(waited, free)
         if time.monotonic() >= deadline:
-            who = "；".join(f"{m['name']}（{m['size_gib']} GiB）" for m in residents)
+            who = "；".join(f"{m['name']}（{m['size_gib']} GiB）" for m in significant)
             raise VramTimeoutError(
                 f"等待显存超时（已等 {waited} 秒）：当前空闲 {free} GiB，需要 {need_gib} GiB；"
                 f"占用显存的是 {who}。可执行 ollama stop <模型名> 释放后重试，"
@@ -100,7 +110,7 @@ async def wait_for_vram(
                 detail=f"need={need_gib} free={free} waited={waited}",
             )
         logger.info(
-            f"Ollama 占着显存（空闲 {free} GiB < 需要 {need_gib} GiB），"
+            f"Ollama 大模型占着显存（空闲 {free} GiB < 需要 {need_gib} GiB），"
             f"{CHECK_INTERVAL:.0f} 秒后复查"
         )
         await asyncio.sleep(CHECK_INTERVAL)
