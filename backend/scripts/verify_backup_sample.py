@@ -42,12 +42,58 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+"""与 `scripts/backup_data.sh` 的 robocopy ``//XD`` 保持**完全一致**的排除目录。
+
+为什么必须一致：复制端跳过这些目录（可重建/临时快照），校验端若仍从源端取样，
+就会把「刻意没备份」的文件报成「缺失」——2026-10-22 的备份就是这样被判失败的：
+源端抽到 3 个 ``_crop_backup/`` 下的文件，而该目录本就不在备份范围内。
+新增排除项时，两处必须同步修改（这是本文件与 shell 之间唯一的隐式耦合）。
+"""
+EXCLUDED_DIRS = frozenset({
+    "logs",
+    "tmp",
+    "_crop_backup",
+    "_crop_dups",
+    "cookies",
+    "debug",
+    "faces",
+    "_pre_reset_snapshot",
+    "_pre_restore_snapshot",
+})
+
+"""``lancedb_backup_*`` 是通配形式的排除项（robocopy 里写作 ``lancedb_backup_*``）。"""
+EXCLUDED_DIR_PREFIXES = ("lancedb_backup_",)
+
+
+"""不参与**逐文件哈希抽样**的目录（但它们**确实**会被备份）。
+
+`lancedb` 是活库：备份步骤在写锁内取一致性快照，快照完成后源端仍会继续写入新的
+`.manifest` / `.lance` 文件——这些文件在快照里本来就不该有。按文件比对只会把
+「正常的新写入」误报成「缺失」（2026-10-22 复验时实测 5 条）。它的完整性由
+快照步骤本身 + manifest 里的目录文件数/字节数覆盖，不依赖抽样哈希。
+"""
+SAMPLE_SKIP_DIRS = frozenset({"lancedb"})
+
+
+def _is_sample_skipped(rel: Path) -> bool:
+    """判断该相对路径是否属于「不参与抽样」的目录（如活库 lancedb）。"""
+    return any(part in SAMPLE_SKIP_DIRS for part in rel.parts[:-1])
+
+
+def _is_excluded(rel: Path) -> bool:
+    """判断相对路径**所在目录**是否在排除清单里（robocopy ``//XD`` 作用于目录）。"""
+    for part in rel.parts[:-1]:
+        if part in EXCLUDED_DIRS or part.startswith(EXCLUDED_DIR_PREFIXES):
+            return True
+    return False
+
+
 def collect_files(root: Path, limit: int | None = None) -> list[Path]:
     """列出 root 下所有常规文件（相对路径，升序保证确定性）。"""
     if not root.exists():
         return []
     files = sorted(
-        (p.relative_to(root) for p in root.rglob("*") if p.is_file()),
+        (p.relative_to(root) for p in root.rglob("*") if p.is_file() and not _is_excluded(p.relative_to(root)) and not _is_sample_skipped(p.relative_to(root))),
         key=lambda p: p.as_posix(),
     )
     return files[:limit] if limit else files
