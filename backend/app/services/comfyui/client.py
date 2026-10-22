@@ -120,8 +120,10 @@ class ComfyUIClient:
                 detail=str(exc),
             ) from exc
         except httpx.TimeoutException as exc:
+            # 这是**请求级**超时（默认 10 秒），与「生成一张图超时」不是一回事：
+            # 共用 kind="timeout" 会让用户看到「生成超时，请降分辨率」这种错误建议。
             raise ComfyUIError(
-                f"ComfyUI 请求超时（{path}）", kind="timeout", detail=str(exc)
+                f"ComfyUI 请求超时（{path}）", kind="http_timeout", detail=str(exc)
             ) from exc
 
     # ── 就绪/环境 ──
@@ -202,10 +204,12 @@ class ComfyUIClient:
             if on_tick is not None and now - last_tick >= tick_interval:
                 last_tick = now
                 if await on_tick():
+                    # 先把排队中的这个 prompt 从队列删掉：interrupt 只中断「正在跑」的那张，
+                    # 不清队列的话取消后剩下几张仍会继续跑完，白占 GPU。
+                    await self.cancel_queued(prompt_id)
                     await self.interrupt()
-                    raise ComfyUIError(
-                        "已取消", kind="timeout", detail="cancelled by user"
-                    )
+                    # 取消不是失败也不是超时：用独立 kind，调用方据此记 cancelled
+                    raise ComfyUIError("已取消", kind="cancelled", detail="cancelled by user")
             entry = await self.history(prompt_id)
             if entry:
                 status = entry.get("status") or {}

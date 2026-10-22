@@ -45,8 +45,12 @@ def _candidate_dir(run: GenerationRun) -> Path:
 
 def _friendly_error(exc: ComfyUIError) -> str:
     """把客户端异常翻译成用户能照做的一句话。"""
+    if exc.kind == "cancelled":
+        return "已取消"
+    if exc.kind == "http_timeout":
+        return f"ComfyUI 响应超时（连接正常，但接口没在超时时间内返回）：{exc}"
     if exc.kind == "not_running":
-        return "ComfyUI 未启动：双击 D:\\AI\\ComfyUI\\run_nvidia_gpu.bat 后重试"
+        return "ComfyUI 未启动：请先启动 ComfyUI（运行 run_nvidia_gpu.bat）后重试"
     if exc.kind == "oom":
         return "显存不足：请关闭浏览器标签/其它占显存的程序，或先执行 ollama stop <模型>"
     if exc.kind == "vram_timeout":
@@ -285,6 +289,12 @@ async def _execute_with_client(
                     f"写入候选图失败（候选目录可能已被丢弃）：{exc}", kind="http"
                 ) from exc
         except ComfyUIError as exc:
+            # 用户取消 ≠ 失败：记成 cancelled，生成历史里才不会出现一条假的 failed
+            if exc.kind == "cancelled":
+                run.status = "cancelled"
+                run.error = "已取消"
+                await db.commit()
+                return
             run.failed += 1
             run.error = _friendly_error(exc)
             logger.warning(f"出图失败（第 {idx} 张）: {run.error} / {exc.detail}")
