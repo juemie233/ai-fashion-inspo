@@ -3,6 +3,11 @@
 source = app
 
 [report]
+# 覆盖率**精确到 2 位**再与 --cov-fail-under 比较。
+# 为什么必须显式设置：pytest-cov 的退出码判定走 coverage 的 should_fail_under，
+# 它按 precision 四舍五入后比较；precision 默认 0 时 78.65% 会被当成 79% → 门槛
+# 「看起来没过、退出码却是 0」——门禁形同虚设（提示信息用的是原始值，两套口径打架）。
+precision = 2
 # 排除样板代码，让覆盖率反映真实业务逻辑
 exclude_lines =
     pragma: no cover
