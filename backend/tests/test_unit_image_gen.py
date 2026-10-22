@@ -470,8 +470,10 @@ async def test_execute_i2i_uploads_references_then_generates(client, monkeypatch
     assert uploaded == [f"gen_ref_{out['run_id']}_1.png"]
     assert len(submitted) == 1
     workflow = submitted[0]
-    # 参考图接进 images.image_1，latent 用条件节点的第三个输出
-    assert workflow["6"]["inputs"]["images"] == {"image_1": ["4", 0]}
+    # 参考图接进 images.image_1（扁平点号 key，嵌套 dict 会被 ComfyUI 静默丢弃），
+    # latent 用条件节点的第三个输出
+    assert workflow["6"]["inputs"]["images.image_1"] == ["4", 0]
+    assert "images" not in workflow["6"]["inputs"]
     assert workflow["7"]["inputs"]["latent_image"] == ["6", 2]
     assert run.status == "done"
 

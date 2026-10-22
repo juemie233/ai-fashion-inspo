@@ -255,12 +255,16 @@ def build_edit_workflow(
 ) -> dict:
     """构造「参考图编辑」工作流：把 N 张参考图接进 Qwen 2.1 的条件编码节点。
 
-    Qwen-Image 2.1 的参考图通过 ``TextEncodeQwenImage21`` 的 AUTOGROW 输入
-    ``images`` 传进去，API 序列化形如 ``{"image_1": ["4", 0], "image_2": ["5", 0]}``
-    —— **嵌套 dict，不是列表**（实测：传列表会被 400 拒）。
+    Qwen-Image 2.1 的参考图走 ``TextEncodeQwenImage21`` 的 AUTOGROW 输入 ``images``，
+    但**提交给 ComfyUI 的 JSON 必须写成扁平点号 key**：``"images.image_1": ["4", 0]``。
+    运行时会用 ``build_nested_inputs`` 自己还原成嵌套 dict（``comfy_api/latest/_io.py``）。
+
+    写成嵌套 dict ``{"images": {"image_1": [...]}}`` 不会报错，而是被**静默丢弃** ——
+    实测后果：条件编码节点拿不到参考图，latent 退回 resolution×resolution 的正方形，
+    模型只按文字从零作画（「去掉鞋子」直接画出一双鞋），看起来像模型不听话，实为漏传。
 
     模板里已经连好第 1 张（``__REF_1__`` + ``images.image_1``）；第 2 张起在本函数里
-    动态追加 ``LoadImage`` 节点（id 从 20 起）并挂到 ``images.image_{i}``，上限由调用方
+    动态追加 ``LoadImage`` 节点（id 从 21 起）并挂到 ``images.image_{i}``，上限由调用方
     （``MODEL_SPECS[...]["max_refs"]``）保证 ≤10 —— 这也是 Qwen 2.1 的官方上限。
 
     Args:
@@ -270,16 +274,24 @@ def build_edit_workflow(
 
     Raises:
         ValueError: 参考图数量不在 1~10。
+        KeyError: 模板把参考图写成了嵌套 ``images``（旧写法，会被 ComfyUI 静默丢弃）。
     """
     if not 1 <= len(reference_names) <= 10:
         raise ValueError(f"参考图数量需在 1~10 之间，实际 {len(reference_names)}")
 
     workflow = inject(template, REF_1=reference_names[0], **params)
 
-    # 第 2 张起：追加 LoadImage 节点并扩展条件节点的 images 映射
-    images = workflow["6"]["inputs"]["images"]
+    inputs = workflow["6"]["inputs"]
+    # 模板写错格式时立刻炸：静默丢弃参考图的代价是「生成结果和参考图毫无关系」
+    if "images" in inputs:
+        raise KeyError(
+            "qwen_edit 模板的参考图必须写成扁平 key（images.image_1），"
+            "嵌套 dict 会被 ComfyUI 静默丢弃，参考图不生效"
+        )
+
+    # 第 2 张起：追加 LoadImage 节点并扩展条件节点的 images.image_N 映射
     for index, name in enumerate(reference_names[1:], start=2):
         node_id = str(19 + index)  # 21, 22, ...
         workflow[node_id] = {"class_type": "LoadImage", "inputs": {"image": name}}
-        images[f"image_{index}"] = [node_id, 0]
+        inputs[f"images.image_{index}"] = [node_id, 0]
     return workflow

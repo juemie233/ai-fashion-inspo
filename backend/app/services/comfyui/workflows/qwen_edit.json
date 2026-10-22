@@ -33,7 +33,7 @@
       "prompt": "__PROMPT__",
       "negative_prompt": "__NEGATIVE__",
       "resolution": "__RESOLUTION__",
-      "images": { "image_1": ["4", 0] },
+      "images.image_1": ["4", 0],
       "vae": ["3", 0]
     }
   },

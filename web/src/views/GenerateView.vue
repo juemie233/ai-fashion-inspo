@@ -373,7 +373,9 @@ onUnmounted(stopPoll)
           <span class="gen-hint">{{ refIdsList.length }}/10</span>
         </div>
         <div v-if="kind === 'i2i'" class="gen-hint">
-          参考图决定「主体与版型」，描述写「要改成什么」。当前 {{ refIdsList.length }} 个参考。
+          参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
+          只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。当前
+          {{ refIdsList.length }} 个参考。
         </div>
 
         <div class="gen-label">描述（prompt）</div>

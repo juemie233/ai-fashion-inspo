@@ -255,7 +255,11 @@ def test_uncensored_spec_uses_its_own_weights():
 
 
 def test_edit_template_injects_single_reference():
-    """单参考图：模板直出，images 是嵌套 dict（列表会被 ComfyUI 400 拒）。"""
+    """单参考图：模板直出，参考图用**扁平点号 key** 挂进 AUTOGROW 输入。
+
+    回归：曾经写成嵌套 dict（``images: {"image_1": ...}``），ComfyUI 会静默丢弃，
+    结果参考图完全不生效、画面按文字从零作画（「去掉鞋子」直接生成一双鞋）。
+    """
     template, digest = wf.load_template("qwen_edit")
     assert len(digest) == 16
     workflow = wf.build_edit_workflow(
@@ -272,7 +276,10 @@ def test_edit_template_injects_single_reference():
         PREFIX="gen_1_01",
     )
     assert workflow["4"]["inputs"]["image"] == "ref_a.png"
-    assert workflow["6"]["inputs"]["images"] == {"image_1": ["4", 0]}
+    inputs6 = workflow["6"]["inputs"]
+    assert inputs6["images.image_1"] == ["4", 0]
+    # 嵌套写法必须不存在（ComfyUI 会忽略它，不报错）
+    assert "images" not in inputs6
     # 图生图的 latent 必须来自条件节点（参考图编码），不是空 latent
     assert workflow["7"]["inputs"]["latent_image"] == ["6", 2]
     assert workflow["7"]["inputs"]["steps"] == 25
@@ -294,13 +301,34 @@ def test_edit_template_appends_extra_references():
         RESOLUTION=1024,
         PREFIX="p",
     )
-    assert workflow["6"]["inputs"]["images"] == {
-        "image_1": ["4", 0],
-        "image_2": ["21", 0],
-        "image_3": ["22", 0],
-    }
+    inputs6 = workflow["6"]["inputs"]
+    assert inputs6["images.image_1"] == ["4", 0]
+    assert inputs6["images.image_2"] == ["21", 0]
+    assert inputs6["images.image_3"] == ["22", 0]
     assert workflow["21"]["class_type"] == "LoadImage"
     assert workflow["22"]["inputs"]["image"] == "c.png"
+
+
+def test_edit_template_rejects_nested_images():
+    """模板若退回嵌套写法，构造阶段就要报错 —— 静默失效的代价太大。"""
+    template, _ = wf.load_template("qwen_edit")
+    broken = json.loads(json.dumps(template))
+    broken["6"]["inputs"].pop("images.image_1")
+    broken["6"]["inputs"]["images"] = {"image_1": ["4", 0]}
+    with pytest.raises(KeyError):
+        wf.build_edit_workflow(
+            broken,
+            reference_names=["a.png"],
+            PROMPT="x",
+            NEGATIVE="",
+            SEED=1,
+            STEPS=25,
+            CFG=1.0,
+            SAMPLER="euler",
+            SCHEDULER="simple",
+            RESOLUTION=1024,
+            PREFIX="p",
+        )
 
 
 def test_edit_reference_count_is_bounded():
