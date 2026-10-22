@@ -13,6 +13,7 @@ import { useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
 import { formatDateTime, shortModelLabel } from '@/utils/format'
+import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPanel.vue'
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
@@ -103,8 +104,6 @@ watch(
   },
 )
 
-const selectedCount = computed(() => selected.value.size)
-
 /** 从素材详情「用这张图改款」跳进来时带的参考素材 ID（交给参数面板预填并切档位） */
 const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim() : ''
 
@@ -163,75 +162,21 @@ onUnmounted(stopPoll)
 
       <!-- 右：进度与候选 -->
       <a-card class="gen-card" :bordered="false">
-        <div class="gen-result-head">
-          <span class="gen-label" style="margin: 0">生成结果</span>
-          <span v-if="lastSeed" class="gen-hint">本次 seed 基值 {{ lastSeed }}</span>
-        </div>
-
-        <div v-if="!run" class="gen-empty">还没有生成结果：左侧填好描述后点「生成」。</div>
-        <template v-else>
-          <a-alert
-            :type="run.status === 'failed' ? 'error' : run.status === 'done' ? 'success' : 'info'"
-            class="gen-alert"
-          >
-            {{ stageText }}
-          </a-alert>
-
-          <div v-if="run.status === 'done' && candidates.length" class="gen-toolbar">
-            <a-button size="mini" @click="selectAll">全选未入库</a-button>
-            <a-button size="mini" @click="clearSelection">清空选择</a-button>
-            <span class="gen-hint">已选 {{ selectedCount }} / {{ candidates.length }}</span>
-            <span class="gen-hint">点图片看大图</span>
-            <a-button type="primary" size="mini" :disabled="selectedCount === 0" @click="confirm">
-              确认入库
-            </a-button>
-            <a-button size="mini" status="danger" @click="discard">丢弃本批</a-button>
-          </div>
-
-          <div v-if="candidates.length" class="gen-candidates">
-            <div
-              v-for="(item, index) in candidates"
-              :key="item.filename"
-              class="gen-item"
-              :class="{ 'is-selected': selected.has(item.filename) }"
-            >
-              <img
-                :src="item.url"
-                :alt="`第 ${index + 1} 张，seed ${item.seed}`"
-                loading="lazy"
-                title="点击查看大图"
-                @click="openLightbox(index)"
-              />
-              <!-- 点图片是「看大图」，勾选单独给角标：候选区最常做的是放大看细节，
-                   把整块点击让给灯箱，入库走这个勾选框 -->
-              <a-checkbox
-                v-if="!item.imported"
-                class="gen-item-check"
-                :model-value="selected.has(item.filename)"
-                title="勾选后可确认入库"
-                @click.stop
-                @change="toggle(item.filename)"
-              />
-              <div class="gen-item-meta">
-                <span>seed {{ item.seed }}</span>
-                <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
-                <a-button
-                  v-if="!item.imported"
-                  size="mini"
-                  type="text"
-                  :loading="submitting"
-                  title="用新 seed 重出这一张"
-                  @click.stop="regenerate(item)"
-                >
-                  换 seed
-                </a-button>
-              </div>
-            </div>
-          </div>
-          <div v-else-if="run.status === 'done'" class="gen-empty">
-            本批没有产出（可能已丢弃或全部失败）。
-          </div>
-        </template>
+        <GenerateCandidatesPanel
+          :run="run"
+          :candidates="candidates"
+          :selected="selected"
+          :stage-text="stageText"
+          :last-seed="lastSeed"
+          :submitting="submitting"
+          @preview="openLightbox"
+          @toggle="toggle"
+          @regenerate="regenerate"
+          @select-all="selectAll"
+          @clear-selection="clearSelection"
+          @confirm="confirm"
+          @discard="discard"
+        />
       </a-card>
     </div>
 
@@ -377,56 +322,7 @@ onUnmounted(stopPoll)
   padding: 24px 0;
   text-align: center;
 }
-.gen-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.gen-candidates {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
-}
-.gen-item {
-  position: relative;
-  border: 2px solid transparent;
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: pointer;
-  background: #f7f8fa;
-}
-.gen-item:hover {
-  border-color: #94bfff;
-}
-.gen-item.is-selected {
-  border-color: #165dff;
-}
-.gen-item img {
-  width: 100%;
-  display: block;
-  cursor: zoom-in;
-}
-/* 勾选框浮在缩略图右上角：点图片看大图，勾选才入库 */
-.gen-item-check {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: rgb(255 255 255 / 85%);
-}
 .gen-history {
   margin-top: 12px;
-}
-.gen-item-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 6px;
-  font-size: 11px;
-  color: #8a8f99;
 }
 </style>
