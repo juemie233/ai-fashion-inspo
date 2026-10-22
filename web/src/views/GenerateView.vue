@@ -84,49 +84,96 @@ const sizeDims = computed(() => size.value.split('x').map(Number))
 const width = computed(() => sizeDims.value[0] ?? 1024)
 const height = computed(() => sizeDims.value[1] ?? 1024)
 
-// ── 生成方式：文生图 / 图生图（参考图）──
-const kind = ref<'t2i' | 'i2i'>('t2i')
+// ── 模型档位（一个档位就决定生成方式：文生图 / 参考图改款）──
+/** 档位选项。 */
+interface ModelOption {
+  key: string
+  label: string
+  kind: 't2i' | 'i2i'
+  uncensored: boolean
+  notice: string
+  ready: boolean
+}
 
-/** 图生图的可选档位（标准版 / 未审查版…）。
- *
- * 档位表跟着后端 `MODEL_SPECS` 走：加一个权重只改后端，前端不用发版。
- * 后端没返回 `models_meta` 时列表为空，此时不渲染选择器、也不传 `model_key`，
- * 由后端按 kind 取默认档位（与旧行为一致）。
- */
-const i2iModels = computed(() =>
-  Object.entries(status.value?.models_meta ?? {})
-    .filter(([, m]) => m.kind === 'i2i')
-    .map(([key, m]) => ({
-      key,
-      label: m.label,
-      uncensored: m.uncensored === true,
-      notice: m.notice || '',
-      ready: status.value?.models?.[key] === 'ok',
-    })),
-)
+/** 旧后端（不返回 models_meta）时的兜底两档：只保证页面不变空白，不含未审查档位 */
+const LEGACY_MODELS: ModelOption[] = [
+  {
+    key: 'z_image_int8',
+    label: 'Z-Image-Turbo（文生图）',
+    kind: 't2i',
+    uncensored: false,
+    notice: '',
+    ready: true,
+  },
+  {
+    key: 'qwen_2_1_i2i',
+    label: 'Qwen-Image 2.1（参考图改款）',
+    kind: 'i2i',
+    uncensored: false,
+    notice: '',
+    ready: true,
+  },
+]
 
-/** 当前档位（'' = 还没有档位表，提交时不传 model_key） */
+/** 全部可选档位：跟着后端 `MODEL_SPECS` 走，加一个权重只改后端、前端不用发版。 */
+const allModels = computed<ModelOption[]>(() => {
+  const meta = status.value?.models_meta ?? {}
+  const models = status.value?.models ?? {}
+  const list = Object.entries(meta).map<ModelOption>(([key, m]) => ({
+    key,
+    label: m.label,
+    kind: m.kind === 'i2i' ? 'i2i' : 't2i',
+    uncensored: m.uncensored === true,
+    notice: m.notice || '',
+    ready: models[key] === 'ok',
+  }))
+  if (list.length) return list
+  return LEGACY_MODELS.map((m) => ({ ...m, ready: !status.value || models[m.key] === 'ok' }))
+})
+
+/** 当前选中的档位 */
 const modelKey = ref('')
-const currentModel = computed(() => i2iModels.value.find((m) => m.key === modelKey.value) ?? null)
 
-/** 默认落在**标准**档位。
+/** 默认档位：优先**就绪**且**非未审查**的。
  *
- * 未审查版必须由用户主动点选：默认选中「无内容过滤」的权重，等于替用户做了一次
- * 他自己不知道的风险选择。刷新环境导致的档位表变化也不会覆盖已有选择。
+ * 未审查版必须由用户主动点选 —— 默认选中「无内容过滤」的权重，等于替用户做了一次
+ * 他自己不知道的风险选择。已选中的档位仍然存在时不动它（刷新环境不重置用户选择）。
  */
 watch(
-  i2iModels,
+  allModels,
   (list) => {
     if (!list.length) return
     if (modelKey.value && list.some((m) => m.key === modelKey.value)) return
-    modelKey.value = (list.find((m) => !m.uncensored) ?? list[0]).key
+    const pickable = list.filter((m) => m.ready)
+    const pool = pickable.length ? pickable : list
+    modelKey.value = (pool.find((m) => !m.uncensored) ?? pool[0]).key
   },
   { immediate: true },
 )
 
+const currentModel = computed<ModelOption | null>(
+  () => allModels.value.find((m) => m.key === modelKey.value) ?? null,
+)
+
+/** 生成方式**由档位推导**：Z-Image 是纯文生图，Qwen 档位要参考图，不再单独选一次 */
+const kind = computed<'t2i' | 'i2i'>(() => currentModel.value?.kind ?? 't2i')
+
+/** 选中的档位是否就绪：权重没放对目录时不能默认它能用 */
+const modelReady = computed(() => currentModel.value?.ready ?? false)
+
+/** 是否有可用的参考图改款档位（配方载入、深链跳转要用） */
+const i2iReady = computed(() => allModels.value.some((m) => m.kind === 'i2i' && m.ready))
+
 /** 按钮上显示的短名：去掉 label 括号里的耗时说明 */
 function shortLabel(label: string): string {
   return label.split('（')[0] ?? label
+}
+
+/** 按生成方式挑一个档位（配方载入 / 从素材详情跳转用）：优先就绪且非未审查 */
+function selectModelByKind(target: 't2i' | 'i2i'): void {
+  const pool = allModels.value.filter((m) => m.kind === target)
+  const pick = pool.find((m) => m.ready && !m.uncensored) ?? pool.find((m) => m.ready) ?? pool[0]
+  if (pick) modelKey.value = pick.key
 }
 
 /** 档位 key → 展示名（历史表用；后端没给档位表时退回 key，不显示空白） */
@@ -139,20 +186,6 @@ function modelLabel(key: string): string {
 function modelUncensored(key: string): boolean {
   return status.value?.models_meta?.[key]?.uncensored === true
 }
-
-/** i2i 是否可用：任一 i2i 档位就绪即可；没有档位表时退回按已知档位名判断 */
-const i2iReady = computed(() => {
-  const models = status.value?.models ?? {}
-  const keys = i2iModels.value.length ? i2iModels.value.map((m) => m.key) : ['qwen_2_1_i2i']
-  return keys.some((k) => models[k] === 'ok')
-})
-
-/** 选中的档位自己是否就绪：权重没放对目录时不能默认它能用 */
-const modelReady = computed(() => {
-  if (kind.value !== 'i2i') return true
-  const models = status.value?.models ?? {}
-  return models[modelKey.value || 'qwen_2_1_i2i'] === 'ok'
-})
 
 /** 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 */
 const refIdsText = ref('')
@@ -203,7 +236,8 @@ function onApplyPreset(name: string): void {
   size.value = preset.size
   steps.value = preset.steps
   count.value = preset.count
-  kind.value = preset.kind === 'i2i' && !i2iReady.value ? 't2i' : preset.kind
+  // 配方存的是生成方式，载入时换成对应档位（改款档位都没就绪就退回文生图档位）
+  selectModelByKind(preset.kind === 'i2i' && i2iReady.value ? 'i2i' : 't2i')
   Message.success(`已载入配方「${preset.name}」`)
 }
 
@@ -255,18 +289,19 @@ const canSubmit = computed(
     !!prompt.value.trim() &&
     !submitting.value &&
     !active.value &&
-    (kind.value === 't2i' || (i2iReady.value && modelReady.value && refCountOk.value)),
+    modelReady.value &&
+    (kind.value === 't2i' || refCountOk.value),
 )
 
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
 const selectedCount = computed(() => selected.value.size)
 
 onMounted(() => {
-  // 从素材详情「用这张图改款」跳进来：预填参考图并切到图生图
+  // 从素材详情「用这张图改款」跳进来：预填参考图并切到改款档位
   const refParam = route.query.ref
   if (typeof refParam === 'string' && refParam.trim()) {
     refIdsText.value = refParam.trim()
-    kind.value = 'i2i'
+    selectModelByKind('i2i')
   }
   void loadStatus()
   void loadHistory()
@@ -308,34 +343,22 @@ onUnmounted(stopPoll)
     <div class="gen-grid">
       <!-- 左：参数 -->
       <a-card class="gen-card" :bordered="false">
-        <div class="gen-label">生成方式</div>
-        <a-radio-group v-model="kind" type="button" size="small">
-          <a-radio value="t2i">文生图（Z-Image，约 7 秒/张）</a-radio>
-          <a-radio value="i2i" :disabled="!i2iReady">
-            参考图改款（Qwen-Image 2.1{{ i2iReady ? '，约 20~45 秒/张' : '：未就绪' }}）
+        <!-- 模型：始终可见。选中哪个档位就决定生成方式（文生图 / 参考图改款） -->
+        <div class="gen-label">模型</div>
+        <a-radio-group v-model="modelKey" size="small" direction="vertical" class="gen-models">
+          <a-radio v-for="m in allModels" :key="m.key" :value="m.key">
+            {{ shortLabel(m.label) }}
+            <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag">
+              未审查
+            </a-tag>
+            <span class="gen-hint gen-model-note">
+              {{ m.kind === 'i2i' ? '需参考图' : '纯文字' }}{{ m.ready ? '' : ' · 未就绪' }}
+            </span>
           </a-radio>
         </a-radio-group>
-
-        <!-- 档位切换：同一套改款流程下的不同权重（标准版 / 未审查版） -->
-        <template v-if="kind === 'i2i' && i2iModels.length > 1">
-          <div class="gen-label">使用模型</div>
-          <a-radio-group v-model="modelKey" size="small" direction="vertical">
-            <a-radio v-for="m in i2iModels" :key="m.key" :value="m.key">
-              {{ shortLabel(m.label) }}
-              <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag">
-                未审查
-              </a-tag>
-              <span v-if="!m.ready" class="gen-hint">（未就绪）</span>
-            </a-radio>
-          </a-radio-group>
-          <a-alert
-            v-if="currentModel?.uncensored"
-            type="warning"
-            class="gen-alert gen-alert--tight"
-          >
-            {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
-          </a-alert>
-        </template>
+        <a-alert v-if="currentModel?.uncensored" type="warning" class="gen-alert gen-alert--tight">
+          {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
+        </a-alert>
 
         <div v-if="kind === 'i2i'" class="gen-row">
           <a-input
@@ -583,6 +606,15 @@ onUnmounted(stopPoll)
 }
 .gen-model-tag {
   margin-left: 4px;
+}
+.gen-models {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gen-model-note {
+  margin-left: 6px;
+  font-size: 11px;
 }
 .gen-model-cell {
   display: inline-flex;

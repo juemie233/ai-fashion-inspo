@@ -140,8 +140,8 @@ describe('GenerateView 参数透传', () => {
     expect(payload.reference_ids).toEqual(['id-a', 'id-b'])
   })
 
-  it('i2i 多档位：默认标准版，切到未审查版要打标、给警示并传 model_key', async () => {
-    // 两个 i2i 档位：标准 + 未审查（uncensored 标记决定前端是否打标/警示）
+  it('模型选择器常驻：默认非未审查档位，切到未审查版要打标、给警示并传 model_key', async () => {
+    // 三个档位（与后端 MODEL_SPECS 一致）：文生图 + 改款标准 + 改款未审查
     mocks.statusRef.value = {
       ready: true,
       reason: null,
@@ -149,6 +149,7 @@ describe('GenerateView 参数透传', () => {
       models: { z_image_int8: 'ok', qwen_2_1_i2i: 'ok', qwen_2_1_uc_i2i: 'ok' },
       ollama_resident: [],
       models_meta: {
+        z_image_int8: { label: 'Z-Image-Turbo（快）', kind: 't2i', defaults: {} },
         qwen_2_1_i2i: { label: 'Qwen-Image 2.1（参考图改款）', kind: 'i2i', defaults: {} },
         qwen_2_1_uc_i2i: {
           label: 'Qwen-Image 2.1 未审查版（参考图改款）',
@@ -162,23 +163,31 @@ describe('GenerateView 参数透传', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    // 切到图生图后才会出现档位选择器
-    await wrapper.findAll('input[type="radio"]')[1].setValue(true)
-    await flushPromises()
+    // 回归：选择器必须**一进页面就在**，不能藏在「参考图改款」下面
+    const radios = wrapper.findAll('input[type="radio"]')
+    expect(radios.length).toBe(3)
     expect(wrapper.text()).toContain('未审查')
 
-    await wrapper.find('input[placeholder*="参考素材 ID"]').setValue('id-a')
-    await wrapper.find('textarea').setValue('改成更利落的版型')
+    // 默认文生图（第一档）：不选未审查那个
+    await wrapper.find('textarea').setValue('米色针织开衫')
     const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))!
     await submitBtn.trigger('click')
     await flushPromises()
+    expect(mocks.submit.mock.calls[0][0].kind).toBe('t2i')
 
-    // 默认必须是标准版：不能替用户默认选中「无内容过滤」的权重
+    // 选改款标准档 → 出现参考图输入，提交带该档位
+    mocks.submit.mockClear()
+    await radios[1].setValue(true)
+    await flushPromises()
+    await wrapper.find('input[placeholder*="参考素材 ID"]').setValue('id-a')
+    await submitBtn.trigger('click')
+    await flushPromises()
     expect(mocks.submit.mock.calls[0][0].model_key).toBe('qwen_2_1_i2i')
+    expect(mocks.submit.mock.calls[0][0].kind).toBe('i2i')
 
     // 主动选未审查版 → 出现风险提示，且提交时带上该档位
     mocks.submit.mockClear()
-    await wrapper.findAll('input[type="radio"]')[3].setValue(true)
+    await radios[2].setValue(true)
     await flushPromises()
     expect(wrapper.text()).toContain('该档位没有内容安全过滤')
     await submitBtn.trigger('click')
