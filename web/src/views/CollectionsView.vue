@@ -10,6 +10,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
+import CollectionOrderingStrip from '@/components/collection/CollectionOrderingStrip.vue'
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import {
@@ -270,22 +271,12 @@ onMounted(() => {
         </div>
 
         <!-- 排序模式：缩略图条带拖拽编排 -->
-        <div v-if="ordering" class="ordering-strip">
-          <p class="ordering-tip">拖动缩略图调整展示顺序，完成后点击「保存顺序」。</p>
-          <div class="ordering-grid">
-            <div
-              v-for="it in orderedItems"
-              :key="it.id"
-              class="ordering-card"
-              draggable="true"
-              @dragstart="onItemDragStart(it.id)"
-              @dragover.prevent
-              @drop.prevent="onItemDrop(it.id)"
-            >
-              <img :src="getFileUrl(it.thumbnail_path ?? it.file_path)" alt="" />
-            </div>
-          </div>
-        </div>
+        <CollectionOrderingStrip
+          v-if="ordering"
+          :items="orderedItems"
+          @drag-start="onItemDragStart"
+          @drop="onItemDrop"
+        />
 
         <!-- 瀑布流内容 -->
         <template v-else>
@@ -521,42 +512,6 @@ onMounted(() => {
   font-size: 13px;
 }
 
-/* 排序模式 */
-.ordering-tip {
-  font-size: 12px;
-  color: #86909c;
-  margin: 0 0 8px;
-}
-.ordering-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px;
-  background: #f8f9fa;
-  border-radius: 8px;
-}
-.ordering-card {
-  width: 96px;
-  height: 130px;
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: grab;
-  border: 2px solid transparent;
-  background: #f2f3f5;
-}
-.ordering-card:active {
-  cursor: grabbing;
-}
-.ordering-card:hover {
-  border-color: #94bfff;
-}
-.ordering-card img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  pointer-events: none;
-}
 .pagination-wrapper {
   display: flex;
   justify-content: center;
