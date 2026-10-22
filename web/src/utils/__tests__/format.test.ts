@@ -10,6 +10,7 @@ import {
   formatSize,
   normalizeModelName,
   renderTimeCell,
+  shortModelLabel,
   shortenText,
 } from '../format'
 
@@ -23,6 +24,18 @@ describe('formatBytes', () => {
     expect(formatBytes(512)).toBe('512.0 B')
     expect(formatBytes(2048)).toBe('2.0 KB')
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  })
+})
+
+describe('shortModelLabel', () => {
+  it('去掉全角括号里的说明', () => {
+    expect(shortModelLabel('Qwen-Image 2.1（参考图改款）')).toBe('Qwen-Image 2.1')
+    expect(shortModelLabel('Z-Image-Turbo（文生图）')).toBe('Z-Image-Turbo')
+  })
+
+  it('没有括号时原样返回', () => {
+    expect(shortModelLabel('Z-Image-Turbo')).toBe('Z-Image-Turbo')
+    expect(shortModelLabel('')).toBe('')
   })
 })
 

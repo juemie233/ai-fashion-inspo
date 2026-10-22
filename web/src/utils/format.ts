@@ -98,6 +98,15 @@ export function normalizeModelName(name: string): string {
   return name.includes(':') ? name : `${name}:latest`
 }
 
+/**
+ * 档位显示名的短名：去掉括号里的说明。
+ * 例：「Qwen-Image 2.1（参考图改款）」→「Qwen-Image 2.1」。
+ * 出图页的档位单选与历史表都用它，避免两处各写一遍 split。
+ */
+export function shortModelLabel(label: string): string {
+  return label.split('（')[0] ?? label
+}
+
 /** 格式化文件大小为可读字符串（KB 取整、MB 1 位、GB 2 位） */
 export function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB'
