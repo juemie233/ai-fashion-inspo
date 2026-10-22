@@ -11,12 +11,9 @@
 import { Message } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { bloggersApi, modelsApi } from '@/api/persons'
 import {
-  confirmFaceScan,
   fetchFaceScanResults,
   fetchFaceScanTask,
-  type DetectionItem,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
@@ -26,6 +23,7 @@ import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
 import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 import { usePolling } from '@/composables/usePolling'
 import { useFaceScanActions } from '@/composables/useFaceScanActions'
+import { useFaceUnmatchedAssign } from '@/composables/useFaceUnmatchedAssign'
 import { useFaceDetailPanel, type ResultTab } from '@/composables/useFaceDetailPanel'
 import FaceClusterTab from '@/components/person/face/FaceClusterTab.vue'
 import FaceConfirmedTab from '@/components/person/face/FaceConfirmedTab.vue'
@@ -171,89 +169,23 @@ const { startScan, cancelTask, startMatch } = useFaceScanActions({
 /** 候选网格列数（3~6 可选，默认 6） */
 const gridColumns = ref<number>(6)
 
-// ── 未匹配区 ──
-const unmatchedItems = ref<DetectionItem[]>([])
-const unmatchedPage = ref(1)
-const unmatchedTotal = ref(0)
-const unmatchedLoading = ref(false)
-const unmatchedChecked = ref<Set<number>>(new Set())
-const assignKind = ref<'blogger' | 'model'>('blogger')
-const assignPersonId = ref<number | undefined>(undefined)
-const assignOptions = ref<Array<{ label: string; value: number }>>([])
-const assignLoading = ref(false)
-const assigning = ref(false)
-
-async function loadUnmatched() {
-  unmatchedLoading.value = true
-  try {
-    const data = await fetchFaceScanResults({
-      status: 'pending',
-      unmatched: true,
-      page: unmatchedPage.value,
-      size: 50,
-    })
-    unmatchedItems.value = data.items as DetectionItem[]
-    unmatchedTotal.value = data.total
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '加载未匹配人脸失败'))
-  } finally {
-    unmatchedLoading.value = false
-  }
-}
-
-/** 拉取人物选择候选（博主/模特全量，排除无意义项） */
-async function loadAssignOptions() {
-  assignLoading.value = true
-  try {
-    const api = assignKind.value === 'blogger' ? bloggersApi : modelsApi
-    const all: Array<{ id: number; name: string }> = []
-    let page = 1
-    while (true) {
-      const { items, total } = await api.fetchList({ page, size: 200, sort: 'name' })
-      all.push(...items)
-      if (all.length >= total) break
-      page += 1
-    }
-    assignOptions.value = all.map((p) => ({ label: p.name, value: p.id }))
-    assignPersonId.value = undefined
-  } catch {
-    assignOptions.value = []
-  } finally {
-    assignLoading.value = false
-  }
-}
-
-/** 未匹配批量指派给某个人物（写关联 + 置 confirmed） */
-async function assignUnmatched() {
-  if (unmatchedChecked.value.size === 0) {
-    Message.warning('请先勾选要指派的人脸')
-    return
-  }
-  if (!assignPersonId.value) {
-    Message.warning('请选择要指派的人物')
-    return
-  }
-  assigning.value = true
-  try {
-    const result = await confirmFaceScan(
-      'confirm',
-      [...unmatchedChecked.value].map((id) => ({
-        detection_id: id,
-        person_type: assignKind.value,
-        person_id: assignPersonId.value,
-      })),
-    )
-    Message.success(
-      `已指派 ${result.confirmed} 条${result.skipped ? `（跳过 ${result.skipped} 条）` : ''}`,
-    )
-    unmatchedChecked.value.clear()
-    await refreshAll()
-  } catch (e) {
-    Message.error(getApiErrorMessage(e, '指派失败'))
-  } finally {
-    assigning.value = false
-  }
-}
+// ── 未匹配区（实现见 composables/useFaceUnmatchedAssign.ts）──
+// 同名解构，模板无需改动；唯一的跨域依赖「指派后整页刷新」以回调注入。
+const {
+  unmatchedItems,
+  unmatchedPage,
+  unmatchedTotal,
+  unmatchedLoading,
+  unmatchedChecked,
+  assignKind,
+  assignPersonId,
+  assignOptions,
+  assignLoading,
+  assigning,
+  loadUnmatched,
+  loadAssignOptions,
+  assignUnmatched,
+} = useFaceUnmatchedAssign({ refreshAll })
 
 // ── 人脸聚合分组（未匹配人脸按疑似同一人聚类）──
 // 状态、请求与轮询全部搬到 useFaceClusterGroups（与扫描/匹配/审核链路解耦）；
