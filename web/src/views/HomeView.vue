@@ -6,11 +6,12 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import BatchActionBar from '@/components/inspiration/BatchActionBar.vue'
+import HomeActiveFilters from '@/components/home/HomeActiveFilters.vue'
+import HomeFilterBar from '@/components/home/HomeFilterBar.vue'
 import TrashReasonModal from '@/components/inspiration/TrashReasonModal.vue'
 import CollectionPickerModal from '@/components/collection/CollectionPickerModal.vue'
 import { useInspirationsStore } from '@/stores/inspirations'
 import { useTagsStore } from '@/stores/tags'
-import { useUiStore, type MaterialOpenMode } from '@/stores/ui'
 import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useInspirationFilters } from '@/composables/useInspirationFilters'
 import { useHomeActions } from '@/composables/useHomeActions'
@@ -20,7 +21,6 @@ const router = useRouter()
 const route = useRoute()
 const store = useInspirationsStore()
 const tagsStore = useTagsStore()
-const uiStore = useUiStore()
 const {
   batchMode,
   selectedIds,
@@ -40,6 +40,14 @@ const {
 
 type Density = 'compact' | 'standard' | 'comfortable'
 
+/** 筛选域（状态 + 选项 + setter）：视图自己只用其中一部分，另外整份传给筛选栏组件 */
+const filters = useInspirationFilters({
+  // 跨域回调：筛选/排序变化 → 退出定位 + 回第一页 + 重新加载 + 同步 URL
+  reloadFirstPage: () => onFilterChange(),
+  loadPage: (page: number) => loadPage(page),
+})
+
+/** 视图直接用到的那部分（构建请求参数 / 同步 URL / 定位模式 / 批量候选标签） */
 const {
   sourceFilter,
   mediaFilter,
@@ -50,31 +58,11 @@ const {
   ratingMin,
   selectedTags,
   focusedIds,
-  dominantColors,
-  tagFilterOptions,
   allTagNames,
-  sourceOptions,
-  mediaOptions,
-  statusOptions,
-  qualityOptions,
-  sortOptions,
-  ratingOptions,
   filtersActive,
   loadDominantColors,
   clearFocus,
-  setSourceFilter,
-  setMediaFilter,
-  setStatusFilter,
-  setQualityFilter,
-  setColorFilter,
-  setSortMode,
-  removeTagFilter,
-  clearAllFilters,
-} = useInspirationFilters({
-  // 跨域回调：筛选/排序变化 → 退出定位 + 回第一页 + 重新加载 + 同步 URL
-  reloadFirstPage: () => onFilterChange(),
-  loadPage: (page: number) => loadPage(page),
-})
+} = filters
 
 const density = ref<Density>((localStorage.getItem('masonry-density') as Density) || 'standard')
 
@@ -84,12 +72,6 @@ const pageSize = ref(storedBrowsePageSize())
 watch(pageSize, (v) => {
   localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(v))
 })
-
-const densityOptions: { label: string; value: Density }[] = [
-  { label: '紧凑', value: 'compact' },
-  { label: '标准', value: 'standard' },
-  { label: '宽松', value: 'comfortable' },
-]
 
 const totalPages = computed(() => Math.ceil(store.total / pageSize.value))
 
@@ -156,26 +138,9 @@ function onFilterChange() {
   syncUrl()
 }
 
-/** 排序变更：与筛选变更同一处理（退出定位 + 回第一页 + 重新加载 + 同步 URL） */
-function onSortChange() {
-  onFilterChange()
-}
-
 function setDensity(d: Density) {
   density.value = d
   localStorage.setItem('masonry-density', d)
-}
-
-// ── 素材打开模式（全局偏好）──
-/** 卡片点击的打开方式：新标签页（默认）/ 当前页；切换后立即对所有素材卡片生效 */
-const materialOpenMode = computed({
-  get: () => uiStore.materialOpenMode,
-  set: (v: MaterialOpenMode) => uiStore.setMaterialOpenMode(v),
-})
-
-/** 切换提示：明确该设置的作用范围，避免误以为只影响本页 */
-function onOpenModeChange() {
-  Message.info(materialOpenMode.value === 'new_tab' ? '素材将在新标签页打开' : '素材将在当前页打开')
 }
 
 const {
@@ -256,198 +221,16 @@ loadPage(currentPage.value)
       </div>
     </div>
 
-    <!-- 筛选栏 -->
-    <div class="filter-bar">
-      <!-- 来源筛选 -->
-      <div class="filter-group">
-        <a-button
-          v-for="opt in sourceOptions"
-          :key="opt.value"
-          size="mini"
-          :type="sourceFilter === opt.value ? 'primary' : 'secondary'"
-          @click="setSourceFilter(opt.value)"
-        >
-          {{ opt.label }}
-        </a-button>
-      </div>
-
-      <a-divider direction="vertical" style="height: 20px" />
-
-      <!-- 媒体筛选 -->
-      <div class="filter-group">
-        <a-button
-          v-for="opt in mediaOptions"
-          :key="opt.value"
-          size="mini"
-          :type="mediaFilter === opt.value ? 'primary' : 'secondary'"
-          @click="setMediaFilter(opt.value)"
-        >
-          {{ opt.label }}
-        </a-button>
-      </div>
-
-      <a-divider direction="vertical" style="height: 20px" />
-
-      <!-- 状态筛选 -->
-      <div class="filter-group">
-        <a-button
-          v-for="opt in statusOptions"
-          :key="opt.value"
-          size="mini"
-          :type="statusFilter === opt.value ? 'primary' : 'secondary'"
-          @click="setStatusFilter(opt.value)"
-        >
-          {{ opt.label }}
-        </a-button>
-      </div>
-
-      <a-divider direction="vertical" style="height: 20px" />
-
-      <!-- 质量审核筛选 -->
-      <div class="filter-group">
-        <a-button
-          v-for="opt in qualityOptions"
-          :key="opt.value"
-          size="mini"
-          :type="qualityFilter === opt.value ? 'primary' : 'secondary'"
-          @click="setQualityFilter(opt.value)"
-        >
-          {{ opt.label }}
-        </a-button>
-      </div>
-
-      <a-divider direction="vertical" style="height: 20px" />
-
-      <!-- 标签筛选（多选，需同时包含） -->
-      <div class="filter-group">
-        <a-select
-          v-model="selectedTags"
-          multiple
-          filterable
-          allow-clear
-          :options="tagFilterOptions"
-          placeholder="按标签筛选"
-          size="mini"
-          style="width: 220px"
-          @change="onFilterChange"
-        />
-      </div>
-
-      <a-divider direction="vertical" style="height: 20px" />
-
-      <!-- 颜色筛选（主色调色板，数据驱动） -->
-      <div v-if="dominantColors.length > 0" class="filter-group color-filter" title="按主色调筛选">
-        <span
-          v-for="c in dominantColors"
-          :key="c.color"
-          class="color-swatch"
-          :class="{ active: colorFilter === c.color }"
-          :style="{ background: c.color }"
-          :title="`${c.color}（${c.count} 个素材）`"
-          @click="setColorFilter(colorFilter === c.color ? '' : c.color)"
-        />
-        <a-button v-if="colorFilter" size="mini" type="text" @click="setColorFilter('')">
-          清除颜色
-        </a-button>
-      </div>
-
-      <a-divider v-if="dominantColors.length > 0" direction="vertical" style="height: 20px" />
-
-      <!-- 评分筛选（评分 >= 指定值） -->
-      <div class="filter-group">
-        <a-select
-          v-model="ratingMin"
-          :options="ratingOptions"
-          placeholder="评分筛选"
-          size="mini"
-          style="width: 130px"
-          @change="onFilterChange"
-        />
-      </div>
-
-      <div style="flex: 1" />
-
-      <!-- 排序 + 密度 -->
-      <div class="control-group">
-        <a-select
-          v-model="sortMode"
-          :options="sortOptions"
-          size="mini"
-          style="width: 110px"
-          @change="onSortChange"
-        />
-
-        <a-button-group size="mini">
-          <a-button
-            v-for="d in densityOptions"
-            :key="d.value"
-            :type="density === d.value ? 'primary' : 'secondary'"
-            @click="setDensity(d.value)"
-          >
-            {{ d.label }}
-          </a-button>
-        </a-button-group>
-
-        <!-- 素材打开模式：全局生效（素材库/搜索/合集/相似推荐等所有素材卡片） -->
-        <a-tooltip
-          content="点击素材卡片时的打开方式，全局生效（素材库、搜索、收藏合集、相似推荐等所有素材入口）；偏好自动保存"
-        >
-          <a-radio-group
-            v-model="materialOpenMode"
-            type="button"
-            size="mini"
-            @change="onOpenModeChange"
-          >
-            <a-radio value="new_tab">新页打开</a-radio>
-            <a-radio value="current_tab">当前页打开</a-radio>
-          </a-radio-group>
-        </a-tooltip>
-      </div>
-    </div>
+    <!-- 筛选栏（四组按钮筛选 + 标签/评分/颜色 + 排序/密度/打开方式） -->
+    <HomeFilterBar
+      :filters="filters"
+      :density="density"
+      @update:density="setDensity"
+      @change="onFilterChange"
+    />
 
     <!-- 当前筛选提示 -->
-    <div
-      v-if="
-        sourceFilter !== 'all' ||
-        mediaFilter !== 'all' ||
-        statusFilter !== 'all' ||
-        qualityFilter !== 'all' ||
-        selectedTags.length > 0 ||
-        colorFilter !== '' ||
-        sortMode !== 'newest'
-      "
-      class="active-filters"
-    >
-      当前筛选：
-      <a-tag v-if="sourceFilter !== 'all'" size="small" closable @close="setSourceFilter('all')">
-        {{ sourceOptions.find((o) => o.value === sourceFilter)?.label }}
-      </a-tag>
-      <a-tag v-if="mediaFilter !== 'all'" size="small" closable @close="setMediaFilter('all')">
-        {{ mediaOptions.find((o) => o.value === mediaFilter)?.label }}
-      </a-tag>
-      <a-tag v-if="statusFilter !== 'all'" size="small" closable @close="setStatusFilter('all')">
-        {{ statusOptions.find((o) => o.value === statusFilter)?.label }}
-      </a-tag>
-      <a-tag v-if="qualityFilter !== 'all'" size="small" closable @close="setQualityFilter('all')">
-        {{ qualityOptions.find((o) => o.value === qualityFilter)?.label }}
-      </a-tag>
-      <a-tag
-        v-for="tag in selectedTags"
-        :key="tag"
-        size="small"
-        closable
-        @close="removeTagFilter(tag)"
-      >
-        {{ tag }}
-      </a-tag>
-      <a-tag v-if="colorFilter" size="small" closable @close="setColorFilter('')">
-        <span class="color-chip" :style="{ background: colorFilter }" /> {{ colorFilter }}
-      </a-tag>
-      <a-tag v-if="sortMode !== 'newest'" size="small" closable @close="setSortMode('newest')">
-        {{ sortOptions.find((o) => o.value === sortMode)?.label }}
-      </a-tag>
-      <a-button size="mini" type="text" @click="clearAllFilters"> 清除全部 </a-button>
-    </div>
+    <HomeActiveFilters :filters="filters" />
 
     <!-- 定位模式横幅：展示被定位的素材并高亮，可一键退出回到完整列表 -->
     <div v-if="focusedIds.length > 0" class="focus-banner">
@@ -586,70 +369,6 @@ loadPage(currentPage.value)
 .header-right {
   display: flex;
   gap: 8px;
-}
-
-/* 筛选栏 */
-.filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  flex-wrap: wrap;
-}
-
-.filter-group {
-  display: flex;
-  gap: 4px;
-}
-
-/* 颜色筛选色板 */
-.color-filter {
-  align-items: center;
-}
-.color-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  cursor: pointer;
-  border: 2px solid transparent;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
-  transition:
-    transform 0.1s,
-    border-color 0.1s;
-}
-.color-swatch:hover {
-  transform: scale(1.15);
-}
-.color-swatch.active {
-  border-color: #2080f0;
-}
-.color-chip {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 4px;
-  vertical-align: middle;
-}
-
-.control-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* 活跃筛选提示 */
-.active-filters {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: #999;
-  flex-wrap: wrap;
 }
 
 /* 定位模式横幅（裁剪跳过素材跳转） */
