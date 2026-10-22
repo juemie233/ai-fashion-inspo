@@ -15,6 +15,13 @@ const props = defineProps<{
   initialIndex?: number
   /** 图片版本标识（可选）：裁剪等原地替换图片后附加 ?v= 绕过浏览器缓存 */
   imageVersion?: string
+  /** 自定义 URL 解析（缺省 {@link getFileUrl}）。
+   *
+   * 素材库图片是 `storage/` 下的相对路径，需要套 `/api/files/` 前缀；出图候选图却由
+   * `/api/generate/runs/{id}/candidates/{name}` 直接返回，再套前缀会 404。调用方传
+   * `(p) => p`（原样使用）或自己的拼法即可。
+   */
+  urlResolver?: (path: string) => string
 }>()
 
 const emit = defineEmits<{
@@ -33,7 +40,8 @@ const currentIndex = ref(0)
 const currentImage = computed(() => imageList.value[currentIndex.value] || '')
 /** 当前图片完整 URL（带可选版本参数，原地替换图片后用于绕过浏览器缓存） */
 const currentImageSrc = computed(() => {
-  const base = getFileUrl(currentImage.value)
+  const resolve = props.urlResolver ?? getFileUrl
+  const base = resolve(currentImage.value)
   return props.imageVersion ? `${base}?v=${props.imageVersion}` : base
 })
 

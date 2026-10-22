@@ -14,6 +14,7 @@ import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
 import { formatDateTime } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
@@ -64,6 +65,23 @@ const {
   retry,
   regenerate,
 } = useImageGen()
+
+// ── 候选图大图浏览 ──
+/** 灯箱开关与起始索引：缩略图看不清面料/版型，点开可按 100% 看细节并左右翻整批 */
+const lightboxVisible = ref(false)
+const lightboxIndex = ref(0)
+const candidateUrls = computed(() => candidates.value.map((c) => c.url))
+
+function openLightbox(index: number): void {
+  if (!candidates.value.length) return
+  lightboxIndex.value = Math.max(0, Math.min(index, candidates.value.length - 1))
+  lightboxVisible.value = true
+}
+
+/** 候选图 URL 由后端直接给出（/api/generate/...），不能再套素材库的 /api/files/ 前缀 */
+function resolveCandidateUrl(path: string): string {
+  return path
+}
 
 // ── 参数 ──
 const prompt = ref('')
@@ -472,6 +490,7 @@ onUnmounted(stopPoll)
             <a-button size="mini" @click="selectAll">全选未入库</a-button>
             <a-button size="mini" @click="clearSelection">清空选择</a-button>
             <span class="gen-hint">已选 {{ selectedCount }} / {{ candidates.length }}</span>
+            <span class="gen-hint">点图片看大图</span>
             <a-button type="primary" size="mini" :disabled="selectedCount === 0" @click="confirm">
               确认入库
             </a-button>
@@ -480,13 +499,28 @@ onUnmounted(stopPoll)
 
           <div v-if="candidates.length" class="gen-candidates">
             <div
-              v-for="item in candidates"
+              v-for="(item, index) in candidates"
               :key="item.filename"
               class="gen-item"
               :class="{ 'is-selected': selected.has(item.filename) }"
-              @click="!item.imported && toggle(item.filename)"
             >
-              <img :src="item.url" :alt="item.filename" loading="lazy" />
+              <img
+                :src="item.url"
+                :alt="`第 ${index + 1} 张，seed ${item.seed}`"
+                loading="lazy"
+                title="点击查看大图"
+                @click="openLightbox(index)"
+              />
+              <!-- 点图片是「看大图」，勾选单独给角标：候选区最常做的是放大看细节，
+                   把整块点击让给灯箱，入库走这个勾选框 -->
+              <a-checkbox
+                v-if="!item.imported"
+                class="gen-item-check"
+                :model-value="selected.has(item.filename)"
+                title="勾选后可确认入库"
+                @click.stop
+                @change="toggle(item.filename)"
+              />
               <div class="gen-item-meta">
                 <span>seed {{ item.seed }}</span>
                 <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
@@ -515,6 +549,15 @@ onUnmounted(stopPoll)
       :selected-ids="refIdsList"
       :max="10"
       @confirm="onPickConfirm"
+    />
+
+    <!-- 候选图大图浏览：复用素材库的灯箱（缩放/拖动/左右切换都有） -->
+    <ImageLightbox
+      :show="lightboxVisible"
+      :image-paths="candidateUrls"
+      :initial-index="lightboxIndex"
+      :url-resolver="resolveCandidateUrl"
+      @close="lightboxVisible = false"
     />
 
     <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->
@@ -694,6 +737,7 @@ onUnmounted(stopPoll)
   gap: 10px;
 }
 .gen-item {
+  position: relative;
   border: 2px solid transparent;
   border-radius: 6px;
   overflow: hidden;
@@ -709,6 +753,17 @@ onUnmounted(stopPoll)
 .gen-item img {
   width: 100%;
   display: block;
+  cursor: zoom-in;
+}
+/* 勾选框浮在缩略图右上角：点图片看大图，勾选才入库 */
+.gen-item-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 85%);
 }
 .gen-preset-list {
   display: flex;
