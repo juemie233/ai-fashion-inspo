@@ -51,7 +51,11 @@ class VramTimeoutError(ComfyUIError):
 
 
 def _free_gib(stats: dict) -> float:
-    """从 /system_stats 取空闲显存（GiB）。"""
+    """从 /system_stats 取空闲显存（GiB）。
+
+    只取 ``devices[0]``：本机是单卡；多卡场景下这会永远看第一张卡（未做卡间调度），
+    如需多卡，这里要改成按档位选卡或用「各卡可用之和」——目前明确不支持。
+    """
     devices = stats.get("devices") or []
     dev = devices[0] if devices else {}
     return round(float(dev.get("vram_free") or 0) / 2**30, 2)
