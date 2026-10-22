@@ -18,5 +18,6 @@ test('任务管理表格渲染正常（不再停留加载态）', async ({ page 
 
 test('任务管理刷新按钮可用', async ({ page }) => {
   await page.goto('/tasks')
-  await expect(page.getByRole('button', { name: '刷新' })).toBeVisible()
+  // 页面上有两个「刷新」按钮（任务工具栏 + 备份状态卡），取第一个避免严格模式歧义
+  await expect(page.getByRole('button', { name: '刷新' }).first()).toBeVisible()
 })

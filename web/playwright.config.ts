@@ -11,8 +11,10 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   retries: 0,
-  // 本地 dev server 单实例，控制并行度避免页面加载竞争导致偶发超时
-  workers: 2,
+  // 本地 dev server 单实例：并行时各页面首屏（Vite 按路由懒编译 + 统计接口）
+  // 会互相抢，实测偶发超时（同一用例单跑 100% 通过）。11 条用例串行约 1 分钟，
+  // 稳定性和可诊断性都更好。
+  workers: 1,
   reporter: [['list']],
   use: {
     baseURL: 'http://localhost:17777',

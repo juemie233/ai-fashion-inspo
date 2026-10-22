@@ -29,5 +29,8 @@ test('标签管理展开分组并查看关联素材', async ({ page }) => {
 
 test('标签管理统计卡片渲染', async ({ page }) => {
   await page.goto('/tags')
-  await expect(page.getByText('总标签').first()).toBeVisible()
+  // 统计卡来自 /api/tags/stats（2 万标签约 0.8s）；并行跑时首屏可能超过默认 5s，
+  // 这里放宽超时，避免把「慢」误判成「没渲染」
+  await expect(page.getByText('总标签').first()).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.arco-statistic').first()).toBeVisible()
 })
