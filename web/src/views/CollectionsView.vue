@@ -9,6 +9,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
+import CollectionContentHeader from '@/components/collection/CollectionContentHeader.vue'
 import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import {
@@ -219,41 +220,20 @@ onMounted(() => {
     <!-- 右侧内容区 -->
     <section class="collection-content">
       <template v-if="current">
-        <div class="content-header">
-          <div class="content-title">
-            <h2>{{ current.name }}</h2>
-            <span v-if="parentName" class="content-parent">{{ parentName }} /</span>
-            <a-tag v-if="current.kind === 'smart'" color="arcoblue" size="small">⚡ 智能合集</a-tag>
-            <a-tag v-if="current.auto_source" color="gray" size="small">抖音同步</a-tag>
-            <span class="content-total">共 {{ total }} 个素材</span>
-          </div>
-          <div class="content-actions">
-            <template v-if="current.kind === 'smart'">
-              <a-button size="small" @click="openEditSmart">编辑条件</a-button>
-              <a-popconfirm content="将当前匹配内容固化为手动合集？" @ok="confirmSolidify">
-                <a-button size="small">转手动</a-button>
-              </a-popconfirm>
-            </template>
-            <template v-else>
-              <a-button v-if="!ordering" size="small" @click="enterOrdering">编辑排序</a-button>
-              <template v-else>
-                <a-button size="small" type="primary" @click="saveItemOrder">保存顺序</a-button>
-                <a-button size="small" @click="ordering = false">取消排序</a-button>
-              </template>
-              <a-tooltip
-                :disabled="!current.auto_source"
-                content="由抖音同步自动维护，名称以抖音侧的收藏夹名为准"
-              >
-                <a-button size="small" :disabled="!!current.auto_source" @click="openRename"
-                  >重命名</a-button
-                >
-              </a-tooltip>
-            </template>
-            <a-button size="small" status="danger" type="text" @click="confirmDelete"
-              >删除合集</a-button
-            >
-          </div>
-        </div>
+        <!-- 详情头：合集名 / 标记 / 素材数 + 操作按钮组 -->
+        <CollectionContentHeader
+          :current="current"
+          :parent-name="parentName"
+          :total="total"
+          :ordering="ordering"
+          @edit-smart="openEditSmart"
+          @solidify="confirmSolidify"
+          @enter-ordering="enterOrdering"
+          @save-order="saveItemOrder"
+          @cancel-ordering="ordering = false"
+          @rename="openRename"
+          @delete="confirmDelete"
+        />
 
         <!-- 智能合集条件摘要 -->
         <a-alert v-if="current.kind === 'smart'" type="info" style="margin-bottom: 12px">
@@ -464,34 +444,6 @@ onMounted(() => {
   border: 1px dashed #e5e7eb;
   border-radius: 8px;
 }
-.content-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-.content-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.content-title h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-.content-total {
-  font-size: 13px;
-  color: #999;
-}
-/* 二级收藏夹的父级面包屑（一级名下没有这段） */
-.content-parent {
-  font-size: 13px;
-  color: #86909c;
-}
-
 /* 分类节点（一级）的收藏夹卡片墙：像抖音的收藏夹列表，而不是混合素材墙 */
 .folder-list {
   margin-bottom: 16px;
@@ -551,11 +503,6 @@ onMounted(() => {
   margin-top: 10px;
   font-size: 12px;
   color: #ff7d00;
-}
-.content-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 .content-toolbar {
   display: flex;
