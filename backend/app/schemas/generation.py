@@ -19,7 +19,10 @@ class GenerationRunCreate(BaseModel):
     cfg: float = Field(default=1.0, description="提示词引导强度")
     seed: int = Field(default=0, description="0=随机；>0 则固定（可复现）")
     count: int = Field(default=1, description="本次生成张数（1~4）")
-    model_key: str = Field(default="z_image_int8", description="模型档位")
+    # 不传 = 按 kind 取默认档位（t2i → z_image_int8 / i2i → qwen_2_1_i2i）。
+# 这里**不能**写成 str + 默认 "z_image_int8"：model_dump() 会把它当成用户显式选择，
+# 于是 kind=i2i 的请求会被「档位与生成方式不符」直接拒掉（2026-10 实测的图生图报错）。
+    model_key: str | None = Field(default=None, description="模型档位（不传则按 kind 取默认）")
     reference_ids: list[str] = Field(default_factory=list, description="参考素材 id（i2i）")
 
 
@@ -37,3 +40,4 @@ class PromptPreviewRequest(BaseModel):
     """从素材反推 prompt。"""
 
     inspiration_ids: list[str] = Field(min_length=1, max_length=10)
+
