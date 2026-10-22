@@ -12,8 +12,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
-import { formatDateTime, shortModelLabel } from '@/utils/format'
 import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPanel.vue'
+import GenerateHistoryTable from '@/components/generate/GenerateHistoryTable.vue'
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
@@ -81,17 +81,6 @@ function openLightbox(index: number): void {
 /** 候选图 URL 由后端直接给出（/api/generate/...），不能再套素材库的 /api/files/ 前缀 */
 function resolveCandidateUrl(path: string): string {
   return path
-}
-
-/** 档位 key → 展示名（历史表用；后端没给档位表时退回 key，不显示空白） */
-function modelLabel(key: string): string {
-  const meta = status.value?.models_meta?.[key]
-  return meta ? shortModelLabel(meta.label) : key || '—'
-}
-
-/** 该档位是否为未审查权重（历史表打标用） */
-function modelUncensored(key: string): boolean {
-  return status.value?.models_meta?.[key]?.uncensored === true
 }
 
 const ready = computed(() => status.value?.ready === true)
@@ -191,67 +180,16 @@ onUnmounted(stopPoll)
 
     <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->
     <a-card class="gen-card gen-history" :bordered="false">
-      <div class="gen-result-head">
-        <span class="gen-label" style="margin: 0">生成历史</span>
-        <a-button size="mini" :loading="historyLoading" @click="loadHistory">刷新</a-button>
-      </div>
-      <div v-if="!history.length" class="gen-empty">还没有生成记录。</div>
-      <a-table
-        v-else
-        :data="history"
-        :pagination="false"
-        row-key="id"
-        size="small"
-        :scroll="{ x: 960 }"
-      >
-        <template #columns>
-          <a-table-column title="#" data-index="id" :width="70" />
-          <a-table-column title="描述" data-index="prompt" :width="320" ellipsis />
-          <a-table-column title="模型" :width="190">
-            <template #cell="{ record }">
-              <span class="gen-model-cell">
-                {{ modelLabel(record.model_key) }}
-                <a-tag v-if="modelUncensored(record.model_key)" color="red" size="small">
-                  未审查
-                </a-tag>
-              </span>
-            </template>
-          </a-table-column>
-          <a-table-column title="状态" :width="110">
-            <template #cell="{ record }">
-              {{ record.status }}（{{ record.done }}/{{ record.total }}）
-            </template>
-          </a-table-column>
-          <a-table-column title="时间" :width="150">
-            <template #cell="{ record }">
-              <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
-            </template>
-          </a-table-column>
-          <a-table-column title="操作" :width="210">
-            <template #cell="{ record }">
-              <a-button size="mini" :loading="submitting" @click="retry(record.id)">
-                同参重跑
-              </a-button>
-              <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
-              <a-popconfirm
-                v-if="['done', 'failed', 'cancelled'].includes(record.status)"
-                content="删除这条生成记录及其候选图？（只清理本批次的候选文件）"
-                ok-text="删除"
-                @ok="removeRun(record.id)"
-              >
-                <a-button
-                  size="mini"
-                  status="danger"
-                  style="margin-left: 6px"
-                  :loading="deletingId === record.id"
-                >
-                  删除
-                </a-button>
-              </a-popconfirm>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
+      <GenerateHistoryTable
+        :history="history"
+        :loading="historyLoading"
+        :submitting="submitting"
+        :deleting-id="deletingId"
+        :status="status"
+        @refresh="loadHistory"
+        @retry="retry"
+        @remove="removeRun"
+      />
     </a-card>
   </div>
 </template>
@@ -276,12 +214,6 @@ onUnmounted(stopPoll)
 }
 .gen-alert {
   margin-bottom: 12px;
-}
-.gen-model-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
 }
 .gen-hint {
   color: #8a8f99;
