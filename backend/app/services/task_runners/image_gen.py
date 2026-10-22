@@ -129,6 +129,13 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
     except FileNotFoundError as exc:
         raise PermanentTaskError(f"工作流模板缺失: {run.workflow_name}") from exc
 
+    # 同一份模板可能服务多个档位（标准版 / 未审查版）：权重文件名由档位覆盖，
+    # 覆盖失败按永久错误处理 —— 绝不能退回模板默认权重继续跑，那会静默出「另一版」的图
+    try:
+        template = wf.apply_file_overrides(template, spec.get("files"))
+    except KeyError as exc:
+        raise PermanentTaskError(f"档位 {run.model_key} 与模板 {run.workflow_name} 不符：{exc}") from exc
+
     out_dir = _candidate_dir(run)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -194,7 +201,20 @@ async def _execute_with_client(
         logger.info(f"参考图已上传 {len(reference_names)} 张（run #{run.id}）")
 
     # ── 2) 逐张生成 ──
+    # 任务允许重试一次（max_retries=1）。若重试时从头重跑全部 seed，`run.done` 会继续累加、
+    # 最终超过 `total`（进度 >100%），已成功的图也会被再生成一遍（纯浪费）。
+    # 这里按「候选目录里已有第 N 张」判断：跳过已出的，计数器据实重建。
+    done_before = 0
+    for idx in range(1, len(seeds) + 1):
+        if (out_dir / _CANDIDATE_NAME.format(idx=idx, seed=seeds[idx - 1])).exists():
+            done_before += 1
+    run.done = done_before
+    run.failed = 0
+
     for idx, seed in enumerate(seeds, start=1):
+        if idx <= done_before:
+            logger.info(f"跳过已出的第 {idx} 张（run #{run.id}，重试续跑）")
+            continue
         if await _is_cancelled(db, task):
             run.status = "cancelled"
             run.error = "已取消"
