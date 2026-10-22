@@ -1417,7 +1417,7 @@ pytest
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
-> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **77.7%**；门禁棘轮 `--cov-fail-under=77`）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **78.3%**；门禁棘轮 `--cov-fail-under=78`）。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
 ### 前端（vitest，478 用例 / 60 个文件）
 
