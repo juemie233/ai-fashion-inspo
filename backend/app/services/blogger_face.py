@@ -798,9 +798,9 @@ async def bind_uploaded_inspiration_face(
         return {"inspiration_id": inspiration_id, "bound": False, "reason": warning}
     try:
         result = await face_client.embed(image_bytes)
-    except FaceServiceUnavailableError:
-        logger.warning(f"上传绑定人脸：人脸服务不可用，跳过 {inspiration_id}")
-        return {"inspiration_id": inspiration_id, "bound": False, "reason": "人脸服务不可用"}
+    # ⚠ 顺序不能反：FaceServiceHttpError 是 FaceServiceUnavailableError 的子类，
+    # 先捕获父类会让 404「无人脸」永远走不到下面的业务分支（被误报成「服务不可用」，
+    # 且旧的非锁定检测记录不会被清理）。
     except FaceServiceHttpError as e:
         if e.status_code == 404:
             # 无人脸：仅清理非锁定普通记录，保证「有记录即已扫」语义
@@ -821,6 +821,9 @@ async def bind_uploaded_inspiration_face(
             }
         logger.warning(f"上传绑定人脸：检测失败 {inspiration_id}: {e}")
         return {"inspiration_id": inspiration_id, "bound": False, "reason": str(e)}
+    except FaceServiceUnavailableError:
+        logger.warning(f"上传绑定人脸：人脸服务不可用，跳过 {inspiration_id}")
+        return {"inspiration_id": inspiration_id, "bound": False, "reason": "人脸服务不可用"}
 
     faces = result.get("faces", [])
     if not faces:

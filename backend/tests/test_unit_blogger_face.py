@@ -548,3 +548,361 @@ async def test_delete_detection_and_locked_rejected(client):
         with pytest.raises(HTTPException) as exc:
             await blogger_face.delete_detection(db, 999999)
         assert exc.value.status_code == 404
+
+
+# ── 素材人脸检测与匹配（矩阵匹配 + 重新检测覆盖 + 锁定记录保护）──
+
+
+@pytest.fixture(autouse=True)
+def _patch_face_detect_deps(monkeypatch):
+    """检测链路的外部依赖：库加载与矩阵匹配（纯 numpy 逻辑另有单测）。"""
+    from app.services import face_match
+
+    async def _library(db, *a, **k):
+        return []
+
+    monkeypatch.setattr(blogger_face, "load_person_library", _library)
+    monkeypatch.setattr(blogger_face, "matrix_match_faces", lambda embs, lib, th: [None] * len(embs))
+
+
+def _inner_face(det_score: float = 0.95, bbox=None, seed: int = 0) -> dict:
+    """子服务返回结构里的「单张脸」（含 embedding），检测链路直接用这个。"""
+    return {
+        "det_score": det_score,
+        "bbox": bbox or [10, 10, 60, 60],
+        "embedding": _embedding(seed),
+    }
+
+
+async def _detect_bytes(insp_id: str, faces: list[dict] | Exception):
+    """执行一次检测：faces 为该次「子服务返回」。"""
+    if isinstance(faces, Exception):
+        async def _embed(data, *a, **k):
+            raise faces
+    else:
+        async def _embed(data, *a, **k):
+            return {"faces": faces}
+
+    blogger_face.face_client.embed = _embed  # type: ignore[assignment]
+
+
+async def test_detect_writes_detections_with_face_index(client):
+    await _insp_row("fx1")
+    await _detect_bytes("fx1", [_inner_face(seed=0), _inner_face(seed=1)])
+
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx1", b"img")
+
+    assert result["face_count"] == 2
+    assert [d["face_index"] for d in result["detections"]] == [0, 1]
+    # 无库命中：matched 为空但 det_score 保留（供人工指定）
+    assert all(d["matched_blogger_id"] is None for d in result["detections"])
+    assert all(d["det_score"] is not None for d in result["detections"])
+
+
+async def test_detect_matches_library_person(client, monkeypatch):
+    blogger_id = await _blogger("命中博主")
+    await _insp_row("fx2")
+    await _detect_bytes("fx2", [_inner_face(seed=0)])
+
+    async def _library(db, *a, **k):
+        return [{"person_type": "blogger", "person_id": blogger_id, "embedding": _embedding(0)}]
+
+    monkeypatch.setattr(blogger_face, "load_person_library", _library)
+    monkeypatch.setattr(
+        blogger_face,
+        "matrix_match_faces",
+        lambda embs, lib, th: [{"person_type": "blogger", "person_id": blogger_id, "score": 0.91}],
+    )
+
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx2", b"img")
+
+    det = result["detections"][0]
+    assert det["matched_blogger_id"] == blogger_id
+    assert det["matched_blogger_name"] == "命中博主"  # 前端展示要名字，不能只给 id
+    assert det["confidence"] == 0.91
+
+
+async def test_detect_redetection_replaces_old_rows(client):
+    """重新检测覆盖旧记录（不累积重复）。"""
+    await _insp_row("fx3")
+    await _detect_bytes("fx3", [_inner_face(seed=0)])
+    async with async_session() as db:
+        await blogger_face.detect_inspiration_faces(db, "fx3", b"img")
+
+    await _detect_bytes("fx3", [_inner_face(seed=2)])
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx3", b"img")
+
+    assert result["face_count"] == 1
+
+
+async def test_detect_keeps_locked_rows_and_offsets_new_indices(client):
+    """已确认（锁定）记录不被覆盖，新人脸序号从锁定数起编（避免撞号）。"""
+    await _insp_row("fx4")
+    locked_id = await _detection("fx4", face_index=0, match_status="confirmed")
+
+    await _detect_bytes("fx4", [_inner_face(seed=1)])
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx4", b"img")
+
+    indices = [d["face_index"] for d in result["detections"]]
+    assert 0 in indices  # 锁定记录仍在
+    assert max(indices) == 1  # 新人脸从 1 开始
+    assert any(d["id"] == locked_id for d in result["detections"])
+
+
+async def test_detect_skips_duplicate_of_locked_embedding(client):
+    """同一张已锁定的脸重复检测：跳过插入（同源 embedding 字节级一致）。"""
+    await _insp_row("fx5")
+    face = _inner_face(seed=0)
+    emb = np.asarray(face["embedding"], dtype=np.float32).tobytes()
+    from app.models.face import InspirationFaceDetection
+
+    async with async_session() as db:
+        db.add(
+            InspirationFaceDetection(
+                inspiration_id="fx5",
+                face_index=0,
+                embedding=emb,
+                det_score=0.9,
+                match_status="confirmed",
+            )
+        )
+        await db.commit()
+
+    await _detect_bytes("fx5", [face])
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx5", b"img")
+
+    assert result["face_count"] == 1  # 只有那条锁定记录
+
+
+async def test_detect_no_face_clears_unlocked_but_keeps_locked(client):
+    """素材图里没人脸（404）：清非锁定记录、保留锁定记录。"""
+    await _insp_row("fx6")
+    await _detection("fx6", face_index=0, match_status="confirmed")
+    await _detection("fx6", face_index=1)
+
+    await _detect_bytes("fx6", FaceServiceHttpError(404, "no face"))
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx6", b"img")
+
+    assert result["face_count"] == 1
+    assert result["detections"][0]["match_status"] == "confirmed"
+
+
+async def test_detect_decode_error_gives_actionable_message(client):
+    await _insp_row("fx7")
+    await _detect_bytes("fx7", FaceServiceHttpError(400, "cannot decode"))
+
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await blogger_face.detect_inspiration_faces(db, "fx7", b"not-an-image")
+
+    assert exc.value.status_code == 400
+    assert "JPG/PNG" in str(exc.value.detail)
+
+
+async def test_detect_service_down_maps_to_503(client):
+    await _insp_row("fx8")
+    await _detect_bytes("fx8", FaceServiceUnavailableError("未启动"))
+
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await blogger_face.detect_inspiration_faces(db, "fx8", b"img")
+    assert exc.value.status_code == 503
+
+
+async def test_detect_missing_material_404(client):
+    await _detect_bytes("nope", [_inner_face()])
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await blogger_face.detect_inspiration_faces(db, "nope", b"img")
+    assert exc.value.status_code == 404
+
+
+async def test_detect_low_confidence_face_skips_matching(client, monkeypatch):
+    """低置信度人脸不参与自动匹配（模糊/侧脸匹配易误判），但仍记录供手动指定。"""
+    await _insp_row("fx9")
+    await _detect_bytes("fx9", [_inner_face(det_score=0.3)])
+
+    called = {"n": 0}
+
+    def _match(embs, lib, th):
+        called["n"] += 1
+        return [None] * len(embs)
+
+    monkeypatch.setattr(blogger_face, "matrix_match_faces", _match)
+
+    async with async_session() as db:
+        result = await blogger_face.detect_inspiration_faces(db, "fx9", b"img")
+
+    assert called["n"] == 0  # 全部低置信 → 不做矩阵匹配
+    assert result["face_count"] == 1
+
+
+async def test_detect_loads_image_when_bytes_not_given(client, monkeypatch):
+    """不传图（详情页「检测」按钮）时走 load_inspiration_image；失败给可操作提示。"""
+    from app.services import face_image
+
+    await _insp_row("fx10")
+
+    async def _load(insp):
+        return None, "视频首帧提取失败"
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await blogger_face.detect_inspiration_faces(db, "fx10", None)
+    assert exc.value.status_code == 400
+    assert "无法用于人脸检测" in str(exc.value.detail)
+
+
+# ── 上传绑定博主 → 后台绑主脸（f2 批量上传场景）──
+
+
+async def test_bind_uploaded_binds_confident_main_face(client, monkeypatch):
+    """主脸置信度合格 → 绑定博主并锁定（confirmed），次脸只记普通记录。"""
+    from app.services import face_image
+
+    blogger_id = await _blogger("上传绑定博主")
+    await _insp_row("ub1")
+
+    async def _load(insp):
+        return b"img", None
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+    await _detect_bytes("ub1", [_inner_face(seed=0), _inner_face(seed=1, det_score=0.8)])
+
+    async with async_session() as db:
+        result = await blogger_face.bind_uploaded_inspiration_face(db, "ub1", blogger_id)
+
+    assert result["bound"] is True
+    assert result["face_count"] == 2
+    async with async_session() as db:
+        rows = await blogger_face.list_inspiration_detections(db, "ub1")
+    # 主脸（锁定）+ 次脸（普通）都会展示
+    assert len(rows) == 2
+    assert any(r["match_status"] == "confirmed" and r["matched_blogger_id"] == blogger_id for r in rows)
+    assert any(r["match_status"] is None and r["matched_blogger_id"] is None for r in rows)
+
+
+async def test_bind_uploaded_low_confidence_does_not_bind(client, monkeypatch):
+    """主脸置信度偏低（0.5~0.65）不锁定绑定：模糊/侧脸锁定易误判。"""
+    from app.services import face_image
+
+    blogger_id = await _blogger("低置信博主")
+    await _insp_row("ub2")
+
+    async def _load(insp):
+        return b"img", None
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+    await _detect_bytes("ub2", [_inner_face(det_score=0.55)])
+
+    async with async_session() as db:
+        result = await blogger_face.bind_uploaded_inspiration_face(db, "ub2", blogger_id)
+
+    assert result["bound"] is False
+    async with async_session() as db:
+        rows = await blogger_face.list_inspiration_detections(db, "ub2")
+    assert rows[0]["matched_blogger_id"] is None
+
+
+async def test_bind_uploaded_handles_missing_material(client, monkeypatch):
+    from app.services import face_image
+
+    async def _load(insp):
+        return b"img", None
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+
+    async with async_session() as db:
+        result = await blogger_face.bind_uploaded_inspiration_face(db, "不存在", 1)
+
+    assert result["bound"] is False
+    assert "不存在" in result["reason"]
+
+
+async def test_bind_uploaded_unreadable_image(client, monkeypatch):
+    from app.services import face_image
+
+    blogger_id = await _blogger("读不出图博主")
+    await _insp_row("ub3")
+
+    async def _load(insp):
+        return None, "视频关键帧提取失败"
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+
+    async with async_session() as db:
+        result = await blogger_face.bind_uploaded_inspiration_face(db, "ub3", blogger_id)
+
+    assert result["bound"] is False
+    assert "关键帧" in result["reason"]
+
+
+async def test_bind_uploaded_service_down_and_no_face(client, monkeypatch):
+    from app.services import face_image
+
+    blogger_id = await _blogger("服务异常博主")
+    await _insp_row("ub4")
+
+    async def _load(insp):
+        return b"img", None
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+
+    await _detect_bytes("ub4", FaceServiceUnavailableError("未启动"))
+    async with async_session() as db:
+        down = await blogger_face.bind_uploaded_inspiration_face(db, "ub4", blogger_id)
+    assert down["bound"] is False
+    assert "不可用" in down["reason"]
+
+    # 404 = 无人脸：同样不绑定，但要清掉非锁定旧记录
+    await _detection("ub4", face_index=1)
+    await _detect_bytes("ub4", FaceServiceHttpError(404, "no face"))
+    async with async_session() as db:
+        no_face = await blogger_face.bind_uploaded_inspiration_face(db, "ub4", blogger_id)
+    assert no_face["bound"] is False
+    assert "未检测到人脸" in no_face["reason"]
+
+    # 其它 HTTP 错误（如 500）：记录原因不抛
+    await _detect_bytes("ub4", FaceServiceHttpError(500, "boom"))
+    async with async_session() as db:
+        err = await blogger_face.bind_uploaded_inspiration_face(db, "ub4", blogger_id)
+    assert err["bound"] is False
+    assert "boom" in err["reason"]
+
+
+async def test_bind_uploaded_empty_faces(client, monkeypatch):
+    from app.services import face_image
+
+    blogger_id = await _blogger("空人脸博主")
+    await _insp_row("ub5")
+
+    async def _load(insp):
+        return b"img", None
+
+    monkeypatch.setattr(face_image, "load_inspiration_image", _load)
+    await _detect_bytes("ub5", [])
+
+    async with async_session() as db:
+        result = await blogger_face.bind_uploaded_inspiration_face(db, "ub5", blogger_id)
+
+    assert result["bound"] is False
+    assert "未检测到人脸" in result["reason"]
+
+
+async def test_run_upload_face_bind_swallows_errors(monkeypatch):
+    """后台任务失败只记日志，绝不把异常抛给上传主流程。"""
+
+    async def _boom(db, insp_id, blogger_id):
+        raise RuntimeError("炸了")
+
+    monkeypatch.setattr(blogger_face, "bind_uploaded_inspiration_face", _boom)
+
+    await blogger_face.run_upload_face_bind("x1", 1)  # 不抛
