@@ -12,7 +12,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
-import { getFileUrl } from '@/api/inspirations'
 import { formatDateTime } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
@@ -353,7 +352,7 @@ onUnmounted(stopPoll)
               :class="{ 'is-selected': selected.has(item.filename) }"
               @click="!item.imported && toggle(item.filename)"
             >
-              <img :src="getFileUrl(item.url)" :alt="item.filename" loading="lazy" />
+              <img :src="item.url" :alt="item.filename" loading="lazy" />
               <div class="gen-item-meta">
                 <span>seed {{ item.seed }}</span>
                 <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
