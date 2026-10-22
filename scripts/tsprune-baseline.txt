@@ -136,8 +136,6 @@ src/composables/useBrowseContext.ts - useBrowseContext
 src/composables/useChromeManager.ts - CHROME_STATE_LABELS
 src/composables/useChromeManager.ts - CHROME_STATE_TAG
 src/composables/useChromeManager.ts - useChromeManager
-src/composables/useCollectionItemOrdering.ts - useCollectionItemOrdering
-src/composables/useCollectionListDnd.ts - useCollectionListDnd
 src/composables/useCollectionMutations.ts - useCollectionMutations
 src/composables/useDouyinBloggerPicker.ts - PickerBlogger (used in module)
 src/composables/useF2Import.ts - F2AuthorRow (used in module)
@@ -156,7 +154,6 @@ src/composables/useFaceClusterGroups.ts - UseFaceClusterGroupsOptions (used in m
 src/composables/useFaceClusterGroups.ts - useFaceClusterGroups
 src/composables/useFaceDetailPanel.ts - ResultTab (used in module)
 src/composables/useFaceDetailPanel.ts - useFaceDetailPanel
-src/composables/useFaceScanActions.ts - useFaceScanActions
 src/composables/useGpuMonitor.ts - GpuStats (used in module)
 src/composables/useGpuMonitor.ts - GpuTrendPoint (used in module)
 src/composables/useGpuMonitor.ts - useGpuMonitor
@@ -271,7 +268,6 @@ src/utils/f2CollectSelection.ts - RestoredSelection (used in module)
 src/utils/faceMedia.ts - personAvatarUrl
 src/utils/format.ts - formatUptime
 src/utils/format.ts - formatVram
-src/utils/format.ts - safeJsonParse
 src/utils/media.ts - isVideoFile
 src/utils/scraperKeywords.ts - KeywordTaskLike (used in module)
 src/utils/tagHistoryDiff.ts - HISTORY_FIELD_LABELS (used in module)
