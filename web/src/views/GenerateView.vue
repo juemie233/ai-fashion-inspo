@@ -85,9 +85,74 @@ const width = computed(() => sizeDims.value[0] ?? 1024)
 const height = computed(() => sizeDims.value[1] ?? 1024)
 
 // ── 生成方式：文生图 / 图生图（参考图）──
-/** i2i 是否可用：后端探测到 Qwen-Image 2.1 档位就绪才允许选（否则按钮置灰并说明） */
-const i2iReady = computed(() => status.value?.models?.qwen_2_1_i2i === 'ok')
 const kind = ref<'t2i' | 'i2i'>('t2i')
+
+/** 图生图的可选档位（标准版 / 未审查版…）。
+ *
+ * 档位表跟着后端 `MODEL_SPECS` 走：加一个权重只改后端，前端不用发版。
+ * 后端没返回 `models_meta` 时列表为空，此时不渲染选择器、也不传 `model_key`，
+ * 由后端按 kind 取默认档位（与旧行为一致）。
+ */
+const i2iModels = computed(() =>
+  Object.entries(status.value?.models_meta ?? {})
+    .filter(([, m]) => m.kind === 'i2i')
+    .map(([key, m]) => ({
+      key,
+      label: m.label,
+      uncensored: m.uncensored === true,
+      notice: m.notice || '',
+      ready: status.value?.models?.[key] === 'ok',
+    })),
+)
+
+/** 当前档位（'' = 还没有档位表，提交时不传 model_key） */
+const modelKey = ref('')
+const currentModel = computed(() => i2iModels.value.find((m) => m.key === modelKey.value) ?? null)
+
+/** 默认落在**标准**档位。
+ *
+ * 未审查版必须由用户主动点选：默认选中「无内容过滤」的权重，等于替用户做了一次
+ * 他自己不知道的风险选择。刷新环境导致的档位表变化也不会覆盖已有选择。
+ */
+watch(
+  i2iModels,
+  (list) => {
+    if (!list.length) return
+    if (modelKey.value && list.some((m) => m.key === modelKey.value)) return
+    modelKey.value = (list.find((m) => !m.uncensored) ?? list[0]).key
+  },
+  { immediate: true },
+)
+
+/** 按钮上显示的短名：去掉 label 括号里的耗时说明 */
+function shortLabel(label: string): string {
+  return label.split('（')[0] ?? label
+}
+
+/** 档位 key → 展示名（历史表用；后端没给档位表时退回 key，不显示空白） */
+function modelLabel(key: string): string {
+  const meta = status.value?.models_meta?.[key]
+  return meta ? shortLabel(meta.label) : key || '—'
+}
+
+/** 该档位是否为未审查权重（历史表打标用） */
+function modelUncensored(key: string): boolean {
+  return status.value?.models_meta?.[key]?.uncensored === true
+}
+
+/** i2i 是否可用：任一 i2i 档位就绪即可；没有档位表时退回按已知档位名判断 */
+const i2iReady = computed(() => {
+  const models = status.value?.models ?? {}
+  const keys = i2iModels.value.length ? i2iModels.value.map((m) => m.key) : ['qwen_2_1_i2i']
+  return keys.some((k) => models[k] === 'ok')
+})
+
+/** 选中的档位自己是否就绪：权重没放对目录时不能默认它能用 */
+const modelReady = computed(() => {
+  if (kind.value !== 'i2i') return true
+  const models = status.value?.models ?? {}
+  return models[modelKey.value || 'qwen_2_1_i2i'] === 'ok'
+})
 
 /** 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 */
 const refIdsText = ref('')
@@ -169,6 +234,8 @@ async function onSubmit() {
     steps: steps.value,
     count: count.value,
     seed: seed.value,
+    // 只有拿到档位表且是图生图时才显式指定；否则交给后端按 kind 取默认
+    model_key: kind.value === 'i2i' && modelKey.value ? modelKey.value : undefined,
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
   })
 }
@@ -188,7 +255,7 @@ const canSubmit = computed(
     !!prompt.value.trim() &&
     !submitting.value &&
     !active.value &&
-    (kind.value === 't2i' || (i2iReady.value && refCountOk.value)),
+    (kind.value === 't2i' || (i2iReady.value && modelReady.value && refCountOk.value)),
 )
 
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
@@ -248,6 +315,28 @@ onUnmounted(stopPoll)
             参考图改款（Qwen-Image 2.1{{ i2iReady ? '，约 20~45 秒/张' : '：未就绪' }}）
           </a-radio>
         </a-radio-group>
+
+        <!-- 档位切换：同一套改款流程下的不同权重（标准版 / 未审查版） -->
+        <template v-if="kind === 'i2i' && i2iModels.length > 1">
+          <div class="gen-label">使用模型</div>
+          <a-radio-group v-model="modelKey" size="small" direction="vertical">
+            <a-radio v-for="m in i2iModels" :key="m.key" :value="m.key">
+              {{ shortLabel(m.label) }}
+              <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag">
+                未审查
+              </a-tag>
+              <span v-if="!m.ready" class="gen-hint">（未就绪）</span>
+            </a-radio>
+          </a-radio-group>
+          <a-alert
+            v-if="currentModel?.uncensored"
+            type="warning"
+            class="gen-alert gen-alert--tight"
+          >
+            {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
+          </a-alert>
+        </template>
+
         <div v-if="kind === 'i2i'" class="gen-row">
           <a-input
             v-model="refIdsText"
@@ -413,11 +502,21 @@ onUnmounted(stopPoll)
         :pagination="false"
         row-key="id"
         size="small"
-        :scroll="{ x: 720 }"
+        :scroll="{ x: 960 }"
       >
         <template #columns>
           <a-table-column title="#" data-index="id" :width="70" />
           <a-table-column title="描述" data-index="prompt" :width="320" ellipsis />
+          <a-table-column title="模型" :width="190">
+            <template #cell="{ record }">
+              <span class="gen-model-cell">
+                {{ modelLabel(record.model_key) }}
+                <a-tag v-if="modelUncensored(record.model_key)" color="red" size="small">
+                  未审查
+                </a-tag>
+              </span>
+            </template>
+          </a-table-column>
           <a-table-column title="状态" :width="110">
             <template #cell="{ record }">
               {{ record.status }}（{{ record.done }}/{{ record.total }}）
@@ -477,6 +576,19 @@ onUnmounted(stopPoll)
 }
 .gen-alert {
   margin-bottom: 12px;
+}
+/* 紧贴在档位选择器下面的风险提示，不要额外的下边距把表单撑开 */
+.gen-alert--tight {
+  margin: 8px 0 0;
+}
+.gen-model-tag {
+  margin-left: 4px;
+}
+.gen-model-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 .gen-hint {
   color: #8a8f99;

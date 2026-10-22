@@ -162,7 +162,14 @@ async def _execute_with_client(
     await _mark_stage(db, task, run, "checking_vram")
 
     # ── 1) 显存守门 ──
+    # 取消必须能穿透「等待显存」：默认最长等 15 分钟，期间若无人检查状态，
+    # 用户点了取消却要等满 15 分钟才有反应。vram.wait_for_vram 提供 should_stop，
+    # 但它是同步回调 —— 用 on_wait（异步）更新的标志位喂给它。
+    stop_requested = False
+
     async def _on_wait(waited: int, free: float) -> None:
+        nonlocal stop_requested
+        stop_requested = await _is_cancelled(db, task)
         await _mark_stage(
             db, task, run, "waiting_vram", waited_seconds=waited, vram_free_gib=free
         )
@@ -173,8 +180,15 @@ async def _execute_with_client(
             spec["vram_gib"],
             wait_seconds=settings.image_gen_wait_vram_seconds,
             on_wait=_on_wait,
+            should_stop=lambda: stop_requested,
         )
     except ComfyUIError as exc:
+        # 「等待期间被取消」不是失败：记成 cancelled，历史里才不会显示一条 failed
+        if stop_requested or "已取消" in str(exc):
+            run.status = "cancelled"
+            run.error = "已取消（等待显存期间）"
+            await db.commit()
+            return
         run.status = "failed"
         run.error = _friendly_error(exc)
         await db.commit()

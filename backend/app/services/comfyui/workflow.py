@@ -106,6 +106,11 @@ def inject(template: dict, /, **params: Any) -> dict:
     missing = _placeholders_in(template) - used
     if missing:
         raise KeyError(f"模板占位符未提供参数: {', '.join(sorted(missing))}")
+    # 残留检查：`__seed__`（小写）这类写法不会被识别成占位符，会**原样**进 ComfyUI，
+    # 最终只换来一个 400「参数非法」。这里在提交前把残留的 `__X__` 显式报出来。
+    leftovers = _placeholders_in(workflow)
+    if leftovers:
+        raise KeyError(f"模板占位符未被展开（检查大小写）: {', '.join(sorted(leftovers))}")
     return workflow
 
 
@@ -174,6 +179,56 @@ def model_files_in(workflow: dict) -> dict[str, list[str]]:
     return out
 
 
+"""模型文件输入字段 → 加载器节点类型。
+
+加载器自检（:func:`check_models`）与档位覆盖（:func:`apply_file_overrides`）共用这一份
+映射：两处各写一份，迟早会出现「自检认得、覆盖不认得」的错位。
+"""
+MODEL_FILE_FIELDS: dict[str, str] = {
+    "unet_name": "UNETLoader",
+    "clip_name": "CLIPLoader",
+    "vae_name": "VAELoader",
+    "ckpt_name": "CheckpointLoaderSimple",
+}
+
+
+def apply_file_overrides(workflow: dict, overrides: dict[str, str] | None) -> dict:
+    """按档位覆盖模板里的模型文件名，返回**新的**工作流（不修改传入的 dict）。
+
+    同一套图结构换不同权重（标准版 / 未审查版）时，模板里写默认文件名，档位在
+    ``MODEL_SPECS[key]["files"]`` 里覆盖即可 —— 比每个权重复制一份模板 JSON 好维护，
+    也不会出现「两份模板改了一处、另一处忘了改」的漂移。
+
+    Args:
+        workflow: 模板工作流。
+        overrides: ``{输入字段名: 文件名}``，如 ``{"unet_name": "xxx.safetensors"}``；
+            空值原样返回。
+
+    Raises:
+        KeyError: 字段名不认识，或模板里找不到对应的加载器节点。这里是**故意**抛错的：
+            静默不生效最危险 —— 用户以为切了未审查版，实际跑的还是标准权重。
+    """
+    if not overrides:
+        return workflow
+    unknown = set(overrides) - set(MODEL_FILE_FIELDS)
+    if unknown:
+        raise KeyError(f"不支持的模型文件覆盖字段: {', '.join(sorted(unknown))}")
+    out = copy.deepcopy(workflow)
+    for field, filename in overrides.items():
+        node_type = MODEL_FILE_FIELDS[field]
+        hits = 0
+        for node in out.values():
+            if not isinstance(node, dict) or node.get("class_type") != node_type:
+                continue
+            inputs = node.get("inputs")
+            if isinstance(inputs, dict) and field in inputs:
+                inputs[field] = filename
+                hits += 1
+        if not hits:
+            raise KeyError(f"模板里没有 {node_type}.{field}，无法覆盖为 {filename}")
+    return out
+
+
 def check_models(workflow: dict, object_info: dict) -> list[str]:
     """检查模板引用的模型文件是否出现在对应节点的下拉选项里。
 
@@ -182,14 +237,8 @@ def check_models(workflow: dict, object_info: dict) -> list[str]:
         ComfyUI 只认它**自己扫到**的文件，磁盘上有但目录不对一样是不可用。
     """
     missing: list[str] = []
-    field_of = {
-        "UNETLoader": ("unet_name",),
-        "CLIPLoader": ("clip_name",),
-        "VAELoader": ("vae_name",),
-        "CheckpointLoaderSimple": ("ckpt_name",),
-    }
     for ctype, files in model_files_in(workflow).items():
-        fields = field_of.get(ctype) or ()
+        fields = tuple(f for f, c in MODEL_FILE_FIELDS.items() if c == ctype)
         for field in fields:
             options = _widget_options(object_info, ctype, field)
             for name in files:

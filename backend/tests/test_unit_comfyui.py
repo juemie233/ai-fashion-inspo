@@ -209,6 +209,48 @@ def test_model_files_in_groups_by_node():
     assert json.dumps(grouped)  # 可序列化（写日志/接口返回）
 
 
+# ── 档位权重覆盖（标准版 / 未审查版共用一份模板）──
+
+
+def test_apply_file_overrides_swaps_unet_only():
+    """覆盖只换权重文件名，模板其余部分（含原 dict）保持不变。"""
+    template, _ = wf.load_template("qwen_edit")
+    out = wf.apply_file_overrides(
+        template, {"unet_name": "qwen-image-2.1-UC-int8_convrot.safetensors"}
+    )
+    assert out["1"]["inputs"]["unet_name"] == "qwen-image-2.1-UC-int8_convrot.safetensors"
+    # 别的加载器不受影响
+    assert out["2"]["inputs"]["clip_name"] == "qwen3vl_8b_w4a8.safetensors"
+    # 原模板没被改（内部 deepcopy）
+    assert template["1"]["inputs"]["unet_name"] == "qwen_image_2.1_int8_convrot.safetensors"
+
+
+def test_apply_file_overrides_rejects_unknown_or_absent_field():
+    """字段名写错 / 模板里没有该加载器时必须抛错 —— 静默不生效会让用户以为切了权重。"""
+    template, _ = wf.load_template("qwen_edit")
+    with pytest.raises(KeyError):
+        wf.apply_file_overrides(template, {"nope_name": "x.safetensors"})
+    # 字段合法但模板里没有 CheckpointLoaderSimple
+    with pytest.raises(KeyError):
+        wf.apply_file_overrides(template, {"ckpt_name": "x.safetensors"})
+
+
+def test_uncensored_spec_uses_its_own_weights():
+    """未审查档位必须真的指向 UC 权重，否则「切了但没换」。"""
+    from app.services.comfyui.probe import MODEL_SPECS
+
+    uc = MODEL_SPECS["qwen_2_1_uc_i2i"]
+    assert uc["uncensored"] is True and uc["notice"]
+    base = MODEL_SPECS["qwen_2_1_i2i"]
+    assert not base.get("uncensored")
+    # 两档共用同一模板，只有权重文件不同
+    assert uc["workflow"] == base["workflow"] == "qwen_edit"
+    template, _ = wf.load_template(uc["workflow"])
+    assert "UC" in wf.apply_file_overrides(template, uc["files"])["1"]["inputs"]["unet_name"]
+    # 覆盖前的模板仍是标准权重（默认档位不受影响）
+    assert template["1"]["inputs"]["unet_name"] == "qwen_image_2.1_int8_convrot.safetensors"
+
+
 # ── i2i：编辑模板与参考图上传 ──
 
 

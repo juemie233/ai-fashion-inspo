@@ -47,6 +47,9 @@ async def generate_status() -> dict:
             "label": spec["label"],
             "kind": spec["kind"],
             "defaults": spec["defaults"],
+            # 未审查档位必须在选择前就能看出来（前端据此打标 + 弹风险提示）
+            "uncensored": bool(spec.get("uncensored")),
+            "notice": spec.get("notice"),
         }
         for key, spec in probe_service.MODEL_SPECS.items()
     }
@@ -65,6 +68,8 @@ async def generate_models() -> dict:
                 "defaults": spec["defaults"],
                 "max_pixels": spec.get("max_pixels"),
                 "vram_gib": spec["vram_gib"],
+                "uncensored": bool(spec.get("uncensored")),
+                "notice": spec.get("notice"),
             }
             for key, spec in probe_service.MODEL_SPECS.items()
         ],

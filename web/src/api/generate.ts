@@ -5,6 +5,17 @@
 
 import apiClient from '@/api/client'
 
+/** 单个出图档位的元信息（来自后端 MODEL_SPECS，前端不写死档位名与文案）。 */
+export interface GenerateModelMeta {
+  label: string
+  kind: string
+  defaults: Record<string, number | string>
+  /** 无内容安全过滤的权重：前端据此打「未审查」标并提示风险 */
+  uncensored?: boolean
+  /** 风险说明文案（随档位走后端，避免前端各写一份） */
+  notice?: string | null
+}
+
 /** 就绪状态（ComfyUI 是否可用、模型是否就位、Ollama 占了多少显存）。 */
 export interface GenerateStatus {
   ready: boolean
@@ -17,10 +28,7 @@ export interface GenerateStatus {
   }
   models: Record<string, string>
   ollama_resident: { name: string; size_gib: number }[]
-  models_meta?: Record<
-    string,
-    { label: string; kind: string; defaults: Record<string, number | string> }
-  >
+  models_meta?: Record<string, GenerateModelMeta>
 }
 
 /** 一次出图批次。 */
