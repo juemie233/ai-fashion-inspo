@@ -9,6 +9,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
+import CollectionSidebar from '@/components/collection/CollectionSidebar.vue'
 import SmartQueryEditorModal from '@/components/collection/SmartQueryEditorModal.vue'
 import {
   fetchCollectionInspirations,
@@ -50,35 +51,23 @@ const parentName = computed(() => {
   if (parentId == null) return null
   return collections.value.find((c) => c.id === parentId)?.name ?? null
 })
+/** 按父级分组：parent_id → 直属二级收藏夹（侧栏与内容区共用同一份，避免两处各写一遍过滤） */
+const childrenByParent = computed(() => {
+  const map = new Map<number, CollectionOut[]>()
+  for (const c of collections.value) {
+    if (c.parent_id === null) continue
+    const list = map.get(c.parent_id)
+    if (list) list.push(c)
+    else map.set(c.parent_id, [c])
+  }
+  return map
+})
+
 /** 当前合集的二级收藏夹（非空 = 这是分类节点：内容区展示收藏夹卡片） */
 const currentChildren = computed(() => {
   const id = current.value?.id
-  return id == null ? [] : childrenOf(id)
+  return id == null ? [] : (childrenByParent.value.get(id) ?? [])
 })
-
-// 两级结构：一级（parent_id 为空）渲染成组，二级跟在各一级下面。
-// 后端已保证「一级后面紧跟它的二级」的顺序，这里只做分组。
-const rootCollections = computed(() => collections.value.filter((c) => c.parent_id === null))
-const childrenOf = (id: number) => collections.value.filter((c) => c.parent_id === id)
-/** 折叠的一级节点（默认展开：抖音收藏夹要一眼看得见） */
-const collapsed = ref<Set<number>>(new Set())
-
-function toggleCollapse(id: number) {
-  const next = new Set(collapsed.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  collapsed.value = next
-}
-
-/** 列表项副标题：一级显示子夹数（+ 素材数），二级显示素材数 */
-function itemMeta(c: CollectionOut): string {
-  if (c.kind === 'smart') return '智能合集'
-  const own = c.item_count ?? 0
-  const children = childrenOf(c.id).length
-  // 分类节点自己没有成员时只报收藏夹数：写「0 个素材」会被读成「这个夹是空的」
-  if (children > 0) return own > 0 ? `${children} 个收藏夹 · ${own} 个素材` : `${children} 个收藏夹`
-  return `${own} 个素材`
-}
 
 async function loadCollections() {
   listLoading.value = true
@@ -213,71 +202,19 @@ onMounted(() => {
 
 <template>
   <div class="collections-page">
-    <!-- 左侧合集列表 -->
-    <aside class="collection-list">
-      <div class="list-header">
-        <span>合集（{{ collections.length }}）</span>
-        <div style="display: flex; gap: 4px">
-          <a-button size="mini" type="primary" @click="openCreateManual">＋ 手动</a-button>
-          <a-button size="mini" @click="openCreateSmartWithId">⚡ 智能</a-button>
-        </div>
-      </div>
-
-      <a-spin :loading="listLoading" style="display: block">
-        <!-- 两级：每个一级渲染成组，二级紧随其下（缩进 + 折角） -->
-        <template v-for="c in rootCollections" :key="c.id">
-          <div
-            class="collection-item"
-            :class="{ active: c.id === currentId, 'drag-over': dragOverId === c.id }"
-            draggable="true"
-            @dragstart="onCollectionDragStart(c.id)"
-            @dragover.prevent="dragOverId = c.id"
-            @dragleave="dragOverId = null"
-            @drop.prevent="onCollectionDrop(c.id)"
-            @click="currentId = c.id"
-          >
-            <span
-              v-if="c.child_count > 0"
-              class="collapse-toggle"
-              :title="collapsed.has(c.id) ? '展开二级收藏夹' : '收起二级收藏夹'"
-              @click.stop="toggleCollapse(c.id)"
-            >
-              {{ collapsed.has(c.id) ? '▸' : '▾' }}
-            </span>
-            <span v-else class="collapse-toggle placeholder"></span>
-            <span class="collection-kind">{{ c.kind === 'smart' ? '⚡' : '📁' }}</span>
-            <div class="collection-info">
-              <div class="collection-name" :title="c.name">{{ c.name }}</div>
-              <div class="collection-meta">{{ itemMeta(c) }}</div>
-            </div>
-          </div>
-
-          <template v-if="!collapsed.has(c.id)">
-            <div
-              v-for="child in childrenOf(c.id)"
-              :key="child.id"
-              class="collection-item child"
-              :class="{ active: child.id === currentId }"
-              @click="currentId = child.id"
-            >
-              <span class="collection-kind">└</span>
-              <div class="collection-info">
-                <div class="collection-name" :title="child.name">{{ child.name }}</div>
-                <div class="collection-meta">{{ itemMeta(child) }}</div>
-              </div>
-            </div>
-            <div v-if="c.kind !== 'smart'" class="child-create" @click="openCreateChild(c.id)">
-              ＋ 在此新建二级收藏夹
-            </div>
-          </template>
-        </template>
-        <a-empty
-          v-if="collections.length === 0 && !listLoading"
-          description="暂无合集，点击上方按钮新建"
-        />
-      </a-spin>
-      <div class="drag-hint">拖动一级合集调整顺序；二级收藏夹由抖音同步维护</div>
-    </aside>
+    <!-- 左侧合集列表（两级树 + 拖拽排序 + 新建入口） -->
+    <CollectionSidebar
+      v-model:current-id="currentId"
+      v-model:drag-over-id="dragOverId"
+      :collections="collections"
+      :children-by-parent="childrenByParent"
+      :loading="listLoading"
+      @drag-start="onCollectionDragStart"
+      @drop="onCollectionDrop"
+      @create-manual="openCreateManual"
+      @create-smart="openCreateSmartWithId"
+      @create-child="openCreateChild"
+    />
 
     <!-- 右侧内容区 -->
     <section class="collection-content">
@@ -510,107 +447,6 @@ onMounted(() => {
   max-width: 1800px;
   margin: 0 auto;
   align-items: flex-start;
-}
-
-/* 左侧列表 */
-.collection-list {
-  width: 260px;
-  min-width: 260px;
-  min-height: 420px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 10px;
-  position: sticky;
-  top: 16px;
-  display: flex;
-  flex-direction: column;
-}
-.list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: nowrap;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-.collection-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  margin-bottom: 2px;
-}
-.collection-item:hover {
-  background: #f5f7fa;
-}
-.collection-item.active {
-  background: #eef4ff;
-  border-color: #94bfff;
-}
-.collection-item.drag-over {
-  border-top: 2px solid #2080f0;
-}
-/* 二级收藏夹：缩进 + 更淡的字色，视觉上从属于上面那个一级 */
-.collection-item.child {
-  padding-left: 26px;
-}
-.collection-item.child .collection-name {
-  font-size: 12.5px;
-  color: #4e5969;
-}
-.collapse-toggle {
-  width: 12px;
-  font-size: 10px;
-  color: #86909c;
-  flex: none;
-  text-align: center;
-}
-.collapse-toggle.placeholder {
-  visibility: hidden;
-}
-.child-create {
-  padding: 4px 10px 4px 26px;
-  font-size: 11px;
-  color: #86909c;
-  cursor: pointer;
-  border-radius: 6px;
-}
-.child-create:hover {
-  color: #2080f0;
-  background: #f5f7fa;
-}
-.collection-kind {
-  font-size: 14px;
-}
-.collection-info {
-  flex: 1;
-  min-width: 0;
-}
-.collection-name {
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.collection-meta {
-  font-size: 11px;
-  color: #86909c;
-}
-.drag-hint {
-  font-size: 11px;
-  color: #c9cdd4;
-  text-align: center;
-  padding-top: 8px;
-}
-
-/* 列表区撑满剩余高度，让「拖动调整」提示稳定贴底 */
-.collection-list :deep(.arco-spin) {
-  flex: 1;
 }
 
 /* 右侧内容 */
