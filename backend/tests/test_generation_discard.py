@@ -62,8 +62,8 @@ def _make_candidates(batch_dir: str, count: int = 2) -> pathlib.Path:
     return folder
 
 
-def test_discard_removes_candidates_and_marks_cancelled(client):
-    """正常丢弃：候选目录被删、返回清理数量、状态变 cancelled。"""
+def test_discard_removes_candidates_and_deletes_row(client):
+    """正常删除：候选目录被删、返回清理数量、批次记录从库里消失。"""
     run_id = _seed_run("generated/901")
     folder = _make_candidates("generated/901", count=3)
     assert folder.exists()
@@ -72,12 +72,16 @@ def test_discard_removes_candidates_and_marks_cancelled(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["removed_files"] == 3, body
-    assert body["status"] == "cancelled", body
+    assert body["status"] == "deleted", body
     assert not folder.exists(), "批次目录应被删除"
 
-    status, still_id = _read_run(run_id)
-    assert still_id == run_id
-    assert status == "cancelled"
+    # 记录必须真的被删掉（这是「点删除却没删」那个 bug 的回归点）
+    try:
+        _read_run(run_id)
+    except LookupError:
+        pass
+    else:
+        raise AssertionError("批次记录应已从 generation_runs 删除")
 
 
 def test_discard_refuses_running_run(client):
@@ -99,16 +103,14 @@ def test_discard_unknown_run_returns_404(client):
     assert r.status_code == 404, r.text
 
 
-def test_discard_keeps_the_row_as_cancelled(client):
-    """现状：丢弃只标记不删行（生成历史里仍留一条 cancelled 记录）。
-
-    这条测试是**刻意**锁住当前行为的：模型注释描述的却是「清空历史」语义（删行 + SET NULL）。
-    两者不一致，若要改成真删除，请同时改这条测试与前端「删除」文案。
-    """
+def test_discard_removes_the_row_entirely(client):
+    """删除后记录不再存在（历史列表里不会再出现一条 cancelled）。"""
     run_id = _seed_run("generated/903")
     _make_candidates("generated/903", count=1)
 
     assert client.delete(f"/api/generate/runs/{run_id}").status_code == 200
-    status, still_id = _read_run(run_id)
-    assert still_id == run_id, "当前实现不删行"
-    assert status == "cancelled"
+    try:
+        _read_run(run_id)
+    except LookupError:
+        return
+    raise AssertionError("批次记录应已删除，但库里仍在")

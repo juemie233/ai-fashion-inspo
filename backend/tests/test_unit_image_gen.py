@@ -266,7 +266,7 @@ async def test_list_candidates_marks_imported(client):
 
 
 async def test_discard_run_removes_candidates_only(client):
-    """丢弃只删候选文件，不动已入库素材。"""
+    """删除只清候选文件：已入库素材保留，但与本批次解绑（generation_run_id 置 NULL）。"""
     async with async_session() as db:
         out = await generation_service.create_run(db, {"prompt": "丢弃"})
         run_id = out["run_id"]
@@ -285,11 +285,9 @@ async def test_discard_run_removes_candidates_only(client):
         result = await generation_service.discard_run(db, run_id)
         assert result["removed_files"] == 1
         assert not folder.exists()
-        # 已入库素材仍在
+        # 已入库素材仍在（只是与本批次解绑：generation_run_id 被置 NULL）
         remaining = (
-            await db.execute(
-                select(Inspiration.id).where(Inspiration.generation_run_id == run_id)
-            )
+            await db.execute(select(Inspiration.id).where(Inspiration.id.is_not(None)))
         ).scalars().all()
         assert len(remaining) == 1
 

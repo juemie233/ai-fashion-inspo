@@ -428,7 +428,12 @@ async def confirm_import(
 
 
 async def discard_run(db: AsyncSession, run_id: int) -> dict:
-    """丢弃批次：删除候选目录（**不删已入库素材**），并标记批次为 cancelled。"""
+    """删除批次：清掉候选目录并**删除记录**（不删已入库素材）。
+
+    为什么删行而不是标记 cancelled：用户点「删除」的预期就是它从生成历史里消失。
+    已入库的素材不受影响 —— ``inspirations.generation_run_id`` 是 ``ON DELETE SET NULL``，
+    删行后它们变成独立素材（与 ``models/generation.py`` 模块注释描述一致）。
+    """
     run = await db.get(GenerationRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
@@ -455,9 +460,20 @@ async def discard_run(db: AsyncSession, run_id: int) -> dict:
         if str(folder.resolve()).startswith(str(settings.storage_root.resolve())):
             await asyncio.to_thread(shutil.rmtree, folder, True)
 
-    run.status = "cancelled"
+    # 删行而不是置 cancelled：置状态的话历史里仍留着一条记录，用户会认为「没删掉」。
+    # 先把引用本批次的素材显式解绑（generation_run_id -> NULL），**不依赖** FK 的
+    # ON DELETE SET NULL：本库 inspirations 上曾出现重复外键，SQLite 按最后一条生效，
+    # 靠反射赌行为不可靠；显式解绑在哪种建表结果下都正确，且素材照样保活。
+    from sqlalchemy import update
+
+    await db.execute(
+        update(Inspiration)
+        .where(Inspiration.generation_run_id == run.id)
+        .values(generation_run_id=None)
+    )
+    await db.delete(run)
     await db.commit()
-    return {"removed_files": removed, "status": run.status}
+    return {"removed_files": removed, "status": "deleted"}
 
 
 async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
