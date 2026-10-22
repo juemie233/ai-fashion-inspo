@@ -362,6 +362,10 @@ async def confirm_import(
         raise HTTPException(status_code=404, detail="出图批次不存在")
     if not filenames:
         raise HTTPException(status_code=400, detail="请至少选择一张图")
+    # 已丢弃的批次：候选目录已被删，逐张都会走「文件不存在」skipped 却不报错 ——
+    # 用户以为入库成功。这里提前拦成 400（running/queued 的半批入库是既有用法，不在此改变）。
+    if run.status == "cancelled":
+        raise HTTPException(status_code=400, detail="本批已丢弃，候选图已清理，无法入库")
 
     if tag_ids:
         # 无效标签 id 会在 flush 时撞外键抛 IntegrityError（500），提前拦成 400
@@ -408,7 +412,13 @@ async def confirm_import(
             await _rollback_created(db, created_files)
             raise
 
-    await db.commit()
+    # commit 自身也可能失败（约束冲突/磁盘/锁超时）：此时文件已复制、DB 行随回滚消失，
+    # 必须同样走 _rollback_created，否则磁盘上留下找不到的孤儿图（循环内异常已单独处理）。
+    try:
+        await db.commit()
+    except Exception:
+        await _rollback_created(db, created_files)
+        raise
     return {
         "imported": len(imported_ids),
         "skipped": len(skipped),
