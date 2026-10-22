@@ -9,6 +9,8 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './e2e',
+  // 开跑前确认后端在跑：否则失败症状是「一堆接口超时/表格空」，容易误判成选择器问题
+  globalSetup: './e2e/global-setup.ts',
   timeout: 30_000,
   retries: 0,
   // 本地 dev server 单实例：并行时各页面首屏（Vite 按路由懒编译 + 统计接口）

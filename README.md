@@ -1383,7 +1383,7 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 
 ## 自动化测试
 
-核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store）。
+核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store / 视图交互）+ Playwright e2e 冒烟（真实浏览器跑页面，需前后端都起着）。
 
 **一键运行全部门禁**（11 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
 
@@ -1392,7 +1392,7 @@ bash scripts/test.sh          # 常规
 bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
-### 后端（pytest，1807 用例）
+### 后端（pytest，2255 用例）
 
 ```bash
 # 首次：安装测试依赖
@@ -1419,7 +1419,7 @@ pytest
 
 > **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **78.65%**；门禁棘轮 `--cov-fail-under=78`（`precision=2`））。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
 
-### 前端（vitest，478 用例 / 60 个文件）
+### 前端（vitest，560 用例 / 69 个文件）
 
 ```bash
 cd web
@@ -1427,6 +1427,28 @@ npm test
 ```
 
 覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` / `ipStatsChart`（IP 属地条形图配置：**不隐藏任何一档标签**、高度随条目数增长）纯函数、`taskPresentation`（任务结果汇总 + **运行中阶段文案**：f2 下载/入库/登记博主/排队/暂停 + 「我的喜欢」实时下载计数，非 f2 任务不编造阶段；**任务行按钮矩阵** `taskRowActions`（暂停/恢复/取消/删除与后端接收矩阵同口径，含「可取消但不可暂停类型不给取消」）+ 重负载互斥组的清单内容锁定与排队说明）、`tagHistoryDiff`（操作历史 before/after 差异与值格式化）、`useSplitResize` 拖拽 / `useBatchSelection` 批量多选 composable、`useF2Import`（f2 状态解析 / 自动获取开关 / 一键获取与「我的喜欢」参数透传）、`F2LikeCard`（「我的喜欢」卡片：链接保存 / 实时下载进度文案 / 一键拉取）、`useF2Results` + `F2ResultsPanel`（批次结果分类过滤 / 移入垃圾桶与恢复）、`useF2TaskHistory`、`useScraperRoi`（采集 ROI：按窗口天数请求 / 切窗口重拉 / 空数据判定 / 失败置空 / 口径说明透传，以及 `formatRate`、`formatCount` 对「没有这个口径」与「样本为 0」都显示「—」）、`PersonAvatarPicker`（头像选择器：素材列表加载 / 上传前校验 / 结果提示）、`PersonTopList`（热门排行渲染）、`persons`（博主/模特双 store 实例 + 请求序号防乱序）/ `inspirations` / `tags` store（mock API）、`taskLabel` 任务类型/图标映射断言、`faceMedia`（人脸库扫描媒体地址：`media_type` 缺失时按后缀判视频，**悬停大图绝不返回 mp4**）、`FaceUnmatchedTab`（悬停浮层：停留后弹出、移出消失、大图取原图）、`useFaceServiceStatus`（未知态不误伤 / 探测到不可达带回中文原因 / 请求本身失败不锁死人脸功能 / 并发复用同一次探测）、`f2Authors`（博主清单表头排序：空值与字段缺失当 0 且不抛错、两方向互为相反数）、`f2CollectSelection`（收藏夹选择只保留最近一次、脏数据当无记录、恢复时只勾仍存在的夹并报告失效数量）、`AdminNearDuplicates`（逐组对比：确认删除才 emit、中途退出也提交已做的决定、可翻页改主意、全部跳过不提交空删除、连点保护）。
+
+### 端到端冒烟（Playwright，11 条）
+
+真实浏览器跑 6 个核心页面（首页 / 任务管理 / 采集管理 / 标签管理 / 质量审核 / 操作审计），
+验证的是「前端 + 后端 + 真实数据」三者联通——单测（vitest）只到「组件挂载 + mock API」为止。
+
+```bash
+# 首次：安装浏览器（约 150 MB）
+cd web && npx playwright install chromium
+
+# 前置：后端必须在跑（Playwright 只会自动起前端 dev server，不会起后端）
+#   cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 18888 --reload
+cd web && npm run test:e2e
+```
+
+- 会自动复用已在跑的 dev server（17777），没有则按 `playwright.config.ts` 的 `webServer` 拉起；
+- **开跑前有后端预检**（`web/e2e/global-setup.ts`）：`/api/health` 不通就直接报错并给出启动命令，
+  不会让你对着一堆「表格空 / 接口超时」的失败去猜选择器；
+- 后端地址取 `web/.env` 的 `VITE_BACKEND_URL`，也可用 `E2E_API_BASE=<地址>` 临时覆盖；
+- **串行执行**（`workers: 1`）：并行时各页面首屏（Vite 按路由懒编译 + 统计接口）会互相抢，
+  实测同一用例单跑必过、并行偶发超时；11 条约 50 秒；
+- 失败产物在 `web/test-results/`（`npx playwright show-trace <trace.zip>` 可回放）。
 
 ### 约定
 

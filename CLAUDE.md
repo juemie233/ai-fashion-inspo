@@ -210,7 +210,8 @@ fashion-inspo/
 - 前端：`cd web && npm test`（vitest：纯函数 / composable / store）
 - 前端 lint：`cd web && npm run lint`（ESLint flat config + Prettier 协同；要求 0 error，`no-explicit-any` 等告警渐进清理）
 - 前端格式：`npm run format:check` 只检查**本次改动**的前端文件（`scripts/check-web-format.mjs`；全库检查会因 45 个历史未格式化文件永远为红）、`npm run format <文件>` 增量格式化；**禁止**全库 `prettier --write`（会产生数千行无关 diff 污染 git 历史），只格式化本次改动的文件。提交时 lint-staged 已对暂存的前端文件自动 `prettier --write`
-- 一键门禁：`bash scripts/test.sh`（后端 pytest/ruff/迁移链自检/库漂移 + 前端 vue-tsc/vitest/eslint/死代码基线/格式，共 9 项，与 `.github/workflows/ci.yml` 对齐）
+- 一键门禁：`bash scripts/test.sh`（后端 pytest+覆盖率棘轮/ruff/迁移链自检/库漂移 + 前端 vue-tsc/vitest/eslint/死代码基线/格式，共 **11 项**，与 `.github/workflows/ci.yml` 对齐）
+- 端到端冒烟：`cd web && npm run test:e2e`（Playwright，11 条、约 50 秒；**需后端在跑**——Playwright 只自动起前端 dev server，开跑前 `web/e2e/global-setup.ts` 会预检 `/api/health` 并给出启动命令；串行执行，产物在 `web/test-results/`）
 - 测试依赖：`pip install -r backend/requirements-dev.txt`（后端）；vitest 等已含在 `web/package.json` devDependencies
 - **约定**：修改核心链路（软删除/垃圾桶/内容去重/破坏性接口认证/人物模块）或新增破坏性接口时，须在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
 - 误将测试文件写入真实存储目录时，用 `python scripts/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
