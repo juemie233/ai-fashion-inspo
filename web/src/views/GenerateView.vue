@@ -27,6 +27,8 @@ async function removeRun(id: number) {
   try {
     const r = await discardRun(id)
     Message.success(`已删除（清理 ${r.removed_files ?? 0} 个文件）`)
+    // 删掉的正是当前打开的批次：清空详情区，否则用户还能对已删除的批次点「确认入库」
+    if (run.value?.id === id) reset()
     await loadHistory()
   } catch (e) {
     Message.error(getApiErrorMessage(e, '删除失败'))
@@ -45,6 +47,7 @@ const {
   active,
   stageText,
   lastSeed,
+  reset,
   history,
   historyLoading,
   loadStatus,

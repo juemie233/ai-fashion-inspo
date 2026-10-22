@@ -42,6 +42,14 @@ export function useImageGen() {
   const detail = ref<GenerationRunDetail | null>(null)
   const lastSeed = ref<number | null>(null)
   const selected = ref<Set<string>>(new Set())
+
+  /** 清空当前批次。删除批次后必须调用：`run`/`candidates` 都是 `detail` 的 computed，
+   * 不清就会让详情区停在一个已不存在的批次上，用户还能点「确认入库」「同参重跑」。 */
+  function reset() {
+    detail.value = null
+    selected.value = new Set()
+    lastSeed.value = null
+  }
   /** 生成历史（最近 20 批），用于「同参重跑」入口 */
   const history = ref<GenerationRunBrief[]>([])
   const historyLoading = ref(false)
@@ -266,6 +274,7 @@ export function useImageGen() {
   }
 
   return {
+    reset,
     // 状态
     status,
     statusLoading,
