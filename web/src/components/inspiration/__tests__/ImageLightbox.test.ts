@@ -8,22 +8,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
-import { defineComponent, h } from 'vue'
 import ImageLightbox from '../ImageLightbox.vue'
-
-/** 只保留默认插槽的 Arco 桩：灯箱里用到 a-spin / a-button */
-const spinStub = defineComponent({
-  name: 'ASpin',
-  render() {
-    return h('div', this.$slots.default?.())
-  },
-})
-const buttonStub = defineComponent({
-  name: 'AButton',
-  render() {
-    return h('button', this.$slots.default?.())
-  },
-})
 
 let wrapper: VueWrapper | null = null
 
@@ -31,7 +16,8 @@ function mountBox(props: Record<string, unknown>): void {
   wrapper = mount(ImageLightbox, {
     props: { show: true, ...props },
     attachTo: document.body,
-    global: { stubs: { 'a-spin': spinStub, 'a-button': buttonStub } },
+    // 布尔桩 + 渲染默认插槽：灯箱的图片与按钮都在 a-spin / a-button 插槽内
+    global: { renderStubDefaultSlot: true, stubs: { 'a-spin': true, 'a-button': true } },
   })
 }
 
