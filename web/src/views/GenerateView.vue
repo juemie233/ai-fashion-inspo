@@ -14,9 +14,26 @@ import { Message } from '@arco-design/web-vue'
 import { useImageGen } from '@/composables/useImageGen'
 import { formatDateTime } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import { discardRun } from '@/api/generate'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 
 const route = useRoute()
+/** 删除某条生成记录（连同批次目录里的候选图）；已入库的素材不受影响 */
+const deletingId = ref<number | null>(null)
+
+async function removeRun(id: number) {
+  deletingId.value = id
+  try {
+    const r = await discardRun(id)
+    Message.success(`已删除（清理 ${r.removed_files ?? 0} 个文件）`)
+    await loadHistory()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '删除失败'))
+  } finally {
+    deletingId.value = null
+  }
+}
 
 const {
   status,
@@ -411,11 +428,27 @@ onUnmounted(stopPoll)
               <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="操作" :width="150">
+          <a-table-column title="操作" :width="210">
             <template #cell="{ record }">
               <a-button size="mini" :loading="submitting" @click="retry(record.id)">
                 同参重跑
               </a-button>
+              <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
+              <a-popconfirm
+                v-if="['done', 'failed', 'cancelled'].includes(record.status)"
+                content="删除这条生成记录及其候选图？（只清理本批次的候选文件）"
+                ok-text="删除"
+                @ok="removeRun(record.id)"
+              >
+                <a-button
+                  size="mini"
+                  status="danger"
+                  style="margin-left: 6px"
+                  :loading="deletingId === record.id"
+                >
+                  删除
+                </a-button>
+              </a-popconfirm>
             </template>
           </a-table-column>
         </template>
