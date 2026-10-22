@@ -492,7 +492,9 @@ const statColumns = [
     width: 150,
     render: ({ record }: { record: unknown }) => {
       const r = record as ModelStat
-      return r.last_used ? formatDate(r.last_used) : '-'
+      // 时间列必须单行（CLAUDE.md 规则 7）：统一走 renderTimeCell 包 nowrap，
+      // 否则 Arco 的 word-break: break-all 会在窄列里把日期断成两行。
+      return r.last_used ? renderTimeCell(formatDate(r.last_used)) : '-'
     },
   },
 ]
