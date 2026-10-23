@@ -18,15 +18,6 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
-          name="settings"
-          options={{
-            headerShown: true,
-            title: '设置',
-            headerBackTitle: '返回',
-            presentation: 'card',
-          }}
-        />
-        <Stack.Screen
           name="detail/[id]"
           options={{
             headerShown: true,

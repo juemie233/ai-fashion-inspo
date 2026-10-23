@@ -63,6 +63,17 @@ export default function TabLayout() {
           ),
         }}
       />
+      {/* 设置做成 Tab 而不是只放在首页 header：真机上齿轮太小且只在「灵感库」页可见，
+          用户找不到改后端地址的入口（2026-10-23 实测反馈） */}
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: '设置',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings-outline" size={size} color={color} />
+          ),
+        }}
+      />
     </Tabs>
   )
 }

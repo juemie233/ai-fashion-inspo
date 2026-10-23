@@ -22,8 +22,8 @@ import {
   loadApiBaseUrl,
   saveApiBaseUrl,
   testApiConnection,
-} from '../services/api'
-import { useInspirationStore } from '../hooks/useInspirations'
+} from '../../services/api'
+import { useInspirationStore } from '../../hooks/useInspirations'
 
 export default function SettingsScreen() {
   const [input, setInput] = useState('')
