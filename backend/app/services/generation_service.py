@@ -29,6 +29,7 @@ from app.models.inspiration import Inspiration
 from app.models.tag import Tag
 from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
+from app.services.comfyui.models import MAX_COUNT, MAX_PIXELS, MAX_STEPS, MIN_STEPS
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
@@ -37,16 +38,10 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-"""参数硬上限（服务端校验，不信任前端）。
-
-依据是 16 GB 显存的实测：Z-Image int8 在 2560×1440 峰值已达 15.2 GiB，
-再往上必然 OOM；张数限制 4 是为了别让一个任务长时间占着 GPU 互斥组。
+"""参数硬上限（服务端校验，不信任前端）见 ``app.services.comfyui.models``：
+那里是纯数据模块，命令行独立出图（``scripts/generate_image.py``）也读同一份，
+避免「网页能设到 X、命令行只能到 Y」的漂移。
 """
-
-MAX_PIXELS = 1328 * 1328
-MAX_COUNT = 4
-MAX_STEPS = 30
-MIN_STEPS = 1
 
 """候选图文件名形态（与执行器保持一致）。"""
 CANDIDATE_SUFFIX = ".png"

@@ -15,6 +15,7 @@ import httpx
 from app.config import settings
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.client import ComfyUIClient, ComfyUIError
+from app.services.comfyui.models import MODEL_SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -43,78 +44,11 @@ async def _object_info_cached(client: ComfyUIClient) -> dict:
     _object_info_cache[key] = (now, info)
     return info
 
-"""模型档位定义。
+"""档位定义在 :mod:`app.services.comfyui.models`（纯数据，命令行工具共用同一份）。
 
-- ``workflow``：模板名（对应 ``workflows/<name>.json``）
-- ``vram_gib``：出图所需显存（**取实测/保守峰值**，不动态算 —— 算不准还不如早判）
-- ``defaults``：前端填默认值用
-- ``files``：覆盖模板里的模型文件名（同一套图结构换权重时用，见
-  :func:`app.services.comfyui.workflow.apply_file_overrides`）
-- ``uncensored``：无内容安全过滤的权重。前端据此打「未审查」标记并给出警示，
-  **不是**装饰字段 —— 换掉它等于换掉一道风险边界，必须能一眼看出来
-- ``notice``：交给前端展示的风险说明（文案随模型走，不写死在前端）
+这里再导出一次，保留 ``from app.services.comfyui.probe import MODEL_SPECS`` 的旧调用点
+（``generation_service`` / ``image_gen`` / 测试）不变。
 """
-
-MODEL_SPECS: dict[str, dict] = {
-    "z_image_int8": {
-        "label": "Z-Image-Turbo int8（快，1024² 约 6 秒）",
-        "workflow": "z_image_t2i",
-        "kind": "t2i",
-        "vram_gib": 15.0,
-        "defaults": {
-            "width": 1024,
-            "height": 1024,
-            "steps": 8,
-            "cfg": 1.0,
-            "sampler": "res_multistep",
-            "scheduler": "simple",
-            "shift": 3.0,
-        },
-        "max_pixels": 1328 * 1328,
-    },
-    "qwen_2_1_i2i": {
-        "label": "Qwen-Image 2.1（参考图改款，1024² 约 20~45 秒）",
-        "workflow": "qwen_edit",
-        "kind": "i2i",
-        "vram_gib": 14.5,
-        "max_refs": 10,
-        "defaults": {
-            "width": 1024,
-            "height": 1024,
-            "steps": 25,
-            "cfg": 1.0,
-            "sampler": "euler",
-            "scheduler": "simple",
-            "shift": 3.0,
-        },
-        # Qwen-Image 2.1 在 16 GB 上 1024² 已是上限（权重 13.6 GiB + 激活）
-        "max_pixels": 1024 * 1024,
-    },
-    "qwen_2_1_uc_i2i": {
-        "label": "Qwen-Image 2.1 未审查版（参考图改款，1024² 约 20~45 秒）",
-        # 与标准版共用同一份模板：只有 UNET 权重不同，其余节点结构完全一致
-        "workflow": "qwen_edit",
-        "kind": "i2i",
-        "vram_gib": 14.5,
-        "max_refs": 10,
-        "uncensored": True,
-        "notice": (
-            "该档位使用无内容审查的权重：没有安全过滤，提示词不会被拦截、出图不会被"
-            "打码或模糊。生成结果只取决于你输入的描述，请自行把握尺度。"
-        ),
-        "files": {"unet_name": "qwen-image-2.1-UC-int8_convrot.safetensors"},
-        "defaults": {
-            "width": 1024,
-            "height": 1024,
-            "steps": 25,
-            "cfg": 1.0,
-            "sampler": "euler",
-            "scheduler": "simple",
-            "shift": 3.0,
-        },
-        "max_pixels": 1024 * 1024,
-    },
-}
 
 
 @dataclass

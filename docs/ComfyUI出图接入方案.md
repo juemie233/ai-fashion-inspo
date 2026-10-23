@@ -767,3 +767,39 @@ docs/ComfyUI出图接入方案.md                          本文
 
 请在重启后端与 worker 后自测一次：`/generate` → 选「文生图」出 2 张 → 勾 1 张确认入库 →
 素材库看到来源「AI 生成」→ 再切「参考图改款」用「选择图片」挑 1 张 → 出图 → 入库。
+
+## 16. 命令行独立出图（不启动本项目前后端）
+
+**动机**：网页那套流程为「素材生产」设计（参数入库 → 任务队列 → 候选区 → 确认入库）。
+只想试个 prompt 看效果时，为它启动 FastAPI + worker + Vue 是纯开销。所以提供了一个只依赖
+ComfyUI 的命令行工具，**复用同一份模板与档位定义**，不碰数据库：
+
+```bash
+# 文生图（默认档位 z_image_int8，1024² 约 6 秒）
+python backend/scripts/generate_image.py "米色针织开衫配白色阔腿裤，极简工作室背景，柔和自然光"
+
+# 多张 + 竖版尺寸
+python backend/scripts/generate_image.py --count 4 --size 768x1344 "白色百褶短裙配黑色乐福鞋"
+
+# 图生图（参考图改款，必须给 --ref）
+python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jpg "同一个人，同一场景，光脚不穿鞋"
+
+# 只体检：ComfyUI 是否在跑 / 节点与权重是否就位 / 显存够不够
+python backend/scripts/generate_image.py --check
+
+# 列出档位
+python backend/scripts/generate_image.py --list-models
+```
+
+**设计要点**：
+
+| 点 | 做法 | 原因 |
+| --- | --- | --- |
+| 模板与档位单一来源 | `app/services/comfyui/workflows/*.json` + `app/services/comfyui/models.py`（纯数据，无 httpx/pydantic 依赖） | 避免「网页一套参数、命令行另一套」的漂移；`probe.py` / `generation_service.py` 仍从 models.py 取，旧调用点不变 |
+| 参数上下限 | 与后端 `_validate_params` 同一套常量（尺寸 ≤ 档位 `max_pixels`、张数 1~4、步数 1~30、prompt ≤ 2000 字） | 命令行不该能设出后端会拒绝（或必 OOM）的值 |
+| 输出位置 | 默认 `backend/storage/generated/cli/`（gitignore），`--out` 可改 | 与素材库候选区同一棵树，不往仓库里散落产物 |
+| 错误话术 | 复用 `ComfyUIError.kind` 分类，翻译成「照着做」的一句话（未启动 / 显存不足 / 超时 / 工作流被拒） | 与网页同一套错误语义，不另造一套 |
+| 测试 | `backend/tests/test_unit_generate_cli.py`：只测「参数 → 工作流」这一层（尺寸注入节点、i2i 扁平 `images.image_N`、未审查档位覆盖 UNET、越界被拒） | 网络部分已由 `client` 的既有用例覆盖；命令行最易静默跑偏的正是拼装口径 |
+
+**不做什么**（刻意的边界）：不写 `generation_runs`、不产出可入库的候选图、不做队列/取消/批量确认。
+要进素材库仍然走网页（或后续单独提需求）。
