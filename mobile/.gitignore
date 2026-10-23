@@ -1,0 +1,4 @@
+
+# prebuild 生成的原生工程（由 npx expo prebuild 重建，不入库）
+/android
+/ios

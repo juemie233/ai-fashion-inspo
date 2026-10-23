@@ -18,17 +18,39 @@
 
 **验收标准：** 手机端能分页浏览搜索结果、编辑标签与删除素材、多选上传，并看到任务进度与失败原因。
 
-### 【任务】移动端真机可跑路线：SDK 52 落后 6 个大版本（P1，卡住一切真机验收）
+### 【任务】移动端真机可跑：自建 APK（P1，APK 已产出，待真机安装验收）
 
-**背景：** 项目锁在 `expo 52.0.49` / `react-native 0.76.0`（2024 年底）。npm 上最新已是 **expo 58.0.17**，而 Expo Go 只支持最新 SDK —— 手机装官方 Expo Go 打不开本项目。本机也无 `adb`、无 Android SDK，`java` 只有 1.8（RN/AGP 需要 17+），所以「本地 dev build」这条也走不通。上面的功能补齐（详情可编辑、多选上传、任务进度）没有真机就无法验收，这条应排在功能开发之前。
+**进度（2026-10-23）：** `app-release.apk` 已构建成功（61MB，`com.fashioninspo.app` 0.1.0，arm64，debug keystore 签名，JS bundle 已内嵌，`usesCleartextTraffic=true` 已生效）。剩余：装到手机（华为 nova7 Pro / HarmonyOS 4.2）验证连接后端。
 
-**三条可选路线（2026-10-22 实测）：**
+**背景：** 手机没有 Google Play，装不了 Expo Go → 只能自建 APK；也正因为如此，**「升级到最新 SDK」不再是前提**，SDK 52 继续用。
 
-1. **侧载对应 SDK 52 的旧版 Expo Go APK**（改动最小）：项目一行不动，只需在手机装 SDK 52 版 Expo Go。`expo.dev/go` 本机 curl 返回 200，但「是否仍提供 SDK 52 的 APK」要在浏览器确认（本机有代理，curl 未走代理）。
-2. **升级到 SDK 58**：`npx expo install expo@^58` 后 `--fix`，跨 6 个大版本（expo-router 4→6、RN 0.76→0.8x、React 18→19）。无设备情况下只能验证到 `npm run type-check` + `expo export` 打包成功，运行时行为无法验收。
-3. **本地 dev build**：装 Android Studio + SDK + JDK 17（数 GB），`npx expo prebuild` + `npx expo run:android`，可继续锁旧 SDK。
+**构建环境（一次性，已装好）：**
 
-**验收标准：** 手机能打开本项目（任一路线），且 `npm run type-check` 与后续功能回归可在真机执行。
+| 组件 | 位置 | 说明 |
+|---|---|---|
+| JDK 17 | `C:\Users\Administrator\jdk17\jdk-17.0.20.1+1` | 系统默认 java 是 25，Gradle 8.10 不支持，必须显式 `JAVA_HOME` |
+| Android SDK | `C:\Users\Administrator\AndroidSdk` | cmdline-tools + platform-tools + platforms;android-35 + build-tools 35 + NDK 26.1 + CMake 3.22 |
+| 构建副本 | `C:\mb` | **必须在短路径构建**，见下方路径坑 |
+
+**四个踩过的坑（换机器重建时必看）：**
+
+1. **路径过长**：项目在 `Claude Code` 下（含空格），CMake 把源路径压成 `C_/Users/.../Claude_Code/...`，react-native-reanimated 的 C++ 对象路径超 Windows MAX_PATH，ninja `mkdir` 失败。`mklink /J` 与 `subst` 都会被 Gradle/CMake 解回真实路径，**只能把工程复制到真实短路径构建**（现为 `C:\mb`，产物再拷回）。
+2. **Kotlin 版本**：RN 0.76 用 Kotlin 1.9.24（`react-native/gradle/libs.versions.toml`），而 `android/build.gradle` 的 ext 默认 1.9.25 → expo-modules-core 要求 Compose 1.5.15 与编译器不匹配。需在 `android/gradle.properties` 加 `android.kotlinVersion=1.9.24`（prebuild 会重置，重跑后要再加）。
+3. **缺三个包**：`expo-asset`、`expo-font`（`@expo/vector-icons` 依赖）、`expo-splash-screen`/`expo-system-ui` 原先都没装，release 打包 JS 时报错，已补齐。
+4. **网络**：`dl.google.com` 直连不稳，构建需走本机代理（clash 7890）——`gradle.properties` 里已写 `systemProp.https.proxyHost=127.0.0.1`，代理没开时要删掉这几行；npm 走 npmmirror，**不要**给它设代理（设了必 ECONNREFUSED）。
+
+**重建步骤：**
+
+```bash
+robocopy "<repo>\mobile" "C:\mb" /MIR    # 同步（含 node_modules）
+cd C:\mb\android
+set JAVA_HOME=C:\Users\Administrator\jdk17\jdk-17.0.20.1+1
+set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
+.\gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+# 产物：C:\mb\android\app\build\outputs\apk\release\app-release.apk
+```
+
+**验收标准：** 手机上装好 APK，设置页填局域网 IP（`http://192.168.1.3:18888`）能连上后端并浏览素材；后续功能回归可在真机执行。
 
 ## 低优先级
 
