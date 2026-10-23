@@ -50,7 +50,23 @@ set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
 # 产物：C:\mb\android\app\build\outputs\apk\release\app-release.apk
 ```
 
-**验收标准：** 手机上装好 APK，设置页填局域网 IP（`http://192.168.1.3:18888`）能连上后端并浏览素材；后续功能回归可在真机执行。
+**构建提速（2026-10-23 实测，6m37s → 31s）**
+
+| 改动 | 收益 | 说明 |
+|---|---|---|
+| 去掉 `--no-daemon` | 主要收益 | 每次冷启 JVM + 重新配置要 2~3 分钟；daemon 复用后配置阶段几秒 |
+| 不清 `android/.cxx` / `build/` | 主要收益 | 清一次就要全量重编 reanimated / expo-modules 的 C++（几分钟）。**只有改原生依赖或 Kotlin/Java 才需要清**，纯 JS 改动不必 |
+| `reactNativeArchitectures=arm64-v8a` | 中 | 手机是 arm64，编 4 个 ABI 纯浪费 |
+| `org.gradle.caching=true` + `jvmargs -Xmx4096m` | 中 | 任务产物复用；heap 2G 偏小 |
+| Windows Defender 排除 `C:\mb`、`.gradle`、`AndroidSdk`、仓库目录 | 大（62s→31s） | 实时扫描 node_modules/构建产物非常拖慢；`Add-MpPreference -ExclusionPath` 需管理员 |
+
+**实测结果**：改 JS 后重新打包 **31s**；无改动重跑 **9s**。
+
+**不要开的**：`--configuration-cache` —— Expo/RN 的 Gradle 插件有 45 处不兼容，直接 BUILD FAILED（已试）。
+
+**日常改界面的更优路线（未落地）**：装一次 **debug APK**，再跑 `npx expo start --host lan`，手机与电脑同网即可 Fast Refresh —— 改 JS 秒级生效、完全不用重新打包。代价是 debug 包体积更大、启动慢一点，且需要 Metro 一直开着。
+
+**验收标准：** 手机上装好 APK，设置页填局域网 IP（`http://192.168.31.142:18888`）能连上后端并浏览素材；后续功能回归可在真机执行。
 
 ## 低优先级
 

@@ -25,10 +25,15 @@ const API_URL_STORAGE_KEY = 'fashion-inspo:api-base-url'
 /** 当前 API 基础地址（模块级缓存；请求拦截器读取，设置页保存后更新） */
 let currentApiBaseUrl = DEFAULT_BASE_URL
 
-/** 去掉首尾空白与末尾斜杠，返回规范化地址；空串回退默认值 */
+/** 去掉首尾空白与末尾斜杠，返回规范化地址；空串回退默认值。
+ *
+ * 没写协议时自动补 `http://`：真机上用户通常直接输入「192.168.31.142:18888」，
+ * axios 会把它当相对路径直接失败（2026-10-23 真机排查时踩到）。
+ */
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, '')
-  return trimmed || DEFAULT_BASE_URL
+  if (!trimmed) return DEFAULT_BASE_URL
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
 }
 
 /** 初始化：从持久化存储恢复自定义后端地址（App 启动时调用一次） */

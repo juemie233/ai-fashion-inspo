@@ -37,6 +37,35 @@ STATUS_FILE = LOG_DIR / "service_status.json"
 BACKEND_PORT = int(os.environ.get("BACKEND_PORT", "18888"))
 FRONTEND_PORT = int(os.environ.get("FRONTEND_PORT", "17777"))
 
+
+def _dotenv_value(key: str) -> str | None:
+    """从 backend/.env 读一个值（找不到返回 None）。
+
+    后端自身用 pydantic-settings 读这个文件；supervisor 是另一个进程，之前完全没读，
+    于是 `.env` 里写 `HOST=0.0.0.0` 也不生效 —— uvicorn 被硬编码绑到 127.0.0.1，
+    手机连同一个局域网也连不上（2026-10-23 真机排查确认）。
+    """
+    env_file = BACKEND_DIR / ".env"
+    try:
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip() == key:
+                return v.strip().strip('"').strip("'")
+    except OSError:
+        return None
+    return None
+
+
+"""绑定地址：显式环境变量 > backend/.env 的 HOST > 仅本机。
+
+真机（手机）访问必须绑 0.0.0.0；默认仍保守选 127.0.0.1，避免无意中把无鉴权的
+读接口暴露到局域网。
+"""
+BACKEND_HOST = os.environ.get("BACKEND_HOST") or _dotenv_value("HOST") or "127.0.0.1"
+
 # ── 调参 ──
 CHECK_INTERVAL = 5.0            # 健康检查轮询间隔（秒）
 RESOURCE_CHECK_INTERVAL = 60.0  # 资源告警检查间隔（秒）
@@ -53,7 +82,7 @@ SERVICE_DEFS = {
     "backend": {
         "cmd": [
             sys.executable, "-m", "uvicorn", "app.main:app",
-            "--host", "127.0.0.1", "--port", str(BACKEND_PORT),
+            "--host", BACKEND_HOST, "--port", str(BACKEND_PORT),
         ],
         "cwd": BACKEND_DIR,
         "env_extra": {
@@ -454,6 +483,12 @@ def run() -> None:
     }
 
     logger.info("supervisor 启动，开始守护 backend / frontend / worker ...")
+    logger.info(f"后端监听 {BACKEND_HOST}:{BACKEND_PORT}")
+    if BACKEND_HOST not in ("127.0.0.1", "localhost"):
+        # 真机需要这个；但接口目前无鉴权，只适合可信局域网
+        logger.warning(
+            f"后端绑定 {BACKEND_HOST}：局域网内设备可访问，且读接口无鉴权（仅限可信网络）"
+        )
 
     last_resource_check = 0.0
     resource_alerts: list[str] = []
