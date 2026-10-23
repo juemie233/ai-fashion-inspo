@@ -112,8 +112,8 @@ chrome_debug_port: int = 9222
 
 > 上一次刷新本文档是 `f53f781`（10-20），本节汇总其后至 `859dfbd` 的全部提交。
 > 出图接入是这两天的主线（9 个提交），其余为 f2 通道收尾、两轮代码审查修复与结构性欠账收尾。
-> 完整方案见 [docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)，模型安装见
-> [docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)。
+> 完整方案见 [docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)，
+> 环境与模型见 [docs/ComfyUI环境与出图模型.md](docs/ComfyUI环境与出图模型.md)。
 
 ### 本地出图（ComfyUI）接入（10-21，9 个提交）
 
@@ -160,7 +160,7 @@ chrome_debug_port: int = 9222
 
 ### 文档（10-20 ~ 10-21）
 
-- 新增 [docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)（供 AI 执行的安装手册，含实测数据与故障对照）、[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)（632 行方案 + 15 节实施记录）、`TODO.md` 相应条目收敛。
+- 新增 [docs/ComfyUI环境与出图模型.md](docs/ComfyUI环境与出图模型.md)（原「安装清单」，现为环境与模型技术参考，含实测数据与故障对照）、[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)（632 行方案 + 15 节实施记录）、`TODO.md` 相应条目收敛。
 
 ## 历史更新（2026-09-20 ~ 10-19，120 个提交）
 
@@ -433,8 +433,8 @@ scripts\sync_openviking.bat   # 双击一键同步（需本地 OpenViking 服务
 
 ### 9. 启用本地出图（ComfyUI，可选）
 
-出图是**外部工具**，不经本项目启动；本项目只通过后端调用它。装法与模型清单见
-[docs/图片生成模型安装清单.md](docs/图片生成模型安装清单.md)，接入设计见
+出图是**外部工具**，不经本项目启动；本项目只通过后端调用它。环境、模型与排障见
+[docs/ComfyUI环境与出图模型.md](docs/ComfyUI环境与出图模型.md)，接入设计见
 [docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)。
 
 ```bash
