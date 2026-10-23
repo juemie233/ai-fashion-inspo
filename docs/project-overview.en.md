@@ -103,7 +103,8 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 
 ## 7. Known Technical Debt and Risks
 
-> See [code audit report](./code-audit-report.en.md) for details.
+> The report from that one-off full-stack audit is not kept in the repository; treat this table and
+> [TODO](../TODO.md) as the current list of open items.
 
 | Category | Item | Status |
 | ------ | ------ | ------ |
@@ -133,6 +134,7 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 | [README](../README.en.md) | Installation, startup, feature overview, data model, full API docs |
 | [TODO](../TODO.md) | Pending feature list (by priority) |
 | [CLAUDE](../CLAUDE.md) | Coding standards, project standards, tech stack conventions |
-| [Code audit report](./code-audit-report.en.md) | Full-stack code audit findings and fix progress |
+| [ComfyUI environment & models](./ComfyUI环境与出图模型.md) (Chinese) | Image-generation environment, model/weight list, measured performance, troubleshooting |
+| Database capacity assessment (local only, gitignored) | SQLite footprint, growth projection, thresholds (contains real statistics, not published) |
 | [System assessment report — open-source component adoption](./open-source-components-assessment.en.md) | Evaluation of open-source component selection |
 | [CLIP encoding notes](./clip-encoding-notes.en.md) | Notes on the image vector encoding approach |
