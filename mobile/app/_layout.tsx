@@ -5,6 +5,7 @@ import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { useInspirationStore } from '../hooks/useInspirations'
+import ErrorBoundary from '../components/ErrorBoundary'
 
 export default function RootLayout() {
   useEffect(() => {
@@ -13,20 +14,22 @@ export default function RootLayout() {
   }, [])
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen
-          name="detail/[id]"
-          options={{
-            headerShown: true,
-            title: '素材详情',
-            headerBackTitle: '返回',
-            presentation: 'card',
-          }}
-        />
-      </Stack>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <StatusBar style="dark" />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen
+            name="detail/[id]"
+            options={{
+              headerShown: true,
+              title: '素材详情',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+        </Stack>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   )
 }
