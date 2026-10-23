@@ -791,10 +791,29 @@ python backend/scripts/generate_image.py --check
 python backend/scripts/generate_image.py --list-models
 ```
 
+### 16.1 想在 ComfyUI 页面里改字出图：`--dump`
+
+ComfyUI 画布本身就能出图，而且**能吃 API 格式 JSON**（前端 `isApiJson()` / `loadApiJson()`
+会自动把 `{"1": {"class_type": …, "inputs": …}}` 画成节点图，已在本机
+`comfyui_frontend_package 1.55.18` 里核对）。但直接把仓库里的模板拖进画布跑不起来：
+模板是给后端注入用的，`__SEED__` / `__STEPS__` / `__CFG__` / `__SAMPLER__` / `__PREFIX__`
+这些占位符会被页面当成**字符串**塞进数字框与下拉框，点 Queue 报参数非法。
+
+`--dump` 把占位符全部换成真实值导出一份工作流，拖进去即可直接跑，只剩描述文字要改：
+
+```bash
+python backend/scripts/generate_image.py --dump backend/storage/generated/cli/z_image.json "示例描述"
+# 图生图：先把参考图上传（页面里的 LoadImage 必须指向真实文件），再导出
+python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jpg --dump backend/storage/generated/cli/qwen.json "同一个人，光脚不穿鞋"
+```
+
+页面里的四步：打开 `127.0.0.1:8188` → 拖入导出的 json → 双击脚本报给你的那个节点
+（文生图 `CLIPTextEncode`、图生图 `TextEncodeQwenImage21`）改文字 → Queue。
+出图落在 ComfyUI 的 `output/`，**不进素材库**（要入库走网页的「本地出图」）。
+
 **设计要点**：
 
 | 点 | 做法 | 原因 |
-| --- | --- | --- |
 | 模板与档位单一来源 | `app/services/comfyui/workflows/*.json` + `app/services/comfyui/models.py`（纯数据，无 httpx/pydantic 依赖） | 避免「网页一套参数、命令行另一套」的漂移；`probe.py` / `generation_service.py` 仍从 models.py 取，旧调用点不变 |
 | 参数上下限 | 与后端 `_validate_params` 同一套常量（尺寸 ≤ 档位 `max_pixels`、张数 1~4、步数 1~30、prompt ≤ 2000 字） | 命令行不该能设出后端会拒绝（或必 OOM）的值 |
 | 输出位置 | 默认 `backend/storage/generated/cli/`（gitignore），`--out` 可改 | 与素材库候选区同一棵树，不往仓库里散落产物 |

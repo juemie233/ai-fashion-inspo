@@ -117,3 +117,17 @@ def test_seed为0时随机而多张逐张递增():
 
     assert 1 <= params["seed_base"] <= 2**31 - 1
     assert params["count"] == 3
+
+
+def test_页面里要改的提示词节点能被定位():
+    """--dump 导出的工作流拖进 ComfyUI 页面后，脚本要能告诉用户改哪个节点。
+
+    两种档位的落点不同：文生图是 CLIPTextEncode.text，图生图是
+    TextEncodeQwenImage21.prompt，所以按「值等于描述」反查而不是写死节点 id。
+    """
+    assert cli.prompt_node_ids(_t2i(), "米色针织开衫配白色阔腿裤") == [("4", "CLIPTextEncode")]
+    assert cli.prompt_node_ids(_i2i(), "同一个人，同一场景，光脚不穿鞋") == [
+        ("6", "TextEncodeQwenImage21")
+    ]
+    # 描述对不上时不应误报节点
+    assert cli.prompt_node_ids(_t2i(), "别的描述") == []

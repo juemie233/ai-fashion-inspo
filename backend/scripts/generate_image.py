@@ -13,6 +13,9 @@ Vue。本脚本复用**同一份**工作流模板（``app/services/comfyui/workf
     python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jpg "同一个人，光脚不穿鞋"
     python backend/scripts/generate_image.py --check          # 只体检：节点 / 模型 / 显存
     python backend/scripts/generate_image.py --list-models    # 列出可用档位
+
+    # 想「在 ComfyUI 页面里改字出图」：先把工作流连参数一起导出来，再拖进画布
+    python backend/scripts/generate_image.py --dump "backend/storage/generated/cli/z_image.json" "示例描述"
     echo "粉色针织连衣裙，街拍" | python backend/scripts/generate_image.py   # 从 stdin 读描述
 
 输出默认落在 ``backend/storage/generated/cli/``（与素材库候选区同一棵树，已 gitignore）。
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import random
 import sys
 import time
@@ -298,6 +302,74 @@ async def _generate(
     return 0
 
 
+def prompt_node_ids(workflow: dict[str, Any], prompt: str) -> list[tuple[str, str]]:
+    """找出工作流里承载描述文字的节点（页面里要改的就是它）。
+
+    两种档位的落点不同：文生图是 ``CLIPTextEncode.text``，图生图是
+    ``TextEncodeQwenImage21.prompt``，所以按「值等于描述」来反查，而不是写死节点 id。
+    """
+    hits: list[tuple[str, str]] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") or {}
+        if any(value == prompt for value in inputs.values()):
+            hits.append((str(node_id), str(node.get("class_type") or "?")))
+    return hits
+
+
+async def _dump(
+    client: ComfyUIClient, args: argparse.Namespace, spec: dict[str, Any], params: dict[str, Any]
+) -> int:
+    """导出「占位符已填实值」的工作流，供直接拖进 ComfyUI 页面改字出图。
+
+    为什么需要它：页面（画布）能吃 API 格式 JSON（前端 ``isApiJson`` / ``loadApiJson``
+    会自动作图），但仓库里的模板是给后端注入用的，数字字段写的是 ``__SEED__`` 这类
+    占位符 —— 页面会把它们当字符串塞进数字框，点 Queue 报参数非法。这里把参数全部
+    落成真实值，拖进去就能直接跑，只剩描述文字要改。
+    """
+    refs: list[str] = []
+    if spec.get("kind") == "i2i":
+        if not args.ref:
+            raise SystemExit("图生图导出需要 --ref（页面里的 LoadImage 必须指向一张真实存在的图）")
+        for path_text in args.ref:
+            path = Path(path_text).expanduser()
+            if not path.is_file():
+                raise SystemExit(f"参考图不存在：{path}")
+            # 上传后把「ComfyUI 认得的文件名」写进工作流，页面里那张图才会直接可跑
+            refs.append(await client.upload_image(path.read_bytes(), f"cli_ref_{path.name}"))
+
+    workflow = build_workflow(
+        spec,
+        prompt=params["prompt"],
+        seed=int(params["seed_base"]),
+        width=params["width"],
+        height=params["height"],
+        steps=params["steps"],
+        cfg=params["cfg"],
+        sampler=params["sampler"],
+        scheduler=params["scheduler"],
+        shift=params["shift"],
+        refs=refs,
+        negative=params["negative"],
+        prefix=f"ui_{spec['workflow']}",
+    )
+    target = Path(args.dump).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(workflow, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    nodes = prompt_node_ids(workflow, params["prompt"])
+    node_text = "、".join(f"节点 {nid}（{ctype}）" for nid, ctype in nodes) or "（未找到，请手动确认）"
+    print(f"已导出工作流：{target}\n")
+    print("在 ComfyUI 页面里出图（不用启动本项目前后端）：")
+    print(f"  1. 打开 {args.base_url}")
+    print("  2. 把上面这个 .json 拖进画布（或 Ctrl+O 打开）—— 页面会自动把 API 工作流画成节点图")
+    print(f"  3. 双击 {node_text}，把文字改成你要的描述")
+    print("  4. 点「Queue / 运行」，出图在 ComfyUI 的 output 目录（页面里也能直接看到）")
+    print("\n注意：页面里出的图不会进素材库；要入库请用网页的「本地出图」或直接跑本脚本。")
+    return 0
+
+
 async def _run(args: argparse.Namespace, spec: dict[str, Any]) -> int:
     client = ComfyUIClient(args.base_url, timeout=15.0)
     try:
@@ -305,6 +377,8 @@ async def _run(args: argparse.Namespace, spec: dict[str, Any]) -> int:
             return await run_check(client)
         prompt = args.prompt if args.prompt is not None else sys.stdin.readline()
         params = resolve_params(args, spec, prompt)
+        if args.dump:
+            return await _dump(client, args, spec, params)
         return await _generate(client, args, spec, params)
     except ComfyUIError as exc:
         _err(f"✗ {_friendly(exc)}")
@@ -350,6 +424,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="参考图路径（图生图必填，可重复 1~10 张）",
     )
     parser.add_argument("--out", default=None, help="输出目录（默认 backend/storage/generated/cli）")
+    parser.add_argument(
+        "--dump",
+        default=None,
+        metavar="PATH",
+        help="不跑图，把「占位符已填实值」的工作流导出到 PATH，供拖进 ComfyUI 页面改字出图",
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="ComfyUI 地址")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="单张超时秒数")
     parser.add_argument("--check", action="store_true", help="只体检（节点 / 模型 / 显存），不出图")
