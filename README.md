@@ -160,7 +160,7 @@ chrome_debug_port: int = 9222
 
 ### 文档（10-20 ~ 10-21）
 
-- 新增 [docs/ComfyUI环境与出图模型.md](docs/ComfyUI环境与出图模型.md)（原「安装清单」，现为环境与模型技术参考，含实测数据与故障对照）、[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)（632 行方案 + 15 节实施记录）、`TODO.md` 相应条目收敛。
+- 新增 [docs/ComfyUI环境与出图模型.md](docs/ComfyUI环境与出图模型.md)（原「安装清单」，现为环境与模型技术参考，含实测数据与故障对照）、[docs/ComfyUI出图接入方案.md](docs/ComfyUI出图接入方案.md)（835 行、16 节 + 实施记录）、`TODO.md` 相应条目收敛。
 
 ## 历史更新（2026-09-20 ~ 10-19，120 个提交）
 
@@ -451,12 +451,21 @@ scripts\sync_openviking.bat   # 双击一键同步（需本地 OpenViking 服务
 
 # 3) 后端会自动探测，无需改配置；Web 侧边栏「本地出图」页顶部会显示
 #    ComfyUI 版本、可用显存与各档位是否就位（未就绪时运行按钮置灰并给启动指引）
+
+# 4) 不想开前后端时，只启动 ComfyUI 也能出图（命令行）
+python backend/scripts/generate_image.py "米色针织开衫配白色阔腿裤，极简工作室背景"
+python backend/scripts/generate_image.py --check                      # 体检：节点/权重/显存
+python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 图.jpg "同一个人，光脚不穿鞋"
+python backend/scripts/generate_image.py --dump out.json "描述"       # 导出可拖进 ComfyUI 页面的工作流
 ```
 
 - **显存互斥**：出图与打标/审核任务属同一重负载互斥组，不会同时抢 GPU；Ollama 模型占着显存时
   任务会显示「等待显存（已等 N 秒）」，可 `ollama stop <模型>` 加速。
 - **16 GB 卡的边界**：Z-Image 1024² 峰值约 15.1 GiB；Qwen-Image 2.1 上限 1024²、单批 ≤4 张。
 - **许可**：Qwen-Image 2.1 为 Qwen Research License（默认仅研究/评估，商用需另行授权）。
+- **在 ComfyUI 页面里直接出图**：打开 `127.0.0.1:8188` 从左栏选一张已存的工作流，改提示词后点 Queue 即可；
+  要把「仓库模板的参数」搬进页面，用上面的 `--dump` 导出一份填好值的版本再拖进去
+  （注意：`CLIPLoader` 的权重与 type 必须成对，否则跑完是满屏噪声且不报错——详见环境文档 §2.5）。
 
 ## 项目结构
 

@@ -1,5 +1,9 @@
 # Project Overview (AI Fashion Inspiration Library)
 
+> **Snapshot notice:** this English text is a translated snapshot taken at an earlier point in time.
+> The Chinese [项目情况说明](./项目情况说明.md) is authoritative and kept up to date; when the two
+> disagree, follow the Chinese version.
+>
 > This document is intended for people approaching the project for the first time (or collaborators who need a quick grasp of the current state). It covers the project's positioning, tech stack, feature completion, data scale, recent progress, technical debt, and next steps. For detailed installation, usage and API docs, see [README](../README.en.md); the TODO list is in [TODO](../TODO.md); coding standards are in [CLAUDE](../CLAUDE.md).
 
 ---
@@ -67,10 +71,12 @@ Core features: **fully local operation** (no cloud dependency), **AI tagging + q
 
 ## 4. Data Scale and Runtime Environment
 
-- **Inspirations**: 3000+ items (images/videos; tag taxonomy with 8 top-level categories: style / item / color / way of wearing / fit / season / image attribute / outfit master tag)
+- **Inspirations**: tens of thousands of items (images/videos; tag taxonomy with 8 top-level categories: style / item / color / way of wearing / fit / season / image attribute / outfit master tag)
 - **Vectors**: text + image vectors stored in LanceDB (local files on disk, portable with the project)
-- **Runtime**: Windows 11, Python 3.12+, Node.js 20+, Ollama, ffmpeg (video keyframes, reserved), Google Chrome (CDP scraping)
-- **Storage layout**: under `backend/storage/`: images / thumbnails / videos / trash (trash bin) / person_photos (creator photos) / person_thumbnails / lancedb (vectors)
+- **Runtime**: Windows 11, Python 3.12+, Node.js 20+, Ollama, ffmpeg (video keyframes), Google Chrome (CDP scraping),
+  ComfyUI (local image generation, see [ComfyUI environment & models](./ComfyUI环境与出图模型.md), Chinese only)
+- **Storage layout**: under `backend/storage/`: images / thumbnails / videos / keyframes / trash (trash bin) /
+  person_photos (creator photos) / person_thumbnails / generated (image-generation candidates) / lancedb (vectors)
 
 ---
 
