@@ -1,6 +1,6 @@
 # 数据备份与恢复指南
 
-> 对应规划：[`docs/wayfinder/backup-disaster-recovery/MAP.md`](./wayfinder/backup-disaster-recovery/MAP.md)
+> 对应规划：本地私有文档 `docs/wayfinder/backup-disaster-recovery/MAP.md`（未随仓库发布）
 > 恢复级别 **L2**（备份含 DB + 原始素材 + 缩略图/向量 + 运行时配置，恢复即用）；**RPO ≤ 1 天**。
 
 本项目素材库的核心数据——SQLite 数据库、`storage/` 素材文件、LanceDB 向量、`.env` 等运行时配置——均不进 git。本文档说明如何自动/手动备份，以及在误删、磁盘损坏、误触发 `DELETE /api/ai/reset` 后如何恢复。
@@ -22,6 +22,8 @@
 | `SUCCESS` / `FAILED` | 备份结果标记；`SUCCESS` 内含时间戳与 git HEAD |
 
 **明确不备份：** `storage/_crop_backup`（裁剪前原图唯一副本，约 880MB，用户拍板排除以省空间；代价是恢复后无法撤销已做过的裁剪，裁剪后成品图仍在）、`logs/`、`tmp/`、`_crop_dups/`、`cookies/`、`debug/`、`faces/`、Ollama 模型文件、Python 虚拟环境、Chrome profile/cookies、代码与 git 历史（已在 Gitee + GitHub 双远程）。
+
+> 口径补充：`storage/generated/`（出图候选区）与 `storage/keyframes/`（视频关键帧）**会随 `storage/` 镜像一并备份**，但它们不在 `REQUIRED` 里参与「文件数/字节数」校验——这两类都是可再生物（候选重生成、关键帧从 `videos/` 重提取），缺了不该判备份失败。
 
 > ⚠️ **安全提示：** 备份含 `.env`（密钥）。请勿放入未加密的网盘/公共位置；可把备份目标指向已加密/受控的网盘挂载目录，由网盘客户端自行同步（脚本本身不做云上传）。
 
