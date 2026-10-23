@@ -18,6 +18,18 @@
 
 **验收标准：** 手机端能分页浏览搜索结果、编辑标签与删除素材、多选上传，并看到任务进度与失败原因。
 
+### 【任务】移动端真机可跑路线：SDK 52 落后 6 个大版本（P1，卡住一切真机验收）
+
+**背景：** 项目锁在 `expo 52.0.49` / `react-native 0.76.0`（2024 年底）。npm 上最新已是 **expo 58.0.17**，而 Expo Go 只支持最新 SDK —— 手机装官方 Expo Go 打不开本项目。本机也无 `adb`、无 Android SDK，`java` 只有 1.8（RN/AGP 需要 17+），所以「本地 dev build」这条也走不通。上面的功能补齐（详情可编辑、多选上传、任务进度）没有真机就无法验收，这条应排在功能开发之前。
+
+**三条可选路线（2026-10-22 实测）：**
+
+1. **侧载对应 SDK 52 的旧版 Expo Go APK**（改动最小）：项目一行不动，只需在手机装 SDK 52 版 Expo Go。`expo.dev/go` 本机 curl 返回 200，但「是否仍提供 SDK 52 的 APK」要在浏览器确认（本机有代理，curl 未走代理）。
+2. **升级到 SDK 58**：`npx expo install expo@^58` 后 `--fix`，跨 6 个大版本（expo-router 4→6、RN 0.76→0.8x、React 18→19）。无设备情况下只能验证到 `npm run type-check` + `expo export` 打包成功，运行时行为无法验收。
+3. **本地 dev build**：装 Android Studio + SDK + JDK 17（数 GB），`npx expo prebuild` + `npx expo run:android`，可继续锁旧 SDK。
+
+**验收标准：** 手机能打开本项目（任一路线），且 `npm run type-check` 与后续功能回归可在真机执行。
+
 ## 低优先级
 
 ### 【任务】f2 下载阶段并发（P2，CLI 已支持；界面侧待实测后再接）

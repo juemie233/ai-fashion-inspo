@@ -1,7 +1,20 @@
 /** 共享类型定义：灵感素材相关。Web 和 Mobile 端共用。 */
 
-/** 灵感的来源类型 */
-export type SourceType = 'xiaohongshu' | 'douyin' | 'manual_upload' | 'scraper' | 'browser_extension' | 'batch_import'
+/** 灵感的来源类型。
+ *
+ * 与后端 `inspirations.source_type` 的实际取值保持一致（2026-10 核对：
+ * `generated` 由出图入库写入，`url_import` 由链接导入写入，两者原先漏在这份定义里，
+ * mobile 的本地映射表反而比共享类型更全 —— 收敛类型时把漂移补回来）。
+ */
+export type SourceType =
+  | 'xiaohongshu'
+  | 'douyin'
+  | 'manual_upload'
+  | 'scraper'
+  | 'browser_extension'
+  | 'batch_import'
+  | 'url_import'
+  | 'generated'
 
 /** 媒体类型 */
 export type MediaType = 'image' | 'video_frame' | 'video'
@@ -11,10 +24,17 @@ export type AnalysisStatus = 'none' | 'analyzing' | 'done' | 'error'
 
 /** 标签类别 */
 export const TAG_CATEGORIES = [
-  'style', 'item_type', 'color', 'body_part',
-  'fit', 'season', 'attribute', 'free', 'outfit',
+  'style',
+  'item_type',
+  'color',
+  'body_part',
+  'fit',
+  'season',
+  'attribute',
+  'free',
+  'outfit',
 ] as const
-export type TagCategory = typeof TAG_CATEGORIES[number]
+export type TagCategory = (typeof TAG_CATEGORIES)[number]
 
 /** 标签类别的中文名称 */
 export const TAG_CATEGORY_LABELS: Record<TagCategory, string> = {

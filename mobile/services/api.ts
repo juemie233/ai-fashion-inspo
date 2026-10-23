@@ -3,6 +3,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import axios from 'axios'
 import { Platform } from 'react-native'
+import type { PaginatedResponse } from '@shared/types/api'
+import type { AnalysisStatus, MediaType, SourceType } from '@shared/types/inspiration'
+import type { Tag, TagCategoryGroup } from '@shared/types/tag'
 
 // Android 模拟器使用 10.0.2.2，iOS 模拟器用 localhost，真机用局域网 IP（设置页可改）
 const DEFAULT_IP = Platform.select({
@@ -57,7 +60,9 @@ export function getApiBaseUrl(): string {
 }
 
 /** 测试后端连通性：GET /api/health，返回是否可连（设置页「测试连接」用） */
-export async function testApiConnection(baseUrl: string): Promise<{ ok: boolean; message: string }> {
+export async function testApiConnection(
+  baseUrl: string,
+): Promise<{ ok: boolean; message: string }> {
   try {
     const normalized = normalizeBaseUrl(baseUrl)
     const resp = await axios.get(`${normalized}/api/health`, { timeout: 8000 })
@@ -88,42 +93,37 @@ export function getFileUrl(base: string, relativePath: string): string {
 }
 
 // 类型定义
+/** 单条素材（后端 `/api/inspirations` 返回）。
+ *
+ * 枚举与标签结构来自 `shared/types`（Web 与 Mobile 共用一份）；实体本身仍留在这里：
+ * web 的 `InspirationOut` 字段更多（标签分组、人物关联、相似度等），两端实体尚未一致，
+ * 强行合并会把 mobile 没用的字段也拉进来。
+ */
 export interface Inspiration {
   id: string
-  source_type: string
+  source_type: SourceType
   source_url?: string | null
   source_author?: string | null
   source_platform_id?: string | null
   file_path: string
   thumbnail_path?: string | null
-  media_type: string
+  media_type: MediaType
   dominant_colors?: string | null
   is_favorite: boolean
   created_at: string
   updated_at?: string | null
   tags: InspirationTag[]
-  analysis_status?: string | null
+  analysis_status?: AnalysisStatus | null
 }
 
+/** 素材上带置信度的标签关联（后端独有结构，shared 未定义） */
 export interface InspirationTag {
   tag: Tag
+  /** AI 判定置信度 0~1 */
   confidence: number
 }
 
-export interface Tag {
-  id: number
-  name: string
-  category: string
-}
+/** 分页响应（与后端分页约定一致） */
+export type InspirationListResponse = PaginatedResponse<Inspiration>
 
-export interface InspirationListResponse {
-  items: Inspiration[]
-  total: number
-  page: number
-  size: number
-}
-
-export interface TagCategoryGroup {
-  category: string
-  tags: (Tag & { usage_count: number })[]
-}
+export type { Tag, TagCategoryGroup }
