@@ -738,6 +738,16 @@ docs/ComfyUI出图接入方案.md                          本文
    接 `EmptyLatentImage` 也能跑完但输出是噪声 —— 官方模板里那个 `ComfySwitchNode` 就是在
    这两者之间切。
 
+**同一个坑在 ComfyUI 页面工作流里的表现（2026-10-23 实测）**：把 `默认.json` 的
+「加载CLIP」换成 `qwen3.5_9b_qwen_image_2.1_pe_i2i_w4a8`、类型填 `lumina2`（Z-Image 的
+编码器类型）后，1024² 出图**整张纯噪声，且 ComfyUI 不报任何错**。改回
+`qwen3vl_8b_w4a8` + 类型 `qwen_image`，同一套图（shift 3.0 / 8 步 / res_multistep /
+cfg 1.0 / seed 42 / AuraFlow）**11.1 秒出正常人像**，其余节点一个都不用动。
+
+教训：**ComfyUI 不校验权重文件与 `CLIPLoader.type` 是否匹配**。选错文件或选错类型不会
+报错，只会让文本条件变成噪声向量 —— 表现就是「跑得完、出来一片噪点」。排查顺序应当是
+先看 `CLIPLoader`（文件 + type 是否成对），再看 latent 来源，最后才怀疑步数/cfg。
+
 ### 15.7 P2 收尾状态（2026-10-21 定稿：全部完成）
 
 **已完成**：
