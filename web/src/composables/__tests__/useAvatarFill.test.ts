@@ -66,7 +66,8 @@ describe('useAvatarFill', () => {
     expect(mocks.pollTask).toHaveBeenCalledWith(42, expect.any(Function))
     // 只提交、任务还没终态：列表先不刷新，等 onDone
     expect(onFinished).not.toHaveBeenCalled()
-    expect(running.value).toBe(false)
+    // 提交后立刻进入 running（占位快照），否则首次轮询前的空窗期能再点一次建出两个任务
+    expect(running.value).toBe(true)
   })
 
   it('终态 updated>0：提示成功计数并刷新列表', async () => {

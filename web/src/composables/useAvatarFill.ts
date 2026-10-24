@@ -45,6 +45,16 @@ export function useAvatarFill(onFinished: () => void | Promise<void>) {
     try {
       const data = await fillMissingAvatars(undefined, overwrite)
       Message.success(data.message)
+      // 立刻放一个「刚提交」的快照：running 用 task 状态判断，而第一次轮询要等 ~1 秒，
+      // 空窗期内按钮不转圈、可被再点一次（会建出两个任务）。这里先占位再交给轮询覆盖
+      task.value = {
+        id: data.task_id,
+        type: 'blogger_avatar_fill',
+        status: 'pending',
+        progress: 0,
+        total: data.total,
+        done: 0,
+      } as unknown as typeof task.value
       pollTask(data.task_id, (result) => {
         const counts = (result || {}) as AvatarFillResult
         const updated = counts.updated ?? 0
