@@ -67,13 +67,16 @@ describe('TaskRow', () => {
     expect(screen.getByText('模型未启动')).toBeTruthy()
   })
 
-  it('后端 20+ 种任务类型都能翻成中文（抽查几个）', () => {
+  it('后端队列任务类型都能翻成中文（抽查几个真实 task_queue.type）', () => {
+    // 只列后端 TASK_HANDLERS 里真实存在的类型：scraper_tasks 是**表名**
+    // （采集任务在 scraper_tasks 表，不在 task_queue），不该出现在这里
     const cases: [string, string][] = [
       ['batch_analyze', '批量 AI 分析'],
       ['image_gen', '本地出图'],
       ['vector_backfill', '向量回填'],
       ['quality_check', '质量审核'],
-      ['scraper_tasks', '采集任务'],
+      ['f2_import', '抖音素材获取'],
+      ['blogger_avatar_fill', '人物头像补全'],
     ]
     for (const [type, label] of cases) {
       const { unmount } = render(
@@ -82,6 +85,13 @@ describe('TaskRow', () => {
       expect(screen.getByText(label)).toBeTruthy()
       unmount()
     }
+  })
+
+  it('已暂停的任务也能取消（后端对 paused 直接置 cancelled）', () => {
+    render(<TaskRow task={makeTask({ type: 'face_scan', status: 'paused' })} onCancel={jest.fn()} />)
+
+    expect(screen.getByText('已暂停')).toBeTruthy()
+    expect(screen.getByText('取消')).toBeTruthy()
   })
 
   it('未知类型/状态回退原值，不显示空白', () => {

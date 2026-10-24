@@ -174,16 +174,33 @@ export async function uploadInspirationImage(
   return data
 }
 
-/** 给单条素材关联标签（按名称查找或创建）；返回实际新增的名称 */
+/** 标签关联结果（与后端 ``add_inspiration_tags`` 的返回一致） */
+export interface AddTagsResult {
+  /** 实际新增的关联（**是对象数组**，不是标签名数组） */
+  added?: Array<{ id: number; name: string; category: string }>
+  /** 新增条数 */
+  count?: number
+  /** 同名标签类别与请求类别不符（仍会关联，仅提示） */
+  category_mismatch?: Array<{
+    id: number
+    name: string
+    category: string
+    requested: string
+    already_linked: boolean
+  }>
+}
+
+/** 给单条素材关联标签（按名称查找或创建，已关联的自动跳过） */
 export async function addTagsToInspiration(
   id: string,
   names: string[],
   category = 'free',
-): Promise<{ added?: string[]; skipped?: string[] }> {
-  const { data } = await apiClient.post<{ added?: string[]; skipped?: string[] }>(
-    `/inspirations/${id}/tags`,
-    { names, category, source: 'manual' },
-  )
+): Promise<AddTagsResult> {
+  const { data } = await apiClient.post<AddTagsResult>(`/inspirations/${id}/tags`, {
+    names,
+    category,
+    source: 'manual',
+  })
   return data ?? {}
 }
 
@@ -235,7 +252,7 @@ export async function createTag(name: string, category = 'free'): Promise<Tag> {
 export interface TaskItem {
   id: number
   type: string
-  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | string
+  status: 'pending' | 'running' | 'paused' | 'success' | 'failed' | 'cancelled' | string
   progress: number
   total: number
   done: number

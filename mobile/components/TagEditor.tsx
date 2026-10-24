@@ -222,7 +222,9 @@ export default function TagEditor({
                     <TouchableOpacity
                       style={styles.row}
                       onPress={() => (linked ? onRemove(item.id) : toggle(item.name))}
-                      disabled={saving || linked}
+                      // 只按 saving 禁用：linked 行此前被一起禁用，导致上面
+                      // 「点已关联标签即移除」的分支永远走不到（死代码）
+                      disabled={saving}
                     >
                       <Icon
                         name={linked ? 'checkmark-circle' : chosen ? 'checkmark' : 'add-outline'}

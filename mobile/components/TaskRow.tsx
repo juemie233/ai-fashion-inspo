@@ -4,13 +4,16 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import Icon from './Icon'
 import type { TaskItem } from '../services/api'
 
-/** 任务类型中文名（后端 `type` 字段的真实取值，20+ 种；缺失时回退原值） */
+/** 任务类型中文名（后端 ``TASK_HANDLERS`` 的真实取值，17 种；缺失时回退原值）
+ *
+ * 之前这张表里混进了 Web 任务中心的**筛选标签**（image / generated / tags /
+ * scraper_tasks / bloggers / task_event / all），它们不是 task_queue.type；
+ * 而真正会出现的 f2_import、blogger_avatar_fill 反而没有中文名。
+ */
 const TYPE_LABELS: Record<string, string> = {
   batch_analyze: '批量 AI 分析',
   multi_analyze: '多模态分析',
-  image: '图片处理',
   image_gen: '本地出图',
-  generated: '出图记录',
   face_scan: '人脸扫描',
   face_match: '人脸匹配',
   face_cluster: '人脸聚类',
@@ -21,13 +24,10 @@ const TYPE_LABELS: Record<string, string> = {
   tag_cluster_scan: '标签聚类',
   tag_health_scan: '标签体检',
   tag_network_analyze: '标签网络分析',
-  tags: '标签处理',
   batch_delete: '批量删除',
-  scraper_tasks: '采集任务',
-  bloggers: '博主补全',
   enrich_blogger_profile: '博主资料补全',
-  task_event: '任务事件',
-  all: '全部',
+  blogger_avatar_fill: '人物头像补全',
+  f2_import: '抖音素材获取',
 }
 
 /** 状态文案与配色 */
@@ -50,7 +50,10 @@ interface Props {
 export default function TaskRow({ task, onCancel, cancelling = false }: Props) {
   const status = STATUS_META[task.status] ?? { label: task.status || '未知', color: '#9ca3af' }
   const typeLabel = TYPE_LABELS[task.type] ?? task.type ?? '任务'
-  const cancellable = task.status === 'pending' || task.status === 'running'
+  // 可取消状态：pending / running / **paused**。
+  // 后端 cancel 接口对 paused 是「直接置 cancelled」（暂停任务不占资源，没必要先恢复），
+  // 而任务列表把「已暂停」排在**最前**——不给按钮的话用户只能去 Web 端处理。
+  const cancellable = ['pending', 'running', 'paused'].includes(task.status)
   // 进度兜底：后端 progress 可能缺失，用 done/total 反算
   const ratio =
     typeof task.progress === 'number' && task.progress > 0

@@ -233,25 +233,32 @@ export default function DetailScreen() {
     groupedTags[cat].push(t)
   })
 
+  // 视频素材没有可渲染的 <Image> 源：用导入时生成的**首帧缩略图**当封面
+  // （直接把 mp4 路径交给 Image 会是一片空白，全屏浏览同样白屏）
+  const isVideo = detail.media_type === 'video'
+  const coverUri = getFileUrl(
+    apiBaseUrl,
+    isVideo ? detail.thumbnail_path || detail.file_path : detail.file_path,
+  )
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
       {/* 大图：点击进入全屏浏览 */}
       <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerOpen(true)}>
-        <Image
-          source={{ uri: getFileUrl(apiBaseUrl, detail.file_path) }}
-          style={styles.mainImage}
-        />
+        <Image source={{ uri: coverUri }} style={styles.mainImage} />
+        {isVideo && (
+          <View style={styles.videoBadge} pointerEvents="none">
+            <Icon name="videocam-outline" size={14} color="#fff" />
+            <Text style={styles.zoomBadgeText}>视频封面</Text>
+          </View>
+        )}
         <View style={styles.zoomBadge} pointerEvents="none">
           <Icon name="expand-outline" size={14} color="#fff" />
           <Text style={styles.zoomBadgeText}>全屏</Text>
         </View>
       </TouchableOpacity>
 
-      <ImageViewer
-        visible={viewerOpen}
-        uri={getFileUrl(apiBaseUrl, detail.file_path)}
-        onClose={() => setViewerOpen(false)}
-      />
+      <ImageViewer visible={viewerOpen} uri={coverUri} onClose={() => setViewerOpen(false)} />
 
       {/* 操作栏 */}
       <View style={styles.actions}>
@@ -424,6 +431,18 @@ const styles = StyleSheet.create({
   },
   noTagsText: { fontSize: 14, color: '#9ca3af' },
   lastRow: { borderBottomWidth: 0 },
+  videoBadge: {
+    position: 'absolute',
+    left: 10,
+    bottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
   zoomBadge: {
     position: 'absolute',
     right: 10,

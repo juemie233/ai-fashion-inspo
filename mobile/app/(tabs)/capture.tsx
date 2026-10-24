@@ -43,20 +43,21 @@ export default function CaptureScreen() {
   const store = useInspirationStore()
 
   const addUris = (uris: string[]) => {
-    setQueue((prev) => {
-      const existing = new Set(prev.map((q) => q.uri))
-      const added = uris.filter((u) => !existing.has(u)).map<QueueItem>((uri) => ({
-        uri,
-        status: 'pending',
-        progress: 0,
-      }))
-      const next = [...prev, ...added]
-      if (next.length > MAX_BATCH) {
-        Alert.alert('超出上限', `一次最多 ${MAX_BATCH} 张，多余的已忽略`)
-        return next.slice(0, MAX_BATCH)
-      }
-      return next
-    })
+    // 超限提示放在 updater **外面**：state updater 必须是纯函数（StrictMode 下会被
+    // 调用两次，写在里面会弹两次窗，也违反 React 的约定）
+    const existing = new Set(queue.map((q) => q.uri))
+    const added = uris.filter((u) => !existing.has(u)).map<QueueItem>((uri) => ({
+      uri,
+      status: 'pending',
+      progress: 0,
+    }))
+    const next = [...queue, ...added]
+    if (next.length > MAX_BATCH) {
+      Alert.alert('超出上限', `一次最多 ${MAX_BATCH} 张，多余的已忽略`)
+      setQueue(next.slice(0, MAX_BATCH))
+      return
+    }
+    setQueue(next)
   }
 
   /** 从相册多选 */

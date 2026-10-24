@@ -41,6 +41,18 @@ export default function TasksScreen() {
     void load()
   }, [load])
 
+  /** 是否有排队/进行中的任务：有就自动刷新，没就停（避免空转） */
+  const hasActive = tasks.some((t) => t.status === 'pending' || t.status === 'running')
+
+  useEffect(() => {
+    if (!hasActive) return
+    // 从上传页点「查看分析进度」进来就是为了看进度，只靠下拉刷新的话进度条不会动
+    const timer = setInterval(() => {
+      void load()
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [hasActive, load])
+
   const handleRefresh = () => {
     setRefreshing(true)
     void load()
