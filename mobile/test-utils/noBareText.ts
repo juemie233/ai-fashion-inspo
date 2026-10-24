@@ -33,7 +33,10 @@ export function findBareText(node: unknown, path = 'root'): BareTextHit[] {
     if (current === null || current === undefined) return
     if (typeof current === 'string' || typeof current === 'number') {
       const text = String(current)
-      if (text.trim() !== '' && !TEXT_TYPES.has(parentType)) {
+      // 注意：**空字符串也算违规**。RN 原生对 '' 同样报
+      // "Text strings must be rendered within a <Text> component"，
+      // 早期版本这里用 trim() 过滤掉了空串，正好漏掉这一类。
+      if (!TEXT_TYPES.has(parentType)) {
         hits.push({ parentType, text: text.slice(0, 80), path: currentPath })
       }
       return
