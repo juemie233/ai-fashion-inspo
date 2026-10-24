@@ -146,6 +146,8 @@ const backfillTaskId = ref<number | null>(null)
 const backfillProgress = ref(0)
 const backfillStatus = ref('')
 const backfillMessage = ref('')
+/** 强制整库重算（哈希来源从原图换成缩略图后需要跑一次；平时别勾） */
+const forceRehash = ref(false)
 
 /** 任务轮询：3 秒一次，终态即停并提示（进度写进 backfillProgress） */
 const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
@@ -166,6 +168,7 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
       backfillStatus.value = data.status
       if (!['pending', 'running'].includes(data.status)) {
         stopBackfillPolling()
+        forceRehash.value = false
         const complete = data.result?.complete ?? false
         backfillMessage.value = complete
           ? '哈希缓存已补齐，可重新扫描（现在覆盖全库）'
@@ -184,7 +187,7 @@ const { start: startBackfillPolling, stop: stopBackfillPolling } = usePolling({
 async function startBackfill() {
   backfillBusy.value = true
   try {
-    const data = await startPhashBackfill()
+    const data = await startPhashBackfill(forceRehash.value)
     backfillTaskId.value = data.task_id
     backfillProgress.value = 0
     backfillStatus.value = 'running'
@@ -414,16 +417,16 @@ function favoriteLabel(f: NearDuplicateFile): string {
     <p style="color: var(--color-text-3); font-size: 12px; margin: 0 0 12px">
       基于感知哈希识别「视觉相似但字节不同」的图片（不同压缩/缩放/水印）。
       <b>默认全库扫描</b>（哈希已缓存时秒级返回，不漏检）；也可改为随机抽样分批扫。
-      哈希首次计算后自动缓存；<b>大库首扫只做限时补算</b>，缺口可用「后台补齐哈希缓存」
-      一次补完（补算要解码原图，万级大图约需数十分钟，走后台任务不会卡住页面）。
+      哈希首次计算后自动缓存；<b>扫描只读缓存、不在请求内补算</b>（否则会超过前端 30 秒
+      上限），缓存缺口用「后台补齐哈希缓存」一次补完（按缩略图算，2.7 万张约 1 分钟）。
       仅列出候选，需人工确认后删除。
     </p>
 
     <!-- 哈希缓存缺口：给出「后台补齐」入口（扫描接口限时补算，补不完的走 worker） -->
     <a-alert v-if="result && result.missing > 0" type="warning" style="margin-bottom: 12px">
       <template #title>哈希缓存未补齐：还差 {{ result.missing }} 张</template>
-      本次扫描只覆盖了已缓存的 {{ result.cached_total }} / {{ result.total }} 张（本次补算
-      {{ result.backfilled }} 张），可能漏掉重复对。
+      本次扫描只覆盖了已缓存的 {{ result.cached_total }} / {{ result.total }} 张，可能漏掉重复对。
+      （扫描不在请求内补算——那会让请求超过 30 秒上限；缺口交给下面的后台任务）
       <template v-if="result.unhashable > 0">
         （另有 {{ result.unhashable }} 张文件缺失或格式不支持，补算不动）
       </template>
@@ -438,6 +441,9 @@ function favoriteLabel(f: NearDuplicateFile): string {
           >
             后台补齐哈希缓存
           </a-button>
+          <a-checkbox v-model="forceRehash" :disabled="backfillBusy" style="font-size: 12px">
+            强制重算全部（哈希口径变更后用，2.7 万张约 1 分钟）
+          </a-checkbox>
           <a-progress
             v-if="backfillStatus === 'running' || backfillStatus === 'pending'"
             :percent="backfillProgress / 100"

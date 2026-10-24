@@ -1,18 +1,20 @@
 """感知哈希缓存补齐任务（phash_backfill）：后台把全库缺失的 phash 一次补齐。
 
-为什么需要它（而不是让扫描接口自己补完）：大库全量补算要数十分钟（实测 11,568 张
-f2 抖音原图、单张 142 ms ≈ 27 分钟），压在一次 HTTP 请求里必然被前端/反代判超时。
-扫描接口因此只做「限时补算」（`BACKFILL_TIME_BUDGET_SECONDS`），把剩下的一次性补齐
-交给 worker：任务队列没有请求超时约束，进度与取消都走既有任务中心那套 UX。
+为什么必须是任务（而不是让扫描接口顺手补完）：实测库内 5,232 张缺哈希，原图单张
+115 ms → 一次补 300 张就要 34 秒，超过前端 30 秒硬超时（用户看到「扫描失败」，
+后端其实跑完返回 200）。所以扫描接口改成**只读缓存**，缺口全部交给本任务：任务队列
+没有请求超时约束，进度与取消都走既有任务中心那套 UX。
 
-补齐后近似重复扫描才是「纯内存分组」——这是扫描页那句「万级素材秒级返回」的前提。
+哈希来源优先缩略图（单张约 8 ms，比原图快 14 倍），整库补齐从 27 分钟降到约 1 分钟。
+⚠ 缩略图哈希与原图哈希不是同一口径（同图中位差 31 位）：切换来源后必须用
+``force=True`` 整库重算一次，否则新旧哈希混在一起会让真重复对被判成不相似。
 """
 
 from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration, NOT_DELETED
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 _UNHASHABLE_SAMPLE_MAX = 20
 
 
-async def create_phash_backfill_task(db: AsyncSession) -> dict:
+async def create_phash_backfill_task(db: AsyncSession, force: bool = False) -> dict:
     """创建哈希缓存补齐任务（幂等）。
 
     幂等约定与其它后台补算一致：
@@ -37,10 +39,24 @@ async def create_phash_backfill_task(db: AsyncSession) -> dict:
     - 已有 pending/running 的同类任务 → 不重复入队（避免两个 worker 同时算同一批、
       白烧 CPU），返回该任务的 id 与待补数，``reused=True``。
 
+    Args:
+        db: 数据库会话。
+        force: 整库重算（含已缓存行）。哈希来源变更（例如从原图换到缩略图）后必须
+            跑一次；此时 ``total`` 是全库图片数，缓存已完整也不再返回 400。
+
     Returns:
         ``{"task_id": 任务 id 或 None, "total": 待补张数, "reused": 是否复用进行中任务}``
     """
     missing = await _count_missing_phash(db)
+    if force:
+        # 整库重算：total = 全库图片数（missing 只用于「算不出哈希」的诊断）
+        missing = (
+            await db.execute(
+                select(func.count(Inspiration.id)).where(
+                    NOT_DELETED, Inspiration.media_type == "image"
+                )
+            )
+        ).scalar() or 0
     if missing == 0:
         return {"task_id": None, "total": 0, "reused": False}
 
@@ -61,7 +77,7 @@ async def create_phash_backfill_task(db: AsyncSession) -> dict:
         progress=0,
         total=missing,
         done=0,
-        result={"missing": missing},
+        result={"missing": missing, "force": force},
         max_retries=1,
     )
     db.add(task)
@@ -98,11 +114,15 @@ async def execute_phash_backfill(db: AsyncSession, task: TaskQueue) -> None:
         task.updated_at = utcnow()
         await db.commit()
 
-    # 后台任务没有请求超时约束，这里给足预算：单批 300 张 × 142 ms ≈ 43 秒，
-    # 远小于 worker 的 90 秒心跳租约（心跳由 worker 每 10 秒刷新，故长跑安全）
+    force = bool((task.result or {}).get("force"))
+    # 后台任务没有请求超时约束，这里给足预算：缩略图单张约 8 ms，单批 300 张 ≈ 2.4 秒，
+    # 远小于 worker 的 90 秒心跳租约（心跳由 worker 每 10 秒刷新，故长跑安全）。
+    # force（整库重算）按「全库图片数」给预算，否则 2.7 万张会跑不完。
     budget_seconds = max(60.0, missing_at_start * 0.2)
+    if force:
+        budget_seconds = max(300.0, missing_at_start * 0.1)
     result = await backfill_phash_cache(
-        db, budget_seconds=budget_seconds, on_batch=_on_batch
+        db, budget_seconds=budget_seconds, on_batch=_on_batch, force=force
     )
 
     if await is_cancelled(db, task):

@@ -293,11 +293,11 @@ async def near_duplicates(
     与「重复文件」（SHA-256 精确重复）互补：本接口识别字节不同但视觉相似的
     近似重复（不同压缩/缩放/水印），由前端并排预览后人工确认删除。
 
-    扫描规则：全库图片**随机抽样**（每次覆盖不同素材）；感知哈希首次计算后
-    缓存到 inspirations.phash，本接口会顺带补算缺失哈希，但**有时间预算**
-    （`BACKFILL_TIME_BUDGET_SECONDS`）——大库全量补算需数十分钟，压在一次请求里
-    会超时。返回里的 `missing` / `cache_complete` 说明缓存是否已就绪：未就绪时
-    用 `POST /api/admin/phash-backfill` 起后台任务一次性补齐。
+    扫描规则：全库图片**随机抽样**（每次覆盖不同素材）；感知哈希缓存在
+    inspirations.phash。**本接口只读缓存、不在请求内补算**（实测补 300 张要 34 秒，
+    超过前端 30 秒上限，用户会看到「扫描失败」而后端其实跑完了）。返回里的
+    `missing` / `cache_complete` 说明缓存是否已就绪：未就绪时用
+    `POST /api/admin/phash-backfill` 起后台任务一次性补齐。
     """
     from app.services.near_duplicate_service import scan_near_duplicates
 
@@ -307,17 +307,25 @@ async def near_duplicates(
 
 
 @router.post("/phash-backfill")
-async def phash_backfill(db: AsyncSession = Depends(get_db)) -> dict:
+async def phash_backfill(
+    force: bool = Query(False, description="整库重算（哈希来源变更后用）"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """创建「感知哈希缓存补齐」后台任务（近似重复扫描的前置）。
 
-    扫描接口只做限时补算（避免请求超时），本接口把剩余缺失交给 worker 一次性补齐。
-    幂等：已有 pending/running 同类任务时返回该任务（`reused=true`）不重复入队；
-    缓存已完整时返回 400。返回 200 而非 201：本接口是「确保缓存就绪」的幂等语义，
-    复用既有任务同样算成功。
+    扫描接口**只读缓存**（不再限时补算：实测补 300 张要 34 秒，超过前端 30 秒上限），
+    缺口全部由本任务补齐。幂等：已有 pending/running 同类任务时返回该任务
+    （`reused=true`）不重复入队；缓存已完整时返回 400。返回 200 而非 201：本接口是
+    「确保缓存就绪」的幂等语义，复用既有任务同样算成功。
+
+    Args:
+        force: 整库重算（含已缓存行）。哈希来源从原图换成缩略图后必须跑一次——
+            两种来源的哈希不同口径（同图中位差 31 位），混在一起会让真重复对被判成
+            不相似。此时缓存已完整也不返回 400。
     """
     from app.services.task_runner import create_phash_backfill_task
 
-    created = await create_phash_backfill_task(db)
+    created = await create_phash_backfill_task(db, force=force)
     if created["task_id"] is None:
         if created["total"] == 0:
             raise HTTPException(status_code=400, detail="哈希缓存已完整，无需补齐")

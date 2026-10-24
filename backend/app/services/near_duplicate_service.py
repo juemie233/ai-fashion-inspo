@@ -7,17 +7,23 @@
 - **全库随机抽样**：`ORDER BY RANDOM()` 每次覆盖不同素材，不再固定扫描
   「最新 N 张」——旧素材的近似重复同样会被发现，多次扫描结果不重复。
 - **感知哈希缓存**：phash 首次计算后写入 `inspirations.phash`，后续扫描
-  零解码（纯内存分组，秒级响应）；缺失哈希由 :func:`backfill_phash_cache`
-  补算，**单次调用有时间预算**（`BACKFILL_TIME_BUDGET_SECONDS`），剩余部分
-  交给后台任务 `phash_backfill` 或下一次扫描继续。
-- 素材文件被替换（如手机图剪裁）后 phash 置空，下次扫描懒重算。
+  零解码（纯内存分组，秒级响应）。
+- **扫描接口只读**：不再在请求内补算，缓存缺口原样返回
+  （``missing`` / ``cache_complete``），补算统一交给后台任务 ``phash_backfill``。
+- 素材文件被替换（如手机图剪裁）后 phash 置空，下次补算懒重算。
 - 哈希计算为阻塞 I/O，统一放线程池执行。
 
-⚠ 为什么补算必须有预算（2026-09 实测事故）：库里 11,568 张 f2 抖音原图没有 phash，
-单张实测 **142 ms**（中位 0.25 MB、最大 1.92 MB 的大图解码），全量补齐约 **27 分钟**。
-早期实现是「一次请求内 `while True` 补到一张不剩」，于是前端 / 反代先超时（用户看到
-「接口异常」），而后端还在继续跑。现在扫描最多补 `BACKFILL_TIME_BUDGET_SECONDS` 秒，
-并且**每轮都没算出哈希时立即停手**（文件缺失/损坏的行否则会让循环原地打转）。
+⚠ 为什么把补算移出请求（2026-10 实测）：库内 27,579 张图有 22,347 张已缓存、
+5,232 张缺哈希，而扫描请求每次都会先「补一批 300 张」。原图（87.5% 是 WebP）单张
+**115 ms**——`img.draft()` 只对 JPEG 有效，WebP 只能全尺寸解码（82 ms）再 LANCZOS
+降到 17×16（21 ms）。300 张 = **34 秒** > 前端 axios 的 30 秒硬超时：用户看到「扫描
+失败」，而后端其实跑完并返回 200（日志里还能看到 `ConnectionResetError`）。而
+原来的 5 秒预算形同虚设——它只在**批与批之间**检查，单批固定 300 张。
+
+✅ 现在两条：① 扫描只读缓存（实测 22,347 张 ≈ **1.7 秒**，永不超时）；② 哈希来源
+改为**缩略图**（47 KB，单张约 **8 ms**，比原图快 14 倍），整库补齐从 27 分钟降到
+约 1 分钟。注意两种来源的哈希**不可混用**（同一张图，缩略图哈希与原图哈希中位差
+**31 位**，已到阈值 32 的边缘），切换来源必须用 ``force=True`` 整库重算一次。
 """
 
 import asyncio
@@ -25,6 +31,7 @@ import inspect
 import time
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,12 +52,14 @@ from app.utils.time import format_utc
 DEFAULT_THRESHOLD = 32
 # 默认扫描上限（0 表示不限）；同步接口，超大库建议分批或后续改造为任务队列
 DEFAULT_LIMIT = 1000
-# 单次扫描最多补算的缺失 phash 数（单轮批大小）：控制单轮内存与单次线程池批处理规模
+# 补算单轮批大小：控制单轮内存与单次线程池批处理规模。
+# 按缩略图 8 ms/张 算，300 张约 2.4 秒——后台任务可用且足够细，进度条不会长时间不动。
 BACKFILL_PER_SCAN = 300
-# 单次调用的补算**时间**预算（秒）。HTTP 接口必须在这个量级内返回：大库全量补算
-# 需数十分钟（实测 11,568 张大图约 27 分钟），压在一次请求里必然超时。
-# 剩余缺失由后台任务 phash_backfill（worker 执行，无请求超时约束）继续补齐。
-BACKFILL_TIME_BUDGET_SECONDS = 5.0
+# 哈希来源：优先缩略图（快 14 倍）；缩略图缺失时才回退原图。
+# ⚠ 两种来源的哈希不同口径（同一张图中位差 31 位），整库必须只用一种，
+# 否则「缩略图哈希 vs 原图哈希」的真重复对会被判成不相似。切换来源后
+# 必须用 ``backfill_phash_cache(force=True)`` 整库重算。
+HASH_SOURCE = "thumbnail"
 # 分带倒排索引的最小带宽（位）。带宽 = 768 // (threshold+1)：阈值越大带越窄、桶越宽，
 # 候选集会膨胀到比簇数还宽（反而更慢）。低于此值时 `_group` 回退逐簇线性扫描。
 # 实测阈值 32（带宽 23）走索引：比较 2.82 亿 → 4.8 万、24 秒 → 0.6 秒。
@@ -87,22 +96,61 @@ async def _notify_batch(
         await result
 
 
+def _compute_hashes_sync(batch: list, storage_root: Path) -> list[tuple[str, str]]:
+    """同步计算一批素材的感知哈希（由调用方放进线程池执行）。
+
+    **哈希来源优先缩略图**：缩略图约 47 KB、单张 ~8 ms；原图（本库 87.5% 是 WebP）
+    要全尺寸解码，单张 ~115 ms——差 14 倍。缩略图缺失/读取失败时才回退原图。
+
+    两种来源算出的哈希**不可混用**（同一张图，缩略图哈希与原图哈希中位差 31 位，
+    已到阈值 32 的边缘）：整库必须统一来源，切换后用 ``force=True`` 重算。
+
+    Args:
+        batch: ``[(素材 id, 原图相对路径, 缩略图相对路径), ...]``。
+        storage_root: 存储根目录。
+
+    Returns:
+        ``[(素材 id, 哈希 hex), ...]``；算不出哈希的行不出现在结果里（调用方据此
+        记为 unhashable，避免补算循环反复命中同一批坏文件）。
+    """
+    out: list[tuple[str, str]] = []
+    for mid, file_path, thumb_path in batch:
+        # 缩略图优先：先试 thumbnail_path，失败再试原图
+        for candidate in (thumb_path, file_path):
+            if not candidate:
+                continue
+            full = storage_root / candidate
+            try:
+                if not full.exists():
+                    continue
+                phash = perceptual_hash(full)
+            except OSError:
+                continue
+            if phash:
+                out.append((mid, phash))
+                break
+    return out
+
+
 async def backfill_phash_cache(
     db: AsyncSession,
     *,
-    budget_seconds: float = BACKFILL_TIME_BUDGET_SECONDS,
+    budget_seconds: float,
     on_batch: Callable[[int, int], Awaitable[None] | None] | None = None,
+    force: bool = False,
 ) -> dict:
-    """补算缺失的感知哈希（写回 `inspirations.phash`），最多跑 ``budget_seconds`` 秒。
+    """补算感知哈希（写回 `inspirations.phash`），最多跑 ``budget_seconds`` 秒。
 
-    幂等：只算 `phash IS NULL` 的行，算过的不再重算；每轮独立 commit。
-    到点即返回（`complete=False`），由调用方决定继续（再点一次）还是交给后台任务。
+    幂等：默认只算 `phash IS NULL` 的行，算过的不再重算；每轮独立 commit。
+    到点即返回（`complete=False`），由调用方决定继续还是交给后台任务。
 
     Args:
         db: 数据库会话。
         budget_seconds: 时间预算（秒）；``0`` 表示只统计不补算（扫描接口的「只看现状」用法）。
         on_batch: 每轮结束后的回调 ``(已补算总数, 仍未缓存数)``，供后台任务写进度；
             可为同步函数或协程函数（协程会被等待）。
+        force: 整库重算（含已缓存的行）。**切换哈希来源后必须跑一次**——缩略图哈希与
+            原图哈希中位差 31 位，混用会让真重复对被判成不相似。
 
     Returns:
         ``{"computed": 本次新算出的哈希数, "missing": 仍未缓存数,
@@ -114,10 +162,49 @@ async def backfill_phash_cache(
     started = time.monotonic()
     computed_total = 0
     unhashable: set[str] = set()
+    # force 模式一次性取出全库待重算的行，之后按 id 顺序切片（确定性、不重复）
+    pending: list = []
+    if force:
+        pending = list(
+            (
+                await db.execute(
+                    select(
+                        Inspiration.id,
+                        Inspiration.file_path,
+                        Inspiration.thumbnail_path,
+                    )
+                    .where(NOT_DELETED, Inspiration.media_type == "image")
+                    .order_by(Inspiration.id)
+                )
+            ).all()
+        )
+
+    async def _next_batch() -> list:
+        """取下一批待算的行（force 走预取列表，否则按需查 phash IS NULL）。"""
+        if force:
+            batch, rest = pending[:BACKFILL_PER_SCAN], pending[BACKFILL_PER_SCAN:]
+            pending[:] = rest
+            return batch
+        # 每轮随机取一批：优先让不同素材先拿到哈希（扫描抽样才有意义），
+        # 并排除已知算不出哈希的行（否则会反复命中同一批，永远没有进展）
+        stmt = select(
+            Inspiration.id, Inspiration.file_path, Inspiration.thumbnail_path
+        ).where(
+            NOT_DELETED,
+            Inspiration.media_type == "image",
+            Inspiration.phash.is_(None),
+        )
+        if unhashable:
+            stmt = stmt.where(Inspiration.id.notin_(sorted(unhashable)))
+        return list(
+            (
+                await db.execute(stmt.order_by(func.random()).limit(BACKFILL_PER_SCAN))
+            ).all()
+        )
 
     while True:
         missing = await _count_missing_phash(db)
-        if missing == 0:
+        if not force and missing == 0:
             return {
                 "computed": computed_total,
                 "missing": 0,
@@ -128,55 +215,25 @@ async def backfill_phash_cache(
             return {
                 "computed": computed_total,
                 "missing": missing,
-                "complete": False,
+                "complete": missing == 0,
                 "unhashable": len(unhashable),
             }
 
-        # 每轮随机取一批：优先让不同素材先拿到哈希（扫描抽样才有意义），
-        # 并排除已知算不出哈希的行（否则会反复命中同一批，永远没有进展）
-        stmt = select(Inspiration.id, Inspiration.file_path).where(
-            NOT_DELETED,
-            Inspiration.media_type == "image",
-            Inspiration.phash.is_(None),
-        )
-        if unhashable:
-            stmt = stmt.where(Inspiration.id.notin_(sorted(unhashable)))
-        rows = (
-            await db.execute(stmt.order_by(func.random()).limit(BACKFILL_PER_SCAN))
-        ).all()
-
+        rows = await _next_batch()
         if not rows:
-            # 剩下的行都算不出哈希：停手，交给调用方按 unhashable 处理
+            # 没有可算的行了：非 force 模式下意味着剩下的都算不出哈希
             return {
                 "computed": computed_total,
                 "missing": missing,
-                "complete": False,
+                "complete": missing == 0,
                 "unhashable": len(unhashable),
             }
 
-        def _compute_hashes(batch: list) -> list[tuple[str, str]]:
-            """同步计算缺失素材的感知哈希（线程池执行，避免阻塞事件循环）。
-
-            ``batch`` 显式传参（而不是闭包捕获循环变量）：避免「加进线程池时
-            循环已进入下一轮」造成的错批问题。
-            """
-            out: list[tuple[str, str]] = []
-            for mid, mpath in batch:
-                if not mpath:
-                    continue
-                full = storage_root / mpath
-                if not full.exists():
-                    continue
-                phash = perceptual_hash(full)
-                if phash:
-                    out.append((mid, phash))
-            return out
-
-        computed = await asyncio.to_thread(_compute_hashes, rows)
+        computed = await asyncio.to_thread(_compute_hashes_sync, rows, storage_root)
         if not computed:
             # 本轮一张都没算出来：记下这些行并进入下一轮（下一轮排除它们，
             # 因此不会原地打转；预算到点也会正常返回）
-            unhashable.update(mid for mid, _path in rows)
+            unhashable.update(mid for mid, _path, _thumb in rows)
             await _notify_batch(on_batch, computed_total, missing)
             continue
 
@@ -186,7 +243,8 @@ async def backfill_phash_cache(
             )
         await db.commit()
         computed_total += len(computed)
-        await _notify_batch(on_batch, computed_total, max(0, missing - len(computed)))
+        remaining = len(pending) if force else max(0, missing - len(computed))
+        await _notify_batch(on_batch, computed_total, remaining)
 
 
 async def _collect_scoring_ids(
@@ -380,11 +438,10 @@ async def scan_near_duplicates(
 ) -> dict:
     """扫描视觉近似重复的图片素材，返回分组候选（不删除）。
 
-    本接口带「phash 缓存补算」副作用（幂等，写回成功计算的哈希），但**有时间预算**：
-    最多补 :data:`BACKFILL_TIME_BUDGET_SECONDS` 秒就返回，避免大库首扫把请求拖到超时
-    （实测 11,568 张大图需约 27 分钟）。返回里的 ``missing`` / ``cache_complete``
-    告诉调用方缓存是否已就绪：未就绪时本次扫描只覆盖已缓存部分，需要后台任务
-    （``phash_backfill``）或再次扫描继续补齐。
+    **只读**：不在请求内补算哈希（实测补一批 300 张要 34 秒，超过前端 30 秒上限，
+    用户看到「扫描失败」而后端其实跑完了）。返回里的 ``missing`` / ``cache_complete``
+    告诉调用方缓存是否就绪；未就绪时本次只覆盖已缓存部分，缺口交给后台任务
+    ``phash_backfill``。实测 22,347 张已缓存素材全库分组 ≈ 1.7 秒。
     """
     storage_root = settings.storage_root
 
@@ -396,12 +453,9 @@ async def scan_near_duplicates(
         )
     ).scalar() or 0
 
-    # ── 1) 补算缺失哈希（限时）──
-    # 显式传预算（而不是依赖默认参数）：调用方/测试可以按需调大调小，
-    # 后台任务则用更长预算一次补完
-    backfill = await backfill_phash_cache(
-        db, budget_seconds=BACKFILL_TIME_BUDGET_SECONDS
-    )
+    # ── 1) 只统计缺口，不补算 ──
+    # budget_seconds=0 → 立刻返回现状（computed 恒 0）；补算统一走后台任务
+    backfill = await backfill_phash_cache(db, budget_seconds=0.0)
 
     # ── 2) 全库随机抽样：仅取已有哈希缓存的素材参与分组 ──
     # commit 后同一个 session 的查询应当能看到已提交数据；
@@ -423,19 +477,28 @@ async def scan_near_duplicates(
         query = query.limit(limit)
     rows = (await db.execute(query)).all()
 
+    # 体积统计放线程池：2 万多次同步 stat 会把事件循环卡住（实测 453 ms），
+    # 并发请求时互相拖慢
+    def _file_sizes(paths: list[str | None]) -> list[int]:
+        sizes: list[int] = []
+        for rel in paths:
+            size = 0
+            if rel:
+                try:
+                    full = storage_root / rel
+                    size = full.stat().st_size if full.exists() else 0
+                except OSError:
+                    size = 0
+            sizes.append(size)
+        return sizes
+
+    sizes = await asyncio.to_thread(_file_sizes, [row[1] for row in rows])
+
     items: list[dict] = []
-    for row in rows:
+    for row, size_bytes in zip(rows, sizes, strict=True):
         phash = row[5]
         if not phash:
             continue
-        # 文件缺失时按 0 字节处理（磁盘文件被手动删除/孤儿时不应让扫描整体 500）
-        size_bytes = 0
-        if row[1]:
-            try:
-                full = storage_root / row[1]
-                size_bytes = full.stat().st_size if full.exists() else 0
-            except OSError:
-                size_bytes = 0
         items.append(
             {
                 "id": row[0],

@@ -117,10 +117,24 @@ def test_near_duplicate_scan(client):
     rb = client.post("/api/inspirations", files={"file": ("b.jpg", b, "image/jpeg")})
     assert ra.status_code == 201 and rb.status_code == 201
 
-    # 首次扫描：全库 2 张均无哈希缓存，全部补算并参与分组
+    # 扫描接口**只读缓存**（实测请求内补 300 张要 34 秒，超过前端 30 秒上限），
+    # 所以先显式补算，再扫描——这也正是 UI 上「后台补齐哈希缓存」按钮做的事
+    from app.database import async_session
+
+    from app.services.near_duplicate_service import backfill_phash_cache
+
+    async def _backfill() -> dict:
+        async with async_session() as _db:
+            return await backfill_phash_cache(_db, budget_seconds=60.0)
+
+    import asyncio
+
+    assert asyncio.run(_backfill())["computed"] == 2
+
     res = client.post("/api/admin/near-duplicates", json={"threshold": 32}).json()
     assert res["scanned"] == 2
-    assert res["backfilled"] == 2
+    # 扫描本身零补算（只读缓存）
+    assert res["backfilled"] == 0
     assert res["cached_total"] == 2
     assert len(res["groups"]) == 1
     ids = {f["id"] for f in res["groups"][0]["files"]}
@@ -131,6 +145,7 @@ def test_near_duplicate_scan(client):
     # 二次扫描：哈希已缓存，零补算、零解码，结果一致
     res2 = client.post("/api/admin/near-duplicates", json={"threshold": 32}).json()
     assert res2["backfilled"] == 0
+    assert res2["cache_complete"] is True
     assert res2["scanned"] == 2
     assert len(res2["groups"]) == 1
 
@@ -142,6 +157,19 @@ def test_near_duplicate_full_scan_accepted(client, upload):
     的主路径；服务层约定 limit=0 表示不限制，请求模型需放行。
     """
     upload()
+    # 扫描只读缓存 → 先补算（真实路径就是「后台补齐哈希缓存」任务）
+    import asyncio
+
+    from app.database import async_session
+
+    from app.services.near_duplicate_service import backfill_phash_cache
+
+    async def _backfill() -> dict:
+        async with async_session() as _db:
+            return await backfill_phash_cache(_db, budget_seconds=30.0)
+
+    assert asyncio.run(_backfill())["computed"] == 1
+
     r = client.post("/api/admin/near-duplicates", json={"limit": 0, "threshold": 32})
     assert r.status_code == 200, r.text
     data = r.json()
@@ -150,15 +178,16 @@ def test_near_duplicate_full_scan_accepted(client, upload):
 
 
 async def test_near_duplicate_scan_backfill_visibility(client):
-    """近似重复扫描：backfill 写入的 phash 必须在随机抽样中可见。
+    """近似重复扫描：独立补算提交的 phash 必须在扫描的随机抽样中可见。
 
-    验证首次扫描时 scanned 数正确（backfill 的 phash 在随机抽样中可见）。
-    这是之前 bug 的回归测试：commit 后随机抽样可能读到旧快照，
-    导致 scanned 数偏少（如请求 5000 却只显示 300）。
+    回归两件事：
+    1. 补算是独立事务（后台任务 / 独立会话）提交的，扫描的随机抽样要能读到
+       ——commit 后同会话读到旧快照会让 scanned 偏少（如请求 5000 却只有 300）；
+    2. 扫描接口本身**不再补算**（请求内补 300 张要 34 秒，超过前端 30 秒上限）。
 
     造数据直接落盘图片 + 批量插入 inspirations（phash 留空），不走 HTTP
     上传——本测试关注的是扫描/补算服务，350 次完整上传（去重/缩略图/人脸
-    等重活）与被测逻辑无关却占十几秒。扫描仍真实调用 /api 端点并补算 phash。
+    等重活）与被测逻辑无关却占十几秒。补算直接调服务函数，扫描仍真实走 /api。
     """
     import random
     import uuid
@@ -199,15 +228,22 @@ async def test_near_duplicate_scan_backfill_visibility(client):
         db.add_all(rows)
         await db.commit()
 
-    # 首次扫描：N 张均无 phash，循环回卷 backfill 直至全部补齐
-    # limit=5000 → 库中只有 N 张，所以 scanned 应 = N（min(N, 5000)）
-    # 关键验证：backfill 写入的 phash 必须在随机抽样中可见
+    # 先显式补齐（扫描接口只读缓存；N > BACKFILL_PER_SCAN 会触发多轮回卷）
+    from app.services.near_duplicate_service import backfill_phash_cache
+
+    async with async_session() as _db:
+        filled = await backfill_phash_cache(_db, budget_seconds=120.0)
+    assert filled["computed"] == N, f"computed={filled['computed']} should be {N}"
+    assert filled["complete"] is True
+
+    # 扫描：limit=5000 → 库中只有 N 张，scanned 应 = N（关键：补算写入的 phash
+    # 必须在扫描的随机抽样里可见，不能读到旧快照）
     res = client.post(
         "/api/admin/near-duplicates", json={"limit": 5000, "threshold": 32}
     ).json()
-    assert res["backfilled"] == N, f"backfilled={res['backfilled']} should be {N} (all images)"
-    assert res["cached_total"] == res["backfilled"], (
-        f"cached_total={res['cached_total']} != backfilled={res['backfilled']}"
+    assert res["backfilled"] == 0, "扫描接口不应再补算"
+    assert res["cached_total"] == N, (
+        f"cached_total={res['cached_total']} should be {N}"
     )
     assert res["scanned"] == N, (
         f"BUG! scanned={res['scanned']} should be {N} when limit=5000 and total={N}"
