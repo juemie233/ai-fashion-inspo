@@ -8,12 +8,14 @@
 1. **已匹配到该博主的人脸检测**（``inspiration_face_detections.matched_blogger_id``，
    带 bbox）：身份已被匹配器或人工确认过，精度最高，且是本地裁剪、零网络开销；
    ``match_status='pending'``（AI 候选未审核）一律不采信；
-2. **扫 TA 最近的若干张素材**：送人脸子服务检测，取**主体脸**——单张脸直接用；多张脸时
-   只有「最大脸面积 ≥ 次大脸的 2 倍」才认（避免合照里把路人裁成头像）；
+2. **随机抽 TA 的 N 张素材**（``ORDER BY random()``）：送人脸子服务检测，取**主体脸**
+   ——单张脸直接用；多张脸时只有「最大脸面积 ≥ 次大脸的 2 倍」才认（避免合照里把路人
+   裁成头像）。抽样而不是「最近 N 张」：博主最近发的往往是细节图/背影/只拍衣服，脸在
+   更早的作品里；随机抽样还能让每次重试换一批图，不会永远卡在同几张没脸的图上；
 3. 都没有 → 跳过并写清原因（不写跳过表，补了素材/服务后可重试）。
 
 质量门槛（两条，缺一不可）：
-- 人脸面积 ≥ 画面 1.5%（太小的人脸放大到 256px 就是糊的）；
+- 人脸面积 ≥ 画面 :data:`MIN_FACE_AREA_RATIO`（0.2%：穿搭素材多是全身街拍，脸本来就小）；
 - 多脸场景要求主次分明（见上）。
 
 其他口径：
@@ -31,7 +33,7 @@ import logging
 from io import BytesIO
 
 from PIL import Image
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.face import InspirationFaceDetection
@@ -47,7 +49,8 @@ from app.services.task_runners.common import PermanentTaskError, is_cancelled, u
 logger = logging.getLogger(__name__)
 
 """每位博主最多扫几张素材：前几张都没检出可用人脸就跳过（再多也基本是同样的构图）。"""
-PICK_IMAGES = 6
+"""每位博主随机抽多少张素材送人脸检测（按需求定为 10 张）。"""
+PICK_IMAGES = 10
 
 """人脸面积占画面比例下限。
 
@@ -205,14 +208,19 @@ async def _avatar_from_matched_detection(db: AsyncSession, blogger: Blogger) -> 
     return None, ""
 
 
-async def _avatar_from_recent_materials(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
-    """扫 TA 最近的几张素材，挑**脸最大**的那张裁头像（脸够清楚就早停）。"""
+async def _avatar_from_sampled_materials(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
+    """**随机抽** TA 的若干张素材，挑脸最大的那张裁头像（脸够清楚就早停）。
+
+    为什么用 ``random()`` 而不是按时间取最新：博主最近发的常是细节图/背影/只拍衣服，
+    脸往往在更早的作品里；随机抽样也让重复跑时换一批图试，不会永远卡在同几张没脸的图上
+    （SQLite 的 ``random()`` 每行求值一次，配合 LIMIT 就是「随机抽样」）。
+    """
     rows = (
         await db.execute(
             select(Inspiration)
             .join(InspirationBlogger, InspirationBlogger.inspiration_id == Inspiration.id)
             .where(InspirationBlogger.blogger_id == blogger.id, NOT_DELETED)
-            .order_by(Inspiration.created_at.desc())
+            .order_by(func.random())
             .limit(PICK_IMAGES)
         )
     ).scalars()
@@ -342,7 +350,7 @@ async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
             detail["name"] = blogger.name
             avatar, note = await _avatar_from_matched_detection(db, blogger)
             if avatar is None:
-                avatar, note = await _avatar_from_recent_materials(db, blogger)
+                avatar, note = await _avatar_from_sampled_materials(db, blogger)
             if avatar is None:
                 skipped += 1
                 results.append(
@@ -350,7 +358,7 @@ async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
                         **detail,
                         "status": "skipped",
                         "reason": (
-                            f"最近 {PICK_IMAGES} 张素材里没检出可用的主体脸"
+                            f"随机抽的 {PICK_IMAGES} 张素材里都没检出可用的主体脸"
                             "（背影/侧脸/多人合照主次不明/人脸小于画面 0.2% 都不算）；"
                             "可手动挑一张更清楚的"
                         ),

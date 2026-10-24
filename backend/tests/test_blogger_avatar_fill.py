@@ -1,6 +1,6 @@
 """博主头像批量补全测试：素材裁脸 / 已匹配人脸优先 / 多脸不明确跳过 / 服务不可用。
 
-头像来源是**博主自己的素材**：优先用已匹配到 TA 的人脸检测（bbox），否则扫最近的素材
+头像来源是**博主自己的素材**：优先用已匹配到 TA 的人脸检测（bbox），否则随机抽 10 张素材
 送人脸子服务检测、取主体脸裁成方形人像。用例把人脸子服务的 embed/health 换成假实现，
 图片由测试夹具真实生成——裁剪走真实 PIL，不联网。
 """
@@ -146,6 +146,129 @@ async def test_execute_scans_recent_materials(client, create_blogger, make_image
     assert task.result["updated"] == 1
     assert "从素材" in task.result["results"][0]["source"]
     assert (settings.storage_root / _avatar_path(blogger["id"])).is_file()
+
+
+async def test_execute_skips_ambiguous_multiface(client, create_blogger, make_image, monkeypatch):
+    """多张脸且主次不分明（合照/路人抢镜）：不裁，记跳过原因。"""
+    blogger = create_blogger(name="多脸博")
+    insp_id = _upload_material(client, make_image, size=(400, 300))
+    _link(client, insp_id, blogger["id"])
+    _patch_face(
+        monkeypatch,
+        _FakeFaceClient(
+            faces=[
+                {"bbox": [100, 50, 250, 200], "det_score": 0.9},
+                {"bbox": [0, 0, 140, 140], "det_score": 0.9},  # 面积接近，主体不明确
+            ]
+        ),
+    )
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 0
+    assert task.result["skipped"] == 1
+    assert "没检出可用的主体脸" in task.result["results"][0]["reason"]
+    assert not (settings.storage_root / _avatar_path(blogger["id"])).exists()
+
+
+async def test_execute_accepts_small_face(client, create_blogger, make_image, monkeypatch):
+    """人脸只占画面 0.25% 也采用（穿搭素材多是全身街拍，脸本来就小）。
+
+    回归：门槛曾是 1.5%，把 452 位里的 314 位全判成「没检出明确的人脸」，而实际
+    每张素材都检出了干净的单张脸——只是小。列表头像只显示 40~72px，0.2% 够用。
+    """
+    blogger = create_blogger(name="小脸博")
+    insp_id = _upload_material(client, make_image, size=(400, 300))
+    _link(client, insp_id, blogger["id"])
+    # 20x15 = 300 px²，画面 120000 px² → 0.25%
+    _patch_face(
+        monkeypatch,
+        _FakeFaceClient(faces=[{"bbox": [10, 10, 30, 25], "det_score": 0.99}]),
+    )
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 1
+    assert (settings.storage_root / _avatar_path(blogger["id"])).is_file()
+
+
+async def test_execute_skips_when_face_too_small(client, create_blogger, make_image, monkeypatch):
+    """人脸不到画面 0.2%（这张是 0.05%）：放大成头像只会是糊块，跳过。"""
+    blogger = create_blogger(name="针眼脸博")
+    insp_id = _upload_material(client, make_image, size=(400, 300))
+    _link(client, insp_id, blogger["id"])
+    # 5x4 = 20 px² / 120000 px² ≈ 0.017%
+    _patch_face(
+        monkeypatch,
+        _FakeFaceClient(faces=[{"bbox": [10, 10, 15, 14], "det_score": 0.99}]),
+    )
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 0
+    assert task.result["skipped"] == 1
+
+
+async def test_execute_tries_more_sampled_images_when_no_face(
+    client, create_blogger, make_image, monkeypatch
+):
+    """一张没脸不算完：抽样里的其它素材有脸仍要补上（不再只看最新一张）。"""
+    blogger = create_blogger(name="多图找脸博")
+    for _ in range(3):
+        _link(client, _upload_material(client, make_image, size=(400, 300)), blogger["id"])
+
+    class _NoFaceThenFace(_FakeFaceClient):
+        """前两次检测没人脸，第三次才检出（模拟随机抽样先抽到细节图/背影）。"""
+
+        def __init__(self):
+            super().__init__(faces=[])
+            self.calls = 0
+
+        async def embed(self, image_bytes: bytes, filename: str = "image.jpg") -> dict:
+            self.calls += 1
+            faces = [{"bbox": [100, 50, 250, 200], "det_score": 0.9}] if self.calls >= 3 else []
+            return {"face_count": len(faces), "faces": faces}
+
+    _patch_face(monkeypatch, _NoFaceThenFace())
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 1
+    assert (settings.storage_root / _avatar_path(blogger["id"])).is_file()
+
+
+async def test_execute_picks_biggest_face_among_sampled(client, create_blogger, make_image, monkeypatch):
+    """抽样里的多张素材都有脸时，用**脸最大**的那张（小脸不触发早停，会继续扫）。"""
+    blogger = create_blogger(name="挑最大脸博")
+    for _ in range(2):
+        _link(client, _upload_material(client, make_image, size=(400, 300)), blogger["id"])
+
+    class _SmallThenBig(_FakeFaceClient):
+        def __init__(self):
+            super().__init__(faces=[])
+            self.calls = 0
+
+        async def embed(self, image_bytes: bytes, filename: str = "image.jpg") -> dict:
+            self.calls += 1
+            faces = (
+                [{"bbox": [10, 10, 30, 25], "det_score": 0.9}]  # 0.25%
+                if self.calls == 1
+                else [{"bbox": [100, 50, 250, 200], "det_score": 0.9}]  # 18.8%
+            )
+            return {"face_count": len(faces), "faces": faces}
+
+    _patch_face(monkeypatch, _SmallThenBig())
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 1
+    # 小脸 0.25% < 早停阈值 0.8%，会继续扫到第二张，最终采用 18.8% 的大脸
+    assert "18.8%" in task.result["results"][0]["source"]
 
 
 async def test_execute_skips_ambiguous_multiface(client, create_blogger, make_image, monkeypatch):
