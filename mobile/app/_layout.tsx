@@ -33,6 +33,15 @@ export default function RootLayout() {
               presentation: 'card',
             }}
           />
+          <Stack.Screen
+            name="tasks"
+            options={{
+              headerShown: true,
+              title: '后台任务',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
         </Stack>
       </SafeAreaProvider>
     </ErrorBoundary>

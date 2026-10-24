@@ -5,19 +5,10 @@ import {
   apiClient,
   getApiBaseUrl,
   loadApiBaseUrl,
+  uploadInspirationImage,
   type Inspiration,
   type InspirationListResponse,
 } from '../services/api'
-
-/** 上传文件扩展名 → MIME 类型（避免 PNG/HEIC 被错误标记为 image/jpeg） */
-const MIME_BY_EXT: Record<string, string> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  mp4: 'video/mp4',
-}
 
 interface InspirationState {
   items: Inspiration[]
@@ -31,6 +22,8 @@ interface InspirationState {
   fetchInspirations: () => Promise<void>
   fetchMore: () => Promise<void>
   uploadImage: (uri: string) => Promise<Inspiration>
+  /** 插入一条素材到列表最前（多图上传用） */
+  prependItem: (item: Inspiration) => void
   toggleFavorite: (id: string, desiredState: boolean) => Promise<void>
 }
 
@@ -85,23 +78,9 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     }
   },
 
-  /** 上传图片 */
+  /** 上传单张图片（multipart 逻辑收敛在 services/api.ts） */
   uploadImage: async (uri: string) => {
-    const formData = new FormData()
-    const filename = uri.split('/').pop() || 'photo.jpg'
-    // 按真实扩展名推断 MIME，避免 PNG/HEIC 被错误标记为 image/jpeg
-    const ext = filename.split('.').pop()?.toLowerCase() || 'jpg'
-    const mime = MIME_BY_EXT[ext] || 'image/jpeg'
-    formData.append('file', {
-      uri,
-      name: filename,
-      type: mime,
-    } as any)
-    formData.append('source_type', 'manual_upload')
-
-    const { data } = await apiClient.post<Inspiration>('/inspirations', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    const data = await uploadInspirationImage(uri)
 
     // 插入到列表最前面
     set((state) => ({
@@ -110,6 +89,11 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     }))
 
     return data
+  },
+
+  /** 把一条新素材插到列表最前（多图上传逐张完成后调用） */
+  prependItem: (item: Inspiration) => {
+    set((state) => ({ items: [item, ...state.items], total: state.total + 1 }))
   },
 
   /** 切换收藏：显式传入目标状态，素材不在列表（详情页）时同样生效 */

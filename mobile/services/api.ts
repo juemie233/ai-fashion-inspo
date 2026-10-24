@@ -136,4 +136,125 @@ export interface InspirationTag {
 /** 分页响应（与后端分页约定一致） */
 export type InspirationListResponse = PaginatedResponse<Inspiration>
 
+// ---------------------------------------------------------------------------
+// M2 能力：标签编辑 / 移入垃圾桶 / 相似推荐 / 多图上传 / 任务中心
+// ---------------------------------------------------------------------------
+
+/** 扩展名 → MIME（HEIC 也按 jpeg 报，避免后端拒绝） */
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  heic: 'image/jpeg',
+}
+
+/** 上传单张图片（multipart）；onProgress 为 0~1 的上传进度回调 */
+export async function uploadInspirationImage(
+  uri: string,
+  onProgress?: (ratio: number) => void,
+): Promise<Inspiration> {
+  const formData = new FormData()
+  const filename = uri.split('/').pop() || 'photo.jpg'
+  const ext = filename.split('.').pop()?.toLowerCase() || 'jpg'
+  const mime = MIME_BY_EXT[ext] || 'image/jpeg'
+
+  formData.append('file', { uri, name: filename, type: mime } as unknown as Blob)
+  formData.append('source_type', 'manual_upload')
+
+  const { data } = await apiClient.post<Inspiration>('/inspirations', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // axios 的进度回调在 RN 下由 XMLHttpRequest 提供；部分环境可能不触发，回调可选
+    onUploadProgress: (e) => {
+      if (!onProgress || !e.total) return
+      onProgress(Math.min(1, e.loaded / e.total))
+    },
+  })
+  return data
+}
+
+/** 给单条素材关联标签（按名称查找或创建）；返回实际新增的名称 */
+export async function addTagsToInspiration(
+  id: string,
+  names: string[],
+  category = 'free',
+): Promise<{ added?: string[]; skipped?: string[] }> {
+  const { data } = await apiClient.post<{ added?: string[]; skipped?: string[] }>(
+    `/inspirations/${id}/tags`,
+    { names, category, source: 'manual' },
+  )
+  return data ?? {}
+}
+
+/** 解除素材与某个标签的关联（tagId 为数字主键） */
+export async function removeTagFromInspiration(id: string, tagId: number): Promise<void> {
+  await apiClient.delete(`/inspirations/${id}/tags/${tagId}`)
+}
+
+/** 垃圾桶原因枚举（与后端一致） */
+export type TrashReason = '质量差' | '重复' | '不喜欢' | '隐私' | '其他'
+
+/** 把素材移入垃圾桶（软删除，可恢复） */
+export async function trashInspiration(id: string, reason?: TrashReason): Promise<Inspiration> {
+  const { data } = await apiClient.post<Inspiration>(`/inspirations/${id}/trash`, {
+    ...(reason ? { reason } : {}),
+    source: 'manual',
+  })
+  return data
+}
+
+/** 从垃圾桶恢复 */
+export async function restoreInspiration(id: string): Promise<Inspiration> {
+  const { data } = await apiClient.post<Inspiration>(`/inspirations/${id}/restore`)
+  return data
+}
+
+/** 相似素材推荐（向量检索结果） */
+export async function fetchSimilarInspirations(id: string): Promise<Inspiration[]> {
+  const { data } = await apiClient.get<{ items?: Inspiration[]; results?: Inspiration[] }>(
+    `/search/similar/${id}`,
+  )
+  // 后端可能返回 {items} 或 {results}，两种都兼容
+  return data?.items ?? data?.results ?? []
+}
+
+/** 标签全量（按类别分组） */
+export async function fetchTagGroups(): Promise<TagCategoryGroup[]> {
+  const { data } = await apiClient.get<TagCategoryGroup[]>('/tags')
+  return data ?? []
+}
+
+/** 新建标签 */
+export async function createTag(name: string, category = 'free'): Promise<Tag> {
+  const { data } = await apiClient.post<Tag>('/tags', { name, category })
+  return data
+}
+
+/** 后台任务（AI 分析、采集、出图等共用一套任务队列） */
+export interface TaskItem {
+  id: number
+  type: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | string
+  progress: number
+  total: number
+  done: number
+  error?: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** 任务分页列表 */
+export async function fetchTasks(page = 1, size = 20): Promise<PaginatedResponse<TaskItem>> {
+  const { data } = await apiClient.get<PaginatedResponse<TaskItem>>('/tasks', {
+    params: { page, size },
+  })
+  return data
+}
+
+/** 取消任务（仅 pending/running 有效） */
+export async function cancelTask(id: number): Promise<void> {
+  await apiClient.post(`/tasks/${id}/cancel`)
+}
+
 export type { Tag, TagCategoryGroup }

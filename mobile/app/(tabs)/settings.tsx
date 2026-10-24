@@ -16,6 +16,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native'
+import { useRouter } from 'expo-router'
 import Icon from '../../components/Icon'
 import {
   getApiBaseUrl,
@@ -26,6 +27,7 @@ import {
 import { useInspirationStore } from '../../hooks/useInspirations'
 
 export default function SettingsScreen() {
+  const router = useRouter()
   const [input, setInput] = useState('')
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -123,6 +125,15 @@ export default function SettingsScreen() {
             </>
           )}
         </TouchableOpacity>
+
+      {/* 后台任务入口：AI 分析/采集/出图共用一套任务队列，手机上只看进度与取消 */}
+      <TouchableOpacity style={styles.linkCard} onPress={() => router.push('/tasks')}>
+        <View style={styles.linkLeft}>
+          <Icon name="pulse-outline" size={18} color="#6366f1" />
+          <Text style={styles.linkLabel}>后台任务</Text>
+        </View>
+        <Icon name="chevron-forward" size={16} color="#d1d5db" />
+      </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   )
@@ -171,4 +182,16 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: '#6366f1' },
   btnDisabled: { opacity: 0.6 },
   btnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  linkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginTop: 12,
+  },
+  linkLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  linkLabel: { fontSize: 15, color: '#374151' },
 })
