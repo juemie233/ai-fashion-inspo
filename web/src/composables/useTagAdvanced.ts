@@ -8,7 +8,8 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-export type AdvancedTab = 'health' | 'cluster' | 'network' | 'effect' | 'tree' | 'history'
+export type AdvancedTab =
+  'health' | 'cluster' | 'network' | 'effect' | 'tree' | 'history' | 'governance'
 
 export const ADVANCED_TABS: AdvancedTab[] = [
   'health',
@@ -17,6 +18,7 @@ export const ADVANCED_TABS: AdvancedTab[] = [
   'effect',
   'tree',
   'history',
+  'governance',
 ]
 
 // ── 模块级共享状态（单例）──

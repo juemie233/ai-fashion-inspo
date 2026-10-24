@@ -11,12 +11,20 @@ vi.mock('vue-router', () => ({
 }))
 
 describe('TagAdvancedManageView 左侧导航', () => {
-  it('渲染六个中文导航项（不渲染组件对象）', () => {
+  it('渲染七个中文导航项（不渲染组件对象）', () => {
     const wrapper = mount(TagAdvancedManageView, { global: { stubs: { 'a-button': true } } })
     const navItems = wrapper.findAll('.adv-nav-item')
-    expect(navItems).toHaveLength(6)
+    expect(navItems).toHaveLength(7)
     const texts = navItems.map((n) => n.text())
-    expect(texts).toEqual(['健康度', '聚类', '网络图', '效果分析', '层级树', '历史记录'])
+    expect(texts).toEqual([
+      '健康度',
+      '聚类',
+      '网络图',
+      '效果分析',
+      '层级树',
+      '历史记录',
+      '标签治理',
+    ])
     // 防回归：任何导航项都不应包含组件对象序列化特征
     for (const t of texts) {
       expect(t).not.toContain('__name')

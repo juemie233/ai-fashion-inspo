@@ -198,3 +198,100 @@ export function asNetworkResult(
 ): NetworkAnalysisResult | null {
   return result ? (result as unknown as NetworkAnalysisResult) : null
 }
+
+// ===== 标签治理（颜色剥离 / 新标签观察名单 / 单标签共现）=====
+
+/** 颜色前缀剥离的统计摘要（dry-run 与 apply 共用同一口径；仅本模块使用） */
+interface ColorStripSummary {
+  category: string
+  /** 扫描了多少个该类别标签 */
+  total_scanned: number
+  /** 会被重命名（剥离颜色前缀）的数量 */
+  renamed: number
+  /** 剥离后与已有标签撞名、会合并的数量 */
+  merged: number
+  /** 跳过（剥完为空名 / 无法处理）的数量 */
+  skipped: number
+  /** 新名命中别名而跳过的数量 */
+  alias_skipped: number
+  /** 跨类别撞名跳过的数量 */
+  cross_category_skipped: number
+  /** 预计重指向的关联行数 */
+  links_repointed: number
+  /** 预计补建的颜色标签关联行数 */
+  color_links_added: number
+}
+
+/** dry-run 额外返回「旧名→新名」样例，方便执行前肉眼确认 */
+export interface ColorStripPreview extends ColorStripSummary {
+  /** 颜色前缀词表大小（来自 color 类别标签名） */
+  color_prefixes: number
+  samples: Array<{ old: string; new: string; action: string }>
+}
+
+/** 颜色剥离 preview（不写库） */
+export async function stripColorDryRun(
+  body: { category?: string; limit?: number } = {},
+): Promise<ColorStripPreview> {
+  const { data } = await apiClient.post<ColorStripPreview>('/tags/color-strip/dry-run', body)
+  return data
+}
+
+/** 颜色剥离执行（会写操作历史，可回滚）；返回批号便于去历史页核对 */
+export async function stripColorApply(
+  body: { category?: string; limit?: number } = {},
+): Promise<ColorStripSummary & { batch_id: string }> {
+  const { data } = await apiClient.post<ColorStripSummary & { batch_id: string }>(
+    '/tags/color-strip/apply',
+    body,
+  )
+  return data
+}
+
+/** 观察名单里的一条 AI 新标签 */
+export interface WatchTag {
+  id: number
+  name: string
+  category: string
+  created_at: string
+  usage_count: number
+}
+
+/** AI 新标签观察名单（最近 N 天新建、用量仍 ≤ max_usage） */
+export async function fetchWatchList(
+  params: { days?: number; max_usage?: number; limit?: number } = {},
+): Promise<{ days: number; max_usage: number; cutoff: string; total: number; items: WatchTag[] }> {
+  const { data } = await apiClient.get<{
+    days: number
+    max_usage: number
+    cutoff: string
+    total: number
+    items: WatchTag[]
+  }>('/tags/watchlist', { params })
+  return data
+}
+
+/** 确认保留（source 改 manual，从观察名单消失） */
+export async function keepWatchTags(tagIds: number[]): Promise<{ kept: number }> {
+  const { data } = await apiClient.post<{ kept: number }>('/tags/watchlist/keep', {
+    tag_ids: tagIds,
+  })
+  return data
+}
+
+/** 某标签「常一起出现的标签」（详情小卡） */
+export async function fetchTagCooccurrence(
+  tagId: number,
+  limit = 8,
+): Promise<{
+  tag: { id: number; name: string; category: string } | null
+  materials: number
+  items: Array<{ id: number; name: string; category: string; count: number }>
+}> {
+  const { data } = await apiClient.get<{
+    tag: { id: number; name: string; category: string } | null
+    materials: number
+    items: Array<{ id: number; name: string; category: string; count: number }>
+  }>(`/tags/${tagId}/cooccurrence`, { params: { limit } })
+  return data
+}

@@ -28,10 +28,7 @@ router = APIRouter(prefix="/api/tags", tags=["tags"])
 async def list_tags(db: AsyncSession = Depends(get_db)) -> list[TagCategoryGroup]:
     """获取所有标签，按类别分组。"""
     grouped = await tag_service.get_all_tags_grouped(db)
-    return [
-        TagCategoryGroup(category=cat, tags=tags)
-        for cat, tags in grouped.items()
-    ]
+    return [TagCategoryGroup(category=cat, tags=tags) for cat, tags in grouped.items()]
 
 
 @router.post("", response_model=TagOut, status_code=status.HTTP_201_CREATED)
@@ -121,6 +118,7 @@ async def update_tag(tag_id: int, data: TagUpdate, db: AsyncSession = Depends(ge
 async def delete_unused_tags(db: AsyncSession = Depends(get_db)) -> dict:
     """删除所有使用次数为 0 的标签。"""
     import logging
+
     _logger = logging.getLogger(__name__)
 
     unused = await tag_service.delete_unused_tags(db)
@@ -132,9 +130,7 @@ async def delete_unused_tags(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.post("/batch-delete", status_code=status.HTTP_200_OK)
-async def batch_delete_tags(
-    data: TagBatchDelete, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def batch_delete_tags(data: TagBatchDelete, db: AsyncSession = Depends(get_db)) -> dict:
     """批量删除标签及其所有关联。"""
     if not data.tag_ids:
         raise HTTPException(status_code=400, detail="请提供要删除的标签 ID 列表")
@@ -165,10 +161,7 @@ async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(
 async def tag_suggestions(name: str, db: AsyncSession = Depends(get_db)) -> list[dict]:
     """查找与给定名称相似的已有标签（用于去重建议）。"""
     similar = await tag_service.find_similar_tags(db, name)
-    return [
-        {"id": t.id, "name": t.name, "category": t.category}
-        for t in similar
-    ]
+    return [{"id": t.id, "name": t.name, "category": t.category} for t in similar]
 
 
 # ============ 统计与扫描 ============
@@ -198,9 +191,7 @@ async def find_duplicate_tags(
     # 1. 查缓存
     # 缓存 key 基于「最后修改时间」：标签的创建/改名/改类别/合并都会刷新
     # updated_at（created_at 只记录创建，改名/改类别不刷新它，会漏失效）。
-    last_mod_result = await db.execute(
-        sa_func.max(TagModel.updated_at)
-    )
+    last_mod_result = await db.execute(sa_func.max(TagModel.updated_at))
     last_mod = str(last_mod_result.scalar() or "")
     cache_key = compute_cache_key(last_mod, threshold)
     cached = get_cached(cache_key)
@@ -256,18 +247,15 @@ async def tag_inspirations(
 async def export_tags(db: AsyncSession = Depends(get_db)) -> dict:
     """导出所有标签为 JSON（含类别、来源、使用次数）。"""
     from datetime import datetime
+
     export_data = await tag_service.export_tags(db)
     return {"tags": export_data, "exported_at": datetime.now(UTC).isoformat()}
 
 
 @router.post("/import", status_code=status.HTTP_200_OK)
-async def import_tags(
-    data: TagImportRequest, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def import_tags(data: TagImportRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """批量导入标签（跳过已存在的标签）。"""
-    imported, skipped = await tag_service.import_tags(
-        db, [(item.name, item.category) for item in data.tags]
-    )
+    imported, skipped = await tag_service.import_tags(db, [(item.name, item.category) for item in data.tags])
     return {
         "message": f"已导入 {imported} 个标签，跳过 {skipped} 个已存在",
         "imported": imported,
@@ -279,9 +267,7 @@ async def import_tags(
 
 
 @router.post("/reorder", status_code=status.HTTP_200_OK)
-async def reorder_tags(
-    data: TagReorderRequest, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def reorder_tags(data: TagReorderRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """批量更新标签自定义排序权重（sort_order 越小越靠前）。"""
     if not data.items:
         raise HTTPException(status_code=400, detail="请提供排序项")
@@ -306,9 +292,7 @@ async def list_aliases(db: AsyncSession = Depends(get_db)) -> list[dict]:
 
 
 @router.post("/{tag_id}/aliases", response_model=AliasOut, status_code=status.HTTP_201_CREATED)
-async def create_alias(
-    tag_id: int, data: AliasCreate, db: AsyncSession = Depends(get_db)
-) -> TagAlias:
+async def create_alias(tag_id: int, data: AliasCreate, db: AsyncSession = Depends(get_db)) -> TagAlias:
     """为标签添加别名（将别名归一化到该标签）。"""
     alias = data.alias.strip()
     if not alias:
@@ -349,15 +333,11 @@ async def tag_history_list(
     """分页查询标签操作历史（按时间倒序），支持按操作类型 / 标签 / 批次过滤。"""
     from app.services.tag_history_service import list_history
 
-    return await list_history(
-        db, page=page, size=size, operation=operation, tag_id=tag_id, batch_id=batch_id
-    )
+    return await list_history(db, page=page, size=size, operation=operation, tag_id=tag_id, batch_id=batch_id)
 
 
 @router.post("/history/{history_id}/rollback", status_code=status.HTTP_200_OK)
-async def rollback_tag_history(
-    history_id: int, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def rollback_tag_history(history_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """回滚一条标签操作（单条操作级；标签已被后续修改时返回 409 冲突）。"""
     from app.services.tag_history_service import (
         TagHistoryNotFoundError,
@@ -458,9 +438,7 @@ async def tag_clusters_scan(
 
 
 @router.post("/clusters/apply", status_code=status.HTTP_200_OK)
-async def tag_clusters_apply(
-    data: ClusterApplyRequest, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def tag_clusters_apply(data: ClusterApplyRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """应用选中的候选组：组内合并（可选保留源名为别名），全部写操作历史。
 
     每个组可传 group_id（从最近一次聚类扫描结果解析成员），
@@ -495,9 +473,7 @@ async def tag_clusters_apply(
                 raise HTTPException(status_code=400, detail=f"候选组 {g.get('group_id')} 不存在")
             target = src["suggested_target"]
             g["target_tag_id"] = target["id"]
-            g["source_tag_ids"] = [
-                m["id"] for m in src["members"] if m["id"] != target["id"]
-            ]
+            g["source_tag_ids"] = [m["id"] for m in src["members"] if m["id"] != target["id"]]
 
     return await apply_tag_clusters(db, groups, batch_id=data.batch_id)
 
@@ -691,6 +667,38 @@ async def cooccurrence_network(
     return await tag_service.get_cooccurrence_network(db, limit, min_count)
 
 
+@router.get("/watchlist", status_code=status.HTTP_200_OK)
+async def tag_watchlist(
+    days: int = Query(7, ge=1, le=90),
+    max_usage: int = Query(1, ge=0, le=20),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """AI 新建且还没用起来的标签（新标签观察名单）。
+
+    标签库 22,813 个里 99.9% 是 AI 自动建的、70% 只被用过 1~2 次——新标签的第一道
+    闸门在这里：看「最近 N 天新建、用量仍 ≤ max_usage」的 AI 标签，人工决定留下还是删掉。
+    """
+    from app.services.tag_query import list_watch_tags
+
+    return await list_watch_tags(db, days=days, max_usage=max_usage, limit=limit)
+
+
+@router.post("/watchlist/keep", status_code=status.HTTP_200_OK)
+async def tag_watchlist_keep(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """把观察名单里的标签「确认保留」：source 改为 manual（不会再出现在观察名单）。
+
+    请求体: ``{"tag_ids": [1, 2]}``。返回 ``{"kept": 实际改动的数量}``。
+    """
+    from app.services.tag_query import keep_watch_tags
+
+    tag_ids = payload.get("tag_ids") or []
+    if not isinstance(tag_ids, list) or not tag_ids:
+        raise HTTPException(status_code=400, detail="请提供 tag_ids")
+    kept = await keep_watch_tags(db, [int(i) for i in tag_ids])
+    return {"kept": kept}
+
+
 @router.get("/top", status_code=status.HTTP_200_OK)
 async def top_tags(
     limit: int = Query(20, ge=1, le=100),
@@ -698,6 +706,18 @@ async def top_tags(
 ) -> list[dict]:
     """返回使用次数最多的标签排行。"""
     return await tag_service.get_top_tags(db, limit)
+
+
+@router.get("/{tag_id}/cooccurrence", status_code=status.HTTP_200_OK)
+async def tag_cooccurrence(
+    tag_id: int,
+    limit: int = Query(8, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """某标签「常一起出现的标签」（详情小卡用；只统计未删除素材）。"""
+    from app.services.tag_query import get_tag_cooccurrence
+
+    return await get_tag_cooccurrence(db, tag_id, limit=limit)
 
 
 @router.get("/{tag_id}/trend", status_code=status.HTTP_200_OK)

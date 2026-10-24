@@ -9,6 +9,7 @@ import TagNetworkPanel from '@/components/tag/advanced/TagNetworkPanel.vue'
 import TagEffectPanel from '@/components/tag/advanced/TagEffectPanel.vue'
 import TagTreePanel from '@/components/tag/advanced/TagTreePanel.vue'
 import TagHistoryPanel from '@/components/tag/advanced/TagHistoryPanel.vue'
+import TagGovernancePanel from '@/components/tag/advanced/TagGovernancePanel.vue'
 import TagBatchEditDrawer from '@/components/tag/advanced/TagBatchEditDrawer.vue'
 
 const {
@@ -26,6 +27,7 @@ const PANELS = {
   effect: TagEffectPanel,
   tree: TagTreePanel,
   history: TagHistoryPanel,
+  governance: TagGovernancePanel,
 } as const
 
 /** 左侧导航中文标签（PANELS 的值是组件对象，不能直接渲染为文本） */
@@ -36,6 +38,7 @@ const PANEL_LABELS: Record<keyof typeof PANELS, string> = {
   effect: '效果分析',
   tree: '层级树',
   history: '历史记录',
+  governance: '标签治理',
 }
 
 const currentPanel = computed(() => PANELS[activeTab.value])

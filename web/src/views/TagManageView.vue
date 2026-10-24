@@ -4,6 +4,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import TagInspirationGrid from '@/components/tag/TagInspirationGrid.vue'
+import TagInsightCard from '@/components/tag/TagInsightCard.vue'
 import TagAnalyticsModal from '@/components/tag/TagAnalyticsModal.vue'
 import TagStatsBar from '@/components/tag/TagStatsBar.vue'
 import TagToolbar from '@/components/tag/TagToolbar.vue'
@@ -64,6 +65,17 @@ const {
 // ===== 重复标签图片对比弹窗 =====
 const compareVisible = ref(false)
 const comparePair = ref<TagDuplicatePair | null>(null)
+
+/** 洞察小卡里点共现标签：从已加载的分组里按 id 找到它并选中（找不到就忽略） */
+function selectTagById(id: number) {
+  for (const group of groups.value) {
+    const found = group.tags.find((tag) => tag.id === id)
+    if (found) {
+      selectTag(found)
+      return
+    }
+  }
+}
 
 function openCompare(pair: TagDuplicatePair) {
   comparePair.value = pair
@@ -262,6 +274,8 @@ async function handleExport() {
 
       <!-- ===== 右面板：选中标签的素材网格 ===== -->
       <div class="right-panel">
+        <!-- 洞察小卡：使用趋势 + 常一起出现的标签（点共现标签直接切过去） -->
+        <TagInsightCard :tag="selectedTag" @select="selectTagById" />
         <TagInspirationGrid :tag="selectedTag" @changed="onGridChanged" />
       </div>
       <!-- /right-panel -->

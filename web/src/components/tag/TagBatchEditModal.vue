@@ -14,6 +14,7 @@ import { Message } from '@arco-design/web-vue'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { batchChangeCategory, batchRenameTags, updateTag, type TagItem } from '@/api/tags'
 import { CATEGORY_LABELS } from '@/constants/tag'
+import { buildRenamePreview, summarizeCategoryChange } from '@/utils/tagGovernance'
 import { useTagEvents } from '@/composables/useTagEvents'
 
 type Mode = 'inline' | 'replace' | 'category'
@@ -176,6 +177,20 @@ function handleOk() {
   else void saveCategory()
 }
 
+/** 查找替换的**执行前预览**：哪些标签会改名、改成什么、会不会被后端拒绝 */
+const renamePreview = computed(() =>
+  mode.value === 'replace' && replaceFind.value.trim()
+    ? buildRenamePreview(props.tags, replaceFind.value.trim(), replaceTo.value.trim())
+    : { rows: [], changedCount: 0, conflicts: [] },
+)
+
+/** 批量改类别的影响面：多少个会变、多少个本来就是目标类别 */
+const categoryImpact = computed(() =>
+  mode.value === 'category' && categoryTarget.value
+    ? summarizeCategoryChange(props.tags, categoryTarget.value)
+    : { changed: 0, unchanged: 0 },
+)
+
 const canSubmit = computed(() => {
   if (saving.value) return false
   if (mode.value === 'inline') return inlineChanges.value.length > 0
@@ -231,6 +246,44 @@ const canSubmit = computed(() => {
         <label class="field-label">替换为</label>
         <a-input v-model="replaceTo" placeholder="如：纯白" />
       </div>
+
+      <!-- 执行前预览：改名的前后对照 + 会被后端挡下的情况 -->
+      <template v-if="replaceFind.trim()">
+        <div class="preview-title">
+          将改名 {{ renamePreview.changedCount }} 个（命中 {{ renamePreview.rows.length }} 个）
+        </div>
+        <a-alert
+          v-for="(conflict, idx) in renamePreview.conflicts"
+          :key="idx"
+          type="warning"
+          :show-icon="true"
+          style="margin-bottom: 6px"
+        >
+          {{ conflict }}
+        </a-alert>
+        <a-table
+          v-if="renamePreview.rows.length"
+          :data="renamePreview.rows.slice(0, 50)"
+          row-key="id"
+          :pagination="false"
+          :bordered="false"
+          size="mini"
+          :scroll="{ y: 160 }"
+          :columns="[
+            { title: '原名', dataIndex: 'before' },
+            { title: '改名后', dataIndex: 'after' },
+          ]"
+        >
+          <template #after="{ record }">
+            <span :style="{ color: record.empty ? '#e5484d' : undefined }">
+              {{ record.empty ? '（空名，会被拒绝）' : record.after }}
+            </span>
+          </template>
+        </a-table>
+        <div v-if="renamePreview.rows.length > 50" class="preview-hint">
+          仅展示前 50 条，共 {{ renamePreview.rows.length }} 条
+        </div>
+      </template>
     </div>
 
     <!-- 批量改类别 -->
@@ -242,6 +295,14 @@ const canSubmit = computed(() => {
         placeholder="选择目标类别"
         style="margin: 8px 0"
       />
+      <div v-if="categoryTarget" class="preview-title">
+        {{ categoryImpact.changed }} 个会改成「{{
+          CATEGORY_LABELS[categoryTarget] || categoryTarget
+        }}」
+        <template v-if="categoryImpact.unchanged > 0">
+          · {{ categoryImpact.unchanged }} 个本来就是该类别（不变）
+        </template>
+      </div>
     </div>
   </a-modal>
 </template>
@@ -289,5 +350,17 @@ const canSubmit = computed(() => {
   font-size: 13px;
   color: #4b5563;
   margin-bottom: 4px;
+}
+
+.preview-title {
+  margin: 10px 0 6px;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+
+.preview-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-3);
 }
 </style>
