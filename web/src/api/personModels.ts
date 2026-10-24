@@ -104,10 +104,11 @@ export async function enrichMissingProfiles(bloggerIds?: number[]): Promise<{
 }
 
 /**
- * 创建「博主头像批量补全」任务（bloggerIds 缺省 = 全部有头像来源的抖音博主）。
+ * 创建「博主头像批量补全」任务（bloggerIds 缺省 = 全部有素材且没头像的博主）。
  *
- * 头像来源是 f2 用户库里的平台头像直链（离线索引 + CDN 下载），所以只覆盖
- * 「f2 见过主页」的抖音账号；默认只补空缺，不覆盖已手动设置的头像。
+ * 头像来源是**博主自己的素材**：优先用已匹配到 TA 的人脸检测（bbox），否则扫最近的
+ * 素材送人脸子服务检测、取主体脸裁成方形人像。因此需要人脸服务在跑，且 TA 有素材；
+ * 默认只补空缺，不覆盖已手动设置的头像。
  */
 export async function fillMissingAvatars(
   bloggerIds?: number[],

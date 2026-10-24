@@ -162,11 +162,12 @@ async def fill_missing_avatars(
 ) -> dict:
     """创建「博主头像批量补全」异步任务（人物管理页一键补头像）。
 
-    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部有头像来源的抖音博主），
+    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部有素材且没头像的博主），
           {"overwrite": true}（可选；默认只补空缺，不覆盖已手动设置的头像）。
 
-    头像来源：f2 用户库 ``user_info_web.avatar_url``（离线索引 + CDN 直链下载），
-    因此只能补「f2 见过主页」的抖音账号；小红书暂无稳定离线来源，不参与本期。
+    头像来源：从**该博主自己的素材**里裁真实人像——优先用已匹配到 TA 的人脸检测
+    （``inspiration_face_detections``，带 bbox），否则扫最近的几张素材送人脸子服务
+    检测、取主体脸裁成方形人像。因此需要人脸服务在跑，且 TA 得有素材。
     """
     payload = body or {}
     blogger_ids = payload.get("blogger_ids")
@@ -182,7 +183,8 @@ async def fill_missing_avatars(
         raise HTTPException(
             status_code=400,
             detail=(
-                "没有可补头像的博主：抖音头像来自 f2 用户库，需该账号被 f2 采过一次主页（或已有头像被跳过）"
+                "没有可补头像的博主：头像从博主自己的素材里裁人脸，需要 TA 有素材"
+                "（且最近素材里能检出人脸）"
             ),
         )
     return {

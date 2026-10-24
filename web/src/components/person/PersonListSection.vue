@@ -145,12 +145,13 @@ function handleExpandedChange(keys: Array<string | number>) {
         <a-button v-if="kind === 'blogger'" type="secondary" @click="enrichOpen = true">
           一键补全主页<template v-if="missingTotal > 0">（{{ missingTotal }}）</template>
         </a-button>
-        <!-- 批量补头像：来源是 f2 用户库里的抖音官方头像直链，默认只补空缺 -->
+        <!-- 批量补头像：从博主自己的素材里裁真实人像，默认只补空缺 -->
         <a-popconfirm
           v-if="kind === 'blogger'"
           :content="
-            '从 f2 用户库读取抖音官方头像并批量下载，只补还没有头像的博主' +
-            '（不覆盖手动设置过的）。约 0.7 秒/位，386 位约 2~3 分钟，可在任务中心看进度。'
+            '从 TA 自己的素材里裁真实人像作头像（优先用已匹配到 TA 的人脸，否则扫最近的素材），' +
+            '只补还没有头像的博主（不覆盖手动设置过的）。约 1 秒/位，需人脸服务在跑，' +
+            '可在任务中心看进度。'
           "
           :ok-loading="avatarRunning"
           @ok="onFillAvatars"

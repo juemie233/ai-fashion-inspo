@@ -94,7 +94,7 @@ describe('useAvatarFill', () => {
 
     expect(success).not.toHaveBeenCalledWith(expect.stringContaining('完成'))
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('没有补上头像'))
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining('f2'))
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('素材'))
     expect(onFinished).toHaveBeenCalledTimes(1)
   })
 

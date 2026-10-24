@@ -1,65 +1,209 @@
-"""博主头像批量补全任务：f2 用户库头像 URL → CDN 下载 → 落盘为人物头像。
+"""博主头像批量补全任务：从 TA **自己的素材**里裁出真实人像作为头像。
 
-为什么需要：人物头像此前只能手动挨个设置（详情页/编辑弹窗里从 TA 的素材挑一张，或
-直接上传一张）。而「我的喜欢」自动登记的博主（400+ 位）几乎都没设头像，逐个点不现实。
-抖音账号的**官方头像 URL 就在 f2 用户库** ``user_info_web.avatar_url`` 里（离线可读），
-拿到直链直接下载即可——不需要登录、不需要浏览器、不需要人脸识别，实测一张
-1080×1080 / 57 KB / 0.7 秒。
+为什么用素材而不是平台头像：头像是用来认人的——要的是「这个人长什么样」，不是 TA 在
+平台上挂的那张宣传图（可能是拼图、插画、滤镜自拍，甚至根本不是本人）。素材是 TA 自己
+发的作品，画面主体通常就是本人；裁出来的人脸与人脸库里的特征也天然同源。
 
-口径与约定：
-- **默认只补空缺**：已有 ``avatar_path`` 的博主一律跳过（那是用户手动挑过的，不覆盖）；
-  传 ``overwrite=True`` 才强制覆盖；
-- **不做人脸裁剪**：平台头像本身就是头像特写，再送人脸子服务只增加失败面
-  （``set_blogger_avatar`` 的裁剪是给「整张照片」用的）；
-- **两阶段**：先并发下载（纯网络，不碰数据库），再顺序写盘 + 逐行提交——同一个
-  AsyncSession 不能并发写，分开也让「下载快、写库慢」的耗时更可控；
-- 单张失败（404/超时/不是图片）只记失败原因，保留原头像，不影响其它博主；
-- 每补一位 task.done++，每批检查取消点（取消后已补的保留）。
+来源优先级（逐级降级，拿到就停）：
+1. **已匹配到该博主的人脸检测**（``inspiration_face_detections.matched_blogger_id``，
+   带 bbox）：身份已被匹配器或人工确认过，精度最高，且是本地裁剪、零网络开销；
+   ``match_status='pending'``（AI 候选未审核）一律不采信；
+2. **扫 TA 最近的若干张素材**：送人脸子服务检测，取**主体脸**——单张脸直接用；多张脸时
+   只有「最大脸面积 ≥ 次大脸的 2 倍」才认（避免合照里把路人裁成头像）；
+3. 都没有 → 跳过并写清原因（不写跳过表，补了素材/服务后可重试）。
+
+质量门槛（两条，缺一不可）：
+- 人脸面积 ≥ 画面 1.5%（太小的人脸放大到 256px 就是糊的）；
+- 多脸场景要求主次分明（见上）。
+
+其他口径：
+- 默认只补空缺，``overwrite=True`` 才覆盖（那是用户手动挑过的头像）；
+- 每补一位提交一次（进度可见、取消时已补的保留）；
+- **人脸子服务不可用 → 整个任务直接失败**并给出人话原因，而不是把几百位全记成
+  「素材里没检出人脸」——后者会让人误以为是素材问题。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from io import BytesIO
 
-import httpx
-from sqlalchemy import select
+from PIL import Image
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.person import Blogger
+from app.models.face import InspirationFaceDetection
+from app.models.inspiration import NOT_DELETED, Inspiration
+from app.models.person import Blogger, InspirationBlogger
 from app.models.task import TaskQueue
-from app.services.person.avatar import prepare_avatar_image, save_avatar_bytes
-from app.services.task_runners.common import is_cancelled, utcnow
+from app.services.face_client import FaceServiceHttpError, face_client
+from app.services.face_crop import FACE_CROP_SIZE, crop_face
+from app.services.face_image import load_inspiration_image
+from app.services.person.avatar import save_avatar_bytes
+from app.services.task_runners.common import PermanentTaskError, is_cancelled, utcnow
 
 logger = logging.getLogger(__name__)
 
-"""下载并发数：头像是 CDN 直链，4 路并发实测稳定；再往上对抖音 CDN 不礼貌。"""
-DOWNLOAD_CONCURRENCY = 4
+"""每位博主最多扫几张素材：前几张都没检出可用人脸就跳过（再多也基本是同样的构图）。"""
+PICK_IMAGES = 4
 
-"""单张头像下载超时（秒）：头像几十 KB，20 秒已经是给慢网的余量。"""
-DOWNLOAD_TIMEOUT_S = 20.0
+"""人脸面积占画面比例下限（太小的人脸放大成头像会糊）。"""
+MIN_FACE_AREA_RATIO = 0.015
 
-"""下载请求头：缺 User-Agent/Referer 时抖音 CDN 会回 403。"""
-_DOWNLOAD_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Referer": "https://www.douyin.com/",
-}
+"""多脸场景的「主次分明」判据：最大脸面积至少是次大脸的这么多倍。"""
+DOMINANCE_RATIO = 2.0
+
+"""单张素材里允许的最多检测人脸数：再多基本是合照/街拍，主体不明确。"""
+MAX_FACES_FOR_CHECK = 6
 
 
-def load_avatar_source() -> dict[str, str]:
-    """读取 f2 用户库的头像 URL 表（阻塞式文件读取；调用方放线程池）。
-
-    Returns:
-        ``{sec_user_id: avatar_url}``；f2 库不存在/读取异常时返回空 dict
-        （调用方按「没有可补的」处理，不抛）。
-    """
-    from scripts import import_f2_downloads as f2
-
+def _bbox_list(bbox) -> list[float] | None:
+    """取合法 bbox（[x1, y1, x2, y2]），非法返回 None。"""
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
     try:
-        return f2.load_f2_avatars(f2.DEFAULT_F2_DIR)
-    except Exception as exc:  # noqa: BLE001 —— 读不到头像来源不该让任务崩
-        logger.warning(f"读取 f2 用户库头像失败（头像补全将没有来源）：{exc}")
-        return {}
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+    except (TypeError, ValueError):
+        return None
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _bbox_area(bbox: list[float] | None) -> float:
+    """bbox 面积（非法按 0 处理）。"""
+    if not bbox:
+        return 0.0
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    """图片尺寸（解不了返回 (0, 0)，由调用方按「面积不达标」跳过）。"""
+    try:
+        with Image.open(BytesIO(data)) as image:
+            return image.size
+    except Exception:  # noqa: BLE001 —— 解不了就不裁，交给上层跳过
+        return 0, 0
+
+
+def _pick_dominant_face(faces: list[dict], width: int, height: int) -> list[float] | None:
+    """从检测结果里挑「主体脸」的 bbox（不达标返回 None）。
+
+    规则：面积最大的那张脸；多脸时要求它至少是次大脸的 :data:`DOMINANCE_RATIO` 倍；
+    且面积占画面比例 ≥ :data:`MIN_FACE_AREA_RATIO`。
+    """
+    ranked: list[tuple[float, list[float]]] = []
+    for face in faces:
+        bbox = _bbox_list(face.get("bbox"))
+        area = _bbox_area(bbox)
+        if bbox is not None and area > 0:
+            ranked.append((area, bbox))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return None
+    best_area, best_bbox = ranked[0]
+    if len(ranked) > 1 and best_area < ranked[1][0] * DOMINANCE_RATIO:
+        return None
+    if width > 0 and height > 0 and best_area < width * height * MIN_FACE_AREA_RATIO:
+        return None
+    return best_bbox
+
+
+async def _detect_faces(data: bytes) -> list[dict]:
+    """送人脸子服务检测（无脸返回空列表；服务异常向上抛，由任务层统一处理）。"""
+    try:
+        result = await face_client.embed(data)
+    except FaceServiceHttpError as exc:
+        # 404 = 这张图没检出人脸（正常结果），其它状态码才是异常
+        if exc.status_code == 404:
+            return []
+        raise
+    return [f for f in (result.get("faces") or []) if isinstance(f, dict)]
+
+
+async def _crop_avatar_from_inspiration(inspiration: Inspiration) -> bytes | None:
+    """从一张素材里裁出头像字节（无人脸/不达标返回 None）。"""
+    data, _warning = await load_inspiration_image(inspiration)
+    if not data:
+        return None
+    faces = await _detect_faces(data)
+    if not faces or len(faces) > MAX_FACES_FOR_CHECK:
+        return None
+    width, height = await asyncio.to_thread(_image_size, data)
+    bbox = _pick_dominant_face(faces, width, height)
+    if bbox is None:
+        return None
+    try:
+        return await asyncio.to_thread(crop_face, data, bbox, FACE_CROP_SIZE)
+    except Exception as exc:  # noqa: BLE001 —— 单张裁剪失败按「这张不行」处理
+        logger.debug("头像裁剪失败（按跳过处理）：%s", exc)
+        return None
+
+
+async def _avatar_from_matched_detection(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
+    """优先用「已匹配到该博主的人脸检测」裁头像（返回 (字节, 来源说明)）。"""
+    rows = (
+        await db.execute(
+            select(InspirationFaceDetection, Inspiration)
+            .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
+            .where(
+                InspirationFaceDetection.matched_blogger_id == blogger.id,
+                InspirationFaceDetection.bbox.is_not(None),
+                NOT_DELETED,
+                or_(
+                    InspirationFaceDetection.match_status.is_(None),
+                    InspirationFaceDetection.match_status == "confirmed",
+                ),
+            )
+            .order_by(
+                InspirationFaceDetection.det_score.desc(),
+                Inspiration.created_at.desc(),
+            )
+            .limit(3)
+        )
+    ).all()
+    for detection, inspiration in rows:
+        try:
+            bbox = _bbox_list(json.loads(detection.bbox or "[]"))
+        except (TypeError, ValueError):
+            continue
+        if bbox is None:
+            continue
+        data, _warning = await load_inspiration_image(inspiration)
+        if not data:
+            continue
+        width, height = await asyncio.to_thread(_image_size, data)
+        if width <= 0 or height <= 0:
+            continue
+        if _bbox_area(bbox) < width * height * MIN_FACE_AREA_RATIO:
+            continue
+        try:
+            avatar = await asyncio.to_thread(crop_face, data, bbox, FACE_CROP_SIZE)
+        except Exception as exc:  # noqa: BLE001 —— 单张裁剪失败继续试下一张
+            logger.debug("已匹配人脸的头像裁剪失败（跳过）：%s", exc)
+            continue
+        return avatar, f"用人脸库里已匹配的人脸（素材 {inspiration.id}）"
+    return None, ""
+
+
+async def _avatar_from_recent_materials(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
+    """退而求其次：扫 TA 最近的几张素材，从里面挑主体脸裁头像。"""
+    rows = (
+        await db.execute(
+            select(Inspiration)
+            .join(InspirationBlogger, InspirationBlogger.inspiration_id == Inspiration.id)
+            .where(InspirationBlogger.blogger_id == blogger.id, NOT_DELETED)
+            .order_by(Inspiration.created_at.desc())
+            .limit(PICK_IMAGES)
+        )
+    ).scalars()
+    for inspiration in rows:
+        avatar = await _crop_avatar_from_inspiration(inspiration)
+        if avatar:
+            return avatar, f"从素材 {inspiration.id} 裁出人脸"
+    return None, ""
 
 
 async def list_avatar_fill_targets(
@@ -67,26 +211,27 @@ async def list_avatar_fill_targets(
     blogger_ids: list[int] | None = None,
     overwrite: bool = False,
 ) -> list[Blogger]:
-    """查询本次可补头像的博主（有 f2 头像来源、且当前没头像或允许覆盖）。
+    """查询本次可补头像的博主：**有素材**、且当前没有头像（或允许覆盖）。
 
     Args:
         db: 数据库会话。
-        blogger_ids: 限定范围（None/空 = 全部抖音博主）。
+        blogger_ids: 限定范围（None/空 = 全部）。
         overwrite: 为真时连已有头像的博主一起补（默认只补空缺）。
 
     Returns:
         待补博主列表（按 id 升序，结果可预期）。
     """
-    avatars = await asyncio.to_thread(load_avatar_source)
-    stmt = select(Blogger).where(Blogger.platform == "douyin").order_by(Blogger.id)
+    with_materials = (
+        select(InspirationBlogger.blogger_id)
+        .join(Inspiration, Inspiration.id == InspirationBlogger.inspiration_id)
+        .where(NOT_DELETED)
+        .distinct()
+    )
+    stmt = select(Blogger).where(Blogger.id.in_(with_materials)).order_by(Blogger.id)
     if blogger_ids:
         stmt = stmt.where(Blogger.id.in_(blogger_ids))
     bloggers = list((await db.execute(stmt)).scalars().all())
-    return [
-        b
-        for b in bloggers
-        if (b.platform_user_id or "").strip() in avatars and (overwrite or not (b.avatar_path or "").strip())
-    ]
+    return [b for b in bloggers if overwrite or not (b.avatar_path or "").strip()]
 
 
 async def create_avatar_fill_task(
@@ -97,7 +242,7 @@ async def create_avatar_fill_task(
     """创建头像批量补全任务（返回 (任务, 目标数)；无可补博主返回 (None, 0)）。
 
     参数:
-        blogger_ids: 限定补全范围（None = 全部有头像来源的抖音博主）
+        blogger_ids: 限定补全范围（None = 全部有素材且没头像的博主）
         overwrite: 是否连已有头像的博主一起覆盖（默认只补空缺）
     """
     targets = await list_avatar_fill_targets(db, blogger_ids, overwrite)
@@ -120,29 +265,19 @@ async def create_avatar_fill_task(
     return task, len(ids)
 
 
-async def _download(
-    client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore
-) -> tuple[bytes | None, str]:
-    """下载并编码一张头像（返回 (JPEG 字节, 失败原因)；成功时原因为空串）。"""
-    async with semaphore:
-        try:
-            response = await client.get(url)
-        except Exception as exc:  # noqa: BLE001 —— 单张失败只记账，不中断整批
-            return None, f"下载失败：{type(exc).__name__}"
-        if response.status_code != 200:
-            return None, f"下载失败（HTTP {response.status_code}）"
-        data = response.content
-    if not data:
-        return None, "下载到的头像为空文件"
-    # 解码 + 压到 512：一律走「整张图」处理（平台头像本身就是头像特写，不裁人脸）
-    avatar_bytes = await asyncio.to_thread(prepare_avatar_image, data)
-    if avatar_bytes is None:
-        return None, "头像图片无法解析（不是有效图片）"
-    return avatar_bytes, ""
+async def _ensure_face_service() -> None:
+    """任务开跑前确认人脸子服务可用（不可用直接让任务失败并说明原因）。"""
+    try:
+        await face_client.health(timeout=5)
+    except Exception as exc:  # noqa: BLE001 —— 任何失败都按「服务不可用」处理
+        raise PermanentTaskError(
+            f"人脸识别子服务不可用（{type(exc).__name__}: {exc}）；"
+            "头像要从素材里裁人脸，请先启动人脸服务再重试"
+        ) from exc
 
 
 async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
-    """执行头像批量补全：并发下载 → 顺序落盘写库，可取消，结果含逐位明细。"""
+    """执行头像批量补全：逐位从素材裁头像，可取消，结果含逐位明细。"""
     payload = task.result or {}
     ids: list[int] = list(payload.get("blogger_ids") or [])
     total = len(ids)
@@ -153,10 +288,7 @@ async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
         await db.commit()
         return
 
-    avatars = await asyncio.to_thread(load_avatar_source)
-    bloggers = list(
-        (await db.execute(select(Blogger).where(Blogger.id.in_(ids)).order_by(Blogger.id))).scalars().all()
-    )
+    await _ensure_face_service()
 
     results: list[dict] = []
     updated = 0
@@ -164,49 +296,43 @@ async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
     failed = 0
     cancelled = False
 
-    # ── 阶段 1：并发下载（纯网络，不碰数据库会话）──
-    semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
-    downloads: dict[int, tuple[bytes | None, str]] = {}
-    urls = {b.id: avatars.get((b.platform_user_id or "").strip(), "") for b in bloggers}
-
-    async def _fetch(blogger_id: int, url: str) -> tuple[int, tuple[bytes | None, str]]:
-        """下载一张（异常也折成「单张失败」，不让 gather 整体炸掉）。"""
-        try:
-            return blogger_id, await _download(client, url, semaphore)
-        except Exception as exc:  # noqa: BLE001 —— 兜底：异常按单张失败记账
-            return blogger_id, (None, f"下载异常：{type(exc).__name__}: {exc}")
-
-    async with httpx.AsyncClient(
-        timeout=DOWNLOAD_TIMEOUT_S, follow_redirects=True, headers=_DOWNLOAD_HEADERS
-    ) as client:
-        pairs = await asyncio.gather(*(_fetch(bid, url) for bid, url in urls.items() if url))
-    downloads = dict(pairs)
-
-    # ── 阶段 2：顺序写盘 + 逐行提交（会话不能并发写）──
-    for index, blogger in enumerate(bloggers, start=1):
+    for index, blogger_id in enumerate(ids, start=1):
         if await is_cancelled(db, task):
             cancelled = True
             break
-        url = avatars.get((blogger.platform_user_id or "").strip(), "")
-        detail = {"blogger_id": blogger.id, "name": blogger.name}
-        if not url:
-            skipped += 1
+        blogger = await db.get(Blogger, blogger_id)
+        detail: dict = {"blogger_id": blogger_id}
+        if blogger is None:
+            failed += 1
             results.append(
                 {
                     **detail,
-                    "status": "skipped",
-                    "reason": "f2 用户库里没有这个账号的头像（让 f2 采一次 TA 的主页后再试）",
+                    "name": f"# {blogger_id}",
+                    "status": "failed",
+                    "reason": "博主不存在（可能已删除）",
                 }
             )
         else:
-            avatar_bytes, reason = downloads.get(blogger.id, (None, "未下载"))
-            if avatar_bytes is None:
-                failed += 1
-                results.append({**detail, "status": "failed", "reason": reason})
+            detail["name"] = blogger.name
+            avatar, note = await _avatar_from_matched_detection(db, blogger)
+            if avatar is None:
+                avatar, note = await _avatar_from_recent_materials(db, blogger)
+            if avatar is None:
+                skipped += 1
+                results.append(
+                    {
+                        **detail,
+                        "status": "skipped",
+                        "reason": (
+                            f"最近 {PICK_IMAGES} 张素材里没检出明确的人脸"
+                            "（合照/背影/侧脸/人脸太小都不算）；可手动挑一张更清楚的"
+                        ),
+                    }
+                )
             else:
-                await save_avatar_bytes(db, blogger, avatar_bytes)
+                await save_avatar_bytes(db, blogger, avatar)
                 updated += 1
-                results.append({**detail, "status": "updated"})
+                results.append({**detail, "status": "updated", "source": note})
         task.done = index
         task.progress = round(index / total * 100)
         task.updated_at = utcnow()

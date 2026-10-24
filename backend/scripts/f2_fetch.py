@@ -215,43 +215,6 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
     return profiles
 
 
-def load_f2_avatars(f2_dir: Path) -> dict[str, str]:
-    """读取 f2 用户库里的账号头像 URL（``{sec_user_id: avatar_url}``）。
-
-    为什么与 :func:`load_f2_profiles` 分开而不是合并成一次查询：两者对**旧库的兼容
-    口径不同**——资料读取在没有 ``ip_location`` 列时要整体返回空；而 ``avatar_url``
-    是更晚才有的列，旧库缺列时**只该少头像、不该连带把昵称/属地也读不出来**。
-    拆成独立函数后各自 try/except，谁也拖不累谁。
-
-    用途：博主头像批量补全（``blogger_avatar_fill``）的离线来源——头像 URL 是 CDN
-    直链（不需要登录、不需要签名参数），拿到就能下载，不必为头像再开一次浏览器。
-
-    Args:
-        f2_dir: f2 工作目录（其下有 douyin_users.db）。
-
-    Returns:
-        ``{sec_user_id: avatar_url}``（空 URL 的行直接丢弃）；库/表/列缺失时返回空 dict，
-        调用方按「无头像来源」处理。
-    """
-    db = f2_dir / F2_AUTHOR_DB
-    if not db.exists():
-        return {}
-    try:
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        try:
-            rows = conn.execute("SELECT sec_user_id, avatar_url FROM user_info_web").fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return {}
-    avatars: dict[str, str] = {}
-    for sec_user_id, avatar_url in rows:
-        url = (avatar_url or "").strip()
-        if sec_user_id and url:
-            avatars[str(sec_user_id)] = url
-    return avatars
-
-
 def load_f2_video_authors(f2_dir: Path) -> dict[str, dict]:
     """读取 f2 作品库的「作品 → 作者」映射（``video_info`` 表）。
 
