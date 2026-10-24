@@ -168,15 +168,20 @@ async def test_execute_skips_ambiguous_multiface(client, create_blogger, make_im
 
     assert task.result["updated"] == 0
     assert task.result["skipped"] == 1
-    assert "没检出明确的人脸" in task.result["results"][0]["reason"]
+    assert "没检出可用的主体脸" in task.result["results"][0]["reason"]
     assert not (settings.storage_root / _avatar_path(blogger["id"])).exists()
 
 
-async def test_execute_rejects_tiny_face(client, create_blogger, make_image, monkeypatch):
-    """人脸只占画面 0.25%（放大成 256px 会糊）：不采用。"""
+async def test_execute_accepts_small_face(client, create_blogger, make_image, monkeypatch):
+    """人脸只占画面 0.25% 也采用（穿搭素材多是全身街拍，脸本来就小）。
+
+    回归：门槛曾是 1.5%，把 452 位里的 314 位全判成「没检出明确的人脸」，而实际
+    每张素材都检出了干净的单张脸——只是小。列表头像只显示 40~72px，0.2% 够用。
+    """
     blogger = create_blogger(name="小脸博")
     insp_id = _upload_material(client, make_image, size=(400, 300))
     _link(client, insp_id, blogger["id"])
+    # 20x15 = 300 px²，画面 120000 px² → 0.25%
     _patch_face(
         monkeypatch,
         _FakeFaceClient(faces=[{"bbox": [10, 10, 30, 25], "det_score": 0.99}]),
@@ -185,8 +190,60 @@ async def test_execute_rejects_tiny_face(client, create_blogger, make_image, mon
     async with async_session() as db:
         task = await _run_task(db)
 
+    assert task.result["updated"] == 1
+    assert (settings.storage_root / _avatar_path(blogger["id"])).is_file()
+
+
+async def test_execute_skips_when_face_too_small(client, create_blogger, make_image, monkeypatch):
+    """人脸不到画面 0.2%（这张是 0.05%）：放大成头像只会是糊块，跳过。"""
+    blogger = create_blogger(name="针眼脸博")
+    insp_id = _upload_material(client, make_image, size=(400, 300))
+    _link(client, insp_id, blogger["id"])
+    # 5x4 = 20 px² / 120000 px² ≈ 0.017%
+    _patch_face(
+        monkeypatch,
+        _FakeFaceClient(faces=[{"bbox": [10, 10, 15, 14], "det_score": 0.99}]),
+    )
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
     assert task.result["updated"] == 0
     assert task.result["skipped"] == 1
+
+
+async def test_execute_prefers_biggest_face_among_materials(client, create_blogger, make_image, monkeypatch):
+    """多张素材都有脸时挑**脸最大**的那张（不是最早/最新的一张）。"""
+    blogger = create_blogger(name="多素材挑脸博")
+    # 先上传的（created_at 更早）是大脸，后上传的是小脸
+    big_id = _upload_material(client, make_image, size=(400, 300))
+    small_id = _upload_material(client, make_image, size=(400, 300))
+    _link(client, big_id, blogger["id"])
+    _link(client, small_id, blogger["id"])
+
+    faces_by_call = [
+        [{"bbox": [100, 50, 250, 200], "det_score": 0.9}],  # 22500/120000 = 18.8%
+        [{"bbox": [10, 10, 30, 25], "det_score": 0.9}],  # 0.25%
+    ]
+
+    class _SeqClient(_FakeFaceClient):
+        def __init__(self):
+            super().__init__(faces=[])
+            self.calls = 0
+
+        async def embed(self, image_bytes: bytes, filename: str = "image.jpg") -> dict:
+            faces = faces_by_call[min(self.calls, len(faces_by_call) - 1)]
+            self.calls += 1
+            return {"face_count": len(faces), "faces": faces}
+
+    _patch_face(monkeypatch, _SeqClient())
+
+    async with async_session() as db:
+        task = await _run_task(db)
+
+    assert task.result["updated"] == 1
+    # 第一张就够清楚（18.8% ≥ 0.8% 早停），来源说明里带着占比
+    assert "占画面" in task.result["results"][0]["source"]
 
 
 async def test_execute_fails_fast_when_face_service_down(client, create_blogger, make_image, monkeypatch):

@@ -47,10 +47,19 @@ from app.services.task_runners.common import PermanentTaskError, is_cancelled, u
 logger = logging.getLogger(__name__)
 
 """每位博主最多扫几张素材：前几张都没检出可用人脸就跳过（再多也基本是同样的构图）。"""
-PICK_IMAGES = 4
+PICK_IMAGES = 6
 
-"""人脸面积占画面比例下限（太小的人脸放大成头像会糊）。"""
-MIN_FACE_AREA_RATIO = 0.015
+"""人脸面积占画面比例下限。
+
+**实测教训（2026-10-24）**：这里是穿搭素材库，主流是**全身街拍**（1080×1440 起），
+人脸只占画面 0.25%~0.85%。初版把下限设成 1.5%，结果 452 位里 314 位被判「没检出
+明确的人脸」——而诊断脚本显示他们**每张素材都恰好检出 1 张干净的脸**，只是小。
+头像最终只在列表里显示 40~72px，0.2%（约 60×60 像素）足够看清，门槛按实际分布定。
+"""
+MIN_FACE_AREA_RATIO = 0.002
+
+"""扫到这么大的脸就可以收工（0.8%：缩到 72px 已经很清楚，不必再翻后面几张）。"""
+GOOD_FACE_AREA_RATIO = 0.008
 
 """多脸场景的「主次分明」判据：最大脸面积至少是次大脸的这么多倍。"""
 DOMINANCE_RATIO = 2.0
@@ -123,23 +132,31 @@ async def _detect_faces(data: bytes) -> list[dict]:
     return [f for f in (result.get("faces") or []) if isinstance(f, dict)]
 
 
-async def _crop_avatar_from_inspiration(inspiration: Inspiration) -> bytes | None:
-    """从一张素材里裁出头像字节（无人脸/不达标返回 None）。"""
+async def _crop_avatar_from_inspiration(
+    inspiration: Inspiration,
+) -> tuple[bytes | None, float]:
+    """从一张素材里裁出头像（返回 ``(字节, 人脸面积占比)``；不达标返回 (None, 0)）。
+
+    返回占比是为了让上层在几张素材里挑**脸最大**的那张：同样是「有脸」，半身照的脸
+    比远景全身体大得多，裁出来的头像也清楚得多。
+    """
     data, _warning = await load_inspiration_image(inspiration)
     if not data:
-        return None
+        return None, 0.0
     faces = await _detect_faces(data)
     if not faces or len(faces) > MAX_FACES_FOR_CHECK:
-        return None
+        return None, 0.0
     width, height = await asyncio.to_thread(_image_size, data)
     bbox = _pick_dominant_face(faces, width, height)
     if bbox is None:
-        return None
+        return None, 0.0
     try:
-        return await asyncio.to_thread(crop_face, data, bbox, FACE_CROP_SIZE)
+        avatar = await asyncio.to_thread(crop_face, data, bbox, FACE_CROP_SIZE)
     except Exception as exc:  # noqa: BLE001 —— 单张裁剪失败按「这张不行」处理
         logger.debug("头像裁剪失败（按跳过处理）：%s", exc)
-        return None
+        return None, 0.0
+    ratio = _bbox_area(bbox) / float(width * height) if width and height else 0.0
+    return avatar, ratio
 
 
 async def _avatar_from_matched_detection(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
@@ -189,7 +206,7 @@ async def _avatar_from_matched_detection(db: AsyncSession, blogger: Blogger) -> 
 
 
 async def _avatar_from_recent_materials(db: AsyncSession, blogger: Blogger) -> tuple[bytes | None, str]:
-    """退而求其次：扫 TA 最近的几张素材，从里面挑主体脸裁头像。"""
+    """扫 TA 最近的几张素材，挑**脸最大**的那张裁头像（脸够清楚就早停）。"""
     rows = (
         await db.execute(
             select(Inspiration)
@@ -199,11 +216,20 @@ async def _avatar_from_recent_materials(db: AsyncSession, blogger: Blogger) -> t
             .limit(PICK_IMAGES)
         )
     ).scalars()
+    best_avatar: bytes | None = None
+    best_ratio = 0.0
+    best_note = ""
     for inspiration in rows:
-        avatar = await _crop_avatar_from_inspiration(inspiration)
-        if avatar:
-            return avatar, f"从素材 {inspiration.id} 裁出人脸"
-    return None, ""
+        avatar, ratio = await _crop_avatar_from_inspiration(inspiration)
+        if avatar is None:
+            continue
+        if ratio > best_ratio:
+            best_avatar = avatar
+            best_ratio = ratio
+            best_note = f"从素材 {inspiration.id} 裁出人脸（占画面 {ratio * 100:.1f}%）"
+        if ratio >= GOOD_FACE_AREA_RATIO:
+            break  # 已经够清楚，省下后面每张约 0.3 秒的人脸检测
+    return best_avatar, best_note
 
 
 async def list_avatar_fill_targets(
@@ -324,8 +350,9 @@ async def execute_avatar_fill(db: AsyncSession, task: TaskQueue) -> None:
                         **detail,
                         "status": "skipped",
                         "reason": (
-                            f"最近 {PICK_IMAGES} 张素材里没检出明确的人脸"
-                            "（合照/背影/侧脸/人脸太小都不算）；可手动挑一张更清楚的"
+                            f"最近 {PICK_IMAGES} 张素材里没检出可用的主体脸"
+                            "（背影/侧脸/多人合照主次不明/人脸小于画面 0.2% 都不算）；"
+                            "可手动挑一张更清楚的"
                         ),
                     }
                 )
