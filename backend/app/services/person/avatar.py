@@ -83,9 +83,7 @@ async def _get_blogger(db: AsyncSession, blogger_id: int) -> Blogger:
     return blogger
 
 
-async def set_blogger_avatar(
-    db: AsyncSession, blogger_id: int, data: bytes, source: str = "upload"
-) -> dict:
+async def set_blogger_avatar(db: AsyncSession, blogger_id: int, data: bytes, source: str = "upload") -> dict:
     """设置博主头像（覆盖旧的）：优先从照片里**提取人像**，提不出来才用整张照片。
 
     Args:
@@ -121,15 +119,7 @@ async def set_blogger_avatar(
         if avatar_bytes is None:
             raise HTTPException(status_code=400, detail="这张图片处理失败，请换一张照片")
 
-    rel_path = avatar_rel_path(blogger_id)
-    target = settings.storage_root / rel_path
-
-    def _write() -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(avatar_bytes)
-
-    await asyncio.to_thread(_write)
-    blogger.avatar_path = rel_path
+    rel_path = await save_avatar_bytes(db, blogger, avatar_bytes)
     await db.commit()
     await db.refresh(blogger)
     logger.info(
@@ -147,6 +137,33 @@ async def set_blogger_avatar(
             "已提取照片里的人脸作为头像" if face_cropped else "照片里没检出人脸，已用整张照片作为头像"
         ),
     }
+
+
+async def save_avatar_bytes(db: AsyncSession, blogger: Blogger, avatar_bytes: bytes) -> str:
+    """把已编码好的头像字节落盘并写回 ``avatar_path``（**不提交事务**，由调用方决定）。
+
+    为什么单独抽出来：手动设置（照片裁人脸）与批量补全（平台头像直降）只是「字节从哪
+    来」不同，落盘规则必须完全一致——按人物 id 定名、固定覆盖 ``avatar_{id}.jpg``，
+    换头像不产生孤儿文件。提交留给调用方：批量场景要逐行提交（进度与可取消）。
+
+    Args:
+        db: 数据库会话（本函数不提交）。
+        blogger: 博主行。
+        avatar_bytes: 已编码好的 JPEG 字节（长边 ≤ :data:`AVATAR_MAX_SIDE`）。
+
+    Returns:
+        相对 ``storage_root`` 的头像路径。
+    """
+    rel_path = avatar_rel_path(blogger.id)
+    target = settings.storage_root / rel_path
+
+    def _write() -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(avatar_bytes)
+
+    await asyncio.to_thread(_write)
+    blogger.avatar_path = rel_path
+    return rel_path
 
 
 async def clear_blogger_avatar(db: AsyncSession, blogger_id: int) -> dict:

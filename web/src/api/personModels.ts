@@ -103,6 +103,23 @@ export async function enrichMissingProfiles(bloggerIds?: number[]): Promise<{
   return data
 }
 
+/**
+ * 创建「博主头像批量补全」任务（bloggerIds 缺省 = 全部有头像来源的抖音博主）。
+ *
+ * 头像来源是 f2 用户库里的平台头像直链（离线索引 + CDN 下载），所以只覆盖
+ * 「f2 见过主页」的抖音账号；默认只补空缺，不覆盖已手动设置的头像。
+ */
+export async function fillMissingAvatars(
+  bloggerIds?: number[],
+  overwrite = false,
+): Promise<{ task_id: number; total: number; message: string }> {
+  const { data } = await apiClient.post('/bloggers/avatars/fill-missing', {
+    blogger_ids: bloggerIds,
+    overwrite,
+  })
+  return data
+}
+
 /** 已跳过补全的博主 */
 export interface EnrichSkipItem {
   blogger_id: number

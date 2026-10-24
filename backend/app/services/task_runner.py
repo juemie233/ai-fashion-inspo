@@ -38,6 +38,10 @@ from app.services.task_runners.deduplicate import (
     create_deduplicate_task,
     execute_deduplicate,
 )
+from app.services.task_runners.blogger_avatar_fill import (
+    create_avatar_fill_task,
+    execute_avatar_fill,
+)
 from app.services.task_runners.enrich_blogger_profile import (
     create_enrich_blogger_profile_task,
     execute_enrich_blogger_profile,
@@ -109,6 +113,7 @@ TASK_HANDLERS = {
     "face_match": execute_face_match,
     "face_cluster": execute_face_cluster,
     "enrich_blogger_profile": execute_enrich_blogger_profile,
+    "blogger_avatar_fill": execute_avatar_fill,
     "f2_import": execute_f2_import,
     "tag_health_scan": execute_tag_health_scan,
     "tag_cluster_scan": execute_tag_cluster_scan,

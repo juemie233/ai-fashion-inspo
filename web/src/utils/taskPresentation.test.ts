@@ -134,6 +134,15 @@ describe('summarizeResult', () => {
     expect(text).toBe('补全 0 · 跳过 2 · 失败 0')
   })
 
+  it('blogger_avatar_fill 只报补上/跳过/失败三个数', () => {
+    const text = summarizeResult(
+      'blogger_avatar_fill',
+      { updated: 380, skipped: 6, failed: 2 },
+      null,
+    )
+    expect(text).toBe('补全 380 · 跳过 6 · 失败 2')
+  })
+
   it('f2_import 入库量与计划量一致时只显示入库数', () => {
     const text = summarizeResult(
       'f2_import',

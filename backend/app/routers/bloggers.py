@@ -85,9 +85,7 @@ async def list_bloggers(
     for item in items:
         members = item.get("group_members") or []
         if not item.get("avatar_path"):
-            item["avatar_path"] = next(
-                (m.get("avatar_path") for m in members if m.get("avatar_path")), None
-            )
+            item["avatar_path"] = next((m.get("avatar_path") for m in members if m.get("avatar_path")), None)
 
     return {"items": items, "total": total, "page": page, "size": size}
 
@@ -140,8 +138,7 @@ async def enrich_missing_profile(
     """
     blogger_ids = body.get("blogger_ids")
     if blogger_ids is not None and (
-        not isinstance(blogger_ids, list)
-        or not all(isinstance(i, int) for i in blogger_ids)
+        not isinstance(blogger_ids, list) or not all(isinstance(i, int) for i in blogger_ids)
     ):
         raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
     from app.services.task_runners.enrich_blogger_profile import (
@@ -155,6 +152,43 @@ async def enrich_missing_profile(
         "task_id": task.id,
         "total": total,
         "message": f"本次将补全 {total} 位博主",
+    }
+
+
+@router.post("/avatars/fill-missing", status_code=status.HTTP_201_CREATED)
+async def fill_missing_avatars(
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """创建「博主头像批量补全」异步任务（人物管理页一键补头像）。
+
+    body: {"blogger_ids": [1, 2]}（可选；缺省 = 全部有头像来源的抖音博主），
+          {"overwrite": true}（可选；默认只补空缺，不覆盖已手动设置的头像）。
+
+    头像来源：f2 用户库 ``user_info_web.avatar_url``（离线索引 + CDN 直链下载），
+    因此只能补「f2 见过主页」的抖音账号；小红书暂无稳定离线来源，不参与本期。
+    """
+    payload = body or {}
+    blogger_ids = payload.get("blogger_ids")
+    if blogger_ids is not None and (
+        not isinstance(blogger_ids, list) or not all(isinstance(i, int) for i in blogger_ids)
+    ):
+        raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
+    overwrite = bool(payload.get("overwrite"))
+    from app.services.task_runners.blogger_avatar_fill import create_avatar_fill_task
+
+    task, total = await create_avatar_fill_task(db, blogger_ids, overwrite)
+    if task is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "没有可补头像的博主：抖音头像来自 f2 用户库，需该账号被 f2 采过一次主页（或已有头像被跳过）"
+            ),
+        )
+    return {
+        "task_id": task.id,
+        "total": total,
+        "message": f"本次将为 {total} 位博主补全头像",
     }
 
 
@@ -197,9 +231,7 @@ async def enrich_skip(
     body: {"blogger_ids": [1, 2], "reason": "可选跳过原因"}
     """
     blogger_ids = body.get("blogger_ids")
-    if not isinstance(blogger_ids, list) or not all(
-        isinstance(i, int) for i in blogger_ids
-    ):
+    if not isinstance(blogger_ids, list) or not all(isinstance(i, int) for i in blogger_ids):
         raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
     from app.services.blogger_enrichment_service import mark_skipped
 
@@ -217,9 +249,7 @@ async def enrich_unskip(
     body: {"blogger_ids": [1, 2]}
     """
     blogger_ids = body.get("blogger_ids")
-    if not isinstance(blogger_ids, list) or not all(
-        isinstance(i, int) for i in blogger_ids
-    ):
+    if not isinstance(blogger_ids, list) or not all(isinstance(i, int) for i in blogger_ids):
         raise HTTPException(status_code=422, detail="blogger_ids 必须为整数数组")
     from app.services.blogger_enrichment_service import unskip
 
@@ -366,19 +396,13 @@ async def get_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> di
 
 
 @router.patch("/{blogger_id}", response_model=BloggerOut)
-async def update_blogger(
-    blogger_id: int, data: BloggerUpdate, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def update_blogger(blogger_id: int, data: BloggerUpdate, db: AsyncSession = Depends(get_db)) -> dict:
     """更新博主信息（部分更新；显式传 null 的字段会被清空）。"""
-    return await blogger_service.update(
-        db, blogger_id, data.model_dump(exclude_unset=True)
-    )
+    return await blogger_service.update(db, blogger_id, data.model_dump(exclude_unset=True))
 
 
 @router.post("/{blogger_id}/resolve-douyin-profile", status_code=status.HTTP_200_OK)
-async def resolve_douyin_profile_api(
-    blogger_id: int, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def resolve_douyin_profile_api(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """解析抖音博主的主页标识（sec_user_id + 主页链接），供「下载所有作品」直接可用。
 
     使用场景：从抖音「我的喜欢 / 我的收藏」采回来的素材只带**作者昵称**（f2 把原作者
@@ -400,9 +424,7 @@ async def resolve_douyin_profile_api(
 
     blogger = await blogger_service.get(db, blogger_id)
     if blogger.platform != "douyin":
-        raise HTTPException(
-            status_code=400, detail="仅抖音博主支持：作品下载走 f2 的抖音通道"
-        )
+        raise HTTPException(status_code=400, detail="仅抖音博主支持：作品下载走 f2 的抖音通道")
     return await resolve_douyin_profile(db, blogger)
 
 
@@ -421,9 +443,7 @@ async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -
 async def set_blogger_avatar_api(
     blogger_id: int,
     file: UploadFile | None = File(None, description="本地上传的照片（与 inspiration_id 二选一）"),
-    inspiration_id: str | None = Form(
-        None, description="从 TA 的素材里选一张（与 file 二选一）"
-    ),
+    inspiration_id: str | None = Form(None, description="从 TA 的素材里选一张（与 file 二选一）"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """设置博主头像（覆盖旧的）：从该博主的素材里选一张，或直接上传一张照片。
@@ -444,9 +464,7 @@ async def set_blogger_avatar_api(
     from app.services.person.avatar import set_blogger_avatar
 
     if bool(file) == bool(inspiration_id):
-        raise HTTPException(
-            status_code=400, detail="请二选一：从素材里选一张，或上传一张照片"
-        )
+        raise HTTPException(status_code=400, detail="请二选一：从素材里选一张，或上传一张照片")
 
     if file is not None:
         data = await file.read()
@@ -472,9 +490,7 @@ async def set_blogger_avatar_api(
         )
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(
-            status_code=400, detail="该素材不存在、已删除或不属于这位博主"
-        )
+        raise HTTPException(status_code=400, detail="该素材不存在、已删除或不属于这位博主")
     data, warning = await load_inspiration_image(row)
     if data is None:
         raise HTTPException(status_code=400, detail=f"这张素材无法用作头像：{warning}")
@@ -482,9 +498,7 @@ async def set_blogger_avatar_api(
 
 
 @router.delete("/{blogger_id}/avatar")
-async def clear_blogger_avatar_api(
-    blogger_id: int, db: AsyncSession = Depends(get_db)
-) -> dict:
+async def clear_blogger_avatar_api(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """清除头像（avatar_path 置空，前端回退首字占位），同时删除头像文件。
 
     Returns:
@@ -559,13 +573,9 @@ async def register_blogger_face_api(
         try:
             parsed = json.loads(inspiration_ids)
         except (ValueError, TypeError):
-            raise HTTPException(
-                status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
-            ) from None
+            raise HTTPException(status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组") from None
         if not isinstance(parsed, list):
-            raise HTTPException(
-                status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组"
-            ) from None
+            raise HTTPException(status_code=422, detail="inspiration_ids 格式错误：应为 JSON 数组") from None
         ids = [str(i) for i in parsed if str(i).strip()]
 
     return await register_blogger_face(db, blogger_id, image_bytes_list, ids)

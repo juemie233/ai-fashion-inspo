@@ -250,6 +250,15 @@ export function summarizeResult(
       ]
         .filter(Boolean)
         .join(' · ')
+    case 'blogger_avatar_fill':
+      // 头像补全：只报「补上 / 跳过（没有来源）/ 失败」三个数，明细在结果面板
+      return [
+        r.updated != null ? `补全 ${r.updated}` : '',
+        r.skipped != null ? `跳过 ${r.skipped}` : '',
+        r.failed != null ? `失败 ${r.failed}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
     case 'f2_import': {
       // f2 一键获取素材：本次入库量 + 导入计划的分层跳过。
       // 「已在垃圾桶」单独列出——它意味着用户主动丢弃过该内容，不会重新导入，

@@ -157,9 +157,7 @@ def load_f2_authors(f2_dir: Path) -> list[dict]:
         return []
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        rows = conn.execute(
-            "SELECT sec_user_id, nickname, aweme_count FROM user_info_web"
-        ).fetchall()
+        rows = conn.execute("SELECT sec_user_id, nickname, aweme_count FROM user_info_web").fetchall()
     except sqlite3.Error:
         return []
     finally:
@@ -198,9 +196,7 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         try:
-            rows = conn.execute(
-                "SELECT sec_user_id, nickname, ip_location FROM user_info_web"
-            ).fetchall()
+            rows = conn.execute("SELECT sec_user_id, nickname, ip_location FROM user_info_web").fetchall()
         except sqlite3.OperationalError:
             # 极小/旧版本的库可能没有 ip_location 列：没有可回填的字段，直接当空
             return {}
@@ -217,6 +213,43 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
             "ip_location": parse_ip_location(ip_location or ""),
         }
     return profiles
+
+
+def load_f2_avatars(f2_dir: Path) -> dict[str, str]:
+    """读取 f2 用户库里的账号头像 URL（``{sec_user_id: avatar_url}``）。
+
+    为什么与 :func:`load_f2_profiles` 分开而不是合并成一次查询：两者对**旧库的兼容
+    口径不同**——资料读取在没有 ``ip_location`` 列时要整体返回空；而 ``avatar_url``
+    是更晚才有的列，旧库缺列时**只该少头像、不该连带把昵称/属地也读不出来**。
+    拆成独立函数后各自 try/except，谁也拖不累谁。
+
+    用途：博主头像批量补全（``blogger_avatar_fill``）的离线来源——头像 URL 是 CDN
+    直链（不需要登录、不需要签名参数），拿到就能下载，不必为头像再开一次浏览器。
+
+    Args:
+        f2_dir: f2 工作目录（其下有 douyin_users.db）。
+
+    Returns:
+        ``{sec_user_id: avatar_url}``（空 URL 的行直接丢弃）；库/表/列缺失时返回空 dict，
+        调用方按「无头像来源」处理。
+    """
+    db = f2_dir / F2_AUTHOR_DB
+    if not db.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT sec_user_id, avatar_url FROM user_info_web").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
+    avatars: dict[str, str] = {}
+    for sec_user_id, avatar_url in rows:
+        url = (avatar_url or "").strip()
+        if sec_user_id and url:
+            avatars[str(sec_user_id)] = url
+    return avatars
 
 
 def load_f2_video_authors(f2_dir: Path) -> dict[str, dict]:
@@ -244,9 +277,7 @@ def load_f2_video_authors(f2_dir: Path) -> dict[str, dict]:
         return {}
     try:
         try:
-            rows = conn.execute(
-                "SELECT aweme_id, sec_user_id, nickname FROM video_info"
-            ).fetchall()
+            rows = conn.execute("SELECT aweme_id, sec_user_id, nickname FROM video_info").fetchall()
         except sqlite3.Error:
             return {}
     finally:
@@ -362,9 +393,7 @@ def resolve_f2_author_by_aweme(
         "reason"}``；``detected`` ∈ ``user_info_new``（新增作者行）/ ``video_info``
         （作品级映射）。``ok=False`` 时 ``reason`` 说明原因（调用方据此提示用户）。
     """
-    runner = runner or (
-        lambda cmd, cwd: _run_with_timeout(cmd, cwd, RESOLVE_RUN_TIMEOUT_S)
-    )
+    runner = runner or (lambda cmd, cwd: _run_with_timeout(cmd, cwd, RESOLVE_RUN_TIMEOUT_S))
     aweme_id = str(aweme_id or "").strip()
     url = (work_url or "").strip() or f"https://www.douyin.com/note/{aweme_id}"
 
@@ -373,9 +402,7 @@ def resolve_f2_author_by_aweme(
     # 临时产物目录：反查不需要媒体，但 f2 一旦不崩就会真下这个作品（见函数说明）
     tmp_root = Path(tempfile.mkdtemp(prefix="f2_resolve_"))
     try:
-        cmd = build_f2_one_command(
-            url, download_root=tmp_root, naming=naming, auto_cookie=auto_cookie
-        )
+        cmd = build_f2_one_command(url, download_root=tmp_root, naming=naming, auto_cookie=auto_cookie)
         try:
             rc, _info = runner(cmd, f2_dir)
         except subprocess.TimeoutExpired:
@@ -405,19 +432,12 @@ def resolve_f2_author_by_aweme(
                 "reason": f"调用 f2 失败：{type(exc).__name__}: {exc}",
             }
 
-        new_rows = [
-            a for a in load_f2_authors(f2_dir) if a["sec_user_id"] not in before
-        ]
+        new_rows = [a for a in load_f2_authors(f2_dir) if a["sec_user_id"] not in before]
         if len(new_rows) == 1:
             sec_user_id = new_rows[0]["sec_user_id"]
             ip_location = ""
             try:
-                ip_location = str(
-                    (load_f2_profiles(f2_dir).get(sec_user_id) or {}).get(
-                        "ip_location"
-                    )
-                    or ""
-                )
+                ip_location = str((load_f2_profiles(f2_dir).get(sec_user_id) or {}).get("ip_location") or "")
             except Exception:  # noqa: BLE001 —— 属地是赠品，读不到不影响反查
                 ip_location = ""
             return {
@@ -440,10 +460,7 @@ def resolve_f2_author_by_aweme(
                 "detected": "",
                 "rc": rc,
                 "cmd": cmd,
-                "reason": (
-                    f"一次跑出 {len(new_rows)} 个新账号（{names}），无法确定哪个是"
-                    "这个作品的作者"
-                ),
+                "reason": (f"一次跑出 {len(new_rows)} 个新账号（{names}），无法确定哪个是这个作品的作者"),
             }
 
         # 没有新增：作者大概率已在 f2 库里，退回作品级映射
@@ -772,9 +789,7 @@ def _run_personal_fetch(
             "failed": 0,
             "results": [],
             "cmd": [],
-            "error": (
-                f"未配置「我的主页链接」：{label}只有本人可见，请先填写你的抖音主页链接"
-            ),
+            "error": (f"未配置「我的主页链接」：{label}只有本人可见，请先填写你的抖音主页链接"),
         }
 
     url = like_user_url(user)
@@ -1000,11 +1015,7 @@ def run_fetch(
                 all_authors, unknown = select_known_authors(all_authors, bloggers)
 
         wanted = {normalize_author(a) for a in authors} if authors is not None else None
-        targets = [
-            a
-            for a in all_authors
-            if wanted is None or normalize_author(a["nickname"]) in wanted
-        ]
+        targets = [a for a in all_authors if wanted is None or normalize_author(a["nickname"]) in wanted]
     if limit is not None:
         targets = targets[:limit]
 
@@ -1015,18 +1026,14 @@ def run_fetch(
             "（要一起处理请加 --include-unknown-authors）"
         )
 
-    root = post_root or (
-        download_root / "douyin" / "post" if download_root else f2_dir / F2_DOWNLOAD_SUBDIR
-    )
+    root = post_root or (download_root / "douyin" / "post" if download_root else f2_dir / F2_DOWNLOAD_SUBDIR)
     last_download = author_last_download(root)
 
     results: list[dict] = []
     windows: Counter = Counter()
     workers = max(1, min(int(concurrency or 1), MAX_FETCH_CONCURRENCY))
     if concurrency and int(concurrency) > MAX_FETCH_CONCURRENCY:
-        _log(
-            f"  ⚠ 下载并发被限制为 {MAX_FETCH_CONCURRENCY}（同一 cookie 并发过高会触发风控）"
-        )
+        _log(f"  ⚠ 下载并发被限制为 {MAX_FETCH_CONCURRENCY}（同一 cookie 并发过高会触发风控）")
 
     def _fetch_one(author: dict) -> dict:
         """下载单个作者，返回结果条目（不修改共享状态，便于并发）。"""
@@ -1097,9 +1104,7 @@ def run_fetch(
     # 入库阶段的白名单按昵称匹配，缺了它就会「下载成功、入库 0」
     resolved: dict[str, str] = {}
     if extra_authors:
-        resolved = resolve_profile_nicknames(
-            f2_dir, [a["sec_user_id"] for a in extra_authors]
-        )
+        resolved = resolve_profile_nicknames(f2_dir, [a["sec_user_id"] for a in extra_authors])
 
     return {
         "total": len(targets),

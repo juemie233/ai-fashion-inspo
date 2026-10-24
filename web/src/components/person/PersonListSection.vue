@@ -7,10 +7,11 @@
  * 人物组（方案 B，仅博主）：同组折叠为一条主记录（多平台徽标），
  * 展开行显示组内其余账号；展开/绑定操作在 usePersonList 中实现。 */
 
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import type { Person } from '@shared/types/person'
 import { usePersonList } from '@/composables/usePersonList'
 import { useBloggerImport } from '@/composables/useBloggerImport'
+import { useAvatarFill } from '@/composables/useAvatarFill'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import PersonImportAlert from '@/components/person/PersonImportAlert.vue'
 import PersonTopList from '@/components/person/PersonTopList.vue'
@@ -50,6 +51,23 @@ const { importResult, importError, handleImportCsv, dismissImportResult } = useB
 
 /** 博主补全弹窗开关（PersonEnrichManager v-model） */
 const enrichOpen = ref(false)
+
+/** 头像批量补全：提交后台任务 → 轮询进度 → 完成后刷新列表 */
+const {
+  running: avatarRunning,
+  progressText: avatarProgress,
+  fillAvatars,
+  stop: stopAvatarFill,
+} = useAvatarFill(async () => {
+  await store.reload()
+})
+
+/** 内置确认弹窗点「确定」：默认只补空缺（不覆盖手动头像） */
+async function onFillAvatars() {
+  await fillAvatars()
+}
+
+onBeforeUnmount(stopAvatarFill)
 
 /** 补全弹窗关闭后：刷新缺失计数与博主列表 */
 function afterEnrich() {
@@ -127,6 +145,20 @@ function handleExpandedChange(keys: Array<string | number>) {
         <a-button v-if="kind === 'blogger'" type="secondary" @click="enrichOpen = true">
           一键补全主页<template v-if="missingTotal > 0">（{{ missingTotal }}）</template>
         </a-button>
+        <!-- 批量补头像：来源是 f2 用户库里的抖音官方头像直链，默认只补空缺 -->
+        <a-popconfirm
+          v-if="kind === 'blogger'"
+          :content="
+            '从 f2 用户库读取抖音官方头像并批量下载，只补还没有头像的博主' +
+            '（不覆盖手动设置过的）。约 0.7 秒/位，386 位约 2~3 分钟，可在任务中心看进度。'
+          "
+          :ok-loading="avatarRunning"
+          @ok="onFillAvatars"
+        >
+          <a-button type="secondary" :loading="avatarRunning">
+            批量补全头像<template v-if="avatarRunning">（{{ avatarProgress }}）</template>
+          </a-button>
+        </a-popconfirm>
         <a-upload
           v-if="kind === 'blogger'"
           accept=".csv,text/csv"
