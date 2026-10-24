@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from datetime import datetime
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -81,8 +82,13 @@ class PersonServiceBase:
 
     # ── 序列化 ──
 
-    def _to_dict(self, person: Blogger | Model, inspiration_count: int = 0) -> dict:
-        """将主体 ORM 对象转为响应字典（含素材数统计）。"""
+    def _to_dict(
+        self,
+        person: Blogger | Model,
+        inspiration_count: int = 0,
+        last_inspiration_at: datetime | None = None,
+    ) -> dict:
+        """将主体 ORM 对象转为响应字典（含素材数统计与最近素材时间）。"""
         return {
             "id": person.id,
             "name": person.name,
@@ -104,6 +110,9 @@ class PersonServiceBase:
             "created_at": person.created_at,
             "updated_at": person.updated_at,
             "inspiration_count": inspiration_count,
+            # 最近一次入库的素材时间（None = 还没有素材）：判断博主是否仍在更新，
+            # 不用点进详情。与素材数同一子查询算出，不额外多一次往返
+            "last_inspiration_at": last_inspiration_at,
             # 人物组（方案 B）：博主有值（null=独立账号）；模特恒为 None
             "person_group_id": getattr(person, "person_group_id", None),
         }
@@ -122,6 +131,7 @@ class PersonServiceBase:
         size: int,
         search: str | None = None,
         platform: str | None = None,
+        source: str | None = None,
         sort: str = "newest",
         order: str = "desc",
         face_registered_only: bool = False,
@@ -145,11 +155,12 @@ class PersonServiceBase:
         model, link_model = self.model, self.link_model
         link_id = self._link_id_col()
 
-        # 素材数统计子查询：人物 -> 有效素材关联数（排除软删除素材）
+        # 素材数 / 最近素材时间统计子查询：人物 -> 有效素材（排除软删除素材）
         count_subq = (
             select(
                 link_id.label("pid"),
                 func.count(link_model.inspiration_id).label("cnt"),
+                func.max(Inspiration.created_at).label("last_at"),
             )
             .join(Inspiration, Inspiration.id == link_model.inspiration_id)
             .where(Inspiration.deleted_at.is_(None))
@@ -158,7 +169,11 @@ class PersonServiceBase:
         )
 
         stmt = (
-            select(model, func.coalesce(count_subq.c.cnt, 0).label("cnt"))
+            select(
+                model,
+                func.coalesce(count_subq.c.cnt, 0).label("cnt"),
+                count_subq.c.last_at,
+            )
             .outerjoin(count_subq, model.id == count_subq.c.pid)
             # 预加载人脸特征 relationship：_to_dict 同步序列化需要（face_registered 列）
             .options(selectinload(model.face_embedding))
@@ -175,6 +190,10 @@ class PersonServiceBase:
             )
         if platform:
             stmt = stmt.where(model.platform == platform)
+        # 来源筛选（manual 手动 / auto_collect 采集自动登记）：自动登记的博主动辄几百个，
+        # 混在追踪名单里既看不清也点不过来，必须能按来源分开看
+        if source:
+            stmt = stmt.where(model.source == source)
 
         # 过滤：仅保留已注册人脸库的人物（人脸检测只匹配库内人物）
         if face_registered_only:
@@ -203,7 +222,7 @@ class PersonServiceBase:
 
         stmt = stmt.offset((page - 1) * size).limit(size)
         rows = (await db.execute(stmt)).all()
-        items = [self._to_dict(p, cnt) for p, cnt in rows]
+        items = [self._to_dict(p, cnt, last_at) for p, cnt, last_at in rows]
         return items, total
 
     async def _list_grouped(
@@ -228,7 +247,7 @@ class PersonServiceBase:
 
         group_ids = {
             person.person_group_id
-            for person, _cnt in rows
+            for person, _cnt, _last in rows
             if person.person_group_id is not None
         }
         manual_primary: dict[int, int] = {}
@@ -246,8 +265,8 @@ class PersonServiceBase:
 
         # 按组折叠：主记录 = 手动指定优先，否则素材数最多（同数取 id 小者）
         groups: dict[int | None, list[tuple]] = {}
-        for person, cnt in rows:
-            groups.setdefault(person.person_group_id, []).append((person, cnt))
+        for person, cnt, last_at in rows:
+            groups.setdefault(person.person_group_id, []).append((person, cnt, last_at))
 
         def _sort_key(item: tuple) -> tuple:
             # (素材数倒序, id 正序)：主账号 = 素材数最多者
@@ -258,8 +277,8 @@ class PersonServiceBase:
             members.sort(key=_sort_key)
             if gid is None:
                 # 独立账号：各自一行（不折叠）
-                for person, cnt in members:
-                    folded.append(self._to_dict(person, cnt))
+                for person, cnt, last_at in members:
+                    folded.append(self._to_dict(person, cnt, last_at))
                 continue
             # 手动指定的主账号优先；否则素材数最多者
             manual = manual_primary.get(gid)
@@ -269,10 +288,10 @@ class PersonServiceBase:
                 )
             else:
                 primary = members[0]
-            item = self._to_dict(primary[0], primary[1])
+            item = self._to_dict(primary[0], primary[1], primary[2])
             # 组内其余账号（含素材数），供前端展开显示
             item["group_members"] = [
-                self._to_dict(m[0], m[1])
+                self._to_dict(m[0], m[1], m[2])
                 for m in members
                 if m[0].id != primary[0].id
             ]

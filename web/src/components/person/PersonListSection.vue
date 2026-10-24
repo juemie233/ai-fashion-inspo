@@ -7,11 +7,13 @@
  * 人物组（方案 B，仅博主）：同组折叠为一条主记录（多平台徽标），
  * 展开行显示组内其余账号；展开/绑定操作在 usePersonList 中实现。 */
 
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Person } from '@shared/types/person'
 import { usePersonList } from '@/composables/usePersonList'
 import { useBloggerImport } from '@/composables/useBloggerImport'
 import { useAvatarFill } from '@/composables/useAvatarFill'
+import { usePersonBatch } from '@/composables/usePersonBatch'
+import PersonDuplicateModal from '@/components/person/PersonDuplicateModal.vue'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import PersonImportAlert from '@/components/person/PersonImportAlert.vue'
 import PersonTopList from '@/components/person/PersonTopList.vue'
@@ -30,6 +32,7 @@ const {
   platformCount,
   platformOptions,
   sortOptions,
+  sourceOptions,
   showForm,
   editingPerson,
   openCreate,
@@ -60,12 +63,40 @@ const {
   stop: stopAvatarFill,
 } = useAvatarFill(async () => {
   await store.reload()
+  await loadCoverage()
 })
 
 /** 内置确认弹窗点「确定」：默认只补空缺（不覆盖手动头像） */
 async function onFillAvatars() {
   await fillAvatars()
 }
+
+/** 批量操作（多选 / 纳入追踪 / 删除 / 清头像 / 同名建议 / 头像覆盖率） */
+const {
+  selectedKeys,
+  selectedCount,
+  busy: batchBusy,
+  coverage,
+  duplicateGroups,
+  duplicateOpen,
+  duplicateLoading,
+  onSelectionChange,
+  clearSelection,
+  loadCoverage,
+  batchPromote,
+  batchDelete,
+  clearSelectedAvatars,
+  openDuplicates,
+  mergeGroup,
+  removeEmptyAccounts,
+} = usePersonBatch(props.kind, async () => {
+  await store.reload()
+  await loadMissingCount()
+})
+
+onMounted(() => {
+  void loadCoverage()
+})
 
 onBeforeUnmount(stopAvatarFill)
 
@@ -89,14 +120,19 @@ function handleExpandedChange(keys: Array<string | number>) {
 
 <template>
   <div>
-    <!-- 博主数量统计（总数 / 平台分布；复用公共统计卡片组件） -->
+    <!-- 博主数量统计（总数 / 平台分布 / 头像覆盖；复用公共统计卡片组件） -->
     <StatCardGrid
       v-if="kind === 'blogger' && bloggerStats"
-      :span="8"
+      :span="6"
       :items="[
         { title: '博主总数', value: bloggerStats.total, highlight: true },
         { title: '小红书博主', value: platformCount('xiaohongshu') },
         { title: '抖音博主', value: platformCount('douyin') },
+        {
+          title: '已设头像',
+          text: coverage ? `${coverage.with_avatar}/${coverage.total}` : '-',
+          note: coverage ? `还能补 ${coverage.fillable} 位` : undefined,
+        },
       ]"
     />
 
@@ -125,6 +161,13 @@ function handleExpandedChange(keys: Array<string | number>) {
           v-model="store.platform"
           :options="platformOptions"
           style="width: 140px"
+          @change="store.reload()"
+        />
+        <a-select
+          v-if="kind === 'blogger'"
+          v-model="store.source"
+          :options="sourceOptions"
+          style="width: 130px"
           @change="store.reload()"
         />
         <a-select
@@ -169,7 +212,40 @@ function handleExpandedChange(keys: Array<string | number>) {
         >
           <a-button type="secondary">点击上传 CSV</a-button>
         </a-upload>
+        <a-button v-if="kind === 'blogger'" type="secondary" @click="openDuplicates">
+          同名建议
+        </a-button>
         <a-button type="primary" @click="openCreate">新建{{ kindLabel }}</a-button>
+      </div>
+
+      <!-- 多选批量操作栏：只在有选择时出现，避免常驻占版面 -->
+      <div v-if="selectedCount > 0" class="batch-bar">
+        <span class="batch-count">已选 {{ selectedCount }} 位</span>
+        <a-space :size="8">
+          <a-popconfirm
+            v-if="kind === 'blogger'"
+            content="把选中的「自动登记」博主纳入追踪？之后「一键获取素材」会增量下载 TA 的主页作品。非自动登记的不受影响。"
+            @ok="batchPromote"
+          >
+            <a-button size="small" type="outline" status="warning" :disabled="batchBusy">
+              批量纳入追踪
+            </a-button>
+          </a-popconfirm>
+          <a-popconfirm
+            v-if="kind === 'blogger'"
+            content="清除选中博主的头像？会删掉头像文件并回到名字首字占位（手动挑过的也会清）。"
+            @ok="clearSelectedAvatars"
+          >
+            <a-button size="small" type="outline" :disabled="batchBusy">清除所选头像</a-button>
+          </a-popconfirm>
+          <a-popconfirm
+            content="删除选中的博主？有素材关联的会被后端拦下并给出原因（不会误删素材）。"
+            @ok="batchDelete"
+          >
+            <a-button size="small" status="danger" :disabled="batchBusy">批量删除</a-button>
+          </a-popconfirm>
+          <a-button size="small" type="text" @click="clearSelection">取消选择</a-button>
+        </a-space>
       </div>
 
       <a-table
@@ -178,8 +254,11 @@ function handleExpandedChange(keys: Array<string | number>) {
         :loading="store.loading"
         row-key="id"
         :bordered="false"
-        :scroll="{ x: 1040 }"
+        :scroll="{ x: 1180 }"
         :pagination="false"
+        :row-selection="{ type: 'checkbox', showCheckedAll: true }"
+        :selected-keys="selectedKeys"
+        @selection-change="onSelectionChange"
         :expandable="props.kind === 'blogger' ? { expandedRowKeys: expandedGroupIds } : undefined"
         @expanded-change="handleExpandedChange"
         @sorter-change="onSorterChange"
@@ -262,6 +341,17 @@ function handleExpandedChange(keys: Array<string | number>) {
       @saved="(p: Person) => (editingPerson ? store.load(true) : store.reload())"
     />
 
+    <!-- 同名建议弹窗（仅穿搭博主） -->
+    <PersonDuplicateModal
+      v-if="kind === 'blogger'"
+      v-model:visible="duplicateOpen"
+      :groups="duplicateGroups"
+      :loading="duplicateLoading"
+      :busy="batchBusy"
+      @merge="mergeGroup"
+      @remove-empty="removeEmptyAccounts"
+    />
+
     <!-- 博主主页信息补全 + 已跳过管理弹窗（仅穿搭博主） -->
     <PersonEnrichManager
       v-if="kind === 'blogger'"
@@ -278,6 +368,22 @@ function handleExpandedChange(keys: Array<string | number>) {
 
 .table-card {
   margin-bottom: 12px;
+}
+
+/* 多选批量操作栏：有选中项时才出现（贴在表格上方，跟着选择走） */
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  background: var(--color-fill-1);
+}
+
+.batch-count {
+  font-weight: 600;
 }
 
 /* 人物单元格：a-avatar + 名称（无头像时 SVG 人形占位） */

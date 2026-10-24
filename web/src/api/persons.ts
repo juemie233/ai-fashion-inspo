@@ -94,6 +94,50 @@ export interface DouyinProfileResolveResult {
   reason: string
 }
 
+/** 批量操作的逐条明细（跳过/被挡下的原因） */
+export interface PersonBatchSkip {
+  id: number
+  name: string
+  reason: string
+}
+
+/** 批量纳入追踪结果（仅本模块使用） */
+interface BatchPromoteResult {
+  promoted: number
+  skipped: PersonBatchSkip[]
+}
+
+/** 批量删除结果（有素材关联的会进 blocked 并给出原因；仅本模块使用） */
+interface BatchDeleteResult {
+  deleted: number
+  blocked: PersonBatchSkip[]
+}
+
+/** 头像覆盖率：总数 / 已有头像 / 现在能补（有素材且没头像） */
+export interface AvatarCoverage {
+  total: number
+  with_avatar: number
+  fillable: number
+}
+
+/** 同名建议里的一条账号（仅本模块内组合用，不对外导出） */
+interface DuplicateNameItem {
+  id: number
+  name: string
+  platform: string
+  source?: string | null
+  person_group_id?: number | null
+  profile_url?: string | null
+  created_at?: string | null
+  inspiration_count: number
+}
+
+/** 同名建议（归一化昵称相同的一组账号） */
+export interface DuplicateNameGroup {
+  key: string
+  items: DuplicateNameItem[]
+}
+
 /** 穿搭博主 API（/api/bloggers）：含人脸特征注册与人物组绑定 */
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
@@ -159,6 +203,44 @@ export const bloggersApi = {
   /** 查询人物组完整信息（组内各账号 + 主账号） */
   async fetchGroupInfo(groupId: number): Promise<PersonGroupInfo> {
     const { data } = await apiClient.get<PersonGroupInfo>(`/bloggers/groups/${groupId}`)
+    return data
+  },
+
+  // ── 批量操作（人物管理页多选）──
+
+  /** 批量把「自动登记」的博主纳入追踪（非自动登记的进 skipped 并说明原因） */
+  async batchPromote(ids: number[]): Promise<BatchPromoteResult> {
+    const { data } = await apiClient.post<BatchPromoteResult>('/bloggers/batch/promote', {
+      ids,
+    })
+    return data
+  },
+
+  /** 批量删除博主（有素材关联的会被挡下，进 blocked 并给出原因） */
+  async batchDelete(ids: number[]): Promise<BatchDeleteResult> {
+    const { data } = await apiClient.post<BatchDeleteResult>('/bloggers/batch/delete', { ids })
+    return data
+  },
+
+  /** 头像覆盖率（顶部统计卡片：已设头像 N/总数，还能补 M） */
+  async avatarCoverage(): Promise<AvatarCoverage> {
+    const { data } = await apiClient.get<AvatarCoverage>('/bloggers/avatars/coverage')
+    return data
+  },
+
+  /** 批量清除头像（ids 缺省 = 全部；文件由后端在提交后删除） */
+  async clearAvatars(ids?: number[]): Promise<{ cleared: number }> {
+    const { data } = await apiClient.post<{ cleared: number }>('/bloggers/avatars/clear', {
+      ids,
+    })
+    return data
+  },
+
+  /** 同名建议：归一化昵称相同的账号分组（只给建议，合并/删除由用户决定） */
+  async duplicateNames(): Promise<{ groups: DuplicateNameGroup[]; total: number }> {
+    const { data } = await apiClient.get<{ groups: DuplicateNameGroup[]; total: number }>(
+      '/bloggers/duplicate-names',
+    )
     return data
   },
 

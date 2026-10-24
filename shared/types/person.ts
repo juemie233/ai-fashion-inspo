@@ -49,6 +49,8 @@ export interface Person {
   created_at?: string | null;
   updated_at?: string | null;
   inspiration_count?: number;
+  /** 最近一次入库的素材时间（null/undefined = 还没有素材）：判断博主是否还在更新 */
+  last_inspiration_at?: string | null;
   /** 人物组 ID（方案 B，仅博主）：null/undefined = 独立账号；非空 = 与组内其它账号为同一人 */
   person_group_id?: number | null;
   /** 折叠视图：组内其余账号（展开显示用）；独立账号/平铺视图为空数组 */

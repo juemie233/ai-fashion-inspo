@@ -42,12 +42,35 @@ from app.services.blogger_face import (
 router = APIRouter(prefix="/api/bloggers", tags=["bloggers"])
 
 
+def _parse_ids(body: dict | None, *, required: bool = True) -> list[int]:
+    """从请求体解析 id 列表（``{"ids": [1, 2]}``）；非法抛 422。
+
+    Args:
+        body: 请求体（可为 None）。
+        required: 必须传时为真；为假时缺省返回空列表（语义是「全部」）。
+
+    Returns:
+        整数 id 列表（可能为空）。
+    """
+    ids = (body or {}).get("ids")
+    if ids is None:
+        if required:
+            raise HTTPException(status_code=422, detail="ids 必须是整数数组")
+        return []
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        raise HTTPException(status_code=422, detail="ids 必须是整数数组")
+    return ids
+
+
 @router.get("", response_model=BloggerListOut)
 async def list_bloggers(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     search: str | None = Query(None, description="名称模糊搜索"),
     platform: str | None = Query(None, description="平台筛选"),
+    # 来源筛选：manual 手动 / auto_collect「我的喜欢」自动登记。
+    # 自动登记的博主动辄几百个（实测 435），混在追踪名单里既看不清也点不过来
+    source: str | None = Query(None, description="来源筛选（manual/auto_collect）"),
     sort: str = Query("newest", pattern="^(newest|name|count)$"),
     # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
     order: str = Query("desc", pattern="^(asc|desc)$"),
@@ -75,6 +98,7 @@ async def list_bloggers(
         size=size,
         search=search,
         platform=platform,
+        source=source,
         sort=sort,
         order=order,
         face_registered_only=face_registered_only,
@@ -384,6 +408,66 @@ async def group_info_api(
     from app.services.person.person_groups import get_group_info
 
     return await get_group_info(db, group_id)
+
+
+@router.post("/batch/promote", status_code=status.HTTP_200_OK)
+async def batch_promote_api(body: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """批量把「自动登记」的博主纳入追踪（source 改回 manual）。
+
+    body: ``{"ids": [1, 2, 3]}``。返回 ``{"promoted", "skipped": [{id, name, reason}]}``；
+    不是自动登记的、已不存在的都进 skipped 并写明原因（不静默丢弃）。
+    """
+    ids = _parse_ids(body)
+    from app.services.person.batch import batch_promote
+
+    return await batch_promote(db, ids)
+
+
+@router.post("/batch/delete", status_code=status.HTTP_200_OK)
+async def batch_delete_api(body: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """批量删除博主（**逐条校验**：有素材关联的一律拒绝并给出原因）。
+
+    body: ``{"ids": [1, 2, 3]}``。返回 ``{"deleted", "blocked": [{id, name, reason}]}``。
+    """
+    ids = _parse_ids(body)
+    from app.services.person.batch import batch_delete
+
+    return await batch_delete(db, ids)
+
+
+@router.get("/avatars/coverage")
+async def avatar_coverage_api(db: AsyncSession = Depends(get_db)) -> dict:
+    """头像覆盖率：``{"total", "with_avatar", "fillable"}``（人物管理页统计卡片用）。"""
+    from app.services.person.batch import avatar_coverage
+
+    return await avatar_coverage(db)
+
+
+@router.post("/avatars/clear", status_code=status.HTTP_200_OK)
+async def clear_avatars_api(
+    body: dict | None = None, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """批量清除头像（``ids`` 缺省 = 全部有头像的博主）。
+
+    body: ``{"ids": [1, 2]}``。返回 ``{"cleared"}``；头像文件在事务提交后才删。
+    """
+    ids = _parse_ids(body, required=False)
+    from app.services.person.batch import clear_avatars
+
+    return await clear_avatars(db, ids)
+
+
+@router.get("/duplicate-names")
+async def duplicate_names_api(db: AsyncSession = Depends(get_db)) -> dict:
+    """同名博主建议（供合并/删除）：归一化昵称相同的记录分组返回。
+
+    只给建议、不改数据；已在同一人物组里的不再提示。
+    返回 ``{"groups": [{"key", "items": [...]}], "total": 组数}``。
+    """
+    from app.services.person.batch import duplicate_name_groups
+
+    groups = await duplicate_name_groups(db)
+    return {"groups": groups, "total": len(groups)}
 
 
 @router.get("/{blogger_id}", response_model=BloggerDetailOut)

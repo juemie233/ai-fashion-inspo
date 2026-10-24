@@ -31,6 +31,8 @@ export function usePersonsStore(kind: PersonKind) {
   const search = ref('')
   /** 平台筛选（'' 表示全部） */
   const platform = ref('')
+  /** 来源筛选（'' 表示全部；auto_collect = 「我的喜欢」自动登记，动辄几百个） */
+  const source = ref('')
   /** 排序方式：newest | name | count（默认素材数最多） */
   const sort = ref<'newest' | 'name' | 'count'>('count')
   /** 素材数排序方向（仅 sort=count 时生效）：表头点击可切换 */
@@ -53,6 +55,7 @@ export function usePersonsStore(kind: PersonKind) {
         size: size.value,
         search: search.value || undefined,
         platform: platform.value || undefined,
+        source: source.value || undefined,
         sort: sort.value,
         // 仅 sort=count 时有意义（表头点击切换升降序）
         order: order.value,
@@ -97,6 +100,7 @@ export function usePersonsStore(kind: PersonKind) {
     size,
     search,
     platform,
+    source,
     sort,
     order,
     grouped,

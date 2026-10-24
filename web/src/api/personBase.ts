@@ -36,6 +36,8 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
         size?: number
         search?: string
         platform?: string
+        /** 来源筛选（manual 手动 / auto_collect 采集自动登记）：自动登记的账号可一键隐藏 */
+        source?: string
         sort?: 'newest' | 'name' | 'count'
         /** 素材数排序方向（sort=count 时生效） */
         order?: 'asc' | 'desc'

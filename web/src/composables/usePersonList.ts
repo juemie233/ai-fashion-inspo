@@ -65,6 +65,7 @@ export function usePersonList(kind: PersonKind) {
     if (store.page > 1) query.page = String(store.page)
     if (store.search.trim()) query.q = store.search.trim()
     if (store.platform) query.platform = store.platform
+    if (store.source) query.source = store.source
     if (store.sort !== 'count') query.sort = store.sort
     if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
     router.replace({ path: '/persons', query })
@@ -72,7 +73,8 @@ export function usePersonList(kind: PersonKind) {
 
   /** 列表上下文变化时同步 URL：翻页/搜索/平台/排序任意变更即反映到地址栏 */
   watch(
-    () => [store.page, store.search, store.platform, store.sort, store.order] as const,
+    () =>
+      [store.page, store.search, store.platform, store.source, store.sort, store.order] as const,
     () => syncUrl(),
   )
 
@@ -84,6 +86,7 @@ export function usePersonList(kind: PersonKind) {
     store.page = Number.isInteger(page) && page > 1 ? page : 1
     store.search = typeof q.q === 'string' ? q.q : ''
     store.platform = typeof q.platform === 'string' ? q.platform : ''
+    store.source = typeof q.source === 'string' ? q.source : ''
     store.sort = q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
     store.order = q.order === 'asc' ? 'asc' : 'desc'
   }
@@ -109,6 +112,11 @@ export function usePersonList(kind: PersonKind) {
     { label: '素材数最多', value: 'count' },
     { label: '最新创建', value: 'newest' },
     { label: '名称排序', value: 'name' },
+  ]
+  /** 来源筛选：自动登记的博主（「我的喜欢」顺手补建）动辄几百个，必须能一键分开看 */
+  const sourceOptions = [
+    { label: '全部来源', value: '' },
+    ...Object.entries(SOURCE_LABELS).map(([value, label]) => ({ label, value })),
   ]
 
   // ── 新建 / 编辑 / 删除 ──
@@ -171,6 +179,7 @@ export function usePersonList(kind: PersonKind) {
     if (store.page > 1) query.page = String(store.page)
     if (store.search.trim()) query.q = store.search.trim()
     if (store.platform) query.platform = store.platform
+    if (store.source) query.source = store.source
     if (store.sort !== 'count') query.sort = store.sort
     if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
     router.push({ path: `/persons/${person.id}`, query })
@@ -312,6 +321,13 @@ export function usePersonList(kind: PersonKind) {
         ] as TableColumnData[])
       : []),
     {
+      title: '最近素材',
+      dataIndex: 'last_inspiration_at',
+      width: 160,
+      // 时间列一律单行（规则 7）：判断博主是否还在更新，不用点进详情
+      render: ({ record }) => renderTimeCell(formatDate((record as Person).last_inspiration_at)),
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
       width: 160,
@@ -433,6 +449,7 @@ export function usePersonList(kind: PersonKind) {
     platformCount,
     platformOptions,
     sortOptions,
+    sourceOptions,
     showForm,
     editingPerson,
     openCreate,
