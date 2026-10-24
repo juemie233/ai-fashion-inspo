@@ -52,3 +52,30 @@ def test_count_sort_order_rejects_unknown(client):
     """order 只接受 asc / desc（非法值由 FastAPI 直接 422）。"""
     r = client.get("/api/bloggers", params={"sort": "count", "order": "sideways"})
     assert r.status_code == 422
+
+
+def test_list_returns_last_inspiration_at(client, upload, create_blogger):
+    """列表响应必须带 last_inspiration_at（「最近素材」列的数据源）。
+
+    回归：服务层 _to_dict 早就算出了该字段，但 ``response_model=BloggerListOut`` 会
+    **过滤掉未在 schema 里声明的字段**——漏声明时接口静默少字段，前端列永远显示 "-"。
+    """
+    blogger = create_blogger("有最近素材的博主")
+    insp_id = upload().json()["id"]
+    asyncio.run(_attach([insp_id], blogger["id"]))
+
+    body = client.get(
+        "/api/bloggers", params={"search": "有最近素材的博主", "grouped": False}
+    ).json()
+    item = body["items"][0]
+    assert item["id"] == blogger["id"]
+    assert item["inspiration_count"] == 1
+    assert item.get("last_inspiration_at"), item
+
+    # 没有素材的博主：字段存在但为 None（前端显示 "-"，而不是 undefined）
+    lonely = create_blogger("没有素材的博主")
+    body = client.get(
+        "/api/bloggers", params={"search": "没有素材的博主", "grouped": False}
+    ).json()
+    assert body["items"][0]["id"] == lonely["id"]
+    assert body["items"][0]["last_inspiration_at"] is None

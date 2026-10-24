@@ -447,14 +447,23 @@ async def avatar_coverage_api(db: AsyncSession = Depends(get_db)) -> dict:
 async def clear_avatars_api(
     body: dict | None = None, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """批量清除头像（``ids`` 缺省 = 全部有头像的博主）。
+    """批量清除头像。**必须明确指定范围**：``{"ids": [...]}`` 或 ``{"all": true}``。
 
-    body: ``{"ids": [1, 2]}``。返回 ``{"cleared"}``；头像文件在事务提交后才删。
+    为什么不做「空 body = 全清」：这是个不可撤销的破坏性操作，前端拼错参数或
+    第三方误调一下就把全库头像清空了；要求显式 ``all`` 只多打一个字段，却能挡住误触。
+
+    返回 ``{"cleared"}``；头像文件在事务提交后才删。
     """
-    ids = _parse_ids(body, required=False)
+    payload = body or {}
+    ids = _parse_ids(payload, required=False)
+    if not ids and not payload.get("all"):
+        raise HTTPException(
+            status_code=422,
+            detail="请指定 ids（要清除的博主）或显式传 all=true（清空全部博主头像）",
+        )
     from app.services.person.batch import clear_avatars
 
-    return await clear_avatars(db, ids)
+    return await clear_avatars(db, ids or None)
 
 
 @router.get("/duplicate-names")

@@ -75,6 +75,11 @@ class _PersonOutFields(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     inspiration_count: int = 0
+    # 最近一次入库的素材时间（None = 还没有素材）：列表「最近素材」列用，
+    # 判断博主是否还在更新不用点进详情。
+    # ⚠ 必须在这里声明：response_model 会**过滤**未声明字段，服务层 _to_dict 算出来的
+    # last_inspiration_at 曾因此被静默丢掉（列表永远显示 "-"）
+    last_inspiration_at: datetime | None = None
     # 是否已注册人脸特征（face_embedding 非空）：人脸检测只匹配库内人物
     face_registered: bool = False
     # 按人人脸匹配阈值（None = 用全局 settings.face_match_threshold）
@@ -82,7 +87,7 @@ class _PersonOutFields(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_serializer("created_at", "updated_at")
+    @field_serializer("created_at", "updated_at", "last_inspiration_at")
     def serialize_datetime(self, dt: datetime | None) -> str | None:
         return format_utc(dt)
 

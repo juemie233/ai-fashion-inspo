@@ -178,3 +178,18 @@ async def test_api_batch_endpoints(client, create_blogger):
     # ids 非法 → 422（前端拼错参数时要立刻报错，而不是悄悄当成「全部」）
     resp = client.post("/api/bloggers/batch/promote", json={"ids": "1,2"})
     assert resp.status_code == 422
+
+
+async def test_api_clear_avatars_requires_explicit_scope(client, create_blogger):
+    """清除头像必须显式指定范围：空 body 一律 422（破坏性操作不能靠默认值全清）。"""
+    blogger = create_blogger(name="有头像待清博")
+    await _set_avatar(blogger["id"])
+
+    resp = client.post("/api/bloggers/avatars/clear", json={})
+    assert resp.status_code == 422
+    assert "all=true" in resp.json()["detail"]
+
+    # 指定 ids：只清这一位
+    resp = client.post("/api/bloggers/avatars/clear", json={"ids": [blogger["id"]]})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["cleared"] == 1
