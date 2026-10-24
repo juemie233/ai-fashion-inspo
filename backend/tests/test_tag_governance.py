@@ -161,3 +161,42 @@ def test_alias_suggestions_uses_band_not_topn(client):
     # 区间非法 → 422
     bad = client.get("/api/tags/alias-suggestions", params={"min_similarity": 0.8, "max_similarity": 0.7})
     assert bad.status_code == 422
+
+
+def test_watchlist_total_is_real_count_not_page_size(client):
+    """total 必须是真实命中数，不能拿「本次返回条数」冒充。
+
+    回归（实测踩过）：之前 total = len(rows)，被 limit 截断后恒等于 200，
+    7/30/90 天都显示「200 个待确认」，而真实数分别是 2,849 / 7,308 / 13,021。
+    """
+    import asyncio
+
+    for i in range(3):
+        asyncio.run(_make_tag(f"总数回归{i}", days_old=1))
+
+    body = client.get("/api/tags/watchlist", params={"days": 7, "max_usage": 1, "limit": 1}).json()
+    assert body["returned"] == 1
+    assert body["total"] >= 3, body
+    assert len(body["items"]) == 1
+
+
+def test_watchlist_keep_does_not_bump_updated_at(client):
+    """「确认保留」只改 source，不该动 updated_at。
+
+    为什么重要：updated_at 是聚类/别名扫描（30 秒量级）的缓存 key。观察名单里连着点
+    几次保留，就把别名建议的缓存整批打掉——每次都要重算 29 秒。
+    """
+    import asyncio
+
+    from sqlalchemy import func
+
+    tag_id = asyncio.run(_make_tag("保留不动时间", days_old=1))
+
+    async def _max_updated_at() -> str:
+        async with async_session() as db:
+            return str((await db.execute(select(func.max(Tag.updated_at)))).scalar() or "")
+
+    before = asyncio.run(_max_updated_at())
+    assert client.post("/api/tags/watchlist/keep", json={"tag_ids": [tag_id]}).json()["kept"] == 1
+    after = asyncio.run(_max_updated_at())
+    assert before == after

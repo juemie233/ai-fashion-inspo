@@ -88,6 +88,8 @@ export function useWatchList() {
   const items = ref<WatchTag[]>([])
   const selected = ref<number[]>([])
   const cutoff = ref('')
+  /** 真实命中数（列表按 limit 截断，items.length 只是本次返回条数） */
+  const total = ref(0)
 
   async function load(): Promise<void> {
     loading.value = true
@@ -95,6 +97,7 @@ export function useWatchList() {
       const data = await fetchWatchList({ days: days.value, max_usage: maxUsage.value })
       items.value = data.items
       cutoff.value = data.cutoff
+      total.value = data.total ?? data.items.length
       selected.value = []
     } catch (e) {
       Message.error(getApiErrorMessage(e, '加载观察名单失败'))
@@ -148,6 +151,7 @@ export function useWatchList() {
     items,
     selected,
     cutoff,
+    total,
     load,
     onSelectionChange,
     doKeep,

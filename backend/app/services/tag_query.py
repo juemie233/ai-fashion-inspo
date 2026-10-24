@@ -427,6 +427,21 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
         .group_by(InspirationTag.tag_id)
         .subquery()
     )
+    conditions = (
+        Tag.source == "ai_generated",
+        Tag.created_at >= cutoff,
+        func.coalesce(usage_subq.c.cnt, 0) <= max_usage,
+    )
+    # 真实命中数必须单独 COUNT：列表被 limit 截断，用 len(rows) 冒充 total 会让
+    # 「共 200 个待确认」永远停在 200（实测 7/30/90 天都恰好 200，实际远不止）
+    total = (
+        await db.execute(
+            select(func.count())
+            .select_from(Tag)
+            .outerjoin(usage_subq, usage_subq.c.tag_id == Tag.id)
+            .where(*conditions)
+        )
+    ).scalar() or 0
     rows = (
         await db.execute(
             select(
@@ -437,11 +452,7 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
                 func.coalesce(usage_subq.c.cnt, 0).label("cnt"),
             )
             .outerjoin(usage_subq, usage_subq.c.tag_id == Tag.id)
-            .where(
-                Tag.source == "ai_generated",
-                Tag.created_at >= cutoff,
-                func.coalesce(usage_subq.c.cnt, 0) <= max_usage,
-            )
+            .where(*conditions)
             .order_by(Tag.created_at.desc(), Tag.id.desc())
             .limit(limit)
         )
@@ -450,7 +461,8 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
         "days": days,
         "max_usage": max_usage,
         "cutoff": cutoff,
-        "total": len(rows),
+        "total": total,
+        "returned": len(rows),
         "items": [
             {
                 "id": tid,
@@ -484,5 +496,8 @@ async def keep_watch_tags(db: AsyncSession, tag_ids: list[int]) -> int:
     tags = result.scalars().all()
     for tag in tags:
         tag.source = "manual"
+        # 不动「最后修改时间」：updated_at 是聚类/别名扫描缓存的 key，改 source 不影响
+        # 名称与相似度，却会让 30 秒的重算白跑一遍（观察名单里连续点保留尤其明显）
+        tag.updated_at = Tag.updated_at
     await db.commit()
     return len(tags)

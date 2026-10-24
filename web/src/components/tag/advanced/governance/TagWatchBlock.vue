@@ -20,6 +20,7 @@ const {
   items,
   selected,
   cutoff,
+  total,
   load,
   onSelectionChange,
   doKeep,
@@ -123,7 +124,8 @@ onMounted(load)
         </template>
       </a-table>
       <div v-if="items.length > 0" class="hint">
-        共 {{ items.length }} 个待确认（截止时间 {{ String(cutoff).slice(0, 19) }}）
+        共 {{ total }} 个待确认，列表显示前 {{ items.length }} 个（截止时间
+        {{ String(cutoff).slice(0, 19) }}）
       </div>
     </a-spin>
   </div>

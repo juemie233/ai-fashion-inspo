@@ -260,12 +260,22 @@ export interface WatchTag {
 /** AI 新标签观察名单（最近 N 天新建、用量仍 ≤ max_usage） */
 export async function fetchWatchList(
   params: { days?: number; max_usage?: number; limit?: number } = {},
-): Promise<{ days: number; max_usage: number; cutoff: string; total: number; items: WatchTag[] }> {
+): Promise<{
+  days: number
+  max_usage: number
+  cutoff: string
+  /** 真实命中数（可能远大于 items.length：列表按 limit 截断） */
+  total: number
+  /** 本次实际返回的条数 */
+  returned: number
+  items: WatchTag[]
+}> {
   const { data } = await apiClient.get<{
     days: number
     max_usage: number
     cutoff: string
     total: number
+    returned: number
     items: WatchTag[]
   }>('/tags/watchlist', { params })
   return data
