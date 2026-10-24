@@ -15,10 +15,12 @@ interface Props {
 interface State {
   error: Error | null
   info: string
+  /** 错误调用栈（Hermes 下带 index.android.bundle 的行号，用来反查具体代码行） */
+  stack: string
 }
 
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, info: '' }
+  state: State = { error: null, info: '', stack: '' }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error }
@@ -26,25 +28,36 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // 落一份到原生日志，便于 adb logcat 抓取
-    console.error('[ErrorBoundary]', error?.message, info?.componentStack)
-    this.setState({ info: info?.componentStack ?? '' })
+    console.error('[ErrorBoundary]', error?.message, error?.stack, info?.componentStack)
+    this.setState({ info: info?.componentStack ?? '', stack: error?.stack ?? '' })
   }
 
   handleRetry = (): void => {
-    this.setState({ error: null, info: '' })
+    this.setState({ error: null, info: '', stack: '' })
   }
 
   render(): ReactNode {
-    const { error, info } = this.state
+    const { error, info, stack } = this.state
     if (!error) return this.props.children
 
     return (
       <View style={styles.page}>
         <Text style={styles.title}>应用出错了</Text>
-        <Text style={styles.hint}>把下面这段截图发我，就能定位</Text>
+        <Text style={styles.hint}>截图这两段发我，行号能直接定位</Text>
         <ScrollView style={styles.box}>
           <Text style={styles.msg}>{String(error.message || error)}</Text>
-          {!!info && <Text style={styles.stack}>{info.slice(0, 1200)}</Text>}
+          {!!stack && (
+            <>
+              <Text style={styles.sectionTitle}>调用栈（含 bundle 行号）</Text>
+              <Text style={styles.stack}>{stack.slice(0, 900)}</Text>
+            </>
+          )}
+          {!!info && (
+            <>
+              <Text style={styles.sectionTitle}>组件栈</Text>
+              <Text style={styles.stack}>{info.slice(0, 900)}</Text>
+            </>
+          )}
         </ScrollView>
         <TouchableOpacity style={styles.btn} onPress={this.handleRetry}>
           <Text style={styles.btnText}>重试</Text>
@@ -67,6 +80,7 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
   },
   msg: { fontSize: 13, color: '#111827', marginBottom: 10 },
+  sectionTitle: { fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 8, marginBottom: 4 },
   stack: { fontSize: 11, color: '#6b7280', lineHeight: 16 },
   btn: {
     marginTop: 16,
