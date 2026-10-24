@@ -43,50 +43,54 @@ export default function GalleryScreen() {
     }
   }
 
-  const renderCard = ({ item }: { item: Inspiration }) => (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.8}
-      onPress={() => router.push(`/detail/${item.id}`)}
-    >
-      <Image
-        source={{
-          uri: item.thumbnail_path
-            ? getFileUrl(item.thumbnail_path)
-            : getFileUrl(item.file_path),
-        }}
-        style={styles.cardImage}
-      />      {/* 标签 */}
-      <View style={styles.cardTags}>
-        {item.tags?.slice(0, 3).map((t) => (
-          <View key={t.tag.id} style={styles.tag}>
-            <Text style={styles.tagText} numberOfLines={1}>
-              {t.tag.name}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      {/* 来源标识 */}
-      <View style={styles.cardBadge}>
-        <Text style={styles.cardBadgeText}>
-          {sourceLabel(item.source_type)}
-        </Text>
-      </View>
-
-      {/* 收藏按钮 */}
+  const renderCard = ({ item }: { item: Inspiration }) => {
+    // 后端字段可能脏（tags 不是数组、元素缺 tag、id 为空）：兜底成空数组，
+    // 否则 slice/map 直接抛错 → 整棵树卸载（真机白屏）
+    const tags = Array.isArray(item.tags) ? item.tags.filter((t) => t && t.tag) : []
+    return (
       <TouchableOpacity
-        style={styles.favBtn}
-        onPress={() => toggleFavorite(item.id, !item.is_favorite)}
+        style={styles.card}
+        activeOpacity={0.8}
+        onPress={() => router.push(`/detail/${item.id}`)}
       >
-        <Ionicons
-          name={item.is_favorite ? 'heart' : 'heart-outline'}
-          size={18}
-          color={item.is_favorite ? '#ef4444' : '#fff'}
+        <Image
+          source={{
+            uri: item.thumbnail_path
+              ? getFileUrl(item.thumbnail_path)
+              : getFileUrl(item.file_path),
+          }}
+          style={styles.cardImage}
         />
+        {/* 标签 */}
+        <View style={styles.cardTags}>
+          {tags.slice(0, 3).map((t, idx) => (
+            <View key={`${item.id}-tag-${idx}`} style={styles.tag}>
+              <Text style={styles.tagText} numberOfLines={1}>
+                {String(t.tag.name ?? '')}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        {/* 来源标识 */}
+        <View style={styles.cardBadge}>
+          <Text style={styles.cardBadgeText}>{sourceLabel(item.source_type)}</Text>
+        </View>
+
+        {/* 收藏按钮 */}
+        <TouchableOpacity
+          style={styles.favBtn}
+          onPress={() => toggleFavorite(item.id, !item.is_favorite)}
+        >
+          <Ionicons
+            name={item.is_favorite ? 'heart' : 'heart-outline'}
+            size={18}
+            color={item.is_favorite ? '#ef4444' : '#fff'}
+          />
+        </TouchableOpacity>
       </TouchableOpacity>
-    </TouchableOpacity>
-  )
+    )
+  }
 
   return (
     <View style={styles.container}>

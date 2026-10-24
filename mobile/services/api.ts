@@ -91,9 +91,14 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-/** 拼接素材文件访问地址：按路径段 URL 编码，防止含空格/中文的路径 404 */
-export function getFileUrl(base: string, relativePath: string): string {
-  const encoded = relativePath.split('/').map(encodeURIComponent).join('/')
+/** 拼接素材文件访问地址：按路径段 URL 编码，防止含空格/中文的路径 404。
+ *
+ * 入参做类型兜底：后端字段脏掉（数组/对象/数字）时直接 `.split` 会抛
+ * "relativePath.split is not a function"，整页崩溃；这里退化成空路径（图裂但页面不崩）。
+ */
+export function getFileUrl(base: string, relativePath: unknown): string {
+  const path = typeof relativePath === 'string' ? relativePath : ''
+  const encoded = path.split('/').map(encodeURIComponent).join('/')
   return `${base}/api/files/${encoded}`
 }
 
