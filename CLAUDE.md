@@ -265,6 +265,15 @@ set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
 
 **日常改 UI 的更快路子（未落地）**：装一次 debug APK + `npx expo start --host lan`，手机同网即可 Fast Refresh，改 JS 秒级生效、完全不用打包。
 
+**增量同步不要用 `/MIR`**：`/MIR` 会删掉 `C:\mb\android\build`、`.cxx`，等于每次全量重编原生（几分钟）。日常改 JS 用 `/E`（只覆盖不删除），保留构建缓存后一次 **30~40 秒**；只有依赖大改/换 prebuild 产物时才 `/MIR`。
+
+**图标必须用 `mobile/components/Icon.tsx`，不要写 `<Ionicons>`**（2026-10-24 真机踩坑）
+
+- 现象：真机上**所有图标**（tab、按钮、爱心、返回箭头）全部空白，且没有任何报错日志
+- 根因两层：① `@expo/vector-icons` 在 Android 用**小写文件名**做 fontFamily（`'ionicons'`），字体必须内嵌为 `assets/fonts/ionicons.ttf` 才能被原生字体表找到；② 更致命的是组件挂载前先判 `Font.isLoaded('ionicons')`，而 expo-font 只把**自己 loadAsync 过的**字体算已加载，内嵌字体不算 → 判假 → 组件直接渲染空 `<Text />`
+- 结论：字体已由 `app.json` 的 `expo-font` plugin 内嵌（`./assets/fonts/Ionicons.ttf`，探针验证 `fontFamily: 'Ionicons'` 可渲染），`Icon.tsx` 直接用该 family 画码点，绕过那层判断；**不要再改回 `<Ionicons>`**，也不要在 `_layout` 里用 `useFonts` 做字体门（字体加载失败会让整页停在白屏底板）
+- 教训：这类问题**只有真机能复现**（Jest / react-native-web 都不校验），排查时用 `adb logcat` + 探针（同一屏并排渲染几种写法对比）最快
+
 ## 代码审查范围
 
 - 自动代码审查（无用文件 / 重复代码 / 未使用依赖等审计与清理任务）**忽略** `scripts/` 一个目录：其中的工具脚本、调试脚本、一次性迁移脚本不在自动审查结论范围内，不得将其列入删除 / 重构建议。

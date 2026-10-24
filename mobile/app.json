@@ -2,11 +2,13 @@
   "expo": {
     "name": "穿搭素材库",
     "slug": "fashion-inspo",
-    "version": "0.1.3",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
       "backgroundColor": "#6366f1"
     },
     "ios": {
@@ -36,7 +38,14 @@
         }
       ],
       "expo-asset",
-      "expo-font"
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Ionicons.ttf"
+          ]
+        }
+      ]
     ],
     "scheme": "fashion-inspo"
   }

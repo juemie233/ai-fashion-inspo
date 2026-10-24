@@ -1,4 +1,4 @@
-/** 首页画廊：瀑布流展示所有灵感素材，支持下拉刷新和无限滚动。 */
+/** 首页画廊：瀑布流展示所有素材，支持下拉刷新和无限滚动。 */
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -12,7 +12,7 @@ import {
   RefreshControl,
 } from 'react-native'
 import { useRouter } from 'expo-router'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
 import { getFileUrl as buildFileUrl } from '../../services/api'
 import { sourceLabel } from '../../utils/sourceLabel'
@@ -82,7 +82,7 @@ export default function GalleryScreen() {
           style={styles.favBtn}
           onPress={() => toggleFavorite(item.id, !item.is_favorite)}
         >
-          <Ionicons
+          <Icon
             name={item.is_favorite ? 'heart' : 'heart-outline'}
             size={18}
             color={item.is_favorite ? '#ef4444' : '#fff'}
@@ -108,8 +108,8 @@ export default function GalleryScreen() {
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Ionicons name="images-outline" size={64} color="#d1d5db" />
-            <Text style={styles.emptyText}>还没有灵感素材</Text>
+            <Icon name="images-outline" size={64} color="#d1d5db" />
+            <Text style={styles.emptyText}>还没有素材</Text>
             <Text style={styles.emptySubtext}>去采集或上传一些穿搭图片吧</Text>
           </View>
         }

@@ -2,7 +2,7 @@
 
 import { TouchableOpacity } from 'react-native'
 import { Tabs, useRouter } from 'expo-router'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 
 export default function TabLayout() {
   const router = useRouter()
@@ -29,9 +29,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: '灵感库',
+          title: '素材库',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="images-outline" size={size} color={color} />
+            <Icon name="images-outline" size={size} color={color} />
           ),
           // 首页右上角设置入口：真机连接自定义后端地址用
           headerRight: () => (
@@ -40,7 +40,7 @@ export default function TabLayout() {
               onPress={() => router.push('/settings')}
               hitSlop={8}
             >
-              <Ionicons name="settings-outline" size={22} color="#6366f1" />
+              <Icon name="settings-outline" size={22} color="#6366f1" />
             </TouchableOpacity>
           ),
         }}
@@ -50,7 +50,7 @@ export default function TabLayout() {
         options={{
           title: '搜索',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="search-outline" size={size} color={color} />
+            <Icon name="search-outline" size={size} color={color} />
           ),
         }}
       />
@@ -59,18 +59,18 @@ export default function TabLayout() {
         options={{
           title: '采集',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="camera-outline" size={size} color={color} />
+            <Icon name="camera-outline" size={size} color={color} />
           ),
         }}
       />
-      {/* 设置做成 Tab 而不是只放在首页 header：真机上齿轮太小且只在「灵感库」页可见，
+      {/* 设置做成 Tab 而不是只放在首页 header：真机上齿轮太小且只在「素材库」页可见，
           用户找不到改后端地址的入口（2026-10-23 实测反馈） */}
       <Tabs.Screen
         name="settings"
         options={{
           title: '设置',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+            <Icon name="settings-outline" size={size} color={color} />
           ),
         }}
       />

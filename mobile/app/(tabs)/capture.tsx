@@ -11,7 +11,7 @@ import {
   Alert,
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 import { useInspirationStore } from '../../hooks/useInspirations'
 
 export default function CaptureScreen() {
@@ -82,14 +82,14 @@ export default function CaptureScreen() {
           <Image source={{ uri: selectedImage }} style={styles.previewImage} />
         ) : (
           <View style={styles.previewPlaceholder}>
-            <Ionicons name="image-outline" size={80} color="#d1d5db" />
+            <Icon name="image-outline" size={80} color="#d1d5db" />
             <Text style={styles.placeholderText}>选择或拍摄一张穿搭照片</Text>
           </View>
         )}
 
         {uploaded && (
           <View style={styles.uploadedBadge}>
-            <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
+            <Icon name="checkmark-circle" size={20} color="#16a34a" />
             <Text style={styles.uploadedText}>已上传</Text>
           </View>
         )}
@@ -106,14 +106,14 @@ export default function CaptureScreen() {
       <View style={styles.actions}>
         <TouchableOpacity style={styles.actionBtn} onPress={takePhoto}>
           <View style={[styles.actionIcon, { backgroundColor: '#6366f1' }]}>
-            <Ionicons name="camera" size={28} color="#fff" />
+            <Icon name="camera" size={28} color="#fff" />
           </View>
           <Text style={styles.actionLabel}>拍照</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionBtn} onPress={pickFromGallery}>
           <View style={[styles.actionIcon, { backgroundColor: '#8b5cf6' }]}>
-            <Ionicons name="images" size={28} color="#fff" />
+            <Icon name="images" size={28} color="#fff" />
           </View>
           <Text style={styles.actionLabel}>相册</Text>
         </TouchableOpacity>

@@ -13,7 +13,7 @@ import {
   Image,
   Dimensions,
 } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 import { useRouter } from 'expo-router'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
 import { apiClient, getFileUrl, type TagCategoryGroup } from '../../services/api'
@@ -126,7 +126,7 @@ export default function SearchScreen() {
         style={styles.favBtn}
         onPress={() => handleToggleFavorite(item)}
       >
-        <Ionicons
+        <Icon
           name={item.is_favorite ? 'heart' : 'heart-outline'}
           size={18}
           color={item.is_favorite ? '#ef4444' : '#fff'}
@@ -139,7 +139,7 @@ export default function SearchScreen() {
     <View style={styles.container}>
       {/* 搜索栏 */}
       <View style={styles.searchBar}>
-        <Ionicons name="search" size={18} color="#9ca3af" />
+        <Icon name="search" size={18} color="#9ca3af" />
         <TextInput
           style={styles.searchInput}
           placeholder="搜索标签，逗号分隔 (如: JK制服, 白色)"
@@ -151,7 +151,7 @@ export default function SearchScreen() {
         />
         {searchText.length > 0 && (
           <TouchableOpacity onPress={() => setSearchText('')}>
-            <Ionicons name="close-circle" size={18} color="#9ca3af" />
+            <Icon name="close-circle" size={18} color="#9ca3af" />
           </TouchableOpacity>
         )}
       </View>

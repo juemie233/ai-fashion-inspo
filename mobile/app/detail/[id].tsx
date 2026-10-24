@@ -14,10 +14,11 @@ import {
   Alert,
 } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 import { apiClient, getFileUrl, type InspirationTag } from '../../services/api'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
 import { sourceLabel } from '../../utils/sourceLabel'
+import ImageViewer from '../../components/ImageViewer'
 
 const { width } = Dimensions.get('window')
 
@@ -34,6 +35,8 @@ function isSourceLinkValid(url: string | null | undefined): boolean {
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
+  /** 全屏图片查看器开关（点大图打开） */
+  const [viewerOpen, setViewerOpen] = useState(false)
 
   const [detail, setDetail] = useState<Inspiration | null>(null)
   const [loading, setLoading] = useState(true)
@@ -116,16 +119,29 @@ export default function DetailScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
-      {/* 大图 */}
-      <Image
-        source={{ uri: getFileUrl(apiBaseUrl, detail.file_path) }}
-        style={styles.mainImage}
+      {/* 大图：点击进入全屏浏览 */}
+      <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerOpen(true)}>
+        <Image
+          source={{ uri: getFileUrl(apiBaseUrl, detail.file_path) }}
+          style={styles.mainImage}
+        />
+        <View style={styles.zoomBadge} pointerEvents="none">
+          <Icon name="expand-outline" size={14} color="#fff" />
+          <Text style={styles.zoomBadgeText}>全屏</Text>
+        </View>
+      </TouchableOpacity>
+
+      {/* 全屏图片查看器 */}
+      <ImageViewer
+        visible={viewerOpen}
+        uri={getFileUrl(apiBaseUrl, detail.file_path)}
+        onClose={() => setViewerOpen(false)}
       />
 
       {/* 操作栏 */}
       <View style={styles.actions}>
         <TouchableOpacity style={styles.favBtn} onPress={handleToggleFav}>
-          <Ionicons
+          <Icon
             name={detail.is_favorite ? 'heart' : 'heart-outline'}
             size={24}
             color={detail.is_favorite ? '#ef4444' : '#6b7280'}
@@ -137,7 +153,7 @@ export default function DetailScreen() {
 
         {detail.source_url && isSourceLinkValid(detail.source_url) && (
           <TouchableOpacity style={styles.linkBtn} onPress={handleOpenSource}>
-            <Ionicons name="link-outline" size={20} color="#6366f1" />
+            <Icon name="link-outline" size={20} color="#6366f1" />
             <Text style={styles.linkText}>查看原链接</Text>
           </TouchableOpacity>
         )}
@@ -189,7 +205,7 @@ export default function DetailScreen() {
         </View>
       ) : (
         <View style={styles.noTags}>
-          <Ionicons name="pricetags-outline" size={32} color="#d1d5db" />
+          <Icon name="pricetags-outline" size={32} color="#d1d5db" />
           <Text style={styles.noTagsText}>暂无标签，AI 分析后自动生成</Text>
         </View>
       )}
@@ -255,5 +271,19 @@ const styles = StyleSheet.create({
     padding: 40,
     gap: 8,
   },
+  lastRow: { borderBottomWidth: 0 },
+  zoomBadge: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  zoomBadgeText: { color: '#fff', fontSize: 11 },
   noTagsText: { fontSize: 14, color: '#9ca3af' },
 })

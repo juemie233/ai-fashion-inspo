@@ -1,4 +1,9 @@
-/** 根布局：配置 Expo Router 导航栈。 */
+/** 根布局：配置 Expo Router 导航栈。
+ *
+ * 图标说明：图标统一走 `components/Icon.tsx`（直接用内嵌字体渲染字形），
+ * 不要再用 `<Ionicons>` —— 它会因 `Font.isLoaded('ionicons')` 判假而渲染空文本，
+ * 表现为「所有图标都不显示」（2026-10-24 真机排查结论，详见 Icon.tsx 注释）。
+ */
 
 import { useEffect } from 'react'
 import { Stack } from 'expo-router'

@@ -16,7 +16,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
+import Icon from '../../components/Icon'
 import {
   getApiBaseUrl,
   loadApiBaseUrl,
@@ -103,7 +103,7 @@ export default function SettingsScreen() {
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
-              <Ionicons name="pulse-outline" size={18} color="#fff" />
+              <Icon name="pulse-outline" size={18} color="#fff" />
               <Text style={styles.btnText}>测试连接</Text>
             </>
           )}
@@ -118,7 +118,7 @@ export default function SettingsScreen() {
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
-              <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+              <Icon name="checkmark-circle-outline" size={18} color="#fff" />
               <Text style={styles.btnText}>保存并刷新</Text>
             </>
           )}
