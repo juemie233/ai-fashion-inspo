@@ -10,8 +10,6 @@ import { onMounted } from 'vue'
 import { useLongTailTags } from '@/composables/useTagGovernance'
 import { CATEGORY_LABELS } from '@/constants/tag'
 
-const emit = defineEmits<{ changed: [] }>()
-
 const {
   PREVIEW_LIMIT,
   loading,
@@ -29,14 +27,6 @@ const {
   doMerge,
   doDelete,
 } = useLongTailTags()
-
-async function onMerge() {
-  if (await doMerge()) emit('changed')
-}
-
-async function onDelete() {
-  if (await doDelete()) emit('changed')
-}
 
 onMounted(load)
 </script>
@@ -72,7 +62,7 @@ onMounted(load)
         <a-popconfirm
           :content="`把选中的 ${selected.length} 个标签合并到「${targetTag?.name ?? ''}」？素材关联会一并指过去。`"
           :disabled="!targetTag || selected.length === 0"
-          @ok="onMerge"
+          @ok="doMerge"
         >
           <a-button
             size="small"
@@ -86,7 +76,7 @@ onMounted(load)
         <a-popconfirm
           :content="`删除选中的 ${selected.length} 个标签？这些素材会少一个标签，操作不可恢复。`"
           :disabled="selected.length === 0"
-          @ok="onDelete"
+          @ok="doDelete"
         >
           <a-button size="small" status="danger" :loading="busy" :disabled="!selected.length">
             删除选中

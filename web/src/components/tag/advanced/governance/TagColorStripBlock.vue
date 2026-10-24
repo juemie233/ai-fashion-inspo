@@ -11,8 +11,6 @@ import { computed } from 'vue'
 import { useColorStrip } from '@/composables/useTagGovernance'
 import { CATEGORY_LABELS } from '@/constants/tag'
 
-const emit = defineEmits<{ changed: [] }>()
-
 const { category, previewing, applying, preview, actionable, runPreview, runApply } =
   useColorStrip()
 
@@ -24,10 +22,6 @@ const ACTION_LABELS: Record<string, string> = {
   rename: '重命名',
   merge: '合并',
   skip: '跳过',
-}
-
-async function onApply() {
-  if (await runApply()) emit('changed')
 }
 </script>
 
@@ -47,7 +41,7 @@ async function onApply() {
           `重指向 ${preview?.links_repointed ?? 0} 条关联（会写历史，可回滚）。`
         "
         :disabled="!preview || actionable === 0"
-        @ok="onApply"
+        @ok="runApply"
       >
         <a-button status="warning" :disabled="!preview || actionable === 0" :loading="applying">
           执行剥离

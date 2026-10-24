@@ -259,7 +259,7 @@ export interface WatchTag {
 
 /** AI 新标签观察名单（最近 N 天新建、用量仍 ≤ max_usage） */
 export async function fetchWatchList(
-  params: { days?: number; max_usage?: number; limit?: number } = {},
+  params: { days?: number; max_usage?: number; limit?: number; offset?: number } = {},
 ): Promise<{
   days: number
   max_usage: number
@@ -268,6 +268,8 @@ export async function fetchWatchList(
   total: number
   /** 本次实际返回的条数 */
   returned: number
+  /** 本次跳过的条数（翻页用） */
+  offset: number
   items: WatchTag[]
 }> {
   const { data } = await apiClient.get<{
@@ -276,6 +278,7 @@ export async function fetchWatchList(
     cutoff: string
     total: number
     returned: number
+    offset: number
     items: WatchTag[]
   }>('/tags/watchlist', { params })
   return data
@@ -330,5 +333,17 @@ export async function fetchAliasSuggestions(
     cached: boolean
     pairs: AliasPair[]
   }>('/tags/alias-suggestions', { params, timeout: 90000 })
+  return data
+}
+
+/** 批量合并：多个源标签并入同一目标（一次请求，服务端逐个合并并回报失败项） */
+export async function mergeTagsBatch(
+  sourceIds: number[],
+  targetId: number,
+): Promise<{ merged: number; failed: Array<{ id: number; reason: string }> }> {
+  const { data } = await apiClient.post<{
+    merged: number
+    failed: Array<{ id: number; reason: string }>
+  }>('/tags/merge-batch', { source_ids: sourceIds, target_id: targetId })
   return data
 }

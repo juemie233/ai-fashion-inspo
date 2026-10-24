@@ -200,3 +200,51 @@ def test_watchlist_keep_does_not_bump_updated_at(client):
     assert client.post("/api/tags/watchlist/keep", json={"tag_ids": [tag_id]}).json()["kept"] == 1
     after = asyncio.run(_max_updated_at())
     assert before == after
+
+
+def test_merge_batch_merges_many_into_one(client):
+    """批量合并：一次请求把多个源标签并进目标；单个失败不影响其余。"""
+    import asyncio
+
+    target = asyncio.run(_make_tag("批量目标", source="manual"))
+    a = asyncio.run(_make_tag("批量源A", source="manual"))
+    b = asyncio.run(_make_tag("批量源B", source="manual"))
+
+    resp = client.post(
+        "/api/tags/merge-batch", json={"source_ids": [a, b, 99_999_999], "target_id": target}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["merged"] == 2
+    assert [item["id"] for item in body["failed"]] == [99_999_999]
+
+    async def _exists(tag_id: int) -> bool:
+        async with async_session() as db:
+            return (await db.execute(select(Tag).where(Tag.id == tag_id))).scalar_one_or_none() is not None
+
+    assert asyncio.run(_exists(target))
+    assert not asyncio.run(_exists(a))
+    assert not asyncio.run(_exists(b))
+
+    # 参数校验：target 不能同时是 source；缺参 400
+    bad = client.post("/api/tags/merge-batch", json={"source_ids": [target], "target_id": target})
+    assert bad.status_code == 400
+    assert client.post("/api/tags/merge-batch", json={"target_id": target}).status_code == 400
+
+
+def test_watchlist_offset_pagination(client):
+    """观察名单支持翻页：offset 让第 2 页与第 1 页不重叠，total 不随分页变化。"""
+    import asyncio
+
+    for i in range(3):
+        asyncio.run(_make_tag(f"翻页回归{i}", days_old=1))
+
+    first = client.get(
+        "/api/tags/watchlist", params={"days": 7, "max_usage": 1, "limit": 1, "offset": 0}
+    ).json()
+    second = client.get(
+        "/api/tags/watchlist", params={"days": 7, "max_usage": 1, "limit": 1, "offset": 1}
+    ).json()
+    assert first["total"] == second["total"] >= 3
+    assert first["offset"] == 0 and second["offset"] == 1
+    assert first["items"][0]["id"] != second["items"][0]["id"]

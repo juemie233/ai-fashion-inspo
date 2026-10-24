@@ -209,6 +209,7 @@ fashion-inspo/
 - 前端：`cd web && npm test`（vitest：纯函数 / composable / store）
 - 移动端：`cd mobile && npm test`（jest-expo + @testing-library/react-native；含**裸字符串检查**——遍历渲染树断言非 `<Text>` 节点下没有字符串/数字，专门防 `Text strings must be rendered within a <Text> component` 这类只有原生 RN 才会拦、Web 预览与普通渲染测试都发现不了的白屏；改页面后请补一条渲染用例）
 - 前端 lint：`cd web && npm run lint`（ESLint flat config + Prettier 协同；要求 0 error，`no-explicit-any` 等告警渐进清理）
+- 后端格式：Python 侧 `ruff format` 同样**只对本次新增/改动的文件**跑，且**不要把它和功能改动混进同一个提交**（`ruff format` 会把文件里的历史代码一起重排，实测一次就让 `routers/tags.py`、`tag_query.py` 的 diff 里混进几十行无关改动，脏化 `git blame/bisect`）。要格式化就单独提一个 `style:` 提交
 - 前端格式：`npm run format:check` 只检查**本次改动**的前端文件（`scripts/check-web-format.mjs`；全库检查会因 45 个历史未格式化文件永远为红）、`npm run format <文件>` 增量格式化；**禁止**全库 `prettier --write`（会产生数千行无关 diff 污染 git 历史），只格式化本次改动的文件。提交时 lint-staged 已对暂存的前端文件自动 `prettier --write`
 - 一键门禁：`bash scripts/test.sh`（后端 pytest+覆盖率棘轮/ruff/迁移链自检/库漂移 + 前端 vue-tsc/vitest/eslint/死代码基线/格式，共 **11 项**，与 `.github/workflows/ci.yml` 对齐）
 - 端到端冒烟：`cd web && npm run test:e2e`（Playwright，11 条、约 50 秒；**需后端在跑**——Playwright 只自动起前端 dev server，开跑前 `web/e2e/global-setup.ts` 会预检 `/api/health` 并给出启动命令；串行执行，产物在 `web/test-results/`）

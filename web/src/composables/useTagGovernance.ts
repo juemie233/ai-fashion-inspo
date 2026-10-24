@@ -19,12 +19,17 @@ import {
   fetchTagCooccurrence,
   fetchWatchList,
   keepWatchTags,
+  mergeTagsBatch,
   stripColorApply,
   stripColorDryRun,
   type ColorStripPreview,
   type WatchTag,
 } from '@/api/tagAdvanced'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { useTagEvents } from '@/composables/useTagEvents'
+
+// 标签变更事件是模块级单例总线，四个入口共用一份引用即可
+const { notifyTagChanged } = useTagEvents()
 import { MERGE_SIMILARITY, summarizeUsage, USAGE_BUCKETS } from '@/utils/tagGovernance'
 import type { TagDuplicatePair } from '@/types/tag'
 
@@ -67,6 +72,8 @@ export function useColorStrip() {
           `重指向关联 ${result.links_repointed} · 补建颜色关联 ${result.color_links_added}`,
       )
       preview.value = null
+      // 一次剥离会改名/合并上千个标签，具体 id 拿不到 → 广播「批量编辑」，让别处整体刷新
+      notifyTagChanged({ type: 'batch-edited' })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '执行失败'))
@@ -90,20 +97,42 @@ export function useWatchList() {
   const cutoff = ref('')
   /** 真实命中数（列表按 limit 截断，items.length 只是本次返回条数） */
   const total = ref(0)
+  /** 每页条数 */
+  const PAGE_SIZE = 200
+  /** 已加载页数（0 = 未加载） */
+  const page = ref(0)
+  /** 本地列表还没到 total 就还有更多 */
+  const hasMore = computed(() => items.value.length < total.value)
 
-  async function load(): Promise<void> {
+  /** 加载观察名单（append=true 追加，用于「加载更多」） */
+  async function load(append = false): Promise<void> {
     loading.value = true
     try {
-      const data = await fetchWatchList({ days: days.value, max_usage: maxUsage.value })
-      items.value = data.items
+      const offset = append ? items.value.length : 0
+      const data = await fetchWatchList({
+        days: days.value,
+        max_usage: maxUsage.value,
+        limit: PAGE_SIZE,
+        offset,
+      })
+      items.value = append ? [...items.value, ...data.items] : data.items
       cutoff.value = data.cutoff
       total.value = data.total ?? data.items.length
-      selected.value = []
+      page.value = Math.floor(items.value.length / PAGE_SIZE)
+      if (!append) selected.value = []
     } catch (e) {
       Message.error(getApiErrorMessage(e, '加载观察名单失败'))
     } finally {
       loading.value = false
     }
+  }
+
+  /** 从本地列表移除已处理的标签（不重拉 200 条，保留滚动位置） */
+  function removeLocal(ids: number[]): void {
+    const removed = new Set(ids)
+    items.value = items.value.filter((item) => !removed.has(item.id))
+    total.value = Math.max(0, total.value - ids.length)
+    selected.value = selected.value.filter((id) => !removed.has(id))
   }
 
   function onSelectionChange(keys: (string | number)[]): void {
@@ -115,9 +144,11 @@ export function useWatchList() {
     if (selected.value.length === 0) return false
     busy.value = true
     try {
-      const result = await keepWatchTags(selected.value)
+      const ids = [...selected.value]
+      const result = await keepWatchTags(ids)
       Message.success(`已确认保留 ${result.kept} 个（改为手动标签，不再进观察名单）`)
-      await load()
+      removeLocal(ids)
+      notifyTagChanged({ type: 'updated', tagIds: ids })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '确认保留失败'))
@@ -131,9 +162,11 @@ export function useWatchList() {
     if (selected.value.length === 0) return false
     busy.value = true
     try {
-      await batchDeleteTags(selected.value)
-      Message.success(`已删除 ${selected.value.length} 个标签`)
-      await load()
+      const ids = [...selected.value]
+      await batchDeleteTags(ids)
+      Message.success(`已删除 ${ids.length} 个标签`)
+      removeLocal(ids)
+      notifyTagChanged({ type: 'deleted', tagIds: ids })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '删除失败'))
@@ -152,6 +185,8 @@ export function useWatchList() {
     selected,
     cutoff,
     total,
+    hasMore,
+    page,
     load,
     onSelectionChange,
     doKeep,
@@ -208,6 +243,7 @@ export function useAliasSuggestions() {
       await createAlias(pair.tag_a.id, pair.tag_b.name)
       Message.success(`已把「${pair.tag_b.name}」登记为「${pair.tag_a.name}」的别名`)
       ignore(pair)
+      notifyTagChanged({ type: 'updated', tagIds: [pair.tag_a.id] })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '设别名失败'))
@@ -224,6 +260,7 @@ export function useAliasSuggestions() {
       await mergeTags(pair.tag_b.id, pair.tag_a.id)
       Message.success(`已把「${pair.tag_b.name}」合并到「${pair.tag_a.name}」`)
       ignore(pair)
+      notifyTagChanged({ type: 'merged', tagIds: [pair.tag_b.id], targetId: pair.tag_a.id })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '合并失败'))
@@ -361,21 +398,30 @@ export function useLongTailTags() {
       return false
     }
     busy.value = true
-    let ok = 0
-    let failed = 0
     try {
-      // 后端 /tags/merge 是单对合并：顺序执行，单个失败不影响其余
-      for (const source of sources) {
-        try {
-          await mergeTags(source.id, target.id)
-          ok += 1
-        } catch {
-          failed += 1
-        }
+      // 一次请求合并全部源标签（后端逐个合并并回报失败项）；不再 200 次串行 HTTP
+      const result = await mergeTagsBatch(
+        sources.map((tag) => tag.id),
+        target.id,
+      )
+      Message.success(
+        `已合并 ${result.merged} 个到「${target.name}」` +
+          (result.failed.length
+            ? `，${result.failed.length} 个失败（${result.failed[0].reason}）`
+            : ''),
+      )
+      if (result.merged > 0) {
+        // 本地移除已合并的源标签：重拉 22k 标签要 1~2 秒，且没有新增信息
+        const mergedIds = new Set(sources.map((tag) => tag.id))
+        target.usage_count = (target.usage_count ?? 0) + result.merged
+        allTags.value = allTags.value.filter((tag) => !mergedIds.has(tag.id))
+        selected.value = []
+        notifyTagChanged({ type: 'merged', tagIds: [...mergedIds], targetId: target.id })
       }
-      Message.success(`已合并 ${ok} 个到「${target.name}」` + (failed ? `，${failed} 个失败` : ''))
-      await load()
-      return ok > 0
+      return result.merged > 0
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '批量合并失败'))
+      return false
     } finally {
       busy.value = false
     }
@@ -385,9 +431,13 @@ export function useLongTailTags() {
     if (selected.value.length === 0) return false
     busy.value = true
     try {
-      await batchDeleteTags(selected.value)
-      Message.success(`已删除 ${selected.value.length} 个标签`)
-      await load()
+      const ids = [...selected.value]
+      await batchDeleteTags(ids)
+      Message.success(`已删除 ${ids.length} 个标签`)
+      const removed = new Set(ids)
+      allTags.value = allTags.value.filter((tag) => !removed.has(tag.id))
+      selected.value = []
+      notifyTagChanged({ type: 'deleted', tagIds: ids })
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '删除失败'))

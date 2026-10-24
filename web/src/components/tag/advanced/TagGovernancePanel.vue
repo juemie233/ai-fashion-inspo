@@ -12,29 +12,23 @@ import TagLongTailBlock from './governance/TagLongTailBlock.vue'
 import TagAliasSuggestBlock from './governance/TagAliasSuggestBlock.vue'
 import TagWatchBlock from './governance/TagWatchBlock.vue'
 
-const emit = defineEmits<{ changed: [] }>()
-
 const active = ref('watch')
-/** 各块操作后递增，供外部（如主页统计）感知有变更 */
-function onChanged() {
-  emit('changed')
-}
 </script>
 
 <template>
   <div class="gov-panel">
     <a-tabs v-model:active-key="active" type="line">
       <a-tab-pane key="watch" title="新标签观察">
-        <TagWatchBlock @changed="onChanged" />
+        <TagWatchBlock />
       </a-tab-pane>
       <a-tab-pane key="alias" title="别名建议">
-        <TagAliasSuggestBlock @changed="onChanged" />
+        <TagAliasSuggestBlock />
       </a-tab-pane>
       <a-tab-pane key="tail" title="长尾标签">
-        <TagLongTailBlock @changed="onChanged" />
+        <TagLongTailBlock />
       </a-tab-pane>
       <a-tab-pane key="color" title="颜色剥离">
-        <TagColorStripBlock @changed="onChanged" />
+        <TagColorStripBlock />
       </a-tab-pane>
     </a-tabs>
   </div>

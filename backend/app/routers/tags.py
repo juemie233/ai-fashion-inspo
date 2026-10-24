@@ -1,5 +1,7 @@
 """标签管理的 REST API 路由。"""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,14 @@ from app.services import tag_service
 from datetime import UTC
 
 router = APIRouter(prefix="/api/tags", tags=["tags"])
+
+"""别名扫描的并发锁。
+
+扫描是同步 CPU 计算（本库 22k 标签约 30 秒），结果按「标签修改时间 + 下限」缓存。
+没有锁时两个并发请求会各算一遍（等于白烧 30 秒 CPU）；这把锁让后来者等第一位算完，
+然后命中缓存直接返回。
+"""
+_alias_scan_lock = asyncio.Lock()
 
 
 @router.get("")
@@ -155,6 +165,64 @@ async def merge_tags_endpoint(data: TagMergeRequest, db: AsyncSession = Depends(
     except tag_service.TagNotFoundError as e:
         raise HTTPException(status_code=404, detail=e.message) from None
     return {"message": f"已将 '{source_name}' 合并到 '{target_name}'"}
+
+
+@router.post("/merge-batch", status_code=status.HTTP_200_OK)
+async def merge_tags_batch(payload: dict, db: AsyncSession = Depends(get_db)) -> dict:
+    """把多个标签合并到同一个目标标签（长尾治理用）。
+
+    请求体: ``{"source_ids": [1, 2], "target_id": 9}``。返回
+    ``{"merged": 成功数, "failed": [{"id", "reason"}]}``。
+
+    为什么单独一个接口：``/merge`` 只能一对一并，前端批量合并 200 个标签就是 200 次
+    串行 HTTP（每次 20~30ms + 网络往返，要好几秒）。这里一次请求内顺序合并、逐个给
+    结果——单个失败（源标签已不存在等）不影响其余。
+    """
+    sources = payload.get("source_ids") or []
+    target_id = payload.get("target_id")
+    if not isinstance(sources, list) or not sources:
+        raise HTTPException(status_code=400, detail="请提供 source_ids")
+    if not isinstance(target_id, int):
+        raise HTTPException(status_code=400, detail="请提供 target_id")
+    if target_id in sources:
+        raise HTTPException(status_code=400, detail="target_id 不能同时作为 source_ids")
+    # 上限 500：单条 SQL 的 IN 参数过多会撞 SQLite 占位符上限，且前端一页最多也就 200 条
+    if len(sources) > 500:
+        raise HTTPException(status_code=400, detail="一次最多合并 500 个标签")
+
+    from sqlalchemy import select as sa_select
+
+    from app.models.tag import Tag as TagModel
+
+    # 预查存在性：merge_tags 对「源标签不存在」是静默跳过的（它只处理关联与别名），
+    # 不预查会把不存在的 id 也算成「合并成功」，结果数字不可信
+    existing = set(
+        (
+            await db.execute(sa_select(TagModel.id).where(TagModel.id.in_(sources)))
+        )
+        .scalars()
+        .all()
+    )
+
+    merged = 0
+    failed: list[dict] = []
+    for source_id in sources:
+        if not isinstance(source_id, int):
+            failed.append({"id": str(source_id), "reason": "id 非法"})
+            continue
+        if source_id not in existing:
+            failed.append({"id": source_id, "reason": "标签不存在（可能已被删除或合并）"})
+            continue
+        try:
+            await tag_service.merge_tags(db, source_id, target_id)
+            merged += 1
+        except HTTPException as exc:
+            await db.rollback()
+            failed.append({"id": source_id, "reason": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001 —— 单条失败不阻塞其余
+            await db.rollback()
+            failed.append({"id": source_id, "reason": f"{type(exc).__name__}: {exc}"})
+    return {"merged": merged, "failed": failed}
 
 
 @router.get("/suggestions/{name}")
@@ -696,8 +764,14 @@ async def alias_suggestions(
     if cached:
         pairs = cached["pairs"]
     else:
-        pairs, _total = await tag_service.find_duplicate_tag_pairs(db, min_similarity)
-        set_cached(cache_key, pairs, len(pairs))
+        async with _alias_scan_lock:
+            # 等锁期间可能已被别人算完：进锁后必须再查一次缓存
+            cached = get_cached(cache_key)
+            if cached:
+                pairs = cached["pairs"]
+            else:
+                pairs, _total = await tag_service.find_duplicate_tag_pairs(db, min_similarity)
+                set_cached(cache_key, pairs, len(pairs))
 
     band = [p for p in pairs if p["similarity"] < max_similarity]
     return {
@@ -714,6 +788,7 @@ async def tag_watchlist(
     days: int = Query(7, ge=1, le=90),
     max_usage: int = Query(1, ge=0, le=20),
     limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """AI 新建且还没用起来的标签（新标签观察名单）。
@@ -723,7 +798,9 @@ async def tag_watchlist(
     """
     from app.services.tag_query import list_watch_tags
 
-    return await list_watch_tags(db, days=days, max_usage=max_usage, limit=limit)
+    return await list_watch_tags(
+        db, days=days, max_usage=max_usage, limit=limit, offset=offset
+    )
 
 
 @router.post("/watchlist/keep", status_code=status.HTTP_200_OK)

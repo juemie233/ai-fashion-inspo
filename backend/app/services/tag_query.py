@@ -397,7 +397,13 @@ async def get_tag_cooccurrence(db: AsyncSession, tag_id: int, limit: int = 8) ->
     }
 
 
-async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, limit: int = 200) -> dict:
+async def list_watch_tags(
+    db: AsyncSession,
+    days: int = 7,
+    max_usage: int = 1,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict:
     """AI 新建的「还没用起来」的标签（新标签观察名单）。
 
     为什么要这份名单：标签库 22,813 个里 99.9% 是 AI 打标自动建的，且 70% 只被用过
@@ -409,6 +415,7 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
         days: 只看最近多少天新建的。
         max_usage: 用量上限（≤ 该值的才算「还没用起来」）。
         limit: 最多返回多少条。
+        offset: 跳过前多少条（翻页；积压上万，单页 200 看不完）。
 
     Returns:
         ``{"days","max_usage","cutoff","total","items":[{"id","name","category",
@@ -454,6 +461,7 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
             .outerjoin(usage_subq, usage_subq.c.tag_id == Tag.id)
             .where(*conditions)
             .order_by(Tag.created_at.desc(), Tag.id.desc())
+            .offset(offset)
             .limit(limit)
         )
     ).all()
@@ -463,6 +471,7 @@ async def list_watch_tags(db: AsyncSession, days: int = 7, max_usage: int = 1, l
         "cutoff": cutoff,
         "total": total,
         "returned": len(rows),
+        "offset": offset,
         "items": [
             {
                 "id": tid,

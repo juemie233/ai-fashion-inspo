@@ -11,18 +11,8 @@ import { onMounted } from 'vue'
 import { useAliasSuggestions } from '@/composables/useTagGovernance'
 import { classifyPair } from '@/utils/tagGovernance'
 
-const emit = defineEmits<{ changed: [] }>()
-
 const { loading, busy, suggestions, pairKey, load, ignore, makeAlias, doMerge } =
   useAliasSuggestions()
-
-async function onAlias(pair: Parameters<typeof makeAlias>[0]) {
-  if (await makeAlias(pair)) emit('changed')
-}
-
-async function onMerge(pair: Parameters<typeof doMerge>[0]) {
-  if (await doMerge(pair)) emit('changed')
-}
 
 onMounted(load)
 </script>
@@ -51,12 +41,12 @@ onMounted(load)
           </span>
         </div>
         <a-space :size="6">
-          <a-button size="mini" type="primary" :loading="busy" @click="onAlias(pair)">
+          <a-button size="mini" type="primary" :loading="busy" @click="makeAlias(pair)">
             设为别名
           </a-button>
           <a-popconfirm
             :content="`把「${pair.tag_b.name}」合并进「${pair.tag_a.name}」？素材关联会一并指过去。`"
-            @ok="onMerge(pair)"
+            @ok="doMerge(pair)"
           >
             <a-button size="mini" :loading="busy">合并</a-button>
           </a-popconfirm>

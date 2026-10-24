@@ -10,8 +10,6 @@ import { onMounted } from 'vue'
 import { useWatchList } from '@/composables/useTagGovernance'
 import { CATEGORY_LABELS } from '@/constants/tag'
 
-const emit = defineEmits<{ changed: [] }>()
-
 const {
   days,
   maxUsage,
@@ -21,19 +19,12 @@ const {
   selected,
   cutoff,
   total,
+  hasMore,
   load,
   onSelectionChange,
   doKeep,
   doDelete,
 } = useWatchList()
-
-async function onKeep() {
-  if (await doKeep()) emit('changed')
-}
-
-async function onDelete() {
-  if (await doDelete()) emit('changed')
-}
 
 onMounted(load)
 </script>
@@ -57,7 +48,7 @@ onMounted(load)
         ]"
         style="width: 130px"
         size="small"
-        @change="load"
+        @change="() => load()"
       />
       <span class="hint">用量 ≤</span>
       <a-select
@@ -70,13 +61,13 @@ onMounted(load)
         ]"
         style="width: 100px"
         size="small"
-        @change="load"
+        @change="() => load()"
       />
-      <a-button size="small" :loading="loading" @click="load">刷新</a-button>
+      <a-button size="small" :loading="loading" @click="() => load()">刷新</a-button>
       <a-popconfirm
         :content="`确认保留选中的 ${selected.length} 个标签？改成手动标签后不再进观察名单。`"
         :disabled="selected.length === 0"
-        @ok="onKeep"
+        @ok="doKeep"
       >
         <a-button size="small" type="primary" :disabled="!selected.length" :loading="busy">
           确认保留
@@ -85,7 +76,7 @@ onMounted(load)
       <a-popconfirm
         :content="`删除选中的 ${selected.length} 个标签？相关素材会少这些标签，不可恢复。`"
         :disabled="selected.length === 0"
-        @ok="onDelete"
+        @ok="doDelete"
       >
         <a-button size="small" status="danger" :disabled="!selected.length" :loading="busy">
           删除
@@ -123,6 +114,11 @@ onMounted(load)
           <span style="white-space: nowrap">{{ String(record.created_at).slice(0, 19) }}</span>
         </template>
       </a-table>
+      <div v-if="hasMore" class="load-more">
+        <a-button size="small" :loading="loading" @click="() => load(true)">
+          加载更多（已显示 {{ items.length }} / 共 {{ total }}）
+        </a-button>
+      </div>
       <div v-if="items.length > 0" class="hint">
         共 {{ total }} 个待确认，列表显示前 {{ items.length }} 个（截止时间
         {{ String(cutoff).slice(0, 19) }}）
@@ -138,5 +134,10 @@ onMounted(load)
 .hint {
   color: var(--color-text-3);
   font-size: 12px;
+}
+
+.load-more {
+  margin-top: 10px;
+  text-align: center;
 }
 </style>

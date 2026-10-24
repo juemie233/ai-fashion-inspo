@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   fetchAliasSuggestions: vi.fn(),
   createAlias: vi.fn(),
   mergeTags: vi.fn(),
+  mergeTagsBatch: vi.fn(),
   fetchTagsGrouped: vi.fn(),
   fetchTagTrend: vi.fn(),
   fetchTagCooccurrence: vi.fn(),
@@ -38,6 +39,12 @@ vi.mock('@/api/tagAdvanced', () => ({
   keepWatchTags: mocks.keepWatchTags,
   fetchTagCooccurrence: mocks.fetchTagCooccurrence,
   fetchAliasSuggestions: mocks.fetchAliasSuggestions,
+  mergeTagsBatch: mocks.mergeTagsBatch,
+}))
+
+const events = vi.hoisted(() => ({ notifyTagChanged: vi.fn() }))
+vi.mock('@/composables/useTagEvents', () => ({
+  useTagEvents: () => ({ notifyTagChanged: events.notifyTagChanged }),
 }))
 
 vi.mock('@/api/tags', () => ({
@@ -79,6 +86,7 @@ function watchItem(id: number, name: string, usage = 0) {
 describe('useTagGovernance', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((fn) => fn.mockReset())
+    events.notifyTagChanged.mockReset()
     vi.restoreAllMocks()
   })
 
@@ -113,12 +121,14 @@ describe('useTagGovernance', () => {
     expect(await strip.runApply()).toBe(false)
   })
 
-  it('观察名单：加载 → 保留 → 重新拉取', async () => {
+  it('观察名单：保留后本地移除并广播变更（不再重拉整页）', async () => {
     mocks.fetchWatchList.mockResolvedValue({
       days: 7,
       max_usage: 1,
       cutoff: '2026-10-17T00:00:00',
       total: 2,
+      returned: 2,
+      offset: 0,
       items: [watchItem(1, '新词A'), watchItem(2, '新词B')],
     })
     mocks.keepWatchTags.mockResolvedValue({ kept: 1 })
@@ -131,8 +141,46 @@ describe('useTagGovernance', () => {
     watch.onSelectionChange([1])
     expect(await watch.doKeep()).toBe(true)
     expect(mocks.keepWatchTags).toHaveBeenCalledWith([1])
-    // 保留后必须重新拉（名单要立刻反映结果）
-    expect(mocks.fetchWatchList).toHaveBeenCalledTimes(2)
+    // 本地移除：只剩 1 条，且没有再次请求（重拉 200 条会把滚动位置冲掉）
+    expect(watch.items.value.map((i) => i.id)).toEqual([2])
+    expect(watch.total.value).toBe(1)
+    expect(mocks.fetchWatchList).toHaveBeenCalledTimes(1)
+    expect(events.notifyTagChanged).toHaveBeenCalledWith({ type: 'updated', tagIds: [1] })
+  })
+
+  it('观察名单：加载更多按 offset 追加，hasMore 跟随 total', async () => {
+    mocks.fetchWatchList.mockResolvedValueOnce({
+      days: 7,
+      max_usage: 1,
+      cutoff: '',
+      total: 3,
+      returned: 2,
+      offset: 0,
+      items: [watchItem(1, '甲'), watchItem(2, '乙')],
+    })
+    mocks.fetchWatchList.mockResolvedValueOnce({
+      days: 7,
+      max_usage: 1,
+      cutoff: '',
+      total: 3,
+      returned: 1,
+      offset: 2,
+      items: [watchItem(3, '丙')],
+    })
+    const watch = useWatchList()
+
+    await watch.load()
+    expect(watch.hasMore.value).toBe(true)
+
+    await watch.load(true)
+    expect(mocks.fetchWatchList).toHaveBeenLastCalledWith({
+      days: 7,
+      max_usage: 1,
+      limit: 200,
+      offset: 2,
+    })
+    expect(watch.items.value.map((i) => i.name)).toEqual(['甲', '乙', '丙'])
+    expect(watch.hasMore.value).toBe(false)
   })
 
   it('观察名单：删除失败时提示且不回显成功', async () => {
@@ -246,7 +294,7 @@ describe('useTagGovernance', () => {
         ],
       },
     ])
-    mocks.mergeTags.mockResolvedValue({})
+    mocks.mergeTagsBatch.mockResolvedValue({ merged: 1, failed: [] })
     mocks.batchDeleteTags.mockResolvedValue({})
     vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
     const warn = vi.spyOn(Message, 'warning').mockImplementation((() => {}) as never)
@@ -261,15 +309,24 @@ describe('useTagGovernance', () => {
     expect(await tail.doMerge()).toBe(false)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('合并到'))
 
-    // 填了精确目标 → 合并到 2
+    // 填了精确目标 → 一次请求合并到 2（不再 1 次/标签）
     tail.targetKeyword.value = '热门词'
     expect(await tail.doMerge()).toBe(true)
-    expect(mocks.mergeTags).toHaveBeenCalledWith(1, 2)
+    expect(mocks.mergeTagsBatch).toHaveBeenCalledWith([1], 2)
+    // 本地移除：不再重拉 22k 标签
+    expect(tail.visibleRows.value).toHaveLength(0)
+    expect(mocks.fetchTagsGrouped).toHaveBeenCalledTimes(1)
+    expect(events.notifyTagChanged).toHaveBeenCalledWith({
+      type: 'merged',
+      tagIds: [1],
+      targetId: 2,
+    })
 
-    // 删除走批量接口
-    tail.onSelectionChange([1])
+    // 删除走批量接口（本地移除同样生效）
+    tail.onSelectionChange([2])
     expect(await tail.doDelete()).toBe(true)
-    expect(mocks.batchDeleteTags).toHaveBeenCalledWith([1])
+    expect(mocks.batchDeleteTags).toHaveBeenCalledWith([2])
+    expect(mocks.fetchTagsGrouped).toHaveBeenCalledTimes(1)
   })
 
   it('洞察：跟随标签自动加载趋势与共现，清空标签则清屏', async () => {
