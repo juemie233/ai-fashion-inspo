@@ -1,6 +1,10 @@
 # AI Outfit Material Library
 
 > **[English](README.en.md) | Chinese** (The English document is a translation; the Chinese version is the source and can be regenerated using `python scripts/translate_docs.py`)
+>
+> **Snapshot notice:** this English overview is a snapshot taken at 2026-10-21 and has **not** been re-translated for the
+> mobile-app / people-management / tag-governance work of 2026-10-22 ~ 10-24 — see the Chinese [README.md](README.md)
+> 「最近更新（2026-10-22 ~ 10-24）」section for the current state.
 
 A personalized AI outfit material management tool designed to automatically collect and visually recognize fragmented outfit content, transforming it into searchable, intelligent material assets tailored to your needs.
 
