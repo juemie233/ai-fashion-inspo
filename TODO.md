@@ -18,55 +18,22 @@
 
 **验收标准：** 手机端能分页浏览搜索结果、编辑标签与删除素材、多选上传，并看到任务进度与失败原因。
 
-### 【任务】移动端真机可跑：自建 APK（P1，APK 已产出，待真机安装验收）
+### 【任务】移动端真机验收：设置页「保存」触发白屏（P1）
 
-**进度（2026-10-23）：** `app-release.apk` 已构建成功（61MB，`com.fashioninspo.app` 0.1.0，arm64，debug keystore 签名，JS bundle 已内嵌，`usesCleartextTraffic=true` 已生效）。剩余：装到手机（华为 nova7 Pro / HarmonyOS 4.2）验证连接后端。
+**现状（2026-10-24）：** APK 已能装能用（当前 0.1.3 / versionCode 4），但**设置页点「保存」会崩**。
 
-**背景：** 手机没有 Google Play，装不了 Expo Go → 只能自建 APK；也正因为如此，**「升级到最新 SDK」不再是前提**，SDK 52 继续用。
+已确认的事实：
 
-**构建环境（一次性，已装好）：**
+- 报错为 `Text strings must be rendered within a <Text> component.`，组件栈指向**灵感库（GalleryScreen）的 FlatList cell**，不是设置页本身 —— 保存后刷新列表触发重渲染才崩
+- 该错误只有**原生 RN** 会拦；`react-native-web` 不校验，所以 Web 预览看不到
+- 用 Babel 静态扫描 5 个页面：裸文本 0 处、字符串表达式 0 处；`{/* 注释 */}` 已实测会被丢弃
+- `mobile/` 的畸形数据扫描（10 字段 × 11 种值）**未能复现裸字符串**（0 命中），只撞出 6 类"脏数据崩"，已在 `210e284` 修掉并加成门禁
 
-| 组件 | 位置 | 说明 |
-|---|---|---|
-| JDK 17 | `C:\Users\Administrator\jdk17\jdk-17.0.20.1+1` | 系统默认 java 是 25，Gradle 8.10 不支持，必须显式 `JAVA_HOME` |
-| Android SDK | `C:\Users\Administrator\AndroidSdk` | cmdline-tools + platform-tools + platforms;android-35 + build-tools 35 + NDK 26.1 + CMake 3.22 |
-| 构建副本 | `C:\mb` | **必须在短路径构建**，见下方路径坑 |
+**还差的信息：** 0.1.3 错误页已显示 `error.stack`（含 bundle 行号），装 0.1.3 复现后截图那一段即可反查具体代码行；或开 USB 调试用 `adb logcat` 抓栈（adb 在 `C:\Users\Administrator\AndroidSdk\platform-tools\`）。
 
-**四个踩过的坑（换机器重建时必看）：**
+**构建方法与环境坑：** 见 [CLAUDE.md 的「移动端构建（Android APK）」](CLAUDE.md#移动端构建android-apk)（短路径构建、Kotlin 1.9.24、提速配方、代理陷阱都在那里，不再在此重复）。
 
-1. **路径过长**：项目在 `Claude Code` 下（含空格），CMake 把源路径压成 `C_/Users/.../Claude_Code/...`，react-native-reanimated 的 C++ 对象路径超 Windows MAX_PATH，ninja `mkdir` 失败。`mklink /J` 与 `subst` 都会被 Gradle/CMake 解回真实路径，**只能把工程复制到真实短路径构建**（现为 `C:\mb`，产物再拷回）。
-2. **Kotlin 版本**：RN 0.76 用 Kotlin 1.9.24（`react-native/gradle/libs.versions.toml`），而 `android/build.gradle` 的 ext 默认 1.9.25 → expo-modules-core 要求 Compose 1.5.15 与编译器不匹配。需在 `android/gradle.properties` 加 `android.kotlinVersion=1.9.24`（prebuild 会重置，重跑后要再加）。
-3. **缺三个包**：`expo-asset`、`expo-font`（`@expo/vector-icons` 依赖）、`expo-splash-screen`/`expo-system-ui` 原先都没装，release 打包 JS 时报错，已补齐。
-4. **网络**：`dl.google.com` 直连不稳，构建需走本机代理（clash 7890）——`gradle.properties` 里已写 `systemProp.https.proxyHost=127.0.0.1`，代理没开时要删掉这几行；npm 走 npmmirror，**不要**给它设代理（设了必 ECONNREFUSED）。
-
-**重建步骤：**
-
-```bash
-robocopy "<repo>\mobile" "C:\mb" /MIR    # 同步（含 node_modules）
-cd C:\mb\android
-set JAVA_HOME=C:\Users\Administrator\jdk17\jdk-17.0.20.1+1
-set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
-.\gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
-# 产物：C:\mb\android\app\build\outputs\apk\release\app-release.apk
-```
-
-**构建提速（2026-10-23 实测，6m37s → 31s）**
-
-| 改动 | 收益 | 说明 |
-|---|---|---|
-| 去掉 `--no-daemon` | 主要收益 | 每次冷启 JVM + 重新配置要 2~3 分钟；daemon 复用后配置阶段几秒 |
-| 不清 `android/.cxx` / `build/` | 主要收益 | 清一次就要全量重编 reanimated / expo-modules 的 C++（几分钟）。**只有改原生依赖或 Kotlin/Java 才需要清**，纯 JS 改动不必 |
-| `reactNativeArchitectures=arm64-v8a` | 中 | 手机是 arm64，编 4 个 ABI 纯浪费 |
-| `org.gradle.caching=true` + `jvmargs -Xmx4096m` | 中 | 任务产物复用；heap 2G 偏小 |
-| Windows Defender 排除 `C:\mb`、`.gradle`、`AndroidSdk`、仓库目录 | 大（62s→31s） | 实时扫描 node_modules/构建产物非常拖慢；`Add-MpPreference -ExclusionPath` 需管理员 |
-
-**实测结果**：改 JS 后重新打包 **31s**；无改动重跑 **9s**。
-
-**不要开的**：`--configuration-cache` —— Expo/RN 的 Gradle 插件有 45 处不兼容，直接 BUILD FAILED（已试）。
-
-**日常改界面的更优路线（未落地）**：装一次 **debug APK**，再跑 `npx expo start --host lan`，手机与电脑同网即可 Fast Refresh —— 改 JS 秒级生效、完全不用重新打包。代价是 debug 包体积更大、启动慢一点，且需要 Metro 一直开着。
-
-**验收标准：** 手机上装好 APK，设置页填局域网 IP（`http://192.168.31.142:18888`）能连上后端并浏览素材；后续功能回归可在真机执行。
+**验收标准：** 手机设置页填 `http://<电脑局域网IP>:18888` → 测试连接通过 → 点「保存」不再崩，列表正常刷新；真机可跑功能回归。
 
 ## 低优先级
 

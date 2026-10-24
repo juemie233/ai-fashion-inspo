@@ -188,9 +188,8 @@ fashion-inspo/
 
 注意事项：
 - **默认分支固定为 `master`**：开发、提交、推送一律在 `master` 上进行（`git push origin master`）；功能分支只在用户明确要求时使用，且分支合并后**不要**继续在旧分支上提交。
-- **fix（修复）提交无限制**：修复功能的代码提交不受行数限制，完成后自动 `git commit` 并 `git push origin master`。
-- **其他类型 < 100 行**：不自动提交。仅在用户明确要求时提交。
-- **其他类型 ≥ 100 行**：自动 `git commit` 并 `git push origin master`。
+- **不再按行数决定是否提交**：任何类型（feat / fix / refactor / style / docs / chore）的改动，完成后一律自动 `git commit` 并 `git push origin master`。**唯一例外**：用户明确说了「先别提交」。
+- **提交粒度仍见下节**：自动提交 ≠ 碎片提交 —— 同一轮的 docs/chore 小改合并成一条，避免历史被格式/文档噪音刷屏。
 - **推送后不要等 CI**：提交推送完成即结束本轮，**禁止**轮询 / 等待 / 查询 GitHub Actions 结果（不调 CI 接口、不 `sleep` 等结果）。CI 是否通过由用户在 GitHub 上查看；若失败，用户会把错误信息贴回来，届时再修。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
@@ -202,7 +201,7 @@ fashion-inspo/
 1. **「功能 + 审查修复」合并提交**：同一功能域内的跟手修复（如「代码审查修复 N 个缺陷」）与它的功能提交属于同一逻辑变更，应合并为一个提交（改完后一次性提交，或 push 前 `git rebase -i` squash），不要拆成两个提交。
 2. **微提交攒批**：`docs`/`chore` 类的纯格式、忽略文件、TODO 整理等小改动（通常 < 100 行），不要单独占一条历史，攒一批再提交，或并入相邻的功能提交。
 3. **大提交保持单一主题**：一个提交只做一件事；若一个提交里同时包含多个不相关的主题（如「自动化测试」+「模型配置统一」），应拆分为多个提交。
-4. **自动提交的合并约束**：命中「≥ 100 行自动提交」时，若本次改动属于上一个提交同一功能域的收尾/修复，优先 `git commit --amend`（或 `git rebase -i` 合并）而非新建提交；仅在属于新的独立主题时才新建提交。
+4. **自动提交的合并约束**：自动提交时，若本次改动属于上一个提交同一功能域的收尾/修复，优先 `git commit --amend`（或 `git rebase -i` 合并）而非新建提交；仅在属于新的独立主题时才新建提交。
 
 ## 自动化测试
 
@@ -216,6 +215,55 @@ fashion-inspo/
 - 测试依赖：`pip install -r backend/requirements-dev.txt`（后端）；vitest 等已含在 `web/package.json` devDependencies
 - **约定**：修改核心链路（软删除/垃圾桶/内容去重/破坏性接口认证/人物模块）或新增破坏性接口时，须在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
 - 误将测试文件写入真实存储目录时，用 `python scripts/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
+
+## 移动端构建（Android APK）
+
+手机没有 Google Play → 装不了 Expo Go → **只能自建 APK**。下面这些不是建议，是实测撞出来的固定动作（2026-10-23）。
+
+**工具链（一次性，本机已装）**
+
+| 组件 | 位置 |
+|---|---|
+| JDK 17 | `C:\Users\Administrator\jdk17\jdk-17.0.20.1+1`（系统默认 java 是 25，Gradle 8.10 不认，**必须显式 `JAVA_HOME`**） |
+| Android SDK | `C:\Users\Administrator\AndroidSdk`（platform-tools / platforms;android-35 / build-tools 35 / NDK 26.1 / CMake 3.22） |
+
+**必须在短真实路径构建**
+
+项目在 `...\Desktop\Claude Code\...`（带空格），CMake 会把源路径压成 `Claude_Code`，react-native-reanimated 的 C++ 对象路径超 Windows MAX_PATH → ninja `mkdir` 失败。`mklink /J` 和 `subst` 都会被 Gradle/CMake 解回真实路径（都试过，无效）——只能**真实复制**到短路径构建：
+
+```bash
+robocopy "<repo>\mobile" "C:\mb" /MIR
+cd C:\mb\android
+set JAVA_HOME=C:\Users\Administrator\jdk17\jdk-17.0.20.1+1
+set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
+.\gradlew assembleRelease
+# 产物：C:\mb\android\app\build\outputs\apk\release\app-release.apk
+```
+
+**版本号**：`android/` 是 prebuild 生成物且已 gitignore，`versionCode`/`versionName` 直接改 `C:\mb\android\app\build.gradle`，且必须用**正则**改——`/MIR` 会用仓库里的旧 `build.gradle` 覆盖副本，按字符串替换会静默失配（踩过：打的包版本号没变）。
+
+**prebuild 重跑后要补的两行**（`android/` 会被重置）
+
+- `android.kotlinVersion=1.9.24` —— RN 0.76 带的是 Kotlin 1.9.24，而 `android/build.gradle` 的 ext 默认 1.9.25，会让 expo-modules-core 报 Compose 1.5.15 与编译器不匹配
+- `android.usesCleartextTraffic: true`（写在 `app.json` 的 `expo-build-properties` 里，不需手改 gradle）
+
+**提速配方（实测 6m37s → 31s；无改动重跑 9s）**
+
+| 做法 | 收益 | 说明 |
+|---|---|---|
+| **不要加 `--no-daemon`** | 最大 | 冷启 JVM + 重新配置要 2~3 分钟，daemon 复用后配置阶段几秒 |
+| **纯 JS 改动不要清** `android/.cxx` / `build/` | 最大 | 清一次就全量重编 reanimated、expo-modules 的 C++（几分钟）；只有动原生依赖才需要清 |
+| `reactNativeArchitectures=arm64-v8a` | 中 | 手机是 arm64，编 4 个 ABI 纯浪费（仓库侧 `gradle.properties` 已配） |
+| `org.gradle.caching=true` + `jvmargs -Xmx4096m` | 中 | 任务产物复用；2G heap 偏小（已配） |
+| **Defender 排除** `C:\mb`、`~/.gradle`、`AndroidSdk`、仓库目录 | 大 | 实时扫描极拖慢（62s → 31s）；`Add-MpPreference -ExclusionPath` 需管理员（已配） |
+| 不要开 `--configuration-cache` | —— | Expo/RN 插件有 45 处不兼容，直接 BUILD FAILED（试过） |
+
+**两个环境陷阱**
+
+- Gradle 依赖走本机代理（clash 7890）：`android/gradle.properties` 里 `systemProp.http(s).proxyHost/Port`；代理没开就删掉这几行（依赖已缓存时不影响增量构建）
+- **npm 不要设代理**：它走 npmmirror，设了必 `ECONNREFUSED`
+
+**日常改 UI 的更快路子（未落地）**：装一次 debug APK + `npx expo start --host lan`，手机同网即可 Fast Refresh，改 JS 秒级生效、完全不用打包。
 
 ## 代码审查范围
 
