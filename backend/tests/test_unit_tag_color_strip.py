@@ -49,11 +49,7 @@ async def _insp(insp_id: str) -> None:
 
 async def _link(insp_id: str, tag_id: int) -> None:
     async with async_session() as db:
-        db.add(
-            InspirationTag(
-                inspiration_id=insp_id, tag_id=tag_id, confidence=0.9, source="ai_generated"
-            )
-        )
+        db.add(InspirationTag(inspiration_id=insp_id, tag_id=tag_id, confidence=0.9, source="ai_generated"))
         await db.commit()
 
 
@@ -237,8 +233,33 @@ async def test_apply_writes_history(client):
         batch_id = result["batch_id"]
 
     async with async_session() as db:
-        rows = (
-            await db.execute(select(TagHistory).where(TagHistory.batch_id == batch_id))
-        ).scalars().all()
+        rows = (await db.execute(select(TagHistory).where(TagHistory.batch_id == batch_id))).scalars().all()
 
     assert rows, "颜色剥离必须留下可回滚的操作历史"
+
+
+async def test_fetch_link_map_chunks_large_id_lists(client):
+    """回归：上千个标签 id 也不再触发 `too many SQL variables`。
+
+    实测 2026-10：本库 item_type 有 11,726 个标签，dry-run 一次性拼进
+    ``IN (...)`` 直接抛 ``sqlite3.OperationalError: too many SQL variables``——
+    这个治理接口第一次真跑就炸在这里。修复是按 500 分片查询。
+    """
+    from app.services.tag_color_strip import _fetch_link_map
+
+    # 1500 个不存在的 id：重点不是结果，而是「不炸」
+    ids = list(range(10_000_000, 10_001_500))
+    async with async_session() as db:
+        link_map = await _fetch_link_map(db, ids)
+    assert len(link_map) == len(ids)
+    assert all(v == [] for v in link_map.values())
+
+
+async def test_count_existing_color_links_chunks_large_inspiration_lists(client):
+    """回归：上千个素材 id 同样要分片（补建颜色关联前的去重查询走这条）。"""
+    from app.services.tag_color_strip import _count_existing_color_links
+
+    color_id = await _tag("分片色", "color")
+    async with async_session() as db:
+        found = await _count_existing_color_links(db, [color_id], [f"chunk-{i}" for i in range(1500)])
+    assert found == set()

@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 
 # 补建颜色关联使用的来源与置信度（与 ai_tag_saver 的颜色落库口径一致）
 _COLOR_LINK_SOURCE = "ai_generated"
+
+"""单条 SQL 里 ``IN (...)`` 的参数个数上限。
+
+SQLite 老版本硬上限是 999 个占位符，item_type 类别有上万个标签、相关素材更大，
+一次性拼进 IN 会直接抛 ``sqlite3.OperationalError: too many SQL variables``
+（实测 2026-10：这个治理接口在本库第一次真跑就炸在这里）。统一按 500 分片。
+"""
+_IN_CHUNK = 500
+
+
+def _chunks(values: list, size: int = _IN_CHUNK):
+    """把列表切成若干片（空列表返回不产生任何片）。"""
+    for i in range(0, len(values), size):
+        yield values[i : i + size]
+
+
 _COLOR_LINK_CONFIDENCE = 0.85
 
 
@@ -51,7 +67,7 @@ def _strip_color_prefix(name: str, prefixes: list[str]) -> tuple[str, str | None
     """
     for prefix in prefixes:
         if name.startswith(prefix) and len(name) > len(prefix):
-            return name[len(prefix):], prefix
+            return name[len(prefix) :], prefix
     return name, None
 
 
@@ -71,9 +87,7 @@ async def _build_plans(
     all_tags = list((await db.execute(select(Tag))).scalars().all())
     tag_by_id = {t.id: t for t in all_tags}
     taken = {t.name: t.id for t in all_tags}  # 当前名 → 归属标签 id（随执行推进更新）
-    alias_names = set(
-        (await db.execute(select(TagAlias.alias))).scalars().all()
-    )
+    alias_names = set((await db.execute(select(TagAlias.alias))).scalars().all())
 
     plans: list[dict] = []
     alias_skipped = 0
@@ -81,8 +95,9 @@ async def _build_plans(
     for tag in tags:
         new_name, color = _strip_color_prefix(tag.name, prefixes)
         if color is None or not new_name.strip():
-            plans.append({"tag": tag, "old": tag.name, "new": None, "color": None,
-                          "action": "skip", "target_id": None})
+            plans.append(
+                {"tag": tag, "old": tag.name, "new": None, "color": None, "action": "skip", "target_id": None}
+            )
             continue
         owner_id = taken.get(new_name)
         if owner_id is not None and owner_id != tag.id:
@@ -90,43 +105,65 @@ async def _build_plans(
             if owner_tag.category != category:
                 # 新名被其它类别的标签占用：跳过，避免跨类别合并
                 cross_category_skipped += 1
-                plans.append({"tag": tag, "old": tag.name, "new": None,
-                              "color": None, "action": "skip",
-                              "target_id": None})
+                plans.append(
+                    {
+                        "tag": tag,
+                        "old": tag.name,
+                        "new": None,
+                        "color": None,
+                        "action": "skip",
+                        "target_id": None,
+                    }
+                )
                 continue
             # 新名已被占用 → 合并到该目标
-            plans.append({"tag": tag, "old": tag.name, "new": new_name,
-                          "color": color, "action": "merge",
-                          "target_id": owner_id})
+            plans.append(
+                {
+                    "tag": tag,
+                    "old": tag.name,
+                    "new": new_name,
+                    "color": color,
+                    "action": "merge",
+                    "target_id": owner_id,
+                }
+            )
             taken.pop(tag.name, None)
             continue
         if new_name in alias_names:
             # 新名与既有标签别名同名：跳过，避免别名归一化歧义
             alias_skipped += 1
-            plans.append({"tag": tag, "old": tag.name, "new": None, "color": None,
-                          "action": "skip", "target_id": None})
+            plans.append(
+                {"tag": tag, "old": tag.name, "new": None, "color": None, "action": "skip", "target_id": None}
+            )
             continue
-        plans.append({"tag": tag, "old": tag.name, "new": new_name, "color": color,
-                      "action": "rename", "target_id": None})
+        plans.append(
+            {
+                "tag": tag,
+                "old": tag.name,
+                "new": new_name,
+                "color": color,
+                "action": "rename",
+                "target_id": None,
+            }
+        )
         taken.pop(tag.name, None)
         taken[new_name] = tag.id
     return plans, alias_skipped, cross_category_skipped
 
 
-async def _fetch_link_map(
-    db: AsyncSession, tag_ids: list[int]
-) -> dict[int, list[str]]:
+async def _fetch_link_map(db: AsyncSession, tag_ids: list[int]) -> dict[int, list[str]]:
     """批量取标签的素材关联，返回 {tag_id: [inspiration_id]}。"""
     link_map: dict[int, list[str]] = {tid: [] for tid in tag_ids}
     if not tag_ids:
         return link_map
-    result = await db.execute(
-        select(InspirationTag.tag_id, InspirationTag.inspiration_id).where(
-            InspirationTag.tag_id.in_(tag_ids)
+    for chunk in _chunks(tag_ids):
+        result = await db.execute(
+            select(InspirationTag.tag_id, InspirationTag.inspiration_id).where(
+                InspirationTag.tag_id.in_(chunk)
+            )
         )
-    )
-    for tid, iid in result.all():
-        link_map.setdefault(tid, []).append(iid)
+        for tid, iid in result.all():
+            link_map.setdefault(tid, []).append(iid)
     return link_map
 
 
@@ -136,17 +173,19 @@ async def _count_existing_color_links(
     """查询素材集合上已存在的颜色关联，返回 {(inspiration_id, color_tag_id)}。"""
     if not color_tag_ids or not inspiration_ids:
         return set()
-    result = await db.execute(
-        select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
-            InspirationTag.tag_id.in_(color_tag_ids),
-            InspirationTag.inspiration_id.in_(inspiration_ids),
+    found: set[tuple[str, int]] = set()
+    for chunk in _chunks(inspiration_ids):
+        result = await db.execute(
+            select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
+                InspirationTag.tag_id.in_(color_tag_ids),
+                InspirationTag.inspiration_id.in_(chunk),
+            )
         )
-    )
-    return {(iid, tid) for iid, tid in result.all()}
+        found.update((iid, tid) for iid, tid in result.all())
+    return found
 
 
-def _summarize(plans: list[dict], alias_skipped: int,
-               cross_category_skipped: int) -> dict:
+def _summarize(plans: list[dict], alias_skipped: int, cross_category_skipped: int) -> dict:
     """计划 → 统计摘要（dry-run 与 apply 共用）。"""
     renamed = sum(1 for p in plans if p["action"] == "rename")
     merged = sum(1 for p in plans if p["action"] == "merge")
@@ -160,9 +199,7 @@ def _summarize(plans: list[dict], alias_skipped: int,
     }
 
 
-async def dry_run_color_strip(
-    db: AsyncSession, category: str = "item_type", limit: int = 0
-) -> dict:
+async def dry_run_color_strip(db: AsyncSession, category: str = "item_type", limit: int = 0) -> dict:
     """颜色剥离 dry-run：返回统计与样例，不写库。
 
     参数:
@@ -179,9 +216,7 @@ async def dry_run_color_strip(
     if limit > 0:
         query = query.limit(limit)
     tags = list((await db.execute(query)).scalars().all())
-    plans, alias_skipped, cross_skipped = await _build_plans(
-        db, tags, prefixes, category
-    )
+    plans, alias_skipped, cross_skipped = await _build_plans(db, tags, prefixes, category)
 
     merge_plans = [p for p in plans if p["action"] == "merge"]
     involved_ids = [p["tag"].id for p in plans if p["action"] != "skip"]
@@ -197,28 +232,24 @@ async def dry_run_color_strip(
         links_repointed += sum(1 for iid in src_links if iid not in tgt_links)
 
     # 预计新增的颜色关联行数：受影响素材 ∖ 已关联对应颜色标签的素材
+    color_names = list({p["color"] for p in plans if p["color"]})
     color_ids: dict[str, int] = {}
-    result = await db.execute(
-        select(Tag.id, Tag.name).where(
-            Tag.category == "color", Tag.name.in_([p["color"] for p in plans if p["color"]])
+    for chunk in _chunks(color_names):
+        result = await db.execute(
+            select(Tag.id, Tag.name).where(Tag.category == "color", Tag.name.in_(chunk))
         )
-    )
-    color_ids = {name: tid for tid, name in result.all()}
+        color_ids.update({name: tid for tid, name in result.all()})
     affected: list[tuple[str, int]] = []  # (inspiration_id, color_tag_id)
     for p in plans:
         if p["action"] == "skip" or p["color"] not in color_ids:
             continue
         for iid in link_map.get(p["tag"].id, []):
             affected.append((iid, color_ids[p["color"]]))
-    existing = await _count_existing_color_links(
-        db, list(color_ids.values()), [iid for iid, _ in affected]
-    )
+    existing = await _count_existing_color_links(db, list(color_ids.values()), [iid for iid, _ in affected])
     color_links_added = len({(iid, tid) for iid, tid in affected} - existing)
 
     samples = [
-        {"old": p["old"], "new": p["new"], "action": p["action"]}
-        for p in plans
-        if p["action"] != "skip"
+        {"old": p["old"], "new": p["new"], "action": p["action"]} for p in plans if p["action"] != "skip"
     ][:20]
 
     return {
@@ -232,28 +263,28 @@ async def dry_run_color_strip(
     }
 
 
-async def _merge_into(
-    db: AsyncSession, source: Tag, target_id: int
-) -> int:
+async def _merge_into(db: AsyncSession, source: Tag, target_id: int) -> int:
     """把源标签合并进目标标签（单事务版，不提交）：重指向关联、搬迁别名、删源标签。
 
     返回实际重指向的关联行数（同素材双关联直接删除，不计入）。
     """
-    result = await db.execute(
-        select(InspirationTag).where(InspirationTag.tag_id == source.id)
-    )
+    result = await db.execute(select(InspirationTag).where(InspirationTag.tag_id == source.id))
     links = result.scalars().all()
 
-    already = set(
-        (await db.execute(
-            select(InspirationTag.inspiration_id).where(
-                InspirationTag.inspiration_id.in_(
-                    [link.inspiration_id for link in links] or ["-"]
-                ),
-                InspirationTag.tag_id == target_id,
+    already: set[str] = set()
+    for chunk in _chunks([link.inspiration_id for link in links]):
+        already.update(
+            (
+                await db.execute(
+                    select(InspirationTag.inspiration_id).where(
+                        InspirationTag.inspiration_id.in_(chunk),
+                        InspirationTag.tag_id == target_id,
+                    )
+                )
             )
-        )).scalars().all()
-    )
+            .scalars()
+            .all()
+        )
 
     repointed = 0
     for link in links:
@@ -274,13 +305,9 @@ async def _merge_into(
     # 搬迁别名（Tag.aliases 为 delete-orphan 级联，不搬迁会随源标签物理删除），
     # 语义与 tag_crud.merge_tags 一致
     target_alias_set = set(
-        (await db.execute(
-            select(TagAlias.alias).where(TagAlias.tag_id == target_id)
-        )).scalars().all()
+        (await db.execute(select(TagAlias.alias).where(TagAlias.tag_id == target_id))).scalars().all()
     )
-    source_aliases = (
-        await db.execute(select(TagAlias).where(TagAlias.tag_id == source.id))
-    ).scalars().all()
+    source_aliases = (await db.execute(select(TagAlias).where(TagAlias.tag_id == source.id))).scalars().all()
     for alias in source_aliases:
         if alias.alias in target_alias_set:
             await db.delete(alias)
@@ -294,9 +321,7 @@ async def _merge_into(
     return repointed
 
 
-async def _ensure_color_links(
-    db: AsyncSession, plans: list[dict], link_map: dict[int, list[str]]
-) -> int:
+async def _ensure_color_links(db: AsyncSession, plans: list[dict], link_map: dict[int, list[str]]) -> int:
     """为重命名/合并源的关联素材补建颜色标签关联（去重），返回新增关联行数。
 
     颜色标签不存在时创建（复用 get_or_create_tag 的别名归一化与竞态处理），
@@ -320,15 +345,17 @@ async def _ensure_color_links(
 
     # 一次查出已存在的颜色关联（避免逐条判重）
     all_ids = [iid for ids in pairs.values() for iid in ids]
-    existing = set()
-    if all_ids:
-        existing = set(
-            (await db.execute(
-                select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
-                    InspirationTag.tag_id.in_(list(color_tag_ids.values())),
-                    InspirationTag.inspiration_id.in_(all_ids),
+    existing: set[tuple[str, int]] = set()
+    for chunk in _chunks(list(all_ids)):
+        existing.update(
+            (
+                await db.execute(
+                    select(InspirationTag.inspiration_id, InspirationTag.tag_id).where(
+                        InspirationTag.tag_id.in_(list(color_tag_ids.values())),
+                        InspirationTag.inspiration_id.in_(chunk),
+                    )
                 )
-            )).all()
+            ).all()
         )
 
     added = 0
@@ -355,9 +382,7 @@ async def _ensure_color_links(
     return added
 
 
-async def apply_color_strip(
-    db: AsyncSession, category: str = "item_type", limit: int = 0
-) -> dict:
+async def apply_color_strip(db: AsyncSession, category: str = "item_type", limit: int = 0) -> dict:
     """颜色剥离执行：重命名 / 合并 / 补建颜色关联，全程单事务。
 
     语义：
@@ -375,9 +400,7 @@ async def apply_color_strip(
     if limit > 0:
         query = query.limit(limit)
     tags = list((await db.execute(query)).scalars().all())
-    plans, alias_skipped, cross_skipped = await _build_plans(
-        db, tags, prefixes, category
-    )
+    plans, alias_skipped, cross_skipped = await _build_plans(db, tags, prefixes, category)
 
     batch_id = new_batch_id("color-strip")
     rename_plans = [p for p in plans if p["action"] == "rename"]
@@ -401,9 +424,7 @@ async def apply_color_strip(
     # 用于补建颜色关联与登记文本向量重建
     involved_source_ids = [p["tag"].id for p in rename_plans + merge_plans]
     link_map = await _fetch_link_map(db, involved_source_ids)
-    affected_ids = [
-        iid for tid in involved_source_ids for iid in link_map.get(tid, [])
-    ]
+    affected_ids = [iid for tid in involved_source_ids for iid in link_map.get(tid, [])]
 
     # 1) 先合并：合并会删除源标签并释放其名称，
     #    避免改名先落库时与尚未删除的合并源旧名触发唯一约束冲突
@@ -463,8 +484,7 @@ async def apply_color_strip(
             meta={
                 "origin": "color_strip",
                 "merged": [
-                    {"source_tag_id": p["tag"].id, "target_tag_id": p["target_id"]}
-                    for p in merge_plans
+                    {"source_tag_id": p["tag"].id, "target_tag_id": p["target_id"]} for p in merge_plans
                 ],
             },
         )
