@@ -11,11 +11,11 @@ import {
   createAlias,
   fetchTagTrend,
   fetchTagsGrouped,
-  findDuplicates,
   mergeTags,
 } from '@/api/tags'
 import type { TagItem } from '@/api/tags'
 import {
+  fetchAliasSuggestions,
   fetchTagCooccurrence,
   fetchWatchList,
   keepWatchTags,
@@ -181,9 +181,10 @@ export function useAliasSuggestions() {
   async function load(): Promise<void> {
     loading.value = true
     try {
-      // 阈值取后端允许的最小值 0.6：目的就是把「不够像重复、又明显同义」的捞出来
-      const data = (await findDuplicates(0.6)) as { duplicates?: TagDuplicatePair[] }
-      const raw = data.duplicates ?? []
+      // 专门的区间接口：0.60~0.75 的「同义变体」（区间过滤在后端截断之前，
+      // 复用 /tags/duplicates 会拿到全 ≥0.75 的重复对、过滤后为空）
+      const data = await fetchAliasSuggestions({ min_similarity: 0.6, max_similarity: 0.75 })
+      const raw = data.pairs ?? []
       pairs.value = raw.filter((pair): pair is Pair => Boolean(pair.tag_a && pair.tag_b))
     } catch (e) {
       Message.error(getApiErrorMessage(e, '扫描失败'))

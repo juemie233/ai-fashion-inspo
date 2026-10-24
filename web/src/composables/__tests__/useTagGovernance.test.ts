@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   fetchWatchList: vi.fn(),
   keepWatchTags: vi.fn(),
   batchDeleteTags: vi.fn(),
-  findDuplicates: vi.fn(),
+  fetchAliasSuggestions: vi.fn(),
   createAlias: vi.fn(),
   mergeTags: vi.fn(),
   fetchTagsGrouped: vi.fn(),
@@ -37,12 +37,13 @@ vi.mock('@/api/tagAdvanced', () => ({
   fetchWatchList: mocks.fetchWatchList,
   keepWatchTags: mocks.keepWatchTags,
   fetchTagCooccurrence: mocks.fetchTagCooccurrence,
+  fetchAliasSuggestions: mocks.fetchAliasSuggestions,
 }))
 
 vi.mock('@/api/tags', () => ({
   batchDeleteTags: mocks.batchDeleteTags,
   createAlias: mocks.createAlias,
-  findDuplicates: mocks.findDuplicates,
+
   mergeTags: mocks.mergeTags,
   fetchTagsGrouped: mocks.fetchTagsGrouped,
   fetchTagTrend: mocks.fetchTagTrend,
@@ -153,8 +154,10 @@ describe('useTagGovernance', () => {
   })
 
   it('别名建议：丢掉残缺配对，只展示 0.6~0.75 的同义变体', async () => {
-    mocks.findDuplicates.mockResolvedValue({
-      duplicates: [
+    mocks.fetchAliasSuggestions.mockResolvedValue({
+      total: 0,
+      cached: false,
+      pairs: [
         {
           tag_a: { id: 1, name: '白衬衫', category: 'item_type' },
           tag_b: { id: 2, name: '白色衬衫', category: 'item_type' },
@@ -173,12 +176,17 @@ describe('useTagGovernance', () => {
     await alias.load()
     expect(alias.suggestions.value).toHaveLength(1)
     expect(alias.suggestions.value[0].similarity).toBeCloseTo(0.68)
-    expect(mocks.findDuplicates).toHaveBeenCalledWith(0.6)
+    expect(mocks.fetchAliasSuggestions).toHaveBeenCalledWith({
+      min_similarity: 0.6,
+      max_similarity: 0.75,
+    })
   })
 
   it('别名建议：设别名与合并分别调用对应接口并隐藏已处理的那一对', async () => {
-    mocks.findDuplicates.mockResolvedValue({
-      duplicates: [
+    mocks.fetchAliasSuggestions.mockResolvedValue({
+      total: 0,
+      cached: false,
+      pairs: [
         {
           tag_a: { id: 1, name: '白衬衫', category: 'item_type' },
           tag_b: { id: 2, name: '白色衬衫', category: 'item_type' },

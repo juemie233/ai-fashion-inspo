@@ -667,6 +667,48 @@ async def cooccurrence_network(
     return await tag_service.get_cooccurrence_network(db, limit, min_count)
 
 
+@router.get("/alias-suggestions", status_code=status.HTTP_200_OK)
+async def alias_suggestions(
+    min_similarity: float = Query(0.6, ge=0.5, le=0.9),
+    max_similarity: float = Query(0.75, ge=0.55, le=0.95),
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """别名建议：名称相似度落在 ``[min, max)`` 的标签对（「像但不够像重复」的那一段）。
+
+    与 ``/duplicates`` 的区别：那个只给 ≥0.75 的重复对，且**先按相似度倒序截断 50 条**；
+    这个把区间过滤放在截断之前，所以不会出现「返回的全是 ≥0.75、前端过滤完就空」。
+
+    首次计算慢（本库 22k 标签约 30 秒，O(类别内两两比对)），结果按「标签最后修改时间 +
+    下限」缓存：换上限不用重算，标签有变更自动失效。
+    """
+    from sqlalchemy import func as sa_func
+
+    from app.models.tag import Tag as TagModel
+    from app.services.tag_dedupe_cache import compute_cache_key, get_cached, set_cached
+
+    if min_similarity >= max_similarity:
+        raise HTTPException(status_code=422, detail="min_similarity 必须小于 max_similarity")
+
+    last_mod = str((await db.execute(sa_func.max(TagModel.updated_at))).scalar() or "")
+    cache_key = compute_cache_key(last_mod, min_similarity)
+    cached = get_cached(cache_key)
+    if cached:
+        pairs = cached["pairs"]
+    else:
+        pairs, _total = await tag_service.find_duplicate_tag_pairs(db, min_similarity)
+        set_cached(cache_key, pairs, len(pairs))
+
+    band = [p for p in pairs if p["similarity"] < max_similarity]
+    return {
+        "min_similarity": min_similarity,
+        "max_similarity": max_similarity,
+        "total": len(band),
+        "cached": cached is not None,
+        "pairs": band[:limit],
+    }
+
+
 @router.get("/watchlist", status_code=status.HTTP_200_OK)
 async def tag_watchlist(
     days: int = Query(7, ge=1, le=90),

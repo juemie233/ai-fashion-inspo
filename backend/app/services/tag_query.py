@@ -102,12 +102,21 @@ async def get_tag_stats(db: AsyncSession) -> dict:
     }
 
 
-async def find_duplicate_tag_pairs(db: AsyncSession, threshold: float = 0.75) -> tuple[list[dict], int]:
-    """扫描所有标签，返回名称相似度达到阈值的标签对列表及总数。
+async def find_duplicate_tag_pairs(
+    db: AsyncSession, threshold: float = 0.75, max_similarity: float = 1.0
+) -> tuple[list[dict], int]:
+    """扫描所有标签，返回名称相似度落在 ``[threshold, max_similarity)`` 的标签对。
 
     优化 1：按类别分组，跨类别不比对
     优化 2：同类别内首字不同直接跳过
     优化 3：相似度计算放入线程池避免阻塞事件循环
+
+    Args:
+        db: 数据库会话。
+        threshold: 相似度下限。
+        max_similarity: 相似度上限。**用区间而不是只给下限**：别名建议要的是
+            「像但不够像重复」的那一段；只按下限取、再按 top-N 截断的话，截出来的
+            全是 ≥0.75 的重复对，前端再过滤就空了（实测踩过）。
     """
     result = await db.execute(select(Tag).order_by(Tag.category, Tag.name))
     all_tags = result.scalars().all()
@@ -134,7 +143,7 @@ async def find_duplicate_tag_pairs(db: AsyncSession, threshold: float = 0.75) ->
                     if name_a[0] != name_b[0]:
                         continue
                     sim = _similarity(name_a, name_b)
-                    if sim >= threshold and sim < 1.0:
+                    if threshold <= sim < min(max_similarity, 1.0):
                         pairs.append(
                             {
                                 "tag_a": {

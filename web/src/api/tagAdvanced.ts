@@ -295,3 +295,30 @@ export async function fetchTagCooccurrence(
   }>(`/tags/${tagId}/cooccurrence`, { params: { limit } })
   return data
 }
+
+/** 别名建议的一条配对（两侧都保证存在；仅本模块使用） */
+interface AliasPair {
+  tag_a: { id: number; name: string; category: string }
+  tag_b: { id: number; name: string; category: string }
+  similarity: number
+}
+
+/**
+ * 别名建议：相似度落在 [min, max) 的标签对。
+ *
+ * 为什么不用 `findDuplicates(0.6)`：那个接口先按相似度倒序截断 50 条，返回的全是
+ * ≥0.75 的重复对，前端再过滤就空了（实测踩过）。这里区间过滤在截断之前。
+ * 首次计算较慢（本库 22k 标签约 30 秒），后端按标签修改时间缓存；超时给到 90 秒。
+ */
+export async function fetchAliasSuggestions(
+  params: { min_similarity?: number; max_similarity?: number; limit?: number } = {},
+): Promise<{ total: number; cached: boolean; pairs: AliasPair[] }> {
+  const { data } = await apiClient.get<{
+    min_similarity: number
+    max_similarity: number
+    total: number
+    cached: boolean
+    pairs: AliasPair[]
+  }>('/tags/alias-suggestions', { params, timeout: 90000 })
+  return data
+}

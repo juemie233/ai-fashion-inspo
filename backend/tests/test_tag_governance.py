@@ -122,3 +122,42 @@ def test_tag_cooccurrence_unknown_tag(client):
     body = client.get("/api/tags/99999999/cooccurrence").json()
     assert body["tag"] is None
     assert body["items"] == []
+
+
+def test_alias_suggestions_uses_band_not_topn(client):
+    """别名建议必须按「区间」取，不能只按下限取再截断。
+
+    回归（实测踩过）：之前复用 /tags/duplicates——那个接口先按相似度**倒序截断 50 条**，
+    返回的全是 ≥0.75 的重复对；前端再过滤 <0.75 就空了。现在区间过滤发生在截断之前。
+    """
+    from app.services.tag_crud import _similarity
+    from app.services.tag_query import find_duplicate_tag_pairs
+
+    import asyncio
+
+    base = "别名区间回归测试"
+    high_a = asyncio.run(_make_tag(f"{base}甲", source="manual"))
+    high_b = asyncio.run(_make_tag(f"{base}甲乙", source="manual"))
+    sim = _similarity(f"{base}甲", f"{base}甲乙")
+    assert sim >= 0.75, sim  # 构造出的这一对属于「重复」，不该出现在别名建议里
+
+    async def _pairs(min_s: float, max_s: float) -> list[dict]:
+        async with async_session() as db:
+            pairs, _total = await find_duplicate_tag_pairs(db, min_s, max_s)
+            return [p for p in pairs if {p["tag_a"]["id"], p["tag_b"]["id"]} == {high_a, high_b}]
+
+    assert asyncio.run(_pairs(0.6, 0.75)) == []  # 高相似对不进别名区间
+    assert asyncio.run(_pairs(0.6, 1.0)) != []  # 只要下限时能看到
+
+    resp = client.get("/api/tags/alias-suggestions", params={"min_similarity": 0.6, "max_similarity": 0.75})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert {"min_similarity", "max_similarity", "total", "cached", "pairs"} <= set(body)
+    for pair in body["pairs"]:
+        assert 0.6 <= pair["similarity"] < 0.75
+    # 第二次命中缓存（结果按「标签最后修改时间 + 下限」缓存）
+    assert client.get("/api/tags/alias-suggestions").json()["cached"] is True
+
+    # 区间非法 → 422
+    bad = client.get("/api/tags/alias-suggestions", params={"min_similarity": 0.8, "max_similarity": 0.7})
+    assert bad.status_code == 422
