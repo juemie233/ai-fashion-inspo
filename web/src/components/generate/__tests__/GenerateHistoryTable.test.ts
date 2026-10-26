@@ -13,7 +13,6 @@ import ArcoVue from '@arco-design/web-vue'
 
 import GenerateHistoryTable from '../GenerateHistoryTable.vue'
 import type { GenerateStatus, GenerationRunBrief } from '@/api/generate'
-import { formatDateTime } from '@/utils/format'
 
 const LONG_PROMPT =
   '法式复古碎花雪纺连衣裙，浅蓝色底配白色小碎花，收腰显瘦，适合春季通勤与周末约会，' +
@@ -87,7 +86,10 @@ describe('生成历史表', () => {
 
     expect(wrapper.text()).toContain('已完成')
     expect(wrapper.text()).not.toContain('done')
-    expect(wrapper.text()).toContain(formatDateTime(row.created_at))
+    // 写死期望值（测试时区固定 Asia/Shanghai）：12:00Z → 20:00 本地；
+    // 若把 Z 丢掉按本地时间解析，这里会显示 12:00，用例就会失败
+    expect(wrapper.text()).toContain('2026-10-26 20:00')
+    expect(wrapper.text()).not.toContain('2026-10-26 12:00')
     expect(wrapper.text()).not.toContain('Invalid Date')
 
     wrapper.unmount()
@@ -118,6 +120,8 @@ describe('生成历史表', () => {
     expect(text).toContain('张数 2')
     expect(text).toContain('参考素材 2 张')
     expect(text).toContain('工作流 qwen_image_i2i')
+    expect(text).toContain('创建 2026-10-26 20:00')
+    expect(text).toContain('最后更新 2026-10-26 20:03')
     expect(text).toContain('复制描述')
 
     wrapper.unmount()

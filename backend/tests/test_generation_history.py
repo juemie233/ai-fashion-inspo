@@ -12,6 +12,8 @@
 
 import asyncio
 
+import pytest
+
 from app.database import async_session
 from app.models.generation import GenerationRun
 
@@ -20,8 +22,14 @@ LONG_PROMPT = (
     "搭配米色针织开衫与白色帆布鞋，自然光街拍，柔和背景虚化，突出面料垂坠感。" * 2
 )
 
+DEFAULT_PARAMS_JSON = (
+    '{"width": 1024, "height": 768, "steps": 20, "cfg": 4.5,'
+    ' "seed_base": 123, "count": 2,'
+    ' "prompt": "params 里的重复副本", "negative": "params 里的重复副本"}'
+)
 
-def _seed_run() -> int:
+
+def _seed_run(params_json: str | None = None) -> int:
     """直接建一条批次记录（不走生成流程），返回 run_id。"""
 
     async def _do() -> int:
@@ -31,11 +39,7 @@ def _seed_run() -> int:
                 status="done",
                 prompt=LONG_PROMPT,
                 negative="模糊，低质量",
-                params_json=(
-                    '{"width": 1024, "height": 768, "steps": 20, "cfg": 4.5,'
-                    ' "seed_base": 123, "count": 2,'
-                    ' "prompt": "params 里的重复副本", "negative": "params 里的重复副本"}'
-                ),
+                params_json=params_json if params_json is not None else DEFAULT_PARAMS_JSON,
                 model_key="z_image_int8",
                 workflow_name="z_image_t2i",
                 total=2,
@@ -84,5 +88,18 @@ def test_recent_runs_keeps_full_prompt_and_utc_iso(client):
         # params 里原本存了一份 prompt/negative 副本，接口不应重复返回
         assert "prompt" not in row["params"]
         assert "negative" not in row["params"]
+    finally:
+        _delete_run(run_id)
+
+
+@pytest.mark.parametrize("bad_params", ["{不是 JSON", "null", "[]"])
+def test_recent_runs_tolerates_bad_params_json(client, bad_params):
+    """单条脏 params_json 不能让整个生成历史接口 500（脏行按空参数展示）。"""
+    run_id = _seed_run(params_json=bad_params)
+    try:
+        r = client.get("/api/generate/runs", params={"limit": 100})
+        assert r.status_code == 200, r.text
+        row = next(i for i in r.json()["items"] if i["id"] == run_id)
+        assert row["params"] == {}
     finally:
         _delete_run(run_id)

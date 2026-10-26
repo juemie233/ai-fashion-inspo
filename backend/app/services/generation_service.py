@@ -61,6 +61,19 @@ def _float_or(value, default: float) -> float:
         return default
 
 
+def _params_of(run: GenerationRun) -> dict:
+    """安全解析 params_json 快照。
+
+    脏数据（非法 JSON / ``null`` / 数组）返回空 dict：生成历史是列表页，不能让
+    单条坏记录把整个接口变成 500（任务执行器 image_gen 的 ``_params_of`` 同样兜底）。
+    """
+    try:
+        value = json.loads(run.params_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _validate_params(payload: dict, spec: dict) -> dict:
     """校验并归一化出图参数。
 
@@ -327,7 +340,7 @@ async def list_candidates(db: AsyncSession, run_id: int) -> dict:
             "status": run.status,
             "prompt": run.prompt,
             "negative": run.negative,
-            "params": json.loads(run.params_json or "{}"),
+            "params": _params_of(run),
             "model_key": run.model_key,
             "workflow_name": run.workflow_name,
             "workflow_hash": run.workflow_hash,
@@ -485,7 +498,7 @@ async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
     )
     out: list[dict] = []
     for run in rows.scalars().all():
-        params = json.loads(run.params_json or "{}")
+        params = _params_of(run)
         # prompt / negative 已单独返回，params 里的副本不再重复（列表最多 100 条）
         params.pop("prompt", None)
         params.pop("negative", None)
@@ -523,7 +536,7 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
 
-    params = json.loads(run.params_json or "{}")
+    params = _params_of(run)
     payload = {
         "kind": run.kind,
         "prompt": run.prompt,
@@ -567,7 +580,7 @@ async def regenerate_candidate(
     _, _, seed_str = stem.partition("_seed-")
     original_seed = int(seed_str) if seed_str.isdigit() else 0
 
-    params = json.loads(run.params_json or "{}")
+    params = _params_of(run)
     payload = {
         "kind": run.kind,
         "prompt": run.prompt,
