@@ -34,6 +34,40 @@ import { usePolling } from '@/composables/usePolling'
 /** 非终态集合：只有这些状态才需要继续轮询。 */
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting_vram'])
 
+/** 档位目录缓存：`/generate/status` 要探测 ComfyUI + 权重文件 + Ollama，实测 **4.4 秒**。
+ *
+ * 这期间如果拿「兜底两档」先渲染，用户会看到「先出现两个档位、几秒后第三个冒出来」，
+ * 而且从素材详情带 `?model=qwen_2_1_uc_i2i` 跳进来时，未审查档位此刻还不在列表里，
+ * 请求会被丢弃 → 到页面时没选中未审查版（真实缺陷）。
+ *
+ * 所以把**档位目录**（label / kind / uncensored / notice，来自后端 MODEL_SPECS，是静态目录）
+ * 缓存下来：进页面先用它渲染档位，就绪状态仍等探测结果（`ready` 一律先按未就绪处理）。
+ */
+const MODELS_META_CACHE_KEY = 'fashion-inspo:generate:models-meta'
+
+/** 读缓存的档位目录（无缓存/损坏返回 null） */
+export function readCachedModelsMeta(): GenerateStatus['models_meta'] | null {
+  try {
+    const raw = localStorage.getItem(MODELS_META_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as GenerateStatus['models_meta']
+  } catch {
+    return null
+  }
+}
+
+/** 写档位目录缓存（探测成功后调用；写失败不影响主流程） */
+export function writeCachedModelsMeta(meta: GenerateStatus['models_meta'] | undefined): void {
+  if (!meta || !Object.keys(meta).length) return
+  try {
+    localStorage.setItem(MODELS_META_CACHE_KEY, JSON.stringify(meta))
+  } catch {
+    /* 隐私模式或配额满：忽略，下次照样能探测 */
+  }
+}
+
 export function useImageGen() {
   const status = ref<GenerateStatus | null>(null)
   const statusLoading = ref(false)
@@ -105,6 +139,7 @@ export function useImageGen() {
     statusLoading.value = true
     try {
       status.value = await fetchStatus()
+      writeCachedModelsMeta(status.value?.models_meta)
     } catch (e) {
       Message.error(getApiErrorMessage(e, '读取出图环境失败'))
       status.value = null

@@ -25,6 +25,13 @@ const props = defineProps<{
   active: boolean
   /** 从素材详情「用这张图改款」跳进来时带的参考素材 ID（空串 = 没有） */
   initialRefIds: string
+  /** 档位**目录**缓存（来自上一次成功探测）：环境还在探测时先按它渲染档位。
+   *
+   *  为什么需要：`/generate/status` 实测 4.4 秒，这期间若只给「兜底两档」，用户会看到
+   *  档位「一个个冒出来」，且 `?model=` 请求的档位此刻还不在列表里 → 选中失败。
+   *  只用它渲染目录，**就绪状态一律先按未就绪**（`ready` 等真探测结果）。
+   */
+  modelsMetaFallback?: GenerateStatus['models_meta'] | null
   /** 从素材详情跳进来时**显式指定**的档位 key（如 `qwen_2_1_uc_i2i`，空串 = 不指定）。
    *
    *  用户点「图生图（未审查）」这个链接就是明确的选择，所以允许直接切到未审查档位；
@@ -72,21 +79,39 @@ const LEGACY_MODELS: ModelOption[] = [
   },
 ]
 
-/** 全部可选档位：跟着后端 `MODEL_SPECS` 走，加一个权重只改后端、前端不用发版。 */
-const allModels = computed<ModelOption[]>(() => {
-  const meta = props.status?.models_meta ?? {}
-  const models = props.status?.models ?? {}
-  const list = Object.entries(meta).map<ModelOption>(([key, m]) => ({
+/** 把 `models_meta` 目录映射成档位列表；`ready` 由 `models` 决定（没探测到就一律未就绪） */
+function toOptions(
+  meta: GenerateStatus['models_meta'] | undefined,
+  models: Record<string, string> | undefined,
+): ModelOption[] {
+  return Object.entries(meta ?? {}).map<ModelOption>(([key, m]) => ({
     key,
     label: m.label,
     kind: m.kind === 'i2i' ? 'i2i' : 't2i',
     uncensored: m.uncensored === true,
     notice: m.notice || '',
-    ready: models[key] === 'ok',
+    ready: models?.[key] === 'ok',
   }))
+}
+
+/** 全部可选档位：跟着后端 `MODEL_SPECS` 走，加一个权重只改后端、前端不用发版。
+ *
+ * 三态，顺序很重要（别把「还没探测到」当成「后端不支持」）：
+ * 1. 已有探测结果 → 用真实目录 + 真实就绪状态；
+ * 2. 探测还没回来 → 用**上次的目录缓存**渲染（就绪状态先按未就绪），没有缓存则返回空
+ *    （渲染「正在读取模型档位…」，而不是先闪两档假档位）；
+ * 3. 探测回来了但后端没给 `models_meta`（旧后端兜底）→ 用内置两档。
+ */
+const allModels = computed<ModelOption[]>(() => {
+  const models = props.status?.models
+  const list = toOptions(props.status?.models_meta, models)
   if (list.length) return list
-  return LEGACY_MODELS.map((m) => ({ ...m, ready: !props.status || models[m.key] === 'ok' }))
+  if (!props.status) return toOptions(props.modelsMetaFallback ?? undefined, undefined)
+  return LEGACY_MODELS.map((m) => ({ ...m, ready: models?.[m.key] === 'ok' }))
 })
+
+/** 环境探测是否还在进行（模板据此显示「正在读取…」提示） */
+const probing = computed(() => !props.status)
 
 /** 当前选中的档位 */
 const modelKey = ref('')
@@ -108,9 +133,11 @@ watch(
     if (!list.length) return
     const wanted = pendingModelKey.value
     if (wanted) {
-      pendingModelKey.value = '' // 只认一次
       const hit = list.find((m) => m.key === wanted)
       if (hit) {
+        // 只有**真的找到**才算认领：环境还在探测时列表里没有这个档位，
+        // 提前清空会让「从详情页带 ?model= 跳进来」永远选不到未审查版（真实缺陷）
+        pendingModelKey.value = ''
         modelKey.value = hit.key
         Message.info(`已切到「${hit.label}」，参考素材 ID 已填好`)
         return
@@ -282,7 +309,11 @@ onMounted(() => {
 <template>
   <!-- 模型：始终可见。选中哪个档位就决定生成方式（文生图 / 参考图改款） -->
   <div class="gen-label">模型</div>
-  <a-radio-group v-model="modelKey" size="small" direction="vertical" class="gen-models">
+  <!-- 探测中且没有目录缓存：说明在等什么，而不是先闪两档假档位 -->
+  <div v-if="!allModels.length" class="gen-hint gen-model-loading">
+    正在读取模型档位…（本机要探测 ComfyUI 与权重文件，约 4 秒）
+  </div>
+  <a-radio-group v-else v-model="modelKey" size="small" direction="vertical" class="gen-models">
     <a-radio v-for="m in allModels" :key="m.key" :value="m.key">
       {{ shortModelLabel(m.label) }}
       <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag"> 未审查 </a-tag>
@@ -291,6 +322,9 @@ onMounted(() => {
       </span>
     </a-radio>
   </a-radio-group>
+  <div v-if="probing && allModels.length" class="gen-hint gen-model-loading">
+    档位已列出（用上次的目录），就绪状态正在探测…
+  </div>
   <a-alert v-if="currentModel?.uncensored" type="warning" class="gen-alert gen-alert--tight">
     {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
   </a-alert>
@@ -392,6 +426,9 @@ onMounted(() => {
    它们同时被环境提示、结果区与历史表用到，scoped 样式不能跨组件继承，故各自保留。 */
 .gen-alert {
   margin-bottom: 12px;
+}
+.gen-model-loading {
+  padding: 4px 0 10px;
 }
 /* 紧贴在档位选择器下面的风险提示，不要额外的下边距把表单撑开 */
 .gen-alert--tight {

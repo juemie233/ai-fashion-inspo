@@ -16,11 +16,13 @@ const mocks = vi.hoisted(() => ({
   loadStatus: vi.fn(),
   loadHistory: vi.fn(),
   /** 出图页读到的就绪状态（ref）：测试可整体替换，用来模拟「多档位 / 未审查档位」 */
-  statusRef: { value: {} as Record<string, unknown> },
+  statusRef: { value: {} as Record<string, unknown> | null },
   /** 初始状态快照：每个用例开始前还原，避免用例之间互相污染 */
   defaultStatus: {} as Record<string, unknown>,
   /** 路由 query（可变）：模拟「从素材详情带 ref / model 跳进来」 */
   routeQuery: {} as Record<string, string>,
+  /** 档位目录缓存（可变）：默认无缓存，模拟「首次进入」 */
+  cachedModelsMeta: null as Record<string, unknown> | null,
 }))
 
 vi.mock('vue-router', () => ({
@@ -38,9 +40,12 @@ vi.mock('@/composables/useImageGen', async () => {
     models: { z_image_int8: 'ok', qwen_2_1_i2i: 'ok' },
     ollama_resident: [],
   })
-  mocks.statusRef = status as unknown as { value: Record<string, unknown> }
+  // 含 null：用例里要模拟「探测还没返回」（statusRef.value = null）
+  mocks.statusRef = status as unknown as { value: Record<string, unknown> | null }
   mocks.defaultStatus = JSON.parse(JSON.stringify(status.value))
   return {
+    // 档位目录缓存：让测试能模拟「上次探测过 → 进页面就有目录」
+    readCachedModelsMeta: () => mocks.cachedModelsMeta,
     useImageGen: () => ({
       status,
       statusLoading: ref(false),
@@ -80,6 +85,7 @@ describe('GenerateView 参数透传', () => {
     mocks.submit.mockReset()
     mocks.submit.mockResolvedValue(1)
     mocks.loadHistory.mockReset()
+    mocks.cachedModelsMeta = null
     mocks.statusRef.value = JSON.parse(JSON.stringify(mocks.defaultStatus))
     mocks.routeQuery = {}
   })
@@ -226,6 +232,32 @@ describe('GenerateView 参数透传', () => {
     await toggle.trigger('click') // 再展开：已有数据，不重复拉
     await flushPromises()
     expect(mocks.loadHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('探测未返回但有目录缓存：档位立刻可选，未审查版当场选中', async () => {
+    // 真实场景：/generate/status 要 4.4 秒；这期间只有上次缓存的「档位目录」
+    mocks.statusRef.value = null
+    mocks.cachedModelsMeta = {
+      z_image_int8: { label: 'Z-Image-Turbo int8（快）', kind: 't2i', defaults: {} },
+      qwen_2_1_i2i: { label: 'Qwen-Image 2.1（参考图改款）', kind: 'i2i', defaults: {} },
+      qwen_2_1_uc_i2i: {
+        label: 'Qwen-Image 2.1 未审查版（参考图改款）',
+        kind: 'i2i',
+        defaults: {},
+        uncensored: true,
+        notice: '该档位使用无内容审查的权重',
+      },
+    }
+    mocks.routeQuery = { ref: 'insp-abc', model: 'qwen_2_1_uc_i2i' }
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 三档一开始就在（不是先两档、几秒后再冒第三档）
+    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(3)
+    const ucRadio = wrapper.find('input[type="radio"][value="qwen_2_1_uc_i2i"]')
+    expect((ucRadio.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.text()).toContain('就绪状态正在探测')
   })
 
   it('从素材详情带 ref + model 跳进来：切到未审查档位并预填参考 ID', async () => {

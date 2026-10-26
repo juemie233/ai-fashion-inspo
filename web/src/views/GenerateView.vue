@@ -11,7 +11,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { useImageGen } from '@/composables/useImageGen'
+import { readCachedModelsMeta, useImageGen } from '@/composables/useImageGen'
 import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPanel.vue'
 import GenerateHistoryTable from '@/components/generate/GenerateHistoryTable.vue'
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
@@ -86,6 +86,9 @@ function resolveCandidateUrl(path: string): string {
 }
 
 const ready = computed(() => status.value?.ready === true)
+
+/** 档位目录缓存（上次探测成功的 MODEL_SPECS 快照）：探测要 4.4 秒，先用它把档位列出来 */
+const cachedModelsMeta = readCachedModelsMeta()
 
 // ── 生成历史：默认收起 ──
 /** 是否展开历史（**默认隐藏**：出图页的主线是「填参数 → 生成 → 勾选入库」，历史只偶尔用） */
@@ -214,6 +217,7 @@ onUnmounted(stopPoll)
           :active="active"
           :initial-ref-ids="initialRefIds"
           :initial-model-key="initialModelKey"
+          :models-meta-fallback="cachedModelsMeta"
           :prompt-from="promptFrom"
           @submit="submit"
           @cancel="cancel"

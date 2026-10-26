@@ -24,7 +24,7 @@ vi.mock('@/composables/usePolling', () => ({
   usePolling: () => ({ start: vi.fn(), stop: vi.fn() }),
 }))
 
-import { useImageGen } from '../useImageGen'
+import { readCachedModelsMeta, useImageGen, writeCachedModelsMeta } from '../useImageGen'
 
 const RUN_DETAIL = {
   run: {
@@ -190,5 +190,38 @@ describe('useImageGen', () => {
     expect(gen.runId.value).toBeNull()
     success.mockRestore()
     info.mockRestore()
+  })
+})
+
+describe('档位目录缓存（探测 4.4 秒，先把档位列出来）', () => {
+  const META = {
+    qwen_2_1_uc_i2i: {
+      label: 'Qwen-Image 2.1 未审查版',
+      kind: 'i2i',
+      defaults: {},
+      uncensored: true,
+    },
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('写入后能原样读出（含未审查标记与文案）', () => {
+    writeCachedModelsMeta(META)
+    expect(readCachedModelsMeta()).toEqual(META)
+  })
+
+  it('没有缓存 / 缓存损坏 / 空目录都返回 null（退回「正在读取」而不是报错）', () => {
+    expect(readCachedModelsMeta()).toBeNull()
+
+    localStorage.setItem('fashion-inspo:generate:models-meta', '{不是 json')
+    expect(readCachedModelsMeta()).toBeNull()
+
+    localStorage.setItem('fashion-inspo:generate:models-meta', '[1,2]')
+    expect(readCachedModelsMeta()).toBeNull()
+
+    writeCachedModelsMeta({})
+    expect(readCachedModelsMeta()).toBeNull()
   })
 })
