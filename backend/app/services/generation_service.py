@@ -34,7 +34,7 @@ from app.services.comfyui.probe import MODEL_SPECS
 from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
 from app.utils.file_hash import file_sha256
-from app.utils.time import utcnow
+from app.utils.time import format_utc, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,9 @@ async def list_candidates(db: AsyncSession, run_id: int) -> dict:
             "error": run.error,
             "task_id": run.task_id,
             "batch_dir": run.batch_dir,
-            "created_at": run.created_at.isoformat() if run.created_at else None,
+            # 必须带时区（Z）：DB 存的是 naive UTC，裸 isoformat() 前端会当成本地时间，
+            # UTC+8 下整批时间早 8 小时
+            "created_at": format_utc(run.created_at),
         },
         "items": items,
     }
@@ -472,24 +474,37 @@ async def discard_run(db: AsyncSession, run_id: int) -> dict:
 
 
 async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
-    """最近的出图批次（生成历史列表）。"""
+    """最近的出图批次（生成历史列表）。
+
+    返回**完整** prompt 与参数快照：前端历史表可展开看全文，此前截到 120 字会让
+    展开行也看不到后半段。时间统一走 ``format_utc``（带 Z），否则前端
+    ``new Date()`` 会把 naive UTC 当本地时间，UTC+8 下整体早 8 小时。
+    """
     rows = await db.execute(
         select(GenerationRun).order_by(GenerationRun.created_at.desc()).limit(limit)
     )
     out: list[dict] = []
     for run in rows.scalars().all():
+        params = json.loads(run.params_json or "{}")
+        # prompt / negative 已单独返回，params 里的副本不再重复（列表最多 100 条）
+        params.pop("prompt", None)
+        params.pop("negative", None)
         out.append(
             {
                 "id": run.id,
                 "kind": run.kind,
                 "status": run.status,
-                "prompt": run.prompt[:120],
+                "prompt": run.prompt,
+                "negative": run.negative,
+                "params": params,
                 "model_key": run.model_key,
+                "workflow_name": run.workflow_name,
                 "total": run.total,
                 "done": run.done,
                 "failed": run.failed,
                 "error": run.error,
-                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "created_at": format_utc(run.created_at),
+                "updated_at": format_utc(run.updated_at),
             }
         )
     return out

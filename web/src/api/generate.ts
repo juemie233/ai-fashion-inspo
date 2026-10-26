@@ -94,18 +94,26 @@ export interface CreateRunPayload {
   reference_ids?: string[]
 }
 
-/** 生成历史的一条（列表用）。 */
+/** 生成历史的一条（列表用）。
+ *
+ * prompt 是**完整**描述（后端不再截断），列表列用 ellipsis 收起、展开行看全文。
+ */
 export interface GenerationRunBrief {
   id: number
   kind: string
   status: string
   prompt: string
+  negative: string | null
+  /** 生成参数快照：宽高 / 步数 / CFG / 采样器 / seed / 参考素材 id 等 */
+  params: Record<string, unknown>
   model_key: string
+  workflow_name: string
   total: number
   done: number
   failed: number
   error: string | null
   created_at: string | null
+  updated_at: string | null
 }
 
 export interface PromptPreview {
