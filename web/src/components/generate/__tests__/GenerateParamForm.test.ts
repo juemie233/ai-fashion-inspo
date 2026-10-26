@@ -121,4 +121,17 @@ describe('GenerateParamForm 档位时序', () => {
     await flushPromises()
     expect(checkedValue(wrapper)).toBe('z_image_int8')
   })
+
+  it('回归：只带 initialRefIds（「用这张图改款」）且档位表晚到时，表到齐后自动选图生图', async () => {
+    // 首访无目录缓存：探测未返回时 allModels 为空，onMounted 的 selectModelByKind 是空操作
+    const wrapper = mountForm({ initialRefIds: 'abc123' })
+    await flushPromises()
+    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+
+    // 探测回来（后端顺序里 t2i 排第一，若按「就绪且非未审查」会挑到文生图 → 参考图静默失效）
+    await wrapper.setProps({ status: READY_STATUS, ready: true })
+    await flushPromises()
+
+    expect(checkedValue(wrapper)).toBe('qwen_2_1_i2i')
+  })
 })

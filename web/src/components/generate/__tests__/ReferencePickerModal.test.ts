@@ -140,4 +140,44 @@ describe('ReferencePickerModal 浏览与多选', () => {
     expect(wrapper.findAll('.pick-chip')).toHaveLength(1)
     expect(wrapper.find('.pick-mark').text()).toBe('1')
   })
+
+  it('切「来源」只重拉列表，不会把来源值当成关键词（回归：Arco select 的 change 第一参是选中值）', async () => {
+    const wrapper = mountPicker()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+    mocks.search.mockClear()
+
+    const select = wrapper.findComponent({ name: 'Select' })
+    select.vm.$emit('update:modelValue', 'douyin')
+    select.vm.$emit('change', 'douyin')
+    await flushPromises()
+
+    expect(mocks.search).toHaveBeenLastCalledWith({
+      keyword: undefined, // 关键：来源值不能写进 keyword，否则查询变成「关键词=douyin」
+      source_type: 'douyin',
+      media_type: 'image',
+      page: 1,
+      size: 40,
+    })
+  })
+
+  it('重新打开会清掉上次的搜索条件（关键词与来源都不跨次残留）', async () => {
+    const wrapper = mountPicker()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    const input = wrapper.findComponent({ name: 'InputSearch' })
+    input.vm.$emit('search', '针织裙')
+    await flushPromises()
+    expect(mocks.search).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '针织裙' }))
+
+    await wrapper.setProps({ visible: false })
+    mocks.search.mockClear()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(mocks.search).toHaveBeenLastCalledWith(
+      expect.objectContaining({ keyword: undefined, source_type: undefined }),
+    )
+  })
 })

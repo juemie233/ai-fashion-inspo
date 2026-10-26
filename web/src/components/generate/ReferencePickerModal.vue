@@ -57,12 +57,14 @@ const sourceOptions = buildSourceOptions('')
 const maxCount = computed(() => props.max ?? 10)
 const hitMax = computed(() => picked.value.length >= maxCount.value)
 
-/** 打开时：回填已选 + 按当前条件重新拉第一页（上次关掉的搜索词不残留） */
+/** 打开时：回填已选 + **清掉上次的筛选** + 拉第一页（搜索词/来源不跨次残留） */
 watch(
   () => props.visible,
   (open) => {
     if (!open) return
     picked.value = [...props.selectedIds]
+    keyword.value = ''
+    sourceType.value = ''
     void load(1)
   },
 )
@@ -94,13 +96,22 @@ async function load(target: number): Promise<void> {
   }
 }
 
-/** 搜索：(重新)从第 1 页开始；关键词为空时等于回到全部。
+/** 关键词搜索：从第 1 页开始。
  *
  * 参数取 a-input-search 直接给的「输入框当前值」（Arco 会把它作为第一个参数传出来），
  * 不再只依赖 v-model 的刷新时机——两者读到的不一致时（回车很快）会搜到旧词。
  */
-function onSearch(value?: unknown): void {
+function onKeywordSearch(value?: unknown): void {
   if (typeof value === 'string') keyword.value = value
+  void load(1)
+}
+
+/** 来源筛选变化：只重拉列表。
+ *
+ * **不能复用** onKeywordSearch：Arco `a-select` 的 change 第一参是**选中值**（如 `douyin`），
+ * 传进来会被当成搜索词写进 keyword，查询就变成「关键词=来源值」（结果为空或完全错）。
+ */
+function onSourceChange(): void {
   void load(1)
 }
 
@@ -128,10 +139,11 @@ function orderOf(id: string): number {
   return picked.value.indexOf(id) + 1
 }
 
-/** 已选条带的一项（详情缺失时只显示序号，等下次加载补全） */
+/** 已选条带的一项（详情缺失时返回空串 → 模板走占位，而不是渲染 `/api/files/` 破图） */
 function pickedThumb(id: string): string {
   const item = pickedMeta.value.get(id)
-  return getFileUrl(item?.thumbnail_path || item?.file_path || '')
+  const path = item?.thumbnail_path || item?.file_path
+  return path ? getFileUrl(path) : ''
 }
 
 function pickedLabel(id: string): string {
@@ -165,15 +177,14 @@ function confirm(): void {
         allow-clear
         size="small"
         style="width: 240px"
-        @search="onSearch"
-        @press-enter="onSearch"
+        @search="onKeywordSearch"
       />
       <a-select
         v-model="sourceType"
         :options="sourceOptions"
         size="small"
         style="width: 130px"
-        @change="onSearch"
+        @change="onSourceChange"
       />
       <span class="pick-tip">
         已选 <b>{{ picked.length }}</b> / {{ maxCount }}（顺序即参考顺序，第 1 张为主参考）

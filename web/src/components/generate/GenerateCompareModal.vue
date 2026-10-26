@@ -103,6 +103,12 @@ function step(delta: number): void {
 /** 键盘 ← → 切生成图：对比时手不用离开键盘（监听只在弹窗打开时挂着） */
 function onKeydown(event: KeyboardEvent): void {
   if (!props.visible) return
+  // 焦点在输入框/下拉/滑块上时放行：否则方向键会被抢去切图，
+  // 叠看模式的透明度滑块（a-slider 是 role=slider）就没法用键盘调了
+  const target = event.target as HTMLElement | null
+  const tag = target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return
+  if (target?.closest?.('[role="slider"], .arco-slider')) return
   if (event.key === 'ArrowLeft') {
     event.preventDefault()
     step(-1)

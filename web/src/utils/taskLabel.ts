@@ -64,11 +64,16 @@ export const SCRAPER_PLATFORM_LABELS: Record<string, string> = {
 /** 任务状态中文标签（success 与 completed 语义一致，统一展示「已完成」） */
 export const TASK_STATUS_LABELS: Record<string, string> = {
   pending: '排队中',
+  // 出图批次用 queued 表示排队（与任务队列的 pending 同义，避免前端各写一份映射）
+  queued: '排队中',
   running: '运行中',
   paused: '已暂停',
   success: '已完成',
+  waiting_vram: '等待显存',
   failed: '失败',
   cancelled: '已取消',
+  // 出图批次用 done 表示成功（同 success）
+  done: '已完成',
 }
 
 /** 归一化状态：采集任务的 completed → success */
@@ -80,11 +85,14 @@ export function normalizeTaskStatus(status: string): string {
 export function taskStatusType(status: string): string {
   const map: Record<string, string> = {
     pending: 'gray',
+    queued: 'gray',
     running: 'arcoblue',
     paused: 'gold',
     success: 'green',
+    waiting_vram: 'orange',
     failed: 'red',
     cancelled: 'orange',
+    done: 'green',
   }
   return map[status] || 'gray'
 }

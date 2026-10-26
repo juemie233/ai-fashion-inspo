@@ -99,8 +99,6 @@ export function useWatchList() {
   const total = ref(0)
   /** 每页条数 */
   const PAGE_SIZE = 200
-  /** 已加载页数（0 = 未加载） */
-  const page = ref(0)
   /** 本地列表还没到 total 就还有更多 */
   const hasMore = computed(() => items.value.length < total.value)
 
@@ -118,7 +116,6 @@ export function useWatchList() {
       items.value = append ? [...items.value, ...data.items] : data.items
       cutoff.value = data.cutoff
       total.value = data.total ?? data.items.length
-      page.value = Math.floor(items.value.length / PAGE_SIZE)
       if (!append) selected.value = []
     } catch (e) {
       Message.error(getApiErrorMessage(e, '加载观察名单失败'))
@@ -186,7 +183,6 @@ export function useWatchList() {
     cutoff,
     total,
     hasMore,
-    page,
     load,
     onSelectionChange,
     doKeep,

@@ -119,6 +119,13 @@ const modelKey = ref('')
 /** 外部显式请求的档位（只生效一次：之后用户手动换档位不该被再次覆盖） */
 const pendingModelKey = ref((props.initialModelKey ?? '').trim())
 
+/** 「想要图生图」的待认领标记：从素材详情带 ref 跳进来、但档位表还没到时先记下意图。
+ *
+ *  没有它会落到默认的文生图档位（watch 只挑「就绪且非未审查」的第一个），
+ *  参考素材虽然填进输入框，提交时 `kind==='t2i'` 却不会带 reference_ids —— 静默失效。
+ */
+const pendingKind = ref<'i2i' | null>(null)
+
 /** 默认档位：优先**就绪**且**非未审查**的。
  *
  * 未审查版必须由用户主动点选 —— 默认选中「无内容过滤」的权重，等于替用户做了一次
@@ -140,6 +147,17 @@ watch(
         pendingModelKey.value = ''
         modelKey.value = hit.key
         Message.info(`已切到「${hit.label}」，参考素材 ID 已填好`)
+        return
+      }
+    }
+    if (pendingKind.value) {
+      // 「用这张图改款」的意图优先于默认挑选：先按生成方式找档位（就绪且非未审查优先）
+      const pool = list.filter((m) => m.kind === pendingKind.value)
+      const pick =
+        pool.find((m) => m.ready && !m.uncensored) ?? pool.find((m) => m.ready) ?? pool[0]
+      if (pick) {
+        pendingKind.value = null
+        modelKey.value = pick.key
         return
       }
     }
@@ -295,7 +313,10 @@ onMounted(() => {
   // 从素材详情跳进来：预填参考图并切到改款档位
   if (props.initialRefIds) {
     refIdsText.value = props.initialRefIds
+    // 档位表已到（有目录缓存）→ 立刻切；还没到（首访）→ 记下意图，由 allModels 的 watch 认领。
+    // 不记的话会落到默认的文生图档位，参考素材填了也不生效（t2i 不提交 reference_ids）
     selectModelByKind('i2i')
+    if (kind.value !== 'i2i') pendingKind.value = 'i2i'
   }
   // 显式指定了档位（「图生图（未审查）」链接）→ 立刻切过去；档位表晚到的话由
   // allModels 的 watch 兜底（pendingModelKey 只认一次，避免覆盖用户后续手选）

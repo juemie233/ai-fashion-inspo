@@ -10,6 +10,7 @@
 
 import { Message } from '@arco-design/web-vue'
 import type { GenerateStatus, GenerationRunBrief } from '@/api/generate'
+import StatusTag from '@/components/common/StatusTag.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { formatDateTime, shortModelLabel } from '@/utils/format'
 
@@ -31,34 +32,6 @@ const emit = defineEmits<{
   (e: 'retry', id: number): void
   (e: 'remove', id: number): void
 }>()
-
-/** 批次状态中文标签（数据库值 → 界面文案，不允许直接显示英文枚举） */
-const STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  running: '生成中',
-  waiting_vram: '等待显存',
-  done: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-}
-
-/** 状态标签色（与文案同步；未知状态退回灰色） */
-const STATUS_COLORS: Record<string, string> = {
-  queued: 'gray',
-  running: 'arcoblue',
-  waiting_vram: 'orange',
-  done: 'green',
-  failed: 'red',
-  cancelled: 'gray',
-}
-
-function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? '未知'
-}
-
-function statusColor(status: string): string {
-  return STATUS_COLORS[status] ?? 'gray'
-}
 
 /** 生成方式中文标签（kind 由档位决定） */
 function kindLabel(kind: string): string {
@@ -141,9 +114,8 @@ async function copyPrompt(prompt: string): Promise<void> {
       </a-table-column>
       <a-table-column title="状态" :width="150">
         <template #cell="{ record }">
-          <a-tag :color="statusColor(record.status)" size="small">
-            {{ statusLabel(record.status) }}
-          </a-tag>
+          <!-- 状态文案与配色统一走 common/StatusTag（单一来源 utils/taskLabel.ts） -->
+          <StatusTag :status="record.status" />
           <span class="gen-status-count">{{ record.done }}/{{ record.total }}</span>
         </template>
       </a-table-column>
