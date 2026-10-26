@@ -79,6 +79,7 @@ describe('GenerateView 参数透传', () => {
   beforeEach(() => {
     mocks.submit.mockReset()
     mocks.submit.mockResolvedValue(1)
+    mocks.loadHistory.mockReset()
     mocks.statusRef.value = JSON.parse(JSON.stringify(mocks.defaultStatus))
     mocks.routeQuery = {}
   })
@@ -197,56 +198,85 @@ describe('GenerateView 参数透传', () => {
     await flushPromises()
     expect(mocks.submit.mock.calls[0][0].model_key).toBe('qwen_2_1_uc_i2i')
   })
-})
+  it('生成历史默认收起：不渲染表格、也不发请求', async () => {
+    const wrapper = mountView()
+    await flushPromises()
 
-it('从素材详情带 ref + model 跳进来：切到未审查档位并预填参考 ID', async () => {
-  // 后端多返回一个未审查档位（真实环境里它由 MODEL_SPECS 带 uncensored 标记下发）
-  mocks.statusRef.value = {
-    ...JSON.parse(JSON.stringify(mocks.defaultStatus)),
-    models: { z_image_int8: 'ok', qwen_2_1_i2i: 'ok', qwen_2_1_uc_i2i: 'ok' },
-    models_meta: {
-      z_image_int8: { label: 'Z-Image-Turbo int8（快）', kind: 't2i', defaults: {} },
-      qwen_2_1_i2i: { label: 'Qwen-Image 2.1（参考图改款）', kind: 'i2i', defaults: {} },
-      qwen_2_1_uc_i2i: {
-        label: 'Qwen-Image 2.1 未审查版（参考图改款）',
-        kind: 'i2i',
-        defaults: {},
-        uncensored: true,
-        notice: '该档位使用无内容审查的权重',
+    expect(wrapper.find('.gen-history').exists()).toBe(false)
+    expect(mocks.loadHistory).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('展开生成历史')
+  })
+
+  it('展开才加载历史；收起再展开不重复请求', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const toggle = wrapper.findAll('button').find((b) => b.text().includes('生成历史'))!
+    await toggle.trigger('click')
+    await flushPromises()
+
+    expect(mocks.loadHistory).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.gen-history').exists()).toBe(true)
+    expect(wrapper.text()).toContain('收起生成历史')
+
+    await toggle.trigger('click') // 收起：只隐藏，不请求
+    await flushPromises()
+    expect(wrapper.find('.gen-history').exists()).toBe(false)
+
+    await toggle.trigger('click') // 再展开：已有数据，不重复拉
+    await flushPromises()
+    expect(mocks.loadHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('从素材详情带 ref + model 跳进来：切到未审查档位并预填参考 ID', async () => {
+    // 后端多返回一个未审查档位（真实环境里它由 MODEL_SPECS 带 uncensored 标记下发）
+    mocks.statusRef.value = {
+      ...JSON.parse(JSON.stringify(mocks.defaultStatus)),
+      models: { z_image_int8: 'ok', qwen_2_1_i2i: 'ok', qwen_2_1_uc_i2i: 'ok' },
+      models_meta: {
+        z_image_int8: { label: 'Z-Image-Turbo int8（快）', kind: 't2i', defaults: {} },
+        qwen_2_1_i2i: { label: 'Qwen-Image 2.1（参考图改款）', kind: 'i2i', defaults: {} },
+        qwen_2_1_uc_i2i: {
+          label: 'Qwen-Image 2.1 未审查版（参考图改款）',
+          kind: 'i2i',
+          defaults: {},
+          uncensored: true,
+          notice: '该档位使用无内容审查的权重',
+        },
       },
-    },
-  }
-  mocks.routeQuery = { ref: 'insp-abc', model: 'qwen_2_1_uc_i2i' }
+    }
+    mocks.routeQuery = { ref: 'insp-abc', model: 'qwen_2_1_uc_i2i' }
 
-  const wrapper = mountView()
-  await flushPromises()
+    const wrapper = mountView()
+    await flushPromises()
 
-  // 参考素材 ID 已预填
-  const refInput = wrapper.find('input[placeholder*="参考素材 ID"]')
-  expect(refInput.exists()).toBe(true)
-  expect((refInput.element as HTMLInputElement).value).toBe('insp-abc')
+    // 参考素材 ID 已预填
+    const refInput = wrapper.find('input[placeholder*="参考素材 ID"]')
+    expect(refInput.exists()).toBe(true)
+    expect((refInput.element as HTMLInputElement).value).toBe('insp-abc')
 
-  // 选中的是未审查档位（而不是默认那个非未审查的图生图档位）
-  const ucRadio = wrapper.find('input[type="radio"][value="qwen_2_1_uc_i2i"]')
-  expect(ucRadio.exists()).toBe(true)
-  expect((ucRadio.element as HTMLInputElement).checked).toBe(true)
+    // 选中的是未审查档位（而不是默认那个非未审查的图生图档位）
+    const ucRadio = wrapper.find('input[type="radio"][value="qwen_2_1_uc_i2i"]')
+    expect(ucRadio.exists()).toBe(true)
+    expect((ucRadio.element as HTMLInputElement).checked).toBe(true)
 
-  // 风险提示随档位出现（未审查权重的 notice 由后端下发）
-  expect(wrapper.text()).toContain('该档位使用无内容审查的权重')
+    // 风险提示随档位出现（未审查权重的 notice 由后端下发）
+    expect(wrapper.text()).toContain('该档位使用无内容审查的权重')
 
-  // 提交时带上这个档位与参考 ID
-  await wrapper.find('textarea').setValue('同一个人，换一套更利落的裤子')
-  const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))!
-  await submitBtn.trigger('click')
-  await flushPromises()
-  // 用「最后一次提交」断言：前面的用例把 wrapper 留在同一份 mock 上（VTU 不会自动卸载），
-  // 取 calls[0] 可能读到别人的历史 payload
-  expect(mocks.submit).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      kind: 'i2i',
-      model_key: 'qwen_2_1_uc_i2i',
-      reference_ids: ['insp-abc'],
-      prompt: '同一个人，换一套更利落的裤子',
-    }),
-  )
+    // 提交时带上这个档位与参考 ID
+    await wrapper.find('textarea').setValue('同一个人，换一套更利落的裤子')
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))!
+    await submitBtn.trigger('click')
+    await flushPromises()
+    // 用「最后一次提交」断言：前面的用例把 wrapper 留在同一份 mock 上（VTU 不会自动卸载），
+    // 取 calls[0] 可能读到别人的历史 payload
+    expect(mocks.submit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: 'i2i',
+        model_key: 'qwen_2_1_uc_i2i',
+        reference_ids: ['insp-abc'],
+        prompt: '同一个人，换一套更利落的裤子',
+      }),
+    )
+  })
 })

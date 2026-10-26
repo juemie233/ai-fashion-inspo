@@ -31,7 +31,8 @@ async function removeRun(id: number) {
     Message.success(`已删除（清理 ${r.removed_files ?? 0} 个文件）`)
     // 删掉的正是当前打开的批次：清空详情区，否则用户还能对已删除的批次点「确认入库」
     if (run.value?.id === id) reset()
-    await loadHistory()
+    if (historyVisible.value) await refreshHistory()
+    else historyDirty.value = true
   } catch (e) {
     Message.error(getApiErrorMessage(e, '删除失败'))
   } finally {
@@ -86,11 +87,51 @@ function resolveCandidateUrl(path: string): string {
 
 const ready = computed(() => status.value?.ready === true)
 
-/** 历史刷新：批次进入终态时拉一次，避免用户手动刷新页面 */
+// ── 生成历史：默认收起 ──
+/** 是否展开历史（**默认隐藏**：出图页的主线是「填参数 → 生成 → 勾选入库」，历史只偶尔用） */
+const historyVisible = ref(false)
+/** 是否已加载过（懒加载：收起时不发请求，也不因轮询白拉） */
+const historyLoaded = ref(false)
+/** 收起期间发生过变更（批次完成 / 删除记录）→ 下次展开时补拉 */
+const historyDirty = ref(false)
+
+/** 拉历史（只在这两种时机调用：首次展开、变更后再展开） */
+async function refreshHistory(): Promise<void> {
+  await loadHistory()
+  historyLoaded.value = true
+  historyDirty.value = false
+}
+
+function toggleHistory(): void {
+  historyVisible.value = !historyVisible.value
+  if (historyVisible.value && (!historyLoaded.value || historyDirty.value)) void refreshHistory()
+}
+
+/** 当前批次本身变了（入库/丢弃）：历史行会跟着变，按可见性决定「现在刷」还是「下次刷」 */
+function touchHistory(): void {
+  if (historyVisible.value) void refreshHistory()
+  else historyDirty.value = true
+}
+
+/** 确认入库：入库张数会体现在历史行里 */
+async function onConfirm(): Promise<void> {
+  const imported = await confirm()
+  if (imported > 0) touchHistory()
+}
+
+/** 丢弃本批：这行记录随后就没了，历史必须跟上（否则展开时还看得到已丢弃的批次） */
+async function onDiscard(): Promise<void> {
+  await discard()
+  touchHistory()
+}
+
+/** 批次进入终态：展开时立刻刷新；收起时只打脏标记，避免看不见的表格白拉接口 */
 watch(
   () => run.value?.status,
   (st) => {
-    if (st && ['done', 'failed', 'cancelled'].includes(st)) void loadHistory()
+    if (!st || !['done', 'failed', 'cancelled'].includes(st)) return
+    if (historyVisible.value) void refreshHistory()
+    else historyDirty.value = true
   },
 )
 
@@ -127,7 +168,7 @@ function openCompare(index: number): void {
 
 onMounted(() => {
   void loadStatus()
-  void loadHistory()
+  // 历史默认收起 → 不在挂载时拉（首次展开时 refreshHistory 才发请求）
 })
 onUnmounted(stopPoll)
 </script>
@@ -193,8 +234,8 @@ onUnmounted(stopPoll)
           @regenerate="regenerate"
           @select-all="selectAll"
           @clear-selection="clearSelection"
-          @confirm="confirm"
-          @discard="discard"
+          @confirm="onConfirm"
+          @discard="onDiscard"
           @compare="openCompare"
         />
       </a-card>
@@ -218,15 +259,25 @@ onUnmounted(stopPoll)
       @update:visible="compareVisible = $event"
     />
 
-    <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->
-    <a-card class="gen-card gen-history" :bordered="false">
+    <!-- 生成历史：默认收起（同参重跑入口；历史只存参数，图在候选区，过期会被清理）。
+         收起时连表格都不渲染、也不发请求——出图页的主线是「填参数 → 生成 → 入库」 -->
+    <div class="gen-history-toggle">
+      <a-button size="mini" @click="toggleHistory">
+        {{ historyVisible ? '收起生成历史' : '展开生成历史' }}
+        <span v-if="!historyVisible && history.length">（{{ history.length }} 条）</span>
+      </a-button>
+      <span class="gen-hint">
+        同参重跑 / 删除记录；默认隐藏，展开才加载（不影响当前批次的候选与勾选）
+      </span>
+    </div>
+    <a-card v-if="historyVisible" class="gen-card gen-history" :bordered="false">
       <GenerateHistoryTable
         :history="history"
         :loading="historyLoading"
         :submitting="submitting"
         :deleting-id="deletingId"
         :status="status"
-        @refresh="loadHistory"
+        @refresh="refreshHistory"
         @retry="retry"
         @remove="removeRun"
       />
@@ -295,6 +346,13 @@ onUnmounted(stopPoll)
   text-align: center;
 }
 .gen-history {
+  margin-top: 8px;
+}
+.gen-history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 </style>
