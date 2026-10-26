@@ -25,6 +25,12 @@ const props = defineProps<{
   active: boolean
   /** 从素材详情「用这张图改款」跳进来时带的参考素材 ID（空串 = 没有） */
   initialRefIds: string
+  /** 从素材详情跳进来时**显式指定**的档位 key（如 `qwen_2_1_uc_i2i`，空串 = 不指定）。
+   *
+   *  用户点「图生图（未审查）」这个链接就是明确的选择，所以允许直接切到未审查档位；
+   *  默认值仍然不会自动选中未审查权重（那条规则管的是「别替用户做风险选择」）。
+   */
+  initialModelKey?: string
   /** 从素材反推描述（沿用视图里 useImageGen 的实现） */
   promptFrom: (ids: string[]) => Promise<string | null>
 }>()
@@ -85,15 +91,31 @@ const allModels = computed<ModelOption[]>(() => {
 /** 当前选中的档位 */
 const modelKey = ref('')
 
+/** 外部显式请求的档位（只生效一次：之后用户手动换档位不该被再次覆盖） */
+const pendingModelKey = ref((props.initialModelKey ?? '').trim())
+
 /** 默认档位：优先**就绪**且**非未审查**的。
  *
  * 未审查版必须由用户主动点选 —— 默认选中「无内容过滤」的权重，等于替用户做了一次
  * 他自己不知道的风险选择。已选中的档位仍然存在时不动它（刷新环境不重置用户选择）。
+ *
+ * 例外：``initialModelKey`` 来自用户在素材详情里**主动点**的那个链接（它写着「未审查」），
+ * 属于明确的知情选择，因此直接切过去，并在拿到档位表后补一次提示。
  */
 watch(
   allModels,
   (list) => {
     if (!list.length) return
+    const wanted = pendingModelKey.value
+    if (wanted) {
+      pendingModelKey.value = '' // 只认一次
+      const hit = list.find((m) => m.key === wanted)
+      if (hit) {
+        modelKey.value = hit.key
+        Message.info(`已切到「${hit.label}」，参考素材 ID 已填好`)
+        return
+      }
+    }
     if (modelKey.value && list.some((m) => m.key === modelKey.value)) return
     const pickable = list.filter((m) => m.ready)
     const pool = pickable.length ? pickable : list
@@ -243,10 +265,16 @@ function onSubmit() {
 }
 
 onMounted(() => {
-  // 从素材详情「用这张图改款」跳进来：预填参考图并切到改款档位
+  // 从素材详情跳进来：预填参考图并切到改款档位
   if (props.initialRefIds) {
     refIdsText.value = props.initialRefIds
     selectModelByKind('i2i')
+  }
+  // 显式指定了档位（「图生图（未审查）」链接）→ 立刻切过去；档位表晚到的话由
+  // allModels 的 watch 兜底（pendingModelKey 只认一次，避免覆盖用户后续手选）
+  if (props.initialModelKey && allModels.value.some((m) => m.key === props.initialModelKey)) {
+    modelKey.value = props.initialModelKey
+    pendingModelKey.value = ''
   }
 })
 </script>

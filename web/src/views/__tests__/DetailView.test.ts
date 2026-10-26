@@ -266,6 +266,24 @@ describe('DetailView 交互路径', () => {
     }
   })
 
+  it('「图生图（未审查）」链接一次带齐 ref 与 model（切档位 + 预填素材 ID）', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 链接文案带「未审查」，用户点它属于明确的知情选择（不是默认值替他选的）
+    const link = wrapper
+      .findAll('a, button, span')
+      .find((n) => n.text().includes('图生图（未审查）'))
+    expect(link, '详情页应有「图生图（未审查）」链接').toBeTruthy()
+    await link!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.routerPush).toHaveBeenCalledWith({
+      path: '/generate',
+      query: { ref: 'insp-1', model: 'qwen_2_1_uc_i2i' },
+    })
+  })
+
   it('搜索标签跳转到搜索页并带上关键词', async () => {
     const wrapper = mountView()
     await flushPromises()

@@ -436,6 +436,21 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
               用这张图改款
             </a-button>
           </div>
+          <!-- 图生图（未审查权重）：一键切到 Qwen-Image 2.1 未审查版，并把本素材 ID 填进「参考素材 ID」。
+               放在 browse-nav 之外——直接从搜索/标签/链接打开详情（不在浏览序列里）时也要能一键过去 -->
+          <a-link
+            v-if="detail.media_type === 'image' && !detail.deleted_at"
+            class="detail-gen-link"
+            title="跳到出图页：切到 Qwen-Image 2.1 未审查版，并把这张图的素材 ID 填进「参考素材 ID」"
+            @click="
+              router.push({
+                path: '/generate',
+                query: { ref: route.params.id as string, model: 'qwen_2_1_uc_i2i' },
+              })
+            "
+          >
+            图生图（未审查）
+          </a-link>
         </div>
 
         <!-- 垃圾桶提示（软删除素材） -->
@@ -563,6 +578,11 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
 </template>
 
 <style scoped>
+.detail-gen-link {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
 /* 左栏/右栏/垃圾桶弹窗的样式随标记迁到对应子组件的 scoped 块（scoped 不跨组件生效）；
    这里只留视图自身布局（页面容器 / 两栏布局 / 顶部导航 / 面包屑）。 */
 .detail-page {

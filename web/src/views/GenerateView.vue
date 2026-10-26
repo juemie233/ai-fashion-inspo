@@ -95,6 +95,8 @@ watch(
 
 /** 从素材详情「用这张图改款」跳进来时带的参考素材 ID（交给参数面板预填并切档位） */
 const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim() : ''
+/** 从素材详情「图生图（未审查）」跳进来时显式指定的档位（缺省按图生图自动挑就绪档位） */
+const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
 
 onMounted(() => {
   void loadStatus()
@@ -143,6 +145,7 @@ onUnmounted(stopPoll)
           :submitting="submitting"
           :active="active"
           :initial-ref-ids="initialRefIds"
+          :initial-model-key="initialModelKey"
           :prompt-from="promptFrom"
           @submit="submit"
           @cancel="cancel"
