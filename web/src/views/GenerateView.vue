@@ -15,6 +15,7 @@ import { useImageGen } from '@/composables/useImageGen'
 import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPanel.vue'
 import GenerateHistoryTable from '@/components/generate/GenerateHistoryTable.vue'
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
+import GenerateCompareModal from '@/components/generate/GenerateCompareModal.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -98,6 +99,32 @@ const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim
 /** 从素材详情「图生图（未审查）」跳进来时显式指定的档位（缺省按图生图自动挑就绪档位） */
 const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
 
+// ── 对比视图（与「点图看大图」的灯箱是两条独立路径：各自的索引与状态）──
+const compareVisible = ref(false)
+const compareIndex = ref(0)
+
+/** 对比用的候选图（只挑弹窗需要的字段，避免把整条 run 传进去） */
+const compareItems = computed(() =>
+  candidates.value.map((item) => ({
+    url: item.url,
+    seed: item.seed,
+    filename: item.filename,
+    imported: item.imported,
+  })),
+)
+
+/** 本批用到的参考素材 id：后端把 params.reference_ids 存下来了（顺序即参考顺序） */
+const compareRefIds = computed<string[]>(() => {
+  const params = run.value?.params as { reference_ids?: unknown } | undefined
+  const ids = params?.reference_ids
+  return Array.isArray(ids) ? ids.map(String).filter(Boolean) : []
+})
+
+function openCompare(index: number): void {
+  compareIndex.value = index
+  compareVisible.value = true
+}
+
 onMounted(() => {
   void loadStatus()
   void loadHistory()
@@ -168,6 +195,7 @@ onUnmounted(stopPoll)
           @clear-selection="clearSelection"
           @confirm="confirm"
           @discard="discard"
+          @compare="openCompare"
         />
       </a-card>
     </div>
@@ -179,6 +207,15 @@ onUnmounted(stopPoll)
       :initial-index="lightboxIndex"
       :url-resolver="resolveCandidateUrl"
       @close="lightboxVisible = false"
+    />
+
+    <!-- 对比：参考图 ↔ 生成图（独立弹窗；打开它不会影响候选勾选与灯箱状态） -->
+    <GenerateCompareModal
+      :visible="compareVisible"
+      :candidates="compareItems"
+      :initial-index="compareIndex"
+      :reference-ids="compareRefIds"
+      @update:visible="compareVisible = $event"
     />
 
     <!-- 生成历史：同参重跑入口（历史记录只存参数，图在候选区，过期会被清理） -->

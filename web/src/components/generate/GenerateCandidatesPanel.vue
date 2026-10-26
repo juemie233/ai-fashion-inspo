@@ -32,6 +32,8 @@ const emit = defineEmits<{
   (e: 'clear-selection'): void
   (e: 'confirm'): void
   (e: 'discard'): void
+  /** 打开「对比」视图（参数为候选图索引）；与「点图看大图」是两条独立路径 */
+  (e: 'compare', index: number): void
 }>()
 
 const selectedCount = computed(() => props.selected.size)
@@ -56,7 +58,10 @@ const selectedCount = computed(() => props.selected.size)
       <a-button size="mini" @click="emit('select-all')">全选未入库</a-button>
       <a-button size="mini" @click="emit('clear-selection')">清空选择</a-button>
       <span class="gen-hint">已选 {{ selectedCount }} / {{ candidates.length }}</span>
-      <span class="gen-hint">点图片看大图</span>
+      <span class="gen-hint">点图片看大图；「对比」与参考图并排/叠看</span>
+      <a-button v-if="run.kind === 'i2i'" size="mini" @click="emit('compare', 0)">
+        对比参考图
+      </a-button>
       <a-button type="primary" size="mini" :disabled="selectedCount === 0" @click="emit('confirm')">
         确认入库
       </a-button>
@@ -90,16 +95,27 @@ const selectedCount = computed(() => props.selected.size)
         <div class="gen-item-meta">
           <span>seed {{ item.seed }}</span>
           <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
-          <a-button
-            v-if="!item.imported"
-            size="mini"
-            type="text"
-            :loading="submitting"
-            title="用新 seed 重出这一张"
-            @click.stop="emit('regenerate', item)"
-          >
-            换 seed
-          </a-button>
+          <span class="gen-item-actions">
+            <a-button
+              v-if="run.kind === 'i2i'"
+              size="mini"
+              type="text"
+              title="与参考图并排/叠看（不改动勾选与大图浏览）"
+              @click.stop="emit('compare', index)"
+            >
+              对比
+            </a-button>
+            <a-button
+              v-if="!item.imported"
+              size="mini"
+              type="text"
+              :loading="submitting"
+              title="用新 seed 重出这一张"
+              @click.stop="emit('regenerate', item)"
+            >
+              换 seed
+            </a-button>
+          </span>
         </div>
       </div>
     </div>
@@ -185,5 +201,10 @@ const selectedCount = computed(() => props.selected.size)
   padding: 4px 6px;
   font-size: 11px;
   color: #8a8f99;
+}
+.gen-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 </style>
