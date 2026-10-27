@@ -29,9 +29,6 @@ from .scraper_common import (
     DEFAULT_VIDEO_MAX_BYTES,
     MAX_VIDEO_BYTES,
     utcnow,
-    _rdsleep,
-    clean_media_url,
-    is_content_image,
     build_download_headers,
     xhs_image_url_candidates,
 )

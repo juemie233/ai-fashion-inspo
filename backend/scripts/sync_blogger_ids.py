@@ -30,13 +30,12 @@ import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 # 与 backend/scripts 下其它脚本一致：把 backend 加入 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.config import settings  # noqa: E402
 
 from .import_f2_downloads import (  # noqa: E402
     AUTHOR_MATCH_CONFIDENCE,
@@ -56,7 +55,7 @@ PROFILE_URL_FMT = "https://www.douyin.com/user/{uid}"
 
 def utcnow() -> datetime:
     """当前 UTC 时间（naive，与库内 DATETIME 列口径一致）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _clean(line: str) -> str:

@@ -268,7 +268,8 @@ def setup_logging(log_path: Path) -> None:
 
 # ============================================================
 #  Chrome / CDP
-# ============================================================def _probe_cdp(port: int) -> tuple[bool, str, bool]:
+# ============================================================
+def _probe_cdp(port: int) -> tuple[bool, str, bool]:
     """探测 CDP 端口（延迟导入复用 scraper_service._check_cdp）。
 
     Args:
@@ -345,7 +346,8 @@ def connect_cdp(port: int) -> tuple:
 
 # ============================================================
 #  页面导航与数据提取
-# ============================================================def discover_user_id(page) -> str | None:
+# ============================================================
+def discover_user_id(page) -> str | None:
     """自动发现当前登录用户 ID（不硬编码）。
 
     依次尝试：顶部头像链接 → __INITIAL_STATE__ → localStorage。

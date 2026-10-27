@@ -30,47 +30,21 @@
 # ── 模块导入 ──
 # 抖音函数由 scraper_douyin 提供（常量已在 scraper_common 中统一）
 from .scraper_common import (
-    SORT_LABELS,
     SORT_TYPES,
-    DOWNLOAD_REFERERS,
-    LOGIN_COOKIE_NAMES,
-    PLATFORM_HOME_URLS,
-    PLATFORM_NAMES,
-    DOWNLOAD_UA,
-    DEFAULT_VIDEO_MAX_BYTES,
-    MAX_VIDEO_BYTES,
     utcnow,
     _rdsleep,
     _human_mouse_move,
-    human_scroll,
-    clean_media_url,
-    is_content_image,
-    build_download_headers,
-    platform_has_login,
     ensure_platform_login,
     ScraperBlockedError,
 )
 from .scraper_download import (
-    _HASHTAG_META_MAX,
-    _HASHTAG_PER_NOTE_MAX,
-    _HASHTAG_SAVED_COUNT,
-    extract_video_thumbnail_sync,
     download_batch,
-    download_videos,
 )
 from .scraper_xhs import (
-    extract_note_detail,
-    collect_blogger_note_urls,
     search_xiaohongshu,
     run_blogger_mode,
 )
 from .scraper_douyin import (
-    _parse_douyin_aweme_id,
-    _canonical_douyin_url,
-    _normalize_douyin_media_url,
-    _extract_douyin_render_data,
-    _extract_douyin_detail,
-    _find_douyin_aweme_data,
     collect_douyin_detail_urls,
     collect_douyin_search_urls,
     run_douyin_notes_pipeline,
@@ -79,26 +53,17 @@ from .scraper_douyin import (
 
 import argparse
 from dataclasses import dataclass
-import hashlib
 import json
-import os as _os
 import random
-import re
 import sqlite3 as _sqlite3
-import subprocess
 import sys
-import time
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
-import urllib.parse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.config import settings
 from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
-from app.models.inspiration import Inspiration
 from app.models.scraper import ScraperTask
 
 # ── UTF-8 输出 ──
@@ -614,7 +579,9 @@ def run_scraper_sync(task_id: int):
                 xhs_found = 0  # 小红书回调模式下逐批累计的「提取数」
                 if platform == "xiaohongshu":
 
-                    def _flush_xhs_batch(pairs) -> int:
+                    # 默认参数在「定义时」取值：显式绑定当前 cookies，
+                    # 避免以后有人在循环内改 browser_cookies 时踩晚绑定（B023）
+                    def _flush_xhs_batch(pairs, _cookies=browser_cookies) -> int:
                         """每轮把新增图片立即下载入库（部分成功语义）。
 
                         对齐 MediaCrawler 的分页回调落库：滚动过程中被风控
@@ -633,7 +600,7 @@ def run_scraper_sync(task_id: int):
                             img_dir,
                             today,
                             httpx,
-                            browser_cookies,
+                            _cookies,
                             content_hash_set,
                             platform=platform,
                         )

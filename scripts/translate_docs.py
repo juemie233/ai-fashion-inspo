@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """文档翻译脚本：把中文源文档翻译为英文文档（.en.md）。
 
 设计原则：

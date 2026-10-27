@@ -48,7 +48,6 @@ def main() -> int:
             continue
         dup_groups += 1
         members.sort(key=lambda m: (m[1] != "confirmed", m[0]))  # confirmed 优先，再 id 小
-        keep = members[0][0]
         for det_id, _status in members[1:]:
             to_delete.append(det_id)
 

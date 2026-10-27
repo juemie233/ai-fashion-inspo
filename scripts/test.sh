@@ -39,9 +39,11 @@ else
 fi
 
 echo ""
-echo "===== 2/12 后端 lint（ruff，零告警）====="
+echo "===== 2/12 后端 lint（ruff，零告警：app + 脚本目录）====="
 cd "$ROOT/backend"
-"$PY" -m ruff check app
+# 脚本目录也纳入：2026-10-28 在 fetch_xhs_following.py 里发现「def 被注释吞掉」的
+# 真损坏（模块能导入、函数却不存在），正是「脚本不 lint」才会潜伏下来的问题
+"$PY" -m ruff check app scripts ../scripts
 
 echo ""
 echo "===== 3/12 后端死代码（vulture，置信度 80 必须 0 条）====="

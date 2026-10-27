@@ -30,7 +30,6 @@ from app.models.tag import Tag
 from app.services.ai_parser import parse_analysis_response
 from app.services.ai_tag_saver import iter_extracted_tags
 from app.services.model_prompt import get_model_prompt
-from app.config import settings
 
 
 def _prompt_version(prompt: str) -> str:

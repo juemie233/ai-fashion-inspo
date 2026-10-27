@@ -18,8 +18,8 @@ from pathlib import Path
 # 添加后端路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy import select, delete, func
-from app.database import async_session, engine, init_db
+from sqlalchemy import select
+from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.tag import Tag, InspirationTag
 from app.services.ai_parser import extract_tag_names

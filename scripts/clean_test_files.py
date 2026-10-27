@@ -45,7 +45,10 @@ def is_test_file(path: Path) -> bool:
             # 平均色接近测试色（200,100,50）
             px = list(small.getdata())
             avg = tuple(sum(c[i] for c in px) // len(px) for i in range(3))
-            return all(abs(a - b) <= 40 for a, b in zip(avg, (200, 100, 50)))
+            return all(
+                abs(a - b) <= 40
+                for a, b in zip(avg, (200, 100, 50), strict=False)
+            )
     except Exception:
         return False
     return True

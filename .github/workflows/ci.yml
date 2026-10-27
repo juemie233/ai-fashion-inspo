@@ -80,8 +80,8 @@ jobs:
           pip uninstall -y hnswlib
 
       # 后端 lint：与本地 `scripts/test.sh` 同一道门禁（存量已于 2026-10 清零）
-      - name: ruff（零告警）
-        run: python -m ruff check app
+      - name: ruff（零告警：app + 脚本目录）
+        run: python -m ruff check app scripts ../scripts
 
       # 后端死代码：置信度 80 下必须 0 条（2026-10 已清零，见 docs/代码检查.md）
       - name: vulture（死代码）

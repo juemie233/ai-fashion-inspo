@@ -18,7 +18,6 @@
 
 import argparse
 import asyncio
-import re
 import sys
 from pathlib import Path
 

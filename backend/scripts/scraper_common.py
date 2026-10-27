@@ -7,10 +7,8 @@
 import random
 import re
 import time
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, UTC
 
-from app.config import settings
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -145,7 +143,7 @@ DOUYIN_MEDIA_HOST = "https://www.douyin.com"
 
 def utcnow() -> datetime:
     """获取当前 UTC 时间（naive datetime，移除时区信息）。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _rdsleep(lo: float = 0.5, hi: float = 2.0) -> None:

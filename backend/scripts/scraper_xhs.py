@@ -15,11 +15,9 @@ import re
 import time
 from urllib.parse import quote
 
-from app.config import settings
 
 from .scraper_common import (
     SORT_LABELS,
-    utcnow,
     _rdsleep,
     _human_mouse_move,
     human_scroll,
@@ -571,7 +569,7 @@ def search_xiaohongshu(
         "batches": batch_count,
         "batch_added": batch_added,
     }
-    print(f"  ┌─ 提取漏斗 ─────────────────────────────")
+    print("  ┌─ 提取漏斗 ─────────────────────────────")
     print(f"  │ DOM 卡片总数: {total_cards}")
     print(f"  │ 有图片的卡片: {funnel['cards_with_img']}")
     print(f"  │ 无图片的卡片: {funnel['cards_without_img']}")
@@ -584,7 +582,7 @@ def search_xiaohongshu(
     if on_batch is not None:
         print(f"  │ 已分批入库:   {batch_added}（{batch_count} 批）")
     print(f"  │ 目标数量:     {need_count}")
-    print(f"  └──────────────────────────────────────────")
+    print("  └──────────────────────────────────────────")
 
     # 回调模式：图片已逐批落库，返回空列表避免调用方重复下载
     if on_batch is not None:

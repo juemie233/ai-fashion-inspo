@@ -36,7 +36,6 @@ from .scraper_common import (
     DOUYIN_SEARCH_INPUT_SELECTOR,
     DOUYIN_SEARCH_RENDER_WAIT,
     goto_with_retry,
-    utcnow,
     _rdsleep,
     _human_mouse_move,
     clean_media_url,

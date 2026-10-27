@@ -1,6 +1,5 @@
 """诊断脚本：直接测试 CDP + 小红书搜索，输出页面详情。"""
 
-import json
 import sys
 import time
 from pathlib import Path
@@ -15,7 +14,7 @@ def main():
     KEYWORD = "JK"
     SEARCH_URL = f"https://www.xiaohongshu.com/search_result/?keyword={KEYWORD}&source=web_search_result_notes"
 
-    print(f"=== CDP 诊断 ===")
+    print("=== CDP 诊断 ===")
     print(f"连接到 Chrome CDP 端口: {CDP_PORT}")
 
     pw = sync_playwright().start()
@@ -31,7 +30,7 @@ def main():
 
     # 创建新页面
     page = context.new_page()
-    print(f"创建新页面 OK")
+    print("创建新页面 OK")
 
     # 检查登录态
     cookies = context.cookies()
@@ -44,7 +43,7 @@ def main():
     print(f"\n登录状态: {'已登录' if has_session else '未登录'}")
 
     # 导航到搜索页
-    print(f"\n=== 导航到搜索页 ===")
+    print("\n=== 导航到搜索页 ===")
     print(f"URL: {SEARCH_URL}")
     page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
     time.sleep(3)
@@ -66,7 +65,7 @@ def main():
     print(f"\n截图已保存: {screenshot_path}")
 
     # 尝试提取 __INITIAL_STATE__
-    print(f"\n=== __INITIAL_STATE__ 检测 ===")
+    print("\n=== __INITIAL_STATE__ 检测 ===")
     try:
         has_state = page.evaluate("() => !!window.__INITIAL_STATE__")
         print(f"__INITIAL_STATE__ 存在: {has_state}")
@@ -86,7 +85,7 @@ def main():
         print(f"__INITIAL_STATE__ 检测失败: {e}")
 
     # 检查验证码
-    print(f"\n=== 验证码检测 ===")
+    print("\n=== 验证码检测 ===")
     html = page.content().lower()
     captcha_signals = ["captcha", "验证码", "verify", "slider", "请完成验证"]
     for s in captcha_signals:
@@ -94,13 +93,13 @@ def main():
             print(f"  检测到: {s}")
 
     # 检查 DOM 元素
-    print(f"\n=== DOM 元素检测 ===")
+    print("\n=== DOM 元素检测 ===")
     for sel in ["section.note-item", "div.note-item", "[class*='note']", "a[href*='/explore/']", "img"]:
         count = len(page.query_selector_all(sel))
         print(f"  {sel}: {count} 个")
 
     # 提取图片
-    print(f"\n=== 图片提取 ===")
+    print("\n=== 图片提取 ===")
     imgs = page.query_selector_all("img")
     img_urls = []
     for img in imgs[:20]:
@@ -114,7 +113,7 @@ def main():
     # 清理
     page.close()
     pw.stop()
-    print(f"\n=== 诊断完成 ===")
+    print("\n=== 诊断完成 ===")
     print(f"截图: {screenshot_path}")
 
 
