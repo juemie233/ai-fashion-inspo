@@ -195,6 +195,79 @@ def format_funnel_summary(
     )
 
 
+@dataclass(frozen=True)
+class SearchPlan:
+    """一次采集的执行计划（关键词 × 排序）与断点计数。
+
+    ``resumed`` 只用于日志：告诉用户「这是接着上次跑的」，不参与任何逻辑判断，
+    避免把「是否恢复」混进计划本身。
+    """
+
+    plan: list[dict]
+    done: int
+    items_found: int
+    items_added: int
+    resumed: bool = False
+
+
+def build_search_plan(
+    *,
+    keywords: list[str],
+    platform: str,
+    config: dict,
+    is_blogger: bool,
+    resume: dict | None,
+) -> SearchPlan:
+    """构建（或从 resume_token 恢复）搜索执行计划。
+
+    三支语义（与改造前逐行一致）：
+
+    1. **按博主采集**：不走关键词计划，一轮完成 → 空计划；
+    2. **有断点**（且计划非空）：原样恢复 plan/done/累计计数，保证跨重启顺序确定；
+    3. **首次运行**：关键词**打乱一次**后按平台展开——
+       抖音网页版不支持排序切换，固定综合排序单组合；
+       小红书按 ``sort_mode`` 展开：latest/popular/general 各对应一种排序，
+       **默认（未配置）只跑综合**；只有配置了未知取值时才回退到 ``SORT_TYPES``
+       （三种全跑）。
+
+    Args:
+        keywords: 已清洗的关键词列表。
+        platform: ``xiaohongshu`` / ``douyin``。
+        config: 任务配置 dict（读 ``sort_mode``）。
+        is_blogger: 是否按博主采集。
+        resume: 解析后的 resume_token（可为 None）。
+
+    Returns:
+        :class:`SearchPlan`；``resumed`` 为 True 表示沿用了断点。
+    """
+    if is_blogger:
+        return SearchPlan(plan=[], done=0, items_found=0, items_added=0)
+
+    if resume and isinstance(resume.get("plan"), list) and resume["plan"]:
+        return SearchPlan(
+            plan=resume["plan"],
+            done=int(resume.get("done", 0)),
+            items_found=int(resume.get("items_found", 0)),
+            items_added=int(resume.get("items_added", 0)),
+            resumed=True,
+        )
+
+    shuffled = list(keywords)
+    random.shuffle(shuffled)
+    if platform == "douyin":
+        # 抖音网页版不支持排序切换：固定综合排序单组合
+        plan = [{"k": kw, "s": "general"} for kw in shuffled]
+    else:
+        sort_mode = config.get("sort_mode") or "general"
+        sorts = {
+            "latest": ["time_descending"],
+            "popular": ["popularity_descending"],
+            "general": ["general"],
+        }.get(sort_mode, SORT_TYPES)
+        plan = [{"k": kw, "s": s} for kw in shuffled for s in sorts]
+    return SearchPlan(plan=plan, done=0, items_found=0, items_added=0)
+
+
 def run_scraper_sync(task_id: int):
     """执行采集任务的同步入口函数。
 
@@ -304,48 +377,22 @@ def run_scraper_sync(task_id: int):
         except Exception:
             resume = None
 
-    if is_blogger:
-        plan: list = []
-        done = 0
-        items_found = 0
-        items_added = 0
-    elif (
-        resume
-        and isinstance(resume.get("plan"), list)
-        and resume["plan"]
-    ):
-        plan = resume["plan"]
-        done = int(resume.get("done", 0))
-        items_found = int(resume.get("items_found", 0))
-        items_added = int(resume.get("items_added", 0))
+    plan_state = build_search_plan(
+        keywords=keywords,
+        platform=platform,
+        config=config,
+        is_blogger=is_blogger,
+        resume=resume,
+    )
+    plan = plan_state.plan
+    done = plan_state.done
+    items_found = plan_state.items_found
+    items_added = plan_state.items_added
+    if plan_state.resumed:
         print(
             f"断点续采：从第 {done}/{len(plan)} 个组合继续"
             f"（已入库 {items_added}）"
         )
-    else:
-        shuffled = list(keywords)
-        random.shuffle(shuffled)
-        # 排序方式映射：用户选择的排序 → 执行计划中的排序类型（默认仅综合）
-        # 抖音网页版不支持排序切换，固定综合排序单组合
-        if platform == "douyin":
-            plan = [
-                {"k": kw, "s": "general"} for kw in shuffled
-            ]
-        else:
-            sort_mode = config.get("sort_mode") or "general"
-            sorts = {
-                "latest": ["time_descending"],
-                "popular": ["popularity_descending"],
-                "general": ["general"],
-            }.get(sort_mode, SORT_TYPES)
-            plan = [
-                {"k": kw, "s": s}
-                for kw in shuffled
-                for s in sorts
-            ]
-        done = 0
-        items_found = 0
-        items_added = 0
 
     existing_url_set: set[str] = set()  # 跨批次 URL 去重
     content_hash_set: set[str] = set()  # 跨批次内容 MD5 去重
