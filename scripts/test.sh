@@ -28,14 +28,14 @@ COV="${1:-}"
 
 echo "===== 1/11 后端测试 + 覆盖率棘轮（≥78%）====="
 cd "$ROOT/backend"
-# 覆盖率底线是**棘轮**：只能往上调。当前 80.26%（2026-10-22 实测）。
+# 覆盖率底线是**棘轮**：只能往上调。当前 81.73%（2026-10-27 实测）。
 # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
 # 门槛会「看起来没过、退出码却是 0」（门禁放水）。
 # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
 if [[ "$COV" == "--cov" ]]; then
-  "$PY" -m pytest --cov --cov-fail-under=80 --cov-report=term-missing
+  "$PY" -m pytest --cov --cov-fail-under=81 --cov-report=term-missing
 else
-  "$PY" -m pytest --cov --cov-fail-under=80 --cov-report=term:skip-covered
+  "$PY" -m pytest --cov --cov-fail-under=81 --cov-report=term:skip-covered
 fi
 
 echo ""
