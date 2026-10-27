@@ -45,6 +45,7 @@ export function usePersonRandomBrowse(
     try {
       const data = await api().fetchRandom(personId(), 1, filters())
       total.value = data.total ?? 0
+      // 历史只在成功拿到下一张后才增长：失败时若已入栈，「上一张」会退回到同一张图
       if (item.value) history.value = [...history.value, item.value]
       item.value = data.items?.[0] ?? null
     } catch (e) {

@@ -18,6 +18,7 @@ import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
 import GenerateCompareModal from '@/components/generate/GenerateCompareModal.vue'
 import ReferenceGalleryModal from '@/components/generate/ReferenceGalleryModal.vue'
 import { fetchInspirations } from '@/api/inspirations'
+import { useReferenceItems } from '@/composables/useReferenceItems'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -146,44 +147,35 @@ const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim
 const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
 
 // ── 已选参考图：拉缩略图供「描述框上方」的缩略图条与浏览大图 ──
-/** 面板抛上来的参考 id（顺序=参考顺序，第 1 张是主参考） */
-const referenceIds = ref<string[]>([])
-const referenceItems = ref<
-  Array<{ id: string; file_path: string; thumbnail_path?: string | null }>
->([])
 const referenceGalleryVisible = ref(false)
 const referenceGalleryIndex = ref(0)
 
-async function loadReferenceItems(ids: string[]): Promise<void> {
-  if (!ids.length) {
-    referenceItems.value = []
-    return
-  }
-  try {
-    const data = await fetchInspirations({ ids: ids.join(','), size: ids.length })
-    // 后端返回顺序不保证：按参考顺序重排；已被删掉的 id 自然缺席（缩略图条会少几张）
-    const byId = new Map(data.items.map((i) => [i.id, i]))
-    const ordered = ids
-      .map((id) => byId.get(id))
-      .filter((i): i is (typeof data.items)[number] => Boolean(i))
-      .map((i) => ({
-        id: i.id,
-        file_path: i.file_path,
-        thumbnail_path: i.thumbnail_path,
-      }))
-    // 期间用户又改了选择：丢弃这次结果，避免旧结果覆盖新选择
-    if (referenceIds.value.join(',') !== ids.join(',')) return
-    referenceItems.value = ordered
-  } catch {
-    // 缩略图只是辅助：拉不到就不显示，不影响出图
-    referenceItems.value = []
-  }
+/** 拉一批参考素材的元数据，并按传入顺序重排（接口返回顺序不保证，实测是倒序） */
+async function fetchReferenceItems(
+  ids: string[],
+): Promise<Array<{ id: string; file_path: string; thumbnail_path?: string | null }>> {
+  const data = await fetchInspirations({ ids: ids.join(','), size: ids.length })
+  const byId = new Map(data.items.map((i) => [i.id, i]))
+  return ids
+    .map((id) => byId.get(id))
+    .filter((i): i is (typeof data.items)[number] => Boolean(i))
+    .map((i) => ({
+      id: i.id,
+      file_path: i.file_path,
+      thumbnail_path: i.thumbnail_path,
+    }))
 }
 
-/** 面板参考 id 变化：同步到本地并拉缩略图 */
+/**
+ * 缩略图数据：**防抖 300ms + 丢过期响应**（见 `useReferenceItems`）。
+ *
+ * 手输 id 时 v-model 每敲一个字符都抛一次选择变化，不做防抖就会一个字符发一次请求，
+ * 且响应乱序会让缩略图条闪来闪去。
+ */
+const { items: referenceItems, set: setReferenceIds } = useReferenceItems(fetchReferenceItems)
+
 function onReferenceIdsChange(ids: string[]): void {
-  referenceIds.value = ids
-  void loadReferenceItems(ids)
+  setReferenceIds(ids)
 }
 
 function openReferenceGallery(index: number): void {
