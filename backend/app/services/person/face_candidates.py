@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.face import InspirationFaceDetection
@@ -96,7 +96,15 @@ async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
             )
             .where(
                 InspirationFaceDetection.matched_blogger_id == blogger_id,
-                InspirationFaceDetection.match_status.in_((None, "confirmed")),
+                # 只用「人工确认过」或「历史单素材检测结果（match_status 为 NULL）」：
+                # ⚠ 不能写 .in_((None, "confirmed"))——SQL 里 `IN (NULL, ...)` 对 NULL
+                # 行恒为 UNKNOWN，历史数据（全库 1 条）会被静默漏掉。
+                or_(
+                    InspirationFaceDetection.match_status.is_(None),
+                    InspirationFaceDetection.match_status == "confirmed",
+                ),
+                # 人工标过「不匹配」的检测不能当注册素材（复核时被否掉的脸）
+                InspirationFaceDetection.match_excluded.is_not(True),
                 Inspiration.deleted_at.is_(None),
                 InspirationFaceDetection.inspiration_id.in_(single_face_subq),
             )

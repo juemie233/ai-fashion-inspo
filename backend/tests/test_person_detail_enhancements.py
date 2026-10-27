@@ -443,3 +443,124 @@ async def test_face_candidates_empty_for_unknown_person(client):
         "candidate_faces": 0,
         "face_dim": 512,
     }
+
+
+# ── 审查修复的回归用例 ──
+
+
+async def test_face_candidates_includes_legacy_null_status(client, make_image):
+    """回归：`match_status` 为 NULL 的历史检测也算「已匹配本人」。
+
+    曾经的写法是 ``match_status.in_((None, "confirmed"))``——SQL 里
+    ``IN (NULL, 'confirmed')`` 对 NULL 行恒为 UNKNOWN，历史数据会被静默漏掉
+    （本库实测存在 1 条）。
+    """
+    blogger = _create_blogger(client, "历史空状态")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        emb = np.random.default_rng(3).normal(size=512).astype(np.float32)
+        await _add_detection(
+            db,
+            iid,
+            emb / np.linalg.norm(emb),
+            matched_blogger_id=blogger["id"],
+            match_status=None,
+        )
+        await db.commit()
+
+    async with async_session() as db:
+        result = await list_face_candidates(db, blogger["id"])
+
+    assert [m["inspiration_id"] for m in result["matched"]] == [iid]
+
+
+async def test_face_candidates_excludes_marked_not_matched(client, make_image):
+    """被人脸复核标成「不匹配」的检测不能当注册素材（否则用错脸注册）。"""
+    blogger = _create_blogger(client, "被否掉的脸")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        emb = np.random.default_rng(4).normal(size=512).astype(np.float32)
+        await _add_detection(
+            db,
+            iid,
+            emb / np.linalg.norm(emb),
+            matched_blogger_id=blogger["id"],
+            match_status="confirmed",
+            match_excluded=True,
+        )
+        await db.commit()
+
+    async with async_session() as db:
+        result = await list_face_candidates(db, blogger["id"])
+    assert result["matched"] == []
+
+
+async def test_backfill_keeps_existing_stats_when_f2_value_missing(client):
+    """回归：f2 某字段为 NULL 时不能把已同步到的统计值抹掉（数据回退）。"""
+    blogger = _create_blogger(client, "统计不丢", platform_user_id="sec-partial")
+    async with async_session() as db:
+        row = await db.get(Blogger, blogger["id"])
+        row.follower_count = 1234
+        row.aweme_count = 56
+        await db.commit()
+
+    profiles = {
+        "sec-partial": {
+            "nickname": "统计不丢",
+            "ip_location": "",
+            "signature": "",
+            "follower_count": None,  # f2 这一列没有值
+            "following_count": 7,
+            "aweme_count": None,
+            "total_favorited": None,
+        }
+    }
+    async with async_session() as db:
+        row = await db.get(Blogger, blogger["id"])
+        result = await enrich.backfill_douyin_profile_from_f2(db, row, profiles)
+        await db.refresh(row)
+
+    assert result["status"] == "updated"
+    assert row.follower_count == 1234  # 不被 None 覆盖
+    assert row.aweme_count == 56
+    assert row.following_count == 7  # 有值的照常写
+    assert "follower_count" not in (result["updated_fields"] or [])
+
+
+async def test_face_matched_filter_ignores_pending_and_excluded(client, make_image):
+    """「人脸已匹配」筛选只认确认/历史结果：AI 候选与被否掉的脸不算。"""
+    blogger = _create_blogger(client, "筛选人脸口径")
+    confirmed = _upload(client, make_image)
+    pending = _upload(client, make_image)
+    excluded = _upload(client, make_image)
+    for iid in (confirmed, pending, excluded):
+        _link(client, iid, blogger["id"])
+
+    async with async_session() as db:
+        base_emb = np.random.default_rng(5).normal(size=512).astype(np.float32)
+        base_emb /= np.linalg.norm(base_emb)
+        await _add_detection(
+            db, confirmed, base_emb, matched_blogger_id=blogger["id"], match_status="confirmed"
+        )
+        await _add_detection(
+            db, pending, base_emb, matched_blogger_id=blogger["id"], match_status="pending"
+        )
+        await _add_detection(
+            db,
+            excluded,
+            base_emb,
+            matched_blogger_id=blogger["id"],
+            match_status="confirmed",
+            match_excluded=True,
+        )
+        await db.commit()
+
+    async with async_session() as db:
+        result = await blogger_service.list_inspirations(
+            db, blogger["id"], 1, 20, "newest", face_matched=True
+        )
+
+    assert result["total"] == 1
+    assert result["items"][0]["inspiration_id"] == confirmed

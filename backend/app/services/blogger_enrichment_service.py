@@ -384,11 +384,14 @@ async def backfill_douyin_profile_from_f2(
         "aweme_count": profile.get("aweme_count"),
         "total_favorited": profile.get("total_favorited"),
     }
-    if any(v is not None for v in stats.values()):
-        for key, value in stats.items():
+    # ⚠ 只写有值的字段：f2 某些账号缺某几个统计列（NULL），若一并 setattr 会把
+    # 之前同步到的真实值抹成 None（数据回退，且无法从快照恢复）。
+    present = {k: v for k, v in stats.items() if v is not None}
+    if present:
+        for key, value in present.items():
             setattr(blogger, key, value)
         blogger.stats_synced_at = utcnow()
-        updated.extend(k for k, v in stats.items() if v is not None)
+        updated.extend(present)
 
     if not updated:
         return {

@@ -145,13 +145,16 @@ const dormant = computed(() => {
           <a-button type="text" size="mini" :loading="enriching" @click="$emit('enrich')">
             {{ hasStats ? '刷新资料' : '补齐资料' }}
           </a-button>
+          <!-- 候选是「打开弹窗才拉」的：不能因为 hasFaceCandidates 还没算好就永久禁用
+               （那样永远点不开）。按钮始终可点，弹窗里没有候选时给空态说明 -->
           <a-button
             v-if="kind === 'blogger'"
             type="text"
             size="mini"
-            :disabled="!hasFaceCandidates"
             :title="
-              hasFaceCandidates ? '用人脸候选素材一键注册' : '暂无人脸候选（先跑一次人脸扫描）'
+              hasFaceCandidates
+                ? '用人脸候选素材一键注册'
+                : '打开候选列表（还没跑人脸扫描的话会是空的）'
             "
             @click="$emit('open-face-candidates')"
           >

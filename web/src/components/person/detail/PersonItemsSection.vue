@@ -40,6 +40,8 @@ const props = defineProps<{
   unbindSubmitting: boolean
   clearingAll: boolean
   isCurrentPageAllSelected: boolean
+  /** 当前页是否有图片素材（决定「全屏浏览」能否点：全是视频时打开灯箱只会空白） */
+  hasImageItems: boolean
 }>()
 
 const emit = defineEmits<{
@@ -189,7 +191,13 @@ function openWork(work: PersonWorkGroup): void {
           <a-radio value="list">全部</a-radio>
           <a-radio value="works">作品</a-radio>
         </a-radio-group>
-        <a-button size="small" secondary :disabled="unbindMode" @click="emit('open-lightbox')">
+        <a-button
+          size="small"
+          secondary
+          :disabled="unbindMode || !hasImageItems"
+          :title="hasImageItems ? '' : '当前页没有图片素材（视频不进图片灯箱）'"
+          @click="emit('open-lightbox')"
+        >
           🖼️ 全屏浏览
         </a-button>
         <a-button
@@ -314,6 +322,15 @@ function openWork(work: PersonWorkGroup): void {
     <!-- 视图二：作品（按发布分组） -->
     <template v-else>
       <a-spin :loading="worksLoading" style="display: block">
+        <a-alert
+          v-if="worksTotal > 0 && worksTotal === worksTotalItems"
+          type="info"
+          size="small"
+          style="margin-bottom: 10px"
+        >
+          该人物的素材没有作品 ID（多是单图/其他来源），每张各自成组——作品视图与「全部」
+          等价，可按「全部」逐张看更直观。
+        </a-alert>
         <div v-if="!works.length && !worksLoading" class="items-empty">还没有可分组作品</div>
         <div class="work-grid">
           <div

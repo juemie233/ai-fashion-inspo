@@ -531,8 +531,15 @@ class PersonServiceBase:
                 if person_kind == "blogger"
                 else InspirationFaceDetection.matched_model_id
             )
+            # 与「人脸候选」同一口径：只认人工确认过 / 历史单素材结果，排除被标记
+            # 「不匹配」的检测——否则筛选会把 AI 候选、甚至复核时否掉的脸也算成已匹配
             face_subq = select(InspirationFaceDetection.inspiration_id).where(
-                person_col == filters["person_id"]
+                person_col == filters["person_id"],
+                or_(
+                    InspirationFaceDetection.match_status.is_(None),
+                    InspirationFaceDetection.match_status == "confirmed",
+                ),
+                InspirationFaceDetection.match_excluded.is_not(True),
             )
             clauses.append(Inspiration.id.in_(face_subq))
         return clauses

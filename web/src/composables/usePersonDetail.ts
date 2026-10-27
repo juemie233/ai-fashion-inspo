@@ -361,6 +361,13 @@ export function usePersonDetail() {
   // 路由参数变化（未来人物间跳转 / 复用同一路由记录）时重新加载
   watch(personId, () => {
     page.value = 1
+    // 换人物必须清掉筛选/排序/作品视图：否则下一位会带着上一位的条件打开，
+    // 看到「空列表」却不知道是筛选造成的（列表页换人也遵循同一约定）
+    filters.value = {}
+    sort.value = 'newest'
+    viewMode.value = 'list'
+    works.value = []
+    worksPage.value = 1
     loadDetail()
   })
 

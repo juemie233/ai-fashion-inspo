@@ -291,6 +291,7 @@ watch(
           :unbind-submitting="unbindSubmitting"
           :clearing-all="clearingAll"
           :is-current-page-all-selected="isCurrentPageAllSelected"
+          :has-image-items="lightboxPaths.length > 0"
           @update:view-mode="setViewMode"
           @update:sort="setSort"
           @update:filters="setFilters"
