@@ -665,7 +665,8 @@ def load_author_sec_ids(f2_dir: Path) -> dict[str, str]:
     if not db.is_file():
         return {}
     try:
-        conn = sqlite3.connect(str(db))
+        # 读的是 f2 自己的库（外部工具在写）：只读打开，避免加锁互相干扰
+        conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
         rows = conn.execute("SELECT nickname, sec_user_id FROM user_info_web").fetchall()
         conn.close()
     except sqlite3.Error:

@@ -7,7 +7,8 @@ DB = Path(__file__).resolve().parent.parent / "backend" / "fashion_inspo.db"
 
 
 def main() -> None:
-    conn = sqlite3.connect(str(DB))
+    # docstring 已写明「只读」，实现也对齐（避免排查脚本意外写库）
+    conn = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True)
     cur = conn.cursor()
 
     print("=== pending_vector_backfills 积压 ===")

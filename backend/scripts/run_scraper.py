@@ -77,6 +77,7 @@ from .scraper_douyin import (
     resolve_douyin_profile_url,
 )
 
+import argparse
 import hashlib
 import json
 import os as _os
@@ -906,7 +907,8 @@ def run_scraper_sync(task_id: int):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m scripts.run_scraper <task_id>")
-        sys.exit(1)
-    run_scraper_sync(int(sys.argv[1]))
+    # 后端由 app/services/scraper/process.py 以 `-m scripts.run_scraper <task_id>` 拉起，
+    # 位置参数与原来的裸索引完全等价；额外白得 --help 与「非数字 task_id」的明确报错
+    parser = argparse.ArgumentParser(description="执行一条采集任务（后端以 -m 调起）")
+    parser.add_argument("task_id", type=int, help="scraper_tasks.id")
+    run_scraper_sync(parser.parse_args().task_id)

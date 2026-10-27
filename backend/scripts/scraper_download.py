@@ -21,6 +21,10 @@ from pathlib import Path
 
 from app.config import settings
 
+from ._inspiration_insert import (
+    INSERT_INSPIRATION_IMAGE_SQL,
+    INSERT_INSPIRATION_VIDEO_SQL,
+)
 from .scraper_common import (
     DEFAULT_VIDEO_MAX_BYTES,
     MAX_VIDEO_BYTES,
@@ -43,29 +47,14 @@ _HASHTAG_META_MAX = 10
 # ═══════════════════════════════════════════════════════════════
 #  素材入库 INSERT（直写 sqlite 路径）
 # ═══════════════════════════════════════════════════════════════
-
-"""图片入库 INSERT：列清单 / 值 / 占位符三者必须一一对应。
-
-教训：曾漏写 updated_at 的占位符（14 列 13 值），sqlite 报
-「13 values for 14 columns」，重试包装器误当网络错误反复重新下载，
-整条抖音采集链路静默颗粒无收（任务 #46）。提取为常量供回归测试
-直接执行，防止再次漂移。"""
-INSERT_INSPIRATION_IMAGE_SQL = (
-    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
-    "thumbnail_path, media_type, dominant_colors, is_favorite, "
-    "quality_status, rating, is_ai_generated, content_hash, caption, "
-    "scraper_task_id, created_at, updated_at) "
-    "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, 'pending', 0, 0, ?, ?, ?, ?, ?)"
-)
-
-"""视频入库 INSERT：thumbnail 为 ffmpeg 首帧非空，content_hash 暂空。"""
-INSERT_INSPIRATION_VIDEO_SQL = (
-    "INSERT INTO inspirations (id, source_type, source_url, file_path, "
-    "thumbnail_path, media_type, dominant_colors, is_favorite, "
-    "quality_status, rating, is_ai_generated, content_hash, caption, "
-    "scraper_task_id, created_at, updated_at) "
-    "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 'pending', 0, 0, NULL, ?, ?, ?, ?)"
-)
+#
+# 列清单不在本文件维护：统一由 ``scripts/_inspiration_insert.py`` 生成（f2 导入路径
+# 共用同一份定义），列/值/占位符的对齐由 ``tests/test_unit_inspiration_insert.py``
+# 用 golden 字符串 + 真跑一次 INSERT 锁死。
+#
+# 历史教训（任务 #46）：曾漏写 updated_at 的占位符（14 列 13 值），sqlite 报
+# 「13 values for 14 columns」，重试包装器误当网络错误反复重新下载，整条抖音采集
+# 链路静默颗粒无收。故这些常量供回归测试直接执行，防止再次漂移。
 
 """每篇笔记提取的话题数上限（防脏数据）。"""
 _HASHTAG_PER_NOTE_MAX = 20

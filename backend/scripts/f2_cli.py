@@ -478,3 +478,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"\n导入计划与结果已写入 {args.json}")
     return 0
+
+
+if __name__ == "__main__":
+    # 补上标准入口：此前只有 main()，`python -m scripts.f2_cli --help` 会「成功退出但
+    # 什么都没做」（静默空转），排查时极易误判成「没输出就是没数据」
+    sys.exit(main())

@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -39,9 +40,11 @@ RATCHET: tuple[str, ...] = (
 )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """跑 mypy：默认只查棘轮清单，``--all`` 查全仓。"""
-    full = "--all" in sys.argv[1:]
+    parser = argparse.ArgumentParser(description="跑 mypy 类型检查（棘轮清单 or 全仓）")
+    parser.add_argument("--all", action="store_true", help="查全仓（存量债，见 docs/代码检查.md）")
+    full = parser.parse_args(argv).all
     targets = ["app"] if full else list(RATCHET)
     # --follow-imports=silent：只报 targets 里的错误，不让被依赖模块的存量错误淹没信号
     args = [sys.executable, "-m", "mypy", "--follow-imports=silent", *targets]

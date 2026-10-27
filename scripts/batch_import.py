@@ -1,5 +1,6 @@
 """批量导入脚本：将本地文件夹中的图片/视频批量导入素材库并逐张完成 AI 分析。"""
 
+import argparse
 import asyncio
 import hashlib
 import sys
@@ -135,12 +136,19 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
             print(f"AI 分析完成：成功 {ok}/{len(imported_items)}")
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("用法: py scripts/batch_import.py <文件夹路径> [来源类型]")
-        print("示例: py scripts/batch_import.py D:/穿搭图库 manual_upload")
-        sys.exit(1)
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """解析命令行参数（用 argparse 而非手写 sys.argv：白得 --help 与参数校验）。"""
+    parser = argparse.ArgumentParser(description="把本地文件夹里的图片批量导入素材库并触发 AI 分析")
+    parser.add_argument("folder", help="待导入的文件夹路径（如 D:/穿搭图库）")
+    parser.add_argument(
+        "source",
+        nargs="?",
+        default="manual_upload",
+        help="来源类型（默认 manual_upload；可选 scraper/douyin/xiaohongshu 等）",
+    )
+    return parser.parse_args(argv)
 
-    folder = sys.argv[1]
-    source = sys.argv[2] if len(sys.argv) > 2 else "manual_upload"
-    asyncio.run(import_folder(folder, source))
+
+if __name__ == "__main__":
+    args = _parse_args()
+    asyncio.run(import_folder(args.folder, args.source))

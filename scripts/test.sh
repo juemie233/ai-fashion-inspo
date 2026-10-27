@@ -26,7 +26,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PYTHON_BIN:-python}"
 COV="${1:-}"
 
-echo "===== 1/11 后端测试 + 覆盖率棘轮（≥78%）====="
+echo "===== 1/12 后端测试 + 覆盖率棘轮（≥81%）====="
 cd "$ROOT/backend"
 # 覆盖率底线是**棘轮**：只能往上调。当前 81.73%（2026-10-27 实测）。
 # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
@@ -39,54 +39,59 @@ else
 fi
 
 echo ""
-echo "===== 2/11 后端 lint（ruff，零告警）====="
+echo "===== 2/12 后端 lint（ruff，零告警）====="
 cd "$ROOT/backend"
 "$PY" -m ruff check app
 
 echo ""
-echo "===== 3/11 后端死代码（vulture，置信度 80 必须 0 条）====="
+echo "===== 3/12 后端死代码（vulture，置信度 80 必须 0 条）====="
 cd "$ROOT/backend"
 "$PY" -m vulture app --min-confidence 80
 
 echo ""
-echo "===== 4/11 后端类型（mypy 棘轮）====="
+echo "===== 4/12 后端类型（mypy 棘轮）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_types.py
 
 echo ""
-echo "===== 5/11 迁移链自检（空库 → 与 ORM 一致）====="
+echo "===== 5/12 迁移链自检（空库 → 与 ORM 一致）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_fresh_migrations.py
 
 echo ""
-echo "===== 6/11 库结构漂移（ORM ↔ 现有库）====="
+echo "===== 6/12 库结构漂移（ORM ↔ 现有库）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_alembic_drift.py
 
 echo ""
-echo "===== 7/11 前端类型检查（vue-tsc）====="
+echo "===== 7/12 脚本规范（只读连接 / CLI 入口）====="
+cd "$ROOT"
+"$PY" scripts/check_scripts.py
+
+echo ""
+echo "===== 8/12 前端类型检查（vue-tsc）====="
 cd "$ROOT/web"
 node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
 
 echo ""
-echo "===== 8/11 前端测试（vitest）====="
+echo "===== 9/12 前端测试（vitest）====="
 cd "$ROOT/web"
 node node_modules/vitest/vitest.mjs run
 
 echo ""
-echo "===== 9/11 前端 lint（eslint，棘轮 34）====="
+echo "===== 10/12 前端 lint（eslint，棘轮 34）====="
 cd "$ROOT/web"
 node node_modules/eslint/bin/eslint.js . --max-warnings 34
 
 echo ""
-echo "===== 10/11 前端死代码基线（ts-prune）====="
+echo "===== 11/12 前端死代码基线（ts-prune）====="
 cd "$ROOT"
 node scripts/check-web-dead-code.mjs
 
 echo ""
-echo "===== 11/11 前端格式（只查改动文件）====="
+echo "===== 12/12 前端格式（只查改动文件）====="
 cd "$ROOT"
 node scripts/check-web-format.mjs
 
 echo ""
-echo "✅ 11 项门禁全部通过"
+echo "✅ 12 项门禁全部通过"

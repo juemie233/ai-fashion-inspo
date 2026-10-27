@@ -100,6 +100,11 @@ jobs:
       - name: 迁移链自检（空库 → 与 ORM 一致）
         run: python scripts/check_fresh_migrations.py
 
+      # 脚本目录的静态守卫：只读用途的 sqlite 连接必须 mode=ro（f2 的外部库不能被
+      # 脚本以读写方式打开），入口必须用 argparse。scripts 不计覆盖率，只能静态兜。
+      - name: 脚本规范（只读连接 / CLI 入口）
+        run: python scripts/check_scripts.py
+
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
       # 覆盖率 68% 是**棘轮底线**（只能往上调）：测试被误删/跳过时这里会红。

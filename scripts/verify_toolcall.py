@@ -3,8 +3,8 @@
 用法: python scripts/verify_toolcall.py <model_name>
 """
 
+import argparse
 import json
-import sys
 
 import httpx
 
@@ -44,4 +44,6 @@ def test_toolcall(model: str) -> None:
 
 
 if __name__ == "__main__":
-    test_toolcall(sys.argv[1] if len(sys.argv) > 1 else "qwen3.5:9b")
+    parser = argparse.ArgumentParser(description="验证本地 Ollama 模型能否返回结构化 tool_calls")
+    parser.add_argument("model", nargs="?", default="qwen3.5:9b", help="模型名（默认 qwen3.5:9b）")
+    test_toolcall(parser.parse_args().model)

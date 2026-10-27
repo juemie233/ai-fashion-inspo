@@ -234,7 +234,7 @@ chrome_debug_port: int = 9222
 
 ### 门禁与测试体系（10-20）
 
-- `scripts/test.sh` 现在是 **11 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
+- `scripts/test.sh` 现在是 **12 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
 - **覆盖率棘轮** 67 → **69**（当前 70%）；**mypy 棘轮** 9 个模块（`check_types.py`）；**eslint 警告** 73 → 34（`--max-warnings 34`）；**死代码基线** 279 → **275** 条（`MAX_BASELINE` 上限，只降不升；跨平台路径归一化两次修正：`1b34a1c`、`8d74fd6`）。
 - 测试补齐：垃圾桶服务层 10 条（覆盖率 30%→91%）、素材创建 8 条（48%→63%）、标签 CRUD/打标/更新 11 条（顺带修「归一化后重名」500）。
 
@@ -1504,7 +1504,7 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store / 视图交互）+ Playwright e2e 冒烟（真实浏览器跑页面，需前后端都起着）。
 
-**一键运行全部门禁**（11 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
+**一键运行全部门禁**（12 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
 
 ```bash
 bash scripts/test.sh          # 常规

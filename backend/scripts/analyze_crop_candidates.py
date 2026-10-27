@@ -301,7 +301,8 @@ def main() -> None:
         sys.exit(1)
     storage_root = Path(args.storage)
 
-    conn = sqlite3.connect(db_path)
+    # 只读打开：本脚本只做扫描/统计，避免误写真实库（也避免和 worker 抢写锁）
+    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     rows = conn.execute(
         """
         SELECT id, file_path, created_at FROM inspirations

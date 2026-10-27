@@ -204,7 +204,8 @@ def build_plan(
 
 def _load_rows(db_path: Path) -> list[tuple[str, str, str | None]]:
     """读未删除的 f2 行（垃圾桶不动）。"""
-    conn = sqlite3.connect(str(db_path))
+    # 只读：这是纯粹的读取步骤，改成 ro 后即使误加写语句也会直接报错
+    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     try:
         return conn.execute(
             "SELECT id, source_platform_id, source_url FROM inspirations "

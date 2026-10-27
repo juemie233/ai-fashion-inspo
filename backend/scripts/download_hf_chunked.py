@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 import urllib.error
@@ -65,6 +66,10 @@ def download(url: str, out: Path, expect: int) -> int:
 
 
 if __name__ == "__main__":
-    url, path, size = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
-    got = download(url, path, size)
-    sys.exit(0 if got == size else 1)
+    parser = argparse.ArgumentParser(description="分块下载 HuggingFace 大文件（断点续传、限速）")
+    parser.add_argument("url", help="文件直链")
+    parser.add_argument("path", help="保存路径")
+    parser.add_argument("size", type=int, help="文件总字节数（用于校验与进度）")
+    args = parser.parse_args()
+    got = download(args.url, Path(args.path), args.size)
+    sys.exit(0 if got == args.size else 1)

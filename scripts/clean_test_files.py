@@ -75,7 +75,8 @@ def main() -> None:
     # 收集数据库中的真实路径
     known_paths = set()
     if DB_PATH.exists():
-        conn = sqlite3.connect(str(DB_PATH))
+        # 只读打开：本脚本按「库内无记录 + 测试时段 + 纯色小图」判定，只查不写库
+        conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
         # 各表媒体路径字段 → 白名单（新增路径字段时在此登记即可纳入保护）
         path_columns = {
             "inspirations": ("file_path", "thumbnail_path"),

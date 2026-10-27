@@ -7,6 +7,7 @@
     python scripts/diagnose_note_detail.py <关键词>
 """
 
+import argparse
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -75,7 +76,6 @@ def main(keyword: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("用法: python scripts/diagnose_note_detail.py <关键词>")
-        sys.exit(1)
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description="诊断小红书笔记详情页的图片/视频加载情况")
+    parser.add_argument("keyword", help="用于打开笔记详情页的关键词")
+    main(parser.parse_args().keyword)

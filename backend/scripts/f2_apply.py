@@ -28,13 +28,9 @@ from .f2_plan import (  # noqa: E402
 )
 
 
-INSERT_F2_SQL = (
-    "INSERT INTO inspirations (id, source_type, source_url, source_author, "
-    "source_platform_id, file_path, thumbnail_path, media_type, dominant_colors, "
-    "is_favorite, quality_status, rating, is_ai_generated, content_hash, caption, "
-    "scraper_task_id, created_at, updated_at) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 'pending', 0, 0, ?, ?, NULL, ?, ?)"
-)
+# 列清单由 ``scripts/_inspiration_insert.py`` 统一维护（与采集路径共用同一份定义），
+# 这里只做导入，避免两处手写 SQL 悄悄漂移（见该模块 docstring 的任务 #46 事故）。
+from ._inspiration_insert import INSERT_F2_SQL  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
