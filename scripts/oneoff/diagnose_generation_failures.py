@@ -6,9 +6,8 @@ ComfyUI 连接失败，还是其它。**先有数据再决定换不换模型**�
 只读：仅 SELECT，不写库、不改文件。
 
 用法：
-    cd backend
-    python scripts/diagnose_generation_failures.py           # 最近 200 个失败的批次
-    python scripts/diagnose_generation_failures.py --limit 0 # 全量
+    python scripts/oneoff/diagnose_generation_failures.py           # 最近 200 个失败的批次
+    python scripts/oneoff/diagnose_generation_failures.py --limit 0   # 全量
 """
 
 from __future__ import annotations
@@ -16,11 +15,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
-import re
 import sys
 from pathlib import Path
 
-BACKEND = Path(__file__).resolve().parent.parent
+BACKEND = Path(__file__).resolve().parents[2] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 

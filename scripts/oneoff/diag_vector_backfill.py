@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-DB = Path(__file__).resolve().parent.parent / "backend" / "fashion_inspo.db"
+DB = Path(__file__).resolve().parents[2] / "backend" / "fashion_inspo.db"
 
 
 def main() -> None:

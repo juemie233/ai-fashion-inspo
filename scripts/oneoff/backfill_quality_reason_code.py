@@ -6,8 +6,8 @@
 
 用法：
     cd backend
-    python ../scripts/backfill_quality_reason_code.py            # 预览（默认 dry-run）
-    python ../scripts/backfill_quality_reason_code.py --apply    # 真正写入
+    python scripts/oneoff/backfill_quality_reason_code.py            # 预览（默认 dry-run）
+    python scripts/oneoff/backfill_quality_reason_code.py --apply    # 真正写入
 
 输出：按原因码统计的分布 + 无法归类（落到 `other`）的样本文本，便于调整规则。
 """
@@ -20,8 +20,9 @@ import collections
 import sys
 from pathlib import Path
 
-# 允许 `python ../scripts/xxx.py` 直接跑（把 backend 加入 sys.path）
-BACKEND = Path(__file__).resolve().parent.parent / "backend"
+# 允许 `python scripts/oneoff/xxx.py` 直接跑（把 backend 加入 sys.path）
+# parents[2] = 仓库根（scripts/oneoff/xxx.py → oneoff → scripts → 根）
+BACKEND = Path(__file__).resolve().parents[2] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 

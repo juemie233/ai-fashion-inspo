@@ -26,7 +26,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCAN_DIRS = (ROOT / "scripts", ROOT / "backend" / "scripts")
+SCAN_DIRS = (
+    ROOT / "scripts",
+    ROOT / "scripts" / "oneoff",  # 一次性/诊断脚本（见该目录 README）
+    ROOT / "backend" / "scripts",
+)
 
 CONNECT_RE = re.compile(r"(?:_?sqlite3)\.connect\(\s*([^)]*)\)")
 

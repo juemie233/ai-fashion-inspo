@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-BACKEND = Path(__file__).resolve().parent.parent / "backend"
+BACKEND = Path(__file__).resolve().parents[2] / "backend"
 sys.path.insert(0, str(BACKEND))
 
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{BACKEND / 'fashion_inspo.db'}")
@@ -19,6 +19,12 @@ def main() -> None:
 
     print("lancedb 目录:", settings.lancedb_dir)
     if not settings.lancedb_dir.exists():
+        # 自定义存储根（如 G:/fashion-inspo-storage）时，默认值会指到 backend/storage；
+        # 直接给可操作的提示，省得误判成「向量库没建」
+        print(
+            "  （目录不存在：若项目用了自定义存储根，请先设置环境变量 "
+            "STORAGE_ROOT=<存储根> 再跑本脚本）"
+        )
         print("目录不存在")
         return
     # 目录内容

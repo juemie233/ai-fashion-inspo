@@ -1,6 +1,6 @@
 """工具调用验证脚本：测试 Ollama 模型的 function calling 是否返回结构化 tool_calls。
 
-用法: python scripts/verify_toolcall.py <model_name>
+用法: python scripts/oneoff/verify_toolcall.py [model_name]
 """
 
 import argparse
