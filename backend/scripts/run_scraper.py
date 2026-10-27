@@ -78,6 +78,7 @@ from .scraper_douyin import (
 )
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os as _os
@@ -147,6 +148,86 @@ def _update_task_sync(task_id: int, fields: dict) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+@dataclass(frozen=True)
+class TaskConfig:
+    """采集任务的配置快照（从 ``scraper_tasks.config`` JSON 解析出来的最小集合）。
+
+    单独建模的原因：这段解析原本内联在 700+ 行的 ``run_scraper_sync`` 里，校验失败
+    只靠 print + return，既测不到也看不清「缺什么会退出」。抽出来后可单测，
+    且错误文案（前端/日志都在看）保持一字不改。
+    """
+
+    keywords: list[str]
+    max_count: int
+    platform: str
+    is_blogger: bool
+    blogger_id: int | None
+
+
+def parse_task_config(config: dict, platform: str) -> TaskConfig:
+    """解析采集配置并做最小校验（不合法直接抛 ``ValueError``，文案面向用户）。
+
+    Args:
+        config: ``scraper_tasks.config`` 解析出的 dict（可能为空）。
+        platform: 任务平台（``xiaohongshu`` / ``douyin``）。
+
+    Returns:
+        :class:`TaskConfig`。
+
+    Raises:
+        ValueError: 按博主采集缺 ``blogger_id``，或搜索采集没有关键词。
+    """
+    keywords = [k.strip() for k in config.get("keywords", []) if k.strip()]
+    max_count = int(config.get("max_count", 50))
+    # 采集模式：search 关键词搜索（默认）| user 按博主采集（小红书）
+    mode = config.get("collect_mode") or config.get("mode") or "search"
+    is_blogger = mode == "user"
+    blogger_id: int | None = None
+    if is_blogger:
+        raw_bid = config.get("blogger_id")
+        if not raw_bid:
+            raise ValueError("按博主采集缺少 blogger_id")
+        blogger_id = int(raw_bid)
+    if not keywords and not is_blogger:
+        raise ValueError("无关键词")
+    return TaskConfig(
+        keywords=keywords,
+        max_count=max_count,
+        platform=platform,
+        is_blogger=is_blogger,
+        blogger_id=blogger_id,
+    )
+
+
+def format_funnel_summary(
+    *,
+    items_found: int,
+    skipped_existing: int,
+    skipped_content_dup: int,
+    skipped_non200: int,
+    skipped_network: int,
+    skipped_video: int,
+    items_added: int,
+) -> str:
+    """把采集漏斗渲染成定宽文本框（纯函数：可单测，也避免报告里数字与统计脱节）。"""
+    return "\n".join(
+        (
+            "",
+            "  ╔══════════════════════════════════════════",
+            "  ║ 采集漏斗汇总",
+            "  ╠══════════════════════════════════════════",
+            f"  ║ 搜索提取总数:   {items_found}",
+            f"  ║ 跨次已存在:     {skipped_existing}",
+            f"  ║ 内容MD5重复:    {skipped_content_dup}",
+            f"  ║ HTTP 非 200:    {skipped_non200}",
+            f"  ║ 网络失败:       {skipped_network}",
+            f"  ║ 视频跳过:       {skipped_video}",
+            f"  ║ ★ 最终入库:     {items_added}",
+            "  ╚══════════════════════════════════════════",
+        )
+    )
 
 
 def run_scraper_sync(task_id: int):
@@ -222,29 +303,18 @@ def run_scraper_sync(task_id: int):
             if isinstance(task.config, str)
             else task.config or {}
         )
-        keywords = [
-            k.strip()
-            for k in config.get("keywords", [])
-            if k.strip()
-        ]
-        max_count = config.get("max_count", 50)
-        platform = task.platform
-        # 采集模式：search 关键词搜索（默认）| user 按博主采集（小红书）
-        mode = config.get("collect_mode") or config.get("mode") or "search"
-        is_blogger = mode == "user"
-        blogger_id: int | None = None
-        if is_blogger:
-            raw_bid = config.get("blogger_id")
-            if not raw_bid:
-                print("按博主采集缺少 blogger_id，退出")
-                _fail("按博主采集缺少 blogger_id")
-                return
-            blogger_id = int(raw_bid)
-
-        if not keywords and not is_blogger:
-            print("无关键词，退出")
-            _fail("无关键词")
+        try:
+            parsed = parse_task_config(config, task.platform)
+        except ValueError as e:
+            # 两种「配置不合格」保留原有的具体提示与失败原因（日志/前端都在看）
+            print(f"{e}，退出")
+            _fail(str(e))
             return
+        keywords = parsed.keywords
+        max_count = parsed.max_count
+        platform = parsed.platform
+        is_blogger = parsed.is_blogger
+        blogger_id = parsed.blogger_id
 
         # 准备下载目录（图片与视频目录统一创建：抖音搜索模式同样会下载视频）
         today = utcnow().strftime("%Y-%m")
@@ -840,17 +910,17 @@ def run_scraper_sync(task_id: int):
     )
 
     # ── 汇总漏斗日志 ──
-    print(f"\n  ╔══════════════════════════════════════════")
-    print(f"  ║ 采集漏斗汇总")
-    print(f"  ╠══════════════════════════════════════════")
-    print(f"  ║ 搜索提取总数:   {items_found}")
-    print(f"  ║ 跨次已存在:     {total_skipped_existing}")
-    print(f"  ║ 内容MD5重复:    {total_skipped_content_dup}")
-    print(f"  ║ HTTP 非 200:    {total_skipped_non200}")
-    print(f"  ║ 网络失败:       {total_skipped_network}")
-    print(f"  ║ 视频跳过:       {total_skipped_video}")
-    print(f"  ║ ★ 最终入库:     {items_added}")
-    print(f"  ╚══════════════════════════════════════════")
+    print(
+        format_funnel_summary(
+            items_found=items_found,
+            skipped_existing=total_skipped_existing,
+            skipped_content_dup=total_skipped_content_dup,
+            skipped_non200=total_skipped_non200,
+            skipped_network=total_skipped_network,
+            skipped_video=total_skipped_video,
+            items_added=items_added,
+        )
+    )
 
     # ── 完成任务 ──
     error_msg = None
