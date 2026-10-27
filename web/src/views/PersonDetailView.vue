@@ -6,7 +6,8 @@
  */
 
 import { usePersonDetail } from '@/composables/usePersonDetail'
-import { ref, watch } from 'vue'
+import { usePageTitle } from '@/composables/usePageTitle'
+import { computed, ref, watch } from 'vue'
 import { bloggersApi, modelsApi } from '@/api/persons'
 import MasonryGrid from '@/components/inspiration/MasonryGrid.vue'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
@@ -59,6 +60,12 @@ const {
   confirmUnbindSelected,
   unbindAll,
 } = usePersonDetail()
+
+// 浏览器标题：人物管理-<网名>（名字要等详情加载完才知道，加载中先显示「人物管理」）
+const pageTitle = computed(() =>
+  detail.value?.name ? `人物管理-${detail.value.name}` : '人物管理',
+)
+usePageTitle(pageTitle)
 
 /** 详情页简介区域「AI 生成」入口：打开编辑弹窗并自动触发一次生成 */
 const autoGenerateBio = ref(false)

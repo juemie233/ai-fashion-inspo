@@ -11,6 +11,7 @@ import { Message } from '@arco-design/web-vue'
 import { modelsApi, createModelPhotoSet, uploadModelPhoto } from '@/api/persons'
 import type { Person } from '@shared/types/person'
 import { getApiErrorMessage } from '@/utils/apiError'
+import { usePageTitle } from '@/composables/usePageTitle'
 import PersonFormModal from '@/components/person/PersonFormModal.vue'
 import ThumbCard from '@/components/common/ThumbCard.vue'
 
@@ -22,6 +23,12 @@ const persons = ref<Person[]>([])
 const personsLoading = ref(false)
 const personId = ref<number | undefined>(undefined)
 const showForm = ref(false)
+
+// 浏览器标题：添加模特照片-<模特名>（未选人物时只显示页面名）
+const selectedPerson = computed(() => persons.value.find((p) => p.id === personId.value) ?? null)
+usePageTitle(() =>
+  selectedPerson.value ? `添加模特照片-${selectedPerson.value.name}` : '添加模特照片',
+)
 
 async function loadPersons() {
   personsLoading.value = true

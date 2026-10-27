@@ -9,6 +9,7 @@ import { useScraperLog } from '@/composables/useScraperLog'
 import { useScraperFunnel } from '@/composables/useScraperFunnel'
 import { useScraperResults } from '@/composables/useScraperResults'
 import { useScraperConfig } from '@/composables/useScraperConfig'
+import { usePageTitle } from '@/composables/usePageTitle'
 import ScraperTaskForm from '@/components/scraper/ScraperTaskForm.vue'
 import ScraperTaskTable from '@/components/scraper/ScraperTaskTable.vue'
 import ScraperLogViewer from '@/components/scraper/ScraperLogViewer.vue'
@@ -28,6 +29,16 @@ import type { ScraperTask } from '@/types/scraper'
 const activeTab = ref<'tasks' | 'config' | 'schedules'>(
   (localStorage.getItem('scraper-active-tab') as 'tasks' | 'config' | 'schedules') || 'tasks',
 )
+
+/** 页签中文标签（浏览器标题用；与模板里的 title 保持一致） */
+const TAB_LABELS: Record<'tasks' | 'config' | 'schedules', string> = {
+  tasks: '采集任务',
+  config: '源配置',
+  schedules: '定时采集',
+}
+
+// 本页页签存在 localStorage 而非 URL，路由守卫读不到，故由视图自己维护标题
+usePageTitle(() => `采集管理-${TAB_LABELS[activeTab.value]}`)
 
 /** 抖音采集历史组件引用：两条 f2 入口提交任务后立刻刷新历史（否则要等 WS 首个事件） */
 const f2History = ref<InstanceType<typeof F2TaskHistory> | null>(null)

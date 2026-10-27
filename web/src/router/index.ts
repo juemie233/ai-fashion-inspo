@@ -1,6 +1,7 @@
 /** Vue Router 路由配置。 */
 
 import { createRouter, createWebHistory } from 'vue-router'
+import { resolveDocumentTitle } from '@/utils/pageTitle'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -121,9 +122,12 @@ const router = createRouter({
   ],
 })
 
-// 更新页面标题
+// 更新页面标题：页面[-子页面] + 站点名。
+// 子页面（?tab= / ?kind=）的标签表在 utils/pageTitle.ts；切页签会触发一次导航，
+// 因此标题随 URL 自动更新。状态只存在 localStorage / 组件 ref 的页面（采集管理）
+// 由该视图自己调 composables/usePageTitle 覆盖。
 router.afterEach((to) => {
-  document.title = `${to.meta.title || 'AI 穿搭素材库'} - AI 穿搭素材库`
+  document.title = resolveDocumentTitle(to)
 })
 
 export default router

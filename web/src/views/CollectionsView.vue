@@ -28,6 +28,7 @@ import { useBatchSelection } from '@/composables/useBatchSelection'
 import { useCollectionMutations } from '@/composables/useCollectionMutations'
 import { useCollectionListDnd } from '@/composables/useCollectionListDnd'
 import { useCollectionItemOrdering } from '@/composables/useCollectionItemOrdering'
+import { usePageTitle } from '@/composables/usePageTitle'
 import type { InspirationOut } from '@/api/inspirations'
 
 const tagsStore = useTagsStore()
@@ -47,6 +48,9 @@ const collections = ref<CollectionOut[]>([])
 const listLoading = ref(false)
 const currentId = ref<number | null>(null)
 const current = computed(() => collections.value.find((c) => c.id === currentId.value) ?? null)
+
+// 浏览器标题：收藏合集-<合集名>（合集是页面内选中态、不在 URL 里，故由视图维护）
+usePageTitle(() => (current.value ? `收藏合集-${current.value.name}` : '收藏合集'))
 /** 当前二级收藏夹所属一级的名字（一级自己的内容区不显示面包屑） */
 const parentName = computed(() => {
   const parentId = current.value?.parent_id

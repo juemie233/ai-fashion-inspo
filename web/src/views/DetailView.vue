@@ -33,12 +33,19 @@ import type { PersonBrief } from '@shared/types/person'
 import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
 import { useBrowseContext } from '@/composables/useBrowseContext'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 const route = useRoute()
 const router = useRouter()
 
 /** 素材详情数据 */
 const detail = ref<InspirationDetailOut | null>(null)
+
+// 浏览器标题：素材详情-<来源作者>（作者加载完成前只显示「素材详情」）
+usePageTitle(() =>
+  detail.value?.source_author ? `素材详情-${detail.value.source_author}` : '素材详情',
+)
+
 /** 灯箱是否打开 */
 const lightboxOpen = ref(false)
 /** 裁剪弹窗是否打开（仅图片素材显示入口） */
