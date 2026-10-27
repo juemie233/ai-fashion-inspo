@@ -62,41 +62,20 @@ def _build_filter_args() -> list[str]:
     return ["-vf", f"fps=1/{interval}"]
 
 
-async def extract_keyframes_for_video(
-    inspiration_id: str, video_rel_path: str
-) -> list[Path]:
-    """提取单个视频的关键帧（幂等），返回帧文件绝对路径列表（时间序）。
+async def _run_ffmpeg(
+    video_path: Path, out_dir: Path, extra_args: list[str], video_rel_path: str
+) -> None:
+    """跑一次 ffmpeg 抽帧（失败/超时只记日志，不抛异常）。
 
-    参数:
-        inspiration_id: 素材 ID（作为关键帧子目录名）
-        video_rel_path: 视频文件相对 storage_root 的路径（如 ``videos/2026-08/x.mp4``）
-
-    说明:
-        - 已有帧（目录存在且帧数 > 0）时直接返回，不重复提取；
-        - 视频文件缺失、ffmpeg 报错或超时均静默降级返回空列表，仅记日志，
-          不抛异常（调用方多为上传/向量/人脸主流程，失败不应阻断）。
+    单独抽成函数是为了让「兜底重试」与测试都能复用同一段调用逻辑（子进程启动、
+    超时终止、僵尸回收）。输出文件命名固定 ``frame_%03d.jpg``。
     """
-    if not video_rel_path:
-        return []
-    video_path = settings.storage_root / video_rel_path
-    if not video_path.exists():
-        logger.warning(f"关键帧提取跳过（视频文件缺失）: {video_rel_path}")
-        return []
-
-    out_dir = keyframes_dir(inspiration_id)
-    existing = _list_frames(out_dir)
-    if existing:
-        return existing  # 幂等：已有帧直接返回
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    output_pattern = str(out_dir / "frame_%03d.jpg")
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video_path),
-        *_build_filter_args(),
-        "-frames:v", str(settings.keyframe_max_frames),
+        *extra_args,
         "-q:v", "2",
-        output_pattern,
+        str(out_dir / "frame_%03d.jpg"),
     ]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -120,7 +99,58 @@ async def extract_keyframes_for_video(
     except Exception as e:
         logger.warning(f"关键帧提取失败（ffmpeg 启动异常，忽略）: {video_rel_path} — {e}")
 
+
+async def extract_keyframes_for_video(
+    inspiration_id: str, video_rel_path: str
+) -> list[Path]:
+    """提取单个视频的关键帧（幂等），返回帧文件绝对路径列表（时间序）。
+
+    参数:
+        inspiration_id: 素材 ID（作为关键帧子目录名）
+        video_rel_path: 视频文件相对 storage_root 的路径（如 ``videos/2026-08/x.mp4``）
+
+    说明:
+        - 已有帧（目录存在且帧数 > 0）时直接返回，不重复提取；
+        - 先按 ``keyframe_interval_seconds`` 固定间隔抽帧；**一帧都没抽到**时
+          退化取前 3 帧（短视频兜底，否则 < 间隔的视频永远抽不到帧）；
+        - 视频文件缺失、ffmpeg 报错或超时均静默降级返回空列表，仅记日志，
+          不抛异常（调用方多为上传/向量/人脸主流程，失败不应阻断）。
+    """
+    if not video_rel_path:
+        return []
+    video_path = settings.storage_root / video_rel_path
+    if not video_path.exists():
+        logger.warning(f"关键帧提取跳过（视频文件缺失）: {video_rel_path}")
+        return []
+
+    out_dir = keyframes_dir(inspiration_id)
+    existing = _list_frames(out_dir)
+    if existing:
+        return existing  # 幂等：已有帧直接返回
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 主路径：固定间隔抽帧 + 帧数上限（长视频不会把磁盘刷爆）
+    await _run_ffmpeg(
+        video_path,
+        out_dir,
+        [*_build_filter_args(), "-frames:v", str(settings.keyframe_max_frames)],
+        video_rel_path,
+    )
+
     frames = _list_frames(out_dir)
+    if not frames:
+        # 兜底：固定间隔抽帧（fps=1/interval）对**短于间隔**的视频一帧都抽不到
+        # （实测 0.7~2.7 秒的抖音片段，ffmpeg 直接报 `Output file is empty`），
+        # 于是这些素材永远「分析源不可用」、永远挂在未分析里。改为退化取前 N 帧。
+        logger.info(f"关键帧按间隔抽取为空，改用「取前几帧」兜底: {video_rel_path}")
+        await _run_ffmpeg(
+            video_path,
+            out_dir,
+            ["-frames:v", str(min(3, settings.keyframe_max_frames))],
+            video_rel_path,
+        )
+        frames = _list_frames(out_dir)
     if frames:
         logger.info(f"关键帧提取完成: 素材 {inspiration_id}，共 {len(frames)} 帧")
     else:

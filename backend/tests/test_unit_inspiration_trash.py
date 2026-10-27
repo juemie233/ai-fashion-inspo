@@ -353,3 +353,46 @@ async def test_purge_trash_audits_even_if_vector_delete_fails(client, upload, mo
             )
         ).all()
     assert audits == [("empty_trash", 1)]
+
+
+# ── 自动物理删除（AI 判定「无穿搭内容」）──
+
+
+async def test_hard_delete_no_content_deletes_active_image(client, upload):
+    """未在垃圾桶的图片也能直接物理删除，并写墓碑 + 审计（自动清理专用入口）。
+
+    为什么单独一条：`delete_inspiration` 会以 409 拦住「活跃素材」（先软删除是给用户
+    手动的保护），而自动清理必须能越过它——但不能越过墓碑与审计，否则同一 URL 会被
+    采集回来、删掉的素材也查不到是谁删的。
+    """
+    insp_id = upload().json()["id"]
+    url = "https://www.douyin.com/note/no-content-image"
+    await _set_fields(insp_id, source_url=url)
+
+    async with async_session() as db:
+        file_path = (await _load(db, insp_id)).file_path
+    assert (settings.storage_root / file_path).exists()
+
+    async with async_session() as db:
+        assert await inspiration_trash.hard_delete_no_content(db, insp_id) is True
+
+    async with async_session() as db:
+        assert await db.get(Inspiration, insp_id) is None
+    assert not (settings.storage_root / file_path).exists()  # 文件也删了
+    assert await _tombstone_count(url) == 1  # 墓碑：不再被采集回来
+    assert ("auto_delete_no_content", 1) in await _audit_actions()
+
+
+async def test_hard_delete_no_content_keeps_video_and_missing(client, upload):
+    """视频不删（删视频的风险远大于收益）；素材不存在时返回 False 且不写审计。"""
+    video_id = upload().json()["id"]
+    # 夹具只能造图片，直接把行标成视频（删除逻辑只认 media_type）
+    await _set_fields(video_id, media_type="video")
+    async with async_session() as db:
+        assert await inspiration_trash.hard_delete_no_content(db, video_id) is False
+    async with async_session() as db:
+        assert await db.get(Inspiration, video_id) is not None
+
+    async with async_session() as db:
+        assert await inspiration_trash.hard_delete_no_content(db, "not-exist") is False
+    assert ("auto_delete_no_content", 1) not in await _audit_actions()

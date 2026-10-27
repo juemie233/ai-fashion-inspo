@@ -17,6 +17,7 @@ import asyncio
 import pytest
 
 from app.database import async_session
+from app.config import settings
 from app.models.inspiration import AIAnalysisLog, Inspiration
 from app.models.task import TaskQueue
 from app.services.task_runners import batch_analyze as ba
@@ -224,6 +225,74 @@ def test_all_failed_permanent_raises_permanent():
     assert "永久错误" in str(exc.value)
 
 
+def test_all_failed_message_uses_real_failure_count():
+    """回归（2026-10）：文案曾用 task_total 当失败数，把「跳过」说成「失败」。
+
+    实测现场：144 个素材里 134 个是视频抽帧不可用（跳过）、10 个真失败，任务却报
+    「批量分析全部失败（144 张）：图片损坏/文件不存在」，纯属误导。
+    """
+    failed = [(f"i{i}", "AI 未提取到任何有效标签") for i in range(10)]
+    with pytest.raises(PermanentTaskError) as exc:
+        ba._raise_if_all_failed(144, 0, failed, [], unavailable=134)
+    msg = str(exc.value)
+    assert "失败 10 张" in msg
+    assert "另有 134 张分析源不可用被跳过" in msg
+    assert "144 张" not in msg
+
+
+async def test_execute_deletes_no_content_image_and_counts(monkeypatch):
+    """模型判定「无穿搭内容」的图片：批量分析顺手物理删除，并在任务结果里计数。
+
+    视频不删（同批放一个视频做对照），只删图片。
+    """
+    await _insp("nc-img")
+    await _insp("nc-vid", media_type="video")
+    task_id = await _task(ids=["nc-img", "nc-vid"])
+
+    async def _empty(sem, iid, frames):
+        return iid, True, None, True  # 成功但「无穿搭内容」
+
+    async def _frames(db, iid):
+        return ["kf/1.jpg"]  # 都有分析源，避免走 unavailable 分支
+
+    monkeypatch.setattr(ba, "_analyze_one", _empty)
+    monkeypatch.setattr(ba, "_resolve_frames_for", _frames)
+
+    async with async_session() as db:
+        await ba.execute_batch_analyze(db, await db.get(TaskQueue, task_id))
+
+    async with async_session() as db:
+        assert await db.get(Inspiration, "nc-img") is None  # 图片被物理删除
+        assert await db.get(Inspiration, "nc-vid") is not None  # 视频保留
+    async with async_session() as db:
+        refreshed = await db.get(TaskQueue, task_id)
+    assert refreshed.result["auto_deleted"] == 1
+    assert refreshed.result["auto_deleted_ids"] == ["nc-img"]
+
+
+async def test_execute_skips_deletion_when_flag_off(monkeypatch):
+    """开关关闭时不删（留给用户自己决定这些素材去留）。"""
+    await _insp("nc2")
+    task_id = await _task(ids=["nc2"])
+
+    async def _empty(sem, iid, frames):
+        return iid, True, None, True
+
+    async def _frames(db, iid):
+        return ["kf/1.jpg"]
+
+    monkeypatch.setattr(ba, "_analyze_one", _empty)
+    monkeypatch.setattr(ba, "_resolve_frames_for", _frames)
+    monkeypatch.setattr(settings, "auto_delete_no_content_images", False)
+
+    async with async_session() as db:
+        await ba.execute_batch_analyze(db, await db.get(TaskQueue, task_id))
+    async with async_session() as db:
+        assert await db.get(Inspiration, "nc2") is not None
+        refreshed = await db.get(TaskQueue, task_id)
+    assert refreshed.result["auto_deleted"] == 0
+
+
 # ── 执行 ──
 
 
@@ -244,7 +313,7 @@ async def test_execute_happy_path_records_counts(monkeypatch):
     task_id = await _task(ids=["e1", "e2"])
 
     async def _ok(sem, iid, frames):
-        return iid, True, None
+        return iid, True, None, False
 
     monkeypatch.setattr(ba, "_analyze_one", _ok)
 
@@ -269,8 +338,8 @@ async def test_execute_partial_failure_keeps_task_successful(monkeypatch):
 
     async def _mixed(sem, iid, frames):
         if iid == "p1":
-            return iid, False, "图片损坏"
-        return iid, True, None
+            return iid, False, "图片损坏", False
+        return iid, True, None, False
 
     monkeypatch.setattr(ba, "_analyze_one", _mixed)
 
@@ -290,7 +359,7 @@ async def test_execute_all_recoverable_failure_raises(monkeypatch):
     task_id = await _task(ids=["f1"])
 
     async def _fail(sem, iid, frames):
-        return iid, False, "无法连接 Ollama 服务"
+        return iid, False, "无法连接 Ollama 服务", False
 
     monkeypatch.setattr(ba, "_analyze_one", _fail)
 
@@ -341,7 +410,7 @@ async def test_execute_stops_when_status_changes(monkeypatch, new_status):
             row = await db.get(TaskQueue, task_id)
             row.status = new_status
             await db.commit()
-        return iid, True, None
+        return iid, True, None, False
 
     monkeypatch.setattr(ba, "_analyze_one", _analyze)
 

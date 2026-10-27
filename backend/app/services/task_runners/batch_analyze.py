@@ -16,6 +16,11 @@ from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration, analysis_log_filter
 from app.models.task import TaskQueue
 from app.services.ai_service import analyze_image, analyze_video
+from app.services.ai_service.analyze import (
+    analyze_image_detail,
+    analyze_video_detail,
+    write_unavailable_log,
+)
 from app.services.task_runners.common import (
     PermanentTaskError,
     RecoverableTaskError,
@@ -87,30 +92,34 @@ async def _last_analysis_error(db: AsyncSession, inspiration_id: str) -> str | N
 
 async def _analyze_one(
     sem: asyncio.Semaphore, inspiration_id: str, frames: list[str]
-) -> tuple[str, bool, str | None]:
-    """分析单个素材（使用独立数据库会话），返回 (素材 ID, 是否成功, 失败原因)。
+) -> tuple[str, bool, str | None, bool]:
+    """分析单个素材（使用独立数据库会话）。
 
     参数:
         sem: 批内并发信号量
         inspiration_id: 素材 ID
         frames: 分析源帧相对路径列表——图片为单元素，视频为采样关键帧
             （多帧时走 analyze_video 融合分析，单帧退化为 analyze_image）
+
+    Returns:
+        ``(素材 ID, 是否成功, 失败原因, 是否「无穿搭内容」)``。最后一项为 True 表示模型
+        返回了合法但全空的 JSON——调用方据此把**图片**物理删除（见主循环）。
     """
     async with sem:
         async with async_session() as db:
             if len(frames) > 1:
-                success = await analyze_video(db, inspiration_id, frames)
+                outcome = await analyze_video_detail(db, inspiration_id, frames)
             else:
-                success = await analyze_image(db, inspiration_id, frames[0])
-            if success:
-                return inspiration_id, True, None
+                outcome = await analyze_image_detail(db, inspiration_id, frames[0])
+            if outcome:
+                return inspiration_id, True, None, outcome.empty_payload
             error = await _last_analysis_error(db, inspiration_id)
             if not error:
                 # 日志未能读到失败原因（_write_analysis_log 内部吞异常时日志
                 # 可能未写入）：给出可辨识的兜底文案，避免「可恢复错误被误判
                 # 为永久错误」时连原因都查不到
                 error = "分析失败（未能记录错误详情，可能日志写入异常）"
-            return inspiration_id, False, error
+            return inspiration_id, False, error, False
 
 
 async def _resolve_analysis_frames(
@@ -225,6 +234,7 @@ def _raise_if_all_failed(
     success_count: int,
     failed_items: list[tuple[str, str | None]],
     recoverable_failed: list[str],
+    unavailable: int = 0,
 ) -> None:
     """整个批次全部失败时按错误类型决定是否自动重试。
 
@@ -234,17 +244,25 @@ def _raise_if_all_failed(
     ``failed_items`` 为空（无一例真正进入分析——例如本批全是关键帧提取失败、
     已在执行器内计入 unavailable 的视频）视为「没有失败样本」，直接返回，
     避免下面取 ``failed_items[0]`` 越界。
+
+    文案口径：失败数用 ``len(failed_items)``（**不是** ``task_total``）——历史实现拿
+    task_total 当失败数，于是「144 张里 134 张被跳过、10 张真失败」会被报成
+    「144 张全部失败：图片损坏/文件不存在」，纯属误导。``unavailable``（分析源不可用
+    被跳过的）单独列出，不再混进「失败」。
     """
     if task_total == 0 or success_count > 0 or not failed_items:
         return
+    scope = f"失败 {len(failed_items)} 张"
+    if unavailable:
+        scope += f"，另有 {unavailable} 张分析源不可用被跳过"
     if recoverable_failed:
         sample = failed_items[0][1] or "未知错误"
         raise RecoverableTaskError(
-            f"批量分析全部失败（{task_total} 张），存在疑似可恢复的系统性错误：{sample}"
+            f"批量分析全部失败（{scope}），存在疑似可恢复的系统性错误：{sample}"
         )
     sample = failed_items[0][1] or "未知错误"
     raise PermanentTaskError(
-        f"批量分析全部失败（{task_total} 张），均为永久错误（图片损坏/文件不存在等）：{sample}"
+        f"批量分析全部失败（{scope}），均为永久错误（图片损坏/文件不存在等）：{sample}"
     )
 
 
@@ -321,6 +339,8 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
     success_count = 0
     failed_items: list[tuple[str, str | None]] = []
     recoverable_failed: list[str] = []
+    # 「模型判定无穿搭内容」的素材：图片会在循环结束后物理删除（视频只保留空的成功日志）
+    no_content_ids: list[str] = []
 
     for start in range(0, len(items), concurrency):
         chunk = items[start:start + concurrency]
@@ -333,15 +353,21 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
                 frames = await _resolve_frames_for(db, iid)
                 if not frames:
                     unavailable += 1
-                    logger.warning(f"素材分析源不可用（视频关键帧提取失败），跳过: {iid}")
+                    reason = "分析源不可用：视频关键帧提取失败（视频过短或 ffmpeg 异常）"
+                    logger.warning(f"素材分析源不可用，跳过: {iid}")
+                    # 落一条失败日志：否则素材既不算已分析、历史里也看不到原因，
+                    # 用户只能看到一个永远清不掉的「未分析」计数
+                    await write_unavailable_log(iid, reason)
                     continue
             resolvable.append((iid, frames))
         results = await asyncio.gather(
             *(_analyze_one(sem, iid, frames) for iid, frames in resolvable)
         )
-        for iid, ok, err in results:
+        for iid, ok, err, empty_payload in results:
             if ok:
                 success_count += 1
+                if empty_payload:
+                    no_content_ids.append(iid)
             else:
                 failed_items.append((iid, err))
                 if _is_recoverable_error(err or ""):
@@ -372,7 +398,39 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
             )
             return
 
-    _raise_if_all_failed(task.total, success_count, failed_items, recoverable_failed)
+    # 「模型判定无穿搭内容」→ 图片**物理删除**（不进垃圾桶）。
+    # 为什么删：这类素材（蛋糕照/风景照/纯文字截图）留着只占空间，且会让「未分析」
+    # 计数永远清不掉；只删图片，视频保留（见 inspiration_trash.hard_delete_no_content）。
+    deleted_ids: list[str] = []
+    from app.config import settings as _settings
+
+    if no_content_ids and _settings.auto_delete_no_content_images:
+        from app.services.inspiration_trash import hard_delete_no_content
+
+        for chunk in _chunked(no_content_ids):
+            rows = await db.execute(
+                select(Inspiration.id, Inspiration.media_type).where(
+                    Inspiration.id.in_(chunk)
+                )
+            )
+            for iid, media_type in rows.all():
+                if media_type != "image":
+                    continue
+                try:
+                    if await hard_delete_no_content(db, iid):
+                        deleted_ids.append(iid)
+                except Exception as e:  # 单张删除失败不该让整批任务崩
+                    logger.warning(f"自动删除无穿搭内容素材失败 {iid}: {e}")
+        if deleted_ids:
+            logger.info(f"批量分析顺手物理删除无穿搭内容图片 {len(deleted_ids)} 张")
+
+    _raise_if_all_failed(
+        task.total,
+        success_count,
+        failed_items,
+        recoverable_failed,
+        unavailable=unavailable,
+    )
 
     # 正常完成（部分图片失败也视为任务成功，失败详情写入结果）
     task.result = {
@@ -381,6 +439,8 @@ async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:
         "already_analyzed": already_analyzed,
         "unavailable": unavailable,
         "success_count": success_count,
+        "auto_deleted": len(deleted_ids),
+        "auto_deleted_ids": deleted_ids[:50],
         "failed_count": len(failed_items),
         "failed_ids": [iid for iid, _ in failed_items],
         "failed_errors": {iid: err for iid, err in failed_items if err},

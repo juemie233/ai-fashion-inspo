@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     ollama_vision_model: str = "qwen3-vl:8b-instruct"
     ollama_embedding_model: str = "all-minilm"
     ai_analysis_timeout: int = 300  # 秒（思考型模型推理耗时更长）
+    # 批量分析时，模型返回「合法但全空」的标签 JSON（= 这张图没有穿搭内容，如蛋糕照/
+    # 风景照/纯文字截图）就**物理删除该图片素材**（不进垃圾桶）。只删图片，视频保留。
+    # 想保留这些素材（例如留着做负样本）时设 false。
+    auto_delete_no_content_images: bool = True
     ai_low_confidence_threshold: float = 0.6
     ai_temperature: float = 0.7
     ai_top_p: float = 0.9

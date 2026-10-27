@@ -472,7 +472,7 @@ async def test_execute_batch_analyze_paused_early_return(client, monkeypatch):
                     update(TaskQueue).where(TaskQueue.id == tid).values(status="paused")
                 )
                 await s.commit()
-        return inspiration_id, True, None
+        return inspiration_id, True, None, False
 
     monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
 
@@ -533,7 +533,7 @@ async def test_execute_batch_analyze_returns_when_status_changed_to_pending(clie
                     )
                 )
                 await s.commit()
-        return inspiration_id, True, None
+        return inspiration_id, True, None, False
 
     monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
 
@@ -624,7 +624,7 @@ async def test_execute_batch_analyze_resolves_video_frames_lazily(client, monkey
 
     async def _fake_analyze_one(sem, iid, frames):
         seen.append(frames)
-        return iid, True, None
+        return iid, True, None, False
 
     monkeypatch.setattr(runner, "_analyze_one", _fake_analyze_one)
 

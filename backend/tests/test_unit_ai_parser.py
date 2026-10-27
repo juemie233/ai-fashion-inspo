@@ -3,6 +3,7 @@
 from app.services.ai_parser import (
     extract_tag_names,
     fix_python_sets,
+    is_empty_tag_payload,
     looks_truncated,
     parse_analysis_response,
     parse_is_outfit,
@@ -86,3 +87,37 @@ def test_extract_tag_names_length_boundary():
     """AI 打标长度过滤与低质命名阈值一致：默认 12 字保留、13 字丢弃。"""
     assert extract_tag_names("一二三四五六七八九十甲乙") == ["一二三四五六七八九十甲乙"]
     assert extract_tag_names("一二三四五六七八九十甲乙丙") == []
+
+
+class TestIsEmptyTagPayload:
+    """「合法但全空」判定：模型对没有穿搭内容的图片会正常返回全空 JSON。
+
+    这条判定决定了两件事：这类结果**不算分析失败**（否则素材永远挂在未分析里），
+    以及批量分析是否物理删除该图片。误判成 False 会让非穿搭图片赖在库里，
+    误判成 True 会删掉真素材——所以边界要逐条钉住。
+    """
+
+    def test_all_empty_lists_is_empty(self):
+        assert is_empty_tag_payload(
+            {
+                "style": [],
+                "items": [],
+                "fit": [],
+                "dominant_colors": [],
+            }
+        )
+
+    def test_any_non_empty_list_is_not_empty(self):
+        assert not is_empty_tag_payload({"style": [], "items": ["阔腿裤"]})
+        assert not is_empty_tag_payload({"dominant_colors": ["#ffffff"]})
+
+    def test_mixed_scalar_values(self):
+        """空串/None/0 都算空；非空字符串算有内容。"""
+        assert is_empty_tag_payload({"negative": None, "note": "", "count": 0})
+        assert not is_empty_tag_payload({"note": "有内容"})
+
+    def test_unparsed_payload_is_not_empty(self):
+        """解析失败（空 dict / None / 非 dict）不算「合法但全空」——仍按失败处理。"""
+        assert not is_empty_tag_payload({})
+        assert not is_empty_tag_payload(None)  # type: ignore[arg-type]
+        assert not is_empty_tag_payload(["a"])  # type: ignore[arg-type]

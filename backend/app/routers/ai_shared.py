@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 
 from app.database import async_session
 from app.models.inspiration import AIAnalysisLog, Inspiration
+from app.services.ai_service.analyze import write_unavailable_log
 
 logger = logging.getLogger(__name__)
 
@@ -64,28 +65,6 @@ async def _resolve_analysis_frames(inspiration) -> list[str]:
     return await video_service.resolve_analysis_frames(inspiration)
 
 
-async def _write_unresolvable_log(inspiration_id: str, error: str) -> None:
-    """写入「分析源无法解析」的失败日志（与 analyze_image 失败日志同口径，
-    保证任务执行器能读到失败原因、历史页能看到失败记录）。"""
-    from app.config import settings
-
-    try:
-        async with async_session() as db:
-            db.add(
-                AIAnalysisLog(
-                    inspiration_id=inspiration_id,
-                    model_name=settings.ollama_vision_model,
-                    model_version=settings.ollama_vision_model,
-                    prompt_version="",
-                    processing_time_ms=0,
-                    error=error,
-                )
-            )
-            await db.commit()
-    except Exception as log_err:
-        logger.error(f"写入分析源解析失败日志出错 {inspiration_id}: {log_err}")
-
-
 async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> None:
     """后台任务：对素材执行 AI 分析并保存标签（带并发控制 + 任务追踪）。
 
@@ -133,7 +112,7 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                         inspiration = result.scalar_one_or_none()
                     if inspiration is None:
                         logger.warning(f"分析源解析失败（素材不存在）: {inspiration_id}")
-                        await _write_unresolvable_log(
+                        await write_unavailable_log(
                             inspiration_id, "分析失败：素材不存在"
                         )
                         return
@@ -142,7 +121,7 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                         logger.warning(
                             f"分析源解析失败（视频关键帧提取失败）: {inspiration_id}"
                         )
-                        await _write_unresolvable_log(
+                        await write_unavailable_log(
                             inspiration_id,
                             "分析失败：视频关键帧提取失败（视频文件缺失或 ffmpeg 异常）",
                         )
@@ -152,9 +131,11 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                 async with async_session() as db:
                     if len(frames) > 1:
                         # 视频：多帧融合分析（标签按帧融合后一次落库，单条日志）
-                        success = await analyze_video(db, inspiration_id, frames)
+                        outcome = await analyze_video(db, inspiration_id, frames)
                     else:
-                        success = await analyze_image(db, inspiration_id, frames[0])
+                        outcome = await analyze_image(db, inspiration_id, frames[0])
+                    # AnalysisOutcome 保留「是否无穿搭内容」等细节；对外只播布尔值
+                    success = bool(outcome)
                     # 仅分析成功时删除该素材的旧失败日志
                     if success:
                         old_logs = await db.execute(

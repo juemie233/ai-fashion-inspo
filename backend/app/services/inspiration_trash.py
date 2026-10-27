@@ -149,6 +149,51 @@ async def batch_trash_inspirations(
     return {"trashed": trashed, "skipped": skipped}
 
 
+async def _purge_inspiration(
+    db: AsyncSession,
+    inspiration: Inspiration,
+    *,
+    action: str,
+    detail: str,
+) -> None:
+    """物理删除一个素材：写墓碑 → 删库提交 → 删向量/文件/关键帧 → 写审计。
+
+    顺序与 ``delete_inspiration`` 历史实现一致：**先 DB 落库成功再删磁盘/向量**，
+    避免「文件已删但事务提交失败」产生指向不存在文件的悬空记录。属性在提交前
+    先取出来（``expire_on_commit=False`` 之外再加一层保险）。
+
+    Args:
+        action: 审计动作名（``delete`` 手动彻底删除 / ``auto_delete_no_content`` 自动清理）。
+        detail: 审计详情文案。
+    """
+    from app.services import vector_store
+
+    inspiration_id = inspiration.id
+    file_path = inspiration.file_path
+    thumbnail_path = inspiration.thumbnail_path
+
+    # 写入墓碑表（防止重复采集：否则删掉的无穿搭素材会被采集器再抓回来）
+    await seal_urls(db, [inspiration.source_url])
+
+    await db.delete(inspiration)
+    await db.commit()
+
+    # 记录审计：物理删除不可恢复，必须留痕（写入在主事务提交后）
+    await record_audit_log(action=action, count=1, detail=detail)
+
+    # 提交成功后同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
+    if vector_store.is_lancedb_available():
+        await vector_store.delete_inspiration_vectors(inspiration_id)
+
+    # 物理删除文件（删除失败仅记日志，不抛异常）
+    delete_files(file_path, thumbnail_path)
+
+    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
+    from app.services.video_service import cleanup_keyframes
+
+    await cleanup_keyframes(inspiration_id)
+
+
 async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
     """删除灵感素材及其对应的磁盘文件，不存在则抛出 404。
 
@@ -157,8 +202,6 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
       防止误调用绕过软删除生命周期直接永久删除；
     - 物理删除属不可恢复的破坏性操作，写入审计留痕（与 trash/restore/purge 一致）。
     """
-    from app.services import vector_store
-
     result = await db.execute(
         select(Inspiration).where(Inspiration.id == inspiration_id)
     )
@@ -171,33 +214,41 @@ async def delete_inspiration(db: AsyncSession, inspiration_id: str) -> None:
             detail="素材不在垃圾桶中，请先移入垃圾桶（软删除）后再彻底删除",
         )
 
-    # 写入墓碑表（防止重复采集）
-    await seal_urls(db, [inspiration.source_url])
-
-    # 先删除数据库记录并提交（与 purge_trash / batch_delete 等路径一致：DB
-    # 落库成功后再删磁盘文件/向量），避免「文件已删但事务提交失败」产生
-    # 指向不存在文件的悬空记录
-    await db.delete(inspiration)
-    await db.commit()
-
-    # 记录审计：物理删除素材属不可恢复的破坏性操作，必须留痕（写入在主事务提交后）
-    await record_audit_log(
+    await _purge_inspiration(
+        db,
+        inspiration,
         action="delete",
-        count=1,
         detail=f"彻底删除素材 {inspiration_id}（垃圾桶中物理删除）",
     )
 
-    # 提交成功后同步删除向量库中的文本/图像向量（LanceDB 未安装时静默跳过）
-    if vector_store.is_lancedb_available():
-        await vector_store.delete_inspiration_vectors(inspiration.id)
 
-    # 物理删除文件（删除失败仅记日志，不抛异常）
-    delete_files(inspiration.file_path, inspiration.thumbnail_path)
+async def hard_delete_no_content(db: AsyncSession, inspiration_id: str) -> bool:
+    """物理删除「AI 判定没有穿搭内容」的**图片**素材（不进垃圾桶、不可恢复）。
 
-    # 同步清理关键帧目录（视频素材；非视频目录不存在，幂等）
-    from app.services.video_service import cleanup_keyframes
+    为什么允许绕过「先进垃圾桶」这道闸：这不是用户的删除操作，而是分析链路的自动
+    清理——模型对非穿搭图片（蛋糕照、风景照、纯文字截图）会正常返回全空 JSON，这类
+    素材留在库里只是占空间、并让「未分析」计数永远清不掉。
 
-    await cleanup_keyframes(inspiration.id)
+    边界（都是刻意的）：
+    - **只删图片**：视频即使判定无内容也保留（删视频的风险远大于收益，且这类很少）；
+    - 写墓碑：同一 URL 不再被采集回来，否则「删了又采回来再删」会变成循环；
+    - 写审计 ``auto_delete_no_content``：可追溯谁在什么时候被自动删掉了。
+
+    Returns:
+        True 表示已物理删除；素材不存在或不是图片返回 False（不做事）。
+    """
+    inspiration = await db.get(Inspiration, inspiration_id)
+    if inspiration is None or inspiration.media_type != "image":
+        return False
+
+    logger.info(f"自动物理删除无穿搭内容素材: {inspiration_id}")
+    await _purge_inspiration(
+        db,
+        inspiration,
+        action="auto_delete_no_content",
+        detail=f"AI 判定无穿搭内容（全空标签），自动物理删除 {inspiration_id}",
+    )
+    return True
 
 
 async def trash_inspiration(

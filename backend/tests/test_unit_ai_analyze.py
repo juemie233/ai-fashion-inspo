@@ -453,16 +453,22 @@ async def test_analyze_video_all_frames_fail_returns_false(_fake_http):
     assert "全部关键帧分析失败" in (logs[0].error or "")
 
 
-async def test_analyze_video_zero_tags_counts_as_failure(_fake_http):
-    """帧解析成功但零标签：按失败计（否则「成功」却什么都没打上）。"""
+async def test_analyze_video_zero_tags_is_success_no_content(_fake_http):
+    """帧都解析成功但零标签 = 模型判定「没有穿搭内容」：算成功，不再算失败。
+
+    回归（2026-10）：原先按失败计 → 这类素材永远挂在「未分析」里（实测 144 个未分析
+    里 10 个是这种：蛋糕照/风景照）。
+    """
     await _insp("v4", media_type="video")
     _fake_http["client"] = _FakeOllama([
         _Resp({"message": {"content": json.dumps({"items": []}, ensure_ascii=False)}}),
     ])
 
     async with async_session() as db:
-        ok = await az.analyze_video(db, "v4", ["kf/1.jpg"])
+        outcome = await az.analyze_video_detail(db, "v4", ["kf/1.jpg"])
 
-    assert ok is False
+    assert outcome.success is True
+    assert outcome.empty_payload is True
     logs = await _logs("v4")
-    assert "未提取到有效标签" in (logs[0].error or "")
+    assert logs[0].error is None  # 成功日志：素材从此离开「未分析」
+

@@ -13,11 +13,17 @@ import json
 import re
 import time
 
+from dataclasses import dataclass
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.inspiration import AIAnalysisLog, AIAnalysisTag, Inspiration
-from app.services.ai_parser import looks_truncated, parse_analysis_response
+from app.services.ai_parser import (
+    is_empty_tag_payload,
+    looks_truncated,
+    parse_analysis_response,
+)
 from app.services.ai_service.common import _read_image_base64, logger
 from app.services.ai_tag_saver import (
     clear_ai_tags,
@@ -29,6 +35,58 @@ from app.services.ai_tag_saver import (
 from app.services.model_config import get_model_config
 from app.services.model_prompt import get_model_prompt
 from app.services.tag_service import get_or_create_tag
+
+
+@dataclass(frozen=True)
+class AnalysisOutcome:
+    """一次分析的结果（比裸 bool 多两个信息：是否「无穿搭内容」、失败原因）。
+
+    为什么不再返回裸 bool：批量分析要据此决定「这张图片没有穿搭内容 → 物理删除」，
+    调用方还要在任务结果里区分「成功 / 无内容 / 失败」。保留 ``__bool__`` 让所有
+    ``if ok:`` 的老调用点无需改动。
+
+    Attributes:
+        success: 分析成功（含「模型判定无穿搭内容」这种情况）。
+        empty_payload: 模型返回了**合法但全空**的 JSON（不是解析失败）。
+        error: 失败原因（成功时为 None）。
+    """
+
+    success: bool
+    empty_payload: bool = False
+    error: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
+async def write_unavailable_log(inspiration_id: str, error: str) -> None:
+    """写入「分析源不可用」的失败日志（视频抽帧失败 / 素材已删除）。
+
+    为什么必须落一条日志：抽帧失败原先只记 logger，素材既没有成功日志（仍算未分析）
+    也没有失败记录（历史里看不到原因），用户只能看到一个永远清不掉的「未分析」计数。
+    落库后它至少能在分析历史里被看见、被筛出来人工处理。
+
+    Args:
+        inspiration_id: 素材 ID。
+        error: 失败原因（会直接展示在分析历史里）。
+    """
+    from app.database import async_session
+
+    try:
+        async with async_session() as db:
+            db.add(
+                AIAnalysisLog(
+                    inspiration_id=inspiration_id,
+                    model_name=settings.ollama_vision_model,
+                    model_version=settings.ollama_vision_model,
+                    prompt_version="",
+                    processing_time_ms=0,
+                    error=error,
+                )
+            )
+            await db.commit()
+    except Exception as log_err:  # 日志失败不能影响分析主流程
+        logger.error(f"写入分析源不可用日志出错 {inspiration_id}: {log_err}")
 
 
 def _prompt_version(prompt: str) -> str:
@@ -207,8 +265,13 @@ async def _parse_and_save_tags(
                 await get_or_create_tag(db, name, category, "ai_generated")
             tag_count = len(name_categories)
         if tag_count == 0:
-            error_msg = f"AI 未提取到任何有效标签（原始输出 {len(raw_response)} 字符）"
-            logger.warning(f"零标签分析 {inspiration_id}: {raw_response[:200]}")
+            if is_empty_tag_payload(tags_data):
+                # 合法但全空：模型正确回答「这张图没有穿搭内容」（蛋糕/风景/纯文字截图），
+                # 不是失败。记成功 + 0 标签，素材才能离开「未分析」；是否物理删除由调用方决定
+                logger.info(f"分析结果无穿搭内容（模型未给出任何标签）: {inspiration_id}")
+            else:
+                error_msg = f"AI 未提取到任何有效标签（原始输出 {len(raw_response)} 字符）"
+                logger.warning(f"零标签分析 {inspiration_id}: {raw_response[:200]}")
 
     return tags_data, extracted_tags, error_msg
 
@@ -290,7 +353,7 @@ async def _write_analysis_log(
             pass
 
 
-async def analyze_image(
+async def analyze_image_detail(
     db: AsyncSession,
     inspiration_id: str,
     file_path: str,
@@ -310,7 +373,9 @@ async def analyze_image(
             素材的正式标签（inspiration_tags）与主色调字段保持不变
 
     返回:
-        True 表示分析成功（无错误），False 表示分析失败
+        :class:`AnalysisOutcome`：``success`` 为真表示分析成功（含模型判定「无穿搭内容」
+        的情况）；``empty_payload`` 标记模型返回了合法但全空的 JSON——调用方据此决定
+        是否物理删除这张图片（批量分析里会删，详见 batch_analyze）。
     """
     used_model = model_name or settings.ollama_vision_model
     start_time = time.time()
@@ -319,6 +384,7 @@ async def analyze_image(
     used_prompt = ""
     extracted_tags: list[tuple[str, str, float]] = []
     success = False
+    empty_payload = False
 
     try:
         image_data, file_size_mb = await _read_image_base64(file_path)
@@ -340,6 +406,8 @@ async def analyze_image(
         # 与第一轮结论不一致时改写 items（如「黑色过膝袜」验证为连裤袜）。
         # 日志 raw_response 保留模型原始输出以便追溯；验证失败静默按原结果保存。
         tags_data = parse_analysis_response(raw_response)
+        # 「合法但全空」要区分于「解析失败」：前者是模型说「没有穿搭内容」
+        empty_payload = is_empty_tag_payload(tags_data)
         if tags_data:
             from app.services.ai_service.sock_verify import maybe_verify_socks
 
@@ -400,10 +468,34 @@ async def analyze_image(
 
     # 注意：return 必须放在 finally 之外。放在 finally 里会**吞掉** try 块的异常
     # （Python 语义：finally 中的 return 会取代正在传播的异常），导致失败被伪装成正常返回。
-    return success
+    return AnalysisOutcome(success=success, empty_payload=empty_payload, error=error_msg)
 
 
-async def analyze_video(
+async def analyze_image(
+    db: AsyncSession,
+    inspiration_id: str,
+    file_path: str,
+    model_name: str | None = None,
+    prompt: str | None = None,
+    apply_tags: bool = True,
+) -> bool:
+    """分析单张图片，返回是否成功（保留既有布尔契约）。
+
+    细节（是否「无穿搭内容」）请看 :func:`analyze_image_detail`：批量分析需要它来
+    决定是否物理删除非穿搭图片；其余调用方只关心成败，用这个包装即可。
+    """
+    outcome = await analyze_image_detail(
+        db,
+        inspiration_id,
+        file_path,
+        model_name=model_name,
+        prompt=prompt,
+        apply_tags=apply_tags,
+    )
+    return bool(outcome)
+
+
+async def analyze_video_detail(
     db: AsyncSession,
     inspiration_id: str,
     frame_paths: list[str],
@@ -430,7 +522,8 @@ async def analyze_video(
         apply_tags: 是否把融合标签写入素材；False 时只写日志与快照
 
     返回:
-        True 表示至少一帧分析成功；全部帧失败返回 False
+        :class:`AnalysisOutcome`：至少一帧解析成功即 ``success``；``empty_payload`` 表示
+        帧都解析成功但一条标签都没得到（无穿搭内容）。视频不做自动删除（仅图片删）。
     """
     if not frame_paths:
         logger.warning(f"视频分析无可用关键帧: {inspiration_id}")
@@ -470,12 +563,15 @@ async def analyze_video(
             frame_errors.append(f"第 {idx} 帧: {e}")
             logger.warning(f"视频第 {idx}/{len(frame_paths)} 帧分析失败 {inspiration_id}: {e}")
 
-    # 判定整体成败：至少一帧解析出结果即视为成功；全部失败或零标签按失败计
+    # 判定整体成败：至少一帧解析出结果即视为成功。
+    # 「帧都解析成功但一条标签都没有」= 模型判定没有穿搭内容（短视频的封面帧、
+    # 纯环境镜头），属正确回答而不是失败——记成功 + 0 标签，让它离开「未分析」。
     error_msg: str | None = None
+    empty_payload = ok_frames > 0 and not fused
     if ok_frames == 0:
         error_msg = "视频全部关键帧分析失败：" + ("；".join(frame_errors[:3]) or "未知错误")
-    elif not fused:
-        error_msg = f"视频 {ok_frames} 个关键帧均未提取到有效标签"
+    elif empty_payload:
+        logger.info(f"视频分析结果无穿搭内容（{ok_frames} 帧均无标签）: {inspiration_id}")
 
     success = error_msg is None
 
@@ -527,7 +623,30 @@ async def analyze_video(
         f"视频多帧分析完成 {inspiration_id}: {ok_frames}/{len(frame_paths)} 帧有效，"
         f"融合标签 {len(extracted)} 个，成功={success}"
     )
-    return success
+    return AnalysisOutcome(success=success, empty_payload=empty_payload, error=error_msg)
+
+
+async def analyze_video(
+    db: AsyncSession,
+    inspiration_id: str,
+    frame_paths: list[str],
+    model_name: str | None = None,
+    prompt: str | None = None,
+    apply_tags: bool = True,
+) -> bool:
+    """多帧融合分析视频，返回是否成功（保留既有布尔契约）。
+
+    细节见 :func:`analyze_video_detail`。
+    """
+    outcome = await analyze_video_detail(
+        db,
+        inspiration_id,
+        frame_paths,
+        model_name=model_name,
+        prompt=prompt,
+        apply_tags=apply_tags,
+    )
+    return bool(outcome)
 
 
 def _http_error_message(

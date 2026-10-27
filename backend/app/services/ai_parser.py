@@ -56,6 +56,26 @@ def fix_python_sets(text: str) -> str:
     )
 
 
+def is_empty_tag_payload(data: dict) -> bool:
+    """判断解析结果是否为「合法但全空」：字典非空，但每个值都是空列表/空串/None。
+
+    为什么要单独判定：模型对**没有穿搭内容**的图片（蛋糕、风景、纯文字截图）会
+    正常返回 ``{"style": [], "items": [], ...}``——那是正确答案，不是解析失败。
+    历史实现把它记成「AI 未提取到任何有效标签」的失败日志，于是这类素材永远挂在
+    「未分析」里（2026-10 实测：144 个未分析里有 10 个就是这种）。
+
+    Args:
+        data: ``parse_analysis_response`` 的返回值。
+
+    Returns:
+        True 表示「解析成功、但模型一条标签都没给」；解析失败（非 dict/空 dict）返回 False，
+        那种情况仍按失败处理。
+    """
+    if not data or not isinstance(data, dict):
+        return False
+    return all(not value for value in data.values())
+
+
 def parse_analysis_response(raw: str) -> dict:
     """从模型响应中提取并解析 JSON。"""
     text = raw.strip()
