@@ -135,3 +135,62 @@ describe('GenerateParamForm 档位时序', () => {
     expect(checkedValue(wrapper)).toBe('qwen_2_1_i2i')
   })
 })
+
+describe('已选参考图缩略图（描述框上方）', () => {
+  const REFS = [
+    { id: 'ref-a', file_path: 'images/a.jpg', thumbnail_path: 'thumbnails/a.jpg' },
+    { id: 'ref-b', file_path: 'images/b.jpg', thumbnail_path: null },
+  ]
+
+  it('图生图下渲染缩略图条：编号、顺序与提示', async () => {
+    const wrapper = mountForm({
+      status: READY_STATUS,
+      ready: true,
+      initialRefIds: 'ref-a, ref-b',
+      referenceItems: REFS,
+    })
+    await flushPromises()
+
+    const thumbs = wrapper.findAll('.gen-ref-thumb')
+    expect(thumbs).toHaveLength(2)
+    // 编号即参考顺序（第 1 张是主参考）
+    expect(thumbs[0].find('.gen-ref-thumb-index').text()).toBe('1')
+    expect(thumbs[1].find('.gen-ref-thumb-index').text()).toBe('2')
+    // 缩略图优先用 thumbnail_path，缺了退回原图
+    expect(thumbs[0].find('img').attributes('src')).toContain('thumbnails/a.jpg')
+    expect(thumbs[1].find('img').attributes('src')).toContain('images/b.jpg')
+    expect(wrapper.text()).toContain('已选参考（2）')
+  })
+
+  it('点某张缩略图抛出下标（视图据此打开大图并定位）', async () => {
+    const wrapper = mountForm({
+      status: READY_STATUS,
+      ready: true,
+      initialRefIds: 'ref-a, ref-b',
+      referenceItems: REFS,
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.gen-ref-thumb')[1].trigger('click')
+    expect(wrapper.emitted('browse-references')?.[0]).toEqual([1])
+  })
+
+  it('参考 id 变化时抛给视图（视图据此拉缩略图），挂载时也抛一次', async () => {
+    const wrapper = mountForm({ status: READY_STATUS, ready: true, initialRefIds: 'ref-a' })
+    await flushPromises()
+    // 首次渲染（此时还没读到 initialRefIds）会先抛一次空数组，onMounted 预填后补发真实的
+    expect((wrapper.emitted('reference-ids-change') ?? []).at(-1)?.[0]).toEqual(['ref-a'])
+
+    // 手输多个 id：同样抛出去（顺序保持不变）
+    const input = wrapper.find('input[placeholder*="参考素材 ID"]')
+    await input.setValue('ref-a, ref-b')
+    const events = wrapper.emitted('reference-ids-change') ?? []
+    expect(events.at(-1)?.[0]).toEqual(['ref-a', 'ref-b'])
+  })
+
+  it('没有已选参考时不渲染缩略图条（不占描述框的空间）', async () => {
+    const wrapper = mountForm({ status: READY_STATUS, ready: true, referenceItems: [] })
+    await flushPromises()
+    expect(wrapper.find('.gen-ref-strip').exists()).toBe(false)
+  })
+})

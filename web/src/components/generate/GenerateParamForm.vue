@@ -13,6 +13,7 @@ import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { shortModelLabel } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
   /** 出图环境状态（档位表 / 就绪标记都来自它；null = 还没拉到） */
@@ -40,12 +41,22 @@ const props = defineProps<{
   initialModelKey?: string
   /** 从素材反推描述（沿用视图里 useImageGen 的实现） */
   promptFrom: (ids: string[]) => Promise<string | null>
+  /** 已选参考图的缩略图数据（视图按 referenceIds 拉好后传下来；顺序=参考顺序）。
+   *
+   *  为什么由视图拉：这个面板只该管表单状态，素材元数据（缩略图/原图路径）在视图层
+   *  已经有一份拉取能力（对比弹窗也用它），两处都自己拉会重复请求同一批素材。
+   */
+  referenceItems?: Array<{ id: string; file_path: string; thumbnail_path?: string | null }>
 }>()
 
 const emit = defineEmits<{
   /** 提交生成：面板把参数拼好后交给视图，由 useImageGen 提交 */
   (e: 'submit', payload: CreateRunPayload): void
   (e: 'cancel'): void
+  /** 参考图 id 变化（视图据此刷新缩略图；空数组=已清空） */
+  (e: 'reference-ids-change', ids: string[]): void
+  /** 点了某张已选参考的缩略图：视图打开大图浏览（参数=该张在参考顺序里的下标） */
+  (e: 'browse-references', index: number): void
 }>()
 
 // ── 模型档位（一个档位就决定生成方式：文生图 / 参考图改款）──
@@ -230,6 +241,19 @@ function onPickConfirm(ids: string[]): void {
   refIdsText.value = ids.join(', ')
 }
 
+// 参考 id 一变就抛给视图（缩略图条由视图拉数据后回传 referenceItems）。
+// 用 join 后的字符串做 watch 键：computed 每次都是新数组，直接 watch 会反复触发。
+watch(
+  () => refIdsList.value.join(','),
+  () => emit('reference-ids-change', refIdsList.value),
+  { immediate: true },
+)
+
+/** 已选参考的缩略图地址（优先缩略图，省流量；没有则退回原图） */
+function refThumb(item: { file_path: string; thumbnail_path?: string | null }): string {
+  return getFileUrl(item.thumbnail_path || item.file_path)
+}
+
 // ── 出图配方（localStorage）──
 const { presets, save: savePreset, remove: removePreset } = useGenerationPresets()
 const presetName = ref('')
@@ -361,6 +385,27 @@ onMounted(() => {
     {{ refIdsList.length }} 个参考。
   </div>
 
+  <!-- 已选参考缩略图：写描述前先确认「选了哪几张、顺序对不对」，点任意一张看大图 -->
+  <div v-if="kind === 'i2i' && (referenceItems?.length ?? 0) > 0" class="gen-ref-strip">
+    <div class="gen-ref-strip-head">
+      <span class="gen-label gen-label--inline">已选参考（{{ referenceItems?.length }}）</span>
+      <span class="gen-hint">点任意一张看大图 · 第 1 张是主参考</span>
+    </div>
+    <div class="gen-ref-thumbs">
+      <button
+        v-for="(item, idx) in referenceItems"
+        :key="item.id"
+        type="button"
+        class="gen-ref-thumb"
+        :title="`第 ${idx + 1} 张 · ${item.id}`"
+        @click="emit('browse-references', idx)"
+      >
+        <img :src="refThumb(item)" alt="" loading="lazy" />
+        <span class="gen-ref-thumb-index">{{ idx + 1 }}</span>
+      </button>
+    </div>
+  </div>
+
   <div class="gen-label">描述（prompt）</div>
   <a-textarea
     v-model="prompt"
@@ -447,6 +492,68 @@ onMounted(() => {
    它们同时被环境提示、结果区与历史表用到，scoped 样式不能跨组件继承，故各自保留。 */
 .gen-alert {
   margin-bottom: 12px;
+}
+
+/* 已选参考缩略图条：一行铺开，超出可横向滑动（10 张参考也不会把描述框挤下去） */
+.gen-ref-strip {
+  margin: 4px 0 10px;
+}
+
+.gen-ref-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.gen-label--inline {
+  margin-bottom: 0;
+}
+
+.gen-ref-thumbs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.gen-ref-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-fill-2);
+  cursor: zoom-in;
+}
+
+.gen-ref-thumb:hover {
+  border-color: rgb(var(--primary-5));
+}
+
+.gen-ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gen-ref-thumb-index {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 60%);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
 }
 .gen-model-loading {
   padding: 4px 0 10px;

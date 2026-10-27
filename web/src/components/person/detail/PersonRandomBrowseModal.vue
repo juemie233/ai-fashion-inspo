@@ -68,12 +68,15 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 // 键盘只在弹窗打开时挂载（与出图对比弹窗同一约定：别在全局留监听）
+// immediate：组件有可能「挂着就已经打开」（父级先置 true 再渲染），
+// 否则第一次打开时键盘不生效，要关了再开才行
 watch(
   () => props.visible,
   (open) => {
     if (open) window.addEventListener('keydown', onKeydown)
     else window.removeEventListener('keydown', onKeydown)
   },
+  { immediate: true },
 )
 
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))

@@ -16,6 +16,8 @@ import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPan
 import GenerateHistoryTable from '@/components/generate/GenerateHistoryTable.vue'
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
 import GenerateCompareModal from '@/components/generate/GenerateCompareModal.vue'
+import ReferenceGalleryModal from '@/components/generate/ReferenceGalleryModal.vue'
+import { fetchInspirations } from '@/api/inspirations'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { discardRun } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
@@ -143,6 +145,53 @@ const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim
 /** 从素材详情「图生图（未审查）」跳进来时显式指定的档位（缺省按图生图自动挑就绪档位） */
 const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
 
+// ── 已选参考图：拉缩略图供「描述框上方」的缩略图条与浏览大图 ──
+/** 面板抛上来的参考 id（顺序=参考顺序，第 1 张是主参考） */
+const referenceIds = ref<string[]>([])
+const referenceItems = ref<
+  Array<{ id: string; file_path: string; thumbnail_path?: string | null }>
+>([])
+const referenceGalleryVisible = ref(false)
+const referenceGalleryIndex = ref(0)
+
+async function loadReferenceItems(ids: string[]): Promise<void> {
+  if (!ids.length) {
+    referenceItems.value = []
+    return
+  }
+  try {
+    const data = await fetchInspirations({ ids: ids.join(','), size: ids.length })
+    // 后端返回顺序不保证：按参考顺序重排；已被删掉的 id 自然缺席（缩略图条会少几张）
+    const byId = new Map(data.items.map((i) => [i.id, i]))
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((i): i is (typeof data.items)[number] => Boolean(i))
+      .map((i) => ({
+        id: i.id,
+        file_path: i.file_path,
+        thumbnail_path: i.thumbnail_path,
+      }))
+    // 期间用户又改了选择：丢弃这次结果，避免旧结果覆盖新选择
+    if (referenceIds.value.join(',') !== ids.join(',')) return
+    referenceItems.value = ordered
+  } catch {
+    // 缩略图只是辅助：拉不到就不显示，不影响出图
+    referenceItems.value = []
+  }
+}
+
+/** 面板参考 id 变化：同步到本地并拉缩略图 */
+function onReferenceIdsChange(ids: string[]): void {
+  referenceIds.value = ids
+  void loadReferenceItems(ids)
+}
+
+function openReferenceGallery(index: number): void {
+  if (!referenceItems.value.length) return
+  referenceGalleryIndex.value = index
+  referenceGalleryVisible.value = true
+}
+
 // ── 对比视图（与「点图看大图」的灯箱是两条独立路径：各自的索引与状态）──
 const compareVisible = ref(false)
 const compareIndex = ref(0)
@@ -219,8 +268,11 @@ onUnmounted(stopPoll)
           :initial-model-key="initialModelKey"
           :models-meta-fallback="cachedModelsMeta"
           :prompt-from="promptFrom"
+          :reference-items="referenceItems"
           @submit="submit"
           @cancel="cancel"
+          @reference-ids-change="onReferenceIdsChange"
+          @browse-references="openReferenceGallery"
         />
       </a-card>
 
@@ -252,6 +304,13 @@ onUnmounted(stopPoll)
       :initial-index="lightboxIndex"
       :url-resolver="resolveCandidateUrl"
       @close="lightboxVisible = false"
+    />
+
+    <!-- 已选参考图的大图浏览（从描述框上方的缩略图条点进来） -->
+    <ReferenceGalleryModal
+      v-model:visible="referenceGalleryVisible"
+      :items="referenceItems"
+      :start-index="referenceGalleryIndex"
     />
 
     <!-- 对比：参考图 ↔ 生成图（独立弹窗；打开它不会影响候选勾选与灯箱状态） -->
