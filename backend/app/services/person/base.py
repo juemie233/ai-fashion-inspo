@@ -196,8 +196,11 @@ class PersonServiceBase:
             stmt = stmt.where(model.source == source)
 
         # 过滤：仅保留已注册人脸库的人物（人脸检测只匹配库内人物）
+        # face_embedding 是**关系**（特征在独立的一对一表里），关系属性不支持
+        # isnot(None)（SQLAlchemy 会抛 NotImplementedError → 接口 500）；
+        # 用 has() 生成 EXISTS 子查询，等价于「该人物有特征行」。
         if face_registered_only:
-            stmt = stmt.where(model.face_embedding.isnot(None))
+            stmt = stmt.where(model.face_embedding.has())
 
         # 人物组折叠：仅穿搭博主且不指定平台时生效（平铺分页交给 _list_grouped）
         if grouped and self.model is Blogger and not platform:
