@@ -221,3 +221,18 @@ select count(*) from user_info_web;                    -- 426
 - 逻辑：[usePersonDetail.ts](../web/src/composables/usePersonDetail.ts)
 - 后端路由：[routers/bloggers.py](../backend/app/routers/bloggers.py)、服务：[services/person/](../backend/app/services/person/)
 - 补全服务：[blogger_enrichment_service.py](../backend/app/services/blogger_enrichment_service.py)
+
+## 7. 落地补充：随机浏览（2026-10-28）
+
+方案之外补的一个小功能，解决「9 位博主的素材 500~3,426 条，分页翻不完」：
+
+- **接口**：`GET /api/bloggers/{id}/random?size=1..30` + 与 `/inspirations` **完全一致**的
+  筛选参数——所以在筛选结果里随机也成立；返回 `total`（满足筛选的素材数，前端据此
+  显示「从 N 张里随机」）。实测博主 287（3,261 条）随机抽 3 张 **47 ms**。
+- **交互**：素材区「🎲 随机浏览」→ 弹窗一次一张；「换一张」重新随机，「上一张」回溯
+  **本次浏览历史**（本地栈，不发请求——随机倒退会让人迷路）；空格/→ 换一张、← 上一张、
+  Esc 关闭；图片可「看大图」交给既有灯箱，视频直接内联播放。
+- **与全屏浏览的分工**：灯箱翻的是「当前页」固定列表（细看），随机浏览每次都是新结果（逛）。
+- **口径**：换人物即清空当前图与历史（否则会先看到上一位的图）；抽取中重复点击
+  只发一次请求（防连点乱序）；抽到重复不特殊处理（素材只有 1~4 条的 315 位博主，
+  强行去重会让「换一张」变成「换不出来」）。

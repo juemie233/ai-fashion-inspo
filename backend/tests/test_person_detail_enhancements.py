@@ -564,3 +564,87 @@ async def test_face_matched_filter_ignores_pending_and_excluded(client, make_ima
 
     assert result["total"] == 1
     assert result["items"][0]["inspiration_id"] == confirmed
+
+
+# ── 随机浏览 ──
+
+
+async def test_random_inspirations_only_own_materials(client, make_image):
+    """随机只在该人物自己的素材里抽（不能串到别人的素材）。"""
+    mine = _create_blogger(client, "随机的我")
+    other = _create_blogger(client, "别人")
+    my_ids = set()
+    for _ in range(3):
+        iid = _upload(client, make_image)
+        _link(client, iid, mine["id"])
+        my_ids.add(iid)
+    other_id = _upload(client, make_image)
+    _link(client, other_id, other["id"])
+
+    async with async_session() as db:
+        result = await blogger_service.random_inspirations(db, mine["id"], size=30)
+
+    returned = {item["inspiration_id"] for item in result["items"]}
+    assert returned == my_ids
+    assert other_id not in returned
+    assert result["total"] == 3
+
+
+async def test_random_inspirations_respects_filters(client, make_image):
+    """筛选条件同样生效（在筛选结果里随机），total 也随之变化。"""
+    blogger = _create_blogger(client, "随机筛选")
+    approved = _upload(client, make_image)
+    rejected = _upload(client, make_image)
+    for iid in (approved, rejected):
+        _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        (await db.get(Inspiration, approved)).quality_status = "approved"
+        (await db.get(Inspiration, rejected)).quality_status = "rejected"
+        await db.commit()
+
+    async with async_session() as db:
+        result = await blogger_service.random_inspirations(
+            db, blogger["id"], size=5, quality_status="rejected"
+        )
+
+    assert result["total"] == 1
+    assert [i["inspiration_id"] for i in result["items"]] == [rejected]
+
+
+async def test_random_inspirations_size_limit_and_unknown_person(client, make_image):
+    """size 生效（抽到的不重复）；人物不存在返回 None（路由层 404）。"""
+    blogger = _create_blogger(client, "随机条数")
+    ids = set()
+    for _ in range(5):
+        iid = _upload(client, make_image)
+        _link(client, iid, blogger["id"])
+        ids.add(iid)
+
+    async with async_session() as db:
+        result = await blogger_service.random_inspirations(db, blogger["id"], size=3)
+        missing = await blogger_service.random_inspirations(db, 999999, size=3)
+
+    assert len(result["items"]) == 3
+    assert len({i["inspiration_id"] for i in result["items"]}) == 3
+    assert {i["inspiration_id"] for i in result["items"]} <= ids
+    assert missing is None
+
+
+def test_random_endpoint_returns_items_and_404(client, make_image):
+    """接口：正常返回 {person, items, total}；不存在 404；size 越界 422。"""
+    blogger = _create_blogger(client, "随机接口")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+
+    resp = client.get(f"/api/bloggers/{blogger['id']}/random", params={"size": 1})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["inspiration_id"] == iid
+    assert body["person"]["id"] == blogger["id"]
+
+    assert client.get("/api/bloggers/999999/random").status_code == 404
+    assert (
+        client.get(f"/api/bloggers/{blogger['id']}/random", params={"size": 31}).status_code
+        == 422
+    )

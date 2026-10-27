@@ -107,6 +107,18 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
       return data
     },
 
+    /** 随机取该人物的素材（详情页「随机浏览」；筛选参数与列表接口一致） */
+    async fetchRandom(
+      id: number,
+      size: number = 1,
+      filters: PersonInspirationFilters = {},
+    ): Promise<PersonInspirationsOut> {
+      const { data } = await apiClient.get<PersonInspirationsOut>(`${base}/${id}/random`, {
+        params: { size, ...filters },
+      })
+      return data
+    },
+
     /** 人物洞察：近 12 个月新增 / 质量构成 / 首末素材时间（B3+B4） */
     async fetchInsights(id: number): Promise<PersonInsights> {
       const { data } = await apiClient.get<PersonInsights>(`${base}/${id}/insights`)

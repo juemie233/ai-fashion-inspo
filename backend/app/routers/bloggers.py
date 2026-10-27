@@ -708,6 +708,44 @@ async def blogger_inspirations(
     return result
 
 
+@router.get("/{blogger_id}/random")
+async def blogger_random_inspirations(
+    blogger_id: int,
+    size: int = Query(1, ge=1, le=30),
+    media_type: str | None = Query(None, pattern="^(image|video)$"),
+    quality_status: str | None = Query(None, pattern="^(approved|pending|rejected)$"),
+    tag_name: str | None = None,
+    rating_min: int | None = Query(None, ge=1, le=5),
+    favorite: bool = Query(False),
+    face_matched: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """随机取该博主的若干素材（详情页「随机浏览」）。
+
+    为什么单独一个接口：详情页素材可达 3,426 条，分页翻不完；随机浏览是「看看她都有
+    什么」的最短路径。筛选参数与 `/inspirations` **完全一致**，所以在当前筛选结果里
+    随机也成立（前端把同一份 filters 传进来即可）。
+
+    Returns:
+        ``{"person", "items": [...], "total": 满足筛选条件的素材总数}``；
+        人物不存在 404。
+    """
+    result = await blogger_service.random_inspirations(
+        db,
+        blogger_id,
+        size=size,
+        media_type=media_type,
+        quality_status=quality_status,
+        tag_name=tag_name,
+        rating_min=rating_min,
+        favorite=favorite,
+        face_matched=face_matched,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="博主未找到")
+    return result
+
+
 @router.get("/{blogger_id}/works")
 async def blogger_works(
     blogger_id: int,

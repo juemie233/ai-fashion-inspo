@@ -649,6 +649,102 @@ class PersonServiceBase:
             "size": size,
         }
 
+    async def random_inspirations(
+        self,
+        db: AsyncSession,
+        person_id: int,
+        size: int = 1,
+        *,
+        media_type: str | None = None,
+        quality_status: str | None = None,
+        tag_name: str | None = None,
+        rating_min: int | None = None,
+        favorite: bool = False,
+        face_matched: bool = False,
+    ) -> dict | None:
+        """随机取该人物的若干素材（详情页「随机浏览」）。
+
+        为什么需要：9 位博主的素材在 500~3,426 条，瀑布流按页翻几乎不可能逛完；
+        随机浏览是「想看看她都有什么」的最短路径（与分页、筛选共用同一套条件，
+        所以在筛选结果里随机也成立）。
+
+        实现要点：`ORDER BY random()` 在单人物子集上代价可接受（实测人物最多 3,426 条，
+        join 后随机排序 ~10~30ms）；`size` 由路由限制上限，避免一次捞回上千条。
+
+        Returns:
+            与 :meth:`list_inspirations` 同形（`items/total`），`total` 是该人物
+            **满足筛选条件**的素材总数（前端可显示「从 N 张里随机」）；人物不存在返回 None。
+        """
+        assert self.model is not None and self.link_model is not None
+        link_model, link_id = self.link_model, self._link_id_col()
+
+        person = await db.get(self.model, person_id)
+        if not person:
+            return None
+
+        filters = {
+            "person_id": person_id,
+            "media_type": media_type,
+            "quality_status": quality_status,
+            "tag_name": tag_name,
+            "rating_min": rating_min,
+            "favorite": favorite,
+            "face_matched": face_matched,
+        }
+        where = [
+            link_id == person_id,
+            Inspiration.deleted_at.is_(None),
+            *self._inspiration_filter_clauses(filters),
+        ]
+
+        total = (
+            await db.execute(
+                select(func.count())
+                .select_from(link_model)
+                .join(Inspiration, Inspiration.id == link_model.inspiration_id)
+                .where(*where)
+            )
+        ).scalar() or 0
+
+        rows = (
+            await db.execute(
+                select(
+                    Inspiration.id,
+                    Inspiration.file_path,
+                    Inspiration.thumbnail_path,
+                    Inspiration.media_type,
+                    Inspiration.created_at,
+                    link_model.confidence,
+                    Inspiration.quality_status,
+                    Inspiration.rating,
+                    Inspiration.is_favorite,
+                )
+                .join(Inspiration, Inspiration.id == link_model.inspiration_id)
+                .where(*where)
+                .order_by(func.random())
+                .limit(size)
+            )
+        ).all()
+
+        return {
+            "person": {"id": person.id, "name": person.name, "platform": person.platform},
+            "items": [
+                {
+                    "inspiration_id": row[0],
+                    "file_path": row[1],
+                    "thumbnail_path": row[2],
+                    "media_type": row[3],
+                    "confidence": round(row[5], 2) if row[5] else 0,
+                    "created_at": str(row[4]) if row[4] else None,
+                    "quality_status": row[6],
+                    "rating": row[7],
+                    "is_favorite": bool(row[8]),
+                }
+                for row in rows
+            ],
+            "total": total,
+        }
+
     async def list_works(
         self, db: AsyncSession, person_id: int, page: int, size: int
     ) -> dict | None:

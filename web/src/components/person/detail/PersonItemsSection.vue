@@ -51,6 +51,8 @@ const emit = defineEmits<{
   (e: 'page-change', page: number): void
   (e: 'works-page-change', page: number): void
   (e: 'open-lightbox'): void
+  /** 随机浏览：由视图打开随机浏览弹窗（用的是同一份筛选条件） */
+  (e: 'random-browse'): void
   (e: 'open-work', paths: string[]): void
   (e: 'enter-unbind'): void
   (e: 'exit-unbind'): void
@@ -199,6 +201,16 @@ function openWork(work: PersonWorkGroup): void {
           @click="emit('open-lightbox')"
         >
           🖼️ 全屏浏览
+        </a-button>
+        <!-- 随机浏览：素材 500+ 的博主靠这个才逛得动（与筛选条件共用） -->
+        <a-button
+          size="small"
+          secondary
+          :disabled="unbindMode || total === 0"
+          :title="total === 0 ? '该人物还没有素材' : '从当前筛选结果里随机抽一张来逛'"
+          @click="emit('random-browse')"
+        >
+          🎲 随机浏览
         </a-button>
         <a-button
           v-if="kind === 'blogger' && !unbindMode"
