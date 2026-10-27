@@ -184,7 +184,10 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
         f2_dir: f2 工作目录（其下有 douyin_users.db）。
 
     Returns:
-        {sec_user_id: {"nickname", "ip_location"}}；``ip_location`` 已按既有口径剥掉
+        {sec_user_id: {"nickname", "ip_location", "signature"?, "follower_count"?,
+        "following_count"?, "aweme_count"?, "total_favorited"?}}；
+        后四项仅在 f2 库有对应列时出现（详情页资料卡用，缺失即不展示）；
+        ``ip_location`` 已按既有口径剥掉
         「IP属地：」前缀（复用 ``fetch_xhs_following.parse_ip_location``，全角/半角
         冒号都认，裸值不会误判）。库/表/列缺失时返回空 dict。
     """
@@ -193,25 +196,51 @@ def load_f2_profiles(f2_dir: Path) -> dict[str, dict]:
     db = f2_dir / F2_AUTHOR_DB
     if not db.exists():
         return {}
+
+    # 资料列随 f2 版本演进：先试完整列集，缺列再退回「只有昵称+属地」的最小集。
+    # 为什么显式列名而不是 SELECT *：不同 f2 版本列序不同，按名取才不会默默错位。
+    full_cols = (
+        "sec_user_id, nickname, ip_location, signature, "
+        "follower_count, following_count, aweme_count, total_favorited"
+    )
+    minimal_cols = "sec_user_id, nickname, ip_location"
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        try:
-            rows = conn.execute("SELECT sec_user_id, nickname, ip_location FROM user_info_web").fetchall()
-        except sqlite3.OperationalError:
-            # 极小/旧版本的库可能没有 ip_location 列：没有可回填的字段，直接当空
+        for cols in (full_cols, minimal_cols):
+            try:
+                rows = conn.execute(f"SELECT {cols} FROM user_info_web").fetchall()
+                break
+            except sqlite3.OperationalError:
+                rows = None
+        if rows is None:
+            # 极小/旧版本的库连 ip_location 都没有：没有可回填的字段，直接当空
             return {}
     except sqlite3.Error:
         return {}
     finally:
         conn.close()
+
     profiles: dict[str, dict] = {}
-    for sec_user_id, nickname, ip_location in rows:
+    for row in rows:
+        sec_user_id, nickname, ip_location = row[0], row[1], row[2]
         if not sec_user_id:
             continue
-        profiles[sec_user_id] = {
+        profile: dict = {
             "nickname": nickname or "",
             "ip_location": parse_ip_location(ip_location or ""),
         }
+        if len(row) > 3:
+            # 完整列集：签名（简介原文）与三个统计数
+            profile["signature"] = (row[3] or "").strip()
+            for key, idx in (
+                ("follower_count", 4),
+                ("following_count", 5),
+                ("aweme_count", 6),
+                ("total_favorited", 7),
+            ):
+                value = row[idx]
+                profile[key] = int(value) if value not in (None, "") else None
+        profiles[sec_user_id] = profile
     return profiles
 
 

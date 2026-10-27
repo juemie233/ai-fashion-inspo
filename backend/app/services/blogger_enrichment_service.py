@@ -313,10 +313,107 @@ def load_f2_profile_map() -> dict[str, dict]:
         return {}
 
 
+async def backfill_douyin_profile_from_f2(
+    db: AsyncSession, blogger: Blogger, profiles: dict[str, dict]
+) -> dict:
+    """按 f2 用户库回填单个抖音博主的**资料卡**（IP 属地 + 统计快照 + 签名）。
+
+    为什么合并成一个函数：详情页「补齐资料」与批量「一键补全」必须同一套口径
+    （否则两处各写一份，日后必然漂移）。一次读库、一次写库，返回逐字段明细。
+
+    写入策略（都是「只补空缺 / 不猜」）：
+
+    - ``ip_location``：已有值不动（手填 / CSV 导入优先）；
+    - ``bio``：**仅当为空**时写入抖音签名，并打 ``bio_source='f2_signature'``
+      ——用户手改过简介就不再覆盖（A4 要能看出简介来源）；
+    - 四个统计数（粉丝 / 关注 / 作品 / 获赞）：总是刷新（同一个人不同时间差别很大，
+      旧值没有保留价值），同时写 ``stats_synced_at`` 标记快照时间；
+    - 统计列全为空的账号只写 IP，不把 ``stats_synced_at`` 打上（避免假装同步过）。
+
+    Args:
+        db: 数据库会话。
+        blogger: 抖音博主行。
+        profiles: :func:`load_f2_profile_map` 的结果（按 sec_user_id 索引）。
+
+    Returns:
+        ``{"blogger_id", "name", "status", "reason"?, "updated_fields": [...]}``，
+        status ∈ updated / skipped。
+    """
+    from app.models.inspiration import utcnow
+
+    detail = {"blogger_id": blogger.id, "name": blogger.name}
+
+    uid = (blogger.platform_user_id or "").strip()
+    if not uid:
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "缺少平台用户 ID（sec_user_id），本轮无法在 f2 用户库里定位；"
+                "补上 TA 的主页链接/sec_user_id 后再跑即可（不写跳过表，仍留在补全列表）"
+            ),
+        }
+
+    profile = profiles.get(uid)
+    if profile is None:
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "f2 用户库里没有这个账号：让 f2 采一次 TA 的主页后再跑即可"
+                "（不写跳过表，仍留在补全列表）"
+            ),
+        }
+
+    updated: list[str] = []
+
+    ip_location = str(profile.get("ip_location") or "").strip()
+    if ip_location and not blogger.ip_location:
+        blogger.ip_location = ip_location
+        updated.append("ip_location")
+
+    signature = str(profile.get("signature") or "").strip()
+    if signature and not (blogger.bio or "").strip():
+        blogger.bio = signature
+        blogger.bio_source = "f2_signature"
+        updated.append("bio")
+
+    stats = {
+        "follower_count": profile.get("follower_count"),
+        "following_count": profile.get("following_count"),
+        "aweme_count": profile.get("aweme_count"),
+        "total_favorited": profile.get("total_favorited"),
+    }
+    if any(v is not None for v in stats.values()):
+        for key, value in stats.items():
+            setattr(blogger, key, value)
+        blogger.stats_synced_at = utcnow()
+        updated.extend(k for k, v in stats.items() if v is not None)
+
+    if not updated:
+        return {
+            **detail,
+            "status": "skipped",
+            "reason": (
+                "f2 用户库里该账号没有可回填的资料（既无 IP 属地也无统计/签名）："
+                "让 f2 采一次 TA 的主页后再跑即可"
+            ),
+        }
+
+    await db.commit()
+    logger.info(
+        f"抖音博主 #{blogger.id}「{blogger.name}」资料已回填：{', '.join(updated)}"
+    )
+    return {**detail, "status": "updated", "updated_fields": updated}
+
+
 async def backfill_douyin_from_f2(
     db: AsyncSession, blogger: Blogger, profiles: dict[str, dict]
 ) -> dict:
     """按 f2 用户库回填单个抖音博主的 IP 属地（离线；只补空缺）。
+
+    ⚠ 新代码请用 :func:`backfill_douyin_profile_from_f2`（一次补齐 IP + 统计 + 签名）；
+    本函数保留给只关心属地的既有调用方，行为不变。
 
     Args:
         db: 数据库会话。

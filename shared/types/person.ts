@@ -51,6 +51,16 @@ export interface Person {
   inspiration_count?: number;
   /** 最近一次入库的素材时间（null/undefined = 还没有素材）：判断博主是否还在更新 */
   last_inspiration_at?: string | null;
+  /** 平台统计**快照**（来自 f2 用户库，离线可读；仅博主有，模特返回 null）：
+   *  必须与 stats_synced_at 一起展示，前端要写「同步于 X 天前」而不是当成实时值 */
+  follower_count?: number | null;
+  following_count?: number | null;
+  aweme_count?: number | null;
+  total_favorited?: number | null;
+  /** 简介来源：f2_signature（抖音签名原文）/ ai / manual（null = 早期数据） */
+  bio_source?: "f2_signature" | "ai" | "manual" | string | null;
+  /** 统计快照的采集时间 */
+  stats_synced_at?: string | null;
   /** 人物组 ID（方案 B，仅博主）：null/undefined = 独立账号；非空 = 与组内其它账号为同一人 */
   person_group_id?: number | null;
   /** 折叠视图：组内其余账号（展开显示用）；独立账号/平铺视图为空数组 */

@@ -1,3 +1,5 @@
+import { formatCount, formatAge } from '../format'
+
 /** 格式化工具函数单测。 */
 
 import { describe, expect, it } from 'vitest'
@@ -162,5 +164,40 @@ describe('formatDateTime', () => {
     const d = new Date(2026, 11, 31, 23, 59, 58)
     expect(formatDateTime(d)).toHaveLength(16)
     expect(formatDateTime(d, true)).toHaveLength(19)
+  })
+})
+
+describe('formatCount（资料卡数字紧凑显示）', () => {
+  it('万/亿量级压缩，小数值原样', () => {
+    expect(formatCount(0)).toBe('0')
+    expect(formatCount(5)).toBe('5')
+    expect(formatCount(9999)).toBe('9999')
+    expect(formatCount(12345)).toBe('1.2万')
+    expect(formatCount(123456)).toBe('12.3万')
+    expect(formatCount(100000000)).toBe('1亿')
+    expect(formatCount(123456789)).toBe('1.2亿')
+  })
+
+  it('缺失值显示 -（而不是 0，避免「0 粉丝」的误读）', () => {
+    expect(formatCount(null)).toBe('-')
+    expect(formatCount(undefined)).toBe('-')
+  })
+})
+
+describe('formatAge（快照/最近素材的时效提示）', () => {
+  it('按分钟/小时/天/月分级', () => {
+    const now = Date.now()
+    expect(formatAge(new Date(now - 5_000).toISOString())).toBe('刚刚')
+    expect(formatAge(new Date(now - 10 * 60_000).toISOString())).toBe('10 分钟前')
+    expect(formatAge(new Date(now - 3 * 3600_000).toISOString())).toBe('3 小时前')
+    expect(formatAge(new Date(now - 5 * 24 * 3600_000).toISOString())).toBe('5 天前')
+    expect(formatAge(new Date(now - 70 * 24 * 3600_000).toISOString())).toBe('2 个月前')
+  })
+
+  it('空值与未来时间不炸', () => {
+    expect(formatAge(null)).toBe('')
+    expect(formatAge('')).toBe('')
+    expect(formatAge('not-a-date')).toBe('')
+    expect(formatAge(new Date(Date.now() + 60_000).toISOString())).toBe('刚刚')
   })
 })

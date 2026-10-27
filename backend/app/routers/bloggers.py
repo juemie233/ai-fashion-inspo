@@ -5,6 +5,7 @@
 ``/{blogger_id}`` 之前，否则会被单段动态路由吞掉。
 """
 
+import asyncio
 import json
 
 from fastapi import (
@@ -523,6 +524,66 @@ async def resolve_douyin_profile_api(blogger_id: int, db: AsyncSession = Depends
     return await resolve_douyin_profile(db, blogger)
 
 
+@router.get("/{blogger_id}/face-candidates", status_code=status.HTTP_200_OK)
+async def blogger_face_candidates(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """列出该博主的「人脸注册候选」：已匹配素材 + 未匹配候选脸聚类。
+
+    解决两个实际问题：
+    1. 注册率只有 4.4%——详情页「注册人脸」要求上传照片或手挑素材，没人愿意为 498 人做；
+    2. 「已匹配素材」只存在于已注册的人身上，所以单靠它只能覆盖那 30 位。
+
+    本接口把「TA 素材里反复出现、但尚未匹配」的那张脸聚成簇（单脸素材、det_score ≥0.5、
+    出现 ≥3 次），前端确认后调既有 ``POST /{id}/face`` 注册（传 inspiration_ids）。
+    **不做自动注册**：素材里有路人/买家秀/其他博主，误注册会污染整库匹配。
+
+    Returns:
+        ``{"matched": [...], "clusters": [...], "candidate_faces": N, "face_dim": 512}``；
+        博主不存在 404。
+    """
+    from app.services.person.face_candidates import list_face_candidates
+
+    blogger = await blogger_service.get(db, blogger_id)
+    if blogger.platform != "douyin" and blogger.platform != "xiaohongshu":
+        raise HTTPException(status_code=400, detail="仅支持有素材人脸检测的人物")
+    return await list_face_candidates(db, blogger_id)
+
+
+@router.post("/{blogger_id}/enrich-profile", status_code=status.HTTP_200_OK)
+async def enrich_blogger_profile_api(
+    blogger_id: int, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """按 f2 用户库补齐单个博主的资料卡（离线：IP 属地 + 粉丝/关注/作品/获赞 + 签名）。
+
+    为什么要这个单条入口：批量「一键补全」解决的是存量，详情页需要的是「我看这一个人，
+    现在就把 TA 的资料补上」。**与批量共用同一个 service 函数**，避免两套口径漂移。
+
+    写入策略（见 ``backfill_douyin_profile_from_f2``）：IP 属地与简介只补空缺（手填优先），
+    四个统计数总是刷新并写 ``stats_synced_at`` 快照时间。
+
+    Returns:
+        ``{"status": "updated"|"skipped", "updated_fields": [...], "reason"?}`` +
+        刷新后的博主详情（`blogger`），前端不用再发一次详情请求。
+        非抖音博主 400；博主不存在 404。
+    """
+    from app.services.blogger_enrichment_service import (
+        backfill_douyin_profile_from_f2,
+        load_f2_profile_map,
+    )
+
+    blogger = await blogger_service.get(db, blogger_id)
+    if blogger.platform != "douyin":
+        raise HTTPException(
+            status_code=400, detail="仅抖音博主支持：资料卡来自 f2 用户库"
+        )
+
+    profiles = await asyncio.to_thread(load_f2_profile_map)
+    result = await backfill_douyin_profile_from_f2(db, blogger, profiles)
+
+    await db.refresh(blogger)
+    count = await blogger_service.count_inspirations(db, blogger_id)
+    return {**result, "blogger": blogger_service._to_dict(blogger, count)}
+
+
 @router.post("/{blogger_id}/promote", response_model=BloggerOut)
 async def promote_blogger(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     """把「自动登记」的博主纳入追踪（source 改回 manual）。
@@ -620,13 +681,97 @@ async def blogger_inspirations(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     sort: str = Query("newest", pattern="^(newest|oldest|confidence)$"),
+    media_type: str | None = Query(None, pattern="^(image|video)$"),
+    quality_status: str | None = Query(None, pattern="^(approved|pending|rejected)$"),
+    tag_name: str | None = Query(None, description="只看带该标签的素材"),
+    rating_min: int | None = Query(None, ge=1, le=5),
+    favorite: bool = Query(False, description="只看已收藏"),
+    face_matched: bool = Query(False, description="只看人脸已匹配到该人物的素材"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """获取该博主的素材列表（分页 + 排序，排除软删除素材）。"""
-    result = await blogger_service.list_inspirations(db, blogger_id, page, size, sort)
+    """获取该博主的素材列表（分页 + 排序 + 筛选，排除软删除素材）。"""
+    result = await blogger_service.list_inspirations(
+        db,
+        blogger_id,
+        page,
+        size,
+        sort,
+        media_type=media_type,
+        quality_status=quality_status,
+        tag_name=tag_name,
+        rating_min=rating_min,
+        favorite=favorite,
+        face_matched=face_matched,
+    )
     if not result:
         raise HTTPException(status_code=404, detail="博主未找到")
     return result
+
+
+@router.get("/{blogger_id}/works")
+async def blogger_works(
+    blogger_id: int,
+    page: int = Query(1, ge=1),
+    size: int = Query(12, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按「作品」分组分页（同一抖音作品的 6~9 张图算一组）。
+
+    为什么需要：9 位博主的素材量 500+（最大 3,426），逐张瀑布流翻不动；作品视图按
+    「一次发布」的粒度看，与她在主页上的观感一致。小红书素材没有稳定作品 ID，
+    这些素材会自成一组（``work_id=null``），前端可据此隐藏作品视图。
+    """
+    result = await blogger_service.list_works(db, blogger_id, page, size)
+    if not result:
+        raise HTTPException(status_code=404, detail="博主未找到")
+    return result
+
+
+@router.get("/{blogger_id}/insights")
+async def blogger_insights(blogger_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """人物洞察：近 12 个月新增、质量构成、媒体构成、首末素材时间。
+
+    详情页用来回答两个问题：**这号还在更新吗**（新增曲线 + 最近素材）、
+    **这些素材值不值得留**（通过/待审/拒绝占比）。
+    """
+    from app.services.person.insights import person_insights
+
+    blogger = await blogger_service.get(db, blogger_id)
+    return await person_insights(
+        db, blogger_service.link_model, blogger_service._link_id_col(), blogger.id
+    )
+
+
+@router.get("/{blogger_id}/similar")
+async def blogger_similar(
+    blogger_id: int,
+    limit: int = Query(6, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """风格相近的博主（标签集合余弦相似度）+ 疑似重复账号（归一化同名）。
+
+    相似度只比同类型人物，且要求 ≥3 个共同标签——实测「共同标签 1~2 个」的相似基本是
+    巧合（都用了「白色」这种高频词）。
+    """
+    from app.services.person.batch import duplicate_name_groups
+    from app.services.person.insights import similar_persons
+
+    blogger = await blogger_service.get(db, blogger_id)
+    similar = await similar_persons(
+        db,
+        blogger_service.model,
+        blogger_service.link_model,
+        blogger_service._link_id_col(),
+        blogger.id,
+        limit=limit,
+    )
+    # 疑似重复：只保留「包含当前博主」的分组，前端直接给「合并为同一人」入口
+    duplicates = [
+        group
+        for group in await duplicate_name_groups(db, blogger_service)
+        if any(item["id"] == blogger.id for item in group.get("items") or [])
+    ]
+    return {"similar": similar, "duplicates": duplicates}
 
 
 @router.post("/{blogger_id}/generate-bio")

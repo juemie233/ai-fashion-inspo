@@ -37,6 +37,9 @@ class PersonBioInputs(BaseModel):
     top_tags: list[dict] = []
     # style_profile 的 by_category: {category: count}
     by_category: dict[str, int] = {}
+    # 平台签名原文（来自 f2 用户库，仅当简介来源是「抖音签名」时传）：
+    # 让她自己的自我定位参与生成，模型就不用从标签硬猜风格（A4）
+    signature: str | None = None
 
 
 def _format_top_tags(top_tags: list[dict], limit: int = 12) -> str:
@@ -98,6 +101,8 @@ async def generate_person_bio(inputs: PersonBioInputs) -> str:
         "ip_location": inputs.ip_location or "未知",
         "top_tags": _format_top_tags(inputs.top_tags),
         "category_summary": _format_category_summary(inputs.by_category),
+        # 未提供签名时给占位文案，避免模板里出现「None」
+        "signature": (inputs.signature or "").strip() or "（未提供）",
     }
 
     try:

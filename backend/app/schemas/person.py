@@ -104,10 +104,24 @@ class BloggerUpdate(_PersonUpdateFields):
 
 
 class BloggerOut(_PersonOutFields):
-    """博主输出（含素材数统计）"""
+    """博主输出（含素材数统计与平台资料快照）"""
 
     name: str
     platform: str = "other"
+    # 平台统计**快照**（来自 f2 用户库，离线可读）：必须与 stats_synced_at 一起看，
+    # 前端展示「同步于 X 天前」而不是当成实时值。
+    follower_count: int | None = None
+    following_count: int | None = None
+    aweme_count: int | None = None
+    total_favorited: int | None = None
+    # 简介来源：f2_signature / ai / manual（None = 早期数据，来源未知）
+    bio_source: str | None = None
+    stats_synced_at: datetime | None = None
+
+    @field_serializer("stats_synced_at")
+    def _serialize_stats_synced_at(self, value: datetime | None) -> str | None:
+        """统一输出 UTC ISO 字符串（与其它时间字段一致，前端直接 new Date 解析）。"""
+        return format_utc(value)
     platform_user_id: str | None = None
     xhs_id: str | None = None
     ip_location: str | None = None

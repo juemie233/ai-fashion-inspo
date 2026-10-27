@@ -134,3 +134,39 @@ export function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T
     return fallback
   }
 }
+
+/** 数字紧凑显示：12.3万 / 4,567 / 1.2亿（资料卡的粉丝/获赞用，避免一长串数字）。
+ *
+ * 为什么不用 toLocaleString 的分组：中文用户对「万/亿」的直觉强于
+ * 「123,456,789」，而粉丝数正是这种量级差异最大的场景。
+ */
+export function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-'
+  const n = Math.abs(value)
+  if (n >= 100_000_000) return `${(value / 100_000_000).toFixed(1).replace(/\.0$/, '')}亿`
+  if (n >= 10_000) return `${(value / 10_000).toFixed(1).replace(/\.0$/, '')}万`
+  return String(value)
+}
+
+/** 距今多久（「3 天前」/「刚同步」）：用于统计快照与最近素材的时效提示。
+ *
+ * 只做粗粒度（分钟/小时/天/月），因为这两个场景要的是「新不新鲜」，
+ * 精确到秒反而让人误以为是实时值。
+ */
+export function formatAge(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ts = new Date(iso).getTime()
+  if (Number.isNaN(ts)) return ''
+  const diff = Date.now() - ts
+  if (diff < 0) return '刚刚'
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 2) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days} 天前`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months} 个月前`
+  return `${Math.floor(months / 12)} 年前`
+}

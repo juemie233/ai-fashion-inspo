@@ -25,7 +25,7 @@ from app.config import settings
 from app.models.person import Blogger
 from app.models.task import TaskQueue
 from app.services.blogger_enrichment_service import (
-    backfill_douyin_from_f2,
+    backfill_douyin_profile_from_f2,
     backfill_douyin_ids_from_f2,
     build_following_index,
     enrich_one,
@@ -169,7 +169,11 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
                 # 离线回填：读本地 f2 库，不联网
                 if f2_profiles is None:
                     f2_profiles = await asyncio.to_thread(load_f2_profile_map)
-                result = await backfill_douyin_from_f2(db, blogger, f2_profiles)
+                # 一次读库补齐 IP 属地 + 统计快照 + 签名（详情页资料卡与批量的
+                # 唯一口径；只补空缺、不猜昵称）
+                result = await backfill_douyin_profile_from_f2(
+                    db, blogger, f2_profiles
+                )
                 results.append(result)
                 if result["status"] == "updated":
                     updated += 1

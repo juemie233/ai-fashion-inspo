@@ -10,6 +10,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     Float,
     ForeignKey,
@@ -68,6 +69,20 @@ class Blogger(_PersonBaseFields, Base):
     __tablename__ = "bloggers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # ── 平台统计快照（来自 f2 用户库，离线可读）──
+    # 为什么是「快照」而不是实时：抖音侧没有稳定的免登录接口可查粉丝数，f2 只在
+    # 采过 TA 主页时把 user_info_web 写进自己的库；因此这组值必须配合
+    # ``stats_synced_at`` 一起展示（前端写「同步于 X 天前」），不能暗示实时。
+    follower_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    following_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    aweme_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_favorited: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # 简介来源：f2_signature（抖音签名原文）/ ai（AI 生成）/ manual（手填）。
+    # 两者可信度不同，详情页要显示出来（见 docs/person-detail-enhancements.md A4）。
+    bio_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 上面统计字段的采集时间（None = 从未同步过）
+    stats_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # 人物组（方案 B）：同一现实人物在多个平台的账号集合。
     # person_group_id 为空 = 独立账号；非空 = 与组内其它账号声明为同一人。

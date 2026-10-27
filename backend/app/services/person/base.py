@@ -115,6 +115,13 @@ class PersonServiceBase:
             "last_inspiration_at": last_inspiration_at,
             # 人物组（方案 B）：博主有值（null=独立账号）；模特恒为 None
             "person_group_id": getattr(person, "person_group_id", None),
+            # 平台统计快照（仅博客表有这些列；模特返回 None）
+            "follower_count": getattr(person, "follower_count", None),
+            "following_count": getattr(person, "following_count", None),
+            "aweme_count": getattr(person, "aweme_count", None),
+            "total_favorited": getattr(person, "total_favorited", None),
+            "bio_source": getattr(person, "bio_source", None),
+            "stats_synced_at": getattr(person, "stats_synced_at", None),
         }
 
     def _link_id_col(self):
@@ -494,10 +501,63 @@ class PersonServiceBase:
         )
         return result.scalar() or 0
 
+    def _inspiration_filter_clauses(self, filters: dict):
+        """把素材筛选条件翻译成 SQL 条件列表（人设无关，博主/模特共用）。"""
+        from app.models.face import InspirationFaceDetection
+
+        clauses = []
+        if filters.get("media_type"):
+            clauses.append(Inspiration.media_type == filters["media_type"])
+        if filters.get("quality_status"):
+            clauses.append(Inspiration.quality_status == filters["quality_status"])
+        if filters.get("rating_min"):
+            clauses.append(Inspiration.rating >= filters["rating_min"])
+        if filters.get("favorite"):
+            clauses.append(Inspiration.is_favorite.is_(True))
+        if filters.get("tag_name"):
+            from app.models.tag import InspirationTag, Tag
+
+            tag_subq = (
+                select(InspirationTag.inspiration_id)
+                .join(Tag, Tag.id == InspirationTag.tag_id)
+                .where(Tag.name == filters["tag_name"])
+            )
+            clauses.append(Inspiration.id.in_(tag_subq))
+        if filters.get("face_matched"):
+            # 基类没有 kind 属性：用关联表外键名推导（blogger_id / model_id）
+            person_kind = "blogger" if self.link_id_field == "blogger_id" else "model"
+            person_col = (
+                InspirationFaceDetection.matched_blogger_id
+                if person_kind == "blogger"
+                else InspirationFaceDetection.matched_model_id
+            )
+            face_subq = select(InspirationFaceDetection.inspiration_id).where(
+                person_col == filters["person_id"]
+            )
+            clauses.append(Inspiration.id.in_(face_subq))
+        return clauses
+
     async def list_inspirations(
-        self, db: AsyncSession, person_id: int, page: int, size: int, sort: str
+        self,
+        db: AsyncSession,
+        person_id: int,
+        page: int,
+        size: int,
+        sort: str,
+        *,
+        media_type: str | None = None,
+        quality_status: str | None = None,
+        tag_name: str | None = None,
+        rating_min: int | None = None,
+        favorite: bool = False,
+        face_matched: bool = False,
     ) -> dict | None:
-        """获取主体的素材列表（含分页与统计）。主体不存在返回 None。"""
+        """获取主体的素材列表（分页 + 排序 + 筛选）。主体不存在返回 None。
+
+        筛选为什么放在服务层：详情页素材区与「质量构成/标签」入口要共用同一口径，
+        前端换筛选条件只需透传参数，不必自己拼多套请求。全部筛选走同一张关联表的
+        IN 子查询，避免 join 造成分页重复。
+        """
         assert self.model is not None and self.link_model is not None
         model, link_model = self.model, self.link_model
         link_id = self._link_id_col()
@@ -506,12 +566,25 @@ class PersonServiceBase:
         if not person:
             return None
 
-        # 统计总数（排除软删除素材）
+        filters = {
+            "person_id": person_id,
+            "media_type": media_type,
+            "quality_status": quality_status,
+            "tag_name": tag_name,
+            "rating_min": rating_min,
+            "favorite": favorite,
+            "face_matched": face_matched,
+        }
+        extra = self._inspiration_filter_clauses(filters)
+
+        base_where = [link_id == person_id, Inspiration.deleted_at.is_(None), *extra]
+
+        # 统计总数（排除软删除素材 + 筛选条件一致，否则分页分母与列表对不上）
         count_result = await db.execute(
             select(func.count())
             .select_from(link_model)
             .join(Inspiration, Inspiration.id == link_model.inspiration_id)
-            .where(link_id == person_id, Inspiration.deleted_at.is_(None))
+            .where(*base_where)
         )
         total = count_result.scalar() or 0
 
@@ -524,9 +597,12 @@ class PersonServiceBase:
                 Inspiration.media_type,
                 Inspiration.created_at,
                 link_model.confidence,
+                Inspiration.quality_status,
+                Inspiration.rating,
+                Inspiration.is_favorite,
             )
             .join(Inspiration, link_model.inspiration_id == Inspiration.id)
-            .where(link_id == person_id, Inspiration.deleted_at.is_(None))
+            .where(*base_where)
             .order_by(
                 link_model.confidence.desc()
                 if sort == "confidence"
@@ -547,6 +623,9 @@ class PersonServiceBase:
                 "media_type": row[3],
                 "confidence": round(row[5], 2) if row[5] else 0,
                 "created_at": str(row[4]) if row[4] else None,
+                "quality_status": row[6],
+                "rating": row[7],
+                "is_favorite": bool(row[8]),
             }
             for row in rows
         ]
@@ -559,6 +638,84 @@ class PersonServiceBase:
             },
             "items": items,
             "total": total,
+            "page": page,
+            "size": size,
+        }
+
+    async def list_works(
+        self, db: AsyncSession, person_id: int, page: int, size: int
+    ) -> dict | None:
+        """按「作品」分组分页（B1）：同一抖音作品的 6~9 张图算一组。
+
+        分组键是 ``inspirations.source_platform_id``（形如 ``f2:{aweme_id}#image3``）：
+        取 ``#`` 之前的部分作为作品 ID，没有该字段的素材自成一组（``work_id=None``）。
+
+        为什么要这个视图：9 位博主的素材量 500+（最大 3,426），逐张瀑布流翻不动；
+        作品视图按「一次发布」的粒度看，才和她主页上的观感一致。
+
+        实现：先在 SQL 里取该人物的**全部**素材的 (workkey, id)，在 Python 归组后
+        分页——因为要同时给出「组数」与「组封面」，用窗口函数在 SQLite 里写会明显更慢
+        且难读；单人物素材上限 3,426 条，内存归组是毫秒级。
+        """
+        assert self.model is not None and self.link_model is not None
+        link_model = self.link_model
+        link_id = self._link_id_col()
+
+        person = await db.get(self.model, person_id)
+        if not person:
+            return None
+
+        rows = (
+            await db.execute(
+                select(
+                    Inspiration.id,
+                    Inspiration.source_platform_id,
+                    Inspiration.thumbnail_path,
+                    Inspiration.file_path,
+                    Inspiration.media_type,
+                    Inspiration.created_at,
+                )
+                .join(link_model, link_model.inspiration_id == Inspiration.id)
+                .where(link_id == person_id, Inspiration.deleted_at.is_(None))
+                .order_by(Inspiration.created_at.desc())
+            )
+        ).all()
+
+        groups: dict[str | None, dict] = {}
+        for iid, platform_id, thumb, file_path, media_type, created_at in rows:
+            work_id = None
+            if platform_id:
+                work_id = str(platform_id).split("#", 1)[0] or None
+            # 组内预览项带上缩略图/原图路径：前端卡片直接铺小图、点击开灯箱，
+            # 不必再为每个作品发一次请求（3426 条素材的博主有 3382 个作品组）。
+            preview = {
+                "inspiration_id": iid,
+                "thumbnail_path": thumb,
+                "file_path": file_path,
+            }
+            group = groups.get(work_id)
+            if group is None:
+                groups[work_id] = {
+                    "work_id": work_id,
+                    "count": 1,
+                    "cover": preview,
+                    "media_type": media_type,
+                    "created_at": str(created_at) if created_at else None,
+                    "items": [preview],
+                }
+            else:
+                group["count"] += 1
+                if len(group["items"]) < 12:  # 组内预览上限：一屏能看够就行
+                    group["items"].append(preview)
+
+        ordered = list(groups.values())
+        total_works = len(ordered)
+        start = (page - 1) * size
+        return {
+            "person": {"id": person.id, "name": person.name, "platform": person.platform},
+            "works": ordered[start : start + size],
+            "total": total_works,
+            "total_items": len(rows),
             "page": page,
             "size": size,
         }

@@ -12,11 +12,16 @@ import type {
   Model,
   PersonBrief,
   PersonDetail,
+  PersonFaceCandidates,
   PersonForm,
+  PersonInsights,
+  PersonInspirationFilters,
   PersonInspirationsOut,
   PersonIpStats,
   PersonListOut,
+  PersonSimilarItem,
   PersonStats,
+  PersonWorksOut,
 } from './persons'
 
 export function createPersonApi(kind: 'bloggers' | 'models') {
@@ -80,16 +85,49 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
       await apiClient.delete(`${base}/${id}`)
     },
 
-    /** 获取人物的素材列表 */
+    /** 获取人物的素材列表（分页 + 排序 + 筛选，筛选由后端执行以保证分页分母一致） */
     async fetchInspirations(
       id: number,
       page: number = 1,
       size: number = 20,
       sort?: string,
+      filters: PersonInspirationFilters = {},
     ): Promise<PersonInspirationsOut> {
       const { data } = await apiClient.get<PersonInspirationsOut>(`${base}/${id}/inspirations`, {
-        params: { page, size, sort },
+        params: { page, size, sort, ...filters },
       })
+      return data
+    },
+
+    /** 按「作品」分组分页（同一抖音作品的 6~9 张图算一组；B1 作品视图） */
+    async fetchWorks(id: number, page: number = 1, size: number = 12): Promise<PersonWorksOut> {
+      const { data } = await apiClient.get<PersonWorksOut>(`${base}/${id}/works`, {
+        params: { page, size },
+      })
+      return data
+    },
+
+    /** 人物洞察：近 12 个月新增 / 质量构成 / 首末素材时间（B3+B4） */
+    async fetchInsights(id: number): Promise<PersonInsights> {
+      const { data } = await apiClient.get<PersonInsights>(`${base}/${id}/insights`)
+      return data
+    },
+
+    /** 风格相近人物（标签余弦相似度，共同标签 ≥3 才推荐） */
+    async fetchSimilar(
+      id: number,
+      limit: number = 6,
+    ): Promise<{ similar: PersonSimilarItem[]; duplicates: unknown[] }> {
+      const { data } = await apiClient.get<{
+        similar: PersonSimilarItem[]
+        duplicates: unknown[]
+      }>(`${base}/${id}/similar`, { params: { limit } })
+      return data
+    },
+
+    /** 人脸注册候选：已匹配素材（一键注册）+ 未匹配候选脸簇（A3） */
+    async fetchFaceCandidates(id: number): Promise<PersonFaceCandidates> {
+      const { data } = await apiClient.get<PersonFaceCandidates>(`${base}/${id}/face-candidates`)
       return data
     },
 
@@ -118,8 +156,11 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
     },
 
     /** 调用本地大模型根据该人物的标签画像生成一段简介（不入库，需手动保存） */
-    async generateBio(id: number): Promise<{ bio: string }> {
-      const { data } = await apiClient.post<{ bio: string }>(`${base}/${id}/generate-bio`)
+    async generateBio(id: number): Promise<{ bio: string; sources?: string[] }> {
+      // sources 说明这段简介参考了什么（tags / signature），详情页据此提示用户
+      const { data } = await apiClient.post<{ bio: string; sources?: string[] }>(
+        `${base}/${id}/generate-bio`,
+      )
       return data
     },
 

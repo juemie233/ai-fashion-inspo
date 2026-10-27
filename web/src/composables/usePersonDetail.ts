@@ -12,6 +12,8 @@ import {
   modelsApi,
   type ModelPhotoSet,
   type PersonInspiration,
+  type PersonInspirationFilters,
+  type PersonWorkGroup,
 } from '@/api/persons'
 import type { InspirationOut } from '@/api/inspirations'
 import type { PersonDetail, PersonType } from '@shared/types/person'
@@ -53,6 +55,20 @@ export function usePersonDetail() {
   /** 灯箱是否打开（全屏浏览该人物全部图片素材） */
   const lightboxOpen = ref(false)
 
+  // ── 素材区视图状态（B1 作品视图 + B2 筛选）──
+  /** 当前视图：全部（逐张）/ 作品（按一次发布分组） */
+  const viewMode = ref<'list' | 'works'>('list')
+  /** 排序（newest / oldest / confidence） */
+  const sort = ref('newest')
+  /** 筛选条件：透传给后端，保证分页分母与列表一致 */
+  const filters = ref<PersonInspirationFilters>({})
+  const works = ref<PersonWorkGroup[]>([])
+  const worksTotal = ref(0)
+  const worksTotalItems = ref(0)
+  const worksPage = ref(1)
+  const worksSize = 12
+  const worksLoading = ref(false)
+
   /** 素材转 InspirationOut（复用 MasonryGrid） */
   function toInspirationOut(item: PersonInspiration): InspirationOut {
     return {
@@ -75,7 +91,13 @@ export function usePersonDetail() {
   async function loadInspirations() {
     itemsLoading.value = true
     try {
-      const data = await api.value.fetchInspirations(personId.value, page.value, PAGE_SIZE)
+      const data = await api.value.fetchInspirations(
+        personId.value,
+        page.value,
+        PAGE_SIZE,
+        sort.value,
+        filters.value,
+      )
       items.value = data.items ?? []
       total.value = data.total ?? 0
     } catch {
@@ -83,6 +105,45 @@ export function usePersonDetail() {
     } finally {
       itemsLoading.value = false
     }
+  }
+
+  /** 作品视图数据（首次切到作品视图时才拉，避免详情页多一次请求） */
+  async function loadWorks() {
+    worksLoading.value = true
+    try {
+      const data = await api.value.fetchWorks(personId.value, worksPage.value, worksSize)
+      works.value = data.works ?? []
+      worksTotal.value = data.total ?? 0
+      worksTotalItems.value = data.total_items ?? 0
+    } catch {
+      Message.error('加载作品失败')
+    } finally {
+      worksLoading.value = false
+    }
+  }
+
+  /** 切换视图：作品第一次进来要拉数据 */
+  async function setViewMode(mode: 'list' | 'works') {
+    viewMode.value = mode
+    if (mode === 'works' && !works.value.length) await loadWorks()
+  }
+
+  async function setWorksPage(p: number) {
+    worksPage.value = p
+    await loadWorks()
+  }
+
+  /** 改筛选条件：一律回到第 1 页（否则停在旧页会看到空列表） */
+  async function setFilters(next: PersonInspirationFilters) {
+    filters.value = next
+    page.value = 1
+    await loadInspirations()
+  }
+
+  async function setSort(next: string) {
+    sort.value = next
+    page.value = 1
+    await loadInspirations()
   }
 
   async function setPage(p: number) {
@@ -305,6 +366,20 @@ export function usePersonDetail() {
 
   return {
     personId,
+    viewMode,
+    sort,
+    filters,
+    works,
+    worksTotal,
+    worksTotalItems,
+    worksPage,
+    worksSize,
+    worksLoading,
+    loadWorks,
+    setViewMode,
+    setWorksPage,
+    setFilters,
+    setSort,
     kind,
     api,
     kindLabel,

@@ -33,7 +33,7 @@ export interface PersonForm {
   face_match_threshold?: number | null
 }
 
-/** 人物素材项（与标签详情素材结构一致） */
+/** 人物素材项（与标签详情素材结构一致，另带详情页筛选所需的质量/评分/收藏） */
 export interface PersonInspiration {
   inspiration_id: string
   file_path: string
@@ -41,6 +41,98 @@ export interface PersonInspiration {
   media_type: string
   confidence: number
   created_at: string | null
+  quality_status?: 'approved' | 'pending' | 'rejected' | null
+  rating?: number | null
+  is_favorite?: boolean
+}
+
+/** 素材区筛选（详情页工具条；全部走后端参数，前端不二次过滤） */
+export interface PersonInspirationFilters {
+  media_type?: 'image' | 'video'
+  quality_status?: 'approved' | 'pending' | 'rejected'
+  tag_name?: string
+  rating_min?: number
+  favorite?: boolean
+  face_matched?: boolean
+}
+
+/** 作品分组（B1：同一抖音作品的 6~9 张图算一组；work_id 为空 = 无作品 ID 的散图） */
+export interface PersonWorkGroup {
+  work_id: string | null
+  count: number
+  cover: { inspiration_id: string; thumbnail_path: string | null; file_path: string }
+  media_type: string
+  created_at: string | null
+  /** 组内前 12 张素材（预览用：带缩略图/原图路径，前端可直接铺图与开灯箱） */
+  items: Array<{
+    inspiration_id: string
+    thumbnail_path: string | null
+    file_path: string
+  }>
+}
+
+/** 作品分组分页响应 */
+export interface PersonWorksOut {
+  person: { id: number; name: string; platform: string }
+  works: PersonWorkGroup[]
+  /** 作品组总数 */
+  total: number
+  /** 素材总数（用于说明「N 个作品 / M 条素材」） */
+  total_items: number
+  page: number
+  size: number
+}
+
+/** 人物洞察（B3 活跃度 + B4 质量构成） */
+export interface PersonInsights {
+  total: number
+  /** 近 12 个月入库新增（缺月补 0，前端可直接画柱状） */
+  monthly: Array<{ month: string; count: number }>
+  quality: { approved: number; pending: number; rejected: number; unreviewed: number }
+  media: Record<string, number>
+  first_added: string | null
+  last_added: string | null
+}
+
+/** 风格相近人物（B5） */
+export interface PersonSimilarItem {
+  id: number
+  name: string
+  avatar_path: string | null
+  inspiration_count: number
+  shared_tags: number
+  similarity: number
+}
+
+/** 人脸注册候选（A3）：已匹配素材 + 未匹配候选脸簇 */
+interface PersonFaceCandidate {
+  inspiration_id: string
+  det_score: number
+  thumbnail_path: string | null
+}
+
+export interface PersonFaceCluster {
+  cluster_id: number
+  size: number
+  avg_score: number
+  thumbnail_path: string | null
+  inspiration_ids: string[]
+  candidates: PersonFaceCandidate[]
+}
+
+export interface PersonFaceCandidates {
+  matched: PersonFaceCandidate[]
+  clusters: PersonFaceCluster[]
+  candidate_faces: number
+  face_dim: number
+}
+
+/** 补齐资料结果（A1：单条补全，返回刷新后的博主） */
+interface PersonEnrichResult {
+  status: 'updated' | 'skipped'
+  updated_fields?: string[]
+  reason?: string
+  blogger?: import('@shared/types/person').Blogger
 }
 
 /** 人物数量统计（总数 + 平台分布） */
@@ -141,6 +233,22 @@ export interface DuplicateNameGroup {
 /** 穿搭博主 API（/api/bloggers）：含人脸特征注册与人物组绑定 */
 export const bloggersApi = {
   ...createPersonApi('bloggers'),
+
+  /**
+   * 补齐该博主的资料卡（离线读 f2 用户库：IP 属地 + 粉丝/关注/作品/获赞 + 签名）。
+   *
+   * 与列表页「一键补全」共用同一后端逻辑（只补空缺、统计数总刷新）；返回刷新后的博主，
+   * 前端不用再发一次详情请求。
+   */
+  async enrichProfile(bloggerId: number): Promise<PersonEnrichResult> {
+    const { data } = await apiClient.post<PersonEnrichResult>(
+      `/bloggers/${bloggerId}/enrich-profile`,
+      undefined,
+      // 读 f2 用户库（sqlite）走线程池，正常几十毫秒；给 30 秒容错
+      { timeout: 30000 },
+    )
+    return data
+  },
 
   /**
    * 解析抖音博主的主页标识（sec_user_id + 主页链接）。

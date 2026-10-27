@@ -563,7 +563,8 @@ async def test_douyin_backfill_empty_in_f2_is_skipped(client, tmp_path, monkeypa
         await db.refresh(task)
         assert task.result["updated"] == 0
         assert task.result["skipped"] == 1
-        assert "没有 IP 属地" in task.result["results"][0]["reason"]
+        # 口径已统一到「资料卡」：f2 里没有可回填的 IP/统计/签名都归这一类
+        assert "没有可回填的资料" in task.result["results"][0]["reason"]
 
 
 async def test_enrich_task_includes_douyin_and_xhs_together(client, tmp_path, monkeypatch):

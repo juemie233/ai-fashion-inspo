@@ -120,9 +120,15 @@ async function handleGenerateBio() {
   generatingBio.value = true
   try {
     const api = props.kind === 'blogger' ? bloggersApi : modelsApi
-    const { bio } = await api.generateBio(props.person.id)
+    const { bio, sources } = await api.generateBio(props.person.id)
     form.value.bio = bio
-    Message.success('已生成简介，可继续编辑后保存')
+    // 说清参考了什么：只用标签 vs 还参考了她的抖音签名（两者可信度不同）
+    const usedSignature = (sources ?? []).includes('signature')
+    Message.success(
+      usedSignature
+        ? '已生成简介（参考了标签与她的抖音签名），可继续编辑后保存'
+        : '已生成简介（基于标签画像），可继续编辑后保存',
+    )
   } catch (e) {
     Message.error(getApiErrorMessage(e, '生成简介失败'))
   } finally {
