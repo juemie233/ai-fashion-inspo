@@ -183,7 +183,9 @@ const filtered = computed(() =>
     props.filters.model_key ||
     props.filters.status ||
     props.filters.has_imported ||
-    props.filters.q,
+    props.filters.q ||
+    props.filters.since ||
+    props.filters.until,
   ),
 )
 
@@ -253,6 +255,8 @@ function submitImport(runId: number): void {
 function resetPicked(runId: number): void {
   pickedByRun[runId] = []
   details[runId] = { items: [], loading: false, error: null }
+  // 重新拉一次详情：否则仍展开的行会停在「这里没有候选图」的空态（图其实还在）
+  void loadDetail(runId)
 }
 
 // 暴露给视图（入库后清勾选）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
