@@ -1,9 +1,14 @@
 name: CI
 
 # 质量门禁：push / PR 到主分支时自动执行，与本地 `scripts/test.sh` 对齐。
-#   前端：eslint（棘轮 73）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
-#   后端：ruff（零告警）+ 迁移链自检（空库 → 与 ORM 一致）+ pytest 全量
+#   前端 job：ESLint（棘轮）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
+#   后端 job：ruff（零告警）+ vulture（死代码）+ mypy 棘轮 + 迁移链自检（空库 → 与 ORM 一致）
+#             + 脚本规范（只读连接 / argparse）+ pytest 全量 + 覆盖率棘轮（≥81%）
 # 任何一步失败即标红，把「人肉漏检」变成「机器必抓」。
+#
+# ⚠️ 注意两个 job 都设了 `defaults.run.working-directory`（web / backend），
+# 需要仓库根相对路径的步骤必须显式写 `working-directory: ${{ github.workspace }}`，
+# 否则会去找 web/scripts 或 backend/scripts 而报「No such file」（2026-10-28 踩过）。
 #
 # ⚠️ 只有 GitHub 镜像会触发本工作流：`origin` 指向 gitee，gitee 侧没有 CI。
 # 所以推 gitee 前请先在本地跑 `bash scripts/test.sh`——那是唯一能在推送前拦住问题的门。
@@ -102,13 +107,18 @@ jobs:
 
       # 脚本目录的静态守卫：只读用途的 sqlite 连接必须 mode=ro（f2 的外部库不能被
       # 脚本以读写方式打开），入口必须用 argparse。scripts 不计覆盖率，只能静态兜。
+      #
+      # ⚠️ 必须显式指定工作目录：本 job 的默认 `working-directory: backend`，
+      # 直接写 `python scripts/check_scripts.py` 会去找 backend/scripts/...（不存在）
+      # 而整步报 exit 2（2026-10-28 实测）。校验脚本在**仓库根**的 scripts/ 下。
       - name: 脚本规范（只读连接 / CLI 入口）
+        working-directory: ${{ github.workspace }}
         run: python scripts/check_scripts.py
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。
-      # 覆盖率 68% 是**棘轮底线**（只能往上调）：测试被误删/跳过时这里会红。
-      - name: pytest 全量 + 覆盖率棘轮（≥69%）
+      # 覆盖率是**棘轮底线**（只能往上调，当前 81.7%）：测试被误删/跳过时这里会红。
+      - name: pytest 全量 + 覆盖率棘轮（≥81%）
         run: |
           python -m pytest -q --tb=long --cov --cov-fail-under=81 \
             --cov-report=term:skip-covered 2>&1 | tee pytest.log
