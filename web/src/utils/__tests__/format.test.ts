@@ -1,4 +1,4 @@
-import { formatCount, formatAge } from '../format'
+import { addDaysIso, formatCount, formatAge } from '../format'
 
 /** 格式化工具函数单测。 */
 
@@ -199,5 +199,22 @@ describe('formatAge（快照/最近素材的时效提示）', () => {
     expect(formatAge('')).toBe('')
     expect(formatAge('not-a-date')).toBe('')
     expect(formatAge(new Date(Date.now() + 60_000).toISOString())).toBe('刚刚')
+  })
+})
+
+describe('addDaysIso（日期范围换算）', () => {
+  it('跨月/跨年正确平移', () => {
+    expect(addDaysIso('2026-10-26', 1)).toBe('2026-10-27')
+    expect(addDaysIso('2026-10-31', 1)).toBe('2026-11-01')
+    expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01')
+    expect(addDaysIso('2026-03-01', -1)).toBe('2026-02-28')
+    expect(addDaysIso('2026-01-01', -1)).toBe('2025-12-31')
+  })
+
+  it('非法输入返回空串（不抛错）', () => {
+    expect(addDaysIso('', 1)).toBe('')
+    expect(addDaysIso(null, 1)).toBe('')
+    expect(addDaysIso('2026/10/26', 1)).toBe('')
+    expect(addDaysIso('2026-10-26T00:00:00', 1)).toBe('')
   })
 })

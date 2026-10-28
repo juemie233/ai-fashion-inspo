@@ -306,3 +306,36 @@ def test_thumbnail_falls_back_when_image_is_corrupt(client):
         assert resp.headers["content-type"].startswith("image/png")
     finally:
         _delete_run(run_id)
+
+
+def test_running_batch_without_dir_is_not_marked_missing(client):
+    """排队/生成中的批次目录还没建：不能显示「图已清理」（会误导用户以为图被清了）。"""
+    run_id = _seed_run(files=0, status="running")
+    try:
+        import shutil
+
+        folder = settings.storage_root / "generated" / str(run_id)
+        shutil.rmtree(folder, ignore_errors=True)
+
+        resp = client.get("/api/generate/runs", params={"size": 50})
+        row = next(item for item in resp.json()["items"] if item["id"] == run_id)
+
+        assert row["files_missing"] is False
+        assert row["candidates"] == []
+    finally:
+        _delete_run(run_id)
+
+
+def test_terminal_batch_with_empty_dir_is_not_marked_missing(client):
+    """终态但目录还在（只是还没出图/图被手工删完）：也不算「已清理」。"""
+    run_id = _seed_run(files=0, status="done")
+    try:
+        # files=0 时没有文件会去建目录，这里显式造一个「空但存在」的目录
+        (settings.storage_root / "generated" / str(run_id)).mkdir(parents=True, exist_ok=True)
+
+        resp = client.get("/api/generate/runs", params={"size": 50})
+        row = next(item for item in resp.json()["items"] if item["id"] == run_id)
+
+        assert row["files_missing"] is False
+    finally:
+        _delete_run(run_id)

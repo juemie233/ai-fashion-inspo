@@ -527,14 +527,18 @@ def ensure_thumbnail(source: Path, width: int = THUMB_WIDTH) -> Path | None:
         return None
 
 
-def _candidate_filenames(folder: Path) -> list[str]:
-    """列出批次目录里的候选图文件名（按文件名排序，不含缩略图子目录）。
+def _list_candidates(folder: Path) -> tuple[bool, list[str]]:
+    """列出批次目录里的候选图文件名，并回报目录是否存在。
 
-    纯同步 IO，调用方放线程池。目录不存在返回空列表（批次目录已被清理）。
+    为什么要回报「存在」：只凭「没文件」判断「图已清理」会冤枉排队中/生成中的批次
+    （目录还没建或还没出图）。纯同步 IO，调用方放线程池。
+
+    Returns:
+        (目录是否存在, 候选图文件名列表（按名排序，不含 .thumbs 子目录）)。
     """
     if not folder.is_dir():
-        return []
-    return sorted(p.name for p in folder.glob(f"*{CANDIDATE_SUFFIX}"))
+        return False, []
+    return True, sorted(p.name for p in folder.glob(f"*{CANDIDATE_SUFFIX}"))
 
 
 def thumb_url(run_id: int, filename: str) -> str:
@@ -542,11 +546,16 @@ def thumb_url(run_id: int, filename: str) -> str:
     return f"/api/generate/runs/{run_id}/candidates/{filename}?w={THUMB_WIDTH}"
 
 
+"""批次终态：只有终态才谈得上「候选图被清理」"""
+TERMINAL_STATUSES = ("done", "failed", "cancelled")
+
+
 def _serialize_run(
     run: GenerationRun,
     *,
     candidates: list[str],
     imported_count: int,
+    folder_exists: bool,
 ) -> dict:
     """把一行批次序列化成列表项（保留原有字段，另加 P0 三件套）。"""
     params = _params_of(run)
@@ -571,7 +580,8 @@ def _serialize_run(
         # ── 列表增强（P0 A1）：缩略图条 + 已入库张数 + 目录是否还在 ──
         "candidates": [{"filename": name, "thumb_url": thumb_url(run.id, name)} for name in candidates],
         "imported_count": imported_count,
-        "files_missing": not candidates,
+        # 终态 + 目录不在 = 真被清理过；排队/生成中目录还没建，不能显示「图已清理」
+        "files_missing": (not folder_exists) and run.status in TERMINAL_STATUSES,
     }
 
 
@@ -688,8 +698,8 @@ async def list_runs(
     run_ids = [run.id for run in rows]
     imported_counts = await _imported_counts(db, run_ids)
     # 目录列举放线程池：单批几十毫秒，但 20 批串行会明显拖慢列表
-    folders = await asyncio.gather(
-        *[asyncio.to_thread(_candidate_filenames, _run_dir(run)) for run in rows]
+    listed = await asyncio.gather(
+        *[asyncio.to_thread(_list_candidates, _run_dir(run)) for run in rows]
     )
 
     items = [
@@ -697,8 +707,9 @@ async def list_runs(
             run,
             candidates=filenames[:LIST_CANDIDATES_LIMIT],
             imported_count=imported_counts.get(run.id, 0),
+            folder_exists=exists,
         )
-        for run, filenames in zip(rows, folders, strict=True)
+        for run, (exists, filenames) in zip(rows, listed, strict=True)
     ]
     return {"items": items, "total": total, "page": page, "size": size}
 

@@ -315,3 +315,30 @@ describe('生成历史表', () => {
     wrapper.unmount()
   })
 })
+
+// ── P0：日期范围 ──
+
+it('选日期范围回抛 since 与「次日零点」的 until（用户选 10-26 要含 26 号全天）', async () => {
+  const wrapper = mountTable(record(), { filters: {} })
+  await wrapper.vm.$nextTick()
+
+  // 直接调用组件的日期回调（Arco RangePicker 的弹层在 jsdom 里不稳定，组件已 expose）
+  const vm = wrapper.vm as unknown as {
+    onDateRangeChange: (v: unknown) => void
+  }
+  vm.onDateRangeChange(['2026-10-20', '2026-10-26'])
+
+  const emitted = wrapper.emitted('update:filters') ?? []
+  const last = emitted.at(-1)?.[0] as Record<string, unknown>
+  expect(last.since).toBe('2026-10-20')
+  // 结束日 +1 天：后端按 created_at < until 过滤，这样才包含 26 号全天
+  expect(last.until).toBe('2026-10-27')
+
+  // 清空日期 → 两个字段都撤掉
+  vm.onDateRangeChange([])
+  const cleared = (wrapper.emitted('update:filters') ?? []).at(-1)?.[0] as Record<string, unknown>
+  expect(cleared.since).toBeUndefined()
+  expect(cleared.until).toBeUndefined()
+
+  wrapper.unmount()
+})

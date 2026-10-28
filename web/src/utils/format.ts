@@ -170,3 +170,19 @@ export function formatAge(iso: string | null | undefined): string {
   if (months < 12) return `${months} 个月前`
   return `${Math.floor(months / 12)} 年前`
 }
+
+/** 把 ``YYYY-MM-DD`` 平移 N 天（纯函数，本地日历日；非法输入返回空串）。
+ *
+ * 为什么需要：后端按 `created_at < until` 过滤，而用户选「截止 10-26」的意思是
+ * **包含 26 号全天**，所以要把结束日期换算成 27 号零点再传。
+ */
+export function addDaysIso(date: string | null | undefined, days: number): string {
+  if (!date) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  if (!m) return ''
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (Number.isNaN(d.getTime())) return ''
+  d.setDate(d.getDate() + days)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}

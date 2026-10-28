@@ -21,7 +21,7 @@ import type {
 import { fetchRun } from '@/api/generate'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { copyToClipboard } from '@/utils/clipboard'
-import { formatDateTime, shortModelLabel } from '@/utils/format'
+import { addDaysIso, formatDateTime, shortModelLabel } from '@/utils/format'
 
 const props = defineProps<{
   /** 当前页历史（服务端已排序：created_at desc） */
@@ -158,6 +158,26 @@ function patchFilters(patch: Partial<GenerationHistoryQuery>): void {
   emit('update:filters', { ...props.filters, ...patch })
 }
 
+/** 日期范围选择器的显示值：`until` 后端存的是「次日零点」，展示时要换回「含当天」 */
+const dateRange = computed<[string, string] | undefined>(() => {
+  const since = String(props.filters.since ?? '')
+  const untilExclusive = String(props.filters.until ?? '')
+  const untilInclusive = untilExclusive ? addDaysIso(untilExclusive, -1) : ''
+  if (!since && !untilInclusive) return undefined
+  return [since, untilInclusive]
+})
+
+/** 选日期：结束日 +1 天作为开区间上界（用户选 10-26 就要包含 26 号全天） */
+function onDateRangeChange(value: unknown): void {
+  const range = Array.isArray(value) ? value : []
+  const since = String(range[0] ?? '').slice(0, 10)
+  const end = String(range[1] ?? '').slice(0, 10)
+  patchFilters({
+    since: since || undefined,
+    until: end ? addDaysIso(end, 1) || undefined : undefined,
+  })
+}
+
 const filtered = computed(() =>
   Boolean(
     props.filters.model_key ||
@@ -235,7 +255,8 @@ function resetPicked(runId: number): void {
   details[runId] = { items: [], loading: false, error: null }
 }
 
-defineExpose({ resetPicked })
+// 暴露给视图（入库后清勾选）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
+defineExpose({ resetPicked, onDateRangeChange })
 </script>
 
 <template>
@@ -267,6 +288,13 @@ defineExpose({ resetPicked })
     >
       只看已入库
     </a-checkbox>
+    <a-range-picker
+      :model-value="dateRange"
+      size="mini"
+      style="width: 216px"
+      value-format="YYYY-MM-DD"
+      @change="onDateRangeChange"
+    />
     <a-input
       v-model="keyword"
       size="mini"
