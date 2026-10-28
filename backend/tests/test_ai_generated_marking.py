@@ -133,6 +133,31 @@ def test_batch_unmark_skips_generated(client, make_image):
     assert _flag(sus)[0] is False
 
 
+def test_single_update_cannot_clear_generated_flag(client, make_image):
+    """单条 PATCH 也不能把本地出图的 AI 标记翻成非 AI。"""
+    gen = _seed_flagged(client, make_image, source_type="generated")
+
+    resp = client.patch(f"/api/inspirations/{gen}", json={"is_ai_generated": False})
+    assert resp.status_code == 200, resp.text
+
+    assert _flag(gen)[0] is True, "生成图被单条编辑翻成非 AI 了"
+
+
+def test_batch_update_cannot_clear_generated_flag(client, make_image):
+    """批量编辑把 AI 标记置 False 时：generated 行保持 True，其余行照常清掉。"""
+    gen = _seed_flagged(client, make_image, source_type="generated")
+    sus = _seed_flagged(client, make_image, source_type="manual_upload")
+
+    resp = client.post(
+        "/api/inspirations/batch-update",
+        json={"ids": [gen, sus], "is_ai_generated": False},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert _flag(gen)[0] is True, "生成图被批量编辑翻成非 AI 了"
+    assert _flag(sus)[0] is False
+
+
 def test_generated_rows_in_db_keep_flag(client, make_image):
     """回归：库里已有的生成图必须都还带着 AI 标记（本次改动不该动历史数据）。"""
     iid = _seed_flagged(client, make_image, source_type="generated")

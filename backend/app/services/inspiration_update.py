@@ -1,7 +1,7 @@
 """灵感素材更新：单条字段更新、批量元数据更新、批量收藏。"""
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration, NOT_DELETED, utcnow
@@ -45,8 +45,11 @@ async def update_inspiration(
             inspiration.quality_reason = data.quality_reason
 
     if data.is_ai_generated is not None:
-        # 人工复核翻案：标记或取消「疑似 AI」标记
-        inspiration.is_ai_generated = data.is_ai_generated
+        # 人工复核翻案：标记或取消「疑似 AI」标记。
+        # 例外：本地出图（source_type='generated'）是确定的 AI 生成，不允许翻成非 AI
+        # （与质量审核、批量翻案同一条铁律）。
+        if not (data.is_ai_generated is False and inspiration.source_type == "generated"):
+            inspiration.is_ai_generated = data.is_ai_generated
 
     await db.flush()
     await db.refresh(inspiration)
@@ -93,7 +96,13 @@ async def batch_update_inspirations(
     if rating is not None:
         values["rating"] = rating
     if is_ai_generated is not None:
-        values["is_ai_generated"] = is_ai_generated
+        # 本地出图是确定的 AI 生成，批量编辑也不能把它翻成非 AI：
+        # 传 False 时用 CASE 把 generated 行钉死为 True，其余行照常置 False。
+        values["is_ai_generated"] = (
+            True
+            if is_ai_generated
+            else case((Inspiration.source_type == "generated", True), else_=False)
+        )
     if quality_status is not None:
         values["quality_status"] = quality_status
         # 人工（含批量）改质量状态 → 记来源
