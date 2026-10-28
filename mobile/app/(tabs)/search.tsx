@@ -25,6 +25,7 @@ import TagFilterSheet from '../../components/TagFilterSheet'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
 import {
   apiClient,
+  fetchTagGroups,
   getFileUrl,
   vectorSearchByImage,
   vectorSearchByText,
@@ -68,8 +69,8 @@ export default function SearchScreen() {
   const loadTags = async () => {
     setTagsLoading(true)
     try {
-      const { data } = await apiClient.get<TagCategoryGroup[]>('/tags')
-      setTagGroups(Array.isArray(data) ? data : [])
+      // 走会话级缓存：与标签管理/标签编辑器共享，避免 4.3MB/8 秒重复下载
+      setTagGroups(await fetchTagGroups())
     } catch {
       // 标签拉取失败不阻塞搜索（可以只用关键词）
     } finally {

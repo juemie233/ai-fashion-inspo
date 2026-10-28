@@ -14,6 +14,7 @@ jest.mock('../services/api', () => {
     ...actual,
     apiClient: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
     fetchPersons: jest.fn(),
+    fetchPerson: jest.fn(),
     fetchPersonInspirations: jest.fn(),
     fetchTagGroups: jest.fn(),
     renameTag: jest.fn(),
@@ -27,6 +28,7 @@ import { findBareText } from '../test-utils/noBareText'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const api = require('../services/api') as {
   fetchPersons: jest.Mock
+  fetchPerson: jest.Mock
   fetchPersonInspirations: jest.Mock
   fetchTagGroups: jest.Mock
   renameTag: jest.Mock
@@ -103,7 +105,7 @@ describe('PersonsScreen（人物列表）', () => {
 describe('PersonDetailScreen（作品墙）', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    api.fetchPersons.mockResolvedValue({ items: BLOGGERS, total: 2, page: 1, size: 200 })
+    api.fetchPerson.mockResolvedValue(BLOGGERS[0])
     api.fetchPersonInspirations.mockResolvedValue({
       items: [
         { id: 'a', file_path: 'images/a.jpg', thumbnail_path: null, tags: [] },
@@ -121,6 +123,8 @@ describe('PersonDetailScreen（作品墙）', () => {
     await waitFor(() => expect(screen.getByText('一朵芝士')).toBeTruthy())
     expect(screen.getByText('抖音 · 2022 张素材 · 浙江')).toBeTruthy()
     expect(screen.getByText('作品')).toBeTruthy()
+    // 资料按 id 直接取详情，不再从列表前 200 条里找
+    expect(api.fetchPerson).toHaveBeenCalledWith('blogger', 3)
     expect(api.fetchPersonInspirations).toHaveBeenCalledWith('blogger', 3, 1, 30)
   })
 

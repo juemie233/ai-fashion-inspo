@@ -1,6 +1,6 @@
 /** 人物作品墙：头部资料 + 该人物素材的分页网格。 */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -14,8 +14,8 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Icon from '../../components/Icon'
 import {
+  fetchPerson,
   fetchPersonInspirations,
-  fetchPersons,
   getFileUrl,
   type Inspiration,
   type Person,
@@ -49,12 +49,14 @@ export default function PersonDetailScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
-  /** 人物资料：列表接口按 id 精确取（后端没有单独的人物详情端点） */
+  /** 翻页互斥 + 请求序号：避免慢网重复触发 onEndReached 时追加重复页 */
+  const loadingMoreRef = useRef(false)
+  const requestSeqRef = useRef(0)
+
+  /** 人物资料：直接按 id 取详情（不再从列表前 200 条里找） */
   const loadPerson = useCallback(async () => {
     try {
-      const data = await fetchPersons(personKind, 1, 200)
-      const found = data.items.find((p) => p.id === personId) ?? null
-      setPerson(found)
+      setPerson(await fetchPerson(personKind, personId))
     } catch {
       // 资料失败不影响作品墙
     }
@@ -67,17 +69,24 @@ export default function PersonDetailScreen() {
         setLoading(false)
         return
       }
+      if (nextPage > 1 && loadingMoreRef.current) return
+      const seq = ++requestSeqRef.current
+      if (nextPage > 1) loadingMoreRef.current = true
       try {
         const data = await fetchPersonInspirations(personKind, personId, nextPage, PAGE_SIZE)
+        if (seq !== requestSeqRef.current) return
         setItems((prev) => (nextPage === 1 ? data.items : [...prev, ...data.items]))
         setTotal(data.total)
         setPage(nextPage)
         setError('')
       } catch {
-        setError('加载失败，请检查网络或后端服务')
+        if (seq === requestSeqRef.current) setError('加载失败，请检查网络或后端服务')
       } finally {
-        setLoading(false)
-        setRefreshing(false)
+        if (nextPage > 1) loadingMoreRef.current = false
+        if (seq === requestSeqRef.current) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
     },
     [personKind, personId],
@@ -90,6 +99,7 @@ export default function PersonDetailScreen() {
 
   const onRefresh = () => {
     setRefreshing(true)
+    void loadPerson()
     void loadWorks(1)
   }
 

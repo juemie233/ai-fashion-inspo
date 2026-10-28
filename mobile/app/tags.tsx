@@ -52,6 +52,8 @@ export default function TagsScreen() {
   const [editing, setEditing] = useState<FlatTag | null>(null)
   const [draftName, setDraftName] = useState('')
   const [saving, setSaving] = useState(false)
+  /** 改名失败原因（必须显示在弹层里：列表区的错误会被遮罩挡住） */
+  const [renameError, setRenameError] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -87,16 +89,24 @@ export default function TagsScreen() {
   const openEdit = (tag: FlatTag) => {
     setEditing(tag)
     setDraftName(tag.name)
+    setRenameError('')
+  }
+
+  /** 关闭改名弹层（错误提示一并清掉） */
+  const closeEdit = () => {
+    setEditing(null)
+    setRenameError('')
   }
 
   const submitRename = async () => {
     if (!editing) return
     const name = draftName.trim()
     if (!name || name === editing.name) {
-      setEditing(null)
+      closeEdit()
       return
     }
     setSaving(true)
+    setRenameError('')
     try {
       await renameTag(editing.id, name)
       // 改名后让其它页面（标签筛选/编辑器）下次拿到最新数据
@@ -108,9 +118,9 @@ export default function TagsScreen() {
           tags: g.tags.map((t) => (t.id === editing.id ? { ...t, name } : t)),
         })),
       )
-      setEditing(null)
+      closeEdit()
     } catch {
-      setError('改名失败：名称可能重复')
+      setRenameError('改名失败：名称可能重复')
     } finally {
       setSaving(false)
     }
@@ -177,7 +187,7 @@ export default function TagsScreen() {
       />
 
       {/* 改名弹层 */}
-      <Modal visible={editing !== null} transparent animationType="fade" onRequestClose={() => setEditing(null)}>
+      <Modal visible={editing !== null} transparent animationType="fade" onRequestClose={closeEdit}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>重命名标签</Text>
@@ -190,8 +200,9 @@ export default function TagsScreen() {
               placeholder="新名称"
               placeholderTextColor="#9ca3af"
             />
+            {renameError !== '' && <Text style={styles.modalError}>{renameError}</Text>}
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setEditing(null)}>
+              <TouchableOpacity style={styles.modalCancel} onPress={closeEdit}>
                 <Text style={styles.modalCancelText}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -261,6 +272,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
+  modalError: { fontSize: 12, color: '#ef4444', marginTop: 8 },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
   modalCancel: { paddingHorizontal: 14, paddingVertical: 9 },
   modalCancelText: { fontSize: 14, color: '#6b7280' },

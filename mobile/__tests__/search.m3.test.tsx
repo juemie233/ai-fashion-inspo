@@ -9,6 +9,11 @@ jest.mock('../services/api', () => {
   return {
     ...actual,
     apiClient: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+    // 搜索页标签筛选走 fetchTagGroups（会话缓存）；actual 内部仍引用真实 axios，
+    // 不单独 mock 会打到真后端（tagsLoading 永远停在「正在加载标签…」）
+    fetchTagGroups: jest.fn().mockResolvedValue([
+      { category: 'style', tags: [{ id: 1, name: '甜美', category: 'style' }] },
+    ]),
     vectorSearchByImage: jest.fn(),
     vectorSearchByText: jest.fn(),
   }

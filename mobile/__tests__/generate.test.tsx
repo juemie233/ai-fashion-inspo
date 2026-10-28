@@ -13,6 +13,8 @@ jest.mock('../services/api', () => {
   return {
     ...actual,
     apiClient: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+    // 档位名由后端提供：测试里给空表，走内置兜底（避免真实请求干扰用例）
+    fetchGenerateModelLabels: jest.fn().mockResolvedValue({}),
     fetchGenerateRuns: jest.fn(),
     fetchGenerateRun: jest.fn(),
   }

@@ -509,6 +509,17 @@ export async function fetchPersons(
   }
 }
 
+/** 单个人物详情（`GET /bloggers|models/{id}`）
+ *
+ * 详情页头需要头像/简介/素材数：按 id 直接取，避免「拉列表前 200 条再找」——
+ * 素材数排名靠后的人物会找不到，白白多传 200 条数据。
+ */
+export async function fetchPerson(kind: PersonKind, id: number): Promise<Person | null> {
+  const path = kind === 'blogger' ? `/bloggers/${id}` : `/models/${id}`
+  const { data } = await apiClient.get<RawPerson>(path)
+  return data ? toPerson(data, kind) : null
+}
+
 /** 人物作品墙（分页） */
 export async function fetchPersonInspirations(
   kind: PersonKind,
@@ -564,6 +575,24 @@ export interface GenerateCandidate {
 export interface GenerateRunDetail {
   run: GenerateRun
   candidates: GenerateCandidate[]
+}
+
+/** 档位展示名缓存：`GET /generate/models` 是 MODEL_SPECS 的单一来源 */
+let generateModelLabels: Record<string, string> | null = null
+
+/** 拉出图档位展示名（会话级缓存；失败时由调用方回退内置兜底表） */
+export async function fetchGenerateModelLabels(): Promise<Record<string, string>> {
+  if (generateModelLabels) return generateModelLabels
+  const { data } = await apiClient.get<{
+    items?: Array<{ key: string; label: string }>
+  }>('/generate/models')
+  const labels: Record<string, string> = {}
+  for (const item of data?.items ?? []) {
+    // 与 Web 的 shortModelLabel 同口径：去掉「（快，1024² 约 6 秒）」这类补充
+    labels[item.key] = item.label.split('（')[0] ?? item.label
+  }
+  generateModelLabels = labels
+  return labels
 }
 
 /** 出图批次分页 */

@@ -1,7 +1,7 @@
 /** M4 API 契约：人物（博主/模特归一）、作品墙、标签改名。 */
 
 import { apiClient } from '../services/api'
-import { fetchPersonInspirations, fetchPersons, renameTag } from '../services/api'
+import { fetchPerson, fetchPersonInspirations, fetchPersons, renameTag } from '../services/api'
 
 describe('人物列表', () => {
   it('博主：打 /bloggers，并把原始结构归一成 Person', async () => {
@@ -64,6 +64,22 @@ describe('人物列表', () => {
     await fetchPersons('blogger', 2, 20, '   ')
 
     expect(spy).toHaveBeenCalledWith('/bloggers', { params: { page: 2, size: 20, sort: 'count' } })
+    spy.mockRestore()
+  })
+})
+
+describe('人物详情', () => {
+  it('按 id 直接打 /bloggers|models/{id}，不再拉列表前 200 条', async () => {
+    const spy = jest.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { id: 9, name: '小A', platform: 'douyin', inspiration_count: 3 },
+    })
+
+    const person = await fetchPerson('blogger', 9)
+    expect(spy).toHaveBeenCalledWith('/bloggers/9')
+    expect(person).toMatchObject({ id: 9, kind: 'blogger', name: '小A' })
+
+    await fetchPerson('model', 4)
+    expect(spy).toHaveBeenLastCalledWith('/models/4')
     spy.mockRestore()
   })
 })

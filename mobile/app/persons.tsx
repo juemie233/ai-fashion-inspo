@@ -4,7 +4,7 @@
  * 那些是维护工作，留在 Web。
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -50,20 +50,31 @@ export default function PersonsScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
+  /** 翻页互斥 + 请求序号：避免慢网重复触发 onEndReached 时追加重复页 */
+  const loadingMoreRef = useRef(false)
+  const requestSeqRef = useRef(0)
+
   const load = useCallback(
     async (nextPage = 1, nextKind = kind, keyword = search) => {
+      if (nextPage > 1 && loadingMoreRef.current) return
       if (nextPage === 1) setLoading(true)
+      const seq = ++requestSeqRef.current
+      if (nextPage > 1) loadingMoreRef.current = true
       try {
         const data = await fetchPersons(nextKind, nextPage, PAGE_SIZE, keyword)
+        if (seq !== requestSeqRef.current) return
         setItems((prev) => (nextPage === 1 ? data.items : [...prev, ...data.items]))
         setTotal(data.total)
         setPage(nextPage)
         setError('')
       } catch {
-        setError('加载失败，请检查网络或后端服务')
+        if (seq === requestSeqRef.current) setError('加载失败，请检查网络或后端服务')
       } finally {
-        setLoading(false)
-        setRefreshing(false)
+        if (nextPage > 1) loadingMoreRef.current = false
+        if (seq === requestSeqRef.current) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
     },
     [kind, search],
@@ -94,10 +105,10 @@ export default function PersonsScreen() {
               style={[styles.tab, active && styles.tabActive]}
               onPress={() => {
                 if (t.kind === kind) return
+                // 只改条件：load 的依赖变化会触发 effect 重新拉第一页（避免双请求）
                 setKind(t.kind)
                 setItems([])
                 setPage(1)
-                void load(1, t.kind, search)
               }}
             >
               <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
@@ -121,8 +132,8 @@ export default function PersonsScreen() {
         {search.length > 0 && (
           <TouchableOpacity
             onPress={() => {
+              // 只改条件：load 的依赖变化会触发 effect 重新拉（避免双请求）
               setSearch('')
-              void load(1, kind, '')
             }}
             hitSlop={8}
           >

@@ -37,6 +37,8 @@ export default function GenerateRunScreen() {
   const [error, setError] = useState('')
   /** 全屏预览的图片地址 */
   const [viewerUri, setViewerUri] = useState<string | null>(null)
+  /** 后端给的最新档位展示名（拉不到时用内置兜底） */
+  const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     if (!Number.isFinite(runId)) {
@@ -60,6 +62,19 @@ export default function GenerateRunScreen() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    // 档位名从后端取（单一来源）；失败不打断详情，回退内置表
+    let alive = true
+    void fetchGenerateModelLabels()
+      .then((labels) => {
+        if (alive) setModelLabels(labels)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -79,7 +94,7 @@ export default function GenerateRunScreen() {
       ListHeaderComponent={
         <View style={styles.header}>
           <Text style={styles.model}>
-            {MODEL_LABELS[run?.model_key ?? ''] ?? run?.model_key ?? '本地出图'}
+            {modelLabel(run?.model_key, modelLabels)}
           </Text>
           <Text style={styles.prompt}>{run?.prompt || '（无描述）'}</Text>
           {run?.negative ? <Text style={styles.negative}>负面词：{run.negative}</Text> : null}
