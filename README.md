@@ -802,6 +802,7 @@ fashion-inspo/
     ├── restart.sh                # 一键重启前后端 + worker
     ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，手动执行）
     ├── project_stats.py          # 项目体量统计（代码行数 / 数据与存储 / 仓库体积 / 测试数 / 最大源文件，支持 --json）
+    ├── code_report.py            # 代码量体检报告（总览 / 分布 / 结构 / 质量 / 真实库数据量，支持 --ref 固定提交、--deep 精确测试数、--json）
     └── generate_icons.py         # 生成插件图标
 ```
 
