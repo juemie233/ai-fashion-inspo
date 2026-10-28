@@ -268,6 +268,42 @@ def build_search_plan(
     return SearchPlan(plan=plan, done=0, items_found=0, items_added=0)
 
 
+def diagnose_empty_result(
+    *,
+    platform: str,
+    items_found: int,
+    per_search: list[dict],
+    login_ok: bool,
+) -> str | None:
+    """颗粒无收时给出可读的失败原因（纯函数；有收获或没有搜索明细就返回 None）。
+
+    三条口径（与改造前的内联实现逐字一致）：
+
+    - 搜索明细里带 error → 拼成「A | B」并截断到 500 字；
+    - 其中抖音 + 未登录 + 「导航失败」→ 补一句**可操作**指引（真实案例：任务 #43，
+      只写「导航失败」让人无从下手）；
+    - 抖音无显式 error 但提取为 0 → 只陈述事实与排查方向，不臆测原因。
+
+    为什么抽出来：这段文案会直接进 `scraper_tasks.error` 并在前端任务详情展示，
+    「登录墙」那句尤其关键——它决定用户下一步是去登录还是去查选择器。
+    """
+    if items_found != 0 or not per_search:
+        return None
+
+    errors = [s.get("error", "") for s in per_search if s.get("error")]
+    if errors:
+        error_msg = " | ".join(errors)[:500]
+        # 抖音未登录时导航失败几乎必然是登录墙：给出可操作指引
+        if platform == "douyin" and not login_ok and "导航失败" in error_msg:
+            error_msg = f"{error_msg}（检测到抖音未登录：请在调试 Chrome 中登录抖音后重试）"[:500]
+        return error_msg
+
+    if platform == "douyin":
+        # 搜索路径的所有失败模式均已带明确漏斗 error，此处仅为兜底
+        return "抖音采集提取 0 个作品链接（具体原因见任务日志与漏斗明细）"[:500]
+    return None
+
+
 def run_scraper_sync(task_id: int):
     """执行采集任务的同步入口函数。
 
@@ -937,33 +973,12 @@ def run_scraper_sync(task_id: int):
     )
 
     # ── 完成任务 ──
-    error_msg = None
-    if items_found == 0 and per_search:
-        errors = [
-            s.get("error", "")
-            for s in per_search
-            if s.get("error")
-        ]
-        if errors:
-            error_msg = " | ".join(errors)[:500]
-            # 抖音未登录时导航失败几乎必然是登录墙：给出可操作指引，
-            # 避免「导航失败」四个字让人无从下手（真实案例：任务 #43）
-            if (
-                platform == "douyin"
-                and not login_ok
-                and "导航失败" in error_msg
-            ):
-                error_msg = (
-                    f"{error_msg}"
-                    "（检测到抖音未登录：请在调试 Chrome 中登录抖音后重试）"
-                )[:500]
-        elif platform == "douyin":
-            # 无显式错误但颗粒无收：只陈述事实与排查方向，不臆测原因
-            # （搜索路径的所有失败模式均已带明确漏斗 error，此处为兜底）
-            error_msg = (
-                "抖音采集提取 0 个作品链接"
-                "（具体原因见任务日志与漏斗明细）"
-            )[:500]
+    error_msg = diagnose_empty_result(
+        platform=platform,
+        items_found=items_found,
+        per_search=per_search,
+        login_ok=login_ok,
+    )
 
     def _done():
         """标记任务完成并写入漏斗诊断（同步写库，规避事件循环冲突）。"""

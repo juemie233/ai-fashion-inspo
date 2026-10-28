@@ -7,6 +7,9 @@
    **不会在测试里暴露**（脚本不计覆盖率），只能靠静态规则兜住。
 2. **入口统一 argparse**：手写 `sys.argv[1]` 没有 `--help`、没有类型校验，参数漏传
    时的报错也各写各的。统一后每一处入口都能 `--help` 自查。
+3. **注释里不许出现 `def`**：`# ====def foo():` 这种「压行」会让函数被注释吞掉，
+   函数体还会被吸进上一个函数——模块照样 import、测试照样过，只有 ruff 的 F821 能发现
+   （2026-10-28 在 `fetch_xhs_following.py` 真撞到两处）。
 
 用法：
     python scripts/check_scripts.py          # 检查 scripts/ 与 backend/scripts/
@@ -117,6 +120,32 @@ def check_readonly_connections(path: Path) -> list[str]:
     return problems
 
 
+COMMENTED_DEF_RE = re.compile(r"^\s*#.*\bdef\s+[A-Za-z_][A-Za-z0-9_]*\s*\(")
+
+
+def check_defs_not_swallowed_by_comment(path: Path) -> list[str]:
+    """注释行里出现 ``def ...(`` → 可能是「压行把定义吃掉了」的静默损坏。
+
+    真实事故（2026-10-28）：`fetch_xhs_following.py` 里两次把
+
+        # ============
+        def _probe_cdp(...):
+
+    压成 ``# ============def _probe_cdp(...):``。注释不改变缩进状态，于是函数体被吸进
+    上一个函数：函数不存在、上一个函数末尾多出一句 `return _check_cdp(port)`，
+    一调用就 NameError；而模块能 import、单测能过，只有 ruff 的 F821 能发现。
+    """
+    problems: list[str] = []
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if COMMENTED_DEF_RE.match(line) and NOQA not in line:
+            problems.append(
+                f"{_rel(path)}:{lineno} 注释行里出现了 def 定义：多半是「注释 + 空行 + def」"
+                "被压成一行，函数会被当注释吞掉；请把 def 拆回独立行"
+            )
+    return problems
+
+
 def check_cli_uses_argparse(path: Path) -> list[str]:
     """入口块里不应直接索引 sys.argv（必须 argparse 或传 argv 给可测函数）。"""
     problems: list[str] = []
@@ -154,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     for path in scripts:
         problems += check_readonly_connections(path)
         problems += check_cli_uses_argparse(path)
+        problems += check_defs_not_swallowed_by_comment(path)
 
     if not problems:
         print(f"[ok] 脚本规范检查通过（{len(scripts)} 个脚本）")

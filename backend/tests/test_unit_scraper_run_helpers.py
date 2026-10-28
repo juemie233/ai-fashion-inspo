@@ -1,4 +1,4 @@
-"""采集主入口的三个纯函数：配置解析、执行计划、漏斗汇总。
+"""采集主入口的四个纯函数：配置解析、执行计划、失败诊断、漏斗汇总。
 
 为什么单独测这两块：`run_scraper_sync` 是一个 700+ 行的巨型函数（覆盖率 0%），
 里面的**配置校验**与**统计口径**却是最容易出错、也最不该靠「跑一次采集看看」来验证的：
@@ -7,7 +7,7 @@
 - 漏斗汇总是人工判断「这次采集成不成功」的唯一凭据，数字错位比报错更危险
   （历史事故 #46 就是数字与写入对不上，没人发现）。
 
-三个函数都不碰网络/浏览器/数据库，可以放心单测。
+四个函数都不碰网络/浏览器/数据库，可以放心单测。
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from scripts.run_scraper import (
     SearchPlan,
     TaskConfig,
     build_search_plan,
+    diagnose_empty_result,
     format_funnel_summary,
     parse_task_config,
 )
@@ -260,3 +261,93 @@ class TestBuildSearchPlan:
 
         assert state.plan == [{"k": "通勤", "s": "general"}]
         assert state.resumed is False
+
+
+class TestDiagnoseEmptyResult:
+    """颗粒无收时的失败诊断：文案会直接进 `scraper_tasks.error` 并展示给用户。
+
+    重点守「登录墙」那句：抖音未登录 + 导航失败时，必须给出**可操作**指引，
+    而不是只说「导航失败」（真实案例：任务 #43，用户不知道该去登录）。
+    """
+
+    def test_returns_none_when_anything_was_found(self) -> None:
+        assert (
+            diagnose_empty_result(
+                platform="douyin", items_found=3, per_search=[{"error": "x"}], login_ok=True
+            )
+            is None
+        )
+
+    def test_returns_none_without_per_search_details(self) -> None:
+        assert (
+            diagnose_empty_result(
+                platform="douyin", items_found=0, per_search=[], login_ok=False
+            )
+            is None
+        )
+
+    def test_joins_search_errors(self) -> None:
+        msg = diagnose_empty_result(
+            platform="xiaohongshu",
+            items_found=0,
+            per_search=[{"error": "风控拦截"}, {"error": "导航失败"}, {}],
+            login_ok=True,
+        )
+
+        assert msg == "风控拦截 | 导航失败"
+
+    def test_truncates_long_errors_to_500_chars(self) -> None:
+        msg = diagnose_empty_result(
+            platform="xiaohongshu",
+            items_found=0,
+            per_search=[{"error": "错" * 800}],
+            login_ok=True,
+        )
+
+        assert msg is not None
+        assert len(msg) == 500
+
+    def test_douyin_logged_out_navigation_failure_gets_actionable_hint(self) -> None:
+        msg = diagnose_empty_result(
+            platform="douyin",
+            items_found=0,
+            per_search=[{"error": "导航失败: net::ERR_ABORTED"}],
+            login_ok=False,
+        )
+
+        assert msg is not None
+        assert "抖音未登录" in msg
+        assert "请（" not in msg  # 句子拼接不留断裂
+        assert "请在调试 Chrome 中登录抖音后重试" in msg
+        assert msg.startswith("导航失败: net::ERR_ABORTED")
+
+    def test_douyin_logged_in_navigation_failure_has_no_login_hint(self) -> None:
+        msg = diagnose_empty_result(
+            platform="douyin",
+            items_found=0,
+            per_search=[{"error": "导航失败: timeout"}],
+            login_ok=True,
+        )
+
+        assert msg == "导航失败: timeout"
+
+    def test_douyin_without_explicit_error_falls_back_to_fact_only(self) -> None:
+        """无显式 error 时只说事实与排查方向，不臆测原因。"""
+        msg = diagnose_empty_result(
+            platform="douyin",
+            items_found=0,
+            per_search=[{"cards_total": 0}],
+            login_ok=True,
+        )
+
+        assert msg == "抖音采集提取 0 个作品链接（具体原因见任务日志与漏斗明细）"
+
+    def test_xiaohongshu_without_error_returns_none(self) -> None:
+        msg = diagnose_empty_result(
+            platform="xiaohongshu",
+            items_found=0,
+            per_search=[{"cards_total": 0}],
+            login_ok=True,
+        )
+
+        assert msg is None
