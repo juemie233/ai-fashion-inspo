@@ -18,11 +18,18 @@ import ArcoVue from '@arco-design/web-vue'
 
 const mocks = vi.hoisted(() => ({
   fetchRun: vi.fn(),
+  fetchInspirations: vi.fn(),
+  autoTitleRun: vi.fn(),
 }))
 
 vi.mock('@/api/generate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/generate')>()
-  return { ...actual, fetchRun: mocks.fetchRun }
+  return { ...actual, fetchRun: mocks.fetchRun, autoTitleRun: mocks.autoTitleRun }
+})
+
+vi.mock('@/api/inspirations', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/inspirations')>()
+  return { ...actual, fetchInspirations: mocks.fetchInspirations }
 })
 
 import GenerateHistoryTable from '../GenerateHistoryTable.vue'
@@ -475,6 +482,164 @@ describe('生成历史表 · 标注与统计', () => {
     expect(emitted?.[1].title).toBe('通勤白衬衫')
     expect(emitted?.[1].note).toBe('袖子加长')
     expect(emitted?.[1].clear_title).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  // ── P2：导出 / 参考素材聚合 ──
+
+  it('导出下拉：CSV / JSON 两种格式都回抛', async () => {
+    // Arco 的 dropdown content 是懒挂载（jsdom 里不悬浮就不渲染）→ 用透传 stub 把内容渲染出来
+    const DropdownStub = {
+      name: 'ADropdownStub',
+      template: '<div class="dd-stub"><slot name="content" /></div>',
+    }
+    const wrapper = mount(GenerateHistoryTable, {
+      props: {
+        history: [record()],
+        total: 1,
+        page: 1,
+        size: 20,
+        filters: {},
+        loading: false,
+        submitting: false,
+        deletingId: null,
+        status,
+      },
+      global: { plugins: [ArcoVue], stubs: { 'a-dropdown': DropdownStub } },
+    })
+    await wrapper.vm.$nextTick()
+
+    // Arco 下拉项的类名是 arco-dropdown-option（不是 arco-doption）
+    const options = wrapper.findAll('.dd-stub .arco-dropdown-option')
+    expect(options).toHaveLength(2)
+    await options[0].trigger('click')
+    await options[1].trigger('click')
+
+    expect(wrapper.emitted('export')).toEqual([['csv'], ['json']])
+    wrapper.unmount()
+  })
+
+  it('参考素材缩略图：点一张回抛 filter-by-reference', async () => {
+    mocks.fetchInspirations.mockResolvedValue({
+      items: [
+        { id: 'ref-a', file_path: 'images/ref-a.jpg', thumbnail_path: 'thumbnails/ref-a.jpg' },
+        { id: 'ref-b', file_path: 'images/ref-b.jpg', thumbnail_path: null },
+      ],
+      total: 2,
+    })
+    const wrapper = mountTable(
+      record({ params: { reference_ids: ['ref-a', 'ref-b'], width: 1024, height: 768 } }),
+    )
+    await wrapper.vm.$nextTick()
+    await expandFirstRow(wrapper)
+    await flushPromises()
+
+    expect(mocks.fetchInspirations).toHaveBeenCalledWith({ ids: 'ref-a,ref-b', size: 2 })
+    const thumbs = wrapper.findAll('.ghd-ref')
+    expect(thumbs).toHaveLength(2)
+    // 有 thumbnail_path 用缩略图，否则退回原图
+    expect(thumbs[0].find('img').attributes('src')).toContain('thumbnails/ref-a.jpg')
+    expect(thumbs[1].find('img').attributes('src')).toContain('images/ref-b.jpg')
+
+    await thumbs[1].trigger('click')
+    expect(wrapper.emitted('filter-by-reference')?.[0]).toEqual(['ref-b'])
+
+    wrapper.unmount()
+  })
+
+  it('参考素材筛选生效时显示可关闭的标签，关闭即清掉该筛选', async () => {
+    const wrapper = mountTable(record(), { filters: { reference_id: 'ref-a-long-id' } })
+    await wrapper.vm.$nextTick()
+
+    const tag = wrapper.find('.gh-toolbar .arco-tag')
+    expect(tag.exists()).toBe(true)
+    expect(tag.text()).toContain('只看这张参考图')
+
+    await tag.find('.arco-tag-close-btn').trigger('click')
+    const emitted = wrapper.emitted('update:filters') ?? []
+    expect((emitted.at(-1)?.[0] as Record<string, unknown>).reference_id).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  // ── P2：两批对比（C1）与 AI 起名（C3） ──
+
+  it('选两个批次后「对比这两批」才可用，点击回抛两个 id', async () => {
+    const wrapper = mount(GenerateHistoryTable, {
+      props: {
+        history: [record({ id: 11 }), record({ id: 22 })],
+        total: 2,
+        page: 1,
+        size: 20,
+        filters: {},
+        loading: false,
+        submitting: false,
+        deletingId: null,
+        status,
+      },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+
+    const compareBtn = wrapper.findAll('button').filter((b) => b.text() === '对比这两批')
+    expect(compareBtn).toHaveLength(1)
+    expect(compareBtn[0].attributes('disabled')).toBeDefined()
+
+    const rowCompare = wrapper.findAll('button').filter((b) => b.text() === '对比')
+    expect(rowCompare).toHaveLength(2)
+    await rowCompare[0].trigger('click')
+    await rowCompare[1].trigger('click')
+
+    const submit = wrapper.findAll('button').filter((b) => b.text().includes('对比这两批'))
+    expect(submit[0].attributes('disabled')).toBeUndefined()
+    await submit[0].trigger('click')
+
+    expect(wrapper.emitted('compare-runs')?.[0]).toEqual([[11, 22]])
+    wrapper.unmount()
+  })
+
+  it('同一个批次点两次「对比」= 取消选择', async () => {
+    const wrapper = mountTable(record({ id: 33 }))
+    await wrapper.vm.$nextTick()
+
+    const btn = wrapper.findAll('button').filter((b) => b.text() === '对比')
+    await btn[0].trigger('click')
+    expect(wrapper.findAll('button').some((b) => b.text() === '已选对比')).toBe(true)
+
+    await wrapper
+      .findAll('button')
+      .filter((b) => b.text() === '已选对比')[0]
+      .trigger('click')
+    expect(wrapper.findAll('button').some((b) => b.text() === '对比')).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('「AI 起名」把模型建议填进命名框（仍需用户点保存）', async () => {
+    mocks.autoTitleRun.mockResolvedValue({ title: '通勤白衬衫', source: 'ai' })
+    const wrapper = mountTable(record(), { attachTo: document.body })
+    await wrapper.vm.$nextTick()
+
+    await wrapper
+      .findAll('button')
+      .filter((b) => b.text() === '标注')[0]
+      .trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const autoBtn = Array.from(document.querySelectorAll('.gh-meta-form button')).find((el) =>
+      (el as HTMLElement).textContent?.includes('AI 起名'),
+    ) as HTMLElement
+    expect(autoBtn).toBeTruthy()
+    autoBtn.click()
+    await flushPromises()
+
+    expect(mocks.autoTitleRun).toHaveBeenCalledWith(12)
+    const input = document.querySelector('.gh-meta-form input') as HTMLInputElement
+    expect(input.value).toBe('通勤白衬衫')
+    // 没点保存：不应该回抛 save-meta
+    expect(wrapper.emitted('save-meta')).toBeUndefined()
 
     wrapper.unmount()
   })

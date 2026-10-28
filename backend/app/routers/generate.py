@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -155,6 +155,60 @@ async def patch_run(
         note=payload.note,
         clear_title=payload.clear_title,
         clear_note=payload.clear_note,
+    )
+
+
+@router.post("/runs/{run_id}/auto-title")
+async def auto_title(run_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """用本地模型给这批起一个 ≤20 字的中文标题（返回建议，不写库）。
+
+    模型不可用/超时/输出为空时自动回退为「描述前 20 字」并标记 `source=fallback`，
+    前端据此提示用户「可以自己改」。
+    """
+    return await generation_service.auto_title_for_run(db, run_id)
+
+
+@router.get("/runs/export")
+async def export_runs(
+    fmt: str = Query("csv", pattern="^(csv|json)$"),
+    kind: str | None = Query(None, pattern="^(t2i|i2i)$"),
+    model_key: str | None = Query(None, max_length=32),
+    status: str | None = Query(None, max_length=16),
+    has_imported: bool | None = Query(None),
+    favorite: bool | None = Query(None),
+    q: str | None = Query(None, max_length=200),
+    reference_id: str | None = Query(None, max_length=64),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """导出生成历史（CSV / JSON），筛选参数与列表接口一致。
+
+    CSV 带 UTF-8 BOM（Excel 直接打开中文不乱码）；最多导出 5000 行。
+    """
+    filename, text = await generation_service.export_runs(
+        db,
+        fmt=fmt,
+        kind=kind,
+        model_key=model_key,
+        status=status,
+        has_imported=has_imported,
+        favorite=favorite,
+        q=q,
+        reference_id=reference_id,
+        since=since,
+        until=until,
+    )
+    if fmt == "json":
+        return Response(
+            content=text,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    return Response(
+        content="\ufeff" + text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

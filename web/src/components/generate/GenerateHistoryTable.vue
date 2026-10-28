@@ -19,7 +19,8 @@ import type {
   GenerationRunBrief,
   GenerationRunStats,
 } from '@/api/generate'
-import { fetchRun } from '@/api/generate'
+import { autoTitleRun, fetchRun } from '@/api/generate'
+import { fetchInspirations } from '@/api/inspirations'
 import StatusTag from '@/components/common/StatusTag.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { addDaysIso, formatDateTime, shortModelLabel } from '@/utils/format'
@@ -70,6 +71,12 @@ const emit = defineEmits<{
   (e: 'apply-to-form', runId: number): void
   /** 打开该批已入库的素材（素材库按 generation_run_id 筛选） */
   (e: 'open-imported', runId: number): void
+  /** 导出当前筛选结果（csv / json） */
+  (e: 'export', fmt: 'csv' | 'json'): void
+  /** 按参考素材聚合：只看用过这张参考图的批次 */
+  (e: 'filter-by-reference', referenceId: string): void
+  /** 两批对比：选中两个批次后回抛（左=先选，右=后选） */
+  (e: 'compare-runs', ids: [number, number]): void
 }>()
 
 /** 生成方式中文标签（kind 由档位决定） */
@@ -120,6 +127,36 @@ async function copyPrompt(prompt: string): Promise<void> {
   else Message.error('复制失败，请手动选择文本')
 }
 
+// ── 两批对比选择（最多 2 个；再点已选中的即取消）──
+
+const comparePicked = ref<number[]>([])
+
+function toggleCompare(runId: number): void {
+  const idx = comparePicked.value.indexOf(runId)
+  if (idx >= 0) {
+    comparePicked.value = comparePicked.value.filter((id) => id !== runId)
+    return
+  }
+  // 已选满两个：替换最早选的那个（比「禁止点击」更符合直觉）
+  comparePicked.value = [...comparePicked.value.slice(-1), runId]
+}
+
+function isComparePicked(runId: number): boolean {
+  return comparePicked.value.includes(runId)
+}
+
+const canCompare = computed(() => comparePicked.value.length === 2)
+
+function submitCompare(): void {
+  const [a, b] = comparePicked.value
+  if (a === undefined || b === undefined) {
+    Message.warning('请先选中两个批次')
+    return
+  }
+  emit('compare-runs', [a, b])
+  comparePicked.value = []
+}
+
 /** 显示标题：用户命名优先，否则 prompt 前 40 字（列表列宽有限） */
 function displayTitle(record: GenerationRunBrief): string {
   const title = (record.title || '').trim()
@@ -163,6 +200,25 @@ function openMetaEditor(record: GenerationRunBrief): void {
   metaNote.value = record.note ?? ''
 }
 
+/** 自动命名：模型给一个 ≤20 字建议填进输入框（用户仍要自己点保存） */
+const autoTitling = ref(false)
+async function fillAutoTitle(): Promise<void> {
+  const record = metaEditing.value
+  if (!record) return
+  autoTitling.value = true
+  try {
+    const result = await autoTitleRun(record.id)
+    metaTitle.value = result.title
+    Message.success(
+      result.source === 'ai' ? '已用模型生成标题，可再修改' : '模型不可用，已用描述前 20 字代替',
+    )
+  } catch {
+    Message.error('自动命名失败，请手动填写')
+  } finally {
+    autoTitling.value = false
+  }
+}
+
 function saveMeta(): void {
   const record = metaEditing.value
   if (!record) return
@@ -174,6 +230,11 @@ function saveMeta(): void {
     clear_title: !title,
     clear_note: !note,
   })
+  // 这里不关弹窗：等视图确认接口成功后再调 closeMetaEditor；失败时保留输入
+}
+
+/** 保存成功后由视图调用：关闭标注弹层（失败时保持打开，避免用户输入丢失） */
+function closeMetaEditor(): void {
   metaEditing.value = null
 }
 
@@ -259,7 +320,9 @@ const filtered = computed(() =>
     props.filters.has_imported ||
     props.filters.q ||
     props.filters.since ||
-    props.filters.until,
+    props.filters.until ||
+    props.filters.reference_id ||
+    props.filters.favorite,
   ),
 )
 
@@ -298,6 +361,34 @@ async function loadDetail(runId: number): Promise<void> {
 /** Arco 的 @expand 签名是 (rowKey: string|number, record: TableData)：这里做一次窄化 */
 function onExpandRow(_rowKey: string | number, record: Record<string, unknown>): void {
   onExpand(record as unknown as GenerationRunBrief, true)
+  void loadReferenceThumbs(record as unknown as GenerationRunBrief)
+}
+
+/** 参考素材缩略图（按行缓存）：用于「按参考素材聚合」的入口 */
+const refThumbs = reactive<Record<number, Array<{ id: string; url: string }>>>({})
+
+async function loadReferenceThumbs(record: GenerationRunBrief): Promise<void> {
+  if (refThumbs[record.id]) return
+  const ids = Array.isArray(record.params?.reference_ids)
+    ? (record.params?.reference_ids as unknown[]).map(String).filter(Boolean)
+    : []
+  if (!ids.length) return
+  refThumbs[record.id] = [] // 占位，避免重复请求
+  try {
+    const data = await fetchInspirations({ ids: ids.join(','), size: ids.length })
+    const byId = new Map(data.items.map((item) => [item.id, item]))
+    refThumbs[record.id] = ids
+      .map((id) => byId.get(id))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .map((item) => ({
+        id: item.id,
+        url: item.thumbnail_path
+          ? `/api/files/${item.thumbnail_path.split('/').map(encodeURIComponent).join('/')}`
+          : `/api/files/${item.file_path.split('/').map(encodeURIComponent).join('/')}`,
+      }))
+  } catch {
+    refThumbs[record.id] = []
+  }
 }
 
 function onExpand(record: GenerationRunBrief, expanded: boolean): void {
@@ -334,7 +425,7 @@ function resetPicked(runId: number): void {
 }
 
 // 暴露给视图（入库后清勾选）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
-defineExpose({ resetPicked, onDateRangeChange })
+defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
 </script>
 
 <template>
@@ -415,7 +506,27 @@ defineExpose({ resetPicked, onDateRangeChange })
     <a-button v-if="filtered" size="mini" type="text" @click="emit('update:filters', {})">
       清空筛选
     </a-button>
-    <span class="gen-history-hint" style="margin-left: auto">共 {{ total }} 条</span>
+    <!-- 参考素材筛选的可见反馈（从展开行点参考图进来） -->
+    <a-tag
+      v-if="filters.reference_id"
+      size="small"
+      closable
+      @close="patchFilters({ reference_id: undefined })"
+    >
+      只看这张参考图（{{ String(filters.reference_id).slice(0, 8) }}…）
+    </a-tag>
+    <!-- 导出当前筛选结果（C2）：走接口拿真文件名，且带上筛选条件 -->
+    <a-dropdown>
+      <a-button size="mini" style="margin-left: auto">导出</a-button>
+      <template #content>
+        <a-doption @click="emit('export', 'csv')">导出 CSV（Excel 可直接打开）</a-doption>
+        <a-doption @click="emit('export', 'json')">导出 JSON</a-doption>
+      </template>
+    </a-dropdown>
+    <a-button size="mini" type="primary" :disabled="!canCompare" @click="submitCompare">
+      对比这两批{{ comparePicked.length ? `（${comparePicked.length}/2）` : '' }}
+    </a-button>
+    <span class="gen-history-hint">共 {{ total }} 条</span>
   </div>
 
   <div v-if="!history.length" class="gen-empty">
@@ -523,6 +634,14 @@ defineExpose({ resetPicked, onDateRangeChange })
           <a-button size="mini" style="margin-left: 6px" @click="openMetaEditor(record)">
             标注
           </a-button>
+          <a-button
+            size="mini"
+            style="margin-left: 6px"
+            :type="isComparePicked(record.id) ? 'primary' : 'secondary'"
+            @click="toggleCompare(record.id)"
+          >
+            {{ isComparePicked(record.id) ? '已选对比' : '对比' }}
+          </a-button>
           <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
           <a-popconfirm
             v-if="['done', 'failed', 'cancelled'].includes(record.status)"
@@ -583,6 +702,23 @@ defineExpose({ resetPicked, onDateRangeChange })
         <div v-if="record.error" class="ghd-row">
           <span class="ghd-label">失败原因</span>
           <div class="ghd-text ghd-error">{{ record.error }}</div>
+        </div>
+        <!-- 参考素材（C4）：点一张 = 只看用过这张参考图的批次 -->
+        <div v-if="(refThumbs[record.id] || []).length" class="ghd-row">
+          <span class="ghd-label">参考素材</span>
+          <div class="ghd-refs">
+            <button
+              v-for="refItem in refThumbs[record.id]"
+              :key="refItem.id"
+              type="button"
+              class="ghd-ref"
+              :title="`只看用过这张参考图的批次（${refItem.id}）`"
+              @click="emit('filter-by-reference', refItem.id)"
+            >
+              <img :src="refItem.url" alt="" loading="lazy" />
+            </button>
+            <span class="gen-history-hint">点参考图 = 只看用过它的批次</span>
+          </div>
         </div>
         <!-- 全部候选图（展开才拉详情：逐张 imported 要算哈希，列表不做） -->
         <div class="ghd-row">
@@ -661,7 +797,12 @@ defineExpose({ resetPicked, onDateRangeChange })
     @cancel="metaEditing = null"
   >
     <div class="gh-meta-form">
-      <div class="gen-label" style="margin-top: 0">命名（留空则显示描述前 40 字）</div>
+      <div class="gen-label gh-meta-label" style="margin-top: 0">
+        命名（留空则显示描述前 40 字）
+        <a-button size="mini" type="text" :loading="autoTitling" @click="fillAutoTitle">
+          AI 起名
+        </a-button>
+      </div>
       <a-input
         v-model="metaTitle"
         placeholder="例：通勤白衬衫-袖子加长版"
@@ -870,6 +1011,36 @@ defineExpose({ resetPicked, onDateRangeChange })
 
 .gh-retention.is-gone {
   color: #f53f3f;
+}
+
+/* 参考素材：小方图，点击 = 按这张参考图筛选 */
+.ghd-refs {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ghd-ref {
+  padding: 0;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  overflow: hidden;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.ghd-ref:hover {
+  border-color: rgb(var(--primary-5));
+}
+
+.ghd-ref img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  display: block;
 }
 
 .gh-meta-form {

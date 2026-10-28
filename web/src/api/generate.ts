@@ -190,6 +190,40 @@ export interface PromptPreview {
   parts: { text: string; source: string }[]
 }
 
+/**
+ * 导出生成历史（CSV / JSON）并触发浏览器下载。
+ *
+ * 走 apiClient 而不是 `window.open`：只有走 axios 才会带上 `X-API-Key`（如果配置了），
+ * 也能从 `content-disposition` 拿到后端生成的文件名（带时间戳）。
+ * 筛选参数与列表一致——导出的一定是「当前筛出来的」。
+ */
+export async function exportRuns(
+  fmt: 'csv' | 'json',
+  filters: GenerationHistoryQuery = {},
+): Promise<void> {
+  // 导出不分页：显式剔除分页参数，避免把 page/size 传给后端（它也不认）
+  const params: Record<string, unknown> = { fmt }
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === 'page' || key === 'size' || key === 'limit' || value === undefined) continue
+    params[key] = value
+  }
+  const res = await apiClient.get<Blob>('/generate/runs/export', {
+    params,
+    responseType: 'blob',
+  })
+  const disposition = (res.headers['content-disposition'] as string) || ''
+  const match = disposition.match(/filename="?([^";]+)"?/)
+  const filename = match?.[1] || `generate-history-${Date.now()}.${fmt}`
+  const url = URL.createObjectURL(res.data)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export async function fetchStatus(): Promise<GenerateStatus> {
   const { data } = await apiClient.get<GenerateStatus>('/generate/status')
   return data
@@ -256,6 +290,16 @@ export async function updateRunMeta(
   patch: GenerationRunMetaPatch,
 ): Promise<GenerationRunBrief> {
   const { data } = await apiClient.patch<GenerationRunBrief>(`/generate/runs/${runId}`, patch)
+  return data
+}
+
+/** 让本地模型给这批起个短标题（只返回建议，不写库；模型不可用时后端回退截断） */
+export async function autoTitleRun(
+  runId: number,
+): Promise<{ title: string; source: 'ai' | 'fallback' }> {
+  const { data } = await apiClient.post<{ title: string; source: 'ai' | 'fallback' }>(
+    `/generate/runs/${runId}/auto-title`,
+  )
   return data
 }
 

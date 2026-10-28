@@ -17,10 +17,11 @@ import GenerateHistoryTable from '@/components/generate/GenerateHistoryTable.vue
 import GenerateParamForm from '@/components/generate/GenerateParamForm.vue'
 import GenerateCompareModal from '@/components/generate/GenerateCompareModal.vue'
 import ReferenceGalleryModal from '@/components/generate/ReferenceGalleryModal.vue'
+import GenerateRunCompareModal from '@/components/generate/GenerateRunCompareModal.vue'
 import { fetchInspirations } from '@/api/inspirations'
 import { useReferenceItems } from '@/composables/useReferenceItems'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
-import { confirmImport, discardRun, type GenerationHistoryQuery } from '@/api/generate'
+import { confirmImport, discardRun, exportRuns, type GenerationHistoryQuery } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const route = useRoute()
@@ -161,7 +162,11 @@ async function onSaveHistoryMeta(
   patch: { title?: string; note?: string; clear_title?: boolean; clear_note?: boolean },
 ): Promise<void> {
   const ok = await updateRunMeta(runId, patch)
-  if (ok) Message.success('标注已保存')
+  if (ok) {
+    // 成功后才关弹窗：失败时保留用户输入（错误由 composable 弹 Message）
+    historyTable.value?.closeMetaEditor()
+    Message.success('标注已保存')
+  }
 }
 
 /**
@@ -194,6 +199,31 @@ function onApplyHistoryToForm(runId: number): void {
 /** 「已入库 N 张」→ 素材库只看这批入库的素材（B5 反查） */
 function onOpenImported(runId: number): void {
   void router.push({ path: '/', query: { run_id: String(runId) } })
+}
+
+/** 导出当前筛选结果（C2）：CSV 带 BOM 可直接用 Excel 打开 */
+async function onExportHistory(fmt: 'csv' | 'json'): Promise<void> {
+  try {
+    await exportRuns(fmt, historyFilters.value)
+    Message.success(`已导出 ${fmt.toUpperCase()}（共 ${historyTotal.value} 条，最多 5000 条）`)
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '导出失败'))
+  }
+}
+
+/** 两批对比（C1）：选中两行后弹窗并排看 */
+const compareRunsVisible = ref(false)
+const compareRuns = ref<[number, number] | null>(null)
+
+function onCompareRuns(ids: [number, number]): void {
+  compareRuns.value = ids
+  compareRunsVisible.value = true
+}
+
+/** 按参考素材聚合（C4）：只看用过这张参考图的批次 */
+function onFilterByReference(referenceId: string): void {
+  void setHistoryFilters({ ...historyFilters.value, reference_id: referenceId })
+  Message.info('已按参考素材筛选')
 }
 
 /** 历史表实例：从历史入库成功后要清掉那一行的勾选并让它重拉候选 */
@@ -403,6 +433,9 @@ onUnmounted(stopPoll)
       @close="lightboxVisible = false"
     />
 
+    <!-- 两批对比（C1）：从生成历史选两行进来 -->
+    <GenerateRunCompareModal v-model:visible="compareRunsVisible" :run-ids="compareRuns" />
+
     <!-- 已选参考图的大图浏览（从描述框上方的缩略图条点进来） -->
     <ReferenceGalleryModal
       v-model:visible="referenceGalleryVisible"
@@ -455,6 +488,9 @@ onUnmounted(stopPoll)
         @save-meta="onSaveHistoryMeta"
         @apply-to-form="onApplyHistoryToForm"
         @open-imported="onOpenImported"
+        @export="onExportHistory"
+        @filter-by-reference="onFilterByReference"
+        @compare-runs="onCompareRuns"
       />
     </a-card>
   </div>

@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
+import re
 import logging
 import random
 import shutil
@@ -22,6 +25,8 @@ from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import httpx
 
 from app.config import settings
 from app.models.generation import GenerationRun
@@ -803,6 +808,188 @@ async def update_run_meta(
         imported_count=imported.get(run.id, 0),
         folder_exists=exists,
     )
+
+
+"""导出最多行数：足够覆盖当前历史规模，又不会让浏览器卡死"""
+EXPORT_MAX_ROWS = 5000
+
+"""CSV 列顺序（与前端表格列对齐，便于人读；不含大字段 params_json）"""
+EXPORT_COLUMNS = (
+    "id",
+    "created_at",
+    "status",
+    "kind",
+    "model_key",
+    "total",
+    "done",
+    "failed",
+    "imported_count",
+    "favorite",
+    "title",
+    "prompt",
+    "negative",
+    "error",
+)
+
+
+async def export_runs(
+    db: AsyncSession,
+    *,
+    fmt: str = "csv",
+    kind: str | None = None,
+    model_key: str | None = None,
+    status: str | None = None,
+    has_imported: bool | None = None,
+    favorite: bool | None = None,
+    q: str | None = None,
+    reference_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[str, str]:
+    """导出生成历史（CSV / JSON 文本 + 建议文件名）。
+
+    与 ``list_runs`` **共用同一套筛选**（`_apply_run_filters`），保证「导出的是你筛出来的」。
+    不返回候选文件，只导出参数台账与统计；候选图本身是 1.6 MB/张的 PNG，不适合塞进导出。
+
+    Args:
+        fmt: ``csv`` 或 ``json``。
+        ds..until: 与列表接口同名同义。
+
+    Returns:
+        ``(filename, text)``；CSV 文本**不含 BOM**（由路由统一加，避免二次编码）。
+
+    Raises:
+        HTTPException: fmt 非法。
+    """
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="导出格式只支持 csv / json")
+
+    filters = {
+        "kind": kind,
+        "model_key": model_key,
+        "status": status,
+        "has_imported": has_imported,
+        "favorite": favorite,
+        "q": (q or "").strip() or None,
+        "reference_id": (reference_id or "").strip() or None,
+        "since": since,
+        "until": until,
+    }
+    rows = (
+        await db.execute(
+            _apply_run_filters(select(GenerationRun), filters)
+            .order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+            .limit(EXPORT_MAX_ROWS)
+        )
+    ).scalars().all()
+
+    imported = await _imported_counts(db, [run.id for run in rows])
+    records = [
+        {
+            "id": run.id,
+            "created_at": format_utc(run.created_at),
+            "status": run.status,
+            "kind": run.kind,
+            "model_key": run.model_key,
+            "total": run.total,
+            "done": run.done,
+            "failed": run.failed,
+            "imported_count": imported.get(run.id, 0),
+            "favorite": bool(run.favorite),
+            "title": run.title or "",
+            "prompt": run.prompt or "",
+            "negative": run.negative or "",
+            "error": run.error or "",
+        }
+        for run in rows
+    ]
+
+    stamp = utcnow().strftime("%Y%m%d-%H%M")
+    if fmt == "json":
+        import json as _json
+
+        return (
+            f"generate-history-{stamp}.json",
+            _json.dumps(records, ensure_ascii=False, indent=2),
+        )
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=EXPORT_COLUMNS, lineterminator="\r\n")
+    writer.writeheader()
+    writer.writerows(records)
+    return (f"generate-history-{stamp}.csv", buffer.getvalue())
+
+
+"""自动命名的字数上限（前端命名框 64，但标题要短到能一眼看完）"""
+AUTO_TITLE_MAX_CHARS = 20
+
+
+def _clean_title(raw: str) -> str:
+    """清洗模型输出：去引号/换行/列表符号，压缩空白，截到 20 字。"""
+    text = (raw or "").strip()
+    text = text.strip("\"'“”‘’")
+    text = re.sub(r"^[-*#\s]+", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text[:AUTO_TITLE_MAX_CHARS]
+
+
+def fallback_title(prompt: str) -> str:
+    """模型不可用时的兜底标题：描述前 20 字（去空白）。"""
+    compact = re.sub(r"\s+", "", (prompt or "").strip())
+    return compact[:AUTO_TITLE_MAX_CHARS] or "未命名批次"
+
+
+async def auto_title_for_run(db: AsyncSession, run_id: int) -> dict:
+    """用本地模型给批次起一个短标题（不写库，返回建议值）。
+
+    不直接写 `title` 的原因：标题是用户可改的元数据，让模型直接落库会覆盖手填内容；
+    走「返回建议 → 前端填入 → 用户确认保存」的路径，写入仍然只有 PATCH 一个入口。
+
+    Args:
+        run_id: 批次 ID。
+
+    Returns:
+        ``{"title": 建议标题, "source": "ai"|"fallback"}``；批次不存在抛 404。
+
+    Raises:
+        HTTPException: 404（批次不存在）。
+    """
+    run = await db.get(GenerationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="出图批次不存在")
+
+    prompt = (run.prompt or "").strip()
+    if not prompt:
+        return {"title": fallback_title(prompt), "source": "fallback"}
+
+    instruction = (
+        "请把下面这段出图描述概括成不超过 20 个汉字的中文短标题，"
+        "用于在生成历史里一眼认出这一批。只输出标题本身：不要引号、不要标点收尾、"
+        "不要解释、不要分行。\n\n描述："
+    )
+    payload = {
+        "model": settings.ollama_vision_model,
+        "messages": [{"role": "user", "content": instruction + prompt[:1000]}],
+        "stream": False,
+        "options": {"temperature": 0.2, "num_predict": 64},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        content = (data.get("message") or {}).get("content") or ""
+        title = _clean_title(content)
+        if title:
+            return {"title": title, "source": "ai"}
+        # 模型回了空内容：同样走兜底，不让前端拿到空标题
+        return {"title": fallback_title(prompt), "source": "fallback"}
+    except Exception as exc:  # noqa: BLE001 —— 命名失败绝不能让接口 500
+        # 用 repr：连接类异常（如 ConnectError）的 str 可能是空串，日志里要能看出类型
+        logger.warning(
+            f"自动命名失败（回退为描述前 {AUTO_TITLE_MAX_CHARS} 字）：{exc!r}"
+        )
+        return {"title": fallback_title(prompt), "source": "fallback"}
 
 
 async def run_stats(db: AsyncSession, days: int = 30) -> dict:

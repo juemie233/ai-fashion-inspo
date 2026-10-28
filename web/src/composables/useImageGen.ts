@@ -284,6 +284,14 @@ export function useImageGen() {
       const updated = await updateRunMetaApi(runId, patch)
       const idx = history.value.findIndex((item) => item.id === runId)
       if (idx >= 0) history.value[idx] = updated
+      // 正在按收藏筛选时，收藏状态一变这行就不符合条件了：重拉当前页，
+      // 否则列表会留着一条本该消失的记录，total 也对不上。
+      if (
+        historyFilters.value.favorite !== undefined &&
+        updated.favorite !== historyFilters.value.favorite
+      ) {
+        await loadHistory()
+      }
       return true
     } catch (e) {
       Message.error(getApiErrorMessage(e, '保存标注失败'))
