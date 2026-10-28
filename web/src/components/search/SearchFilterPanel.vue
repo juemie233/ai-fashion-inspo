@@ -231,7 +231,15 @@ const ratingFilterModel = computed({
   opacity: 0;
 }
 
-@media (max-width: 900px) {
+/* 平板宽度（iPad 竖屏 768~834）：筛选栏收窄到 240px，右侧结果多留 50px 宽度；
+   竖排（全宽筛选）只在手机宽度（≤767px）发生，见 SearchView 的 search-layout */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .filter-panel {
+    width: 240px;
+  }
+}
+
+@media (max-width: 767px) {
   .filter-panel {
     width: 100%;
   }

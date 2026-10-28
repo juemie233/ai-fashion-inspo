@@ -126,7 +126,12 @@ const {
         @rate="handleRate"
         @sort-change="doSearch(1)"
         @search="doSearch"
-        @update:page-size="(s: number) => { pageSize = s; doSearch(1) }"
+        @update:page-size="
+          (s: number) => {
+            pageSize = s
+            doSearch(1)
+          }
+        "
       />
     </div>
   </div>
@@ -147,7 +152,11 @@ const {
   gap: 16px;
 }
 
-@media (max-width: 900px) {
-  .search-layout { flex-direction: column; }
+/* 筛选栏与结果并排到 767px 为止：iPad 竖屏（768~834）保持左右两栏，
+   否则平板上会白白丢掉一块横向空间（手机才需要上下堆叠） */
+@media (max-width: 767px) {
+  .search-layout {
+    flex-direction: column;
+  }
 }
 </style>

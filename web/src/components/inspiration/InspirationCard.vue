@@ -245,9 +245,12 @@ function openDetail() {
     box-shadow 0.15s;
   border: 1px solid var(--color-border-2);
 }
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+/* 悬停浮起只给鼠标设备：触摸端 :hover 会「粘住」，点过的卡片长期歪着 */
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  }
 }
 
 .card-image {
@@ -386,6 +389,21 @@ function openDetail() {
 }
 .view-detail-btn:hover {
   background: rgba(0, 0, 0, 0.75);
+}
+
+/* 触摸端（iPad / 手机）：没有 hover，收藏/删除/评分等操作常显，
+   否则这些按钮在触摸设备上永远不出现 —— 网格里等于无法操作素材 */
+@media (hover: none) {
+  .card-overlay {
+    opacity: 1;
+  }
+
+  .view-detail-btn {
+    opacity: 1;
+    /* 手指点得准的最小尺寸（原 26px 偏小） */
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .quality-badges {
