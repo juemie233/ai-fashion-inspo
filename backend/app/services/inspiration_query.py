@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -95,7 +95,8 @@ async def list_inspirations(
     tag_status: str | None = None,        # tagged | untagged
     quality_status: str | None = None,    # pending | approved | rejected
     quality_reason_code: str | None = None,  # 结构化拒绝原因（not_outfit/single_item/...）
-    is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
+    is_ai_generated: bool | None = None,  # 标记了 AI 生成（含本地出图）
+    ai_suspected: bool | None = None,     # 仅「疑似 AI」：标记为真但不是本地出图
     include_tags: list[str] | None = None,  # 需同时包含的标签名（AND 语义）
     dominant_color: str | None = None,      # 主色调（hex 子串匹配）
     date_from: str | None = None,           # 上传日期下限（ISO 日期）
@@ -131,6 +132,13 @@ async def list_inspirations(
         )
     if is_ai_generated is not None:
         query = query.where(Inspiration.is_ai_generated == is_ai_generated)
+    if ai_suspected is not None:
+        # 「疑似 AI」= 打了标记、但不是本地出图的（本地出图是确定 AI，不该进疑似审核队列）
+        cond = and_(
+            Inspiration.is_ai_generated.is_(True),
+            Inspiration.source_type != "generated",
+        )
+        query = query.where(cond if ai_suspected else not_(cond))
     if rating_min is not None:
         # 评分筛选：rating >= rating_min；rating_min=0 时所有未删除素材（含未评分 0）都通过
         query = query.where(Inspiration.rating >= rating_min)

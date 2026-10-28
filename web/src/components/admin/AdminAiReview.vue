@@ -32,7 +32,9 @@ async function load() {
   loading.value = true
   try {
     const data = await fetchInspirations({
-      is_ai_generated: true,
+      // ai_suspected：只要「疑似」，不含本地出图的生成图——那些是确定的 AI 生成，
+      // 既不该出现在这里待审，也不该被「翻案为非 AI」。
+      ai_suspected: true,
       page: page.value,
       size: pageSize,
       sort: 'newest',
@@ -50,10 +52,13 @@ async function load() {
 }
 
 // 父组件批量删除完成后刷新本页
-watch(() => props.refreshKey, () => {
-  page.value = 1
-  load()
-})
+watch(
+  () => props.refreshKey,
+  () => {
+    page.value = 1
+    load()
+  },
+)
 
 onMounted(load)
 
@@ -123,9 +128,7 @@ function onPageChange(p: number) {
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <a-tag color="orange" size="small" :bordered="false">
-          共 {{ total }} 个疑似 AI 素材
-        </a-tag>
+        <a-tag color="orange" size="small" :bordered="false"> 共 {{ total }} 个疑似 AI 素材 </a-tag>
         <span class="view-hint">点击卡片勾选，悬停后点 👁 浏览详情</span>
         <span v-if="selectedCount > 0" class="selected-info">已选 {{ selectedCount }} 项</span>
       </div>
@@ -177,12 +180,7 @@ function onPageChange(p: number) {
 
     <!-- 分页 -->
     <div v-if="totalPages > 1" class="pagination-wrapper">
-      <a-pagination
-        :total="total"
-        :current="page"
-        :page-size="pageSize"
-        @change="onPageChange"
-      />
+      <a-pagination :total="total" :current="page" :page-size="pageSize" @change="onPageChange" />
     </div>
   </div>
 </template>

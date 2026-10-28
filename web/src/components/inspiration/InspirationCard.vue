@@ -203,8 +203,17 @@ function openDetail() {
         <div v-else-if="item.quality_status === 'pending'" class="quality-badge pending">
           待审核
         </div>
-        <div v-if="item.is_ai_generated" class="quality-badge ai" title="疑似 AI 生成，请人工确认">
-          疑似 AI
+        <!-- 本地出图是**确定**的 AI 生成，不叫「疑似」；两者共用 is_ai_generated 这一个标记 -->
+        <div
+          v-if="item.is_ai_generated"
+          class="quality-badge ai"
+          :title="
+            item.source_type === 'generated'
+              ? '由本地出图生成（不是真实拍摄）'
+              : '疑似 AI 生成，请人工确认'
+          "
+        >
+          {{ item.source_type === 'generated' ? 'AI 生成' : '疑似 AI' }}
         </div>
       </div>
     </div>

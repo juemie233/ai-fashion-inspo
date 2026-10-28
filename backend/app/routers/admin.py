@@ -206,13 +206,22 @@ async def batch_unmark_ai(
     if not ids:
         raise HTTPException(status_code=400, detail="请提供 ids 列表")
 
+    # 本地出图（source_type='generated'）是**确定**的 AI 生成，不存在「翻案为非 AI」；
+    # 之前它们会混进疑似队列、被这里一并翻掉，等于丢掉了「这张是生成的」这个事实。
+    generated_rows = await db.execute(
+        select(Inspiration.id).where(
+            Inspiration.id.in_(ids), Inspiration.source_type == "generated"
+        )
+    )
+    skipped_generated = [row[0] for row in generated_rows.all()]
+
     result = await db.execute(
         update(Inspiration)
-        .where(Inspiration.id.in_(ids))
+        .where(Inspiration.id.in_(ids), Inspiration.source_type != "generated")
         .values(is_ai_generated=False, updated_at=utcnow())
     )
     await db.commit()
-    return {"updated": result.rowcount}
+    return {"updated": result.rowcount, "skipped_generated": len(skipped_generated)}
 
 
 @router.get("/check-duplicate")

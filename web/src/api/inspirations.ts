@@ -292,7 +292,10 @@ export async function fetchInspirations(
     analysis_status?: string
     tag_status?: string
     quality_status?: string
+    /** 标记了 AI 生成（含本地出图） */
     is_ai_generated?: boolean
+    /** 仅「疑似 AI」：标记为真但不是本地出图（疑似审核页用） */
+    ai_suspected?: boolean
     include_tags?: string
     dominant_color?: string
     date_from?: string

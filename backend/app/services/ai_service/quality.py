@@ -6,7 +6,7 @@ Inspiration 的 quality_status / quality_reason / is_ai_generated 字段。
 
 import hashlib
 
-from sqlalchemy import or_, update
+from sqlalchemy import case, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -179,7 +179,12 @@ async def _write_quality_result(
                 **_auto_trash_fields(status),
                 quality_status=status,
                 quality_reason=reason,
-                is_ai_generated=is_ai_generated,
+                # 本地出图（source_type='generated'）是**确定**的 AI 生成：
+                # 模型没检出痕迹也不能把它翻成非 AI（生成图入库即 pending，会走这里）
+                is_ai_generated=case(
+                    (Inspiration.source_type == "generated", True),
+                    else_=is_ai_generated,
+                ),
                 # 结构化拒绝原因：approved 时为 None（同时清掉上一次的结构化原因）
                 quality_reason_code=reason_code,
                 # 判定来源：本条由模型判定（人工判定在 inspiration_update 服务里写 human）

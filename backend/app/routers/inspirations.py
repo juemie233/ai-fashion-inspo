@@ -239,7 +239,8 @@ async def list_inspirations(
     quality_status: str | None = None,    # pending | approved | rejected
     # 按结构化拒绝原因筛选（仅 quality_status=rejected 时有意义）
     quality_reason_code: str | None = None,
-    is_ai_generated: bool | None = None,  # 仅筛选疑似 AI 生成素材
+    is_ai_generated: bool | None = None,  # 标记了 AI 生成（含本地出图）
+    ai_suspected: bool | None = None,     # 仅「疑似 AI」：不含本地出图的生成图
     include_tags: str | None = Query(None, description="逗号分隔的标签名（需同时包含）"),
     dominant_color: str | None = Query(None, description="主色调 hex 值（子串匹配）"),
     date_from: str | None = Query(None, description="上传日期下限，ISO 日期"),
@@ -267,6 +268,7 @@ async def list_inspirations(
         quality_status=quality_status,
         quality_reason_code=quality_reason_code,
         is_ai_generated=is_ai_generated,
+        ai_suspected=ai_suspected,
         include_tags=include_list,
         dominant_color=dominant_color,
         date_from=date_from,
