@@ -55,6 +55,13 @@
           ],
           "disableIOS": true
         }
+      ],
+      [
+        "expo-video",
+        {
+          "supportsPictureInPicture": true,
+          "supportsBackgroundPlayback": false
+        }
       ]
     ],
     "scheme": "fashion-inspo"

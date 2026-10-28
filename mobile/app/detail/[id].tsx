@@ -30,6 +30,7 @@ import {
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { sourceLabel } from '../../utils/sourceLabel'
 import ImageViewer from '../../components/ImageViewer'
+import VideoPlayer from '../../components/VideoPlayer'
 import SimilarList from '../../components/SimilarList'
 import TagEditor from '../../components/TagEditor'
 
@@ -243,22 +244,25 @@ export default function DetailScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
-      {/* 大图：点击进入全屏浏览 */}
-      <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerOpen(true)}>
-        <Image source={{ uri: coverUri }} style={styles.mainImage} />
-        {isVideo && (
-          <View style={styles.videoBadge} pointerEvents="none">
-            <Icon name="videocam-outline" size={14} color="#fff" />
-            <Text style={styles.zoomBadgeText}>视频封面</Text>
+      {/* 视频：内嵌播放器（封面帧 + 原生控件 + 全屏）；图片：点开全屏看图 */}
+      {isVideo ? (
+        <VideoPlayer
+          uri={getFileUrl(apiBaseUrl, detail.file_path)}
+          posterUri={coverUri}
+        />
+      ) : (
+        <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerOpen(true)}>
+          <Image source={{ uri: coverUri }} style={styles.mainImage} />
+          <View style={styles.zoomBadge} pointerEvents="none">
+            <Icon name="expand-outline" size={14} color="#fff" />
+            <Text style={styles.zoomBadgeText}>全屏</Text>
           </View>
-        )}
-        <View style={styles.zoomBadge} pointerEvents="none">
-          <Icon name="expand-outline" size={14} color="#fff" />
-          <Text style={styles.zoomBadgeText}>全屏</Text>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      )}
 
-      <ImageViewer visible={viewerOpen} uri={coverUri} onClose={() => setViewerOpen(false)} />
+      {!isVideo && (
+        <ImageViewer visible={viewerOpen} uri={coverUri} onClose={() => setViewerOpen(false)} />
+      )}
 
       {/* 操作栏 */}
       <View style={styles.actions}>

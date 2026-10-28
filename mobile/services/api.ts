@@ -52,6 +52,8 @@ export async function loadApiBaseUrl(): Promise<string> {
 /** 保存自定义后端地址（设置页调用）；保存失败不影响本次会话（模块缓存已更新） */
 export async function saveApiBaseUrl(url: string): Promise<void> {
   currentApiBaseUrl = normalizeBaseUrl(url)
+  // 让后续请求立刻用新地址（不依赖 AsyncStorage 回读）
+  baseUrlReady = Promise.resolve(currentApiBaseUrl)
   try {
     await AsyncStorage.setItem(API_URL_STORAGE_KEY, currentApiBaseUrl)
   } catch {
@@ -86,8 +88,24 @@ export const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-apiClient.interceptors.request.use((config) => {
-  config.baseURL = `${currentApiBaseUrl}/api`
+/**
+ * 首次请求前先等持久化地址就绪。
+ *
+ * 真实 bug（2026-10-28 真机复现）：冷启动时页面（素材库/详情）在 mount 就发请求，
+ * 而 `loadApiBaseUrl()` 还没跑完 → baseURL 仍是默认的 10.0.2.2 → 请求必然失败，
+ * 界面显示「加载失败」，用户重进一次又正常。表现就是「时好时坏」。
+ * 这里把「读地址」做成一个可复用的 Promise，请求拦截器 await 它（只付一次成本）。
+ */
+let baseUrlReady: Promise<string> | null = null
+
+function ensureBaseUrl(): Promise<string> {
+  if (!baseUrlReady) baseUrlReady = loadApiBaseUrl()
+  return baseUrlReady
+}
+
+apiClient.interceptors.request.use(async (config) => {
+  // 地址已在会命中缓存，这里不会重复读 AsyncStorage
+  config.baseURL = `${await ensureBaseUrl()}/api`
   return config
 })
 

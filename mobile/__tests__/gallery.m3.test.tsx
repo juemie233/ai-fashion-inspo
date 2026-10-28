@@ -191,6 +191,23 @@ describe('GalleryScreen（M3）', () => {
     await waitFor(() => expect(api.addToCollection).toHaveBeenCalledWith(1, ['i2']))
   })
 
+  it('视频素材显示「视频」角标，图片素材不显示', async () => {
+    useInspirationStore.setState({
+      items: [
+        makeItem({ id: 'v1', media_type: 'video' }),
+        makeItem({ id: 'i9', media_type: 'image' }),
+      ] as never,
+      total: 2,
+      page: 1,
+      filter: {},
+    })
+    render(<GalleryScreen />)
+
+    expect(screen.getByText('视频')).toBeTruthy()
+    // 两张卡片里只有一个视频角标
+    expect(screen.getAllByText('视频')).toHaveLength(1)
+  })
+
   it('筛选结果为空时给出对应文案而不是「还没有素材」', async () => {
     useInspirationStore.setState({ items: [], total: 0, filter: { is_favorite: true } })
     render(<GalleryScreen />)

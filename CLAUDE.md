@@ -270,6 +270,10 @@ set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
 
 **两个构建期坑**：① `npm i --legacy-peer-deps` 会**删掉一批包**（实测两次：一次删掉 `expo-linking` 导致打包失败，一次删 63 个），装完依赖要立刻检查 `expo-linking` / `expo-font` / `expo-asset` / `expo-router` 是否还在；② `:app:mergeDexRelease` 报「另一个程序正在使用此文件」时，`./gradlew --stop` + 删 `app/build/intermediates/dex/release/mergeDexRelease` 再构建即可。
 
+**视频播放（`expo-video`）**：SDK 52 对应的版本是 `~2.0.6`（`expo-av` 已弃用）。它是**原生模块**——装完必须重跑 `prebuild` + 完整重建，否则运行时报「找不到模块」。`app.json` 里配 `["expo-video", { "supportsPictureInPicture": true, "supportsBackgroundPlayback": false }]`，不配插件时能播但会刷 `Current activity does not support picture-in-picture` 告警。播放器封装在 `components/VideoPlayer.tsx`（封面帧 + 点击播放 + 原生控件 + 全屏），详情页按 `media_type === 'video'` 分流；素材库卡片给视频加「视频」角标。
+
+**冷启动请求竞态（2026-10-28 真机定位）**：页面在 mount 时就发请求，而 `loadApiBaseUrl()`（读 AsyncStorage）还没跑完 → baseURL 仍是默认的 `10.0.2.2` → 请求必失败、界面显示「加载失败」，用户重进一次又好了，表现为「时好时坏」。修法是在 `apiClient` 的**请求拦截器里 `await ensureBaseUrl()`**（缓存 Promise，只付一次成本）；`saveApiBaseUrl` 后要同步刷新该 Promise。以后新增任何「启动即请求」的页面都不用再关心这个顺序。
+
 **增量同步不要用 `/MIR`**：`/MIR` 会删掉 `C:\mb\android\build`、`.cxx`，等于每次全量重编原生（几分钟）。日常改 JS 用 `/E`（只覆盖不删除），保留构建缓存后一次 **30~40 秒**；只有依赖大改/换 prebuild 产物时才 `/MIR`。
 
 **图标必须用 `mobile/components/Icon.tsx`，不要写 `<Ionicons>`**（2026-10-24 真机踩坑）

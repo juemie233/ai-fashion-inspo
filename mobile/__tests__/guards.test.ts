@@ -25,6 +25,27 @@ describe('sourceLabel 兜底', () => {
   })
 })
 
+describe('冷启动时的后端地址（真机 bug 回归）', () => {
+  it('持久化地址存在时，首个请求就带它，而不是默认 10.0.2.2', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    const { apiClient } = require('../services/api')
+    await AsyncStorage.setItem('fashion-inspo:api-base-url', '192.168.31.142:18888')
+
+    // 用一个假的 adapter 拦住真实网络，只观察 axios 最终用的 baseURL
+    const seen: string[] = []
+    const original = apiClient.defaults.adapter
+    apiClient.defaults.adapter = async (config: { baseURL?: string }) => {
+      seen.push(String(config.baseURL))
+      return { data: {}, status: 200, statusText: 'OK', headers: {}, config }
+    }
+
+    await apiClient.get('/inspirations')
+    expect(seen[0]).toBe('http://192.168.31.142:18888/api')
+
+    apiClient.defaults.adapter = original
+  })
+})
+
 describe('getFileUrl 兜底', () => {
   it('正常相对路径按段编码', () => {
     expect(getFileUrl('http://h:18888', 'images/2026-10/a b.webp')).toBe(

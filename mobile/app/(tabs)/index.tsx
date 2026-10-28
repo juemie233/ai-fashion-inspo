@@ -228,6 +228,14 @@ export default function GalleryScreen() {
           <Text style={styles.cardBadgeText}>{sourceLabel(item.source_type)}</Text>
         </View>
 
+        {/* 视频角标：缩略图是封面帧，点进去才是播放器 */}
+        {item.media_type === 'video' && (
+          <View style={styles.videoBadge}>
+            <Icon name="play" size={10} color="#fff" />
+            <Text style={styles.videoBadgeText}>视频</Text>
+          </View>
+        )}
+
         {/* 收藏按钮（多选态隐藏，避免与勾选冲突） */}
         {!selectionMode && (
           <TouchableOpacity
@@ -390,6 +398,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  videoBadge: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  videoBadgeText: { fontSize: 9, color: '#fff' },
   checkOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(99,102,241,0.35)',
