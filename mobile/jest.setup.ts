@@ -1,9 +1,15 @@
 /** Jest 全局设置：mock 掉原生模块。 */
 
-// RNTL 默认 1s 的异步等待在满负载并行跑时容易偶发超时（Modal 动画 + 多套件竞争）
-// 统一放宽到 5s，减少假失败；真正的回归仍会被超时挡住
+// RNTL 默认 1s 的异步等待在满负载并行跑时容易偶发超时（Modal 动画 + 多套件竞争）。
+// 2026-10-28 CI 实测：GitHub runner 只有 2 核，同一套件本地 29s / CI 65s，
+// 5s 的等待窗口在 CI 上会偶发假失败，放宽到 15s（真正的回归仍会被超时挡住）。
 const { configure } = require('@testing-library/react-native')
-configure({ asyncUtilTimeout: 5000 })
+configure({ asyncUtilTimeout: 15000 })
+
+// 单个用例的硬超时同样放宽：CI 上渲染密集用例耗时是本地 2~3 倍。
+// 注意 jest 对**同步**用例无法中断（card.fuzz 的整屏渲染就是同步循环），
+// 所以这一行只兜「异步用例卡死」，同步用例的耗时靠拆小用例控制。
+jest.setTimeout(60000)
 
 // AsyncStorage 的原生模块在 Node 里不存在，用官方 jest mock 代替
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -18,6 +24,19 @@ jest.mock('expo-router', () => ({
   Stack: ({ children }: { children?: unknown }) => children ?? null,
   Tabs: ({ children }: { children?: unknown }) => children ?? null,
 }))
+
+// 视频播放器：expo-video 是原生模块，Node 下直接 import 会崩（读 undefined.prototype）。
+// 用 View 顶替 VideoView，播放器实例给最小可用替身；具体断言在 video.test.tsx 里覆盖。
+jest.mock('expo-video', () => {
+  const React = require('react')
+  const { View } = require('react-native')
+  const player = { play: () => {}, pause: () => {}, loop: false, playing: false }
+  return {
+    __esModule: true,
+    useVideoPlayer: () => player,
+    VideoView: (props: Record<string, unknown>) => React.createElement(View, props),
+  }
+})
 
 // 安全区：组件里的 useSafeAreaInsets 在没有 SafeAreaProvider 的测试树里会抛错，
 // 测试环境统一给 0 边距（真机行为由 App 里的 SafeAreaProvider 提供）

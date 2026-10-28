@@ -52,8 +52,11 @@ interface Finding {
 const findings: Finding[] = []
 
 describe('卡片畸形数据扫描', () => {
-  it('穷举字段 × 畸形值，报告裸字符串与崩溃', () => {
-    for (const field of FIELDS) {
+  // 按字段拆成独立用例：每个字段 11 次整屏渲染约 2.4s（CI 2 核上更慢）。
+  // 原先合成一个大循环要 24s+（同步循环无法被 jest 超时中断，CI 上直接把
+  // jest 步骤拖到 65s），且失败时看不出是哪个字段。
+  for (const field of FIELDS) {
+    it(`字段 ${field}：${WEIRD.length} 种畸形值都不抛渲染错`, () => {
       for (const value of WEIRD) {
         const item = { ...BASE, [field]: value }
         // 部分畸形值会在渲染中抛 TypeError（也是真机白屏来源，一并记录）
@@ -83,16 +86,22 @@ describe('卡片畸形数据扫描', () => {
           }
         }
       }
-    }
 
-    // 把发现打印出来，便于定位（故意不直接 fail：有些畸形值本就不该支持）
-    if (findings.length) {
+      const thrown = findings.filter((f) => f.field === field && f.kind === 'throw')
+      expect(thrown).toEqual([])
+    })
+  }
+
+  it('汇总：畸形值没有漏出裸字符串', () => {
+    const bare = findings.filter((f) => f.kind === 'bare-text')
+    // 把发现打印出来，便于定位（裸字符串会让真机白屏，属于必须修的回归）
+    if (bare.length) {
       // eslint-disable-next-line no-console
-      console.log('=== 畸形数据发现 ===\n' + JSON.stringify(findings, null, 2))
+      console.log('=== 畸形数据发现 ===\n' + JSON.stringify(bare, null, 2))
     } else {
       // eslint-disable-next-line no-console
       console.log('=== 畸形数据扫描：未发现问题 ===')
     }
-    expect(true).toBe(true)
+    expect(bare).toEqual([])
   })
 })
