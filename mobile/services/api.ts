@@ -349,17 +349,6 @@ export interface VectorHit {
   score: number
 }
 
-/** 语义搜索（文本 → 向量） */
-export async function vectorSearchByText(text: string, topK = 20): Promise<VectorHit[]> {
-  const form = new FormData()
-  form.append('text', text)
-  form.append('top_k', String(topK))
-  const { data } = await apiClient.post<{ items?: VectorHit[] }>('/search/vector', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return data?.items ?? []
-}
-
 /** 以图搜图（相册/相机图片 → CLIP 图像向量） */
 export async function vectorSearchByImage(uri: string, topK = 20): Promise<VectorHit[]> {
   const form = new FormData()

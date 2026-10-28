@@ -11,7 +11,6 @@ import {
   fetchInspirationPage,
   removeFromCollection,
   vectorSearchByImage,
-  vectorSearchByText,
 } from '../services/api'
 
 describe('列表筛选/排序', () => {
@@ -77,25 +76,7 @@ describe('批量操作', () => {
 })
 
 describe('向量检索', () => {
-  it('文本检索以 multipart 提交 text + top_k', async () => {
-    const spy = jest
-      .spyOn(apiClient, 'post')
-      .mockResolvedValue({ data: { items: [{ inspiration: { id: 'x' }, score: 0.9 }] } })
-
-    const hits = await vectorSearchByText('白色连衣裙', 12)
-
-    const [url, form, config] = spy.mock.calls[0]
-    expect(url).toBe('/search/vector')
-    expect(form).toBeInstanceOf(FormData)
-    expect((config as { headers: Record<string, string> }).headers['Content-Type']).toBe(
-      'multipart/form-data',
-    )
-    expect(hits).toHaveLength(1)
-    expect(hits[0].score).toBe(0.9)
-    spy.mockRestore()
-  })
-
-  it('以图搜图提交 file，并给更长的超时（要跑图像向量推理）', async () => {
+  it('以图搜图提交 file，multipart + 更长超时（要跑图像向量推理）', async () => {
     const spy = jest.spyOn(apiClient, 'post').mockResolvedValue({ data: { items: [] } })
 
     await vectorSearchByImage('file:///tmp/query.png')
@@ -103,13 +84,16 @@ describe('向量检索', () => {
     const [url, form, config] = spy.mock.calls[0]
     expect(url).toBe('/search/vector')
     expect(form).toBeInstanceOf(FormData)
+    expect((config as { headers: Record<string, string> }).headers['Content-Type']).toBe(
+      'multipart/form-data',
+    )
     expect((config as { timeout: number }).timeout).toBeGreaterThanOrEqual(30000)
     spy.mockRestore()
   })
 
   it('后端没有 items 字段时返回空数组，不抛错', async () => {
     const spy = jest.spyOn(apiClient, 'post').mockResolvedValue({ data: {} })
-    expect(await vectorSearchByText('x')).toEqual([])
+    expect(await vectorSearchByImage('file:///tmp/query.png')).toEqual([])
     spy.mockRestore()
   })
 })
