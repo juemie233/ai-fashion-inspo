@@ -30,6 +30,18 @@ import { sourceLabel } from '../../utils/sourceLabel'
 
 const { width } = Dimensions.get('window')
 
+/** 批量收藏/垃圾桶的单次上限（与后端 Pydantic 校验保持一致，避免 422 只报通用失败） */
+const MAX_BATCH = 500
+/** 合集单次加入上限（后端 AddInspirationsRequest 为 200） */
+const MAX_COLLECTION_BATCH = 200
+
+/** 超过后端上限时先给出明确提示，返回 false 表示调用方应中止本次操作 */
+function ensureBatchLimit(count: number, limit: number, action: string): boolean {
+  if (count <= limit) return true
+  Alert.alert('数量过多', `单次${action}最多 ${limit} 张，请减少选择后再试`)
+  return false
+}
+
 export default function GalleryScreen() {
   const router = useRouter()
   const {
@@ -65,8 +77,14 @@ export default function GalleryScreen() {
     fetchInspirations()
   }, [])
 
+  // 筛选/排序变化后列表已被替换：多选必须一起清掉，否则批量操作会落到看不见的旧素材上
+  useEffect(() => {
+    setSelected([])
+  }, [filter, sort])
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
+    setSelected([])
     await fetchInspirations()
     setRefreshing(false)
   }, [])
@@ -102,6 +120,7 @@ export default function GalleryScreen() {
   }
 
   const handleBatchFavorite = async () => {
+    if (!ensureBatchLimit(selected.length, MAX_BATCH, '批量收藏')) return
     const allFavorite = favoriteCount === selected.length
     setBusy(true)
     try {
@@ -115,6 +134,7 @@ export default function GalleryScreen() {
   }
 
   const handleBatchTrash = () => {
+    if (!ensureBatchLimit(selected.length, MAX_BATCH, '批量移入垃圾桶')) return
     Alert.alert('移入垃圾桶', `将 ${selected.length} 张素材移入垃圾桶（可恢复），确定吗？`, [
       { text: '取消', style: 'cancel' },
       {
@@ -137,6 +157,7 @@ export default function GalleryScreen() {
   }
 
   const handlePickCollection = async (collection: CollectionItem) => {
+    if (!ensureBatchLimit(selected.length, MAX_COLLECTION_BATCH, '加入合集')) return
     setBusy(true)
     try {
       await addToCollection(collection.id, selected)
@@ -151,6 +172,7 @@ export default function GalleryScreen() {
   }
 
   const handleCreateCollection = async (name: string) => {
+    if (!ensureBatchLimit(selected.length, MAX_COLLECTION_BATCH, '加入合集')) return
     setBusy(true)
     try {
       const created = await createCollection(name)
@@ -248,7 +270,7 @@ export default function GalleryScreen() {
       <FilterBar
         filter={filter}
         sort={sort}
-        onFilter={(patch) => void setFilter(patch)}
+        onFilter={(next) => void setFilter(next)}
         onSort={(s) => void setSort(s)}
       />
 

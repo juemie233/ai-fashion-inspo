@@ -29,21 +29,22 @@ interface InspirationState {
   filter: ListFilter
   /** 当前排序 */
   sort: SortKey
-  /** 修改筛选（自动重新拉第一页） */
-  setFilter: (patch: ListFilter) => Promise<void>
+  /** 修改筛选（整体替换条件，自动重新拉第一页） */
+  setFilter: (filter: ListFilter) => Promise<void>
   /** 修改排序（自动重新拉第一页） */
   setSort: (sort: SortKey) => Promise<void>
   /** 批量收藏 / 取消收藏 */
   batchFavorite: (ids: string[], isFavorite: boolean) => Promise<void>
   /** 批量移入垃圾桶（本地同步移除） */
   batchTrash: (ids: string[]) => Promise<number>
-  /** 从列表本地移除若干条（移入垃圾桶/移出合集后调用） */
-  removeItems: (ids: string[]) => void
   uploadImage: (uri: string) => Promise<Inspiration>
   /** 插入一条素材到列表最前（多图上传用） */
   prependItem: (item: Inspiration) => void
   toggleFavorite: (id: string, desiredState: boolean) => Promise<void>
 }
+
+/** 列表请求序号：只有最新一次请求的响应能落地，防止快速切筛选时旧响应覆盖新列表 */
+let listRequestSeq = 0
 
 export const useInspirationStore = create<InspirationState>((set, get) => ({
   items: [],
@@ -63,21 +64,24 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   /** 加载第一页（带当前筛选与排序） */
   fetchInspirations: async () => {
+    const seq = ++listRequestSeq
     const { filter, sort } = get()
     set({ loading: true })
     try {
       const data = await fetchInspirationPage(1, 30, filter, sort)
+      if (seq !== listRequestSeq) return
       set({ items: data.items, total: data.total, page: 1 })
     } catch (e) {
-      console.error('加载素材失败', e)
+      if (seq === listRequestSeq) console.error('加载素材失败', e)
     } finally {
-      set({ loading: false })
+      // 只有最新请求能收尾；旧请求不要提前把 loading 关掉
+      if (seq === listRequestSeq) set({ loading: false })
     }
   },
 
-  /** 切换筛选：更新条件后重拉第一页 */
-  setFilter: async (patch: ListFilter) => {
-    set((state) => ({ filter: { ...state.filter, ...patch }, items: [], page: 1 }))
+  /** 切换筛选：整体替换条件后重拉第一页（胶囊是互斥的，合并会残留上一个条件） */
+  setFilter: async (filter: ListFilter) => {
+    set({ filter, items: [], page: 1 })
     await get().fetchInspirations()
   },
 
@@ -106,32 +110,27 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     return trashed
   },
 
-  /** 本地移除（不再请求后端，用于移出合集等场景） */
-  removeItems: (ids: string[]) => {
-    set((state) => ({
-      items: state.items.filter((i) => !ids.includes(i.id)),
-      total: Math.max(0, state.total - ids.length),
-    }))
-  },
-
   /** 加载更多（无限滚动） */
   fetchMore: async () => {
     const { loading, page, items, total } = get()
     if (loading || items.length >= total) return
 
+    const seq = ++listRequestSeq
     set({ loading: true })
     try {
       const { filter, sort } = get()
       const data = await fetchInspirationPage(page + 1, 30, filter, sort)
-      set({
-        items: [...items, ...data.items],
+      if (seq !== listRequestSeq) return
+      // 用函数式更新基于最新 state 拼接：期间被批量移入垃圾桶的素材不会被旧快照带回来
+      set((state) => ({
+        items: [...state.items, ...data.items],
         total: data.total,
         page: page + 1,
-      })
+      }))
     } catch (e) {
-      console.error('加载更多失败', e)
+      if (seq === listRequestSeq) console.error('加载更多失败', e)
     } finally {
-      set({ loading: false })
+      if (seq === listRequestSeq) set({ loading: false })
     }
   },
 

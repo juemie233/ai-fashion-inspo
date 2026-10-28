@@ -6,7 +6,7 @@
  * - 以图搜图是手机端**独占优势**：相册选图 → `/search/vector`（CLIP 图像向量）
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -53,6 +53,8 @@ export default function SearchScreen() {
   const [searched, setSearched] = useState(false)
   /** 当前结果是否来自以图搜图（用于标题文案与停止分页） */
   const [imageQueryUri, setImageQueryUri] = useState<string | null>(null)
+  /** 搜索请求序号：翻页在飞时重新搜索/以图搜图，旧响应直接丢弃，避免混入新结果 */
+  const searchSeqRef = useRef(0)
 
   useEffect(() => {
     void loadTags()
@@ -73,8 +75,10 @@ export default function SearchScreen() {
   /** 执行搜索（page=1 重置结果） */
   const doSearch = useCallback(
     async (nextPage = 1) => {
+      const seq = ++searchSeqRef.current
       if (nextPage === 1) {
         setLoading(true)
+        setLoadingMore(false)
         setSearched(true)
         setImageQueryUri(null)
       } else {
@@ -92,19 +96,24 @@ export default function SearchScreen() {
         const { data } = await apiClient.get<{ items: Inspiration[]; total: number }>('/search', {
           params,
         })
+        // 已发起更新的搜索：这次响应作废，否则旧第 2 页会拼进新结果
+        if (seq !== searchSeqRef.current) return
         const items = data?.items ?? []
         setResults((prev) => (nextPage === 1 ? items : [...prev, ...items]))
         setTotal(data?.total ?? 0)
         setPage(nextPage)
       } catch {
+        if (seq !== searchSeqRef.current) return
         setError('搜索失败，请确认后端服务已启动')
         if (nextPage === 1) {
           setResults([])
           setTotal(0)
         }
       } finally {
-        setLoading(false)
-        setLoadingMore(false)
+        if (seq === searchSeqRef.current) {
+          setLoading(false)
+          setLoadingMore(false)
+        }
       }
     },
     [searchText, selectedTags],
@@ -125,21 +134,25 @@ export default function SearchScreen() {
     if (picked.canceled || !picked.assets?.[0]) return
 
     const uri = picked.assets[0].uri
+    const seq = ++searchSeqRef.current
     setLoading(true)
+    setLoadingMore(false)
     setSearched(true)
     setError('')
     try {
       const hits: VectorHit[] = await vectorSearchByImage(uri, PAGE_SIZE)
+      if (seq !== searchSeqRef.current) return
       setResults(hits.map((h) => h.inspiration).filter(Boolean))
       setTotal(hits.length)
       setImageQueryUri(uri)
       setPage(1)
     } catch {
+      if (seq !== searchSeqRef.current) return
       setError('以图搜图失败：可能图像向量模型未就绪')
       setResults([])
       setTotal(0)
     } finally {
-      setLoading(false)
+      if (seq === searchSeqRef.current) setLoading(false)
     }
   }
 

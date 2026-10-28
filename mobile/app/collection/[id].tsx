@@ -1,6 +1,6 @@
 /** 合集详情：合集内素材的两列网格（分页加载）。 */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -36,6 +36,11 @@ export default function CollectionDetailScreen() {
 
   const collectionId = Number(id)
 
+  /** 请求序号：下拉刷新会让在飞的翻页请求作废，避免旧页追加到新列表后面 */
+  const requestSeqRef = useRef(0)
+  /** 翻页互斥：上一页还没回来时 onEndReached 重复触发不再发同一页 */
+  const loadingMoreRef = useRef(false)
+
   const load = useCallback(
     async (nextPage = 1) => {
       if (!Number.isFinite(collectionId)) {
@@ -43,17 +48,24 @@ export default function CollectionDetailScreen() {
         setLoading(false)
         return
       }
+      if (nextPage > 1 && loadingMoreRef.current) return
+      const seq = ++requestSeqRef.current
+      if (nextPage > 1) loadingMoreRef.current = true
       try {
         const data = await fetchCollectionInspirations(collectionId, nextPage, PAGE_SIZE)
+        if (seq !== requestSeqRef.current) return
         setItems((prev) => (nextPage === 1 ? data.items : [...prev, ...data.items]))
         setTotal(data.total)
         setPage(nextPage)
         setError('')
       } catch {
-        setError('加载失败，请检查网络或后端服务')
+        if (seq === requestSeqRef.current) setError('加载失败，请检查网络或后端服务')
       } finally {
-        setLoading(false)
-        setRefreshing(false)
+        if (nextPage > 1) loadingMoreRef.current = false
+        if (seq === requestSeqRef.current) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
     },
     [collectionId],
