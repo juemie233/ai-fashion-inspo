@@ -236,10 +236,23 @@ export async function fetchSimilarInspirations(id: string): Promise<Inspiration[
   return data?.items ?? data?.results ?? []
 }
 
-/** 标签全量（按类别分组） */
-export async function fetchTagGroups(): Promise<TagCategoryGroup[]> {
+/**
+ * 标签库缓存：`GET /api/tags` 有 **2 万+ 条、约 4.3MB、8 秒**（实测），
+ * 三个页面（标签管理 / 标签筛选 / 标签编辑器）都要用，必须缓存，否则每次进页面都重拉。
+ */
+let tagGroupsCache: TagCategoryGroup[] | null = null
+
+/** 标签全量（按类别分组）；默认走缓存，force=true 强制刷新 */
+export async function fetchTagGroups(force = false): Promise<TagCategoryGroup[]> {
+  if (!force && tagGroupsCache) return tagGroupsCache
   const { data } = await apiClient.get<TagCategoryGroup[]>('/tags')
-  return data ?? []
+  tagGroupsCache = data ?? []
+  return tagGroupsCache
+}
+
+/** 清空标签缓存（改名/合并后可调用，让下次进页面拿到最新数据） */
+export function invalidateTagCache(): void {
+  tagGroupsCache = null
 }
 
 /** 新建标签 */
@@ -412,4 +425,104 @@ export async function addToCollection(id: number, ids: string[]): Promise<void> 
 /** 批量移出合集 */
 export async function removeFromCollection(id: number, ids: string[]): Promise<void> {
   await apiClient.delete(`/collections/${id}/inspirations`, { data: { inspiration_ids: ids } })
+}
+
+// ---------------------------------------------------------------------------
+// M4：人物浏览（穿搭博主 / 模特）+ 标签轻量管理
+// ---------------------------------------------------------------------------
+
+/** 人物类型：后端拆成 bloggers / models 两张表 */
+export type PersonKind = 'blogger' | 'model'
+
+/** 人物统一视图（两种表字段取并集，缺的置空） */
+export interface Person {
+  id: number
+  kind: PersonKind
+  name: string
+  platform: string
+  avatar_path?: string | null
+  bio?: string | null
+  ip_location?: string | null
+  profile_url?: string | null
+  /** 素材数 */
+  inspiration_count: number
+  /** 最近一次入库时间 */
+  last_inspiration_at?: string | null
+  /** 是否注册了人脸（博主才有意义） */
+  face_registered?: boolean
+  /** 粉丝数快照（仅博主，来自平台统计同步） */
+  follower_count?: number | null
+}
+
+/** 后端人物原始结构（两份表字段并集） */
+interface RawPerson {
+  id: number
+  name?: string
+  platform?: string
+  avatar_path?: string | null
+  bio?: string | null
+  ip_location?: string | null
+  profile_url?: string | null
+  inspiration_count?: number
+  last_inspiration_at?: string | null
+  face_registered?: boolean
+  follower_count?: number | null
+}
+
+/** 把后端两种人物结构归一，页面只认 `Person` */
+function toPerson(raw: RawPerson, kind: PersonKind): Person {
+  return {
+    id: raw.id,
+    kind,
+    name: String(raw.name ?? '未命名'),
+    platform: String(raw.platform ?? 'other'),
+    avatar_path: raw.avatar_path ?? null,
+    bio: raw.bio ?? null,
+    ip_location: raw.ip_location ?? null,
+    profile_url: raw.profile_url ?? null,
+    inspiration_count: Number(raw.inspiration_count ?? 0),
+    last_inspiration_at: raw.last_inspiration_at ?? null,
+    face_registered: Boolean(raw.face_registered),
+    follower_count: raw.follower_count ?? null,
+  }
+}
+
+/** 人物分页（type 决定查 bloggers 还是 models） */
+export async function fetchPersons(
+  kind: PersonKind,
+  page = 1,
+  size = 20,
+  search?: string,
+): Promise<PaginatedResponse<Person>> {
+  const path = kind === 'blogger' ? '/bloggers' : '/models'
+  const params: Record<string, string | number> = { page, size, sort: 'count' }
+  if (search && search.trim()) params.search = search.trim()
+
+  const { data } = await apiClient.get<{ items?: RawPerson[]; total?: number }>(path, { params })
+  return {
+    items: (data?.items ?? []).map((it) => toPerson(it, kind)),
+    total: Number(data?.total ?? 0),
+    page,
+    size,
+  }
+}
+
+/** 人物作品墙（分页） */
+export async function fetchPersonInspirations(
+  kind: PersonKind,
+  id: number,
+  page = 1,
+  size = 30,
+): Promise<InspirationListResponse> {
+  const path = kind === 'blogger' ? `/bloggers/${id}/inspirations` : `/models/${id}/inspirations`
+  const { data } = await apiClient.get<{ items?: Inspiration[]; total?: number }>(path, {
+    params: { page, size },
+  })
+  return { items: data?.items ?? [], total: Number(data?.total ?? 0), page, size }
+}
+
+/** 标签改名（轻量管理只开放改名，合并/删除留在 Web） */
+export async function renameTag(tagId: number, name: string): Promise<Tag> {
+  const { data } = await apiClient.patch<Tag>(`/tags/${tagId}`, { name })
+  return data
 }

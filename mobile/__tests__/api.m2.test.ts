@@ -41,12 +41,20 @@ describe('标签相关', () => {
   })
 
   it('fetchTagGroups 返回分组数组；后端异常返回时退化为空数组', async () => {
+    // 注意：fetchTagGroups 现在有会话级缓存（4.3MB 的接口不能每次重拉），
+    // 想拿到新结果必须 invalidateTagCache() 或传 force
+    const { invalidateTagCache } = require('../services/api') as {
+      invalidateTagCache: () => void
+    }
     const spy = jest.spyOn(apiClient, 'get').mockResolvedValue({ data: [{ category: 'style', tags: [] }] })
+
+    invalidateTagCache()
     expect(await fetchTagGroups()).toHaveLength(1)
 
     spy.mockResolvedValue({ data: null })
-    expect(await fetchTagGroups()).toEqual([])
+    expect(await fetchTagGroups(true)).toEqual([])
     spy.mockRestore()
+    invalidateTagCache()
   })
 
   it('createTag 打 POST /tags', async () => {

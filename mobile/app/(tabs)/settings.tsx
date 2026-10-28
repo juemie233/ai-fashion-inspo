@@ -134,6 +134,23 @@ export default function SettingsScreen() {
         </View>
         <Icon name="chevron-forward" size={16} color="#d1d5db" />
       </TouchableOpacity>
+
+      {/* 人物浏览与标签管理：只读/轻量，重操作留在 Web */}
+      <TouchableOpacity style={styles.linkCard} onPress={() => router.push('/persons')}>
+        <View style={styles.linkLeft}>
+          <Icon name="people-outline" size={18} color="#6366f1" />
+          <Text style={styles.linkLabel}>人物</Text>
+        </View>
+        <Icon name="chevron-forward" size={16} color="#d1d5db" />
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.linkCard} onPress={() => router.push('/tags')}>
+        <View style={styles.linkLeft}>
+          <Icon name="pricetags-outline" size={18} color="#6366f1" />
+          <Text style={styles.linkLabel}>标签管理</Text>
+        </View>
+        <Icon name="chevron-forward" size={16} color="#d1d5db" />
+      </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   )

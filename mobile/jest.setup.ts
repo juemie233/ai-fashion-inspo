@@ -1,5 +1,10 @@
 /** Jest 全局设置：mock 掉原生模块。 */
 
+// RNTL 默认 1s 的异步等待在满负载并行跑时容易偶发超时（Modal 动画 + 多套件竞争）
+// 统一放宽到 5s，减少假失败；真正的回归仍会被超时挡住
+const { configure } = require('@testing-library/react-native')
+configure({ asyncUtilTimeout: 5000 })
+
 // AsyncStorage 的原生模块在 Node 里不存在，用官方 jest mock 代替
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
@@ -13,6 +18,16 @@ jest.mock('expo-router', () => ({
   Stack: ({ children }: { children?: unknown }) => children ?? null,
   Tabs: ({ children }: { children?: unknown }) => children ?? null,
 }))
+
+// 安全区：组件里的 useSafeAreaInsets 在没有 SafeAreaProvider 的测试树里会抛错，
+// 测试环境统一给 0 边距（真机行为由 App 里的 SafeAreaProvider 提供）
+jest.mock('react-native-safe-area-context', () => {
+  const actual = jest.requireActual('react-native-safe-area-context')
+  return {
+    ...actual,
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  }
+})
 
 // 相册/相机：默认返回空结果，具体用例在测试文件里用 jest.spyOn 覆盖
 jest.mock('expo-image-picker', () => ({

@@ -60,6 +60,33 @@ export default function RootLayout() {
               presentation: 'card',
             }}
           />
+          <Stack.Screen
+            name="persons"
+            options={{
+              headerShown: true,
+              title: '人物',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+          <Stack.Screen
+            name="person/[id]"
+            options={{
+              headerShown: true,
+              title: '人物作品',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+          <Stack.Screen
+            name="tags"
+            options={{
+              headerShown: true,
+              title: '标签管理',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
         </Stack>
       </SafeAreaProvider>
     </ErrorBoundary>
