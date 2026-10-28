@@ -26,6 +26,7 @@ from app.models.generation import GenerationRun
 from app.schemas.generation import (
     GenerationConfirm,
     GenerationRunCreate,
+    GenerationRunPatch,
     PromptPreviewRequest,
 )
 from app.services import generation_service
@@ -100,6 +101,7 @@ async def list_runs(
     model_key: str | None = Query(None, max_length=32),
     status: str | None = Query(None, max_length=16),
     has_imported: bool | None = Query(None, description="只看已入库 / 未入库的批次"),
+    favorite: bool | None = Query(None, description="只看已收藏 / 未收藏的批次"),
     q: str | None = Query(None, max_length=200, description="关键字：描述或负面词"),
     reference_id: str | None = Query(None, max_length=64, description="参考素材 id"),
     since: datetime | None = Query(None, description="创建时间 >=（ISO 8601）"),
@@ -123,11 +125,46 @@ async def list_runs(
         model_key=model_key,
         status=status,
         has_imported=has_imported,
+        favorite=favorite,
         q=q,
         reference_id=reference_id,
         since=since,
         until=until,
     )
+
+
+@router.patch("/runs/{run_id}")
+async def patch_run(
+    run_id: int,
+    payload: GenerationRunPatch,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """更新批次的用户标注：收藏 / 命名 / 备注（收藏的批次不参与过期清理）。
+
+    `favorite=False` 是「取消收藏」而不是「不改」；要清空命名/备注请传
+    `clear_title=true` / `clear_note=true`（`null` 在这套语义里表示「本次不改」）。
+
+    Returns:
+        更新后的批次摘要（与列表项同形）。
+    """
+    return await generation_service.update_run_meta(
+        db,
+        run_id,
+        favorite=payload.favorite,
+        title=payload.title,
+        note=payload.note,
+        clear_title=payload.clear_title,
+        clear_note=payload.clear_note,
+    )
+
+
+@router.get("/runs/stats")
+async def run_stats(
+    days: int = Query(30, ge=0, le=365, description="统计窗口天数；0 = 全部历史"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """近 N 天出图统计（历史区顶部数字卡）：批次/张数/入库率/平均耗时/失败率/档位分布。"""
+    return await generation_service.run_stats(db, days)
 
 
 @router.get("/runs/{run_id}")

@@ -12,7 +12,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -59,6 +59,16 @@ class GenerationRun(Base):
 
     # 关联任务队列 id（任务记录被清理后置空的场景由 GET 侧容忍）
     task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+    # ── 用户标注（P1）──
+    # 收藏 = 「这一批别清掉」：cleanup_expired_runs 会跳过收藏批次，图不会被清
+    favorite: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+    # 命名（空 = 前端按 prompt 前 40 字展示）
+    title: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 自由备注（为什么这么调、下次改哪儿）
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(

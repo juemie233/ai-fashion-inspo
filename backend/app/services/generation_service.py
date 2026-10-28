@@ -582,6 +582,14 @@ def _serialize_run(
         "imported_count": imported_count,
         # 终态 + 目录不在 = 真被清理过；排队/生成中目录还没建，不能显示「图已清理」
         "files_missing": (not folder_exists) and run.status in TERMINAL_STATUSES,
+        # ── 用户标注与保留期（P1）──
+        "favorite": bool(run.favorite),
+        "title": run.title,
+        "note": run.note,
+        # 保留期截止时间：收藏批次不清理，给 None（前端显示「已收藏，不自动清理」）
+        "expires_at": None
+        if run.favorite
+        else format_utc(run.created_at + timedelta(days=settings.image_gen_keep_candidates_days)),
     }
 
 
@@ -623,6 +631,8 @@ def _apply_run_filters(stmt, filters: dict):
         stmt = stmt.where(GenerationRun.created_at >= filters["since"])
     if filters.get("until"):
         stmt = stmt.where(GenerationRun.created_at < filters["until"])
+    if filters.get("favorite") is not None:
+        stmt = stmt.where(GenerationRun.favorite == filters["favorite"])
     if filters.get("has_imported") is not None:
         imported_subq = select(Inspiration.generation_run_id).where(
             Inspiration.generation_run_id.is_not(None),
@@ -648,6 +658,7 @@ async def list_runs(
     reference_id: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    favorite: bool | None = None,
 ) -> dict:
     """生成历史（分页 + 筛选），供出图页历史区使用。
 
@@ -678,6 +689,7 @@ async def list_runs(
         "reference_id": (reference_id or "").strip() or None,
         "since": since,
         "until": until,
+        "favorite": favorite,
     }
 
     base = _apply_run_filters(select(GenerationRun), filters)
@@ -711,7 +723,138 @@ async def list_runs(
         )
         for run, (exists, filenames) in zip(rows, listed, strict=True)
     ]
-    return {"items": items, "total": total, "page": page, "size": size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+        # 保留期天数：前端用它显示「图还剩 N 天」（收藏批次不清理）
+        "keep_days": settings.image_gen_keep_candidates_days,
+    }
+
+
+async def update_run_meta(
+    db: AsyncSession,
+    run_id: int,
+    *,
+    favorite: bool | None = None,
+    title: str | None = None,
+    note: str | None = None,
+    clear_title: bool = False,
+    clear_note: bool = False,
+) -> dict:
+    """更新批次的用户标注（收藏 / 命名 / 备注）。
+
+    为什么用「显式 clear_*」而不是 `None` 表示清空：PATCH 语义里 `None` 通常表示
+    「本次不改」，要清空得给一个明确信号（否则前端没法把已填的备注删掉）。
+
+    Args:
+        favorite: 是否收藏（收藏批次不参与过期清理）。
+        title: 新命名（≤64 字，空白按清空处理）。
+        note: 新备注（≤2000 字，空白按清空处理）。
+        clear_title / clear_note: 显式清空对应字段。
+
+    Returns:
+        更新后的批次摘要（与列表项同形，便于前端原地替换）。
+
+    Raises:
+        HTTPException: 404 批次不存在 / 400 字段超长。
+    """
+    run = await db.get(GenerationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="出图批次不存在")
+
+    if favorite is not None:
+        run.favorite = bool(favorite)
+    if clear_title:
+        run.title = None
+    elif title is not None:
+        text = title.strip()
+        if len(text) > 64:
+            raise HTTPException(status_code=400, detail="命名最多 64 个字")
+        run.title = text or None
+    if clear_note:
+        run.note = None
+    elif note is not None:
+        text = note.strip()
+        if len(text) > 2000:
+            raise HTTPException(status_code=400, detail="备注最多 2000 个字")
+        run.note = text or None
+
+    run.updated_at = utcnow()
+    await db.commit()
+    await db.refresh(run)
+
+    imported = await _imported_counts(db, [run.id])
+    exists, filenames = await asyncio.to_thread(_list_candidates, _run_dir(run))
+    return _serialize_run(
+        run,
+        candidates=filenames[:LIST_CANDIDATES_LIMIT],
+        imported_count=imported.get(run.id, 0),
+        folder_exists=exists,
+    )
+
+
+async def run_stats(db: AsyncSession, days: int = 30) -> dict:
+    """近 N 天的出图统计（历史区顶部数字卡）。
+
+    - ``import_rate`` = 已入库张数 / 出图张数（按 **入库素材数** 而非批次数，
+      因为一批可能只入库其中一张）；
+    - ``avg_duration_s`` 用 `updated_at - created_at`（含排队等待，文案要写「含排队」）；
+    - 一个批次都没有时返回全 0，不报错（新库/清空历史后前端正常显示空卡）。
+
+    Args:
+        days: 统计窗口（天），`<=0` 时按全部历史统计。
+
+    Returns:
+        ``{runs, images, imported_images, import_rate, avg_duration_s, failure_rate,
+        by_model: [{model_key, runs, images}], days}``。
+    """
+    cutoff = utcnow() - timedelta(days=days) if days > 0 else None
+    conditions = [GenerationRun.created_at >= cutoff] if cutoff else []
+
+    rows = (await db.execute(select(GenerationRun).where(*conditions))).scalars().all()
+    run_ids = [r.id for r in rows]
+
+    images = sum(int(r.total or 0) for r in rows)
+    imported_images = 0
+    if run_ids:
+        imported_images = (
+            await db.execute(
+                select(func.count())
+                .select_from(Inspiration)
+                .where(
+                    Inspiration.generation_run_id.in_(run_ids),
+                    Inspiration.deleted_at.is_(None),
+                )
+            )
+        ).scalar() or 0
+
+    durations = [
+        (r.updated_at - r.created_at).total_seconds()
+        for r in rows
+        if r.updated_at and r.created_at
+    ]
+    failed = sum(1 for r in rows if r.status == "failed")
+    by_model: dict[str, dict] = {}
+    for run in rows:
+        item = by_model.setdefault(run.model_key or "unknown", {"runs": 0, "images": 0})
+        item["runs"] += 1
+        item["images"] += int(run.total or 0)
+
+    return {
+        "days": days,
+        "runs": len(rows),
+        "images": images,
+        "imported_images": imported_images,
+        "import_rate": round(imported_images / images, 4) if images else 0,
+        "avg_duration_s": round(sum(durations) / len(durations), 1) if durations else 0,
+        "failure_rate": round(failed / len(rows), 4) if rows else 0,
+        "by_model": [
+            {"model_key": key, **value}
+            for key, value in sorted(by_model.items(), key=lambda kv: -kv[1]["runs"])
+        ],
+    }
 
 
 async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
@@ -811,20 +954,27 @@ async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dic
         days: 保留天数（缺省取 ``settings.image_gen_keep_candidates_days``）。
 
     Returns:
-        ``{"scanned": 批次数, "removed": 删掉的目录数, "freed_dirs": [...]}``
+        ``{"scanned": 批次数, "removed": 删掉的目录数, "freed_dirs": [...],
+        "skipped_favorites": 因收藏被跳过的批次数}``
     """
     keep_days = days if days is not None else settings.image_gen_keep_candidates_days
     if keep_days <= 0:
-        return {"scanned": 0, "removed": 0}
+        return {"scanned": 0, "removed": 0, "skipped_favorites": 0}
 
     cutoff = utcnow() - timedelta(days=keep_days)
-    rows = await db.execute(
+    # 收藏批次不清理：用户点星标就是「这批我要留着」；清理返回里单独回报跳过数，
+    # 避免「为什么我的图还在/没了」无从解释
+    expired = await db.execute(
         select(GenerationRun).where(
             GenerationRun.status.in_(("done", "failed", "cancelled")),
             GenerationRun.created_at < cutoff,
         )
     )
-    runs = rows.scalars().all()
+    expired_runs = expired.scalars().all()
+    # 收藏批次不清理：用户点星标就是「这批我要留着」；返回里单独回报跳过数，
+    # 避免「为什么我的图还在/没了」无从解释
+    runs = [run for run in expired_runs if not run.favorite]
+    skipped_favorites = len(expired_runs) - len(runs)
     removed: list[str] = []
     for run in runs:
         folder = _run_dir(run)
@@ -839,4 +989,8 @@ async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dic
             logger.warning(f"清理候选目录失败（忽略）{folder}: {exc}")
     if removed:
         logger.info(f"[出图清理] 删除 {len(removed)} 个过期候选目录（保留 {keep_days} 天）")
-    return {"scanned": len(runs), "removed": len(removed)}
+    return {
+        "scanned": len(runs),
+        "removed": len(removed),
+        "skipped_favorites": skipped_favorites,
+    }

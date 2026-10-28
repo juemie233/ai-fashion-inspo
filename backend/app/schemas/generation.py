@@ -26,6 +26,20 @@ class GenerationRunCreate(BaseModel):
     reference_ids: list[str] = Field(default_factory=list, description="参考素材 id（i2i）")
 
 
+class GenerationRunPatch(BaseModel):
+    """批次标注的部分更新（P1：收藏 / 命名 / 备注）。
+
+    为什么清空要单独的 `clear_*` 开关：`None` 在 PATCH 里表示「本次不改」，
+    要清空已填的命名/备注必须给一个明确信号（否则前端删不掉内容）。
+    """
+
+    favorite: bool | None = None
+    title: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=2000)
+    clear_title: bool = False
+    clear_note: bool = False
+
+
 class GenerationConfirm(BaseModel):
     """确认把候选图入库。"""
 

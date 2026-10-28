@@ -102,6 +102,7 @@ async def list_inspirations(
     date_from: str | None = None,           # 上传日期下限（ISO 日期）
     date_to: str | None = None,             # 上传日期上限（ISO 日期）
     ids: list[str] | None = None,           # 精确 ID 过滤（定位跳转用，与其他筛选条件叠加）
+    generation_run_id: int | None = None,   # 只看某出图批次入库的素材
     rating_min: int | None = None,          # 评分下限（评分 >= 该值，0 表示未评分也通过）
     sort: str = "newest",
 ) -> tuple[list[Inspiration], int]:
@@ -118,6 +119,8 @@ async def list_inspirations(
 
     if ids:
         query = query.where(Inspiration.id.in_(ids))
+    if generation_run_id is not None:
+        query = query.where(Inspiration.generation_run_id == generation_run_id)
     if source_type:
         query = query.where(Inspiration.source_type == source_type)
     if is_favorite is not None:
