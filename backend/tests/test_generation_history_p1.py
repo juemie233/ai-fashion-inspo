@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 import shutil
 from datetime import timedelta
 
@@ -232,8 +234,12 @@ def test_run_stats_counts_and_rates(client):
         assert stats["runs"] >= 2
         assert stats["images"] >= 4
         assert stats["imported_images"] >= 1
-        # 入库率按「张」算：>= 1/4
-        assert stats["import_rate"] >= 0.25
+        # 并行跑时其他用例也会建批次 → 不能断言固定比率，改为**自洽性**：
+        # 入库率必须等于 imported_images / images（口径错误时这里立刻红）
+        assert stats["images"] > 0
+        assert stats["import_rate"] == pytest.approx(
+            stats["imported_images"] / stats["images"], abs=1e-3
+        )
         assert stats["failure_rate"] > 0
         assert stats["avg_duration_s"] >= 0
         keys = {row["model_key"] for row in stats["by_model"]}

@@ -49,6 +49,15 @@ const props = defineProps<{
   referenceItems?: Array<{ id: string; file_path: string; thumbnail_path?: string | null }>
 }>()
 
+/** 历史参数「带入表单」的载荷（来自生成历史的一行） */
+export interface RunPayload {
+  prompt?: string | null
+  negative?: string | null
+  model_key?: string | null
+  reference_ids?: string[] | null
+  params?: Record<string, unknown> | null
+}
+
 const emit = defineEmits<{
   /** 提交生成：面板把参数拼好后交给视图，由 useImageGen 提交 */
   (e: 'submit', payload: CreateRunPayload): void
@@ -332,6 +341,50 @@ function onSubmit() {
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
   })
 }
+
+/**
+ * 把历史批次的参数带进表单（**不直接生成**，用户可先改 seed / 参考图）。
+ *
+ * 只覆盖表单里确实存在的字段；档位只在当前档位表里有时才切换
+ * （否则历史里的旧档位会把表单切到一个不存在的选项上）。
+ */
+function applyRunPayload(payload: RunPayload): void {
+  if (typeof payload.prompt === 'string') prompt.value = payload.prompt
+  if (typeof payload.negative === 'string') negative.value = payload.negative
+
+  const params = payload.params ?? {}
+  const num = (key: string): number | null => {
+    const value = params[key]
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+  }
+  const w = num('width')
+  const h = num('height')
+  if (w && h) {
+    const preset = `${w}x${h}`
+    // 非预设尺寸（历史里手改过）时不硬塞：保留当前预设，避免出现空选项
+    if (sizePresets.some((item) => item.value === preset)) size.value = preset
+  }
+  const n = num('steps')
+  if (n) steps.value = n
+  const c = num('count')
+  if (c) count.value = c
+  const s = num('seed_base')
+  if (s !== null) seed.value = s
+
+  const refIds = payload.reference_ids ?? []
+  refIdsText.value = refIds.join(', ')
+  if (refIds.length) {
+    selectModelByKind('i2i')
+    if (kind.value !== 'i2i') pendingKind.value = 'i2i'
+  }
+  if (payload.model_key && allModels.value.some((m) => m.key === payload.model_key)) {
+    modelKey.value = payload.model_key
+    pendingModelKey.value = ''
+  }
+  Message.success('已带入历史参数，可继续修改后生成')
+}
+
+defineExpose({ applyRunPayload })
 
 onMounted(() => {
   // 从素材详情跳进来：预填参考图并切到改款档位

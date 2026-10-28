@@ -17,6 +17,7 @@ import type {
   GenerationCandidate,
   GenerationHistoryQuery,
   GenerationRunBrief,
+  GenerationRunStats,
 } from '@/api/generate'
 import { fetchRun } from '@/api/generate'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -44,6 +45,10 @@ const props = defineProps<{
   filters: GenerationHistoryQuery
   /** 入库中（展开行的「入库选中」按钮 loading） */
   importing?: boolean
+  /** 近 30 天统计（历史区顶部数字卡；null = 还没拉到） */
+  stats?: GenerationRunStats | null
+  /** 候选保留天数（用于「图还剩 N 天」） */
+  keepDays?: number
 }>()
 
 const emit = defineEmits<{
@@ -53,6 +58,18 @@ const emit = defineEmits<{
   (e: 'page-change', page: number): void
   (e: 'update:filters', filters: GenerationHistoryQuery): void
   (e: 'import-selected', runId: number, filenames: string[]): void
+  /** 切换收藏（收藏的批次不会被过期清理） */
+  (e: 'toggle-favorite', runId: number, favorite: boolean): void
+  /** 保存命名与备注（clear_* 为显式清空） */
+  (
+    e: 'save-meta',
+    runId: number,
+    patch: { title?: string; note?: string; clear_title?: boolean; clear_note?: boolean },
+  ): void
+  /** 把该批参数带入左侧表单（不直接生成） */
+  (e: 'apply-to-form', runId: number): void
+  /** 打开该批已入库的素材（素材库按 generation_run_id 筛选） */
+  (e: 'open-imported', runId: number): void
 }>()
 
 /** 生成方式中文标签（kind 由档位决定） */
@@ -101,6 +118,63 @@ async function copyPrompt(prompt: string): Promise<void> {
   const ok = await copyToClipboard(prompt)
   if (ok) Message.success('描述已复制')
   else Message.error('复制失败，请手动选择文本')
+}
+
+/** 显示标题：用户命名优先，否则 prompt 前 40 字（列表列宽有限） */
+function displayTitle(record: GenerationRunBrief): string {
+  const title = (record.title || '').trim()
+  if (title) return title
+  const prompt = (record.prompt || '').trim()
+  return prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt || '（无描述）'
+}
+
+/** 保留期文案：收藏批次永不清理；已清理的目录直接说明；其余给剩余天数 */
+function retentionText(record: GenerationRunBrief): string {
+  if (record.favorite) return '已收藏，不清理'
+  if (record.files_missing) return '图已清理'
+  const expires = record.expires_at ? new Date(record.expires_at).getTime() : NaN
+  if (Number.isNaN(expires)) return props.keepDays ? `保留 ${props.keepDays} 天` : ''
+  const leftMs = expires - Date.now()
+  if (leftMs <= 0) return '即将清理'
+  return `${Math.ceil(leftMs / 86_400_000)} 天后清理`
+}
+
+/** 统计卡：入库率/失败率转百分比（保留一位小数，避免 0.0531 这种不好读） */
+const importRateText = computed(() =>
+  props.stats ? `${Math.round(props.stats.import_rate * 1000) / 10}%` : '—',
+)
+const failureRateText = computed(() =>
+  props.stats ? `${Math.round(props.stats.failure_rate * 1000) / 10}%` : '—',
+)
+
+/** 档位分布条：取前 3 个（再多在 200px 里也看不出来） */
+const topModels = computed(() => (props.stats?.by_model ?? []).slice(0, 3))
+const maxModelRuns = computed(() => Math.max(1, ...topModels.value.map((item) => item.runs)))
+
+// ── 标注编辑（命名 / 备注）──
+
+const metaEditing = ref<GenerationRunBrief | null>(null)
+const metaTitle = ref('')
+const metaNote = ref('')
+
+function openMetaEditor(record: GenerationRunBrief): void {
+  metaEditing.value = record
+  metaTitle.value = record.title ?? ''
+  metaNote.value = record.note ?? ''
+}
+
+function saveMeta(): void {
+  const record = metaEditing.value
+  if (!record) return
+  const title = metaTitle.value.trim()
+  const note = metaNote.value.trim()
+  emit('save-meta', record.id, {
+    title: title || undefined,
+    note: note || undefined,
+    clear_title: !title,
+    clear_note: !note,
+  })
+  metaEditing.value = null
 }
 
 // ── 筛选工具栏 ──
@@ -270,6 +344,38 @@ defineExpose({ resetPicked, onDateRangeChange })
     <a-button size="mini" :loading="loading" @click="emit('refresh')">刷新</a-button>
   </div>
 
+  <!-- 统计卡（近 30 天）：入库率按「张」算，耗时含排队等待 -->
+  <div v-if="stats" class="gh-stats">
+    <div class="gh-stat">
+      <b>{{ stats.runs }}</b
+      ><span>批次</span>
+    </div>
+    <div class="gh-stat">
+      <b>{{ stats.images }}</b
+      ><span>出图</span>
+    </div>
+    <div class="gh-stat">
+      <b>{{ stats.imported_images }}</b
+      ><span>入库（{{ importRateText }}）</span>
+    </div>
+    <div class="gh-stat">
+      <b>{{ stats.avg_duration_s }}s</b><span>均耗时</span>
+    </div>
+    <div class="gh-stat">
+      <b>{{ failureRateText }}</b
+      ><span>失败率</span>
+    </div>
+    <div v-if="topModels.length" class="gh-stat-models">
+      <div v-for="item in topModels" :key="item.model_key" class="gh-stat-model">
+        <span class="gh-stat-model-name">{{ modelLabel(item.model_key) }}</span>
+        <span class="gh-stat-model-bar">
+          <i :style="{ width: `${Math.round((item.runs / maxModelRuns) * 100)}%` }" />
+        </span>
+        <span class="gh-stat-model-num">{{ item.runs }} 批</span>
+      </div>
+    </div>
+  </div>
+
   <!-- 筛选工具栏：全部走后端参数（total 与 items 同口径，分页才不会飘） -->
   <div class="gh-toolbar">
     <a-select
@@ -327,6 +433,21 @@ defineExpose({ resetPicked, onDateRangeChange })
   >
     <template #columns>
       <a-table-column title="#" data-index="id" :width="64" />
+      <!-- 收藏：星标即「这批别清掉」。收藏批次不参与过期清理 -->
+      <a-table-column title="收藏" :width="56">
+        <template #cell="{ record }">
+          <a-button
+            size="mini"
+            type="text"
+            :title="record.favorite ? '取消收藏（之后会按保留期清理）' : '收藏（图不会被自动清理）'"
+            class="gh-star"
+            :class="{ 'is-on': record.favorite }"
+            @click="emit('toggle-favorite', record.id, !record.favorite)"
+          >
+            {{ record.favorite ? '★' : '☆' }}
+          </a-button>
+        </template>
+      </a-table-column>
       <!-- 缩略图：最多 4 张（后端只给前 4 张，列表不是候选区）；目录已清显示占位 -->
       <a-table-column title="图" :width="200">
         <template #cell="{ record }">
@@ -344,8 +465,13 @@ defineExpose({ resetPicked, onDateRangeChange })
           <span v-else class="gh-missing">—</span>
         </template>
       </a-table-column>
-      <!-- 单行省略；悬停看全文，或用行首箭头展开完整详情 -->
-      <a-table-column title="描述" data-index="prompt" :width="340" ellipsis tooltip />
+      <!-- 命名优先、否则描述前 40 字；完整描述在展开行 -->
+      <a-table-column title="描述 / 命名" :width="340">
+        <template #cell="{ record }">
+          <div class="gh-title" :title="record.prompt || ''">{{ displayTitle(record) }}</div>
+          <div v-if="record.note" class="gh-note" :title="record.note">备注：{{ record.note }}</div>
+        </template>
+      </a-table-column>
       <a-table-column title="模型" :width="190">
         <template #cell="{ record }">
           <span class="gen-model-cell">
@@ -361,9 +487,23 @@ defineExpose({ resetPicked, onDateRangeChange })
           <!-- 状态文案与配色统一走 common/StatusTag（单一来源 utils/taskLabel.ts） -->
           <StatusTag :status="record.status" />
           <span class="gen-status-count">{{ record.done }}/{{ record.total }}</span>
-          <a-tag v-if="record.imported_count" size="small" color="green" class="gh-imported">
+          <a-tag
+            v-if="record.imported_count"
+            size="small"
+            color="green"
+            class="gh-imported"
+            :title="`查看这批入库的 ${record.imported_count} 张素材`"
+            @click="emit('open-imported', record.id)"
+          >
             已入库 {{ record.imported_count }}
           </a-tag>
+        </template>
+      </a-table-column>
+      <a-table-column title="保留" :width="110">
+        <template #cell="{ record }">
+          <span class="gh-retention" :class="{ 'is-gone': record.files_missing }">
+            {{ retentionText(record) }}
+          </span>
         </template>
       </a-table-column>
       <a-table-column title="时间" :width="150">
@@ -371,10 +511,17 @@ defineExpose({ resetPicked, onDateRangeChange })
           <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
         </template>
       </a-table-column>
-      <a-table-column title="操作" :width="210">
+      <a-table-column title="操作" :width="320">
         <template #cell="{ record }">
           <a-button size="mini" :loading="submitting" @click="emit('retry', record.id)">
             同参重跑
+          </a-button>
+          <!-- 带入表单：把参数填回左侧面板，可先改 seed/参考图再生成（与「同参重跑」互补） -->
+          <a-button size="mini" style="margin-left: 6px" @click="emit('apply-to-form', record.id)">
+            带入表单
+          </a-button>
+          <a-button size="mini" style="margin-left: 6px" @click="openMetaEditor(record)">
+            标注
           </a-button>
           <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
           <a-popconfirm
@@ -503,6 +650,38 @@ defineExpose({ resetPicked, onDateRangeChange })
     size="small"
     @change="(p: number) => emit('page-change', p)"
   />
+
+  <!-- 命名 / 备注编辑：清空是显式的（后端 PATCH 里 null 表示「本次不改」） -->
+  <a-modal
+    :visible="metaEditing !== null"
+    title="标注这一批"
+    :width="520"
+    :footer="false"
+    unmount-on-close
+    @cancel="metaEditing = null"
+  >
+    <div class="gh-meta-form">
+      <div class="gen-label" style="margin-top: 0">命名（留空则显示描述前 40 字）</div>
+      <a-input
+        v-model="metaTitle"
+        placeholder="例：通勤白衬衫-袖子加长版"
+        :max-length="64"
+        show-word-limit
+      />
+      <div class="gen-label">备注</div>
+      <a-textarea
+        v-model="metaNote"
+        placeholder="例：袖子稍长，下次把「长袖」写进描述再看一版"
+        :auto-size="{ minRows: 3, maxRows: 6 }"
+        :max-length="2000"
+        show-word-limit
+      />
+      <div class="gh-meta-actions">
+        <a-button size="small" @click="metaEditing = null">取消</a-button>
+        <a-button size="small" type="primary" @click="saveMeta">保存</a-button>
+      </div>
+    </div>
+  </a-modal>
 </template>
 
 <style scoped>
@@ -593,5 +772,116 @@ defineExpose({ resetPicked, onDateRangeChange })
   gap: 8px;
   color: #86909c;
   font-size: 12px;
+}
+
+/* ── P1：统计卡 / 收藏星标 / 标题与备注 / 保留期 ── */
+.gh-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.gh-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  color: #86909c;
+}
+
+.gh-stat b {
+  font-size: 16px;
+  color: #1d2129;
+}
+
+.gh-stat-models {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+}
+
+.gh-stat-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #4e5969;
+}
+
+.gh-stat-model-name {
+  width: 110px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-stat-model-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e5e6eb;
+  overflow: hidden;
+}
+
+.gh-stat-model-bar i {
+  display: block;
+  height: 100%;
+  background: rgb(var(--primary-5));
+}
+
+.gh-star {
+  color: #c9cdd4;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.gh-star.is-on {
+  color: #ff7d00;
+}
+
+.gh-title {
+  color: #1d2129;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-note {
+  margin-top: 2px;
+  color: #86909c;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.gh-retention {
+  color: #86909c;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gh-retention.is-gone {
+  color: #f53f3f;
+}
+
+.gh-meta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gh-meta-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
 }
 </style>

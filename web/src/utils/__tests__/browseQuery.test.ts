@@ -10,6 +10,14 @@ import {
   parseFocusIds,
 } from '../browseQuery'
 
+describe('buildBrowseParams · 出图批次反查', () => {
+  it('run_id → generation_run_id（数字）；空值不带参数', () => {
+    expect(buildBrowseParams({ run_id: '42' }, 1, 50).generation_run_id).toBe(42)
+    expect(buildBrowseParams({ run_id: '' }, 1, 50).generation_run_id).toBeUndefined()
+    expect(buildBrowseParams({}, 1, 50).generation_run_id).toBeUndefined()
+  })
+})
+
 describe('buildBrowseParams', () => {
   it('映射分页与基础字段', () => {
     const p = buildBrowseParams({}, 2, 50)

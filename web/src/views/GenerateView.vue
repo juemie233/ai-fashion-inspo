@@ -9,7 +9,7 @@
  */
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { readCachedModelsMeta, useImageGen } from '@/composables/useImageGen'
 import GenerateCandidatesPanel from '@/components/generate/GenerateCandidatesPanel.vue'
@@ -24,6 +24,7 @@ import { confirmImport, discardRun, type GenerationHistoryQuery } from '@/api/ge
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const route = useRoute()
+const router = useRouter()
 /** 删除某条生成记录（连同批次目录里的候选图）；已入库的素材不受影响 */
 const deletingId = ref<number | null>(null)
 
@@ -60,6 +61,10 @@ const {
   historyPage,
   historyPageSize,
   historyFilters,
+  historyStats,
+  historyKeepDays,
+  loadHistoryStats,
+  updateRunMeta,
   setHistoryPage,
   setHistoryFilters,
   loadStatus,
@@ -109,7 +114,7 @@ const historyDirty = ref(false)
 
 /** 拉历史（只在这两种时机调用：首次展开、变更后再展开） */
 async function refreshHistory(): Promise<void> {
-  await loadHistory()
+  await Promise.all([loadHistory(), loadHistoryStats(30)])
   historyLoaded.value = true
   historyDirty.value = false
 }
@@ -139,6 +144,56 @@ function closeHistory(): void {
 function touchHistory(): void {
   if (historyVisible.value) void refreshHistory()
   else historyDirty.value = true
+}
+
+/** 参数面板实例：历史行的「带入表单」要调它的 applyRunPayload */
+const paramForm = ref<InstanceType<typeof GenerateParamForm> | null>(null)
+
+/** 收藏切换（收藏的批次不会被过期清理） */
+async function onToggleFavorite(runId: number, favorite: boolean): Promise<void> {
+  const ok = await updateRunMeta(runId, { favorite })
+  if (ok) Message.success(favorite ? '已收藏（图不会被自动清理）' : '已取消收藏')
+}
+
+/** 保存命名 / 备注（表格的标注弹窗回抛） */
+async function onSaveHistoryMeta(
+  runId: number,
+  patch: { title?: string; note?: string; clear_title?: boolean; clear_note?: boolean },
+): Promise<void> {
+  const ok = await updateRunMeta(runId, patch)
+  if (ok) Message.success('标注已保存')
+}
+
+/**
+ * 把历史批次的参数带进左侧表单（**不直接生成**）。
+ *
+ * 与「同参重跑」互补：那个是一键复制跑一遍，这个是先带进来改 seed / 加参考图再跑。
+ * 参数直接取列表行里的快照（`params_json` 里本来就含 prompt/negative/reference_ids）。
+ */
+function onApplyHistoryToForm(runId: number): void {
+  const row = history.value.find((item) => item.id === runId)
+  if (!row) {
+    Message.warning('这条记录不在当前页：请刷新历史后重试')
+    return
+  }
+  const params = (row.params ?? {}) as {
+    reference_ids?: unknown
+  } & Record<string, unknown>
+  const refIds = Array.isArray(params.reference_ids)
+    ? params.reference_ids.map(String).filter(Boolean)
+    : []
+  paramForm.value?.applyRunPayload({
+    prompt: row.prompt,
+    negative: row.negative,
+    model_key: row.model_key,
+    reference_ids: refIds,
+    params,
+  })
+}
+
+/** 「已入库 N 张」→ 素材库只看这批入库的素材（B5 反查） */
+function onOpenImported(runId: number): void {
+  void router.push({ path: '/', query: { run_id: String(runId) } })
 }
 
 /** 历史表实例：从历史入库成功后要清掉那一行的勾选并让它重拉候选 */
@@ -301,6 +356,7 @@ onUnmounted(stopPoll)
       <!-- 左：参数 -->
       <a-card class="gen-card" :bordered="false">
         <GenerateParamForm
+          ref="paramForm"
           :status="status"
           :ready="ready"
           :submitting="submitting"
@@ -387,12 +443,18 @@ onUnmounted(stopPoll)
         :deleting-id="deletingId"
         :status="status"
         :importing="historyImporting"
+        :stats="historyStats"
+        :keep-days="historyKeepDays"
         @refresh="refreshHistory"
         @retry="retry"
         @remove="removeRun"
         @page-change="setHistoryPage"
         @update:filters="onHistoryFilters"
         @import-selected="onImportFromHistory"
+        @toggle-favorite="onToggleFavorite"
+        @save-meta="onSaveHistoryMeta"
+        @apply-to-form="onApplyHistoryToForm"
+        @open-imported="onOpenImported"
       />
     </a-card>
   </div>

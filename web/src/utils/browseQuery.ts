@@ -71,6 +71,8 @@ export function buildBrowseParams(state: Record<string, any>, page: number, size
     date_to: state.date_to || undefined,
     ids: state.ids ? state.ids : undefined,
     rating_min: state.rating_min ? Number(state.rating_min) : undefined,
+    // 出图批次反查（生成历史「已入库 N 张」点进来）：只看该批入库的素材
+    generation_run_id: state.run_id ? Number(state.run_id) : undefined,
     sort: state.sort || storedBrowseSort(),
   }
 }

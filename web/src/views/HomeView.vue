@@ -56,6 +56,7 @@ const {
   colorFilter,
   sortMode,
   ratingMin,
+  generationRunId,
   selectedTags,
   focusedIds,
   allTagNames,
@@ -89,6 +90,7 @@ function syncUrl() {
   if (selectedTags.value.length > 0) query.tags = selectedTags.value.join(',')
   if (colorFilter.value) query.color = colorFilter.value
   if (ratingMin.value) query.rating_min = ratingMin.value
+  if (generationRunId.value) query.run_id = generationRunId.value
   if (sortMode.value !== 'newest') query.sort = sortMode.value
   if (currentPage.value > 1) query.page = String(currentPage.value)
   router.replace({ query })
@@ -111,6 +113,7 @@ function buildParams(page: number) {
       tags: selectedTags.value.join(','),
       color: colorFilter.value,
       rating_min: ratingMin.value,
+      run_id: generationRunId.value,
       sort: sortMode.value,
     },
     page,
@@ -126,6 +129,12 @@ function loadPage(page: number) {
 }
 
 // ── 筛选/排序变更时重新加载第一页 ──
+
+/** 清掉「只看某个出图批次入库的素材」（B5 反查入口的关闭按钮） */
+function clearRunFilter() {
+  generationRunId.value = ''
+  loadPage(1)
+}
 
 function onFilterChange() {
   // 定位模式下修改筛选 = 主动退出定位，回到完整列表按新条件浏览
@@ -211,6 +220,10 @@ loadPage(currentPage.value)
       <div class="header-left">
         <h2>素材库</h2>
         <span class="total-count">共 {{ store.total }} 条</span>
+        <!-- 出图反查：从生成历史「已入库 N 张」点进来时只显示该批素材 -->
+        <a-tag v-if="generationRunId" closable @close="clearRunFilter">
+          只看出图批次 #{{ generationRunId }} 入库的素材
+        </a-tag>
       </div>
       <div class="header-right">
         <a-button size="small" @click="openSaveCollection">保存为合集</a-button>

@@ -20,10 +20,14 @@ import {
   previewPrompt,
   regenerateCandidate,
   retryRun,
+  fetchRunStats,
+  updateRunMeta as updateRunMetaApi,
   type CreateRunPayload,
   type GenerateStatus,
   type GenerationCandidate,
   type GenerationHistoryQuery,
+  type GenerationRunMetaPatch,
+  type GenerationRunStats,
   type GenerationRunBrief,
   type GenerationRun,
   type GenerationTaskInfo,
@@ -94,6 +98,10 @@ export function useImageGen() {
   const HISTORY_PAGE_SIZE = 20
   /** 筛选条件：档位 / 状态 / 只看已入库 / 关键字（后端执行，前端不二次过滤） */
   const historyFilters = ref<GenerationHistoryQuery>({})
+  /** 近 30 天统计（历史区顶部数字卡；收起时不拉） */
+  const historyStats = ref<GenerationRunStats | null>(null)
+  /** 候选保留天数（后端给，前端算「图还剩 N 天」） */
+  const historyKeepDays = ref(0)
 
   const run = computed<GenerationRun | null>(() => detail.value?.run ?? null)
   const candidates = computed<GenerationCandidate[]>(() => detail.value?.items ?? [])
@@ -242,6 +250,7 @@ export function useImageGen() {
       })
       history.value = out.items ?? []
       historyTotal.value = out.total ?? 0
+      historyKeepDays.value = out.keep_days ?? 0
     } catch (e) {
       Message.error(getApiErrorMessage(e, '读取生成历史失败'))
     } finally {
@@ -256,6 +265,32 @@ export function useImageGen() {
   }
 
   /** 改筛选条件：一律回到第 1 页（否则停在旧页会看到空列表） */
+  /** 拉统计卡（与列表分开：统计不随筛选变化，只跟时间窗口走） */
+  async function loadHistoryStats(days = 30): Promise<void> {
+    try {
+      historyStats.value = await fetchRunStats(days)
+    } catch {
+      // 统计只是辅助信息：失败不打断历史区（保留上一次数据）
+    }
+  }
+
+  /**
+   * 更新批次标注（收藏 / 命名 / 备注）。
+   *
+   * 成功后**原地替换**列表里那一行，避免整页刷新导致分页位置与展开状态丢失。
+   */
+  async function updateRunMeta(runId: number, patch: GenerationRunMetaPatch): Promise<boolean> {
+    try {
+      const updated = await updateRunMetaApi(runId, patch)
+      const idx = history.value.findIndex((item) => item.id === runId)
+      if (idx >= 0) history.value[idx] = updated
+      return true
+    } catch (e) {
+      Message.error(getApiErrorMessage(e, '保存标注失败'))
+      return false
+    }
+  }
+
   async function setHistoryFilters(next: GenerationHistoryQuery): Promise<void> {
     historyFilters.value = next
     historyPage.value = 1
@@ -359,6 +394,10 @@ export function useImageGen() {
     historyPage,
     historyPageSize: HISTORY_PAGE_SIZE,
     historyFilters,
+    historyStats,
+    historyKeepDays,
+    loadHistoryStats,
+    updateRunMeta,
     setHistoryPage,
     setHistoryFilters,
     // 动作

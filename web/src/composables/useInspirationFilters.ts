@@ -116,6 +116,10 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
   // 从 URL query 恢复（rating >= 指定值），刷新/详情返回时保持
   const ratingMin = ref<string>((route.query.rating_min as string) || '')
 
+  // ── 出图批次筛选（B5：从生成历史「已入库 N 张」点进来）──
+  // 只展示某个出图批次入库的素材；清空即回到全库
+  const generationRunId = ref<string>((route.query.run_id as string) || '')
+
   async function loadDominantColors() {
     try {
       dominantColors.value = await fetchDominantColors(30)
@@ -223,6 +227,7 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
     selectedTags.value = []
     colorFilter.value = ''
     ratingMin.value = ''
+    generationRunId.value = ''
     sortMode.value = 'newest'
     options.reloadFirstPage()
   }
@@ -249,6 +254,7 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
     colorFilter,
     sortMode,
     ratingMin,
+    generationRunId,
     selectedTags,
     focusedIds,
     dominantColors,

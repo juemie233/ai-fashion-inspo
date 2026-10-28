@@ -120,6 +120,10 @@ export interface GenerationRunBrief {
   imported_count?: number
   /** 候选目录是否已被清掉（true → 前端显示「图已清理」占位） */
   files_missing?: boolean
+  favorite?: boolean
+  title?: string | null
+  note?: string | null
+  expires_at?: string | null
 }
 
 /** 列表里的候选缩略图（不带逐张 imported：那要算哈希，只有详情接口才做） */
@@ -143,15 +147,42 @@ export interface GenerationHistoryQuery {
   q?: string
   /** 参考素材 id（精确命中） */
   reference_id?: string
+  /** 只看已收藏 / 未收藏 */
+  favorite?: boolean
   since?: string
   until?: string
 }
 
 interface GenerationHistoryPage {
   items: GenerationRunBrief[]
+  /** 候选保留天数（前端显示「图还剩 N 天」） */
+  keep_days?: number
   total: number
   page: number
   size: number
+}
+
+/** 批次标注的部分更新：`null` 表示「本次不改」，清空要走 clear_* */
+export interface GenerationRunMetaPatch {
+  favorite?: boolean
+  title?: string | null
+  note?: string | null
+  clear_title?: boolean
+  clear_note?: boolean
+}
+
+/** 近 N 天出图统计（历史区顶部数字卡） */
+export interface GenerationRunStats {
+  days: number
+  runs: number
+  images: number
+  imported_images: number
+  /** 入库率 = 入库张数 / 出图张数 */
+  import_rate: number
+  /** 平均耗时（秒）：含排队等待 */
+  avg_duration_s: number
+  failure_rate: number
+  by_model: Array<{ model_key: string; runs: number; images: number }>
 }
 
 export interface PromptPreview {
@@ -219,6 +250,23 @@ export async function listRuns(
 }
 
 /** 同参数再生成（seed=0 随机；>0 复现）。 */
+/** 更新批次标注（收藏 / 命名 / 备注），返回更新后的批次摘要 */
+export async function updateRunMeta(
+  runId: number,
+  patch: GenerationRunMetaPatch,
+): Promise<GenerationRunBrief> {
+  const { data } = await apiClient.patch<GenerationRunBrief>(`/generate/runs/${runId}`, patch)
+  return data
+}
+
+/** 近 N 天出图统计（days=0 表示全部历史） */
+export async function fetchRunStats(days = 30): Promise<GenerationRunStats> {
+  const { data } = await apiClient.get<GenerationRunStats>('/generate/runs/stats', {
+    params: { days },
+  })
+  return data
+}
+
 export async function retryRun(
   runId: number,
   seed = 0,

@@ -318,27 +318,164 @@ describe('生成历史表', () => {
 
 // ── P0：日期范围 ──
 
-it('选日期范围回抛 since 与「次日零点」的 until（用户选 10-26 要含 26 号全天）', async () => {
-  const wrapper = mountTable(record(), { filters: {} })
-  await wrapper.vm.$nextTick()
+describe('生成历史表 · 日期范围', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
 
-  // 直接调用组件的日期回调（Arco RangePicker 的弹层在 jsdom 里不稳定，组件已 expose）
-  const vm = wrapper.vm as unknown as {
-    onDateRangeChange: (v: unknown) => void
-  }
-  vm.onDateRangeChange(['2026-10-20', '2026-10-26'])
+  it('选日期范围回抛 since 与「次日零点」的 until（用户选 10-26 要含 26 号全天）', async () => {
+    const wrapper = mountTable(record(), { filters: {} })
+    await wrapper.vm.$nextTick()
 
-  const emitted = wrapper.emitted('update:filters') ?? []
-  const last = emitted.at(-1)?.[0] as Record<string, unknown>
-  expect(last.since).toBe('2026-10-20')
-  // 结束日 +1 天：后端按 created_at < until 过滤，这样才包含 26 号全天
-  expect(last.until).toBe('2026-10-27')
+    // 直接调用组件的日期回调（Arco RangePicker 的弹层在 jsdom 里不稳定，组件已 expose）
+    const vm = wrapper.vm as unknown as {
+      onDateRangeChange: (v: unknown) => void
+    }
+    vm.onDateRangeChange(['2026-10-20', '2026-10-26'])
 
-  // 清空日期 → 两个字段都撤掉
-  vm.onDateRangeChange([])
-  const cleared = (wrapper.emitted('update:filters') ?? []).at(-1)?.[0] as Record<string, unknown>
-  expect(cleared.since).toBeUndefined()
-  expect(cleared.until).toBeUndefined()
+    const emitted = wrapper.emitted('update:filters') ?? []
+    const last = emitted.at(-1)?.[0] as Record<string, unknown>
+    expect(last.since).toBe('2026-10-20')
+    // 结束日 +1 天：后端按 created_at < until 过滤，这样才包含 26 号全天
+    expect(last.until).toBe('2026-10-27')
 
-  wrapper.unmount()
+    // 清空日期 → 两个字段都撤掉
+    vm.onDateRangeChange([])
+    const cleared = (wrapper.emitted('update:filters') ?? []).at(-1)?.[0] as Record<string, unknown>
+    expect(cleared.since).toBeUndefined()
+    expect(cleared.until).toBeUndefined()
+
+    wrapper.unmount()
+  })
+})
+
+// ── P1：收藏 / 保留期 / 统计卡 / 带入表单 / 入库反查 / 标注 ──
+
+describe('生成历史表 · 标注与统计', () => {
+  beforeEach(() => {
+    mocks.fetchRun.mockReset()
+    mocks.fetchRun.mockResolvedValue({ run: {}, items: [], task: null })
+    document.body.innerHTML = ''
+  })
+
+  it('点星标回抛 toggle-favorite（收藏的批次不会被清理）', async () => {
+    const wrapper = mountTable(record({ favorite: false }))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('.gh-star').trigger('click')
+    expect(wrapper.emitted('toggle-favorite')?.[0]).toEqual([12, true])
+
+    wrapper.unmount()
+  })
+
+  it('保留期文案：收藏 / 已清理 / 剩余天数', async () => {
+    const fav = mountTable(record({ favorite: true }))
+    await fav.vm.$nextTick()
+    expect(fav.text()).toContain('已收藏，不清理')
+    fav.unmount()
+
+    const gone = mountTable(record({ files_missing: true, candidates: [] }))
+    await gone.vm.$nextTick()
+    expect(gone.text()).toContain('图已清理')
+    gone.unmount()
+
+    const soon = new Date(Date.now() + 3 * 86_400_000).toISOString()
+    const expiring = mountTable(record({ expires_at: soon }))
+    await expiring.vm.$nextTick()
+    expect(expiring.text()).toContain('3 天后清理')
+    expiring.unmount()
+  })
+
+  it('统计卡渲染批次/出图/入库率/均耗时/失败率与档位分布', async () => {
+    const wrapper = mountTable(record(), {
+      stats: {
+        days: 30,
+        runs: 89,
+        images: 188,
+        imported_images: 10,
+        import_rate: 0.0532,
+        avg_duration_s: 56.8,
+        failure_rate: 0.0112,
+        by_model: [{ model_key: 'qwen_2_1_i2i', runs: 79, images: 170 }],
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    const card = wrapper.find('.gh-stats')
+    expect(card.exists()).toBe(true)
+    expect(card.text()).toContain('89')
+    expect(card.text()).toContain('188')
+    expect(card.text()).toContain('10')
+    expect(card.text()).toContain('5.3%')
+    expect(card.text()).toContain('56.8s')
+    expect(card.text()).toContain('1.1%')
+    expect(card.findAll('.gh-stat-model')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('「带入表单」回抛该行 id（不直接生成）', async () => {
+    const wrapper = mountTable(record())
+    await wrapper.vm.$nextTick()
+
+    const buttons = wrapper.findAll('button').filter((b) => b.text() === '带入表单')
+    expect(buttons).toHaveLength(1)
+    await buttons[0].trigger('click')
+
+    expect(wrapper.emitted('apply-to-form')?.[0]).toEqual([12])
+    wrapper.unmount()
+  })
+
+  it('「已入库 N 张」可点，回抛 open-imported', async () => {
+    const wrapper = mountTable(record({ imported_count: 2 }))
+    await wrapper.vm.$nextTick()
+
+    const chip = wrapper.find('.gh-imported')
+    expect(chip.exists()).toBe(true)
+    await chip.trigger('click')
+
+    expect(wrapper.emitted('open-imported')?.[0]).toEqual([12])
+    wrapper.unmount()
+  })
+
+  it('标注弹窗：保存后回抛 save-meta（含命名与备注）', async () => {
+    const wrapper = mountTable(record(), { attachTo: document.body })
+    await wrapper.vm.$nextTick()
+
+    const btn = wrapper.findAll('button').filter((b) => b.text() === '标注')
+    expect(btn).toHaveLength(1)
+    await btn[0].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // 弹窗 teleport 到 body：用 document 查
+    const inputs = Array.from(
+      document.querySelectorAll('.gh-meta-form input'),
+    ) as HTMLInputElement[]
+    const textareas = Array.from(
+      document.querySelectorAll('.gh-meta-form textarea'),
+    ) as HTMLTextAreaElement[]
+    expect(inputs.length).toBeGreaterThan(0)
+    expect(textareas.length).toBeGreaterThan(0)
+
+    inputs[0].value = '通勤白衬衫'
+    inputs[0].dispatchEvent(new Event('input'))
+    textareas[0].value = '袖子加长'
+    textareas[0].dispatchEvent(new Event('input'))
+    await wrapper.vm.$nextTick()
+
+    const save = Array.from(document.querySelectorAll('.gh-meta-actions button')).find((el) =>
+      (el as HTMLElement).textContent?.includes('保存'),
+    ) as HTMLElement
+    expect(save).toBeTruthy()
+    save.click()
+    await wrapper.vm.$nextTick()
+
+    const emitted = wrapper.emitted('save-meta')?.[0] as [number, Record<string, unknown>]
+    expect(emitted?.[0]).toBe(12)
+    expect(emitted?.[1].title).toBe('通勤白衬衫')
+    expect(emitted?.[1].note).toBe('袖子加长')
+    expect(emitted?.[1].clear_title).toBe(false)
+
+    wrapper.unmount()
+  })
 })
