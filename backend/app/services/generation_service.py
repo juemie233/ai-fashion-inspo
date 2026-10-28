@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -748,6 +748,9 @@ async def update_run_meta(
     为什么用「显式 clear_*」而不是 `None` 表示清空：PATCH 语义里 `None` 通常表示
     「本次不改」，要清空得给一个明确信号（否则前端没法把已填的备注删掉）。
 
+    注意：本函数**不推进 `updated_at`**（显式保留原值）。它代表生成状态的最后变更，
+    统计卡的「均耗时」依赖它——收藏/改名若刷新它，几十天前的旧批次会把均值拉到几天。
+
     Args:
         favorite: 是否收藏（收藏批次不参与过期清理）。
         title: 新命名（≤64 字，空白按清空处理）。
@@ -764,24 +767,31 @@ async def update_run_meta(
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
 
+    # 显式带上「updated_at = 原值」：本函数只改用户标注，不能让统计卡的均耗时
+    # 把收藏/改名当成一次生成（updated_at 只应随生成状态推进）。
+    values: dict = {"updated_at": GenerationRun.updated_at}
     if favorite is not None:
-        run.favorite = bool(favorite)
+        values["favorite"] = bool(favorite)
     if clear_title:
-        run.title = None
+        values["title"] = None
     elif title is not None:
         text = title.strip()
         if len(text) > 64:
             raise HTTPException(status_code=400, detail="命名最多 64 个字")
-        run.title = text or None
+        values["title"] = text or None
     if clear_note:
-        run.note = None
+        values["note"] = None
     elif note is not None:
         text = note.strip()
         if len(text) > 2000:
             raise HTTPException(status_code=400, detail="备注最多 2000 个字")
-        run.note = text or None
+        values["note"] = text or None
 
-    run.updated_at = utcnow()
+    result = await db.execute(
+        update(GenerationRun).where(GenerationRun.id == run_id).values(**values)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="出图批次不存在")
     await db.commit()
     await db.refresh(run)
 

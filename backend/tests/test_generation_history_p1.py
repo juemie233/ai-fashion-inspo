@@ -143,6 +143,41 @@ def test_patch_validation_and_404(client):
         _cleanup([rid])
 
 
+def _get_updated_at(run_id: int):
+    async def _do():
+        async with async_session() as db:
+            row = await db.get(GenerationRun, run_id)
+            return row.updated_at
+
+    return asyncio.run(_do())
+
+
+def test_patch_meta_keeps_updated_at_for_duration_stats(client):
+    """收藏/改名不能推进 updated_at：统计卡均耗时靠它，旧批次被收藏会拉肿均值。"""
+    rid = _seed_run()
+    try:
+
+        async def _pin() -> None:
+            async with async_session() as db:
+                row = await db.get(GenerationRun, rid)
+                row.updated_at = row.created_at + timedelta(seconds=60)
+                await db.commit()
+
+        asyncio.run(_pin())
+        before = _get_updated_at(rid)
+
+        resp = client.patch(
+            f"/api/generate/runs/{rid}",
+            json={"favorite": True, "title": "保留旧时间", "note": "不要污染均耗时"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        after = _get_updated_at(rid)
+        assert after == before, "收藏/改名不应该推进 updated_at（会污染均耗时统计）"
+    finally:
+        _cleanup([rid])
+
+
 # ── 列表：收藏筛选与保留期 ──
 
 
