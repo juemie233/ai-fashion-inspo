@@ -119,16 +119,19 @@ function toggleHistory(): void {
   if (historyVisible.value && (!historyLoaded.value || historyDirty.value)) void refreshHistory()
 }
 
-/** 收起历史时清掉筛选与页码：下次展开是「全部历史第 1 页」的可预期状态 */
+/** 收起历史时重置筛选与页码：下次展开是「全部历史第 1 页」的可预期状态。
+ *
+ * 直接改 ref 而不调 setHistoryFilters/setHistoryPage：收起时不该再发请求；
+ * 置 dirty 让下次展开统一补拉。
+ */
 function closeHistory(): void {
   historyVisible.value = false
-  if (
-    historyFilters.value.model_key ||
-    historyFilters.value.status ||
-    historyFilters.value.has_imported ||
-    historyFilters.value.q
-  ) {
-    void setHistoryFilters({})
+  const f = historyFilters.value
+  const hasQuery = Boolean(f.model_key || f.status || f.has_imported || f.q || f.since || f.until)
+  if (hasQuery || historyPage.value > 1) {
+    historyFilters.value = {}
+    historyPage.value = 1
+    historyDirty.value = true
   }
 }
 
