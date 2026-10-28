@@ -515,3 +515,77 @@ export async function renameTag(tagId: number, name: string): Promise<Tag> {
   const { data } = await apiClient.patch<Tag>(`/tags/${tagId}`, { name })
   return data
 }
+
+// ---------------------------------------------------------------------------
+// M5：本地出图记录（只读）+ 分享入库
+// ---------------------------------------------------------------------------
+
+/** 出图批次（后端 `GET /generate/runs`） */
+export interface GenerateRun {
+  id: number
+  kind: string
+  model_key?: string | null
+  status: string
+  prompt: string
+  negative?: string | null
+  total: number
+  done: number
+  failed: number
+  imported_count: number
+  files_missing?: boolean
+  created_at: string
+}
+
+/** 候选图（`GET /generate/runs/{id}` 的 items 项） */
+export interface GenerateCandidate {
+  filename: string
+  index: number
+  seed?: number | null
+  size_bytes?: number | null
+  imported: boolean
+  /** 后端返回的相对路径，如 /api/generate/runs/111/candidates/01.png */
+  url: string
+}
+
+/** 批次详情 */
+export interface GenerateRunDetail {
+  run: GenerateRun
+  candidates: GenerateCandidate[]
+}
+
+/** 出图批次分页 */
+export async function fetchGenerateRuns(
+  page = 1,
+  size = 20,
+): Promise<PaginatedResponse<GenerateRun>> {
+  const { data } = await apiClient.get<{ items?: GenerateRun[]; total?: number }>('/generate/runs', {
+    params: { page, size },
+  })
+  return { items: data?.items ?? [], total: Number(data?.total ?? 0), page, size }
+}
+
+/** 批次详情 + 候选图（后端字段是 `{items, run, task}`，这里归一成 {run, candidates}） */
+export async function fetchGenerateRun(id: number): Promise<GenerateRunDetail> {
+  const { data } = await apiClient.get<{
+    items?: GenerateCandidate[]
+    run?: GenerateRun
+  }>(`/generate/runs/${id}`)
+  return {
+    run: data?.run ?? ({} as GenerateRun),
+    candidates: data?.items ?? [],
+  }
+}
+
+/** 候选图完整 URL（后端给的是 /api/... 相对路径，w>0 时请求缩略图） */
+export function candidateUrl(base: string, url: string, width = 0): string {
+  const path = typeof url === 'string' && url ? url : ''
+  if (!path) return ''
+  const withHost = /^https?:\/\//i.test(path) ? path : `${base}${path}`
+  return width > 0 ? `${withHost}?w=${width}` : withHost
+}
+
+/** 从 URL 下载并入库（分享文本链接时用） */
+export async function importInspirationFromUrl(url: string): Promise<Inspiration> {
+  const { data } = await apiClient.post<Inspiration>('/inspirations/from-url', { url })
+  return data
+}

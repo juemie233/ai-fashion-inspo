@@ -266,6 +266,10 @@ set ANDROID_HOME=C:\Users\Administrator\AndroidSdk
 
 **日常改 UI 的更快路子（未落地）**：装一次 debug APK + `npx expo start --host lan`，手机同网即可 Fast Refresh，改 JS 秒级生效、完全不用打包。
 
+**分享 Intent（`expo-share-intent`）**：只做 Android，版本 `3.1.0`（对应 SDK 52；4.x 起要 SDK 53+）。`app.json` 里配 `androidIntentFilters: ["image/*","text/*"]` + `disableIOS: true`，**prebuild 会把它写进 AndroidManifest 的 `ACTION_SEND`**（改配置后必须重跑 prebuild）。处理逻辑在 `components/ShareIntentBridge.tsx`，处理完必须 `resetShareIntent()`，否则下次冷启动会重复入库。
+
+**两个构建期坑**：① `npm i --legacy-peer-deps` 会**删掉一批包**（实测两次：一次删掉 `expo-linking` 导致打包失败，一次删 63 个），装完依赖要立刻检查 `expo-linking` / `expo-font` / `expo-asset` / `expo-router` 是否还在；② `:app:mergeDexRelease` 报「另一个程序正在使用此文件」时，`./gradlew --stop` + 删 `app/build/intermediates/dex/release/mergeDexRelease` 再构建即可。
+
 **增量同步不要用 `/MIR`**：`/MIR` 会删掉 `C:\mb\android\build`、`.cxx`，等于每次全量重编原生（几分钟）。日常改 JS 用 `/E`（只覆盖不删除），保留构建缓存后一次 **30~40 秒**；只有依赖大改/换 prebuild 产物时才 `/MIR`。
 
 **图标必须用 `mobile/components/Icon.tsx`，不要写 `<Ionicons>`**（2026-10-24 真机踩坑）

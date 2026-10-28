@@ -11,6 +11,7 @@ import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { useInspirationStore } from '../hooks/useInspirations'
 import ErrorBoundary from '../components/ErrorBoundary'
+import ShareIntentBridge from '../components/ShareIntentBridge'
 
 export default function RootLayout() {
   useEffect(() => {
@@ -22,6 +23,8 @@ export default function RootLayout() {
     <ErrorBoundary>
       <SafeAreaProvider>
         <StatusBar style="dark" />
+        {/* 分享 Intent：小红书/抖音/相册分享进来直接入库 */}
+        <ShareIntentBridge />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen
@@ -83,6 +86,24 @@ export default function RootLayout() {
             options={{
               headerShown: true,
               title: '标签管理',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+          <Stack.Screen
+            name="generate"
+            options={{
+              headerShown: true,
+              title: '出图记录',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+          <Stack.Screen
+            name="generate/[id]"
+            options={{
+              headerShown: true,
+              title: '候选图',
               headerBackTitle: '返回',
               presentation: 'card',
             }}

@@ -45,6 +45,16 @@
             "./assets/fonts/Ionicons.ttf"
           ]
         }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": [
+            "image/*",
+            "text/*"
+          ],
+          "disableIOS": true
+        }
       ]
     ],
     "scheme": "fashion-inspo"

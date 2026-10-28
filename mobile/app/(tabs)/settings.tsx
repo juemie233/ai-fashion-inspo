@@ -151,6 +151,15 @@ export default function SettingsScreen() {
         </View>
         <Icon name="chevron-forward" size={16} color="#d1d5db" />
       </TouchableOpacity>
+
+      {/* 出图在电脑端，手机只看候选图（只读） */}
+      <TouchableOpacity style={styles.linkCard} onPress={() => router.push('/generate')}>
+        <View style={styles.linkLeft}>
+          <Icon name="sparkles-outline" size={18} color="#6366f1" />
+          <Text style={styles.linkLabel}>出图记录</Text>
+        </View>
+        <Icon name="chevron-forward" size={16} color="#d1d5db" />
+      </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   )
