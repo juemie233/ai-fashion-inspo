@@ -23,6 +23,7 @@ import {
   type CreateRunPayload,
   type GenerateStatus,
   type GenerationCandidate,
+  type GenerationHistoryQuery,
   type GenerationRunBrief,
   type GenerationRun,
   type GenerationTaskInfo,
@@ -84,9 +85,15 @@ export function useImageGen() {
     selected.value = new Set()
     lastSeed.value = null
   }
-  /** 生成历史（最近 20 批），用于「同参重跑」入口 */
+  /** 生成历史（服务端分页 + 筛选）：列表、总数、页码与筛选条件 */
   const history = ref<GenerationRunBrief[]>([])
   const historyLoading = ref(false)
+  const historyTotal = ref(0)
+  const historyPage = ref(1)
+  /** 每页条数（历史区一屏约 10 行 + 分页，20 条足够且请求轻） */
+  const HISTORY_PAGE_SIZE = 20
+  /** 筛选条件：档位 / 状态 / 只看已入库 / 关键字（后端执行，前端不二次过滤） */
+  const historyFilters = ref<GenerationHistoryQuery>({})
 
   const run = computed<GenerationRun | null>(() => detail.value?.run ?? null)
   const candidates = computed<GenerationCandidate[]>(() => detail.value?.items ?? [])
@@ -220,16 +227,39 @@ export function useImageGen() {
    * 放在 composable 里而不是 view 里：视图只做编排，且 ts-prune 看不到 .vue 引用，
    * 直接在视图里调 api 会被误判成死代码（项目死代码门禁对 .vue 是盲的）。
    */
+  /**
+   * 拉当前页历史。筛选与分页都由后端执行（`total` 与 `items` 同口径，否则分页会飘）。
+   *
+   * 注意：调用方（视图）在历史区收起时不调它——收起时连请求都不该发。
+   */
   async function loadHistory(): Promise<void> {
     historyLoading.value = true
     try {
-      const out = await listRuns(20)
-      history.value = out.items
+      const out = await listRuns({
+        page: historyPage.value,
+        size: HISTORY_PAGE_SIZE,
+        ...historyFilters.value,
+      })
+      history.value = out.items ?? []
+      historyTotal.value = out.total ?? 0
     } catch (e) {
       Message.error(getApiErrorMessage(e, '读取生成历史失败'))
     } finally {
       historyLoading.value = false
     }
+  }
+
+  /** 翻页（回到顶部由表格自己管，这里只换数据） */
+  async function setHistoryPage(page: number): Promise<void> {
+    historyPage.value = Math.max(1, page)
+    await loadHistory()
+  }
+
+  /** 改筛选条件：一律回到第 1 页（否则停在旧页会看到空列表） */
+  async function setHistoryFilters(next: GenerationHistoryQuery): Promise<void> {
+    historyFilters.value = next
+    historyPage.value = 1
+    await loadHistory()
   }
 
   /**
@@ -325,6 +355,12 @@ export function useImageGen() {
     lastSeed,
     history,
     historyLoading,
+    historyTotal,
+    historyPage,
+    historyPageSize: HISTORY_PAGE_SIZE,
+    historyFilters,
+    setHistoryPage,
+    setHistoryFilters,
     // 动作
     loadStatus,
     submit,

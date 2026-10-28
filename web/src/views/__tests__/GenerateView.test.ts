@@ -60,6 +60,13 @@ vi.mock('@/composables/useImageGen', async () => {
       lastSeed: ref(null),
       history: ref([]),
       historyLoading: ref(false),
+      // P0 历史区：分页 + 筛选（视图会读这些 ref，缺了会在收起历史时抛 TypeError）
+      historyTotal: ref(0),
+      historyPage: ref(1),
+      historyPageSize: ref(20),
+      historyFilters: ref({}),
+      setHistoryPage: vi.fn(),
+      setHistoryFilters: vi.fn(),
       loadStatus: mocks.loadStatus,
       submit: mocks.submit,
       toggle: vi.fn(),

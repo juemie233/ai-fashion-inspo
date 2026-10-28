@@ -16,11 +16,11 @@ import json
 import logging
 import random
 import shutil
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -486,41 +486,231 @@ async def discard_run(db: AsyncSession, run_id: int) -> dict:
     return {"removed_files": removed, "status": "deleted"}
 
 
+"""列表里每批最多带几张候选图（缩略图条）：再多也只是复制候选区"""
+LIST_CANDIDATES_LIMIT = 4
+
+"""缩略图宽度（基准）：历史列表用 256px，约 20 KB/张"""
+THUMB_WIDTH = 256
+
+
+def ensure_thumbnail(source: Path, width: int = THUMB_WIDTH) -> Path | None:
+    """返回候选图的缩略图路径（存在则直接复用；不存在则生成）。
+
+    同步函数（Pillow 解码 + 编码），调用方用 ``asyncio.to_thread`` 包起来。
+
+    缓存失效判据是 **mtime 比较**：候选图文件被重生成时（同文件名换内容）mtime 会变，
+    缩略图自动重建，不需要额外的版本号。
+
+    Args:
+        source: 原图路径（PNG）。
+        width: 目标宽度（等比缩放，最长边不超过它）。
+
+    Returns:
+        缩略图路径；Pillow 解不开（文件损坏/不是图片）时返回 None，由调用方退回原图。
+    """
+    from PIL import Image  # 延迟导入：列表/创建批次等热路径不需要 Pillow
+
+    thumb_dir = source.parent / ".thumbs"
+    target = thumb_dir / f"{source.stem}_w{width}.jpg"
+    try:
+        if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
+            return target
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as image:
+            rgb = image.convert("RGB")
+            rgb.thumbnail((width, width))
+            # quality=82：256px 缩略图约 20 KB，肉眼与 UI 用途足够
+            rgb.save(target, "JPEG", quality=82, optimize=True)
+        return target
+    except Exception as exc:  # noqa: BLE001 —— 缩略图失败不能影响看图，退回原图
+        logger.warning(f"生成缩略图失败（退回原图）：{source} → {exc}")
+        return None
+
+
+def _candidate_filenames(folder: Path) -> list[str]:
+    """列出批次目录里的候选图文件名（按文件名排序，不含缩略图子目录）。
+
+    纯同步 IO，调用方放线程池。目录不存在返回空列表（批次目录已被清理）。
+    """
+    if not folder.is_dir():
+        return []
+    return sorted(p.name for p in folder.glob(f"*{CANDIDATE_SUFFIX}"))
+
+
+def thumb_url(run_id: int, filename: str) -> str:
+    """候选图的缩略图地址（走同一个文件接口，加 w 参数触发缩略图）。"""
+    return f"/api/generate/runs/{run_id}/candidates/{filename}?w={THUMB_WIDTH}"
+
+
+def _serialize_run(
+    run: GenerationRun,
+    *,
+    candidates: list[str],
+    imported_count: int,
+) -> dict:
+    """把一行批次序列化成列表项（保留原有字段，另加 P0 三件套）。"""
+    params = _params_of(run)
+    # prompt / negative 已单独返回，params 里的副本不再重复（列表最多 100 条）
+    params.pop("prompt", None)
+    params.pop("negative", None)
+    return {
+        "id": run.id,
+        "kind": run.kind,
+        "status": run.status,
+        "prompt": run.prompt,
+        "negative": run.negative,
+        "params": params,
+        "model_key": run.model_key,
+        "workflow_name": run.workflow_name,
+        "total": run.total,
+        "done": run.done,
+        "failed": run.failed,
+        "error": run.error,
+        "created_at": format_utc(run.created_at),
+        "updated_at": format_utc(run.updated_at),
+        # ── 列表增强（P0 A1）：缩略图条 + 已入库张数 + 目录是否还在 ──
+        "candidates": [{"filename": name, "thumb_url": thumb_url(run.id, name)} for name in candidates],
+        "imported_count": imported_count,
+        "files_missing": not candidates,
+    }
+
+
+async def _imported_counts(db: AsyncSession, run_ids: list[int]) -> dict[int, int]:
+    """按批次统计已入库素材数（一条聚合 SQL；列表**不**逐文件算哈希）。"""
+    if not run_ids:
+        return {}
+    rows = await db.execute(
+        select(Inspiration.generation_run_id, func.count())
+        .where(
+            Inspiration.generation_run_id.in_(run_ids),
+            Inspiration.deleted_at.is_(None),
+        )
+        .group_by(Inspiration.generation_run_id)
+    )
+    return {int(run_id): int(count) for run_id, count in rows.all()}
+
+
+def _apply_run_filters(stmt, filters: dict):
+    """把筛选条件翻译成 where 子句（列表与计数共用，避免两边口径漂移）。"""
+    if filters.get("kind"):
+        stmt = stmt.where(GenerationRun.kind == filters["kind"])
+    if filters.get("model_key"):
+        stmt = stmt.where(GenerationRun.model_key == filters["model_key"])
+    if filters.get("status"):
+        stmt = stmt.where(GenerationRun.status == filters["status"])
+    if filters.get("q"):
+        # 关键字同时匹配描述与负面词：用户记不清写在哪一边
+        like = f"%{filters['q']}%"
+        stmt = stmt.where(
+            or_(GenerationRun.prompt.like(like), GenerationRun.negative.like(like))
+        )
+    if filters.get("reference_id"):
+        # reference_ids 是 JSON 数组字符串；用带引号的 LIKE 命中完整 id，避免前缀误伤
+        stmt = stmt.where(
+            GenerationRun.reference_ids.like(f'%"{filters["reference_id"]}"%')
+        )
+    if filters.get("since"):
+        stmt = stmt.where(GenerationRun.created_at >= filters["since"])
+    if filters.get("until"):
+        stmt = stmt.where(GenerationRun.created_at < filters["until"])
+    if filters.get("has_imported") is not None:
+        imported_subq = select(Inspiration.generation_run_id).where(
+            Inspiration.generation_run_id.is_not(None),
+            Inspiration.deleted_at.is_(None),
+        )
+        if filters["has_imported"]:
+            stmt = stmt.where(GenerationRun.id.in_(imported_subq))
+        else:
+            stmt = stmt.where(GenerationRun.id.not_in(imported_subq))
+    return stmt
+
+
+async def list_runs(
+    db: AsyncSession,
+    *,
+    page: int = 1,
+    size: int = 20,
+    kind: str | None = None,
+    model_key: str | None = None,
+    status: str | None = None,
+    has_imported: bool | None = None,
+    q: str | None = None,
+    reference_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict:
+    """生成历史（分页 + 筛选），供出图页历史区使用。
+
+    为什么不用旧的 ``recent_runs`` 直接改成带参：它是「最近 N 条」的语义，仍有调用方；
+    这里返回 ``{items, total, page, size}``，前端据此做服务端分页。
+
+    Args:
+        page: 页码（从 1 开始）。
+        size: 每页条数。
+        kind: t2i / i2i。
+        model_key: 档位 key。
+        status: 批次状态。
+        has_imported: True 只看有入库的批次；False 只看没入库的。
+        q: 关键字（匹配描述或负面词）。
+        reference_id: 参考素材 id（精确命中 JSON 数组里的那一项）。
+        since / until: 创建时间区间（左闭右开）。
+
+    Returns:
+        ``{"items": [...], "total": n, "page": p, "size": s}``；items 每项含
+        ``candidates``（最多 4 张 + 缩略图地址）、``imported_count``、``files_missing``。
+    """
+    filters = {
+        "kind": kind,
+        "model_key": model_key,
+        "status": status,
+        "has_imported": has_imported,
+        "q": (q or "").strip() or None,
+        "reference_id": (reference_id or "").strip() or None,
+        "since": since,
+        "until": until,
+    }
+
+    base = _apply_run_filters(select(GenerationRun), filters)
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar() or 0
+
+    page = max(1, page)
+    size = max(1, size)
+    rows = (
+        await db.execute(
+            base.order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+    ).scalars().all()
+
+    run_ids = [run.id for run in rows]
+    imported_counts = await _imported_counts(db, run_ids)
+    # 目录列举放线程池：单批几十毫秒，但 20 批串行会明显拖慢列表
+    folders = await asyncio.gather(
+        *[asyncio.to_thread(_candidate_filenames, _run_dir(run)) for run in rows]
+    )
+
+    items = [
+        _serialize_run(
+            run,
+            candidates=filenames[:LIST_CANDIDATES_LIMIT],
+            imported_count=imported_counts.get(run.id, 0),
+        )
+        for run, filenames in zip(rows, folders, strict=True)
+    ]
+    return {"items": items, "total": total, "page": page, "size": size}
+
+
 async def recent_runs(db: AsyncSession, limit: int = 20) -> list[dict]:
-    """最近的出图批次（生成历史列表）。
+    """最近的出图批次（兼容旧调用：等价于 ``list_runs(size=limit)["items"]``）。
 
     返回**完整** prompt 与参数快照：前端历史表可展开看全文，此前截到 120 字会让
     展开行也看不到后半段。时间统一走 ``format_utc``（带 Z），否则前端
     ``new Date()`` 会把 naive UTC 当本地时间，UTC+8 下整体早 8 小时。
     """
-    rows = await db.execute(
-        select(GenerationRun).order_by(GenerationRun.created_at.desc()).limit(limit)
-    )
-    out: list[dict] = []
-    for run in rows.scalars().all():
-        params = _params_of(run)
-        # prompt / negative 已单独返回，params 里的副本不再重复（列表最多 100 条）
-        params.pop("prompt", None)
-        params.pop("negative", None)
-        out.append(
-            {
-                "id": run.id,
-                "kind": run.kind,
-                "status": run.status,
-                "prompt": run.prompt,
-                "negative": run.negative,
-                "params": params,
-                "model_key": run.model_key,
-                "workflow_name": run.workflow_name,
-                "total": run.total,
-                "done": run.done,
-                "failed": run.failed,
-                "error": run.error,
-                "created_at": format_utc(run.created_at),
-                "updated_at": format_utc(run.updated_at),
-            }
-        )
-    return out
+    return (await list_runs(db, page=1, size=limit))["items"]
 
 
 async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:

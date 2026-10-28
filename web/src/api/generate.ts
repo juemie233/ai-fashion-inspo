@@ -114,6 +114,44 @@ export interface GenerationRunBrief {
   error: string | null
   created_at: string | null
   updated_at: string | null
+  /** 候选图缩略图（最多 4 张；目录已被清理时为空数组）—— 列表用，不算哈希 */
+  candidates?: GenerationRunThumb[]
+  /** 该批次已入库的素材张数（后端一条聚合 SQL 得出） */
+  imported_count?: number
+  /** 候选目录是否已被清掉（true → 前端显示「图已清理」占位） */
+  files_missing?: boolean
+}
+
+/** 列表里的候选缩略图（不带逐张 imported：那要算哈希，只有详情接口才做） */
+interface GenerationRunThumb {
+  filename: string
+  thumb_url: string
+}
+
+/** 生成历史查询参数（服务端分页 + 筛选） */
+export interface GenerationHistoryQuery {
+  page?: number
+  size?: number
+  /** 兼容老调法：等价于 size（后端已标注 deprecated） */
+  limit?: number
+  kind?: 't2i' | 'i2i'
+  model_key?: string
+  status?: string
+  /** true 只看已入库；false 只看未入库 */
+  has_imported?: boolean
+  /** 关键字：描述或负面词 */
+  q?: string
+  /** 参考素材 id（精确命中） */
+  reference_id?: string
+  since?: string
+  until?: string
+}
+
+interface GenerationHistoryPage {
+  items: GenerationRunBrief[]
+  total: number
+  page: number
+  size: number
 }
 
 export interface PromptPreview {
@@ -166,8 +204,17 @@ export async function previewPrompt(inspirationIds: string[]): Promise<PromptPre
   return data
 }
 
-export async function listRuns(limit = 20): Promise<{ items: GenerationRunBrief[] }> {
-  const { data } = await apiClient.get('/generate/runs', { params: { limit } })
+/**
+ * 生成历史（服务端分页 + 筛选）。
+ *
+ * 兼容两种调法：`listRuns(20)`（老代码）与 `listRuns({ page, size, q })`（新历史区）。
+ * 后端同时接受 `limit`（旧）与 `size`（新），语义等价。
+ */
+export async function listRuns(
+  query: number | GenerationHistoryQuery = 20,
+): Promise<GenerationHistoryPage> {
+  const params: GenerationHistoryQuery = typeof query === 'number' ? { limit: query } : query
+  const { data } = await apiClient.get<GenerationHistoryPage>('/generate/runs', { params })
   return data
 }
 

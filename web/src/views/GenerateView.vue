@@ -20,7 +20,7 @@ import ReferenceGalleryModal from '@/components/generate/ReferenceGalleryModal.v
 import { fetchInspirations } from '@/api/inspirations'
 import { useReferenceItems } from '@/composables/useReferenceItems'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
-import { discardRun } from '@/api/generate'
+import { confirmImport, discardRun, type GenerationHistoryQuery } from '@/api/generate'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const route = useRoute()
@@ -56,6 +56,12 @@ const {
   reset,
   history,
   historyLoading,
+  historyTotal,
+  historyPage,
+  historyPageSize,
+  historyFilters,
+  setHistoryPage,
+  setHistoryFilters,
   loadStatus,
   submit,
   toggle,
@@ -113,10 +119,50 @@ function toggleHistory(): void {
   if (historyVisible.value && (!historyLoaded.value || historyDirty.value)) void refreshHistory()
 }
 
+/** 收起历史时清掉筛选与页码：下次展开是「全部历史第 1 页」的可预期状态 */
+function closeHistory(): void {
+  historyVisible.value = false
+  if (
+    historyFilters.value.model_key ||
+    historyFilters.value.status ||
+    historyFilters.value.has_imported ||
+    historyFilters.value.q
+  ) {
+    void setHistoryFilters({})
+  }
+}
+
 /** 当前批次本身变了（入库/丢弃）：历史行会跟着变，按可见性决定「现在刷」还是「下次刷」 */
 function touchHistory(): void {
   if (historyVisible.value) void refreshHistory()
   else historyDirty.value = true
+}
+
+/** 历史表实例：从历史入库成功后要清掉那一行的勾选并让它重拉候选 */
+const historyTable = ref<InstanceType<typeof GenerateHistoryTable> | null>(null)
+/** 历史区入库中（展开行的按钮 loading） */
+const historyImporting = ref(false)
+
+/** 从历史页直接入库选中的候选（与候选区入库共用同一个接口） */
+async function onImportFromHistory(runId: number, filenames: string[]): Promise<void> {
+  historyImporting.value = true
+  try {
+    const result = await confirmImport(runId, filenames)
+    const imported = result.imported ?? 0
+    if (imported > 0) Message.success(`已入库 ${imported} 张`)
+    else Message.info('这张已经入库过了（按内容哈希去重）')
+    historyTable.value?.resetPicked(runId)
+    await refreshHistory()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '入库失败'))
+  } finally {
+    historyImporting.value = false
+  }
+}
+
+/** 历史区筛选变化（工具栏回抛）：回到第 1 页重新拉 */
+async function onHistoryFilters(next: GenerationHistoryQuery): Promise<void> {
+  await setHistoryFilters(next)
 }
 
 /** 确认入库：入库张数会体现在历史行里 */
@@ -317,7 +363,7 @@ onUnmounted(stopPoll)
     <!-- 生成历史：默认收起（同参重跑入口；历史只存参数，图在候选区，过期会被清理）。
          收起时连表格都不渲染、也不发请求——出图页的主线是「填参数 → 生成 → 入库」 -->
     <div class="gen-history-toggle">
-      <a-button size="mini" @click="toggleHistory">
+      <a-button size="mini" @click="historyVisible ? closeHistory() : toggleHistory()">
         {{ historyVisible ? '收起生成历史' : '展开生成历史' }}
         <span v-if="!historyVisible && history.length">（{{ history.length }} 条）</span>
       </a-button>
@@ -327,14 +373,23 @@ onUnmounted(stopPoll)
     </div>
     <a-card v-if="historyVisible" class="gen-card gen-history" :bordered="false">
       <GenerateHistoryTable
+        ref="historyTable"
         :history="history"
+        :total="historyTotal"
+        :page="historyPage"
+        :size="historyPageSize"
+        :filters="historyFilters"
         :loading="historyLoading"
         :submitting="submitting"
         :deleting-id="deletingId"
         :status="status"
+        :importing="historyImporting"
         @refresh="refreshHistory"
         @retry="retry"
         @remove="removeRun"
+        @page-change="setHistoryPage"
+        @update:filters="onHistoryFilters"
+        @import-selected="onImportFromHistory"
       />
     </a-card>
   </div>

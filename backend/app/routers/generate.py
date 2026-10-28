@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -91,10 +93,41 @@ async def create_run(
 
 @router.get("/runs")
 async def list_runs(
-    limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)
+    page: int = Query(1, ge=1),
+    size: int | None = Query(None, ge=1, le=100),
+    limit: int | None = Query(None, ge=1, le=100, deprecated=True),
+    kind: str | None = Query(None, pattern="^(t2i|i2i)$"),
+    model_key: str | None = Query(None, max_length=32),
+    status: str | None = Query(None, max_length=16),
+    has_imported: bool | None = Query(None, description="只看已入库 / 未入库的批次"),
+    q: str | None = Query(None, max_length=200, description="关键字：描述或负面词"),
+    reference_id: str | None = Query(None, max_length=64, description="参考素材 id"),
+    since: datetime | None = Query(None, description="创建时间 >=（ISO 8601）"),
+    until: datetime | None = Query(None, description="创建时间 <（ISO 8601）"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """最近的出图批次。"""
-    return {"items": await generation_service.recent_runs(db, limit)}
+    """生成历史：分页 + 筛选 + 列表增强（缩略图条 / 已入库张数 / 目录是否已清理）。
+
+    为什么保留 `limit`：这是老前端的调用方式（也是既有测试的写法），语义等价于
+    `size`；新前端一律用 `size` + `page`。
+
+    Returns:
+        ``{"items", "total", "page", "size"}``。
+    """
+    page_size = size or limit or 20
+    return await generation_service.list_runs(
+        db,
+        page=page,
+        size=page_size,
+        kind=kind,
+        model_key=model_key,
+        status=status,
+        has_imported=has_imported,
+        q=q,
+        reference_id=reference_id,
+        since=since,
+        until=until,
+    )
 
 
 @router.get("/runs/{run_id}")
@@ -104,8 +137,18 @@ async def get_run(run_id: int, db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.get("/runs/{run_id}/candidates/{filename}")
-async def get_candidate(run_id: int, filename: str, db: AsyncSession = Depends(get_db)) -> FileResponse:
-    """读取候选图文件（缩略图/预览用）。"""
+async def get_candidate(
+    run_id: int,
+    filename: str,
+    w: int = Query(0, ge=0, le=1024, description="缩略图宽度；0 = 返回原图"),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """读取候选图文件（原图或缩略图）。
+
+    `w>0` 时返回 256px 级别的 JPEG 缩略图（首次请求生成并缓存到批次目录下的
+    ``.thumbs/``，随批次目录一起被清理）。为什么需要它：候选图是 1.6 MB 的 1024² PNG，
+    历史列表一屏 20 行全用原图 ≈ 75 MB（实测），缩略图约 20 KB/张。
+    """
     run = await db.get(GenerationRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="出图批次不存在")
@@ -120,7 +163,15 @@ async def get_candidate(run_id: int, filename: str, db: AsyncSession = Depends(g
     path = settings.storage_root / run.batch_dir / safe_name
     if not path.exists():
         raise HTTPException(status_code=404, detail="候选图不存在")
-    return FileResponse(path, media_type="image/png")
+    if w <= 0:
+        return FileResponse(path, media_type="image/png")
+
+    # 生成/复用缩略图放线程池：Pillow 解码 1.6 MB PNG 约 10~20 ms，别占事件循环
+    thumb = await asyncio.to_thread(generation_service.ensure_thumbnail, path, w)
+    if thumb is None:
+        # Pillow 解不开（损坏图）：退回原图，至少不会 500
+        return FileResponse(path, media_type="image/png")
+    return FileResponse(thumb, media_type="image/jpeg")
 
 
 @router.post("/runs/{run_id}/confirm")
