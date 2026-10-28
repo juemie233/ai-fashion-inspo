@@ -11,6 +11,7 @@ import {
   fetchInspirationPage,
   removeFromCollection,
   vectorSearchByImage,
+  vectorSearchByText,
 } from '../services/api'
 
 describe('列表筛选/排序', () => {

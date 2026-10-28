@@ -4,7 +4,7 @@
  * 面板与提交，只看「出了什么、要不要用」——点进批次可以看候选图与全屏预览。
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -16,25 +16,19 @@ import {
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import Icon from '../components/Icon'
-import { fetchGenerateRuns, type GenerateRun } from '../services/api'
+import { fetchGenerateModelLabels, fetchGenerateRuns, type GenerateRun } from '../services/api'
+import { modelLabel } from '../utils/modelLabel'
 
 const PAGE_SIZE = 20
 
-/** 批次状态中文名与配色 */
+/** 批次状态中文名与配色（枚举与后端 generation.GENERATION_STATUSES 对齐） */
 const STATUS_META: Record<string, { label: string; color: string }> = {
-  done: { label: '已完成', color: '#16a34a' },
+  queued: { label: '排队中', color: '#f59e0b' },
+  waiting_vram: { label: '等待显存', color: '#f59e0b' },
   running: { label: '出图中', color: '#6366f1' },
-  pending: { label: '排队中', color: '#f59e0b' },
+  done: { label: '已完成', color: '#16a34a' },
   failed: { label: '失败', color: '#ef4444' },
   cancelled: { label: '已取消', color: '#9ca3af' },
-}
-
-/** 模型 key → 展示名（未收录的原样显示） */
-const MODEL_LABELS: Record<string, string> = {
-  qwen_2_1_i2i: 'Qwen 2.1 图生图',
-  qwen_2_1_uc_i2i: 'Qwen 2.1 图生图（未审查）',
-  z_image_int8: 'Z-Image',
-  z_image_t2i: 'Z-Image 文生图',
 }
 
 export default function GenerateScreen() {
@@ -46,19 +40,45 @@ export default function GenerateScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  /** 后端给的最新档位展示名（拉不到时用内置兜底） */
+  const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
+
+  /** 翻页互斥 + 请求序号：慢网重复触发 onEndReached 时不再追加重复页 */
+  const loadingMoreRef = useRef(false)
+  const requestSeqRef = useRef(0)
 
   const load = useCallback(async (nextPage = 1) => {
+    if (nextPage > 1 && loadingMoreRef.current) return
+    const seq = ++requestSeqRef.current
+    if (nextPage > 1) loadingMoreRef.current = true
     try {
       const data = await fetchGenerateRuns(nextPage, PAGE_SIZE)
+      if (seq !== requestSeqRef.current) return
       setRuns((prev) => (nextPage === 1 ? data.items : [...prev, ...data.items]))
       setTotal(data.total)
       setPage(nextPage)
       setError('')
     } catch {
-      setError('加载失败，请检查网络或后端服务')
+      if (seq === requestSeqRef.current) setError('加载失败，请检查网络或后端服务')
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (nextPage > 1) loadingMoreRef.current = false
+      if (seq === requestSeqRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    // 档位名从后端取（单一来源）；失败不打断列表，回退内置表
+    let alive = true
+    void fetchGenerateModelLabels()
+      .then((labels) => {
+        if (alive) setModelLabels(labels)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
     }
   }, [])
 
@@ -103,7 +123,7 @@ export default function GenerateScreen() {
           >
             <View style={styles.cardHeader}>
               <Text style={styles.model} numberOfLines={1}>
-                {MODEL_LABELS[item.model_key ?? ''] ?? item.model_key ?? '本地出图'}
+                {modelLabel(item.model_key, modelLabels)}
               </Text>
               <Text style={[styles.status, { color: status.color }]}>{status.label}</Text>
             </View>

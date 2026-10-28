@@ -15,6 +15,7 @@
 #    9. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
 #   10. 前端死代码基线（ts-prune，只拦新增）
 #   11. 前端格式（只查本次改动文件；全库检查会因 45 个历史文件永远为红）
+#   12. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含裸字符串检查）
 #
 # 依赖：Python 3.12+（可用 PYTHON_BIN 覆盖，如 PYTHON_BIN=py）、Node 20+、web/node_modules。
 # 前端一律用 node 直接调用本地二进制，规避 npx/npm 包装脚本在受限 PowerShell 下的执行策略问题。
@@ -26,7 +27,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PYTHON_BIN:-python}"
 COV="${1:-}"
 
-echo "===== 1/12 后端测试 + 覆盖率棘轮（≥81%）====="
+echo "===== 1/13 后端测试 + 覆盖率棘轮（≥81%）====="
 cd "$ROOT/backend"
 # 覆盖率底线是**棘轮**：只能往上调。当前 81.73%（2026-10-27 实测）。
 # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
@@ -39,61 +40,69 @@ else
 fi
 
 echo ""
-echo "===== 2/12 后端 lint（ruff，零告警：app + 脚本目录）====="
+echo "===== 2/13 后端 lint（ruff，零告警：app + 脚本目录）====="
 cd "$ROOT/backend"
 # 脚本目录也纳入：2026-10-28 在 fetch_xhs_following.py 里发现「def 被注释吞掉」的
 # 真损坏（模块能导入、函数却不存在），正是「脚本不 lint」才会潜伏下来的问题
 "$PY" -m ruff check app scripts ../scripts
 
 echo ""
-echo "===== 3/12 后端死代码（vulture，置信度 80 必须 0 条）====="
+echo "===== 3/13 后端死代码（vulture，置信度 80 必须 0 条）====="
 cd "$ROOT/backend"
 "$PY" -m vulture app --min-confidence 80
 
 echo ""
-echo "===== 4/12 后端类型（mypy 棘轮）====="
+echo "===== 4/13 后端类型（mypy 棘轮）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_types.py
 
 echo ""
-echo "===== 5/12 迁移链自检（空库 → 与 ORM 一致）====="
+echo "===== 5/13 迁移链自检（空库 → 与 ORM 一致）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_fresh_migrations.py
 
 echo ""
-echo "===== 6/12 库结构漂移（ORM ↔ 现有库）====="
+echo "===== 6/13 库结构漂移（ORM ↔ 现有库）====="
 cd "$ROOT/backend"
 "$PY" scripts/check_alembic_drift.py
 
 echo ""
-echo "===== 7/12 脚本规范（只读连接 / CLI 入口）====="
+echo "===== 7/13 脚本规范（只读连接 / CLI 入口）====="
 cd "$ROOT"
 "$PY" scripts/check_scripts.py
 
 echo ""
-echo "===== 8/12 前端类型检查（vue-tsc）====="
+echo "===== 8/13 前端类型检查（vue-tsc）====="
 cd "$ROOT/web"
 node node_modules/vue-tsc/bin/vue-tsc.js --noEmit
 
 echo ""
-echo "===== 9/12 前端测试（vitest）====="
+echo "===== 9/13 前端测试（vitest）====="
 cd "$ROOT/web"
 node node_modules/vitest/vitest.mjs run
 
 echo ""
-echo "===== 10/12 前端 lint（eslint，棘轮 34）====="
+echo "===== 10/13 前端 lint（eslint，棘轮 34）====="
 cd "$ROOT/web"
 node node_modules/eslint/bin/eslint.js . --max-warnings 34
 
 echo ""
-echo "===== 11/12 前端死代码基线（ts-prune）====="
+echo "===== 11/13 前端死代码基线（ts-prune）====="
 cd "$ROOT"
 node scripts/check-web-dead-code.mjs
 
 echo ""
-echo "===== 12/12 前端格式（只查改动文件）====="
+echo "===== 12/13 前端格式（只查改动文件）====="
 cd "$ROOT"
 node scripts/check-web-format.mjs
 
 echo ""
-echo "✅ 12 项门禁全部通过"
+echo "===== 13/13 移动端（tsc + jest）====="
+cd "$ROOT/mobile"
+# 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
+# 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/jest/bin/jest.js --ci
+
+echo ""
+echo "✅ 13 项门禁全部通过"

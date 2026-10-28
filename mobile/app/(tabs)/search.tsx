@@ -27,6 +27,7 @@ import {
   apiClient,
   getFileUrl,
   vectorSearchByImage,
+  vectorSearchByText,
   type TagCategoryGroup,
   type VectorHit,
 } from '../../services/api'
@@ -53,6 +54,10 @@ export default function SearchScreen() {
   const [searched, setSearched] = useState(false)
   /** 当前结果是否来自以图搜图（用于标题文案与停止分页） */
   const [imageQueryUri, setImageQueryUri] = useState<string | null>(null)
+  /** 检索模式：关键词（走 /search）或语义（走向量库 /search/vector 的 text 分支） */
+  const [mode, setMode] = useState<'keyword' | 'semantic'>('keyword')
+  /** 当前结果是否来自语义检索 */
+  const [semanticQuery, setSemanticQuery] = useState<string | null>(null)
   /** 搜索请求序号：翻页在飞时重新搜索/以图搜图，旧响应直接丢弃，避免混入新结果 */
   const searchSeqRef = useRef(0)
 
@@ -81,10 +86,41 @@ export default function SearchScreen() {
         setLoadingMore(false)
         setSearched(true)
         setImageQueryUri(null)
+        setSemanticQuery(null)
       } else {
         setLoadingMore(true)
       }
       setError('')
+
+      // 语义检索：走向量库（text 分支），一次取 TopK，不分页
+      if (mode === 'semantic' && nextPage === 1) {
+        const text = searchText.trim()
+        if (!text) {
+          setError('语义检索需要先输入一句话，例如「白色连衣裙 约会」')
+          setLoading(false)
+          setLoadingMore(false)
+          return
+        }
+        try {
+          const hits: VectorHit[] = await vectorSearchByText(text, PAGE_SIZE)
+          if (seq !== searchSeqRef.current) return
+          setResults(hits.map((h) => h.inspiration).filter(Boolean))
+          setTotal(hits.length)
+          setSemanticQuery(text)
+          setPage(1)
+        } catch {
+          if (seq !== searchSeqRef.current) return
+          setError('语义检索失败：可能文本向量模型未就绪（需 Ollama + 嵌入模型）')
+          setResults([])
+          setTotal(0)
+        } finally {
+          if (seq === searchSeqRef.current) {
+            setLoading(false)
+            setLoadingMore(false)
+          }
+        }
+        return
+      }
 
       try {
         const params: Record<string, string | number> = { page: nextPage, size: PAGE_SIZE }
@@ -116,7 +152,7 @@ export default function SearchScreen() {
         }
       }
     },
-    [searchText, selectedTags],
+    [searchText, selectedTags, mode],
   )
 
   /** 以图搜图：相册选图 → 图像向量检索 */
@@ -157,8 +193,8 @@ export default function SearchScreen() {
   }
 
   const onEndReached = () => {
-    // 以图搜图结果是一次性返回的，不做分页
-    if (imageQueryUri) return
+    // 以图搜图 / 语义检索的结果都是一次性返回的，不做分页
+    if (imageQueryUri || semanticQuery) return
     if (!loadingMore && !loading && results.length < total) void doSearch(page + 1)
   }
 
@@ -223,19 +259,46 @@ export default function SearchScreen() {
         )}
       </View>
 
+      {/* 检索模式：关键词（标签/全文）或语义（向量） */}
+      <View style={styles.modeRow}>
+        {([
+          { key: 'keyword', label: '关键词' },
+          { key: 'semantic', label: '语义' },
+        ] as const).map((m) => {
+          const active = mode === m.key
+          return (
+            <TouchableOpacity
+              key={m.key}
+              testID={`mode-${m.key}`}
+              style={[styles.modeChip, active && styles.modeChipActive]}
+              onPress={() => setMode(m.key)}
+            >
+              <Text style={[styles.modeText, active && styles.modeTextActive]}>{m.label}</Text>
+            </TouchableOpacity>
+          )
+        })}
+        {mode === 'semantic' && (
+          <Text style={styles.modeHint}>用一句话描述想找的穿搭</Text>
+        )}
+      </View>
+
       {/* 条件行：标签筛选 + 以图搜图 + 搜索 */}
       <View style={styles.condRow}>
+        {mode === 'keyword' && (
         <TouchableOpacity style={styles.condBtn} onPress={() => setTagSheetOpen(true)}>
           <Icon name="pricetags-outline" size={16} color="#6366f1" />
           <Text style={styles.condText}>
             标签{selectedTags.length > 0 ? ` (${selectedTags.length})` : ''}
           </Text>
         </TouchableOpacity>
+        )}
 
-        <TouchableOpacity style={styles.condBtn} onPress={() => void doImageSearch()}>
-          <Icon name="images-outline" size={16} color="#6366f1" />
-          <Text style={styles.condText}>以图搜图</Text>
-        </TouchableOpacity>
+        {mode === 'keyword' && (
+          <TouchableOpacity style={styles.condBtn} onPress={() => void doImageSearch()}>
+            <Icon name="images-outline" size={16} color="#6366f1" />
+            <Text style={styles.condText}>以图搜图</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={styles.searchBtn} onPress={() => void doSearch(1)}>
           <Text style={styles.searchBtnText}>搜索</Text>
@@ -282,7 +345,11 @@ export default function SearchScreen() {
           contentContainerStyle={styles.resultsGrid}
           onEndReached={onEndReached}
           onEndReachedThreshold={0.5}
-          ListHeaderComponent={<Text style={styles.resultCount}>找到 {total} 条结果</Text>}
+          ListHeaderComponent={
+            <Text style={styles.resultCount}>
+              {semanticQuery ? `语义匹配 ${total} 条` : `找到 ${total} 条结果`}
+            </Text>
+          }
           ListFooterComponent={
             loadingMore ? <ActivityIndicator style={{ marginVertical: 12 }} color="#6366f1" /> : null
           }
@@ -319,6 +386,12 @@ const styles = StyleSheet.create({
     height: 44,
   },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#1f2937' },
+  modeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 10 },
+  modeChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, backgroundColor: '#f3f4f6' },
+  modeChipActive: { backgroundColor: '#6366f1' },
+  modeText: { fontSize: 12, color: '#374151' },
+  modeTextActive: { color: '#fff', fontWeight: '500' },
+  modeHint: { fontSize: 11, color: '#9ca3af' },
   condRow: {
     flexDirection: 'row',
     alignItems: 'center',

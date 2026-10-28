@@ -349,6 +349,19 @@ export interface VectorHit {
   score: number
 }
 
+/** 语义检索（一句话 → 文本向量；需要 Ollama + 嵌入模型就绪） */
+export async function vectorSearchByText(text: string, topK = 20): Promise<VectorHit[]> {
+  const form = new FormData()
+  form.append('text', text)
+  form.append('top_k', String(topK))
+  const { data } = await apiClient.post<{ items?: VectorHit[] }>('/search/vector', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // 文本嵌入比图像快，但仍要给模型留时间
+    timeout: 45000,
+  })
+  return data?.items ?? []
+}
+
 /** 以图搜图（相册/相机图片 → CLIP 图像向量） */
 export async function vectorSearchByImage(uri: string, topK = 20): Promise<VectorHit[]> {
   const form = new FormData()

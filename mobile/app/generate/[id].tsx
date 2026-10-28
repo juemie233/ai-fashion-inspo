@@ -15,18 +15,13 @@ import Icon from '../../components/Icon'
 import ImageViewer from '../../components/ImageViewer'
 import {
   candidateUrl,
+  fetchGenerateModelLabels,
   fetchGenerateRun,
   type GenerateCandidate,
   type GenerateRun,
 } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
-
-const MODEL_LABELS: Record<string, string> = {
-  qwen_2_1_i2i: 'Qwen 2.1 图生图',
-  qwen_2_1_uc_i2i: 'Qwen 2.1 图生图（未审查）',
-  z_image_int8: 'Z-Image',
-  z_image_t2i: 'Z-Image 文生图',
-}
+import { modelLabel } from '../../utils/modelLabel'
 
 /** 缩略图宽度（后端支持 ?w= 生成缩略图，省流量） */
 const THUMB_WIDTH = 400

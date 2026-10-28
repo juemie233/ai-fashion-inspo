@@ -20,6 +20,7 @@ import { findBareText } from '../test-utils/noBareText'
 const api = require('../services/api') as {
   apiClient: { get: jest.Mock }
   vectorSearchByImage: jest.Mock
+  vectorSearchByText: jest.Mock
 }
 
 function makeItem(id: string) {
@@ -140,6 +141,65 @@ describe('SearchScreen（M3）', () => {
       expect(Alert.alert).toHaveBeenCalledWith('权限不足', '请在系统设置中允许访问相册'),
     )
     expect(api.vectorSearchByImage).not.toHaveBeenCalled()
+  })
+
+  it('切到语义模式：提示用法，且隐藏标签/以图入口', async () => {
+    render(<SearchScreen />)
+    await waitFor(() => expect(screen.getByText('关键词')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('mode-semantic'))
+
+    expect(screen.getByText('用一句话描述想找的穿搭')).toBeTruthy()
+    expect(screen.queryByText('以图搜图')).toBeNull()
+    expect(screen.queryByText('标签')).toBeNull()
+  })
+
+  it('语义模式没输入文本时给提示，不发请求', async () => {
+    render(<SearchScreen />)
+    await waitFor(() => expect(screen.getByText('语义')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('mode-semantic'))
+    fireEvent.press(screen.getByText('搜索'))
+
+    await waitFor(() =>
+      expect(screen.getByText('语义检索需要先输入一句话，例如「白色连衣裙 约会」')).toBeTruthy(),
+    )
+    expect(api.vectorSearchByText).not.toHaveBeenCalled()
+    expect(api.apiClient.get).not.toHaveBeenCalledWith('/search', expect.anything())
+  })
+
+  it('语义模式走向量检索，标题显示「语义匹配」', async () => {
+    api.vectorSearchByText.mockResolvedValue([
+      { inspiration: makeItem('s1'), score: 0.9 },
+      { inspiration: makeItem('s2'), score: 0.8 },
+    ])
+
+    render(<SearchScreen />)
+    await waitFor(() => expect(screen.getByText('语义')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('mode-semantic'))
+    fireEvent.changeText(screen.getByPlaceholderText('搜标签名 / 作者 / 文件名'), '白色连衣裙 约会')
+    fireEvent.press(screen.getByText('搜索'))
+
+    await waitFor(() => expect(api.vectorSearchByText).toHaveBeenCalledWith('白色连衣裙 约会', 30))
+    await waitFor(() => expect(screen.getByText('语义匹配 2 条')).toBeTruthy())
+  })
+
+  it('语义检索失败时提示模型未就绪', async () => {
+    api.vectorSearchByText.mockRejectedValue(new Error('boom'))
+
+    render(<SearchScreen />)
+    await waitFor(() => expect(screen.getByText('语义')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('mode-semantic'))
+    fireEvent.changeText(screen.getByPlaceholderText('搜标签名 / 作者 / 文件名'), '通勤')
+    fireEvent.press(screen.getByText('搜索'))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('语义检索失败：可能文本向量模型未就绪（需 Ollama + 嵌入模型）'),
+      ).toBeTruthy(),
+    )
   })
 
   it('标签筛选弹层：打开后显示标签库规模提示（不全量渲染）', async () => {
