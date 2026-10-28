@@ -42,6 +42,24 @@ export default function RootLayout() {
               presentation: 'card',
             }}
           />
+          <Stack.Screen
+            name="collections"
+            options={{
+              headerShown: true,
+              title: '收藏合集',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
+          <Stack.Screen
+            name="collection/[id]"
+            options={{
+              headerShown: true,
+              title: '合集内容',
+              headerBackTitle: '返回',
+              presentation: 'card',
+            }}
+          />
         </Stack>
       </SafeAreaProvider>
     </ErrorBoundary>

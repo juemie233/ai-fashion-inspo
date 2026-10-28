@@ -275,3 +275,141 @@ export async function cancelTask(id: number): Promise<void> {
 }
 
 export type { Tag, TagCategoryGroup }
+
+// ---------------------------------------------------------------------------
+// M3：列表筛选/排序、批量操作、以图搜图、合集
+// ---------------------------------------------------------------------------
+
+/** 素材列表筛选条件（与后端 `GET /inspirations` 查询参数对齐） */
+export interface ListFilter {
+  /** 只看收藏 */
+  is_favorite?: boolean
+  /** tagged=已标注 / untagged=未标注 */
+  tag_status?: 'tagged' | 'untagged'
+  /** 来源类型（source_type） */
+  source_type?: string
+}
+
+/** 排序键（后端 sort 支持的子集，其余留给 Web） */
+export type SortKey = 'newest' | 'oldest' | 'rating' | 'random'
+
+/** 拉取素材分页（带筛选与排序） */
+export async function fetchInspirationPage(
+  page: number,
+  size: number,
+  filter: ListFilter = {},
+  sort: SortKey = 'newest',
+): Promise<InspirationListResponse> {
+  const { data } = await apiClient.get<InspirationListResponse>('/inspirations', {
+    params: { page, size, sort, ...filter },
+  })
+  return data
+}
+
+/** 批量收藏 / 取消收藏 */
+export async function batchFavorite(
+  ids: string[],
+  isFavorite: boolean,
+): Promise<{ updated?: number }> {
+  const { data } = await apiClient.post<{ updated?: number }>('/inspirations/batch-favorite', {
+    ids,
+    is_favorite: isFavorite,
+  })
+  return data ?? {}
+}
+
+/** 批量移入垃圾桶（软删除，可恢复） */
+export async function batchTrash(
+  ids: string[],
+  reason?: TrashReason,
+): Promise<{ trashed?: number; skipped?: number }> {
+  const { data } = await apiClient.post<{ trashed?: number; skipped?: number }>(
+    '/inspirations/batch-trash',
+    reason ? { ids, reason, source: 'manual' } : { ids },
+  )
+  return data ?? {}
+}
+
+/** 向量检索单项：素材 + 相似度分数 */
+export interface VectorHit {
+  inspiration: Inspiration
+  score: number
+}
+
+/** 语义搜索（文本 → 向量） */
+export async function vectorSearchByText(text: string, topK = 20): Promise<VectorHit[]> {
+  const form = new FormData()
+  form.append('text', text)
+  form.append('top_k', String(topK))
+  const { data } = await apiClient.post<{ items?: VectorHit[] }>('/search/vector', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data?.items ?? []
+}
+
+/** 以图搜图（相册/相机图片 → CLIP 图像向量） */
+export async function vectorSearchByImage(uri: string, topK = 20): Promise<VectorHit[]> {
+  const form = new FormData()
+  const filename = uri.split('/').pop() || 'query.jpg'
+  const ext = filename.split('.').pop()?.toLowerCase() || 'jpg'
+  form.append('file', {
+    uri,
+    name: filename,
+    type: MIME_BY_EXT[ext] || 'image/jpeg',
+  } as unknown as Blob)
+  form.append('top_k', String(topK))
+  const { data } = await apiClient.post<{ items?: VectorHit[] }>('/search/vector', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000, // 以图搜图要跑一次图像向量推理，给足时间
+  })
+  return data?.items ?? []
+}
+
+/** 合集（收藏夹）：一级/二级，手动/智能 */
+export interface CollectionItem {
+  id: number
+  name: string
+  description?: string | null
+  kind: string
+  parent_id?: number | null
+  item_count?: number | null
+  cover_thumbnail_path?: string | null
+  auto_source?: string | null
+  child_count?: number
+  created_at?: string
+}
+
+/** 合集列表 */
+export async function fetchCollections(): Promise<CollectionItem[]> {
+  const { data } = await apiClient.get<CollectionItem[]>('/collections')
+  return data ?? []
+}
+
+/** 新建合集 */
+export async function createCollection(name: string): Promise<CollectionItem> {
+  const { data } = await apiClient.post<CollectionItem>('/collections', { name })
+  return data
+}
+
+/** 合集内素材（分页） */
+export async function fetchCollectionInspirations(
+  id: number,
+  page = 1,
+  size = 30,
+): Promise<InspirationListResponse> {
+  const { data } = await apiClient.get<{ items: Inspiration[]; total: number }>(
+    `/collections/${id}/inspirations`,
+    { params: { page, page_size: size } },
+  )
+  return { items: data?.items ?? [], total: data?.total ?? 0, page, size }
+}
+
+/** 批量加入合集 */
+export async function addToCollection(id: number, ids: string[]): Promise<void> {
+  await apiClient.post(`/collections/${id}/inspirations`, { inspiration_ids: ids })
+}
+
+/** 批量移出合集 */
+export async function removeFromCollection(id: number, ids: string[]): Promise<void> {
+  await apiClient.delete(`/collections/${id}/inspirations`, { data: { inspiration_ids: ids } })
+}

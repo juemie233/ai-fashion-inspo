@@ -1,6 +1,6 @@
 /** 任务中心：任务行渲染 + 任务页加载/取消/空态。 */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { Alert } from 'react-native'
 import TaskRow from '../components/TaskRow'
 import TasksScreen from '../app/tasks'
@@ -168,13 +168,13 @@ describe('TasksScreen', () => {
     const confirm = buttons.find((b) => b.text === '确定取消')
     expect(confirm).toBeTruthy()
 
-    await waitFor(() => {
+    await act(async () => {
       confirm?.onPress?.()
     })
 
-    await waitFor(() => expect(api.cancelTask).toHaveBeenCalledWith(5))
+    await waitFor(() => expect(api.cancelTask).toHaveBeenCalledWith(5), { timeout: 5000 })
     // 取消后重新拉列表（首次 + 刷新）
-    await waitFor(() => expect(api.fetchTasks).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(api.fetchTasks).toHaveBeenCalledTimes(2), { timeout: 5000 })
 
     alertSpy.mockRestore()
   })

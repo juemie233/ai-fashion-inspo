@@ -1,6 +1,12 @@
-/** 搜索页：标签筛选 + 关键词搜索 + 结果网格。 */
+/** 搜索页：关键词/标签筛选 + 分页 + 以图搜图。
+ *
+ * 手机侧取舍（docs/mobile-porting-plan.md）：
+ * - 标签筛选不再是「全量 chip 墙」（库里有 2 万+ 标签，会直接卡死），改为弹层搜索多选
+ * - 结果分页（onEndReached），不再一次性拉到底
+ * - 以图搜图是手机端**独占优势**：相册选图 → `/search/vector`（CLIP 图像向量）
+ */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -8,81 +14,128 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   ActivityIndicator,
   Image,
-  Dimensions,
+  Alert,
 } from 'react-native'
-import Icon from '../../components/Icon'
+import * as ImagePicker from 'expo-image-picker'
 import { useRouter } from 'expo-router'
+import Icon from '../../components/Icon'
+import TagFilterSheet from '../../components/TagFilterSheet'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
-import { apiClient, getFileUrl, type TagCategoryGroup } from '../../services/api'
+import {
+  apiClient,
+  getFileUrl,
+  vectorSearchByImage,
+  type TagCategoryGroup,
+  type VectorHit,
+} from '../../services/api'
 import { sourceLabel } from '../../utils/sourceLabel'
 
-const { width } = Dimensions.get('window')
-const CARD_WIDTH = (width - 36) / 2
-
-const CAT_LABELS: Record<string, string> = {
-  style: '风格', item_type: '单品', color: '颜色',
-  body_part: '穿着方式', fit: '版型',
-  season: '季节', attribute: '属性', free: '自定义',
-}
+const PAGE_SIZE = 30
 
 export default function SearchScreen() {
   const router = useRouter()
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
+
   const [searchText, setSearchText] = useState('')
   const [tagGroups, setTagGroups] = useState<TagCategoryGroup[]>([])
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
+  const [tagsLoading, setTagsLoading] = useState(false)
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [tagSheetOpen, setTagSheetOpen] = useState(false)
+
   const [results, setResults] = useState<Inspiration[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
-  const [total, setTotal] = useState(0)
+  /** 当前结果是否来自以图搜图（用于标题文案与停止分页） */
+  const [imageQueryUri, setImageQueryUri] = useState<string | null>(null)
 
   useEffect(() => {
-    loadTags()
+    void loadTags()
   }, [])
 
   const loadTags = async () => {
+    setTagsLoading(true)
     try {
-      const { data } = await apiClient.get('/tags')
-      setTagGroups(data)
-    } catch (e) {
-      console.error('加载标签失败', e)
-    }
-  }
-
-  const toggleTag = (name: string) => {
-    const next = new Set(selectedTags)
-    if (next.has(name)) {
-      next.delete(name)
-    } else {
-      next.add(name)
-    }
-    setSelectedTags(next)
-  }
-
-  const doSearch = async () => {
-    setLoading(true)
-    setError('')
-    setSearched(true)
-    try {
-      const params: Record<string, string> = {}
-      if (selectedTags.size > 0) {
-        params.include_tags = Array.from(selectedTags).join(',')
-      }
-      if (searchText.trim()) {
-        // 追加手动输入的标签
-        const existing = params.include_tags || ''
-        params.include_tags = existing ? `${existing},${searchText.trim()}` : searchText.trim()
-      }
-
-      const { data } = await apiClient.get('/search', { params })
-      setResults(data.items)
-      setTotal(data.total)
+      const { data } = await apiClient.get<TagCategoryGroup[]>('/tags')
+      setTagGroups(Array.isArray(data) ? data : [])
     } catch {
-      setError('搜索失败，请确认后端服务已启动')
+      // 标签拉取失败不阻塞搜索（可以只用关键词）
+    } finally {
+      setTagsLoading(false)
+    }
+  }
+
+  /** 执行搜索（page=1 重置结果） */
+  const doSearch = useCallback(
+    async (nextPage = 1) => {
+      if (nextPage === 1) {
+        setLoading(true)
+        setSearched(true)
+        setImageQueryUri(null)
+      } else {
+        setLoadingMore(true)
+      }
+      setError('')
+
+      try {
+        const params: Record<string, string | number> = { page: nextPage, size: PAGE_SIZE }
+        const tags = [...selectedTags]
+        const keyword = searchText.trim()
+        if (tags.length > 0) params.include_tags = tags.join(',')
+        if (keyword) params.keyword = keyword
+
+        const { data } = await apiClient.get<{ items: Inspiration[]; total: number }>('/search', {
+          params,
+        })
+        const items = data?.items ?? []
+        setResults((prev) => (nextPage === 1 ? items : [...prev, ...items]))
+        setTotal(data?.total ?? 0)
+        setPage(nextPage)
+      } catch {
+        setError('搜索失败，请确认后端服务已启动')
+        if (nextPage === 1) {
+          setResults([])
+          setTotal(0)
+        }
+      } finally {
+        setLoading(false)
+        setLoadingMore(false)
+      }
+    },
+    [searchText, selectedTags],
+  )
+
+  /** 以图搜图：相册选图 → 图像向量检索 */
+  const doImageSearch = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert('权限不足', '请在系统设置中允许访问相册')
+      return
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsMultipleSelection: false,
+    })
+    if (picked.canceled || !picked.assets?.[0]) return
+
+    const uri = picked.assets[0].uri
+    setLoading(true)
+    setSearched(true)
+    setError('')
+    try {
+      const hits: VectorHit[] = await vectorSearchByImage(uri, PAGE_SIZE)
+      setResults(hits.map((h) => h.inspiration).filter(Boolean))
+      setTotal(hits.length)
+      setImageQueryUri(uri)
+      setPage(1)
+    } catch {
+      setError('以图搜图失败：可能图像向量模型未就绪')
       setResults([])
       setTotal(0)
     } finally {
@@ -90,13 +143,19 @@ export default function SearchScreen() {
     }
   }
 
+  const onEndReached = () => {
+    // 以图搜图结果是一次性返回的，不做分页
+    if (imageQueryUri) return
+    if (!loadingMore && !loading && results.length < total) void doSearch(page + 1)
+  }
+
   /** 切换收藏：结果项本地更新（结果不经过素材库 store 列表） */
   const handleToggleFavorite = async (item: Inspiration) => {
+    const newState = !item.is_favorite
     try {
-      const newState = !item.is_favorite
       await toggleFavorite(item.id, newState)
       setResults((prev) =>
-        prev.map((r) => (r.id === item.id ? { ...r, is_favorite: newState } : r))
+        prev.map((r) => (r.id === item.id ? { ...r, is_favorite: newState } : r)),
       )
     } catch {
       setError('收藏操作失败')
@@ -117,15 +176,10 @@ export default function SearchScreen() {
         }}
         style={styles.cardImage}
       />
-      {/* 来源标识 */}
       <View style={styles.cardBadge}>
         <Text style={styles.cardBadgeText}>{sourceLabel(item.source_type)}</Text>
       </View>
-      {/* 收藏按钮 */}
-      <TouchableOpacity
-        style={styles.favBtn}
-        onPress={() => handleToggleFavorite(item)}
-      >
+      <TouchableOpacity style={styles.favBtn} onPress={() => handleToggleFavorite(item)}>
         <Icon
           name={item.is_favorite ? 'heart' : 'heart-outline'}
           size={18}
@@ -142,67 +196,69 @@ export default function SearchScreen() {
         <Icon name="search" size={18} color="#9ca3af" />
         <TextInput
           style={styles.searchInput}
-          placeholder="搜索标签，逗号分隔 (如: JK制服, 白色)"
+          placeholder="搜标签名 / 作者 / 文件名"
           placeholderTextColor="#9ca3af"
           value={searchText}
           onChangeText={setSearchText}
-          onSubmitEditing={doSearch}
+          onSubmitEditing={() => void doSearch(1)}
           returnKeyType="search"
         />
         {searchText.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchText('')}>
+          <TouchableOpacity onPress={() => setSearchText('')} hitSlop={8}>
             <Icon name="close-circle" size={18} color="#9ca3af" />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* 标签筛选（限高滚动，为结果区留出空间） */}
-      <ScrollView style={styles.tagsPanel} showsVerticalScrollIndicator={false}>
-        {tagGroups.map((group) => (
-          <View key={group.category} style={styles.tagGroup}>
-            <Text style={styles.tagCategoryTitle}>
-              {CAT_LABELS[group.category] || group.category}
-            </Text>
-            <View style={styles.tagChips}>
-              {group.tags.map((tag) => (
-                <TouchableOpacity
-                  key={tag.id}
-                  style={[
-                    styles.tagChip,
-                    selectedTags.has(tag.name) && styles.tagChipSelected,
-                  ]}
-                  onPress={() => toggleTag(tag.name)}
-                >
-                  <Text
-                    style={[
-                      styles.tagChipText,
-                      selectedTags.has(tag.name) && styles.tagChipTextSelected,
-                    ]}
-                  >
-                    {tag.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+      {/* 条件行：标签筛选 + 以图搜图 + 搜索 */}
+      <View style={styles.condRow}>
+        <TouchableOpacity style={styles.condBtn} onPress={() => setTagSheetOpen(true)}>
+          <Icon name="pricetags-outline" size={16} color="#6366f1" />
+          <Text style={styles.condText}>
+            标签{selectedTags.length > 0 ? ` (${selectedTags.length})` : ''}
+          </Text>
+        </TouchableOpacity>
 
-      {/* 搜索按钮 */}
-      <TouchableOpacity style={styles.searchBtn} onPress={doSearch}>
-        <Text style={styles.searchBtnText}>
-          搜索 {selectedTags.size > 0 ? `(${selectedTags.size} 个标签)` : ''}
-        </Text>
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.condBtn} onPress={() => void doImageSearch()}>
+          <Icon name="images-outline" size={16} color="#6366f1" />
+          <Text style={styles.condText}>以图搜图</Text>
+        </TouchableOpacity>
 
-      {/* 结果 */}
-      {loading && <ActivityIndicator style={{ marginTop: 16 }} color="#6366f1" />}
-      {error !== '' && (
-        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.searchBtn} onPress={() => void doSearch(1)}>
+          <Text style={styles.searchBtnText}>搜索</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 已选标签 */}
+      {selectedTags.length > 0 && (
+        <View style={styles.selectedRow}>
+          {selectedTags.map((name) => (
+            <TouchableOpacity
+              key={name}
+              style={styles.selectedChip}
+              onPress={() => setSelectedTags((prev) => prev.filter((n) => n !== name))}
+            >
+              <Text style={styles.selectedChipText}>{name}</Text>
+              <Icon name="close" size={11} color="#6366f1" />
+            </TouchableOpacity>
+          ))}
+        </View>
       )}
+
+      {/* 以图搜图预览 */}
+      {imageQueryUri && (
+        <View style={styles.queryRow}>
+          <Image source={{ uri: imageQueryUri }} style={styles.queryThumb} />
+          <Text style={styles.queryText}>以这张图搜到的相似素材</Text>
+        </View>
+      )}
+
+      {loading && <ActivityIndicator style={{ marginTop: 16 }} color="#6366f1" />}
+      {error !== '' && <Text style={styles.errorText}>{error}</Text>}
       {!loading && searched && total === 0 && error === '' && (
         <Text style={styles.resultCount}>没有找到匹配的素材</Text>
       )}
+
       {results.length > 0 && (
         <FlatList
           data={results}
@@ -211,11 +267,26 @@ export default function SearchScreen() {
           numColumns={2}
           columnWrapperStyle={styles.row}
           contentContainerStyle={styles.resultsGrid}
-          ListHeaderComponent={
-            <Text style={styles.resultCount}>找到 {total} 条结果</Text>
+          onEndReached={onEndReached}
+          onEndReachedThreshold={0.5}
+          ListHeaderComponent={<Text style={styles.resultCount}>找到 {total} 条结果</Text>}
+          ListFooterComponent={
+            loadingMore ? <ActivityIndicator style={{ marginVertical: 12 }} color="#6366f1" /> : null
           }
         />
       )}
+
+      <TagFilterSheet
+        visible={tagSheetOpen}
+        loading={tagsLoading}
+        groups={tagGroups}
+        selected={selectedTags}
+        onClose={() => setTagSheetOpen(false)}
+        onConfirm={(names) => {
+          setSelectedTags(names)
+          setTagSheetOpen(false)
+        }}
+      />
     </View>
   )
 }
@@ -226,80 +297,77 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
-    margin: 12,
+    marginHorizontal: 12,
+    marginTop: 12,
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     height: 44,
   },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 15,
-    color: '#1f2937',
-  },
-  tagsPanel: { maxHeight: 200, paddingHorizontal: 12 },
-  tagGroup: { marginBottom: 16 },
-  tagCategoryTitle: {
-    fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  tagChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tagChip: {
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#1f2937' },
+  condRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    paddingVertical: 10,
   },
-  tagChipSelected: {
+  condBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
     backgroundColor: '#eef2ff',
-    borderColor: '#6366f1',
   },
-  tagChipText: { fontSize: 13, color: '#4b5563' },
-  tagChipTextSelected: { color: '#6366f1', fontWeight: '500' },
+  condText: { fontSize: 12, color: '#6366f1' },
   searchBtn: {
-    margin: 12,
+    flex: 1,
     backgroundColor: '#6366f1',
-    paddingVertical: 14,
-    borderRadius: 10,
+    paddingVertical: 9,
+    borderRadius: 8,
     alignItems: 'center',
   },
-  searchBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  resultCount: {
+  searchBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  selectedRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: '#6b7280',
+    paddingBottom: 8,
   },
-  errorText: {
+  selectedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  selectedChipText: { fontSize: 12, color: '#6366f1' },
+  queryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: '#ef4444',
+    paddingBottom: 8,
   },
+  queryThumb: { width: 40, height: 40, borderRadius: 6, backgroundColor: '#e5e7eb' },
+  queryText: { fontSize: 12, color: '#6b7280' },
+  resultCount: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#6b7280' },
+  errorText: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#ef4444' },
   resultsGrid: { paddingHorizontal: 12, paddingBottom: 24 },
   row: { gap: 12, marginBottom: 12 },
   card: {
-    width: CARD_WIDTH,
+    flex: 1,
     backgroundColor: '#fff',
     borderRadius: 12,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
   },
-  cardImage: {
-    width: '100%',
-    aspectRatio: 2 / 3,
-    backgroundColor: '#f3f4f6',
-  },
+  cardImage: { width: '100%', aspectRatio: 2 / 3, backgroundColor: '#f3f4f6' },
   cardBadge: {
     position: 'absolute',
     top: 8,

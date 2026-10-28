@@ -3,11 +3,15 @@
 import { create } from 'zustand'
 import {
   apiClient,
+  batchFavorite as apiBatchFavorite,
+  batchTrash as apiBatchTrash,
+  fetchInspirationPage,
   getApiBaseUrl,
   loadApiBaseUrl,
   uploadInspirationImage,
   type Inspiration,
-  type InspirationListResponse,
+  type ListFilter,
+  type SortKey,
 } from '../services/api'
 
 interface InspirationState {
@@ -21,6 +25,20 @@ interface InspirationState {
   init: () => Promise<void>
   fetchInspirations: () => Promise<void>
   fetchMore: () => Promise<void>
+  /** 当前筛选条件（素材库顶部胶囊） */
+  filter: ListFilter
+  /** 当前排序 */
+  sort: SortKey
+  /** 修改筛选（自动重新拉第一页） */
+  setFilter: (patch: ListFilter) => Promise<void>
+  /** 修改排序（自动重新拉第一页） */
+  setSort: (sort: SortKey) => Promise<void>
+  /** 批量收藏 / 取消收藏 */
+  batchFavorite: (ids: string[], isFavorite: boolean) => Promise<void>
+  /** 批量移入垃圾桶（本地同步移除） */
+  batchTrash: (ids: string[]) => Promise<number>
+  /** 从列表本地移除若干条（移入垃圾桶/移出合集后调用） */
+  removeItems: (ids: string[]) => void
   uploadImage: (uri: string) => Promise<Inspiration>
   /** 插入一条素材到列表最前（多图上传用） */
   prependItem: (item: Inspiration) => void
@@ -33,6 +51,8 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   page: 1,
   loading: false,
   apiBaseUrl: getApiBaseUrl(),
+  filter: {},
+  sort: 'newest',
 
   /** 启动初始化：恢复持久化地址（设置页保存的自定义地址）后同步状态 */
   init: async () => {
@@ -41,19 +61,57 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     await get().fetchInspirations()
   },
 
-  /** 加载第一页 */
+  /** 加载第一页（带当前筛选与排序） */
   fetchInspirations: async () => {
+    const { filter, sort } = get()
     set({ loading: true })
     try {
-      const { data } = await apiClient.get<InspirationListResponse>('/inspirations', {
-        params: { page: 1, size: 30 },
-      })
+      const data = await fetchInspirationPage(1, 30, filter, sort)
       set({ items: data.items, total: data.total, page: 1 })
     } catch (e) {
       console.error('加载素材失败', e)
     } finally {
       set({ loading: false })
     }
+  },
+
+  /** 切换筛选：更新条件后重拉第一页 */
+  setFilter: async (patch: ListFilter) => {
+    set((state) => ({ filter: { ...state.filter, ...patch }, items: [], page: 1 }))
+    await get().fetchInspirations()
+  },
+
+  /** 切换排序：更新后重拉第一页 */
+  setSort: async (sort: SortKey) => {
+    set({ sort, items: [], page: 1 })
+    await get().fetchInspirations()
+  },
+
+  /** 批量收藏 / 取消收藏：成功后本地同步，失败抛出交给调用方提示 */
+  batchFavorite: async (ids: string[], isFavorite: boolean) => {
+    await apiBatchFavorite(ids, isFavorite)
+    set((state) => ({
+      items: state.items.map((i) => (ids.includes(i.id) ? { ...i, is_favorite: isFavorite } : i)),
+    }))
+  },
+
+  /** 批量移入垃圾桶：返回成功条数，本地移除 */
+  batchTrash: async (ids: string[]) => {
+    const result = await apiBatchTrash(ids)
+    const trashed = result.trashed ?? ids.length
+    set((state) => ({
+      items: state.items.filter((i) => !ids.includes(i.id)),
+      total: Math.max(0, state.total - trashed),
+    }))
+    return trashed
+  },
+
+  /** 本地移除（不再请求后端，用于移出合集等场景） */
+  removeItems: (ids: string[]) => {
+    set((state) => ({
+      items: state.items.filter((i) => !ids.includes(i.id)),
+      total: Math.max(0, state.total - ids.length),
+    }))
   },
 
   /** 加载更多（无限滚动） */
@@ -63,9 +121,8 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
     set({ loading: true })
     try {
-      const { data } = await apiClient.get<InspirationListResponse>('/inspirations', {
-        params: { page: page + 1, size: 30 },
-      })
+      const { filter, sort } = get()
+      const data = await fetchInspirationPage(page + 1, 30, filter, sort)
       set({
         items: [...items, ...data.items],
         total: data.total,

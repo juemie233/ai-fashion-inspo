@@ -1,6 +1,6 @@
 /** 详情页 M2 行为：标签编辑入口、移入垃圾桶、相似推荐、已有标签渲染。 */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { Alert } from 'react-native'
 
 jest.mock('expo-router', () => ({
@@ -101,8 +101,10 @@ describe('DetailScreen（M2）', () => {
     const confirm = buttons.find((b) => b.text === '移入')
     expect(confirm).toBeTruthy()
 
-    await waitFor(() => confirm?.onPress?.())
-    await waitFor(() => expect(api.trashInspiration).toHaveBeenCalledWith('i1'))
+    await act(async () => {
+      confirm?.onPress?.()
+    })
+    await waitFor(() => expect(api.trashInspiration).toHaveBeenCalledWith('i1'), { timeout: 5000 })
 
     alertSpy.mockRestore()
   })

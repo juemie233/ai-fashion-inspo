@@ -30,18 +30,10 @@ export default function TabLayout() {
         name="index"
         options={{
           title: '素材库',
+          // 首页有自己的顶栏（素材库标题 + 合集 + 设置入口），这里关掉重复的 header
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <Icon name="images-outline" size={size} color={color} />
-          ),
-          // 首页右上角设置入口：真机连接自定义后端地址用
-          headerRight: () => (
-            <TouchableOpacity
-              style={{ marginRight: 14, padding: 2 }}
-              onPress={() => router.push('/settings')}
-              hitSlop={8}
-            >
-              <Icon name="settings-outline" size={22} color="#6366f1" />
-            </TouchableOpacity>
           ),
         }}
       />
