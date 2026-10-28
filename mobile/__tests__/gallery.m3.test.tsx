@@ -95,6 +95,35 @@ describe('GalleryScreen（M3）', () => {
     )
   })
 
+  it('点「全部」会清掉上一个筛选条件（胶囊互斥，不是叠加）', async () => {
+    render(<GalleryScreen />)
+
+    fireEvent.press(screen.getByText('收藏'))
+    await waitFor(() =>
+      expect(api.fetchInspirationPage).toHaveBeenLastCalledWith(
+        1,
+        30,
+        expect.objectContaining({ is_favorite: true }),
+        'newest',
+      ),
+    )
+
+    fireEvent.press(screen.getByText('全部'))
+    await waitFor(() =>
+      expect(api.fetchInspirationPage).toHaveBeenLastCalledWith(1, 30, {}, 'newest'),
+    )
+  })
+
+  it('切换筛选会退出多选，避免批量操作作用于看不见的旧素材', async () => {
+    render(<GalleryScreen />)
+
+    fireEvent(screen.getByTestId('card-i1'), 'longPress')
+    await waitFor(() => expect(screen.getByText('已选 1 张')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('filter-fav'))
+    await waitFor(() => expect(screen.queryByText('已选 1 张')).toBeNull())
+  })
+
   it('点排序按钮在四种排序间轮转', async () => {
     render(<GalleryScreen />)
     fireEvent.press(screen.getByText('最新'))

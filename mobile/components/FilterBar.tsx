@@ -51,6 +51,7 @@ export default function FilterBar({ filter, sort, onFilter, onSort }: Props) {
           return (
             <TouchableOpacity
               key={f.key}
+              testID={`filter-${f.key}`}
               style={[styles.chip, isActive && styles.chipActive]}
               onPress={() => onFilter(f.filter)}
             >
