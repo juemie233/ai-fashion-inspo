@@ -164,7 +164,8 @@ scripts\restore_task.bat
    ```bash
    bash scripts/restore_data.sh <备份目录>
    ```
-5. **数据库迁移（保险）**：备份库通常已是最新版，换代码版本后跑一次：
+5. **数据库迁移（必需，不是保险）**：备份库可能落后于当前代码（实测 10-27 的备份就落后一个迁移，
+   不迁移则新代码查新列直接报错）。换代码版本或恢复较旧备份后必须跑一次：
    ```bash
    cd backend && alembic upgrade head && cd ..
    ```
@@ -188,7 +189,111 @@ scripts\restore_task.bat
 
 ---
 
-## 5. 常见场景
+## 5. 恢复演练记录（2026-10-27 首次实跑）
+
+「没验过恢复不算备份」——这一节是**真跑过一次**的记录，不是设计推演。
+
+### 5.1 怎么跑才不碰真数据
+
+真实备份 2 GB 级（DB 522 MB + storage 17 GB / 3.6 万个文件），反复演练不现实；
+换成假数据又测不出真问题。做法：**把真实库裁剪到 60 条素材**（外键级联清理到 0 违规、
+`integrity_check` ok、`VACUUM` 后 87 MB），storage 只放这 60 条对应的文件，
+manifest 按裁剪后的库重算——数据是假的，**结构与真备份完全一致**，
+脚本每一步（快照 / robocopy / count 比对 / 抽查）都走真实路径。
+
+沙箱：`%TEMP%\fi-drill\project`（只有 `scripts/restore_data.sh` + 空 `backend/`），
+备份在 `%TEMP%\fi-drill\backup`。
+
+> 演练时真实后端正在跑（18888）。为了不停服务，沙箱里用 PATH 桩把 `netstat` 屏蔽掉，
+> 绕过「服务在跑就拒绝恢复」的前置检查——**真机恢复必须先停后端与 worker**，
+> 这个检查本身也单独验证过（见下表的 negative 用例）。
+
+### 5.2 用例矩阵与结果
+
+| # | 用例 | 预期 | 实测 |
+| - | ---- | ---- | ---- |
+| 1 | 空目标恢复（`.db` 快照路径） | 成功 | ✅ exit 0，8 张表行数与 manifest 一致，抽查 20/20 文件存在 |
+| 2 | 目标已有数据、未加 `--allow-overwrite` | 拒绝 | ✅ exit 1，提示「恢复会覆盖现有数据」 |
+| 3 | 备份缺 `SUCCESS`、未加 `--force` | 拒绝 | ✅ exit 1，提示可能是不完整备份 |
+| 4 | 目标已有数据 + `--allow-overwrite` | 先快照再恢复 | ✅ 快照出 DB + 4 个 storage 目录，随后恢复成功 |
+| 5 | `--from-sql`（DB 损坏时的重建路径） | 成功 | ✅ exit 0，33 张表行数与备份**逐表一致** |
+| 6 | 真实服务检测（不屏蔽 netstat） | 拒绝 | ✅ exit 1，提示先停后端/worker |
+| 7 | 恢复**旧备份**（落后一个迁移） | 成功但需迁移 | ✅ 恢复 exit 0；`alembic check` 报「库结构落后于迁移链」 |
+
+### 5.3 深度校验（脚本自带的校验之外）
+
+脚本的恢复后校验只查「行数 + 文件是否存在」，两点不够，另做了三项：
+
+| 校验 | 结果 |
+| ---- | ---- |
+| 恢复出的 `.db` 与备份 `.db` 的 SHA-256 | ✅ 一致（`.db` 路径是整文件复制） |
+| 备份 storage 里**全部 120 个文件**逐个 SHA-256 比对 | ✅ 120/120 一致 |
+| 恢复库可读性 | ✅ `integrity_check`=ok、`foreign_key_check` 违规 0、真实标签关联查询有结果 |
+| 恢复库与**当前代码**的结构一致性 | ✅ `alembic_version`=现行 head、`check_alembic_drift.py` 报「ORM 与数据库结构一致」 |
+
+即：**恢复当天备份后，不需要跑迁移就能直接被当前代码使用**。
+
+### 5.4 旧备份的关键一步（最容易漏）
+
+`2026-10-27_084508` 那份备份的库在 `c92d4f8329ac`，比当前 head 落后一个迁移：
+
+```
+恢复后 alembic_version: c92d4f8329ac
+ALEMBIC_DB_URL=... python scripts/check_alembic_drift.py
+  → [fail] 库结构落后于迁移链：先 `alembic upgrade head`
+ALEMBIC_DB_URL=... python -m alembic upgrade head
+  → c92d4f8329ac -> n7o8p9q0r1s2「博主资料卡：新增粉丝/作品/获赞等平台统计快照字段」
+再 check → [ok] ORM 与数据库结构一致
+迁移后数据：inspirations 60 / tags 22952 / inspiration_tags 1516 / bloggers 488（未丢）
+新列到位：follower_count、aweme_count、total_favorited
+```
+
+结论：**恢复不是恢复完就结束**。跨版本恢复（或恢复几天前的备份）后必须跑
+`alembic upgrade head`，否则新代码查新列会直接报错。文档 4.2 的第 5 步不是「保险」，
+是**必需步骤**。
+
+### 5.5 演练中发现并修掉的两个问题
+
+| 问题 | 现象 | 修法 |
+| ---- | ---- | ---- |
+| 前置检查卡两分钟以上 | `du -sk` 在真实备份（3.6 万文件 / 17 GB）上实测 **>120 s** 未返回，用户会以为脚本挂了 | 体积优先读 `manifest.json`（`db_size`+`sql_size`+`dir_stats` 字节数，毫秒级），缺 manifest 才退回 `du` 并提示 |
+| 恢复后校验只查「文件存在」 | 复制中断导致的**半截文件**能通过检查，用户到打开图时才发现 | 新增 6.4：按固定种子抽 200 个文件比对「备份/恢复后」体积；新增 6.5：`.db` 路径比对恢复库与备份库的 SHA-256（`--from-sql` 自动跳过） |
+
+修完后同一套用例重跑：空目标恢复 **1 秒**完成，输出多两行
+`抽查文件体积：120/120 与备份一致`、`数据库字节一致性：一致`。
+
+### 5.6 这套校验测不到什么（边界）
+
+- **同尺寸的内容损坏**：磁盘静默位翻转后大小不变，体积比对与 DB 行数都看不出来。
+  这类只能靠备份时的 `--verify-hash`（全量 SHA-256）或定期抽检；
+- **备份本身有问题**：恢复校验是「恢复出来的 == 备份里的」，备份里本来就坏的话照样通过。
+  所以备份侧要开 `backend/scripts/verify_backup_sample.py` 抽样哈希（默认已开，
+  与源端对比，能区分「真损坏」与「备份后源端又写」）；
+- **恢复的可用性**：脚本只保证文件与库完整，不保证应用能跑起来。人工还要做第 4.2 节
+  第 10 步的验证（健康检查 / 抽查图片 / 标签搜索 / 收藏与审核状态）。
+
+### 5.7 下次演练清单
+
+```bash
+# 1) 挑一份带 SUCCESS 的最新备份
+ls -d /e/fashion-inspo-backups/*/ | tail -3
+
+# 2) 在临时沙箱里恢复（不要指向真实项目目录）
+mkdir -p "$TEMP/fi-drill/project/scripts"
+cp scripts/restore_data.sh "$TEMP/fi-drill/project/scripts/"
+cd "$TEMP/fi-drill/project" && bash scripts/restore_data.sh <备份目录>
+
+# 3) 迁移到当前 head 并确认结构一致
+cd backend && ALEMBIC_DB_URL="sqlite:///$PWD/fashion_inspo.db" python -m alembic upgrade head
+ALEMBIC_DB_URL="sqlite:///$PWD/fashion_inspo.db" python scripts/check_alembic_drift.py
+
+# 4) 深度校验（字节一致 / 文件哈希 / 可读性）——脚本之外自己补一遍
+# 5) 删除沙箱目录
+```
+
+---
+
+## 6. 常见场景
 
 | 场景 | 做法 |
 | ---- | ---- |
@@ -201,13 +306,13 @@ scripts\restore_task.bat
 
 ---
 
-## 6. 文件与脚本索引
+## 7. 文件与脚本索引
 
 | 文件 | 作用 |
 | ---- | ---- |
 | `scripts/backup_data.sh` | 备份主脚本（一致性快照 + SQL 导出 + robocopy + 校验 + 标记 + rotation + 锁） |
 | `backend/scripts/verify_backup_sample.py` | 抽样哈希校验（默认 200 个；区分「真损坏」与「备份后源端又写」） |
 | `scripts/backup_task.bat` | 供 schtasks 调用的每日备份包装 |
-| `scripts/restore_data.sh` | 恢复主脚本（前置检查 + 恢复前快照 + 还原 + 校验） |
+| `scripts/restore_data.sh` | 恢复主脚本（前置检查 + 恢复前快照 + 还原 + 校验：行数 / 文件体积抽样 / `.db` 字节一致） |
 | `scripts/restore_task.bat` | 恢复包装（无参时自动选最新 SUCCESS 备份） |
 | `docs/wayfinder/backup-disaster-recovery/` | 备份与灾难恢复的完整规划记录（MAP + 8 张 ticket） |

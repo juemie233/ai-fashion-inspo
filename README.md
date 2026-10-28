@@ -1498,7 +1498,8 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 - **热写入兼容**：备份期间后台任务（标签分析/向量回填）持续写入时，脚本自动对不一致目录做增量修复重试（最多 5 次），校验以复制完成时刻的「冻结源端清单」为基准（时点快照语义），不再与实时源端比对误报。
 - **数据重置（reset）防呆**：执行前自动快照 DB 与素材目录到 `storage/_pre_reset_snapshot/`（保留 7 天），需输入 `DELETE` 二次确认，未配 API Key 时非本机访问直接拒绝。
 
-完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、常见场景）见 **[docs/backup-restore.md](docs/backup-restore.md)**。
+完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、**恢复演练记录**、常见场景）见 **[docs/backup-restore.md](docs/backup-restore.md)**。
+> 恢复侧已实跑演练（7 个用例 + 逐文件哈希 + 恢复库与当前 ORM 的结构一致性）：**旧备份恢复后必须 `alembic upgrade head`**，否则新代码查新列会直接报错——详见文档第 5 节。
 
 ## 自动化测试
 

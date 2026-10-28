@@ -124,17 +124,43 @@ fi
 echo "  覆盖确认: $([ "$HAS_EXISTING" -eq 1 ] && echo '已有数据，将先快照后覆盖' || echo '目标为空，直接恢复')"
 
 # 1.5 磁盘空间（粗略：备份占用 ×1.1）
-if command -v du >/dev/null 2>&1; then
+# 体积优先取 manifest.json：真实备份是 DB 500MB + storage 十几 GB / 3 万多个文件，
+# `du -sk` 在这种目录上实测要跑 2 分钟以上（2026-10-27 演练实测超时），前置检查卡住
+# 会让人以为脚本挂了；manifest 由备份脚本写入，含 db_size/sql_size/dir_stats 字节数，
+# 读取是毫秒级。只有缺 manifest 时才退回 du，并提示可能较慢。
+BK_SIZE_KB=""
+if [ -f "$BACKUP/manifest.json" ]; then
+  BK_SIZE_KB=$(python - "$BACKUP/manifest.json" <<'PYEOF'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        m = json.load(f)
+except Exception:
+    print("")
+    raise SystemExit(0)
+total = (m.get("db_size") or 0) + (m.get("sql_size") or 0)
+for _name, stats in (m.get("dir_stats") or {}).items():
+    dest = (stats or {}).get("dest") or {}
+    total += dest.get("bytes") or 0
+print(total // 1024 if total else "")
+PYEOF
+)
+fi
+if [ -z "${BK_SIZE_KB:-}" ] && command -v du >/dev/null 2>&1; then
+  echo "  提示：备份缺 manifest.json，改用 du 统计体积（大备份可能要多等一会儿）"
   BK_SIZE_KB=$(du -sk "$BACKUP" 2>/dev/null | cut -f1)
-  FREE_KB=$(df -Pk "$PROJECT_ROOT" 2>/dev/null | awk 'NR==2{print $4}')
-  if [ -n "${BK_SIZE_KB:-}" ] && [ -n "${FREE_KB:-}" ]; then
-    NEED_KB=$(( BK_SIZE_KB * 11 / 10 ))
-    if [ "$NEED_KB" -gt "$FREE_KB" ]; then
-      echo "  错误：磁盘空间不足（备份 ${BK_SIZE_KB}KB，需要约 ${NEED_KB}KB，可用 ${FREE_KB}KB）。"
-      exit 1
-    fi
-    echo "  磁盘空间充足（备份 $((BK_SIZE_KB/1024))MB，可用 $((FREE_KB/1024))MB）"
+fi
+FREE_KB=$(df -Pk "$PROJECT_ROOT" 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "${BK_SIZE_KB:-}" ] && [ -n "${FREE_KB:-}" ]; then
+  NEED_KB=$(( BK_SIZE_KB * 11 / 10 ))
+  if [ "$NEED_KB" -gt "$FREE_KB" ]; then
+    echo "  错误：磁盘空间不足（备份 ${BK_SIZE_KB}KB，需要约 ${NEED_KB}KB，可用 ${FREE_KB}KB）。"
+    echo "  注意：这里比较的是**项目根所在磁盘**；若 .env 的 STORAGE_ROOT 指向别的盘，"
+    echo "  素材会恢复到那块盘上，请另外确认那里的可用空间。"
+    exit 1
   fi
+  echo "  磁盘空间充足（备份 $((BK_SIZE_KB/1024))MB，可用 $((FREE_KB/1024))MB）"
 fi
 
 [ "$RESTORE_FAILED" -ne 0 ] && { echo "前置检查未通过，终止。"; exit 1; }
@@ -231,7 +257,10 @@ echo ""
 
 # ── 步骤 6：恢复后校验 ──
 echo ">>> [6/6] 恢复后校验..."
-python - "$BACKEND_DIR/fashion_inspo.db" "$STORAGE_DIR" "$BACKUP/manifest.json" <<'PYEOF'
+# RESTORE_MODE 告诉校验块「这次是整文件复制还是 SQL 重建」：重建出的库不可能与备份
+# 字节一致，只能比行数，跳过 6.5 的 SHA-256 比对。
+RESTORE_MODE=$([ "$FROM_SQL" -eq 1 ] && echo sql || echo copy) \
+  python - "$BACKEND_DIR/fashion_inspo.db" "$STORAGE_DIR" "$BACKUP/manifest.json" <<'PYEOF'
 import json, os, sqlite3, sys
 
 db_path, storage_dir, manifest_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -289,6 +318,53 @@ if missing:
 crop_ok = not os.path.isdir(os.path.join(storage_dir, "_crop_backup"))
 if crop_ok:
     print("  _crop_backup 不存在（符合预期：该目录不纳入备份）")
+
+# 6.4 体积比对：文件存在 ≠ 文件完整。
+# 真实故障里更常见的是「复制中断/磁盘满」导致的**半截文件**——exists() 检查不出来，
+# 而用户要到打开某张图时才发现。这里按 manifest 的目录统计随机抽 200 个文件，
+# 比对「备份内文件大小」与「恢复后文件大小」。
+backup_storage = os.path.join(os.path.dirname(manifest_path), "storage")
+if os.path.isdir(backup_storage):
+    candidates = []
+    for dirpath, _dirnames, filenames in os.walk(backup_storage):
+        for name in filenames:
+            candidates.append(os.path.join(dirpath, name))
+    import random
+
+    random.seed(20261027)  # 固定种子：同样的备份每次都抽查同一批，便于复现
+    picked = random.sample(candidates, min(200, len(candidates)))
+    size_bad = []
+    for src in picked:
+        rel = os.path.relpath(src, backup_storage)
+        dst = os.path.join(storage_dir, rel)
+        if not os.path.exists(dst):
+            size_bad.append((rel, "缺失"))
+        elif os.path.getsize(dst) != os.path.getsize(src):
+            size_bad.append((rel, f"备份 {os.path.getsize(src)}B / 恢复 {os.path.getsize(dst)}B"))
+    if picked:
+        print(f"  抽查文件体积：{len(picked) - len(size_bad)}/{len(picked)} 与备份一致")
+    if size_bad:
+        errors.append(f"{len(size_bad)} 个文件体积不符（复制不完整？），例如: {size_bad[:3]}")
+else:
+    warnings.append("备份内无 storage/ 目录，跳过体积比对")
+
+# 6.5 .db 一致性：默认路径是「整文件复制」，恢复出来的库应与备份字节一致；
+# --from-sql 是重建，只能比行数（上面 6.2 已比）。这里只对复制路径做 SHA-256。
+backup_db = os.path.join(os.path.dirname(manifest_path), "fashion_inspo.db")
+if os.path.exists(backup_db) and os.environ.get("RESTORE_MODE", "") != "sql":
+    import hashlib
+
+    def _sha256(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    same = _sha256(db_path) == _sha256(backup_db)
+    print(f"  数据库字节一致性：{'一致' if same else '不一致'}")
+    if not same:
+        errors.append("恢复出的 .db 与备份 .db 字节不一致（复制不完整或已被写入）")
 
 for w in warnings:
     print("  告警:", w)
