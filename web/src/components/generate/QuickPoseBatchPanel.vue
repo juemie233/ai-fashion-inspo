@@ -18,6 +18,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { fetchPoses, type PoseItem } from '@/api/poseGallery'
+import { getApiErrorMessage } from '@/utils/apiError'
 
 const props = withDefaults(
   defineProps<{
@@ -101,6 +102,13 @@ const queueTotal = ref(1)
 const queueCount = ref(2)
 const queueSteps = ref(25)
 /** 已 emit 一轮、正在等父组件跑完 */
+/** 一轮最短合理耗时：真实出图 20s 起；<2s 就结束说明提交失败/被取消，
+ *  连续模式继续下一轮只会把剩余姿势快速耗尽并刷出一堆失败批次。 */
+const MIN_ROUND_MS = 2000
+/** 本轮开始的时刻与使用的姿势（用于识别「秒失败」并把姿势回滚成未使用） */
+let roundStartedAt = 0
+let lastRoundPoseId = ''
+
 const awaiting = ref(false)
 /** 一轮发出后 3 秒内父组件还没进入 busy → 判定没启动，停止队列 */
 let startGuard: ReturnType<typeof setTimeout> | null = null
@@ -151,7 +159,7 @@ async function loadPoses(): Promise<void> {
     poses.value = all
     if (!all.length) loadError.value = '该体系没有可用姿势，稍后重试或换个体系'
   } catch (e) {
-    loadError.value = e instanceof Error ? e.message : '加载姿势库失败'
+    loadError.value = getApiErrorMessage(e, '加载姿势库失败')
   } finally {
     loading.value = false
   }
@@ -199,6 +207,8 @@ function fireRound(): void {
     return
   }
   markUsed(pose)
+  lastRoundPoseId = pose.id
+  roundStartedAt = Date.now()
   queueDone.value += 1
   awaiting.value = true
   emit('run', {
@@ -213,13 +223,35 @@ function fireRound(): void {
   startGuard = setTimeout(() => {
     startGuard = null
     if (queueActive.value && awaiting.value && !props.busy) {
-      finishBatch('本轮未启动（检查参考图/档位是否被清空）')
+      awaiting.value = false
+      failRound('本轮没启动成功（检查参考图/档位是否被清空），已停止连续出图')
     }
   }, 3000)
 }
 
 function fillAllRounds(): void {
   rounds.value = maxRounds.value
+}
+
+/** 本轮没启动（3 秒没进 busy 或秒失败）：回滚姿势、扣掉这一轮、停止队列。
+ *
+ * 两种失败路径共用：否则姿势会被标记成「已出过」但实际一张图都没有，
+ * 继续队列还会把剩余姿势一批批烧掉。
+ */
+function failRound(reason: string): void {
+  rollbackLastPose()
+  queueDone.value = Math.max(0, queueDone.value - 1)
+  finishBatch(reason)
+}
+
+/** 把「本轮已标记为用过」的姿势回滚（这一批根本没出图） */
+function rollbackLastPose(): void {
+  if (!lastRoundPoseId) return
+  const next = new Set(usedIds.value)
+  next.delete(lastRoundPoseId)
+  usedIds.value = next
+  saveUsed()
+  lastRoundPoseId = ''
 }
 
 function startBatch(): void {
@@ -276,6 +308,11 @@ watch(
     }
     if (!queueActive.value || !awaiting.value) return
     awaiting.value = false
+    if (Date.now() - roundStartedAt < MIN_ROUND_MS) {
+      // 提交失败/被取消：回滚姿势、扣掉这一轮，停止队列（别把剩余姿势一批批烧掉）
+      failRound('本轮没启动成功（可能档位/参考图被清空或提交失败），已停止连续出图')
+      return
+    }
     if (queueDone.value >= queueTotal.value) {
       finishBatch()
       return

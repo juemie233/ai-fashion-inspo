@@ -857,6 +857,8 @@ EXPORT_COLUMNS = (
     "prompt",
     "negative",
     "error",
+    # 换姿势批次：导出里带上姿势 id，方便事后按姿势筛选/复现（一键出图几百批时尤其需要）
+    "pose_id",
 )
 
 
@@ -928,6 +930,7 @@ async def export_runs(
             "prompt": run.prompt or "",
             "negative": run.negative or "",
             "error": run.error or "",
+            "pose_id": str(_params_of(run).get("pose_id") or ""),
         }
         for run in rows
     ]

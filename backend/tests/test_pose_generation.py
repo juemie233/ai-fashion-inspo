@@ -267,7 +267,12 @@ async def test_runner_uploads_pose_as_last_reference(
 async def test_runner_pose_download_503_is_retryable(
     client, fake_pose_gallery, monkeypatch
 ):
-    """源站 503 是临时故障：抛 HTTPException 交给 worker 重试，不要当永久失败。"""
+    """源站 503 是临时故障：抛 RecoverableTaskError 走 worker 的**显式重试通道**。
+
+    不能透传裸 HTTPException：worker 只认 RecoverableTaskError/PermanentTaskError，
+    其它异常要靠错误文案关键词猜重试，文案一改就静默变成永久失败。
+    """
+    from app.services.task_runners.common import RecoverableTaskError
 
     async def _down(_pose_id: str):
         raise HTTPException(status_code=503, detail="姿势图下载失败：连接超时")
@@ -288,7 +293,37 @@ async def test_runner_pose_download_503_is_retryable(
             },
         )
         task = await db.get(TaskQueue, out["task_id"])
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(RecoverableTaskError):
             await runner.execute_image_gen(db, task)
 
-    assert exc.value.status_code == 503
+
+# ── 执行器异常分类：源站临时不可用要重试，数据问题不重试 ──
+
+
+async def test_runner_pose_502_is_permanent(client, fake_pose_gallery, monkeypatch):
+    """姿势图在源站不存在（502）→ PermanentTaskError（不重试）。"""
+    from fastapi import HTTPException
+
+    from app.services.task_runners.common import PermanentTaskError
+
+    async def _bad(_pose_id: str):
+        raise HTTPException(status_code=502, detail="姿势图在源站不可用")
+
+    client_obj = _PoseClient()
+    monkeypatch.setattr(runner, "ComfyUIClient", lambda *a, **kw: client_obj)
+    monkeypatch.setattr(pose_gallery, "ensure_pose_image", _bad)
+    await _add_reference_image("ref-pose-502")
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db,
+            {
+                "kind": "i2i",
+                "prompt": "换姿势",
+                "reference_ids": ["ref-pose-502"],
+                "pose_id": POSE_ID,
+                "count": 1,
+            },
+        )
+        task = await db.get(TaskQueue, out["task_id"])
+        with pytest.raises(PermanentTaskError):
+            await runner.execute_image_gen(db, task)

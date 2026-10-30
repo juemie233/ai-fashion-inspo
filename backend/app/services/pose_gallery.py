@@ -369,7 +369,20 @@ async def ensure_pose_image(pose_id: str) -> Path:
 
     try:
         data = await _fetch_image(pose["image_url"])
-    except Exception as exc:  # noqa: BLE001
+    except httpx.HTTPStatusError as exc:
+        # 源站 4xx（文件被删/改路径）= 数据漂移，重试不会好；5xx 才值得重试。
+        # 不能把两者都当 503：任务会白白重试一次并且前端提示「稍后再试」误导用户。
+        code = exc.response.status_code
+        if 400 <= code < 500:
+            raise HTTPException(
+                status_code=502,
+                detail=f"姿势图在源站不可用（HTTP {code}）：{pose_id}",
+            ) from exc
+        raise HTTPException(status_code=503, detail=f"姿势图下载失败：{exc}") from exc
+    except ValueError as exc:
+        # 响应超上限/内容不像 JSON/PNG 等：数据问题，重试也不会好
+        raise HTTPException(status_code=502, detail=f"姿势图格式异常：{exc}") from exc
+    except Exception as exc:  # noqa: BLE001 —— 网络超时/连接失败等，可重试
         raise HTTPException(status_code=503, detail=f"姿势图下载失败：{exc}") from exc
     if len(data) < MIN_IMAGE_BYTES or not data.startswith(PNG_MAGIC):
         raise HTTPException(status_code=502, detail="姿势图格式异常（非 PNG 或文件过小）")

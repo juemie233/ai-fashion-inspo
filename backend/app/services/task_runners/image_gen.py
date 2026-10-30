@@ -32,7 +32,7 @@ from app.services.comfyui.client import ComfyUIClient, ComfyUIError
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.comfyui.vram import wait_for_vram
 from app.services import pose_gallery
-from app.services.task_runners.common import PermanentTaskError
+from app.services.task_runners.common import PermanentTaskError, RecoverableTaskError
 
 logger = logging.getLogger(__name__)
 
@@ -228,10 +228,13 @@ async def _execute_with_client(
         try:
             pose_path = await pose_gallery.ensure_pose_image(pose_id)
         except HTTPException as exc:
-            # 503 = 源站临时不可用/超时：交给任务重试一次（不要一刀切永久失败）；
-            # 400/404/502 = id 非法、姿势不存在、拿到非 PNG，重试也不会好。
+            # 503 = 源站临时不可用/超时：显式抛**可恢复错误**交给任务重试一次。
+            # 不能用裸 HTTPException 透传：worker 只有 RecoverableTaskError/PermanentTaskError
+            # 两条明确通道，其它异常要靠错误文案关键词猜，姿势库超时文案一旦不含关键词
+            # 就会被误判成永久失败（这类「靠字符串判重试」的隐患必须收口）。
+            # 400/404/502 = id 非法、姿势不存在、拿到非 PNG，重试也不会好 → 永久失败。
             if exc.status_code == 503:
-                raise
+                raise RecoverableTaskError(str(exc.detail)) from exc
             raise PermanentTaskError(str(exc.detail)) from exc
         pose_data = await asyncio.to_thread(pose_path.read_bytes)
         uploaded_pose = await client.upload_image(pose_data, f"gen_pose_{run.id}.png")

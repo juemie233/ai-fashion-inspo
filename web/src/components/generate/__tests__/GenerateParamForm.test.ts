@@ -428,8 +428,10 @@ describe('GenerateParamForm 一键出图', () => {
     expect(payload.count).toBe(3)
     expect(payload.steps).toBe(12)
     expect(payload.reference_ids).toEqual(['ref-a'])
-    // 描述为空时自动补通用姿势模板
+    // 描述为空时自动补姿势模板，并带上姿势名/角度（历史/导出里才分得清哪批用了哪个姿势）
     expect(String(payload.prompt)).toContain('保持第 1 张参考图')
+    expect(String(payload.prompt)).toContain(QUICK_POSE.name)
+    expect(String(payload.prompt)).toContain(QUICK_POSE.angle)
     // 面板的「下一个姿势」同步显示在姿势卡片里
     expect(wrapper.text()).toContain(QUICK_POSE.name)
     wrapper.unmount()

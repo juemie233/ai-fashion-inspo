@@ -300,7 +300,7 @@ function poseFraming(system: string): string {
 function insertPosePrompt(): void {
   const pose = selectedPose.value
   if (!pose) return
-  const template = `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，${poseFraming(pose.system)}。`
+  const template = buildPosePrompt(pose)
   // 连点两下不重复追加同一段
   if (prompt.value.includes(template)) return
   prompt.value = prompt.value.trim()
@@ -309,22 +309,44 @@ ${template}`
     : template
 }
 
-/** 一键出图用的档位（未审查改款版）是否就绪：没权重时面板按钮要禁用并给原因 */
-const quickModelReady = computed(() =>
-  allModels.value.some((m) => m.key === POSE_MODEL_KEY && m.ready),
-)
+/** 一键出图档位就绪判断：与 selectPoseModel 的兜底口径一致 —— 只要有就绪的 i2i
+ * 档位就允许（未审查版优先、没有时退回普通改款）。若只认未审查版，会出现
+ * 「手动换姿势能用、一键面板却说档位未就绪」的口径矛盾。
+ */
+const quickModelReady = computed(() => allModels.value.some((m) => m.kind === 'i2i' && m.ready))
 
-/** 一键出图：描述为空时自动补的通用姿势模板（姿势名/角度由姿势图本身决定，不用写死） */
-const QUICK_PROMPT_TEMPLATE =
-  '保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势重新生成，全身照。'
+/** 一键出图的用户基础描述（批次开始时锁定；每轮在它后面拼姿势模板，批次结束清空） */
+const quickBasePrompt = ref('')
+
+/** 生成一段「换姿势」描述（手动插入与一键出图共用；含姿势名/角度，历史里可区分批次） */
+function buildPosePrompt(pose: PoseItem): string {
+  return `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，${poseFraming(pose.system)}。`
+}
 
 /** 一键出图的每一轮：套用面板给的姿势/张数/步数 → 切未审查档位 → 复用正常提交流程 */
-function onQuickRun(payload: { pose: PoseItem; count: number; steps: number }): void {
+function onQuickRun(payload: {
+  pose: PoseItem
+  count: number
+  steps: number
+  round: number
+}): void {
   count.value = payload.count
   steps.value = payload.steps
   selectedPose.value = payload.pose
   selectPoseModel()
-  if (!prompt.value.trim()) prompt.value = QUICK_PROMPT_TEMPLATE
+
+  // 描述：每轮都带**姿势名/角度**（否则一键出图几百批的历史描述完全一样，
+  // 事后没法从历史/导出里看出这批用的是哪个姿势）。
+  if (payload.round === 1) {
+    const current = prompt.value.trim()
+    // 上一轮一键出图留下的模板不算「用户描述」：整段替换，避免反复叠加
+    quickBasePrompt.value = current.includes('按最后一张参考图的姿势') ? '' : current
+  }
+  const posePrompt = buildPosePrompt(payload.pose)
+  prompt.value = quickBasePrompt.value
+    ? `${quickBasePrompt.value}
+${posePrompt}`
+    : posePrompt
 
   // 防御：面板已禁用的场景（参考图被清空/档位未就绪）不该真的提交，否则会出一批错图
   if (kind.value !== 'i2i' || !refCountOk.value || !modelReady.value) {
@@ -332,6 +354,11 @@ function onQuickRun(payload: { pose: PoseItem; count: number; steps: number }): 
     return
   }
   onSubmit()
+}
+
+/** 连续出图结束：释放批次锁定的基础描述（下一批重新采集） */
+function onQuickBatchEnd(): void {
+  quickBasePrompt.value = ''
 }
 
 /** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
@@ -608,6 +635,7 @@ onMounted(() => {
     :has-references="refIdsList.length > 0"
     :busy="submitting || active"
     @run="onQuickRun"
+    @batch-end="onQuickBatchEnd"
   />
 
   <div class="gen-label">描述（prompt）</div>

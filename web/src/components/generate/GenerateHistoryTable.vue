@@ -113,6 +113,12 @@ function dimensions(record: GenerationRunBrief): string {
   return w && h ? `${w}×${h}` : ''
 }
 
+/** 换姿势批次用的姿势 id（来自参数快照；没有则空串） */
+function poseId(record: GenerationRunBrief): string {
+  const value = record.params?.pose_id
+  return typeof value === 'string' ? value : ''
+}
+
 /** 参考素材张数（文生图为 0） */
 function referenceCount(record: GenerationRunBrief): number {
   const ids = record.params?.reference_ids
@@ -696,6 +702,10 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
             <span class="ghd-chip">张数 {{ record.total }}</span>
             <span v-if="referenceCount(record)" class="ghd-chip">
               参考素材 {{ referenceCount(record) }} 张
+            </span>
+            <!-- 换姿势：显示姿势 id（含体系/编号/角度），便于在历史里区分几百个批次 -->
+            <span v-if="poseId(record)" class="ghd-chip" :title="`姿势 id：${poseId(record)}`">
+              姿势 {{ poseId(record) }}
             </span>
           </div>
         </div>

@@ -6,7 +6,7 @@
  * 3. 「连续 N 次」会等上一轮结束（busy true→false）再自动出下一轮，最后回抛 batch-end。
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
@@ -51,6 +51,10 @@ function mountPanel(props: Record<string, unknown> = {}) {
 }
 
 describe('QuickPoseBatchPanel', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   beforeEach(() => {
     localStorage.clear()
     mocks.fetchPoses.mockReset()
@@ -101,6 +105,11 @@ describe('QuickPoseBatchPanel', () => {
   })
 
   it('连续 2 次：等上一轮 busy 结束再自动出下一轮，最后回抛 batch-end', async () => {
+    // 用可控时钟模拟「每轮真实耗时 30 秒」：面板会把 <2 秒结束的轮次判定为启动失败，
+    // 直接瞬间切换 busy 会触发秒失败保护（那条路径另有专门用例）。
+    let fakeNow = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
+
     const wrapper = mountPanel()
     await flushPromises()
 
@@ -118,19 +127,51 @@ describe('QuickPoseBatchPanel', () => {
     await flushPromises()
     expect(wrapper.emitted('run')?.length).toBe(1)
 
-    // 第 1 轮开始跑 → 跑完
+    // 第 1 轮开始跑 → 30 秒后跑完
+    fakeNow += 30_000
     await wrapper.setProps({ busy: true })
     await wrapper.setProps({ busy: false })
-    await vi.waitFor(() => {
-      expect(wrapper.emitted('run')?.length).toBe(2)
-    })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await flushPromises()
+    expect(wrapper.emitted('run')?.length).toBe(2)
 
     // 第 2 轮结束 → 收尾
+    fakeNow += 30_000
     await wrapper.setProps({ busy: true })
     await wrapper.setProps({ busy: false })
-    await vi.waitFor(() => {
-      expect(wrapper.emitted('batch-end')?.[0]?.[0]).toEqual({ rounds: 2, images: 4 })
-    })
+    await flushPromises()
+    expect(wrapper.emitted('batch-end')?.[0]?.[0]).toEqual({ rounds: 2, images: 4 })
+    wrapper.unmount()
+  })
+
+  it('一轮秒失败（<2 秒）：停止队列并把姿势回滚成未使用', async () => {
+    let fakeNow = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
+
+    const wrapper = mountPanel()
+    await flushPromises()
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('一键出图'))!
+      .trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('run')?.length).toBe(1)
+    expect(wrapper.text()).toContain('已用 1/3')
+
+    // 提交失败/被取消：busy 很快 true→false（<2 秒）
+    fakeNow += 500
+    await wrapper.setProps({ busy: true })
+    await wrapper.setProps({ busy: false })
+    await flushPromises()
+
+    expect(wrapper.emitted('batch-end')?.[0]?.[0]).toEqual({ rounds: 0, images: 0 })
+    expect(wrapper.text()).toContain('已用 0/3') // 姿势已回滚
+    // 队列已停：后续 busy 变化不会再出下一轮
+    fakeNow += 30_000
+    await wrapper.setProps({ busy: true })
+    await wrapper.setProps({ busy: false })
+    await flushPromises()
+    expect(wrapper.emitted('run')?.length).toBe(1)
     wrapper.unmount()
   })
 
@@ -145,6 +186,9 @@ describe('QuickPoseBatchPanel', () => {
   })
 
   it('重置进度会把已用姿势清空', async () => {
+    let fakeNow = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
+
     const wrapper = mountPanel()
     await flushPromises()
     await wrapper
@@ -152,7 +196,8 @@ describe('QuickPoseBatchPanel', () => {
       .find((b) => b.text().includes('一键出图'))!
       .trigger('click')
     await flushPromises()
-    // 跑完这一轮（busy true→false）队列才收尾，之后「重置进度」才可用
+    // 跑完这一轮（真实耗时 30 秒）队列才收尾，之后「重置进度」才可用
+    fakeNow += 30_000
     await wrapper.setProps({ busy: true })
     await wrapper.setProps({ busy: false })
     await flushPromises()
@@ -188,6 +233,9 @@ describe('QuickPoseBatchPanel', () => {
   })
 
   it('出完一个姿势后连续上限随之下降，超出的次数自动夹回', async () => {
+    let fakeNow = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => fakeNow)
+
     const wrapper = mountPanel()
     await flushPromises()
 
@@ -203,6 +251,8 @@ describe('QuickPoseBatchPanel', () => {
       .find((b) => b.text().includes('一键出图'))!
       .trigger('click')
     await flushPromises()
+    // 这一轮真实耗时 30 秒（否则会被秒失败保护当成启动失败）
+    fakeNow += 30_000
     await wrapper.setProps({ busy: true })
     await wrapper.setProps({ busy: false })
     await flushPromises()

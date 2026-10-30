@@ -305,6 +305,18 @@ describe('生成历史表', () => {
     wrapper.unmount()
   })
 
+  it('换姿势批次在展开行显示姿势 id（一键出图几百批时靠它区分）', async () => {
+    mocks.fetchRun.mockResolvedValue({ run: {}, items: [], task: null })
+    const wrapper = mountTable(
+      record({ params: { ...record().params, pose_id: 'full_sexy_P001_side' } }),
+    )
+    await wrapper.vm.$nextTick()
+    await expandFirstRow(wrapper)
+
+    expect(wrapper.text()).toContain('姿势 full_sexy_P001_side')
+    wrapper.unmount()
+  })
+
   it('没勾选时入库按钮禁用（不发事件）', async () => {
     mocks.fetchRun.mockResolvedValue({
       run: {},

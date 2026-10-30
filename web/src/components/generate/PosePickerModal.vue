@@ -11,6 +11,7 @@
 
 import { computed, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import {
   fetchPoseGalleryMeta,
   fetchPoses,
@@ -109,7 +110,7 @@ async function load(target: number): Promise<void> {
     hasMore.value = data.items.length >= PAGE_SIZE && items.value.length < data.total
   } catch (e) {
     if (seq !== requestSeq) return
-    error.value = e instanceof Error ? e.message : '加载姿势失败'
+    error.value = getApiErrorMessage(e, '加载姿势失败')
     Message.error(error.value)
   } finally {
     if (seq === requestSeq) {

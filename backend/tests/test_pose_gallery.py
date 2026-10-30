@@ -295,3 +295,48 @@ def test_router_get_pose(client, fake_gallery):
     assert ok.json()["id"] == "full_std_P001_front"
 
     assert client.get("/api/pose-gallery/not_exist_pose").status_code == 404
+
+
+# ── 下载错误分类（决定任务是否重试）──
+
+
+async def test_ensure_pose_image_maps_404_to_permanent_502(fake_gallery, monkeypatch):
+    """源站 4xx = 数据漂移，重试不会好 → 502（不是可重试的 503）。"""
+    import httpx
+
+    async def _not_found(_url: str) -> bytes:
+        request = httpx.Request("GET", "https://example.com/img/a.png")
+        response = httpx.Response(404, request=request)
+        raise httpx.HTTPStatusError("404", request=request, response=response)
+
+    monkeypatch.setattr(pose_gallery, "_fetch_image", _not_found)
+    with pytest.raises(HTTPException) as exc:
+        await pose_gallery.ensure_pose_image("full_std_P001_front")
+    assert exc.value.status_code == 502
+    assert "源站不可用" in str(exc.value.detail)
+
+
+async def test_ensure_pose_image_maps_oversize_to_permanent_502(fake_gallery, monkeypatch):
+    """响应超上限（ValueError）= 数据问题，重试不会好 → 502。"""
+
+    async def _too_big(_url: str) -> bytes:
+        raise ValueError("响应超过上限（26214400 字节）")
+
+    monkeypatch.setattr(pose_gallery, "_fetch_image", _too_big)
+    with pytest.raises(HTTPException) as exc:
+        await pose_gallery.ensure_pose_image("full_std_P001_front")
+    assert exc.value.status_code == 502
+
+
+async def test_ensure_pose_image_maps_network_error_to_retryable_503(
+    fake_gallery, monkeypatch
+):
+    """网络超时/连接失败 = 可重试 → 503。"""
+
+    async def _timeout(_url: str) -> bytes:
+        raise TimeoutError("Read timed out")
+
+    monkeypatch.setattr(pose_gallery, "_fetch_image", _timeout)
+    with pytest.raises(HTTPException) as exc:
+        await pose_gallery.ensure_pose_image("full_std_P001_front")
+    assert exc.value.status_code == 503
