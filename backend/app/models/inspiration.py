@@ -99,7 +99,8 @@ class Inspiration(Base):
     )  # 软删除时间戳（非空表示在垃圾桶中，可恢复）
     trash_reason: Mapped[str | None] = mapped_column(
         String(32), nullable=True
-    )  # 删除原因：质量差/重复/不喜欢/隐私/其他（垃圾桶素材全部作为负样本学习输入）
+    )  # 删除原因：质量差/重复/不喜欢/隐私/其他；负样本口径见 quality_learner
+    # （「隐私」与 AI 生成图不进负样本，不要写成「全部」）
     trash_source: Mapped[str | None] = mapped_column(
         String(16), nullable=True
     )  # 移入来源：manual（手动移入）/ auto（质量审核自动移动），用于垃圾桶区分展示
