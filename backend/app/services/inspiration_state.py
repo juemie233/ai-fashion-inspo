@@ -14,7 +14,7 @@ from app.schemas.inspiration import TRASH_REASONS
 def _resolve_trash_reason(reason: str | None, inspiration: Inspiration) -> str:
     """解析删除原因：显式传入的合法值优先；否则按素材状态自动推断。
 
-    - 质量审核被拒绝（rejected）→ 「质量差」（垃圾桶素材全部作为负样本学习输入）
+    - 质量审核被拒绝（rejected）→ 「质量差」（写入时带 `trash_source=auto`，见 quality.py）
     - 其余 → 「不喜欢」
     """
     if reason in TRASH_REASONS:
