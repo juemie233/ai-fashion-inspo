@@ -13,12 +13,43 @@
  *    不再渲染假档位。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
 import GenerateParamForm from '../GenerateParamForm.vue'
 import type { GenerateStatus } from '@/api/generate'
+
+const poseMocks = vi.hoisted(() => ({
+  fetchPoses: vi.fn(),
+}))
+
+vi.mock('@/api/poseGallery', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/poseGallery')>()
+  return { ...actual, fetchPoses: poseMocks.fetchPoses }
+})
+
+const QUICK_POSE = {
+  id: 'full_sexy_P001_front',
+  name: 'S形站姿',
+  system: '全身单人・性感系',
+  category: '站姿',
+  angle: '正面',
+  pose_no: 'P001',
+  thumb_url: 'https://example.com/thumbs/q.jpg',
+  image_url: 'https://example.com/img/q.png',
+}
+
+beforeEach(() => {
+  poseMocks.fetchPoses.mockReset()
+  poseMocks.fetchPoses.mockResolvedValue({
+    items: [QUICK_POSE],
+    total: 1,
+    page: 1,
+    size: 100,
+    note: '',
+  })
+})
 
 /** 后端 MODEL_SPECS 的三档目录（探测结果里就是这样下发的） */
 const MODELS_META = {
@@ -363,5 +394,63 @@ describe('GenerateParamForm 换姿势', () => {
     await submitBtn!.trigger('click')
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
     expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+  })
+})
+
+describe('GenerateParamForm 一键出图', () => {
+  function mountQuickForm() {
+    return mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue] },
+    })
+  }
+
+  it('面板发出 run：套用姿势/张数/步数、切未审查档位并自动补描述', async () => {
+    const wrapper = mountQuickForm()
+    await flushPromises()
+
+    const panel = wrapper.findComponent({ name: 'QuickPoseBatchPanel' })
+    expect(panel.exists(), '参数面板应有一键出图面板').toBe(true)
+    panel.vm.$emit('run', { pose: QUICK_POSE, count: 3, steps: 12, round: 1, rounds: 1 })
+    await flushPromises()
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.kind).toBe('i2i')
+    expect(payload.model_key).toBe('qwen_2_1_uc_i2i')
+    expect(payload.pose_id).toBe(QUICK_POSE.id)
+    expect(payload.count).toBe(3)
+    expect(payload.steps).toBe(12)
+    expect(payload.reference_ids).toEqual(['ref-a'])
+    // 描述为空时自动补通用姿势模板
+    expect(String(payload.prompt)).toContain('保持第 1 张参考图')
+    // 面板的「下一个姿势」同步显示在姿势卡片里
+    expect(wrapper.text()).toContain(QUICK_POSE.name)
+    wrapper.unmount()
+  })
+
+  it('没有参考图时一键出图面板禁用（不会白提交）', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: '',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue] },
+    })
+    await flushPromises()
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
+    expect(btn?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 })

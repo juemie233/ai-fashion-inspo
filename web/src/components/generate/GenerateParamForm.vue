@@ -14,6 +14,7 @@ import { useGenerationPresets, type GenerationPreset } from '@/composables/useGe
 import { shortModelLabel } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
 import PosePickerModal from '@/components/generate/PosePickerModal.vue'
+import QuickPoseBatchPanel from '@/components/generate/QuickPoseBatchPanel.vue'
 import type { PoseItem } from '@/api/poseGallery'
 import { getFileUrl } from '@/api/inspirations'
 
@@ -308,6 +309,31 @@ ${template}`
     : template
 }
 
+/** 一键出图用的档位（未审查改款版）是否就绪：没权重时面板按钮要禁用并给原因 */
+const quickModelReady = computed(() =>
+  allModels.value.some((m) => m.key === POSE_MODEL_KEY && m.ready),
+)
+
+/** 一键出图：描述为空时自动补的通用姿势模板（姿势名/角度由姿势图本身决定，不用写死） */
+const QUICK_PROMPT_TEMPLATE =
+  '保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势重新生成，全身照。'
+
+/** 一键出图的每一轮：套用面板给的姿势/张数/步数 → 切未审查档位 → 复用正常提交流程 */
+function onQuickRun(payload: { pose: PoseItem; count: number; steps: number }): void {
+  count.value = payload.count
+  steps.value = payload.steps
+  selectedPose.value = payload.pose
+  selectPoseModel()
+  if (!prompt.value.trim()) prompt.value = QUICK_PROMPT_TEMPLATE
+
+  // 防御：面板已禁用的场景（参考图被清空/档位未就绪）不该真的提交，否则会出一批错图
+  if (kind.value !== 'i2i' || !refCountOk.value || !modelReady.value) {
+    Message.warning('一键出图未启动：请确认已选参考图且图生图档位就绪')
+    return
+  }
+  onSubmit()
+}
+
 /** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
 function splitIds(text: string): string[] {
   return text
@@ -574,6 +600,15 @@ onMounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- 一键出图：按「性感系 399」顺序轮播姿势，可连续多次；参数只有每次张数/步数/连续次数 -->
+  <QuickPoseBatchPanel
+    :platform-ready="ready"
+    :model-ready="quickModelReady"
+    :has-references="refIdsList.length > 0"
+    :busy="submitting || active"
+    @run="onQuickRun"
+  />
 
   <div class="gen-label">描述（prompt）</div>
   <a-textarea
