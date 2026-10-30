@@ -76,6 +76,10 @@ chrome_debug_port: int = 9222
 > - macOS：`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
 > - Linux：`/usr/bin/google-chrome`
 
+### 抖音素材获取附加条件（仅 f2 通道需要）
+
+抖音侧的作品 / 点赞 / 收藏下载依赖开源项目 **f2**，且**必须用本地克隆版而不是 PyPI 版**（PyPI 版本签名失效，下载会稳定 403）。克隆方式、版本要求与「为什么不能用 pip 版」见 [使用的外部开源项目](#使用的外部开源项目)。
+
 ## 技术栈
 
 | 层级       | 技术                                                                                         |
@@ -87,6 +91,20 @@ chrome_debug_port: int = 9222
 | AI 推理    | Ollama + Qwen3-VL:8B-Instruct（本地 GPU）                                                    |
 | 本地出图   | ComfyUI（外部进程，`127.0.0.1:8188`）+ Z-Image-Turbo int8 / Qwen-Image 2.1                |
 | 采集引擎   | Playwright + CDP 连接真实 Chrome（零检测采集）                                               |
+| 抖音采集   | f2（[Johnserf-Seed/f2](https://github.com/Johnserf-Seed/f2)，Apache-2.0；本地克隆版 + 子进程 `python -m f2`） |
+
+## 使用的外部开源项目
+
+本项目不是从零造轮子：**抖音侧的作品下载完全交给上游开源项目 f2**，本仓库只做「调度 → 判重 → 入库 → 打标」这一层。
+
+| 项目                                                                | 许可       | 在本项目里承担什么                                                                                       | 不承担什么                                                       |
+| ------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [f2](https://github.com/Johnserf-Seed/f2)（Johnserf-Seed，抖音/TikTok 下载器） | Apache-2.0 | 作品 / 点赞 / 收藏的列表翻页与文件下载；本地 `douyin_users.db` 用户库（`sec_user_id`、昵称、作品数、IP 属地） | 判重、入库、标签分析、向量、批次回滚、界面与 API——全部由本项目实现 |
+
+- **引入方式**：本地克隆一份 f2 到工作目录（默认见 `backend/scripts/f2_common.py` 的 `DEFAULT_F2_DIR`），本项目以**子进程 + `cwd` 指向该目录**执行 `python -m f2`（`backend/scripts/f2_fetch.py`），产物落在 `<工作目录>/Download/douyin/{post|like|collection}/<昵称>/`，再被扫描入库。两边是**进程级解耦**：f2 升级或换目录只影响下载产物，不碰已入库的素材。
+- **不要用 `pip install f2`**：PyPI 上最新只到 `0.0.1.7`（2024-12-31），抖音签名早已失效，用它下载会**稳定 403**（2026-09-19 实测：同一份有效 Cookie 换 chrome / chrome124 / edge101 三种指纹仍 403，改用克隆版同一请求 200）。更隐蔽的是装进 site-packages 的那份会因 `sys.path` 顺序抢在克隆版前面，表现为「明明换了版本还是 403」。
+- **版本**：跟上上游 `main` 分支即可（本项目对齐的是 2025-10 的 `7dab3e2`）；上游 `pyproject.toml` 要求 Python ≥ 3.10。
+- 接入步骤、日期窗口、五层去重与批次回滚见下方 [接入 f2 抖音素材获取](#5-接入-f2-抖音素材获取可选)。
 
 ## 功能概览
 
@@ -428,11 +446,12 @@ VITE_BACKEND_URL=http://localhost:18888  # 后端 API 地址
 抖音素材除 CDP 采集外还有一条**独立通道**：用本地 [f2](https://github.com/Johnserf-Seed/f2) 按博主增量下载作品，再导入素材库——不依赖 Chrome/CDP，适合「把关注的博主一次性拉全 + 之后每天自动追更」。
 
 ```bash
-# 1) 安装 f2（装在后端所用的 Python 环境里，能被 python -m f2 调起即可）
-pip install f2
+# 1) 克隆 f2 源码到工作目录（**不要 pip install f2**：PyPI 版停在 0.0.1.7，
+#    抖音签名已失效、下载会稳定 403；装进 site-packages 还会抢在克隆版前面）
+git clone https://github.com/Johnserf-Seed/f2.git C:/Users/Administrator/Desktop/f2
 
 # 2) 在 f2 工作目录跑一次手动下载并完成登录（首次全量；之后由素材库做增量）
-#    缺省工作目录见 backend/scripts/import_f2_downloads.py 的 DEFAULT_F2_DIR，可用 --f2-dir 覆盖
+#    缺省工作目录 = backend/scripts/f2_common.py 的 DEFAULT_F2_DIR，可用 --f2-dir 覆盖
 cd C:/Users/Administrator/Desktop/f2
 python -m f2 dy -u "https://www.douyin.com/user/<sec_user_id>" -M post -i all
 # Cookie 失效时：-k "粘贴 Cookie"，或 --auto-cookie chrome（需先关闭 Chrome 浏览器）
