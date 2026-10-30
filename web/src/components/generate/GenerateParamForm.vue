@@ -213,6 +213,32 @@ function selectModelByKind(target: 't2i' | 'i2i'): void {
   if (pick) modelKey.value = pick.key
 }
 
+/** 换姿势默认走**未审查版**改款档位（`qwen_2_1_uc_i2i`，档位表里的第三个）。
+ *
+ * 为什么不像「用这张图改款」那样按 kind 挑「就绪且非未审查」：姿势图库里包含成人向
+ * 姿势，有审查权重会拦提示词/改图，换姿势经常直接失效；而用户点「换个姿势」本身
+ * 就是明确的知情选择（详情页按钮、姿势选择器都只在这个流程出现），所以默认用未审查版。
+ *
+ * 兜底：旧后端没有未审查档位（或权重没放好）时退回就绪的普通改款档位，保证还能用；
+ * 档位表还没探测回来时记下意图（pendingModelKey），等列表到达由 watch 认领。
+ */
+const POSE_MODEL_KEY = 'qwen_2_1_uc_i2i'
+function selectPoseModel(): void {
+  const pool = allModels.value.filter((m) => m.kind === 'i2i')
+  const pick =
+    pool.find((m) => m.uncensored && m.ready) ??
+    pool.find((m) => m.uncensored) ??
+    pool.find((m) => m.ready) ??
+    pool[0]
+  if (pick) {
+    modelKey.value = pick.key
+    pendingModelKey.value = ''
+    return
+  }
+  pendingModelKey.value = POSE_MODEL_KEY
+  pendingKind.value = 'i2i'
+}
+
 // ── 参数 ──
 const prompt = ref('')
 const negative = ref('')
@@ -249,11 +275,10 @@ const refCountOk = computed(
   () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
 )
 
-/** 选中姿势：顺手切到图生图档位（文生图没有可替换的主体） */
+/** 选中姿势：切到图生图**未审查版**档位（换姿势默认用第三个档位，见 selectPoseModel） */
 function onPoseSelected(pose: PoseItem): void {
   selectedPose.value = pose
-  selectModelByKind('i2i')
-  if (kind.value !== 'i2i') pendingKind.value = 'i2i'
+  selectPoseModel()
   Message.success(`已选姿势：${pose.name}`)
 }
 
@@ -440,6 +465,9 @@ onMounted(() => {
     modelKey.value = props.initialModelKey
     pendingModelKey.value = ''
   }
+  // 换姿势流程的档位**最后**定：上面 initialRefIds 会把档位切到「就绪且非未审查」的
+  // 第二个改款档位，必须在这之后再覆盖成未审查版，否则进入页面落在有审查档位上。
+  if (props.initialPoseLib) selectPoseModel()
 })
 </script>
 

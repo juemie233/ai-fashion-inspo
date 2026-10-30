@@ -282,6 +282,25 @@ describe('GenerateParamForm 换姿势', () => {
     expect(submitBtn!.attributes('disabled')).toBeDefined()
   })
 
+  it('选姿势自动切到未审查版（第三个档位，不是有审查的第二个）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    // 未选姿势前：i2i 默认按「就绪且非未审查」→ 第二个（有审查）
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_i2i')
+
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+    expect(wrapper.text()).toContain('未审查')
+  })
+
+  it('从详情页「换个姿势」进入时也默认未审查版', async () => {
+    const wrapper = mountPoseForm({ initialPoseLib: true })
+    await flushPromises()
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+  })
+
   it('清除姿势后提交不再带 pose_id', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()

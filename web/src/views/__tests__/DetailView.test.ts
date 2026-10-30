@@ -295,7 +295,7 @@ describe('DetailView 交互路径', () => {
 
     expect(mocks.routerPush).toHaveBeenCalledWith({
       path: '/generate',
-      query: { ref: 'insp-1', pose_lib: '1' },
+      query: { ref: 'insp-1', pose_lib: '1', model: 'qwen_2_1_uc_i2i' },
     })
   })
 

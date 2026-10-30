@@ -462,11 +462,15 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
           <a-link
             v-if="detail.media_type === 'image' && !detail.deleted_at"
             class="detail-gen-link"
-            title="跳到出图页：以这张图为主体，从姿势图库选一个姿势重新生成"
+            title="跳到出图页：以这张图为主体，从姿势图库选一个姿势重新生成（未审查档位）"
             @click="
               router.push({
                 path: '/generate',
-                query: { ref: route.params.id as string, pose_lib: '1' },
+                query: {
+                  ref: route.params.id as string,
+                  pose_lib: '1',
+                  model: 'qwen_2_1_uc_i2i',
+                },
               })
             "
           >
