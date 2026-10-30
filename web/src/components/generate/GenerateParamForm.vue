@@ -13,6 +13,8 @@ import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { shortModelLabel } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import PosePickerModal from '@/components/generate/PosePickerModal.vue'
+import type { PoseItem } from '@/api/poseGallery'
 import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
@@ -39,6 +41,8 @@ const props = defineProps<{
    *  默认值仍然不会自动选中未审查权重（那条规则管的是「别替用户做风险选择」）。
    */
   initialModelKey?: string
+  /** 从素材详情「换个姿势」跳进来：挂载后自动打开姿势选择器（空串=false） */
+  initialPoseLib?: boolean
   /** 从素材反推描述（沿用视图里 useImageGen 的实现） */
   promptFrom: (ids: string[]) => Promise<string | null>
   /** 已选参考图的缩略图数据（视图按 referenceIds 拉好后传下来；顺序=参考顺序）。
@@ -234,7 +238,39 @@ const height = computed(() => sizeDims.value[1] ?? 1024)
 // ── 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 ──
 const refIdsText = ref('')
 const refIdsList = computed(() => splitIds(refIdsText.value))
-const refCountOk = computed(() => refIdsList.value.length >= 1 && refIdsList.value.length <= 10)
+
+// ── 姿势参考（换姿势）：单选，姿势图占一张参考额度 ──
+// 为什么占额度：执行器把姿势图作为**最后一张参考图**上传，Qwen-Image 2.1 最多 10 张，
+// 所以选了姿势后主体参考最多 9 张（后端同样会校验，前端提前拦住给出可读提示）。
+const posePickerVisible = ref(false)
+const selectedPose = ref<PoseItem | null>(null)
+const maxRefs = computed(() => (selectedPose.value ? 9 : 10))
+const refCountOk = computed(
+  () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
+)
+
+/** 选中姿势：顺手切到图生图档位（文生图没有可替换的主体） */
+function onPoseSelected(pose: PoseItem): void {
+  selectedPose.value = pose
+  selectModelByKind('i2i')
+  if (kind.value !== 'i2i') pendingKind.value = 'i2i'
+  Message.success(`已选姿势：${pose.name}`)
+}
+
+function clearPose(): void {
+  selectedPose.value = null
+}
+
+/** 插入一段「换姿势」描述模板（可再改）：明确参考图顺序，模型才不容易把主体也改掉 */
+function insertPosePrompt(): void {
+  const pose = selectedPose.value
+  if (!pose) return
+  const template = `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，全身照。`
+  prompt.value = prompt.value.trim()
+    ? `${prompt.value.trim()}
+${template}`
+    : template
+}
 
 /** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
 function splitIds(text: string): string[] {
@@ -339,6 +375,7 @@ function onSubmit() {
     // 只有拿到档位表且是图生图时才显式指定；否则交给后端按 kind 取默认
     model_key: kind.value === 'i2i' && modelKey.value ? modelKey.value : undefined,
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
+    pose_id: kind.value === 'i2i' && selectedPose.value ? selectedPose.value.id : undefined,
   })
 }
 
@@ -387,6 +424,8 @@ function applyRunPayload(payload: RunPayload): void {
 defineExpose({ applyRunPayload })
 
 onMounted(() => {
+  // 从素材详情「换个姿势」跳进来：自动打开姿势选择器（参考图由 initialRefIds 预填）
+  if (props.initialPoseLib) posePickerVisible.value = true
   // 从素材详情跳进来：预填参考图并切到改款档位
   if (props.initialRefIds) {
     refIdsText.value = props.initialRefIds
@@ -430,12 +469,12 @@ onMounted(() => {
   <div v-if="kind === 'i2i'" class="gen-row">
     <a-input v-model="refIdsText" placeholder="参考素材 ID（1~10 个，逗号分隔）" allow-clear />
     <a-button @click="pickerVisible = true">选择图片</a-button>
-    <span class="gen-hint">{{ refIdsList.length }}/10</span>
+    <span class="gen-hint">{{ refIdsList.length }}/{{ maxRefs }}</span>
   </div>
   <div v-if="kind === 'i2i'" class="gen-hint">
     参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
     只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。当前
-    {{ refIdsList.length }} 个参考。
+    {{ refIdsList.length }} 个参考（选姿势后上限 {{ maxRefs }} 张：姿势图占 1 张额度）。
   </div>
 
   <!-- 已选参考缩略图：写描述前先确认「选了哪几张、顺序对不对」，点任意一张看大图 -->
@@ -456,6 +495,30 @@ onMounted(() => {
         <img :src="refThumb(item)" alt="" loading="lazy" />
         <span class="gen-ref-thumb-index">{{ idx + 1 }}</span>
       </button>
+    </div>
+  </div>
+
+  <!-- 姿势参考（换姿势）：单选；执行器把它作为最后一张参考图上传 -->
+  <div v-if="kind === 'i2i'" class="gen-pose">
+    <div class="gen-row">
+      <a-button @click="posePickerVisible = true">
+        {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
+      </a-button>
+      <a-button v-if="selectedPose" type="text" @click="insertPosePrompt">插入姿势描述</a-button>
+      <a-button v-if="selectedPose" type="text" @click="clearPose">清除</a-button>
+      <span v-if="!selectedPose" class="gen-hint">
+        可选：从姿势图库挑一个姿势，让模特换成该姿势（个人本地使用）
+      </span>
+    </div>
+    <div v-if="selectedPose" class="gen-pose-card">
+      <img :src="selectedPose.thumb_url" :alt="selectedPose.name" loading="lazy" />
+      <div class="gen-pose-meta">
+        <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
+        <div class="gen-hint">
+          {{ selectedPose.system }} / {{ selectedPose.category }} · 姿势图会作为**最后一张**
+          参考图参与生成
+        </div>
+      </div>
     </div>
   </div>
 
@@ -535,12 +598,47 @@ onMounted(() => {
   <ReferencePickerModal
     v-model:visible="pickerVisible"
     :selected-ids="refIdsList"
-    :max="10"
+    :max="maxRefs"
     @confirm="onPickConfirm"
+  />
+
+  <PosePickerModal
+    v-model:visible="posePickerVisible"
+    :selected-id="selectedPose?.id"
+    @select="onPoseSelected"
   />
 </template>
 
 <style scoped>
+/* 姿势参考卡片：缩略图 + 名称/角度（选中后显示，避免只留一个 id） */
+.gen-pose {
+  margin: 4px 0 10px;
+}
+
+.gen-pose-card {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+
+.gen-pose-card img {
+  width: 64px;
+  height: 86px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.gen-pose-name {
+  color: var(--color-text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* 下面 .gen-alert / .gen-hint / .gen-label 三条在视图里另有一份：
    它们同时被环境提示、结果区与历史表用到，scoped 样式不能跨组件继承，故各自保留。 */
 .gen-alert {

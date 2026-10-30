@@ -36,6 +36,7 @@ from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.models import MAX_COUNT, MAX_PIXELS, MAX_STEPS, MIN_STEPS
 from app.services.comfyui.probe import MODEL_SPECS
+from app.services import pose_gallery
 from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
 from app.utils.file_hash import file_sha256
@@ -223,7 +224,31 @@ async def create_run(
             ),
         )
 
+    # 姿势参考（换姿势）：只对图生图开放，且姿势图会占一张参考额度。
+    # 校验放在建批次之前：源站不可用/姿势不存在要当场报错，别让用户等一轮任务才失败。
+    pose_id = str(payload.get("pose_id") or "").strip() or None
+    if pose_id:
+        if kind != "i2i":
+            raise HTTPException(
+                status_code=400,
+                detail="换姿势需要「参考图改款」（kind=i2i）：文生图没有可替换的主体",
+            )
+        max_refs = int(spec.get("max_refs") or 10)
+        if len(ref_ids) + 1 > max_refs:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"选姿势后参考素材最多 {max_refs - 1} 张（姿势图占 1 张额度），"
+                    f"当前 {len(ref_ids)} 张"
+                ),
+            )
+        await pose_gallery.get_pose(pose_id)
+
     params = _validate_params(payload, spec)
+    if pose_id:
+        # 存进参数快照：生成历史/回放入口据此复现「这批用了哪张姿势」，
+        # 执行器也从这里读（不额外加数据库列）。
+        params["pose_id"] = pose_id
     template, digest = wf.load_template(spec["workflow"])
 
     run = GenerationRun(
@@ -1089,6 +1114,7 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
         "count": params.get("count") or run.total or 1,
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
+        "pose_id": params.get("pose_id"),
         "seed": seed,
     }
     return await create_run(db, payload)
@@ -1133,6 +1159,7 @@ async def regenerate_candidate(
         "count": 1,
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
+        "pose_id": params.get("pose_id"),
         "seed": seed,
     }
     out = await create_run(db, payload)

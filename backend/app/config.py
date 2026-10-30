@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     image_gen_wait_vram_seconds: int = 900
     image_gen_keep_candidates_days: int = 7  # 未确认候选目录保留天数（过期清理）
 
+    # ── 姿势参考图库（ai-pose-gallery-zh，换姿势用）──
+    # 源站是纯静态站（GitHub Pages），数据接口没有 CORS 头，所以由本机后端拉一次缓存：
+    # 前端只跟我们的 /api/pose-gallery 打交道，源站抖动时还有本地缓存兜底。
+    # 只读、只取**全年龄子集**（18+ 体系在服务层直接排除）；图片按需下载到 storage 缓存，
+    # 不随仓库分发（图片与原始数据的版权归原作者，代码 MIT 不覆盖图片）。
+    pose_gallery_base_url: str = "https://ai-pose-gallery.anhao.app"
+    pose_gallery_cache_hours: int = 12  # 目录缓存有效期（小时）；过期后重新拉一次
+
     # 质量审核
     manual_upload_auto_approve: bool = True  # 手动上传默认免审核（直接标记为已通过）
     ai_generated_confidence_threshold: float = 0.8  # AI 生成检测置信度阈值，仅 ≥ 此值才标记「疑似 AI」

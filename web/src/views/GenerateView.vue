@@ -279,6 +279,8 @@ watch(
 const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim() : ''
 /** 从素材详情「图生图（未审查）」跳进来时显式指定的档位（缺省按图生图自动挑就绪档位） */
 const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
+/** 从素材详情「换个姿势」跳进来：进页面就打开姿势选择器（参考图由 ref 参数预填） */
+const initialPoseLib = route.query.pose_lib === '1'
 
 // ── 已选参考图：拉缩略图供「描述框上方」的缩略图条与浏览大图 ──
 const referenceGalleryVisible = ref(false)
@@ -393,6 +395,7 @@ onUnmounted(stopPoll)
           :active="active"
           :initial-ref-ids="initialRefIds"
           :initial-model-key="initialModelKey"
+          :initial-pose-lib="initialPoseLib"
           :models-meta-fallback="cachedModelsMeta"
           :prompt-from="promptFrom"
           :reference-items="referenceItems"

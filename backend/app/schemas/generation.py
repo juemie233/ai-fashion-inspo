@@ -24,6 +24,12 @@ class GenerationRunCreate(BaseModel):
 # 于是 kind=i2i 的请求会被「档位与生成方式不符」直接拒掉（2026-10 实测的图生图报错）。
     model_key: str | None = Field(default=None, description="模型档位（不传则按 kind 取默认）")
     reference_ids: list[str] = Field(default_factory=list, description="参考素材 id（i2i）")
+    # 姿势参考（换姿势）：来自 /api/pose-gallery 的姿势 id。与 reference_ids 是两个概念——
+    # 参考素材是「主体/服装」，姿势图是「要换成哪个姿势」；执行器会把姿势图作为
+    # **最后一张参考图**上传（提示词按「第 1 张是主体、最后一张是姿势」约定写）。
+    pose_id: str | None = Field(
+        default=None, max_length=64, description="姿势图 id（图生图换姿势，来自姿势图库）"
+    )
 
 
 class GenerationRunPatch(BaseModel):

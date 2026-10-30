@@ -284,6 +284,21 @@ describe('DetailView 交互路径', () => {
     })
   })
 
+  it('「换个姿势」入口带 ref 与 pose_lib（进图生图页自动打开姿势选择器）', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const link = wrapper.findAll('a, button, span').find((n) => n.text().includes('换个姿势'))
+    expect(link, '详情页应有「换个姿势」入口').toBeTruthy()
+    await link!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.routerPush).toHaveBeenCalledWith({
+      path: '/generate',
+      query: { ref: 'insp-1', pose_lib: '1' },
+    })
+  })
+
   it('搜索标签跳转到搜索页并带上关键词', async () => {
     const wrapper = mountView()
     await flushPromises()

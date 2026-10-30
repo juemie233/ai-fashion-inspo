@@ -458,6 +458,20 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
           >
             图生图（未审查）
           </a-link>
+          <!-- 换姿势：进图生图页后自动打开姿势选择器（参考图已预填本素材） -->
+          <a-link
+            v-if="detail.media_type === 'image' && !detail.deleted_at"
+            class="detail-gen-link"
+            title="跳到出图页：以这张图为主体，从姿势图库选一个姿势重新生成"
+            @click="
+              router.push({
+                path: '/generate',
+                query: { ref: route.params.id as string, pose_lib: '1' },
+              })
+            "
+          >
+            换个姿势
+          </a-link>
         </div>
 
         <!-- 垃圾桶提示（软删除素材） -->

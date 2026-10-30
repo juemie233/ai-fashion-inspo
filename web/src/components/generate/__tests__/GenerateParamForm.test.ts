@@ -194,3 +194,109 @@ describe('已选参考图缩略图（描述框上方）', () => {
     expect(wrapper.find('.gen-ref-strip').exists()).toBe(false)
   })
 })
+
+// ── 换姿势（姿势参考）──
+
+const POSE_FIXTURE = {
+  id: 'full_std_P001_front',
+  name: 'S形站姿',
+  system: '全身单人・标准系',
+  category: '站姿',
+  angle: '正面',
+  pose_no: 'P001',
+  thumb_url: 'https://example.com/thumbs/a.jpg',
+  image_url: 'https://example.com/img/a.png',
+}
+
+/** 姿势弹窗 stub：直接把「选中」事件回抛给参数面板，避免真弹窗在 jsdom 里的 teleport 麻烦。 */
+const PosePickerStub = {
+  name: 'PosePickerModal',
+  props: ['visible', 'selectedId'],
+  emits: ['update:visible', 'select'],
+  template: '<div class="pose-picker-stub" />',
+}
+
+describe('GenerateParamForm 换姿势', () => {
+  function mountPoseForm(props: Record<string, unknown> = {}) {
+    return mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+        ...props,
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('选姿势后提交参数带 pose_id（图生图）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('换成这个姿势')
+
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    // 已选姿势会显示名称与角度，并提供「插入姿势描述」快捷
+    expect(wrapper.text()).toContain('S形站姿')
+    expect(wrapper.text()).toContain('插入姿势描述')
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn).toBeTruthy()
+    await submitBtn!.trigger('click')
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+    expect(payload.reference_ids).toEqual(['ref-a'])
+  })
+
+  it('选姿势后参考上限降为 9 张（姿势图占 1 张额度）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+    expect(wrapper.text()).toContain('/9')
+
+    // 9 张主体参考 + 姿势 = 合法，可以提交
+    const input = wrapper.find('input[placeholder*="参考素材 ID"]')
+    const nine = Array.from({ length: 9 }, (_, i) => `ref-${i}`).join(', ')
+    await input.setValue(nine)
+    await wrapper.find('textarea').setValue('换姿势')
+    let submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn!.attributes('disabled')).toBeUndefined()
+
+    // 10 张主体参考 + 姿势 = 超上限，按钮禁用
+    const ten = Array.from({ length: 10 }, (_, i) => `ref-${i}`).join(', ')
+    await input.setValue(ten)
+    submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn!.attributes('disabled')).toBeDefined()
+  })
+
+  it('清除姿势后提交不再带 pose_id', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('换姿势')
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清除')
+    expect(clearBtn).toBeTruthy()
+    await clearBtn!.trigger('click')
+    await flushPromises()
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBeUndefined()
+  })
+})

@@ -20,6 +20,7 @@ import json
 import logging
 from pathlib import Path
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,6 +31,7 @@ from app.services.comfyui import workflow as wf
 from app.services.comfyui.client import ComfyUIClient, ComfyUIError
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.comfyui.vram import wait_for_vram
+from app.services import pose_gallery
 from app.services.task_runners.common import PermanentTaskError
 
 logger = logging.getLogger(__name__)
@@ -217,6 +219,20 @@ async def _execute_with_client(
             )
             reference_names.append(uploaded)
         logger.info(f"参考图已上传 {len(reference_names)} 张（run #{run.id}）")
+
+    # ── 1.6) 换姿势：姿势图作为**最后一张**参考图（提示词约定「第 1 张是主体、最后一张是姿势」）──
+    # 姿势图不属于素材库（不是 Inspiration），按需从姿势图库下载到 storage 缓存再上传；
+    # 下载失败按永久错误处理（源站不可用重试也不会好），并给用户可执行的原因。
+    pose_id = str(params.get("pose_id") or "").strip()
+    if pose_id:
+        try:
+            pose_path = await pose_gallery.ensure_pose_image(pose_id)
+        except HTTPException as exc:
+            raise PermanentTaskError(str(exc.detail)) from exc
+        pose_data = await asyncio.to_thread(pose_path.read_bytes)
+        uploaded_pose = await client.upload_image(pose_data, f"gen_pose_{run.id}.png")
+        reference_names.append(uploaded_pose)
+        logger.info(f"姿势参考已上传（run #{run.id}，pose={pose_id}）")
 
     # ── 2) 逐张生成 ──
     # 任务允许重试一次（max_retries=1）。若重试时从头重跑全部 seed，`run.done` 会继续累加、
