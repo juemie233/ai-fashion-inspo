@@ -44,7 +44,13 @@ PROMPT_POSE_FIRST = (
     "第 1 张是姿势图（姿势正确，但服装上有圆形护具/机甲元素），第 2 张是人物照片。"
     "请保持第 1 张图的姿势与构图不变，把人物换成第 2 张图的人（长相、发型、肤色一致），"
     "并去掉身上的圆形护具、关节垫片与机甲质感，换成日常黑色修身连衣裙与黑色丝袜，"
-    "真实照片质感、全身照。"
+    "真实照片质感、清晰自然、全身照。"
+)
+PROMPT_POSE_FIRST_FACE = (
+    "第 1 张是姿势图（姿势正确，但服装上有圆形护具/机甲元素），第 2 张是人物全身照，"
+    "第 3 张是同一人物的脸部特写。请保持第 1 张图的姿势与构图不变，把人物换成第 2/3 张里的人："
+    "**脸型、五官、发型严格按第 3 张**，身材与穿着按第 2 张；去掉圆形护具、关节垫片与机甲质感，"
+    "换成日常黑色修身连衣裙与黑色丝袜；真实照片质感、清晰自然、全身照。"
 )
 NEGATIVE = "圆形护具, 护膝, 肩甲, 机甲, 线稿, 素体, 夸张比例, 多肢, 畸形手"
 
@@ -57,6 +63,42 @@ GEN = {
     "SHIFT": 3.0,
     "SEED": 1001,
 }
+
+
+def _face_crop(subject_path: Path, out_path: Path) -> bool:
+    """用 OpenCV Haar 检测主体人脸并裁出带发型的特写（给 Qwen 第三张参考用）。
+
+    Qwen 编辑在「全身照参考」里人脸像素太少，identity 保不住；单独给一张脸部特写
+    是零下载、最便宜的身份增强手段（先验证是否有效，再决定是否上 IP-Adapter）。
+    """
+    import cv2
+
+    img = cv2.imread(str(subject_path))
+    if img is None:
+        return False
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+    if len(faces) == 0:
+        return False
+    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+    # 扩到 1.9 倍，带进头发/脖子；再裁 1:1 并缩到 512
+    cx, cy = x + w // 2, y + h // 2
+    size = int(max(w, h) * 1.9)
+    left = max(0, cx - size // 2)
+    top = max(0, cy - size // 2)
+    crop = img[top : top + size, left : left + size]
+    if crop.size == 0:
+        return False
+
+    side = min(crop.shape[:2])
+    crop = crop[:side, :side]
+    crop = cv2.resize(crop, (512, 512), interpolation=cv2.INTER_LANCZOS4)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), crop)
+    return True
 
 
 def _pick_image(entry: dict) -> dict | None:
@@ -107,10 +149,22 @@ async def run(args: argparse.Namespace) -> int:
         subject_data = await asyncio.to_thread(subject_path.read_bytes)
         suffix = subject_path.suffix or ".png"
         subject_name = await client.upload_image(subject_data, f"r2s2_subject{suffix}")
+        face_name = None
+        if args.face_ref:
+            face_path = out_dir / "face_ref.png"
+            if _face_crop(subject_path, face_path):
+                face_data = await asyncio.to_thread(face_path.read_bytes)
+                face_name = await client.upload_image(face_data, "r2s2_face.png")
+                print("人脸参考已生成：", face_path)
+            else:
+                print("未检测到人脸，降级为两图参考")
         for path in names:
             data = await asyncio.to_thread(path.read_bytes)
             stage_name = await client.upload_image(data, f"r2s2_{path.name}")
-            if args.ref_order == "pose-first":
+            if args.face_ref and face_name:
+                reference_names = [stage_name, subject_name, face_name]
+                prompt = PROMPT_POSE_FIRST_FACE
+            elif args.ref_order == "pose-first":
                 reference_names = [stage_name, subject_name]
                 prompt = PROMPT_POSE_FIRST
             else:
@@ -165,6 +219,9 @@ def main() -> None:
     parser.add_argument("--subject-id", default=SUBJECT_ID)
     parser.add_argument("--out-dir", default="")
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--face-ref", action="store_true", help="额外上传主体人脸特写作为第 3 张参考（增强身份）"
+    )
     parser.add_argument(
         "--ref-order",
         default="subject-first",

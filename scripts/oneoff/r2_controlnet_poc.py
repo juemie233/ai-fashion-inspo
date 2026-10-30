@@ -55,6 +55,27 @@ POSE_EN: dict[str, str] = {
     "full_single_P020_high": (
         "standing straight, one hand touching the back of the head, looking up, high angle view"
     ),
+    "full_single_P001_front": (
+        "sitting on the floor leaning back, one knee raised, hands behind for support, front view"
+    ),
+    "full_single_P015_front": (
+        "standing in contrapposto pose, one hand on the hip, weight on one leg, front view"
+    ),
+    "full_sexy_P016_front": (
+        "sitting sideways on the floor, one hand supporting the body, body gently arched, front view"
+    ),
+    "full_sexy_P046_front": (
+        "lying on one side, waist line emphasized, one leg bent, front view"
+    ),
+    "full_single_P031_front": (
+        "kneeling on both knees, hands resting on the thighs, front view"
+    ),
+    "full_sexy_P066_front": (
+        "bridge pose, hips lifted high, knees apart, front view"
+    ),
+    "upper80v2_P002_front": (
+        "hands forming a heart shape above the head, front view"
+    ),
 }
 
 NEGATIVE = (

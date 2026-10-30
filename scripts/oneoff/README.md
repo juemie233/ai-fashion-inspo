@@ -22,6 +22,7 @@
 | `diagnose_generation_failures.py` | 给出图失败分类：OOM / 工作流参数 / 参考图 / ComfyUI 连接 / 其它（**只读**） | `python scripts/oneoff/diagnose_generation_failures.py [--limit N]` | 真实库 |
 | `download_hf_chunked.py` | 从 hf-mirror 分段下载大文件（该镜像不支持全量 GET、连续请求会 429；支持断点续传） | `python scripts/oneoff/download_hf_chunked.py <url> <保存路径> <总字节数>` | 网络 |
 | `verify_toolcall.py` | 验证本地 Ollama 模型能否返回结构化 `tool_calls`（agent 能力的前置检查） | `python scripts/oneoff/verify_toolcall.py [模型名，默认 qwen3.5:9b]` | 本机 Ollama |
+| `r2_batch10_eval.py` | R2 两段式批量评估：随机 N 张四星素材 × 每人 1 个随机单人姿势，串起「SDXL+CN 阶段1 → Qwen 清洗阶段2」，产出样本图 + summary（报告见 `docs/换姿势实验报告-*.md`） | `python scripts/oneoff/r2_batch10_eval.py --count 10 --seed 20261031`（需 ComfyUI 在 8188、SDXL/union 权重就位） | 本机 ComfyUI + storage |
 | `r2_controlnet_poc.py` | R2 PoC 阶段1：SDXL + ControlNet-Union(lineart) 用姿势线稿控姿势（txt2img / img2img 对比） | `python scripts/oneoff/r2_controlnet_poc.py --dry-run` / `--execute`（需 SDXL + union 权重、ComfyUI 在 8188） | 本机 ComfyUI + storage |
 | `r2_stage2_cleanup.py` | R2 PoC 阶段2（两段式）：Qwen-Image-Edit 以 `[阶段1图, 主体]` 为参考，保姿势、去护具、换回日常服装 | `python scripts/oneoff/r2_stage2_cleanup.py --dry-run` / `--execute`（需阶段1产物） | 本机 ComfyUI + storage |
 | `pose_fidelity_ab.py` | 换姿势零成本对照实验：提示词/参考顺序/参考数量对姿势保真度的影响；也可批量随取四星素材 × 单人姿势做文字姿势测试（只读库 + 直连 ComfyUI，产物落 storage/poc/） | `--dry-run`（只打印工作流）/ `--execute`（需 ComfyUI 在 8188）/ `--batch --batch-subjects 5 --batch-poses 5 --execute` | 本机 ComfyUI + storage |
