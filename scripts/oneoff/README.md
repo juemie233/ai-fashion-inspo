@@ -22,7 +22,7 @@
 | `diagnose_generation_failures.py` | 给出图失败分类：OOM / 工作流参数 / 参考图 / ComfyUI 连接 / 其它（**只读**） | `python scripts/oneoff/diagnose_generation_failures.py [--limit N]` | 真实库 |
 | `download_hf_chunked.py` | 从 hf-mirror 分段下载大文件（该镜像不支持全量 GET、连续请求会 429；支持断点续传） | `python scripts/oneoff/download_hf_chunked.py <url> <保存路径> <总字节数>` | 网络 |
 | `verify_toolcall.py` | 验证本地 Ollama 模型能否返回结构化 `tool_calls`（agent 能力的前置检查） | `python scripts/oneoff/verify_toolcall.py [模型名，默认 qwen3.5:9b]` | 本机 Ollama |
-| `pose_fidelity_ab.py` | 换姿势零成本对照实验：提示词/参考顺序/参考数量对姿势保真度的影响（只读库 + 直连 ComfyUI，产物落 storage/poc/） | `python scripts/oneoff/pose_fidelity_ab.py --dry-run`（只打印工作流）或 `--execute`（需 ComfyUI 在 8188） | 本机 ComfyUI + storage |
+| `pose_fidelity_ab.py` | 换姿势零成本对照实验：提示词/参考顺序/参考数量对姿势保真度的影响；也可批量随取四星素材 × 单人姿势做文字姿势测试（只读库 + 直连 ComfyUI，产物落 storage/poc/） | `--dry-run`（只打印工作流）/ `--execute`（需 ComfyUI 在 8188）/ `--batch --batch-subjects 5 --batch-poses 5 --execute` | 本机 ComfyUI + storage |
 
 ## 使用约定
 

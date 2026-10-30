@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import sqlite3
 import sys
 import time
@@ -149,6 +150,51 @@ def _pose_info(pose_id: str, catalog: list[dict[str, Any]]) -> dict[str, Any]:
     return item
 
 
+def text_only_prompt(pose: dict[str, Any]) -> str:
+    """批量文字测试用的提示词：只给姿势名称/角度/构图，不传姿势线稿。"""
+    framing = "半身构图（半身照）" if "上半身" in pose["system"] else "全身照"
+    return (
+        "保持人物长相、发型与服装不变，把姿势改成"
+        f"「{pose['name']}」（{pose['angle']}视角、{framing}）。"
+    )
+
+
+def _random_subjects(seed: int, count: int) -> list[dict[str, Any]]:
+    """随机取 rating>=4 的图片素材（只读库；文件不存在/已删除的跳过）。"""
+    con = sqlite3.connect(f"file:{_db_path().as_posix()}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "select id, file_path, rating from inspirations "
+            "where deleted_at is null and media_type='image' "
+            "and is_ai_generated=0 and rating>=4"
+        ).fetchall()
+    finally:
+        con.close()
+    available = [
+        {"id": row[0], "path": row[1], "rating": row[2]}
+        for row in rows
+        if (settings.storage_root / str(row[1])).exists()
+    ]
+    rng = random.Random(seed)
+    if len(available) < count:
+        raise SystemExit(f"四星以上可用素材只有 {len(available)} 张，少于需要的 {count} 张")
+    return rng.sample(available, count)
+
+
+def _random_single_poses(
+    seed: int, count: int, catalog: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """随机取单人姿势（排除「双人缠绵」体系，避免生成双人构图）。"""
+    single = [
+        item
+        for item in catalog
+        if "双人" not in item["system"] and not item["id"].startswith(("pair", "double"))
+    ]
+    if len(single) < count:
+        raise SystemExit(f"单人姿势不足：{len(single)} < {count}")
+    return random.Random(seed).sample(single, count)
+
+
 def build_prompt(kind: str, pose: dict[str, Any]) -> str:
     """按实验组构造提示词（中文；与线上模板同一风格）。"""
     name, angle = pose["name"], pose["angle"]
@@ -221,6 +267,80 @@ def _pick_image(entry: dict) -> dict | None:
         if images:
             return images[0]
     return None
+
+
+async def run_batch(args: argparse.Namespace) -> int:
+    """更大批量：随机 N 张 rating>=4 素材 × 每张随机 M 个单人姿势（纯文字描述姿势）。"""
+    subjects = _random_subjects(args.random_seed, args.batch_subjects)
+    catalog = await pose_gallery.load_catalog()
+    poses = _random_single_poses(args.random_seed + 1, args.batch_poses, catalog)
+    out_dir = Path(args.out_dir) if args.out_dir else (
+        settings.storage_root / "poc" / f"r1_text_batch_{time.strftime('%Y%m%d')}"
+    )
+    print(f"随机素材 {len(subjects)} 张：" + ", ".join(s["id"][:8] for s in subjects))
+    print("随机单人姿势：")
+    for pose in poses:
+        print(f"  {pose['id']}｜{pose['system']}｜{pose['name']}·{pose['angle']}")
+    print(f"输出目录：{out_dir}（共 {len(subjects) * len(poses)} 张）")
+    if args.dry_run:
+        print("\n[dry-run] 以上述组合生成，不连 ComfyUI；加 --execute 才会真跑。")
+        return 0
+
+    template, _digest = load_template("qwen_edit")
+    client = ComfyUIClient(settings.comfyui_base_url, timeout=settings.comfyui_timeout)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = []
+    try:
+        for s_idx, subject in enumerate(subjects, start=1):
+            subject_path = settings.storage_root / subject["path"]
+            suffix = Path(subject["path"]).suffix or ".png"
+            data = await asyncio.to_thread(subject_path.read_bytes)
+            name = await client.upload_image(data, f"poc_batch_s{s_idx:02d}{suffix}")
+            print(f"\n[素材 {s_idx}/{len(subjects)}] {subject['id'][:8]} rating={subject['rating']}")
+            for pose in poses:
+                workflow = build_edit_workflow(
+                    template,
+                    reference_names=[name],
+                    PROMPT=text_only_prompt(pose),
+                    PREFIX=f"poc_batch_s{s_idx:02d}_{pose['id']}",
+                    SEED=args.random_seed + s_idx * 100 + poses.index(pose),
+                    **GEN,
+                )
+                started = time.monotonic()
+                prompt_id = await client.submit(workflow)
+                entry = await client.wait_for_prompt(prompt_id, timeout=args.timeout)
+                image = _pick_image(entry)
+                if image is None:
+                    print(f"  [失败] {pose['id']}：ComfyUI 未返回图片")
+                    continue
+                raw = await client.fetch_image(
+                    image.get("filename") or "", image.get("subfolder") or ""
+                )
+                target = out_dir / f"s{s_idx:02d}__{pose['id']}.png"
+                target.write_bytes(raw)
+                elapsed = round(time.monotonic() - started, 1)
+                records.append(
+                    {
+                        "subject_id": subject["id"],
+                        "subject_rating": subject["rating"],
+                        "subject_index": s_idx,
+                        "pose_id": pose["id"],
+                        "pose_system": pose["system"],
+                        "pose_name": pose["name"],
+                        "pose_angle": pose["angle"],
+                        "prompt": text_only_prompt(pose),
+                        "image": target.name,
+                        "elapsed_s": elapsed,
+                    }
+                )
+                print(f"  {pose['id']} -> {target.name}（{elapsed}s）")
+    finally:
+        await client.aclose()
+
+    summary = out_dir / "summary.json"
+    summary.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n完成 {len(records)} 张；summary: {summary}")
+    return 0
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -335,6 +455,12 @@ def main() -> None:
     )
     parser.add_argument("--out-dir", default="", help="输出目录（默认 storage/poc/...）")
     parser.add_argument("--timeout", type=float, default=900.0, help="单张生成超时（秒）")
+    parser.add_argument(
+        "--batch", action="store_true", help="更大批量：随机四星素材 × 随机单人姿势（文字描述）"
+    )
+    parser.add_argument("--batch-subjects", type=int, default=5, help="批量测试素材数")
+    parser.add_argument("--batch-poses", type=int, default=5, help="每张素材的姿势数")
+    parser.add_argument("--random-seed", type=int, default=20261030, help="随机种子（可复现）")
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--dry-run", action="store_true", default=True, help="只构建工作流（默认）"
@@ -343,7 +469,8 @@ def main() -> None:
         "--execute", dest="dry_run", action="store_false", help="真实提交 ComfyUI"
     )
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args)))
+    runner = run_batch if args.batch else run
+    sys.exit(asyncio.run(runner(args)))
 
 
 if __name__ == "__main__":
