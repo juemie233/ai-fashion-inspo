@@ -22,6 +22,7 @@
 | `diagnose_generation_failures.py` | 给出图失败分类：OOM / 工作流参数 / 参考图 / ComfyUI 连接 / 其它（**只读**） | `python scripts/oneoff/diagnose_generation_failures.py [--limit N]` | 真实库 |
 | `download_hf_chunked.py` | 从 hf-mirror 分段下载大文件（该镜像不支持全量 GET、连续请求会 429；支持断点续传） | `python scripts/oneoff/download_hf_chunked.py <url> <保存路径> <总字节数>` | 网络 |
 | `verify_toolcall.py` | 验证本地 Ollama 模型能否返回结构化 `tool_calls`（agent 能力的前置检查） | `python scripts/oneoff/verify_toolcall.py [模型名，默认 qwen3.5:9b]` | 本机 Ollama |
+| `r2_outfit_keep_eval.py` | 发型/服装保持实验：Qwen-Image 2.1 未审查版 i2i，在 R2 目标姿势图上重绘人物并尝试保持主体发型/服装（可加服装裁切第三参考） | `python scripts/oneoff/r2_outfit_keep_eval.py --execute --variants keep2`（需 ComfyUI + UC 权重） | 本机 ComfyUI + storage |
 | `r2_faceswap_batch.py` | R2 后处理 A 方案：对两段式结果做 InsightFace 换脸（主体脸→成图），可选 GFPGAN 面部修复；输出换脸图与 swap_summary（报告见 `docs/换姿势实验报告-*换脸增强*.md`；权重非商用，仅个人本地） | 需单独 venv（insightface/onnxruntime）与 buffalo_l + inswapper + gfpgan onnx；`python scripts/oneoff/r2_faceswap_batch.py --batch-dir <阶段2目录> --out-dir <输出目录>` | 本机模型目录 + storage |
 | `r2_batch10_eval.py` | R2 两段式批量评估：随机 N 张四星素材 × 每人 1 个随机单人姿势，串起「SDXL+CN 阶段1 → Qwen 清洗阶段2」，产出样本图 + summary（报告见 `docs/换姿势实验报告-*.md`） | `python scripts/oneoff/r2_batch10_eval.py --count 10 --seed 20261031`（需 ComfyUI 在 8188、SDXL/union 权重就位） | 本机 ComfyUI + storage |
 | `r2_controlnet_poc.py` | R2 PoC 阶段1：SDXL + ControlNet-Union(lineart) 用姿势线稿控姿势（txt2img / img2img 对比） | `python scripts/oneoff/r2_controlnet_poc.py --dry-run` / `--execute`（需 SDXL + union 权重、ComfyUI 在 8188） | 本机 ComfyUI + storage |
