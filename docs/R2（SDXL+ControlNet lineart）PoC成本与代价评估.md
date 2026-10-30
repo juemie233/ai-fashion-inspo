@@ -333,6 +333,75 @@ PoC 产出（都要删临时文件/只留报告）：
 
 ---
 
+## 11. R2 PoC 实测结果（2026-10-30 晚，已跑通）
+
+> 结论先说：**姿势可以做到 5/5 精准**（这是 R1 做不到的），但单靠 R2 会出「护具/机甲」伪影且丢身份；
+> **两段式（SDXL+ControlNet 出姿势 → Qwen 清洗）结构可行**，身份还原仍是下一个要解决的问题。
+> 产物：`G:/fashion-inspo-storage/poc/r2_controlnet_20261030/`、`.../r2_stage2_20261030/`、
+> `.../r2_poc_compare/compare_*.png`；脚本：`scripts/oneoff/r2_controlnet_poc.py`、`scripts/oneoff/r2_stage2_cleanup.py`。
+
+### 11.1 模型与运行参数（已下载）
+
+| 资产 | 来源 | 大小 | 放置位置 |
+| --- | --- | ---: | --- |
+| SDXL base 1.0（fp16 checkpoint） | ModelScope `AI-ModelScope/stable-diffusion-xl-base-1.0` | **6.46 GiB** | `D:/AI/ComfyUI/ComfyUI/models/checkpoints/sd_xl_base_1.0.safetensors` |
+| ControlNet-Union SDXL 1.0 promax | ModelScope `AI-ModelScope/controlnet-union-sdxl-1.0` | **2.34 GiB** | `D:/AI/ComfyUI/ComfyUI/models/controlnet/controlnet-union-sdxl-1.0-promax.safetensors` |
+
+- 为什么用 union：同一模型支持 lineart / openpose / depth / canny 等；ComfyUI 用
+  `ControlNetLoader → SetUnionControlNetType(type="canny/lineart/anime_lineart/mlsd") → ControlNetApplyAdvanced`；
+- 为什么不用 MistoLine：hf-mirror 单连接仅 0.4~0.6 MiB/s、并发也不稳定；ModelScope 的 union 速度
+  ~6~11 MB/s，总下载 ~25 分钟（已清理临时下载脚本）；
+- 参数：SDXL 30 steps / cfg 7 / dpmpp_2m / karras / 896×1152（3:4，贴近姿势线稿）；
+  控制图=姿势线稿阈值化为纯黑白；强度 1.0；阶段2 Qwen 25 steps / cfg 1.0。
+
+### 11.2 阶段 1：SDXL + ControlNet（姿势准不准？）
+
+| 变体 | 姿势保真 | 身份 | 画面问题 | 实测耗时 |
+| --- | :---: | :---: | --- | ---: |
+| txt2img + CN(lineart) | **5/5（关节逐一对上）** | 0/5（纯生成脸） | **关节圆圈被渲染成护具/机甲圆片**（膝/肘/肩/踝） | **17.8 s** |
+| img2img 0.70 + CN | 5/5 | 1/5 | 同上，且人物比例夸张 | 17.8 s |
+| img2img 0.85 + CN | 5/5 | 1/5 | 同上 | 17.8 s |
+| hed 控制类型 | 5/5 | 0/5 | **风格变二次元素体**，更差 | 17.8 s |
+| lineart 强度 0.75 + “no armor/round pads” 提示词 | 5/5 | 0/5 | 护具圆片仍在 | 17.8 s |
+
+**判定**：ControlNet lineart 对「素体线稿」的姿势控制力非常强，这是 R1 完全做不到的；
+但**关节圆圈是线稿内容，ControlNet 会忠实渲染成服装上的圆片/护甲**，提示词与强度压不住。
+尝试用 Hough 圆检测 / 封闭区域洪泛擦除关节圆：漏检膝盖且误伤身体线条，不可靠，暂不采用。
+
+### 11.3 阶段 2：Qwen-Image-Edit 清洗（R2-C 两段式）
+
+输入参考顺序 **`[阶段1图, 主体照片]`（姿势图在前、主体在后）**，提示词「保持第 1 张的姿势与构图，
+把人物换成第 2 张的人，去掉圆形护具/机甲，改成日常黑色连衣裙与丝袜」：
+
+| 样本 | 姿势 | 护具伪影 | 身份 | 画面 | 耗时 |
+| --- | :---: | :---: | :---: | --- | ---: |
+| P001_side | **5/5 保留** | **已去掉** | 2~3/5（脸像但不确定是原人物） | 干净、可用的全身照 | 87.4 s |
+| P006_diag | **5/5 保留** | **已去掉** | 2~3/5 | 干净、可用 | 93.3 s |
+
+对照实验：若把参考顺序改成 `[主体照片, 阶段1图]`（主体在前），Qwen 会把姿势**打回原图**（坐姿），
+说明「第一张图=编辑底图」的语义必须尊重 → 两段式只能「姿势图在前」。
+
+### 11.4 总成本与结论
+
+| 项 | 实测/预估 |
+| --- | --- |
+| 模型体积 | **8.8 GiB**（SDXL 6.46 + union 2.34） |
+| 单张耗时 | 阶段1 17.8 s + 阶段2 87~93 s ≈ **105~111 s/张**（R1 文字方案 31 s、R1 线稿方案 85~137 s） |
+| 姿势质量 | **5/5（逐关节）** —— 明显优于 R1（文字 3/5、线稿方案姿势不跟） |
+| 身份还原 | **2~3/5（瓶颈）**：阶段1 完全丢，阶段2 只能算「像」；要稳定还原需加 IP-Adapter/FaceID 或更细的参考 |
+| 伪影 | 阶段1 关节圆 → 护具；阶段2 可清除 |
+| 其他成本 | SDXL 的 CLIP **不支持中文**：1439 条中文姿势名要先翻译成英文提示词（或维护英文映射表），产品化必须算这块 |
+
+**可以下的决定**：
+1. 「R2-A 单跑」**不可产品化**（护具伪影 + 身份丢失）；
+2. 「R2-C 两段式」**结构可行**：姿势 5/5、画面干净、身份 2~3/5；总耗时约 2 分钟/张。适合做「精修换姿势」；
+3. **身份是下一个必须解决的问题**：优先试 **IP-Adapter（+3.2 GB）**或 Stage2 加「主体人脸裁切」第三张参考，
+   再决定是否把两段式做成正式档位；
+4. 产品化成本按此更新：后端新档位+工作流+执行器分支 + 前端档位/参数 + 测试 + 文档 ≈ **3~5 人日**
+   （含姿势中英文映射），另需接受 **~2 分钟/张** 与 **8.8 GiB 模型** 的代价。
+
+---
+
 ## 附录 A：模型清单与核对项（PoC 前逐项确认）
 
 | 项 | 期望 | 核对方式 |
