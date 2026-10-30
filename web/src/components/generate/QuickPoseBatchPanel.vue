@@ -72,6 +72,27 @@ const nextPose = computed<PoseItem | null>(
   () => poses.value.find((pose) => !usedIds.value.has(pose.id)) ?? null,
 )
 
+/** 连续次数的上限 = 剩余未出过的姿势数（想一次出完 399 个就填 399）。
+ *
+ * 为什么不再写死 20：这是个人批量出图的核心用法——一次把整个体系排完；写死小上限
+ * 只会逼用户分几十次点。下限 1（全出完时需要先「重置进度」）。
+ */
+const maxRounds = computed(() => Math.max(1, total.value - usedCount.value))
+
+/** rounds 超出剩余姿势数时夹回上限（出图后剩余变少会触发） */
+watch(maxRounds, (max) => {
+  if (rounds.value > max) rounds.value = max
+})
+
+/** 连续出图预计耗时（按每张约 40 秒粗估；Qwen 2.1 25 步 1024² 实测 20~45 秒/张） */
+const estimateHint = computed(() => {
+  const images = Math.max(1, count.value) * Math.max(1, rounds.value)
+  const minutes = (images * 40) / 60
+  return minutes >= 90
+    ? `共 ${images} 张，约需 ${(minutes / 60).toFixed(1)} 小时`
+    : `共 ${images} 张，约需 ${Math.max(1, Math.round(minutes))} 分钟`
+})
+
 // ── 连续出图状态机 ──
 const queueActive = ref(false)
 const queueDone = ref(0)
@@ -197,10 +218,14 @@ function fireRound(): void {
   }, 3000)
 }
 
+function fillAllRounds(): void {
+  rounds.value = maxRounds.value
+}
+
 function startBatch(): void {
   if (running.value || disabledReason.value) return
   queueActive.value = true
-  queueTotal.value = Math.max(1, rounds.value)
+  queueTotal.value = Math.min(Math.max(1, rounds.value), maxRounds.value)
   queueCount.value = count.value
   queueSteps.value = steps.value
   queueDone.value = 0
@@ -301,38 +326,53 @@ onBeforeUnmount(() => {
 
       <!-- 每次张数 / 步数 / 连续轮数：三个数就够了，不多加输入 -->
       <div class="quick-controls">
-        <a-input-number
-          v-model="count"
-          :min="1"
-          :max="4"
-          :disabled="running"
-          size="small"
-          style="width: 108px"
+        <span class="quick-control">
+          <a-input-number
+            v-model="count"
+            :min="1"
+            :max="4"
+            :disabled="running"
+            size="small"
+            style="width: 104px"
+          >
+            <template #prefix>每次</template>
+          </a-input-number>
+          <span class="gen-hint">张</span>
+        </span>
+        <span class="quick-control">
+          <a-input-number
+            v-model="steps"
+            :min="1"
+            :max="30"
+            :disabled="running"
+            size="small"
+            style="width: 104px"
+          >
+            <template #prefix>步数</template>
+          </a-input-number>
+          <span class="gen-hint">步</span>
+        </span>
+        <span class="quick-control">
+          <a-input-number
+            v-model="rounds"
+            :min="1"
+            :max="maxRounds"
+            :disabled="running"
+            size="small"
+            style="width: 118px"
+          >
+            <template #prefix>连续</template>
+          </a-input-number>
+          <span class="gen-hint">次</span>
+        </span>
+        <a-button
+          type="text"
+          size="mini"
+          :disabled="running || maxRounds <= 1 || rounds >= maxRounds"
+          @click="fillAllRounds"
         >
-          <template #prefix>每次</template>
-        </a-input-number>
-        <span class="gen-hint">张</span>
-        <a-input-number
-          v-model="steps"
-          :min="1"
-          :max="30"
-          :disabled="running"
-          size="small"
-          style="width: 108px"
-        >
-          <template #prefix>步数</template>
-        </a-input-number>
-        <a-input-number
-          v-model="rounds"
-          :min="1"
-          :max="20"
-          :disabled="running"
-          size="small"
-          style="width: 108px"
-        >
-          <template #prefix>连续</template>
-        </a-input-number>
-        <span class="gen-hint">次</span>
+          设为剩余全部（{{ maxRounds }}）
+        </a-button>
       </div>
     </div>
 
@@ -357,6 +397,8 @@ onBeforeUnmount(() => {
       <span v-else-if="disabledReason" class="gen-hint">{{ disabledReason }}</span>
       <span v-else class="gen-hint">
         每次用一个未出过的姿势；进度会记住（{{ usedCount }}/{{ total }}）
+        <template v-if="rounds > 1"> · {{ estimateHint }}（按每张约 40 秒估算）</template>
+        <template v-if="rounds >= 20"> · 连续出图期间请保持本页打开（队列在前端运行）</template>
       </span>
     </div>
   </div>
@@ -420,8 +462,16 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px 10px;
   margin-left: auto;
+}
+
+/* 输入框与单位绑成一组：窗口变窄时整组换行，不会出现「张/步/次」被单独折到下一行 */
+.quick-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .quick-progress {

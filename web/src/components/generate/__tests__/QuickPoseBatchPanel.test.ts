@@ -169,4 +169,54 @@ describe('QuickPoseBatchPanel', () => {
     expect(saved['全身单人・性感系']).toEqual([])
     wrapper.unmount()
   })
+
+  it('「设为剩余全部」把连续次数设成剩余姿势数（不写死上限）', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const fillAll = wrapper.findAll('button').find((b) => b.text().includes('设为剩余全部'))
+    expect(fillAll).toBeTruthy()
+    expect(fillAll!.text()).toContain('3') // 3 个姿势都没出过
+    await fillAll!.trigger('click')
+    await flushPromises()
+
+    const mainBtn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
+    expect(mainBtn!.text()).toContain('连续 3 次，共 6 张')
+    // 连续 3 次给出耗时估算（提示里「分钟/小时」二选一）
+    expect(wrapper.text()).toMatch(/约需 [\d.]+ (分钟|小时)/)
+    wrapper.unmount()
+  })
+
+  it('出完一个姿势后连续上限随之下降，超出的次数自动夹回', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    // 先设连续 3 次（<= 剩余 3），再出 1 轮后点「停止连续出图」
+    const roundsInput = wrapper.findAll('.quick-controls input')[2]
+    await roundsInput.setValue('3')
+    await roundsInput.trigger('change')
+    await roundsInput.trigger('blur')
+    await flushPromises()
+
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('一键出图'))!
+      .trigger('click')
+    await flushPromises()
+    await wrapper.setProps({ busy: true })
+    await wrapper.setProps({ busy: false })
+    await flushPromises()
+
+    // 第 1 轮已过：停止队列，此时剩余 2 个姿势 → 连续次数被夹回 2
+    const stop = wrapper.findAll('button').find((b) => b.text().includes('停止连续出图'))
+    expect(stop).toBeTruthy()
+    await stop!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('设为剩余全部（2）')
+    expect((wrapper.findAll('.quick-controls input')[2].element as HTMLInputElement).value).toBe(
+      '2',
+    )
+    wrapper.unmount()
+  })
 })
