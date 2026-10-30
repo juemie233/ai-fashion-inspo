@@ -10,7 +10,7 @@ vi.mock('@/api/client', () => ({
   default: { get: mocks.get },
 }))
 
-import { fetchPoseGalleryMeta, fetchPoses } from '../poseGallery'
+import { fetchPose, fetchPoseGalleryMeta, fetchPoses } from '../poseGallery'
 
 describe('poseGallery API', () => {
   beforeEach(() => {
@@ -36,5 +36,25 @@ describe('poseGallery API', () => {
     expect(mocks.get).toHaveBeenCalledWith('/pose-gallery', {
       params: { q: '站姿', system: '上半身单人', angle: '俯视', page: 2, size: 40 },
     })
+  })
+
+  it('fetchPose 按 id 打单条路径（历史带入表单恢复姿势）', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        id: 'full_std_P001_front',
+        name: 'S形站姿',
+        system: '全身单人・标准系',
+        category: '站姿',
+        angle: '正面',
+        pose_no: 'P001',
+        thumb_url: 'https://example.com/t.jpg',
+        image_url: 'https://example.com/i.png',
+      },
+    })
+
+    const pose = await fetchPose('full_std_P001_front')
+
+    expect(mocks.get).toHaveBeenCalledWith('/pose-gallery/full_std_P001_front')
+    expect(pose.id).toBe('full_std_P001_front')
   })
 })

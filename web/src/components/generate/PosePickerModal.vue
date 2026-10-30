@@ -35,10 +35,15 @@ const PAGE_SIZE = 40
 const items = ref<PoseItem[]>([])
 const meta = ref<PoseGalleryMeta | null>(null)
 const loading = ref(false)
+/** 加载更多（与筛选请求分开：避免筛选返回时把「加载更多」的转圈状态带错） */
+const loadingMore = ref(false)
 const error = ref('')
 const page = ref(1)
 const hasMore = ref(false)
 const total = ref(0)
+
+/** 请求序号：快速切筛选/搜索时，只允许最新一次响应落地（旧响应会污染新结果）。 */
+let requestSeq = 0
 
 const keyword = ref('')
 const system = ref('')
@@ -80,7 +85,12 @@ async function loadMeta(): Promise<void> {
 }
 
 async function load(target: number): Promise<void> {
-  loading.value = true
+  // 加载更多互斥：慢网连点不会把同一页 append 两次；筛选第一页在飞时也不允许
+  // 追加下一页（否则新筛选的 page 2 会拼到旧筛选的列表上）
+  if (target > 1 && (loadingMore.value || loading.value)) return
+  const seq = ++requestSeq
+  if (target > 1) loadingMore.value = true
+  else loading.value = true
   error.value = ''
   try {
     const data = await fetchPoses({
@@ -91,15 +101,24 @@ async function load(target: number): Promise<void> {
       page: target,
       size: PAGE_SIZE,
     })
+    // 已发起更新的筛选/搜索：这次响应作废，否则旧筛选结果会覆盖新结果
+    if (seq !== requestSeq) return
     items.value = target === 1 ? data.items : [...items.value, ...data.items]
     total.value = data.total
     page.value = target
     hasMore.value = data.items.length >= PAGE_SIZE && items.value.length < data.total
   } catch (e) {
+    if (seq !== requestSeq) return
     error.value = e instanceof Error ? e.message : '加载姿势失败'
     Message.error(error.value)
   } finally {
-    loading.value = false
+    if (seq === requestSeq) {
+      loading.value = false
+      loadingMore.value = false
+    } else if (target > 1) {
+      // 过期的「加载更多」也要释放互斥，避免后续分页被永久卡住
+      loadingMore.value = false
+    }
   }
 }
 
@@ -191,8 +210,8 @@ function onSelect(pose: PoseItem): void {
       </div>
     </a-spin>
 
-    <div v-if="hasMore" class="pose-more">
-      <a-button size="small" :loading="loading" @click="load(page + 1)">加载更多</a-button>
+    <div v-if="hasMore && !loading" class="pose-more">
+      <a-button size="small" :loading="loadingMore" @click="load(page + 1)">加载更多</a-button>
     </div>
   </a-modal>
 </template>

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -108,6 +109,38 @@ def test_normalize_rejects_traversal_like_ids():
             "原图": "i.png",
         }
         assert pose_gallery._normalize(row) is None
+
+
+def test_normalize_rejects_unsafe_image_paths():
+    """图片路径只能站内相对路径：绝对 URL / 路径穿越一律丢弃（防上游被篡改）。"""
+    base = {
+        "id": "upper_P004_front",
+        "体系": "上半身单人",
+        "缩略图": "thumbs/a.jpg",
+        "原图": "img/a.png",
+        "分类": "站姿",
+        "姿势名称": "测试",
+        "角度": "正面",
+        "姿势编号": "P004",
+    }
+    assert pose_gallery._normalize(base) is not None
+    for bad in ("https://evil.com/x.png", "//evil.com/x.png", "../../etc/passwd", "a/../../b.png"):
+        assert pose_gallery._normalize({**base, "原图": bad}) is None
+        assert pose_gallery._normalize({**base, "缩略图": bad}) is None
+
+
+async def test_fetch_limited_rejects_oversize():
+    """上游返回超大响应时必须中止，不能把整段内容读进内存。"""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 4096)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ValueError, match="响应"):
+            await pose_gallery._fetch_limited(
+                "https://example.com/huge", 1024, client=client
+            )
 
 
 # ── 目录缓存 ──
@@ -223,6 +256,19 @@ async def test_ensure_pose_image_rejects_bad_payload(fake_gallery, monkeypatch):
     assert exc.value.status_code == 502
 
 
+async def test_cached_bad_magic_is_redownloaded(fake_gallery):
+    """大小达标但魔数不对的缓存（半截文件/错误页）必须重新下载，不能直接复用。"""
+    folder = fake_gallery["tmp"] / "images"
+    folder.mkdir()
+    bad = folder / "full_std_P001_front.png"
+    bad.write_bytes(b"<html>error</html>" + b"x" * 4096)
+
+    path = await pose_gallery.ensure_pose_image("full_std_P001_front")
+
+    assert path.read_bytes().startswith(pose_gallery.PNG_MAGIC)
+    assert fake_gallery["calls"]["download"] == 1
+
+
 # ── 接口层（真实路由 + 假目录）──
 
 
@@ -237,5 +283,15 @@ def test_router_meta_and_list(client, fake_gallery):
     assert body["total"] == 1
     assert body["items"][0]["id"] == "upper_P003_low"
     assert body["note"]
+    assert "成人向" in body["note"]  # 不过滤 18+ 时必须在 UI 文案里明示
     # 缩略图/原图直链给前端用（<img> 展示不需要 CORS）
     assert body["items"][0]["thumb_url"].startswith("https://")
+
+
+def test_router_get_pose(client, fake_gallery):
+    """历史「带入表单」恢复姿势用：按 id 取单条，未知 id 404。"""
+    ok = client.get("/api/pose-gallery/full_std_P001_front")
+    assert ok.status_code == 200
+    assert ok.json()["id"] == "full_std_P001_front"
+
+    assert client.get("/api/pose-gallery/not_exist_pose").status_code == 404

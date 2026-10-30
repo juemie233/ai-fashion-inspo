@@ -74,3 +74,9 @@ export async function fetchPoses(query: PoseQuery = {}): Promise<PoseList> {
   const { data } = await apiClient.get<PoseList>('/pose-gallery', { params: query })
   return data
 }
+
+/** 按 id 取一条姿势（生成历史「带入表单」时恢复已选姿势）。 */
+export async function fetchPose(id: string): Promise<PoseItem> {
+  const { data } = await apiClient.get<PoseItem>(`/pose-gallery/${encodeURIComponent(id)}`)
+  return data
+}

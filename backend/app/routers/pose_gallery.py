@@ -38,3 +38,9 @@ async def list_poses(
     return await pose_gallery.list_poses(
         q=q, system=system, category=category, angle=angle, page=page, size=size
     )
+
+
+@router.get("/{pose_id}")
+async def get_pose(pose_id: str) -> dict:
+    """按 id 取一条姿势（生成历史「带入表单」恢复已选姿势用）。"""
+    return await pose_gallery.get_pose(pose_id)

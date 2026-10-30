@@ -318,4 +318,50 @@ describe('GenerateParamForm 换姿势', () => {
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
     expect(payload.pose_id).toBeUndefined()
   })
+
+  it('插入姿势描述按体系换构图词（上半身不写全身照）', async () => {
+    const upperPose = {
+      ...POSE_FIXTURE,
+      id: 'upper_P003_low',
+      name: '半身坐姿',
+      system: '上半身单人',
+      angle: '俯视',
+    }
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', upperPose)
+    await flushPromises()
+
+    const insertBtn = wrapper.findAll('button').find((b) => b.text() === '插入姿势描述')
+    await insertBtn!.trigger('click')
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
+    expect(textarea.value).toContain('上半身构图（半身照）')
+    expect(textarea.value).not.toContain('全身照')
+  })
+
+  it('带入历史参数时恢复姿势（不静默丢失）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+
+    ;(
+      wrapper.vm as unknown as {
+        applyRunPayload: (payload: Record<string, unknown>) => void
+      }
+    ).applyRunPayload({
+      prompt: '换姿势',
+      model_key: 'qwen_2_1_i2i',
+      reference_ids: ['ref-a'],
+      params: { pose_id: POSE_FIXTURE.id },
+      pose: POSE_FIXTURE,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('S形站姿')
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+  })
 })

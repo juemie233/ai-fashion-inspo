@@ -22,6 +22,7 @@ import { fetchInspirations } from '@/api/inspirations'
 import { useReferenceItems } from '@/composables/useReferenceItems'
 import ImageLightbox from '@/components/inspiration/ImageLightbox.vue'
 import { confirmImport, discardRun, exportRuns, type GenerationHistoryQuery } from '@/api/generate'
+import { fetchPose, type PoseItem } from '@/api/poseGallery'
 import { getApiErrorMessage } from '@/utils/apiError'
 
 const route = useRoute()
@@ -175,7 +176,7 @@ async function onSaveHistoryMeta(
  * 与「同参重跑」互补：那个是一键复制跑一遍，这个是先带进来改 seed / 加参考图再跑。
  * 参数直接取列表行里的快照（`params_json` 里本来就含 prompt/negative/reference_ids）。
  */
-function onApplyHistoryToForm(runId: number): void {
+async function onApplyHistoryToForm(runId: number): Promise<void> {
   const row = history.value.find((item) => item.id === runId)
   if (!row) {
     Message.warning('这条记录不在当前页：请刷新历史后重试')
@@ -183,16 +184,29 @@ function onApplyHistoryToForm(runId: number): void {
   }
   const params = (row.params ?? {}) as {
     reference_ids?: unknown
+    pose_id?: unknown
   } & Record<string, unknown>
   const refIds = Array.isArray(params.reference_ids)
     ? params.reference_ids.map(String).filter(Boolean)
     : []
+  // 姿势不丢：历史里带了 pose_id 就按 id 取回完整姿势（名称/缩略图/体系），
+  // 取不到时清空并提示重选，避免「带入表单后姿势悄悄没了」。
+  const poseId = typeof params.pose_id === 'string' ? params.pose_id : ''
+  let pose: PoseItem | null = null
+  if (poseId) {
+    try {
+      pose = await fetchPose(poseId)
+    } catch {
+      Message.warning('历史姿势已不可用，请重新选择')
+    }
+  }
   paramForm.value?.applyRunPayload({
     prompt: row.prompt,
     negative: row.negative,
     model_key: row.model_key,
     reference_ids: refIds,
     params,
+    pose,
   })
 }
 

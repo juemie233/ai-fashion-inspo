@@ -228,6 +228,10 @@ async def _execute_with_client(
         try:
             pose_path = await pose_gallery.ensure_pose_image(pose_id)
         except HTTPException as exc:
+            # 503 = 源站临时不可用/超时：交给任务重试一次（不要一刀切永久失败）；
+            # 400/404/502 = id 非法、姿势不存在、拿到非 PNG，重试也不会好。
+            if exc.status_code == 503:
+                raise
             raise PermanentTaskError(str(exc.detail)) from exc
         pose_data = await asyncio.to_thread(pose_path.read_bytes)
         uploaded_pose = await client.upload_image(pose_data, f"gen_pose_{run.id}.png")

@@ -262,3 +262,33 @@ async def test_runner_uploads_pose_as_last_reference(
     assert workflow["6"]["inputs"]["images.image_2"] == ["21", 0]
     assert workflow["21"]["inputs"]["image"] == f"up_gen_pose_{run_id}.png"
     assert run.status == "done"
+
+
+async def test_runner_pose_download_503_is_retryable(
+    client, fake_pose_gallery, monkeypatch
+):
+    """源站 503 是临时故障：抛 HTTPException 交给 worker 重试，不要当永久失败。"""
+
+    async def _down(_pose_id: str):
+        raise HTTPException(status_code=503, detail="姿势图下载失败：连接超时")
+
+    monkeypatch.setattr(pose_gallery, "ensure_pose_image", _down)
+    monkeypatch.setattr(runner, "ComfyUIClient", lambda *a, **k: _PoseClient())
+    await _add_reference_image("ref-pose-503")
+
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db,
+            {
+                "kind": "i2i",
+                "prompt": "换姿势",
+                "reference_ids": ["ref-pose-503"],
+                "pose_id": POSE_ID,
+                "count": 1,
+            },
+        )
+        task = await db.get(TaskQueue, out["task_id"])
+        with pytest.raises(HTTPException) as exc:
+            await runner.execute_image_gen(db, task)
+
+    assert exc.value.status_code == 503

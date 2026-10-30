@@ -22,6 +22,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException
@@ -41,8 +42,17 @@ POSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MIN_IMAGE_BYTES = 2048
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+"""上游响应大小硬上限：源站是第三方静态站，异常/被篡改时不能把整段响应读进内存。
+
+目录正常约 0.6 MB；原图最大约 917 KB。上限留足余量，同时挡住「错误页/超大文件」。
+"""
+MAX_CATALOG_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
 """目录接口的固定说明（前端直接展示，避免文案各写一份）。"""
-GALLERY_NOTE = "图片来自 ai-pose-gallery-zh（个人本地使用，不随项目分发）；仅供本地创作参考"
+GALLERY_NOTE = (
+    "图片来自 ai-pose-gallery-zh（含成人向内容，仅限成年人本地个人使用，不随项目分发）"
+)
 
 
 def cache_dir() -> Path:
@@ -62,8 +72,26 @@ def _base_url() -> str:
     return settings.pose_gallery_base_url.rstrip("/")
 
 
+def _safe_relative_path(value: Any) -> str | None:
+    """校验源站给的图片相对路径：只允许站内相对路径，拒绝绝对 URL 与路径穿越。
+
+    源站数据虽然可信，但它来自第三方且会被写进 ``<img src>`` 与下载请求：
+    一旦上游被篡改/换源，``https://evil``、``../`` 这类值不能原样拼进 URL。
+    """
+    path = str(value or "").strip()
+    if (
+        not path
+        or path.startswith("/")  # 绝对路径/协议相对地址一律拒绝
+        or "://" in path
+        or "\\" in path
+        or any(part == ".." for part in path.split("/"))
+    ):
+        return None
+    return path
+
+
 def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
-    """把源站一条记录归一化；字段残缺/id 非法的返回 None（脏数据不进目录）。
+    """把源站一条记录归一化；字段残缺/id/路径非法的返回 None（脏数据不进目录）。
 
     Args:
         raw: 源站 ``pose-zh.json`` 的一条记录（中文键：体系/分类/姿势名称/角度/缩略图/原图）。
@@ -78,8 +106,8 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
     system = str(raw.get("体系") or "").strip()
     if not system:
         return None
-    thumb = str(raw.get("缩略图") or "").strip()
-    original = str(raw.get("原图") or "").strip()
+    thumb = _safe_relative_path(raw.get("缩略图"))
+    original = _safe_relative_path(raw.get("原图"))
     if not thumb or not original:
         return None
     base = _base_url()
@@ -90,9 +118,48 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
         "system": system,
         "category": str(raw.get("分类") or "").strip(),
         "angle": str(raw.get("角度") or "").strip(),
-        "thumb_url": f"{base}/{thumb.lstrip('/')}",
-        "image_url": f"{base}/{original.lstrip('/')}",
+        "thumb_url": f"{base}/{thumb}",
+        "image_url": f"{base}/{original}",
     }
+
+
+async def _fetch_limited(
+    url: str,
+    max_bytes: int,
+    *,
+    timeout: float = 20.0,
+    client: httpx.AsyncClient | None = None,
+) -> bytes:
+    """流式下载并限制大小：上游异常返回超大文件时及时中止，避免占满内存。
+
+    Args:
+        url: 目标地址。
+        max_bytes: 允许的最大字节数。
+        timeout: 超时秒数。
+        client: 可选注入的 AsyncClient（测试用 MockTransport）；缺省自建并负责关闭。
+    """
+    owns_client = client is None
+    if client is None:
+        client = httpx.AsyncClient(timeout=timeout)
+    try:
+        async with client.stream(
+            "GET", url, headers={"User-Agent": "fashion-inspo-pose-gallery/1.0"}
+        ) as resp:
+            resp.raise_for_status()
+            length = resp.headers.get("content-length")
+            if length and length.isdigit() and int(length) > max_bytes:
+                raise ValueError(f"响应过大（{length} 字节，上限 {max_bytes}）")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError(f"响应超过上限（{max_bytes} 字节）")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def _fetch_catalog() -> list[dict[str, Any]]:
@@ -100,13 +167,14 @@ async def _fetch_catalog() -> list[dict[str, Any]]:
 
     Raises:
         httpx.HTTPError: 网络/状态码异常。
-        ValueError: 返回不是数组、或过滤后为空（说明上游格式变了，不能当成"没有姿势"）。
+        ValueError: 返回过大/不是数组、或过滤后为空（说明上游格式变了，不能当成"没有姿势"）。
     """
     url = f"{_base_url()}/data/pose-zh.json"
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(url, headers={"User-Agent": "fashion-inspo-pose-gallery/1.0"})
-        resp.raise_for_status()
-        raw = resp.json()
+    data = await _fetch_limited(url, MAX_CATALOG_BYTES)
+    try:
+        raw = json.loads(data)
+    except ValueError as exc:
+        raise ValueError("姿势目录不是合法 JSON（上游格式可能变了）") from exc
     if not isinstance(raw, list):
         raise ValueError("姿势目录格式异常：顶层不是数组")
     items = [item for item in (_normalize(row) for row in raw if isinstance(row, dict)) if item]
@@ -128,9 +196,13 @@ def _read_cache() -> list[dict[str, Any]] | None:
 
 
 def _write_cache(items: list[dict[str, Any]]) -> None:
-    """原子写目录缓存（先写 .part 再 replace）：半截 JSON 会被下次读成"没有缓存"。"""
+    """原子写目录缓存（唯一 .part 再 replace）：半截 JSON 会被下次读成"没有缓存"。
+
+    .part 文件名带随机后缀：并发回源（多个请求同时遇到过期缓存）不能共用同一个
+    临时文件，否则两个写入会交错出损坏的 JSON。
+    """
     path = catalog_cache_path()
-    tmp = path.with_suffix(".json.part")
+    tmp = path.with_name(f"{path.name}.{uuid4().hex}.part")
     tmp.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
 
@@ -267,17 +339,24 @@ async def get_pose(pose_id: str) -> dict[str, Any]:
 
 
 async def _fetch_image(url: str) -> bytes:
-    """下载一张姿势原图。"""
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(url, headers={"User-Agent": "fashion-inspo-pose-gallery/1.0"})
-        resp.raise_for_status()
-        return resp.content
+    """下载一张姿势原图（流式 + 大小上限，避免错误页/超大文件占满内存）。"""
+    return await _fetch_limited(url, MAX_IMAGE_BYTES, timeout=60.0)
+
+
+def _is_png(path: Path) -> bool:
+    """缓存命中时也要验 PNG 魔数：只有大小达标可能是上次写坏的半截文件/错误页。"""
+    try:
+        with path.open("rb") as fh:
+            return fh.read(len(PNG_MAGIC)) == PNG_MAGIC
+    except OSError:
+        return False
 
 
 async def ensure_pose_image(pose_id: str) -> Path:
     """确保姿势原图已下载到本地缓存，返回文件路径（出图执行器用）。
 
-    缓存按 ``<pose_id>.png`` 存：同一姿势反复使用只下载一次；文件存在且大小达标就直接用。
+    缓存按 ``<pose_id>.png`` 存：同一姿势反复使用只下载一次；文件存在、大小达标且
+    PNG 魔数正确才直接复用（损坏缓存会重新下载）。
 
     Raises:
         HTTPException: id 非法/姿势不存在（400/404）或下载失败（503/502）。
@@ -285,7 +364,7 @@ async def ensure_pose_image(pose_id: str) -> Path:
     pose = await get_pose(pose_id)
     folder = cache_dir() / "images"
     target = folder / f"{pose_id}.png"
-    if target.exists() and target.stat().st_size >= MIN_IMAGE_BYTES:
+    if target.exists() and target.stat().st_size >= MIN_IMAGE_BYTES and _is_png(target):
         return target
 
     try:
@@ -296,7 +375,8 @@ async def ensure_pose_image(pose_id: str) -> Path:
         raise HTTPException(status_code=502, detail="姿势图格式异常（非 PNG 或文件过小）")
 
     folder.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".png.part")
+    # 唯一临时名：同一姿势被两个任务并发下载时不能共用同一个 .part 文件
+    tmp = target.with_name(f"{target.name}.{uuid4().hex}.part")
     await asyncio.to_thread(tmp.write_bytes, data)
     await asyncio.to_thread(tmp.replace, target)
     logger.info(f"姿势图已缓存：{pose_id}（{len(data)} 字节）")

@@ -60,6 +60,8 @@ export interface RunPayload {
   model_key?: string | null
   reference_ids?: string[] | null
   params?: Record<string, unknown> | null
+  /** 历史批次用过的姿势（视图按 params.pose_id 查好后传入；缺省/null = 清除当前姿势） */
+  pose?: PoseItem | null
 }
 
 const emit = defineEmits<{
@@ -286,11 +288,20 @@ function clearPose(): void {
   selectedPose.value = null
 }
 
+/** 姿势体系的构图词：上半身不要硬写「全身照」，双人不要写成单人构图。 */
+function poseFraming(system: string): string {
+  if (system.includes('上半身')) return '上半身构图（半身照）'
+  if (system.includes('双人')) return '双人合照'
+  return '全身照'
+}
+
 /** 插入一段「换姿势」描述模板（可再改）：明确参考图顺序，模型才不容易把主体也改掉 */
 function insertPosePrompt(): void {
   const pose = selectedPose.value
   if (!pose) return
-  const template = `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，全身照。`
+  const template = `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，${poseFraming(pose.system)}。`
+  // 连点两下不重复追加同一段
+  if (prompt.value.includes(template)) return
   prompt.value = prompt.value.trim()
     ? `${prompt.value.trim()}
 ${template}`
@@ -413,6 +424,8 @@ function onSubmit() {
 function applyRunPayload(payload: RunPayload): void {
   if (typeof payload.prompt === 'string') prompt.value = payload.prompt
   if (typeof payload.negative === 'string') negative.value = payload.negative
+  // 姿势：历史里没有姿势就清空（避免把上一个批次的姿势带进新批次）
+  selectedPose.value = payload.pose ?? null
 
   const params = payload.params ?? {}
   const num = (key: string): number | null => {
@@ -442,6 +455,16 @@ function applyRunPayload(payload: RunPayload): void {
   if (payload.model_key && allModels.value.some((m) => m.key === payload.model_key)) {
     modelKey.value = payload.model_key
     pendingModelKey.value = ''
+  }
+  // 历史姿势必须配图生图档位：历史模型缺失/不是 i2i 时按换姿势流程挑一个 i2i 档位
+  if (
+    payload.pose &&
+    !(
+      payload.model_key &&
+      allModels.value.some((m) => m.key === payload.model_key && m.kind === 'i2i')
+    )
+  ) {
+    selectPoseModel()
   }
   Message.success('已带入历史参数，可继续修改后生成')
 }
@@ -543,7 +566,9 @@ onMounted(() => {
       <div class="gen-pose-meta">
         <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
         <div class="gen-hint">
-          {{ selectedPose.system }} / {{ selectedPose.category }} · 姿势图会作为**最后一张**
+          {{ selectedPose.system }} / {{ selectedPose.category }} · 姿势图会作为<strong
+            >最后一张</strong
+          >
           参考图参与生成
         </div>
       </div>

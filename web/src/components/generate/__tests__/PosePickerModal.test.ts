@@ -135,4 +135,45 @@ describe('PosePickerModal', () => {
     expect(wrapper.text()).toContain('姿势库暂时不可用')
     wrapper.unmount()
   })
+
+  it('快速切筛选时旧响应不会覆盖新结果', async () => {
+    const wrapper = mountPicker()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    let resolveOld!: (value: unknown) => void
+    const oldPromise = new Promise((resolve) => {
+      resolveOld = resolve
+    })
+    mocks.poses.mockReturnValueOnce(oldPromise as never)
+
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects.length).toBeGreaterThanOrEqual(2)
+
+    // 第一次筛选：请求挂起
+    selects[0].vm.$emit('update:modelValue', '上半身单人')
+    selects[0].vm.$emit('change', '上半身单人')
+    await flushPromises()
+
+    // 第二次筛选：新请求先返回
+    mocks.poses.mockResolvedValueOnce({
+      items: [POSES[1]],
+      total: 1,
+      page: 1,
+      size: 40,
+      note: META.note,
+    })
+    selects[1].vm.$emit('update:modelValue', '坐姿')
+    selects[1].vm.$emit('change', '坐姿')
+    await flushPromises()
+
+    // 旧请求迟到：必须被丢弃
+    resolveOld({ items: [POSES[0]], total: 1, page: 1, size: 40, note: META.note })
+    await flushPromises()
+
+    expect(wrapper.findAll('.pose-card')).toHaveLength(1)
+    expect(wrapper.text()).toContain('半身坐姿')
+    expect(wrapper.text()).not.toContain('S形站姿')
+    wrapper.unmount()
+  })
 })

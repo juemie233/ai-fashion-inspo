@@ -212,7 +212,6 @@ async def create_run(
             raise HTTPException(
                 status_code=400, detail=f"图生图需要 1~{max_refs} 张参考素材，当前 {len(ref_ids)} 张"
             )
-        await _assert_references_exist(db, ref_ids)
     elif ref_ids:
         # 显式报错而不是静默丢弃：静默丢弃会让用户以为「按这张图生成了」，
         # 结果却是纯文字从零画出来的图 —— 这类"看起来成功了"的错最坑
@@ -225,7 +224,8 @@ async def create_run(
         )
 
     # 姿势参考（换姿势）：只对图生图开放，且姿势图会占一张参考额度。
-    # 校验放在建批次之前：源站不可用/姿势不存在要当场报错，别让用户等一轮任务才失败。
+    # 先做这项**网络校验**再查库：load_catalog 在缓存过期时要回源（最长 20s），
+    # 不能拿着 SQLite 连接/事务去等第三方源站，否则会拖住其它写入。
     pose_id = str(payload.get("pose_id") or "").strip() or None
     if pose_id:
         if kind != "i2i":
@@ -243,6 +243,9 @@ async def create_run(
                 ),
             )
         await pose_gallery.get_pose(pose_id)
+
+    if kind == "i2i":
+        await _assert_references_exist(db, ref_ids)
 
     params = _validate_params(payload, spec)
     if pose_id:
