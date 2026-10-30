@@ -1,0 +1,126 @@
+# GitHub 调研：「X 项目 + ai-pose-gallery」到底是不是 1+1<2？
+
+> 目的：回答一个暂停开发后的疑问——GitHub 上有没有别的项目把「AI 出图/编辑」和「ai-pose-gallery（素体姿势图库）」结合？
+> 它们的组合效果是 1+1>2 还是 1+1<2？有没有我们已经踩到、但别人已经解决的坑？
+> 调研时间：2026-10-30 深夜；方式：GitHub API（仓库/issue/PR/文件）+ HuggingFace API + 实测文档逐字核对。
+> **结论先行：有，而且不止一个；大多数组合是 1+1<2 或 1+1≈1，只有一个组合（Qwen 2.1 + Pose Studio LoRA）在 2 个样本上做到了「姿势迁移 + 保留服装/发型」，是唯一值得跟进的方向。**
+
+---
+
+## 1. 生态盘点：目前有哪些「X + ai-pose-gallery」
+
+| 项目 | 规模（截至 2026-10-30） | 与图库的关系 | 性质 |
+| --- | --- | --- | --- |
+| [`anhao/ai-pose-gallery-zh`](https://github.com/anhao/ai-pose-gallery-zh) | 3,856★ / 993 fork | **图库本体**（288 组 / 1,439 张，4 体系 × 5 视角） | 静态画廊；PR #2 已合并「5 个 Agent Skills」，PR #3/#4 为 UI 与 Codex 插件（未合并） |
+| [`wangweihong/comfyui-pose-gallery`](https://github.com/wangweihong/comfyui-pose-gallery) | **120★ / 16 fork** | 节点内嵌 660 MB 完整图库 | **最完整的集成项目**：4 套实测工作流（Qwen2.1+LoRA / MOSS 深度 / Krea2 深度 / Anima 线稿） |
+| [`Stone-dielianhua/ComfyUI_Pose-Gallery_ZH`](https://github.com/Stone-dielianhua/ComfyUI_Pose-Gallery_ZH) | 46★ / 23 fork | 内嵌图库的 ComfyUI 离线节点 | 只做「浏览 + 选图 + 输出给下游节点」 |
+| [`mugicha-AI/ComfyUI-PoseAtlas`](https://github.com/mugicha-AI/ComfyUI-PoseAtlas) | 33★ / 6 fork | 同一套 1,439 张素体图（RuiC-PoseAtlas） | 图库挑选节点，图片需另行下载 |
+| [`lnyuqian/comfyui-pose-gallery`](https://github.com/lnyuqian/comfyui-pose-gallery) | 12★ | 本地图库 + **Qwen 2.1 姿势→出图** 工作流（单张/批量） | 自带 `pose-to-qwen-*.json`，README 记录了多个坑 |
+| [`icefox57/ComfyUI-Pose-Gallery`](https://github.com/icefox57/ComfyUI-Pose-Gallery) | 0★ | 同类画廊节点 | 浏览/选图 |
+| [`klarkxy/ai-gallery`](https://github.com/klarkxy/ai-gallery) | 0★（新建） | Agent Skill：检索 pose/depth/costume/face 参考图 | 检索层，不负责生成质量 |
+| [`33rd-kk/latentry`](https://github.com/33rd-kk/latentry) | 0★ | 本地出图 App（SDXL/diffusers/ComfyUI 前端），支持「从合影中提取姿势并在 3D 中转向」 | 相邻思路：姿势来源不走图库，而是照片 |
+| [`a-lgil/pose-depot`](https://github.com/a-lgil/pose-depot) | — | ControlNet 姿势集合（不是这个图库） | 素材集合，无生成链路 |
+| [`T8mars/Comfyui-Qwen-Image-2.1-MultiAngle-T8`](https://github.com/T8mars/Comfyui-Qwen-Image-2.1-MultiAngle-T8) | 96★ | Qwen 2.1 多角度生成（与「5 视角图库」同思路） | 相邻，不是图库集成 |
+| [`waveweaver.io/tools/ai-pose-gallery`](https://waveweaver.io/tools/ai-pose-gallery) | — | 营销页：声称「用 1,439 张多机位锁死角色一致性」 | **SEO/联盟营销文章**，无实际工作流与实拍验证 |
+
+> 补充：图库本体 issue #5 就是 WaveWeaver 来「通知收录」的推广；PR #2 是 Agent Skills（让 Claude Code 等按「姿势名+视角」检索图片）；
+> PR #4 是一个 Codex 本地插件（MCP 工具）——说明**社区目前主要把它当「参考资料库」用，而不是生成链路的核心**。
+
+## 2. 1+1 到底等于几：有实测证据的四种组合
+
+### 2.1 只做「浏览/装载」节点：1+1 ≈ 1
+
+Stone、PoseAtlas、icefox、以及 lnyuqian 的 Gallery 部分，都只是把图库搬进 ComfyUI：
+省去手动找图/下载，但**不改变任何生成质量**。这是目前多数项目的真实价值。
+
+### 2.2 线稿直接控制（Anima LLLite / 我们的 R2-A）：1+1 < 2（有第三方实锤）
+
+- wangweihong 的 Anima LLLite v2 实测 8 组（同一提示词、同种子，9.4 s/张）原文记录：
+  - 「单膝跪、俯卧：**肩部关节圆圈被转成服装开口或圆形装饰**」
+  - 「**蹲姿：头部上仰**，与参考头部角度存在偏移」
+  - 「服装款式、配饰和脸部可随姿势变化；**手指需要人工检查**」
+  - 「每组仅测试一个固定种子，未验证多人、所有视角及完整图库的成功率」
+- 这与我们 R2-A 的结果**完全一致**（关节圆 → 护具/圆片；俯仰角不跟随；手部需检查）。
+- 结论：**线稿直接当控制信号 = 社区和我们都复现的 1+1<2**。不是我们实现错了，是这条路的固有缺陷。
+
+### 2.3 深度控制（MOSS / Krea2）：1+1 ≈ 1.5
+
+- MOSS 工作流：姿势线稿 → `Depth Anything V2 Large` → `MOSS-Image Color/Depth Control`（LoRA）→ MOSS SFT 50 步，46.4 s；
+  作者明确写到「**提前结束深度控制用于减少素体外观**」（深度强度 0.75，结束 0.5），
+  且「手指和脸部仍由模型生成」。
+- Krea2 深度：8 步、9.4 s/张，深度约束轮廓；但作者实测总结「**手脚细节和精确关节角度仍可能偏离参考**」。
+- 结论：深度路线比线稿干净（不会把关节圆画成服装装饰），但仍然只到「轮廓对、细节偏」；
+  且 MOSS 要新增一整套模型（MOSS 主模型 + 文本编码器 + flux2 VAE + 控制 LoRA），ComfyUI 需 0.43+。
+
+### 2.4 Qwen-Image 2.1 + **Pose Studio v2 LoRA**：目前唯一「可能 1+1 > 2」
+
+wangweihong 的 Qwen 工作流（ComfyUI 0.43.0，25 步、CFG 1、Euler/simple、876×1184、17 s/张，LoRA 强度 1）：
+
+- 输入：**图库线稿 → image_1**，**人物参考 → image_2**（明确要求不要交换顺序）；
+- 提示词（英文，原文）：
+  > Replace the pose of the person in image2 with the pose shown in image1. Use image1 only as a reference for
+  > body pose, limb placement, body orientation and camera viewpoint. Preserve the identity, facial features,
+  > hairstyle, clothing, accessories, colors, visual style, background and lighting of image2. … do not copy the
+  > line drawing, mannequin appearance or annotations from image1.
+- 关键配料：**VNCCS Pose Studio QI2.1 v2 LoRA**（HF `MIUProject/VNCCS_PoseStudio_QI2.1`，**152 MB**），
+  对应仓库 `loras/qwen2.1/...safetensors`；
+- 实测（`pose_gallery_qwen21_validation.json`）：`full_sexy_P002_front`（站）与 `full_sexy_P031_front`（跪）两例，
+  17.05 s / 16.82 s，visual_review =「arms behind head and corresponding standing/kneeling pose followed;
+  **reference clothing and hairstyle retained**」；limitations =「只测了这两个单人正面姿势，不保证全部姿势」。
+
+> **这是和我们最接近、也最有价值的参照**：它证明「线稿只作姿势、人物身份和服装由 image_2 保留」在 Qwen 2.1 上
+> **可以做到**——前提是 **pose LoRA + 明确的英文提示词 + 图1=姿势/图2=人物**。
+> 我们之前失败，是因为缺了 pose LoRA，且提示词要求「换成黑裙」；不是路线本身不行。
+
+### 2.5 普通 Qwen 线稿参考（lnyuqian 的 2 个 Qwen 工作流）：1+1 < 2（作者自述）
+
+README 原文要点（对我们非常有用的坑）：
+
+- 「线稿只有人体结构，没有五官、服装、场景等。**模型容易按训练分布自由发挥**——例如把「站立单手摸头」画成
+  「举手摸头/叉腰」……实际对弱姿态提升明显。」→ 需要额外加**中文姿势描述**；
+- 「**`cfg = 1.0` 时负面提示词不生效**」（Qwen 2.1 蒸馏 LoRA 的推荐设置；我们之前也一直 cfg=1，等于负向白写）；
+- 「**姿势图是线稿人体模型，DWPose / OpenPose 等骨架检测节点识别不上**」→ 我们尝试 openpose 的想法被第三方证实希望渺茫；
+- 「`TextEncodeQwenImage21` 只取 batch 的第一张参考图；多张参考图尺寸不一致时 latent 尺寸取第一张」——
+  解释了为什么「重复线稿/批量参考」会失效。
+
+## 3. 结论：X + 图库 的「1+1」真相
+
+| 组合方式 | 1+1 效果 | 依据 |
+| --- | --- | --- |
+| 图库接入为「浏览/选图」节点 | ≈1 | 多个节点项目，只省操作 |
+| 图库线稿 → 线稿/边缘 ControlNet 直控 | **<2** | 社区 Anima 8 组实测 + 我们 R2-A |
+| 图库线稿 → 深度先验（MOSS/Krea2） | ≈1.5 | 作者实测：轮廓对、手脚/关节偏；需新模型栈 |
+| 图库线稿 + 普通 Qwen 参考 | **<2** | lnyuqian 自述模型自由发挥；我们 R1 同款 |
+| 图库线稿 + Qwen2.1 + **Pose Studio v2 LoRA** + 明确英文 prompt | **>2（2 例）** | wangweihong 实测：姿势跟随 + 服装/发型保留；样本极少，需自测扩展 |
+
+**一句话**：你的直觉成立——大多数「X + ai-pose-gallery」没有 1+1>2，甚至 <2；
+但社区里确实出现了一个「做了额外动作（+pose LoRA、+英文约束 prompt、明确图序）」后可能 >2 的组合，
+而且它正好补上了我们缺的那块。
+
+## 4. 对我们项目的直接启示与下一步
+
+1. 我们之前踩的坑**社区都踩过并记录**：关节圆变服装装饰、俯仰角不跟随、DWPose 不认线稿、cfg=1 负向无效、
+   Qwen 只认第一张参考/取第一张尺寸——这些不是我们实现错误，而是路线固有边界。
+2. **最值得补的一课**：Qwen 2.1 + **Pose Studio QI2.1 v2 LoRA（152 MB）** + 英文「image1 只作姿势、
+   image2 保留身份/服装/发型/背景」prompt + 图1=姿势/图2=人物。这是唯一被第三方实测证明「保留服装发型 +
+   换姿势」的组合，且 LoRA 很小（152 MB）。
+3. 下一步实验（暂停后待你拍板，按成本排序）：
+   - **E1（零下载）**：把我们的 Qwen 2.1 阶段2 换成该英文 prompt（图1=阶段1 姿势图、图2=主体），10 样本；
+     验证「不改模型只改 prompt/图序」能提升多少；
+   - **E2（+152 MB）**：下载 `VNCCS_QI2_PoseStudioV2.safetensors`（文件名带尾随空格，URL 需 `%20`），
+     测试能否挂到我们现有的 **int8 convrot** Qwen 模型上（社区用的是 BF16；若 int8 不支持 LoRA，
+     需评估 BF16 模型体积，可能直接放弃）；
+   - **E3（+~1.3 GB）**：`Depth Anything V2` + 我们已有的 SDXL union **depth** 控制（替代 lineart），
+     解决「关节圆」问题；不要直接搬 MOSS/Krea2 整套（新栈大、ComfyUI 0.43+）。
+4. 不建议继续：普通线稿直控（社区 + 我们双重证明 <2）、把图库当「内容参考图」喂 Qwen（我们 R1 已证 <2）。
+
+## 5. 来源
+
+- 图库本体：<https://github.com/anhao/ai-pose-gallery-zh>（含 issue #5 WaveWeaver、PR #2 Agent Skills、PR #3/#4）
+- 最完整集成项目（含 4 套实测工作流与失败记录）：<https://github.com/wangweihong/comfyui-pose-gallery>
+- Qwen 2.1 姿态编辑说明：<https://github.com/wangweihong/comfyui-pose-gallery/blob/main/example_workflows/qwen21_pose_gallery.md>
+- Pose Studio LoRA：<https://huggingface.co/MIUProject/VNCCS_PoseStudio_QI2.1>（V2 权重 159,436,400 B，文件名含尾随空格）
+- Anima 实测（关节圆→服装装饰）：<https://github.com/wangweihong/comfyui-pose-gallery/blob/main/example_workflows/anima_pose_gallery.md>
+- Qwen 工作流与已知坑：<https://github.com/lnyuqian/comfyui-pose-gallery/blob/main/workflows/README.md>
+- 其他节点：<https://github.com/Stone-dielianhua/ComfyUI_Pose-Gallery_ZH>、<https://github.com/mugicha-AI/ComfyUI-PoseAtlas>
+- WaveWeaver 营销页（说明：非实现）：<https://waveweaver.io/tools/ai-pose-gallery>
