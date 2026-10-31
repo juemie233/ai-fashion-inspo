@@ -295,7 +295,7 @@ fashion-inspo/
 - 后端格式：Python 侧 `ruff format` 同样**只对本次新增/改动的文件**跑，且**不要把它和功能改动混进同一个提交**（`ruff format` 会把文件里的历史代码一起重排，实测一次就让 `routers/tags.py`、`tag_query.py` 的 diff 里混进几十行无关改动，脏化 `git blame/bisect`）。要格式化就单独提一个 `style:` 提交
 - 前端格式：`npm run format:check` 只检查**本次改动**的前端文件（`scripts/check-web-format.mjs`；全库检查会因约 45 个历史未格式化文件永远为红（截至 2026-10-30，只减不增））、`npm run format <文件>` 增量格式化；**禁止**全库 `prettier --write`（会产生数千行无关 diff 污染 git 历史），只格式化本次改动的文件。提交时 lint-staged 已对暂存的前端文件自动 `prettier --write`
 - 一键门禁：`bash scripts/test.sh`（后端 pytest+覆盖率棘轮/ruff/迁移链自检/库漂移 + **脚本规范（只读连接/argparse）** + 前端 vue-tsc/vitest/eslint/死代码基线/格式 + **移动端 tsc/jest**，共 **13 项**（截至 2026-10-30，以脚本自身输出为准），与 `.github/workflows/ci.yml` 对齐；CI 里 `mobile` 是独立 job，装依赖用 `npm ci --legacy-peer-deps`——移动端有 peer 冲突（RNTL 12 需要 React 18））
-- 端到端冒烟：`cd web && npm run test:e2e`（Playwright，11 条、约 50 秒，截至 2026-10-30；**需后端在跑**——Playwright 只自动起前端 dev server，开跑前 `web/e2e/global-setup.ts` 会预检 `/api/health` 并给出启动命令；串行执行，产物在 `web/test-results/`）
+- 端到端冒烟：`cd web && npm run test:e2e`（Playwright，**20 条**、约 1.5 分钟，截至 2026-10-31；**需后端在跑**——Playwright 只自动起前端 dev server，开跑前 `web/e2e/global-setup.ts` 会预检 `/api/health` 并给出启动命令；串行执行，产物在 `web/test-results/`）
 - 测试依赖：`pip install -r backend/requirements-dev.txt`（后端）；vitest 等已含在 `web/package.json` devDependencies
 - **约定**：修改核心链路（软删除/垃圾桶/内容去重/破坏性接口认证/人物模块）或新增破坏性接口时，须在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
 - 误将测试文件写入真实存储目录时，用 `python scripts/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
