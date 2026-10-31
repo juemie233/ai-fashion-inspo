@@ -109,3 +109,5 @@ web/playwright-report/
 prompt_configs.json
 backend/prompt_configs.json
 
+# 换姿势/R2 实验对比图只在本地保留，不推送远程（用户 2026-10-31 要求；原图在 storage/poc）
+docs/*.jpg
