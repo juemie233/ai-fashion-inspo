@@ -31,6 +31,12 @@
 | `r2_stage2_cleanup.py` | R2 PoC 阶段2（两段式）：Qwen-Image-Edit 以 `[阶段1图, 主体]` 为参考，保姿势、去护具、换回日常服装 | `python scripts/oneoff/r2_stage2_cleanup.py --dry-run` / `--execute`（需阶段1产物） | 本机 ComfyUI + storage |
 | `pose_fidelity_ab.py` | 换姿势零成本对照实验：提示词/参考顺序/参考数量对姿势保真度的影响；也可批量随取四星素材 × 单人姿势做文字姿势测试（只读库 + 直连 ComfyUI，产物落 storage/poc/） | `--dry-run`（只打印工作流）/ `--execute`（需 ComfyUI 在 8188）/ `--batch --batch-subjects 5 --batch-poses 5 --execute` | 本机 ComfyUI + storage |
 
+## 已归档（2026-10-31）
+
+`r2_*`、`make_depth_maps.py`、`pose_fidelity_ab.py` 属于「换姿势 / R2」专项实验脚本，
+该方向已结项（见 `docs/换姿势方向结项报告-2026-10-31.md`）。**暂停维护**：保留用于复现历史实验，
+新需求不要在此基础上扩展；若要重启，先看结项报告第 6 节。
+
 ## 使用约定
 
 1. **只读优先**：诊断类脚本一律以 `sqlite3 ... ?mode=ro` 打开库（`scripts/check_scripts.py`
