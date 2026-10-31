@@ -522,7 +522,7 @@ negative_rows = (
 | `quality_learner` | AI 生成图不进负样本（决策 2 回归） | 真 sqlite |
 | 前端 | `useImageGen` 状态机、轮询停止、确认入库调用 | vitest |
 
-**门禁不变**：`bash scripts/test.sh` 11 项；覆盖率不得低于当前 70%。
+**门禁不变**：`bash scripts/ci/test.sh` 13 项；覆盖率不得低于当前 70%。
 
 ---
 

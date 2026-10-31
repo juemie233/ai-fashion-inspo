@@ -26,6 +26,8 @@ ignore = ["E501", "B008"]
 # → `from app.config import settings`），因此 E402「import 不在文件顶部」在这里是刻意为之，
 # 不是风格问题。pattern 相对本配置文件（backend/）解析，故用 `../scripts/...`。
 "../scripts/oneoff/*.py" = ["E402"]
+# 已结项归档脚本（scripts/archive）：同样是先注入 sys.path 再 import，且不再维护
+"../scripts/archive/*.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

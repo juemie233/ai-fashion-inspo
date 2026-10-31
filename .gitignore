@@ -21,13 +21,13 @@ storage/
 backend/storage/
 
 # 裁剪脚本候选清单（运行时数据）
-scripts/crop_candidates.json
+scripts/data/crop_candidates.json
 
 # OpenViking 同步增量状态（运行时数据，机器相关；删除即退化为全量同步）
-scripts/.sync_openviking_state.json
-scripts/.sync_openviking_state.json.tmp
+scripts/sync/.sync_openviking_state.json
+scripts/sync/.sync_openviking_state.json.*.tmp
 
-# 决策台账（由 scripts/sync_openviking.sh 从 git log 生成；派生数据不入库，
+# 决策台账（由 scripts/sync/sync_openviking.sh 从 git log 生成；派生数据不入库，
 # 内容与提交历史一一对应，要改就改提交，不要手改这些文件）
 docs/decisions/
 

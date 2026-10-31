@@ -19,7 +19,7 @@ from app.models.service_heartbeat import ServiceHeartbeat
 from app.utils.system_stats import disk_usage, memory_usage
 from app.utils.time import format_utc, utcnow
 
-# 前端 dev server 端口（与 scripts/restart.sh、scripts/ensure-services.sh 约定一致）
+# 前端 dev server 端口（与 scripts/ops/restart.sh、scripts/ops/ensure-services.sh 约定一致）
 _FRONTEND_PORT = 17777
 
 # worker 心跳超时阈值（秒）：超过该时长无心跳视为 worker 已死

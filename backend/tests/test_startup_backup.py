@@ -196,7 +196,7 @@ async def test_spawn_backup_calls_script(monkeypatch, tmp_path):
 
     rc = await backup_service._spawn_backup("E:/fashion-inspo-backups")
     assert rc == 0
-    # 命令形如 <bash> <scripts/backup_data.sh> E:/fashion-inspo-backups；
+    # 命令形如 <bash> <scripts/ops/backup_data.sh> E:/fashion-inspo-backups；
     # bash 可能是 PATH 中的 "bash"，也可能是探测到的绝对路径（服务环境）
     assert Path(captured["args"][0]).name.lower() in ("bash", "bash.exe")
     assert str(captured["args"][1]).endswith("backup_data.sh")

@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.host not in _loopback_hosts and not settings.api_key:
         logger.warning(
             "安全警告：当前绑定非回环地址 %s 但未配置 API_KEY，破坏性接口（物理删除/"
-            "清空垃圾桶/数据重置等）将无鉴权开放。请运行 scripts/generate_api_key.py "
+            "清空垃圾桶/数据重置等）将无鉴权开放。请运行 scripts/ops/generate_api_key.py "
             "生成密钥并写入 backend/.env，或把 host 改回 127.0.0.1（仅本机访问）。",
             settings.host,
         )

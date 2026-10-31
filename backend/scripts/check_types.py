@@ -11,7 +11,7 @@
 「新代码必须干净」的自然结果。
 
 用法：
-    cd backend && python scripts/check_types.py          # 棘轮（CI / scripts/test.sh 跑的就是这个）
+    cd backend && python scripts/check_types.py          # 棘轮（CI / scripts/ci/test.sh 跑的就是这个）
     cd backend && python scripts/check_types.py --all    # 全仓诊断（预期有存量错误，仅排查用）
 
 退出码：0=通过；1=有类型错误。

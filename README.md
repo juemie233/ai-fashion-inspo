@@ -1,6 +1,6 @@
 # AI 穿搭素材库
 
-> **[English](README.en.md) | 中文**（英文文档为翻译产物，中文为源，可用 `python scripts/translate_docs.py` 重新生成）
+> **[English](README.en.md) | 中文**（英文文档为翻译产物，中文为源，可用 `python scripts/data/translate_docs.py` 重新生成）
 
 专为个人打造的 AI 穿搭素材管理工具，通过自动化采集与视觉识别，将碎片化的穿搭内容转化为可智能检索的专属素材资产。
 
@@ -252,7 +252,7 @@ chrome_debug_port: int = 9222
 
 ### 门禁与测试体系（10-20）
 
-- `scripts/test.sh` 现在是 **12 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
+- `scripts/ci/test.sh` 现在是 **13 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/ci/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
 - **覆盖率棘轮** 67 → **69**（当前 70%）；**mypy 棘轮** 9 个模块（`check_types.py`）；**eslint 警告** 73 → 34（`--max-warnings 34`）；**死代码基线** 279 → **275** 条（`MAX_BASELINE` 上限，只降不升；跨平台路径归一化两次修正：`1b34a1c`、`8d74fd6`）。
 - 测试补齐：垃圾桶服务层 10 条（覆盖率 30%→91%）、素材创建 8 条（48%→63%）、标签 CRUD/打标/更新 11 条（顺带修「归一化后重名」500）。
 
@@ -324,7 +324,7 @@ chrome_debug_port: int = 9222
 ### 工程与索引（09-20 ~ 09-23）
 
 - `scripts/import_f2_downloads.py`（约 1.9k 行）拆成 8 个子模块 + 转发壳（`82c466f`）。
-- OpenViking 同步：改为增量上传并排除测试（`b0b95c5`）；修 dry-run 落盘、过期周文件与日志轮转（`6629729`）；新增每日增量同步包装 `scripts/sync_openviking_task.bat` + 从 git log 生成决策台账（`5072fb9`）；同步前预热 embedding 模型，消除冷启动失败窗口（`5ac5d51`）。
+- OpenViking 同步：改为增量上传并排除测试（`b0b95c5`）；修 dry-run 落盘、过期周文件与日志轮转（`6629729`）；新增每日增量同步包装 `scripts/sync/sync_openviking_task.bat` + 从 git log 生成决策台账（`5072fb9`）；同步前预热 embedding 模型，消除冷启动失败窗口（`5ac5d51`）。
 
 ## 快速启动
 
@@ -382,9 +382,9 @@ cd ../face-service
 
 浏览器打开 `http://localhost:17777`
 
-> 一键重启：`bash scripts/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker + 人脸识别子服务，并校验就绪。
+> 一键重启：`bash scripts/ops/restart.sh` 会自动停旧进程并同时拉起后端 + 前端 + worker + 人脸识别子服务，并校验就绪。
 >
-> 自动拉起：`bash scripts/ensure-services.sh` 做「健康检查 + 只启动缺失服务」，幂等且带锁。服务启停由用户手动执行（项目规则），需要重启时手动运行上述脚本即可。
+> 自动拉起：`bash scripts/ops/ensure-services.sh` 做「健康检查 + 只启动缺失服务」，幂等且带锁。服务启停由用户手动执行（项目规则），需要重启时手动运行上述脚本即可。
 
 **自定义端口：**
 
@@ -539,7 +539,7 @@ scripts\sync_openviking.bat   # 双击一键同步（需本地 OpenViking 服务
   导出完整表结构（列/索引/外键/行数）写入 `database/`；
 - 幂等（upsert），可重复执行；向量与语义摘要在后台异步生成。
 - **增量上传**：只上传有变化的文件（对比远端摘要），并排除测试文件；重复执行的开销从「全量重传」降为「按需补传」。
-- **每日增量同步**：`scripts/sync_openviking_task.bat` 供 Windows 任务计划每日调用；同时从 `git log` 生成决策台账（`docs/decisions/` 按周归档），供语义检索回溯「某个改动为什么这么做」。
+- **每日增量同步**：`scripts/sync/sync_openviking_task.bat` 供 Windows 任务计划每日调用；同时从 `git log` 生成决策台账（`docs/decisions/` 按周归档），供语义检索回溯「某个改动为什么这么做」。
 - 同步前预热 embedding 模型，消除首次同步的冷启动失败窗口；dry-run 结果落盘、过期周文件与日志自动轮转。
 
 ### 9. 启用本地出图（ComfyUI，可选）
@@ -814,15 +814,13 @@ fashion-inspo/
 │   ├── person.ts
 │   └── api.ts
 │
-└── scripts/                      # 工具脚本
-    ├── seed_tags.py              # 预设标签导入
-    ├── batch_import.py           # 批量导入本地图片
-    ├── backfill_vectors.py       # 存量素材向量回填
-    ├── restart.sh                # 一键重启前后端 + worker
-    ├── ensure-services.sh        # 幂等确保服务运行（锁 + 健康检查，手动执行）
-    ├── project_stats.py          # 项目体量统计（代码行数 / 数据与存储 / 仓库体积 / 测试数 / 最大源文件，支持 --json）
-    ├── code_report.py            # 代码量体检报告（总览 / 分布 / 结构 / 质量 / 真实库数据量，支持 --ref 固定提交、--deep 精确测试数、--json）
-    └── generate_icons.py         # 生成插件图标
+└── scripts/                      # 工具脚本（完整索引见 scripts/脚本索引.md）
+    ├── ops/                      # 运维：备份/恢复/重启/守护/状态/密钥
+    ├── ci/                       # 质量门禁、构建、代码统计
+    ├── data/                     # 素材/标签/向量/质量等数据维护
+    ├── sync/                     # OpenViking 索引同步
+    ├── oneoff/                   # 仍可用的一次性/诊断脚本
+    └── archive/                  # 已结项/归档脚本（不维护、不进门禁）
 ```
 
 ## 系统架构
@@ -1054,7 +1052,7 @@ alembic upgrade head
 > ```bash
 > pip install sentence-transformers   # 含 torch，较重
 > export HF_ENDPOINT=https://hf-mirror.com   # 国内下载 CLIP 模型用镜像
-> python scripts/backfill_vectors.py --mode all   # 存量回填（首次下载 clip-ViT-B-32 约 600MB）
+> python scripts/data/backfill_vectors.py --mode all   # 存量回填（首次下载 clip-ViT-B-32 约 600MB）
 > ```
 >
 > 未安装 CLIP 时，以图搜图接口返回 503、相似推荐自动退化为纯标签匹配，其余功能不受影响。
@@ -1313,7 +1311,7 @@ alembic upgrade head
 
 > **负样本口径（10-19 收窄）：** 垃圾桶素材默认全部作为负样本，但**排除「隐私」**——隐私图不是「穿得不好」，学进去会让初筛器把露肤/私密场景的正常穿搭判成垃圾。训练结果里给 `negative_by_reason`（排除后按删除原因分层）与 `excluded_reasons`，可直接看出负样本构成。
 
-> **说明：** 初筛器用「垃圾桶 `质量差` 负样本 + `rejected` 素材 + `approved` 正样本」的 CLIP 图像向量（512 维，LanceDB）训练轻量逻辑回归，作为质量审核前置初筛：高置信度垃圾直接拒绝，低置信度仍走 VLM 复审（「宁缺毋滥」）。阈值见 `quality_classifier_threshold`，人工翻案机制原样保留。「AI 模型管理 → 质量审核」页有状态/指标/训练/回滚面板，也可用脚本 `python scripts/quality_learner.py status|train|reset` 操作。
+> **说明：** 初筛器用「垃圾桶 `质量差` 负样本 + `rejected` 素材 + `approved` 正样本」的 CLIP 图像向量（512 维，LanceDB）训练轻量逻辑回归，作为质量审核前置初筛：高置信度垃圾直接拒绝，低置信度仍走 VLM 复审（「宁缺毋滥」）。阈值见 `quality_classifier_threshold`，人工翻案机制原样保留。「AI 模型管理 → 质量审核」页有状态/指标/训练/回滚面板，也可用脚本 `python scripts/data/quality_learner.py status|train|reset` 操作。
 
 ### 任务队列
 
@@ -1470,7 +1468,7 @@ alembic upgrade head
 | `GET` | `/api/files/{path}` | 静态文件访问                                              |
 | `WS`  | `/ws`               | WebSocket 实时推送                                        |
 
-> **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端期望值不再手工维护：dev 启动 / build 时由 `scripts/compute_schema_version.py` 调用后端代码自动计算并注入为全局常量 `__SCHEMA_VERSION__`（见 `web/vite.config.ts`）。不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」；后端改动后重启前端 dev / 重新 build 即自动对齐。
+> **schema 版本握手：** `/api/health` 返回的 `schema_version` 由「数据库结构哈希（`db_migrations.py` 的列/索引清单自动计算）+ API 契约版本（`API_CONTRACT_VERSION` 手动递增）」拼接而成。前端期望值不再手工维护：dev 启动 / build 时由 `scripts/ci/compute_schema_version.py` 调用后端代码自动计算并注入为全局常量 `__SCHEMA_VERSION__`（见 `web/vite.config.ts`）。不一致时在页面顶部弹出提示，避免后端更新未重启导致的「静默失败」；后端改动后重启前端 dev / 重新 build 即自动对齐。
 
 ## 安全加固（API 密钥）
 
@@ -1482,13 +1480,13 @@ alembic upgrade head
 
 ```bash
 # 1. 生成密钥并获取启用指引
-python scripts/generate_api_key.py
+python scripts/ops/generate_api_key.py
 
 # 2. 将输出的密钥追加到 backend/.env（脚本会打印完整指引）
 #    API_KEY=<生成的密钥>
 
 # 3. 重启后端生效
-bash scripts/restart.sh
+bash scripts/ops/restart.sh
 ```
 
 **生效后行为**：
@@ -1506,13 +1504,13 @@ bash scripts/restart.sh
 
 ```bash
 # 手动备份到独立物理盘（推荐）
-bash scripts/backup_data.sh E:/fashion-inspo-backups
+bash scripts/ops/backup_data.sh E:/fashion-inspo-backups
 
 # 从某份备份恢复（同机回滚，会先快照当前数据）
-bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-overwrite
+bash scripts/ops/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-overwrite
 ```
 
-- **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/backup_task.bat`（注册命令见 [备份恢复指南](docs/数据备份与恢复.md)）。
+- **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/ops/backup_task.bat`（注册命令见 [备份恢复指南](docs/数据备份与恢复.md)）。
 - **启动后自动补备**：后端启动 10 分钟后，若距上次成功备份超过 20 小时则自动补跑一次（`.env` 的 `BACKUP_ON_STARTUP=false` 可关闭）。两个通道通过 `backup.lock` 互斥。
 - **过期锁自愈**：上次备份被中断会残留 `backup.lock`，过去会让后续每次备份直接退出（曾整整 7 天没有新备份）。现在按锁目录 mtime 判定，超过 `BACKUP_LOCK_MAX_AGE_HOURS`（默认 6 小时）即判为残留、打印原因后清除继续。
 - **存储根跟随配置**：素材备份源与日志目录都按 `settings.storage_root` 解析（不再写死 `backend/storage`）——存储迁盘后不会静默备份旧树、也不会把日志写到旧位置。
@@ -1530,8 +1528,8 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 **一键运行全部门禁**（12 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
 
 ```bash
-bash scripts/test.sh          # 常规
-bash scripts/test.sh --cov    # 后端额外输出覆盖率报告
+bash scripts/ci/test.sh          # 常规
+bash scripts/ci/test.sh --cov    # 后端额外输出覆盖率报告
 ```
 
 ### 后端（pytest，2299 用例）
@@ -1603,7 +1601,7 @@ cd web && npm run test:e2e
 
 ### 约定
 
-- 测试使用**临时数据库与临时存储目录**，不会读写真实 `storage/` 与 `fashion_inspo.db`；如误将测试文件写入真实目录，用 `python scripts/clean_test_files.py --delete` 清理
+- 测试使用**临时数据库与临时存储目录**，不会读写真实 `storage/` 与 `fashion_inspo.db`；如误将测试文件写入真实目录，用 `python scripts/data/clean_test_files.py --delete` 清理
 - 新增破坏性接口或修改核心链路（软删除/垃圾桶/去重/认证）时，请在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
 
 ## 环境要求

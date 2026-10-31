@@ -42,7 +42,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-"""与 `scripts/backup_data.sh` 的 robocopy ``//XD`` 保持**完全一致**的排除目录。
+"""与 `scripts/ops/backup_data.sh` 的 robocopy ``//XD`` 保持**完全一致**的排除目录。
 
 为什么必须一致：复制端跳过这些目录（可重建/临时快照），校验端若仍从源端取样，
 就会把「刻意没备份」的文件报成「缺失」——2026-10-22 的备份就是这样被判失败的：

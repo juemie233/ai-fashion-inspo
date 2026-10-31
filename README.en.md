@@ -1,6 +1,6 @@
 # AI Outfit Material Library
 
-> **[English](README.en.md) | Chinese** (The English document is a translation; the Chinese version is the source and can be regenerated using `python scripts/translate_docs.py`)
+> **[English](README.en.md) | Chinese** (The English document is a translation; the Chinese version is the source and can be regenerated using `python scripts/data/translate_docs.py`)
 >
 > **Snapshot notice:** this English overview is a snapshot taken at 2026-10-21 and has **not** been re-translated for the
 > mobile-app / people-management / tag-governance work of 2026-10-22 ~ 10-24 — see the Chinese [README.md](README.md)
@@ -157,9 +157,9 @@ cd ../face-service
 
 Open `http://localhost:17777` in your browser.
 
-> One-click restart: `bash scripts/restart.sh` will automatically stop old processes and simultaneously launch the backend, frontend, worker, and face recognition sub-service, with readiness checks.
+> One-click restart: `bash scripts/ops/restart.sh` will automatically stop old processes and simultaneously launch the backend, frontend, worker, and face recognition sub-service, with readiness checks.
 >
-> Auto-start: run `bash scripts/ensure-services.sh` manually — "health checks + only starts missing services," idempotent and lock-protected. Service start/restart is manual: the coding agent will not run these scripts automatically and will prompt you when a restart is needed.
+> Auto-start: run `bash scripts/ops/ensure-services.sh` manually — "health checks + only starts missing services," idempotent and lock-protected. Service start/restart is manual: the coding agent will not run these scripts automatically and will prompt you when a restart is needed.
 
 **Custom Ports:**
 
@@ -426,7 +426,7 @@ alembic upgrade head
 > ```bash
 > pip install sentence-transformers   # includes torch, heavier
 > export HF_ENDPOINT=https://hf-mirror.com   # use mirror for downloading CLIP models in China
-> python scripts/backfill_vectors.py --mode all   # bulk backfill (first-time download of clip-ViT-B-32 ~600MB)
+> python scripts/data/backfill_vectors.py --mode all   # bulk backfill (first-time download of clip-ViT-B-32 ~600MB)
 > ```
 >
 > Without CLIP installed, the image-to-image search API returns 503, and similar recommendations degrade to pure tag matching; all other features remain unaffected.
@@ -592,7 +592,7 @@ Model photo sets are separated from fashion materials: model photos are consider
 | `POST` | `/api/ai/quality-learner/train` | Train/retrain sklearn classifier using positive/negative samples (returns metrics) |
 | `POST` | `/api/ai/quality-learner/reset` | Delete the model and roll back to pure VLM review |
 
-> **Note:** The initial screening tool trains a lightweight logistic regression model using CLIP image vectors (512-dimensional, stored in LanceDB) derived from negative samples labeled "quality poor" in the trash, rejected materials, and approved positive samples. This serves as a pre-screening step for quality review: high-confidence junk is directly rejected, while low-confidence items proceed to VLM re-review ("宁缺毋滥" — better to miss than to include falsely). Thresholds are defined in `quality_classifier_threshold`, and the manual override mechanism remains unchanged. The "AI Model Management → Quality Review" page includes panels for status, metrics, training, and rollback, and can also be operated via the script `python scripts/quality_learner.py status|train|reset`.
+> **Note:** The initial screening tool trains a lightweight logistic regression model using CLIP image vectors (512-dimensional, stored in LanceDB) derived from negative samples labeled "quality poor" in the trash, rejected materials, and approved positive samples. This serves as a pre-screening step for quality review: high-confidence junk is directly rejected, while low-confidence items proceed to VLM re-review ("宁缺毋滥" — better to miss than to include falsely). Thresholds are defined in `quality_classifier_threshold`, and the manual override mechanism remains unchanged. The "AI Model Management → Quality Review" page includes panels for status, metrics, training, and rollback, and can also be operated via the script `python scripts/data/quality_learner.py status|train|reset`.
 
 ### Task Queue
 
@@ -698,7 +698,7 @@ Model photo sets are separated from fashion materials: model photos are consider
 | `GET` | `/api/files/{path}` | Static file access |
 | `WS` | `/ws` | WebSocket real-time push |
 
-> **Schema Version Handshake:** The `schema_version` returned by `/api/health` is composed of the concatenation of the "database structure hash" (automatically calculated from the columns/indexes list in `db_migrations.py`) and the "API contract version" (`API_CONTRACT_VERSION`, manually incremented). The frontend expected value is no longer manually maintained: during dev startup or build, `scripts/compute_schema_version.py` invokes backend code to automatically compute and inject the value as the global constant `__SCHEMA_VERSION__` (see `web/vite.config.ts`). In case of inconsistency, a prompt will appear at the top of the page to avoid "silent failures" caused by backend updates without frontend restart; after backend changes, restarting the frontend dev server or rebuilding will automatically align the versions.
+> **Schema Version Handshake:** The `schema_version` returned by `/api/health` is composed of the concatenation of the "database structure hash" (automatically calculated from the columns/indexes list in `db_migrations.py`) and the "API contract version" (`API_CONTRACT_VERSION`, manually incremented). The frontend expected value is no longer manually maintained: during dev startup or build, `scripts/ci/compute_schema_version.py` invokes backend code to automatically compute and inject the value as the global constant `__SCHEMA_VERSION__` (see `web/vite.config.ts`). In case of inconsistency, a prompt will appear at the top of the page to avoid "silent failures" caused by backend updates without frontend restart; after backend changes, restarting the frontend dev server or rebuilding will automatically align the versions.
 
 ## Security Hardening (API Key)
 
@@ -708,13 +708,13 @@ Backend defaults to **not enabling** authentication (development mode). If the s
 
 ```bash
 # 1. Generate key and get enablement instructions
-python scripts/generate_api_key.py
+python scripts/ops/generate_api_key.py
 
 # 2. Append the generated key to backend/.env (script prints full instructions)
 #    API_KEY=<generated key>
 
 # 3. Restart backend to take effect
-bash scripts/restart.sh
+bash scripts/ops/restart.sh
 ```
 
 **Behavior After Activation**:
@@ -732,8 +732,8 @@ Core flow regression protection: backend `pytest` (integration tests + service u
 **Run All Tests in One Click** (backend + frontend type checking + vitest, Git Bash):
 
 ```bash
-bash scripts/test.sh          # Normal run
-bash scripts/test.sh --cov    # Backend coverage report (extra)
+bash scripts/ci/test.sh          # Normal run
+bash scripts/ci/test.sh --cov    # Backend coverage report (extra)
 ```
 
 ### Backend (pytest, 311 test cases)
@@ -767,7 +767,7 @@ Coverage: pure functions `format` / `sourceLabel` / `taskLabel` / `browseQuery`,
 
 ### Conventions
 
-- Tests use **temporary databases and temporary storage directories**, will not read/write real `storage/` or `fashion_inspo.db`; if test files are mistakenly written to real directories, clean them with `python scripts/clean_test_files.py --delete`
+- Tests use **temporary databases and temporary storage directories**, will not read/write real `storage/` or `fashion_inspo.db`; if test files are mistakenly written to real directories, clean them with `python scripts/data/clean_test_files.py --delete`
 - When adding destructive APIs or modifying core chains (soft delete/trash/deduplication/authentication), please supplement test cases in corresponding `backend/tests/` or `web/src/**/__tests__/` and ensure they pass.
 
 | Software | Purpose | Required? |

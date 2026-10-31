@@ -1,0 +1,573 @@
+#!/bin/bash
+# AI 穿搭素材库 — 数据恢复脚本
+#
+# 用法:
+#   bash scripts/ops/restore_data.sh <备份目录> [--force] [--allow-overwrite] [--from-sql]
+#
+# 示例:
+#   bash scripts/ops/restore_data.sh E:/fashion-inspo-backups/2026-08-26_102630
+#   bash scripts/ops/restore_data.sh /path/to/backup --from-sql          # .db 损坏时用 SQL 重建
+#   bash scripts/ops/restore_data.sh /path/to/backup --force             # 备份无 SUCCESS 标记也恢复
+#   bash scripts/ops/restore_data.sh /path/to/backup --allow-overwrite   # 目标已有数据时不拒绝
+#
+# 执行步骤（对应 T8）:
+#   1. 前置检查（SUCCESS 标记/磁盘空间/服务是否在跑/是否覆盖现有数据）
+#   2. 恢复前快照当前 DB + storage（移到 backend/storage/_pre_restore_snapshot/，保留7天）
+#   3. 还原数据库（默认 .db 一致性快照；--from-sql 用 fashion_inspo.sql 重建）
+#   4. robocopy 还原 storage 必备目录（_crop_backup/logs 等排除项缺失不告警）
+#   5. 还原运行时配置（.env / prompt 配置 / web/.env.local）
+#   6. 恢复后校验（integrity_check + 关键表 count 对 manifest + 抽查素材文件）
+#
+# 安全约定:
+#   - 不自动停/启后端与 worker（项目约定）：检测到服务在运行会打印停止命令并退出。
+#   - 不自动回滚：恢复后校验不一致只报错，交由人工用步骤2的快照决定。
+#
+# 退出码: 0 成功；1 参数/前置检查失败；2 恢复或校验失败
+
+set -u
+
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
+cd "$(dirname "$0")/../.."
+PROJECT_ROOT="$(pwd -W 2>/dev/null || pwd)"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+
+# 从 .env 读一个键（去引号/CR）；找不到输出空
+_env_value() {
+  local key="$1" file="$2"
+  [ -f "$file" ] || return 0
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      sub(/^[^=]*=/, "");
+      gsub(/\r$/, "");
+      gsub(/^"|"$/, "");
+      print; exit
+    }' "$file"
+}
+
+# 恢复目标存储根：优先备份里的 .env（恢复后将生效），其次当前 app.config，最后默认目录。
+# 绝不能写死 backend/storage：本机 STORAGE_ROOT 已迁到 G: 盘。
+_resolve_storage_root() {
+  local raw
+  raw="$(_env_value STORAGE_ROOT "$BACKUP/backend/.env")"
+  if [ -n "$raw" ]; then
+    case "$raw" in
+      /*|[A-Za-z]:[\\/]*) printf '%s' "$raw" ;;
+      *) printf '%s' "$BACKEND_DIR/$raw" ;;
+    esac
+    return
+  fi
+  raw="$(cd "$BACKEND_DIR" && python -c 'from app.config import settings; print(settings.storage_root)' 2>/dev/null)"
+  case "$raw" in
+    /*|[A-Za-z]:[\\/]*) printf '%s' "$raw" ;;
+    *) printf '%s' "$BACKEND_DIR/storage" ;;
+  esac
+}
+
+# ── 参数解析 ──
+BACKUP=""
+FORCE=0
+ALLOW_OVERWRITE=0
+FROM_SQL=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --force) FORCE=1; shift ;;
+    --allow-overwrite) ALLOW_OVERWRITE=1; shift ;;
+    --from-sql) FROM_SQL=1; shift ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -*) echo "未知参数: $1"; exit 1 ;;
+    *)
+      if [ -z "$BACKUP" ]; then BACKUP="$1"; else echo "多余的位置参数: $1"; exit 1; fi
+      shift ;;
+  esac
+done
+
+if [ -z "$BACKUP" ]; then
+  echo "错误：必须指定要恢复的备份目录。"
+  echo "示例: bash scripts/ops/restore_data.sh E:/fashion-inspo-backups/2026-08-26_102630"
+  exit 1
+fi
+# 规范化为绝对路径
+if [ -d "$BACKUP" ]; then
+  BACKUP="$(cd "$BACKUP" && pwd -W 2>/dev/null || pwd)"
+else
+  echo "错误：备份目录不存在: $BACKUP"
+  exit 1
+fi
+
+if [ -n "$(_env_value STORAGE_ROOT "$BACKUP/backend/.env")" ]; then
+  STORAGE_DIR_SOURCE="备份 .env"
+else
+  STORAGE_DIR_SOURCE="当前 app.config"
+fi
+STORAGE_DIR="$(_resolve_storage_root)"
+DB_PATH="$(cd "$BACKEND_DIR" && python -c 'from app.config import settings; print(settings.db_file_path)' 2>/dev/null)"
+case "$DB_PATH" in
+  /*|[A-Za-z]:[\\/]*) : ;;
+  *) DB_PATH="$BACKEND_DIR/fashion_inspo.db" ;;
+esac
+BACKEND_PORT="$(_env_value PORT "$BACKUP/backend/.env")"
+BACKEND_PORT="${BACKEND_PORT:-$(_env_value PORT "$BACKEND_DIR/.env")}"
+BACKEND_PORT="${BACKEND_PORT:-18888}"
+FRONTEND_PORT=17777
+FACE_PORT=18889
+
+echo "=============================================="
+echo "  数据恢复"
+echo "=============================================="
+echo "存储根:   $STORAGE_DIR（来源：$STORAGE_DIR_SOURCE）"
+echo "备份目录: $BACKUP"
+echo "项目根:   $PROJECT_ROOT"
+echo ""
+
+RESTORE_FAILED=0
+fail() { echo "  !!! $1"; RESTORE_FAILED=1; }
+
+# ── 步骤 1：前置检查（不改动任何数据）──
+echo ">>> [1/6] 前置检查..."
+
+# 1.1 SUCCESS 标记
+if [ ! -f "$BACKUP/SUCCESS" ]; then
+  if [ "$FORCE" -ne 1 ]; then
+    echo "  错误：该备份缺少 SUCCESS 标记，可能是不完整/失败的备份。"
+    echo "  如确认要恢复，加 --force 强制执行。"
+    exit 1
+  fi
+  echo "  告警：缺少 SUCCESS 标记，已按 --force 继续。"
+else
+  echo "  SUCCESS 标记: $(cat "$BACKUP/SUCCESS")"
+fi
+
+# 1.2 必要产物存在
+if [ "$FROM_SQL" -eq 1 ]; then
+  [ -f "$BACKUP/fashion_inspo.sql" ] || fail "指定了 --from-sql 但缺少 fashion_inspo.sql"
+else
+  [ -f "$BACKUP/fashion_inspo.db" ] || fail "缺少 fashion_inspo.db（可用 --from-sql 从 SQL 恢复）"
+fi
+[ -d "$BACKUP/storage" ] || fail "备份中缺少 storage/ 目录"
+[ -f "$BACKUP/backend/.env" ] || echo "  告警：备份中无 backend/.env（恢复后需自行配置）"
+
+# 1.2b 备份库自身完整性：先验再动现有数据，避免恢复一半才发现备份坏了
+if [ "$FROM_SQL" -eq 0 ] && [ -f "$BACKUP/fashion_inspo.db" ]; then
+  if python - "$BACKUP/fashion_inspo.db" <<'PYEOF'
+import sqlite3, sys
+con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+try:
+    sys.exit(0 if con.execute("PRAGMA integrity_check").fetchone()[0] == "ok" else 1)
+finally:
+    con.close()
+PYEOF
+  then
+    echo "  备份数据库 integrity_check 通过"
+  else
+    fail "备份数据库 integrity_check 未通过（不要用它覆盖现有数据）"
+  fi
+fi
+
+# 1.3 服务是否在运行：端口 + supervisor/状态文件里的 PID（worker 可能没有端口）
+RUNNING_DESC=""
+_port_listening() {
+  netstat -ano 2>/dev/null | grep -E "[:.]$1( |$)" | grep -qi LISTENING
+}
+for p in "$BACKEND_PORT" "$FRONTEND_PORT" "$FACE_PORT"; do
+  if _port_listening "$p"; then RUNNING_DESC="$RUNNING_DESC 端口$p"; fi
+done
+PIDS="$(python - "$PROJECT_ROOT/logs/supervisor.pid" "$PROJECT_ROOT/logs/service_status.json" <<'PYEOF'
+import json, sys
+out = []
+for path in sys.argv[1:]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    pid = data.get("pid")
+    if isinstance(pid, int):
+        out.append(pid)
+    for svc in (data.get("services") or {}).values():
+        p = (svc or {}).get("pid")
+        if isinstance(p, int):
+            out.append(p)
+print(" ".join(str(p) for p in dict.fromkeys(out)))
+PYEOF
+)"
+_pid_alive() {
+  [ -n "$1" ] || return 1
+  python - "$1" <<'PYEOF' >/dev/null 2>&1
+import os, sys
+try:
+    os.kill(int(sys.argv[1]), 0)
+except OSError:
+    raise SystemExit(1)
+PYEOF
+}
+for pid in $PIDS; do
+  if _pid_alive "$pid"; then
+    RUNNING_DESC="$RUNNING_DESC PID:$pid"
+  fi
+done
+if [ -n "$RUNNING_DESC" ]; then
+  echo "  错误：检测到服务仍在运行（$RUNNING_DESC）。"
+  echo "  请先手动停止后端/worker/前端后再恢复（项目约定脚本不自行停服务）。"
+  echo "  可在项目根执行你的停止脚本，或任务管理器结束 python 进程。"
+  exit 1
+fi
+echo "  未检测到服务运行"
+
+# 1.4 目标已有数据？（所有 storage 子目录都要看，不只看 images/person_photos）
+HAS_EXISTING=0
+if [ -f "$DB_PATH" ] || [ -d "$STORAGE_DIR" ]; then
+  for d in images person_photos trash videos thumbnails person_thumbnails lancedb; do
+    if [ -d "$STORAGE_DIR/$d" ]; then HAS_EXISTING=1; break; fi
+  done
+  # storage 根下已有任意内容也算（避免只存在 keyframes/ 等目录时跳过快照）
+  if [ "$HAS_EXISTING" -eq 0 ] && [ -d "$STORAGE_DIR" ] && [ -n "$(ls -A "$STORAGE_DIR" 2>/dev/null)" ]; then
+    HAS_EXISTING=1
+  fi
+fi
+if [ "$HAS_EXISTING" -eq 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
+  echo "  错误：目标位置已有数据（DB 或素材目录存在）。"
+  echo "  恢复会覆盖现有数据（脚本会先做快照，但仍需你显式确认）。"
+  echo "  加 --allow-overwrite 继续。"
+  exit 1
+fi
+echo "  覆盖确认: $([ "$HAS_EXISTING" -eq 1 ] && echo '已有数据，将先快照后覆盖' || echo '目标为空，直接恢复')"
+
+# 1.5 磁盘空间（粗略：备份占用 ×1.1）
+# 体积优先取 manifest.json：真实备份是 DB 500MB + storage 十几 GB / 3 万多个文件，
+# `du -sk` 在这种目录上实测要跑 2 分钟以上（2026-10-27 演练实测超时），前置检查卡住
+# 会让人以为脚本挂了；manifest 由备份脚本写入，含 db_size/sql_size/dir_stats 字节数，
+# 读取是毫秒级。只有缺 manifest 时才退回 du，并提示可能较慢。
+BK_SIZE_KB=""
+if [ -f "$BACKUP/manifest.json" ]; then
+  BK_SIZE_KB=$(python - "$BACKUP/manifest.json" <<'PYEOF'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        m = json.load(f)
+except Exception:
+    print("")
+    raise SystemExit(0)
+total = (m.get("db_size") or 0) + (m.get("sql_size") or 0)
+for _name, stats in (m.get("dir_stats") or {}).items():
+    dest = (stats or {}).get("dest") or {}
+    total += dest.get("bytes") or 0
+print(total // 1024 if total else "")
+PYEOF
+)
+fi
+if [ -z "${BK_SIZE_KB:-}" ] && command -v du >/dev/null 2>&1; then
+  echo "  提示：备份缺 manifest.json，改用 du 统计体积（大备份可能要多等一会儿）"
+  BK_SIZE_KB=$(du -sk "$BACKUP" 2>/dev/null | cut -f1)
+fi
+# 磁盘空间检查必须看**实际恢复目标**（STORAGE_ROOT 可能在另一块盘）
+SPACE_CHECK_DIR="$STORAGE_DIR"
+[ -d "$SPACE_CHECK_DIR" ] || SPACE_CHECK_DIR="$(dirname "$STORAGE_DIR")"
+[ -d "$SPACE_CHECK_DIR" ] || SPACE_CHECK_DIR="$PROJECT_ROOT"
+FREE_KB=$(df -Pk "$SPACE_CHECK_DIR" 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "${BK_SIZE_KB:-}" ] && [ -n "${FREE_KB:-}" ]; then
+  NEED_KB=$(( BK_SIZE_KB * 11 / 10 ))
+  if [ "$NEED_KB" -gt "$FREE_KB" ]; then
+    echo "  错误：磁盘空间不足（备份 ${BK_SIZE_KB}KB，需要约 ${NEED_KB}KB，可用 ${FREE_KB}KB）。"
+    echo "  检查目录：$SPACE_CHECK_DIR（恢复目标存储根：$STORAGE_DIR）"
+    exit 1
+  fi
+  echo "  磁盘空间充足（备份 $((BK_SIZE_KB/1024))MB，可用 $((FREE_KB/1024))MB）"
+fi
+
+[ "$RESTORE_FAILED" -ne 0 ] && { echo "前置检查未通过，终止。"; exit 1; }
+
+# 恢复锁：防止两个恢复进程同时移动/覆盖同一份数据
+mkdir -p "$PROJECT_ROOT/logs"
+RESTORE_LOCK="$PROJECT_ROOT/logs/restore.lock"
+if [ -d "$RESTORE_LOCK" ]; then
+  _lock_mtime="$(stat -c %Y "$RESTORE_LOCK" 2>/dev/null || echo "")"
+  case "$_lock_mtime" in
+    ''|*[!0-9]*) echo "已有恢复在进行中（锁存在），本次退出。"; exit 1 ;;
+  esac
+  if [ "$(( $(date +%s) - _lock_mtime ))" -gt 7200 ]; then
+    rm -rf "$RESTORE_LOCK"
+  else
+    echo "已有恢复在进行中（锁存在），本次退出。"
+    exit 1
+  fi
+fi
+if ! mkdir "$RESTORE_LOCK" 2>/dev/null; then
+  echo "已有恢复在进行中（锁存在），本次退出。"
+  exit 1
+fi
+trap 'rm -rf "$RESTORE_LOCK" 2>/dev/null || true' EXIT
+echo ""
+
+# ── 步骤 2：恢复前快照当前状态 ──
+SNAPSHOT_DIR=""
+if [ "$HAS_EXISTING" -eq 1 ]; then
+  echo ">>> [2/6] 快照当前数据（恢复前安全网）..."
+  STAMP="$(date +%Y-%m-%d_%H%M%S)"
+  SNAPSHOT_DIR="$STORAGE_DIR/_pre_restore_snapshot/$STAMP"
+  if ! mkdir -p "$SNAPSHOT_DIR"; then
+    echo "  错误：无法创建恢复前快照目录：$SNAPSHOT_DIR"
+    exit 1
+  fi
+  # DB（含 WAL/SHM）移动到快照；移动失败必须中止，不能带着半快照去覆盖数据
+  for f in "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm"; do
+    if [ -f "$f" ]; then
+      if mv "$f" "$SNAPSHOT_DIR/"; then
+        echo "  快照 $(basename "$f")"
+      else
+        echo "  错误：快照数据库文件失败：$f"
+        exit 1
+      fi
+    fi
+  done
+  # 当前 storage 必备目录移动到快照（被排除的 _crop_backup/logs 等保留原位，不参与恢复）
+  if [ -d "$STORAGE_DIR" ]; then
+    if ! mkdir -p "$SNAPSHOT_DIR/storage"; then
+      echo "  错误：无法创建快照 storage 目录"
+      exit 1
+    fi
+    for d in images person_photos trash videos thumbnails person_thumbnails lancedb; do
+      if [ -d "$STORAGE_DIR/$d" ]; then
+        if mv "$STORAGE_DIR/$d" "$SNAPSHOT_DIR/storage/"; then
+          echo "  快照 storage/$d"
+        else
+          echo "  错误：快照 storage/$d 失败"
+          exit 1
+        fi
+      fi
+    done
+  fi
+  echo "  快照位置: $SNAPSHOT_DIR"
+  echo "  （快照保留 7 天，由后端启动清理任务回收；如需回滚可从此处手动取回）"
+else
+  echo ">>> [2/6] 目标为空，跳过恢复前快照"
+  mkdir -p "$STORAGE_DIR"
+fi
+echo ""
+
+# ── 步骤 3：还原数据库 ──
+echo ">>> [3/6] 还原数据库..."
+if [ "$FROM_SQL" -eq 1 ]; then
+  echo "  使用 SQL 明文重建（--from-sql）..."
+  python - "$DB_PATH" "$BACKUP/fashion_inspo.sql" <<'PYEOF'
+import sqlite3, sys
+dst_path, sql_path = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(dst_path)
+with open(sql_path, encoding="utf-8") as f:
+    con.executescript(f.read())
+con.commit()
+con.close()
+print("  SQL 重建完成")
+PYEOF
+  [ $? -ne 0 ] && fail "SQL 重建失败"
+  rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
+else
+  if cp "$BACKUP/fashion_inspo.db" "$DB_PATH"; then
+    echo "  .db 快照已复制到 $DB_PATH"
+  else
+    fail "复制数据库失败：$BACKUP/fashion_inspo.db → $DB_PATH"
+  fi
+  # 清掉可能残留的 WAL/SHM，避免连接时用旧 WAL 覆盖恢复的数据
+  rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
+fi
+echo ""
+
+# ── 步骤 4：还原 storage 文件 ──
+echo ">>> [4/6] 还原素材存储（robocopy）..."
+if command -v robocopy >/dev/null 2>&1; then
+  # 逐必备目录复制（/E 含子目录；不清空目标上的排除目录，避免误删 _crop_backup 等）
+  # 被备份排除的目录（_crop_backup/logs/tmp 等）在备份中本就不存在，不告警
+  for d in images person_photos trash videos thumbnails person_thumbnails lancedb; do
+    if [ -d "$BACKUP/storage/$d" ]; then
+      robocopy "$BACKUP/storage/$d" "$STORAGE_DIR/$d" //E //R:1 //W:1 //NFL //NDL //NJH //NJS //NP >/dev/null 2>&1
+      RC=$?
+      if [ "$RC" -le 7 ]; then
+        echo "  还原 storage/$d（robocopy $RC）"
+      else
+        fail "还原 storage/$d 失败（robocopy $RC）"
+      fi
+    fi
+  done
+else
+  for d in images person_photos trash videos thumbnails person_thumbnails lancedb; do
+    if [ -d "$BACKUP/storage/$d" ]; then
+      if mkdir -p "$STORAGE_DIR/$d" && cp -r "$BACKUP/storage/$d/." "$STORAGE_DIR/$d/"; then
+        echo "  还原 storage/$d（cp）"
+      else
+        fail "还原 storage/$d 失败（cp）"
+      fi
+    fi
+  done
+fi
+echo ""
+
+# ── 步骤 5：还原运行时配置 ──
+echo ">>> [5/6] 还原运行时配置..."
+for f in backend/.env backend/prompt_configs.json backend/model_configs.json \
+         backend/prompt_versions.json backend/prompt.txt web/.env.local; do
+  if [ -f "$BACKUP/$f" ]; then
+    if mkdir -p "$PROJECT_ROOT/$(dirname "$f")" && cp "$BACKUP/$f" "$PROJECT_ROOT/$f"; then
+      echo "  还原 $f"
+    else
+      fail "还原配置失败：$f"
+    fi
+  fi
+done
+echo "  提醒：在新机器上请核对 .env 中的路径、API Key、Ollama 地址是否需要调整。"
+echo ""
+
+# ── 步骤 6：恢复后校验 ──
+echo ">>> [6/6] 恢复后校验..."
+# RESTORE_MODE 告诉校验块「这次是整文件复制还是 SQL 重建」：重建出的库不可能与备份
+# 字节一致，只能比行数，跳过 6.5 的 SHA-256 比对。
+RESTORE_MODE=$([ "$FROM_SQL" -eq 1 ] && echo sql || echo copy) \
+  python - "$DB_PATH" "$STORAGE_DIR" "$BACKUP/manifest.json" <<'PYEOF'
+import json, os, sqlite3, sys
+
+db_path, storage_dir, manifest_path = sys.argv[1], sys.argv[2], sys.argv[3]
+errors, warnings = [], []
+
+# 6.1 integrity_check
+con = sqlite3.connect(db_path)
+try:
+    ic = con.execute("PRAGMA integrity_check").fetchone()[0]
+    if ic != "ok":
+        errors.append(f"integrity_check 返回 {ic!r}")
+
+    # 6.2 关键表 count 与 manifest 比对
+    counts = {}
+    for t in ("inspirations", "tags", "inspiration_tags", "bloggers",
+              "models", "audit_logs", "ai_analysis_log", "task_queue"):
+        try:
+            counts[t] = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        except sqlite3.Error:
+            counts[t] = None
+finally:
+    con.close()
+
+manifest = {}
+if os.path.exists(manifest_path):
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    m_counts = manifest.get("table_counts", {})
+    for t, v in m_counts.items():
+        if v is not None and counts.get(t) is not None and counts[t] != v:
+            errors.append(f"表 {t} 行数不一致：备份={v} 恢复={counts[t]}")
+else:
+    warnings.append("无 manifest.json，跳过 count 比对")
+
+print("  关键表行数:", {k: v for k, v in counts.items() if v is not None})
+
+# 6.3 抽查素材文件：随机取若干 file_path 验证磁盘存在
+con = sqlite3.connect(db_path)
+try:
+    rows = con.execute(
+        "SELECT file_path FROM inspirations WHERE file_path IS NOT NULL "
+        "ORDER BY RANDOM() LIMIT 20"
+    ).fetchall()
+finally:
+    con.close()
+missing = []
+for (fp,) in rows:
+    full = os.path.join(storage_dir, fp.replace("/", os.sep))
+    if not os.path.exists(full):
+        missing.append(fp)
+if rows:
+    print(f"  抽查素材文件：{len(rows) - len(missing)}/{len(rows)} 存在")
+if missing:
+    errors.append(f"{len(missing)} 个抽查文件缺失，例如: {missing[:3]}")
+crop_ok = not os.path.isdir(os.path.join(storage_dir, "_crop_backup"))
+if crop_ok:
+    print("  _crop_backup 不存在（符合预期：该目录不纳入备份）")
+
+# 6.4 体积比对：文件存在 ≠ 文件完整。
+# 真实故障里更常见的是「复制中断/磁盘满」导致的**半截文件**——exists() 检查不出来，
+# 而用户要到打开某张图时才发现。这里按 manifest 的目录统计随机抽 200 个文件，
+# 比对「备份内文件大小」与「恢复后文件大小」。
+backup_storage = os.path.join(os.path.dirname(manifest_path), "storage")
+if os.path.isdir(backup_storage):
+    candidates = []
+    for dirpath, _dirnames, filenames in os.walk(backup_storage):
+        for name in filenames:
+            candidates.append(os.path.join(dirpath, name))
+    import random
+
+    random.seed(20261027)  # 固定种子：同样的备份每次都抽查同一批，便于复现
+    picked = random.sample(candidates, min(200, len(candidates)))
+    size_bad = []
+    for src in picked:
+        rel = os.path.relpath(src, backup_storage)
+        dst = os.path.join(storage_dir, rel)
+        if not os.path.exists(dst):
+            size_bad.append((rel, "缺失"))
+        elif os.path.getsize(dst) != os.path.getsize(src):
+            size_bad.append((rel, f"备份 {os.path.getsize(src)}B / 恢复 {os.path.getsize(dst)}B"))
+    if picked:
+        print(f"  抽查文件体积：{len(picked) - len(size_bad)}/{len(picked)} 与备份一致")
+    if size_bad:
+        errors.append(f"{len(size_bad)} 个文件体积不符（复制不完整？），例如: {size_bad[:3]}")
+else:
+    warnings.append("备份内无 storage/ 目录，跳过体积比对")
+
+# 6.5 .db 一致性：默认路径是「整文件复制」，恢复出来的库应与备份字节一致；
+# --from-sql 是重建，只能比行数（上面 6.2 已比）。这里只对复制路径做 SHA-256。
+backup_db = os.path.join(os.path.dirname(manifest_path), "fashion_inspo.db")
+if os.path.exists(backup_db) and os.environ.get("RESTORE_MODE", "") != "sql":
+    import hashlib
+
+    def _sha256(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    same = _sha256(db_path) == _sha256(backup_db)
+    print(f"  数据库字节一致性：{'一致' if same else '不一致'}")
+    if not same:
+        errors.append("恢复出的 .db 与备份 .db 字节不一致（复制不完整或已被写入）")
+
+for w in warnings:
+    print("  告警:", w)
+if errors:
+    print("  校验失败:")
+    for e in errors:
+        print("    -", e)
+    sys.exit(2)
+print("  恢复校验通过")
+PYEOF
+[ $? -ne 0 ] && fail "恢复后校验未通过"
+echo ""
+
+# ── 汇总 ──
+if [ "$RESTORE_FAILED" -ne 0 ]; then
+  echo "=============================================="
+  echo "  恢复过程存在失败项（见上方 !!! 提示）"
+  echo "=============================================="
+  if [ -n "$SNAPSHOT_DIR" ]; then
+    echo "恢复前快照保留在: $SNAPSHOT_DIR"
+    echo "如需回滚，可手动将其中的 DB / storage 移回原位。"
+  fi
+  exit 2
+fi
+
+echo "=============================================="
+echo "  恢复完成"
+echo "=============================================="
+if [ -n "$SNAPSHOT_DIR" ]; then
+  echo "恢复前快照: $SNAPSHOT_DIR"
+fi
+echo ""
+echo "后续步骤（请手动执行，脚本不自动启停服务）："
+echo "  1. 如有需要，运行数据库迁移：cd backend && alembic upgrade head"
+echo "  2. 确认 Ollama 已启动、所需模型已 pull（qwen3-vl:8b-instruct、all-minilm）"
+echo "  3. 启动后端/前端/worker"
+echo "  4. 验证：打开后台 / GET /api/health，核对素材数、抽查图片、搜索标签"
+echo ""
+echo "定期备份的计划任务（schtasks）不会随恢复迁移，新机器需重新注册，见"
+echo "docs/数据备份与恢复.md。"
+exit 0

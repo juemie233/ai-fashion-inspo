@@ -1,6 +1,6 @@
 name: CI
 
-# 质量门禁：push / PR 到主分支时自动执行，与本地 `scripts/test.sh` 对齐。
+# 质量门禁：push / PR 到主分支时自动执行，与本地 `scripts/ci/test.sh` 对齐。
 #   前端 job：ESLint（棘轮）+ vitest + vue-tsc + 死代码基线（ts-prune，只拦新增）
 #   后端 job：ruff（零告警）+ vulture（死代码）+ mypy 棘轮 + 迁移链自检（空库 → 与 ORM 一致）
 #             + 脚本规范（只读连接 / argparse）+ pytest 全量 + 覆盖率棘轮（≥82%）
@@ -13,7 +13,7 @@ name: CI
 # 否则会去找 web/scripts 或 backend/scripts 而报「No such file」（2026-10-28 踩过）。
 #
 # ⚠️ 只有 GitHub 镜像会触发本工作流：`origin` 指向 gitee，gitee 侧没有 CI。
-# 所以推 gitee 前请先在本地跑 `bash scripts/test.sh`——那是唯一能在推送前拦住问题的门。
+# 所以推 gitee 前请先在本地跑 `bash scripts/ci/test.sh`——那是唯一能在推送前拦住问题的门。
 #
 # 开发阶段约定：项目当前仅在本地运行（npm run dev + uvicorn），尚未进入
 # 部署阶段，CI 不做产物构建（vite build）——只保留能抓问题的 lint / 类型
@@ -55,7 +55,7 @@ jobs:
         run: npm run type-check
 
       - name: 死代码基线（ts-prune，只拦新增）
-        run: node ../scripts/check-web-dead-code.mjs
+        run: node ../scripts/ci/check-web-dead-code.mjs
 
   mobile:
     name: 移动端（tsc / jest）
@@ -111,7 +111,7 @@ jobs:
           # 生产环境（wheel 与 CPU 匹配）真实运行。
           pip uninstall -y hnswlib
 
-      # 后端 lint：与本地 `scripts/test.sh` 同一道门禁（存量已于 2026-10 清零）
+      # 后端 lint：与本地 `scripts/ci/test.sh` 同一道门禁（存量已于 2026-10 清零）
       - name: ruff（零告警：app + 脚本目录）
         run: python -m ruff check app scripts ../scripts
 
@@ -136,11 +136,11 @@ jobs:
       # 脚本以读写方式打开），入口必须用 argparse。scripts 不计覆盖率，只能静态兜。
       #
       # ⚠️ 必须显式指定工作目录：本 job 的默认 `working-directory: backend`，
-      # 直接写 `python scripts/check_scripts.py` 会去找 backend/scripts/...（不存在）
-      # 而整步报 exit 2（2026-10-28 实测）。校验脚本在**仓库根**的 scripts/ 下。
+      # 直接写 `python scripts/ci/check_scripts.py` 会去找 backend/scripts/...（不存在）
+      # 而整步报 exit 2（2026-10-28 实测）。校验脚本在**仓库根**的 scripts/ci/ 下。
       - name: 脚本规范（只读连接 / CLI 入口）
         working-directory: ${{ github.workspace }}
-        run: python scripts/check_scripts.py
+        run: python scripts/ci/check_scripts.py
 
       # 测试使用临时数据库/临时存储（项目约定），不触碰真实数据；
       # 真实爬虫 / Ollama / face-service 依赖外部环境的用例在 CI 中走 mock。

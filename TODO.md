@@ -117,7 +117,7 @@
 | `backend/scripts/scraper_xhs.py` | 博主模式优先走接口，回退详情页路径 |
 | `backend/scripts/scraper_common.py` | 原图 trace_id 保留中间路径段（修复 CDN 404 回落压缩图） |
 | `backend/scripts/run_scraper.py` | 详情页采集 + 视频下载（搜索模式待接入） |
-| `scripts/diagnose_note_detail.py` | 详情页 DOM 诊断（已存在） |
+| `scripts/oneoff/diagnose_note_detail.py` | 详情页 DOM 诊断（已存在） |
 
 **验收标准：**
 

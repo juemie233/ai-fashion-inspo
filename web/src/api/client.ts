@@ -40,12 +40,12 @@ apiClient.interceptors.response.use(
     if (status === 401 || status === 403) {
       console.warn(
         `[API 认证] ${msg} —— 若已启用 API 密钥，请在控制台执行 ` +
-          `localStorage.setItem('apiKey', '<密钥>') 后刷新（生成方式见 scripts/generate_api_key.py）`
+          `localStorage.setItem('apiKey', '<密钥>') 后刷新（生成方式见 scripts/ops/generate_api_key.py）`,
       )
     }
     console.error(`[API Error] ${msg}`)
     return Promise.reject(error)
-  }
+  },
 )
 
 export default apiClient

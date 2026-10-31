@@ -45,7 +45,7 @@ def _take_pre_reset_snapshot() -> tuple[Path | None, int]:
 
     person_photos/ trash/ 等目录 reset 本身不删除文件，故不纳入快照（不扩大
     reset 的破坏面，也省去 ~800MB 拷贝）。快照位于项目盘，只防误操作、不防
-    磁盘损坏——那是定时异盘备份（scripts/backup_data.sh）的职责。
+    磁盘损坏——那是定时异盘备份（scripts/ops/backup_data.sh）的职责。
 
     返回 (快照目录, 从活动存储移走的文件数)；快照失败时返回 (None, 0)。
     """

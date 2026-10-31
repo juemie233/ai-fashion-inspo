@@ -27,9 +27,9 @@ _STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{6})$")
 
 # 项目根目录（backend/app/services/backup_service.py → 上三级到项目根）
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-BACKUP_SCRIPT = PROJECT_ROOT / "scripts" / "backup_data.sh"
+BACKUP_SCRIPT = PROJECT_ROOT / "scripts" / "ops" / "backup_data.sh"
 
-# Git Bash 常见安装路径（与 scripts/backup_task.bat 保持一致）。
+# Git Bash 常见安装路径（与 scripts/ops/backup_task.bat 保持一致）。
 # 后端若以服务方式运行，PATH 中往往没有 bash，需按绝对路径探测。
 _BASH_CANDIDATES = (
     r"D:\Program Files (x86)\Git\bin\bash.exe",

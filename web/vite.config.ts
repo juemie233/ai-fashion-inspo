@@ -13,7 +13,7 @@ import { execSync } from 'child_process'
  */
 function resolveSchemaVersion(): string {
   try {
-    const out = execSync('python scripts/compute_schema_version.py', {
+    const out = execSync('python scripts/ci/compute_schema_version.py', {
       cwd: resolve(__dirname, '..'),
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],

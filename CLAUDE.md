@@ -7,9 +7,9 @@
 3. **用户界面文案**：所有页面提示、警告、错误信息、状态标签、按钮文字、空状态引导等，一律使用中文
 4. **数据内容**（标签名、AI prompt 等）：使用中文
 5. **禁止启动子代理**：项目内的一切开发工作（含代码迁移、重构、批量修改等）均由主会话直接完成，**不得启动 subagent / 子代理 / 并行代理**。需要并行或拆解的工作，改为在主会话内顺序执行或自行批量处理，保证每个改动的上下文完整、可追溯。
-6. **服务启停由用户手动执行**：**禁止自动执行一键重启/启动脚本**（`scripts/restart.sh`、`scripts/ensure-services.sh` 等涉及服务启停的脚本）。当代码改动需要重启后端/前端/worker 才能生效时，**不得自行执行脚本**，只需明确提示用户「需要重启服务」，由用户手动执行。
+6. **服务启停由用户手动执行**：**禁止自动执行一键重启/启动脚本**（`scripts/ops/restart.sh`、`scripts/ops/ensure-services.sh` 等涉及服务启停的脚本）。当代码改动需要重启后端/前端/worker 才能生效时，**不得自行执行脚本**，只需明确提示用户「需要重启服务」，由用户手动执行。
 7. **时间列单行显示**：所有表格/列表中的时间列必须保持单行（`white-space: nowrap`），禁止换行；新增或修改时间列时同样遵守（Arco 表格单元格默认 `word-break: break-all`，时间字符串在窄列下会被断行，需显式加 nowrap）。实现约定：render 函数列统一用 `web/src/utils/format.ts` 的 `renderTimeCell(text, extra?)`（内部包 nowrap span，extra 可附加颜色/class）；模板列包 `<span style="white-space: nowrap">`。
-8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils,router,constants,styles,assets}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/`、`scripts/`（含 `scripts/oneoff/` 一次性脚本））。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
+8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils,router,constants,styles,assets}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/`、`scripts/{ops,ci,data,sync,oneoff,archive}`（各目录职责见 `scripts/脚本索引.md`））。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
    - **例外**：业务确实需要新位置（新增顶层文件、新增目录、必须落在仓库外）时，**先说明理由并征得用户同意**；若属长期结构，同意后同步登记进「项目结构」一节，使其成为「已登记」位置。
    - **临时文件**（排查脚本、一次性诊断、提交信息草稿等）可以直接创建，但必须满足两条：**用完即删**（`git status` 自查，不得残留）且**不得入库**（不 `git add`、不提交）；优先落在系统临时目录或已 gitignore 的位置，不得把临时产物留在仓库根、`scripts/`、`storage/` 里冒充交付物。
    - **判据**：提交前问自己「这个新文件的位置在本文档里登记过吗」——没有登记且未经同意，就换到已登记位置，或先来问。
@@ -112,7 +112,13 @@ fashion-inspo/
 ├── browser-extension/     # Chrome 浏览器插件
 ├── shared/types/          # 前后端共享的类型定义
 ├── docs/                  # 方案 / 实现说明、实验报告、移动端构建手册
-└── scripts/               # 工具脚本（oneoff/ 为一次性/诊断脚本，见其 README）
+└── scripts/               # 工具脚本（索引见 scripts/脚本索引.md）
+    ├── ops/               # 运维：备份/恢复/重启/守护/状态/密钥
+    ├── ci/                # 质量门禁、构建、代码统计
+    ├── data/              # 素材/标签/向量/质量等数据维护
+    ├── sync/              # OpenViking 索引同步
+    ├── oneoff/            # 仍可用的一次性/诊断脚本
+    └── archive/           # 已结项/归档脚本（不维护、不进门禁）
 ```
 
 ## API 设计约定
@@ -293,12 +299,12 @@ fashion-inspo/
 - 移动端：`cd mobile && npm test`（jest-expo + @testing-library/react-native；含**裸字符串检查**——遍历渲染树断言非 `<Text>` 节点下没有字符串/数字，专门防 `Text strings must be rendered within a <Text> component` 这类只有原生 RN 才会拦、Web 预览与普通渲染测试都发现不了的白屏；改页面后请补一条渲染用例）
 - 前端 lint：`cd web && npm run lint`（ESLint flat config + Prettier 协同；要求 0 error，`no-explicit-any` 等告警渐进清理）
 - 后端格式：Python 侧 `ruff format` 同样**只对本次新增/改动的文件**跑，且**不要把它和功能改动混进同一个提交**（`ruff format` 会把文件里的历史代码一起重排，实测一次就让 `routers/tags.py`、`tag_query.py` 的 diff 里混进几十行无关改动，脏化 `git blame/bisect`）。要格式化就单独提一个 `style:` 提交
-- 前端格式：`npm run format:check` 只检查**本次改动**的前端文件（`scripts/check-web-format.mjs`；全库检查会因约 45 个历史未格式化文件永远为红（截至 2026-10-30，只减不增））、`npm run format <文件>` 增量格式化；**禁止**全库 `prettier --write`（会产生数千行无关 diff 污染 git 历史），只格式化本次改动的文件。提交时 lint-staged 已对暂存的前端文件自动 `prettier --write`
-- 一键门禁：`bash scripts/test.sh`（后端 pytest+覆盖率棘轮/ruff/迁移链自检/库漂移 + **脚本规范（只读连接/argparse）** + 前端 vue-tsc/vitest/eslint/死代码基线/格式 + **移动端 tsc/jest**，共 **13 项**（截至 2026-10-30，以脚本自身输出为准），与 `.github/workflows/ci.yml` 对齐；CI 里 `mobile` 是独立 job，装依赖用 `npm ci --legacy-peer-deps`——移动端有 peer 冲突（RNTL 12 需要 React 18））
+- 前端格式：`npm run format:check` 只检查**本次改动**的前端文件（`scripts/ci/check-web-format.mjs`；全库检查会因约 45 个历史未格式化文件永远为红（截至 2026-10-30，只减不增））、`npm run format <文件>` 增量格式化；**禁止**全库 `prettier --write`（会产生数千行无关 diff 污染 git 历史），只格式化本次改动的文件。提交时 lint-staged 已对暂存的前端文件自动 `prettier --write`
+- 一键门禁：`bash scripts/ci/test.sh`（后端 pytest+覆盖率棘轮/ruff/迁移链自检/库漂移 + **脚本规范（只读连接/argparse）** + 前端 vue-tsc/vitest/eslint/死代码基线/格式 + **移动端 tsc/jest**，共 **13 项**（截至 2026-10-30，以脚本自身输出为准），与 `.github/workflows/ci.yml` 对齐；CI 里 `mobile` 是独立 job，装依赖用 `npm ci --legacy-peer-deps`——移动端有 peer 冲突（RNTL 12 需要 React 18））
 - 端到端冒烟：`cd web && npm run test:e2e`（Playwright，**20 条**、约 1.5 分钟，截至 2026-10-31；**需后端在跑**——Playwright 只自动起前端 dev server，开跑前 `web/e2e/global-setup.ts` 会预检 `/api/health` 并给出启动命令；串行执行，产物在 `web/test-results/`）
 - 测试依赖：`pip install -r backend/requirements-dev.txt`（后端）；vitest 等已含在 `web/package.json` devDependencies
 - **约定**：修改核心链路（软删除/垃圾桶/内容去重/破坏性接口认证/人物模块）或新增破坏性接口时，须在对应 `backend/tests/` 或 `web/src/**/__tests__/` 补充用例并跑通
-- 误将测试文件写入真实存储目录时，用 `python scripts/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
+- 误将测试文件写入真实存储目录时，用 `python scripts/data/clean_test_files.py --delete` 清理（判定：DB 无记录 + 测试时段 + 纯色小图）
 
 ## 移动端构建（Android APK）
 

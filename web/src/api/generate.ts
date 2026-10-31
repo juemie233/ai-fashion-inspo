@@ -8,7 +8,7 @@ import apiClient from '@/api/client'
 /** 单个出图档位的元信息（来自后端 MODEL_SPECS，前端不写死档位名与文案）。
  *
  * 不 export：只作为 {@link GenerateStatus.models_meta} 的结构使用，模块外无人引用 ——
- * 导出会被 ts-prune 判成死代码（scripts/check-web-dead-code.mjs）。
+ * 导出会被 ts-prune 判成死代码（scripts/ci/check-web-dead-code.mjs）。
  */
 interface GenerateModelMeta {
   label: string

@@ -22,7 +22,7 @@
 | 提示词 | 社区原文英文约束（Replace the pose of the person in image2 with image1's pose… preserve image2 identity/clothing… do not copy line drawing/mannequin appearance） |
 | 图序 | 图 1 = 图库姿势线稿（或 R2 阶段1 图）；图 2 = 主体素材 |
 | 参数 | 25 steps、CFG 1.0、Euler / simple、resolution 1024；seed = 20261029+i；**参考图保持原始比例**（压成方图会破坏姿势，已修正） |
-| 脚本 | `scripts/oneoff/r2_qwen_en_prompt_eval.py --execute …` |
+| 脚本 | `scripts/archive/r2_qwen_en_prompt_eval.py --execute …` |
 
 ## 2. 六组对比结果
 
