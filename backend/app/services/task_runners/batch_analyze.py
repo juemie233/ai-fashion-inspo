@@ -267,11 +267,17 @@ def _raise_if_all_failed(
 
 
 async def _inflight_excluding(db: AsyncSession, task_id: int) -> set[str]:
-    """收集除当前任务外、所有未完成（pending/running）batch/multi 任务认领的素材 ID。
+    """收集**较早创建的**未完成（pending/running）batch/multi 任务认领的素材 ID。
 
     并发批处理时，若两个任务都包含同一素材 ID，两个 worker 会各分析一次——
     这是跨任务重复分析的主因之一。本函数给出「已被其它任务认领」的集合，
     让当前任务在加载待分析素材时豁免这些 ID，交由所属任务处理。
+
+    **只豁免 id 更小（更早创建）的任务**，不能「互相豁免」：两个任务覆盖同一批素材时，
+    若双方都把对方的素材豁免掉，两边都会变成待分析 0 条——任务显示成功，素材却
+    一张都没分析（实测复现：两个 batch_analyze 并发跑同一批 5 张图，`_analyze_one`
+    调用 0 次）。按 id 排序做**单向**让位（老任务拥有素材、新任务跳过），既避免重复
+    分析，也保证不会互锁：id 单调递增，让位关系无环。
     """
     from app.models.task import TaskQueue
 
@@ -279,9 +285,15 @@ async def _inflight_excluding(db: AsyncSession, task_id: int) -> set[str]:
         select(TaskQueue.result).where(
             TaskQueue.type.in_(("batch_analyze", "multi_analyze")),
             TaskQueue.status.in_(("pending", "running")),
-            TaskQueue.id != task_id,
+            TaskQueue.id < task_id,
         )
     )
+    ids: set[str] = set()
+    for (result,) in rows:
+        if isinstance(result, dict):
+            for iid in result.get("inspiration_ids") or []:
+                ids.add(iid)
+    return ids
     ids: set[str] = set()
     for (result,) in rows:
         if isinstance(result, dict):

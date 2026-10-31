@@ -189,18 +189,27 @@ async def test_load_done_ids_matches_model_and_prompt_version():
     assert other_prompt == set()
 
 
-async def test_inflight_excluding_reads_other_unfinished_tasks():
-    """并发任务互斥：别的 pending/running 任务认领的素材要豁免。"""
+async def test_inflight_excluding_only_yields_to_earlier_tasks():
+    """并发任务互斥是**单向**的：只豁免「更早创建（id 更小）」的任务。
+
+    若双向豁免，两个任务覆盖同一批素材时会互相让位，双方都变成待分析 0 条
+    （任务显示成功、素材一张都没分析，实测可复现）——所以这里锁住 id 顺序语义。
+    """
+    earlier = await _task(ids=["b", "c"])
     mine_id = await _task(ids=["a"])
-    await _task(ids=["b", "c"])
     await _task(status="success", ids=["d"])  # 已完成的不管
 
     async with async_session() as db:
         inflight = await ba._inflight_excluding(db, mine_id)
 
-    assert inflight == {"b", "c"}
+    assert inflight == {"b", "c"}  # 只让位给更早的那个任务
     assert "a" not in inflight  # 自己认领的不算
-    assert "d" not in inflight
+    assert "d" not in inflight  # 已完成的不管
+    assert earlier < mine_id
+
+    # 反向：更早的任务不会让位给后来者（否则又变成互锁）
+    async with async_session() as db:
+        assert await ba._inflight_excluding(db, earlier) == set()
 
 
 # ── 全失败判定 ──

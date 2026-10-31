@@ -54,16 +54,28 @@ async def test_inflight_ids_collects_pending_running_only(client):
     assert "insp-f" not in ids
 
 
-async def test_inflight_excluding_omits_other_tasks(client):
-    """_inflight_excluding：排除其它未完成任务的素材，但保留当前任务自己的素材。"""
+async def test_inflight_excluding_yields_only_to_earlier_tasks(client):
+    """_inflight_excluding：只豁免**更早创建**的未完成任务所认领的素材。
+
+    语义是单向让位（老任务拥有素材、新任务跳过）。不能双向豁免：两个任务覆盖同一批
+    素材时，双向会让双方都变成「待分析 0 条」——任务显示成功、素材一张都没分析
+    （2026-10-31 实测复现，见 tests/test_integration_worker_concurrency.py）。
+    """
+    earlier = await _add_task(
+        ["insp-other", "insp-self"], status="running", type_="batch_analyze"
+    )
     cur = await _add_task(["insp-self"], status="running", type_="batch_analyze")
-    await _add_task(["insp-other", "insp-self"], status="running", type_="batch_analyze")
+    assert earlier < cur
 
     async with async_session() as db:
         inflight = await _inflight_excluding(db, cur)
-    # 其他任务认领 insp-self 也被视为进行中（跨任务去重），并含 insp-other
+    # 更早的任务认领的两个素材都算进行中（跨任务去重）
     assert "insp-other" in inflight
     assert "insp-self" in inflight
+
+    # 反向：更早的任务不让位给后来者（否则又变成互锁 → 谁也不分析）
+    async with async_session() as db:
+        assert await _inflight_excluding(db, earlier) == set()
 
 
 async def test_unanalyzed_ids_excludes_inflight(client, upload):
