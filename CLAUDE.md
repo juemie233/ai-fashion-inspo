@@ -210,7 +210,9 @@ fashion-inspo/
 
 注意事项：
 - **默认分支固定为 `master`**：开发、提交、推送一律在 `master` 上进行（`git push origin master`）；功能分支只在用户明确要求时使用，且分支合并后**不要**继续在旧分支上提交。
-- **不再按行数决定是否提交**：任何类型（feat / fix / refactor / style / docs / chore）的改动，完成后一律自动 `git commit` 并 `git push origin master`。**唯一例外**：用户明确说了「先别提交」。
+- **不再按行数决定是否提交**：任何类型（feat / fix / refactor / style / docs / chore）的改动，完成后一律自动 `git commit`。
+- **暂停自动推送远程（2026-10-30 起）**：只 `git commit`，**不得 `git push`**（任何分支、任何远端），直到用户明确说「可以推送」。
+  待允许后再按默认规则推 `origin`（github + gitee 双端）。**唯一例外**：用户明确说了「先别提交」。
 - **提交粒度仍见下节**：自动提交 ≠ 碎片提交 —— 同一轮的 docs/chore 小改合并成一条，避免历史被格式/文档噪音刷屏。
 - **推送后不要等 CI**：提交推送完成即结束本轮，**禁止**轮询 / 等待 / 查询 GitHub Actions 结果（不调 CI 接口、不 `sleep` 等结果）。CI 是否通过由用户在 GitHub 上查看；若失败，用户会把错误信息贴回来，届时再修。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。

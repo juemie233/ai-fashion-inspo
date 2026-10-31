@@ -35,6 +35,7 @@ from app.routers import (
     face_scan,
     health,
     collections,
+    pose_gallery,
 )
 from app.utils.auth import is_destructive_route
 from app.exceptions import (
@@ -332,6 +333,7 @@ app.include_router(face_scan.match_router)
 app.include_router(generate.router)
 app.include_router(health.router)
 app.include_router(collections.router)
+app.include_router(pose_gallery.router)
 
 
 @app.get("/api/health")

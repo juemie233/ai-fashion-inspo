@@ -13,6 +13,9 @@ import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { shortModelLabel } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
+import PosePickerModal from '@/components/generate/PosePickerModal.vue'
+import QuickPoseBatchPanel from '@/components/generate/QuickPoseBatchPanel.vue'
+import type { PoseItem } from '@/api/poseGallery'
 import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
@@ -39,6 +42,8 @@ const props = defineProps<{
    *  默认值仍然不会自动选中未审查权重（那条规则管的是「别替用户做风险选择」）。
    */
   initialModelKey?: string
+  /** 从素材详情「换个姿势」跳进来：挂载后自动打开姿势选择器（空串=false） */
+  initialPoseLib?: boolean
   /** 从素材反推描述（沿用视图里 useImageGen 的实现） */
   promptFrom: (ids: string[]) => Promise<string | null>
   /** 已选参考图的缩略图数据（视图按 referenceIds 拉好后传下来；顺序=参考顺序）。
@@ -56,6 +61,8 @@ export interface RunPayload {
   model_key?: string | null
   reference_ids?: string[] | null
   params?: Record<string, unknown> | null
+  /** 历史批次用过的姿势（视图按 params.pose_id 查好后传入；缺省/null = 清除当前姿势） */
+  pose?: PoseItem | null
 }
 
 const emit = defineEmits<{
@@ -209,6 +216,32 @@ function selectModelByKind(target: 't2i' | 'i2i'): void {
   if (pick) modelKey.value = pick.key
 }
 
+/** 换姿势默认走**未审查版**改款档位（`qwen_2_1_uc_i2i`，档位表里的第三个）。
+ *
+ * 为什么不像「用这张图改款」那样按 kind 挑「就绪且非未审查」：姿势图库里包含成人向
+ * 姿势，有审查权重会拦提示词/改图，换姿势经常直接失效；而用户点「换个姿势」本身
+ * 就是明确的知情选择（详情页按钮、姿势选择器都只在这个流程出现），所以默认用未审查版。
+ *
+ * 兜底：旧后端没有未审查档位（或权重没放好）时退回就绪的普通改款档位，保证还能用；
+ * 档位表还没探测回来时记下意图（pendingModelKey），等列表到达由 watch 认领。
+ */
+const POSE_MODEL_KEY = 'qwen_2_1_uc_i2i'
+function selectPoseModel(): void {
+  const pool = allModels.value.filter((m) => m.kind === 'i2i')
+  const pick =
+    pool.find((m) => m.uncensored && m.ready) ??
+    pool.find((m) => m.uncensored) ??
+    pool.find((m) => m.ready) ??
+    pool[0]
+  if (pick) {
+    modelKey.value = pick.key
+    pendingModelKey.value = ''
+    return
+  }
+  pendingModelKey.value = POSE_MODEL_KEY
+  pendingKind.value = 'i2i'
+}
+
 // ── 参数 ──
 const prompt = ref('')
 const negative = ref('')
@@ -234,7 +267,99 @@ const height = computed(() => sizeDims.value[1] ?? 1024)
 // ── 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 ──
 const refIdsText = ref('')
 const refIdsList = computed(() => splitIds(refIdsText.value))
-const refCountOk = computed(() => refIdsList.value.length >= 1 && refIdsList.value.length <= 10)
+
+// ── 姿势参考（换姿势）：单选，姿势图占一张参考额度 ──
+// 为什么占额度：执行器把姿势图作为**最后一张参考图**上传，Qwen-Image 2.1 最多 10 张，
+// 所以选了姿势后主体参考最多 9 张（后端同样会校验，前端提前拦住给出可读提示）。
+const posePickerVisible = ref(false)
+const selectedPose = ref<PoseItem | null>(null)
+const maxRefs = computed(() => (selectedPose.value ? 9 : 10))
+const refCountOk = computed(
+  () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
+)
+
+/** 选中姿势：切到图生图**未审查版**档位（换姿势默认用第三个档位，见 selectPoseModel） */
+function onPoseSelected(pose: PoseItem): void {
+  selectedPose.value = pose
+  selectPoseModel()
+  Message.success(`已选姿势：${pose.name}`)
+}
+
+function clearPose(): void {
+  selectedPose.value = null
+}
+
+/** 姿势体系的构图词：上半身不要硬写「全身照」，双人不要写成单人构图。 */
+function poseFraming(system: string): string {
+  if (system.includes('上半身')) return '上半身构图（半身照）'
+  if (system.includes('双人')) return '双人合照'
+  return '全身照'
+}
+
+/** 插入一段「换姿势」描述模板（可再改）：明确参考图顺序，模型才不容易把主体也改掉 */
+function insertPosePrompt(): void {
+  const pose = selectedPose.value
+  if (!pose) return
+  const template = buildPosePrompt(pose)
+  // 连点两下不重复追加同一段
+  if (prompt.value.includes(template)) return
+  prompt.value = prompt.value.trim()
+    ? `${prompt.value.trim()}
+${template}`
+    : template
+}
+
+/** 一键出图档位就绪判断：与 selectPoseModel 的兜底口径一致 —— 只要有就绪的 i2i
+ * 档位就允许（未审查版优先、没有时退回普通改款）。若只认未审查版，会出现
+ * 「手动换姿势能用、一键面板却说档位未就绪」的口径矛盾。
+ */
+const quickModelReady = computed(() => allModels.value.some((m) => m.kind === 'i2i' && m.ready))
+
+/** 一键出图的用户基础描述（批次开始时锁定；每轮在它后面拼姿势模板，批次结束清空） */
+const quickBasePrompt = ref('')
+
+/** 生成一段「换姿势」描述（手动插入与一键出图共用；含姿势名/角度，历史里可区分批次） */
+function buildPosePrompt(pose: PoseItem): string {
+  return `保持第 1 张参考图的人物长相、发型与服装不变，按最后一张参考图的姿势（${pose.name}·${pose.angle}）重新生成，${poseFraming(pose.system)}。`
+}
+
+/** 一键出图的每一轮：套用面板给的姿势/张数/步数 → 切未审查档位 → 复用正常提交流程 */
+function onQuickRun(payload: {
+  pose: PoseItem
+  count: number
+  steps: number
+  round: number
+}): void {
+  count.value = payload.count
+  steps.value = payload.steps
+  selectedPose.value = payload.pose
+  selectPoseModel()
+
+  // 描述：每轮都带**姿势名/角度**（否则一键出图几百批的历史描述完全一样，
+  // 事后没法从历史/导出里看出这批用的是哪个姿势）。
+  if (payload.round === 1) {
+    const current = prompt.value.trim()
+    // 上一轮一键出图留下的模板不算「用户描述」：整段替换，避免反复叠加
+    quickBasePrompt.value = current.includes('按最后一张参考图的姿势') ? '' : current
+  }
+  const posePrompt = buildPosePrompt(payload.pose)
+  prompt.value = quickBasePrompt.value
+    ? `${quickBasePrompt.value}
+${posePrompt}`
+    : posePrompt
+
+  // 防御：面板已禁用的场景（参考图被清空/档位未就绪）不该真的提交，否则会出一批错图
+  if (kind.value !== 'i2i' || !refCountOk.value || !modelReady.value) {
+    Message.warning('一键出图未启动：请确认已选参考图且图生图档位就绪')
+    return
+  }
+  onSubmit()
+}
+
+/** 连续出图结束：释放批次锁定的基础描述（下一批重新采集） */
+function onQuickBatchEnd(): void {
+  quickBasePrompt.value = ''
+}
 
 /** 把「逗号/中文逗号/空白」分隔的 id 串拆成数组（两个输入框共用同一口径） */
 function splitIds(text: string): string[] {
@@ -339,6 +464,7 @@ function onSubmit() {
     // 只有拿到档位表且是图生图时才显式指定；否则交给后端按 kind 取默认
     model_key: kind.value === 'i2i' && modelKey.value ? modelKey.value : undefined,
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
+    pose_id: kind.value === 'i2i' && selectedPose.value ? selectedPose.value.id : undefined,
   })
 }
 
@@ -351,6 +477,8 @@ function onSubmit() {
 function applyRunPayload(payload: RunPayload): void {
   if (typeof payload.prompt === 'string') prompt.value = payload.prompt
   if (typeof payload.negative === 'string') negative.value = payload.negative
+  // 姿势：历史里没有姿势就清空（避免把上一个批次的姿势带进新批次）
+  selectedPose.value = payload.pose ?? null
 
   const params = payload.params ?? {}
   const num = (key: string): number | null => {
@@ -381,12 +509,24 @@ function applyRunPayload(payload: RunPayload): void {
     modelKey.value = payload.model_key
     pendingModelKey.value = ''
   }
+  // 历史姿势必须配图生图档位：历史模型缺失/不是 i2i 时按换姿势流程挑一个 i2i 档位
+  if (
+    payload.pose &&
+    !(
+      payload.model_key &&
+      allModels.value.some((m) => m.key === payload.model_key && m.kind === 'i2i')
+    )
+  ) {
+    selectPoseModel()
+  }
   Message.success('已带入历史参数，可继续修改后生成')
 }
 
 defineExpose({ applyRunPayload })
 
 onMounted(() => {
+  // 从素材详情「换个姿势」跳进来：自动打开姿势选择器（参考图由 initialRefIds 预填）
+  if (props.initialPoseLib) posePickerVisible.value = true
   // 从素材详情跳进来：预填参考图并切到改款档位
   if (props.initialRefIds) {
     refIdsText.value = props.initialRefIds
@@ -401,6 +541,9 @@ onMounted(() => {
     modelKey.value = props.initialModelKey
     pendingModelKey.value = ''
   }
+  // 换姿势流程的档位**最后**定：上面 initialRefIds 会把档位切到「就绪且非未审查」的
+  // 第二个改款档位，必须在这之后再覆盖成未审查版，否则进入页面落在有审查档位上。
+  if (props.initialPoseLib) selectPoseModel()
 })
 </script>
 
@@ -430,12 +573,12 @@ onMounted(() => {
   <div v-if="kind === 'i2i'" class="gen-row">
     <a-input v-model="refIdsText" placeholder="参考素材 ID（1~10 个，逗号分隔）" allow-clear />
     <a-button @click="pickerVisible = true">选择图片</a-button>
-    <span class="gen-hint">{{ refIdsList.length }}/10</span>
+    <span class="gen-hint">{{ refIdsList.length }}/{{ maxRefs }}</span>
   </div>
   <div v-if="kind === 'i2i'" class="gen-hint">
     参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
     只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。当前
-    {{ refIdsList.length }} 个参考。
+    {{ refIdsList.length }} 个参考（选姿势后上限 {{ maxRefs }} 张：姿势图占 1 张额度）。
   </div>
 
   <!-- 已选参考缩略图：写描述前先确认「选了哪几张、顺序对不对」，点任意一张看大图 -->
@@ -458,6 +601,42 @@ onMounted(() => {
       </button>
     </div>
   </div>
+
+  <!-- 姿势参考（换姿势）：单选；执行器把它作为最后一张参考图上传 -->
+  <div v-if="kind === 'i2i'" class="gen-pose">
+    <div class="gen-row">
+      <a-button @click="posePickerVisible = true">
+        {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
+      </a-button>
+      <a-button v-if="selectedPose" type="text" @click="insertPosePrompt">插入姿势描述</a-button>
+      <a-button v-if="selectedPose" type="text" @click="clearPose">清除</a-button>
+      <span v-if="!selectedPose" class="gen-hint">
+        可选：从姿势图库挑一个姿势，让模特换成该姿势（个人本地使用）
+      </span>
+    </div>
+    <div v-if="selectedPose" class="gen-pose-card">
+      <img :src="selectedPose.thumb_url" :alt="selectedPose.name" loading="lazy" />
+      <div class="gen-pose-meta">
+        <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
+        <div class="gen-hint">
+          {{ selectedPose.system }} / {{ selectedPose.category }} · 姿势图会作为<strong
+            >最后一张</strong
+          >
+          参考图参与生成
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 一键出图：按「性感系 399」顺序轮播姿势，可连续多次；参数只有每次张数/步数/连续次数 -->
+  <QuickPoseBatchPanel
+    :platform-ready="ready"
+    :model-ready="quickModelReady"
+    :has-references="refIdsList.length > 0"
+    :busy="submitting || active"
+    @run="onQuickRun"
+    @batch-end="onQuickBatchEnd"
+  />
 
   <div class="gen-label">描述（prompt）</div>
   <a-textarea
@@ -535,12 +714,47 @@ onMounted(() => {
   <ReferencePickerModal
     v-model:visible="pickerVisible"
     :selected-ids="refIdsList"
-    :max="10"
+    :max="maxRefs"
     @confirm="onPickConfirm"
+  />
+
+  <PosePickerModal
+    v-model:visible="posePickerVisible"
+    :selected-id="selectedPose?.id"
+    @select="onPoseSelected"
   />
 </template>
 
 <style scoped>
+/* 姿势参考卡片：缩略图 + 名称/角度（选中后显示，避免只留一个 id） */
+.gen-pose {
+  margin: 4px 0 10px;
+}
+
+.gen-pose-card {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+
+.gen-pose-card img {
+  width: 64px;
+  height: 86px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.gen-pose-name {
+  color: var(--color-text-1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* 下面 .gen-alert / .gen-hint / .gen-label 三条在视图里另有一份：
    它们同时被环境提示、结果区与历史表用到，scoped 样式不能跨组件继承，故各自保留。 */
 .gen-alert {

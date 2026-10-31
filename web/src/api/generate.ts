@@ -92,6 +92,8 @@ export interface CreateRunPayload {
   model_key?: string
   /** 参考素材 id（i2i 必填 1~10 个） */
   reference_ids?: string[]
+  /** 姿势图 id（换姿势；i2i 可选，来自姿势图库。会占一张参考额度） */
+  pose_id?: string
 }
 
 /** 生成历史的一条（列表用）。

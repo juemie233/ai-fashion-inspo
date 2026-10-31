@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -16,14 +17,14 @@ from app.database import async_session
 from app.models.generation import GenerationRun
 
 
-def _seed_run(prompt: str, *, status: str = "done") -> int:
+def _seed_run(prompt: str, *, status: str = "done", params: dict | None = None) -> int:
     async def _do() -> int:
         async with async_session() as db:
             run = GenerationRun(
                 kind="i2i",
                 status=status,
                 prompt=prompt,
-                params_json="{}",
+                params_json=json.dumps(params or {}, ensure_ascii=False),
                 model_key="qwen_2_1_uc_i2i",
                 workflow_name="qwen_image_i2i",
                 total=2,
@@ -175,3 +176,30 @@ def test_export_uses_settings_storage_for_imported_counts(client):
     finally:
         _cleanup([rid])
     assert settings.storage_root  # 仅确保 settings 已加载（避免误用真实路径的回归）
+
+
+def test_export_includes_pose_id(client):
+    """换姿势批次导出要带 pose_id：几百批一键出图时靠它在 CSV/JSON 里区分。"""
+    rid = _seed_run(
+        "导出姿势批次",
+        params={"pose_id": "full_sexy_P001_front", "width": 1024, "height": 1024},
+    )
+    try:
+        resp = client.get(
+            "/api/generate/runs/export",
+            params={"fmt": "json", "q": "导出姿势批次"},
+        )
+        rows = json.loads(resp.text)
+        row = next(item for item in rows if item["id"] == rid)
+        assert row["pose_id"] == "full_sexy_P001_front"
+
+        csv_resp = client.get(
+            "/api/generate/runs/export",
+            params={"fmt": "csv", "q": "导出姿势批次"},
+        )
+        text = csv_resp.content.decode("utf-8-sig")
+        header = text.splitlines()[0]
+        assert "pose_id" in header.split(",")
+        assert "full_sexy_P001_front" in text
+    finally:
+        _cleanup([rid])

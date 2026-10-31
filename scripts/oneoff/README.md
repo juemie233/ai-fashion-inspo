@@ -22,6 +22,20 @@
 | `diagnose_generation_failures.py` | 给出图失败分类：OOM / 工作流参数 / 参考图 / ComfyUI 连接 / 其它（**只读**） | `python scripts/oneoff/diagnose_generation_failures.py [--limit N]` | 真实库 |
 | `download_hf_chunked.py` | 从 hf-mirror 分段下载大文件（该镜像不支持全量 GET、连续请求会 429；支持断点续传） | `python scripts/oneoff/download_hf_chunked.py <url> <保存路径> <总字节数>` | 网络 |
 | `verify_toolcall.py` | 验证本地 Ollama 模型能否返回结构化 `tool_calls`（agent 能力的前置检查） | `python scripts/oneoff/verify_toolcall.py [模型名，默认 qwen3.5:9b]` | 本机 Ollama |
+| `r2_qwen_en_prompt_eval.py` | P0 实验：Qwen-Image 2.1 用社区英文约束 prompt（图1=姿势图库线稿/阶段1图，图2=主体），可选挂 VNCCS Pose Studio QI2.1 v2 LoRA；验证 int8 栈能否复现「姿势+身份/服装」 | `python scripts/oneoff/r2_qwen_en_prompt_eval.py --execute --limit 2 --variants lineart --lora --unet std`（需 ComfyUI + LoRA 权重） | 本机 ComfyUI + storage |
+| `r2_outfit_keep_eval.py` | 发型/服装保持实验：Qwen-Image 2.1 未审查版 i2i，在 R2 目标姿势图上重绘人物并尝试保持主体发型/服装（可加服装裁切第三参考） | `python scripts/oneoff/r2_outfit_keep_eval.py --execute --variants keep2`（需 ComfyUI + UC 权重） | 本机 ComfyUI + storage |
+| `r2_faceswap_batch.py` | R2 后处理 A 方案：对两段式结果做 InsightFace 换脸（主体脸→成图），可选 GFPGAN 面部修复；输出换脸图与 swap_summary（报告见 `docs/换姿势实验报告-*换脸增强*.md`；权重非商用，仅个人本地） | 需单独 venv（insightface/onnxruntime）与 buffalo_l + inswapper + gfpgan onnx；`python scripts/oneoff/r2_faceswap_batch.py --batch-dir <阶段2目录> --out-dir <输出目录>` | 本机模型目录 + storage |
+| `r2_batch10_eval.py` | R2 两段式批量评估：随机 N 张四星素材 × 每人 1 个随机单人姿势，串起「SDXL+CN 阶段1 → Qwen 清洗阶段2」，产出样本图 + summary（报告见 `docs/换姿势实验报告-*.md`） | `python scripts/oneoff/r2_batch10_eval.py --count 10 --seed 20261031`（需 ComfyUI 在 8188、SDXL/union 权重就位） | 本机 ComfyUI + storage |
+| `make_depth_maps.py` | 图库姿势线稿 → 深度图（Depth Anything V2 Small ONNX，CPU，约 1 秒/张），供 SDXL union depth 控制；模型在 `ComfyUI/models/depthanything/` | 需单独 venv（onnxruntime+numpy+pillow）；`python scripts/oneoff/make_depth_maps.py --limit 10` | storage + 深度模型 |
+| `r2_controlnet_poc.py` | R2 PoC 阶段1：SDXL + ControlNet-Union(lineart) 用姿势线稿控姿势（txt2img / img2img 对比） | `python scripts/oneoff/r2_controlnet_poc.py --dry-run` / `--execute`（需 SDXL + union 权重、ComfyUI 在 8188） | 本机 ComfyUI + storage |
+| `r2_stage2_cleanup.py` | R2 PoC 阶段2（两段式）：Qwen-Image-Edit 以 `[阶段1图, 主体]` 为参考，保姿势、去护具、换回日常服装 | `python scripts/oneoff/r2_stage2_cleanup.py --dry-run` / `--execute`（需阶段1产物） | 本机 ComfyUI + storage |
+| `pose_fidelity_ab.py` | 换姿势零成本对照实验：提示词/参考顺序/参考数量对姿势保真度的影响；也可批量随取四星素材 × 单人姿势做文字姿势测试（只读库 + 直连 ComfyUI，产物落 storage/poc/） | `--dry-run`（只打印工作流）/ `--execute`（需 ComfyUI 在 8188）/ `--batch --batch-subjects 5 --batch-poses 5 --execute` | 本机 ComfyUI + storage |
+
+## 已归档（2026-10-31）
+
+`r2_*`、`make_depth_maps.py`、`pose_fidelity_ab.py` 属于「换姿势 / R2」专项实验脚本，
+该方向已结项（见 `docs/换姿势方向结项报告-2026-10-31.md`）。**暂停维护**：保留用于复现历史实验，
+新需求不要在此基础上扩展；若要重启，先看结项报告第 6 节。
 
 ## 使用约定
 

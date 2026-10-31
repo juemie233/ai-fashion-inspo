@@ -36,6 +36,7 @@ from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.models import MAX_COUNT, MAX_PIXELS, MAX_STEPS, MIN_STEPS
 from app.services.comfyui.probe import MODEL_SPECS
+from app.services import pose_gallery
 from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
 from app.utils.file_hash import file_sha256
@@ -211,7 +212,6 @@ async def create_run(
             raise HTTPException(
                 status_code=400, detail=f"图生图需要 1~{max_refs} 张参考素材，当前 {len(ref_ids)} 张"
             )
-        await _assert_references_exist(db, ref_ids)
     elif ref_ids:
         # 显式报错而不是静默丢弃：静默丢弃会让用户以为「按这张图生成了」，
         # 结果却是纯文字从零画出来的图 —— 这类"看起来成功了"的错最坑
@@ -223,7 +223,35 @@ async def create_run(
             ),
         )
 
+    # 姿势参考（换姿势）：只对图生图开放，且姿势图会占一张参考额度。
+    # 先做这项**网络校验**再查库：load_catalog 在缓存过期时要回源（最长 20s），
+    # 不能拿着 SQLite 连接/事务去等第三方源站，否则会拖住其它写入。
+    pose_id = str(payload.get("pose_id") or "").strip() or None
+    if pose_id:
+        if kind != "i2i":
+            raise HTTPException(
+                status_code=400,
+                detail="换姿势需要「参考图改款」（kind=i2i）：文生图没有可替换的主体",
+            )
+        max_refs = int(spec.get("max_refs") or 10)
+        if len(ref_ids) + 1 > max_refs:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"选姿势后参考素材最多 {max_refs - 1} 张（姿势图占 1 张额度），"
+                    f"当前 {len(ref_ids)} 张"
+                ),
+            )
+        await pose_gallery.get_pose(pose_id)
+
+    if kind == "i2i":
+        await _assert_references_exist(db, ref_ids)
+
     params = _validate_params(payload, spec)
+    if pose_id:
+        # 存进参数快照：生成历史/回放入口据此复现「这批用了哪张姿势」，
+        # 执行器也从这里读（不额外加数据库列）。
+        params["pose_id"] = pose_id
     template, digest = wf.load_template(spec["workflow"])
 
     run = GenerationRun(
@@ -829,6 +857,8 @@ EXPORT_COLUMNS = (
     "prompt",
     "negative",
     "error",
+    # 换姿势批次：导出里带上姿势 id，方便事后按姿势筛选/复现（一键出图几百批时尤其需要）
+    "pose_id",
 )
 
 
@@ -900,6 +930,7 @@ async def export_runs(
             "prompt": run.prompt or "",
             "negative": run.negative or "",
             "error": run.error or "",
+            "pose_id": str(_params_of(run).get("pose_id") or ""),
         }
         for run in rows
     ]
@@ -1089,6 +1120,7 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
         "count": params.get("count") or run.total or 1,
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
+        "pose_id": params.get("pose_id"),
         "seed": seed,
     }
     return await create_run(db, payload)
@@ -1133,6 +1165,7 @@ async def regenerate_candidate(
         "count": 1,
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
+        "pose_id": params.get("pose_id"),
         "seed": seed,
     }
     out = await create_run(db, payload)

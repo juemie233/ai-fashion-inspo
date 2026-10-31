@@ -13,12 +13,43 @@
  *    不再渲染假档位。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
 import GenerateParamForm from '../GenerateParamForm.vue'
 import type { GenerateStatus } from '@/api/generate'
+
+const poseMocks = vi.hoisted(() => ({
+  fetchPoses: vi.fn(),
+}))
+
+vi.mock('@/api/poseGallery', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/poseGallery')>()
+  return { ...actual, fetchPoses: poseMocks.fetchPoses }
+})
+
+const QUICK_POSE = {
+  id: 'full_sexy_P001_front',
+  name: 'S形站姿',
+  system: '全身单人・性感系',
+  category: '站姿',
+  angle: '正面',
+  pose_no: 'P001',
+  thumb_url: 'https://example.com/thumbs/q.jpg',
+  image_url: 'https://example.com/img/q.png',
+}
+
+beforeEach(() => {
+  poseMocks.fetchPoses.mockReset()
+  poseMocks.fetchPoses.mockResolvedValue({
+    items: [QUICK_POSE],
+    total: 1,
+    page: 1,
+    size: 100,
+    note: '',
+  })
+})
 
 /** 后端 MODEL_SPECS 的三档目录（探测结果里就是这样下发的） */
 const MODELS_META = {
@@ -192,5 +223,236 @@ describe('已选参考图缩略图（描述框上方）', () => {
     const wrapper = mountForm({ status: READY_STATUS, ready: true, referenceItems: [] })
     await flushPromises()
     expect(wrapper.find('.gen-ref-strip').exists()).toBe(false)
+  })
+})
+
+// ── 换姿势（姿势参考）──
+
+const POSE_FIXTURE = {
+  id: 'full_std_P001_front',
+  name: 'S形站姿',
+  system: '全身单人・标准系',
+  category: '站姿',
+  angle: '正面',
+  pose_no: 'P001',
+  thumb_url: 'https://example.com/thumbs/a.jpg',
+  image_url: 'https://example.com/img/a.png',
+}
+
+/** 姿势弹窗 stub：直接把「选中」事件回抛给参数面板，避免真弹窗在 jsdom 里的 teleport 麻烦。 */
+const PosePickerStub = {
+  name: 'PosePickerModal',
+  props: ['visible', 'selectedId'],
+  emits: ['update:visible', 'select'],
+  template: '<div class="pose-picker-stub" />',
+}
+
+describe('GenerateParamForm 换姿势', () => {
+  function mountPoseForm(props: Record<string, unknown> = {}) {
+    return mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+        ...props,
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('选姿势后提交参数带 pose_id（图生图）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('换成这个姿势')
+
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    // 已选姿势会显示名称与角度，并提供「插入姿势描述」快捷
+    expect(wrapper.text()).toContain('S形站姿')
+    expect(wrapper.text()).toContain('插入姿势描述')
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn).toBeTruthy()
+    await submitBtn!.trigger('click')
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+    expect(payload.reference_ids).toEqual(['ref-a'])
+  })
+
+  it('选姿势后参考上限降为 9 张（姿势图占 1 张额度）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+    expect(wrapper.text()).toContain('/9')
+
+    // 9 张主体参考 + 姿势 = 合法，可以提交
+    const input = wrapper.find('input[placeholder*="参考素材 ID"]')
+    const nine = Array.from({ length: 9 }, (_, i) => `ref-${i}`).join(', ')
+    await input.setValue(nine)
+    await wrapper.find('textarea').setValue('换姿势')
+    let submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn!.attributes('disabled')).toBeUndefined()
+
+    // 10 张主体参考 + 姿势 = 超上限，按钮禁用
+    const ten = Array.from({ length: 10 }, (_, i) => `ref-${i}`).join(', ')
+    await input.setValue(ten)
+    submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(submitBtn!.attributes('disabled')).toBeDefined()
+  })
+
+  it('选姿势自动切到未审查版（第三个档位，不是有审查的第二个）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    // 未选姿势前：i2i 默认按「就绪且非未审查」→ 第二个（有审查）
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_i2i')
+
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+    expect(wrapper.text()).toContain('未审查')
+  })
+
+  it('从详情页「换个姿势」进入时也默认未审查版', async () => {
+    const wrapper = mountPoseForm({ initialPoseLib: true })
+    await flushPromises()
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+  })
+
+  it('清除姿势后提交不再带 pose_id', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('换姿势')
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清除')
+    expect(clearBtn).toBeTruthy()
+    await clearBtn!.trigger('click')
+    await flushPromises()
+
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBeUndefined()
+  })
+
+  it('插入姿势描述按体系换构图词（上半身不写全身照）', async () => {
+    const upperPose = {
+      ...POSE_FIXTURE,
+      id: 'upper_P003_low',
+      name: '半身坐姿',
+      system: '上半身单人',
+      angle: '俯视',
+    }
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', upperPose)
+    await flushPromises()
+
+    const insertBtn = wrapper.findAll('button').find((b) => b.text() === '插入姿势描述')
+    await insertBtn!.trigger('click')
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
+    expect(textarea.value).toContain('上半身构图（半身照）')
+    expect(textarea.value).not.toContain('全身照')
+  })
+
+  it('带入历史参数时恢复姿势（不静默丢失）', async () => {
+    const wrapper = mountPoseForm()
+    await flushPromises()
+
+    ;(
+      wrapper.vm as unknown as {
+        applyRunPayload: (payload: Record<string, unknown>) => void
+      }
+    ).applyRunPayload({
+      prompt: '换姿势',
+      model_key: 'qwen_2_1_i2i',
+      reference_ids: ['ref-a'],
+      params: { pose_id: POSE_FIXTURE.id },
+      pose: POSE_FIXTURE,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('S形站姿')
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+  })
+})
+
+describe('GenerateParamForm 一键出图', () => {
+  function mountQuickForm() {
+    return mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue] },
+    })
+  }
+
+  it('面板发出 run：套用姿势/张数/步数、切未审查档位并自动补描述', async () => {
+    const wrapper = mountQuickForm()
+    await flushPromises()
+
+    const panel = wrapper.findComponent({ name: 'QuickPoseBatchPanel' })
+    expect(panel.exists(), '参数面板应有一键出图面板').toBe(true)
+    panel.vm.$emit('run', { pose: QUICK_POSE, count: 3, steps: 12, round: 1, rounds: 1 })
+    await flushPromises()
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.kind).toBe('i2i')
+    expect(payload.model_key).toBe('qwen_2_1_uc_i2i')
+    expect(payload.pose_id).toBe(QUICK_POSE.id)
+    expect(payload.count).toBe(3)
+    expect(payload.steps).toBe(12)
+    expect(payload.reference_ids).toEqual(['ref-a'])
+    // 描述为空时自动补姿势模板，并带上姿势名/角度（历史/导出里才分得清哪批用了哪个姿势）
+    expect(String(payload.prompt)).toContain('保持第 1 张参考图')
+    expect(String(payload.prompt)).toContain(QUICK_POSE.name)
+    expect(String(payload.prompt)).toContain(QUICK_POSE.angle)
+    // 面板的「下一个姿势」同步显示在姿势卡片里
+    expect(wrapper.text()).toContain(QUICK_POSE.name)
+    wrapper.unmount()
+  })
+
+  it('没有参考图时一键出图面板禁用（不会白提交）', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: READY_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: '',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue] },
+    })
+    await flushPromises()
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
+    expect(btn?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 })
