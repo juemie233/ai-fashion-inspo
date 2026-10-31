@@ -404,5 +404,5 @@ echo "  3. 启动后端/前端/worker"
 echo "  4. 验证：打开后台 / GET /api/health，核对素材数、抽查图片、搜索标签"
 echo ""
 echo "定期备份的计划任务（schtasks）不会随恢复迁移，新机器需重新注册，见"
-echo "docs/backup-restore.md。"
+echo "docs/数据备份与恢复.md。"
 exit 0

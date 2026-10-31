@@ -4,7 +4,7 @@ Revision ID: n7o8p9q0r1s2
 Revises: c92d4f8329ac
 Create Date: 2026-10-27 16:10:00.000000
 
-设计依据：docs/person-detail-enhancements.md §A1。
+设计依据：docs/人物详情页增强方案.md §A1。
 
 背景：f2 用户库 ``douyin_users.db`` 的 ``user_info_web`` 里存着博主公开资料
 （粉丝数/关注数/作品数/获赞总数/签名），离线可读、零网络零风控；而素材库此前

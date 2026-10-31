@@ -1,6 +1,6 @@
 /** 合集宫格页：所有收藏夹（一级手动合集）的封面 + 名称 + 数量。
  *
- * 手机侧取舍：不做拖拽排序、不做智能合集的规则编辑（见 docs/mobile-porting-plan.md）。
+ * 手机侧取舍：不做拖拽排序、不做智能合集的规则编辑（见 docs/移动端移植方案.md）。
  */
 
 import { useCallback, useEffect, useState } from 'react'

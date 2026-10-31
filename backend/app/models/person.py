@@ -79,7 +79,7 @@ class Blogger(_PersonBaseFields, Base):
     aweme_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_favorited: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 简介来源：f2_signature（抖音签名原文）/ ai（AI 生成）/ manual（手填）。
-    # 两者可信度不同，详情页要显示出来（见 docs/person-detail-enhancements.md A4）。
+    # 两者可信度不同，详情页要显示出来（见 docs/人物详情页增强方案.md A4）。
     bio_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # 上面统计字段的采集时间（None = 从未同步过）
     stats_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

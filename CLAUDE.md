@@ -303,7 +303,7 @@ fashion-inspo/
 ## 移动端构建（Android APK）
 
 构建命令、本机工具链路径、prebuild 后要补的配置、提速配方、真机踩坑（图标字体 / 分享 Intent /
-视频播放 / 冷启动竞态）全部在 [docs/mobile-build.md](docs/mobile-build.md)。
+视频播放 / 冷启动竞态）全部在 [docs/移动端构建.md](docs/移动端构建.md)。
 
 该文含**本机绝对路径与代理端口**等环境特定信息，换机器时按原文替换；标准里不重复这些内容。
 

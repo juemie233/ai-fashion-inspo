@@ -1,6 +1,6 @@
 """R2 PoC：SDXL + ControlNet(lineart/union) 换姿势 —— 最小可用性验证。
 
-目的（见 docs/R2（SDXL+ControlNet lineart）PoC成本与代价评估.md）：
+目的（见 docs/换姿势R2方案成本与代价评估.md）：
 用下载好的 SDXL 基座 + xinsir ControlNet-Union（lineart 类型）验证「姿势线稿当控制信号」
 能不能把姿势带准，以及三种接入方式哪个可用：
 

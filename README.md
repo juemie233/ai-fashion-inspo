@@ -187,7 +187,7 @@ chrome_debug_port: int = 9222
 
 ### 文档（10-24）
 
-- 新增 [docs/mobile-porting-plan.md](docs/mobile-porting-plan.md)：Web 端功能移植到手机的**可行性判定**（哪些能力原样搬、哪些要换实现、M1/M2/M3 批次划分与验收口径）。
+- 新增 [docs/移动端移植方案.md](docs/移动端移植方案.md)：Web 端功能移植到手机的**可行性判定**（哪些能力原样搬、哪些要换实现、M1/M2/M3 批次划分与验收口径）。
 - `CLAUDE.md` 补两条实测纪律：**移动端图标必须用 `components/Icon.tsx`**（`<Ionicons>` 在 release 包里静默渲染空 `<Text />`，只有真机能复现）；**后端 `ruff format` 只对本次改动文件跑、且不与功能改动混进同一提交**（否则 diff 里混进几十行历史代码重排，脏化 `git blame/bisect`）。
 
 ### 素材治理：把「未分析 144」清掉（10-26）
@@ -200,7 +200,7 @@ chrome_debug_port: int = 9222
 
 ### 人物详情页增强方案（10-27，文档）
 
-新增 [docs/person-detail-enhancements.md](docs/person-detail-enhancements.md)：先盘现状（498 位博主 ·
+新增 [docs/人物详情页增强方案.md](docs/人物详情页增强方案.md)：先盘现状（498 位博主 ·
 简介仅 **4.4%** · 人脸注册 **4.4%** · 素材 500+ 的 **9 位**（最大 3,426）· f2 用户库可补 **407 位**、其中
 376 位带签名），再按 P0/P1/P2 给增强项（资料卡补齐粉丝/作品数/签名、首屏三个状态 chip、人脸注册
 两步走、素材「作品/时间线」双视图、活跃度与质量构成、疑似重复与风格相近），每项带数据依据、改动面、
@@ -1512,7 +1512,7 @@ bash scripts/backup_data.sh E:/fashion-inspo-backups
 bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-overwrite
 ```
 
-- **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/backup_task.bat`（注册命令见 [备份恢复指南](docs/backup-restore.md)）。
+- **每日 03:00 自动备份**：用 Windows 任务计划程序注册 `scripts/backup_task.bat`（注册命令见 [备份恢复指南](docs/数据备份与恢复.md)）。
 - **启动后自动补备**：后端启动 10 分钟后，若距上次成功备份超过 20 小时则自动补跑一次（`.env` 的 `BACKUP_ON_STARTUP=false` 可关闭）。两个通道通过 `backup.lock` 互斥。
 - **过期锁自愈**：上次备份被中断会残留 `backup.lock`，过去会让后续每次备份直接退出（曾整整 7 天没有新备份）。现在按锁目录 mtime 判定，超过 `BACKUP_LOCK_MAX_AGE_HOURS`（默认 6 小时）即判为残留、打印原因后清除继续。
 - **存储根跟随配置**：素材备份源与日志目录都按 `settings.storage_root` 解析（不再写死 `backend/storage`）——存储迁盘后不会静默备份旧树、也不会把日志写到旧位置。
@@ -1520,7 +1520,7 @@ bash scripts/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --allow-
 - **热写入兼容**：备份期间后台任务（标签分析/向量回填）持续写入时，脚本自动对不一致目录做增量修复重试（最多 5 次），校验以复制完成时刻的「冻结源端清单」为基准（时点快照语义），不再与实时源端比对误报。
 - **数据重置（reset）防呆**：执行前自动快照 DB 与素材目录到 `storage/_pre_reset_snapshot/`（保留 7 天），需输入 `DELETE` 二次确认，未配 API Key 时非本机访问直接拒绝。
 
-完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、**恢复演练记录**、常见场景）见 **[docs/backup-restore.md](docs/backup-restore.md)**。
+完整说明（备份内容、自动注册、新机从零恢复 12 步 checklist、**恢复演练记录**、常见场景）见 **[docs/数据备份与恢复.md](docs/数据备份与恢复.md)**。
 > 恢复侧已实跑演练（7 个用例 + 逐文件哈希 + 恢复库与当前 ORM 的结构一致性）：**旧备份恢复后必须 `alembic upgrade head`**，否则新代码查新列会直接报错——详见文档第 5 节。
 
 ## 自动化测试
