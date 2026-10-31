@@ -1,0 +1,97 @@
+{
+  "GET /api/bloggers": [
+    "items",
+    "page",
+    "size",
+    "total"
+  ],
+  "GET /api/collections": [
+    "auto_source",
+    "child_count",
+    "cover_inspiration_id",
+    "cover_thumbnail_path",
+    "created_at",
+    "description",
+    "id",
+    "item_count",
+    "kind",
+    "name",
+    "parent_id",
+    "position",
+    "query_json",
+    "updated_at"
+  ],
+  "GET /api/inspirations": [
+    "items",
+    "page",
+    "size",
+    "total",
+    "trash_retention_days"
+  ],
+  "GET /api/inspirations/trash": [
+    "items",
+    "page",
+    "size",
+    "total",
+    "trash_retention_days"
+  ],
+  "GET /api/inspirations/{inspiration_id}": [
+    "analysis_logs",
+    "analysis_status",
+    "bloggers",
+    "created_at",
+    "deleted_at",
+    "dominant_colors",
+    "file_path",
+    "id",
+    "is_ai_generated",
+    "is_favorite",
+    "media_type",
+    "models",
+    "quality_reason",
+    "quality_status",
+    "rating",
+    "source_author",
+    "source_platform_id",
+    "source_type",
+    "source_url",
+    "tags",
+    "thumbnail_path",
+    "trash_reason",
+    "trash_source",
+    "updated_at"
+  ],
+  "GET /api/search": [
+    "items",
+    "page",
+    "size",
+    "total",
+    "trash_retention_days"
+  ],
+  "GET /api/tags": [
+    "category",
+    "tags"
+  ],
+  "GET /api/tasks": [
+    "items",
+    "page",
+    "size",
+    "total"
+  ],
+  "GET /api/tasks/{task_id}": [
+    "created_at",
+    "done",
+    "error",
+    "id",
+    "max_retries",
+    "next_retry_at",
+    "priority",
+    "progress",
+    "result",
+    "retry_count",
+    "status",
+    "total",
+    "type",
+    "updated_at"
+  ]
+}
