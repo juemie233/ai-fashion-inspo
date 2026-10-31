@@ -301,6 +301,24 @@ Remove-Item -LiteralPath "D:\AI\ComfyUI" -Recurse -Force
 > ⚠️ 来源 1、10 是个人博客的单次测试，不是独立基准；来源 4 的评测分数是厂商自报。
 > 用它们判断「能不能跑 / 大概多快」可以，别当质量排名。
 
+## 9.5 实验模型（不在产品依赖内，2026-10-31）
+
+换姿势实验（已结项）额外下载、但**不属于本地出图主链路**的模型：
+
+| 模型 | 路径 | 大小 | 用途 / 现状 |
+| --- | --- | ---: | --- |
+| SDXL base 1.0 | `models/checkpoints/sd_xl_base_1.0.safetensors` | 6.46 GiB | R2 ControlNet 实验；产品未用 |
+| ControlNet-Union SDXL promax | `models/controlnet/controlnet-union-sdxl-1.0-promax.safetensors` | 2.34 GiB | lineart/depth 控制实验；产品未用 |
+| Depth Anything V2 Small | `models/depthanything/depth_anything_v2_small.onnx` | 99 MB | 线稿→深度图（E3）；产品未用 |
+| InsightFace buffalo_l + inswapper | `models/insightface/buffalo_l/` | 0.69 GiB | 换脸（A 方案）；未接入 API（非商用许可，仅本地） |
+| GFPGAN 1.4 ONNX | `models/facerestore_models/gfpgan14-fp16.onnx` | 0.16 GiB | 面部修复；未接入 API |
+| VNCCS Pose Studio QI2.1 v2 LoRA | `models/loras/qwen2.1/VNCCS_QI2_PoseStudioV2.safetensors` | 152 MB | Qwen 2.1 姿态 LoRA；int8 权重下效果崩坏，不可用 |
+
+结论与资产处置见 [换姿势方向结项报告](换姿势方向结项报告-2026-10-31.md)；这些文件可整体保留或按报告 §5 清理。
+**不要**把它们写进产品依赖或模型档位清单。
+
+---
+
 ## 10. 变更记录
 
 | 日期 | 变更 |
