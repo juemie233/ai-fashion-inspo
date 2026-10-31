@@ -105,6 +105,8 @@ def build_workflow(
     prefix: str,
     control_type: str = UNION_LINEART,
     control_strength: float = CONTROL_STRENGTH,
+    control_start: float = 0.0,
+    control_end: float = 1.0,
 ) -> dict[str, Any]:
     """构造 SDXL + ControlNet 工作流（txt2img 或 img2img）。"""
     latent: list[Any] = ["13", 0]  # EmptyLatentImage
@@ -129,8 +131,8 @@ def build_workflow(
                 "control_net": ["6", 0],
                 "image": ["4", 0],
                 "strength": control_strength,
-                "start_percent": 0.0,
-                "end_percent": 1.0,
+                "start_percent": control_start,
+                "end_percent": control_end,
             },
         },
         "13": {
@@ -206,7 +208,11 @@ async def run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     control_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"SDXL: {SDXL_CKPT} | ControlNet: {CONTROLNET} | union type: {UNION_LINEART}")
+    print(
+        f"SDXL: {SDXL_CKPT} | ControlNet: {CONTROLNET} | "
+        f"union type: {args.control_type}（strength={args.strength}, "
+        f"{args.control_start}~{args.control_end}）"
+    )
     print(f"输出目录：{out_dir}")
 
     pose_paths = {pid: await pose_gallery.ensure_pose_image(pid) for pid in poses}
@@ -235,7 +241,13 @@ async def run(args: argparse.Namespace) -> int:
 
     for pid, path in pose_paths.items():
         target = control_dir / f"control_{pid}.png"
-        prepare_control(path, target)
+        if args.control_dir:
+            src = Path(args.control_dir) / f"{pid}.png"
+            if not src.exists():
+                raise SystemExit(f"预生成控制图不存在：{src}")
+            target.write_bytes(src.read_bytes())
+        else:
+            prepare_control(path, target)
         control_names[pid] = f"r2_poc_control_{pid}.png"
         print(f"控制图：{target}（{target.stat().st_size} 字节）")
 
@@ -287,12 +299,14 @@ async def run(args: argparse.Namespace) -> int:
                     subject_image=uploaded_subject,
                     denoise=denoise,
                     prefix=f"r2_poc_{pid}_{variant}",
-                    control_type=(
-                        UNION_LINEART
-                        if args.control_type == "lineart"
-                        else "hed/pidi/scribble/ted"
-                    ),
+                    control_type={
+                        "lineart": UNION_LINEART,
+                        "hed": "hed/pidi/scribble/ted",
+                        "depth": "depth",
+                    }[args.control_type],
                     control_strength=args.strength,
+                    control_start=args.control_start,
+                    control_end=args.control_end,
                 )
                 started = time.monotonic()
                 prompt_id = await client.submit(wf)
@@ -342,9 +356,16 @@ def main() -> None:
     parser.add_argument(
         "--control-type",
         default="lineart",
-        choices=["lineart", "hed"],
-        help="union 控制类型：lineart（canny/lineart/...）或 hed（softedge 系）",
+        choices=["lineart", "hed", "depth"],
+        help="union 控制类型：lineart / hed / depth",
     )
+    parser.add_argument(
+        "--control-dir",
+        default="",
+        help="预生成控制图目录（文件名 <pose_id>.png，如 depth 图）；不给则用线稿阈值图",
+    )
+    parser.add_argument("--control-start", type=float, default=0.0)
+    parser.add_argument("--control-end", type=float, default=1.0)
     parser.add_argument("--strength", type=float, default=1.0, help="ControlNet 强度")
     parser.add_argument(
         "--prompt-suffix", default="", help="追加到正向提示词末尾（可试抑制关节圆护具）"
