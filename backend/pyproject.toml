@@ -21,6 +21,11 @@ ignore = ["E501", "B008"]
 # 任务执行器再导出层：这里刻意把各 task_runners 的公开符号转发出来（旧调用点
 # 仍 import app.services.task_runner），不是未使用导入
 "app/services/task_runner.py" = ["F401"]
+# 一次性/诊断脚本（scripts/oneoff）：这类脚本**必须先**把自己的目录与 backend 注入
+# sys.path，才能 import 项目模块（`ROOT = Path(__file__).parents[2]` → `sys.path.insert`
+# → `from app.config import settings`），因此 E402「import 不在文件顶部」在这里是刻意为之，
+# 不是风格问题。pattern 相对本配置文件（backend/）解析，故用 `../scripts/...`。
+"../scripts/oneoff/*.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"
