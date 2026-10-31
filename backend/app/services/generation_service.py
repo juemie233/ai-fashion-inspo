@@ -21,6 +21,7 @@ import random
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select, update
@@ -154,6 +155,30 @@ async def _rollback_created(
     await db.rollback()
 
 
+def _pose_text_prompt(pose: dict[str, Any]) -> str:
+    """把一条姿势转成可写进 prompt 的中文描述（文生图模式用）。
+
+    Args:
+        pose: ``pose_gallery.get_pose`` 返回的归一化记录（name/angle/system）。
+
+    Returns:
+        形如「人物姿势：站立单手抚后脑（正面），全身照。」的片段；缺名称时返回空串。
+    """
+    name = str(pose.get("name") or "").strip()
+    if not name:
+        return ""
+    angle = str(pose.get("angle") or "").strip()
+    system = str(pose.get("system") or "")
+    if "上半身" in system:
+        framing = "上半身构图（半身照）"
+    elif "双人" in system:
+        framing = "双人合照"
+    else:
+        framing = "全身照"
+    angle_part = f"（{angle}）" if angle else ""
+    return f"人物姿势：{name}{angle_part}，{framing}。"
+
+
 async def _assert_references_exist(db: AsyncSession, ids: list[str]) -> None:
     """校验参考素材存在、未删除、是图片、且文件还在。
 
@@ -223,26 +248,32 @@ async def create_run(
             ),
         )
 
-    # 姿势参考（换姿势）：只对图生图开放，且姿势图会占一张参考额度。
+    # 姿势参考（换姿势）支持两种方式：
+    # - 默认 **文生图**：把姿势名/角度拼进描述（不传参考图），适合一键批量出图；
+    # - 可选 **线稿参考**：姿势线稿作为最后一张参考图参与图生图，占 1 张参考额度。
     # 先做这项**网络校验**再查库：load_catalog 在缓存过期时要回源（最长 20s），
     # 不能拿着 SQLite 连接/事务去等第三方源站，否则会拖住其它写入。
     pose_id = str(payload.get("pose_id") or "").strip() or None
+    pose: dict[str, Any] | None = None
     if pose_id:
-        if kind != "i2i":
-            raise HTTPException(
-                status_code=400,
-                detail="换姿势需要「参考图改款」（kind=i2i）：文生图没有可替换的主体",
-            )
-        max_refs = int(spec.get("max_refs") or 10)
-        if len(ref_ids) + 1 > max_refs:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"选姿势后参考素材最多 {max_refs - 1} 张（姿势图占 1 张额度），"
-                    f"当前 {len(ref_ids)} 张"
-                ),
-            )
-        await pose_gallery.get_pose(pose_id)
+        pose = await pose_gallery.get_pose(pose_id)
+        if kind == "i2i":
+            max_refs = int(spec.get("max_refs") or 10)
+            if len(ref_ids) + 1 > max_refs:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"选姿势后参考素材最多 {max_refs - 1} 张（姿势图占 1 张额度），"
+                        f"当前 {len(ref_ids)} 张"
+                    ),
+                )
+        elif pose:
+            # 文生图：把姿势描述拼进 prompt（服务端兜底，避免前端忘记拼或历史回放丢姿势）
+            payload = dict(payload)
+            suffix = _pose_text_prompt(pose)
+            current = str(payload.get("prompt") or "").strip()
+            if suffix and pose.get("name") not in current:
+                payload["prompt"] = f"{current}，{suffix}" if current else suffix
 
     if kind == "i2i":
         await _assert_references_exist(db, ref_ids)

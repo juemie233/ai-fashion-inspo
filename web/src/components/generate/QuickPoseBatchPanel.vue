@@ -26,14 +26,16 @@ const props = withDefaults(
     platformReady: boolean
     /** 图生图（未审查版）档位是否就绪：没权重时不许一键出图 */
     modelReady: boolean
-    /** 是否已选参考图（一键出图用当前参考图当主体） */
+    /** 是否已选参考图（仅「线稿参考」方式需要；文生图不需要） */
     hasReferences: boolean
+    /** 姿势生成方式：text=文生图（默认），lineart=线稿参考图生图 */
+    poseMode?: 'text' | 'lineart'
     /** 正在提交或正在生成（父组件传 submitting || active） */
     busy: boolean
     /** 姿势体系（默认「全身单人性感系」；后续要扩其他体系时改这个 prop 即可） */
     system?: string
   }>(),
-  { system: '全身单人・性感系' },
+  { system: '全身单人・性感系', poseMode: 'text' },
 )
 
 const emit = defineEmits<{
@@ -180,8 +182,14 @@ const disabledReason = computed(() => {
   if (loadError.value) return loadError.value
   if (!poses.value.length) return '姿势库为空，点「重试」重新加载'
   if (!nextPose.value) return '该体系姿势已全部出过，点「重置进度」可再来一轮'
-  if (!props.hasReferences) return '先在上方选 1 张以上参考图（一键出图用当前参考图当主体）'
-  if (!props.modelReady) return '图生图（未审查版）档位未就绪：请确认权重已放好并刷新环境'
+  if (props.poseMode === 'lineart' && !props.hasReferences) {
+    return '线稿参考方式需要先在上方选 1 张以上主体参考图'
+  }
+  if (!props.modelReady) {
+    return props.poseMode === 'text'
+      ? '文生图档位未就绪：请确认权重已放好并刷新环境'
+      : '图生图（未审查版）档位未就绪：请确认权重已放好并刷新环境'
+  }
   if (!props.platformReady) return 'ComfyUI 未就绪：先启动 ComfyUI 再点「刷新环境」'
   if (props.busy) return '正在生成上一批，结束后自动继续'
   return ''
@@ -341,7 +349,11 @@ onBeforeUnmount(() => {
     <div class="quick-head">
       <span class="gen-label">一键出图</span>
       <a-tag size="small" color="arcoblue">{{ system }}</a-tag>
-      <span class="gen-hint">按姿势库顺序轮播，每次自动换下一个姿势</span>
+      <span class="gen-hint"
+        >按姿势库顺序轮播，每次自动换下一个姿势（{{
+          poseMode === 'text' ? '文生图，姿势写进描述' : '线稿参考，图生图'
+        }}）</span
+      >
     </div>
 
     <div class="quick-body">

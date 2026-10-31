@@ -220,11 +220,24 @@ async def _execute_with_client(
             reference_names.append(uploaded)
         logger.info(f"参考图已上传 {len(reference_names)} 张（run #{run.id}）")
 
-    # ── 1.6) 换姿势：姿势图作为**最后一张**参考图（提示词约定「第 1 张是主体、最后一张是姿势」）──
+    # ── 1.6) 换姿势 ──
+    # 默认文生图：姿势名/角度已由提交层拼进 prompt（这里只兜底补一次，兼容直接造 run 的场景）；
+    # 可选线稿参考（i2i）：姿势图作为**最后一张**参考图上传（提示词约定「第 1 张主体、最后一张姿势」）。
     # 姿势图不属于素材库（不是 Inspiration），按需从姿势图库下载到 storage 缓存再上传；
     # 下载失败按永久错误处理（源站不可用重试也不会好），并给用户可执行的原因。
     pose_id = str(params.get("pose_id") or "").strip()
-    if pose_id:
+    if pose_id and run.kind == "t2i":
+        pose = await pose_gallery.get_pose(pose_id)
+        name = str(pose.get("name") or "").strip()
+        if name and name not in (run.prompt or ""):
+            angle = str(pose.get("angle") or "").strip()
+            framing = "上半身构图（半身照）" if "上半身" in str(pose.get("system") or "") else (
+                "双人合照" if "双人" in str(pose.get("system") or "") else "全身照"
+            )
+            angle_part = f"（{angle}）" if angle else ""
+            run.prompt = f"{(run.prompt or '').strip()}，人物姿势：{name}{angle_part}，{framing}。"
+            logger.info(f"文生图姿势描述已补进 prompt（run #{run.id}，pose={pose_id}）")
+    if pose_id and run.kind == "i2i":
         try:
             pose_path = await pose_gallery.ensure_pose_image(pose_id)
         except HTTPException as exc:

@@ -1,11 +1,12 @@
-"""图生图换姿势：提交校验 + 执行器把姿势图作为**最后一张参考图**上传。
+"""换姿势：提交校验 + 执行器（默认文生图 / 可选线稿参考图生图）。
 
-覆盖四件事：
+覆盖五件事：
 
-1. 姿势只对图生图开放（文生图没有可替换的主体）；
-2. 姿势必须存在（源站目录里有），且会占一张参考额度；
-3. `pose_id` 写进参数快照，`同参重跑` 不丢姿势；
-4. 执行器把姿势图接在参考图**末尾**（提示词约定「第 1 张是主体、最后一张是姿势」）。
+1. 默认**文生图**：姿势名/角度自动拼进 prompt，不要求参考图；
+2. 可选**线稿参考**（i2i）：姿势图作为最后一张参考图上传并占 1 张参考额度；
+3. 姿势必须存在（源站目录里有），id 非法/不存在分别 400/404；
+4. `pose_id` 写进参数快照，`同参重跑` 不丢姿势；
+5. 文生图执行器**不下载/上传**姿势图（提交层已把描述写进 prompt）。
 """
 
 from __future__ import annotations
@@ -126,15 +127,22 @@ def _fast_vram(monkeypatch) -> None:
 # ── 提交校验 ──
 
 
-async def test_pose_rejected_for_t2i(client, fake_pose_gallery):
-    """文生图没有可替换的主体 → 提交前直接拒。"""
+async def test_pose_appended_to_prompt_for_t2i(client, fake_pose_gallery):
+    """默认文生图：姿势名/角度拼进 prompt，不需要参考图。"""
     async with async_session() as db:
-        with pytest.raises(HTTPException) as exc:
-            await generation_service.create_run(
-                db, {"kind": "t2i", "prompt": "米色开衫", "pose_id": POSE_ID}
-            )
-        assert exc.value.status_code == 400
-        assert "参考图改款" in str(exc.value.detail)
+        out = await generation_service.create_run(
+            db,
+            {"kind": "t2i", "prompt": "米色开衫，咖啡店背景", "pose_id": POSE_ID, "count": 1},
+        )
+        run = await db.get(GenerationRun, out["run_id"])
+        params = json.loads(run.params_json)
+
+    assert run.kind == "t2i"
+    assert "米色开衫" in run.prompt
+    assert "S形站姿" in run.prompt
+    assert "全身照" in run.prompt
+    assert params["pose_id"] == POSE_ID
+    assert run.reference_ids is None
 
 
 async def test_pose_rejected_when_unknown(client, fake_pose_gallery):
@@ -261,6 +269,40 @@ async def test_runner_uploads_pose_as_last_reference(
     # 第 2 张参考（姿势图）动态追加了 LoadImage 节点并挂到 images.image_2
     assert workflow["6"]["inputs"]["images.image_2"] == ["21", 0]
     assert workflow["21"]["inputs"]["image"] == f"up_gen_pose_{run_id}.png"
+    assert run.status == "done"
+
+
+async def test_runner_t2i_pose_skips_image_upload(
+    client, fake_pose_gallery, monkeypatch
+):
+    """文生图 + 姿势：不应下载/上传姿势图（描述已在 prompt 里）。"""
+    calls: list[str] = []
+
+    async def _ensure(pose_id: str):
+        calls.append(pose_id)
+        raise AssertionError("文生图不应下载姿势图")
+
+    monkeypatch.setattr(pose_gallery, "ensure_pose_image", _ensure)
+    client_obj = _PoseClient()
+
+    def _client_factory(*args, **kwargs):
+        return client_obj
+
+    monkeypatch.setattr(runner, "ComfyUIClient", _client_factory)
+
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db,
+            {"kind": "t2i", "prompt": "米色开衫，咖啡店背景", "pose_id": POSE_ID, "count": 1},
+        )
+        task = await db.get(TaskQueue, out["task_id"])
+        await runner.execute_image_gen(db, task)
+        run = await db.get(GenerationRun, out["run_id"])
+
+    assert calls == []
+    assert client_obj.uploaded == []
+    assert len(client_obj.submitted) == 1
+    assert "S形站姿" in run.prompt
     assert run.status == "done"
 
 

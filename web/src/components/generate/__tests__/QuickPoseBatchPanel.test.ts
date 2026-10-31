@@ -43,6 +43,7 @@ function mountPanel(props: Record<string, unknown> = {}) {
       platformReady: true,
       modelReady: true,
       hasReferences: true,
+      poseMode: 'text',
       busy: false,
       ...props,
     },
@@ -176,12 +177,12 @@ describe('QuickPoseBatchPanel', () => {
   })
 
   it('没选参考图时按钮禁用并给原因', async () => {
-    const wrapper = mountPanel({ hasReferences: false })
+    const wrapper = mountPanel({ hasReferences: false, poseMode: 'lineart' })
     await flushPromises()
 
     const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
     expect(btn!.attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('先在上方选 1 张以上参考图')
+    expect(wrapper.text()).toContain('线稿参考方式需要先在上方选 1 张以上主体参考图')
     wrapper.unmount()
   })
 

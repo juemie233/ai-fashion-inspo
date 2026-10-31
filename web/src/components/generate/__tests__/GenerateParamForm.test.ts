@@ -267,7 +267,17 @@ describe('GenerateParamForm 换姿势', () => {
     vi.restoreAllMocks()
   })
 
-  it('选姿势后提交参数带 pose_id（图生图）', async () => {
+  /** 点姿势生成方式单选框（text=文生图 / lineart=线稿参考） */
+  async function switchPoseMode(wrapper: ReturnType<typeof mountPoseForm>, mode: string) {
+    const radio = wrapper
+      .findAll('input[type="radio"]')
+      .find((r) => (r.element as HTMLInputElement).value === mode)
+    expect(radio, `找不到生成方式单选项 ${mode}`).toBeTruthy()
+    await radio!.setValue(true)
+    await flushPromises()
+  }
+
+  it('选姿势后默认按文生图提交，并带 pose_id', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
     await wrapper.find('textarea').setValue('换成这个姿势')
@@ -285,17 +295,19 @@ describe('GenerateParamForm 换姿势', () => {
     await submitBtn!.trigger('click')
 
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.kind).toBe('t2i')
     expect(payload.pose_id).toBe(POSE_FIXTURE.id)
-    expect(payload.reference_ids).toEqual(['ref-a'])
+    expect(payload.reference_ids).toBeUndefined()
   })
 
-  it('选姿势后参考上限降为 9 张（姿势图占 1 张额度）', async () => {
+  it('切线稿参考后参考上限降为 9 张（姿势图占 1 张额度）', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
 
     const picker = wrapper.findComponent({ name: 'PosePickerModal' })
     picker.vm.$emit('select', POSE_FIXTURE)
     await flushPromises()
+    await switchPoseMode(wrapper, 'lineart')
     expect(wrapper.text()).toContain('/9')
 
     // 9 张主体参考 + 姿势 = 合法，可以提交
@@ -313,7 +325,7 @@ describe('GenerateParamForm 换姿势', () => {
     expect(submitBtn!.attributes('disabled')).toBeDefined()
   })
 
-  it('选姿势自动切到未审查版（第三个档位，不是有审查的第二个）', async () => {
+  it('选姿势默认切文生图档位；切线稿参考后切到未审查版图生图', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
     // 未选姿势前：i2i 默认按「就绪且非未审查」→ 第二个（有审查）
@@ -321,15 +333,18 @@ describe('GenerateParamForm 换姿势', () => {
 
     wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
     await flushPromises()
+    // 默认文字描述 → 文生图档位
+    expect(checkedValue(wrapper as never)).toBe('z_image_int8')
 
+    await switchPoseMode(wrapper, 'lineart')
     expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
     expect(wrapper.text()).toContain('未审查')
   })
 
-  it('从详情页「换个姿势」进入时也默认未审查版', async () => {
+  it('从详情页「换个姿势」进入时默认文生图档位', async () => {
     const wrapper = mountPoseForm({ initialPoseLib: true })
     await flushPromises()
-    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+    expect(checkedValue(wrapper as never)).toBe('z_image_int8')
   })
 
   it('清除姿势后提交不再带 pose_id', async () => {
@@ -422,14 +437,14 @@ describe('GenerateParamForm 一键出图', () => {
     await flushPromises()
 
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
-    expect(payload.kind).toBe('i2i')
-    expect(payload.model_key).toBe('qwen_2_1_uc_i2i')
+    expect(payload.kind).toBe('t2i')
+    expect(payload.model_key).toBeUndefined()
     expect(payload.pose_id).toBe(QUICK_POSE.id)
     expect(payload.count).toBe(3)
     expect(payload.steps).toBe(12)
-    expect(payload.reference_ids).toEqual(['ref-a'])
-    // 描述为空时自动补姿势模板，并带上姿势名/角度（历史/导出里才分得清哪批用了哪个姿势）
-    expect(String(payload.prompt)).toContain('保持第 1 张参考图')
+    expect(payload.reference_ids).toBeUndefined()
+    // 描述为空时自动补姿势模板（默认文生图），并带上姿势名/角度
+    expect(String(payload.prompt)).toContain('人物姿势：')
     expect(String(payload.prompt)).toContain(QUICK_POSE.name)
     expect(String(payload.prompt)).toContain(QUICK_POSE.angle)
     // 面板的「下一个姿势」同步显示在姿势卡片里
@@ -437,7 +452,7 @@ describe('GenerateParamForm 一键出图', () => {
     wrapper.unmount()
   })
 
-  it('没有参考图时一键出图面板禁用（不会白提交）', async () => {
+  it('没有参考图时文字描述模式仍可一键出图（文生图不需要参考图）', async () => {
     const wrapper = mount(GenerateParamForm, {
       props: {
         status: READY_STATUS,
@@ -452,7 +467,7 @@ describe('GenerateParamForm 一键出图', () => {
     await flushPromises()
 
     const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
-    expect(btn?.attributes('disabled')).toBeDefined()
+    expect(btn?.attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 })

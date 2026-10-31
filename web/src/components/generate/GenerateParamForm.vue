@@ -151,7 +151,7 @@ const pendingModelKey = ref((props.initialModelKey ?? '').trim())
  *  没有它会落到默认的文生图档位（watch 只挑「就绪且非未审查」的第一个），
  *  参考素材虽然填进输入框，提交时 `kind==='t2i'` 却不会带 reference_ids —— 静默失效。
  */
-const pendingKind = ref<'i2i' | null>(null)
+const pendingKind = ref<'t2i' | 'i2i' | null>(null)
 
 /** 默认档位：优先**就绪**且**非未审查**的。
  *
@@ -242,6 +242,37 @@ function selectPoseModel(): void {
   pendingKind.value = 'i2i'
 }
 
+/** 姿势生成方式：默认「文字描述（文生图）」；用户可切「线稿参考（图生图）」。 */
+const poseMode = ref<'text' | 'lineart'>('text')
+
+/** 文生图默认档位（Z-Image）；目前没有未审查的文生图档位，按就绪优先即可。 */
+const POSE_TEXT_MODEL_KEY = 'z_image_int8'
+
+/** 切到文生图档位：姿势只写进 prompt，不需要参考图。 */
+function selectPoseTextModel(): void {
+  const pool = allModels.value.filter((m) => m.kind === 't2i')
+  const pick = pool.find((m) => m.ready && !m.uncensored) ?? pool.find((m) => m.ready) ?? pool[0]
+  if (pick) {
+    modelKey.value = pick.key
+    pendingModelKey.value = ''
+    return
+  }
+  pendingModelKey.value = POSE_TEXT_MODEL_KEY
+  pendingKind.value = 't2i'
+}
+
+/** 应用姿势生成方式：文字→文生图档位；线稿→图生图（未审查版优先）。 */
+function applyPoseMode(mode: 'text' | 'lineart'): void {
+  poseMode.value = mode
+  if (mode === 'text') selectPoseTextModel()
+  else selectPoseModel()
+}
+
+// 用户点生成方式单选时同步档位（选中姿势后才需要切）
+watch(poseMode, (mode) => {
+  if (selectedPose.value) applyPoseMode(mode)
+})
+
 // ── 参数 ──
 const prompt = ref('')
 const negative = ref('')
@@ -273,16 +304,20 @@ const refIdsList = computed(() => splitIds(refIdsText.value))
 // 所以选了姿势后主体参考最多 9 张（后端同样会校验，前端提前拦住给出可读提示）。
 const posePickerVisible = ref(false)
 const selectedPose = ref<PoseItem | null>(null)
-const maxRefs = computed(() => (selectedPose.value ? 9 : 10))
+const maxRefs = computed(() => (selectedPose.value && poseMode.value === 'lineart' ? 9 : 10))
 const refCountOk = computed(
   () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
 )
 
-/** 选中姿势：切到图生图**未审查版**档位（换姿势默认用第三个档位，见 selectPoseModel） */
+/** 选中姿势：按当前生成方式切档位（默认文字描述/文生图，可切线稿参考/图生图） */
 function onPoseSelected(pose: PoseItem): void {
   selectedPose.value = pose
-  selectPoseModel()
-  Message.success(`已选姿势：${pose.name}`)
+  applyPoseMode(poseMode.value)
+  Message.success(
+    poseMode.value === 'text'
+      ? `已选姿势：${pose.name}（文字描述生成）`
+      : `已选姿势：${pose.name}（线稿参考生成）`,
+  )
 }
 
 function clearPose(): void {
@@ -296,11 +331,16 @@ function poseFraming(system: string): string {
   return '全身照'
 }
 
-/** 插入一段「换姿势」描述模板（可再改）：明确参考图顺序，模型才不容易把主体也改掉 */
+/** 文生图的姿势描述：不引用参考图，直接写人物姿势（默认方式）。 */
+function buildPoseTextPrompt(pose: PoseItem): string {
+  return `人物姿势：${pose.name}（${pose.angle}），${poseFraming(pose.system)}。`
+}
+
+/** 插入一段「换姿势」描述模板（可再改）：默认文生图写法；线稿模式才写参考图顺序 */
 function insertPosePrompt(): void {
   const pose = selectedPose.value
   if (!pose) return
-  const template = buildPosePrompt(pose)
+  const template = poseMode.value === 'lineart' ? buildPosePrompt(pose) : buildPoseTextPrompt(pose)
   // 连点两下不重复追加同一段
   if (prompt.value.includes(template)) return
   prompt.value = prompt.value.trim()
@@ -309,11 +349,10 @@ ${template}`
     : template
 }
 
-/** 一键出图档位就绪判断：与 selectPoseModel 的兜底口径一致 —— 只要有就绪的 i2i
- * 档位就允许（未审查版优先、没有时退回普通改款）。若只认未审查版，会出现
- * 「手动换姿势能用、一键面板却说档位未就绪」的口径矛盾。
- */
-const quickModelReady = computed(() => allModels.value.some((m) => m.kind === 'i2i' && m.ready))
+/** 一键出图档位就绪：按当前生成方式判断——文字描述看 t2i，线稿参考看 i2i。 */
+const quickModelReady = computed(() =>
+  allModels.value.some((m) => m.kind === (poseMode.value === 'text' ? 't2i' : 'i2i') && m.ready),
+)
 
 /** 一键出图的用户基础描述（批次开始时锁定；每轮在它后面拼姿势模板，批次结束清空） */
 const quickBasePrompt = ref('')
@@ -333,23 +372,30 @@ function onQuickRun(payload: {
   count.value = payload.count
   steps.value = payload.steps
   selectedPose.value = payload.pose
-  selectPoseModel()
+  applyPoseMode(poseMode.value)
 
   // 描述：每轮都带**姿势名/角度**（否则一键出图几百批的历史描述完全一样，
   // 事后没法从历史/导出里看出这批用的是哪个姿势）。
   if (payload.round === 1) {
     const current = prompt.value.trim()
     // 上一轮一键出图留下的模板不算「用户描述」：整段替换，避免反复叠加
-    quickBasePrompt.value = current.includes('按最后一张参考图的姿势') ? '' : current
+    quickBasePrompt.value =
+      current.includes('按最后一张参考图的姿势') || current.includes('人物姿势：') ? '' : current
   }
-  const posePrompt = buildPosePrompt(payload.pose)
+  const posePrompt =
+    poseMode.value === 'lineart' ? buildPosePrompt(payload.pose) : buildPoseTextPrompt(payload.pose)
   prompt.value = quickBasePrompt.value
     ? `${quickBasePrompt.value}
 ${posePrompt}`
     : posePrompt
 
-  // 防御：面板已禁用的场景（参考图被清空/档位未就绪）不该真的提交，否则会出一批错图
-  if (kind.value !== 'i2i' || !refCountOk.value || !modelReady.value) {
+  // 防御：面板已禁用的场景不该真的提交，否则会出一批错图
+  if (poseMode.value === 'text') {
+    if (kind.value !== 't2i' || !modelReady.value) {
+      Message.warning('一键出图未启动：请确认文生图档位就绪')
+      return
+    }
+  } else if (kind.value !== 'i2i' || !refCountOk.value || !modelReady.value) {
     Message.warning('一键出图未启动：请确认已选参考图且图生图档位就绪')
     return
   }
@@ -452,6 +498,17 @@ const activePreset = computed(() => sizePresets.find((p) => p.value === size.val
 
 function onSubmit() {
   if (!prompt.value.trim()) return
+  // 姿势两种方式各自要求对应档位：文字=文生图；线稿=图生图且至少 1 张主体参考
+  if (selectedPose.value) {
+    if (poseMode.value === 'text' && kind.value !== 't2i') {
+      Message.warning('文字描述模式需要文生图档位：请切换档位，或把生成方式改成「线稿参考」')
+      return
+    }
+    if (poseMode.value === 'lineart' && (kind.value !== 'i2i' || !refCountOk.value)) {
+      Message.warning('线稿参考模式需要图生图档位，并先选 1 张以上主体参考图')
+      return
+    }
+  }
   emit('submit', {
     kind: kind.value,
     prompt: prompt.value.trim(),
@@ -464,7 +521,8 @@ function onSubmit() {
     // 只有拿到档位表且是图生图时才显式指定；否则交给后端按 kind 取默认
     model_key: kind.value === 'i2i' && modelKey.value ? modelKey.value : undefined,
     reference_ids: kind.value === 'i2i' ? refIdsList.value : undefined,
-    pose_id: kind.value === 'i2i' && selectedPose.value ? selectedPose.value.id : undefined,
+    // 姿势两种模式都带 id：文生图用于历史可追溯，图生图额外把线稿作为最后一张参考
+    pose_id: selectedPose.value ? selectedPose.value.id : undefined,
   })
 }
 
@@ -509,15 +567,14 @@ function applyRunPayload(payload: RunPayload): void {
     modelKey.value = payload.model_key
     pendingModelKey.value = ''
   }
-  // 历史姿势必须配图生图档位：历史模型缺失/不是 i2i 时按换姿势流程挑一个 i2i 档位
-  if (
-    payload.pose &&
-    !(
+  // 姿势历史：按历史档位还原生成方式（i2i=线稿参考；t2i/缺省=文字描述）
+  if (payload.pose) {
+    const historyI2i = !!(
       payload.model_key &&
       allModels.value.some((m) => m.key === payload.model_key && m.kind === 'i2i')
     )
-  ) {
-    selectPoseModel()
+    poseMode.value = historyI2i ? 'lineart' : 'text'
+    if (!payload.model_key) applyPoseMode(poseMode.value)
   }
   Message.success('已带入历史参数，可继续修改后生成')
 }
@@ -541,9 +598,8 @@ onMounted(() => {
     modelKey.value = props.initialModelKey
     pendingModelKey.value = ''
   }
-  // 换姿势流程的档位**最后**定：上面 initialRefIds 会把档位切到「就绪且非未审查」的
-  // 第二个改款档位，必须在这之后再覆盖成未审查版，否则进入页面落在有审查档位上。
-  if (props.initialPoseLib) selectPoseModel()
+  // 换姿势流程最后定档位：默认用**文生图**（文字描述），保留参考图供用户切线稿参考。
+  if (props.initialPoseLib) applyPoseMode(poseMode.value)
 })
 </script>
 
@@ -578,7 +634,9 @@ onMounted(() => {
   <div v-if="kind === 'i2i'" class="gen-hint">
     参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
     只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。当前
-    {{ refIdsList.length }} 个参考（选姿势后上限 {{ maxRefs }} 张：姿势图占 1 张额度）。
+    {{ refIdsList.length }} 个参考{{
+      poseMode === 'lineart' && selectedPose ? `（上限 ${maxRefs} 张：姿势图占 1 张）` : ''
+    }}。
   </div>
 
   <!-- 已选参考缩略图：写描述前先确认「选了哪几张、顺序对不对」，点任意一张看大图 -->
@@ -602,8 +660,8 @@ onMounted(() => {
     </div>
   </div>
 
-  <!-- 姿势参考（换姿势）：单选；执行器把它作为最后一张参考图上传 -->
-  <div v-if="kind === 'i2i'" class="gen-pose">
+  <!-- 姿势参考（换姿势）：默认文生图（姿势写进描述），可选线稿参考（图生图） -->
+  <div class="gen-pose">
     <div class="gen-row">
       <a-button @click="posePickerVisible = true">
         {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
@@ -611,18 +669,28 @@ onMounted(() => {
       <a-button v-if="selectedPose" type="text" @click="insertPosePrompt">插入姿势描述</a-button>
       <a-button v-if="selectedPose" type="text" @click="clearPose">清除</a-button>
       <span v-if="!selectedPose" class="gen-hint">
-        可选：从姿势图库挑一个姿势，让模特换成该姿势（个人本地使用）
+        可选：从姿势图库挑一个姿势；默认按文字描述生成（文生图），也可切线稿参考
       </span>
+    </div>
+    <div v-if="selectedPose" class="gen-row">
+      <span class="gen-label gen-label--inline">姿势生成方式</span>
+      <a-radio-group v-model="poseMode" size="small">
+        <a-radio value="text">文字描述（文生图）</a-radio>
+        <a-radio value="lineart">线稿参考（图生图）</a-radio>
+      </a-radio-group>
     </div>
     <div v-if="selectedPose" class="gen-pose-card">
       <img :src="selectedPose.thumb_url" :alt="selectedPose.name" loading="lazy" />
       <div class="gen-pose-meta">
         <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
         <div class="gen-hint">
-          {{ selectedPose.system }} / {{ selectedPose.category }} · 姿势图会作为<strong
-            >最后一张</strong
-          >
-          参考图参与生成
+          {{ selectedPose.system }} / {{ selectedPose.category }} ·
+          <template v-if="poseMode === 'lineart'">
+            姿势图会作为<strong>最后一张</strong>参考图参与生成（占 1 张额度，需先选主体参考）
+          </template>
+          <template v-else>
+            姿势名/角度会写进描述，用<strong>文生图</strong>生成（不需要参考图）
+          </template>
         </div>
       </div>
     </div>
@@ -632,6 +700,7 @@ onMounted(() => {
   <QuickPoseBatchPanel
     :platform-ready="ready"
     :model-ready="quickModelReady"
+    :pose-mode="poseMode"
     :has-references="refIdsList.length > 0"
     :busy="submitting || active"
     @run="onQuickRun"
