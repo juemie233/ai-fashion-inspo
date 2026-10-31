@@ -17,7 +17,13 @@
 
 cd "$(dirname "$0")/.."
 
-BACKEND_PORT=18888
+_env_value() {
+  local key="$1" file="backend/.env"
+  [ -f "$file" ] || return 0
+  awk -v key="$key" 'index($0, key "=") == 1 { sub(/^[^=]*=/, ""); gsub(/\r$/, ""); gsub(/^"|"$/, ""); print; exit }' "$file"
+}
+BACKEND_PORT="$(_env_value PORT)"
+BACKEND_PORT="${BACKEND_PORT:-18888}"
 FRONTEND_PORT=17777
 LOG_DIR="logs"
 
@@ -67,14 +73,58 @@ frontend_healthy() {
   curl -s --max-time 3 "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1
 }
 
+_status_pid() {
+  local service="$1"
+  python - "$LOG_DIR/service_status.json" "$service" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    raise SystemExit(0)
+pid = ((data.get("services") or {}).get(sys.argv[2]) or {}).get("pid")
+if isinstance(pid, int):
+    print(pid)
+PYEOF
+}
+
+_supervisor_pid() {
+  python - "$LOG_DIR/supervisor.pid" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        pid = json.load(f).get("pid")
+except Exception:
+    raise SystemExit(0)
+if isinstance(pid, int):
+    print(pid)
+PYEOF
+}
+
+_pid_alive() {
+  [ -n "$1" ] || return 1
+  # 用 Python os.kill(pid, 0)：Windows 的 tasklist 在 Git Bash 下参数会路径转换/输出 GBK，不可靠
+  python - "$1" <<'PYEOF' >/dev/null 2>&1
+import os, sys
+try:
+    os.kill(int(sys.argv[1]), 0)
+except OSError:
+    raise SystemExit(1)
+PYEOF
+}
+
 worker_running() {
   local found
+  found="$(_status_pid worker)"
+  if _pid_alive "$found"; then return 0; fi
   found=$(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+' | head -1)
   [ -n "$found" ]
 }
 
 supervisor_running() {
   local found
+  found="$(_supervisor_pid)"
+  if _pid_alive "$found"; then return 0; fi
   found=$(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*supervisor.py*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+' | head -1)
   [ -n "$found" ]
 }

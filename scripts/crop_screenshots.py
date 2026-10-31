@@ -333,47 +333,73 @@ async def apply_crops(args: argparse.Namespace) -> None:
 
                 # 2. 新内容哈希 + 去重检查（重复则放弃本条，保留原图）
                 new_hash = file_sha256(tmp)
-                if new_hash:
-                    dup_id = (
-                        await db.execute(
-                            select(Inspiration.id).where(
-                                Inspiration.content_hash == new_hash,
-                                Inspiration.id != insp_id,
-                                Inspiration.deleted_at.is_(None),
-                            )
+                if not new_hash:
+                    raise RuntimeError("无法计算裁剪结果的内容哈希")
+                dup_id = (
+                    await db.execute(
+                        select(Inspiration.id).where(
+                            Inspiration.content_hash == new_hash,
+                            Inspiration.id != insp_id,
+                            Inspiration.deleted_at.is_(None),
                         )
-                    ).scalars().first()
-                    if dup_id:
-                        skipped.append((insp_id, f"裁剪结果与素材 {dup_id} 内容重复"))
-                        tmp.unlink(missing_ok=True)
-                        continue
+                    )
+                ).scalars().first()
+                if dup_id:
+                    skipped.append((insp_id, f"裁剪结果与素材 {dup_id} 内容重复"))
+                    tmp.unlink(missing_ok=True)
+                    continue
 
                 # 3. 备份原图
-                shutil.copy2(full, backup_dir / f"{insp_id}{full.suffix}")
+                backup_file = backup_dir / f"{insp_id}{full.suffix}"
+                shutil.copy2(full, backup_file)
 
-                # 4. 原子替换原图（此后文件已变更，必须登记为成功）
+                # 4. 原子替换原图（此后文件已变更，必须与 DB 同步成功）
                 os.replace(tmp, full)
                 tmp = None
 
                 # 5. 重新生成缩略图（失败仅告警，沿用旧缩略图）
-                thumb_path = insp.thumbnail_path
-                new_thumb = await generate_thumbnail(full)
+                old_thumb = insp.thumbnail_path
+                thumb_path = old_thumb
+                new_thumb = None
+                try:
+                    new_thumb = await generate_thumbnail(full)
+                except Exception as exc:
+                    print(f"  警告 {insp_id}: 缩略图生成异常，沿用旧缩略图（{exc}）")
                 if new_thumb:
-                    if thumb_path and (
-                        settings.storage_root / thumb_path
-                    ) != (settings.storage_root / new_thumb):
-                        (settings.storage_root / thumb_path).unlink(missing_ok=True)
                     thumb_path = new_thumb
                 else:
                     print(f"  警告 {insp_id}: 缩略图生成失败，沿用旧缩略图")
 
-                # 6. 主色调重算（仅原值非空时刷新，避免引入新的过滤属性）
+                # 6. 主色调重算（仅原值非空时刷新；失败不阻断入库）
                 colors = insp.dominant_colors
                 if colors is not None:
-                    new_colors = extract_dominant_colors(full)
-                    colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
+                    try:
+                        new_colors = extract_dominant_colors(full)
+                        colors = json.dumps(new_colors) if new_colors else insp.dominant_colors
+                    except Exception as exc:
+                        print(f"  警告 {insp_id}: 主色调重算失败，沿用旧值（{exc}）")
 
-                successes.append((insp_id, new_hash or "", thumb_path, colors))
+                # 7. 逐条写库并提交：文件已替换后必须立即让 DB 追上；
+                #    提交失败则从备份恢复原图，避免「图已裁、库还旧」的半状态。
+                insp.content_hash = new_hash
+                insp.thumbnail_path = thumb_path
+                insp.dominant_colors = colors
+                insp.updated_at = utcnow()
+                try:
+                    await db.commit()
+                except Exception as exc:
+                    await db.rollback()
+                    shutil.copy2(backup_file, full)
+                    if new_thumb:
+                        (settings.storage_root / new_thumb).unlink(missing_ok=True)
+                    raise RuntimeError(f"写库失败，已从备份恢复原图: {exc}") from exc
+
+                successes.append((insp_id, new_hash, thumb_path, colors))
+                # 旧缩略图在 DB 提交成功后才删（提交失败时还要用它）
+                if old_thumb and new_thumb and (
+                    settings.storage_root / old_thumb
+                ) != (settings.storage_root / new_thumb):
+                    (settings.storage_root / old_thumb).unlink(missing_ok=True)
                 print(
                     f"  完成 {insp_id}: 裁剪顶部 {top_frac * 100:.1f}% / "
                     f"底部 {bottom_frac * 100:.1f}%"
@@ -383,14 +409,7 @@ async def apply_crops(args: argparse.Namespace) -> None:
                     tmp.unlink(missing_ok=True)
                 skipped.append((insp_id, f"处理失败: {e}"))
 
-        # 7. 写回数据库（标签/收藏/来源等字段不动）
-        for insp_id, new_hash, thumb_path, colors in successes:
-            insp = insp_map[insp_id]
-            if new_hash:
-                insp.content_hash = new_hash
-            insp.thumbnail_path = thumb_path
-            insp.dominant_colors = colors
-            insp.updated_at = utcnow()
+        # 兼容旧流程：每条已提交，这里再提交一次空事务（无害）
         await db.commit()
 
         # 8. 向量回填：图像向量按新图重建，文本向量沿用现有标签

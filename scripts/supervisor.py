@@ -18,6 +18,7 @@ import logging
 import logging.handlers
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -65,6 +66,12 @@ def _dotenv_value(key: str) -> str | None:
 读接口暴露到局域网。
 """
 BACKEND_HOST = os.environ.get("BACKEND_HOST") or _dotenv_value("HOST") or "127.0.0.1"
+
+# 端口同样以 .env 为准：否则改 PORT 后 supervisor 仍把 uvicorn 绑到 18888
+if "BACKEND_PORT" not in os.environ:
+    _env_port = _dotenv_value("PORT")
+    if _env_port and _env_port.isdigit():
+        BACKEND_PORT = int(_env_port)
 
 # ── 调参 ──
 CHECK_INTERVAL = 5.0            # 健康检查轮询间隔（秒）
@@ -157,23 +164,37 @@ class RotatingFileWriter:
                 self._rotate()
 
     def _rotate(self) -> None:
-        """轮转日志：移除最老备份，逐级后移，当前文件转为 .1。"""
+        """轮转日志：移除最老备份，逐级后移，当前文件转为 .1。
+
+        轮转失败（Windows 上日志被杀毒/索引占用很常见）不能让写入异常冒到
+        读取线程：那会让 stdout 管道停止被消费，子进程可能写满管道后卡死。
+        """
         assert self._fh is not None
-        self._fh.close()
-        self._fh = None
-        oldest = self.path.with_name(f"{self.path.name}.{self.backup_count}")
-        if oldest.exists():
-            oldest.unlink()
-        for i in range(self.backup_count - 1, 0, -1):
-            src = self.path.with_name(f"{self.path.name}.{i}")
-            if src.exists():
-                dst = self.path.with_name(f"{self.path.name}.{i + 1}")
-                if dst.exists():
-                    dst.unlink()
-                src.replace(dst)
-        if self.path.exists():
-            self.path.replace(self.path.with_name(f"{self.path.name}.1"))
-        self._open()
+        try:
+            self._fh.close()
+            self._fh = None
+            oldest = self.path.with_name(f"{self.path.name}.{self.backup_count}")
+            if oldest.exists():
+                oldest.unlink()
+            for i in range(self.backup_count - 1, 0, -1):
+                src = self.path.with_name(f"{self.path.name}.{i}")
+                if src.exists():
+                    dst = self.path.with_name(f"{self.path.name}.{i + 1}")
+                    if dst.exists():
+                        dst.unlink()
+                    src.replace(dst)
+            if self.path.exists():
+                self.path.replace(self.path.with_name(f"{self.path.name}.1"))
+        except OSError as exc:
+            print(f"[supervisor] 日志轮转失败（{self.path}）：{exc}", file=sys.stderr)
+        finally:
+            # 无论轮转是否成功都重新打开当前日志；打不开就放弃写日志，
+            # 但绝不能把异常抛给读取线程（见 docstring）。
+            try:
+                self._open()
+            except OSError as exc:
+                print(f"[supervisor] 重新打开日志失败（{self.path}）：{exc}", file=sys.stderr)
+                self._fh = None
 
     def close(self) -> None:
         with self._lock:
@@ -309,12 +330,21 @@ def _http_ok(url: str, timeout: float = 3.0) -> bool:
         return False
 
 
-def _disk_used_percent() -> float:
+def _disk_used_percent(path: Path | None = None) -> float:
     try:
-        usage = shutil.disk_usage(str(PROJECT_ROOT))
+        usage = shutil.disk_usage(str(path or PROJECT_ROOT))
         return usage.used / usage.total * 100
     except Exception:
         return 0.0
+
+
+def _storage_root() -> Path:
+    """素材存储根：数据盘可能与项目不在同一块盘（.env 的 STORAGE_ROOT）。"""
+    raw = _dotenv_value("STORAGE_ROOT")
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else BACKEND_DIR / path
+    return BACKEND_DIR / "storage"
 
 
 class _MEMORYSTATUSEX(ctypes.Structure):
@@ -382,11 +412,14 @@ def acquire_lock() -> bool:
 
 
 def _write_pid_heartbeat() -> None:
+    """原子写心跳：直接 write_text 会让第二个实例读到半截 JSON 并误判为陈旧锁。"""
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PID_FILE.write_text(
+    tmp = PID_FILE.with_name(f"{PID_FILE.name}.{os.getpid()}.tmp")
+    tmp.write_text(
         json.dumps({"pid": os.getpid(), "heartbeat_at": time.time()}),
         encoding="utf-8",
     )
+    tmp.replace(PID_FILE)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -433,11 +466,16 @@ def write_status_file(services: dict, alerts: list[str]) -> None:
 def _check_resources(logger: logging.Logger) -> list[str]:
     """检查磁盘/内存占用，超阈值写入告警日志并返回告警文案。"""
     alerts: list[str] = []
-    disk = _disk_used_percent()
-    if disk >= DISK_ALERT_PERCENT:
-        msg = f"磁盘使用率 {disk:.1f}% 超过阈值 {DISK_ALERT_PERCENT:.0f}%"
-        alerts.append(msg)
-        logger.warning(f"[资源告警] {msg}")
+    disks = [("项目盘", PROJECT_ROOT)]
+    storage = _storage_root()
+    if storage != PROJECT_ROOT and storage.exists():
+        disks.append(("素材盘", storage))
+    for label, path in disks:
+        disk = _disk_used_percent(path)
+        if disk >= DISK_ALERT_PERCENT:
+            msg = f"{label} {path} 使用率 {disk:.1f}% 超过阈值 {DISK_ALERT_PERCENT:.0f}%"
+            alerts.append(msg)
+            logger.warning(f"[资源告警] {msg}")
 
     mem = _memory_used_percent()
     if mem is not None and mem >= MEMORY_ALERT_PERCENT:
@@ -471,6 +509,16 @@ def _supervisor_logger() -> logging.Logger:
 def run() -> None:
     """supervisor 主流程：启动服务、循环健康检查与自动拉起。"""
     logger = _supervisor_logger()
+
+    def _on_stop(signum, _frame) -> None:
+        raise SystemExit(0)
+
+    # 收到终止信号也要走 finally 停子服务；否则直接退出会把 backend/worker 留成孤儿
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _on_stop)
+        except (OSError, ValueError):
+            pass
 
     if not acquire_lock():
         return

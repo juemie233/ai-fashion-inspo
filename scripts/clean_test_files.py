@@ -24,8 +24,16 @@ from PIL import Image
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent  # fashion-inspo 项目根
 BACKEND_DIR = PROJECT_DIR / "backend"
-STORAGE_DIR = BACKEND_DIR / "storage"
-DB_PATH = BACKEND_DIR / "fashion_inspo.db"
+# 与运行时同源：STORAGE_ROOT 可能迁到别的盘，写死 backend/storage 会扫错目录
+sys.path.insert(0, str(BACKEND_DIR))
+try:
+    from app.config import settings
+
+    STORAGE_DIR = Path(settings.storage_root)
+    DB_PATH = Path(settings.db_file_path)
+except Exception:
+    STORAGE_DIR = BACKEND_DIR / "storage"
+    DB_PATH = BACKEND_DIR / "fashion_inspo.db"
 
 # 测试上传使用的纯色（make_image 默认色 (200,100,50)）
 TEST_COLORS = {(200, 100, 50)}
@@ -77,13 +85,21 @@ def main() -> None:
 
     # 收集数据库中的真实路径
     known_paths = set()
-    if DB_PATH.exists():
+    if not DB_PATH.exists():
+        print(f"[错误] 数据库不存在，无法建立白名单：{DB_PATH}", file=sys.stderr)
+        if args.delete:
+            print("拒绝在数据库不可用时执行 --delete（可能误删真实素材）。", file=sys.stderr)
+            sys.exit(1)
+        print("仅做扫描（未删除），但白名单为空，结果不可信。", file=sys.stderr)
+    else:
         # 只读打开：本脚本按「库内无记录 + 测试时段 + 纯色小图」判定，只查不写库
         conn = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
         # 各表媒体路径字段 → 白名单（新增路径字段时在此登记即可纳入保护）
+        # 注意：没有 persons 表，人物头像在 bloggers / models
         path_columns = {
             "inspirations": ("file_path", "thumbnail_path"),
-            "persons": ("avatar_path",),
+            "bloggers": ("avatar_path",),
+            "models": ("avatar_path",),
         }
         for table, columns in path_columns.items():
             for column in columns:
@@ -91,11 +107,12 @@ def main() -> None:
                     for (p,) in conn.execute(
                         f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"
                     ):
-                        known_paths.add(p.replace("\\", "/"))
-                except sqlite3.Error:
-                    pass
+                        if p:
+                            known_paths.add(p.replace("\\", "/"))
+                except sqlite3.Error as exc:
+                    print(f"[警告] 白名单查询失败 {table}.{column}: {exc}", file=sys.stderr)
         conn.close()
-    print(f"数据库已知路径: {len(known_paths)} 条")
+    print(f"数据库已知路径: {len(known_paths)} 条（storage={STORAGE_DIR}）")
 
     candidates = []
     for sub in ("images", "thumbnails"):

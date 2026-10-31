@@ -6,7 +6,7 @@
 # 用法：双击 scripts/sync_openviking.bat（推荐），或在 Git Bash 中执行：
 #         bash scripts/sync_openviking.sh            # 增量（默认）
 #         bash scripts/sync_openviking.sh --full     # 忽略状态文件，强制全量
-#         bash scripts/sync_openviking.sh --dry-run  # 只预览，不上传也不落状态（仍会刷新决策台账）
+#         bash scripts/sync_openviking.sh --dry-run  # 只预览，不上传、不落状态，也不写决策台账
 # 说明：
 #   - 增量判定按「文件内容 sha1」比对，状态落 scripts/.sync_openviking_state.json。
 #     该文件是机器相关运行时数据，已在 .gitignore 忽略；删掉它即退化为全量同步。
@@ -141,6 +141,8 @@ TEST_FILE_RE = re.compile(
 # 本脚本自己的增量状态文件（scripts/ 也在白名单里、.json 也在扩展名白名单里，
 # 不显式排除会被当成源码索引进去，而且它每次运行都变，会无限自我重传）
 STATE_BASENAME = ".sync_openviking_state.json"
+# scripts/ 下还有被 gitignore 的派生文件（人工审查清单），不应进索引
+SKIP_BASENAMES = {STATE_BASENAME, "crop_candidates.json"}
 
 # 决策台账（派生文档；已在 .gitignore 忽略，不入库、不需要人工维护）
 DECISIONS_DIR_REL = "docs/decisions"
@@ -272,7 +274,7 @@ for d in DIRS:
             kept.append(x)
         dirnames[:] = kept
         for fn in filenames:
-            if fn == STATE_BASENAME or fn == STATE_BASENAME + ".tmp":
+            if fn in SKIP_BASENAMES or fn.startswith(STATE_BASENAME + "."):
                 continue
             if os.path.splitext(fn)[1].lower() not in EXTS:
                 continue
@@ -499,7 +501,8 @@ for i in range(0, len(ops), CHUNK):
         sys.exit(1)
 
 # ---------- 6. 全部批次成功后才落状态（原子替换） ----------
-tmp_path = STATE_PATH + ".tmp"
+# 唯一临时名：计划任务与手动运行并发时不能共用同一个 .tmp
+tmp_path = f"{STATE_PATH}.{os.getpid()}.tmp"
 with open(tmp_path, "w", encoding="utf-8") as fh:
     json.dump(
         {

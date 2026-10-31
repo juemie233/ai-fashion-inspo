@@ -22,6 +22,7 @@ rem 切到项目根目录（脚本位于 scripts\ 下）
 cd /d "%~dp0.."
 
 set BACKEND_PORT=18888
+for /f "tokens=1,2 delims==" %%a in ('findstr /B "PORT=" backend\.env 2^>nul') do if /I "%%a"=="PORT" set BACKEND_PORT=%%b
 set FRONTEND_PORT=17777
 set FACE_PORT=18889
 set FACE_LOG=logs\face-service.log
@@ -51,7 +52,7 @@ for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":%BACKEND_PORT%" ^| findstr 
 )
 
 rem 兜底：按命令行匹配 uvicorn reloader 主进程 + spawn worker 子进程
-for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and ($_.CommandLine -like '*uvicorn app.main*' -or $_.CommandLine -like '*spawn_main*') } | Select-Object -ExpandProperty ProcessId"`) do (
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and ($_.CommandLine -like '*uvicorn app.main*') } | Select-Object -ExpandProperty ProcessId"`) do (
   taskkill /F /T /PID %%p >nul 2>&1
   if not errorlevel 1 echo   已终止 uvicorn 进程 PID %%p
 )

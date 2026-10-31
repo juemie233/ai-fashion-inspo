@@ -4,18 +4,19 @@
 #   bash scripts/test.sh --cov    后端额外输出行级覆盖率报告（term-missing）
 #
 # 门禁清单（顺序即输出编号）：
-#    1. 后端 pytest 全量 + 覆盖率棘轮 ≥69%（临时库/临时存储，不碰真实数据）
+#    1. 后端 pytest 全量 + 覆盖率棘轮 ≥82%（临时库/临时存储，不碰真实数据）
 #    2. 后端 ruff（零告警）
 #    3. 后端 vulture（死代码，--min-confidence 80 必须 0 条）
 #    4. 后端 mypy 棘轮（只查已清零的模块，列表只增不减）
 #    5. 迁移链自检（空库 upgrade head → 结构必须与 ORM 一致）
 #    6. 真实库漂移（ORM ↔ 现有库；无库环境自动跳过）
-#    7. 前端 vue-tsc 类型检查
-#    8. 前端 vitest
-#    9. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
-#   10. 前端死代码基线（ts-prune，只拦新增）
-#   11. 前端格式（只查本次改动文件；全库检查会因 45 个历史文件永远为红）
-#   12. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含裸字符串检查）
+#    7. 脚本规范（只读连接 / CLI 入口）
+#    8. 前端 vue-tsc 类型检查
+#    9. 前端 vitest
+#   10. 前端 eslint（带 --max-warnings 棘轮：只能降不能升，当前 34）
+#   11. 前端死代码基线（ts-prune，只拦新增）
+#   12. 前端格式（只查本次改动文件；全库检查会因约 45 个历史文件永远为红）
+#   13. 移动端类型检查（tsc）+ 单元测试（jest-expo + RNTL，含裸字符串检查）
 #
 # 依赖：Python 3.12+（可用 PYTHON_BIN 覆盖，如 PYTHON_BIN=py）、Node 20+、web/node_modules。
 # 前端一律用 node 直接调用本地二进制，规避 npx/npm 包装脚本在受限 PowerShell 下的执行策略问题。

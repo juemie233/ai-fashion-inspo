@@ -16,11 +16,57 @@
 
 cd "$(dirname "$0")/.."
 
-BACKEND_PORT=18888
+# 端口以 backend/.env 为准，脚本不再写死（改 PORT 后仍能正确杀/探）
+_env_value() {
+  local key="$1" file="backend/.env"
+  [ -f "$file" ] || return 0
+  awk -v key="$key" 'index($0, key "=") == 1 { sub(/^[^=]*=/, ""); gsub(/\r$/, ""); gsub(/^"|"$/, ""); print; exit }' "$file"
+}
+BACKEND_PORT="$(_env_value PORT)"
+BACKEND_PORT="${BACKEND_PORT:-18888}"
 FRONTEND_PORT=17777
 FACE_PORT=18889
 LOG_DIR="logs"
 FACE_LOG="$LOG_DIR/face-service.log"
+
+# 从 supervisor 状态文件取精确 PID（优先于按命令行通配杀进程）
+_status_pid() {
+  local service="$1"
+  python - "$LOG_DIR/service_status.json" "$service" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    raise SystemExit(0)
+pid = ((data.get("services") or {}).get(sys.argv[2]) or {}).get("pid")
+if isinstance(pid, int):
+    print(pid)
+PYEOF
+}
+_supervisor_pid() {
+  python - "$LOG_DIR/supervisor.pid" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        pid = json.load(f).get("pid")
+except Exception:
+    raise SystemExit(0)
+if isinstance(pid, int):
+    print(pid)
+PYEOF
+}
+_pid_alive() {
+  [ -n "$1" ] || return 1
+  # 用 Python os.kill(pid, 0)：Windows 的 tasklist 在 Git Bash 下参数会路径转换/输出 GBK，不可靠
+  python - "$1" <<'PYEOF' >/dev/null 2>&1
+import os, sys
+try:
+    os.kill(int(sys.argv[1]), 0)
+except OSError:
+    raise SystemExit(1)
+PYEOF
+}
 
 mkdir -p "$LOG_DIR"
 
@@ -31,9 +77,15 @@ echo "=============================================="
 # ── 0. 停止 supervisor（守护进程；级联停止三服务）──
 echo ""
 echo ">>> [0/5] 停止 supervisor ..."
-for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*supervisor.py*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
-  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 supervisor 进程树 PID $pid"
-done
+SUP_PID="$(_supervisor_pid)"
+if _pid_alive "$SUP_PID"; then
+  taskkill //F //T //PID "$SUP_PID" >/dev/null 2>&1 && echo "  已终止 supervisor 进程树 PID $SUP_PID"
+else
+  # 心跳文件缺失/过期时兜底；该匹配只在“本机 supervisor 不在”时用于清理残留
+  for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*supervisor.py*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+    taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 supervisor 进程树 PID $pid"
+  done
+fi
 sleep 1
 
 # ── 1. 停止后端 ──
@@ -52,7 +104,7 @@ done
 #     uvicorn --reload 用 multiprocessing spawn 启动 server worker；若 reloader
 #     先被单独杀掉，worker 会变成孤儿继续持有端口（此时 netstat 只显示已死的
 #     reloader PID，导致 1a 无法命中）。必须同时按命令行清理 spawn worker。
-for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*uvicorn app.main*' -or \$_.CommandLine -like '*spawn_main*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*uvicorn app.main*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
   taskkill //F //T //PID "$pid" >/dev/null 2>&1 && { echo "  已终止 uvicorn 进程 PID $pid"; killed=1; }
 done
 
@@ -83,9 +135,15 @@ fi
 # ── 3. 停止 worker ──
 echo ""
 echo ">>> [3/5] 停止 worker ..."
-for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
-  taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 worker 进程 PID $pid"
-done
+WORKER_PID="$(_status_pid worker)"
+if _pid_alive "$WORKER_PID"; then
+  taskkill //F //T //PID "$WORKER_PID" >/dev/null 2>&1 && echo "  已终止 worker 进程 PID $WORKER_PID"
+else
+  # supervisor 已停、状态文件缺失时的兜底：仅按 worker 模块名匹配
+  for pid in $(powershell -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -like '*app.worker*' } | Select-Object -ExpandProperty ProcessId" 2>/dev/null | grep -Eo '[0-9]+'); do
+    taskkill //F //T //PID "$pid" >/dev/null 2>&1 && echo "  已终止 worker 进程 PID $pid"
+  done
+fi
 sleep 1
 
 # ── 4. 停止并启动人脸识别服务（face-service，独立于 supervisor）──

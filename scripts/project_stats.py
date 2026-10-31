@@ -312,15 +312,30 @@ def collect(root: Path) -> dict:
             code[label] = {"files": files, "lines": lines}
             total_files += files
             total_lines += lines
+    # 与运行时同源：STORAGE_ROOT / DATABASE_URL 可能指向别的盘，不能写死 backend/storage
+    backend_dir = root / "backend"
+    storage_root = backend_dir / "storage"
+    db_path = backend_dir / "fashion_inspo.db"
+    if str(backend_dir) not in sys.path:
+        sys.path.insert(0, str(backend_dir))
+    try:
+        from app.config import settings
+
+        storage_root = Path(settings.storage_root)
+        db_path = Path(settings.db_file_path)
+    except Exception:
+        pass
+
     return {
         "root": str(root),
         "code": code,
         "code_total": {"files": total_files, "lines": total_lines},
-        "db": db_stats(root / "backend/fashion_inspo.db"),
+        "db": db_stats(db_path),
         "storage": {
-            part: dir_size(root / "backend/storage" / part) for part in STORAGE_PARTS
+            part: dir_size(storage_root / part) for part in STORAGE_PARTS
         },
-        "storage_total": dir_size(root / "backend/storage"),
+        "storage_total": dir_size(storage_root),
+        "storage_root": str(storage_root),
         "git": git_info(root),
         "tests": test_stats(root),
     }

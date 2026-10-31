@@ -61,6 +61,16 @@ if [ -z "$STORAGE_DIR" ] || [ ! -d "$STORAGE_DIR" ]; then
   echo "⚠ 若数据盘已迁移，本次备份的可能不是现网素材树；已在 manifest 标记 fallback 并计入告警。"
 fi
 
+# DB 路径同样跟随 DATABASE_URL：写死 backend/fashion_inspo.db 在自定义数据库路径下会备错库
+DB_PATH=""
+if command -v python >/dev/null 2>&1; then
+  DB_PATH="$(cd backend 2>/dev/null && python -c 'from app.config import settings; print(settings.db_file_path)' 2>/dev/null)"
+fi
+case "$DB_PATH" in
+  /*|[A-Za-z]:*) : ;;
+  *) DB_PATH="$PROJECT_ROOT/backend/fashion_inspo.db" ;;
+esac
+
 # ── 参数解析 ──
 TARGET=""
 ALLOW_SAME_DISK=0
@@ -84,6 +94,10 @@ while [ $# -gt 0 ]; do
       shift ;;
   esac
 done
+
+case "$VERIFY_SAMPLE" in
+  ''|*[!0-9]*) echo "错误：--verify-sample 必须是非负整数（当前：$VERIFY_SAMPLE）"; exit 1 ;;
+esac
 
 if [ -z "$TARGET" ]; then
   echo "错误：必须指定备份目标目录。"
@@ -178,8 +192,8 @@ fail() {
 # ── 1. 数据库一致性快照 + SQL 明文导出 ──
 echo ">>> [1/5] 备份数据库（一致性快照 + SQL 导出）..."
 DB_OK=0
-if [ -f backend/fashion_inspo.db ]; then
-  python - backend/fashion_inspo.db "$DEST/fashion_inspo.db" "$DEST/fashion_inspo.sql" <<'PYEOF'
+if [ -f "$DB_PATH" ]; then
+  python - "$DB_PATH" "$DEST/fashion_inspo.db" "$DEST/fashion_inspo.sql" <<'PYEOF'
 import sqlite3, sys
 src_path, db_dest, sql_dest = sys.argv[1], sys.argv[2], sys.argv[3]
 src = sqlite3.connect(src_path)
@@ -198,7 +212,7 @@ print("  数据库快照 + SQL 导出完成")
 PYEOF
   DB_OK=$?
 else
-  fail "未找到 backend/fashion_inspo.db，跳过数据库备份"
+  fail "未找到数据库文件（$DB_PATH），跳过数据库备份"
 fi
 [ "$DB_OK" -ne 0 ] && fail "数据库快照/导出失败（python 退出码 $DB_OK）"
 echo ""
@@ -212,7 +226,7 @@ if [ -d "$STORAGE_DIR" ]; then
     # _pre_reset_snapshot / _pre_restore_snapshot 为 reset/restore 前的 7 天临时
     # 安全网（内含整库素材副本），不应重复打进长期备份，故一并排除。
     robocopy "$STORAGE_DIR" "$DEST/storage" //E \
-      //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
+      //XD logs tmp lancedb _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
       //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
     RC=$?
     if [ "$RC" -le 7 ]; then
@@ -314,7 +328,7 @@ PYEOF
       # /MIR 修复：同时处理「源端新增」与「源端删除」两类漂移；
       # 正在写入中的文件复制失败由下一轮重试兜底
       robocopy "$STORAGE_DIR/$d" "$DEST/storage/$d" //MIR \
-        //XD logs tmp _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
+        //XD logs tmp lancedb _crop_backup _crop_dups cookies debug faces lancedb_backup_* _pre_reset_snapshot _pre_restore_snapshot \
         //R:1 //W:1 //NFL //NDL //NJH //NJS //NP
       RC=$?
       if [ "$RC" -le 7 ]; then
@@ -403,8 +417,11 @@ for f in backend/.env backend/prompt_configs.json backend/model_configs.json \
          backend/prompt_versions.json backend/prompt.txt web/.env.local; do
   if [ -f "$f" ]; then
     mkdir -p "$DEST/$(dirname "$f")"
-    cp "$f" "$DEST/$f"
-    echo "  已备份 $f"
+    if cp "$f" "$DEST/$f"; then
+      echo "  已备份 $f"
+    else
+      fail "备份运行时配置失败：$f"
+    fi
   fi
 done
 echo ""

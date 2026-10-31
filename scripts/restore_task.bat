@@ -14,7 +14,7 @@ REM The script does NOT stop/start services. Stop the backend/worker first.
 setlocal
 
 REM Where backups live (must match backup_task.bat). Used only when no arg given.
-set "BACKUP_ROOT=E:\fashion-inspo-backups"
+if not defined BACKUP_ROOT set "BACKUP_ROOT=E:\fashion-inspo-backups"
 
 set "PROJECT_DIR=%~dp0.."
 
@@ -36,7 +36,7 @@ if not "%~1"=="" (
   set "BACKUP_BASH=%~1"
   set "BACKUP_BASH=%BACKUP_BASH:\=/%"
   echo [restore_task] restoring from %BACKUP_BASH%
-  "%BASH_EXE%" -c "bash '%SCRIPT_PATH%' '%BACKUP_BASH%' %2 %3 %4 %5"
+  "%BASH_EXE%" "%SCRIPT_PATH%" "%BACKUP_BASH%" %2 %3 %4 %5
   goto :done
 )
 
@@ -53,7 +53,7 @@ if not defined LATEST (
 )
 set "LATEST_BASH=%LATEST:\=/%"
 echo [restore_task] latest: %LATEST_BASH%
-"%BASH_EXE%" -c "bash '%SCRIPT_PATH%' '%LATEST_BASH%'"
+"%BASH_EXE%" "%SCRIPT_PATH%" "%LATEST_BASH%"
 
 :done
 set "RC=%errorlevel%"

@@ -10,6 +10,7 @@
 
 import io
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -27,7 +28,26 @@ except Exception:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATUS_FILE = PROJECT_ROOT / "logs" / "service_status.json"
-API_URL = "http://127.0.0.1:18888/api/health/services"
+
+
+def _backend_port() -> int:
+    """后端端口：环境变量 BACKEND_PORT > backend/.env 的 PORT > 18888。"""
+    raw = os.environ.get("BACKEND_PORT", "").strip()
+    if not raw:
+        try:
+            for line in (PROJECT_ROOT / "backend" / ".env").read_text(
+                encoding="utf-8"
+            ).splitlines():
+                key, _, value = line.strip().partition("=")
+                if key == "PORT":
+                    raw = value.strip().strip('"').strip("'")
+                    break
+        except OSError:
+            pass
+    return int(raw) if raw.isdigit() else 18888
+
+
+API_URL = f"http://127.0.0.1:{_backend_port()}/api/health/services"
 
 # 状态 → 中文展示
 _STATUS_LABEL = {

@@ -15,15 +15,32 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DB = Path(__file__).resolve().parent.parent / "backend" / "fashion_inspo.db"
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "backend"))
+try:
+    from app.config import settings
+
+    DEFAULT_DB = Path(settings.db_file_path)
+except Exception:  # 后端依赖不可用时退回默认路径（仍可手动 --db）
+    DEFAULT_DB = ROOT / "backend" / "fashion_inspo.db"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--delete", action="store_true", help="实际删除（缺省仅 dry-run 统计）")
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"数据库路径（默认 {DEFAULT_DB}）")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(str(DB))
+    db_path = args.db.resolve()
+    if not db_path.is_file():
+        print(f"[错误] 数据库不存在：{db_path}", file=sys.stderr)
+        return 1
+
+    # dry-run 只读打开：避免统计动作顺带创建 WAL/持有写锁
+    if args.delete:
+        conn = sqlite3.connect(str(db_path))
+    else:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     cur = conn.cursor()
 
     # 取全部非空 embedding 记录（占位记录 embedding='' 不参与分组）
@@ -64,6 +81,7 @@ def main() -> int:
         conn.close()
         return 0
 
+    print(f"[提醒] 即将删除 {len(to_delete)} 条重复记录；建议先备份数据库：{db_path}")
     cur.executemany("DELETE FROM inspiration_face_detections WHERE id = ?", [(i,) for i in to_delete])
     conn.commit()
     print(f"已删除 {len(to_delete)} 条重复记录。")

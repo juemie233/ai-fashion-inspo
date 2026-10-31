@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 from app.database import async_session, init_db
 from app.models.inspiration import Inspiration
 from app.services.ai_service import analyze_image
-from app.services.file_service import save_upload
+from app.services.file_service import delete_files, save_upload
 from app.services.inspiration_service import find_duplicate_by_hash
 
 # 支持的扩展名 → (media_type, content_type)
@@ -73,6 +73,8 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
         imported_items: list[tuple[str, str]] = []  # (inspiration_id, rel_path)
 
         for i, file_path in enumerate(files, 1):
+            saved_rel: str | None = None
+            saved_thumb: str | None = None
             try:
                 ext = file_path.suffix.lower()
                 media_type, content_type = _EXT_MEDIA[ext]
@@ -96,6 +98,7 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
                         _file=f,
                     )
                     rel_path, thumb_path = await save_upload(fake_file)
+                    saved_rel, saved_thumb = rel_path, thumb_path
 
                 inspiration = Inspiration(
                     source_type=source_type,
@@ -114,6 +117,12 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
 
             except Exception as e:
                 failed += 1
+                # 文件已落盘但 DB 行没写成功：清掉，避免留下孤儿文件
+                if saved_rel:
+                    try:
+                        delete_files(saved_rel, saved_thumb)
+                    except Exception as cleanup_exc:
+                        print(f"    清理已落盘文件失败: {cleanup_exc}")
                 print(f"  [{i}/{len(files)}] {file_path.name} 失败: {e}")
 
         # 显式提交导入记录：确保即使 AI 分析失败/脚本中断，已导入素材也不丢失
@@ -125,13 +134,16 @@ async def import_folder(folder_path: str, source_type: str = "manual_upload"):
             print("开始 AI 分析（逐张执行，耗时较长）...")
             ok = 0
             for idx, (insp_id, rel_path) in enumerate(imported_items, 1):
-                try:
-                    if await analyze_image(db, insp_id, rel_path):
-                        ok += 1
-                    else:
-                        print(f"  分析失败（已记录错误日志）: {rel_path}")
-                except Exception as e:
-                    print(f"  分析异常: {insp_id} — {e}")
+                # 每张用独立 session：某张分析触发数据库异常时不会污染后续所有项
+                async with async_session() as analysis_db:
+                    try:
+                        if await analyze_image(analysis_db, insp_id, rel_path):
+                            ok += 1
+                        else:
+                            print(f"  分析失败（已记录错误日志）: {rel_path}")
+                    except Exception as e:
+                        await analysis_db.rollback()
+                        print(f"  分析异常: {insp_id} — {e}")
                 print(f"  [{idx}/{len(imported_items)}] 分析完成")
             print(f"AI 分析完成：成功 {ok}/{len(imported_items)}")
 

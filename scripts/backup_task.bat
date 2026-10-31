@@ -10,7 +10,7 @@ REM Delete:  schtasks /Delete /TN "FashionInspo-Backup" /F
 setlocal
 
 REM Backup target (a separate physical SSD to survive project-disk failure). Edit as needed.
-set "BACKUP_TARGET=E:\fashion-inspo-backups"
+if not defined BACKUP_TARGET set "BACKUP_TARGET=E:\fashion-inspo-backups"
 
 REM Project root = parent of the scripts directory holding this file.
 set "PROJECT_DIR=%~dp0.."
@@ -32,7 +32,7 @@ set "TARGET_BASH=%BACKUP_TARGET:\=/%"
 set "SCRIPT_PATH=%PROJECT_BASH%/scripts/backup_data.sh"
 
 echo [backup_task] %date% %time% starting backup to %BACKUP_TARGET%
-"%BASH_EXE%" -c "bash '%SCRIPT_PATH%' '%TARGET_BASH%'"
+"%BASH_EXE%" "%SCRIPT_PATH%" "%TARGET_BASH%"
 set "RC=%errorlevel%"
 echo [backup_task] finished with exit code %RC%
 endlocal & exit /b %RC%

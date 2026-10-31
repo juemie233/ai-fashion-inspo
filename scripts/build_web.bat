@@ -1,4 +1,5 @@
 @echo off
+chcp 936 >nul
 REM AI 穿搭素材库 — 前端项目打包脚本（Windows 入口，委托给 bash 执行 build_web.sh）
 REM 用法:
 REM   scripts\build_web.bat           只构建，产物在 web\dist

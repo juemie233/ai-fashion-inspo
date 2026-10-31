@@ -19,10 +19,12 @@
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from uuid import uuid4
 
 # 默认配置
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -144,7 +146,13 @@ def translate_file(base_url: str, model: str, src: Path, force: bool) -> None:
             print(f"  [警告] 段落 {i} 翻译结果为空，保留原文")
             translated = chunk
         parts.append(translated)
-    dst.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+    # 原子写：翻译过程中断不能留下半截 .en.md（否则下次会被当作已完成而跳过）
+    tmp = dst.with_name(f"{dst.name}.{uuid4().hex}.tmp")
+    try:
+        tmp.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
     print(f"[完成] {dst.name}（{len(parts)} 段）")
 
 

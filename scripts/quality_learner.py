@@ -77,12 +77,13 @@ def cmd_reset() -> int:
 
 async def main() -> int:
     """脚本入口。"""
-    await init_db()
-    await ensure_schema()
-
+    # 先解析参数：`--help`/参数错误不应触发建库或迁移
     parser = argparse.ArgumentParser(description="负样本初筛器（CLIP 向量 + sklearn）")
     parser.add_argument("command", choices=["status", "train", "reset"])
     args = parser.parse_args()
+
+    await init_db()
+    await ensure_schema()
 
     if args.command == "status":
         return await cmd_status()

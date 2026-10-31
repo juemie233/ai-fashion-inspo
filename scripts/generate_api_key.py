@@ -36,7 +36,9 @@ def main() -> None:
 
     if current:
         print("已检测到 API_KEY 配置（为避免误覆盖，未生成新密钥）。")
-        print(f"  当前密钥: {current}")
+        # 只回显掩码：脚本可能在终端/日志/录屏中执行，不能把完整密钥打出来
+        masked = f"{current[:4]}…{current[-4:]}" if len(current) > 8 else "***"
+        print(f"  当前密钥: {masked}（已脱敏，完整值见 backend/.env）")
         print("  如需更换，请手动修改 backend/.env 中的 API_KEY 后重启后端。")
         return
 
