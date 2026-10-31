@@ -6,8 +6,8 @@
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tag import InspirationTag, Tag
@@ -306,43 +306,38 @@ async def link_tag(
     confidence: float = 1.0,
     source: str = "ai_generated",
 ) -> None:
-    """将标签与素材关联，避免重复。纠竞态冲突，置信度更高时更新。
+    """把标签关联到素材（原子 upsert，幂等）。
 
-    新建关联写入 source（AI 关联默认 ai_generated）；已存在关联时
-    保留其原 source（不把手动关联覆盖成 AI 关联）。
+    语义（三条都必须成立，写错了不报错只会让数据慢慢变脏）：
+
+    - **同一 (素材, 标签) 只允许一行**：复合主键保证，重复调用不新增；
+    - **置信度只升不降**：二次分析若置信度更低，保留原值（好结果不被差结果覆盖）；
+    - **不覆盖已有关联的 source**：手动/种子关联保持 manual，不会被二次分析改写成
+      ai_generated（否则人工修正记录被抹掉）。
+
+    实现用 SQLite 的 ``INSERT … ON CONFLICT DO UPDATE`` 而不是「先查后写 + 捕获
+    IntegrityError」：
+    - 先查后写有并发窗口，批量分析（多任务并发写同一素材）时必然撞唯一约束；
+    - 原来的补偿路径是 ``begin_nested()`` + ``except IntegrityError``，但 flush 失败后
+      Session 进入 pending-rollback 状态，补偿逻辑里的下一次 execute 直接抛
+      ``PendingRollbackError``——**恢复路径自己成了新的异常**，整个分析批次跟着失败。
+    upsert 是单条原子语句，既没有窗口也不需要异常处理。
     """
-    result = await db.execute(
-        select(InspirationTag).where(
-            InspirationTag.inspiration_id == inspiration_id,
-            InspirationTag.tag_id == tag_id,
-        )
-    )
-    existing = result.scalar_one_or_none()
-    if existing:
-        if confidence > existing.confidence:
-            existing.confidence = confidence
-        await db.flush()
-    else:
-        link = InspirationTag(
+    stmt = (
+        sqlite_insert(InspirationTag)
+        .values(
             inspiration_id=inspiration_id,
             tag_id=tag_id,
             confidence=confidence,
             source=source,
         )
-        db.add(link)
-        try:
-            async with db.begin_nested():
-                await db.flush()
-        except IntegrityError:
-            # SAVEPOINT 已回滚（不影响同事务其它关联），移除失败对象后重查更新
-            db.expunge(link)
-            result2 = await db.execute(
-                select(InspirationTag).where(
-                    InspirationTag.inspiration_id == inspiration_id,
-                    InspirationTag.tag_id == tag_id,
-                )
-            )
-            retry_existing = result2.scalar_one_or_none()
-            if retry_existing and confidence > retry_existing.confidence:
-                retry_existing.confidence = confidence
-                await db.flush()
+        .on_conflict_do_update(
+            index_elements=[
+                InspirationTag.inspiration_id,
+                InspirationTag.tag_id,
+            ],
+            # 只动置信度（取较大值）与 updated 无关；source 不在 set_ 里 → 保留原值
+            set_={"confidence": func.max(InspirationTag.confidence, confidence)},
+        )
+    )
+    await db.execute(stmt)

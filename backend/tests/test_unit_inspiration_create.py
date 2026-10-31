@@ -177,3 +177,91 @@ async def test_create_from_url_tombstone(client):
             )
     assert exc.value.status_code == 409
     assert "墓碑" in str(exc.value.detail)
+
+
+# ── 上传路径的收尾分支：视频、并发冲突、回填降级 ──
+
+
+def _video_upload() -> UploadFile:
+    """构造一个「声明为视频」的上传（内容校验与缩略图在用例里打桩）。"""
+    return UploadFile(
+        file=BytesIO(b"fake-mp4-bytes"),
+        filename="clip.mp4",
+        headers={"content-type": "video/mp4"},  # type: ignore[arg-type]
+    )
+
+
+async def test_create_inspiration_video_marks_type_and_prewarms(client, monkeypatch):
+    """视频上传：media_type 由 Content-Type 判定，并后台预热关键帧。"""
+    import app.services.file_service as fs
+    import app.services.video_service as vs
+
+    monkeypatch.setattr(fs, "validate_media", lambda path, ct: None)
+
+    async def _thumb(_path, _dir=None):
+        return "thumbnails/2026-10/clip_thumb.jpg"
+
+    monkeypatch.setattr(inspiration_create, "generate_thumbnail", _thumb)
+    warmed: list[str] = []
+    monkeypatch.setattr(vs, "prewarm_keyframes", lambda insp: warmed.append(insp.id))
+
+    async with async_session() as db:
+        insp = await inspiration_create.create_inspiration(db, _video_upload())
+        await db.commit()
+
+    assert insp.media_type == "video"
+    assert warmed == [insp.id]
+
+
+async def test_create_inspiration_flush_conflict_returns_409(client, monkeypatch):
+    """查重通过但 flush 撞唯一约束（并发抢跑）→ 409，且不残留落盘文件。"""
+    from app.config import settings
+    from app.models.inspiration import Inspiration
+
+    async with async_session() as db:
+        db.add(
+            Inspiration(
+                id="upload-conflict-1",
+                source_type="douyin",
+                source_platform_id="xhs:upload-race#image_1",
+                file_path="images/2026-10/race.jpg",
+                media_type="image",
+            )
+        )
+        await db.commit()
+
+    async def _skip(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(inspiration_create, "check_platform_id_duplicate", _skip)
+
+    def _count() -> int:
+        root = settings.images_dir
+        return sum(1 for p in root.rglob("*") if p.is_file()) if root.exists() else 0
+
+    before = _count()
+    async with async_session() as db:
+        with pytest.raises(HTTPException) as exc:
+            await inspiration_create.create_inspiration(
+                db, _upload_file((31, 32, 33)), source_platform_id="xhs:upload-race#image_1"
+            )
+
+    assert exc.value.status_code == 409
+    assert "平台 ID 冲突" in str(exc.value.detail)
+    assert _count() == before  # 落盘文件已清理，不留孤儿
+
+
+async def test_create_inspiration_tolerates_backfill_failure(client, monkeypatch):
+    """向量回填登记失败只记日志：上传本身已经成功，不能被拖成失败。"""
+    import app.services.task_runners.vector_backfill as vb
+
+    async def _boom(db, ids):
+        raise RuntimeError("任务表不可用")
+
+    monkeypatch.setattr(vb, "enqueue_vector_backfills", _boom)
+
+    async with async_session() as db:
+        insp = await inspiration_create.create_inspiration(db, _upload_file((41, 42, 43)))
+        await db.commit()
+
+    assert insp.id
