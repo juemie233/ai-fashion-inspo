@@ -242,8 +242,9 @@ function selectPoseModel(): void {
   pendingKind.value = 'i2i'
 }
 
-/** 姿势生成方式：默认「文字描述（文生图）」；用户可切「线稿参考（图生图）」。 */
-const poseMode = ref<'text' | 'lineart'>('text')
+/** 姿势生成方式：默认「线稿参考（图生图）」——走第三个未审查档位；
+ * 用户可切「文字描述（文生图）」走第一个档位。 */
+const poseMode = ref<'text' | 'lineart'>('lineart')
 
 /** 文生图默认档位（Z-Image）；目前没有未审查的文生图档位，按就绪优先即可。 */
 const POSE_TEXT_MODEL_KEY = 'z_image_int8'
@@ -312,6 +313,9 @@ const refCountOk = computed(
 /** 选中姿势：按当前生成方式切档位（默认文字描述/文生图，可切线稿参考/图生图） */
 function onPoseSelected(pose: PoseItem): void {
   selectedPose.value = pose
+  // 线稿参考固定用未审查第三档；文字描述用文生图第一档
+  pendingModelKey.value = ''
+  pendingKind.value = null
   applyPoseMode(poseMode.value)
   Message.success(
     poseMode.value === 'text'
@@ -598,8 +602,13 @@ onMounted(() => {
     modelKey.value = props.initialModelKey
     pendingModelKey.value = ''
   }
-  // 换姿势流程最后定档位：默认用**文生图**（文字描述），保留参考图供用户切线稿参考。
-  if (props.initialPoseLib) applyPoseMode(poseMode.value)
+  // 换姿势流程最后定档位：默认「线稿参考」→ 未审查第三档（覆盖前面 initialRefIds
+  // 选中的普通改款第二档）；用户仍可在面板切「文字描述」换成文生图第一档。
+  if (props.initialPoseLib) {
+    pendingModelKey.value = ''
+    pendingKind.value = null
+    applyPoseMode(poseMode.value)
+  }
 })
 </script>
 

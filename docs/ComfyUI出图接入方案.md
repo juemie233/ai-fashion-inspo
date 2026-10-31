@@ -851,7 +851,7 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 | 图库服务 | `backend/app/services/pose_gallery.py`：图库目录（8,288 组/1,439 张体系）、图片缓存（`storage/pose_gallery/images`）、错误映射（4xx/ValueError→502、网络/5xx→503）、不做 18+ 过滤 |
 | 生成参数 | `POST /api/generate/runs` 支持 `params.pose_id`；`generation_service` 校验姿势存在后随任务参数落库，重试/重新生成/导出都携带 |
 | 前端入口 | `GenerateParamForm` 姿势选择器 + 详情页「用这个姿势生成」；`selectPoseModel()` 优先切到**未审查 i2i 档位**（`qwen_2_1_uc_i2i`，缺省回退任意就绪 i2i） |
-| 语义 | **默认文字描述（文生图）**：姿势名/角度由提交层拼进 prompt，走 `z_image_t2i`，不需要参考图；**可选线稿参考（图生图）**：姿势图作为最后一张参考图进入 `qwen_edit`，占 1 张额度；`pose_id` 两种方式都写进参数快照 |
+| 语义 | **默认线稿参考（图生图）**：姿势图作为最后一张参考图进入 `qwen_edit`（未审查第三档），占 1 张额度；**可选文字描述（文生图）**：姿势名/角度由提交层拼进 prompt，走 `z_image_t2i`，不需要参考图；`pose_id` 两种方式都写进参数快照 |
 | 已知边界 | 线稿作参考图时**姿势不跟随**（见 [换姿势方向结项报告](换姿势方向结项报告-2026-10-31.md)）；该功能是「选姿势 + 记录来源」，不是「保证换姿势成功」 |
 
 ### 17.2 一键出图（批量轮转）
@@ -860,7 +860,7 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 | --- | --- |
 | 组件 | `web/src/components/generate/QuickPoseBatchPanel.vue`：姿势队列（初期固定为图库「性感系 399」）、每次张数 / 步数 / 连续轮数 |
 | 规则 | 连续次数上限 = 剩余未用过的姿势数；用过的姿势记 localStorage；失败即停并回滚当前轮次（`failRound`）；显示剩余与预估耗时（Qwen 25 步 1024² 约 20~45 s/张） |
-| 提交 | 复用生成参数面板的提交函数，`params.pose_id` 随每轮姿势写入；**默认文生图（文字描述）**，切线稿参考后才要求主体参考图；`quickModelReady` 按当前方式判断（text→t2i / lineart→i2i） |
+| 提交 | 复用生成参数面板的提交函数，`params.pose_id` 随每轮姿势写入；**默认线稿参考（未审查第三档，需主体参考图）**，切文字描述后才走文生图；`quickModelReady` 按当前方式判断（lineart→i2i / text→t2i） |
 | 实测 | 单轮 10 张、连续多轮可跑；失败保护与预算（显存/批次）由 `generation_service` 原有逻辑兜底 |
 
 > 实现细节与代码位置见 [姿势图库换姿势（路径一）实现说明](姿势图库换姿势（路径一）实现说明.md)、[一键出图审查修复说明]（提交 `2d27e27`/`0066619`，见 git log）。

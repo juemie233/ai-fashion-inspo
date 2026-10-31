@@ -277,7 +277,7 @@ describe('GenerateParamForm 换姿势', () => {
     await flushPromises()
   }
 
-  it('选姿势后默认按文生图提交，并带 pose_id', async () => {
+  it('选姿势后默认按线稿参考（图生图）提交，并带 pose_id', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
     await wrapper.find('textarea').setValue('换成这个姿势')
@@ -295,19 +295,18 @@ describe('GenerateParamForm 换姿势', () => {
     await submitBtn!.trigger('click')
 
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
-    expect(payload.kind).toBe('t2i')
+    expect(payload.kind).toBe('i2i')
     expect(payload.pose_id).toBe(POSE_FIXTURE.id)
-    expect(payload.reference_ids).toBeUndefined()
+    expect(payload.reference_ids).toEqual(['ref-a'])
   })
 
-  it('切线稿参考后参考上限降为 9 张（姿势图占 1 张额度）', async () => {
+  it('默认线稿参考时参考上限为 9 张（姿势图占 1 张额度）', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
 
     const picker = wrapper.findComponent({ name: 'PosePickerModal' })
     picker.vm.$emit('select', POSE_FIXTURE)
     await flushPromises()
-    await switchPoseMode(wrapper, 'lineart')
     expect(wrapper.text()).toContain('/9')
 
     // 9 张主体参考 + 姿势 = 合法，可以提交
@@ -323,9 +322,13 @@ describe('GenerateParamForm 换姿势', () => {
     await input.setValue(ten)
     submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
     expect(submitBtn!.attributes('disabled')).toBeDefined()
+
+    // 切文字描述（文生图）后不再需要参考图 → 参考输入区隐藏，不再显示 9 张上限
+    await switchPoseMode(wrapper, 'text')
+    expect(wrapper.text()).not.toContain('/9')
   })
 
-  it('选姿势默认切文生图档位；切线稿参考后切到未审查版图生图', async () => {
+  it('选姿势默认切未审查版（第三个档位）；切文字描述后换文生图档位', async () => {
     const wrapper = mountPoseForm()
     await flushPromises()
     // 未选姿势前：i2i 默认按「就绪且非未审查」→ 第二个（有审查）
@@ -333,18 +336,33 @@ describe('GenerateParamForm 换姿势', () => {
 
     wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
     await flushPromises()
-    // 默认文字描述 → 文生图档位
-    expect(checkedValue(wrapper as never)).toBe('z_image_int8')
-
-    await switchPoseMode(wrapper, 'lineart')
+    // 默认线稿参考 → 第三个未审查档位
     expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
     expect(wrapper.text()).toContain('未审查')
+
+    await switchPoseMode(wrapper, 'text')
+    expect(checkedValue(wrapper as never)).toBe('z_image_int8')
   })
 
-  it('从详情页「换个姿势」进入时默认文生图档位', async () => {
+  it('从详情页「换个姿势」进入时默认未审查第三档', async () => {
     const wrapper = mountPoseForm({ initialPoseLib: true })
     await flushPromises()
-    expect(checkedValue(wrapper as never)).toBe('z_image_int8')
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+  })
+
+  it('详情页带 model 参数进入后，再次「更换姿势」档位仍保持第三档', async () => {
+    const wrapper = mountPoseForm({
+      initialPoseLib: true,
+      initialModelKey: 'qwen_2_1_uc_i2i',
+    })
+    await flushPromises()
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    picker.vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+    // 更换姿势不能把档位打回第一档（文生图）或第二档（普通改款）
+    expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
   })
 
   it('清除姿势后提交不再带 pose_id', async () => {
@@ -437,14 +455,14 @@ describe('GenerateParamForm 一键出图', () => {
     await flushPromises()
 
     const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
-    expect(payload.kind).toBe('t2i')
-    expect(payload.model_key).toBeUndefined()
+    expect(payload.kind).toBe('i2i')
+    expect(payload.model_key).toBe('qwen_2_1_uc_i2i')
     expect(payload.pose_id).toBe(QUICK_POSE.id)
     expect(payload.count).toBe(3)
     expect(payload.steps).toBe(12)
-    expect(payload.reference_ids).toBeUndefined()
-    // 描述为空时自动补姿势模板（默认文生图），并带上姿势名/角度
-    expect(String(payload.prompt)).toContain('人物姿势：')
+    expect(payload.reference_ids).toEqual(['ref-a'])
+    // 描述为空时自动补姿势模板（默认线稿参考），并带上姿势名/角度
+    expect(String(payload.prompt)).toContain('保持第 1 张参考图')
     expect(String(payload.prompt)).toContain(QUICK_POSE.name)
     expect(String(payload.prompt)).toContain(QUICK_POSE.angle)
     // 面板的「下一个姿势」同步显示在姿势卡片里
@@ -452,7 +470,7 @@ describe('GenerateParamForm 一键出图', () => {
     wrapper.unmount()
   })
 
-  it('没有参考图时文字描述模式仍可一键出图（文生图不需要参考图）', async () => {
+  it('没有参考图时线稿参考模式禁一键出图（避免白提交）', async () => {
     const wrapper = mount(GenerateParamForm, {
       props: {
         status: READY_STATUS,
@@ -467,7 +485,7 @@ describe('GenerateParamForm 一键出图', () => {
     await flushPromises()
 
     const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
-    expect(btn?.attributes('disabled')).toBeUndefined()
+    expect(btn?.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 })
