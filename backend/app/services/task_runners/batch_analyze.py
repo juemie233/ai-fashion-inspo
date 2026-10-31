@@ -294,12 +294,6 @@ async def _inflight_excluding(db: AsyncSession, task_id: int) -> set[str]:
             for iid in result.get("inspiration_ids") or []:
                 ids.add(iid)
     return ids
-    ids: set[str] = set()
-    for (result,) in rows:
-        if isinstance(result, dict):
-            for iid in result.get("inspiration_ids") or []:
-                ids.add(iid)
-    return ids
 
 
 async def execute_batch_analyze(db: AsyncSession, task: TaskQueue) -> None:

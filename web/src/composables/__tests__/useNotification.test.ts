@@ -10,15 +10,16 @@
  *    （等于阈值要告警——0.3 正好是「三成失败」这条线）。
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type MockedFunction } from 'vitest'
 
 describe('useNotification', () => {
-  let notifyCtor: ReturnType<typeof vi.fn>
+  // 既是可调用替身、又要访问 .mock.calls：用 MockedFunction 类型
+  let notifyCtor: MockedFunction<(title: string, options?: NotificationOptions) => void>
 
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
-    notifyCtor = vi.fn()
+    notifyCtor = vi.fn<(title: string, options?: NotificationOptions) => void>()
     // 每个用例重新定义 window.Notification，确保模块级 permission 初值可控
     class FakeNotification {
       static permission = 'default'
@@ -71,7 +72,6 @@ describe('useNotification', () => {
   it('浏览器不支持 Notification 时静默降级（不抛错、不发通知）', async () => {
     vi.stubGlobal('Notification', undefined)
     // 模拟「没有 Notification 这个全局」：in 判断为 false
-    // @ts-expect-error 测试里刻意删除
     delete (globalThis as Record<string, unknown>).Notification
 
     const { requestPermission, notify, requestAndNotify } = await load()
@@ -100,10 +100,10 @@ describe('useNotification', () => {
     notify('出图完成', { body: '共 4 张' })
 
     expect(notifyCtor).toHaveBeenCalledTimes(1)
-    const [title, options] = notifyCtor.mock.calls[0]
+    const [title, options] = notifyCtor.mock.calls[0] ?? []
     expect(title).toBe('出图完成')
-    expect(options.body).toBe('共 4 张')
-    expect(options.icon).toBe('/favicon.ico')
+    expect(options?.body).toBe('共 4 张')
+    expect(options?.icon).toBe('/favicon.ico')
   })
 
   it('requestAndNotify 在授权后才会发通知', async () => {
@@ -134,10 +134,10 @@ describe('useNotification', () => {
 
     checkFailureAlert(30, 100) // 恰好 30%：要告警（>= 阈值）
     expect(notifyCtor).toHaveBeenCalledTimes(1)
-    const [title, options] = notifyCtor.mock.calls[0]
+    const [title, options] = notifyCtor.mock.calls[0] ?? []
     expect(title).toContain('失败率告警')
-    expect(options.body).toContain('30%')
-    expect(options.tag).toBe('failure-alert')
+    expect(options?.body).toContain('30%')
+    expect(options?.tag).toBe('failure-alert')
 
     checkFailureAlert(5, 10, 0.9) // 自定义阈值 50% < 90%
     expect(notifyCtor).toHaveBeenCalledTimes(1)
