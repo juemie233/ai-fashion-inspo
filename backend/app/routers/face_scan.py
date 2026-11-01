@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -22,6 +22,7 @@ from app.models.inspiration import Inspiration
 from app.models.person import Blogger, Model
 from app.models.task import TaskQueue
 from app.schemas.face_scan import (
+    FaceClusterCreatePersonIn,
     FaceClusterRunIn,
     FaceConfirmIn,
     FaceMatchRunIn,
@@ -653,6 +654,133 @@ async def cluster_groups(
             "rejected_merges": result.get("rejected_merges"),
             "split_groups": result.get("split_groups"),
         },
+    }
+
+
+async def _cluster_group_detection_ids(db: AsyncSession, group_id: int) -> list[int]:
+    """取最近一次成功聚类结果里某组的 detection_ids（越界/无结果 404）。"""
+    task = (
+        await db.execute(
+            select(TaskQueue)
+            .where(TaskQueue.type == "face_cluster", TaskQueue.status == "success")
+            .order_by(TaskQueue.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    groups = (task.result or {}).get("groups") if task and task.result else None
+    if not groups or group_id < 0 or group_id >= len(groups):
+        raise HTTPException(status_code=404, detail="聚类分组不存在或聚类结果已过期")
+    return [int(i) for i in (groups[group_id].get("detection_ids") or [])]
+
+
+@router.post("/cluster/groups/{group_id}/ignore")
+async def cluster_group_ignore(
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """整组忽略：把组内未匹配人脸标记为「不匹配」，永久退出后续匹配。"""
+    detection_ids = await _cluster_group_detection_ids(db, group_id)
+    if not detection_ids:
+        raise HTTPException(status_code=404, detail="该分组没有可忽略的人脸")
+    result = await db.execute(
+        update(InspirationFaceDetection)
+        .where(
+            InspirationFaceDetection.id.in_(detection_ids),
+            InspirationFaceDetection.matched_blogger_id.is_(None),
+            InspirationFaceDetection.matched_model_id.is_(None),
+            InspirationFaceDetection.match_excluded.is_(False),
+        )
+        .values(match_excluded=True, match_status=None)
+    )
+    await db.commit()
+    return {"group_id": group_id, "ignored": result.rowcount}
+
+
+@router.post("/cluster/groups/{group_id}/create-person", status_code=201)
+async def cluster_group_create_person(
+    group_id: int,
+    data: FaceClusterCreatePersonIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """按聚类分组新建博主，并用组内最高质量的人脸注册（随后整组确认关联）。"""
+    from app.models.face import BloggerFaceEmbedding
+    from app.models.inspiration import NOT_DELETED, Inspiration
+    from app.models.person import InspirationBlogger
+    from app.services.blogger_face import register_blogger_face
+
+    detection_ids = await _cluster_group_detection_ids(db, group_id)
+    rows = (
+        await db.execute(
+            select(
+                InspirationFaceDetection.id,
+                InspirationFaceDetection.inspiration_id,
+                InspirationFaceDetection.det_score,
+            )
+            .join(Inspiration, Inspiration.id == InspirationFaceDetection.inspiration_id)
+            .where(
+                InspirationFaceDetection.id.in_(detection_ids),
+                InspirationFaceDetection.matched_blogger_id.is_(None),
+                InspirationFaceDetection.matched_model_id.is_(None),
+                InspirationFaceDetection.match_excluded.is_(False),
+                NOT_DELETED,
+            )
+            .order_by(InspirationFaceDetection.det_score.desc())
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="该分组没有可关联的未匹配人脸")
+
+    blogger = Blogger(name=data.name.strip(), platform=data.platform, source="manual")
+    db.add(blogger)
+    await db.flush()
+
+    # 先把组内素材关联到新人物，注册服务才能按 association 读取图片
+    inspiration_ids = list(dict.fromkeys(r[1] for r in rows))
+    for iid in inspiration_ids:
+        db.add(InspirationBlogger(inspiration_id=iid, blogger_id=blogger.id))
+    await db.flush()
+
+    top_ids = list(dict.fromkeys(r[1] for r in rows if r[2] is not None))[:3] or inspiration_ids[:3]
+    try:
+        reg = await register_blogger_face(db, blogger.id, [], top_ids)
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:  # noqa: BLE001 —— 子服务异常统一转 503
+        await db.rollback()
+        raise HTTPException(status_code=503, detail=f"新建人物注册失败：{exc}") from exc
+
+    result = await db.execute(
+        update(InspirationFaceDetection)
+        .where(
+            InspirationFaceDetection.id.in_([r[0] for r in rows]),
+            InspirationFaceDetection.matched_blogger_id.is_(None),
+            InspirationFaceDetection.matched_model_id.is_(None),
+            InspirationFaceDetection.match_excluded.is_(False),
+        )
+        .values(
+            matched_blogger_id=blogger.id,
+            matched_model_id=None,
+            match_status="confirmed",
+        )
+    )
+    await db.commit()
+
+    # 注册成功后再确认一次特征确实落库（避免子服务返回但写库失败）
+    has_face = (
+        await db.execute(
+            select(BloggerFaceEmbedding.blogger_id).where(
+                BloggerFaceEmbedding.blogger_id == blogger.id
+            )
+        )
+    ).scalar_one_or_none() is not None
+    return {
+        "blogger_id": blogger.id,
+        "name": blogger.name,
+        "registered": has_face,
+        "face_count": int(reg.get("photos_used") or 0),
+        "assigned": result.rowcount,
+        "group_id": group_id,
     }
 
 

@@ -12,8 +12,11 @@ import { Message, Modal } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  createFaceClusterPerson,
   fetchFaceScanResults,
   fetchFaceScanTask,
+  ignoreFaceClusterGroup,
+  type FaceClusterGroup,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
@@ -257,6 +260,69 @@ const {
   selectAllGroup,
   clearGroupChecked,
 } = useFaceClusterGroups({ loadUnmatched: () => loadUnmatched() })
+
+// ── 聚类分组：新建人物并注册 / 整组忽略 ──
+const createPersonVisible = ref(false)
+const createPersonGroup = ref<FaceClusterGroup | null>(null)
+const newPersonName = ref('')
+const newPersonPlatform = ref<'xiaohongshu' | 'douyin' | 'other'>('other')
+const creatingPerson = ref(false)
+
+function openCreatePerson(group: FaceClusterGroup) {
+  createPersonGroup.value = group
+  newPersonName.value = ''
+  newPersonPlatform.value = 'other'
+  createPersonVisible.value = true
+}
+
+async function submitCreatePerson() {
+  const group = createPersonGroup.value
+  const name = newPersonName.value.trim()
+  if (!group || !name) {
+    Message.warning('请填写新人物名称')
+    return
+  }
+  creatingPerson.value = true
+  try {
+    const result = await createFaceClusterPerson(group.group_id, {
+      name,
+      platform: newPersonPlatform.value,
+    })
+    Message.success(
+      `已新建「${result.name}」，注册 ${result.face_count} 张人脸、整组关联 ${result.assigned} 条`,
+    )
+    createPersonVisible.value = false
+    await loadClusterGroups()
+    await refreshAll()
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '新建人物失败'))
+  } finally {
+    creatingPerson.value = false
+  }
+}
+
+function handleIgnoreGroup(group: FaceClusterGroup) {
+  Modal.confirm({
+    title: `整组忽略「组 #${group.group_id}」的 ${group.size} 张人脸？`,
+    content:
+      '忽略会把组内所有人脸标记为「不匹配」，永久退出后续匹配（包括重跑匹配与聚类），' +
+      '且不提供批量撤销。请确认这组确实不是要跟踪的人物。',
+    okText: '整组忽略',
+    cancelText: '取消',
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      try {
+        const result = await ignoreFaceClusterGroup(group.group_id)
+        Message.success(`已忽略 ${result.ignored} 张人脸`)
+        await loadClusterGroups()
+        await refreshAll()
+      } catch (e) {
+        Message.error(getApiErrorMessage(e, '整组忽略失败'))
+      }
+    },
+  })
+}
+
 // ── 汇总刷新 ──
 async function refreshAll() {
   await Promise.all([
@@ -533,6 +599,8 @@ function filterOption(input: string, option: { label?: string }): boolean {
             @start-cluster="startCluster"
             @toggle-group-detail="toggleGroupDetail"
             @assign-group="assignGroup"
+            @ignore-group="handleIgnoreGroup"
+            @create-person="openCreatePerson"
             @load-group-detail-page="onGroupDetailPageChange"
             @select-all-group="selectAllGroup"
             @clear-group-checked="clearGroupChecked"
@@ -544,6 +612,29 @@ function filterOption(input: string, option: { label?: string }): boolean {
         </a-tab-pane>
       </a-tabs>
     </a-card>
+
+    <a-modal
+      v-model:visible="createPersonVisible"
+      title="新建人物并注册"
+      :ok-loading="creatingPerson"
+      @ok="submitCreatePerson"
+    >
+      <a-form :model="{}" layout="vertical">
+        <a-form-item label="人物名称" required>
+          <a-input v-model="newPersonName" placeholder="例如：新博主昵称" allow-clear />
+        </a-form-item>
+        <a-form-item label="平台">
+          <a-radio-group v-model="newPersonPlatform">
+            <a-radio value="other">其他</a-radio>
+            <a-radio value="douyin">抖音</a-radio>
+            <a-radio value="xiaohongshu">小红书</a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <a-typography-text type="secondary" style="font-size: 12px">
+          会用组内置信度最高的 3 张素材注册人脸；注册成功后整组人脸确认关联到该人物。
+        </a-typography-text>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 

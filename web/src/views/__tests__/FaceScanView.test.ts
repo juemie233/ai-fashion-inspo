@@ -59,6 +59,8 @@ vi.mock('@/api/faceScan', () => ({
     },
   }),
   registerFaceBatch: vi.fn(),
+  ignoreFaceClusterGroup: vi.fn(),
+  createFaceClusterPerson: vi.fn(),
 }))
 
 vi.mock('@/api/persons', () => ({

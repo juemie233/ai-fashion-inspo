@@ -293,3 +293,36 @@ export async function registerFaceBatch(
   })
   return data
 }
+
+/** 聚类分组：整组忽略（标记为不匹配，永久退出后续匹配） */
+export async function ignoreFaceClusterGroup(
+  groupId: number,
+): Promise<{ group_id: number; ignored: number }> {
+  const { data } = await apiClient.post<{ group_id: number; ignored: number }>(
+    `/face-scan/cluster/groups/${groupId}/ignore`,
+  )
+  return data
+}
+
+/** 聚类分组：按组新建人物并注册人脸（随后整组确认关联） */
+export async function createFaceClusterPerson(
+  groupId: number,
+  payload: { name: string; platform: 'xiaohongshu' | 'douyin' | 'other' },
+): Promise<{
+  blogger_id: number
+  name: string
+  registered: boolean
+  face_count: number
+  assigned: number
+  group_id: number
+}> {
+  const { data } = await apiClient.post<{
+    blogger_id: number
+    name: string
+    registered: boolean
+    face_count: number
+    assigned: number
+    group_id: number
+  }>(`/face-scan/cluster/groups/${groupId}/create-person`, payload)
+  return data
+}

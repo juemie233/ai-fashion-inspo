@@ -5,7 +5,8 @@ from __future__ import annotations
 import numpy as np
 
 from app.database import async_session
-from app.models.face import InspirationFaceDetection
+from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
+from app.models.task import TaskQueue
 from app.services.person.face_register_plan import build_register_plan, register_bloggers_batch
 
 
@@ -132,3 +133,90 @@ async def test_register_batch_serial_success(client, make_image, monkeypatch):
     assert out["succeeded"] == 1
     assert out["items"][0]["ok"] is True
     assert out["items"][0]["face_count"] == 1
+
+
+async def _seed_cluster_task(detection_ids: list[int]) -> None:
+    async with async_session() as db:
+        db.add(
+            TaskQueue(
+                type="face_cluster",
+                status="success",
+                progress=100,
+                total=len(detection_ids),
+                done=len(detection_ids),
+                result={"groups": [{"detection_ids": detection_ids}], "group_count": 1},
+            )
+        )
+        await db.commit()
+
+
+async def test_cluster_group_ignore_marks_excluded(client, make_image):
+    """整组忽略：组内未匹配人脸置 match_excluded=True，后续不再参与聚类。"""
+    blogger = _create_blogger(client, "忽略组博主")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        det = InspirationFaceDetection(
+            inspiration_id=iid,
+            face_index=0,
+            embedding=np.zeros(512, dtype=np.float32).tobytes(),
+            det_score=0.9,
+        )
+        db.add(det)
+        await db.commit()
+        await db.refresh(det)
+        detection_id = det.id
+    await _seed_cluster_task([detection_id])
+
+    resp = client.post("/api/face-scan/cluster/groups/0/ignore")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ignored"] == 1
+    async with async_session() as db:
+        det = await db.get(InspirationFaceDetection, detection_id)
+        assert det.match_excluded is True
+        assert det.match_status is None
+
+
+async def test_cluster_group_create_person_registers_and_assigns(
+    client, make_image, monkeypatch
+):
+    """整组新建人物：建博主 → 注册 → 组内人脸 confirmed 关联。"""
+    blogger = _create_blogger(client, "占位博主")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        det = InspirationFaceDetection(
+            inspiration_id=iid,
+            face_index=0,
+            embedding=np.zeros(512, dtype=np.float32).tobytes(),
+            det_score=0.9,
+        )
+        db.add(det)
+        await db.commit()
+        await db.refresh(det)
+        detection_id = det.id
+    await _seed_cluster_task([detection_id])
+
+    async def fake_register(db, blogger_id, image_bytes_list, inspiration_ids=None):
+        db.add(
+            BloggerFaceEmbedding(
+                blogger_id=blogger_id, embedding=np.zeros(512, dtype=np.float32).tobytes()
+            )
+        )
+        await db.commit()
+        return {"photos_used": 1, "warnings": []}
+
+    monkeypatch.setattr("app.services.blogger_face.register_blogger_face", fake_register)
+    resp = client.post(
+        "/api/face-scan/cluster/groups/0/create-person",
+        json={"name": "聚类新人", "platform": "other"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "聚类新人"
+    assert body["registered"] is True
+    assert body["assigned"] == 1
+    async with async_session() as db:
+        det = await db.get(InspirationFaceDetection, detection_id)
+        assert det.match_status == "confirmed"
+        assert det.matched_blogger_id == body["blogger_id"]

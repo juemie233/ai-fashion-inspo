@@ -76,3 +76,10 @@ class FaceRegisterBatchIn(BaseModel):
     """批量注册请求（一次最多 20 位，前端分批循环）。"""
 
     items: list[FaceRegisterBatchItem] = Field(..., min_length=1, max_length=20)
+
+
+class FaceClusterCreatePersonIn(BaseModel):
+    """聚类分组「新建人物并注册」请求。"""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    platform: str = Field("other", pattern="^(xiaohongshu|douyin|other)$")

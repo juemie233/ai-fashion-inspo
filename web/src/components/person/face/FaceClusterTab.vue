@@ -53,6 +53,8 @@ const emit = defineEmits<{
   (e: 'startCluster'): void
   (e: 'toggleGroupDetail', group: FaceClusterGroup): void
   (e: 'assignGroup', group: FaceClusterGroup): void
+  (e: 'ignoreGroup', group: FaceClusterGroup): void
+  (e: 'createPerson', group: FaceClusterGroup): void
   (e: 'loadGroupDetail'): void
   (e: 'loadGroupDetailPage', page: number): void
   (e: 'selectAllGroup', group: FaceClusterGroup): void
@@ -180,6 +182,17 @@ const {
           </a-button>
           <a-button size="mini" @click.stop="emit('toggleGroupDetail', g)">
             {{ expandedGroupId === g.group_id ? '收起' : '查看人脸' }}
+          </a-button>
+          <a-button size="mini" :loading="groupActionBusy" @click.stop="emit('createPerson', g)">
+            新建人物并注册
+          </a-button>
+          <a-button
+            size="mini"
+            status="danger"
+            :loading="groupActionBusy"
+            @click.stop="emit('ignoreGroup', g)"
+          >
+            整组忽略
           </a-button>
         </a-space>
 
