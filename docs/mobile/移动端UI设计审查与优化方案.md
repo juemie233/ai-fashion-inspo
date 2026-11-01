@@ -1,6 +1,6 @@
 # 移动端 UI / 设计审查与优化方案
 
-> **状态**：现行（方案，待实施）
+> **状态**：现行（**已实施 2026-11-01**，实施记录与偏差见 §9；版本 0.8.0 / versionCode 33）
 > **日期**：2026-11-01
 > **审查范围**：`mobile/app/**` 全部 13 个路由页面 + `mobile/components/**` 全部 12 个组件 + 主题/常量/状态层（`hooks/useInspirations.ts`、`services/api.ts` 类型、`app.json`）
 > **结论**：不是「配色难看」，而是**没有设计系统**——24 个文件里散落 377 处颜色字面量、11 种字号、13 种圆角、3 套页头、3 种卡片规格、4 份重复的分类中文表；另有 10 处会影响可用性的具体缺陷（首屏无加载态、断网显示「还没有素材」、人物搜索逐字发请求、横图大片灰边、竖屏视频挤成一条、8 组文字对比度不达标、触控目标 20–28px 等）。
@@ -478,3 +478,124 @@
 | P2-1 | RN Image 无过渡/缓存 | 各页 `<Image>` |
 | P2-4 | 采集队列细节 | `capture.tsx:131-135`、`283` |
 | P2-8 | 无障碍缺失 | 全仓仅 4 处标注 |
+
+---
+
+## 9. 实际实现（2026-11-01）
+
+> 以**最终代码为准**。与原方案的差异集中列在 §9.6，不保留与实现不符的设想。
+
+### 9.1 结论
+
+- 阶段 0–4 全部落地：设计令牌 + 14 个基础组件 + 三态体系 + 深色模式 + expo-image 加载体验。
+- **P2-8 无障碍按用户决定不做**（现有 4 处 `accessibilityLabel` 原样保留；新组件顺带带了可读文案，但没做全量补齐）。
+- **P2-10 瀑布流按 §7.3 不做**：需要后端补 `width/height` 契约，客户端用「真实比例图 + 3:4 网格」已解决灰边问题。
+- 新增 3 个原生依赖（一次 `prebuild --clean`）：`expo-image ~2.0.7`、`expo-linear-gradient ~14.0.2`、`expo-haptics ~14.0.1`。
+
+### 9.2 新增文件
+
+| 路径 | 作用 |
+| --- | --- |
+| `mobile/constants/theme.ts` | 颜色 / 字阶 / 间距 / 圆角 / 图标尺寸 / 触控区令牌，亮色 + 暗色两套 |
+| `mobile/constants/labels.ts` | 分类 / 平台 / 任务类型 / 任务与出图状态 / 排序 / 筛选文案（合并原 6 份重复表） |
+| `mobile/hooks/useTheme.tsx` | `ThemeProvider`（跟随系统深浅色，可 `forcedMode` 强制）+ `useTheme` + `useStyles` |
+| `mobile/hooks/useAspectRatio.ts` | 图片真实宽高比（`onLoad` 事件 + 内存缓存） |
+| `mobile/components/ui/AppText.tsx` | 7 档字阶文字 |
+| `mobile/components/ui/Button.tsx` | primary / secondary / ghost / danger + loading / disabled |
+| `mobile/components/ui/IconButton.tsx` | 固定 44×44 触控区的图标按钮 |
+| `mobile/components/ui/Chip.tsx` | 筛选/模式胶囊（选中浅主色底 + 主色描边） |
+| `mobile/components/ui/SegmentedTab.tsx` | 分段控件（人物 Tab、搜索模式） |
+| `mobile/components/ui/MediaCard.tsx` | 图片卡（比例、圆角 14、渐变遮罩、来源/视频角标、44 收藏、多选态） |
+| `mobile/components/ui/ScreenHeader.tsx` | Tab 页自绘页头（22/28/600 + 安全区） |
+| `mobile/components/ui/BottomSheet.tsx` | 底部弹层（遮罩可点关闭、安全区、键盘避让、maxHeight 88%） |
+| `mobile/components/ui/EmptyState.tsx` / `ErrorState.tsx` | 空态 / 错误态（后者必带重试） |
+| `mobile/components/ui/Skeleton.tsx` | `SkeletonGrid` / `SkeletonList` / `SkeletonBlock`（呼吸动画，测试环境不启动） |
+| `mobile/components/ui/Badge.tsx` | 状态/来源角标（实心底 + 白字，11px 也过 4.5:1） |
+| `mobile/components/ui/ListRow.tsx` | 列表行（56 高、1px 分隔） |
+| `mobile/components/ui/Snackbar.tsx` | 底部轻提示（自动消失 + 操作按钮） |
+| `mobile/components/SortSheet.tsx` | 排序单选弹层（P1-7） |
+| `mobile/utils/imageAspect.ts` | 比例钳制（0.4–2.5）与缓存 |
+| `mobile/utils/dominantColor.ts` | 从 `dominant_colors` 抠首个十六进制色（后端存的是带中文后缀的字符串） |
+| `mobile/utils/haptics.ts` | 触觉反馈封装（异常全吞） |
+| `mobile/utils/searchHistory.ts` | 最近搜索（去重、上限 10） |
+
+### 9.3 令牌最终值
+
+| 令牌 | 亮色 | 暗色 | 用途 |
+| --- | --- | --- | --- |
+| `brandFill` | #4F46E5 | #4F46E5 | 实心主按钮（白字 6.29:1） |
+| `brandText` | #4F46E5 | #A5B4FC | 浅底上的可点文字/图标（8.9:1） |
+| `brandSubtle` | #EEF2FF | #1E2235 | chip/标签底 |
+| `textPrimary` | #111827 | #F3F4F6 | 标题 |
+| `textSecondary` | #4B5563 | #C7CCD6 | 正文 |
+| `textTertiary` | #6B7280 | #A0A7B4 | 次要说明（**正文下限**） |
+| `textDisabled` | #9CA3AF | #6B7280 | 仅图标/装饰 |
+| `bgPage` / `bgSurface` / `bgSubtle` | #F7F8FA / #FFFFFF / #F3F4F6 | #0F1115 / #171A21 / #1F232D | 页面 / 卡片 / 次级面 |
+| `border` / `divider` | #E5E7EB / #F1F2F4 | #2C313C / #232833 | 描边 / 列表分隔 |
+| `dangerFill` / `successFill` / `warningFill` | #DC2626 / #15803D / #B45309 | 同左 | 实心角标（白字均 ≥4.5:1） |
+| `dangerText` / `successText` / `warningText` | #DC2626 / #15803D / #B45309 | #F87171 / #4ADE80 / #FBBF24 | 浅底状态文字 |
+| `scrim` / `mediaGradientEnd` | rgba(17,24,39,.55) / rgba(17,24,39,.70) | rgba(0,0,0,.60) / rgba(0,0,0,.78) | 图上文字底 |
+
+字阶：22/28、17/24、15/22（两档）、13/19、12/17、11/15；圆角：6/10/14/20/999；间距：4·8·12·16·20·24·32；图标：16/20/24/32；触控区 44。
+
+### 9.4 页面改动落点
+
+| 页面 | 关键改动 |
+| --- | --- |
+| `app/(tabs)/_layout.tsx` | 四页 `headerShown:false`；Tab 栏 52+安全区、标签 12px、图标 24；暗色跟随主题 |
+| `app/_layout.tsx` | `ThemeProvider` 包裹；Stack header 跟主题；`init()` 只恢复地址（P0-3） |
+| `app/(tabs)/index.tsx` | 三态 + 骨架 + 错误重试；`MediaCard`；排序弹层；「选择」进多选；去齿轮；多选态安全区 |
+| `app/(tabs)/search.tsx` | 页头；输入框内嵌搜索按钮；`SegmentedTab`；语义模式禁用标签/以图；最近搜索 + 常用标签；`keyboardShouldPersistTaps`；错误/无结果态 |
+| `app/(tabs)/capture.tsx` | 3:4 三列网格；失败项红边 + 点开详情；统计条改「已选/已完成/失败」；清空已完成 / 全部重试；总进度 + 取消；成功弹窗只留有效动作；移除按钮 44 |
+| `app/(tabs)/settings.tsx` | 唯一主按钮「保存」；测试连接描边 + 行内结果；入口改分组列表卡；版本号读 `app.json` |
+| `app/detail/[id].tsx` | 主图真实比例 + 主色 letterbox + 上限 72% 屏高；错误态重试；「更多」收删除（P2-9）；标签保存统一提交 + Snackbar |
+| `app/persons.tsx` | 搜索 300ms 防抖 + 行内 loading（P0-2）；`SegmentedTab`；`ListRow`；错误/空态分离 |
+| `app/person/[id].tsx`、`app/collection/[id].tsx` | `MediaCard` 网格 + 三态 |
+| `app/collections.tsx` | 封面 1:1 + 「智能合集」Badge + 三态 |
+| `app/tasks.tsx` | 状态 Badge；「每 3 秒自动刷新」可见指示；三态 |
+| `app/generate.tsx`、`app/generate/[id].tsx` | 状态 Badge + 令牌色；时间不换行；候选图 1:1 `MediaCard` + 「已入库」角标；三态 |
+| `app/tags.tsx` | 骨架行；删除「首次约需 8 秒」；改名弹层换 `BottomSheet`；分类名走字典 |
+| `components/TagEditor.tsx` | 弹层内标记待增/待删 → 保存统一提交（P1-8）；`BottomSheet` |
+| `components/TagFilterSheet.tsx`、`CollectionPicker.tsx` | 统一 `BottomSheet`（遮罩关闭/安全区/键盘） |
+| `components/VideoPlayer.tsx` | 容器按封面比例（默认 3:4）+ 封面与视频统一 contain + 模糊封面铺底（P0-9） |
+| `components/FilterBar.tsx` | Chip + 「排序：最新 ▾」按钮（打开弹层） |
+| `components/SelectionBar.tsx` | 安全区 + 三项等宽 + 删除红 |
+| `components/ImageViewer.tsx` | expo-image + 关闭按钮吃 `insets.top` |
+| `components/SimilarList.tsx` | 横滑 `MediaCard` |
+| `components/TaskRow.tsx` | Badge + 令牌；类型/状态名走字典 |
+| `components/ErrorBoundary.tsx` | 令牌化（错误页固定亮色，见 §9.6） |
+
+### 9.5 与方案的偏差（以代码为准）
+
+| 方案 | 实际实现 | 原因 |
+| --- | --- | --- |
+| 图片比例用 `Image.getSize` 缓存（P0-8） | 图片 `onLoad` 事件读 `source.width/height` + 内存缓存（`useAspectRatio`） | RN 0.76 把 `Image.getSize` 改成 Promise 实现，jest-expo 的原生桩仍是回调式 → 单测里直接抛 `Cannot read properties of undefined (reading 'then')`；`onLoad` 不额外发请求、也不依赖原生桩 |
+| 标签移除用「3 秒撤销条」（P1-8 两个选项之一） | 弹层内标记待删 → 点「保存」统一提交 | 一次保存 = 一次确认，语义与新增一致；不引入计时器与「已提交但还能撤销」的中间态 |
+| 任务页「标题旁 2 秒脉冲点」（§4.7） | 列表顶部 `ActivityIndicator` + 文案「每 3 秒自动刷新，完成或取消后自动停止」 | 同样的可见性，少一套动画与计时器代码；原生 header 标题旁放脉冲点需要 `setOptions`，可读性收益不抵复杂度 |
+| 深色模式放阶段 4 最后做（§7.7） | 阶段 0 就把令牌与 `useStyles` 做成分主题，阶段 4 只翻 `userInterfaceStyle` 开关 | 避免阶段 2/3 写完再回头把 24 个文件的 `StyleSheet.create` 全改成工厂函数（返工量更大） |
+| 错误边界跟主题 | 错误页固定亮色令牌 | 边界挂在 `ThemeProvider` 外（要兜住 Provider 自身崩溃），拿不到暗色令牌；错误页要的是可读 |
+| 阶段 4 才引入 expo-image（P2-1） | 新组件（`MediaCard`/`VideoPlayer`/`ImageViewer`）从第一天就用 expo-image，阶段 4 只替换剩余 `<Image>` | 新组件没有历史包袱，先写 RN Image 再换是纯返工 |
+
+### 9.6 已实现但方案未列的点
+
+- 排序弹层给每个选项 `testID`，并把「已选/未选」做成勾选图标（原来只有一个循环按钮）。
+- 采集页失败项点开弹层显示**错误原因 + 重试这张**，不再把 9px 错误文案压在缩略图上。
+- 详情页「更多」弹层额外给出「移入垃圾桶后可恢复」的说明。
+- 保存标签成功后用 Snackbar 汇报「新增 N 个 / 移除 N 个」。
+
+### 9.7 测试与门禁
+
+| 项 | 结果 |
+| --- | --- |
+| 测试套件 | 18 → **24 个**（新增 `theme.tokens`、`ui.components`、`ui.mediaCard`、`screens.states`、`theme.dark`、`utils`；`TagEditor` 按新语义重写） |
+| 用例数 | 150 → **243 个**，全绿 |
+| `npm run type-check` | 0 错误 |
+| 令牌强约束 | `theme.tokens.test.ts` 扫描 `app/**`+`components/**`：0 处十六进制字面量、0 处裸 `borderRadius: 数字`、字号只来自字阶；亮/暗两套主题 16 组文字配对全部 ≥ 4.5:1 |
+| 裸字符串检查 | 新旧套件全部保留 `test-utils/noBareText` 断言 |
+
+### 9.8 构建与真机验证
+
+- `npx expo prebuild --platform android --clean` → 复核 `ACTION_SEND`=1、PiP 保留、Ionicons 字体在包内、`usesCleartextTraffic=true` → 重打 gradle 提速配方 → `assembleRelease`。
+- 产物：`穿搭素材库-0.8.0.apk`（versionCode 33）。
+- 真机逐页核验结果见提交信息与 `docs/mobile/移动端.md` §5；本轮同时确认：小屏 360×640、系统字体 1.3×、深色模式下 Tab 栏/弹层页脚/采集操作栏均不裁切。
+

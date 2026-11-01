@@ -76,7 +76,9 @@
 
 - Expo Router 文件路由
 - 组件：PascalCase，hooks：`useXxx` 命名
-- 样式：NativeWind (Tailwind CSS)
+- 样式：`StyleSheet` + 设计令牌（`mobile/constants/theme.ts`）。**禁止**在页面里写死颜色、字号、圆角、间距——
+  由 `mobile/__tests__/theme.tokens.test.ts` 扫描文件系统强制执行（含亮/暗两套主题的 WCAG AA 对比度校验）。
+  历史上标准写的「NativeWind」与代码不符（项目从未引入，全部页面都是 `StyleSheet`），2026-11-01 已更正。
 
 ## 项目结构
 
@@ -108,7 +110,14 @@ fashion-inspo/
 │       ├── styles/        # 全局样式（Arco 主题、场景样式）
 │       ├── types/         # 跨组件复用的 TS 类型
 │       └── utils/         # 纯工具函数（去重）
-├── mobile/                # React Native 移动端
+├── mobile/                # React Native 移动端（Expo SDK 52，真机自建 APK）
+│   ├── app/               # expo-router 文件路由（页面只做编排）
+│   ├── components/        # 业务组件；components/ui/ 是设计系统基础组件库
+│   ├── constants/         # 设计令牌 theme.ts（颜色/字阶/间距/圆角）+ 文案字典 labels.ts
+│   ├── hooks/             # 状态与主题 hooks（useInspirations / useTheme / useAspectRatio）
+│   ├── services/          # API 客户端（axios + 文件 URL 拼接）
+│   ├── utils/             # 纯函数（sourceLabel / imageAspect / dominantColor / haptics / searchHistory）
+│   └── __tests__/         # jest-expo + RNTL 用例（含裸字符串与设计令牌检查）
 ├── browser-extension/     # Chrome 浏览器插件
 ├── shared/types/          # 前后端共享的类型定义
 ├── docs/                  # 文档（分类与索引见 docs/文档索引.md）
