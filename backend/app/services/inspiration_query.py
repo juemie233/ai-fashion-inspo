@@ -295,7 +295,7 @@ def build_filters_from_query_json(query_json: dict) -> list[ColumnElement[bool]]
 
     复用素材库列表/搜索的同一套筛选口径（关键词：标签名/作者名/文件名；
     标签：AND/OR；评分、日期、来源、媒体类型、收藏），保证「素材库怎么筛、
-    合集就怎么算」。字段契约见 docs/收藏合集设计方案.md：
+    合集就怎么算」。字段契约见 docs/features/收藏合集两级结构.md：
     keyword / tag_ids / tag_mode / source_types / media_type /
     is_favorite / min_rating / start_date / end_date；未知键忽略（向前兼容），
     值类型非法的键同样忽略。无条件命中时仅返回「排除垃圾桶」这一条

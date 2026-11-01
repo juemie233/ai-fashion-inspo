@@ -4,7 +4,7 @@ Revision ID: c92d4f8329ac
 Revises: d1b2c3d4e5f6
 Create Date: 2026-10-21 08:53:48.390616
 
-设计依据：docs/ComfyUI出图接入方案.md 第 4 节。
+设计依据：docs/features/ComfyUI出图接入方案.md 第 4 节。
 
 - `generation_runs`：一次出图批次的参数快照与状态机（queued/running/waiting_vram/
   done/failed/cancelled）。图片本体落 `storage/generated/<run_id>/`，DB 不存二进制。

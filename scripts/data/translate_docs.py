@@ -2,7 +2,7 @@
 """文档翻译脚本：把中文源文档翻译为英文文档（.en.md）。
 
 设计原则：
-- 中文文档是源（README.md、docs/*.md），英文文档是「手动执行本脚本后生成的产物」。
+- 中文文档是源（README.md、docs/**/*.md），英文文档是「手动执行本脚本后生成的产物」。
 - 翻译引擎：本地 Ollama 语言模型（无需 API key、数据不出本机）。
 
 用法（在项目根目录执行）：
@@ -36,10 +36,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # 注意：严禁把「人物模块移植报告.md / 数据库容量评估.md」加入本清单（本地私有文档，不公开、不翻译）
 SOURCE_DOCS = [
     "README.md",
-    "docs/CLIP编码说明.md",
+    "docs/features/CLIP编码说明.md",
     "docs/代码审计报告.md",
-    "docs/系统评估报告-开源组件引入.md",
-    "docs/项目情况说明.md",
+    "docs/archive/系统评估报告-开源组件引入.md",
+    "docs/overview/项目情况说明.md",
 ]
 
 # 每段翻译的最大字符数（控制上下文长度，避免超出模型窗口）

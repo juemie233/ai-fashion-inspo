@@ -4,7 +4,7 @@ Revision ID: j4k5l6m7n8o9
 Revises: i3j4k5l6m7n8
 Create Date: 2026-08-29
 
-背景：收藏合集（Lookbook / Board）功能，见 docs/收藏合集设计方案.md。
+背景：收藏合集（Lookbook / Board）功能，见 docs/features/收藏合集两级结构.md。
 - collections：手动合集与智能合集同表区分（query_json IS NULL = 手动，
   IS NOT NULL = 智能动态求值）；name 唯一（重名 409）；封面素材物理删除
   时由外键 ON DELETE SET NULL 自动置空，回退到「加入最早」的成员。

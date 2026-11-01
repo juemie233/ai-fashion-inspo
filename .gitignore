@@ -76,8 +76,8 @@ backend/prompt.txt
 backend/person_bio_prompt.json
 
 # 数据库容量评估（含真实数据统计，不公开）
-docs/数据库容量评估.md
-docs/database-capacity-assessment.en.md
+docs/archive/数据库容量评估.md
+docs/archive/database-capacity-assessment.en.md
 
 # 人物模块移植报告（本地私有文档，不公开、严禁翻译）
 人物模块移植报告.md

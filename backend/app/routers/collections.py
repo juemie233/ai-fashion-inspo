@@ -1,6 +1,6 @@
 """收藏合集的 REST API 路由。
 
-契约见 docs/收藏合集设计方案.md「三、API 契约」：
+契约见 docs/features/收藏合集两级结构.md「三、API 契约」：
 - 手动合集（query_json IS NULL）：实体成员，支持批量加入/移出与拖拽排序；
 - 智能合集（query_json 非空）：动态求值，仅支持查看内容、更新条件与固化。
 """

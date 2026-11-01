@@ -9,7 +9,7 @@
 5. **禁止启动子代理**：项目内的一切开发工作（含代码迁移、重构、批量修改等）均由主会话直接完成，**不得启动 subagent / 子代理 / 并行代理**。需要并行或拆解的工作，改为在主会话内顺序执行或自行批量处理，保证每个改动的上下文完整、可追溯。
 6. **服务启停由用户手动执行**：**禁止自动执行一键重启/启动脚本**（`scripts/ops/restart.sh`、`scripts/ops/ensure-services.sh` 等涉及服务启停的脚本）。当代码改动需要重启后端/前端/worker 才能生效时，**不得自行执行脚本**，只需明确提示用户「需要重启服务」，由用户手动执行。
 7. **时间列单行显示**：所有表格/列表中的时间列必须保持单行（`white-space: nowrap`），禁止换行；新增或修改时间列时同样遵守（Arco 表格单元格默认 `word-break: break-all`，时间字符串在窄列下会被断行，需显式加 nowrap）。实现约定：render 函数列统一用 `web/src/utils/format.ts` 的 `renderTimeCell(text, extra?)`（内部包 nowrap span，extra 可附加颜色/class）；模板列包 `<span style="white-space: nowrap">`。
-8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils,router,constants,styles,assets}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/`、`scripts/{ops,ci,data,sync,oneoff,archive}`（各目录职责见 `scripts/脚本索引.md`））。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
+8. **新建文件位置受限**：**新文件的落点必须是「已登记」的位置**——即本文档 [项目结构](#项目结构) 与 [前端文件拆分约定](#前端文件拆分约定) 列出的目录，加上仓库中既有的约定目录（`backend/app/**`（含 `services/task_runners`）、`backend/{scripts,tests,alembic}`、`web/src/{views,components,composables,stores,api,types,utils,router,constants,styles,assets}`、`mobile/`、`browser-extension/`、`shared/types/`、`docs/{overview,mobile,features,pose,ops,archive}`、`scripts/{ops,ci,data,sync,oneoff,archive}`（各目录职责见 `scripts/脚本索引.md`））。**禁止**在仓库根目录散落文件、随手新建目录、或把产物写到仓库之外的路径（系统临时目录、桌面、其他盘）。
    - **例外**：业务确实需要新位置（新增顶层文件、新增目录、必须落在仓库外）时，**先说明理由并征得用户同意**；若属长期结构，同意后同步登记进「项目结构」一节，使其成为「已登记」位置。
    - **临时文件**（排查脚本、一次性诊断、提交信息草稿等）可以直接创建，但必须满足两条：**用完即删**（`git status` 自查，不得残留）且**不得入库**（不 `git add`、不提交）；优先落在系统临时目录或已 gitignore 的位置，不得把临时产物留在仓库根、`scripts/`、`storage/` 里冒充交付物。
    - **判据**：提交前问自己「这个新文件的位置在本文档里登记过吗」——没有登记且未经同意，就换到已登记位置，或先来问。
@@ -111,7 +111,14 @@ fashion-inspo/
 ├── mobile/                # React Native 移动端
 ├── browser-extension/     # Chrome 浏览器插件
 ├── shared/types/          # 前后端共享的类型定义
-├── docs/                  # 方案 / 实现说明、实验报告、移动端构建手册
+├── docs/                  # 文档（分类与索引见 docs/文档索引.md）
+│   ├── overview/          # 总览与规划：项目情况、同类项目调研
+│   ├── mobile/            # 移动端：移植判定、UI 设计、APK 构建、真机踩坑
+│   ├── features/          # 功能方案与实现说明：出图/合集/人物/向量等
+│   ├── pose/              # 姿势图库与换姿势专题（已结项，含全部实验报告）
+│   ├── ops/               # 运维：备份与恢复
+│   ├── archive/           # 历史审计与规划快照（只查阅、不维护）
+│   └── decisions/         # 提交决策台账（本机派生，不入库）
 └── scripts/               # 工具脚本（索引见 scripts/脚本索引.md）
     ├── ops/               # 运维：备份/恢复/重启/守护/状态/密钥
     ├── ci/                # 质量门禁、构建、代码统计
@@ -264,19 +271,19 @@ fashion-inspo/
 1. 先出**评估/方案文档**（可行性、方案对比、改造点、风险），评审通过再写代码；
 2. 开发完成后补齐「实际实现」部分（数据流、接口、配置、验证方式、已知边界），
    **以最终代码为准**，不保留与实现不符的设想；
-3. 文档放 `docs/`，用中文文件名（如 `docs/xxx方案.md`、`docs/xxx实现说明.md`）；
+3. 文档放对应分类目录，用中文文件名（如 `docs/features/xxx方案.md`、`docs/features/xxx实现说明.md`；分类见 `docs/文档索引.md`）；
 4. 涉及用户可感知能力时，同步更新 README 对应表格/清单；
 5. 大任务的跟手修复并入同一文档与同一功能提交，不单独造文档。
 
 ### 测试 / 实验报告：每次都要留下可读文档
 
 **任何一次测试、对照实验、参数扫描、PoC 验证，做完都必须产出一份「人能独立读懂」的报告**，
-放在 `docs/`（中文文件名），不靠聊天记录承载结论。报告至少包含：
+放在对应分类目录（中文文件名，如 `docs/pose/`、`docs/features/`），不靠聊天记录承载结论。报告至少包含：
 
 1. **目的与假设**：这次要验证什么、不验证什么；
 2. **生成流程**：用的模型/档位、关键参数（steps/cfg/分辨率/seed）、数据来源与样本量、随机种子；
 3. **结果**：量化指标（如姿势保真、身份相似、耗时、失败率）+ 逐样本结果；
-4. **图片对比**：把「输入 / 中间产物 / 最终结果」拼成对比图（拼图文件放 `docs/` 或注明 storage 路径），
+4. **图片对比**：把「输入 / 中间产物 / 最终结果」拼成对比图（拼图文件放对应分类目录或注明 storage 路径），
    让审阅者不用打开一堆文件就能横向比较；
 5. **判断与下一步**：成功/失败/部分成功，以及下一次实验要改什么。
 
@@ -309,7 +316,7 @@ fashion-inspo/
 ## 移动端构建（Android APK）
 
 构建命令、本机工具链路径、prebuild 后要补的配置、提速配方、真机踩坑（图标字体 / 分享 Intent /
-视频播放 / 冷启动竞态）全部在 [docs/移动端.md](docs/移动端.md)。
+视频播放 / 冷启动竞态）全部在 [docs/mobile/移动端.md](docs/mobile/移动端.md)。
 
 该文含**本机绝对路径与代理端口**等环境特定信息，换机器时按原文替换；标准里不重复这些内容。
 

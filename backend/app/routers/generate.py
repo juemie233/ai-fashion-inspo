@@ -1,6 +1,6 @@
 """本地出图（ComfyUI）的 REST 接口。
 
-设计约束（见 docs/ComfyUI出图接入方案.md 第 6 节）：
+设计约束（见 docs/features/ComfyUI出图接入方案.md 第 6 节）：
 
 - 前端**不直连** ComfyUI（8188 无鉴权），所有交互经这里；
 - 提交立即返回 ``run_id + task_id``，跑图在 worker 里异步执行；

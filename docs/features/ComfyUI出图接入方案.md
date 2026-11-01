@@ -9,7 +9,7 @@
 >
 > 定位：本文是**实施方案**，不是科普。每节都给出「改哪个文件、加哪张表、什么契约、怎么验收」，
 > 以及**为什么这么定**（含被否决的选项）。外部工具的环境与模型见
-`docs/ComfyUI环境与出图模型.md`（环境基线、模型/权重与排障）。
+`docs/features/ComfyUI环境与出图模型.md`（环境基线、模型/权重与排障）。
 
 ---
 
@@ -621,7 +621,7 @@ web/
   src/router/index.ts                                +/generate
   src/utils/sourceLabel.ts                           +generated
 mobile/utils/sourceLabel.ts                          +generated
-docs/ComfyUI出图接入方案.md                          本文
+docs/features/ComfyUI出图接入方案.md                          本文
 ```
 
 ## 附录 B · 与既有约定的对照（自查表）
@@ -852,7 +852,7 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 | 生成参数 | `POST /api/generate/runs` 支持 `params.pose_id`；`generation_service` 校验姿势存在后随任务参数落库，重试/重新生成/导出都携带 |
 | 前端入口 | `GenerateParamForm` 姿势选择器 + 详情页「用这个姿势生成」；`selectPoseModel()` 优先切到**未审查 i2i 档位**（`qwen_2_1_uc_i2i`，缺省回退任意就绪 i2i） |
 | 语义 | **默认线稿参考（图生图）**：姿势图作为最后一张参考图进入 `qwen_edit`（未审查第三档），占 1 张额度；**可选文字描述（文生图）**：姿势名/角度由提交层拼进 prompt，走 `z_image_t2i`，不需要参考图；`pose_id` 两种方式都写进参数快照 |
-| 已知边界 | 线稿作参考图时**姿势不跟随**（见 [换姿势方向结项报告](换姿势方向结项报告-2026-10-31.md)）；该功能是「选姿势 + 记录来源」，不是「保证换姿势成功」 |
+| 已知边界 | 线稿作参考图时**姿势不跟随**（见 [换姿势方向结项报告](../pose/换姿势方向结项报告-2026-10-31.md)）；该功能是「选姿势 + 记录来源」，不是「保证换姿势成功」 |
 
 ### 17.2 一键出图（批量轮转）
 
@@ -863,7 +863,7 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 | 提交 | 复用生成参数面板的提交函数，`params.pose_id` 随每轮姿势写入；**默认线稿参考（未审查第三档，需主体参考图）**，切文字描述后才走文生图；`quickModelReady` 按当前方式判断（lineart→i2i / text→t2i） |
 | 实测 | 单轮 10 张、连续多轮可跑；失败保护与预算（显存/批次）由 `generation_service` 原有逻辑兜底 |
 
-> 实现细节与代码位置见 [姿势图库换姿势（路径一）实现说明](姿势图库换姿势（路径一）实现说明.md)、[一键出图审查修复说明]（提交 `2d27e27`/`0066619`，见 git log）。
+> 实现细节与代码位置见 [姿势图库换姿势（路径一）实现说明](../pose/姿势图库换姿势（路径一）实现说明.md)、[一键出图审查修复说明]（提交 `2d27e27`/`0066619`，见 git log）。
 
 ---
 
@@ -878,4 +878,4 @@ python backend/scripts/generate_image.py --model qwen_2_1_i2i --ref 参考图.jp
 | InsightFace buffalo_l + inswapper、GFPGAN ONNX | 换脸 / 面部修复 | 保留；未接入 API |
 | Pose Studio QI2.1 v2 LoRA（152 MB） | Qwen 2.1 姿态 LoRA | int8 权重下不可用，留作备查 |
 
-结论与收尾（**已结项**）：[换姿势方向结项报告](换姿势方向结项报告-2026-10-31.md)。若继续，优先 F1（Depth 姿势图 + Qwen 英文 prompt），不要重复 lineart 路线。
+结论与收尾（**已结项**）：[换姿势方向结项报告](../pose/换姿势方向结项报告-2026-10-31.md)。若继续，优先 F1（Depth 姿势图 + Qwen 英文 prompt），不要重复 lineart 路线。

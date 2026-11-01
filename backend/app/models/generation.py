@@ -1,6 +1,6 @@
 """本地出图（ComfyUI）批次模型。
 
-设计要点（见 docs/ComfyUI出图接入方案.md 第 4 节）：
+设计要点（见 docs/features/ComfyUI出图接入方案.md 第 4 节）：
 
 - **参数与批次进表，图片文件落目录**：DB 不存二进制；候选区的每张图用文件名编码
   seed（`001_seed-123456.png`），因此不需要 per-image 表也能复现。

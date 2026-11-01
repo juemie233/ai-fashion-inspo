@@ -3,7 +3,7 @@
 import apiClient from './client'
 import type { InspirationOut } from './inspirations'
 
-/** 智能合集筛选条件（与素材库筛选口径一致，见 docs/收藏合集设计方案.md） */
+/** 智能合集筛选条件（与素材库筛选口径一致，见 docs/features/收藏合集两级结构.md） */
 export interface SmartCollectionQuery {
   keyword?: string | null
   tag_ids?: number[]

@@ -720,7 +720,7 @@ def _make_download_env(tmp_path, monkeypatch):
     库文件口径是 ``settings.database_url``（→ ``Settings.db_file_path``），
     与 ``storage_root`` 无关：改 storage_root 不会（也不该）搬走库文件——历史 bug
     正是按 ``storage_root.parent`` 猜库路径，STORAGE_ROOT 指到别的盘时算出空库
-    （见 docs/收藏合集两级结构.md 第三节）。
+    （见 docs/features/收藏合集两级结构.md 第三节）。
     """
     import app.models  # noqa: F401  # 确保全部模型注册进 metadata
     from app.database import Base

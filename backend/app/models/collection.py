@@ -1,6 +1,6 @@
 """收藏合集模型：手动合集（实体成员）与智能合集（动态求值）两类同表区分。
 
-约定（见 docs/收藏合集设计方案.md）：
+约定（见 docs/features/收藏合集两级结构.md）：
 - ``query_json IS NULL`` 为手动合集：成员关系落在 collection_items 表；
 - ``query_json IS NOT NULL`` 为智能合集：成员由筛选条件动态求值，
   items 表不存它的行；

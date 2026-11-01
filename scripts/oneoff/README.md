@@ -23,7 +23,7 @@
 
 R2/换姿势实验（`r2_*`、`make_depth_maps.py`、`pose_fidelity_ab.py`、`pose_prompt_ab_eval.py`）
 与已完成使命的 `backfill_quality_reason_code.py` 已移到 `scripts/archive/`；该方向已结项，
-结论见 `docs/换姿势方向结项报告-2026-10-31.md`。
+结论见 `docs/pose/换姿势方向结项报告-2026-10-31.md`。
 
 ## 使用约定
 

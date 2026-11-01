@@ -8,7 +8,7 @@
 > **当前状态**，不是待执行清单。
 >
 > 出图如何接进项目（API、任务队列、候选区、确认入库）见
-> [ComfyUI出图接入方案.md](./ComfyUI出图接入方案.md)；网页与命令行的日常用法见该文 §16。
+> [ComfyUI出图接入方案.md](ComfyUI出图接入方案.md)；网页与命令行的日常用法见该文 §16。
 >
 > 最后核对：**2026-10-23**（ComfyUI 0.42.1，三档全部「节点与模型就绪」）。
 
@@ -314,7 +314,7 @@ Remove-Item -LiteralPath "D:\AI\ComfyUI" -Recurse -Force
 | GFPGAN 1.4 ONNX | `models/facerestore_models/gfpgan14-fp16.onnx` | 0.16 GiB | 面部修复；未接入 API |
 | VNCCS Pose Studio QI2.1 v2 LoRA | `models/loras/qwen2.1/VNCCS_QI2_PoseStudioV2.safetensors` | 152 MB | Qwen 2.1 姿态 LoRA；int8 权重下效果崩坏，不可用 |
 
-结论与资产处置见 [换姿势方向结项报告](换姿势方向结项报告-2026-10-31.md)；这些文件可整体保留或按报告 §5 清理。
+结论与资产处置见 [换姿势方向结项报告](../pose/换姿势方向结项报告-2026-10-31.md)；这些文件可整体保留或按报告 §5 清理。
 **不要**把它们写进产品依赖或模型档位清单。
 
 ---

@@ -1,6 +1,6 @@
 """收藏合集服务：手动合集 CRUD、批量加入/移出、拖拽排序与智能合集动态求值。
 
-两类合集同表区分（见 docs/收藏合集设计方案.md）：
+两类合集同表区分（见 docs/features/收藏合集两级结构.md）：
 - ``query_json IS NULL``：手动合集，成员关系实体化在 collection_items；
 - ``query_json IS NOT NULL``：智能合集，成员由筛选条件动态求值，
   items 表不存它的行，可一键固化（solidify）转手动。
