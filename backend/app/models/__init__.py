@@ -25,6 +25,7 @@ from app.models.tag_correction import TagCorrection
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.collection import Collection, CollectionItem
 from app.models.generation import GenerationRun
+from app.models.pose_prompt import PosePrompt
 
 __all__ = [
     "Inspiration",
@@ -54,4 +55,5 @@ __all__ = [
     "Collection",
     "GenerationRun",
     "CollectionItem",
+    "PosePrompt",
 ]
