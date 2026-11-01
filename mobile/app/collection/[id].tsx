@@ -1,30 +1,28 @@
-/** 合集详情：合集内素材的两列网格（分页加载）。 */
+/** 合集详情：合集内素材的两列网格（分页加载）。
+ *
+ * 审查修复：三态（骨架/错误+重试/空态）、卡片统一 `MediaCard`（3:4、圆角 14）。
+ */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import Icon from '../../components/Icon'
-import {
-  fetchCollectionInspirations,
-  getFileUrl,
-  type Inspiration,
-} from '../../services/api'
+import MediaCard from '../../components/ui/MediaCard'
+import EmptyState from '../../components/ui/EmptyState'
+import ErrorState from '../../components/ui/ErrorState'
+import { SkeletonGrid } from '../../components/ui/Skeleton'
+import { fetchCollectionInspirations, getFileUrl, type Inspiration } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
+import { useStyles, useTheme } from '../../hooks/useTheme'
+import { sourceLabel } from '../../utils/sourceLabel'
+import type { Theme } from '../../constants/theme'
 
 const PAGE_SIZE = 30
 
 export default function CollectionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const apiBaseUrl = useInspirationStore((s) => s.apiBaseUrl)
 
   const [items, setItems] = useState<Inspiration[]>([])
@@ -86,8 +84,8 @@ export default function CollectionDetailScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366f1" />
+      <View style={styles.container}>
+        <SkeletonGrid count={6} columns={2} />
       </View>
     )
   }
@@ -102,40 +100,46 @@ export default function CollectionDetailScreen() {
       contentContainerStyle={styles.grid}
       onEndReached={onEndReached}
       onEndReachedThreshold={0.5}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[theme.color.brandFill]}
+          tintColor={theme.color.brandFill}
+        />
+      }
       renderItem={({ item }) => (
-        <TouchableOpacity
-          style={styles.card}
-          activeOpacity={0.85}
+        <MediaCard
+          uri={
+            item.thumbnail_path
+              ? getFileUrl(apiBaseUrl, item.thumbnail_path)
+              : getFileUrl(apiBaseUrl, item.file_path)
+          }
+          badgeText={sourceLabel(item.source_type)}
+          video={item.media_type === 'video'}
           onPress={() => router.push(`/detail/${item.id}`)}
-        >
-          <Image
-            source={{
-              uri: item.thumbnail_path
-                ? getFileUrl(apiBaseUrl, item.thumbnail_path)
-                : getFileUrl(apiBaseUrl, item.file_path),
-            }}
-            style={styles.image}
-          />
-        </TouchableOpacity>
+        />
       )}
       ListEmptyComponent={
-        <View style={styles.empty}>
-          <Icon name="images-outline" size={56} color="#d1d5db" />
-          <Text style={styles.emptyText}>{error || '合集里还没有素材'}</Text>
-        </View>
+        error ? (
+          <ErrorState onRetry={() => void load(1)} />
+        ) : (
+          <EmptyState icon="images-outline" title="合集里还没有素材" />
+        )
+      }
+      ListFooterComponent={
+        items.length < total ? (
+          <ActivityIndicator style={styles.footer} color={theme.color.brandFill} />
+        ) : null
       }
     />
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' },
-  grid: { padding: 12, paddingBottom: 24 },
-  row: { gap: 12, marginBottom: 12 },
-  card: { flex: 1, aspectRatio: 0.75, borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff' },
-  image: { width: '100%', height: '100%', backgroundColor: '#f3f4f6' },
-  empty: { paddingTop: 80, alignItems: 'center', gap: 8 },
-  emptyText: { fontSize: 14, color: '#9ca3af' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    grid: { padding: t.space.md, paddingBottom: t.space.xxl, flexGrow: 1 },
+    row: { gap: t.space.md, marginBottom: t.space.md },
+    footer: { paddingVertical: t.space.lg },
+  })

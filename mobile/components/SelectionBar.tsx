@@ -1,7 +1,14 @@
-/** 多选态的底部操作栏：收藏 / 加合集 / 移入垃圾桶 / 退出多选。 */
+/** 多选态的底部操作栏：收藏 / 加合集 / 移入垃圾桶 / 退出多选。
+ *
+ * 审查修复：安全区（`insets.bottom`）、删除项红色、三项等宽（§4.2）。
+ */
 
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { Pressable, StyleSheet, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Icon from './Icon'
+import AppText from './ui/AppText'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 
 interface Props {
   /** 已选数量 */
@@ -24,70 +31,87 @@ export default function SelectionBar({
   onTrash,
   onCancel,
 }: Props) {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
+  const insets = useSafeAreaInsets()
   // 全部已收藏时按钮变成「取消收藏」，否则「收藏」
   const allFavorite = count > 0 && favoriteCount === count
 
   return (
-    <View style={styles.bar}>
+    <View style={[styles.bar, { paddingBottom: insets.bottom + 8 }]}>
       <View style={styles.info}>
-        <Text style={styles.countText}>已选 {count} 张</Text>
-        <TouchableOpacity onPress={onCancel} hitSlop={8}>
-          <Text style={styles.cancelText}>退出多选</Text>
-        </TouchableOpacity>
+        <AppText variant="bodySm" color="textSecondary">
+          已选 {count} 张
+        </AppText>
+        <Pressable onPress={onCancel} hitSlop={10} accessibilityRole="button">
+          <AppText variant="bodySm" color="textTertiary">
+            退出多选
+          </AppText>
+        </Pressable>
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity
+        <Pressable
           testID="batch-favorite"
           style={styles.action}
           onPress={onToggleFavorite}
           disabled={busy}
+          accessibilityRole="button"
         >
-          <Icon name={allFavorite ? 'heart-dislike-outline' : 'heart-outline'} size={20} color="#6366f1" />
-          <Text style={styles.actionText}>{allFavorite ? '取消收藏' : '收藏'}</Text>
-        </TouchableOpacity>
+          <Icon
+            name={allFavorite ? 'heart-dislike-outline' : 'heart-outline'}
+            size={theme.icon.lg}
+            color={theme.color.brandText}
+          />
+          <AppText variant="caption" color="brandText">
+            {allFavorite ? '取消收藏' : '收藏'}
+          </AppText>
+        </Pressable>
 
-        <TouchableOpacity
+        <Pressable
           testID="batch-collection"
           style={styles.action}
           onPress={onAddToCollection}
           disabled={busy}
+          accessibilityRole="button"
         >
-          <Icon name="albums-outline" size={20} color="#6366f1" />
-          <Text style={styles.actionText}>加合集</Text>
-        </TouchableOpacity>
+          <Icon name="albums-outline" size={theme.icon.lg} color={theme.color.brandText} />
+          <AppText variant="caption" color="brandText">
+            加合集
+          </AppText>
+        </Pressable>
 
-        <TouchableOpacity
+        <Pressable
           testID="batch-trash"
           style={styles.action}
           onPress={onTrash}
           disabled={busy}
+          accessibilityRole="button"
         >
-          <Icon name="trash-outline" size={20} color="#ef4444" />
-          <Text style={[styles.actionText, { color: '#ef4444' }]}>移入垃圾桶</Text>
-        </TouchableOpacity>
+          <Icon name="trash-outline" size={theme.icon.lg} color={theme.color.dangerText} />
+          <AppText variant="caption" color="dangerText">
+            移入垃圾桶
+          </AppText>
+        </Pressable>
       </View>
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  bar: {
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    paddingBottom: 6,
-  },
-  info: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  countText: { fontSize: 13, color: '#374151', fontWeight: '500' },
-  cancelText: { fontSize: 13, color: '#6b7280' },
-  actions: { flexDirection: 'row', paddingHorizontal: 8, paddingBottom: 6 },
-  action: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 4 },
-  actionText: { fontSize: 11, color: '#6366f1' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    bar: {
+      backgroundColor: t.color.bgSurface,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: t.color.border,
+    },
+    info: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: t.space.lg,
+      paddingVertical: t.space.sm,
+    },
+    actions: { flexDirection: 'row', paddingHorizontal: t.space.sm },
+    action: { flex: 1, alignItems: 'center', gap: 2, paddingVertical: t.space.xs },
+  })

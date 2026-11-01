@@ -19,6 +19,8 @@ interface InspirationState {
   total: number
   page: number
   loading: boolean
+  /** 列表加载错误（首屏失败时页面渲染错误态；有数据时为行内提示） */
+  error: string | null
   apiBaseUrl: string
 
   /** App 启动初始化：从持久化存储恢复自定义后端地址并刷新数据 */
@@ -51,15 +53,20 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   total: 0,
   page: 1,
   loading: false,
+  error: null,
   apiBaseUrl: getApiBaseUrl(),
   filter: {},
   sort: 'newest',
 
-  /** 启动初始化：恢复持久化地址（设置页保存的自定义地址）后同步状态 */
+  /** 启动初始化：只恢复持久化地址（设置页保存的自定义地址）。
+   *
+   * 这里**不再**顺带拉第一页：素材库挂载时自己会拉，两处都拉就是冷启动双请求
+   * （审查报告 P0-3，弱网下表现为「先空后闪」）。
+   * 地址就绪由 `services/api.ts` 的请求拦截器 `ensureBaseUrl()` 保证，早发请求也不会错。
+   */
   init: async () => {
     const url = await loadApiBaseUrl()
     set({ apiBaseUrl: url })
-    await get().fetchInspirations()
   },
 
   /** 加载第一页（带当前筛选与排序） */
@@ -70,9 +77,13 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     try {
       const data = await fetchInspirationPage(1, 30, filter, sort)
       if (seq !== listRequestSeq) return
-      set({ items: data.items, total: data.total, page: 1 })
+      set({ items: data.items, total: data.total, page: 1, error: null })
     } catch (e) {
-      if (seq === listRequestSeq) console.error('加载素材失败', e)
+      if (seq === listRequestSeq) {
+        console.error('加载素材失败', e)
+        // 断网/后端没启动时不能显示「还没有素材」：交给页面的错误态与重试按钮
+        set({ error: '加载失败，请检查网络或后端服务' })
+      }
     } finally {
       // 只有最新请求能收尾；旧请求不要提前把 loading 关掉
       if (seq === listRequestSeq) set({ loading: false })
@@ -81,13 +92,13 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   /** 切换筛选：整体替换条件后重拉第一页（胶囊是互斥的，合并会残留上一个条件） */
   setFilter: async (filter: ListFilter) => {
-    set({ filter, items: [], page: 1 })
+    set({ filter, items: [], page: 1, error: null })
     await get().fetchInspirations()
   },
 
   /** 切换排序：更新后重拉第一页 */
   setSort: async (sort: SortKey) => {
-    set({ sort, items: [], page: 1 })
+    set({ sort, items: [], page: 1, error: null })
     await get().fetchInspirations()
   },
 
@@ -128,7 +139,11 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
         page: page + 1,
       }))
     } catch (e) {
-      if (seq === listRequestSeq) console.error('加载更多失败', e)
+      if (seq === listRequestSeq) {
+        console.error('加载更多失败', e)
+        // 已有数据时不清空列表，只标记错误（页面用行内提示）
+        set({ error: '加载更多失败，请下拉重试' })
+      }
     } finally {
       if (seq === listRequestSeq) set({ loading: false })
     }

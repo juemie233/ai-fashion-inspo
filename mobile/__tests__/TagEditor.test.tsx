@@ -1,4 +1,8 @@
-/** 标签编辑弹层：筛选、勾选、移除、新建、保存载荷，以及「2 万+ 标签不卡死」的约束。 */
+/** 标签编辑弹层：筛选、勾选、标记移除、新建、保存载荷，以及「2 万+ 标签不卡死」的约束。
+ *
+ * 审查修复 P1-8 后的语义：点击已关联标签只是**标记移除**（可再点取消），
+ * 点「保存」才统一提交（`onSubmit({add, remove})`），不再点一下就调接口删除。
+ */
 
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import TagEditor from '../components/TagEditor'
@@ -31,8 +35,7 @@ function renderEditor(over: Partial<React.ComponentProps<typeof TagEditor>> = {}
     groups: GROUPS,
     current: CURRENT,
     onClose: jest.fn(),
-    onAdd: jest.fn(),
-    onRemove: jest.fn(),
+    onSubmit: jest.fn(),
     ...over,
   }
   const utils = render(<TagEditor {...props} />)
@@ -59,44 +62,67 @@ describe('TagEditor', () => {
     expect(screen.getByText('匹配 1 个')).toBeTruthy()
   })
 
-  it('已关联标签单独成区，点它触发移除（而不是加入待添加）', () => {
+  it('点已关联标签只是「标记移除」，保存时才提交 remove', () => {
     const { props } = renderEditor()
-    expect(screen.getByText('已关联（点击移除）')).toBeTruthy()
+    expect(screen.getByText('已关联（点击标记移除）')).toBeTruthy()
 
-    // 「甜美」同时出现在已关联区与列表行里，点第一个即已关联 chip
-    fireEvent.press(screen.getAllByText('甜美')[0])
+    // 标记后立刻调接口删除是改前的缺陷（误触无法撤销），现在必须先点保存
+    fireEvent.press(screen.getByTestId('linked-tag-1'))
+    expect(props.onSubmit).not.toHaveBeenCalled()
+    expect(screen.getByText('待移除 1 个')).toBeTruthy()
 
-    expect(props.onRemove).toHaveBeenCalledWith(1)
-    expect(props.onAdd).not.toHaveBeenCalled()
+    fireEvent.press(screen.getByText('保存'))
+    expect(props.onSubmit).toHaveBeenCalledWith({ add: [], remove: [1] })
   })
 
-  it('勾选新标签 → 保存时把待添加名称传给 onAdd', () => {
+  it('再点一次已关联标签可以取消标记', () => {
+    const { props } = renderEditor()
+    fireEvent.press(screen.getByTestId('linked-tag-1'))
+    fireEvent.press(screen.getByTestId('linked-tag-1'))
+
+    expect(screen.queryByText('待移除 1 个')).toBeNull()
+    // 没有待提交内容时保存按钮不可用
+    fireEvent.press(screen.getByText('保存'))
+    expect(props.onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('勾选新标签 → 保存时把待添加名称传给 onSubmit', () => {
     const { props } = renderEditor()
     fireEvent.press(screen.getByText('通勤'))
     expect(screen.getByText('待添加 1 个')).toBeTruthy()
 
     fireEvent.press(screen.getByText('保存'))
-    expect(props.onAdd).toHaveBeenCalledWith(['通勤'])
+    expect(props.onSubmit).toHaveBeenCalledWith({ add: ['通勤'], remove: [] })
   })
 
-  it('未勾选任何标签时保存按钮不触发 onAdd', () => {
+  it('未勾选任何标签时保存按钮不触发提交', () => {
     const { props } = renderEditor()
     fireEvent.press(screen.getByText('保存'))
 
-    expect(props.onAdd).not.toHaveBeenCalled()
+    expect(props.onSubmit).not.toHaveBeenCalled()
   })
 
-  it('搜索无匹配时提供新建入口，点击即用该名字新增', () => {
+  it('搜索无匹配时提供新建入口，点击即勾选为待新建', () => {
     const { props } = renderEditor()
     fireEvent.changeText(screen.getByPlaceholderText('搜索或输入新标签'), '复古风')
 
     fireEvent.press(screen.getByText('新建标签「复古风」'))
-    expect(props.onAdd).toHaveBeenCalledWith(['复古风'])
+    // 点新建只是加入待添加，仍需保存
+    expect(screen.getByText('待添加 1 个')).toBeTruthy()
+    fireEvent.press(screen.getByText('保存'))
+    expect(props.onSubmit).toHaveBeenCalledWith({ add: ['复古风'], remove: [] })
   })
 
   it('loading 时显示占位文案而不是空列表', () => {
     renderEditor({ loading: true })
     expect(screen.getByText('正在加载标签…')).toBeTruthy()
+  })
+
+  it('标签库加载失败时给重试入口', () => {
+    const onRetry = jest.fn()
+    renderEditor({ loadError: true, groups: [], onRetry })
+    fireEvent.press(screen.getByText('重试'))
+    expect(onRetry).toHaveBeenCalled()
   })
 
   it('标签库有 5000 个时不会一次性渲染全部（防止真机 ANR）', () => {

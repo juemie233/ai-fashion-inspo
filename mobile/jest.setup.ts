@@ -80,3 +80,36 @@ jest.mock('@expo/vector-icons', () => {
     Feather: makeIcon('Feather'),
   }
 })
+
+// expo-image 是原生视图（ExpoImage）：Node 下用 View 顶替，
+// `contentFit`/`transition`/`cachePolicy` 这些属性对断言无意义，原样透传即可。
+jest.mock('expo-image', () => {
+  const React = require('react')
+  const { View } = require('react-native')
+  return {
+    __esModule: true,
+    Image: (props: Record<string, unknown>) => React.createElement(View, props),
+  }
+})
+
+// 渐变遮罩同上是原生视图：渲染成 View 并保留 children（不影响断言与裸字符串检查）
+jest.mock('expo-linear-gradient', () => {
+  const React = require('react')
+  const { View } = require('react-native')
+  return {
+    __esModule: true,
+    LinearGradient: (props: Record<string, unknown>) =>
+      React.createElement(View, props, props.children as React.ReactNode),
+  }
+})
+
+// 触觉反馈：Node 环境没有振动马达，统一空实现（具体调用由 utils/haptics 的用例断言）
+jest.mock('expo-haptics', () => ({
+  __esModule: true,
+  selectionAsync: jest.fn(async () => {}),
+  impactAsync: jest.fn(async () => {}),
+  notificationAsync: jest.fn(async () => {}),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
+}))
+

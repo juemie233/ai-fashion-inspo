@@ -77,7 +77,8 @@ describe('GalleryScreen（M3）', () => {
     expect(screen.getByText('收藏')).toBeTruthy()
     expect(screen.getByText('已标注')).toBeTruthy()
     expect(screen.getByText('未标注')).toBeTruthy()
-    expect(screen.getByText('最新')).toBeTruthy()
+    // P1-7：排序入口显示当前排序 + 下拉箭头，点开是弹层单选
+    expect(screen.getByText('排序：最新')).toBeTruthy()
     expect(findBareText(utils.toJSON())).toEqual([])
   })
 
@@ -124,12 +125,22 @@ describe('GalleryScreen（M3）', () => {
     await waitFor(() => expect(screen.queryByText('已选 1 张')).toBeNull())
   })
 
-  it('点排序按钮在四种排序间轮转', async () => {
+  it('排序改成弹层单选（不再循环点四次）', async () => {
     render(<GalleryScreen />)
-    fireEvent.press(screen.getByText('最新'))
+    fireEvent.press(screen.getByTestId('sort-button'))
+
+    await waitFor(() => expect(screen.getByText('排序方式')).toBeTruthy())
+    fireEvent.press(screen.getByTestId('sort-option-oldest'))
 
     await waitFor(() => expect(api.fetchInspirationPage).toHaveBeenCalledWith(1, 30, {}, 'oldest'))
-    await waitFor(() => expect(screen.getByText('最早')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('排序：最早')).toBeTruthy())
+  })
+
+  it('页头「选择」按钮可进入多选（长按之外的显式入口）', async () => {
+    render(<GalleryScreen />)
+    fireEvent.press(screen.getByTestId('toggle-selection'))
+
+    await waitFor(() => expect(screen.getByText('点选要批量操作的素材')).toBeTruthy())
   })
 
   it('长按卡片进入多选，显示已选数量', async () => {
@@ -208,10 +219,41 @@ describe('GalleryScreen（M3）', () => {
     expect(screen.getAllByText('视频')).toHaveLength(1)
   })
 
-  it('筛选结果为空时给出对应文案而不是「还没有素材」', async () => {
-    useInspirationStore.setState({ items: [], total: 0, filter: { is_favorite: true } })
+  it('首屏加载时显示骨架网格而不是空态', () => {
+    useInspirationStore.setState({ items: [], total: 0, loading: true, error: null })
     render(<GalleryScreen />)
 
-    expect(screen.getByText('还没有收藏的素材')).toBeTruthy()
+    expect(screen.getByTestId('skeleton-grid')).toBeTruthy()
+    expect(screen.queryByText('还没有素材')).toBeNull()
+  })
+
+  it('加载失败显示错误态与重试，而不是「还没有素材」', async () => {
+    api.fetchInspirationPage.mockRejectedValue(new Error('offline'))
+    useInspirationStore.setState({ items: [], total: 0, loading: false, error: null })
+    render(<GalleryScreen />)
+
+    await waitFor(() => expect(screen.getByText('加载失败')).toBeTruthy())
+    expect(screen.getByText('请检查网络或后端服务')).toBeTruthy()
+    expect(screen.queryByText('还没有素材')).toBeNull()
+
+    // 重试会重新请求第一页
+    api.fetchInspirationPage.mockClear()
+    fireEvent.press(screen.getByTestId('retry-button'))
+    await waitFor(() => expect(api.fetchInspirationPage).toHaveBeenCalled())
+  })
+
+  it('筛选结果为空时给出对应文案而不是「还没有素材」', async () => {
+    api.fetchInspirationPage.mockResolvedValue({ items: [], total: 0, page: 1, size: 30 })
+    useInspirationStore.setState({
+      items: [],
+      total: 0,
+      loading: false,
+      error: null,
+      filter: { is_favorite: true },
+    })
+    render(<GalleryScreen />)
+
+    await waitFor(() => expect(screen.getByText('还没有收藏的素材')).toBeTruthy())
+    expect(screen.queryByText('还没有素材')).toBeNull()
   })
 })

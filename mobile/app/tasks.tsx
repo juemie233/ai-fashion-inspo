@@ -2,22 +2,25 @@
  *
  * 设计取舍（见 docs/移动端.md）：暂停/恢复/删除留在 Web ——
  * 状态机复杂，手机上误触代价高。
+ *
+ * 审查修复：三态（骨架/错误+重试/空态）、状态用 Badge、自动刷新时有可见指示
+ * （改前每 3 秒静默重绘，用户不知道在刷新）。
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native'
+import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, View } from 'react-native'
 import { cancelTask, fetchTasks, type TaskItem } from '../services/api'
 import TaskRow from '../components/TaskRow'
+import AppText from '../components/ui/AppText'
+import EmptyState from '../components/ui/EmptyState'
+import ErrorState from '../components/ui/ErrorState'
+import { SkeletonList } from '../components/ui/Skeleton'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 
 export default function TasksScreen() {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -81,8 +84,8 @@ export default function TasksScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366f1" />
+      <View style={styles.container}>
+        <SkeletonList rows={5} />
       </View>
     )
   }
@@ -94,26 +97,50 @@ export default function TasksScreen() {
       keyExtractor={(t) => String(t.id)}
       contentContainerStyle={styles.list}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#6366f1" />
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          colors={[theme.color.brandFill]}
+          tintColor={theme.color.brandFill}
+        />
       }
       renderItem={({ item }) => (
         <TaskRow task={item} onCancel={handleCancel} cancelling={cancellingId === item.id} />
       )}
+      ListHeaderComponent={
+        hasActive ? (
+          <View style={styles.autoRefresh}>
+            <ActivityIndicator size="small" color={theme.color.brandFill} />
+            <AppText variant="caption" color="textTertiary">
+              每 3 秒自动刷新，完成或取消后自动停止
+            </AppText>
+          </View>
+        ) : null
+      }
       ListEmptyComponent={
-        <View style={styles.empty}>
-          <Text style={styles.emptyText}>{error || '暂无后台任务'}</Text>
-          {error ? <Text style={styles.emptyHint}>下拉可重试</Text> : null}
-        </View>
+        error ? (
+          <ErrorState onRetry={() => void load()} />
+        ) : (
+          <EmptyState
+            icon="pulse-outline"
+            title="暂无后台任务"
+            description="上传或采集素材后，AI 分析会出现在这里"
+          />
+        )
       }
     />
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  list: { paddingVertical: 12 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' },
-  empty: { paddingTop: 80, alignItems: 'center', gap: 6 },
-  emptyText: { fontSize: 14, color: '#9ca3af' },
-  emptyHint: { fontSize: 12, color: '#d1d5db' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    list: { paddingVertical: t.space.md, flexGrow: 1 },
+    autoRefresh: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.lg,
+      paddingBottom: t.space.sm,
+    },
+  })

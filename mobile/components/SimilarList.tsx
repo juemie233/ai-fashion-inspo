@@ -1,7 +1,14 @@
 /** 相似素材横向列表：详情页底部展示向量检索出来的同类素材。 */
 
-import { FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { FlatList, StyleSheet, View } from 'react-native'
+import MediaCard from './ui/MediaCard'
+import AppText from './ui/AppText'
+import { useStyles } from '../hooks/useTheme'
 import type { Inspiration } from '../services/api'
+import type { Theme } from '../constants/theme'
+
+/** 横滑卡片宽度 */
+const CARD_WIDTH = 96
 
 interface Props {
   items: Inspiration[]
@@ -11,11 +18,14 @@ interface Props {
 }
 
 export default function SimilarList({ items, resolveUri, onPress }: Props) {
+  const styles = useStyles(makeStyles)
   if (items.length === 0) return null
 
   return (
     <View style={styles.section}>
-      <Text style={styles.title}>相似素材</Text>
+      <AppText variant="subtitle" style={styles.title}>
+        相似素材
+      </AppText>
       <FlatList
         data={items}
         horizontal
@@ -23,29 +33,24 @@ export default function SimilarList({ items, resolveUri, onPress }: Props) {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.card}
-            activeOpacity={0.8}
-            onPress={() => onPress(item.id)}
-          >
-            <Image source={{ uri: resolveUri(item) }} style={styles.image} />
-          </TouchableOpacity>
+          <View style={styles.cardWrap}>
+            <MediaCard uri={resolveUri(item)} onPress={() => onPress(item.id)} />
+          </View>
         )}
       />
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  section: { paddingTop: 16, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
-  title: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    paddingHorizontal: 16,
-    marginBottom: 8,
-  },
-  list: { paddingHorizontal: 16, gap: 8 },
-  card: { width: 96, height: 128, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f3f4f6' },
-  image: { width: '100%', height: '100%', resizeMode: 'cover' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    section: {
+      paddingTop: t.space.lg,
+      gap: t.space.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: t.color.divider,
+    },
+    title: { paddingHorizontal: t.space.lg },
+    list: { paddingHorizontal: t.space.lg, gap: t.space.sm },
+    cardWrap: { width: CARD_WIDTH },
+  })

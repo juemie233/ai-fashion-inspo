@@ -1,21 +1,19 @@
 /** 合集选择器：把选中的素材加进已有合集，或现场新建一个。
  *
  * 只在多选态用（见 docs/移动端.md：手机上不做合集拖拽排序）。
+ *
+ * 审查修复（P1-9）：换 `ui/BottomSheet`（安全区、遮罩可点关闭、键盘避让、无 62% 硬编码高度）。
  */
 
 import { useEffect, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  Modal,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native'
 import Icon from './Icon'
+import AppText from './ui/AppText'
+import Button from './ui/Button'
+import BottomSheet from './ui/BottomSheet'
+import { useStyles, useTheme } from '../hooks/useTheme'
 import type { CollectionItem } from '../services/api'
+import type { Theme } from '../constants/theme'
 
 interface Props {
   visible: boolean
@@ -42,6 +40,8 @@ export default function CollectionPicker({
   onPick,
   onCreate,
 }: Props) {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const [name, setName] = useState('')
 
   useEffect(() => {
@@ -52,116 +52,111 @@ export default function CollectionPicker({
   const targets = collections.filter((c) => !c.parent_id && c.kind === 'manual')
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.header}>
-            <Text style={styles.title}>加入合集</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={12} accessibilityLabel="关闭合集选择">
-              <Icon name="close" size={22} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
+    <BottomSheet
+      visible={visible}
+      title="加入合集"
+      onClose={onClose}
+      testID="collection-picker"
+      footer={
+        <>
+          <AppText variant="caption" color="textTertiary" style={styles.footerInfo}>
+            已选 {count} 张
+          </AppText>
+          <Button title="取消" variant="secondary" onPress={onClose} disabled={saving} />
+        </>
+      }
+    >
+      <AppText variant="caption" color="textTertiary" style={styles.hint}>
+        把选中的 {count} 张素材加入下面某个合集
+      </AppText>
 
-          <Text style={styles.hint}>把选中的 {count} 张素材加入下面某个合集</Text>
-
-          {/* 新建合集 */}
-          <View style={styles.createRow}>
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="新建合集名称"
-              placeholderTextColor="#9ca3af"
-            />
-            <TouchableOpacity
-              style={[styles.createBtn, (!name.trim() || saving) && styles.createBtnDisabled]}
-              onPress={() => onCreate(name.trim())}
-              disabled={!name.trim() || saving}
-            >
-              <Text style={styles.createBtnText}>新建并加入</Text>
-            </TouchableOpacity>
-          </View>
-
-          {loading ? (
-            <View style={styles.loading}>
-              <ActivityIndicator color="#6366f1" />
-            </View>
-          ) : (
-            <FlatList
-              data={targets}
-              keyExtractor={(c) => String(c.id)}
-              style={styles.list}
-              ListEmptyComponent={<Text style={styles.empty}>还没有合集，可以在上面新建一个</Text>}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.row}
-                  onPress={() => onPick(item)}
-                  disabled={saving}
-                >
-                  <Icon name="albums-outline" size={18} color="#6366f1" />
-                  <Text style={styles.rowName} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={styles.rowCount}>{item.item_count ?? 0} 张</Text>
-                </TouchableOpacity>
-              )}
-            />
-          )}
-        </View>
+      {/* 新建合集 */}
+      <View style={styles.createRow}>
+        <TextInput
+          style={styles.input}
+          value={name}
+          onChangeText={setName}
+          placeholder="新建合集名称"
+          placeholderTextColor={theme.color.textTertiary}
+          autoCorrect={false}
+        />
+        <Button
+          title="新建并加入"
+          onPress={() => onCreate(name.trim())}
+          disabled={!name.trim() || saving}
+          loading={saving}
+        />
       </View>
-    </Modal>
+
+      {loading ? (
+        <AppText variant="bodySm" color="textTertiary" style={styles.empty}>
+          正在加载合集…
+        </AppText>
+      ) : (
+        <FlatList
+          data={targets}
+          keyExtractor={(c) => String(c.id)}
+          style={styles.list}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={
+            <AppText variant="bodySm" color="textTertiary" style={styles.empty}>
+              还没有合集，可以在上面新建一个
+            </AppText>
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+              onPress={() => onPick(item)}
+              disabled={saving}
+              accessibilityRole="button"
+            >
+              <Icon name="albums-outline" size={theme.icon.md} color={theme.color.brandText} />
+              <AppText variant="body" numberOfLines={1} style={styles.rowName}>
+                {item.name}
+              </AppText>
+              <AppText variant="caption" color="textTertiary">
+                {item.item_count ?? 0} 张
+              </AppText>
+            </Pressable>
+          )}
+        />
+      )}
+    </BottomSheet>
   )
 }
 
-const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    height: '62%',
-    paddingBottom: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
-  },
-  title: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  hint: { fontSize: 12, color: '#9ca3af', paddingHorizontal: 16, paddingBottom: 8 },
-  createRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
-  input: {
-    flex: 1,
-    height: 38,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    fontSize: 14,
-    color: '#111827',
-  },
-  createBtn: {
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    borderRadius: 8,
-    backgroundColor: '#6366f1',
-  },
-  createBtnDisabled: { backgroundColor: '#c7d2fe' },
-  createBtnText: { color: '#fff', fontSize: 13 },
-  loading: { paddingVertical: 40, alignItems: 'center' },
-  list: { flex: 1, paddingHorizontal: 16 },
-  empty: { fontSize: 13, color: '#9ca3af', paddingVertical: 24, textAlign: 'center' },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f9fafb',
-  },
-  rowName: { flex: 1, fontSize: 14, color: '#374151' },
-  rowCount: { fontSize: 11, color: '#9ca3af' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    hint: { paddingHorizontal: t.space.lg, paddingBottom: t.space.sm },
+    createRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.lg,
+      paddingBottom: t.space.sm,
+    },
+    input: {
+      flex: 1,
+      minHeight: t.touch,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      borderRadius: t.radius.control,
+      paddingHorizontal: t.space.md,
+      fontSize: t.font.body.fontSize,
+      color: t.color.textPrimary,
+    },
+    list: { maxHeight: 360 },
+    row: {
+      minHeight: 52,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.md,
+      paddingHorizontal: t.space.lg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.color.divider,
+    },
+    rowName: { flex: 1 },
+    empty: { textAlign: 'center', paddingVertical: t.space.xxl },
+    pressed: { backgroundColor: t.color.bgSubtle },
+    footerInfo: { flex: 1 },
+  })

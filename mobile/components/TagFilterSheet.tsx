@@ -1,37 +1,22 @@
 /** 标签筛选弹层（搜索页用）：搜索 + 虚拟列表 + 多选。
  *
  * 为什么单独一个组件而不复用 TagEditor：TagEditor 的语义是「改某个素材的标签」
- * （点已关联即移除、保存即提交），这里只是「攒一组查询条件」，交互不同。
+ * （标记增删后保存提交），这里只是「攒一组查询条件」，交互不同。
  * 相同点是性能约束：标签库有 2 万+，必须虚拟化 + 默认限量 + 搜索（见 CLAUDE.md）。
+ *
+ * 审查修复（P1-9）：换 `ui/BottomSheet`（安全区、遮罩可点关闭、键盘避让、无 78% 硬编码高度）。
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  Modal,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native'
 import Icon from './Icon'
+import AppText from './ui/AppText'
+import Button from './ui/Button'
+import BottomSheet from './ui/BottomSheet'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import { tagCategoryLabel } from '../constants/labels'
 import type { TagCategoryGroup } from '../services/api'
-
-const CATEGORY_LABELS: Record<string, string> = {
-  style: '风格',
-  item_type: '单品',
-  color: '颜色',
-  body_part: '穿着方式',
-  fit: '版型',
-  season: '季节',
-  attribute: '属性',
-  atmosphere: '氛围',
-  design_detail: '设计细节',
-  expression: '表情',
-  free: '自定义',
-}
+import type { Theme } from '../constants/theme'
 
 /** 不带搜索词时展示的条数（避免开屏就渲染过多） */
 const DEFAULT_LIMIT = 60
@@ -57,6 +42,8 @@ export default function TagFilterSheet({
   onClose,
   onConfirm,
 }: Props) {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string[]>(selected)
 
@@ -86,148 +73,123 @@ export default function TagFilterSheet({
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.header}>
-            <Text style={styles.title}>按标签筛选</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={12} accessibilityLabel="关闭标签筛选">
-              <Icon name="close" size={22} color="#6b7280" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.searchRow}>
-            <Icon name="search-outline" size={16} color="#9ca3af" />
-            <TextInput
-              style={styles.searchInput}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="搜索标签"
-              placeholderTextColor="#9ca3af"
-            />
-            {query.length > 0 && (
-              <TouchableOpacity onPress={() => setQuery('')} hitSlop={8}>
-                <Icon name="close-circle" size={16} color="#d1d5db" />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {loading ? (
-            <View style={styles.fillBox}>
-              <ActivityIndicator color="#6366f1" />
-              <Text style={styles.hintText}>正在加载标签…</Text>
-            </View>
-          ) : (
-            <>
-              <Text style={styles.hintLine}>
-                {q ? `匹配 ${visibleTags.length} 个` : `共 ${all.length} 个标签，输入关键词缩小范围`}
-              </Text>
-              <FlatList
-                data={visibleTags}
-                keyExtractor={(t) => String(t.id)}
-                style={styles.list}
-                keyboardShouldPersistTaps="handled"
-                initialNumToRender={14}
-                windowSize={6}
-                removeClippedSubviews
-                ListEmptyComponent={<Text style={styles.hintText}>没有匹配的标签</Text>}
-                renderItem={({ item }) => {
-                  const on = picked.includes(item.name)
-                  return (
-                    <TouchableOpacity style={styles.row} onPress={() => toggle(item.name)}>
-                      <Icon
-                        name={on ? 'checkmark-circle' : 'ellipse-outline'}
-                        size={16}
-                        color={on ? '#6366f1' : '#d1d5db'}
-                      />
-                      <Text style={[styles.rowName, on && styles.rowNameActive]}>{item.name}</Text>
-                      <Text style={styles.rowCategory}>
-                        {CATEGORY_LABELS[item.category] || item.category}
-                      </Text>
-                    </TouchableOpacity>
-                  )
-                }}
-              />
-            </>
-          )}
-
-          <View style={styles.footer}>
-            <Text style={styles.hint}>已选 {picked.length} 个</Text>
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setPicked([])}>
-              <Text style={styles.cancelText}>清空</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.okBtn} onPress={() => onConfirm(picked)}>
-              <Text style={styles.okText}>确定</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+    <BottomSheet
+      visible={visible}
+      title="按标签筛选"
+      onClose={onClose}
+      testID="tag-filter-sheet"
+      footer={
+        <>
+          <AppText variant="caption" color="textTertiary" style={styles.footerInfo}>
+            已选 {picked.length} 个
+          </AppText>
+          <Button title="清空" variant="secondary" onPress={() => setPicked([])} />
+          <Button title="确定" onPress={() => onConfirm(picked)} testID="tag-filter-ok" />
+        </>
+      }
+    >
+      <View style={styles.searchRow}>
+        <Icon name="search-outline" size={theme.icon.sm} color={theme.color.textTertiary} />
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="搜索标签"
+          placeholderTextColor={theme.color.textTertiary}
+          autoCorrect={false}
+        />
+        {query.length > 0 ? (
+          <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityLabel="清空搜索词">
+            <Icon name="close-circle" size={theme.icon.sm} color={theme.color.textDisabled} />
+          </Pressable>
+        ) : null}
       </View>
-    </Modal>
+
+      {loading ? (
+        <View style={styles.fillBox}>
+          <AppText variant="bodySm" color="textSecondary">
+            正在加载标签…
+          </AppText>
+        </View>
+      ) : (
+        <>
+          <AppText variant="caption" color="textTertiary" style={styles.hintLine}>
+            {q ? `匹配 ${visibleTags.length} 个` : `共 ${all.length} 个标签，输入关键词缩小范围`}
+          </AppText>
+          <FlatList
+            data={visibleTags}
+            keyExtractor={(t) => String(t.id)}
+            style={styles.list}
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={14}
+            windowSize={6}
+            removeClippedSubviews
+            ListEmptyComponent={
+              <AppText variant="bodySm" color="textTertiary" style={styles.empty}>
+                没有匹配的标签
+              </AppText>
+            }
+            renderItem={({ item }) => {
+              const on = picked.includes(item.name)
+              return (
+                <Pressable
+                  testID={`tag-option-${item.id}`}
+                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                  onPress={() => toggle(item.name)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Icon
+                    name={on ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={theme.icon.md}
+                    color={on ? theme.color.brandText : theme.color.textDisabled}
+                  />
+                  <AppText
+                    variant="body"
+                    color={on ? 'brandText' : 'textPrimary'}
+                    numberOfLines={1}
+                    style={styles.rowName}
+                  >
+                    {item.name}
+                  </AppText>
+                  <AppText variant="caption" color="textTertiary">
+                    {tagCategoryLabel(item.category)}
+                  </AppText>
+                </Pressable>
+              )
+            }}
+          />
+        </>
+      )}
+    </BottomSheet>
   )
 }
 
-const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    height: '78%',
-    paddingBottom: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 8,
-  },
-  title: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingHorizontal: 10,
-    height: 38,
-    borderRadius: 8,
-    backgroundColor: '#f3f4f6',
-  },
-  searchInput: { flex: 1, fontSize: 14, color: '#111827', padding: 0 },
-  fillBox: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  hintLine: { fontSize: 11, color: '#9ca3af', paddingHorizontal: 16, paddingBottom: 4 },
-  list: { flex: 1, paddingHorizontal: 16 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f9fafb',
-  },
-  rowName: { flex: 1, fontSize: 14, color: '#374151' },
-  rowNameActive: { color: '#6366f1', fontWeight: '500' },
-  rowCategory: { fontSize: 11, color: '#9ca3af' },
-  hintText: { fontSize: 13, color: '#9ca3af', textAlign: 'center', paddingVertical: 16 },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  hint: { flex: 1, fontSize: 12, color: '#9ca3af' },
-  cancelBtn: { paddingHorizontal: 14, paddingVertical: 9 },
-  cancelText: { fontSize: 14, color: '#6b7280' },
-  okBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 9,
-    borderRadius: 8,
-    backgroundColor: '#6366f1',
-  },
-  okText: { fontSize: 14, color: '#fff', fontWeight: '600' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      marginHorizontal: t.space.lg,
+      paddingHorizontal: t.space.md,
+      minHeight: 44,
+      borderRadius: t.radius.control,
+      backgroundColor: t.color.bgSubtle,
+    },
+    searchInput: { flex: 1, fontSize: t.font.body.fontSize, color: t.color.textPrimary },
+    fillBox: { paddingVertical: t.space.xxxl, alignItems: 'center' },
+    hintLine: { paddingHorizontal: t.space.lg, paddingTop: t.space.sm },
+    list: { maxHeight: 360, marginTop: t.space.xs },
+    row: {
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.lg,
+    },
+    rowName: { flex: 1 },
+    empty: { textAlign: 'center', paddingVertical: t.space.xl },
+    pressed: { backgroundColor: t.color.bgSubtle },
+    footerInfo: { flex: 1 },
+  })

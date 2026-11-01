@@ -2,35 +2,25 @@
  *
  * 只做三件事（见 docs/移动端.md）：合并/删除/颜色/排序留在 Web ——
  * 破坏性操作需要对比多个标签，手机上误触代价高。
+ *
+ * 审查修复：
+ * - P1-6 加载改骨架行，删除「正在加载标签库…（2 万+ 个，首次约需 8 秒）」这种技术文案
+ * - P1-9 改名弹层换 `ui/BottomSheet`
+ * - P1-10 分类中文名统一走 `constants/labels.ts`
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  Modal,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native'
+import AppText from '../components/ui/AppText'
+import Button from '../components/ui/Button'
+import BottomSheet from '../components/ui/BottomSheet'
+import ErrorState from '../components/ui/ErrorState'
+import { SkeletonList } from '../components/ui/Skeleton'
 import Icon from '../components/Icon'
 import { fetchTagGroups, invalidateTagCache, renameTag, type TagCategoryGroup } from '../services/api'
-
-const CATEGORY_LABELS: Record<string, string> = {
-  style: '风格',
-  item_type: '单品',
-  color: '颜色',
-  body_part: '穿着方式',
-  fit: '版型',
-  season: '季节',
-  attribute: '属性',
-  atmosphere: '氛围',
-  design_detail: '设计细节',
-  expression: '表情',
-  free: '自定义',
-}
+import { tagCategoryLabel } from '../constants/labels'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 
 /** 不带搜索词时最多展示多少（标签库 2 万+，必须限量 + 虚拟化） */
 const DEFAULT_LIMIT = 80
@@ -43,6 +33,8 @@ interface FlatTag {
 }
 
 export default function TagsScreen() {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const [groups, setGroups] = useState<TagCategoryGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -128,9 +120,16 @@ export default function TagsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366f1" />
-        <Text style={styles.loadingHint}>正在加载标签库…（2 万+ 个，首次约需 8 秒）</Text>
+      <View style={styles.container}>
+        <SkeletonList rows={8} />
+      </View>
+    )
+  }
+
+  if (error && groups.length === 0) {
+    return (
+      <View style={styles.container}>
+        <ErrorState onRetry={() => void load()} />
       </View>
     )
   }
@@ -138,28 +137,27 @@ export default function TagsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.searchBar}>
-        <Icon name="search" size={16} color="#9ca3af" />
+        <Icon name="search" size={theme.icon.sm} color={theme.color.textTertiary} />
         <TextInput
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
           placeholder="搜索标签"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={theme.color.textTertiary}
+          autoCorrect={false}
         />
-        {query.length > 0 && (
-          <TouchableOpacity onPress={() => setQuery('')} hitSlop={8}>
-            <Icon name="close-circle" size={16} color="#d1d5db" />
-          </TouchableOpacity>
-        )}
+        {query.length > 0 ? (
+          <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityLabel="清空搜索词">
+            <Icon name="close-circle" size={theme.icon.sm} color={theme.color.textDisabled} />
+          </Pressable>
+        ) : null}
       </View>
 
-      <Text style={styles.hint}>
+      <AppText variant="caption" color="textTertiary" style={styles.hint}>
         {q
           ? `匹配 ${visibleTags.length} 个${visibleTags.length >= SEARCH_LIMIT ? '（仅显示前 200）' : ''}`
           : `共 ${all.length} 个标签，输入关键词缩小范围`}
-      </Text>
-
-      {error !== '' && <Text style={styles.errorText}>{error}</Text>}
+      </AppText>
 
       <FlatList
         data={visibleTags}
@@ -168,120 +166,105 @@ export default function TagsScreen() {
         windowSize={6}
         removeClippedSubviews
         contentContainerStyle={styles.list}
-        ListEmptyComponent={<Text style={styles.emptyText}>没有匹配的标签</Text>}
+        ListEmptyComponent={
+          <AppText variant="bodySm" color="textTertiary" style={styles.emptyText}>
+            没有匹配的标签
+          </AppText>
+        }
         renderItem={({ item }) => (
-          <TouchableOpacity
+          <Pressable
             testID={`tag-${item.id}`}
-            style={styles.row}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}
             onPress={() => openEdit(item)}
+            accessibilityRole="button"
           >
-            <Text style={styles.rowName} numberOfLines={1}>
+            <AppText variant="body" numberOfLines={1} style={styles.rowName}>
               {item.name}
-            </Text>
-            <Text style={styles.rowCategory}>
-              {CATEGORY_LABELS[item.category] || item.category}
-            </Text>
-            <Icon name="create-outline" size={15} color="#d1d5db" />
-          </TouchableOpacity>
+            </AppText>
+            <AppText variant="caption" color="textTertiary">
+              {tagCategoryLabel(item.category)}
+            </AppText>
+            <Icon name="create-outline" size={theme.icon.sm} color={theme.color.textDisabled} />
+          </Pressable>
         )}
       />
 
       {/* 改名弹层 */}
-      <Modal visible={editing !== null} transparent animationType="fade" onRequestClose={closeEdit}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>重命名标签</Text>
-            <Text style={styles.modalHint}>原名：{editing?.name ?? ''}</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={draftName}
-              onChangeText={setDraftName}
-              autoFocus
-              placeholder="新名称"
-              placeholderTextColor="#9ca3af"
-            />
-            {renameError !== '' && <Text style={styles.modalError}>{renameError}</Text>}
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={closeEdit}>
-                <Text style={styles.modalCancelText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalSave, saving && styles.modalSaveDisabled]}
-                onPress={() => void submitRename()}
-                disabled={saving}
-              >
-                <Text style={styles.modalSaveText}>{saving ? '保存中…' : '保存'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+      <BottomSheet
+        visible={editing !== null}
+        title="重命名标签"
+        onClose={closeEdit}
+        testID="rename-sheet"
+        footer={
+          <>
+            <Button title="取消" variant="secondary" onPress={closeEdit} />
+            <Button title="保存" onPress={() => void submitRename()} loading={saving} />
+          </>
+        }
+      >
+        <View style={styles.sheetBody}>
+          <AppText variant="caption" color="textTertiary">
+            原名：{editing?.name ?? ''}
+          </AppText>
+          <TextInput
+            style={styles.input}
+            value={draftName}
+            onChangeText={setDraftName}
+            autoFocus
+            placeholder="新名称"
+            placeholderTextColor={theme.color.textTertiary}
+            autoCorrect={false}
+          />
+          {renameError !== '' ? (
+            <AppText variant="caption" color="dangerText">
+              {renameError}
+            </AppText>
+          ) : null}
         </View>
-      </Modal>
+      </BottomSheet>
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb', gap: 10 },
-  loadingHint: { fontSize: 12, color: '#9ca3af' },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fff',
-    margin: 12,
-    paddingHorizontal: 10,
-    height: 38,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  searchInput: { flex: 1, fontSize: 14, color: '#111827', padding: 0 },
-  hint: { fontSize: 11, color: '#9ca3af', paddingHorizontal: 14, paddingBottom: 6 },
-  errorText: { fontSize: 12, color: '#ef4444', paddingHorizontal: 14, paddingBottom: 6 },
-  list: { paddingHorizontal: 12, paddingBottom: 24 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    marginBottom: 6,
-    borderRadius: 8,
-  },
-  rowName: { flex: 1, fontSize: 14, color: '#374151' },
-  rowCategory: { fontSize: 11, color: '#9ca3af' },
-  emptyText: { textAlign: 'center', paddingVertical: 24, fontSize: 13, color: '#9ca3af' },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: { width: '100%', backgroundColor: '#fff', borderRadius: 12, padding: 16 },
-  modalTitle: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 6 },
-  modalHint: { fontSize: 12, color: '#9ca3af', marginBottom: 10 },
-  modalInput: {
-    height: 40,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    fontSize: 15,
-    color: '#111827',
-  },
-  modalError: { fontSize: 12, color: '#ef4444', marginTop: 8 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
-  modalCancel: { paddingHorizontal: 14, paddingVertical: 9 },
-  modalCancelText: { fontSize: 14, color: '#6b7280' },
-  modalSave: {
-    paddingHorizontal: 20,
-    paddingVertical: 9,
-    borderRadius: 8,
-    backgroundColor: '#6366f1',
-  },
-  modalSaveDisabled: { backgroundColor: '#c7d2fe' },
-  modalSaveText: { fontSize: 14, color: '#fff', fontWeight: '600' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    searchBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      backgroundColor: t.color.bgSurface,
+      margin: t.space.md,
+      paddingHorizontal: t.space.md,
+      minHeight: 42,
+      borderRadius: t.radius.control,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    searchInput: { flex: 1, fontSize: t.font.body.fontSize, color: t.color.textPrimary },
+    hint: { paddingHorizontal: t.space.lg, paddingBottom: t.space.sm },
+    list: { paddingHorizontal: t.space.md, paddingBottom: t.space.xxl },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      backgroundColor: t.color.bgSurface,
+      paddingHorizontal: t.space.md,
+      minHeight: 48,
+      marginBottom: t.space.xs,
+      borderRadius: t.radius.control,
+    },
+    rowName: { flex: 1 },
+    pressed: { backgroundColor: t.color.bgSubtle },
+    emptyText: { textAlign: 'center', paddingVertical: t.space.xxl },
+    sheetBody: { paddingHorizontal: t.space.lg, paddingBottom: t.space.md, gap: t.space.sm },
+    input: {
+      minHeight: t.touch,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      borderRadius: t.radius.control,
+      paddingHorizontal: t.space.md,
+      fontSize: t.font.body.fontSize,
+      color: t.color.textPrimary,
+    },
+  })

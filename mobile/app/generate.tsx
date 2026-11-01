@@ -2,37 +2,30 @@
  *
  * 手机侧取舍（docs/移动端.md）：出图依赖 PC 上的 ComfyUI，手机上不做参数
  * 面板与提交，只看「出了什么、要不要用」——点进批次可以看候选图与全屏预览。
+ *
+ * 审查修复：三态（骨架/错误+重试/空态）、状态用 Badge（令牌色）、时间列不换行。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native'
 import { useRouter } from 'expo-router'
-import Icon from '../components/Icon'
+import AppText from '../components/ui/AppText'
+import Badge from '../components/ui/Badge'
+import EmptyState from '../components/ui/EmptyState'
+import ErrorState from '../components/ui/ErrorState'
+import { SkeletonList } from '../components/ui/Skeleton'
 import { fetchGenerateModelLabels, fetchGenerateRuns, type GenerateRun } from '../services/api'
 import { modelLabel } from '../utils/modelLabel'
+import { statusMeta, GENERATE_STATUS_META } from '../constants/labels'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 
 const PAGE_SIZE = 20
 
-/** 批次状态中文名与配色（枚举与后端 generation.GENERATION_STATUSES 对齐） */
-const STATUS_META: Record<string, { label: string; color: string }> = {
-  queued: { label: '排队中', color: '#f59e0b' },
-  waiting_vram: { label: '等待显存', color: '#f59e0b' },
-  running: { label: '出图中', color: '#6366f1' },
-  done: { label: '已完成', color: '#16a34a' },
-  failed: { label: '失败', color: '#ef4444' },
-  cancelled: { label: '已取消', color: '#9ca3af' },
-}
-
 export default function GenerateScreen() {
   const router = useRouter()
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
 
   const [runs, setRuns] = useState<GenerateRun[]>([])
   const [total, setTotal] = useState(0)
@@ -97,8 +90,8 @@ export default function GenerateScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366f1" />
+      <View style={styles.container}>
+        <SkeletonList rows={5} />
       </View>
     )
   }
@@ -109,68 +102,93 @@ export default function GenerateScreen() {
       data={runs}
       keyExtractor={(r) => String(r.id)}
       contentContainerStyle={styles.list}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={[theme.color.brandFill]}
+          tintColor={theme.color.brandFill}
+        />
+      }
       onEndReached={onEndReached}
       onEndReachedThreshold={0.5}
       renderItem={({ item }) => {
-        const status = STATUS_META[item.status] ?? { label: item.status, color: '#9ca3af' }
+        const status = statusMeta(GENERATE_STATUS_META, item.status)
         return (
-          <TouchableOpacity
+          <Pressable
             testID={`run-${item.id}`}
-            style={styles.card}
-            activeOpacity={0.85}
+            style={({ pressed }) => [styles.card, pressed && styles.pressed]}
             onPress={() => router.push(`/generate/${item.id}`)}
+            accessibilityRole="button"
           >
             <View style={styles.cardHeader}>
-              <Text style={styles.model} numberOfLines={1}>
+              <AppText variant="subtitle" numberOfLines={1} style={styles.model}>
                 {modelLabel(item.model_key, modelLabels)}
-              </Text>
-              <Text style={[styles.status, { color: status.color }]}>{status.label}</Text>
+              </AppText>
+              <Badge text={status.label} tone={status.tone} />
             </View>
 
-            <Text style={styles.prompt} numberOfLines={2}>
+            <AppText variant="bodySm" color="textSecondary" numberOfLines={2}>
               {item.prompt || '（无描述）'}
-            </Text>
+            </AppText>
 
             <View style={styles.footer}>
-              <Text style={styles.meta}>
+              <AppText variant="caption" color="textTertiary" tabularNums numberOfLines={1}>
                 {item.done}/{item.total} 张
                 {item.imported_count > 0 ? ` · 已入库 ${item.imported_count}` : ''}
                 {item.files_missing ? ' · 文件缺失' : ''}
-              </Text>
-              <Text style={styles.time}>{new Date(item.created_at).toLocaleDateString('zh-CN')}</Text>
+              </AppText>
+              <AppText variant="caption" color="textTertiary" tabularNums numberOfLines={1}>
+                {new Date(item.created_at).toLocaleDateString('zh-CN')}
+              </AppText>
             </View>
-          </TouchableOpacity>
+          </Pressable>
         )
       }}
       ListEmptyComponent={
-        <View style={styles.empty}>
-          <Icon name="sparkles-outline" size={56} color="#d1d5db" />
-          <Text style={styles.emptyText}>{error || '还没有出图记录'}</Text>
-          <Text style={styles.emptyHint}>出图在电脑端进行，手机上看结果</Text>
-        </View>
+        error ? (
+          <ErrorState onRetry={() => void load(1)} />
+        ) : (
+          <EmptyState
+            icon="sparkles-outline"
+            title="还没有出图记录"
+            description="出图在电脑端进行，手机上看结果"
+          />
+        )
       }
       ListFooterComponent={
-        <Text style={styles.footerText}>{total > 0 ? `共 ${total} 个批次` : ''}</Text>
+        runs.length === 0 ? null : (
+          <View>
+            {runs.length < total ? (
+              <ActivityIndicator style={styles.footerSpinner} color={theme.color.brandFill} />
+            ) : null}
+            <AppText variant="caption" color="textTertiary" style={styles.footerText}>
+              共 {total} 个批次
+            </AppText>
+          </View>
+        )
       }
     />
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' },
-  list: { padding: 12, paddingBottom: 24 },
-  card: { backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  model: { flex: 1, fontSize: 13, fontWeight: '600', color: '#111827' },
-  status: { fontSize: 12 },
-  prompt: { fontSize: 12, color: '#4b5563', marginTop: 6, lineHeight: 17 },
-  footer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  meta: { fontSize: 11, color: '#9ca3af' },
-  time: { fontSize: 11, color: '#d1d5db' },
-  empty: { paddingTop: 80, alignItems: 'center', gap: 8 },
-  emptyText: { fontSize: 14, color: '#9ca3af' },
-  emptyHint: { fontSize: 12, color: '#d1d5db' },
-  footerText: { textAlign: 'center', fontSize: 11, color: '#d1d5db', paddingVertical: 12 },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    list: { padding: t.space.md, paddingBottom: t.space.xxl, flexGrow: 1 },
+    card: {
+      backgroundColor: t.color.bgSurface,
+      borderRadius: t.radius.card,
+      padding: t.space.md,
+      marginBottom: t.space.sm,
+      gap: t.space.sm,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.color.divider,
+    },
+    pressed: { opacity: 0.85 },
+    cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm },
+    model: { flex: 1 },
+    footer: { flexDirection: 'row', justifyContent: 'space-between', gap: t.space.sm },
+    footerText: { textAlign: 'center', paddingVertical: t.space.md },
+    footerSpinner: { paddingVertical: t.space.lg },
+  })

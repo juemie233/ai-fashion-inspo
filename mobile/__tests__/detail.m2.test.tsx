@@ -61,7 +61,9 @@ describe('DetailScreen（M2）', () => {
     await waitFor(() => expect(screen.getByText('甜美')).toBeTruthy())
 
     expect(screen.getByText('编辑标签')).toBeTruthy()
-    expect(screen.getByText('删除')).toBeTruthy()
+    // P2-9：「删除」收进「更多」弹层，避免与「收藏」并排误触
+    expect(screen.getByText('更多')).toBeTruthy()
+    expect(screen.queryByText('删除')).toBeNull()
     expect(findBareText(utils.toJSON())).toEqual([])
     // 没有相似结果时不渲染「相似素材」标题
     expect(screen.queryByText('相似素材')).toBeNull()
@@ -83,18 +85,19 @@ describe('DetailScreen（M2）', () => {
     fireEvent.press(screen.getByText('编辑标签'))
 
     await waitFor(() => expect(api.fetchTagGroups).toHaveBeenCalled())
-    // 弹层已打开（标题 + 空暂存态提示）
-    await waitFor(() => expect(screen.getByText('点已关联的标签可移除')).toBeTruthy())
+    // 弹层已打开（标题 + 已关联区提示）
+    await waitFor(() => expect(screen.getByText('已关联（点击标记移除）')).toBeTruthy())
   })
 
-  it('点「删除」弹二次确认，确认后调移入垃圾桶并返回', async () => {
+  it('「更多 → 移入垃圾桶」弹二次确认，确认后调移入垃圾桶并返回', async () => {
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {})
     api.trashInspiration.mockResolvedValue({ id: 'i1' })
 
     render(<DetailScreen />)
-    await waitFor(() => expect(screen.getByText('删除')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('更多')).toBeTruthy())
 
-    fireEvent.press(screen.getByText('删除'))
+    fireEvent.press(screen.getByText('更多'))
+    fireEvent.press(screen.getByTestId('trash-action'))
     expect(alertSpy).toHaveBeenCalled()
 
     const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[]

@@ -1,28 +1,32 @@
-/** 搜索页：关键词/标签筛选 + 分页 + 以图搜图。
+/** 搜索页：关键词/标签筛选 + 分页 + 以图搜图 + 语义检索。
  *
  * 手机侧取舍（docs/移动端.md）：
  * - 标签筛选不再是「全量 chip 墙」（库里有 2 万+ 标签，会直接卡死），改为弹层搜索多选
  * - 结果分页（onEndReached），不再一次性拉到底
  * - 以图搜图是手机端**独占优势**：相册选图 → `/search/vector`（CLIP 图像向量）
+ *
+ * 审查修复：
+ * - P0-7 结果列表 `keyboardShouldPersistTaps="handled"`：键盘未收起时点卡片一次即进详情
+ * - P1-4 关键词/语义改 `SegmentedTab`（页面级模式切换）
+ * - P2-5 初始态不再空白：最近搜索 + 常用标签
+ * - 语义模式下标签筛选**禁用而非隐藏**（改前静默忽略已选标签，用户以为生效了）
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import {
-  View,
-  Text,
-  TextInput,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Image,
-  Alert,
-} from 'react-native'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { View, TextInput, FlatList, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { useRouter } from 'expo-router'
+import ScreenHeader from '../../components/ui/ScreenHeader'
+import SegmentedTab from '../../components/ui/SegmentedTab'
+import Chip from '../../components/ui/Chip'
+import MediaCard from '../../components/ui/MediaCard'
+import EmptyState from '../../components/ui/EmptyState'
+import ErrorState from '../../components/ui/ErrorState'
+import AppText from '../../components/ui/AppText'
 import Icon from '../../components/Icon'
 import TagFilterSheet from '../../components/TagFilterSheet'
 import { useInspirationStore, type Inspiration } from '../../hooks/useInspirations'
+import { useStyles, useTheme } from '../../hooks/useTheme'
 import {
   apiClient,
   fetchTagGroups,
@@ -33,11 +37,25 @@ import {
   type VectorHit,
 } from '../../services/api'
 import { sourceLabel } from '../../utils/sourceLabel'
+import { dominantColor } from '../../utils/dominantColor'
+import { loadSearchHistory, pushSearchHistory } from '../../utils/searchHistory'
+import type { Theme } from '../../constants/theme'
 
 const PAGE_SIZE = 30
+/** 初始态展示几个常用标签 */
+const POPULAR_TAG_COUNT = 8
+
+type SearchMode = 'keyword' | 'semantic'
+
+const MODE_TABS: { key: SearchMode; label: string }[] = [
+  { key: 'keyword', label: '关键词' },
+  { key: 'semantic', label: '语义' },
+]
 
 export default function SearchScreen() {
   const router = useRouter()
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
 
   const [searchText, setSearchText] = useState('')
@@ -56,14 +74,17 @@ export default function SearchScreen() {
   /** 当前结果是否来自以图搜图（用于标题文案与停止分页） */
   const [imageQueryUri, setImageQueryUri] = useState<string | null>(null)
   /** 检索模式：关键词（走 /search）或语义（走向量库 /search/vector 的 text 分支） */
-  const [mode, setMode] = useState<'keyword' | 'semantic'>('keyword')
+  const [mode, setMode] = useState<SearchMode>('keyword')
   /** 当前结果是否来自语义检索 */
   const [semanticQuery, setSemanticQuery] = useState<string | null>(null)
+  /** 最近搜索（本地历史，P2-5） */
+  const [history, setHistory] = useState<string[]>([])
   /** 搜索请求序号：翻页在飞时重新搜索/以图搜图，旧响应直接丢弃，避免混入新结果 */
   const searchSeqRef = useRef(0)
 
   useEffect(() => {
     void loadTags()
+    void loadSearchHistory().then(setHistory)
   }, [])
 
   const loadTags = async () => {
@@ -78,9 +99,29 @@ export default function SearchScreen() {
     }
   }
 
+  /** 常用标签：按 usage_count 取前 8（后端分组响应自带使用次数） */
+  const popularTags = useMemo(() => {
+    const all: { name: string; count: number }[] = []
+    for (const group of tagGroups) {
+      for (const tag of group.tags) {
+        all.push({ name: tag.name, count: tag.usage_count ?? 0 })
+      }
+    }
+    const seen = new Set<string>()
+    return all
+      .sort((a, b) => b.count - a.count)
+      .filter((tag) => {
+        if (seen.has(tag.name)) return false
+        seen.add(tag.name)
+        return true
+      })
+      .slice(0, POPULAR_TAG_COUNT)
+      .map((tag) => tag.name)
+  }, [tagGroups])
+
   /** 执行搜索（page=1 重置结果） */
   const doSearch = useCallback(
-    async (nextPage = 1) => {
+    async (nextPage = 1, overrideKeyword?: string) => {
       const seq = ++searchSeqRef.current
       if (nextPage === 1) {
         setLoading(true)
@@ -95,7 +136,7 @@ export default function SearchScreen() {
 
       // 语义检索：走向量库（text 分支），一次取 TopK，不分页
       if (mode === 'semantic' && nextPage === 1) {
-        const text = searchText.trim()
+        const text = (overrideKeyword ?? searchText).trim()
         if (!text) {
           setError('语义检索需要先输入一句话，例如「白色连衣裙 约会」')
           setLoading(false)
@@ -109,6 +150,7 @@ export default function SearchScreen() {
           setTotal(hits.length)
           setSemanticQuery(text)
           setPage(1)
+          setHistory(await pushSearchHistory(text))
         } catch {
           if (seq !== searchSeqRef.current) return
           setError('语义检索失败：可能文本向量模型未就绪（需 Ollama + 嵌入模型）')
@@ -126,7 +168,7 @@ export default function SearchScreen() {
       try {
         const params: Record<string, string | number> = { page: nextPage, size: PAGE_SIZE }
         const tags = [...selectedTags]
-        const keyword = searchText.trim()
+        const keyword = (overrideKeyword ?? searchText).trim()
         if (tags.length > 0) params.include_tags = tags.join(',')
         if (keyword) params.keyword = keyword
 
@@ -139,6 +181,7 @@ export default function SearchScreen() {
         setResults((prev) => (nextPage === 1 ? items : [...prev, ...items]))
         setTotal(data?.total ?? 0)
         setPage(nextPage)
+        if (nextPage === 1 && keyword) setHistory(await pushSearchHistory(keyword))
       } catch {
         if (seq !== searchSeqRef.current) return
         setError('搜索失败，请确认后端服务已启动')
@@ -193,6 +236,18 @@ export default function SearchScreen() {
     }
   }
 
+  /** 切换模式：语义模式不支持标签筛选，清掉已选标签（避免「选了但没生效」） */
+  const changeMode = (nextKey: string) => {
+    const next = nextKey as SearchMode
+    if (next === mode) return
+    setMode(next)
+    if (next === 'semantic') setSelectedTags([])
+    setSearched(false)
+    setResults([])
+    setTotal(0)
+    setError('')
+  }
+
   const onEndReached = () => {
     // 以图搜图 / 语义检索的结果都是一次性返回的，不做分页
     if (imageQueryUri || semanticQuery) return
@@ -204,158 +259,223 @@ export default function SearchScreen() {
     const newState = !item.is_favorite
     try {
       await toggleFavorite(item.id, newState)
-      setResults((prev) =>
-        prev.map((r) => (r.id === item.id ? { ...r, is_favorite: newState } : r)),
-      )
+      setResults((prev) => prev.map((r) => (r.id === item.id ? { ...r, is_favorite: newState } : r)))
     } catch {
-      setError('收藏操作失败')
+      Alert.alert('操作失败', '收藏操作失败，请稍后重试')
     }
   }
 
-  const renderCard = ({ item }: { item: Inspiration }) => (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.8}
-      onPress={() => router.push(`/detail/${item.id}`)}
-    >
-      <Image
-        source={{
-          uri: item.thumbnail_path
-            ? getFileUrl(apiBaseUrl, item.thumbnail_path)
-            : getFileUrl(apiBaseUrl, item.file_path),
-        }}
-        style={styles.cardImage}
-      />
-      <View style={styles.cardBadge}>
-        <Text style={styles.cardBadgeText}>{sourceLabel(item.source_type)}</Text>
-      </View>
-      <TouchableOpacity style={styles.favBtn} onPress={() => handleToggleFavorite(item)}>
-        <Icon
-          name={item.is_favorite ? 'heart' : 'heart-outline'}
-          size={18}
-          color={item.is_favorite ? '#ef4444' : '#fff'}
-        />
-      </TouchableOpacity>
-    </TouchableOpacity>
-  )
+  /** 点最近搜索/常用标签：先落输入框，再用显式关键词发起搜索 */
+  const applyHistory = (term: string) => {
+    setSearchText(term)
+    void doSearch(1, term)
+  }
+
+  const initial = !searched && results.length === 0
+  const showError = Boolean(error) && results.length === 0
+  const noResult = searched && !loading && !error && total === 0
 
   return (
     <View style={styles.container}>
-      {/* 搜索栏 */}
+      <ScreenHeader title="搜索" />
+
+      {/* 搜索栏：输入框内嵌搜索按钮（§4.4） */}
       <View style={styles.searchBar}>
-        <Icon name="search" size={18} color="#9ca3af" />
+        <Icon name="search" size={theme.icon.md} color={theme.color.textTertiary} />
         <TextInput
+          testID="search-input"
           style={styles.searchInput}
           placeholder="搜标签名 / 作者 / 文件名"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={theme.color.textTertiary}
           value={searchText}
           onChangeText={setSearchText}
           onSubmitEditing={() => void doSearch(1)}
           returnKeyType="search"
+          blurOnSubmit
+          autoCorrect={false}
         />
-        {searchText.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchText('')} hitSlop={8}>
-            <Icon name="close-circle" size={18} color="#9ca3af" />
-          </TouchableOpacity>
-        )}
+        {searchText.length > 0 ? (
+          <Pressable onPress={() => setSearchText('')} hitSlop={10} accessibilityLabel="清空输入">
+            <Icon name="close-circle" size={theme.icon.md} color={theme.color.textDisabled} />
+          </Pressable>
+        ) : null}
+        <Pressable
+          testID="search-submit"
+          onPress={() => void doSearch(1)}
+          accessibilityRole="button"
+          accessibilityLabel="搜索"
+          style={styles.submit}
+        >
+          <AppText variant="bodySm" color="brandText">
+            搜索
+          </AppText>
+        </Pressable>
       </View>
 
       {/* 检索模式：关键词（标签/全文）或语义（向量） */}
       <View style={styles.modeRow}>
-        {([
-          { key: 'keyword', label: '关键词' },
-          { key: 'semantic', label: '语义' },
-        ] as const).map((m) => {
-          const active = mode === m.key
-          return (
-            <TouchableOpacity
-              key={m.key}
-              testID={`mode-${m.key}`}
-              style={[styles.modeChip, active && styles.modeChipActive]}
-              onPress={() => setMode(m.key)}
-            >
-              <Text style={[styles.modeText, active && styles.modeTextActive]}>{m.label}</Text>
-            </TouchableOpacity>
-          )
-        })}
-        {mode === 'semantic' && (
-          <Text style={styles.modeHint}>用一句话描述想找的穿搭</Text>
-        )}
+        <SegmentedTab
+          items={MODE_TABS}
+          value={mode}
+          onChange={changeMode}
+          testIDPrefix="mode"
+          style={styles.modeTabs}
+        />
       </View>
 
-      {/* 条件行：标签筛选 + 以图搜图 + 搜索 */}
+      {/* 条件行：标签筛选 + 以图搜图（语义模式下禁用而非隐藏） */}
       <View style={styles.condRow}>
-        {mode === 'keyword' && (
-        <TouchableOpacity style={styles.condBtn} onPress={() => setTagSheetOpen(true)}>
-          <Icon name="pricetags-outline" size={16} color="#6366f1" />
-          <Text style={styles.condText}>
-            标签{selectedTags.length > 0 ? ` (${selectedTags.length})` : ''}
-          </Text>
-        </TouchableOpacity>
-        )}
-
-        {mode === 'keyword' && (
-          <TouchableOpacity style={styles.condBtn} onPress={() => void doImageSearch()}>
-            <Icon name="images-outline" size={16} color="#6366f1" />
-            <Text style={styles.condText}>以图搜图</Text>
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity style={styles.searchBtn} onPress={() => void doSearch(1)}>
-          <Text style={styles.searchBtnText}>搜索</Text>
-        </TouchableOpacity>
+        <Chip
+          testID="cond-tag"
+          icon="pricetags-outline"
+          label={`标签${selectedTags.length > 0 ? ` (${selectedTags.length})` : ''}`}
+          disabled={mode === 'semantic'}
+          onPress={() => setTagSheetOpen(true)}
+        />
+        <Chip
+          testID="cond-image"
+          icon="images-outline"
+          label="以图搜图"
+          disabled={mode === 'semantic'}
+          onPress={() => void doImageSearch()}
+        />
+        {mode === 'semantic' ? (
+          <AppText variant="micro" color="textTertiary" style={styles.flex}>
+            语义检索不支持标签筛选
+          </AppText>
+        ) : null}
       </View>
 
       {/* 已选标签 */}
-      {selectedTags.length > 0 && (
+      {selectedTags.length > 0 && mode === 'keyword' ? (
         <View style={styles.selectedRow}>
           {selectedTags.map((name) => (
-            <TouchableOpacity
+            <Chip
               key={name}
-              style={styles.selectedChip}
-              onPress={() => setSelectedTags((prev) => prev.filter((n) => n !== name))}
-            >
-              <Text style={styles.selectedChipText}>{name}</Text>
-              <Icon name="close" size={11} color="#6366f1" />
-            </TouchableOpacity>
+              label={name}
+              selected
+              onClear={() => setSelectedTags((prev) => prev.filter((n) => n !== name))}
+            />
           ))}
         </View>
-      )}
+      ) : null}
 
       {/* 以图搜图预览 */}
-      {imageQueryUri && (
+      {imageQueryUri ? (
         <View style={styles.queryRow}>
-          <Image source={{ uri: imageQueryUri }} style={styles.queryThumb} />
-          <Text style={styles.queryText}>以这张图搜到的相似素材</Text>
+          <AppText variant="caption" color="textSecondary">
+            以这张图搜到的相似素材
+          </AppText>
         </View>
-      )}
+      ) : null}
 
-      {loading && <ActivityIndicator style={{ marginTop: 16 }} color="#6366f1" />}
-      {error !== '' && <Text style={styles.errorText}>{error}</Text>}
-      {!loading && searched && total === 0 && error === '' && (
-        <Text style={styles.resultCount}>没有找到匹配的素材</Text>
-      )}
+      {/* 初始态：最近搜索 + 常用标签（P2-5） */}
+      {initial ? (
+        <View style={styles.initialBox}>
+          {history.length > 0 ? (
+            <View style={styles.section}>
+              <AppText variant="subtitle">最近搜索</AppText>
+              <View style={styles.chipWrap}>
+                {history.map((term) => (
+                  <Chip key={term} label={term} onPress={() => applyHistory(term)} />
+                ))}
+              </View>
+            </View>
+          ) : null}
+          {popularTags.length > 0 ? (
+            <View style={styles.section}>
+              <AppText variant="subtitle">常用标签</AppText>
+              <View style={styles.chipWrap}>
+                {popularTags.map((name) => (
+                  <Chip key={name} label={name} onPress={() => applyHistory(name)} />
+                ))}
+              </View>
+            </View>
+          ) : null}
+          {history.length === 0 && popularTags.length === 0 ? (
+            <EmptyState
+              icon="search-outline"
+              title="搜点什么"
+              description="支持标签名、作者、文件名；也可以切到语义模式描述一句话"
+            />
+          ) : null}
+        </View>
+      ) : null}
 
-      {results.length > 0 && (
+      {/* 结果计数吸顶 */}
+      {results.length > 0 ? (
+        <View style={styles.countBar}>
+          <AppText variant="caption" color="textTertiary">
+            {semanticQuery ? `语义匹配 ${total} 条` : `找到 ${total} 条结果`}
+          </AppText>
+        </View>
+      ) : null}
+
+      {loading && results.length === 0 ? (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator color={theme.color.brandFill} />
+        </View>
+      ) : null}
+
+      {showError ? <ErrorState title={error} onRetry={() => void doSearch(1)} /> : null}
+
+      {noResult ? (
+        <EmptyState
+          icon="search-outline"
+          title={semanticQuery ? '语义检索没有匹配' : '没有找到匹配的素材'}
+          description="换个关键词，或清除标签再试"
+          actionLabel={selectedTags.length > 0 ? '清除标签' : undefined}
+          onAction={
+            selectedTags.length > 0
+              ? () => {
+                  setSelectedTags([])
+                  void doSearch(1)
+                }
+              : undefined
+          }
+        />
+      ) : null}
+
+      {results.length > 0 ? (
         <FlatList
           data={results}
-          renderItem={renderCard}
+          renderItem={({ item }) => (
+            <MediaCard
+              uri={
+                item.thumbnail_path
+                  ? getFileUrl(apiBaseUrl, item.thumbnail_path)
+                  : getFileUrl(apiBaseUrl, item.file_path)
+              }
+              tags={
+                Array.isArray(item.tags)
+                  ? item.tags.filter((t) => t && t.tag).map((t) => String(t.tag.name ?? ''))
+                  : []
+              }
+              badgeText={sourceLabel(item.source_type)}
+              video={item.media_type === 'video'}
+              favorite={item.is_favorite}
+              showFavorite
+              onToggleFavorite={() => void handleToggleFavorite(item)}
+              placeholderColor={dominantColor(item.dominant_colors) ?? undefined}
+              onPress={() => router.push(`/detail/${item.id}`)}
+            />
+          )}
           keyExtractor={(item) => item.id}
           numColumns={2}
           columnWrapperStyle={styles.row}
           contentContainerStyle={styles.resultsGrid}
           onEndReached={onEndReached}
           onEndReachedThreshold={0.5}
-          ListHeaderComponent={
-            <Text style={styles.resultCount}>
-              {semanticQuery ? `语义匹配 ${total} 条` : `找到 ${total} 条结果`}
-            </Text>
-          }
+          // P0-7：键盘未收起时第一次点击就能进详情
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           ListFooterComponent={
-            loadingMore ? <ActivityIndicator style={{ marginVertical: 12 }} color="#6366f1" /> : null
+            loadingMore ? (
+              <ActivityIndicator style={styles.footer} color={theme.color.brandFill} />
+            ) : null
           }
         />
-      )}
+      ) : null}
 
       <TagFilterSheet
         visible={tagSheetOpen}
@@ -372,108 +492,53 @@ export default function SearchScreen() {
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    marginHorizontal: 12,
-    marginTop: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    height: 44,
-  },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 15, color: '#1f2937' },
-  modeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 10 },
-  modeChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, backgroundColor: '#f3f4f6' },
-  modeChipActive: { backgroundColor: '#6366f1' },
-  modeText: { fontSize: 12, color: '#374151' },
-  modeTextActive: { color: '#fff', fontWeight: '500' },
-  modeHint: { fontSize: 11, color: '#9ca3af' },
-  condRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  condBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: '#eef2ff',
-  },
-  condText: { fontSize: 12, color: '#6366f1' },
-  searchBtn: {
-    flex: 1,
-    backgroundColor: '#6366f1',
-    paddingVertical: 9,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  searchBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  selectedRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-  },
-  selectedChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#eef2ff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  selectedChipText: { fontSize: 12, color: '#6366f1' },
-  queryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-  },
-  queryThumb: { width: 40, height: 40, borderRadius: 6, backgroundColor: '#e5e7eb' },
-  queryText: { fontSize: 12, color: '#6b7280' },
-  resultCount: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#6b7280' },
-  errorText: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#ef4444' },
-  resultsGrid: { paddingHorizontal: 12, paddingBottom: 24 },
-  row: { gap: 12, marginBottom: 12 },
-  card: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  cardImage: { width: '100%', aspectRatio: 2 / 3, backgroundColor: '#f3f4f6' },
-  cardBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  cardBadgeText: { fontSize: 10, color: '#fff' },
-  favBtn: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    flex: { flex: 1 },
+    searchBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      marginHorizontal: t.space.md,
+      marginTop: t.space.md,
+      paddingLeft: t.space.md,
+      paddingRight: t.space.xs,
+      minHeight: 46,
+      borderRadius: t.radius.control,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.bgSurface,
+    },
+    searchInput: { flex: 1, fontSize: t.font.body.fontSize, color: t.color.textPrimary },
+    submit: { minHeight: t.touch, justifyContent: 'center', paddingHorizontal: t.space.sm },
+    modeRow: { paddingHorizontal: t.space.md, paddingTop: t.space.md },
+    modeTabs: { flex: 1 },
+    condRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.md,
+      paddingVertical: t.space.sm,
+    },
+    selectedRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.md,
+      paddingBottom: t.space.sm,
+    },
+    queryRow: { paddingHorizontal: t.space.md, paddingBottom: t.space.sm },
+    initialBox: { padding: t.space.lg, gap: t.space.xxl },
+    section: { gap: t.space.md },
+    chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm },
+    countBar: {
+      paddingHorizontal: t.space.md,
+      paddingVertical: t.space.sm,
+      backgroundColor: t.color.bgPage,
+    },
+    loadingBox: { paddingVertical: t.space.xxl, alignItems: 'center' },
+    resultsGrid: { paddingHorizontal: t.space.md, paddingBottom: t.space.xxl },
+    row: { gap: t.space.md, marginBottom: t.space.md },
+    footer: { paddingVertical: t.space.lg },
+  })

@@ -45,7 +45,7 @@ describe('CaptureScreen（多选 + 逐张进度）', () => {
     render(<CaptureScreen />)
     fireEvent.press(screen.getByText('相册多选'))
 
-    await waitFor(() => expect(screen.getByText('共 3 张 · 已上传 0 · 待上传 3')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('已选 3 · 已完成 0 · 失败 0')).toBeTruthy())
     expect(screen.getByText('上传 3 张')).toBeTruthy()
   })
 
@@ -63,7 +63,7 @@ describe('CaptureScreen（多选 + 逐张进度）', () => {
     fireEvent.press(screen.getByText('上传 2 张'))
 
     await waitFor(() => expect(api.uploadInspirationImage).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.getByText('共 2 张 · 已上传 2 · 待上传 0')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('已选 2 · 已完成 2 · 失败 0')).toBeTruthy())
     // 上传成功后应插到 store 列表最前
     expect(useInspirationStore.getState().total).toBe(2)
   })
@@ -79,7 +79,7 @@ describe('CaptureScreen（多选 + 逐张进度）', () => {
     fireEvent.press(screen.getByText('上传 1 张'))
 
     // 失败后仍算「待上传」，按钮文案保持可重试
-    await waitFor(() => expect(screen.getByText('共 1 张 · 已上传 0 · 待上传 1')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('已选 1 · 已完成 0 · 失败 1')).toBeTruthy())
     expect(screen.getByText('上传 1 张')).toBeTruthy()
   })
 

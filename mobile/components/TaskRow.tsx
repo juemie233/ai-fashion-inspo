@@ -1,44 +1,17 @@
-/** 后台任务行：展示类型/状态/进度，可取消。 */
-
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native'
-import Icon from './Icon'
-import type { TaskItem } from '../services/api'
-
-/** 任务类型中文名（后端 ``TASK_HANDLERS`` 的真实取值，17 种；缺失时回退原值）
+/** 后台任务行：展示类型/状态/进度，可取消。
  *
- * 之前这张表里混进了 Web 任务中心的**筛选标签**（image / generated / tags /
- * scraper_tasks / bloggers / task_event / all），它们不是 task_queue.type；
- * 而真正会出现的 f2_import、blogger_avatar_fill 反而没有中文名。
+ * 审查修复：状态用 `Badge`（实心底 + 白字，11px 也过 4.5:1），类型/状态文案统一走
+ * `constants/labels.ts`（改前 `STATUS_META` 在任务页与出图页各一份）。
  */
-const TYPE_LABELS: Record<string, string> = {
-  batch_analyze: '批量 AI 分析',
-  multi_analyze: '多模态分析',
-  image_gen: '本地出图',
-  face_scan: '人脸扫描',
-  face_match: '人脸匹配',
-  face_cluster: '人脸聚类',
-  quality_check: '质量审核',
-  vector_backfill: '向量回填',
-  phash_backfill: '去重回填',
-  deduplicate: '内容去重',
-  tag_cluster_scan: '标签聚类',
-  tag_health_scan: '标签体检',
-  tag_network_analyze: '标签网络分析',
-  batch_delete: '批量删除',
-  enrich_blogger_profile: '博主资料补全',
-  blogger_avatar_fill: '人物头像补全',
-  f2_import: '抖音素材获取',
-}
 
-/** 状态文案与配色 */
-const STATUS_META: Record<string, { label: string; color: string }> = {
-  pending: { label: '排队中', color: '#f59e0b' },
-  running: { label: '进行中', color: '#6366f1' },
-  success: { label: '已完成', color: '#16a34a' },
-  failed: { label: '失败', color: '#ef4444' },
-  paused: { label: '已暂停', color: '#f59e0b' },
-  cancelled: { label: '已取消', color: '#9ca3af' },
-}
+import { Pressable, StyleSheet, View } from 'react-native'
+import Icon from './Icon'
+import AppText from './ui/AppText'
+import Badge from './ui/Badge'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import { statusMeta, TASK_STATUS_META, TASK_TYPE_LABELS } from '../constants/labels'
+import type { TaskItem } from '../services/api'
+import type { Theme } from '../constants/theme'
 
 interface Props {
   task: TaskItem
@@ -48,8 +21,10 @@ interface Props {
 }
 
 export default function TaskRow({ task, onCancel, cancelling = false }: Props) {
-  const status = STATUS_META[task.status] ?? { label: task.status || '未知', color: '#9ca3af' }
-  const typeLabel = TYPE_LABELS[task.type] ?? task.type ?? '任务'
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
+  const status = statusMeta(TASK_STATUS_META, task.status)
+  const typeLabel = TASK_TYPE_LABELS[task.type] ?? task.type ?? '任务'
   // 可取消状态：pending / running / **paused**。
   // 后端 cancel 接口对 paused 是「直接置 cancelled」（暂停任务不占资源，没必要先恢复），
   // 而任务列表把「已暂停」排在**最前**——不给按钮的话用户只能去 Web 端处理。
@@ -61,67 +36,72 @@ export default function TaskRow({ task, onCancel, cancelling = false }: Props) {
       : task.total > 0
         ? Math.min(1, task.done / task.total)
         : 0
+  const percent = Math.round(ratio * 100)
 
   return (
     <View style={styles.row}>
       <View style={styles.header}>
-        <Text style={styles.type}>{typeLabel}</Text>
-        <Text style={[styles.status, { color: status.color }]}>{status.label}</Text>
+        <AppText variant="subtitle" numberOfLines={1} style={styles.type}>
+          {typeLabel}
+        </AppText>
+        <Badge text={status.label} tone={status.tone} />
       </View>
 
       <View style={styles.barTrack}>
-        <View style={[styles.barFill, { width: `${Math.round(ratio * 100)}%` }]} />
+        <View style={[styles.barFill, { width: `${percent}%` }]} />
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.meta}>
-          {task.total > 0 ? `${task.done}/${task.total}` : '—'} · {Math.round(ratio * 100)}%
-        </Text>
-        {cancellable && (
-          <TouchableOpacity
+        <AppText variant="caption" color="textTertiary" tabularNums>
+          {task.total > 0 ? `${task.done}/${task.total}` : '—'} · {percent}%
+        </AppText>
+        {cancellable ? (
+          <Pressable
             style={styles.cancelBtn}
             onPress={() => onCancel(task.id)}
             disabled={cancelling}
-            hitSlop={8}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="取消任务"
           >
-            <Icon name="close-circle-outline" size={14} color="#ef4444" />
-            <Text style={styles.cancelText}>{cancelling ? '取消中…' : '取消'}</Text>
-          </TouchableOpacity>
-        )}
+            <Icon name="close-circle-outline" size={theme.icon.sm} color={theme.color.dangerText} />
+            <AppText variant="caption" color="dangerText">
+              {cancelling ? '取消中…' : '取消'}
+            </AppText>
+          </Pressable>
+        ) : null}
       </View>
 
-      {task.error ? <Text style={styles.error}>{task.error}</Text> : null}
+      {task.error ? (
+        <AppText variant="caption" color="dangerText" numberOfLines={2}>
+          {task.error}
+        </AppText>
+      ) : null}
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  row: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 12,
-    marginHorizontal: 16,
-    marginBottom: 8,
-  },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  type: { fontSize: 14, fontWeight: '600', color: '#111827' },
-  status: { fontSize: 12 },
-  barTrack: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#f3f4f6',
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  barFill: { height: '100%', borderRadius: 2, backgroundColor: '#6366f1' },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  meta: { fontSize: 11, color: '#9ca3af' },
-  cancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  cancelText: { fontSize: 12, color: '#ef4444' },
-  error: { fontSize: 11, color: '#ef4444', marginTop: 6 },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    row: {
+      backgroundColor: t.color.bgSurface,
+      borderRadius: t.radius.card,
+      padding: t.space.md,
+      marginHorizontal: t.space.lg,
+      marginBottom: t.space.sm,
+      gap: t.space.sm,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.color.divider,
+    },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.sm },
+    type: { flex: 1 },
+    barTrack: {
+      height: 4,
+      borderRadius: t.radius.pill,
+      backgroundColor: t.color.bgSubtle,
+      overflow: 'hidden',
+    },
+    barFill: { height: '100%', borderRadius: t.radius.pill, backgroundColor: t.color.brandFill },
+    footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    cancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  })

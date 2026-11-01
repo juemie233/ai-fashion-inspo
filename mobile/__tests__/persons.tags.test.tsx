@@ -98,7 +98,10 @@ describe('PersonsScreen（人物列表）', () => {
     api.fetchPersons.mockRejectedValue(new Error('boom'))
     render(<PersonsScreen />)
 
-    await waitFor(() => expect(screen.getByText('加载失败，请检查网络或后端服务')).toBeTruthy())
+    // 改版后错误态拆成标题 + 说明（ErrorState），不再是一行拼接文案
+    await waitFor(() => expect(screen.getByText('加载失败')).toBeTruthy())
+    expect(screen.getByText('请检查网络或后端服务')).toBeTruthy()
+    expect(screen.getByTestId('retry-button')).toBeTruthy()
   })
 })
 

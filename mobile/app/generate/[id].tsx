@@ -1,17 +1,17 @@
-/** 出图批次详情（只读）：候选图网格 + 点开全屏预览。 */
+/** 出图批次详情（只读）：候选图网格 + 点开全屏预览。
+ *
+ * 审查修复：三态（骨架/错误+重试/空态）、候选图统一 `MediaCard`（1:1）、
+ * 已入库角标用 Badge。
+ */
 
 import { useCallback, useEffect, useState } from 'react'
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native'
+import { FlatList, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
-import Icon from '../../components/Icon'
+import MediaCard from '../../components/ui/MediaCard'
+import EmptyState from '../../components/ui/EmptyState'
+import ErrorState from '../../components/ui/ErrorState'
+import AppText from '../../components/ui/AppText'
+import { SkeletonGrid } from '../../components/ui/Skeleton'
 import ImageViewer from '../../components/ImageViewer'
 import {
   candidateUrl,
@@ -22,12 +22,15 @@ import {
 } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { modelLabel } from '../../utils/modelLabel'
+import { useStyles } from '../../hooks/useTheme'
+import type { Theme } from '../../constants/theme'
 
 /** 缩略图宽度（后端支持 ?w= 生成缩略图，省流量） */
 const THUMB_WIDTH = 400
 
 export default function GenerateRunScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
+  const styles = useStyles(makeStyles)
   const apiBaseUrl = useInspirationStore((s) => s.apiBaseUrl)
   const runId = Number(id)
 
@@ -77,94 +80,69 @@ export default function GenerateRunScreen() {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366f1" />
+      <View style={styles.container}>
+        <SkeletonGrid count={4} columns={2} ratio={1} />
       </View>
     )
   }
 
   return (
-    <FlatList
-      style={styles.container}
-      data={candidates}
-      keyExtractor={(c) => c.filename}
-      numColumns={2}
-      columnWrapperStyle={styles.row}
-      contentContainerStyle={styles.grid}
-      ListHeaderComponent={
-        <View style={styles.header}>
-          <Text style={styles.model}>
-            {modelLabel(run?.model_key, modelLabels)}
-          </Text>
-          <Text style={styles.prompt}>{run?.prompt || '（无描述）'}</Text>
-          {run?.negative ? <Text style={styles.negative}>负面词：{run.negative}</Text> : null}
-          <Text style={styles.meta}>
-            {run?.done ?? candidates.length}/{run?.total ?? candidates.length} 张
-            {run?.imported_count ? ` · 已入库 ${run.imported_count}` : ''}
-          </Text>
-        </View>
-      }
-      renderItem={({ item }) => (
-        <TouchableOpacity
-          testID={`candidate-${item.index}`}
-          style={styles.cell}
-          activeOpacity={0.85}
-          onPress={() => setViewerUri(candidateUrl(apiBaseUrl, item.url))}
-        >
-          <Image
-            source={{ uri: candidateUrl(apiBaseUrl, item.url, THUMB_WIDTH) }}
-            style={styles.image}
+    <View style={styles.container}>
+      <FlatList
+        data={candidates}
+        keyExtractor={(c) => c.filename}
+        numColumns={2}
+        columnWrapperStyle={styles.row}
+        contentContainerStyle={styles.grid}
+        ListHeaderComponent={
+          <View style={styles.header}>
+            <AppText variant="subtitle" numberOfLines={2}>
+              {modelLabel(run?.model_key, modelLabels)}
+            </AppText>
+            <AppText variant="caption" color="textSecondary" numberOfLines={4}>
+              {run?.prompt || '（无描述）'}
+            </AppText>
+            {run?.negative ? (
+              <AppText variant="micro" color="textTertiary" numberOfLines={2}>
+                负面词：{run.negative}
+              </AppText>
+            ) : null}
+            <AppText variant="caption" color="textTertiary" tabularNums>
+              {run?.done ?? candidates.length}/{run?.total ?? candidates.length} 张
+              {run?.imported_count ? ` · 已入库 ${run.imported_count}` : ''}
+            </AppText>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <MediaCard
+            testID={`candidate-${item.index}`}
+            uri={candidateUrl(apiBaseUrl, item.url, THUMB_WIDTH)}
+            ratio={1}
+            cornerBadge={item.imported ? '已入库' : undefined}
+            onPress={() => setViewerUri(candidateUrl(apiBaseUrl, item.url))}
           />
-          {item.imported ? (
-            <View style={styles.importedBadge}>
-              <Icon name="checkmark" size={11} color="#fff" />
-              <Text style={styles.importedText}>已入库</Text>
-            </View>
-          ) : null}
-        </TouchableOpacity>
-      )}
-      ListEmptyComponent={
-        <View style={styles.empty}>
-          <Icon name="images-outline" size={48} color="#d1d5db" />
-          <Text style={styles.emptyText}>{error || '这个批次没有候选图'}</Text>
-        </View>
-      }
-      ListFooterComponent={
-        <ImageViewer
-          visible={viewerUri !== null}
-          uri={viewerUri ?? ''}
-          onClose={() => setViewerUri(null)}
-        />
-      }
-    />
+        )}
+        ListEmptyComponent={
+          error ? (
+            <ErrorState onRetry={() => void load()} />
+          ) : (
+            <EmptyState icon="images-outline" title="这个批次没有候选图" />
+          )
+        }
+      />
+      <ImageViewer
+        visible={viewerUri !== null}
+        uri={viewerUri ?? ''}
+        onClose={() => setViewerUri(null)}
+      />
+    </View>
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb' },
-  grid: { padding: 12, paddingBottom: 24 },
-  row: { gap: 12, marginBottom: 12 },
-  header: { marginBottom: 12, gap: 6 },
-  model: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  prompt: { fontSize: 12, color: '#4b5563', lineHeight: 18 },
-  negative: { fontSize: 11, color: '#9ca3af' },
-  meta: { fontSize: 11, color: '#9ca3af' },
-  cell: { flex: 1, aspectRatio: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff' },
-  image: { width: '100%', height: '100%', backgroundColor: '#f3f4f6' },
-  importedBadge: {
-    position: 'absolute',
-    left: 6,
-    bottom: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(22,163,74,0.9)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  importedText: { fontSize: 10, color: '#fff' },
-  empty: { paddingTop: 40, alignItems: 'center', gap: 8 },
-  emptyText: { fontSize: 13, color: '#9ca3af' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: { flex: 1, backgroundColor: t.color.bgPage },
+    grid: { padding: t.space.md, paddingBottom: t.space.xxl, flexGrow: 1 },
+    row: { gap: t.space.md, marginBottom: t.space.md },
+    header: { marginBottom: t.space.md, gap: t.space.xs },
+  })

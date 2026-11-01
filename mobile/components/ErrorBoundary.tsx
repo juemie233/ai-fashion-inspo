@@ -3,13 +3,20 @@
  * 为什么要它：release 包里 JS 抛异常时 React 会卸载整棵树，用户只看到白屏，
  * 没有任何线索（2026-10-23 真机上「点保存后白屏」就是这么丢的信息）。这里把错误
  * 捕获后直接画在屏幕上，同时写一份到 console（`adb logcat` 能看到）。
+ *
+ * 主题说明：错误边界挂在 `ThemeProvider` **外面**（要能兜住 Provider 自身的崩溃），
+ * 所以这里只能拿到 context 的默认值（亮色令牌）；暗色下错误页仍是亮底，
+ * 属于有意取舍——错误页要的是可读，不是观感。
  */
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 
 interface Props {
   children: ReactNode
+  theme: Theme
 }
 
 interface State {
@@ -19,7 +26,8 @@ interface State {
   stack: string
 }
 
-export default class ErrorBoundary extends Component<Props, State> {
+/** 内部实现：类组件才能实现 componentDidCatch */
+class ErrorBoundaryInner extends Component<Props, State> {
   state: State = { error: null, info: '', stack: '' }
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -38,7 +46,10 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     const { error, info, stack } = this.state
+    const { theme } = this.props
     if (!error) return this.props.children
+
+    const styles = makeStyles(theme)
 
     return (
       <View style={styles.page}>
@@ -59,7 +70,12 @@ export default class ErrorBoundary extends Component<Props, State> {
             </>
           )}
         </ScrollView>
-        <TouchableOpacity style={styles.btn} onPress={this.handleRetry}>
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={this.handleRetry}
+          accessibilityRole="button"
+          accessibilityLabel="重试"
+        >
           <Text style={styles.btnText}>重试</Text>
         </TouchableOpacity>
       </View>
@@ -67,27 +83,65 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#fff', padding: 20, paddingTop: 60 },
-  title: { fontSize: 18, fontWeight: '700', color: '#b91c1c', marginBottom: 6 },
-  hint: { fontSize: 12, color: '#6b7280', marginBottom: 12 },
-  box: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  msg: { fontSize: 13, color: '#111827', marginBottom: 10 },
-  sectionTitle: { fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 8, marginBottom: 4 },
-  stack: { fontSize: 11, color: '#6b7280', lineHeight: 16 },
-  btn: {
-    marginTop: 16,
-    backgroundColor: '#6366f1',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  btnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-})
+/** 对外组件：注入主题令牌（未包 Provider 时取 context 默认的亮色主题） */
+export default function ErrorBoundary({ children }: { children: ReactNode }) {
+  const theme = useTheme()
+  return <ErrorBoundaryInner theme={theme}>{children}</ErrorBoundaryInner>
+}
+
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    page: { flex: 1, backgroundColor: t.color.bgSurface, padding: t.space.xl, paddingTop: 60 },
+    title: {
+      fontSize: t.font.title.fontSize,
+      lineHeight: t.font.title.lineHeight,
+      fontWeight: '600',
+      color: t.color.dangerText,
+      marginBottom: 6,
+    },
+    hint: {
+      fontSize: t.font.caption.fontSize,
+      lineHeight: t.font.caption.lineHeight,
+      color: t.color.textTertiary,
+      marginBottom: t.space.md,
+    },
+    box: {
+      flex: 1,
+      backgroundColor: t.color.bgSubtle,
+      borderRadius: t.radius.control,
+      padding: t.space.md,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    msg: {
+      fontSize: t.font.bodySm.fontSize,
+      lineHeight: t.font.bodySm.lineHeight,
+      color: t.color.textPrimary,
+      marginBottom: t.space.sm,
+    },
+    sectionTitle: {
+      fontSize: t.font.caption.fontSize,
+      fontWeight: '600',
+      color: t.color.textSecondary,
+      marginTop: t.space.sm,
+      marginBottom: t.space.xs,
+    },
+    stack: {
+      fontSize: t.font.micro.fontSize,
+      lineHeight: t.font.micro.lineHeight,
+      color: t.color.textTertiary,
+    },
+    btn: {
+      marginTop: t.space.lg,
+      backgroundColor: t.color.brandFill,
+      borderRadius: t.radius.control,
+      minHeight: t.touch,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    btnText: {
+      color: t.color.textOnMedia,
+      fontSize: t.font.subtitle.fontSize,
+      fontWeight: '600',
+    },
+  })

@@ -1,101 +1,91 @@
-/** 素材库顶部筛选栏：筛选胶囊 + 排序切换。
+/** 素材库顶部筛选栏：筛选胶囊（横滑）+ 排序入口。
  *
- * 触屏取舍（见 docs/移动端.md）：Web 的多维筛选抽屉在手机上收起为
- * 一排可横滑的胶囊；排序只保留手机上有意义的几种，其余留在 Web。
+ * 触屏取舍（见 docs/移动端.md）：Web 的多维筛选抽屉在手机上收起为一排可横滑的胶囊；
+ * 排序只保留手机上有意义的四种，其余留在 Web。
+ *
+ * 审查修复：
+ * - P1-4 胶囊改用 `ui/Chip`（浅底 + 选中主色描边），与页面级切换的分段控件区分开
+ * - P1-7 排序不再「点一次切下一个」，改为打开底部弹层单选，按钮显示当前排序
  */
 
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import Chip from './ui/Chip'
 import Icon from './Icon'
+import AppText from './ui/AppText'
+import { activeFilterKey, FILTER_OPTIONS, sortLabel } from '../constants/labels'
+import { useStyles, useTheme } from '../hooks/useTheme'
+import type { Theme } from '../constants/theme'
 import type { ListFilter, SortKey } from '../services/api'
-
-/** 筛选胶囊定义：key 用于比较当前态 */
-const FILTERS: { key: string; label: string; filter: ListFilter }[] = [
-  { key: 'all', label: '全部', filter: {} },
-  { key: 'fav', label: '收藏', filter: { is_favorite: true } },
-  { key: 'tagged', label: '已标注', filter: { tag_status: 'tagged' } },
-  { key: 'untagged', label: '未标注', filter: { tag_status: 'untagged' } },
-]
-
-/** 排序选项（手机侧够用的四种） */
-const SORTS: { key: SortKey; label: string }[] = [
-  { key: 'newest', label: '最新' },
-  { key: 'oldest', label: '最早' },
-  { key: 'rating', label: '评分' },
-  { key: 'random', label: '随机' },
-]
 
 interface Props {
   filter: ListFilter
   sort: SortKey
-  onFilter: (patch: ListFilter) => void
-  onSort: (sort: SortKey) => void
+  onFilter: (filter: ListFilter) => void
+  /** 打开排序弹层 */
+  onOpenSort: () => void
 }
 
-/** 当前筛选命中的是哪个胶囊 */
-function activeKey(filter: ListFilter): string {
-  if (filter.is_favorite) return 'fav'
-  if (filter.tag_status === 'tagged') return 'tagged'
-  if (filter.tag_status === 'untagged') return 'untagged'
-  return 'all'
-}
-
-export default function FilterBar({ filter, sort, onFilter, onSort }: Props) {
-  const active = activeKey(filter)
-  const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? '最新'
+export default function FilterBar({ filter, sort, onFilter, onOpenSort }: Props) {
+  const theme = useTheme()
+  const styles = useStyles(makeStyles)
+  const active = activeFilterKey(filter)
 
   return (
     <View style={styles.container}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {FILTERS.map((f) => {
-          const isActive = f.key === active
-          return (
-            <TouchableOpacity
-              key={f.key}
-              testID={`filter-${f.key}`}
-              style={[styles.chip, isActive && styles.chipActive]}
-              onPress={() => onFilter(f.filter)}
-            >
-              <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{f.label}</Text>
-            </TouchableOpacity>
-          )
-        })}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chips}
+        style={styles.chipsScroll}
+      >
+        {FILTER_OPTIONS.map((option) => (
+          <Chip
+            key={option.key}
+            testID={`filter-${option.key}`}
+            label={option.label}
+            selected={option.key === active}
+            onPress={() => onFilter(option.filter)}
+          />
+        ))}
       </ScrollView>
 
-      <TouchableOpacity
-        style={styles.sortBtn}
-        onPress={() => {
-          const idx = SORTS.findIndex((s) => s.key === sort)
-          onSort(SORTS[(idx + 1) % SORTS.length].key)
-        }}
+      <Pressable
+        testID="sort-button"
+        onPress={onOpenSort}
+        accessibilityRole="button"
+        accessibilityLabel={`排序：${sortLabel(sort)}`}
+        style={({ pressed }) => [styles.sortBtn, pressed && styles.pressed]}
       >
-        <Icon name="swap-vertical-outline" size={14} color="#6b7280" />
-        <Text style={styles.sortText}>{sortLabel}</Text>
-      </TouchableOpacity>
+        <AppText variant="caption" color="textSecondary" numberOfLines={1}>
+          排序：{sortLabel(sort)}
+        </AppText>
+        <Icon name="chevron-down" size={theme.icon.sm} color={theme.color.textSecondary} />
+      </Pressable>
     </View>
   )
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 8,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  chips: { gap: 8, paddingRight: 8, alignItems: 'center' },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: '#f3f4f6',
-  },
-  chipActive: { backgroundColor: '#6366f1' },
-  chipText: { fontSize: 13, color: '#374151' },
-  chipTextActive: { color: '#fff', fontWeight: '500' },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingLeft: 8 },
-  sortText: { fontSize: 12, color: '#6b7280' },
-})
+const makeStyles = (t: Theme) =>
+  StyleSheet.create({
+    container: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.md,
+      paddingVertical: t.space.sm,
+      backgroundColor: t.color.bgSurface,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.color.divider,
+    },
+    chipsScroll: { flex: 1 },
+    chips: { gap: t.space.sm, alignItems: 'center', paddingRight: t.space.xs },
+    // 排序入口给足 44 高的触控区（P0-5）
+    sortBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 2,
+      minHeight: t.touch,
+      paddingLeft: t.space.sm,
+    },
+    pressed: { opacity: 0.7 },
+  })
