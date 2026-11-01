@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -371,6 +374,76 @@ async def _unmatched_page(
         for r in rows
     ]
     return items, total
+
+
+@router.get("/detections/{detection_id}/face")
+async def detection_face_crop(
+    detection_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """按检测框裁出人脸小图（候选审核时与来源素材并排查看）。
+
+    不调用人脸子服务：直接从素材原图/视频首帧缩略图按检测 bbox 裁剪（外扩 20%），
+    统一重编码为 JPEG。源图读不到或 bbox 缺失时返回 404。
+    """
+    import io
+
+    from PIL import Image
+
+    from app.services.face_image import load_inspiration_image
+
+    det = await db.get(InspirationFaceDetection, detection_id)
+    if det is None:
+        raise HTTPException(status_code=404, detail="人脸检测记录不存在")
+    inspiration = await db.get(Inspiration, det.inspiration_id)
+    if inspiration is None:
+        raise HTTPException(status_code=404, detail="人脸所属素材不存在")
+    data, _warning = await load_inspiration_image(inspiration)
+    if data is None:
+        raise HTTPException(status_code=404, detail="素材图片无法读取")
+
+    def _crop() -> bytes:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            rgb = image.convert("RGB")
+            width, height = rgb.size
+            box: tuple[int, int, int, int] | None = None
+            if det.bbox:
+                try:
+                    raw = json.loads(det.bbox)
+                    if isinstance(raw, list) and len(raw) == 4:
+                        x1, y1, x2, y2 = (int(round(float(v))) for v in raw)
+                        pad_x = max(8, int(round((x2 - x1) * 0.2)))
+                        pad_y = max(8, int(round((y2 - y1) * 0.2)))
+                        box = (
+                            max(0, x1 - pad_x),
+                            max(0, y1 - pad_y),
+                            min(width, x2 + pad_x),
+                            min(height, y2 + pad_y),
+                        )
+                except (ValueError, TypeError):
+                    box = None
+            if box is None:
+                # 老数据没有 bbox：取中心 60% 区域，至少给出「疑似人脸位置」
+                side = int(min(width, height) * 0.6)
+                left = (width - side) // 2
+                top = (height - side) // 2
+                box = (left, top, left + side, top + side)
+            if box[2] <= box[0] or box[3] <= box[1]:
+                raise HTTPException(status_code=404, detail="人脸检测框异常")
+            crop = rgb.crop(box)
+            crop.thumbnail((256, 256))
+            buf = io.BytesIO()
+            crop.save(buf, format="JPEG", quality=88)
+            return buf.getvalue()
+
+    try:
+        content = await asyncio.to_thread(_crop)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 —— 解码/裁剪失败统一 404
+        raise HTTPException(status_code=404, detail=f"人脸裁剪失败：{exc}") from exc
+    return Response(content=content, media_type="image/jpeg")
 
 
 # ── 批量注册（阶段 1：先把「有素材但未注册」的博主人脸补上）──

@@ -16,12 +16,14 @@ import {
   fetchFaceScanResults,
   fetchFaceScanTask,
   ignoreFaceClusterGroup,
+  type DetectionItem,
   type FaceClusterGroup,
   type FaceScanTaskOut,
   type PersonAggregateItem,
 } from '@/api/faceScan'
 import { getApiErrorMessage } from '@/utils/apiError'
 import { openInspiration } from '@/utils/openInspiration'
+import { faceCropUrl, largePreviewUrl } from '@/utils/faceMedia'
 import { useFaceClusterGroups } from '@/composables/useFaceClusterGroups'
 import { useFaceServiceStatus } from '@/composables/useFaceServiceStatus'
 import { usePolling } from '@/composables/usePolling'
@@ -323,6 +325,15 @@ function handleIgnoreGroup(group: FaceClusterGroup) {
   })
 }
 
+// ── 人脸对比弹窗（人脸裁剪 + 来源素材并排）──
+const compareItem = ref<DetectionItem | null>(null)
+const compareVisible = ref(false)
+
+function openCompare(item: DetectionItem) {
+  compareItem.value = item
+  compareVisible.value = true
+}
+
 // ── 汇总刷新 ──
 async function refreshAll() {
   await Promise.all([
@@ -524,6 +535,7 @@ function filterOption(input: string, option: { label?: string }): boolean {
             @select-all-detail="toggleSelectAllDetail"
             @act-on-checked="handleActOnChecked"
             @open-inspiration="goDetail"
+            @compare-face="openCompare"
           />
         </a-tab-pane>
 
@@ -613,6 +625,19 @@ function filterOption(input: string, option: { label?: string }): boolean {
       </a-tabs>
     </a-card>
 
+    <a-modal v-model:visible="compareVisible" title="人脸对比" :footer="false" width="760px">
+      <div v-if="compareItem" class="compare-wrap">
+        <div class="compare-col">
+          <div class="compare-title">来源素材</div>
+          <img :src="largePreviewUrl(compareItem)" class="compare-source" />
+        </div>
+        <div class="compare-col">
+          <div class="compare-title">检测人脸（bbox 裁剪）</div>
+          <img :src="faceCropUrl(compareItem.detection_id)" class="compare-face" />
+        </div>
+      </div>
+    </a-modal>
+
     <a-modal
       v-model:visible="createPersonVisible"
       title="新建人物并注册"
@@ -645,6 +670,36 @@ function filterOption(input: string, option: { label?: string }): boolean {
   max-width: 1100px;
   margin: 0 auto;
   padding: 16px;
+}
+
+/* 人脸对比弹窗 */
+.compare-wrap {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+.compare-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.compare-title {
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+.compare-source {
+  max-width: 480px;
+  max-height: 620px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+.compare-face {
+  width: 200px;
+  height: 200px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-2);
 }
 
 /* 子服务离线提示条 */

@@ -220,3 +220,26 @@ async def test_cluster_group_create_person_registers_and_assigns(
         det = await db.get(InspirationFaceDetection, detection_id)
         assert det.match_status == "confirmed"
         assert det.matched_blogger_id == body["blogger_id"]
+
+
+async def test_detection_face_crop(client, make_image):
+    """审核对比：按 bbox 裁出人脸 JPEG（不调用人脸子服务）。"""
+    blogger = _create_blogger(client, "裁剪博主")
+    iid = _upload(client, make_image)
+    _link(client, iid, blogger["id"])
+    async with async_session() as db:
+        det = InspirationFaceDetection(
+            inspiration_id=iid,
+            face_index=0,
+            embedding=np.zeros(512, dtype=np.float32).tobytes(),
+            det_score=0.9,
+            bbox="[10, 10, 40, 40]",
+        )
+        db.add(det)
+        await db.commit()
+        await db.refresh(det)
+        detection_id = det.id
+    resp = client.get(f"/api/face-scan/detections/{detection_id}/face")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("image/jpeg")
+    assert len(resp.content) > 100

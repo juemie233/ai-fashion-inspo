@@ -41,6 +41,11 @@ export function largePreviewUrl(item: DetectionItem): string {
   return getFileUrl(item.file_path)
 }
 
+/** 人脸裁剪小图地址（后端按检测 bbox 裁；审核时与来源素材并排查看） */
+export function faceCropUrl(detectionId: number): string {
+  return `/api/face-scan/detections/${detectionId}/face`
+}
+
 /** 人物头像地址：只有手动设置一条来源（未设置则显示首字占位，与人物列表/详情一致） */
 export function personAvatarUrl(item: PersonAggregateItem): string | undefined {
   return item.avatar_path ? getFileUrl(item.avatar_path) : undefined

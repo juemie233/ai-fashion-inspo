@@ -52,6 +52,7 @@ const emit = defineEmits<{
   (e: 'actOnChecked', action: 'confirm' | 'reject'): void
   (e: 'update:highConfidence', value: number): void
   (e: 'openInspiration', inspirationId: string): void
+  (e: 'compareFace', item: DetectionItem): void
 }>()
 
 /** 候选网格列数（3~6 可选，默认 6；原视图状态，经 v-model 双向绑定） */
@@ -180,6 +181,9 @@ const {
                   @click.stop
                   @change="(v: unknown) => emit('toggleDetailChecked', item.detection_id, v)"
                 />
+                <a-button class="compare-btn" size="mini" @click.stop="emit('compareFace', item)">
+                  对比
+                </a-button>
                 <span class="detail-conf">{{ (item.confidence ?? 0).toFixed(2) }}</span>
               </div>
             </div>
@@ -250,3 +254,12 @@ const {
     />
   </a-spin>
 </template>
+
+<style scoped>
+.compare-btn {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+}
+</style>
