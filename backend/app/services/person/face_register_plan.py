@@ -12,16 +12,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from fastapi import HTTPException
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
 from app.models.inspiration import Inspiration
+from app.config import settings
 from app.models.person import Blogger, InspirationBlogger
-from app.services.blogger_face import register_blogger_face
+from app.services.blogger_face import MIN_FACE_WIDTH_RATIO, register_blogger_face
 from app.services.person.face_candidates import list_face_candidates
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,37 @@ logger = logging.getLogger(__name__)
 MAX_BATCH_SIZE = 5
 # 单个候选计划里每位博主最多返回几个簇（前端「换一组」轮换）
 MAX_CLUSTERS_PER_BLOGGER = 5
+
+
+def _face_width_ratio(candidate: dict) -> float | None:
+    """估算候选素材的人脸宽度占比（与注册服务的质量门槛同口径）。
+
+    bbox 是送检图坐标系；用缩略图或原图宽度即可还原比例（整图等比缩放不改变比例）。
+    文件读不到/bbox 缺失返回 None（视为不可用于注册，避免点了才报错）。
+    """
+    bbox = candidate.get("bbox")
+    # 注册服务对图片用原图算比例、对视频用首帧缩略图算；这里必须同口径：
+    # 用缩略图宽度算图片会得到虚高的比例（实测 17% vs 实际 4.8%）而漏过滤。
+    if str(candidate.get("media_type") or "") == "video":
+        raw = candidate.get("thumbnail_path") or candidate.get("file_path")
+    else:
+        raw = candidate.get("file_path") or candidate.get("thumbnail_path")
+    if not bbox or not raw:
+        return None
+    try:
+        values = json.loads(bbox) if isinstance(bbox, str) else bbox
+        if not isinstance(values, list) or len(values) != 4:
+            return None
+        path = Path(settings.storage_root) / str(raw)
+        if not path.exists():
+            return None
+        with Image.open(path) as image:
+            width = float(image.size[0])
+        if width <= 0:
+            return None
+        return (float(values[2]) - float(values[0])) / width
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 async def build_register_plan(
@@ -122,20 +157,41 @@ async def build_register_plan(
             min_cluster_size=min_cluster_size,
             max_clusters=MAX_CLUSTERS_PER_BLOGGER,
         )
-        clusters = [
-            {
-                "size": int(c["size"]),
-                "avg_det_score": float(c.get("avg_score") or 0.0),
-                "suggested_inspiration_ids": list(c.get("inspiration_ids") or []),
-                "cover_detection_ids": [
-                    int(cand["detection_id"])
-                    for cand in (c.get("candidates") or [])
-                    if cand.get("detection_id") is not None
-                ],
-                "candidates": list(c.get("candidates") or []),
-            }
-            for c in result["clusters"]
-        ]
+        clusters = []
+        for c in result["clusters"]:
+            # 只保留「人脸宽度 ≥ 注册质量门槛」的素材：注册服务会拒绝 5% 以下的人脸，
+            # 计划阶段先过滤，避免用户点了「采用」才看到「所有图片均未检出清晰人脸」。
+            usable = []
+            for cand in c.get("candidates") or []:
+                ratio = _face_width_ratio(cand)
+                if ratio is None or ratio < MIN_FACE_WIDTH_RATIO:
+                    continue
+                cand = dict(cand)
+                cand["face_width_ratio"] = round(ratio, 4)
+                usable.append(cand)
+            if not usable:
+                continue
+            # 按置信度排序后取前 3 张（候选列表本身已按 det_score 降序）
+            suggested: list[str] = []
+            for cand in usable:
+                iid = str(cand.get("inspiration_id") or "")
+                if iid and iid not in suggested:
+                    suggested.append(iid)
+                if len(suggested) >= 3:
+                    break
+            clusters.append(
+                {
+                    "size": int(c["size"]),
+                    "avg_det_score": float(c.get("avg_score") or 0.0),
+                    "suggested_inspiration_ids": suggested,
+                    "cover_detection_ids": [
+                        int(cand["detection_id"])
+                        for cand in usable
+                        if cand.get("detection_id") is not None
+                    ],
+                    "candidates": usable[:3],
+                }
+            )
         if not clusters:
             continue
         item = {

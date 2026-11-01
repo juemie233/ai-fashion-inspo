@@ -37,6 +37,7 @@ async def _add_detection(db, inspiration_id: str, embedding: np.ndarray) -> None
             face_index=0,
             embedding=embedding.astype(np.float32).tobytes(),
             det_score=0.9,
+            bbox="[8, 8, 56, 56]",
         )
     )
 

@@ -140,6 +140,9 @@ async def list_face_candidates(
                 InspirationFaceDetection.det_score,
                 InspirationFaceDetection.embedding,
                 Inspiration.thumbnail_path,
+                InspirationFaceDetection.bbox,
+                Inspiration.file_path,
+                Inspiration.media_type,
             )
             .join(
                 InspirationBlogger,
@@ -199,6 +202,10 @@ async def list_face_candidates(
                             "inspiration_id": r[1],
                             "det_score": round(float(r[2] or 0.0), 4),
                             "thumbnail_path": r[4],
+                            # 供批量注册计划判断人脸大小（人脸宽度 / 画面宽度）
+                            "bbox": r[5],
+                            "file_path": r[6],
+                            "media_type": r[7],
                         }
                         for r in top
                     ],

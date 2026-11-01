@@ -280,7 +280,9 @@ export async function fetchFaceRegisterPlan(
     only_with_candidates?: boolean
   } = {},
 ): Promise<FaceRegisterPlan> {
-  const { data } = await apiClient.post<FaceRegisterPlan>('/face-scan/register-plan', params)
+  const { data } = await apiClient.post<FaceRegisterPlan>('/face-scan/register-plan', params, {
+    timeout: 120000,
+  })
   return data
 }
 
