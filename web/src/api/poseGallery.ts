@@ -80,3 +80,17 @@ export async function fetchPose(id: string): Promise<PoseItem> {
   const { data } = await apiClient.get<PoseItem>(`/pose-gallery/${encodeURIComponent(id)}`)
   return data
 }
+
+/** 姿势提示词反推结果（`pose_prompts` 表；尚未回填时为 null）。 */
+export interface PosePromptResult {
+  pose_id: string
+  prompt: string | null
+}
+
+/** 取该姿势已反推的图生图提示词（图生图时自动使用）。 */
+export async function fetchPosePrompt(id: string): Promise<PosePromptResult> {
+  const { data } = await apiClient.get<PosePromptResult>(
+    `/pose-gallery/${encodeURIComponent(id)}/prompt`,
+  )
+  return data
+}

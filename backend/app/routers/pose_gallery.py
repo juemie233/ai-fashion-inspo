@@ -7,8 +7,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
+from app.models.pose_prompt import PosePrompt
 from app.services import pose_gallery
 
 router = APIRouter(prefix="/api/pose-gallery", tags=["pose-gallery"])
@@ -38,6 +42,19 @@ async def list_poses(
     return await pose_gallery.list_poses(
         q=q, system=system, category=category, angle=angle, page=page, size=size
     )
+
+
+@router.get("/{pose_id}/prompt")
+async def get_pose_prompt(pose_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """取该姿势已反推的提示词（`pose_prompts` 表；图生图自动使用）。
+
+    Returns:
+        ``{pose_id, prompt}``；图库无此姿势 404，库里尚未回填时 ``prompt=null``。
+    """
+    await pose_gallery.get_pose(pose_id)
+    row = await db.execute(select(PosePrompt.prompt).where(PosePrompt.pose_id == pose_id))
+    prompt = row.scalar_one_or_none()
+    return {"pose_id": pose_id, "prompt": prompt}
 
 
 @router.get("/{pose_id}")

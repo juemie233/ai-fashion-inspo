@@ -22,11 +22,16 @@ import type { GenerateStatus } from '@/api/generate'
 
 const poseMocks = vi.hoisted(() => ({
   fetchPoses: vi.fn(),
+  fetchPosePrompt: vi.fn(),
 }))
 
 vi.mock('@/api/poseGallery', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/poseGallery')>()
-  return { ...actual, fetchPoses: poseMocks.fetchPoses }
+  return {
+    ...actual,
+    fetchPoses: poseMocks.fetchPoses,
+    fetchPosePrompt: poseMocks.fetchPosePrompt,
+  }
 })
 
 const QUICK_POSE = {
@@ -49,6 +54,8 @@ beforeEach(() => {
     size: 100,
     note: '',
   })
+  poseMocks.fetchPosePrompt.mockReset()
+  poseMocks.fetchPosePrompt.mockResolvedValue({ pose_id: QUICK_POSE.id, prompt: null })
 })
 
 /** 后端 MODEL_SPECS 的三档目录（探测结果里就是这样下发的） */
@@ -348,6 +355,24 @@ describe('GenerateParamForm 换姿势', () => {
     const wrapper = mountPoseForm({ initialPoseLib: true })
     await flushPromises()
     expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+  })
+
+  it('选姿势时自动填入 pose_prompts 的提示词，并用于提交', async () => {
+    poseMocks.fetchPosePrompt.mockResolvedValue({
+      pose_id: POSE_FIXTURE.id,
+      prompt: '数据库提示词：保持人物与服装，按参考姿势生成，全身照。',
+    })
+    const wrapper = mountPoseForm()
+    await flushPromises()
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('select', POSE_FIXTURE)
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea').element as HTMLTextAreaElement
+    expect(textarea.value).toContain('数据库提示词')
+    const submitBtn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    await submitBtn!.trigger('click')
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(String(payload.prompt)).toContain('数据库提示词')
   })
 
   it('详情页带 model 参数进入后，再次「更换姿势」档位仍保持第三档', async () => {

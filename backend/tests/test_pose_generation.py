@@ -22,6 +22,7 @@ from app.config import settings
 from app.database import async_session
 from app.models.generation import GenerationRun
 from app.models.inspiration import Inspiration
+from app.models.pose_prompt import PosePrompt
 from app.models.task import TaskQueue
 from app.services import generation_service, pose_gallery
 from app.services.task_runners import image_gen as runner
@@ -201,6 +202,30 @@ async def test_create_run_records_pose_in_params(client, fake_pose_gallery):
     assert run.kind == "i2i"
     assert params["pose_id"] == POSE_ID
     assert json.loads(run.reference_ids) == ["ref-pose-ok"]
+
+
+async def test_i2i_uses_db_pose_prompt(client, fake_pose_gallery):
+    """图生图 + 姿势：优先用 pose_prompts 表里的反推提示词，用户补充内容保留在后面。"""
+    async with async_session() as db:
+        db.add(PosePrompt(pose_id=POSE_ID, prompt="数据库姿态提示词：保持人物与服装，按参考姿态生成。"))
+        await db.commit()
+    await _add_reference_image("ref-db-pose-prompt")
+    async with async_session() as db:
+        out = await generation_service.create_run(
+            db,
+            {
+                "kind": "i2i",
+                "prompt": "用户补充：自然光",
+                "reference_ids": ["ref-db-pose-prompt"],
+                "pose_id": POSE_ID,
+                "count": 1,
+            },
+        )
+        run = await db.get(GenerationRun, out["run_id"])
+
+    assert run.prompt.startswith("数据库姿态提示词")
+    assert "用户补充" in run.prompt
+    assert run.prompt.count("数据库姿态提示词") == 1
 
 
 async def test_retry_run_keeps_pose(client, fake_pose_gallery):

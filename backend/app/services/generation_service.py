@@ -32,6 +32,7 @@ import httpx
 from app.config import settings
 from app.models.generation import GenerationRun
 from app.models.inspiration import Inspiration
+from app.models.pose_prompt import PosePrompt
 from app.models.tag import Tag
 from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
@@ -155,6 +156,19 @@ async def _rollback_created(
     await db.rollback()
 
 
+async def _db_pose_prompt(db: AsyncSession, pose_id: str) -> str:
+    """取图库姿势的已反推提示词（`pose_prompts` 表；没有记录返回空串）。
+
+    数据由 ``scripts/data/backfill_pose_prompts.py`` 批量回填；图生图 + 姿势时优先用它，
+    保证「换姿势」使用的是 thinking 反推后的描述，而不是前端拼的固定模板。
+    """
+    row = await db.execute(
+        select(PosePrompt.prompt).where(PosePrompt.pose_id == pose_id)
+    )
+    value = row.scalar_one_or_none()
+    return str(value or "").strip()
+
+
 def _pose_text_prompt(pose: dict[str, Any]) -> str:
     """把一条姿势转成可写进 prompt 的中文描述（文生图模式用）。
 
@@ -259,6 +273,15 @@ async def create_run(
         pose = await pose_gallery.get_pose(pose_id)
         if kind == "i2i":
             max_refs = int(spec.get("max_refs") or 10)
+            # 图生图 + 姿势：优先使用 `pose_prompts` 里已反推的提示词（全量回填过），
+            # 客户端没带/带的是旧模板时自动补在最前面；库里没有该 pose_id 时回退旧逻辑。
+            db_pose_prompt = await _db_pose_prompt(db, pose_id)
+            if db_pose_prompt:
+                payload = dict(payload)
+                current = str(payload.get("prompt") or "").strip()
+                if db_pose_prompt not in current:
+                    joined = f"{db_pose_prompt}\n{current}" if current else db_pose_prompt
+                    payload["prompt"] = joined
             if len(ref_ids) + 1 > max_refs:
                 raise HTTPException(
                     status_code=400,

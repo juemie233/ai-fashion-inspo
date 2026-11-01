@@ -15,7 +15,7 @@ import { shortModelLabel } from '@/utils/format'
 import ReferencePickerModal from '@/components/generate/ReferencePickerModal.vue'
 import PosePickerModal from '@/components/generate/PosePickerModal.vue'
 import QuickPoseBatchPanel from '@/components/generate/QuickPoseBatchPanel.vue'
-import type { PoseItem } from '@/api/poseGallery'
+import { fetchPosePrompt, type PoseItem } from '@/api/poseGallery'
 import { getFileUrl } from '@/api/inspirations'
 
 const props = defineProps<{
@@ -310,13 +310,51 @@ const refCountOk = computed(
   () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
 )
 
+/** 姿势提示词缓存：同一姿势只查一次 `pose_prompts` 表。 */
+const posePromptCache = new Map<string, string>()
+/** 最近一次自动填入的提示词（用于判断"这是系统填的、可以整段替换"）。 */
+const lastAutoPrompt = ref('')
+
+/** 读取姿势已反推的提示词（后端 `pose_prompts` 表；没有则空串）。 */
+async function loadPoseDbPrompt(pose: PoseItem): Promise<string> {
+  const hit = posePromptCache.get(pose.id)
+  if (hit) return hit
+  try {
+    const res = await fetchPosePrompt(pose.id)
+    const text = (res.prompt ?? '').trim()
+    if (text) posePromptCache.set(pose.id, text)
+    return text
+  } catch {
+    // 查询失败不阻塞选姿势：生成时后端仍会补数据库提示词
+    return ''
+  }
+}
+
+/** 线稿参考模式：把 `pose_prompts` 的反推提示词填进描述框（保留用户手写内容）。 */
+async function applyPoseDbPrompt(pose: PoseItem): Promise<boolean> {
+  if (poseMode.value !== 'lineart') return false
+  const text = await loadPoseDbPrompt(pose)
+  if (!text) return false
+  const current = prompt.value.trim()
+  const legacy = current.includes('保持第 1 张参考图') || current.includes('人物姿势：')
+  if (!current || current === lastAutoPrompt.value || legacy) {
+    prompt.value = text
+    lastAutoPrompt.value = text
+  } else if (!current.includes(text)) {
+    prompt.value = `${text}
+${current}`
+  }
+  return true
+}
+
 /** 选中姿势：按当前生成方式切档位（默认文字描述/文生图，可切线稿参考/图生图） */
-function onPoseSelected(pose: PoseItem): void {
+async function onPoseSelected(pose: PoseItem): Promise<void> {
   selectedPose.value = pose
   // 线稿参考固定用未审查第三档；文字描述用文生图第一档
   pendingModelKey.value = ''
   pendingKind.value = null
   applyPoseMode(poseMode.value)
+  if (poseMode.value === 'lineart') await applyPoseDbPrompt(pose)
   Message.success(
     poseMode.value === 'text'
       ? `已选姿势：${pose.name}（文字描述生成）`
@@ -340,10 +378,11 @@ function buildPoseTextPrompt(pose: PoseItem): string {
   return `人物姿势：${pose.name}（${pose.angle}），${poseFraming(pose.system)}。`
 }
 
-/** 插入一段「换姿势」描述模板（可再改）：默认文生图写法；线稿模式才写参考图顺序 */
-function insertPosePrompt(): void {
+/** 插入一段「换姿势」描述模板（可再改）：优先用数据库反推提示词，缺记录时回退旧模板 */
+async function insertPosePrompt(): Promise<void> {
   const pose = selectedPose.value
   if (!pose) return
+  if (poseMode.value === 'lineart' && (await applyPoseDbPrompt(pose))) return
   const template = poseMode.value === 'lineart' ? buildPosePrompt(pose) : buildPoseTextPrompt(pose)
   // 连点两下不重复追加同一段
   if (prompt.value.includes(template)) return
@@ -367,12 +406,12 @@ function buildPosePrompt(pose: PoseItem): string {
 }
 
 /** 一键出图的每一轮：套用面板给的姿势/张数/步数 → 切未审查档位 → 复用正常提交流程 */
-function onQuickRun(payload: {
+async function onQuickRun(payload: {
   pose: PoseItem
   count: number
   steps: number
   round: number
-}): void {
+}): Promise<void> {
   count.value = payload.count
   steps.value = payload.steps
   selectedPose.value = payload.pose
@@ -382,12 +421,23 @@ function onQuickRun(payload: {
   // 事后没法从历史/导出里看出这批用的是哪个姿势）。
   if (payload.round === 1) {
     const current = prompt.value.trim()
-    // 上一轮一键出图留下的模板不算「用户描述」：整段替换，避免反复叠加
+    // 上一轮一键出图留下的模板/数据库提示词不算「用户描述」：整段替换，避免反复叠加
     quickBasePrompt.value =
-      current.includes('按最后一张参考图的姿势') || current.includes('人物姿势：') ? '' : current
+      current === lastAutoPrompt.value ||
+      current.includes('按最后一张参考图的姿势') ||
+      current.includes('人物姿势：')
+        ? ''
+        : current
   }
-  const posePrompt =
-    poseMode.value === 'lineart' ? buildPosePrompt(payload.pose) : buildPoseTextPrompt(payload.pose)
+  let posePrompt: string
+  if (poseMode.value === 'lineart') {
+    const dbPrompt = await loadPoseDbPrompt(payload.pose)
+    posePrompt = dbPrompt || buildPosePrompt(payload.pose)
+    lastAutoPrompt.value = posePrompt
+  } else {
+    posePrompt = buildPoseTextPrompt(payload.pose)
+    lastAutoPrompt.value = ''
+  }
   prompt.value = quickBasePrompt.value
     ? `${quickBasePrompt.value}
 ${posePrompt}`
