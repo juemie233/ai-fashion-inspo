@@ -22,23 +22,26 @@ import {
 import { getApiErrorMessage } from '@/utils/apiError'
 
 /** 结果区四个 tab（视图侧也用它做 query 校验，故在此导出，避免两处各写一份） */
-export type ResultTab = 'pending' | 'confirmed' | 'unmatched' | 'cluster'
+export type ResultTab = 'pending' | 'confirmed' | 'unmatched' | 'cluster' | 'register'
 
 /** 明细批量操作的目标状态：pending 页面里操作 = 确认，confirmed 页面里 = 驳回 */
 type TargetStatus = 'pending' | 'confirmed'
 
-/** 高置信度快捷确认的门槛（与视图上的「≥0.75 快捷确认」文案一致） */
-const HIGH_CONFIDENCE = 0.75
+/** 高置信度快捷确认的默认门槛（视图可通过 highConfidence 覆盖，默认 0.65） */
+const DEFAULT_HIGH_CONFIDENCE = 0.65
 
 interface FaceDetailPanelDeps {
   /** 当前结果区 tab（决定确认/驳回的目标状态） */
   resultTab: Ref<ResultTab>
   /** 审核动作完成后刷新整个页面数据（聚合区 + 任务状态） */
   refreshAll: () => Promise<void>
+  /** 快捷确认门槛（默认 0.65；仅影响「确认高分」按钮，不自动确认） */
+  highConfidence?: Ref<number>
 }
 
 export function useFaceDetailPanel(opts: FaceDetailPanelDeps) {
   const { resultTab, refreshAll } = opts
+  const highConfidence = opts.highConfidence ?? { value: DEFAULT_HIGH_CONFIDENCE }
 
   const detailKey = ref('') // `${person_type}:${person_id}`
   const detailItems = ref<DetectionItem[]>([])
@@ -125,7 +128,7 @@ export function useFaceDetailPanel(opts: FaceDetailPanelDeps) {
       const { person_type: personType, person_id: personId } = person
       const all = await fetchAllDetections(targetStatus(), personType, personId)
       const items = all
-        .filter((d) => !onlyHighConfidence || (d.confidence ?? 0) >= HIGH_CONFIDENCE)
+        .filter((d) => !onlyHighConfidence || (d.confidence ?? 0) >= highConfidence.value)
         .map((d) => ({
           detection_id: d.detection_id,
           person_type: action === 'confirm' ? personType : undefined,

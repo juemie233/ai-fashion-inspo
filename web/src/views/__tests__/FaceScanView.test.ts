@@ -48,6 +48,17 @@ vi.mock('@/api/faceScan', () => ({
   fetchFaceClusterGroups: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   fetchFaceGroupDetections: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   assignFaceGroup: vi.fn(),
+  fetchFaceRegisterPlan: vi.fn().mockResolvedValue({
+    items: [],
+    summary: {
+      total: 0,
+      with_candidates: 0,
+      no_candidates: 0,
+      min_cluster_size: 3,
+      min_det_score: 0.5,
+    },
+  }),
+  registerFaceBatch: vi.fn(),
 }))
 
 vi.mock('@/api/persons', () => ({

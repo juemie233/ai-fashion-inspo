@@ -8,7 +8,7 @@
  *    已确认区可撤销，未匹配区可批量指派人物。
  */
 
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -26,6 +26,7 @@ import { useFaceScanActions } from '@/composables/useFaceScanActions'
 import { useFaceUnmatchedAssign } from '@/composables/useFaceUnmatchedAssign'
 import { useFaceDetailPanel, type ResultTab } from '@/composables/useFaceDetailPanel'
 import FaceClusterTab from '@/components/person/face/FaceClusterTab.vue'
+import FaceRegisterTab from '@/components/person/face/FaceRegisterTab.vue'
 import FaceConfirmedTab from '@/components/person/face/FaceConfirmedTab.vue'
 import FacePendingTab from '@/components/person/face/FacePendingTab.vue'
 import FaceUnmatchedTab from '@/components/person/face/FaceUnmatchedTab.vue'
@@ -94,7 +95,7 @@ async function refreshTasks() {
 }
 
 /** 开始扫描（增量/全量） */
-const VALID_RESULT_TABS: ResultTab[] = ['pending', 'confirmed', 'unmatched', 'cluster']
+const VALID_RESULT_TABS: ResultTab[] = ['pending', 'confirmed', 'unmatched', 'cluster', 'register']
 // 从 URL query 恢复当前 tab，刷新/分享链接后不再回到第一个页面
 const route = useRoute()
 const router = useRouter()
@@ -139,6 +140,8 @@ async function loadAggregates() {
 
 // ── 明细（按人物展开 + 批量审核）：实现见 composables/useFaceDetailPanel.ts ──
 
+/** 快捷确认门槛（默认 0.65；只影响「确认高分」按钮，不自动确认） */
+const quickThreshold = ref(0.65)
 const {
   detailKey,
   detailItems,
@@ -151,7 +154,45 @@ const {
   loadDetail,
   actOnPerson,
   actOnChecked,
-} = useFaceDetailPanel({ resultTab, refreshAll })
+} = useFaceDetailPanel({ resultTab, refreshAll, highConfidence: quickThreshold })
+
+/** 驳回是不可批量撤销的永久排除：先弹窗明确告知，再交给面板批量执行 */
+function confirmRejectThen(run: () => Promise<void>) {
+  Modal.confirm({
+    title: '确认驳回这些人脸？',
+    content:
+      '驳回会把它们标记为「不匹配」，永久退出后续全库匹配（包括重跑匹配），' +
+      '且不提供批量撤销。请确认已看过人脸、确实不属于该人物。',
+    okText: '确认驳回',
+    cancelText: '取消',
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      await run()
+    },
+  })
+}
+
+/** 人物行批量操作包装：驳回先确认，确认动作直接执行 */
+function handleActOnPerson(
+  person: PersonAggregateItem,
+  action: 'confirm' | 'reject',
+  onlyHigh?: boolean,
+) {
+  if (action === 'reject') {
+    confirmRejectThen(() => actOnPerson(person, action, onlyHigh))
+    return
+  }
+  void actOnPerson(person, action, onlyHigh)
+}
+
+/** 勾选批量操作包装：驳回先确认 */
+function handleActOnChecked(action: 'confirm' | 'reject') {
+  if (action === 'reject') {
+    confirmRejectThen(() => actOnChecked(action))
+    return
+  }
+  void actOnChecked(action)
+}
 
 const { startScan, cancelTask, startMatch } = useFaceScanActions({
   scanTask,
@@ -394,9 +435,10 @@ function filterOption(input: string, option: { label?: string }): boolean {
     <a-card size="small" class="results-card">
       <a-tabs v-model:active-key="resultTab" type="line" @change="refreshAll">
         <!-- 待审核候选 -->
-        <a-tab-pane key="pending" title="待审核候选">
+        <a-tab-pane key="pending" title="AI 候选（已匹配到人物）">
           <FacePendingTab
             v-model:grid-columns="gridColumns"
+            v-model:high-confidence="quickThreshold"
             :persons="pendingPersons"
             :loading="personsLoading"
             :page="pendingPage"
@@ -409,14 +451,19 @@ function filterOption(input: string, option: { label?: string }): boolean {
             :detail-checked="detailChecked"
             :action-busy="detailActionBusy"
             @toggle-detail="toggleDetail"
-            @act-on-person="actOnPerson"
+            @act-on-person="handleActOnPerson"
             @page-change="onPendingPageChange"
             @detail-page-change="onDetailPageChange"
             @toggle-detail-checked="toggleDetailChecked"
             @select-all-detail="toggleSelectAllDetail"
-            @act-on-checked="actOnChecked"
+            @act-on-checked="handleActOnChecked"
             @open-inspiration="goDetail"
           />
+        </a-tab-pane>
+
+        <!-- 批量注册（阶段 1：先补未注册博主的人脸特征库） -->
+        <a-tab-pane key="register" title="批量注册">
+          <FaceRegisterTab :offline="faceServiceOffline" @registered="refreshAll" />
         </a-tab-pane>
 
         <!-- 已确认 -->

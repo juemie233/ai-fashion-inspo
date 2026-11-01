@@ -282,11 +282,16 @@ async def match_all_faces(
                 new_blogger = None
                 new_model = result["person_id"]
                 new_conf = round(result["score"], 4)
+            # 未命中（result is None）= 普通检测，不能写成 pending：
+            # pending 的语义是「已匹配到具体人物、等待人工审核」。旧实现把 1.6 万条
+            # 无匹配记录也写成 pending，导致审核页出现大量无人物分组，且一旦批量
+            # 驳回会被 match_excluded 永久排除（注册完新人物也再匹配不到）。
+            target_status = "pending" if result is not None else None
             if (
                 det.matched_blogger_id != new_blogger
                 or det.matched_model_id != new_model
                 or det.confidence != new_conf
-                or det.match_status != "pending"
+                or det.match_status != target_status
             ):
                 changes.append(
                     {
@@ -294,6 +299,7 @@ async def match_all_faces(
                         "matched_blogger_id": new_blogger,
                         "matched_model_id": new_model,
                         "confidence": new_conf,
+                        "match_status": target_status,
                     }
                 )
             if result is None:
@@ -304,13 +310,7 @@ async def match_all_faces(
     if changes:
         await db.execute(
             update(InspirationFaceDetection),
-            [
-                {
-                    **c,
-                    "match_status": "pending",
-                }
-                for c in changes
-            ],
+            changes,
         )
         await db.commit()
 

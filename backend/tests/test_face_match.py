@@ -289,7 +289,7 @@ async def test_match_all_faces_writes_pending(
     """全库匹配：博主/模特合并库取最高分，写入 pending；未命中保持空。"""
     base = _unit(1)
     blogger = _setup_blogger_face(client, create_blogger, monkeypatch, base.tolist())
-    model = _setup_model_face(client, create_model, monkeypatch, _near(2, base).tolist())
+    _setup_model_face(client, create_model, monkeypatch, _near(2, base).tolist())
     # 素材两张脸：脸0 与博主同向（cos=1 > 与模特 ~0.998），脸1 随机（未命中）
     insp_id = _setup_inspiration_faces(
         client,
@@ -305,7 +305,8 @@ async def test_match_all_faces_writes_pending(
         assert stats["total_faces"] == 2
         assert stats["matched"] == 1
         assert stats["unmatched"] == 1
-        assert stats["updated"] == 2
+        # 只有脸0（命中→pending）发生变化；脸1 本来就是 NULL，不再被写成 pending
+        assert stats["updated"] == 1
         assert stats["library_size"] == 2
 
         detections = (
@@ -321,14 +322,46 @@ async def test_match_all_faces_writes_pending(
         assert detections[0].matched_model_id is None
         assert detections[0].match_status == "pending"
         assert detections[0].confidence > 0.9
-        # 脸1：未命中
+        # 脸1：未命中 → 普通检测（NULL），不能写成 pending
         assert detections[1].matched_blogger_id is None
         assert detections[1].matched_model_id is None
-        assert detections[1].match_status == "pending"
+        assert detections[1].match_status is None
 
         # 幂等：再跑一次无变化
         stats2 = await match_all_faces(db)
         assert stats2["updated"] == 0
+
+
+async def test_match_all_faces_does_not_touch_confirmed(
+    client, create_blogger, monkeypatch
+):
+    """已确认（confirmed）的人脸重跑匹配时保持不变，也不会被降级为 pending。"""
+    base = _unit(1)
+    blogger = _setup_blogger_face(client, create_blogger, monkeypatch, base.tolist())
+    insp_id = _setup_inspiration_faces(
+        client,
+        monkeypatch,
+        [{"bbox": [0, 0, 10, 10], "det_score": 0.9, "embedding": base.tolist()}],
+    )
+
+    async with async_session() as db:
+        await match_all_faces(db)
+        det = (
+            await db.execute(
+                select(InspirationFaceDetection).where(
+                    InspirationFaceDetection.inspiration_id == insp_id
+                )
+            )
+        ).scalar_one()
+        det.match_status = "confirmed"
+        det.matched_blogger_id = blogger["id"]
+        await db.commit()
+
+        stats = await match_all_faces(db)
+        assert stats["total_faces"] == 0  # 已确认记录被跳过
+        await db.refresh(det)
+        assert det.match_status == "confirmed"
+        assert det.matched_blogger_id == blogger["id"]
 
 
 async def test_match_all_faces_model_scope(client, create_blogger, create_model, monkeypatch):

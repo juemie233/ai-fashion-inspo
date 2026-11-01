@@ -25,6 +25,8 @@ from app.schemas.face_scan import (
     FaceClusterRunIn,
     FaceConfirmIn,
     FaceMatchRunIn,
+    FaceRegisterBatchIn,
+    FaceRegisterPlanIn,
     FaceScanStartIn,
 )
 from app.schemas.task import TaskOut
@@ -217,6 +219,7 @@ async def _person_aggregate_page(
             id_expr,
             func.count().label("cnt"),
             func.max(InspirationFaceDetection.confidence).label("best_conf"),
+            func.avg(InspirationFaceDetection.confidence).label("avg_conf"),
         )
         .where(*filters)
         .group_by("person_type", "person_id")
@@ -225,14 +228,20 @@ async def _person_aggregate_page(
     total = (await db.execute(select(func.count()).select_from(base))).scalar() or 0
     rows = (
         await db.execute(
-            select(base.c.person_type, base.c.person_id, base.c.cnt, base.c.best_conf)
+            select(
+                base.c.person_type,
+                base.c.person_id,
+                base.c.cnt,
+                base.c.best_conf,
+                base.c.avg_conf,
+            )
             .order_by(base.c.cnt.desc(), base.c.person_id)
             .offset((page - 1) * size)
             .limit(size)
         )
     ).all()
     items = []
-    for p_type, person_id, cnt, best_conf in rows:
+    for p_type, person_id, cnt, best_conf, avg_conf in rows:
         name_model = Blogger if p_type == "blogger" else Model
         person = await db.get(name_model, person_id)
         items.append(
@@ -244,6 +253,7 @@ async def _person_aggregate_page(
                 "avatar_path": person.avatar_path if person else None,
                 "count": cnt,
                 "best_conf": round(best_conf, 4) if best_conf is not None else None,
+                "avg_conf": round(avg_conf, 4) if avg_conf is not None else None,
             }
         )
     return items, total
@@ -360,6 +370,37 @@ async def _unmatched_page(
         for r in rows
     ]
     return items, total
+
+
+# ── 批量注册（阶段 1：先把「有素材但未注册」的博主人脸补上）──
+
+
+@router.post("/register-plan")
+async def register_plan(
+    data: FaceRegisterPlanIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量注册候选计划（只读）：未注册博主 + 未匹配单脸簇 + 建议注册素材。"""
+    from app.services.person.face_register_plan import build_register_plan
+
+    return await build_register_plan(
+        db,
+        limit=data.limit,
+        min_cluster_size=data.min_cluster_size,
+        min_det_score=data.min_det_score,
+        only_with_candidates=data.only_with_candidates,
+    )
+
+
+@router.post("/register-batch")
+async def register_batch(
+    data: FaceRegisterBatchIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """批量注册博主人脸（串行，最多 20 位/批）；子服务不可用时快速失败。"""
+    from app.services.person.face_register_plan import register_bloggers_batch
+
+    return await register_bloggers_batch(db, data.items)
 
 
 # ── 人工审核确认（唯一写人物关联表的入口）──

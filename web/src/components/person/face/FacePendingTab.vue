@@ -33,6 +33,8 @@ const props = defineProps<{
   detailChecked: Set<number>
   /** 批量审核进行中 */
   actionBusy: boolean
+  /** 快捷确认门槛（仅影响「确认高分」按钮，不自动确认） */
+  highConfidence: number
 }>()
 
 const emit = defineEmits<{
@@ -48,6 +50,7 @@ const emit = defineEmits<{
   (e: 'toggleDetailChecked', id: number, checked: unknown): void
   (e: 'selectAllDetail'): void
   (e: 'actOnChecked', action: 'confirm' | 'reject'): void
+  (e: 'update:highConfidence', value: number): void
   (e: 'openInspiration', inspirationId: string): void
 }>()
 
@@ -67,11 +70,30 @@ const {
   detailLoading,
   detailChecked,
   actionBusy,
+  highConfidence,
 } = toRefs(props)
 </script>
 
 <template>
   <a-spin :loading="loading" style="display: block">
+    <div class="pending-toolbar">
+      <a-typography-text type="secondary" style="font-size: 12px">
+        AI 候选（已匹配到人物）：仅列出匹配到具体博主的待审记录。驳回会把该人脸标记为「不匹配」，
+        <strong>永久退出后续匹配</strong>，请先看脸再操作。
+      </a-typography-text>
+      <a-space :size="6">
+        <span style="font-size: 12px">高分门槛</span>
+        <a-input-number
+          :model-value="highConfidence"
+          :min="0"
+          :max="1"
+          :step="0.05"
+          size="mini"
+          style="width: 80px"
+          @change="(v: number | undefined) => emit('update:highConfidence', v ?? 0.65)"
+        />
+      </a-space>
+    </div>
     <div v-if="persons.length > 0" class="person-list">
       <div v-for="p in persons" :key="`${p.person_type}:${p.person_id}`" class="person-row">
         <div class="person-head" @click="emit('toggleDetail', p)">
@@ -97,7 +119,8 @@ const {
             {{ p.person_type === 'blogger' ? '穿搭博主' : '职业模特' }}
           </a-tag>
           <a-typography-text type="secondary" style="font-size: 12px">
-            {{ p.count }} 条候选 · 最高 {{ (p.best_conf ?? 0).toFixed(2) }}
+            {{ p.count }} 条候选 · 平均 {{ (p.avg_conf ?? 0).toFixed(2) }} · 最高
+            {{ (p.best_conf ?? 0).toFixed(2) }}
           </a-typography-text>
         </div>
         <a-space :size="6">
@@ -107,7 +130,7 @@ const {
             :loading="actionBusy"
             @click.stop="emit('actOnPerson', p, 'confirm', true)"
           >
-            确认高分（≥0.75）
+            确认高分（≥{{ highConfidence.toFixed(2) }}）
           </a-button>
           <a-button
             size="mini"
@@ -213,7 +236,10 @@ const {
         </div>
       </div>
     </div>
-    <a-empty v-else description="暂无待审核候选，先运行扫描与匹配" />
+    <a-empty
+      v-else
+      description="暂无 AI 候选（已匹配到人物）；未匹配人脸请到「未匹配人脸」或「聚合分组」处理"
+    />
     <a-pagination
       v-if="total > 50"
       style="margin-top: 12px; justify-content: center"

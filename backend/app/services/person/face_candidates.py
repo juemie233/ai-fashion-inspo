@@ -57,7 +57,14 @@ async def _single_face_inspiration_ids(
     return set(rows.scalars().all())
 
 
-async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
+async def list_face_candidates(
+    db: AsyncSession,
+    blogger_id: int,
+    *,
+    min_det_score: float = MIN_DET_SCORE,
+    min_cluster_size: int = MIN_CLUSTER_SIZE,
+    max_clusters: int = MAX_CLUSTERS,
+) -> dict:
     """列出某博主的注册候选：已匹配素材（一键注册）+ 未匹配候选脸簇。
 
     Args:
@@ -72,6 +79,9 @@ async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
         - ``clusters``：TA 素材里未匹配人脸聚出的簇（出现 ≥3 次），每簇给封面、
           成员数、平均置信度与前 3 张素材 ID（前端确认后直接注册）；
         - ``candidate_faces``：参与聚类的未匹配人脸数（用于面板说明「基于多少张脸」）。
+
+    参数 ``min_det_score`` / ``min_cluster_size`` / ``max_clusters`` 供批量注册计划
+    调整口径（默认与人物详情页一致）。
     """
     # 注意：这里必须是**子查询**（IN (SELECT ...)），不能 .scalar_subquery()——
     # 标量子查询会退化成 `IN (单个值)`，一条候选都查不出来（踩过：全返回 0）。
@@ -145,7 +155,7 @@ async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
                 # IS NOT TRUE：历史行该列可能为 NULL，用 IS FALSE 会把它们全排掉
                 InspirationFaceDetection.match_excluded.is_not(True),
                 Inspiration.deleted_at.is_(None),
-                InspirationFaceDetection.det_score >= MIN_DET_SCORE,
+                InspirationFaceDetection.det_score >= min_det_score,
                 InspirationFaceDetection.inspiration_id.in_(single_face_subq),
             )
             .order_by(InspirationFaceDetection.det_score.desc())
@@ -165,10 +175,10 @@ async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
             [row[0] for row in candidate_rows],
             embs,
             EDGE_THRESHOLD,
-            MIN_CLUSTER_SIZE,
+            min_cluster_size,
             MAX_CLUSTER_SIZE,
         )
-        for idx, group in enumerate(result["groups"][:MAX_CLUSTERS]):
+        for idx, group in enumerate(result["groups"][:max_clusters]):
             members = [meta[did] for did in group["detection_ids"] if did in meta]
             if not members:
                 continue
@@ -185,6 +195,7 @@ async def list_face_candidates(db: AsyncSession, blogger_id: int) -> dict:
                     "inspiration_ids": [r[1] for r in top],
                     "candidates": [
                         {
+                            "detection_id": r[0],
                             "inspiration_id": r[1],
                             "det_score": round(float(r[2] or 0.0), 4),
                             "thumbnail_path": r[4],

@@ -48,6 +48,10 @@ const { items, loading, page, total, checked, assignOptions, assignLoading, assi
 </script>
 
 <template>
+  <a-alert type="info" style="margin-bottom: 10px">
+    未匹配人脸：未超过人物库阈值，可手动指派，或到「聚合分组」按疑似同一人整组处理；
+    驳回会标记为「不匹配」并永久退出后续匹配。
+  </a-alert>
   <div class="assign-bar">
     <a-radio-group
       v-model="assignKind"

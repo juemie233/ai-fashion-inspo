@@ -49,3 +49,30 @@ class FaceClusterRunIn(BaseModel):
 
     threshold: float | None = Field(None, ge=0.0, le=1.0)
     min_group_size: int | None = Field(None, ge=2, le=100)
+
+
+class FaceRegisterPlanIn(BaseModel):
+    """批量注册候选计划请求（只读，不写库）。
+
+    默认返回「有候选」的博主（with_candidates=141 量级）；only_with_candidates=false
+    时把无稳定人脸的博主也列出来（带 skip_reason），方便排查素材覆盖。
+    """
+
+    limit: int = Field(200, ge=1, le=500)
+    min_cluster_size: int = Field(3, ge=2, le=50)
+    min_det_score: float = Field(0.5, ge=0.0, le=1.0)
+    only_with_candidates: bool = True
+
+
+class FaceRegisterBatchItem(BaseModel):
+    """单条批量注册项：博主 + 该博主已关联的 1~5 张注册素材。"""
+
+    person_type: str = Field("blogger", pattern="^(blogger|model)$")
+    person_id: int
+    inspiration_ids: list[str] = Field(..., min_length=1, max_length=5)
+
+
+class FaceRegisterBatchIn(BaseModel):
+    """批量注册请求（一次最多 20 位，前端分批循环）。"""
+
+    items: list[FaceRegisterBatchItem] = Field(..., min_length=1, max_length=20)

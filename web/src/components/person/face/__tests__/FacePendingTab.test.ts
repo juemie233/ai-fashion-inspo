@@ -43,6 +43,7 @@ function mountTab(persons: PersonAggregateItem[]) {
       detailLoading: false,
       detailChecked: new Set<number>(),
       actionBusy: false,
+      highConfidence: 0.65,
       gridColumns: 6,
     },
   })

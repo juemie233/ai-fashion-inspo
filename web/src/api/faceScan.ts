@@ -28,6 +28,8 @@ export interface PersonAggregateItem {
   avatar_path: string | null
   count: number
   best_conf: number | null
+  /** 平均置信度（按人物聚合时返回；用于显示「N 条 · 平均 x · 最高 y」） */
+  avg_conf?: number | null
 }
 
 /** 单条命中/未匹配明细 */
@@ -212,5 +214,82 @@ export interface FaceServiceStatus {
 /** 查询人脸子服务状态：接口恒返回 200，可用性看 enabled/reachable */
 export async function fetchFaceServiceStatus(): Promise<FaceServiceStatus> {
   const { data } = await apiClient.get<FaceServiceStatus>('/face-scan/service-status')
+  return data
+}
+
+/** 批量注册候选簇：与后端 register-plan 的 clusters 字段一一对应 */
+export interface FaceRegisterCluster {
+  size: number
+  avg_det_score: number
+  suggested_inspiration_ids: string[]
+  cover_detection_ids: number[]
+  candidates: Array<{
+    detection_id?: number
+    inspiration_id: string
+    det_score: number
+    thumbnail_path: string | null
+  }>
+}
+
+/** 批量注册计划中的一位博主 */
+export interface FaceRegisterPlanItem {
+  person_type: 'blogger'
+  person_id: number
+  name: string
+  avatar_path: string | null
+  inspiration_count: number
+  registered: boolean
+  clusters: FaceRegisterCluster[]
+  skip_reason: string | null
+}
+
+/** 批量注册计划（只读） */
+export interface FaceRegisterPlan {
+  items: FaceRegisterPlanItem[]
+  summary: {
+    total: number
+    with_candidates: number
+    no_candidates: number
+    min_cluster_size: number
+    min_det_score: number
+  }
+}
+
+/** 批量注册单条结果 */
+export interface FaceRegisterBatchResultItem {
+  person_id: number
+  ok: boolean
+  face_count: number
+  error: string | null
+  warnings?: string[]
+}
+
+/** 批量注册结果 */
+export interface FaceRegisterBatchResult {
+  items: FaceRegisterBatchResultItem[]
+  succeeded: number
+  failed: number
+}
+
+/** 拉取批量注册候选计划（只读；后端会在服务端完成聚类与排序） */
+export async function fetchFaceRegisterPlan(
+  params: {
+    limit?: number
+    min_cluster_size?: number
+    min_det_score?: number
+    only_with_candidates?: boolean
+  } = {},
+): Promise<FaceRegisterPlan> {
+  const { data } = await apiClient.post<FaceRegisterPlan>('/face-scan/register-plan', params)
+  return data
+}
+
+/** 批量注册博主人脸（一次最多 20 位，前端分批循环） */
+export async function registerFaceBatch(
+  items: Array<{ person_type: 'blogger' | 'model'; person_id: number; inspiration_ids: string[] }>,
+): Promise<FaceRegisterBatchResult> {
+  const { data } = await apiClient.post<FaceRegisterBatchResult>('/face-scan/register-batch', {
+    items,
+  })
   return data
 }
