@@ -73,9 +73,13 @@ class FaceRegisterBatchItem(BaseModel):
 
 
 class FaceRegisterBatchIn(BaseModel):
-    """批量注册请求（一次最多 20 位，前端分批循环）。"""
+    """批量注册请求（单次最多 5 位，前端按 5 位循环分批）。
 
-    items: list[FaceRegisterBatchItem] = Field(..., min_length=1, max_length=20)
+    单次上限从 20 降到 5：每位要读 3 张素材并逐张调人脸子服务，20 位请求会超过
+    前端/反向代理的 30s 超时（实测单条约 0.6s，但大图/冷启动波动大）。
+    """
+
+    items: list[FaceRegisterBatchItem] = Field(..., min_length=1, max_length=5)
 
 
 class FaceClusterCreatePersonIn(BaseModel):

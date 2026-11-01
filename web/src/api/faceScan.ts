@@ -288,9 +288,11 @@ export async function fetchFaceRegisterPlan(
 export async function registerFaceBatch(
   items: Array<{ person_type: 'blogger' | 'model'; person_id: number; inspiration_ids: string[] }>,
 ): Promise<FaceRegisterBatchResult> {
-  const { data } = await apiClient.post<FaceRegisterBatchResult>('/face-scan/register-batch', {
-    items,
-  })
+  const { data } = await apiClient.post<FaceRegisterBatchResult>(
+    '/face-scan/register-batch',
+    { items },
+    { timeout: 120000 },
+  )
   return data
 }
 

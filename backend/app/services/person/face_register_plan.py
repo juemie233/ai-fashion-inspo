@@ -26,8 +26,8 @@ from app.services.person.face_candidates import list_face_candidates
 
 logger = logging.getLogger(__name__)
 
-# 单批最多注册人数（方案约定：一次 ≤20 位，前端分批）
-MAX_BATCH_SIZE = 20
+# 单批最多注册人数（HTTP 单次 ≤5 位；前端按 5 位循环，避免 30s 超时）
+MAX_BATCH_SIZE = 5
 # 单个候选计划里每位博主最多返回几个簇（前端「换一组」轮换）
 MAX_CLUSTERS_PER_BLOGGER = 5
 

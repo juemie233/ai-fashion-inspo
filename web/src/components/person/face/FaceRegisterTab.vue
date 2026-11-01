@@ -128,26 +128,34 @@ async function adoptPage() {
   }
   batchBusy.value = true
   lastErrors.value = []
+  let succeeded = 0
+  let failed = 0
   try {
-    const result = await registerFaceBatch(
-      batch.map((item) => {
-        const cluster = currentCluster(item)
-        return {
-          person_type: 'blogger' as const,
-          person_id: item.person_id,
-          inspiration_ids: (cluster?.suggested_inspiration_ids ?? []).slice(0, 3),
-        }
-      }),
-    )
-    for (const row of result.items) {
-      if (row.ok) registered.value.add(row.person_id)
-      else lastErrors.value.push(`博主 #${row.person_id}：${row.error || '注册失败'}`)
+    // 单次 HTTP 最多 5 位：20 位拆 4 次，避免 30s 超时；按顺序执行便于逐批反馈
+    for (let start = 0; start < batch.length; start += 5) {
+      const chunk = batch.slice(start, start + 5)
+      const result = await registerFaceBatch(
+        chunk.map((item) => {
+          const cluster = currentCluster(item)
+          return {
+            person_type: 'blogger' as const,
+            person_id: item.person_id,
+            inspiration_ids: (cluster?.suggested_inspiration_ids ?? []).slice(0, 3),
+          }
+        }),
+      )
+      succeeded += result.succeeded
+      failed += result.failed
+      for (const row of result.items) {
+        if (row.ok) registered.value.add(row.person_id)
+        else lastErrors.value.push(`博主 #${row.person_id}：${row.error || '注册失败'}`)
+      }
+      registered.value = new Set(registered.value)
     }
-    registered.value = new Set(registered.value)
-    Message.success(`本批采用 ${result.succeeded} 位，失败 ${result.failed} 位`)
-    if (result.succeeded > 0) emit('registered')
+    Message.success(`本批采用 ${succeeded} 位，失败 ${failed} 位`)
+    if (succeeded > 0) emit('registered')
   } catch (e) {
-    Message.error(getApiErrorMessage(e, '批量注册失败'))
+    Message.error(getApiErrorMessage(e, '批量注册失败（已成功的保留，失败项可重试）'))
   } finally {
     batchBusy.value = false
   }
@@ -175,7 +183,8 @@ onMounted(load)
           :disabled="offline || pendingItems.length === 0"
           @click="adoptPage"
         >
-          采用当前页（{{ Math.min(20, pendingItems.length) }} 位）
+          采用当前页（{{ Math.min(20, pendingItems.length) }} 位，分
+          {{ Math.ceil(Math.min(20, pendingItems.length) / 5) }} 次请求）
         </a-button>
         <a-button size="small" :loading="loading" @click="load">重新拉取计划</a-button>
       </a-space>
