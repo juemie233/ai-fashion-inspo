@@ -595,7 +595,33 @@
 
 ### 9.8 构建与真机验证
 
-- `npx expo prebuild --platform android --clean` → 复核 `ACTION_SEND`=1、PiP 保留、Ionicons 字体在包内、`usesCleartextTraffic=true` → 重打 gradle 提速配方 → `assembleRelease`。
-- 产物：`穿搭素材库-0.8.0.apk`（versionCode 33）。
-- 真机逐页核验结果见提交信息与 `docs/mobile/移动端.md` §5；本轮同时确认：小屏 360×640、系统字体 1.3×、深色模式下 Tab 栏/弹层页脚/采集操作栏均不裁切。
+**构建链路**（新增 3 个原生模块，需一次 `prebuild --clean`）：
+
+1. `npx expo install expo-image expo-linear-gradient expo-haptics`（装完核验 `expo-linking`/`expo-font`/`expo-asset`/`expo-router` 未被剪掉）；
+2. `npx expo prebuild --platform android --clean` → 复核 `ACTION_SEND` 段数=1、`supportsPictureInPicture="true"`、`assets/fonts/Ionicons.ttf`、`usesCleartextTraffic="true"`；
+3. 重打 `gradle.properties` 提速配方 → `MSYS_NO_PATHCONV=1 robocopy mobile C:\mb /E` → `./gradlew assembleRelease`（native 全量 3m09s，后续纯 JS 改动 40s）；
+4. 产物 `穿搭素材库-0.8.0.apk`（72.6 MB / versionCode 33 / versionName 0.8.0），`adb install -r` 覆盖安装。
+
+**逐页实测**（nova 7 Pro，1080×2340，系统字体 1.15×，Android 12）：
+
+| 页面 | 结果 |
+| --- | --- |
+| 素材库 | 三态：冷启动断网先骨架 → 超时后「加载失败 + 重试」，恢复网络点重试即回列表；有数据时刷新失败只出红色行内提示、不清空列表；卡片渐变遮罩 + 2 个标签 + `+N`、来源角标、视频角标、收藏按钮均正常 |
+| 搜索 | 分段控件、标签/以图搜图 chip、常用标签（8 个，按 `usage_count`）正常；点常用标签直接出结果（「找到 19161 条结果」），卡片标签折叠 `+27` |
+| 采集 | 空态「从相册选择 / 拍照」+ 底部操作栏（拍照 / 相册多选 / 上传入库）在 360×640 下不换行 |
+| 详情 | 竖屏视频按封面比例铺满、原生控件可播；图片按真实比例 + 主色 letterbox + 全屏角标；全屏查看器黑底、关闭按钮避开状态栏；无标签时给「暂无标签，点这里手动添加」；操作栏为 收藏 / 编辑标签 / 原链接 / 更多 |
+| 标签编辑弹层 | 拖动条 + 标题 + 关闭、搜索框、`共 22873 个标签` 限额提示、保存按钮按「有待提交内容」置灰、页脚吃安全区 |
+| 设置 | 唯一实心主按钮「保存」；「测试连接」为描边按钮，结果行内显示「✓ 连接成功」；浏览入口为一张分组列表卡；底部 `穿搭素材库 v0.8.0` |
+| 合集 / 人物 / 任务 / 出图 / 标签 | 封面 1:1 + 「智能合集」角标；人物分段控件 + 56 高列表行；任务与出图状态为实心角标、日期单行；标签页首屏骨架 → 加载完成 |
+| 深色模式 | 系统切深色后立即生效（无需重启）：页面/卡片/胶囊/Tab 栏/状态栏图标全部跟随，无白底白字 |
+
+**适配三查**：小屏 360×640（`wm size 1080x1920` + density 480）、系统字体 1.3×（`font_scale 1.3`）、深色模式（`cmd uimode night yes`）——Tab 栏标签、采集操作栏、搜索条件行均不裁切，测完已还原（`wm size reset` / `font_scale 1.15` / `night no`）。
+
+**验证中改掉的 3 个问题**（已并入 `fix(mobile): 真机验证发现的 3 处布局问题`）：
+
+1. `MediaCard` 的占位底色 View 画在图片之后 → 所有缩略图被灰色底盖住（同级后画的在上层）。改为先占位、后图片；
+2. Tab 栏固定 52 高在字体 1.15× 时标签下缘被裁 → 改 `56 + 安全区 + (fontScale-1)×24`；
+3. 搜索页「关键词/语义」分段控件传了 `flex: 1`，在高度自适应的列容器里塌成 0 高度、与下面 chip 行重叠 → 去掉 `flex`。
+
+`adb logcat` 全程无 `Text strings must be rendered within a <Text>`、无 JS 异常、无 ANR。
 
