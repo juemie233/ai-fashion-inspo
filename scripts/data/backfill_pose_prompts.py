@@ -45,9 +45,10 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.config import settings
-from app.services import pose_gallery
-from app.utils.time import utcnow
+# noqa: E402 —— 必须先注入 backend 路径再 import 项目模块（同 scripts/data 其他脚本）
+from app.config import settings  # noqa: E402
+from app.services import pose_gallery  # noqa: E402
+from app.utils.time import utcnow  # noqa: E402
 
 URL = "https://api.deepseek.com/anthropic/v1/messages"
 MODEL = "deepseek-flash[1m]"
