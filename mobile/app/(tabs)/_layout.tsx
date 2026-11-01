@@ -5,14 +5,22 @@
  * Tab 栏高度 = 52 + 安全区，标签 12px、图标 24。
  */
 
+import { useWindowDimensions } from 'react-native'
 import { Tabs } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Icon from '../../components/Icon'
 import { useTheme } from '../../hooks/useTheme'
 
+/** Tab 栏基础高度（不含安全区）；系统字体放大时按 fontScale 追加，避免标签被裁 */
+const TAB_BAR_BASE_HEIGHT = 56
+
 export default function TabLayout() {
   const theme = useTheme()
   const insets = useSafeAreaInsets()
+  const { fontScale } = useWindowDimensions()
+  // 真机踩坑（0.8.0）：固定 52 高 + 系统字体 1.15× 时，标签下缘会被屏幕边缘裁掉；
+  // 这里按字体缩放追加高度，并把 paddingTop 收到 4
+  const barHeight = TAB_BAR_BASE_HEIGHT + insets.bottom + Math.round(Math.max(0, fontScale - 1) * 24)
 
   return (
     <Tabs
@@ -23,8 +31,8 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: theme.color.bgSurface,
           borderTopColor: theme.color.divider,
-          height: 52 + insets.bottom,
-          paddingTop: 6,
+          height: barHeight,
+          paddingTop: 4,
           paddingBottom: insets.bottom,
         },
         tabBarLabelStyle: {

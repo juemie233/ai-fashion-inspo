@@ -319,7 +319,6 @@ export default function SearchScreen() {
           value={mode}
           onChange={changeMode}
           testIDPrefix="mode"
-          style={styles.modeTabs}
         />
       </View>
 
@@ -513,7 +512,6 @@ const makeStyles = (t: Theme) =>
     searchInput: { flex: 1, fontSize: t.font.body.fontSize, color: t.color.textPrimary },
     submit: { minHeight: t.touch, justifyContent: 'center', paddingHorizontal: t.space.sm },
     modeRow: { paddingHorizontal: t.space.md, paddingTop: t.space.md },
-    modeTabs: { flex: 1 },
     condRow: {
       flexDirection: 'row',
       alignItems: 'center',
