@@ -388,6 +388,9 @@ cd ../face-service
 
 **自定义端口：**
 
+> 所有可覆盖的环境变量（含默认值、格式说明）登记在 [`backend/.env.example`](backend/.env.example)，
+> 首次部署先 `cp backend/.env.example backend/.env` 再按本机情况改；真正的 `.env` 已 gitignore。
+
 ```bash
 # 后端 .env
 PORT=18888                   # 后端监听端口

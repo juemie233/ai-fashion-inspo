@@ -236,6 +236,10 @@ fashion-inspo/
   （2026-10-31：此前「暂停自动推送」的临时规则已由用户取消，恢复双端推送。）
 - **提交粒度仍见下节**：自动提交 ≠ 碎片提交 —— 同一轮的 docs/chore 小改合并成一条，避免历史被格式/文档噪音刷屏。
 - **推送后不要等 CI**：提交推送完成即结束本轮，**禁止**轮询 / 等待 / 查询 GitHub Actions 结果（不调 CI 接口、不 `sleep` 等结果）。CI 是否通过由用户在 GitHub 上查看；若失败，用户会把错误信息贴回来，届时再修。
+- **`backend/model_configs.json` 的运行时 diff**：该文件已入库，但界面上改模型参数/超时会被后端重写。
+  提交前用 `git diff backend/model_configs.json` 自查——**只提交有意修改的默认值**，运行时产生的改动
+  `git checkout -- backend/model_configs.json` 丢掉（2026-11-01 决定：接受 diff + 人工确认，
+  不迁 `model_configs.local.json`；见 `docs/ops/运行产物与实验数据管理.md` §8.3）。
 - **TODO 维护**：完成 TODO.md 中某个功能后，自动删除对应的文档条目（章节标题 + 描述 + 方案 + 涉及模块等完整内容），保持 TODO.md 仅包含未完成项。
 ```
 

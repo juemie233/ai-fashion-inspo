@@ -107,5 +107,13 @@ web/playwright-report/
 prompt_configs.json
 backend/prompt_configs.json
 
-# 换姿势/R2 实验对比图只在本地保留，不推送远程（用户 2026-10-31 要求；原图在 storage/poc）
+# 实验图一律不入库：对比图/截图放 STORAGE_ROOT/poc/（见 docs/ops/运行产物与实验数据管理.md §8.2）
+# 早期只挡了 docs 根目录（docs/*.jpg），docs/pose/*.jpg 这类子目录的图会被误提交；
+# gitignore 不支持 {a,b} 花括号展开，只能逐条列扩展名。
+# 例外：确实需要入库的示意图，用 `git add -f <文件>` 并在提交信息里说明理由。
 docs/*.jpg
+docs/**/*.jpg
+docs/**/*.jpeg
+docs/**/*.png
+docs/**/*.webp
+docs/**/*.gif
