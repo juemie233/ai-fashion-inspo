@@ -23,11 +23,16 @@ const props = defineProps<{
   visible: boolean
   /** 当前已选姿势 id（打开时高亮；空串=未选） */
   selectedId?: string
+  /** 多选模式（云端 Seedream 一次选多个姿态） */
+  multiple?: boolean
+  /** 多选模式打开时已选的姿势 id */
+  selectedIds?: string[]
 }>()
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
   (e: 'select', pose: PoseItem): void
+  (e: 'selectMultiple', poses: PoseItem[]): void
 }>()
 
 /** 每页张数：40 张 5 列 ≈ 8 行，一屏能看两页的量 */
@@ -40,6 +45,10 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
 const page = ref(1)
+/** 多选模式：按选择顺序保存（选满 maxSelect 后不再加） */
+const multiSelected = ref<PoseItem[]>([])
+const multiIds = ref<string[]>([])
+const MAX_SELECT = 10
 const hasMore = ref(false)
 const total = ref(0)
 
@@ -70,6 +79,8 @@ watch(
     system.value = ''
     category.value = ''
     angle.value = ''
+    multiIds.value = (props.selectedIds ?? []).slice(0, MAX_SELECT)
+    multiSelected.value = []
     void loadMeta()
     void load(1)
   },
@@ -135,7 +146,29 @@ function onFilterChange(): void {
 }
 
 function onSelect(pose: PoseItem): void {
+  if (props.multiple) {
+    if (multiIds.value.includes(pose.id)) {
+      multiIds.value = multiIds.value.filter((id) => id !== pose.id)
+      multiSelected.value = multiSelected.value.filter((p) => p.id !== pose.id)
+    } else if (multiIds.value.length >= MAX_SELECT) {
+      Message.warning(`最多选择 ${MAX_SELECT} 个姿态`)
+      return
+    } else {
+      multiIds.value = [...multiIds.value, pose.id]
+      multiSelected.value = [...multiSelected.value, pose]
+    }
+    return
+  }
   emit('select', pose)
+  emit('update:visible', false)
+}
+
+function confirmMulti(): void {
+  if (!multiSelected.value.length) {
+    Message.warning('请至少选择 1 个姿态')
+    return
+  }
+  emit('selectMultiple', multiSelected.value.slice())
   emit('update:visible', false)
 }
 </script>
@@ -200,7 +233,7 @@ function onSelect(pose: PoseItem): void {
           :key="pose.id"
           type="button"
           class="pose-card"
-          :class="{ 'is-selected': pose.id === selectedId }"
+          :class="{ 'is-selected': multiple ? multiIds.includes(pose.id) : pose.id === selectedId }"
           :title="`${pose.name} · ${pose.angle}`"
           @click="onSelect(pose)"
         >
@@ -213,6 +246,11 @@ function onSelect(pose: PoseItem): void {
 
     <div v-if="hasMore && !loading" class="pose-more">
       <a-button size="small" :loading="loadingMore" @click="load(page + 1)">加载更多</a-button>
+    </div>
+
+    <div v-if="multiple" class="pose-multi-bar">
+      <span>已选 {{ multiIds.length }}/{{ MAX_SELECT }} 个姿态</span>
+      <a-button type="primary" size="small" @click="confirmMulti">确定选择</a-button>
     </div>
   </a-modal>
 </template>
@@ -310,5 +348,17 @@ function onSelect(pose: PoseItem): void {
   .pose-grid {
     grid-template-columns: repeat(3, 1fr);
   }
+}
+</style>
+
+<style scoped>
+.pose-multi-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-2);
+  font-size: 13px;
 }
 </style>

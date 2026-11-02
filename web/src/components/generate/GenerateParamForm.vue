@@ -68,6 +68,8 @@ export interface RunPayload {
 const emit = defineEmits<{
   /** 提交生成：面板把参数拼好后交给视图，由 useImageGen 提交 */
   (e: 'submit', payload: CreateRunPayload): void
+  /** 云端多姿态：一次提交 N 个独立批次（每个姿态一个 run） */
+  (e: 'submitBatch', payloads: CreateRunPayload[]): void
   (e: 'cancel'): void
   /** 参考图 id 变化（视图据此刷新缩略图；空数组=已清空） */
   (e: 'reference-ids-change', ids: string[]): void
@@ -325,7 +327,23 @@ const CLOUD_SIZE_PRESETS = [
 ]
 const cloudSize = ref('1536x2048')
 const cloudWatermark = ref(false)
-const cloudCost = computed(() => (isArk.value ? (currentModel.value?.costPerImage ?? 0.12) : 0))
+const cloudPoses = ref<PoseItem[]>([])
+const MAX_CLOUD_POSES = 10
+const cloudCost = computed(() =>
+  isArk.value
+    ? Math.max(1, cloudPoses.value.length) * (currentModel.value?.costPerImage ?? 0.12)
+    : 0,
+)
+
+function onCloudPosesSelected(poses: PoseItem[]): void {
+  cloudPoses.value = poses.slice(0, MAX_CLOUD_POSES)
+  selectedPose.value = cloudPoses.value[0] ?? null
+}
+
+function removeCloudPose(id: string): void {
+  cloudPoses.value = cloudPoses.value.filter((p) => p.id !== id)
+  if (selectedPose.value?.id === id) selectedPose.value = cloudPoses.value[0] ?? null
+}
 
 // 云端档位固定 i2i + 1 张；切到云端时强制线稿模式并重置张数
 watch(isArk, (ark) => {
@@ -587,14 +605,14 @@ const canSubmit = computed(
     !props.active &&
     modelReady.value &&
     (isArk.value
-      ? !!selectedPose.value && refIdsList.value.length === 1
+      ? cloudPoses.value.length >= 1 && refIdsList.value.length === 1
       : kind.value === 't2i' || refCountOk.value),
 )
 
 // ── 云端隐私确认（每个浏览器会话一次；不做永久同意）──
 const privacyVisible = ref(false)
 const privacyAgree = ref(false)
-const pendingPayload = ref<CreateRunPayload | null>(null)
+const pendingPayloads = ref<CreateRunPayload[]>([])
 const ARK_PRIVACY_KEY = 'fashion-inspo:ark-upload-confirmed'
 
 function needsPrivacyConfirm(): boolean {
@@ -614,9 +632,10 @@ function confirmPrivacy(): void {
     /* 隐私模式忽略 */
   }
   privacyVisible.value = false
-  const payload = pendingPayload.value
-  pendingPayload.value = null
-  if (payload) emit('submit', payload)
+  const payloads = pendingPayloads.value
+  pendingPayloads.value = []
+  if (payloads.length === 1) emit('submit', payloads[0])
+  else if (payloads.length > 1) emit('submitBatch', payloads)
 }
 
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
@@ -624,15 +643,15 @@ const activePreset = computed(() => sizePresets.find((p) => p.value === size.val
 function onSubmit() {
   if (!isArk.value && !prompt.value.trim()) return
   if (isArk.value) {
-    if (!selectedPose.value) {
-      Message.warning('云端出图需要先从姿势图库选择 1 个姿态')
+    if (cloudPoses.value.length === 0) {
+      Message.warning('云端出图需要先从姿势图库选择至少 1 个姿态')
       return
     }
     if (refIdsList.value.length !== 1) {
       Message.warning('云端出图一期需要恰好 1 张素材图作参考')
       return
     }
-    const payload: CreateRunPayload = {
+    const payloads: CreateRunPayload[] = cloudPoses.value.map((pose) => ({
       kind: 'i2i',
       prompt: prompt.value.trim() || '按图2姿势重新拍摄，保持图1人物长相与服装不变',
       count: 1,
@@ -640,17 +659,18 @@ function onSubmit() {
       seed: 0,
       model_key: modelKey.value,
       reference_ids: refIdsList.value,
-      pose_id: selectedPose.value.id,
+      pose_id: pose.id,
       size: cloudSize.value,
       watermark: cloudWatermark.value,
-    }
+    }))
     if (needsPrivacyConfirm()) {
-      pendingPayload.value = payload
+      pendingPayloads.value = payloads
       privacyAgree.value = false
       privacyVisible.value = true
       return
     }
-    emit('submit', payload)
+    if (payloads.length === 1) emit('submit', payloads[0])
+    else emit('submitBatch', payloads)
     return
   }
   // 姿势两种方式各自要求对应档位：文字=文生图；线稿=图生图且至少 1 张主体参考
@@ -823,8 +843,25 @@ onMounted(() => {
     </div>
   </div>
 
-  <!-- 姿势参考（换姿势）：默认文生图（姿势写进描述），可选线稿参考（图生图） -->
-  <div class="gen-pose">
+  <!-- 云端 Seedream：多姿态选择 -->
+  <div v-if="isArk" class="gen-pose">
+    <div class="gen-row">
+      <a-button @click="posePickerVisible = true">选择多个姿势（≤10）</a-button>
+      <span class="gen-hint">已选 {{ cloudPoses.length }} / 10 个姿态；每个姿态独立计费</span>
+    </div>
+    <div v-if="cloudPoses.length" class="gen-pose-cards">
+      <div v-for="pose in cloudPoses" :key="pose.id" class="gen-pose-card">
+        <img :src="pose.thumb_url" :alt="pose.name" loading="lazy" />
+        <div class="gen-pose-meta">
+          <div class="gen-pose-name">{{ pose.name }} · {{ pose.angle }}</div>
+          <a-button size="mini" type="text" @click="removeCloudPose(pose.id)">移除</a-button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 本地/线稿姿势参考：默认文生图（姿势写进描述），可选线稿参考（图生图） -->
+  <div v-if="!isArk" class="gen-pose">
     <div class="gen-row">
       <a-button @click="posePickerVisible = true">
         {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
@@ -972,7 +1009,10 @@ onMounted(() => {
   <PosePickerModal
     v-model:visible="posePickerVisible"
     :selected-id="selectedPose?.id"
+    :multiple="isArk"
+    :selected-ids="cloudPoses.map((p) => p.id)"
     @select="onPoseSelected"
+    @select-multiple="onCloudPosesSelected"
   />
 
   <a-modal
@@ -993,6 +1033,14 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 云端多姿态：横向卡片列表 */
+.gen-pose-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 /* 姿势参考卡片：缩略图 + 名称/角度（选中后显示，避免只留一个 id） */
 .gen-pose {
   margin: 4px 0 10px;

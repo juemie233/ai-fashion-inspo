@@ -275,7 +275,7 @@ const POSE_FIXTURE = {
 const PosePickerStub = {
   name: 'PosePickerModal',
   props: ['visible', 'selectedId'],
-  emits: ['update:visible', 'select'],
+  emits: ['update:visible', 'select', 'selectMultiple'],
   template: '<div class="pose-picker-stub" />',
 }
 
@@ -554,6 +554,40 @@ describe('云端 Seedream 档位', () => {
     expect(wrapper.text()).toContain('加水印')
     // 本地档位的负向描述输入框在云端档位下隐藏（步数文字仍可能来自一键出图面板，不能按全文断言）
     expect(wrapper.find('input[placeholder*="例：模糊"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('多选姿态后一次提交多个云端批次（每姿态一个 payload）', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: CLOUD_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        initialModelKey: 'seedream_5_0_flash',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+    const second = { ...POSE_FIXTURE, id: 'full_std_P002_front', name: '第二个姿势' }
+    wrapper
+      .findComponent({ name: 'PosePickerModal' })
+      .vm.$emit('selectMultiple', [POSE_FIXTURE, second])
+    await flushPromises()
+    expect(wrapper.text()).toContain('已选 2 / 10 个姿态')
+
+    sessionStorage.setItem('fashion-inspo:ark-upload-confirmed', '1')
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成 1 张'))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+
+    const payloads = wrapper.emitted('submitBatch')?.[0]?.[0] as Array<Record<string, unknown>>
+    expect(payloads).toHaveLength(2)
+    expect(payloads.map((p) => p.pose_id)).toEqual([POSE_FIXTURE.id, second.id])
+    expect(payloads[0].model_key).toBe('seedream_5_0_flash')
     wrapper.unmount()
   })
 })

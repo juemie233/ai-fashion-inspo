@@ -163,6 +163,46 @@ export function useImageGen() {
     }
   }
 
+  /** 云端多姿态：每个姿态一个独立 run，最多 2 并发（控制方舟 429）。
+   *
+   * 与单次 submit 的区别：不覆盖正在展示的批次，只在全部结束后展示最后一个成功批次；
+   * 失败项列在提示里，用户可单独重试；已成功的不会重复提交。
+   */
+  async function submitBatch(
+    payloads: CreateRunPayload[],
+  ): Promise<{ succeeded: number; failed: number }> {
+    submitting.value = true
+    selected.value = new Set()
+    const succeeded: Array<{ run_id: number; seed: number }> = []
+    const failures: string[] = []
+    try {
+      for (let i = 0; i < payloads.length; i += 2) {
+        const chunk = payloads.slice(i, i + 2)
+        const results = await Promise.allSettled(chunk.map((payload) => createRun(payload)))
+        results.forEach((result) => {
+          if (result.status === 'fulfilled') succeeded.push(result.value)
+          else failures.push(getApiErrorMessage(result.reason, '提交失败'))
+        })
+      }
+      if (succeeded.length > 0) {
+        const last = succeeded[succeeded.length - 1]
+        runId.value = last.run_id
+        lastSeed.value = last.seed
+        detail.value = await fetchRun(last.run_id)
+        startPoll()
+        Message.success(`已提交 ${succeeded.length} 个云端批次，正在逐个生成`)
+      }
+      if (failures.length > 0) {
+        Message.error(
+          `${failures.length} 个批次提交失败：${failures[0]}${failures.length > 1 ? '（等）' : ''}`,
+        )
+      }
+      return { succeeded: succeeded.length, failed: failures.length }
+    } finally {
+      submitting.value = false
+    }
+  }
+
   async function submit(payload: CreateRunPayload): Promise<number | null> {
     submitting.value = true
     selected.value = new Set()
@@ -411,6 +451,7 @@ export function useImageGen() {
     // 动作
     loadStatus,
     submit,
+    submitBatch,
     toggle,
     selectAll,
     clearSelection,

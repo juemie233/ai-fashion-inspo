@@ -78,6 +78,45 @@ describe('useImageGen', () => {
     success.mockRestore()
   })
 
+  it('submitBatch 按每个姿态建独立批次，返回成功/失败数', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: seq, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockResolvedValue(RUN_DETAIL)
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const gen = useImageGen()
+    const out = await gen.submitBatch([
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p1' },
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p3' },
+    ])
+    expect(out).toEqual({ succeeded: 3, failed: 0 })
+    expect(mocks.createRun).toHaveBeenCalledTimes(3)
+    expect(gen.runId.value).toBe(103)
+    expect(success).toHaveBeenCalled()
+    success.mockRestore()
+  })
+
+  it('submitBatch 部分失败时保留成功批次并提示失败数', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      if (seq === 2) throw new Error('方舟限流')
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: seq, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockResolvedValue(RUN_DETAIL)
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const error = vi.spyOn(Message, 'error').mockImplementation((() => {}) as never)
+    const gen = useImageGen()
+    const out = await gen.submitBatch([{ prompt: 'x' }, { prompt: 'x' }, { prompt: 'x' }])
+    expect(out).toEqual({ succeeded: 2, failed: 1 })
+    expect(error).toHaveBeenCalled()
+    success.mockRestore()
+    error.mockRestore()
+  })
+
   it('阶段文案覆盖「等待显存」与失败原因（前端要能解释在等什么）', async () => {
     mocks.fetchRun.mockResolvedValue({
       run: { ...RUN_DETAIL.run, status: 'waiting_vram' },

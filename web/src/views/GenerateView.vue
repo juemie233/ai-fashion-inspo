@@ -71,6 +71,7 @@ const {
   setHistoryFilters,
   loadStatus,
   submit,
+  submitBatch,
   toggle,
   selectAll,
   clearSelection,
@@ -414,6 +415,7 @@ onUnmounted(stopPoll)
           :prompt-from="promptFrom"
           :reference-items="referenceItems"
           @submit="submit"
+          @submit-batch="submitBatch"
           @cancel="cancel"
           @reference-ids-change="onReferenceIdsChange"
           @browse-references="openReferenceGallery"
