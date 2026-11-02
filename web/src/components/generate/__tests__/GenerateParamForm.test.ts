@@ -552,6 +552,8 @@ describe('云端 Seedream 档位', () => {
     expect(wrapper.text()).toContain('云端')
     expect(wrapper.text()).toContain('本次云端预计费用')
     expect(wrapper.text()).toContain('加水印')
+    // 云端档位不显示「性感系 399 姿势轮播」的一键出图，避免误触后队列空转
+    expect(wrapper.text()).not.toContain('一键出图')
     // 本地档位的负向描述输入框在云端档位下隐藏（步数文字仍可能来自一键出图面板，不能按全文断言）
     expect(wrapper.find('input[placeholder*="例：模糊"]').exists()).toBe(false)
     wrapper.unmount()

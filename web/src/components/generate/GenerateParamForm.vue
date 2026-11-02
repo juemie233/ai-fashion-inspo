@@ -471,6 +471,9 @@ async function onQuickRun(payload: {
   steps: number
   round: number
 }): Promise<void> {
+  // 云端 Seedream 不走「性感系 399 姿势轮播」：它需要用户显式多选姿势，
+  // 且每次只出 1 张（无 seed/多张概念）。误触时直接忽略，避免队列空转报失败。
+  if (isArk.value) return
   count.value = payload.count
   steps.value = payload.steps
   selectedPose.value = payload.pose
@@ -896,8 +899,10 @@ onMounted(() => {
     </div>
   </div>
 
-  <!-- 一键出图：按「性感系 399」顺序轮播姿势，可连续多次；参数只有每次张数/步数/连续次数 -->
+  <!-- 一键出图：按「性感系 399」顺序轮播姿势，可连续多次；参数只有每次张数/步数/连续次数
+       云端 Seedream 走「选择多个姿势」的独立流程，这里隐藏，避免误触后队列空转 -->
   <QuickPoseBatchPanel
+    v-if="!isArk"
     :platform-ready="ready"
     :model-ready="quickModelReady"
     :pose-mode="poseMode"
