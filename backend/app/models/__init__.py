@@ -19,6 +19,7 @@ from app.models.person import (
 from app.models.face import BloggerFaceEmbedding, InspirationFaceDetection
 from app.models.scraper import ScraperSchedule, ScraperTask
 from app.models.task import PendingVectorBackfill, TaskQueue
+from app.models.task_run_log import TaskRunLog
 from app.models.audit import AuditLog
 from app.models.tag_history import TagHistory
 from app.models.tag_correction import TagCorrection
@@ -48,6 +49,7 @@ __all__ = [
     "ScraperSchedule",
     "TaskQueue",
     "PendingVectorBackfill",
+    "TaskRunLog",
     "AuditLog",
     "TagHistory",
     "TagCorrection",

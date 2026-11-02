@@ -14,9 +14,12 @@ worker 与 API 之间通过 task_queue 表解耦。
 import asyncio
 import logging
 import os
+import subprocess
 import time
 import uuid
 from datetime import timedelta
+from functools import lru_cache
+from pathlib import Path
 
 from sqlalchemy import and_, case, delete, or_, select, update
 from sqlalchemy.exc import OperationalError
@@ -27,6 +30,7 @@ from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.task import TaskQueue
+from app.models.task_run_log import TaskRunLog
 from app.services.task_runner import (
     PermanentTaskError,
     RecoverableTaskError,
@@ -35,6 +39,7 @@ from app.services.task_runner import (
     _is_recoverable_error,
     _schedule_retry,
 )
+from app.utils.daily_log import DailyFileHandler
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -175,6 +180,113 @@ async def _claim_next_task(worker_id: str) -> int | None:
         return task_id
 
 
+"""任务运行台账日志目录（与 supervisor 的 logs/ 同级）。"""
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+
+
+@lru_cache(maxsize=1)
+def _gpu_model() -> str | None:
+    """探测显卡型号（只探一次）；没有 nvidia-smi/多卡时返回 None，不猜。"""
+    override = os.environ.get("GPU_MODEL", "").strip()
+    if override:
+        return override[:128]
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode == 0:
+            names = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+            if names:
+                return "; ".join(dict.fromkeys(names))[:128]
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+async def _start_run_log(db: AsyncSession, task: TaskQueue) -> int | None:
+    """任务开始：写一条运行台账（started_at + GPU + attempt）。
+
+    独立提交：即使 handler 随后失败/回滚，这条「开始过」的记录仍在，
+    进程崩溃时也能看出哪次执行没有结束。
+    """
+    try:
+        row = TaskRunLog(
+            task_id=task.id,
+            task_type=task.type,
+            attempt=int(task.retry_count or 0),
+            started_at=utcnow(),
+            item_count=0,
+            total_count=int(task.total or 0),
+            status="running",
+            gpu_model=await asyncio.to_thread(_gpu_model),
+        )
+        db.add(row)
+        await db.commit()
+        logger.info(
+            "任务开始: #%s (%s) total=%s attempt=%s gpu=%s",
+            task.id,
+            task.type,
+            task.total,
+            task.retry_count,
+            row.gpu_model or "unknown",
+        )
+        return row.id
+    except Exception as exc:  # noqa: BLE001 —— 台账失败不能阻断任务执行
+        logger.warning("写任务运行台账失败（忽略）: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+async def _finish_run_log(
+    db: AsyncSession,
+    run_log_id: int | None,
+    *,
+    status: str,
+    item_count: int,
+    error: str | None = None,
+) -> None:
+    """任务结束：补 finished_at / 状态 / 实际张数。"""
+    if run_log_id is None:
+        return
+    try:
+        row = await db.get(TaskRunLog, run_log_id)
+        if row is None:
+            return
+        row.finished_at = utcnow()
+        row.status = status
+        row.item_count = int(item_count or 0)
+        row.error = (error or "")[:2000] or None
+        await db.commit()
+        seconds = (
+            (row.finished_at - row.started_at).total_seconds()
+            if row.started_at and row.finished_at
+            else 0
+        )
+        logger.info(
+            "任务结束: #%s (%s) status=%s done=%s/%s elapsed=%.1fs gpu=%s",
+            row.task_id,
+            row.task_type,
+            status,
+            row.item_count,
+            row.total_count,
+            seconds,
+            row.gpu_model or "unknown",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("写任务运行台账收尾失败（忽略）: %s", exc)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def _reload_for_failure(
     db: AsyncSession, task_id: int
 ) -> TaskQueue | None:
@@ -216,6 +328,8 @@ async def _run_task(task_id: int) -> None:
 
         # 广播「开始执行」事件（安全入口，无 WS 连接时静默降级）
         await _broadcast_task_event(task, "running")
+        # 运行台账：开始时间 / GPU 型号（结束时间在终态补）
+        run_log_id = await _start_run_log(db, task)
 
         try:
             handler = TASK_HANDLERS.get(task.type)
@@ -231,12 +345,22 @@ async def _run_task(task_id: int) -> None:
                 # 外部已置为 cancelled：补一次终态广播（paused 不在事件契约内，不广播）
                 if task.status == "cancelled":
                     await _broadcast_task_event(task, "cancelled", error=task.error)
+                await _finish_run_log(
+                    db,
+                    run_log_id,
+                    status=task.status,
+                    item_count=task.done,
+                    error=task.error,
+                )
                 return
             task.status = "success"
             task.progress = 100
             task.error = None
             task.next_retry_at = None
             await db.commit()
+            await _finish_run_log(
+                db, run_log_id, status="success", item_count=task.done
+            )
             await _broadcast_task_event(task, "success")
             logger.info(f"任务完成: #{task.id} ({task.type})")
         except RecoverableTaskError as e:
@@ -246,6 +370,9 @@ async def _run_task(task_id: int) -> None:
                 return
             await _schedule_retry(db, task, str(e))
             await db.commit()
+            await _finish_run_log(
+                db, run_log_id, status="retry", item_count=task.done, error=str(e)
+            )
         except PermanentTaskError as e:
             task = await _reload_for_failure(db, task_id)
             if task is None:
@@ -255,6 +382,9 @@ async def _run_task(task_id: int) -> None:
             task.next_retry_at = None
             logger.error(f"任务失败（永久错误，不重试）: #{task.id} ({task.type}): {e}")
             await db.commit()
+            await _finish_run_log(
+                db, run_log_id, status="failed", item_count=task.done, error=str(e)
+            )
             await _broadcast_task_event(task, "failed", error=str(e))
         except Exception as e:
             task = await _reload_for_failure(db, task_id)
@@ -269,6 +399,13 @@ async def _run_task(task_id: int) -> None:
                 task.next_retry_at = None
                 logger.error(f"任务失败: #{task.id} ({task.type}): {msg}")
             await db.commit()
+            await _finish_run_log(
+                db,
+                run_log_id,
+                status="failed" if task.status == "failed" else "retry",
+                item_count=task.done,
+                error=msg,
+            )
             # 仅真正进入 failed 终态时广播；重试回 pending 不广播
             if task.status == "failed":
                 await _broadcast_task_event(task, "failed", error=msg)
@@ -453,12 +590,24 @@ async def _flush_pending_backfills_on_startup() -> None:
             logger.warning(f"启动时清理/回填遗留任务失败（忽略，不影响 worker 启动）: {e}")
 
 
-async def main() -> None:
-    """worker 入口：确保表结构、重置遗留任务后启动主循环与心跳循环。"""
+def _setup_logging() -> None:
+    """控制台 + 按天切分的 `logs/analyze-YYYY-MM-DD.log`（批处理留痕用）。"""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    root = logging.getLogger()
+    if not any(isinstance(handler, DailyFileHandler) for handler in root.handlers):
+        handler = DailyFileHandler(_LOG_DIR, prefix="analyze")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        root.addHandler(handler)
+
+
+async def main() -> None:
+    """worker 入口：确保表结构、重置遗留任务后启动主循环与心跳循环。"""
+    _setup_logging()
     # 关闭 SQLAlchemy 引擎的 SQL 日志（debug 模式下每秒轮询会刷屏）
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     # 注意：worker 不跑 Alembic 迁移，由服务端进程（app.main）统一负责。

@@ -103,6 +103,9 @@ async def test_create_seedream_rejects_bad_params(client, upload, fake_cloud):
 
 
 async def test_cloud_disabled_hides_model_and_rejects_run(client, upload, monkeypatch):
+    # 本机 .env 可能已配置 ARK_ENABLED=true；这个用例专门验证关闭态
+    monkeypatch.setattr(settings, "ark_enabled", False)
+    monkeypatch.setattr(settings, "ark_api_key", "")
     insp = upload().json()["id"]
     models = client.get("/api/generate/models").json()["items"]
     assert all(item["key"] != "seedream_5_0_flash" for item in models)
