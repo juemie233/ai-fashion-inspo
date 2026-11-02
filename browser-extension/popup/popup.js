@@ -14,6 +14,12 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const uploadOverlay = document.getElementById('uploadOverlay');
 const uploadProgressText = document.getElementById('uploadProgressText');
+// 调试日志（P2-4）：service worker 关键失败写在 session 环形缓冲，这里查看/复制
+const debugModeInput = document.getElementById('debugMode');
+const debugLogBox = document.getElementById('debugLogBox');
+const showDebugLogBtn = document.getElementById('showDebugLogBtn');
+const copyDebugLogBtn = document.getElementById('copyDebugLogBtn');
+const clearDebugLogBtn = document.getElementById('clearDebugLogBtn');
 
 // 状态
 let imageList = [];
@@ -62,6 +68,7 @@ async function loadSettings() {
       document.getElementById('autoAnalyze').checked = settings.autoAnalyze !== false;
       skipDuplicates = settings.skipDuplicates !== false;
       document.getElementById('skipDuplicates').checked = skipDuplicates;
+      debugModeInput.checked = settings.debugMode === true;
     }
   } catch (err) {
     // service worker 冷启动 / 未就绪时 sendMessage 可能失败：用默认值，不抛异常
@@ -300,9 +307,10 @@ function setupEventListeners() {
     const apiUrl = document.getElementById('apiUrl').value;
     const autoAnalyze = document.getElementById('autoAnalyze').checked;
     skipDuplicates = document.getElementById('skipDuplicates').checked;
+    const debugMode = debugModeInput.checked;
     await chrome.runtime.sendMessage({
       type: 'SAVE_SETTINGS',
-      settings: { apiUrl, autoAnalyze, skipDuplicates },
+      settings: { apiUrl, autoAnalyze, skipDuplicates, debugMode },
     });
     settingsPanel.classList.add('hidden');
     checkConnection();
@@ -313,5 +321,36 @@ function setupEventListeners() {
       });
     }
     renderImages();
+  });
+
+  // ── 调试日志（P2-4）──────────────────────────────────────────────
+  showDebugLogBtn.addEventListener('click', async () => {
+    if (!debugLogBox.classList.contains('hidden')) {
+      debugLogBox.classList.add('hidden');
+      return;
+    }
+    const response = await chrome.runtime.sendMessage({ type: 'GET_DEBUG_LOGS' });
+    const logs = (response && response.logs) || [];
+    debugLogBox.textContent = logs.length
+      ? logs.join('\n')
+      : '暂无调试日志（service worker 的关键失败会记录在这里）';
+    debugLogBox.classList.remove('hidden');
+  });
+
+  copyDebugLogBtn.addEventListener('click', async () => {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_DEBUG_LOGS' });
+    const logs = (response && response.logs) || [];
+    const text = logs.length ? logs.join('\n') : '暂无调试日志';
+    try {
+      await navigator.clipboard.writeText(text);
+      statusText.textContent = '调试日志已复制';
+    } catch {
+      statusText.textContent = '复制失败，请展开日志手动选择';
+    }
+  });
+
+  clearDebugLogBtn.addEventListener('click', async () => {
+    await chrome.runtime.sendMessage({ type: 'CLEAR_DEBUG_LOGS' });
+    debugLogBox.textContent = '调试日志已清空';
   });
 }

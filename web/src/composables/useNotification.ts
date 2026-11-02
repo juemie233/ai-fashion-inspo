@@ -1,15 +1,16 @@
 /** 浏览器桌面通知 composable：请求权限、发送通知、失败告警。 */
 
 import { ref } from 'vue'
+import { logger } from '@/utils/logger'
 
 /** 通知权限状态——从浏览器当前状态初始化 */
-const _initial = ('Notification' in window) ? Notification.permission : 'default'
+const _initial = 'Notification' in window ? Notification.permission : 'default'
 const permission = ref<NotificationPermission>(_initial)
 
 /** 请求通知权限（首次调用时浏览器会弹出授权对话框） */
 async function requestPermission(): Promise<boolean> {
   if (!('Notification' in window)) {
-    console.warn('浏览器不支持 Notification API')
+    logger.warn('浏览器不支持 Notification API')
     return false
   }
   if (permission.value === 'granted') return true
@@ -37,11 +38,7 @@ async function requestAndNotify(title: string, options?: NotificationOptions) {
 }
 
 /** 失败率告警：当队列失败数超过阈值时发送 */
-function checkFailureAlert(
-  failed: number,
-  total: number,
-  threshold: number = 0.3,
-) {
+function checkFailureAlert(failed: number, total: number, threshold: number = 0.3) {
   if (total === 0) return
   const rate = failed / total
   if (rate >= threshold) {

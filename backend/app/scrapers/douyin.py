@@ -76,12 +76,13 @@ class DouyinScraper(BaseScraper):
                             platform=self.platform, platform_id=platform_id,
                             url=href, image_urls=[img_src] if img_src else [],
                         ))
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("_search: 忽略异常（预期降级）：%s", exc)
                         continue
 
                 logger.info(f"抖音找到 {len(results)} 条结果")
             except Exception as e:
-                logger.error(f"抖音搜索失败: {e}")
+                logger.exception(f"抖音搜索失败: {e}")
             return results
 
         return await asyncio.to_thread(_search)
@@ -98,7 +99,8 @@ class DouyinScraper(BaseScraper):
             return {}
         try:
             return {c["name"]: c for c in self._context.cookies()}
-        except Exception:
+        except Exception as exc:
+            logger.debug("cookies: 忽略异常（预期降级）：%s", exc)
             return {}
 
     async def close(self) -> None:
@@ -108,6 +110,7 @@ class DouyinScraper(BaseScraper):
                     self._browser.close()
                 if self._pw:
                     self._pw.stop()
-            except Exception:
+            except Exception as exc:
+                logger.debug("_close: 忽略异常（预期降级）：%s", exc)
                 pass
         await asyncio.to_thread(_close)

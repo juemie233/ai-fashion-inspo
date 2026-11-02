@@ -30,7 +30,7 @@ def async_performance_monitor(func_name: str = None):
                 return result
             except Exception as e:
                 execution_time = time.time() - start_time
-                logger.error(f"{func_name or func.__name__} 执行失败，耗时: {execution_time:.3f}s, 错误: {e}")
+                logger.exception(f"{func_name or func.__name__} 执行失败，耗时: {execution_time:.3f}s, 错误: {e}")
                 raise
 
         @wraps(func)
@@ -43,7 +43,7 @@ def async_performance_monitor(func_name: str = None):
                 return result
             except Exception as e:
                 execution_time = time.time() - start_time
-                logger.error(f"{func_name or func.__name__} 执行失败，耗时: {execution_time:.3f}s, 错误: {e}")
+                logger.exception(f"{func_name or func.__name__} 执行失败，耗时: {execution_time:.3f}s, 错误: {e}")
                 raise
 
         # 判断是否是异步函数
@@ -90,7 +90,7 @@ class BatchProcessor:
                     results[index] = result
                     return result
                 except Exception as e:
-                    logger.error(f"任务 {index} 失败: {e}")
+                    logger.exception(f"任务 {index} 失败: {e}")
                     results[index] = None
                     return None
 

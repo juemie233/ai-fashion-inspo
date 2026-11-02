@@ -2,6 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { logger } from '@/utils/logger'
 import {
   fetchInspirations,
   fetchInspiration,
@@ -83,7 +84,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
       page.value = result.page
     } catch (e) {
       if (seq !== _requestSeq) return
-      console.error('加载素材列表失败', e)
+      logger.error('加载素材列表失败', e)
     } finally {
       if (seq === _requestSeq) loading.value = false
     }
@@ -121,7 +122,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
       page.value = result.page
     } catch (e) {
       if (seq !== _requestSeq) return
-      console.error('加载更多失败', e)
+      logger.error('加载更多失败', e)
     } finally {
       if (seq === _requestSeq) loading.value = false
     }
@@ -132,7 +133,7 @@ export const useInspirationsStore = defineStore('inspirations', () => {
     try {
       currentDetail.value = await fetchInspiration(id)
     } catch (e) {
-      console.error('加载素材详情失败', e)
+      logger.error('加载素材详情失败', e)
     }
   }
 

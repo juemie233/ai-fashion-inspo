@@ -4,12 +4,20 @@ import asyncio
 import hmac
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+
+from app.logging_config import (
+    request_id_var,
+    setup_logging,
+    setup_uvicorn_access_log,
+)
 
 from app.services.person.base import (
     PersonConflictError,
@@ -127,6 +135,11 @@ async def _scraper_schedule_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用启动与关闭事件处理。"""
+    # 日志最先初始化：uvicorn 自己的 configure_logging 只配 uvicorn.*、不配 root，
+    # 不在这里补 root handler 的话 app.* 的业务日志会被静默丢弃（P0-1）。
+    setup_logging("api")
+    setup_uvicorn_access_log()
+
     # 安全护栏：绑定非回环地址（0.0.0.0 / 局域网 IP）时，破坏性接口（物理删除、
     # 清空垃圾桶、数据重置等）在未配置 API_KEY 的情况下会对所有能访问该地址的
     # 客户端无鉴权开放。此处仅强烈告警而非强制中断，避免破坏现有部署；生产或
@@ -231,7 +244,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         task.cancel()
         try:
             await task
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            logger.debug("lifespan: 忽略异常（预期降级）：%s", exc)
             pass
     logger.info("正在关闭...")
 
@@ -279,6 +293,52 @@ async def destructive_api_key_middleware(
             status_code=403, content={"detail": "API 密钥无效"}
         )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def request_context_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """请求关联 ID + 慢请求记账 + 未处理异常的堆栈（P0-2 / P1-3）。
+
+    - 每请求生成 ``request_id``（优先复用调用方传入的 ``X-Request-ID``），写进
+      contextvar，日志格式里的 ``req=`` 自动带上；响应头回传，便于前端把用户
+      看到的报错与 backend.log 对上；
+    - 慢请求（> ``settings.slow_request_ms``）记一条 WARNING：uvicorn 的访问
+      日志不再记 2xx，慢请求靠这条可见；
+    - 未处理异常：先用带 request_id 的 ``logger.exception`` 落完整堆栈，再返回
+      统一 ``{"detail": ...}`` 500（不让 uvicorn 再打一遍重复 traceback）。
+
+    为什么中间件里自己兜 500：Starlette 的 ``ServerErrorMiddleware`` 在用户
+    中间件之外，异常一路抛出去后 request_id 上下文已经被 reset，堆栈日志里就
+    没有关联 ID；在这里截住才能保证「日志里的堆栈」和「前端拿到的 ID」对应。
+    """
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex[:12]
+    request.state.request_id = request_id
+    token = request_id_var.set(request_id)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms >= settings.slow_request_ms:
+            logger.warning(
+                "慢请求 %s %s -> %s（%.0fms）",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+            )
+    except Exception:  # noqa: BLE001 —— 全局兜底，日志留堆栈后返回统一 500
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        logger.exception(
+            "未处理异常 %s %s（%.0fms）", request.method, request.url.path, elapsed_ms
+        )
+        response = JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
+    finally:
+        request_id_var.reset(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 # ── 人物模块的领域异常 → HTTP 状态码（集中一处，路由层不再逐处转译）──
 # 这三个异常此前在每个路由里被 try/except 手工翻译成 404/409/400（29 处样板，顺带带来

@@ -14,6 +14,7 @@ f2_import 上的同名属性依然生效。
 import logging
 
 import asyncio
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -68,9 +69,49 @@ def _soft_fraction(elapsed: float) -> float:
     return elapsed / (elapsed + _SOFT_PROGRESS_HALF_SECONDS)
 
 
+def _tail_lines(path: Path, count: int = 20) -> str:
+    """读文件最后 ``count`` 行（失败时给可读提示，不抛异常）。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            tail = handle.readlines()[-count:]
+        return "".join(tail).rstrip() or "（无输出）"
+    except OSError as exc:
+        logger.debug("_tail_lines: 忽略异常（预期降级）：%s", exc)
+        return "（读取 f2 输出文件失败）"
+
+
 def _run_subprocess(cmd: list[str], cwd: Path) -> int:
-    """在 f2 工作目录执行 f2（继承标准输出，下载进度实时可见）。"""
-    return subprocess.run(cmd, cwd=str(cwd), check=False).returncode
+    """执行 f2 子进程，stdout/stderr 写入独立日志文件（不再直灌 worker.log）。
+
+    历史问题（2026-11-02 日志扫描 P0-3）：f2 的原始输出直接继承 worker 的
+    stdout，约占 worker.log 的 26%，既没有时间戳也没有任务 id，排障时要在
+    ``INFO     [  跳过  ]: ...`` 这类行里翻找应用日志。
+
+    现在按次写入 ``logs/f2-<时间戳>-<pid>.log``（沿用既有 f2-*.log 命名，
+    由 ``scripts/ops/cleanup_artifacts.py`` 统一回收），worker.log 只留一行
+    退出码 + 文件路径；失败时附最后 20 行摘要，兼顾「降噪」与「出问题能看」。
+    """
+    from app.logging_config import LOG_DIR
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d-%H-%M-%S")
+    log_path = LOG_DIR / f"f2-{stamp}-{os.getpid()}.log"
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        returncode = proc.wait()
+    logger.info("f2 子进程退出 rc=%s，完整输出：%s", returncode, log_path)
+    if returncode != 0:
+        logger.warning(
+            "f2 子进程失败 rc=%s，最后 20 行：\n%s",
+            returncode,
+            _tail_lines(log_path),
+        )
+    return returncode
 
 
 async def _watch_download(

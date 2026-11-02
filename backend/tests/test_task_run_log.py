@@ -96,3 +96,48 @@ async def test_run_task_writes_ledger_on_success(monkeypatch):
         assert row.item_count == 3
         assert row.gpu_model == "Test GPU"
         assert row.finished_at is not None
+
+
+async def test_task_runs_api_返回台账(client):
+    """P1-4：``GET /api/tasks/{id}/runs`` 露出台账（此前只能手写 SQL 查）。"""
+    from app.utils.time import utcnow
+
+    async with async_session() as db:
+        task = TaskQueue(type="batch_analyze", status="failed", total=10, done=4, result={})
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        task_id = task.id
+        started = utcnow()
+        db.add(
+            TaskRunLog(
+                task_id=task_id,
+                task_type="batch_analyze",
+                attempt=1,
+                started_at=started,
+                finished_at=started,
+                item_count=4,
+                total_count=10,
+                status="failed",
+                gpu_model="Test GPU",
+                error="模拟失败",
+            )
+        )
+        await db.commit()
+
+    response = client.get(f"/api/tasks/{task_id}/runs")
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    row = payload[0]
+    assert row["task_id"] == task_id
+    assert row["attempt"] == 1
+    assert row["status"] == "failed"
+    assert row["gpu_model"] == "Test GPU"
+    assert row["error"] == "模拟失败"
+    # 时间必须带时区后缀（前端 new Date() 才能正确转本地时间）
+    assert row["started_at"].endswith("Z")
+    assert row["finished_at"].endswith("Z")
+
+    # 不存在的任务返回 404（与 /api/tasks/{id} 口径一致）
+    assert client.get("/api/tasks/99999999/runs").status_code == 404

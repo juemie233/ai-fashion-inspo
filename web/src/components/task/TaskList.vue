@@ -12,6 +12,7 @@ import {
   type TableColumnData,
 } from '@arco-design/web-vue'
 import StatusTag from '@/components/common/StatusTag.vue'
+import TaskRunHistoryModal from '@/components/task/TaskRunHistoryModal.vue'
 import type { UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate, renderTimeCell } from '@/utils/format'
@@ -28,6 +29,14 @@ onMounted(async () => {
     modelAvgMs.value = null
   }
 })
+
+/** 运行记录弹窗（P1-4）：队列任务在 worker 里有 task_run_logs 台账，可看每次执行 */
+const historyVisible = ref(false)
+const historyTask = ref<UnifiedTask | null>(null)
+function openRunHistory(task: UnifiedTask) {
+  historyTask.value = task
+  historyVisible.value = true
+}
 
 const props = defineProps<{
   tasks: UnifiedTask[]
@@ -151,12 +160,19 @@ const columns: TableColumnData[] = [
   {
     title: '操作',
     dataIndex: 'actions',
-    width: 220,
+    width: 250,
     render: ({ record }) => {
       const row = record as UnifiedTask
       // 按钮矩阵的唯一判据（与后端接收矩阵同口径、可单测；见 taskRowActions 注释）
       const actions = taskRowActions(row.status, row.type, row.source)
       return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
+        row.source === 'queue'
+          ? h(
+              Button,
+              { size: 'small', type: 'text', onClick: () => openRunHistory(row) },
+              { default: () => '运行记录' },
+            )
+          : null,
         // 结果浏览入口（按域开关，如 f2 一键获取的批次结果）：由调用方决定哪些行可点开
         props.canViewResults?.(row)
           ? h(
@@ -298,4 +314,5 @@ const columns: TableColumnData[] = [
     :bordered="false"
     :pagination="false"
   />
+  <task-run-history-modal v-model:visible="historyVisible" :task="historyTask" />
 </template>

@@ -4,6 +4,9 @@ from collections import Counter
 from pathlib import Path
 
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def extract_dominant_colors(image_path: Path, n_colors: int = 3) -> list[str]:
@@ -36,5 +39,6 @@ def extract_dominant_colors(image_path: Path, n_colors: int = 3) -> list[str]:
             dominant.append(hex_color)
 
         return dominant
-    except Exception:
+    except Exception as exc:
+        logger.debug("extract_dominant_colors: 忽略异常（预期降级）：%s", exc)
         return []

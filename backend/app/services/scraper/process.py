@@ -71,13 +71,16 @@ def _check_cdp(port: int, timeout: float = 2.0) -> tuple[bool, str, bool]:
                             f"端口 {port} 上运行的是 {browser}，而非 Google Chrome。"
                             f"CDP 采集必须使用 Google Chrome，请关闭当前浏览器后重新启动 Chrome 调试模式。"
                         ), False
-            except Exception:
+            except Exception as exc:
+                logger.debug("_check_cdp: 忽略异常（预期降级）：%s", exc)
                 return True, f"端口 {port} 可达，但未能确认调试协议", False
         else:
             return False, f"端口 {port} 无响应（请先在命令行中启动调试 Chrome）", False
-    except TimeoutError:
+    except TimeoutError as exc:
+        logger.debug("_check_cdp: 忽略异常（预期降级）：%s", exc)
         return False, f"端口 {port} 连接超时", False
     except Exception as e:
+        logger.debug("_check_cdp: 忽略异常（预期降级）：%s", e)
         return False, f"端口检测异常: {e}", False
     finally:
         sock.close()
@@ -124,7 +127,7 @@ async def _safe_launch(db: AsyncSession, task: ScraperTask) -> None:
     try:
         _launch_scraper_process(task.id)
     except Exception as e:
-        logger.error(f"启动采集子进程失败 task {task.id}: {e}")
+        logger.exception(f"启动采集子进程失败 task {task.id}: {e}")
         task.status = "failed"
         task.error = f"采集进程启动失败: {e}"
         await db.commit()
@@ -174,7 +177,7 @@ def _maybe_auto_retry(task_id: int) -> None:
     try:
         _launch_scraper_process(task_id)
     except Exception as e:
-        logger.error(f"自动续采启动失败 task {task_id}: {e}")
+        logger.exception(f"自动续采启动失败 task {task_id}: {e}")
 
 
 async def has_active_scraper_tasks() -> bool:

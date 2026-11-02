@@ -80,7 +80,8 @@ async def list_models() -> dict:
                             "vram_used": m.get("size_vram", 0),
                             "loaded": True,
                         }
-        except Exception:
+        except Exception as exc:
+            logger.debug("list_models: 忽略异常（预期降级）：%s", exc)
             pass
 
         result = []
@@ -122,7 +123,8 @@ async def _get_ollama_uptime_seconds() -> int | None:
         text = stdout.decode().strip()
         if text.isdigit():
             return int(text)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_get_ollama_uptime_seconds: 忽略异常（预期降级）：%s", exc)
         pass
     return None
 
@@ -138,7 +140,8 @@ async def ai_status() -> dict:
             if resp.status_code == 200:
                 connected = True
                 version = resp.json().get("version", "")
-    except Exception:
+    except Exception as exc:
+        logger.debug("ai_status: 忽略异常（预期降级）：%s", exc)
         pass
     uptime = await _get_ollama_uptime_seconds() if connected else None
     return {
@@ -176,7 +179,8 @@ def _pull_event_stream(model_name: str) -> AsyncIterator[str]:
                                 if chunk.get("status") == "success":
                                     yield f"data: {json.dumps({'type': 'done', 'message': '下载完成'})}\n\n"
                                     return
-                            except json.JSONDecodeError:
+                            except json.JSONDecodeError as exc:
+                                logger.debug("event_stream: 忽略异常（预期降级）：%s", exc)
                                 continue
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"

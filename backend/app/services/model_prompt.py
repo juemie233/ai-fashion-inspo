@@ -9,6 +9,9 @@ import json
 from pathlib import Path
 
 from app.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "prompt_configs.json"
 
@@ -27,7 +30,8 @@ def _load() -> dict[str, str]:
         return {}
     try:
         mtime = _PROMPT_FILE.stat().st_mtime
-    except OSError:
+    except OSError as exc:
+        logger.debug("_load: 忽略异常（预期降级）：%s", exc)
         return _cache["data"] or {}
     if _cache["mtime"] == mtime and _cache["data"] is not None:
         return _cache["data"]
@@ -85,7 +89,8 @@ def get_prompt_versions(model_name: str) -> list[dict]:
         else:
             versions = []  # 兼容旧的平铺格式（不按模型隔离的已废弃格式）
         return versions if isinstance(versions, list) else []
-    except Exception:
+    except Exception as exc:
+        logger.debug("get_prompt_versions: 忽略异常（预期降级）：%s", exc)
         return []
 
 

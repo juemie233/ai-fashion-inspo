@@ -11,6 +11,9 @@
 import json
 import re
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def quote_bare_array_words(text: str) -> str:
@@ -99,7 +102,8 @@ def parse_analysis_response(raw: str) -> dict:
         if isinstance(data, dict):
             return data
         # 顶层是数组等非 dict 时，继续走清洗+评分策略，避免下游 .get() 崩溃
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.debug("parse_analysis_response: 忽略异常（预期降级）：%s", exc)
         pass
 
     # 预处理：清洗各类注释和非法内容
@@ -155,7 +159,8 @@ def parse_analysis_response(raw: str) -> dict:
             score = sum(1 for k in EXPECTED_KEYS if k in data)
             if score > sum(1 for k in EXPECTED_KEYS if k in best):
                 best = data
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.debug("parse_analysis_response: 忽略异常（预期降级）：%s", exc)
             continue
     if best:
         return best
@@ -165,7 +170,8 @@ def parse_analysis_response(raw: str) -> dict:
     if match:
         try:
             return json.loads(match.group())
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.debug("parse_analysis_response: 忽略异常（预期降级）：%s", exc)
             pass
 
     # 策略3：修复可能被截断的 JSON
@@ -173,7 +179,8 @@ def parse_analysis_response(raw: str) -> dict:
     if repaired:
         try:
             return json.loads(repaired)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.debug("parse_analysis_response: 忽略异常（预期降级）：%s", exc)
             pass
 
     return {}

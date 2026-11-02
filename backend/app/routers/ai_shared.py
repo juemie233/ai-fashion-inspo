@@ -97,7 +97,8 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
                 # 安全地从排队列表移除（可能已被取消端点移除）
                 try:
                     _pending_queue.remove(inspiration_id)
-                except ValueError:
+                except ValueError as exc:
+                    logger.debug("_run_analysis: 忽略异常（预期降级）：%s", exc)
                     pass
                 _active_analyses[inspiration_id] = "正在分析..."
                 from app.services.ai_service import analyze_image, analyze_video
@@ -158,14 +159,15 @@ async def _run_analysis(inspiration_id: str, file_path: str | None = None) -> No
             except ImportError:
                 logger.warning("AI 服务尚未安装")
             except Exception as e:
-                logger.error(f"分析失败 {inspiration_id}: {e}")
+                logger.exception(f"分析失败 {inspiration_id}: {e}")
     finally:
         # 无论何时被取消（含等待信号量/暂停期间），都清理队列与追踪状态
         _active_analyses.pop(inspiration_id, None)
         _task_by_id.pop(inspiration_id, None)
         try:
             _pending_queue.remove(inspiration_id)
-        except ValueError:
+        except ValueError as exc:
+            logger.debug("_run_analysis: 忽略异常（预期降级）：%s", exc)
             pass
 
         # 实时推送分析结果（前端 useWebSocket 监听 ai_analysis_done）

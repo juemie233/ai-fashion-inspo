@@ -47,7 +47,8 @@ def _load_prompt_versions(model_name: str) -> list[dict]:
         if isinstance(data, dict):
             return data.get(model_name, [])
         return data if isinstance(data, list) else []  # 兼容旧的平铺格式
-    except Exception:
+    except Exception as exc:
+        logger.debug("_load_prompt_versions: 忽略异常（预期降级）：%s", exc)
         return []
 
 

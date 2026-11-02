@@ -9,6 +9,9 @@ import ctypes
 import shutil
 import sys
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def disk_usage(path: Path | str) -> dict:
@@ -62,5 +65,6 @@ def memory_usage() -> dict | None:
             "total_bytes": stat.ullTotalPhys,
             "available_bytes": stat.ullAvailPhys,
         }
-    except Exception:
+    except Exception as exc:
+        logger.debug("memory_usage: 忽略异常（预期降级）：%s", exc)
         return None

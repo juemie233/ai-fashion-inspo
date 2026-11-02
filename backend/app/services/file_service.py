@@ -11,6 +11,8 @@ from fastapi import HTTPException, UploadFile
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 _log = logging.getLogger(__name__)
 
 # 分块读取大小：大文件分块流式落盘，避免整体驻留内存
@@ -112,19 +114,22 @@ async def _generate_video_thumbnail(
         except TimeoutError:
             try:
                 proc.kill()
-            except ProcessLookupError:
+            except ProcessLookupError as exc:
+                logger.debug("_generate_video_thumbnail: 忽略异常（预期降级）：%s", exc)
                 pass
             # kill 后必须回收子进程，否则留下僵尸进程
             try:
                 await proc.wait()
-            except Exception:
+            except Exception as exc:
+                logger.debug("_generate_video_thumbnail: 忽略异常（预期降级）：%s", exc)
                 pass
             _log.warning(f"ffmpeg 缩略图提取超时，已终止: {video_path}")
             return None
         if full_thumb_path.exists() and full_thumb_path.stat().st_size > 0:
             today = datetime.now().strftime("%Y-%m")
             return f"{thumb_prefix}/{today}/{thumb_filename}"
-    except Exception:
+    except Exception as exc:
+        logger.debug("_generate_video_thumbnail: 忽略异常（预期降级）：%s", exc)
         pass
     return None
 
@@ -166,7 +171,8 @@ def _generate_image_thumbnail_sync(
         img.save(full_thumb_path, "JPEG", quality=settings.thumbnail_quality)
         today = datetime.now().strftime("%Y-%m")
         return f"{thumb_prefix}/{today}/{thumb_filename}"
-    except Exception:
+    except Exception as exc:
+        logger.debug("_generate_image_thumbnail_sync: 忽略异常（预期降级）：%s", exc)
         return None
 
 
@@ -218,7 +224,8 @@ async def save_upload(
         try:
             if file_path.exists():
                 file_path.unlink(missing_ok=True)
-        except OSError:
+        except OSError as exc:
+            logger.debug("save_upload: 忽略异常（预期降级）：%s", exc)
             pass
         raise
 
@@ -231,7 +238,8 @@ async def save_upload(
         try:
             if file_path.exists():
                 file_path.unlink(missing_ok=True)
-        except OSError:
+        except OSError as exc:
+            logger.debug("save_upload: 忽略异常（预期降级）：%s", exc)
             pass
         raise
 

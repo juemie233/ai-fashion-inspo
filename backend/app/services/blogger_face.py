@@ -50,7 +50,8 @@ def _image_size(data: bytes) -> tuple[int, int] | None:
     try:
         with Image.open(io.BytesIO(data)) as img:
             return img.size  # (w, h)
-    except Exception:  # noqa: BLE001 图片损坏/格式不支持时无法计算占比
+    except Exception as exc:  # noqa: BLE001 图片损坏/格式不支持时无法计算占比
+        logger.debug("_image_size: 忽略异常（预期降级）：%s", exc)
         return None
 
 

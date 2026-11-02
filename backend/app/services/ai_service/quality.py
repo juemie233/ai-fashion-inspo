@@ -64,11 +64,13 @@ async def _ollama_vision_chat(
                 if raw:
                     return raw, None
         return "", "模型返回空内容"
-    except httpx.ConnectError:
+    except httpx.ConnectError as exc:
         # Ollama 未启动/连接失败：可恢复（_is_recoverable_error 命中「无法连接 Ollama」）
+        logger.debug("_ollama_vision_chat: 忽略异常（预期降级）：%s", exc)
         return "", "无法连接 Ollama 服务"
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as exc:
         # 模型响应超时：可恢复（命中「超时」）
+        logger.debug("_ollama_vision_chat: 忽略异常（预期降级）：%s", exc)
         return "", "调用 Ollama 超时"
     except httpx.HTTPStatusError as e:
         # 4xx 为请求/模型问题（如 400 模型未就绪），重试无益 → 永久错误；
@@ -82,6 +84,7 @@ async def _ollama_vision_chat(
             return "", f"Ollama 请求被拒绝（HTTP {status_code}）"
         return "", f"Ollama 服务异常（HTTP {status_code}）"
     except Exception as e:
+        logger.debug("_ollama_vision_chat: 忽略异常（预期降级）：%s", e)
         return "", f"调用失败: {str(e)[:100]}"
 
 
@@ -96,7 +99,8 @@ def _parse_ai_generated(parsed: dict) -> bool:
         return False
     try:
         confidence = float(parsed.get("confidence"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_parse_ai_generated: 忽略异常（预期降级）：%s", exc)
         return False
     return confidence >= settings.ai_generated_confidence_threshold
 
@@ -258,7 +262,8 @@ def _precheck_image(image_data: str) -> str | None:
             colors = im.convert("RGB").resize((64, 64)).getcolors(maxcolors=MAX_UNIQUE_COLORS + 1)
             if colors is not None and len(colors) <= MAX_UNIQUE_COLORS:
                 return "low_quality"
-    except Exception:  # 解析失败交给下游 VLM 判（不要因预检把素材卡死在 pending）
+    except Exception as exc:  # 解析失败交给下游 VLM 判（不要因预检把素材卡死在 pending）
+        logger.debug("_precheck_image: 忽略异常（预期降级）：%s", exc)
         return None
     return None
 
@@ -371,6 +376,7 @@ async def check_image_quality(
             return "pending", err, False
         return "rejected", "文件缺失", False
     except Exception as e:
+        logger.debug("check_image_quality: 忽略异常（预期降级）：%s", e)
         return "pending", f"审核失败: {str(e)[:100]}", False
 
     model_cfg = get_model_config(settings.ollama_vision_model)

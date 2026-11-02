@@ -266,6 +266,26 @@ body {
   margin-top: 16px;
 }
 
+/* 调试日志（P2-4）：service worker 关键失败的 session 环形缓冲 */
+.debug-log {
+  margin-top: 8px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.debug-log.hidden {
+  display: none;
+}
+
 /* 上传进度遮罩 */
 .upload-overlay {
   position: absolute;

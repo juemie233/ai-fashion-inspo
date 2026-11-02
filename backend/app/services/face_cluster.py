@@ -82,7 +82,8 @@ def _is_hnswlib_available() -> bool:
         import hnswlib  # noqa: F401
 
         return True
-    except ImportError:
+    except ImportError as exc:
+        logger.debug("_is_hnswlib_available: 忽略异常（预期降级）：%s", exc)
         return False
 
 

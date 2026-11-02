@@ -31,13 +31,17 @@ from app.services.inspiration_query import (
     build_filters_from_query_json,
     inspiration_load_options,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _load_query_json(collection: Collection) -> dict:
     """解析智能合集的 query_json，损坏的 JSON 按空条件处理（向前兼容）。"""
     try:
         data = json.loads(collection.query_json or "")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_load_query_json: 忽略异常（预期降级）：%s", exc)
         return {}
     return data if isinstance(data, dict) else {}
 

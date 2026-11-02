@@ -59,6 +59,18 @@
         跳过已采集的图片
       </label>
     </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="debugMode" />
+        调试模式（记录更多插件日志）
+      </label>
+    </div>
+    <div class="form-group">
+      <button id="showDebugLogBtn" class="btn btn-secondary">查看调试日志</button>
+      <button id="copyDebugLogBtn" class="btn btn-secondary">复制</button>
+      <button id="clearDebugLogBtn" class="btn btn-secondary">清空</button>
+      <pre id="debugLogBox" class="debug-log hidden"></pre>
+    </div>
     <div class="form-actions">
       <button id="saveSettingsBtn" class="btn btn-primary">保存</button>
       <button id="closeSettingsBtn" class="btn btn-secondary">取消</button>

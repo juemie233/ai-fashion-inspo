@@ -55,7 +55,8 @@ async def is_ollama_running() -> bool:
             resp = await client.get(f"{settings.ollama_base_url}/api/version")
             if resp.status_code == 200:
                 return True
-    except Exception:
+    except Exception as exc:
+        logger.debug("is_ollama_running: 忽略异常（预期降级）：%s", exc)
         pass
     return False
 
@@ -72,7 +73,8 @@ async def is_ollama_port_listening() -> bool:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port), timeout=1
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug("is_ollama_port_listening: 忽略异常（预期降级）：%s", exc)
         return False
     writer.close()
     with contextlib.suppress(Exception):
@@ -133,5 +135,5 @@ async def start_ollama() -> str | None:
         logger.warning(f"Ollama 启动失败: {stderr.decode()[:200]}")
         return "无法启动 Ollama，请手动启动后重试"
     except Exception as e:
-        logger.error(f"启动 Ollama 失败: {e}")
+        logger.exception(f"启动 Ollama 失败: {e}")
         return f"启动 Ollama 失败: {e}"

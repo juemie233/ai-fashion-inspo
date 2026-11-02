@@ -21,6 +21,24 @@ export function isTaskTerminalStatus(status: string): boolean {
 /** 任务来源：queue=任务队列，scraper=采集任务 */
 export type TaskSource = 'queue' | 'scraper'
 
+/** 一次任务执行尝试的台账（后端 GET /api/tasks/{id}/runs，对应 task_run_logs 表） */
+export interface TaskRunOut {
+  id: number
+  task_id: number
+  task_type: string
+  /** 第几次执行：0=首次，1=第一次重试，…… */
+  attempt: number
+  /** 带时区后缀的 ISO 时间（后端 format_utc 输出，前端 new Date 转本地） */
+  started_at: string
+  finished_at: string | null
+  item_count: number
+  total_count: number
+  /** running/success/retry/failed */
+  status: string
+  gpu_model: string | null
+  error: string | null
+}
+
 /** 统一任务视图模型（前端聚合两类后端任务后归一化得到） */
 export interface UnifiedTask {
   id: number

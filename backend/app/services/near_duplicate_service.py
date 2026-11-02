@@ -47,6 +47,9 @@ from app.models.tag import InspirationTag
 from app.services.task_runners.common import _chunked
 from app.utils.image_hash import perceptual_hash
 from app.utils.time import format_utc
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 默认阈值（768 位 RGB dHash 汉明距离）：≤32 视为近似重复（约 4% 差异内）
 DEFAULT_THRESHOLD = 32
@@ -124,7 +127,8 @@ def _compute_hashes_sync(batch: list, storage_root: Path) -> list[tuple[str, str
                 if not full.exists():
                     continue
                 phash = perceptual_hash(full)
-            except OSError:
+            except OSError as exc:
+                logger.debug("_compute_hashes_sync: 忽略异常（预期降级）：%s", exc)
                 continue
             if phash:
                 out.append((mid, phash))

@@ -53,3 +53,30 @@ class TaskCancelOut(BaseModel):
     message: str
     task_id: int
     deleted: bool = False
+
+
+class TaskRunOut(BaseModel):
+    """一次任务执行尝试的台账（``GET /api/tasks/{id}/runs``）。
+
+    字段与 ``task_run_logs`` 表一一对应；前端据此展示每次执行的耗时、GPU 与
+    错误摘要（2026-11-02 日志扫描 P1-4：此前只有表、没有读接口）。
+    """
+
+    id: int
+    task_id: int
+    task_type: str
+    attempt: int
+    started_at: datetime
+    finished_at: datetime | None = None
+    item_count: int
+    total_count: int
+    status: str  # running/success/retry/failed
+    gpu_model: str | None = None
+    error: str | None = None
+
+    model_config = {"from_attributes": True}
+
+    @field_serializer("started_at", "finished_at")
+    def serialize_datetime(self, dt: datetime | None, _info: Any) -> str | None:
+        """将 naive UTC datetime 格式化为带 Z 后缀的 ISO 字符串。"""
+        return format_utc(dt)

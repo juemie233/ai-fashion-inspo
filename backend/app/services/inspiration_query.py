@@ -18,6 +18,9 @@ from app.models.inspiration import (
 )
 from app.models.person import InspirationBlogger, InspirationModel
 from app.models.tag import InspirationTag, Tag
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def inspiration_load_options() -> tuple:
@@ -239,7 +242,8 @@ async def list_inspirations(
             try:
                 p = settings.storage_root / row[1]
                 return p.stat().st_size if p.exists() else 0
-            except OSError:
+            except OSError as exc:
+                logger.debug("_file_size: 忽略异常（预期降级）：%s", exc)
                 return 0
 
         def _sort_by_size() -> list[str]:
@@ -397,7 +401,8 @@ async def list_dominant_colors(db: AsyncSession, limit: int = 30) -> list[dict]:
     for (raw,) in result.all():
         try:
             colors = json.loads(raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.debug("list_dominant_colors: 忽略异常（预期降级）：%s", exc)
             continue
         if isinstance(colors, list):
             for c in colors:

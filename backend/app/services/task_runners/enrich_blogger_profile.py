@@ -198,7 +198,8 @@ async def execute_enrich_blogger_profile(db: AsyncSession, task: TaskQueue) -> N
         if browser_executor is not None and scraper is not None:
             try:
                 await loop.run_in_executor(browser_executor, scraper.close_sync)
-            except Exception:  # noqa: BLE001 关闭失败不影响任务结果
+            except Exception as exc:  # noqa: BLE001 关闭失败不影响任务结果
+                logger.debug("execute_enrich_blogger_profile: 忽略异常（预期降级）：%s", exc)
                 pass
             browser_executor.shutdown(wait=False)
 

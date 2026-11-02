@@ -51,7 +51,8 @@ def _sanitize_threshold(raw: object, fallback: float) -> float:
     """
     try:
         value = float(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_sanitize_threshold: 忽略异常（预期降级）：%s", exc)
         return fallback
     return value if np.isfinite(value) else fallback
 

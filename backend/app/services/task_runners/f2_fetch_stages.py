@@ -240,7 +240,8 @@ async def _fetch_collects_by_folder_stage(
             try:
                 await asyncio.wait_for(finished.wait(), timeout=_WATCH_INTERVAL)
                 break
-            except TimeoutError:
+            except TimeoutError as exc:
+                logger.debug("_watcher: 忽略异常（预期降级）：%s", exc)
                 pass
             try:
                 if await status_of(db, task.id) not in ("running", "pending"):

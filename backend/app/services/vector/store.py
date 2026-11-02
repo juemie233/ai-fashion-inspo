@@ -79,7 +79,8 @@ def _vector_write_lock() -> Iterator[None]:
         if fh is not None:
             try:
                 fh.close()
-            except OSError:
+            except OSError as exc:
+                logger.debug("_release_for_dir_reset: 忽略异常（预期降级）：%s", exc)
                 pass
             _lock_held_by_thread.fh = None
 
@@ -112,7 +113,8 @@ def _vector_write_lock() -> Iterator[None]:
                         f.seek(0)
                         try:
                             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                        except OSError:
+                        except OSError as exc:
+                            logger.debug("_vector_write_lock: 忽略异常（预期降级）：%s", exc)
                             pass
             else:
                 import fcntl
@@ -146,7 +148,8 @@ def is_lancedb_available() -> bool:
     try:
         import lancedb  # noqa: F401
         return True
-    except ImportError:
+    except ImportError as exc:
+        logger.debug("is_lancedb_available: 忽略异常（预期降级）：%s", exc)
         return False
 
 
@@ -313,7 +316,7 @@ def _table_for_write(kind: str) -> object:
     try:
         return _table(kind)
     except _CorruptTableError as e:
-        logger.error(
+        logger.exception(
             f"{e} —— 先备份再重建（原数据已备份，勿再写入新表覆盖同名目录）"
         )
         name = _table_name(kind)
@@ -348,7 +351,8 @@ def _backup_corrupt_table(name: str) -> None:
         try:
             reset_connection()
             _connect().drop_table(name)
-        except Exception:
+        except Exception as exc:
+            logger.debug("_backup_corrupt_table: 忽略异常（预期降级）：%s", exc)
             pass
 
 
@@ -382,7 +386,8 @@ def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
             table = _table_for_write(kind)
             try:
                 table.delete(f"inspiration_id = '{_sql_quote(inspiration_id)}'")
-            except Exception:
+            except Exception as exc:
+                logger.debug("_upsert_sync: 忽略异常（预期降级）：%s", exc)
                 pass  # 无匹配行时删除可能抛错，忽略即可
             table.add([{
                 "id": uuid.uuid4().hex,
@@ -392,7 +397,7 @@ def _upsert_sync(kind: str, inspiration_id: str, vector: list[float]) -> bool:
             }])
         return True
     except Exception as e:
-        logger.error(f"写入向量失败 (kind={kind}, id={inspiration_id}): {e}")
+        logger.exception(f"写入向量失败 (kind={kind}, id={inspiration_id}): {e}")
         return False
 
 
@@ -476,7 +481,7 @@ def _batch_add_sync(kind: str, items: list[tuple[str, list[float]]]) -> int:
             table.add(rows)
         return len(rows)
     except Exception as e:
-        logger.error(f"批量写入向量失败 (kind={kind}, count={len(rows)}): {e}")
+        logger.exception(f"批量写入向量失败 (kind={kind}, count={len(rows)}): {e}")
         return 0
 
 
@@ -509,7 +514,7 @@ def _search_sync(
             })
         return results
     except Exception as e:
-        logger.error(f"向量检索失败 (kind={kind}): {e}")
+        logger.exception(f"向量检索失败 (kind={kind}): {e}")
         return []
 
 
@@ -535,7 +540,7 @@ def _get_vector_sync(kind: str, inspiration_id: str) -> list[float] | None:
         vec = filtered["vector"][0].as_py()
         return [float(x) for x in vec]
     except Exception as e:
-        logger.error(f"读取向量失败 (kind={kind}, id={inspiration_id}): {e}")
+        logger.exception(f"读取向量失败 (kind={kind}, id={inspiration_id}): {e}")
         return None
 
 
@@ -564,7 +569,7 @@ def _get_vectors_sync(kind: str, inspiration_ids: list[str]) -> dict[str, list[f
                 result[str(insp_id)] = [float(x) for x in vec]
         return result
     except Exception as e:
-        logger.error(f"批量读取向量失败 (kind={kind}): {e}")
+        logger.exception(f"批量读取向量失败 (kind={kind}): {e}")
         return {}
 
 
@@ -580,7 +585,7 @@ def _count_sync(kind: str) -> int:
     try:
         return _table(kind).count_rows()
     except Exception as e:
-        logger.error(f"统计向量数量失败 (kind={kind}): {e}")
+        logger.exception(f"统计向量数量失败 (kind={kind}): {e}")
         return 0
 
 
@@ -596,7 +601,7 @@ def _list_vector_ids_sync(kind: str) -> set[str]:
         arrow_table = table.to_arrow()
         return {str(x) for x in arrow_table["inspiration_id"].to_pylist()}
     except Exception as e:
-        logger.error(f"读取向量表素材 ID 失败 (kind={kind}): {e}")
+        logger.exception(f"读取向量表素材 ID 失败 (kind={kind}): {e}")
         return set()
 
 
@@ -616,7 +621,8 @@ def get_stored_text_formula_version() -> int | None:
     marker = settings.lancedb_dir / _TEXT_FORMULA_MARKER
     try:
         return int(marker.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.debug("get_stored_text_formula_version: 忽略异常（预期降级）：%s", exc)
         return None
 
 

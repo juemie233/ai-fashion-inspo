@@ -170,8 +170,10 @@ else
   if [ -d "/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin" ]; then
     export PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin:$PATH"
   fi
-  ( cd face-service && nohup .venv/Scripts/python -m uvicorn app.main:app --host 0.0.0.0 --port "$FACE_PORT" > "../$FACE_LOG" 2>&1 & )
-  echo "  人脸服务已启动（日志: $FACE_LOG）"
+  # 服务自身日志走 RotatingFileHandler（logs/face-service.log，10 MB × 3）；
+  # 这里只接住 uvicorn 的启动/访问行，避免与轮转文件争同一路径。
+  ( cd face-service && nohup .venv/Scripts/python -m uvicorn app.main:app --host 0.0.0.0 --port "$FACE_PORT" > "../$LOG_DIR/face-service-bootstrap.log" 2>&1 & )
+  echo "  人脸服务已启动（日志: $FACE_LOG，启动输出: $LOG_DIR/face-service-bootstrap.log）"
 fi
 
 # ── 5. 启动 supervisor（由它拉起三服务）──

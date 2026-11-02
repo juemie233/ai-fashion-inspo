@@ -194,7 +194,8 @@ async def _scan_one_candidate(
     try:
         # PIL 文件头读取是阻塞 I/O，放线程池执行（与下方 detect_* 一致）
         width, height = await asyncio.to_thread(_probe_size, full)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_scan_one_candidate: 忽略异常（预期降级）：%s", exc)
         return None, False  # 无法解码的图片不做候选
     ratio = height / width
     if ratio < min_ratio:

@@ -4,6 +4,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { fetchTagsGrouped, type TagCategoryGroup } from '@/api/tags'
 import { CATEGORY_LABELS } from '@/constants/tag'
+import { logger } from '@/utils/logger'
 
 export const useTagsStore = defineStore('tags', () => {
   /** 已加载的标签分组 */
@@ -24,7 +25,7 @@ export const useTagsStore = defineStore('tags', () => {
     try {
       groups.value = await fetchTagsGrouped()
     } catch (e) {
-      console.error('加载标签失败', e)
+      logger.error('加载标签失败', e)
     } finally {
       loading.value = false
     }

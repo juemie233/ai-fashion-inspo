@@ -15,6 +15,9 @@ from app.services.ai_parser import extract_tag_names
 from app.services.tag_service import get_or_create_tag
 from app.utils.tag_compliance import is_bare_garment_word
 from app.utils.tag_normalizer import is_similar_category_tag, normalize_tag_name
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.models.tag import Tag
@@ -295,7 +298,8 @@ def guess_color_from_hex(hex_str: str) -> str:
         if r > 150 and g > 150 and b < 60:
             return "金色"
         return ""
-    except (ValueError, IndexError):
+    except (ValueError, IndexError) as exc:
+        logger.debug("guess_color_from_hex: 忽略异常（预期降级）：%s", exc)
         return ""
 
 

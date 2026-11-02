@@ -56,6 +56,9 @@ _ALL_TABLES = [
     "scraper_hashtags",
     "task_queue",
     "pending_vector_backfills",
+    # 任务运行台账：task_queue 的 id 在清表后会被 SQLite 复用，不一起清会让
+    # 上一用例的台账行挂到下一用例同 id 的任务上（test_task_runs_api 踩到过）
+    "task_run_logs",
     "service_heartbeats",
     "audit_logs",
     "model_photos",

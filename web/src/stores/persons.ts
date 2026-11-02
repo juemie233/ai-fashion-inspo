@@ -4,6 +4,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { bloggersApi, modelsApi, type PersonForm } from '@/api/persons'
 import type { Person } from '@shared/types/person'
+import { logger } from '@/utils/logger'
 
 /** 人物种类：blogger（穿搭博主）/ model（职业模特） */
 export type PersonKind = 'blogger' | 'model'
@@ -67,7 +68,7 @@ export function usePersonsStore(kind: PersonKind) {
     } catch (e) {
       if (seq !== loadSeq) return
       error.value = '加载人物列表失败，请检查服务后重试'
-      console.error('加载人物列表失败', e)
+      logger.error('加载人物列表失败', e)
     } finally {
       if (seq === loadSeq) loading.value = false
     }

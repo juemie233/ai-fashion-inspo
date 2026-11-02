@@ -63,7 +63,8 @@ def _face_width_ratio(candidate: dict) -> float | None:
         if width <= 0:
             return None
         return (float(values[2]) - float(values[0])) / width
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as exc:
+        logger.debug("_face_width_ratio: 忽略异常（预期降级）：%s", exc)
         return None
 
 

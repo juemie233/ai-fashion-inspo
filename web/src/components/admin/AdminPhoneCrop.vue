@@ -10,6 +10,7 @@ import { getFileUrl, deleteInspiration } from '@/api/inspirations'
 import { normalizeApplyResult, type CropApplyResult, type CropDuplicate } from '@/utils/cropResult'
 import { openInNewTab } from '@/utils/openInNewTab'
 import { defaultCheckedIds } from '@/utils/cropSelection'
+import { logger } from '@/utils/logger'
 import type { CropCandidate, CropGridDensity } from '@/types/crop'
 import AdminCropResultsPanel from '@/components/admin/AdminCropResultsPanel.vue'
 
@@ -340,7 +341,7 @@ async function handleApply() {
     })
     // 归一化后再消费：duplicates/skipped 恒为数组，避免字段缺失导致访问崩溃
     result.value = normalizeApplyResult(data)
-    console.debug('[手机图剪裁] apply 结果', {
+    logger.debug('[手机图剪裁] apply 结果', {
       processed: result.value.processed,
       skipped: result.value.skipped.length,
       duplicates: result.value.duplicates.length,
@@ -363,7 +364,7 @@ async function handleApply() {
       )
     }
   } catch (e: unknown) {
-    console.error('[手机图剪裁] apply 请求失败', e)
+    logger.error('[手机图剪裁] apply 请求失败', e)
     Message.error(errorDetail(e) || '裁剪失败')
   } finally {
     cropping.value = false

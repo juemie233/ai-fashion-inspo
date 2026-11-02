@@ -6,6 +6,9 @@
 
 import hashlib
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _digest(path: Path, factory: callable) -> str | None:
@@ -16,7 +19,8 @@ def _digest(path: Path, factory: callable) -> str | None:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)
         return h.hexdigest()
-    except Exception:
+    except Exception as exc:
+        logger.debug("_digest: 忽略异常（预期降级）：%s", exc)
         return None
 
 

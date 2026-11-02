@@ -50,7 +50,7 @@ class ChromeManager:
             try:
                 self._proc = subprocess.Popen(cmd)
             except Exception as e:
-                logger.error(f"启动 Chrome 失败: {e}")
+                logger.exception(f"启动 Chrome 失败: {e}")
                 return self._status("not_started", f"启动 Chrome 失败: {e}", None)
 
             # 轮询就绪（复用 scraper_service._check_cdp 探测 /json/version）

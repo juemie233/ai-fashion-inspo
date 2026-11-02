@@ -78,7 +78,8 @@ def _result_summary(task: TaskQueue) -> dict:
             return 0
         try:
             return int(block.get(key) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.debug("_int: 忽略异常（预期降级）：%s", exc)
             return 0
 
     return {

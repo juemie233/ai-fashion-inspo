@@ -73,7 +73,8 @@ def latest_success_backup_time(target_root: Path) -> datetime | None:
             continue
         try:
             dt = datetime.strptime(m.group(1), "%Y-%m-%d_%H%M%S")
-        except ValueError:
+        except ValueError as exc:
+            logger.debug("latest_success_backup_time: 忽略异常（预期降级）：%s", exc)
             continue
         if latest is None or dt > latest:
             latest = dt
@@ -109,7 +110,8 @@ def _read_log_tail(path: Path, max_lines: int = 40) -> list[str]:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-    except OSError:
+    except OSError as exc:
+        logger.debug("_read_log_tail: 忽略异常（预期降级）：%s", exc)
         return []
     return [line.rstrip("\r\n") for line in lines[-max_lines:]]
 

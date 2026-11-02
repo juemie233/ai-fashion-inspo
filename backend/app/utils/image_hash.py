@@ -13,6 +13,9 @@ dHash 识别「视觉上一样但字节不同」的近似重复。
 from pathlib import Path
 
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def perceptual_hash(path: Path, hash_size: int = 16) -> str | None:
@@ -49,7 +52,8 @@ def perceptual_hash(path: Path, hash_size: int = 16) -> str | None:
                             bits |= 1
             total_bits = 3 * hash_size * hash_size
             return f"{bits:0{total_bits // 4}x}"
-    except Exception:
+    except Exception as exc:
+        logger.debug("perceptual_hash: 忽略异常（预期降级）：%s", exc)
         return None
 
 

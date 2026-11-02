@@ -111,7 +111,8 @@ async def cancel_scraper_task(db: AsyncSession, task_id: int) -> dict:
         try:
             os.kill(pid, signal.SIGTERM)
             logger.info(f"已发送 SIGTERM 给采集进程 PID={pid} (task {task_id})")
-        except OSError:
+        except OSError as exc:
+            logger.debug("cancel_scraper_task: 忽略异常（预期降级）：%s", exc)
             pass  # 进程已退出
 
     return {"message": f"任务 {task_id} 已取消"}

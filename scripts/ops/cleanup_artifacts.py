@@ -15,7 +15,12 @@
 --------
 - 服务日志（**永不删**）：``^(backend|frontend|worker|supervisor|face-service)\\.log(\\.\\d+)?$``
 - 一次性日志：``logs/`` 下其余 ``*.log`` / ``*.log.N``；``f2-*.log`` 默认保留
-  （体积极小、且是采集排障的第一手材料），要删加 ``--include-f2``
+  （体积极小、且是采集排障的第一手材料），要删加 ``--include-f2``；
+  **0 字节的 f2 日志始终清**（f2 启动即退出时留下的空壳，无排障价值）
+- 按天日志：``analyze-YYYY-MM-DD.log`` 超过 ``--analyze-keep-days``（默认 30）天才删
+  （worker 启动时也会自动清一次，这里用于手工补清）
+- 历史遗留：``backend/logs/*``、``backend/{api,worker}.{out,err}``（手动启动遗留，
+  2026-08 之后不再更新）一并列入，删除前务必确认没有进程还在写
 - DB 快照：按 mtime 保留**最新 N 份**且**不超过 keep-days 天**；两份规则都满足才保留
   （即「太旧」或「超份数」任一命中即列入删除）
 
@@ -25,6 +30,7 @@
     python scripts/ops/cleanup_artifacts.py --target logs        # 只看日志
     python scripts/ops/cleanup_artifacts.py --apply              # 真删
     python scripts/ops/cleanup_artifacts.py --apply --include-f2 --keep-count 20
+    python scripts/ops/cleanup_artifacts.py --target logs --analyze-keep-days 14
     python scripts/ops/cleanup_artifacts.py --target snapshots --max-total-mb 512   # 压到 512 MB
 
 退出码：0=正常（含无可清理项）；1=参数错误。
@@ -55,9 +61,20 @@ SNAPSHOT_DIR = PROJECT_ROOT / "backend" / "storage" / "_db_backups"
 # supervisor 管理的服务日志：轮转策略在 supervisor 里，脚本绝不碰
 SERVICE_LOG_RE = re.compile(r"^(backend|frontend|worker|supervisor|face-service)\.log(\.\d+)?$")
 F2_LOG_RE = re.compile(r"^f2-.*\.log(\.\d+)?$")
+ANALYZE_LOG_RE = re.compile(r"^analyze-\d{4}-\d{2}-\d{2}\.log$")
+
+# 历史遗留产物（手动启动时代留下的，不再更新）
+LEGACY_DIRS = (PROJECT_ROOT / "backend" / "logs",)
+LEGACY_FILES = (
+    PROJECT_ROOT / "backend" / "api.out",
+    PROJECT_ROOT / "backend" / "api.err",
+    PROJECT_ROOT / "backend" / "worker.out",
+    PROJECT_ROOT / "backend" / "worker.err",
+)
 
 DEFAULT_KEEP_DAYS = 30
 DEFAULT_KEEP_COUNT = 20
+DEFAULT_ANALYZE_KEEP_DAYS = 30
 
 
 def human_size(num_bytes: float) -> str:
@@ -75,10 +92,18 @@ def _mtime(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
 
 
-def collect_oneoff_logs(include_f2: bool) -> list[Path]:
-    """列出「一次性日志」：logs/ 下除服务日志以外的一切 .log/.log.N。"""
+def collect_oneoff_logs(include_f2: bool, analyze_keep_days: int = DEFAULT_ANALYZE_KEEP_DAYS) -> list[Path]:
+    """列出「一次性日志」：logs/ 下除服务日志以外的一切 .log/.log.N。
+
+    规则（2026-11-02 日志扫描 P1-4）：
+
+    - ``analyze-*.log``（worker 按天日志）只清超过 ``analyze_keep_days`` 天的；
+    - ``f2-*.log`` 默认保留（采集排障第一手材料），但 **0 字节空壳始终清**；
+    - 其余一次性排查日志（``ab-*`` / ``backfill_*`` 等）全部列入。
+    """
     if not LOGS_DIR.is_dir():
         return []
+    analyze_cutoff = datetime.now(UTC) - timedelta(days=max(0, analyze_keep_days))
     victims: list[Path] = []
     for path in sorted(LOGS_DIR.iterdir()):
         if not path.is_file():
@@ -87,9 +112,29 @@ def collect_oneoff_logs(include_f2: bool) -> list[Path]:
             continue
         if SERVICE_LOG_RE.match(path.name):
             continue
-        if F2_LOG_RE.match(path.name) and not include_f2:
+        if ANALYZE_LOG_RE.match(path.name):
+            if _mtime(path) >= analyze_cutoff:
+                continue
+            victims.append(path)
             continue
+        if F2_LOG_RE.match(path.name):
+            # 0 字节空壳（f2 启动即失败/立刻退出）没有排障价值，始终清
+            if path.stat().st_size == 0:
+                victims.append(path)
+                continue
+            if not include_f2:
+                continue
         victims.append(path)
+    return victims
+
+
+def collect_legacy_artifacts() -> list[Path]:
+    """列出历史遗留的手动启动产物（``backend/logs/*``、``*.out`` / ``*.err``）。"""
+    victims: list[Path] = []
+    for directory in LEGACY_DIRS:
+        if directory.is_dir():
+            victims.extend(sorted(p for p in directory.iterdir() if p.is_file()))
+    victims.extend(p for p in LEGACY_FILES if p.is_file())
     return victims
 
 
@@ -190,15 +235,32 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="DB 快照总体积预算（MB，0=不限）；超出时从最旧的开始删（最新一份永不删）",
     )
+    parser.add_argument(
+        "--analyze-keep-days",
+        type=int,
+        default=DEFAULT_ANALYZE_KEEP_DAYS,
+        help=f"按天日志 analyze-*.log 保留天数（默认 {DEFAULT_ANALYZE_KEEP_DAYS}）",
+    )
     args = parser.parse_args(argv)
 
-    if args.keep_days < 0 or args.keep_count < 0 or args.max_total_mb < 0:
-        parser.error("--keep-days / --keep-count / --max-total-mb 不能为负数")
+    if (
+        args.keep_days < 0
+        or args.keep_count < 0
+        or args.max_total_mb < 0
+        or args.analyze_keep_days < 0
+    ):
+        parser.error(
+            "--keep-days / --keep-count / --max-total-mb / --analyze-keep-days 不能为负数"
+        )
 
     logs: list[Path] = []
+    legacy: list[Path] = []
     snaps: list[Path] = []
     if args.target in ("all", "logs"):
-        logs = collect_oneoff_logs(include_f2=args.include_f2)
+        logs = collect_oneoff_logs(
+            include_f2=args.include_f2, analyze_keep_days=args.analyze_keep_days
+        )
+        legacy = collect_legacy_artifacts()
     if args.target in ("all", "snapshots"):
         snaps = collect_old_snapshots(args.keep_days, args.keep_count, args.max_total_mb)
 
@@ -206,8 +268,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"模式:   {'删除（--apply）' if args.apply else '预览（dry-run，加 --apply 才删）'}")
     total = 0
     if args.target in ("all", "logs"):
-        keep_note = "保留服务轮转日志" + ("；含 f2 日志" if args.include_f2 else "；保留 f2 日志")
+        keep_note = (
+            f"保留服务轮转日志；analyze 保留 {args.analyze_keep_days} 天"
+            + ("；含 f2 日志" if args.include_f2 else "；保留 f2 日志（0 字节除外）")
+        )
         total += _print_group("一次性日志 logs/", logs, keep_note=keep_note)
+        total += _print_group(
+            "历史遗留 backend/（手动启动产物）", legacy, keep_note="8 月手动启动遗留，确认无进程占用"
+        )
     if args.target in ("all", "snapshots"):
         keep_note = (
             f"保留最新 {args.keep_count} 份且 {args.keep_days} 天内"
@@ -215,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         total += _print_group("DB 改前快照 _db_backups/", snaps, keep_note=keep_note)
 
-    if not (logs or snaps):
+    if not (logs or legacy or snaps):
         print("\n没有需要清理的产物。")
         return 0
     if not args.apply:
@@ -224,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
 
     failed: list[tuple[Path, str]] = []
     removed = 0
-    for path in [*logs, *snaps]:
+    for path in [*logs, *legacy, *snaps]:
         try:
             path.unlink()
             removed += 1

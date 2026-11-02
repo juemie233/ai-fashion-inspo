@@ -78,7 +78,8 @@ async def _load_run(db: AsyncSession, task: TaskQueue) -> GenerationRun:
 def _params_of(run: GenerationRun) -> dict:
     try:
         return json.loads(run.params_json or "{}")
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        logger.debug("_params_of: 忽略异常（预期降级）：%s", exc)
         return {}
 
 

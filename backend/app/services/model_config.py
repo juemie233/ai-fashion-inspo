@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "model_configs.json"
 
@@ -46,7 +49,8 @@ def _load() -> dict[str, dict[str, Any]]:
         return {}
     try:
         mtime = _CONFIG_FILE.stat().st_mtime
-    except OSError:
+    except OSError as exc:
+        logger.debug("_load: 忽略异常（预期降级）：%s", exc)
         return _cache["data"] or {}
     if _cache["mtime"] == mtime and _cache["data"] is not None:
         return _cache["data"]

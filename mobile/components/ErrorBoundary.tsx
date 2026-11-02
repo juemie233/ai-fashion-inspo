@@ -2,7 +2,8 @@
  *
  * 为什么要它：release 包里 JS 抛异常时 React 会卸载整棵树，用户只看到白屏，
  * 没有任何线索（2026-10-23 真机上「点保存后白屏」就是这么丢的信息）。这里把错误
- * 捕获后直接画在屏幕上，同时写一份到 console（`adb logcat` 能看到）。
+ * 捕获后直接画在屏幕上，同时写一份到前端日志缓冲（utils/logger），并提供
+ * 「分享诊断信息」把平台/版本 + 最近日志通过系统分享面板发给开发者（P2-4）。
  *
  * 主题说明：错误边界挂在 `ThemeProvider` **外面**（要能兜住 Provider 自身的崩溃），
  * 所以这里只能拿到 context 的默认值（亮色令牌）；暗色下错误页仍是亮底，
@@ -10,9 +11,10 @@
  */
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useTheme } from '../hooks/useTheme'
 import type { Theme } from '../constants/theme'
+import { buildDiagnostics, logger } from '../utils/logger'
 
 interface Props {
   children: ReactNode
@@ -35,13 +37,26 @@ class ErrorBoundaryInner extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // 落一份到原生日志，便于 adb logcat 抓取
-    console.error('[ErrorBoundary]', error?.message, error?.stack, info?.componentStack)
+    // 写入前端环形缓冲（同时打到控制台，adb logcat 可抓）
+    logger.error('[ErrorBoundary] 捕获渲染错误', {
+      message: error?.message,
+      stack: error?.stack,
+      componentStack: info?.componentStack,
+    })
     this.setState({ info: info?.componentStack ?? '', stack: error?.stack ?? '' })
   }
 
   handleRetry = (): void => {
     this.setState({ error: null, info: '', stack: '' })
+  }
+
+  /** 分享诊断信息：系统分享面板（微信/邮件/文件传输），不依赖剪贴板权限 */
+  handleShareDiagnostics = async (): Promise<void> => {
+    try {
+      await Share.share({ message: buildDiagnostics(), title: '穿搭素材库诊断信息' })
+    } catch {
+      // 用户取消分享或系统不支持时忽略：错误页本身仍可截图
+    }
   }
 
   render(): ReactNode {
@@ -70,14 +85,24 @@ class ErrorBoundaryInner extends Component<Props, State> {
             </>
           )}
         </ScrollView>
-        <TouchableOpacity
-          style={styles.btn}
-          onPress={this.handleRetry}
-          accessibilityRole="button"
-          accessibilityLabel="重试"
-        >
-          <Text style={styles.btnText}>重试</Text>
-        </TouchableOpacity>
+        <View style={styles.btnRow}>
+          <TouchableOpacity
+            style={styles.btn}
+            onPress={this.handleRetry}
+            accessibilityRole="button"
+            accessibilityLabel="重试"
+          >
+            <Text style={styles.btnText}>重试</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.btnSecondary}
+            onPress={this.handleShareDiagnostics}
+            accessibilityRole="button"
+            accessibilityLabel="分享诊断信息"
+          >
+            <Text style={styles.btnSecondaryText}>分享诊断信息</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     )
   }
@@ -131,9 +156,24 @@ const makeStyles = (t: Theme) =>
       lineHeight: t.font.micro.lineHeight,
       color: t.color.textTertiary,
     },
-    btn: {
+    btnRow: {
       marginTop: t.space.lg,
+      flexDirection: 'row',
+      gap: t.space.sm,
+    },
+    btn: {
+      flex: 1,
       backgroundColor: t.color.brandFill,
+      borderRadius: t.radius.control,
+      minHeight: t.touch,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    btnSecondary: {
+      flex: 1,
+      backgroundColor: t.color.bgSubtle,
+      borderWidth: 1,
+      borderColor: t.color.border,
       borderRadius: t.radius.control,
       minHeight: t.touch,
       alignItems: 'center',
@@ -141,6 +181,11 @@ const makeStyles = (t: Theme) =>
     },
     btnText: {
       color: t.color.textOnMedia,
+      fontSize: t.font.subtitle.fontSize,
+      fontWeight: '600',
+    },
+    btnSecondaryText: {
+      color: t.color.textPrimary,
       fontSize: t.font.subtitle.fontSize,
       fontWeight: '600',
     },

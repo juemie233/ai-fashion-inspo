@@ -86,6 +86,7 @@ async def load_inspiration_image(inspiration) -> tuple[bytes | None, str]:
     try:
         data = await asyncio.to_thread(path.read_bytes)
     except OSError as exc:
+        logger.debug("load_inspiration_image: 忽略异常（预期降级）：%s", exc)
         return None, f"{label}读取失败（{exc}）"
 
     normalized = await asyncio.to_thread(normalize_image, data)

@@ -12,13 +12,41 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from .face import face_engine
 from .router import router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+"""日志目录（face-service/app/main.py → 仓库根/logs）。"""
+_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+
+"""服务日志文件：由本进程按大小轮转（10 MB × 3），不再依赖启动脚本的 `>` 重定向。"""
+_LOG_FILE = _LOG_DIR / "face-service.log"
+
+
+def _setup_logging() -> None:
+    """控制台 + 轮转文件双输出。
+
+    历史问题（2026-11-02 日志扫描 P1-4）：face-service 由 `restart.sh` 用
+    `> logs/face-service.log` 重定向，**没有轮转**，进程不在 supervisor 守护内；
+    跑久了单文件会无限增长。这里自带 `RotatingFileHandler`，启动脚本的重定向
+    改为写 ``face-service-bootstrap.log``（只含 uvicorn 启动/访问行，体积很小）。
+    """
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler = RotatingFileHandler(
+        _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
+
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

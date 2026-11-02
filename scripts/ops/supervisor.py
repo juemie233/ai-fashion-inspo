@@ -106,7 +106,8 @@ SERVICE_DEFS = {
             "--host", "127.0.0.1", "--port", str(FRONTEND_PORT),
         ],
         "cwd": FRONTEND_DIR,
-        "env_extra": {"FORCE_COLOR": "0"},  # 去掉 ANSI 颜色码，日志干净
+        # 去掉 ANSI 颜色码，日志干净（FORCE_COLOR 对 vite 不够，补 NO_COLOR/CLICOLOR）
+        "env_extra": {"FORCE_COLOR": "0", "NO_COLOR": "1", "CLICOLOR": "0"},
         "health_url": f"http://127.0.0.1:{FRONTEND_PORT}/",
         "startup_grace": 30.0,
     },

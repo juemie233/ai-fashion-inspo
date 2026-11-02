@@ -19,6 +19,9 @@
 import asyncio
 import json
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 _PROMPT_FILE = Path(__file__).resolve().parent.parent.parent / "person_bio_prompt.json"
 
@@ -53,7 +56,8 @@ def _read_persisted() -> str | None:
         return None
     try:
         data = json.loads(_PROMPT_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("_read_persisted: 忽略异常（预期降级）：%s", exc)
         return None
     if not isinstance(data, dict):
         return None
@@ -91,5 +95,6 @@ def reset_person_bio_prompt() -> None:
     """删除持久化文件，回退到默认模板（用于「恢复默认」按钮）。"""
     try:
         _PROMPT_FILE.unlink()
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        logger.debug("reset_person_bio_prompt: 忽略异常（预期降级）：%s", exc)
         pass

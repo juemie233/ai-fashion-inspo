@@ -1,6 +1,9 @@
 """WebSocket 端点：AI 分析和采集进度的实时推送。"""
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 
@@ -20,7 +23,8 @@ class ConnectionManager:
         """移除断开的连接（存在性保护：并发断开时忽略重复移除）。"""
         try:
             self.active_connections.remove(websocket)
-        except ValueError:
+        except ValueError as exc:
+            logger.debug("disconnect: 忽略异常（预期降级）：%s", exc)
             pass
 
     async def broadcast(self, message: dict) -> None:

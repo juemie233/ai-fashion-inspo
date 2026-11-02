@@ -118,7 +118,6 @@ src/api/tags.ts - exportTags
 src/api/tags.ts - fetchAliases
 src/api/tags.ts - fetchCooccurrenceNetwork
 src/api/tags.ts - fetchTagInspirations
-src/api/tags.ts - fetchTagTrend
 src/api/tags.ts - fetchTopTags
 src/api/tags.ts - getSimilarSuggestions
 src/api/tags.ts - importTags
@@ -167,15 +166,12 @@ src/composables/useInspirationFilters.ts - UseInspirationFiltersOptions (used in
 src/composables/useModelFaceRegister.ts - useModelFaceRegister
 src/composables/useOutfitTags.ts - useOutfitTags
 src/composables/usePersonDetail.ts - usePersonDetail
-src/composables/usePersonList.ts - SOURCE_LABELS (used in module)
-src/composables/usePersonList.ts - usePersonList
 src/composables/useQualityLearner.ts - LearnerDataset (used in module)
 src/composables/useQualityLearner.ts - LearnerMeta (used in module)
 src/composables/useQualityLearner.ts - LearnerMetrics (used in module)
 src/composables/useQualityLearner.ts - LearnerStatus (used in module)
 src/composables/useQualityLearner.ts - useQualityLearner
 src/composables/useQualityReviewPanel.ts - QualityReviewPanelDeps (used in module)
-src/composables/useQualityReviewPanel.ts - useQualityReviewPanel
 src/composables/useRecentUploads.ts - useRecentUploads
 src/composables/useSchemaCheck.ts - useSchemaCheck
 src/composables/useScraperConfig.ts - useScraperConfig
@@ -198,7 +194,6 @@ src/composables/useScraperStats.ts - useScraperStats
 src/composables/useScraperTasks.ts - PLATFORM_LABELS (used in module)
 src/composables/useScraperTasks.ts - useScraperTasks
 src/composables/useSearch.ts - SEARCH_SORT_OPTIONS (used in module)
-src/composables/useSearch.ts - useSearch
 src/composables/useSplitResize.ts - SplitResizeOptions (used in module)
 src/composables/useTagAdvanced.ts - ADVANCED_TABS (used in module)
 src/composables/useTagAdvanced.ts - AdvancedTab (used in module)
@@ -207,9 +202,6 @@ src/composables/useTagEvents.ts - TagEventPayload (used in module)
 src/composables/useTagEvents.ts - TagEventType (used in module)
 src/composables/useTagMerge.ts - useTagMerge
 src/composables/useUploadPrefs.ts - useUploadPrefs
-src/composables/useWebSocket.ts - WsMessage (used in module)
-src/composables/useWebSocket.ts - WsMessageType (used in module)
-src/composables/useWebSocket.ts - connectTaskWebSocket
 src/composables/useWorksDownload.ts - WorksDownloadState (used in module)
 src/constants/tag.ts - SOURCE_LABELS
 src/router/index.ts - default
@@ -280,3 +272,12 @@ src/utils/taskLabel.ts - taskStatusType
 src/utils/taskLabel.ts - taskTypeTagColor
 src/utils/taskPollUntilIdle.ts - PollableTask (used in module)
 src/utils/taskPresentation.ts - TaskRowActions (used in module)
+
+# 2026-11-02 日志整改新增（ts-prune 不追踪 .vue SFC 引用，属已知误报）：
+src/api/tasks.ts - fetchTaskRuns
+src/utils/logger.ts - copyDiagnostics
+src/utils/logger.ts - getLastRequestId
+# 2026-11 历史遗漏（同为 .vue 误报，补齐基线使门禁重新为绿）：
+src/api/poseGallery.ts - PosePromptResult (used in module)
+src/api/poseGallery.ts - fetchPosePrompt
+src/utils/faceMedia.ts - faceCropUrl

@@ -285,6 +285,7 @@ def reset() -> dict:
             if p.exists():
                 p.unlink()
                 removed.append(p.name)
-        except Exception:
+        except Exception as exc:
+            logger.debug("reset: 忽略异常（预期降级）：%s", exc)
             pass
     return {"reset": bool(removed), "removed": removed}

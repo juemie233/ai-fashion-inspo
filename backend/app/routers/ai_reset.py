@@ -80,7 +80,7 @@ def _take_pre_reset_snapshot() -> tuple[Path | None, int]:
         return snap_dir, moved_files
     except Exception as e:
         # 快照失败不应阻断已被明确确认的 reset，但要留下醒目日志
-        logger.error(f"reset 前快照生成失败（继续执行 reset）: {e}")
+        logger.exception(f"reset 前快照生成失败（继续执行 reset）: {e}")
         return None, 0
 
 

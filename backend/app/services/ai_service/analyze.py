@@ -86,7 +86,7 @@ async def write_unavailable_log(inspiration_id: str, error: str) -> None:
             )
             await db.commit()
     except Exception as log_err:  # 日志失败不能影响分析主流程
-        logger.error(f"写入分析源不可用日志出错 {inspiration_id}: {log_err}")
+        logger.exception(f"写入分析源不可用日志出错 {inspiration_id}: {log_err}")
 
 
 def _prompt_version(prompt: str) -> str:
@@ -162,7 +162,8 @@ async def _call_ollama_vision(
                     detail = ""
                     try:
                         detail = e.response.json().get("error", "")
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("_call_ollama_vision: 忽略异常（预期降级）：%s", exc)
                         pass
                     # 400 + 上下文相关错误：图片 token 超过当前窗口，若还有更大窗口则继续重试
                     if status == 400 and (
@@ -344,12 +345,13 @@ async def _write_analysis_log(
                 )
         await db.commit()
     except Exception as log_err:
-        logger.error(f"写入分析日志失败 {inspiration_id}: {log_err}")
+        logger.exception(f"写入分析日志失败 {inspiration_id}: {log_err}")
         # 显式回滚，避免会话进入 pending-rollback 状态；
         # 否则后续查询会抛 PendingRollbackError，被误判为永久失败
         try:
             await db.rollback()
-        except Exception:
+        except Exception as exc:
+            logger.debug("_write_analysis_log: 忽略异常（预期降级）：%s", exc)
             pass
 
 
@@ -446,11 +448,12 @@ async def analyze_image_detail(
     except Exception as e:
         error_msg = str(e)
         success = False
-        logger.error(f"AI 分析失败 {inspiration_id}: {e}")
+        logger.exception(f"AI 分析失败 {inspiration_id}: {e}")
         # 发生异常时回滚当前事务，确保日志记录不受脏事务影响
         try:
             await db.rollback()
-        except Exception:
+        except Exception as exc:
+            logger.debug("analyze_image_detail: 忽略异常（预期降级）：%s", exc)
             pass
 
     finally:
@@ -601,10 +604,11 @@ async def analyze_video_detail(
     except Exception as e:
         error_msg = error_msg or str(e)
         success = False
-        logger.error(f"视频分析落库失败 {inspiration_id}: {e}")
+        logger.exception(f"视频分析落库失败 {inspiration_id}: {e}")
         try:
             await db.rollback()
-        except Exception:
+        except Exception as exc:
+            logger.debug("analyze_video_detail: 忽略异常（预期降级）：%s", exc)
             pass
 
     processing_time = int((time.time() - start_time) * 1000)

@@ -65,7 +65,8 @@ def _cache_text_embedding(text: str, vec: list[float]) -> None:
     if len(_text_cache) >= _TEXT_CACHE_MAX:
         try:
             _text_cache.pop(next(iter(_text_cache)))
-        except StopIteration:
+        except StopIteration as exc:
+            logger.debug("_cache_text_embedding: 忽略异常（预期降级）：%s", exc)
             pass
     _text_cache[text] = list(vec)
 
@@ -85,7 +86,8 @@ def _cache_image_embedding(file_path: str, vec: list[float]) -> None:
         if len(_image_cache) >= _IMAGE_CACHE_MAX:
             try:
                 _image_cache.pop(next(iter(_image_cache)))
-            except StopIteration:
+            except StopIteration as exc:
+                logger.debug("_cache_image_embedding: 忽略异常（预期降级）：%s", exc)
                 pass
         _image_cache[file_path] = list(vec)
 
@@ -154,7 +156,7 @@ async def generate_text_embedding(text: str) -> list[float] | None:
                     )
                     await asyncio.sleep(_TEXT_RETRY_BACKOFF_S)
                     continue
-                logger.error(
+                logger.exception(
                     f"生成文本向量失败（已尝试 {_TEXT_ATTEMPTS} 次）: {detail}"
                 )
                 return None
@@ -165,13 +167,19 @@ async def generate_text_embedding(text: str) -> list[float] | None:
                     return None
                 result = list(embedding)
                 _cache_text_embedding(text, result)
+                if limit is not None:
+                    # 只记一次「实际用了哪个档位」，避免每档重复刷同一条事实
+                    logger.info(
+                        "文本嵌入截断至 %s 字符（原文 %s 字符）",
+                        limit,
+                        len(text),
+                    )
                 return result
             body = resp.text or ""
             if "context length" in body.lower():
-                logger.warning(
-                    f"文本嵌入超长（{len(text)} 字符），截断到 {limit} 字符重试: "
-                    f"{body[:120]}"
-                )
+                # 历史文案 bug：第一档 limit=None 会打出「截断到 None 字符」，且每档
+                # 重复 4 次（2026-11-02 扫描 P2-2）。改为成功时只记一次实际档位，
+                # 见上面 limit is not None 的分支。
                 break  # 跳出尝试循环，换下一个更短的截断档
             if resp.status_code >= 500 or resp.status_code == 429:
                 if attempt < _TEXT_ATTEMPTS:
@@ -205,6 +213,7 @@ def _check_clip_dependency() -> str | None:
         import sentence_transformers  # noqa: F401
         return None
     except ImportError as e:
+        logger.debug("_check_clip_dependency: 忽略异常（预期降级）：%s", e)
         return (
             "图像向量不可用：缺少 CLIP 依赖（sentence-transformers / torch）。"
             f"请手动安装：pip install sentence-transformers。({e})"
@@ -282,7 +291,7 @@ def _load_clip_model() -> object | None:
                 f"请先离线放置或联网下载模型 {settings.clip_model_name}。({e})"
             )
             _image_model_error_at = time.monotonic()
-            logger.error(_image_model_error)
+            logger.exception(_image_model_error)
             return None
 
 
@@ -328,7 +337,7 @@ def _encode_image_sync(file_path: str | None, image_bytes: bytes | None) -> list
             _cache_image_embedding(file_path, result)
         return result
     except Exception as e:
-        logger.error(f"生成图像向量失败: {type(e).__name__}: {e or '无详情'}")
+        logger.exception(f"生成图像向量失败: {type(e).__name__}: {e or '无详情'}")
         return None
 
 
@@ -405,7 +414,7 @@ def _encode_images_sync(file_paths: list[str]) -> list[list[float] | None]:
             images.append(img)
             idxs.append(idx)
         except Exception as e:
-            logger.error(f"读取图片失败，跳过该素材: {path} ({type(e).__name__}: {e})")
+            logger.exception(f"读取图片失败，跳过该素材: {path} ({type(e).__name__}: {e})")
 
     if not images:
         return results
@@ -422,7 +431,7 @@ def _encode_images_sync(file_paths: list[str]) -> list[list[float] | None]:
             try:
                 rows.append(model.encode(img))
             except Exception as e2:
-                logger.error(f"逐张图像编码失败: {type(e2).__name__}: {e2 or '无详情'}")
+                logger.exception(f"逐张图像编码失败: {type(e2).__name__}: {e2 or '无详情'}")
                 rows.append(None)
 
     # 批量编码返回行数理论上与 images 等长；万一不齐（ST 内部异常丢弃），剩下的槽位
@@ -471,7 +480,8 @@ def build_inspiration_text(inspiration: Inspiration) -> str:
             colors = json.loads(inspiration.dominant_colors)
             if isinstance(colors, list):
                 parts.extend([f"颜色 {c}" for c in colors if isinstance(c, str)])
-        except Exception:
+        except Exception as exc:
+            logger.debug("build_inspiration_text: 忽略异常（预期降级）：%s", exc)
             pass
 
     if inspiration.source_author:

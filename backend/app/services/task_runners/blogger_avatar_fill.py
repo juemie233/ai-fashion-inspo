@@ -77,7 +77,8 @@ def _bbox_list(bbox) -> list[float] | None:
         return None
     try:
         x1, y1, x2, y2 = (float(v) for v in bbox)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_bbox_list: 忽略异常（预期降级）：%s", exc)
         return None
     if x2 <= x1 or y2 <= y1:
         return None
@@ -96,7 +97,8 @@ def _image_size(data: bytes) -> tuple[int, int]:
     try:
         with Image.open(BytesIO(data)) as image:
             return image.size
-    except Exception:  # noqa: BLE001 —— 解不了就不裁，交给上层跳过
+    except Exception as exc:  # noqa: BLE001 —— 解不了就不裁，交给上层跳过
+        logger.debug("_image_size: 忽略异常（预期降级）：%s", exc)
         return 0, 0
 
 
@@ -187,7 +189,8 @@ async def _avatar_from_matched_detection(db: AsyncSession, blogger: Blogger) -> 
     for detection, inspiration in rows:
         try:
             bbox = _bbox_list(json.loads(detection.bbox or "[]"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.debug("_avatar_from_matched_detection: 忽略异常（预期降级）：%s", exc)
             continue
         if bbox is None:
             continue

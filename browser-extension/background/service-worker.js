@@ -6,14 +6,57 @@ const DEFAULT_API_URL = 'http://localhost:18888';
 // 右键菜单 ID（固定，onInstalled 中重复创建时靠 lastError 静默忽略）
 const CONTEXT_MENU_ID = 'fashion-inspo-capture-image';
 
+// ── 调试日志（2026-11-02 日志扫描 P2-4）──────────────────────────────
+// 问题：MV3 service worker 被回收后控制台日志全部消失，上传/查重/建会话失败
+// 时用户报「没反应」，开发者拿不到任何现场。这里把关键失败写入
+// `chrome.storage.session` 的环形缓冲（会话级，关浏览器即清），popup 可查看/复制。
+// 默认只记 warn/error；`debugMode` 打开后再记 debug（设置面板可切换）。
+const DEBUG_LOG_KEY = 'debugLogs';
+const DEBUG_LOG_MAX = 50;
+let debugMode = false;
+
+chrome.storage.local.get(['debugMode']).then((result) => {
+  debugMode = result.debugMode === true;
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.debugMode) {
+    debugMode = changes.debugMode.newValue === true;
+  }
+});
+
+/** 写一条调试日志：控制台 + session 环形缓冲（失败时不抛异常） */
+async function logEvent(level, message, detail) {
+  const suffix = detail === undefined || detail === null ? '' : ` ${String(detail)}`;
+  const line = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${message}${suffix}`;
+  if (level === 'error') console.error(message, detail === undefined ? '' : detail);
+  else if (level === 'warn') console.warn(message, detail === undefined ? '' : detail);
+  else console.log(message, detail === undefined ? '' : detail);
+  if (level === 'debug' && !debugMode) return;
+  try {
+    const stored = await chrome.storage.session.get(DEBUG_LOG_KEY);
+    const logs = Array.isArray(stored[DEBUG_LOG_KEY]) ? stored[DEBUG_LOG_KEY] : [];
+    logs.push(line);
+    if (logs.length > DEBUG_LOG_MAX) logs.splice(0, logs.length - DEBUG_LOG_MAX);
+    await chrome.storage.session.set({ [DEBUG_LOG_KEY]: logs });
+  } catch {
+    // session storage 不可用（旧内核 / 受限上下文）时只留控制台，不阻断业务
+  }
+}
+
 /** 获取保存的设置 */
 async function getSettings() {
-  const result = await chrome.storage.local.get(['apiUrl', 'autoAnalyze', 'skipDuplicates']);
+  const result = await chrome.storage.local.get([
+    'apiUrl',
+    'autoAnalyze',
+    'skipDuplicates',
+    'debugMode',
+  ]);
   return {
     apiUrl: result.apiUrl || DEFAULT_API_URL,
     autoAnalyze: result.autoAnalyze !== false,
     // 上传前查重：已入库图片默认跳过（可在 popup 设置面板关闭）
     skipDuplicates: result.skipDuplicates !== false,
+    debugMode: result.debugMode === true,
   };
 }
 
@@ -66,8 +109,8 @@ async function uploadImage(imageUrl, metadata, taskId, settings) {
     }
     return { success: true, data };
   } catch (error) {
-    // 记录失败原因（扩展 Service Worker 的控制台可见，便于排查上传失败）
-    console.warn(`[穿搭采集器] 图片上传失败: ${imageUrl}`, error.message || error);
+    // 记录失败原因（控制台 + session 缓冲，popup 可复制诊断）
+    await logEvent('warn', `[穿搭采集器] 图片上传失败: ${imageUrl}`, error.message || error);
     return { success: false, error: error.message || String(error) };
   }
 }
@@ -88,14 +131,15 @@ async function triggerAnalysis(inspiration, settings) {
       method: 'POST',
     });
     if (!resp.ok) {
-      console.warn(
+      await logEvent(
+        'warn',
         `[穿搭采集器] 触发 AI 分析失败 (HTTP ${resp.status}): ${inspiration.id}`
       );
       return false;
     }
     return true;
   } catch (err) {
-    console.warn('[穿搭采集器] 触发 AI 分析异常:', err);
+    await logEvent('warn', '[穿搭采集器] 触发 AI 分析异常', err.message || err);
     return false;
   }
 }
@@ -116,7 +160,7 @@ async function checkPlatformIdExists(platformId) {
     const data = await resp.json();
     return { exists: !!data.exists, inspirationId: data.inspiration_id || null };
   } catch (err) {
-    console.warn('[穿搭采集器] 平台 ID 查重失败:', err);
+    await logEvent('warn', '[穿搭采集器] 平台 ID 查重失败', err.message || err);
     return { exists: false, inspirationId: null, error: err.message || String(err) };
   }
 }
@@ -138,7 +182,7 @@ async function createExtensionTask(metadata, settings) {
     return data.id || null;
   } catch (err) {
     // 任务创建失败不影响上传主流程，但记录日志便于排查
-    console.warn('[穿搭采集器] 创建采集会话任务失败:', err);
+    await logEvent('warn', '[穿搭采集器] 创建采集会话任务失败', err.message || err);
     return null;
   }
 }
@@ -237,7 +281,7 @@ async function notifyCaptureResult(success, title, message) {
       message,
     });
   } catch (err) {
-    console.warn('[穿搭采集器] 通知创建失败:', err);
+    await logEvent('warn', '[穿搭采集器] 通知创建失败', err.message || err);
   }
   try {
     await chrome.action.setBadgeBackgroundColor({ color: success ? '#16a34a' : '#dc2626' });
@@ -286,6 +330,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     checkPlatformIdExists(message.platformId).then(sendResponse);
     return true;
   }
+
+  if (message.type === 'GET_DEBUG_LOGS') {
+    chrome.storage.session
+      .get(DEBUG_LOG_KEY)
+      .then((stored) => sendResponse({ logs: stored[DEBUG_LOG_KEY] || [] }))
+      .catch(() => sendResponse({ logs: [] }));
+    return true;
+  }
+
+  if (message.type === 'CLEAR_DEBUG_LOGS') {
+    chrome.storage.session
+      .remove(DEBUG_LOG_KEY)
+      .then(() => sendResponse({ success: true }))
+      .catch(() => sendResponse({ success: false }));
+    return true;
+  }
 });
 
 /** 批量上传图片：先创建采集会话任务，逐张上传后汇总计数。
@@ -313,7 +373,7 @@ async function handleUploadImages(images, metadata, sendResponse) {
     // popup 可能在等待期间被关闭：sendResponse 抛错时静默（结果已无法送达）
     sendResponse({ results, taskId });
   } catch (err) {
-    console.error('[穿搭采集器] 批量上传异常:', err);
+    await logEvent('error', '[穿搭采集器] 批量上传异常', err.message || err);
     try {
       sendResponse({ results: [], taskId: null, error: String(err) });
     } catch {

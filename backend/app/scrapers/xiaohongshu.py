@@ -154,7 +154,8 @@ class XiaohongshuScraper(BaseScraper):
                         if cards:
                             logger.info(f"使用选择器 '{sel}' 找到 {len(cards)} 条笔记")
                             break
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("_search: 忽略异常（预期降级）：%s", exc)
                         continue
 
                 if not cards:
@@ -199,10 +200,11 @@ class XiaohongshuScraper(BaseScraper):
                             image_urls=image_urls,
                             caption=caption,
                         ))
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("_search: 忽略异常（预期降级）：%s", exc)
                         continue
             except Exception as e:
-                logger.error(f"小红书搜索失败: {e}")
+                logger.exception(f"小红书搜索失败: {e}")
             return results
 
         return await asyncio.to_thread(_search)
@@ -267,10 +269,11 @@ class XiaohongshuScraper(BaseScraper):
                             platform=self.platform, platform_id=platform_id,
                             url=url or "", image_urls=image_urls,
                         ))
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("_get_feed: 忽略异常（预期降级）：%s", exc)
                         continue
             except Exception as e:
-                logger.error(f"小红书发现页失败: {e}")
+                logger.exception(f"小红书发现页失败: {e}")
             return results
 
         return await asyncio.to_thread(_get_feed)
@@ -282,7 +285,8 @@ class XiaohongshuScraper(BaseScraper):
                 self._browser.close()
             if self._pw:
                 self._pw.stop()
-        except Exception:
+        except Exception as exc:
+            logger.debug("close_sync: 忽略异常（预期降级）：%s", exc)
             pass
 
     async def close(self) -> None:

@@ -41,6 +41,9 @@ from app.services.task_runners.face_scan import (
     create_face_match_task,
     create_face_scan_task,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/face-scan", tags=["face-scan"])
 # 全库重匹配入口独立前缀（与设计文档 API 清单一致）
@@ -108,6 +111,7 @@ async def face_service_status() -> dict:
     try:
         detail = await face_client.health(timeout=FACE_SERVICE_PROBE_TIMEOUT)
     except FaceServiceUnavailableError as e:
+        logger.debug("face_service_status: 忽略异常（预期降级）：%s", e)
         return {
             "enabled": True,
             "reachable": False,

@@ -78,7 +78,8 @@ def _face_area(face: dict) -> float:
         return 0.0
     try:
         x1, y1, x2, y2 = (float(v) for v in bbox)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_face_area: 忽略异常（预期降级）：%s", exc)
         return 0.0
     return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 

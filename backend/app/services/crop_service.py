@@ -470,9 +470,9 @@ async def _crop_one_inspiration(
             if backup_path is not None and backup_path.exists():
                 try:
                     shutil.copy2(backup_path, full)
-                    logger.error(f"裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
+                    logger.exception(f"裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
                 except Exception as restore_err:
-                    logger.error(
+                    logger.exception(
                         f"裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
                         f"err={e}, restore_err={restore_err}"
                     )
@@ -681,9 +681,9 @@ async def crop_inspiration_region(
             if backup_path is not None and backup_path.exists():
                 try:
                     shutil.copy2(backup_path, full)
-                    logger.error(f"手动裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
+                    logger.exception(f"手动裁剪后处理异常，已从备份恢复原图: {insp.id}, err={e}")
                 except Exception as restore_err:
-                    logger.error(
+                    logger.exception(
                         f"手动裁剪后处理异常且原图恢复失败（请手工从备份恢复）: {insp.id}, "
                         f"err={e}, restore_err={restore_err}"
                     )

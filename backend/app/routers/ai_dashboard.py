@@ -177,7 +177,8 @@ async def test_analyze(
                     detail = ""
                     try:
                         detail = e.response.json().get("error", "")
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("event_stream: 忽略异常（预期降级）：%s", exc)
                         pass
                     yield f"data: {json.dumps({'type': 'error', 'message': f'HTTP {e.response.status_code}: {detail or str(e)}'})}\n\n"
                     return

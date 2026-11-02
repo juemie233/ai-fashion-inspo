@@ -18,6 +18,9 @@ from app.config import settings
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.utils.system_stats import disk_usage, memory_usage
 from app.utils.time import format_utc, utcnow
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 前端 dev server 端口（与 scripts/ops/restart.sh、scripts/ops/ensure-services.sh 约定一致）
 _FRONTEND_PORT = 17777
@@ -45,6 +48,7 @@ async def _probe_frontend() -> dict:
         latency_ms = round((time.perf_counter() - start) * 1000)
         return {"status": "ok", "latency_ms": latency_ms, "http_status": resp.status_code}
     except Exception as e:
+        logger.debug("_probe_frontend: 忽略异常（预期降级）：%s", e)
         return {"status": "down", "latency_ms": None, "detail": str(e)[:120]}
 
 
@@ -82,7 +86,8 @@ def _logs_stats() -> dict:
         for fpath in log_dir.rglob("*.log"):
             try:
                 size = fpath.stat().st_size
-            except OSError:
+            except OSError as exc:
+                logger.debug("_logs_stats: 忽略异常（预期降级）：%s", exc)
                 continue
             total += size
             files.append({"name": fpath.name, "size_bytes": size})

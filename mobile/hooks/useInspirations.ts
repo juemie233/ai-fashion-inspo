@@ -13,6 +13,7 @@ import {
   type ListFilter,
   type SortKey,
 } from '../services/api'
+import { logger } from '../utils/logger'
 
 interface InspirationState {
   items: Inspiration[]
@@ -80,7 +81,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       set({ items: data.items, total: data.total, page: 1, error: null })
     } catch (e) {
       if (seq === listRequestSeq) {
-        console.error('加载素材失败', e)
+        logger.error('加载素材失败', e)
         // 断网/后端没启动时不能显示「还没有素材」：交给页面的错误态与重试按钮
         set({ error: '加载失败，请检查网络或后端服务' })
       }
@@ -140,7 +141,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       }))
     } catch (e) {
       if (seq === listRequestSeq) {
-        console.error('加载更多失败', e)
+        logger.error('加载更多失败', e)
         // 已有数据时不清空列表，只标记错误（页面用行内提示）
         set({ error: '加载更多失败，请下拉重试' })
       }

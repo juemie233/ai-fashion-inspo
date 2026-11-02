@@ -88,12 +88,14 @@ async def _run_ffmpeg(
         except TimeoutError:
             try:
                 proc.kill()
-            except ProcessLookupError:
+            except ProcessLookupError as exc:
+                logger.debug("_run_ffmpeg: 忽略异常（预期降级）：%s", exc)
                 pass
             # kill 后回收子进程，避免留下僵尸进程
             try:
                 await proc.wait()
-            except Exception:
+            except Exception as exc:
+                logger.debug("_run_ffmpeg: 忽略异常（预期降级）：%s", exc)
                 pass
             logger.warning(f"关键帧提取超时（{_FFMPEG_TIMEOUT}s），已终止: {video_rel_path}")
     except Exception as e:
@@ -157,7 +159,8 @@ async def extract_keyframes_for_video(
         # 空目录移除，保持存储干净；同时让下次调用可重试
         try:
             out_dir.rmdir()
-        except OSError:
+        except OSError as exc:
+            logger.debug("extract_keyframes_for_video: 忽略异常（预期降级）：%s", exc)
             pass
         logger.warning(f"关键帧提取失败（无帧产出，忽略）: {video_rel_path}")
     return frames

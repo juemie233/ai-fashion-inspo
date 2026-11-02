@@ -131,7 +131,8 @@ def _cookie_path(platform: str) -> Path:
 def _file_mtime(cookie_file: Path) -> float:
     try:
         return cookie_file.stat().st_mtime
-    except OSError:
+    except OSError as exc:
+        logger.debug("_file_mtime: 忽略异常（预期降级）：%s", exc)
         return 0.0
 
 
@@ -143,6 +144,7 @@ async def _probe(platform: str, probe: dict, cookie_file: Path) -> dict:
     try:
         raw = json.loads(cookie_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
+        logger.debug("_probe: 忽略异常（预期降级）：%s", e)
         return _result(platform, "invalid", f"Cookie 文件解析失败: {e}", probe["url"])
 
     if not isinstance(raw, list):

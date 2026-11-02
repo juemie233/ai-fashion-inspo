@@ -63,14 +63,16 @@ CANDIDATE_SUFFIX = ".png"
 def _int_or(value, default: int) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_int_or: 忽略异常（预期降级）：%s", exc)
         return default
 
 
 def _float_or(value, default: float) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_float_or: 忽略异常（预期降级）：%s", exc)
         return default
 
 
@@ -82,7 +84,8 @@ def _params_of(run: GenerationRun) -> dict:
     """
     try:
         value = json.loads(run.params_json or "{}")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("_params_of: 忽略异常（预期降级）：%s", exc)
         return {}
     return value if isinstance(value, dict) else {}
 

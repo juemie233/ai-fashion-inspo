@@ -17,7 +17,7 @@ import os
 import subprocess
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,6 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session, init_db
 from app.db_migrations import ensure_schema
+from app.logging_config import (
+    TEXT_FORMAT,
+    ContextFormatter,
+    run_id_var,
+    setup_logging,
+    task_id_var,
+)
 from app.models.service_heartbeat import ServiceHeartbeat
 from app.models.task import TaskQueue
 from app.models.task_run_log import TaskRunLog
@@ -202,7 +209,8 @@ def _gpu_model() -> str | None:
             names = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
             if names:
                 return "; ".join(dict.fromkeys(names))[:128]
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("_gpu_model: 忽略异常（预期降级）：%s", exc)
         return None
     return None
 
@@ -226,6 +234,8 @@ async def _start_run_log(db: AsyncSession, task: TaskQueue) -> int | None:
         )
         db.add(row)
         await db.commit()
+        # 本次执行的账本行 id：日志格式里的 run= 字段据此与 task_run_logs 对齐
+        run_id_var.set(str(row.id))
         logger.info(
             "任务开始: #%s (%s) total=%s attempt=%s gpu=%s",
             task.id,
@@ -239,7 +249,8 @@ async def _start_run_log(db: AsyncSession, task: TaskQueue) -> int | None:
         logger.warning("写任务运行台账失败（忽略）: %s", exc)
         try:
             await db.rollback()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_start_run_log: 忽略异常（预期降级）：%s", exc)
             pass
         return None
 
@@ -283,7 +294,8 @@ async def _finish_run_log(
         logger.warning("写任务运行台账收尾失败（忽略）: %s", exc)
         try:
             await db.rollback()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_finish_run_log: 忽略异常（预期降级）：%s", exc)
             pass
 
 
@@ -380,7 +392,7 @@ async def _run_task(task_id: int) -> None:
             task.status = "failed"
             task.error = str(e)
             task.next_retry_at = None
-            logger.error(f"任务失败（永久错误，不重试）: #{task.id} ({task.type}): {e}")
+            logger.exception(f"任务失败（永久错误，不重试）: #{task.id} ({task.type}): {e}")
             await db.commit()
             await _finish_run_log(
                 db, run_log_id, status="failed", item_count=task.done, error=str(e)
@@ -397,7 +409,7 @@ async def _run_task(task_id: int) -> None:
                 task.status = "failed"
                 task.error = msg
                 task.next_retry_at = None
-                logger.error(f"任务失败: #{task.id} ({task.type}): {msg}")
+                logger.exception(f"任务失败: #{task.id} ({task.type}): {msg}")
             await db.commit()
             await _finish_run_log(
                 db,
@@ -413,12 +425,18 @@ async def _run_task(task_id: int) -> None:
 
 async def _run_task_safe(task_id: int) -> None:
     """并发槽位中执行单个任务：捕获所有异常，防止执行协程崩溃拖垮主循环。"""
+    # 任务上下文：task_id / run_id 写进 contextvar，任务 runner 内所有日志自动带上
+    task_token = task_id_var.set(f"#{task_id}")
+    run_token = run_id_var.set("-")
     try:
         await _run_task(task_id)
     except asyncio.CancelledError:
         raise
     except Exception:
         logger.exception(f"任务执行协程异常退出: #{task_id}")
+    finally:
+        run_id_var.reset(run_token)
+        task_id_var.reset(task_token)
 
 
 async def _reset_stale_tasks() -> None:
@@ -590,31 +608,88 @@ async def _flush_pending_backfills_on_startup() -> None:
             logger.warning(f"启动时清理/回填遗留任务失败（忽略，不影响 worker 启动）: {e}")
 
 
+def _cleanup_old_analyze_logs() -> None:
+    """删除超过保留期的 ``logs/analyze-YYYY-MM-DD.log``（默认 30 天）。
+
+    按天日志只增不减，长期跑下去会把 logs/ 撑大；worker 启动时顺手清一次即可
+    （worker 重启频率远高于保留期，不需要额外定时器）。
+    """
+    keep_days = max(0, settings.log_retention_days)
+    if keep_days <= 0 or not _LOG_DIR.is_dir():
+        return
+    cutoff = datetime.now().timestamp() - keep_days * 86400
+    removed = 0
+    for path in _LOG_DIR.glob("analyze-*.log"):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError as exc:  # 文件被占用时跳过，不能因为清理失败拖垮启动
+            logger.warning("清理过期按天日志失败（忽略）：%s（%s）", path.name, exc)
+    if removed:
+        logger.info("[日志清理] 删除 %s 个超过 %s 天的按天分析日志", removed, keep_days)
+
+
+async def _cleanup_old_run_logs() -> None:
+    """删除超过保留期的任务运行台账行（默认 90 天）。
+
+    只按 ``started_at`` 删历史行，不动 running 中的行；清理失败只告警不阻断启动。
+    """
+    keep_days = max(0, settings.task_run_log_retention_days)
+    if keep_days <= 0:
+        return
+    cutoff = utcnow() - timedelta(days=keep_days)
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                delete(TaskRunLog).where(TaskRunLog.started_at < cutoff)
+            )
+            await db.commit()
+            if result.rowcount:
+                logger.info(
+                    "[台账清理] 删除 %s 条超过 %s 天的任务运行台账",
+                    result.rowcount,
+                    keep_days,
+                )
+    except Exception as exc:  # noqa: BLE001 —— 台账清理失败不能阻断 worker 启动
+        logger.warning("清理过期任务运行台账失败（忽略）：%s", exc)
+
+
 def _setup_logging() -> None:
-    """控制台 + 按天切分的 `logs/analyze-YYYY-MM-DD.log`（批处理留痕用）。"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    """统一日志（root handler + 级别/格式）+ 按天 ``analyze-YYYY-MM-DD.log``。
+
+    历史问题（P1-5）：``basicConfig`` 只配 root 根级别，且运行中的 worker 早于
+    台账功能提交，导致 ``task_run_logs`` 为空、``analyze-*.log`` 不生成，排查时
+    只能猜「代码是否生效」。现在启动时把 root handlers 与按天日志目录打进日志，
+    下次重启即可从 ``worker.log`` 直接确认配置已加载。
+    """
+    setup_logging("worker")
     root = logging.getLogger()
     if not any(isinstance(handler, DailyFileHandler) for handler in root.handlers):
         handler = DailyFileHandler(_LOG_DIR, prefix="analyze")
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-        )
+        handler.setFormatter(ContextFormatter(TEXT_FORMAT))
         root.addHandler(handler)
+    logger.info(
+        "[worker] 日志就绪：root handlers=%s，按天日志目录=%s（LOG_LEVEL=%s）",
+        [type(handler).__name__ for handler in root.handlers],
+        _LOG_DIR,
+        logging.getLevelName(root.level),
+    )
 
 
 async def main() -> None:
     """worker 入口：确保表结构、重置遗留任务后启动主循环与心跳循环。"""
     _setup_logging()
-    # 关闭 SQLAlchemy 引擎的 SQL 日志（debug 模式下每秒轮询会刷屏）
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # setup_logging 已把 sqlalchemy.engine 压到 WARNING（LOG_LEVEL=DEBUG 时保留）
     # 注意：worker 不跑 Alembic 迁移，由服务端进程（app.main）统一负责。
     # 服务端与 worker 并发启动时同时跑 alembic upgrade 会竞争 SQLite 写锁导致死锁；
     # worker 仅做 create_all（建缺失表）+ ensure_schema（手写补列）兜底。
     await init_db()
     await ensure_schema()  # 手写迁移兜底
+
+    # 日志/台账保留期清理（P1-4）：启动时各做一次，失败只告警不阻断
+    _cleanup_old_analyze_logs()
+    await _cleanup_old_run_logs()
 
     worker_id = _build_worker_id()
     await _reset_stale_tasks()

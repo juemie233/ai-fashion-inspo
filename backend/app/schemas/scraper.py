@@ -7,6 +7,9 @@ from typing import Any
 from pydantic import BaseModel, Field, field_serializer, field_validator
 
 from app.utils.time import format_utc
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ScraperTaskCreate(BaseModel):
@@ -94,7 +97,8 @@ class ScraperScheduleOut(BaseModel):
         if isinstance(v, str):
             try:
                 return json.loads(v)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.debug("parse_keywords: 忽略异常（预期降级）：%s", exc)
                 return []
         return v or []
 

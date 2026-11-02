@@ -28,6 +28,7 @@ import argparse
 import csv
 import json
 import logging
+import logging.handlers
 import os
 import re
 import subprocess
@@ -247,7 +248,10 @@ def _setup_stdout_utf8() -> None:
 
 
 def setup_logging(log_path: Path) -> None:
-    """配置日志：控制台 + 文件双输出（UTF-8，中文信息）。
+    """配置日志：控制台 + 轮转文件双输出（UTF-8，中文信息）。
+
+    长驻脚本会持续追加日志，用 `RotatingFileHandler`（10 MB × 3）而不是
+    无上限的 `FileHandler`，避免单文件无限增长（2026-11-02 日志扫描 P2-5）。
 
     Args:
         log_path: 日志文件路径（backend/storage/xhs_following.log）。
@@ -257,7 +261,9 @@ def setup_logging(log_path: Path) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
-    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
     fh.setFormatter(fmt)
     root.addHandler(fh)
 

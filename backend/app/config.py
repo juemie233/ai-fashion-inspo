@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = True
 
+    # ── 日志（见 app/logging_config.py）──
+    # 级别：DEBUG/INFO/WARNING/ERROR，默认 INFO；排障时在 .env 临时开 DEBUG
+    log_level: str = "INFO"
+    # 格式：text（默认，人读）| json（一行一条，便于 grep/jq）
+    log_format: str = "text"
+    # 慢请求阈值（毫秒）：超过则中间件记一条 WARNING（uvicorn 访问日志只留 4xx/5xx）
+    slow_request_ms: int = 1000
+    # worker 按天日志 analyze-YYYY-MM-DD.log 的保留天数
+    log_retention_days: int = 30
+    # 任务运行台账 task_run_logs 的保留天数
+    task_run_log_retention_days: int = 90
+
     # 服务器（默认仅本机可访问；确需局域网/真机访问时再显式改绑 0.0.0.0）
     host: str = "127.0.0.1"
     port: int = 18888

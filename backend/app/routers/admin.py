@@ -106,7 +106,8 @@ async def cleanup_orphan_files() -> dict:
         if dirpath.is_dir():
             try:
                 dirpath.rmdir()  # 仅删除空目录
-            except OSError:
+            except OSError as exc:
+                logger.debug("cleanup_orphan_files: 忽略异常（预期降级）：%s", exc)
                 pass
 
     # 记录审计：清理孤立文件属破坏性操作，留痕便于追溯

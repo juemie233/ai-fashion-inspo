@@ -118,7 +118,8 @@ def _parse_verdict(raw: str) -> str | None:
         return None
     try:
         obj = json.loads(m.group(0))
-    except Exception:
+    except Exception as exc:
+        logger.debug("_parse_verdict: 忽略异常（预期降级）：%s", exc)
         return None
     sock = str(obj.get("sock", "")).strip()
     return sock if sock in ("过膝袜", "大腿袜", "长筒袜", "连裤袜", "无袜子", "不确定") else None

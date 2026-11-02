@@ -188,7 +188,8 @@ def _read_cache() -> list[dict[str, Any]] | None:
     path = catalog_cache_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.debug("_read_cache: 忽略异常（预期降级）：%s", exc)
         return None
     if not isinstance(data, list) or not data:
         return None
@@ -348,7 +349,8 @@ def _is_png(path: Path) -> bool:
     try:
         with path.open("rb") as fh:
             return fh.read(len(PNG_MAGIC)) == PNG_MAGIC
-    except OSError:
+    except OSError as exc:
+        logger.debug("_is_png: 忽略异常（预期降级）：%s", exc)
         return False
 
 

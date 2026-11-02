@@ -57,7 +57,8 @@ def _color_label(hex_code: str) -> str:
     # 退化到粗粒度判断：很亮→浅色，很暗→深色
     try:
         r, g, b = int(code[0:2], 16), int(code[2:4], 16), int(code[4:6], 16)
-    except ValueError:
+    except ValueError as exc:
+        logger.debug("_color_label: 忽略异常（预期降级）：%s", exc)
         return hex_code
     if r > 220 and g > 220 and b > 220:
         return "白色"

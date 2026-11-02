@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.task import TaskQueue
-from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut
+from app.models.task_run_log import TaskRunLog
+from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut, TaskRunOut
 from app.services.task_runner import _broadcast_task_event
 from app.utils.time import utcnow
 from app.worker import _STALE_HEARTBEAT_THRESHOLD
@@ -114,6 +115,31 @@ async def get_task(
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
     return task
+
+
+@router.get("/{task_id}/runs", response_model=list[TaskRunOut])
+async def list_task_runs(
+    task_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> list[TaskRunLog]:
+    """查询任务的运行台账：每次执行尝试一行（含重试），按开始时间升序。
+
+    对应 ``task_run_logs`` 表（worker 写入，worker 启动时按保留期清理）。
+    此前只有表、没有读接口，排障只能手写 SQL；任务详情页「运行记录」用它。
+    """
+    task = await db.get(TaskQueue, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务未找到")
+    rows = (
+        await db.execute(
+            select(TaskRunLog)
+            .where(TaskRunLog.task_id == task_id)
+            .order_by(TaskRunLog.id.asc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskCancelOut)
