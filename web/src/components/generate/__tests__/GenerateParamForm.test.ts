@@ -590,4 +590,31 @@ describe('云端 Seedream 档位', () => {
     expect(payloads[0].model_key).toBe('seedream_5_0_flash')
     wrapper.unmount()
   })
+
+  it('首次云端提交先弹隐私确认，未确认不发出批次', async () => {
+    sessionStorage.clear()
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: CLOUD_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        initialModelKey: 'seedream_5_0_flash',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('selectMultiple', [POSE_FIXTURE])
+    await flushPromises()
+
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成 1 张'))
+    await btn!.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('云端出图需要上传图片')
+    expect(wrapper.emitted('submitBatch')).toBeUndefined()
+    wrapper.unmount()
+  })
 })
