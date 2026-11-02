@@ -340,3 +340,68 @@ async def test_ensure_pose_image_maps_network_error_to_retryable_503(
     with pytest.raises(HTTPException) as exc:
         await pose_gallery.ensure_pose_image("full_std_P001_front")
     assert exc.value.status_code == 503
+
+
+# ── 姿势使用次数（选择器「已用 N 次」）──
+
+
+async def test_pose_usage_counts_按批次聚合(client, fake_gallery):
+    """usage_count = 该项目里用该姿势提交过的出图批次数（失败批次也算）。"""
+    import json
+
+    from app.database import async_session
+    from app.models.generation import GenerationRun
+    from app.services import generation_service
+
+    async with async_session() as db:
+        db.add_all(
+            [
+                GenerationRun(
+                    kind="i2i",
+                    status="done",
+                    prompt="p",
+                    params_json=json.dumps({"pose_id": "upper_P003_low"}),
+                ),
+                GenerationRun(
+                    kind="i2i",
+                    status="failed",
+                    prompt="p",
+                    params_json=json.dumps({"pose_id": "upper_P003_low"}),
+                ),
+                GenerationRun(kind="t2i", status="done", prompt="p", params_json="{}"),
+                # 脏数据（非法 JSON）不能让整个聚合报 malformed JSON
+                GenerationRun(kind="t2i", status="done", prompt="p", params_json="{bad"),
+            ]
+        )
+        await db.commit()
+        counts = await generation_service.pose_usage_counts(db)
+
+    assert counts == {"upper_P003_low": 2}
+
+    resp = client.get("/api/pose-gallery")
+    assert resp.status_code == 200
+    by_id = {item["id"]: item for item in resp.json()["items"]}
+    assert by_id["upper_P003_low"]["usage_count"] == 2
+    # 未使用过的姿势明确给 0（前端显示「未用」，而不是缺字段）
+    assert by_id["full_std_P001_front"]["usage_count"] == 0
+
+
+def test_router_random_pose_按筛选随机(client, fake_gallery):
+    """随机接口只在当前筛选里抽，并支持 exclude（单选项只有一个时仍返回它）。"""
+    resp = client.get("/api/pose-gallery/random", params={"category": "坐姿"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "upper_P003_low"
+    assert body["usage_count"] == 0
+
+    # 排除唯一匹配：仍返回它自己（比直接 404 更符合「点随机就是要选一个」）
+    again = client.get(
+        "/api/pose-gallery/random",
+        params={"category": "坐姿", "exclude": "upper_P003_low"},
+    )
+    assert again.status_code == 200
+    assert again.json()["id"] == "upper_P003_low"
+
+    # 筛选结果为空 → 404，前端提示可执行文案
+    empty = client.get("/api/pose-gallery/random", params={"q": "不存在的姿势名"})
+    assert empty.status_code == 404

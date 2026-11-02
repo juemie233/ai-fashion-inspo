@@ -14,11 +14,17 @@ import type { PoseGalleryMeta, PoseItem } from '@/api/poseGallery'
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
   poses: vi.fn(),
+  random: vi.fn(),
 }))
 
 vi.mock('@/api/poseGallery', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/poseGallery')>()
-  return { ...actual, fetchPoseGalleryMeta: mocks.meta, fetchPoses: mocks.poses }
+  return {
+    ...actual,
+    fetchPoseGalleryMeta: mocks.meta,
+    fetchPoses: mocks.poses,
+    fetchRandomPose: mocks.random,
+  }
 })
 
 const META: PoseGalleryMeta = {
@@ -40,6 +46,8 @@ const POSES: PoseItem[] = [
     pose_no: 'P001',
     thumb_url: 'https://example.com/thumbs/a.jpg',
     image_url: 'https://example.com/img/a.png',
+    // 该项目里用过 3 次（卡片显示「已用 3 次」）
+    usage_count: 3,
   },
   {
     id: 'upper_P003_low',
@@ -50,6 +58,8 @@ const POSES: PoseItem[] = [
     pose_no: 'P003',
     thumb_url: 'https://example.com/thumbs/b.jpg',
     image_url: 'https://example.com/img/b.png',
+    // 从未用过（卡片显示「未用」）
+    usage_count: 0,
   },
 ]
 
@@ -59,9 +69,9 @@ const ModalStub = {
   template: '<div class="modal-stub"><slot /></div>',
 }
 
-function mountPicker() {
+function mountPicker(props: Record<string, unknown> = {}) {
   return mount(PosePickerModal, {
-    props: { visible: false },
+    props: { visible: false, ...props },
     global: { plugins: [ArcoVue], stubs: { 'a-modal': ModalStub } },
     attachTo: document.body,
   })
@@ -71,6 +81,7 @@ describe('PosePickerModal', () => {
   beforeEach(() => {
     mocks.meta.mockReset()
     mocks.poses.mockReset()
+    mocks.random.mockReset()
     mocks.meta.mockResolvedValue(META)
     mocks.poses.mockResolvedValue({
       items: POSES,
@@ -174,6 +185,59 @@ describe('PosePickerModal', () => {
     expect(wrapper.findAll('.pose-card')).toHaveLength(1)
     expect(wrapper.text()).toContain('半身坐姿')
     expect(wrapper.text()).not.toContain('S形站姿')
+    wrapper.unmount()
+  })
+
+  it('卡片显示该项目里该姿势的已用次数（0 次显示「未用」）', async () => {
+    const wrapper = mountPicker()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已用 3 次')
+    expect(wrapper.text()).toContain('未用')
+    // 用过的姿势高亮，未用的保持灰字
+    expect(wrapper.find('.pose-card-usage.is-used').text()).toBe('已用 3 次')
+    wrapper.unmount()
+  })
+
+  it('随机按钮：单选模式按当前筛选抽一个，直接选中并关闭弹窗', async () => {
+    mocks.random.mockResolvedValue(POSES[1])
+    const wrapper = mountPicker()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    const randomBtn = wrapper.findAll('button').find((btn) => btn.text().includes('随机'))
+    expect(randomBtn, '工具栏应有「🎲 随机」按钮').toBeTruthy()
+    await randomBtn!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.random).toHaveBeenCalledWith({
+      q: undefined,
+      system: undefined,
+      category: undefined,
+      angle: undefined,
+      exclude: undefined,
+    })
+    expect(wrapper.emitted('select')?.[0]).toEqual([POSES[1]])
+    expect(wrapper.emitted('update:visible')?.[0]).toEqual([false])
+    wrapper.unmount()
+  })
+
+  it('随机按钮：多选模式把随机姿势加入已选、不关闭弹窗', async () => {
+    mocks.random.mockResolvedValue(POSES[0])
+    const wrapper = mountPicker({ multiple: true, selectedIds: [] })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    await wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('随机'))!
+      .trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 1/10')
+    expect(wrapper.find('.pose-card.is-selected').exists()).toBe(true)
+    expect(wrapper.emitted('update:visible')).toBeFalsy()
     wrapper.unmount()
   })
 })

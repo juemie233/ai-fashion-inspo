@@ -931,6 +931,9 @@ onMounted(() => {
           <img :src="pose.thumb_url" :alt="pose.name" loading="lazy" />
           <div class="gen-pose-meta">
             <div class="gen-pose-name">{{ pose.name }} · {{ pose.angle }}</div>
+            <div v-if="pose.usage_count !== undefined" class="gen-hint">
+              此前已用 {{ pose.usage_count }} 次
+            </div>
             <a-button size="mini" type="text" @click="removeCloudPose(pose.id)">移除</a-button>
           </div>
         </div>
@@ -970,6 +973,9 @@ onMounted(() => {
             </template>
             <template v-else>
               姿势名/角度会写进描述，用<strong>文生图</strong>生成（不需要参考图）
+            </template>
+            <template v-if="selectedPose.usage_count !== undefined">
+              · 此前已用 {{ selectedPose.usage_count }} 次
             </template>
           </div>
         </div>

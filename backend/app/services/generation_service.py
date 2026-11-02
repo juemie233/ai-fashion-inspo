@@ -90,6 +90,38 @@ def _params_of(run: GenerationRun) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+async def pose_usage_counts(db: AsyncSession) -> dict[str, int]:
+    """统计每个姿势被用于出图的批次数（选择器显示「已用 N 次」）。
+
+    数据源是 ``generation_runs.params_json`` 里的 ``pose_id`` 快照（建批次时写入，
+    云端多姿态是「每个姿态各建一个批次」，因此同样只出现 ``pose_id``）：
+
+    - 每一次提交都算一次使用——包括失败/取消的批次，用户问的是「这个姿势我用过几次」；
+    - 参数快照里没有 ``pose_id`` 的批次（未选姿势）不参与统计；
+    - 用 SQLite JSON1 的 ``json_extract`` 在库里分组，不把整段提示词读进 Python；
+    - 不做缓存：查询只是一次 ``GROUP BY``（当前全库 91 批），缓存反而要处理
+      「批次被删/新批次 +1 后旧缓存」的失效问题。
+
+    Args:
+        db: 数据库会话。
+
+    Returns:
+        ``{pose_id: 使用批次数}``；未使用过的姿势不在字典里（调用方按 0 兜底）。
+    """
+    pose_expr = func.json_extract(GenerationRun.params_json, "$.pose_id")
+    rows = (
+        await db.execute(
+            select(pose_expr, func.count())
+            # 历史脏数据（非法 JSON）会让 json_extract 直接报 malformed JSON，
+            # 整个选择器接口 500；用 json_valid 先过滤，坏行不参与统计
+            .where(func.json_valid(GenerationRun.params_json) == 1)
+            .where(pose_expr.is_not(None))
+            .group_by(pose_expr)
+        )
+    ).all()
+    return {str(pose_id): int(count) for pose_id, count in rows if pose_id}
+
+
 def _validate_params(payload: dict, spec: dict) -> dict:
     """校验并归一化出图参数。
 

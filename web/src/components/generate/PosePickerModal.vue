@@ -15,6 +15,7 @@ import { getApiErrorMessage } from '@/utils/apiError'
 import {
   fetchPoseGalleryMeta,
   fetchPoses,
+  fetchRandomPose,
   type PoseGalleryMeta,
   type PoseItem,
 } from '@/api/poseGallery'
@@ -51,6 +52,8 @@ const multiIds = ref<string[]>([])
 const MAX_SELECT = 10
 const hasMore = ref(false)
 const total = ref(0)
+/** 「🎲 随机」按钮加载态（防连点抽多个） */
+const randomLoading = ref(false)
 
 /** 请求序号：快速切筛选/搜索时，只允许最新一次响应落地（旧响应会污染新结果）。 */
 let requestSeq = 0
@@ -163,6 +166,55 @@ function onSelect(pose: PoseItem): void {
   emit('update:visible', false)
 }
 
+/** 卡片上的使用次数：0 显示「未用」，避免一片「已用 0 次」噪音。 */
+function usageLabel(pose: PoseItem): string {
+  const count = pose.usage_count ?? 0
+  return count > 0 ? `已用 ${count} 次` : '未用'
+}
+
+/**
+ * 按当前筛选随机选一个姿势（本地单选：选中即关闭；云端多选：加入已选、留在弹窗）。
+ *
+ * 排除规则：单选时排除当前已选姿势（筛选里只剩它时后端会允许返回它自己，避免
+ * 「点随机直接报没有匹配」）；多选时最多重试 3 次，避开已选中的姿势。
+ */
+async function onRandom(): Promise<void> {
+  if (randomLoading.value) return
+  randomLoading.value = true
+  try {
+    const attempts = props.multiple ? 3 : 1
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const pose = await fetchRandomPose({
+        q: keyword.value.trim() || undefined,
+        system: system.value || undefined,
+        category: category.value || undefined,
+        angle: angle.value || undefined,
+        // 单选才排除已选；多选靠下面的重试避开
+        exclude: !props.multiple && total.value > 1 ? props.selectedId || undefined : undefined,
+      })
+      if (props.multiple && multiIds.value.includes(pose.id)) continue
+      if (props.multiple) {
+        if (multiIds.value.length >= MAX_SELECT) {
+          Message.warning(`最多选择 ${MAX_SELECT} 个姿态`)
+          return
+        }
+        multiIds.value = [...multiIds.value, pose.id]
+        multiSelected.value = [...multiSelected.value, pose]
+        Message.success(`随机加入姿势：${pose.name}`)
+        return
+      }
+      emit('select', pose)
+      emit('update:visible', false)
+      return
+    }
+    Message.info('随机到的姿势都已在已选列表中，换个筛选再试')
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '随机选择姿势失败'))
+  } finally {
+    randomLoading.value = false
+  }
+}
+
 function confirmMulti(): void {
   if (!multiSelected.value.length) {
     Message.warning('请至少选择 1 个姿态')
@@ -218,6 +270,14 @@ function confirmMulti(): void {
         style="width: 130px"
         @change="onFilterChange"
       />
+      <a-button
+        size="small"
+        :loading="randomLoading"
+        title="按当前筛选随机选一个姿势"
+        @click="onRandom"
+      >
+        🎲 随机
+      </a-button>
       <span class="pose-hint">共 {{ total }} 个姿势</span>
     </div>
     <div class="pose-note">{{ meta?.note || '图片来自 ai-pose-gallery-zh（个人本地使用）' }}</div>
@@ -234,12 +294,15 @@ function confirmMulti(): void {
           type="button"
           class="pose-card"
           :class="{ 'is-selected': multiple ? multiIds.includes(pose.id) : pose.id === selectedId }"
-          :title="`${pose.name} · ${pose.angle}`"
+          :title="`${pose.name} · ${pose.angle} · ${usageLabel(pose)}`"
           @click="onSelect(pose)"
         >
           <img :src="pose.thumb_url" :alt="pose.name" loading="lazy" />
           <span class="pose-card-meta">{{ pose.name }}</span>
           <span class="pose-card-sub">{{ pose.category }} · {{ pose.angle }}</span>
+          <span class="pose-card-usage" :class="{ 'is-used': (pose.usage_count ?? 0) > 0 }">
+            {{ usageLabel(pose) }}
+          </span>
         </button>
       </div>
     </a-spin>
@@ -334,9 +397,20 @@ function confirmMulti(): void {
 }
 
 .pose-card-sub {
-  margin-bottom: 4px;
   color: var(--color-text-3);
   font-size: 11px;
+}
+
+/* 使用次数（项目中该姿势被出图用过的批次数）：用户高频姿势高亮，未用灰字 */
+.pose-card-usage {
+  padding: 0 6px 5px;
+  color: var(--color-text-3);
+  font-size: 11px;
+}
+
+.pose-card-usage.is-used {
+  color: rgb(var(--primary-6));
+  font-weight: 600;
 }
 
 .pose-more {

@@ -24,6 +24,8 @@ export interface PoseItem {
   thumb_url: string
   /** 原图直链（900×1200 PNG，源站；后端生成时下载） */
   image_url: string
+  /** 该项目中该姿势被用于出图的批次数（列表/随机接口返回；历史恢复的单条接口可能没有） */
+  usage_count?: number
 }
 
 /** 筛选项（带数量，下拉用；只在本模块的元信息结构里出现，不单独 export）。 */
@@ -72,6 +74,14 @@ export async function fetchPoseGalleryMeta(): Promise<PoseGalleryMeta> {
 /** 分页查询姿势（服务端筛选）。 */
 export async function fetchPoses(query: PoseQuery = {}): Promise<PoseList> {
   const { data } = await apiClient.get<PoseList>('/pose-gallery', { params: query })
+  return data
+}
+
+/** 按当前筛选随机取一个姿势（选择器「🎲 随机」按钮用）。 */
+export async function fetchRandomPose(
+  query: PoseQuery & { exclude?: string } = {},
+): Promise<PoseItem> {
+  const { data } = await apiClient.get<PoseItem>('/pose-gallery/random', { params: query })
   return data
 }
 

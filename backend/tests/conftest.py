@@ -54,6 +54,9 @@ _ALL_TABLES = [
     "scraper_schedules",
     "scraper_tasks",
     "scraper_hashtags",
+    # 出图批次：清表隔离「姿势使用次数」等聚合口径（generation_runs 只记历史，
+    # 不参与其它用例的前置依赖；候选图目录由下面 storage 清理负责）
+    "generation_runs",
     "task_queue",
     "pending_vector_backfills",
     # 任务运行台账：task_queue 的 id 在清表后会被 SQLite 复用，不一起清会让
@@ -153,6 +156,9 @@ def clean_state(client):
         settings.storage_root / "_crop_backup",  # 裁剪原图备份（按时间戳分目录）
         settings.storage_root / "_crop_dups",  # 裁剪重复对比预览（按批次分目录）
         settings.storage_root / "cookies",  # 平台 Cookie 文件（防跨用例污染，见下）
+        # 出图候选目录 generated/<run_id>/：generation_runs 清表后 run id 会从头复用，
+        # 不一起清会让上一用例的候选图出现在新用例同 id 的批次里（seed 断言串味）
+        settings.storage_root / "generated",
         settings.lancedb_dir,  # 向量库（LanceDB 落盘目录，含 .text-formula-version 标记）
     ]:
         if dir_path.exists():

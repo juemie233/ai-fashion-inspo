@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 from pathlib import Path
@@ -296,6 +297,36 @@ async def list_poses(
         "size": size,
         "note": GALLERY_NOTE,
     }
+
+
+async def random_pose(
+    *,
+    q: str | None = None,
+    system: str | None = None,
+    category: str | None = None,
+    angle: str | None = None,
+    exclude: str | None = None,
+) -> dict[str, Any]:
+    """按当前筛选随机取一个姿势（选择器「🎲 随机」按钮用）。
+
+    目录已在本地缓存时零网络请求；筛选口径与 ``list_poses`` 完全一致，保证
+    「随机」只在用户当前看到的那批姿势里抽。``exclude`` 用来排除当前已选姿势
+    （只有一个匹配时宁可不排除，避免随机按钮直接报「没有匹配」）。
+
+    Raises:
+        HTTPException(404): 筛选（或排除后）没有可选的姿势。
+    """
+    items = await load_catalog()
+    filtered = filter_poses(items, q=q, system=system, category=category, angle=angle)
+    if exclude:
+        remaining = [item for item in filtered if item["id"] != exclude]
+        # 只剩被排除的那一个时，允许随机到它自己（用户点随机就是要换个姿势，
+        # 但整批筛选只有一个时返回同一个比 404 更合理）
+        if remaining:
+            filtered = remaining
+    if not filtered:
+        raise HTTPException(status_code=404, detail="没有匹配的姿势")
+    return dict(random.choice(filtered))
 
 
 def _counts(values: list[str]) -> list[dict[str, Any]]:

@@ -281,3 +281,5 @@ src/utils/logger.ts - getLastRequestId
 src/api/poseGallery.ts - PosePromptResult (used in module)
 src/api/poseGallery.ts - fetchPosePrompt
 src/utils/faceMedia.ts - faceCropUrl
+# 2026-11-02 姿势选择器「随机」按钮：fetchRandomPose 仅被 PosePickerModal.vue 使用
+src/api/poseGallery.ts - fetchRandomPose
