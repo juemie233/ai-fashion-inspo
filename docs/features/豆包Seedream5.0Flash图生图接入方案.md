@@ -1,6 +1,6 @@
 # 接入豆包 Seedream 5.0 Flash 图生图（素材图 + 姿态图 → 目标姿态）
 
-> **状态**：方案（2026-11-02 编写，**未实施**）。本文只做接入设计与验收口径，评审通过后再改代码。
+> **状态**：实施中（2026-11-02）。P1 后端链路、P2 单姿态页面已落地；P0 真实联调需配置 ARK_API_KEY 且接受上传云端；P3 多姿态循环未做。
 > **结论先行**：Seedream 5.0 Flash 支持「2～10 张参考图 + 提示词 → 单张图」，正好覆盖「1 张素材图 + 1 张姿态图」的换姿势场景；
 > 按张计费约 **¥0.12/张**，1K/1.5K/2K 同价，参考图不额外收费；但它**没有 seed / 负向词 / steps / cfg**，且素材图会离开本机上传到火山引擎方舟。
 > 因此建议做成**默认关闭、逐次确认的云端通道**，与本地 ComfyUI 通道并存，不替代本地链路。
@@ -727,3 +727,26 @@ SEEDREAM_DAILY_BUDGET_CNY=5.0
 - 提示词指南：<https://ark.volcengine.com/region:cn-beijing/docs/ark/seedream-4-0-5-0-prompt-guide>
 - Base URL 与鉴权：<https://docs.volcengine.com/docs/ark/base-url-and-authentication>
 - 官方 SDK / OpenAI 兼容：<https://docs.volcengine.com/docs/ark/compatible-with-openai-sdk>
+
+
+---
+
+## 14. 实施记录（2026-11-02）
+
+### 14.1 已完成
+
+| 层 | 内容 |
+| --- | --- |
+| 配置 | `config.py` 新增 `ark_enabled` / `ark_api_key` / `ark_base_url` / `seedream_model` / `seedream_timeout` / `seedream_max_poses` / `seedream_daily_budget_cny`；`.env.example` 只放空 key |
+| 档位 | `MODEL_SPECS` 新增 `seedream_5_0_flash`（provider=ark、i2i、cost 0.12、supports_seed/negative=false、requires_upload=true）；探测跳过非 ComfyUI 档位，`/status` 增加 `ark` 状态 |
+| 客户端 | 新增 `seedream_client.py`：data URI、尺寸校验、URL/b64 解析、429/5xx/超时重试、400/401/403/404/审核拒绝永久失败、结果下载与魔数校验 |
+| 提交 | `create_run` provider=ark 分支：仅 i2i、恰好 1 张素材、pose_id 必填、count=1；固定包装模板 + pose_prompts；日预算软上限；写入 `workflow_name=ark_seedream`、`workflow_hash=ark:<model>`、params provider/size/watermark/model_id |
+| 执行 | `image_gen` 早期分支到 `_execute_seedream`：素材图/姿态图预处理（长边≤2048、去 EXIF）、调用、落盘 `01_seed-0.png`、状态流转与可重试/永久错误 |
+| 前端 | 云端档位带「云端」标，隐藏 steps/cfg/seed/负向词；显示 1K/1.5K/2K 尺寸、水印、单张费用；首次会话隐私确认弹窗；单姿态提交 |
+| 测试 | `test_seedream_client.py`（MIME/data URI/尺寸/429 重试/错误映射/无 key）、`test_generation_seedream.py`（provider 分支校验/提示词/模型可见性/执行器落盘）；前端云端档位显隐用例 |
+
+### 14.2 未完成 / 待用户决定
+
+- **P0 真实联调**：仓库内没有 `ARK_API_KEY`，且方案 §7.2 的隐私边界需用户明确接受后才能上传真实素材；未调用真实 Ark 接口，质量/审核/耗时尚未实测。
+- **P3 多姿态循环提交**：一期页面仍是单姿态提交（后端天然支持逐姿态建 run），多选姿态 + 2 并发 + 部分失败提示待做。
+- **水印/预算默认值**：当前 `watermark=false`、日预算 ¥5，按方案默认值实现，可在 `.env` 调整。

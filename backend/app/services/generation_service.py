@@ -38,6 +38,11 @@ from app.models.task import TaskQueue
 from app.services.comfyui import workflow as wf
 from app.services.comfyui.models import MAX_COUNT, MAX_PIXELS, MAX_STEPS, MIN_STEPS
 from app.services.comfyui.probe import MODEL_SPECS
+from app.services.seedream_client import (
+    SeedreamError,
+    build_prompt as build_seedream_prompt,
+    validate_size as validate_seedream_size,
+)
 from app.services import pose_gallery
 from app.services.file_service import delete_files
 from app.services.inspiration_create import create_inspiration_from_file
@@ -213,6 +218,152 @@ async def _assert_references_exist(db: AsyncSession, ids: list[str]) -> None:
             raise HTTPException(status_code=400, detail=f"参考素材文件缺失：{insp_id}")
 
 
+"""云端出图固定包装模板（见接入方案 §3.2）：先声明保持什么，再声明要改什么。"""
+_ARK_PROMPT_TEMPLATE = (
+    "保持图1中人物的长相、发型、肤色和服装完全不变，让人物按图2的姿势重新拍摄。"
+    "图2只作为姿势参考：只参考身体朝向、重心、四肢位置、手部动作和镜头视角；"
+    "不要复制图2的线稿风格、灰色背景、关节球和人体模型外观。"
+    "写实摄影，{framing}构图，自然光，皮肤与服装细节清晰，画面干净。"
+)
+
+
+def _model_provider(spec: dict) -> str:
+    """档位所属执行通道：comfyui（本地） / ark（云端 Seedream）。"""
+    return str(spec.get("provider") or "comfyui")
+
+
+def _ark_framing(pose: dict[str, Any]) -> str:
+    """按姿态体系给包装模板选构图词（与姿势描述保持同一口径）。"""
+    system = str(pose.get("system") or "")
+    if "上半身" in system:
+        return "上半身"
+    if "双人" in system:
+        return "双人合照"
+    return "全身"
+
+
+def _ark_prompt_text(pose: dict[str, Any], pose_prompt: str, negative: str | None) -> str:
+    """云端提示词 = 固定包装模板 + 姿态描述（优先 pose_prompts）。"""
+    detail = (pose_prompt or "").strip() or _pose_text_prompt(pose)
+    text = _ARK_PROMPT_TEMPLATE.format(framing=_ark_framing(pose))
+    if detail:
+        text = f"{text}\n姿势细节：{detail}"
+    return build_seedream_prompt(text, negative)
+
+
+async def _create_ark_run(
+    db: AsyncSession,
+    payload: dict,
+    spec: dict,
+    model_key: str,
+    ref_ids: list[str],
+    *,
+    task_factory=None,
+) -> dict:
+    """云端 Seedream 批次：严格按云端能力校验，不走 ComfyUI 模板/显存守门。"""
+    if not settings.ark_enabled or not settings.ark_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="云端出图未启用或未配置 ARK_API_KEY：请在 backend/.env 设置后重启后端",
+        )
+    if len(ref_ids) != 1:
+        raise HTTPException(status_code=400, detail="云端出图一期仅支持 1 张素材图作参考")
+    pose_id = str(payload.get("pose_id") or "").strip()
+    if not pose_id:
+        raise HTTPException(status_code=400, detail="云端出图必须选择 1 个姿态（pose_id）")
+    count = int(payload.get("count") or 1)
+    if count != 1:
+        raise HTTPException(status_code=400, detail="云端出图每次只生成 1 张（多姿态请逐个提交）")
+
+    # 姿势必须存在；先做网络校验再查库，避免拿着 SQLite 连接等第三方源站
+    pose = await pose_gallery.get_pose(pose_id)
+    await _assert_references_exist(db, ref_ids)
+    pose_prompt = await _db_pose_prompt(db, pose_id)
+    prompt = _ark_prompt_text(pose, pose_prompt, payload.get("negative"))
+
+    size_raw = payload.get("size") or (
+        f"{spec['defaults']['width']}x{spec['defaults']['height']}"
+    )
+    try:
+        size, width, height = validate_seedream_size(str(size_raw))
+    except SeedreamError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 日预算软上限：当天已建的云端批次 × 单价 + 本次
+    cost = float(spec.get("cost_per_image_cny") or 0.12)
+    budget = float(settings.seedream_daily_budget_cny or 0)
+    if budget > 0:
+        today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        used = (
+            await db.execute(
+                select(func.count())
+                .select_from(GenerationRun)
+                .where(GenerationRun.model_key == model_key, GenerationRun.created_at >= today)
+            )
+        ).scalar() or 0
+        if (int(used) + 1) * cost > budget:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"今日云端预算不足：已提交 {used} 张（约 ¥{used * cost:.2f}），"
+                    f"日上限 ¥{budget:.2f}（SEEDREAM_DAILY_BUDGET_CNY）"
+                ),
+            )
+
+    seed_base = random.randint(1, 2**31 - 1)
+    params = {
+        "width": width,
+        "height": height,
+        "steps": 1,
+        "cfg": 1.0,
+        "sampler": "ark",
+        "scheduler": "ark",
+        "shift": 0.0,
+        "count": 1,
+        "seed_base": seed_base,
+        "seeds": [seed_base],
+        "prompt": prompt,
+        "negative": None,
+        "reference_ids": ref_ids,
+        "pose_id": pose_id,
+        "provider": "ark",
+        "size": size,
+        "watermark": bool(payload.get("watermark") or False),
+        "model_id": settings.seedream_model,
+        "cost_per_image_cny": cost,
+    }
+    run = GenerationRun(
+        kind="i2i",
+        status="queued",
+        prompt=prompt,
+        negative=None,
+        params_json=json.dumps(params, ensure_ascii=False),
+        model_key=model_key,
+        workflow_name="ark_seedream",
+        workflow_hash=f"ark:{settings.seedream_model}",
+        reference_ids=json.dumps(ref_ids),
+        batch_dir="",
+        total=1,
+        done=0,
+        failed=0,
+    )
+    db.add(run)
+    await db.flush()
+    run.batch_dir = f"generated/{run.id}"
+    await db.flush()
+    factory = task_factory or _default_task_factory
+    task = await factory(db, run, params)
+    run.task_id = task.id
+    await db.commit()
+    return {
+        "run_id": run.id,
+        "task_id": task.id,
+        "seed": seed_base,
+        "batch_dir": run.batch_dir,
+        "total": 1,
+    }
+
+
 async def create_run(
     db: AsyncSession, payload: dict, *, task_factory=None
 ) -> dict:
@@ -260,6 +411,11 @@ async def create_run(
                 "文生图不接受参考素材：如需按参考图生成，请把生成方式切换为"
                 "「参考图改款」（kind=i2i）"
             ),
+        )
+
+    if _model_provider(spec) == "ark":
+        return await _create_ark_run(
+            db, payload, spec, model_key, ref_ids, task_factory=task_factory
         )
 
     # 姿势参考（换姿势）支持两种方式：

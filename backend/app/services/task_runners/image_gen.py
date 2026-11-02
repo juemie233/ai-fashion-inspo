@@ -32,6 +32,7 @@ from app.services.comfyui.client import ComfyUIClient, ComfyUIError
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.comfyui.vram import wait_for_vram
 from app.services import pose_gallery
+from app.services.seedream_client import SeedreamClient, SeedreamError
 from app.services.task_runners.common import PermanentTaskError, RecoverableTaskError
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,11 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
     spec = MODEL_SPECS.get(run.model_key)
     if spec is None:
         raise PermanentTaskError(f"未知出图模型档位: {run.model_key}")
+
+    # 云端档位（豆包 Seedream）：不加载 ComfyUI 模板、不占本机显存，走独立执行体
+    if str(spec.get("provider") or "comfyui") == "ark":
+        await _execute_seedream(db, task, run, spec)
+        return
 
     params = _params_of(run)
     seeds = list(params.get("seeds") or [])
@@ -348,3 +354,130 @@ async def _execute_with_client(
     task.progress = 100
     await _mark_stage(db, task, run, "done", batch_dir=run.batch_dir)
     logger.info(f"出图完成: run #{run.id}，{run.done}/{run.total} 张")
+
+
+# ── 云端 Seedream 执行体（provider=ark）────────────────────────────
+
+
+def _prepare_ark_image(data: bytes, *, output_format: str, max_side: int = 2048) -> bytes:
+    """把素材/姿态图压到长边 ≤ max_side，去 EXIF；素材用 JPEG、线稿保留 PNG。"""
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        rgb = image.convert("RGB")
+        width, height = rgb.size
+        longest = max(width, height)
+        if longest > max_side:
+            scale = max_side / float(longest)
+            rgb = rgb.resize(
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        buf = io.BytesIO()
+        if output_format == "png":
+            rgb.save(buf, format="PNG", optimize=True)
+        else:
+            rgb.save(buf, format="JPEG", quality=90, optimize=True)
+        return buf.getvalue()
+
+
+async def _execute_seedream(
+    db: AsyncSession, task: TaskQueue, run: GenerationRun, spec: dict
+) -> None:
+    """云端 Seedream 单张出图：素材图 + 姿态图 → 1 张候选图。"""
+    params = _params_of(run)
+    pose_id = str(params.get("pose_id") or "").strip()
+    if not pose_id:
+        raise PermanentTaskError("云端出图缺少 pose_id，请重新提交")
+    ref_ids = json.loads(run.reference_ids or "[]")
+    if len(ref_ids) != 1:
+        raise PermanentTaskError("云端出图一期只支持 1 张素材图，请重新提交")
+
+    run.status = "running"
+    run.error = None
+    await _mark_stage(db, task, run, "preparing_images")
+
+    # 1) 素材图
+    insp = await db.get(Inspiration, ref_ids[0])
+    if insp is None or insp.deleted_at is not None:
+        raise PermanentTaskError(f"素材不存在或被删除：{ref_ids[0]}")
+    source = settings.storage_root / insp.file_path
+    if not source.exists():
+        raise PermanentTaskError(f"素材文件缺失：{insp.file_path}")
+    material_bytes = await asyncio.to_thread(source.read_bytes)
+
+    # 2) 姿态图（姿势图库缓存；503 视为可恢复，与本地链路一致）
+    try:
+        pose_path = await pose_gallery.ensure_pose_image(pose_id)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            raise RecoverableTaskError(str(exc.detail)) from exc
+        raise PermanentTaskError(str(exc.detail)) from exc
+    pose_bytes = await asyncio.to_thread(pose_path.read_bytes)
+
+    # 3) 预处理（去 EXIF、长边 ≤2048；素材 JPEG、线稿 PNG）
+    prepared_material = await asyncio.to_thread(
+        _prepare_ark_image, material_bytes, output_format="jpeg"
+    )
+    prepared_pose = await asyncio.to_thread(_prepare_ark_image, pose_bytes, output_format="png")
+
+    if await _is_cancelled(db, task):
+        run.status = "cancelled"
+        run.error = "已取消"
+        await db.commit()
+        return
+
+    await _mark_stage(db, task, run, "calling_seedream")
+
+    client = SeedreamClient(
+        settings.ark_api_key,
+        base_url=settings.ark_base_url,
+        model=settings.seedream_model,
+        timeout=settings.seedream_timeout,
+    )
+    try:
+        result = await client.generate(
+            prompt=run.prompt,
+            images=[prepared_material, prepared_pose],
+            size=str(params.get("size") or "1536x2048"),
+            output_format="png",
+            watermark=bool(params.get("watermark") or False),
+        )
+    except SeedreamError as exc:
+        run.failed = 1
+        run.error = str(exc)
+        run.status = "failed"
+        await db.commit()
+        if exc.retryable:
+            raise RecoverableTaskError(str(exc)) from exc
+        raise PermanentTaskError(str(exc)) from exc
+    finally:
+        await client.aclose()
+
+    # 4) 落盘候选图；拿到响应后若已取消则不再写文件
+    if await _is_cancelled(db, task):
+        run.status = "cancelled"
+        run.error = "已取消"
+        await db.commit()
+        return
+    out_dir = _candidate_dir(run)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / _CANDIDATE_NAME.format(idx=1, seed=0)
+    await asyncio.to_thread(target.write_bytes, result.image)
+
+    run.done = 1
+    run.failed = 0
+    task.done = 1
+    task.progress = 100
+    run.status = "done"
+    await _mark_stage(db, task, run, "done", batch_dir=run.batch_dir)
+    logger.info(
+        "云端出图完成 run #%s model=%s size=%s request_id=%s",
+        run.id,
+        settings.seedream_model,
+        params.get("size"),
+        result.request_id or "-",
+    )

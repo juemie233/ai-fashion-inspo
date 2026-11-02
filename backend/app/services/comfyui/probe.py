@@ -60,6 +60,7 @@ class ProbedStatus:
     comfyui: dict = field(default_factory=dict)
     models: dict[str, str] = field(default_factory=dict)
     ollama_resident: list[dict] = field(default_factory=list)
+    ark: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +69,7 @@ class ProbedStatus:
             "comfyui": self.comfyui,
             "models": self.models,
             "ollama_resident": self.ollama_resident,
+            "ark": self.ark,
         }
 
 
@@ -113,9 +115,26 @@ async def probe(client: ComfyUIClient | None = None) -> ProbedStatus:
             await client.aclose()
 
 
+def _ark_probe_status() -> dict:
+    """云端通道就绪状态：只看配置，不发起真实请求（探测要花钱）。"""
+    ready = bool(settings.ark_enabled and settings.ark_api_key)
+    reason = None
+    if not settings.ark_enabled:
+        reason = "云端出图未启用（ARK_ENABLED=false）"
+    elif not settings.ark_api_key:
+        reason = "未配置 ARK_API_KEY"
+    return {
+        "ready": ready,
+        "reason": reason,
+        "model": settings.seedream_model,
+        "base_url": settings.ark_base_url,
+    }
+
+
 async def _probe_with(client: ComfyUIClient) -> ProbedStatus:
     """探测主体（拆出来只为让 :func:`probe` 能 finally 关连接池）。"""
     status = ProbedStatus()
+    status.ark = _ark_probe_status()
     try:
         stats = await client.system_stats()
     except ComfyUIError as exc:
@@ -124,8 +143,16 @@ async def _probe_with(client: ComfyUIClient) -> ProbedStatus:
             if exc.kind == "not_running"
             else f"ComfyUI 不可用：{exc}"
         )
-        status.models = {key: "unknown" for key in MODEL_SPECS}
+        status.models = {
+            key: "ok" if spec.get("provider") == "ark" and status.ark["ready"] else (
+                "off" if spec.get("provider") == "ark" else "unknown"
+            )
+            for key, spec in MODEL_SPECS.items()
+        }
         status.ollama_resident = await ollama_resident()
+        status.ready = bool(status.ark["ready"])
+        if not status.ready and status.reason is None:
+            status.reason = status.ark.get("reason")
         return status
 
     total, free = _vram_gib(stats)
@@ -142,11 +169,25 @@ async def _probe_with(client: ComfyUIClient) -> ProbedStatus:
         info = await _object_info_cached(client)
     except ComfyUIError as exc:
         status.reason = f"读取 ComfyUI 节点信息失败：{exc}"
-        status.models = {key: "unknown" for key in MODEL_SPECS}
+        status.models = {
+            key: "ok" if spec.get("provider") == "ark" and status.ark["ready"] else (
+                "off" if spec.get("provider") == "ark" else "unknown"
+            )
+            for key, spec in MODEL_SPECS.items()
+        }
+        status.ready = bool(status.ark["ready"])
+        if not status.ready and status.reason is None:
+            status.reason = status.ark.get("reason")
         return status
 
     missing_all: list[str] = []
     for key, spec in MODEL_SPECS.items():
+        if str(spec.get("provider") or "comfyui") != "comfyui":
+            # 云端档位不依赖 ComfyUI 模板/权重；就绪只看 ARK 配置
+            status.models[key] = "ok" if status.ark["ready"] else "off"
+            if not status.ark["ready"] and status.ark.get("reason"):
+                missing_all.append(f"{key}: {status.ark['reason']}")
+            continue
         try:
             template, _digest = wf.load_template(spec["workflow"])
         except FileNotFoundError:

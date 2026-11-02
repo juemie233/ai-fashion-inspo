@@ -18,6 +18,18 @@ interface GenerateModelMeta {
   uncensored?: boolean
   /** 风险说明文案（随档位走后端，避免前端各写一份） */
   notice?: string | null
+  /** 执行通道：comfyui=本地；ark=豆包 Seedream 云端（默认关闭） */
+  provider?: 'comfyui' | 'ark' | string
+  /** 云端单张估算费用（人民币，元） */
+  cost_per_image_cny?: number | null
+  /** 是否支持 seed（云端无 seed，只存展示） */
+  supports_seed?: boolean
+  /** 是否支持负向词（云端无 negative，会改写进正向 prompt） */
+  supports_negative?: boolean
+  /** 是否需要上传素材/姿态图到云端（隐私提示） */
+  requires_upload?: boolean
+  /** 云端一次最多可选的姿态数（本地档位为空） */
+  max_poses?: number | null
 }
 
 /** 就绪状态（ComfyUI 是否可用、模型是否就位、Ollama 占了多少显存）。 */
@@ -33,6 +45,13 @@ export interface GenerateStatus {
   models: Record<string, string>
   ollama_resident: { name: string; size_gib: number }[]
   models_meta?: Record<string, GenerateModelMeta>
+  /** 云端通道就绪状态（只表示已配置开关+key，不发起真实请求） */
+  ark?: {
+    ready: boolean
+    reason: string | null
+    model: string
+    base_url: string
+  }
 }
 
 /** 一次出图批次。 */
@@ -94,6 +113,10 @@ export interface CreateRunPayload {
   reference_ids?: string[]
   /** 姿势图 id（换姿势；i2i 可选，来自姿势图库。会占一张参考额度） */
   pose_id?: string
+  /** 云端专用：输出尺寸（1K/1.5K/2K 或「宽x高」；本地忽略） */
+  size?: string
+  /** 云端专用：是否加水印（默认关；本地忽略） */
+  watermark?: boolean
 }
 
 /** 生成历史的一条（列表用）。

@@ -8,7 +8,7 @@
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { shortModelLabel } from '@/utils/format'
@@ -84,6 +84,11 @@ interface ModelOption {
   uncensored: boolean
   notice: string
   ready: boolean
+  provider: string
+  costPerImage: number
+  requiresUpload: boolean
+  supportsSeed: boolean
+  supportsNegative: boolean
 }
 
 /** 旧后端（不返回 models_meta）时的兜底两档：只保证页面不变空白，不含未审查档位 */
@@ -95,6 +100,11 @@ const LEGACY_MODELS: ModelOption[] = [
     uncensored: false,
     notice: '',
     ready: true,
+    provider: 'comfyui',
+    costPerImage: 0,
+    requiresUpload: false,
+    supportsSeed: true,
+    supportsNegative: true,
   },
   {
     key: 'qwen_2_1_i2i',
@@ -103,6 +113,11 @@ const LEGACY_MODELS: ModelOption[] = [
     uncensored: false,
     notice: '',
     ready: true,
+    provider: 'comfyui',
+    costPerImage: 0,
+    requiresUpload: false,
+    supportsSeed: true,
+    supportsNegative: true,
   },
 ]
 
@@ -118,6 +133,11 @@ function toOptions(
     uncensored: m.uncensored === true,
     notice: m.notice || '',
     ready: models?.[key] === 'ok',
+    provider: m.provider || 'comfyui',
+    costPerImage: Number(m.cost_per_image_cny ?? 0),
+    requiresUpload: m.requires_upload === true,
+    supportsSeed: m.supports_seed !== false,
+    supportsNegative: m.supports_negative !== false,
   }))
 }
 
@@ -201,6 +221,8 @@ const currentModel = computed<ModelOption | null>(
 )
 
 /** 生成方式**由档位推导**：Z-Image 是纯文生图，Qwen 档位要参考图，不再单独选一次 */
+const isArk = computed(() => currentModel.value?.provider === 'ark')
+
 const kind = computed<'t2i' | 'i2i'>(() => currentModel.value?.kind ?? 't2i')
 
 /** 选中的档位是否就绪：权重没放对目录时不能默认它能用 */
@@ -296,6 +318,22 @@ const sizeDims = computed(() => size.value.split('x').map(Number))
 const width = computed(() => sizeDims.value[0] ?? 1024)
 const height = computed(() => sizeDims.value[1] ?? 1024)
 
+const CLOUD_SIZE_PRESETS = [
+  { label: '2K 竖版 1536 × 2048（推荐）', value: '1536x2048' },
+  { label: '1.5K 竖版 1152 × 1536', value: '1152x1536' },
+  { label: '1K 方形 1024 × 1024', value: '1024x1024' },
+]
+const cloudSize = ref('1536x2048')
+const cloudWatermark = ref(false)
+const cloudCost = computed(() => (isArk.value ? (currentModel.value?.costPerImage ?? 0.12) : 0))
+
+// 云端档位固定 i2i + 1 张；切到云端时强制线稿模式并重置张数
+watch(isArk, (ark) => {
+  if (!ark) return
+  poseMode.value = 'lineart'
+  count.value = 1
+})
+
 // ── 参考素材 id（逗号/空格分隔，1~10 个）——i2i 用 ──
 const refIdsText = ref('')
 const refIdsList = computed(() => splitIds(refIdsText.value))
@@ -305,7 +343,10 @@ const refIdsList = computed(() => splitIds(refIdsText.value))
 // 所以选了姿势后主体参考最多 9 张（后端同样会校验，前端提前拦住给出可读提示）。
 const posePickerVisible = ref(false)
 const selectedPose = ref<PoseItem | null>(null)
-const maxRefs = computed(() => (selectedPose.value && poseMode.value === 'lineart' ? 9 : 10))
+const maxRefs = computed(() => {
+  if (isArk.value) return 1
+  return selectedPose.value && poseMode.value === 'lineart' ? 9 : 10
+})
 const refCountOk = computed(
   () => refIdsList.value.length >= 1 && refIdsList.value.length <= maxRefs.value,
 )
@@ -541,17 +582,77 @@ async function onPreviewPrompt() {
 // ── 生成 ──
 const canSubmit = computed(
   () =>
-    !!prompt.value.trim() &&
+    (!isArk.value ? !!prompt.value.trim() : true) &&
     !props.submitting &&
     !props.active &&
     modelReady.value &&
-    (kind.value === 't2i' || refCountOk.value),
+    (isArk.value
+      ? !!selectedPose.value && refIdsList.value.length === 1
+      : kind.value === 't2i' || refCountOk.value),
 )
+
+// ── 云端隐私确认（每个浏览器会话一次；不做永久同意）──
+const privacyVisible = ref(false)
+const privacyAgree = ref(false)
+const pendingPayload = ref<CreateRunPayload | null>(null)
+const ARK_PRIVACY_KEY = 'fashion-inspo:ark-upload-confirmed'
+
+function needsPrivacyConfirm(): boolean {
+  if (!isArk.value) return false
+  try {
+    return sessionStorage.getItem(ARK_PRIVACY_KEY) !== '1'
+  } catch {
+    return true
+  }
+}
+
+function confirmPrivacy(): void {
+  if (!privacyAgree.value) return
+  try {
+    sessionStorage.setItem(ARK_PRIVACY_KEY, '1')
+  } catch {
+    /* 隐私模式忽略 */
+  }
+  privacyVisible.value = false
+  const payload = pendingPayload.value
+  pendingPayload.value = null
+  if (payload) emit('submit', payload)
+}
 
 const activePreset = computed(() => sizePresets.find((p) => p.value === size.value))
 
 function onSubmit() {
-  if (!prompt.value.trim()) return
+  if (!isArk.value && !prompt.value.trim()) return
+  if (isArk.value) {
+    if (!selectedPose.value) {
+      Message.warning('云端出图需要先从姿势图库选择 1 个姿态')
+      return
+    }
+    if (refIdsList.value.length !== 1) {
+      Message.warning('云端出图一期需要恰好 1 张素材图作参考')
+      return
+    }
+    const payload: CreateRunPayload = {
+      kind: 'i2i',
+      prompt: prompt.value.trim() || '按图2姿势重新拍摄，保持图1人物长相与服装不变',
+      count: 1,
+      steps: 1,
+      seed: 0,
+      model_key: modelKey.value,
+      reference_ids: refIdsList.value,
+      pose_id: selectedPose.value.id,
+      size: cloudSize.value,
+      watermark: cloudWatermark.value,
+    }
+    if (needsPrivacyConfirm()) {
+      pendingPayload.value = payload
+      privacyAgree.value = false
+      privacyVisible.value = true
+      return
+    }
+    emit('submit', payload)
+    return
+  }
   // 姿势两种方式各自要求对应档位：文字=文生图；线稿=图生图且至少 1 张主体参考
   if (selectedPose.value) {
     if (poseMode.value === 'text' && kind.value !== 't2i') {
@@ -672,6 +773,9 @@ onMounted(() => {
   <a-radio-group v-else v-model="modelKey" size="small" direction="vertical" class="gen-models">
     <a-radio v-for="m in allModels" :key="m.key" :value="m.key">
       {{ shortModelLabel(m.label) }}
+      <a-tag v-if="m.provider === 'ark'" color="orange" size="small" class="gen-model-tag">
+        云端
+      </a-tag>
       <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag"> 未审查 </a-tag>
       <span class="gen-hint gen-model-note">
         {{ m.kind === 'i2i' ? '需参考图' : '纯文字' }}{{ m.ready ? '' : ' · 未就绪' }}
@@ -731,7 +835,7 @@ onMounted(() => {
         可选：从姿势图库挑一个姿势；默认按文字描述生成（文生图），也可切线稿参考
       </span>
     </div>
-    <div v-if="selectedPose" class="gen-row">
+    <div v-if="selectedPose && !isArk" class="gen-row">
       <span class="gen-label gen-label--inline">姿势生成方式</span>
       <a-radio-group v-model="poseMode" size="small">
         <a-radio value="text">文字描述（文生图）</a-radio>
@@ -784,24 +888,38 @@ onMounted(() => {
   </div>
   <div class="gen-hint">反推会读取这些素材的标签、正文与主色拼成描述（可再手动改）。</div>
 
-  <div class="gen-label">负向描述（可选）</div>
-  <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
+  <template v-if="!isArk">
+    <div class="gen-label">负向描述（可选）</div>
+    <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
 
-  <div class="gen-row gen-row--multi">
-    <a-select v-model="size" :options="sizePresets" style="flex: 1" />
-    <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
-      <template #prefix>步数</template>
-    </a-input-number>
-    <a-input-number v-model="count" :min="1" :max="4" style="width: 100px">
-      <template #prefix>张数</template>
-    </a-input-number>
-  </div>
-  <div class="gen-row">
-    <a-input-number v-model="seed" :min="0" style="width: 180px">
-      <template #prefix>seed</template>
-    </a-input-number>
-    <span class="gen-hint">0 = 随机（提交后会把真实 seed 显示在结果区，便于复现）</span>
-  </div>
+    <div class="gen-row gen-row--multi">
+      <a-select v-model="size" :options="sizePresets" style="flex: 1" />
+      <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
+        <template #prefix>步数</template>
+      </a-input-number>
+      <a-input-number v-model="count" :min="1" :max="4" style="width: 100px">
+        <template #prefix>张数</template>
+      </a-input-number>
+    </div>
+    <div class="gen-row">
+      <a-input-number v-model="seed" :min="0" style="width: 180px">
+        <template #prefix>seed</template>
+      </a-input-number>
+      <span class="gen-hint">0 = 随机（提交后会把真实 seed 显示在结果区，便于复现）</span>
+    </div>
+  </template>
+
+  <!-- 云端 Seedream：只有尺寸/水印可调，steps/cfg/seed 对云端无效 -->
+  <template v-else>
+    <div class="gen-row gen-row--multi">
+      <a-select v-model="cloudSize" :options="CLOUD_SIZE_PRESETS" style="flex: 1" />
+      <a-switch v-model="cloudWatermark" />
+      <span class="gen-hint">加水印（默认关）</span>
+    </div>
+    <div class="gen-hint">
+      云端单次固定 1 张，无 seed / 负向词 / 步数；素材图 + 姿态图会上传到火山引擎方舟。
+    </div>
+  </template>
 
   <div class="gen-label">出图配方（保存当前参数，下次一键载入）</div>
   <div class="gen-row">
@@ -826,6 +944,11 @@ onMounted(() => {
     </a-tag>
   </div>
 
+  <div v-if="isArk" class="gen-hint" style="margin-bottom: 6px">
+    本次云端预计费用：1 个姿态 × ¥{{ (currentModel?.costPerImage ?? 0.12).toFixed(2) }} ≈ ¥{{
+      cloudCost.toFixed(2)
+    }}（以方舟实际计费为准）
+  </div>
   <div class="gen-actions">
     <a-button
       type="primary"
@@ -833,7 +956,7 @@ onMounted(() => {
       :disabled="!canSubmit || !ready"
       @click="onSubmit"
     >
-      生成 {{ count }} 张
+      生成 {{ isArk ? 1 : count }} 张
     </a-button>
     <a-button v-if="active" status="warning" @click="emit('cancel')">取消</a-button>
     <span v-if="activePreset" class="gen-hint">{{ activePreset.label }}</span>
@@ -851,6 +974,22 @@ onMounted(() => {
     :selected-id="selectedPose?.id"
     @select="onPoseSelected"
   />
+
+  <a-modal
+    v-model:visible="privacyVisible"
+    title="云端出图需要上传图片"
+    :ok-button-props="{ disabled: !privacyAgree }"
+    ok-text="继续生成"
+    cancel-text="取消"
+    @ok="confirmPrivacy"
+  >
+    <p>
+      本次生成会把「素材图」和「姿态图」上传到火山引擎方舟（cn-beijing）用于推理。
+      素材涉及人物/人脸时，请确认你有权上传并接受云端处理。
+    </p>
+    <p>云端接口可能触发内容审核；被拦截时会给出提示，不会自动绕过。</p>
+    <a-checkbox v-model="privacyAgree">我已知晓，本次允许上传</a-checkbox>
+  </a-modal>
 </template>
 
 <style scoped>

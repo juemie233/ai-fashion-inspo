@@ -101,6 +101,17 @@ class Settings(BaseSettings):
     image_gen_wait_vram_seconds: int = 900
     image_gen_keep_candidates_days: int = 7  # 未确认候选目录保留天数（过期清理）
 
+    # ── 豆包 Seedream 云端图生图（火山引擎方舟）──
+    # 默认关闭：开启后素材图/姿态图会离开本机上传到火山引擎，属于隐私边界变更。
+    # 只有显式设置 ARK_ENABLED=true 且配置 ARK_API_KEY 后，云端档位才会出现在出图页。
+    ark_enabled: bool = False
+    ark_api_key: str = ""
+    ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    seedream_model: str = "doubao-seedream-5-0-flash-260915"
+    seedream_timeout: float = 120.0
+    seedream_max_poses: int = 10
+    seedream_daily_budget_cny: float = 5.0
+
     # ── 姿势参考图库（ai-pose-gallery-zh，换姿势用）──
     # 源站是纯静态站（GitHub Pages），数据接口没有 CORS 头，所以由本机后端拉一次缓存：
     # 前端只跟我们的 /api/pose-gallery 打交道，源站抖动时还有本地缓存兜底。

@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/generate", tags=["generate"])
 
 
+def _visible_model_specs() -> list[tuple[str, dict]]:
+    """对前端可见的档位：云端档位在未启用/未配置 key 时隐藏（不建任务、不入队）。"""
+    return [
+        (key, spec)
+        for key, spec in probe_service.MODEL_SPECS.items()
+        if str(spec.get("provider") or "comfyui") != "ark"
+        or (settings.ark_enabled and bool(settings.ark_api_key))
+    ]
+
+
 @router.get("/status")
 async def generate_status() -> dict:
     """就绪状态：ComfyUI 是否可用、哪些模型就位、Ollama 占了显存。
@@ -53,8 +63,14 @@ async def generate_status() -> dict:
             # 未审查档位必须在选择前就能看出来（前端据此打标 + 弹风险提示）
             "uncensored": bool(spec.get("uncensored")),
             "notice": spec.get("notice"),
+            "provider": str(spec.get("provider") or "comfyui"),
+            "cost_per_image_cny": spec.get("cost_per_image_cny"),
+            "supports_seed": spec.get("supports_seed", True),
+            "supports_negative": spec.get("supports_negative", True),
+            "requires_upload": bool(spec.get("requires_upload")),
+            "max_poses": spec.get("max_poses"),
         }
-        for key, spec in probe_service.MODEL_SPECS.items()
+        for key, spec in _visible_model_specs()
     }
     return data
 
@@ -70,11 +86,17 @@ async def generate_models() -> dict:
                 "kind": spec["kind"],
                 "defaults": spec["defaults"],
                 "max_pixels": spec.get("max_pixels"),
-                "vram_gib": spec["vram_gib"],
+                "vram_gib": spec.get("vram_gib"),
                 "uncensored": bool(spec.get("uncensored")),
                 "notice": spec.get("notice"),
+                "provider": str(spec.get("provider") or "comfyui"),
+                "cost_per_image_cny": spec.get("cost_per_image_cny"),
+                "supports_seed": spec.get("supports_seed", True),
+                "supports_negative": spec.get("supports_negative", True),
+                "requires_upload": bool(spec.get("requires_upload")),
+                "max_poses": spec.get("max_poses"),
             }
-            for key, spec in probe_service.MODEL_SPECS.items()
+            for key, spec in _visible_model_specs()
         ],
         "limits": {
             "max_count": generation_service.MAX_COUNT,

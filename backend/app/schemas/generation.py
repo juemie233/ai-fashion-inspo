@@ -30,6 +30,15 @@ class GenerationRunCreate(BaseModel):
     pose_id: str | None = Field(
         default=None, max_length=64, description="姿势图 id（图生图换姿势，来自姿势图库）"
     )
+    # ── 云端 Seedream 专用（本地 ComfyUI 忽略）──
+    size: str | None = Field(
+        default=None,
+        max_length=32,
+        description="云端输出尺寸：1K/1.5K/2K 或「宽x高」（云端档位专有，本地忽略）",
+    )
+    watermark: bool | None = Field(
+        default=None, description="云端是否加水印（默认关；本地忽略）"
+    )
 
 
 class GenerationRunPatch(BaseModel):

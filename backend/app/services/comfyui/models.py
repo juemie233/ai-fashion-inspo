@@ -76,6 +76,31 @@ MODEL_SPECS: dict[str, dict] = {
         },
         "max_pixels": 1024 * 1024,
     },
+    # ── 云端档位：豆包 Seedream 5.0 Flash（火山引擎方舟）──
+    # 仅当 ARK_ENABLED=true 且 ARK_API_KEY 非空时才会出现在 /api/generate/models；
+    # 默认关闭：素材图 + 姿态图会上传到云端，属于隐私边界变更（见接入方案 §7.2）。
+    "seedream_5_0_flash": {
+        "label": "豆包 Seedream 5.0 Flash（云端 · 约 ¥0.12/张）",
+        "provider": "ark",
+        "kind": "i2i",
+        "vram_gib": 0,  # 云端不占本机显存
+        "max_refs": 10,
+        "max_poses": 10,
+        "defaults": {
+            "width": 1536,
+            "height": 2048,
+            # 云端无 steps/cfg/sampler，仅为兼容现有校验/前端默认值保留占位
+            "steps": 1,
+            "cfg": 1.0,
+            "sampler": "ark",
+            "scheduler": "ark",
+            "shift": 0.0,
+        },
+        "cost_per_image_cny": 0.12,
+        "supports_seed": False,
+        "supports_negative": False,
+        "requires_upload": True,
+    },
 }
 
 """参数硬上限（服务端校验，不信任前端；命令行工具同样受它约束）。

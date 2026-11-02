@@ -80,6 +80,31 @@ const READY_STATUS: GenerateStatus = {
   models_meta: MODELS_META,
 }
 
+const CLOUD_STATUS: GenerateStatus = {
+  ...READY_STATUS,
+  models: { ...READY_STATUS.models, seedream_5_0_flash: 'ok' },
+  models_meta: {
+    ...MODELS_META,
+    seedream_5_0_flash: {
+      label: '豆包 Seedream 5.0 Flash（云端 · 约 ¥0.12/张）',
+      kind: 'i2i',
+      defaults: { width: 1536, height: 2048, steps: 1, cfg: 1 },
+      provider: 'ark',
+      cost_per_image_cny: 0.12,
+      supports_seed: false,
+      supports_negative: false,
+      requires_upload: true,
+      max_poses: 10,
+    },
+  },
+  ark: {
+    ready: true,
+    reason: null,
+    model: 'doubao-seedream-5-0-flash-260915',
+    base_url: 'https://ark',
+  },
+}
+
 function mountForm(props: Record<string, unknown> = {}) {
   return mount(GenerateParamForm, {
     props: {
@@ -511,6 +536,24 @@ describe('GenerateParamForm 一键出图', () => {
 
     const btn = wrapper.findAll('button').find((b) => b.text().includes('一键出图'))
     expect(btn?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+})
+
+describe('云端 Seedream 档位', () => {
+  it('选中云端档位后隐藏步数/seed，显示云端费用与隐私说明', async () => {
+    const wrapper = mountForm({
+      status: CLOUD_STATUS,
+      ready: true,
+      initialRefIds: 'ref-a',
+      initialModelKey: 'seedream_5_0_flash',
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('云端')
+    expect(wrapper.text()).toContain('本次云端预计费用')
+    expect(wrapper.text()).toContain('加水印')
+    // 本地档位的负向描述输入框在云端档位下隐藏（步数文字仍可能来自一键出图面板，不能按全文断言）
+    expect(wrapper.find('input[placeholder*="例：模糊"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })
