@@ -153,3 +153,22 @@ async def test_execute_seedream_writes_candidate(client, upload, fake_cloud, mon
         assert run.status == "done"
         assert run.done == 1
         assert task.progress == 100
+
+
+async def test_cloud_daily_budget_rejects_second_run(client, upload, fake_cloud, monkeypatch):
+    """日预算软上限：当天已建 1 个云端批次后，再提交超过预算直接 400。"""
+    monkeypatch.setattr(settings, "seedream_daily_budget_cny", 0.12)
+    insp = upload().json()["id"]
+    first = client.post("/api/generate/runs", json=_payload(insp))
+    assert first.status_code == 200, first.text
+    second = client.post("/api/generate/runs", json=_payload(insp))
+    assert second.status_code == 400
+    assert "预算" in second.text
+
+
+async def test_cloud_status_reports_ark_ready(client, monkeypatch):
+    monkeypatch.setattr(settings, "ark_enabled", True)
+    monkeypatch.setattr(settings, "ark_api_key", "test-key")
+    status = client.get("/api/generate/status").json()
+    assert status["ark"]["ready"] is True
+    assert status["ark"]["model"] == settings.seedream_model
