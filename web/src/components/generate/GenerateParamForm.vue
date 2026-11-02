@@ -8,7 +8,7 @@
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
-import { Message, Modal } from '@arco-design/web-vue'
+import { Message } from '@arco-design/web-vue'
 import type { CreateRunPayload, GenerateStatus } from '@/api/generate'
 import { useGenerationPresets, type GenerationPreset } from '@/composables/useGenerationPresets'
 import { shortModelLabel } from '@/utils/format'
@@ -221,6 +221,29 @@ watch(
 const currentModel = computed<ModelOption | null>(
   () => allModels.value.find((m) => m.key === modelKey.value) ?? null,
 )
+
+/** 按「本地 / 云端」分组：云端档位涉及上传，和本地档位混在一列里容易误选。 */
+const modelGroups = computed(() => {
+  const local = allModels.value.filter((m) => m.provider !== 'ark')
+  const cloud = allModels.value.filter((m) => m.provider === 'ark')
+  return [
+    ...(local.length ? [{ key: 'local', label: '本地 ComfyUI', models: local }] : []),
+    ...(cloud.length ? [{ key: 'cloud', label: '云端（素材会上传）', models: cloud }] : []),
+  ]
+})
+
+/** 卡片标题用「任务」而不是模型名：用户关心的是「我要做什么」，不是权重文件名。 */
+function modelTaskTitle(m: ModelOption): string {
+  if (m.provider === 'ark') return '云端换姿势'
+  if (m.uncensored) return '未审查改款'
+  return m.kind === 't2i' ? '文生图' : '参考图改款'
+}
+
+function modelTaskDesc(m: ModelOption): string {
+  if (m.provider === 'ark') return '素材图 + 姿态图，上传云端'
+  if (m.uncensored) return '无内容过滤的参考图改款'
+  return m.kind === 't2i' ? '只写描述，从零生成' : '用现有素材改服装/场景'
+}
 
 /** 生成方式**由档位推导**：Z-Image 是纯文生图，Qwen 档位要参考图，不再单独选一次 */
 const isArk = computed(() => currentModel.value?.provider === 'ark')
@@ -787,221 +810,275 @@ onMounted(() => {
 </script>
 
 <template>
-  <!-- 模型：始终可见。选中哪个档位就决定生成方式（文生图 / 参考图改款） -->
-  <div class="gen-label">模型</div>
-  <!-- 探测中且没有目录缓存：说明在等什么，而不是先闪两档假档位 -->
-  <div v-if="!allModels.length" class="gen-hint gen-model-loading">
-    正在读取模型档位…（本机要探测 ComfyUI 与权重文件，约 4 秒）
-  </div>
-  <a-radio-group v-else v-model="modelKey" size="small" direction="vertical" class="gen-models">
-    <a-radio v-for="m in allModels" :key="m.key" :value="m.key">
-      {{ shortModelLabel(m.label) }}
-      <a-tag v-if="m.provider === 'ark'" color="orange" size="small" class="gen-model-tag">
-        云端
-      </a-tag>
-      <a-tag v-if="m.uncensored" color="red" size="small" class="gen-model-tag"> 未审查 </a-tag>
-      <span class="gen-hint gen-model-note">
-        {{ m.kind === 'i2i' ? '需参考图' : '纯文字' }}{{ m.ready ? '' : ' · 未就绪' }}
+  <div class="gen-form">
+    <!-- ① 生成方式：按任务选，而不是按模型名选 -->
+    <div class="gen-section-head">
+      <span class="gen-section-title">选择生成方式</span>
+      <span class="gen-hint">按「你要做什么」选，不用记模型名</span>
+    </div>
+    <div v-if="!allModels.length" class="gen-hint gen-model-loading">
+      正在读取模型档位…（本机要探测 ComfyUI 与权重文件，约 4 秒）
+    </div>
+    <a-radio-group v-else v-model="modelKey" class="gen-models">
+      <template v-for="group in modelGroups" :key="group.key">
+        <div class="gen-model-group">{{ group.label }}</div>
+        <a-radio v-for="m in group.models" :key="m.key" :value="m.key" class="gen-model-card">
+          <span class="gen-model-card-top">
+            <span class="gen-model-card-title">{{ modelTaskTitle(m) }}</span>
+            <span class="gen-model-state" :class="{ 'is-ready': m.ready }">
+              <span class="gen-model-dot" />
+              {{ m.ready ? '就绪' : probing ? '探测中' : '未就绪' }}
+            </span>
+          </span>
+          <span class="gen-model-card-name">{{ shortModelLabel(m.label) }}</span>
+          <span class="gen-model-card-desc">{{ modelTaskDesc(m) }}</span>
+          <span class="gen-model-card-meta">
+            <a-tag :color="m.provider === 'ark' ? 'orange' : 'gray'" size="small">
+              {{ m.provider === 'ark' ? '云端' : '本地' }}
+            </a-tag>
+            <a-tag v-if="m.uncensored" color="red" size="small">未审查</a-tag>
+            <span class="gen-hint">{{ m.kind === 'i2i' ? '需参考图' : '纯文字' }}</span>
+            <span v-if="m.costPerImage" class="gen-hint">¥{{ m.costPerImage.toFixed(2) }}/张</span>
+          </span>
+        </a-radio>
+      </template>
+    </a-radio-group>
+    <div v-if="probing && allModels.length" class="gen-hint gen-model-loading">
+      档位已列出（用上次的目录），就绪状态正在探测…
+    </div>
+    <a-alert v-if="currentModel?.uncensored" type="warning" class="gen-alert gen-alert--tight">
+      {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
+    </a-alert>
+
+    <!-- ② 参考图（仅图生图）：先选图，再写改款描述 -->
+    <template v-if="kind === 'i2i'">
+      <div class="gen-section-head">
+        <span class="gen-section-title">选择参考图</span>
+        <span class="gen-hint">{{ refIdsList.length }}/{{ maxRefs }} · 第 1 张是主参考</span>
+      </div>
+      <div class="gen-row">
+        <a-input
+          v-model="refIdsText"
+          :placeholder="isArk ? '参考素材 ID（1 个）' : '参考素材 ID（1~10 个，逗号分隔）'"
+          allow-clear
+        />
+        <a-button type="outline" @click="pickerVisible = true">选择图片</a-button>
+      </div>
+      <div class="gen-hint">
+        参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
+        只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。
+      </div>
+      <div v-if="(referenceItems?.length ?? 0) > 0" class="gen-ref-strip">
+        <div class="gen-ref-strip-head">
+          <span class="gen-label gen-label--inline">已选参考（{{ referenceItems?.length }}）</span>
+          <span class="gen-hint">点任意一张看大图 · 第 1 张是主参考</span>
+        </div>
+        <div class="gen-ref-thumbs">
+          <button
+            v-for="(item, idx) in referenceItems"
+            :key="item.id"
+            type="button"
+            class="gen-ref-thumb"
+            :title="`第 ${idx + 1} 张 · ${item.id}`"
+            @click="emit('browse-references', idx)"
+          >
+            <img :src="refThumb(item)" alt="" loading="lazy" />
+            <span class="gen-ref-thumb-index">{{ idx + 1 }}</span>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <!-- ③ 描述：放在输入区靠上的位置，不再被姿势/批量面板挤到下面 -->
+    <div class="gen-section-head">
+      <span class="gen-section-title">描述画面</span>
+      <span class="gen-hint">
+        {{ isArk ? '可留空，系统会按姿态补默认描述' : '主体 + 穿搭 + 场景 + 光线' }}
       </span>
-    </a-radio>
-  </a-radio-group>
-  <div v-if="probing && allModels.length" class="gen-hint gen-model-loading">
-    档位已列出（用上次的目录），就绪状态正在探测…
-  </div>
-  <a-alert v-if="currentModel?.uncensored" type="warning" class="gen-alert gen-alert--tight">
-    {{ currentModel.notice || '该档位使用无内容安全过滤的权重。' }}
-  </a-alert>
-
-  <div v-if="kind === 'i2i'" class="gen-row">
-    <a-input v-model="refIdsText" placeholder="参考素材 ID（1~10 个，逗号分隔）" allow-clear />
-    <a-button @click="pickerVisible = true">选择图片</a-button>
-    <span class="gen-hint">{{ refIdsList.length }}/{{ maxRefs }}</span>
-  </div>
-  <div v-if="kind === 'i2i'" class="gen-hint">
-    参考图决定人物、场景与版型；描述要写「改完之后的样子」（例：「同一个人、同一场景，光脚不穿鞋」），
-    只写命令（如「去掉鞋子」）容易失效。出图比例跟随参考图。当前
-    {{ refIdsList.length }} 个参考{{
-      poseMode === 'lineart' && selectedPose ? `（上限 ${maxRefs} 张：姿势图占 1 张）` : ''
-    }}。
-  </div>
-
-  <!-- 已选参考缩略图：写描述前先确认「选了哪几张、顺序对不对」，点任意一张看大图 -->
-  <div v-if="kind === 'i2i' && (referenceItems?.length ?? 0) > 0" class="gen-ref-strip">
-    <div class="gen-ref-strip-head">
-      <span class="gen-label gen-label--inline">已选参考（{{ referenceItems?.length }}）</span>
-      <span class="gen-hint">点任意一张看大图 · 第 1 张是主参考</span>
     </div>
-    <div class="gen-ref-thumbs">
-      <button
-        v-for="(item, idx) in referenceItems"
-        :key="item.id"
-        type="button"
-        class="gen-ref-thumb"
-        :title="`第 ${idx + 1} 张 · ${item.id}`"
-        @click="emit('browse-references', idx)"
-      >
-        <img :src="refThumb(item)" alt="" loading="lazy" />
-        <span class="gen-ref-thumb-index">{{ idx + 1 }}</span>
-      </button>
+    <a-textarea
+      v-model="prompt"
+      :placeholder="
+        isArk
+          ? '可留空；也可写「保持图1人物长相与服装，按图2姿势重新拍摄」'
+          : '例：米色针织开衫配白色阔腿裤，极简工作室背景，柔和自然光，时尚编辑摄影'
+      "
+      :auto-size="{ minRows: 4, maxRows: 8 }"
+      allow-clear
+    />
+    <div class="gen-row gen-row--inline">
+      <a-input
+        v-model="rewriteIdsText"
+        placeholder="从素材反推：粘贴素材 ID（逗号分隔）"
+        allow-clear
+      />
+      <a-button :loading="previewing" @click="onPreviewPrompt">反推</a-button>
     </div>
-  </div>
+    <div class="gen-hint">反推会读取这些素材的标签、正文与主色拼成描述（可再手动改）。</div>
 
-  <!-- 云端 Seedream：多姿态选择 -->
-  <div v-if="isArk" class="gen-pose">
-    <div class="gen-row">
-      <a-button @click="posePickerVisible = true">选择多个姿势（≤10）</a-button>
-      <span class="gen-hint">已选 {{ cloudPoses.length }} / 10 个姿态；每个姿态独立计费</span>
+    <!-- ④ 姿势：云端多选；本地单选 + 可选的批量轮播 -->
+    <div v-if="isArk" class="gen-pose">
+      <div class="gen-section-head">
+        <span class="gen-section-title">选择姿态</span>
+        <span class="gen-hint">可多选，每个姿态独立生成、独立计费</span>
+      </div>
+      <div class="gen-row">
+        <a-button @click="posePickerVisible = true">选择多个姿势（≤10）</a-button>
+        <span class="gen-hint">已选 {{ cloudPoses.length }} / 10 个姿态</span>
+      </div>
+      <div v-if="cloudPoses.length" class="gen-pose-cards">
+        <div v-for="pose in cloudPoses" :key="pose.id" class="gen-pose-card">
+          <img :src="pose.thumb_url" :alt="pose.name" loading="lazy" />
+          <div class="gen-pose-meta">
+            <div class="gen-pose-name">{{ pose.name }} · {{ pose.angle }}</div>
+            <a-button size="mini" type="text" @click="removeCloudPose(pose.id)">移除</a-button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div v-if="cloudPoses.length" class="gen-pose-cards">
-      <div v-for="pose in cloudPoses" :key="pose.id" class="gen-pose-card">
-        <img :src="pose.thumb_url" :alt="pose.name" loading="lazy" />
+
+    <div v-else class="gen-pose">
+      <div class="gen-section-head">
+        <span class="gen-section-title">姿势（可选）</span>
+        <span class="gen-hint">从姿势图库挑一个姿势</span>
+      </div>
+      <div class="gen-row">
+        <a-button @click="posePickerVisible = true">
+          {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
+        </a-button>
+        <a-button v-if="selectedPose" type="text" @click="insertPosePrompt">插入姿势描述</a-button>
+        <a-button v-if="selectedPose" type="text" @click="clearPose">清除</a-button>
+        <span v-if="!selectedPose" class="gen-hint">
+          默认按文字描述生成（文生图）；也可切线稿参考（图生图）
+        </span>
+      </div>
+      <div v-if="selectedPose" class="gen-row">
+        <span class="gen-label gen-label--inline">姿势生成方式</span>
+        <a-radio-group v-model="poseMode" size="small">
+          <a-radio value="text">文字描述（文生图）</a-radio>
+          <a-radio value="lineart">线稿参考（图生图）</a-radio>
+        </a-radio-group>
+      </div>
+      <div v-if="selectedPose" class="gen-pose-card">
+        <img :src="selectedPose.thumb_url" :alt="selectedPose.name" loading="lazy" />
         <div class="gen-pose-meta">
-          <div class="gen-pose-name">{{ pose.name }} · {{ pose.angle }}</div>
-          <a-button size="mini" type="text" @click="removeCloudPose(pose.id)">移除</a-button>
+          <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
+          <div class="gen-hint">
+            {{ selectedPose.system }} / {{ selectedPose.category }} ·
+            <template v-if="poseMode === 'lineart'">
+              姿势图会作为<strong>最后一张</strong>参考图参与生成（占 1 张额度，需先选主体参考）
+            </template>
+            <template v-else>
+              姿势名/角度会写进描述，用<strong>文生图</strong>生成（不需要参考图）
+            </template>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- 本地/线稿姿势参考：默认文生图（姿势写进描述），可选线稿参考（图生图） -->
-  <div v-if="!isArk" class="gen-pose">
+      <!-- 批量轮播只服务「线稿参考（图生图）」；文生图下隐藏，避免误以为能直接批量 -->
+      <QuickPoseBatchPanel
+        v-if="kind === 'i2i'"
+        :platform-ready="ready"
+        :model-ready="quickModelReady"
+        :pose-mode="poseMode"
+        :has-references="refIdsList.length > 0"
+        :busy="submitting || active"
+        @run="onQuickRun"
+        @batch-end="onQuickBatchEnd"
+      />
+    </div>
+
+    <!-- ⑤ 高级参数：默认收起，减少首屏噪音；尺寸/张数在提交栏有摘要 -->
+    <a-collapse class="gen-advanced" :bordered="false">
+      <a-collapse-item
+        key="advanced"
+        :header="isArk ? '高级参数（尺寸 / 水印）' : '高级参数（尺寸 / 步数 / seed / 负向）'"
+      >
+        <template v-if="!isArk">
+          <div class="gen-row gen-row--multi">
+            <a-select v-model="size" :options="sizePresets" style="flex: 1" />
+            <a-input-number v-model="count" :min="1" :max="4" style="width: 100px">
+              <template #prefix>张数</template>
+            </a-input-number>
+          </div>
+          <div class="gen-label">负向描述（可选）</div>
+          <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
+          <div class="gen-row">
+            <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
+              <template #prefix>步数</template>
+            </a-input-number>
+            <a-input-number v-model="seed" :min="0" style="width: 180px">
+              <template #prefix>seed</template>
+            </a-input-number>
+          </div>
+          <div class="gen-hint">seed=0 时随机；提交后会把真实 seed 显示在结果区，便于复现。</div>
+        </template>
+        <template v-else>
+          <div class="gen-row gen-row--multi">
+            <a-select v-model="cloudSize" :options="CLOUD_SIZE_PRESETS" style="flex: 1" />
+            <a-switch v-model="cloudWatermark" />
+            <span class="gen-hint">加水印（默认关）</span>
+          </div>
+          <div class="gen-hint">
+            云端单次固定 1 张，无 seed / 负向词 / 步数；素材图 + 姿态图会上传到火山引擎方舟。
+          </div>
+        </template>
+      </a-collapse-item>
+    </a-collapse>
+
+    <!-- ⑥ 配方：次要功能，放在提交前，保持可发现但不抢主流程 -->
+    <div class="gen-section-head">
+      <span class="gen-section-title">出图配方</span>
+      <span class="gen-hint">保存当前参数，下次一键载入</span>
+    </div>
     <div class="gen-row">
-      <a-button @click="posePickerVisible = true">
-        {{ selectedPose ? '更换姿势' : '选择姿势（换姿势）' }}
-      </a-button>
-      <a-button v-if="selectedPose" type="text" @click="insertPosePrompt">插入姿势描述</a-button>
-      <a-button v-if="selectedPose" type="text" @click="clearPose">清除</a-button>
-      <span v-if="!selectedPose" class="gen-hint">
-        可选：从姿势图库挑一个姿势；默认按文字描述生成（文生图），也可切线稿参考
-      </span>
+      <a-input
+        v-model="presetName"
+        placeholder="配方名，如「极简工作室」"
+        allow-clear
+        style="flex: 1"
+      />
+      <a-button :disabled="!presetName.trim()" @click="onSavePreset">保存配方</a-button>
     </div>
-    <div v-if="selectedPose && !isArk" class="gen-row">
-      <span class="gen-label gen-label--inline">姿势生成方式</span>
-      <a-radio-group v-model="poseMode" size="small">
-        <a-radio value="text">文字描述（文生图）</a-radio>
-        <a-radio value="lineart">线稿参考（图生图）</a-radio>
-      </a-radio-group>
+    <div v-if="presets.length" class="gen-preset-list">
+      <a-tag
+        v-for="p in presets"
+        :key="p.name"
+        closable
+        class="gen-preset-tag"
+        @click="onApplyPreset(p.name)"
+        @close="removePreset(p.name)"
+      >
+        {{ p.name }}
+      </a-tag>
     </div>
-    <div v-if="selectedPose" class="gen-pose-card">
-      <img :src="selectedPose.thumb_url" :alt="selectedPose.name" loading="lazy" />
-      <div class="gen-pose-meta">
-        <div class="gen-pose-name">{{ selectedPose.name }} · {{ selectedPose.angle }}</div>
-        <div class="gen-hint">
-          {{ selectedPose.system }} / {{ selectedPose.category }} ·
-          <template v-if="poseMode === 'lineart'">
-            姿势图会作为<strong>最后一张</strong>参考图参与生成（占 1 张额度，需先选主体参考）
-          </template>
-          <template v-else>
-            姿势名/角度会写进描述，用<strong>文生图</strong>生成（不需要参考图）
-          </template>
-        </div>
+
+    <!-- ⑦ 提交栏：sticky 在面板底部，长表单滚动时不用再翻到底 -->
+    <div class="gen-actions">
+      <div class="gen-actions-info">
+        <span class="gen-actions-mode">
+          {{ currentModel ? modelTaskTitle(currentModel) : '—' }}
+        </span>
+        <span v-if="isArk" class="gen-hint">
+          云端 · 本次云端预计费用 ¥{{ cloudCost.toFixed(2) }}（{{ Math.max(1, cloudPoses.length) }}
+          个姿态）
+        </span>
+        <span v-else class="gen-hint">
+          本地 · {{ activePreset?.label || size }} · {{ count }} 张
+        </span>
+      </div>
+      <div class="gen-actions-buttons">
+        <a-button
+          type="primary"
+          :loading="submitting"
+          :disabled="!canSubmit || !ready"
+          @click="onSubmit"
+        >
+          生成 {{ isArk ? Math.max(1, cloudPoses.length) : count }} 张
+        </a-button>
+        <a-button v-if="active" status="warning" @click="emit('cancel')">取消</a-button>
       </div>
     </div>
-  </div>
-
-  <!-- 一键出图：按「性感系 399」顺序轮播姿势，可连续多次；参数只有每次张数/步数/连续次数
-       云端 Seedream 走「选择多个姿势」的独立流程，这里隐藏，避免误触后队列空转 -->
-  <QuickPoseBatchPanel
-    v-if="!isArk"
-    :platform-ready="ready"
-    :model-ready="quickModelReady"
-    :pose-mode="poseMode"
-    :has-references="refIdsList.length > 0"
-    :busy="submitting || active"
-    @run="onQuickRun"
-    @batch-end="onQuickBatchEnd"
-  />
-
-  <div class="gen-label">描述（prompt）</div>
-  <a-textarea
-    v-model="prompt"
-    placeholder="例：米色针织开衫配白色阔腿裤，极简工作室背景，柔和自然光，时尚编辑摄影"
-    :auto-size="{ minRows: 4, maxRows: 8 }"
-    allow-clear
-  />
-
-  <div class="gen-row">
-    <a-input
-      v-model="rewriteIdsText"
-      placeholder="从素材反推：粘贴素材 ID（逗号分隔）"
-      allow-clear
-    />
-    <a-button :loading="previewing" @click="onPreviewPrompt">反推</a-button>
-  </div>
-  <div class="gen-hint">反推会读取这些素材的标签、正文与主色拼成描述（可再手动改）。</div>
-
-  <template v-if="!isArk">
-    <div class="gen-label">负向描述（可选）</div>
-    <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
-
-    <div class="gen-row gen-row--multi">
-      <a-select v-model="size" :options="sizePresets" style="flex: 1" />
-      <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
-        <template #prefix>步数</template>
-      </a-input-number>
-      <a-input-number v-model="count" :min="1" :max="4" style="width: 100px">
-        <template #prefix>张数</template>
-      </a-input-number>
-    </div>
-    <div class="gen-row">
-      <a-input-number v-model="seed" :min="0" style="width: 180px">
-        <template #prefix>seed</template>
-      </a-input-number>
-      <span class="gen-hint">0 = 随机（提交后会把真实 seed 显示在结果区，便于复现）</span>
-    </div>
-  </template>
-
-  <!-- 云端 Seedream：只有尺寸/水印可调，steps/cfg/seed 对云端无效 -->
-  <template v-else>
-    <div class="gen-row gen-row--multi">
-      <a-select v-model="cloudSize" :options="CLOUD_SIZE_PRESETS" style="flex: 1" />
-      <a-switch v-model="cloudWatermark" />
-      <span class="gen-hint">加水印（默认关）</span>
-    </div>
-    <div class="gen-hint">
-      云端单次固定 1 张，无 seed / 负向词 / 步数；素材图 + 姿态图会上传到火山引擎方舟。
-    </div>
-  </template>
-
-  <div class="gen-label">出图配方（保存当前参数，下次一键载入）</div>
-  <div class="gen-row">
-    <a-input
-      v-model="presetName"
-      placeholder="配方名，如「极简工作室」"
-      allow-clear
-      style="flex: 1"
-    />
-    <a-button :disabled="!presetName.trim()" @click="onSavePreset">保存配方</a-button>
-  </div>
-  <div v-if="presets.length" class="gen-preset-list">
-    <a-tag
-      v-for="p in presets"
-      :key="p.name"
-      closable
-      class="gen-preset-tag"
-      @click="onApplyPreset(p.name)"
-      @close="removePreset(p.name)"
-    >
-      {{ p.name }}
-    </a-tag>
-  </div>
-
-  <div v-if="isArk" class="gen-hint" style="margin-bottom: 6px">
-    本次云端预计费用：1 个姿态 × ¥{{ (currentModel?.costPerImage ?? 0.12).toFixed(2) }} ≈ ¥{{
-      cloudCost.toFixed(2)
-    }}（以方舟实际计费为准）
-  </div>
-  <div class="gen-actions">
-    <a-button
-      type="primary"
-      :loading="submitting"
-      :disabled="!canSubmit || !ready"
-      @click="onSubmit"
-    >
-      生成 {{ isArk ? 1 : count }} 张
-    </a-button>
-    <a-button v-if="active" status="warning" @click="emit('cancel')">取消</a-button>
-    <span v-if="activePreset" class="gen-hint">{{ activePreset.label }}</span>
   </div>
 
   <ReferencePickerModal
@@ -1149,17 +1226,124 @@ onMounted(() => {
 .gen-alert--tight {
   margin: 8px 0 0;
 }
-.gen-model-tag {
-  margin-left: 4px;
-}
-.gen-models {
+.gen-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
-.gen-model-note {
-  margin-left: 6px;
+/* 分区标题：左侧一条主色竖线，长表单里一眼能看出「现在在哪一段」 */
+.gen-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 16px 0 8px;
+  padding-left: 8px;
+  border-left: 3px solid rgb(var(--primary-6));
+}
+.gen-section-head:first-child {
+  margin-top: 0;
+}
+.gen-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+  white-space: nowrap;
+}
+/* 档位卡片：2×2 网格，按「本地 / 云端」分组；用户按任务标题选，不用记模型名 */
+.gen-models {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+.gen-model-group {
+  grid-column: 1 / -1;
+  margin-top: 2px;
   font-size: 11px;
+  color: #8a8f99;
+}
+.gen-model-card {
+  display: block;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 8px;
+  background: var(--color-fill-1);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.gen-model-card:hover {
+  border-color: rgb(var(--primary-5));
+}
+.gen-model-card.arco-radio-checked {
+  border-color: rgb(var(--primary-6));
+  background: rgb(var(--primary-1));
+}
+.gen-model-card :deep(.arco-radio-label) {
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+.gen-model-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.gen-model-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+}
+.gen-model-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #8a8f99;
+  white-space: nowrap;
+}
+.gen-model-state.is-ready {
+  color: rgb(var(--green-6));
+}
+.gen-model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.gen-model-card-name {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+.gen-model-card-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8a8f99;
+}
+.gen-model-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+/* 高级参数默认收起，避免首屏被尺寸/步数/seed/负向撑满 */
+.gen-advanced {
+  margin-top: 16px;
+}
+.gen-advanced :deep(.arco-collapse-item-header) {
+  padding-left: 0;
+}
+.gen-advanced :deep(.arco-collapse-item-content-box) {
+  padding-left: 0;
+  padding-right: 0;
 }
 .gen-hint {
   color: #8a8f99;
@@ -1180,11 +1364,41 @@ onMounted(() => {
 .gen-row--multi {
   flex-wrap: wrap;
 }
+/* 提交栏贴在面板底部：长表单滚动时不用再翻到底找「生成」 */
 .gen-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 16px;
+  padding: 12px 0 4px;
+  background: var(--color-bg-2, #fff);
+  border-top: 1px solid var(--color-border-2);
+}
+.gen-actions-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.gen-actions-mode {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-1);
+}
+.gen-actions-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+@media (max-width: 480px) {
+  .gen-models {
+    grid-template-columns: 1fr;
+  }
 }
 .gen-preset-list {
   display: flex;

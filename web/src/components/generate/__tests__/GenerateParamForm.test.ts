@@ -528,6 +528,7 @@ describe('GenerateParamForm 一键出图', () => {
         submitting: false,
         active: false,
         initialRefIds: '',
+        initialModelKey: 'qwen_2_1_i2i',
         promptFrom: vi.fn(),
       },
       global: { plugins: [ArcoVue] },
@@ -581,7 +582,7 @@ describe('云端 Seedream 档位', () => {
     expect(wrapper.text()).toContain('已选 2 / 10 个姿态')
 
     sessionStorage.setItem('fashion-inspo:ark-upload-confirmed', '1')
-    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成 1 张'))
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成 2 张'))
     expect(btn).toBeTruthy()
     await btn!.trigger('click')
     await flushPromises()

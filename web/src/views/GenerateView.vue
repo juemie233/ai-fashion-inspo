@@ -374,8 +374,8 @@ onUnmounted(stopPoll)
       <div>
         <h2 class="gen-title">本地出图</h2>
         <div class="gen-sub">
-          用本机 ComfyUI 生成穿搭图；生成结果先进候选区，勾选后才入库（默认待审核、标记「AI
-          生成」）。
+          用本机 ComfyUI 或云端 Seedream
+          生成穿搭图；生成结果先进候选区，勾选后才入库（默认待审核、标记「AI 生成」）。
         </div>
       </div>
       <a-button :loading="statusLoading" @click="loadStatus">刷新环境</a-button>
