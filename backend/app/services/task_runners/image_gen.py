@@ -468,6 +468,12 @@ async def _execute_seedream(
     target = out_dir / _CANDIDATE_NAME.format(idx=1, seed=0)
     await asyncio.to_thread(target.write_bytes, result.image)
 
+    # 对账信息写回参数快照（不记录图片/base64/key，只留 request_id/耗时/usage/估算费用）
+    params["ark_request_id"] = result.request_id
+    params["ark_elapsed_s"] = result.elapsed_s
+    params["ark_usage"] = result.usage
+    run.params_json = json.dumps(params, ensure_ascii=False)
+
     run.done = 1
     run.failed = 0
     task.done = 1
@@ -475,9 +481,10 @@ async def _execute_seedream(
     run.status = "done"
     await _mark_stage(db, task, run, "done", batch_dir=run.batch_dir)
     logger.info(
-        "云端出图完成 run #%s model=%s size=%s request_id=%s",
+        "云端出图完成 run #%s model=%s size=%s request_id=%s elapsed=%.2fs",
         run.id,
         settings.seedream_model,
         params.get("size"),
         result.request_id or "-",
+        result.elapsed_s,
     )

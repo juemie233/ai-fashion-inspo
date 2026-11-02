@@ -137,7 +137,9 @@ async def test_execute_seedream_writes_candidate(client, upload, fake_cloud, mon
 
         async def generate(self, **kwargs):
             assert len(kwargs["images"]) == 2
-            return SimpleNamespace(image=_png_bytes(), request_id="req-test", usage={})
+            return SimpleNamespace(
+                image=_png_bytes(), request_id="req-test", usage={}, elapsed_s=1.2
+            )
 
         async def aclose(self) -> None:
             return None
@@ -153,14 +155,19 @@ async def test_execute_seedream_writes_candidate(client, upload, fake_cloud, mon
         assert run.status == "done"
         assert run.done == 1
         assert task.progress == 100
+        params = json.loads(run.params_json)
+        assert params["ark_request_id"] == "req-test"
+        assert "ark_elapsed_s" in params
 
 
 async def test_cloud_daily_budget_rejects_second_run(client, upload, fake_cloud, monkeypatch):
     """日预算软上限：当天已建 1 个云端批次后，再提交超过预算直接 400。"""
-    monkeypatch.setattr(settings, "seedream_daily_budget_cny", 0.12)
+    # 先不限预算建第 1 个批次，再把预算压到 0.12：第 2 个必然超额
+    monkeypatch.setattr(settings, "seedream_daily_budget_cny", 0)
     insp = upload().json()["id"]
     first = client.post("/api/generate/runs", json=_payload(insp))
     assert first.status_code == 200, first.text
+    monkeypatch.setattr(settings, "seedream_daily_budget_cny", 0.12)
     second = client.post("/api/generate/runs", json=_payload(insp))
     assert second.status_code == 400
     assert "预算" in second.text

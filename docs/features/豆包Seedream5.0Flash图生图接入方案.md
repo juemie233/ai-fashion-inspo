@@ -751,7 +751,8 @@ SEEDREAM_DAILY_BUDGET_CNY=5.0
 - 参数面板为每个姿态生成独立 `CreateRunPayload`（固定 1 张素材 + 各自 pose_id），一次提交 N 个批次；
 - `useImageGen.submitBatch`：最多 2 并发、逐批收集成功/失败，展示最后一个成功批次，失败项不重复提交；
 - 费用提示按「已选姿态数 × ¥0.12」计算；隐私确认一次覆盖整批；
-- 测试：前端新增多姿态提交用例、submitBatch 成功/部分失败用例；全量前端 886 项通过。
+- 测试：前端新增多姿态提交用例、submitBatch 成功/部分失败用例、隐私确认未确认不发出批次用例；全量前端 886 项通过。
+- 对账：执行成功后把 `ark_request_id` / `ark_elapsed_s` / `ark_usage` 写回 `params_json`（不记录 key/base64/图片）；README 已补充云端通道说明。
 
 ### 14.3 未完成 / 待用户决定
 
