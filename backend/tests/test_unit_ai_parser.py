@@ -121,3 +121,116 @@ class TestIsEmptyTagPayload:
         assert not is_empty_tag_payload({})
         assert not is_empty_tag_payload(None)  # type: ignore[arg-type]
         assert not is_empty_tag_payload(["a"])  # type: ignore[arg-type]
+
+
+# ── 边界补充：模型输出的畸形形态千奇百怪，这里逐条钉住「降级而不是崩」的路径 ──
+
+
+def test_parse_analysis_response_skips_invalid_candidate_blocks():
+    """策略 1 会遍历所有 {…} 块打分：坏块跳过、好块胜出（不能因为坏块就整体失败）。"""
+    raw = '{bad json} {"style": ["法式"], "items": []}'
+    data = parse_analysis_response(raw)
+    assert data["style"] == ["法式"]
+
+
+def test_parse_analysis_response_unrepairable_returns_empty():
+    """三段策略都救不回来时返回空 dict（调用方按「解析失败」处理，不能抛异常）。"""
+    assert parse_analysis_response("{oops: 1}") == {}
+
+
+def test_repair_truncated_json_handles_escaped_quotes():
+    """截断处落在转义引号中间：不能把 `\\"` 当成字符串结束符。"""
+    repaired = repair_truncated_json(r'{"a": "x\"y')
+    assert repaired is not None
+    import json
+
+    assert json.loads(repaired)["a"].startswith("x")
+
+
+def test_repair_truncated_json_closes_nested_objects():
+    """嵌套对象被截断：按括号栈从内到外补齐。"""
+    import json
+
+    repaired = repair_truncated_json('{"a": {"b": 1}')
+    assert repaired is not None
+    assert json.loads(repaired) == {"a": {"b": 1}}
+
+
+def test_repair_truncated_json_without_object_returns_none():
+    assert repair_truncated_json("没有花括号") is None
+
+
+def test_strip_trailing_commas_keeps_string_content():
+    """去尾部逗号必须字符串感知：标签名里的 `,}` 不能被当成结构逗号删掉。"""
+    from app.services.ai_parser import _strip_trailing_commas
+
+    assert _strip_trailing_commas('["黑,}"]') == '["黑,}"]'
+    assert _strip_trailing_commas('{"a": 1,}') == '{"a": 1}'
+    assert _strip_trailing_commas('["a",]') == '["a"]'
+
+
+def test_looks_truncated_edge_cases():
+    assert not looks_truncated("")  # 空输出不算截断
+    # 转义引号不能被当成字符串边界，否则括号计数会错
+    assert looks_truncated('{"a": "q\\"q')
+
+
+def test_parse_is_outfit_numeric_and_case():
+    assert parse_is_outfit(1) is True
+    assert parse_is_outfit(0) is False
+    assert parse_is_outfit("  TRUE  ") is True
+    assert parse_is_outfit(" NO ") is False
+    assert parse_is_outfit("不确定") is None
+
+
+def test_extract_tag_names_unsupported_type_returns_empty():
+    """既不认识的类型（对象/None）返回空列表，不能抛 TypeError。"""
+    assert extract_tag_names(object()) == []
+    assert extract_tag_names(None) == []
+
+
+class TestExtractStrTagFilters:
+    """单字符串值的过滤规则（长度/标点/句式/颜色/纯数字）。"""
+
+    def test_too_short(self):
+        assert extract_tag_names("a") == []
+        assert extract_tag_names("  ") == []
+
+    def test_set_like_string(self):
+        assert extract_tag_names("{坐姿}") == []
+
+    def test_punctuation_sentence(self):
+        assert extract_tag_names("坐姿。") == []
+
+    def test_description_sentence(self):
+        assert extract_tag_names("整体造型说明") == []
+
+    def test_separator_splitting(self):
+        """半角/全角逗号、顿号、斜杠都要拆开再逐项过滤。"""
+        assert extract_tag_names("宽松，修身") == ["宽松", "修身"]
+        assert extract_tag_names("宽松,修身") == ["宽松", "修身"]
+        assert extract_tag_names("宽松、修身") == ["宽松", "修身"]
+        assert extract_tag_names("宽松/修身") == ["宽松", "修身"]
+
+    def test_bracket_content_removed(self):
+        assert extract_tag_names("室内拍摄（棚拍）") == ["室内拍摄"]
+        assert extract_tag_names("室内拍摄(棚拍)") == ["室内拍摄"]
+        # 只剩括号内容 → 空
+        assert extract_tag_names("（棚拍）") == []
+
+    def test_color_and_digit_filters(self):
+        assert extract_tag_names("#F4D0A3") == []  # 带 # 的颜色值
+        assert extract_tag_names("abc123") == []  # 6 位纯 hex
+        assert extract_tag_names("123456") == []  # 纯数字
+
+
+def test_extract_tag_names_chinese_context_key():
+    """第 3 轮：中文语境键（图片属性/季节等）要提取出来。"""
+    assert extract_tag_names({"图片属性": "室内"}) == ["室内"]
+    assert extract_tag_names({"穿着方式": "塞衣角"}) == ["塞衣角"]
+
+
+def test_extract_tag_names_fallback_skips_english_booleans():
+    """兜底遍历时跳过 `{"face": true}` 这类纯英文布尔键，但中文键照常提取。"""
+    assert extract_tag_names({"face": True}) == []
+    assert extract_tag_names({"face": True, "风格": "法式"}) == ["法式"]
