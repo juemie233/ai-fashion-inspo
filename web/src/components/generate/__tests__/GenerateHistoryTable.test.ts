@@ -14,7 +14,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import ArcoVue from '@arco-design/web-vue'
+import ArcoVue, { Message } from '@arco-design/web-vue'
 
 const mocks = vi.hoisted(() => ({
   fetchRun: vi.fn(),
@@ -33,6 +33,8 @@ vi.mock('@/api/inspirations', async (importOriginal) => {
 })
 
 import GenerateHistoryTable from '../GenerateHistoryTable.vue'
+import GenerateImportDialog from '../GenerateImportDialog.vue'
+import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
 import type { GenerateStatus, GenerationRunBrief } from '@/api/generate'
 
 const LONG_PROMPT =
@@ -330,6 +332,124 @@ describe('生成历史表', () => {
     const button = wrapper.find('.ghd-cand-actions button')
     expect(button.attributes('disabled')).toBeDefined()
     expect(wrapper.emitted('import-selected')).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  // ── 操作列「入库」：默认全部入库，多张时弹窗默认全选 ──
+
+  /** 操作列里文案为「入库」的按钮（与展开行的「入库选中」区分） */
+  function importButton(wrapper: ReturnType<typeof mountTable>) {
+    return wrapper.findAll('button').find((btn) => btn.text() === '入库')
+  }
+
+  function candidates() {
+    return [
+      { filename: '01_seed-1.png', index: 1, seed: 1, imported: false, url: '/u/1' },
+      { filename: '02_seed-2.png', index: 2, seed: 2, imported: false, url: '/u/2' },
+      { filename: '03_seed-3.png', index: 3, seed: 3, imported: true, url: '/u/3' },
+    ]
+  }
+
+  it('操作列「入库」：单张候选直接全部入库（不弹窗）', async () => {
+    mocks.fetchRun.mockResolvedValue({
+      run: {},
+      items: [candidates()[0]],
+      task: null,
+    })
+    const wrapper = mountTable(record())
+    await wrapper.vm.$nextTick()
+
+    expect(importButton(wrapper)).toBeTruthy()
+    await importButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.fetchRun).toHaveBeenCalledWith(12)
+    expect(wrapper.emitted('import-selected')?.[0]).toEqual([12, ['01_seed-1.png']])
+    expect(wrapper.findComponent(GenerateImportDialog).props('visible')).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('操作列「入库」：多张候选弹窗默认全选（含已入库的只读展示）', async () => {
+    mocks.fetchRun.mockResolvedValue({ run: {}, items: candidates(), task: null })
+    const wrapper = mountTable(record())
+    await wrapper.vm.$nextTick()
+
+    await importButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.findComponent(GenerateImportDialog)
+    expect(dialog.props('visible')).toBe(true)
+    expect(dialog.props('runId')).toBe(12)
+    expect(dialog.props('candidates')).toHaveLength(3)
+
+    // 弹窗内默认全选逻辑由 GenerateImportDialog 单测覆盖；这里确认结果被转发给视图入库
+    dialog.vm.$emit('confirm', ['01_seed-1.png', '02_seed-2.png'])
+    await flushPromises()
+    expect(wrapper.emitted('import-selected')?.[0]).toEqual([
+      12,
+      ['01_seed-1.png', '02_seed-2.png'],
+    ])
+
+    wrapper.unmount()
+  })
+
+  it('操作列「入库」：全部已入库时只提示、不弹窗', async () => {
+    const info = vi.spyOn(Message, 'info').mockImplementation((() => {}) as never)
+    mocks.fetchRun.mockResolvedValue({
+      run: {},
+      items: [candidates()[2]],
+      task: null,
+    })
+    const wrapper = mountTable(record())
+    await wrapper.vm.$nextTick()
+
+    await importButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    expect(info).toHaveBeenCalled()
+    expect(wrapper.findComponent(GenerateImportDialog).props('visible')).toBe(false)
+    expect(wrapper.emitted('import-selected')).toBeUndefined()
+
+    info.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('操作列「入库」只在 done 且候选未清理时出现', async () => {
+    const done = mountTable(record({ status: 'done' }))
+    await done.vm.$nextTick()
+    expect(importButton(done)).toBeTruthy()
+    done.unmount()
+
+    for (const overrides of [
+      { status: 'running' as const },
+      { status: 'done' as const, files_missing: true },
+    ]) {
+      const wrapper = mountTable(record(overrides))
+      await wrapper.vm.$nextTick()
+      expect(importButton(wrapper), JSON.stringify(overrides)).toBeUndefined()
+      wrapper.unmount()
+    }
+  })
+
+  it('历史缩略图带悬停放大组件（预览走 w=1024）', async () => {
+    const wrapper = mountTable(
+      record({
+        candidates: [
+          {
+            filename: '01_seed-1.png',
+            thumb_url: '/api/generate/runs/12/candidates/01_seed-1.png?w=256',
+          },
+        ],
+      }),
+    )
+    await wrapper.vm.$nextTick()
+
+    const previews = wrapper.findAllComponents(ImageHoverPreview)
+    expect(previews).toHaveLength(1)
+    expect(previews[0].props('src')).toContain('?w=256')
+    expect(previews[0].props('previewSrc')).toContain('01_seed-1.png?w=1024')
 
     wrapper.unmount()
   })

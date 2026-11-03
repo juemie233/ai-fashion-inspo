@@ -283,3 +283,5 @@ src/api/poseGallery.ts - fetchPosePrompt
 src/utils/faceMedia.ts - faceCropUrl
 # 2026-11-02 姿势选择器「随机」按钮：fetchRandomPose 仅被 PosePickerModal.vue 使用
 src/api/poseGallery.ts - fetchRandomPose
+# 2026-11-03 生成历史悬停放大/入库弹窗：candidateUrl 仅被两个 .vue 使用（ts-prune 不追踪 SFC）
+src/api/generate.ts - candidateUrl

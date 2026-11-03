@@ -308,6 +308,15 @@ export async function listRuns(
   return data
 }
 
+/**
+ * 候选图地址：`width>0` 走服务端缩略图（首次生成后缓存在批次 `.thumbs/`），
+ * `width` 缺省返回原图。悬停放大用 1024、入库弹窗卡片用 384。
+ */
+export function candidateUrl(runId: number, filename: string, width?: number): string {
+  const base = `/api/generate/runs/${runId}/candidates/${encodeURIComponent(filename)}`
+  return width ? `${base}?w=${width}` : base
+}
+
 /** 同参数再生成（seed=0 随机；>0 复现）。 */
 /** 更新批次标注（收藏 / 命名 / 备注），返回更新后的批次摘要 */
 export async function updateRunMeta(

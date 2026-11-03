@@ -19,9 +19,12 @@ import type {
   GenerationRunBrief,
   GenerationRunStats,
 } from '@/api/generate'
-import { autoTitleRun, fetchRun } from '@/api/generate'
+import { autoTitleRun, candidateUrl, fetchRun } from '@/api/generate'
 import { fetchInspirations } from '@/api/inspirations'
+import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
+import GenerateImportDialog from '@/components/generate/GenerateImportDialog.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
+import { getApiErrorMessage } from '@/utils/apiError'
 import { copyToClipboard } from '@/utils/clipboard'
 import { addDaysIso, formatDateTime, shortModelLabel } from '@/utils/format'
 
@@ -430,6 +433,63 @@ function resetPicked(runId: number): void {
   void loadDetail(runId)
 }
 
+// ── 操作列「入库」：默认全部入库；多张时弹窗确认（默认全选）──
+
+/** 正在读取候选图的批次 id（那一行的「入库」按钮转 loading） */
+const preparingImportId = ref<number | null>(null)
+const importDialogVisible = ref(false)
+const importDialogRunId = ref<number | null>(null)
+const importDialogItems = ref<GenerationCandidate[]>([])
+
+/** 终态 done 且候选目录还在，才给「入库」入口（运行中/已清理没有可入库的图） */
+function canImport(record: GenerationRunBrief): boolean {
+  return record.status === 'done' && !record.files_missing
+}
+
+/**
+ * 点「入库」：先拉详情拿到未入库候选。
+ * - 只有 1 张可入库 → 直接提交（用户要求的「默认全部入库」）；
+ * - 多张 → 打开弹窗并默认全选，由用户勾选后再提交。
+ * 两种情况都回抛 `import-selected`，由视图统一调确认入库接口并刷新。
+ */
+async function openImportDialog(record: GenerationRunBrief): Promise<void> {
+  if (preparingImportId.value !== null) return
+  preparingImportId.value = record.id
+  try {
+    const out = await fetchRun(record.id)
+    const items = out.items ?? []
+    const selectable = items.filter((item) => !item.imported)
+    if (!selectable.length) {
+      Message.info('这批候选图都已入库或已不存在')
+      return
+    }
+    if (selectable.length === 1) {
+      emit('import-selected', record.id, [selectable[0].filename])
+      return
+    }
+    importDialogRunId.value = record.id
+    importDialogItems.value = items
+    importDialogVisible.value = true
+  } catch (e) {
+    Message.error(getApiErrorMessage(e, '读取候选图失败'))
+  } finally {
+    preparingImportId.value = null
+  }
+}
+
+function onImportDialogConfirm(filenames: string[]): void {
+  if (importDialogRunId.value === null) return
+  emit('import-selected', importDialogRunId.value, filenames)
+}
+
+/** 入库后视图刷新了历史：关掉弹窗（避免对着旧候选再点一次） */
+watch(
+  () => props.history,
+  () => {
+    if (importDialogVisible.value) importDialogVisible.value = false
+  },
+)
+
 // 暴露给视图（入库后清勾选）与测试（日期换算的边界：Arco 弹层在 jsdom 里不稳定）
 defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
 </script>
@@ -544,7 +604,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
     :pagination="false"
     row-key="id"
     size="small"
-    :scroll="{ x: 1420 }"
+    :scroll="{ x: 1480 }"
     :expandable="{ width: 40 }"
     @expand="onExpandRow"
   >
@@ -569,13 +629,14 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
       <a-table-column title="图" :width="200">
         <template #cell="{ record }">
           <div v-if="record.candidates?.length" class="gh-thumbs">
-            <img
+            <!-- 悬停自动放大预览（大图走 ?w=1024 缩略图，不拉原图） -->
+            <image-hover-preview
               v-for="thumb in record.candidates"
               :key="thumb.filename"
               :src="thumb.thumb_url"
+              :preview-src="candidateUrl(record.id, thumb.filename, 1024)"
               :alt="thumb.filename"
-              loading="lazy"
-              class="gh-thumb"
+              img-class="gh-thumb"
             />
           </div>
           <span v-else-if="record.files_missing" class="gh-missing">图已清理</span>
@@ -628,7 +689,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           <span style="white-space: nowrap">{{ formatDateTime(record.created_at) }}</span>
         </template>
       </a-table-column>
-      <a-table-column title="操作" :width="320">
+      <a-table-column title="操作" :width="380">
         <template #cell="{ record }">
           <a-button size="mini" :loading="submitting" @click="emit('retry', record.id)">
             同参重跑
@@ -647,6 +708,18 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
             @click="toggleCompare(record.id)"
           >
             {{ isComparePicked(record.id) ? '已选对比' : '对比' }}
+          </a-button>
+          <!-- 入库：默认全部入库；多张时弹窗默认全选让用户挑（已入库的不可重复选） -->
+          <a-button
+            v-if="canImport(record)"
+            size="mini"
+            type="primary"
+            style="margin-left: 6px"
+            :loading="preparingImportId === record.id"
+            title="默认全部入库；有多张候选时弹窗选择"
+            @click="openImportDialog(record)"
+          >
+            入库
           </a-button>
           <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
           <a-popconfirm
@@ -748,7 +821,12 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
                   class="ghd-cand"
                   :class="{ 'is-imported': item.imported }"
                 >
-                  <img :src="item.url" :alt="item.filename" loading="lazy" />
+                  <!-- 悬停自动放大预览（候选图原图较大，预览用 ?w=1024 缩略图） -->
+                  <image-hover-preview
+                    :src="item.url"
+                    :preview-src="candidateUrl(record.id, item.filename, 1024)"
+                    :alt="item.filename"
+                  />
                   <span class="ghd-cand-seed">seed {{ item.seed }}</span>
                   <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
                   <a-checkbox
@@ -833,6 +911,14 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
       </div>
     </div>
   </a-modal>
+
+  <!-- 入库候选选择弹窗（多张时默认全选；图可悬停放大） -->
+  <generate-import-dialog
+    v-model:visible="importDialogVisible"
+    :run-id="importDialogRunId"
+    :candidates="importDialogItems"
+    @confirm="onImportDialogConfirm"
+  />
 </template>
 
 <style scoped>
@@ -1064,5 +1150,61 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
+}
+
+/* ── 缩略图 / 展开行候选图 ──
+   这两个块此前没有尺寸约束（图片按 256px/1024px 原尺寸撑开），补上统一尺寸；
+   cursor: zoom-in 提示「鼠标移上去可以放大预览」。 */
+.gh-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.gh-thumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: zoom-in;
+  background: var(--color-fill-3);
+}
+
+.ghd-cand-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ghd-cand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 132px;
+}
+
+.ghd-cand img {
+  display: block;
+  width: 132px;
+  height: 132px;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: zoom-in;
+  background: var(--color-fill-3);
+}
+
+.ghd-cand.is-imported {
+  opacity: 0.6;
+}
+
+.ghd-cand .arco-checkbox {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 85%);
 }
 </style>
