@@ -32,11 +32,19 @@ const deletingId = ref<number | null>(null)
 
 async function removeRun(id: number) {
   deletingId.value = id
+  // 多姿态合并行：删除整组（逐批调用删除接口，底层批次仍各自独立）
+  const row = history.value.find((item) => item.id === id)
+  const runIds = row?.run_ids?.length ? row.run_ids : [id]
   try {
-    const r = await discardRun(id)
-    Message.success(`已删除（清理 ${r.removed_files ?? 0} 个文件）`)
-    // 删掉的正是当前打开的批次：清空详情区，否则用户还能对已删除的批次点「确认入库」
-    if (run.value?.id === id) reset()
+    let removedFiles = 0
+    for (const runId of runIds) {
+      const result = await discardRun(runId)
+      removedFiles += result.removed_files ?? 0
+    }
+    Message.success(`已删除（清理 ${removedFiles} 个文件）`)
+    // 删掉的正是当前打开的批次（含多姿态组里任一批次）：清空详情区，
+    // 否则用户还能对已删除的批次点「确认入库」
+    if (run.value && runIds.includes(run.value.id)) reset()
     if (historyVisible.value) await refreshHistory()
     else historyDirty.value = true
   } catch (e) {
@@ -253,15 +261,26 @@ const historyTable = ref<InstanceType<typeof GenerateHistoryTable> | null>(null)
 /** 历史区入库中（展开行的按钮 loading） */
 const historyImporting = ref(false)
 
-/** 从历史页直接入库选中的候选（与候选区入库共用同一个接口） */
-async function onImportFromHistory(runId: number, filenames: string[]): Promise<void> {
+/** 从历史页直接入库选中的候选（多姿态合并行可能一次跨多个底层批次） */
+async function onImportFromHistory(
+  rowId: number,
+  groups: Array<{ run_id: number; filenames: string[] }>,
+): Promise<void> {
   historyImporting.value = true
   try {
-    const result = await confirmImport(runId, filenames)
-    const imported = result.imported ?? 0
-    if (imported > 0) Message.success(`已入库 ${imported} 张`)
-    else Message.info('这张已经入库过了（按内容哈希去重）')
-    historyTable.value?.resetPicked(runId)
+    let imported = 0
+    let skipped = 0
+    for (const group of groups) {
+      const result = await confirmImport(group.run_id, group.filenames)
+      imported += result.imported ?? 0
+      skipped += result.skipped ?? 0
+    }
+    if (imported > 0) {
+      Message.success(`已入库 ${imported} 张${skipped ? `（跳过 ${skipped} 张已存在）` : ''}`)
+    } else {
+      Message.info('选中的图都已入库过了（按内容哈希去重）')
+    }
+    historyTable.value?.resetPicked(rowId)
     await refreshHistory()
   } catch (e) {
     Message.error(getApiErrorMessage(e, '入库失败'))
@@ -523,7 +542,7 @@ onUnmounted(stopPoll)
         @remove="removeRun"
         @page-change="setHistoryPage"
         @update:filters="onHistoryFilters"
-        @import-selected="onImportFromHistory"
+        @import-selected-batch="onImportFromHistory"
         @toggle-favorite="onToggleFavorite"
         @save-meta="onSaveHistoryMeta"
         @apply-to-form="onApplyHistoryToForm"

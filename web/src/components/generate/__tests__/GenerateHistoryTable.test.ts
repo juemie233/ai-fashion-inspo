@@ -302,7 +302,10 @@ describe('生成历史表', () => {
     expect(buttons).toHaveLength(1)
     await buttons[0].trigger('click')
 
-    expect(wrapper.emitted('import-selected')?.[0]).toEqual([12, ['02_seed-2.png']])
+    expect(wrapper.emitted('import-selected-batch')?.[0]).toEqual([
+      12,
+      [{ run_id: 12, filenames: ['02_seed-2.png'] }],
+    ])
 
     wrapper.unmount()
   })
@@ -331,7 +334,7 @@ describe('生成历史表', () => {
 
     const button = wrapper.find('.ghd-cand-actions button')
     expect(button.attributes('disabled')).toBeDefined()
-    expect(wrapper.emitted('import-selected')).toBeUndefined()
+    expect(wrapper.emitted('import-selected-batch')).toBeUndefined()
 
     wrapper.unmount()
   })
@@ -365,7 +368,10 @@ describe('生成历史表', () => {
     await flushPromises()
 
     expect(mocks.fetchRun).toHaveBeenCalledWith(12)
-    expect(wrapper.emitted('import-selected')?.[0]).toEqual([12, ['01_seed-1.png']])
+    expect(wrapper.emitted('import-selected-batch')?.[0]).toEqual([
+      12,
+      [{ run_id: 12, filenames: ['01_seed-1.png'] }],
+    ])
     expect(wrapper.findComponent(GenerateImportDialog).props('visible')).toBe(false)
 
     wrapper.unmount()
@@ -385,11 +391,14 @@ describe('生成历史表', () => {
     expect(dialog.props('candidates')).toHaveLength(3)
 
     // 弹窗内默认全选逻辑由 GenerateImportDialog 单测覆盖；这里确认结果被转发给视图入库
-    dialog.vm.$emit('confirm', ['01_seed-1.png', '02_seed-2.png'])
+    dialog.vm.$emit('confirm', [
+      { run_id: 12, filename: '01_seed-1.png' },
+      { run_id: 12, filename: '02_seed-2.png' },
+    ])
     await flushPromises()
-    expect(wrapper.emitted('import-selected')?.[0]).toEqual([
+    expect(wrapper.emitted('import-selected-batch')?.[0]).toEqual([
       12,
-      ['01_seed-1.png', '02_seed-2.png'],
+      [{ run_id: 12, filenames: ['01_seed-1.png', '02_seed-2.png'] }],
     ])
 
     wrapper.unmount()
@@ -410,7 +419,7 @@ describe('生成历史表', () => {
 
     expect(info).toHaveBeenCalled()
     expect(wrapper.findComponent(GenerateImportDialog).props('visible')).toBe(false)
-    expect(wrapper.emitted('import-selected')).toBeUndefined()
+    expect(wrapper.emitted('import-selected-batch')).toBeUndefined()
 
     info.mockRestore()
     wrapper.unmount()
@@ -492,6 +501,69 @@ describe('生成历史表', () => {
 
     expect(wrapper.text()).toContain('无 seed（每次随机）')
     expect(wrapper.text()).not.toContain('seed 0')
+    wrapper.unmount()
+  })
+
+  // ── 多姿态合并行（2026-11-03）──
+
+  it('多姿态合并行：缩略图/状态/展开候选都跨批次合并，入库按批分组', async () => {
+    mocks.fetchRun.mockImplementation(async (id: number) => ({
+      run: { id, status: 'done' },
+      items: [
+        {
+          filename: '01_seed-0.png',
+          index: 1,
+          seed: 0,
+          imported: false,
+          url: `/u/${id}`,
+        },
+      ],
+      task: null,
+    }))
+    const groupRow = record({
+      id: 30,
+      group_id: 'g'.repeat(32),
+      run_ids: [20, 30],
+      total: 2,
+      done: 2,
+      candidates: [
+        { filename: '01_seed-0.png', thumb_url: 'u20', run_id: 20 },
+        { filename: '01_seed-0.png', thumb_url: 'u30', run_id: 30 },
+      ],
+      candidate_total: 2,
+    })
+    const wrapper = mountTable(groupRow)
+    await wrapper.vm.$nextTick()
+
+    // 列表行显示合并标识；重跑按钮不出现（组行不单独代表某一批）
+    expect(wrapper.text()).toContain('多姿态 2')
+    expect(wrapper.text()).not.toContain('同参重跑')
+    expect(wrapper.findAllComponents(ImageHoverPreview)).toHaveLength(2)
+
+    await expandFirstRow(wrapper)
+    expect(mocks.fetchRun).toHaveBeenCalledWith(20)
+    expect(mocks.fetchRun).toHaveBeenCalledWith(30)
+    expect(wrapper.findAll('.ghd-cand')).toHaveLength(2)
+
+    // 两张同名候选各自勾选（选择键带批次），提交时按底层批次分组
+    const boxes = wrapper.findAll('.ghd-cand .arco-checkbox input')
+    expect(boxes).toHaveLength(2)
+    await boxes[0].setValue(true)
+    await boxes[1].setValue(true)
+    await flushPromises()
+
+    const submit = wrapper
+      .findAll('.ghd-cand-actions button')
+      .find((btn) => btn.text().includes('入库选中'))!
+    await submit.trigger('click')
+
+    expect(wrapper.emitted('import-selected-batch')?.[0]).toEqual([
+      30,
+      [
+        { run_id: 20, filenames: ['01_seed-0.png'] },
+        { run_id: 30, filenames: ['01_seed-0.png'] },
+      ],
+    ])
     wrapper.unmount()
   })
 })

@@ -107,4 +107,30 @@ describe('候选区对比入口', () => {
       .find((b) => b.text().includes('重新生成'))
     expect(regenerateBtn).toBeTruthy()
   })
+
+  it('多姿态合并候选：同名文件用批次区分选择键，并提示合并姿态数', async () => {
+    const groupCandidates: GenerationCandidate[] = [
+      { ...candidates[0], seed: 0, run_id: 20, select_key: '20:0.png' },
+      { ...candidates[0], seed: 0, run_id: 30, select_key: '30:0.png' },
+    ]
+    const wrapper = mount(GenerateCandidatesPanel, {
+      props: {
+        run: run('i2i'),
+        candidates: groupCandidates,
+        selected: new Set<string>(['20:0.png']),
+        stageText: '完成',
+        lastSeed: null,
+        submitting: false,
+      },
+      global: { plugins: [ArcoVue] },
+    })
+
+    expect(wrapper.text()).toContain('本次合并 2 个姿态')
+    // 第一张已选中，第二张未选中：选择状态按 select_key 生效（不会两张一起亮）
+    expect(wrapper.findAll('.gen-item.is-selected')).toHaveLength(1)
+
+    const secondCheckbox = wrapper.findAll('.gen-item .arco-checkbox input')[1]
+    await secondCheckbox.setValue(true)
+    expect(wrapper.emitted('toggle')?.[0]).toEqual(['30:0.png'])
+  })
 })

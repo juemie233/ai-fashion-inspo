@@ -72,7 +72,12 @@ describe('GenerateImportDialog', () => {
     expect(confirmBtn).toBeTruthy()
     await confirmBtn!.trigger('click')
 
-    expect(wrapper.emitted('confirm')?.[0]).toEqual([['01_seed-1.png', '02_seed-2.png']])
+    expect(wrapper.emitted('confirm')?.[0]).toEqual([
+      [
+        { run_id: 12, filename: '01_seed-1.png' },
+        { run_id: 12, filename: '02_seed-2.png' },
+      ],
+    ])
     expect(wrapper.emitted('update:visible')?.[0]).toEqual([false])
 
     wrapper.unmount()
@@ -101,6 +106,32 @@ describe('GenerateImportDialog', () => {
     expect(previews[0].props('src')).toContain('01_seed-1.png?w=384')
     expect(previews[0].props('previewSrc')).toContain('01_seed-1.png?w=1024')
 
+    wrapper.unmount()
+  })
+
+  it('多姿态合并候选：默认全选，确认时按底层批次回抛', async () => {
+    const wrapper = mountDialog([
+      {
+        ...candidate({ filename: '01_seed-0.png' }),
+        run_id: 20,
+      },
+      {
+        ...candidate({ filename: '01_seed-0.png' }),
+        run_id: 30,
+      },
+    ])
+
+    expect(wrapper.text()).toContain('多姿态合并行会按底层批次分别入库')
+    expect(wrapper.text()).toContain('已选 2 / 2 张')
+    const confirmBtn = wrapper.findAll('button').find((btn) => btn.text().includes('确认入库'))
+    await confirmBtn!.trigger('click')
+
+    expect(wrapper.emitted('confirm')?.[0]).toEqual([
+      [
+        { run_id: 20, filename: '01_seed-0.png' },
+        { run_id: 30, filename: '01_seed-0.png' },
+      ],
+    ])
     wrapper.unmount()
   })
 })

@@ -462,6 +462,7 @@ async def _create_ark_run(
             workflow_name="ark_seedream",
             workflow_hash=f"ark:{settings.seedream_model}",
             reference_ids=json.dumps(ref_ids),
+            group_id=str(payload.get("group_id") or "").strip() or None,
             batch_dir="",
             total=1,
             done=0,
@@ -594,6 +595,7 @@ async def create_run(
         workflow_name=spec["workflow"],
         workflow_hash=digest,
         reference_ids=json.dumps(ref_ids) if kind == "i2i" else None,
+        group_id=str(payload.get("group_id") or "").strip() or None,
         batch_dir="",
         total=params["count"],
         done=0,
@@ -682,6 +684,8 @@ async def list_candidates(db: AsyncSession, run_id: int) -> dict:
                     "size_bytes": path.stat().st_size,
                     "imported": bool(digest and digest in imported),
                     "url": f"/api/generate/runs/{run_id}/candidates/{path.name}",
+                    # 多姿态合并展示时，候选图需要知道自己属于哪个批次（入库按批调用）
+                    "run_id": run_id,
                 }
             )
 
@@ -856,6 +860,22 @@ async def discard_run(db: AsyncSession, run_id: int) -> dict:
 """列表里每批最多带几张候选图（缩略图条）：再多也只是复制候选区"""
 LIST_CANDIDATES_LIMIT = 4
 
+"""多姿态合并行最多带几张缩略图（展开行仍给全部候选）"""
+GROUP_CANDIDATES_LIMIT = 8
+
+
+def _merged_run_status(runs: list[GenerationRun]) -> str:
+    """多姿态组的聚合状态：有在跑的就显示在跑，全失败/全取消才显示对应终态。"""
+    statuses = [run.status for run in runs]
+    for active in ("running", "waiting_vram", "queued"):
+        if active in statuses:
+            return active
+    if statuses and all(status == "failed" for status in statuses):
+        return "failed"
+    if statuses and all(status == "cancelled" for status in statuses):
+        return "cancelled"
+    return "done"
+
 """缩略图宽度（基准）：历史列表用 256px，约 20 KB/张"""
 THUMB_WIDTH = 256
 
@@ -923,6 +943,7 @@ def _serialize_run(
     candidates: list[str],
     imported_count: int,
     folder_exists: bool,
+    candidate_total: int | None = None,
 ) -> dict:
     """把一行批次序列化成列表项（保留原有字段，另加 P0 三件套）。"""
     params = _params_of(run)
@@ -946,7 +967,16 @@ def _serialize_run(
         "updated_at": format_utc(run.updated_at),
         # ── 列表增强（P0 A1）：缩略图条 + 已入库张数 + 目录是否还在 ──
         "candidates": [{"filename": name, "thumb_url": thumb_url(run.id, name)} for name in candidates],
+        # 候选图总数（candidates 最多带 LIST_CANDIDATES_LIMIT 张缩略图）
+        "candidate_total": (
+            candidate_total if candidate_total is not None else len(candidates)
+        ),
         "imported_count": imported_count,
+        # ── 多姿态分组（2026-11-03）：group_id 为空即单批次 ──
+        # 组内每个条目仍保留自己的 id（代表批次 = 组内最新批次，操作以它为准）；
+        # run_ids 供前端展开时逐批拉详情、入库/删除时逐批调用接口。
+        "group_id": run.group_id,
+        "run_ids": [run.id],
         # 终态 + 目录不在 = 真被清理过；排队/生成中目录还没建，不能显示「图已清理」
         "files_missing": (not folder_exists) and run.status in TERMINAL_STATUSES,
         # ── 用户标注与保留期（P1）──
@@ -1060,36 +1090,155 @@ async def list_runs(
     }
 
     base = _apply_run_filters(select(GenerationRun), filters)
-    total = (
-        await db.execute(select(func.count()).select_from(base.subquery()))
-    ).scalar() or 0
-
     page = max(1, page)
     size = max(1, size)
-    rows = (
-        await db.execute(
-            base.order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
-            .offset((page - 1) * size)
-            .limit(size)
-        )
-    ).scalars().all()
 
-    run_ids = [run.id for run in rows]
-    imported_counts = await _imported_counts(db, run_ids)
-    # 目录列举放线程池：单批几十毫秒，但 20 批串行会明显拖慢列表
-    listed = await asyncio.gather(
-        *[asyncio.to_thread(_list_candidates, _run_dir(run)) for run in rows]
+    # ── 多姿态分组分页（2026-11-03）──
+    # group_id 非空的批次属于同一次「多姿态提交」，历史里合并成一行；
+    # group_id 为空的是单批次，各自独立成行。两类分别查询/计数后在内存里
+    # 按创建时间合并排序再切页（组数不会大到需要 SQL 窗口函数）。
+    group_query = (
+        base.with_only_columns(
+            GenerationRun.group_id.label("gid"),
+            func.max(GenerationRun.created_at).label("sort_at"),
+            func.max(GenerationRun.id).label("sort_id"),
+        )
+        .where(GenerationRun.group_id.is_not(None))
+        .group_by(GenerationRun.group_id)
+        .order_by(
+            func.max(GenerationRun.created_at).desc(),
+            func.max(GenerationRun.id).desc(),
+        )
     )
-
-    items = [
-        _serialize_run(
-            run,
-            candidates=filenames[:LIST_CANDIDATES_LIMIT],
-            imported_count=imported_counts.get(run.id, 0),
-            folder_exists=exists,
+    single_query = (
+        base.with_only_columns(
+            GenerationRun.id.label("rid"),
+            GenerationRun.created_at.label("sort_at"),
         )
-        for run, (exists, filenames) in zip(rows, listed, strict=True)
-    ]
+        .where(GenerationRun.group_id.is_(None))
+        .order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+    )
+    group_total = int(
+        (await db.execute(select(func.count()).select_from(group_query.subquery()))).scalar()
+        or 0
+    )
+    single_total = int(
+        (await db.execute(select(func.count()).select_from(single_query.subquery()))).scalar()
+        or 0
+    )
+    total = group_total + single_total
+
+    # 分别多取到当前页末尾，再统一排序/切页：组与单批次的排序键都是
+    # (created_at, id)，放在一起排才能保证「最新在前」。
+    need = (page - 1) * size + size
+    entries: list[tuple[str, int | str, datetime, int]] = []
+    if group_total:
+        for gid, sort_at, sort_id in (await db.execute(group_query.limit(need))).all():
+            entries.append(("group", gid, sort_at, sort_id))
+    if single_total:
+        for rid, sort_at in (await db.execute(single_query.limit(need))).all():
+            entries.append(("single", rid, sort_at, rid))
+    entries.sort(key=lambda item: (item[2], item[3]), reverse=True)
+    page_entries = entries[(page - 1) * size : page * size]
+
+    group_ids = [str(key) for kind, key, *_ in page_entries if kind == "group"]
+    single_ids = [int(key) for kind, key, *_ in page_entries if kind == "single"]
+
+    # 组内批次一次取回（**不加筛选**）：组里只要有一批命中筛选，整组都该完整展示，
+    # 否则用户会看到「10 个姿态只显示 2 张」这种被筛选条件截断的假象。
+    runs: list[GenerationRun] = []
+    if group_ids:
+        runs.extend(
+            (
+                await db.execute(
+                    select(GenerationRun).where(GenerationRun.group_id.in_(group_ids))
+                )
+            ).scalars().all()
+        )
+    if single_ids:
+        runs.extend(
+            (
+                await db.execute(select(GenerationRun).where(GenerationRun.id.in_(single_ids)))
+            ).scalars().all()
+        )
+    groups: dict[tuple[str, int | str], list[GenerationRun]] = {}
+    for run in runs:
+        key: tuple[str, int | str] = (
+            ("group", run.group_id) if run.group_id else ("single", run.id)
+        )
+        groups.setdefault(key, []).append(run)
+
+    imported_counts = await _imported_counts(db, [run.id for run in runs])
+    exists_by_run: dict[int, tuple[bool, list[str]]] = {}
+    listed = await asyncio.gather(
+        *[asyncio.to_thread(_list_candidates, _run_dir(run)) for run in runs]
+    )
+    for run, item in zip(runs, listed, strict=True):
+        exists_by_run[run.id] = item
+
+    items: list[dict] = []
+    for kind, key, *_ in page_entries:
+        run_list = sorted(groups.get((kind, key), []), key=lambda r: r.id)
+        if not run_list:
+            continue
+        rep = run_list[-1]
+        if kind == "single":
+            exists, filenames = exists_by_run[rep.id]
+            items.append(
+                _serialize_run(
+                    rep,
+                    candidates=filenames[:LIST_CANDIDATES_LIMIT],
+                    imported_count=imported_counts.get(rep.id, 0),
+                    folder_exists=exists,
+                    candidate_total=len(filenames),
+                )
+            )
+            continue
+
+        # 合并组：候选图带 run_id，前端据此按批入库；状态/总数取组内聚合。
+        candidates: list[dict] = []
+        for run in run_list:
+            _exists, filenames = exists_by_run[run.id]
+            for name in filenames:
+                candidates.append(
+                    {
+                        "filename": name,
+                        "thumb_url": thumb_url(run.id, name),
+                        "run_id": run.id,
+                    }
+                )
+        favorite = any(run.favorite for run in run_list)
+        merged = _serialize_run(
+            rep,
+            candidates=[],
+            imported_count=sum(imported_counts.get(run.id, 0) for run in run_list),
+            folder_exists=any(exists_by_run[run.id][0] for run in run_list),
+            candidate_total=len(candidates),
+        )
+        merged.update(
+            {
+                "candidates": candidates[:GROUP_CANDIDATES_LIMIT],
+                "candidate_total": len(candidates),
+                "id": rep.id,
+                "group_id": rep.group_id,
+                "run_ids": [run.id for run in run_list],
+                "total": sum(run.total for run in run_list),
+                "done": sum(run.done for run in run_list),
+                "failed": sum(run.failed for run in run_list),
+                "status": _merged_run_status(run_list),
+                "error": next((run.error for run in run_list if run.error), rep.error),
+                "favorite": favorite,
+                "files_missing": (not any(exists_by_run[run.id][0] for run in run_list))
+                and all(run.status in TERMINAL_STATUSES for run in run_list),
+                "expires_at": None
+                if favorite
+                else format_utc(
+                    rep.created_at + timedelta(days=settings.image_gen_keep_candidates_days)
+                ),
+            }
+        )
+        items.append(merged)
+
     return {
         "items": items,
         "total": total,
@@ -1169,6 +1318,7 @@ async def update_run_meta(
         candidates=filenames[:LIST_CANDIDATES_LIMIT],
         imported_count=imported.get(run.id, 0),
         folder_exists=exists,
+        candidate_total=len(filenames),
     )
 
 

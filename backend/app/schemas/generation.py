@@ -39,6 +39,14 @@ class GenerationRunCreate(BaseModel):
     watermark: bool | None = Field(
         default=None, description="云端是否加水印（默认关；本地忽略）"
     )
+    # 多姿态提交分组（前端生成 32 位十六进制）：同一次「一次选多个姿态」提交的
+    # 多个独立批次共用一个 group_id，历史/候选区按组合并展示；任务仍各自独立。
+    group_id: str | None = Field(
+        default=None,
+        max_length=32,
+        pattern=r"^[a-f0-9]{32}$",
+        description="多姿态提交分组 id（32 位小写十六进制；单批次不传）",
+    )
 
 
 class GenerationRunPatch(BaseModel):

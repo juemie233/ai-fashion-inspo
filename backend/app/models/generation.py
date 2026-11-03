@@ -60,6 +60,12 @@ class GenerationRun(Base):
     # 关联任务队列 id（任务记录被清理后置空的场景由 GET 侧容忍）
     task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
+    # ── 多姿态提交分组（2026-11-03）──
+    # 云端一次选择多个姿态提交时，前端给每个独立批次带同一个 group_id；
+    # 批次/任务仍各自独立执行，历史与候选区按 group 合并展示。
+    # NULL = 单批次提交（本地出图或单姿态云端），行为不变。
+    group_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
     # ── 用户标注（P1）──
     # 收藏 = 「这一批别清掉」：cleanup_expired_runs 会跳过收藏批次，图不会被清
     favorite: Mapped[bool] = mapped_column(

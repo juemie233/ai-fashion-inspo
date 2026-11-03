@@ -15,19 +15,34 @@ import ImageHoverPreview from '@/components/common/ImageHoverPreview.vue'
 
 const props = defineProps<{
   visible: boolean
-  /** 批次 id（仅用于标题展示） */
+  /** 批次 id（单批次/合并行代表批次；仅用于标题展示与缺省 run_id） */
   runId: number | null
-  /** 该批候选图（含 imported 标记） */
+  /** 候选图（含 imported 标记；多姿态合并行里每张带 run_id） */
   candidates: GenerationCandidate[]
 }>()
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
-  (e: 'confirm', filenames: string[]): void
+  (e: 'confirm', files: Array<{ run_id: number; filename: string }>): void
 }>()
+
+/** 候选所属批次：单批次接口可能没回 run_id，退回弹窗传入的代表批次 */
+function candidateRunId(item: GenerationCandidate): number {
+  return item.run_id ?? props.runId ?? 0
+}
+
+/** 选择键：多姿态组内各批文件名相同，必须带批次前缀 */
+function candidateKey(item: GenerationCandidate): string {
+  return `${candidateRunId(item)}:${item.filename}`
+}
 
 /** 可选（未入库）的候选图 */
 const selectable = computed(() => props.candidates.filter((item) => !item.imported))
+
+/** 合并行的批次数（>1 = 多姿态一次提交，需要按批次分别入库） */
+const groupCount = computed(
+  () => new Set(props.candidates.map((item) => candidateRunId(item))).size,
+)
 
 const selected = ref<string[]>([])
 
@@ -36,24 +51,25 @@ watch(
   () => [props.visible, props.candidates] as const,
   ([visible]) => {
     if (!visible) return
-    selected.value = selectable.value.map((item) => item.filename)
+    selected.value = selectable.value.map((item) => candidateKey(item))
   },
   { immediate: true },
 )
 
-function isSelected(filename: string): boolean {
-  return selected.value.includes(filename)
+function isSelected(item: GenerationCandidate): boolean {
+  return selected.value.includes(candidateKey(item))
 }
 
-function toggle(filename: string): void {
-  selected.value = isSelected(filename)
-    ? selected.value.filter((name) => name !== filename)
-    : [...selected.value, filename]
+function toggle(item: GenerationCandidate): void {
+  const key = candidateKey(item)
+  selected.value = isSelected(item)
+    ? selected.value.filter((itemKey) => itemKey !== key)
+    : [...selected.value, key]
 }
 
 /** 全选/清空只作用于「未入库」的图 */
 function selectAll(): void {
-  selected.value = selectable.value.map((item) => item.filename)
+  selected.value = selectable.value.map((item) => candidateKey(item))
 }
 
 function clearAll(): void {
@@ -67,11 +83,11 @@ function close(): void {
 function confirm(): void {
   if (!selected.value.length) return
   // 按候选图顺序回抛：勾选先后顺序不该影响入库顺序（界面/日志可复现）
-  const order = props.candidates.map((item) => item.filename)
-  const filenames = [...selected.value].sort(
-    (left, right) => order.indexOf(left) - order.indexOf(right),
-  )
-  emit('confirm', filenames)
+  const chosen = new Set(selected.value)
+  const files = props.candidates
+    .filter((item) => chosen.has(candidateKey(item)))
+    .map((item) => ({ run_id: candidateRunId(item), filename: item.filename }))
+  emit('confirm', files)
   emit('update:visible', false)
 }
 </script>
@@ -79,40 +95,48 @@ function confirm(): void {
 <template>
   <a-modal
     :visible="visible"
-    :title="`入库候选图 · 批次 #${runId ?? ''}`"
+    :title="
+      groupCount > 1 ? `入库候选图 · ${groupCount} 个姿态合并` : `入库候选图 · 批次 #${runId ?? ''}`
+    "
     :width="900"
     :footer="false"
     unmount-on-close
     @cancel="close"
   >
     <div class="gid-hint">
-      默认已全选；取消勾选的图不会入库（已入库的不可重复选，后端按内容哈希去重）。鼠标移到图上可放大预览。
+      默认已全选；取消勾选的图不会入库（已入库的不可重复选，后端按内容哈希去重）。<template
+        v-if="groupCount > 1"
+      >
+        多姿态合并行会按底层批次分别入库。</template
+      >
+      鼠标移到图上可放大预览。
     </div>
 
     <div v-if="selectable.length" class="gid-grid">
       <div
         v-for="item in candidates"
-        :key="item.filename"
+        :key="candidateKey(item)"
         class="gid-card"
-        :class="{ 'is-imported': item.imported, 'is-selected': isSelected(item.filename) }"
-        @click="!item.imported && toggle(item.filename)"
+        :class="{ 'is-imported': item.imported, 'is-selected': isSelected(item) }"
+        @click="!item.imported && toggle(item)"
       >
         <image-hover-preview
-          :src="candidateUrl(runId ?? 0, item.filename, 384)"
-          :preview-src="candidateUrl(runId ?? 0, item.filename, 1024)"
+          :src="candidateUrl(candidateRunId(item), item.filename, 384)"
+          :preview-src="candidateUrl(candidateRunId(item), item.filename, 1024)"
           :alt="item.filename"
           img-class="gid-img"
         />
         <span class="gid-seed">{{
           item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端每次随机）'
         }}</span>
+        <span v-if="groupCount > 1" class="gid-batch">批次 #{{ candidateRunId(item) }}</span>
         <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
         <a-checkbox
           v-else
           class="gid-check"
-          :model-value="isSelected(item.filename)"
+          :model-value="isSelected(item)"
           @click.stop
-          @change="toggle(item.filename)"
+          @change="toggle(item)"
         />
       </div>
     </div>
@@ -177,6 +201,11 @@ function confirm(): void {
 }
 
 .gid-seed {
+  color: var(--color-text-3);
+  font-size: 11px;
+}
+
+.gid-batch {
   color: var(--color-text-3);
   font-size: 11px;
 }

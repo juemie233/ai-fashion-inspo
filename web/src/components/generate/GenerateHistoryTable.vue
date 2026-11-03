@@ -61,7 +61,12 @@ const emit = defineEmits<{
   (e: 'remove', id: number): void
   (e: 'page-change', page: number): void
   (e: 'update:filters', filters: GenerationHistoryQuery): void
-  (e: 'import-selected', runId: number, filenames: string[]): void
+  /** 入库回抛：rowId=列表行 id；groups=按底层批次分组的文件名（多姿态合并行可能多批） */
+  (
+    e: 'import-selected-batch',
+    rowId: number,
+    groups: Array<{ run_id: number; filenames: string[] }>,
+  ): void
   /** 切换收藏（收藏的批次不会被过期清理） */
   (e: 'toggle-favorite', runId: number, favorite: boolean): void
   /** 保存命名与备注（clear_* 为显式清空） */
@@ -359,20 +364,57 @@ interface RunDetailState {
 }
 
 const details = reactive<Record<number, RunDetailState>>({})
-/** 展开行里勾选的候选文件名（runId → 文件名集合） */
+/** 展开行里勾选的候选选择键（行 id → select_key 集合） */
 const pickedByRun = reactive<Record<number, string[]>>({})
 
-async function loadDetail(runId: number): Promise<void> {
-  if (!details[runId]) details[runId] = { items: [], loading: false, error: null }
+/** 列表行包含的底层批次 id（多姿态合并行 >1；单批次 = [id]） */
+function rowRunIds(record: GenerationRunBrief): number[] {
+  return record.run_ids?.length ? record.run_ids : [record.id]
+}
+
+/** 是否为多姿态合并行 */
+function isGroupRow(record: GenerationRunBrief): boolean {
+  return rowRunIds(record).length > 1
+}
+
+/** 候选选择键：同一次多姿态提交里各批文件名相同，必须带 run_id 区分 */
+function candidateKey(item: GenerationCandidate): string {
+  return item.select_key ?? `${item.run_id ?? 0}:${item.filename}`
+}
+
+/** 拉取一行对应的全部候选图（多姿态行逐批拉详情后合并） */
+async function fetchRowItems(record: GenerationRunBrief): Promise<GenerationCandidate[]> {
+  const runIds = rowRunIds(record)
+  const settled = await Promise.allSettled(runIds.map((id) => fetchRun(id)))
+  const merged: GenerationCandidate[] = []
+  settled.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return
+    const out = result.value
+    // 测试/旧接口可能没回 run.id：退回发起请求时的批次 id
+    const batchRunId = out.run.id ?? runIds[index]
+    for (const item of out.items ?? []) {
+      merged.push({
+        ...item,
+        run_id: batchRunId,
+        select_key: `${batchRunId}:${item.filename}`,
+      })
+    }
+  })
+  if (merged.length === 0) throw new Error('候选图读取失败')
+  return merged
+}
+
+async function loadDetail(record: GenerationRunBrief): Promise<void> {
+  const rowId = record.id
+  if (!details[rowId]) details[rowId] = { items: [], loading: false, error: null }
   // ⚠ 必须从 reactive 容器里读回 **proxy** 再改：直接改赋进去的原始对象不会触发更新
   // （踩过：展开行一直显示「这里没有候选图」还转圈）
-  const state = details[runId]
+  const state = details[rowId]
   if (state.loading) return
   state.loading = true
   state.error = null
   try {
-    const out = await fetchRun(runId)
-    state.items = out.items ?? []
+    state.items = await fetchRowItems(record)
   } catch {
     // 详情拉不到不影响看列表：展开行给一句提示即可
     state.error = '候选图读取失败（批次可能已被清理）'
@@ -416,36 +458,50 @@ async function loadReferenceThumbs(record: GenerationRunBrief): Promise<void> {
 }
 
 function onExpand(record: GenerationRunBrief, expanded: boolean): void {
-  if (expanded && !details[record.id]?.items.length) void loadDetail(record.id)
+  if (expanded && !details[record.id]?.items.length) void loadDetail(record)
 }
 
 /** 勾选/取消某张候选（已入库的不可选：后端会按哈希去重，前端不该给这个选项） */
-function togglePick(runId: number, filename: string): void {
-  const list = pickedByRun[runId] ?? []
-  pickedByRun[runId] = list.includes(filename)
-    ? list.filter((name) => name !== filename)
-    : [...list, filename]
+function togglePick(rowId: number, selectKey: string): void {
+  const list = pickedByRun[rowId] ?? []
+  pickedByRun[rowId] = list.includes(selectKey)
+    ? list.filter((key) => key !== selectKey)
+    : [...list, selectKey]
 }
 
-function pickCount(runId: number): number {
-  return (pickedByRun[runId] ?? []).length
+function pickCount(rowId: number): number {
+  return (pickedByRun[rowId] ?? []).length
 }
 
-function submitImport(runId: number): void {
-  const filenames = pickedByRun[runId] ?? []
-  if (!filenames.length) {
+/** 把选中的候选按底层批次分组（多姿态合并行会一次入库多个批次的图） */
+function pickedGroups(rowId: number): Array<{ run_id: number; filenames: string[] }> {
+  const picked = new Set(pickedByRun[rowId] ?? [])
+  const groups = new Map<number, string[]>()
+  for (const item of details[rowId]?.items ?? []) {
+    if (!picked.has(candidateKey(item)) || item.run_id == null) continue
+    const filenames = groups.get(item.run_id) ?? []
+    filenames.push(item.filename)
+    groups.set(item.run_id, filenames)
+  }
+  return [...groups].map(([runId, filenames]) => ({ run_id: runId, filenames }))
+}
+
+function submitImport(rowId: number): void {
+  const groups = pickedGroups(rowId)
+  if (!groups.length) {
     Message.warning('请先勾选要入库的候选图')
     return
   }
-  emit('import-selected', runId, filenames)
+  emit('import-selected-batch', rowId, groups)
 }
 
 /** 入库成功后由视图调它清空勾选（并刷新行数据） */
-function resetPicked(runId: number): void {
-  pickedByRun[runId] = []
-  details[runId] = { items: [], loading: false, error: null }
+function resetPicked(rowId: number): void {
+  pickedByRun[rowId] = []
+  details[rowId] = { items: [], loading: false, error: null }
   // 重新拉一次详情：否则仍展开的行会停在「这里没有候选图」的空态（图其实还在）
-  void loadDetail(runId)
+  const record = props.history.find((item) => item.id === rowId)
+  if (record) void loadDetail(record)
 }
 
 // ── 操作列「入库」：默认全部入库；多张时弹窗确认（默认全选）──
@@ -471,15 +527,18 @@ async function openImportDialog(record: GenerationRunBrief): Promise<void> {
   if (preparingImportId.value !== null) return
   preparingImportId.value = record.id
   try {
-    const out = await fetchRun(record.id)
-    const items = out.items ?? []
+    const items = await fetchRowItems(record)
     const selectable = items.filter((item) => !item.imported)
     if (!selectable.length) {
-      Message.info('这批候选图都已入库或已不存在')
+      Message.info(
+        isGroupRow(record) ? '本次提交的候选图都已入库或已不存在' : '这批候选图都已入库或已不存在',
+      )
       return
     }
     if (selectable.length === 1) {
-      emit('import-selected', record.id, [selectable[0].filename])
+      emit('import-selected-batch', record.id, [
+        { run_id: selectable[0].run_id as number, filenames: [selectable[0].filename] },
+      ])
       return
     }
     importDialogRunId.value = record.id
@@ -492,9 +551,19 @@ async function openImportDialog(record: GenerationRunBrief): Promise<void> {
   }
 }
 
-function onImportDialogConfirm(filenames: string[]): void {
-  if (importDialogRunId.value === null) return
-  emit('import-selected', importDialogRunId.value, filenames)
+function onImportDialogConfirm(files: Array<{ run_id: number; filename: string }>): void {
+  if (importDialogRunId.value === null || !files.length) return
+  const groups = new Map<number, string[]>()
+  for (const file of files) {
+    const filenames = groups.get(file.run_id) ?? []
+    filenames.push(file.filename)
+    groups.set(file.run_id, filenames)
+  }
+  emit(
+    'import-selected-batch',
+    importDialogRunId.value,
+    [...groups].map(([runId, filenames]) => ({ run_id: runId, filenames })),
+  )
 }
 
 /** 入库后视图刷新了历史：关掉弹窗（避免对着旧候选再点一次） */
@@ -640,22 +709,31 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           </a-button>
         </template>
       </a-table-column>
-      <!-- 缩略图：最多 4 张（后端只给前 4 张，列表不是候选区）；目录已清显示占位 -->
+      <!-- 缩略图：单批最多 4 张；多姿态合并行把各批缩略图拼在一起（展开看全部） -->
       <a-table-column title="图" :width="200">
         <template #cell="{ record }">
           <div v-if="record.candidates?.length" class="gh-thumbs">
             <!-- 悬停自动放大预览（大图走 ?w=1024 缩略图，不拉原图） -->
             <image-hover-preview
               v-for="thumb in record.candidates"
-              :key="thumb.filename"
+              :key="`${thumb.run_id ?? record.id}:${thumb.filename}`"
               :src="thumb.thumb_url"
-              :preview-src="candidateUrl(record.id, thumb.filename, 1024)"
+              :preview-src="candidateUrl(thumb.run_id ?? record.id, thumb.filename, 1024)"
               :alt="thumb.filename"
               img-class="gh-thumb"
             />
           </div>
           <span v-else-if="record.files_missing" class="gh-missing">图已清理</span>
           <span v-else class="gh-missing">—</span>
+          <a-tag v-if="isGroupRow(record)" size="small" class="gh-group-tag">
+            多姿态 {{ rowRunIds(record).length }}
+          </a-tag>
+          <span
+            v-if="(record.candidate_total ?? 0) > (record.candidates?.length ?? 0)"
+            class="gh-more"
+          >
+            共 {{ record.candidate_total }} 张
+          </span>
         </template>
       </a-table-column>
       <!-- 命名优先、否则描述前 40 字；完整描述在展开行 -->
@@ -680,6 +758,9 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           <!-- 状态文案与配色统一走 common/StatusTag（单一来源 utils/taskLabel.ts） -->
           <StatusTag :status="record.status" />
           <span class="gen-status-count">{{ record.done }}/{{ record.total }}</span>
+          <a-tag v-if="isGroupRow(record)" size="small" class="gh-group-tag">
+            多姿态 {{ rowRunIds(record).length }}
+          </a-tag>
           <a-tag
             v-if="record.imported_count"
             size="small"
@@ -707,6 +788,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
       <a-table-column title="操作" :width="380">
         <template #cell="{ record }">
           <a-button
+            v-if="!isGroupRow(record)"
             size="mini"
             :loading="submitting"
             :title="
@@ -748,7 +830,11 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
           <!-- 只对已结束的批次给删除：运行中的批次后端会拒绝（400），按钮不显示更清楚 -->
           <a-popconfirm
             v-if="['done', 'failed', 'cancelled'].includes(record.status)"
-            content="删除这条生成记录及其候选图？（只清理本批次的候选文件）"
+            :content="
+              isGroupRow(record)
+                ? `删除本次多姿态的 ${rowRunIds(record).length} 个批次及其候选图？`
+                : '删除这条生成记录及其候选图？（只清理本批次的候选文件）'
+            "
             ok-text="删除"
             @ok="emit('remove', record.id)"
           >
@@ -841,29 +927,32 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
               <div v-else class="ghd-cand-grid">
                 <label
                   v-for="item in details[record.id]?.items || []"
-                  :key="item.filename"
+                  :key="candidateKey(item)"
                   class="ghd-cand"
                   :class="{ 'is-imported': item.imported }"
                 >
                   <!-- 悬停自动放大预览（候选图原图较大，预览用 ?w=1024 缩略图） -->
                   <image-hover-preview
                     :src="item.url"
-                    :preview-src="candidateUrl(record.id, item.filename, 1024)"
+                    :preview-src="candidateUrl(item.run_id ?? record.id, item.filename, 1024)"
                     :alt="item.filename"
                   />
                   <span class="ghd-cand-seed">{{ seedText(item.seed) }}</span>
                   <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
                   <a-checkbox
                     v-else
-                    :model-value="(pickedByRun[record.id] || []).includes(item.filename)"
-                    @change="togglePick(record.id, item.filename)"
+                    :model-value="(pickedByRun[record.id] || []).includes(candidateKey(item))"
+                    @change="togglePick(record.id, candidateKey(item))"
                   />
                 </label>
               </div>
             </a-spin>
             <div v-if="(details[record.id]?.items || []).length" class="ghd-cand-actions">
               <span class="gen-history-hint">
-                已勾选 {{ pickCount(record.id) }} 张（已入库的不可重复选）
+                已勾选 {{ pickCount(record.id) }} 张（已入库的不可重复选<template
+                  v-if="isGroupRow(record)"
+                  >；多姿态合并行会按批次分别入库</template
+                >）
               </span>
               <a-button
                 size="mini"

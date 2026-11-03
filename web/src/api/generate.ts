@@ -74,6 +74,8 @@ export interface GenerationRun {
   task_id: number | null
   batch_dir: string
   created_at: string | null
+  /** 多姿态提交分组 id（同一次提交的多个独立批次共用；空 = 单批次） */
+  group_id?: string | null
 }
 
 /** 候选图（未入库前只存在于候选区）。 */
@@ -84,6 +86,10 @@ export interface GenerationCandidate {
   size_bytes: number
   imported: boolean
   url: string
+  /** 所属批次（多姿态合并展示时由前端注入；单批次可缺省） */
+  run_id?: number
+  /** 多姿态合并后的唯一选择键（`${run_id}:${filename}`）；单批次 = filename */
+  select_key?: string
 }
 
 /** 任务侧信息：进度百分比 + result 里的 stage / waited_seconds。 */
@@ -119,6 +125,8 @@ export interface CreateRunPayload {
   size?: string
   /** 云端专用：是否加水印（默认关；本地忽略） */
   watermark?: boolean
+  /** 多姿态提交分组：同一次提交的多个批次带同一个 32 位十六进制 id */
+  group_id?: string
 }
 
 /** 生成历史的一条（列表用）。
@@ -143,6 +151,8 @@ export interface GenerationRunBrief {
   updated_at: string | null
   /** 候选图缩略图（最多 4 张；目录已被清理时为空数组）—— 列表用，不算哈希 */
   candidates?: GenerationRunThumb[]
+  /** 候选图总数（candidates 只是截断后的缩略图条） */
+  candidate_total?: number
   /** 该批次已入库的素材张数（后端一条聚合 SQL 得出） */
   imported_count?: number
   /** 候选目录是否已被清掉（true → 前端显示「图已清理」占位） */
@@ -151,12 +161,18 @@ export interface GenerationRunBrief {
   title?: string | null
   note?: string | null
   expires_at?: string | null
+  /** 多姿态提交分组：有值 = 合并行（同一次提交的多个独立批次） */
+  group_id?: string | null
+  /** 合并行包含的批次 id（单批次行 = [id]）；展开/入库/删除按它逐批处理 */
+  run_ids?: number[]
 }
 
 /** 列表里的候选缩略图（不带逐张 imported：那要算哈希，只有详情接口才做） */
 interface GenerationRunThumb {
   filename: string
   thumb_url: string
+  /** 合并行的缩略图知道自己属于哪个批次（点击/预览用） */
+  run_id?: number
 }
 
 /** 生成历史查询参数（服务端分页 + 筛选） */

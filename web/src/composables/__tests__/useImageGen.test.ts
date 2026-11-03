@@ -117,6 +117,68 @@ describe('useImageGen', () => {
     error.mockRestore()
   })
 
+  it('submitBatch 合并展示多个姿态的候选，并共用同一个 group_id', async () => {
+    let seq = 0
+    mocks.createRun.mockImplementation(async () => {
+      seq += 1
+      return { run_id: 100 + seq, task_id: 200 + seq, seed: null, batch_dir: 'x', total: 1 }
+    })
+    mocks.fetchRun.mockImplementation(async (id: number) => ({
+      run: {
+        ...RUN_DETAIL.run,
+        id,
+        status: 'done',
+        total: 1,
+        done: 1,
+        model_key: 'seedream_5_0_flash',
+        group_id: 'group',
+      },
+      items: [
+        {
+          filename: '01_seed-0.png',
+          index: 1,
+          seed: 0,
+          size_bytes: 1,
+          imported: false,
+          url: `/u/${id}`,
+        },
+      ],
+      task: null,
+    }))
+    mocks.confirmImport.mockResolvedValue({ imported: 1, skipped: 0, ids: ['i'] })
+    const success = vi.spyOn(Message, 'success').mockImplementation((() => {}) as never)
+    const gen = useImageGen()
+
+    await gen.submitBatch([
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p1' },
+      { prompt: 'x', model_key: 'seedream_5_0_flash', pose_id: 'p2' },
+    ])
+
+    // 同一次提交的 payload 共用 group_id（否则历史里又会被拆成两行）
+    const payloads = mocks.createRun.mock.calls.map((call) => call[0] as { group_id?: string })
+    expect(payloads[0].group_id).toMatch(/^[a-f0-9]{32}$/)
+    expect(payloads[1].group_id).toBe(payloads[0].group_id)
+
+    // 候选区合并展示两个姿态的两张图（底层仍是两个独立批次）
+    expect(gen.candidates.value).toHaveLength(2)
+    expect(gen.candidates.value.map((item) => item.run_id)).toEqual([101, 102])
+    expect(gen.candidates.value.map((item) => item.select_key)).toEqual([
+      '101:01_seed-0.png',
+      '102:01_seed-0.png',
+    ])
+    expect(gen.isGroup.value).toBe(true)
+    expect(gen.stageText.value).toContain('2 个姿态合并显示')
+
+    // 勾选后确认入库：按底层批次分别调用接口
+    gen.selectAll()
+    expect(await gen.confirm()).toBe(2)
+    expect(mocks.confirmImport).toHaveBeenCalledTimes(2)
+    expect(mocks.confirmImport).toHaveBeenCalledWith(101, ['01_seed-0.png'])
+    expect(mocks.confirmImport).toHaveBeenCalledWith(102, ['01_seed-0.png'])
+
+    success.mockRestore()
+  })
+
   it('阶段文案覆盖「等待显存」与失败原因（前端要能解释在等什么）', async () => {
     mocks.fetchRun.mockResolvedValue({
       run: { ...RUN_DETAIL.run, status: 'waiting_vram' },

@@ -45,6 +45,16 @@ const seedEnabled = computed(() => props.seedSupported !== false)
 function seedLabel(seed: number): string {
   return seedEnabled.value ? `seed ${seed}` : '云端 · 无 seed'
 }
+
+/** 选择键：多姿态合并时同一次提交的候选同名（01_seed-0.png），必须带批次前缀 */
+function candidateKey(item: GenerationCandidate): string {
+  return item.select_key ?? item.filename
+}
+
+/** 合并展示的批次数（多姿态一次提交 >1 个独立批次） */
+const groupCount = computed(
+  () => new Set(props.candidates.map((item) => item.run_id).filter((id) => id != null)).size,
+)
 </script>
 
 <template>
@@ -66,22 +76,27 @@ function seedLabel(seed: number): string {
       <a-button size="mini" @click="emit('select-all')">全选未入库</a-button>
       <a-button size="mini" @click="emit('clear-selection')">清空选择</a-button>
       <span class="gen-hint">已选 {{ selectedCount }} / {{ candidates.length }}</span>
-      <span class="gen-hint">点图片看大图；「对比」与参考图并排/叠看</span>
+      <span v-if="groupCount > 1" class="gen-hint">
+        本次合并 {{ groupCount }} 个姿态（{{ candidates.length }} 张，底层批次独立执行）
+      </span>
+      <span v-else class="gen-hint">点图片看大图；「对比」与参考图并排/叠看</span>
       <a-button v-if="run.kind === 'i2i'" size="mini" @click="emit('compare', 0)">
         对比参考图
       </a-button>
       <a-button type="primary" size="mini" :disabled="selectedCount === 0" @click="emit('confirm')">
         确认入库
       </a-button>
-      <a-button size="mini" status="danger" @click="emit('discard')">丢弃本批</a-button>
+      <a-button size="mini" status="danger" @click="emit('discard')">
+        {{ groupCount > 1 ? '丢弃本次' : '丢弃本批' }}
+      </a-button>
     </div>
 
     <div v-if="candidates.length" class="gen-candidates">
       <div
         v-for="(item, index) in candidates"
-        :key="item.filename"
+        :key="candidateKey(item)"
         class="gen-item"
-        :class="{ 'is-selected': selected.has(item.filename) }"
+        :class="{ 'is-selected': selected.has(candidateKey(item)) }"
       >
         <img
           :src="item.url"
@@ -95,10 +110,10 @@ function seedLabel(seed: number): string {
         <a-checkbox
           v-if="!item.imported"
           class="gen-item-check"
-          :model-value="selected.has(item.filename)"
+          :model-value="selected.has(candidateKey(item))"
           title="勾选后可确认入库"
           @click.stop
-          @change="emit('toggle', item.filename)"
+          @change="emit('toggle', candidateKey(item))"
         />
         <div class="gen-item-meta">
           <span>{{ seedLabel(item.seed) }}</span>
