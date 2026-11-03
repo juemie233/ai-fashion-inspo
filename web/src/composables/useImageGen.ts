@@ -173,7 +173,7 @@ export function useImageGen() {
   ): Promise<{ succeeded: number; failed: number }> {
     submitting.value = true
     selected.value = new Set()
-    const succeeded: Array<{ run_id: number; seed: number }> = []
+    const succeeded: Array<{ run_id: number; seed: number | null }> = []
     const failures: string[] = []
     try {
       for (let i = 0; i < payloads.length; i += 2) {
@@ -210,7 +210,9 @@ export function useImageGen() {
       const out = await createRun(payload)
       runId.value = out.run_id
       lastSeed.value = out.seed
-      Message.success(`已提交：正在生成 ${out.total} 张（seed ${out.seed}）`)
+      // 云端档位无 seed（每次随机），不要把 null 打印成「seed null」
+      const seedSuffix = out.seed === null ? '（云端每次随机）' : `（seed ${out.seed}）`
+      Message.success(`已提交：正在生成 ${out.total} 张${seedSuffix}`)
       detail.value = await fetchRun(out.run_id)
       startPoll()
       return out.run_id
@@ -357,7 +359,11 @@ export function useImageGen() {
       const out = await retryRun(sourceRunId, seed)
       runId.value = out.run_id
       lastSeed.value = out.seed
-      Message.success(`已按原参数重跑（seed ${out.seed}）`)
+      Message.success(
+        out.seed === null
+          ? '已按原参数重新生成（云端每次随机）'
+          : `已按原参数重跑（seed ${out.seed}）`,
+      )
       detail.value = await fetchRun(out.run_id)
       startPoll()
       await loadHistory()
@@ -381,7 +387,12 @@ export function useImageGen() {
     submitting.value = true
     try {
       const out = await regenerateCandidate(runId.value, item.filename)
-      Message.success(`已用新 seed ${out['seed']} 重出（原 seed ${out['original_seed']}）`)
+      // 云端无 seed：文案改「重新生成」，不要打印 new/original seed
+      Message.success(
+        out.seed === null
+          ? '已按同一素材/姿势重新生成一张（云端每次随机）'
+          : `已用新 seed ${out['seed']} 重出（原 seed ${out['original_seed']}）`,
+      )
       // 切到新批次（只含 1 张），原批次仍留在历史里
       runId.value = out.run_id
       lastSeed.value = out.seed

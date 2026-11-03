@@ -112,7 +112,9 @@ function promptBrief(run: GenerationRun | null): string {
               @click="pickedLeft = item.filename"
             >
               <img :src="item.url" alt="" loading="lazy" />
-              <span class="gc-seed">seed {{ item.seed }}</span>
+              <span class="gc-seed">{{
+                item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端随机）'
+              }}</span>
             </button>
           </div>
           <div class="gc-stage">
@@ -140,7 +142,9 @@ function promptBrief(run: GenerationRun | null): string {
               @click="pickedRight = item.filename"
             >
               <img :src="item.url" alt="" loading="lazy" />
-              <span class="gc-seed">seed {{ item.seed }}</span>
+              <span class="gc-seed">{{
+                item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端随机）'
+              }}</span>
             </button>
           </div>
           <div class="gc-stage">

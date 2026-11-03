@@ -453,6 +453,47 @@ describe('生成历史表', () => {
 
     wrapper.unmount()
   })
+
+  // ── 云端批次（无 seed）文案 ──
+
+  it('云端批次的「重跑」文案改为「重新生成」（云端无 seed 可复现）', async () => {
+    const cloudStatus: GenerateStatus = {
+      ...status,
+      models_meta: {
+        ...status.models_meta,
+        seedream_5_0_flash: {
+          label: '豆包 Seedream 5.0 Flash',
+          kind: 'i2i',
+          defaults: {},
+          provider: 'ark',
+          supports_seed: false,
+        },
+      },
+    }
+    const wrapper = mountTable(record({ model_key: 'seedream_5_0_flash' }), {
+      status: cloudStatus,
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('重新生成')
+    expect(wrapper.text()).not.toContain('同参重跑')
+    wrapper.unmount()
+  })
+
+  it('云端候选图（seed=0）展开行显示「无 seed（每次随机）」', async () => {
+    mocks.fetchRun.mockResolvedValue({
+      run: {},
+      items: [{ filename: '01_seed-0.png', index: 1, seed: 0, imported: false, url: '/u/1' }],
+      task: null,
+    })
+    const wrapper = mountTable(record({ model_key: 'seedream_5_0_flash' }))
+    await wrapper.vm.$nextTick()
+    await expandFirstRow(wrapper)
+
+    expect(wrapper.text()).toContain('无 seed（每次随机）')
+    expect(wrapper.text()).not.toContain('seed 0')
+    wrapper.unmount()
+  })
 })
 
 // ── P0：日期范围 ──

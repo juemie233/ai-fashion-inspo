@@ -124,7 +124,7 @@ async def execute_image_gen(db: AsyncSession, task: TaskQueue) -> None:
 
     # 云端档位（豆包 Seedream）：不加载 ComfyUI 模板、不占本机显存，走独立执行体
     if str(spec.get("provider") or "comfyui") == "ark":
-        await _execute_seedream(db, task, run, spec)
+        await _execute_seedream(db, task, run)
         return
 
     params = _params_of(run)
@@ -361,14 +361,30 @@ async def _execute_with_client(
 
 
 def _prepare_ark_image(data: bytes, *, output_format: str, max_side: int = 2048) -> bytes:
-    """把素材/姿态图压到长边 ≤ max_side，去 EXIF；素材用 JPEG、线稿保留 PNG。"""
+    """把素材/姿态图压到长边 ≤ max_side，并做两项修正（2026-11-03 评审 P2-6）：
+
+    - **EXIF 方向校正**：手机竖拍照片常带 Orientation 标记，直接 ``convert("RGB")``
+      会把画面转 90°（云端出图后人物是横的）；
+    - **透明背景贴白底**：RGBA/LA 的透明区域直接 ``convert("RGB")`` 会变黑
+      （线稿/抠图很常见），先合成到白色画布再送云端。
+    """
     import io
 
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     with Image.open(io.BytesIO(data)) as image:
         image.load()
-        rgb = image.convert("RGB")
+        image = ImageOps.exif_transpose(image)
+        has_alpha = image.mode in ("RGBA", "LA") or (
+            image.mode == "P" and "transparency" in image.info
+        )
+        if has_alpha:
+            rgba = image.convert("RGBA")
+            background = Image.new("RGB", rgba.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            rgb = background
+        else:
+            rgb = image.convert("RGB")
         width, height = rgb.size
         longest = max(width, height)
         if longest > max_side:
@@ -385,78 +401,121 @@ def _prepare_ark_image(data: bytes, *, output_format: str, max_side: int = 2048)
         return buf.getvalue()
 
 
-async def _execute_seedream(
-    db: AsyncSession, task: TaskQueue, run: GenerationRun, spec: dict
-) -> None:
-    """云端 Seedream 单张出图：素材图 + 姿态图 → 1 张候选图。"""
-    params = _params_of(run)
-    pose_id = str(params.get("pose_id") or "").strip()
-    if not pose_id:
-        raise PermanentTaskError("云端出图缺少 pose_id，请重新提交")
-    ref_ids = json.loads(run.reference_ids or "[]")
-    if len(ref_ids) != 1:
-        raise PermanentTaskError("云端出图一期只支持 1 张素材图，请重新提交")
+async def _fail_ark_run(db: AsyncSession, run: GenerationRun, message: str) -> None:
+    """把云端批次写成 failed（P0-2：准备阶段失败也必须离开 running/queued）。"""
+    run.status = "failed"
+    run.error = message[:2000]
+    run.failed = max(1, int(run.failed or 0))
+    await db.commit()
 
+
+async def _execute_seedream(db: AsyncSession, task: TaskQueue, run: GenerationRun) -> None:
+    """云端 Seedream 单张出图：素材图 + 姿态图 → 1 张候选图。
+
+    失败语义（2026-11-03 评审 P0-2）：准备阶段的任何异常（素材缺失 / 姿势 503 /
+    坏图 / 预处理失败 / 预算超限）都必须把 ``run`` 写成 failed 再抛出去；否则批次
+    永久停在 running，用户在生成历史上只能看到「生成中」不结束。
+    """
+    # 局部导入：generation_service 顶层不依赖 task_runners，这里用它做预算二次检查
+    from app.services import generation_service
+
+    params = _params_of(run)
     run.status = "running"
     run.error = None
     await _mark_stage(db, task, run, "preparing_images")
 
-    # 1) 素材图
-    insp = await db.get(Inspiration, ref_ids[0])
-    if insp is None or insp.deleted_at is not None:
-        raise PermanentTaskError(f"素材不存在或被删除：{ref_ids[0]}")
-    source = settings.storage_root / insp.file_path
-    if not source.exists():
-        raise PermanentTaskError(f"素材文件缺失：{insp.file_path}")
-    material_bytes = await asyncio.to_thread(source.read_bytes)
-
-    # 2) 姿态图（姿势图库缓存；503 视为可恢复，与本地链路一致）
     try:
-        pose_path = await pose_gallery.ensure_pose_image(pose_id)
-    except HTTPException as exc:
-        if exc.status_code == 503:
-            raise RecoverableTaskError(str(exc.detail)) from exc
-        raise PermanentTaskError(str(exc.detail)) from exc
-    pose_bytes = await asyncio.to_thread(pose_path.read_bytes)
+        pose_id = str(params.get("pose_id") or "").strip()
+        if not pose_id:
+            raise PermanentTaskError("云端出图缺少 pose_id，请重新提交")
+        ref_ids = json.loads(run.reference_ids or "[]")
+        if len(ref_ids) != 1:
+            raise PermanentTaskError("云端出图一期只支持 1 张素材图，请重新提交")
 
-    # 3) 预处理（去 EXIF、长边 ≤2048；素材 JPEG、线稿 PNG）
-    prepared_material = await asyncio.to_thread(
-        _prepare_ark_image, material_bytes, output_format="jpeg"
-    )
-    prepared_pose = await asyncio.to_thread(_prepare_ark_image, pose_bytes, output_format="png")
+        # 1) 素材图
+        insp = await db.get(Inspiration, ref_ids[0])
+        if insp is None or insp.deleted_at is not None:
+            raise PermanentTaskError(f"素材不存在或被删除：{ref_ids[0]}")
+        source = settings.storage_root / insp.file_path
+        if not source.exists():
+            raise PermanentTaskError(f"素材文件缺失：{insp.file_path}")
+        material_bytes = await asyncio.to_thread(source.read_bytes)
 
-    if await _is_cancelled(db, task):
-        run.status = "cancelled"
-        run.error = "已取消"
-        await db.commit()
-        return
+        # 2) 姿态图（姿势图库缓存；503 视为可恢复，与本地链路一致）
+        try:
+            pose_path = await pose_gallery.ensure_pose_image(pose_id)
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                raise RecoverableTaskError(str(exc.detail)) from exc
+            raise PermanentTaskError(str(exc.detail)) from exc
+        pose_bytes = await asyncio.to_thread(pose_path.read_bytes)
 
-    await _mark_stage(db, task, run, "calling_seedream")
-
-    client = SeedreamClient(
-        settings.ark_api_key,
-        base_url=settings.ark_base_url,
-        model=settings.seedream_model,
-        timeout=settings.seedream_timeout,
-    )
-    try:
-        result = await client.generate(
-            prompt=run.prompt,
-            images=[prepared_material, prepared_pose],
-            size=str(params.get("size") or "1536x2048"),
-            output_format="png",
-            watermark=bool(params.get("watermark") or False),
+        # 3) 预处理（EXIF 转正、透明贴白底、长边 ≤2048；素材 JPEG、线稿 PNG）
+        prepared_material = await asyncio.to_thread(
+            _prepare_ark_image, material_bytes, output_format="jpeg"
         )
+        prepared_pose = await asyncio.to_thread(
+            _prepare_ark_image, pose_bytes, output_format="png"
+        )
+
+        if await _is_cancelled(db, task):
+            run.status = "cancelled"
+            run.error = "已取消"
+            await db.commit()
+            return
+
+        # P2-2：执行前二次预算检查（排队期间可能被其它批次用满当日额度）
+        cost = float(params.get("cost_per_image_cny") or 0.12)
+        budget_message = await generation_service.ark_budget_exceeded(
+            db, run.model_key, cost
+        )
+        if budget_message:
+            raise PermanentTaskError(budget_message)
+
+        await _mark_stage(db, task, run, "calling_seedream")
+
+        # P2-4：用批次参数里的 model_id，而不是执行时的全局配置——
+        # 提交后改 SEEDREAM_MODEL 不应该改变在跑/重试批次的模型
+        model_id = str(params.get("model_id") or settings.seedream_model)
+        client = SeedreamClient(
+            settings.ark_api_key,
+            base_url=settings.ark_base_url,
+            model=model_id,
+            timeout=settings.seedream_timeout,
+        )
+        try:
+            result = await client.generate(
+                prompt=run.prompt,
+                images=[prepared_material, prepared_pose],
+                size=str(params.get("size") or "1536x2048"),
+                output_format="png",
+                watermark=bool(params.get("watermark") or False),
+                max_attempts=int(settings.seedream_max_attempts or 3),
+                # P1-6：请求期间每 0.5s 轮询一次任务状态，取消后尽快终止
+                should_cancel=lambda: _is_cancelled(db, task),
+            )
+        finally:
+            await client.aclose()
     except SeedreamError as exc:
-        run.failed = 1
-        run.error = str(exc)
-        run.status = "failed"
-        await db.commit()
+        if exc.code == "cancelled":
+            run.status = "cancelled"
+            run.error = "已取消"
+            await db.commit()
+            return
+        await _fail_ark_run(db, run, str(exc))
         if exc.retryable:
             raise RecoverableTaskError(str(exc)) from exc
         raise PermanentTaskError(str(exc)) from exc
-    finally:
-        await client.aclose()
+    except (RecoverableTaskError, PermanentTaskError) as exc:
+        await _fail_ark_run(db, run, str(exc))
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 —— 预调用阶段任何异常都要让批次离开 running
+        logger.exception("云端出图准备阶段异常 run #%s", run.id)
+        message = f"云端出图准备失败：{type(exc).__name__}: {exc}"
+        await _fail_ark_run(db, run, message)
+        raise PermanentTaskError(message) from exc
 
     # 4) 落盘候选图；拿到响应后若已取消则不再写文件
     if await _is_cancelled(db, task):
@@ -465,14 +524,30 @@ async def _execute_seedream(
         await db.commit()
         return
     out_dir = _candidate_dir(run)
-    out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / _CANDIDATE_NAME.format(idx=1, seed=0)
-    await asyncio.to_thread(target.write_bytes, result.image)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(target.write_bytes, result.image)
+    except Exception as exc:  # noqa: BLE001 —— 磁盘/权限错误不能让批次卡在 running
+        message = f"候选图落盘失败：{type(exc).__name__}: {exc}"
+        await _fail_ark_run(db, run, message)
+        raise PermanentTaskError(message) from exc
 
-    # 对账信息写回参数快照（不记录图片/base64/key，只留 request_id/耗时/usage/估算费用）
-    params["ark_request_id"] = result.request_id
-    params["ark_elapsed_s"] = result.elapsed_s
-    params["ark_usage"] = result.usage
+    # P2-3：响应里的实际尺寸回写参数快照（1K/1.5K/2K 档位名与真实像素不一定一致）
+    actual_size = str(getattr(result, "size", "") or "")
+    if actual_size:
+        params["size"] = actual_size
+        try:
+            width_s, height_s = actual_size.lower().split("x", 1)
+            params["width"], params["height"] = int(width_s), int(height_s)
+        except (TypeError, ValueError):
+            # 响应 size 可能是 1K/2K 档位名而不是宽x高：保留字符串，宽高维持提交值
+            logger.debug("云端响应 size 不是「宽x高」，宽高不回写：%r", actual_size)
+    # P2-5：对账信息写回参数快照（不记录图片/base64/key，只留 request_id/耗时/usage）
+    params["ark_request_id"] = getattr(result, "request_id", None)
+    params["ark_elapsed_s"] = getattr(result, "elapsed_s", 0.0)
+    params["ark_usage"] = getattr(result, "usage", None) or {}
+    params["ark_model_id"] = model_id
     run.params_json = json.dumps(params, ensure_ascii=False)
 
     run.done = 1
@@ -484,8 +559,8 @@ async def _execute_seedream(
     logger.info(
         "云端出图完成 run #%s model=%s size=%s request_id=%s elapsed=%.2fs",
         run.id,
-        settings.seedream_model,
+        model_id,
         params.get("size"),
-        result.request_id or "-",
-        result.elapsed_s,
+        getattr(result, "request_id", None) or "-",
+        getattr(result, "elapsed_s", 0.0),
     )

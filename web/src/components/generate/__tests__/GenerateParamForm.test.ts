@@ -95,6 +95,7 @@ const CLOUD_STATUS: GenerateStatus = {
       supports_negative: false,
       requires_upload: true,
       max_poses: 10,
+      max_refs: 1,
     },
   },
   ark: {
@@ -618,6 +619,108 @@ describe('云端 Seedream 档位', () => {
 
     expect(document.body.textContent).toContain('云端出图需要上传图片')
     expect(wrapper.emitted('submitBatch')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('带入云端历史参数：size / 水印 / 姿态一并恢复（P1-4）', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: CLOUD_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        initialModelKey: 'seedream_5_0_flash',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+
+    ;(
+      wrapper.vm as unknown as {
+        applyRunPayload: (payload: Record<string, unknown>) => void
+      }
+    ).applyRunPayload({
+      model_key: 'seedream_5_0_flash',
+      prompt: '换成红色背景',
+      reference_ids: ['ref-a'],
+      params: { size: '1024x1024', watermark: true },
+      pose: POSE_FIXTURE,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(POSE_FIXTURE.name)
+    sessionStorage.setItem('fashion-inspo:ark-upload-confirmed', '1')
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成 1 张'))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+
+    const payload = wrapper.emitted('submit')?.[0]?.[0] as Record<string, unknown>
+    expect(payload.size).toBe('1024x1024')
+    expect(payload.watermark).toBe(true)
+    expect(payload.pose_id).toBe(POSE_FIXTURE.id)
+    wrapper.unmount()
+  })
+
+  it('双人姿态被过滤掉（P1-5：单人物模板无法承载双人）', async () => {
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: CLOUD_STATUS,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        initialModelKey: 'seedream_5_0_flash',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+    const dual = { ...POSE_FIXTURE, id: 'dual_pose', name: '双人合照', system: '双人合照（情侣）' }
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('selectMultiple', [dual])
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 0 / 10 个姿态')
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('生成'))
+    expect(btn?.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('云端姿态上限取后端 max_poses（SEEDREAM_MAX_POSES 可配置）', async () => {
+    const limited: GenerateStatus = {
+      ...CLOUD_STATUS,
+      models_meta: {
+        ...CLOUD_STATUS.models_meta,
+        seedream_5_0_flash: {
+          ...CLOUD_STATUS.models_meta!.seedream_5_0_flash!,
+          max_poses: 2,
+        },
+      },
+    }
+    const wrapper = mount(GenerateParamForm, {
+      props: {
+        status: limited,
+        ready: true,
+        submitting: false,
+        active: false,
+        initialRefIds: 'ref-a',
+        initialModelKey: 'seedream_5_0_flash',
+        promptFrom: vi.fn(),
+      },
+      global: { plugins: [ArcoVue], stubs: { PosePickerModal: PosePickerStub } },
+    })
+    await flushPromises()
+    const poses = [1, 2, 3].map((n) => ({
+      ...POSE_FIXTURE,
+      id: `pose-${n}`,
+      name: `姿势${n}`,
+    }))
+    wrapper.findComponent({ name: 'PosePickerModal' }).vm.$emit('selectMultiple', poses)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选 2 / 2 个姿态')
     wrapper.unmount()
   })
 })

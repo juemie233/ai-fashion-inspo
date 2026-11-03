@@ -30,6 +30,8 @@ interface GenerateModelMeta {
   requires_upload?: boolean
   /** 云端一次最多可选的姿态数（本地档位为空） */
   max_poses?: number | null
+  /** 参考素材张数上限（云端素材图只能是 1 张；本地 i2i 最多 10 张） */
+  max_refs?: number | null
 }
 
 /** 就绪状态（ComfyUI 是否可用、模型是否就位、Ollama 占了多少显存）。 */
@@ -257,7 +259,8 @@ export async function fetchStatus(): Promise<GenerateStatus> {
 export async function createRun(payload: CreateRunPayload): Promise<{
   run_id: number
   task_id: number
-  seed: number
+  /** 云端档位没有 seed（每次随机），返回 null */
+  seed: number | null
   batch_dir: string
   total: number
 }> {
@@ -348,7 +351,7 @@ export async function fetchRunStats(days = 30): Promise<GenerationRunStats> {
 export async function retryRun(
   runId: number,
   seed = 0,
-): Promise<{ run_id: number; task_id: number; seed: number }> {
+): Promise<{ run_id: number; task_id: number; seed: number | null }> {
   const { data } = await apiClient.post(`/generate/runs/${runId}/retry`, null, {
     params: { seed },
   })
@@ -360,7 +363,12 @@ export async function regenerateCandidate(
   runId: number,
   filename: string,
   seed = 0,
-): Promise<{ run_id: number; task_id: number; seed: number; original_seed: number }> {
+): Promise<{
+  run_id: number
+  task_id: number
+  seed: number | null
+  original_seed: number
+}> {
   const { data } = await apiClient.post(`/generate/runs/${runId}/regenerate`, null, {
     params: { filename, seed },
   })

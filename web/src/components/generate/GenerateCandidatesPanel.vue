@@ -19,6 +19,8 @@ const props = defineProps<{
   stageText: string
   /** 本次 seed 基值（0 = 随机时后端返回真实基值；为空则不显示） */
   lastSeed: number | null
+  /** 当前档位是否支持 seed（云端 Seedream 无 seed，文案改「重新生成」） */
+  seedSupported?: boolean
   /** 提交中（换 seed 按钮的 loading） */
   submitting: boolean
 }>()
@@ -37,6 +39,12 @@ const emit = defineEmits<{
 }>()
 
 const selectedCount = computed(() => props.selected.size)
+const seedEnabled = computed(() => props.seedSupported !== false)
+
+/** 候选图的 seed 标签：云端没有 seed（每次随机），不要显示误导性的 seed 0 */
+function seedLabel(seed: number): string {
+  return seedEnabled.value ? `seed ${seed}` : '云端 · 无 seed'
+}
 </script>
 
 <template>
@@ -77,7 +85,7 @@ const selectedCount = computed(() => props.selected.size)
       >
         <img
           :src="item.url"
-          :alt="`第 ${index + 1} 张，seed ${item.seed}`"
+          :alt="`第 ${index + 1} 张，${seedLabel(item.seed)}`"
           loading="lazy"
           title="点击查看大图"
           @click="emit('preview', index)"
@@ -93,7 +101,7 @@ const selectedCount = computed(() => props.selected.size)
           @change="emit('toggle', item.filename)"
         />
         <div class="gen-item-meta">
-          <span>seed {{ item.seed }}</span>
+          <span>{{ seedLabel(item.seed) }}</span>
           <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
           <span class="gen-item-actions">
             <a-button
@@ -110,10 +118,12 @@ const selectedCount = computed(() => props.selected.size)
               size="mini"
               type="text"
               :loading="submitting"
-              title="用新 seed 重出这一张"
+              :title="
+                seedEnabled ? '用新 seed 重出这一张' : '云端无 seed：按同样素材/姿势重新生成一张'
+              "
               @click.stop="emit('regenerate', item)"
             >
-              换 seed
+              {{ seedEnabled ? '换 seed' : '重新生成' }}
             </a-button>
           </span>
         </div>

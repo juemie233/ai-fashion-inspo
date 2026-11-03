@@ -103,7 +103,9 @@ function confirm(): void {
           :alt="item.filename"
           img-class="gid-img"
         />
-        <span class="gid-seed">seed {{ item.seed }}</span>
+        <span class="gid-seed">{{
+          item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端每次随机）'
+        }}</span>
         <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
         <a-checkbox
           v-else

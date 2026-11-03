@@ -85,4 +85,26 @@ describe('候选区对比入口', () => {
     await wrapper.findAll('.gen-item img')[0].trigger('click')
     expect(wrapper.emitted('preview')?.[0]).toEqual([0])
   })
+
+  it('云端批次（无 seed）：不展示 seed 0，按钮文案改为「重新生成」', () => {
+    const wrapper = mount(GenerateCandidatesPanel, {
+      props: {
+        run: run('i2i'),
+        candidates: [{ ...candidates[0], seed: 0 }],
+        selected: new Set<string>(),
+        stageText: '完成',
+        lastSeed: null,
+        seedSupported: false,
+        submitting: false,
+      },
+      global: { plugins: [ArcoVue] },
+    })
+
+    expect(wrapper.text()).toContain('云端 · 无 seed')
+    expect(wrapper.text()).not.toContain('seed 0')
+    const regenerateBtn = wrapper
+      .findAll('.gen-item-actions button')
+      .find((b) => b.text().includes('重新生成'))
+    expect(regenerateBtn).toBeTruthy()
+  })
 })

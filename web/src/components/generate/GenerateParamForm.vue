@@ -91,6 +91,10 @@ interface ModelOption {
   requiresUpload: boolean
   supportsSeed: boolean
   supportsNegative: boolean
+  /** 云端一次最多可选姿态数（本地档位固定 10，仅作占位） */
+  maxPoses: number
+  /** 参考素材张数上限（云端只能是 1 张素材图） */
+  maxRefs: number
 }
 
 /** 旧后端（不返回 models_meta）时的兜底两档：只保证页面不变空白，不含未审查档位 */
@@ -107,6 +111,8 @@ const LEGACY_MODELS: ModelOption[] = [
     requiresUpload: false,
     supportsSeed: true,
     supportsNegative: true,
+    maxPoses: 10,
+    maxRefs: 10,
   },
   {
     key: 'qwen_2_1_i2i',
@@ -120,6 +126,8 @@ const LEGACY_MODELS: ModelOption[] = [
     requiresUpload: false,
     supportsSeed: true,
     supportsNegative: true,
+    maxPoses: 10,
+    maxRefs: 10,
   },
 ]
 
@@ -140,6 +148,8 @@ function toOptions(
     requiresUpload: m.requires_upload === true,
     supportsSeed: m.supports_seed !== false,
     supportsNegative: m.supports_negative !== false,
+    maxPoses: Number(m.max_poses ?? 10),
+    maxRefs: Number(m.max_refs ?? 10),
   }))
 }
 
@@ -248,6 +258,11 @@ function modelTaskDesc(m: ModelOption): string {
 /** 生成方式**由档位推导**：Z-Image 是纯文生图，Qwen 档位要参考图，不再单独选一次 */
 const isArk = computed(() => currentModel.value?.provider === 'ark')
 
+/** 档位能力声明（后端 models_meta 下发）：UI 按能力显示，而不是到处硬编码 isArk */
+const supportsSeed = computed(() => currentModel.value?.supportsSeed !== false)
+const supportsNegative = computed(() => currentModel.value?.supportsNegative !== false)
+const requiresUpload = computed(() => currentModel.value?.requiresUpload === true)
+
 const kind = computed<'t2i' | 'i2i'>(() => currentModel.value?.kind ?? 't2i')
 
 /** 选中的档位是否就绪：权重没放对目录时不能默认它能用 */
@@ -351,15 +366,25 @@ const CLOUD_SIZE_PRESETS = [
 const cloudSize = ref('1536x2048')
 const cloudWatermark = ref(false)
 const cloudPoses = ref<PoseItem[]>([])
-const MAX_CLOUD_POSES = 10
+/** 云端可选姿态上限：后端 models_meta.max_poses（默认 10，可由 SEEDREAM_MAX_POSES 配置） */
+const maxCloudPoses = computed(() => currentModel.value?.maxPoses ?? 10)
 const cloudCost = computed(() =>
   isArk.value
-    ? Math.max(1, cloudPoses.value.length) * (currentModel.value?.costPerImage ?? 0.12)
+    ? Math.max(1, cloudPoses.value.length) * (currentModel.value?.costPerImage || 0.12)
     : 0,
 )
 
 function onCloudPosesSelected(poses: PoseItem[]): void {
-  cloudPoses.value = poses.slice(0, MAX_CLOUD_POSES)
+  // P1-5：云端一期是单人物模板 + 1 张素材图，双人姿态会被合成/截断，选的时候就拦掉
+  const single = poses.filter((pose) => !(pose.system || '').includes('双人'))
+  const dualCount = poses.length - single.length
+  if (dualCount > 0) {
+    Message.warning(`云端一期不支持双人姿态，已跳过 ${dualCount} 个（可改用本地出图）`)
+  }
+  if (single.length > maxCloudPoses.value) {
+    Message.warning(`云端一次最多 ${maxCloudPoses.value} 个姿态，超出部分已忽略`)
+  }
+  cloudPoses.value = single.slice(0, maxCloudPoses.value)
   selectedPose.value = cloudPoses.value[0] ?? null
 }
 
@@ -385,7 +410,7 @@ const refIdsList = computed(() => splitIds(refIdsText.value))
 const posePickerVisible = ref(false)
 const selectedPose = ref<PoseItem | null>(null)
 const maxRefs = computed(() => {
-  if (isArk.value) return 1
+  if (isArk.value) return currentModel.value?.maxRefs ?? 1
   return selectedPose.value && poseMode.value === 'lineart' ? 9 : 10
 })
 const refCountOk = computed(
@@ -642,7 +667,8 @@ const pendingPayloads = ref<CreateRunPayload[]>([])
 const ARK_PRIVACY_KEY = 'fashion-inspo:ark-upload-confirmed'
 
 function needsPrivacyConfirm(): boolean {
-  if (!isArk.value) return false
+  // 用档位能力声明判断，而不是硬编码 isArk：以后新增需要上传的档位自动走隐私确认
+  if (!requiresUpload.value) return false
   try {
     return sessionStorage.getItem(ARK_PRIVACY_KEY) !== '1'
   } catch {
@@ -675,6 +701,14 @@ function onSubmit() {
     }
     if (refIdsList.value.length !== 1) {
       Message.warning('云端出图一期需要恰好 1 张素材图作参考')
+      return
+    }
+    // P1-5：双人姿态在单人物模板 + 1 张素材图下必然失败；历史带入的也要拦住
+    const dualPoses = cloudPoses.value.filter((pose) => (pose.system || '').includes('双人'))
+    if (dualPoses.length) {
+      Message.error(
+        `云端一期不支持双人姿态：${dualPoses.map((pose) => pose.name).join('、')}，请移除后重试`,
+      )
       return
     }
     const payloads: CreateRunPayload[] = cloudPoses.value.map((pose) => ({
@@ -767,6 +801,21 @@ function applyRunPayload(payload: RunPayload): void {
   if (payload.model_key && allModels.value.some((m) => m.key === payload.model_key)) {
     modelKey.value = payload.model_key
     pendingModelKey.value = ''
+  }
+  // P1-4：云端档位的 size / 水印 / 姿态不在本地参数（宽高/steps）里，
+  // 带入表单时必须一并恢复，否则「带入历史参数」后重跑会悄悄变回默认值
+  const isCloudRun = !!(
+    payload.model_key &&
+    allModels.value.some((m) => m.key === payload.model_key && m.provider === 'ark')
+  )
+  if (isCloudRun) {
+    const cloudSizeRaw = typeof params.size === 'string' ? params.size : ''
+    if (cloudSizeRaw && CLOUD_SIZE_PRESETS.some((item) => item.value === cloudSizeRaw)) {
+      cloudSize.value = cloudSizeRaw
+    }
+    cloudWatermark.value = params.watermark === true
+    cloudPoses.value = payload.pose ? [payload.pose] : []
+    selectedPose.value = cloudPoses.value[0] ?? null
   }
   // 姿势历史：按历史档位还原生成方式（i2i=线稿参考；t2i/缺省=文字描述）
   if (payload.pose) {
@@ -923,8 +972,10 @@ onMounted(() => {
         <span class="gen-hint">可多选，每个姿态独立生成、独立计费</span>
       </div>
       <div class="gen-row">
-        <a-button @click="posePickerVisible = true">选择多个姿势（≤10）</a-button>
-        <span class="gen-hint">已选 {{ cloudPoses.length }} / 10 个姿态</span>
+        <a-button @click="posePickerVisible = true">
+          选择多个姿势（≤{{ maxCloudPoses }}）
+        </a-button>
+        <span class="gen-hint">已选 {{ cloudPoses.length }} / {{ maxCloudPoses }} 个姿态</span>
       </div>
       <div v-if="cloudPoses.length" class="gen-pose-cards">
         <div v-for="pose in cloudPoses" :key="pose.id" class="gen-pose-card">
@@ -1007,17 +1058,21 @@ onMounted(() => {
               <template #prefix>张数</template>
             </a-input-number>
           </div>
-          <div class="gen-label">负向描述（可选）</div>
-          <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
+          <template v-if="supportsNegative">
+            <div class="gen-label">负向描述（可选）</div>
+            <a-input v-model="negative" placeholder="例：模糊、变形、多余手指" allow-clear />
+          </template>
           <div class="gen-row">
             <a-input-number v-model="steps" :min="1" :max="30" style="width: 110px">
               <template #prefix>步数</template>
             </a-input-number>
-            <a-input-number v-model="seed" :min="0" style="width: 180px">
+            <a-input-number v-if="supportsSeed" v-model="seed" :min="0" style="width: 180px">
               <template #prefix>seed</template>
             </a-input-number>
           </div>
-          <div class="gen-hint">seed=0 时随机；提交后会把真实 seed 显示在结果区，便于复现。</div>
+          <div v-if="supportsSeed" class="gen-hint">
+            seed=0 时随机；提交后会把真实 seed 显示在结果区，便于复现。
+          </div>
         </template>
         <template v-else>
           <div class="gen-row gen-row--multi">

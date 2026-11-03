@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
 import httpx
 import pytest
 
+from app.services import seedream_client
 from app.services.seedream_client import (
+    MAX_OUTPUT_BYTES,
     SeedreamClient,
     SeedreamError,
     _data_uri,
@@ -53,6 +56,12 @@ def test_build_prompt_merges_negative():
     text = build_prompt("保持图1人物", "模糊, 多余手指")
     assert text.startswith("保持图1人物")
     assert "避免出现：模糊, 多余手指" in text
+
+
+def test_build_prompt_truncates_to_official_limit():
+    """P2-10：官方中文建议 ≤300 字，超长 prompt 要截断而不是原样发出去。"""
+    text = build_prompt("甲" * 400, "乙" * 100)
+    assert len(text) <= 300
 
 
 @pytest.mark.asyncio
@@ -155,3 +164,130 @@ async def test_generate_requires_two_images():
         await client.generate(prompt="x", images=[TINY_PNG], size="1K")
     await client.aclose()
     assert "2~10" in str(exc.value)
+
+
+# ── 2026-11-03 评审修复：下载重试语义 / 取消 / Retry-After / 审核中文 ──
+
+
+@pytest.mark.asyncio
+async def test_download_failure_retries_download_only(monkeypatch):
+    """P1-1：生成成功但下载失败时，只重试下载，绝不重新发生成请求（避免重复计费）。"""
+    monkeypatch.setattr(seedream_client, "_backoff_seconds", lambda attempt: 0.0)
+    posts = {"n": 0}
+    gets = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts["n"] += 1
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://cdn.example.com/out.png"}]},
+            )
+        gets["n"] += 1
+        return httpx.Response(500, content=b"boom")
+
+    client = _client(handler)
+    with pytest.raises(SeedreamError) as exc:
+        await client.generate(prompt="x", images=[TINY_PNG, TINY_PNG], size="1K")
+    await client.aclose()
+
+    assert posts["n"] == 1, "下载失败不应触发第二次生成（会重复计费）"
+    assert gets["n"] == seedream_client.DOWNLOAD_ATTEMPTS
+    assert exc.value.code == "download_failed"
+    assert exc.value.retryable is False
+    assert "cdn.example.com" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_429_honours_retry_after_header(monkeypatch):
+    """P2-8：429 带 Retry-After 时，退避时间不能短于响应头给的秒数。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(seedream_client, "_backoff_seconds", lambda attempt: 0.1)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "2"},
+                json={"error": {"code": "rate_limit", "message": "slow"}},
+            )
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(TINY_PNG).decode()}]},
+        )
+
+    client = _client(handler)
+    await client.generate(prompt="x", images=[TINY_PNG, TINY_PNG], size="1K")
+    await client.aclose()
+
+    assert calls["n"] == 2
+    assert any(delay >= 1.9 for delay in sleeps), sleeps
+
+
+def test_error_mapping_matches_chinese_moderation_text():
+    """P2-7：中文「内容审核」也要映射成审核错误，而不是落到「参数不合法」。"""
+    err = seedream_client._error_from_response(
+        400,
+        {"error": {"code": "SensitiveContentDetected", "message": "内容审核未通过"}},
+    )
+    assert err.retryable is False
+    assert "审核" in str(err)
+
+
+@pytest.mark.asyncio
+async def test_download_size_limit_rejects_oversize(monkeypatch):
+    """P2-9：下载响应超过上限时直接拒绝，不把异常大文件读进内存。"""
+    monkeypatch.setattr(seedream_client, "_backoff_seconds", lambda attempt: 0.0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200, json={"data": [{"url": "https://cdn.example.com/huge.png"}]}
+            )
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "image/png",
+                "content-length": str(MAX_OUTPUT_BYTES + 1),
+            },
+            content=TINY_PNG,
+        )
+
+    client = _client(handler)
+    with pytest.raises(SeedreamError) as exc:
+        await client.generate(prompt="x", images=[TINY_PNG, TINY_PNG], size="1K")
+    await client.aclose()
+    assert exc.value.code == "download_failed"
+    assert "上限" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_should_cancel_before_request_skips_http_call():
+    """P1-6：任务已取消时不再发请求（避免取消后仍产生费用）。"""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(TINY_PNG).decode()}]},
+        )
+
+    async def cancelled() -> bool:
+        return True
+
+    client = _client(handler)
+    with pytest.raises(SeedreamError) as exc:
+        await client.generate(
+            prompt="x", images=[TINY_PNG, TINY_PNG], size="1K", should_cancel=cancelled
+        )
+    await client.aclose()
+    assert exc.value.code == "cancelled"
+    assert calls["n"] == 0

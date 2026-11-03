@@ -184,7 +184,8 @@ const refOptions = computed(() =>
           <div class="cmp-pane-head">
             生成图
             <span v-if="current" class="cmp-file"
-              >{{ current.filename }} · seed {{ current.seed }}</span
+              >{{ current.filename }} ·
+              {{ current.seed > 0 ? `seed ${current.seed}` : '无 seed（云端随机）' }}</span
             >
             <a-tag v-if="current?.imported" size="small" color="green">已入库</a-tag>
           </div>
@@ -214,7 +215,7 @@ const refOptions = computed(() =>
         :key="item.filename"
         class="cmp-strip-item"
         :class="{ 'is-current': i === index }"
-        :title="`第 ${i + 1} 张 · seed ${item.seed}`"
+        :title="`第 ${i + 1} 张 · ${item.seed > 0 ? `seed ${item.seed}` : '无 seed（云端随机）'}`"
         @click="index = i"
       >
         <img :src="item.url" alt="" loading="lazy" />

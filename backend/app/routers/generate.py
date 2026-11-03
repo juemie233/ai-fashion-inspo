@@ -68,7 +68,13 @@ async def generate_status() -> dict:
             "supports_seed": spec.get("supports_seed", True),
             "supports_negative": spec.get("supports_negative", True),
             "requires_upload": bool(spec.get("requires_upload")),
-            "max_poses": spec.get("max_poses"),
+            # 多姿态上限走配置（默认 10）：前端据此限制云端可选的姿态数
+            "max_poses": (
+                settings.seedream_max_poses
+                if str(spec.get("provider") or "comfyui") == "ark"
+                else spec.get("max_poses")
+            ),
+            "max_refs": spec.get("max_refs"),
         }
         for key, spec in _visible_model_specs()
     }
@@ -94,7 +100,12 @@ async def generate_models() -> dict:
                 "supports_seed": spec.get("supports_seed", True),
                 "supports_negative": spec.get("supports_negative", True),
                 "requires_upload": bool(spec.get("requires_upload")),
-                "max_poses": spec.get("max_poses"),
+                "max_poses": (
+                    settings.seedream_max_poses
+                    if str(spec.get("provider") or "comfyui") == "ark"
+                    else spec.get("max_poses")
+                ),
+                "max_refs": spec.get("max_refs"),
             }
             for key, spec in _visible_model_specs()
         ],

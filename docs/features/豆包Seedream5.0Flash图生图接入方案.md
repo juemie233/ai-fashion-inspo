@@ -526,9 +526,14 @@ ARK_API_KEY=
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 SEEDREAM_MODEL=doubao-seedream-5-0-flash-260915
 SEEDREAM_TIMEOUT=120
+SEEDREAM_MAX_ATTEMPTS=3
 SEEDREAM_MAX_POSES=10
 SEEDREAM_DAILY_BUDGET_CNY=5.0
 ```
+
+> `SEEDREAM_MAX_ATTEMPTS`（2026-11-03 新增）：**生成请求**的重试次数（含第一次）；
+> 429/5xx/短时网络错误才重试。生成成功后的**下载失败只重试下载**、不重新生成，
+> 因此不会因为下载抖动重复计费。默认 3，不配置即使用默认值。
 
 - `ARK_ENABLED=false` 时，`MODEL_SPECS` 里的云端档位仍可存在，但 `/api/generate/models` 不返回，前端看不到。
 - `ARK_API_KEY` 只放 `backend/.env`（已 gitignore）或环境变量；**不写进代码、不写进文档、不提交**。
@@ -701,9 +706,9 @@ SEEDREAM_DAILY_BUDGET_CNY=5.0
 ### 13.2 图片预处理约定
 
 ```text
-素材图：EXIF 剥离 → 转 RGB → 长边 ≤ 2048 → JPEG quality 90
-姿态图：保留 PNG（线稿细节）→ 长边 ≤ 2048；必要时转黑白剪影做 A/B
-两张图：单图 ≤ 30 MB；总像素 ≤ 3600 万；不透明背景
+素材图：EXIF 方向校正（按 Orientation 转正，不保留 EXIF）→ 转 RGB → 长边 ≤ 2048 → JPEG quality 90
+姿态图：保留 PNG（线稿细节）→ 长边 ≤ 2048；透明背景先贴白底；必要时转黑白剪影做 A/B
+两张图：单图 ≤ 30 MB；总像素 ≤ 3600 万；输出图下载上限 32 MB
 ```
 
 ### 13.3 与本地链路的代码复用对照
@@ -775,3 +780,56 @@ SEEDREAM_DAILY_BUDGET_CNY=5.0
 - **P4 对比实验**（方案 §9.4）：10 素材 × 3 姿态与本地链路对比、盲评与报告，费用约 ¥3.6+，待用户确认预算。
 - **验收口径补全**：本机真实 API 路径（web → worker）尚未跑，需要在 backend/worker 重启后提交 1 个批次确认状态流转。
 - **水印/预算默认值**：当前 `watermark=false`、日预算 ¥5，按方案默认值实现，可在 `.env` 调整；实际账单以方舟为准。
+
+---
+
+## 15. 评审修复记录（2026-11-03，提交 `9c0fecd` 之后）
+
+> 依据 [豆包 Seedream 5.0 Flash 接入提交代码评测（3645006）](./豆包Seedream5.0Flash提交代码评测-2026-11-03.md)
+> 的 §7 建议顺序逐项修复。本文只记录**当前实际实现**，旧行为不再保留。
+
+### 15.1 修复清单
+
+| 编号 | 原问题 | 修复后行为 |
+| --- | --- | --- |
+| **P0-1** | 用户自定义 prompt 被静默丢弃 | `_ark_prompt_text` 增加 `user_prompt`：固定包装 → **用户补充要求** → 姿势细节 → 负向改写；长度不够先截姿势细节，不截用户要求。创建批次时传 `payload["prompt"]` |
+| **P0-2** | 预调用失败让批次永久停在 `running` | `_execute_seedream` 全流程 `try/except`：素材缺失 / 姿势 503 / 坏图 / 预处理失败 / 落盘失败 / 未知异常都会写 `run.status=failed` + `run.error` 再抛出；取消写 `cancelled` |
+| **P1-1** | 下载失败会重跑整次生成（重复计费） | 生成与取图分离：生成请求最多 `SEEDREAM_MAX_ATTEMPTS` 次；成功后**只重试下载** 3 次；下载最终失败为永久错误（`code=download_failed`，错误信息保留云端 URL 供人工恢复），不再自动重发生成 |
+| **P1-2** | 云端档位仍显示一键出图 | 云端档位不渲染 `QuickPoseBatchPanel`（既有修复保留，测试锁定） |
+| **P1-3** | 云端返回假 seed | `create_run` 不写 `seed_base`/`seeds`，响应 `seed=null`；前端候选图显示「无 seed（每次随机）」，重跑按钮文案改「重新生成」，消息不再打印 seed |
+| **P1-4** | retry / 单张重出 / 带入表单丢云端参数 | `retry_run`、`regenerate_candidate` 的 payload 原样携带 `size` / `watermark`；前端 `applyRunPayload` 对云端档位恢复 `cloudSize` / `cloudWatermark` / 姿态 |
+| **P1-5** | 双人姿态与单张素材图不匹配 | `_create_ark_run` 遇到 `system` 含「双人」的姿势返回 400（提示改用本地或换单人姿态）；前端选姿态时过滤双人并提示，提交前再兜底拦截 |
+| **P1-6** | 取消无法在云端调用期间生效 | `SeedreamClient.generate` 接受 `should_cancel` 回调，请求期间每 0.5s 轮询任务状态；取消抛 `code=cancelled`，执行器将批次置 `cancelled`（已发出的请求仍可能计费，UI 已提示） |
+| **P2-1** | 日预算按 UTC 零点重置 | `_ark_budget_day_start()` 按**本地时区零点**换算成 naive UTC |
+| **P2-2** | 预算检查非原子/排队不查 | 创建时用 `_ARK_BUDGET_LOCK` 把「检查 + 建行」串行化；执行器调用云端前用 `ark_budget_exceeded` 做二次检查，超预算直接 failed、不发请求 |
+| **P2-3** | 档位尺寸与实际输出不一致 | 执行成功把响应 `size` 回写 `params.size`；若为 `宽x高` 同时回写 `width`/`height` |
+| **P2-4** | 执行用全局 `seedream_model` | 执行器用 `params.model_id`（提交时写入），提交后改配置不影响在跑/重试批次 |
+| **P2-5** | 未写 request_id/usage/耗时 | 成功回写 `ark_request_id` / `ark_elapsed_s` / `ark_usage` / `ark_model_id`（不写 key/base64/图片） |
+| **P2-6** | EXIF 未转正、透明图变黑底 | 预处理先 `ImageOps.exif_transpose`；带 alpha 的图先合成到白色背景再转 RGB |
+| **P2-7** | 审核错误只匹配英文 | 错误映射同时匹配中文关键词（审核/敏感/违规/内容安全/不合规） |
+| **P2-8** | 未遵守 Retry-After / 退避写错 | 解析 429 响应头 `Retry-After`（秒、上限 60），退避取 `max(指数退避, Retry-After)`；文档与实现一致（1/2 秒 + 抖动，上限由重试次数决定） |
+| **P2-9** | 下载无大小上限 | 下载前检查 `Content-Length`、下载后检查实际长度，超过 32 MB 直接拒绝 |
+| **P2-10** | prompt 截断 600 字 | 上限收紧到 **300 字**（官方中文建议），用户要求优先于姿势细节 |
+| **P2-11** | 成功横幅假设 ComfyUI 有值 | `GenerateView` 增加「ComfyUI 未启动但云端就绪」分支，不再显示 `undefined / undefined GiB`；就绪横幅提示云端已就绪 |
+| **P2-12** | `max_refs=10` 与云端 1 张素材不一致 | 云端档位 `max_refs=1`（素材图；姿态图由 pose_id 单独处理），`/models` 与 `/status` 都下发 `max_refs`，前端按它校验 |
+| **P2-13** | 云端费用为 0 时不回退 0.12 | 前端费用计算改为 `costPerImage || 0.12`（0/缺省都回退默认单价） |
+| **P3** | 死常量/死配置/未使用字段 | 删除 `_MIME_BY_MAGIC`；`SEEDREAM_MAX_POSES` 经 `/models` 的 `max_poses` 真正下发并被前端使用；`max_poses`/`max_refs`/`supports_seed`/`supports_negative`/`requires_upload` 均被前端能力判断消费；删除 `_execute_seedream` 未使用的 `spec` 参数；`_get_client` 增加并发锁 |
+
+### 15.2 新增/调整的测试
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `backend/tests/test_seedream_client.py` | 下载失败只重试下载（生成只调 1 次）、429 Retry-After、中文审核映射、下载大小上限、取消回调、prompt 300 字截断 |
+| `backend/tests/test_generation_seedream.py` | 用户 prompt 进入 `run.prompt`、seed 为 None、双人姿态 400、retry 保留 size/watermark、准备阶段三类失败均写 failed、真实尺寸回写、model_id 来自 params、执行前预算二次检查、取消置 cancelled |
+| `backend/tests/test_unit_seedream_image.py` | EXIF 方向转正、透明图贴白底、长边缩放 |
+| `web/src/components/generate/__tests__/GenerateParamForm.test.ts` | 带入云端历史参数恢复 size/水印/姿态、双人姿态过滤、`max_poses` 配置生效 |
+| `web/src/components/generate/__tests__/GenerateCandidatesPanel.test.ts` | 云端无 seed 文案 + 「重新生成」按钮 |
+| `web/src/components/generate/__tests__/GenerateHistoryTable.test.ts` | 云端批次「重新生成」文案、候选图「无 seed（每次随机）」 |
+| `web/src/views/__tests__/GenerateView.test.ts` | ComfyUI 未启动 + 云端就绪时横幅不出现 undefined |
+
+### 15.3 边界说明
+
+- 云端取消只能做到「尽快终止本地等待」；**已经发到方舟的请求仍可能计费**，UI 不再承诺零费用取消。
+- 下载最终失败不会自动重试生成（防止重复计费），错误信息保留云端 URL；URL 24h 失效，超时后只能重新生成。
+- 双人姿态一期直接拒绝；若后续要支持，需要 2 张素材图 + 双人物提示词模板，不能复用当前单人物模板。
+- 预算锁只在单 API 进程内原子；多进程部署需换成数据库/Redis 级原子检查。

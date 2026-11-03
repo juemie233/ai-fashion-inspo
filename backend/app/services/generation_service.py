@@ -19,7 +19,7 @@ import re
 import logging
 import random
 import shutil
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,6 @@ from app.services.comfyui.models import MAX_COUNT, MAX_PIXELS, MAX_STEPS, MIN_ST
 from app.services.comfyui.probe import MODEL_SPECS
 from app.services.seedream_client import (
     SeedreamError,
-    build_prompt as build_seedream_prompt,
     validate_size as validate_seedream_size,
 )
 from app.services import pose_gallery
@@ -261,6 +260,16 @@ _ARK_PROMPT_TEMPLATE = (
     "写实摄影，{framing}构图，自然光，皮肤与服装细节清晰，画面干净。"
 )
 
+"""云端提示词总长上限（2026-11-03 评审 P2-10：官方中文建议 ≤300 字）。"""
+_ARK_PROMPT_LIMIT = 300
+
+"""日预算检查 + 建批次的互斥锁（P2-2）。
+
+单 uvicorn 进程内有效：并发请求不会同时读到同一个「已用数量」再一起通过检查。
+跨进程（worker 执行前）另有 ``ark_budget_exceeded`` 二次检查兜底。
+"""
+_ARK_BUDGET_LOCK = asyncio.Lock()
+
 
 def _model_provider(spec: dict) -> str:
     """档位所属执行通道：comfyui（本地） / ark（云端 Seedream）。"""
@@ -277,13 +286,85 @@ def _ark_framing(pose: dict[str, Any]) -> str:
     return "全身"
 
 
-def _ark_prompt_text(pose: dict[str, Any], pose_prompt: str, negative: str | None) -> str:
-    """云端提示词 = 固定包装模板 + 姿态描述（优先 pose_prompts）。"""
+def _ark_prompt_text(
+    pose: dict[str, Any],
+    pose_prompt: str,
+    negative: str | None,
+    user_prompt: str | None = None,
+) -> str:
+    """云端提示词 = 固定包装 → 用户补充要求 → 姿势细节 → 负向改写（按优先级排队）。
+
+    2026-11-03 评审 P0-1：历史实现只拼姿势提示词，用户在描述框写的
+    「换成红色背景 / 不要笑」等要求被**整段丢弃**。现在用户原文必须进入云端请求；
+    长度不够时先截姿势细节与负向词，不截用户要求。
+
+    上限 300 字（P2-10，官方对中文提示词的建议长度）：包装模板已占大半，
+    再叠姿势细节+用户长文会分散模型注意力；用户要求优先级高于姿势细节。
+    """
+    template = _ARK_PROMPT_TEMPLATE.format(framing=_ark_framing(pose))
     detail = (pose_prompt or "").strip() or _pose_text_prompt(pose)
-    text = _ARK_PROMPT_TEMPLATE.format(framing=_ark_framing(pose))
+    user = (user_prompt or "").strip()
+    budget = max(0, _ARK_PROMPT_LIMIT - len(template))
+    text = template
+    if user:
+        user_section = f"\n用户补充要求：{user}"[:budget]
+        text += user_section
+        budget -= len(user_section)
+    tail_parts: list[str] = []
     if detail:
-        text = f"{text}\n姿势细节：{detail}"
-    return build_seedream_prompt(text, negative)
+        tail_parts.append(f"姿势细节：{detail}")
+    if (negative or "").strip():
+        tail_parts.append(f"避免出现：{str(negative).strip()}")
+    if tail_parts and budget > 0:
+        text += ("\n" + "\n".join(tail_parts))[:budget]
+    return text.rstrip()
+
+
+def _ark_budget_day_start() -> datetime:
+    """日预算的「今天 00:00」——按**本地时区**算，再换算成库里的 naive UTC。
+
+    2026-11-03 评审 P2-1：原实现用 UTC 零点，中国用户要到 08:00 才重置预算。
+    预算统计的是 ``GenerationRun.created_at``（naive UTC），所以这里返回 naive UTC。
+    """
+    local_now = datetime.now().astimezone()
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(UTC).replace(tzinfo=None)
+
+
+async def ark_budget_used(db: AsyncSession, model_key: str) -> int:
+    """当天（本地日）已创建的该档位批次数（含排队/失败，按批计费口径）。"""
+    day_start = _ark_budget_day_start()
+    used = (
+        await db.execute(
+            select(func.count())
+            .select_from(GenerationRun)
+            .where(
+                GenerationRun.model_key == model_key,
+                GenerationRun.created_at >= day_start,
+            )
+        )
+    ).scalar()
+    return int(used or 0)
+
+
+async def ark_budget_exceeded(
+    db: AsyncSession, model_key: str, cost: float
+) -> str | None:
+    """执行前二次预算检查（P2-2）：返回超预算提示，未超则 None。
+
+    创建时已拦一次，这里挡住「排队期间预算被别的批次用满」的情况；云端调用前
+    再查一次成本很低，比事后发现超支只能向用户解释要好。
+    """
+    budget = float(settings.seedream_daily_budget_cny or 0)
+    if budget <= 0:
+        return None
+    used = await ark_budget_used(db, model_key)
+    if used * cost > budget:
+        return (
+            f"今日云端预算已用尽：已提交 {used} 张（约 ¥{used * cost:.2f}），"
+            f"日上限 ¥{budget:.2f}（SEEDREAM_DAILY_BUDGET_CNY）"
+        )
+    return None
 
 
 async def _create_ark_run(
@@ -312,9 +393,21 @@ async def _create_ark_run(
 
     # 姿势必须存在；先做网络校验再查库，避免拿着 SQLite 连接等第三方源站
     pose = await pose_gallery.get_pose(pose_id)
+    if "双人" in str(pose.get("system") or ""):
+        # P1-5：一期是「单人物模板 + 1 张素材图」，双人姿态会被合成/截断
+        raise HTTPException(
+            status_code=400,
+            detail="云端出图一期不支持双人姿态：请改用本地出图链路，或换一个单人姿态",
+        )
     await _assert_references_exist(db, ref_ids)
     pose_prompt = await _db_pose_prompt(db, pose_id)
-    prompt = _ark_prompt_text(pose, pose_prompt, payload.get("negative"))
+    # P0-1：用户在描述框写的要求必须进入云端请求（历史实现只拼姿势提示词，整段丢弃）
+    prompt = _ark_prompt_text(
+        pose,
+        pose_prompt,
+        payload.get("negative"),
+        payload.get("prompt"),
+    )
 
     size_raw = payload.get("size") or (
         f"{spec['defaults']['width']}x{spec['defaults']['height']}"
@@ -324,76 +417,68 @@ async def _create_ark_run(
     except SeedreamError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # 日预算软上限：当天已建的云端批次 × 单价 + 本次
     cost = float(spec.get("cost_per_image_cny") or 0.12)
-    budget = float(settings.seedream_daily_budget_cny or 0)
-    if budget > 0:
-        today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        used = (
-            await db.execute(
-                select(func.count())
-                .select_from(GenerationRun)
-                .where(GenerationRun.model_key == model_key, GenerationRun.created_at >= today)
-            )
-        ).scalar() or 0
-        if (int(used) + 1) * cost > budget:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"今日云端预算不足：已提交 {used} 张（约 ¥{used * cost:.2f}），"
-                    f"日上限 ¥{budget:.2f}（SEEDREAM_DAILY_BUDGET_CNY）"
-                ),
-            )
+    # P2-1/P2-2：按本地日统计预算；检查 + 建行放在同一把锁里，避免并发请求一起超卖
+    async with _ARK_BUDGET_LOCK:
+        budget = float(settings.seedream_daily_budget_cny or 0)
+        if budget > 0:
+            used = await ark_budget_used(db, model_key)
+            if (used + 1) * cost > budget:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"今日云端预算不足：已提交 {used} 张（约 ¥{used * cost:.2f}），"
+                        f"日上限 ¥{budget:.2f}（SEEDREAM_DAILY_BUDGET_CNY）"
+                    ),
+                )
 
-    seed_base = random.randint(1, 2**31 - 1)
-    params = {
-        "width": width,
-        "height": height,
-        "steps": 1,
-        "cfg": 1.0,
-        "sampler": "ark",
-        "scheduler": "ark",
-        "shift": 0.0,
-        "count": 1,
-        "seed_base": seed_base,
-        "seeds": [seed_base],
-        "prompt": prompt,
-        "negative": None,
-        "reference_ids": ref_ids,
-        "pose_id": pose_id,
-        "provider": "ark",
-        "size": size,
-        "watermark": bool(payload.get("watermark") or False),
-        "model_id": settings.seedream_model,
-        "cost_per_image_cny": cost,
-    }
-    run = GenerationRun(
-        kind="i2i",
-        status="queued",
-        prompt=prompt,
-        negative=None,
-        params_json=json.dumps(params, ensure_ascii=False),
-        model_key=model_key,
-        workflow_name="ark_seedream",
-        workflow_hash=f"ark:{settings.seedream_model}",
-        reference_ids=json.dumps(ref_ids),
-        batch_dir="",
-        total=1,
-        done=0,
-        failed=0,
-    )
-    db.add(run)
-    await db.flush()
-    run.batch_dir = f"generated/{run.id}"
-    await db.flush()
-    factory = task_factory or _default_task_factory
-    task = await factory(db, run, params)
-    run.task_id = task.id
-    await db.commit()
+        # P1-3：云端没有 seed（每次随机），不写假的 seed_base/seeds；响应 seed=None。
+        params = {
+            "width": width,
+            "height": height,
+            "steps": 1,
+            "cfg": 1.0,
+            "sampler": "ark",
+            "scheduler": "ark",
+            "shift": 0.0,
+            "count": 1,
+            "prompt": prompt,
+            "negative": None,
+            "reference_ids": ref_ids,
+            "pose_id": pose_id,
+            "provider": "ark",
+            "size": size,
+            "watermark": bool(payload.get("watermark") or False),
+            "model_id": settings.seedream_model,
+            "cost_per_image_cny": cost,
+        }
+        run = GenerationRun(
+            kind="i2i",
+            status="queued",
+            prompt=prompt,
+            negative=None,
+            params_json=json.dumps(params, ensure_ascii=False),
+            model_key=model_key,
+            workflow_name="ark_seedream",
+            workflow_hash=f"ark:{settings.seedream_model}",
+            reference_ids=json.dumps(ref_ids),
+            batch_dir="",
+            total=1,
+            done=0,
+            failed=0,
+        )
+        db.add(run)
+        await db.flush()
+        run.batch_dir = f"generated/{run.id}"
+        await db.flush()
+        factory = task_factory or _default_task_factory
+        task = await factory(db, run, params)
+        run.task_id = task.id
+        await db.commit()
     return {
         "run_id": run.id,
         "task_id": task.id,
-        "seed": seed_base,
+        "seed": None,
         "batch_dir": run.batch_dir,
         "total": 1,
     }
@@ -536,14 +621,18 @@ async def create_run(
 async def _default_task_factory(
     db: AsyncSession, run: GenerationRun, params: dict
 ) -> TaskQueue:
-    """建 ``image_gen`` 任务（总张数、run_id、seeds 进 task.result）。"""
+    """建 ``image_gen`` 任务（总张数、run_id、seeds 进 task.result）。
+
+    云端（ark）没有 seed 列表：``params["seeds"]`` 不存在，result 里给空列表即可；
+    任务执行器按 provider 分流，不会读它。
+    """
     task = TaskQueue(
         type="image_gen",
         status="pending",
         progress=0,
         total=params["count"],
         done=0,
-        result={"run_id": run.id, "seeds": params["seeds"]},
+        result={"run_id": run.id, "seeds": params.get("seeds") or []},
         max_retries=1,  # 出图幂等（重复生成只是多花时间），允许重试一次
     )
     db.add(task)
@@ -1366,6 +1455,10 @@ async def retry_run(db: AsyncSession, run_id: int, seed: int = 0) -> dict:
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
         "pose_id": params.get("pose_id"),
+        # P1-4：云端档位的 size/watermark 不在宽高/steps 里，重跑与单张重出必须原样带上，
+        # 否则「同参重跑」会悄悄退回默认 1536x2048 + 水印关
+        "size": params.get("size"),
+        "watermark": params.get("watermark"),
         "seed": seed,
     }
     return await create_run(db, payload)
@@ -1411,6 +1504,10 @@ async def regenerate_candidate(
         "model_key": run.model_key,
         "reference_ids": json.loads(run.reference_ids or "[]"),
         "pose_id": params.get("pose_id"),
+        # P1-4：云端档位的 size/watermark 不在宽高/steps 里，重跑与单张重出必须原样带上，
+        # 否则「同参重跑」会悄悄退回默认 1536x2048 + 水印关
+        "size": params.get("size"),
+        "watermark": params.get("watermark"),
         "seed": seed,
     }
     out = await create_run(db, payload)

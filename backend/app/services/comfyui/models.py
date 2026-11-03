@@ -84,7 +84,9 @@ MODEL_SPECS: dict[str, dict] = {
         "provider": "ark",
         "kind": "i2i",
         "vram_gib": 0,  # 云端不占本机显存
-        "max_refs": 10,
+        # 云端 API 的 reference_ids 只接受 1 张素材图（姿态图由 pose_id 单独准备并作为
+        # 第 2 张参考图上传）；前端按 max_refs 校验参考素材数量，这里是 1 而不是 10。
+        "max_refs": 1,
         "max_poses": 10,
         "defaults": {
             "width": 1536,

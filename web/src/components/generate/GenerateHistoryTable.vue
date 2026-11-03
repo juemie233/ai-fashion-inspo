@@ -98,6 +98,21 @@ function modelUncensored(key: string): boolean {
   return props.status?.models_meta?.[key]?.uncensored === true
 }
 
+/** 该批次是否云端档位（provider=ark）：云端无 seed，重跑=重新生成 */
+function isCloudRun(record: GenerationRunBrief): boolean {
+  return props.status?.models_meta?.[record.model_key]?.provider === 'ark'
+}
+
+/** 操作列重跑文案：云端没有 seed，用「重新生成」避免暗示可复现 */
+function retryLabel(record: GenerationRunBrief): string {
+  return isCloudRun(record) ? '重新生成' : '同参重跑'
+}
+
+/** 候选图 seed 标签：云端每次随机（seed 恒为 0），不要显示误导性的 seed 0 */
+function seedText(seed: number): string {
+  return seed > 0 ? `seed ${seed}` : '无 seed（每次随机）'
+}
+
 /** 从历史参数快照里取数值（老记录可能缺字段，取不到就不展示） */
 function paramNumber(record: GenerationRunBrief, key: string): number | null {
   const value = record.params?.[key]
@@ -691,8 +706,17 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
       </a-table-column>
       <a-table-column title="操作" :width="380">
         <template #cell="{ record }">
-          <a-button size="mini" :loading="submitting" @click="emit('retry', record.id)">
-            同参重跑
+          <a-button
+            size="mini"
+            :loading="submitting"
+            :title="
+              isCloudRun(record)
+                ? '云端无 seed：按原素材/姿势重新生成一个批次'
+                : '同参数新建批次（可复现或生成变体）'
+            "
+            @click="emit('retry', record.id)"
+          >
+            {{ retryLabel(record) }}
           </a-button>
           <!-- 带入表单：把参数填回左侧面板，可先改 seed/参考图再生成（与「同参重跑」互补） -->
           <a-button size="mini" style="margin-left: 6px" @click="emit('apply-to-form', record.id)">
@@ -827,7 +851,7 @@ defineExpose({ resetPicked, onDateRangeChange, closeMetaEditor })
                     :preview-src="candidateUrl(record.id, item.filename, 1024)"
                     :alt="item.filename"
                   />
-                  <span class="ghd-cand-seed">seed {{ item.seed }}</span>
+                  <span class="ghd-cand-seed">{{ seedText(item.seed) }}</span>
                   <a-tag v-if="item.imported" size="small" color="green">已入库</a-tag>
                   <a-checkbox
                     v-else

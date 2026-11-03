@@ -322,4 +322,26 @@ describe('GenerateView 参数透传', () => {
       }),
     )
   })
+
+  it('ComfyUI 未启动但云端就绪：横幅不显示 undefined GiB（P2-11）', async () => {
+    mocks.statusRef.value = {
+      ready: true,
+      reason: null,
+      comfyui: {},
+      models: {},
+      ollama_resident: [],
+      ark: {
+        ready: true,
+        reason: null,
+        model: 'doubao-seedream-5-0-flash-260915',
+        base_url: 'https://ark',
+      },
+    }
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('云端 Seedream 就绪')
+    expect(wrapper.text()).not.toContain('undefined')
+    wrapper.unmount()
+  })
 })

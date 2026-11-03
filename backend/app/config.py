@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     seedream_model: str = "doubao-seedream-5-0-flash-260915"
     seedream_timeout: float = 120.0
+    # 单次云端生成请求的重试次数（含第一次；429/5xx/短时网络错误才重试）。
+    # 下载结果单独重试（见 seedream_client.DOWNLOAD_ATTEMPTS），不重新生成、不重复计费。
+    seedream_max_attempts: int = 3
     seedream_max_poses: int = 10
     seedream_daily_budget_cny: float = 5.0
 

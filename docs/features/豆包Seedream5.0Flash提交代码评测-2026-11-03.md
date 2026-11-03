@@ -5,6 +5,7 @@
 > **评审时间**：2026-11-03。**只读评审，未改代码**。
 > **评审范围**：该提交改动的 16 个文件、1311 行新增 / 32 行删除。按用户要求，**不评估安全面**（密钥、隐私、日志泄露、审核绕过、访问控制等）；隐私弹窗只作为交互行为提及，不作为安全结论。
 > **快照说明**：本文按该提交的代码快照评审。后续提交（如 `949f670` 隐藏云端一键出图、`a288197` 多姿态）可能已修掉部分问题，本文不回溯评价后续改动。
+> **修复记录（2026-11-03）**：已按 §7 建议顺序修复全部 P0/P1/P2/P3 问题，实现细节见 [接入方案 §15](./豆包Seedream5.0Flash图生图接入方案.md)，逐项对照见文末 §11。
 
 ---
 
@@ -321,3 +322,36 @@ for attempt in range(1, MAX_ATTEMPTS + 1):
 ## 10. 最终建议
 
 **可以继续保留这条链路，但启用云端档位前必须完成 P0-1、P0-2、P1-1**；P1-2～P1-6 建议在同一轮修复，否则用户会遇到“描述不生效 / 批次卡住 / 重跑参数变了 / 取消没反应”这类难以解释的行为。修完后再按接入方案里的 10 素材 × 3 姿态做一次人工对比，确认质量与成本。
+
+---
+
+## 11. 修复记录（2026-11-03）
+
+按 §7 建议顺序逐项修复，**全部 P0/P1/P2/P3 已落地**；实现说明见 [接入方案 §15](./豆包Seedream5.0Flash图生图接入方案.md)。
+
+| 编号 | 结论 | 修复落点 | 验证 |
+| --- | --- | --- | --- |
+| P0-1 | 已修 | `generation_service._ark_prompt_text` 增 `user_prompt`，`_create_ark_run` 传 `payload["prompt"]`；用户要求优先于姿势细节 | `test_generation_seedream.py` 断言 `run.prompt` 含用户原文 |
+| P0-2 | 已修 | `image_gen._execute_seedream` 全流程异常兜底，失败统一写 `run.status=failed` + `error` | 素材缺失/姿势 503/坏图三类用例 |
+| P1-1 | 已修 | 生成与取图分离：生成按 `SEEDREAM_MAX_ATTEMPTS` 重试，下载单独重试 3 次且不重新生成 | `test_download_failure_retries_download_only` 断言 POST 只 1 次 |
+| P1-2 | 已修（后续提交，保留） | 云端档位不渲染 `QuickPoseBatchPanel` | `GenerateParamForm.test.ts` 断言文本不含「一键出图」 |
+| P1-3 | 已修 | 云端不写 `seed_base`/`seeds`、响应 `seed=null`；前端「无 seed（每次随机）」/「重新生成」文案 | 后端创建用例 + 前端三处文案用例 |
+| P1-4 | 已修 | `retry_run`/`regenerate_candidate` 携带 `size`/`watermark`；前端 `applyRunPayload` 恢复云端参数 | 后端 retry 用例 + 前端带入历史用例 |
+| P1-5 | 已修 | 后端双人姿态 400；前端选姿态过滤 + 提交前拦截 | 后端 400 用例 + 前端过滤用例 |
+| P1-6 | 已修 | `SeedreamClient.generate` 支持 `should_cancel`（0.5s 轮询），取消置 cancelled | 客户端取消用例 + 执行器取消用例 |
+| P2-1 | 已修 | 预算日改用本地零点（naive UTC 存储） | `_ark_budget_day_start` 单测 |
+| P2-2 | 已修 | 创建时 `_ARK_BUDGET_LOCK` 串行化；执行前二次检查 | 执行前超预算用例（不发请求） |
+| P2-3 | 已修 | 响应实际尺寸回写 `params.size/width/height` | 实际尺寸回写用例 |
+| P2-4 | 已修 | 执行用 `params.model_id`，不再用全局配置 | 提交后改配置用例 |
+| P2-5 | 已修 | 回写 `ark_request_id`/`ark_elapsed_s`/`ark_usage`/`ark_model_id` | 执行器落盘用例 |
+| P2-6 | 已修 | EXIF 转正 + 透明贴白底 | 预处理单测（方向/白底/缩放） |
+| P2-7 | 已修 | 审核关键词中英文都匹配 | 中文审核映射用例 |
+| P2-8 | 已修 | 429 遵守 `Retry-After`，退避取较大值 | Retry-After 用例 |
+| P2-9 | 已修 | 下载响应大小上限 32 MB | 超限拒绝用例 |
+| P2-10 | 已修 | prompt 上限 300 字，用户要求优先 | 截断用例 |
+| P2-11 | 已修 | `GenerateView` 增加「ComfyUI 未启动但云端就绪」横幅分支 | 前端横幅用例 |
+| P2-12 | 已修 | 云端档位 `max_refs=1`，`/models` 与 `/status` 下发，前端按它校验 | `/models` 元数据用例 |
+| P2-13 | 已修 | 云端费用 `costPerImage || 0.12` | 前端费用提示（既有用例覆盖） |
+| P3 | 已修 | 删 `_MIME_BY_MAGIC`、`_execute_seedream` 的 `spec` 参数；`SEEDREAM_MAX_POSES` 经 `max_poses` 真正下发；能力字段被 UI 消费；`_get_client` 加锁 | 元数据用例 + lint/vulture |
+
+**验证**：`PYTHON_BIN=py bash scripts/ci/test.sh` 13 项门禁全绿；后端新增/更新用例见各测试文件共 40+ 条断言；前端 `npm test` 全量通过。

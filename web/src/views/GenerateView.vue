@@ -104,6 +104,13 @@ function resolveCandidateUrl(path: string): string {
 
 const ready = computed(() => status.value?.ready === true)
 
+/** 当前批次档位是否支持 seed（云端 Seedream 无 seed，候选区文案改「重新生成」） */
+const seedSupported = computed(() => {
+  const key = run.value?.model_key
+  if (!key) return true
+  return status.value?.models_meta?.[key]?.supports_seed !== false
+})
+
 /** 档位目录缓存（上次探测成功的 MODEL_SPECS 快照）：探测要 4.4 秒，先用它把档位列出来 */
 const cachedModelsMeta = readCachedModelsMeta()
 
@@ -387,11 +394,24 @@ onUnmounted(stopPoll)
       <div class="gen-hint">
         启动方式：双击 <code>D:\AI\ComfyUI\run_nvidia_gpu.bat</code>，等浏览器能打开
         <code>http://127.0.0.1:8188</code> 后点「刷新环境」。
+        <template v-if="!status.ark?.ready">
+          / 云端出图未启用：在 backend/.env 设置 ARK_ENABLED=true 与 ARK_API_KEY 后重启后端。
+        </template>
       </div>
+    </a-alert>
+    <!-- 本地 ComfyUI 没起来但云端已就绪：不要把 undefined GiB 当成功横幅展示 -->
+    <a-alert
+      v-else-if="status && status.ark?.ready && !status.comfyui.version"
+      type="success"
+      class="gen-alert"
+    >
+      云端 Seedream 就绪 · {{ status.ark.model }}（仅云端档位可用；本地 ComfyUI 未启动）
+      <span class="gen-hint">素材图 + 姿态图会上传到火山引擎方舟；本地档位需先启动 ComfyUI。</span>
     </a-alert>
     <a-alert v-else-if="status" type="success" class="gen-alert">
       ComfyUI {{ status.comfyui.version }} 就绪 · 显存 {{ status.comfyui.vram_free_gib }} /
       {{ status.comfyui.vram_total_gib }} GiB 可用
+      <span v-if="status.ark?.ready" class="gen-hint"> · 云端 Seedream 已就绪</span>
       <span v-if="status.ollama_resident.length" class="gen-hint">
         · Ollama 占用：{{
           status.ollama_resident.map((m) => m.name).join('、')
@@ -430,6 +450,7 @@ onUnmounted(stopPoll)
           :selected="selected"
           :stage-text="stageText"
           :last-seed="lastSeed"
+          :seed-supported="seedSupported"
           :submitting="submitting"
           @preview="openLightbox"
           @toggle="toggle"
