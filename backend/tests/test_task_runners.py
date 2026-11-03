@@ -574,6 +574,45 @@ async def test_vector_backfill_real_load_path_with_tags(client, upload, monkeypa
         assert task.result["image_done"] == 1
 
 
+async def test_vector_backfill_文本全失败跳过图像编码(client, upload, monkeypatch):
+    """Ollama 不可用（文本全失败）→ 不进入 CLIP 图像编码（2026-11-02 卡死快路径）。
+
+    现场：Ollama 未启动，6 个素材文本全失败后仍去加载/跑 CLIP，随后 worker 卡死。
+    这里锁住「文本全失败 → 跳过图像编码 + 任务按失败收尾」的语义。
+    """
+    insp_id = upload().json()["id"]
+    r = client.post(
+        f"/api/inspirations/{insp_id}/tags", json={"names": ["白色"], "category": "color"}
+    )
+    assert r.status_code == 200, r.text
+
+    from app.services.vector import embedding as emb_module
+
+    async def text_down(_text):
+        return None
+
+    image_calls: list[list[str]] = []
+
+    async def fake_image_embs(file_paths):
+        image_calls.append(list(file_paths))
+        return [[0.3, 0.4] for _ in file_paths]
+
+    monkeypatch.setattr(emb_module, "generate_text_embedding", text_down)
+    monkeypatch.setattr(emb_module, "generate_image_embeddings", fake_image_embs)
+
+    async with async_session() as db:
+        task = await _make_backfill_task(db, [insp_id])
+        with pytest.raises(PermanentTaskError):
+            await vb_module.execute_vector_backfill(db, task)
+        await db.refresh(task)
+
+    assert image_calls == [], "文本全失败时不应再跑 CLIP 图像编码"
+    assert task.result["text_failed"] == 1
+    # 图像没编码 → 由执行器计入 image_failed（有图但拿不到向量）；
+    # 关键是 CLIP 编码器一次都没被调用
+    assert task.result["image_failed"] == 1
+
+
 async def test_vector_backfill_skips_deleted_inspiration(client, upload, monkeypatch):
     """已删除（垃圾桶）素材在回填中被跳过，不生成向量也不计入失败。"""
     insp_id = upload().json()["id"]

@@ -106,6 +106,31 @@ _TEXT_TIMEOUT_S = 15.0
 _TEXT_ATTEMPTS = 2
 _TEXT_RETRY_BACKOFF_S = 1.5
 
+# 「Ollama 连接不可达」熔断（2026-11-02 卡死事故复盘）：
+# 现场 Ollama 未启动，6 个素材在「每条文本 × 多档截断 × 2 次尝试」上耗了数分钟，
+# 期间 worker 单并发槽位被占死，后续出图任务一直排队。连接类异常（拒绝连接/连接
+# 超时）不是几秒内能自愈的瞬时抖动，因此：**判一次即熔断 60 秒**，期间的后续嵌入
+# 直接返回 None（计入 text_failed，由任务收尾统一登记），不再逐条等超时。
+_OLLAMA_DOWN_COOLDOWN_S = 60.0
+_ollama_down_until = 0.0
+
+
+def _mark_ollama_unreachable() -> None:
+    """记录 Ollama 连接不可达，进入冷却（期间文本嵌入快速失败）。"""
+    global _ollama_down_until
+    _ollama_down_until = time.monotonic() + _OLLAMA_DOWN_COOLDOWN_S
+
+
+def _ollama_in_cooldown() -> bool:
+    """Ollama 是否处于「刚判定不可达」的冷却窗口。"""
+    return time.monotonic() < _ollama_down_until
+
+
+def reset_ollama_cooldown() -> None:
+    """清除熔断状态（Ollama 恢复/测试隔离用）。"""
+    global _ollama_down_until
+    _ollama_down_until = 0.0
+
 
 async def generate_text_embedding(text: str) -> list[float] | None:
     """通过 Ollama embedding 模型生成文本向量（带进程内缓存）。
@@ -131,6 +156,10 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     cached = _text_cache.get(text)
     if cached is not None:
         return list(cached)
+    if _ollama_in_cooldown():
+        # 60 秒内刚判定 Ollama 连不上：直接失败，别让每条文本都等一次超时
+        logger.debug("Ollama 连接不可达（熔断冷却中），跳过文本嵌入: %s", text[:50])
+        return None
     # 逐级截断重试：None=全文，超长报 context 错误时依次减半
     for limit in (None, 1024, 512, 256):
         payload = text if limit is None else text[:limit]
@@ -149,6 +178,16 @@ async def generate_text_embedding(text: str) -> list[float] | None:
                 # 只剩「生成文本向量失败: 」，2026-09-27 那 27 分钟的故障就是
                 # 因为这行空日志而难以定位。
                 detail = f"{type(e).__name__}: {e or '无详情'}"
+                if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+                    # Ollama 没启动 / 端口不通：不是秒级自愈的抖动，判一次即熔断，
+                    # 不再重试（重试只会让每条文本再等一次超时，白白占住任务槽位）
+                    _mark_ollama_unreachable()
+                    logger.warning(
+                        "Ollama 连接不可达（%s），熔断 %ss：后续文本嵌入直接失败",
+                        detail,
+                        int(_OLLAMA_DOWN_COOLDOWN_S),
+                    )
+                    return None
                 if attempt < _TEXT_ATTEMPTS:
                     logger.warning(
                         f"文本嵌入请求异常（{detail}），{_TEXT_RETRY_BACKOFF_S}s 后重试: "
@@ -161,6 +200,7 @@ async def generate_text_embedding(text: str) -> list[float] | None:
                 )
                 return None
             if resp.status_code == 200:
+                reset_ollama_cooldown()  # 成功响应说明 Ollama 已恢复
                 embedding = resp.json().get("embedding")
                 if not embedding:
                     logger.warning(f"文本嵌入返回空结果: {payload[:50]}")

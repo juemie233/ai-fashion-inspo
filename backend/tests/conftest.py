@@ -181,6 +181,12 @@ def clean_state(client):
     from app.services.vector import store as vector_store
 
     vector_store.reset_connection()
+
+    # Ollama 熔断状态是模块级全局：上一个用例模拟「连接不可达」后，若不重置会让
+    # 后续用例的文本嵌入直接走冷却快速失败（测试之间相互污染）
+    from app.services.vector import embedding as embedding_module
+
+    embedding_module.reset_ollama_cooldown()
     yield
 
 

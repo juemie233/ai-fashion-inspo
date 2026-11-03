@@ -60,6 +60,16 @@ _HEARTBEAT_INTERVAL = 10.0
 # 心跳超时阈值（秒）：running 任务心跳超过该时长未更新，视为「认领它的 worker 已死」
 _STALE_HEARTBEAT_THRESHOLD = 90.0
 
+# 任务看门狗检查间隔（秒）：低频扫「本 worker 认领的 running 任务是否长时间没进度」
+_STALL_CHECK_INTERVAL = 30.0
+
+# 看门狗已取消的任务 id（_run_task_safe 据此区分「看门狗取消」与「进程关闭取消」，
+# 只对前者写 failed 终态；关闭时保留 running 交给下次启动的 _reset_stale_tasks）
+_WATCHDOG_CANCELLED: set[int] = set()
+
+# task_id -> 本次执行台账行 id（看门狗收尾时补 finished_at 用；_run_task_safe 兜底清理）
+_RUN_LOG_IDS: dict[int, int] = {}
+
 # 僵尸任务清扫间隔（秒）：worker 运行期周期性执行 _reset_stale_tasks。
 # 仅靠启动时的一次清扫有漏洞：关闭服务后 90s 内快速重启（restart.sh 常见
 # 耗时），遗留 running 任务的心跳仍「新鲜」，启动清扫会跳过；此后无人再
@@ -236,6 +246,7 @@ async def _start_run_log(db: AsyncSession, task: TaskQueue) -> int | None:
         await db.commit()
         # 本次执行的账本行 id：日志格式里的 run= 字段据此与 task_run_logs 对齐
         run_id_var.set(str(row.id))
+        _RUN_LOG_IDS[task.id] = row.id
         logger.info(
             "任务开始: #%s (%s) total=%s attempt=%s gpu=%s",
             task.id,
@@ -431,12 +442,84 @@ async def _run_task_safe(task_id: int) -> None:
     try:
         await _run_task(task_id)
     except asyncio.CancelledError:
+        # 看门狗取消：写 failed 终态 + 补台账结束时间，再放行异常让槽位释放。
+        # 进程关闭（asyncio.run 收尾）取消时不写终态：任务保持 running，下次启动
+        # 由 _reset_stale_tasks 按心跳超时重置，语义与历史一致。
+        if task_id in _WATCHDOG_CANCELLED:
+            _WATCHDOG_CANCELLED.discard(task_id)
+            try:
+                await _fail_stalled_task(task_id)
+            except Exception:  # noqa: BLE001 —— 收尾失败不能把 worker 主循环带崩
+                logger.exception("看门狗收尾失败: #%s", task_id)
         raise
     except Exception:
         logger.exception(f"任务执行协程异常退出: #{task_id}")
     finally:
+        _RUN_LOG_IDS.pop(task_id, None)
         run_id_var.reset(run_token)
         task_id_var.reset(task_token)
+
+
+async def _stalled_task_ids(worker_id: str, stall_seconds: int) -> list[int]:
+    """找出本 worker 认领、但超过 ``stall_seconds`` 没有进度更新的 running 任务。
+
+    进度更新的证据是 ``task_queue.updated_at``（各执行器在写进度/心跳时都会刷新；
+    心跳循环也会每 10 秒刷新被认领任务的心跳，但**不刷新 updated_at**，所以这里
+    只能代表「执行器自己有没有动」——这正是看门狗要的语义）。
+    """
+    cutoff = utcnow() - timedelta(seconds=stall_seconds)
+    async with async_session() as db:
+        rows = (
+            await db.execute(
+                select(TaskQueue.id).where(
+                    TaskQueue.status == "running",
+                    TaskQueue.claimed_by == worker_id,
+                    or_(
+                        TaskQueue.updated_at.is_(None),
+                        TaskQueue.updated_at < cutoff,
+                    ),
+                )
+            )
+        ).scalars().all()
+    return list(rows)
+
+
+async def _fail_stalled_task(task_id: int) -> None:
+    """看门狗取消任务后的收尾：标记 failed、补台账结束时间、广播失败事件。
+
+    为什么不在取消前写库：取消前写会让卡死的执行协程与新写操作共用 SQLite 写锁，
+    极端情况下反而卡住收尾；先 cancel 释放它持有的会话/锁，再由本函数用新会话收尾。
+    """
+    minutes = max(1, int(settings.task_stall_timeout_seconds) // 60)
+    message = (
+        f"任务超过 {minutes} 分钟无进度更新，已由看门狗强制终止（释放并发槽位；"
+        f"可重新提交，已产生的数据保留）"
+    )
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        if task is None:
+            return
+        if task.status == "running":
+            task.status = "failed"
+            task.error = message
+            task.next_retry_at = None
+            task.updated_at = utcnow()
+            await db.commit()
+            await _finish_run_log(
+                db,
+                _RUN_LOG_IDS.pop(task_id, None),
+                status="failed",
+                item_count=task.done,
+                error=message,
+            )
+            await _broadcast_task_event(task, "failed", error=message)
+        logger.error(
+            "任务看门狗终止: #%s (%s) 已 %s 秒无进度更新，状态=%s",
+            task.id,
+            task.type,
+            settings.task_stall_timeout_seconds,
+            task.status,
+        )
 
 
 async def _reset_stale_tasks() -> None:
@@ -560,8 +643,10 @@ async def _worker_loop(worker_id: str) -> None:
     注意：并发调大会增加 Ollama 显存压力与 SQLite 写锁竞争，建议 1~2。
     """
     logger.info(f"任务队列 worker 已启动（{worker_id}），开始轮询...")
-    running: set[asyncio.Task] = set()
+    # task -> task_id：看门狗要按 id 匹配「是否卡死」，不能只有 Task 集合
+    running: dict[asyncio.Task, int] = {}
     last_stale_sweep = 0.0  # 启动后首轮即清扫（main 启动清扫后的兜底补位）
+    last_stall_check = 0.0
     while True:
         try:
             # 周期性清扫心跳超时的遗留 running 任务（修复：仅启动时清扫一次，
@@ -569,14 +654,35 @@ async def _worker_loop(worker_id: str) -> None:
             if time.monotonic() - last_stale_sweep >= _STALE_SWEEP_INTERVAL:
                 last_stale_sweep = time.monotonic()
                 await _reset_stale_tasks()
+            # 任务看门狗：本 worker 认领的任务长时间没进度 → cancel + 写 failed。
+            # 低频（30s）执行，查询只涉及本 worker 的少数 running 行。
+            stall_seconds = int(settings.task_stall_timeout_seconds or 0)
+            if (
+                stall_seconds > 0
+                and time.monotonic() - last_stall_check >= _STALL_CHECK_INTERVAL
+            ):
+                last_stall_check = time.monotonic()
+                stalled = set(await _stalled_task_ids(worker_id, stall_seconds))
+                if stalled:
+                    for task, task_id in list(running.items()):
+                        if task_id in stalled and not task.done():
+                            logger.error(
+                                "[看门狗] 任务 #%s 超过 %s 秒无进度更新，强制取消并标记失败",
+                                task_id,
+                                stall_seconds,
+                            )
+                            _WATCHDOG_CANCELLED.add(task_id)
+                            task.cancel()
             # 回收已完成的执行协程（异常已在 _run_task_safe 内记录，不会丢失槽位）
-            running = {t for t in running if not t.done()}
+            running = {
+                task: task_id for task, task_id in running.items() if not task.done()
+            }
             concurrency = max(1, int(settings.worker_concurrency))
             while len(running) < concurrency:
                 task_id = await _claim_next_task(worker_id)
                 if task_id is None:
                     break
-                running.add(asyncio.create_task(_run_task_safe(task_id)))
+                running[asyncio.create_task(_run_task_safe(task_id))] = task_id
             await asyncio.sleep(_POLL_INTERVAL)
         except asyncio.CancelledError:
             raise
@@ -655,6 +761,36 @@ async def _cleanup_old_run_logs() -> None:
         logger.warning("清理过期任务运行台账失败（忽略）：%s", exc)
 
 
+async def _finalize_orphan_run_logs() -> None:
+    """启动时把遗留的 running 台账标记 failed（进程崩溃/看门狗没收尾的孤儿行）。
+
+    2026-11-02 现场留下一条 task_id=745 的 running 台账（任务行已被删除），
+    永远等不到 finished_at；不清理的话「运行记录」里会一直显示"进行中"。
+    只收尾**超过 2 小时**的 running 行：多 worker 部署时另一实例正在跑的任务
+    （正常不会超过 2 小时，重负载任务也持续刷新进度）不受影响。
+    """
+    cutoff = utcnow() - timedelta(hours=2)
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                update(TaskRunLog)
+                .where(TaskRunLog.status == "running", TaskRunLog.started_at < cutoff)
+                .values(
+                    status="failed",
+                    finished_at=utcnow(),
+                    error="进程异常终止：台账未收尾（worker 启动时补齐）",
+                )
+            )
+            await db.commit()
+            if result.rowcount:
+                logger.warning(
+                    "[台账收尾] 把 %s 条超过 2 小时仍未结束的 running 台账标记为 failed",
+                    result.rowcount,
+                )
+    except Exception as exc:  # noqa: BLE001 —— 台账收尾失败不能阻断 worker 启动
+        logger.warning("收尾孤儿任务运行台账失败（忽略）：%s", exc)
+
+
 def _setup_logging() -> None:
     """统一日志（root handler + 级别/格式）+ 按天 ``analyze-YYYY-MM-DD.log``。
 
@@ -690,6 +826,7 @@ async def main() -> None:
     # 日志/台账保留期清理（P1-4）：启动时各做一次，失败只告警不阻断
     _cleanup_old_analyze_logs()
     await _cleanup_old_run_logs()
+    await _finalize_orphan_run_logs()
 
     worker_id = _build_worker_id()
     await _reset_stale_tasks()

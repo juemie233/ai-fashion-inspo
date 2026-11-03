@@ -1,6 +1,9 @@
 """任务队列路由：查询任务状态、任务列表、取消任务与删除任务。"""
 
+import json
+import logging
 from datetime import timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, delete, func, or_, select, update
@@ -15,6 +18,36 @@ from app.utils.time import utcnow
 from app.worker import _STALE_HEARTBEAT_THRESHOLD
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+logger = logging.getLogger(__name__)
+
+"""列表接口回传的 result 前缀长度（字符）。
+
+为什么截断：单条 ``tag_health_scan`` 的 result 可达 2.9 MB，历史数据里这类行占
+result 总量的 99%——列表按 200 行返回曾是 **30 MB/次** 响应（前端每 5 秒轮询一次），
+实测 ``GET /api/tasks?size=200`` 耗时 1.3s。列表只需要「干成了什么」的摘要字段
+（都在前几 KB），完整 result 由详情接口 ``GET /api/tasks/{id}`` 提供。
+"""
+RESULT_PREVIEW_CHARS = 8192
+
+
+def _parse_result_preview(prefix: str | None) -> dict | None:
+    """解析 result 的 JSON 前缀；被截断的超长结果解析失败时按 None 返回。"""
+    if not prefix:
+        return None
+    try:
+        value = json.loads(prefix)
+    except (TypeError, ValueError) as exc:
+        # 超长 result 被 substr 截断：解析失败是预期情况（列表不展示完整结果）
+        logger.debug("_parse_result_preview: 忽略异常（预期降级）：%s", exc)
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _task_list_item(row: Any, result: dict | None) -> TaskOut:
+    """把「不含 result 的列集合」组装成 TaskOut（result 用前缀解析结果填入）。"""
+    payload = dict(row._mapping)
+    payload["result"] = result
+    return TaskOut.model_validate(payload)
 
 # 支持「运行中取消」的任务类型：执行器内部每批检查 cancelled 后自行停止。
 # 人脸扫描/匹配任务耗时较长（分钟级），用户需要能随时中断（增量语义下
@@ -79,26 +112,49 @@ async def list_tasks(
     排序：**已暂停的排最前**（等着用户点「继续」或「取消」，不该被新任务挤到后面），
     同组内仍按 id 倒序（最新在前）。与前端 `compareUnifiedTasks` 同一口径——前端把
     队列任务与采集任务合并后才分页，两侧顺序一致才不会来回跳。
+
+    性能：分页只取「除 result 外的所有列」，再按 8KB 前缀单独查 result——避免把
+    单条 2.9MB 的重型结果整列读出来（历史数据 200 行会到 30MB/次，前端还每 5 秒
+    轮询）。超长结果的列表里 ``result=None``，完整结果走详情接口。
     """
-    query = select(TaskQueue)
+    conditions = []
     if status:
-        query = query.where(TaskQueue.status == status)
+        conditions.append(TaskQueue.status == status)
     if type:
-        query = query.where(TaskQueue.type == type)
-    query = query.order_by(
-        case((TaskQueue.status == "paused", 0), else_=1),
-        TaskQueue.id.desc(),
-    )
+        conditions.append(TaskQueue.type == type)
 
-    count_query = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_query)).scalar() or 0
+    total = (
+        await db.execute(select(func.count()).select_from(TaskQueue).where(*conditions))
+    ).scalar() or 0
 
-    query = query.offset((page - 1) * size).limit(size)
-    result = await db.execute(query)
-    tasks = result.scalars().all()
+    columns = [column for column in TaskQueue.__table__.columns if column.key != "result"]
+    page_rows = (
+        await db.execute(
+            select(*columns)
+            .where(*conditions)
+            .order_by(
+                case((TaskQueue.status == "paused", 0), else_=1),
+                TaskQueue.id.desc(),
+            )
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+    ).all()
+
+    previews: dict[int, dict | None] = {}
+    if page_rows:
+        preview_rows = await db.execute(
+            select(
+                TaskQueue.id,
+                func.substr(TaskQueue.result, 1, RESULT_PREVIEW_CHARS),
+            ).where(TaskQueue.id.in_([row.id for row in page_rows]))
+        )
+        previews = {
+            row_id: _parse_result_preview(prefix) for row_id, prefix in preview_rows
+        }
 
     return {
-        "items": [TaskOut.model_validate(t) for t in tasks],
+        "items": [_task_list_item(row, previews.get(row.id)) for row in page_rows],
         "total": total,
         "page": page,
         "size": size,

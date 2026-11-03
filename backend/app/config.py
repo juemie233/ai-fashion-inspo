@@ -170,6 +170,12 @@ class Settings(BaseSettings):
     # SQLite 写锁竞争也随之增大（多任务同时写进度/心跳易触发 database is locked），
     # 建议保持 1~2；仅多卡/强机器再尝试更大值。可在 .env 用 WORKER_CONCURRENCY 覆盖
     worker_concurrency: int = 1
+    # 任务看门狗：单个任务超过该秒数**没有进度更新**即视为卡死，worker 取消它并
+    # 标记 failed（释放并发槽位，避免一个卡死任务把整个队列堵死——2026-11-02 实测
+    # 一个向量回填卡死导致 4 个出图任务永远排队）。默认 30 分钟：比单次最慢操作
+    # （云端出图 600s / CLIP 首次加载数分钟）留足余量；0 = 关闭看门狗。
+    # 可在 .env 用 TASK_STALL_TIMEOUT_SECONDS 覆盖
+    task_stall_timeout_seconds: int = 1800
     # 批内分析并发度：批量分析/组合分析/质量审核任务内部同时分析的素材数
     # （原写死常量 _ANALYZE_CONCURRENCY=1）。注意 worker 与 API 进程
     # （routers/ai_shared.py 的独立信号量=2）互不感知，最坏并发出路为

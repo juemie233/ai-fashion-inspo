@@ -36,6 +36,39 @@ async def test_list_tasks(client):
     assert len(data["items"]) == 2
 
 
+async def test_list_tasks_result_preview_不返回超大结果(client):
+    """列表只回传 8KB 前缀内的 result（2026-11-02 性能加固）。
+
+    历史数据里 6 条 tag_health_scan 的 result 合计 30MB，列表按 200 行返回曾是
+    30MB/次响应、前端每 5 秒轮询 → 任务页明显卡；现在超长结果列表置 None，
+    小结果（前端摘要要用的字段）原样保留，完整结果走详情接口。
+    """
+    big = {"tags": [{"index": index} for index in range(200_000)]}  # 远超 8KB
+    small = {"done": 3, "notices": ["有一条提示"]}
+    async with async_session() as db:
+        big_task = TaskQueue(
+            type="tag_health_scan", status="success", progress=100, total=1, done=1, result=big
+        )
+        small_task = TaskQueue(
+            type="batch_analyze", status="success", progress=100, total=1, done=1, result=small
+        )
+        db.add_all([big_task, small_task])
+        await db.commit()
+        await db.refresh(big_task)
+        await db.refresh(small_task)
+        big_id, small_id = big_task.id, small_task.id
+
+    data = client.get("/api/tasks").json()
+    by_type = {item["type"]: item for item in data["items"]}
+    assert by_type["tag_health_scan"]["result"] is None  # 超长结果不在列表里返回
+    assert by_type["batch_analyze"]["result"] == small  # 小结果保留（摘要要用）
+
+    # 详情接口仍给完整 result（展开/排障用）
+    detail = client.get(f"/api/tasks/{big_id}").json()
+    assert detail["result"]["tags"][0] == {"index": 0}
+    assert client.get(f"/api/tasks/{small_id}").json()["result"] == small
+
+
 async def test_list_tasks_paused_first(client):
     """已暂停的任务排最前（哪怕它比别的任务更早创建），同组内仍按最新在前。"""
     paused_old = await _add_task(status="paused", type_="batch_analyze")

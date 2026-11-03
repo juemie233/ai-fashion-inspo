@@ -160,6 +160,22 @@ async def test_text_embedding_network_error_is_logged_with_type(ollama):
     assert await emb.generate_text_embedding("针织") is None
 
 
+async def test_text_embedding_connection_error_熔断快速失败(ollama):
+    """连接不可达（Ollama 没启动）→ 判一次即熔断，后续文本不再逐条等超时。
+
+    2026-11-02 卡死事故：Ollama 未启动时每条文本都要等连接超时并重试，窗口内 6 条
+    素材耗掉数分钟、占死 worker 并发槽位。现在第一条判 ConnectError 后进入 60s 冷却，
+    冷却期内的后续文本直接返回 None（计入 text_failed，由任务收尾统一登记）。
+    """
+    ollama["client"] = _FakeOllama([httpx.ConnectError("connection refused")])
+
+    assert await emb.generate_text_embedding("第一条") is None
+    assert len(ollama["client"].requests) == 1  # 连接类异常不重试
+    # 冷却期内：不再发起请求
+    assert await emb.generate_text_embedding("第二条") is None
+    assert len(ollama["client"].requests) == 1
+
+
 async def test_text_embedding_empty_result_is_none(ollama):
     ollama["client"] = _FakeOllama([_Resp(payload={"embedding": []})])
     assert await emb.generate_text_embedding("针织") is None

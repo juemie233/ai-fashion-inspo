@@ -468,7 +468,11 @@ async def test_worker_loop_claims_until_empty_then_sleeps(monkeypatch):
     monkeypatch.setattr(w, "_claim_next_task", _claim)
     monkeypatch.setattr(w, "_run_task_safe", _run)
     monkeypatch.setattr(w, "_reset_stale_tasks", _claim_none)
-    monkeypatch.setattr(w, "settings", type("S", (), {"worker_concurrency": 4})())
+    monkeypatch.setattr(
+        w,
+        "settings",
+        type("S", (), {"worker_concurrency": 4, "task_stall_timeout_seconds": 0})(),
+    )
     monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
     try:
         with pytest.raises(asyncio.CancelledError):

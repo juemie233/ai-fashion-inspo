@@ -480,8 +480,25 @@ async def _build_material_vectors(
 
     text_vecs = list(await asyncio.gather(*(_embed(text) for text in texts)))
 
+    # 快路径（2026-11-02 卡死事故复盘）：本窗口所有文本都嵌入失败（典型是 Ollama
+    # 未启动 / 嵌入服务挂了）时，**不再进入 CLIP 图像编码**。原因：
+    #   1. 收尾时「本轮零成功」必判任务失败，图像编码跑了也白跑；
+    #   2. CLIP 首次加载 + 批量前向是分钟级重型操作，事故现场正是走完文本失败后
+    #      卡在图像编码链路，把 worker 并发槽位占死；
+    #   3. 只影响「文本全失败」窗口；部分失败/正常窗口仍照常编码图像。
+    has_text = [bool(text) for text in texts]
+    text_all_failed = any(has_text) and not any(vec is not None for vec in text_vecs)
+    if text_all_failed and with_images:
+        image_count = sum(1 for insp in inss if insp.media_type == "image")
+        if image_count:
+            logger.warning(
+                "文本嵌入全部失败（疑似 Ollama 不可用），跳过本窗口 %s 张图像的 "
+                "CLIP 编码（避免重型路径；任务将按失败收尾并重新登记待回填）",
+                image_count,
+            )
+
     image_vecs: list[list[float] | None] = [None] * len(inss)
-    if with_images:
+    if with_images and not text_all_failed:
         image_paths = [
             str(settings.storage_root / insp.file_path)
             for insp in inss
