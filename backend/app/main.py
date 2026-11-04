@@ -132,6 +132,45 @@ async def _scraper_schedule_loop() -> None:
             logger.warning(f"[定时采集] 检查失败: {e}")
 
 
+async def _backfill_task_result_summaries(batch_size: int = 50) -> int:
+    """补齐历史任务的 result_summary（2026-11-03 评审 P1-2）。
+
+    新写入由 ORM 事件自动生成；历史行（迁移前）为空时在启动阶段按 result 计算。
+    分批 commit，避免一次性把几十 MB 的大 JSON 全读进内存。
+    """
+    from sqlalchemy import select, update
+
+    from app.database import async_session
+    from app.models.task import TaskQueue
+    from app.utils.task_summary import summarize_result
+
+    filled = 0
+    while True:
+        async with async_session() as db:
+            rows = (
+                await db.execute(
+                    select(TaskQueue.id, TaskQueue.result)
+                    .where(
+                        TaskQueue.result_summary.is_(None),
+                        TaskQueue.result.is_not(None),
+                    )
+                    .limit(batch_size)
+                )
+            ).all()
+            if not rows:
+                return filled
+            for task_id, result in rows:
+                await db.execute(
+                    update(TaskQueue)
+                    .where(TaskQueue.id == task_id)
+                    .values(result_summary=summarize_result(result))
+                )
+            await db.commit()
+            filled += len(rows)
+            if len(rows) < batch_size:
+                return filled
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用启动与关闭事件处理。"""
@@ -176,6 +215,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 手写迁移兜底（Alembic 不可用或失败时仍能补齐缺失列）
     await ensure_schema()
+
+    # 列表摘要回填：历史任务的 result_summary 为空时按 result 生成
+    # （2026-11-03 评审 P1-2；失败不阻断启动，列表会退回读取 result 前缀）
+    try:
+        filled = await _backfill_task_result_summaries()
+        if filled:
+            logger.info("[启动] 已补齐 %s 条任务列表摘要", filled)
+    except Exception as e:  # noqa: BLE001 —— 摘要回填失败不阻断启动
+        logger.warning("[启动] 任务列表摘要回填失败（列表退回旧前缀策略）: %s", e)
 
     # 启动时清理遗留的僵尸任务
     from app.database import async_session

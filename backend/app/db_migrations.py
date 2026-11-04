@@ -54,6 +54,7 @@ _SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "task_queue": [
         ("claimed_by", "TEXT"),
         ("heartbeat_at", "DATETIME"),
+        ("result_summary", "JSON"),
     ],
 }
 

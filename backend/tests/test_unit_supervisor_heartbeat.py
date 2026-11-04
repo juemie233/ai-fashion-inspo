@@ -61,11 +61,31 @@ def _insert(heartbeat_db: Path, *, pid: int, age_seconds: int) -> None:
     conn.close()
 
 
+def _read(age: float | None, error: str | None = None):
+    """构造心跳读取桩（旧接口形态，兼容部分用例）。"""
+    return lambda _pid: _READING(age, error)
+
+
+def _read_reading(reading):
+    return lambda _pid: reading
+
+
+_READING = None  # 在 fixture 里绑定 supervisor.HeartbeatReading
+
+
+@pytest.fixture(autouse=True)
+def _bind_reading(supervisor):
+    global _READING
+    _READING = supervisor.HeartbeatReading
+    yield
+
+
 def test_read_worker_heartbeat_age_返回秒数(heartbeat_db, supervisor):
     """读得到心跳：返回与当前时间的差（允许几秒误差）。"""
     _insert(heartbeat_db, pid=9948, age_seconds=42)
-    age = supervisor.read_worker_heartbeat_age(9948)
-    assert age is not None and 40 <= age <= 60
+    reading = supervisor._read_worker_heartbeat(9948)
+    assert reading.error is None
+    assert reading.age is not None and 40 <= reading.age <= 60
 
 
 def test_read_worker_heartbeat_age_按_pid_过滤(heartbeat_db, supervisor):
@@ -78,16 +98,27 @@ def test_read_worker_heartbeat_age_按_pid_过滤(heartbeat_db, supervisor):
 def test_read_worker_heartbeat_age_库不存在返回_none(tmp_path, supervisor, monkeypatch):
     """库不存在/pid 为空：返回 None（调用方按启动宽限处理，不触发重启）。"""
     monkeypatch.setattr(supervisor, "_database_path", lambda: tmp_path / "missing.db")
+    missing = supervisor._read_worker_heartbeat(9948)
+    assert missing.age is None and missing.error is not None  # 读失败要能区分
     assert supervisor.read_worker_heartbeat_age(9948) is None
     assert supervisor.read_worker_heartbeat_age(None) is None
 
 
 def test_env_float_非法值回退默认(supervisor, monkeypatch):
-    """WORKER_HEARTBEAT_STALE_SECONDS 配错不应让 supervisor 崩。"""
+    """WORKER_HEARTBEAT_STALE_SECONDS 配错/nan/inf 不应让 supervisor 崩或误判。"""
     monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", "not-a-number")
     assert supervisor._env_float("WORKER_HEARTBEAT_STALE_SECONDS", 90.0) == 90.0
     monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", "45")
     assert supervisor._env_float("WORKER_HEARTBEAT_STALE_SECONDS", 90.0) == 45.0
+    for bad in ("nan", "inf", "-inf"):
+        monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", bad)
+        assert supervisor._env_float("WORKER_HEARTBEAT_STALE_SECONDS", 90.0) == 90.0
+
+
+def test_心跳过期阈值下限校验(supervisor):
+    """P1-5：stale 必须明显大于心跳间隔（10s），否则会持续重启 worker。"""
+    assert supervisor.MIN_HEARTBEAT_STALE_SECONDS >= supervisor.HEARTBEAT_INTERVAL_SECONDS * 3
+    assert supervisor.WORKER_HEARTBEAT_STALE_SECONDS >= supervisor.MIN_HEARTBEAT_STALE_SECONDS
 
 
 def _make_worker_service(supervisor, tmp_path: Path, monkeypatch, *, started_ago: float):
@@ -106,28 +137,52 @@ def _make_worker_service(supervisor, tmp_path: Path, monkeypatch, *, started_ago
 def test_worker_健康判定看心跳年龄(supervisor, tmp_path, monkeypatch):
     """进程活着但心跳过期 → 不健康（触发既有 fail_streak 重启链路）。"""
     svc, log = _make_worker_service(supervisor, tmp_path, monkeypatch, started_ago=200)
+
+    def _reader(reading):
+        # 缓存是生产特性（同一轮健康检查+状态文件只读一次库）；测试切换桩时手动失效
+        svc._hb_reading = None
+        svc._hb_cache_at = 0.0
+        monkeypatch.setattr(supervisor, "_read_worker_heartbeat", _read_reading(reading))
+
     try:
-        monkeypatch.setattr(supervisor, "read_worker_heartbeat_age", lambda _pid: 10.0)
+        _reader(_READING(10.0, None))
         assert svc.healthy() is True
 
-        monkeypatch.setattr(supervisor, "read_worker_heartbeat_age", lambda _pid: 500.0)
+        _reader(_READING(500.0, None))
         assert svc.healthy() is False
 
-        # 读不到心跳（库被锁/还没写过）：启动宽限内视为健康，过了 grace+阈值不健康
-        monkeypatch.setattr(supervisor, "read_worker_heartbeat_age", lambda _pid: None)
+        # 查询成功但还没写出心跳：启动宽限内视为健康，过了 grace+阈值不健康
+        _reader(_READING(None, None))
         assert svc.healthy() is False  # 已运行 200s > 5+90
         svc.started_at = time.time()
+        svc._hb_reading = None
         assert svc.healthy() is True  # 刚启动，给宽限
     finally:
         log.close()
 
 
+def test_worker_心跳读失败不误杀(supervisor, tmp_path, monkeypatch):
+    """P1-1：库不存在/被锁（error 非空）不能按「心跳过期」周期性重启 worker。"""
+    svc, log = _make_worker_service(supervisor, tmp_path, monkeypatch, started_ago=10_000)
+    try:
+        monkeypatch.setattr(
+            supervisor,
+            "_read_worker_heartbeat",
+            _read(None, "任务库不存在: X"),
+        )
+        assert svc.healthy() is True  # 远超启动宽限也不判死
+        assert svc.heartbeat_reading().error == "任务库不存在: X"
+        assert svc.heartbeat_age() is None
+    finally:
+        log.close()
+
+
 def test_状态文件带心跳年龄(supervisor, tmp_path, monkeypatch):
-    """service_status.json 的 worker 条目要带 heartbeat_age_seconds（排障证据）。"""
+    """service_status.json 的 worker 条目要带心跳年龄/读失败原因（排障证据）。"""
     svc, log = _make_worker_service(supervisor, tmp_path, monkeypatch, started_ago=200)
     status_file = tmp_path / "service_status.json"
     monkeypatch.setattr(supervisor, "STATUS_FILE", status_file)
-    monkeypatch.setattr(supervisor, "read_worker_heartbeat_age", lambda _pid: 12.3)
+    monkeypatch.setattr(supervisor, "_read_worker_heartbeat", _read(12.3))
     try:
         supervisor.write_status_file({"worker": svc}, [])
     finally:
@@ -136,4 +191,43 @@ def test_状态文件带心跳年龄(supervisor, tmp_path, monkeypatch):
     payload = json.loads(status_file.read_text(encoding="utf-8"))
     entry = payload["services"]["worker"]
     assert entry["heartbeat_age_seconds"] == 12.3
+    assert entry["heartbeat_read_error"] is None
     assert entry["pid"] == 12345
+
+
+def test_状态文件记录读失败原因(supervisor, tmp_path, monkeypatch):
+    svc, log = _make_worker_service(supervisor, tmp_path, monkeypatch, started_ago=200)
+    status_file = tmp_path / "service_status.json"
+    monkeypatch.setattr(supervisor, "STATUS_FILE", status_file)
+    monkeypatch.setattr(
+        supervisor, "_read_worker_heartbeat", _read(None, "任务库被锁")
+    )
+    try:
+        supervisor.write_status_file({"worker": svc}, [])
+    finally:
+        log.close()
+
+    entry = json.loads(status_file.read_text(encoding="utf-8"))["services"]["worker"]
+    assert entry["heartbeat_read_error"] == "任务库被锁"
+    assert entry["heartbeat_age_seconds"] is None
+
+
+def test_同一轮只读一次心跳(supervisor, tmp_path, monkeypatch):
+    """P2-8：health 检查与状态文件共用同一次读取，避免每轮读库两次。"""
+    calls = {"n": 0}
+
+    def _counting(_pid):
+        calls["n"] += 1
+        return _READING(10.0, None)
+
+    svc, log = _make_worker_service(supervisor, tmp_path, monkeypatch, started_ago=200)
+    status_file = tmp_path / "service_status.json"
+    monkeypatch.setattr(supervisor, "STATUS_FILE", status_file)
+    monkeypatch.setattr(supervisor, "_read_worker_heartbeat", _counting)
+    try:
+        assert svc.healthy() is True
+        supervisor.write_status_file({"worker": svc}, [])
+    finally:
+        log.close()
+
+    assert calls["n"] == 1

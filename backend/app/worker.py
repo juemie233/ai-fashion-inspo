@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
-from sqlalchemy import and_, case, delete, or_, select, update
+from sqlalchemy import and_, case, delete, exists, or_, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -446,11 +446,14 @@ async def _run_task_safe(task_id: int) -> None:
         # 进程关闭（asyncio.run 收尾）取消时不写终态：任务保持 running，下次启动
         # 由 _reset_stale_tasks 按心跳超时重置，语义与历史一致。
         if task_id in _WATCHDOG_CANCELLED:
-            _WATCHDOG_CANCELLED.discard(task_id)
             try:
                 await _fail_stalled_task(task_id)
             except Exception:  # noqa: BLE001 —— 收尾失败不能把 worker 主循环带崩
-                logger.exception("看门狗收尾失败: #%s", task_id)
+                # P1-4：收尾失败时**保留**标记，由主循环 watchdog 周期重试；
+                # 先 discard 会让任务永远留在 running（没有下一次处理机会）。
+                logger.exception("看门狗收尾失败（保留标记待重试）: #%s", task_id)
+            else:
+                _WATCHDOG_CANCELLED.discard(task_id)
         raise
     except Exception:
         logger.exception(f"任务执行协程异常退出: #{task_id}")
@@ -463,9 +466,11 @@ async def _run_task_safe(task_id: int) -> None:
 async def _stalled_task_ids(worker_id: str, stall_seconds: int) -> list[int]:
     """找出本 worker 认领、但超过 ``stall_seconds`` 没有进度更新的 running 任务。
 
-    进度更新的证据是 ``task_queue.updated_at``（各执行器在写进度/心跳时都会刷新；
-    心跳循环也会每 10 秒刷新被认领任务的心跳，但**不刷新 updated_at**，所以这里
-    只能代表「执行器自己有没有动」——这正是看门狗要的语义）。
+    进度证据是 ``task_queue.updated_at``：执行器写进度/结果/状态时 ORM 会刷新它；
+    **心跳只写 ``heartbeat_at``，并显式保留 ``updated_at``（见 ``_write_heartbeat``）**，
+    所以这个列代表「执行器自己有没有动」，不会被执行器存活的证据（心跳）掩盖。
+    这是 2026-11-03 评审 P0-1 的修复：此前心跳 UPDATE 触发 ``onupdate=utcnow``，
+    把 ``updated_at`` 每 10 秒刷新一次，看门狗永远看不到卡死。
     """
     cutoff = utcnow() - timedelta(seconds=stall_seconds)
     async with async_session() as db:
@@ -613,7 +618,9 @@ async def _write_heartbeat(worker_id: str) -> None:
         await db.execute(
             update(TaskQueue)
             .where(TaskQueue.status == "running", TaskQueue.claimed_by == worker_id)
-            .values(heartbeat_at=now)
+            # P0-1/P2-4：显式把 updated_at 赋回原列表达式，阻止 onupdate=utcnow
+            # 把「执行器进度时间」也刷新成心跳时间——否则看门狗永远看不到卡死。
+            .values(heartbeat_at=now, updated_at=TaskQueue.updated_at)
         )
         await db.commit()
 
@@ -677,6 +684,9 @@ async def _worker_loop(worker_id: str) -> None:
             running = {
                 task: task_id for task, task_id in running.items() if not task.done()
             }
+            # P1-4：看门狗收尾失败的任务标记不会丢；协程已结束后在这里重试写终态，
+            # 避免 DB 瞬时锁导致任务永久停在 running。
+            await _retry_pending_watchdog_finalize(set(running.values()))
             concurrency = max(1, int(settings.worker_concurrency))
             while len(running) < concurrency:
                 task_id = await _claim_next_task(worker_id)
@@ -761,20 +771,46 @@ async def _cleanup_old_run_logs() -> None:
         logger.warning("清理过期任务运行台账失败（忽略）：%s", exc)
 
 
+async def _retry_pending_watchdog_finalize(running_task_ids: set[int]) -> None:
+    """重试「看门狗收尾失败」的任务（P1-4）。
+
+    取消协程已经结束、但 ``_fail_stalled_task`` 因 DB 锁/异常失败时，任务仍是
+    running；标记保留在 ``_WATCHDOG_CANCELLED``，由主循环在每次看门狗周期重试，
+    直到写库成功才清标记——避免「先丢标记、再收尾失败」导致永久 running 僵尸。
+    """
+    for task_id in list(_WATCHDOG_CANCELLED):
+        if task_id in running_task_ids:
+            continue
+        try:
+            await _fail_stalled_task(task_id)
+        except Exception:  # noqa: BLE001 —— 下一轮继续重试
+            logger.exception("看门狗收尾重试失败（保留标记）: #%s", task_id)
+            continue
+        _WATCHDOG_CANCELLED.discard(task_id)
+
+
 async def _finalize_orphan_run_logs() -> None:
-    """启动时把遗留的 running 台账标记 failed（进程崩溃/看门狗没收尾的孤儿行）。
+    """启动时收尾「任务已不存在或已非 running」的 running 台账。
 
     2026-11-02 现场留下一条 task_id=745 的 running 台账（任务行已被删除），
     永远等不到 finished_at；不清理的话「运行记录」里会一直显示"进行中"。
-    只收尾**超过 2 小时**的 running 行：多 worker 部署时另一实例正在跑的任务
-    （正常不会超过 2 小时，重负载任务也持续刷新进度）不受影响。
+
+    2026-11-03 评审 P1-3：不能只按「开始超过 2 小时」收尾——多 worker 部署时
+    另一实例正在跑的长任务会被误标 failed，台账与任务状态矛盾。现在用相关子查询
+    只收尾**任务行不存在、或任务本身已不是 running**的台账；任务仍 running 的
+    （无论多久）一律不动，由实际执行方负责收尾。
     """
-    cutoff = utcnow() - timedelta(hours=2)
+    task_still_running = exists(
+        select(TaskQueue.id).where(
+            TaskQueue.id == TaskRunLog.task_id,
+            TaskQueue.status == "running",
+        )
+    )
     try:
         async with async_session() as db:
             result = await db.execute(
                 update(TaskRunLog)
-                .where(TaskRunLog.status == "running", TaskRunLog.started_at < cutoff)
+                .where(TaskRunLog.status == "running", ~task_still_running)
                 .values(
                     status="failed",
                     finished_at=utcnow(),
@@ -784,7 +820,7 @@ async def _finalize_orphan_run_logs() -> None:
             await db.commit()
             if result.rowcount:
                 logger.warning(
-                    "[台账收尾] 把 %s 条超过 2 小时仍未结束的 running 台账标记为 failed",
+                    "[台账收尾] 把 %s 条任务已结束/不存在的 running 台账标记为 failed",
                     result.rowcount,
                 )
     except Exception as exc:  # noqa: BLE001 —— 台账收尾失败不能阻断 worker 启动
@@ -810,6 +846,14 @@ def _setup_logging() -> None:
         [type(handler).__name__ for handler in root.handlers],
         _LOG_DIR,
         logging.getLevelName(root.level),
+    )
+    # P1-5：启动时打印生效的看门狗参数，排障时不用反查 .env
+    logger.info(
+        "[worker] 看门狗阈值=%ss，心跳间隔=%.0fs，并发槽位=%s（TASK_STALL_TIMEOUT_SECONDS / "
+        "WORKER_HEARTBEAT_STALE_SECONDS 见文档）",
+        settings.task_stall_timeout_seconds,
+        _HEARTBEAT_INTERVAL,
+        settings.worker_concurrency,
     )
 
 

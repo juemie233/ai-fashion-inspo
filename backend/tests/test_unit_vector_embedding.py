@@ -18,6 +18,7 @@ CLIP 模型与 Ollama 都用替身（真模型 600MB + GPU，测试不能也不�
 """
 
 import json
+import time
 
 import httpx
 import pytest
@@ -164,7 +165,7 @@ async def test_text_embedding_connection_error_熔断快速失败(ollama):
     """连接不可达（Ollama 没启动）→ 判一次即熔断，后续文本不再逐条等超时。
 
     2026-11-02 卡死事故：Ollama 未启动时每条文本都要等连接超时并重试，窗口内 6 条
-    素材耗掉数分钟、占死 worker 并发槽位。现在第一条判 ConnectError 后进入 60s 冷却，
+    素材耗掉数分钟、占死 worker 并发槽位。现在第一条判 ConnectError 后进入冷却，
     冷却期内的后续文本直接返回 None（计入 text_failed，由任务收尾统一登记）。
     """
     ollama["client"] = _FakeOllama([httpx.ConnectError("connection refused")])
@@ -174,6 +175,38 @@ async def test_text_embedding_connection_error_熔断快速失败(ollama):
     # 冷却期内：不再发起请求
     assert await emb.generate_text_embedding("第二条") is None
     assert len(ollama["client"].requests) == 1
+
+
+async def test_text_embedding_read_timeout_也触发冷却(ollama):
+    """P2-2：读超时/协议错误也应快速失败（此前只认 ConnectError/ConnectTimeout）。"""
+    ollama["client"] = _FakeOllama([httpx.ReadTimeout("read timed out")])
+    assert await emb.generate_text_embedding("第一条") is None
+    assert len(ollama["client"].requests) == 1
+    assert emb.ollama_unreachable_recent() is True
+
+    assert await emb.generate_text_embedding("第二条") is None
+    assert len(ollama["client"].requests) == 1
+
+
+async def test_冷却到期后允许重试_成功后解除(ollama, monkeypatch):
+    """P2-2：冷却到期必须重新尝试；成功响应立即清除冷却状态。"""
+    emb._mark_ollama_unreachable()
+    assert emb._ollama_in_cooldown() is True
+
+    # 模拟冷却到期（不 patch time.monotonic，避免影响事件循环内部计时）
+    emb._ollama_down_until = time.monotonic() - 1
+    ollama["client"] = _FakeOllama([_Resp(payload={"embedding": [0.3, 0.4]})])
+    out = await emb.generate_text_embedding("冷却到期后重试")
+    assert out == [0.3, 0.4]
+    assert emb._ollama_in_cooldown() is False
+
+
+def test_冷却时长可配置(monkeypatch):
+    """P2-2：冷却时长走 OLLAMA_EMBED_DOWN_COOLDOWN_SECONDS，不再写死 60s。"""
+    monkeypatch.setattr(emb.settings, "ollama_embed_down_cooldown_seconds", 5.0)
+    assert emb._ollama_cooldown_seconds() == 5.0
+    # 读超时用 1/3（但不低于 5s 下限）
+    assert emb._mark_ollama_unreachable(read_timeout=True) == 5.0
 
 
 async def test_text_embedding_empty_result_is_none(ollama):

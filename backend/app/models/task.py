@@ -5,12 +5,13 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text, event
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 from app.models.inspiration import utcnow
+from app.utils.task_summary import summarize_result
 
 
 class TaskQueue(Base):
@@ -41,6 +42,13 @@ class TaskQueue(Base):
     result: Mapped[dict | None] = mapped_column(
         JSON, nullable=True
     )  # JSON 结果（初始为输入载荷，完成后含统计）
+    # 列表专用摘要（2026-11-03 评审 P1-2/P2-6）：写入时由下方事件监听器生成；
+    # 列表接口只读这一列，避免 substr 截断 JSON 导致整条摘要解析失败。
+    # none_as_null=True：空摘要用 SQL NULL（默认会存成 JSON 文本 "null"，回填查询
+    # 的 IS NULL 匹配不到，历史补摘要会永远查不到这些行）。
+    result_summary: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)  # 失败原因
     retry_count: Mapped[int] = mapped_column(Integer, default=0)  # 已重试次数
     max_retries: Mapped[int] = mapped_column(Integer, default=2)  # 最大重试次数
@@ -69,6 +77,13 @@ class TaskQueue(Base):
 
     def __repr__(self) -> str:
         return f"<TaskQueue(id={self.id}, type={self.type}, status={self.status})>"
+
+
+@event.listens_for(TaskQueue, "before_insert")
+@event.listens_for(TaskQueue, "before_update")
+def _fill_task_result_summary(_mapper, _connection, target: TaskQueue) -> None:
+    """任何写 result 的路径都同步生成列表摘要（列表不再读完整 result）。"""
+    target.result_summary = summarize_result(target.result)
 
 
 class PendingVectorBackfill(Base):

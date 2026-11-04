@@ -463,6 +463,7 @@ async def _build_material_vectors(
         build_inspiration_text,
         generate_image_embeddings,
         generate_text_embedding,
+        ollama_unreachable_recent,
     )
 
     texts = [build_inspiration_text(insp) for insp in inss]
@@ -491,11 +492,20 @@ async def _build_material_vectors(
     if text_all_failed and with_images:
         image_count = sum(1 for insp in inss if insp.media_type == "image")
         if image_count:
-            logger.warning(
-                "文本嵌入全部失败（疑似 Ollama 不可用），跳过本窗口 %s 张图像的 "
-                "CLIP 编码（避免重型路径；任务将按失败收尾并重新登记待回填）",
-                image_count,
-            )
+            # P2-3：区分「Ollama 连不上」和「文本内容/单条数据导致的嵌入失败」，
+            # 后者不是 Ollama 故障，日志不能误导成服务不可用（任务无论如何都会失败收尾）。
+            if ollama_unreachable_recent():
+                logger.warning(
+                    "文本嵌入全部失败（Ollama 连接不可达），跳过本窗口 %s 张图像的 "
+                    "CLIP 编码（避免重型路径；任务将按失败收尾并重新登记待回填）",
+                    image_count,
+                )
+            else:
+                logger.warning(
+                    "文本嵌入全部失败（非连接原因：可能是文本内容/单条数据异常），"
+                    "跳过本窗口 %s 张图像的 CLIP 编码（任务将按失败收尾并重新登记待回填）",
+                    image_count,
+                )
 
     image_vecs: list[list[float] | None] = [None] * len(inss)
     if with_images and not text_all_failed:

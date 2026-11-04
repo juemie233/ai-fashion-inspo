@@ -36,12 +36,11 @@ async def test_list_tasks(client):
     assert len(data["items"]) == 2
 
 
-async def test_list_tasks_result_preview_不返回超大结果(client):
-    """列表只回传 8KB 前缀内的 result（2026-11-02 性能加固）。
+async def test_list_tasks_result_returns_summary_not_huge_result(client):
+    """列表回传 result 摘要（2026-11-03 评审 P1-2），详情仍给完整 result。
 
-    历史数据里 6 条 tag_health_scan 的 result 合计 30MB，列表按 200 行返回曾是
-    30MB/次响应、前端每 5 秒轮询 → 任务页明显卡；现在超长结果列表置 None，
-    小结果（前端摘要要用的字段）原样保留，完整结果走详情接口。
+    历史实现取 8KB 前缀，超长 JSON 被截断后解析失败 → 整条摘要为 None；现在
+    写入时生成 result_summary，列表始终能拿到可解析的小 JSON。
     """
     big = {"tags": [{"index": index} for index in range(200_000)]}  # 远超 8KB
     small = {"done": 3, "notices": ["有一条提示"]}
@@ -60,8 +59,11 @@ async def test_list_tasks_result_preview_不返回超大结果(client):
 
     data = client.get("/api/tasks").json()
     by_type = {item["type"]: item for item in data["items"]}
-    assert by_type["tag_health_scan"]["result"] is None  # 超长结果不在列表里返回
-    assert by_type["batch_analyze"]["result"] == small  # 小结果保留（摘要要用）
+    # 超长结果的列表摘要不再是 None（P1-2 核心回归）：可解析、且不含大数组
+    big_summary = by_type["tag_health_scan"]["result"]
+    assert isinstance(big_summary, dict)
+    assert "tags" not in big_summary or len(big_summary["tags"]) <= 10
+    assert by_type["batch_analyze"]["result"] == small  # 小结果原样保留
 
     # 详情接口仍给完整 result（展开/排障用）
     detail = client.get(f"/api/tasks/{big_id}").json()

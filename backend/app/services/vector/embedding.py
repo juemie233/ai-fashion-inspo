@@ -109,21 +109,38 @@ _TEXT_RETRY_BACKOFF_S = 1.5
 # 「Ollama 连接不可达」熔断（2026-11-02 卡死事故复盘）：
 # 现场 Ollama 未启动，6 个素材在「每条文本 × 多档截断 × 2 次尝试」上耗了数分钟，
 # 期间 worker 单并发槽位被占死，后续出图任务一直排队。连接类异常（拒绝连接/连接
-# 超时）不是几秒内能自愈的瞬时抖动，因此：**判一次即熔断 60 秒**，期间的后续嵌入
-# 直接返回 None（计入 text_failed，由任务收尾统一登记），不再逐条等超时。
-_OLLAMA_DOWN_COOLDOWN_S = 60.0
+# 超时）不是几秒内能自愈的瞬时抖动，因此：**判一次即熔断**，期间的后续嵌入直接
+# 返回 None（计入 text_failed，由任务收尾统一登记），不再逐条等超时。
+#
+# 2026-11-03 评审 P2-2：原实现固定 60s、且只认 ConnectError/ConnectTimeout；
+# 现在时长走 `OLLAMA_EMBED_DOWN_COOLDOWN_SECONDS`（默认 30s），读超时/协议错误
+# 也触发（用 1/3 时长，因为模型加载慢/服务端重启可能较快恢复），成功响应仍立即解除。
+_OLLAMA_READ_TIMEOUT_COOLDOWN_RATIO = 1.0 / 3.0
 _ollama_down_until = 0.0
 
 
-def _mark_ollama_unreachable() -> None:
-    """记录 Ollama 连接不可达，进入冷却（期间文本嵌入快速失败）。"""
+def _ollama_cooldown_seconds() -> float:
+    return max(1.0, float(settings.ollama_embed_down_cooldown_seconds or 30.0))
+
+
+def _mark_ollama_unreachable(*, read_timeout: bool = False) -> float:
+    """记录 Ollama 连接不可达，进入冷却；返回本次冷却秒数。"""
     global _ollama_down_until
-    _ollama_down_until = time.monotonic() + _OLLAMA_DOWN_COOLDOWN_S
+    seconds = _ollama_cooldown_seconds()
+    if read_timeout:
+        seconds = max(5.0, seconds * _OLLAMA_READ_TIMEOUT_COOLDOWN_RATIO)
+    _ollama_down_until = time.monotonic() + seconds
+    return seconds
 
 
 def _ollama_in_cooldown() -> bool:
     """Ollama 是否处于「刚判定不可达」的冷却窗口。"""
     return time.monotonic() < _ollama_down_until
+
+
+def ollama_unreachable_recent() -> bool:
+    """对外只读查询：最近是否因连接类错误进入冷却（向量回填日志区分原因用）。"""
+    return _ollama_in_cooldown()
 
 
 def reset_ollama_cooldown() -> None:
@@ -157,7 +174,7 @@ async def generate_text_embedding(text: str) -> list[float] | None:
     if cached is not None:
         return list(cached)
     if _ollama_in_cooldown():
-        # 60 秒内刚判定 Ollama 连不上：直接失败，别让每条文本都等一次超时
+        # 刚判定 Ollama 连不上（连接错误/读超时）：直接失败，别让每条文本都等一次超时
         logger.debug("Ollama 连接不可达（熔断冷却中），跳过文本嵌入: %s", text[:50])
         return None
     # 逐级截断重试：None=全文，超长报 context 错误时依次减半
@@ -181,11 +198,21 @@ async def generate_text_embedding(text: str) -> list[float] | None:
                 if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
                     # Ollama 没启动 / 端口不通：不是秒级自愈的抖动，判一次即熔断，
                     # 不再重试（重试只会让每条文本再等一次超时，白白占住任务槽位）
-                    _mark_ollama_unreachable()
+                    seconds = _mark_ollama_unreachable()
                     logger.warning(
                         "Ollama 连接不可达（%s），熔断 %ss：后续文本嵌入直接失败",
                         detail,
-                        int(_OLLAMA_DOWN_COOLDOWN_S),
+                        int(seconds),
+                    )
+                    return None
+                if isinstance(e, (httpx.ReadTimeout, httpx.RemoteProtocolError)):
+                    # 2026-11-03 评审 P2-2：读超时/协议错误同样进入冷却（更短），
+                    # 避免每条文本反复等 15s；成功响应会立即解除。
+                    seconds = _mark_ollama_unreachable(read_timeout=True)
+                    logger.warning(
+                        "Ollama 响应超时/协议异常（%s），短暂熔断 %ss：后续文本嵌入先快速失败",
+                        detail,
+                        int(seconds),
                     )
                     return None
                 if attempt < _TEXT_ATTEMPTS:

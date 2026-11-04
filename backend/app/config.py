@@ -1,7 +1,7 @@
 """应用配置：通过 Pydantic Settings 管理所有配置项。"""
 
 from pathlib import Path
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 数据库文件绝对路径（不依赖进程 CWD，避免从不同目录启动时产生双库）
@@ -84,6 +84,10 @@ class Settings(BaseSettings):
 
     # AI / Ollama
     ollama_base_url: str = "http://localhost:11434"
+    # Ollama 连接不可达熔断时长（秒）：2026-11-02 卡死事故后引入的快速失败窗口。
+    # 2026-11-03 评审 P2-2：60s 过宽（一次瞬时失败会让一整分钟所有文本嵌入跳过），
+    # 默认降到 30s；连接类错误用本值，读超时/协议错误用 1/3。
+    ollama_embed_down_cooldown_seconds: float = 30.0
     # 默认视觉模型与 README 推荐一致（Qwen3-VL:8B-Instruct）；
     # 可在 .env 用 OLLAMA_VISION_MODEL 覆盖，或在「AI 模型管理」页切换
     ollama_vision_model: str = "qwen3-vl:8b-instruct"
@@ -178,7 +182,9 @@ class Settings(BaseSettings):
     # 一个向量回填卡死导致 4 个出图任务永远排队）。默认 30 分钟：比单次最慢操作
     # （云端出图 600s / CLIP 首次加载数分钟）留足余量；0 = 关闭看门狗。
     # 可在 .env 用 TASK_STALL_TIMEOUT_SECONDS 覆盖
-    task_stall_timeout_seconds: int = 1800
+    # P1-5：负数没有意义（0 = 关闭看门狗）；上限 7 天防止误填成毫秒/天数值导致
+    # 看门狗形同关闭。启动即拒绝，避免配置笔误静默失效。
+    task_stall_timeout_seconds: int = Field(default=1800, ge=0, le=7 * 24 * 3600)
     # 批内分析并发度：批量分析/组合分析/质量审核任务内部同时分析的素材数
     # （原写死常量 _ANALYZE_CONCURRENCY=1）。注意 worker 与 API 进程
     # （routers/ai_shared.py 的独立信号量=2）互不感知，最坏并发出路为

@@ -20,12 +20,15 @@ from app.worker import _STALE_HEARTBEAT_THRESHOLD
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
 
-"""列表接口回传的 result 前缀长度（字符）。
+"""列表接口回退用的 result 前缀长度（字符）。
 
-为什么截断：单条 ``tag_health_scan`` 的 result 可达 2.9 MB，历史数据里这类行占
-result 总量的 99%——列表按 200 行返回曾是 **30 MB/次** 响应（前端每 5 秒轮询一次），
-实测 ``GET /api/tasks?size=200`` 耗时 1.3s。列表只需要「干成了什么」的摘要字段
-（都在前几 KB），完整 result 由详情接口 ``GET /api/tasks/{id}`` 提供。
+优先使用 ``task_queue.result_summary``（写入时生成的 8KB 内小 JSON，见
+``app/utils/task_summary.py``）；仅当历史行摘要尚未回填（启动回填失败等）时，
+才退回旧策略读取 result 前缀——超长 JSON 被截断时解析失败按 None 返回。
+
+为什么不能只截前缀：单条 ``tag_health_scan`` 的 result 可达 2.9 MB，147 条历史
+任务的 result > 8KB，被截断后 ``json.loads`` 必然失败，标题/摘要整条变空
+（2026-11-03 评审 P1-2）。完整 result 仍由详情接口 ``GET /api/tasks/{id}`` 提供。
 """
 RESULT_PREVIEW_CHARS = 8192
 
@@ -127,7 +130,12 @@ async def list_tasks(
         await db.execute(select(func.count()).select_from(TaskQueue).where(*conditions))
     ).scalar() or 0
 
-    columns = [column for column in TaskQueue.__table__.columns if column.key != "result"]
+    columns = [
+        column
+        for column in TaskQueue.__table__.columns
+        # 大 JSON 列不进列表：result 读摘要列，stage_state 只有详情/恢复用
+        if column.key not in ("result", "stage_state")
+    ]
     page_rows = (
         await db.execute(
             select(*columns)
@@ -141,20 +149,31 @@ async def list_tasks(
         )
     ).all()
 
-    previews: dict[int, dict | None] = {}
-    if page_rows:
+    # 正常情况直接读 result_summary；只有历史行摘要为空（启动回填尚未跑完/失败）
+    # 才退回旧的前缀解析——避免 147 条大结果行摘要整条为空的老问题。
+    missing_ids = [row.id for row in page_rows if row._mapping["result_summary"] is None]
+    fallback: dict[int, dict | None] = {}
+    if missing_ids:
         preview_rows = await db.execute(
             select(
                 TaskQueue.id,
                 func.substr(TaskQueue.result, 1, RESULT_PREVIEW_CHARS),
-            ).where(TaskQueue.id.in_([row.id for row in page_rows]))
+            ).where(TaskQueue.id.in_(missing_ids))
         )
-        previews = {
+        fallback = {
             row_id: _parse_result_preview(prefix) for row_id, prefix in preview_rows
         }
 
     return {
-        "items": [_task_list_item(row, previews.get(row.id)) for row in page_rows],
+        "items": [
+            _task_list_item(
+                row,
+                row._mapping["result_summary"]
+                if row._mapping["result_summary"] is not None
+                else fallback.get(row.id),
+            )
+            for row in page_rows
+        ],
         "total": total,
         "page": page,
         "size": size,

@@ -187,6 +187,13 @@ def clean_state(client):
     from app.services.vector import embedding as embedding_module
 
     embedding_module.reset_ollama_cooldown()
+
+    # worker 的看门狗标记/台账缓存也是模块级全局（2026-11-03 评审 P2-12）：
+    # 上一个用例留下的 id 会让下一个用例的收尾逻辑误处理别人的任务。
+    from app import worker as worker_module
+
+    worker_module._WATCHDOG_CANCELLED.clear()
+    worker_module._RUN_LOG_IDS.clear()
     yield
 
 

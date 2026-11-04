@@ -12,10 +12,13 @@
 - 状态落盘：每轮把各服务状态写入 logs/service_status.json，供命令行脚本兜底读取。
 """
 
+from __future__ import annotations
+
 import ctypes
 import json
 import logging
 import logging.handlers
+import math
 import os
 import shutil
 import signal
@@ -27,6 +30,7 @@ import time
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 # ── 路径与端口（与 scripts/ops/restart.sh、scripts/ops/ensure-services.sh 约定一致）──
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -87,18 +91,38 @@ MEMORY_ALERT_PERCENT = 90.0     # 内存使用率告警阈值（%）
 
 
 def _env_float(key: str, default: float) -> float:
-    """读环境变量 / backend/.env 的浮点配置，非法值回退默认。"""
+    """读环境变量 / backend/.env 的浮点配置，非法/非有限值回退默认。"""
     raw = os.environ.get(key) or _dotenv_value(key)
     try:
-        return float(raw) if raw else default
+        value = float(raw) if raw else default
     except (TypeError, ValueError):
         return default
+    # P2-7：nan/inf 会让 age <= stale 永远为 False（nan）或永远健康（inf），直接回退
+    return value if math.isfinite(value) else default
 
 
 # worker 心跳过期阈值（秒）：超过则视为「进程活着但事件循环卡死」，按连续健康检查
 # 失败强制重启。2026-11-02 事故：worker 进程 pid 在、心跳 23:41:34 后断了，任务队列
 # 停摆 20 分钟无人拉起——supervisor 原先对 worker 只看进程存活，这是补上的盲区。
-WORKER_HEARTBEAT_STALE_SECONDS = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 90.0)
+HEARTBEAT_INTERVAL_SECONDS = 10.0  # 与 backend/app/worker.py 的 _HEARTBEAT_INTERVAL 一致
+MIN_HEARTBEAT_STALE_SECONDS = 30.0  # 低于该值会把偶发一次慢心跳判死，强制回退默认
+WORKER_HEARTBEAT_STALE_RAW = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 90.0)
+WORKER_HEARTBEAT_STALE_SECONDS = WORKER_HEARTBEAT_STALE_RAW
+if not (
+    math.isfinite(WORKER_HEARTBEAT_STALE_RAW)
+    and MIN_HEARTBEAT_STALE_SECONDS <= WORKER_HEARTBEAT_STALE_RAW
+):
+    WORKER_HEARTBEAT_STALE_SECONDS = 90.0
+
+"""启动时要打印的配置告警（logger 在 run() 里才配置好，先收集后输出）。"""
+_CONFIG_WARNINGS: list[str] = []
+if WORKER_HEARTBEAT_STALE_SECONDS != WORKER_HEARTBEAT_STALE_RAW:
+    _CONFIG_WARNINGS.append(
+        "WORKER_HEARTBEAT_STALE_SECONDS="
+        f"{WORKER_HEARTBEAT_STALE_RAW:g} 非法（需有限值且 ≥"
+        f"{MIN_HEARTBEAT_STALE_SECONDS:g}s，心跳间隔 {HEARTBEAT_INTERVAL_SECONDS:g}s），"
+        f"已回退 {WORKER_HEARTBEAT_STALE_SECONDS:g}s"
+    )
 
 # ── 服务定义 ──
 SERVICE_DEFS = {
@@ -247,6 +271,10 @@ class ManagedService:
         self.restart_count = 0
         self.last_exit_code: int | None = None
         self.last_exit_reason: str | None = None
+        # 心跳读取缓存（P2-8：同一轮健康检查/状态文件只读一次库）
+        self._hb_reading: HeartbeatReading | None = None
+        self._hb_cache_at = 0.0
+        self._hb_error_logged: str | None = None
 
     def start(self) -> None:
         """启动子进程并开启日志读取线程。"""
@@ -290,11 +318,34 @@ class ManagedService:
     def age(self) -> float:
         return time.time() - self.started_at
 
+    def heartbeat_reading(self, *, refresh: bool = False) -> HeartbeatReading:
+        """该服务进程的心跳读取结果（仅 worker 有；短缓存避免一轮读两次库）。"""
+        if self.name != "worker" or self.proc is None or self.proc.poll() is not None:
+            return HeartbeatReading(None, None)
+        now = time.monotonic()
+        if (
+            not refresh
+            and self._hb_reading is not None
+            and now - self._hb_cache_at < 2.0
+        ):
+            return self._hb_reading
+        reading = _read_worker_heartbeat(self.proc.pid)
+        self._hb_reading = reading
+        self._hb_cache_at = now
+        if reading.error:
+            if reading.error != self._hb_error_logged:
+                # P2-9：读失败只记一次 warning + 状态文件 read_error，排障不用靠猜
+                logging.getLogger("supervisor").warning(
+                    "worker 心跳读取失败（不据此重启 worker）：%s", reading.error
+                )
+                self._hb_error_logged = reading.error
+        else:
+            self._hb_error_logged = None
+        return reading
+
     def heartbeat_age(self) -> float | None:
         """该服务进程的心跳距今秒数（仅 worker 有；读不到返回 None）。"""
-        if self.name != "worker" or self.proc is None or self.proc.poll() is not None:
-            return None
-        return read_worker_heartbeat_age(self.proc.pid)
+        return self.heartbeat_reading().age
 
     def healthy(self) -> bool:
         """健康判定：worker = 进程存活 + 心跳新鲜；其余用 HTTP 探针。
@@ -303,13 +354,19 @@ class ManagedService:
         supervisor 不会重启（2026-11-02 任务队列停摆 20 分钟的根因）。现在读任务库里
         worker 的心跳年龄：超过 ``WORKER_HEARTBEAT_STALE_SECONDS`` 即不健康，
         连续 ``MAX_FAIL_STREAK`` 次后走既有的强制重启逻辑。
+
+        P1-1：读不到库（``error`` 非空）不是 worker 的问题，**返回健康且不累计
+        fail_streak**，避免 DATABASE_URL 配错/库长时间被锁时把 worker 反复重启；
+        只有「库可读但心跳年龄超阈值」才判不健康。
         """
         if self.health_url is None:
-            age = self.heartbeat_age()
-            if age is None:
+            reading = self.heartbeat_reading()
+            if reading.error:
+                return True  # 读失败不误杀；错误已记 supervisor.log + 状态文件
+            if reading.age is None:
                 # 还没写出第一行心跳：启动宽限（grace + 心跳阈值）内视为健康
                 return self.age() < self.grace + WORKER_HEARTBEAT_STALE_SECONDS
-            return age <= WORKER_HEARTBEAT_STALE_SECONDS
+            return reading.age <= WORKER_HEARTBEAT_STALE_SECONDS
         return _http_ok(self.health_url)
 
     def stop(self) -> None:
@@ -394,22 +451,34 @@ def _database_path() -> Path:
     return BACKEND_DIR / "fashion_inspo.db"
 
 
-def read_worker_heartbeat_age(pid: int | None) -> float | None:
-    """读该 worker 进程最近一次心跳距今多少秒；读不到返回 None。
+class HeartbeatReading(NamedTuple):
+    """一次 worker 心跳读取结果。
 
-    返回 None 表示「无法判断」（库不存在/被锁/还没写过心跳行），调用方按启动
-    宽限处理，不能因为一次读失败就误杀进程。只读连接（mode=ro）：supervisor
-    不该以写权限打开任务库。
+    ``age`` 为 None 且 ``error`` 为 None = 还没写出心跳行（启动宽限）；
+    ``error`` 非空 = 读者自己读不到（库不存在/被锁/查询失败），**不等于 worker 死了**。
+    """
+
+    age: float | None
+    error: str | None = None
+
+
+def _read_worker_heartbeat(pid: int | None) -> HeartbeatReading:
+    """读该 worker 进程最近一次心跳；区分「没有心跳行」与「读失败」。
+
+    2026-11-03 评审 P1-1：原实现把库不存在/被锁/查询失败都返回 None，健康判定把
+    None 当成「还没写出第一行心跳」，超过启动宽限就周期性强制重启 worker ——
+    与文档「库读不到不误杀」相反。现在读失败带 ``error`` 返回，健康判定不累计失败。
+    只读连接（mode=ro）：supervisor 不该以写权限打开任务库。
     """
     if not pid:
-        return None
+        return HeartbeatReading(None, "worker pid 为空")
     db_path = _database_path()
     if not db_path.exists():
-        return None
+        return HeartbeatReading(None, f"任务库不存在: {db_path}")
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=2)
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as exc:
+        return HeartbeatReading(None, f"任务库不可读（{db_path}）: {exc}")
     try:
         row = conn.execute(
             "SELECT last_heartbeat_at FROM service_heartbeats "
@@ -417,19 +486,24 @@ def read_worker_heartbeat_age(pid: int | None) -> float | None:
             "ORDER BY last_heartbeat_at DESC LIMIT 1",
             (pid,),
         ).fetchone()
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as exc:
+        return HeartbeatReading(None, f"读取 worker 心跳失败（{db_path}）: {exc}")
     finally:
         conn.close()
     if not row or not row[0]:
-        return None
+        return HeartbeatReading(None, None)  # 查询成功但没有心跳行
     try:
         last = datetime.fromisoformat(str(row[0]))
-    except ValueError:
-        return None
+    except ValueError as exc:
+        return HeartbeatReading(None, f"心跳时间格式非法: {row[0]!r}（{exc}）")
     if last.tzinfo is None:
         last = last.replace(tzinfo=UTC)  # 库里存的是 naive UTC
-    return max(0.0, (datetime.now(UTC) - last).total_seconds())
+    return HeartbeatReading(max(0.0, (datetime.now(UTC) - last).total_seconds()), None)
+
+
+def read_worker_heartbeat_age(pid: int | None) -> float | None:
+    """兼容接口：只返回心跳年龄（读失败/无行均 None；需要区分时用 ``_read_worker_heartbeat``）。"""
+    return _read_worker_heartbeat(pid).age
 
 
 class _MEMORYSTATUSEX(ctypes.Structure):
@@ -536,8 +610,11 @@ def write_status_file(services: dict, alerts: list[str]) -> None:
             "last_exit_reason": svc.last_exit_reason,
         }
         if name == "worker":
-            age = svc.heartbeat_age()
-            entry["heartbeat_age_seconds"] = round(age, 1) if age is not None else None
+            reading = svc.heartbeat_reading()  # 复用本轮的缓存，避免再读一次库
+            entry["heartbeat_age_seconds"] = (
+                round(reading.age, 1) if reading.age is not None else None
+            )
+            entry["heartbeat_read_error"] = reading.error
         service_entries[name] = entry
     payload = {
         "updated_at": datetime.now().isoformat(),
@@ -625,6 +702,13 @@ def run() -> None:
 
     logger.info("supervisor 启动，开始守护 backend / frontend / worker ...")
     logger.info(f"后端监听 {BACKEND_HOST}:{BACKEND_PORT}")
+    for warning in _CONFIG_WARNINGS:
+        logger.warning(warning)
+    logger.info(
+        "worker 心跳过期阈值 %.0fs（WORKER_HEARTBEAT_STALE_SECONDS；心跳间隔 %.0fs）",
+        WORKER_HEARTBEAT_STALE_SECONDS,
+        HEARTBEAT_INTERVAL_SECONDS,
+    )
     if BACKEND_HOST not in ("127.0.0.1", "localhost"):
         # 真机需要这个；但接口目前无鉴权，只适合可信局域网
         logger.warning(
@@ -649,12 +733,19 @@ def run() -> None:
                             if svc.fail_streak >= MAX_FAIL_STREAK:
                                 reason = "健康检查连续失败"
                                 if svc.health_url is None:
-                                    age = svc.heartbeat_age()
+                                    reading = svc.heartbeat_reading(refresh=True)
                                     reason = (
-                                        f"worker 心跳 {age:.0f}s 未更新"
-                                        if age is not None
+                                        f"worker 心跳 {reading.age:.0f}s 未更新"
+                                        if reading.age is not None
                                         else "worker 启动后一直没有心跳"
                                     )
+                                # 两处都写：supervisor.log 记录决策，worker.log 方便贴给用户看
+                                logger.warning(
+                                    "[强制重启] %s %s（连续 %s 次健康检查失败）",
+                                    svc.name,
+                                    reason,
+                                    svc.fail_streak,
+                                )
                                 svc.log.write(
                                     f"[supervisor] {svc.name} {reason}，强制重启\n"
                                 )

@@ -58,6 +58,43 @@ async def test_stalled_task_ids_只返回本worker且超时的running任务():
     assert fresh not in ids and other_worker not in ids and pending not in ids
 
 
+async def test_心跳不刷新updated_at_看门狗仍能识别卡死():
+    """P0-1：心跳只写 heartbeat_at，不能把「执行器进度时间」一起刷新。
+
+    历史 bug：心跳 UPDATE 触发 TaskQueue.updated_at 的 onupdate=utcnow，每 10 秒
+    刷新一次，看门狗要求 30 分钟不动，正常路径下永远不会触发。
+    """
+    task_id = await _add_task(status="running", claimed_by="w-beat", updated_ago_seconds=3600)
+    async with async_session() as db:
+        before = (await db.get(TaskQueue, task_id)).updated_at
+
+    await worker._write_heartbeat("w-beat")
+
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        assert task is not None
+        assert task.updated_at == before, "心跳刷新了 updated_at，看门狗会永久失效"
+        assert task.heartbeat_at is not None
+        heartbeat_age = utcnow() - task.heartbeat_at
+        assert heartbeat_age < timedelta(seconds=30)
+
+    ids = await worker._stalled_task_ids("w-beat", stall_seconds=1800)
+    assert task_id in ids
+
+
+async def test_心跳不刷新_updated_at_的_orm_update语义():
+    """确认「显式 updated_at=原列表达式」能压过 onupdate（SQLAlchemy 行为回归）。"""
+    task_id = await _add_task(status="running", claimed_by="w-beat", updated_ago_seconds=3600)
+    async with async_session() as db:
+        task = await db.get(TaskQueue, task_id)
+        old = task.updated_at
+        # 模拟除心跳外的普通 ORM 写入：updated_at 必须刷新（进度语义）
+        task.progress = 50
+        await db.commit()
+        async with async_session() as probe:
+            assert (await probe.get(TaskQueue, task_id)).updated_at > old
+
+
 async def test_fail_stalled_task_标失败并补台账结束时间():
     """看门狗取消后：任务 failed + 错误可读 + 台账 finished_at 补齐。"""
     task_id = await _add_task(status="running", claimed_by="w-test", updated_ago_seconds=3600)
@@ -128,35 +165,88 @@ async def test_run_task_safe_进程关闭取消不写终态(monkeypatch):
     assert finalized == []
 
 
-async def test_finalize_orphan_run_logs_收尾超期_进行中台账():
-    """启动时把超过 2 小时仍 running 的台账标 failed；新台账不动。"""
+async def test_watchdog_finalize_失败保留标记_下轮重试成功(monkeypatch):
+    """P1-4：收尾失败不能先丢标记，否则任务永久 running；主循环重试成功后清标记。"""
+    finalized: list[int] = []
+
+    async def _hang(_task_id: int) -> None:
+        await asyncio.sleep(3600)
+
+    async def _fail(_task_id: int) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(worker, "_run_task", _hang)
+    monkeypatch.setattr(worker, "_fail_stalled_task", _fail)
+
+    coro = asyncio.create_task(worker._run_task_safe(9))
+    await asyncio.sleep(0)
+    worker._WATCHDOG_CANCELLED.add(9)
+    coro.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await coro
+
+    assert 9 in worker._WATCHDOG_CANCELLED, "收尾失败时标记必须保留待重试"
+
+    async def _ok(task_id: int) -> None:
+        finalized.append(task_id)
+
+    monkeypatch.setattr(worker, "_fail_stalled_task", _ok)
+    await worker._retry_pending_watchdog_finalize(set())
+    assert finalized == [9]
+    assert 9 not in worker._WATCHDOG_CANCELLED
+
+
+async def test_finalize_orphan_run_logs_只收尾非running任务的台账():
+    """P1-3：任务仍 running 的台账（无论多久）不能动；任务结束/不存在的才收尾。"""
     async with async_session() as db:
-        old = TaskRunLog(
-            task_id=1,
-            task_type="batch_analyze",
-            attempt=0,
-            started_at=utcnow() - timedelta(hours=3),
-            status="running",
+        running_task = TaskQueue(
+            type="batch_analyze", status="running", progress=0, total=1, done=0, result={}
         )
-        recent = TaskRunLog(
-            task_id=2,
-            task_type="batch_analyze",
-            attempt=0,
-            started_at=utcnow(),
-            status="running",
+        done_task = TaskQueue(
+            type="batch_analyze", status="success", progress=100, total=1, done=1, result={}
         )
-        db.add_all([old, recent])
+        db.add_all([running_task, done_task])
         await db.commit()
-        await db.refresh(old)
-        await db.refresh(recent)
-        old_id, recent_id = old.id, recent.id
+        await db.refresh(running_task)
+        await db.refresh(done_task)
+        running_id, done_id = running_task.id, done_task.id
+
+        running_log = TaskRunLog(
+            task_id=running_id,
+            task_type="batch_analyze",
+            attempt=0,
+            started_at=utcnow() - timedelta(hours=5),
+            status="running",
+        )
+        done_log = TaskRunLog(
+            task_id=done_id,
+            task_type="batch_analyze",
+            attempt=0,
+            started_at=utcnow() - timedelta(hours=5),
+            status="running",
+        )
+        missing_log = TaskRunLog(
+            task_id=999_999,
+            task_type="batch_analyze",
+            attempt=0,
+            started_at=utcnow() - timedelta(hours=5),
+            status="running",
+        )
+        db.add_all([running_log, done_log, missing_log])
+        await db.commit()
+        await db.refresh(running_log)
+        await db.refresh(done_log)
+        await db.refresh(missing_log)
+        log_ids = (running_log.id, done_log.id, missing_log.id)
 
     await worker._finalize_orphan_run_logs()
 
     async with async_session() as db:
-        old_row = await db.get(TaskRunLog, old_id)
-        recent_row = await db.get(TaskRunLog, recent_id)
-        assert old_row is not None and old_row.status == "failed"
-        assert old_row.finished_at is not None
-        assert "台账未收尾" in (old_row.error or "")
-        assert recent_row is not None and recent_row.status == "running"
+        running_row = await db.get(TaskRunLog, log_ids[0])
+        done_row = await db.get(TaskRunLog, log_ids[1])
+        missing_row = await db.get(TaskRunLog, log_ids[2])
+        assert running_row is not None and running_row.status == "running"
+        assert done_row is not None and done_row.status == "failed"
+        assert done_row.finished_at is not None
+        assert "台账未收尾" in (done_row.error or "")
+        assert missing_row is not None and missing_row.status == "failed"
