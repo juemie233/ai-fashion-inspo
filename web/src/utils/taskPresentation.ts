@@ -524,8 +524,11 @@ export function normalizeQueueTask(t: QueueTask): UnifiedTask {
     started_at: null,
     title: personalTitle || TASK_TYPE_LABELS[t.type] || t.type,
     // 已结束 → 汇总结果；未结束（排队/运行/暂停）→ 说明当前阶段在干什么
+    // result 缺失/过大未回传（旧任务无 result_summary）时，f2 任务用 done 兜底，
+    // 否则「任务」列左下只剩一个类型标签，看不出这次到底入库了多少。
     detail: finished
-      ? summarizeResult(t.type, t.result, t.error || '')
+      ? summarizeResult(t.type, t.result, t.error || '') ||
+        (t.type === 'f2_import' && t.done > 0 ? `入库 ${t.done}` : '')
       : describeRunningTask(t.type, t.result, t.status, t.done, t.total),
     error: t.error,
     created_at: t.created_at,

@@ -93,7 +93,10 @@ const columns: TableColumnData[] = [
     width: 100,
     render: ({ record }) => {
       const row = record as TaskRunOut
-      return row.total_count > 0 ? `${row.item_count} / ${row.total_count}` : `${row.item_count}`
+      // 统一展示「完成数 / 总数」；f2「我的喜欢/收藏」在开始时总数未知（total_count=0），
+      // 结束后用 item_count 兜底，避免只显示一个 883 让用户以为没有总数。
+      const total = row.total_count > 0 ? row.total_count : row.item_count
+      return `${row.item_count} / ${total}`
     },
   },
   { title: '显卡', dataIndex: 'gpu_model', width: 150 },

@@ -585,6 +585,19 @@ describe('normalizeQueueTask', () => {
     expect(t.finished_at).toBe('2026-02-02T00:00:00Z')
     expect(t.detail).toBe('完成 8 张')
   })
+
+  it('f2 成功但 result 未回传时，用 done 兜底显示入库数', () => {
+    const t = normalizeQueueTask(
+      makeQueueTask({
+        type: 'f2_import',
+        status: 'success',
+        done: 883,
+        total: 883,
+        result: null,
+      }),
+    )
+    expect(t.detail).toBe('入库 883')
+  })
 })
 
 describe('normalizeScraperTask', () => {

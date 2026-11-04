@@ -144,4 +144,20 @@ describe('TaskList 按钮矩阵', () => {
 
     expect(wrapper.text()).toContain('暂无数据')
   })
+
+  it('终态任务总数为 0 时也显示「完成数 / 总数」，不再显示破折号', async () => {
+    const wrapper = mountList([queueTask({ status: 'success', total: 0, done: 0 })])
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('0 / 0')
+  })
+
+  it('f2 任务显示「完成数 / 总数」两个数', async () => {
+    const wrapper = mountList([
+      queueTask({ type: 'f2_import', status: 'success', total: 883, done: 883 }),
+    ])
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('883 / 883')
+  })
 })

@@ -13,7 +13,7 @@ import {
 } from '@arco-design/web-vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import TaskRunHistoryModal from '@/components/task/TaskRunHistoryModal.vue'
-import type { UnifiedTask } from '@/types/task'
+import { isTaskTerminalStatus, type UnifiedTask } from '@/types/task'
 import { TASK_TYPE_ICONS, taskTypeTagColor, predictEta } from '@/utils/taskLabel'
 import { formatDate, renderTimeCell } from '@/utils/format'
 import { taskRowActions } from '@/utils/taskPresentation'
@@ -74,7 +74,12 @@ function renderProgress(row: UnifiedTask) {
 
 /** 完成数 / 总数列 */
 function renderCount(row: UnifiedTask) {
-  const text = row.total > 0 ? `${row.done} / ${row.total}` : row.done > 0 ? `${row.done}` : '—'
+  // 明确展示「完成数 / 总数」：即使总数为 0（如「我的喜欢」未采到作品）也写 0 / 0，
+  // 不再用「—」让用户以为这一列没数据；旧任务 total 为 0 但有 done 时按 done 兜底。
+  let text: string
+  if (row.total > 0) text = `${row.done} / ${row.total}`
+  else if (row.done > 0) text = `${row.done} / ${row.done}`
+  else text = isTaskTerminalStatus(row.status) ? '0 / 0' : '—'
   return h(TypographyText, { type: 'secondary' }, { default: () => text })
 }
 
