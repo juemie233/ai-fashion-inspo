@@ -117,3 +117,7 @@ docs/**/*.jpeg
 docs/**/*.png
 docs/**/*.webp
 docs/**/*.gif
+
+# Coverage reports
+web/coverage/
+mobile/coverage/

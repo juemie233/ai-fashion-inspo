@@ -14,7 +14,8 @@
     "format": "prettier --write",
     "format:check": "node ../scripts/ci/check-web-format.mjs",
     "prepare": "husky",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.58.0",
@@ -31,6 +32,7 @@
     "@types/cropperjs": "^1.1.5",
     "@types/node": "^22.10.2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vitest/coverage-v8": "^4.1.12",
     "@vue/test-utils": "^2.4.11",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",

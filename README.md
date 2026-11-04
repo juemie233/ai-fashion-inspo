@@ -252,7 +252,7 @@ chrome_debug_port: int = 9222
 
 ### 门禁与测试体系（10-20）
 
-- `scripts/ci/test.sh` 现在是 **13 项**门禁：ruff、pytest+覆盖率、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/ci/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest、eslint、死代码基线、改动文件格式（`test.sh` 与 CI 对齐）。
+- `scripts/ci/test.sh` 现在是 **14 项**门禁：ruff、pytest+覆盖率+关键模块地板、迁移链空库自检、ORM/库漂移、**脚本规范（`scripts/ci/check_scripts.py`：只读连接 + argparse 入口）**、vue-tsc、vitest+覆盖率、eslint、死代码基线、改动文件格式、移动端 tsc+jest+覆盖率、子项目测试；`--e2e` 为可选附加档。
 - **覆盖率棘轮** 67 → **69**（当前 70%）；**mypy 棘轮** 9 个模块（`check_types.py`）；**eslint 警告** 73 → 34（`--max-warnings 34`）；**死代码基线** 279 → **275** 条（`MAX_BASELINE` 上限，只降不升；跨平台路径归一化两次修正：`1b34a1c`、`8d74fd6`）。
 - 测试补齐：垃圾桶服务层 10 条（覆盖率 30%→91%）、素材创建 8 条（48%→63%）、标签 CRUD/打标/更新 11 条（顺带修「归一化后重名」500）。
 
@@ -1528,14 +1528,16 @@ bash scripts/ops/restore_data.sh E:/fashion-inspo-backups/<时间戳目录> --al
 
 核心链路回归防护：后端 `pytest`（集成测试 + 服务单测）+ 前端 `vitest`（纯函数 / composable / store / 视图交互）+ Playwright e2e 冒烟（真实浏览器跑页面，需前后端都起着）。
 
-**一键运行全部门禁**（12 项：ruff / pytest+覆盖率 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest / eslint / 死代码基线 / 改动文件格式，Git Bash）：
+**一键运行全部门禁**（14 项：后端 pytest+覆盖率+关键模块地板 / ruff / vulture / mypy 棘轮 / 迁移链空库自检 / ORM-库漂移 / 脚本规范 / vue-tsc / vitest+覆盖率 / eslint / 死代码基线 / 改动文件格式 / 移动端 tsc+jest+覆盖率 / 子项目测试；数字以 `test.sh` 输出为准）：
 
 ```bash
-bash scripts/ci/test.sh          # 常规
+bash scripts/ci/test.sh          # 常规（14 项）
 bash scripts/ci/test.sh --cov    # 后端额外输出覆盖率报告
+bash scripts/ci/test.sh --e2e    # 跑完 14 项后再跑 Playwright（需后端在跑；可作 nightly）
 ```
 
-### 后端（pytest，2299 用例）
+### 后端（pytest；当前约 3,000 条，具体以收集数为准；覆盖率棘轮 ≥82.9%）
+
 
 ```bash
 # 首次：安装测试依赖
@@ -1560,9 +1562,9 @@ pytest
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
-> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **81.73%**；门禁棘轮 `--cov-fail-under=81`（`precision=2`））。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，0%，依赖真实浏览器）、`vector/similarity` 深度分支、`ai_analysis_service` 的批量重试/重试全部、`ws.py`（WebSocket）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **83.00%**；门禁棘轮 `--cov-fail-under=82.9`（`precision=2`））。另有 `backend/scripts/check_module_coverage.py` 对 `worker` / `generation_service` / `seedream_client` / `search` / `ai_settings` / `ai_quality` 设模块地板，防止全局均值掩盖关键模块退化。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，依赖真实浏览器）、`vector/similarity` 深度分支、`ws.py`（WebSocket）。
 
-### 前端（vitest，606 用例 / 75 个文件）
+### 前端（vitest；当前 900+ 用例 / 100+ 文件；覆盖率门槛见 `web/vitest.config.ts`）
 
 ```bash
 cd web
@@ -1571,7 +1573,7 @@ npm test
 
 覆盖范围：`format` / `sourceLabel` / `taskLabel` / `browseQuery` / `ipStatsChart`（IP 属地条形图配置：**不隐藏任何一档标签**、高度随条目数增长）纯函数、`taskPresentation`（任务结果汇总 + **运行中阶段文案**：f2 下载/入库/登记博主/排队/暂停 + 「我的喜欢」实时下载计数，非 f2 任务不编造阶段；**任务行按钮矩阵** `taskRowActions`（暂停/恢复/取消/删除与后端接收矩阵同口径，含「可取消但不可暂停类型不给取消」）+ 重负载互斥组的清单内容锁定与排队说明）、`tagHistoryDiff`（操作历史 before/after 差异与值格式化）、`useSplitResize` 拖拽 / `useBatchSelection` 批量多选 composable、`useF2Import`（f2 状态解析 / 自动获取开关 / 一键获取与「我的喜欢」参数透传）、`F2LikeCard`（「我的喜欢」卡片：链接保存 / 实时下载进度文案 / 一键拉取）、`useF2Results` + `F2ResultsPanel`（批次结果分类过滤 / 移入垃圾桶与恢复）、`useF2TaskHistory`、`useScraperRoi`（采集 ROI：按窗口天数请求 / 切窗口重拉 / 空数据判定 / 失败置空 / 口径说明透传，以及 `formatRate`、`formatCount` 对「没有这个口径」与「样本为 0」都显示「—」）、`PersonAvatarPicker`（头像选择器：素材列表加载 / 上传前校验 / 结果提示）、`PersonTopList`（热门排行渲染）、`persons`（博主/模特双 store 实例 + 请求序号防乱序）/ `inspirations` / `tags` store（mock API）、`taskLabel` 任务类型/图标映射断言、`faceMedia`（人脸库扫描媒体地址：`media_type` 缺失时按后缀判视频，**悬停大图绝不返回 mp4**）、`FaceUnmatchedTab`（悬停浮层：停留后弹出、移出消失、大图取原图）、`useFaceServiceStatus`（未知态不误伤 / 探测到不可达带回中文原因 / 请求本身失败不锁死人脸功能 / 并发复用同一次探测）、`f2Authors`（博主清单表头排序：空值与字段缺失当 0 且不抛错、两方向互为相反数）、`f2CollectSelection`（收藏夹选择只保留最近一次、脏数据当无记录、恢复时只勾仍存在的夹并报告失效数量）、`AdminNearDuplicates`（逐组对比：确认删除才 emit、中途退出也提交已做的决定、可翻页改主意、全部跳过不提交空删除、连点保护）、`tagGovernance` 纯函数（用量分桶边界、重命名预览的空名/批内撞名预检与后端 400/409 同口径、相似对「合并 vs 设别名」分界）、`useTagGovernance`（颜色剥离预览→执行、观察名单翻页与本地移除、别名建议的残缺配对过滤、长尾批量合并/删除、洞察跟随标签）、`usePersonBatch`（批量纳入追踪/删除/清头像的结果如实汇报 + 同名合并以素材最多者为组主）、`useAvatarFill`（提交后立即可重复点击防护、终态计数文案）。
 
-### 移动端（jest-expo + @testing-library/react-native，243 用例 / 24 个文件）
+### 移动端（jest-expo + @testing-library/react-native；当前 246 用例 / 25 个文件；utils/hooks/services 覆盖率门槛见 `mobile/package.json`）
 
 ```bash
 cd mobile && npm test
@@ -1579,7 +1581,7 @@ cd mobile && npm test
 
 覆盖范围：**设计令牌强约束**（`theme.tokens`：扫描 `app/**`+`components/**` 断言 0 处十六进制颜色与裸圆角、字号只来自 11/12/13/15/17/22，并按 WCAG AA 校验亮/暗两套主题 16 组文字配对 ≥4.5:1）、14 个基础组件与 `MediaCard` 的契约、深色模式取色、冷启动只发一次首页请求、人物搜索 300ms 防抖（6 个字符 1 次请求）、页面渲染（画廊/搜索/详情/采集/设置/任务中心）、**裸字符串检查**（遍历渲染树断言非 `<Text>` 节点下没有字符串/数字——专治只有原生才会拦、Web 预览与普通渲染测试都发现不了的「白屏」）、API 契约（URL / 请求体形状，含 f2 专属字段）、`TagEditor`（筛选/勾选/移除/新建/**5000 标签下的渲染行数远小于总量**，防再次卡死 JS 线程）、采集页多选入队与逐张上传失败重试、详情页编辑入口/垃圾桶确认/404、任务行类型与状态映射（含「已暂停也能取消」）。
 
-### 端到端冒烟（Playwright，20 条）
+### 端到端冒烟（Playwright，20 条；已修复 3 条失败，可选门禁 `test.sh --e2e`）
 
 真实浏览器跑 9 个核心页面（首页 / 任务管理 / 采集管理 / 标签管理 / 质量审核 / 操作审计 /
 **本地出图 / 人物列表与详情 / 数据治理**），
@@ -1599,7 +1601,9 @@ cd web && npm run test:e2e
   不会让你对着一堆「表格空 / 接口超时」的失败去猜选择器；
 - 后端地址取 `web/.env` 的 `VITE_BACKEND_URL`，也可用 `E2E_API_BASE=<地址>` 临时覆盖；
 - **串行执行**（`workers: 1`）：并行时各页面首屏（Vite 按路由懒编译 + 统计接口）会互相抢，
-  实测同一用例单跑必过、并行偶发超时；20 条约 1.5 分钟；
+  实测同一用例单跑必过、并行偶发超时；20 条约 3 分钟（含长接口/完整性检查）；
+- **不依赖固定 sleep**：等待具体元素/启用状态；生成历史空态改用 `.gen-empty`，
+  治理页无数据时跳过「批量删除」确认用例，避免真实库为空时假红；
 - 失败产物在 `web/test-results/`（`npx playwright show-trace <trace.zip>` 可回放）。
 
 ### 约定

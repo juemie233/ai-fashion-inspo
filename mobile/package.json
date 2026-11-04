@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "type-check": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",
@@ -55,6 +56,24 @@
     ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg))"
-    ]
+    ],
+    "collectCoverageFrom": [
+      "utils/**/*.ts",
+      "hooks/**/*.ts",
+      "services/**/*.ts",
+      "!**/__tests__/**",
+      "!**/*.test.ts"
+    ],
+    "coverageReporters": [
+      "text-summary"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 75,
+        "statements": 75,
+        "functions": 80,
+        "branches": 65
+      }
+    }
   }
 }

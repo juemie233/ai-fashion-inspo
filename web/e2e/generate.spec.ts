@@ -51,9 +51,11 @@ test('出图页：生成历史默认折叠，展开后才加载并渲染', async
   await expect(toggle).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.arco-table').first()).toHaveCount(0)
 
-  // 展开后：有记录是表格、无记录是空态，两者都算渲染完成
+  // 展开后：有记录是表格、无记录是空态，两者都算渲染完成。
+  // 空态是 GenerateHistoryTable 自己的 `.gen-empty`（不是 Arco 的 `.arco-empty`），
+  // 这里同时接受两种形态，避免没生成记录的环境下用例永久等 Arco 空态。
   await toggle.click()
-  await expect(page.locator('.arco-table, .arco-empty').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.arco-table, .gen-empty').first()).toBeVisible({ timeout: 15_000 })
   // 收起入口文案应变为「收起」（表示状态真的翻转了）
   await expect(page.getByText(/收起生成历史/).first()).toBeVisible()
 })
