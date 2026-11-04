@@ -17,20 +17,18 @@ from app.services.vector import similarity as sim
 
 
 async def _insp(insp_id: str, *, media_type: str = "image", deleted: bool = False) -> str:
+    from factories import create_inspiration
+
     async with async_session() as db:
-        db.add(
-            Inspiration(
-                id=insp_id,
-                source_type="douyin",
-                file_path=f"images/x/{insp_id}.jpg",
-                media_type=media_type,
-                quality_status="approved",
-                deleted_at=(
-                    datetime.now(timezone.utc) if deleted else None
-                ),
-            )
+        await create_inspiration(
+            db,
+            id=insp_id,
+            source_type="douyin",
+            file_path=f"images/x/{insp_id}.jpg",
+            media_type=media_type,
+            quality_status="approved",
+            deleted_at=(datetime.now(timezone.utc) if deleted else None),
         )
-        await db.commit()
     return insp_id
 
 
@@ -499,6 +497,47 @@ async def test_backfill_respects_limit(client, monkeypatch):
         stats = await sim.backfill_all_vectors(db, limit=2)
 
     assert stats["processed"] == 2
+
+
+async def test_find_similar_hybrid_fixed_vectors_rank_by_visual_plus_tags(monkeypatch):
+    """P2：固定向量的小规模排序断言（不依赖假 CLIP 的语义，只验混合排序公式）。"""
+    from types import SimpleNamespace
+
+    source = SimpleNamespace(id="src", tags=[SimpleNamespace(tag_id=1), SimpleNamespace(tag_id=2)])
+    candidates = {
+        "visual_only": SimpleNamespace(id="visual_only", tags=[]),
+        "visual_plus_tags": SimpleNamespace(
+            id="visual_plus_tags", tags=[SimpleNamespace(tag_id=1), SimpleNamespace(tag_id=2)]
+        ),
+    }
+
+    async def fake_search(kind, vector, top_k):
+        assert kind == "image"
+        assert vector == [1.0, 0.0]
+        return [
+            {"inspiration_id": "visual_only", "score": 0.50},
+            {"inspiration_id": "visual_plus_tags", "score": 0.40},
+        ]
+
+    async def fake_load(_db, insp_id):
+        return candidates.get(insp_id)
+
+    async def fake_build(_db, _source):
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(sim.vector_store, "is_lancedb_available", lambda: True)
+    monkeypatch.setattr(sim.vector_store, "search_vectors", fake_search)
+    monkeypatch.setattr(sim, "load_live_inspiration", fake_load)
+    monkeypatch.setattr(sim, "_get_or_build_image_vector", fake_build)
+
+    results = await sim.find_similar_hybrid(None, source, top_k=2)
+
+    ids = [item["inspiration"].id for item in results]
+    # 标签满配的候选应凭 tag 加权反超纯视觉分（固定权重下 0.4*visual + 0.3 > 0.5*visual）
+    assert ids == ["visual_plus_tags", "visual_only"]
+    assert results[0]["shared_tags"] == 2
+    assert results[0]["match_source"] == "hybrid"
+    assert results[1]["match_source"] == "visual"
 
 
 async def _empty() -> set[str]:

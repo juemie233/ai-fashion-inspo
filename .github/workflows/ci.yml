@@ -85,6 +85,8 @@ jobs:
   backend:
     name: 后端（lint / 迁移 / pytest 全量）
     runs-on: ubuntu-latest
+    env:
+      TZ: UTC
     defaults:
       run:
         working-directory: backend

@@ -40,14 +40,14 @@ done
 
 echo "===== 1/14 后端测试 + 覆盖率棘轮（≥82.9%）+ 关键模块地板 ====="
 cd "$ROOT/backend"
-# 覆盖率底线是**棘轮**：只能往上调。当前 82.93%（2026-11-04 实测），本轮提到 82.9。
+# 覆盖率底线是**棘轮**：只能往上调。当前 83.02%（2026-11-04 实测），本轮提到 82.9。
 # 注意 backend/.coveragerc 的 precision=2：不设它时覆盖率按整数四舍五入比较，
 # 门槛会「看起来没过、退出码却是 0」（门禁放水）。
 # --cov 参数只影响报告详略（不传则只看被跳过的文件），阈值始终生效。
 if [[ "$COV" == "--cov" ]]; then
-  "$PY" -m pytest --cov --cov-fail-under=82.9 --cov-report=term-missing
+  TZ=UTC "$PY" -m pytest -m "" --cov --cov-fail-under=82.9 --cov-report=term-missing
 else
-  "$PY" -m pytest --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
+  TZ=UTC "$PY" -m pytest -m "" --cov --cov-fail-under=82.9 --cov-report=term:skip-covered
 fi
 # 全局覆盖率会掩盖关键模块的薄弱：worker/出图/搜索/AI 设置单独设地板
 "$PY" scripts/check_module_coverage.py
@@ -115,7 +115,7 @@ cd "$ROOT/mobile"
 # 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
 # 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
 node node_modules/typescript/bin/tsc --noEmit
-node node_modules/jest/bin/jest.js --ci --coverage
+node node_modules/jest/bin/jest.js --ci --coverage --runInBand --detectOpenHandles
 
 echo ""
 echo "===== 14/14 子项目最低测试（浏览器插件 / 人脸子服务）====="

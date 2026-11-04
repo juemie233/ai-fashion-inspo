@@ -33,10 +33,13 @@ WATCHED: list[tuple[str, str]] = [
     ("get", "/api/inspirations/trash"),
     ("get", "/api/tasks"),
     ("get", "/api/tasks/{task_id}"),
+    ("get", "/api/tasks/{task_id}/runs"),
     ("get", "/api/tags"),
     ("get", "/api/search"),
     ("get", "/api/collections"),
     ("get", "/api/bloggers"),
+    ("get", "/api/bloggers/{blogger_id}"),
+    ("get", "/api/models"),
 ]
 
 # 前端在消费、但后端**没有 response_model**（返回自由 dict）的接口。

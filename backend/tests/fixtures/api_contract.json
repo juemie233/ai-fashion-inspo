@@ -5,6 +5,34 @@
     "size",
     "total"
   ],
+  "GET /api/bloggers/{blogger_id}": [
+    "avatar_path",
+    "aweme_count",
+    "bio",
+    "bio_source",
+    "created_at",
+    "face_match_threshold",
+    "face_registered",
+    "follower_count",
+    "following_count",
+    "group_members",
+    "group_platforms",
+    "id",
+    "inspiration_count",
+    "ip_location",
+    "last_inspiration_at",
+    "name",
+    "person_group_id",
+    "platform",
+    "platform_user_id",
+    "profile_url",
+    "source",
+    "stats_synced_at",
+    "style_profile",
+    "total_favorited",
+    "updated_at",
+    "xhs_id"
+  ],
   "GET /api/collections": [
     "auto_source",
     "child_count",
@@ -61,6 +89,12 @@
     "trash_source",
     "updated_at"
   ],
+  "GET /api/models": [
+    "items",
+    "page",
+    "size",
+    "total"
+  ],
   "GET /api/search": [
     "items",
     "page",
@@ -93,5 +127,18 @@
     "total",
     "type",
     "updated_at"
+  ],
+  "GET /api/tasks/{task_id}/runs": [
+    "attempt",
+    "error",
+    "finished_at",
+    "gpu_model",
+    "id",
+    "item_count",
+    "started_at",
+    "status",
+    "task_id",
+    "task_type",
+    "total_count"
   ]
 }

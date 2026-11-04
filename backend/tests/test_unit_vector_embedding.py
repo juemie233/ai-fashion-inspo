@@ -241,6 +241,7 @@ def test_text_embedding_status_exposes_model_and_dim():
 # ── CLIP 依赖与模型加载 ──
 
 
+@pytest.mark.slow
 def test_clip_dependency_detected():
     """当前环境（未装 sentence-transformers/torch）应给出可操作的安装提示。"""
     reason = emb._check_clip_dependency()

@@ -13,6 +13,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, shallowMount } from '@vue/test-utils'
+import ArcoVue from '@arco-design/web-vue'
 
 const mocks = vi.hoisted(() => ({
   searchInspirations: vi.fn(),
@@ -45,6 +47,11 @@ vi.mock('@/api/inspirations', () => ({
   getFileUrl: (p: string) => `/files/${p}`,
 }))
 
+// SearchView 集成用例会挂载真实 useSearch，进而触发 tags store；mock 掉 tags API 防真实请求
+vi.mock('@/api/tags', () => ({
+  fetchTagsGrouped: vi.fn().mockResolvedValue([]),
+}))
+
 vi.mock('@arco-design/web-vue', async () => {
   const actual =
     await vi.importActual<typeof import('@arco-design/web-vue')>('@arco-design/web-vue')
@@ -52,6 +59,7 @@ vi.mock('@arco-design/web-vue', async () => {
 })
 
 import { useSearch } from '../useSearch'
+import SearchView from '@/views/SearchView.vue'
 
 const ITEM = {
   id: 's1',
@@ -261,5 +269,14 @@ describe('useSearch', () => {
     await s.copySearchLink()
 
     expect(mocks.message.error).toHaveBeenCalledWith('复制失败')
+  })
+
+  it('SearchView + 真实 useSearch + mock API：页面能挂载并触发搜索（P2 去过度 mock）', async () => {
+    setActivePinia(createPinia())
+    const wrapper = shallowMount(SearchView, { global: { plugins: [ArcoVue] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('高级搜索')
+    expect(mocks.searchInspirations).toHaveBeenCalled()
   })
 })

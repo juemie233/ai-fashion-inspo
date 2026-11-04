@@ -1,5 +1,7 @@
 """素材管理后台洞察：CSV 导出、新增趋势、人物频次排行。"""
 
+import pytest
+
 
 def test_export_csv(client, upload):
     """导出 CSV：返回可下载的文本/CSV，内容含表头与素材元数据。"""
@@ -177,6 +179,7 @@ def test_near_duplicate_full_scan_accepted(client, upload):
     assert data["truncated"] is False  # 全量扫描不截断
 
 
+@pytest.mark.slow
 async def test_near_duplicate_scan_backfill_visibility(client):
     """近似重复扫描：独立补算提交的 phash 必须在扫描的随机抽样中可见。
 

@@ -19,6 +19,9 @@ import sqlite3
 from datetime import timedelta
 
 from PIL import Image
+import pytest
+
+pytestmark = pytest.mark.integration
 
 from app.config import settings
 from app.utils.time import utcnow

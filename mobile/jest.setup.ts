@@ -113,3 +113,13 @@ jest.mock('expo-haptics', () => ({
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }))
 
+
+// P2：逐用例清理渲染树与定时器，避免 React 更新悬挂 / Jest 强制退出。
+// 用 require 而不是顶层 import：本文件里大量 jest.mock 依赖 require 顺序。
+const { cleanup } = require('@testing-library/react-native')
+
+afterEach(() => {
+  cleanup()
+  jest.clearAllTimers()
+  jest.useRealTimers()
+})

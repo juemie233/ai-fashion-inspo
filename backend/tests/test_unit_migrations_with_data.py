@@ -138,6 +138,7 @@ def _insert_sample_rows(tmp_path: Path) -> dict:
         con.close()
 
 
+@pytest.mark.slow
 def test_upgrade_head_preserves_existing_data(temp_db):
     """旧版本库（带数据）→ upgrade head：数据不丢、结构到 head、新增列有合法默认值。"""
     head, parent = _head_and_parent()

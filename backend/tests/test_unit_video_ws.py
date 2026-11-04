@@ -16,6 +16,8 @@ import pytest
 from app.routers.ws import ConnectionManager
 from app.services import video_service
 
+pytestmark = pytest.mark.slow
+
 
 # ── video_service：纯函数部分 ──
 
