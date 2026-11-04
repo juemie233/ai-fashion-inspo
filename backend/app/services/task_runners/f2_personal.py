@@ -15,8 +15,13 @@ web/src/utils/taskPresentation.ts）。
 """
 
 import logging
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from types import ModuleType
+from urllib.parse import unquote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -235,3 +240,142 @@ def _brief_reason(exc: BaseException, limit: int = 60) -> str:
     detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
     text = " ".join(str(detail).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+@dataclass(frozen=True)
+class F2CookieStatus:
+    """F2 抖音登录 Cookie 的预检结果（只读 f2 自己的 app.yaml，不碰任务库）。"""
+
+    expires_at: datetime | None = None
+    error: str | None = None
+    config_found: bool = False
+
+
+"""F2 配置文件位置（相对 f2 工作目录）。
+
+本机 f2 是「工作目录 / 包目录」两层：``Desktop\\f2`` 下还有一层 ``f2/conf/app.yaml``；
+也兼容直接装在 ``<f2_dir>/conf/app.yaml`` 或单文件 ``<f2_dir>/app.yaml`` 的情况。
+"""
+_F2_CONFIG_CANDIDATES = (
+    Path("f2") / "conf" / "app.yaml",
+    Path("conf") / "app.yaml",
+    Path("app.yaml"),
+)
+
+
+def _read_f2_config(f2_dir: Path) -> tuple[Path | None, str]:
+    """读 F2 的 app.yaml；找不到时返回 (None, "")。"""
+    for rel in _F2_CONFIG_CANDIDATES:
+        path = f2_dir / rel
+        if path.is_file():
+            try:
+                return path, path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:  # 权限/被占用：当作读不到，不阻断任务
+                logger.warning("F2 配置文件读取失败（%s）：%s", path, exc)
+                return path, ""
+    return None, ""
+
+
+def _extract_douyin_cookie(config_text: str) -> str:
+    """从 app.yaml 文本里取出 douyin.cookie 的值（不依赖 PyYAML）。
+
+    兼容三种写法：单行/multiline plain scalar、``cookie: >`` 块、``cookie: |`` 块；
+    遇到下一个 ``naming:`` 等键就停止，避免把后续配置拼进 Cookie。
+    """
+    lines = config_text.splitlines()
+    in_douyin = False
+    collecting = False
+    parts: list[str] = []
+    for line in lines:
+        if not in_douyin:
+            if line.rstrip() == "douyin:":
+                in_douyin = True
+            continue
+        # 下一个顶层键（tiktok: / twitter: ...）结束 douyin 段
+        if re.match(r"^[A-Za-z0-9_]+:\s*", line):
+            break
+        match = re.match(r"^\s+cookie:\s*(.*)$", line)
+        if match and not parts:
+            value = match.group(1).strip()
+            if value[:1] in (">", "|"):  # 块标量：内容在后续缩进行
+                collecting = True
+                continue
+            if value:
+                parts.append(value)
+            collecting = True
+            continue
+        if collecting:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # 下一个配置键（如 naming:）不是 Cookie 的延续
+            if re.match(r"^[A-Za-z0-9_]+:\s*", stripped):
+                break
+            parts.append(stripped)
+    value = " ".join(parts).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    return value
+
+
+def _parse_sid_guard_expiry(cookie: str) -> tuple[datetime | None, str | None]:
+    """从 Cookie 的 ``sid_guard`` 解析登录有效期。
+
+    sid_guard 形态：``sessionid|创建时间戳|TTL 秒|过期时间(GMT)``（值可能被
+    URL 编码成 ``%7C`` / ``%3A``）。解析失败只返回原因，由调用方决定是否阻断。
+    """
+    match = re.search(r"(?:^|;\s*)sid_guard=([^;]+)", cookie)
+    if not match:
+        return None, "F2 配置未设置 douyin.cookie（或 Cookie 里没有 sid_guard）"
+    parts = unquote(match.group(1)).replace("+", " ").split("|")
+    if len(parts) >= 4:
+        try:
+            expires = parsedate_to_datetime(parts[3])
+        except (TypeError, ValueError):
+            expires = None
+        if expires is not None:
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            return expires.astimezone(UTC), None
+    # 老格式没有可读的过期日期时，用「创建时间 + TTL」兜底
+    if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
+        return datetime.fromtimestamp(int(parts[1]) + int(parts[2]), tz=UTC), None
+    return None, "F2 登录 Cookie 的 sid_guard 格式无法解析"
+
+
+def personal_cookie_status(f2_dir: Path) -> F2CookieStatus:
+    """读取 f2 配置里的抖音登录 Cookie 并判断是否已过期。"""
+    config_path, text = _read_f2_config(f2_dir)
+    if config_path is None:
+        return F2CookieStatus(error=f"未找到 F2 配置文件（{f2_dir} 下 conf/app.yaml）", config_found=False)
+    cookie = _extract_douyin_cookie(text)
+    if not cookie:
+        return F2CookieStatus(
+            error=f"F2 配置 {config_path} 未设置 douyin.cookie（登录态）",
+            config_found=True,
+        )
+    expires_at, error = _parse_sid_guard_expiry(cookie)
+    return F2CookieStatus(expires_at=expires_at, error=error, config_found=True)
+
+
+def ensure_personal_cookie(f2_dir: Path, label: str) -> None:
+    """「我的喜欢 / 我的收藏」取数前的登录态防护。
+
+    F2 在 Cookie 过期时会把点赞接口的 ``200 + 空响应``当成「没有作品」，然后以
+    0 退出——上层只看到「任务成功、导入 0」，用户完全不知道登录态已经失效。
+    这里在启动 f2 子进程**之前**读 ``sid_guard`` 的过期时间，已过期就直接失败并
+    给出可操作的中文提示。
+
+    找不到配置文件时不阻断：可能是通过 ``--config``/其它路径运行，且现有测试
+    的临时 f2 目录也没有配置文件；只有「配置存在但 Cookie 为空」才确定为不可用。
+    """
+    status = personal_cookie_status(f2_dir)
+    if status.expires_at is not None and status.expires_at <= datetime.now(UTC):
+        local = status.expires_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        raise RuntimeError(
+            f"F2 抖音登录 Cookie 已于 {local} 过期，无法读取「{label}」。"
+            "请先更新 F2 登录态（关闭浏览器后运行 `python -m f2 dy --auto-cookie chrome`，"
+            "或手动替换 f2/conf/app.yaml 里的 douyin.cookie）后重新提交任务。"
+        )
+    if status.error:
+        logger.warning("F2「%s」登录态预检：%s（继续执行；若采集为 0 请检查登录态）", label, status.error)

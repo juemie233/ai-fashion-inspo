@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task import TaskQueue
 from app.services.task_runners.common import utcnow
 from app.services.task_runners.f2_library_ids import known_library_aweme_ids
-from app.services.task_runners.f2_personal import _personal_label, _personal_scan_root
+from app.services.task_runners.f2_personal import (
+    _personal_label,
+    _personal_scan_root,
+    ensure_personal_cookie,
+)
 from app.services.task_runners.f2_progress import (
     _PROGRESS_AFTER_DOWNLOAD,
     _WATCH_INTERVAL,
@@ -67,6 +71,9 @@ async def _fetch_personal_stage(
         raise RuntimeError(
             f"未配置「我的主页链接」：{label}只有本人可见，请先在「{label}」卡片里填写你的抖音主页链接"
         )
+    # 登录态防护：Cookie 已过期时 f2 会把点赞接口的空响应当成「0 个作品」并成功
+    # 退出，任务看似 success、实际什么都没采；这里在下载前直接失败并给出更新指引。
+    ensure_personal_cookie(f2_dir, label)
     fetch_summary["total"] = 1
     # 总数要翻到底才知道：下载期不给 done/total（计数看 download_progress 的文件数），
     # 进度条由 watcher 按耗时给软进度。
@@ -183,6 +190,7 @@ async def _fetch_collects_by_folder_stage(
         raise RuntimeError(
             "未配置「我的主页链接」：收藏列表只有本人可见，请先在「我的收藏」卡片里填写你的抖音主页链接"
         )
+    ensure_personal_cookie(f2_dir, label)
 
     personal_root = f2.DEFAULT_F2_COLLECT_ROOT
     # F（下载前两道过滤）：库内已有作品 → 整件跳过；另一个「我的列表」目录里已有
