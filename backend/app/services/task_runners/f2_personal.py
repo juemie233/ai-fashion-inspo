@@ -86,11 +86,7 @@ def personal_registers_bloggers(fetch_mode: str, requested: bool) -> bool:
 
 def _personal_scan_root(f2: ModuleType, fetch_mode: str) -> Path:
     """「我的列表」模式的产物根目录（点赞 / 收藏）。"""
-    return (
-        f2.DEFAULT_F2_COLLECT_ROOT
-        if fetch_mode == "collection"
-        else f2.DEFAULT_F2_LIKE_ROOT
-    )
+    return f2.DEFAULT_F2_COLLECT_ROOT if fetch_mode == "collection" else f2.DEFAULT_F2_LIKE_ROOT
 
 
 def load_collect_folder_entries(root: str | Path) -> dict[str, dict]:
@@ -115,9 +111,7 @@ def load_collect_folder_entries(root: str | Path) -> dict[str, dict]:
         return {}
     # 清单落在「昵称」目录下：既认根目录直下，也认一层子目录（f2 的产物结构）
     candidates = [base / _COLLECT_FOLDER_MAP_NAME]
-    candidates += [
-        child / _COLLECT_FOLDER_MAP_NAME for child in sorted(base.iterdir()) if child.is_dir()
-    ]
+    candidates += [child / _COLLECT_FOLDER_MAP_NAME for child in sorted(base.iterdir()) if child.is_dir()]
     merged: dict[str, dict] = {}
     for path in candidates:
         if not path.is_file():
@@ -135,8 +129,7 @@ def load_collect_folder_entries(root: str | Path) -> dict[str, dict]:
             prev["name"] = prev["name"] or str(entry.get("name") or "").strip()
             prev["aweme_ids"] |= ids
     return {
-        fid: {"name": entry["name"], "aweme_ids": sorted(entry["aweme_ids"])}
-        for fid, entry in merged.items()
+        fid: {"name": entry["name"], "aweme_ids": sorted(entry["aweme_ids"])} for fid, entry in merged.items()
     }
 
 

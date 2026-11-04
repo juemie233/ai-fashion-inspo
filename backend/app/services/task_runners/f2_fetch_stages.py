@@ -65,8 +65,7 @@ async def _fetch_personal_stage(
     label = _personal_label(fetch_mode)
     if not like_user:
         raise RuntimeError(
-            f"未配置「我的主页链接」：{label}只有本人可见，"
-            f"请先在「{label}」卡片里填写你的抖音主页链接"
+            f"未配置「我的主页链接」：{label}只有本人可见，请先在「{label}」卡片里填写你的抖音主页链接"
         )
     fetch_summary["total"] = 1
     # 总数要翻到底才知道：下载期不给 done/total（计数看 download_progress 的文件数），
@@ -91,18 +90,14 @@ async def _fetch_personal_stage(
             max_counts=like_max_counts,
         )
     )
-    outcome, final_stats = await _watch_personal_download(
-        db, task, fetch_task, personal_root, baseline, opts
-    )
+    outcome, final_stats = await _watch_personal_download(db, task, fetch_task, personal_root, baseline, opts)
     if outcome.get("error"):
         raise RuntimeError(str(outcome["error"]))
     fetch_summary["ok"] = int(outcome.get("ok") or 0)
     fetch_summary["failed"] = int(outcome.get("failed") or 0)
     fetch_summary["like_user"] = f2.like_user_url(like_user)
     fetch_summary["like_max_counts"] = like_max_counts
-    fetch_summary["cmd"] = (
-        outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
-    )
+    fetch_summary["cmd"] = outcome["results"][0].get("cmd", "") if outcome.get("results") else ""
     # 本次下载的真实产出（文件数 / 体积）：入库阶段的 plan 只讲「有多少要入库」，
     # 这个字段回答「下载期到底拉回来多少」——全部被去重挡掉时也看得见
     fetch_summary["downloaded"] = {
@@ -186,8 +181,7 @@ async def _fetch_collects_by_folder_stage(
     label = f"我的收藏（{len(collect_ids)} 个收藏夹）"
     if not like_user:
         raise RuntimeError(
-            "未配置「我的主页链接」：收藏列表只有本人可见，"
-            "请先在「我的收藏」卡片里填写你的抖音主页链接"
+            "未配置「我的主页链接」：收藏列表只有本人可见，请先在「我的收藏」卡片里填写你的抖音主页链接"
         )
 
     personal_root = f2.DEFAULT_F2_COLLECT_ROOT
@@ -386,9 +380,7 @@ def _select_post_targets(
         targets = known_authors
         wanted = {f2.normalize_author(a) for a in authors} if authors else None
         if wanted is not None:
-            targets = [
-                a for a in targets if f2.normalize_author(a["nickname"]) in wanted
-            ]
+            targets = [a for a in targets if f2.normalize_author(a["nickname"]) in wanted]
             # 点名的作者一个都不在 f2 用户库里 → 什么都下不了。**必须响亮失败**：
             # 任务 351 就是这么静默过去的（请求「唐思瑶ya」不在 f2 用户库，
             # 下载 0 个作者、入库 0，状态却是 success，用户看不出任何原因）。
@@ -413,9 +405,17 @@ def _select_post_targets(
     return targets
 
 
-async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targets: list[dict],
-                   profiles: list[str], since_days: int, f2_dir: Path,
-                   fetch_summary: dict, status_of: StatusReader) -> bool:
+async def _fetch_posts_stage(
+    db: AsyncSession,
+    task: TaskQueue,
+    opts: dict,
+    targets: list[dict],
+    profiles: list[str],
+    since_days: int,
+    f2_dir: Path,
+    fetch_summary: dict,
+    status_of: StatusReader,
+) -> bool:
     """阶段 1b：发布模式——逐作者串行下载（子进程放线程）。
 
     返回 True 表示任务已被取消/暂停（已落库，调用方直接返回）。"""
@@ -445,9 +445,7 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
             if profiles
             else f2.compute_fetch_interval(since_days, last_at)
         )
-        cmd = f2.build_f2_command(
-            author, download_root=f2.DEFAULT_F2_DOWNLOAD_ROOT, interval=interval
-        )
+        cmd = f2.build_f2_command(author, download_root=f2.DEFAULT_F2_DOWNLOAD_ROOT, interval=interval)
         logger.info(f"f2 下载 {display}（窗口 {interval}）")
         # 下载**期间**也要有实时进度（2026-10-01 用户报「磁盘已落两千张图、界面还是
         # 第 0/1 个作者 · 0%」）：单个作者内部 f2 一路翻页、每页固定等一次 timeout，
@@ -483,21 +481,14 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
             ``Callable[[float], int]``（watch_download 的参数类型）。
             """
             return (
-                int(
-                    _PROGRESS_AFTER_DOWNLOAD
-                    * (i - 1 + _soft_fraction(elapsed))
-                    / max(1, len(targets))
-                )
-                + 1
+                int(_PROGRESS_AFTER_DOWNLOAD * (i - 1 + _soft_fraction(elapsed)) / max(1, len(targets))) + 1
             )
 
         try:
             rc, _stats = await _watch_download(
                 db,
                 task,
-                asyncio.create_task(
-                    asyncio.to_thread(_run_subprocess, cmd, f2_dir)
-                ),
+                asyncio.create_task(asyncio.to_thread(_run_subprocess, cmd, f2_dir)),
                 post_root,
                 baseline,
                 opts,
@@ -546,9 +537,9 @@ async def _fetch_posts_stage(db: AsyncSession, task: TaskQueue, opts: dict, targ
     return False
 
 
-async def _resolve_named_profile_keys(db: AsyncSession, task: TaskQueue, opts: dict,
-                            targets: list[dict], fetch_summary: dict,
-                            f2_dir: Path) -> set[str]:
+async def _resolve_named_profile_keys(
+    db: AsyncSession, task: TaskQueue, opts: dict, targets: list[dict], fetch_summary: dict, f2_dir: Path
+) -> set[str]:
     """点名博主的昵称反查（决定本次入库范围）。
 
     下单后 f2 已把新账号写进用户库，此时才能按 sec_user_id 反查昵称——入库白名单
