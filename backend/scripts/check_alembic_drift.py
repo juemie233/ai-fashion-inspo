@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +54,43 @@ def _resolve_db() -> Path | None:
     return path if path.is_absolute() else (BACKEND / path).resolve()
 
 
+def _check_partial_indexes(db: Path) -> list[str]:
+    """对账 ORM 部分索引的 WHERE 谓词（alembic check 不比较 sqlite_where）。
+
+    2026-11-06 数据库审查 P1-1：历史库版本是 head，但
+    ix_inspirations_source_platform_id 仍是全量唯一；`alembic check` 认为一致，
+    只有直接读 sqlite_master 才能发现。返回问题列表（空=通过）。
+    """
+    sys.path.insert(0, str(BACKEND))
+    import app.models  # noqa: F401 —— 注册全部 ORM 表
+    from app.database import Base
+
+    con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)
+    problems: list[str] = []
+    try:
+        for table in Base.metadata.tables.values():
+            for index in table.indexes:
+                where = index.dialect_options["sqlite"].get("where")
+                if where is None:
+                    continue
+                row = con.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                    (index.name,),
+                ).fetchone()
+                actual = " ".join((row[0] or "").split()).upper() if row else ""
+                expected = " ".join(str(where).split()).upper()
+                if not actual:
+                    problems.append(f"缺少部分索引 {index.name}（表 {table.name}）")
+                elif "WHERE" not in actual or expected not in actual:
+                    problems.append(
+                        f"部分索引 {index.name} 谓词不一致：库中 `{actual}`，"
+                        f"ORM 要求 `{expected}`"
+                    )
+    finally:
+        con.close()
+    return problems
+
+
 def main() -> int:
     """运行 alembic check 并返回退出码。"""
     db = _resolve_db()
@@ -74,7 +112,17 @@ def main() -> int:
     )
     output = (result.stdout or "") + (result.stderr or "")
     if "No new upgrade operations detected" in output:
-        print(f"[ok] ORM 与数据库结构一致（{db.name}）")
+        partial_problems = _check_partial_indexes(db)
+        if partial_problems:
+            print("[fail] ORM 与数据库的部分索引谓词不一致：")
+            for problem in partial_problems:
+                print(f"  - {problem}")
+            print(
+                "\n修复：执行 `python -m alembic upgrade head` 跑 w3x4y5z6a7b8 迁移，"
+                "或重启后端让 ensure_schema 的索引对账执行。"
+            )
+            return 1
+        print(f"[ok] ORM 与数据库结构一致（{db.name}，含部分索引谓词）")
         return 0
 
     if "not up to date" in output:

@@ -74,7 +74,56 @@ async def test_列表返回大结果摘要_详情保留完整结果(client):
     assert item["result"]["fetch_mode"] == "collection"
 
     detail = client.get(f"/api/tasks/{task_id}").json()
-    assert len(json.dumps(detail["result"], ensure_ascii=False)) > SUMMARY_LIMIT
+    # 详情也默认摘要（大结果不随轮询返回），完整结果走显式 /result
+    assert detail["result"]["done"] == 12
+    assert len(json.dumps(detail["result"], ensure_ascii=False)) <= SUMMARY_LIMIT
+
+    full = client.get(f"/api/tasks/{task_id}/result").json()
+    assert len(json.dumps(full["result"], ensure_ascii=False)) > SUMMARY_LIMIT
+    assert full["result"]["done"] == 12
+
+
+async def test_超期任务完整result被清理_摘要保留():
+    """P1-2：超过保留天数的终态任务清空 result，但列表摘要必须保留。"""
+    from datetime import timedelta
+
+    from app.services.task_retention import prune_task_results
+    from app.utils.time import utcnow
+
+    async with async_session() as db:
+        old = TaskQueue(
+            type="tag_health_scan", status="success", progress=100, result={"done": 1}
+        )
+        fresh = TaskQueue(
+            type="tag_health_scan", status="success", progress=100, result={"done": 2}
+        )
+        db.add_all([old, fresh])
+        await db.commit()
+        await db.refresh(old)
+        await db.refresh(fresh)
+        await db.execute(
+            update(TaskQueue)
+            .where(TaskQueue.id == old.id)
+            .values(updated_at=utcnow() - timedelta(days=30))
+        )
+        await db.commit()
+        old_id, fresh_id = old.id, fresh.id
+
+    async with async_session() as db:
+        preview = await prune_task_results(db, days=7, dry_run=True)
+        assert preview["scanned"] == 1
+        # dry-run 不写库
+        assert (await db.get(TaskQueue, old_id)).result is not None
+
+        applied = await prune_task_results(db, days=7)
+        assert applied["pruned"] == 1
+
+    async with async_session() as db:
+        old_row = await db.get(TaskQueue, old_id)
+        fresh_row = await db.get(TaskQueue, fresh_id)
+        assert old_row.result is None
+        assert old_row.result_summary == {"done": 1}
+        assert fresh_row.result == {"done": 2}
 
 
 async def test_历史行摘要为空时启动回填(client):

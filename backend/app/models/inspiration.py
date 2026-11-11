@@ -39,6 +39,22 @@ class Inspiration(Base):
             unique=True,
             sqlite_where=text("deleted_at IS NULL"),
         ),
+        # 2026-11-06 数据库审查 P2：默认列表/筛选的复合索引。默认列表是
+        # deleted_at IS NULL ORDER BY created_at DESC，单列 deleted_at 之后仍要
+        # 临时 B-tree 排序；复合索引让「过滤 + 排序」一次走完。
+        Index("ix_inspirations_active_created", "deleted_at", "created_at"),
+        Index(
+            "ix_inspirations_active_quality_created",
+            "deleted_at",
+            "quality_status",
+            "created_at",
+        ),
+        Index(
+            "ix_inspirations_active_source_created",
+            "deleted_at",
+            "source_type",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -224,6 +240,12 @@ class AIAnalysisTag(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.8)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # 2026-11-06 数据库审查 P2：当前 0 重复，但重复分析会继续写入重复标签；
+        # 唯一索引把「重复写」变成显式约束。
+        Index("uq_ai_extracted_tags_log_tag", "log_id", "tag_id", unique=True),
     )
 
     # 关联关系

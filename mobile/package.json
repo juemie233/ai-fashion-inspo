@@ -10,7 +10,7 @@
     "web": "expo start --web",
     "type-check": "tsc --noEmit",
     "test": "jest",
-    "test:coverage": "jest --coverage --runInBand --detectOpenHandles",
+    "test:coverage": "jest --coverage",
     "test:open-handles": "jest --detectOpenHandles --runInBand"
   },
   "dependencies": {
@@ -75,7 +75,6 @@
         "functions": 80,
         "branches": 65
       }
-    },
-    "maxWorkers": 1
+    }
   }
 }

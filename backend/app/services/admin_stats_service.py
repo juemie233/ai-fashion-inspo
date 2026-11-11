@@ -38,13 +38,19 @@ from app.models.person import Blogger, InspirationBlogger, InspirationModel, Mod
 INSP_MEDIA_DIRS = ("images", "thumbnails", "videos")
 
 
-def scan_storage_files() -> dict[str, int]:
-    """扫描素材媒体目录中的实际文件，返回 {相对路径: 字节数}。"""
+def scan_storage_files(include_trash: bool = False) -> dict[str, int]:
+    """扫描素材媒体目录中的实际文件，返回 {相对路径: 字节数}。
+
+    Args:
+        include_trash: 清理孤立文件时需包含 trash/（垃圾桶里的文件也可能成为孤儿）；
+            普通统计保持 False，避免把垃圾桶体积算进素材总占用。
+    """
     files: dict[str, int] = {}
     storage_root = settings.storage_root
     if not storage_root.exists():
         return files
-    for dir_name in INSP_MEDIA_DIRS:
+    dirs = (*INSP_MEDIA_DIRS, "trash") if include_trash else INSP_MEDIA_DIRS
+    for dir_name in dirs:
         dir_path = storage_root / dir_name
         if not dir_path.exists():
             continue

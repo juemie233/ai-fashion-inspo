@@ -95,7 +95,7 @@ class InspirationFaceDetection(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     inspiration_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("inspirations.id", ondelete="CASCADE"), index=True
+        String(36), ForeignKey("inspirations.id", ondelete="CASCADE")
     )
     face_index: Mapped[int] = mapped_column(Integer)  # 图内人脸序号（0 起）
     embedding: Mapped[bytes] = mapped_column(LargeBinary)  # 512 维 float32

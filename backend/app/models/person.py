@@ -318,6 +318,7 @@ class PersonGroup(Base):
         Integer,
         ForeignKey("bloggers.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
 
     # 关联关系：组内博主（按 person_group_id 关联；组删除时账号回退独立）

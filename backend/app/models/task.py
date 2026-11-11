@@ -5,7 +5,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, event
+from sqlalchemy import DateTime, Index, Integer, String, Text, event
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,14 @@ class TaskQueue(Base):
 
     __tablename__ = "task_queue"
 
+    __table_args__ = (
+        # 2026-11-06 数据库审查 P2：worker 认领是 status='pending' +
+        # ORDER BY priority DESC, id ASsc；SQLite 对混合方向仍会排 right part
+        # （实测无法用单索引消除），但任务表很小（<1k 行），保留全 ASC 复合索引。
+        Index("ix_task_queue_claim", "status", "priority", "id"),
+        Index("ix_task_queue_created_at", "created_at"),
+    )
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     type: Mapped[str] = mapped_column(String(32), index=True)  # 任务类型：batch_analyze 等
     status: Mapped[str] = mapped_column(
@@ -40,8 +48,8 @@ class TaskQueue(Base):
     total: Mapped[int] = mapped_column(Integer, default=0)  # 批处理总数量
     done: Mapped[int] = mapped_column(Integer, default=0)  # 已完成数量
     result: Mapped[dict | None] = mapped_column(
-        JSON, nullable=True
-    )  # JSON 结果（初始为输入载荷，完成后含统计）
+        JSON(none_as_null=True), nullable=True
+    )  # JSON 结果（初始为输入载荷，完成后含统计）；None 存 SQL NULL 便于保留策略查询
     # 列表专用摘要（2026-11-03 评审 P1-2/P2-6）：写入时由下方事件监听器生成；
     # 列表接口只读这一列，避免 substr 截断 JSON 导致整条摘要解析失败。
     # none_as_null=True：空摘要用 SQL NULL（默认会存成 JSON 文本 "null"，回填查询

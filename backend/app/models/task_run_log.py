@@ -11,7 +11,7 @@ GPU 型号由 `nvidia-smi` 探测一次并缓存；探测不到就存 NULL（不
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -22,6 +22,11 @@ class TaskRunLog(Base):
     """一次任务执行尝试的耗时台账。"""
 
     __tablename__ = "task_run_logs"
+
+    __table_args__ = (
+        # 2026-11-06 数据库审查 P2：任务运行记录按 (task_id, started_at) 查
+        Index("ix_task_run_logs_task_started", "task_id", "started_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(Integer, index=True)

@@ -76,6 +76,20 @@ _SCHEMA_INDEXES: dict[str, list[tuple[str, str]]] = {
 }
 
 
+# 已知的部分唯一索引（2026-11-06 数据库审查 P1-1）。
+# 历史库可能被 run_migrations 直接 stamp 到 head，跳过迁移；ensure_schema 每次启动
+# 对账 sqlite_master 的 WHERE 谓词，发现「全量唯一」就重建为部分唯一。
+# 结构：(表, 索引名, 列, WHERE 谓词)
+_KNOWN_PARTIAL_UNIQUE_INDEXES: list[tuple[str, str, str, str]] = [
+    (
+        "inspirations",
+        "ix_inspirations_source_platform_id",
+        "source_platform_id",
+        "deleted_at IS NULL",
+    ),
+]
+
+
 def compute_schema_version() -> str:
     """计算前后端握手用的 schema 版本号。
 
@@ -137,6 +151,44 @@ async def ensure_schema() -> list[str]:
                 await conn.execute(
                     f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})"
                 )
+
+        # 对账已知部分索引：只写版本号的历史库可能保留了错误的「全量唯一」索引，
+        # 会让垃圾桶占用的平台 ID 无法重新入库（2026-11-06 P1-1）。
+        for table, idx_name, column, where in _KNOWN_PARTIAL_UNIQUE_INDEXES:
+            cursor = await conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                (idx_name,),
+            )
+            row = await cursor.fetchone()
+            db_sql = (row[0] or "") if row else ""
+            if "WHERE" in db_sql.upper():
+                continue  # 已是部分索引
+            active_dups = (
+                await (
+                    await conn.execute(
+                        f"SELECT COUNT(*) FROM ("
+                        f"SELECT {column} FROM {table} WHERE {where} "
+                        f"AND {column} IS NOT NULL GROUP BY {column} HAVING COUNT(*) > 1"
+                        f")"
+                    )
+                ).fetchone()
+            )[0]
+            if active_dups:
+                logger.error(
+                    "[迁移] %s 需重建为部分索引，但存在 %s 组重复的未删除值，暂不处理",
+                    idx_name,
+                    active_dups,
+                )
+                continue
+            try:
+                await conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+                await conn.execute(
+                    f"CREATE UNIQUE INDEX {idx_name} ON {table} ({column}) WHERE {where}"
+                )
+                logger.warning("[迁移] 已重建部分唯一索引 %s（WHERE %s）", idx_name, where)
+            except aiosqlite.OperationalError as exc:
+                # 多进程并发启动时另一进程可能已在重建，容忍并下一轮 startup 再查
+                logger.warning("[迁移] 重建索引 %s 失败（并发启动？）: %s", idx_name, exc)
 
         await conn.commit()
 

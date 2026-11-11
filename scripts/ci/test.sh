@@ -115,7 +115,7 @@ cd "$ROOT/mobile"
 # 移动端没有独立的 lint 脚本，类型检查用 tsc；测试含「非 <Text> 节点下不许有裸字符串」
 # 的断言，专门防只有原生 RN 才会拦的白屏（见 CLAUDE.md）
 node node_modules/typescript/bin/tsc --noEmit
-node node_modules/jest/bin/jest.js --ci --coverage --runInBand --detectOpenHandles
+node node_modules/jest/bin/jest.js --ci --coverage
 
 echo ""
 echo "===== 14/14 子项目最低测试（浏览器插件 / 人脸子服务）====="

@@ -55,6 +55,17 @@ class TaskCancelOut(BaseModel):
     deleted: bool = False
 
 
+class TaskResultOut(BaseModel):
+    """任务完整 result（``GET /api/tasks/{id}/result``）。
+
+    详情接口默认只返回摘要（大结果不随轮询返回）；排障/展开完整结果时显式调用
+    本端点。2026-11-06 数据库审查 P1-2。
+    """
+
+    id: int
+    result: dict[str, Any] | None = None
+
+
 class TaskRunOut(BaseModel):
     """一次任务执行尝试的台账（``GET /api/tasks/{id}/runs``）。
 

@@ -225,6 +225,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:  # noqa: BLE001 —— 摘要回填失败不阻断启动
         logger.warning("[启动] 任务列表摘要回填失败（列表退回旧前缀策略）: %s", e)
 
+    # 任务完整 result 保留策略（2026-11-06 数据库审查 P1-2）：只清终态且超期的
+    # result，result_summary 原样保留；失败不阻断启动
+    try:
+        from app.services.task_retention import prune_task_results_in_session
+
+        pruned = await prune_task_results_in_session()
+        if pruned["pruned"]:
+            logger.info(
+                "[启动] 任务结果保留策略清空 %s 条 result（约 %.1f MB）",
+                pruned["pruned"],
+                pruned["bytes"] / 1048576,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[启动] 任务结果保留清理失败: %s", e)
+
+    # 出图批次 running 对账（2026-11-06 数据库审查 P1-3）：任务消失/终态/超时的
+    # running 批次标 failed，否则候选目录永远不会进入过期清理
+    try:
+        from app.database import async_session
+        from app.services.generation_service import reconcile_stale_generation_runs
+
+        async with async_session() as db:
+            reconciled = await reconcile_stale_generation_runs(db)
+        if reconciled["reconciled"]:
+            logger.info("[启动] 已对账 %s 个停滞出图批次", reconciled["reconciled"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[启动] 出图批次对账失败: %s", e)
+
+
     # 启动时清理遗留的僵尸任务
     from app.database import async_session
     from sqlalchemy import update

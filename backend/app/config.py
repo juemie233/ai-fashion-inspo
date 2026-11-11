@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     log_retention_days: int = 30
     # 任务运行台账 task_run_logs 的保留天数
     task_run_log_retention_days: int = 90
+    # 任务完整 result 的保留天数（2026-11-06 数据库审查 P1-2）：超过后清空 result，
+    # 保留 result_summary；0=不清理。默认 7 天：任务历史与摘要仍保留，只回收大 JSON。
+    task_result_retention_days: int = Field(default=7, ge=0, le=3650)
 
     # 服务器（默认仅本机可访问；确需局域网/真机访问时再显式改绑 0.0.0.0）
     host: str = "127.0.0.1"
@@ -43,6 +46,11 @@ class Settings(BaseSettings):
 
     # 数据库
     database_url: str = f"sqlite+aiosqlite:///{_DB_PATH.as_posix()}"
+    # SQLite 连接级调优（2026-11-06 数据库审查 P2-9）：546MB 库、31k 素材/795k 关联，
+    # 默认 cache_size=-2000（约 2MB）偏小；连接级设置不影响库文件。
+    sqlite_cache_size_kb: int = -65536  # 负数 = KiB，约 64MB
+    sqlite_mmap_size_bytes: int = 268435456  # 256MB；0=关闭
+    sqlite_temp_store: str = "MEMORY"
 
     # 文件存储
     storage_root: Path = Path(__file__).parent.parent / "storage"
@@ -116,6 +124,9 @@ class Settings(BaseSettings):
     # 等待显存上限：Ollama 模型可能在上一次打标任务后仍驻留，等它自然过期而不是强杀
     image_gen_wait_vram_seconds: int = 900
     image_gen_keep_candidates_days: int = 7  # 未确认候选目录保留天数（过期清理）
+    # 出图批次 running 超时兜底（2026-11-06 数据库审查 P1-3）：关联任务消失/终态且
+    # 批次 running 超过该小时数 → 启动对账标 failed，避免永久停在 running
+    image_gen_stale_run_hours: int = Field(default=6, ge=1, le=168)
 
     # ── 豆包 Seedream 云端图生图（火山引擎方舟）──
     # 默认关闭：开启后素材图/姿态图会离开本机上传到火山引擎，属于隐私边界变更。
