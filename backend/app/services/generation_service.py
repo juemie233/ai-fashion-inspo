@@ -1666,6 +1666,45 @@ async def regenerate_candidate(
     return out
 
 
+async def reconcile_stale_generation_runs(db: AsyncSession) -> dict:
+    """收尾停滞的 running 出图批次（2026-11-06 数据库审查 P1-3）。
+
+    判据：批次仍 running，且满足任一：
+    - task_id 为空 / 对应任务已不存在 / 任务已终态；
+    - 批次 updated_at 超过 ``settings.image_gen_stale_run_hours``（例如 worker 崩溃后
+      task_queue 行被清掉，批次没有执行器再推进）。
+
+    收尾为 failed 并写 error，后续候选目录由正常过期清理处理；收藏批次不在这里删除。
+    """
+    cutoff = utcnow() - timedelta(hours=settings.image_gen_stale_run_hours)
+    terminal = ("success", "failed", "cancelled")
+    rows = (
+        await db.execute(select(GenerationRun).where(GenerationRun.status == "running"))
+    ).scalars().all()
+    reconciled = 0
+    for run in rows:
+        task = await db.get(TaskQueue, run.task_id) if run.task_id else None
+        reason: str | None = None
+        if task is None:
+            reason = "关联任务不存在，启动对账标记失败"
+        elif task.status in terminal:
+            reason = f"关联任务已是终态 {task.status}，启动对账标记失败"
+        elif run.updated_at and run.updated_at < cutoff:
+            reason = (
+                f"批次 running 超过 {settings.image_gen_stale_run_hours} 小时无更新，"
+                "按停滞对账标记失败"
+            )
+        if reason is None:
+            continue
+        run.status = "failed"
+        run.error = reason
+        reconciled += 1
+    if reconciled:
+        await db.commit()
+        logger.warning("[出图对账] 收尾 %s 个停滞 running 批次", reconciled)
+    return {"reconciled": reconciled}
+
+
 async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dict:
     """清理过期候选目录（不动已入库素材、不删历史记录）。
 
@@ -1682,6 +1721,9 @@ async def cleanup_expired_runs(db: AsyncSession, days: int | None = None) -> dic
     keep_days = days if days is not None else settings.image_gen_keep_candidates_days
     if keep_days <= 0:
         return {"scanned": 0, "removed": 0, "skipped_favorites": 0}
+
+    # 先对账停滞 running（任务被清掉/终态/超时），否则 running 永远不会进入过期清理
+    await reconcile_stale_generation_runs(db)
 
     cutoff = utcnow() - timedelta(days=keep_days)
     # 收藏批次不清理：用户点星标就是「这批我要留着」；清理返回里单独回报跳过数，

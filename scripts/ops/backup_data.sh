@@ -23,6 +23,7 @@
 #   - 素材存储根跟随 app.config 的 storage_root（.env 的 STORAGE_ROOT），
 #     数据盘迁移后不会备份到旧树
 #   - rotation：日备留 7 份 + 周备（周日）留 4 份
+#   - 容量预检：目标盘剩余空间不足（DB+5GB）直接失败，低于 30GB 告警
 #
 # 退出码:
 #   0 全部成功（含「已有备份在跑，跳过」）
@@ -108,6 +109,25 @@ fi
 # 先创建目标根目录（存在或新建），再解析为规范的 Windows 绝对路径
 mkdir -p "$TARGET" || { echo "无法创建目标目录: $TARGET"; exit 1; }
 TARGET_ROOT="$(cd "$TARGET" && pwd -W 2>/dev/null || pwd)"
+
+# ── 容量预检（2026-11-06 数据库审查 P2-11）──
+# 单份备份约 25GB；E 盘余量不足时先失败，避免跑到一半 robocopy 失败并留下半套备份。
+AVAIL_KB="$(df -Pk "$TARGET_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
+DB_BYTES="$(stat -c %s "$DB_PATH" 2>/dev/null || echo 0)"
+case "$DB_BYTES" in ''|*[!0-9]*) DB_BYTES=0 ;; esac
+case "$AVAIL_KB" in ''|*[!0-9]*) AVAIL_KB="" ;; esac
+if [ -n "$AVAIL_KB" ]; then
+  # 至少留出「DB 快照 + 5GB」；storage 体积大，经验上 25GB 以下直接告警
+  REQUIRED_KB=$(( DB_BYTES / 1024 + 5 * 1024 * 1024 ))
+  if [ "$AVAIL_KB" -lt "$REQUIRED_KB" ]; then
+    echo "错误：备份目标可用空间不足（剩余 $((AVAIL_KB / 1024)) MB，至少需要 $((REQUIRED_KB / 1024)) MB）。"
+    echo "请清理旧备份或更换目标磁盘后重试。"
+    exit 1
+  fi
+  if [ "$AVAIL_KB" -lt $((30 * 1024 * 1024)) ]; then
+    echo "⚠ 备份目标剩余 $((AVAIL_KB / 1024 / 1024)) GB，低于建议的 30GB；请关注保留策略。"
+  fi
+fi
 
 # ── 同盘检测：目标与项目在同一物理盘符时拒绝（除非 --allow-same-disk）──
 _drive_letter() {

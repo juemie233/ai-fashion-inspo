@@ -27,14 +27,16 @@ if settings.debug:
 
 @event.listens_for(engine.sync_engine, "connect")
 def _enable_sqlite_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
-    """每次建立连接时启用 SQLite 外键约束。
-
-    SQLite 默认关闭外键，导致 ON DELETE SET NULL / ON DELETE CASCADE 失效。
-    """
+    """每次建立连接时启用 SQLite 外键约束并设置连接级调优。"""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     # WAL 模式：读不阻塞写、写不阻塞读，显著提升并发读写能力（尤其 AI 分析并发写日志时）
     cursor.execute("PRAGMA journal_mode=WAL")
+    # 2026-11-06 数据库审查 P2-9：小 cache/无 mmap 时大表扫描与排序读放大明显。
+    # 这些是连接级 PRAGMA；mmap_size 在 32 位/不支持平台 SQLite 会返回 0，不影响启动。
+    cursor.execute(f"PRAGMA cache_size={settings.sqlite_cache_size_kb}")
+    cursor.execute(f"PRAGMA mmap_size={settings.sqlite_mmap_size_bytes}")
+    cursor.execute(f"PRAGMA temp_store={settings.sqlite_temp_store}")
     cursor.close()
 
 

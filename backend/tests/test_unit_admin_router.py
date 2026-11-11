@@ -656,3 +656,46 @@ async def test_get_missing_image_vector_ids_empty_library(client, monkeypatch):
     async with async_session() as db:
         assert await admin_router._get_missing_image_vector_ids(db) == []
     assert called["n"] == 0
+
+
+async def test_cleanup_orphans_dry_run_keeps_files(client):
+    """P1-4：先 dry-run 预览，再执行删除。"""
+    import os
+    import time
+
+    from app.config import settings
+
+    orphan = settings.storage_root / "thumbnails" / "orphan-dry-run.jpg"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_bytes(b"orphan")
+    old = time.time() - 3600
+    os.utime(orphan, (old, old))
+
+    preview = await admin_router.cleanup_orphan_files(dry_run=True)
+    assert preview["dry_run"] is True
+    assert preview["deleted_count"] == 0
+    assert any(item["path"].endswith("orphan-dry-run.jpg") for item in preview["preview"])
+    assert orphan.exists()
+
+    applied = await admin_router.cleanup_orphan_files(dry_run=False)
+    assert applied["deleted_count"] >= 1
+    assert not orphan.exists()
+
+
+async def test_cleanup_orphans_keeps_trashed_files(client, upload):
+    """回归：trash/ 里仍被垃圾桶行引用的文件不能当孤儿删除。"""
+    import time
+
+    from app.config import settings
+
+    insp = upload().json()
+    assert client.post(f"/api/inspirations/{insp['id']}/trash").status_code == 200
+    trashed_file = settings.storage_root / "trash" / (insp["id"] + ".jpg")
+    assert trashed_file.exists()
+    old = time.time() - 3600
+    import os
+
+    os.utime(trashed_file, (old, old))
+
+    await admin_router.cleanup_orphan_files(dry_run=False)
+    assert trashed_file.exists(), "被垃圾桶行引用的文件被误删了"

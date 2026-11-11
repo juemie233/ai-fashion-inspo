@@ -57,6 +57,7 @@ class Collection(Base):
         String(36),
         ForeignKey("inspirations.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )  # 封面素材 ID（可空；未手动指定时取「加入最早」的一张，素材物理删除自动置空）
     position: Mapped[int] = mapped_column(Integer, default=0)  # 合集列表排序（越大越靠后）
     query_json: Mapped[str | None] = mapped_column(
@@ -150,6 +151,7 @@ class CollectionItem(Base):
         String(36),
         ForeignKey("inspirations.id", ondelete="CASCADE"),
         primary_key=True,
+        index=True,
     )  # 素材物理删除时由外键级联自动出合集
     position: Mapped[int] = mapped_column(Integer, default=0)  # 合集内自定义顺序（拖拽编排）
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)  # 加入时间

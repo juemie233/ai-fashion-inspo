@@ -61,16 +61,23 @@ async def integrity_check(db: AsyncSession = Depends(get_db)) -> dict:
 
 
 @router.post("/cleanup-orphans")
-async def cleanup_orphan_files() -> dict:
-    """删除所有孤立文件（磁盘上有但数据库无记录的文件）。"""
-    storage_files = await asyncio.to_thread(admin_stats_service.scan_storage_files)
+async def cleanup_orphan_files(
+    dry_run: bool = False,
+) -> dict:
+    """删除所有孤立文件（磁盘上有但数据库无记录的文件）。
+
+    2026-11-06 数据库审查 P1-4：先支持 dry-run 预览（扫描 + 体积 + 样本），
+    确认后再执行；删除仍保留 10 分钟保护期，避免误删正在入库的文件。
+    """
+    storage_files = await asyncio.to_thread(admin_stats_service.scan_storage_files, True)
     storage_root = settings.storage_root
 
-    # 这里需要一个同步的数据库会话来获取文件列表
+    # 清理范围同时包含垃圾桶：孤立文件可能落在 trash/；但垃圾桶行**仍被引用**的
+    # 文件绝不能删（2026-11-11 实测踩坑：只查 NOT_DELETED 会把所有垃圾桶文件误判孤儿）。
     from app.database import async_session
     async with async_session() as db:
         result = await db.execute(
-            select(Inspiration.file_path, Inspiration.thumbnail_path).where(NOT_DELETED)
+            select(Inspiration.file_path, Inspiration.thumbnail_path)
         )
         db_paths: set[str] = set()
         for row in result:
@@ -81,34 +88,42 @@ async def cleanup_orphan_files() -> dict:
     deleted = 0
     freed_bytes = 0
     failed: list[str] = []
+    preview: list[dict] = []
     # 保护期：跳过最近写入的文件，避免与「上传落盘 → 建库/哈希 → 事务提交」的窗口
     # 并发（TOCTOU），误删正在上传、尚未入库的媒体文件
     _ORPHAN_GRACE_SECONDS = 600  # 10 分钟
     cutoff = time.time() - _ORPHAN_GRACE_SECONDS
     for rel_path in storage_files:
-        if rel_path not in db_paths:
-            fpath = storage_root / rel_path
-            try:
-                st = fpath.stat()
-                if st.st_mtime > cutoff:
-                    continue  # 最近写入，可能仍在入库流程中
-                sz = st.st_size
-                fpath.unlink()
-                deleted += 1
+        if rel_path in db_paths:
+            continue
+        fpath = storage_root / rel_path
+        try:
+            st = fpath.stat()
+            if st.st_mtime > cutoff:
+                continue  # 最近写入，可能仍在入库流程中
+            sz = st.st_size
+            if dry_run:
                 freed_bytes += sz
-            except Exception as e:
-                # 删除失败不能静默吞掉：记录日志与失败列表，freed_bytes 与实际释放保持一致
-                failed.append(rel_path)
-                logger.warning(f"孤立文件删除失败: {rel_path} — {e}")
+                if len(preview) < 50:
+                    preview.append({"path": str(rel_path), "bytes": sz})
+                continue
+            fpath.unlink()
+            deleted += 1
+            freed_bytes += sz
+        except Exception as e:
+            # 删除失败不能静默吞掉：记录日志与失败列表，freed_bytes 与实际释放保持一致
+            failed.append(rel_path)
+            logger.warning(f"孤立文件删除失败: {rel_path} — {e}")
 
-    # 清理空目录
-    for dirpath in sorted(storage_root.rglob("*"), reverse=True):
-        if dirpath.is_dir():
-            try:
-                dirpath.rmdir()  # 仅删除空目录
-            except OSError as exc:
-                logger.debug("cleanup_orphan_files: 忽略异常（预期降级）：%s", exc)
-                pass
+    # 清理空目录（dry-run 不删除）
+    if not dry_run:
+        for dirpath in sorted(storage_root.rglob("*"), reverse=True):
+            if dirpath.is_dir():
+                try:
+                    dirpath.rmdir()  # 仅删除空目录
+                except OSError as exc:
+                    logger.debug("cleanup_orphan_files: 忽略异常（预期降级）：%s", exc)
+                    pass
 
     # 记录审计：清理孤立文件属破坏性操作，留痕便于追溯
     if deleted > 0:
@@ -120,9 +135,12 @@ async def cleanup_orphan_files() -> dict:
         )
 
     return {
+        "dry_run": dry_run,
         "deleted_count": deleted,
         "freed_bytes": freed_bytes,
         "failed_files": failed if failed else None,
+        "preview": preview if dry_run else None,
+        "preview_truncated": bool(dry_run and len(preview) >= 50),
     }
 
 

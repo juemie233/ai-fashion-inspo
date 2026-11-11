@@ -65,9 +65,12 @@ async def test_list_tasks_result_returns_summary_not_huge_result(client):
     assert "tags" not in big_summary or len(big_summary["tags"]) <= 10
     assert by_type["batch_analyze"]["result"] == small  # 小结果原样保留
 
-    # 详情接口仍给完整 result（展开/排障用）
+    # 详情默认摘要；完整 result 走显式 /result（2026-11-06 P1-2）
     detail = client.get(f"/api/tasks/{big_id}").json()
-    assert detail["result"]["tags"][0] == {"index": 0}
+    assert detail["result"] is not None
+    assert "tags" not in detail["result"] or len(detail["result"]["tags"]) <= 10
+    full = client.get(f"/api/tasks/{big_id}/result").json()
+    assert full["result"]["tags"][0] == {"index": 0}
     assert client.get(f"/api/tasks/{small_id}").json()["result"] == small
 
 

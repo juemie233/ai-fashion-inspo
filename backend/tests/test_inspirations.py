@@ -317,3 +317,17 @@ def test_dominant_colors_and_filter(client, upload):
     r = client.get("/api/inspirations", params={"dominant_color": "#ff0000"})
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["id"] == a
+
+
+def test_trash_releases_platform_id_for_reimport(client, upload):
+    """P1-1 回归：垃圾桶素材释放平台 ID，上传同一 ID 不应撞唯一索引 500。
+
+    2026-11-06 数据库审查发现历史库索引仍是「全量唯一」；迁移/ensure_schema
+    重建为部分唯一后，这条才成立。
+    """
+    old = upload(source_platform_id="platform-id-reuse").json()
+    assert client.post(f"/api/inspirations/{old['id']}/trash").status_code == 200
+
+    new = upload(source_platform_id="platform-id-reuse")
+    assert new.status_code == 201, new.text
+    assert new.json()["source_platform_id"] == "platform-id-reuse"

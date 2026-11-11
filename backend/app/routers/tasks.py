@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.task import TaskQueue
 from app.models.task_run_log import TaskRunLog
-from app.schemas.task import TaskCancelOut, TaskListOut, TaskOut, TaskRunOut
+from app.schemas.task import (
+    TaskCancelOut,
+    TaskListOut,
+    TaskOut,
+    TaskResultOut,
+    TaskRunOut,
+)
 from app.services.task_runner import _broadcast_task_event
 from app.utils.time import utcnow
 from app.worker import _STALE_HEARTBEAT_THRESHOLD
@@ -180,16 +186,37 @@ async def list_tasks(
     }
 
 
+@router.get("/{task_id}/result", response_model=TaskResultOut)
+async def get_task_result(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """返回任务完整 result（大字段按需加载；列表/详情默认不再返回）。"""
+    task = await db.get(TaskQueue, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务未找到")
+    return {"id": task.id, "result": task.result}
+
+
 @router.get("/{task_id}", response_model=TaskOut)
 async def get_task(
     task_id: int,
     db: AsyncSession = Depends(get_db),
-) -> TaskQueue:
-    """查询单个任务状态（供前端轮询进度）。"""
+) -> TaskOut:
+    """查询单个任务状态（供前端轮询进度）。
+
+    大结果（>8KB）默认返回 ``result_summary``；完整结果走
+    ``GET /api/tasks/{id}/result``，避免单次轮询拉 2.9MB JSON（2026-11-06 P1-2）。
+    """
     task = await db.get(TaskQueue, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
-    return task
+    out = TaskOut.model_validate(task)
+    # 详情默认只回摘要：小结果摘要与完整 result 等价，大结果避免轮询/详情拉 2.9MB；
+    # 完整结果走显式 GET /api/tasks/{id}/result。
+    if task.result_summary is not None:
+        out.result = task.result_summary
+    return out
 
 
 @router.get("/{task_id}/runs", response_model=list[TaskRunOut])

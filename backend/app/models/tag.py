@@ -99,6 +99,8 @@ class InspirationTag(Base):
         UniqueConstraint("inspiration_id", "tag_id", name="uq_inspiration_tag"),
         # 按标签筛选（WHERE tag_id = X）需要 tag_id 单列索引；复合主键索引 (inspiration_id, tag_id) 无法高效服务此类查询
         Index("ix_inspiration_tags_tag_id", "tag_id"),
+        # 2026-11-06 数据库审查 P2：按标签反查素材时避免回表取 inspiration_id
+        Index("ix_inspiration_tags_tag_insp", "tag_id", "inspiration_id"),
         # 重新分析时按 (素材, 来源) 删除旧 AI 关联
         Index("ix_inspiration_tags_insp_source", "inspiration_id", "source"),
     )

@@ -1563,7 +1563,7 @@ pytest -m ""          # 提交前/CI 全量（含 slow）
 
 > **错误响应契约**：服务层可抛 `app.exceptions` 的领域异常（NotFoundException → 404、ValidationException → 400、认证/授权 → 401/403，其余 AppException → 500），由 `main.py` 注册的全局 exception_handler 统一转换为 `{"detail": "错误描述"}` 格式，前端无需适配。
 
-> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **83.02%**；门禁棘轮 `--cov-fail-under=82.9`（`precision=2`））。另有 `backend/scripts/check_module_coverage.py` 对 `worker` / `generation_service` / `seedream_client` / `search` / `ai_settings` / `ai_quality` 设模块地板，防止全局均值掩盖关键模块退化。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，依赖真实浏览器）、`vector/similarity` 深度分支、`ws.py`（WebSocket）。
+> **覆盖率度量**：安装 `pytest-cov` 后执行 `pytest --cov --cov-report=term-missing` 可生成行级覆盖率（`backend/.coveragerc` 已配置 `source=app` 并排除样板代码，当前 **83.08%**；门禁棘轮 `--cov-fail-under=82.9`（`precision=2`））。另有 `backend/scripts/check_module_coverage.py` 对 `worker` / `generation_service` / `seedream_client` / `search` / `ai_settings` / `ai_quality` 设模块地板，防止全局均值掩盖关键模块退化。剩余低覆盖盲区集中在：真实爬虫（`scrapers/`，依赖真实浏览器）、`vector/similarity` 深度分支、`ws.py`（WebSocket）。
 
 ### 前端（vitest；当前 900+ 用例 / 100+ 文件；覆盖率门槛见 `web/vitest.config.ts`）
 
@@ -1580,7 +1580,7 @@ npm run test:coverage # 覆盖率（utils/composables/stores/api 门槛）
 ```bash
 cd mobile && npm test
 cd mobile && npm run test:coverage   # utils/hooks/services 覆盖率门槛
-cd mobile && npm run test:open-handles  # 复查定时器/句柄泄漏（runInBand）
+cd mobile && npm run test:open-handles  # 手动复查定时器/句柄泄漏（runInBand + detectOpenHandles）
 ```
 
 覆盖范围：**设计令牌强约束**（`theme.tokens`：扫描 `app/**`+`components/**` 断言 0 处十六进制颜色与裸圆角、字号只来自 11/12/13/15/17/22，并按 WCAG AA 校验亮/暗两套主题 16 组文字配对 ≥4.5:1）、14 个基础组件与 `MediaCard` 的契约、深色模式取色、冷启动只发一次首页请求、人物搜索 300ms 防抖（6 个字符 1 次请求）、页面渲染（画廊/搜索/详情/采集/设置/任务中心）、**裸字符串检查**（遍历渲染树断言非 `<Text>` 节点下没有字符串/数字——专治只有原生才会拦、Web 预览与普通渲染测试都发现不了的「白屏」）、API 契约（URL / 请求体形状，含 f2 专属字段）、`TagEditor`（筛选/勾选/移除/新建/**5000 标签下的渲染行数远小于总量**，防再次卡死 JS 线程）、采集页多选入队与逐张上传失败重试、详情页编辑入口/垃圾桶确认/404、任务行类型与状态映射（含「已暂停也能取消」）。
