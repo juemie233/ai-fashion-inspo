@@ -38,7 +38,7 @@ SOURCE_DOCS = [
     "README.md",
     "docs/features/CLIP编码说明.md",
     "docs/代码审计报告.md",
-    "docs/archive/系统评估报告-开源组件引入.md",
+    "docs/archive/历史审计合集.md",
     "docs/overview/项目情况说明.md",
 ]
 

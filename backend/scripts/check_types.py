@@ -43,7 +43,7 @@ RATCHET: tuple[str, ...] = (
 def main(argv: list[str] | None = None) -> int:
     """跑 mypy：默认只查棘轮清单，``--all`` 查全仓。"""
     parser = argparse.ArgumentParser(description="跑 mypy 类型检查（棘轮清单 or 全仓）")
-    parser.add_argument("--all", action="store_true", help="查全仓（存量债，见 docs/archive/代码检查.md）")
+    parser.add_argument("--all", action="store_true", help="查全仓（存量债，见 docs/archive/历史审计合集.md §1）")
     full = parser.parse_args(argv).all
     targets = ["app"] if full else list(RATCHET)
     # --follow-imports=silent：只报 targets 里的错误，不让被依赖模块的存量错误淹没信号
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(
         "\n[fail] 类型检查未通过。棘轮清单里的模块必须保持干净；"
-        "若报错来自 `--all`，那是存量债（见 docs/archive/代码检查.md「类型检查」一节）。"
+        "若报错来自 `--all`，那是存量债（见 docs/archive/历史审计合集.md §1「类型检查」一节）。"
     )
     return 1
 

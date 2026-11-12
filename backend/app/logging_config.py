@@ -1,6 +1,6 @@
 """统一日志配置：API、worker 与服务脚本共用的 dictConfig 入口。
 
-背景（2026-11-02 日志系统全量扫描 P0-1）：
+背景（2026-11-02 日志系统审计 P0-1，见 docs/ops/日志系统扫描与整改-2026-11-02.md §1）：
 API 进程此前只跑 uvicorn 默认日志配置，而它只给 ``uvicorn`` / ``uvicorn.error`` /
 ``uvicorn.access`` 配 handler，**没有 root handler**。``app.*`` 的 logger 向 root
 传播后无 handler 接手，INFO 级业务日志被静默丢弃（``logs/backend.log*`` 里
