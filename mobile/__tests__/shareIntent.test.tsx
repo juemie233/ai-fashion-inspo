@@ -1,11 +1,16 @@
-/** 分享 Intent：URL 提取 + 图片/链接入库两条链路。 */
+/** 分享 Intent：URL 提取 + 图片/链接入库两条链路 + P1 多图/判重。 */
 
 import { render, waitFor } from '@testing-library/react-native'
 import { Alert } from 'react-native'
 
 const mockShare = {
   hasShareIntent: false,
-  shareIntent: {} as { files?: { path: string }[]; text?: string },
+  shareIntent: {} as {
+    files?: { path: string }[]
+    text?: string
+    webUrl?: string | null
+    meta?: { title?: string }
+  },
   resetShareIntent: jest.fn(),
 }
 
@@ -31,6 +36,15 @@ const api = require('../services/api') as {
   uploadInspirationImage: jest.Mock
   importInspirationFromUrl: jest.Mock
 }
+
+/** 取最后一次 Alert 的标题与正文 */
+function lastAlert(): [string, string] {
+  const calls = (Alert.alert as jest.Mock).mock.calls
+  const call = calls[calls.length - 1] as [string, string]
+  return [call[0], call[1]]
+}
+
+const ok = (id: string) => ({ id, file_path: `images/${id}.jpg`, tags: [] })
 
 describe('extractUrl', () => {
   it('从抖音分享文案里提取链接，并去掉尾部标点', () => {
@@ -75,7 +89,7 @@ describe('ShareIntentBridge', () => {
   it('分享图片：走上传并插到列表最前，随后重置 intent', async () => {
     mockShare.hasShareIntent = true
     mockShare.shareIntent = { files: [{ path: 'file:///tmp/shared.jpg' }] }
-    api.uploadInspirationImage.mockResolvedValue({ id: 'n1', file_path: 'images/n1.jpg', tags: [] })
+    api.uploadInspirationImage.mockResolvedValue(ok('n1'))
 
     render(<ShareIntentBridge />)
 
@@ -90,7 +104,7 @@ describe('ShareIntentBridge', () => {
   it('分享链接：走 URL 导入而不是上传', async () => {
     mockShare.hasShareIntent = true
     mockShare.shareIntent = { text: '看看这个 https://v.douyin.com/xyz/ 复制打开' }
-    api.importInspirationFromUrl.mockResolvedValue({ id: 'n2', file_path: 'images/n2.jpg', tags: [] })
+    api.importInspirationFromUrl.mockResolvedValue(ok('n2'))
 
     render(<ShareIntentBridge />)
 
@@ -121,9 +135,8 @@ describe('ShareIntentBridge', () => {
 
     render(<ShareIntentBridge />)
 
-    await waitFor(() =>
-      expect(Alert.alert).toHaveBeenCalledWith('入库失败', '请检查后端地址与网络后重试'),
-    )
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    expect(lastAlert()).toEqual(['入库失败', '1 张失败：请检查后端地址与网络后重试'])
     await waitFor(() => expect(mockShare.resetShareIntent).toHaveBeenCalled())
   })
 
@@ -135,5 +148,144 @@ describe('ShareIntentBridge', () => {
     expect(api.uploadInspirationImage).not.toHaveBeenCalled()
     expect(api.importInspirationFromUrl).not.toHaveBeenCalled()
     expect(mockShare.resetShareIntent).not.toHaveBeenCalled()
+  })
+})
+
+describe('ShareIntentBridge · 多图分享（P1）', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {})
+    useInspirationStore.setState({ items: [], total: 0, page: 1, loading: false })
+    mockShare.hasShareIntent = true
+    mockShare.resetShareIntent = jest.fn()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('一次分享 3 张：逐张入库，只弹一条汇总', async () => {
+    mockShare.shareIntent = {
+      files: [
+        { path: 'file:///tmp/a.jpg' },
+        { path: 'file:///tmp/b.jpg' },
+        { path: 'file:///tmp/c.jpg' },
+      ],
+    }
+    api.uploadInspirationImage
+      .mockResolvedValueOnce(ok('n1'))
+      .mockResolvedValueOnce(ok('n2'))
+      .mockResolvedValueOnce(ok('n3'))
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(api.uploadInspirationImage).toHaveBeenCalledTimes(3))
+    expect(useInspirationStore.getState().total).toBe(3)
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    expect(lastAlert()).toEqual(['已入库', '已入库 3 张，AI 将自动分析标签'])
+    expect((Alert.alert as jest.Mock).mock.calls).toHaveLength(1)
+  })
+
+  it('内容重复（409）算「已在库中」而不是失败', async () => {
+    mockShare.shareIntent = {
+      files: [{ path: 'file:///tmp/a.jpg' }, { path: 'file:///tmp/dup.jpg' }],
+    }
+    api.uploadInspirationImage.mockResolvedValueOnce(ok('n1')).mockRejectedValueOnce({
+      response: { status: 409, data: { detail: '该素材已存在（内容重复）' } },
+    })
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [title, message] = lastAlert()
+    expect(title).toBe('分享入库结果')
+    expect(message).toContain('已入库 1 张')
+    expect(message).toContain('1 张已在库中（内容重复），已跳过')
+  })
+
+  it('全部重复时标题是「已在库中」，不出现失败字样', async () => {
+    mockShare.shareIntent = { files: [{ path: 'file:///tmp/dup.jpg' }] }
+    api.uploadInspirationImage.mockRejectedValue({
+      response: { status: 409, data: { detail: '该素材已存在（内容重复）' } },
+    })
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [title, message] = lastAlert()
+    expect(title).toBe('已在库中')
+    expect(message).toContain('已在库中（内容重复）')
+    expect(message).not.toContain('失败')
+  })
+
+  it('部分失败时汇总里带第一条失败原因', async () => {
+    mockShare.shareIntent = {
+      files: [{ path: 'file:///tmp/a.jpg' }, { path: 'file:///tmp/b.jpg' }],
+    }
+    api.uploadInspirationImage.mockResolvedValueOnce(ok('n1')).mockRejectedValueOnce({
+      response: { status: 400, data: { detail: '不支持的文件类型: video/webm' } },
+    })
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [title, message] = lastAlert()
+    expect(title).toBe('分享入库结果')
+    expect(message).toContain('已入库 1 张')
+    expect(message).toContain('1 张失败：不支持的文件类型: video/webm')
+  })
+
+  it('超过单次上限（12 张）时只处理前 12 张并说明剩余数量', async () => {
+    mockShare.shareIntent = {
+      files: Array.from({ length: 14 }, (_, i) => ({ path: `file:///tmp/${i}.jpg` })),
+    }
+    api.uploadInspirationImage.mockResolvedValue(ok('n'))
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(api.uploadInspirationImage).toHaveBeenCalledTimes(12))
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [, message] = lastAlert()
+    expect(message).toContain('另有 2 张超出单次上限（12），未处理')
+  })
+
+  it('链接已在库中时明确提示，不伪装成成功', async () => {
+    mockShare.shareIntent = { text: '看看这个 https://v.douyin.com/xyz/ 复制打开' }
+    api.importInspirationFromUrl.mockRejectedValue({
+      response: { status: 409, data: { detail: '该素材已存在（内容重复）' } },
+    })
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [title, message] = lastAlert()
+    expect(title).toBe('已在库中')
+    expect(message).toContain('1 个链接已在库中')
+  })
+
+  it('链接导入成功时把文案标题带进提示', async () => {
+    mockShare.shareIntent = {
+      text: '7.88 复制打开抖音，看看【夏日穿搭】这套真好看 https://v.douyin.com/abc/',
+    }
+    api.importInspirationFromUrl.mockResolvedValue(ok('n9'))
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled())
+    const [title, message] = lastAlert()
+    expect(title).toBe('已导入')
+    expect(message).toContain('夏日穿搭')
+    expect(message).toContain('链接')
+  })
+
+  it('webUrl 也能当链接导入（iOS 形态的分享载荷）', async () => {
+    mockShare.shareIntent = { webUrl: 'https://example.com/p/1', files: [] }
+    api.importInspirationFromUrl.mockResolvedValue(ok('n10'))
+
+    render(<ShareIntentBridge />)
+
+    await waitFor(() =>
+      expect(api.importInspirationFromUrl).toHaveBeenCalledWith('https://example.com/p/1'),
+    )
   })
 })
