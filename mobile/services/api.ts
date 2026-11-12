@@ -748,9 +748,13 @@ export async function confirmGenerateCandidates(
   }
 }
 
-/** 丢弃整批（删除批次记录与候选目录；已入库素材不受影响） */
+/** 丢弃整批（删除批次记录与候选目录；已入库素材不受影响）。
+ *
+ * 注意是 `DELETE /runs/{id}`：`POST /runs/{id}/cancel` 只是把批次标记为已取消
+ * （候选图还留在目录里），不能当「丢弃」用——两者语义不同，别混。
+ */
 export async function discardGenerateRun(runId: number): Promise<void> {
-  await apiClient.post(`/generate/runs/${runId}/cancel`)
+  await apiClient.delete(`/generate/runs/${runId}`)
 }
 
 export interface GenerateCandidate {
