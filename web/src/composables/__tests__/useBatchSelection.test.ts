@@ -163,6 +163,18 @@ describe('useBatchSelection', () => {
     expect(mockUpdate).toHaveBeenCalledWith(['a', 'b'], { source_type: 'douyin' })
   })
 
+  it('batchUpdate 支持评分字段（含 0 清除）', async () => {
+    mockUpdate.mockResolvedValue(1)
+    const b = useBatchSelection()
+    b.toggleSelect('a')
+
+    await b.batchUpdate({ rating: 4 })
+    expect(mockUpdate).toHaveBeenLastCalledWith(['a'], { rating: 4 })
+
+    await b.batchUpdate({ rating: 0 })
+    expect(mockUpdate).toHaveBeenLastCalledWith(['a'], { rating: 0 })
+  })
+
   it('batchFavorite 失败返回 0 并提示错误', async () => {
     mockFavorite.mockRejectedValue(new Error('network'))
     const b = useBatchSelection()

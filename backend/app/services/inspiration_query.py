@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, and_, func, not_, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -85,6 +85,37 @@ async def load_live_inspiration(
         )
     )
     return result.unique().scalar_one_or_none()
+
+
+RATING_SORTS = ("rating", "rating_asc", "unrated_first")
+
+
+def rating_sort_clauses(sort: str) -> list[ColumnElement]:
+    """评分排序的稳定排序子句（2026-11-12 评分方案 §4.4）。
+
+    - ``rating``：评分高→低；
+    - ``rating_asc``：仅已评分，评分低→高；
+    - ``unrated_first``：未评分优先，再按创建时间倒序。
+
+    所有分支都追加 ``created_at DESC, id DESC`` 作为 tie-breaker，避免同分素材
+    在翻页时出现重复/漏图；index 见 ``ix_inspirations_active_rating_created``。
+    """
+    tie_breakers = [Inspiration.created_at.desc(), Inspiration.id.desc()]
+    if sort == "rating":
+        return [Inspiration.rating.desc(), *tie_breakers]
+    if sort == "rating_asc":
+        return [Inspiration.rating.asc(), *tie_breakers]
+    if sort == "unrated_first":
+        return [
+            case((Inspiration.rating == 0, 0), else_=1).asc(),
+            *tie_breakers,
+        ]
+    return []
+
+
+def rating_sort_filter(sort: str) -> ColumnElement[bool] | None:
+    """评分排序附带的筛选条件：``rating_asc`` 只排已评分（§4.3 方案 C）。"""
+    return Inspiration.rating > 0 if sort == "rating_asc" else None
 
 
 async def list_inspirations(
@@ -209,14 +240,18 @@ async def list_inspirations(
             )
         )
 
+    # 评分排序口径：rating_asc 只排已评分；其余评分排序包含未评分。
+    if sort == "rating_asc":
+        rated_filter = rating_sort_filter(sort)
+        if rated_filter is not None:
+            query = query.where(rated_filter)
+
     # 排序
     sort_map = {
         "newest": Inspiration.created_at.desc(),
         "oldest": Inspiration.created_at.asc(),
         "updated": Inspiration.updated_at.desc(),
         "random": func.random(),  # 随机洗牌：每次请求重新随机
-        "rating": Inspiration.rating.desc(),  # 评分降序（高分优先）
-        "rating_asc": Inspiration.rating.asc(),  # 评分升序
     }
 
     # largest 排序：SQLite 无法按磁盘文件大小排序，改为取全量 (id, file_path)
@@ -279,6 +314,8 @@ async def list_inspirations(
             func.coalesce(tag_count_sub.c.cnt, 0).desc(),
             Inspiration.created_at.desc(),
         )
+    elif sort in RATING_SORTS:
+        query = query.order_by(*rating_sort_clauses(sort))
     else:
         query = query.order_by(sort_map.get(sort, Inspiration.created_at.desc()))
 

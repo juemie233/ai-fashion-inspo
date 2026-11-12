@@ -187,9 +187,17 @@ def test_rating_filter_and_sort(client, upload):
     ids = [i["id"] for i in client.get("/api/inspirations", params={"sort": "rating"}).json()["items"]]
     assert ids == [b, c, a]
 
-    # 评分升序：a(0) → c(2) → b(5)
-    ids_asc = [i["id"] for i in client.get("/api/inspirations", params={"sort": "rating_asc"}).json()["items"]]
-    assert ids_asc == [a, c, b]
+    # 评分升序（仅已评分）：c(2) → b(5)，未评分的 a 不出现
+    asc = client.get("/api/inspirations", params={"sort": "rating_asc"}).json()
+    assert asc["total"] == 2
+    assert [i["id"] for i in asc["items"]] == [c, b]
+
+    # 未评分优先：a 排最前，其余按创建时间倒序
+    unrated = client.get(
+        "/api/inspirations", params={"sort": "unrated_first"}
+    ).json()["items"]
+    assert unrated[0]["id"] == a
+    assert {i["id"] for i in unrated} == {a, b, c}
 
 
 def test_physical_delete(client, upload):
@@ -289,6 +297,53 @@ def test_batch_update(client, upload):
         assert i["source_type"] == "douyin"
         assert i["quality_status"] == "rejected"
         assert i["is_ai_generated"] is True
+
+
+def test_batch_update_rating(client, upload):
+    """P0：batch-update 的 rating 必须真正写库（此前 router 漏传）。"""
+    a = upload().json()["id"]
+    b = upload().json()["id"]
+
+    r = client.post(
+        "/api/inspirations/batch-update",
+        json={"ids": [a, b], "rating": 4},
+    )
+    assert r.status_code == 200
+    assert r.json()["updated"] == 2
+    assert client.get(f"/api/inspirations/{a}").json()["rating"] == 4
+    assert client.get(f"/api/inspirations/{b}").json()["rating"] == 4
+
+    # 0 = 清除评分
+    r = client.post(
+        "/api/inspirations/batch-update",
+        json={"ids": [a], "rating": 0},
+    )
+    assert r.json()["updated"] == 1
+    assert client.get(f"/api/inspirations/{a}").json()["rating"] == 0
+    assert client.get(f"/api/inspirations/{b}").json()["rating"] == 4
+
+
+def test_rating_sort_pagination_stable(client, upload):
+    """同分素材翻页不重不漏（tie-breaker created_at/id）。"""
+    ids = [upload().json()["id"] for _ in range(7)]
+    for insp_id in ids:
+        client.patch(f"/api/inspirations/{insp_id}", json={"rating": 3})
+
+    pages: list[list[str]] = []
+    for page in (1, 2, 3):
+        body = client.get(
+            "/api/inspirations", params={"sort": "rating", "size": 3, "page": page}
+        ).json()
+        pages.append([item["id"] for item in body["items"]])
+
+    flat = [insp_id for page in pages for insp_id in page]
+    assert len(flat) == len(ids)
+    assert set(flat) == set(ids)
+    # 重复请求同一页顺序一致（SQLite 没有二级排序时这里会漂）
+    again = client.get(
+        "/api/inspirations", params={"sort": "rating", "size": 3, "page": 2}
+    ).json()
+    assert [item["id"] for item in again["items"]] == pages[1]
 
 
 def test_dominant_colors_and_filter(client, upload):

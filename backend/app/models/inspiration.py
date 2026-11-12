@@ -55,6 +55,16 @@ class Inspiration(Base):
             "source_type",
             "created_at",
         ),
+        # 2026-11-12 评分功能：评分排序/筛选复合索引。评分排序以
+        # (deleted_at, rating, created_at) 为主，降序扫描复用同一索引；
+        # 末尾带 id 让 id DESC tie-breaker 也能走索引，避免同分翻页漂移。
+        Index(
+            "ix_inspirations_active_rating_created",
+            "deleted_at",
+            "rating",
+            "created_at",
+            "id",
+        ),
     )
 
     id: Mapped[str] = mapped_column(

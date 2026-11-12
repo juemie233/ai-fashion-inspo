@@ -9,7 +9,6 @@ import { IconLeft, IconRight } from '@arco-design/web-vue/es/icon'
 import {
   fetchInspiration,
   toggleFavorite,
-  updateRating,
   moveToTrash,
   restoreInspiration,
   deleteInspiration,
@@ -34,9 +33,11 @@ import { useOutfitTags } from '@/composables/useOutfitTags'
 import { useSimilarItems } from '@/composables/useSimilarItems'
 import { useBrowseContext } from '@/composables/useBrowseContext'
 import { usePageTitle } from '@/composables/usePageTitle'
+import { useInspirationsStore } from '@/stores/inspirations'
 
 const route = useRoute()
 const router = useRouter()
+const inspirationsStore = useInspirationsStore()
 
 /** 素材详情数据 */
 const detail = ref<InspirationDetailOut | null>(null)
@@ -197,16 +198,19 @@ async function handleToggleFavorite() {
   }
 }
 
-/** 设置评分（0~5，0 清除）：同步详情数据 */
+/** 设置评分（0~5，0 清除）：统一走 store，同步列表项与详情，失败回滚 */
 async function handleRate(value: number) {
   if (!detail.value) return
+  const previous = detail.value.rating ?? 0
+  // 先乐观更新详情：Arco rate 是受控组件，失败时把值改回 previous 才会触发重新渲染
+  detail.value.rating = value
   try {
-    await updateRating(detail.value.id, value)
-    detail.value.rating = value
+    await inspirationsStore.setRating(detail.value.id, value)
+    if (detail.value) detail.value.rating = value
     Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
   } catch (e) {
-    const detailMsg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    Message.error(detailMsg || '评分失败')
+    if (detail.value) detail.value.rating = previous
+    Message.error(getApiErrorMessage(e, '评分失败'))
   }
 }
 

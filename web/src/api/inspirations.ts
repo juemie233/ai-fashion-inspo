@@ -240,6 +240,8 @@ export async function batchTrash(
 export interface BatchUpdateFields {
   source_type?: string
   is_favorite?: boolean
+  /** 评分 0~5（0 = 清除评分） */
+  rating?: number
   quality_status?: QualityStatus
   is_ai_generated?: boolean
 }

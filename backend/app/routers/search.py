@@ -32,7 +32,12 @@ from app.services.embedding_service import (
     get_image_embedding_status,
     get_text_embedding_status,
 )
-from app.services.inspiration_query import load_live_inspiration, inspiration_load_options
+from app.services.inspiration_query import (
+    RATING_SORTS,
+    inspiration_load_options,
+    load_live_inspiration,
+    rating_sort_clauses,
+)
 from app.services.vector_service import find_similar_hybrid
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -69,7 +74,10 @@ async def search_inspirations(
     rating_min: int | None = Query(None, ge=1, le=5, description="评分下限（评分 >= 该值）"),
     sort: str = Query(
         "newest",
-        description="newest | oldest | tag_count | match_score | rating | rating_asc",
+        description=(
+            "newest | oldest | tag_count | match_score | rating | "
+            "rating_asc（仅已评分） | unrated_first（未评分优先）"
+        ),
     ),
     combine: str = Query("AND", description="标签组合逻辑 AND | OR"),
     page: int = Query(1, ge=1),
@@ -206,14 +214,16 @@ async def search_inspirations(
                 )
             )
 
+    # 评分排序口径：rating_asc 只排已评分；其余评分排序包含未评分。
+    if sort == "rating_asc":
+        base_query = base_query.where(Inspiration.rating > 0)
+
     # 排序
     sort_mapping = {
         "newest": Inspiration.created_at.desc(),
         "oldest": Inspiration.created_at.asc(),
         "tag_count": Inspiration.id.desc(),  # 占位，下面特殊处理
         "match_score": Inspiration.id.asc(),  # 占位，下面特殊处理
-        "rating": Inspiration.rating.desc(),  # 评分降序（高分优先）
-        "rating_asc": Inspiration.rating.asc(),  # 评分升序
     }
 
     if sort == "tag_count":
@@ -245,6 +255,8 @@ async def search_inspirations(
             match_sub,
             Inspiration.id == match_sub.c.inspiration_id,
         ).order_by(func.coalesce(match_sub.c.cnt, 0).desc())
+    elif sort in RATING_SORTS:
+        base_query = base_query.order_by(*rating_sort_clauses(sort))
     else:
         base_query = base_query.order_by(sort_mapping.get(sort, Inspiration.created_at.desc()))
 

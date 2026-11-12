@@ -107,6 +107,7 @@ function groupedTags(): Record<string, InspirationTagOut[]> {
       <div class="rating-box" title="评分（0~5，点击星设置，再点清除）">
         <a-rate
           :model-value="detail.rating || 0"
+          :aria-label="`评分，当前 ${detail.rating || 0} 星`"
           allow-clear
           @change="(v: number) => emit('rate', v)"
         />

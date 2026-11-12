@@ -495,12 +495,13 @@ async def batch_update(
     data: BatchUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记），仅更新显式字段。"""
+    """批量编辑素材元数据（来源/收藏/审核状态/疑似 AI 标记/评分），仅更新显式字段。"""
     updated = await inspiration_service.batch_update_inspirations(
         db,
         data.ids,
         source_type=data.source_type,
         is_favorite=data.is_favorite,
+        rating=data.rating,
         quality_status=data.quality_status,
         is_ai_generated=data.is_ai_generated,
     )

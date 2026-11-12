@@ -14,7 +14,10 @@ import {
   type VectorSearchItem,
 } from '@/api/search'
 import type { InspirationOut } from '@/api/inspirations'
-import { toggleFavorite as toggleFavoriteApi, updateRating as updateRatingApi } from '@/api/inspirations'
+import {
+  toggleFavorite as toggleFavoriteApi,
+  updateRating as updateRatingApi,
+} from '@/api/inspirations'
 
 /** 排序选项（搜索结果排序） */
 export const SEARCH_SORT_OPTIONS = [
@@ -23,7 +26,8 @@ export const SEARCH_SORT_OPTIONS = [
   { label: '标签最多', value: 'tag_count' },
   { label: '匹配优先', value: 'match_score' },
   { label: '评分最高', value: 'rating' },
-  { label: '评分最低', value: 'rating_asc' },
+  { label: '评分最低（仅已评分）', value: 'rating_asc' },
+  { label: '未评分优先', value: 'unrated_first' },
 ]
 
 /**
@@ -33,7 +37,7 @@ export const SEARCH_SORT_OPTIONS = [
 export function useSearch() {
   const router = useRouter()
   const route = useRoute()
-    const tagsStore = useTagsStore()
+  const tagsStore = useTagsStore()
   const inspStore = useInspirationsStore()
 
   /** 搜索栏组件引用，供全局快捷键聚焦 */
@@ -44,7 +48,7 @@ export function useSearch() {
   const results = ref<InspirationOut[]>([])
   const total = ref(0)
   const searching = ref(false)
-  let searchSeq = 0  // 请求序号：普通/语义/以图搜图共用，防止陈旧响应乱序覆盖新结果
+  let searchSeq = 0 // 请求序号：普通/语义/以图搜图共用，防止陈旧响应乱序覆盖新结果
   const filterVisible = ref(localStorage.getItem('search-filter-visible') !== 'false')
 
   // 搜索参数
@@ -62,13 +66,19 @@ export function useSearch() {
 
   // 密度
   const density = ref<'compact' | 'standard' | 'comfortable'>(
-    (localStorage.getItem('search-density') as 'compact' | 'standard' | 'comfortable') || 'compact'
+    (localStorage.getItem('search-density') as 'compact' | 'standard' | 'comfortable') || 'compact',
   )
 
   // ── 持久化分页大小 / 筛选面板可见性 / 密度：刷新或再次进入时保持上次选择 ──
-  watch(pageSize, (v) => { localStorage.setItem('search-page-size', String(v)) })
-  watch(filterVisible, (v) => { localStorage.setItem('search-filter-visible', String(v)) })
-  watch(density, (v) => { localStorage.setItem('search-density', v) })
+  watch(pageSize, (v) => {
+    localStorage.setItem('search-page-size', String(v))
+  })
+  watch(filterVisible, (v) => {
+    localStorage.setItem('search-filter-visible', String(v))
+  })
+  watch(density, (v) => {
+    localStorage.setItem('search-density', v)
+  })
 
   // ── 向量搜索（语义搜索 / 以图搜图） ──
 
@@ -127,7 +137,7 @@ export function useSearch() {
 
   /** 复制当前搜索链接（含筛选条件）到剪贴板 */
   async function copySearchLink() {
-    await syncUrl()  // 等待 URL 同步完成后再读取 location.href，确保复制到最新筛选条件
+    await syncUrl() // 等待 URL 同步完成后再读取 location.href，确保复制到最新筛选条件
     try {
       await navigator.clipboard.writeText(location.href)
       Message.success('已复制搜索链接')
@@ -167,7 +177,7 @@ export function useSearch() {
     const seq = ++searchSeq
     try {
       const data = await searchInspirations(buildQuery(page))
-      if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
+      if (seq !== searchSeq) return // 已有更新的搜索请求，丢弃过期响应
       results.value = data.items
       total.value = data.total
       syncUrl()
@@ -189,7 +199,7 @@ export function useSearch() {
   }
 
   function addToHistory(val: string) {
-    const h = searchHistory.value.filter(h => h !== val)
+    const h = searchHistory.value.filter((h) => h !== val)
     h.unshift(val)
     searchHistory.value = h.slice(0, 10)
     localStorage.setItem('search-history', JSON.stringify(searchHistory.value))
@@ -205,10 +215,10 @@ export function useSearch() {
       return
     }
     vectorLoading.value = true
-    const seq = ++searchSeq  // 纳入同一序号体系，防止与普通搜索乱序覆盖
+    const seq = ++searchSeq // 纳入同一序号体系，防止与普通搜索乱序覆盖
     try {
       const data = await vectorSearchText(text, 50)
-      if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
+      if (seq !== searchSeq) return // 已有更新的搜索请求，丢弃过期响应
       vectorItems.value = data.items
       vectorMode.value = 'semantic'
       vectorQueryLabel.value = text
@@ -217,7 +227,8 @@ export function useSearch() {
       addToHistory(text)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {
-      if (seq === searchSeq) Message.error(getApiErrorMessage(e, '语义搜索失败，请确认后端向量服务已就绪'))
+      if (seq === searchSeq)
+        Message.error(getApiErrorMessage(e, '语义搜索失败，请确认后端向量服务已就绪'))
     } finally {
       if (seq === searchSeq) vectorLoading.value = false
     }
@@ -226,7 +237,7 @@ export function useSearch() {
   /** 选择图片后触发以图搜图 */
   async function handleImagePicked(file: File) {
     vectorLoading.value = true
-    const seq = ++searchSeq  // 纳入同一序号体系，防止与普通搜索乱序覆盖
+    const seq = ++searchSeq // 纳入同一序号体系，防止与普通搜索乱序覆盖
     // 生成本地预览：先释放上一次的 blob URL，避免内存泄漏
     if (imagePreviewUrl.value) {
       URL.revokeObjectURL(imagePreviewUrl.value)
@@ -235,7 +246,7 @@ export function useSearch() {
     imagePreviewUrl.value = URL.createObjectURL(file)
     try {
       const data = await vectorSearchImage(file, 50)
-      if (seq !== searchSeq) return  // 已有更新的搜索请求，丢弃过期响应
+      if (seq !== searchSeq) return // 已有更新的搜索请求，丢弃过期响应
       vectorItems.value = data.items
       vectorMode.value = 'image'
       vectorQueryLabel.value = file.name
@@ -243,7 +254,8 @@ export function useSearch() {
       total.value = data.total
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err) {
-      if (seq === searchSeq) Message.error(getApiErrorMessage(err, '以图搜图失败，请确认已安装 CLIP 图像模型'))
+      if (seq === searchSeq)
+        Message.error(getApiErrorMessage(err, '以图搜图失败，请确认已安装 CLIP 图像模型'))
     } finally {
       if (seq === searchSeq) vectorLoading.value = false
     }
@@ -278,7 +290,7 @@ export function useSearch() {
         doSearch(1)
       }
     },
-    { deep: false }
+    { deep: false },
   )
 
   // ── 删除/收藏 ──
@@ -286,7 +298,7 @@ export function useSearch() {
   async function handleDelete(id: string) {
     try {
       await inspStore.remove(id)
-      results.value = results.value.filter(r => r.id !== id)
+      results.value = results.value.filter((r) => r.id !== id)
       total.value--
       Message.success('已移入垃圾桶')
     } catch {
@@ -317,8 +329,7 @@ export function useSearch() {
       item.rating = value
       Message.success(value > 0 ? `已评分 ${value} 星` : '已清除评分')
     } catch (e) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data
-        ?.detail
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       Message.error(detail || '评分失败')
     }
   }

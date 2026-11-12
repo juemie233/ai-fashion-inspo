@@ -24,7 +24,15 @@ export type MediaFilter = 'all' | 'image' | 'video'
 export type StatusFilter = 'all' | 'done' | 'pending' | 'untagged' | 'favorites'
 export type QualityFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'ai'
 export type SortMode =
-  'newest' | 'oldest' | 'updated' | 'largest' | 'tag_count' | 'random' | 'rating' | 'rating_asc'
+  | 'newest'
+  | 'oldest'
+  | 'updated'
+  | 'largest'
+  | 'tag_count'
+  | 'random'
+  | 'rating'
+  | 'rating_asc'
+  | 'unrated_first'
 
 export interface UseInspirationFiltersOptions {
   /** 任一筛选/排序变更后：退出定位模式、回第一页、重新加载并同步 URL */
@@ -162,7 +170,8 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
     { label: '最旧在前', value: 'oldest' },
     { label: '最近更新', value: 'updated' },
     { label: '评分最高', value: 'rating' },
-    { label: '评分最低', value: 'rating_asc' },
+    { label: '评分最低（仅已评分）', value: 'rating_asc' },
+    { label: '未评分优先', value: 'unrated_first' },
     { label: '文件最大', value: 'largest' },
     { label: '标签最多', value: 'tag_count' },
     { label: '随机', value: 'random' },
@@ -171,11 +180,11 @@ export function useInspirationFilters(options: UseInspirationFiltersOptions) {
   /** 评分筛选选项（rating >= 指定值） */
   const ratingOptions: { label: string; value: string }[] = [
     { label: '全部评分', value: '' },
-    { label: '★ 1 分及以上', value: '1' },
-    { label: '★ 2 分及以上', value: '2' },
-    { label: '★ 3 分及以上', value: '3' },
-    { label: '★ 4 分及以上', value: '4' },
-    { label: '★ 5 分', value: '5' },
+    { label: '≥1 星', value: '1' },
+    { label: '≥2 星', value: '2' },
+    { label: '≥3 星', value: '3' },
+    { label: '≥4 星', value: '4' },
+    { label: '5 星', value: '5' },
   ]
 
   // ── 筛选/排序快捷入口 ──

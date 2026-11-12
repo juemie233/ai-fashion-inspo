@@ -102,11 +102,10 @@ export const FILTER_OPTIONS: { key: string; label: string; filter: ListFilter }[
   { key: 'untagged', label: '未标注', filter: { tag_status: 'untagged' } },
 ]
 
-/** 排序选项（手机侧够用的四种，其余留在 Web） */
+/** 排序选项（手机侧够用的三种，其余留在 Web；手机本期无评分入口，不展示评分排序） */
 export const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'newest', label: '最新' },
   { key: 'oldest', label: '最早' },
-  { key: 'rating', label: '评分' },
   { key: 'random', label: '随机' },
 ]
 

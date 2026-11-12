@@ -65,6 +65,16 @@ describe('useInspirationFilters', () => {
     expect(filters.focusedIds.value).toEqual([])
   })
 
+  it('评分排序文案区分「仅已评分」并提供「未评分优先」', () => {
+    const { filters } = setup()
+
+    expect(filters.sortOptions.find((o) => o.value === 'rating_asc')?.label).toBe(
+      '评分最低（仅已评分）',
+    )
+    expect(filters.sortOptions.find((o) => o.value === 'unrated_first')?.label).toBe('未评分优先')
+    expect(filters.ratingOptions.map((o) => o.label)).toContain('≥3 星')
+  })
+
   it('setter 先改状态再回调重新加载（筛选与排序走同一入口）', () => {
     const { filters, reloadFirstPage } = setup()
 

@@ -85,6 +85,21 @@ function confirmLinkBloggers() {
   bloggerIds.value = []
 }
 
+// ── 批量评分弹窗 ──
+const ratingModalOpen = ref(false)
+/** 0 = 未选择/清除；1~5 = 星数（Arco a-rate allow-clear 回 0） */
+const ratingValue = ref(0)
+
+function openRatingModal() {
+  ratingValue.value = 0
+  ratingModalOpen.value = true
+}
+
+function applyRating(value: number) {
+  emit('update', { rating: value })
+  ratingModalOpen.value = false
+}
+
 // ── 加标签弹窗 ──
 const tagModalOpen = ref(false)
 const tagInput = ref<string[]>([])
@@ -141,6 +156,7 @@ function confirmEdit() {
     <a-button size="mini" @click="emit('favorite', true)">批量收藏</a-button>
     <a-button size="mini" @click="emit('favorite', false)">取消收藏</a-button>
     <a-button size="mini" @click="openTagModal">加标签</a-button>
+    <a-button size="mini" @click="openRatingModal">评分</a-button>
     <a-button size="mini" @click="emit('add-collection')">加入合集</a-button>
     <a-select
       v-model="bloggerIds"
@@ -171,6 +187,26 @@ function confirmEdit() {
     <div style="flex: 1" />
     <a-button size="mini" type="text" @click="emit('exit')">退出批量</a-button>
   </div>
+
+  <!-- 批量评分弹窗 -->
+  <a-modal v-model:visible="ratingModalOpen" title="批量评分" :width="420">
+    <p style="color: #999; font-size: 12px">
+      为所选 {{ count }} 个素材设置同一评分；0 星表示清除评分，可再次修改。
+    </p>
+    <div style="display: flex; align-items: center; gap: 12px">
+      <a-rate v-model="ratingValue" allow-clear :count="5" />
+      <span style="color: #666; font-size: 12px">
+        {{ ratingValue > 0 ? `已选 ${ratingValue} 星` : '未选择（应用即清除评分）' }}
+      </span>
+    </div>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <a-button size="small" @click="ratingModalOpen = false">取消</a-button>
+        <a-button size="small" @click="applyRating(0)">清除评分</a-button>
+        <a-button size="small" type="primary" @click="applyRating(ratingValue)"> 确定 </a-button>
+      </div>
+    </template>
+  </a-modal>
 
   <!-- 加标签弹窗 -->
   <a-modal v-model:visible="tagModalOpen" title="批量添加标签" :width="460">

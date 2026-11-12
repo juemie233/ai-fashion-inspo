@@ -178,6 +178,7 @@ function openDetail() {
         <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
         <a-rate
           :model-value="item.rating || 0"
+          :aria-label="`评分，当前 ${item.rating || 0} 星，点击修改`"
           allow-clear
           class="card-rate"
           title="评分（点击星设置，再点清除）"

@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import ArcoVue from '@arco-design/web-vue'
 
 const mocks = vi.hoisted(() => ({
@@ -73,6 +74,7 @@ vi.mock('@/api/tags', () => ({
 }))
 
 import DetailView from '../DetailView.vue'
+import { useInspirationsStore } from '@/stores/inspirations'
 
 const DETAIL = {
   id: 'insp-1',
@@ -116,6 +118,7 @@ function mountView() {
 
 describe('DetailView 交互路径', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     mocks.routeQuery = {}
     mocks.fetchInspiration.mockResolvedValue(structuredClone(DETAIL))
@@ -157,6 +160,34 @@ describe('DetailView 交互路径', () => {
       await flushPromises()
       expect(mocks.toggleFavorite).toHaveBeenCalledWith('insp-1', true)
     }
+  })
+
+  it('评分成功后同步列表 store 与详情', async () => {
+    const store = useInspirationsStore()
+    store.items = [{ id: 'insp-1', rating: 0 } as never]
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'DetailInfoPanel' }).vm.$emit('rate', 4)
+    await flushPromises()
+
+    expect(mocks.updateRating).toHaveBeenCalledWith('insp-1', 4)
+    expect(store.items[0].rating).toBe(4)
+  })
+
+  it('评分失败回滚评分值并提示', async () => {
+    const store = useInspirationsStore()
+    store.items = [{ id: 'insp-1', rating: 2 } as never]
+    mocks.updateRating.mockRejectedValueOnce({ response: { data: { detail: '写入失败' } } })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    wrapper.findComponent({ name: 'DetailInfoPanel' }).vm.$emit('rate', 5)
+    await flushPromises()
+
+    expect(store.items[0].rating).toBe(2)
   })
 
   it('移入垃圾桶成功后返回列表并带上原筛选条件', async () => {

@@ -58,11 +58,16 @@ def test_search_rating_filter_and_sort(client, upload):
     ids = [i["id"] for i in client.get("/api/search", params={"sort": "rating"}).json()["items"]]
     assert ids == [b, c, a]
 
-    # 评分升序：a(0) → c(2) → b(5)
-    ids_asc = [
-        i["id"] for i in client.get("/api/search", params={"sort": "rating_asc"}).json()["items"]
-    ]
-    assert ids_asc == [a, c, b]
+    # 评分升序（仅已评分）：c(2) → b(5)，未评分的 a 不出现
+    asc = client.get("/api/search", params={"sort": "rating_asc"}).json()
+    assert asc["total"] == 2
+    assert [i["id"] for i in asc["items"]] == [c, b]
+
+    # 未评分优先：a 排最前
+    unrated = client.get(
+        "/api/search", params={"sort": "unrated_first"}
+    ).json()["items"]
+    assert unrated[0]["id"] == a
 
 
 def test_search_excludes_trashed(client, upload):
