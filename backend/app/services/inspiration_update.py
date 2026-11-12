@@ -63,11 +63,15 @@ async def batch_favorite_inspirations(
 ) -> int:
     """批量设置素材收藏状态，返回实际更新的行数。
 
-    仅作用于未删除素材；已删除/不存在的 ID 被静默忽略。
+    仅作用于未删除素材；已删除/不存在的 ID 被静默忽略。先按 Set/dict 保序去重，
+    避免重复 ID 撑大 IN 列表（前端全选 + 手动追加时可能出现重复）。
     """
+    unique_ids = list(dict.fromkeys(inspiration_ids))
+    if not unique_ids:
+        return 0
     result = await db.execute(
         update(Inspiration)
-        .where(Inspiration.id.in_(inspiration_ids), NOT_DELETED)
+        .where(Inspiration.id.in_(unique_ids), NOT_DELETED)
         .values(is_favorite=is_favorite, updated_at=utcnow())
     )
     await db.commit()
@@ -114,9 +118,12 @@ async def batch_update_inspirations(
     if len(values) == 1:  # 仅 updated_at，无任何业务字段
         return 0
 
+    unique_ids = list(dict.fromkeys(inspiration_ids))
+    if not unique_ids:
+        return 0
     result = await db.execute(
         update(Inspiration)
-        .where(Inspiration.id.in_(inspiration_ids), NOT_DELETED)
+        .where(Inspiration.id.in_(unique_ids), NOT_DELETED)
         .values(**values)
     )
     await db.commit()

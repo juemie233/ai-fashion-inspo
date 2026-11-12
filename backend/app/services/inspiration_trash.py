@@ -114,39 +114,74 @@ async def batch_trash_inspirations(
     reason: str | None = None,
     source: str = "manual",
 ) -> dict:
-    """批量将素材移入垃圾桶（逐个复用单条软删除逻辑，容忍部分失败）。
+    """批量将素材移入垃圾桶（一次预加载 + 一次批量写，避免 N 次查询/提交）。
 
-    单条素材的文件移动与软删除已在 trash_inspiration 内完成并各自提交；
-    此处逐条调用，不存在/已在垃圾桶中的 ID 计入 skipped，不影响其余素材。
+    早期实现逐条调用 ``trash_inspiration``：500 个素材会产生 500 次 SELECT、
+    1000 次文件移动、最多 1000 次 commit，批量操作明显卡顿。这里改为：
+    1. ``dict.fromkeys`` 去重并保序；
+    2. 一次 ``WHERE id IN (...)`` 预加载，``dict`` 按 ID 索引；
+    3. 批量 ``_mark_trashed`` + 一次 ``seal_urls`` + 一次 commit；
+    4. 文件仍逐条移动，但只在有路径变化时再 commit 一次。
 
-    参数:
-        source: 移入来源（manual 手动 / auto 质量审核自动移动），逐条透传给 trash_inspiration
+    单条文件移动失败只记日志，不阻断软删除（与单条 ``trash_inspiration`` 一致）。
     """
-    trashed = 0
+    ordered_ids = list(dict.fromkeys(inspiration_ids))
+    if not ordered_ids:
+        return {"trashed": 0, "skipped": 0}
+
+    rows = (
+        await db.execute(select(Inspiration).where(Inspiration.id.in_(ordered_ids)))
+    ).scalars().all()
+    by_id = {insp.id: insp for insp in rows}
+
+    trashed_items: list[Inspiration] = []
     skipped = 0
-    for inspiration_id in inspiration_ids:
-        try:
-            # audit=False：批量路径由下方汇总写一条 batch_trash 审计，避免逐条留痕噪音
-            await trash_inspiration(db, inspiration_id, reason, source=source, audit=False)
-            trashed += 1
-        except Exception as e:
-            # 与注释「容忍部分失败」语义一致：单条失败（404/409 或异常）计入
-            # skipped 继续处理其余素材，避免单条异常中断整个批次
+    for inspiration_id in ordered_ids:
+        inspiration = by_id.get(inspiration_id)
+        if inspiration is None or inspiration.deleted_at is not None:
             skipped += 1
-            if not isinstance(e, HTTPException):
-                logger.warning(
-                    f"批量移入垃圾桶单条失败（计入跳过）{inspiration_id}: {e}"
-                )
+            continue
+        resolved = _resolve_trash_reason(reason, inspiration)
+        _mark_trashed(inspiration, resolved, source)
+        trashed_items.append(inspiration)
 
-    # 记录审计：批量移入垃圾桶（软删除）也纳入审计，便于追溯批量整理动作
-    if trashed > 0:
-        await record_audit_log(
-            action="batch_trash",
-            count=trashed,
-            detail=f"跳过 {skipped} 个（不存在或已在垃圾桶）" if skipped else None,
-        )
+    if not trashed_items:
+        return {"trashed": 0, "skipped": skipped}
 
-    return {"trashed": trashed, "skipped": skipped}
+    # DB 先落库（软删除标记与 URL 墓碑同一事务），成功后再移动文件
+    await seal_urls(db, [insp.source_url for insp in trashed_items if insp.source_url])
+    await db.commit()
+
+    paths_changed = False
+    for inspiration in trashed_items:
+        try:
+            new_file = move_to_trash(inspiration.file_path, inspiration.id)
+            if new_file:
+                inspiration.file_path = new_file
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动主文件到垃圾桶失败 {inspiration.id}: {e}")
+        try:
+            new_thumb = move_to_trash(
+                inspiration.thumbnail_path, inspiration.id, suffix="_thumb"
+            )
+            if new_thumb:
+                inspiration.thumbnail_path = new_thumb
+                paths_changed = True
+        except OSError as e:
+            logger.warning(f"移动缩略图到垃圾桶失败 {inspiration.id}: {e}")
+
+    if paths_changed:
+        await db.commit()
+
+    # 批量操作只写一条汇总审计，避免 500 条 batch_trash 噪音
+    await record_audit_log(
+        action="batch_trash",
+        count=len(trashed_items),
+        detail=f"跳过 {skipped} 个（不存在或已在垃圾桶）" if skipped else None,
+    )
+
+    return {"trashed": len(trashed_items), "skipped": skipped}
 
 
 async def _purge_inspiration(

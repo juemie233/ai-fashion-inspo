@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** 素材库批量选择操作栏：收藏 / 移垃圾桶 / 加标签 / 关联博主 / 编辑元数据 / 全选 / 退出。 */
 
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { BatchUpdateFields } from '@/api/inspirations'
 import { bloggersApi } from '@/api/persons'
 import { SOURCE_TYPE_LABELS } from '@/utils/sourceLabel'
 
-defineProps<{
+const props = defineProps<{
   /** 已勾选数量 */
   count: number
   /** 当前页是否全选 */
@@ -43,38 +43,65 @@ const aiOptions = [
 
 // ── 批量关联穿搭博主 ──
 /** 博主选择器选项：按素材数量降序（素材多者在前，后端 sort=count 保证） */
+type BloggerOption = { id: number; name: string; inspiration_count?: number }
 const bloggerLoading = ref(false)
-const bloggers = ref<Array<{ id: number; name: string; inspiration_count?: number }>>([])
+const bloggerOptions = ref<Array<{ label: string; value: number }>>([])
 const bloggerIds = ref<number[]>([])
 
-const bloggerOptions = computed(() =>
-  bloggers.value.map((b) => ({
-    label: `${b.name}（${b.inspiration_count ?? 0} 个素材）`,
-    value: b.id,
-  })),
-)
+/**
+ * 博主候选懒加载 + 模块级缓存。
+ *
+ * 旧实现每次进入批量模式都在 onMounted 里串行翻页拉完所有博主（611 个约 4 次
+ * 请求），即使这次只想批量收藏/删除；批量选择因此明显变慢。现在：
+ * - 只有用户展开「关联穿搭博主」下拉时才发请求；
+ * - 先取第一页拿到 total，再并行拉剩余页；
+ * - 用 Map 按 id 去重（跨页重叠/分页边界变化时不会出现重复选项）；
+ * - 模块级缓存，同一次页面会话内再次进入批量模式不重复拉。
+ */
+let bloggerOptionsCache: Array<{ label: string; value: number }> | null = null
+let bloggerLoadPromise: Promise<Array<{ label: string; value: number }>> | null = null
 
-onMounted(async () => {
+async function loadBloggerOptions(): Promise<void> {
+  if (bloggerOptionsCache) {
+    bloggerOptions.value = bloggerOptionsCache
+    return
+  }
+  if (bloggerLoading.value) return
   bloggerLoading.value = true
   try {
-    // 分页拉取全部博主（单页上限 200，循环取完）。此前只取前 100 名：
-    // 按素材数排序后，素材较少的博主（如部分抖音博主）排在 100 名之外，
-    // 批量关联的候选列表里就没有它们，用户选不到。
-    const all: Array<{ id: number; name: string; inspiration_count?: number }> = []
-    let page = 1
-    while (true) {
-      const { items, total } = await bloggersApi.fetchList({ sort: 'count', page, size: 200 })
-      all.push(...items)
-      if (all.length >= total || items.length === 0) break
-      page += 1
+    if (!bloggerLoadPromise) {
+      bloggerLoadPromise = (async () => {
+        const pageSize = 200
+        const first = await bloggersApi.fetchList({ sort: 'count', page: 1, size: pageSize })
+        const pageCount = Math.ceil(first.total / pageSize)
+        const rest = await Promise.all(
+          Array.from({ length: Math.max(0, pageCount - 1) }, (_, i) =>
+            bloggersApi.fetchList({ sort: 'count', page: i + 2, size: pageSize }),
+          ),
+        )
+        const byId = new Map<number, BloggerOption>()
+        for (const page of [first, ...rest]) {
+          for (const blogger of page.items) byId.set(blogger.id, blogger)
+        }
+        return [...byId.values()].map((blogger) => ({
+          label: `${blogger.name}（${blogger.inspiration_count ?? 0} 个素材）`,
+          value: blogger.id,
+        }))
+      })()
     }
-    bloggers.value = all
+    bloggerOptionsCache = await bloggerLoadPromise
+    bloggerOptions.value = bloggerOptionsCache
   } catch {
     // 加载失败静默：选择器空态展示，不影响批量操作栏其它功能
+    bloggerLoadPromise = null
   } finally {
     bloggerLoading.value = false
   }
-})
+}
+
+function onBloggerPopupVisible(visible: boolean) {
+  if (visible) void loadBloggerOptions()
+}
 
 function confirmLinkBloggers() {
   if (bloggerIds.value.length === 0) {
@@ -103,6 +130,11 @@ function applyRating(value: number) {
 // ── 加标签弹窗 ──
 const tagModalOpen = ref(false)
 const tagInput = ref<string[]>([])
+/** 标签候选按需映射：库内可能有 2 万+ 标签，弹窗关闭时不构造 option 数组，
+ * 打开后交给 a-select 虚拟列表只渲染可视项，避免批量栏每次重渲染都映射全量。 */
+const tagSelectOptions = computed(() =>
+  tagModalOpen.value ? props.tagOptions.map((name) => ({ label: name, value: name })) : [],
+)
 
 function openTagModal() {
   tagInput.value = []
@@ -168,6 +200,8 @@ function confirmEdit() {
       placeholder="关联穿搭博主"
       :options="bloggerOptions"
       :loading="bloggerLoading"
+      :virtual-list-props="{ height: 240 }"
+      @popup-visible-change="onBloggerPopupVisible"
     />
     <a-button
       size="mini"
@@ -220,7 +254,8 @@ function confirmEdit() {
       allow-create
       clearable
       placeholder="输入标签名，回车新建；也可从已有标签中选择"
-      :options="tagOptions.map((name) => ({ label: name, value: name }))"
+      :options="tagSelectOptions"
+      :virtual-list-props="{ height: 240 }"
     />
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">

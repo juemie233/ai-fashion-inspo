@@ -2,7 +2,7 @@
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspiration import Inspiration
@@ -56,40 +56,49 @@ async def batch_add_tags(
     existing_pairs = {(r[0], r[1]) for r in existing_result.all()}
 
     # 批量插入新关联，跳过已存在的；记录实际变更的素材。
-    # 逐条用 SAVEPOINT flush 并捕获 IntegrityError：并发请求插入同一关联时，
-    # 仅回滚该条 SAVEPOINT 而非整个事务，避免 500。
-    total_added = 0
+    # 用一条 SQLite ``INSERT OR IGNORE`` 批量写入，替代「每条关联一次 SAVEPOINT +
+    # flush」——500 素材 × 5 标签会产生 2500 次 savepoint/flush，是批量打标慢的
+    # 主因。UNIQUE(inspiration_id, tag_id) 自带幂等，并发时由 OR IGNORE 兜底。
+    new_pairs = [
+        (inspiration_id, tag_id)
+        for inspiration_id in inspiration_ids
+        if inspiration_id in found_ids
+        for tag_id in tag_ids
+        if (inspiration_id, tag_id) not in existing_pairs
+    ]
     affected_ids: list[str] = []
-    skipped_existing = 0
-    for inspiration_id in inspiration_ids:
-        if inspiration_id not in found_ids:
-            continue
-        added_for_this = 0
-        for tag_id in tag_ids:
-            if (inspiration_id, tag_id) in existing_pairs:
-                skipped_existing += 1
-                continue
-            link = InspirationTag(
-                inspiration_id=inspiration_id, tag_id=tag_id, confidence=1.0,
-                source="manual",
+    total_added = 0
+    if new_pairs:
+        # 分块写入：一次 values(...) 过大时 SQLite 会撞变量数上限；
+        # 500 行/批在「往返次数」与「SQL 体积」之间平衡。
+        for start in range(0, len(new_pairs), 500):
+            chunk = new_pairs[start:start + 500]
+            result = await db.execute(
+                sqlite_insert(InspirationTag)
+                .values(
+                    [
+                        {
+                            "inspiration_id": inspiration_id,
+                            "tag_id": tag_id,
+                            "confidence": 1.0,
+                            "source": "manual",
+                        }
+                        for inspiration_id, tag_id in chunk
+                    ]
+                )
+                .on_conflict_do_nothing()
             )
-            db.add(link)
-            try:
-                async with db.begin_nested():
-                    await db.flush()
-            except IntegrityError:
-                # 并发下同一关联已被其他请求插入：SAVEPOINT 已回滚，对象可能已**脱离会话**，
-                # 直接 expunge 会抛 InvalidRequestError（一次可忽略的冲突被放大成 500）。
-                # 先判断再移除，并记住这对已存在，后续素材不再重复尝试。
-                if link in db:
-                    db.expunge(link)
-                existing_pairs.add((inspiration_id, tag_id))
-                skipped_existing += 1
-                continue
-            added_for_this += 1
-        if added_for_this:
-            affected_ids.append(inspiration_id)
-            total_added += added_for_this
+            inserted = result.rowcount
+            if inserted is None or inserted < 0:  # 驱动不支持 rowcount 时退回尝试数
+                inserted = len(chunk)
+            total_added += inserted
+        affected_set = {inspiration_id for inspiration_id, _ in new_pairs}
+        affected_ids = [
+            inspiration_id
+            for inspiration_id in inspiration_ids
+            if inspiration_id in affected_set
+        ]
+    skipped_existing = len(existing_pairs)
 
     await db.commit()
 

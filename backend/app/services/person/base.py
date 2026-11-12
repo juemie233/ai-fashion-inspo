@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1118,58 +1119,112 @@ class PersonServiceBase:
     ) -> dict:
         """批量建立「多个素材 × 多个博主」关联（素材库批量选择场景）。
 
-        逐素材复用 link_batch（幂等：已关联自动跳过；缺失的素材/博主计入
-        not_found 静默跳过，不抛错），汇总整体统计。
+        旧实现逐素材调用 ``link_batch``：N 个素材 = N 次素材查询 + N 次人员查询 +
+        N 次关联查询 + N 次 flush。这里改为集合预加载 + 一次批量 INSERT：
+
+        - ``dict.fromkeys`` 去重保序；
+        - ``Set`` 记录存在的素材/人员与已有关联对，O(1) 判重；
+        - 一次 ``INSERT ... ON CONFLICT DO NOTHING`` 写入所有新关联（主键幂等）。
 
         返回:
             {"linked": 新增关联数, "affected": 发生变更的素材数,
              "not_found_count": 不存在的素材数, "skipped": 已存在关联跳过数}
         """
+        assert self.model is not None and self.link_model is not None
+        model, link_model = self.model, self.link_model
+        link_id = self._link_id_col()
         inspiration_ids = list(dict.fromkeys(inspiration_ids))
         person_ids = list(dict.fromkeys(person_ids))
-        linked = 0
-        affected = 0
-        not_found = 0
+
+        if not inspiration_ids or not person_ids:
+            return {
+                "linked": 0,
+                "affected": 0,
+                "not_found_count": len(inspiration_ids),
+                "skipped": 0,
+            }
+
+        found_ids = set(
+            (
+                await db.execute(
+                    select(Inspiration.id).where(Inspiration.id.in_(inspiration_ids))
+                )
+            ).scalars().all()
+        )
+        person_id_set = set(
+            (
+                await db.execute(select(model.id).where(model.id.in_(person_ids)))
+            ).scalars().all()
+        )
+
+        existing_pairs = {
+            (row[0], row[1])
+            for row in (
+                await db.execute(
+                    select(link_model.inspiration_id, link_id).where(
+                        link_model.inspiration_id.in_(found_ids),
+                        link_id.in_(person_id_set),
+                    )
+                )
+            ).all()
+        }
+
+        new_rows: list[dict] = []
+        affected_ids: set[str] = set()
         skipped = 0
         for inspiration_id in inspiration_ids:
-            result = await self.link_batch(
-                db, inspiration_id, person_ids, confidence=confidence
-            )
-            added = len(result["links"])
-            if not result["inspiration_exists"]:
-                not_found += 1
+            if inspiration_id not in found_ids:
                 continue
-            linked += added
-            skipped += result["skipped"]
-            if added:
-                affected += 1
-
-        # 批量关联属批量写操作，按项目批量操作留痕惯例记录审计
-        # （独立会话，失败不影响主流程）
-        if linked > 0:
-            # 先提交主事务释放 SQLite 写锁，再写审计：独立会话写审计会被
-            # 本事务持有的写锁挡住，互等 30s 后审计超时失败（SQLite 单写者
-            # 死锁），接口被拖慢到超过前端超时，造成「实际成功却提示失败」。
-            # 与批量移垃圾桶 / 删除人物的审计时机一致（先 commit 再审计）。
-            await db.commit()
-            try:
-                await record_audit_log(
-                    action="batch_link_bloggers",
-                    target_type=self.label,
-                    count=linked,
-                    detail=(
-                        f"{self.label} {len(person_ids)} 个 × 素材 "
-                        f"{len(inspiration_ids)} 个（新增 {linked} 条关联，"
-                        f"跳过已关联 {skipped} 条，缺失素材 {not_found} 个）"
-                    ),
+            for person_id in person_ids:
+                if person_id not in person_id_set:
+                    continue
+                if (inspiration_id, person_id) in existing_pairs:
+                    skipped += 1
+                    continue
+                new_rows.append(
+                    {
+                        "inspiration_id": inspiration_id,
+                        self.link_id_field: person_id,
+                        "confidence": confidence,
+                    }
                 )
-            except Exception as e:
-                logger.warning(f"写入批量关联审计失败（忽略）: {e}")
+                affected_ids.add(inspiration_id)
+
+        linked = 0
+        if new_rows:
+            # 分块写入，避免 500 素材 × 50 博主一次绑定几十万个 SQL 变量
+            for start in range(0, len(new_rows), 500):
+                chunk = new_rows[start:start + 500]
+                result = await db.execute(
+                    sqlite_insert(link_model)
+                    .values(chunk)
+                    .on_conflict_do_nothing()
+                )
+                inserted = result.rowcount
+                if inserted is None or inserted < 0:  # 驱动不支持 rowcount 时退回尝试数
+                    inserted = len(chunk)
+                linked += inserted
+            await db.commit()
+            if linked > 0:
+                try:
+                    await record_audit_log(
+                        action="batch_link_bloggers",
+                        target_type=self.label,
+                        count=linked,
+                        detail=(
+                            f"{self.label} {len(person_ids)} 个 × 素材 "
+                            f"{len(inspiration_ids)} 个（新增 {linked} 条关联，"
+                            f"跳过已关联 {skipped} 条，缺失素材 "
+                            f"{len(inspiration_ids) - len(found_ids)} 个）"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"写入批量关联审计失败（忽略）: {e}")
 
         return {
             "linked": linked,
-            "affected": affected,
-            "not_found_count": not_found,
+            "affected": len(affected_ids) if linked else 0,
+            "not_found_count": len(inspiration_ids) - len(found_ids),
             "skipped": skipped,
         }
 

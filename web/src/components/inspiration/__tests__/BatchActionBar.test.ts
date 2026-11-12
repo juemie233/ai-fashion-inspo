@@ -4,8 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ArcoVue from '@arco-design/web-vue'
 
+const bloggerMocks = vi.hoisted(() => ({
+  fetchList: vi.fn(async () => ({ items: [], total: 0 })),
+}))
+
 vi.mock('@/api/persons', () => ({
-  bloggersApi: { fetchList: vi.fn(async () => ({ items: [], total: 0 })) },
+  bloggersApi: { fetchList: bloggerMocks.fetchList },
 }))
 
 import BatchActionBar from '../BatchActionBar.vue'
@@ -31,6 +35,15 @@ afterEach(() => {
 })
 
 describe('BatchActionBar 评分', () => {
+  it('进入批量模式不预载全部博主（懒加载）', async () => {
+    bloggerMocks.fetchList.mockClear()
+    const wrapper = mountBar()
+    await flushPromises()
+
+    expect(bloggerMocks.fetchList).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('「清除评分」提交 rating=0', async () => {
     const wrapper = mountBar()
     await flushPromises()
