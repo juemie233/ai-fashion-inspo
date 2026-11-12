@@ -284,7 +284,7 @@ describe('DetailView 交互路径', () => {
     })
   })
 
-  it('「换个姿势」入口带 ref 与 pose_lib（进图生图页自动打开姿势选择器）', async () => {
+  it('「换个姿势」默认云端换姿势且带 ref/pose_lib（进入后不预选姿态）', async () => {
     const wrapper = mountView()
     await flushPromises()
 
@@ -295,7 +295,12 @@ describe('DetailView 交互路径', () => {
 
     expect(mocks.routerPush).toHaveBeenCalledWith({
       path: '/generate',
-      query: { ref: 'insp-1', pose_lib: '1', model: 'qwen_2_1_uc_i2i' },
+      query: {
+        ref: 'insp-1',
+        pose_lib: '1',
+        pose_cloud: '1',
+        model: 'seedream_5_0_flash',
+      },
     })
   })
 

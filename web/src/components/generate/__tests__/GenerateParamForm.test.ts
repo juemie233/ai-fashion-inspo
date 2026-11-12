@@ -275,7 +275,7 @@ const POSE_FIXTURE = {
 /** 姿势弹窗 stub：直接把「选中」事件回抛给参数面板，避免真弹窗在 jsdom 里的 teleport 麻烦。 */
 const PosePickerStub = {
   name: 'PosePickerModal',
-  props: ['visible', 'selectedId'],
+  props: ['visible', 'selectedId', 'selectedIds', 'multiple'],
   emits: ['update:visible', 'select', 'selectMultiple'],
   template: '<div class="pose-picker-stub" />',
 }
@@ -381,6 +381,23 @@ describe('GenerateParamForm 换姿势', () => {
     const wrapper = mountPoseForm({ initialPoseLib: true })
     await flushPromises()
     expect(checkedValue(wrapper as never)).toBe('qwen_2_1_uc_i2i')
+  })
+
+  it('从详情页「换个姿势」默认云端换姿势，且不预选任何姿态', async () => {
+    const wrapper = mountPoseForm({
+      status: CLOUD_STATUS,
+      initialPoseLib: true,
+      initialPoseCloud: true,
+      initialModelKey: 'seedream_5_0_flash',
+    })
+    await flushPromises()
+
+    expect(checkedValue(wrapper as never)).toBe('seedream_5_0_flash')
+    expect(wrapper.text()).toContain('云端换姿势')
+    const picker = wrapper.findComponent({ name: 'PosePickerModal' })
+    expect(picker.props('visible')).toBe(true)
+    expect(picker.props('selectedId')).toBeUndefined()
+    expect(picker.props('selectedIds')).toEqual([])
   })
 
   it('选姿势时自动填入 pose_prompts 的提示词，并用于提交', async () => {

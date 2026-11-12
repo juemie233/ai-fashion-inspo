@@ -44,6 +44,11 @@ const props = defineProps<{
   initialModelKey?: string
   /** 从素材详情「换个姿势」跳进来：挂载后自动打开姿势选择器（空串=false） */
   initialPoseLib?: boolean
+  /** 从素材详情「换个姿势」跳进来时默认走云端换姿势（不预选任何姿态）。
+   *
+   *  云端档位由 `seedream_5_0_flash` 提供；本地线稿换姿势仍保留为手动切换。
+   */
+  initialPoseCloud?: boolean
   /** 从素材反推描述（沿用视图里 useImageGen 的实现） */
   promptFrom: (ids: string[]) => Promise<string | null>
   /** 已选参考图的缩略图数据（视图按 referenceIds 拉好后传下来；顺序=参考顺序）。
@@ -303,6 +308,9 @@ function selectPoseModel(): void {
   pendingModelKey.value = POSE_MODEL_KEY
   pendingKind.value = 'i2i'
 }
+
+/** 云端换姿势档位（豆包 Seedream 5.0 Flash）。 */
+const POSE_CLOUD_MODEL_KEY = 'seedream_5_0_flash'
 
 /** 姿势生成方式：默认「线稿参考（图生图）」——走第三个未审查档位；
  * 用户可切「文字描述（文生图）」走第一个档位。 */
@@ -850,7 +858,20 @@ onMounted(() => {
   }
   // 换姿势流程最后定档位：默认「线稿参考」→ 未审查第三档（覆盖前面 initialRefIds
   // 选中的普通改款第二档）；用户仍可在面板切「文字描述」换成文生图第一档。
-  if (props.initialPoseLib) {
+  // 2026-11-12：从详情「换个姿势」默认走云端换姿势，不预选姿态；云端档位未就绪时
+  // 不强行切本地（保留用户选择/默认档位）。
+  if (props.initialPoseCloud) {
+    cloudPoses.value = []
+    selectedPose.value = null
+    pendingKind.value = null
+    if (allModels.value.some((m) => m.key === POSE_CLOUD_MODEL_KEY)) {
+      modelKey.value = POSE_CLOUD_MODEL_KEY
+      pendingModelKey.value = ''
+    } else {
+      // 档位表还没回来：等 allModels 的 watch 认领云端档位
+      pendingModelKey.value = POSE_CLOUD_MODEL_KEY
+    }
+  } else if (props.initialPoseLib) {
     pendingModelKey.value = ''
     pendingKind.value = null
     applyPoseMode(poseMode.value)

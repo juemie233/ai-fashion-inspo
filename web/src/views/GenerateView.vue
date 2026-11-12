@@ -322,6 +322,8 @@ const initialRefIds = typeof route.query.ref === 'string' ? route.query.ref.trim
 const initialModelKey = typeof route.query.model === 'string' ? route.query.model.trim() : ''
 /** 从素材详情「换个姿势」跳进来：进页面就打开姿势选择器（参考图由 ref 参数预填） */
 const initialPoseLib = route.query.pose_lib === '1'
+/** 从素材详情「换个姿势」跳进来：默认走云端换姿势，且不预选姿态 */
+const initialPoseCloud = route.query.pose_cloud === '1'
 
 // ── 已选参考图：拉缩略图供「描述框上方」的缩略图条与浏览大图 ──
 const referenceGalleryVisible = ref(false)
@@ -450,6 +452,7 @@ onUnmounted(stopPoll)
           :initial-ref-ids="initialRefIds"
           :initial-model-key="initialModelKey"
           :initial-pose-lib="initialPoseLib"
+          :initial-pose-cloud="initialPoseCloud"
           :models-meta-fallback="cachedModelsMeta"
           :prompt-from="promptFrom"
           :reference-items="referenceItems"

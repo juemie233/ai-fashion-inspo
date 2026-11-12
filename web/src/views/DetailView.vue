@@ -458,18 +458,19 @@ async function onCorrectionRecorded(result: { applied: boolean }) {
           >
             图生图（未审查）
           </a-link>
-          <!-- 换姿势：进图生图页后自动打开姿势选择器（参考图已预填本素材） -->
+          <!-- 换姿势：默认云端换姿势（Seedream），进页自动打开姿势选择器且不预选姿态 -->
           <a-link
             v-if="detail.media_type === 'image' && !detail.deleted_at"
             class="detail-gen-link"
-            title="跳到出图页：以这张图为主体，从姿势图库选一个姿势重新生成（未审查档位）"
+            title="跳到出图页：默认云端换姿势（素材图 + 姿态图），进入后选择姿态（默认不预选）"
             @click="
               router.push({
                 path: '/generate',
                 query: {
                   ref: route.params.id as string,
                   pose_lib: '1',
-                  model: 'qwen_2_1_uc_i2i',
+                  pose_cloud: '1',
+                  model: 'seedream_5_0_flash',
                 },
               })
             "
