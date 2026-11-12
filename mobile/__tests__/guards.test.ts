@@ -3,7 +3,7 @@
  * 对应 2026-10-24 的畸形数据扫描结果 —— 修之前下列输入都会抛错并卸载整棵树。
  */
 
-import { getFileUrl } from '../services/api'
+import { getFileUrl, loadApiKey, saveApiKey } from '../services/api'
 import { sourceLabel } from '../utils/sourceLabel'
 
 describe('sourceLabel 兜底', () => {
@@ -57,5 +57,44 @@ describe('getFileUrl 兜底', () => {
     expect(getFileUrl('http://h:18888', null)).toBe('http://h:18888/api/files/')
     expect(getFileUrl('http://h:18888', [])).toBe('http://h:18888/api/files/')
     expect(getFileUrl('http://h:18888', {})).toBe('http://h:18888/api/files/')
+  })
+})
+
+describe('API Key（P1：后端开鉴权后手机端要能带 header）', () => {
+  it('保存后拦截器自动加 X-API-Key；清除后不再加', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    const { apiClient } = require('../services/api')
+    await AsyncStorage.clear()
+    await AsyncStorage.setItem('fashion-inspo:api-base-url', 'http://192.168.31.142:18888')
+
+    const seen: Record<string, unknown>[] = []
+    const original = apiClient.defaults.adapter
+    apiClient.defaults.adapter = async (config: Record<string, unknown>) => {
+      seen.push({ ...(config.headers as Record<string, unknown>) })
+      return { data: {}, status: 200, statusText: 'OK', headers: {}, config }
+    }
+
+    await saveApiKey('secret-key')
+    await apiClient.get('/inspirations')
+    expect(seen[0]['X-API-Key']).toBe('secret-key')
+
+    await saveApiKey('')
+    await apiClient.get('/inspirations')
+    expect(seen[1]['X-API-Key']).toBeUndefined()
+
+    apiClient.defaults.adapter = original
+  })
+
+  it('Key 持久化到 AsyncStorage（重启后可恢复）', async () => {
+    const AsyncStorage = require('@react-native-async-storage/async-storage')
+    await AsyncStorage.clear()
+    await saveApiKey('  abc123  ')
+
+    expect(await AsyncStorage.getItem('fashion-inspo:api-key')).toBe('abc123')
+    // 模块内缓存也要是修剪后的值
+    expect(await loadApiKey()).toBe('abc123')
+
+    await saveApiKey('')
+    expect(await AsyncStorage.getItem('fashion-inspo:api-key')).toBeNull()
   })
 })

@@ -12,8 +12,17 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { View, FlatList, RefreshControl, StyleSheet, Alert } from 'react-native'
+import {
+  View,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Alert,
+  useWindowDimensions,
+} from 'react-native'
 import { useRouter } from 'expo-router'
+import Icon from '../../components/Icon'
 import ScreenHeader from '../../components/ui/ScreenHeader'
 import IconButton from '../../components/ui/IconButton'
 import MediaCard from '../../components/ui/MediaCard'
@@ -39,6 +48,15 @@ import {
 } from '../../services/api'
 import { sourceLabel } from '../../utils/sourceLabel'
 import { dominantColor } from '../../utils/dominantColor'
+import { gridColumns } from '../../utils/layout'
+import { Image } from 'expo-image'
+import {
+  formatCacheTime,
+  loadGalleryCache,
+  saveGalleryCache,
+  shouldCache,
+  type GalleryCacheEntry,
+} from '../../utils/offlineCache'
 import type { Theme } from '../../constants/theme'
 
 /** 批量收藏/垃圾桶的单次上限（与后端 Pydantic 校验保持一致，避免 422 只报通用失败） */
@@ -74,6 +92,9 @@ export default function GalleryScreen() {
     batchTrash,
   } = useInspirationStore()
 
+  const { width } = useWindowDimensions()
+  /** 平板/大屏切 3 列（600dp 断点），手机保持 2 列 */
+  const columns = gridColumns(width)
   const [refreshing, setRefreshing] = useState(false)
   /** 是否处于多选模式（与「已选数量」分开：可以从页头「选择」进入但不选任何素材） */
   const [selectionMode, setSelectionMode] = useState(false)
@@ -82,6 +103,8 @@ export default function GalleryScreen() {
   const [sortOpen, setSortOpen] = useState(false)
   const [snackbar, setSnackbar] = useState('')
   const [snackbarVisible, setSnackbarVisible] = useState(false)
+  /** 离线时读到的首页缓存（只在接口失败且列表为空时使用） */
+  const [offlineEntry, setOfflineEntry] = useState<GalleryCacheEntry | null>(null)
 
   // 合集选择器
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -99,6 +122,27 @@ export default function GalleryScreen() {
     setSelectionMode(false)
   }, [filter, sort])
 
+  // 弱网/离线（P1）：成功就写首页缓存；失败且列表为空就回退到缓存，并挂一条离线横幅
+  useEffect(() => {
+    if (loading) return
+    if (error === null) {
+      // 只有「默认视图 + 有数据」才值得缓存（非默认筛选的列表不缓存）
+      if (items.length > 0 && shouldCache(filter, sort)) {
+        void saveGalleryCache(items, total)
+        setOfflineEntry(null)
+      }
+      return
+    }
+    if (items.length > 0 || !shouldCache(filter, sort)) return
+    let alive = true
+    void loadGalleryCache().then((entry) => {
+      if (alive && entry) setOfflineEntry(entry)
+    })
+    return () => {
+      alive = false
+    }
+  }, [loading, error, items, total, filter, sort])
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     setSelected([])
@@ -110,6 +154,20 @@ export default function GalleryScreen() {
     if (items.length < total && !loading) {
       void fetchMore()
     }
+  }
+
+  /** 随机看一张（P2 随机灵感）：从当前已加载的素材里随机挑一条进详情，不额外请求 */
+  const openRandom = () => {
+    const pool = (items.length > 0 ? items : (offlineEntry?.items ?? [])).filter(
+      (item) => item && item.id,
+    )
+    if (pool.length === 0) {
+      showSnack('还没有可看的素材')
+      return
+    }
+    const pick = pool[Math.floor(Math.random() * pool.length)]
+    selectionFeedback()
+    router.push(`/detail/${pick.id}`)
   }
 
   const showSnack = (message: string) => {
@@ -258,7 +316,18 @@ export default function GalleryScreen() {
         onToggleFavorite={() => void handleToggleFavorite(item)}
         selected={selectionMode && selected.includes(item.id)}
         placeholderColor={dominantColor(item.dominant_colors) ?? undefined}
-        onPress={() => (selectionMode ? toggleSelect(item.id) : router.push(`/detail/${item.id}`))}
+        accessibilityLabel={`素材：${sourceLabel(item.source_type)}${
+          item.is_favorite ? '，已收藏' : ''
+        }${item.media_type === 'video' ? '，视频' : ''}`}
+        onPress={() => {
+          if (selectionMode) {
+            toggleSelect(item.id)
+            return
+          }
+          // 进详情前先把原图塞进缓存：详情页打开时就不是「白底慢慢出图」
+          void Image.prefetch(getFileUrl(apiBaseUrl, item.file_path)).catch(() => {})
+          router.push(`/detail/${item.id}`)
+        }}
         onLongPress={() => {
           if (!selectionMode) setSelectionMode(true)
           toggleSelect(item.id)
@@ -276,8 +345,10 @@ export default function GalleryScreen() {
         ? '还没有已标注的素材'
         : '还没有素材'
 
-  const firstLoad = loading && items.length === 0
-  const showError = !loading && Boolean(error) && items.length === 0
+  /** 列表实际渲染的数据：接口数据优先，断网时退化到缓存 */
+  const displayItems = items.length > 0 ? items : (offlineEntry?.items ?? [])
+  const firstLoad = loading && displayItems.length === 0
+  const showError = !loading && Boolean(error) && displayItems.length === 0
 
   return (
     <View style={styles.container}>
@@ -290,6 +361,13 @@ export default function GalleryScreen() {
               color={theme.color.brandText}
               onPress={() => router.push('/collections')}
               accessibilityLabel="收藏合集"
+            />
+            <IconButton
+              name="shuffle-outline"
+              color={theme.color.brandText}
+              onPress={openRandom}
+              accessibilityLabel="随机看一张"
+              testID="random-open"
             />
             <IconButton
               name={selectionMode ? 'close' : 'checkmark-circle-outline'}
@@ -318,7 +396,23 @@ export default function GalleryScreen() {
         onOpenSort={() => setSortOpen(true)}
       />
 
-      {error && items.length > 0 ? (
+      {offlineEntry && items.length === 0 ? (
+        <View style={styles.offlineBanner}>
+          <Icon
+            name="cloud-offline-outline"
+            size={theme.icon.sm}
+            color={theme.color.warningText}
+          />
+          <AppText variant="caption" color="textSecondary" style={styles.offlineText}>
+            离线模式：显示 {formatCacheTime(offlineEntry.savedAt)} 的缓存
+          </AppText>
+          <Pressable onPress={() => void fetchInspirations()} hitSlop={10} accessibilityRole="button">
+            <AppText variant="caption" color="brandText">
+              重试
+            </AppText>
+          </Pressable>
+        </View>
+      ) : error && items.length > 0 ? (
         <View style={styles.inlineError}>
           <AppText variant="caption" color="dangerText">
             {error}
@@ -327,10 +421,12 @@ export default function GalleryScreen() {
       ) : null}
 
       <FlatList
-        data={items}
+        testID="gallery-list"
+        data={displayItems}
         renderItem={renderCard}
         keyExtractor={(item) => item.id}
-        numColumns={2}
+        numColumns={columns}
+        key={`gallery-${columns}`}
         contentContainerStyle={styles.grid}
         columnWrapperStyle={styles.row}
         onEndReached={onEndReached}
@@ -416,6 +512,17 @@ const makeStyles = (t: Theme) =>
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: t.color.divider,
     },
+    offlineBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.space.sm,
+      paddingHorizontal: t.space.lg,
+      paddingVertical: t.space.sm,
+      backgroundColor: t.color.bgSurface,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: t.color.divider,
+    },
+    offlineText: { flex: 1 },
     inlineError: {
       paddingHorizontal: t.space.lg,
       paddingVertical: t.space.sm,

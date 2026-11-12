@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View, useWindowDimensions } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import MediaCard from '../../components/ui/MediaCard'
 import EmptyState from '../../components/ui/EmptyState'
@@ -13,6 +13,7 @@ import { SkeletonGrid } from '../../components/ui/Skeleton'
 import { fetchCollectionInspirations, getFileUrl, type Inspiration } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { useStyles, useTheme } from '../../hooks/useTheme'
+import { gridColumns } from '../../utils/layout'
 import { sourceLabel } from '../../utils/sourceLabel'
 import type { Theme } from '../../constants/theme'
 
@@ -33,6 +34,8 @@ export default function CollectionDetailScreen() {
   const [error, setError] = useState('')
 
   const collectionId = Number(id)
+  const { width } = useWindowDimensions()
+  const columns = gridColumns(width)
 
   /** 请求序号：下拉刷新会让在飞的翻页请求作废，避免旧页追加到新列表后面 */
   const requestSeqRef = useRef(0)

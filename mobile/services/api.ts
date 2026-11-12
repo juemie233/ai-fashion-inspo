@@ -66,18 +66,77 @@ export function getApiBaseUrl(): string {
   return currentApiBaseUrl
 }
 
-/** 测试后端连通性：GET /api/health，返回是否可连（设置页「测试连接」用） */
+// ---------------------------------------------------------------------------
+// API Key：后端设置 `API_KEY` 后，除回环地址外的请求都要带 `X-API-Key`
+// ---------------------------------------------------------------------------
+
+/** 持久化存储键：后端 API Key */
+const API_KEY_STORAGE_KEY = 'fashion-inspo:api-key'
+
+/** 当前 API Key（空串 = 未设置；仅存本机 AsyncStorage，不写日志、不随请求回显） */
+let currentApiKey = ''
+
+/** 初始化：从持久化存储恢复 API Key（App 启动时与地址一起恢复） */
+export async function loadApiKey(): Promise<string> {
+  try {
+    const saved = await AsyncStorage.getItem(API_KEY_STORAGE_KEY)
+    if (saved && saved.trim()) currentApiKey = saved.trim()
+  } catch {
+    // 读取失败静默：按未设置处理（后端未开鉴权时不影响使用）
+  }
+  return currentApiKey
+}
+
+/** 保存 API Key（空串 = 清除）；保存失败不影响本次会话 */
+export async function saveApiKey(key: string): Promise<void> {
+  currentApiKey = key.trim()
+  try {
+    if (currentApiKey) {
+      await AsyncStorage.setItem(API_KEY_STORAGE_KEY, currentApiKey)
+    } else {
+      await AsyncStorage.removeItem(API_KEY_STORAGE_KEY)
+    }
+  } catch {
+    // 持久化失败静默：本次运行仍生效，重启后回退
+  }
+}
+
+/** 当前 API Key（同步读取，设置页回显用；只显示是否已设置，不整串展示） */
+export function getApiKey(): string {
+  return currentApiKey
+}
+
+/** 是否已设置 API Key */
+export function hasApiKey(): boolean {
+  return currentApiKey.length > 0
+}
+
+/**
+ * 测试后端连通性：GET /api/health，返回是否可连（设置页「测试连接」用）。
+ *
+ * @param baseUrl 待测试地址（未保存也测）
+ * @param apiKey 可选的 API Key；传了就带 `X-API-Key`，用来验证「地址 + Key」组合是否可用
+ */
 export async function testApiConnection(
   baseUrl: string,
+  apiKey?: string,
 ): Promise<{ ok: boolean; message: string }> {
   try {
     const normalized = normalizeBaseUrl(baseUrl)
-    const resp = await axios.get(`${normalized}/api/health`, { timeout: 8000 })
+    const key = (apiKey ?? '').trim()
+    const resp = await axios.get(`${normalized}/api/health`, {
+      timeout: 8000,
+      headers: key ? { 'X-API-Key': key } : undefined,
+    })
     if (resp.status === 200) {
-      return { ok: true, message: '连接成功' }
+      return { ok: true, message: key ? '连接成功（已带 API Key）' : '连接成功' }
     }
     return { ok: false, message: `后端返回 HTTP ${resp.status}` }
   } catch (e) {
+    const status = (e as { response?: { status?: number } })?.response?.status
+    if (status === 401 || status === 403) {
+      return { ok: false, message: 'API Key 无效或缺失（后端已开启鉴权）' }
+    }
     return { ok: false, message: '无法连接，请检查地址与网络' }
   }
 }
@@ -106,6 +165,11 @@ function ensureBaseUrl(): Promise<string> {
 apiClient.interceptors.request.use(async (config) => {
   // 地址已在会命中缓存，这里不会重复读 AsyncStorage
   config.baseURL = `${await ensureBaseUrl()}/api`
+  // 后端开了 API_KEY 后，非回环请求必须带 header；未设置时不加（不能发空 header）
+  if (currentApiKey) {
+    config.headers = config.headers ?? {}
+    config.headers['X-API-Key'] = currentApiKey
+  }
   return config
 })
 
@@ -652,6 +716,43 @@ export interface GenerateRun {
 }
 
 /** 候选图（`GET /generate/runs/{id}` 的 items 项） */
+/** 确认入库的结果（后端 confirm_import 返回结构） */
+export interface GenerateConfirmResult {
+  /** 成功入库数量 */
+  imported: number
+  /** 跳过数量（文件不存在 / 内容重复） */
+  skipped: number
+  /** 新素材 ID */
+  ids: string[]
+  /** 跳过明细（filename + 原因） */
+  skipped_items: { filename: string; reason: string }[]
+}
+
+/**
+ * 把选中的候选图入库（幂等：已入库的按「跳过」返回，不报错）。
+ *
+ * @param filenames 候选文件名（后端只认批次目录内的 basename）
+ */
+export async function confirmGenerateCandidates(
+  runId: number,
+  filenames: string[],
+): Promise<GenerateConfirmResult> {
+  const { data } = await apiClient.post<GenerateConfirmResult>(`/generate/runs/${runId}/confirm`, {
+    filenames,
+  })
+  return {
+    imported: data?.imported ?? 0,
+    skipped: data?.skipped ?? 0,
+    ids: Array.isArray(data?.ids) ? data.ids : [],
+    skipped_items: Array.isArray(data?.skipped_items) ? data.skipped_items : [],
+  }
+}
+
+/** 丢弃整批（删除批次记录与候选目录；已入库素材不受影响） */
+export async function discardGenerateRun(runId: number): Promise<void> {
+  await apiClient.post(`/generate/runs/${runId}/cancel`)
+}
+
 export interface GenerateCandidate {
   filename: string
   index: number

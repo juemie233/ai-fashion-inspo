@@ -13,7 +13,16 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { View, TextInput, FlatList, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native'
+import {
+  View,
+  TextInput,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  useWindowDimensions,
+} from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { useRouter } from 'expo-router'
 import ScreenHeader from '../../components/ui/ScreenHeader'
@@ -39,6 +48,8 @@ import {
 import { sourceLabel } from '../../utils/sourceLabel'
 import { dominantColor } from '../../utils/dominantColor'
 import { loadSearchHistory, pushSearchHistory } from '../../utils/searchHistory'
+import { loadPopularTags, savePopularTags } from '../../utils/offlineCache'
+import { gridColumns } from '../../utils/layout'
 import type { Theme } from '../../constants/theme'
 
 const PAGE_SIZE = 30
@@ -57,6 +68,9 @@ export default function SearchScreen() {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const { apiBaseUrl, toggleFavorite } = useInspirationStore()
+  const { width } = useWindowDimensions()
+  /** 平板/大屏切 3 列 */
+  const columns = gridColumns(width)
 
   const [searchText, setSearchText] = useState('')
   const [tagGroups, setTagGroups] = useState<TagCategoryGroup[]>([])
@@ -79,12 +93,16 @@ export default function SearchScreen() {
   const [semanticQuery, setSemanticQuery] = useState<string | null>(null)
   /** 最近搜索（本地历史，P2-5） */
   const [history, setHistory] = useState<string[]>([])
+  /** 标签库拉取失败时的离线常用标签（P1 弱网/离线） */
+  const [cachedPopular, setCachedPopular] = useState<string[]>([])
   /** 搜索请求序号：翻页在飞时重新搜索/以图搜图，旧响应直接丢弃，避免混入新结果 */
   const searchSeqRef = useRef(0)
 
   useEffect(() => {
     void loadTags()
     void loadSearchHistory().then(setHistory)
+    // 标签库拉不到时（断网/后端未启动）用上次缓存的常用标签兜底，初始态不至于空着
+    void loadPopularTags().then(setCachedPopular)
   }, [])
 
   const loadTags = async () => {
@@ -99,8 +117,8 @@ export default function SearchScreen() {
     }
   }
 
-  /** 常用标签：按 usage_count 取前 8（后端分组响应自带使用次数） */
-  const popularTags = useMemo(() => {
+  /** 常用标签（真实来源）：按 usage_count 取前 8（后端分组响应自带使用次数） */
+  const fetchedPopular = useMemo(() => {
     const all: { name: string; count: number }[] = []
     for (const group of tagGroups) {
       for (const tag of group.tags) {
@@ -118,6 +136,14 @@ export default function SearchScreen() {
       .slice(0, POPULAR_TAG_COUNT)
       .map((tag) => tag.name)
   }, [tagGroups])
+
+  /** 展示用常用标签：拉到了用真实数据，拉不到（标签库为空）用离线缓存 */
+  const popularTags = fetchedPopular.length > 0 ? fetchedPopular : cachedPopular
+
+  // 拉到真实数据就刷新离线缓存（下次断网时初始态还能用）
+  useEffect(() => {
+    if (fetchedPopular.length > 0) void savePopularTags(fetchedPopular)
+  }, [fetchedPopular])
 
   /** 执行搜索（page=1 重置结果） */
   const doSearch = useCallback(
@@ -492,7 +518,8 @@ export default function SearchScreen() {
             />
           )}
           keyExtractor={(item) => item.id}
-          numColumns={2}
+          numColumns={columns}
+          key={`search-${columns}`}
           columnWrapperStyle={styles.row}
           contentContainerStyle={styles.resultsGrid}
           onEndReached={onEndReached}

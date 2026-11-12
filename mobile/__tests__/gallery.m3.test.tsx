@@ -1,6 +1,7 @@
 /** 素材库 M3：筛选胶囊、排序、长按多选、批量操作与合集选择器。 */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Alert } from 'react-native'
 
 jest.mock('../services/api', () => {
@@ -47,8 +48,10 @@ function makeItem(over: Record<string, unknown> = {}) {
 const ITEMS = [makeItem({ id: 'i1' }), makeItem({ id: 'i2', is_favorite: true }), makeItem({ id: 'i3' })]
 
 describe('GalleryScreen（M3）', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks()
+    // P1 离线缓存会持久化首页数据：用例之间必须清空，否则错误态会被「缓存」顶掉
+    await AsyncStorage.clear()
     api.fetchInspirationPage.mockResolvedValue({ items: ITEMS, total: 3, page: 1, size: 30 })
     api.fetchCollections.mockResolvedValue([
       { id: 1, name: '春日穿搭', kind: 'manual', item_count: 5 },

@@ -94,7 +94,13 @@ jest.mock('expo-image', () => {
   // 所以挂到组件函数上而不是模块导出上
   const MockImage = Object.assign(
     (props: Record<string, unknown>) => React.createElement(View, props),
-    { loadAsync: jest.fn(async () => ({ width: 1, height: 1 })) },
+    {
+      loadAsync: jest.fn(async () => ({ width: 1, height: 1 })),
+      // 设置页「清理缓存」与列表图片预取（P1）
+      clearMemoryCache: jest.fn(async () => true),
+      clearDiskCache: jest.fn(async () => true),
+      prefetch: jest.fn(async () => true),
+    },
   )
   return { __esModule: true, Image: MockImage }
 })

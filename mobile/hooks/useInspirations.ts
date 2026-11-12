@@ -8,6 +8,7 @@ import {
   fetchInspirationPage,
   getApiBaseUrl,
   loadApiBaseUrl,
+  loadApiKey,
   uploadInspirationImage,
   type Inspiration,
   type ListFilter,
@@ -66,7 +67,8 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
    * 地址就绪由 `services/api.ts` 的请求拦截器 `ensureBaseUrl()` 保证，早发请求也不会错。
    */
   init: async () => {
-    const url = await loadApiBaseUrl()
+    // 地址与 API Key 一起恢复：后端开了鉴权后，早于 Key 就绪的请求会 401
+    const [url] = await Promise.all([loadApiBaseUrl(), loadApiKey()])
     set({ apiBaseUrl: url })
   },
 

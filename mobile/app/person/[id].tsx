@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View, useWindowDimensions } from 'react-native'
 import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Icon from '../../components/Icon'
@@ -24,6 +24,7 @@ import {
 } from '../../services/api'
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { useStyles, useTheme } from '../../hooks/useTheme'
+import { gridColumns } from '../../utils/layout'
 import { platformLabel } from '../../constants/labels'
 import { dominantColor } from '../../utils/dominantColor'
 import type { Theme } from '../../constants/theme'
@@ -39,6 +40,8 @@ export default function PersonDetailScreen() {
 
   const personKind: PersonKind = kind === 'model' ? 'model' : 'blogger'
   const personId = Number(id)
+  const { width } = useWindowDimensions()
+  const columns = gridColumns(width)
 
   const [person, setPerson] = useState<Person | null>(null)
   const [items, setItems] = useState<Inspiration[]>([])

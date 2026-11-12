@@ -19,6 +19,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native'
 import { Image } from 'expo-image'
 import { useRouter } from 'expo-router'
@@ -42,6 +43,7 @@ import {
 import { useInspirationStore } from '../hooks/useInspirations'
 import { useStyles, useTheme } from '../hooks/useTheme'
 import { successFeedback, warningFeedback } from '../utils/haptics'
+import { gridColumns } from '../utils/layout'
 import type { Theme } from '../constants/theme'
 
 export default function CollectionsScreen() {
@@ -49,6 +51,9 @@ export default function CollectionsScreen() {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const apiBaseUrl = useInspirationStore((s) => s.apiBaseUrl)
+  const { width } = useWindowDimensions()
+  /** 平板/大屏切 3 列 */
+  const columns = gridColumns(width)
 
   const [collections, setCollections] = useState<CollectionItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -205,7 +210,8 @@ export default function CollectionsScreen() {
         style={styles.list}
         data={collections}
         keyExtractor={(c) => String(c.id)}
-        numColumns={2}
+        numColumns={columns}
+        key={`collections-${columns}`}
         columnWrapperStyle={styles.row}
         contentContainerStyle={styles.grid}
         refreshControl={

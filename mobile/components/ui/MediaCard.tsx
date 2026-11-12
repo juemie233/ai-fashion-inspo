@@ -46,6 +46,8 @@ interface Props {
   style?: StyleProp<ViewStyle>
   /** 右侧自定义角标（生成候选图用「已入库」） */
   cornerBadge?: string
+  /** 无障碍朗读文案（读屏用户听不到图片，只能靠这句话判断是什么素材） */
+  accessibilityLabel?: string
 }
 
 export default function MediaCard({
@@ -65,6 +67,7 @@ export default function MediaCard({
   testID,
   style,
   cornerBadge,
+  accessibilityLabel,
 }: Props) {
   const theme = useTheme()
   const styles = useStyles(makeStyles)
@@ -80,6 +83,7 @@ export default function MediaCard({
       onLongPress={onLongPress}
       delayLongPress={280}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [
         styles.card,
         { aspectRatio: ratio },
