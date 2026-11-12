@@ -126,10 +126,12 @@ export default function GalleryScreen() {
   useEffect(() => {
     if (loading) return
     if (error === null) {
-      // 只有「默认视图 + 有数据」才值得缓存（非默认筛选的列表不缓存）
-      if (items.length > 0 && shouldCache(filter, sort)) {
-        void saveGalleryCache(items, total)
+      // 拿到数据就撤掉离线横幅——不管当前是哪个排序/筛选，
+      // 否则切成「随机」再联网成功，横幅会赖着不走（真机 20:45 发现）
+      if (items.length > 0) {
         setOfflineEntry(null)
+        // 只有「默认视图」才值得写入缓存（非默认筛选的列表不缓存）
+        if (shouldCache(filter, sort)) void saveGalleryCache(items, total)
       }
       return
     }

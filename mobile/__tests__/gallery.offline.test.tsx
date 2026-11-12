@@ -106,6 +106,27 @@ describe('素材库离线回退', () => {
     expect(screen.queryByTestId('card-c1')).toBeNull()
   })
 
+  it('切到「随机」排序后联网成功，离线横幅也会消失', async () => {
+    await saveGalleryCache([makeItem('c1')], 1)
+    api.fetchInspirationPage.mockRejectedValueOnce(new Error('offline'))
+
+    render(<GalleryScreen />)
+    await waitFor(() => expect(screen.getByText(/离线模式/)).toBeTruthy())
+
+    // 切排序 → 触发新请求（成功）→ 横幅必须撤掉
+    api.fetchInspirationPage.mockResolvedValue({
+      items: [makeItem('r1')],
+      total: 1,
+      page: 1,
+      size: 30,
+    })
+    fireEvent.press(screen.getByTestId('sort-button'))
+    fireEvent.press(await screen.findByText('随机'))
+
+    await waitFor(() => expect(screen.getByTestId('card-r1')).toBeTruthy())
+    await waitFor(() => expect(screen.queryByText(/离线模式/)).toBeNull())
+  })
+
   it('成功拉到首页时会写入缓存（供下次断网使用）', async () => {
     api.fetchInspirationPage.mockResolvedValue({
       items: [makeItem('n1')],

@@ -81,7 +81,7 @@ describe('GalleryScreen（M3）', () => {
     expect(screen.getByText('已标注')).toBeTruthy()
     expect(screen.getByText('未标注')).toBeTruthy()
     // P1-7：排序入口显示当前排序 + 下拉箭头，点开是弹层单选
-    expect(screen.getByText('排序：最新')).toBeTruthy()
+    expect(screen.getByText('最新')).toBeTruthy()
     expect(findBareText(utils.toJSON())).toEqual([])
   })
 
@@ -136,7 +136,7 @@ describe('GalleryScreen（M3）', () => {
     fireEvent.press(screen.getByTestId('sort-option-oldest'))
 
     await waitFor(() => expect(api.fetchInspirationPage).toHaveBeenCalledWith(1, 30, {}, 'oldest'))
-    await waitFor(() => expect(screen.getByText('排序：最早')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('最早')).toBeTruthy())
   })
 
   it('页头「选择」按钮可进入多选（长按之外的显式入口）', async () => {

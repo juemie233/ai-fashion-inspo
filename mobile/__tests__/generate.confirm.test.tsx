@@ -137,6 +137,17 @@ describe('勾选入库', () => {
     await waitFor(() => expect(lastAlert()).toEqual(['已入库', '入库 1 张\n跳过 1 张：已存在（内容重复）']))
   })
 
+  it('空批次进入选择模式不显示「都已入库」（文案误导）', async () => {
+    api.fetchGenerateRun.mockResolvedValue({ ...detail([]), candidates: [] })
+    render(<GenerateRunScreen />)
+    await waitFor(() => expect(screen.getByText('这个批次没有候选图')).toBeTruthy())
+
+    fireEvent.press(screen.getByTestId('toggle-select'))
+
+    expect(screen.getByText('已选 0 张')).toBeTruthy()
+    expect(screen.queryByText(/都已入库/)).toBeNull()
+  })
+
   it('未勾选时入库按钮不可用', async () => {
     await renderReady()
     fireEvent.press(screen.getByTestId('toggle-select'))

@@ -6,6 +6,8 @@
  * 审查修复：
  * - P1-4 胶囊改用 `ui/Chip`（浅底 + 选中主色描边），与页面级切换的分段控件区分开
  * - P1-7 排序不再「点一次切下一个」，改为打开底部弹层单选，按钮显示当前排序
+ * - 2026-11-12 真机验收：1.15× 字体下「排序：最新」把第 4 个胶囊（未标注）挤出屏幕，
+ *   按钮文案改成只显示当前值（无障碍标签保留「排序：…」），腾出的宽度给筛选胶囊
  */
 
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
@@ -56,8 +58,9 @@ export default function FilterBar({ filter, sort, onFilter, onOpenSort }: Props)
         accessibilityLabel={`排序：${sortLabel(sort)}`}
         style={({ pressed }) => [styles.sortBtn, pressed && styles.pressed]}
       >
+        {/* 只显示当前值：1.15× 字体下「排序：最新」会挤掉第 4 个筛选胶囊（真机发现） */}
         <AppText variant="caption" color="textSecondary" numberOfLines={1}>
-          排序：{sortLabel(sort)}
+          {sortLabel(sort)}
         </AppText>
         <Icon name="chevron-down" size={theme.icon.sm} color={theme.color.textSecondary} />
       </Pressable>

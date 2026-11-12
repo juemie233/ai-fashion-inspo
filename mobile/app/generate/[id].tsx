@@ -282,8 +282,10 @@ export default function GenerateRunScreen() {
       {/* 勾选模式底部操作条 */}
       {selecting ? (
         <View style={styles.selectionBar}>
-          <AppText variant="bodySm" color="textSecondary" style={styles.flex}>
-            已选 {selected.length} 张{selectableCount === 0 ? '（都已入库）' : ''}
+          <AppText variant="bodySm" color="textSecondary" style={styles.flex} numberOfLines={1}>
+            {/* 「都已入库」只在真有候选但都不能选时加；空批次不能这么写（真机发现） */}
+            已选 {selected.length} 张
+            {selectableCount === 0 && candidates.length > 0 ? '（都已入库）' : ''}
           </AppText>
           <Button title="取消" variant="ghost" onPress={exitSelecting} disabled={busy} />
           <Button
