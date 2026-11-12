@@ -19,7 +19,7 @@ jest.mock('expo-sharing', () => ({
 import * as FileSystem from 'expo-file-system'
 import * as MediaLibrary from 'expo-media-library'
 import * as Sharing from 'expo-sharing'
-import { saveImageToLibrary, shareImage } from '../utils/mediaActions'
+import { canSaveWithoutPermission, saveImageToLibrary, shareImage } from '../utils/mediaActions'
 
 const download = FileSystem.downloadAsync as jest.Mock
 const removeFile = FileSystem.deleteAsync as jest.Mock
@@ -58,7 +58,7 @@ describe('saveImageToLibrary', () => {
     expect(removeFile).not.toHaveBeenCalled()
   })
 
-  it('没有相册权限时给出可操作提示，不下载', async () => {
+  it('没有相册权限时给出可操作提示，不下载（非 Android 13+ 场景）', async () => {
     requestPermission.mockResolvedValue({ granted: false })
 
     const result = await saveImageToLibrary(REMOTE)
@@ -66,6 +66,16 @@ describe('saveImageToLibrary', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toContain('相册权限')
     expect(download).not.toHaveBeenCalled()
+    // 只申请写入权限（我们只保存，不读相册）
+    expect(requestPermission).toHaveBeenCalledWith(true)
+  })
+
+  it('Android 13+ 不需要存储权限，权限被拒也继续保存', () => {
+    // 这条规则决定「13+ 上权限返回 denied 时要不要挡用户」，必须单测锁住
+    expect(canSaveWithoutPermission('android', 33)).toBe(true)
+    expect(canSaveWithoutPermission('android', '34')).toBe(true)
+    expect(canSaveWithoutPermission('android', 32)).toBe(false)
+    expect(canSaveWithoutPermission('ios', 17)).toBe(false)
   })
 
   it('下载失败（非 200）时报错并清掉半截文件', async () => {

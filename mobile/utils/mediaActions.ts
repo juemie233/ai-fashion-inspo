@@ -11,6 +11,8 @@
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 
+import { Platform } from 'react-native'
+
 /** 操作结果（永不抛异常） */
 export interface MediaActionResult {
   ok: boolean
@@ -33,13 +35,23 @@ interface FileSystemModule {
 }
 
 interface MediaLibraryModule {
-  requestPermissionsAsync: () => Promise<{ granted: boolean }>
+  /** writeOnly=true 只申请写入权限（我们只保存，不读相册） */
+  requestPermissionsAsync: (writeOnly?: boolean) => Promise<{ granted: boolean }>
   saveToLibraryAsync: (uri: string) => Promise<void>
 }
 
 interface SharingModule {
   isAvailableAsync: () => Promise<boolean>
   shareAsync: (uri: string, options?: Record<string, unknown>) => Promise<void>
+}
+
+/**
+ * Android 13+（API 33）保存自己写入的图片走 MediaStore，**不需要存储权限**；
+ * 而 `WRITE_EXTERNAL_STORAGE` 在 13+ 已被系统忽略，申请会返回 denied。
+ * 这种情况不能把用户挡在「没有相册权限」上，直接继续保存。
+ */
+export function canSaveWithoutPermission(os: string, version: number | string): boolean {
+  return os === 'android' && Number(version) >= 33
 }
 
 /** 安全 require：模块不存在（未重建 APK）时返回 null */
@@ -101,8 +113,8 @@ export async function saveImageToLibrary(uri: string): Promise<MediaActionResult
   if (!library) return { ok: false, message: MODULE_MISSING }
 
   try {
-    const permission = await library.requestPermissionsAsync()
-    if (!permission.granted) {
+    const permission = await library.requestPermissionsAsync(true)
+    if (!permission.granted && !canSaveWithoutPermission(Platform.OS, Platform.Version)) {
       return { ok: false, message: '没有相册权限，请在系统设置中允许后重试' }
     }
 
