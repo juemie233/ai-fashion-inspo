@@ -189,12 +189,16 @@ jobs:
           python -m pip install --upgrade pip
           # 依赖清单以 requirements.txt 为唯一真源：测试会 import app.router（人脸推理模块）
           # 验证注册/匹配/删除，需要的包必须与生产一致。这里只把 GPU 版运行时换成 CPU 版
-          # （runner 无 CUDA），其余照requirements 装。
+          # （runner 无 CUDA），其余照 requirements 装。
           #
           # ⚠️ 不要退回「手写包名清单」：2026-11-12 CI 就因此变红——router 里有 File(...)
           # 端点，requirements.txt 声明了 python-multipart，而手写清单漏了它；新版 FastAPI
-          # （0.162 起）在**导入时**就校验 multipart，于是整个 test_storage.py 导入失败
+          # 把 multipart 校验提前到**导入时**，于是整个 test_storage.py 导入失败
           # （RuntimeError: Form data requires "python-multipart"），报错信息完全看不出是缺依赖。
+          #
+          # 版本号也不再手写：requirements.txt 已精确锁版本（与生产 venv 一致），
+          # CPU 版运行时直接复用 GPU 版同一版本号，保持单一真源。
           grep -v '^onnxruntime-gpu' requirements.txt > /tmp/face-requirements-cpu.txt
-          pip install -r /tmp/face-requirements-cpu.txt onnxruntime
+          CPU_ONNX="$(sed -n 's/^onnxruntime-gpu==//p' requirements.txt)"
+          pip install -r /tmp/face-requirements-cpu.txt "onnxruntime==${CPU_ONNX}"
           python -m unittest -q test_storage.py

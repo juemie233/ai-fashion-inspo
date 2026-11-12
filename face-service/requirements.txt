@@ -1,8 +1,20 @@
 # 人脸识别微服务依赖（onnxruntime 直载 buffalo_l onnx 模型，无需 insightface 包）
 # 安装：pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
-onnxruntime-gpu>=1.17
-fastapi>=0.110
-uvicorn>=0.27
-opencv-python-headless>=4.8
-python-multipart>=0.0.9
-numpy
+#
+# 版本策略：**精确锁版本**（与 backend/requirements.txt 一致），不写 >= 让 CI/重装去追最新。
+# 锁的值取自生产 venv（Python 3.10.11，face-service/.venv）当前实际安装的版本，
+# 即「已经验证跑得通」的那一版；不要凭印象改。
+#
+# 为什么必须锁（2026-11-12 实测事故）：CI 子项目 job 以前装最新 fastapi，新版把
+# File(...) 端点的 multipart 校验提前到**路由导入时**，缺 python-multipart 就直接
+# RuntimeError，整个 test_storage.py 连 import 都过不去（CI 只显示 exit code 1，
+# 极难定位）。锁版本后 CI 与生产同版本，上游破坏性发布不再随机染红。
+#
+# 升级流程：在生产 venv 里 `pip install -U <包>` 验证人脸服务仍正常 →
+# 把新版本号抄回这里 → 提交前跑 `python -m unittest -q test_storage.py`（CPU 路径见 CI）。
+onnxruntime-gpu==1.23.2
+fastapi==0.141.1
+uvicorn==0.52.3
+opencv-python-headless==5.0.0.93
+python-multipart==0.0.32
+numpy==2.2.6
