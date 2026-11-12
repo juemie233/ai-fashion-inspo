@@ -18,6 +18,7 @@ import {
   Dimensions,
   Linking,
   Pressable,
+  useWindowDimensions,
 } from 'react-native'
 import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
@@ -44,6 +45,7 @@ import {
 import { useInspirationStore } from '../../hooks/useInspirations'
 import { useStyles, useTheme } from '../../hooks/useTheme'
 import { useAspectRatio } from '../../hooks/useAspectRatio'
+import { detailImageHeight } from '../../utils/imageAspect'
 import { sourceLabel } from '../../utils/sourceLabel'
 import { dominantColor } from '../../utils/dominantColor'
 import { tagCategoryLabel } from '../../constants/labels'
@@ -436,15 +438,15 @@ function DetailImage({
   const theme = useTheme()
   const styles = useStyles(makeStyles)
   const { ratio, onLoad } = useAspectRatio(uri, FALLBACK_RATIO)
+  const { width } = useWindowDimensions()
+  // 高度自己算（而不是 aspectRatio + maxHeight）：否则竖图被钳高后宽度跟着收窄、整块靠左
+  const height = detailImageHeight(ratio, width, MAX_IMAGE_HEIGHT)
   return (
     <Pressable onPress={onOpen} accessibilityRole="imagebutton" accessibilityLabel="全屏查看">
       <Image
         source={{ uri }}
         onLoad={onLoad}
-        style={[
-          styles.mainImage,
-          { aspectRatio: ratio, maxHeight: MAX_IMAGE_HEIGHT, backgroundColor: letterbox },
-        ]}
+        style={[styles.mainImage, { height, backgroundColor: letterbox }]}
         contentFit="contain"
         transition={200}
         cachePolicy="memory-disk"

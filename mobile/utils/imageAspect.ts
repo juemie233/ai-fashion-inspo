@@ -46,3 +46,30 @@ export function cacheAspectRatio(uri: string | null | undefined, ratio: number):
 export function clearAspectRatioCache(): void {
   cache.clear()
 }
+
+/**
+ * 详情主图的展示高度（dp）：整行宽 + 高度取 `min(宽/比例, 上限)`。
+ *
+ * 为什么需要它：原来用 `width:'100%' + aspectRatio + maxHeight`，一旦高度被 `maxHeight`
+ * 钳住，Yoga 会反过来按比例收窄宽度——竖图（比例小于「容器宽 / 高度上限」）就变成一条窄图
+ * 且**靠左**，右边留一片空白（2026-11-12 真机反馈「有些素材点开后居左」）。
+ * 现在高度自己算、宽度固定整行，图用 `contain` 在整行盒子里居中，letterbox 由背景色铺满整行。
+ *
+ * @param ratio 图片宽高比（w / h）
+ * @param containerWidth 容器宽度（详情页即窗口宽度，主图没有左右内边距）
+ * @param maxHeight 高度上限
+ */
+export function detailImageHeight(
+  ratio: number,
+  containerWidth: number,
+  maxHeight: number,
+): number {
+  const r = clampRatio(ratio)
+  const safeMax = Number.isFinite(maxHeight) && maxHeight > 0 ? maxHeight : 0
+  if (!Number.isFinite(containerWidth) || containerWidth <= 0) return safeMax
+  const natural = containerWidth / r
+  if (!Number.isFinite(natural) || natural <= 0) return safeMax
+  // 上限非法（NaN/0）时视为不限制，而不是把图压成 1px
+  if (safeMax <= 0) return natural
+  return Math.max(1, Math.min(natural, safeMax))
+}

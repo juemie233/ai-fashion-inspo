@@ -10,6 +10,7 @@ import {
   cacheAspectRatio,
   clampRatio,
   clearAspectRatioCache,
+  detailImageHeight,
   getCachedAspectRatio,
   MAX_RATIO,
   MIN_RATIO,
@@ -37,6 +38,19 @@ describe('imageAspect', () => {
     expect(clampRatio(0)).toBe(0.75)
     expect(clampRatio(Number.NaN)).toBe(0.75)
     expect(clampRatio(0.8)).toBeCloseTo(0.8)
+  })
+
+  it('详情主图高度：宽图整行高、竖图不超上限且仍占整行宽', () => {
+    // 横图：宽 360 / 比例 1.5 = 240，未触上限
+    expect(detailImageHeight(1.5, 360, 520)).toBeCloseTo(240)
+    // 竖图（9:16）：自然高度 640 > 上限 520 → 取 520（宽度仍由页面给整行，故不会靠左）
+    expect(detailImageHeight(0.5625, 360, 520)).toBe(520)
+    // 比例被钳制：极窄竖图按 MIN_RATIO=0.4 算
+    expect(detailImageHeight(0.1, 360, 520)).toBe(520)
+    // 非法输入不炸，回退上限
+    expect(detailImageHeight(0.75, 0, 520)).toBe(520)
+    // 上限非法视为不限（回落到自然高度），别把图画成 1px
+    expect(detailImageHeight(Number.NaN, 360, Number.NaN)).toBeCloseTo(360 / 0.75)
   })
 
   it('由宽高算比例，非法尺寸返回 null', () => {

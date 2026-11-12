@@ -206,6 +206,8 @@ export interface Inspiration {
   updated_at?: string | null
   tags: InspirationTag[]
   analysis_status?: AnalysisStatus | null
+  /** 软删除时间（进垃圾桶后非空；后端列表/详情都会返回） */
+  deleted_at?: string | null
 }
 
 /** 素材上带置信度的标签关联（后端独有结构，shared 未定义） */
