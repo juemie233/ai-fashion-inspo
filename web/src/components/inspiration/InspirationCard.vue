@@ -19,21 +19,34 @@ import { openInspiration } from '@/utils/openInspiration'
 /** 悬停放大预览的触发阈值（毫秒）：鼠标停留在素材上超过该时长才弹出放大图 */
 const HOVER_ZOOM_DELAY = 2000
 
-const props = defineProps<{
-  item: InspirationOut
-  /** 右上角角标文本（如相似度「92% 视觉相似」，用于相似推荐场景） */
-  badge?: string
-  /** 是否显示悬浮操作按钮（删除/收藏），相似推荐卡片默认关闭 */
-  showActions?: boolean
-  /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
-  selectable?: boolean
-  /** 批量选择模式下是否已勾选 */
-  selected?: boolean
-  /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
-  hoverZoom?: boolean
-  /** 是否显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
-  showViewButton?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    item: InspirationOut
+    /** 右上角角标文本（如相似度「92% 视觉相似」，用于相似推荐场景） */
+    badge?: string
+    /** 是否显示悬浮操作按钮（删除/收藏），相似推荐卡片默认关闭 */
+    showActions?: boolean
+    /** 是否显示五星评分；与 showActions 独立，人物详情「全部」视图只开评分 */
+    showRating?: boolean
+    /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
+    selectable?: boolean
+    /** 批量选择模式下是否已勾选 */
+    selected?: boolean
+    /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
+    hoverZoom?: boolean
+    /** 是否显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
+    showViewButton?: boolean
+  }>(),
+  {
+    badge: '',
+    showActions: false,
+    showRating: true,
+    selectable: false,
+    selected: false,
+    hoverZoom: false,
+    showViewButton: false,
+  },
+)
 
 const emit = defineEmits<{
   (e: 'delete'): void
@@ -137,46 +150,49 @@ function openDetail() {
         <IconEye :size="14" />
       </div>
 
-      <!-- 悬浮操作层 -->
-      <div v-if="showActions !== false" class="card-overlay">
-        <a-button
-          v-if="item.quality_status === 'rejected'"
-          size="mini"
-          shape="circle"
-          type="text"
-          status="success"
-          title="标记为通过（翻案）"
-          @click.stop="emit('approve')"
-        >
-          <template #icon>
-            <IconCheck :size="14" />
-          </template>
-        </a-button>
-        <a-popconfirm
-          content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
-          :ok-button-props="{ status: 'danger' }"
-          @ok="emit('delete')"
-        >
-          <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
+      <!-- 悬浮操作层：showActions=false 时可只保留评分（人物详情「全部」视图） -->
+      <div v-if="showActions !== false || showRating" class="card-overlay">
+        <template v-if="showActions !== false">
+          <a-button
+            v-if="item.quality_status === 'rejected'"
+            size="mini"
+            shape="circle"
+            type="text"
+            status="success"
+            title="标记为通过（翻案）"
+            @click.stop="emit('approve')"
+          >
             <template #icon>
-              <IconDelete :size="14" />
+              <IconCheck :size="14" />
             </template>
           </a-button>
-        </a-popconfirm>
-        <a-button
-          size="mini"
-          shape="circle"
-          :type="item.is_favorite ? 'primary' : 'text'"
-          :status="item.is_favorite ? 'danger' : undefined"
-          @click.stop="emit('toggleFavorite')"
-        >
-          <template #icon>
-            <IconHeartFill v-if="item.is_favorite" :size="14" />
-            <IconHeart v-else :size="14" />
-          </template>
-        </a-button>
+          <a-popconfirm
+            content="移入垃圾桶？保留期内可在「素材管理 → 垃圾桶」恢复"
+            :ok-button-props="{ status: 'danger' }"
+            @ok="emit('delete')"
+          >
+            <a-button size="mini" shape="circle" type="text" status="danger" @click.stop>
+              <template #icon>
+                <IconDelete :size="14" />
+              </template>
+            </a-button>
+          </a-popconfirm>
+          <a-button
+            size="mini"
+            shape="circle"
+            :type="item.is_favorite ? 'primary' : 'text'"
+            :status="item.is_favorite ? 'danger' : undefined"
+            @click.stop="emit('toggleFavorite')"
+          >
+            <template #icon>
+              <IconHeartFill v-if="item.is_favorite" :size="14" />
+              <IconHeart v-else :size="14" />
+            </template>
+          </a-button>
+        </template>
         <!-- 五星评分：仅整数（不允许半星），点击星设置评分，再点已选星清除（0 分） -->
         <a-rate
+          v-if="showRating"
           :model-value="item.rating || 0"
           :aria-label="`评分，当前 ${item.rating || 0} 星，点击修改`"
           allow-clear

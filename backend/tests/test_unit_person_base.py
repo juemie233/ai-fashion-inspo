@@ -728,3 +728,98 @@ async def test_list_unknown_sort_falls_back_to_newest(client):
 
     assert total == 2
     assert len(items) == 2
+
+
+# ── 作品评分聚合（2026-11-12 博主作品评分方案）──
+
+
+async def _rated_works(
+    blogger_id: int, ratings: list[int], prefix: str, *, deleted: bool = False
+) -> list[str]:
+    """给博主造若干已评分作品，返回素材 ID 列表。"""
+    ids = []
+    for i, rating in enumerate(ratings):
+        insp_id = f"{prefix}{i}"
+        await _insp(insp_id, deleted=deleted)
+        await _link(insp_id, blogger_id)
+        async with async_session() as db:
+            item = await db.get(Inspiration, insp_id)
+            assert item is not None
+            item.rating = rating
+            await db.commit()
+        ids.append(insp_id)
+    return ids
+
+
+async def test_list_rating_average_filter_and_sort(client):
+    """均分只算未删除且 rating>0；不足 5 张不参与筛选/排名但显示样本数。"""
+    full = await _blogger("高分样本足")
+    low = await _blogger("低分样本足")
+    few = await _blogger("高分样本不足")
+    await _rated_works(full, [5, 5, 5, 5, 5], "rt-full-")
+    await _rated_works(low, [3, 3, 3, 3, 3], "rt-low-")
+    await _rated_works(few, [5, 5, 5, 5], "rt-few-")
+    # 垃圾桶里的 1 星作品不能拉低/增加分母
+    await _rated_works(full, [1], "rt-trash-", deleted=True)
+
+    async with async_session() as db:
+        items, total = await BloggerService().list_items(db, page=1, size=10)
+        by_id = {i["id"]: i for i in items}
+        assert total == 3
+        assert by_id[full]["rated_count"] == 5
+        assert by_id[full]["rating_average"] == 5.0
+        assert by_id[few]["rated_count"] == 4
+        assert by_id[few]["rating_average"] == 5.0
+
+        filtered, ftotal = await BloggerService().list_items(
+            db, page=1, size=10, rating_min=4
+        )
+        assert ftotal == 1
+        assert filtered[0]["id"] == full
+
+        desc, _ = await BloggerService().list_items(
+            db, page=1, size=10, sort="rating"
+        )
+        assert [i["id"] for i in desc] == [full, low, few]
+        asc, _ = await BloggerService().list_items(
+            db, page=1, size=10, sort="rating_asc"
+        )
+        assert [i["id"] for i in asc] == [low, full, few]
+
+
+async def test_grouped_list_rating_aggregates_all_accounts(client):
+    """人物组按组内全部账号合并分子/分母；评分筛选用组合后均分。"""
+    gid = await _group("评分同人")
+    primary = await _blogger_in_group("评分主号", "douyin", gid)
+    secondary = await _blogger_in_group("评分副号", "xiaohongshu", gid)
+    await _rated_works(primary, [5, 5, 5], "rt-g1-")
+    await _rated_works(secondary, [4, 4, 4], "rt-g2-")
+
+    async with async_session() as db:
+        items, total = await BloggerService().list_items(
+            db, page=1, size=10, grouped=True
+        )
+        assert total == 1
+        group = items[0]
+        assert group["rated_count"] == 6
+        assert group["rating_average"] == 4.5
+        member = group["group_members"][0]
+        assert member["rated_count"] == 3
+
+        # 组均分 4.5：rating_min=4 通过，rating_min=5 排除
+        passed, ptotal = await BloggerService().list_items(
+            db, page=1, size=10, grouped=True, rating_min=4
+        )
+        assert ptotal == 1
+        excluded, etotal = await BloggerService().list_items(
+            db, page=1, size=10, grouped=True, rating_min=5
+        )
+        assert etotal == 0
+
+        # 平台筛选平铺：每个账号各自算
+        flat, flat_total = await BloggerService().list_items(
+            db, page=1, size=10, platform="douyin", grouped=True
+        )
+        assert flat_total == 1
+        assert flat[0]["id"] == primary
+        assert flat[0]["rating_average"] == 5.0

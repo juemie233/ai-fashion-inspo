@@ -29,9 +29,9 @@ const ITEM = {
   tags: [],
 } as never
 
-function mountCard() {
+function mountCard(props: Record<string, unknown> = {}) {
   return mount(InspirationCard, {
-    props: { item: ITEM, showActions: true },
+    props: { item: ITEM, showActions: true, ...props },
     global: { plugins: [ArcoVue] },
   })
 }
@@ -51,5 +51,17 @@ describe('InspirationCard 评分', () => {
     const wrapper = mountCard()
     wrapper.findComponent({ name: 'Rate' }).vm.$emit('change', 4)
     expect(wrapper.emitted('rate')?.[0]?.[0]).toBe(4)
+  })
+
+  it('showRating=false 时不渲染评分（详情/相似卡片可显式关闭）', () => {
+    const wrapper = mountCard({ showRating: false })
+    expect(wrapper.find('.card-rate').exists()).toBe(false)
+  })
+
+  it('showActions=false + showRating=true 时只保留评分，不显示收藏/删除', () => {
+    const wrapper = mountCard({ showActions: false, showRating: true })
+    expect(wrapper.find('.card-rate').exists()).toBe(true)
+    // 收藏按钮用爱心图标；只有评分控件时不应出现
+    expect(wrapper.find('.card-overlay .arco-btn').exists()).toBe(false)
   })
 })

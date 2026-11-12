@@ -43,9 +43,11 @@ export function createPersonApi(kind: 'bloggers' | 'models') {
         platform?: string
         /** 来源筛选（manual 手动 / auto_collect 采集自动登记）：自动登记的账号可一键隐藏 */
         source?: string
-        sort?: 'newest' | 'name' | 'count'
+        sort?: 'newest' | 'name' | 'count' | 'rating' | 'rating_asc'
         /** 素材数排序方向（sort=count 时生效） */
         order?: 'asc' | 'desc'
+        /** 作品均分下限（仅博主；后端要求至少 5 张已评分） */
+        rating_min?: number
         /** 仅返回已注册人脸库的人物（用于人脸检测手动选择） */
         face_registered_only?: boolean
         /** 按人物组折叠（方案 B，仅博主）：同组只返回主账号，组内账号在 group_members */

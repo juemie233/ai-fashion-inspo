@@ -26,6 +26,8 @@
     "platform",
     "platform_user_id",
     "profile_url",
+    "rated_count",
+    "rating_average",
     "source",
     "stats_synced_at",
     "style_profile",

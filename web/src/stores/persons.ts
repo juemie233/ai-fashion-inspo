@@ -34,10 +34,12 @@ export function usePersonsStore(kind: PersonKind) {
   const platform = ref('')
   /** 来源筛选（'' 表示全部；auto_collect = 「我的喜欢」自动登记，动辄几百个） */
   const source = ref('')
-  /** 排序方式：newest | name | count（默认素材数最多） */
-  const sort = ref<'newest' | 'name' | 'count'>('count')
+  /** 排序方式：newest | name | count | rating | rating_asc（默认素材数最多） */
+  const sort = ref<'newest' | 'name' | 'count' | 'rating' | 'rating_asc'>('count')
   /** 素材数排序方向（仅 sort=count 时生效）：表头点击可切换 */
   const order = ref<'asc' | 'desc'>('desc')
+  /** 作品均分筛选（仅博主；'' = 全部） */
+  const ratingMin = ref<number | ''>('')
   /** 按人物组折叠（方案 B，仅博主）：同组只显示主账号；平台筛选时后端自动平铺 */
   const grouped = ref(kind === 'blogger')
 
@@ -60,6 +62,8 @@ export function usePersonsStore(kind: PersonKind) {
         sort: sort.value,
         // 仅 sort=count 时有意义（表头点击切换升降序）
         order: order.value,
+        // 仅博主生效；模特后端忽略
+        rating_min: ratingMin.value === '' ? undefined : ratingMin.value,
         grouped: grouped.value,
       })
       if (seq !== loadSeq) return // 已有更新的请求，丢弃过期响应
@@ -104,6 +108,7 @@ export function usePersonsStore(kind: PersonKind) {
     source,
     sort,
     order,
+    ratingMin,
     grouped,
     load,
     reload,

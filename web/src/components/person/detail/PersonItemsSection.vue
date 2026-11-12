@@ -54,6 +54,8 @@ const emit = defineEmits<{
   /** 随机浏览：由视图打开随机浏览弹窗（用的是同一份筛选条件） */
   (e: 'random-browse'): void
   (e: 'open-work', paths: string[]): void
+  /** 博主详情「全部」视图：单张作品评分（id=inspiration_id） */
+  (e: 'rate', id: string, value: number): void
   (e: 'enter-unbind'): void
   (e: 'exit-unbind'): void
   (e: 'toggle-select', id: string): void
@@ -97,6 +99,7 @@ function toInspirationOut(item: PersonInspiration): InspirationOut {
     thumbnail_path: item.thumbnail_path,
     media_type: item.media_type,
     is_favorite: Boolean(item.is_favorite),
+    rating: item.rating ?? 0,
     created_at: item.created_at || '',
     tags: [],
     analysis_status: 'none',
@@ -313,12 +316,14 @@ function openWork(work: PersonWorkGroup): void {
         :items="gridItems"
         :loading="loading"
         :show-actions="false"
+        :show-rating="kind === 'blogger' && !unbindMode"
         :selectable="kind === 'blogger' && unbindMode"
         :selected-ids="unbindSelectedIds"
         :show-view-button="unbindMode"
         :empty-text="
           filtered ? '没有符合筛选条件的素材' : '该人物还没有素材，去素材详情页关联或按博主采集吧'
         "
+        @rate="(id: string, value: number) => emit('rate', id, value)"
         @toggle-select="(id: string) => emit('toggle-select', id)"
       />
       <a-pagination

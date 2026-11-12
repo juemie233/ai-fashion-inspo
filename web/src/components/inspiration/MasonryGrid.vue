@@ -9,27 +9,44 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import InspirationCard from './InspirationCard.vue'
 import type { InspirationOut } from '@/api/inspirations'
 
-const props = defineProps<{
-  items: InspirationOut[]
-  loading?: boolean
-  density?: 'compact' | 'standard' | 'comfortable'
-  /** 卡片角标映射：素材 id -> 角标文本（如「92% 相似」），用于向量搜索结果 */
-  badges?: Record<string, string>
-  /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
-  selectable?: boolean
-  /** 已勾选的素材 id 集合（选择模式下生效） */
-  selectedIds?: ReadonlySet<string>
-  /** 空状态提示文案 */
-  emptyText?: string
-  /** 是否显示悬浮操作按钮（删除/收藏），默认显示 */
-  showActions?: boolean
-  /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
-  hoverZoom?: boolean
-  /** 显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
-  showViewButton?: boolean
-  /** 定位模式：这些素材 id 高亮（金色描边），列表加载后自动滚动到首个目标 */
-  focusedIds?: string[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    items: InspirationOut[]
+    loading?: boolean
+    density?: 'compact' | 'standard' | 'comfortable'
+    /** 卡片角标映射：素材 id -> 角标文本（如「92% 相似」），用于向量搜索结果 */
+    badges?: Record<string, string>
+    /** 批量选择模式：显示勾选框，点击卡片切换勾选而非跳转详情 */
+    selectable?: boolean
+    /** 已勾选的素材 id 集合（选择模式下生效） */
+    selectedIds?: ReadonlySet<string>
+    /** 空状态提示文案 */
+    emptyText?: string
+    /** 是否显示悬浮操作按钮（删除/收藏），默认显示 */
+    showActions?: boolean
+    /** 是否显示卡片五星评分（人物详情「全部」视图只开评分） */
+    showRating?: boolean
+    /** 悬停放大预览：鼠标停留在素材上超过 2 秒时弹出大图（疑似 AI 页面启用） */
+    hoverZoom?: boolean
+    /** 显示「浏览详情」按钮：选择模式下点击卡片只能勾选，需单独提供入口跳转详情页 */
+    showViewButton?: boolean
+    /** 定位模式：这些素材 id 高亮（金色描边），列表加载后自动滚动到首个目标 */
+    focusedIds?: string[]
+  }>(),
+  {
+    loading: false,
+    density: 'standard',
+    badges: () => ({}),
+    selectable: false,
+    selectedIds: undefined,
+    emptyText: '',
+    showActions: false,
+    showRating: true,
+    hoverZoom: false,
+    showViewButton: false,
+    focusedIds: () => [],
+  },
+)
 
 const emit = defineEmits<{
   (e: 'delete', id: string): void
@@ -121,6 +138,7 @@ watch(
             :selectable="selectable"
             :selected="selectable ? selectedIds?.has(item.id) : false"
             :show-actions="showActions !== false"
+            :show-rating="showRating"
             :hover-zoom="hoverZoom"
             :show-view-button="showViewButton"
             @delete="emit('delete', item.id)"

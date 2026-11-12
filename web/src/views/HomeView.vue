@@ -321,6 +321,7 @@ loadPage(currentPage.value)
       :selected-ids="selectedIds"
       :show-view-button="batchMode"
       :show-actions="!batchMode"
+      :show-rating="!batchMode"
       :focused-ids="focusedIds"
       @delete="handleDelete"
       @toggle-favorite="handleToggleFavorite"

@@ -32,6 +32,7 @@ const {
   platformCount,
   platformOptions,
   sortOptions,
+  ratingOptions,
   sourceOptions,
   showForm,
   editingPerson,
@@ -171,9 +172,16 @@ function handleExpandedChange(keys: Array<string | number>) {
           @change="store.reload()"
         />
         <a-select
+          v-if="kind === 'blogger'"
+          v-model="store.ratingMin"
+          :options="ratingOptions"
+          style="width: 190px"
+          @change="store.reload()"
+        />
+        <a-select
           v-model="store.sort"
           :options="sortOptions"
-          style="width: 140px"
+          style="width: 190px"
           @change="onSortPicked"
         />
       </a-space>
@@ -293,6 +301,9 @@ function handleExpandedChange(keys: Array<string | number>) {
               <span class="group-member-name">{{ m.name }}</span>
               <a-tag size="small">{{ PERSON_PLATFORM_LABELS[m.platform] ?? m.platform }}</a-tag>
               <span class="group-member-count">{{ m.inspiration_count ?? 0 }} 素材</span>
+              <span v-if="(m.rated_count ?? 0) > 0" class="group-member-count">
+                ★ {{ (m.rating_average ?? 0).toFixed(1) }} ({{ m.rated_count }})
+              </span>
             </div>
             <div class="group-expand-hint">点击账号查看该平台素材</div>
           </div>

@@ -10,7 +10,7 @@ import contextlib
 import logging
 from datetime import datetime
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 # 风格画像 top_tags 数量上限
 STYLE_PROFILE_TOP_TAGS = 15
+
+# 博主作品均分参与排名/筛选所需的最少已评分作品数（2026-11-12 博主作品评分方案）。
+# 预检：当前库 11 位博主达到 5 张，门槛保持 5。
+MIN_RATING_SAMPLE = 5
 
 
 class PersonNotFoundError(Exception):
@@ -88,8 +92,14 @@ class PersonServiceBase:
         person: Blogger | Model,
         inspiration_count: int = 0,
         last_inspiration_at: datetime | None = None,
+        rating_sum: int = 0,
+        rated_count: int = 0,
     ) -> dict:
-        """将主体 ORM 对象转为响应字典（含素材数统计与最近素材时间）。"""
+        """将主体 ORM 对象转为响应字典（含素材数统计、最近素材时间与作品评分）。
+
+        rating_sum/rated_count 来自列表聚合子查询；详情/创建等单条路径默认 0，
+        返回 rating_average=None、rated_count=0（前端显示「—」）。
+        """
         return {
             "id": person.id,
             "name": person.name,
@@ -114,6 +124,12 @@ class PersonServiceBase:
             # 最近一次入库的素材时间（None = 还没有素材）：判断博主是否仍在更新，
             # 不用点进详情。与素材数同一子查询算出，不额外多一次往返
             "last_inspiration_at": last_inspiration_at,
+            # 作品评分：均值只算 rating>0 的未删除作品；门槛由列表查询/前端文案控制。
+            # 详情/单条路径默认 0（rating_average=None）。
+            "rating_average": (
+                round(rating_sum / rated_count, 2) if rated_count else None
+            ),
+            "rated_count": rated_count,
             # 人物组（方案 B）：博主有值（null=独立账号）；模特恒为 None
             "person_group_id": getattr(person, "person_group_id", None),
             # 平台统计快照（仅博客表有这些列；模特返回 None）
@@ -144,6 +160,7 @@ class PersonServiceBase:
         order: str = "desc",
         face_registered_only: bool = False,
         grouped: bool = False,
+        rating_min: int | None = None,
     ) -> tuple[list[dict], int]:
         """分页查询（含素材数统计与多维筛选），返回 (items, total)。
 
@@ -163,12 +180,29 @@ class PersonServiceBase:
         model, link_model = self.model, self.link_model
         link_id = self._link_id_col()
 
-        # 素材数 / 最近素材时间统计子查询：人物 -> 有效素材（排除软删除素材）
+        # 素材数 / 最近素材时间 / 作品评分聚合：人物 -> 有效素材（排除软删除素材）
+        # 评分只统计 rating>0；用 sum + count 而不是 avg，人物组折叠时才能把
+        # 组内多个账号的分子分母分别相加再算组均分。
         count_subq = (
             select(
                 link_id.label("pid"),
                 func.count(link_model.inspiration_id).label("cnt"),
                 func.max(Inspiration.created_at).label("last_at"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Inspiration.rating > 0, Inspiration.rating),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("rating_sum"),
+                func.coalesce(
+                    func.sum(
+                        case((Inspiration.rating > 0, 1), else_=0)
+                    ),
+                    0,
+                ).label("rated_count"),
             )
             .join(Inspiration, Inspiration.id == link_model.inspiration_id)
             .where(Inspiration.deleted_at.is_(None))
@@ -176,11 +210,16 @@ class PersonServiceBase:
             .subquery()
         )
 
+        rating_sum_col = func.coalesce(count_subq.c.rating_sum, 0)
+        rated_count_col = func.coalesce(count_subq.c.rated_count, 0)
+
         stmt = (
             select(
                 model,
                 func.coalesce(count_subq.c.cnt, 0).label("cnt"),
                 count_subq.c.last_at,
+                rating_sum_col.label("rating_sum"),
+                rated_count_col.label("rated_count"),
             )
             .outerjoin(count_subq, model.id == count_subq.c.pid)
             # 预加载人脸特征 relationship：_to_dict 同步序列化需要（face_registered 列）
@@ -212,9 +251,20 @@ class PersonServiceBase:
 
         # 人物组折叠：仅穿搭博主且不指定平台时生效（平铺分页交给 _list_grouped）
         if grouped and self.model is Blogger and not platform:
-            return await self._list_grouped(db, stmt, sort, order, page, size)
+            return await self._list_grouped(
+                db, stmt, sort, order, page, size, rating_min=rating_min
+            )
+
+        # 评分筛选（平铺路径）：仅返回样本足够且均分达标的博主。
+        # 必须放在折叠分支之后：折叠时评分筛选要在组内合并后做，不能先过滤账号。
+        if rating_min is not None:
+            stmt = stmt.where(
+                rated_count_col >= MIN_RATING_SAMPLE,
+                rating_sum_col >= rating_min * rated_count_col,
+            )
 
         # 排序：newest（创建时间倒序）| name（按名称）| count（按素材数，order 控制升/降）
+        # rating / rating_asc：样本足够者在前，按均分排序；样本不足者统一排最后。
         if sort == "name":
             stmt = stmt.order_by(model.name.asc(), model.id.desc())
         elif sort == "count":
@@ -224,6 +274,31 @@ class PersonServiceBase:
                 stmt = stmt.order_by(cnt_col.asc(), model.id.asc())
             else:
                 stmt = stmt.order_by(cnt_col.desc(), model.id.desc())
+        elif sort in ("rating", "rating_asc"):
+            has_sample = case(
+                (rated_count_col >= MIN_RATING_SAMPLE, 0), else_=1
+            ).asc()
+            avg_expr = case(
+                (
+                    rated_count_col >= MIN_RATING_SAMPLE,
+                    rating_sum_col * 1.0 / rated_count_col,
+                ),
+                else_=0,
+            )
+            if sort == "rating":
+                stmt = stmt.order_by(
+                    has_sample,
+                    avg_expr.desc(),
+                    rated_count_col.desc(),
+                    model.id.desc(),
+                )
+            else:
+                stmt = stmt.order_by(
+                    has_sample,
+                    avg_expr.asc(),
+                    rated_count_col.desc(),
+                    model.id.asc(),
+                )
         else:
             stmt = stmt.order_by(model.created_at.desc(), model.id.desc())
 
@@ -233,7 +308,10 @@ class PersonServiceBase:
 
         stmt = stmt.offset((page - 1) * size).limit(size)
         rows = (await db.execute(stmt)).all()
-        items = [self._to_dict(p, cnt, last_at) for p, cnt, last_at in rows]
+        items = [
+            self._to_dict(p, cnt, last_at, rating_sum, rated_count)
+            for p, cnt, last_at, rating_sum, rated_count in rows
+        ]
         return items, total
 
     async def _list_grouped(
@@ -244,12 +322,17 @@ class PersonServiceBase:
         order: str,
         page: int,
         size: int,
+        rating_min: int | None = None,
     ) -> tuple[list[dict], int]:
         """人物组折叠列表：同组只返回主记录，分页以主记录为准。
 
         主账号确定规则：组手动指定（primary_blogger_id）优先；
         否则素材数最多者；同数取 id 较小者（先建）。
-        折叠后按主记录在内存排序/分页（SQL 排序对折叠列表无意义）。
+
+        评分口径（2026-11-12）：
+        - 子查询带每个账号的 rating_sum/rated_count；
+        - 折叠时把组内所有账号的分子分母分别相加，主记录展示**组均分**；
+        - 评分筛选/排序必须在折叠后做，否则先剔除低分账号会扭曲组均分。
         """
         rows = (await db.execute(stmt)).all()
 
@@ -258,7 +341,7 @@ class PersonServiceBase:
 
         group_ids = {
             person.person_group_id
-            for person, _cnt, _last in rows
+            for person, _cnt, _last, _rs, _rc in rows
             if person.person_group_id is not None
         }
         manual_primary: dict[int, int] = {}
@@ -276,8 +359,10 @@ class PersonServiceBase:
 
         # 按组折叠：主记录 = 手动指定优先，否则素材数最多（同数取 id 小者）
         groups: dict[int | None, list[tuple]] = {}
-        for person, cnt, last_at in rows:
-            groups.setdefault(person.person_group_id, []).append((person, cnt, last_at))
+        for person, cnt, last_at, rating_sum, rated_count in rows:
+            groups.setdefault(person.person_group_id, []).append(
+                (person, cnt, last_at, rating_sum, rated_count)
+            )
 
         def _sort_key(item: tuple) -> tuple:
             # (素材数倒序, id 正序)：主账号 = 素材数最多者
@@ -288,8 +373,10 @@ class PersonServiceBase:
             members.sort(key=_sort_key)
             if gid is None:
                 # 独立账号：各自一行（不折叠）
-                for person, cnt, last_at in members:
-                    folded.append(self._to_dict(person, cnt, last_at))
+                for person, cnt, last_at, rating_sum, rated_count in members:
+                    folded.append(
+                        self._to_dict(person, cnt, last_at, rating_sum, rated_count)
+                    )
                 continue
             # 手动指定的主账号优先；否则素材数最多者
             manual = manual_primary.get(gid)
@@ -299,10 +386,19 @@ class PersonServiceBase:
                 )
             else:
                 primary = members[0]
-            item = self._to_dict(primary[0], primary[1], primary[2])
-            # 组内其余账号（含素材数），供前端展开显示
+            # 组均分 = 组内所有账号的分子/分母分别相加，再统一算平均
+            group_rating_sum = sum(m[3] for m in members)
+            group_rated_count = sum(m[4] for m in members)
+            item = self._to_dict(
+                primary[0],
+                primary[1],
+                primary[2],
+                group_rating_sum,
+                group_rated_count,
+            )
+            # 组内其余账号（含各自素材数与评分），供前端展开显示
             item["group_members"] = [
-                self._to_dict(m[0], m[1], m[2])
+                self._to_dict(m[0], m[1], m[2], m[3], m[4])
                 for m in members
                 if m[0].id != primary[0].id
             ]
@@ -311,6 +407,16 @@ class PersonServiceBase:
                 {m[0].platform for m in members}
             )
             folded.append(item)
+
+        # 评分筛选在折叠后做：样本不足的排除（与列表 rating_min 语义一致）
+        if rating_min is not None:
+            folded = [
+                item
+                for item in folded
+                if (item.get("rated_count") or 0) >= MIN_RATING_SAMPLE
+                and item.get("rating_average") is not None
+                and item["rating_average"] >= rating_min
+            ]
 
         # 折叠后分页/排序以主记录为准
         total = len(folded)
@@ -322,6 +428,25 @@ class PersonServiceBase:
                 key=lambda x: (x["inspiration_count"], x["id"])
                 if order == "asc"
                 else (-x["inspiration_count"], x["id"])
+            )
+        elif sort == "rating":
+            # 样本足够者在前，按均分降序；同分按已评分数/id 稳定
+            folded.sort(
+                key=lambda x: (
+                    0 if (x.get("rated_count") or 0) >= MIN_RATING_SAMPLE else 1,
+                    -(x.get("rating_average") or 0),
+                    -(x.get("rated_count") or 0),
+                    -x["id"],
+                )
+            )
+        elif sort == "rating_asc":
+            folded.sort(
+                key=lambda x: (
+                    0 if (x.get("rated_count") or 0) >= MIN_RATING_SAMPLE else 1,
+                    x.get("rating_average") or 0,
+                    -(x.get("rated_count") or 0),
+                    x["id"],
+                )
             )
         else:
             folded.sort(

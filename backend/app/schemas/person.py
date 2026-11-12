@@ -108,6 +108,10 @@ class BloggerOut(_PersonOutFields):
 
     name: str
     platform: str = "other"
+    # 作品评分聚合（2026-11-12 博主作品评分方案）：只算未删除且 rating>0 的作品；
+    # rating_average=None 表示还没有已评分作品；rated_count 为已评分作品数。
+    rating_average: float | None = None
+    rated_count: int = 0
     # 平台统计**快照**（来自 f2 用户库，离线可读）：必须与 stats_synced_at 一起看，
     # 前端展示「同步于 X 天前」而不是当成实时值。
     follower_count: int | None = None

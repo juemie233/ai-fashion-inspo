@@ -49,6 +49,10 @@ export interface Person {
   created_at?: string | null;
   updated_at?: string | null;
   inspiration_count?: number;
+  /** 作品均分（仅博主；只算未删除且 rating>0 的单张作品） */
+  rating_average?: number | null;
+  /** 已评分作品数（仅博主；不足 5 张不参与列表评分排名/筛选） */
+  rated_count?: number;
   /** 最近一次入库的素材时间（null/undefined = 还没有素材）：判断博主是否还在更新 */
   last_inspiration_at?: string | null;
   /** 平台统计**快照**（来自 f2 用户库，离线可读；仅博主有，模特返回 null）：

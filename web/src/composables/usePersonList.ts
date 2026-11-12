@@ -68,13 +68,22 @@ export function usePersonList(kind: PersonKind) {
     if (store.source) query.source = store.source
     if (store.sort !== 'count') query.sort = store.sort
     if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
+    if (store.ratingMin !== '') query.rating_min = String(store.ratingMin)
     router.replace({ path: '/persons', query })
   }
 
-  /** 列表上下文变化时同步 URL：翻页/搜索/平台/排序任意变更即反映到地址栏 */
+  /** 列表上下文变化时同步 URL：翻页/搜索/平台/来源/评分筛选/排序任意变更即反映到地址栏 */
   watch(
     () =>
-      [store.page, store.search, store.platform, store.source, store.sort, store.order] as const,
+      [
+        store.page,
+        store.search,
+        store.platform,
+        store.source,
+        store.sort,
+        store.order,
+        store.ratingMin,
+      ] as const,
     () => syncUrl(),
   )
 
@@ -87,7 +96,13 @@ export function usePersonList(kind: PersonKind) {
     store.search = typeof q.q === 'string' ? q.q : ''
     store.platform = typeof q.platform === 'string' ? q.platform : ''
     store.source = typeof q.source === 'string' ? q.source : ''
-    store.sort = q.sort === 'name' || q.sort === 'count' ? q.sort : 'count'
+    const ratingMin = Number(q.rating_min)
+    store.ratingMin =
+      Number.isInteger(ratingMin) && ratingMin >= 1 && ratingMin <= 5 ? ratingMin : ''
+    store.sort =
+      q.sort === 'name' || q.sort === 'count' || q.sort === 'rating' || q.sort === 'rating_asc'
+        ? q.sort
+        : 'count'
     store.order = q.order === 'asc' ? 'asc' : 'desc'
   }
 
@@ -108,10 +123,23 @@ export function usePersonList(kind: PersonKind) {
     { label: '全部平台', value: '' },
     ...Object.entries(PERSON_PLATFORM_LABELS).map(([value, label]) => ({ label, value })),
   ]
-  const sortOptions = [
+  const sortOptions = computed(() => [
     { label: '素材数最多', value: 'count' },
     { label: '最新创建', value: 'newest' },
     { label: '名称排序', value: 'name' },
+    ...(kind === 'blogger'
+      ? [
+          { label: '评分最高（至少5张已评）', value: 'rating' },
+          { label: '评分最低（至少5张已评）', value: 'rating_asc' },
+        ]
+      : []),
+  ])
+  /** 作品均分筛选（仅博主；至少 5 张已评分才参与） */
+  const ratingOptions = [
+    { label: '全部评分', value: '' },
+    { label: '≥ 3 星（至少5张已评）', value: 3 },
+    { label: '≥ 4 星（至少5张已评）', value: 4 },
+    { label: '5 星（至少5张已评）', value: 5 },
   ]
   /** 来源筛选：自动登记的博主（「我的喜欢」顺手补建）动辄几百个，必须能一键分开看 */
   const sourceOptions = [
@@ -182,6 +210,7 @@ export function usePersonList(kind: PersonKind) {
     if (store.source) query.source = store.source
     if (store.sort !== 'count') query.sort = store.sort
     if (store.sort === 'count' && store.order !== 'desc') query.order = store.order
+    if (store.ratingMin !== '') query.rating_min = String(store.ratingMin)
     router.push({ path: `/persons/${person.id}`, query })
   }
 
@@ -307,6 +336,34 @@ export function usePersonList(kind: PersonKind) {
       render: ({ record }) => h('span', String((record as Person).inspiration_count ?? 0)),
     },
     // 「来源」列仅职业模特展示（穿搭博主不显示该列，其余能力不受影响）
+    ...(kind === 'blogger'
+      ? ([
+          {
+            title: '作品评分',
+            dataIndex: 'rating_average',
+            width: 120,
+            render: ({ record }) => {
+              const row = record as Person
+              const rated = row.rated_count ?? 0
+              if (rated >= 5 && row.rating_average != null) {
+                return h(
+                  'span',
+                  { style: 'white-space: nowrap' },
+                  `★ ${row.rating_average.toFixed(1)} (${rated})`,
+                )
+              }
+              if (rated > 0) {
+                return h(
+                  'span',
+                  { style: 'color: #999; white-space: nowrap' },
+                  `样本不足 ${rated}/5`,
+                )
+              }
+              return h('span', { style: 'color: #999' }, '—')
+            },
+          },
+        ] as TableColumnData[])
+      : []),
     ...(kind === 'model'
       ? ([
           {
@@ -449,6 +506,7 @@ export function usePersonList(kind: PersonKind) {
     platformCount,
     platformOptions,
     sortOptions,
+    ratingOptions,
     sourceOptions,
     showForm,
     editingPerson,

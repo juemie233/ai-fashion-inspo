@@ -282,3 +282,48 @@ describe('usePersonList', () => {
     expect(store.order).toBe('desc')
   })
 })
+
+describe('usePersonList 作品评分（博主）', () => {
+  function setQuery(query: Record<string, string>) {
+    for (const key of Object.keys(mocks.routeQuery)) delete mocks.routeQuery[key]
+    Object.assign(mocks.routeQuery, query)
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    setQuery({})
+    mocks.bloggerList.mockResolvedValue(pageResult([], 0))
+    mocks.modelList.mockResolvedValue(pageResult([], 0))
+    mocks.bloggerStats.mockResolvedValue({ total: 0, items: [] })
+  })
+
+  it('评分排序与最低均分筛选写进 URL，并能从 URL 恢复', async () => {
+    const mod = await import('../usePersonList')
+    const { store, loadAndSync, restoreFromUrl } = mod.usePersonList('blogger')
+    await loadAndSync()
+
+    store.sort = 'rating'
+    store.ratingMin = 4
+    await Promise.resolve()
+    const query = mocks.replace.mock.calls.at(-1)?.[0]?.query ?? {}
+    expect(query.sort).toBe('rating')
+    expect(query.rating_min).toBe('4')
+
+    setQuery({ sort: 'rating_asc', rating_min: '3' })
+    restoreFromUrl()
+    expect(store.sort).toBe('rating_asc')
+    expect(store.ratingMin).toBe(3)
+  })
+
+  it('评分排序/筛选选项只在博主端出现', async () => {
+    const mod = await import('../usePersonList')
+    const blogger = mod.usePersonList('blogger')
+    expect(blogger.sortOptions.value.map((o) => o.value)).toContain('rating')
+    expect(blogger.sortOptions.value.map((o) => o.value)).toContain('rating_asc')
+    expect(blogger.ratingOptions.map((o) => o.value)).toEqual(['', 3, 4, 5])
+
+    const model = mod.usePersonList('model')
+    expect(model.sortOptions.value.map((o) => o.value)).toEqual(['count', 'newest', 'name'])
+  })
+})

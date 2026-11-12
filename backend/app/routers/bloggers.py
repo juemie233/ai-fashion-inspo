@@ -72,9 +72,15 @@ async def list_bloggers(
     # 来源筛选：manual 手动 / auto_collect「我的喜欢」自动登记。
     # 自动登记的博主动辄几百个（实测 435），混在追踪名单里既看不清也点不过来
     source: str | None = Query(None, description="来源筛选（manual/auto_collect）"),
-    sort: str = Query("newest", pattern="^(newest|name|count)$"),
+    sort: str = Query(
+        "newest", pattern="^(newest|name|count|rating|rating_asc)$"
+    ),
     # 素材数排序方向（sort=count 时生效；asc 便于找「素材最少」的人物）
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    # 作品评分筛选：仅博主；至少 5 张已评分才参与
+    rating_min: int | None = Query(
+        None, ge=1, le=5, description="作品均分下限（至少 5 张已评分才参与）"
+    ),
     # 人脸检测约束：仅保留已注册人脸库的博主（确保只匹配候选人脸库内的人）
     face_registered_only: bool = Query(False, description="仅返回已注册人脸库的博主"),
     # 人物组折叠（方案 B）：同组只返回主记录，组内账号放 group_members；
@@ -104,6 +110,7 @@ async def list_bloggers(
         order=order,
         face_registered_only=face_registered_only,
         grouped=grouped,
+        rating_min=rating_min,
     )
     # 人物组头像兜底：同组就是同一个人，主账号没有手动头像时用组内账号的
     # （否则「组里明明有人设过头像，折叠行却显示占位图」）

@@ -501,3 +501,41 @@ def test_search_by_xhs_id_and_ip(client):
     r = client.get("/api/bloggers", params={"search": "浙江"}).json()
     assert r["total"] == 1
     assert r["items"][0]["name"] == "博主H"
+
+
+def test_blogger_rating_sort_and_filter(client, create_blogger, upload):
+    """博主列表：作品均分字段、评分排序与样本门槛筛选（2026-11-12）。"""
+    high = create_blogger(name="高分博主")
+    low = create_blogger(name="低分博主")
+    few = create_blogger(name="样本不足博主")
+
+    def rate_works(blogger_id: int, ratings: list[int], prefix: str) -> None:
+        for idx, value in enumerate(ratings):
+            insp = upload(name=f"{prefix}-{idx}.jpg").json()
+            linked = client.post(
+                f"/api/inspirations/{insp['id']}/bloggers",
+                json={"person_ids": [blogger_id]},
+            )
+            assert linked.status_code == 200, linked.text
+            rated = client.patch(f"/api/inspirations/{insp['id']}", json={"rating": value})
+            assert rated.status_code == 200, rated.text
+
+    rate_works(high["id"], [5, 5, 5, 5, 5], "rating-high")
+    rate_works(low["id"], [3, 3, 3, 3, 3], "rating-low")
+    rate_works(few["id"], [5, 5, 5, 5], "rating-few")
+
+    body = client.get("/api/bloggers", params={"sort": "rating", "size": 50}).json()
+    by_id = {item["id"]: item for item in body["items"]}
+    assert by_id[high["id"]]["rating_average"] == 5.0
+    assert by_id[high["id"]]["rated_count"] == 5
+    assert by_id[few["id"]]["rating_average"] == 5.0
+    assert by_id[few["id"]]["rated_count"] == 4
+    # 样本不足的 few 即使均分 5.0 也排在样本足够的 low 之后
+    ordered = [item["id"] for item in body["items"]]
+    assert ordered.index(high["id"]) < ordered.index(low["id"]) < ordered.index(few["id"])
+
+    filtered = client.get("/api/bloggers", params={"rating_min": 4, "size": 50}).json()
+    filtered_ids = {item["id"] for item in filtered["items"]}
+    assert high["id"] in filtered_ids
+    assert low["id"] not in filtered_ids
+    assert few["id"] not in filtered_ids
